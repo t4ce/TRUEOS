@@ -555,8 +555,6 @@ fn main() {
 
     let quickjs_dir = ensure_quickjs_checkout(&out_dir);
 
-    // Freestanding C ABI stubs for printf/vsnprintf/etc.
-    // Kept in the kernel's v layer so both C and Rust can share the same routing.
     let trueos_stdio = manifest_dir
         .join("..")
         .join("..")

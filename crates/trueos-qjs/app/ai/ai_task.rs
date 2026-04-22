@@ -153,7 +153,8 @@ static AI_TASK_SIGNAL: Signal<SpinRawMutex, ()> = Signal::new();
 static AI_TASK_REQUEST_SEQ: AtomicU64 = AtomicU64::new(1);
 
 fn print_targeted_line(target_mask: u8, text: &str) {
-    let _ = qjs::trueos_shims::shell2_print_targeted_line(target_mask as u32, text.as_bytes());
+    let _ = target_mask;
+    let _ = qjs::trueos_shims::shell2_print_line(text.as_bytes());
 }
 
 fn print_targeted_multiline(target_mask: u8, text: &str) {

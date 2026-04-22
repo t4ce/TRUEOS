@@ -89,14 +89,12 @@ pub struct BlueprintLaunchState {
     pub archive: AllocString,
     pub module_bytes: AllocVec<u8>,
     pub app_args: AllocVec<AllocString>,
-    pub console_target: Option<crate::shell2::MatrixTarget>,
 }
 
 #[derive(Clone)]
 struct AppWindowSession {
     archive: AllocString,
     window_ids: AllocVec<u32>,
-    console_target: Option<crate::shell2::MatrixTarget>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -117,6 +115,39 @@ pub struct HvStatus {
     pub vm1_marker_seen: bool,
     pub guest_module_present: bool,
     pub stored_vm_count: usize,
+}
+
+#[inline]
+fn primary_vm_id() -> u8 {
+    VM1_ID
+}
+
+#[inline]
+fn guest_exception_summary() -> Option<(u8, &'static str, u64, u64, u64)> {
+    let info = vmread(VMCS_VMEXIT_INTERRUPTION_INFO)?;
+    if ((info >> 31) & 1) == 0 {
+        return None;
+    }
+
+    let vector = (info & 0xFF) as u8;
+    let kind = (info >> 8) & 0x7;
+    if kind != 3 && kind != 5 && kind != 6 {
+        return None;
+    }
+
+    let err_valid = ((info >> 11) & 1) != 0;
+    let err = if err_valid {
+        vmread(VMCS_VMEXIT_INTERRUPTION_ERROR_CODE).unwrap_or(0)
+    } else {
+        0
+    };
+    Some((
+        vector,
+        crate::hv::vmx::decode_exception_vector(vector),
+        kind,
+        info,
+        err,
+    ))
 }
 
 pub fn hvlogf(args: core::fmt::Arguments<'_>) {
@@ -296,10 +327,13 @@ pub fn stop(vm_id: u8) -> Result<bool, StopError> {
 
     if VM1_RUNNING.load(Ordering::Acquire) || VM1_STARTING.load(Ordering::Acquire) {
         VM1_STOP_REQ.store(true, Ordering::Release);
-        hvlogf(format_args!("hv: vm1 lifecycle: stop requested"));
+        hvlogf(format_args!("hv: vm{} lifecycle: stop requested", primary_vm_id()));
         Ok(true)
     } else {
-        hvlogf(format_args!("hv: vm1 lifecycle: stop ignored (not running)"));
+        hvlogf(format_args!(
+            "hv: vm{} lifecycle: stop ignored (not running)",
+            primary_vm_id()
+        ));
         Ok(false)
     }
 }
@@ -395,15 +429,24 @@ fn snapshot_on_preserve_exit() {
     match snapshot_bytes() {
         Ok(bytes) => match crate::hv::store::save_bytes(VM1_ID, bytes) {
             Ok(saved) => hvlogf(format_args!(
-                "hv: vm1 reporting: preserve snapshot saved store=hv-ramdisk path=vm/vm1.snapshot bytes={}",
+                "hv: vm{} reporting: preserve snapshot saved store=hv-ramdisk path=vm/vm1.snapshot bytes={}",
+                primary_vm_id(),
                 saved
             )),
             Err(e) => {
-                hvlogf(format_args!("hv: vm1 reporting: preserve snapshot save failed ({:?})", e))
+                hvlogf(format_args!(
+                    "hv: vm{} reporting: preserve snapshot save failed ({:?})",
+                    primary_vm_id(),
+                    e
+                ))
             }
         },
         Err(e) => {
-            hvlogf(format_args!("hv: vm1 reporting: preserve snapshot bytes failed ({:?})", e))
+            hvlogf(format_args!(
+                "hv: vm{} reporting: preserve snapshot bytes failed ({:?})",
+                primary_vm_id(),
+                e
+            ))
         }
     }
 }
@@ -446,14 +489,6 @@ fn app_window_broker_log(args: core::fmt::Arguments<'_>) {
     }
 
     hvlogf(format_args!("{}", line.as_str()));
-
-    let console_target = APP_WINDOW_SESSION
-        .lock()
-        .as_ref()
-        .and_then(|session| session.console_target.clone());
-    if let Some(target) = console_target.as_ref() {
-        crate::shell2::print_matrix_target_line(target, line.as_str());
-    }
 }
 
 pub fn log_active_blueprint_console_line(args: core::fmt::Arguments<'_>) {
@@ -462,28 +497,17 @@ pub fn log_active_blueprint_console_line(args: core::fmt::Arguments<'_>) {
     if line.is_empty() {
         return;
     }
-
-    let console_target = APP_WINDOW_SESSION
-        .lock()
-        .as_ref()
-        .and_then(|session| session.console_target.clone());
-    if let Some(target) = console_target.as_ref() {
-        crate::shell2::print_matrix_target_line(target, line.as_str());
-    }
+    hvlogf(format_args!("{}", line.as_str()));
 }
 
 pub fn log_blueprint_app_window_event(args: core::fmt::Arguments<'_>) {
     app_window_broker_log(args);
 }
 
-pub fn begin_blueprint_app_window_session(
-    archive: &str,
-    console_target: Option<crate::shell2::MatrixTarget>,
-) {
+pub fn begin_blueprint_app_window_session(archive: &str) {
     *APP_WINDOW_SESSION.lock() = Some(AppWindowSession {
         archive: AllocString::from(archive),
         window_ids: AllocVec::new(),
-        console_target,
     });
     app_window_broker_log(format_args!("app-window-broker: session begin archive={}", archive));
 }
@@ -555,14 +579,19 @@ async fn vm1_task() {
     let cpu = crate::cpu::CpuProfile::current();
     if let Some(cpu) = cpu {
         hvlogf(format_args!(
-            "hv: vm1-{} lifecycle: starting slot={} lapic={} kind={}",
+            "hv: vm{}-{} lifecycle: starting slot={} lapic={} kind={}",
+            primary_vm_id(),
             lineage_record.level,
             cpu.slot(),
             cpu.lapic_id(),
             cpu.core_kind_name()
         ));
     } else {
-        hvlogf(format_args!("hv: vm1-{} lifecycle: starting slot=unknown", lineage_record.level));
+        hvlogf(format_args!(
+            "hv: vm{}-{} lifecycle: starting slot=unknown",
+            primary_vm_id(),
+            lineage_record.level
+        ));
     }
 
     let boot_mode = *VM_BOOT_MODE.lock();
@@ -570,17 +599,23 @@ async fn vm1_task() {
     match boot_mode {
         VmBootMode::Full => {
             let guest_len = guest.map(|b| b.len()).unwrap_or(0);
-            hvlogf(format_args!("hv: vm1 lifecycle: full guest bytes={}", guest_len));
+            hvlogf(format_args!(
+                "hv: vm{} lifecycle: full guest bytes={}",
+                primary_vm_id(),
+                guest_len
+            ));
             if let Some(bytes) = guest {
                 if let Some(entry) = guest_kernel_elf_entry(bytes) {
                     hvlogf(format_args!(
-                        "hv: vm1 reporting: full guest elf entry=0x{:016X} vmx_guest_entry=0x{:016X}",
+                        "hv: vm{} reporting: full guest elf entry=0x{:016X} vmx_guest_entry=0x{:016X}",
+                        primary_vm_id(),
                         entry,
                         guest_launch_rip()
                     ));
                 } else {
                     hvlogf(format_args!(
-                        "hv: vm1 reporting: full guest bytes present but ELF entry parse failed; vmx_guest_entry=0x{:016X}",
+                        "hv: vm{} reporting: full guest bytes present but ELF entry parse failed; vmx_guest_entry=0x{:016X}",
+                        primary_vm_id(),
                         guest_launch_rip()
                     ));
                 }
@@ -588,25 +623,24 @@ async fn vm1_task() {
         }
         VmBootMode::Hull => {
             hvlogf(format_args!(
-                "hv: vm1 lifecycle: hull guest entry=0x{:016X} stack_mib={}",
+                "hv: vm{} lifecycle: hull guest entry=0x{:016X} stack_mib={}",
+                primary_vm_id(),
                 guest_launch_rip(),
                 memory::active_guest_stack_mb()
             ));
         }
     }
-    hvlogf(format_args!("hv: vm1 reporting: vmx preflight ok, stage=m1"));
-    hvlogf(format_args!("hv: vm1 reporting: vlayer policy=integrity-first"));
-    match vmx_smoke() {
-        Ok(()) => {
-            hvlogf(format_args!("hv: vm1 reporting: vmx smoke ok (vmxon/vmclear/vmptrld/vmxoff)"))
-        }
-        Err(e) => hvlogf(format_args!("hv: vm1 reporting: vmx smoke failed ({})", e)),
-    }
+    hvlogf(format_args!("hv: vm{} reporting: vmx preflight ok, stage=m1", primary_vm_id()));
+    hvlogf(format_args!(
+        "hv: vm{} reporting: vlayer policy=integrity-first",
+        primary_vm_id()
+    ));
     let guest_heap_ready = crate::allocators::ensure_hv_guest_heap_ready();
     if guest_heap_ready {
         let stats = crate::allocators::hv_guest_heap_stats();
         hvlogf(format_args!(
-            "hv: vm1 reporting: hv-guest-heap virt=0x{:016X}..0x{:016X} src={:?} free_bytes={} blocks={}",
+            "hv: vm{} reporting: hv-guest-heap virt=0x{:016X}..0x{:016X} src={:?} free_bytes={} blocks={}",
+            primary_vm_id(),
             stats.heap_start, stats.heap_end, stats.source, stats.free_bytes, stats.free_blocks
         ));
     }
@@ -620,7 +654,8 @@ async fn vm1_task() {
                 snapshot_on_preserve_exit();
             }
             hvlogf(format_args!(
-                "hv: vm1-{} reporting: vmlaunch entered={} launch_failed={} exit_reason=0x{:X} exit_qual=0x{:X} guest_rip=0x{:016X}",
+                "hv: vm{}-{} reporting: vmlaunch entered={} launch_failed={} exit_reason=0x{:X} exit_qual=0x{:X} guest_rip=0x{:016X}",
+                primary_vm_id(),
                 lineage_record.level,
                 lr.entered,
                 lr.launch_failed,
@@ -630,8 +665,10 @@ async fn vm1_task() {
             ));
         }
         Err(e) => hvlogf(format_args!(
-            "hv: vm1-{} reporting: vmlaunch/ept failed ({})",
-            lineage_record.level, e
+            "hv: vm{}-{} reporting: vmlaunch/ept failed ({})",
+            primary_vm_id(),
+            lineage_record.level,
+            e
         )),
     }
 
@@ -639,7 +676,10 @@ async fn vm1_task() {
         if let Some(bytes) = guest {
             if contains_bytes(bytes, MAIN_LOOP_MARKER) {
                 VM1_MARKER_SEEN.store(true, Ordering::Release);
-                hvlogf(format_args!("hv: vm1 reporting: main: entering executor loop"));
+                hvlogf(format_args!(
+                    "hv: vm{} reporting: main: entering executor loop",
+                    primary_vm_id()
+                ));
             }
         }
     }
@@ -649,7 +689,7 @@ async fn vm1_task() {
     VM1_STOP_REQ.store(false, Ordering::Release);
     VM1_PRESERVE_REQ.store(false, Ordering::Release);
     VM1_PRESERVE_EXIT.store(false, Ordering::Release);
-    hvlogf(format_args!("hv: vm1 lifecycle: stopped"));
+    hvlogf(format_args!("hv: vm{} lifecycle: stopped", primary_vm_id()));
 }
 
 fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
@@ -720,7 +760,8 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
     let vmxon_pa = kernel_va_to_pa(vmxon_va as u64).ok_or("vmxon pa")?;
     let vmcs_pa = kernel_va_to_pa(vmcs_va as u64).ok_or("vmcs pa")?;
     hvlogf(format_args!(
-        "hv: vm1 reporting: vmlaunch prep revision=0x{:08X} vmxon_pa=0x{:016X} vmcs_pa=0x{:016X}",
+        "hv: vm{} reporting: vmlaunch prep revision=0x{:08X} vmxon_pa=0x{:016X} vmcs_pa=0x{:016X}",
+        primary_vm_id(),
         revision, vmxon_pa, vmcs_pa
     ));
 
@@ -768,20 +809,36 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
 
         if lr.launch_failed != 0 {
             hvlogf(format_args!(
-                "hv: vm1 reporting: vmlaunch/vmresume failed instr_err={} rip=0x{:016X}",
+                "hv: vm{} reporting: vmlaunch/vmresume failed instr_err={} rip=0x{:016X}",
+                primary_vm_id(),
                 lr.instr_err,
                 crate::hv::vmx::current_rip()
             ));
             break;
         }
         if lr.entered == 0 {
-            hvlogf(format_args!("hv: vm1 reporting: vmlaunch/vmresume: guest not entered"));
+            hvlogf(format_args!(
+                "hv: vm{} reporting: vmlaunch/vmresume: guest not entered",
+                primary_vm_id()
+            ));
             break;
         }
 
         let reason = lr.exit_reason & 0xFFFF;
         crate::hv::vmx::log_vmexit_interrupt_info("vmexit");
         if reason == 0x0 {
+            if let Some((vector, vector_name, kind, info, err)) = guest_exception_summary() {
+                hvlogf(format_args!(
+                    "hv: vm{} reporting: guest exception vector={} name={} type={}({}) err=0x{:X} intr_info=0x{:08X}",
+                    primary_vm_id(),
+                    vector,
+                    vector_name,
+                    kind,
+                    crate::hv::vmx::decode_vmexit_int_type(kind),
+                    err,
+                    info as u32
+                ));
+            }
             let guest_rsp = vmread(VMCS_GUEST_RSP).unwrap_or(0);
             let guest_cr3 = vmread(VMCS_GUEST_CR3).unwrap_or(0);
             let guest_cr0 = vmread(VMCS_GUEST_CR0).unwrap_or(0);
@@ -790,7 +847,8 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
             let guest_linear = vmread(VMCS_GUEST_LINEAR_ADDRESS).unwrap_or(0);
             let intr_err = vmread(VMCS_VMEXIT_INTERRUPTION_ERROR_CODE).unwrap_or(0);
             hvlogf(format_args!(
-                "hv: vm1 reporting: pf err=0x{:X} present={} write={} user={} rsvd={} exec={}",
+                "hv: vm{} reporting: pf-like err=0x{:X} present={} write={} user={} rsvd={} exec={}",
+                primary_vm_id(),
                 intr_err,
                 (intr_err & (1 << 0)) != 0,
                 (intr_err & (1 << 1)) != 0,
@@ -799,7 +857,8 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
                 (intr_err & (1 << 4)) != 0
             ));
             hvlogf(format_args!(
-                "hv: vm1 reporting: guest-state cr0=0x{:016X} cr3=0x{:016X} cr4=0x{:016X} efer=0x{:016X}",
+                "hv: vm{} reporting: guest-state cr0=0x{:016X} cr3=0x{:016X} cr4=0x{:016X} efer=0x{:016X}",
+                primary_vm_id(),
                 guest_cr0, guest_cr3, guest_cr4, guest_efer
             ));
             crate::hv::memory::log_guest_mapping("fault-linear", guest_linear);
@@ -814,7 +873,8 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
             let trace = crate::allocators::last_alloc_trace();
             if trace.seq != 0 {
                 hvlogf(format_args!(
-                    "hv: vm1 reporting: alloc-trace seq={} caller=0x{:016X} caller1=0x{:016X} caller2=0x{:016X} size={} align={} stage={} head=0x{:016X} block=0x{:016X} block_size={} next=0x{:016X} payload=0x{:016X} aligned_used={}",
+                    "hv: vm{} reporting: alloc-trace seq={} caller=0x{:016X} caller1=0x{:016X} caller2=0x{:016X} size={} align={} stage={} head=0x{:016X} block=0x{:016X} block_size={} next=0x{:016X} payload=0x{:016X} aligned_used={}",
+                    primary_vm_id(),
                     trace.seq,
                     trace.caller_rip,
                     trace.caller_rip_1,
@@ -867,7 +927,8 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
                     _ => {
                         cpuid_other_count = cpuid_other_count.saturating_add(1);
                         hvlogf(format_args!(
-                            "hv: vm1 reporting: cpuid leaf=0x{:08X} subleaf=0x{:08X} -> eax=0x{:08X} ebx=0x{:08X} ecx=0x{:08X} edx=0x{:08X}",
+                            "hv: vm{} reporting: cpuid leaf=0x{:08X} subleaf=0x{:08X} -> eax=0x{:08X} ebx=0x{:08X} ecx=0x{:08X} edx=0x{:08X}",
+                            primary_vm_id(),
                             leaf, subleaf, out.eax, out.ebx, out.ecx, out.edx
                         ));
                     }
@@ -881,7 +942,8 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
                 let gpa = (lr.exit_qualification & (1 << 8)) != 0;
                 let gla = (lr.exit_qualification & (1 << 9)) != 0;
                 hvlogf(format_args!(
-                    "hv: vm1 reporting: ept violation qual=0x{:X} guest_physical=0x{:016X} access={}{}{} gpa_valid={} gla_valid={}",
+                    "hv: vm{} reporting: ept violation qual=0x{:X} guest_physical=0x{:016X} access={}{}{} gpa_valid={} gla_valid={}",
+                    primary_vm_id(),
                     lr.exit_qualification,
                     guest_physical,
                     if read { "r" } else { "" },
@@ -894,7 +956,8 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
             }
             _ => {
                 hvlogf(format_args!(
-                    "hv: vm1 reporting: unhandled vmexit reason=0x{:X}, stopping",
+                    "hv: vm{} reporting: unhandled vmexit reason=0x{:X}, stopping",
+                    primary_vm_id(),
                     reason
                 ));
                 break;
@@ -904,7 +967,8 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
             preserve_requested = true;
             VM1_PRESERVE_EXIT.store(true, Ordering::Release);
             hvlogf(format_args!(
-                "hv: vm1 reporting: host preserve request armed at rip=0x{:016X}",
+                "hv: vm{} reporting: host preserve request armed at rip=0x{:016X}",
+                primary_vm_id(),
                 lr.guest_rip
             ));
             break;
@@ -916,7 +980,8 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
         || cpuid_other_count != 0
     {
         hvlogf(format_args!(
-            "hv: vm1 reporting: cpuid summary leaf0={} leaf80000000={} leaf1={} other={}",
+            "hv: vm{} reporting: cpuid summary leaf0={} leaf80000000={} leaf1={} other={}",
+            primary_vm_id(),
             cpuid_leaf0_count, cpuid_leaf80000000_count, cpuid_leaf1_count, cpuid_other_count
         ));
     }
@@ -973,20 +1038,28 @@ fn setup_vmcs_for_launch(
     let exit = crate::hv::vmx::adjust_vmx_ctrl(exit_msr, EXIT_CTL_HOST_ADDR_SPACE_SIZE);
     let entry = crate::hv::vmx::adjust_vmx_ctrl(entry_msr, ENTRY_CTL_IA32E_MODE_GUEST);
     hvlogf(format_args!(
-        "hv: vm1-{} reporting: vmcs controls pin=0x{:08X} proc=0x{:08X} proc2=0x{:08X} exit=0x{:08X} entry=0x{:08X}",
-        lineage_record.level, pin as u32, proc as u32, proc2 as u32, exit as u32, entry as u32
+        "hv: vm{}-{} reporting: vmcs controls pin=0x{:08X} proc=0x{:08X} proc2=0x{:08X} exit=0x{:08X} entry=0x{:08X}",
+        primary_vm_id(),
+        lineage_record.level,
+        pin as u32,
+        proc as u32,
+        proc2 as u32,
+        exit as u32,
+        entry as u32
     ));
 
     if (proc & PROC_BASED_ACTIVATE_SECONDARY) == 0 {
         hvlogf(format_args!(
-            "hv: vm1-{} reporting: vmcs ctrl unsupported: primary bit ACTIVATE_SECONDARY not available",
+            "hv: vm{}-{} reporting: vmcs ctrl unsupported: primary bit ACTIVATE_SECONDARY not available",
+            primary_vm_id(),
             lineage_record.level
         ));
         return Err("secondary controls unsupported");
     }
     if (proc2 & PROC2_BASED_ENABLE_EPT) == 0 {
         hvlogf(format_args!(
-            "hv: vm1-{} reporting: vmcs ctrl unsupported: secondary bit ENABLE_EPT not available",
+            "hv: vm{}-{} reporting: vmcs ctrl unsupported: secondary bit ENABLE_EPT not available",
+            primary_vm_id(),
             lineage_record.level
         ));
         return Err("ept unsupported");
@@ -1031,8 +1104,10 @@ fn setup_vmcs_for_launch(
         {
             tr_sel = busy_sel;
             hvlogf(format_args!(
-                "hv: vm1-{} reporting: host-state recovered: adopted busy tss selector=0x{:04X}",
-                lineage_record.level, tr_sel
+                "hv: vm{}-{} reporting: host-state recovered: adopted busy tss selector=0x{:04X}",
+                primary_vm_id(),
+                lineage_record.level,
+                tr_sel
             ));
         } else if let Some((avail_sel, 0x9)) =
             crate::hv::vmx::find_tss_selector(gdtr.base.as_u64(), gdtr.limit)
@@ -1041,14 +1116,18 @@ fn setup_vmcs_for_launch(
             tr_sel = crate::hv::vmx::read_tr_selector();
             if tr_sel == 0 {
                 hvlogf(format_args!(
-                    "hv: vm1-{} reporting: host-state invalid: tr selector null after ltr candidate=0x{:04X}",
-                    lineage_record.level, avail_sel
+                    "hv: vm{}-{} reporting: host-state invalid: tr selector null after ltr candidate=0x{:04X}",
+                    primary_vm_id(),
+                    lineage_record.level,
+                    avail_sel
                 ));
                 return Err("host tr ltr");
             }
             hvlogf(format_args!(
-                "hv: vm1-{} reporting: host-state recovered: loaded tr selector=0x{:04X}",
-                lineage_record.level, tr_sel
+                "hv: vm{}-{} reporting: host-state recovered: loaded tr selector=0x{:04X}",
+                primary_vm_id(),
+                lineage_record.level,
+                tr_sel
             ));
         } else {
             let synth = crate::hv::vmx::synthesize_host_gdt_tss();
@@ -1062,8 +1141,11 @@ fn setup_vmcs_for_launch(
             host_gs = 0;
             tr_base = synth.tr_base;
             hvlogf(format_args!(
-                "hv: vm1-{} reporting: host-state recovered: using synthetic hv gdt+tss tr=0x{:04X} tr_base=0x{:016X}",
-                lineage_record.level, synth.tr_sel, synth.tr_base
+                "hv: vm{}-{} reporting: host-state recovered: using synthetic hv gdt+tss tr=0x{:04X} tr_base=0x{:016X}",
+                primary_vm_id(),
+                lineage_record.level,
+                synth.tr_sel,
+                synth.tr_base
             ));
             let fs_base = unsafe { Msr::new(crate::hv::vmx::IA32_FS_BASE).read() };
             let gs_base = unsafe { Msr::new(crate::hv::vmx::IA32_GS_BASE).read() };
@@ -1090,8 +1172,12 @@ fn setup_vmcs_for_launch(
 
             if host_cs == 0 || host_ss == 0 || host_tr == 0 {
                 hvlogf(format_args!(
-                    "hv: vm1-{} reporting: host-state invalid selectors cs=0x{:04X} ss=0x{:04X} tr=0x{:04X}",
-                    lineage_record.level, host_cs as u16, host_ss as u16, host_tr as u16
+                    "hv: vm{}-{} reporting: host-state invalid selectors cs=0x{:04X} ss=0x{:04X} tr=0x{:04X}",
+                    primary_vm_id(),
+                    lineage_record.level,
+                    host_cs as u16,
+                    host_ss as u16,
+                    host_tr as u16
                 ));
                 return Err("host selectors");
             }
@@ -1102,7 +1188,8 @@ fn setup_vmcs_for_launch(
                 || !crate::hv::vmx::is_canonical(idtr.base.as_u64())
             {
                 hvlogf(format_args!(
-                    "hv: vm1-{} reporting: host-state invalid bases tr=0x{:016X} fs=0x{:016X} gs=0x{:016X} gdtr=0x{:016X} idtr=0x{:016X}",
+                    "hv: vm{}-{} reporting: host-state invalid bases tr=0x{:016X} fs=0x{:016X} gs=0x{:016X} gdtr=0x{:016X} idtr=0x{:016X}",
+                    primary_vm_id(),
                     lineage_record.level,
                     tr_base,
                     fs_base,
@@ -1113,8 +1200,13 @@ fn setup_vmcs_for_launch(
                 return Err("host bases");
             }
             hvlogf(format_args!(
-                "hv: vm1-{} reporting: host-state cs=0x{:04X} ss=0x{:04X} tr=0x{:04X} tr_base=0x{:016X}",
-                lineage_record.level, host_cs as u16, host_ss as u16, host_tr as u16, tr_base
+                "hv: vm{}-{} reporting: host-state cs=0x{:04X} ss=0x{:04X} tr=0x{:04X} tr_base=0x{:016X}",
+                primary_vm_id(),
+                lineage_record.level,
+                host_cs as u16,
+                host_ss as u16,
+                host_tr as u16,
+                tr_base
             ));
 
             vmwrite(VMCS_HOST_CR0, host_cr0)?;
@@ -1224,7 +1316,8 @@ fn setup_vmcs_for_launch(
     }
     if tr_sel == 0 {
         hvlogf(format_args!(
-            "hv: vm1-{} reporting: host-state invalid: tr selector remains null after recovery",
+            "hv: vm{}-{} reporting: host-state invalid: tr selector remains null after recovery",
+            primary_vm_id(),
             lineage_record.level
         ));
         return Err("host tr selector");
@@ -1233,7 +1326,8 @@ fn setup_vmcs_for_launch(
         Some(v) => v,
         None => {
             hvlogf(format_args!(
-                "hv: vm1-{} reporting: host-state invalid: unable to resolve tss base from gdt",
+                "hv: vm{}-{} reporting: host-state invalid: unable to resolve tss base from gdt",
+                primary_vm_id(),
                 lineage_record.level
             ));
             return Err("host tr base");
@@ -1265,8 +1359,12 @@ fn setup_vmcs_for_launch(
 
     if host_cs == 0 || host_ss == 0 || host_tr == 0 {
         hvlogf(format_args!(
-            "hv: vm1-{} reporting: host-state invalid selectors cs=0x{:04X} ss=0x{:04X} tr=0x{:04X}",
-            lineage_record.level, host_cs as u16, host_ss as u16, host_tr as u16
+            "hv: vm{}-{} reporting: host-state invalid selectors cs=0x{:04X} ss=0x{:04X} tr=0x{:04X}",
+            primary_vm_id(),
+            lineage_record.level,
+            host_cs as u16,
+            host_ss as u16,
+            host_tr as u16
         ));
         return Err("host selectors");
     }
@@ -1277,7 +1375,8 @@ fn setup_vmcs_for_launch(
         || !crate::hv::vmx::is_canonical(idtr.base.as_u64())
     {
         hvlogf(format_args!(
-            "hv: vm1-{} reporting: host-state invalid bases tr=0x{:016X} fs=0x{:016X} gs=0x{:016X} gdtr=0x{:016X} idtr=0x{:016X}",
+            "hv: vm{}-{} reporting: host-state invalid bases tr=0x{:016X} fs=0x{:016X} gs=0x{:016X} gdtr=0x{:016X} idtr=0x{:016X}",
+            primary_vm_id(),
             lineage_record.level,
             tr_base,
             fs_base,
@@ -1288,8 +1387,13 @@ fn setup_vmcs_for_launch(
         return Err("host bases");
     }
     hvlogf(format_args!(
-        "hv: vm1-{} reporting: host-state cs=0x{:04X} ss=0x{:04X} tr=0x{:04X} tr_base=0x{:016X}",
-        lineage_record.level, host_cs as u16, host_ss as u16, host_tr as u16, tr_base
+        "hv: vm{}-{} reporting: host-state cs=0x{:04X} ss=0x{:04X} tr=0x{:04X} tr_base=0x{:016X}",
+        primary_vm_id(),
+        lineage_record.level,
+        host_cs as u16,
+        host_ss as u16,
+        host_tr as u16,
+        tr_base
     ));
 
     let (host_cr3, _) = Cr3::read();
@@ -1433,47 +1537,70 @@ fn vmx_smoke() -> Result<(), &'static str> {
     let vmxon_pa = kernel_va_to_pa(vmxon_va as u64).ok_or("vmxon pa")?;
     let vmcs_pa = kernel_va_to_pa(vmcs_va as u64).ok_or("vmcs pa")?;
     hvlogf(format_args!(
-        "hv: vm1 reporting: vmx setup revision=0x{:08X} vmxon_pa=0x{:016X} vmcs_pa=0x{:016X}",
+        "hv: vm{} reporting: vmx setup revision=0x{:08X} vmxon_pa=0x{:016X} vmcs_pa=0x{:016X}",
+        primary_vm_id(),
         revision, vmxon_pa, vmcs_pa
     ));
 
     let rip = vmx::current_rip();
     if !vmxon(vmxon_pa) {
         hvlogf(format_args!(
-            "hv: vm1 reporting: vmxon failed rip=0x{:016X} pa=0x{:016X}",
-            rip, vmxon_pa
+            "hv: vm{} reporting: vmxon failed rip=0x{:016X} pa=0x{:016X}",
+            primary_vm_id(),
+            rip,
+            vmxon_pa
         ));
         return Err("vmxon");
     }
-    hvlogf(format_args!("hv: vm1 reporting: vmxon ok rip=0x{:016X}", rip));
+    hvlogf(format_args!(
+        "hv: vm{} reporting: vmxon ok rip=0x{:016X}",
+        primary_vm_id(),
+        rip
+    ));
 
     let rip = vmx::current_rip();
     if !vmclear(vmcs_pa) {
         hvlogf(format_args!(
-            "hv: vm1 reporting: vmclear failed rip=0x{:016X} pa=0x{:016X}",
-            rip, vmcs_pa
+            "hv: vm{} reporting: vmclear failed rip=0x{:016X} pa=0x{:016X}",
+            primary_vm_id(),
+            rip,
+            vmcs_pa
         ));
         let _ = vmxoff();
         return Err("vmclear");
     }
-    hvlogf(format_args!("hv: vm1 reporting: vmclear ok rip=0x{:016X}", rip));
+    hvlogf(format_args!(
+        "hv: vm{} reporting: vmclear ok rip=0x{:016X}",
+        primary_vm_id(),
+        rip
+    ));
 
     let rip = vmx::current_rip();
     if !vmptrld(vmcs_pa) {
         hvlogf(format_args!(
-            "hv: vm1 reporting: vmptrld failed rip=0x{:016X} pa=0x{:016X}",
-            rip, vmcs_pa
+            "hv: vm{} reporting: vmptrld failed rip=0x{:016X} pa=0x{:016X}",
+            primary_vm_id(),
+            rip,
+            vmcs_pa
         ));
         let _ = vmxoff();
         return Err("vmptrld");
     }
-    hvlogf(format_args!("hv: vm1 reporting: vmptrld ok rip=0x{:016X}", rip));
+    hvlogf(format_args!(
+        "hv: vm{} reporting: vmptrld ok rip=0x{:016X}",
+        primary_vm_id(),
+        rip
+    ));
 
     let ptr = match vmx::vmptrst() {
         Some(v) => v,
         None => {
             let rip = vmx::current_rip();
-            hvlogf(format_args!("hv: vm1 reporting: vmptrst failed rip=0x{:016X}", rip));
+            hvlogf(format_args!(
+                "hv: vm{} reporting: vmptrst failed rip=0x{:016X}",
+                primary_vm_id(),
+                rip
+            ));
             let _ = vmxoff();
             return Err("vmptrst");
         }
@@ -1481,19 +1608,30 @@ fn vmx_smoke() -> Result<(), &'static str> {
     if ptr != vmcs_pa {
         let rip = vmx::current_rip();
         hvlogf(format_args!(
-            "hv: vm1 reporting: vmptrst mismatch rip=0x{:016X} got=0x{:016X} want=0x{:016X}",
-            rip, ptr, vmcs_pa
+            "hv: vm{} reporting: vmptrst mismatch rip=0x{:016X} got=0x{:016X} want=0x{:016X}",
+            primary_vm_id(),
+            rip,
+            ptr,
+            vmcs_pa
         ));
         let _ = vmxoff();
         return Err("vmptrst mismatch");
     }
-    hvlogf(format_args!("hv: vm1 reporting: vmptrst ok current_vmcs=0x{:016X}", ptr));
+    hvlogf(format_args!(
+        "hv: vm{} reporting: vmptrst ok current_vmcs=0x{:016X}",
+        primary_vm_id(),
+        ptr
+    ));
 
     if !vmxoff() {
         let rip = vmx::current_rip();
-        hvlogf(format_args!("hv: vm1 reporting: vmxoff failed rip=0x{:016X}", rip));
+        hvlogf(format_args!(
+            "hv: vm{} reporting: vmxoff failed rip=0x{:016X}",
+            primary_vm_id(),
+            rip
+        ));
         return Err("vmxoff");
     }
-    hvlogf(format_args!("hv: vm1 reporting: vmxoff ok"));
+    hvlogf(format_args!("hv: vm{} reporting: vmxoff ok", primary_vm_id()));
     Ok(())
 }

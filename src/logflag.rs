@@ -46,6 +46,7 @@ pub(crate) static GFX_CABI_VIRGL_FIRST_FRAME_SEEN: AtomicBool = AtomicBool::new(
 
 pub(crate) static USB_LOG_ALL: AtomicBool = AtomicBool::new(true);
 pub(crate) const USB_VENDOR_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
+pub(crate) const BLUEPRINT_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
 pub(crate) const USB_AUDIO_DEBUG_LOGS: bool = true;
 pub(crate) const HID_DEBUG_REPORT_LOGS: bool = true;
 
@@ -56,7 +57,15 @@ pub(crate) static TGA_MISSING_LOG_ONCE: Once<()> = Once::new();
 pub(crate) static TGA_TASK_STARTED_LOG_ONCE: Once<()> = Once::new();
 
 pub(crate) fn usb_vendor_log_enabled(level: Level) -> bool {
-    match USB_VENDOR_LOG_LEVEL {
+    level_enabled(USB_VENDOR_LOG_LEVEL, level)
+}
+
+pub(crate) fn blueprint_log_enabled(level: Level) -> bool {
+    level_enabled(BLUEPRINT_LOG_LEVEL, level)
+}
+
+fn level_enabled(filter: LevelFilter, level: Level) -> bool {
+    match filter {
         LevelFilter::Off => false,
         LevelFilter::Error => matches!(level, Level::Error),
         LevelFilter::Warn => matches!(level, Level::Warn | Level::Error),

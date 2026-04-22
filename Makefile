@@ -10,9 +10,11 @@ ISO_PATH := bld/trueos.iso
 ISO_BOOT_DIR := bld/iso-bootroot
 ISO_EFI_IMG := efi.img
 UPDATE_7Z_FLAGS ?= -mx=9 -m0=LZMA2 -ms=off
-# Size of the EFI System Partition image that gets embedded into the ISO.
-# It needs to hold the EFI loader, firmware blob, and embedded blueprint apps.
-EFI_IMG_SIZE_KIB ?= 4096
+# Extra slack added on top of the staged EFI payload when sizing the embedded
+# EFI System Partition image. This keeps the image close to minimal while
+# leaving room for FAT metadata and small growth in embedded artifacts.
+EFI_IMG_OVERHEAD_KIB ?= 1024
+EFI_IMG_MIN_SIZE_KIB ?= 0
 LIMINE_CFG := limine.conf
 LIMINE_PREFIX := bld/limine-prefix
 LIMINE_SHARE := $(LIMINE_PREFIX)/share/limine
@@ -164,7 +166,13 @@ iso: artifacts images
 	mkdir -p $(ISO_BOOT_DIR)/EFI/BOOT
 	cp $(LIMINE_SHARE)/BOOTX64.EFI $(ISO_BOOT_DIR)/EFI/BOOT/BOOTX64.EFI
 	rm -f $(ISO_BOOT_DIR)/$(ISO_EFI_IMG)
-	dd if=/dev/zero of=$(ISO_BOOT_DIR)/$(ISO_EFI_IMG) bs=1k count=$(EFI_IMG_SIZE_KIB)
+	@efi_payload_kib=$$(du -sk "$(ISO_BOOT_DIR)/EFI" | cut -f1); \
+		efi_img_size_kib=$$((efi_payload_kib + $(EFI_IMG_OVERHEAD_KIB))); \
+		if [ "$$efi_img_size_kib" -lt "$(EFI_IMG_MIN_SIZE_KIB)" ]; then \
+			efi_img_size_kib="$(EFI_IMG_MIN_SIZE_KIB)"; \
+		fi; \
+		echo "iso: sizing $(ISO_EFI_IMG) to $${efi_img_size_kib} KiB (payload=$${efi_payload_kib} KiB, overhead=$(EFI_IMG_OVERHEAD_KIB) KiB)"; \
+		dd if=/dev/zero of=$(ISO_BOOT_DIR)/$(ISO_EFI_IMG) bs=1k count=$$efi_img_size_kib
 	mkfs.vfat -n TRUEOS_EFI $(ISO_BOOT_DIR)/$(ISO_EFI_IMG)
 	mmd -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) ::/EFI ::/EFI/BOOT
 	mmd -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) ::/EFI/BOOT/apps

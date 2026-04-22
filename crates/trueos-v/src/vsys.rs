@@ -10,7 +10,7 @@ pub fn write_stream(stream: u32, bytes: &[u8]) {
     if bytes.is_empty() {
         return;
     }
-    unsafe { vcabi::trueos_cabi_write(stream, bytes.as_ptr(), bytes.len()) }
+    //unsafe { vcabi::trueos_cabi_write(stream, bytes.as_ptr(), bytes.len()) }
 }
 
 #[inline]

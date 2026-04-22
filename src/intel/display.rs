@@ -601,20 +601,33 @@ fn clamp_u8_i32(value: i32) -> u8 {
 
 pub(crate) fn present_nv12_surface_center(
     src: &[u8],
-    src_width: u32,
-    src_height: u32,
+    coded_width: u32,
+    coded_height: u32,
+    visible_x: u32,
+    visible_y: u32,
+    visible_width: u32,
+    visible_height: u32,
     src_pitch_bytes: usize,
 ) -> bool {
     let Some(surface) = *PRIMARY_SURFACE.lock() else {
         return false;
     };
-    if surface.virt.is_null() || src_width == 0 || src_height == 0 {
+    if surface.virt.is_null() || coded_width == 0 || coded_height == 0 {
         return false;
     }
 
-    let src_width = src_width as usize;
-    let src_height = src_height as usize;
-    if src_pitch_bytes < src_width {
+    let coded_width = coded_width as usize;
+    let coded_height = coded_height as usize;
+    let visible_x = visible_x as usize;
+    let visible_y = visible_y as usize;
+    let visible_width = visible_width as usize;
+    let visible_height = visible_height as usize;
+    if src_pitch_bytes < coded_width || visible_width == 0 || visible_height == 0 {
+        return false;
+    }
+    if visible_x.saturating_add(visible_width) > coded_width
+        || visible_y.saturating_add(visible_height) > coded_height
+    {
         return false;
     }
 
@@ -625,8 +638,8 @@ pub(crate) fn present_nv12_surface_center(
     const YTILE_W: usize = 128;
     const YTILE_H: usize = 32;
     let tiles_per_row = src_pitch_bytes / YTILE_W;
-    let chroma_y_offset = (src_height + YTILE_H - 1) & !(YTILE_H - 1);
-    let total_height = chroma_y_offset + (src_height + 1) / 2;
+    let chroma_y_offset = (coded_height + YTILE_H - 1) & !(YTILE_H - 1);
+    let total_height = chroma_y_offset + (coded_height + 1) / 2;
     let total_tile_rows = (total_height + YTILE_H - 1) / YTILE_H;
     let needed = total_tile_rows * tiles_per_row * 4096;
     if src.len() < needed {
@@ -652,11 +665,11 @@ pub(crate) fn present_nv12_surface_center(
         );
     }
 
-    let scale_x = src_width.div_ceil(dst_width.max(1));
-    let scale_y = src_height.div_ceil(dst_height.max(1));
+    let scale_x = visible_width.div_ceil(dst_width.max(1));
+    let scale_y = visible_height.div_ceil(dst_height.max(1));
     let scale = scale_x.max(scale_y).max(1);
-    let copy_w = (src_width / scale).max(1).min(dst_width);
-    let copy_h = (src_height / scale).max(1).min(dst_height);
+    let copy_w = (visible_width / scale).max(1).min(dst_width);
+    let copy_h = (visible_height / scale).max(1).min(dst_height);
     let dst_x = dst_width.saturating_sub(copy_w) / 2;
     let dst_y = dst_height.saturating_sub(copy_h) / 2;
 
@@ -676,14 +689,18 @@ pub(crate) fn present_nv12_surface_center(
     }
 
     for row_idx in 0..copy_h {
-        let src_y = (row_idx.saturating_mul(scale)).min(src_height.saturating_sub(1));
+        let src_y = visible_y.saturating_add(
+            (row_idx.saturating_mul(scale)).min(visible_height.saturating_sub(1)),
+        );
         let dst_row_off = (dst_y + row_idx)
             .saturating_mul(dst_pitch)
             .saturating_add(dst_x.saturating_mul(4));
         let dst_row = unsafe { surface.virt.add(dst_row_off) as *mut u32 };
         let uv_row = chroma_y_offset + src_y / 2;
         for col_idx in 0..copy_w {
-            let src_x = (col_idx.saturating_mul(scale)).min(src_width.saturating_sub(1));
+            let src_x = visible_x.saturating_add(
+                (col_idx.saturating_mul(scale)).min(visible_width.saturating_sub(1)),
+            );
             let y_off = ytile_offset(src_x, src_y, tiles_per_row);
             let y = unsafe { i32::from(*src.get_unchecked(y_off)) };
             // UV plane is in the same tiled surface, starting at row chroma_y_offset.

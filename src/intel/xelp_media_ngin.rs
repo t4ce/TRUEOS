@@ -8,8 +8,9 @@ use spin::Mutex;
 
 use super::xelp_media_h264src::parse_h264_source_summary;
 use super::xelp_media_mp4::{
-    AnnexBAccessUnit, H264VclInfo, ParsedPps, ParsedSps, first_sample_nal_types, parse_pps,
-    parse_sample_vcl_info, parse_sps, write_annex_b_for_sample,
+    AnnexBAccessUnit, H264VclInfo, ParsedPps, ParsedSps, first_sample_nal_types,
+    h264_crop_offsets_px, parse_pps, parse_sample_vcl_info, parse_sps, visible_h264_frame_dims,
+    write_annex_b_for_sample,
 };
 use super::xelp_media_source;
 
@@ -835,6 +836,10 @@ fn surface_signature(bytes: &[u8]) -> (u32, usize) {
 
 fn present_nv12_frame(
     output_surface: &[u8],
+    coded_width: u16,
+    coded_height: u16,
+    visible_x: u16,
+    visible_y: u16,
     frame_width: u16,
     frame_height: u16,
     output_pitch: usize,
@@ -843,17 +848,21 @@ fn present_nv12_frame(
     let (signature, nonzero_samples) = surface_signature(output_surface);
 
     // Y-tile NV12: chroma starts at tile-row-aligned height (matches batch builder).
-    let chroma_y_aligned = ((frame_height as usize) + 31) & !31;
-    let total_height = chroma_y_aligned + ((frame_height as usize) + 1) / 2;
+    let chroma_y_aligned = ((coded_height as usize) + 31) & !31;
+    let total_height = chroma_y_aligned + ((coded_height as usize) + 1) / 2;
     let total_tile_rows = (total_height + 31) & !31;
     if frame_width != 0
         && frame_height != 0
-        && output_pitch >= frame_width as usize
+        && output_pitch >= coded_width as usize
         && output_surface.len() >= output_pitch.saturating_mul(total_tile_rows)
         && submit_completed
     {
         let ready = super::display::present_nv12_surface_center(
             output_surface,
+            coded_width as u32,
+            coded_height as u32,
+            visible_x as u32,
+            visible_y as u32,
             frame_width as u32,
             frame_height as u32,
             output_pitch,
@@ -909,9 +918,15 @@ fn decode_and_present_frame(
     let output_surface = unsafe {
         core::slice::from_raw_parts(output_surface_virt as *const u8, output_surface_bytes)
     };
+    let (coded_width, coded_height) = coded_h264_frame_dims(sps);
+    let (visible_x, visible_y) = h264_crop_offsets_px(sps);
     let (present_ready, output_surface_signature, output_surface_nonzero_samples) =
         present_nv12_frame(
             output_surface,
+            u16::try_from(coded_width).unwrap_or(u16::MAX),
+            u16::try_from(coded_height).unwrap_or(u16::MAX),
+            u16::try_from(visible_x).unwrap_or(0),
+            u16::try_from(visible_y).unwrap_or(0),
             frame_width,
             frame_height,
             output_surface_pitch,
@@ -960,6 +975,11 @@ fn align_up_u32(value: u32, align: u32) -> u32 {
 fn masked_bits_update(set_bits: u32, clear_bits: u32) -> u32 {
     let update = set_bits | clear_bits;
     set_bits | (update << 16)
+}
+
+#[inline]
+fn masked_bit_disable(bit: u32) -> u32 {
+    bit << 16
 }
 
 #[inline]
@@ -1247,7 +1267,7 @@ fn init_gen12_video_context_image(
     let dwords = unsafe { core::slice::from_raw_parts_mut(context_virt as *mut u32, total_dwords) };
     dwords.fill(0);
     let state = &mut dwords[LRC_STATE_OFFSET_DWORDS..];
-    if state.len() < 96 {
+    if state.len() < 112 {
         return false;
     }
     let ring_base = ring_base as u32;
@@ -1305,6 +1325,13 @@ fn init_gen12_video_context_image(
         state[idx + 1] = value;
         idx += 2;
     }
+    // Keep MI_MODE aligned with the cold-start path by explicitly clearing
+    // STOP_RING from the restored context image on every replay.
+    state[idx] = mi_lri_cmd(1, MI_LRI_FORCE_POSTED);
+    idx += 1;
+    state[idx] = ring_base + 0x9C;
+    state[idx + 1] = masked_bit_disable(STOP_RING);
+    idx += 2;
     push_mi_nops(state, &mut idx, 12);
     state[CTX_RING_HEAD_DW] = 0;
     state[CTX_RING_TAIL_DW] = ring_tail;
@@ -1379,6 +1406,20 @@ fn read_result_dword(base_virt: *mut u8, slot_off: u64) -> u32 {
     unsafe { core::ptr::read_volatile(ptr) }
 }
 
+fn coded_h264_frame_dims(sps: &ParsedSps) -> (u32, u32) {
+    let width_mbs = sps.pic_width_in_mbs_minus1 + 1;
+    let pic_height_map_units = sps.pic_height_in_map_units_minus1 + 1;
+    let frame_height_mbs = if sps.frame_mbs_only_flag {
+        pic_height_map_units
+    } else {
+        pic_height_map_units.saturating_mul(2)
+    };
+    (
+        width_mbs.saturating_mul(16),
+        frame_height_mbs.saturating_mul(16),
+    )
+}
+
 fn build_h264_decode_batch_skeleton(
     batch_virt: *mut u8,
     batch_bytes: usize,
@@ -1410,15 +1451,15 @@ fn build_h264_decode_batch_skeleton(
         )
     };
     let mut idx = 0usize;
-    let width = frame_width as u32;
-    let height = frame_height as u32;
-    let width_mbs = width.saturating_add(15) / 16;
-    let _height_mbs = height.saturating_add(15) / 16;
-    let frame_dims = width | (height << 16);
-    let output_pitch = align_up_u32(width.max(128), 128); // Y-tile: 128-byte tile width
+    let visible_width = frame_width as u32;
+    let visible_height = frame_height as u32;
+    let (coded_width, coded_height) = coded_h264_frame_dims(sps);
+    let width_mbs = coded_width.saturating_add(15) / 16;
+    let frame_dims = visible_width | (visible_height << 16);
+    let output_pitch = align_up_u32(coded_width.max(128), 128); // Y-tile: 128-byte tile width
     // Y-tile NV12: chroma plane must start on a 32-row tile boundary so the
     // HW doesn't share a physical tile row between Y bottom and UV top.
-    let chroma_y_offset = align_up_u32(height, 32);
+    let chroma_y_offset = align_up_u32(coded_height, 32);
     let stage_flags = (has_idr as u32) | (1 << 1);
 
     if !emit_store_dword(
@@ -1544,7 +1585,8 @@ fn build_h264_decode_batch_skeleton(
             MFX_CMD_LEN_SURFACE_STATE,
         ),
     )?;
-    batch[surface + 2] = ((width.saturating_sub(1)) << 4) | ((height.saturating_sub(1)) << 18);
+    batch[surface + 2] =
+        ((coded_width.saturating_sub(1)) << 4) | ((coded_height.saturating_sub(1)) << 18);
     // DW3: SurfaceFormat(31:28)=4(PLANAR_420_8/NV12), TiledSurface(27)=1,
     //       TileWalk(26)=1(Y-major), SurfacePitch-1(17:3),
     //       InterleaveChroma(1)=1: NV12 uses interleaved CbCr pairs.
@@ -2116,6 +2158,7 @@ fn seed_media_ring_live_state(
     // Gen12 Execlists: ring registers are loaded from LRC, NOT from MMIO.
     // Only set engine-level config here.
     super::mmio_write(dev, ring_base + RING_MI_MODE, STOP_RING << 16);
+    super::mmio_write(dev, ring_base + RING_MI_MODE, masked_bit_disable(STOP_RING));
     super::mmio_write(dev, ring_base + RING_HWS_PGA, pphwsp_gpu);
     super::mmio_write(dev, ring_base + RING_HWSTAM, !0u32);
 }
@@ -2134,40 +2177,6 @@ fn submit_h264_frame(
     sample_idx: u32,
     ref_surface_idx: u32,
 ) -> Option<(bool, usize, usize, u64, u64, *mut u8)> {
-    if sample_idx != 0 {
-        match submit_h264_frame_once(
-            dev,
-            engine,
-            windows,
-            backing,
-            frame_width,
-            frame_height,
-            annex_b,
-            vcl_info,
-            sps,
-            pps,
-            sample_idx,
-            ref_surface_idx,
-            false,
-        ) {
-            Some(result) if result.0 => return Some(result),
-            Some(_) => {
-                crate::log!(
-                    "intel/media: hot submit incomplete index={} engine={} fallback=reset\n",
-                    sample_idx,
-                    engine.name,
-                );
-            }
-            None => {
-                crate::log!(
-                    "intel/media: hot submit setup failed index={} engine={} fallback=reset\n",
-                    sample_idx,
-                    engine.name,
-                );
-            }
-        }
-    }
-
     submit_h264_frame_once(
         dev,
         engine,
@@ -2181,7 +2190,7 @@ fn submit_h264_frame(
         pps,
         sample_idx,
         ref_surface_idx,
-        true,
+        sample_idx == 0,
     )
 }
 
@@ -2200,10 +2209,11 @@ fn submit_h264_frame_once(
     ref_surface_idx: u32,
     force_reset: bool,
 ) -> Option<(bool, usize, usize, u64, u64, *mut u8)> {
-    let output_pitch = align_up_u32((frame_width as u32).max(128), 128) as usize; // Y-tile: 128-byte tile width
+    let (coded_width, coded_height) = coded_h264_frame_dims(sps);
+    let output_pitch = align_up_u32(coded_width.max(128), 128) as usize; // Y-tile: 128-byte tile width
     // Y-tile NV12: chroma starts at tile-row-aligned height (same as batch builder).
-    let chroma_y_aligned = ((frame_height as usize) + 31) & !31;
-    let total_height = chroma_y_aligned + ((frame_height as usize) + 1) / 2;
+    let chroma_y_aligned = ((coded_height as usize) + 31) & !31;
+    let total_height = chroma_y_aligned + ((coded_height as usize) + 1) / 2;
     let total_tile_rows = (total_height + 31) & !31;
     let output_bytes = output_pitch.checked_mul(total_tile_rows)?;
     let output_budget = backing
@@ -2374,12 +2384,12 @@ fn submit_h264_frame_once(
     let ring_start = ring_gpu_addr as u32;
     let pphwsp_gpu = (context_gpu_addr & !0xFFF) as u32;
 
-    // Hot submits need a real LRC restore so the scheduler reloads the updated
-    // ring head/tail from memory. Keep restore-inhibit only on reset-created
-    // empty contexts.
-    let ctx_ctl_after = media_ctx_control_value(force_reset);
+    // Keep the same known-good context control semantics across the whole
+    // playback session so streaming frames do not drift into a distinct hot
+    // submit mode after frame 0.
+    let ctx_ctl_after = media_ctx_control_value(true);
     let prev_tail = read_video_lrc_slot(context_virt, backing.context_bytes, 7) as usize;
-    let force_context_restore = force_reset || ring_tail_bytes <= prev_tail;
+    let force_context_restore = true;
     if force_reset {
         if !init_gen12_video_context_image(
             context_virt,
@@ -2434,6 +2444,7 @@ fn submit_h264_frame_once(
     {
         super::mmio_write(dev, engine.ring_base + RING_CONTEXT_CONTROL, ctx_ctl_after);
         super::mmio_write(dev, engine.ring_base + RING_CONTEXT_CONTROL_REF, ctx_ctl_after);
+        super::mmio_write(dev, engine.ring_base + RING_MI_MODE, masked_bit_disable(STOP_RING));
         super::mmio_write(dev, engine.ring_base + RING_HWS_PGA, pphwsp_gpu);
     }
     // FORCE_RESTORE: forces the scheduler to reload LRC state from memory
@@ -2869,8 +2880,17 @@ pub(crate) async fn run_media_decode_async() {
         store_kickoff_state(MediaKickoffStage::ResourcePlanning, None);
         return;
     };
+    let (sps_visible_width, sps_visible_height) = visible_h264_frame_dims(&sps);
+    let display_width = u16::try_from(sps_visible_width)
+        .ok()
+        .filter(|width| *width != 0)
+        .unwrap_or_else(|| summary.width());
+    let display_height = u16::try_from(sps_visible_height)
+        .ok()
+        .filter(|height| *height != 0)
+        .unwrap_or_else(|| summary.height());
     crate::log!(
-        "intel/media: sps chroma={} depth_y={} depth_c={} log2_frame={} poc_type={} log2_poc={} refs={} mbs={}x{} frame_only={} direct8x8={}\n",
+        "intel/media: sps chroma={} depth_y={} depth_c={} log2_frame={} poc_type={} log2_poc={} refs={} mbs={}x{} frame_only={} direct8x8={} crop=l{} r{} t{} b{} visible={}x{}\n",
         sps.chroma_format_idc,
         sps.bit_depth_luma_minus8,
         sps.bit_depth_chroma_minus8,
@@ -2882,6 +2902,12 @@ pub(crate) async fn run_media_decode_async() {
         sps.pic_height_in_map_units_minus1 + 1,
         sps.frame_mbs_only_flag as u8,
         sps.direct_8x8_inference_flag as u8,
+        sps.frame_crop_left_offset,
+        sps.frame_crop_right_offset,
+        sps.frame_crop_top_offset,
+        sps.frame_crop_bottom_offset,
+        display_width,
+        display_height,
     );
     crate::log!(
         "intel/media: pps cabac={} pic_order_present={} l0={} l1={} wpred={} wbipred={} qp={} cqp={} cqp2={} deblock={} constrained={} t8x8={}\n",
@@ -2950,8 +2976,8 @@ pub(crate) async fn run_media_decode_async() {
         summary.container_name(),
         summary.avcc().profile_idc,
         summary.avcc().level_idc,
-        summary.width(),
-        summary.height(),
+        display_width,
+        display_height,
         summary.avcc().nal_length_size,
         first_annex_b.sample_nal_count,
         first_annex_b.has_idr as u8,
@@ -3053,8 +3079,8 @@ pub(crate) async fn run_media_decode_async() {
             engine,
             windows,
             backing,
-            summary.width(),
-            summary.height(),
+            display_width,
+            display_height,
             sample_annex_b,
             vcl_info,
             &sps,
