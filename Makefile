@@ -16,12 +16,14 @@ UPDATE_7Z_FLAGS ?= -mx=9 -m0=LZMA2 -ms=off
 EFI_IMG_OVERHEAD_KIB ?= 1024
 EFI_IMG_MIN_SIZE_KIB ?= 0
 LIMINE_CFG := limine.conf
+LIMINE_CFG_GENERATED := $(ISO_DIR)/limine.generated.conf
 LIMINE_PREFIX := bld/limine-prefix
 LIMINE_SHARE := $(LIMINE_PREFIX)/share/limine
 GUC_FW_HOST_PATH ?= /lib/firmware/i915/adlp_guc_70.bin.zst
 GUC_FW_ISO_REL_PATH ?= EFI/BOOT/adlp_guc_70.bin
 BLUEPRINTS_ROOT ?= ../TRUEOS Blueprints
-BP_NAMES ?= hello_world triangle
+BP_MANIFEST ?= $(BLUEPRINTS_ROOT)/Cargo.toml
+BP_NAMES ?= $(strip $(shell awk 'BEGIN { in_example = 0 } /^\[\[example\]\]$$/ { in_example = 1; next } /^\[/ { in_example = 0 } in_example && /^[[:space:]]*name[[:space:]]*=/ { line = $$0; sub(/^[^=]*=[[:space:]]*"/, "", line); sub(/"[[:space:]]*$$/, "", line); print line }' "$(BP_MANIFEST)" 2>/dev/null))
 BP_DIST_DIR ?= $(BLUEPRINTS_ROOT)/dist
 BP_ISO_DIR_REL ?= EFI/BOOT/apps
 QEMU_ENV = env -i HOME="$(HOME)" PATH="/usr/bin:/bin" TERM="$${TERM:-xterm}" LANG="$${LANG:-C.UTF-8}" DISPLAY="$${DISPLAY:-}" WAYLAND_DISPLAY="$${WAYLAND_DISPLAY:-}" XDG_RUNTIME_DIR="$${XDG_RUNTIME_DIR:-}" XAUTHORITY="$${XAUTHORITY:-}"
@@ -155,13 +157,20 @@ iso: artifacts images
 	@for bp in $(BP_NAMES); do \
 		cp "$(BP_DIST_DIR)/$$bp.bp" "$(ISO_DIR)/$(BP_ISO_DIR_REL)/$$bp.bp"; \
 	done
+	@awk 'BEGIN { skip_app_string = 0 } skip_app_string && /^module_string: trueos\.app\./ { skip_app_string = 0; next } skip_app_string { skip_app_string = 0 } /^module_path: boot\(\):\/EFI\/BOOT\/apps\/.*\.bp$$/ { skip_app_string = 1; next } { print }' "$(LIMINE_CFG)" > "$(LIMINE_CFG_GENERATED)"
+	@for bp in $(BP_NAMES); do \
+		printf '%s\n%s\n' \
+			"module_path: boot():/$(BP_ISO_DIR_REL)/$$bp.bp" \
+			"module_string: trueos.app.$$bp" \
+			>> "$(LIMINE_CFG_GENERATED)"; \
+	done
 	@if [ "$(GUC_FW_ISO_REL_PATH)" != "EFI/BOOT/adlp_guc_70.bin" ]; then \
 		mkdir -p $(ISO_BOOT_DIR)/EFI/BOOT; \
 		cp $(ISO_DIR)/EFI/BOOT/adlp_guc_70.bin $(ISO_BOOT_DIR)/EFI/BOOT/adlp_guc_70.bin; \
 	fi
-	cp $(LIMINE_CFG) $(ISO_BOOT_DIR)/limine.conf
+	cp $(LIMINE_CFG_GENERATED) $(ISO_BOOT_DIR)/limine.conf
 	cp $(LIMINE_SHARE)/BOOTX64.EFI $(ISO_DIR)/EFI/BOOT/BOOTX64.EFI
-	cp $(LIMINE_CFG) $(ISO_DIR)/EFI/BOOT/limine.conf
+	cp $(LIMINE_CFG_GENERATED) $(ISO_DIR)/EFI/BOOT/limine.conf
 	cp $(ISO_BOOT_DIR)/TRUEOS.elf $(ISO_DIR)/TRUEOS.elf
 	mkdir -p $(ISO_BOOT_DIR)/EFI/BOOT
 	cp $(LIMINE_SHARE)/BOOTX64.EFI $(ISO_BOOT_DIR)/EFI/BOOT/BOOTX64.EFI
