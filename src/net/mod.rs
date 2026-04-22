@@ -73,6 +73,14 @@ impl NetDevice for ActiveDevice {
         }
     }
 
+    fn drain_rx_each(&mut self, limit: usize, f: &mut dyn FnMut(alloc::vec::Vec<u8>)) -> usize {
+        match self {
+            ActiveDevice::Virtio(dev) => dev.drain_rx_each(limit, f),
+            //  ActiveDevice::E1000(dev) => dev.drain_rx_each(limit, f),
+            ActiveDevice::R8125(dev) => dev.drain_rx_each(limit, f),
+        }
+    }
+
     fn transmit(&mut self, frame: &[u8]) -> Result<(), ()> {
         match self {
             ActiveDevice::Virtio(dev) => dev.transmit(frame),
@@ -369,6 +377,14 @@ pub fn poll_at(index: usize) -> bool {
 
 pub fn drain_rx_packets_at(index: usize, limit: usize) -> alloc::vec::Vec<alloc::vec::Vec<u8>> {
     with_device_at(index, |dev| dev.drain_rx(limit)).unwrap_or_else(alloc::vec::Vec::new)
+}
+
+pub fn drain_rx_packets_each_at(
+    index: usize,
+    limit: usize,
+    f: &mut dyn FnMut(alloc::vec::Vec<u8>),
+) -> usize {
+    with_device_at(index, |dev| dev.drain_rx_each(limit, f)).unwrap_or(0)
 }
 
 pub fn rx_pending_at(index: usize) -> usize {

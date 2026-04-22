@@ -237,7 +237,7 @@ pub async fn ui2_coreticks_demo_task() {
         }
         if UI2_CORETICKS_DIRTY.swap(false, Ordering::AcqRel) {
             let pixels = ui2_coreticks_demo_current_rgba();
-            if !surface.upload_rgba(pixels.as_slice(), "ui2-coreticks-demo-present") {
+            if !surface.upload_rgba_owned(pixels, "ui2-coreticks-demo-present") {
                 break;
             }
             let _ = crate::r::ui2::request_window_content_present(

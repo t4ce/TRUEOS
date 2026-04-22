@@ -840,7 +840,7 @@ pub async fn ui2_swarm_demo_task() {
             let _ = crate::r::ui2::set_window_title(surface.window_id(), scene.title.as_str());
             let _ = surface.bind_hosted_scroll_state(UI2_SWARM_CONTENT_ID, content_w, content_h);
             let _ = surface.set_interactives(interactives.as_slice());
-            if !surface.upload_rgba(pixels.as_slice(), "ui2-swarm-present") {
+            if !surface.upload_rgba_owned(pixels, "ui2-swarm-present") {
                 break;
             }
             needs_render = false;

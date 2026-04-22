@@ -1088,6 +1088,50 @@ pub mod cabi {
         DrawTex(TextureDrawTexReq),
     }
 
+    const MAX_REASONABLE_TEX_ID: u32 = 100_000;
+
+    #[inline]
+    fn reject_unreasonable_tex_id(tex_id: u32, op: &'static str) -> bool {
+        if tex_id == 0 || tex_id <= MAX_REASONABLE_TEX_ID {
+            return false;
+        }
+        crate::log!(
+            "gfx-cabi: reject unreasonable tex_id={} op={} max={}\n",
+            tex_id,
+            op,
+            MAX_REASONABLE_TEX_ID
+        );
+        true
+    }
+
+    #[inline]
+    fn reject_unreasonable_tex_pair(
+        target_tex_id: u32,
+        source_tex_id: u32,
+        op: &'static str,
+    ) -> bool {
+        let mut rejected = false;
+        if target_tex_id > MAX_REASONABLE_TEX_ID {
+            crate::log!(
+                "gfx-cabi: reject unreasonable target_tex_id={} op={} max={}\n",
+                target_tex_id,
+                op,
+                MAX_REASONABLE_TEX_ID
+            );
+            rejected = true;
+        }
+        if source_tex_id > MAX_REASONABLE_TEX_ID {
+            crate::log!(
+                "gfx-cabi: reject unreasonable source_tex_id={} op={} max={}\n",
+                source_tex_id,
+                op,
+                MAX_REASONABLE_TEX_ID
+            );
+            rejected = true;
+        }
+        rejected
+    }
+
     fn set_async_tex_status(tex_id: u32, status: i32) {
         if tex_id == 0 {
             return;
@@ -1227,6 +1271,9 @@ pub mod cabi {
         if tex_id == 0 || width == 0 || height == 0 {
             return false;
         }
+        if reject_unreasonable_tex_id(tex_id, "queue-texture-upload") {
+            return false;
+        }
         if checked_reasonable_rgba_len(width, height).is_none() {
             crate::log!(
                 "gfx-cabi: reject texture-upload queue tex={} size={}x{} repaint={} window={}\n",
@@ -1270,6 +1317,27 @@ pub mod cabi {
             update_async_status,
         });
         true
+    }
+
+    pub fn queue_texture_rgba_image_upload_owned(
+        tex_id: u32,
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+        repaint_window_id: u32,
+        repaint_reason: &'static str,
+    ) -> bool {
+        queue_texture_rgba_upload_owned(
+            tex_id,
+            width,
+            height,
+            None,
+            rgba,
+            TexSampleKind::Rgba,
+            repaint_window_id,
+            repaint_reason,
+            false,
+        )
     }
 
     pub fn queue_texture_rgba_image_upload_copy(
@@ -1354,6 +1422,9 @@ pub mod cabi {
         if tex_id == 0 {
             return false;
         }
+        if reject_unreasonable_tex_id(tex_id, "queue-draw-rgb") {
+            return false;
+        }
         if vtx.is_empty() {
             return true;
         }
@@ -1383,6 +1454,9 @@ pub mod cabi {
         if tex_id == 0 {
             return false;
         }
+        if reject_unreasonable_tex_id(tex_id, "queue-draw-mandelbrot") {
+            return false;
+        }
         enqueue_texture_draw_mandelbrot(TextureDrawMandelbrotReq {
             tex_id,
             ticks,
@@ -1402,6 +1476,9 @@ pub mod cabi {
         repaint_reason: &'static str,
     ) -> bool {
         if target_tex_id == 0 || source_tex_id == 0 {
+            return false;
+        }
+        if reject_unreasonable_tex_pair(target_tex_id, source_tex_id, "queue-draw-tex") {
             return false;
         }
         if vtx.is_empty() {
@@ -1434,6 +1511,9 @@ pub mod cabi {
         repaint_reason: &'static str,
     ) -> bool {
         if target_tex_id == 0 || source_tex_id == 0 {
+            return false;
+        }
+        if reject_unreasonable_tex_pair(target_tex_id, source_tex_id, "queue-draw-particle-tex") {
             return false;
         }
         if vtx.is_empty() {
@@ -2272,6 +2352,9 @@ pub mod cabi {
 
     fn texture_dimensions_inner(tex_id: u32) -> Option<(u32, u32)> {
         if tex_id == 0 {
+            return None;
+        }
+        if reject_unreasonable_tex_id(tex_id, "texture-dimensions") {
             return None;
         }
         let idx = tex_id.saturating_sub(1) as usize;
@@ -3556,6 +3639,9 @@ pub mod cabi {
         if tex_id == 0 {
             return -1;
         }
+        if reject_unreasonable_tex_id(tex_id, "render-rgb-now") {
+            return -7;
+        }
         if vtx.is_empty() {
             return 0;
         }
@@ -3695,6 +3781,9 @@ pub mod cabi {
         if tex_id == 0 {
             return -1;
         }
+        if reject_unreasonable_tex_id(tex_id, "render-mandelbrot-now") {
+            return -8;
+        }
         if !crate::gfx::is_virgl_active() {
             return -2;
         }
@@ -3787,6 +3876,9 @@ pub mod cabi {
 
         if target_tex_id == 0 || source_tex_id == 0 {
             return -1;
+        }
+        if reject_unreasonable_tex_pair(target_tex_id, source_tex_id, "render-tex-now") {
+            return -8;
         }
         const VTX_SIZE: usize = 20;
         let usable = vtx.len() - (vtx.len() % VTX_SIZE);
@@ -4018,6 +4110,9 @@ pub mod cabi {
 
         if tex_id == 0 || width == 0 || height == 0 {
             return -1;
+        }
+        if reject_unreasonable_tex_id(tex_id, "upload-rgba-now") {
+            return -8;
         }
         if data_ptr.is_null() {
             return -2;
@@ -4559,6 +4654,9 @@ pub mod cabi {
 
     #[unsafe(no_mangle)]
     pub extern "C" fn trueos_cabi_gfx_texture_status(tex_id: u32) -> i32 {
+        if reject_unreasonable_tex_id(tex_id, "texture-status") {
+            return ASYNC_TEX_STATUS_UNKNOWN;
+        }
         if get_async_tex_status(tex_id) == ASYNC_TEX_STATUS_PENDING {
             try_start_async_png_worker();
             try_start_async_svg_worker();

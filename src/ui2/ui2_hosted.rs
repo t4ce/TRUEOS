@@ -670,10 +670,10 @@ fn sync_browser_title_metadata(state: &mut Ui2State, window_id: u32, title: &str
         let Some(window) = window_mut(state, window_id) else {
             return;
         };
-        if window.title == title {
+        if window.title.as_str() == title {
             false
         } else {
-            window.title = String::from(title);
+            window.title = ui2_window_title_inline(title);
             true
         }
     };

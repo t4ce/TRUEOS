@@ -252,7 +252,7 @@ pub async fn ui2_svg_demo_task() {
     let _ = surface.bind_spawn_task("ui2-svg-demo");
 
     let (rgba, rendered) = compose_svg_demo_grid_rgba(surface_w, surface_h);
-    if !surface.upload_rgba(rgba.as_slice(), "ui2-svg-demo-upload") {
+    if !surface.upload_rgba_owned(rgba, "ui2-svg-demo-upload") {
         crate::log!(
             "ui2-svg-demo: upload failed window={} tex={} size={}x{}\n",
             surface.window_id(),

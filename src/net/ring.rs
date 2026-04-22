@@ -146,8 +146,10 @@ impl RxRing {
         slot.owned_by_hw = false;
     }
 
-    pub fn poll(&mut self, budget: usize) -> Vec<Vec<u8>> {
-        let mut out = Vec::with_capacity(budget.min(self.slots.len()));
+    pub fn poll_each<F>(&mut self, budget: usize, mut f: F) -> usize
+    where
+        F: FnMut(Vec<u8>),
+    {
         let mut processed = 0;
         while processed < budget {
             let slot = &mut self.slots[self.head];
@@ -161,13 +163,13 @@ impl RxRing {
             let mut packet = core::mem::replace(&mut slot.buf, new_buf);
             packet.truncate(len);
 
-            out.push(packet);
             slot.len = 0;
             slot.owned_by_hw = true;
             self.head = (self.head + 1) % self.slots.len();
             processed += 1;
+            f(packet);
         }
-        out
+        processed
     }
 
     pub fn push_hw_owned(&mut self) -> Result<usize, RxError> {
@@ -219,8 +221,11 @@ impl NetRing {
         }
     }
 
-    pub fn poll_rx(&mut self) -> Vec<Vec<u8>> {
-        self.rx.poll(self.poll_budget)
+    pub fn poll_rx_each<F>(&mut self, f: F) -> usize
+    where
+        F: FnMut(Vec<u8>),
+    {
+        self.rx.poll_each(self.poll_budget, f)
     }
 
     pub fn push_rx_packet(&mut self, data: &[u8]) -> Result<(), RxError> {

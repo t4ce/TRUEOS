@@ -4,6 +4,7 @@ use alloc::vec::Vec;
 use core::cmp::Ordering as CmpOrdering;
 use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use heapless::String as HString;
 
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::{Mutex, Once};
@@ -418,6 +419,14 @@ pub struct Ui2HostedInteractiveRect {
     pub height: u32,
 }
 
+type Ui2WindowTitle = HString<64>;
+
+fn ui2_window_title_inline(title: &str) -> Ui2WindowTitle {
+    let mut out = Ui2WindowTitle::new();
+    let _ = out.push_str(title);
+    out
+}
+
 #[derive(Clone)]
 struct Ui2Window {
     id: u32,
@@ -426,7 +435,7 @@ struct Ui2Window {
     vm_origin_hint: bool,
     browser_instance_id: u32,
     hosted_browser_snapshot: UiHostedBrowserSnapshot,
-    title: String,
+    title: Ui2WindowTitle,
     icon_id: u32,
     title_twemoji: char,
     title_icon_tex_id: u32,
@@ -1177,6 +1186,7 @@ pub unsafe extern "C" fn trueos_cabi_app_window_create(
         ));
         return 0;
     };
+    let title = String::from(title);
     let rect = Ui2Rect {
         x: x as f32,
         y: y as f32,
@@ -1184,7 +1194,7 @@ pub unsafe extern "C" fn trueos_cabi_app_window_create(
         h: height.max(1) as f32,
     };
     let id = create_window(
-        title,
+        title.as_str(),
         rect,
         z.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
         alpha.min(255) as u8,
@@ -1192,11 +1202,11 @@ pub unsafe extern "C" fn trueos_cabi_app_window_create(
     if id != 0 {
         let _ = set_window_vm_origin_hint(id, true);
         let _ = focus_window(id);
-        crate::hv::register_blueprint_app_window(id, "plain", title);
+        crate::hv::register_blueprint_app_window(id, "plain", title.as_str());
     } else {
         crate::hv::log_blueprint_app_window_event(format_args!(
             "app-window-broker: plain create failed title={} rect=({},{} {}x{}) z={} alpha={}",
-            title,
+            title.as_str(),
             x,
             y,
             width,
@@ -1228,6 +1238,7 @@ pub unsafe extern "C" fn trueos_cabi_ui2_surface_window_create(
     let Ok(title) = core::str::from_utf8(title) else {
         return 0;
     };
+    let title = String::from(title);
     let content_rect = Ui2Rect {
         x: x as f32,
         y: y as f32,
@@ -1235,7 +1246,7 @@ pub unsafe extern "C" fn trueos_cabi_ui2_surface_window_create(
         h: height.max(1) as f32,
     };
     let id = create_hosted_surface_content_window(
-        title,
+        title.as_str(),
         content_rect,
         z.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
         alpha.min(255) as u8,
@@ -1278,6 +1289,7 @@ pub unsafe extern "C" fn trueos_cabi_app_surface_window_create(
         ));
         return 0;
     };
+    let title = String::from(title);
     let content_rect = Ui2Rect {
         x: x as f32,
         y: y as f32,
@@ -1285,7 +1297,7 @@ pub unsafe extern "C" fn trueos_cabi_app_surface_window_create(
         h: height.max(1) as f32,
     };
     let id = Ui2SurfaceWindow::new(
-        title,
+        title.as_str(),
         content_rect,
         z.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
         alpha.min(255) as u8,
@@ -1298,11 +1310,11 @@ pub unsafe extern "C" fn trueos_cabi_app_surface_window_create(
     if id != 0 {
         let _ = set_window_vm_origin_hint(id, true);
         let _ = focus_window(id);
-        crate::hv::register_blueprint_app_window(id, "surface", title);
+        crate::hv::register_blueprint_app_window(id, "surface", title.as_str());
     } else {
         crate::hv::log_blueprint_app_window_event(format_args!(
             "app-window-broker: surface create failed title={} tex={} rect=({},{} {}x{}) z={} alpha={} blend={}",
-            title,
+            title.as_str(),
             tex_id,
             x,
             y,

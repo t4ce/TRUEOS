@@ -5,6 +5,8 @@ use alloc::vec::Vec;
 use crate::net::device::{LinkState, NetDevice};
 use crate::net::ring::NetRing;
 
+const RX_QUEUE_SOFT_CAP: usize = 64;
+
 pub trait VendorAdapter {
     fn mac(&self) -> [u8; 6];
     fn poll_rx(&mut self);
@@ -37,7 +39,7 @@ impl<A: VendorAdapter> NetCore<A> {
         Self {
             adapter,
             ring,
-            rx_queue: VecDeque::new(),
+            rx_queue: VecDeque::with_capacity(RX_QUEUE_SOFT_CAP),
         }
     }
 
@@ -54,11 +56,15 @@ impl<A: VendorAdapter> NetDevice for NetCore<A> {
 
     fn poll_rx(&mut self) -> bool {
         self.adapter.poll_rx();
-        let packets = self.ring.poll_rx();
-        let received = !packets.is_empty();
-        if received {
-            self.rx_queue.extend(packets);
-        }
+        let mut received = false;
+        self.ring.poll_rx_each(|packet| {
+            received = true;
+            if self.rx_queue.len() < RX_QUEUE_SOFT_CAP {
+                self.rx_queue.push_back(packet);
+            } else {
+                crate::net::ring::recycle_packet_buf(packet);
+            }
+        });
         received
     }
 
@@ -75,6 +81,18 @@ impl<A: VendorAdapter> NetDevice for NetCore<A> {
         }
         let len = self.rx_queue.len().min(limit);
         self.rx_queue.drain(..len).collect()
+    }
+
+    fn drain_rx_each(&mut self, limit: usize, f: &mut dyn FnMut(Vec<u8>)) -> usize {
+        let mut drained = 0usize;
+        while drained < limit {
+            let Some(pkt) = self.rx_queue.pop_front() else {
+                break;
+            };
+            drained += 1;
+            f(pkt);
+        }
+        drained
     }
 
     fn rx_queue_len(&self) -> usize {

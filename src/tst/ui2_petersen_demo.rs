@@ -247,7 +247,7 @@ pub async fn ui2_petersen_demo_task() {
 
     let (surface_w, surface_h) = surface.size();
     let (pixels, node_count, edge_count) = render_petersen_surface_rgba(surface_w, surface_h);
-    if !surface.upload_rgba(pixels.as_slice(), "ui2-petersen-demo") {
+    if !surface.upload_rgba_owned(pixels, "ui2-petersen-demo") {
         crate::log!(
             "ui2-petersen-demo: upload failed window={} tex={} size={}x{}\n",
             surface.window_id(),
