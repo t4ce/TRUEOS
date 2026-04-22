@@ -424,51 +424,51 @@ fn engine_key(engine: EngineTarget) -> &'static str {
     }
 }
 
-fn media_engine_class_str(class: crate::intel::xelp_media_ngin::MediaEngineClass) -> &'static str {
+fn media_engine_class_str(class: crate::intel::xelp_media2_ngin::MediaEngineClass) -> &'static str {
     match class {
-        crate::intel::xelp_media_ngin::MediaEngineClass::VideoDecode => "video-decode",
-        crate::intel::xelp_media_ngin::MediaEngineClass::VideoEnhancement => "video-enhancement",
+        crate::intel::xelp_media2_ngin::MediaEngineClass::VideoDecode => "video-decode",
+        crate::intel::xelp_media2_ngin::MediaEngineClass::VideoEnhancement => "video-enhancement",
     }
 }
 
 fn media_provisioning_str(
-    provisioning: crate::intel::xelp_media_ngin::MediaProvisioning,
+    provisioning: crate::intel::xelp_media2_ngin::MediaProvisioning,
 ) -> &'static str {
     match provisioning {
-        crate::intel::xelp_media_ngin::MediaProvisioning::Kickoff => "kickoff",
-        crate::intel::xelp_media_ngin::MediaProvisioning::ScaleOutReserve => "scaleout-reserve",
-        crate::intel::xelp_media_ngin::MediaProvisioning::Disabled => "disabled",
+        crate::intel::xelp_media2_ngin::MediaProvisioning::Kickoff => "kickoff",
+        crate::intel::xelp_media2_ngin::MediaProvisioning::ScaleOutReserve => "scaleout-reserve",
+        crate::intel::xelp_media2_ngin::MediaProvisioning::Disabled => "disabled",
     }
 }
 
-fn media_workload_str(workload: crate::intel::xelp_media_ngin::MediaWorkloadKind) -> &'static str {
+fn media_workload_str(workload: crate::intel::xelp_media2_ngin::MediaWorkloadKind) -> &'static str {
     match workload {
-        crate::intel::xelp_media_ngin::MediaWorkloadKind::DecodeBitstream => "decode-bitstream",
-        crate::intel::xelp_media_ngin::MediaWorkloadKind::DecodeFrame => "decode-frame",
-        crate::intel::xelp_media_ngin::MediaWorkloadKind::EnhanceFrame => "enhance-frame",
-        crate::intel::xelp_media_ngin::MediaWorkloadKind::SessionSnapshot => "session-snapshot",
-        crate::intel::xelp_media_ngin::MediaWorkloadKind::EngineReset => "engine-reset",
-        crate::intel::xelp_media_ngin::MediaWorkloadKind::Smoke => "smoke",
+        crate::intel::xelp_media2_ngin::MediaWorkloadKind::DecodeBitstream => "decode-bitstream",
+        crate::intel::xelp_media2_ngin::MediaWorkloadKind::DecodeFrame => "decode-frame",
+        crate::intel::xelp_media2_ngin::MediaWorkloadKind::EnhanceFrame => "enhance-frame",
+        crate::intel::xelp_media2_ngin::MediaWorkloadKind::SessionSnapshot => "session-snapshot",
+        crate::intel::xelp_media2_ngin::MediaWorkloadKind::EngineReset => "engine-reset",
+        crate::intel::xelp_media2_ngin::MediaWorkloadKind::Smoke => "smoke",
     }
 }
 
 fn media_transport_str(
-    transport: crate::intel::xelp_media_ngin::MediaSubmissionTransport,
+    transport: crate::intel::xelp_media2_ngin::MediaSubmissionTransport,
 ) -> &'static str {
     match transport {
-        crate::intel::xelp_media_ngin::MediaSubmissionTransport::GuC => "guc",
-        crate::intel::xelp_media_ngin::MediaSubmissionTransport::Execlists => "execlists",
-        crate::intel::xelp_media_ngin::MediaSubmissionTransport::Disabled => "disabled",
+        crate::intel::xelp_media2_ngin::MediaSubmissionTransport::GuC => "guc",
+        crate::intel::xelp_media2_ngin::MediaSubmissionTransport::Execlists => "execlists",
+        crate::intel::xelp_media2_ngin::MediaSubmissionTransport::Disabled => "disabled",
     }
 }
 
-fn media_stage_str(stage: crate::intel::xelp_media_ngin::MediaKickoffStage) -> &'static str {
+fn media_stage_str(stage: crate::intel::xelp_media2_ngin::MediaKickoffStage) -> &'static str {
     match stage {
-        crate::intel::xelp_media_ngin::MediaKickoffStage::Discovery => "discovery",
-        crate::intel::xelp_media_ngin::MediaKickoffStage::ResourcePlanning => "resource-planning",
-        crate::intel::xelp_media_ngin::MediaKickoffStage::SubmissionWiring => "submission-wiring",
-        crate::intel::xelp_media_ngin::MediaKickoffStage::CommandEncoding => "command-encoding",
-        crate::intel::xelp_media_ngin::MediaKickoffStage::Smoke => "smoke",
+        crate::intel::xelp_media2_ngin::MediaKickoffStage::Discovery => "discovery",
+        crate::intel::xelp_media2_ngin::MediaKickoffStage::ResourcePlanning => "resource-planning",
+        crate::intel::xelp_media2_ngin::MediaKickoffStage::SubmissionWiring => "submission-wiring",
+        crate::intel::xelp_media2_ngin::MediaKickoffStage::CommandEncoding => "command-encoding",
+        crate::intel::xelp_media2_ngin::MediaKickoffStage::Smoke => "smoke",
     }
 }
 

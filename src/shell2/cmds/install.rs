@@ -139,10 +139,11 @@ async fn install_command_task(
         )
         .await
         {
-            Ok(()) => {
-                crate::r::fs::trueosfs::request_mount_root(disk);
-                log("install: ok");
-            }
+            Ok(()) => match crate::r::fs::trueosfs::remount_root_async(disk).await {
+                Ok(Some(_)) => log("install: ok"),
+                Ok(None) => log("install: failed to remount TRUEOSFS"),
+                Err(e) => log(alloc::format!("install: remount failed ({:?})", e).as_str()),
+            },
             Err(e) => log(alloc::format!("install: failed ({:?})", e).as_str()),
         }
     }

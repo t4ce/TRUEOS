@@ -95,9 +95,7 @@ pub struct IntelGfxBackend {
 unsafe impl Send for IntelGfxBackend {}
 
 impl IntelGfxBackend {
-    pub fn init(
-        framebuffers: Option<&'static crate::limine::FramebufferResponse>,
-    ) -> Option<Self> {
+    pub fn init(framebuffers: Option<&'static crate::limine::FramebufferResponse>) -> Option<Self> {
         if !crate::intel::has_claimed_device() {
             return None;
         }
@@ -889,7 +887,28 @@ impl GfxDevice for IntelGfxBackend {
                         self.sync_screen_rgba_from_gpu();
                     }
                     self.with_target_mut(target, |rgba, target_w, target_h| {
-                        clear_rgba_rect(rgba, target_w, target_h, x, y, width, height, rgb);
+                        let mut x0 = x.min(target_w);
+                        let mut y0 = y.min(target_h);
+                        let mut x1 = x.saturating_add(width).min(target_w);
+                        let mut y1 = y.saturating_add(height).min(target_h);
+                        if let Some(scissor) = scissor {
+                            x0 = x0.max(scissor.x.min(target_w));
+                            y0 = y0.max(scissor.y.min(target_h));
+                            x1 = x1.min(scissor.x.saturating_add(scissor.width).min(target_w));
+                            y1 = y1.min(scissor.y.saturating_add(scissor.height).min(target_h));
+                        }
+                        if x0 < x1 && y0 < y1 {
+                            clear_rgba_rect(
+                                rgba,
+                                target_w,
+                                target_h,
+                                x0,
+                                y0,
+                                x1 - x0,
+                                y1 - y0,
+                                rgb,
+                            );
+                        }
                     })?;
                 }
                 Command::BindPipeline(id) => {

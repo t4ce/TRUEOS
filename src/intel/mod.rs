@@ -6,11 +6,10 @@ mod render;
 pub(crate) mod shader;
 pub(crate) mod state;
 pub(crate) mod stats;
+pub(crate) mod xelp_media2_ngin;
 pub(crate) mod xelp_media_h264src;
 pub(crate) mod xelp_media_matroska;
-pub(crate) mod xelp_media2_ngin;
 pub(crate) mod xelp_media_mp4;
-pub(crate) mod xelp_media_ngin;
 pub(crate) mod xelp_media_source;
 
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -300,24 +299,25 @@ pub fn kernel_hw_cursor_slot() -> Option<u32> {
 }
 
 pub fn media_kickoff_once() {
-    self::xelp_media_ngin::kickoff_once();
+    self::xelp_media2_ngin::kickoff_once();
 }
 
-pub fn media_kickoff_state() -> Option<self::xelp_media_ngin::MediaKickoffState> {
-    self::xelp_media_ngin::kickoff_state()
+pub fn media_kickoff_state() -> Option<self::xelp_media2_ngin::MediaKickoffState> {
+    self::xelp_media2_ngin::kickoff_state()
 }
 
 pub fn media_decode_surface_window(
     name: &str,
-) -> Option<self::xelp_media_ngin::MediaSurfaceWindow> {
-    self::xelp_media_ngin::decode_surface_window(name)
+) -> Option<self::xelp_media2_ngin::MediaSurfaceWindow> {
+    self::xelp_media2_ngin::decode_surface_window(name)
 }
 
 pub async fn run_media_decode_async() {
-    self::xelp_media_ngin::run_media_decode_async().await
+    self::xelp_media2_ngin::run_media_decode_async().await
 }
 
-pub async fn run_media2_first_frame_async() -> Option<self::xelp_media2_ngin::Media2FirstFrameState> {
+pub async fn run_media2_first_frame_async() -> Option<self::xelp_media2_ngin::Media2FirstFrameState>
+{
     self::xelp_media2_ngin::run_media2_first_frame_async().await
 }
 

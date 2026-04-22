@@ -153,24 +153,39 @@ async fn format_command_task(target: MatrixTarget, disk: DeviceHandle) {
                                     .await
                                     {
                                         Ok(()) => {
-                                            crate::r::fs::trueosfs::request_mount_root(disk);
-                                            let (status, err) =
-                                            crate::r::disc::detect::detect_physical_disk_detail(
-                                                disk,
-                                            )
-                                            .await;
-                                            log(alloc::format!(
-                                                "format: ok (status now: {}{})",
-                                                status.short(),
-                                                match (&status, err) {
-                                                    (
-                                                        crate::r::disc::detect::DiscStatus::Unknown,
-                                                        Some(err),
-                                                    ) => alloc::format!("; err={:?}", err),
-                                                    _ => String::new(),
+                                            match crate::r::fs::trueosfs::remount_root_async(disk)
+                                                .await
+                                            {
+                                                Ok(Some(_)) => {
+                                                    let (status, err) =
+                                                    crate::r::disc::detect::detect_physical_disk_detail(
+                                                        disk,
+                                                    )
+                                                    .await;
+                                                    log(alloc::format!(
+                                                        "format: ok (status now: {}{})",
+                                                        status.short(),
+                                                        match (&status, err) {
+                                                            (
+                                                                crate::r::disc::detect::DiscStatus::Unknown,
+                                                                Some(err),
+                                                            ) => alloc::format!("; err={:?}", err),
+                                                            _ => String::new(),
+                                                        }
+                                                    )
+                                                    .as_str());
                                                 }
-                                            )
-                                            .as_str());
+                                                Ok(None) => {
+                                                    log("format: remount failed (TRUEOSFS not found after format)");
+                                                }
+                                                Err(err) => {
+                                                    log(alloc::format!(
+                                                        "format: remount failed ({:?})",
+                                                        err
+                                                    )
+                                                    .as_str());
+                                                }
+                                            }
                                         }
                                         Err(err) => {
                                             log(alloc::format!(
