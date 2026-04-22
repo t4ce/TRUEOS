@@ -72,7 +72,7 @@ impl Drop for LoadedRelImage {
     }
 }
 
-const PORTAL_IMAGE_ARENA_BYTES: usize = 1024 * 1024;
+const PORTAL_IMAGE_ARENA_BYTES: usize = 4 * 1024 * 1024;
 
 #[repr(align(4096))]
 struct PortalImageArena([u8; PORTAL_IMAGE_ARENA_BYTES]);

@@ -35,6 +35,12 @@ gh auth login
 apt install npm
 sudo npm install node
 
+# minimum install on MAC
+xcode-select --install
+rustup toolchain install nightly
+brew install xorriso zstd 
+
+
 # update
 cargo outdated -R
 cargo upgrade

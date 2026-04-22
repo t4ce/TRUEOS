@@ -12,6 +12,115 @@ fn run(cmd: &mut Command) {
     }
 }
 
+fn env_var_set(name: &str) -> bool {
+    env::var_os(name).is_some_and(|value| !value.is_empty())
+}
+
+fn env_var_value(name: &str) -> Option<String> {
+    env::var(name).ok().map(|value| value.trim().to_string())
+}
+
+fn is_default_cc_driver(value: &str) -> bool {
+    matches!(value, "cc" | "clang" | "/usr/bin/cc" | "/usr/bin/clang")
+}
+
+fn is_default_ar_driver(value: &str) -> bool {
+    matches!(value, "ar" | "/usr/bin/ar")
+}
+
+fn darwin_sdk_path() -> Option<PathBuf> {
+    if let Some(path) = env::var_os("SDKROOT").filter(|value| !value.is_empty()) {
+        return Some(PathBuf::from(path));
+    }
+
+    let common_sdk_paths = [
+        "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk",
+    ];
+    for candidate in common_sdk_paths {
+        let path = PathBuf::from(candidate);
+        if path.is_dir() {
+            return Some(path);
+        }
+    }
+
+    let output = Command::new("xcrun")
+        .arg("--sdk")
+        .arg("macosx")
+        .arg("--show-sdk-path")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let path = String::from_utf8(output.stdout).ok()?;
+    let path = path.trim();
+    if path.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(path))
+    }
+}
+
+fn configure_darwin_baremetal_cc_tools(build: &mut cc::Build, target: &str) {
+    if env::consts::OS != "macos" || !target.contains("unknown-none") {
+        return;
+    }
+
+    // Respect explicit target-specific overrides and non-default generic tools.
+    if env_var_set("CC_x86_64_unknown_none_elf") || env_var_set("AR_x86_64_unknown_none_elf") {
+        return;
+    }
+    if let Some(cc) = env_var_value("CC") {
+        if !cc.is_empty() && !is_default_cc_driver(&cc) {
+            return;
+        }
+    }
+    if let Some(ar) = env_var_value("AR") {
+        if !ar.is_empty() && !is_default_ar_driver(&ar) {
+            return;
+        }
+    }
+
+    let mut found_llvm = false;
+    let llvm_roots = ["/opt/homebrew/opt/llvm/bin", "/usr/local/opt/llvm/bin"];
+    for root in llvm_roots {
+        let clang = Path::new(root).join("clang");
+        let llvm_ar = Path::new(root).join("llvm-ar");
+        if clang.is_file() && llvm_ar.is_file() {
+            build.compiler(&clang);
+            build.archiver(&llvm_ar);
+            found_llvm = true;
+            println!(
+                "cargo:warning=trueos-qjs: using Homebrew LLVM tools for macOS bare-metal build: {}",
+                clang.display()
+            );
+            break;
+        }
+    }
+
+    if let Some(sdk) = darwin_sdk_path() {
+        let sdk_include = sdk.join("usr").join("include");
+        build.flag("-isysroot");
+        build.flag(sdk.to_string_lossy().as_ref());
+        if sdk_include.is_dir() {
+            build.flag("-isystem");
+            build.flag(sdk_include.to_string_lossy().as_ref());
+        }
+        println!(
+            "cargo:warning=trueos-qjs: using macOS SDK headers from {} for bare-metal C build",
+            sdk.display()
+        );
+    }
+
+    if !found_llvm {
+        println!(
+            "cargo:warning=trueos-qjs: Homebrew LLVM not found; if Apple clang fails, set CC_x86_64_unknown_none_elf and AR_x86_64_unknown_none_elf"
+        );
+    }
+}
+
 fn ensure_quickjs_checkout(out_dir: &Path) -> PathBuf {
     // User override: point directly at a QuickJS source tree.
     if let Ok(p) = env::var("TRUEOS_QJS_QUICKJS_DIR") {
@@ -552,6 +661,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=TRUEOS_QJS_QUICKJS_REF");
     println!("cargo:rerun-if-env-changed=TRUEOS_QJS_EMBED_BYTECODE");
     println!("cargo:rerun-if-env-changed=CARGO_NET_OFFLINE");
+    println!("cargo:rerun-if-env-changed=SDKROOT");
 
     let quickjs_dir = ensure_quickjs_checkout(&out_dir);
 
@@ -595,12 +705,14 @@ fn main() {
         build.file(&yoga_cabi);
     }
 
-    if !target.contains('-') {
-        let fixed_target = format!("{}-unknown-none", arch);
-        build.target(&fixed_target);
+    let effective_target = if !target.contains('-') {
+        format!("{}-unknown-none", arch)
     } else {
-        build.target(&target);
-    }
+        target.clone()
+    };
+    build.target(&effective_target);
+
+    configure_darwin_baremetal_cc_tools(&mut build, &effective_target);
 
     build
         .flag("-ffreestanding")

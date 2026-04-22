@@ -48,6 +48,21 @@ fn require_tool(tool: &str, hint: &str) {
     }
 }
 
+fn clone_limine_repo(paths: &LiminePaths, repo: &str, reference: &str) {
+    remove_dir_if_exists(&paths.src_dir);
+    fs::create_dir_all(paths.src_dir.parent().unwrap()).expect("create bld/");
+
+    let mut cmd = Command::new("git");
+    cmd.arg("clone")
+        .arg("--depth")
+        .arg("1")
+        .arg("--branch")
+        .arg(reference)
+        .arg(repo)
+        .arg(&paths.src_dir);
+    run(&mut cmd);
+}
+
 pub struct LiminePaths {
     pub src_dir: PathBuf,
     pub build_dir: PathBuf,
@@ -117,18 +132,7 @@ Set TRUEOS_LIMINE_REF/TRUEOS_LIMINE_REPO and build with network access once.",
 
     if !paths.src_dir.join(".git").exists() {
         // Fresh clone into bld/ so it stays out of version control.
-        remove_dir_if_exists(&paths.src_dir);
-        fs::create_dir_all(paths.src_dir.parent().unwrap()).expect("create bld/");
-
-        let mut cmd = Command::new("git");
-        cmd.arg("clone")
-            .arg("--depth")
-            .arg("1")
-            .arg("--branch")
-            .arg(&reference)
-            .arg(&repo)
-            .arg(&paths.src_dir);
-        run(&mut cmd);
+        clone_limine_repo(&paths, &repo, &reference);
     }
 
     // Reconfigure/rebuild if config args changed.
@@ -148,6 +152,10 @@ Set TRUEOS_LIMINE_REF/TRUEOS_LIMINE_REPO and build with network access once.",
 
     // Bootstrap if needed.
     if !paths.src_dir.join("configure").is_file() {
+        if !paths.src_dir.join("bootstrap").is_file() {
+            // Self-heal broken/incomplete source trees instead of panicking on ./bootstrap.
+            clone_limine_repo(&paths, &repo, &reference);
+        }
         require_tool("autoreconf", "Install autoconf + automake (and likely libtool)");
         let mut cmd = Command::new("sh");
         cmd.current_dir(&paths.src_dir)
