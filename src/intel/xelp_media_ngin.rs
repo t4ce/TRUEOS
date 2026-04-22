@@ -471,26 +471,26 @@ unsafe impl Send for MediaSurfaceWindow {}
 unsafe impl Sync for MediaSurfaceWindow {}
 
 #[derive(Copy, Clone)]
-struct MediaBitstreamBacking {
-    ring_phys: u64,
-    ring_virt: *mut u8,
-    ring_bytes: usize,
-    context_phys: u64,
-    context_virt: *mut u8,
-    context_bytes: usize,
-    batch_phys: u64,
-    batch_virt: *mut u8,
-    batch_bytes: usize,
-    result_phys: u64,
-    result_virt: *mut u8,
-    result_bytes: usize,
-    bitstream_phys: u64,
-    bitstream_virt: *mut u8,
-    bitstream_bytes: usize,
-    output_surface_phys: u64,
-    output_surface_virt: *mut u8,
-    output_surface_bytes: usize,
-    ppgtt_pml4_phys: u64,
+pub(super) struct MediaBitstreamBacking {
+    pub(super) ring_phys: u64,
+    pub(super) ring_virt: *mut u8,
+    pub(super) ring_bytes: usize,
+    pub(super) context_phys: u64,
+    pub(super) context_virt: *mut u8,
+    pub(super) context_bytes: usize,
+    pub(super) batch_phys: u64,
+    pub(super) batch_virt: *mut u8,
+    pub(super) batch_bytes: usize,
+    pub(super) result_phys: u64,
+    pub(super) result_virt: *mut u8,
+    pub(super) result_bytes: usize,
+    pub(super) bitstream_phys: u64,
+    pub(super) bitstream_virt: *mut u8,
+    pub(super) bitstream_bytes: usize,
+    pub(super) output_surface_phys: u64,
+    pub(super) output_surface_virt: *mut u8,
+    pub(super) output_surface_bytes: usize,
+    pub(super) ppgtt_pml4_phys: u64,
 }
 
 unsafe impl Send for MediaBitstreamBacking {}
@@ -634,6 +634,15 @@ fn engine_window(slot: usize) -> MediaGpuWindowLayout {
         output_surface_gpu_addr: base + 0x0020_0000,
         result_gpu_addr: base + 0x00A0_0000,
     }
+}
+
+pub(super) fn default_decode_engine_and_window() -> (MediaEngineDescriptor, MediaGpuWindowLayout) {
+    let topology = current_topology();
+    let engine = topology
+        .default_decode
+        .map(|_| topology.engines[0])
+        .unwrap_or(topology.engines[0]);
+    (engine, engine_window(0))
 }
 
 fn preferred_transport() -> MediaSubmissionTransport {
@@ -877,7 +886,7 @@ fn present_nv12_frame(
     (false, signature, nonzero_samples)
 }
 
-fn decode_and_present_frame(
+pub(super) fn decode_and_present_frame(
     dev: crate::intel::Dev,
     engine: MediaEngineDescriptor,
     windows: MediaGpuWindowLayout,
@@ -2177,7 +2186,8 @@ fn submit_h264_frame(
     sample_idx: u32,
     ref_surface_idx: u32,
 ) -> Option<(bool, usize, usize, u64, u64, *mut u8)> {
-    submit_h264_frame_once(
+    let cold_start = sample_idx == 0;
+    let first_attempt = submit_h264_frame_once(
         dev,
         engine,
         windows,
@@ -2190,8 +2200,60 @@ fn submit_h264_frame(
         pps,
         sample_idx,
         ref_surface_idx,
-        sample_idx == 0,
-    )
+        cold_start,
+    );
+
+    if cold_start {
+        return first_attempt;
+    }
+
+    match first_attempt {
+        Some(result) if result.0 => Some(result),
+        Some(_) => {
+            crate::log!(
+                "intel/media: hot submit retry reset index={} engine={}\n",
+                sample_idx,
+                engine.name,
+            );
+            submit_h264_frame_once(
+                dev,
+                engine,
+                windows,
+                backing,
+                frame_width,
+                frame_height,
+                annex_b,
+                vcl_info,
+                sps,
+                pps,
+                sample_idx,
+                ref_surface_idx,
+                true,
+            )
+        }
+        None => {
+            crate::log!(
+                "intel/media: hot submit retry reset index={} engine={} reason=unavailable\n",
+                sample_idx,
+                engine.name,
+            );
+            submit_h264_frame_once(
+                dev,
+                engine,
+                windows,
+                backing,
+                frame_width,
+                frame_height,
+                annex_b,
+                vcl_info,
+                sps,
+                pps,
+                sample_idx,
+                ref_surface_idx,
+                true,
+            )
+        }
+    }
 }
 
 fn submit_h264_frame_once(
@@ -2630,7 +2692,7 @@ fn submit_h264_frame_once(
     ))
 }
 
-fn ensure_decode_backing(
+pub(super) fn ensure_decode_backing(
     dev: crate::intel::Dev,
     windows: MediaGpuWindowLayout,
 ) -> Option<MediaBitstreamBacking> {
