@@ -296,7 +296,7 @@ pub mod env {
 pub mod cabi {
     include!("cabi_codes.rs");
 
-    use super::VecDeque;
+    use super::{BTreeMap, String, VecDeque};
     use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
     #[repr(u32)]
@@ -304,6 +304,119 @@ pub mod cabi {
     pub enum CStream {
         Stdout = 1,
         Stderr = 2,
+    }
+
+    struct StreamTextBuffers {
+        stdout: String,
+        stderr: String,
+    }
+
+    impl StreamTextBuffers {
+        fn new() -> Self {
+            Self {
+                stdout: String::new(),
+                stderr: String::new(),
+            }
+        }
+
+        fn pending_mut(&mut self, stream: CStream) -> &mut String {
+            match stream {
+                CStream::Stdout => &mut self.stdout,
+                CStream::Stderr => &mut self.stderr,
+            }
+        }
+    }
+
+    static CABI_TEXT_BUFFERS: spin::Mutex<BTreeMap<u32, StreamTextBuffers>> =
+        spin::Mutex::new(BTreeMap::new());
+
+    fn current_cpu_key() -> u32 {
+        crate::percpu::this_cpu().cpu_index()
+    }
+
+    fn level_from_tag(level: &str) -> Option<log::Level> {
+        match level {
+            "ERROR" => Some(log::Level::Error),
+            "WARN" => Some(log::Level::Warn),
+            "INFO" => Some(log::Level::Info),
+            "DEBUG" => Some(log::Level::Debug),
+            "TRACE" => Some(log::Level::Trace),
+            _ => None,
+        }
+    }
+
+    fn purpose_for_level(level: log::Level) -> &'static str {
+        match level {
+            log::Level::Error => "error",
+            log::Level::Warn => "warn",
+            log::Level::Info => "info",
+            log::Level::Debug => "debug",
+            log::Level::Trace => "trace",
+        }
+    }
+
+    fn parse_structured_guest_log(line: &str) -> Option<(&str, log::Level, &str)> {
+        let rest = line.strip_prefix('[')?;
+        let end = rest.find(']')?;
+        let header = &rest[..end];
+        let message = rest[end + 1..].trim_start();
+        let split = header.rfind(':')?;
+        let source = &header[..split];
+        let level = level_from_tag(&header[split + 1..])?;
+        if source.is_empty() {
+            return None;
+        }
+        Some((source, level, message))
+    }
+
+    fn emit_guest_log_line(source: &str, level: log::Level, message: &str) {
+        if !crate::logflag::blueprint_log_enabled(level) {
+            return;
+        }
+        crate::hv::log_active_blueprint_console_line(format_args!(
+            "{}: {}\n",
+            source, message
+        ));
+        crate::globalog::log_with_purpose(
+            Some(purpose_for_level(level)),
+            format_args!("{}: {}\n", source, message),
+        );
+    }
+
+    fn emit_plain_stream_line(stream: CStream, line: &str) {
+        crate::hv::log_active_blueprint_console_line(format_args!("{}\n", line));
+        crate::globalog::log(format_args!("{}\n", line));
+    }
+
+    fn process_text_stream(stream: CStream, text: &str) {
+        let cpu = current_cpu_key();
+        let mut lines = VecDeque::new();
+
+        {
+            let mut buffers = CABI_TEXT_BUFFERS.lock();
+            let pending = buffers
+                .entry(cpu)
+                .or_insert_with(StreamTextBuffers::new)
+                .pending_mut(stream);
+            pending.push_str(text);
+
+            while let Some(newline_idx) = pending.find('\n') {
+                let mut line = String::from(&pending[..newline_idx]);
+                if line.ends_with('\r') {
+                    line.pop();
+                }
+                lines.push_back(line);
+                pending.drain(..=newline_idx);
+            }
+        }
+
+        for line in lines {
+            if let Some((source, level, message)) = parse_structured_guest_log(line.as_str()) {
+                emit_guest_log_line(source, level, message);
+            } else {
+                emit_plain_stream_line(stream, line.as_str());
+            }
+        }
     }
 
     #[inline]
@@ -335,25 +448,11 @@ pub mod cabi {
             return;
         }
 
-        if let Some(target) = crate::r::io::env::console_target()
-            && let Ok(s) = core::str::from_utf8(bytes)
-        {
-            let _ = stream;
-            crate::shell2::print_matrix_target_native_text(&target, s);
-            return;
-        }
-
-        // Prefer routing through the existing global logger (debugcon + VGA + USB).
-        // If the byte stream isn't valid UTF-8, fall back to raw debugcon output.
         match core::str::from_utf8(bytes) {
-            Ok(s) => match stream {
-                CStream::Stdout => crate::globalog::log(format_args!("{}", s)),
-                CStream::Stderr => crate::globalog::log(format_args!("[stderr] {}", s)),
-            },
+            Ok(text) => process_text_stream(stream, text),
             Err(_) => {
-                for &b in bytes {
-                    crate::globalog::debugcon_write_byte_raw(b);
-                }
+                let text = alloc::string::String::from_utf8_lossy(bytes);
+                process_text_stream(stream, text.as_ref());
             }
         }
     }
@@ -486,24 +585,6 @@ pub mod cabi {
             return 0;
         };
         crate::shell2::print_shell_line(&crate::shell2::UART1_COM1_BACKEND, text);
-        crate::shell2::print_shell_line(&crate::shell2::NET_TCP_SHELL_BACKEND, text);
-        data_len
-    }
-
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn trueos_cabi_shell2_print_targeted_line(
-        target_mask: u32,
-        data_ptr: *const u8,
-        data_len: usize,
-    ) -> usize {
-        if data_ptr.is_null() || data_len == 0 {
-            return 0;
-        }
-        let data = core::slice::from_raw_parts(data_ptr, data_len);
-        let Ok(text) = core::str::from_utf8(data) else {
-            return 0;
-        };
-        crate::shell2::print_targeted_line(target_mask as u8, text);
         data_len
     }
 

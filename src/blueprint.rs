@@ -768,7 +768,6 @@ pub(crate) fn invoke_host_rel(
     entry_hint: u64,
     process_args: Vec<String>,
     process_env: BTreeMap<String, String>,
-    console_target: Option<crate::shell2::MatrixTarget>,
 ) -> Result<(), String> {
     let image = load_rel_image(unpacked)?;
     let sections = parse_sections(unpacked)?;
@@ -777,21 +776,16 @@ pub(crate) fn invoke_host_rel(
     let (_arg_storage, argv) = build_argv(process_args.as_slice());
     let main_fn: extern "C" fn(usize, *const *const c_char) =
         unsafe { core::mem::transmute(main_addr) };
-    crate::r::io::env::with_launch_context_console(
-        process_args,
-        process_env,
-        console_target,
-        || {
-            main_fn(
-                argv.len(),
-                if argv.is_empty() {
-                    core::ptr::null()
-                } else {
-                    argv.as_ptr()
-                },
-            );
-        },
-    );
+    crate::r::io::env::with_launch_context(process_args, process_env, || {
+        main_fn(
+            argv.len(),
+            if argv.is_empty() {
+                core::ptr::null()
+            } else {
+                argv.as_ptr()
+            },
+        );
+    });
     drop(image);
     Ok(())
 }

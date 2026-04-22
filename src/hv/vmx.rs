@@ -255,7 +255,8 @@ pub fn vmwrite(field: u64, val: u64) -> Result<(), &'static str> {
         } else {
             let err = vmread(VMCS_VM_INSTRUCTION_ERROR).unwrap_or(!0u64);
             hvlogf(format_args!(
-                "hv: vm1 reporting: vmwrite failed field=0x{:X} val=0x{:016X} instr_err={} rip=0x{:016X}",
+                "hv: vm{} reporting: vmwrite failed field=0x{:X} val=0x{:016X} instr_err={} rip=0x{:016X}",
+                super::snapshot::VM1_ID,
                 field,
                 val,
                 err,
@@ -375,6 +376,36 @@ pub fn decode_vmexit_int_type(kind: u64) -> &'static str {
     }
 }
 
+pub fn decode_exception_vector(vector: u8) -> &'static str {
+    match vector {
+        0 => "#DE Divide Error",
+        1 => "#DB Debug",
+        2 => "NMI",
+        3 => "#BP Breakpoint",
+        4 => "#OF Overflow",
+        5 => "#BR BOUND Range Exceeded",
+        6 => "#UD Invalid Opcode",
+        7 => "#NM Device Not Available",
+        8 => "#DF Double Fault",
+        9 => "Coprocessor Segment Overrun",
+        10 => "#TS Invalid TSS",
+        11 => "#NP Segment Not Present",
+        12 => "#SS Stack Fault",
+        13 => "#GP General Protection",
+        14 => "#PF Page Fault",
+        16 => "#MF x87 Floating-Point",
+        17 => "#AC Alignment Check",
+        18 => "#MC Machine Check",
+        19 => "#XM SIMD Floating-Point",
+        20 => "#VE Virtualization",
+        21 => "#CP Control Protection",
+        28 => "#HV Hypervisor Injection",
+        29 => "#VC VMM Communication",
+        30 => "#SX Security",
+        _ => "unknown-exception",
+    }
+}
+
 pub fn log_vmexit_interrupt_info(label: &str) {
     let Some(info) = vmread(VMCS_VMEXIT_INTERRUPTION_INFO) else {
         return;
@@ -393,11 +424,18 @@ pub fn log_vmexit_interrupt_info(label: &str) {
     } else {
         0
     };
+    let vector_name = if kind == 3 || kind == 5 || kind == 6 {
+        decode_exception_vector(vector)
+    } else {
+        ""
+    };
 
     hvlogf(format_args!(
-        "hv: vm1 reporting: {} vmexit intr vector={} type={}({}) err_valid={} err=0x{:X} intr_info=0x{:08X}",
+        "hv: vm{} reporting: {} vmexit intr vector={} name={} type={}({}) err_valid={} err=0x{:X} intr_info=0x{:08X}",
+        super::snapshot::VM1_ID,
         label,
         vector,
+        vector_name,
         kind,
         decode_vmexit_int_type(kind),
         err_valid as u8,
@@ -409,7 +447,8 @@ pub fn log_vmexit_interrupt_info(label: &str) {
     let guest_linear = vmread(VMCS_GUEST_LINEAR_ADDRESS).unwrap_or(0);
     let guest_physical = vmread(VMCS_GUEST_PHYSICAL_ADDRESS).unwrap_or(0);
     hvlogf(format_args!(
-        "hv: vm1 reporting: {} vmexit addr guest_linear=0x{:016X} guest_physical=0x{:016X} guest_rsp=0x{:016X}",
+        "hv: vm{} reporting: {} vmexit addr guest_linear=0x{:016X} guest_physical=0x{:016X} guest_rsp=0x{:016X}",
+        super::snapshot::VM1_ID,
         label, guest_linear, guest_physical, guest_rsp,
     ));
 }
