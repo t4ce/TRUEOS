@@ -315,38 +315,94 @@ pub async fn mount_root_async(
         }
     }
 
-    // IMPORTANT: do not call `build_root_index()` here.
-    // `build_root_index()` uses the synchronous TRUEOSFS engine which calls into
-    // `KernelBlockIo` and ultimately a synchronous wait wrapper. Doing that from
-    // an async task can starve other async tasks (notably the xHCI poll task), which
-    // can manifest as USB mass-storage transfers timing out due to missing completion
-    // events.
-    //
-    // Index building is an optional cache; we can populate it later via a dedicated
-    // async pipeline if needed.
-    let index = None;
-    let writes_since_checkpoint = 0;
+    register_root_mount(disk, false);
+    Ok(Some(disk_id))
+}
 
-    let mut roots = ROOTS.lock();
-    if roots.iter().any(|m| m.disk_id == disk_id) {
-        return Ok(Some(disk_id));
+/// Async remount path used after destructive operations that replace the on-disk
+/// TRUEOSFS contents on an already-mounted disk.
+///
+/// Unlike [`mount_root_async`], this always refreshes the in-memory root mount
+/// state for `disk` when TRUEOSFS is present so stale indexes and file-record
+/// caches do not survive a format/install/update.
+pub async fn remount_root_async(
+    disk: block::DeviceHandle,
+) -> Result<Option<block::DiscId>, block::Error> {
+    if disk.parent().is_some() {
+        return Err(block::Error::InvalidParam);
     }
-    roots.push(RootMount {
-        building_index: false,
-        disk_id,
-        seq: ROOT_SEQ.fetch_add(1, Ordering::AcqRel).wrapping_add(1),
-        index,
-        writes_since_checkpoint,
-        cache_gen: 0,
-    });
+
+    let Some(_placement) = locate_async(disk).await? else {
+        unregister_root_mount(disk.id());
+        return Ok(None);
+    };
+
+    let disk_id = disk.id();
+    register_root_mount(disk, true);
+    Ok(Some(disk_id))
+}
+
+fn register_root_mount(disk: block::DeviceHandle, replace_existing: bool) {
+    let disk_id = disk.id();
+    let seq = ROOT_SEQ.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
+    let cache_gen = if replace_existing {
+        let roots = ROOTS.lock();
+        roots
+            .iter()
+            .find(|m| m.disk_id == disk_id)
+            .map(|m| m.cache_gen.wrapping_add(1))
+            .unwrap_or(0)
+    } else {
+        0
+    };
+
+    {
+        let mut roots = ROOTS.lock();
+        if let Some(existing) = roots.iter_mut().find(|m| m.disk_id == disk_id) {
+            if !replace_existing {
+                return;
+            }
+            existing.seq = seq;
+            existing.index = None;
+            existing.building_index = false;
+            existing.writes_since_checkpoint = 0;
+            existing.cache_gen = cache_gen;
+        } else {
+            roots.push(RootMount {
+                building_index: false,
+                disk_id,
+                seq,
+                index: None,
+                writes_since_checkpoint: 0,
+                cache_gen,
+            });
+        }
+    }
+
     PRIMARY_ROOT_RAW.store(disk_id.raw(), Ordering::Release);
     PRIMARY_ROOT_HANDLE_RAW.store(disk.into_raw(), Ordering::Release);
 
     file_record_cache_invalidate_disk(disk_id);
 
     crate::r::readiness::set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED);
+}
 
-    Ok(Some(disk_id))
+fn unregister_root_mount(disk_id: block::DiscId) {
+    let mut roots = ROOTS.lock();
+    let before = roots.len();
+    roots.retain(|m| m.disk_id != disk_id);
+    if roots.len() == before {
+        return;
+    }
+    drop(roots);
+
+    file_record_cache_invalidate_disk(disk_id);
+
+    let primary_raw = PRIMARY_ROOT_RAW.load(Ordering::Acquire);
+    if primary_raw == disk_id.raw() {
+        PRIMARY_ROOT_RAW.store(0, Ordering::Release);
+        PRIMARY_ROOT_HANDLE_RAW.store(0, Ordering::Release);
+    }
 }
 
 fn root_cache_gen(disk_id: block::DiscId) -> u32 {

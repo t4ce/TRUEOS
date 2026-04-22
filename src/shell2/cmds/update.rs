@@ -201,10 +201,11 @@ async fn update_command_task(target: MatrixTarget, disk: crate::disc::block::Dev
         )
         .await
         {
-            Ok(()) => {
-                crate::r::fs::trueosfs::request_mount_root(disk);
-                log("update: ok");
-            }
+            Ok(()) => match crate::r::fs::trueosfs::remount_root_async(disk).await {
+                Ok(Some(_)) => log("update: ok"),
+                Ok(None) => log("update: failed to remount TRUEOSFS"),
+                Err(e) => log(alloc::format!("update: remount failed ({:?})", e).as_str()),
+            },
             Err(e) => log(alloc::format!("update: failed ({:?})", e).as_str()),
         }
     }

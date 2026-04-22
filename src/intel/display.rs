@@ -653,23 +653,41 @@ pub(crate) fn present_nv12_surface_center(
         return false;
     }
 
-    // Only fill background on first present; subsequent frames overwrite
-    // the same video region so the border pixels are already correct.
-    if PRIMARY_PRESENT_SEQ.load(Ordering::Relaxed) == 0 {
-        fill_surface_color(
-            surface.virt,
-            dst_pitch,
-            surface.width,
-            surface.height,
-            PRIMARY_BASELINE_COLOR,
-        );
-    }
+    // Repaint the whole destination every frame. The NV12 copy does not always
+    // touch every pixel of the scanout surface, so reusing prior contents leaves
+    // deterministic stale bands at the bottom/edges when the copied region is
+    // even slightly smaller than the destination.
+    fill_surface_color(
+        surface.virt,
+        dst_pitch,
+        surface.width,
+        surface.height,
+        PRIMARY_BASELINE_COLOR,
+    );
 
-    let scale_x = visible_width.div_ceil(dst_width.max(1));
-    let scale_y = visible_height.div_ceil(dst_height.max(1));
-    let scale = scale_x.max(scale_y).max(1);
-    let copy_w = (visible_width / scale).max(1).min(dst_width);
-    let copy_h = (visible_height / scale).max(1).min(dst_height);
+    // Fit the visible video into the destination while preserving aspect ratio.
+    // The previous code only downscaled and never upscaled, so a 1080p video on
+    // a taller panel would leave whole green tile rows unused at the bottom.
+    let (copy_w, copy_h) =
+        if dst_width.saturating_mul(visible_height) <= dst_height.saturating_mul(visible_width) {
+            let copy_w = dst_width.max(1);
+            let copy_h = visible_height
+                .saturating_mul(copy_w)
+                .checked_div(visible_width.max(1))
+                .unwrap_or(1)
+                .max(1)
+                .min(dst_height);
+            (copy_w, copy_h)
+        } else {
+            let copy_h = dst_height.max(1);
+            let copy_w = visible_width
+                .saturating_mul(copy_h)
+                .checked_div(visible_height.max(1))
+                .unwrap_or(1)
+                .max(1)
+                .min(dst_width);
+            (copy_w, copy_h)
+        };
     let dst_x = dst_width.saturating_sub(copy_w) / 2;
     let dst_y = dst_height.saturating_sub(copy_h) / 2;
 
@@ -690,7 +708,11 @@ pub(crate) fn present_nv12_surface_center(
 
     for row_idx in 0..copy_h {
         let src_y = visible_y.saturating_add(
-            (row_idx.saturating_mul(scale)).min(visible_height.saturating_sub(1)),
+            row_idx
+                .saturating_mul(visible_height)
+                .checked_div(copy_h.max(1))
+                .unwrap_or(0)
+                .min(visible_height.saturating_sub(1)),
         );
         let dst_row_off = (dst_y + row_idx)
             .saturating_mul(dst_pitch)
@@ -699,7 +721,11 @@ pub(crate) fn present_nv12_surface_center(
         let uv_row = chroma_y_offset + src_y / 2;
         for col_idx in 0..copy_w {
             let src_x = visible_x.saturating_add(
-                (col_idx.saturating_mul(scale)).min(visible_width.saturating_sub(1)),
+                col_idx
+                    .saturating_mul(visible_width)
+                    .checked_div(copy_w.max(1))
+                    .unwrap_or(0)
+                    .min(visible_width.saturating_sub(1)),
             );
             let y_off = ytile_offset(src_x, src_y, tiles_per_row);
             let y = unsafe { i32::from(*src.get_unchecked(y_off)) };
