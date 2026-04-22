@@ -67,7 +67,7 @@ pub fn tool_definition() -> Value {
         "type": "function",
         "function": {
             "name": tool_name(),
-            "description": "Control UI2 windows using shell-level semantics. This bridge resolves UI2 window shell targets and then drives the cursor movement tool underneath.",
+            "description": "Control UI2 windows using shell-level semantics. Standard shell actions like focus, minimize, maximize, restore, and close go through the UI2 kernel service. Move resolves shell geometry and drives the cursor movement tool underneath.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -120,7 +120,7 @@ pub fn tool_definition() -> Value {
 }
 
 pub fn build_system_prompt() -> &'static str {
-    "Use ui2_window_controller for shell-level window actions only. Select the target window by window_id when known, otherwise by title_contains. For move, provide either x_px/y_px or x_norm/y_norm. This tool resolves the proper shell target and then drives the cursor movement service for human-like interaction."
+    "Use ui2_window_controller for shell-level window actions only. Select the target window by window_id when known, otherwise by title_contains. focus, minimize, maximize, restore, and close go through direct UI2 kernel window controls. For move, provide either x_px/y_px or x_norm/y_norm; move resolves the proper shell target and then drives the cursor movement service for human-like interaction."
 }
 
 pub async fn execute_tool_call(arguments: Value) -> Result<String> {

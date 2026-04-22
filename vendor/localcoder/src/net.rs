@@ -4,7 +4,8 @@ use serde::de::DeserializeOwned;
 #[cfg(feature = "host-net")]
 use std::time::Duration;
 
-const DEFAULT_TIMEOUT_MS: u64 = 20_000;
+const DEFAULT_TIMEOUT_MS: u64 = 15_000;
+const LOCALCODER_POST_TIMEOUT_MS: u64 = 60_000;
 
 pub struct HttpResponse {
     status: u16,
@@ -182,9 +183,14 @@ mod backend {
 
     async fn post_json_async<T: Serialize>(url: &str, body: &T) -> Result<Vec<u8>> {
         let body = serde_json::to_vec(body).context("failed to serialize request body")?;
-        let op_id = v::vnetfs::fetch_post_json_bytes(url.as_bytes(), &body, None)
+        let op_id = v::vnetfs::fetch_post_json_bytes_with_timeout(
+            url.as_bytes(),
+            &body,
+            None,
+            LOCALCODER_POST_TIMEOUT_MS.min(u64::from(u32::MAX)) as u32,
+        )
             .map_err(|rc| anyhow!("TRUEOS post_json start failed rc={}", rc))?;
-        if let Err(err) = wait_for_bytes_op(op_id, DEFAULT_TIMEOUT_MS, "post_json").await {
+        if let Err(err) = wait_for_bytes_op(op_id, LOCALCODER_POST_TIMEOUT_MS, "post_json").await {
             let _ = v::vnetfs::fetch_bytes_discard(op_id);
             return Err(err);
         }

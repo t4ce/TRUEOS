@@ -1,3 +1,0 @@
-/* esm.sh - openai@6.27.0/internal/errors */
-function c(t){return typeof t=="object"&&t!==null&&("name"in t&&t.name==="AbortError"||"message"in t&&String(t.message).includes("FetchRequestCanceledException"))}var o=t=>{if(t instanceof Error)return t;if(typeof t=="object"&&t!==null){try{if(Object.prototype.toString.call(t)==="[object Error]"){let n=new Error(t.message,t.cause?{cause:t.cause}:{});return t.stack&&(n.stack=t.stack),t.cause&&!n.cause&&(n.cause=t.cause),t.name&&(n.name=t.name),n}}catch{}try{return new Error(JSON.stringify(t))}catch{}}return new Error(t)};export{o as castToError,c as isAbortError};
-//# sourceMappingURL=errors.mjs.map

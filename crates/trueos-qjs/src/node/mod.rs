@@ -16,7 +16,6 @@ pub enum RuntimeProfile {
     Shell,
     Worker,
     Browser,
-    Ai,
 }
 
 impl RuntimeProfile {
@@ -27,7 +26,6 @@ impl RuntimeProfile {
             Self::Shell => "shell",
             Self::Worker => "worker",
             Self::Browser => "browser",
-            Self::Ai => "ai",
         }
     }
 }
@@ -82,7 +80,6 @@ pub unsafe fn install_globals_with_profile(ctx: *mut qjs::JSContext, profile: Ru
     ensure_global_fetch(ctx);
     ensure_global_kernel_time(ctx);
     ensure_runtime_profile_marker(ctx, profile);
-    crate::host_api_hook::call_context_init_hook(ctx);
 }
 
 unsafe fn ensure_runtime_profile_marker(ctx: *mut qjs::JSContext, profile: RuntimeProfile) {
@@ -107,9 +104,6 @@ unsafe fn ensure_global_env(ctx: *mut qjs::JSContext) {
     if (!G) return;
     if (!G.__env__ || typeof G.__env__ !== 'object') {
         G.__env__ = Object.create(null);
-    }
-    if (typeof G.__env__.OPENAI_API_KEY !== 'string' || !G.__env__.OPENAI_API_KEY) {
-        G.__env__.OPENAI_API_KEY = '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';
     }
 })(typeof globalThis !== 'undefined' ? globalThis : this);
 "#;
@@ -1008,15 +1002,9 @@ unsafe fn ensure_global_fetch(ctx: *mut qjs::JSContext) {
             }
             const fetchPromise = wantBinary
                 ? Promise.resolve((function () {
-                    if (typeof G.__trueosAiPrintLine === 'function') {
-                        G.__trueosAiPrintLine('qjs: fetch shim GET(bytes) ' + String(req.url || ''));
-                    }
                     return G.__trueosFetchBytes(req.url);
                 })())
                 : Promise.resolve((function () {
-                    if (typeof G.__trueosAiPrintLine === 'function') {
-                        G.__trueosAiPrintLine('qjs: fetch shim ' + method + ' ' + String(req.url || ''));
-                    }
                     return G.__trueosFetchText(req.url, method, bodyArg, bearer);
                 })());
             return fetchPromise.then((body) => {

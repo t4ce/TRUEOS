@@ -1,3 +1,0 @@
-/* esm.sh - openai@6.27.0/internal/utils/bytes */
-function l(t){let e=0;for(let n of t)e+=n.length;let o=new Uint8Array(e),c=0;for(let n of t)o.set(n,c),c+=n.length;return o}var r;function f(t){let e;return(r??(e=new globalThis.TextEncoder,r=e.encode.bind(e)))(t)}var d;function i(t){let e;return(d??(e=new globalThis.TextDecoder,d=e.decode.bind(e)))(t)}export{l as concatBytes,i as decodeUTF8,f as encodeUTF8};
-//# sourceMappingURL=bytes.mjs.map

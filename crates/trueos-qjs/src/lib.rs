@@ -27,10 +27,6 @@ pub mod html_demo;
 pub use truesurfer_qjs_vm_task as browser_task;
 
 #[cfg(feature = "trueos")]
-#[path = "../app/ai/ai_task.rs"]
-pub mod ai_task;
-
-#[cfg(feature = "trueos")]
 pub mod cmd_stream;
 
 #[cfg(feature = "trueos")]
@@ -50,9 +46,6 @@ pub mod vm;
 
 #[cfg(feature = "trueos")]
 pub mod workers;
-
-#[cfg(feature = "trueos")]
-pub mod host_api_hook;
 
 #[cfg(feature = "trueos")]
 pub mod qjs_diag;

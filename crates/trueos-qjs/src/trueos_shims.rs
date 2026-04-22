@@ -20,9 +20,8 @@ pub use v::vcabi::{
     trueos_cabi_shell_command_registry_json, trueos_cabi_shell_qjs_init,
     trueos_cabi_shell_qjs_read, trueos_cabi_shell_qjs_read_byte, trueos_cabi_shell_qjs_write,
     trueos_cabi_shell_qjs_write_byte, trueos_cabi_shell1_submit_input,
-    trueos_cabi_shell2_print_line,
-    trueos_cabi_trueosfs_json_all, trueos_cabi_trueosfs_primary_html_tree,
-    trueos_cabi_uart1_shell_write,
+    trueos_cabi_shell2_print_line, trueos_cabi_trueosfs_json_all,
+    trueos_cabi_trueosfs_primary_html_tree, trueos_cabi_uart1_shell_write,
 };
 pub use v::vgfx::capture_screenshot_data_url as gfx_capture_screenshot_data_url;
 pub use v::vshell::{

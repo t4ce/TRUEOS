@@ -490,7 +490,6 @@ fn node_builtin_shim_specifier(spec: &[u8]) -> Option<&'static [u8]> {
 
 fn qjs_vendor_specifier(spec: &[u8]) -> Option<&'static [u8]> {
     match spec {
-        b"openai" => Some(b"/qjs/vendor/openai.mjs"),
         b"parse5" => Some(b"/qjs/vendor/parse5.mjs"),
         b"yoga-layout" => Some(b"/qjs/vendor/yoga.mjs"),
         b"three" => Some(b"https://esm.sh/three@0.162.0"),

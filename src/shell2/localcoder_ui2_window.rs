@@ -31,9 +31,9 @@ fn handle_observer_request(
         .filter(|window| request.include_hidden || window.visible)
         .filter(|window| request.window_id.is_none_or(|id| window.id == id))
         .filter(|window| {
-            title_filter.as_ref().is_none_or(|needle| {
-                window.title.to_ascii_lowercase().contains(needle.as_str())
-            })
+            title_filter
+                .as_ref()
+                .is_none_or(|needle| window.title.to_ascii_lowercase().contains(needle.as_str()))
         })
         .map(window_snapshot_to_json)
         .collect();
@@ -51,27 +51,33 @@ fn handle_controller_command(
     match command {
         controller_tool::Ui2WindowControllerCommand::Focus(selector) => {
             let window = resolve_window(selector)?;
-            let point = window
-                .titlebar_rect
-                .unwrap_or(window.frame_rect)
-                .center();
-            queue_move_click(point.x, point.y, WINDOW_ACTION_APPROACH_MS)
+            direct_window_action(window.id, "focus", || unsafe {
+                crate::r::ui2::trueos_cabi_ui2_window_focus(window.id)
+            })
         }
         controller_tool::Ui2WindowControllerCommand::Minimize(selector) => {
             let window = resolve_window(selector)?;
-            queue_rect_click(window.id, "minimize", window.minimize_rect)
+            direct_window_action(window.id, "minimize", || unsafe {
+                crate::r::ui2::trueos_cabi_ui2_window_minimize(window.id)
+            })
         }
         controller_tool::Ui2WindowControllerCommand::Maximize(selector) => {
             let window = resolve_window(selector)?;
-            queue_rect_click(window.id, "maximize", window.maximize_rect)
+            direct_window_action(window.id, "maximize", || unsafe {
+                crate::r::ui2::trueos_cabi_ui2_window_maximize(window.id)
+            })
         }
         controller_tool::Ui2WindowControllerCommand::Restore(selector) => {
             let window = resolve_window(selector)?;
-            queue_rect_click(window.id, "restore", window.restore_rect)
+            direct_window_action(window.id, "restore", || unsafe {
+                crate::r::ui2::trueos_cabi_ui2_window_restore(window.id)
+            })
         }
         controller_tool::Ui2WindowControllerCommand::Close(selector) => {
             let window = resolve_window(selector)?;
-            queue_rect_click(window.id, "close", window.close_rect)
+            direct_window_action(window.id, "close", || unsafe {
+                crate::r::ui2::trueos_cabi_ui2_window_close(window.id)
+            })
         }
         controller_tool::Ui2WindowControllerCommand::Move {
             selector,
@@ -82,40 +88,52 @@ fn handle_controller_command(
             duration_ms,
         } => {
             let window = resolve_window(selector)?;
-            let titlebar = window
-                .titlebar_rect
-                .ok_or_else(|| {
-                    controller_tool::controller_error(format!(
-                        "window {} has no draggable titlebar",
-                        window.id
-                    ))
-                })?;
+            let titlebar = window.titlebar_rect.ok_or_else(|| {
+                controller_tool::controller_error(format!(
+                    "window {} has no draggable titlebar",
+                    window.id
+                ))
+            })?;
             let drag_anchor = titlebar.center();
             let target_top_left = resolve_destination_top_left(x_px, y_px, x_norm, y_norm)?;
-            let target_cursor_x = target_top_left.0 + (drag_anchor.x - window.frame_rect.x).round() as i32;
-            let target_cursor_y = target_top_left.1 + (drag_anchor.y - window.frame_rect.y).round() as i32;
+            let target_cursor_x =
+                target_top_left.0 + (drag_anchor.x - window.frame_rect.x).round() as i32;
+            let target_cursor_y =
+                target_top_left.1 + (drag_anchor.y - window.frame_rect.y).round() as i32;
 
             let mut summary = Vec::new();
-            summary.push(localcoder_service::enqueue_command(cursor_service::LocalcoderServiceCommand::MoveAbs {
-                x_px: Some(drag_anchor.x.round() as i32),
-                y_px: Some(drag_anchor.y.round() as i32),
-                x_norm: None,
-                y_norm: None,
-                duration_ms: WINDOW_ACTION_APPROACH_MS,
-            })?);
-            summary.push(localcoder_service::enqueue_command(cursor_service::LocalcoderServiceCommand::ButtonDown {
-                buttons_down: 1,
-            })?);
-            summary.push(localcoder_service::enqueue_command(cursor_service::LocalcoderServiceCommand::MoveAbs {
-                x_px: Some(target_cursor_x),
-                y_px: Some(target_cursor_y),
-                x_norm: None,
-                y_norm: None,
-                duration_ms,
-            })?);
-            summary.push(localcoder_service::enqueue_command(cursor_service::LocalcoderServiceCommand::ButtonUp {
-                buttons_up: 1,
-            })?);
+            summary.push(localcoder_service::enqueue_command(
+                cursor_service::LocalcoderServiceCommand::MoveAbs {
+                    cursor_slot_id: None,
+                    x_px: Some(drag_anchor.x.round() as i32),
+                    y_px: Some(drag_anchor.y.round() as i32),
+                    x_norm: None,
+                    y_norm: None,
+                    duration_ms: WINDOW_ACTION_APPROACH_MS,
+                },
+            )?);
+            summary.push(localcoder_service::enqueue_command(
+                cursor_service::LocalcoderServiceCommand::ButtonDown {
+                    cursor_slot_id: None,
+                    buttons_down: 1,
+                },
+            )?);
+            summary.push(localcoder_service::enqueue_command(
+                cursor_service::LocalcoderServiceCommand::MoveAbs {
+                    cursor_slot_id: None,
+                    x_px: Some(target_cursor_x),
+                    y_px: Some(target_cursor_y),
+                    x_norm: None,
+                    y_norm: None,
+                    duration_ms,
+                },
+            )?);
+            summary.push(localcoder_service::enqueue_command(
+                cursor_service::LocalcoderServiceCommand::ButtonUp {
+                    cursor_slot_id: None,
+                    buttons_up: 1,
+                },
+            )?);
             Ok(format!(
                 "window {} drag queued to top-left {},{} ({})",
                 window.id,
@@ -124,6 +142,22 @@ fn handle_controller_command(
                 summary.join("; ")
             ))
         }
+    }
+}
+
+fn direct_window_action(
+    window_id: u32,
+    action_name: &str,
+    invoke: impl FnOnce() -> i32,
+) -> controller_tool::Ui2WindowControllerResult {
+    let rc = invoke();
+    if rc == 0 {
+        Ok(format!("window {} {} applied via UI2 kernel service", window_id, action_name))
+    } else {
+        Err(controller_tool::controller_error(format!(
+            "window {} {} failed via UI2 kernel service (rc={})",
+            window_id, action_name, rc
+        )))
     }
 }
 
@@ -136,7 +170,9 @@ fn resolve_window(
         return windows
             .into_iter()
             .find(|window| window.id == window_id)
-            .ok_or_else(|| controller_tool::controller_error(format!("window {} not found", window_id)));
+            .ok_or_else(|| {
+                controller_tool::controller_error(format!("window {} not found", window_id))
+            });
     }
 
     let title_contains = selector
@@ -151,7 +187,12 @@ fn resolve_window(
 
     let mut matches: Vec<_> = windows
         .into_iter()
-        .filter(|window| window.title.to_ascii_lowercase().contains(title_contains.as_str()))
+        .filter(|window| {
+            window
+                .title
+                .to_ascii_lowercase()
+                .contains(title_contains.as_str())
+        })
         .collect();
 
     if matches.is_empty() {
@@ -188,20 +229,30 @@ fn queue_rect_click(
     Ok(format!("window {} {} queued ({})", window_id, action_name, summary))
 }
 
-fn queue_move_click(x: f32, y: f32, duration_ms: u32) -> controller_tool::Ui2WindowControllerResult {
+fn queue_move_click(
+    x: f32,
+    y: f32,
+    duration_ms: u32,
+) -> controller_tool::Ui2WindowControllerResult {
     let mut summary = Vec::new();
-    summary.push(localcoder_service::enqueue_command(cursor_service::LocalcoderServiceCommand::MoveAbs {
-        x_px: Some(x.round() as i32),
-        y_px: Some(y.round() as i32),
-        x_norm: None,
-        y_norm: None,
-        duration_ms,
-    })?);
-    summary.push(localcoder_service::enqueue_command(cursor_service::LocalcoderServiceCommand::Click {
-        buttons_down: 1,
-        repeat: 1,
-        delay_ms: WINDOW_ACTION_CLICK_DELAY_MS,
-    })?);
+    summary.push(localcoder_service::enqueue_command(
+        cursor_service::LocalcoderServiceCommand::MoveAbs {
+            cursor_slot_id: None,
+            x_px: Some(x.round() as i32),
+            y_px: Some(y.round() as i32),
+            x_norm: None,
+            y_norm: None,
+            duration_ms,
+        },
+    )?);
+    summary.push(localcoder_service::enqueue_command(
+        cursor_service::LocalcoderServiceCommand::Click {
+            cursor_slot_id: None,
+            buttons_down: 1,
+            repeat: 1,
+            delay_ms: WINDOW_ACTION_CLICK_DELAY_MS,
+        },
+    )?);
     Ok(summary.join("; "))
 }
 
