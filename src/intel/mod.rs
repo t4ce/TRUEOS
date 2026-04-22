@@ -8,6 +8,7 @@ pub(crate) mod state;
 pub(crate) mod stats;
 pub(crate) mod xelp_media_h264src;
 pub(crate) mod xelp_media_matroska;
+pub(crate) mod xelp_media2_ngin;
 pub(crate) mod xelp_media_mp4;
 pub(crate) mod xelp_media_ngin;
 pub(crate) mod xelp_media_source;
@@ -314,6 +315,10 @@ pub fn media_decode_surface_window(
 
 pub async fn run_media_decode_async() {
     self::xelp_media_ngin::run_media_decode_async().await
+}
+
+pub async fn run_media2_first_frame_async() -> Option<self::xelp_media2_ngin::Media2FirstFrameState> {
+    self::xelp_media2_ngin::run_media2_first_frame_async().await
 }
 
 pub async fn run_media_source_warmup_async() {
