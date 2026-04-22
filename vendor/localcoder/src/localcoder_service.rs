@@ -28,7 +28,9 @@ static LOCALCODER_SERVICE_CONTEXT_PROVIDER: OnceLock<Mutex<Option<LocalcoderServ
 
 #[derive(Debug, Clone)]
 pub enum LocalcoderServiceCommand {
+    SpawnCursor,
     MoveAbs {
+        cursor_slot_id: Option<u32>,
         x_px: Option<i32>,
         y_px: Option<i32>,
         x_norm: Option<f64>,
@@ -36,6 +38,7 @@ pub enum LocalcoderServiceCommand {
         duration_ms: u32,
     },
     Orbit {
+        cursor_slot_id: Option<u32>,
         center_x_px: Option<i32>,
         center_y_px: Option<i32>,
         center_x_norm: Option<f64>,
@@ -46,17 +49,21 @@ pub enum LocalcoderServiceCommand {
         loops: u32,
     },
     Click {
+        cursor_slot_id: Option<u32>,
         buttons_down: u32,
         repeat: u32,
         delay_ms: u32,
     },
     ButtonDown {
+        cursor_slot_id: Option<u32>,
         buttons_down: u32,
     },
     ButtonUp {
+        cursor_slot_id: Option<u32>,
         buttons_up: u32,
     },
     SetButtons {
+        cursor_slot_id: Option<u32>,
         buttons_down: u32,
     },
 }
@@ -107,8 +114,13 @@ pub fn tool_definition() -> Value {
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["move_abs", "orbit", "click", "button_down", "button_up", "set_buttons"],
+                        "enum": ["spawn_cursor", "move_abs", "orbit", "click", "button_down", "button_up", "set_buttons"],
                         "description": "Cursor action to queue."
+                    },
+                    "cursor_slot_id": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Optional AI cursor slot to target. Omit to use the default AI cursor. Use spawn_cursor first to create additional cursors."
                     },
                     "x_px": {
                         "type": "integer",
@@ -229,7 +241,7 @@ pub fn tool_definition() -> Value {
 
 pub fn build_system_prompt() -> String {
     let mut out = String::from(
-        "The localcoder_service tool controls the TRUEOS AI cursor. Use it only when direct pointer movement or clicking is required. Prefer normalized coordinates x_norm/y_norm unless you specifically need pixel precision. Prefer named buttons with button or buttons instead of raw bitmasks. For move_abs, provide either x_px/y_px or x_norm/y_norm; duration_ms is optional and defaults to 180. For orbit, provide either center_x_px/center_y_px or center_x_norm/center_y_norm, plus radius_px or radius_norm; loop_duration_ms defaults to 1400 and loops defaults to 1. For click, button defaults to left, repeat defaults to 1, and delay_ms defaults to 120. For drag-like behavior, call button_down, then move_abs or orbit, then button_up. set_buttons forces the full current button state. Prefer realistic timings so motion stays smooth and avoid redundant tool calls when one click or move call is enough.",
+        "The localcoder_service tool controls TRUEOS AI cursors. Use it only when direct pointer movement or clicking is required. Prefer normalized coordinates x_norm/y_norm unless you specifically need pixel precision. Prefer named buttons with button or buttons instead of raw bitmasks. Call spawn_cursor when you need an additional cursor; it returns a cursor_slot_id you can pass into later calls. If cursor_slot_id is omitted, the default AI cursor is used. For move_abs, provide either x_px/y_px or x_norm/y_norm; duration_ms is optional and defaults to 180. For orbit, provide either center_x_px/center_y_px or center_x_norm/center_y_norm, plus radius_px or radius_norm; loop_duration_ms defaults to 1400 and loops defaults to 1. For click, button defaults to left, repeat defaults to 1, and delay_ms defaults to 120. For drag-like behavior, call button_down, then move_abs or orbit, then button_up. set_buttons forces the full current button state. Prefer realistic timings so motion stays smooth and avoid redundant tool calls when one click or move call is enough.",
     );
     if let Some(provider) = *context_provider_cell()
         .lock()
@@ -262,7 +274,9 @@ fn command_from_value(input: &Value) -> Result<LocalcoderServiceCommand> {
         .ok_or_else(|| anyhow!("action must be a string"))?;
 
     match action {
+        "spawn_cursor" => Ok(LocalcoderServiceCommand::SpawnCursor),
         "move_abs" => Ok(LocalcoderServiceCommand::MoveAbs {
+            cursor_slot_id: optional_cursor_slot_id(input)?,
             x_px: optional_i32(input, "x_px")?,
             y_px: optional_i32(input, "y_px")?,
             x_norm: optional_norm(input, "x_norm")?,
@@ -276,6 +290,7 @@ fn command_from_value(input: &Value) -> Result<LocalcoderServiceCommand> {
             )?,
         }),
         "orbit" => Ok(LocalcoderServiceCommand::Orbit {
+            cursor_slot_id: optional_cursor_slot_id(input)?,
             center_x_px: optional_i32(input, "center_x_px")?,
             center_y_px: optional_i32(input, "center_y_px")?,
             center_x_norm: optional_norm(input, "center_x_norm")?,
@@ -298,6 +313,7 @@ fn command_from_value(input: &Value) -> Result<LocalcoderServiceCommand> {
             )?,
         }),
         "click" => Ok(LocalcoderServiceCommand::Click {
+            cursor_slot_id: optional_cursor_slot_id(input)?,
             buttons_down: parse_button_mask(input, ButtonMaskKind::Down, DEFAULT_BUTTON_MASK)?,
             repeat: optional_bounded_u32_or_default(
                 input,
@@ -315,12 +331,15 @@ fn command_from_value(input: &Value) -> Result<LocalcoderServiceCommand> {
             )?,
         }),
         "button_down" => Ok(LocalcoderServiceCommand::ButtonDown {
+            cursor_slot_id: optional_cursor_slot_id(input)?,
             buttons_down: parse_button_mask(input, ButtonMaskKind::Down, DEFAULT_BUTTON_MASK)?,
         }),
         "button_up" => Ok(LocalcoderServiceCommand::ButtonUp {
+            cursor_slot_id: optional_cursor_slot_id(input)?,
             buttons_up: parse_button_mask(input, ButtonMaskKind::Up, DEFAULT_BUTTON_MASK)?,
         }),
         "set_buttons" => Ok(LocalcoderServiceCommand::SetButtons {
+            cursor_slot_id: optional_cursor_slot_id(input)?,
             buttons_down: parse_button_mask(input, ButtonMaskKind::Down, DEFAULT_BUTTON_MASK)?,
         }),
         other => bail!("unsupported action: {}", other),
@@ -330,6 +349,7 @@ fn command_from_value(input: &Value) -> Result<LocalcoderServiceCommand> {
 
 fn validate_command(command: LocalcoderServiceCommand) -> Result<LocalcoderServiceCommand> {
     match &command {
+        LocalcoderServiceCommand::SpawnCursor => {}
         LocalcoderServiceCommand::MoveAbs {
             x_px,
             y_px,
@@ -385,6 +405,10 @@ fn validate_coordinate_mode(
         bail!("{} normalized coordinates require both x and y", label);
     }
     Ok(())
+}
+
+fn optional_cursor_slot_id(input: &Value) -> Result<Option<u32>> {
+    optional_bounded_u32(input, "cursor_slot_id", 1, u32::MAX)
 }
 
 fn optional_i32(input: &Value, key: &str) -> Result<Option<i32>> {
@@ -510,6 +534,7 @@ mod tests {
     fn parse_move_command() {
         let command = command_from_value(&json!({
             "action": "move_abs",
+            "cursor_slot_id": 7,
             "x_norm": 0.5,
             "y_norm": 0.5,
             "duration_ms": 250,
@@ -517,11 +542,13 @@ mod tests {
         .unwrap();
         match command {
             LocalcoderServiceCommand::MoveAbs {
+                cursor_slot_id,
                 x_norm,
                 y_norm,
                 duration_ms,
                 ..
             } => {
+                assert_eq!(cursor_slot_id, Some(7));
                 assert_eq!(x_norm, Some(0.5));
                 assert_eq!(y_norm, Some(0.5));
                 assert_eq!(duration_ms, 250);
@@ -545,11 +572,18 @@ mod tests {
     fn parse_button_up_command() {
         let command = command_from_value(&json!({
             "action": "button_up",
+            "cursor_slot_id": 9,
             "buttons_up": 8,
         }))
         .unwrap();
         match command {
-            LocalcoderServiceCommand::ButtonUp { buttons_up } => assert_eq!(buttons_up, 8),
+            LocalcoderServiceCommand::ButtonUp {
+                cursor_slot_id,
+                buttons_up,
+            } => {
+                assert_eq!(cursor_slot_id, Some(9));
+                assert_eq!(buttons_up, 8);
+            }
             _ => panic!("expected button_up command"),
         }
     }
@@ -562,10 +596,12 @@ mod tests {
         .unwrap();
         match command {
             LocalcoderServiceCommand::Click {
+                cursor_slot_id,
                 buttons_down,
                 repeat,
                 delay_ms,
             } => {
+                assert_eq!(cursor_slot_id, None);
                 assert_eq!(buttons_down, 1);
                 assert_eq!(repeat, 1);
                 assert_eq!(delay_ms, 120);
@@ -582,8 +618,26 @@ mod tests {
         }))
         .unwrap();
         match command {
-            LocalcoderServiceCommand::ButtonDown { buttons_down } => assert_eq!(buttons_down, 17),
+            LocalcoderServiceCommand::ButtonDown {
+                cursor_slot_id,
+                buttons_down,
+            } => {
+                assert_eq!(cursor_slot_id, None);
+                assert_eq!(buttons_down, 17);
+            }
             _ => panic!("expected button_down command"),
+        }
+    }
+
+    #[test]
+    fn parse_spawn_cursor_command() {
+        let command = command_from_value(&json!({
+            "action": "spawn_cursor",
+        }))
+        .unwrap();
+        match command {
+            LocalcoderServiceCommand::SpawnCursor => {}
+            _ => panic!("expected spawn_cursor command"),
         }
     }
 }
