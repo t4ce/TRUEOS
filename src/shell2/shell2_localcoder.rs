@@ -7,7 +7,7 @@ use localcoder::kernel::{self, BasicPromptRequest};
 use localcoder::resume::ResumeTarget as LocalcoderKernelResumeTarget;
 
 use super::{
-    MatrixTarget, ShellBackend2, matrix_target_for_backend, print_matrix_target_line,
+    MatrixTarget, ShellBackend2, localcoder_service, matrix_target_for_backend, print_matrix_target_line,
     set_matrix_target_active,
 };
 
@@ -33,6 +33,8 @@ pub(crate) fn submit(
     resume_target: LocalcoderResumeTarget,
     prompt: Option<String>,
 ) -> bool {
+    localcoder_service::ensure_registered(spawner);
+
     let target = matrix_target_for_backend(io);
     set_matrix_target_active(&target, true);
 

@@ -1,3 +1,9 @@
+Copyright (c) 2026 Jonas Baethke. All rights reserved.
+
+No permission is granted to use, copy, modify, distribute, or sublicense
+this software or its source code, in whole or in part, without prior
+written permission from the copyright holder.
+
 /* TRUE OS § ® 2026
 ██████████████████████████████████████████████████████████████████████
 ██░        ░░       ░░░  ░░░░  ░░        ░░░░░░░░░      ░░░░      ░░██

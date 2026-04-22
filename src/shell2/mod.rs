@@ -16,6 +16,7 @@ mod shell2_ai;
 mod shell2_cmd;
 mod shell2_cmd_registry;
 mod shell2_irc;
+mod localcoder_service;
 mod shell2_localcoder;
 mod shell2_qjs;
 mod shell2_qjs_c4;
