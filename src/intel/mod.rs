@@ -118,7 +118,11 @@ fn log_media_demo_task_profile(origin: &str, requested_slot: u32, queued_at_ms: 
 async fn media_boot_demo_task(requested_slot: u32, queued_at_ms: u64) {
     log_media_demo_task_profile("worker", requested_slot, queued_at_ms);
     crate::log!("intel/media: boot demo begin\n");
-    run_media_decode_async().await;
+    let first_frame = run_media2_first_frame_async().await;
+    crate::log!(
+        "intel/media: boot demo first-frame origin=worker returned={}\n",
+        first_frame.is_some() as u8,
+    );
 }
 
 #[derive(Copy, Clone)]
@@ -254,7 +258,11 @@ pub fn init_once() {
 
             log_media_demo_task_profile("local", 0, queued_at_ms);
             crate::log!("intel/media: boot demo begin\n");
-            self::run_media_decode_async().await;
+            let first_frame = self::run_media2_first_frame_async().await;
+            crate::log!(
+                "intel/media: boot demo first-frame origin=local returned={}\n",
+                first_frame.is_some() as u8,
+            );
         });
     } else {
         crate::log!("intel/media: boot demo disabled\n");
