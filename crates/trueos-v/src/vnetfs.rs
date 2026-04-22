@@ -37,12 +37,23 @@ pub fn fetch_post_json_to_file(
     body: &[u8],
     bearer: Option<&[u8]>,
 ) -> Result<u32, i32> {
+    fetch_post_json_to_file_with_timeout(url, path, body, bearer, 15_000)
+}
+
+#[inline]
+pub fn fetch_post_json_to_file_with_timeout(
+    url: &[u8],
+    path: &[u8],
+    body: &[u8],
+    bearer: Option<&[u8]>,
+    timeout_ms: u32,
+) -> Result<u32, i32> {
     let (bearer_ptr, bearer_len) = match bearer {
         Some(token) => (token.as_ptr(), token.len()),
         None => (core::ptr::null(), 0),
     };
     let op_id = unsafe {
-        vcabi::trueos_cabi_net_fetch_post_json_start(
+        vcabi::trueos_cabi_net_fetch_post_json_start_with_timeout(
             url.as_ptr(),
             url.len(),
             path.as_ptr(),
@@ -51,6 +62,7 @@ pub fn fetch_post_json_to_file(
             body.len(),
             bearer_ptr,
             bearer_len,
+            timeout_ms,
         )
     };
     if op_id == 0 {
@@ -61,18 +73,29 @@ pub fn fetch_post_json_to_file(
 
 #[inline]
 pub fn fetch_post_json_bytes(url: &[u8], body: &[u8], bearer: Option<&[u8]>) -> Result<u32, i32> {
+    fetch_post_json_bytes_with_timeout(url, body, bearer, 15_000)
+}
+
+#[inline]
+pub fn fetch_post_json_bytes_with_timeout(
+    url: &[u8],
+    body: &[u8],
+    bearer: Option<&[u8]>,
+    timeout_ms: u32,
+) -> Result<u32, i32> {
     let (bearer_ptr, bearer_len) = match bearer {
         Some(token) => (token.as_ptr(), token.len()),
         None => (core::ptr::null(), 0),
     };
     let op_id = unsafe {
-        vcabi::trueos_cabi_net_fetch_post_json_bytes_start(
+        vcabi::trueos_cabi_net_fetch_post_json_bytes_start_with_timeout(
             url.as_ptr(),
             url.len(),
             body.as_ptr(),
             body.len(),
             bearer_ptr,
             bearer_len,
+            timeout_ms,
         )
     };
     if op_id == 0 {

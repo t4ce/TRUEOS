@@ -1,3 +1,0 @@
-/* esm.sh - openai@6.27.0/resources/batches */
-import{APIResource as c}from"../core/resource.mjs";import{CursorPage as i}from"../core/pagination.mjs";import{path as r}from"../internal/utils/path.mjs";var s=class extends c{create(t,e){return this._client.post("/batches",{body:t,...e})}retrieve(t,e){return this._client.get(r`/batches/${t}`,e)}list(t={},e){return this._client.getAPIList("/batches",i,{query:t,...e})}cancel(t,e){return this._client.post(r`/batches/${t}/cancel`,e)}};export{s as Batches};
-//# sourceMappingURL=batches.mjs.map

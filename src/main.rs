@@ -217,7 +217,6 @@ pub extern "C" fn kmain() -> ! {
     intel::init_once();
 
     //vga::cube::tick();
-    trueos_qjs::host_api_hook::set_context_init_hook(host_api::install);
 
     pci::vrng::init_once();
     //pci::vrng::smoke_test_once();

@@ -10,10 +10,13 @@ use serde_json::{Value, json};
 
 use crate::api::LLMClient;
 
-const TOKEN_THRESHOLD: usize = 12_000;
+// TRUEOS slot sessions include tool history plus a large fixed tool/schema
+// surface every turn, so practical context pressure arrives much earlier than
+// the raw model window suggests. Compact well before we approach that limit.
+const TOKEN_THRESHOLD: usize = 2_000;
 const CHARS_PER_TOKEN: usize = 4;
-const KEEP_RECENT_MESSAGES: usize = 10;
-const SUMMARY_MESSAGE_LIMIT: usize = 24;
+const KEEP_RECENT_MESSAGES: usize = 6;
+const SUMMARY_MESSAGE_LIMIT: usize = 16;
 
 pub async fn maybe_compact(client: &LLMClient, messages: &mut Vec<Value>) -> Result<bool> {
     if !should_compact(messages) {
@@ -89,10 +92,10 @@ fn format_message(message: &Value) -> String {
         format!(
             "tool {}:\n{}",
             message["tool_name"].as_str().unwrap_or("unknown"),
-            truncate(content, 800)
+            truncate(content, 400)
         )
     } else {
-        format!("{}:\n{}", role, truncate(content, 1200))
+        format!("{}:\n{}", role, truncate(content, 800))
     }
 }
 

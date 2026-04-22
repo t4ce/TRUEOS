@@ -1,3 +1,0 @@
-/* esm.sh - openai@6.27.0/resources/images */
-import{APIResource as r}from"../core/resource.mjs";import{multipartFormRequestOptions as s}from"../internal/uploads.mjs";var i=class extends r{createVariation(t,e){return this._client.post("/images/variations",s({body:t,...e},this._client))}edit(t,e){return this._client.post("/images/edits",s({body:t,...e,stream:t.stream??!1},this._client))}generate(t,e){return this._client.post("/images/generations",{body:t,...e,stream:t.stream??!1})}};export{i as Images};
-//# sourceMappingURL=images.mjs.map

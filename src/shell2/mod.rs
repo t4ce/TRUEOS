@@ -11,13 +11,13 @@ pub(crate) mod backends;
 pub(crate) mod cmds;
 mod ecma48;
 mod interface;
+mod localcoder_service;
 mod localcoder_ui2_window;
 mod matrix;
 mod shell2_ai;
 mod shell2_cmd;
 mod shell2_cmd_registry;
 mod shell2_irc;
-mod localcoder_service;
 mod shell2_localcoder;
 mod shell2_qjs;
 mod shell2_qjs_c4;
@@ -95,15 +95,6 @@ pub(crate) enum CommandSessionInputResult {
 pub(crate) struct MatrixTarget {
     output_mask: u8,
     slot_id: matrix::MatrixSlotId,
-}
-
-#[derive(Clone)]
-pub(crate) struct AiPcCommandExecResult {
-    pub(crate) ok: bool,
-    pub(crate) command_line: AllocString,
-    pub(crate) stdout: AllocString,
-    pub(crate) stderr: AllocString,
-    pub(crate) exit_code: i32,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -577,16 +568,6 @@ pub(crate) fn output_target_for_backend(io: &'static dyn ShellBackend2) -> u8 {
     0
 }
 
-fn backend_for_output_mask(output_mask: u8) -> &'static dyn ShellBackend2 {
-    if (output_mask & OUTPUT_UI2_MASK) != 0 {
-        return &UI2_SHELL_BACKEND;
-    }
-    if (output_mask & OUTPUT_NET_TCP_MASK) != 0 {
-        return &NET_TCP_SHELL_BACKEND;
-    }
-    &UART1_COM1_BACKEND
-}
-
 pub(crate) fn matrix_target_for_backend(io: &'static dyn ShellBackend2) -> MatrixTarget {
     let output_mask = output_target_for_backend(io);
     MatrixTarget {
@@ -689,148 +670,6 @@ pub(crate) fn print_matrix_target_native_text(target: &MatrixTarget, text: &str)
 
 fn current_transcript_for_task(io: &'static dyn ShellBackend2) -> VecDeque<TranscriptEntry> {
     matrix::active_lines(output_target_for_backend(io))
-}
-
-fn transcript_delta_text(
-    before: &VecDeque<TranscriptEntry>,
-    after: &VecDeque<TranscriptEntry>,
-) -> AllocString {
-    let mut common = 0usize;
-    let limit = core::cmp::min(before.len(), after.len());
-    while common < limit {
-        let Some(prev) = before.get(common) else {
-            break;
-        };
-        let Some(next) = after.get(common) else {
-            break;
-        };
-        if prev.source != next.source || prev.text != next.text {
-            break;
-        }
-        common += 1;
-    }
-
-    let mut out = AllocString::new();
-    for entry in after.iter().skip(common) {
-        if !out.is_empty() {
-            out.push('\n');
-        }
-        out.push_str(entry.text.as_str());
-    }
-    out
-}
-
-fn quote_ai_pc_arg(value: &str) -> AllocString {
-    let needs_quotes = value
-        .bytes()
-        .any(|byte| matches!(byte, b' ' | b'\t' | b'\r' | b'\n' | b'"' | b'\\'));
-    if !needs_quotes {
-        return AllocString::from(value);
-    }
-
-    let mut out = AllocString::from("\"");
-    for ch in value.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            _ => out.push(ch),
-        }
-    }
-    out.push('"');
-    out
-}
-
-pub(crate) fn execute_ai_pc_shell_command(
-    output_mask: u8,
-    command_name: &str,
-    argv: &[AllocString],
-) -> AiPcCommandExecResult {
-    let io = backend_for_output_mask(output_mask);
-    let trimmed_name = command_name.trim();
-    let rendered_args = argv
-        .iter()
-        .map(|arg| quote_ai_pc_arg(arg.as_str()))
-        .collect::<alloc::vec::Vec<_>>()
-        .join(" ");
-    let command_line = if rendered_args.is_empty() {
-        AllocString::from(trimmed_name)
-    } else {
-        alloc::format!("{trimmed_name} {rendered_args}")
-    };
-
-    let before = current_transcript_for_task(io);
-    let outcome = match trimmed_name {
-        "acpi" => {
-            let mut args = rendered_args.split_whitespace();
-            cmds::acpi::try_parse(io, &mut args)
-        }
-        "email" => {
-            let mut args = rendered_args.split_whitespace();
-            cmds::email::try_parse(io, &mut args)
-        }
-        "etc" => {
-            let mut args = rendered_args.split_whitespace();
-            cmds::etc::try_parse(io, &mut args)
-        }
-        "file" => {
-            let mut args = rendered_args.split_whitespace();
-            cmds::file::try_parse(io, &mut args)
-        }
-        "net" => {
-            let mut args = rendered_args.split_whitespace();
-            cmds::net::try_parse(io, &mut args)
-        }
-        "set" => {
-            let mut args = rendered_args.split_whitespace();
-            cmds::set::try_parse(io, &mut args)
-        }
-        "smp" => {
-            let mut args = rendered_args.split_whitespace();
-            cmds::smp::try_parse(io, &mut args)
-        }
-        "tlb" => {
-            let mut args = rendered_args.split_whitespace();
-            cmds::tlb::try_parse(io, &mut args)
-        }
-        "turbo" => {
-            let mut args = rendered_args.split_whitespace();
-            cmds::turbo::try_parse(io, &mut args)
-        }
-        _ => shell2_cmd::ParseOutcome::NotCommand,
-    };
-    let after = current_transcript_for_task(io);
-    let mut stdout = transcript_delta_text(&before, &after);
-    let mut stderr = AllocString::new();
-
-    let (ok, exit_code) = match outcome {
-        shell2_cmd::ParseOutcome::Handled | shell2_cmd::ParseOutcome::SetLineWidth(_) => (true, 0),
-        shell2_cmd::ParseOutcome::StartSession(_) => {
-            if !stdout.is_empty() {
-                stdout.push('\n');
-            }
-            stdout.push_str("ai-pc: interactive command sessions are not supported yet");
-            (false, 1)
-        }
-        shell2_cmd::ParseOutcome::LaunchTetris => {
-            if !stdout.is_empty() {
-                stdout.push('\n');
-            }
-            stdout.push_str("ai-pc: graphical launch commands are not supported yet");
-            (false, 1)
-        }
-        shell2_cmd::ParseOutcome::NotCommand => {
-            stderr.push_str("ai-pc: unsupported shell command");
-            (false, 1)
-        }
-    };
-
-    AiPcCommandExecResult {
-        ok,
-        command_line,
-        stdout,
-        stderr,
-        exit_code,
-    }
 }
 
 pub(crate) fn repaint_backend_screen(io: &'static dyn ShellBackend2) {

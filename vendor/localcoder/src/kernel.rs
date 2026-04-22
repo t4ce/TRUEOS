@@ -1,4 +1,5 @@
 use crate::api::LLMClient;
+use crate::compact;
 use crate::engine;
 use crate::localcoder_service;
 use crate::resume::ResumeTarget;
@@ -19,12 +20,8 @@ use std::path::{Path, PathBuf};
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
-#[cfg(feature = "trueos-net")]
-const TRUEOS_REMOTE_OLLAMA_URL: &str = "http://192.168.178.112:1234/v1";
-#[cfg(feature = "trueos-net")]
-const TRUEOS_REMOTE_MODEL: &str = "google/gemma-4-e4b";
-
 static SESSION_COUNTER: AtomicU64 = AtomicU64::new(0);
+const TRUEOS_FORCED_MODEL: &str = "google/gemma-4-e4b";
 
 #[derive(Debug, Clone)]
 pub struct BasicPromptRequest {
@@ -245,10 +242,8 @@ pub async fn run_basic_prompt(request: &BasicPromptRequest) -> Result<BasicPromp
         .map_err(|e| anyhow!("localcoder settings bootstrap failed: {}", e))?;
     let mut client =
         LLMClient::new().map_err(|e| anyhow!("localcoder client init failed: {}", e))?;
-    #[cfg(feature = "trueos-net")]
-    client.set_base_url(TRUEOS_REMOTE_OLLAMA_URL.to_string());
-    #[cfg(feature = "trueos-net")]
-    client.set_model(TRUEOS_REMOTE_MODEL.to_string());
+    client.set_model(TRUEOS_FORCED_MODEL.to_string());
+    client.set_max_tokens(request.max_tokens);
 
     let session_scope = request.session_scope.as_deref();
     let cwd = rt_env::current_dir().map_err(|e| anyhow!("failed to resolve project directory: {}", e))?;
@@ -264,25 +259,59 @@ pub async fn run_basic_prompt(request: &BasicPromptRequest) -> Result<BasicPromp
     save_prompt_session(&cwd, session_scope, &session)?;
 
     let mut messages = session.messages.clone();
-    let text = engine::run_agent_loop_with_system_prompt(
+    if compact::maybe_compact(&client, &mut messages).await? {
+        session.messages = messages.clone();
+        save_prompt_session(&cwd, session_scope, &session)?;
+    }
+
+    let text = match engine::run_agent_loop_with_system_prompt(
         &client,
         &registry,
         &mut messages,
         system_prompt.as_deref(),
     )
     .await
-    .map_err(|e| {
-        if let Some(warning) = endpoint_soft_warning(base_url.as_str(), &e) {
-            return anyhow!(warning);
+    {
+        Ok(text) => text,
+        Err(err) if err.to_string().contains("Context size has been exceeded") => {
+            if compact::force_compact(&client, &mut messages).await? {
+                session.messages = messages.clone();
+                save_prompt_session(&cwd, session_scope, &session)?;
+            }
+            engine::run_agent_loop_with_system_prompt(
+                &client,
+                &registry,
+                &mut messages,
+                system_prompt.as_deref(),
+            )
+            .await
+            .map_err(|e| {
+                if let Some(warning) = endpoint_soft_warning(base_url.as_str(), &e) {
+                    return anyhow!(warning);
+                }
+                anyhow!(
+                    "localcoder prompt failed: {:#} (endpoint={} model={} settings={} hint=for LM Studio enable Serve on Local Network and verify the server is listening on that host:port)",
+                    e,
+                    base_url,
+                    model,
+                    settings_path.display()
+                )
+            })?
         }
-        anyhow!(
-            "localcoder prompt failed: {:#} (endpoint={} model={} settings={} hint=for LM Studio enable Serve on Local Network and verify the server is listening on that host:port)",
-            e,
-            base_url,
-            model,
-            settings_path.display()
-        )
-    })?;
+        Err(err) => {
+            return Err(if let Some(warning) = endpoint_soft_warning(base_url.as_str(), &err) {
+                anyhow!(warning)
+            } else {
+                anyhow!(
+                    "localcoder prompt failed: {:#} (endpoint={} model={} settings={} hint=for LM Studio enable Serve on Local Network and verify the server is listening on that host:port)",
+                    err,
+                    base_url,
+                    model,
+                    settings_path.display()
+                )
+            });
+        }
+    };
 
     session.messages = messages;
     save_prompt_session(&cwd, session_scope, &session)?;

@@ -2,6 +2,16 @@
  * LLM Client Module
  *
  * Pure Ollama client implementation with tool-calling support.
+ *
+ * NOTE:
+ * The TRUEOS localcoder runtime stores conversation history in its own internal
+ * shape after tool use, for example assistant messages with lightweight
+ * `tool_calls` entries and tool result messages carrying `tool_name` /
+ * `is_error`. OpenAI-compatible `/v1/chat/completions` backends reject that
+ * history as invalid `messages`, so before sending requests to that API surface
+ * we must normalize the stored messages into OpenAI chat format:
+ * assistant tool calls need ids plus stringified arguments, and tool results
+ * need `role="tool"` with a matching `tool_call_id`.
  */
 
 use crate::net;
@@ -10,6 +20,7 @@ use crate::types::{AgentResponse, OllamaChatResponse, ToolUseCall};
 use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
 const DEFAULT_OLLAMA_URL: &str = "http://localhost:11434";
@@ -61,6 +72,10 @@ pub enum ClientConfigSource {
 }
 
 impl LLMClient {
+    fn is_placeholder_settings_cwd(path: &Path) -> bool {
+        path == Path::new("/lc")
+    }
+
     fn uses_openai_compat(&self) -> bool {
         self.base_url.ends_with("/v1")
     }
@@ -125,9 +140,11 @@ impl LLMClient {
 
     fn resolve_settings_path_with(home: Option<&Path>) -> Result<PathBuf> {
         if let Ok(cwd) = rt_env::current_dir() {
-            let cwd_path = cwd.join(".localcoder/settings.json");
-            if rt_fs::exists(&cwd_path) {
-                return Ok(cwd_path);
+            if !Self::is_placeholder_settings_cwd(&cwd) {
+                let cwd_path = cwd.join(".localcoder/settings.json");
+                if rt_fs::exists(&cwd_path) {
+                    return Ok(cwd_path);
+                }
             }
         }
 
@@ -151,9 +168,15 @@ impl LLMClient {
         let path = if let Some(home) = home {
             home.join(".localcoder/settings.json")
         } else {
-            rt_env::current_dir()
-                .context("failed to resolve current directory for settings bootstrap")?
-                .join(".localcoder/settings.json")
+            let cwd = rt_env::current_dir()
+                .context("failed to resolve current directory for settings bootstrap")?;
+            if Self::is_placeholder_settings_cwd(&cwd) {
+                return Err(anyhow!(
+                    "missing $HOME/.localcoder/settings.json and refusing to bootstrap placeholder cwd {}",
+                    cwd.display()
+                ));
+            }
+            cwd.join(".localcoder/settings.json")
         };
         if let Some(parent) = path.parent() {
             rt_fs::create_dir_all(parent).with_context(|| {
@@ -200,6 +223,7 @@ impl LLMClient {
         tools: &[Value],
     ) -> Result<AgentResponse> {
         if self.uses_openai_compat() {
+            let messages = normalize_openai_compat_messages(messages);
             let body = if tools.is_empty() {
                 json!({
                     "model": self.model,
@@ -354,6 +378,43 @@ impl LLMClient {
             "以下是一段对话历史，请生成简洁摘要，保留：\n1. 已完成的任务和结果\n2. 重要文件修改\n3. 用户的关键偏好和决定\n4. 未完成的任务\n\n对话历史：\n{}",
             crate::compact::summarize_for_prompt(messages)
         );
+
+        if self.uses_openai_compat() {
+            let body = json!({
+                "model": self.model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                "stream": false,
+                "max_tokens": 1024
+            });
+
+            let response = net::post_json(&format!("{}/chat/completions", self.base_url), &body)
+                .await
+                .context("LM Studio summarize request failed")?;
+
+            if !response.is_success() {
+                let status = response.status();
+                let error_text = response.text().unwrap_or_default();
+                anyhow::bail!("LM Studio returned error {}: {}", status, error_text);
+            }
+
+            let response: Value = response
+                .json()
+                .context("failed to parse LM Studio summarize response")?;
+
+            if let Some(text) = response
+                .pointer("/choices/0/message/content")
+                .and_then(Value::as_str)
+            {
+                return Ok(text.to_string());
+            }
+
+            anyhow::bail!("LM Studio summarize response missing choices[0].message.content");
+        }
 
         let body = json!({
             "model": self.model,
@@ -549,6 +610,127 @@ impl LLMClient {
     }
 }
 
+fn normalize_openai_compat_messages(messages: &[Value]) -> Vec<Value> {
+    let mut normalized = Vec::with_capacity(messages.len());
+    let mut pending_tool_calls: VecDeque<(String, String)> = VecDeque::new();
+    let mut next_tool_call_id: u64 = 1;
+
+    for message in messages {
+        let role = message
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        match role {
+            "system" | "user" => {
+                normalized.push(json!({
+                    "role": role,
+                    "content": message
+                        .get("content")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                }));
+            }
+            "assistant" => {
+                let content = message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let mut assistant = json!({
+                    "role": "assistant",
+                    "content": content
+                });
+                if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
+                    let mut normalized_tool_calls = Vec::with_capacity(tool_calls.len());
+                    for tool_call in tool_calls {
+                        let function = tool_call
+                            .get("function")
+                            .cloned()
+                            .unwrap_or_else(|| json!({}));
+                        let name = function
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string();
+                        let arguments = function
+                            .get("arguments")
+                            .cloned()
+                            .unwrap_or(Value::Null);
+                        let call_id = format!("call_{}", next_tool_call_id);
+                        next_tool_call_id += 1;
+                        pending_tool_calls.push_back((call_id.clone(), name.clone()));
+                        normalized_tool_calls.push(json!({
+                            "id": call_id,
+                            "type": "function",
+                            "function": {
+                                "name": name,
+                                "arguments": stringify_tool_arguments(&arguments),
+                            }
+                        }));
+                    }
+                    assistant["tool_calls"] = Value::Array(normalized_tool_calls);
+                }
+                normalized.push(assistant);
+            }
+            "tool" => {
+                let tool_name = message
+                    .get("tool_name")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let tool_call_id = take_pending_tool_call_id(&mut pending_tool_calls, tool_name)
+                    .unwrap_or_else(|| {
+                        let call_id = format!("call_{}", next_tool_call_id);
+                        next_tool_call_id += 1;
+                        call_id
+                    });
+                normalized.push(json!({
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "content": message
+                        .get("content")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                }));
+            }
+            _ => {
+                normalized.push(json!({
+                    "role": role,
+                    "content": message
+                        .get("content")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                }));
+            }
+        }
+    }
+
+    normalized
+}
+
+fn stringify_tool_arguments(arguments: &Value) -> String {
+    match arguments {
+        Value::String(raw) => raw.clone(),
+        other => serde_json::to_string(other).unwrap_or_else(|_| "null".to_string()),
+    }
+}
+
+fn take_pending_tool_call_id(
+    pending_tool_calls: &mut VecDeque<(String, String)>,
+    tool_name: &str,
+) -> Option<String> {
+    if tool_name.is_empty() {
+        return pending_tool_calls.pop_front().map(|(call_id, _)| call_id);
+    }
+
+    if let Some(index) = pending_tool_calls
+        .iter()
+        .position(|(_, pending_name)| pending_name == tool_name)
+    {
+        return pending_tool_calls.remove(index).map(|(call_id, _)| call_id);
+    }
+
+    pending_tool_calls.pop_front().map(|(call_id, _)| call_id)
+}
+
 #[cfg(test)]
 impl LLMClient {
     fn max_tokens(&self) -> u32 {
@@ -559,6 +741,7 @@ impl LLMClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use tempfile::tempdir;
 
     #[test]
@@ -682,5 +865,52 @@ mod tests {
         let settings: PersistedSettings = serde_json::from_str(&raw).unwrap();
         assert_eq!(settings.ollama.url, "http://remote-host:11434");
         assert_eq!(settings.ollama.model, "deepseek-r1:8b");
+    }
+
+    #[test]
+    fn normalize_openai_compat_messages_converts_tool_history() {
+        let messages = vec![
+            json!({"role":"system","content":"sys"}),
+            json!({"role":"user","content":"orbit"}),
+            json!({
+                "role":"assistant",
+                "content":"",
+                "tool_calls":[
+                    {
+                        "function": {
+                            "name":"localcoder_service",
+                            "arguments":{"action":"orbit","center_x_norm":0.5}
+                        }
+                    }
+                ]
+            }),
+            json!({
+                "role":"tool",
+                "tool_name":"localcoder_service",
+                "content":"queued orbit",
+                "is_error": false
+            }),
+        ];
+
+        let normalized = normalize_openai_compat_messages(&messages);
+        assert_eq!(normalized.len(), 4);
+        assert_eq!(normalized[0]["role"], "system");
+        assert_eq!(normalized[1]["role"], "user");
+        assert_eq!(normalized[2]["role"], "assistant");
+        assert_eq!(normalized[3]["role"], "tool");
+
+        let tool_call_id = normalized[2]["tool_calls"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(normalized[2]["tool_calls"][0]["type"], "function");
+        assert_eq!(
+            normalized[2]["tool_calls"][0]["function"]["arguments"],
+            "{\"action\":\"orbit\",\"center_x_norm\":0.5}"
+        );
+        assert_eq!(normalized[3]["tool_call_id"], tool_call_id);
+        assert_eq!(normalized[3]["content"], "queued orbit");
+        assert!(normalized[3].get("tool_name").is_none());
+        assert!(normalized[3].get("is_error").is_none());
     }
 }

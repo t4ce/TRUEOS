@@ -12,6 +12,8 @@ const DEFAULT_AI_CURSOR_SLOT_ID: u32 = AI_CURSOR_SLOT_BASE + 1;
 const LOCALCODER_SERVICE_IDLE_MS: u64 = 8;
 const LOCALCODER_SERVICE_STEP_MS: u64 = 12;
 const LOCALCODER_SERVICE_QUEUE_CAP: usize = 32;
+const LOCALCODER_SERVICE_PLAYBACK_SCALE_NUM: u32 = 2;
+const LOCALCODER_SERVICE_PLAYBACK_SCALE_DEN: u32 = 1;
 
 static LOCALCODER_SERVICE_STARTED: AtomicBool = AtomicBool::new(false);
 static LOCALCODER_SERVICE_INSTALLED: AtomicBool = AtomicBool::new(false);
@@ -52,6 +54,13 @@ pub(crate) fn enqueue_command(
 fn queue_localcoder_service_command(
     command: lc_service::LocalcoderServiceCommand,
 ) -> lc_service::LocalcoderServiceResult {
+    if matches!(command, lc_service::LocalcoderServiceCommand::SpawnCursor) {
+        let slot_id = allocate_ai_cursor_slot_id();
+        let (x_px, y_px, buttons_down) = current_cursor_position_px(None);
+        inject_cursor(slot_id, x_px, y_px, buttons_down);
+        return Ok(format!("{{\"cursor_slot_id\":{}}}", slot_id));
+    }
+
     let summary = summarize_command(&command);
     let mut guard = LOCALCODER_SERVICE_QUEUE.lock();
     if guard.len() >= LOCALCODER_SERVICE_QUEUE_CAP {
@@ -176,11 +185,7 @@ async fn localcoder_cursor_service_task() {
 
 async fn run_command(command: lc_service::LocalcoderServiceCommand) {
     match command {
-        lc_service::LocalcoderServiceCommand::SpawnCursor => {
-            let slot_id = allocate_ai_cursor_slot_id();
-            let (x_px, y_px, buttons_down) = current_cursor_position_px(None);
-            inject_cursor(slot_id, x_px, y_px, buttons_down);
-        }
+        lc_service::LocalcoderServiceCommand::SpawnCursor => {}
         lc_service::LocalcoderServiceCommand::MoveAbs {
             cursor_slot_id,
             x_px,
@@ -200,7 +205,7 @@ async fn run_command(command: lc_service::LocalcoderServiceCommand) {
                 start_y,
                 target_x,
                 target_y,
-                duration_ms,
+                scale_duration_ms(duration_ms),
                 buttons_down,
             )
             .await;
@@ -216,12 +221,9 @@ async fn run_command(command: lc_service::LocalcoderServiceCommand) {
             loop_duration_ms,
             loops,
         } => {
-            let Some((center_x, center_y)) = resolve_point_px(
-                center_x_px,
-                center_y_px,
-                center_x_norm,
-                center_y_norm,
-            ) else {
+            let Some((center_x, center_y)) =
+                resolve_point_px(center_x_px, center_y_px, center_x_norm, center_y_norm)
+            else {
                 return;
             };
             let radius_px = resolve_radius_px(radius_px, radius_norm);
@@ -230,20 +232,13 @@ async fn run_command(command: lc_service::LocalcoderServiceCommand) {
             }
 
             let cursor_slot_id = cursor_slot_id.unwrap_or(DEFAULT_AI_CURSOR_SLOT_ID);
+            let loop_duration_ms = scale_duration_ms(loop_duration_ms);
             let start_x = center_x.saturating_add(radius_px);
             let start_y = center_y;
             let (cur_x, cur_y, buttons_down) = current_cursor_position_px(Some(cursor_slot_id));
             let lead_in_ms = loop_duration_ms.min(240).max(60) / 3;
-            smooth_move(
-                cursor_slot_id,
-                cur_x,
-                cur_y,
-                start_x,
-                start_y,
-                lead_in_ms,
-                buttons_down,
-            )
-            .await;
+            smooth_move(cursor_slot_id, cur_x, cur_y, start_x, start_y, lead_in_ms, buttons_down)
+                .await;
 
             let steps_per_loop = (loop_duration_ms / LOCALCODER_SERVICE_STEP_MS as u32).max(16);
             let step_delay_ms = (loop_duration_ms / steps_per_loop).max(1) as u64;
@@ -266,9 +261,11 @@ async fn run_command(command: lc_service::LocalcoderServiceCommand) {
         } => {
             let cursor_slot_id = cursor_slot_id.unwrap_or(DEFAULT_AI_CURSOR_SLOT_ID);
             let (x_px, y_px, base_buttons) = current_cursor_position_px(Some(cursor_slot_id));
+            let delay_ms = scale_duration_ms(delay_ms);
+            let click_hold_ms = scale_duration_ms(24);
             for idx in 0..repeat {
                 inject_cursor(cursor_slot_id, x_px, y_px, base_buttons | buttons_down);
-                Timer::after(EmbassyDuration::from_millis(24)).await;
+                Timer::after(EmbassyDuration::from_millis(click_hold_ms as u64)).await;
                 inject_cursor(cursor_slot_id, x_px, y_px, base_buttons);
                 if idx + 1 < repeat {
                     Timer::after(EmbassyDuration::from_millis(delay_ms as u64)).await;
@@ -338,10 +335,7 @@ fn resolve_point_px(
         (Some(x_px), Some(y_px), None, None) => Some((x_px, y_px)),
         (None, None, Some(x_norm), Some(y_norm)) => {
             let (vp_w, vp_h) = viewport_dimensions_px();
-            Some((
-                norm_to_px(x_norm, vp_w),
-                norm_to_px(y_norm, vp_h),
-            ))
+            Some((norm_to_px(x_norm, vp_w), norm_to_px(y_norm, vp_h)))
         }
         _ => None,
     }
@@ -363,7 +357,9 @@ fn current_cursor_position_px(target_slot_id: Option<u32>) -> (i32, i32, u32) {
     let (vp_w, vp_h) = viewport_dimensions_px();
     let mut default_ai_fallback: Option<(i32, i32, u32)> = None;
     let mut any_fallback: Option<(i32, i32, u32)> = None;
-    for (slot_id, x_norm, y_norm, buttons_down) in crate::r::cursor::ordered_cursor_snapshot_with_slot_buttons() {
+    for (slot_id, x_norm, y_norm, buttons_down) in
+        crate::r::cursor::ordered_cursor_snapshot_with_slot_buttons()
+    {
         let x_px = norm_to_px(x_norm, vp_w);
         let y_px = norm_to_px(y_norm, vp_h);
         if Some(slot_id) == target_slot_id {
@@ -405,6 +401,12 @@ fn allocate_ai_cursor_slot_id() -> u32 {
 
 fn display_cursor_slot_id(cursor_slot_id: Option<u32>) -> u32 {
     cursor_slot_id.unwrap_or(DEFAULT_AI_CURSOR_SLOT_ID)
+}
+
+fn scale_duration_ms(duration_ms: u32) -> u32 {
+    let scaled = (u64::from(duration_ms) * u64::from(LOCALCODER_SERVICE_PLAYBACK_SCALE_NUM))
+        / u64::from(LOCALCODER_SERVICE_PLAYBACK_SCALE_DEN.max(1));
+    scaled.clamp(0, u64::from(u32::MAX)) as u32
 }
 
 fn norm_to_px(value: f64, extent_px: i32) -> i32 {

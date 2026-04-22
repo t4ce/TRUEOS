@@ -1,10 +1,8 @@
 extern crate alloc;
 
 use alloc::string::String;
-use alloc::vec::Vec;
 use core::ffi::c_char;
 use core::ffi::c_int;
-use embassy_time::Instant;
 
 use trueos_qjs as qjs;
 use v::{vgfx, vshell};
@@ -304,95 +302,6 @@ unsafe extern "C" fn trueos_shell1_history_text_since_js(
     qjs::JS_NewStringLen(ctx, bytes.as_ptr() as *const c_char, bytes.len())
 }
 
-unsafe extern "C" fn trueos_ai_pc_execute_shell_command_js(
-    ctx: *mut qjs::JSContext,
-    _this_val: qjs::JSValueConst,
-    argc: c_int,
-    argv: *const qjs::JSValueConst,
-) -> qjs::JSValue {
-    if argv.is_null() || argc < 1 {
-        return js_null();
-    }
-
-    let args = core::slice::from_raw_parts(argv, argc as usize);
-    let Some(command_name) = js_to_string(ctx, args[0]) else {
-        return js_null();
-    };
-    let argv_json = if argc >= 2 {
-        js_to_string(ctx, args[1]).unwrap_or_default()
-    } else {
-        String::from("[]")
-    };
-    let target_mask = if argc >= 3 {
-        js_to_i32(ctx, args[2]).unwrap_or(0).max(0) as u8
-    } else {
-        0u8
-    };
-
-    let argv = match serde_json::from_str::<Vec<String>>(argv_json.as_str()) {
-        Ok(parsed) => parsed,
-        Err(error) => {
-            let obj = qjs::JS_NewObject(ctx);
-            if obj.is_exception() {
-                return js_null();
-            }
-
-            let stderr = alloc::format!("ai-pc: invalid argv json: {}", error);
-            let _ =
-                qjs::JS_SetPropertyStr(ctx, obj, b"ok\0".as_ptr() as *const c_char, js_bool(false));
-            js_set_string_prop(ctx, obj, b"tool_name\0", command_name.as_str());
-            js_set_string_prop(ctx, obj, b"command_line\0", command_name.as_str());
-            js_set_string_prop(ctx, obj, b"stdout\0", "");
-            js_set_string_prop(ctx, obj, b"stderr\0", stderr.as_str());
-            let _ = qjs::JS_SetPropertyStr(
-                ctx,
-                obj,
-                b"exit_code\0".as_ptr() as *const c_char,
-                js_int32(1),
-            );
-            let _ = qjs::JS_SetPropertyStr(
-                ctx,
-                obj,
-                b"duration_ms\0".as_ptr() as *const c_char,
-                js_int32(0),
-            );
-            return obj;
-        }
-    };
-
-    let started = Instant::now();
-    let result = crate::shell2::execute_ai_pc_shell_command(
-        target_mask,
-        command_name.as_str(),
-        argv.as_slice(),
-    );
-    let duration_ms = started.elapsed().as_millis() as i32;
-
-    let obj = qjs::JS_NewObject(ctx);
-    if obj.is_exception() {
-        return js_null();
-    }
-
-    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"ok\0".as_ptr() as *const c_char, js_bool(result.ok));
-    js_set_string_prop(ctx, obj, b"tool_name\0", command_name.as_str());
-    js_set_string_prop(ctx, obj, b"command_line\0", result.command_line.as_str());
-    js_set_string_prop(ctx, obj, b"stdout\0", result.stdout.as_str());
-    js_set_string_prop(ctx, obj, b"stderr\0", result.stderr.as_str());
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        obj,
-        b"exit_code\0".as_ptr() as *const c_char,
-        js_int32(result.exit_code),
-    );
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        obj,
-        b"duration_ms\0".as_ptr() as *const c_char,
-        js_int32(duration_ms),
-    );
-    obj
-}
-
 unsafe extern "C" fn trueos_capture_screenshot_js(
     ctx: *mut qjs::JSContext,
     _this_val: qjs::JSValueConst,
@@ -558,21 +467,6 @@ pub(crate) unsafe fn install(ctx: *mut qjs::JSContext) {
         ctx,
         global,
         b"__trueosShell1HistoryTextSince\0".as_ptr() as *const c_char,
-        f,
-    );
-
-    let f = qjs::JS_NewCFunction2(
-        ctx,
-        Some(trueos_ai_pc_execute_shell_command_js),
-        b"__trueosAiPcExecuteShellCommand\0".as_ptr() as *const c_char,
-        3,
-        qjs::JS_CFUNC_GENERIC,
-        0,
-    );
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        global,
-        b"__trueosAiPcExecuteShellCommand\0".as_ptr() as *const c_char,
         f,
     );
 

@@ -414,7 +414,8 @@ fn spawn_logtotcp(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_ai_qjs_oneshot(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| trueos_qjs::ai_task::run_once())
+    let _ = spawner;
+    SpawnAttempt::Skipped
 }
 
 fn spawn_html_demo(spawner: Spawner) -> SpawnAttempt {

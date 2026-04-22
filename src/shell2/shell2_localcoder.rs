@@ -8,8 +8,7 @@ use localcoder::resume::ResumeTarget as LocalcoderKernelResumeTarget;
 
 use super::{
     MatrixTarget, ShellBackend2, localcoder_service, localcoder_ui2_window,
-    matrix_target_for_backend, print_matrix_target_line,
-    set_matrix_target_active,
+    matrix_target_for_backend, print_matrix_target_line, set_matrix_target_active,
 };
 
 static LOCALCODER_USAGE_HINT_SHOWN: AtomicBool = AtomicBool::new(false);
@@ -62,21 +61,22 @@ async fn localcoder_command_task(request: LocalcoderRequest) {
         match request.prompt.as_deref() {
             Some(prompt) if !prompt.trim().is_empty() => {
                 let kernel_request = BasicPromptRequest {
-                    session_scope: Some(alloc::format!("matrix-slot-{}", request.target.slot_id.as_str())),
+                    session_scope: Some(alloc::format!(
+                        "matrix-slot-{}",
+                        request.target.slot_id.as_str()
+                    )),
                     resume_target: LocalcoderKernelResumeTarget::ContinueLatest,
                     prompt: String::from(prompt),
                     max_tokens: 1024,
                 };
                 match kernel::run_basic_prompt(&kernel_request).await {
                     Ok(response) => {
-                        log(
-                            alloc::format!(
-                                "lc: session {} ({})",
-                                response.session_id,
-                                response.session_action
-                            )
-                            .as_str(),
-                        );
+                        log(alloc::format!(
+                            "lc: session {} ({})",
+                            response.session_id,
+                            response.session_action
+                        )
+                        .as_str());
                         if response.text.trim().is_empty() {
                             log("lc: empty response");
                         } else {
