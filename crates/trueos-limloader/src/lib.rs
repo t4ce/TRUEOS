@@ -1,3 +1,4 @@
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -48,6 +49,84 @@ fn require_tool(tool: &str, hint: &str) {
     }
 }
 
+fn tool_search_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(path_var) = env::var_os("PATH") {
+        roots.extend(env::split_paths(&path_var));
+    }
+    roots.push(PathBuf::from("/opt/homebrew/opt/llvm/bin"));
+    roots.push(PathBuf::from("/usr/local/opt/llvm/bin"));
+    roots.push(PathBuf::from("/opt/homebrew/opt/binutils/bin"));
+    roots.push(PathBuf::from("/usr/local/opt/binutils/bin"));
+    roots
+}
+
+fn find_tool(tool_names: &[&str]) -> Option<PathBuf> {
+    let roots = tool_search_roots();
+    for root in roots {
+        for tool_name in tool_names {
+            let candidate = root.join(tool_name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+fn require_any_tool(tool_names: &[&str], hint: &str) -> PathBuf {
+    find_tool(tool_names).unwrap_or_else(|| {
+        panic!(
+            "Missing required tool '{}'. Hint: {hint}",
+            tool_names.join(" or ")
+        )
+    })
+}
+
+fn tool_display_name(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
+struct LimineToolchain {
+    cc: PathBuf,
+    ld: PathBuf,
+    objcopy: PathBuf,
+    objdump: PathBuf,
+    readelf: PathBuf,
+}
+
+impl LimineToolchain {
+    fn detect() -> Self {
+        Self {
+            cc: require_any_tool(&["gcc", "clang", "cc"], "Install gcc or clang"),
+            ld: require_any_tool(&["ld.lld", "gld", "ld"], "Install LLVM lld or GNU ld"),
+            objcopy: require_any_tool(
+                &["llvm-objcopy", "gobjcopy", "objcopy"],
+                "Install Homebrew llvm or binutils",
+            ),
+            objdump: require_any_tool(
+                &["llvm-objdump", "gobjdump", "objdump"],
+                "Install Homebrew llvm or binutils",
+            ),
+            readelf: require_any_tool(
+                &["llvm-readelf", "greadelf", "readelf"],
+                "Install Homebrew llvm or binutils",
+            ),
+        }
+    }
+
+    fn stamp_contents(&self) -> String {
+        format!(
+            "CC_FOR_TARGET={}\nLD_FOR_TARGET={}\nOBJCOPY_FOR_TARGET={}\nOBJDUMP_FOR_TARGET={}\nREADELF_FOR_TARGET={}\n",
+            self.cc.display(),
+            self.ld.display(),
+            self.objcopy.display(),
+            self.objdump.display(),
+            self.readelf.display()
+        )
+    }
+}
+
 fn clone_limine_repo(paths: &LiminePaths, repo: &str, reference: &str) {
     remove_dir_if_exists(&paths.src_dir);
     fs::create_dir_all(paths.src_dir.parent().unwrap()).expect("create bld/");
@@ -76,6 +155,10 @@ impl LiminePaths {
 
     pub fn stamp(&self) -> PathBuf {
         self.build_dir.join(".installed")
+    }
+
+    pub fn toolchain_stamp(&self) -> PathBuf {
+        self.build_dir.join(".toolchain_args")
     }
 }
 
@@ -110,7 +193,7 @@ pub fn ensure_limine(repo_root: &Path) {
     // Tools we need.
     require_tool("git", "Install git");
     require_tool("make", "Install build-essential / make");
-    require_tool("gcc", "Install a C compiler toolchain");
+    let toolchain = LimineToolchain::detect();
 
     // Limine generates configure via ./bootstrap (autoreconf).
     // Match the existing Makefile behavior: only require autoreconf when configure is missing.
@@ -141,7 +224,12 @@ Set TRUEOS_LIMINE_REF/TRUEOS_LIMINE_REPO and build with network access once.",
 
     let config_path = paths.build_dir.join(".config_args");
     let prior = read_to_string_if_exists(&config_path);
-    if prior.as_deref() != Some(config_args.trim()) {
+    let toolchain_path = paths.toolchain_stamp();
+    let prior_toolchain = read_to_string_if_exists(&toolchain_path);
+    let toolchain_stamp = toolchain.stamp_contents();
+    if prior.as_deref() != Some(config_args.trim())
+        || prior_toolchain.as_deref() != Some(toolchain_stamp.trim())
+    {
         remove_dir_if_exists(&paths.build_dir);
         remove_dir_if_exists(&paths.prefix_dir);
     }
@@ -149,6 +237,7 @@ Set TRUEOS_LIMINE_REF/TRUEOS_LIMINE_REPO and build with network access once.",
     fs::create_dir_all(&paths.build_dir).expect("create build dir");
     fs::create_dir_all(&paths.prefix_dir).expect("create prefix dir");
     write_string(&config_path, config_args.trim());
+    write_string(&toolchain_path, toolchain_stamp.trim());
 
     // Bootstrap if needed.
     if !paths.src_dir.join("configure").is_file() {
@@ -172,11 +261,11 @@ Set TRUEOS_LIMINE_REF/TRUEOS_LIMINE_REPO and build with network access once.",
 
     let mut cmd = Command::new(&configure);
     cmd.current_dir(&paths.build_dir)
-        .env("CC_FOR_TARGET", "gcc")
-        .env("LD_FOR_TARGET", "ld")
-        .env("OBJCOPY_FOR_TARGET", "objcopy")
-        .env("OBJDUMP_FOR_TARGET", "objdump")
-        .env("READELF_FOR_TARGET", "readelf");
+        .env("CC_FOR_TARGET", tool_display_name(&toolchain.cc))
+        .env("LD_FOR_TARGET", tool_display_name(&toolchain.ld))
+        .env("OBJCOPY_FOR_TARGET", tool_display_name(&toolchain.objcopy))
+        .env("OBJDUMP_FOR_TARGET", tool_display_name(&toolchain.objdump))
+        .env("READELF_FOR_TARGET", tool_display_name(&toolchain.readelf));
 
     for part in config_args.split_whitespace() {
         cmd.arg(part);
