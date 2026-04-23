@@ -44,8 +44,7 @@ sudo npm install node
 # minimum install on MAC
 xcode-select --install
 rustup toolchain install nightly
-brew install xorriso zstd 
-
+brew install llvm binutils autoconf automake libtool xorriso zstd p7zip
 
 # update
 cargo outdated -R
