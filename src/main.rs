@@ -42,6 +42,8 @@ mod iso9660;
 mod limine;
 mod logflag;
 mod net;
+#[cfg(feature = "octocrab-probe")]
+mod octocrab_probe;
 mod pci;
 mod percpu;
 mod phys;
@@ -65,9 +67,9 @@ mod smp;
 mod std_abi_shim;
 mod tga;
 #[cfg(feature = "tokio-probe")]
+mod mio_probe;
+#[cfg(feature = "tokio-probe")]
 mod tokio_probe;
-#[cfg(feature = "octocrab-probe")]
-mod octocrab_probe;
 #[path = "tst/boot_factory_ram_probe.rs"]
 mod tst_boot_factory_ram_probe;
 #[path = "tst/fps.rs"]
@@ -262,6 +264,8 @@ pub extern "C" fn kmain() -> ! {
 
     #[cfg(feature = "tokio-probe")]
     tokio_probe::log_boot_probe();
+    #[cfg(feature = "tokio-probe")]
+    mio_probe::log_boot_probe();
     #[cfg(feature = "octocrab-probe")]
     octocrab_probe::log_boot_probe();
 

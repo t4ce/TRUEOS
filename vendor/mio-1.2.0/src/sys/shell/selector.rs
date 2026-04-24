@@ -16,11 +16,12 @@ impl Selector {
     }
 
     pub fn try_clone(&self) -> io::Result<Selector> {
-        os_required!();
+        Ok(Selector {})
     }
 
-    pub fn select(&self, _: &mut Events, _: Option<Duration>) -> io::Result<()> {
-        os_required!();
+    pub fn select(&self, events: &mut Events, _: Option<Duration>) -> io::Result<()> {
+        events.clear();
+        unsupported_io!("mio zkvm selector wait loop is not wired yet");
     }
 }
 
@@ -30,15 +31,15 @@ cfg_os_ext! {
 
     impl Selector {
         pub fn register(&self, _: RawFd, _: Token, _: Interest) -> io::Result<()> {
-            os_required!();
+            unsupported_io!("mio zkvm selector registration backend is not wired yet");
         }
 
         pub fn reregister(&self, _: RawFd, _: Token, _: Interest) -> io::Result<()> {
-            os_required!();
+            unsupported_io!("mio zkvm selector reregistration backend is not wired yet");
         }
 
         pub fn deregister(&self, _: RawFd) -> io::Result<()> {
-            os_required!();
+            unsupported_io!("mio zkvm selector deregistration backend is not wired yet");
         }
     }
 }
@@ -49,15 +50,15 @@ cfg_any_os_ext! {
 
     impl Selector {
         pub fn register(&self, _: wasi::Fd, _: Token, _: Interest) -> io::Result<()> {
-            os_required!();
+            unsupported_io!("mio zkvm selector registration backend is not wired yet");
         }
 
         pub fn reregister(&self, _: wasi::Fd, _: Token, _: Interest) -> io::Result<()> {
-            os_required!();
+            unsupported_io!("mio zkvm selector reregistration backend is not wired yet");
         }
 
         pub fn deregister(&self, _: wasi::Fd) -> io::Result<()> {
-            os_required!();
+            unsupported_io!("mio zkvm selector deregistration backend is not wired yet");
         }
     }
 }

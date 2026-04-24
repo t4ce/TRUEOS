@@ -580,7 +580,6 @@ impl TcpKeepalive {
 /// This wraps `msghdr` on Unix and `WSAMSG` on Windows. Also see [`MsgHdrMut`]
 /// for the variant used by `recvmsg(2)`.
 #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
-#[repr(transparent)]
 pub struct MsgHdr<'addr, 'bufs, 'control> {
     inner: sys::msghdr,
     #[allow(clippy::type_complexity)]
@@ -649,7 +648,6 @@ impl<'name, 'bufs, 'control> fmt::Debug for MsgHdr<'name, 'bufs, 'control> {
 /// This wraps `msghdr` on Unix and `WSAMSG` on Windows. Also see [`MsgHdr`] for
 /// the variant used by `sendmsg(2)`.
 #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
-#[repr(transparent)]
 pub struct MsgHdrMut<'addr, 'bufs, 'control> {
     inner: sys::msghdr,
     #[allow(clippy::type_complexity)]

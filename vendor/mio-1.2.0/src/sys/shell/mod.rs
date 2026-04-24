@@ -59,7 +59,7 @@ cfg_io_source! {
             _: Interest,
             _: RawFd,
         ) -> io::Result<()> {
-            os_required!()
+            unsupported_io!("mio zkvm source registration backend is not wired yet")
         }
 
         pub fn reregister(
@@ -69,11 +69,11 @@ cfg_io_source! {
             _: Interest,
             _: RawFd,
         ) -> io::Result<()> {
-           os_required!()
+            unsupported_io!("mio zkvm source reregistration backend is not wired yet")
         }
 
         pub fn deregister(&mut self, _: &Registry, _: RawFd) -> io::Result<()> {
-            os_required!()
+            unsupported_io!("mio zkvm source deregistration backend is not wired yet")
         }
     }
 
@@ -85,7 +85,7 @@ cfg_io_source! {
             _: crate::Token,
             _: crate::Interest,
         ) -> io::Result<()> {
-            os_required!()
+            unsupported_io!("mio zkvm source registration backend is not wired yet")
         }
 
         pub fn reregister(
@@ -94,11 +94,11 @@ cfg_io_source! {
             _: crate::Token,
             _: crate::Interest,
         ) -> io::Result<()> {
-           os_required!()
+            unsupported_io!("mio zkvm source reregistration backend is not wired yet")
         }
 
         pub fn deregister(&mut self, _: &crate::Registry) -> io::Result<()> {
-            os_required!()
+            unsupported_io!("mio zkvm source deregistration backend is not wired yet")
         }
     }
 
@@ -111,7 +111,7 @@ cfg_io_source! {
             _: Interest,
             _: RawSocket,
         ) -> io::Result<()> {
-            os_required!()
+            unsupported_io!("mio zkvm source registration backend is not wired yet")
         }
 
         pub fn reregister(
@@ -120,11 +120,11 @@ cfg_io_source! {
             _: Token,
             _: Interest,
         ) -> io::Result<()> {
-           os_required!()
+            unsupported_io!("mio zkvm source reregistration backend is not wired yet")
         }
 
         pub fn deregister(&mut self) -> io::Result<()> {
-            os_required!()
+            unsupported_io!("mio zkvm source deregistration backend is not wired yet")
         }
     }
 }

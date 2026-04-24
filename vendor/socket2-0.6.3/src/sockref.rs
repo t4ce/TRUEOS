@@ -71,7 +71,7 @@ pub struct SockRef<'s> {
 impl<'s> Deref for SockRef<'s> {
     type Target = Socket;
 
-    fn deref(&self) -> &Self::Target {
+    fn deref(&self) -> &Socket {
         &self.socket
     }
 }
