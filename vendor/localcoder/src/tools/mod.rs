@@ -181,10 +181,7 @@ impl ToolRegistry {
     pub async fn execute(&self, name: &str, input: Value) -> Result<String> {
         let allowed = self.active_allowed_tools();
         if !tool_is_allowed(name, allowed.as_ref()) {
-            return Err(anyhow!(
-                "tool '{}' is not allowed by the active skill",
-                name
-            ));
+            return Err(anyhow!("tool '{}' is not allowed by the active skill", name));
         }
 
         let tool = self

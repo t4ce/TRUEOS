@@ -37,16 +37,10 @@ impl LspClient {
             })?;
 
         let stdin = child.stdin.take().ok_or_else(|| {
-            anyhow!(
-                "failed to capture stdin for language server '{}'",
-                server_name
-            )
+            anyhow!("failed to capture stdin for language server '{}'", server_name)
         })?;
         let stdout = child.stdout.take().ok_or_else(|| {
-            anyhow!(
-                "failed to capture stdout for language server '{}'",
-                server_name
-            )
+            anyhow!("failed to capture stdout for language server '{}'", server_name)
         })?;
 
         Ok(Self {
@@ -108,10 +102,7 @@ impl LspClient {
     async fn read_response(&mut self, target_id: u64) -> Result<Value> {
         loop {
             let message = read_message(&mut self.stdout).await.with_context(|| {
-                format!(
-                    "failed to read message from language server '{}'",
-                    self.server_name
-                )
+                format!("failed to read message from language server '{}'", self.server_name)
             })?;
 
             if is_notification(&message) {

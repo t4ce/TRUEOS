@@ -5,12 +5,7 @@ use std::io;
 use std::net::SocketAddr;
 
 fn log_io_failure(stage: &str, err: &io::Error) {
-    crate::log!(
-        "mio_probe: failure {} kind={:?} err={}\n",
-        stage,
-        err.kind(),
-        err
-    );
+    crate::log!("mio_probe: failure {} kind={:?} err={}\n", stage, err.kind(), err);
 }
 
 pub(crate) fn log_boot_probe() {
@@ -47,10 +42,9 @@ pub(crate) fn log_boot_probe() {
     }
 
     match poll.poll(&mut events, Some(core::time::Duration::ZERO)) {
-        Ok(()) => crate::log!(
-            "mio_probe: success poll.poll timeout0 events={}\n",
-            events.iter().count()
-        ),
+        Ok(()) => {
+            crate::log!("mio_probe: success poll.poll timeout0 events={}\n", events.iter().count())
+        }
         Err(err) => log_io_failure("poll.poll", &err),
     }
 

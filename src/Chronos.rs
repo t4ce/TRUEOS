@@ -145,6 +145,24 @@ fn refresh_snapshot(seq: u64) -> TimeSnapshot {
     snapshot
 }
 
+#[inline]
+pub fn monotonic_nanos() -> u64 {
+    let snapshot = latest_snapshot();
+    let live_ticks = embassy_time_driver::now();
+    let ticks = if snapshot.seq != 0 || is_awake() {
+        live_ticks.max(snapshot.mono_ticks)
+    } else {
+        live_ticks
+    };
+    let hz = embassy_time_driver::TICK_HZ.max(1) as u128;
+    ((ticks as u128) * 1_000_000_000u128 / hz).min(u64::MAX as u128) as u64
+}
+
+#[inline]
+pub fn best_effort_unix_time_seconds() -> Option<u64> {
+    crate::r::net::ntp::current_unix_seconds().or_else(crate::time::unix_time_seconds)
+}
+
 #[cfg(target_arch = "x86_64")]
 pub(crate) fn interrupt_install(idt: &mut InterruptDescriptorTable) {
     idt[CHRONOS_TIMER_VECTOR].set_handler_fn(CHRONOS_TIMER);

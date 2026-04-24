@@ -23,8 +23,9 @@ pub type LocalcoderServiceResult = Result<String>;
 
 static LOCALCODER_SERVICE_HANDLER: OnceLock<Mutex<Option<LocalcoderServiceHandler>>> =
     OnceLock::new();
-static LOCALCODER_SERVICE_CONTEXT_PROVIDER: OnceLock<Mutex<Option<LocalcoderServiceContextProvider>>> =
-    OnceLock::new();
+static LOCALCODER_SERVICE_CONTEXT_PROVIDER: OnceLock<
+    Mutex<Option<LocalcoderServiceContextProvider>>,
+> = OnceLock::new();
 
 #[derive(Debug, Clone)]
 pub enum LocalcoderServiceCommand {
@@ -77,7 +78,9 @@ fn context_provider_cell() -> &'static Mutex<Option<LocalcoderServiceContextProv
 }
 
 pub fn register_handler(handler: LocalcoderServiceHandler) {
-    let mut guard = handler_cell().lock().expect("localcoder service handler lock poisoned");
+    let mut guard = handler_cell()
+        .lock()
+        .expect("localcoder service handler lock poisoned");
     *guard = Some(handler);
 }
 
@@ -262,7 +265,9 @@ pub async fn execute_tool_call(arguments: Value) -> Result<String> {
         let guard = handler_cell()
             .lock()
             .expect("localcoder service handler lock poisoned");
-        (*guard).ok_or_else(|| anyhow!("localcoder_service handler is not registered in this runtime"))?
+        (*guard).ok_or_else(|| {
+            anyhow!("localcoder_service handler is not registered in this runtime")
+        })?
     };
     handler(command)
 }
@@ -418,9 +423,7 @@ fn optional_i32(input: &Value, key: &str) -> Result<Option<i32>> {
     let value = value
         .as_i64()
         .ok_or_else(|| anyhow!("{} must be an integer", key))?;
-    Ok(Some(
-        i32::try_from(value).map_err(|_| anyhow!("{} is out of i32 range", key))?,
-    ))
+    Ok(Some(i32::try_from(value).map_err(|_| anyhow!("{} is out of i32 range", key))?))
 }
 
 fn bounded_u32(input: &Value, key: &str, min: u32, max: u32) -> Result<u32> {

@@ -129,7 +129,9 @@ pub async fn execute_tool_call(arguments: Value) -> Result<String> {
         let guard = handler_cell()
             .lock()
             .expect("ui2_window_controller handler lock poisoned");
-        (*guard).ok_or_else(|| anyhow!("ui2_window_controller handler is not registered in this runtime"))?
+        (*guard).ok_or_else(|| {
+            anyhow!("ui2_window_controller handler is not registered in this runtime")
+        })?
     };
     handler(command)
 }
@@ -203,7 +205,10 @@ fn selector_from_value(input: &Value) -> Result<Ui2WindowSelector> {
 impl Ui2WindowSelector {
     fn validate(&self) -> Result<()> {
         let have_id = self.window_id.is_some();
-        let have_title = self.title_contains.as_ref().is_some_and(|value| !value.trim().is_empty());
+        let have_title = self
+            .title_contains
+            .as_ref()
+            .is_some_and(|value| !value.trim().is_empty());
         if have_id == have_title {
             bail!("provide exactly one of window_id or title_contains");
         }
@@ -218,9 +223,7 @@ fn optional_i32(input: &Value, key: &str) -> Result<Option<i32>> {
     let value = value
         .as_i64()
         .ok_or_else(|| anyhow!("{} must be an integer", key))?;
-    Ok(Some(
-        i32::try_from(value).map_err(|_| anyhow!("{} is out of i32 range", key))?,
-    ))
+    Ok(Some(i32::try_from(value).map_err(|_| anyhow!("{} is out of i32 range", key))?))
 }
 
 fn optional_bounded_u32_or_default(

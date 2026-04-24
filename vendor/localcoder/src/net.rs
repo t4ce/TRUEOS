@@ -106,9 +106,7 @@ mod backend {
         headers: &[(&str, &str)],
     ) -> Result<HttpResponse> {
         let client = build_client()?;
-        let mut request = client
-            .post(url)
-            .header("content-type", "application/json");
+        let mut request = client.post(url).header("content-type", "application/json");
         for (name, value) in headers {
             request = request.header(*name, *value);
         }
@@ -189,7 +187,7 @@ mod backend {
             None,
             LOCALCODER_POST_TIMEOUT_MS.min(u64::from(u32::MAX)) as u32,
         )
-            .map_err(|rc| anyhow!("TRUEOS post_json start failed rc={}", rc))?;
+        .map_err(|rc| anyhow!("TRUEOS post_json start failed rc={}", rc))?;
         if let Err(err) = wait_for_bytes_op(op_id, LOCALCODER_POST_TIMEOUT_MS, "post_json").await {
             let _ = v::vnetfs::fetch_bytes_discard(op_id);
             return Err(err);
@@ -202,7 +200,9 @@ mod backend {
     }
 
     fn sniff_content_type(url: &str, body: &[u8]) -> Option<String> {
-        let prefix = core::str::from_utf8(&body[..body.len().min(256)]).ok()?.trim_start();
+        let prefix = core::str::from_utf8(&body[..body.len().min(256)])
+            .ok()?
+            .trim_start();
         if prefix.starts_with("<!DOCTYPE html")
             || prefix.starts_with("<html")
             || prefix.contains("<html")

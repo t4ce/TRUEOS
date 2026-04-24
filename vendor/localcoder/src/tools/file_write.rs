@@ -57,11 +57,7 @@ impl Tool for WriteTool {
         if let Some(parent) = path.parent() {
             if !rt_fs::exists(parent) {
                 rt_fs::create_dir_all(parent).map_err(|e| {
-                    anyhow!(
-                        "Write: cannot create directories for '{}': {}",
-                        file_path,
-                        e
-                    )
+                    anyhow!("Write: cannot create directories for '{}': {}", file_path, e)
                 })?;
             }
         }

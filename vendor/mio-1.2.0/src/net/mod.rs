@@ -29,6 +29,7 @@ mod tcp;
 pub use self::tcp::{TcpListener, TcpStream};
 
 #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
+#[cfg_attr(target_os = "zkvm", path = "udp_zkvm.rs")]
 mod udp;
 #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 pub use self::udp::UdpSocket;

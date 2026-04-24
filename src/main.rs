@@ -41,6 +41,10 @@ mod intel_hda_probe;
 mod iso9660;
 mod limine;
 mod logflag;
+#[cfg(all(feature = "tokio-probe", target_os = "zkvm"))]
+mod mio_compat;
+#[cfg(feature = "tokio-probe")]
+mod mio_probe;
 mod net;
 #[cfg(feature = "octocrab-probe")]
 mod octocrab_probe;
@@ -66,8 +70,6 @@ mod smp;
 #[cfg(all(feature = "tokio-probe", target_os = "zkvm"))]
 mod std_abi_shim;
 mod tga;
-#[cfg(feature = "tokio-probe")]
-mod mio_probe;
 #[cfg(feature = "tokio-probe")]
 mod tokio_probe;
 #[path = "tst/boot_factory_ram_probe.rs"]

@@ -1,6 +1,6 @@
-use anyhow::Result;
 #[cfg(not(feature = "trueos-net"))]
 use anyhow::Context;
+use anyhow::Result;
 #[cfg(feature = "trueos-net")]
 use anyhow::anyhow;
 use std::path::Path;
@@ -21,8 +21,7 @@ pub fn read_to_string(path: &Path) -> Result<String> {
 
 #[cfg(not(feature = "trueos-net"))]
 pub fn write(path: &Path, contents: impl AsRef<[u8]>) -> Result<()> {
-    std::fs::write(path, contents)
-        .with_context(|| format!("failed to write {}", path.display()))
+    std::fs::write(path, contents).with_context(|| format!("failed to write {}", path.display()))
 }
 
 #[cfg(feature = "trueos-net")]

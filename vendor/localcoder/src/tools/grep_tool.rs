@@ -191,22 +191,8 @@ impl Tool for GrepTool {
                 head_limit,
                 offset,
             ),
-            "count" => search_count(
-                &search_path,
-                &re,
-                &type_exts,
-                glob_filter,
-                head_limit,
-                offset,
-            ),
-            _ => search_files(
-                &search_path,
-                &re,
-                &type_exts,
-                glob_filter,
-                head_limit,
-                offset,
-            ),
+            "count" => search_count(&search_path, &re, &type_exts, glob_filter, head_limit, offset),
+            _ => search_files(&search_path, &re, &type_exts, glob_filter, head_limit, offset),
         }
     }
 }
@@ -305,13 +291,7 @@ fn search_content(
 
                 for j in start..end {
                     let marker = if j == i { ">" } else { " " };
-                    lines.push(format!(
-                        "{}{}:{}\t{}",
-                        marker,
-                        display,
-                        j + 1,
-                        file_lines[j]
-                    ));
+                    lines.push(format!("{}{}:{}\t{}", marker, display, j + 1, file_lines[j]));
                 }
             }
         }
@@ -362,11 +342,7 @@ fn search_count(
     );
 
     let mut output = slice.join("\n");
-    output.push_str(&format!(
-        "\nTotal: {} matches in {} files",
-        total,
-        counts.len()
-    ));
+    output.push_str(&format!("\nTotal: {} matches in {} files", total, counts.len()));
     Ok(output)
 }
 

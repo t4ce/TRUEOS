@@ -1,3 +1,5 @@
+#![cfg_attr(target_os = "zkvm", allow(dead_code))]
+
 use std::ops::{Deref, DerefMut};
 #[cfg(any(unix, target_os = "wasi"))]
 use std::os::fd::AsRawFd;

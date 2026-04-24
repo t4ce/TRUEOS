@@ -147,11 +147,7 @@ impl SessionStore {
 
         for (line_no, line) in reader.lines().enumerate() {
             let line = line.with_context(|| {
-                format!(
-                    "failed to read line {} from {}",
-                    line_no + 1,
-                    self.path.display()
-                )
+                format!("failed to read line {} from {}", line_no + 1, self.path.display())
             })?;
             let line = line.trim();
             if line.is_empty() {
@@ -159,11 +155,7 @@ impl SessionStore {
             }
 
             let event: Value = serde_json::from_str(line).with_context(|| {
-                format!(
-                    "invalid JSONL at line {} in {}",
-                    line_no + 1,
-                    self.path.display()
-                )
+                format!("invalid JSONL at line {} in {}", line_no + 1, self.path.display())
             })?;
 
             if let Some(message) = event_to_message(&event) {
@@ -263,10 +255,7 @@ fn now_ts() -> u64 {
 }
 
 fn sessions_project_dir(project_dir: &Path) -> Result<PathBuf> {
-    sessions_project_dir_with_home(
-        project_dir,
-        std::env::var_os("HOME").as_deref().map(Path::new),
-    )
+    sessions_project_dir_with_home(project_dir, std::env::var_os("HOME").as_deref().map(Path::new))
 }
 
 fn sessions_project_dir_with_home(project_dir: &Path, home: Option<&Path>) -> Result<PathBuf> {
@@ -308,10 +297,7 @@ mod tests {
         let assistant_event = message_to_event(&assistant).unwrap();
 
         assert_eq!(event_to_message(&user_event).unwrap()["role"], "user");
-        assert_eq!(
-            event_to_message(&assistant_event).unwrap()["role"],
-            "assistant"
-        );
+        assert_eq!(event_to_message(&assistant_event).unwrap()["role"], "assistant");
     }
 
     #[test]

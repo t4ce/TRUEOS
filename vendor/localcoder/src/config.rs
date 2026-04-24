@@ -106,10 +106,7 @@ fn default_settings_json() -> Value {
 }
 
 fn resolve_settings_path(project_dir: &Path) -> Result<PathBuf> {
-    resolve_settings_path_with_home(
-        project_dir,
-        rt_env::home_dir_opt().as_deref(),
-    )
+    resolve_settings_path_with_home(project_dir, rt_env::home_dir_opt().as_deref())
 }
 
 fn resolve_settings_path_with_home(project_dir: &Path, home: Option<&Path>) -> Result<PathBuf> {
