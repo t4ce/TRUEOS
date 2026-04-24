@@ -51,6 +51,8 @@ mod interest;
 mod poll;
 mod sys;
 mod token;
+#[cfg(target_os = "zkvm")]
+mod zkvm_compat;
 #[cfg(not(target_os = "wasi"))]
 mod waker;
 

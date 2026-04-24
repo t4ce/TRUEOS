@@ -31,12 +31,13 @@ BP_MANIFEST ?= $(BLUEPRINTS_ROOT)/Cargo.toml
 BP_NAMES ?= $(strip $(shell awk 'BEGIN { in_example = 0 } /^\[\[example\]\]$$/ { in_example = 1; next } /^\[/ { in_example = 0 } in_example && /^[[:space:]]*name[[:space:]]*=/ { line = $$0; sub(/^[^=]*=[[:space:]]*"/, "", line); sub(/"[[:space:]]*$$/, "", line); print line }' "$(BP_MANIFEST)" 2>/dev/null))
 BP_DIST_DIR ?= $(BLUEPRINTS_ROOT)/dist
 BP_ISO_DIR_REL ?= EFI/BOOT/apps
+BP_EXAMPLE_PAIRS ?= $(strip $(shell awk 'BEGIN { in_example = 0; name = ""; path = "" } /^\[\[example\]\]$$/ { if (in_example && name != "" && path != "") print name ":" path; in_example = 1; name = ""; path = ""; next } /^\[/ { if (in_example && name != "" && path != "") print name ":" path; in_example = 0; next } in_example && /^[[:space:]]*name[[:space:]]*=/ { line = $$0; sub(/^[^=]*=[[:space:]]*"/, "", line); sub(/"[[:space:]]*$$/, "", line); name = line; next } in_example && /^[[:space:]]*path[[:space:]]*=/ { line = $$0; sub(/^[^=]*=[[:space:]]*"/, "", line); sub(/"[[:space:]]*$$/, "", line); path = line; next } END { if (in_example && name != "" && path != "") print name ":" path }' "$(BP_MANIFEST)" 2>/dev/null))
 # Blueprint build/embed switches.
-# Set BP_SKIP_BUILD to 1 to reuse existing dist/*.bp files.
+# Set BP_SKIP_BUILD to 1 to reuse existing dist/*.bp files even when stale.
 # Set BP_SKIP_EMBED to 1 to omit blueprints from the ISO.
 # Set both to 1 to stop both blueprint build and embedding.
-BP_SKIP_BUILD := 0
-BP_SKIP_EMBED := 0
+BP_SKIP_BUILD := 1
+BP_SKIP_EMBED := 1
 QEMU_ENV = env -i HOME="$(HOME)" PATH="/usr/bin:/bin" TERM="$${TERM:-xterm}" LANG="$${LANG:-C.UTF-8}" DISPLAY="$${DISPLAY:-}" WAYLAND_DISPLAY="$${WAYLAND_DISPLAY:-}" XDG_RUNTIME_DIR="$${XDG_RUNTIME_DIR:-}" XAUTHORITY="$${XAUTHORITY:-}"
 QEMU_BIN = $(QEMU_ENV) qemu-system-x86_64 -no-shutdown
 QEMU_UEFI_FIRMWARE = $(OVMF_BUNDLE_PATH)
@@ -113,8 +114,36 @@ kernel:
 blueprints:
 	@if [ "$(BP_SKIP_BUILD)" = "1" ]; then \
 		echo "blueprints: skipping build"; \
+	elif [ -z "$(strip $(BP_EXAMPLE_PAIRS))" ]; then \
+		echo "blueprints: no blueprint outputs configured"; \
 	else \
-		cd "$(BLUEPRINTS_ROOT)" && for bp in $(BP_NAMES); do cargo bp --example "$$bp"; done; \
+		mkdir -p "$(BP_DIST_DIR)"; \
+		for bp_entry in $(BP_EXAMPLE_PAIRS); do \
+			bp=$${bp_entry%%:*}; \
+			src_rel=$${bp_entry#*:}; \
+			out="$(BP_DIST_DIR)/$$bp.bp"; \
+			needs_build=0; \
+			if [ ! -f "$$out" ]; then \
+				needs_build=1; \
+			elif [ "$(BP_MANIFEST)" -nt "$$out" ] || [ "$(BLUEPRINTS_ROOT)/$$src_rel" -nt "$$out" ]; then \
+				needs_build=1; \
+			elif [ -f "$(BLUEPRINTS_ROOT)/Cargo.lock" ] && [ "$(BLUEPRINTS_ROOT)/Cargo.lock" -nt "$$out" ]; then \
+				needs_build=1; \
+			elif [ -f "$(BLUEPRINTS_ROOT)/target.json" ] && [ "$(BLUEPRINTS_ROOT)/target.json" -nt "$$out" ]; then \
+				needs_build=1; \
+			elif [ -f "$(BLUEPRINTS_ROOT)/trueos/Cargo.toml" ] && [ "$(BLUEPRINTS_ROOT)/trueos/Cargo.toml" -nt "$$out" ]; then \
+				needs_build=1; \
+			elif [ -f "$(BLUEPRINTS_ROOT)/trueos-sys/Cargo.toml" ] && [ "$(BLUEPRINTS_ROOT)/trueos-sys/Cargo.toml" -nt "$$out" ]; then \
+				needs_build=1; \
+			elif find "$(BLUEPRINTS_ROOT)/src" "$(BLUEPRINTS_ROOT)/trueos/src" "$(BLUEPRINTS_ROOT)/trueos-sys/src" -type f -name '*.rs' -newer "$$out" -print -quit 2>/dev/null | grep -q .; then \
+				needs_build=1; \
+			fi; \
+			if [ "$$needs_build" = "1" ]; then \
+				cd "$(BLUEPRINTS_ROOT)" && cargo bp --example "$$bp"; \
+			else \
+				echo "blueprints: $$bp is up to date"; \
+			fi; \
+		done; \
 	fi
 
 artifacts: blueprints kernel

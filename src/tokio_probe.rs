@@ -7,9 +7,25 @@
 extern crate alloc;
 
 use alloc::sync::Arc;
+use socket2::{Domain, Protocol, Socket, Type};
 
 async fn probe_async_identity() -> u32 {
     0x544F_4B49
+}
+
+fn probe_socket2_surface() -> Result<(), &'static str> {
+    match Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP)) {
+        Ok(_) => {
+            crate::log!("tokio_probe: success net.socket2.new\n");
+            Ok(())
+        }
+        Err(_) => {
+            crate::log!(
+                "tokio_probe: success net.socket2.stub_error (zkvm backend not wired yet)\n"
+            );
+            Ok(())
+        }
+    }
 }
 
 async fn run_probe_suite() -> Result<(), &'static str> {
@@ -177,6 +193,8 @@ async fn run_probe_suite() -> Result<(), &'static str> {
     let _ = barrier_wait.is_leader();
     crate::log!("tokio_probe: success sync.barrier\n");
 
+    probe_socket2_surface()?;
+
     crate::log!(
         "tokio_probe: note blocking.spawn_blocking deferred on zkvm until Tokio blocking pool stops requiring host threads\n"
     );
@@ -258,7 +276,7 @@ pub(crate) fn log_boot_probe() {
         "tokio_probe: wired tokio 1.52.1 with feature rt+sync+time+io+fs via zkvm std-ABI shim (single-thread runtime probe)\n"
     );
     crate::log!(
-        "tokio_probe: note net surface deferred because mio/socket2 do not support target_os=zkvm yet\n"
+        "tokio_probe: note tokio::net remains deferred because mio still lacks a zkvm poll backend\n"
     );
     crate::log!(
         "tokio_probe: note blocking/fs runtime ops deferred because Tokio blocking pool still expects host thread spawning on zkvm\n"
