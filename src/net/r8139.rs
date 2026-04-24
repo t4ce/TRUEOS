@@ -27,23 +27,23 @@ impl Driver for Rtl8139Driver {
     fn info(&self) -> &DriverInfo {
         &DRIVER_INFO
     }
-    
+
     fn probe(&mut self, _pci_device: &PciDevice) -> Result<(), &'static str> {
         self.status = DriverStatus::Loading;
         crate::log!("[rtl8139] Driver probe - not yet implemented");
         Err("RTL8139 driver not implemented yet")
     }
-    
+
     fn start(&mut self) -> Result<(), &'static str> {
         self.status = DriverStatus::Running;
         Ok(())
     }
-    
+
     fn stop(&mut self) -> Result<(), &'static str> {
         self.status = DriverStatus::Suspended;
         Ok(())
     }
-    
+
     fn status(&self) -> DriverStatus {
         self.status
     }
@@ -55,21 +55,21 @@ impl NetworkDriver for Rtl8139Driver {
     fn mac_address(&self) -> [u8; 6] {
         self.mac
     }
-    
+
     fn link_up(&self) -> bool {
         false
     }
-    
+
     fn send(&mut self, _data: &[u8]) -> Result<(), &'static str> {
         Err("Not implemented")
     }
-    
+
     fn receive(&mut self) -> Option<Vec<u8>> {
         None
     }
-    
+
     fn poll(&mut self) {}
-    
+
     fn stats(&self) -> NetStats {
         NetStats::default()
     }
@@ -81,7 +81,7 @@ const DRIVER_INFO: DriverInfo = DriverInfo {
     author: "T-RustOs Team",
     category: DriverCategory::Network,
     vendor_ids: &[
-        (0x10EC, 0x8139),  // RTL8139
+        (0x10EC, 0x8139), // RTL8139
     ],
 };
 

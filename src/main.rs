@@ -66,6 +66,8 @@ mod std_abi_shim;
 mod tga;
 #[cfg(feature = "tokio-probe")]
 mod tokio_probe;
+#[cfg(feature = "octocrab-probe")]
+mod octocrab_probe;
 #[path = "tst/boot_factory_ram_probe.rs"]
 mod tst_boot_factory_ram_probe;
 #[path = "tst/fps.rs"]
@@ -260,6 +262,8 @@ pub extern "C" fn kmain() -> ! {
 
     #[cfg(feature = "tokio-probe")]
     tokio_probe::log_boot_probe();
+    #[cfg(feature = "octocrab-probe")]
+    octocrab_probe::log_boot_probe();
 
     match pci::nic_fpga_dma::init_default_once() {
         Ok(region) => {
