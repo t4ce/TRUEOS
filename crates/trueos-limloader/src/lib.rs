@@ -76,10 +76,7 @@ fn find_tool(tool_names: &[&str]) -> Option<PathBuf> {
 
 fn require_any_tool(tool_names: &[&str], hint: &str) -> PathBuf {
     find_tool(tool_names).unwrap_or_else(|| {
-        panic!(
-            "Missing required tool '{}'. Hint: {hint}",
-            tool_names.join(" or ")
-        )
+        panic!("Missing required tool '{}'. Hint: {hint}", tool_names.join(" or "))
     })
 }
 

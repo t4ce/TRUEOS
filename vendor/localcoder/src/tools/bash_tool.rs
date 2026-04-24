@@ -102,10 +102,7 @@ impl Tool for BashTool {
                 let _ = child.wait().await;
             });
 
-            return Ok(format!(
-                "Started background command (pid {}): {}",
-                pid, command
-            ));
+            return Ok(format!("Started background command (pid {}): {}", pid, command));
         }
 
         let output_future = Command::new("bash").arg("-lc").arg(command).output();

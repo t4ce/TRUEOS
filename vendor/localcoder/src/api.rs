@@ -99,10 +99,7 @@ impl LLMClient {
         match Self::resolve_settings_path() {
             Ok(path) => {
                 let settings = Self::load_settings_from_path(&path)?;
-                Ok((
-                    Self::from_settings(settings),
-                    ClientConfigSource::SettingsFile(path),
-                ))
+                Ok((Self::from_settings(settings), ClientConfigSource::SettingsFile(path)))
             }
             Err(_) => Ok((Self::default_client(), ClientConfigSource::BuiltInDefaults)),
         }
@@ -282,13 +279,11 @@ impl LLMClient {
                         .ok_or_else(|| anyhow!("LM Studio tool call missing function.name"))?
                         .to_string();
                     let arguments = match function.get("arguments") {
-                        Some(Value::String(raw)) => serde_json::from_str(raw)
-                            .with_context(|| {
-                                format!(
-                                    "failed to parse LM Studio tool arguments for {}",
-                                    name
-                                )
-                            })?,
+                        Some(Value::String(raw)) => {
+                            serde_json::from_str(raw).with_context(|| {
+                                format!("failed to parse LM Studio tool arguments for {}", name)
+                            })?
+                        }
                         Some(value) => value.clone(),
                         None => Value::Null,
                     };
@@ -340,9 +335,8 @@ impl LLMClient {
             anyhow::bail!("Ollama returned error {}: {}", status, error_text);
         }
 
-        let response: OllamaChatResponse = response
-            .json()
-            .context("failed to parse Ollama response")?;
+        let response: OllamaChatResponse =
+            response.json().context("failed to parse Ollama response")?;
 
         let text = response.message.content.unwrap_or_default();
         if !text.is_empty() {
@@ -651,10 +645,7 @@ fn normalize_openai_compat_messages(messages: &[Value]) -> Vec<Value> {
                             .and_then(Value::as_str)
                             .unwrap_or_default()
                             .to_string();
-                        let arguments = function
-                            .get("arguments")
-                            .cloned()
-                            .unwrap_or(Value::Null);
+                        let arguments = function.get("arguments").cloned().unwrap_or(Value::Null);
                         let call_id = format!("call_{}", next_tool_call_id);
                         next_tool_call_id += 1;
                         pending_tool_calls.push_back((call_id.clone(), name.clone()));

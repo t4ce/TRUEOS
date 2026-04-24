@@ -70,14 +70,7 @@ async fn main() -> Result<()> {
         ));
     } else {
         let prompt = prompt_args.join(" ");
-        one_shot(
-            &prompt,
-            registry,
-            output_style_manager,
-            plan_manager,
-            skill_manager,
-        )
-        .await?;
+        one_shot(&prompt, registry, output_style_manager, plan_manager, skill_manager).await?;
     }
 
     Ok(())
@@ -112,18 +105,9 @@ fn parse_args(args: Vec<String>) -> Result<(ResumeTarget, Vec<String>)> {
 }
 
 fn print_banner() {
-    println!(
-        "{}",
-        "╔════════════════════════════════════════════════════════════╗".cyan()
-    );
-    println!(
-        "{}",
-        "║         Localcoder Minimal Version (Rust) - CLI Interface  ║".cyan()
-    );
-    println!(
-        "{}",
-        "╚════════════════════════════════════════════════════════════╝".cyan()
-    );
+    println!("{}", "╔════════════════════════════════════════════════════════════╗".cyan());
+    println!("{}", "║         Localcoder Minimal Version (Rust) - CLI Interface  ║".cyan());
+    println!("{}", "╚════════════════════════════════════════════════════════════╝".cyan());
     println!();
 }
 
@@ -145,10 +129,7 @@ async fn one_shot(
     if let Some(style_name) = parse_command_arg(prompt, "/output-style") {
         if style_name.is_empty() {
             println!("{}", "🎨 Available output styles:".cyan().bold());
-            println!(
-                "{}",
-                output_style_manager.render_style_list(&app_config.output_style)?
-            );
+            println!("{}", output_style_manager.render_style_list(&app_config.output_style)?);
         } else if output_style_manager.has_style(style_name)? {
             app_config.output_style = style_name.trim().to_string();
             let path = app_config.save(&cwd)?;
@@ -274,10 +255,7 @@ mod tests {
 
     #[test]
     fn parse_slash_skill_extracts_name_and_args() {
-        assert_eq!(
-            parse_slash_skill("/simplify src/main.rs"),
-            Some(("simplify", "src/main.rs"))
-        );
+        assert_eq!(parse_slash_skill("/simplify src/main.rs"), Some(("simplify", "src/main.rs")));
     }
 
     #[test]
@@ -292,10 +270,7 @@ mod tests {
 
     #[test]
     fn parse_command_arg_extracts_argument() {
-        assert_eq!(
-            parse_command_arg("/web rust async", "/web"),
-            Some("rust async")
-        );
+        assert_eq!(parse_command_arg("/web rust async", "/web"), Some("rust async"));
     }
 
     #[test]

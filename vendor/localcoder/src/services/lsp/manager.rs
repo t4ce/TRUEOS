@@ -232,10 +232,7 @@ impl LspServerManager {
     async fn sync_document(server: &mut RunningServer, path: &Path) -> Result<()> {
         let uri = file_uri(path)?;
         let text = fs::read_to_string(path).with_context(|| {
-            format!(
-                "failed to read source file for LSP sync: {}",
-                path.display()
-            )
+            format!("failed to read source file for LSP sync: {}", path.display())
         })?;
 
         match server.documents.get_mut(path) {

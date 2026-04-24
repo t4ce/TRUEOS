@@ -113,10 +113,7 @@ fn validate_public_web_url(raw: &str) -> Result<Url> {
         .host_str()
         .ok_or_else(|| anyhow!("WebFetch: URL is missing a hostname"))?;
     if is_blocked_host(host) {
-        return Err(anyhow!(
-            "WebFetch: blocked non-public destination '{}'",
-            host
-        ));
+        return Err(anyhow!("WebFetch: blocked non-public destination '{}'", host));
     }
 
     Ok(url)

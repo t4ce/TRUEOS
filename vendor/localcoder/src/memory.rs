@@ -128,10 +128,7 @@ impl MemoryStore {
         Ok(headers
             .into_iter()
             .map(|m| {
-                format!(
-                    "- [{}] {} ({}) — {}",
-                    m.memory_type, m.name, m.filename, m.description
-                )
+                format!("- [{}] {} ({}) — {}", m.memory_type, m.name, m.filename, m.description)
             })
             .collect::<Vec<_>>()
             .join("\n"))
@@ -228,10 +225,7 @@ impl MemoryStore {
             .list_headers()?
             .into_iter()
             .map(|m| {
-                format!(
-                    "- [{}] {} ({}) — {}",
-                    m.memory_type, m.name, m.filename, m.description
-                )
+                format!("- [{}] {} ({}) — {}", m.memory_type, m.name, m.filename, m.description)
             })
             .collect::<Vec<_>>()
             .join("\n");
@@ -301,27 +295,18 @@ Conversation:\n{}",
         let index = headers
             .iter()
             .map(|m| {
-                format!(
-                    "- [{}]({}) — [{}] {}",
-                    m.name, m.filename, m.memory_type, m.description
-                )
+                format!("- [{}]({}) — [{}] {}", m.name, m.filename, m.memory_type, m.description)
             })
             .collect::<Vec<_>>()
             .join("\n");
-        fs::write(
-            self.root.join(MEMORY_INDEX_FILENAME),
-            format!("{}\n", index),
-        )
-        .with_context(|| format!("failed to write memory index in {}", self.root.display()))?;
+        fs::write(self.root.join(MEMORY_INDEX_FILENAME), format!("{}\n", index))
+            .with_context(|| format!("failed to write memory index in {}", self.root.display()))?;
         Ok(())
     }
 }
 
 fn memory_root(project_dir: &Path) -> Result<PathBuf> {
-    memory_root_with_home(
-        project_dir,
-        std::env::var_os("HOME").as_deref().map(Path::new),
-    )
+    memory_root_with_home(project_dir, std::env::var_os("HOME").as_deref().map(Path::new))
 }
 
 fn memory_root_with_home(project_dir: &Path, home: Option<&Path>) -> Result<PathBuf> {

@@ -292,11 +292,7 @@ fn init_session(
         ResumeTarget::ResumeId(id) => {
             let store = SessionStore::load(cwd, &id)?;
             let messages = store.load_messages()?;
-            println!(
-                "{} {}",
-                "🔄 Resumed session:".cyan().bold(),
-                id.as_str().white()
-            );
+            println!("{} {}", "🔄 Resumed session:".cyan().bold(), id.as_str().white());
             Ok((Some(store), messages))
         }
     }
@@ -329,48 +325,26 @@ fn print_instructions(client: &LLMClient, app_config: &AppConfig) {
     println!("{}", "📝 Instructions:".cyan().bold());
     println!("  - Type a message and press Enter to send");
     if app_config.tips {
-        println!(
-            "  - Type {} or {} to exit",
-            "/exit".yellow(),
-            "/quit".yellow()
-        );
-        println!(
-            "  - Type {} to clear conversation history",
-            "/clear".yellow()
-        );
-        println!(
-            "  - Type {} to view conversation history",
-            "/history".yellow()
-        );
+        println!("  - Type {} or {} to exit", "/exit".yellow(), "/quit".yellow());
+        println!("  - Type {} to clear conversation history", "/clear".yellow());
+        println!("  - Type {} to view conversation history", "/history".yellow());
         println!("  - Type {} to resume previous session", "/resume".yellow());
         println!("  - Type {} to compact long context", "/compact".yellow());
         println!("  - Type {} to show git diff", "/diff".yellow());
         println!("  - Type {} to review current diff", "/review".yellow());
-        println!(
-            "  - Type {} to generate and run git commit",
-            "/commit".yellow()
-        );
+        println!("  - Type {} to generate and run git commit", "/commit".yellow());
         println!("  - Type {} to list saved memories", "/memory".yellow());
-        println!(
-            "  - Type {} to list or switch output styles",
-            "/output-style".yellow()
-        );
+        println!("  - Type {} to list or switch output styles", "/output-style".yellow());
         println!("  - Type {} to run a web search", "/web <query>".yellow());
         println!("  - Type {} to fetch a web page", "/fetch <url>".yellow());
         println!("  - Type {} to show or toggle plan mode", "/plan".yellow());
         println!("  - Type {} to list available skills", "/skills".yellow());
-        println!(
-            "  - Type {} to invoke a user skill",
-            "/<skill-name>".yellow()
-        );
+        println!("  - Type {} to invoke a user skill", "/<skill-name>".yellow());
         println!("  - Type {} to open config menu", "/config".yellow());
         println!("  - Type {} to switch Ollama model", "/model".yellow());
         println!("  - Type {} to show help", "/help".yellow());
     } else {
-        println!(
-            "  - Tips are disabled. Use {} for all commands",
-            "/help".yellow()
-        );
+        println!("  - Tips are disabled. Use {} for all commands", "/help".yellow());
     }
     println!();
 
@@ -385,16 +359,8 @@ fn print_instructions(client: &LLMClient, app_config: &AppConfig) {
             "off".red()
         }
     );
-    println!(
-        "{} {}",
-        "🎯 Output Style:".cyan().bold(),
-        app_config.output_style.white()
-    );
-    println!(
-        "{} {}",
-        "🌐 Endpoint:".cyan().bold(),
-        client.base_url().white()
-    );
+    println!("{} {}", "🎯 Output Style:".cyan().bold(), app_config.output_style.white());
+    println!("{} {}", "🌐 Endpoint:".cyan().bold(), client.base_url().white());
     println!();
 }
 
@@ -426,11 +392,7 @@ async fn handle_command(command: &str, history: &mut ConversationHistory) -> boo
             println!("\n{} {}", "📊 Message count:".cyan().bold(), history.len());
         }
         "/version" => {
-            println!(
-                "\n{} {}",
-                "📦 Version:".cyan().bold(),
-                env!("CARGO_PKG_VERSION").white()
-            );
+            println!("\n{} {}", "📦 Version:".cyan().bold(), env!("CARGO_PKG_VERSION").white());
         }
         _ => {
             println!("\n{} {}", "❌ Unknown command:".red().bold(), command);
@@ -445,76 +407,25 @@ fn print_help() {
     println!("\n{}", "📖 Available commands:".cyan().bold());
     println!();
     println!("  {}          - Exit the program", "/exit, /quit".yellow());
-    println!(
-        "  {}            - Clear conversation history",
-        "/clear".yellow()
-    );
-    println!(
-        "  {}          - View conversation history (JSON format)",
-        "/history".yellow()
-    );
-    println!(
-        "  {}           - List and resume a previous session",
-        "/resume".yellow()
-    );
-    println!(
-        "  {}           - Manually compact conversation context",
-        "/compact".yellow()
-    );
-    println!(
-        "  {}              - Show current git diff",
-        "/diff".yellow()
-    );
-    println!(
-        "  {}            - Review current git diff with the model",
-        "/review".yellow()
-    );
-    println!(
-        "  {}    - Generate a commit message and commit",
-        "/commit [title]".yellow()
-    );
+    println!("  {}            - Clear conversation history", "/clear".yellow());
+    println!("  {}          - View conversation history (JSON format)", "/history".yellow());
+    println!("  {}           - List and resume a previous session", "/resume".yellow());
+    println!("  {}           - Manually compact conversation context", "/compact".yellow());
+    println!("  {}              - Show current git diff", "/diff".yellow());
+    println!("  {}            - Review current git diff with the model", "/review".yellow());
+    println!("  {}    - Generate a commit message and commit", "/commit [title]".yellow());
     println!("  {}           - List saved memories", "/memory".yellow());
-    println!(
-        "  {}      - List or switch output styles",
-        "/output-style [name]".yellow()
-    );
-    println!(
-        "  {}          - Search the web directly",
-        "/web <query>".yellow()
-    );
-    println!(
-        "  {}         - Fetch a public web page",
-        "/fetch <url>".yellow()
-    );
+    println!("  {}      - List or switch output styles", "/output-style [name]".yellow());
+    println!("  {}          - Search the web directly", "/web <query>".yellow());
+    println!("  {}         - Fetch a public web page", "/fetch <url>".yellow());
     println!("  {}             - Show plan status", "/plan".yellow());
-    println!(
-        "  {}        - Enable plan mode manually",
-        "/plan on".yellow()
-    );
-    println!(
-        "  {}       - Disable plan mode manually",
-        "/plan off".yellow()
-    );
-    println!(
-        "  {}     - Clear persisted todo list",
-        "/plan clear".yellow()
-    );
-    println!(
-        "  {}           - List available user skills",
-        "/skills".yellow()
-    );
-    println!(
-        "  {}     - Invoke a user skill by slash command",
-        "/<skill-name> [args]".yellow()
-    );
-    println!(
-        "  {}           - Configure UI settings (Theme / Tips)",
-        "/config".yellow()
-    );
-    println!(
-        "  {}           - Select and persist Ollama model",
-        "/model".yellow()
-    );
+    println!("  {}        - Enable plan mode manually", "/plan on".yellow());
+    println!("  {}       - Disable plan mode manually", "/plan off".yellow());
+    println!("  {}     - Clear persisted todo list", "/plan clear".yellow());
+    println!("  {}           - List available user skills", "/skills".yellow());
+    println!("  {}     - Invoke a user skill by slash command", "/<skill-name> [args]".yellow());
+    println!("  {}           - Configure UI settings (Theme / Tips)", "/config".yellow());
+    println!("  {}           - Select and persist Ollama model", "/model".yellow());
     println!("  {}             - Show this help", "/help".yellow());
     println!("  {}            - Show message count", "/count".yellow());
     println!("  {}          - Show current version", "/version".yellow());
@@ -653,11 +564,7 @@ async fn handle_skill_command(
         format!("[{} / {}]", resolved.loaded_from, resolved.context).dimmed()
     );
     if !resolved.allowed_tools.is_empty() {
-        println!(
-            "{} {}",
-            "🔒 Allowed tools:".cyan().bold(),
-            resolved.allowed_tools.join(", ")
-        );
+        println!("{} {}", "🔒 Allowed tools:".cyan().bold(), resolved.allowed_tools.join(", "));
     }
 
     let user_message = resolved.default_user_message(skill_args);
@@ -692,10 +599,7 @@ fn handle_output_style_command(
     let style_name = style_name.trim();
     if style_name.is_empty() {
         println!("\n{}", "🎨 Available output styles:".cyan().bold());
-        println!(
-            "{}",
-            output_style_manager.render_style_list(&app_config.output_style)?
-        );
+        println!("{}", output_style_manager.render_style_list(&app_config.output_style)?);
         return Ok(false);
     }
 
@@ -830,10 +734,7 @@ fn handle_config_command(
     println!("  2. Tips");
     println!();
 
-    let input = rl.readline(&format!(
-        "{} ",
-        "Select option (Enter to cancel) >".cyan().bold()
-    ))?;
+    let input = rl.readline(&format!("{} ", "Select option (Enter to cancel) >".cyan().bold()))?;
     let input = input.trim();
     if input.is_empty() {
         println!("{}", "Config cancelled".yellow());
@@ -861,10 +762,7 @@ fn configure_theme(
     println!("  current: {}", app_config.theme.to_string().white());
     println!();
 
-    let input = rl.readline(&format!(
-        "{} ",
-        "Select theme (Enter to cancel) >".cyan().bold()
-    ))?;
+    let input = rl.readline(&format!("{} ", "Select theme (Enter to cancel) >".cyan().bold()))?;
     let input = input.trim();
     if input.is_empty() {
         println!("{}", "Theme change cancelled".yellow());
@@ -910,10 +808,8 @@ fn configure_tips(
     );
     println!();
 
-    let input = rl.readline(&format!(
-        "{} ",
-        "Select tips mode (Enter to cancel) >".cyan().bold()
-    ))?;
+    let input =
+        rl.readline(&format!("{} ", "Select tips mode (Enter to cancel) >".cyan().bold()))?;
     let input = input.trim();
     if input.is_empty() {
         println!("{}", "Tips change cancelled".yellow());
@@ -962,19 +858,11 @@ fn handle_resume_command(
     for (index, s) in sessions.iter().enumerate() {
         let preview =
             session_last_user_preview(s).unwrap_or_else(|_| "(failed to load)".to_string());
-        println!(
-            "  {}. {} {}",
-            index + 1,
-            preview.white(),
-            format!("[{}]", s.id).dimmed()
-        );
+        println!("  {}. {} {}", index + 1, preview.white(), format!("[{}]", s.id).dimmed());
     }
     println!();
 
-    let prompt = format!(
-        "{} ",
-        "Select session number (Enter to cancel) >".cyan().bold()
-    );
+    let prompt = format!("{} ", "Select session number (Enter to cancel) >".cyan().bold());
     let input = rl.readline(&prompt)?;
     let input = input.trim();
     if input.is_empty() {
@@ -1045,11 +933,7 @@ fn truncate_preview(s: &str, max_chars: usize) -> String {
 fn ensure_session_started(cwd: &std::path::Path, session: &mut Option<SessionStore>) -> Result<()> {
     if session.is_none() {
         let created = SessionStore::create(cwd)?;
-        println!(
-            "{} {}",
-            "🧾 Session started:".cyan().bold(),
-            created.id.as_str().white()
-        );
+        println!("{} {}", "🧾 Session started:".cyan().bold(), created.id.as_str().white());
         *session = Some(created);
     }
     Ok(())
@@ -1179,15 +1063,9 @@ async fn handle_commit_command(
         anyhow::bail!("model returned an empty commit message");
     }
 
-    println!(
-        "{} {}",
-        "Suggested commit message:".cyan().bold(),
-        suggested.white()
-    );
-    let confirm = rl.readline(&format!(
-        "{} ",
-        "Commit with this message? [Y/n/e] >".cyan().bold()
-    ))?;
+    println!("{} {}", "Suggested commit message:".cyan().bold(), suggested.white());
+    let confirm =
+        rl.readline(&format!("{} ", "Commit with this message? [Y/n/e] >".cyan().bold()))?;
     let confirm = confirm.trim().to_lowercase();
 
     let final_message = match confirm.as_str() {
@@ -1233,10 +1111,7 @@ async fn select_model(rl: &mut DefaultEditor, client: &mut LLMClient) -> Result<
     }
 
     println!();
-    let prompt = format!(
-        "{} ",
-        "Select model number (Enter to cancel) >".cyan().bold()
-    );
+    let prompt = format!("{} ", "Select model number (Enter to cancel) >".cyan().bold());
     let input = rl.readline(&prompt)?;
     let input = input.trim();
     if input.is_empty() {
@@ -1255,11 +1130,7 @@ async fn select_model(rl: &mut DefaultEditor, client: &mut LLMClient) -> Result<
     let path = client.persist_model_to_home(&model)?;
     *client = LLMClient::new()?;
 
-    println!(
-        "{} {}",
-        "✅ Active model updated:".green(),
-        client.model().white()
-    );
+    println!("{} {}", "✅ Active model updated:".green(), client.model().white());
     println!("{} {}", "📝 Saved to:".cyan().bold(), path.display());
 
     Ok(())
@@ -1365,10 +1236,7 @@ mod tests {
 
     #[test]
     fn command_arg_extracts_argument() {
-        assert_eq!(
-            command_arg("/commit feat: add git", "/commit"),
-            Some("feat: add git")
-        );
+        assert_eq!(command_arg("/commit feat: add git", "/commit"), Some("feat: add git"));
     }
 
     #[test]
@@ -1378,10 +1246,7 @@ mod tests {
 
     #[test]
     fn parse_slash_skill_extracts_name_and_args() {
-        assert_eq!(
-            parse_slash_skill("/simplify src/lib.rs"),
-            Some(("simplify", "src/lib.rs"))
-        );
+        assert_eq!(parse_slash_skill("/simplify src/lib.rs"), Some(("simplify", "src/lib.rs")));
     }
 
     #[test]

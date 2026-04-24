@@ -178,7 +178,7 @@ unsafe extern "C" {
     pub fn trueos_cabi_gfx_set_render_target(tex_id: u32) -> i32;
     pub fn trueos_cabi_gfx_begin_frame_no_present(clear_rgb: u32) -> i32;
     pub fn trueos_cabi_gfx_draw_rgb_triangles_no_present(vtx_ptr: *const u8, vtx_len: usize)
-        -> i32;
+    -> i32;
     pub fn trueos_cabi_gfx_queue_render_rgb_triangles_to_texture(
         tex_id: u32,
         clear_rgb: u32,

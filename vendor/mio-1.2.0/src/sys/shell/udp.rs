@@ -1,4 +1,6 @@
 #![cfg(not(target_os = "wasi"))]
+#![allow(dead_code)]
+
 use std::io;
 use std::net::{self, SocketAddr};
 

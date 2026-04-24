@@ -1,0 +1,932 @@
+use alloc::{collections::VecDeque, vec::Vec};
+
+use spin::Mutex;
+use v::vnet as api;
+
+use crate::r::net::VNet;
+
+const STATUS_OK: i32 = 0;
+const STATUS_UNSUPPORTED: i32 = -1;
+const STATUS_WOULD_BLOCK: i32 = -2;
+const STATUS_NOT_CONNECTED: i32 = -3;
+const STATUS_INVALID_INPUT: i32 = -4;
+const STATUS_NOT_FOUND: i32 = -5;
+const STATUS_IO: i32 = -6;
+const STATUS_TIMED_OUT: i32 = -7;
+const STATUS_NO_DEVICE: i32 = -8;
+
+const READY_READABLE: u8 = 0b0000_0001;
+const READY_WRITABLE: u8 = 0b0000_0010;
+const READY_ERROR: u8 = 0b0000_0100;
+const READY_READ_CLOSED: u8 = 0b0000_1000;
+const READY_WRITE_CLOSED: u8 = 0b0001_0000;
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct TrueosMioSocketAddr {
+    pub family: u8,
+    pub port: u16,
+    pub addr: [u8; 16],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct TrueosMioReadyEvent {
+    pub token: usize,
+    pub readiness: u8,
+}
+
+#[derive(Clone, Copy)]
+enum CompatAddr {
+    V4 { addr: [u8; 4], port: u16 },
+    V6 { addr: [u8; 16], port: u16 },
+}
+
+impl CompatAddr {
+    fn from_raw(raw: TrueosMioSocketAddr) -> Option<Self> {
+        match raw.family {
+            4 => Some(Self::V4 {
+                addr: [raw.addr[0], raw.addr[1], raw.addr[2], raw.addr[3]],
+                port: raw.port,
+            }),
+            6 => Some(Self::V6 {
+                addr: raw.addr,
+                port: raw.port,
+            }),
+            _ => None,
+        }
+    }
+
+    fn to_raw(self) -> TrueosMioSocketAddr {
+        match self {
+            Self::V4 { addr, port } => {
+                let mut raw = TrueosMioSocketAddr {
+                    family: 4,
+                    port,
+                    addr: [0; 16],
+                };
+                raw.addr[..4].copy_from_slice(&addr);
+                raw
+            }
+            Self::V6 { addr, port } => TrueosMioSocketAddr {
+                family: 6,
+                port,
+                addr,
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MioSocketKind {
+    TcpStream,
+    TcpListener,
+    Udp,
+}
+
+struct MioSocketState {
+    id: u32,
+    kind: MioSocketKind,
+    handle: Option<api::NetHandle>,
+    local: Option<CompatAddr>,
+    peer: Option<CompatAddr>,
+    listen_port: Option<u16>,
+    connected: bool,
+    closed: bool,
+    error: i32,
+    rx_stream: VecDeque<u8>,
+    rx_dgrams: VecDeque<(CompatAddr, Vec<u8>)>,
+    accept_queue: VecDeque<u32>,
+}
+
+struct PendingOpen {
+    socket_id: u32,
+    kind: api::SocketKind,
+}
+
+struct SelectorRegistration {
+    selector_id: usize,
+    socket_id: u32,
+    token: usize,
+    interests: u8,
+}
+
+struct MioCompat {
+    net: Option<VNet>,
+    sockets: Vec<MioSocketState>,
+    pending_opens: VecDeque<PendingOpen>,
+    registrations: Vec<SelectorRegistration>,
+    next_socket_id: u32,
+    udp_next_ephemeral: u16,
+}
+
+static MIO_COMPAT: Mutex<Option<MioCompat>> = Mutex::new(None);
+
+fn with_compat<R>(f: impl FnOnce(&mut MioCompat) -> R) -> R {
+    let mut guard = MIO_COMPAT.lock();
+    let compat = guard.get_or_insert_with(MioCompat::new);
+    f(compat)
+}
+
+impl MioCompat {
+    fn new() -> Self {
+        Self {
+            net: None,
+            sockets: Vec::new(),
+            pending_opens: VecDeque::new(),
+            registrations: Vec::new(),
+            next_socket_id: 1,
+            udp_next_ephemeral: 49_152,
+        }
+    }
+
+    fn ensure_net(&mut self) -> Result<(), i32> {
+        if self.net.is_none() {
+            self.net = VNet::open_primary();
+        }
+        if self.net.is_some() {
+            Ok(())
+        } else {
+            Err(STATUS_NO_DEVICE)
+        }
+    }
+
+    fn alloc_socket_id(&mut self) -> u32 {
+        let id = self.next_socket_id;
+        self.next_socket_id = self.next_socket_id.wrapping_add(1).max(1);
+        id
+    }
+
+    fn alloc_udp_port(&mut self) -> u16 {
+        let port = self.udp_next_ephemeral;
+        self.udp_next_ephemeral = self.udp_next_ephemeral.wrapping_add(1).max(49_152);
+        port
+    }
+
+    fn socket(&self, socket_id: u32) -> Option<&MioSocketState> {
+        self.sockets.iter().find(|socket| socket.id == socket_id)
+    }
+
+    fn socket_mut(&mut self, socket_id: u32) -> Option<&mut MioSocketState> {
+        self.sockets
+            .iter_mut()
+            .find(|socket| socket.id == socket_id)
+    }
+
+    fn socket_by_handle_mut(&mut self, handle: api::NetHandle) -> Option<&mut MioSocketState> {
+        self.sockets
+            .iter_mut()
+            .find(|socket| socket.handle == Some(handle))
+    }
+
+    fn socket_by_handle_id(&self, handle: api::NetHandle, kind: MioSocketKind) -> Option<u32> {
+        self.sockets
+            .iter()
+            .find(|socket| socket.handle == Some(handle) && socket.kind == kind)
+            .map(|socket| socket.id)
+    }
+
+    fn submit(&mut self, cmd: api::Command) -> Result<(), i32> {
+        self.ensure_net()?;
+        self.net
+            .as_ref()
+            .unwrap()
+            .submit(cmd)
+            .map_err(|_| STATUS_WOULD_BLOCK)
+    }
+
+    fn wait_for_open(&mut self, socket_id: u32) -> i32 {
+        for _ in 0..4096 {
+            self.pump();
+            if let Some(socket) = self.socket(socket_id) {
+                if socket.handle.is_some() {
+                    return STATUS_OK;
+                }
+                if socket.error != STATUS_OK {
+                    return socket.error;
+                }
+            }
+            crate::wait::spin_step();
+        }
+        STATUS_TIMED_OUT
+    }
+
+    fn pump(&mut self) {
+        while let Some(event) = self.net.as_ref().and_then(|net| net.pop_event()) {
+            self.handle_event(event);
+        }
+    }
+
+    fn handle_event(&mut self, event: api::Event) {
+        match event {
+            api::Event::Opened { handle, kind } => {
+                if let Some(index) = self
+                    .pending_opens
+                    .iter()
+                    .position(|pending| pending.kind == kind)
+                    && let Some(pending) = self.pending_opens.remove(index)
+                    && let Some(socket) = self.socket_mut(pending.socket_id)
+                {
+                    socket.handle = Some(handle);
+                    if socket.kind == MioSocketKind::Udp {
+                        socket.connected = true;
+                    }
+                }
+            }
+            api::Event::TcpEstablished { handle } => {
+                if let Some(listener_id) =
+                    self.socket_by_handle_id(handle, MioSocketKind::TcpListener)
+                {
+                    let child_id = self.alloc_socket_id();
+                    let (local, port) = {
+                        let listener = self.socket(listener_id).unwrap();
+                        (listener.local, listener.listen_port)
+                    };
+
+                    self.sockets.push(MioSocketState {
+                        id: child_id,
+                        kind: MioSocketKind::TcpStream,
+                        handle: Some(handle),
+                        local,
+                        peer: None,
+                        listen_port: None,
+                        connected: true,
+                        closed: false,
+                        error: STATUS_OK,
+                        rx_stream: VecDeque::new(),
+                        rx_dgrams: VecDeque::new(),
+                        accept_queue: VecDeque::new(),
+                    });
+
+                    if let Some(listener) = self.socket_mut(listener_id) {
+                        listener.handle = None;
+                        listener.accept_queue.push_back(child_id);
+                    }
+
+                    if let Some(port) = port {
+                        let _ = self.submit(api::Command::OpenTcpListen { port });
+                        self.pending_opens.push_back(PendingOpen {
+                            socket_id: listener_id,
+                            kind: api::SocketKind::Tcp,
+                        });
+                    }
+                } else if let Some(socket) = self.socket_by_handle_mut(handle) {
+                    socket.connected = true;
+                }
+            }
+            api::Event::TcpData { handle, data } => {
+                if let Some(socket) = self.socket_by_handle_mut(handle) {
+                    socket.rx_stream.extend(data.as_slice().iter().copied());
+                }
+            }
+            api::Event::TcpSent { handle, .. } => {
+                if let Some(socket) = self.socket_by_handle_mut(handle) {
+                    if socket.kind == MioSocketKind::TcpStream {
+                        socket.connected = true;
+                    }
+                }
+            }
+            api::Event::UdpPacket { handle, from, data } => {
+                if let Some(socket) = self.socket_by_handle_mut(handle) {
+                    socket.rx_dgrams.push_back((
+                        CompatAddr::V4 {
+                            addr: from.addr,
+                            port: from.port,
+                        },
+                        Vec::from(data.as_slice()),
+                    ));
+                }
+            }
+            api::Event::UdpPacketV6 { handle, from, data } => {
+                if let Some(socket) = self.socket_by_handle_mut(handle) {
+                    socket.rx_dgrams.push_back((
+                        CompatAddr::V6 {
+                            addr: from.addr,
+                            port: from.port,
+                        },
+                        Vec::from(data.as_slice()),
+                    ));
+                }
+            }
+            api::Event::Closed { handle } => {
+                if let Some(socket) = self.socket_by_handle_mut(handle) {
+                    socket.handle = None;
+                    socket.closed = true;
+                }
+            }
+            api::Event::Error { .. } => {
+                if let Some(pending) = self.pending_opens.pop_front()
+                    && let Some(socket) = self.socket_mut(pending.socket_id)
+                {
+                    socket.error = STATUS_IO;
+                }
+            }
+            api::Event::IcmpReply { .. } => {}
+            api::Event::IcmpReplyV6 { .. } => {}
+        }
+    }
+
+    fn ready_mask(&self, socket: &MioSocketState, interests: u8) -> u8 {
+        let want_read = (interests & READY_READABLE) != 0;
+        let want_write = (interests & READY_WRITABLE) != 0;
+        let mut ready = 0u8;
+
+        if socket.error != STATUS_OK {
+            ready |= READY_ERROR;
+        }
+
+        match socket.kind {
+            MioSocketKind::TcpStream => {
+                if want_read && (!socket.rx_stream.is_empty() || socket.closed) {
+                    ready |= READY_READABLE;
+                }
+                if want_write && socket.connected {
+                    ready |= READY_WRITABLE;
+                }
+                if socket.closed {
+                    ready |= READY_READ_CLOSED | READY_WRITE_CLOSED;
+                }
+            }
+            MioSocketKind::TcpListener => {
+                if want_read && !socket.accept_queue.is_empty() {
+                    ready |= READY_READABLE;
+                }
+            }
+            MioSocketKind::Udp => {
+                if want_read && !socket.rx_dgrams.is_empty() {
+                    ready |= READY_READABLE;
+                }
+                if want_write && socket.handle.is_some() {
+                    ready |= READY_WRITABLE;
+                }
+            }
+        }
+
+        ready
+    }
+
+    fn selector_poll(
+        &mut self,
+        selector_id: usize,
+        out_events: *mut TrueosMioReadyEvent,
+        out_cap: usize,
+        timeout_nanos: u64,
+    ) -> usize {
+        let block_forever = timeout_nanos == u64::MAX;
+        let mut spins = 0u64;
+
+        loop {
+            self.pump();
+
+            let mut written = 0usize;
+            for reg in self
+                .registrations
+                .iter()
+                .filter(|reg| reg.selector_id == selector_id)
+            {
+                if written >= out_cap {
+                    break;
+                }
+
+                let Some(socket) = self.socket(reg.socket_id) else {
+                    continue;
+                };
+
+                let readiness = self.ready_mask(socket, reg.interests);
+                if readiness == 0 {
+                    continue;
+                }
+
+                unsafe {
+                    out_events.add(written).write(TrueosMioReadyEvent {
+                        token: reg.token,
+                        readiness,
+                    });
+                }
+                written += 1;
+            }
+
+            if written != 0 || timeout_nanos == 0 {
+                return written;
+            }
+
+            if !block_forever && spins >= timeout_nanos.saturating_div(1_000_000).saturating_add(1)
+            {
+                return 0;
+            }
+
+            spins = spins.saturating_add(1);
+            crate::wait::spin_step();
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_mio_tcp_listener_bind(
+    addr: TrueosMioSocketAddr,
+    out_socket_id: *mut u32,
+) -> i32 {
+    if out_socket_id.is_null() {
+        return STATUS_INVALID_INPUT;
+    }
+    let Some(local) = CompatAddr::from_raw(addr) else {
+        return STATUS_INVALID_INPUT;
+    };
+    let port = match local {
+        CompatAddr::V4 { port, .. } | CompatAddr::V6 { port, .. } => port,
+    };
+
+    with_compat(|compat| {
+        let socket_id = compat.alloc_socket_id();
+        compat.sockets.push(MioSocketState {
+            id: socket_id,
+            kind: MioSocketKind::TcpListener,
+            handle: None,
+            local: Some(local),
+            peer: None,
+            listen_port: Some(port),
+            connected: false,
+            closed: false,
+            error: STATUS_OK,
+            rx_stream: VecDeque::new(),
+            rx_dgrams: VecDeque::new(),
+            accept_queue: VecDeque::new(),
+        });
+
+        let status = match compat.submit(api::Command::OpenTcpListen { port }) {
+            Ok(()) => {
+                compat.pending_opens.push_back(PendingOpen {
+                    socket_id,
+                    kind: api::SocketKind::Tcp,
+                });
+                compat.wait_for_open(socket_id)
+            }
+            Err(status) => status,
+        };
+
+        if status == STATUS_OK {
+            unsafe { *out_socket_id = socket_id };
+        }
+
+        status
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_mio_tcp_stream_connect(
+    addr: TrueosMioSocketAddr,
+    out_socket_id: *mut u32,
+) -> i32 {
+    if out_socket_id.is_null() {
+        return STATUS_INVALID_INPUT;
+    }
+    let Some(peer) = CompatAddr::from_raw(addr) else {
+        return STATUS_INVALID_INPUT;
+    };
+
+    with_compat(|compat| {
+        let socket_id = compat.alloc_socket_id();
+        compat.sockets.push(MioSocketState {
+            id: socket_id,
+            kind: MioSocketKind::TcpStream,
+            handle: None,
+            local: None,
+            peer: Some(peer),
+            listen_port: None,
+            connected: false,
+            closed: false,
+            error: STATUS_OK,
+            rx_stream: VecDeque::new(),
+            rx_dgrams: VecDeque::new(),
+            accept_queue: VecDeque::new(),
+        });
+
+        let status = match peer {
+            CompatAddr::V4 { addr, port } => compat.submit(api::Command::OpenTcpConnect {
+                remote: api::EndpointV4 { addr, port },
+            }),
+            CompatAddr::V6 { addr, port } => compat.submit(api::Command::OpenTcpConnectV6 {
+                remote: api::EndpointV6 { addr, port },
+            }),
+        };
+
+        let status = match status {
+            Ok(()) => {
+                compat.pending_opens.push_back(PendingOpen {
+                    socket_id,
+                    kind: api::SocketKind::Tcp,
+                });
+                compat.wait_for_open(socket_id)
+            }
+            Err(status) => status,
+        };
+
+        if status == STATUS_OK {
+            unsafe { *out_socket_id = socket_id };
+        }
+
+        status
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_mio_udp_socket_bind(
+    addr: TrueosMioSocketAddr,
+    out_socket_id: *mut u32,
+) -> i32 {
+    if out_socket_id.is_null() {
+        return STATUS_INVALID_INPUT;
+    }
+    let Some(local) = CompatAddr::from_raw(addr) else {
+        return STATUS_INVALID_INPUT;
+    };
+
+    with_compat(|compat| {
+        let local = match local {
+            CompatAddr::V4 { addr, port } => CompatAddr::V4 {
+                addr,
+                port: if port == 0 {
+                    compat.alloc_udp_port()
+                } else {
+                    port
+                },
+            },
+            CompatAddr::V6 { addr, port } => CompatAddr::V6 {
+                addr,
+                port: if port == 0 {
+                    compat.alloc_udp_port()
+                } else {
+                    port
+                },
+            },
+        };
+
+        let socket_id = compat.alloc_socket_id();
+        compat.sockets.push(MioSocketState {
+            id: socket_id,
+            kind: MioSocketKind::Udp,
+            handle: None,
+            local: Some(local),
+            peer: None,
+            listen_port: None,
+            connected: true,
+            closed: false,
+            error: STATUS_OK,
+            rx_stream: VecDeque::new(),
+            rx_dgrams: VecDeque::new(),
+            accept_queue: VecDeque::new(),
+        });
+
+        let port = match local {
+            CompatAddr::V4 { port, .. } | CompatAddr::V6 { port, .. } => port,
+        };
+
+        let status = match compat.submit(api::Command::OpenUdp { port }) {
+            Ok(()) => {
+                compat.pending_opens.push_back(PendingOpen {
+                    socket_id,
+                    kind: api::SocketKind::Udp,
+                });
+                compat.wait_for_open(socket_id)
+            }
+            Err(status) => status,
+        };
+
+        if status == STATUS_OK {
+            unsafe { *out_socket_id = socket_id };
+        }
+
+        status
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_mio_socket_close(socket_id: u32) -> i32 {
+    with_compat(|compat| {
+        compat.pump();
+        let Some(socket) = compat.socket_mut(socket_id) else {
+            return STATUS_NOT_FOUND;
+        };
+        let handle = socket.handle.take();
+        socket.closed = true;
+        if let Some(handle) = handle {
+            let _ = compat.submit(api::Command::Close { handle });
+        }
+        STATUS_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_mio_socket_local_addr(
+    socket_id: u32,
+    out_addr: *mut TrueosMioSocketAddr,
+) -> i32 {
+    if out_addr.is_null() {
+        return STATUS_INVALID_INPUT;
+    }
+    with_compat(|compat| {
+        compat.pump();
+        let Some(socket) = compat.socket(socket_id) else {
+            return STATUS_NOT_FOUND;
+        };
+        let Some(addr) = socket.local else {
+            return STATUS_UNSUPPORTED;
+        };
+        unsafe { *out_addr = addr.to_raw() };
+        STATUS_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_mio_socket_peer_addr(
+    socket_id: u32,
+    out_addr: *mut TrueosMioSocketAddr,
+) -> i32 {
+    if out_addr.is_null() {
+        return STATUS_INVALID_INPUT;
+    }
+    with_compat(|compat| {
+        compat.pump();
+        let Some(socket) = compat.socket(socket_id) else {
+            return STATUS_NOT_FOUND;
+        };
+        let Some(addr) = socket.peer else {
+            return STATUS_UNSUPPORTED;
+        };
+        unsafe { *out_addr = addr.to_raw() };
+        STATUS_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_mio_socket_take_error(socket_id: u32) -> i32 {
+    with_compat(|compat| {
+        compat.pump();
+        let Some(socket) = compat.socket_mut(socket_id) else {
+            return STATUS_NOT_FOUND;
+        };
+        let status = socket.error;
+        socket.error = STATUS_OK;
+        status
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_mio_tcp_stream_read(
+    socket_id: u32,
+    out_ptr: *mut u8,
+    out_cap: usize,
+) -> isize {
+    if out_ptr.is_null() && out_cap != 0 {
+        return STATUS_INVALID_INPUT as isize;
+    }
+    with_compat(|compat| {
+        compat.pump();
+        let Some(socket) = compat.socket_mut(socket_id) else {
+            return STATUS_NOT_FOUND as isize;
+        };
+        if socket.kind != MioSocketKind::TcpStream {
+            return STATUS_INVALID_INPUT as isize;
+        }
+        if socket.rx_stream.is_empty() {
+            return if socket.closed {
+                0
+            } else {
+                STATUS_WOULD_BLOCK as isize
+            };
+        }
+
+        let len = out_cap.min(socket.rx_stream.len());
+        for index in 0..len {
+            unsafe {
+                out_ptr
+                    .add(index)
+                    .write(socket.rx_stream.pop_front().unwrap());
+            }
+        }
+        len as isize
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_mio_tcp_stream_write(
+    socket_id: u32,
+    data_ptr: *const u8,
+    data_len: usize,
+) -> isize {
+    if data_ptr.is_null() && data_len != 0 {
+        return STATUS_INVALID_INPUT as isize;
+    }
+    with_compat(|compat| {
+        compat.pump();
+        let Some(socket) = compat.socket(socket_id) else {
+            return STATUS_NOT_FOUND as isize;
+        };
+        if socket.kind != MioSocketKind::TcpStream {
+            return STATUS_INVALID_INPUT as isize;
+        }
+        if !socket.connected {
+            return if socket.error != STATUS_OK {
+                socket.error as isize
+            } else {
+                STATUS_WOULD_BLOCK as isize
+            };
+        }
+        let Some(handle) = socket.handle else {
+            return STATUS_NOT_CONNECTED as isize;
+        };
+
+        let len = data_len.min(api::MAX_MSG);
+        let data = unsafe { core::slice::from_raw_parts(data_ptr, len) };
+        match compat.submit(api::Command::SendTcp {
+            handle,
+            data: api::ByteBuf::from_slice_trunc(data),
+        }) {
+            Ok(()) => len as isize,
+            Err(status) => status as isize,
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_mio_udp_socket_connect(
+    socket_id: u32,
+    addr: TrueosMioSocketAddr,
+) -> i32 {
+    let Some(peer) = CompatAddr::from_raw(addr) else {
+        return STATUS_INVALID_INPUT;
+    };
+    with_compat(|compat| {
+        let Some(socket) = compat.socket_mut(socket_id) else {
+            return STATUS_NOT_FOUND;
+        };
+        if socket.kind != MioSocketKind::Udp {
+            return STATUS_INVALID_INPUT;
+        }
+        socket.peer = Some(peer);
+        STATUS_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_mio_udp_socket_send_to(
+    socket_id: u32,
+    addr: TrueosMioSocketAddr,
+    data_ptr: *const u8,
+    data_len: usize,
+) -> isize {
+    if data_ptr.is_null() && data_len != 0 {
+        return STATUS_INVALID_INPUT as isize;
+    }
+    let Some(peer) = CompatAddr::from_raw(addr) else {
+        return STATUS_INVALID_INPUT as isize;
+    };
+    with_compat(|compat| {
+        compat.pump();
+        let Some(socket) = compat.socket(socket_id) else {
+            return STATUS_NOT_FOUND as isize;
+        };
+        if socket.kind != MioSocketKind::Udp {
+            return STATUS_INVALID_INPUT as isize;
+        }
+        let Some(handle) = socket.handle else {
+            return STATUS_NOT_CONNECTED as isize;
+        };
+
+        let len = data_len.min(api::MAX_MSG);
+        let data = unsafe { core::slice::from_raw_parts(data_ptr, len) };
+        let command = match peer {
+            CompatAddr::V4 { addr, port } => api::Command::SendUdp {
+                handle,
+                remote: api::EndpointV4 { addr, port },
+                data: api::ByteBuf::from_slice_trunc(data),
+            },
+            CompatAddr::V6 { addr, port } => api::Command::SendUdpV6 {
+                handle,
+                remote: api::EndpointV6 { addr, port },
+                data: api::ByteBuf::from_slice_trunc(data),
+            },
+        };
+
+        match compat.submit(command) {
+            Ok(()) => len as isize,
+            Err(status) => status as isize,
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_mio_udp_socket_recv_from(
+    socket_id: u32,
+    out_addr: *mut TrueosMioSocketAddr,
+    out_ptr: *mut u8,
+    out_cap: usize,
+) -> isize {
+    if out_addr.is_null() || (out_ptr.is_null() && out_cap != 0) {
+        return STATUS_INVALID_INPUT as isize;
+    }
+    with_compat(|compat| {
+        compat.pump();
+        let Some(socket) = compat.socket_mut(socket_id) else {
+            return STATUS_NOT_FOUND as isize;
+        };
+        if socket.kind != MioSocketKind::Udp {
+            return STATUS_INVALID_INPUT as isize;
+        }
+        let Some((from, data)) = socket.rx_dgrams.pop_front() else {
+            return STATUS_WOULD_BLOCK as isize;
+        };
+        unsafe { *out_addr = from.to_raw() };
+        let len = out_cap.min(data.len());
+        unsafe {
+            core::ptr::copy_nonoverlapping(data.as_ptr(), out_ptr, len);
+        }
+        len as isize
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_mio_tcp_listener_accept(
+    socket_id: u32,
+    out_socket_id: *mut u32,
+    out_addr: *mut TrueosMioSocketAddr,
+) -> i32 {
+    if out_socket_id.is_null() || out_addr.is_null() {
+        return STATUS_INVALID_INPUT;
+    }
+    with_compat(|compat| {
+        compat.pump();
+        let Some(listener) = compat.socket_mut(socket_id) else {
+            return STATUS_NOT_FOUND;
+        };
+        if listener.kind != MioSocketKind::TcpListener {
+            return STATUS_INVALID_INPUT;
+        }
+        let Some(child_id) = listener.accept_queue.pop_front() else {
+            return STATUS_WOULD_BLOCK;
+        };
+        unsafe {
+            *out_socket_id = child_id;
+            *out_addr = TrueosMioSocketAddr::default();
+        }
+        STATUS_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_mio_selector_register_socket(
+    selector_id: usize,
+    socket_id: u32,
+    token: usize,
+    interests: u8,
+) -> i32 {
+    with_compat(|compat| {
+        if compat.socket(socket_id).is_none() {
+            return STATUS_NOT_FOUND;
+        }
+
+        if let Some(reg) = compat
+            .registrations
+            .iter_mut()
+            .find(|reg| reg.selector_id == selector_id && reg.socket_id == socket_id)
+        {
+            reg.token = token;
+            reg.interests = interests;
+            return STATUS_OK;
+        }
+
+        compat.registrations.push(SelectorRegistration {
+            selector_id,
+            socket_id,
+            token,
+            interests,
+        });
+        STATUS_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_mio_selector_deregister_socket(
+    selector_id: usize,
+    socket_id: u32,
+) -> i32 {
+    with_compat(|compat| {
+        compat
+            .registrations
+            .retain(|reg| !(reg.selector_id == selector_id && reg.socket_id == socket_id));
+        STATUS_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_mio_selector_poll(
+    selector_id: usize,
+    out_events: *mut TrueosMioReadyEvent,
+    out_cap: usize,
+    timeout_nanos: u64,
+) -> usize {
+    if out_events.is_null() && out_cap != 0 {
+        return 0;
+    }
+    with_compat(|compat| compat.selector_poll(selector_id, out_events, out_cap, timeout_nanos))
+}

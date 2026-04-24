@@ -83,7 +83,9 @@ pub async fn execute_tool_call(arguments: Value) -> Result<String> {
         let guard = handler_cell()
             .lock()
             .expect("ui2_window_observer handler lock poisoned");
-        (*guard).ok_or_else(|| anyhow!("ui2_window_observer handler is not registered in this runtime"))?
+        (*guard).ok_or_else(|| {
+            anyhow!("ui2_window_observer handler is not registered in this runtime")
+        })?
     };
     handler(request)
 }

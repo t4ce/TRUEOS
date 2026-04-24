@@ -170,7 +170,10 @@ pub mod kfs {
         let base_depth = if prefix.is_empty() {
             0
         } else {
-            prefix.split('/').filter(|segment| !segment.is_empty()).count()
+            prefix
+                .split('/')
+                .filter(|segment| !segment.is_empty())
+                .count()
         };
 
         Ok(tree(max_entries)?

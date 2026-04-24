@@ -18,10 +18,7 @@ mod common;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    println!(
-        "{}",
-        "=== Example 2: Streaming Response ===\n".cyan().bold()
-    );
+    println!("{}", "=== Example 2: Streaming Response ===\n".cyan().bold());
 
     let api_key = std::env::var("ANTHROPIC_API_KEY")
         .expect("Please set the ANTHROPIC_API_KEY environment variable");

@@ -292,11 +292,7 @@ fn render_todos(todos: &[TodoItem]) -> String {
 }
 
 fn render_markdown(state: &PlanState) -> String {
-    format!(
-        "# Plan\n\nMode: {}\n\n{}\n",
-        state.mode,
-        render_todos(&state.todos)
-    )
+    format!("# Plan\n\nMode: {}\n\n{}\n", state.mode, render_todos(&state.todos))
 }
 
 fn checkbox(status: TodoStatus) -> &'static str {
@@ -308,10 +304,7 @@ fn checkbox(status: TodoStatus) -> &'static str {
 }
 
 fn plan_root(project_dir: &Path) -> Result<PathBuf> {
-    plan_root_with_home(
-        project_dir,
-        std::env::var_os("HOME").as_deref().map(Path::new),
-    )
+    plan_root_with_home(project_dir, std::env::var_os("HOME").as_deref().map(Path::new))
 }
 
 fn plan_root_with_home(project_dir: &Path, home: Option<&Path>) -> Result<PathBuf> {

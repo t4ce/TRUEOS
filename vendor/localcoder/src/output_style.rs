@@ -79,10 +79,7 @@ impl OutputStyleManager {
                 } else {
                     ""
                 };
-                format!(
-                    "- {} [{}] — {}{}",
-                    style.name, style.source, style.description, marker
-                )
+                format!("- {} [{}] — {}{}", style.name, style.source, style.description, marker)
             })
             .collect::<Vec<_>>()
             .join("\n"))

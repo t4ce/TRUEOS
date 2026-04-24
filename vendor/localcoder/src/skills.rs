@@ -76,10 +76,7 @@ impl ResolvedSkill {
     pub fn default_user_message(&self, args: &str) -> String {
         let args = args.trim();
         if args.is_empty() {
-            format!(
-                "Please execute the active skill `{}` for this turn.",
-                self.name
-            )
+            format!("Please execute the active skill `{}` for this turn.", self.name)
         } else {
             format!("Skill arguments:\n{}", args)
         }
@@ -284,10 +281,7 @@ impl SkillManager {
         );
 
         if !skill.allowed_tools.is_empty() {
-            prompt.push_str(&format!(
-                "\nallowed-tools: {}",
-                skill.allowed_tools.join(", ")
-            ));
+            prompt.push_str(&format!("\nallowed-tools: {}", skill.allowed_tools.join(", ")));
         }
 
         if !skill.paths.is_empty() {
@@ -339,11 +333,7 @@ fn load_skill_registry_with_home(cwd: &Path, home: Option<&Path>) -> Result<Skil
         )?;
     }
 
-    load_skills_from_dir(
-        &cwd.join(".claude").join("skills"),
-        LoadedFrom::Project,
-        &mut skills,
-    )?;
+    load_skills_from_dir(&cwd.join(".claude").join("skills"), LoadedFrom::Project, &mut skills)?;
     Ok(SkillRegistry { skills })
 }
 
@@ -390,13 +380,8 @@ fn parse_skill_md(path: &Path, loaded_from: LoadedFrom) -> Result<Skill> {
         .and_then(|parent| parent.file_name())
         .and_then(|name| name.to_str())
         .unwrap_or("skill");
-    parse_skill_text(
-        &raw,
-        fallback_name,
-        loaded_from,
-        path.parent().map(|dir| dir.to_path_buf()),
-    )
-    .with_context(|| format!("failed to parse skill file: {}", path.display()))
+    parse_skill_text(&raw, fallback_name, loaded_from, path.parent().map(|dir| dir.to_path_buf()))
+        .with_context(|| format!("failed to parse skill file: {}", path.display()))
 }
 
 fn parse_skill_text(
@@ -502,16 +487,14 @@ where
             .into_iter()
             .map(|value| match value {
                 serde_yaml::Value::String(s) => Ok(s.trim().to_string()),
-                other => Err(D::Error::custom(format!(
-                    "expected string item in list, got {:?}",
-                    other
-                ))),
+                other => {
+                    Err(D::Error::custom(format!("expected string item in list, got {:?}", other)))
+                }
             })
             .collect(),
-        other => Err(D::Error::custom(format!(
-            "expected string or list of strings, got {:?}",
-            other
-        ))),
+        other => {
+            Err(D::Error::custom(format!("expected string or list of strings, got {:?}", other)))
+        }
     }
 }
 

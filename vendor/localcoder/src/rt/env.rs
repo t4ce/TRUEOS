@@ -1,6 +1,6 @@
-use anyhow::{Result, anyhow};
 #[cfg(not(feature = "trueos-net"))]
 use anyhow::Context;
+use anyhow::{Result, anyhow};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -38,9 +38,7 @@ pub fn home_dir() -> Result<PathBuf> {
 }
 
 pub fn home_dir_opt() -> Option<PathBuf> {
-    var_os("HOME")
-        .or_else(fallback_home_os)
-        .map(PathBuf::from)
+    var_os("HOME").or_else(fallback_home_os).map(PathBuf::from)
 }
 
 #[cfg(not(feature = "trueos-net"))]

@@ -181,11 +181,7 @@ impl Tool for LspTool {
                     .filter(|query| !query.is_empty())
                     .ok_or_else(|| anyhow!("workspace_symbols requires a non-empty 'query'"))?;
                 let batch = self.manager.request_workspace_symbols(query).await?;
-                Ok(format_workspace_symbols(
-                    query,
-                    batch,
-                    self.manager.workspace_root(),
-                )?)
+                Ok(format_workspace_symbols(query, batch, self.manager.workspace_root())?)
             }
             LspOperation::CallHierarchy => {
                 let file = request.require_file()?;
@@ -288,26 +284,17 @@ impl ParsedInput {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .ok_or_else(|| {
-                anyhow!(
-                    "operation '{}' requires a non-empty 'file'",
-                    self.operation.as_str()
-                )
+                anyhow!("operation '{}' requires a non-empty 'file'", self.operation.as_str())
             })?;
         Ok(PathBuf::from(file))
     }
 
     fn require_position(&self) -> Result<(u32, u32)> {
         let line = self.line.filter(|value| *value > 0).ok_or_else(|| {
-            anyhow!(
-                "operation '{}' requires 'line' > 0",
-                self.operation.as_str()
-            )
+            anyhow!("operation '{}' requires 'line' > 0", self.operation.as_str())
         })?;
         let character = self.character.filter(|value| *value > 0).ok_or_else(|| {
-            anyhow!(
-                "operation '{}' requires 'character' > 0",
-                self.operation.as_str()
-            )
+            anyhow!("operation '{}' requires 'character' > 0", self.operation.as_str())
         })?;
         Ok((line, character))
     }
@@ -522,11 +509,7 @@ fn format_hover(server_name: &str, value: &Value) -> Result<String> {
         ));
     }
 
-    Ok(format!(
-        "Operation: hover\nServer: {}\n\n{}",
-        server_name,
-        rendered.trim()
-    ))
+    Ok(format!("Operation: hover\nServer: {}\n\n{}", server_name, rendered.trim()))
 }
 
 fn format_document_symbols(
@@ -583,11 +566,7 @@ fn format_workspace_symbols(
             continue;
         }
         total += symbols.len();
-        out.push_str(&format!(
-            "\n\nServer: {}\nResults: {}",
-            server_name,
-            symbols.len()
-        ));
+        out.push_str(&format!("\n\nServer: {}\nResults: {}", server_name, symbols.len()));
         for (index, symbol) in symbols.iter().enumerate() {
             out.push_str(&format!(
                 "\n{}. {} [{}] - {}{}",
@@ -629,10 +608,8 @@ fn format_call_hierarchy(
         CallHierarchyDirection::Incoming => {
             let calls: Vec<IncomingCall> = serde_json::from_value(value.clone())
                 .context("failed to parse incoming call hierarchy")?;
-            let mut out = format!(
-                "Operation: call_hierarchy\nServer: {}\nDirection: incoming",
-                server_name
-            );
+            let mut out =
+                format!("Operation: call_hierarchy\nServer: {}\nDirection: incoming", server_name);
             if calls.is_empty() {
                 out.push_str("\nNo incoming calls found.");
                 return Ok(out);
@@ -659,10 +636,8 @@ fn format_call_hierarchy(
         CallHierarchyDirection::Outgoing => {
             let calls: Vec<OutgoingCall> = serde_json::from_value(value.clone())
                 .context("failed to parse outgoing call hierarchy")?;
-            let mut out = format!(
-                "Operation: call_hierarchy\nServer: {}\nDirection: outgoing",
-                server_name
-            );
+            let mut out =
+                format!("Operation: call_hierarchy\nServer: {}\nDirection: outgoing", server_name);
             if calls.is_empty() {
                 out.push_str("\nNo outgoing calls found.");
                 return Ok(out);
@@ -718,13 +693,7 @@ fn format_location_line(location: &Location, workspace_root: &Path) -> String {
     let snippet = line_snippet(&path, line)
         .map(|snippet| format!(" - {}", snippet))
         .unwrap_or_default();
-    format!(
-        "{}:{}:{}{}",
-        display_path(&path, workspace_root),
-        line,
-        character,
-        snippet
-    )
+    format!("{}:{}:{}{}", display_path(&path, workspace_root), line, character, snippet)
 }
 
 fn path_for_uri(uri: &str, workspace_root: &Path) -> PathBuf {

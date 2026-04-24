@@ -3,8 +3,8 @@ use crate::compact;
 use crate::engine;
 use crate::localcoder_service;
 use crate::resume::ResumeTarget;
-use crate::rt::fs as rt_fs;
 use crate::rt::env as rt_env;
+use crate::rt::fs as rt_fs;
 use crate::tools::{
     EchoTool, EditTool, EnterPlanModeTool, ExitPlanModeTool, GlobTool, ReadTool, SkillTool,
     TodoWriteTool, Tool, ToolRegistry, WriteTool,
@@ -70,10 +70,7 @@ fn endpoint_soft_warning(base_url: &str, err: &anyhow::Error) -> Option<String> 
         return None;
     }
 
-    Some(format!(
-        "warning: localcoder endpoint {} is unavailable right now",
-        base_url
-    ))
+    Some(format!("warning: localcoder endpoint {} is unavailable right now", base_url))
 }
 
 struct PromptSession {
@@ -134,8 +131,7 @@ fn load_prompt_session(
     let messages: Vec<Value> = if raw.trim().is_empty() {
         Vec::new()
     } else {
-        serde_json::from_str(&raw)
-            .map_err(|e| anyhow!("invalid session {}: {}", session_id, e))?
+        serde_json::from_str(&raw).map_err(|e| anyhow!("invalid session {}: {}", session_id, e))?
     };
 
     Ok(PromptSession {
@@ -146,7 +142,11 @@ fn load_prompt_session(
     })
 }
 
-fn save_prompt_session(cwd: &Path, session_scope: Option<&str>, session: &PromptSession) -> Result<()> {
+fn save_prompt_session(
+    cwd: &Path,
+    session_scope: Option<&str>,
+    session: &PromptSession,
+) -> Result<()> {
     let base = project_session_dir(cwd, session_scope)?;
     rt_fs::create_dir_all(&base)
         .map_err(|e| anyhow!("failed to create session directory {}: {}", base.display(), e))?;
@@ -156,11 +156,7 @@ fn save_prompt_session(cwd: &Path, session_scope: Option<&str>, session: &Prompt
         .map_err(|e| anyhow!("failed to write session {}: {}", session.path.display(), e))?;
     let latest_path = latest_session_pointer_path(cwd, session_scope)?;
     rt_fs::write(&latest_path, session.id.as_bytes()).map_err(|e| {
-        anyhow!(
-            "failed to write latest session pointer {}: {}",
-            latest_path.display(),
-            e
-        )
+        anyhow!("failed to write latest session pointer {}: {}", latest_path.display(), e)
     })?;
     Ok(())
 }
@@ -172,11 +168,7 @@ fn load_latest_session_id(cwd: &Path, session_scope: Option<&str>) -> Result<Opt
     }
 
     let latest = rt_fs::read_to_string(&latest_path).map_err(|e| {
-        anyhow!(
-            "failed to read latest session pointer {}: {}",
-            latest_path.display(),
-            e
-        )
+        anyhow!("failed to read latest session pointer {}: {}", latest_path.display(), e)
     })?;
     let trimmed = latest.trim();
     if trimmed.is_empty() {
@@ -246,7 +238,8 @@ pub async fn run_basic_prompt(request: &BasicPromptRequest) -> Result<BasicPromp
     client.set_max_tokens(request.max_tokens);
 
     let session_scope = request.session_scope.as_deref();
-    let cwd = rt_env::current_dir().map_err(|e| anyhow!("failed to resolve project directory: {}", e))?;
+    let cwd =
+        rt_env::current_dir().map_err(|e| anyhow!("failed to resolve project directory: {}", e))?;
     let model = client.model().to_string();
     let base_url = client.base_url().to_string();
     let registry = build_trueos_registry(&cwd)?;

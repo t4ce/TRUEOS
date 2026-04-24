@@ -1,4 +1,5 @@
 use alloc::vec::Vec;
+use bytes::{BufMut, Bytes, BytesMut};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use crc32fast::Hasher as Crc32;
 use embassy_time::{Duration as EmbassyDuration, Timer};
@@ -70,37 +71,36 @@ struct LastScreenshotBuffer {
 }
 
 struct EncodedScreenshotBuffer {
-    bytes: Mutex<Vec<u8>>,
+    bytes: Mutex<Option<Bytes>>,
 }
 
 impl EncodedScreenshotBuffer {
     const fn new() -> Self {
         Self {
-            bytes: Mutex::new(Vec::new()),
+            bytes: Mutex::new(None),
         }
     }
 
-    fn replace(&self, data: &[u8]) {
+    fn replace(&self, data: Bytes) {
         let mut guard = self.bytes.lock();
-        guard.clear();
-        guard.extend_from_slice(data);
+        *guard = Some(data);
     }
 
     fn copy_out(&self, out_ptr: *mut u8, out_cap: usize) -> isize {
         let guard = self.bytes.lock();
-        if guard.is_empty() {
+        let Some(bytes) = guard.as_ref() else {
             return -1;
-        }
+        };
         if out_ptr.is_null() || out_cap == 0 {
-            return guard.len() as isize;
+            return bytes.len() as isize;
         }
-        if out_cap < guard.len() {
-            return guard.len() as isize;
+        if out_cap < bytes.len() {
+            return bytes.len() as isize;
         }
         unsafe {
-            core::ptr::copy_nonoverlapping(guard.as_ptr(), out_ptr, guard.len());
+            core::ptr::copy_nonoverlapping(bytes.as_ptr(), out_ptr, bytes.len());
         }
-        guard.len() as isize
+        bytes.len() as isize
     }
 }
 
@@ -184,14 +184,14 @@ fn next_frame_blocking(timeout_ms: u64) -> Option<ImageBuffer> {
     if ok { out } else { None }
 }
 
-fn push_be_u32(out: &mut Vec<u8>, value: u32) {
-    out.extend_from_slice(&value.to_be_bytes());
+fn push_be_u32(out: &mut BytesMut, value: u32) {
+    out.put_u32(value);
 }
 
-fn append_png_chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+fn append_png_chunk(out: &mut BytesMut, kind: &[u8; 4], data: &[u8]) {
     push_be_u32(out, data.len() as u32);
-    out.extend_from_slice(kind);
-    out.extend_from_slice(data);
+    out.put_slice(kind);
+    out.put_slice(data);
 
     let mut crc = Crc32::new();
     crc.update(kind);
@@ -199,33 +199,33 @@ fn append_png_chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
     push_be_u32(out, crc.finalize());
 }
 
-fn base64_encode(bytes: &[u8]) -> Vec<u8> {
+fn base64_encode(bytes: &[u8]) -> BytesMut {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = Vec::with_capacity(bytes.len().div_ceil(3).saturating_mul(4));
+    let mut out = BytesMut::with_capacity(bytes.len().div_ceil(3).saturating_mul(4));
     let mut i = 0usize;
     while i + 3 <= bytes.len() {
         let n = ((bytes[i] as u32) << 16) | ((bytes[i + 1] as u32) << 8) | (bytes[i + 2] as u32);
-        out.push(TABLE[((n >> 18) & 0x3F) as usize]);
-        out.push(TABLE[((n >> 12) & 0x3F) as usize]);
-        out.push(TABLE[((n >> 6) & 0x3F) as usize]);
-        out.push(TABLE[(n & 0x3F) as usize]);
+        out.put_u8(TABLE[((n >> 18) & 0x3F) as usize]);
+        out.put_u8(TABLE[((n >> 12) & 0x3F) as usize]);
+        out.put_u8(TABLE[((n >> 6) & 0x3F) as usize]);
+        out.put_u8(TABLE[(n & 0x3F) as usize]);
         i += 3;
     }
 
     match bytes.len().saturating_sub(i) {
         1 => {
             let n = (bytes[i] as u32) << 16;
-            out.push(TABLE[((n >> 18) & 0x3F) as usize]);
-            out.push(TABLE[((n >> 12) & 0x3F) as usize]);
-            out.push(b'=');
-            out.push(b'=');
+            out.put_u8(TABLE[((n >> 18) & 0x3F) as usize]);
+            out.put_u8(TABLE[((n >> 12) & 0x3F) as usize]);
+            out.put_u8(b'=');
+            out.put_u8(b'=');
         }
         2 => {
             let n = ((bytes[i] as u32) << 16) | ((bytes[i + 1] as u32) << 8);
-            out.push(TABLE[((n >> 18) & 0x3F) as usize]);
-            out.push(TABLE[((n >> 12) & 0x3F) as usize]);
-            out.push(TABLE[((n >> 6) & 0x3F) as usize]);
-            out.push(b'=');
+            out.put_u8(TABLE[((n >> 18) & 0x3F) as usize]);
+            out.put_u8(TABLE[((n >> 12) & 0x3F) as usize]);
+            out.put_u8(TABLE[((n >> 6) & 0x3F) as usize]);
+            out.put_u8(b'=');
         }
         _ => {}
     }
@@ -233,7 +233,7 @@ fn base64_encode(bytes: &[u8]) -> Vec<u8> {
     out
 }
 
-fn encode_png_data_url(image: &ImageBuffer) -> Option<Vec<u8>> {
+fn encode_png_data_url(image: &ImageBuffer) -> Option<Bytes> {
     let width = image.width as usize;
     let height = image.height as usize;
     if width == 0 || height == 0 {
@@ -245,33 +245,35 @@ fn encode_png_data_url(image: &ImageBuffer) -> Option<Vec<u8>> {
         return None;
     }
 
-    let mut filtered = Vec::with_capacity(height.saturating_mul(1 + width.saturating_mul(3)));
+    let mut filtered = BytesMut::with_capacity(height.saturating_mul(1 + width.saturating_mul(3)));
     for y in 0..height {
         let row = &image.pixels[y * width..(y + 1) * width];
-        filtered.push(0);
+        filtered.put_u8(0);
         for &pixel in row {
-            filtered.push(((pixel >> 16) & 0xFF) as u8);
-            filtered.push(((pixel >> 8) & 0xFF) as u8);
-            filtered.push((pixel & 0xFF) as u8);
+            filtered.put_u8(((pixel >> 16) & 0xFF) as u8);
+            filtered.put_u8(((pixel >> 8) & 0xFF) as u8);
+            filtered.put_u8((pixel & 0xFF) as u8);
         }
     }
 
     let compressed = compress_to_vec_zlib(&filtered, 6);
 
-    let mut png = Vec::with_capacity(8 + 25 + 12 + compressed.len() + 12);
-    png.extend_from_slice(&[137, 80, 78, 71, 13, 10, 26, 10]);
+    let mut png = BytesMut::with_capacity(8 + 25 + 12 + compressed.len() + 12);
+    png.put_slice(&[137, 80, 78, 71, 13, 10, 26, 10]);
 
-    let mut ihdr = Vec::with_capacity(13);
+    let mut ihdr = BytesMut::with_capacity(13);
     push_be_u32(&mut ihdr, image.width);
     push_be_u32(&mut ihdr, image.height);
-    ihdr.extend_from_slice(&[8, 2, 0, 0, 0]);
+    ihdr.put_slice(&[8, 2, 0, 0, 0]);
     append_png_chunk(&mut png, b"IHDR", &ihdr);
     append_png_chunk(&mut png, b"IDAT", &compressed);
     append_png_chunk(&mut png, b"IEND", &[]);
 
-    let mut out = b"data:image/png;base64,".to_vec();
-    out.extend_from_slice(&base64_encode(&png));
-    Some(out)
+    let encoded = base64_encode(&png);
+    let mut out = BytesMut::with_capacity(b"data:image/png;base64,".len() + encoded.len());
+    out.put_slice(b"data:image/png;base64,");
+    out.extend_from_slice(&encoded);
+    Some(out.freeze())
 }
 
 #[unsafe(no_mangle)]
@@ -286,7 +288,7 @@ pub unsafe extern "C" fn trueos_cabi_gfx_capture_screenshot_data_url(
         let Some(data_url) = encode_png_data_url(&image) else {
             return -1;
         };
-        ENCODED_SCREENSHOT_BUFFER.replace(data_url.as_slice());
+        ENCODED_SCREENSHOT_BUFFER.replace(data_url.clone());
         return data_url.len() as isize;
     }
 

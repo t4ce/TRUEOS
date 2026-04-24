@@ -3,14 +3,20 @@ use crate::Token;
 use std::io;
 
 #[derive(Debug)]
-pub struct Waker {}
+pub struct Waker {
+    selector: Selector,
+    token: Token,
+}
 
 impl Waker {
-    pub fn new(_: &Selector, _: Token) -> io::Result<Waker> {
-        unsupported_io!("mio zkvm poll waker registration is not wired yet");
+    pub fn new(selector: &Selector, token: Token) -> io::Result<Waker> {
+        Ok(Waker {
+            selector: selector.try_clone()?,
+            token,
+        })
     }
 
     pub fn wake(&self) -> io::Result<()> {
-        unsupported_io!("mio zkvm poll wake signalling is not wired yet");
+        self.selector.push_waker_event(self.token)
     }
 }

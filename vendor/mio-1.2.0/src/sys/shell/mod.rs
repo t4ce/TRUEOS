@@ -21,6 +21,8 @@ cfg_net! {
 
 cfg_io_source! {
     use std::io;
+    #[cfg(target_os = "zkvm")]
+    use std::sync::atomic::{AtomicUsize, Ordering};
     #[cfg(unix)]
     use std::os::fd::RawFd;
     // TODO: once <https://github.com/rust-lang/rust/issues/126198> is fixed this
@@ -33,11 +35,22 @@ cfg_io_source! {
     #[cfg(any(windows, unix, target_os = "hermit"))]
     use crate::{Registry, Token, Interest};
 
-    pub(crate) struct IoSourceState;
+    #[cfg(target_os = "zkvm")]
+    #[allow(dead_code)]
+    static NEXT_SOURCE_ID: AtomicUsize = AtomicUsize::new(1);
 
+    pub(crate) struct IoSourceState {
+        #[cfg(target_os = "zkvm")]
+        source_id: usize,
+    }
+
+    #[allow(dead_code)]
     impl IoSourceState {
         pub fn new() -> IoSourceState {
-            IoSourceState
+            IoSourceState {
+                #[cfg(target_os = "zkvm")]
+                source_id: NEXT_SOURCE_ID.fetch_add(1, Ordering::Relaxed),
+            }
         }
 
         pub fn do_io<T, F, R>(&self, f: F, io: &T) -> io::Result<R>
@@ -81,24 +94,28 @@ cfg_io_source! {
     impl IoSourceState {
         pub fn register(
             &mut self,
-            _: &crate::Registry,
-            _: crate::Token,
-            _: crate::Interest,
+            registry: &crate::Registry,
+            token: crate::Token,
+            interests: crate::Interest,
         ) -> io::Result<()> {
-            unsupported_io!("mio zkvm source registration backend is not wired yet")
+            registry
+                .selector()
+                .register_source(self.source_id, token, interests)
         }
 
         pub fn reregister(
             &mut self,
-            _: &crate::Registry,
-            _: crate::Token,
-            _: crate::Interest,
+            registry: &crate::Registry,
+            token: crate::Token,
+            interests: crate::Interest,
         ) -> io::Result<()> {
-            unsupported_io!("mio zkvm source reregistration backend is not wired yet")
+            registry
+                .selector()
+                .reregister_source(self.source_id, token, interests)
         }
 
-        pub fn deregister(&mut self, _: &crate::Registry) -> io::Result<()> {
-            unsupported_io!("mio zkvm source deregistration backend is not wired yet")
+        pub fn deregister(&mut self, registry: &crate::Registry) -> io::Result<()> {
+            registry.selector().deregister_source(self.source_id)
         }
     }
 
