@@ -254,7 +254,7 @@ impl UdpSocket {
     /// [`std::net::UdpSocket`]: std::net::UdpSocket
     /// [`set_nonblocking`]: fn@std::net::UdpSocket::set_nonblocking
     pub fn into_std(self) -> io::Result<std::net::UdpSocket> {
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, target_os = "zkvm")))]
         {
             use std::os::fd::{FromRawFd, IntoRawFd};
             self.io
@@ -270,6 +270,15 @@ impl UdpSocket {
                 .into_inner()
                 .map(|io| io.into_raw_socket())
                 .map(|raw_socket| unsafe { std::net::UdpSocket::from_raw_socket(raw_socket) })
+        }
+
+        #[cfg(target_os = "zkvm")]
+        {
+            let _ = self;
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "tokio UDP into_std is not wired on zkvm yet",
+            ))
         }
     }
 
@@ -2322,7 +2331,7 @@ impl fmt::Debug for UdpSocket {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "zkvm")))]
 mod sys {
     use super::UdpSocket;
     use std::os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};

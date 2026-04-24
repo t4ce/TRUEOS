@@ -239,14 +239,12 @@ impl Instant {
     }
 }
 
-#[cfg(not(target_os = "zkvm"))]
 impl From<std::time::Instant> for Instant {
     fn from(time: std::time::Instant) -> Instant {
         Instant::from_std(time)
     }
 }
 
-#[cfg(not(target_os = "zkvm"))]
 impl From<Instant> for std::time::Instant {
     fn from(time: Instant) -> std::time::Instant {
         time.into_std()
