@@ -139,7 +139,7 @@ async fn update_command_task(target: MatrixTarget, disk: crate::disc::block::Dev
             return;
         }
 
-        let iso = match crate::z7::extract_single_file_to_vec(payload.as_slice()) {
+        let iso = match crate::z7::extract_file_to_vec(payload.as_slice(), "trueos.iso") {
             Ok(v) => v,
             Err(e) => {
                 log(alloc::format!("update: extract failed ({:?})", e).as_str());

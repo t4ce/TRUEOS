@@ -11,8 +11,8 @@
 //! - Polled packet send/receive
 
 use alloc::boxed::Box;
-use alloc::vec::Vec;
 use alloc::vec;
+use alloc::vec::Vec;
 use core::ptr::{read_volatile, write_volatile};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -36,24 +36,24 @@ fn map_mmio(phys: u64, size: usize) -> Result<u64, &'static str> {
 // RTL8169 Register Offsets
 // ============================================================================
 
-const REG_MAC0: u32       = 0x00;  // MAC address bytes 0-3
-const REG_MAC4: u32       = 0x04;  // MAC address bytes 4-5
-const REG_TNPDS: u32      = 0x20;  // TX Normal Priority Descriptors (lo)
-const REG_TNPDS_HI: u32   = 0x24;  // TX Normal Priority Descriptors (hi)
-const REG_CMD: u32         = 0x37;  // Command register (8-bit)
-const REG_TPPOLL: u32      = 0x38;  // TX Priority Polling (8-bit)
-const REG_IMR: u32         = 0x3C;  // Interrupt Mask Register (16-bit)
-const REG_ISR: u32         = 0x3E;  // Interrupt Status Register (16-bit)
-const REG_TX_CONFIG: u32   = 0x40;  // TX Configuration
-const REG_RX_CONFIG: u32   = 0x44;  // RX Configuration
-const REG_MPC: u32         = 0x4C;  // Missed Packet Counter
-const REG_9346CR: u32      = 0x50;  // 93C46 Command Register (8-bit)
-const REG_CONFIG1: u32     = 0x52;  // Configuration 1
-const REG_PHY_STATUS: u32  = 0x6C;  // PHY Status
-const REG_RX_MAX_SIZE: u32 = 0xDA;  // RX Max Packet Size (16-bit)
-const REG_CPCR: u32        = 0xE0;  // C+ Command Register (16-bit)
-const REG_RDSAR: u32       = 0xE4;  // RX Descriptor Start Address (lo)
-const REG_RDSAR_HI: u32    = 0xE8;  // RX Descriptor Start Address (hi)
+const REG_MAC0: u32 = 0x00; // MAC address bytes 0-3
+const REG_MAC4: u32 = 0x04; // MAC address bytes 4-5
+const REG_TNPDS: u32 = 0x20; // TX Normal Priority Descriptors (lo)
+const REG_TNPDS_HI: u32 = 0x24; // TX Normal Priority Descriptors (hi)
+const REG_CMD: u32 = 0x37; // Command register (8-bit)
+const REG_TPPOLL: u32 = 0x38; // TX Priority Polling (8-bit)
+const REG_IMR: u32 = 0x3C; // Interrupt Mask Register (16-bit)
+const REG_ISR: u32 = 0x3E; // Interrupt Status Register (16-bit)
+const REG_TX_CONFIG: u32 = 0x40; // TX Configuration
+const REG_RX_CONFIG: u32 = 0x44; // RX Configuration
+const REG_MPC: u32 = 0x4C; // Missed Packet Counter
+const REG_9346CR: u32 = 0x50; // 93C46 Command Register (8-bit)
+const REG_CONFIG1: u32 = 0x52; // Configuration 1
+const REG_PHY_STATUS: u32 = 0x6C; // PHY Status
+const REG_RX_MAX_SIZE: u32 = 0xDA; // RX Max Packet Size (16-bit)
+const REG_CPCR: u32 = 0xE0; // C+ Command Register (16-bit)
+const REG_RDSAR: u32 = 0xE4; // RX Descriptor Start Address (lo)
+const REG_RDSAR_HI: u32 = 0xE8; // RX Descriptor Start Address (hi)
 const REG_ETH_TX_EARLY: u32 = 0xEC; // Early TX threshold (8-bit)
 
 // ============================================================================
@@ -66,25 +66,25 @@ const CMD_RX_ENABLE: u8 = 0x08;
 const CMD_TX_ENABLE: u8 = 0x04;
 
 // TPPOLL register (0x38)
-const TPPOLL_NPQ: u8 = 0x40;  // Normal Priority Queue polling
+const TPPOLL_NPQ: u8 = 0x40; // Normal Priority Queue polling
 
 // Interrupt bits (IMR/ISR)
-const INT_ROK: u16 = 0x0001;    // RX OK
-const INT_TOK: u16 = 0x0004;    // TX OK
+const INT_ROK: u16 = 0x0001; // RX OK
+const INT_TOK: u16 = 0x0004; // TX OK
 const INT_LINK_CHG: u16 = 0x0020; // Link change
 const INT_RX_OVERFLOW: u16 = 0x0010;
 const INT_ALL: u16 = INT_ROK | INT_TOK | INT_LINK_CHG | INT_RX_OVERFLOW;
 
 // TX Config
-const TX_CFG_IFG: u32 = 0x03 << 24;  // Inter-frame gap (standard)
+const TX_CFG_IFG: u32 = 0x03 << 24; // Inter-frame gap (standard)
 const TX_CFG_DMA_BURST: u32 = 0x07 << 8; // max DMA burst (unlimited)
 
 // RX Config
-const RX_CFG_AAP: u32 = 1 << 0;   // Accept All Packets
-const RX_CFG_APM: u32 = 1 << 1;   // Accept Physical Match
-const RX_CFG_AM: u32  = 1 << 2;   // Accept Multicast
-const RX_CFG_AB: u32  = 1 << 3;   // Accept Broadcast
-const RX_CFG_WRAP: u32 = 1 << 7;  // No wrap (not used in C+ mode)
+const RX_CFG_AAP: u32 = 1 << 0; // Accept All Packets
+const RX_CFG_APM: u32 = 1 << 1; // Accept Physical Match
+const RX_CFG_AM: u32 = 1 << 2; // Accept Multicast
+const RX_CFG_AB: u32 = 1 << 3; // Accept Broadcast
+const RX_CFG_WRAP: u32 = 1 << 7; // No wrap (not used in C+ mode)
 const RX_CFG_DMA_BURST: u32 = 0x07 << 8; // Max DMA burst
 const RX_CFG_NO_THRESHOLD: u32 = 0x07 << 13; // No FIFO threshold
 
@@ -95,7 +95,7 @@ const CPCR_PCI_MUL_RW: u16 = 1 << 3;
 
 // 93C46 Command Register (unlock/lock config)
 const CFG_9346_UNLOCK: u8 = 0xC0;
-const CFG_9346_LOCK: u8   = 0x00;
+const CFG_9346_LOCK: u8 = 0x00;
 
 // PHY Status register (0x6C)
 const PHY_STATUS_LINK: u32 = 0x02;
@@ -112,10 +112,10 @@ const NUM_TX_DESC: usize = 64;
 const RX_BUFFER_SIZE: usize = 2048;
 
 // Descriptor flags (first u32: opts1)
-const DESC_OWN: u32  = 1 << 31;  // Owned by NIC
-const DESC_EOR: u32  = 1 << 30;  // End of Ring
-const DESC_FS: u32   = 1 << 29;  // First Segment
-const DESC_LS: u32   = 1 << 28;  // Last Segment
+const DESC_OWN: u32 = 1 << 31; // Owned by NIC
+const DESC_EOR: u32 = 1 << 30; // End of Ring
+const DESC_FS: u32 = 1 << 29; // First Segment
+const DESC_LS: u32 = 1 << 28; // Last Segment
 
 /// RTL8169 C+ mode descriptor (16 bytes, 256-byte aligned ring recommended)
 #[repr(C, align(16))]
@@ -196,39 +196,57 @@ impl Rtl8169Driver {
     // ---- MMIO register helpers ----
 
     fn read8(&self, offset: u32) -> u8 {
-        if self.mmio_base == 0 { return 0; }
+        if self.mmio_base == 0 {
+            return 0;
+        }
         let addr = (self.mmio_base + offset as u64) as *const u8;
         unsafe { read_volatile(addr) }
     }
 
     fn write8(&self, offset: u32, val: u8) {
-        if self.mmio_base == 0 { return; }
+        if self.mmio_base == 0 {
+            return;
+        }
         let addr = (self.mmio_base + offset as u64) as *mut u8;
-        unsafe { write_volatile(addr, val); }
+        unsafe {
+            write_volatile(addr, val);
+        }
     }
 
     fn read16(&self, offset: u32) -> u16 {
-        if self.mmio_base == 0 { return 0; }
+        if self.mmio_base == 0 {
+            return 0;
+        }
         let addr = (self.mmio_base + offset as u64) as *const u16;
         unsafe { read_volatile(addr) }
     }
 
     fn write16(&self, offset: u32, val: u16) {
-        if self.mmio_base == 0 { return; }
+        if self.mmio_base == 0 {
+            return;
+        }
         let addr = (self.mmio_base + offset as u64) as *mut u16;
-        unsafe { write_volatile(addr, val); }
+        unsafe {
+            write_volatile(addr, val);
+        }
     }
 
     fn read32(&self, offset: u32) -> u32 {
-        if self.mmio_base == 0 { return 0; }
+        if self.mmio_base == 0 {
+            return 0;
+        }
         let addr = (self.mmio_base + offset as u64) as *const u32;
         unsafe { read_volatile(addr) }
     }
 
     fn write32(&self, offset: u32, val: u32) {
-        if self.mmio_base == 0 { return; }
+        if self.mmio_base == 0 {
+            return;
+        }
         let addr = (self.mmio_base + offset as u64) as *mut u32;
-        unsafe { write_volatile(addr, val); }
+        unsafe {
+            write_volatile(addr, val);
+        }
     }
 
     /// Convert virtual address to physical (HHDM)
@@ -248,7 +266,9 @@ impl Rtl8169Driver {
                 crate::log!("[RTL8169] Reset complete");
                 return;
             }
-            for _ in 0..1000 { core::hint::spin_loop(); }
+            for _ in 0..1000 {
+                core::hint::spin_loop();
+            }
         }
 
         crate::log!("[RTL8169] Reset timeout — continuing anyway");
@@ -419,15 +439,16 @@ impl Driver for Rtl8169Driver {
 
         // Get BAR0 (MMIO)
         let bar0 = pci_device.bar_address(0).ok_or("No BAR0")?;
-        if bar0 == 0 { return Err("BAR0 is zero"); }
+        if bar0 == 0 {
+            return Err("BAR0 is zero");
+        }
 
         // Map MMIO (256 bytes is the standard register space)
         const RTL8169_MMIO_SIZE: usize = 4096;
-        self.mmio_base = map_mmio(bar0, RTL8169_MMIO_SIZE)
-            .map_err(|e| {
-                crate::log!("[RTL8169] map_mmio failed: {}", e);
-                e
-            })?;
+        self.mmio_base = map_mmio(bar0, RTL8169_MMIO_SIZE).map_err(|e| {
+            crate::log!("[RTL8169] map_mmio failed: {}", e);
+            e
+        })?;
 
         crate::log!("[RTL8169] MMIO: phys={:#x} virt={:#x}", bar0, self.mmio_base);
 
@@ -456,8 +477,15 @@ impl Driver for Rtl8169Driver {
         self.initialized.store(true, Ordering::SeqCst);
         self.status = DriverStatus::Running;
 
-        crate::log!("[RTL8169] MAC: {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
-            self.mac[0], self.mac[1], self.mac[2], self.mac[3], self.mac[4], self.mac[5]);
+        crate::log!(
+            "[RTL8169] MAC: {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+            self.mac[0],
+            self.mac[1],
+            self.mac[2],
+            self.mac[3],
+            self.mac[4],
+            self.mac[5]
+        );
 
         Ok(())
     }
@@ -503,20 +531,31 @@ impl NetworkDriver for Rtl8169Driver {
     }
 
     fn link_speed(&self) -> u32 {
-        if self.mmio_base == 0 { return 0; }
+        if self.mmio_base == 0 {
+            return 0;
+        }
         let phy = self.read32(REG_PHY_STATUS);
-        if phy & PHY_STATUS_1000M != 0 { 1000 }
-        else if phy & PHY_STATUS_100M != 0 { 100 }
-        else if phy & PHY_STATUS_10M != 0 { 10 }
-        else { 0 }
+        if phy & PHY_STATUS_1000M != 0 {
+            1000
+        } else if phy & PHY_STATUS_100M != 0 {
+            100
+        } else if phy & PHY_STATUS_10M != 0 {
+            10
+        } else {
+            0
+        }
     }
 
     fn send(&mut self, data: &[u8]) -> Result<(), &'static str> {
         if !self.initialized.load(Ordering::Relaxed) {
             return Err("Driver not initialized");
         }
-        if data.len() > RX_BUFFER_SIZE { return Err("Packet too large"); }
-        if data.len() < 14 { return Err("Packet too small"); }
+        if data.len() > RX_BUFFER_SIZE {
+            return Err("Packet too large");
+        }
+        if data.len() < 14 {
+            return Err("Packet too small");
+        }
 
         let idx = self.tx_cur;
 
@@ -555,13 +594,16 @@ impl NetworkDriver for Rtl8169Driver {
         self.tx_cur = (self.tx_cur + 1) % NUM_TX_DESC;
 
         self.tx_packets.fetch_add(1, Ordering::Relaxed);
-        self.tx_bytes.fetch_add(data.len() as u64, Ordering::Relaxed);
+        self.tx_bytes
+            .fetch_add(data.len() as u64, Ordering::Relaxed);
 
         Ok(())
     }
 
     fn receive(&mut self) -> Option<Vec<u8>> {
-        if !self.initialized.load(Ordering::Relaxed) { return None; }
+        if !self.initialized.load(Ordering::Relaxed) {
+            return None;
+        }
 
         let idx = self.rx_cur;
         let opts1 = self.rx_descs[idx].opts1;
@@ -606,7 +648,9 @@ impl NetworkDriver for Rtl8169Driver {
     }
 
     fn poll(&mut self) {
-        if !self.initialized.load(Ordering::Relaxed) { return; }
+        if !self.initialized.load(Ordering::Relaxed) {
+            return;
+        }
 
         // Read and acknowledge interrupt status
         let isr = self.read16(REG_ISR);
@@ -617,7 +661,8 @@ impl NetworkDriver for Rtl8169Driver {
         // Update link status on link change
         if isr & INT_LINK_CHG != 0 {
             let phy = self.read32(REG_PHY_STATUS);
-            self.link_up.store(phy & PHY_STATUS_LINK != 0, Ordering::SeqCst);
+            self.link_up
+                .store(phy & PHY_STATUS_LINK != 0, Ordering::SeqCst);
         }
     }
 
@@ -635,7 +680,9 @@ impl NetworkDriver for Rtl8169Driver {
     }
 
     fn set_promiscuous(&mut self, enabled: bool) -> Result<(), &'static str> {
-        if !self.initialized.load(Ordering::Relaxed) { return Err("Not initialized"); }
+        if !self.initialized.load(Ordering::Relaxed) {
+            return Err("Not initialized");
+        }
         let mut rxcfg = self.read32(REG_RX_CONFIG);
         if enabled {
             rxcfg |= RX_CFG_AAP; // Accept all packets
@@ -670,10 +717,10 @@ const DRIVER_INFO: DriverInfo = DriverInfo {
     author: "TrustOS Team",
     category: DriverCategory::Network,
     vendor_ids: &[
-        (0x10EC, 0x8169),  // RTL8169
-        (0x10EC, 0x8168),  // RTL8168/8111
-        (0x10EC, 0x8161),  // RTL8169SC
-        (0x10EC, 0x8136),  // RTL8101E/8102E
+        (0x10EC, 0x8169), // RTL8169
+        (0x10EC, 0x8168), // RTL8168/8111
+        (0x10EC, 0x8161), // RTL8169SC
+        (0x10EC, 0x8136), // RTL8101E/8102E
     ],
 };
 

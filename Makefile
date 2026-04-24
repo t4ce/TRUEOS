@@ -1,15 +1,20 @@
 BUILD_MODE ?= debug
 KERNEL_BIN = tgt/86_64/$(BUILD_MODE)/TRUEOS
 ARTIFACT_BUILD_ID ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
-ARTIFACT_DIR := bld/artifacts/$(BUILD_MODE)-$(ARTIFACT_BUILD_ID)
-ARTIFACT_FULL_ELF := $(ARTIFACT_DIR)/TRUEOS.full.elf
-ARTIFACT_RUNTIME_ELF := $(ARTIFACT_DIR)/TRUEOS.elf
-ARTIFACT_BUILD_INFO := $(ARTIFACT_DIR)/BUILD_INFO
+ARTIFACT_DIR = bld/artifacts/$(BUILD_MODE)-$(ARTIFACT_BUILD_ID)
+ARTIFACT_FULL_ELF = $(ARTIFACT_DIR)/TRUEOS.full.elf
+ARTIFACT_RUNTIME_ELF = $(ARTIFACT_DIR)/TRUEOS.elf
+ARTIFACT_BUILD_INFO = $(ARTIFACT_DIR)/BUILD_INFO
 ISO_DIR := bld
 ISO_PATH := bld/trueos.iso
 ISO_BOOT_DIR := bld/iso-bootroot
 ISO_EFI_IMG := efi.img
 UPDATE_7Z_FLAGS ?= -mx=9 -m0=LZMA2 -ms=off
+RELEASE_BUNDLE_DIR := $(ISO_DIR)/trueos-release
+RELEASE_ARCHIVE := $(ISO_DIR)/TrueOS.7z
+BUNDLED_OVMF_NAME := ovmf-code-x86_64.fd
+OVMF_BUNDLE_PATH ?= $(firstword $(wildcard /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd /opt/homebrew/share/qemu/edk2-x86_64-code.fd /usr/local/share/qemu/edk2-x86_64-code.fd))
+OVMF_LICENSE_PATH ?= $(firstword $(wildcard /usr/share/doc/ovmf/copyright /opt/homebrew/share/doc/qemu/LICENSE /usr/local/share/doc/qemu/LICENSE))
 # Extra slack added on top of the staged EFI payload when sizing the embedded
 # EFI System Partition image. This keeps the image close to minimal while
 # leaving room for FAT metadata and small growth in embedded artifacts.
@@ -30,11 +35,11 @@ BP_ISO_DIR_REL ?= EFI/BOOT/apps
 # Set BP_SKIP_BUILD to 1 to reuse existing dist/*.bp files.
 # Set BP_SKIP_EMBED to 1 to omit blueprints from the ISO.
 # Set both to 1 to stop both blueprint build and embedding.
-BP_SKIP_BUILD := 1
-BP_SKIP_EMBED := 1
+BP_SKIP_BUILD := 0
+BP_SKIP_EMBED := 0
 QEMU_ENV = env -i HOME="$(HOME)" PATH="/usr/bin:/bin" TERM="$${TERM:-xterm}" LANG="$${LANG:-C.UTF-8}" DISPLAY="$${DISPLAY:-}" WAYLAND_DISPLAY="$${WAYLAND_DISPLAY:-}" XDG_RUNTIME_DIR="$${XDG_RUNTIME_DIR:-}" XAUTHORITY="$${XAUTHORITY:-}"
 QEMU_BIN = $(QEMU_ENV) qemu-system-x86_64 -no-shutdown
-QEMU_UEFI_FIRMWARE = $(firstword $(wildcard /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd))
+QEMU_UEFI_FIRMWARE = $(OVMF_BUNDLE_PATH)
 comma := ,
 QEMU_VHOST ?= off
 QEMU_BRIDGE ?= br0
@@ -225,10 +230,26 @@ iso: artifacts images
 iso-release: BUILD_MODE := release
 iso-release: CARGO_BUILD_FLAGS += --release
 iso-release: iso
-	rm -f $(ISO_DIR)/TrueOS.7z
-	cd $(ISO_DIR) && 7z a -t7z $(UPDATE_7Z_FLAGS) TrueOS.7z $(notdir $(ISO_PATH))
+	@if [ -z "$(OVMF_BUNDLE_PATH)" ] || [ ! -f "$(OVMF_BUNDLE_PATH)" ]; then \
+		echo "error: no OVMF firmware found to bundle"; \
+		echo "       install OVMF/edk2-ovmf or run: make iso-release OVMF_BUNDLE_PATH=/path/to/ovmf-code-x86_64.fd"; \
+		exit 1; \
+	fi
+	rm -rf $(RELEASE_BUNDLE_DIR)
+	rm -f $(RELEASE_ARCHIVE)
+	mkdir -p $(RELEASE_BUNDLE_DIR)
+	cp $(ISO_PATH) $(RELEASE_BUNDLE_DIR)/trueos.iso
+	cp "$(OVMF_BUNDLE_PATH)" $(RELEASE_BUNDLE_DIR)/$(BUNDLED_OVMF_NAME)
+	cp tools/release/run-linux.sh $(RELEASE_BUNDLE_DIR)/run-linux.sh
+	cp tools/release/run-macos.sh $(RELEASE_BUNDLE_DIR)/run-macos.sh
+	cp tools/release/README-RUN.txt $(RELEASE_BUNDLE_DIR)/README-RUN.txt
+	@if [ -n "$(OVMF_LICENSE_PATH)" ] && [ -f "$(OVMF_LICENSE_PATH)" ]; then \
+		cp "$(OVMF_LICENSE_PATH)" $(RELEASE_BUNDLE_DIR)/OVMF-LICENSE.txt; \
+	fi
+	chmod +x $(RELEASE_BUNDLE_DIR)/run-linux.sh $(RELEASE_BUNDLE_DIR)/run-macos.sh
+	cd $(RELEASE_BUNDLE_DIR) && 7z a -t7z $(UPDATE_7Z_FLAGS) ../$(notdir $(RELEASE_ARCHIVE)) trueos.iso $(BUNDLED_OVMF_NAME) run-linux.sh run-macos.sh README-RUN.txt $$(test -f OVMF-LICENSE.txt && printf '%s' OVMF-LICENSE.txt)
 	env -u GIO_MODULE_DIR gio mount smb://t4ce@pdjb/home-share || true
-	env -u GIO_MODULE_DIR gio copy $(ISO_DIR)/TrueOS.7z smb://t4ce@pdjb/home-share/TRUEOS_SITE/
+	env -u GIO_MODULE_DIR gio copy $(RELEASE_ARCHIVE) smb://t4ce@pdjb/home-share/TRUEOS_SITE/
 	@count=$$(cat cnt 2>/dev/null || echo 0); count=$${count:-0}; printf '%s\n' $$((count + 1)) | tee cnt
 
 iso-debug: BUILD_MODE := debug

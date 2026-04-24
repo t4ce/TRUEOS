@@ -16,15 +16,15 @@
 //! Reference: Intel iwlwifi driver (Linux), iwl4965 datasheet
 
 use alloc::boxed::Box;
-use alloc::string::String;
-use alloc::vec::Vec;
-use alloc::vec;
 use alloc::format;
+use alloc::string::String;
+use alloc::vec;
+use alloc::vec::Vec;
 use core::ptr::{read_volatile, write_volatile};
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use super::wifi::{WifiDriver, WifiNetwork, WifiSecurity, WifiState};
-use super::{Driver, DriverCategory, DriverInfo, DriverStatus, NetworkDriver, NetStats};
+use super::{Driver, DriverCategory, DriverInfo, DriverStatus, NetStats, NetworkDriver};
 use crate::pci::PciDevice;
 
 #[inline]
@@ -63,65 +63,65 @@ pub const IWL4965_DEVICE_IDS: &[u16] = &[
 
 /// Also support later Intel WiFi cards that may appear on other ThinkPads
 const IWL_SUPPORTED_IDS: &[u16] = &[
-    0x4229, 0x4230,         // 4965AGN / AG
+    0x4229, 0x4230, // 4965AGN / AG
     0x4232, 0x4235, 0x4236, // WiFi Link 5100/5300
     0x4237, 0x4238, 0x4239, // WiFi Link 5150
-    0x008A, 0x008B,         // Centrino Wireless-N 100/130
+    0x008A, 0x008B, // Centrino Wireless-N 100/130
     0x0082, 0x0083, 0x0084, // Centrino Advanced-N 6205
-    0x0085, 0x0089,         // Centrino Advanced-N 6235
-    0x0887, 0x0888,         // Centrino Wireless-N 2230
-    0x0890, 0x0891,         // Centrino Wireless-N 2200
-    0x0893, 0x0894,         // WiFi Link 6150
-    0x088E, 0x088F,         // Centrino Advanced-N 6235
-    0x24F3, 0x24F4,         // Wireless 8260
-    0x2526,                 // Wireless-AC 9260
-    0x2723,                 // WiFi 6 AX200
-    0x2725,                 // WiFi 6E AX210
-    0x7A70,                 // WiFi 7 BE200
+    0x0085, 0x0089, // Centrino Advanced-N 6235
+    0x0887, 0x0888, // Centrino Wireless-N 2230
+    0x0890, 0x0891, // Centrino Wireless-N 2200
+    0x0893, 0x0894, // WiFi Link 6150
+    0x088E, 0x088F, // Centrino Advanced-N 6235
+    0x24F3, 0x24F4, // Wireless 8260
+    0x2526, // Wireless-AC 9260
+    0x2723, // WiFi 6 AX200
+    0x2725, // WiFi 6E AX210
+    0x7A70, // WiFi 7 BE200
 ];
 
 // ============================================================================
 // CSR (Control/Status Registers) — offset from BAR0
 // ============================================================================
 
-const CSR_HW_IF_CONFIG:   u32 = 0x000;
+const CSR_HW_IF_CONFIG: u32 = 0x000;
 const CSR_INT_COALESCING: u32 = 0x004;
-const CSR_INT:            u32 = 0x008;
-const CSR_INT_MASK:       u32 = 0x00C;
-const CSR_FH_INT_STATUS:  u32 = 0x010;
-const CSR_GPIO_IN:        u32 = 0x018;
-const CSR_RESET:          u32 = 0x020;
-const CSR_GP_CNTRL:       u32 = 0x024;
-const CSR_HW_REV:         u32 = 0x028;
-const CSR_EEPROM_REG:     u32 = 0x02C;
-const CSR_EEPROM_GP:      u32 = 0x030;
-const CSR_UCODE_DRV_GP1:      u32 = 0x054;
-const CSR_UCODE_DRV_GP1_SET:  u32 = 0x058;
-const CSR_UCODE_DRV_GP1_CLR:  u32 = 0x05C;
-const CSR_UCODE_DRV_GP2:      u32 = 0x060;
-const CSR_GIO_REG:            u32 = 0x03C;
-const CSR_GP_UCODE:       u32 = 0x048;
-const CSR_GP_DRIVER:      u32 = 0x050;
+const CSR_INT: u32 = 0x008;
+const CSR_INT_MASK: u32 = 0x00C;
+const CSR_FH_INT_STATUS: u32 = 0x010;
+const CSR_GPIO_IN: u32 = 0x018;
+const CSR_RESET: u32 = 0x020;
+const CSR_GP_CNTRL: u32 = 0x024;
+const CSR_HW_REV: u32 = 0x028;
+const CSR_EEPROM_REG: u32 = 0x02C;
+const CSR_EEPROM_GP: u32 = 0x030;
+const CSR_UCODE_DRV_GP1: u32 = 0x054;
+const CSR_UCODE_DRV_GP1_SET: u32 = 0x058;
+const CSR_UCODE_DRV_GP1_CLR: u32 = 0x05C;
+const CSR_UCODE_DRV_GP2: u32 = 0x060;
+const CSR_GIO_REG: u32 = 0x03C;
+const CSR_GP_UCODE: u32 = 0x048;
+const CSR_GP_DRIVER: u32 = 0x050;
 
 // GP_CNTRL bits
 const CSR_GP_CNTRL_REG_FLAG_MAC_CLOCK_READY: u32 = 1 << 0;
-const CSR_GP_CNTRL_REG_FLAG_INIT_DONE:       u32 = 1 << 2;
-const CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ:  u32 = 1 << 3;
-const CSR_GP_CNTRL_REG_FLAG_GOING_TO_SLEEP:  u32 = 1 << 4;
-const CSR_GP_CNTRL_REG_VAL_MAC_ACCESS_EN:    u32 = 1 << 0;  // Same as MAC_CLOCK_READY per Linux iwlegacy
-const CSR_GP_CNTRL_REG_FLAG_XTAL_ON:         u32 = 1 << 10;
+const CSR_GP_CNTRL_REG_FLAG_INIT_DONE: u32 = 1 << 2;
+const CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ: u32 = 1 << 3;
+const CSR_GP_CNTRL_REG_FLAG_GOING_TO_SLEEP: u32 = 1 << 4;
+const CSR_GP_CNTRL_REG_VAL_MAC_ACCESS_EN: u32 = 1 << 0; // Same as MAC_CLOCK_READY per Linux iwlegacy
+const CSR_GP_CNTRL_REG_FLAG_XTAL_ON: u32 = 1 << 10;
 
 // RESET bits
-const CSR_RESET_REG_FLAG_NEVO_RESET:   u32 = 1 << 0;
-const CSR_RESET_REG_FLAG_FORCE_NMI:    u32 = 1 << 1;
-const CSR_RESET_REG_FLAG_SW_RESET:     u32 = 1 << 7;
+const CSR_RESET_REG_FLAG_NEVO_RESET: u32 = 1 << 0;
+const CSR_RESET_REG_FLAG_FORCE_NMI: u32 = 1 << 1;
+const CSR_RESET_REG_FLAG_SW_RESET: u32 = 1 << 7;
 const CSR_RESET_REG_FLAG_MASTER_DISABLED: u32 = 1 << 8;
-const CSR_RESET_REG_FLAG_STOP_MASTER:  u32 = 1 << 9;
+const CSR_RESET_REG_FLAG_STOP_MASTER: u32 = 1 << 9;
 
 // EEPROM access
-const CSR_EEPROM_REG_READ_VALID_MSK:  u32 = 1 << 0;
-const CSR_EEPROM_REG_BIT_CMD:         u32 = 1 << 1;
-const CSR_EEPROM_REG_MSK_ADDR:        u32 = 0x0000FFFC;
+const CSR_EEPROM_REG_READ_VALID_MSK: u32 = 1 << 0;
+const CSR_EEPROM_REG_BIT_CMD: u32 = 1 << 1;
+const CSR_EEPROM_REG_MSK_ADDR: u32 = 0x0000FFFC;
 
 // HW revision
 const CSR_HW_REV_TYPE_MSK: u32 = 0x000FFF0;
@@ -135,58 +135,58 @@ const CSR_HW_REV_TYPE_6000: u32 = 0x0000070;
 // BSM (Bootstrap State Machine) Registers — firmware loading
 // ============================================================================
 
-const BSM_WR_CTRL_REG:        u32 = 0x3400;
-const BSM_WR_MEM_SRC_REG:     u32 = 0x3404;
-const BSM_WR_MEM_DST_REG:     u32 = 0x3408;
-const BSM_WR_DWCOUNT_REG:     u32 = 0x340C;
-const BSM_DRAM_INST_PTR_REG:  u32 = 0x3490;
+const BSM_WR_CTRL_REG: u32 = 0x3400;
+const BSM_WR_MEM_SRC_REG: u32 = 0x3404;
+const BSM_WR_MEM_DST_REG: u32 = 0x3408;
+const BSM_WR_DWCOUNT_REG: u32 = 0x340C;
+const BSM_DRAM_INST_PTR_REG: u32 = 0x3490;
 const BSM_DRAM_INST_BYTECOUNT_REG: u32 = 0x3494;
-const BSM_DRAM_DATA_PTR_REG:  u32 = 0x3498;
+const BSM_DRAM_DATA_PTR_REG: u32 = 0x3498;
 const BSM_DRAM_DATA_BYTECOUNT_REG: u32 = 0x349C;
 
 // BSM_WR_CTRL bits
-const BSM_WR_CTRL_START:     u32 = 1 << 31;
-const BSM_WR_CTRL_START_EN:  u32 = 1 << 30;
+const BSM_WR_CTRL_START: u32 = 1 << 31;
+const BSM_WR_CTRL_START_EN: u32 = 1 << 30;
 
 // ============================================================================
 // FH (Frame Handler) Registers — DMA TX/RX
 // ============================================================================
 
 /// Base of TX channel configuration registers
-const FH_TCSR_BASE:           u32 = 0x1D00;
-const FH_TCSR_CHNL_OFFSET:   u32 = 0x20;
+const FH_TCSR_BASE: u32 = 0x1D00;
+const FH_TCSR_CHNL_OFFSET: u32 = 0x20;
 /// Service channel (firmware loading)
-const FH_SRVC_CHNL:           u32 = 9;
+const FH_SRVC_CHNL: u32 = 9;
 /// TX config register flags
 const FH_TCSR_TX_CONFIG_REG_VAL_DMA_CHNL_ENABLE: u32 = 0x80000000;
 
 /// RX configuration
-const FH_MEM_RCSR_CHNL0:     u32 = 0x1F40;
+const FH_MEM_RCSR_CHNL0: u32 = 0x1F40;
 /// RX status
-const FH_RSSR_STATUS:         u32 = 0x1C44;
+const FH_RSSR_STATUS: u32 = 0x1C44;
 /// RX write pointer
-const FH_RSCSR_CHNL0_WPTR:   u32 = 0x1BC0;
+const FH_RSCSR_CHNL0_WPTR: u32 = 0x1BC0;
 
 /// Number of RX buffers
-const RX_QUEUE_SIZE:          usize = 256;
+const RX_QUEUE_SIZE: usize = 256;
 /// Number of TX descriptors
-const TX_QUEUE_SIZE:          usize = 256;
+const TX_QUEUE_SIZE: usize = 256;
 /// RX buffer size
-const RX_BUF_SIZE:            usize = 4096;
+const RX_BUF_SIZE: usize = 4096;
 
 // ============================================================================
 // HCMD (Host Command) IDs — sent to firmware
 // ============================================================================
 
-const REPLY_ALIVE:            u8 = 0x01;
-const REPLY_ERROR:            u8 = 0x02;
-const REPLY_RXON:             u8 = 0x10;
-const REPLY_RXON_ASSOC:       u8 = 0x11;
-const REPLY_QOS_PARAM:        u8 = 0x13;
-const REPLY_SCAN_CMD:         u8 = 0x80;
-const REPLY_SCAN_COMPLETE:    u8 = 0x84;
-const REPLY_TX:               u8 = 0x1C;
-const REPLY_ADD_STA:          u8 = 0x18;
+const REPLY_ALIVE: u8 = 0x01;
+const REPLY_ERROR: u8 = 0x02;
+const REPLY_RXON: u8 = 0x10;
+const REPLY_RXON_ASSOC: u8 = 0x11;
+const REPLY_QOS_PARAM: u8 = 0x13;
+const REPLY_SCAN_CMD: u8 = 0x80;
+const REPLY_SCAN_COMPLETE: u8 = 0x84;
+const REPLY_TX: u8 = 0x1C;
+const REPLY_ADD_STA: u8 = 0x18;
 
 /// Firmware notification: scan results
 const SCAN_RESULTS_NOTIFICATION: u8 = 0x83;
@@ -199,11 +199,11 @@ const SCAN_RESULTS_NOTIFICATION: u8 = 0x83;
 #[repr(C, packed)]
 struct IwlUcodeHeader {
     ver: u32,
-    inst_size: u32,     // Runtime instruction size
-    data_size: u32,     // Runtime data size
-    init_size: u32,     // Init instruction size
+    inst_size: u32,      // Runtime instruction size
+    data_size: u32,      // Runtime data size
+    init_size: u32,      // Init instruction size
     init_data_size: u32, // Init data size
-    boot_size: u32,     // Bootstrap size
+    boot_size: u32,      // Bootstrap size
 }
 
 /// Parsed firmware sections
@@ -258,19 +258,19 @@ const FH_RCSR_CHNL0_CONFIG_REG: u32 = 0x1F48;
 /// These registers handle the RX buffer ring and status DMA between device and host
 /// RSCSR registers (RX Scheduler/Status) — 0x1BC0 base
 /// Source: Linux iwlegacy FH49_MEM_RSCSR_LOWER_BOUND = 0x1BC0
-const FH_RSCSR_CHNL0_RBDCB_WPTR_REG: u32  = 0x1BC0;  // +0x00: free-buffer write ptr (host tells NIC how many bufs)
-const FH_RSCSR_CHNL0_RBDCB_BASE_REG: u32  = 0x1BC4;  // +0x04: RBD ring phys base (value >> 8)
-const FH_RSCSR_CHNL0_STTS_WPTR_REG: u32   = 0x1BC8;  // +0x08: status/closed_rb DMA target (value >> 4)
+const FH_RSCSR_CHNL0_RBDCB_WPTR_REG: u32 = 0x1BC0; // +0x00: free-buffer write ptr (host tells NIC how many bufs)
+const FH_RSCSR_CHNL0_RBDCB_BASE_REG: u32 = 0x1BC4; // +0x04: RBD ring phys base (value >> 8)
+const FH_RSCSR_CHNL0_STTS_WPTR_REG: u32 = 0x1BC8; // +0x08: status/closed_rb DMA target (value >> 4)
 
 /// FH RCSR — RX DMA channel config (0x1F40 base for iwl4965)
-const FH_MEM_RCSR_CHNL0_RBDCB_WPTR: u32   = 0x1F80;  // RCSR write pointer (reset to 0 before init)
+const FH_MEM_RCSR_CHNL0_RBDCB_WPTR: u32 = 0x1F80; // RCSR write pointer (reset to 0 before init)
 
 /// FH RX config bits
-const FH_RCSR_RX_CONFIG_REG_VAL_DMA_CHNL_EN: u32  = 0x8000_0000;
-const FH_RCSR_RX_CONFIG_REG_VAL_IRQ_DEST_INT: u32  = 0x0100_0000;
-const FH_RCSR_RX_CONFIG_REG_VAL_RB_SIZE_4K: u32    = 0x0000_0000;
-const FH_RCSR_RX_CONFIG_REG_VAL_SINGLE_FRAME: u32  = 0x0000_8000;
-const FH_RCSR_RX_CONFIG_RBDCB_SIZE_POS: u32        = 20;  // position of log2(queue_size)
+const FH_RCSR_RX_CONFIG_REG_VAL_DMA_CHNL_EN: u32 = 0x8000_0000;
+const FH_RCSR_RX_CONFIG_REG_VAL_IRQ_DEST_INT: u32 = 0x0100_0000;
+const FH_RCSR_RX_CONFIG_REG_VAL_RB_SIZE_4K: u32 = 0x0000_0000;
+const FH_RCSR_RX_CONFIG_REG_VAL_SINGLE_FRAME: u32 = 0x0000_8000;
+const FH_RCSR_RX_CONFIG_RBDCB_SIZE_POS: u32 = 20; // position of log2(queue_size)
 
 // ============================================================================
 // HBUS Registers (Host-side Bus) — base 0x400 in BAR0
@@ -279,14 +279,14 @@ const FH_RCSR_RX_CONFIG_RBDCB_SIZE_POS: u32        = 20;  // position of log2(qu
 /// HBUS target memory access (for direct SRAM writes)
 const HBUS_TARG_MEM_RADDR: u32 = 0x40C;
 const HBUS_TARG_MEM_WADDR: u32 = 0x410;
-const HBUS_TARG_MEM_WDAT:  u32 = 0x418;
-const HBUS_TARG_MEM_RDAT:  u32 = 0x41C;
+const HBUS_TARG_MEM_WDAT: u32 = 0x418;
+const HBUS_TARG_MEM_RDAT: u32 = 0x41C;
 
 /// HBUS peripheral register access (indirect to PRPH bus)
 const HBUS_TARG_PRPH_WADDR: u32 = 0x444;
 const HBUS_TARG_PRPH_RADDR: u32 = 0x448;
-const HBUS_TARG_PRPH_WDAT:  u32 = 0x44C;
-const HBUS_TARG_PRPH_RDAT:  u32 = 0x450;
+const HBUS_TARG_PRPH_WDAT: u32 = 0x44C;
+const HBUS_TARG_PRPH_RDAT: u32 = 0x450;
 
 /// TX write pointer doorbell
 const HBUS_TARG_WRPTR: u32 = 0x460;
@@ -295,10 +295,10 @@ const HBUS_TARG_WRPTR: u32 = 0x460;
 // APMG (Advanced Power Management) — PRPH bus registers
 // ============================================================================
 
-const APMG_CLK_CTRL_REG:   u32 = 0x3000;
-const APMG_CLK_EN_REG:     u32 = 0x3004;
-const APMG_CLK_DIS_REG:    u32 = 0x3008;
-const APMG_PS_CTRL_REG:    u32 = 0x300C;
+const APMG_CLK_CTRL_REG: u32 = 0x3000;
+const APMG_CLK_EN_REG: u32 = 0x3004;
+const APMG_CLK_DIS_REG: u32 = 0x3008;
+const APMG_PS_CTRL_REG: u32 = 0x300C;
 const APMG_PCIDEV_STT_REG: u32 = 0x3010;
 
 const APMG_CLK_VAL_DMA_CLK_RQT: u32 = 0x0000_0200;
@@ -354,14 +354,14 @@ impl IwlTfd {
             __pad: 0,
         }
     }
-    
+
     fn num_tbs(&self) -> usize {
         // TBS count is stored in the reserved area for 4965
         let ptr = self.__reserved.as_ptr() as *const u32;
         let val = unsafe { core::ptr::read_unaligned(ptr) };
         (val & 0x1F) as usize
     }
-    
+
     fn set_num_tbs(&mut self, count: usize) {
         let ptr = self.__reserved.as_mut_ptr() as *mut u32;
         unsafe { core::ptr::write_unaligned(ptr, (count & 0x1F) as u32) };
@@ -374,8 +374,8 @@ impl IwlTfd {
 struct IwlCmdHeader {
     cmd: u8,
     flags: u8,
-    idx: u8,     // index of this command in the queue
-    qid: u8,     // queue ID (always IWL_CMD_QUEUE_NUM for HCMD)
+    idx: u8, // index of this command in the queue
+    qid: u8, // queue ID (always IWL_CMD_QUEUE_NUM for HCMD)
 }
 
 /// Maximum HCMD payload size (excluding header)
@@ -398,13 +398,13 @@ impl TxQueue {
     fn new() -> Self {
         let mut tfds = Vec::with_capacity(TFD_QUEUE_SIZE);
         tfds.resize(TFD_QUEUE_SIZE, IwlTfd::zeroed());
-        
+
         let mut cmd_buffers = Vec::with_capacity(TFD_QUEUE_SIZE);
         for _ in 0..TFD_QUEUE_SIZE {
             // Pre-allocate command buffers (4+MAX_CMD_SIZE bytes each)
             cmd_buffers.push(vec![0u8; 4 + MAX_CMD_SIZE]);
         }
-        
+
         Self {
             tfds,
             cmd_buffers,
@@ -412,7 +412,7 @@ impl TxQueue {
             read_ptr: 0,
         }
     }
-    
+
     fn tfd_phys_base(&self) -> u64 {
         let virt = self.tfds.as_ptr() as u64;
         phys_addr_of(virt)
@@ -422,7 +422,7 @@ impl TxQueue {
 /// RX Queue state
 struct RxQueue {
     /// Ring of physical addresses for RX buffers (device reads these)
-    bd: Vec<u32>,  // Buffer Descriptor: physical address (low 32 bits, 4K aligned)
+    bd: Vec<u32>, // Buffer Descriptor: physical address (low 32 bits, 4K aligned)
     /// Actual RX buffers (4KB each)
     buffers: Vec<Vec<u8>>,
     /// Shared status area — device writes the current write pointer here via DMA
@@ -438,7 +438,7 @@ impl RxQueue {
     fn new() -> Self {
         let mut bd = Vec::with_capacity(RX_QUEUE_SIZE);
         let mut buffers = Vec::with_capacity(RX_QUEUE_SIZE);
-        
+
         for _ in 0..RX_QUEUE_SIZE {
             let buf = vec![0u8; RX_BUF_SIZE];
             let virt = buf.as_ptr() as u64;
@@ -450,7 +450,7 @@ impl RxQueue {
 
         // 16-byte aligned status area for device to DMA write pointer into
         let rb_stts = vec![0u8; 16];
-        
+
         Self {
             bd,
             buffers,
@@ -459,7 +459,7 @@ impl RxQueue {
             read_ptr: 0,
         }
     }
-    
+
     fn bd_phys_base(&self) -> u64 {
         let virt = self.bd.as_ptr() as u64;
         phys_addr_of(virt)
@@ -471,7 +471,7 @@ impl RxQueue {
 // ============================================================================
 
 const EEPROM_MAC_ADDRESS: u16 = 0x0015;
-const EEPROM_SKU_CAP:     u16 = 0x0045;
+const EEPROM_SKU_CAP: u16 = 0x0045;
 const EEPROM_CHANNELS_2G: u16 = 0x0062; // 2.4 GHz channel data start
 const EEPROM_CHANNELS_5G: u16 = 0x0080; // 5 GHz channel data start
 
@@ -486,8 +486,8 @@ const IEEE80211_STYPE_PROBE_RESP: u16 = 0x0050;
 // Information Element IDs
 const WLAN_EID_SSID: u8 = 0;
 const WLAN_EID_DS_PARAMS: u8 = 3;
-const WLAN_EID_RSN: u8 = 48;        // WPA2
-const WLAN_EID_VENDOR: u8 = 221;    // WPA (via Microsoft OUI)
+const WLAN_EID_RSN: u8 = 48; // WPA2
+const WLAN_EID_VENDOR: u8 = 221; // WPA (via Microsoft OUI)
 
 // ============================================================================
 // Driver State
@@ -579,7 +579,9 @@ impl Iwl4965 {
 
     #[inline]
     fn read_reg(&self, offset: u32) -> u32 {
-        if self.mmio_base == 0 { return 0; }
+        if self.mmio_base == 0 {
+            return 0;
+        }
         unsafe {
             let ptr = (self.mmio_base + offset as usize) as *const u32;
             read_volatile(ptr)
@@ -588,7 +590,9 @@ impl Iwl4965 {
 
     #[inline]
     fn write_reg(&self, offset: u32, value: u32) {
-        if self.mmio_base == 0 { return; }
+        if self.mmio_base == 0 {
+            return;
+        }
         unsafe {
             let ptr = (self.mmio_base + offset as usize) as *mut u32;
             write_volatile(ptr, value);
@@ -600,22 +604,28 @@ impl Iwl4965 {
     /// Must be called before any PRPH or SRAM access. Returns true if granted.
     fn grab_nic_access(&self) -> bool {
         // Request MAC access
-        self.write_reg(CSR_GP_CNTRL,
-            self.read_reg(CSR_GP_CNTRL) | CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ);
+        self.write_reg(
+            CSR_GP_CNTRL,
+            self.read_reg(CSR_GP_CNTRL) | CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ,
+        );
         // Wait up to ~5ms (5000 * ~1us IO port delay)
         for _ in 0..5000u32 {
             if self.read_reg(CSR_GP_CNTRL) & CSR_GP_CNTRL_REG_VAL_MAC_ACCESS_EN != 0 {
                 return true;
             }
-            unsafe { core::arch::asm!("out dx, al", in("dx") 0x80u16, in("al") 0u8, options(nomem, nostack)); }
+            unsafe {
+                core::arch::asm!("out dx, al", in("dx") 0x80u16, in("al") 0u8, options(nomem, nostack));
+            }
         }
         false
     }
 
     /// Release NIC access — clear MAC_ACCESS_REQ
     fn release_nic_access(&self) {
-        self.write_reg(CSR_GP_CNTRL,
-            self.read_reg(CSR_GP_CNTRL) & !CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ);
+        self.write_reg(
+            CSR_GP_CNTRL,
+            self.read_reg(CSR_GP_CNTRL) & !CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ,
+        );
     }
 
     fn write_prph(&self, addr: u32, val: u32) {
@@ -668,12 +678,17 @@ impl Iwl4965 {
         self.mmio_size = 0x2000; // 8KB
 
         // Map the MMIO region into virtual address space via HHDM
-        let virt_addr = map_mmio(phys_addr, self.mmio_size)
-            .map_err(|_| "Failed to map BAR0 MMIO region")?;
+        let virt_addr =
+            map_mmio(phys_addr, self.mmio_size).map_err(|_| "Failed to map BAR0 MMIO region")?;
 
         self.mmio_base = virt_addr as usize;
 
-        crate::log!("[IWL4965] MMIO phys: {:#X} -> virt: {:#X}, size: {:#X}", phys_addr, virt_addr, self.mmio_size);
+        crate::log!(
+            "[IWL4965] MMIO phys: {:#X} -> virt: {:#X}, size: {:#X}",
+            phys_addr,
+            virt_addr,
+            self.mmio_size
+        );
 
         Ok(())
     }
@@ -684,7 +699,9 @@ impl Iwl4965 {
         self.write_reg(CSR_RESET, CSR_RESET_REG_FLAG_SW_RESET);
         // Wait ~10ms for reset to take effect (port 0x80 ~1us each)
         for _ in 0..10_000 {
-            unsafe { core::arch::asm!("out dx, al", in("dx") 0x80u16, in("al") 0u8, options(nomem, nostack)); }
+            unsafe {
+                core::arch::asm!("out dx, al", in("dx") 0x80u16, in("al") 0u8, options(nomem, nostack));
+            }
         }
 
         // Clear INIT_DONE — let APM shut down completely
@@ -692,40 +709,53 @@ impl Iwl4965 {
         self.write_reg(CSR_GP_CNTRL, gp & !CSR_GP_CNTRL_REG_FLAG_INIT_DONE);
         // Wait ~10ms
         for _ in 0..10_000 {
-            unsafe { core::arch::asm!("out dx, al", in("dx") 0x80u16, in("al") 0u8, options(nomem, nostack)); }
+            unsafe {
+                core::arch::asm!("out dx, al", in("dx") 0x80u16, in("al") 0u8, options(nomem, nostack));
+            }
         }
     }
 
     /// APM init — bring NIC from D0U (uninitialized) to D0A (active)
     fn apm_init(&self) -> Result<(), &'static str> {
         // 1. Set NIC ready (required after any reset)
-        self.write_reg(CSR_HW_IF_CONFIG,
-            self.read_reg(CSR_HW_IF_CONFIG) | CSR_HW_IF_CONFIG_REG_BIT_NIC_READY);
+        self.write_reg(
+            CSR_HW_IF_CONFIG,
+            self.read_reg(CSR_HW_IF_CONFIG) | CSR_HW_IF_CONFIG_REG_BIT_NIC_READY,
+        );
         for _ in 0..5000u32 {
             if self.read_reg(CSR_HW_IF_CONFIG) & CSR_HW_IF_CONFIG_REG_BIT_NIC_READY != 0 {
                 break;
             }
-            for _ in 0..1000 { core::hint::spin_loop(); }
+            for _ in 0..1000 {
+                core::hint::spin_loop();
+            }
         }
 
         // 2. Disable L0s exit timer (GIO chicken bits)
-        self.write_reg(CSR_GIO_CHICKEN_BITS,
-            self.read_reg(CSR_GIO_CHICKEN_BITS) | CSR_GIO_CHICKEN_BITS_REG_BIT_DIS_L0S_EXIT_TIMER);
+        self.write_reg(
+            CSR_GIO_CHICKEN_BITS,
+            self.read_reg(CSR_GIO_CHICKEN_BITS) | CSR_GIO_CHICKEN_BITS_REG_BIT_DIS_L0S_EXIT_TIMER,
+        );
 
         // 3. Set INIT_DONE to start NIC's internal clock initialization
-        self.write_reg(CSR_GP_CNTRL,
-            self.read_reg(CSR_GP_CNTRL) | CSR_GP_CNTRL_REG_FLAG_INIT_DONE);
+        self.write_reg(CSR_GP_CNTRL, self.read_reg(CSR_GP_CNTRL) | CSR_GP_CNTRL_REG_FLAG_INIT_DONE);
 
         // 3. Poll for MAC clock ready (up to ~25ms)
         //    Each iteration: read reg + ~1000 spin loops ≈ ~1-5us, × 25000 = 25-125ms
         for i in 0..25000u32 {
             let val = self.read_reg(CSR_GP_CNTRL);
             if val & CSR_GP_CNTRL_REG_FLAG_MAC_CLOCK_READY != 0 {
-                crate::log!("[IWL4965] MAC clock ready after {} iterations, GP_CNTRL={:#010X}", i, val);
+                crate::log!(
+                    "[IWL4965] MAC clock ready after {} iterations, GP_CNTRL={:#010X}",
+                    i,
+                    val
+                );
 
                 // 4. Request NIC (MAC) access — REQUIRED for PRPH bus writes
-                self.write_reg(CSR_GP_CNTRL,
-                    self.read_reg(CSR_GP_CNTRL) | CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ);
+                self.write_reg(
+                    CSR_GP_CNTRL,
+                    self.read_reg(CSR_GP_CNTRL) | CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ,
+                );
                 let mut mac_access_ok = false;
                 for j in 0..10_000u32 {
                     if self.read_reg(CSR_GP_CNTRL) & CSR_GP_CNTRL_REG_VAL_MAC_ACCESS_EN != 0 {
@@ -734,18 +764,26 @@ impl Iwl4965 {
                         break;
                     }
                     // ~1us per IO port write on real hardware
-                    unsafe { core::arch::asm!("out dx, al", in("dx") 0x80u16, in("al") 0u8, options(nomem, nostack)); }
+                    unsafe {
+                        core::arch::asm!("out dx, al", in("dx") 0x80u16, in("al") 0u8, options(nomem, nostack));
+                    }
                 }
                 if !mac_access_ok {
-                    crate::log!("[IWL4965] WARNING: MAC access not granted, GP={:#010X}",
-                        self.read_reg(CSR_GP_CNTRL));
+                    crate::log!(
+                        "[IWL4965] WARNING: MAC access not granted, GP={:#010X}",
+                        self.read_reg(CSR_GP_CNTRL)
+                    );
                 }
 
                 // 5. Enable DMA and BSM clocks via APMG (peripheral register)
-                self.write_prph(APMG_CLK_EN_REG,
-                    APMG_CLK_VAL_DMA_CLK_RQT | APMG_CLK_VAL_BSM_CLK_RQT);
+                self.write_prph(
+                    APMG_CLK_EN_REG,
+                    APMG_CLK_VAL_DMA_CLK_RQT | APMG_CLK_VAL_BSM_CLK_RQT,
+                );
                 // Wait ~20us for clocks
-                for _ in 0..20_000 { core::hint::spin_loop(); }
+                for _ in 0..20_000 {
+                    core::hint::spin_loop();
+                }
 
                 // 6. Disable L1-Active power save
                 let stt = self.read_prph(APMG_PCIDEV_STT_REG);
@@ -753,7 +791,9 @@ impl Iwl4965 {
 
                 return Ok(());
             }
-            for _ in 0..1000 { core::hint::spin_loop(); }
+            for _ in 0..1000 {
+                core::hint::spin_loop();
+            }
         }
 
         let gp = self.read_reg(CSR_GP_CNTRL);
@@ -789,9 +829,15 @@ impl Iwl4965 {
         // 6. Read MAC address from EEPROM
         self.read_eeprom_mac()?;
 
-        crate::log!("[IWL4965] MAC: {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
-            self.mac_addr[0], self.mac_addr[1], self.mac_addr[2],
-            self.mac_addr[3], self.mac_addr[4], self.mac_addr[5]);
+        crate::log!(
+            "[IWL4965] MAC: {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+            self.mac_addr[0],
+            self.mac_addr[1],
+            self.mac_addr[2],
+            self.mac_addr[3],
+            self.mac_addr[4],
+            self.mac_addr[5]
+        );
 
         self.initialized = true;
         Ok(())
@@ -809,7 +855,9 @@ impl Iwl4965 {
             if val & CSR_EEPROM_REG_READ_VALID_MSK != 0 {
                 return (val >> 16) as u16;
             }
-            for _ in 0..50 { core::hint::spin_loop(); }
+            for _ in 0..50 {
+                core::hint::spin_loop();
+            }
         }
 
         crate::log!("[IWL4965] EEPROM read timeout at addr {:#06X}", addr);
@@ -836,7 +884,9 @@ impl Iwl4965 {
             crate::log!("[IWL4965] EEPROM MAC invalid, generating from PCI");
             // Generate deterministic MAC from PCI location
             self.mac_addr = [
-                0x00, 0x13, 0xE8, // Intel OUI
+                0x00,
+                0x13,
+                0xE8, // Intel OUI
                 self.pci_bus,
                 self.pci_device,
                 self.pci_function | 0x40,
@@ -873,14 +923,24 @@ impl Iwl4965 {
         let minor = (ver >> 16) & 0xFF;
         let api = (ver >> 8) & 0xFF;
         crate::log!("[IWL4965] FW version: {}.{}.{} (raw {:#010X})", major, minor, api, ver);
-        crate::log!("[IWL4965] FW sections: inst={} data={} init={} init_data={} boot={}",
-            inst_size, data_size, init_size, init_data_size, boot_size);
+        crate::log!(
+            "[IWL4965] FW sections: inst={} data={} init={} init_data={} boot={}",
+            inst_size,
+            data_size,
+            init_size,
+            init_data_size,
+            boot_size
+        );
 
         let mut off = hdr_size;
-        let inst = data[off..off + inst_size].to_vec(); off += inst_size;
-        let data_sec = data[off..off + data_size].to_vec(); off += data_size;
-        let init_inst = data[off..off + init_size].to_vec(); off += init_size;
-        let init_data = data[off..off + init_data_size].to_vec(); off += init_data_size;
+        let inst = data[off..off + inst_size].to_vec();
+        off += inst_size;
+        let data_sec = data[off..off + data_size].to_vec();
+        off += data_size;
+        let init_inst = data[off..off + init_size].to_vec();
+        off += init_size;
+        let init_data = data[off..off + init_data_size].to_vec();
+        off += init_data_size;
         let boot = data[off..off + boot_size].to_vec();
 
         Ok(IwlFirmware {
@@ -908,8 +968,14 @@ impl Iwl4965 {
         };
 
         let fw = Self::parse_firmware(&fw_data)?;
-        crate::log!("iwl4965: fw parsed boot={} inst={} data={} init_inst={} init_data={}",
-            fw.boot.len(), fw.inst.len(), fw.data.len(), fw.init_inst.len(), fw.init_data.len());
+        crate::log!(
+            "iwl4965: fw parsed boot={} inst={} data={} init_inst={} init_data={}",
+            fw.boot.len(),
+            fw.inst.len(),
+            fw.data.len(),
+            fw.init_inst.len(),
+            fw.init_data.len()
+        );
 
         // Allocate page-aligned DMA buffers (NIC DMA uses phys>>4, needs 16-byte alignment minimum)
         // Linux uses dma_alloc_coherent() which returns page-aligned memory.
@@ -928,7 +994,11 @@ impl Iwl4965 {
             crate::log!("iwl4965: stop_device");
             self.stop_device()?;
             let gp = self.read_reg(CSR_GP_CNTRL);
-            let mac_ok = if gp & CSR_GP_CNTRL_REG_VAL_MAC_ACCESS_EN != 0 { "granted" } else { "DENIED" };
+            let mac_ok = if gp & CSR_GP_CNTRL_REG_VAL_MAC_ACCESS_EN != 0 {
+                "granted"
+            } else {
+                "DENIED"
+            };
             crate::log!("iwl4965: stop_device ok gp={:#010X} mac_access={}", gp, mac_ok);
 
             crate::log!("iwl4965: bsm_load_bootstrap bytes={}", fw.boot.len());
@@ -937,7 +1007,11 @@ impl Iwl4965 {
 
             let ii_slice = &init_inst_dma[ii_off..ii_off + fw.init_inst.len()];
             let id_slice = &init_data_dma[id_off..id_off + fw.init_data.len()];
-            crate::log!("iwl4965: bsm_set_dram_addrs init_inst={} init_data={}", fw.init_inst.len(), fw.init_data.len());
+            crate::log!(
+                "iwl4965: bsm_set_dram_addrs init_inst={} init_data={}",
+                fw.init_inst.len(),
+                fw.init_data.len()
+            );
             self.bsm_set_dram_addrs(ii_slice, id_slice)?;
             crate::log!("iwl4965: bsm_set_dram_addrs ok");
 
@@ -956,7 +1030,9 @@ impl Iwl4965 {
             self.write_reg(CSR_RESET, 0);
             // 25ms delay for CPU to start executing bootstrap
             for _ in 0..25_000 {
-                unsafe { core::arch::asm!("out dx, al", in("dx") 0x80u16, in("al") 0u8, options(nomem, nostack)); }
+                unsafe {
+                    core::arch::asm!("out dx, al", in("dx") 0x80u16, in("al") 0u8, options(nomem, nostack));
+                }
             }
             let rst_rb = self.read_reg(CSR_RESET);
             let gp_rb = self.read_reg(CSR_GP_CNTRL);
@@ -970,12 +1046,17 @@ impl Iwl4965 {
                     // Poll RX queue periodically to receive calibration notifications
                     for i in 0..50u32 {
                         for _ in 0..10_000u32 {
-                            for _ in 0..1000 { core::hint::spin_loop(); }
+                            for _ in 0..1000 {
+                                core::hint::spin_loop();
+                            }
                         }
                         self.poll_rx(); // Process any calibration notifications
                         if i == 25 {
                             let int_val = self.read_reg(CSR_INT);
-                            crate::log!("[IWL4965] Init cal progress: INT={:#X} rxpkts so far", int_val);
+                            crate::log!(
+                                "[IWL4965] Init cal progress: INT={:#X} rxpkts so far",
+                                int_val
+                            );
                         }
                     }
                     crate::log!("iwl4965: init calibration done\n");
@@ -999,19 +1080,24 @@ impl Iwl4965 {
             if self.read_reg(CSR_RESET) & CSR_RESET_REG_FLAG_MASTER_DISABLED != 0 {
                 break;
             }
-            for _ in 0..100 { core::hint::spin_loop(); }
+            for _ in 0..100 {
+                core::hint::spin_loop();
+            }
         }
         // 2. Assert NEVO_RESET to hold CPU in reset (resets PC to 0)
         self.write_reg(CSR_RESET, CSR_RESET_REG_FLAG_NEVO_RESET | CSR_RESET_REG_FLAG_STOP_MASTER);
         // ~5ms for reset to take effect
         for _ in 0..5_000 {
-            unsafe { core::arch::asm!("out dx, al", in("dx") 0x80u16, in("al") 0u8, options(nomem, nostack)); }
+            unsafe {
+                core::arch::asm!("out dx, al", in("dx") 0x80u16, in("al") 0u8, options(nomem, nostack));
+            }
         }
 
         // 3. Re-enable APMG clocks (DMA + BSM) in case they were gated
-        self.write_prph(APMG_CLK_EN_REG,
-            APMG_CLK_VAL_DMA_CLK_RQT | APMG_CLK_VAL_BSM_CLK_RQT);
-        for _ in 0..20_000 { core::hint::spin_loop(); }
+        self.write_prph(APMG_CLK_EN_REG, APMG_CLK_VAL_DMA_CLK_RQT | APMG_CLK_VAL_BSM_CLK_RQT);
+        for _ in 0..20_000 {
+            core::hint::spin_loop();
+        }
 
         let gp = self.read_reg(CSR_GP_CNTRL);
         crate::log!("iwl4965: soft reset ok gp={:#010X}", gp);
@@ -1022,7 +1108,11 @@ impl Iwl4965 {
 
         let i_slice = &inst_dma[i_off..i_off + fw.inst.len()];
         let d_slice = &data_dma[d_off..d_off + fw.data.len()];
-        crate::log!("iwl4965: runtime bsm_set_dram_addrs inst={} data={}", fw.inst.len(), fw.data.len());
+        crate::log!(
+            "iwl4965: runtime bsm_set_dram_addrs inst={} data={}",
+            fw.inst.len(),
+            fw.data.len()
+        );
         self.bsm_set_dram_addrs(i_slice, d_slice)?;
         crate::log!("iwl4965: runtime bsm_set_dram_addrs ok");
 
@@ -1041,7 +1131,9 @@ impl Iwl4965 {
         self.write_reg(CSR_RESET, 0);
         // 25ms delay for CPU to start executing bootstrap
         for _ in 0..25_000 {
-            unsafe { core::arch::asm!("out dx, al", in("dx") 0x80u16, in("al") 0u8, options(nomem, nostack)); }
+            unsafe {
+                core::arch::asm!("out dx, al", in("dx") 0x80u16, in("al") 0u8, options(nomem, nostack));
+            }
         }
         let rst_rb = self.read_reg(CSR_RESET);
         let gp_rb = self.read_reg(CSR_GP_CNTRL);
@@ -1081,9 +1173,15 @@ impl Iwl4965 {
             self.write_reg(HBUS_TARG_MEM_RADDR, (i * 4) as u32);
             let val = self.read_reg(HBUS_TARG_MEM_RDAT);
             let off = i * 4;
-            let expect = u32::from_le_bytes([boot[off], boot[off+1], boot[off+2], boot[off+3]]);
+            let expect =
+                u32::from_le_bytes([boot[off], boot[off + 1], boot[off + 2], boot[off + 3]]);
             if val != expect {
-                crate::log!("iwl4965: inst sram[{}] mismatch got={:#010X} expect={:#010X}", i, val, expect);
+                crate::log!(
+                    "iwl4965: inst sram[{}] mismatch got={:#010X} expect={:#010X}",
+                    i,
+                    val,
+                    expect
+                );
                 mismatches += 1;
             }
         }
@@ -1106,7 +1204,9 @@ impl Iwl4965 {
             if self.read_reg(CSR_RESET) & CSR_RESET_REG_FLAG_MASTER_DISABLED != 0 {
                 break;
             }
-            for _ in 0..100 { core::hint::spin_loop(); }
+            for _ in 0..100 {
+                core::hint::spin_loop();
+            }
         }
 
         // APM stop: SW_RESET + clear INIT_DONE (same as Linux iwl_apm_stop)
@@ -1116,10 +1216,18 @@ impl Iwl4965 {
         self.apm_init()?;
 
         // Re-enable PCI bus master (SW_RESET may clear it)
-        let cmd = crate::pci::config_read_u16(self.pci_bus, self.pci_device, self.pci_function, 0x04) as u32;
+        let cmd =
+            crate::pci::config_read_u16(self.pci_bus, self.pci_device, self.pci_function, 0x04)
+                as u32;
         if cmd & 0x04 == 0 {
             crate::log!("[IWL4965] Re-enabling PCI bus master after reset");
-            crate::pci::config_write_u16(self.pci_bus, self.pci_device, self.pci_function, 0x04, (cmd | 0x06) as u16);
+            crate::pci::config_write_u16(
+                self.pci_bus,
+                self.pci_device,
+                self.pci_function,
+                0x04,
+                (cmd | 0x06) as u16,
+            );
         }
 
         Ok(())
@@ -1139,7 +1247,12 @@ impl Iwl4965 {
         for i in 0..dword_count {
             let offset = i * 4;
             let word = if offset + 4 <= boot.len() {
-                u32::from_le_bytes([boot[offset], boot[offset+1], boot[offset+2], boot[offset+3]])
+                u32::from_le_bytes([
+                    boot[offset],
+                    boot[offset + 1],
+                    boot[offset + 2],
+                    boot[offset + 3],
+                ])
             } else {
                 let mut bytes = [0u8; 4];
                 for j in 0..(boot.len() - offset) {
@@ -1165,10 +1278,18 @@ impl Iwl4965 {
         if verify0 == expect0 {
             crate::log!("iwl4965: sram verify [0] ok value={:#010X}", verify0);
         } else {
-            crate::log!("iwl4965: sram verify [0] mismatch got={:#010X} expect={:#010X}", verify0, expect0);
+            crate::log!(
+                "iwl4965: sram verify [0] mismatch got={:#010X} expect={:#010X}",
+                verify0,
+                expect0
+            );
         }
-        crate::log!("[IWL4965] Bootstrap: {} dwords written to SRAM @ {:#X}, verify={}",
-            dword_count, BSM_SRAM_LOWER_BOUND, if verify0 == expect0 { "OK" } else { "FAIL" });
+        crate::log!(
+            "[IWL4965] Bootstrap: {} dwords written to SRAM @ {:#X}, verify={}",
+            dword_count,
+            BSM_SRAM_LOWER_BOUND,
+            if verify0 == expect0 { "OK" } else { "FAIL" }
+        );
         Ok(())
     }
 
@@ -1188,8 +1309,18 @@ impl Iwl4965 {
             let phys = virt_to_phys(virt).unwrap_or(virt.wrapping_sub(hhdm));
             self.write_prph(BSM_DRAM_INST_PTR_REG, (phys >> 4) as u32);
             self.write_prph(BSM_DRAM_INST_BYTECOUNT_REG, inst.len() as u32);
-            crate::log!("[IWL4965] FW inst @ phys {:#010X} >> 4 = {:#010X} ({} bytes)", phys, phys >> 4, inst.len());
-            crate::log!("iwl4965: inst phys={:#010X} >>4={:#010X} len={}", phys, phys >> 4, inst.len());
+            crate::log!(
+                "[IWL4965] FW inst @ phys {:#010X} >> 4 = {:#010X} ({} bytes)",
+                phys,
+                phys >> 4,
+                inst.len()
+            );
+            crate::log!(
+                "iwl4965: inst phys={:#010X} >>4={:#010X} len={}",
+                phys,
+                phys >> 4,
+                inst.len()
+            );
         }
 
         // Data section
@@ -1198,8 +1329,18 @@ impl Iwl4965 {
             let phys = virt_to_phys(virt).unwrap_or(virt.wrapping_sub(hhdm));
             self.write_prph(BSM_DRAM_DATA_PTR_REG, (phys >> 4) as u32);
             self.write_prph(BSM_DRAM_DATA_BYTECOUNT_REG, data.len() as u32);
-            crate::log!("[IWL4965] FW data @ phys {:#010X} >> 4 = {:#010X} ({} bytes)", phys, phys >> 4, data.len());
-            crate::log!("iwl4965: data phys={:#010X} >>4={:#010X} len={}", phys, phys >> 4, data.len());
+            crate::log!(
+                "[IWL4965] FW data @ phys {:#010X} >> 4 = {:#010X} ({} bytes)",
+                phys,
+                phys >> 4,
+                data.len()
+            );
+            crate::log!(
+                "iwl4965: data phys={:#010X} >>4={:#010X} len={}",
+                phys,
+                phys >> 4,
+                data.len()
+            );
         }
 
         Ok(())
@@ -1210,7 +1351,9 @@ impl Iwl4965 {
         // BSM registers are on the PRPH bus
         // Clear start bit first
         self.write_prph(BSM_WR_CTRL_REG, 0);
-        for _ in 0..1000 { core::hint::spin_loop(); }
+        for _ in 0..1000 {
+            core::hint::spin_loop();
+        }
 
         // Set BSM source (offset 0 within SRAM), destination 0 (instruction memory start)
         self.write_prph(BSM_WR_MEM_SRC_REG, 0);
@@ -1234,7 +1377,9 @@ impl Iwl4965 {
                 self.write_prph(BSM_WR_CTRL_REG, BSM_WR_CTRL_START_EN);
                 return Ok(());
             }
-            for _ in 0..1000 { core::hint::spin_loop(); }
+            for _ in 0..1000 {
+                core::hint::spin_loop();
+            }
         }
 
         // BSM may still complete — check if device is running
@@ -1267,16 +1412,29 @@ impl Iwl4965 {
                 self.write_reg(CSR_INT, int_status); // ACK
                 let gp1 = self.read_reg(CSR_UCODE_DRV_GP1);
                 let gp_ucode = self.read_reg(CSR_GP_UCODE);
-                crate::log!("iwl4965: alive int={:#X} gp1={:#X} ucode={:#X} attempt={}\n",
-                    int_status, gp1, gp_ucode, attempt);
-                crate::log!("[IWL4965] FW alive: INT={:#X} GP1={:#X} UCODE={:#X}",
-                    int_status, gp1, gp_ucode);
+                crate::log!(
+                    "iwl4965: alive int={:#X} gp1={:#X} ucode={:#X} attempt={}\n",
+                    int_status,
+                    gp1,
+                    gp_ucode,
+                    attempt
+                );
+                crate::log!(
+                    "[IWL4965] FW alive: INT={:#X} GP1={:#X} UCODE={:#X}",
+                    int_status,
+                    gp1,
+                    gp_ucode
+                );
                 return Ok(());
             }
 
             // Check for HW error
             if int_status & CSR_INT_BIT_HW_ERR != 0 {
-                crate::log!("iwl4965: hardware error during wait_alive int={:#X} attempt={}", int_status, attempt);
+                crate::log!(
+                    "iwl4965: hardware error during wait_alive int={:#X} attempt={}",
+                    int_status,
+                    attempt
+                );
                 self.write_reg(CSR_INT, int_status);
                 return Err("Hardware error during firmware load");
             }
@@ -1286,7 +1444,11 @@ impl Iwl4965 {
                 // FH_RX means firmware sent something via RX DMA
                 if int_status & CSR_INT_BIT_FH_RX != 0 {
                     self.write_reg(CSR_INT, int_status);
-                    crate::log!("iwl4965: alive via fh_rx int={:#X} attempt={}\n", int_status, attempt);
+                    crate::log!(
+                        "iwl4965: alive via fh_rx int={:#X} attempt={}\n",
+                        int_status,
+                        attempt
+                    );
                     return Ok(());
                 }
             }
@@ -1307,18 +1469,22 @@ impl Iwl4965 {
             // Print progress every 50 attempts
             if attempt % 50 == 49 {
                 let gp = self.read_reg(CSR_GP_CNTRL);
-                crate::log!("      [{}] RST={:#X} GP={:#010X} INT={:#X} GP1={:#X} UCODE={:#X}\n",
+                crate::log!(
+                    "      [{}] RST={:#X} GP={:#010X} INT={:#X} GP1={:#X} UCODE={:#X}\n",
                     attempt + 1,
                     self.read_reg(CSR_RESET),
                     gp,
                     self.read_reg(CSR_INT),
                     self.read_reg(CSR_UCODE_DRV_GP1),
-                    self.read_reg(CSR_GP_UCODE));
+                    self.read_reg(CSR_GP_UCODE)
+                );
             }
 
             // ~10ms delay between checks (port 0x80 ~1us each)
             for _ in 0..10_000 {
-                unsafe { core::arch::asm!("out dx, al", in("dx") 0x80u16, in("al") 0u8, options(nomem, nostack)); }
+                unsafe {
+                    core::arch::asm!("out dx, al", in("dx") 0x80u16, in("al") 0u8, options(nomem, nostack));
+                }
             }
         }
 
@@ -1328,10 +1494,22 @@ impl Iwl4965 {
         let gp_ucode = self.read_reg(CSR_GP_UCODE);
         let int_val = self.read_reg(CSR_INT);
         let rst = self.read_reg(CSR_RESET);
-        crate::log!("iwl4965: wait_alive timeout rst={:#X} gp={:#010X} gp1={:#X} ucode={:#X} int={:#X}",
-            rst, gp, gp1, gp_ucode, int_val);
-        crate::log!("[IWL4965] FW ALIVE TIMEOUT: RST={:#X} GP={:#X} GP1={:#X} UCODE={:#X} INT={:#X}",
-            rst, gp, gp1, gp_ucode, int_val);
+        crate::log!(
+            "iwl4965: wait_alive timeout rst={:#X} gp={:#010X} gp1={:#X} ucode={:#X} int={:#X}",
+            rst,
+            gp,
+            gp1,
+            gp_ucode,
+            int_val
+        );
+        crate::log!(
+            "[IWL4965] FW ALIVE TIMEOUT: RST={:#X} GP={:#X} GP1={:#X} UCODE={:#X} INT={:#X}",
+            rst,
+            gp,
+            gp1,
+            gp_ucode,
+            int_val
+        );
 
         Err("Firmware ALIVE timeout")
     }
@@ -1347,11 +1525,11 @@ impl Iwl4965 {
         for q in 0..IWL_TX_QUEUE_COUNT {
             let txq = TxQueue::new();
             let phys = txq.tfd_phys_base();
-            
+
             // Tell the device where this queue's TFD ring lives
             self.write_reg(FH_MEM_CBBC_QUEUE + (q as u32) * 4, phys as u32);
             crate::log!("[IWL4965]   TXQ{}: TFD ring @ phys {:#X}", q, phys);
-            
+
             self.tx_queues.push(txq);
         }
 
@@ -1376,14 +1554,19 @@ impl Iwl4965 {
             | FH_RCSR_RX_CONFIG_REG_VAL_IRQ_DEST_INT
             | FH_RCSR_RX_CONFIG_REG_VAL_SINGLE_FRAME
             | FH_RCSR_RX_CONFIG_REG_VAL_RB_SIZE_4K
-            | (8u32 << FH_RCSR_RX_CONFIG_RBDCB_SIZE_POS);  // log2(256) = 8
+            | (8u32 << FH_RCSR_RX_CONFIG_RBDCB_SIZE_POS); // log2(256) = 8
         self.write_reg(FH_RCSR_CHNL0_CONFIG_REG, rx_config);
 
         // Step 4: Tell device all RX buffers are available (aligned to 8)
         self.write_reg(FH_RSCSR_CHNL0_RBDCB_WPTR_REG, (RX_QUEUE_SIZE as u32) & !0x7);
 
-        crate::log!("[IWL4965]   RXQ: CONFIG={:#010X} BASE={:#X} STTS={:#X} WPTR={}",
-            rx_config, (rb_phys >> 8) as u32, (stts_phys >> 4) as u32, (RX_QUEUE_SIZE as u32) & !0x7);
+        crate::log!(
+            "[IWL4965]   RXQ: CONFIG={:#010X} BASE={:#X} STTS={:#X} WPTR={}",
+            rx_config,
+            (rb_phys >> 8) as u32,
+            (stts_phys >> 4) as u32,
+            (RX_QUEUE_SIZE as u32) & !0x7
+        );
 
         self.rx_queue = Some(rxq);
 
@@ -1471,7 +1654,10 @@ impl Iwl4965 {
         let hw_write = {
             let rxq = match self.rx_queue.as_ref() {
                 Some(q) => q,
-                None => { crate::log!("[IWL4965] poll_rx: no RX queue"); return; }
+                None => {
+                    crate::log!("[IWL4965] poll_rx: no RX queue");
+                    return;
+                }
             };
             let stts = &rxq.rb_stts;
             // Device writes a u32 at offset 0: bits [11:0] = closed_rb_num (write pointer)
@@ -1482,7 +1668,7 @@ impl Iwl4965 {
             Some(q) => q.read_ptr,
             None => return,
         };
-        
+
         if hw_write == read {
             return;
         }
@@ -1493,7 +1679,7 @@ impl Iwl4965 {
         let mut packets: Vec<(u8, Vec<u8>)> = Vec::new();
         let mut idx = read;
         let mut count = 0;
-        
+
         {
             let rxq = match self.rx_queue.as_ref() {
                 Some(q) => q,
@@ -1518,7 +1704,7 @@ impl Iwl4965 {
         if let Some(rxq) = self.rx_queue.as_mut() {
             rxq.read_ptr = idx;
         }
-        
+
         // Process collected packets
         for (cmd_id, data) in packets {
             self.process_rx_packet(cmd_id, &data);
@@ -1581,7 +1767,7 @@ impl Iwl4965 {
         // offset 4: notification ID (0x83)
         // offset 8: number of results
         // Then for each result: BSSID(6) + channel(1) + signal(1) + IEs(variable)
-        
+
         if data.len() < 12 {
             return;
         }
@@ -1591,7 +1777,9 @@ impl Iwl4965 {
 
         let mut offset = 12; // Start of first result
         for _ in 0..count {
-            if offset + 20 > data.len() { break; }
+            if offset + 20 > data.len() {
+                break;
+            }
 
             // Parse BSS entry
             let mut bssid = [0u8; 6];
@@ -1654,8 +1842,11 @@ impl Iwl4965 {
                 }
                 WLAN_EID_VENDOR => {
                     // WPA1 OUI: 00:50:F2:01
-                    if elen >= 4 && data[estart] == 0x00 && data[estart + 1] == 0x50
-                        && data[estart + 2] == 0xF2 && data[estart + 3] == 0x01
+                    if elen >= 4
+                        && data[estart] == 0x00
+                        && data[estart + 1] == 0x50
+                        && data[estart + 2] == 0xF2
+                        && data[estart + 3] == 0x01
                     {
                         if security == WifiSecurity::Open {
                             security = WifiSecurity::WPA;
@@ -1680,18 +1871,32 @@ impl Iwl4965 {
         }
 
         // Report firmware/queue state
-        crate::log!("[IWL4965] Scan: fw_loaded={} fw_alive={} queues={} rx={}",
-            self.firmware_loaded, self.fw_alive,
-            self.tx_queues.len(), self.rx_queue.is_some());
-        crate::log!("iwl4965: scan fw_loaded={} fw_alive={} queues={}",
-            self.firmware_loaded, self.fw_alive, self.tx_queues.len());
+        crate::log!(
+            "[IWL4965] Scan: fw_loaded={} fw_alive={} queues={} rx={}",
+            self.firmware_loaded,
+            self.fw_alive,
+            self.tx_queues.len(),
+            self.rx_queue.is_some()
+        );
+        crate::log!(
+            "iwl4965: scan fw_loaded={} fw_alive={} queues={}",
+            self.firmware_loaded,
+            self.fw_alive,
+            self.tx_queues.len()
+        );
 
         // Check key CSR registers
         let gp = self.read_reg(CSR_GP_CNTRL);
         let int = self.read_reg(CSR_INT);
         let gp1 = self.read_reg(CSR_UCODE_DRV_GP1);
         let fh = self.read_reg(CSR_FH_INT_STATUS);
-        crate::log!("[IWL4965] Pre-scan CSR: GP={:#X} INT={:#X} GP1={:#X} FH={:#X}", gp, int, gp1, fh);
+        crate::log!(
+            "[IWL4965] Pre-scan CSR: GP={:#X} INT={:#X} GP1={:#X} FH={:#X}",
+            gp,
+            int,
+            gp1,
+            fh
+        );
         crate::log!("iwl4965: pre-scan csr gp_cntrl={:#X} int={:#X}", gp, int);
 
         self.scan_results.clear();
@@ -1704,7 +1909,9 @@ impl Iwl4965 {
             crate::log!("[IWL4965] Sending RXON to enable radio...");
             self.send_rxon()?;
             // Give firmware time to process RXON and poll for response
-            for _ in 0..500_000 { core::hint::spin_loop(); }
+            for _ in 0..500_000 {
+                core::hint::spin_loop();
+            }
             self.poll_rx(); // Check if firmware ACKed RXON
             let int_after_rxon = self.read_reg(CSR_INT);
             crate::log!("[IWL4965] Post-RXON: INT={:#X}", int_after_rxon);
@@ -1778,8 +1985,12 @@ impl Iwl4965 {
         rxon[40] = 1;
 
         self.send_hcmd(REPLY_RXON, &rxon)?;
-        crate::log!("[IWL4965] RXON sent: ch=1 STA flags={:#X} filter={:#X} rx_chain={:#X}",
-            flags, filter, rx_chain);
+        crate::log!(
+            "[IWL4965] RXON sent: ch=1 STA flags={:#X} filter={:#X} rx_chain={:#X}",
+            flags,
+            filter,
+            rx_chain
+        );
         Ok(())
     }
 
@@ -1878,8 +2089,11 @@ impl Iwl4965 {
 
         self.send_hcmd(REPLY_SCAN_CMD, &cmd)?;
 
-        crate::log!("[IWL4965] Scan request sent: {} channels, {} bytes, passive mode",
-            chan_count, total_len);
+        crate::log!(
+            "[IWL4965] Scan request sent: {} channels, {} bytes, passive mode",
+            chan_count,
+            total_len
+        );
         Ok(())
     }
 
@@ -1945,16 +2159,21 @@ impl Iwl4965 {
         }
 
         // Find the network in scan results
-        let network = self.scan_results.iter()
-            .find(|n| n.ssid == ssid)
-            .cloned();
+        let network = self.scan_results.iter().find(|n| n.ssid == ssid).cloned();
 
         match network {
             Some(net) => {
-                crate::log!("[IWL4965] Connecting to '{}' on ch{} ({:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X})",
-                    ssid, net.channel,
-                    net.bssid[0], net.bssid[1], net.bssid[2],
-                    net.bssid[3], net.bssid[4], net.bssid[5]);
+                crate::log!(
+                    "[IWL4965] Connecting to '{}' on ch{} ({:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X})",
+                    ssid,
+                    net.channel,
+                    net.bssid[0],
+                    net.bssid[1],
+                    net.bssid[2],
+                    net.bssid[3],
+                    net.bssid[4],
+                    net.bssid[5]
+                );
 
                 self.wifi_state = WifiState::Connecting;
                 self.connected_bssid = net.bssid;
@@ -1965,7 +2184,7 @@ impl Iwl4965 {
                 if self.fw_alive && !self.tx_queues.is_empty() {
                     self.send_rxon_cmd(&net)?;
                     self.wifi_state = WifiState::Authenticating;
-                    
+
                     // Step 2: For Open networks, association completes after RXON
                     // For WPA2, we need to do 4-way handshake after association
                     // (EAPOL frames via TX queue 0)
@@ -1974,18 +2193,30 @@ impl Iwl4965 {
                             // Open network: RXON is enough
                             self.connected_ssid = Some(String::from(ssid));
                             self.wifi_state = WifiState::Connected;
-                            crate::log!("[IWL4965] Connected to '{}' (Open, {} dBm)", ssid, net.signal_dbm);
+                            crate::log!(
+                                "[IWL4965] Connected to '{}' (Open, {} dBm)",
+                                ssid,
+                                net.signal_dbm
+                            );
                         }
                         WifiSecurity::WPA2 | WifiSecurity::WPA | WifiSecurity::WPA3 => {
                             // WPA2: firmware handles authentication, we need EAPOL for keys
                             self.connected_ssid = Some(String::from(ssid));
                             self.wifi_state = WifiState::Connected;
-                            crate::log!("[IWL4965] Associated to '{}' (WPA2, {} dBm) — key exchange TODO", ssid, net.signal_dbm);
+                            crate::log!(
+                                "[IWL4965] Associated to '{}' (WPA2, {} dBm) — key exchange TODO",
+                                ssid,
+                                net.signal_dbm
+                            );
                         }
                         _ => {
                             self.connected_ssid = Some(String::from(ssid));
                             self.wifi_state = WifiState::Connected;
-                            crate::log!("[IWL4965] Connected to '{}' ({} dBm)", ssid, net.signal_dbm);
+                            crate::log!(
+                                "[IWL4965] Connected to '{}' ({} dBm)",
+                                ssid,
+                                net.signal_dbm
+                            );
                         }
                     }
                 } else {
@@ -1998,7 +2229,10 @@ impl Iwl4965 {
                 Ok(())
             }
             None => {
-                crate::log!("[IWL4965] Network '{}' not in scan results, attempting blind connect", ssid);
+                crate::log!(
+                    "[IWL4965] Network '{}' not in scan results, attempting blind connect",
+                    ssid
+                );
                 self.wifi_state = WifiState::Connecting;
                 self.connected_ssid = Some(String::from(ssid));
                 Ok(())
@@ -2044,9 +2278,16 @@ impl Iwl4965 {
         rxon[26] = net.channel;
 
         self.send_hcmd(REPLY_RXON, &rxon)?;
-        crate::log!("[IWL4965] RXON sent: ch{} BSSID {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
-            net.channel, net.bssid[0], net.bssid[1], net.bssid[2],
-            net.bssid[3], net.bssid[4], net.bssid[5]);
+        crate::log!(
+            "[IWL4965] RXON sent: ch{} BSSID {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+            net.channel,
+            net.bssid[0],
+            net.bssid[1],
+            net.bssid[2],
+            net.bssid[3],
+            net.bssid[4],
+            net.bssid[5]
+        );
 
         Ok(())
     }
@@ -2076,8 +2317,7 @@ impl Driver for Iwl4965 {
         // Enable bus mastering and memory space in PCI command register
         crate::log!("iwl4965: probe enable pci bus master");
         let cmd = crate::pci::config_read_u16(pci_dev.bus, pci_dev.slot, pci_dev.function, 0x04);
-        crate::pci::config_write_u16(pci_dev.bus, pci_dev.slot, pci_dev.function, 0x04,
-            cmd | 0x06); // Memory Space + Bus Master
+        crate::pci::config_write_u16(pci_dev.bus, pci_dev.slot, pci_dev.function, 0x04, cmd | 0x06); // Memory Space + Bus Master
         crate::log!("iwl4965: probe done");
 
         Ok(())
@@ -2087,9 +2327,15 @@ impl Driver for Iwl4965 {
         crate::log!("wifi/iwl4965: hw_init\n");
         self.hw_init()?;
         let gp_after_init = self.read_reg(CSR_GP_CNTRL);
-        crate::log!("wifi/iwl4965: hw_init ok gp={:#010X} mac_clk={}\n",
+        crate::log!(
+            "wifi/iwl4965: hw_init ok gp={:#010X} mac_clk={}\n",
             gp_after_init,
-            if gp_after_init & CSR_GP_CNTRL_REG_FLAG_MAC_CLOCK_READY != 0 { "ready" } else { "DEAD" });
+            if gp_after_init & CSR_GP_CNTRL_REG_FLAG_MAC_CLOCK_READY != 0 {
+                "ready"
+            } else {
+                "DEAD"
+            }
+        );
         self.wifi_state = WifiState::Disconnected;
         self.status = DriverStatus::Running;
 
@@ -2115,7 +2361,7 @@ impl Driver for Iwl4965 {
                         }
                     }
 
-                    // Enable interrupts 
+                    // Enable interrupts
                     self.write_reg(CSR_INT, 0xFFFFFFFF); // clear any pending
                     self.write_reg(CSR_INT_MASK, 0xAB00_000B);
                 }
@@ -2130,12 +2376,18 @@ impl Driver for Iwl4965 {
 
         // Print status summary to screen so user can see what happened
         let gp = self.read_reg(CSR_GP_CNTRL);
-        let clk = if gp & CSR_GP_CNTRL_REG_FLAG_MAC_CLOCK_READY != 0 { "ready" } else { "DEAD" };
-        crate::log!("wifi/iwl4965: summary mac_clk={} fw={} alive={} gp={:#010X}\n",
+        let clk = if gp & CSR_GP_CNTRL_REG_FLAG_MAC_CLOCK_READY != 0 {
+            "ready"
+        } else {
+            "DEAD"
+        };
+        crate::log!(
+            "wifi/iwl4965: summary mac_clk={} fw={} alive={} gp={:#010X}\n",
             clk,
             if self.firmware_loaded { "yes" } else { "no" },
             if self.fw_alive { "yes" } else { "no" },
-            gp);
+            gp
+        );
         Ok(())
     }
 
@@ -2180,7 +2432,11 @@ impl NetworkDriver for Iwl4965 {
     }
 
     fn link_speed(&self) -> u32 {
-        if self.wifi_state == WifiState::Connected { 54 } else { 0 } // 54 Mbps (802.11g baseline)
+        if self.wifi_state == WifiState::Connected {
+            54
+        } else {
+            0
+        } // 54 Mbps (802.11g baseline)
     }
 
     fn send(&mut self, data: &[u8]) -> Result<(), &'static str> {
@@ -2208,7 +2464,7 @@ impl NetworkDriver for Iwl4965 {
         // Setup TFD
         let buf_virt = buf.as_ptr() as u64;
         let buf_phys = phys_addr_of(buf_virt);
-        
+
         let tfd = &mut txq.tfds[idx];
         *tfd = IwlTfd::zeroed();
         tfd.tbs[0].set(buf_phys, len as u16);
@@ -2234,7 +2490,7 @@ impl NetworkDriver for Iwl4965 {
     fn poll(&mut self) {
         // Process RX queue for any pending notifications/data
         self.poll_rx();
-        
+
         if self.scanning {
             self.poll_scan();
         }
@@ -2289,11 +2545,19 @@ impl WifiDriver for Iwl4965 {
     }
 
     fn current_channel(&self) -> Option<u8> {
-        if self.current_channel > 0 { Some(self.current_channel) } else { None }
+        if self.current_channel > 0 {
+            Some(self.current_channel)
+        } else {
+            None
+        }
     }
 
     fn signal_strength(&self) -> Option<i8> {
-        if self.wifi_state == WifiState::Connected { Some(self.signal_dbm) } else { None }
+        if self.wifi_state == WifiState::Connected {
+            Some(self.signal_dbm)
+        } else {
+            None
+        }
     }
 }
 
@@ -2324,16 +2588,22 @@ pub fn probe(pci_dev: &PciDevice) -> Option<Box<dyn WifiDriver>> {
         return None;
     }
 
-    crate::log!("[IWL4965] Probing Intel WiFi {:04X}:{:04X}...", 
-        pci_dev.vendor_id, pci_dev.device_id);
+    crate::log!(
+        "[IWL4965] Probing Intel WiFi {:04X}:{:04X}...",
+        pci_dev.vendor_id,
+        pci_dev.device_id
+    );
 
     let mut driver = Iwl4965::new();
     match driver.probe(pci_dev) {
         Ok(()) => {
             // Don't call start() during boot — it does hw_init + firmware load
             // which can hang on real hardware. Start is deferred to first use.
-            crate::log!("[IWL4965] PCI probe OK for {:04X}:{:04X} — start deferred", 
-                pci_dev.vendor_id, pci_dev.device_id);
+            crate::log!(
+                "[IWL4965] PCI probe OK for {:04X}:{:04X} — start deferred",
+                pci_dev.vendor_id,
+                pci_dev.device_id
+            );
             Some(Box::new(driver))
         }
         Err(e) => {
@@ -2367,7 +2637,14 @@ pub fn debug_dump() {
         crate::log!("  No WiFi driver loaded\n");
     }
 
-    crate::log!("  Firmware:   {}\n", if has_firmware() { "available" } else { "NOT loaded" });
+    crate::log!(
+        "  Firmware:   {}\n",
+        if has_firmware() {
+            "available"
+        } else {
+            "NOT loaded"
+        }
+    );
     if let Some(ref fw) = *WIFI_FIRMWARE.lock() {
         crate::log!("  FW size:    {} bytes\n", fw.len());
     }
@@ -2389,9 +2666,13 @@ pub fn debug_read_csr(offset: u32) -> Option<u32> {
     });
     if let Some(dev) = found {
         if dev.vendor_id == INTEL_VENDOR && IWL_SUPPORTED_IDS.contains(&dev.device_id) {
-            if !dev.bar_is_memory(0) { return None; }
+            if !dev.bar_is_memory(0) {
+                return None;
+            }
             let phys = dev.bar_address(0)?;
-            if phys == 0 { return None; }
+            if phys == 0 {
+                return None;
+            }
             // Map MMIO region via HHDM page tables before access
             let virt = match map_mmio(phys, 0x2000) {
                 Ok(v) => v,
@@ -2409,21 +2690,21 @@ pub fn debug_read_csr(offset: u32) -> Option<u32> {
 /// Live debug: dump key CSR registers of the Intel WiFi card
 pub fn debug_dump_csrs() {
     let regs: &[(&str, u32)] = &[
-        ("HW_IF_CONFIG",  CSR_HW_IF_CONFIG),
-        ("INT",           CSR_INT),
-        ("INT_MASK",      CSR_INT_MASK),
+        ("HW_IF_CONFIG", CSR_HW_IF_CONFIG),
+        ("INT", CSR_INT),
+        ("INT_MASK", CSR_INT_MASK),
         ("FH_INT_STATUS", CSR_FH_INT_STATUS),
-        ("GPIO_IN",       CSR_GPIO_IN),
-        ("RESET",         CSR_RESET),
-        ("GP_CNTRL",      CSR_GP_CNTRL),
-        ("HW_REV",        CSR_HW_REV),
-        ("EEPROM_REG",    CSR_EEPROM_REG),
-        ("EEPROM_GP",     CSR_EEPROM_GP),
+        ("GPIO_IN", CSR_GPIO_IN),
+        ("RESET", CSR_RESET),
+        ("GP_CNTRL", CSR_GP_CNTRL),
+        ("HW_REV", CSR_HW_REV),
+        ("EEPROM_REG", CSR_EEPROM_REG),
+        ("EEPROM_GP", CSR_EEPROM_GP),
         ("UCODE_DRV_GP1", CSR_UCODE_DRV_GP1),
         ("UCODE_DRV_GP2", CSR_UCODE_DRV_GP2),
-        ("GIO_REG",       CSR_GIO_REG),
-        ("GP_UCODE",      CSR_GP_UCODE),
-        ("GP_DRIVER",     CSR_GP_DRIVER),
+        ("GIO_REG", CSR_GIO_REG),
+        ("GP_UCODE", CSR_GP_UCODE),
+        ("GP_DRIVER", CSR_GP_DRIVER),
     ];
 
     for (name, offset) in regs {
@@ -2448,9 +2729,13 @@ fn debug_get_mmio() -> Option<usize> {
     });
     if let Some(dev) = found {
         if dev.vendor_id == INTEL_VENDOR && IWL_SUPPORTED_IDS.contains(&dev.device_id) {
-            if !dev.bar_is_memory(0) { return None; }
+            if !dev.bar_is_memory(0) {
+                return None;
+            }
             let phys = dev.bar_address(0)?;
-            if phys == 0 { return None; }
+            if phys == 0 {
+                return None;
+            }
             return map_mmio(phys, 0x2000).ok();
         }
     }
@@ -2462,16 +2747,22 @@ fn debug_reg_read(base: usize, offset: u32) -> u32 {
 }
 
 fn debug_reg_write(base: usize, offset: u32, val: u32) {
-    unsafe { core::ptr::write_volatile((base + offset as usize) as *mut u32, val); }
+    unsafe {
+        core::ptr::write_volatile((base + offset as usize) as *mut u32, val);
+    }
 }
 
 /// Write a CSR register live (no driver needed)
 pub fn debug_write_csr(offset: u32, val: u32) -> bool {
-    if offset >= 0x2000 { return false; }
+    if offset >= 0x2000 {
+        return false;
+    }
     if let Some(base) = debug_get_mmio() {
         debug_reg_write(base, offset, val);
         true
-    } else { false }
+    } else {
+        false
+    }
 }
 
 /// Read a peripheral (PRPH) register via HBUS (no driver needed)
@@ -2487,56 +2778,89 @@ pub fn debug_write_prph(addr: u32, val: u32) -> bool {
         debug_reg_write(base, HBUS_TARG_PRPH_WADDR, (addr & 0x000F_FFFF) | (3 << 24));
         debug_reg_write(base, HBUS_TARG_PRPH_WDAT, val);
         true
-    } else { false }
+    } else {
+        false
+    }
 }
 
 /// Live APM init — can be called from shell without recompile
 pub fn debug_apm_init() -> Result<(), &'static str> {
     let base = debug_get_mmio().ok_or("No MMIO")?;
-    
+
     crate::log!("  [1] Setting NIC_READY...\n");
     let hic = debug_reg_read(base, CSR_HW_IF_CONFIG);
     debug_reg_write(base, CSR_HW_IF_CONFIG, hic | CSR_HW_IF_CONFIG_REG_BIT_NIC_READY);
     for _ in 0..5000u32 {
-        if debug_reg_read(base, CSR_HW_IF_CONFIG) & CSR_HW_IF_CONFIG_REG_BIT_NIC_READY != 0 { break; }
-        for _ in 0..1000 { core::hint::spin_loop(); }
+        if debug_reg_read(base, CSR_HW_IF_CONFIG) & CSR_HW_IF_CONFIG_REG_BIT_NIC_READY != 0 {
+            break;
+        }
+        for _ in 0..1000 {
+            core::hint::spin_loop();
+        }
     }
-    let nic_ready = debug_reg_read(base, CSR_HW_IF_CONFIG) & CSR_HW_IF_CONFIG_REG_BIT_NIC_READY != 0;
+    let nic_ready =
+        debug_reg_read(base, CSR_HW_IF_CONFIG) & CSR_HW_IF_CONFIG_REG_BIT_NIC_READY != 0;
     crate::log!("      NIC_READY = {}\n", if nic_ready { "YES" } else { "NO" });
-    
+
     crate::log!("  [2] GIO chicken bits (disable L0s timer)...\n");
     let gio = debug_reg_read(base, CSR_GIO_CHICKEN_BITS);
-    debug_reg_write(base, CSR_GIO_CHICKEN_BITS, gio | CSR_GIO_CHICKEN_BITS_REG_BIT_DIS_L0S_EXIT_TIMER);
-    
+    debug_reg_write(
+        base,
+        CSR_GIO_CHICKEN_BITS,
+        gio | CSR_GIO_CHICKEN_BITS_REG_BIT_DIS_L0S_EXIT_TIMER,
+    );
+
     crate::log!("  [3] Setting INIT_DONE...\n");
     let gp = debug_reg_read(base, CSR_GP_CNTRL);
     debug_reg_write(base, CSR_GP_CNTRL, gp | CSR_GP_CNTRL_REG_FLAG_INIT_DONE);
-    
+
     crate::log!("  [4] Polling MAC clock...\n");
     for i in 0..25000u32 {
         let val = debug_reg_read(base, CSR_GP_CNTRL);
         if val & CSR_GP_CNTRL_REG_FLAG_MAC_CLOCK_READY != 0 {
             crate::log!("      MAC clock READY after {} iters (GP={:#010X})\n", i, val);
-            
+
             crate::log!("  [5] Enabling APMG DMA+BSM clocks...\n");
             // write_prph(APMG_CLK_EN_REG, DMA|BSM)
-            debug_reg_write(base, HBUS_TARG_PRPH_WADDR, (APMG_CLK_EN_REG & 0x000F_FFFF) | (3 << 24));
-            debug_reg_write(base, HBUS_TARG_PRPH_WDAT, APMG_CLK_VAL_DMA_CLK_RQT | APMG_CLK_VAL_BSM_CLK_RQT);
-            for _ in 0..20_000 { core::hint::spin_loop(); }
-            
+            debug_reg_write(
+                base,
+                HBUS_TARG_PRPH_WADDR,
+                (APMG_CLK_EN_REG & 0x000F_FFFF) | (3 << 24),
+            );
+            debug_reg_write(
+                base,
+                HBUS_TARG_PRPH_WDAT,
+                APMG_CLK_VAL_DMA_CLK_RQT | APMG_CLK_VAL_BSM_CLK_RQT,
+            );
+            for _ in 0..20_000 {
+                core::hint::spin_loop();
+            }
+
             crate::log!("  [6] Disabling L1-Active...\n");
-            debug_reg_write(base, HBUS_TARG_PRPH_RADDR, (APMG_PCIDEV_STT_REG & 0x000F_FFFF) | (3 << 24));
+            debug_reg_write(
+                base,
+                HBUS_TARG_PRPH_RADDR,
+                (APMG_PCIDEV_STT_REG & 0x000F_FFFF) | (3 << 24),
+            );
             let stt = debug_reg_read(base, HBUS_TARG_PRPH_RDAT);
-            debug_reg_write(base, HBUS_TARG_PRPH_WADDR, (APMG_PCIDEV_STT_REG & 0x000F_FFFF) | (3 << 24));
+            debug_reg_write(
+                base,
+                HBUS_TARG_PRPH_WADDR,
+                (APMG_PCIDEV_STT_REG & 0x000F_FFFF) | (3 << 24),
+            );
             debug_reg_write(base, HBUS_TARG_PRPH_WDAT, stt | APMG_PCIDEV_STT_VAL_L1_LOOKUP_DIS);
-            
+
             crate::log!("  APM init DONE!\n");
             return Ok(());
         }
-        for _ in 0..1000 { core::hint::spin_loop(); }
-        if i % 5000 == 4999 { crate::log!("."); }
+        for _ in 0..1000 {
+            core::hint::spin_loop();
+        }
+        if i % 5000 == 4999 {
+            crate::log!(".");
+        }
     }
-    
+
     let final_gp = debug_reg_read(base, CSR_GP_CNTRL);
     crate::log!("iwl4965 debug: mac clock timeout gp={:#010X}", final_gp);
     Err("MAC clock not ready")
@@ -2545,19 +2869,21 @@ pub fn debug_apm_init() -> Result<(), &'static str> {
 /// Live firmware load — step by step with visible output
 pub fn debug_load_firmware() -> Result<(), &'static str> {
     use super::wifi::WIFI_DRIVER;
-    
+
     // Check driver exists
     let mut guard = WIFI_DRIVER.lock();
-    let driver = guard.as_mut().ok_or("No WiFi driver — run 'drv reprobe wifi' first")?;
-    
+    let driver = guard
+        .as_mut()
+        .ok_or("No WiFi driver — run 'drv reprobe wifi' first")?;
+
     crate::log!("  Driver found: {:?}\n", driver.status());
-    
+
     // Need to start the driver which does hw_init + firmware
     crate::log!("  Calling driver.start()...\n");
     crate::log!("    This does: hw_init -> apm_init -> firmware load -> DMA queues\n");
     crate::log!("    Watch for step-by-step output below:\n");
     crate::log!("\n");
-    
+
     match driver.start() {
         Ok(()) => {
             crate::log!("\n");
@@ -2566,7 +2892,14 @@ pub fn debug_load_firmware() -> Result<(), &'static str> {
             let ucode = debug_read_csr(CSR_GP_UCODE).unwrap_or(0);
             crate::log!("  Result: OK!\n");
             crate::log!("    GP_CNTRL={:#010X} GP1={:#010X} UCODE={:#010X}\n", gp, gp1, ucode);
-            crate::log!("    MAC_CLK={}\n", if gp & CSR_GP_CNTRL_REG_FLAG_MAC_CLOCK_READY != 0 { "ready" } else { "DEAD" });
+            crate::log!(
+                "    MAC_CLK={}\n",
+                if gp & CSR_GP_CNTRL_REG_FLAG_MAC_CLOCK_READY != 0 {
+                    "ready"
+                } else {
+                    "DEAD"
+                }
+            );
             Ok(())
         }
         Err(e) => {
@@ -2574,7 +2907,14 @@ pub fn debug_load_firmware() -> Result<(), &'static str> {
             let gp = debug_read_csr(CSR_GP_CNTRL).unwrap_or(0);
             crate::log!("iwl4965 debug: result failed: {}", e);
             crate::log!("    GP_CNTRL={:#010X}\n", gp);
-            crate::log!("    MAC_CLK={}\n", if gp & CSR_GP_CNTRL_REG_FLAG_MAC_CLOCK_READY != 0 { "ready" } else { "DEAD" });
+            crate::log!(
+                "    MAC_CLK={}\n",
+                if gp & CSR_GP_CNTRL_REG_FLAG_MAC_CLOCK_READY != 0 {
+                    "ready"
+                } else {
+                    "DEAD"
+                }
+            );
             Err(e)
         }
     }
@@ -2583,16 +2923,16 @@ pub fn debug_load_firmware() -> Result<(), &'static str> {
 /// Dump BSM (Bootstrap State Machine) registers
 pub fn debug_dump_bsm() {
     let bsm_regs: &[(&str, u32)] = &[
-        ("BSM_WR_CTRL",        BSM_WR_CTRL_REG),
-        ("BSM_WR_MEM_SRC",     BSM_WR_MEM_SRC_REG),
-        ("BSM_WR_MEM_DST",     BSM_WR_MEM_DST_REG),
-        ("BSM_WR_DWCOUNT",     BSM_WR_DWCOUNT_REG),
-        ("BSM_DRAM_INST_PTR",  BSM_DRAM_INST_PTR_REG),
+        ("BSM_WR_CTRL", BSM_WR_CTRL_REG),
+        ("BSM_WR_MEM_SRC", BSM_WR_MEM_SRC_REG),
+        ("BSM_WR_MEM_DST", BSM_WR_MEM_DST_REG),
+        ("BSM_WR_DWCOUNT", BSM_WR_DWCOUNT_REG),
+        ("BSM_DRAM_INST_PTR", BSM_DRAM_INST_PTR_REG),
         ("BSM_DRAM_INST_SIZE", BSM_DRAM_INST_BYTECOUNT_REG),
-        ("BSM_DRAM_DATA_PTR",  BSM_DRAM_DATA_PTR_REG),
+        ("BSM_DRAM_DATA_PTR", BSM_DRAM_DATA_PTR_REG),
         ("BSM_DRAM_DATA_SIZE", BSM_DRAM_DATA_BYTECOUNT_REG),
     ];
-    
+
     crate::log!("  BSM Registers (via PRPH bus):\n");
     for (name, addr) in bsm_regs {
         match debug_read_prph(*addr) {
@@ -2605,13 +2945,13 @@ pub fn debug_dump_bsm() {
 /// Dump APMG (Advanced Power Management) registers
 pub fn debug_dump_apmg() {
     let apmg_regs: &[(&str, u32)] = &[
-        ("APMG_CLK_CTRL",   APMG_CLK_CTRL_REG),
-        ("APMG_CLK_EN",     APMG_CLK_EN_REG),
-        ("APMG_CLK_DIS",    APMG_CLK_DIS_REG),
-        ("APMG_PS_CTRL",    APMG_PS_CTRL_REG),
+        ("APMG_CLK_CTRL", APMG_CLK_CTRL_REG),
+        ("APMG_CLK_EN", APMG_CLK_EN_REG),
+        ("APMG_CLK_DIS", APMG_CLK_DIS_REG),
+        ("APMG_PS_CTRL", APMG_PS_CTRL_REG),
         ("APMG_PCIDEV_STT", APMG_PCIDEV_STT_REG),
     ];
-    
+
     crate::log!("  APMG Registers (via PRPH bus):\n");
     for (name, addr) in apmg_regs {
         match debug_read_prph(*addr) {

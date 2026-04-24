@@ -6,8 +6,6 @@ pub mod mmio;
 pub mod mmio;
 pub mod nic_fpga_dma;
 #[cfg(target_arch = "x86_64")]
-mod nvme_backend;
-#[cfg(target_arch = "x86_64")]
 pub mod nvme;
 #[cfg(not(target_arch = "x86_64"))]
 #[path = "nvme_disabled.rs"]

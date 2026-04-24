@@ -2,15 +2,15 @@ pub mod adapter;
 pub mod core;
 pub mod device;
 pub mod dhcpv6;
-pub mod r8139;
+pub mod iwl4965;
 pub mod r8125;
+pub mod r8139;
 pub mod r8169;
 pub mod ring;
 pub mod tls;
 pub mod tls_socket;
 pub mod vio;
 pub mod wifi;
-pub mod iwl4965;
 
 use ::core::sync::atomic::{AtomicUsize, Ordering};
 use spin::Mutex;

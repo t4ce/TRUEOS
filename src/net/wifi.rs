@@ -1,10 +1,10 @@
+use super::{DriverStatus, NetStats, NetworkDriver};
+use crate::pci::PciDevice;
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
-use spin::Mutex;
 use core::sync::atomic::{AtomicBool, Ordering};
-use super::{DriverStatus, NetworkDriver, NetStats};
-use crate::pci::PciDevice;
+use spin::Mutex;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WifiSecurity {
@@ -42,8 +42,12 @@ pub struct WifiNetwork {
 impl WifiNetwork {
     pub fn signal_quality(&self) -> u8 {
         // Convert dBm to percentage: -30 dBm = 100%, -90 dBm = 0%
-        if self.signal_dbm >= -30 { return 100; }
-        if self.signal_dbm <= -90 { return 0; }
+        if self.signal_dbm >= -30 {
+            return 100;
+        }
+        if self.signal_dbm <= -90 {
+            return 0;
+        }
         ((self.signal_dbm as i16 + 90) * 100 / 60) as u8
     }
 
@@ -157,7 +161,10 @@ pub fn connected_ssid() -> Option<String> {
 }
 
 pub fn signal_strength() -> Option<i8> {
-    WIFI_DRIVER.lock().as_ref().and_then(|d| d.signal_strength())
+    WIFI_DRIVER
+        .lock()
+        .as_ref()
+        .and_then(|d| d.signal_strength())
 }
 
 pub fn ensure_started() -> Result<(), &'static str> {
@@ -270,27 +277,43 @@ pub fn set_driver(driver: Box<dyn WifiDriver>) {
 
 pub fn probe_pci(pci_dev: &PciDevice) -> bool {
     // Debug: log every device we check
-    crate::log!("[WIFI-PROBE] Checking {:04X}:{:04X} class={:02X} sub={:02X} at {}.{}.{}",
-        pci_dev.vendor_id, pci_dev.device_id,
-        pci_dev.class, pci_dev.subclass,
-        pci_dev.bus, pci_dev.slot, pci_dev.function);
+    crate::log!(
+        "[WIFI-PROBE] Checking {:04X}:{:04X} class={:02X} sub={:02X} at {}.{}.{}",
+        pci_dev.vendor_id,
+        pci_dev.device_id,
+        pci_dev.class,
+        pci_dev.subclass,
+        pci_dev.bus,
+        pci_dev.slot,
+        pci_dev.function
+    );
 
     // Intel WiFi devices: class 0x02 (Network) subclass 0x80 (Other)
     // or class 0x0D (Wireless)
     // or Intel vendor with known WiFi device IDs
     let is_wireless = pci_dev.class == 0x0D
         || (pci_dev.class == crate::pci::class::NETWORK && pci_dev.subclass == 0x80)
-        || (pci_dev.vendor_id == 0x8086 && super::iwl4965::IWL4965_DEVICE_IDS.contains(&pci_dev.device_id));
+        || (pci_dev.vendor_id == 0x8086
+            && super::iwl4965::IWL4965_DEVICE_IDS.contains(&pci_dev.device_id));
 
     if !is_wireless {
-        crate::log!("[WIFI-PROBE] -> Not wireless (class={:02X} sub={:02X} devid={:04X})",
-            pci_dev.class, pci_dev.subclass, pci_dev.device_id);
+        crate::log!(
+            "[WIFI-PROBE] -> Not wireless (class={:02X} sub={:02X} devid={:04X})",
+            pci_dev.class,
+            pci_dev.subclass,
+            pci_dev.device_id
+        );
         return false;
     }
 
-    crate::log!("[WIFI] Found wireless device: {:04X}:{:04X} at {}.{}.{}",
-        pci_dev.vendor_id, pci_dev.device_id,
-        pci_dev.bus, pci_dev.slot, pci_dev.function);
+    crate::log!(
+        "[WIFI] Found wireless device: {:04X}:{:04X} at {}.{}.{}",
+        pci_dev.vendor_id,
+        pci_dev.device_id,
+        pci_dev.bus,
+        pci_dev.slot,
+        pci_dev.function
+    );
 
     // Try Intel WiFi Link 4965AGN
     if pci_dev.vendor_id == 0x8086 {
