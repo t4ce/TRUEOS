@@ -5,8 +5,8 @@ use spin::Mutex;
 
 use super::xelp_media_h264src::parse_h264_source_summary;
 use super::xelp_media_mp4::{
-    h264_crop_offsets_px, parse_pps, parse_sample_vcl_info, parse_sps, visible_h264_frame_dims,
-    write_annex_b_for_sample, AnnexBAccessUnit, H264VclInfo, ParsedPps, ParsedSps,
+    AnnexBAccessUnit, H264VclInfo, ParsedPps, ParsedSps, h264_crop_offsets_px, parse_pps,
+    parse_sample_vcl_info, parse_sps, visible_h264_frame_dims, write_annex_b_for_sample,
 };
 use super::xelp_media_source;
 
@@ -1357,11 +1357,7 @@ fn build_execlist_context_descriptor_for_gpu_addr(context_gpu_addr: u64) -> (u32
 
 fn media_sw_context_id_for_submit(context_gpu_addr: u64) -> u32 {
     let sw_context_id = ((context_gpu_addr >> 12) as u32) & 0x7FF;
-    if sw_context_id == 0 {
-        1
-    } else {
-        sw_context_id
-    }
+    if sw_context_id == 0 { 1 } else { sw_context_id }
 }
 
 fn build_media_execlist_context_descriptor(
@@ -1689,8 +1685,8 @@ fn build_h264_decode_batch_skeleton(
     let width_mbs = coded_width.saturating_add(15) / 16;
     let frame_dims = visible_width | (visible_height << 16);
     let output_pitch = align_up_u32(coded_width.max(128), 128); // Y-tile: 128-byte tile width
-                                                                // Y-tile NV12: chroma plane must start on a 32-row tile boundary so the
-                                                                // HW doesn't share a physical tile row between Y bottom and UV top.
+    // Y-tile NV12: chroma plane must start on a 32-row tile boundary so the
+    // HW doesn't share a physical tile row between Y bottom and UV top.
     let chroma_y_offset = align_up_u32(coded_height, 32);
     let stage_flags = (has_idr as u32) | (1 << 1);
 
@@ -1839,13 +1835,18 @@ fn build_h264_decode_batch_skeleton(
             MFX_CMD_LEN_PIPE_BUF_ADDR_STATE,
         ),
     )?;
-    // DW1-2: Pre Deblocking Destination = output surface
-    packet_write_addr64(batch, pipe_buf, 1, output_surface_gpu_addr);
-    batch[pipe_buf + 3] = MFX_MOCS_UC;
+    // Mesa only programs the currently selected decode destination. With
+    // post-deblock output enabled, aliasing both pre- and post-deblock
+    // destinations to the same surface can let two stages stamp the same
+    // buffer differently. Keep pre-deblock unset and use only the active
+    // post-deblock destination.
+    batch[pipe_buf + 1] = 0;
+    batch[pipe_buf + 2] = 0;
+    batch[pipe_buf + 3] = 0;
     // DW4-5: Post Deblocking Destination = output surface
     packet_write_addr64(batch, pipe_buf, 4, output_surface_gpu_addr);
     batch[pipe_buf + 6] = MFX_MOCS_UC; // Post Deblocking Attributes
-                                       // DW9: Original Uncompressed Picture Source Attributes
+    // DW9: Original Uncompressed Picture Source Attributes
     batch[pipe_buf + 9] = MFX_MOCS_UC;
     // DW7-8: Original Uncompressed Picture Source = reference surface (previous frame)
     if !has_idr {
@@ -1856,12 +1857,12 @@ fn build_h264_decode_batch_skeleton(
     // DW13-14: Intra Row Store Scratch Buffer (32KB at +0x00000)
     packet_write_addr64(batch, pipe_buf, 13, scratch_gpu_addr);
     batch[pipe_buf + 15] = MFX_MOCS_UC; // Intra Row Store Attributes
-                                        // DW16-17: Deblocking Filter Row Store Scratch Buffer (32KB at +0x08000)
-                                        // Gen12 needs width_in_mbs × 256 bytes; for 1280px = 80 MBs = 20KB.
+    // DW16-17: Deblocking Filter Row Store Scratch Buffer (32KB at +0x08000)
+    // Gen12 needs width_in_mbs × 256 bytes; for 1280px = 80 MBs = 20KB.
     packet_write_addr64(batch, pipe_buf, 16, scratch_gpu_addr + 0x08000);
     batch[pipe_buf + 18] = MFX_MOCS_UC; // Deblocking Filter Row Store Attributes
-                                        // DW19-50: Reference Picture Frame Store addresses (16 refs × 2 DWords each)
-                                        //          For non-IDR frames, point ref 0 to the reference surface (previous decoded frame).
+    // DW19-50: Reference Picture Frame Store addresses (16 refs × 2 DWords each)
+    //          For non-IDR frames, point ref 0 to the reference surface (previous decoded frame).
     if !has_idr {
         packet_write_addr64(batch, pipe_buf, 19, ref_surface_gpu_addr);
     }
@@ -1911,7 +1912,7 @@ fn build_h264_decode_batch_skeleton(
     // BSD Row Store (32KB at +0x10000)
     packet_write_addr64(batch, bsp, 1, scratch_gpu_addr + 0x10000);
     batch[bsp + 3] = MFX_MOCS_UC; // BSD Row Store Attributes
-                                  // MPR Row Store (32KB at +0x18000)
+    // MPR Row Store (32KB at +0x18000)
     packet_write_addr64(batch, bsp, 4, scratch_gpu_addr + 0x18000);
     batch[bsp + 6] = MFX_MOCS_UC; // MPR Row Store Attributes
     batch[bsp + 9] = MFX_MOCS_UC; // Bitplane Read Buffer Attributes
@@ -1931,7 +1932,12 @@ fn build_h264_decode_batch_skeleton(
             MFX_CMD_LEN_AVC_DPB_STATE,
         ),
     )?;
-    if !has_idr {
+    if has_idr {
+        // With no references on the first IDR, every DPB slot must be invalid.
+        // Leaving this packet zeroed means 16 VALID non-reference entries,
+        // which still gives the concealment path something stale to point at.
+        batch[dpb + 1] = 0x0000_FFFF;
+    } else {
         // DW1: FrameStore_ID[0]=0, NonExisting[0]=0 (valid), InUse(LongTerm)[0]=0 (short-term)
         // All other frame stores: NonExisting=1
         batch[dpb + 1] = 0x0000_FFFE; // bits[15:1]=1 → frame stores 1..15 non-existing
@@ -2415,7 +2421,7 @@ fn submit_h264_frame_once(
 ) -> Option<(bool, usize, usize, u64, u64, *mut u8)> {
     let (coded_width, coded_height) = coded_h264_frame_dims(sps);
     let output_pitch = align_up_u32(coded_width.max(128), 128) as usize; // Y-tile: 128-byte tile width
-                                                                         // Y-tile NV12: chroma starts at tile-row-aligned height (same as batch builder).
+    // Y-tile NV12: chroma starts at tile-row-aligned height (same as batch builder).
     let chroma_y_aligned = ((coded_height as usize) + 31) & !31;
     let total_height = chroma_y_aligned + ((coded_height as usize) + 1) / 2;
     let total_tile_rows = (total_height + 31) & !31;

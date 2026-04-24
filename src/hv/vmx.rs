@@ -449,7 +449,10 @@ pub fn log_vmexit_interrupt_info(label: &str) {
     hvlogf(format_args!(
         "hv: vm{} reporting: {} vmexit addr guest_linear=0x{:016X} guest_physical=0x{:016X} guest_rsp=0x{:016X}",
         super::snapshot::VM1_ID,
-        label, guest_linear, guest_physical, guest_rsp,
+        label,
+        guest_linear,
+        guest_physical,
+        guest_rsp,
     ));
 }
 

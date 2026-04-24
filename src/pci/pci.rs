@@ -1,8 +1,19 @@
 #[cfg(target_arch = "x86_64")]
 use core::arch::asm;
+#[cfg(target_arch = "x86_64")]
+use x86_64::instructions::interrupts;
 
 use heapless::Vec;
 use spin::{Mutex, Once};
+
+// PCI config access direction:
+// - Legacy CF8/CFC is a single global address+data window, so accesses must be serialized.
+// - Keep that serialization coarse for now so sub-dword read-modify-write helpers stay correct.
+// - On x86_64 we also mask local CPU interrupts while holding the legacy lock to avoid
+//   deadlocking against an interrupt handler re-entering CF8/CFC on the same core.
+// - Future cleanup: preserve this conservative legacy fallback, but let ECAM-backed config
+//   accesses stay parallel so independent PCI probe / hotplug / driver bring-up can fan out
+//   without reintroducing CF8/CFC races.
 
 const CFG_ADDR: u16 = 0xCF8;
 const CFG_DATA: u16 = 0xCFC;
@@ -32,6 +43,8 @@ const PCI_BRIDGE_MEM_BASE_LIMIT: u16 = 0x20;
 
 const MAX_BRIDGE_ALLOCS: usize = 32;
 
+static LEGACY_CFG_LOCK: Mutex<()> = Mutex::new(());
+
 #[derive(Copy, Clone, Debug)]
 struct BridgeAlloc {
     bus: u8,
@@ -44,6 +57,17 @@ struct BridgeAlloc {
 
 static BRIDGE_ALLOCS: Mutex<Vec<BridgeAlloc, MAX_BRIDGE_ALLOCS>> = Mutex::new(Vec::new());
 
+pub mod class {
+    pub const UNCLASSIFIED: u8 = 0x00;
+    pub const MASS_STORAGE: u8 = 0x01;
+    pub const NETWORK: u8 = 0x02;
+    pub const DISPLAY: u8 = 0x03;
+    pub const MULTIMEDIA: u8 = 0x04;
+    pub const MEMORY: u8 = 0x05;
+    pub const BRIDGE: u8 = 0x06;
+    pub const SERIAL_BUS: u8 = 0x0C;
+}
+
 #[derive(Copy, Clone, Debug)]
 pub struct PciDevice {
     pub bus: u8,
@@ -51,9 +75,60 @@ pub struct PciDevice {
     pub function: u8,
     pub vendor: u16,
     pub device: u16,
+    pub vendor_id: u16,
+    pub device_id: u16,
     pub class: u8,
     pub subclass: u8,
     pub prog_if: u8,
+}
+
+impl PciDevice {
+    /// Return the decoded BAR address for `index`.
+    ///
+    /// For MMIO BARs this masks off the low attribute bits.
+    /// For 64-bit BARs this combines the low/high dwords.
+    pub fn bar_address(&self, index: usize) -> Option<u64> {
+        if index >= 6 {
+            return None;
+        }
+
+        let (bar_lo, bar_hi) = read_bar_raw(self.bus, self.slot, self.function, index as u8);
+        if bar_lo == 0 {
+            return None;
+        }
+
+        if (bar_lo & 0x1) != 0 {
+            return Some((bar_lo & !0x3) as u64);
+        }
+
+        let addr_lo = (bar_lo & !0xFu32) as u64;
+        let is_64 = ((bar_lo >> 1) & 0x3) == 0x2;
+        if is_64 {
+            Some(((bar_hi.unwrap_or(0) as u64) << 32) | addr_lo)
+        } else {
+            Some(addr_lo)
+        }
+    }
+
+    /// Returns true when BAR `index` is present and memory-mapped.
+    pub fn bar_is_memory(&self, index: usize) -> bool {
+        if index >= 6 {
+            return false;
+        }
+
+        let (bar_lo, _) = read_bar_raw(self.bus, self.slot, self.function, index as u8);
+        bar_lo != 0 && (bar_lo & 0x1) == 0
+    }
+
+    /// Returns true when BAR `index` is present and I/O-port based.
+    pub fn bar_is_io(&self, index: usize) -> bool {
+        if index >= 6 {
+            return false;
+        }
+
+        let (bar_lo, _) = read_bar_raw(self.bus, self.slot, self.function, index as u8);
+        bar_lo != 0 && (bar_lo & 0x1) != 0
+    }
 }
 
 static DEVICES: Mutex<Vec<PciDevice, MAX_PCI_DEVICES>> = Mutex::new(Vec::new());
@@ -211,6 +286,8 @@ pub fn enumerate_impl() {
                     function: 0,
                     vendor: vendor0,
                     device: device0,
+                    vendor_id: vendor0,
+                    device_id: device0,
                     class: class0,
                     subclass: subclass0,
                     prog_if: prog_if0,
@@ -238,6 +315,8 @@ pub fn enumerate_impl() {
                         function,
                         vendor,
                         device,
+                        vendor_id: vendor,
+                        device_id: device,
                         class,
                         subclass,
                         prog_if,
@@ -262,6 +341,23 @@ fn cfg_address(bus: u8, slot: u8, function: u8, offset: u8) -> u32 {
         | ((offset as u32) & 0xFC)
 }
 
+#[inline(always)]
+fn with_legacy_cfg_lock<R>(f: impl FnOnce() -> R) -> R {
+    #[cfg(target_arch = "x86_64")]
+    {
+        interrupts::without_interrupts(|| {
+            let _guard = LEGACY_CFG_LOCK.lock();
+            f()
+        })
+    }
+
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        let _guard = LEGACY_CFG_LOCK.lock();
+        f()
+    }
+}
+
 #[cfg(not(target_arch = "x86_64"))]
 #[cold]
 fn legacy_cfg_unsupported() -> ! {
@@ -271,38 +367,51 @@ fn legacy_cfg_unsupported() -> ! {
 }
 
 fn read_u16(bus: u8, slot: u8, function: u8, offset: u8) -> u16 {
-    let aligned = read_u32(bus, slot, function, offset & !0x03);
-    let shift = ((offset & 0x03) as u32) * 8;
-    ((aligned >> shift) & 0xFFFF) as u16
+    with_legacy_cfg_lock(|| {
+        let aligned = read_u32_unlocked(bus, slot, function, offset & !0x03);
+        let shift = ((offset & 0x03) as u32) * 8;
+        ((aligned >> shift) & 0xFFFF) as u16
+    })
 }
 
 fn read_u8(bus: u8, slot: u8, function: u8, offset: u8) -> u8 {
-    let aligned = read_u32(bus, slot, function, offset & !0x03);
-    let shift = ((offset & 0x03) as u32) * 8;
-    ((aligned >> shift) & 0xFF) as u8
+    with_legacy_cfg_lock(|| {
+        let aligned = read_u32_unlocked(bus, slot, function, offset & !0x03);
+        let shift = ((offset & 0x03) as u32) * 8;
+        ((aligned >> shift) & 0xFF) as u8
+    })
 }
 
 fn write_u16(bus: u8, slot: u8, function: u8, offset: u8, value: u16) {
-    let aligned_off = offset & !0x03;
-    let shift = ((offset & 0x03) as u32) * 8;
-    let mask = !(0xFFFFu32 << shift);
+    with_legacy_cfg_lock(|| {
+        let aligned_off = offset & !0x03;
+        let shift = ((offset & 0x03) as u32) * 8;
+        let mask = !(0xFFFFu32 << shift);
 
-    let current = read_u32(bus, slot, function, aligned_off);
-    let new_val = (current & mask) | ((value as u32) << shift);
-    write_u32(bus, slot, function, aligned_off, new_val);
+        let current = read_u32_unlocked(bus, slot, function, aligned_off);
+        let new_val = (current & mask) | ((value as u32) << shift);
+        write_u32_unlocked(bus, slot, function, aligned_off, new_val);
+    })
 }
 
 fn write_u8(bus: u8, slot: u8, function: u8, offset: u8, value: u8) {
-    let aligned_off = offset & !0x03;
-    let shift = ((offset & 0x03) as u32) * 8;
-    let mask = !(0xFFu32 << shift);
+    with_legacy_cfg_lock(|| {
+        let aligned_off = offset & !0x03;
+        let shift = ((offset & 0x03) as u32) * 8;
+        let mask = !(0xFFu32 << shift);
 
-    let current = read_u32(bus, slot, function, aligned_off);
-    let new_val = (current & mask) | ((value as u32) << shift);
-    write_u32(bus, slot, function, aligned_off, new_val);
+        let current = read_u32_unlocked(bus, slot, function, aligned_off);
+        let new_val = (current & mask) | ((value as u32) << shift);
+        write_u32_unlocked(bus, slot, function, aligned_off, new_val);
+    })
 }
 
 fn read_u32(bus: u8, slot: u8, function: u8, offset: u8) -> u32 {
+    debug_assert_eq!(offset & 0x03, 0);
+    with_legacy_cfg_lock(|| read_u32_unlocked(bus, slot, function, offset))
+}
+
+fn read_u32_unlocked(bus: u8, slot: u8, function: u8, offset: u8) -> u32 {
     debug_assert_eq!(offset & 0x03, 0);
     #[cfg(not(target_arch = "x86_64"))]
     {
@@ -320,6 +429,11 @@ fn read_u32(bus: u8, slot: u8, function: u8, offset: u8) -> u32 {
 }
 
 fn write_u32(bus: u8, slot: u8, function: u8, offset: u8, value: u32) {
+    debug_assert_eq!(offset & 0x03, 0);
+    with_legacy_cfg_lock(|| write_u32_unlocked(bus, slot, function, offset, value))
+}
+
+fn write_u32_unlocked(bus: u8, slot: u8, function: u8, offset: u8, value: u32) {
     debug_assert_eq!(offset & 0x03, 0);
     #[cfg(not(target_arch = "x86_64"))]
     {
@@ -341,7 +455,23 @@ pub fn with_devices<R, F: FnOnce(&[PciDevice]) -> R>(f: F) -> R {
     f(lock.as_slice())
 }
 
+pub fn find_by_class(class: u8) -> alloc::vec::Vec<PciDevice> {
+    let mut out = alloc::vec::Vec::new();
+    with_devices(|list| {
+        for dev in list {
+            if dev.class == class {
+                out.push(*dev);
+            }
+        }
+    });
+    out
+}
+
 pub fn read_bar_raw(bus: u8, slot: u8, function: u8, index: u8) -> (u32, Option<u32>) {
+    if index >= 6 {
+        return (0, None);
+    }
+
     let off = 0x10u16 + (index as u16) * 4;
     let bar_lo = config_read_u32(bus, slot, function, off);
     if (bar_lo & 0x1) != 0 {
@@ -368,12 +498,7 @@ pub fn enable_mem_and_bus_master(bus: u8, slot: u8, function: u8) {
 }
 
 pub fn try_function_level_reset(bus: u8, slot: u8, function: u8) -> bool {
-    let status = config_read_u16(bus, slot, function, 0x06);
-    if (status & PCI_STATUS_CAP_LIST) == 0 {
-        return false;
-    }
-
-    let Some(pcie_cap) = find_capability(bus, slot, function, PCI_CAP_ID_PCI_EXPRESS) else {
+    let Some(pcie_cap) = find_capability_bdf(bus, slot, function, PCI_CAP_ID_PCI_EXPRESS) else {
         return false;
     };
 
@@ -391,7 +516,17 @@ pub fn try_function_level_reset(bus: u8, slot: u8, function: u8) -> bool {
     true
 }
 
-fn find_capability(bus: u8, slot: u8, function: u8, cap_id: u8) -> Option<u16> {
+/// Walk the standard PCI capability list and return the capability offset.
+pub fn find_capability(dev: &PciDevice, cap_id: u8) -> Option<u16> {
+    find_capability_bdf(dev.bus, dev.slot, dev.function, cap_id)
+}
+
+fn find_capability_bdf(bus: u8, slot: u8, function: u8, cap_id: u8) -> Option<u16> {
+    let status = config_read_u16(bus, slot, function, 0x06);
+    if (status & PCI_STATUS_CAP_LIST) == 0 {
+        return None;
+    }
+
     let mut ptr = (config_read_u8(bus, slot, function, PCI_CAP_PTR) & !0x3) as u16;
     let mut guard = 0usize;
     while ptr >= 0x40 && ptr < 0x100 && guard < 48 {

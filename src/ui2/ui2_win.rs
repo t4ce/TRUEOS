@@ -489,7 +489,9 @@ pub(super) fn teardown_stopped_vm_windows_in_state(state: &mut Ui2State) -> usiz
         }
     }
 
-    state.windows.retain(|window| !stale_ids.contains(&window.id));
+    state
+        .windows
+        .retain(|window| !stale_ids.contains(&window.id));
 
     let active_selected: Vec<(u32, u32)> = state
         .cursors
@@ -514,7 +516,12 @@ pub(super) fn teardown_stopped_vm_windows_in_state(state: &mut Ui2State) -> usiz
     }
 
     state.compose_reason = "teardown-stopped-vm-windows";
-    for window_id in state.windows.iter().map(|window| window.id).collect::<Vec<_>>() {
+    for window_id in state
+        .windows
+        .iter()
+        .map(|window| window.id)
+        .collect::<Vec<_>>()
+    {
         refresh_window_hit_entries(state, window_id);
     }
     UI2_DIRTY.store(true, Ordering::Release);
@@ -749,6 +756,28 @@ pub fn browser_window_id_for_instance(browser_instance_id: u32) -> Option<u32> {
     }
 }
 
+pub fn hosted_surface_window_id_for_content(content_id: u32) -> Option<u32> {
+    if content_id == 0 {
+        return None;
+    }
+    let window_id = hosted_window_id_for_content(content_id);
+    if window_id == 0 {
+        return None;
+    }
+
+    let state_lock = init_state();
+    let state = state_lock.lock();
+    state
+        .windows
+        .iter()
+        .find(|window| {
+            window.id == window_id
+                && window.kind == Ui2WindowKind::HostedSurface
+                && window.browser_instance_id == content_id
+        })
+        .map(|_| window_id)
+}
+
 pub fn window_info_by_id(id: u32) -> Option<TrueosUi2WindowInfo> {
     let state_lock = init_state();
     let state = state_lock.lock();
@@ -778,7 +807,11 @@ pub fn window_shell_snapshots() -> Vec<Ui2WindowShellSnapshot> {
             frame_rect,
             content_rect: window_content_rect(&state, window),
             titlebar_rect: window_decoration_rect(&state, window),
-            minimize_rect: window_system_button_rect(&state, window, Ui2SystemButtonAction::Minimize),
+            minimize_rect: window_system_button_rect(
+                &state,
+                window,
+                Ui2SystemButtonAction::Minimize,
+            ),
             maximize_rect: window_system_button_rect(
                 &state,
                 window,
@@ -1191,7 +1224,7 @@ impl Ui2SurfaceWindow {
         )
     }
 
-    pub fn from_existing_texture(
+    pub fn create_from_existing_texture(
         title: &str,
         content_rect: Ui2Rect,
         z: i16,
@@ -1202,7 +1235,7 @@ impl Ui2SurfaceWindow {
         Some(Self::attach_existing_texture(title, content_rect, z, alpha, tex_id, blend_enabled))
     }
 
-    pub fn from_existing_texture_with_size(
+    pub fn create_from_existing_texture_with_size(
         title: &str,
         content_rect: Ui2Rect,
         z: i16,
@@ -1222,6 +1255,53 @@ impl Ui2SurfaceWindow {
             tex_width.max(1),
             tex_height.max(1),
         ))
+    }
+
+    pub fn get_or_create_for_hosted_content_with_size(
+        title: &str,
+        content_rect: Ui2Rect,
+        z: i16,
+        alpha: u8,
+        content_id: u32,
+        tex_id: u32,
+        blend_enabled: bool,
+        tex_width: u32,
+        tex_height: u32,
+    ) -> Option<Self> {
+        if content_id == 0 {
+            return None;
+        }
+
+        let width = tex_width.max(1);
+        let height = tex_height.max(1);
+        let window_id = if let Some(window_id) = hosted_surface_window_id_for_content(content_id) {
+            let rect = window_rect_for_content(Ui2WindowDecorationMode::System, content_rect);
+            let _ = set_window_title(window_id, title);
+            let _ = set_window_hosted_surface_content(window_id, tex_id, blend_enabled);
+            let _ = move_window(window_id, rect.x, rect.y);
+            let _ = resize_window(window_id, rect.w, rect.h);
+            let _ = set_window_visible(window_id, true);
+            let _ = bind_window_hosted_surface_state(window_id, content_id, width, height);
+            window_id
+        } else {
+            let window_id = create_hosted_surface_content_window(
+                title,
+                content_rect,
+                z,
+                alpha,
+                tex_id,
+                blend_enabled,
+            );
+            let _ = bind_window_hosted_surface_state(window_id, content_id, width, height);
+            window_id
+        };
+
+        Some(Self {
+            window_id,
+            tex_id,
+            width,
+            height,
+        })
     }
 
     pub fn from_tiled_content(

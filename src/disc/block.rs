@@ -14,7 +14,6 @@ use embassy_sync::signal::Signal;
 
 const DEFAULT_DMA_ALIGNMENT: u32 = 64;
 const DEFAULT_MAX_TRANSFER_BYTES: u64 = 256 * 1024;
-const BLOCK_DEVICE_SERVICE_TASK_POOL: usize = 3;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -32,6 +31,8 @@ pub enum Error {
 pub type Result<T> = core::result::Result<T, Error>;
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
+
+const BLOCK_DEVICE_SERVICE_TASK_POOL: usize = 3;
 
 struct AsyncMutex<T> {
     locked: core::sync::atomic::AtomicBool,
@@ -160,18 +161,9 @@ enum ServicedBlockRequest {
 }
 
 enum ServicedBlockReply {
-    Read {
-        seq: u64,
-        result: Result<Vec<u8>>,
-    },
-    Write {
-        seq: u64,
-        result: Result<()>,
-    },
-    Flush {
-        seq: u64,
-        result: Result<()>,
-    },
+    Read { seq: u64, result: Result<Vec<u8>> },
+    Write { seq: u64, result: Result<()> },
+    Flush { seq: u64, result: Result<()> },
 }
 
 impl ServicedBlockReply {
@@ -215,11 +207,15 @@ async fn serviced_block_device_task(front: &'static ServicedBlockDeviceFront) {
             }
             ServicedBlockRequest::Write { seq, lba, data } => {
                 let result = driver.write_blocks(lba, &data).await;
-                front.reply.signal(ServicedBlockReply::Write { seq, result });
+                front
+                    .reply
+                    .signal(ServicedBlockReply::Write { seq, result });
             }
             ServicedBlockRequest::Flush { seq } => {
                 let result = driver.flush().await;
-                front.reply.signal(ServicedBlockReply::Flush { seq, result });
+                front
+                    .reply
+                    .signal(ServicedBlockReply::Flush { seq, result });
             }
         }
     }
@@ -684,7 +680,10 @@ fn blocks_in_buffer(len: usize, block_size: u32) -> Result<u64> {
     Ok((len / block_size as usize) as u64)
 }
 
-fn register_boxed_device(descriptor: DeviceDescriptor, driver: Box<dyn BlockDevice>) -> DeviceHandle {
+fn register_boxed_device(
+    descriptor: DeviceDescriptor,
+    driver: Box<dyn BlockDevice>,
+) -> DeviceHandle {
     let should_request_trueosfs_mount = descriptor.parent.is_none() && descriptor.user_visible;
     let block_size = driver.block_size_bytes();
     let block_count = driver.block_count();

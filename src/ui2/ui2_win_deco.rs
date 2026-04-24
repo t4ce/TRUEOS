@@ -407,7 +407,8 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
     if window.decoration_mode == Ui2WindowDecorationMode::System && window.titlebar_visible {
         let has_title_texture_icon = texture_is_drawable(window.title_icon_tex_id);
         let has_title_twemoji = !has_title_texture_icon && window.title_twemoji != '\0';
-        let title_icon_rect = Ui2Rect::new(rect.x, rect.y, titleband_h.max(1.0), titleband_h.max(1.0));
+        let title_icon_rect =
+            Ui2Rect::new(rect.x, rect.y, titleband_h.max(1.0), titleband_h.max(1.0));
         if has_title_texture_icon || has_title_twemoji {
             if has_title_texture_icon {
                 draw_window_title_texture_icon(

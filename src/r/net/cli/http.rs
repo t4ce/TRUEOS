@@ -354,11 +354,7 @@ async fn request_http_body(
     let timeout_window = EmbassyDuration::from_millis(timeout_ms as u64);
     let mut last_progress = Instant::now();
 
-    async fn send_tcp_all(
-        net: &VNet,
-        handle: api::NetHandle,
-        data: &[u8],
-    ) -> Result<(), ()> {
+    async fn send_tcp_all(net: &VNet, handle: api::NetHandle, data: &[u8]) -> Result<(), ()> {
         for chunk in data.chunks(api::MAX_MSG) {
             let mut sent = false;
             for _ in 0..64 {
@@ -506,7 +502,8 @@ async fn request_http_body(
                         let status = parse_http_status(headers).unwrap_or(0);
                         if crate::logflag::VHTTPS_VERBOSE {
                             let content_length = header_parse_content_length(headers).unwrap_or(0);
-                            let chunked = header_contains_token(headers, b"transfer-encoding", b"chunked");
+                            let chunked =
+                                header_contains_token(headers, b"transfer-encoding", b"chunked");
                             crate::log!(
                                 "http: headers host={} port={} handle={} status={} hdr_bytes={} body_bytes={} chunked={} content_length={}\n",
                                 parsed.host,

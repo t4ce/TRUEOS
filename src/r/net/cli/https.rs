@@ -4425,14 +4425,7 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_post_json_start(
 ) -> u32 {
     const TIMEOUT_MS: u32 = 15_000;
     trueos_cabi_net_fetch_post_json_start_with_timeout(
-        url_ptr,
-        url_len,
-        path_ptr,
-        path_len,
-        body_ptr,
-        body_len,
-        bearer_ptr,
-        bearer_len,
+        url_ptr, url_len, path_ptr, path_len, body_ptr, body_len, bearer_ptr, bearer_len,
         TIMEOUT_MS,
     )
 }
@@ -4495,7 +4488,15 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_post_json_start_with_timeout(
     let op_id = CABI_NET_FETCH_SEQ.fetch_add(1, Ordering::Relaxed);
     CABI_NET_FETCH_RESULTS.lock().insert(op_id, None);
 
-    spawn_cabi_net_fetch_post_json(op_id, key, url, body_json, bearer, timeout_ms.max(1), MAX_BYTES);
+    spawn_cabi_net_fetch_post_json(
+        op_id,
+        key,
+        url,
+        body_json,
+        bearer,
+        timeout_ms.max(1),
+        MAX_BYTES,
+    );
 
     op_id
 }
@@ -4514,13 +4515,7 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_post_json_bytes_start(
 ) -> u32 {
     const TIMEOUT_MS: u32 = 15_000;
     trueos_cabi_net_fetch_post_json_bytes_start_with_timeout(
-        url_ptr,
-        url_len,
-        body_ptr,
-        body_len,
-        bearer_ptr,
-        bearer_len,
-        TIMEOUT_MS,
+        url_ptr, url_len, body_ptr, body_len, bearer_ptr, bearer_len, TIMEOUT_MS,
     )
 }
 

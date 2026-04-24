@@ -457,7 +457,7 @@ pub async fn ui2_raple_demo_task() {
         return;
     };
 
-    let Some(surface) = ui2::Ui2SurfaceWindow::from_existing_texture_with_size(
+    let Some(surface) = ui2::Ui2SurfaceWindow::get_or_create_for_hosted_content_with_size(
         UI2_RAPLE_WINDOW_TITLE,
         Ui2Rect {
             x: UI2_RAPLE_WINDOW_X,
@@ -467,6 +467,7 @@ pub async fn ui2_raple_demo_task() {
         },
         UI2_RAPLE_WINDOW_Z,
         UI2_RAPLE_WINDOW_ALPHA,
+        UI2_RAPLE_CONTENT_ID,
         UI2_RAPLE_TEX_ID,
         true,
         UI2_RAPLE_VIEW_W,

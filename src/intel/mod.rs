@@ -1,6 +1,7 @@
 mod display;
 pub(crate) mod format;
 mod guc;
+pub mod hda;
 mod hw_cursor;
 mod render;
 pub(crate) mod shader;

@@ -17,6 +17,7 @@ pub enum Ui2DemoTexId {
     Chart = 4_721,
     Raple = 4_722,
     Currency = 4_723,
+    Player = 4_724,
     TrueosfsExplorer = 4_901,
 }
 
@@ -38,6 +39,7 @@ pub enum Ui2DemoContentId {
     Chart = 48,
     Raple = 49,
     Currency = 50,
+    Player = 51,
 }
 
 impl Ui2DemoContentId {

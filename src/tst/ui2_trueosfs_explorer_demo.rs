@@ -633,7 +633,7 @@ pub async fn ui2_trueosfs_explorer_demo_task() {
         return;
     }
 
-    let Some(surface) = crate::r::ui2::Ui2SurfaceWindow::from_existing_texture_with_size(
+    let Some(surface) = crate::r::ui2::Ui2SurfaceWindow::get_or_create_for_hosted_content_with_size(
         "TRUEOSFS Explorer",
         Ui2Rect {
             x: UI2_TRUEOSFS_EXPLORER_X,
@@ -643,6 +643,7 @@ pub async fn ui2_trueosfs_explorer_demo_task() {
         },
         UI2_TRUEOSFS_EXPLORER_Z,
         UI2_TRUEOSFS_EXPLORER_ALPHA,
+        UI2_TRUEOSFS_EXPLORER_CONTENT_ID,
         UI2_TRUEOSFS_EXPLORER_TEX_ID,
         true,
         UI2_TRUEOSFS_EXPLORER_TEX_W,

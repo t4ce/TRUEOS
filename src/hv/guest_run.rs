@@ -154,12 +154,7 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
         blueprint::build_process_args(state.archive.as_str(), state.app_args.as_slice());
     let process_env = blueprint::build_process_env(state.archive.as_str());
     crate::hv::begin_blueprint_app_window_session(state.archive.as_str());
-    match blueprint::invoke_host_rel(
-        unpacked.as_slice(),
-        module.entry,
-        process_args,
-        process_env,
-    ) {
+    match blueprint::invoke_host_rel(unpacked.as_slice(), module.entry, process_args, process_env) {
         Ok(()) => {
             crate::hv::finish_blueprint_app_window_session(true);
             log("run: guest blueprint returned");

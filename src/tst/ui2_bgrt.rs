@@ -58,7 +58,7 @@ pub async fn ui2_bgrt_demo_task() {
     }
 
     let surface = if intel_direct {
-        crate::r::ui2::Ui2SurfaceWindow::from_existing_texture_with_size(
+        crate::r::ui2::Ui2SurfaceWindow::create_from_existing_texture_with_size(
             "Demo BGRT",
             content_rect,
             UI2_BGRT_WINDOW_Z,

@@ -10,6 +10,7 @@ const _: f16 = 0.0_f16;
 pub extern crate alloc;
 
 mod allocators;
+mod aud;
 mod blueprint;
 #[path = "Chronos.rs"]
 mod chronos;
@@ -30,12 +31,13 @@ mod hv;
 #[cfg(not(feature = "intel-hv"))]
 #[path = "hv_disabled.rs"]
 mod hv;
-#[cfg(feature = "intel-hv")]
 pub mod hvv;
 #[cfg(not(feature = "intel-hv"))]
 #[path = "hvv_disabled.rs"]
 pub mod hvv;
 mod intel;
+#[cfg(feature = "intel-hv")]
+mod intel_hda_probe;
 mod iso9660;
 mod limine;
 mod logflag;
@@ -64,10 +66,10 @@ mod std_abi_shim;
 mod tga;
 #[cfg(feature = "tokio-probe")]
 mod tokio_probe;
-#[path = "tst/fps.rs"]
-mod tst_fps;
 #[path = "tst/boot_factory_ram_probe.rs"]
 mod tst_boot_factory_ram_probe;
+#[path = "tst/fps.rs"]
+mod tst_fps;
 #[path = "tst/gfx_tetris.rs"]
 mod tst_gfx_tetris;
 #[path = "tst/html_demo.rs"]
@@ -84,10 +86,10 @@ mod tst_smtp_smoke;
 mod tst_ui2_bgrt;
 #[path = "tst/ui2_chart_demo.rs"]
 mod tst_ui2_chart_demo;
-#[path = "tst/ui2_currency_demo.rs"]
-mod tst_ui2_currency_demo;
 #[path = "tst/ui2_coreticks_demo.rs"]
 mod tst_ui2_coreticks_demo;
+#[path = "tst/ui2_currency_demo.rs"]
+mod tst_ui2_currency_demo;
 #[path = "tst/ui2_ids.rs"]
 mod tst_ui2_ids;
 #[path = "tst/ui2_mandelbrot_demo.rs"]
@@ -96,6 +98,8 @@ mod tst_ui2_mandelbrot_demo;
 mod tst_ui2_particle_demo;
 #[path = "tst/ui2_petersen_demo.rs"]
 mod tst_ui2_petersen_demo;
+#[path = "tst/ui2_player_demo.rs"]
+mod tst_ui2_player_demo;
 #[path = "tst/ui2_raple_demo.rs"]
 mod tst_ui2_raple_demo;
 #[path = "tst/ui2_shell_demo.rs"]
@@ -123,6 +127,8 @@ mod usb2;
 mod wait;
 mod x2apic;
 mod z7;
+
+pub(crate) use crate::intel::hda;
 
 use embassy_executor::{Spawner, raw::Executor};
 pub(crate) use portio::{inb, inl, inw, outb, outl, outw};
@@ -212,13 +218,18 @@ pub extern "C" fn kmain() -> ! {
         );
     }
     let smp_resp = limine::smp_response().unwrap();
-    let lapic_ids: alloc::vec::Vec<u32> = smp_resp.cpus().iter().map(|c| limine::mp_cpu_id(c)).collect();
+    let lapic_ids: alloc::vec::Vec<u32> = smp_resp
+        .cpus()
+        .iter()
+        .map(|c| limine::mp_cpu_id(c))
+        .collect();
     percpu::install_cpu_slot_lapic_order_owned(lapic_ids);
     cpu::init_profiles(percpu::total_slots());
     percpu::init_bsp();
     dma::init_from_limine();
     pci::enumerate_impl();
     intel::init_once();
+    let _ = hda::boot_probe_once();
 
     //vga::cube::tick();
 

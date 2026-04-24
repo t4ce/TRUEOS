@@ -435,7 +435,7 @@ pub async fn ui2_shell_demo_task() {
 
     let content_w = ui2_shell_surface_width();
     let content_h = ui2_shell_surface_height();
-    let Some(surface) = crate::r::ui2::Ui2SurfaceWindow::from_existing_texture_with_size(
+    let Some(surface) = crate::r::ui2::Ui2SurfaceWindow::get_or_create_for_hosted_content_with_size(
         "Shell",
         crate::r::ui2::Ui2Rect {
             x: UI2_SHELL_WINDOW_X,
@@ -445,6 +445,7 @@ pub async fn ui2_shell_demo_task() {
         },
         UI2_SHELL_WINDOW_Z,
         UI2_SHELL_WINDOW_ALPHA,
+        UI2_SHELL_CONTENT_ID,
         UI2_SHELL_TEX_ID,
         true,
         content_w,

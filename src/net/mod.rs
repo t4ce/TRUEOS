@@ -2,11 +2,15 @@ pub mod adapter;
 pub mod core;
 pub mod device;
 pub mod dhcpv6;
+pub mod r8139;
 pub mod r8125;
+pub mod r8169;
 pub mod ring;
 pub mod tls;
 pub mod tls_socket;
 pub mod vio;
+pub mod wifi;
+pub mod iwl4965;
 
 use ::core::sync::atomic::{AtomicUsize, Ordering};
 use spin::Mutex;
@@ -21,6 +25,68 @@ use crate::pci::PciDevice;
 const RX_DESC_COUNT: usize = 256;
 const RX_BUF_SIZE: usize = 2048;
 const POLL_BUDGET: usize = 512;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DriverCategory {
+    Network,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DriverStatus {
+    Unloaded,
+    Loading,
+    Running,
+    Suspended,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct DriverInfo {
+    pub name: &'static str,
+    pub version: &'static str,
+    pub author: &'static str,
+    pub category: DriverCategory,
+    pub vendor_ids: &'static [(u16, u16)],
+}
+
+pub trait Driver {
+    fn info(&self) -> &DriverInfo;
+    fn probe(&mut self, pci_dev: &PciDevice) -> Result<(), &'static str>;
+    fn start(&mut self) -> Result<(), &'static str>;
+    fn stop(&mut self) -> Result<(), &'static str>;
+    fn status(&self) -> DriverStatus;
+    fn handle_interrupt(&mut self);
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NetStats {
+    pub tx_packets: u64,
+    pub rx_packets: u64,
+    pub tx_bytes: u64,
+    pub rx_bytes: u64,
+    pub tx_errors: u64,
+    pub rx_errors: u64,
+    pub tx_dropped: u64,
+    pub rx_dropped: u64,
+}
+
+pub trait NetworkDriver: Driver {
+    fn mac_address(&self) -> [u8; 6];
+    fn link_up(&self) -> bool;
+    fn link_speed(&self) -> u32 {
+        0
+    }
+    fn send(&mut self, data: &[u8]) -> Result<(), &'static str>;
+    fn receive(&mut self) -> Option<alloc::vec::Vec<u8>>;
+    fn poll(&mut self);
+    fn stats(&self) -> NetStats;
+    fn set_promiscuous(&mut self, _enabled: bool) -> Result<(), &'static str> {
+        Err("Not supported")
+    }
+    fn add_multicast(&mut self, _mac: [u8; 6]) -> Result<(), &'static str> {
+        Err("Not supported")
+    }
+}
+
 // Keep RTL8125 enabled, but keep RTL8168 as the primary NIC (dev0) by init order.
 // Enable RTL8125 probing as a secondary NIC. Primary selection is kept stable (dev=0)
 // so the two adapters don't interfere.
@@ -285,6 +351,7 @@ pub fn init() {
     PRIMARY_DEVICE_INDEX.store(0, Ordering::Relaxed);
 
     let mut added: usize = 0;
+    let mut dormant_detected: usize = 0;
 
     // Ordering matters: most of the stack defaults to device 0 as the primary
     // interface (e.g. `mac_address()` and early boot probes). Prefer virtio in
@@ -314,6 +381,31 @@ pub fn init() {
         }
     }
 
+    if crate::logflag::BOOT_INFO_LOGS {
+        for dev in r8139::detect_all() {
+            dormant_detected += 1;
+            crate::log!(
+                "net: detected rtl8139 bdf={:02x}:{:02x}.{} vid={:04x} did={:04x} (not wired)\n",
+                dev.bus,
+                dev.slot,
+                dev.function,
+                dev.vendor_id,
+                dev.device_id
+            );
+        }
+        for dev in r8169::detect_all() {
+            dormant_detected += 1;
+            crate::log!(
+                "net: detected rtl8169-family bdf={:02x}:{:02x}.{} vid={:04x} did={:04x} (not wired)\n",
+                dev.bus,
+                dev.slot,
+                dev.function,
+                dev.vendor_id,
+                dev.device_id
+            );
+        }
+    }
+
     // Prefer a link-up device as primary so swapping cables between ports
     // doesn't strand the stack on a permanently link-down dev0.
     if added != 0 {
@@ -335,7 +427,14 @@ pub fn init() {
 
     if added == 0 {
         if crate::logflag::BOOT_INFO_LOGS {
-            crate::log!("net: no supported NIC detected.\n");
+            if dormant_detected == 0 {
+                crate::log!("net: no supported NIC detected.\n");
+            } else {
+                crate::log!(
+                    "net: no supported NIC detected; {} rtl candidate(s) present but not wired.\n",
+                    dormant_detected
+                );
+            }
         }
     } else {
         if crate::logflag::BOOT_INFO_LOGS {

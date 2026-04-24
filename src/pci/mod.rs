@@ -12,6 +12,8 @@ pub mod nvme;
 #[cfg(not(target_arch = "x86_64"))]
 #[path = "nvme_disabled.rs"]
 pub mod nvme;
+#[cfg(target_arch = "x86_64")]
+pub(crate) mod nvme_backend;
 mod pci;
 pub mod pciids;
 pub mod vrng;
