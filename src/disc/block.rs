@@ -6,12 +6,15 @@ use core::{
     hash::{Hash, Hasher},
     pin::Pin,
     ptr,
-    sync::atomic::{AtomicU32, Ordering},
+    sync::atomic::{AtomicBool, AtomicU32, Ordering},
     task::Waker,
 };
+use embassy_executor::Spawner;
+use embassy_sync::signal::Signal;
 
 const DEFAULT_DMA_ALIGNMENT: u32 = 64;
 const DEFAULT_MAX_TRANSFER_BYTES: u64 = 256 * 1024;
+const BLOCK_DEVICE_SERVICE_TASK_POOL: usize = 3;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -147,6 +150,209 @@ pub trait BlockDevice: Send {
     /// Optional flush hook for devices that need explicit cache drains.
     fn flush<'a>(&'a mut self) -> BoxFuture<'a, Result<()>> {
         Box::pin(async { Ok(()) })
+    }
+}
+
+enum ServicedBlockRequest {
+    Read { seq: u64, lba: u64, blocks: usize },
+    Write { seq: u64, lba: u64, data: Vec<u8> },
+    Flush { seq: u64 },
+}
+
+enum ServicedBlockReply {
+    Read {
+        seq: u64,
+        result: Result<Vec<u8>>,
+    },
+    Write {
+        seq: u64,
+        result: Result<()>,
+    },
+    Flush {
+        seq: u64,
+        result: Result<()>,
+    },
+}
+
+impl ServicedBlockReply {
+    fn seq(&self) -> u64 {
+        match self {
+            Self::Read { seq, .. } | Self::Write { seq, .. } | Self::Flush { seq, .. } => *seq,
+        }
+    }
+}
+
+struct ServicedBlockDeviceFront {
+    spawned: AtomicBool,
+    driver: spin::Mutex<Option<Box<dyn BlockDevice>>>,
+    request: Signal<wait::EmbassySpinRawMutex, ServicedBlockRequest>,
+    reply: Signal<wait::EmbassySpinRawMutex, ServicedBlockReply>,
+}
+
+impl ServicedBlockDeviceFront {
+    fn new(driver: Box<dyn BlockDevice>) -> Self {
+        Self {
+            spawned: AtomicBool::new(false),
+            driver: spin::Mutex::new(Some(driver)),
+            request: Signal::new(),
+            reply: Signal::new(),
+        }
+    }
+}
+
+#[embassy_executor::task(pool_size = BLOCK_DEVICE_SERVICE_TASK_POOL)]
+async fn serviced_block_device_task(front: &'static ServicedBlockDeviceFront) {
+    let Some(mut driver) = front.driver.lock().take() else {
+        front.spawned.store(false, Ordering::Release);
+        return;
+    };
+
+    loop {
+        match front.request.wait().await {
+            ServicedBlockRequest::Read { seq, lba, blocks } => {
+                let result = driver.read_blocks(lba, blocks).await;
+                front.reply.signal(ServicedBlockReply::Read { seq, result });
+            }
+            ServicedBlockRequest::Write { seq, lba, data } => {
+                let result = driver.write_blocks(lba, &data).await;
+                front.reply.signal(ServicedBlockReply::Write { seq, result });
+            }
+            ServicedBlockRequest::Flush { seq } => {
+                let result = driver.flush().await;
+                front.reply.signal(ServicedBlockReply::Flush { seq, result });
+            }
+        }
+    }
+}
+
+struct ServicedBlockDevice {
+    front: &'static ServicedBlockDeviceFront,
+    block_size: u32,
+    block_count: u64,
+    dma_alignment: u32,
+    max_transfer_bytes: u64,
+    writable: bool,
+    next_seq: u64,
+}
+
+unsafe impl Send for ServicedBlockDevice {}
+
+impl ServicedBlockDevice {
+    fn alloc_request_seq(&mut self) -> u64 {
+        let seq = self.next_seq.max(1);
+        self.next_seq = self.next_seq.wrapping_add(1);
+        if self.next_seq == 0 {
+            self.next_seq = 1;
+        }
+        seq
+    }
+
+    async fn ensure_worker_started(&mut self) -> Result<()> {
+        if self.front.spawned.load(Ordering::Acquire) {
+            return Ok(());
+        }
+
+        let spawner: Spawner = unsafe { Spawner::for_current_executor().await };
+        if self
+            .front
+            .spawned
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            match serviced_block_device_task(self.front) {
+                Ok(token) => spawner.spawn(token),
+                Err(_) => {
+                    self.front.spawned.store(false, Ordering::Release);
+                    return Err(Error::NotReady);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn submit_request(
+        &mut self,
+        request: ServicedBlockRequest,
+        expected_seq: u64,
+    ) -> Result<ServicedBlockReply> {
+        self.ensure_worker_started().await?;
+        self.front.request.signal(request);
+
+        loop {
+            let reply = self.front.reply.wait().await;
+            if reply.seq() == expected_seq {
+                return Ok(reply);
+            }
+        }
+    }
+}
+
+impl BlockDevice for ServicedBlockDevice {
+    fn block_size_bytes(&self) -> u32 {
+        self.block_size
+    }
+
+    fn block_count(&self) -> u64 {
+        self.block_count
+    }
+
+    fn read_blocks<'a>(&'a mut self, lba: u64, blocks: usize) -> BoxFuture<'a, Result<Vec<u8>>> {
+        Box::pin(async move {
+            let seq = self.alloc_request_seq();
+            match self
+                .submit_request(ServicedBlockRequest::Read { seq, lba, blocks }, seq)
+                .await?
+            {
+                ServicedBlockReply::Read { result, .. } => result,
+                _ => Err(Error::Corrupted),
+            }
+        })
+    }
+
+    fn write_blocks<'a>(&'a mut self, lba: u64, buf: &'a [u8]) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            let seq = self.alloc_request_seq();
+            match self
+                .submit_request(
+                    ServicedBlockRequest::Write {
+                        seq,
+                        lba,
+                        data: buf.to_vec(),
+                    },
+                    seq,
+                )
+                .await?
+            {
+                ServicedBlockReply::Write { result, .. } => result,
+                _ => Err(Error::Corrupted),
+            }
+        })
+    }
+
+    fn dma_alignment_bytes(&self) -> u32 {
+        self.dma_alignment
+    }
+
+    fn max_transfer_bytes(&self) -> u64 {
+        self.max_transfer_bytes
+    }
+
+    fn supports_write(&self) -> bool {
+        self.writable
+    }
+
+    fn flush<'a>(&'a mut self) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            let seq = self.alloc_request_seq();
+            match self
+                .submit_request(ServicedBlockRequest::Flush { seq }, seq)
+                .await?
+            {
+                ServicedBlockReply::Flush { result, .. } => result,
+                _ => Err(Error::Corrupted),
+            }
+        })
     }
 }
 
@@ -478,12 +684,8 @@ fn blocks_in_buffer(len: usize, block_size: u32) -> Result<u64> {
     Ok((len / block_size as usize) as u64)
 }
 
-pub fn register_device<D>(descriptor: DeviceDescriptor, device: D) -> DeviceHandle
-where
-    D: BlockDevice + 'static,
-{
+fn register_boxed_device(descriptor: DeviceDescriptor, driver: Box<dyn BlockDevice>) -> DeviceHandle {
     let should_request_trueosfs_mount = descriptor.parent.is_none() && descriptor.user_visible;
-    let driver: Box<dyn BlockDevice> = Box::new(device);
     let block_size = driver.block_size_bytes();
     let block_count = driver.block_count();
     let dma_alignment = driver.dma_alignment_bytes().max(1);
@@ -518,6 +720,38 @@ where
         crate::r::fs::trueosfs::request_mount_root(handle);
     }
     handle
+}
+
+pub fn register_device<D>(descriptor: DeviceDescriptor, device: D) -> DeviceHandle
+where
+    D: BlockDevice + 'static,
+{
+    register_boxed_device(descriptor, Box::new(device))
+}
+
+pub fn register_device_with_worker<D>(descriptor: DeviceDescriptor, device: D) -> DeviceHandle
+where
+    D: BlockDevice + 'static,
+{
+    let driver: Box<dyn BlockDevice> = Box::new(device);
+    let block_size = driver.block_size_bytes();
+    let block_count = driver.block_count();
+    let dma_alignment = driver.dma_alignment_bytes().max(1);
+    let max_transfer_bytes = driver.max_transfer_bytes().max(block_size as u64).max(1);
+    let writable = driver.supports_write() && !descriptor.read_only;
+
+    let front = Box::leak(Box::new(ServicedBlockDeviceFront::new(driver)));
+    let proxy = ServicedBlockDevice {
+        front,
+        block_size,
+        block_count,
+        dma_alignment,
+        max_transfer_bytes,
+        writable,
+        next_seq: 1,
+    };
+
+    register_boxed_device(descriptor, Box::new(proxy))
 }
 
 pub fn device_handles() -> Vec<DeviceHandle> {
