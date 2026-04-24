@@ -54,7 +54,9 @@ fn next_walk_state(state: &mut u64) -> u64 {
 
 fn build_random_sample(page_phys: u64) -> FactoryRamProbeState {
     let page_virt = crate::phys::phys_to_virt(page_phys as usize);
-    let page = unsafe { core::slice::from_raw_parts(page_virt as *const u8, FACTORY_RAM_PROBE_PAGE_BYTES) };
+    let page = unsafe {
+        core::slice::from_raw_parts(page_virt as *const u8, FACTORY_RAM_PROBE_PAGE_BYTES)
+    };
 
     let mut seed = crate::rng::rdrand_u64()
         .or_else(|| crate::rng::rdseed_u64())
@@ -69,7 +71,8 @@ fn build_random_sample(page_phys: u64) -> FactoryRamProbeState {
     let mut count = 0usize;
 
     while count < FACTORY_RAM_PROBE_SAMPLE_BYTES {
-        let off = ((next_walk_state(&mut seed) >> 16) as usize) & (FACTORY_RAM_PROBE_PAGE_BYTES - 1);
+        let off =
+            ((next_walk_state(&mut seed) >> 16) as usize) & (FACTORY_RAM_PROBE_PAGE_BYTES - 1);
         if used[off] {
             continue;
         }
@@ -88,8 +91,9 @@ fn build_random_sample(page_phys: u64) -> FactoryRamProbeState {
     }
 }
 
-fn build_binary_blob(snapshot: &FactoryRamProbeSnapshot) -> [u8; 8 + 8 + 4 + 4 + (FACTORY_RAM_PROBE_SAMPLE_BYTES * 9)]
-{
+fn build_binary_blob(
+    snapshot: &FactoryRamProbeSnapshot,
+) -> [u8; 8 + 8 + 4 + 4 + (FACTORY_RAM_PROBE_SAMPLE_BYTES * 9)] {
     let mut out = [0u8; 8 + 8 + 4 + 4 + (FACTORY_RAM_PROBE_SAMPLE_BYTES * 9)];
     let mut at = 0usize;
 

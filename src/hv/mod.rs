@@ -141,13 +141,7 @@ fn guest_exception_summary() -> Option<(u8, &'static str, u64, u64, u64)> {
     } else {
         0
     };
-    Some((
-        vector,
-        crate::hv::vmx::decode_exception_vector(vector),
-        kind,
-        info,
-        err,
-    ))
+    Some((vector, crate::hv::vmx::decode_exception_vector(vector), kind, info, err))
 }
 
 pub fn hvlogf(args: core::fmt::Arguments<'_>) {
@@ -330,10 +324,7 @@ pub fn stop(vm_id: u8) -> Result<bool, StopError> {
         hvlogf(format_args!("hv: vm{} lifecycle: stop requested", primary_vm_id()));
         Ok(true)
     } else {
-        hvlogf(format_args!(
-            "hv: vm{} lifecycle: stop ignored (not running)",
-            primary_vm_id()
-        ));
+        hvlogf(format_args!("hv: vm{} lifecycle: stop ignored (not running)", primary_vm_id()));
         Ok(false)
     }
 }
@@ -433,21 +424,17 @@ fn snapshot_on_preserve_exit() {
                 primary_vm_id(),
                 saved
             )),
-            Err(e) => {
-                hvlogf(format_args!(
-                    "hv: vm{} reporting: preserve snapshot save failed ({:?})",
-                    primary_vm_id(),
-                    e
-                ))
-            }
-        },
-        Err(e) => {
-            hvlogf(format_args!(
-                "hv: vm{} reporting: preserve snapshot bytes failed ({:?})",
+            Err(e) => hvlogf(format_args!(
+                "hv: vm{} reporting: preserve snapshot save failed ({:?})",
                 primary_vm_id(),
                 e
-            ))
-        }
+            )),
+        },
+        Err(e) => hvlogf(format_args!(
+            "hv: vm{} reporting: preserve snapshot bytes failed ({:?})",
+            primary_vm_id(),
+            e
+        )),
     }
 }
 
@@ -627,17 +614,18 @@ async fn vm1_task() {
         }
     }
     hvlogf(format_args!("hv: vm{} reporting: vmx preflight ok, stage=m1", primary_vm_id()));
-    hvlogf(format_args!(
-        "hv: vm{} reporting: vlayer policy=integrity-first",
-        primary_vm_id()
-    ));
+    hvlogf(format_args!("hv: vm{} reporting: vlayer policy=integrity-first", primary_vm_id()));
     let guest_heap_ready = crate::allocators::ensure_hv_guest_heap_ready();
     if guest_heap_ready {
         let stats = crate::allocators::hv_guest_heap_stats();
         hvlogf(format_args!(
             "hv: vm{} reporting: hv-guest-heap virt=0x{:016X}..0x{:016X} src={:?} free_bytes={} blocks={}",
             primary_vm_id(),
-            stats.heap_start, stats.heap_end, stats.source, stats.free_bytes, stats.free_blocks
+            stats.heap_start,
+            stats.heap_end,
+            stats.source,
+            stats.free_bytes,
+            stats.free_blocks
         ));
     }
     let _entered_guest_alloc = crate::allocators::enter_hv_guest_domain_current_cpu();
@@ -758,7 +746,9 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
     hvlogf(format_args!(
         "hv: vm{} reporting: vmlaunch prep revision=0x{:08X} vmxon_pa=0x{:016X} vmcs_pa=0x{:016X}",
         primary_vm_id(),
-        revision, vmxon_pa, vmcs_pa
+        revision,
+        vmxon_pa,
+        vmcs_pa
     ));
 
     if !crate::hv::vmx::vmxon(vmxon_pa) {
@@ -855,7 +845,10 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
             hvlogf(format_args!(
                 "hv: vm{} reporting: guest-state cr0=0x{:016X} cr3=0x{:016X} cr4=0x{:016X} efer=0x{:016X}",
                 primary_vm_id(),
-                guest_cr0, guest_cr3, guest_cr4, guest_efer
+                guest_cr0,
+                guest_cr3,
+                guest_cr4,
+                guest_efer
             ));
             crate::hv::memory::log_guest_mapping("fault-linear", guest_linear);
             crate::hv::memory::log_guest_mapping("fault-rsp", guest_rsp);
@@ -925,7 +918,12 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
                         hvlogf(format_args!(
                             "hv: vm{} reporting: cpuid leaf=0x{:08X} subleaf=0x{:08X} -> eax=0x{:08X} ebx=0x{:08X} ecx=0x{:08X} edx=0x{:08X}",
                             primary_vm_id(),
-                            leaf, subleaf, out.eax, out.ebx, out.ecx, out.edx
+                            leaf,
+                            subleaf,
+                            out.eax,
+                            out.ebx,
+                            out.ecx,
+                            out.edx
                         ));
                     }
                 }
@@ -978,7 +976,10 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
         hvlogf(format_args!(
             "hv: vm{} reporting: cpuid summary leaf0={} leaf80000000={} leaf1={} other={}",
             primary_vm_id(),
-            cpuid_leaf0_count, cpuid_leaf80000000_count, cpuid_leaf1_count, cpuid_other_count
+            cpuid_leaf0_count,
+            cpuid_leaf80000000_count,
+            cpuid_leaf1_count,
+            cpuid_other_count
         ));
     }
     // ─────────────────────────────────────────────────────────────────────────
@@ -1535,7 +1536,9 @@ fn vmx_smoke() -> Result<(), &'static str> {
     hvlogf(format_args!(
         "hv: vm{} reporting: vmx setup revision=0x{:08X} vmxon_pa=0x{:016X} vmcs_pa=0x{:016X}",
         primary_vm_id(),
-        revision, vmxon_pa, vmcs_pa
+        revision,
+        vmxon_pa,
+        vmcs_pa
     ));
 
     let rip = vmx::current_rip();
@@ -1548,11 +1551,7 @@ fn vmx_smoke() -> Result<(), &'static str> {
         ));
         return Err("vmxon");
     }
-    hvlogf(format_args!(
-        "hv: vm{} reporting: vmxon ok rip=0x{:016X}",
-        primary_vm_id(),
-        rip
-    ));
+    hvlogf(format_args!("hv: vm{} reporting: vmxon ok rip=0x{:016X}", primary_vm_id(), rip));
 
     let rip = vmx::current_rip();
     if !vmclear(vmcs_pa) {
@@ -1565,11 +1564,7 @@ fn vmx_smoke() -> Result<(), &'static str> {
         let _ = vmxoff();
         return Err("vmclear");
     }
-    hvlogf(format_args!(
-        "hv: vm{} reporting: vmclear ok rip=0x{:016X}",
-        primary_vm_id(),
-        rip
-    ));
+    hvlogf(format_args!("hv: vm{} reporting: vmclear ok rip=0x{:016X}", primary_vm_id(), rip));
 
     let rip = vmx::current_rip();
     if !vmptrld(vmcs_pa) {
@@ -1582,11 +1577,7 @@ fn vmx_smoke() -> Result<(), &'static str> {
         let _ = vmxoff();
         return Err("vmptrld");
     }
-    hvlogf(format_args!(
-        "hv: vm{} reporting: vmptrld ok rip=0x{:016X}",
-        primary_vm_id(),
-        rip
-    ));
+    hvlogf(format_args!("hv: vm{} reporting: vmptrld ok rip=0x{:016X}", primary_vm_id(), rip));
 
     let ptr = match vmx::vmptrst() {
         Some(v) => v,

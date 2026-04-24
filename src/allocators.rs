@@ -63,7 +63,7 @@ pub struct AllocTrace {
 unsafe fn read_return_address(depth: usize) -> usize {
     #[cfg(target_arch = "x86_64")]
     {
-    let rbp: usize;
+        let rbp: usize;
         asm!("mov {}, rbp", out(reg) rbp, options(nomem, nostack, preserves_flags));
         let mut frame = rbp as *const usize;
         let mut remaining = depth;
@@ -794,7 +794,7 @@ fn alloc_error(layout: Layout) -> ! {
     unsafe {
         #[cfg(target_arch = "x86_64")]
         {
-        asm!("cli", options(nomem, nostack));
+            asm!("cli", options(nomem, nostack));
             loop {
                 asm!("hlt", options(nomem, nostack));
             }

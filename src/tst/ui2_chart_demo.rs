@@ -350,7 +350,7 @@ pub async fn ui2_chart_demo_task() {
 
     let content_w = UI2_CHART_VIEW_W;
     let content_h = UI2_CHART_VIEW_H;
-    let Some(surface) = ui2::Ui2SurfaceWindow::from_existing_texture_with_size(
+    let Some(surface) = ui2::Ui2SurfaceWindow::get_or_create_for_hosted_content_with_size(
         UI2_CHART_WINDOW_TITLE,
         Ui2Rect {
             x: UI2_CHART_WINDOW_X,
@@ -360,6 +360,7 @@ pub async fn ui2_chart_demo_task() {
         },
         UI2_CHART_WINDOW_Z,
         UI2_CHART_WINDOW_ALPHA,
+        UI2_CHART_CONTENT_ID,
         UI2_CHART_TEX_ID,
         true,
         content_w,

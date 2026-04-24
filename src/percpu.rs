@@ -70,7 +70,10 @@ pub fn init_bsp() {
     let lapic_id = read_lapic_id_via_cpuid();
 
     #[cfg(not(target_arch = "x86_64"))]
-    let lapic_id = cpu_slot_table().first().map(|slot| slot.lapic_id).unwrap_or(0);
+    let lapic_id = cpu_slot_table()
+        .first()
+        .map(|slot| slot.lapic_id)
+        .unwrap_or(0);
 
     init_with(lapic_id, 0, "bsp")
 }
@@ -171,7 +174,7 @@ fn init_with(lapic_id: u32, cpu_index: u32, _tag: &str) {
 
     #[cfg(target_arch = "x86_64")]
     {
-    let mut gs_base = Msr::new(MSR_IA32_GS_BASE);
+        let mut gs_base = Msr::new(MSR_IA32_GS_BASE);
         unsafe { gs_base.write(ptr as u64) };
     }
 
@@ -219,7 +222,10 @@ pub fn current_lapic_id_via_cpuid() -> u32 {
         if !ptr.is_null() {
             return unsafe { (*ptr).lapic_id() };
         }
-        cpu_slot_table().first().map(|slot| slot.lapic_id).unwrap_or(0)
+        cpu_slot_table()
+            .first()
+            .map(|slot| slot.lapic_id)
+            .unwrap_or(0)
     }
 }
 
@@ -232,7 +238,7 @@ pub fn current_slot_via_cpuid() -> usize {
 pub fn this_cpu_ptr() -> *mut PerCpu {
     #[cfg(target_arch = "x86_64")]
     {
-    let ptr: *mut PerCpu;
+        let ptr: *mut PerCpu;
         unsafe {
             asm!(
                 "mov {0}, gs:0",

@@ -31,8 +31,8 @@ pub(crate) use self::ui2_font::{
     ui2_font_measure_text_for_px, ui2_font_native_line_height_px,
 };
 pub(crate) use self::ui2_font_bucketproducer::*;
-pub(crate) use self::ui2_hid::{cursor_color_rgba8, cursor_color_rgba8_for_cursor_id};
 use self::ui2_hid::*;
+pub(crate) use self::ui2_hid::{cursor_color_rgba8, cursor_color_rgba8_for_cursor_id};
 pub(crate) use self::ui2_hit::ui2_hit_task;
 use self::ui2_hit::*;
 use self::ui2_hosted::*;
@@ -1284,8 +1284,7 @@ pub unsafe extern "C" fn trueos_cabi_app_surface_window_create(
     let Ok(title) = core::str::from_utf8(title) else {
         crate::hv::log_blueprint_app_window_event(format_args!(
             "app-window-broker: surface create rejected invalid utf8 title len={} tex_id={}",
-            title_len,
-            tex_id
+            title_len, tex_id
         ));
         return 0;
     };

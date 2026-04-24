@@ -678,7 +678,7 @@ pub async fn ui2_swarm_demo_task() {
         return;
     }
 
-    let Some(surface) = crate::r::ui2::Ui2SurfaceWindow::from_existing_texture_with_size(
+    let Some(surface) = crate::r::ui2::Ui2SurfaceWindow::get_or_create_for_hosted_content_with_size(
         "ESP32 Swarm",
         Ui2Rect {
             x: UI2_SWARM_WINDOW_X,
@@ -688,6 +688,7 @@ pub async fn ui2_swarm_demo_task() {
         },
         UI2_SWARM_WINDOW_Z,
         UI2_SWARM_WINDOW_ALPHA,
+        UI2_SWARM_CONTENT_ID,
         UI2_SWARM_TEX_ID,
         false,
         UI2_SWARM_VIEW_W,

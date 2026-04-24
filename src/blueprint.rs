@@ -406,12 +406,7 @@ fn rel_symbol_value(
             if bind == STB_WEAK {
                 return Ok(0);
             }
-            Err(alloc::format!(
-                "unresolved import: {} (sym={} bind={})",
-                name,
-                sym_index,
-                bind
-            ))
+            Err(alloc::format!("unresolved import: {} (sym={} bind={})", name, sym_index, bind))
         }
         SHN_ABS => Ok(sym.value as usize),
         section_index => {
@@ -511,8 +506,8 @@ fn load_rel_image(bytes: &[u8]) -> Result<LoadedRelImage, String> {
         return Err(String::from("ELF image has no allocatable sections"));
     }
 
-    let layout =
-        Layout::from_size_align(total_size, max_align).map_err(|_| String::from("bad ELF layout"))?;
+    let layout = Layout::from_size_align(total_size, max_align)
+        .map_err(|_| String::from("bad ELF layout"))?;
     let arena_align = 4096usize;
     let slop = layout.align().saturating_sub(arena_align);
     let needed = total_size
@@ -576,12 +571,12 @@ fn load_rel_image(bytes: &[u8]) -> Result<LoadedRelImage, String> {
             .get(section.file_offset..section.file_offset + section.size)
             .ok_or_else(|| String::from("ELF relocation section truncated"))?;
         for chunk in rela.chunks_exact(ELF64_RELA_LEN) {
-            let r_offset = le_u64(chunk, 0)
-                .ok_or_else(|| String::from("ELF relocation truncated"))? as usize;
+            let r_offset =
+                le_u64(chunk, 0).ok_or_else(|| String::from("ELF relocation truncated"))? as usize;
             let r_info =
                 le_u64(chunk, 8).ok_or_else(|| String::from("ELF relocation truncated"))?;
-            let r_addend = le_u64(chunk, 16)
-                .ok_or_else(|| String::from("ELF relocation truncated"))? as i64;
+            let r_addend =
+                le_u64(chunk, 16).ok_or_else(|| String::from("ELF relocation truncated"))? as i64;
             let r_sym = (r_info >> 32) as usize;
             let r_type = r_info as u32;
             let place = target_base
@@ -621,12 +616,7 @@ fn load_rel_image(bytes: &[u8]) -> Result<LoadedRelImage, String> {
                             .map_err(|_| String::from("R_X86_64_PC32 out of range"))?;
                         (place as *mut i32).write_unaligned(value_i32);
                     }
-                    _ => {
-                        return Err(alloc::format!(
-                            "unsupported ELF relocation type: {}",
-                            r_type
-                        ))
-                    }
+                    _ => return Err(alloc::format!("unsupported ELF relocation type: {}", r_type)),
                 }
             }
         }

@@ -292,7 +292,9 @@ pub fn build_ept_identity_4g() -> Result<u64, &'static str> {
     hvlogf(format_args!(
         "hv: vm{} reporting: ept v1 sparse map ready eptp=0x{:016X} pd_used={} pt_used={}",
         primary_vm_id(),
-        eptp, next_pd, next_pt,
+        eptp,
+        next_pd,
+        next_pt,
     ));
     Ok(eptp)
 }
@@ -347,7 +349,9 @@ fn map_ept_identity_span(
     hvlogf(format_args!(
         "hv: vm{} reporting: ept span {} phys=0x{:016X}..0x{:016X}",
         primary_vm_id(),
-        label, start, end
+        label,
+        start,
+        end
     ));
     Ok(())
 }
@@ -843,7 +847,9 @@ pub fn log_guest_mapping_from_cr3(label: &str, guest_cr3: u64, guest_va: u64) {
         hvlogf(format_args!(
             "hv: vm{} reporting: guest-walk {} va=0x{:016X} cr3=0x{:016X} pml4=missing",
             primary_vm_id(),
-            label, guest_va, guest_cr3
+            label,
+            guest_va,
+            guest_cr3
         ));
         return;
     }
@@ -909,7 +915,10 @@ pub fn log_guest_phys_pt_context(label: &str, guest_cr3: u64, guest_va: u64) {
         hvlogf(format_args!(
             "hv: vm{} reporting: guest-phys-pt {} pt_pa=0x{:016X} idx={} entry=0x{:016X}",
             primary_vm_id(),
-            label, pt_pa, idx, entry
+            label,
+            pt_pa,
+            idx,
+            entry
         ));
         if idx == usize::MAX {
             break;

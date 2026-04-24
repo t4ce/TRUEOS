@@ -1232,14 +1232,15 @@ pub(crate) fn visible_h264_frame_dims(sps: &ParsedSps) -> (u32, u32) {
     let coded_height = frame_height_mbs.saturating_mul(16);
 
     let (crop_unit_x, crop_unit_y) = h264_crop_units(sps);
-    let crop_width = crop_unit_x
-        .saturating_mul(sps.frame_crop_left_offset.saturating_add(sps.frame_crop_right_offset));
-    let crop_height = crop_unit_y
-        .saturating_mul(sps.frame_crop_top_offset.saturating_add(sps.frame_crop_bottom_offset));
-    (
-        coded_width.saturating_sub(crop_width),
-        coded_height.saturating_sub(crop_height),
-    )
+    let crop_width = crop_unit_x.saturating_mul(
+        sps.frame_crop_left_offset
+            .saturating_add(sps.frame_crop_right_offset),
+    );
+    let crop_height = crop_unit_y.saturating_mul(
+        sps.frame_crop_top_offset
+            .saturating_add(sps.frame_crop_bottom_offset),
+    );
+    (coded_width.saturating_sub(crop_width), coded_height.saturating_sub(crop_height))
 }
 
 pub(crate) fn h264_crop_offsets_px(sps: &ParsedSps) -> (u32, u32) {

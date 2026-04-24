@@ -403,7 +403,7 @@ pub async fn ui2_weather_demo_task() {
 
     let content_w = UI2_WEATHER_VIEW_W;
     let content_h = UI2_WEATHER_VIEW_H;
-    let Some(surface) = ui2::Ui2SurfaceWindow::from_existing_texture_with_size(
+    let Some(surface) = ui2::Ui2SurfaceWindow::get_or_create_for_hosted_content_with_size(
         UI2_WEATHER_WINDOW_TITLE,
         Ui2Rect {
             x: UI2_WEATHER_WINDOW_X,
@@ -413,6 +413,7 @@ pub async fn ui2_weather_demo_task() {
         },
         UI2_WEATHER_WINDOW_Z,
         UI2_WEATHER_WINDOW_ALPHA,
+        UI2_WEATHER_CONTENT_ID,
         UI2_WEATHER_TEX_ID,
         true,
         content_w,

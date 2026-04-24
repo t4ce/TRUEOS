@@ -95,11 +95,7 @@ fn log_fault_frame(label: &str, stack_frame: &InterruptStackFrame) {
         stack_frame.instruction_pointer.as_u64(),
         stack_frame.code_segment.0
     );
-    faultln!(
-        "RSP={:#x} SS={:#x}",
-        stack_frame.stack_pointer.as_u64(),
-        stack_frame.stack_segment.0
-    );
+    faultln!("RSP={:#x} SS={:#x}", stack_frame.stack_pointer.as_u64(), stack_frame.stack_segment.0);
     faultln!("RFLAGS={:#x}", stack_frame.cpu_flags.bits());
     faultln!(
         "CPU: lapic={} cpu={}",

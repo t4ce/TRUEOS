@@ -47,6 +47,7 @@ define_started_flags!(
     GFX_VIRGL_READY_TASK_STARTED,
     GFX_VIRGL_CURSOR_OVERLAY_STARTED,
     INTEL_CURSOR_SERVICE_STARTED,
+    INTEL_HDA_PROBE_STARTED,
     RAPLE_SERVICE_STARTED,
     GFX_TEXTURE_UPLOAD_SERVICE_STARTED,
     HTML_SHACK_SERVICE_STARTED,
@@ -64,6 +65,7 @@ define_started_flags!(
     UI2_BGRT_DEMO_STARTED,
     UI2_CORETICKS_DEMO_STARTED,
     UI2_MANDELBROT_DEMO_STARTED,
+    UI2_PLAYER_DEMO_STARTED,
     UI2_RAPLE_DEMO_STARTED,
     UI2_PETERSEN_DEMO_STARTED,
     UI2_PARTICLE_DEMO_STARTED,
@@ -103,6 +105,7 @@ define_disabled_flags!(
     DISABLED_TGA,
     DISABLED_UI2_GFX_TETRIS,
     DISABLED_UI2_MANDELBROT_DEMO,
+    DISABLED_UI2_PLAYER_DEMO,
     DISABLED_UI2_PETERSEN_DEMO,
     DISABLED_UI2_PARTICLE_DEMO,
     DISABLED_UI2_SMILEY_FOUNTAIN_DEMO,
@@ -114,6 +117,8 @@ define_disabled_flags!(
     DISABLED_BOOT_NETBENCH,
     DISABLED_ATOMIC_BOMB,
 );
+
+static DISABLED_INTEL_HDA_PROBE: AtomicBool = AtomicBool::new(false);
 
 macro_rules! define_stop_flags {
     ($($name:ident),* $(,)?) => {
@@ -127,6 +132,7 @@ define_stop_flags!(
     STOP_UI2_BGRT_DEMO,
     STOP_UI2_CORETICKS_DEMO,
     STOP_UI2_MANDELBROT_DEMO,
+    STOP_UI2_PLAYER_DEMO,
     STOP_UI2_RAPLE_DEMO,
     STOP_UI2_PETERSEN_DEMO,
     STOP_UI2_PARTICLE_DEMO,
@@ -147,6 +153,7 @@ fn stop_flag_by_task_name(name: &str) -> Option<&'static AtomicBool> {
         "ui2-bgrt-demo" => Some(&STOP_UI2_BGRT_DEMO),
         "ui2-coreticks-demo" => Some(&STOP_UI2_CORETICKS_DEMO),
         "ui2-mandelbrot-demo" => Some(&STOP_UI2_MANDELBROT_DEMO),
+        "ui2-player-demo" => Some(&STOP_UI2_PLAYER_DEMO),
         "ui2-raple-demo" => Some(&STOP_UI2_RAPLE_DEMO),
         "ui2-petersen-demo" => Some(&STOP_UI2_PETERSEN_DEMO),
         "ui2-particle-demo" => Some(&STOP_UI2_PARTICLE_DEMO),
@@ -323,7 +330,9 @@ fn spawn_globalog_persist_once(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_factory_ram_probe(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::tst_boot_factory_ram_probe::boot_factory_ram_probe_task())
+    spawn_local(spawner, |_spawner| {
+        crate::tst_boot_factory_ram_probe::boot_factory_ram_probe_task()
+    })
 }
 
 fn spawn_qjs_async_fs_service(spawner: Spawner) -> SpawnAttempt {
@@ -516,6 +525,13 @@ async fn intel_cursor_service_task() {
 
 fn spawn_intel_cursor_service_task(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| intel_cursor_service_task())
+}
+
+fn spawn_intel_hda_probe_task(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_worker(spawner, |worker_spawner| {
+        let _ = worker_spawner;
+        crate::intel_hda_probe::task()
+    })
 }
 
 fn spawn_raple_service(spawner: Spawner) -> SpawnAttempt {
@@ -780,6 +796,13 @@ fn spawn_ui2_mandelbrot_demo(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
+fn spawn_ui2_player_demo(spawner: Spawner) -> SpawnAttempt {
+    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
+        let _ = worker_spawner;
+        crate::tst_ui2_player_demo::ui2_player_demo_task()
+    })
+}
+
 fn spawn_ui2_raple_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
         let _ = worker_spawner;
@@ -1022,12 +1045,7 @@ static TASKS: &[TaskSpec] = &[
         &GLOBALOG_PERSIST_ONCE_STARTED,
         spawn_globalog_persist_once,
     ),
-    TaskSpec::enabled(
-        "factory-ram-probe",
-        0,
-        &FACTORY_RAM_PROBE_STARTED,
-        spawn_factory_ram_probe,
-    ),
+    TaskSpec::enabled("factory-ram-probe", 0, &FACTORY_RAM_PROBE_STARTED, spawn_factory_ram_probe),
     TaskSpec::enabled(
         "qjs-async-fs-service",
         0,
@@ -1138,6 +1156,14 @@ static TASKS: &[TaskSpec] = &[
         &INTEL_CURSOR_SERVICE_STARTED,
         spawn_intel_cursor_service_task,
     ),
+    TaskSpec::disabled_on(
+        SpawnPlacement::Worker,
+        "intel-hda-probe",
+        crate::r::readiness::INTEL_HDA_READY,
+        &DISABLED_INTEL_HDA_PROBE,
+        &INTEL_HDA_PROBE_STARTED,
+        spawn_intel_hda_probe_task,
+    ),
     TaskSpec::enabled("raple-service", 0, &RAPLE_SERVICE_STARTED, spawn_raple_service),
     TaskSpec::enabled_on(
         SpawnPlacement::Worker,
@@ -1237,6 +1263,15 @@ static TASKS: &[TaskSpec] = &[
         &DISABLED_UI2_MANDELBROT_DEMO,
         &UI2_MANDELBROT_DEMO_STARTED,
         spawn_ui2_mandelbrot_demo,
+    ),
+    // DANGER: Creates a lot of UI2 Windows!!! (me noob ki)
+    // Enable here only if you explicitly want ui2-player-demo to auto-start again.
+    TaskSpec::disabled(
+        "ui2-player-demo",
+        UI2_DEMO_READY,
+        &DISABLED_UI2_PLAYER_DEMO,
+        &UI2_PLAYER_DEMO_STARTED,
+        spawn_ui2_player_demo,
     ),
     TaskSpec::enabled(
         "ui2-raple-demo",

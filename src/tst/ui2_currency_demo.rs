@@ -218,7 +218,9 @@ fn compose_currency_rgba(
         0,
         0,
         dst_width,
-        line_step.saturating_mul(2).saturating_add(UI2_CURRENCY_PAD_Y),
+        line_step
+            .saturating_mul(2)
+            .saturating_add(UI2_CURRENCY_PAD_Y),
         UI2_CURRENCY_HEADER_BG_RGBA,
     );
 
@@ -325,7 +327,7 @@ pub async fn ui2_currency_demo_task() {
         return;
     };
 
-    let Some(surface) = ui2::Ui2SurfaceWindow::from_existing_texture_with_size(
+    let Some(surface) = ui2::Ui2SurfaceWindow::get_or_create_for_hosted_content_with_size(
         UI2_CURRENCY_WINDOW_TITLE,
         Ui2Rect {
             x: UI2_CURRENCY_WINDOW_X,
@@ -335,6 +337,7 @@ pub async fn ui2_currency_demo_task() {
         },
         UI2_CURRENCY_WINDOW_Z,
         UI2_CURRENCY_WINDOW_ALPHA,
+        UI2_CURRENCY_CONTENT_ID,
         UI2_CURRENCY_TEX_ID,
         true,
         UI2_CURRENCY_VIEW_W,
