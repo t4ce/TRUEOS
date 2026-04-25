@@ -8,12 +8,16 @@ extern crate alloc;
 extern crate std;
 
 use alloc::sync::Arc;
+use core::sync::atomic::{AtomicBool, Ordering};
+use embassy_executor::task;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::io;
 use std::net::SocketAddr;
 
 const VNET_PROBE_PORT: u16 = 48_123;
 const TOKIO_NET_PROBE_PORT: u16 = 48_125;
+
+static TOKIO_NET_PROBE_TASK_SPAWNED: AtomicBool = AtomicBool::new(false);
 
 async fn probe_async_identity() -> u32 {
     0x544F_4B49
@@ -149,6 +153,56 @@ async fn probe_tokio_net_surface() -> Result<(), &'static str> {
     }
 
     Ok(())
+}
+
+fn run_tokio_net_probe_runtime() {
+    let mut runtime_builder = tokio::runtime::Builder::new_current_thread();
+    runtime_builder.enable_io();
+    runtime_builder.enable_time();
+
+    let runtime = match runtime_builder.build() {
+        Ok(runtime) => runtime,
+        Err(_) => {
+            crate::log!("tokio_probe: failure net.tokio.rt.build current_thread\n");
+            return;
+        }
+    };
+
+    match runtime.block_on(probe_tokio_net_surface()) {
+        Ok(()) => crate::log!("tokio_probe: success net.tokio probe_suite\n"),
+        Err(stage) => crate::log!("tokio_probe: failure {}\n", stage),
+    }
+}
+
+#[task]
+async fn tokio_net_probe_task() {
+    crate::r::readiness::wait_for(crate::r::readiness::NET_CONFIGURED).await;
+    crate::log!("tokio_probe: resume net.tokio surface after NET_CONFIGURED\n");
+    run_tokio_net_probe_runtime();
+}
+
+fn spawn_deferred_tokio_net_probe() {
+    if crate::r::readiness::is_set(crate::r::readiness::NET_CONFIGURED) {
+        return;
+    }
+
+    crate::log!("tokio_probe: note net.tokio surface deferred until NET_CONFIGURED\n");
+
+    if TOKIO_NET_PROBE_TASK_SPAWNED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    let Some(spawner) = trueos_qjs::workers::spawner_for_slot(0) else {
+        crate::log!("tokio_probe: note net.tokio task not spawned (no slot0 spawner)\n");
+        return;
+    };
+
+    match tokio_net_probe_task() {
+        Ok(token) => spawner.spawn(token),
+        Err(err) => {
+            crate::log!("tokio_probe: note net.tokio task spawn failed: {:?}\n", err)
+        }
+    }
 }
 
 async fn run_probe_suite() -> Result<(), &'static str> {
@@ -490,4 +544,6 @@ pub(crate) fn log_boot_probe() {
         Ok(()) => crate::log!("tokio_probe: success rt.block_on probe_suite\n"),
         Err(stage) => crate::log!("tokio_probe: failure {}\n", stage),
     }
+
+    spawn_deferred_tokio_net_probe();
 }

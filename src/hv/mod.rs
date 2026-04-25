@@ -27,7 +27,7 @@ use x86_64::registers::model_specific::Msr;
 use x86_64::registers::rflags;
 use x86_64::registers::segmentation::{CS, DS, ES, FS, GS, SS, Segment};
 
-use crate::shell2::{ShellBackend2, ShellIo2};
+use crate::shell2::{MatrixTarget, ShellBackend2, ShellIo2};
 
 use guest_work::{VmLaneProfile, pick_vm_hull_lane};
 use memory::*;
@@ -89,6 +89,7 @@ pub struct BlueprintLaunchState {
     pub archive: AllocString,
     pub module_bytes: AllocVec<u8>,
     pub app_args: AllocVec<AllocString>,
+    pub console_target: Option<MatrixTarget>,
 }
 
 #[derive(Clone)]
@@ -163,7 +164,16 @@ pub fn hvlogf(args: core::fmt::Arguments<'_>) {
         });
     }
 
-    crate::log!("{}\n", line.as_str());
+    if hvlog_console_enabled(line.as_str()) {
+        crate::log!("{}\n", line.as_str());
+    }
+}
+
+fn hvlog_console_enabled(line: &str) -> bool {
+    if line.starts_with("portal:") {
+        return crate::logflag::PORTAL_LOGS;
+    }
+    crate::logflag::HV_LOGS
 }
 
 pub fn status() -> HvStatus {

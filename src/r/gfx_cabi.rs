@@ -215,7 +215,7 @@ pub mod env {
         crate::percpu::this_cpu().cpu_index()
     }
 
-    pub fn with_launch_context<R>(
+    pub(crate) fn with_launch_context<R>(
         args: Vec<String>,
         vars: BTreeMap<String, String>,
         f: impl FnOnce() -> R,
@@ -223,7 +223,7 @@ pub mod env {
         with_launch_context_console(args, vars, None, f)
     }
 
-    pub fn with_launch_context_console<R>(
+    pub(crate) fn with_launch_context_console<R>(
         args: Vec<String>,
         vars: BTreeMap<String, String>,
         console_target: Option<MatrixTarget>,
@@ -282,7 +282,7 @@ pub mod env {
             .cloned()
     }
 
-    pub fn console_target() -> Option<MatrixTarget> {
+    pub(crate) fn console_target() -> Option<MatrixTarget> {
         let cpu = cpu_key();
         let contexts = CONTEXTS.lock();
         contexts
@@ -379,8 +379,21 @@ pub mod cabi {
         );
     }
 
-    fn emit_plain_stream_line(stream: CStream, line: &str) {
+    fn emit_plain_stream_line(_stream: CStream, line: &str) {
         crate::globalog::log(format_args!("{}\n", line));
+    }
+
+    fn emit_console_stream_line(stream: CStream, line: &str) {
+        let Some(target) = super::env::console_target() else {
+            return;
+        };
+        match stream {
+            CStream::Stdout => crate::shell2::print_matrix_target_line(&target, line),
+            CStream::Stderr => crate::shell2::print_matrix_target_line(
+                &target,
+                alloc::format!("error: {}", line).as_str(),
+            ),
+        }
     }
 
     fn process_text_stream(stream: CStream, text: &str) {
@@ -406,6 +419,7 @@ pub mod cabi {
         }
 
         for line in lines {
+            emit_console_stream_line(stream, line.as_str());
             if let Some((source, level, message)) = parse_structured_guest_log(line.as_str()) {
                 emit_guest_log_line(source, level, message);
             } else {

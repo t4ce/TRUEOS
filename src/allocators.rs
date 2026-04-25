@@ -153,6 +153,17 @@ fn trace_alloc_invalid_ptr(trace_enabled: bool, block_ptr: usize) {
     ALLOC_TRACE_BLOCK_PTR.store(block_ptr, Ordering::Release);
 }
 
+#[inline]
+fn trace_hv_guest_alloc_96_8(layout: Layout, domain: AllocDomain, message: &'static str) {
+    if crate::logflag::HV_GUEST_ALLOC_TRACE_LOGS
+        && domain == AllocDomain::HvGuest
+        && layout.size() == 96
+        && layout.align() == 8
+    {
+        crate::log!("{}", message);
+    }
+}
+
 pub fn last_alloc_trace() -> AllocTrace {
     AllocTrace {
         seq: ALLOC_TRACE_SEQ.load(Ordering::Acquire),
@@ -250,20 +261,35 @@ impl FreeList {
     }
 
     unsafe fn alloc(&mut self, domain: AllocDomain, layout: Layout) -> *mut u8 {
+        trace_hv_guest_alloc_96_8(layout, domain, "hv-guest-alloc-96: freelist.alloc enter\n");
         if !self.initialized {
+            trace_hv_guest_alloc_96_8(
+                layout,
+                domain,
+                "hv-guest-alloc-96: freelist before init_once\n",
+            );
             self.init_once();
+            trace_hv_guest_alloc_96_8(
+                layout,
+                domain,
+                "hv-guest-alloc-96: freelist after init_once\n",
+            );
         }
 
         let trace_enabled = true;
         let mut current = self.head;
+        trace_hv_guest_alloc_96_8(layout, domain, "hv-guest-alloc-96: before trace_entry\n");
         trace_alloc_entry(trace_enabled, layout, current);
+        trace_hv_guest_alloc_96_8(layout, domain, "hv-guest-alloc-96: after trace_entry\n");
         let mut prev: Option<NonNull<FreeBlock>> = None;
 
         while let Some(mut block_ptr) = current {
+            trace_hv_guest_alloc_96_8(layout, domain, "hv-guest-alloc-96: loop block\n");
             if !self.is_plausible_free_block_ptr(block_ptr.as_ptr() as usize) {
                 trace_alloc_invalid_ptr(trace_enabled, block_ptr.as_ptr() as usize);
                 return null_mut();
             }
+            trace_hv_guest_alloc_96_8(layout, domain, "hv-guest-alloc-96: after plausible\n");
             let block = block_ptr.as_mut();
 
             let block_start = block as *mut FreeBlock as usize;
@@ -292,8 +318,11 @@ impl FreeList {
             // If we split, the next free-list node must be properly aligned for `FreeBlock`.
             // This padding is accounted to the allocated block size.
             let aligned_used = align_up(total_used, align_of::<FreeBlock>());
+            trace_hv_guest_alloc_96_8(layout, domain, "hv-guest-alloc-96: before trace_block\n");
             trace_alloc_block(trace_enabled, block, block_start, payload_start, aligned_used);
+            trace_hv_guest_alloc_96_8(layout, domain, "hv-guest-alloc-96: after trace_block\n");
             trace_alloc_compare(trace_enabled);
+            trace_hv_guest_alloc_96_8(layout, domain, "hv-guest-alloc-96: after trace_compare\n");
 
             if aligned_used > block.size {
                 prev = Some(block_ptr);
@@ -306,10 +335,16 @@ impl FreeList {
             let next_block = if remaining >= minimum_block_size() {
                 let next_start = block_start + aligned_used;
                 let next_ptr = next_start as *mut FreeBlock;
+                trace_hv_guest_alloc_96_8(
+                    layout,
+                    domain,
+                    "hv-guest-alloc-96: before split write\n",
+                );
                 next_ptr.write(FreeBlock {
                     size: remaining,
                     next: block.next,
                 });
+                trace_hv_guest_alloc_96_8(layout, domain, "hv-guest-alloc-96: after split write\n");
                 Some(NonNull::new_unchecked(next_ptr))
             } else {
                 remaining = 0;
@@ -328,16 +363,20 @@ impl FreeList {
             }
 
             let tag_ptr = payload_start - size_of::<AllocTag>();
+            trace_hv_guest_alloc_96_8(layout, domain, "hv-guest-alloc-96: before tag write\n");
             (tag_ptr as *mut AllocTag).write(AllocTag {
                 block_start,
                 block_size: alloc_block_size,
                 domain: domain as u8,
             });
+            trace_hv_guest_alloc_96_8(layout, domain, "hv-guest-alloc-96: after tag write\n");
 
             trace_alloc_success(trace_enabled);
+            trace_hv_guest_alloc_96_8(layout, domain, "hv-guest-alloc-96: return success\n");
             return payload_start as *mut u8;
         }
 
+        trace_hv_guest_alloc_96_8(layout, domain, "hv-guest-alloc-96: return null\n");
         null_mut()
     }
 
@@ -577,10 +616,24 @@ static GLOBAL_ALLOCATOR: Allocator = Allocator;
 pub unsafe fn alloc_raw(layout: Layout) -> *mut u8 {
     init_fallback_regions();
     let domain = current_alloc_domain();
-    let ptr = allocator_for_domain(domain).lock().alloc(domain, layout);
+    trace_hv_guest_alloc_96_8(layout, domain, "hv-guest-alloc-96: alloc_raw after domain\n");
+    let mut guard = allocator_for_domain(domain).lock();
+    trace_hv_guest_alloc_96_8(layout, domain, "hv-guest-alloc-96: alloc_raw after lock\n");
+    let ptr = guard.alloc(domain, layout);
+    trace_hv_guest_alloc_96_8(
+        layout,
+        domain,
+        "hv-guest-alloc-96: alloc_raw after freelist.alloc\n",
+    );
     if !ptr.is_null() {
         let tag_ptr = ptr.sub(size_of::<AllocTag>()) as *mut AllocTag;
+        trace_hv_guest_alloc_96_8(
+            layout,
+            domain,
+            "hv-guest-alloc-96: alloc_raw before domain tag\n",
+        );
         (*tag_ptr).domain = domain as u8;
+        trace_hv_guest_alloc_96_8(layout, domain, "hv-guest-alloc-96: alloc_raw return ptr\n");
     } else if domain == AllocDomain::HvGuest {
         let stats = hv_guest_heap_stats();
         let trace = last_alloc_trace();

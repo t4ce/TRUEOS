@@ -150,11 +150,43 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
         return false;
     }
 
+    match blueprint::elf_imports(unpacked.as_slice()) {
+        Ok(imports) => {
+            let unresolved = imports
+                .iter()
+                .filter(|import| import.resolved_addr.is_none())
+                .count();
+            log(alloc::format!(
+                "run: guest ELF imports={} unresolved={}",
+                imports.len(),
+                unresolved
+            )
+            .as_str());
+            for import in imports
+                .iter()
+                .filter(|import| import.resolved_addr.is_none())
+                .take(16)
+            {
+                log(alloc::format!("run: guest unresolved import {}", import.name).as_str());
+            }
+        }
+        Err(err) => {
+            log(alloc::format!("run: guest ELF import scan failed: {}", err).as_str());
+        }
+    }
+
     let process_args =
         blueprint::build_process_args(state.archive.as_str(), state.app_args.as_slice());
     let process_env = blueprint::build_process_env(state.archive.as_str());
     crate::hv::begin_blueprint_app_window_session(state.archive.as_str());
-    match blueprint::invoke_host_rel(unpacked.as_slice(), module.entry, process_args, process_env) {
+    let invoke_result = blueprint::invoke_host_rel(
+        unpacked.as_slice(),
+        module.entry,
+        process_args,
+        process_env,
+        state.console_target.clone(),
+    );
+    match invoke_result {
         Ok(()) => {
             crate::hv::finish_blueprint_app_window_session(true);
             log("run: guest blueprint returned");

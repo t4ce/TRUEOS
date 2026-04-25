@@ -225,16 +225,26 @@ fn unresolved_import_called(slot: usize) -> usize {
     0
 }
 
+fn portal_logf(args: core::fmt::Arguments<'_>) {
+    if crate::logflag::PORTAL_LOGS {
+        crate::log!("{}\n", args);
+    }
+}
+
 fn resolve_unresolved_import(name: &str) -> Option<usize> {
     let slot = unresolved_import_stub_slot(name)?;
     Some(UNRESOLVED_IMPORT_STUB_FNS[slot] as *const () as usize)
 }
 
 fn portal_alloc_error_handler(layout: Layout) -> ! {
-    crate::log!("portal: alloc error size={} align={}\n", layout.size(), layout.align());
+    portal_logf(format_args!(
+        "portal: alloc error size={} align={}",
+        layout.size(),
+        layout.align()
+    ));
     let stats = crate::allocators::hv_guest_heap_stats();
-    crate::log!(
-        "portal: hv-guest-heap virt=0x{:X}..0x{:X} phys=0x{:X} src={:?} usable_total={} free_bytes={} largest_free={} free_blocks={} init={}\n",
+    portal_logf(format_args!(
+        "portal: hv-guest-heap virt=0x{:X}..0x{:X} phys=0x{:X} src={:?} usable_total={} free_bytes={} largest_free={} free_blocks={} init={}",
         stats.heap_start,
         stats.heap_end,
         stats.phys_start,
@@ -244,10 +254,10 @@ fn portal_alloc_error_handler(layout: Layout) -> ! {
         stats.largest_free_block,
         stats.free_blocks,
         stats.initialized,
-    );
+    ));
     let trace = crate::allocators::last_alloc_trace();
-    crate::log!(
-        "portal: last-alloc seq={} caller=0x{:016X} caller1=0x{:016X} caller2=0x{:016X} size={} align={} stage={} head=0x{:016X} block=0x{:016X} block_size={} next=0x{:016X} payload=0x{:016X} aligned_used={}\n",
+    portal_logf(format_args!(
+        "portal: last-alloc seq={} caller=0x{:016X} caller1=0x{:016X} caller2=0x{:016X} size={} align={} stage={} head=0x{:016X} block=0x{:016X} block_size={} next=0x{:016X} payload=0x{:016X} aligned_used={}",
         trace.seq,
         trace.caller_rip,
         trace.caller_rip_1,
@@ -261,7 +271,7 @@ fn portal_alloc_error_handler(layout: Layout) -> ! {
         trace.block_next,
         trace.payload_start,
         trace.aligned_used,
-    );
+    ));
     loop {
         core::hint::spin_loop();
     }
@@ -739,7 +749,7 @@ pub(crate) fn elf_imports<'a>(bytes: &'a [u8]) -> Result<Vec<ElfImport<'a>>, &'s
                 .map_err(|_| "ELF symbol name is not UTF-8")?;
             imports.push(ElfImport {
                 name,
-                resolved_addr: resolve_import(name),
+                resolved_addr: resolve_known_import(name),
             });
         }
     }
@@ -749,7 +759,7 @@ pub(crate) fn elf_imports<'a>(bytes: &'a [u8]) -> Result<Vec<ElfImport<'a>>, &'s
     Ok(imports)
 }
 
-fn resolve_import(name: &str) -> Option<usize> {
+fn resolve_known_import(name: &str) -> Option<usize> {
     match name {
         "_RNvCs75cmLyI1ip2_7___rustc26___rust_alloc_error_handler"
         | "_RNvCs2csqI13tepL_7___rustc26___rust_alloc_error_handler" => {
@@ -784,10 +794,12 @@ fn resolve_import(name: &str) -> Option<usize> {
         | "_RNvCs2csqI13tepL_7___rustc19___rust_alloc_zeroed" => {
             Some(portal_rust_alloc_zeroed as *const () as usize)
         }
-        _ => resolve_std_abi_import(name)
-            .or_else(|| resolve_cabi_import(name))
-            .or_else(|| resolve_unresolved_import(name)),
+        _ => resolve_std_abi_import(name).or_else(|| resolve_cabi_import(name)),
     }
+}
+
+fn resolve_import(name: &str) -> Option<usize> {
+    resolve_known_import(name).or_else(|| resolve_unresolved_import(name))
 }
 
 #[cfg(all(feature = "tokio-probe", target_os = "zkvm"))]
@@ -797,6 +809,9 @@ fn resolve_std_abi_import(name: &str) -> Option<usize> {
         "sys_alloc_aligned" => Some(crate::std_abi_shim::sys_alloc_aligned as *const () as usize),
         "sys_rand" => Some(crate::std_abi_shim::sys_rand as *const () as usize),
         "sys_write" => Some(crate::std_abi_shim::sys_write as *const () as usize),
+        "trueos_internal_log_write" => {
+            Some(crate::std_abi_shim::trueos_internal_log_write as *const () as usize)
+        }
         "sys_read" => Some(crate::std_abi_shim::sys_read as *const () as usize),
         "sys_getenv" => Some(crate::std_abi_shim::sys_getenv as *const () as usize),
         "sys_argc" => Some(crate::std_abi_shim::sys_argc as *const () as usize),
@@ -810,6 +825,57 @@ fn resolve_std_abi_import(name: &str) -> Option<usize> {
         "sys_halt" => Some(crate::std_abi_shim::sys_halt as *const () as usize),
         "trueos_tokio_time_now_nanos" => {
             Some(crate::std_abi_shim::trueos_tokio_time_now_nanos as *const () as usize)
+        }
+        "trueos_octocrab_unix_time_seconds" => {
+            Some(crate::std_abi_shim::trueos_octocrab_unix_time_seconds as *const () as usize)
+        }
+        "trueos_mio_tcp_listener_bind" => {
+            Some(crate::mio_compat::trueos_mio_tcp_listener_bind as *const () as usize)
+        }
+        "trueos_mio_tcp_stream_connect" => {
+            Some(crate::mio_compat::trueos_mio_tcp_stream_connect as *const () as usize)
+        }
+        "trueos_mio_udp_socket_bind" => {
+            Some(crate::mio_compat::trueos_mio_udp_socket_bind as *const () as usize)
+        }
+        "trueos_mio_socket_close" => {
+            Some(crate::mio_compat::trueos_mio_socket_close as *const () as usize)
+        }
+        "trueos_mio_socket_local_addr" => {
+            Some(crate::mio_compat::trueos_mio_socket_local_addr as *const () as usize)
+        }
+        "trueos_mio_socket_peer_addr" => {
+            Some(crate::mio_compat::trueos_mio_socket_peer_addr as *const () as usize)
+        }
+        "trueos_mio_socket_take_error" => {
+            Some(crate::mio_compat::trueos_mio_socket_take_error as *const () as usize)
+        }
+        "trueos_mio_tcp_stream_read" => {
+            Some(crate::mio_compat::trueos_mio_tcp_stream_read as *const () as usize)
+        }
+        "trueos_mio_tcp_stream_write" => {
+            Some(crate::mio_compat::trueos_mio_tcp_stream_write as *const () as usize)
+        }
+        "trueos_mio_udp_socket_connect" => {
+            Some(crate::mio_compat::trueos_mio_udp_socket_connect as *const () as usize)
+        }
+        "trueos_mio_udp_socket_send_to" => {
+            Some(crate::mio_compat::trueos_mio_udp_socket_send_to as *const () as usize)
+        }
+        "trueos_mio_udp_socket_recv_from" => {
+            Some(crate::mio_compat::trueos_mio_udp_socket_recv_from as *const () as usize)
+        }
+        "trueos_mio_tcp_listener_accept" => {
+            Some(crate::mio_compat::trueos_mio_tcp_listener_accept as *const () as usize)
+        }
+        "trueos_mio_selector_register_socket" => {
+            Some(crate::mio_compat::trueos_mio_selector_register_socket as *const () as usize)
+        }
+        "trueos_mio_selector_deregister_socket" => {
+            Some(crate::mio_compat::trueos_mio_selector_deregister_socket as *const () as usize)
+        }
+        "trueos_mio_selector_poll" => {
+            Some(crate::mio_compat::trueos_mio_selector_poll as *const () as usize)
         }
         _ => None,
     }
@@ -941,6 +1007,7 @@ pub(crate) fn invoke_host_rel(
     entry_hint: u64,
     process_args: Vec<String>,
     process_env: BTreeMap<String, String>,
+    console_target: Option<crate::shell2::MatrixTarget>,
 ) -> Result<(), String> {
     let image = load_rel_image(unpacked)?;
     let sections = parse_sections(unpacked)?;
@@ -949,16 +1016,21 @@ pub(crate) fn invoke_host_rel(
     let (_arg_storage, argv) = build_argv(process_args.as_slice());
     let main_fn: extern "C" fn(usize, *const *const c_char) =
         unsafe { core::mem::transmute(main_addr) };
-    crate::r::io::env::with_launch_context(process_args, process_env, || {
-        main_fn(
-            argv.len(),
-            if argv.is_empty() {
-                core::ptr::null()
-            } else {
-                argv.as_ptr()
-            },
-        );
-    });
+    crate::r::io::env::with_launch_context_console(
+        process_args,
+        process_env,
+        console_target,
+        || {
+            main_fn(
+                argv.len(),
+                if argv.is_empty() {
+                    core::ptr::null()
+                } else {
+                    argv.as_ptr()
+                },
+            );
+        },
+    );
     drop(image);
     Ok(())
 }

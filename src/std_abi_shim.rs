@@ -63,6 +63,22 @@ pub unsafe extern "C" fn sys_write(_fd: u32, write_buf: *const u8, nbytes: usize
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_internal_log_write(bytes: *const u8, len: usize) {
+    if bytes.is_null() || len == 0 {
+        return;
+    }
+
+    let bytes = unsafe { slice::from_raw_parts(bytes, len) };
+    match core::str::from_utf8(bytes) {
+        Ok(text) => crate::globalog::log(format_args!("{}", text)),
+        Err(_) => crate::globalog::log(format_args!(
+            "trueos_internal_log_write: non-utf8 payload len={}\n",
+            len
+        )),
+    }
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn sys_read(_fd: u32, recv_buf: *mut u8, nrequested: usize) -> usize {
     if recv_buf.is_null() || nrequested == 0 {
         return 0;

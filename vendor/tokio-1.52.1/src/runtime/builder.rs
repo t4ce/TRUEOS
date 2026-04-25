@@ -2,10 +2,10 @@
 
 use crate::runtime::handle::Handle;
 use crate::runtime::{
-    blocking, driver, Callback, HistogramBuilder, Runtime, TaskCallback, TimerFlavor,
+    Callback, HistogramBuilder, Runtime, TaskCallback, TimerFlavor, blocking, driver,
 };
 #[cfg(tokio_unstable)]
-use crate::runtime::{metrics::HistogramConfiguration, TaskMeta};
+use crate::runtime::{TaskMeta, metrics::HistogramConfiguration};
 
 use crate::runtime::{LocalOptions, LocalRuntime};
 use crate::util::rand::{RngSeed, RngSeedGenerator};
@@ -16,6 +16,19 @@ use std::fmt;
 use std::io;
 use std::thread::ThreadId;
 use std::time::Duration;
+
+#[cfg(target_os = "zkvm")]
+unsafe extern "C" {
+    fn trueos_internal_log_write(bytes: *const u8, len: usize);
+}
+
+#[cfg(target_os = "zkvm")]
+fn zkvm_runtime_build_trace(message: &'static str) {
+    unsafe { trueos_internal_log_write(message.as_ptr(), message.len()) };
+}
+
+#[cfg(not(target_os = "zkvm"))]
+fn zkvm_runtime_build_trace(_message: &'static str) {}
 
 /// Builds Tokio Runtime with custom configuration values.
 ///
@@ -253,13 +266,17 @@ impl Builder {
     /// [`LocalRuntime`]: crate::runtime::LocalRuntime
     /// [`build_local`]: crate::runtime::Builder::build_local
     pub fn new_current_thread() -> Builder {
+        zkvm_runtime_build_trace("tokio_rt_builder: enter new_current_thread\n");
         #[cfg(loom)]
         const EVENT_INTERVAL: u32 = 4;
         // The number `61` is fairly arbitrary. I believe this value was copied from golang.
         #[cfg(not(loom))]
         const EVENT_INTERVAL: u32 = 61;
 
-        Builder::new(Kind::CurrentThread, EVENT_INTERVAL)
+        zkvm_runtime_build_trace("tokio_rt_builder: before builder_new\n");
+        let builder = Builder::new(Kind::CurrentThread, EVENT_INTERVAL);
+        zkvm_runtime_build_trace("tokio_rt_builder: return new_current_thread\n");
+        builder
     }
 
     /// Returns a new builder with the multi thread scheduler selected.
@@ -277,7 +294,15 @@ impl Builder {
     ///
     /// Configuration methods can be chained on the return value.
     pub(crate) fn new(kind: Kind, event_interval: u32) -> Builder {
-        Builder {
+        zkvm_runtime_build_trace("tokio_rt_builder: enter builder_new\n");
+        zkvm_runtime_build_trace("tokio_rt_builder: before thread_name_arc\n");
+        let thread_name = std::sync::Arc::new(|| "tokio-rt-worker".into());
+        zkvm_runtime_build_trace("tokio_rt_builder: after thread_name_arc\n");
+        zkvm_runtime_build_trace("tokio_rt_builder: before rng_seed_new\n");
+        let seed_generator = RngSeedGenerator::new(RngSeed::new());
+        zkvm_runtime_build_trace("tokio_rt_builder: after rng_seed_new\n");
+
+        let builder = Builder {
             kind,
 
             // Default runtime name
@@ -300,7 +325,7 @@ impl Builder {
             max_blocking_threads: 512,
 
             // Default thread name
-            thread_name: std::sync::Arc::new(|| "tokio-rt-worker".into()),
+            thread_name,
 
             // Do not set a stack size by default
             thread_stack_size: None,
@@ -326,7 +351,7 @@ impl Builder {
             global_queue_interval: None,
             event_interval,
 
-            seed_generator: RngSeedGenerator::new(RngSeed::new()),
+            seed_generator,
 
             #[cfg(tokio_unstable)]
             unhandled_panic: UnhandledPanic::Ignore,
@@ -341,7 +366,9 @@ impl Builder {
 
             // Eager driver handoff is disabled by default.
             enable_eager_driver_handoff: false,
-        }
+        };
+        zkvm_runtime_build_trace("tokio_rt_builder: return builder_new\n");
+        builder
     }
 
     /// Enables both I/O and time drivers.
@@ -1638,11 +1665,7 @@ impl Builder {
         let (scheduler, handle, blocking_pool) =
             self.build_current_thread_runtime_components(None)?;
 
-        Ok(Runtime::from_parts(
-            Scheduler::CurrentThread(scheduler),
-            handle,
-            blocking_pool,
-        ))
+        Ok(Runtime::from_parts(Scheduler::CurrentThread(scheduler), handle, blocking_pool))
     }
 
     fn build_current_thread_local_runtime(&mut self) -> io::Result<LocalRuntime> {
@@ -1664,25 +1687,37 @@ impl Builder {
         &mut self,
         local_tid: Option<ThreadId>,
     ) -> io::Result<(CurrentThread, Handle, BlockingPool)> {
-        use crate::runtime::scheduler;
         use crate::runtime::Config;
+        use crate::runtime::scheduler;
 
+        zkvm_runtime_build_trace("tokio_rt_build: enter current_thread_components\n");
         let mut cfg = self.get_cfg();
+        zkvm_runtime_build_trace("tokio_rt_build: after get_cfg\n");
         cfg.timer_flavor = TimerFlavor::Traditional;
+        zkvm_runtime_build_trace("tokio_rt_build: before driver_new\n");
         let (driver, driver_handle) = driver::Driver::new(cfg)?;
+        zkvm_runtime_build_trace("tokio_rt_build: after driver_new\n");
 
         // Blocking pool
+        zkvm_runtime_build_trace("tokio_rt_build: before blocking_pool\n");
         let blocking_pool = blocking::create_blocking_pool(self, self.max_blocking_threads);
+        zkvm_runtime_build_trace("tokio_rt_build: after blocking_pool\n");
         let blocking_spawner = blocking_pool.spawner().clone();
+        zkvm_runtime_build_trace("tokio_rt_build: after blocking_spawner_clone\n");
 
         // Generate a rng seed for this runtime.
+        zkvm_runtime_build_trace("tokio_rt_build: before seed_generator_1\n");
         let seed_generator_1 = self.seed_generator.next_generator();
+        zkvm_runtime_build_trace("tokio_rt_build: after seed_generator_1\n");
+        zkvm_runtime_build_trace("tokio_rt_build: before seed_generator_2\n");
         let seed_generator_2 = self.seed_generator.next_generator();
+        zkvm_runtime_build_trace("tokio_rt_build: after seed_generator_2\n");
 
         // And now put a single-threaded scheduler on top of the timer. When
         // there are no futures ready to do something, it'll let the timer or
         // the reactor to generate some new stimuli for the futures to continue
         // in their life.
+        zkvm_runtime_build_trace("tokio_rt_build: before current_thread_new\n");
         let (scheduler, handle) = CurrentThread::new(
             driver,
             driver_handle,
@@ -1712,10 +1747,13 @@ impl Builder {
             local_tid,
             self.name.clone(),
         );
+        zkvm_runtime_build_trace("tokio_rt_build: after current_thread_new\n");
 
+        zkvm_runtime_build_trace("tokio_rt_build: before scheduler_handle_wrap\n");
         let handle = Handle {
             inner: scheduler::Handle::CurrentThread(handle),
         };
+        zkvm_runtime_build_trace("tokio_rt_build: return current_thread_components\n");
 
         Ok((scheduler, handle, blocking_pool))
     }
@@ -1918,19 +1956,13 @@ impl fmt::Debug for Builder {
         debug
             .field("worker_threads", &self.worker_threads)
             .field("max_blocking_threads", &self.max_blocking_threads)
-            .field(
-                "thread_name",
-                &"<dyn Fn() -> String + Send + Sync + 'static>",
-            )
+            .field("thread_name", &"<dyn Fn() -> String + Send + Sync + 'static>")
             .field("thread_stack_size", &self.thread_stack_size)
             .field("after_start", &self.after_start.as_ref().map(|_| "..."))
             .field("before_stop", &self.before_stop.as_ref().map(|_| "..."))
             .field("before_park", &self.before_park.as_ref().map(|_| "..."))
             .field("after_unpark", &self.after_unpark.as_ref().map(|_| "..."))
-            .field(
-                "enable_eager_driver_handoff",
-                &self.enable_eager_driver_handoff,
-            );
+            .field("enable_eager_driver_handoff", &self.enable_eager_driver_handoff);
 
         if self.name.is_none() {
             debug.finish_non_exhaustive()
