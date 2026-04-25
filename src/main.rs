@@ -289,7 +289,9 @@ pub extern "C" fn kmain() -> ! {
     tga::init_once();
     net::init();
 
-    tokio_probe::log_boot_probe();
+    if crate::appcaps::probes::TOKIO_BOOT_PROBE {
+        tokio_probe::log_boot_probe();
+    }
     mio_probe::log_boot_probe();
     hyper_probe::log_boot_probe();
 

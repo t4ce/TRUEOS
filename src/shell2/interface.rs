@@ -1,9 +1,11 @@
 pub(crate) trait ShellIo2 {
-    fn write_str(&self, s: &str);
-    fn write_fmt(&self, args: core::fmt::Arguments<'_>);
-    fn write_char(&self, ch: char);
-    fn write_byte(&self, b: u8) {
-        self.write_char(b as char);
+    // Raw terminal/backend writes bypass the shell transcript. Normal command
+    // output should go through `print_shell_line` or a command session target.
+    fn raw_write_str(&self, s: &str);
+    fn raw_write_fmt(&self, args: core::fmt::Arguments<'_>);
+    fn raw_write_char(&self, ch: char);
+    fn raw_write_byte(&self, b: u8) {
+        self.raw_write_char(b as char);
     }
 }
 

@@ -22,11 +22,11 @@ struct IoAdapter<'a> {
 
 impl trueos_tetris::shell::ShellIo for IoAdapter<'_> {
     fn write_str(&self, s: &str) {
-        self.io.write_str(s);
+        self.io.raw_write_str(s);
     }
 
     fn write_fmt(&self, args: core::fmt::Arguments<'_>) {
-        self.io.write_fmt(args);
+        self.io.raw_write_fmt(args);
     }
 }
 
@@ -73,10 +73,10 @@ fn draw_status_controls(io: &'static dyn ShellBackend2, cols: usize) {
         .checked_div(2)
         .unwrap_or(0)
         .saturating_add(1);
-    io.write_fmt(format_args!("\x1b[{};1H\x1b[2K", STATUS_ROW));
-    io.write_fmt(format_args!("\x1b[{};{}H", STATUS_ROW, col.max(1)));
-    io.write_str(text.as_str());
-    io.write_str(super::super::ecma48::RESET);
+    io.raw_write_fmt(format_args!("\x1b[{};1H\x1b[2K", STATUS_ROW));
+    io.raw_write_fmt(format_args!("\x1b[{};{}H", STATUS_ROW, col.max(1)));
+    io.raw_write_str(text.as_str());
+    io.raw_write_str(super::super::ecma48::RESET);
 }
 
 pub(crate) async fn run(io: &'static dyn ShellBackend2, cols: usize, rows: usize, top_row: usize) {
@@ -121,5 +121,5 @@ pub(crate) async fn run(io: &'static dyn ShellBackend2, cols: usize, rows: usize
         Timer::after(EmbassyDuration::from_millis(16)).await;
     }
 
-    io.write_str(super::super::ecma48::SHOW_CURSOR);
+    io.raw_write_str(super::super::ecma48::SHOW_CURSOR);
 }

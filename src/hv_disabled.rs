@@ -102,6 +102,14 @@ pub struct HvStatus {
     pub vm1_marker_seen: bool,
     pub guest_module_present: bool,
     pub stored_vm_count: usize,
+    pub vm_id_limit: usize,
+    pub running_count: usize,
+    pub starting_count: usize,
+    pub active_vm_ids: [Option<u8>; crate::appcaps::hv::VM_ID_LIMIT],
+    pub vm_shared_heap_total_bytes: usize,
+    pub vm_shared_heap_free_bytes: usize,
+    pub vm_shared_stack_bytes: usize,
+    pub vm_shared_vmx_bytes: usize,
 }
 
 pub fn hvlogf(_args: core::fmt::Arguments<'_>) {}
@@ -118,6 +126,14 @@ pub fn status() -> HvStatus {
         vm1_marker_seen: false,
         guest_module_present: false,
         stored_vm_count: 0,
+        vm_id_limit: crate::appcaps::hv::VM_ID_LIMIT,
+        running_count: 0,
+        starting_count: 0,
+        active_vm_ids: [None; crate::appcaps::hv::VM_ID_LIMIT],
+        vm_shared_heap_total_bytes: 0,
+        vm_shared_heap_free_bytes: 0,
+        vm_shared_stack_bytes: 0,
+        vm_shared_vmx_bytes: 0,
     }
 }
 
