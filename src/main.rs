@@ -46,6 +46,8 @@ mod mio_compat;
 #[cfg(feature = "tokio-probe")]
 mod mio_probe;
 mod net;
+#[cfg(feature = "hyper-probe")]
+mod hyper_probe;
 #[cfg(feature = "octocrab-probe")]
 mod octocrab_probe;
 mod pci;
@@ -268,6 +270,8 @@ pub extern "C" fn kmain() -> ! {
     tokio_probe::log_boot_probe();
     #[cfg(feature = "tokio-probe")]
     mio_probe::log_boot_probe();
+    #[cfg(feature = "hyper-probe")]
+    hyper_probe::log_boot_probe();
     #[cfg(feature = "octocrab-probe")]
     octocrab_probe::log_boot_probe();
 

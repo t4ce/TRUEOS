@@ -6,12 +6,10 @@ mod atomic_u64;
 mod atomic_usize;
 mod barrier;
 mod mutex;
-#[cfg(all(feature = "parking_lot", not(miri), not(target_os = "zkvm")))]
+#[cfg(all(feature = "parking_lot", not(miri)))]
 mod parking_lot;
 mod rwlock;
 mod unsafe_cell;
-#[cfg(target_os = "zkvm")]
-mod zkvm;
 
 pub(crate) mod cell {
     pub(crate) use super::unsafe_cell::UnsafeCell;
@@ -53,26 +51,21 @@ pub(crate) mod sync {
     // internal use. Note however that some are not _currently_ named by
     // consuming code.
 
-    #[cfg(target_os = "zkvm")]
-    pub(crate) use crate::loom::std::zkvm::{
-        Condvar, Mutex, MutexGuard, RwLock, RwLockReadGuard, WaitTimeoutResult,
-    };
-
     // Not using parking_lot in Miri due to <https://github.com/Amanieu/parking_lot/issues/477>.
-    #[cfg(all(feature = "parking_lot", not(miri), not(target_os = "zkvm")))]
+    #[cfg(all(feature = "parking_lot", not(miri)))]
     #[allow(unused_imports)]
     pub(crate) use crate::loom::std::parking_lot::{
         Condvar, Mutex, MutexGuard, RwLock, RwLockReadGuard, WaitTimeoutResult,
     };
 
-    #[cfg(all(not(target_os = "zkvm"), not(all(feature = "parking_lot", not(miri)))))]
+    #[cfg(not(all(feature = "parking_lot", not(miri))))]
     #[allow(unused_imports)]
     pub(crate) use std::sync::{Condvar, MutexGuard, RwLockReadGuard, WaitTimeoutResult};
 
-    #[cfg(all(not(target_os = "zkvm"), not(all(feature = "parking_lot", not(miri)))))]
+    #[cfg(not(all(feature = "parking_lot", not(miri))))]
     pub(crate) use crate::loom::std::mutex::Mutex;
 
-    #[cfg(all(not(target_os = "zkvm"), not(all(feature = "parking_lot", not(miri)))))]
+    #[cfg(not(all(feature = "parking_lot", not(miri))))]
     pub(crate) use crate::loom::std::rwlock::RwLock;
 
     pub(crate) mod atomic {

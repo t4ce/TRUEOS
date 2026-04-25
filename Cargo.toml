@@ -8,6 +8,7 @@ default = ["tokio-probe", "intel-hv"]
 # `tokio::net` is still deferred in the probe: `mio` socket construction works
 # on zkvm now, but selector-delivered socket readiness is not wired end-to-end yet.
 tokio-probe = ["dep:tokio", "dep:socket2", "dep:mio", "tokio/rt", "tokio/macros", "tokio/sync", "tokio/time", "tokio/io-util", "tokio/io-std", "tokio/fs", "tokio/parking_lot", "tokio/test-util"]
+hyper-probe = ["dep:hyper"]
 intel-hv = ["dep:trueos-vm"]
 
 [dependencies]
@@ -75,6 +76,7 @@ serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 tokio = { version = "1.52.1", default-features = false, optional = true }
 socket2 = { version = "0.6.3", default-features = false, optional = true }
 mio = { version = "1.2.0", default-features = false, features = ["os-poll", "net"], optional = true }
+hyper = { version = "1.9.0", default-features = false, features = ["client", "http1"], optional = true }
 localcoder = { path = "vendor/localcoder", default-features = false, features = ["trueos-net"] }
 
 [target.'cfg(target_arch = "x86_64")'.dependencies]
@@ -96,12 +98,21 @@ opt-level = 2
 trueos-limloader = { path = "crates/trueos-limloader" }
 
 [patch.crates-io]
+atomic-waker = { path = "vendor/atomic-waker-1.1.2" }
+bytes = { path = "vendor/bytes-1.11.1" }
+futures-channel = { path = "vendor/futures-channel-0.3.32" }
+futures-core = { path = "vendor/futures-core-0.3.32" }
 png = { path = "vendor/png-0.18.1" }
 fdeflate = { path = "vendor/fdeflate-0.3.7" }
 simd-adler32 = { path = "vendor/simd-adler32-0.3.8" }
 num-traits = { path = "vendor/num-traits-0.2.19" }
+http = { path = "vendor/http-1.4.0" }
+http-body = { path = "vendor/http-body-1.0.1" }
 usvg = { path = "vendor/usvg-0.45.1" }
 imagesize = { path = "vendor/imagesize-0.13.0" }
+httparse = { path = "vendor/httparse-1.10.1" }
+hyper = { path = "vendor/hyper-1.9.0" }
+itoa = { path = "vendor/itoa-1.0.18" }
 kurbo = { path = "vendor/kurbo-0.11.3" }
 svgtypes = { path = "vendor/svgtypes-0.15.3" }
 xmlwriter = { path = "vendor/xmlwriter-0.1.0" }
@@ -109,6 +120,9 @@ crc32fast = { path = "vendor/crc32fast-1.5.0" }
 embedded-websocket = { path = "vendor/embedded-websocket-0.9.4" }
 crab-usb = { path = "vendor/crab-usb-0.6.2/crab-usb-0.6.2" }
 pin-project-lite = { path = "vendor/pin-project-lite-0.2.17" }
+smallvec = { path = "vendor/smallvec-1.15.1" }
 tokio = { path = "vendor/tokio-1.52.1" }
 mio = { path = "vendor/mio-1.2.0" }
 socket2 = { path = "vendor/socket2-0.6.3" }
+try-lock = { path = "vendor/try-lock-0.2.5" }
+want = { path = "vendor/want-0.3.1" }

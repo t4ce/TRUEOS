@@ -6,35 +6,6 @@ use crate::loom::sync::{Arc, Condvar, Mutex};
 use std::sync::atomic::Ordering::SeqCst;
 use std::time::Duration;
 
-#[cfg(target_os = "zkvm")]
-mod zkvm_time {
-    use std::time::Duration;
-
-    unsafe extern "C" {
-        fn trueos_tokio_time_now_nanos() -> u64;
-    }
-
-    #[inline]
-    fn duration_as_nanos(duration: Duration) -> u64 {
-        u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
-    }
-
-    #[inline]
-    pub(super) fn deadline_after(timeout: Duration) -> u64 {
-        now_nanos().saturating_add(duration_as_nanos(timeout))
-    }
-
-    #[inline]
-    pub(super) fn deadline_reached(deadline: u64) -> bool {
-        now_nanos() >= deadline
-    }
-
-    #[inline]
-    fn now_nanos() -> u64 {
-        unsafe { trueos_tokio_time_now_nanos() }
-    }
-}
-
 #[derive(Debug)]
 pub(crate) struct ParkThread {
     inner: Arc<Inner>,
@@ -182,29 +153,7 @@ impl Inner {
             Err(actual) => panic!("inconsistent park_timeout state; actual = {actual}"),
         }
 
-        #[cfg(target_os = "zkvm")]
-        {
-            let deadline = zkvm_time::deadline_after(dur);
-
-            loop {
-                if self
-                    .state
-                    .compare_exchange(NOTIFIED, EMPTY, SeqCst, SeqCst)
-                    .is_ok()
-                {
-                    return;
-                }
-
-                if zkvm_time::deadline_reached(deadline) {
-                    break;
-                }
-
-                std::hint::spin_loop();
-            }
-        }
-
         #[cfg(not(all(target_family = "wasm", not(target_feature = "atomics"))))]
-        #[cfg(not(target_os = "zkvm"))]
         // Wait with a timeout, and if we spuriously wake up or otherwise wake up
         // from a notification, we just want to unconditionally set the state back to
         // empty, either consuming a notification or un-flagging ourselves as
@@ -212,7 +161,6 @@ impl Inner {
         let (_m, _result) = self.condvar.wait_timeout(m, dur).unwrap();
 
         #[cfg(all(target_family = "wasm", not(target_feature = "atomics")))]
-        #[cfg(not(target_os = "zkvm"))]
         // Wasm without atomics doesn't have threads, so just sleep.
         {
             let _m = m;
