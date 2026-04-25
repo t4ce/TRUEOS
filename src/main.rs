@@ -62,6 +62,8 @@ mod runtime;
 mod shell2;
 mod smp;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+mod stackkeeper;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod std_abi_shim;
 mod tga;
 mod tokio_probe;

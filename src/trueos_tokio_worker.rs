@@ -6,11 +6,15 @@ use core::sync::atomic::{AtomicBool, Ordering};
 type TokioBlockingJob = Box<dyn FnOnce() + Send + 'static>;
 
 static LOGGED_NO_WORKER: AtomicBool = AtomicBool::new(false);
+static LOGGED_NO_LANE: AtomicBool = AtomicBool::new(false);
 static LOGGED_SPAWN: AtomicBool = AtomicBool::new(false);
 
 #[embassy_executor::task(pool_size = 64)]
-async fn tokio_blocking_job_task(job: TokioBlockingJob) {
+async fn tokio_blocking_job_task(job: TokioBlockingJob, lane: crate::stackkeeper::TokioLaneLease) {
+    let _guard = crate::stackkeeper::enter_tokio_lane(lane, "tokio-blocking-job");
     job();
+    drop(_guard);
+    let _ = crate::stackkeeper::release_tokio_lane(lane);
 }
 
 fn reject_until_background_ap_ready() -> i32 {
@@ -21,18 +25,47 @@ fn reject_until_background_ap_ready() -> i32 {
 }
 
 fn spawn_on_background_ap(job: TokioBlockingJob) -> i32 {
-    let Some(spawner) = crate::workers::pick_background_spawner() else {
+    let Some((cpu_slot, core_kind, spawner)) = crate::workers::pick_background_spawner_with_slot()
+    else {
         let _ = job;
         return reject_until_background_ap_ready();
     };
 
-    let token = match tokio_blocking_job_task(job) {
+    let Some(lane) =
+        crate::stackkeeper::try_acquire_tokio_lane(cpu_slot, core_kind, "tokio-blocking-job")
+    else {
+        let _ = job;
+        if !LOGGED_NO_LANE.swap(true, Ordering::AcqRel) {
+            crate::log!(
+                "tokio-worker: no free TRUEOS Tokio lane for cpu_slot={}; blocking job not launched\n",
+                cpu_slot
+            );
+        }
+        return -4;
+    };
+
+    let token = match tokio_blocking_job_task(job, lane) {
         Ok(token) => token,
-        Err(_) => return -3,
+        Err(_) => {
+            let _ = crate::stackkeeper::release_tokio_lane(lane);
+            return -3;
+        }
     };
 
     if !LOGGED_SPAWN.swap(true, Ordering::AcqRel) {
-        crate::log!("tokio-worker: using TRUEOS AP>2 background spawners for blocking jobs\n");
+        let tag = lane.tag();
+        crate::log!(
+            "tokio-worker: using TRUEOS AP>2 background spawners for blocking jobs tag=0x{:08X} vm={} domain={} role={} lane{} cpu_slot={} core_kind={} scratch={:#x}+{}\n",
+            tag.magic,
+            tag.vm_id,
+            tag.domain,
+            tag.role,
+            tag.lane_id,
+            tag.cpu_slot,
+            tag.core_kind,
+            tag.scratch_base,
+            tag.scratch_len
+        );
     }
 
     spawner.spawn(token);
