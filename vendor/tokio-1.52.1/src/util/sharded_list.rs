@@ -6,19 +6,6 @@ use crate::util::metric_atomics::{MetricAtomicU64, MetricAtomicUsize};
 
 use super::linked_list::{Link, LinkedList};
 
-#[cfg(target_os = "zkvm")]
-unsafe extern "C" {
-    fn trueos_internal_log_write(bytes: *const u8, len: usize);
-}
-
-#[cfg(target_os = "zkvm")]
-fn zkvm_sharded_list_trace(message: &'static str) {
-    unsafe { trueos_internal_log_write(message.as_ptr(), message.len()) };
-}
-
-#[cfg(not(target_os = "zkvm"))]
-fn zkvm_sharded_list_trace(_message: &'static str) {}
-
 /// An intrusive linked list supporting highly concurrent updates.
 ///
 /// It currently relies on `LinkedList`, so it is the caller's
@@ -48,30 +35,16 @@ pub(crate) unsafe trait ShardedListItem: Link {
 impl<L, T> ShardedList<L, T> {
     /// Creates a new and empty sharded linked list with the specified size.
     pub(crate) fn new(sharded_size: usize) -> Self {
-        zkvm_sharded_list_trace("tokio_sharded_list: enter new\n");
-        zkvm_sharded_list_trace("tokio_sharded_list: before assert_power_two\n");
         assert!(sharded_size.is_power_of_two());
-        zkvm_sharded_list_trace("tokio_sharded_list: after assert_power_two\n");
 
-        zkvm_sharded_list_trace("tokio_sharded_list: before shard_mask\n");
         let shard_mask = sharded_size - 1;
-        zkvm_sharded_list_trace("tokio_sharded_list: after shard_mask\n");
-        zkvm_sharded_list_trace("tokio_sharded_list: before vec_with_capacity\n");
         let mut lists = Vec::with_capacity(sharded_size);
-        zkvm_sharded_list_trace("tokio_sharded_list: after vec_with_capacity\n");
         for _ in 0..sharded_size {
-            zkvm_sharded_list_trace("tokio_sharded_list: before mutex_push\n");
             lists.push(Mutex::new(LinkedList::<L, T>::new()));
-            zkvm_sharded_list_trace("tokio_sharded_list: after mutex_push\n");
         }
-        zkvm_sharded_list_trace("tokio_sharded_list: before into_boxed_slice\n");
         let lists = lists.into_boxed_slice();
-        zkvm_sharded_list_trace("tokio_sharded_list: after into_boxed_slice\n");
-        zkvm_sharded_list_trace("tokio_sharded_list: before metrics\n");
         let added = MetricAtomicU64::new(0);
         let count = MetricAtomicUsize::new(0);
-        zkvm_sharded_list_trace("tokio_sharded_list: after metrics\n");
-        zkvm_sharded_list_trace("tokio_sharded_list: return new\n");
         Self {
             lists,
             added,

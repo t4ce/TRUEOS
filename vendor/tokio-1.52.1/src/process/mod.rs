@@ -239,6 +239,10 @@ pub(crate) mod unix {
 #[cfg(windows)]
 mod imp;
 
+#[path = "zkvm.rs"]
+#[cfg(target_os = "zkvm")]
+mod imp;
+
 mod kill;
 
 use crate::io::{AsyncRead, AsyncWrite, ReadBuf};

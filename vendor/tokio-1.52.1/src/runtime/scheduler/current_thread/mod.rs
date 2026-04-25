@@ -22,19 +22,6 @@ use std::thread::ThreadId;
 use std::time::Duration;
 use std::{fmt, thread};
 
-#[cfg(target_os = "zkvm")]
-unsafe extern "C" {
-    fn trueos_internal_log_write(bytes: *const u8, len: usize);
-}
-
-#[cfg(target_os = "zkvm")]
-fn zkvm_current_thread_trace(message: &'static str) {
-    unsafe { trueos_internal_log_write(message.as_ptr(), message.len()) };
-}
-
-#[cfg(not(target_os = "zkvm"))]
-fn zkvm_current_thread_trace(_message: &'static str) {}
-
 /// Executes tasks on the current thread
 pub(crate) struct CurrentThread {
     /// Core scheduler data is acquired by a thread entering `block_on`.
@@ -150,22 +137,14 @@ impl CurrentThread {
         local_tid: Option<ThreadId>,
         name: Option<String>,
     ) -> (CurrentThread, Arc<Handle>) {
-        zkvm_current_thread_trace("tokio_ct_new: enter\n");
-        zkvm_current_thread_trace("tokio_ct_new: before worker_metrics\n");
         let worker_metrics = WorkerMetrics::from_config(&config);
-        zkvm_current_thread_trace("tokio_ct_new: after worker_metrics\n");
-        zkvm_current_thread_trace("tokio_ct_new: before set_thread_id\n");
         worker_metrics.set_thread_id(thread::current().id());
-        zkvm_current_thread_trace("tokio_ct_new: after set_thread_id\n");
 
         // Get the configured global queue interval, or use the default.
-        zkvm_current_thread_trace("tokio_ct_new: before global_queue_interval\n");
         let global_queue_interval = config
             .global_queue_interval
             .unwrap_or(DEFAULT_GLOBAL_QUEUE_INTERVAL);
-        zkvm_current_thread_trace("tokio_ct_new: after global_queue_interval\n");
 
-        zkvm_current_thread_trace("tokio_ct_new: before task_hooks\n");
         let task_hooks = TaskHooks {
             task_spawn_callback: config.before_spawn.clone(),
             task_terminate_callback: config.after_termination.clone(),
@@ -174,25 +153,15 @@ impl CurrentThread {
             #[cfg(tokio_unstable)]
             after_poll_callback: config.after_poll.clone(),
         };
-        zkvm_current_thread_trace("tokio_ct_new: after task_hooks\n");
 
-        zkvm_current_thread_trace("tokio_ct_new: before inject_new\n");
         let inject = Inject::new();
-        zkvm_current_thread_trace("tokio_ct_new: after inject_new\n");
 
-        zkvm_current_thread_trace("tokio_ct_new: before owned_tasks_new\n");
         let owned = OwnedTasks::new(1);
-        zkvm_current_thread_trace("tokio_ct_new: after owned_tasks_new\n");
 
-        zkvm_current_thread_trace("tokio_ct_new: before woken_atomic\n");
         let woken = AtomicBool::new(false);
-        zkvm_current_thread_trace("tokio_ct_new: after woken_atomic\n");
 
-        zkvm_current_thread_trace("tokio_ct_new: before scheduler_metrics\n");
         let scheduler_metrics = SchedulerMetrics::new();
-        zkvm_current_thread_trace("tokio_ct_new: after scheduler_metrics\n");
 
-        zkvm_current_thread_trace("tokio_ct_new: before shared_struct\n");
         let shared = Shared {
             inject,
             owned,
@@ -201,9 +170,7 @@ impl CurrentThread {
             scheduler_metrics,
             worker_metrics,
         };
-        zkvm_current_thread_trace("tokio_ct_new: after shared_struct\n");
 
-        zkvm_current_thread_trace("tokio_ct_new: before handle_struct\n");
         let handle_inner = Handle {
             name,
             task_hooks,
@@ -213,13 +180,9 @@ impl CurrentThread {
             seed_generator,
             local_tid,
         };
-        zkvm_current_thread_trace("tokio_ct_new: after handle_struct\n");
 
-        zkvm_current_thread_trace("tokio_ct_new: before handle_arc\n");
         let handle = Arc::new(handle_inner);
-        zkvm_current_thread_trace("tokio_ct_new: after handle_arc\n");
 
-        zkvm_current_thread_trace("tokio_ct_new: before core_atomic_cell\n");
         let core = AtomicCell::new(Some(Box::new(Core {
             tasks: VecDeque::with_capacity(INITIAL_CAPACITY),
             tick: 0,
@@ -228,14 +191,11 @@ impl CurrentThread {
             global_queue_interval,
             unhandled_panic: false,
         })));
-        zkvm_current_thread_trace("tokio_ct_new: after core_atomic_cell\n");
 
-        zkvm_current_thread_trace("tokio_ct_new: before scheduler_struct\n");
         let scheduler = CurrentThread {
             core,
             notify: Notify::new(),
         };
-        zkvm_current_thread_trace("tokio_ct_new: return\n");
 
         (scheduler, handle)
     }

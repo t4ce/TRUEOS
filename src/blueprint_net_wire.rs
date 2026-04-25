@@ -57,7 +57,10 @@ impl<'a> Writer<'a> {
     }
 
     fn bytes(&mut self, value: &[u8]) -> Result<(), WireError> {
-        let end = self.pos.checked_add(value.len()).ok_or(WireError::BufferTooSmall)?;
+        let end = self
+            .pos
+            .checked_add(value.len())
+            .ok_or(WireError::BufferTooSmall)?;
         if end > self.out.len() {
             return Err(WireError::BufferTooSmall);
         }

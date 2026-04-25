@@ -1275,12 +1275,7 @@ static TASKS: [TaskSpec; 65] = [
         &UI2_SWARM_DEMO_STARTED,
         spawn_ui2_swarm_demo,
     ),
-    TaskSpec::disabled(
-        "ui2-svg-demo",
-        UI2_DEMO_READY,
-        &UI2_SVG_DEMO_STARTED,
-        spawn_ui2_svg_demo,
-    ),
+    TaskSpec::disabled("ui2-svg-demo", UI2_DEMO_READY, &UI2_SVG_DEMO_STARTED, spawn_ui2_svg_demo),
     TaskSpec::disabled(
         "ui2-weather-demo",
         UI2_DEMO_READY | crate::r::readiness::NET_CONFIGURED,
@@ -1311,32 +1306,12 @@ static TASKS: [TaskSpec; 65] = [
         &TRUEOSFS_READY_HOOK_STARTED,
         spawn_trueosfs_ready_hook,
     ),
-    TaskSpec::disabled(
-        "boot-ws-smoke",
-        WS_BOOT_READY,
-        &BOOT_WS_SMOKE_STARTED,
-        spawn_boot_ws_smoke,
-    ),
-    TaskSpec::disabled(
-        "smtp-smoke",
-        0,
-        &SMTP_SMOKE_STARTED,
-        spawn_smtp_smoke,
-    ),
-    TaskSpec::disabled(
-        "boot-netbench",
-        0,
-        &BOOT_NETBENCH_STARTED,
-        spawn_boot_netbench,
-    ),
+    TaskSpec::disabled("boot-ws-smoke", WS_BOOT_READY, &BOOT_WS_SMOKE_STARTED, spawn_boot_ws_smoke),
+    TaskSpec::disabled("smtp-smoke", 0, &SMTP_SMOKE_STARTED, spawn_smtp_smoke),
+    TaskSpec::disabled("boot-netbench", 0, &BOOT_NETBENCH_STARTED, spawn_boot_netbench),
     TaskSpec::enabled("uart-shell", 0, &UART_SHELL_STARTED, spawn_uart_shell),
     TaskSpec::enabled("net-tcp-shell", 0, &NET_TCP_SHELL_STARTED, spawn_net_tcp_shell),
-    TaskSpec::disabled(
-        "atomic_bomb",
-        0,
-        &ATOMIC_BOMB_STARTED,
-        spawn_atomic_bomb,
-    ),
+    TaskSpec::disabled("atomic_bomb", 0, &ATOMIC_BOMB_STARTED, spawn_atomic_bomb),
 ];
 
 // ---------------------------------------------------------------------------
