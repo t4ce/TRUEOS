@@ -109,6 +109,7 @@ async fn probe_tokio_blocking_canary() -> bool {
 async fn probe_tokio_fs_runtime_surface() {
     crate::log!("tokio_probe: enter fs.runtime_ops probe\n");
 
+    crate::log!("tokio_probe: enter fs.runtime_ops.write\n");
     match tokio::fs::write(TOKIO_FS_PROBE_PATH, TOKIO_FS_PROBE_BYTES).await {
         Ok(()) => crate::log!("tokio_probe: success fs.runtime_ops.write\n"),
         Err(err) => {
@@ -117,6 +118,7 @@ async fn probe_tokio_fs_runtime_surface() {
         }
     }
 
+    crate::log!("tokio_probe: enter fs.runtime_ops.read\n");
     match tokio::fs::read(TOKIO_FS_PROBE_PATH).await {
         Ok(bytes) if bytes.as_slice() == TOKIO_FS_PROBE_BYTES => {
             crate::log!("tokio_probe: success fs.runtime_ops.read\n")
@@ -134,6 +136,7 @@ async fn probe_tokio_fs_runtime_surface() {
         }
     }
 
+    crate::log!("tokio_probe: enter fs.runtime_ops.read_to_string\n");
     match tokio::fs::read_to_string(TOKIO_FS_PROBE_PATH).await {
         Ok(text) if text.as_bytes() == TOKIO_FS_PROBE_BYTES => {
             crate::log!("tokio_probe: success fs.runtime_ops.read_to_string\n")
@@ -151,6 +154,7 @@ async fn probe_tokio_fs_runtime_surface() {
         }
     }
 
+    crate::log!("tokio_probe: enter fs.runtime_ops.remove_file\n");
     match tokio::fs::remove_file(TOKIO_FS_PROBE_PATH).await {
         Ok(()) => crate::log!("tokio_probe: success fs.runtime_ops.remove_file\n"),
         Err(err) => {

@@ -1,3 +1,4 @@
+#[cfg(not(target_os = "zkvm"))]
 use crate::fs::asyncify;
 
 use std::io;
@@ -47,5 +48,8 @@ use std::path::Path;
 /// ```
 pub async fn create_dir_all(path: impl AsRef<Path>) -> io::Result<()> {
     let path = path.as_ref().to_owned();
+    #[cfg(target_os = "zkvm")]
+    return crate::fs::trueos::create_dir_all(&path).await;
+    #[cfg(not(target_os = "zkvm"))]
     asyncify(move || std::fs::create_dir_all(path)).await
 }
