@@ -18,7 +18,7 @@ use alloc::string::String as AllocString;
 use alloc::vec::Vec as AllocVec;
 use core::arch::x86_64::{__cpuid, __cpuid_count};
 use core::fmt::Write;
-use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
 use embassy_executor::{Spawner, task};
 use heapless::{Deque, String};
@@ -38,20 +38,46 @@ use vmm::VmManager;
 
 const MAIN_LOOP_MARKER: &[u8] = b"main: entering executor loop";
 const VMX_PAGE_SIZE: usize = 4096;
-const HV_LOG_CAP: usize = 64;
-const HV_LOG_LINE: usize = 200;
+const HV_LOG_CAP: usize = crate::appcaps::hv::LOG_CAP;
+const HV_LOG_LINE: usize = crate::appcaps::hv::LOG_LINE_BYTES;
+pub const TRUEOS_VM_ID_LIMIT: usize = crate::appcaps::hv::VM_ID_LIMIT;
+const TRUEOS_VM_TASK_POOL_SIZE: usize = crate::appcaps::hv::VM_TASK_POOL_SIZE;
+const TRUEOS_VM_CPU_SLOT_LIMIT: usize = crate::appcaps::hv::VM_CPU_SLOT_LIMIT;
+
+struct TrueosVmId {
+    running: AtomicBool,
+    starting: AtomicBool,
+    stop_req: AtomicBool,
+    preserve_req: AtomicBool,
+    preserve_exit: AtomicBool,
+    marker_seen: AtomicBool,
+    guest_boot_armed: AtomicBool,
+}
+
+impl TrueosVmId {
+    const fn new() -> Self {
+        Self {
+            running: AtomicBool::new(false),
+            starting: AtomicBool::new(false),
+            stop_req: AtomicBool::new(false),
+            preserve_req: AtomicBool::new(false),
+            preserve_exit: AtomicBool::new(false),
+            marker_seen: AtomicBool::new(false),
+            guest_boot_armed: AtomicBool::new(false),
+        }
+    }
+}
 
 static VMM: VmManager = VmManager::new();
-static VM1_RUNNING: AtomicBool = AtomicBool::new(false);
-static VM1_STARTING: AtomicBool = AtomicBool::new(false);
-static VM1_STOP_REQ: AtomicBool = AtomicBool::new(false);
-static VM1_PRESERVE_REQ: AtomicBool = AtomicBool::new(false);
-static VM1_PRESERVE_EXIT: AtomicBool = AtomicBool::new(false);
-static VM1_MARKER_SEEN: AtomicBool = AtomicBool::new(false);
-static VM1_GUEST_BOOT_ARMED: AtomicBool = AtomicBool::new(false);
+#[allow(non_upper_case_globals)]
+static trueos_vm_ids: [TrueosVmId; TRUEOS_VM_ID_LIMIT] =
+    [const { TrueosVmId::new() }; TRUEOS_VM_ID_LIMIT];
+static CURRENT_VM_ID_BY_CPU: [AtomicU8; TRUEOS_VM_CPU_SLOT_LIMIT] =
+    [const { AtomicU8::new(0) }; TRUEOS_VM_CPU_SLOT_LIMIT];
 static HV_LOG_SEQ: AtomicU64 = AtomicU64::new(0);
 static VM_BOOT_MODE: Mutex<VmBootMode> = Mutex::new(VmBootMode::Hull);
-static BLUEPRINT_LAUNCH_STATE: Mutex<Option<BlueprintLaunchState>> = Mutex::new(None);
+static BLUEPRINT_LAUNCH_STATES: [Mutex<Option<BlueprintLaunchState>>; TRUEOS_VM_ID_LIMIT] =
+    [const { Mutex::new(None) }; TRUEOS_VM_ID_LIMIT];
 static APP_WINDOW_SESSION: Mutex<Option<AppWindowSession>> = Mutex::new(None);
 
 #[derive(Clone)]
@@ -126,6 +152,45 @@ fn primary_vm_id() -> u8 {
 }
 
 #[inline]
+fn vm_slot(vm_id: u8) -> Option<&'static TrueosVmId> {
+    trueos_vm_ids.get(vm_id as usize)
+}
+
+pub fn first_free_vm_id() -> Option<u8> {
+    for (idx, slot) in trueos_vm_ids.iter().enumerate() {
+        if !slot.running.load(Ordering::Acquire) && !slot.starting.load(Ordering::Acquire) {
+            return Some(idx as u8);
+        }
+    }
+    None
+}
+
+pub(crate) fn current_vm_id() -> Option<u8> {
+    let cpu = crate::cpu::CpuProfile::current()?;
+    let slot = cpu.slot() as usize;
+    let tagged = CURRENT_VM_ID_BY_CPU.get(slot)?.load(Ordering::Acquire);
+    tagged.checked_sub(1)
+}
+
+fn set_current_vm_id(vm_id: u8) {
+    let Some(cpu) = crate::cpu::CpuProfile::current() else {
+        return;
+    };
+    if let Some(slot) = CURRENT_VM_ID_BY_CPU.get(cpu.slot() as usize) {
+        slot.store(vm_id.saturating_add(1), Ordering::Release);
+    }
+}
+
+fn clear_current_vm_id() {
+    let Some(cpu) = crate::cpu::CpuProfile::current() else {
+        return;
+    };
+    if let Some(slot) = CURRENT_VM_ID_BY_CPU.get(cpu.slot() as usize) {
+        slot.store(0, Ordering::Release);
+    }
+}
+
+#[inline]
 fn guest_exception_summary() -> Option<(u8, &'static str, u64, u64, u64)> {
     let info = vmread(VMCS_VMEXIT_INTERRUPTION_INFO)?;
     if ((info >> 31) & 1) == 0 {
@@ -180,15 +245,16 @@ fn hvlog_console_enabled(line: &str) -> bool {
 
 pub fn status() -> HvStatus {
     let (vendor_intel, has_msr, has_vmx, fc_locked, fc_vmx_outside_smx) = vmx_caps();
+    let vm1 = &trueos_vm_ids[VM1_ID as usize];
     HvStatus {
         vendor_intel,
         has_msr,
         has_vmx,
         feature_control_locked: fc_locked,
         feature_control_vmx_outside_smx: fc_vmx_outside_smx,
-        vm1_running: VM1_RUNNING.load(Ordering::Acquire),
-        vm1_starting: VM1_STARTING.load(Ordering::Acquire),
-        vm1_marker_seen: VM1_MARKER_SEEN.load(Ordering::Acquire),
+        vm1_running: vm1.running.load(Ordering::Acquire),
+        vm1_starting: vm1.starting.load(Ordering::Acquire),
+        vm1_marker_seen: vm1.marker_seen.load(Ordering::Acquire),
         guest_module_present: crate::limine::guest_kernel_bytes().is_some(),
         stored_vm_count: crate::hv::store::committed_vm_count(),
     }
@@ -218,11 +284,16 @@ fn start_with_mode(
     boot_mode: VmBootMode,
     stack_mb: Option<usize>,
 ) -> Result<(), StartError> {
-    if vm_id != VM1_ID {
+    let Some(vm) = vm_slot(vm_id) else {
         return Err(StartError::UnsupportedVmId);
-    }
+    };
 
-    if VM1_RUNNING.load(Ordering::Acquire) || VM1_STARTING.load(Ordering::Acquire) {
+    if vm.running.load(Ordering::Acquire)
+        || vm
+            .starting
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+    {
         return Err(StartError::AlreadyRunning);
     }
 
@@ -254,22 +325,24 @@ fn start_with_mode(
         hvlogf(format_args!("hv: cpuid0 ebx=0x{:X} ecx=0x{:X} edx=0x{:X}", r0.ebx, r0.ecx, r0.edx));
         let r1 = __cpuid(1);
         hvlogf(format_args!("hv: cpuid1 ecx=0x{:X} edx=0x{:X}", r1.ecx, r1.edx));
+        vm.starting.store(false, Ordering::Release);
         return Err(StartError::VmxUnsupported);
     }
 
     if boot_mode == VmBootMode::Full && crate::limine::guest_kernel_bytes().is_none() {
+        vm.starting.store(false, Ordering::Release);
         return Err(StartError::MissingGuestModule);
     }
 
     let requested_stack_mb = stack_mb.unwrap_or(memory::guest_stack_default_mb());
     let active_stack_mb = memory::clamp_guest_stack_mb(requested_stack_mb);
     if memory::prepare_guest_stack_mb(active_stack_mb).is_err() {
+        vm.starting.store(false, Ordering::Release);
         return Err(StartError::GuestMemoryUnavailable);
     }
 
-    VM1_STOP_REQ.store(false, Ordering::Release);
-    VM1_MARKER_SEEN.store(false, Ordering::Release);
-    VM1_STARTING.store(true, Ordering::Release);
+    vm.stop_req.store(false, Ordering::Release);
+    vm.marker_seen.store(false, Ordering::Release);
     *VM_BOOT_MODE.lock() = boot_mode;
 
     let _ = spawner;
@@ -278,7 +351,7 @@ fn start_with_mode(
     let target = match pick_vm_hull_lane() {
         Ok(target) => target,
         Err(error) => {
-            VM1_STARTING.store(false, Ordering::Release);
+            vm.starting.store(false, Ordering::Release);
             hvlogf(format_args!(
                 "hv: vm{} lane pick failed: role={} placement={} reason={}",
                 vm_id,
@@ -294,7 +367,7 @@ fn start_with_mode(
     // actual guest work must stay on HV-reserved VM lanes only, never on BSP
     // and never on the first AP service lane.
     if !profile.requires_reserved_vm_lane() || !target.supports(profile) {
-        VM1_STARTING.store(false, Ordering::Release);
+        vm.starting.store(false, Ordering::Release);
         hvlogf(format_args!(
             "hv: vm{} lane rejected: role={} placement={} slot={} requires reserved VM lane on AP>2",
             vm_id,
@@ -316,10 +389,10 @@ fn start_with_mode(
         memory::active_guest_stack_mb()
     ));
 
-    match vm1_task() {
+    match vm_task(vm_id) {
         Ok(token) => target.spawner.spawn(token),
         Err(_) => {
-            VM1_STARTING.store(false, Ordering::Release);
+            vm.starting.store(false, Ordering::Release);
             return Err(StartError::SpawnFailed);
         }
     }
@@ -327,16 +400,16 @@ fn start_with_mode(
 }
 
 pub fn stop(vm_id: u8) -> Result<bool, StopError> {
-    if vm_id != VM1_ID {
+    let Some(vm) = vm_slot(vm_id) else {
         return Err(StopError::UnsupportedVmId);
-    }
+    };
 
-    if VM1_RUNNING.load(Ordering::Acquire) || VM1_STARTING.load(Ordering::Acquire) {
-        VM1_STOP_REQ.store(true, Ordering::Release);
-        hvlogf(format_args!("hv: vm{} lifecycle: stop requested", primary_vm_id()));
+    if vm.running.load(Ordering::Acquire) || vm.starting.load(Ordering::Acquire) {
+        vm.stop_req.store(true, Ordering::Release);
+        hvlogf(format_args!("hv: vm{} lifecycle: stop requested", vm_id));
         Ok(true)
     } else {
-        hvlogf(format_args!("hv: vm{} lifecycle: stop ignored (not running)", primary_vm_id()));
+        hvlogf(format_args!("hv: vm{} lifecycle: stop ignored (not running)", vm_id));
         Ok(false)
     }
 }
@@ -422,62 +495,81 @@ fn map_store_restore_error(err: crate::hv::store::VmStoreError) -> RestoreError 
 }
 
 fn vmexit_is_preserve(lr: LaunchResult) -> bool {
+    let vm_id = current_vm_id().unwrap_or_else(primary_vm_id);
     lr.entered != 0
         && lr.launch_failed == 0
         && ((lr.exit_reason & 0xFFFF) == VMEXIT_REASON_VMCALL
-            || VM1_PRESERVE_EXIT.load(Ordering::Acquire))
+            || vm_slot(vm_id)
+                .map(|vm| vm.preserve_exit.load(Ordering::Acquire))
+                .unwrap_or(false))
 }
 
-fn snapshot_on_preserve_exit() {
+fn snapshot_on_preserve_exit(vm_id: u8) {
     match snapshot_bytes() {
-        Ok(bytes) => match crate::hv::store::save_bytes(VM1_ID, bytes) {
+        Ok(bytes) => match crate::hv::store::save_bytes(vm_id, bytes) {
             Ok(saved) => hvlogf(format_args!(
                 "hv: vm{} reporting: preserve snapshot saved store=hv-ramdisk path=vm/vm1.snapshot bytes={}",
-                primary_vm_id(),
+                vm_id,
                 saved
             )),
             Err(e) => hvlogf(format_args!(
                 "hv: vm{} reporting: preserve snapshot save failed ({:?})",
-                primary_vm_id(),
+                vm_id,
                 e
             )),
         },
         Err(e) => hvlogf(format_args!(
             "hv: vm{} reporting: preserve snapshot bytes failed ({:?})",
-            primary_vm_id(),
+            vm_id,
             e
         )),
     }
 }
 
 pub fn guest_boot_take() -> bool {
-    VM1_GUEST_BOOT_ARMED.swap(false, Ordering::AcqRel)
+    let vm_id = current_vm_id().unwrap_or_else(primary_vm_id);
+    vm_slot(vm_id)
+        .map(|vm| vm.guest_boot_armed.swap(false, Ordering::AcqRel))
+        .unwrap_or(false)
 }
 
 pub fn guest_boot_active() -> bool {
-    VM1_GUEST_BOOT_ARMED.load(Ordering::Acquire)
+    let vm_id = current_vm_id().unwrap_or_else(primary_vm_id);
+    vm_slot(vm_id)
+        .map(|vm| vm.guest_boot_armed.load(Ordering::Acquire))
+        .unwrap_or(false)
 }
 
 pub fn request_preserve_vm1() -> bool {
-    let running = VM1_RUNNING.load(Ordering::Acquire);
-    let starting = VM1_STARTING.load(Ordering::Acquire);
+    let Some(vm) = vm_slot(VM1_ID) else {
+        return false;
+    };
+    let running = vm.running.load(Ordering::Acquire);
+    let starting = vm.starting.load(Ordering::Acquire);
     if !running && !starting {
         return false;
     }
-    VM1_PRESERVE_REQ.store(true, Ordering::Release);
+    vm.preserve_req.store(true, Ordering::Release);
     true
 }
 
-pub fn stage_blueprint_launch(state: BlueprintLaunchState) {
-    *BLUEPRINT_LAUNCH_STATE.lock() = Some(state);
+pub fn stage_blueprint_launch(vm_id: u8, state: BlueprintLaunchState) -> Result<(), StartError> {
+    let Some(slot) = BLUEPRINT_LAUNCH_STATES.get(vm_id as usize) else {
+        return Err(StartError::UnsupportedVmId);
+    };
+    *slot.lock() = Some(state);
+    Ok(())
 }
 
-pub fn take_blueprint_launch() -> Option<BlueprintLaunchState> {
-    BLUEPRINT_LAUNCH_STATE.lock().take()
+pub fn take_blueprint_launch(vm_id: u8) -> Option<BlueprintLaunchState> {
+    BLUEPRINT_LAUNCH_STATES.get(vm_id as usize)?.lock().take()
 }
 
-pub fn blueprint_launch_active() -> bool {
-    BLUEPRINT_LAUNCH_STATE.lock().is_some()
+pub fn blueprint_launch_active(vm_id: u8) -> bool {
+    BLUEPRINT_LAUNCH_STATES
+        .get(vm_id as usize)
+        .map(|slot| slot.lock().is_some())
+        .unwrap_or(false)
 }
 
 fn app_window_broker_log(args: core::fmt::Arguments<'_>) {
@@ -564,18 +656,22 @@ impl LineageRecord {
     }
 }
 
-#[task(pool_size = 1)]
-async fn vm1_task() {
+#[task(pool_size = 32)]
+async fn vm_task(vm_id: u8) {
+    let Some(vm) = vm_slot(vm_id) else {
+        return;
+    };
     let lineage_record = LineageRecord::new();
-    VM1_STARTING.store(false, Ordering::Release);
-    VM1_RUNNING.store(true, Ordering::Release);
-    VM1_PRESERVE_REQ.store(false, Ordering::Release);
-    VM1_PRESERVE_EXIT.store(false, Ordering::Release);
+    vm.starting.store(false, Ordering::Release);
+    vm.running.store(true, Ordering::Release);
+    vm.preserve_req.store(false, Ordering::Release);
+    vm.preserve_exit.store(false, Ordering::Release);
+    set_current_vm_id(vm_id);
     let cpu = crate::cpu::CpuProfile::current();
     if let Some(cpu) = cpu {
         hvlogf(format_args!(
             "hv: vm{}-{} lifecycle: starting slot={} lapic={} kind={}",
-            primary_vm_id(),
+            vm_id,
             lineage_record.level,
             cpu.slot(),
             cpu.lapic_id(),
@@ -584,7 +680,7 @@ async fn vm1_task() {
     } else {
         hvlogf(format_args!(
             "hv: vm{}-{} lifecycle: starting slot=unknown",
-            primary_vm_id(),
+            vm_id,
             lineage_record.level
         ));
     }
@@ -596,21 +692,21 @@ async fn vm1_task() {
             let guest_len = guest.map(|b| b.len()).unwrap_or(0);
             hvlogf(format_args!(
                 "hv: vm{} lifecycle: full guest bytes={}",
-                primary_vm_id(),
+                vm_id,
                 guest_len
             ));
             if let Some(bytes) = guest {
                 if let Some(entry) = guest_kernel_elf_entry(bytes) {
                     hvlogf(format_args!(
                         "hv: vm{} reporting: full guest elf entry=0x{:016X} vmx_guest_entry=0x{:016X}",
-                        primary_vm_id(),
+                        vm_id,
                         entry,
                         guest_launch_rip()
                     ));
                 } else {
                     hvlogf(format_args!(
                         "hv: vm{} reporting: full guest bytes present but ELF entry parse failed; vmx_guest_entry=0x{:016X}",
-                        primary_vm_id(),
+                        vm_id,
                         guest_launch_rip()
                     ));
                 }
@@ -619,20 +715,20 @@ async fn vm1_task() {
         VmBootMode::Hull => {
             hvlogf(format_args!(
                 "hv: vm{} lifecycle: hull guest entry=0x{:016X} stack_mib={}",
-                primary_vm_id(),
+                vm_id,
                 guest_launch_rip(),
                 memory::active_guest_stack_mb()
             ));
         }
     }
-    hvlogf(format_args!("hv: vm{} reporting: vmx preflight ok, stage=m1", primary_vm_id()));
-    hvlogf(format_args!("hv: vm{} reporting: vlayer policy=integrity-first", primary_vm_id()));
+    hvlogf(format_args!("hv: vm{} reporting: vmx preflight ok, stage=m1", vm_id));
+    hvlogf(format_args!("hv: vm{} reporting: vlayer policy=integrity-first", vm_id));
     let guest_heap_ready = crate::allocators::ensure_hv_guest_heap_ready();
     if guest_heap_ready {
         let stats = crate::allocators::hv_guest_heap_stats();
         hvlogf(format_args!(
             "hv: vm{} reporting: hv-guest-heap virt=0x{:016X}..0x{:016X} src={:?} free_bytes={} blocks={}",
-            primary_vm_id(),
+            vm_id,
             stats.heap_start,
             stats.heap_end,
             stats.source,
@@ -647,11 +743,11 @@ async fn vm1_task() {
         Ok(lr) => {
             capture_snapshot_meta(lr);
             if vmexit_is_preserve(lr) {
-                snapshot_on_preserve_exit();
+                snapshot_on_preserve_exit(vm_id);
             }
             hvlogf(format_args!(
                 "hv: vm{}-{} reporting: vmlaunch entered={} launch_failed={} exit_reason=0x{:X} exit_qual=0x{:X} guest_rip=0x{:016X}",
-                primary_vm_id(),
+                vm_id,
                 lineage_record.level,
                 lr.entered,
                 lr.launch_failed,
@@ -662,7 +758,7 @@ async fn vm1_task() {
         }
         Err(e) => hvlogf(format_args!(
             "hv: vm{}-{} reporting: vmlaunch/ept failed ({})",
-            primary_vm_id(),
+            vm_id,
             lineage_record.level,
             e
         )),
@@ -671,21 +767,23 @@ async fn vm1_task() {
     if boot_mode == VmBootMode::Full {
         if let Some(bytes) = guest {
             if contains_bytes(bytes, MAIN_LOOP_MARKER) {
-                VM1_MARKER_SEEN.store(true, Ordering::Release);
+                vm.marker_seen.store(true, Ordering::Release);
                 hvlogf(format_args!(
                     "hv: vm{} reporting: main: entering executor loop",
-                    primary_vm_id()
+                    vm_id
                 ));
             }
         }
     }
 
-    VM1_RUNNING.store(false, Ordering::Release);
-    VM1_STARTING.store(false, Ordering::Release);
-    VM1_STOP_REQ.store(false, Ordering::Release);
-    VM1_PRESERVE_REQ.store(false, Ordering::Release);
-    VM1_PRESERVE_EXIT.store(false, Ordering::Release);
-    hvlogf(format_args!("hv: vm{} lifecycle: stopped", primary_vm_id()));
+    clear_current_vm_id();
+    vm.running.store(false, Ordering::Release);
+    vm.starting.store(false, Ordering::Release);
+    vm.stop_req.store(false, Ordering::Release);
+    vm.preserve_req.store(false, Ordering::Release);
+    vm.preserve_exit.store(false, Ordering::Release);
+    let _ = take_blueprint_launch(vm_id);
+    hvlogf(format_args!("hv: vm{} lifecycle: stopped", vm_id));
 }
 
 fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
@@ -721,6 +819,8 @@ fn vmx_caps() -> (bool, bool, bool, bool, bool) {
 }
 
 fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResult, &'static str> {
+    let vm_id = current_vm_id().unwrap_or_else(primary_vm_id);
+    let vm = vm_slot(vm_id);
     let caps = status();
     if !caps.vendor_intel || !caps.has_msr || !caps.has_vmx {
         return Err("vmx unsupported");
@@ -797,9 +897,13 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
     let mut first = true;
     loop {
         if first {
-            VM1_GUEST_BOOT_ARMED.store(true, Ordering::Release);
+            if let Some(vm) = vm {
+                vm.guest_boot_armed.store(true, Ordering::Release);
+            }
             vmlaunch_once_wrapper(&mut lr);
-            VM1_GUEST_BOOT_ARMED.store(false, Ordering::Release);
+            if let Some(vm) = vm {
+                vm.guest_boot_armed.store(false, Ordering::Release);
+            }
             first = false;
         } else {
             vmresume_once_wrapper(&mut lr);
@@ -969,12 +1073,17 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
                 break;
             }
         }
-        if VM1_PRESERVE_REQ.swap(false, Ordering::AcqRel) {
+        if vm
+            .map(|vm| vm.preserve_req.swap(false, Ordering::AcqRel))
+            .unwrap_or(false)
+        {
             preserve_requested = true;
-            VM1_PRESERVE_EXIT.store(true, Ordering::Release);
+            if let Some(vm) = vm {
+                vm.preserve_exit.store(true, Ordering::Release);
+            }
             hvlogf(format_args!(
                 "hv: vm{} reporting: host preserve request armed at rip=0x{:016X}",
-                primary_vm_id(),
+                vm_id,
                 lr.guest_rip
             ));
             break;
@@ -999,7 +1108,9 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
         return Err("vmxoff");
     }
     if !preserve_requested {
-        VM1_PRESERVE_EXIT.store(false, Ordering::Release);
+        if let Some(vm) = vm {
+            vm.preserve_exit.store(false, Ordering::Release);
+        }
     }
     Ok(lr)
 }

@@ -114,12 +114,14 @@ pub extern "C" fn trueos_hv_guest_shell_run() -> ! {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_hv_guest_blueprint_launch_active() -> bool {
-    crate::hv::blueprint_launch_active()
+    let vm_id = crate::hv::current_vm_id().unwrap_or(crate::hv::snapshot::VM1_ID);
+    crate::hv::blueprint_launch_active(vm_id)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
-    let Some(state) = crate::hv::take_blueprint_launch() else {
+    let vm_id = crate::hv::current_vm_id().unwrap_or(crate::hv::snapshot::VM1_ID);
+    let Some(state) = crate::hv::take_blueprint_launch(vm_id) else {
         return false;
     };
 

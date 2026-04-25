@@ -13,19 +13,24 @@ use super::api::claim_interface;
 use super::mass::{self, MassProbeInfo, MassTarget};
 use super::scsi::{self, SenseKey};
 
-const MAX_MASS_RUNTIMES: usize = 8;
-const MAX_ACTIVE_STREAMS: usize = 8;
-const MASS_KEEPALIVE_MS: u64 = 2_000;
-const MASS_IO_RETRY_LIMIT: u8 = 8;
-const MASS_IO_RETRY_DELAY_MS: u64 = 25;
-const MASS_RUNTIME_WAIT_LIMIT: u16 = 500;
-const MASS_RUNTIME_WAIT_DELAY_MS: u64 = 10;
-const MIN_IO_BYTES: usize = 8 * 1024;
-const MAX_IO_BYTES: usize = 128 * 1024;
-const MASS_IO_GROW_SUCCESS_TARGET: u16 = 16;
-const MASS_IO_GROW_SUCCESS_TARGET_FAST_BOT: u16 = 4;
-const FAST_BOT_INITIAL_IO_BYTES: usize = 64 * 1024;
-const FAST_BOT_WRITE_MAX_IO_BYTES: usize = 64 * 1024;
+const MAX_MASS_RUNTIMES: usize = crate::appcaps::storage::USB_MASS_MAX_RUNTIMES;
+const MAX_ACTIVE_STREAMS: usize = crate::appcaps::storage::USB_MASS_MAX_ACTIVE_STREAMS;
+const MASS_KEEPALIVE_MS: u64 = crate::appcaps::storage::USB_MASS_KEEPALIVE_MS;
+const MASS_IO_RETRY_LIMIT: u8 = crate::appcaps::storage::USB_MASS_IO_RETRY_LIMIT;
+const MASS_IO_RETRY_DELAY_MS: u64 = crate::appcaps::storage::USB_MASS_IO_RETRY_DELAY_MS;
+const MASS_RUNTIME_WAIT_LIMIT: u16 = crate::appcaps::storage::USB_MASS_RUNTIME_WAIT_LIMIT;
+const MASS_RUNTIME_WAIT_DELAY_MS: u64 =
+    crate::appcaps::storage::USB_MASS_RUNTIME_WAIT_DELAY_MS;
+const MIN_IO_BYTES: usize = crate::appcaps::storage::USB_MASS_MIN_IO_BYTES;
+const MAX_IO_BYTES: usize = crate::appcaps::storage::USB_MASS_MAX_IO_BYTES;
+const MASS_IO_GROW_SUCCESS_TARGET: u16 =
+    crate::appcaps::storage::USB_MASS_IO_GROW_SUCCESS_TARGET;
+const MASS_IO_GROW_SUCCESS_TARGET_FAST_BOT: u16 =
+    crate::appcaps::storage::USB_MASS_IO_GROW_SUCCESS_TARGET_FAST_BOT;
+const FAST_BOT_INITIAL_IO_BYTES: usize =
+    crate::appcaps::storage::USB_MASS_FAST_BOT_INITIAL_IO_BYTES;
+const FAST_BOT_WRITE_MAX_IO_BYTES: usize =
+    crate::appcaps::storage::USB_MASS_FAST_BOT_WRITE_MAX_IO_BYTES;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct ActiveMassStream {

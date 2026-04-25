@@ -4,8 +4,8 @@ use crate::net::device::LinkState;
 use spin::Mutex;
 
 static PACKET_POOL: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
-const POOL_MAX: usize = 1024;
-const RX_BUF_SIZE: usize = 2048;
+const POOL_MAX: usize = crate::appcaps::net::PACKET_POOL_MAX;
+const RX_BUF_SIZE: usize = crate::appcaps::net::RX_BUF_SIZE;
 
 #[inline]
 fn alloc_uninit_buf(len: usize) -> Vec<u8> {

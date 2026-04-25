@@ -17,7 +17,6 @@ use crate::blueprint;
 use crate::shell2::shell2_cmd::ParseOutcome;
 
 const TABLE_HEADERS: &[&str; 3] = &["id", "module", "source"];
-const APP_VM_ID: u8 = 0;
 
 static APP_VM_RUN_QUEUE: Mutex<VecDeque<AppVmLaunchRequest>> = Mutex::new(VecDeque::new());
 
@@ -137,18 +136,6 @@ fn dequeue_request() -> Option<AppVmLaunchRequest> {
     APP_VM_RUN_QUEUE.lock().pop_front()
 }
 
-fn wait_for_vm_slot_clear() -> impl core::future::Future<Output = ()> {
-    async {
-        loop {
-            let status = crate::hv::status();
-            if !status.vm1_running && !status.vm1_starting {
-                return;
-            }
-            Timer::after(EmbassyDuration::from_millis(50)).await;
-        }
-    }
-}
-
 async fn execute_request(spawner: &Spawner, request: AppVmLaunchRequest) {
     let target = request.target.clone();
     let log = |line: &str| {
@@ -246,35 +233,31 @@ async fn execute_request(spawner: &Spawner, request: AppVmLaunchRequest) {
         log("run: app_vm_ready=1");
     }
 
-    wait_for_vm_slot_clear().await;
+    let Some(vm_id) = crate::hv::first_free_vm_id() else {
+        log("run: no free app-vm ids");
+        return;
+    };
 
-    crate::hv::stage_blueprint_launch(crate::hv::BlueprintLaunchState {
+    if let Err(err) = crate::hv::stage_blueprint_launch(vm_id, crate::hv::BlueprintLaunchState {
         archive: request.archive.clone(),
         module_bytes: request.module_bytes.clone(),
         app_args: request.app_args.clone(),
         console_target: Some(target.clone()),
-    });
+    }) {
+        log(alloc::format!("run: app-vm stage failed: {:?}", err).as_str());
+        return;
+    }
 
-    match crate::hv::start(APP_VM_ID, spawner, &UART1_COM1_BACKEND, None) {
+    match crate::hv::start(vm_id, spawner, &UART1_COM1_BACKEND, None) {
         Ok(()) => {
-            log("run: app-vm launch requested");
+            log(alloc::format!("run: app-vm{} launch requested", vm_id).as_str());
         }
         Err(err) => {
             log(alloc::format!("run: app-vm start failed: {:?}", err).as_str());
-            let _ = crate::hv::take_blueprint_launch();
+            let _ = crate::hv::take_blueprint_launch(vm_id);
             return;
         }
     }
-
-    loop {
-        let status = crate::hv::status();
-        if !status.vm1_running && !status.vm1_starting {
-            break;
-        }
-        Timer::after(EmbassyDuration::from_millis(50)).await;
-    }
-
-    log("run: app-vm finished");
 }
 
 #[embassy_executor::task(pool_size = 1)]
