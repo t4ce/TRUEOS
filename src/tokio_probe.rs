@@ -1,8 +1,9 @@
 //! Stage-1 Tokio probe for TRUEOS.
 //!
-//! This wires Tokio's single-thread runtime surface (`rt`) so we can probe
-//! BSP / VM-hull assumptions incrementally without approaching Tokio's
-//! multi-thread scheduler yet.
+//! This wires Tokio's runtime surfaces so we can probe BSP / VM-hull
+//! assumptions incrementally. The current-thread scheduler is executed at
+//! boot; the multi-thread scheduler is compiled and logged until TRUEOS has a
+//! real thread facade for Tokio workers.
 
 extern crate alloc;
 extern crate std;
@@ -71,38 +72,38 @@ async fn probe_tokio_blocking_canary() -> bool {
 
     #[cfg(not(target_os = "zkvm"))]
     {
-    crate::log!("tokio_probe: enter blocking.spawn_blocking_canary\n");
-    let canary = tokio::time::timeout(
-        core::time::Duration::from_millis(50),
-        tokio::task::spawn_blocking(|| 0xB10C_0001u32),
-    )
-    .await;
+        crate::log!("tokio_probe: enter blocking.spawn_blocking_canary\n");
+        let canary = tokio::time::timeout(
+            core::time::Duration::from_millis(50),
+            tokio::task::spawn_blocking(|| 0xB10C_0001u32),
+        )
+        .await;
 
-    match canary {
-        Ok(Ok(0xB10C_0001)) => {
-            crate::log!("tokio_probe: success blocking.spawn_blocking_canary\n");
-            true
+        match canary {
+            Ok(Ok(0xB10C_0001)) => {
+                crate::log!("tokio_probe: success blocking.spawn_blocking_canary\n");
+                true
+            }
+            Ok(Ok(value)) => {
+                crate::log!(
+                    "tokio_probe: failure blocking.spawn_blocking_canary value=0x{:08X}\n",
+                    value
+                );
+                false
+            }
+            Ok(Err(err)) => {
+                crate::log!(
+                    "tokio_probe: failure blocking.spawn_blocking_canary join_cancelled={} join_panic={}\n",
+                    err.is_cancelled(),
+                    err.is_panic()
+                );
+                false
+            }
+            Err(_) => {
+                crate::log!("tokio_probe: failure blocking.spawn_blocking_canary_timeout\n");
+                false
+            }
         }
-        Ok(Ok(value)) => {
-            crate::log!(
-                "tokio_probe: failure blocking.spawn_blocking_canary value=0x{:08X}\n",
-                value
-            );
-            false
-        }
-        Ok(Err(err)) => {
-            crate::log!(
-                "tokio_probe: failure blocking.spawn_blocking_canary join_cancelled={} join_panic={}\n",
-                err.is_cancelled(),
-                err.is_panic()
-            );
-            false
-        }
-        Err(_) => {
-            crate::log!("tokio_probe: failure blocking.spawn_blocking_canary_timeout\n");
-            false
-        }
-    }
     }
 }
 
@@ -124,10 +125,7 @@ async fn probe_tokio_fs_runtime_surface() {
             crate::log!("tokio_probe: success fs.runtime_ops.read\n")
         }
         Ok(bytes) => {
-            crate::log!(
-                "tokio_probe: failure fs.runtime_ops.read_value len={}\n",
-                bytes.len()
-            );
+            crate::log!("tokio_probe: failure fs.runtime_ops.read_value len={}\n", bytes.len());
             return;
         }
         Err(err) => {
@@ -407,6 +405,38 @@ fn run_tokio_net_probe_runtime() {
 
     match runtime.block_on(probe_tokio_net_surface()) {
         Ok(()) => crate::log!("tokio_probe: success net.tokio probe_suite\n"),
+        Err(stage) => crate::log!("tokio_probe: failure {}\n", stage),
+    }
+}
+
+fn log_rt_multi_thread_probe() {
+    let mut runtime_builder = tokio::runtime::Builder::new_multi_thread();
+    runtime_builder.worker_threads(2);
+    runtime_builder.enable_io();
+    runtime_builder.enable_time();
+
+    crate::log!("tokio_probe: success rt-multi-thread.builder_surface\n");
+
+    let runtime = match runtime_builder.build() {
+        Ok(runtime) => runtime,
+        Err(_) => {
+            crate::log!("tokio_probe: failure rt-multi-thread.build\n");
+            return;
+        }
+    };
+    crate::log!("tokio_probe: success rt-multi-thread.build\n");
+
+    let value = runtime.block_on(async {
+        let left = tokio::task::spawn(async { 0x4D54_0001u32 });
+        let right = tokio::task::spawn(async { 0x4D54_0002u32 });
+        let left = left.await.map_err(|_| "rt-multi-thread.spawn_left")?;
+        let right = right.await.map_err(|_| "rt-multi-thread.spawn_right")?;
+        Ok::<u32, &'static str>(left ^ right)
+    });
+
+    match value {
+        Ok(0x0000_0003) => crate::log!("tokio_probe: success rt-multi-thread.spawn_join\n"),
+        Ok(_) => crate::log!("tokio_probe: failure rt-multi-thread.spawn_value\n"),
         Err(stage) => crate::log!("tokio_probe: failure {}\n", stage),
     }
 }
@@ -760,12 +790,9 @@ async fn run_probe_suite() -> Result<(), &'static str> {
 }
 
 pub(crate) fn log_boot_probe() {
-    crate::log!(
-        "tokio_probe: wired tokio 1.52.1 with feature rt+sync+time+net+io+fs via zkvm std-ABI shim (single-thread runtime probe)\n"
-    );
-    crate::log!(
-        "tokio_probe: note blocking/File handle ops deferred because Tokio blocking pool still expects host thread spawning on zkvm\n"
-    );
+    crate::log!("tokio_probe: wired tokio 1.52.1 with feature full via zkvm std-ABI shim\n");
+
+    log_rt_multi_thread_probe();
 
     let mut runtime_builder = tokio::runtime::Builder::new_current_thread();
     runtime_builder.enable_io();

@@ -55,6 +55,8 @@ pub(crate) mod registry;
 
 pub mod unix;
 pub mod windows;
+#[cfg(target_os = "zkvm")]
+mod zkvm;
 
 mod reusable_box;
 use self::reusable_box::ReusableBoxFuture;

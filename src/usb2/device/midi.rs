@@ -121,7 +121,9 @@ fn unpack_note_snapshot(packed: u32) -> Option<PianoNoteSnapshot> {
 }
 
 fn piano_record_note_on(note: u8, velocity: u8) {
-    let seq = PIANO_NOTE_SEQ.fetch_add(1, Ordering::AcqRel).wrapping_add(1) as u16;
+    let seq = PIANO_NOTE_SEQ
+        .fetch_add(1, Ordering::AcqRel)
+        .wrapping_add(1) as u16;
     PIANO_LAST_NOTE.store(pack_note_snapshot(seq, note, velocity), Ordering::Release);
 }
 
@@ -176,10 +178,11 @@ fn piano_play_packet(pkt: [u8; 4]) {
         return;
     };
 
-    let duration_ms =
-        PIANO_AUDIBLE_MIN_MS + (u32::from(velocity) * PIANO_AUDIBLE_VEL_MS / 127);
+    let duration_ms = PIANO_AUDIBLE_MIN_MS + (u32::from(velocity) * PIANO_AUDIBLE_VEL_MS / 127);
     if let Err(err) = crate::aud::play_midi_note(note, velocity, duration_ms) {
-        let n = PIANO_AUDIO_ERRS.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
+        let n = PIANO_AUDIO_ERRS
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1);
         if n <= 4 {
             crate::log!("piano: audible note failed err={}\n", err);
         }

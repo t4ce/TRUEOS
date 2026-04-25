@@ -16,19 +16,6 @@ use crate::loom::sync::atomic::{AtomicBool, Ordering};
 use std::marker::PhantomData;
 use std::num::NonZeroU64;
 
-#[cfg(target_os = "zkvm")]
-unsafe extern "C" {
-    fn trueos_internal_log_write(bytes: *const u8, len: usize);
-}
-
-#[cfg(target_os = "zkvm")]
-fn zkvm_owned_tasks_trace(message: &'static str) {
-    unsafe { trueos_internal_log_write(message.as_ptr(), message.len()) };
-}
-
-#[cfg(not(target_os = "zkvm"))]
-fn zkvm_owned_tasks_trace(_message: &'static str) {}
-
 // The id from the module below is used to verify whether a given task is stored
 // in this OwnedTasks, or some other task. The counter starts at one so we can
 // use `None` for tasks not owned by any list.
@@ -44,13 +31,9 @@ cfg_has_atomic_u64! {
     static NEXT_OWNED_TASKS_ID: AtomicU64 = AtomicU64::new(1);
 
     fn get_next_id() -> NonZeroU64 {
-        zkvm_owned_tasks_trace("tokio_owned_tasks: enter get_next_id_u64\n");
         loop {
-            zkvm_owned_tasks_trace("tokio_owned_tasks: before fetch_add_u64\n");
             let id = NEXT_OWNED_TASKS_ID.fetch_add(1, Ordering::Relaxed);
-            zkvm_owned_tasks_trace("tokio_owned_tasks: after fetch_add_u64\n");
             if let Some(id) = NonZeroU64::new(id) {
-                zkvm_owned_tasks_trace("tokio_owned_tasks: return get_next_id_u64\n");
                 return id;
             }
         }
@@ -63,13 +46,9 @@ cfg_not_has_atomic_u64! {
     static NEXT_OWNED_TASKS_ID: AtomicU32 = AtomicU32::new(1);
 
     fn get_next_id() -> NonZeroU64 {
-        zkvm_owned_tasks_trace("tokio_owned_tasks: enter get_next_id_u32\n");
         loop {
-            zkvm_owned_tasks_trace("tokio_owned_tasks: before fetch_add_u32\n");
             let id = NEXT_OWNED_TASKS_ID.fetch_add(1, Ordering::Relaxed);
-            zkvm_owned_tasks_trace("tokio_owned_tasks: after fetch_add_u32\n");
             if let Some(id) = NonZeroU64::new(u64::from(id)) {
-                zkvm_owned_tasks_trace("tokio_owned_tasks: return get_next_id_u32\n");
                 return id;
             }
         }
@@ -97,20 +76,10 @@ struct OwnedTasksInner<S: 'static> {
 
 impl<S: 'static> OwnedTasks<S> {
     pub(crate) fn new(num_cores: usize) -> Self {
-        zkvm_owned_tasks_trace("tokio_owned_tasks: enter new\n");
-        zkvm_owned_tasks_trace("tokio_owned_tasks: before shard_size\n");
         let shard_size = Self::gen_shared_list_size(num_cores);
-        zkvm_owned_tasks_trace("tokio_owned_tasks: after shard_size\n");
-        zkvm_owned_tasks_trace("tokio_owned_tasks: before list_new\n");
         let list = List::new(shard_size);
-        zkvm_owned_tasks_trace("tokio_owned_tasks: after list_new\n");
-        zkvm_owned_tasks_trace("tokio_owned_tasks: before closed_atomic\n");
         let closed = AtomicBool::new(false);
-        zkvm_owned_tasks_trace("tokio_owned_tasks: after closed_atomic\n");
-        zkvm_owned_tasks_trace("tokio_owned_tasks: before id\n");
         let id = get_next_id();
-        zkvm_owned_tasks_trace("tokio_owned_tasks: after id\n");
-        zkvm_owned_tasks_trace("tokio_owned_tasks: return new\n");
         Self { list, closed, id }
     }
 

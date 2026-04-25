@@ -36,11 +36,7 @@ pub(crate) fn submit(session_id: u32, command_bytes: &[u8]) -> Result<(), ()> {
         api::Command::OpenTcpConnect { remote } => {
             crate::hv::hvlogf(format_args!(
                 "hv: blueprint-net submit tcp-connect {}.{}.{}.{}:{}",
-                remote.addr[0],
-                remote.addr[1],
-                remote.addr[2],
-                remote.addr[3],
-                remote.port
+                remote.addr[0], remote.addr[1], remote.addr[2], remote.addr[3], remote.port
             ));
         }
         api::Command::OpenTcpListen { port } => {
