@@ -11,14 +11,12 @@ pub(crate) struct BlueprintNetBroker {
 }
 
 enum BrokerBackend {
-    #[cfg(feature = "intel-hv")]
     Vmx(VmxBroker),
     LocalVnet(VNet),
 }
 
 impl BlueprintNetBroker {
     pub(crate) fn open_primary() -> Option<Self> {
-        #[cfg(feature = "intel-hv")]
         if VMX_GUEST_NET_BACKEND.load(Ordering::Acquire) {
             if let Some(vmx) = VmxBroker::open_primary() {
                 return Some(Self {
@@ -35,7 +33,6 @@ impl BlueprintNetBroker {
 
     pub(crate) fn submit(&self, command: api::Command) -> Result<(), ()> {
         match &self.backend {
-            #[cfg(feature = "intel-hv")]
             BrokerBackend::Vmx(vmx) => vmx.submit(command),
             BrokerBackend::LocalVnet(vnet) => vnet.submit(command),
         }
@@ -43,7 +40,6 @@ impl BlueprintNetBroker {
 
     pub(crate) fn pop_event(&self) -> Option<api::Event> {
         match &self.backend {
-            #[cfg(feature = "intel-hv")]
             BrokerBackend::Vmx(vmx) => vmx.pop_event(),
             BrokerBackend::LocalVnet(vnet) => vnet.pop_event(),
         }
@@ -54,12 +50,10 @@ pub(crate) fn set_vmx_guest_net_backend(enabled: bool) {
     VMX_GUEST_NET_BACKEND.store(enabled, Ordering::Release);
 }
 
-#[cfg(feature = "intel-hv")]
 struct VmxBroker {
     session_id: u32,
 }
 
-#[cfg(feature = "intel-hv")]
 impl VmxBroker {
     fn open_primary() -> Option<Self> {
         let (status, session_id) = trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_NET_OPEN, 0, 0);

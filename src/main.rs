@@ -12,9 +12,9 @@ pub extern crate alloc;
 mod allocators;
 mod aud;
 mod blueprint;
-#[cfg(all(feature = "tokio-probe", target_os = "zkvm"))]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod blueprint_net_broker;
-#[cfg(all(feature = "tokio-probe", target_os = "zkvm"))]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod blueprint_net_wire;
 #[path = "Chronos.rs"]
 mod chronos;
@@ -30,26 +30,16 @@ mod exceptions;
 mod gfx;
 mod globalog;
 mod host_api;
-#[cfg(feature = "intel-hv")]
-mod hv;
-#[cfg(not(feature = "intel-hv"))]
-#[path = "hv_disabled.rs"]
 mod hv;
 pub mod hvv;
-#[cfg(not(feature = "intel-hv"))]
-#[path = "hvv_disabled.rs"]
-pub mod hvv;
-#[cfg(feature = "hyper-probe")]
 mod hyper_probe;
 mod intel;
-#[cfg(feature = "intel-hv")]
 mod intel_hda_probe;
 mod iso9660;
 mod limine;
 mod logflag;
-#[cfg(all(feature = "tokio-probe", target_os = "zkvm"))]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod mio_compat;
-#[cfg(feature = "tokio-probe")]
 mod mio_probe;
 mod net;
 mod pci;
@@ -71,12 +61,11 @@ mod rng;
 mod runtime;
 mod shell2;
 mod smp;
-#[cfg(all(feature = "tokio-probe", target_os = "zkvm"))]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod std_abi_shim;
 mod tga;
-#[cfg(feature = "tokio-probe")]
 mod tokio_probe;
-#[cfg(all(feature = "tokio-probe", target_os = "zkvm"))]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod trueos_tokio_worker;
 #[path = "tst/boot_factory_ram_probe.rs"]
 mod tst_boot_factory_ram_probe;
@@ -271,11 +260,8 @@ pub extern "C" fn kmain() -> ! {
     tga::init_once();
     net::init();
 
-    #[cfg(feature = "tokio-probe")]
     tokio_probe::log_boot_probe();
-    #[cfg(feature = "tokio-probe")]
     mio_probe::log_boot_probe();
-    #[cfg(feature = "hyper-probe")]
     hyper_probe::log_boot_probe();
     #[cfg(feature = "octocrab-probe")]
     octocrab_probe::log_boot_probe();

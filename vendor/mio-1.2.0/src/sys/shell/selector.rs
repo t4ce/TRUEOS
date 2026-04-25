@@ -230,7 +230,7 @@ cfg_any_os_ext! {
 }
 
 cfg_io_source! {
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, target_os = "zkvm"))]
     impl Selector {
         pub fn id(&self) -> usize {
             self.id

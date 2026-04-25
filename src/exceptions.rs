@@ -1,6 +1,4 @@
 use core::fmt;
-#[cfg(not(feature = "tokio-probe"))]
-use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use heapless::Vec;
@@ -332,34 +330,4 @@ extern "x86-interrupt" fn double_fault_handler(
     dprintln!("RFLAGS={:#x}", stack_frame.cpu_flags.bits());
 
     halt_loop();
-}
-
-#[cfg(not(feature = "tokio-probe"))]
-#[panic_handler]
-fn panic(info: &PanicInfo) -> ! {
-    interrupts::disable();
-
-    dprintln!("\n\x1b[31m=== KERNEL PANIC ===\x1b[0m");
-
-    if let Some(loc) = info.location() {
-        dprintln!("Location: {}:{}:{}", loc.file(), loc.line(), loc.column());
-        crate::log!("Location: {}:{}:{}\n", loc.file(), loc.line(), loc.column());
-    } else {
-        crate::log!("Location: unknown\n");
-    }
-
-    let args = info.message();
-    dprintln!("Reason: {}", args);
-    crate::log!("Reason: {}\n", args);
-
-    print_backtrace(64);
-
-    if crate::cpu::can_restart_current_worker_ap_from_panic() {
-        dprintln!("PANIC PANIC PANIC: restarting disposable worker AP");
-        crate::cpu::restart_current_worker_ap_from_panic();
-    }
-
-    loop {
-        hlt();
-    }
 }

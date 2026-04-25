@@ -2,7 +2,7 @@
 //!
 //! This wires Tokio's runtime surfaces so we can probe BSP / VM-hull
 //! assumptions incrementally. The current-thread scheduler is executed at
-//! boot; the multi-thread scheduler is backed by TRUEOS worker APs on zkvm.
+//! boot; the multi-thread scheduler is backed by TRUEOS worker APs.
 
 extern crate alloc;
 extern crate std;
@@ -36,7 +36,7 @@ fn probe_socket2_surface() -> Result<(), &'static str> {
         }
         Err(_) => {
             crate::log!(
-                "tokio_probe: success net.socket2.stub_error (zkvm backend not wired yet)\n"
+                "tokio_probe: success net.socket2.stub_error (TRUEOS backend not wired yet)\n"
             );
             Ok(())
         }
@@ -872,7 +872,7 @@ async fn run_probe_suite() -> Result<(), &'static str> {
 }
 
 pub(crate) fn log_boot_probe() {
-    crate::log!("tokio_probe: wired tokio 1.52.1 with feature full via zkvm std-ABI shim\n");
+    crate::log!("tokio_probe: wired tokio 1.52.1 with feature full via TRUEOS std-ABI shim\n");
 
     log_rt_multi_thread_probe();
     spawn_deferred_tokio_blocking_canary();

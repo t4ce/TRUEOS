@@ -1,7 +1,7 @@
 //! Minimal `std` ABI shim for the Tokio probe when the custom target is
-//! advertised as `target_os = "zkvm"`.
+//! advertised as `target_os = "trueos"`.
 //!
-//! The intent is not to emulate the real zkVM environment. We only provide the
+//! The intent is not to emulate a host userspace environment. We only provide the
 //! narrow symbol surface that Rust `std` expects so it can allocate and do
 //! basic stdio through TRUEOS facilities while we probe Tokio's `rt` feature.
 
@@ -175,7 +175,7 @@ pub extern "C" fn trueos_octocrab_unix_time_seconds() -> u64 {
 pub unsafe extern "C" fn sys_panic(msg_ptr: *const u8, len: usize) -> ! {
     if !msg_ptr.is_null() && len != 0 {
         let bytes = unsafe { slice::from_raw_parts(msg_ptr, len) };
-        uart_write(b"std-zkvm panic: ");
+        uart_write(b"std-trueos panic: ");
         uart_write(bytes);
         uart_write(b"\n");
     }

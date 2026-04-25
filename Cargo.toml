@@ -3,12 +3,6 @@ name = "TRUEOS"
 version = "0.0.2"
 edition = "2024"
 
-[features]
-default = ["tokio-probe", "intel-hv"]
-tokio-probe = ["dep:tokio", "dep:socket2", "dep:mio", "tokio/rt", "tokio/rt-multi-thread", "tokio/macros", "tokio/sync", "tokio/time", "tokio/net", "tokio/io-util", "tokio/io-std", "tokio/fs", "tokio/parking_lot", "tokio/process", "tokio/signal", "tokio/test-util"]
-hyper-probe = ["dep:hyper"]
-intel-hv = ["dep:trueos-vm"]
-
 [dependencies]
 x86_64 = { version = "0.15.4", default-features = false, features = ["instructions", "nightly"] }
 core3 = { version = "0.1.2", default-features = false, features = ["alloc"] }
@@ -58,7 +52,7 @@ trueos-fs = { path = "crates/trueos-fs" }
 v = { path = "crates/trueos-v" }
 trueos-tetris = { path = "crates/trueos-tetris" }
 trueos-weather = { path = "crates/trueos-weather" }
-trueos-vm = { path = "crates/trueos-vm", optional = true }
+trueos-vm = { path = "crates/trueos-vm" }
 trueos-esp = { path = "crates/trueos-esp" }
 lyon_geom = { version = "1.0.19", default-features = false }
 lyon_tessellation = { version = "1.0.20", default-features = false }
@@ -70,11 +64,10 @@ parry2d = { version = "0.26", default-features = false, features = ["dim2", "f32
 petgraph = { version = "0.8.3", default-features = false }
 serde = { version = "1.0", default-features = false, features = ["alloc", "derive"] }
 serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
-# Stage-1 Tokio foothold for VM-hull/runtime probing.
-tokio = { version = "1.52.1", default-features = false, optional = true }
-socket2 = { version = "0.6.3", default-features = false, optional = true }
-mio = { version = "1.2.0", default-features = false, features = ["os-poll", "net"], optional = true }
-hyper = { version = "1.9.0", default-features = false, features = ["client", "http1"], optional = true }
+tokio = { version = "1.52.1", default-features = false, features = ["rt", "rt-multi-thread", "macros", "sync", "time", "net", "io-util", "io-std", "fs", "parking_lot", "process", "signal", "test-util"] }
+socket2 = { version = "0.6.3", default-features = false }
+mio = { version = "1.2.0", default-features = false, features = ["os-poll", "net"] }
+hyper = { version = "1.9.0", default-features = false, features = ["client", "http1"] }
 localcoder = { path = "vendor/localcoder", default-features = false, features = ["trueos-net"] }
 
 [target.'cfg(target_arch = "x86_64")'.dependencies]

@@ -802,7 +802,7 @@ fn resolve_import(name: &str) -> Option<usize> {
     resolve_known_import(name).or_else(|| resolve_unresolved_import(name))
 }
 
-#[cfg(all(feature = "tokio-probe", target_os = "zkvm"))]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 fn resolve_std_abi_import(name: &str) -> Option<usize> {
     match name {
         "sys_alloc_words" => Some(crate::std_abi_shim::sys_alloc_words as *const () as usize),
@@ -881,7 +881,7 @@ fn resolve_std_abi_import(name: &str) -> Option<usize> {
     }
 }
 
-#[cfg(not(all(feature = "tokio-probe", target_os = "zkvm")))]
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 fn resolve_std_abi_import(_name: &str) -> Option<usize> {
     None
 }
