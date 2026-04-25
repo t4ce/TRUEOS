@@ -1,4 +1,6 @@
 pub mod guest_run;
+#[cfg(all(feature = "tokio-probe", target_os = "zkvm"))]
+pub mod blueprint_net;
 pub mod guest_work;
 pub mod memory;
 pub mod snapshot;

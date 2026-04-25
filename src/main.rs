@@ -12,6 +12,10 @@ pub extern crate alloc;
 mod allocators;
 mod aud;
 mod blueprint;
+#[cfg(all(feature = "tokio-probe", target_os = "zkvm"))]
+mod blueprint_net_broker;
+#[cfg(all(feature = "tokio-probe", target_os = "zkvm"))]
+mod blueprint_net_wire;
 #[path = "Chronos.rs"]
 mod chronos;
 mod cpu;

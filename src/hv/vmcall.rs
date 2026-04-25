@@ -18,6 +18,9 @@ pub const OP_PING: u32 = 0x02; // response_data = 0xCAFE_BABE
 pub const OP_UNIX_TIME: u32 = 0x03; // response_data = unix seconds
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
+pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
+pub const OP_BP_NET_SUBMIT: u32 = 0x21; // request payload is wire Command
+pub const OP_BP_NET_POLL: u32 = 0x22; // response payload is optional wire Event
 
 // ── response status codes (u32, written by host) ────────────────────────────
 pub const STATUS_OK: u32 = 0;
@@ -139,6 +142,36 @@ pub fn dispatch() -> bool {
             match crate::hv::vnet::tcp_read(1, out) {
                 Ok(got) => write_response(seq, STATUS_OK, got as u64, got as u32),
                 Err(_) => write_response(seq, STATUS_BAD_ARG, 0, 0),
+            }
+            true
+        }
+        #[cfg(all(feature = "tokio-probe", target_os = "zkvm"))]
+        OP_BP_NET_OPEN => {
+            match crate::hv::blueprint_net::open_primary() {
+                Some(session_id) => write_response(seq, STATUS_OK, session_id as u64, 0),
+                None => write_response(seq, STATUS_BAD_ARG, 0, 0),
+            }
+            true
+        }
+        #[cfg(all(feature = "tokio-probe", target_os = "zkvm"))]
+        OP_BP_NET_SUBMIT => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let p = host_ptr();
+            let bytes = unsafe { &(&(*p).payload)[..n] };
+            match crate::hv::blueprint_net::submit(arg0 as u32, bytes) {
+                Ok(()) => write_response(seq, STATUS_OK, 0, 0),
+                Err(()) => write_response(seq, STATUS_BAD_ARG, 0, 0),
+            }
+            true
+        }
+        #[cfg(all(feature = "tokio-probe", target_os = "zkvm"))]
+        OP_BP_NET_POLL => {
+            let p = host_ptr();
+            let out = unsafe { &mut (&mut (*p).payload)[..PAYLOAD_CAP] };
+            match crate::hv::blueprint_net::poll_event(arg0 as u32, out) {
+                Ok(Some(len)) => write_response(seq, STATUS_OK, 1, len as u32),
+                Ok(None) => write_response(seq, STATUS_OK, 0, 0),
+                Err(()) => write_response(seq, STATUS_BAD_ARG, 0, 0),
             }
             true
         }

@@ -92,34 +92,6 @@ define_started_flags!(
     SURFER_FACTORY_STARTED
 );
 
-macro_rules! define_disabled_flags {
-    ($($name:ident),+ $(,)?) => {
-        $(static $name: AtomicBool = AtomicBool::new(true);)+
-    };
-}
-
-define_disabled_flags!(
-    DISABLED_AI_TASK,
-    DISABLED_HTML_DEMO,
-    DISABLED_FTP_SERVER,
-    DISABLED_TGA,
-    DISABLED_UI2_GFX_TETRIS,
-    DISABLED_UI2_MANDELBROT_DEMO,
-    DISABLED_UI2_PLAYER_DEMO,
-    DISABLED_UI2_PETERSEN_DEMO,
-    DISABLED_UI2_PARTICLE_DEMO,
-    DISABLED_UI2_SMILEY_FOUNTAIN_DEMO,
-    DISABLED_UI2_SWARM_DEMO,
-    DISABLED_UI2_SVG_DEMO,
-    DISABLED_UI2_TRUEOSFS_EXPLORER_DEMO,
-    DISABLED_BOOT_WS_SMOKE,
-    DISABLED_SMTP_SMOKE,
-    DISABLED_BOOT_NETBENCH,
-    DISABLED_ATOMIC_BOMB,
-);
-
-static DISABLED_INTEL_HDA_PROBE: AtomicBool = AtomicBool::new(false);
-
 macro_rules! define_stop_flags {
     ($($name:ident),* $(,)?) => {
         $(static $name: AtomicBool = AtomicBool::new(false);)*
@@ -1037,7 +1009,7 @@ const UI2_DEMO_READY: u32 =
 const WS_BOOT_READY: u32 = crate::r::readiness::NET_GATEWAY_REACHABLE
     | crate::r::readiness::TLS_SOCKET_SERVICE_READY
     | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
-static TASKS: &[TaskSpec] = &[
+static TASKS: [TaskSpec; 65] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
         "globalog-persist-once",
@@ -1102,11 +1074,10 @@ static TASKS: &[TaskSpec] = &[
     TaskSpec::disabled(
         "ai-task",
         AI_QJS_ONESHOT_READY,
-        &DISABLED_AI_TASK,
         &AI_QJS_ONESHOT_STARTED,
         spawn_ai_qjs_oneshot,
     ),
-    TaskSpec::disabled("html-demo", 0, &DISABLED_HTML_DEMO, &HTML_DEMO_STARTED, spawn_html_demo),
+    TaskSpec::disabled("html-demo", 0, &HTML_DEMO_STARTED, spawn_html_demo),
     TaskSpec::enabled(
         "http-trueosfs",
         NET_CONFIGURED_AND_ROOT_READY,
@@ -1131,11 +1102,10 @@ static TASKS: &[TaskSpec] = &[
     TaskSpec::disabled(
         "ftp-server",
         NET_CONFIGURED_AND_ROOT_READY,
-        &DISABLED_FTP_SERVER,
         &FTP_SERVER_STARTED,
         spawn_ftp_server,
     ),
-    TaskSpec::disabled("tga", 0, &DISABLED_TGA, &TGA_TASK_STARTED, spawn_tga_task),
+    TaskSpec::disabled("tga", 0, &TGA_TASK_STARTED, spawn_tga_task),
     TaskSpec::enabled_gated(
         "gfx-virgl-backend-ready",
         0,
@@ -1156,11 +1126,10 @@ static TASKS: &[TaskSpec] = &[
         &INTEL_CURSOR_SERVICE_STARTED,
         spawn_intel_cursor_service_task,
     ),
-    TaskSpec::disabled_on(
+    TaskSpec::enabled_on(
         SpawnPlacement::Worker,
         "intel-hda-probe",
         crate::r::readiness::INTEL_HDA_READY,
-        &DISABLED_INTEL_HDA_PROBE,
         &INTEL_HDA_PROBE_STARTED,
         spawn_intel_hda_probe_task,
     ),
@@ -1203,7 +1172,6 @@ static TASKS: &[TaskSpec] = &[
     TaskSpec::disabled(
         "ui2-gfx-tetris",
         UI2_DEMO_READY,
-        &DISABLED_UI2_GFX_TETRIS,
         &UI2_GFX_TETRIS_STARTED,
         spawn_ui2_gfx_tetris,
     ),
@@ -1260,7 +1228,6 @@ static TASKS: &[TaskSpec] = &[
     TaskSpec::disabled(
         "ui2-mandelbrot-demo",
         UI2_DEMO_READY,
-        &DISABLED_UI2_MANDELBROT_DEMO,
         &UI2_MANDELBROT_DEMO_STARTED,
         spawn_ui2_mandelbrot_demo,
     ),
@@ -1281,21 +1248,18 @@ static TASKS: &[TaskSpec] = &[
     TaskSpec::disabled(
         "ui2-petersen-demo",
         UI2_DEMO_READY,
-        &DISABLED_UI2_PETERSEN_DEMO,
         &UI2_PETERSEN_DEMO_STARTED,
         spawn_ui2_petersen_demo,
     ),
     TaskSpec::disabled(
         "ui2-particle-demo",
         UI2_DEMO_READY,
-        &DISABLED_UI2_PARTICLE_DEMO,
         &UI2_PARTICLE_DEMO_STARTED,
         spawn_ui2_particle_demo,
     ),
     TaskSpec::disabled(
         "ui2-smiley-fountain-demo",
         UI2_DEMO_READY,
-        &DISABLED_UI2_SMILEY_FOUNTAIN_DEMO,
         &UI2_SMILEY_FOUNTAIN_DEMO_STARTED,
         spawn_ui2_smiley_fountain_demo,
     ),
@@ -1308,18 +1272,16 @@ static TASKS: &[TaskSpec] = &[
     TaskSpec::disabled(
         "ui2-swarm-demo",
         UI2_DEMO_READY | crate::r::readiness::NET_CONFIGURED,
-        &DISABLED_UI2_SWARM_DEMO,
         &UI2_SWARM_DEMO_STARTED,
         spawn_ui2_swarm_demo,
     ),
     TaskSpec::disabled(
         "ui2-svg-demo",
         UI2_DEMO_READY,
-        &DISABLED_UI2_SVG_DEMO,
         &UI2_SVG_DEMO_STARTED,
         spawn_ui2_svg_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui2-weather-demo",
         UI2_DEMO_READY | crate::r::readiness::NET_CONFIGURED,
         &UI2_WEATHER_DEMO_STARTED,
@@ -1331,7 +1293,7 @@ static TASKS: &[TaskSpec] = &[
         &UI2_CHART_DEMO_STARTED,
         spawn_ui2_chart_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui2-currency-demo",
         UI2_DEMO_READY | crate::r::readiness::NET_CONFIGURED,
         &UI2_CURRENCY_DEMO_STARTED,
@@ -1340,7 +1302,6 @@ static TASKS: &[TaskSpec] = &[
     TaskSpec::disabled(
         "ui2-trueosfs-explorer-demo",
         UI2_DEMO_READY | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
-        &DISABLED_UI2_TRUEOSFS_EXPLORER_DEMO,
         &UI2_TRUEOSFS_EXPLORER_DEMO_STARTED,
         spawn_ui2_trueosfs_explorer_demo,
     ),
@@ -1353,21 +1314,18 @@ static TASKS: &[TaskSpec] = &[
     TaskSpec::disabled(
         "boot-ws-smoke",
         WS_BOOT_READY,
-        &DISABLED_BOOT_WS_SMOKE,
         &BOOT_WS_SMOKE_STARTED,
         spawn_boot_ws_smoke,
     ),
     TaskSpec::disabled(
         "smtp-smoke",
         0,
-        &DISABLED_SMTP_SMOKE,
         &SMTP_SMOKE_STARTED,
         spawn_smtp_smoke,
     ),
     TaskSpec::disabled(
         "boot-netbench",
         0,
-        &DISABLED_BOOT_NETBENCH,
         &BOOT_NETBENCH_STARTED,
         spawn_boot_netbench,
     ),
@@ -1376,7 +1334,6 @@ static TASKS: &[TaskSpec] = &[
     TaskSpec::disabled(
         "atomic_bomb",
         0,
-        &DISABLED_ATOMIC_BOMB,
         &ATOMIC_BOMB_STARTED,
         spawn_atomic_bomb,
     ),
@@ -1455,7 +1412,7 @@ pub async fn spawn_service_task(spawner: Spawner) {
             let mut pending = 0usize;
             let mut started_any = false;
 
-            for spec in TASKS {
+            for spec in TASKS.iter() {
                 if spec.disabled.load(Ordering::Acquire) {
                     continue;
                 }

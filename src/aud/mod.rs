@@ -17,7 +17,7 @@ use alloc::format;
 use alloc::string::String;
 use spin::Mutex;
 
-use pattern::{Pattern, PatternBank};
+use pattern::{Pattern, PatternBank, Step};
 use player::PatternPlayer;
 use synth::{Envelope, SynthEngine, Waveform};
 
@@ -275,6 +275,31 @@ pub fn pattern_play(name: &str, loops: u32) -> Result<(), &'static str> {
     };
 
     // Get synth engine and player — need to drop locks carefully
+    let mut synth_lock = SYNTH.lock();
+    let engine = synth_lock.as_mut().ok_or("Synth not initialized")?;
+    let mut player_lock = PLAYER.lock();
+    let player = player_lock.as_mut().ok_or("Player not initialized")?;
+
+    player.play_pattern_visual(&pattern, engine, loops)
+}
+
+/// Play a short generated phrase seeded from the latest piano MIDI note.
+pub fn pattern_play_piano_probe(note: u8, velocity: u8, loops: u32) -> Result<(), &'static str> {
+    ensure_patterns()?;
+
+    let root = note.min(127);
+    let vel = velocity.clamp(48, 127);
+    let mut pattern = Pattern::new("piano-probe", 8, 132);
+    pattern.waveform = Waveform::Triangle;
+    pattern.envelope = Envelope::new(2, 90, 45, 80);
+
+    let offsets: [i16; 8] = [0, 7, 12, 7, 3, 10, 15, 12];
+    for (i, offset) in offsets.iter().enumerate() {
+        let stepped = (i16::from(root) + *offset).clamp(0, 127) as u8;
+        let step_vel = vel.saturating_sub((i as u8) * 4).max(40);
+        pattern.steps[i] = Step::note_vel(stepped, step_vel);
+    }
+
     let mut synth_lock = SYNTH.lock();
     let engine = synth_lock.as_mut().ok_or("Synth not initialized")?;
     let mut player_lock = PLAYER.lock();
