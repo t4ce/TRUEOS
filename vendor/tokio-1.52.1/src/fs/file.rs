@@ -27,9 +27,9 @@ use super::mocks::{spawn_blocking, spawn_mandatory_blocking};
 use crate::blocking::JoinHandle;
 #[cfg(not(test))]
 use crate::blocking::{spawn_blocking, spawn_mandatory_blocking};
-#[cfg(all(not(test), not(target_os = "zkvm")))]
+#[cfg(all(not(test), not(any(target_os = "trueos", target_os = "zkvm"))))]
 use std::fs::File as StdFile;
-#[cfg(all(not(test), target_os = "zkvm"))]
+#[cfg(all(not(test), any(target_os = "trueos", target_os = "zkvm")))]
 use crate::fs::trueos::TrueosFile as StdFile;
 
 cfg_io_uring! {
@@ -317,10 +317,10 @@ impl File {
     /// [`write_all`]: fn@crate::io::AsyncWriteExt::write_all
     /// [`AsyncWriteExt`]: trait@crate::io::AsyncWriteExt
     pub async fn sync_all(&self) -> io::Result<()> {
-        #[cfg(target_os = "zkvm")]
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         return self.std.sync_all();
 
-        #[cfg(not(target_os = "zkvm"))]
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         {
         let mut inner = self.inner.lock().await;
         inner.complete_inflight().await;
@@ -358,10 +358,10 @@ impl File {
     /// [`write_all`]: fn@crate::io::AsyncWriteExt::write_all
     /// [`AsyncWriteExt`]: trait@crate::io::AsyncWriteExt
     pub async fn sync_data(&self) -> io::Result<()> {
-        #[cfg(target_os = "zkvm")]
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         return self.std.sync_data();
 
-        #[cfg(not(target_os = "zkvm"))]
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         {
         let mut inner = self.inner.lock().await;
         inner.complete_inflight().await;
@@ -402,10 +402,10 @@ impl File {
     /// [`write_all`]: fn@crate::io::AsyncWriteExt::write_all
     /// [`AsyncWriteExt`]: trait@crate::io::AsyncWriteExt
     pub async fn set_len(&self, size: u64) -> io::Result<()> {
-        #[cfg(target_os = "zkvm")]
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         return self.std.set_len(size);
 
-        #[cfg(not(target_os = "zkvm"))]
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         {
         let mut inner = self.inner.lock().await;
         inner.complete_inflight().await;
@@ -467,10 +467,10 @@ impl File {
     /// # }
     /// ```
     pub async fn metadata(&self) -> io::Result<Metadata> {
-        #[cfg(target_os = "zkvm")]
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         return self.std.metadata();
 
-        #[cfg(not(target_os = "zkvm"))]
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         {
         let std = self.std.clone();
         asyncify(move || std.metadata()).await
@@ -493,7 +493,7 @@ impl File {
     /// # }
     /// ```
     pub async fn try_clone(&self) -> io::Result<File> {
-        #[cfg(target_os = "zkvm")]
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         {
             let std_file = self.std.try_clone()?;
             let mut file = File::from_std(std_file);
@@ -501,7 +501,7 @@ impl File {
             return Ok(file);
         }
 
-        #[cfg(not(target_os = "zkvm"))]
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         {
         self.inner.lock().await.complete_inflight().await;
         let std = self.std.clone();
@@ -592,10 +592,10 @@ impl File {
     /// # }
     /// ```
     pub async fn set_permissions(&self, perm: Permissions) -> io::Result<()> {
-        #[cfg(target_os = "zkvm")]
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         return self.std.set_permissions(perm);
 
-        #[cfg(not(target_os = "zkvm"))]
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         {
         let std = self.std.clone();
         asyncify(move || std.set_permissions(perm)).await
@@ -646,10 +646,10 @@ impl AsyncRead for File {
 
         let me = self.get_mut();
 
-        #[cfg(target_os = "zkvm")]
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         return Poll::Ready(me.std.poll_read_into(dst));
 
-        #[cfg(not(target_os = "zkvm"))]
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         {
         let inner = me.inner.get_mut();
 
@@ -714,13 +714,13 @@ impl AsyncSeek for File {
     fn start_seek(self: Pin<&mut Self>, mut pos: SeekFrom) -> io::Result<()> {
         let me = self.get_mut();
 
-        #[cfg(target_os = "zkvm")]
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         {
             me.std.seek_inner(pos)?;
             return Ok(());
         }
 
-        #[cfg(not(target_os = "zkvm"))]
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         {
         let inner = me.inner.get_mut();
 
@@ -756,10 +756,10 @@ impl AsyncSeek for File {
     fn poll_complete(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<u64>> {
         ready!(crate::trace::trace_leaf(cx));
 
-        #[cfg(target_os = "zkvm")]
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         return Poll::Ready(self.std.position());
 
-        #[cfg(not(target_os = "zkvm"))]
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         {
         let inner = self.inner.get_mut();
 
@@ -800,10 +800,10 @@ impl AsyncWrite for File {
         ready!(crate::trace::trace_leaf(cx));
         let me = self.get_mut();
 
-        #[cfg(target_os = "zkvm")]
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         return Poll::Ready(me.std.poll_write_from(src));
 
-        #[cfg(not(target_os = "zkvm"))]
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         {
         let inner = me.inner.get_mut();
 
@@ -878,7 +878,7 @@ impl AsyncWrite for File {
         ready!(crate::trace::trace_leaf(cx));
         let me = self.get_mut();
 
-        #[cfg(target_os = "zkvm")]
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         {
             let mut written = 0usize;
             for buf in bufs {
@@ -891,7 +891,7 @@ impl AsyncWrite for File {
             return Poll::Ready(Ok(written));
         }
 
-        #[cfg(not(target_os = "zkvm"))]
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         {
         let inner = me.inner.get_mut();
 
@@ -965,10 +965,10 @@ impl AsyncWrite for File {
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
         ready!(crate::trace::trace_leaf(cx));
 
-        #[cfg(target_os = "zkvm")]
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         return Poll::Ready(self.std.sync_all());
 
-        #[cfg(not(target_os = "zkvm"))]
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         {
         let inner = self.inner.get_mut();
         inner.poll_flush(cx)

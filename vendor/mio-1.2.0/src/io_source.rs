@@ -1,4 +1,4 @@
-#![cfg_attr(target_os = "zkvm", allow(dead_code))]
+#![cfg_attr(any(target_os = "trueos", target_os = "zkvm"), allow(dead_code))]
 
 use std::ops::{Deref, DerefMut};
 #[cfg(any(unix, target_os = "wasi"))]
@@ -147,7 +147,7 @@ where
     }
 }
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 impl<T> event::Source for IoSource<T> {
     fn register(
         &mut self,

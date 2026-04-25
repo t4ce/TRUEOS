@@ -117,7 +117,7 @@ macro_rules! from {
                 unsafe {
                     <$for>::from_raw_socket(socket.into_raw_socket())
                 }
-                #[cfg(target_os = "zkvm")]
+                #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
                 {
                     let _ = socket;
                     panic!("socket2 zkvm backend cannot convert std sockets yet")
@@ -185,11 +185,11 @@ mod sockref;
     any(unix, all(target_os = "wasi", not(target_env = "p1"))),
     path = "sys/unix.rs"
 )]
-#[cfg_attr(target_os = "zkvm", path = "sys/zkvm.rs")]
+#[cfg_attr(any(target_os = "trueos", target_os = "zkvm"), path = "sys/zkvm.rs")]
 #[cfg_attr(windows, path = "sys/windows.rs")]
 mod sys;
 
-#[cfg(not(any(windows, unix, target_os = "zkvm", all(target_os = "wasi", not(target_env = "p1")))))]
+#[cfg(not(any(windows, unix, any(target_os = "trueos", target_os = "zkvm"), all(target_os = "wasi", not(target_env = "p1")))))]
 compile_error!("Socket2 doesn't support the compile target");
 
 use sys::c_int;

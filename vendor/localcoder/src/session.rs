@@ -12,7 +12,7 @@ use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
-#[cfg(not(target_os = "zkvm"))]
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 fn session_sort_key(entry: &fs::DirEntry) -> u64 {
     entry
         .metadata()
@@ -23,7 +23,7 @@ fn session_sort_key(entry: &fs::DirEntry) -> u64 {
         .unwrap_or(0)
 }
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 fn session_sort_key(entry: &fs::DirEntry) -> u64 {
     entry.metadata().map(|m| m.len()).unwrap_or(0)
 }

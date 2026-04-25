@@ -298,7 +298,7 @@ impl SockAddr {
                 ip,
                 port,
                 addr.sin6_flowinfo,
-                #[cfg(any(unix, target_os = "zkvm", all(target_os = "wasi", not(target_env = "p1"))))]
+                #[cfg(any(unix, any(target_os = "trueos", target_os = "zkvm"), all(target_os = "wasi", not(target_env = "p1"))))]
                 addr.sin6_scope_id,
                 #[cfg(windows)]
                 unsafe {
@@ -393,7 +393,7 @@ impl From<SocketAddrV6> for SockAddr {
             storage.sin6_port = addr.port().to_be();
             storage.sin6_addr = crate::sys::to_in6_addr(addr.ip());
             storage.sin6_flowinfo = addr.flowinfo();
-            #[cfg(any(unix, target_os = "zkvm", all(target_os = "wasi", not(target_env = "p1"))))]
+            #[cfg(any(unix, any(target_os = "trueos", target_os = "zkvm"), all(target_os = "wasi", not(target_env = "p1"))))]
             {
                 storage.sin6_scope_id = addr.scope_id();
             }

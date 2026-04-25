@@ -55,7 +55,7 @@ pub(crate) mod registry;
 
 pub mod unix;
 pub mod windows;
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod zkvm;
 
 mod reusable_box;

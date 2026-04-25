@@ -1,4 +1,4 @@
-#[cfg(not(target_os = "zkvm"))]
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use crate::fs::asyncify;
 
 use std::{io, path::Path};
@@ -27,8 +27,8 @@ use std::{io, path::Path};
 /// ```
 pub async fn read_to_string(path: impl AsRef<Path>) -> io::Result<String> {
     let path = path.as_ref().to_owned();
-    #[cfg(target_os = "zkvm")]
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
     return crate::fs::trueos::read_to_string(&path).await;
-    #[cfg(not(target_os = "zkvm"))]
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     asyncify(move || std::fs::read_to_string(path)).await
 }

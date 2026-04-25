@@ -1,10 +1,10 @@
-#[cfg(all(target_os = "zkvm", feature = "trueos-net"))]
+#[cfg(all(any(target_os = "trueos", target_os = "zkvm"), feature = "trueos-net"))]
 #[inline]
 pub(crate) fn unix_time_seconds() -> u64 {
     v::vclock::ntp_current_unix_seconds()
 }
 
-#[cfg(not(all(target_os = "zkvm", feature = "trueos-net")))]
+#[cfg(not(all(any(target_os = "trueos", target_os = "zkvm"), feature = "trueos-net")))]
 #[inline]
 pub(crate) fn unix_time_seconds() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};

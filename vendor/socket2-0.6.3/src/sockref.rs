@@ -110,7 +110,7 @@ where
     }
 }
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 impl<'s, S> From<&'s S> for SockRef<'s> {
     fn from(_: &'s S) -> Self {
         panic!("socket2 SockRef is not wired to zkvm socket handles yet")

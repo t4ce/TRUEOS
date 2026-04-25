@@ -67,7 +67,7 @@ cfg_os_poll! {
     pub use self::windows::*;
 }
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 cfg_os_poll! {
     mod shell;
     pub(crate) use self::shell::*;

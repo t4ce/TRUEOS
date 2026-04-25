@@ -251,7 +251,7 @@ impl UdpSocket {
     /// [`std::net::UdpSocket`]: std::net::UdpSocket
     /// [`set_nonblocking`]: fn@std::net::UdpSocket::set_nonblocking
     pub fn into_std(self) -> io::Result<std::net::UdpSocket> {
-        #[cfg(not(any(windows, target_os = "zkvm")))]
+        #[cfg(not(any(windows, any(target_os = "trueos", target_os = "zkvm"))))]
         {
             use std::os::fd::{FromRawFd, IntoRawFd};
             self.io
@@ -269,7 +269,7 @@ impl UdpSocket {
                 .map(|raw_socket| unsafe { std::net::UdpSocket::from_raw_socket(raw_socket) })
         }
 
-        #[cfg(target_os = "zkvm")]
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         {
             Err(io::Error::new(
                 io::ErrorKind::Unsupported,
@@ -2317,7 +2317,7 @@ impl fmt::Debug for UdpSocket {
     }
 }
 
-#[cfg(not(any(windows, target_os = "zkvm")))]
+#[cfg(not(any(windows, any(target_os = "trueos", target_os = "zkvm"))))]
 mod sys {
     use super::UdpSocket;
     use std::os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};

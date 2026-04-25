@@ -9,7 +9,7 @@ use std::{pin::Pin, time::Instant};
 use crate::rt::Sleep;
 use crate::rt::Timer;
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 fn instant_now() -> Instant {
     let duration = std::time::Duration::from_nanos(unsafe { trueos_tokio_time_now_nanos() });
 
@@ -18,12 +18,12 @@ fn instant_now() -> Instant {
     unsafe { core::mem::transmute::<std::time::Duration, Instant>(duration) }
 }
 
-#[cfg(not(target_os = "zkvm"))]
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 fn instant_now() -> Instant {
     Instant::now()
 }
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 unsafe extern "C" {
     fn trueos_tokio_time_now_nanos() -> u64;
 }
