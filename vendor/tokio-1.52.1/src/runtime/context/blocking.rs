@@ -77,21 +77,20 @@ impl BlockingRegionGuard {
         use crate::runtime::park::CachedParkThread;
         use std::task::Context;
         use std::task::Poll::Ready;
-        use std::time::Instant;
 
         let mut park = CachedParkThread::new();
         let waker = park.waker().map_err(|_| ())?;
         let mut cx = Context::from_waker(&waker);
 
         pin!(f);
-        let when = Instant::now() + timeout;
+        let when = crate::time::Instant::now().into_std() + timeout;
 
         loop {
             if let Ready(v) = crate::task::coop::budget(|| f.as_mut().poll(&mut cx)) {
                 return Ok(v);
             }
 
-            let now = Instant::now();
+            let now = crate::time::Instant::now().into_std();
 
             if now >= when {
                 return Err(());

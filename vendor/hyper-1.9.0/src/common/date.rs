@@ -43,6 +43,21 @@ struct CachedDate {
 
 thread_local!(static CACHED: RefCell<CachedDate> = RefCell::new(CachedDate::new()));
 
+#[cfg(target_os = "zkvm")]
+fn system_time_now() -> SystemTime {
+    UNIX_EPOCH + Duration::from_secs(unsafe { trueos_octocrab_unix_time_seconds() })
+}
+
+#[cfg(not(target_os = "zkvm"))]
+fn system_time_now() -> SystemTime {
+    SystemTime::now()
+}
+
+#[cfg(target_os = "zkvm")]
+unsafe extern "C" {
+    fn trueos_octocrab_unix_time_seconds() -> u64;
+}
+
 impl CachedDate {
     fn new() -> Self {
         let mut cache = CachedDate {
@@ -50,7 +65,7 @@ impl CachedDate {
             pos: 0,
             #[cfg(feature = "http2")]
             header_value: HeaderValue::from_static(""),
-            next_update: SystemTime::now(),
+            next_update: system_time_now(),
         };
         cache.update(cache.next_update);
         cache
@@ -61,7 +76,7 @@ impl CachedDate {
     }
 
     fn check(&mut self) {
-        let now = SystemTime::now();
+        let now = system_time_now();
         if now > self.next_update {
             self.update(now);
         }
@@ -131,7 +146,7 @@ mod tests {
     #[bench]
     fn bench_date_render(b: &mut Bencher) {
         let mut date = CachedDate::new();
-        let now = SystemTime::now();
+        let now = system_time_now();
         date.render(now);
         b.bytes = date.buffer().len() as u64;
 

@@ -2744,9 +2744,13 @@ name = "tokio"
 version = "1.52.1"
 dependencies = [
  "bytes",
+ "libc",
+ "mio",
  "parking_lot",
  "pin-project-lite",
+ "socket2",
  "tokio-macros",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

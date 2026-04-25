@@ -281,6 +281,14 @@ impl TcpStream {
                 .map(|io| io.into_raw_fd())
                 .map(|raw_fd| unsafe { std::net::TcpStream::from_raw_fd(raw_fd) })
         }
+
+        #[cfg(target_os = "zkvm")]
+        {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "tokio zkvm TcpStream::into_std is not backed by raw fds",
+            ))
+        }
     }
 
     /// Returns the local address that this stream is bound to.

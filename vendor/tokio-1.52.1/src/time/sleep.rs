@@ -421,10 +421,7 @@ impl Sleep {
 
         // Keep track of task budget
         #[cfg(all(tokio_unstable, feature = "tracing"))]
-        let coop = ready!(trace_poll_op!(
-            "poll_elapsed",
-            crate::task::coop::poll_proceed(cx),
-        ));
+        let coop = ready!(trace_poll_op!("poll_elapsed", crate::task::coop::poll_proceed(cx),));
 
         #[cfg(any(not(tokio_unstable), not(feature = "tracing")))]
         let coop = ready!(crate::task::coop::poll_proceed(cx));
