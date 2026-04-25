@@ -12,14 +12,8 @@ cfg_not_test_util! {
     #[derive(Debug, Clone)]
     pub(crate) struct Clock {}
 
-    #[cfg(not(target_os = "zkvm"))]
     pub(crate) fn now() -> Instant {
         Instant::from_std(std::time::Instant::now())
-    }
-
-    #[cfg(target_os = "zkvm")]
-    pub(crate) fn now() -> Instant {
-        Instant::raw_now()
     }
 
     impl Clock {
@@ -38,23 +32,6 @@ cfg_test_util! {
     use crate::loom::sync::Mutex;
     use crate::loom::sync::atomic::Ordering;
     use std::sync::atomic::AtomicBool as StdAtomicBool;
-
-    #[cfg(not(target_os = "zkvm"))]
-    type ClockInstant = std::time::Instant;
-    #[cfg(target_os = "zkvm")]
-    type ClockInstant = Instant;
-
-    #[cfg(not(target_os = "zkvm"))]
-    #[inline]
-    fn elapsed_from_clock_instant(instant: ClockInstant) -> Duration {
-        instant.elapsed()
-    }
-
-    #[cfg(target_os = "zkvm")]
-    #[inline]
-    fn elapsed_from_clock_instant(instant: ClockInstant) -> Duration {
-        Instant::raw_now().saturating_duration_since(instant)
-    }
 
     cfg_rt! {
         #[track_caller]
@@ -105,10 +82,10 @@ cfg_test_util! {
         enable_pausing: bool,
 
         /// Instant to use as the clock's base instant.
-        base: ClockInstant,
+        base: std::time::Instant,
 
         /// Instant at which the clock was last unfrozen.
-        unfrozen: Option<ClockInstant>,
+        unfrozen: Option<std::time::Instant>,
 
         /// Number of `inhibit_auto_advance` calls still in effect.
         auto_advance_inhibit_count: usize,
@@ -213,7 +190,7 @@ cfg_test_util! {
                 return Err("time is not frozen");
             }
 
-            inner.unfrozen = Some(Instant::raw_now());
+            inner.unfrozen = Some(std::time::Instant::now());
             Ok(())
         });
     }
@@ -306,14 +283,14 @@ cfg_test_util! {
     /// Returns the current instant, factoring in frozen time.
     pub(crate) fn now() -> Instant {
         if !DID_PAUSE_CLOCK.load(Ordering::Acquire) {
-            return Instant::raw_now();
+            return Instant::from_std(std::time::Instant::now());
         }
 
         with_clock(|maybe_clock| {
             Ok(if let Some(clock) = maybe_clock {
                 clock.now()
             } else {
-                Instant::raw_now()
+                Instant::from_std(std::time::Instant::now())
             })
         })
     }
@@ -322,7 +299,7 @@ cfg_test_util! {
         /// Returns a new `Clock` instance that uses the current execution context's
         /// source of time.
         pub(crate) fn new(enable_pausing: bool, start_paused: bool) -> Clock {
-            let now = Instant::raw_now();
+            let now = std::time::Instant::now();
 
             let clock = Clock {
                 inner: Mutex::new(Inner {
@@ -354,7 +331,7 @@ cfg_test_util! {
             DID_PAUSE_CLOCK.store(true, Ordering::Release);
 
             let elapsed = match inner.unfrozen.as_ref() {
-                Some(v) => elapsed_from_clock_instant(*v),
+                Some(v) => v.elapsed(),
                 None => return Err("time is already frozen")
             };
             inner.base += elapsed;
@@ -396,10 +373,10 @@ cfg_test_util! {
             let mut ret = inner.base;
 
             if let Some(unfrozen) = inner.unfrozen {
-                ret += elapsed_from_clock_instant(unfrozen);
+                ret += unfrozen.elapsed();
             }
 
-            ret
+            Instant::from_std(ret)
         }
     }
 }

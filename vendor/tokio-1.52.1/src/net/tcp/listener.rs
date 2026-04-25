@@ -272,15 +272,6 @@ impl TcpListener {
     /// [`std::net::TcpListener`]: std::net::TcpListener
     /// [`set_nonblocking`]: fn@std::net::TcpListener::set_nonblocking
     pub fn into_std(self) -> io::Result<std::net::TcpListener> {
-        #[cfg(target_os = "zkvm")]
-        {
-            let _ = self;
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "tokio TcpListener::into_std is not wired on zkvm yet",
-            ));
-        }
-
         #[cfg(unix)]
         {
             use std::os::unix::io::{FromRawFd, IntoRawFd};

@@ -4,7 +4,7 @@ use std::fmt;
 use std::io;
 use std::net::SocketAddr;
 
-#[cfg(not(any(windows, target_os = "zkvm")))]
+#[cfg(not(windows))]
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, RawFd};
 use std::time::Duration;
 
@@ -835,17 +835,6 @@ impl TcpSocket {
     /// }
     /// ```
     pub async fn connect(self, addr: SocketAddr) -> io::Result<TcpStream> {
-        #[cfg(target_os = "zkvm")]
-        {
-            let _ = (self, addr);
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "tokio TCP connect is not wired to the zkvm VNet backend yet",
-            ));
-        }
-
-        #[cfg(not(target_os = "zkvm"))]
-        {
         if let Err(err) = self.inner.connect(&addr.into()) {
             #[cfg(not(windows))]
             if err.raw_os_error() != Some(libc::EINPROGRESS) {
@@ -873,7 +862,6 @@ impl TcpSocket {
         };
 
         TcpStream::connect_mio(mio).await
-        }
     }
 
     /// Converts the socket into a `TcpListener`.
@@ -912,17 +900,6 @@ impl TcpSocket {
     /// }
     /// ```
     pub fn listen(self, backlog: u32) -> io::Result<TcpListener> {
-        #[cfg(target_os = "zkvm")]
-        {
-            let _ = (self, backlog);
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "tokio TCP listen is not wired to the zkvm VNet backend yet",
-            ));
-        }
-
-        #[cfg(not(target_os = "zkvm"))]
-        {
         self.inner.listen(backlog as i32)?;
         #[cfg(not(windows))]
         let mio = {
@@ -941,7 +918,6 @@ impl TcpSocket {
         };
 
         TcpListener::new(mio)
-        }
     }
 
     /// Converts a [`std::net::TcpStream`] into a `TcpSocket`. The provided
@@ -979,7 +955,7 @@ impl TcpSocket {
     /// }
     /// ```
     pub fn from_std_stream(std_stream: std::net::TcpStream) -> TcpSocket {
-        #[cfg(not(any(windows, target_os = "zkvm")))]
+        #[cfg(not(windows))]
         {
             use std::os::fd::{FromRawFd, IntoRawFd};
 
@@ -993,12 +969,6 @@ impl TcpSocket {
 
             let raw_socket = std_stream.into_raw_socket();
             unsafe { TcpSocket::from_raw_socket(raw_socket) }
-        }
-
-        #[cfg(target_os = "zkvm")]
-        {
-            let _ = std_stream;
-            panic!("tokio TcpSocket::from_std_stream is not wired on zkvm yet")
         }
     }
 }
