@@ -1,7 +1,11 @@
 /*
- * DANGER: Creates a lot of UI2 Windows!!! (me noob ki)
+ * This demo remains opt-in by default because it opens the audio player on boot.
  *
- * This demo is intentionally disabled by default.
+ * The old "creates a lot of UI2 windows" warning came from the pre-reuse
+ * hosted-surface path. This demo now uses
+ * Ui2SurfaceWindow::get_or_create_for_hosted_content_with_size(...), so relaunches
+ * reuse the content-bound window instead of creating a fresh one.
+ *
  * To enable it again, see the ui2-player-demo TaskSpec in src/r/spawn_service.rs.
  */
 

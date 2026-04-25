@@ -12,6 +12,7 @@ const CAP_VMCS_SHADOWING: u64 = 1 << 14;
 const CAP_EPTP_SWITCHING: u64 = 1 << 19;
 const CAP_VPID: u64 = 1 << 5;
 
+#[cfg(target_arch = "x86_64")]
 unsafe fn rdmsr(msr: u32) -> u64 {
     let lo: u32;
     let hi: u32;
@@ -22,6 +23,11 @@ unsafe fn rdmsr(msr: u32) -> u64 {
         out("edx") hi,
     );
     (hi as u64) << 32 | lo as u64
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+unsafe fn rdmsr(_msr: u32) -> u64 {
+    0
 }
 
 #[derive(Clone, Copy)]
@@ -42,6 +48,17 @@ pub struct VmxCaps {
 impl VmxCaps {
     /// Probe capabilities from VMX MSRs. Call only after VMXON is confirmed.
     pub fn probe() -> Self {
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            return Self {
+                ept: false,
+                vpid: false,
+                unrestricted_guest: false,
+                vmcs_shadowing: false,
+                eptp_switching: false,
+            };
+        }
+
         // High 32 bits of secondary proc-based ctls MSR = allowed-1 (feature available).
         let ctls2_hi = unsafe { rdmsr(MSR_VMX_PROCBASED_CTLS2) } >> 32;
         let vmfunc = unsafe { rdmsr(MSR_VMX_VMFUNC) };

@@ -1264,12 +1264,11 @@ static TASKS: &[TaskSpec] = &[
         &UI2_MANDELBROT_DEMO_STARTED,
         spawn_ui2_mandelbrot_demo,
     ),
-    // DANGER: Creates a lot of UI2 Windows!!! (me noob ki)
-    // Enable here only if you explicitly want ui2-player-demo to auto-start again.
-    TaskSpec::disabled(
+    // Keep the player demo opt-in because it opens the audio player on boot.
+    // The old hosted-surface window-spam issue was fixed by content-id keyed reuse.
+    TaskSpec::enabled(
         "ui2-player-demo",
         UI2_DEMO_READY,
-        &DISABLED_UI2_PLAYER_DEMO,
         &UI2_PLAYER_DEMO_STARTED,
         spawn_ui2_player_demo,
     ),

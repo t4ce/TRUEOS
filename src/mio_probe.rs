@@ -1,11 +1,58 @@
 extern crate std;
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
+use embassy_executor::task;
 use mio::{Events, Poll, Token, Waker};
 use std::io;
 use std::net::SocketAddr;
 
+const MIO_NET_PROBE_PORT: u16 = 48_124;
+
+static MIO_NET_PROBE_TASK_SPAWNED: AtomicBool = AtomicBool::new(false);
+
 fn log_io_failure(stage: &str, err: &io::Error) {
     crate::log!("mio_probe: failure {} kind={:?} err={}\n", stage, err.kind(), err);
+}
+
+fn primary_ipv4_probe_addr(port: u16) -> Option<SocketAddr> {
+    let dev_idx = crate::net::primary_device_index();
+    let ip = crate::net::adapter::ipv4_at(dev_idx)?;
+    Some(SocketAddr::from((ip, port)))
+}
+
+fn log_net_surface_probe() {
+    let Some(tcp_probe) = primary_ipv4_probe_addr(MIO_NET_PROBE_PORT) else {
+        crate::log!("mio_probe: note net surface skipped (no primary ipv4 yet)\n");
+        return;
+    };
+
+    let Some(udp_probe) = primary_ipv4_probe_addr(0) else {
+        crate::log!("mio_probe: note net surface skipped (no primary ipv4 yet)\n");
+        return;
+    };
+
+    match mio::net::TcpListener::bind(tcp_probe) {
+        Ok(_) => crate::log!("mio_probe: success net.tcp_listener.bind\n"),
+        Err(err) => log_io_failure("net.tcp_listener.bind", &err),
+    }
+
+    match mio::net::TcpStream::connect(tcp_probe) {
+        Ok(_) => crate::log!("mio_probe: success net.tcp_stream.connect\n"),
+        Err(err) => log_io_failure("net.tcp_stream.connect", &err),
+    }
+
+    match mio::net::UdpSocket::bind(udp_probe) {
+        Ok(_) => crate::log!("mio_probe: success net.udp_socket.bind\n"),
+        Err(err) => log_io_failure("net.udp_socket.bind", &err),
+    }
+}
+
+#[task]
+async fn mio_net_probe_task() {
+    crate::r::readiness::wait_for(crate::r::readiness::NET_CONFIGURED).await;
+    crate::log!("mio_probe: resume net surface after NET_CONFIGURED\n");
+    log_net_surface_probe();
 }
 
 pub(crate) fn log_boot_probe() {
@@ -48,20 +95,26 @@ pub(crate) fn log_boot_probe() {
         Err(err) => log_io_failure("poll.poll", &err),
     }
 
-    let loopback_probe = SocketAddr::from(([127, 0, 0, 1], 1));
-
-    match mio::net::TcpListener::bind(loopback_probe) {
-        Ok(_) => crate::log!("mio_probe: success net.tcp_listener.bind\n"),
-        Err(err) => log_io_failure("net.tcp_listener.bind", &err),
+    if crate::r::readiness::is_set(crate::r::readiness::NET_CONFIGURED) {
+        log_net_surface_probe();
+        return;
     }
 
-    match mio::net::TcpStream::connect(loopback_probe) {
-        Ok(_) => crate::log!("mio_probe: success net.tcp_stream.connect\n"),
-        Err(err) => log_io_failure("net.tcp_stream.connect", &err),
+    crate::log!("mio_probe: note net surface deferred until NET_CONFIGURED\n");
+
+    if MIO_NET_PROBE_TASK_SPAWNED.swap(true, Ordering::AcqRel) {
+        return;
     }
 
-    match mio::net::UdpSocket::bind(SocketAddr::from(([127, 0, 0, 1], 0))) {
-        Ok(_) => crate::log!("mio_probe: success net.udp_socket.bind\n"),
-        Err(err) => log_io_failure("net.udp_socket.bind", &err),
+    let Some(spawner) = trueos_qjs::workers::spawner_for_slot(0) else {
+        crate::log!("mio_probe: note net surface task not spawned (no slot0 spawner)\n");
+        return;
+    };
+
+    match mio_net_probe_task() {
+        Ok(token) => spawner.spawn(token),
+        Err(err) => {
+            crate::log!("mio_probe: note net surface task spawn failed: {:?}\n", err)
+        }
     }
 }

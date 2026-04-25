@@ -1257,6 +1257,9 @@ impl Ui2SurfaceWindow {
         ))
     }
 
+    // Hosted content should usually reuse a stable content-bound window instead of
+    // treating the texture id as window identity. This path always creates a fresh
+    // window for the supplied texture.
     pub fn get_or_create_for_hosted_content_with_size(
         title: &str,
         content_rect: Ui2Rect,
@@ -1277,6 +1280,8 @@ impl Ui2SurfaceWindow {
         let window_id = if let Some(window_id) = hosted_surface_window_id_for_content(content_id) {
             let rect = window_rect_for_content(Ui2WindowDecorationMode::System, content_rect);
             let _ = set_window_title(window_id, title);
+            // Window reuse is keyed by hosted content id; rebinding the texture here
+            // prevents stale texture ids from controlling window reuse behavior.
             let _ = set_window_hosted_surface_content(window_id, tex_id, blend_enabled);
             let _ = move_window(window_id, rect.x, rect.y);
             let _ = resize_window(window_id, rect.w, rect.h);
