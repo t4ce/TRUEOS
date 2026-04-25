@@ -20,6 +20,7 @@ unsafe extern "C" {
     fn trueos_cabi_fs_write_chunk(handle: u32, data_ptr: *const u8, data_len: usize) -> i32;
     fn trueos_cabi_fs_write_finish(handle: u32) -> i32;
     fn trueos_cabi_fs_write_abort(handle: u32) -> i32;
+    fn trueos_cabi_fs_create_dir_all(path_ptr: *const u8, path_len: usize) -> i32;
     fn trueos_cabi_fs_exists(path_ptr: *const u8, path_len: usize) -> i32;
     fn trueos_cabi_fs_remove(path_ptr: *const u8, path_len: usize) -> i32;
 }
@@ -427,6 +428,23 @@ pub(crate) async fn read_to_string(path: &Path) -> io::Result<String> {
 
 pub(crate) async fn write(path: &Path, contents: &[u8]) -> io::Result<()> {
     write_sync(path, contents)
+}
+
+pub(crate) async fn create_dir(path: &Path) -> io::Result<()> {
+    create_dir_all(path).await
+}
+
+pub(crate) async fn create_dir_all(path: &Path) -> io::Result<()> {
+    let path = path_bytes(path)?;
+    let rc = unsafe { trueos_cabi_fs_create_dir_all(path.as_ptr(), path.len()) };
+    if rc != 0 {
+        return Err(fs_status_to_io(rc, "create_dir_all"));
+    }
+    Ok(())
+}
+
+pub(crate) async fn try_exists(path: &Path) -> io::Result<bool> {
+    exists_sync(path)
 }
 
 pub(crate) async fn remove_file(path: &Path) -> io::Result<()> {
