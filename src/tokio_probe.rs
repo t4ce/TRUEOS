@@ -8,6 +8,7 @@ extern crate alloc;
 extern crate std;
 
 use alloc::sync::Arc;
+use core::cell::Cell;
 use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_executor::task;
 use socket2::{Domain, Protocol, Socket, Type};
@@ -21,8 +22,12 @@ const TOKIO_FS_PROBE_BYTES: &[u8] = b"TRUEOS tokio::fs probe\n";
 
 static TOKIO_NET_PROBE_TASK_SPAWNED: AtomicBool = AtomicBool::new(false);
 static TOKIO_FS_PROBE_TASK_SPAWNED: AtomicBool = AtomicBool::new(false);
-static TOKIO_RT_MULTI_THREAD_PROBE_TASK_SPAWNED: AtomicBool = AtomicBool::new(false);
 static TOKIO_BLOCKING_CANARY_TASK_SPAWNED: AtomicBool = AtomicBool::new(false);
+static TOKIO_STD_TLS_CANARY_TASK_SPAWNED: AtomicBool = AtomicBool::new(false);
+
+std::thread_local! {
+    static TOKIO_STD_TLS_CANARY: Cell<u32> = const { Cell::new(0) };
+}
 
 async fn probe_async_identity() -> u32 {
     0x544F_4B49
@@ -426,6 +431,58 @@ fn tokio_background_worker_ready() -> bool {
         && crate::workers::has_background_worker_slot()
 }
 
+fn mark_std_tls_canary_on_boot_cpu() {
+    TOKIO_STD_TLS_CANARY.with(|canary| canary.set(0xB5B5_0001));
+    crate::log!("tokio_probe: note std.thread_local boot canary armed\n");
+}
+
+fn read_std_tls_canary() -> u32 {
+    TOKIO_STD_TLS_CANARY.with(|canary| canary.get())
+}
+
+#[task]
+async fn tokio_std_tls_canary_task() {
+    crate::r::readiness::wait_for(crate::r::readiness::BACKGROUND_AP_WORKER_READY).await;
+
+    let before = read_std_tls_canary();
+    TOKIO_STD_TLS_CANARY.with(|canary| canary.set(0xA9A9_0001));
+    let after = read_std_tls_canary();
+
+    if before == 0 {
+        crate::log!(
+            "tokio_probe: success std.thread_local per-AP canary before=0x{:08X} after=0x{:08X}\n",
+            before,
+            after
+        );
+    } else {
+        crate::log!(
+            "tokio_probe: failure std.thread_local per-AP canary leaked before=0x{:08X} after=0x{:08X}; rt-multi-thread.build stays deferred\n",
+            before,
+            after
+        );
+    }
+}
+
+fn spawn_deferred_std_tls_canary() {
+    if TOKIO_STD_TLS_CANARY_TASK_SPAWNED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    let Some(spawner) = crate::workers::spawner_for_slot(0) else {
+        crate::log!(
+            "tokio_probe: note std.thread_local canary task not spawned (no slot0 spawner)\n"
+        );
+        return;
+    };
+
+    match tokio_std_tls_canary_task() {
+        Ok(token) => spawner.spawn(token),
+        Err(err) => {
+            crate::log!("tokio_probe: note std.thread_local canary task spawn failed: {:?}\n", err)
+        }
+    }
+}
+
 fn run_rt_multi_thread_probe() {
     let mut runtime_builder = tokio::runtime::Builder::new_multi_thread();
     runtime_builder.worker_threads(2);
@@ -433,62 +490,20 @@ fn run_rt_multi_thread_probe() {
     runtime_builder.enable_time();
 
     crate::log!("tokio_probe: success rt-multi-thread.builder_surface\n");
-
-    let runtime = match runtime_builder.build() {
-        Ok(runtime) => runtime,
-        Err(_) => {
-            crate::log!("tokio_probe: failure rt-multi-thread.build\n");
-            return;
-        }
-    };
-    crate::log!("tokio_probe: success rt-multi-thread.build\n");
-
-    let value = runtime.block_on(async {
-        let left = tokio::task::spawn(async { 0x4D54_0001u32 });
-        let right = tokio::task::spawn(async { 0x4D54_0002u32 });
-        let left = left.await.map_err(|_| "rt-multi-thread.spawn_left")?;
-        let right = right.await.map_err(|_| "rt-multi-thread.spawn_right")?;
-        Ok::<u32, &'static str>(left ^ right)
-    });
-
-    match value {
-        Ok(0x0000_0003) => crate::log!("tokio_probe: success rt-multi-thread.spawn_join\n"),
-        Ok(_) => crate::log!("tokio_probe: failure rt-multi-thread.spawn_value\n"),
-        Err(stage) => crate::log!("tokio_probe: failure {}\n", stage),
-    }
-}
-
-#[task]
-async fn tokio_rt_multi_thread_probe_task() {
-    while !tokio_background_worker_ready() {
-        embassy_time::Timer::after(embassy_time::Duration::from_millis(10)).await;
-    }
-
-    crate::log!("tokio_probe: resume rt-multi-thread after TRUEOS background AP spawner ready\n");
-    run_rt_multi_thread_probe();
+    // TRUEOS treats the VM/app/process as the isolation boundary. Tokio worker
+    // lanes inside that boundary may trust the same app memory, but they still
+    // need independent TLS scratchpads for runtime context: enter depth,
+    // current task, current scheduler worker, errno-like state, and similar
+    // bookkeeping. Until each AP carrier has that per-lane context isolation,
+    // building the multi-thread runtime would corrupt Tokio's own worker state.
+    crate::log!(
+        "tokio_probe: note rt-multi-thread.build deferred until TRUEOS per-AP TLS is ready\n"
+    );
+    let _ = runtime_builder;
 }
 
 fn log_rt_multi_thread_probe() {
-    if tokio_background_worker_ready() {
-        run_rt_multi_thread_probe();
-        return;
-    }
-
-    crate::log!("tokio_probe: note rt-multi-thread waiting for TRUEOS background AP spawner\n");
-
-    if TOKIO_RT_MULTI_THREAD_PROBE_TASK_SPAWNED.swap(true, Ordering::AcqRel) {
-        return;
-    }
-
-    let Some(spawner) = crate::workers::spawner_for_slot(0) else {
-        crate::log!("tokio_probe: note rt-multi-thread task not spawned (no slot0 spawner)\n");
-        return;
-    };
-
-    match tokio_rt_multi_thread_probe_task() {
-        Ok(token) => spawner.spawn(token),
-        Err(err) => crate::log!("tokio_probe: note rt-multi-thread task spawn failed: {:?}\n", err),
-    }
+    run_rt_multi_thread_probe();
 }
 
 #[task]
@@ -873,8 +888,10 @@ async fn run_probe_suite() -> Result<(), &'static str> {
 
 pub(crate) fn log_boot_probe() {
     crate::log!("tokio_probe: wired tokio 1.52.1 with feature full via TRUEOS std-ABI shim\n");
+    mark_std_tls_canary_on_boot_cpu();
 
     log_rt_multi_thread_probe();
+    spawn_deferred_std_tls_canary();
     spawn_deferred_tokio_blocking_canary();
 
     let mut runtime_builder = tokio::runtime::Builder::new_current_thread();
