@@ -58,6 +58,7 @@ cfg_rt! {
         use tracing::instrument::Instrument;
         pub(crate) use tracing::instrument::Instrumented;
 
+        #[cfg(not(target_os = "zkvm"))]
         #[inline]
         pub(crate) fn task<F>(task: F, kind: &'static str, meta: SpawnMeta<'_>, id: u64) -> Instrumented<F> {
             fn get_span(kind: &'static str, spawn_meta: SpawnMeta<'_>, id: u64, task_size: usize) -> tracing::Span {
@@ -85,6 +86,13 @@ cfg_rt! {
             task.instrument(span)
         }
 
+        #[cfg(target_os = "zkvm")]
+        #[inline]
+        pub(crate) fn task<F>(task: F, _kind: &'static str, _meta: SpawnMeta<'_>, _id: u64) -> F {
+            task
+        }
+
+        #[cfg(not(target_os = "zkvm"))]
         #[inline]
         pub(crate) fn blocking_task<Fn, Fut>(task: Fut, spawn_meta: SpawnMeta<'_>, id: u64) -> Instrumented<Fut> {
             let fn_size = mem::size_of::<Fn>();
@@ -109,6 +117,13 @@ cfg_rt! {
             );
             task.instrument(span)
 
+        }
+
+        #[cfg(target_os = "zkvm")]
+        #[inline]
+        pub(crate) fn blocking_task<Fn, Fut>(task: Fut, _spawn_meta: SpawnMeta<'_>, _id: u64) -> Fut {
+            let _ = PhantomData::<&Fn>;
+            task
         }
 
         pub(crate) fn async_op<P,F>(inner: P, resource_span: tracing::Span, source: &str, poll_op_name: &'static str, inherits_child_attrs: bool) -> InstrumentedAsyncOp<F>

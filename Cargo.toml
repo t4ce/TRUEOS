@@ -119,6 +119,8 @@ embedded-websocket = { path = "vendor/embedded-websocket-0.9.4" }
 crab-usb = { path = "vendor/crab-usb-0.6.2/crab-usb-0.6.2" }
 pin-project-lite = { path = "vendor/pin-project-lite-0.2.17" }
 smallvec = { path = "vendor/smallvec-1.15.1" }
+parking_lot = { path = "vendor/parking_lot-0.12.5" }
+parking_lot_core = { path = "vendor/parking_lot_core-0.9.12" }
 tokio = { path = "vendor/tokio-1.52.1" }
 mio = { path = "vendor/mio-1.2.0" }
 socket2 = { path = "vendor/socket2-0.6.3" }
