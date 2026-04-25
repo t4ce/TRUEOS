@@ -60,6 +60,7 @@ pub unsafe extern "C" fn sys_write(_fd: u32, write_buf: *const u8, nbytes: usize
     }
     let bytes = unsafe { slice::from_raw_parts(write_buf, nbytes) };
     uart_write(bytes);
+    crate::globalog::append_raw(bytes);
 }
 
 #[unsafe(no_mangle)]
@@ -69,13 +70,8 @@ pub unsafe extern "C" fn trueos_internal_log_write(bytes: *const u8, len: usize)
     }
 
     let bytes = unsafe { slice::from_raw_parts(bytes, len) };
-    match core::str::from_utf8(bytes) {
-        Ok(text) => crate::globalog::log(format_args!("{}", text)),
-        Err(_) => crate::globalog::log(format_args!(
-            "trueos_internal_log_write: non-utf8 payload len={}\n",
-            len
-        )),
-    }
+    uart_write(bytes);
+    crate::globalog::append_raw(bytes);
 }
 
 #[unsafe(no_mangle)]
