@@ -5,7 +5,7 @@ use embassy_executor::SendSpawner;
 
 use crate::r::spawn_spec::SpawnPlacement;
 
-const VM_RESERVED_FIRST_SLOT: u32 = 2;
+const VM_RESERVED_FIRST_SLOT: u32 = 3;
 const AP1_SERVICE_SLOT: u32 = 1;
 
 static GUEST_WORK_RR: AtomicU64 = AtomicU64::new(0);
@@ -34,7 +34,7 @@ impl VmLaneProfile {
     ///
     /// Keep guest hulls on HV-reserved VM lanes only:
     /// - never on BSP/local
-    /// - never on the first AP service lane (`Ap1` / slot 1)
+    /// - never on the first two AP service lanes
     /// - prefer AP>2 perf workers, with AP>2 fallback when needed
     ///
     /// This is the placement policy that future lane-indexed `vm[n]`
@@ -47,7 +47,7 @@ impl VmLaneProfile {
     }
 
     /// Default placement for synchronous offload work that should stay off the
-    /// BSP and AP1 service lane while still using disposable executor carriers.
+    /// BSP and the first two AP service lanes while still using disposable executor carriers.
     pub const fn tokio_blocking_default() -> Self {
         Self {
             role: VmLaneRole::TokioBlocking,
@@ -110,8 +110,8 @@ pub struct VmLaneTarget {
 impl VmLaneTarget {
     pub fn core_kind_name(&self) -> &'static str {
         match self.core_kind {
-            trueos_qjs::workers::CORE_KIND_PERF => "perf",
-            trueos_qjs::workers::CORE_KIND_EFF => "eff",
+            crate::workers::CORE_KIND_PERF => "perf",
+            crate::workers::CORE_KIND_EFF => "eff",
             _ => "unknown",
         }
     }
@@ -192,8 +192,8 @@ pub fn pick_guest_work_target(profile: GuestWorkProfile) -> Option<GuestWorkTarg
 fn pick_ap1_lane() -> Result<VmLaneTarget, VmLanePickError> {
     let profile = crate::cpu::CpuProfile::for_slot(AP1_SERVICE_SLOT)
         .ok_or(VmLanePickError::MissingAp1Lane)?;
-    let spawner = trueos_qjs::workers::spawner_for_slot(profile.slot())
-        .ok_or(VmLanePickError::MissingAp1Lane)?;
+    let spawner =
+        crate::workers::spawner_for_slot(profile.slot()).ok_or(VmLanePickError::MissingAp1Lane)?;
     Ok(VmLaneTarget {
         slot: profile.slot(),
         core_kind: profile.core_kind(),
@@ -212,13 +212,13 @@ fn pick_reserved_vm_lane() -> Result<VmLaneTarget, VmLanePickError> {
     let mut fallback: Vec<VmLaneTarget> = Vec::new();
 
     for target in pool {
-        // Slot 0 is BSP/local and slot 1 is the AP1 service lane.
+        // Slots <= 2 are reserved for BSP/local and service work.
         // VM hull work must stay on AP>2 lanes so that hull execution and
         // future Tokio blocking keep sharing the same carrier substrate.
         if !target.is_reserved_vm_lane() {
             continue;
         }
-        if target.core_kind == trueos_qjs::workers::CORE_KIND_PERF {
+        if target.core_kind == crate::workers::CORE_KIND_PERF {
             perf.push(target);
         } else {
             fallback.push(target);
@@ -233,16 +233,16 @@ fn pick_reserved_vm_lane() -> Result<VmLaneTarget, VmLanePickError> {
 }
 
 fn collect_disposable_worker_lanes() -> Vec<VmLaneTarget> {
-    let slots = trueos_qjs::workers::background_worker_slots();
+    let slots = crate::workers::background_worker_slots();
     let mut pool: Vec<VmLaneTarget> = Vec::new();
     for slot in slots {
-        let Some(spawner) = trueos_qjs::workers::spawner_for_slot(slot) else {
+        let Some(spawner) = crate::workers::spawner_for_slot(slot) else {
             continue;
         };
         let profile = crate::cpu::CpuProfile::for_slot(slot);
         let core_kind = profile
             .map(|profile| profile.core_kind())
-            .unwrap_or(trueos_qjs::workers::CORE_KIND_UNKNOWN);
+            .unwrap_or(crate::workers::CORE_KIND_UNKNOWN);
         pool.push(VmLaneTarget {
             slot,
             core_kind,

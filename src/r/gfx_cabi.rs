@@ -1804,7 +1804,7 @@ pub mod cabi {
             return;
         }
 
-        if let Some(worker_spawner) = trueos_qjs::workers::pick_background_spawner() {
+        if let Some(worker_spawner) = crate::workers::pick_background_spawner() {
             if ASYNC_PNG_WORKER_STARTED
                 .compare_exchange(
                     false,
@@ -1850,7 +1850,7 @@ pub mod cabi {
             return;
         }
 
-        if let Some(worker_spawner) = trueos_qjs::workers::pick_background_spawner() {
+        if let Some(worker_spawner) = crate::workers::pick_background_spawner() {
             if ASYNC_JPEG_WORKER_STARTED
                 .compare_exchange(
                     false,
@@ -1896,7 +1896,7 @@ pub mod cabi {
             return;
         }
 
-        if let Some(worker_spawner) = trueos_qjs::workers::pick_background_spawner() {
+        if let Some(worker_spawner) = crate::workers::pick_background_spawner() {
             if ASYNC_SVG_WORKER_STARTED
                 .compare_exchange(
                     false,

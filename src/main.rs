@@ -76,6 +76,8 @@ mod std_abi_shim;
 mod tga;
 #[cfg(feature = "tokio-probe")]
 mod tokio_probe;
+#[cfg(all(feature = "tokio-probe", target_os = "zkvm"))]
+mod trueos_tokio_worker;
 #[path = "tst/boot_factory_ram_probe.rs"]
 mod tst_boot_factory_ram_probe;
 #[path = "tst/fps.rs"]
@@ -135,6 +137,7 @@ mod turbo;
 mod turbo;
 mod usb2;
 mod wait;
+mod workers;
 mod x2apic;
 mod z7;
 

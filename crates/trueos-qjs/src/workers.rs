@@ -8,7 +8,7 @@ use alloc::vec::Vec;
 use core::ffi::{CStr, c_char, c_int};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-use embassy_executor::Spawner;
+use embassy_executor::{SendSpawner, Spawner};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
@@ -16,6 +16,18 @@ use crate as qjs;
 
 unsafe extern "C" {
     fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
+}
+
+unsafe extern "Rust" {
+    fn trueos_kernel_worker_register_core_spawner(
+        cpu_slot: u32,
+        core_kind: u8,
+        spawner: Spawner,
+    );
+    fn trueos_kernel_worker_core_kind_for_slot(cpu_slot: u32) -> u8;
+    fn trueos_kernel_worker_spawner_for_slot(cpu_slot: u32) -> Option<SendSpawner>;
+    fn trueos_kernel_worker_background_worker_slots() -> Vec<u32>;
+    fn trueos_kernel_worker_pick_background_spawner_with_slot() -> Option<(u32, u8, SendSpawner)>;
 }
 
 #[inline]
@@ -37,21 +49,12 @@ pub const CORE_KIND_UNKNOWN: u8 = 0;
 pub const CORE_KIND_PERF: u8 = 1;
 pub const CORE_KIND_EFF: u8 = 2;
 
-static CORE_SPAWNERS: Mutex<BTreeMap<u32, embassy_executor::SendSpawner>> =
-    Mutex::new(BTreeMap::new());
-static CORE_KINDS: Mutex<BTreeMap<u32, u8>> = Mutex::new(BTreeMap::new());
-static SPAWN_RR: AtomicU32 = AtomicU32::new(0);
 static LOGGED_WORKER_API_USE: AtomicBool = AtomicBool::new(false);
 
-// Slots 0 and 1 are reserved by the kernel as critical lanes (BSP + UI2/cursor/HID AP).
-const FIRST_DISPOSABLE_SLOT: u32 = 2;
+// Slots <= 2 are reserved by the kernel; background worker carriers start at AP > 2.
+const FIRST_DISPOSABLE_SLOT: u32 = 3;
 const WORKER_TASK_POOL: usize = 32;
 const WORKER_TEARDOWN_WAIT_MS: u64 = 50;
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-enum SpawnPolicy {
-    AnyNonCritical,
-}
 
 static WORKERS: Mutex<BTreeMap<u32, WorkerState>> = Mutex::new(BTreeMap::new());
 
@@ -119,8 +122,7 @@ pub fn ensure_service_started(spawner: &Spawner) -> bool {
 /// - `CORE_KIND_EFF`: efficient core
 /// - `CORE_KIND_UNKNOWN`: fallback
 pub fn register_core_spawner(cpu_slot: u32, core_kind: u8, spawner: Spawner) {
-    CORE_SPAWNERS.lock().insert(cpu_slot, spawner.make_send());
-    CORE_KINDS.lock().insert(cpu_slot, core_kind);
+    unsafe { trueos_kernel_worker_register_core_spawner(cpu_slot, core_kind, spawner) };
 }
 
 #[inline]
@@ -132,80 +134,17 @@ fn core_kind_name(kind: u8) -> &'static str {
     }
 }
 
-#[inline]
-fn pick_from_pool(
-    pool: &[(u32, u8, embassy_executor::SendSpawner)],
-) -> Option<(u32, u8, embassy_executor::SendSpawner)> {
-    if pool.is_empty() {
-        return None;
-    }
-    let idx = SPAWN_RR.fetch_add(1, Ordering::Relaxed) as usize;
-    Some(pool[idx % pool.len()].clone())
-}
-
-#[inline]
-fn pick_any_noncritical(
-    pool: &[(u32, u8, embassy_executor::SendSpawner)],
-) -> Option<(u32, u8, embassy_executor::SendSpawner)> {
-    if pool.is_empty() {
-        return None;
-    }
-
-    let perf_only: Vec<(u32, u8, embassy_executor::SendSpawner)> = pool
-        .iter()
-        .filter(|(_, kind, _)| *kind == CORE_KIND_PERF)
-        .cloned()
-        .collect();
-
-    if !perf_only.is_empty() {
-        pick_from_pool(&perf_only)
-    } else {
-        pick_from_pool(pool)
-    }
-}
-
-fn pick_spawner_with_policy(
-    policy: SpawnPolicy,
-) -> Option<(u32, u8, embassy_executor::SendSpawner)> {
-    // Slots 0 and 1 remain reserved for critical kernel work and are excluded
-    // from QJS scheduling. Only disposable worker lanes are eligible.
-    let map = CORE_SPAWNERS.lock();
-    if map.is_empty() {
-        return None;
-    }
-
-    let kinds = CORE_KINDS.lock();
-
-    let mut eligible: Vec<(u32, u8, embassy_executor::SendSpawner)> = Vec::new();
-    for (slot, sp) in map.iter() {
-        let kind = kinds.get(slot).copied().unwrap_or(CORE_KIND_UNKNOWN);
-        if *slot >= FIRST_DISPOSABLE_SLOT {
-            eligible.push((*slot, kind, sp.clone()));
-        }
-    }
-
-    match policy {
-        SpawnPolicy::AnyNonCritical => pick_any_noncritical(&eligible),
-    }
-}
-
 pub fn pick_background_spawner() -> Option<embassy_executor::SendSpawner> {
-    pick_spawner_with_policy(SpawnPolicy::AnyNonCritical).map(|(_, _, spawner)| spawner)
+    unsafe { trueos_kernel_worker_pick_background_spawner_with_slot() }
+        .map(|(_, _, spawner)| spawner)
 }
 
 pub fn spawner_for_slot(cpu_slot: u32) -> Option<embassy_executor::SendSpawner> {
-    CORE_SPAWNERS.lock().get(&cpu_slot).cloned()
+    unsafe { trueos_kernel_worker_spawner_for_slot(cpu_slot) }
 }
 
 pub fn background_worker_slots() -> Vec<u32> {
-    let map = CORE_SPAWNERS.lock();
-    let mut out: Vec<u32> = map
-        .keys()
-        .copied()
-        .filter(|slot| *slot >= FIRST_DISPOSABLE_SLOT)
-        .collect();
-    out.sort_unstable();
-    out
+    unsafe { trueos_kernel_worker_background_worker_slots() }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -264,15 +203,11 @@ fn spawn_eval_on_slot_inner(cpu_slot: Option<u32>, code_utf8: &[u8]) -> Result<u
         if slot < FIRST_DISPOSABLE_SLOT {
             return Err(-2);
         }
-        let spawner = CORE_SPAWNERS.lock().get(&slot).cloned().ok_or(-2)?;
-        let kind = CORE_KINDS
-            .lock()
-            .get(&slot)
-            .copied()
-            .unwrap_or(CORE_KIND_UNKNOWN);
+        let spawner = spawner_for_slot(slot).ok_or(-2)?;
+        let kind = unsafe { trueos_kernel_worker_core_kind_for_slot(slot) };
         (slot, kind, spawner)
     } else {
-        pick_spawner_with_policy(SpawnPolicy::AnyNonCritical).ok_or(-2)?
+        unsafe { trueos_kernel_worker_pick_background_spawner_with_slot() }.ok_or(-2)?
     };
     log_str(&format!(
         "qjs-worker: worker#{} created; scheduled slot={} kind={}\n",

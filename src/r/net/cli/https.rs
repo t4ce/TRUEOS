@@ -947,7 +947,7 @@ fn spawn_cabi_net_fetch(
     timeout_ms: u32,
     max_bytes: usize,
 ) {
-    if let Some(spawner) = trueos_qjs::workers::pick_background_spawner()
+    if let Some(spawner) = crate::workers::pick_background_spawner()
         && let Ok(token) = cabi_net_fetch_task(
             op_id,
             key.clone(),
@@ -1020,7 +1020,7 @@ async fn cabi_net_fetch_bytes_task(op_id: u32, url: String, timeout_ms: u32, max
 }
 
 fn spawn_cabi_net_fetch_bytes(op_id: u32, url: String, timeout_ms: u32, max_bytes: usize) {
-    if let Some(spawner) = trueos_qjs::workers::pick_background_spawner()
+    if let Some(spawner) = crate::workers::pick_background_spawner()
         && let Ok(token) = cabi_net_fetch_bytes_task(op_id, url.clone(), timeout_ms, max_bytes)
     {
         spawner.spawn(token);
@@ -1113,7 +1113,7 @@ fn spawn_cabi_net_fetch_post_json(
     timeout_ms: u32,
     max_bytes: usize,
 ) {
-    if let Some(spawner) = trueos_qjs::workers::pick_background_spawner()
+    if let Some(spawner) = crate::workers::pick_background_spawner()
         && let Ok(token) = cabi_net_fetch_post_json_task(
             op_id,
             key.clone(),
@@ -1217,7 +1217,7 @@ fn spawn_cabi_net_fetch_post_json_bytes(
     timeout_ms: u32,
     max_bytes: usize,
 ) {
-    if let Some(spawner) = trueos_qjs::workers::pick_background_spawner()
+    if let Some(spawner) = crate::workers::pick_background_spawner()
         && let Ok(token) = cabi_net_fetch_post_json_bytes_task(
             request_id,
             url.clone(),
@@ -1261,7 +1261,7 @@ async fn cabi_net_prewarm_url_task(url: String) {
 }
 
 fn spawn_cabi_net_prewarm_url(url: String) {
-    if let Some(spawner) = trueos_qjs::workers::pick_background_spawner()
+    if let Some(spawner) = crate::workers::pick_background_spawner()
         && let Ok(token) = cabi_net_prewarm_url_task(url.clone())
     {
         spawner.spawn(token);

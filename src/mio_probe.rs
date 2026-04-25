@@ -106,7 +106,7 @@ pub(crate) fn log_boot_probe() {
         return;
     }
 
-    let Some(spawner) = trueos_qjs::workers::spawner_for_slot(0) else {
+    let Some(spawner) = crate::workers::spawner_for_slot(0) else {
         crate::log!("mio_probe: note net surface task not spawned (no slot0 spawner)\n");
         return;
     };

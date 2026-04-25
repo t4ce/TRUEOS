@@ -295,7 +295,7 @@ fn parse_kv_u64(text: &str, key: &str) -> Option<u64> {
 }
 
 fn online_background_worker_slots() -> Vec<u32> {
-    let mut slots: Vec<u32> = trueos_qjs::workers::background_worker_slots()
+    let mut slots: Vec<u32> = crate::workers::background_worker_slots()
         .into_iter()
         .filter(|slot| {
             crate::smp::read(*slot as usize)
@@ -701,7 +701,7 @@ async fn cpubench_task(target: MatrixTarget, session_id: u64) {
         let log = |line: &str| {
             print_matrix_target_line(&task_target, line);
         };
-        let all_worker_slots = trueos_qjs::workers::background_worker_slots();
+        let all_worker_slots = crate::workers::background_worker_slots();
         let worker_slots = online_background_worker_slots();
         if worker_slots.is_empty() {
             if all_worker_slots.is_empty() {

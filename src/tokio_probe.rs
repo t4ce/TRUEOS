@@ -2,8 +2,7 @@
 //!
 //! This wires Tokio's runtime surfaces so we can probe BSP / VM-hull
 //! assumptions incrementally. The current-thread scheduler is executed at
-//! boot; the multi-thread scheduler is compiled and logged until TRUEOS has a
-//! real thread facade for Tokio workers.
+//! boot; the multi-thread scheduler is backed by TRUEOS worker APs on zkvm.
 
 extern crate alloc;
 extern crate std;
@@ -22,6 +21,8 @@ const TOKIO_FS_PROBE_BYTES: &[u8] = b"TRUEOS tokio::fs probe\n";
 
 static TOKIO_NET_PROBE_TASK_SPAWNED: AtomicBool = AtomicBool::new(false);
 static TOKIO_FS_PROBE_TASK_SPAWNED: AtomicBool = AtomicBool::new(false);
+static TOKIO_RT_MULTI_THREAD_PROBE_TASK_SPAWNED: AtomicBool = AtomicBool::new(false);
+static TOKIO_BLOCKING_CANARY_TASK_SPAWNED: AtomicBool = AtomicBool::new(false);
 
 async fn probe_async_identity() -> u32 {
     0x544F_4B49
@@ -62,49 +63,60 @@ fn primary_ipv4_probe_addr(port: u16) -> Option<SocketAddr> {
 }
 
 async fn probe_tokio_blocking_canary() -> bool {
-    #[cfg(target_os = "zkvm")]
-    {
+    if !tokio_background_worker_ready() {
         crate::log!(
-            "tokio_probe: failure blocking.spawn_blocking_canary unsupported_on_zkvm_thread_facade\n"
+            "tokio_probe: note blocking.spawn_blocking_canary deferred until BACKGROUND_AP_WORKER_READY\n"
         );
         return false;
     }
 
-    #[cfg(not(target_os = "zkvm"))]
-    {
-        crate::log!("tokio_probe: enter blocking.spawn_blocking_canary\n");
-        let canary = tokio::time::timeout(
-            core::time::Duration::from_millis(50),
-            tokio::task::spawn_blocking(|| 0xB10C_0001u32),
-        )
-        .await;
+    crate::log!("tokio_probe: enter blocking.spawn_blocking_canary\n");
+    let canary = tokio::time::timeout(
+        core::time::Duration::from_millis(50),
+        tokio::task::spawn_blocking(|| 0xB10C_0001u32),
+    )
+    .await;
 
-        match canary {
-            Ok(Ok(0xB10C_0001)) => {
-                crate::log!("tokio_probe: success blocking.spawn_blocking_canary\n");
-                true
-            }
-            Ok(Ok(value)) => {
-                crate::log!(
-                    "tokio_probe: failure blocking.spawn_blocking_canary value=0x{:08X}\n",
-                    value
-                );
-                false
-            }
-            Ok(Err(err)) => {
-                crate::log!(
-                    "tokio_probe: failure blocking.spawn_blocking_canary join_cancelled={} join_panic={}\n",
-                    err.is_cancelled(),
-                    err.is_panic()
-                );
-                false
-            }
-            Err(_) => {
-                crate::log!("tokio_probe: failure blocking.spawn_blocking_canary_timeout\n");
-                false
-            }
+    match canary {
+        Ok(Ok(0xB10C_0001)) => {
+            crate::log!("tokio_probe: success blocking.spawn_blocking_canary\n");
+            true
+        }
+        Ok(Ok(value)) => {
+            crate::log!(
+                "tokio_probe: failure blocking.spawn_blocking_canary value=0x{:08X}\n",
+                value
+            );
+            false
+        }
+        Ok(Err(err)) => {
+            crate::log!(
+                "tokio_probe: failure blocking.spawn_blocking_canary join_cancelled={} join_panic={}\n",
+                err.is_cancelled(),
+                err.is_panic()
+            );
+            false
+        }
+        Err(_) => {
+            crate::log!("tokio_probe: failure blocking.spawn_blocking_canary_timeout\n");
+            false
         }
     }
+}
+
+fn run_tokio_blocking_canary_runtime() {
+    let mut runtime_builder = tokio::runtime::Builder::new_current_thread();
+    runtime_builder.enable_time();
+
+    let runtime = match runtime_builder.build() {
+        Ok(runtime) => runtime,
+        Err(_) => {
+            crate::log!("tokio_probe: failure blocking.rt.build current_thread\n");
+            return;
+        }
+    };
+
+    runtime.block_on(probe_tokio_blocking_canary());
 }
 
 async fn probe_tokio_fs_runtime_surface() {
@@ -272,7 +284,7 @@ fn spawn_deferred_tokio_fs_probe() {
         return;
     }
 
-    let Some(spawner) = trueos_qjs::workers::spawner_for_slot(0) else {
+    let Some(spawner) = crate::workers::spawner_for_slot(0) else {
         crate::log!("tokio_probe: note fs.runtime_ops task not spawned (no slot0 spawner)\n");
         return;
     };
@@ -409,7 +421,12 @@ fn run_tokio_net_probe_runtime() {
     }
 }
 
-fn log_rt_multi_thread_probe() {
+fn tokio_background_worker_ready() -> bool {
+    crate::r::readiness::is_set(crate::r::readiness::BACKGROUND_AP_WORKER_READY)
+        && crate::workers::has_background_worker_slot()
+}
+
+fn run_rt_multi_thread_probe() {
     let mut runtime_builder = tokio::runtime::Builder::new_multi_thread();
     runtime_builder.worker_threads(2);
     runtime_builder.enable_io();
@@ -442,6 +459,73 @@ fn log_rt_multi_thread_probe() {
 }
 
 #[task]
+async fn tokio_rt_multi_thread_probe_task() {
+    while !tokio_background_worker_ready() {
+        embassy_time::Timer::after(embassy_time::Duration::from_millis(10)).await;
+    }
+
+    crate::log!("tokio_probe: resume rt-multi-thread after TRUEOS background AP spawner ready\n");
+    run_rt_multi_thread_probe();
+}
+
+fn log_rt_multi_thread_probe() {
+    if tokio_background_worker_ready() {
+        run_rt_multi_thread_probe();
+        return;
+    }
+
+    crate::log!("tokio_probe: note rt-multi-thread waiting for TRUEOS background AP spawner\n");
+
+    if TOKIO_RT_MULTI_THREAD_PROBE_TASK_SPAWNED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    let Some(spawner) = crate::workers::spawner_for_slot(0) else {
+        crate::log!("tokio_probe: note rt-multi-thread task not spawned (no slot0 spawner)\n");
+        return;
+    };
+
+    match tokio_rt_multi_thread_probe_task() {
+        Ok(token) => spawner.spawn(token),
+        Err(err) => crate::log!("tokio_probe: note rt-multi-thread task spawn failed: {:?}\n", err),
+    }
+}
+
+#[task]
+async fn tokio_blocking_canary_task() {
+    crate::r::readiness::wait_for(crate::r::readiness::BACKGROUND_AP_WORKER_READY).await;
+    crate::log!(
+        "tokio_probe: resume blocking.spawn_blocking_canary after BACKGROUND_AP_WORKER_READY\n"
+    );
+    run_tokio_blocking_canary_runtime();
+}
+
+fn spawn_deferred_tokio_blocking_canary() {
+    if tokio_background_worker_ready() {
+        return;
+    }
+
+    if TOKIO_BLOCKING_CANARY_TASK_SPAWNED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    let Some(spawner) = crate::workers::spawner_for_slot(0) else {
+        crate::log!(
+            "tokio_probe: note blocking.spawn_blocking_canary task not spawned (no slot0 spawner)\n"
+        );
+        return;
+    };
+
+    match tokio_blocking_canary_task() {
+        Ok(token) => spawner.spawn(token),
+        Err(err) => crate::log!(
+            "tokio_probe: note blocking.spawn_blocking_canary task spawn failed: {:?}\n",
+            err
+        ),
+    }
+}
+
+#[task]
 async fn tokio_net_probe_task() {
     crate::r::readiness::wait_for(crate::r::readiness::NET_CONFIGURED).await;
     crate::log!("tokio_probe: resume net.tokio surface after NET_CONFIGURED\n");
@@ -459,7 +543,7 @@ fn spawn_deferred_tokio_net_probe() {
         return;
     }
 
-    let Some(spawner) = trueos_qjs::workers::spawner_for_slot(0) else {
+    let Some(spawner) = crate::workers::spawner_for_slot(0) else {
         crate::log!("tokio_probe: note net.tokio task not spawned (no slot0 spawner)\n");
         return;
     };
@@ -689,9 +773,7 @@ async fn run_probe_suite() -> Result<(), &'static str> {
     probe_socket2_surface()?;
     probe_tokio_net_surface().await?;
 
-    crate::log!(
-        "tokio_probe: note blocking.spawn_blocking deferred on zkvm until Tokio blocking pool stops requiring host threads\n"
-    );
+    probe_tokio_blocking_canary().await;
 
     {
         crate::log!("tokio_probe: enter time.sleep\n");
@@ -793,6 +875,7 @@ pub(crate) fn log_boot_probe() {
     crate::log!("tokio_probe: wired tokio 1.52.1 with feature full via zkvm std-ABI shim\n");
 
     log_rt_multi_thread_probe();
+    spawn_deferred_tokio_blocking_canary();
 
     let mut runtime_builder = tokio::runtime::Builder::new_current_thread();
     runtime_builder.enable_io();
