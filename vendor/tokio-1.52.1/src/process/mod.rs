@@ -240,7 +240,7 @@ pub(crate) mod unix {
 mod imp;
 
 #[path = "zkvm.rs"]
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod imp;
 
 mod kill;

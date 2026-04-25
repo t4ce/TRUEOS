@@ -2442,15 +2442,15 @@ impl fmt::Debug for Socket {
 // zkvm currently exposes a compile-time socket surface only. Keep the std
 // socket conversion impls disabled there until the backend can create and own
 // real std-compatible socket handles.
-#[cfg(not(target_os = "zkvm"))]
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 from!(net::TcpStream, Socket);
-#[cfg(not(target_os = "zkvm"))]
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 from!(net::TcpListener, Socket);
-#[cfg(not(target_os = "zkvm"))]
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 from!(net::UdpSocket, Socket);
-#[cfg(not(target_os = "zkvm"))]
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 from!(Socket, net::TcpStream);
-#[cfg(not(target_os = "zkvm"))]
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 from!(Socket, net::TcpListener);
-#[cfg(not(target_os = "zkvm"))]
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 from!(Socket, net::UdpSocket);

@@ -282,7 +282,7 @@ impl TcpStream {
                 .map(|raw_fd| unsafe { std::net::TcpStream::from_raw_fd(raw_fd) })
         }
 
-        #[cfg(target_os = "zkvm")]
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         {
             Err(io::Error::new(
                 io::ErrorKind::Unsupported,

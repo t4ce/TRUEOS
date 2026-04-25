@@ -16,10 +16,10 @@ use std::io;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 type TrueosBlockingJob = Box<dyn FnOnce() + Send + 'static>;
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 unsafe extern "Rust" {
     fn trueos_tokio_spawn_blocking_job(job: TrueosBlockingJob) -> i32;
 }
@@ -426,7 +426,7 @@ impl Spawner {
                 if let Some(shutdown_tx) = shutdown_tx {
                     let id = shared.worker_thread_index;
 
-                    #[cfg(target_os = "zkvm")]
+                    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
                     {
                         match self.spawn_zkvm_worker(shutdown_tx, rt, id) {
                             Ok(()) => {
@@ -441,7 +441,7 @@ impl Spawner {
                         }
                     }
 
-                    #[cfg(not(target_os = "zkvm"))]
+                    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
                     {
                         match self.spawn_thread(shutdown_tx, rt, id) {
                             Ok(handle) => {
@@ -502,7 +502,7 @@ impl Spawner {
         })
     }
 
-    #[cfg(target_os = "zkvm")]
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
     fn spawn_zkvm_worker(
         &self,
         shutdown_tx: shutdown::Sender,

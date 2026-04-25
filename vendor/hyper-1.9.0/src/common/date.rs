@@ -43,17 +43,17 @@ struct CachedDate {
 
 thread_local!(static CACHED: RefCell<CachedDate> = RefCell::new(CachedDate::new()));
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 fn system_time_now() -> SystemTime {
     UNIX_EPOCH + Duration::from_secs(unsafe { trueos_octocrab_unix_time_seconds() })
 }
 
-#[cfg(not(target_os = "zkvm"))]
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 fn system_time_now() -> SystemTime {
     SystemTime::now()
 }
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 unsafe extern "C" {
     fn trueos_octocrab_unix_time_seconds() -> u64;
 }

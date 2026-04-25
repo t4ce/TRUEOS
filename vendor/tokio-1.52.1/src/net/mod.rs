@@ -43,7 +43,7 @@ cfg_net! {
     pub use tcp::listener::TcpListener;
     pub use tcp::stream::TcpStream;
     cfg_not_wasip1! {
-        #[cfg(not(target_os = "zkvm"))]
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         pub use tcp::socket::TcpSocket;
 
         mod udp;

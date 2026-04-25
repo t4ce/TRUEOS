@@ -263,8 +263,6 @@ pub extern "C" fn kmain() -> ! {
     tokio_probe::log_boot_probe();
     mio_probe::log_boot_probe();
     hyper_probe::log_boot_probe();
-    #[cfg(feature = "octocrab-probe")]
-    octocrab_probe::log_boot_probe();
 
     match pci::nic_fpga_dma::init_default_once() {
         Ok(region) => {

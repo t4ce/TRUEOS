@@ -23,7 +23,7 @@ pub(crate) fn listen(_: &net::TcpListener, _: i32) -> io::Result<()> {
     unsupported_io!("mio zkvm TCP listen backend is not wired yet");
 }
 
-#[cfg(any(unix, target_os = "hermit", target_os = "zkvm"))]
+#[cfg(any(unix, target_os = "hermit", any(target_os = "trueos", target_os = "zkvm")))]
 pub(crate) fn set_reuseaddr(_: &net::TcpListener, _: bool) -> io::Result<()> {
     unsupported_io!("mio zkvm TCP socket option backend is not wired yet");
 }

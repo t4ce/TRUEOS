@@ -6,12 +6,12 @@
 //! `test-util` feature flag is enabled, the values returned for `now()` are
 //! configurable.
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 fn std_now() -> std::time::Instant {
     crate::time::zkvm::std_instant_now()
 }
 
-#[cfg(not(target_os = "zkvm"))]
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 fn std_now() -> std::time::Instant {
     std::time::Instant::now()
 }

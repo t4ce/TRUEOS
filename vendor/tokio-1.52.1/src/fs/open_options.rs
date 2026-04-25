@@ -13,9 +13,9 @@ cfg_io_uring! {
 mod mock_open_options;
 #[cfg(test)]
 use mock_open_options::MockOpenOptions as StdOpenOptions;
-#[cfg(all(not(test), not(target_os = "zkvm")))]
+#[cfg(all(not(test), not(any(target_os = "trueos", target_os = "zkvm"))))]
 use std::fs::OpenOptions as StdOpenOptions;
-#[cfg(all(not(test), target_os = "zkvm"))]
+#[cfg(all(not(test), any(target_os = "trueos", target_os = "zkvm")))]
 use crate::fs::trueos::TrueosOpenOptions as StdOpenOptions;
 
 #[cfg(unix)]
@@ -550,13 +550,13 @@ impl OpenOptions {
         let path = path.as_ref().to_owned();
         let opts = opts.clone();
 
-        #[cfg(target_os = "zkvm")]
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         {
             let std = opts.open(path)?;
             return Ok(File::from_std(std));
         }
 
-        #[cfg(not(target_os = "zkvm"))]
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         {
         let std = asyncify(move || opts.open(path)).await?;
         Ok(File::from_std(std))

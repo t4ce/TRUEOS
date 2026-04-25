@@ -111,6 +111,6 @@ version = "0.5"
 [dependencies.xhci]
 version = "0.9"
 
-[target.'cfg(not(any(target_os = "none", target_os = "zkvm")))'.dependencies.libusb1-sys]
+[target.'cfg(not(any(target_os = "none", target_os = "trueos", target_os = "zkvm")))'.dependencies.libusb1-sys]
 version = "0.7"
 optional = true

@@ -66,7 +66,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 fn instant_now() -> Instant {
     let duration = Duration::from_nanos(unsafe { trueos_tokio_time_now_nanos() });
 
@@ -75,12 +75,12 @@ fn instant_now() -> Instant {
     unsafe { core::mem::transmute::<Duration, Instant>(duration) }
 }
 
-#[cfg(not(target_os = "zkvm"))]
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 fn instant_now() -> Instant {
     Instant::now()
 }
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 unsafe extern "C" {
     fn trueos_tokio_time_now_nanos() -> u64;
 }

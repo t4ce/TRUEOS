@@ -42,12 +42,12 @@ cfg_if::cfg_if! {
 
 #[inline]
 fn timeout_instant_now() -> TimeoutInstant {
-    #[cfg(target_os = "zkvm")]
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
     {
         crate::zkvm_time::instant_now()
     }
 
-    #[cfg(not(target_os = "zkvm"))]
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     {
         TimeoutInstant::now()
     }

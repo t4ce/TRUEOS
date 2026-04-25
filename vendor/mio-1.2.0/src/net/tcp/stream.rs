@@ -14,7 +14,7 @@ use std::os::windows::io::{
 
 use crate::io_source::IoSource;
 #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
-#[cfg(not(target_os = "zkvm"))]
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use crate::sys::tcp::{connect, new_for_addr};
 use crate::{event, Interest, Registry, Token};
 
@@ -90,7 +90,7 @@ impl TcpStream {
     /// [write interest]: Interest::WRITABLE
     #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     pub fn connect(addr: SocketAddr) -> io::Result<TcpStream> {
-        #[cfg(target_os = "zkvm")]
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         {
             let _ = addr;
             Err(io::Error::new(
@@ -99,7 +99,7 @@ impl TcpStream {
             ))
         }
 
-        #[cfg(not(target_os = "zkvm"))]
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         {
             let socket = new_for_addr(addr)?;
             #[cfg(any(unix, target_os = "hermit", target_os = "wasi"))]
@@ -485,7 +485,7 @@ impl From<TcpStream> for net::TcpStream {
             {
                 net::TcpStream::from_raw_fd(stream.into_raw_fd())
             }
-            #[cfg(target_os = "zkvm")]
+            #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
             {
                 let _ = stream;
                 panic!("mio zkvm backend cannot convert TcpStream into std yet")

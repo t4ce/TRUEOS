@@ -21,7 +21,7 @@ cfg_net! {
 
 cfg_io_source! {
     use std::io;
-    #[cfg(target_os = "zkvm")]
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
     use std::sync::atomic::{AtomicUsize, Ordering};
     #[cfg(unix)]
     use std::os::fd::RawFd;
@@ -35,12 +35,12 @@ cfg_io_source! {
     #[cfg(any(windows, unix, target_os = "hermit"))]
     use crate::{Registry, Token, Interest};
 
-    #[cfg(target_os = "zkvm")]
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
     #[allow(dead_code)]
     static NEXT_SOURCE_ID: AtomicUsize = AtomicUsize::new(1);
 
     pub(crate) struct IoSourceState {
-        #[cfg(target_os = "zkvm")]
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         source_id: usize,
     }
 
@@ -48,7 +48,7 @@ cfg_io_source! {
     impl IoSourceState {
         pub fn new() -> IoSourceState {
             IoSourceState {
-                #[cfg(target_os = "zkvm")]
+                #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
                 source_id: NEXT_SOURCE_ID.fetch_add(1, Ordering::Relaxed),
             }
         }
@@ -90,7 +90,7 @@ cfg_io_source! {
         }
     }
 
-    #[cfg(target_os = "zkvm")]
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
     impl IoSourceState {
         pub fn register(
             &mut self,

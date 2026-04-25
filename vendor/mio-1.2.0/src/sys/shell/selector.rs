@@ -151,7 +151,7 @@ impl Selector {
         !events.is_empty()
     }
 
-    #[cfg(target_os = "zkvm")]
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
     fn drain_socket_ready(&self, events: &mut Events) -> bool {
         let remaining = events.capacity().saturating_sub(events.len());
         if remaining == 0 {
@@ -173,13 +173,13 @@ impl Selector {
         !events.is_empty()
     }
 
-    #[cfg(not(target_os = "zkvm"))]
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     fn drain_socket_ready(&self, events: &mut Events) -> bool {
         !events.is_empty()
     }
 }
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 impl Ready {
     fn from_zkvm_bits(bits: u8) -> Self {
         Self {
@@ -230,7 +230,7 @@ cfg_any_os_ext! {
 }
 
 cfg_io_source! {
-    #[cfg(any(debug_assertions, target_os = "zkvm"))]
+    #[cfg(any(debug_assertions, any(target_os = "trueos", target_os = "zkvm")))]
     impl Selector {
         pub fn id(&self) -> usize {
             self.id
