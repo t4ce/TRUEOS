@@ -1,8 +1,12 @@
+use std::collections::BTreeMap;
 use std::io;
 use std::mem::MaybeUninit;
-use std::net::{Ipv4Addr, Ipv6Addr, Shutdown};
+use std::net::{Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::ptr;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
+
+use trueos_sys::vcabi;
 
 use crate::{MsgHdr, MsgHdrMut, RecvFlags, SockAddr, TcpKeepalive};
 
@@ -179,6 +183,87 @@ impl<'a> MaybeUninitSlice<'a> {
 #[derive(Debug)]
 pub(crate) struct Socket(RawSocket);
 
+#[derive(Clone)]
+struct SocketMeta {
+    domain: c_int,
+    socket_type: c_int,
+    protocol: c_int,
+    nonblocking: bool,
+    recv_timeout: Option<Duration>,
+    send_timeout: Option<Duration>,
+    local: Option<SocketAddr>,
+    peer: Option<SocketAddr>,
+}
+
+fn socket_registry() -> &'static Mutex<BTreeMap<RawSocket, SocketMeta>> {
+    static REGISTRY: OnceLock<Mutex<BTreeMap<RawSocket, SocketMeta>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+fn io_error_from_neg_rc(rc: i32) -> io::Error {
+    io::Error::from_raw_os_error(-rc)
+}
+
+fn rc_to_io(rc: i32) -> io::Result<()> {
+    if rc >= 0 {
+        Ok(())
+    } else {
+        Err(io_error_from_neg_rc(rc))
+    }
+}
+
+fn ssize_to_io(value: isize) -> io::Result<usize> {
+    if value >= 0 {
+        Ok(value as usize)
+    } else {
+        Err(io::Error::from_raw_os_error((-value) as i32))
+    }
+}
+
+fn timeout_to_cabi(timeout: Option<Duration>) -> u64 {
+    timeout
+        .map(|timeout| timeout.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(u64::MAX)
+}
+
+fn invalid_socket() -> io::Error {
+    io::Error::from_raw_os_error(9)
+}
+
+fn with_meta<T>(socket: RawSocket, f: impl FnOnce(&SocketMeta) -> T) -> io::Result<T> {
+    let registry = socket_registry().lock().expect("socket registry poisoned");
+    let Some(meta) = registry.get(&socket) else {
+        return Err(invalid_socket());
+    };
+    Ok(f(meta))
+}
+
+fn with_meta_mut<T>(socket: RawSocket, f: impl FnOnce(&mut SocketMeta) -> T) -> io::Result<T> {
+    let mut registry = socket_registry().lock().expect("socket registry poisoned");
+    let Some(meta) = registry.get_mut(&socket) else {
+        return Err(invalid_socket());
+    };
+    Ok(f(meta))
+}
+
+unsafe fn cast_value<T, U: Copy>(value: U) -> T {
+    debug_assert_eq!(std::mem::size_of::<T>(), std::mem::size_of::<U>());
+    let mut out = MaybeUninit::<T>::uninit();
+    ptr::copy_nonoverlapping(
+        (&value as *const U).cast::<u8>(),
+        out.as_mut_ptr().cast::<u8>(),
+        std::mem::size_of::<U>(),
+    );
+    out.assume_init()
+}
+
+fn default_local_addr(domain: c_int) -> SocketAddr {
+    match domain {
+        AF_INET6 => SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0)),
+        _ => SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)),
+    }
+}
+
 pub(crate) unsafe fn socket_from_raw(socket: RawSocket) -> Socket {
     Socket(socket)
 }
@@ -188,7 +273,9 @@ pub(crate) fn socket_as_raw(socket: &Socket) -> RawSocket {
 }
 
 pub(crate) fn socket_into_raw(socket: Socket) -> RawSocket {
-    socket.0
+    let raw = socket.0;
+    std::mem::forget(socket);
+    raw
 }
 
 fn unsupported() -> io::Error {
@@ -198,24 +285,104 @@ fn unsupported() -> io::Error {
     )
 }
 
-pub(crate) fn socket(_: c_int, _: c_int, _: c_int) -> io::Result<RawSocket> {
-    Err(unsupported())
+pub(crate) fn socket(domain: c_int, socket_type: c_int, protocol: c_int) -> io::Result<RawSocket> {
+    let raw = unsafe { vcabi::trueos_cabi_socket_tcp_open(domain, socket_type, protocol) };
+    if raw < 0 {
+        return Err(io_error_from_neg_rc(raw));
+    }
+
+    socket_registry()
+        .lock()
+        .expect("socket registry poisoned")
+        .insert(
+            raw,
+            SocketMeta {
+                domain,
+                socket_type,
+                protocol,
+                nonblocking: false,
+                recv_timeout: None,
+                send_timeout: None,
+                local: None,
+                peer: None,
+            },
+        );
+    Ok(raw)
 }
 
 pub(crate) fn socketpair(_: c_int, _: c_int, _: c_int) -> io::Result<[RawSocket; 2]> {
     Err(unsupported())
 }
 
-pub(crate) fn bind(_: RawSocket, _: &SockAddr) -> io::Result<()> {
-    Err(unsupported())
+pub(crate) fn bind(socket: RawSocket, address: &SockAddr) -> io::Result<()> {
+    let Some(address) = address.as_socket() else {
+        return Err(unsupported());
+    };
+
+    match address {
+        SocketAddr::V4(address) => {
+            rc_to_io(unsafe {
+                vcabi::trueos_cabi_socket_tcp_bind_v4(
+                    socket as u32,
+                    u32::from_be_bytes(address.ip().octets()),
+                    address.port().to_be(),
+                )
+            })?;
+        }
+        SocketAddr::V6(address) => {
+            rc_to_io(unsafe {
+                vcabi::trueos_cabi_socket_tcp_bind_v6(
+                    socket as u32,
+                    address.ip().octets().as_ptr(),
+                    address.port().to_be(),
+                )
+            })?;
+        }
+    }
+
+    let _ = with_meta_mut(socket, |meta| meta.local = Some(address));
+    Ok(())
 }
 
-pub(crate) fn connect(_: RawSocket, _: &SockAddr) -> io::Result<()> {
-    Err(unsupported())
+pub(crate) fn connect(socket: RawSocket, address: &SockAddr) -> io::Result<()> {
+    let Some(address) = address.as_socket() else {
+        return Err(unsupported());
+    };
+    let nonblocking = with_meta(socket, |meta| meta.nonblocking)?;
+
+    let rc = match address {
+        SocketAddr::V4(address) => unsafe {
+            vcabi::trueos_cabi_socket_tcp_connect_v4(
+                socket as u32,
+                u32::from_be_bytes(address.ip().octets()),
+                address.port().to_be(),
+                nonblocking as u32,
+            )
+        },
+        SocketAddr::V6(address) => unsafe {
+            vcabi::trueos_cabi_socket_tcp_connect_v6(
+                socket as u32,
+                address.ip().octets().as_ptr(),
+                address.port().to_be(),
+                nonblocking as u32,
+            )
+        },
+    };
+
+    let result = rc_to_io(rc);
+    if result.is_ok() || result.as_ref().err().and_then(|err| err.raw_os_error()) == Some(115) {
+        let _ = with_meta_mut(socket, |meta| meta.peer = Some(address));
+    }
+    result
 }
 
-pub(crate) fn poll_connect(_: &crate::Socket, _: Duration) -> io::Result<()> {
-    Err(unsupported())
+pub(crate) fn poll_connect(socket: &crate::Socket, timeout: Duration) -> io::Result<()> {
+    rc_to_io(unsafe {
+        vcabi::trueos_cabi_socket_tcp_poll_connect(
+            socket.as_raw() as u32,
+            timeout.as_millis().min(u128::from(u64::MAX)) as u64,
+        )
+    })
 }
 
 pub(crate) fn listen(_: RawSocket, _: c_int) -> io::Result<()> {
@@ -226,32 +393,52 @@ pub(crate) fn accept(_: RawSocket) -> io::Result<(RawSocket, SockAddr)> {
     Err(unsupported())
 }
 
-pub(crate) fn getsockname(_: RawSocket) -> io::Result<SockAddr> {
-    Err(unsupported())
+pub(crate) fn getsockname(socket: RawSocket) -> io::Result<SockAddr> {
+    let address = with_meta(socket, |meta| meta.local.unwrap_or_else(|| default_local_addr(meta.domain)))?;
+    Ok(SockAddr::from(address))
 }
 
-pub(crate) fn getpeername(_: RawSocket) -> io::Result<SockAddr> {
-    Err(unsupported())
+pub(crate) fn getpeername(socket: RawSocket) -> io::Result<SockAddr> {
+    let address = with_meta(socket, |meta| meta.peer)?
+        .ok_or_else(|| io::Error::from_raw_os_error(107))?;
+    Ok(SockAddr::from(address))
 }
 
 pub(crate) fn try_clone(_: RawSocket) -> io::Result<RawSocket> {
     Err(unsupported())
 }
 
-pub(crate) fn nonblocking(_: RawSocket) -> io::Result<bool> {
-    Err(unsupported())
+pub(crate) fn nonblocking(socket: RawSocket) -> io::Result<bool> {
+    with_meta(socket, |meta| meta.nonblocking)
 }
 
-pub(crate) fn set_nonblocking(_: RawSocket, _: bool) -> io::Result<()> {
-    Err(unsupported())
+pub(crate) fn set_nonblocking(socket: RawSocket, nonblocking: bool) -> io::Result<()> {
+    rc_to_io(unsafe { vcabi::trueos_cabi_socket_tcp_set_nonblocking(socket as u32, nonblocking as u32) })?;
+    let _ = with_meta_mut(socket, |meta| meta.nonblocking = nonblocking)?;
+    Ok(())
 }
 
-pub(crate) fn shutdown(_: RawSocket, _: Shutdown) -> io::Result<()> {
-    Err(unsupported())
+pub(crate) fn shutdown(socket: RawSocket, how: Shutdown) -> io::Result<()> {
+    let how = match how {
+        Shutdown::Read => 0,
+        Shutdown::Write => 1,
+        Shutdown::Both => 2,
+    };
+    rc_to_io(unsafe { vcabi::trueos_cabi_socket_tcp_shutdown(socket as u32, how) })
 }
 
-pub(crate) fn recv(_: RawSocket, _: &mut [MaybeUninit<u8>], _: c_int) -> io::Result<usize> {
-    Err(unsupported())
+pub(crate) fn recv(socket: RawSocket, buf: &mut [MaybeUninit<u8>], flags: c_int) -> io::Result<usize> {
+    let (nonblocking, timeout) = with_meta(socket, |meta| (meta.nonblocking, meta.recv_timeout))?;
+    ssize_to_io(unsafe {
+        vcabi::trueos_cabi_socket_tcp_recv(
+            socket as u32,
+            buf.as_mut_ptr().cast::<u8>(),
+            buf.len(),
+            flags,
+            nonblocking as u32,
+            timeout_to_cabi(timeout),
+        )
+    })
 }
 
 pub(crate) fn recv_from(
@@ -286,12 +473,21 @@ pub(crate) fn recvmsg(_: RawSocket, _: &mut MsgHdrMut<'_, '_, '_>, _: c_int) -> 
     Err(unsupported())
 }
 
-pub(crate) fn send(_: RawSocket, _: &[u8], _: c_int) -> io::Result<usize> {
-    Err(unsupported())
+pub(crate) fn send(socket: RawSocket, buf: &[u8], _: c_int) -> io::Result<usize> {
+    ssize_to_io(unsafe { vcabi::trueos_cabi_socket_tcp_send(socket as u32, buf.as_ptr(), buf.len()) })
 }
 
-pub(crate) fn send_vectored(_: RawSocket, _: &[std::io::IoSlice<'_>], _: c_int) -> io::Result<usize> {
-    Err(unsupported())
+pub(crate) fn send_vectored(
+    socket: RawSocket,
+    bufs: &[std::io::IoSlice<'_>],
+    flags: c_int,
+) -> io::Result<usize> {
+    let total = bufs.iter().map(|buf| buf.len()).sum();
+    let mut merged = Vec::with_capacity(total);
+    for buf in bufs {
+        merged.extend_from_slice(buf);
+    }
+    send(socket, &merged, flags)
 }
 
 pub(crate) fn send_to(_: RawSocket, _: &[u8], _: &SockAddr, _: c_int) -> io::Result<usize> {
@@ -311,12 +507,26 @@ pub(crate) fn sendmsg(_: RawSocket, _: &MsgHdr<'_, '_, '_>, _: c_int) -> io::Res
     Err(unsupported())
 }
 
-pub(crate) fn timeout_opt(_: RawSocket, _: c_int, _: c_int) -> io::Result<Option<Duration>> {
-    Err(unsupported())
+pub(crate) fn timeout_opt(socket: RawSocket, _: c_int, name: c_int) -> io::Result<Option<Duration>> {
+    with_meta(socket, |meta| match name {
+        SO_RCVTIMEO => meta.recv_timeout,
+        SO_SNDTIMEO => meta.send_timeout,
+        _ => None,
+    })
 }
 
-pub(crate) fn set_timeout_opt(_: RawSocket, _: c_int, _: c_int, _: Option<Duration>) -> io::Result<()> {
-    Err(unsupported())
+pub(crate) fn set_timeout_opt(
+    socket: RawSocket,
+    _: c_int,
+    name: c_int,
+    timeout: Option<Duration>,
+) -> io::Result<()> {
+    with_meta_mut(socket, |meta| match name {
+        SO_RCVTIMEO => meta.recv_timeout = timeout,
+        SO_SNDTIMEO => meta.send_timeout = timeout,
+        _ => {}
+    })?;
+    Ok(())
 }
 
 pub(crate) fn tcp_keepalive_time(_: RawSocket) -> io::Result<Duration> {
@@ -327,12 +537,30 @@ pub(crate) fn set_tcp_keepalive(_: RawSocket, _: &TcpKeepalive) -> io::Result<()
     Err(unsupported())
 }
 
-pub(crate) unsafe fn getsockopt<T>(_: RawSocket, _: c_int, _: c_int) -> io::Result<T> {
-    Err(unsupported())
+pub(crate) unsafe fn getsockopt<T>(socket: RawSocket, level: c_int, name: c_int) -> io::Result<T> {
+    match (level, name) {
+        (SOL_SOCKET, SO_TYPE) => {
+            let socket_type = with_meta(socket, |meta| meta.socket_type)?;
+            Ok(cast_value(socket_type))
+        }
+        (SOL_SOCKET, SO_ERROR) => {
+            let value = unsafe { vcabi::trueos_cabi_socket_tcp_take_error(socket as u32) };
+            if value < 0 {
+                Err(io_error_from_neg_rc(value))
+            } else {
+                Ok(cast_value(value as c_int))
+            }
+        }
+        _ => Err(unsupported()),
+    }
 }
 
-pub(crate) unsafe fn setsockopt<T>(_: RawSocket, _: c_int, _: c_int, _: T) -> io::Result<()> {
-    Err(unsupported())
+pub(crate) unsafe fn setsockopt<T>(_: RawSocket, level: c_int, name: c_int, _: T) -> io::Result<()> {
+    match (level, name) {
+        (SOL_SOCKET, SO_KEEPALIVE | SO_REUSEADDR | SO_BROADCAST) => Ok(()),
+        (IPPROTO_TCP, TCP_NODELAY) => Ok(()),
+        _ => Err(unsupported()),
+    }
 }
 
 pub(crate) const fn to_in_addr(addr: &Ipv4Addr) -> in_addr {
@@ -414,7 +642,11 @@ pub(crate) fn msghdr_control_len(msg: &msghdr) -> usize {
 
 impl Drop for Socket {
     fn drop(&mut self) {
-        let _ = ptr::addr_of!(self.0);
+        let _ = unsafe { vcabi::trueos_cabi_socket_tcp_close(self.0 as u32) };
+        let _ = socket_registry()
+            .lock()
+            .expect("socket registry poisoned")
+            .remove(&self.0);
     }
 }
 

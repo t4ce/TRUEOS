@@ -9,6 +9,8 @@ extern crate alloc;
 use alloc::sync::Arc;
 use socket2::{Domain, Protocol, Socket, Type};
 
+const VNET_PROBE_PORT: u16 = 48_123;
+
 async fn probe_async_identity() -> u32 {
     0x544F_4B49
 }
@@ -25,6 +27,52 @@ fn probe_socket2_surface() -> Result<(), &'static str> {
             );
             Ok(())
         }
+    }
+}
+
+async fn probe_vnet_surface() -> Result<(), &'static str> {
+    let deadline = embassy_time::Instant::now() + embassy_time::Duration::from_millis(500);
+    while !crate::r::readiness::is_set(crate::r::readiness::NET_CONFIGURED) {
+        if embassy_time::Instant::now() >= deadline {
+            crate::log!("tokio_probe: note vnet surface skipped (net not configured yet)\n");
+            return Ok(());
+        }
+        tokio::time::sleep(core::time::Duration::from_millis(10)).await;
+    }
+
+    let Some(vnet) = crate::r::net::VNet::open_primary() else {
+        crate::log!("tokio_probe: note vnet surface skipped (no primary vnet)\n");
+        return Ok(());
+    };
+
+    if vnet
+        .submit(v::vnet::Command::OpenTcpListen {
+            port: VNET_PROBE_PORT,
+        })
+        .is_err()
+    {
+        return Err("net.vnet.submit_open_tcp_listen");
+    }
+
+    let deadline = embassy_time::Instant::now() + embassy_time::Duration::from_millis(500);
+    loop {
+        if let Some(event) = vnet.pop_event() {
+            match event {
+                v::vnet::Event::Opened { handle, kind } if kind == v::vnet::SocketKind::Tcp => {
+                    crate::log!("tokio_probe: success net.vnet.open_tcp_listen\n");
+                    let _ = vnet.submit(v::vnet::Command::Close { handle });
+                    return Ok(());
+                }
+                v::vnet::Event::Error { .. } => return Err("net.vnet.open_tcp_listen"),
+                _ => {}
+            }
+        }
+
+        if embassy_time::Instant::now() >= deadline {
+            return Err("net.vnet.open_tcp_listen_timeout");
+        }
+
+        tokio::task::yield_now().await;
     }
 }
 
@@ -69,6 +117,54 @@ async fn run_probe_suite() -> Result<(), &'static str> {
         return Err("rt-joinset-value");
     }
     crate::log!("tokio_probe: success rt.task.join_set\n");
+
+    let (join_left, join_right) = tokio::join!(
+        async {
+            tokio::task::yield_now().await;
+            0x4A4F_494Eu32
+        },
+        async { 0x4D41_4352u32 },
+    );
+    if join_left != 0x4A4F_494E || join_right != 0x4D41_4352 {
+        return Err("rt-join-macro-value");
+    }
+    crate::log!("tokio_probe: success rt.task.join_macro\n");
+
+    let (try_join_left, try_join_right) = tokio::try_join!(
+        async {
+            tokio::task::yield_now().await;
+            Ok::<u32, &'static str>(0x5452_5931)
+        },
+        async { Ok::<u32, &'static str>(0x5452_5932) },
+    )?;
+    if try_join_left != 0x5452_5931 || try_join_right != 0x5452_5932 {
+        return Err("rt-try-join-macro-value");
+    }
+    crate::log!("tokio_probe: success rt.task.try_join_macro\n");
+
+    let (_abort_tx, abort_rx) = tokio::sync::oneshot::channel::<()>();
+    let abort_task = tokio::task::spawn(async move {
+        let _ = abort_rx.await;
+        0x4142_4F52u32
+    });
+    abort_task.abort();
+    match abort_task.await {
+        Err(err) if err.is_cancelled() => crate::log!("tokio_probe: success rt.task.abort\n"),
+        Err(_) => return Err("rt-task-abort-state"),
+        Ok(_) => return Err("rt-task-abort-value"),
+    }
+
+    let select_value = tokio::select! {
+        _ = tokio::time::sleep(core::time::Duration::from_millis(5)) => 0u32,
+        value = async {
+            tokio::task::yield_now().await;
+            0x5345_4C45u32
+        } => value,
+    };
+    if select_value != 0x5345_4C45 {
+        return Err("rt-select-value");
+    }
+    crate::log!("tokio_probe: success rt.select\n");
 
     let (oneshot_tx, oneshot_rx) = tokio::sync::oneshot::channel();
     let oneshot_task = tokio::task::spawn(async move {
@@ -193,6 +289,7 @@ async fn run_probe_suite() -> Result<(), &'static str> {
     let _ = barrier_wait.is_leader();
     crate::log!("tokio_probe: success sync.barrier\n");
 
+    probe_vnet_surface().await?;
     probe_socket2_surface()?;
 
     crate::log!(
@@ -203,6 +300,27 @@ async fn run_probe_suite() -> Result<(), &'static str> {
         crate::log!("tokio_probe: enter time.sleep\n");
         tokio::time::sleep(core::time::Duration::from_millis(1)).await;
         crate::log!("tokio_probe: success time.sleep\n");
+
+        let timeout_value = tokio::time::timeout(core::time::Duration::from_millis(5), async {
+            tokio::task::yield_now().await;
+            0x5449_4D45u32
+        })
+        .await
+        .map_err(|_| "time-timeout-ok")?;
+        if timeout_value != 0x5449_4D45 {
+            return Err("time-timeout-value");
+        }
+        crate::log!("tokio_probe: success time.timeout\n");
+
+        match tokio::time::timeout(core::time::Duration::from_millis(1), async {
+            tokio::time::sleep(core::time::Duration::from_millis(5)).await;
+            0x4445_4144u32
+        })
+        .await
+        {
+            Err(_) => crate::log!("tokio_probe: success time.timeout_elapsed\n"),
+            Ok(_) => return Err("time-timeout-elapsed"),
+        }
 
         crate::log!("tokio_probe: enter time.interval\n");
         let mut interval = tokio::time::interval(core::time::Duration::from_millis(1));
@@ -276,7 +394,7 @@ pub(crate) fn log_boot_probe() {
         "tokio_probe: wired tokio 1.52.1 with feature rt+sync+time+io+fs via zkvm std-ABI shim (single-thread runtime probe)\n"
     );
     crate::log!(
-        "tokio_probe: note tokio::net remains deferred because mio still lacks a zkvm poll backend\n"
+        "tokio_probe: note tokio::net remains deferred until mio surfaces socket readiness events through the zkvm selector\n"
     );
     crate::log!(
         "tokio_probe: note blocking/fs runtime ops deferred because Tokio blocking pool still expects host thread spawning on zkvm\n"

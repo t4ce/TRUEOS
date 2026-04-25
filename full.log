@@ -1,0 +1,566 @@
+block 0 will be restricted.
+         Specify the 'raw' format explicitly to remove the restrictions.
+intel: no Intel display-class PCI device claimed
+pci/vrng: found virtio-rng 00:04.0 vid=1af4 did=1005 io_base=0x6060
+nvme: 00:02.0 caps ver=1.4.0 mqes=2048 dstrd=0 mpsmin=0 cap.to=7500ms ready_timeout=7500ms
+nvme: 00:02.0 smoke-read ok qid=1 nsid=1 lba=0 bytes=512
+nvme: registered 00:02.0 nsid=1 qid=1 id=1 blocks=2097152 bs=512 max_io=524288
+net/vio: found virtio-net 00:03.0 vid=1af4 did=1000 io_base=0x6080
+net/vio: features=0x79bfffe7 guest=0x00000020 mac=52:54:00:12:34:56
+tokio_probe: wired tokio 1.52.1 with feature rt+sync+time+io+fs via zkvm std-ABI shim (single-thread runtime probe)
+tokio_probe: note tokio::net remains deferred until mio surfaces socket readiness events through the zkvm selector
+tokio_probe: note blocking/fs runtime ops deferred because Tokio blocking pool still expects host thread spawning on zkvm
+tokio_probe: success rt.build current_thread
+tokio_probe: success rt.block_on async-body
+tokio_probe: success rt.task.yield_now
+tokio_probe: success rt.task.spawn_join
+tokio_probe: success rt.task.localset_spawn_local
+tokio_probe: success rt.task.join_set
+tokio_probe: success rt.task.join_macro
+tokio_probe: success rt.task.try_join_macro
+tokio_probe: success rt.task.abort
+tokio_probe: success rt.select
+tokio_probe: success sync.oneshot
+tokio_probe: success sync.mpsc
+tokio_probe: success sync.watch
+tokio_probe: success sync.broadcast
+tokio_probe: success sync.notify
+tokio_probe: success sync.mutex
+tokio_probe: success sync.rwlock
+tokio_probe: success sync.semaphore
+tokio_probe: success sync.barrier
+tokio_probe: note vnet surface skipped (net not configured yet)
+tokio_probe: success net.socket2.new
+tokio_probe: note blocking.spawn_blocking deferred on zkvm until Tokio blocking pool stops requiring host threads
+tokio_probe: enter time.sleep
+tokio_probe: success time.sleep
+tokio_probe: success time.timeout
+tokio_probe: success time.timeout_elapsed
+tokio_probe: enter time.interval
+tokio_probe: tick time.interval first
+tokio_probe: tick time.interval second
+tokio_probe: success time.interval
+tokio_probe: success io-util.duplex
+tokio_probe: success io-std.stdin_stdout_stderr
+tokio_probe: success fs.open_options_surface
+tokio_probe: note fs.runtime_ops deferred on zkvm because tokio::fs currently routes through spawn_blocking
+tokio_probe: success parking_lot.sync_surface
+tokio_probe: success test-util.pause_advance
+tokio_probe: success rt.block_on probe_suite
+mio_probe: direct mio 1.2.0 boot probe after tokio_probe (poll+waker+net surface)
+mio_probe: success poll.new
+mio_probe: success events.with_capacity
+mio_probe: success waker.new
+mio_probe: success waker.wake
+mio_probe: success poll.poll timeout0 events=1
+mio_probe: note net surface deferred until NET_CONFIGURED
+dma_nic_fpga: region phys=0x41800000 virt=0xFFFF800041800000 size=0x1000000
+spawn-svc: started job-runner (mask=0x00000000)
+spawn-svc: started globalog-persist-once (mask=0x00000000)
+spawn-svc: started factory-ram-probe (mask=0x00000000)
+spawn-svc: started qjs-async-fs-service (mask=0x00000000)
+spawn-svc: started trueosfs-mount-service (mask=0x00000000)
+sphv-aswtnor-es:vc : sttaaskr tsetda rhtv -msv=m-560
+sthv-ores t(moarske=:0x 0s000t0a0r0t0 )s
+lsopta=w1n -slvacp:i cs=t1a rktiendd =huvn-kvnmo-wsnt
+ohrve--snteot r(em:a sokn=l0ixn0e0 0m0o0d0e0=0l)a
+zsyp-arwanm-dsivsck:
+ started nehtv--psotlolr-et-ansekts:  (lmiasstk=e0nxi0n0g0 0o0n0 0t0c)p
+ s3p2a1w2n3- sovwcn:e r=shtv-astroterde -nneet-ts@e0r0v:ic0e3 .(0m
+ask=0x00000000)
+spawn-svc: started net-shell (mask=0x00000000)
+spawn-svc: started app-vm-run-queue (mask=0x00000000)
+spawn-svc: started usb-controller-tasks (mask=0x00000000)
+spawn-svc: started esp-gate (mask=0x00000000)
+spawn-svc: started esp-gate-registry (mask=0x00000000)
+spawn-svc: started gfx-virgl-backend-ready (mask=0x00000000)
+spawn-svc: started raple-service (mask=0x00000000)
+spawn-svc: started html_fetch_service (mask=0x00000000)
+spawn-svc: started uart-shell (mask=0x00000000)
+spawn-svc: started net-tcp-shell (mask=0x00000000)
+0rapl: service online period_s=1
+virgl-backend: scanout backing=dma display=1440x900 bytes=5184000
+virgl-backend: scanout backing cleared
+virgl-backend: init ok scanout=0 display=1440x900 refresh_millihz=Some(74994) ctx=1 scanout_res=1 rt_res=2
+virgl-backend: bootstrap present ok display=1440x900
+gfx: using virgl backend (auto)
+gfx: backend=virgl
+boot-probe: gfx-virgl-backend-ready ms=620
+crabusb: controller 0 boot defer before USB bring-up; waiting 0ms
+net: dev=0 mac=52:54:00:12:34:56
+net: static fallback dev=0 ipv4=192.168.178.111 mask=255.255.255.0 gw=192.168.178.1
+net: dhcp start dev=0 mode=static-fallback
+net: dhcp6 start dev=0 reason=dns-needed ra_other=0 ra_dns6=0 dhcp6_dns6=0
+net: dhcp6 info-request dev=0 xid=9a340b
+factory-ram-probe: reserved phys=0x786000 sampled=100 hold=5s
+net: ipv6 ra-flags dev=0 M=0 O=1
+net: dhcp acquired dev=0 ipv4=192.168.178.78 gw=192.168.178.1 ipv6=ra
+net: route v4 default dev=0 gw=192.168.178.1 ok
+net: dhcp dns-count dev=0 count=1
+net: dhcp dns dev=0 idx=0 server=192.168.178.1
+esp-gate: starting udp swarm listener on port 32343 payload=swarm
+net-shell: routing dev=0 Virtio Net owner=net-shell ip=192.168.178.78
+net-shell: listening on tcp 4245 owner=net-shell
+net-shell: opened tcp handle=3
+esp-gate: udp listener bound handle=2 port=32343
+trueosfs: mounted root disk_id=1
+crabusb: init successful ctrl=0 bdf=00:05.0 vid=1B36 pid=000D mmio=0xffffff0010134000 ports=9(HS),10(HS),11(HS)
+mio_probe: resume net surface after NET_CONFIGURED
+crabusb: pump port change ctrl=0 root_port=11
+mio_probe: success net.tcp_listener.bind
+mio_probe: success net.tcp_stream.connect
+mio_probe: success net.udp_socket.bind
+spawn-svc: started tls-socket-service (mask=0x00001000)
+spawn-svc: started ntp-sync (mask=0x00001000)
+spawn-svc: started sntp-service (mask=0x00002000)
+spawn-svc: started logtotcp (mask=0x00001000)
+spawn-svc: started http-trueosfs (mask=0x00011000)
+spawn-svc: started ws-time (mask=0x00001000)
+spabwoont--psvrcob: set:a rgtefd xg-fxcursor--voiverglr-lcauyr sort-oavsekr lays (tmaarstk =m0sx=010046010
+000)
+sbpoaowtn--psrvocb:e :s ttaerxtteudr egf-xu-ptleoxatdu rtea-sukp lsotaadr-ts emrsv=i1c0e6 1(
+mask=0x00400000)
+spbaowont--spvrco:b esta:r tueid 2ui 2t a(smkas k=s0txa0rt ms=1061
+0400000)
+boot-probviergl:-b acksenpd:a bwinnd  bluenid 2Bl enmdDses=c {1 e0nabl6ed2: 
+trsuep, asrwc:n S-rcsAlvphca,: ds t:s OtneaMirnutsSercdAl phua }i -2> h-anhdloe=s33t
+ed (mask=bo0otx-p0ro0be4: ui20 f0i0rst0 c0om)po
+ses bpegin mas=w10n62-
+sbovot-procbe::  uis2-thiat rtatsk setadrt  mus=i10267-
+hboiott-p rob(e:m uia2-shokst=ed 0taxsk0 s0ta4rt 0ms0=100670
+0)
+spawn-svc: started trueosfs-ready-hook (mask=0x00010000)
+spawn-svc: trueosfs-ready-hook task online
+intel/media: source warmup skipped reason=simplified-single-fetch-path
+ws-time: listening on tcp 2 path=/time
+http-trueosfs: listening on tcp 80 (hostfwd localhost:8080 -> guest:80)
+logtotcp: listening on tcp 1
+sntp: waiting for NET_V4_CONFIGURED
+sntp: readiness reached, starting service loop
+tls-socket: service running
+spawn-svc: started ui2-athlas-third-demo (mask=0x02800000)
+spawn-svc: started ui2-athlas-half-demo (mask=0x02800000)
+spawn-svc: started ui2-athlas-1x-demo (mask=0x02800000)
+spawn-svc: started ui2-athlas-2x-demo (mask=0x02800000)
+spawn-svc: started ui2-palatino-1x-demo (mask=0x02800000)
+spawn-svc: started ui2-twemoji-1x (mask=0x02000000)
+spawn-svc: started ui2-triangle-demo (mask=0x02800000)
+boot-probe: spawn ui2-triangle-demo ms=1092
+spawn-svc: started ui2-bgrt-demo (mask=0x02800000)
+spawn-svc: started ui2-coreticks-demo (mask=0x02800000)
+spawn-svc: started ui2-raple-demo (mask=0x02800000)
+spawn-svc: started ui2-shell-demo (mask=0x02800000)
+boot-probe: spawn ui2-shell-demo ms=1094
+spawn-svc: started ui2-weather-demo (mask=0x02801000)
+spawn-svc: started ui2-chart-demo (mask=0x02800000)
+spawn-svc: started ui2-currency-demo (mask=0x02801000)
+sntp: udp opened on port=123 handle=NetHandle(10)
+virgl-backend: bind blend BlendDesc { enabled: true, src: SrcAlpha, dst: OneMinusSrcAlpha } -> handle=33
+dns: fs-cache hit host=time.google.com dev=0 ip=216.239.35.4
+virgl-backend: bind blend BlendDesc { enabled: true, src: SrcAlpha, dst: OneMinusSrcAlpha } -> handle=33
+crabusb: probe ctrl=0 devices=3
+crabusb: hotplug connect ctrl=0 root_port=9 dev=1 stable_id=150994944 vid=0627 pid=0001 class=00/00/00
+crabusb: hotplug connect ctrl=0 root_port=10 dev=2 stable_id=167772160 vid=0627 pid=0001 class=00/00/00
+crabusb: hotplug connect ctrl=0 root_port=11 dev=3 stable_id=184549376 vid=0627 pid=0001 class=vi0r0gl/-0b0/0acke0
+ndc: rbinad bbluends bBle:nd Dedsce {v  enacbledt: true,r slrc:= S0rc Alrphoa, odstt:_ OpneoMirnutsS=rc9Al phva i} d->= h0an6dl2e=733 
+pid=0001 clviargsl-bsac=ke0nd0: b insd ublbend cBllenadDsessc {= e0na0bl edp: rtroue,t sorc=: 0Sr0cA lphsa,p dset:e dOne=MiHnusSSr cAilphfa s} -=> 1ha ndele=33
+psvi=rg1l-
+bacckernda: bteux suplboa:d  imgd=1 25e6x2s56c rervi p0->t3 orers=6  vciewh=6e5
+ck ctrl=0 root_port=9 ok cfgs=1
+crabusb: hid 0627:0001 cvainrgld-biacdkenda: ttexe c retatea_vriegw eimtg=s1 r=es1=6
+ viewc=6r5 afmbt=67
+usb: hid 0627:0001 target kind=mouse if#0 alt=0 cfg=1 int_in=0x81 mps=4 proto=02
+crabusb: hid mouse 0627:0001 skipping descriptor log for qemu boot hid
+crabusb: hid mouse 0627:0001 handoff if#0 alt=0 cfg=1 int_in=0x81 mps=4 proto=02
+crabusb: bind ctrl=0 root_port=9 vid=0627 pid=0001 handoff=true
+crabusb: dev ctrl=0 root_port=10 vid=0627 pid=0001 class=00 subclass=00 proto=00 speed=HS ifs=1 eps=1
+crabusb: descriptor check ctrl=0 root_port=10 ok cfgs=1
+crabusb: hid 0627:0001 found 1 HID interface(s) but no stream targets
+crabusb: dev ctrl=0 root_port=11 vid=0627 pid=0001 class=00 subclass=00 proto=00 speed=HS ifs=1 eps=1
+crabusb: descriptor check ctrl=0 root_port=11 ok cfgs=1
+crabusb: hid 0627:0001 candidate targets=1
+crabusb: hid 0627:0001 target kind=keyboard if#0 alt=0 cfg=1 int_in=0x81 mps=8 proto=01
+ui2-font-bucketproducer: window=3 family=lucidacrab uvarsbi:ant =h1xi videw pokrte=40y0xb40o0 caonrtdent= 100166x72033 7bu:ck0et0s=08 1up ems=2048kvi lineir_hpgeplii-gnbhgat c=kd3ee1n47sd c:rr ebiianpddty o_brsleq e=ln1od  mgB ifloern niqdemDimezscu {e  ebdnab=letd: rtruuee, sr
+c: SrcAlpha, dst: OneMinusSrcAlpha } -> handle=33
+oot hid
+cravirgl-backebnd: ubinsd bble:nd  BlhenidDdes c k{ eenyablbedo: atrrued,  src0: 6Sr2cA7lp:ha0, 0ds0t:1 O nehMianusnSrdcAolpfhaf }  -i> fhan#dl0e= 33a
+ltvi=rg0l- bacckefngd:= t1e x uiplnoadt im_g=1 25i6x2n56= 0revx 3-8>4 1res =6 mvipews=65=
+8 proto=01
+crabusb: bind ctrl=0 root_port=11 vid=0627 pid=0001 handoff=true
+crabusb: hid mouse 0627:0001 ready slot=1 if#0 alt=0 cfg=1 int_in=0x81 mps=4 ep_target=3 proto=02 boot=true idle=true
+crabusb: hid keyboard 0627:0001 ready slot=3 if#0 alt=0 cfg=1 int_in=0x81 mps=8 ep_target=3 proto=01 boot=true idle=true
+ui2-triangle-demo: mode=ui2-surface window=8 tex=4700 size=384x240 intel=0
+kbd-report: ctrl=0 slot=3 ep=3 seq=1 flags=0x00 mods=0x00 keys=[0,0,0,0,0,0] ascii=[0,0,0,0,0,0]
+virgl-backend: bind blend BlendDesc { enabled: true, src: SrcAlpha, dst: OneMinusSrcAlpha } -> handle=33
+kbd-report: ctrl=0 slot=3 ep=3 seq=2 flags=0x00 mods=0x00 keys=[0,0,0,0,0,0] ascii=[0,0,0,0,0,0]
+virgl-backend: tex upload img=13 384x240 rev 0->2 res=18 view=77
+virgl-backend: tex create_view img=13 res=18 view=77 fmt=67
+virgl-backend: tex upload img=1 256x256 rev 4->5 res=6 view=65
+virgl-backend: tex upload img=12 480x320 rev 0->2 res=17 view=76
+virgl-backend: tex create_view img=12 res=17 view=76 fmt=67
+kbd-report: ctrl=0 slot=3 ep=3 seq=3 flags=0x00 mods=0x00 keys=[0,0,0,0,0,0] ascii=[0,0,0,0,0,0]
+ui2-font-bucketproducer: window=1 family=lucida variant=third viewport=400x400 content=344x2389 buckets=8 upem=2048 line_height=3147 ready_seq=1 minimized=true
+kbd-report: ctrl=0 slot=3 ep=3 seq=4 flags=0x00 mods=0x00 keys=[0,0,0,0,0,0] ascii=[0,0,0,0,0,0]
+BGRT: addr=0x000000007ADC3018 off=(623, 421) size=0x839E fmt=bmp 193x58 24bpp
+ui2-bgrt-demo: window=11 tex=4704 size=193x58 mode=queued
+dns: fs-cache hit host=api.fxfeed.io dev=0 ip=151.101.2.15
+vhttps: connect host=api.fxfeed.io dev=0 timeout_ms=15000
+ui2-shell-demo: window=1 tex=4705 viewport=600x400 content=600x400 cols=100 rows=12
+tls-socket: net via vnet owner=vhttps-1@00:03.0 conn=1 device=0
+[debug] No cached session for DnsName("api.fxfeed.io")
+[debug] Not resuming any session
+[trace] Sending ClientHello Message {
+    version: TLSv1_0,
+    payload: Handshake {
+        parsed: HandshakeMessagePayload(
+            ClientHello(
+                ClientHelloPayload {
+                    client_version: TLSv1_2,
+                    random: 9ff9823f3ee3f3944c445f4c0aeff350951a40fae9cb81e06bc3227342d30185,
+                    session_id: 464fa1b9320e818a9dd86b626770cce3e23fba4b590314d2b52a9f9e19b6a450,
+                    cipher_suites: [
+                        TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+                        TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+                        TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
+                        TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+                        TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+                        TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+                        TLS13_AES_128_GCM_SHA256,
+                        TLS13_AES_256_GCM_SHA384,
+                        TLS13_CHACHA20_POLY1305_SHA256,
+                        TLS_EMPTY_RENEGOTIATION_INFO_SCSV,
+                    ],
+                    compression_methods: [
+                        Null,
+                    ],
+                    extensions: ClientExtensions {
+                        server_name: SingleDnsName(
+                            DnsName(
+                                "api.fxfeed.io",
+                            ),
+                        ),
+                        certificate_status_request: Ocsp(
+                            OcspCertificateStatusRequest {
+                                responder_ids: [],
+                                extensions: ,
+                            },
+                        ),
+                        named_groups: [
+                            X25519,
+                            secp256r1,
+                            secp384r1,
+                        ],
+                        ec_point_formats: SupportedEcPointFormats {
+                            uncompressed: true,
+                        },
+                        signature_schemes: [
+                            ECDSA_NISTP384_SHA384,
+                            ECDSA_NISTP256_SHA256,
+                            ED25519,
+                            RSA_PKCS1_SHA256,
+                            RSA_PKCS1_SHA384,
+                            RSA_PKCS1_SHA512,
+                            RSA_PSS_SHA256,
+                            RSA_PSS_SHA384,
+                            RSA_PSS_SHA512,
+                        ],
+                        protocols: [
+                            ProtocolName(
+                                687474702f312e31,
+                     u    i  2 -),
+    f  o  n  t  -   bu  c  k e  t  p],
+r  o d  u  c  e  r  :      w  i nd o w ext=en2de d_fmaastmeri_slecyre=t_lreuqucesit: d()a,
+   v  a  r  i  a  n  t          supported_versions: SupportedProtocolVersions {
+                            tls13: true,
+                 =half viewport=400x40  0     c   o  ntlts1e2:n ttru=e,5
+ 2   0  x  3  5  7 7      b u   c  }k,
+e  t  s  =  8     u  p  e   m  =  2 p0re4sh8ar edl_kieny_modees_: hePskKeyEixcghangheMtod=es3 {
+      1 4       7           r  e  apsdk_ydh_e: streueq,
+=  1      m  i  n  i  m   i  z  e  d  =  tpsk: farlseu,
+e  
+                      },
+                        key_shares: [
+                            KeyShareEntry {
+                                group: X25519,
+                                payload: 801c2af4ccdb878e754d0e9d2cab615b1aa8cdd6fec167cc2885d9298d507a4d,
+                            },
+                        ],
+                        order_seed: 42481,
+                        contiguous_extensions: [],
+                        ..
+                    },
+                },
+            ),
+        ),
+        encoded: 010000f203039ff9823f3ee3f3944c445f4c0aeff350951a40fae9cb81e06bc3227342d3018520464fa1b9320e818a9dd86b626770cce3e23fba4b590314d2b52a9f9e19b6a4500014c02bc02ccca9c02fc030cca813011302130300ff010000950005000501000000000010000b000908687474702f312e31000b00020100002d0002010100000012001000000d6170692e6678666565642e696f000d00140012050304030807040105010601080408050806000a00080006001d00170018002b0005040304030300170000003300260024001d0020801c2af4ccdb878e754d0e9d2cab615b1aa8cdd6fec167cc2885d9298d507a4d,
+    },
+}
+ui2-font-bucketproducer: twemoji ready tex=4840 size=928x5696 line_height=64 ready_seq=1
+dns: fs-cache hit host=api.openweathermap.org dev=0 ip=141.95.99.79
+vhttps: connect host=api.openweathermap.org dev=0 timeout_ms=15000
+ui2-font-buckettlps-rodsuoccekre:t :w inent dvoiwa= 5v nfeatm iolwyn=epra=lvahttitnpos -v2a@r0i0a:n0t3=.10x  cvoinenw=p2o rdte=v4i0c0ex=400
+0 content=1432[xde4b5u3g7]  bNuoc kceatcsh=e8d  uspesesmi=o2n0 4f8o rl iDnnes_Nahmee("iagphit.=o3p1e4n7w eraetahedrym_aps.eoqr=g0" )m
+i[ndiembiuzge]d =Ntortu er
+esuming any session
+[trace] Sending ClientHello Message {
+    version: uTiL2Sv-1f_o0n,
+t - b u cpkaeytlporaodd:u cHearn:d swhiakne d{o
+  w = 6    f apamrisleyd=:p aHlaantdisnhoa kveMaersisaangte=P1axy lvoiade(
+w p o r t = 4 0 0 x 4 0 0C lcioenntteHnetl=l1o4(3
+2 x 4 5  3  7   b u c k e t s =C8l iuepnetmH=e2l0l4o8P alyilnoea_dh e{i
+g h t = 3 1 4 7   r e a d y _ s e q = 0  cmliineinmti_zveedr=stiroune:
+ TLSv1_2,
+                    random: 6d41fe9589e84109f7d8f68e7be5ca562ad0903ddeeaeae2ee0a4de401d50c56,
+                    session_id: dc14f6c44c5594212f8ae96ffef6431e4ac3ce148e30fe271f8a9a9c420deca6,
+                    cipher_suites: [
+                        TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+                        TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+                        TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
+                        TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+                        TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+                        TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+                        TLS13_AES_128_GCM_SHA256,
+                        TLS13_AES_256_GCM_SHA384,
+                        TLS13_CHACHA20_POLY1305_SHA256,
+                        TLS_EMPTY_RENEGOTIATION_INFO_SCSV,
+                    ],
+                    compression_methods: [
+                        Null,
+                    ],
+                    extensions: ClientExtensions {
+                        server_name: SingleDnsName(
+                            DnsName(
+                                "api.openweathermap.org",
+                            ),
+                        ),
+                        certificate_status_request: Ocsp(
+                            OcspCertificateStatusRequest {
+                                responder_ids: [],
+                                extensions: ,
+                            },
+                        ),
+                        named_groups: [
+                            X25519,
+                            secp256r1,
+                            secp384r1,
+                        ],
+                        ec_point_formats: SupportedEcPointFormats {
+                            uncompressed: true,
+                        },
+                        signature_schemes: [
+                            ECDSA_NISTP384_SHA384,
+                            ECDSA_NISTP256_SHA256,
+                            ED25519,
+                            RSA_PKCS1_SHA256,
+                            RSA_PKCS1_SHA384,
+                            RSA_PKCS1_SHA512,
+                            RSA_PSS_SHA256,
+                            RSA_PSS_SHA384,
+                            RSA_PSS_SHA512,
+                        ],
+                        protocols: [
+                            ProtocolName(
+                                687474702f312e31,
+                            ),
+                        ],
+                        extended_master_secret_request: (),
+                        supported_versions: SupportedProtocolVersions {
+                            tls13: true,
+                            tls12: true,
+                        },
+                        preshared_key_modes: PskKeyExchangeModes {
+                            psk_dhe: true,
+                            psk: false,
+                        },
+                        key_shares: [
+                            KeyShareEntry {
+                                group: X25519,
+                                payload: 4db46f397e2acc4cecaa1f75c88de0956e97195f3a8a83c073fde68c3a5d480b,
+                            },
+                        ],
+                        order_seed: 14400,
+                        contiguous_extensions: [],
+                        ..
+                    },
+                },
+            ),
+        ),
+        encoded: 010000fb03036d41fe9589e84109f7d8f68e7be5ca562ad0903ddeeaeae2ee0a4de401d50c5620dc14f6c44c5594212f8ae96ffef6431e4ac3ce148e30fe271f8a9a9c420deca60014c02bc02ccca9c02fc030cca813011302130300ff0100009e000a00080006001d00170018000d001400120503040308070401050106010804080508060005000501000000000010000b000908687474702f312e31000b00020100002d00020101002b00050403040303003300260024001d00204db46f397e2acc4cecaa1f75c88de0956e97195f3a8a83c073fde68c3a5d480b0000001b00190000166170692e6f70656e776561746865726d61702e6f726700170000,
+    },
+}
+ui2-font-bucketproducer: window=9 family=lucida variant=2x viewport=400x400 content=1992x13945 buckets=8 upem=2048 line_height=3147 ready_seq=1 minimized=true
+tls-socket: tcp established owner=vhttps-1@00:03.0 handle=12
+tls-socket: tcp established owner=vhttps-2@00:03.0 handle=13
+[trace] We got ServerHello ServerHelloPayload {
+    legacy_version: TLSv1_2,
+    random: 80a00fad4ed1332732c714783fcece5dacb94a057b30bee7b04ea421cde2ffb3,
+    session_id: 464fa1b9320e818a9dd86b626770cce3e23fba4b590314d2b52a9f9e19b6a450,
+    cipher_suite: TLS13_AES_128_GCM_SHA256,
+    compression_method: Null,
+    extensions: ServerExtensions {
+        key_share: KeyShareEntry {
+            group: X25519,
+            payload: a0dde9184584883bc019839a757dbedd5d17ce5b9dd73e90e87d77ed8333d365,
+        },
+        selected_version: TLSv1_3,
+        unknown_extensions: {},
+        ..
+    },
+}
+[debug] Using ciphersuite TLS13_AES_128_GCM_SHA256
+[debug] Not resuming
+[trace] EarlyData rejected
+[trace] Dropping CCS
+[debug] TLS1.3 encrypted extensions: ServerExtensions { server_name_ack: (), selected_protocol: SingleProtocolName(ProtocolName(687474702f312e31)), unknown_extensions: {}, .. }
+[debug] ALPN protocol is Some(b"http/1.1")
+[trace] Server cert is CertificateChain([CertificateDer(0x308204ed308203d5a003020102021205ba813c988b56249ae3f973ec01fa45a950300d06092a864886f70d01010b05003033310b300906035504061302555331163014060355040a130d4c6574277320456e6372797074310c300a06035504031303523132301e170d3236303332353036343832325a170d3236303632333036343832315a3018311630140603550403130d6170692e6678666565642e696f30820122300d06092a864886f70d01010105000382010f003082010a0282010100be08b28865bb5efae7c93843b914ff7593f16ff609ad0e150309ee8a381e8ab68ca4226b26a3b690ac4650c3ffc40451354d31fc6925a06d944f8abedc70f55a0d594a3ec438d5acc8ac8ef3b7bf96990c5fdfb547bbbdb8d16f18008bc8ab1b16764dd52711dd4c755719266d7db2c043c049deff8ea1e6ddba5829710e5b9f62feee8701feb1cce69c4dd9ae88cd9c17612b96aa8330b975c6d1335466a19e7247b21b4f060be8a49be03727f703af00d33a047b1a685c70e0e25a185dcde97989bfa45a25238c82ca0d5fea7b37b954a9ba6717296f84406eb35b63e672b2fc22e0c0a8bcbd56bf3ddfaa02dd72c8d7d363f9211e09c8bd2ce4b2ea82db470203010001a382021430820210300e0603551d0f0101ff0404030205a030130603551d25040c300a06082b06010505070301300c0603551d130101ff04023000301d0603551d0e041604147b794179e760d25fde42d549c2b527848467a178301f0603551d2304183016801400b529f22d8e6f31e89b4cad783efadce90cd1d2303306082b0601050507010104273025302306082b060105050730028617687474703a2f2f7231322e692e6c656e63722e6f72672f30180603551d110411300f820d6170692e6678666565642e696f30130603551d20040c300a3008060667810c010201302e0603551d1f042730253023a021a01f861d687474703a2f2f7231322e632e6c656e63722e6f72672f38312e63726c30820105060a2b06010401d6790204020481f60481f300f1007600499c9b69de1d7cecfc36decd8764a6b85baf0a878019d15552fbe9eb29ddf8c30000019d23f5ebac0000040300473045022021fce5ec0c2d60d9106e16ba704d8255d7e94044172972a5dc9c4c8a038ee90b022100a703de6df993cd7604eccf34bbf964c354e92224570d9367085e41bf7b613e46007700969764bf555897adf743876837084277e9f03ad5f6a4f3366e46a43f0fcaa9c60000019d23f5ebf80000040300483046022100c20981be2e444dbe903cae8b7c60c5b1adccb5be092293490b23980a145ca75a022100cfed207ce5d6530546d7252b54efd0a3473cc1e51a00963be446cc88605b2e18300d06092a864886f70d01010b050003820101006a62ef9a2c8eafb1f893bc2a15480138f1cbc1280d9dc9254d00e48382b58a1b6aca33d58de033dfb5a07d33e0aa566ec768b161100ed1cbe9fa4e03c0b90c921b9a7af11a6a7f4a402cd1a00bd4bc65cb09fe554353b06e840f681b4429a2ef8387db4f8eb2cd64eccec5ba56c8a53f8addbe33b0b905f6932348a0d0b0f1c49c871e8f4973904c0bff5ae58a5f317ac6ed8c464b971674ed0bf2156f11f88ed2739355b73e4b363d6258f6aca3913b725ca98e58dd808369a1703e8eb743c64a7de218e0485c9619e9fe49c00a1735e4e362f75b4980b34435ff8f1fbd79fc7bc7ca15a54ba6c5b0147e7b07eb891b1f99ab788dd2ff83ada6b2daa65acf2d), CertificateDer(0x30820506308202eea003020102021100c212324b70a9b49171dc40f7e285263c300d06092a864886f70d01010b0500304f310b300906035504061302555331293027060355040a1320496e7465726e65742053656375726974792052657365617263682047726f7570311530130603550403130c4953524720526f6f74205831301e170d3234303331333030303030305a170d3237303331323233353935395a3033310b300906035504061302555331163014060355040a130d4c6574277320456e6372797074310c300a0603550403130352313230820122300d06092a864886f70d01010105000382010f003082010a0282010100da982874adbe94fe3be01ee2e54b75ab2c127feda703327e3697ece8318fa5138d0b992e1ecd01513d4ce5286e095531aaa5225d72f42d07c24d403cdf0123b97837f51a653234e686719d04ef84085bbd021a99eba601009a73906d8fa207a0d097d3da456181353d14f9c4c05f6adc0b961ab09fe32aeabd2ad698c79b71ab3b740f3cdbb260be5a4b4e18e9db2a735c8961659efeed3ca6cb4e6fe49ef90046b3ff194d2a63b38e66c6188570c750656f3b74e548830f08585d2d239d5ea3fee8db00a1d2f4e3194df2ee7af6279ee5cd9c2da2f27f9c17adef133739d1b4c82c41d686c0e9ec21f8591b7fb93a7c9f5c019d6204c228bd0aad3cca10ec1b0203010001a381f83081f5300e0603551d0f0101ff040403020186301d0603551d250416301406082b0601050507030206082b0601050507030130120603551d130101ff040830060101ff020100301d0603551d0e0416041400b529f22d8e6f31e89b4cad783efadce90cd1d2301f0603551d2304183016801479b459e67bb6e5e40173800888c81a58f6e99b6e303206082b0601050507010104263024302206082b060105050730028616687474703a2f2f78312e692e6c656e63722e6f72672f30130603551d20040c300a3008060667810c01020130270603551d1f0420301e301ca01aa0188616687474703a2f2f78312e632e6c656e63722e6f72672f300d06092a864886f70d01010b050003820201008f75d009cf6a7648653292deb544c88576f415848c02bf76ebb3f1e2f96e84a85691e1924bf7e1ea0078488f7592e3e4467b1b602b20afa0ce14e5450d6ae05286a4f3da1414a9a95ff16d46f952501740e9e41e7de61558fea98bfceff59e63e066e2c3773b1f01872694ed4010dcb799ecdd57d35c7141ee30200004dc954b5028879992feaa8094b6060814f81c837e7440c5085a0c4f5cd1849dc4fddb59deee796e234d95f292d498296a5ceb02c142f0f8f54e64207ba8e331c4c06809478bd8b978a0ca4e4abe69242a4b377b51036b3a3f528bb3d4d2ad584e93eecb5f6f0d314948bac43f9f12c9203d11840785b4f8f23823ac710040e77f8d4634826a4ecfe00e635fba699a47091022fe4b48b7917554cb931ee416eb53cf7bde364dbff6b1ebe64ae9333c8d69a298bea87fa3ab5fb654e84d96a9acf3b05acb1b7a3693249bce5852809f350a5e2dbf749b6226179c9131290bf37fcdc3628b68c777f47f0bfbc659f503664ba6509bd0efa5fc02b4604d034b614fc520078b48b031f5b69cd1c9ad7718dcb2c70fbee04608dee04bdeb9b8b6c716be36693f86684b7481138950c56a7a02acc548a50e7d5d61e4cdd166a075c7055ee889b5631923bb50b490ecc275373e75a61b83252800214ec0d33acb9ceac08ff75fae51164610af0206eec0b657d40dac8cd8d7a0f3876ec3e2cbe94ed4a17cfd763b)])
+tls-socket: tls connected owner=vhttps-1@00:03.0 handle=12
+vhttps: request-sent host=api.fxfeed.io dev=0 handle=12 bytes=0 path=/v2/latest?base=USD&currencies=EUR,GBP,JPY&api_key=f[trxafc_eS]w FWe1 gTo4t6 MSmHer8vuCekrOHOe7ltlOoc S
+erverHelloPayload {
+    legacy_version: TLSv1_2,
+    random: 9dd412a9adf22dc792a8672a01bc7a61e08bbf61f8b496dfbed3acaa30fb5c37,
+    session_id: dc14f6c44c5594212f8ae96ffef6431e4ac3ce148e30fe271f8a9a9c420deca6,
+    cipher_suite: TLS13_AES_256_GCM_SHA384,
+    compression_method: Null,
+    extensions: ServerExtensions {
+        key_share: KeyShareEntry {
+            group: X25519,
+            payload: 157be5c491f8c2b1ca357def2d004770034155e8f41389dd7c63bb096c225662,
+        },
+        selected_version: TLSv1_3,
+        unknown_extensions: {},
+        ..
+    },
+}
+[debug] Using ciphersuite TLS13_AES_256_GCM_SHA384
+[debug] Not resuming
+[trace] EarlyData rejected
+[trace] Dropping CCS
+[debug] TLS1.3 encrypted extensions: ServerExtensions { server_name_ack: (), selected_protocol: SingleProtocolName(ProtocolName(687474702f312e31)), unknown_extensions: {}, .. }
+[debug] ALPN protocol is Some(b"http/1.1")
+[trace] Server cert is CertificateChain([CertificateDer(0x308207363082059ea003020102021100d982f57d97db0b093e5fac0f14a0ee1a300d06092a864886f70d01010b05003060310b300906035504061302474231183016060355040a130f5365637469676f204c696d69746564313730350603550403132e5365637469676f205075626c6963205365727665722041757468656e7469636174696f6e204341204f5620523336301e170d3236303331393030303030305a170d3236313030333233353935395a3061310b3009060355040613024742311830160603550408130f4c6f6e646f6e2c2043697479206f6631193017060355040a13104f70656e77656174686572204c74642e311d301b06035504030c142a2e6f70656e776561746865726d61702e6f726730820122300d06092a864886f70d01010105000382010f003082010a0282010100dcffb0408d508b17d3c0192dc3844e0cb131ba5d9e78acca8847f1ce32b19e1b0baca6c01d7db94f331c12ead13d7c3bfacebbf6059cd95f584750e212ca1767d358437b0cc241e4256b4e05d3ab72a6ed136305f3cda4d9186d4d20129f9201d8296ea4aec47d60b2ad721c4b1d8f74c32244fa7dd8f2cf994ebc69c8ea5a49bb32d9ac8557aa858177e144807a0c113f4235db3298c2253669e8b4c378813708f346285dde98b2a205a6756cdc35177629b17a7dba2848292ac00f331e32a308f8af65d86f42ab124b31691dab5f3038012641daae5727e49def95449cc6fd7136eb82a1c83cf863237d65c37ed683623ee95fa26a962df8645bb8fc07ac410203010001a382036830820364301f0603551d23041830168014e36674bb70688d2c5d4e0ea64a8f9b37229c8292301d0603551d0e0416041491f1f858d40bd9667d7f2b72ad494030353ef208300e0603551d0f0101ff0404030205a0300c0603551d130101ff04023000301d0603551d250416301406082b0601050507030106082b06010505070302304a0603551d20044330413035060c2b06010401b23101020103043025302306082b06010505070201161768747470733a2f2f7365637469676f2e636f6d2f4350533008060667810c01020230540603551d1f044d304b3049a047a0458643687474703a2f2f63726c2e7365637469676f2e636f6d2f5365637469676f5075626c696353657276657241757468656e7469636174696f6e43414f565233362e63726c30818406082b0601050507010104783076304f06082b060105050730028643687474703a2f2f6372742e7365637469676f2e636f6d2f5365637469676f5075626c696353657276657241757468656e7469636174696f6e43414f565233362e637274302306082b060105050730018617687474703a2f2f6f6373702e7365637469676f2e636f6d30330603551d11042c302a82142a2e6f70656e776561746865726d61702e6f726782126f70656e776561746865726d61702e6f726730820185060a2b06010401d6790204020482017504820171016f007500d76d7d10d1a7f577c2c7e95fd700bff982c9335a65e1d0b3017317c0c8c569770000019d070834e300000403004630440220543c9127d3f3dbfa4f4794ee78e6ce5dcb8037354b147872ba9d9bca167cada702206488989d14b1009d9050d26664d98e9acddbe23f9d02e7be8025a80a96ddb9b4007600c8a3c47fc7b3adb9356b013f6a7a126de33a4e43a5c646f997ad3975991dcf9a0000019d0708351800000403004730450221009a30076527a3f5fc7e5dd591d9d864ed1386be2da39bb5f78b348cde1db444d202203c567f60953dd5f4955178e022930881aeade73577e29461ea16228ac8604cc2007e006cfe501943a85ea916bc52d133e4dcc91ef1411c7d258420d173809e1818eb3a0000019d0708371700080000050003a38917040300473045022100ce038b02e2acacc22670ef45197961fa090bee6276376d9d1a82c12dd5d8d14702201df45162d8e325bb2605a3901755d9d9516e65db6b04d07ea4f15b7d97d94570300d06092a864886f70d01010b050003820181008505152ce97f524a011957db3553543e98a590a4f7eb759fabeb5de28f68e28b72558da21bacf1c1e4d485e22875f016aa4585f2ab913d13476672bd89d100b3459a6199c021fe6fe90f2783c44b40ed6b7e1aa375105201feff612af1d6e7516bf99b2ab5fdec296c174c9af0d684bf891480efe5a537c6d077ac80ddf84470e64d37489e7183ad723cb01d7ded4aa47bf4b1f82e32e13d309bdf8da50c6a4b980be8954cbc59440e0aa5f42261aa4e0bd583aeec524b200223b28970c7b4f3ddbe1f8b0ab72b8c83ef9610954b0b4c74422521fc75da0eb67a47798663cfefc1adfe5147e73a83340bf4d54bba0be419af0aedd516b231bcbfbf2258d068be35719199006db1ce33a21b8d154f5007a0a75446fba7cf22c8af721836e03a3a4f36cb7350f567606c8664b6079dcc7b0f015692fc5840017c062061777f63efb0887207fcd37ef01f8ad719bca5175847f658ddbed06b17d18de3f33c749faf4143a09b110ec16b1f22e2f0bed9817cd16ec96cec1df48dce485bbf30b3b7ed), CertificateDer(0x3082064c30820434a00302010202102c1a3c76e943ddddff191b31890aed71300d06092a864886f70d01010c0500305f310b300906035504061302474231183016060355040a130f5365637469676f204c696d69746564313630340603550403132d5365637469676f205075626c6963205365727665722041757468656e7469636174696f6e20526f6f7420523436301e170d3231303332323030303030305a170d3336303332313233353935395a3060310b300906035504061302474231183016060355040a130f5365637469676f204c696d69746564313730350603550403132e5365637469676f205075626c6963205365727665722041757468656e7469636174696f6e204341204f5620523336308201a2300d06092a864886f70d01010105000382018f003082018a0282018100a6432d277474ea3a347dc788d0ce7607b2be4f231e19cbf6050e4055cde3958b7be93bc722efe735edb65bf4495d7f6b5940ffd8613a185e71d15e1bb18ecadc8789f04efe2b31bf4c66e8c927c3bbe179da3a9005b63ada87e162331e8806cb234dbe16ac0778cf2e22b52d717f1bd910b1177e7c4c1d0d1d571c01765c1588199dd642797c63b9c6bba49276d0b2d49d7b605dc8c0135bd8e16bdb45e5b45ba9a4799c8d19d9a94dc16ce58faccb2e8bb44e59a1c8e2f49f4d94d9d17a8c76456572117a40d42859e20a8df99a554884341c1a2b5456c12b285d67211781980d48db41470c6ac08cc978f26161de195213b5be4fbfb8fde7c03934a7de6afe3ee76973424af1129eb1cfca96815912b4eba9ca7cf44f8bd9bd9083a131d61f4bc8221514dc7602f6e18722963ede7002bd4eb87455b8f0a2e278587fb16ede3bbbaf191420ff69ce792340cd1e40a968faee8fa7bd466afb2b8eb06430185ee100a81eed186fe377a24003e1f63b8e0257df0d46c536d777f5912708667b4d0203010001a38201813082017d301f0603551d230418301680145673586495f9921ab0122a046279a14015882149301d0603551d0e04160414e36674bb70688d2c5d4e0ea64a8f9b37229c8292300e0603551d0f0101ff04040302018630120603551d130101ff040830060101ff020100301d0603551d250416301406082b0601050507030106082b06010505070302301b0603551d200414301230060604551d20003008060667810c01020230540603551d1f044d304b3049a047a0458643687474703a2f2f63726c2e7365637469676f2e636f6d2f5365637469676f5075626c696353657276657241757468656e7469636174696f6e526f6f745234362e63726c30818406082b0601050507010104783076304f06082b060105050730028643687474703a2f2f6372742e7365637469676f2e636f6d2f5365637469676f5075626c696353657276657241757468656e7469636174696f6e526f6f745234362e703763302306082b060105050730018617687474703a2f2f6f6373702e7365637469676f2e636f6d300d06092a864886f70d01010c050003820201000595d60c7582ddcb9b6ff7b52359338bc94f1622bf654a07d3db9f9953ab73939b607fd72a45947b148fa919302852abeebf0eb86fa9ed5341f2b89f5faba8a6a28082cbd9b59b2aee2005c34e13a3abcd731781b7512eb21ddc4386fc9db4113102c2860100ab086e5e9f4fe3c4f840405292c61abfbf9a1633724ac2d894fccda9533744dc2f05dbe9eaf803b46c1cc65290655bae35521aa18ca5b3cb308710de4872a945dc516ae4cb67ea65fb01afcb4a67acb109192cfd98e1267dba1d7bf5e8a51d8d1aa68727a6c88f2c4fbba52dc90188dba127ed4004a33002ac7cf4e8dc768d3018f44e8d781e97ba86c4c0b2b4db96519af825714446d41ad5db8b461c74e0c427bc337a06969512313290d9d92096365562dfa029d16d5842d932e45d8be5f75ecad1f0b173f9a2d488345f42a866c374718c8c952afbeef543d86359ecbf162616751278cfb6ab5cff88f52bcbec4363d302ebe22195e293d3de1529d155a7b2d71f8dbec2f53ed7b951a2543698ad8dfe704b541c1a22189b417c385582b007ce8173a792ea2aac73de0a1200ff53856c8e681f84af97a7834cf956334d36b741e577a7cc4e334730ab5a7ca19140f8e05ccf71585a90c87b98f43562a5c3d857b13c8f63f1de654579f5a92c9123924529837def302433d7e7cb81f7fee5b9dd06df1d29c5001c7df3f46b229abcdc034f0e147c9df8704c), CertificateDer(0x308206953082047da003020102021100d27fbbc1de359e5216ad6149586099c4300d06092a864886f70d01010c0500308188310b3009060355040613025553311330110603550408130a4e6577204a6572736579311430120603550407130b4a65727365792043697479311e301c060355040a131554686520555345525452555354204e6574776f726b312e302c06035504031325555345525472757374205253412043657274696669636174696f6e20417574686f72697479301e170d3231303332323030303030305a170d3338303131383233353935395a305f310b300906035504061302474231183016060355040a130f5365637469676f204c696d69746564313630340603550403132d5365637469676f205075626c6963205365727665722041757468656e7469636174696f6e20526f6f742052343630820222300d06092a864886f70d01010105000382020f003082020a028202010093bed5365275d80123a01c474249ee63b6b721fdc495d5482b267c145310da79fd2bb72da4d42cfaea32dd49c2b9bd0f483d7b5a9854af9e5d31744f07fc5021dda4cf684f1b12636d25994c2a99f3483061fa817c1ea7084adc3e2b1c1f184c71aa358cadf86ee83b4ad9e59402d6898413aa6dc84f33cc5096379233dc5f88e79f54d948f09843d666fd9f173843c501510bd7e3230f145d5b14e74bbeddf4c8da0337d1d639a121513083b06dd7304e965b91f07024abbf458164430dbd213a2f3ce99e0dcb20b54227ccda6f9bee64309039cd9365812131b52350333722e338edf83130cc45fe62f9d15d32794287df6acc5619404dceaabbf9b5764994f127f891a583e506b3630e80dce0125580a63b66b439872dc8f0d0d114e9e40d4d0ef65d5772c53b1c47569de2d5fb81618ccc4d8090345bb7d71475dcd804489fc0c12888b4e91ccaa7b1f156b77b494c59e52015a8840229fa3894699a49068fcd1f791417120c837ade1fb197eef9977828a4c84492e97d2605a658729b7913d8115faec538623468b286308ef890619e326cf50736cda24c6eec8a36edf2e699154470c37cbc9c39c0b4e16bf783252357d91280e549f0750fef8deb1c9b5428b4213cfc7c0affef7b6b75ff8b1da01905abfaf82b8142e838babbfbaafd3de0f3cadf4e979729edf31856e9a596acbdc39098b2e0f9a2d4a647437c6dcf0203010001a38201203082011c301f0603551d230418301680145379bf5aaa2b4acf5480e1d89bc09df2b20366cb301d0603551d0e041604145673586495f9921ab0122a046279a14015882149300e0603551d0f0101ff040403020186300f0603551d130101ff040530030101ff301d0603551d250416301406082b0601050507030106082b0601050507030230110603551d20040a300830060604551d200030500603551d1f044930473045a043a041863f687474703a2f2f63726c2e7573657274727573742e636f6d2f55534552547275737452534143657274696669636174696f6e417574686f726974792e63726c303506082b0601050507010104293027302506082b060105050730018619687474703a2f2f6f6373702e7573657274727573742e636f6d300d06092a864886f70d01010c050003820201003a6f04896aedb314d1c1434fff4ff7e06c802911810b344ba05feef252956307c1bcb4546bf1092d21adb8b42b60483596c46ec56c82942ad38e37d72ca8567dc795da2b82adb84657510ce3a2a446434c507dc02f4762dd6d847174d17786d82f0a0b5a65c281332802213ef79f23f0b7713d027d35c9b858d46ca2204b08cd8f0e981ed2e0a32fe1779f892d494b728fe0cc55ffa966d3eed12ab8e318a6c34a5998fc4cba8fabaccc886e0d6ba7de119b5ee983d71ab31695358ddf8d6f0de75cfb2c50a92ba0efd1c951070e66cecac835b3b6669e431b0f138f5457ff17c2b7d9b59698cabb381690fde19e10f1dcd718bf3ea84263c607336bb5ba3d139a0a5b9b6af77554a3e6f3e6825bbeeeed2c694764c518bea43ddc6c2b21628e972e9d1e55efdb14c9139f35dce3ac07055995caf2c6dbf45967c2e546ebbec92eff995535f90312ef5b9381e33b79b92fb307adb027f5affa35c602db5201c25e73888580258746f762fe32684b344b6b79c4cf1ea9148cdc9520a7874bb5c4278b714072a5288f81af16fba3e4ba8c90abc53daacf44a311b936faef972b21c144bdcaf719446c3b2e3971e23247fc18483d1f242010908f5be76bd4f38993abc3539ff210d46c72851bd3e6f03a76bdb8f3ff6247dfdaafc6c84f29596519fabee6494f9bbc994546138823006eac0d74bfe7b2a1764679f2a79f17452b49)])
+tls-socket: tls connected owner=vhttps-2@00:03.0 handle=13
+vhttps: request-sent host=api.openweathermap.org dev=0 handle=13 bytes=0 path=/geo/1.0/direct?q=Holzminden&limit=1&appid=9715912a7d8748d65bc3985b4a4274a0
+vhttps: first-data host=api.openweathermap.org dev=0 handle=13 bytes=453
+ui2-weather: geo ok: DE Holzminden lat=51.828835 lon=9.4466591
+dns: cache hit host=api.openweathermap.org dev=0 ip=141.95.99.79
+vhttps: connect host=api.openweathermap.org dev=0 timeout_ms=15000
+tls-socket: net via vnet owner=vhttps-3@00:03.0 conn=3 device=0
+[debug] No cached session for DnsName("api.openweathermap.org")
+[debug] Not resuming any session
+[trace] Sending ClientHello Message {
+    version: TLSv1_0,
+    payload: Handshake {
+        parsed: HandshakeMessagePayload(
+            ClientHello(
+                ClientHelloPayload {
+                    client_version: TLSv1_2,
+                    random: 000e1179d51f15d3c5a5e478f5ad8965608a06812584200ab007b3afd07267eb,
+                    session_id: 0e3fe73cccaf4288a863f50bfbf6cae0d71bb735b635c1a4cdef6e23f57b1bec,
+                    cipher_suites: [
+                        TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+                        TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+                        TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
+                        TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+                        TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+                        TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+                        TLS13_AES_128_GCM_SHA256,
+                        TLS13_AES_256_GCM_SHA384,
+                        TLS13_CHACHA20_POLY1305_SHA256,
+                        TLS_EMPTY_RENEGOTIATION_INFO_SCSV,
+                    ],
+                    compression_methods: [
+                        Null,
+                    ],
+                    extensions: ClientExtensions {
+                        server_name: SingleDnsName(
+                            DnsName(
+                                "api.openweathermap.org",
+                            ),
+                        ),
+                        certificate_status_request: Ocsp(
+                            OcspCertificateStatusRequest {
+                                responder_ids: [],
+                                extensions: ,
+                            },
+                        ),
+                        named_groups: [
+                            X25519,
+                            secp256r1,
+                            secp384r1,
+                        ],
+                        ec_point_formats: SupportedEcPointFormats {
+                            uncompressed: true,
+                        },
+                        signature_schemes: [
+                            ECDSA_NISTP384_SHA384,
+                            ECDSA_NISTP256_SHA256,
+                            ED25519,
+                            RSA_PKCS1_SHA256,
+                            RSA_PKCS1_SHA384,
+                            RSA_PKCS1_SHA512,
+                            RSA_PSS_SHA256,
+                            RSA_PSS_SHA384,
+                            RSA_PSS_SHA512,
+                        ],
+                        protocols: [
+                            ProtocolName(
+                                687474702f312e31,
+                            ),
+                        ],
+                        extended_master_secret_request: (),
+                        supported_versions: SupportedProtocolVersions {
+                            tls13: true,
+                            tls12: true,
+                        },
+                        preshared_key_modes: PskKeyExchangeModes {
+                            psk_dhe: true,
+                            psk: false,
+                        },
+                        key_shares: [
+                            KeyShareEntry {
+                                group: X25519,
+                                payload: ed561e2d040afaa7f785d8480daa88425bfa115b43e2b80666206cbfaecbac72,
+                            },
+                        ],
+                        order_seed: 36226,
+                        contiguous_extensions: [],
+                        ..
+                    },
+                },
+            ),
+        ),
+        encoded: 010000fb0303000e1179d51f15d3c5a5e478f5ad8965608a06812584200ab007b3afd07267eb200e3fe73cccaf4288a863f50bfbf6cae0d71bb735b635c1a4cdef6e23f57b1bec0014c02bc02ccca9c02fc030cca813011302130300ff0100009e002b000504030403030010000b000908687474702f312e310000001b00190000166170692e6f70656e776561746865726d61702e6f7267000d00140012050304030807040105010601080408050806002d00020101000b00020100003300260024001d0020ed561e2d040afaa7f785d8480daa88425bfa115b43e2b80666206cbfaecbac72000500050100000000000a00080006001d0017001800170000,
+    },
+}
+tls-socket: tcp established owner=vhttps-3@00:03.0 handle=14
+[trace] We got ServerHello ServerHelloPayload {
+    legacy_version: TLSv1_2,
+    random: 13ecf3ab1a3a37cf9cb5e49ad4c62ded6a7b50692083dcc1c79a23c5a2e898ef,
+    session_id: 0e3fe73cccaf4288a863f50bfbf6cae0d71bb735b635c1a4cdef6e23f57b1bec,
+    cipher_suite: TLS13_AES_256_GCM_SHA384,
+    compression_method: Null,
+    extensions: ServerExtensions {
+        key_share: KeyShareEntry {
+            group: X25519,
+            payload: e7b758561e68cda0f1864b782939e29d06683dcd481b67677647b9a43856d64d,
+        },
+        selected_version: TLSv1_3,
+        unknown_extensions: {},
+        ..
+    },
+}
+[debug] Using ciphersuite TLS13_AES_256_GCM_SHA384
+[debug] Not resuming
+[trace] EarlyData rejected
+[trace] Dropping CCS
+[debug] TLS1.3 encrypted extensions: ServerExtensions { server_name_ack: (), selected_protocol: SingleProtocolName(ProtocolName(687474702f312e31)), unknown_extensions: {}, .. }
+[debug] ALPN protocol is Some(b"http/1.1")
+[trace] Server cert is CertificateChain([CertificateDer(0x308207363082059ea003020102021100d982f57d97db0b093e5fac0f14a0ee1a300d06092a864886f70d01010b05003060310b300906035504061302474231183016060355040a130f5365637469676f204c696d69746564313730350603550403132e5365637469676f205075626c6963205365727665722041757468656e7469636174696f6e204341204f5620523336301e170d3236303331393030303030305a170d3236313030333233353935395a3061310b3009060355040613024742311830160603550408130f4c6f6e646f6e2c2043697479206f6631193017060355040a13104f70656e77656174686572204c74642e311d301b06035504030c142a2e6f70656e776561746865726d61702e6f726730820122300d06092a864886f70d01010105000382010f003082010a0282010100dcffb0408d508b17d3c0192dc3844e0cb131ba5d9e78acca8847f1ce32b19e1b0baca6c01d7db94f331c12ead13d7c3bfacebbf6059cd95f584750e212ca1767d358437b0cc241e4256b4e05d3ab72a6ed136305f3cda4d9186d4d20129f9201d8296ea4aec47d60b2ad721c4b1d8f74c32244fa7dd8f2cf994ebc69c8ea5a49bb32d9ac8557aa858177e144807a0c113f4235db3298c2253669e8b4c378813708f346285dde98b2a205a6756cdc35177629b17a7dba2848292ac00f331e32a308f8af65d86f42ab124b31691dab5f3038012641daae5727e49def95449cc6fd7136eb82a1c83cf863237d65c37ed683623ee95fa26a962df8645bb8fc07ac410203010001a382036830820364301f0603551d23041830168014e36674bb70688d2c5d4e0ea64a8f9b37229c8292301d0603551d0e0416041491f1f858d40bd9667d7f2b72ad494030353ef208300e0603551d0f0101ff0404030205a0300c0603551d130101ff04023000301d0603551d250416301406082b0601050507030106082b06010505070302304a0603551d20044330413035060c2b06010401b23101020103043025302306082b06010505070201161768747470733a2f2f7365637469676f2e636f6d2f4350533008060667810c01020230540603551d1f044d304b3049a047a0458643687474703a2f2f63726c2e7365637469676f2e636f6d2f5365637469676f5075626c696353657276657241757468656e7469636174696f6e43414f565233362e63726c30818406082b0601050507010104783076304f06082b060105050730028643687474703a2f2f6372742e7365637469676f2e636f6d2f5365637469676f5075626c696353657276657241757468656e7469636174696f6e43414f565233362e637274302306082b060105050730018617687474703a2f2f6f6373702e7365637469676f2e636f6d30330603551d11042c302a82142a2e6f70656e776561746865726d61702e6f726782126f70656e776561746865726d61702e6f726730820185060a2b06010401d6790204020482017504820171016f007500d76d7d10d1a7f577c2c7e95fd700bff982c9335a65e1d0b3017317c0c8c569770000019d070834e300000403004630440220543c9127d3f3dbfa4f4794ee78e6ce5dcb8037354b147872ba9d9bca167cada702206488989d14b1009d9050d26664d98e9acddbe23f9d02e7be8025a80a96ddb9b4007600c8a3c47fc7b3adb9356b013f6a7a126de33a4e43a5c646f997ad3975991dcf9a0000019d0708351800000403004730450221009a30076527a3f5fc7e5dd591d9d864ed1386be2da39bb5f78b348cde1db444d202203c567f60953dd5f4955178e022930881aeade73577e29461ea16228ac8604cc2007e006cfe501943a85ea916bc52d133e4dcc91ef1411c7d258420d173809e1818eb3a0000019d0708371700080000050003a38917040300473045022100ce038b02e2acacc22670ef45197961fa090bee6276376d9d1a82c12dd5d8d14702201df45162d8e325bb2605a3901755d9d9516e65db6b04d07ea4f15b7d97d94570300d06092a864886f70d01010b050003820181008505152ce97f524a011957db3553543e98a590a4f7eb759fabeb5de28f68e28b72558da21bacf1c1e4d485e22875f016aa4585f2ab913d13476672bd89d100b3459a6199c021fe6fe90f2783c44b40ed6b7e1aa375105201feff612af1d6e7516bf99b2ab5fdec296c174c9af0d684bf891480efe5a537c6d077ac80ddf84470e64d37489e7183ad723cb01d7ded4aa47bf4b1f82e32e13d309bdf8da50c6a4b980be8954cbc59440e0aa5f42261aa4e0bd583aeec524b200223b28970c7b4f3ddbe1f8b0ab72b8c83ef9610954b0b4c74422521fc75da0eb67a47798663cfefc1adfe5147e73a83340bf4d54bba0be419af0aedd516b231bcbfbf2258d068be35719199006db1ce33a21b8d154f5007a0a75446fba7cf22c8af721836e03a3a4f36cb7350f567606c8664b6079dcc7b0f015692fc5840017c062061777f63efb0887207fcd37ef01f8ad719bca5175847f658ddbed06b17d18de3f33c749faf4143a09b110ec16b1f22e2f0bed9817cd16ec96cec1df48dce485bbf30b3b7ed), CertificateDer(0x3082064c30820434a00302010202102c1a3c76e943ddddff191b31890aed71300d06092a864886f70d01010c0500305f310b300906035504061302474231183016060355040a130f5365637469676f204c696d69746564313630340603550403132d5365637469676f205075626c6963205365727665722041757468656e7469636174696f6e20526f6f7420523436301e170d3231303332323030303030305a170d3336303332313233353935395a3060310b300906035504061302474231183016060355040a130f5365637469676f204c696d69746564313730350603550403132e5365637469676f205075626c6963205365727665722041757468656e7469636174696f6e204341204f5620523336308201a2300d06092a864886f70d01010105000382018f003082018a0282018100a6432d277474ea3a347dc788d0ce7607b2be4f231e19cbf6050e4055cde3958b7be93bc722efe735edb65bf4495d7f6b5940ffd8613a185e71d15e1bb18ecadc8789f04efe2b31bf4c66e8c927c3bbe179da3a9005b63ada87e162331e8806cb234dbe16ac0778cf2e22b52d717f1bd910b1177e7c4c1d0d1d571c01765c1588199dd642797c63b9c6bba49276d0b2d49d7b605dc8c0135bd8e16bdb45e5b45ba9a4799c8d19d9a94dc16ce58faccb2e8bb44e59a1c8e2f49f4d94d9d17a8c76456572117a40d42859e20a8df99a554884341c1a2b5456c12b285d67211781980d48db41470c6ac08cc978f26161de195213b5be4fbfb8fde7c03934a7de6afe3ee76973424af1129eb1cfca96815912b4eba9ca7cf44f8bd9bd9083a131d61f4bc8221514dc7602f6e18722963ede7002bd4eb87455b8f0a2e278587fb16ede3bbbaf191420ff69ce792340cd1e40a968faee8fa7bd466afb2b8eb06430185ee100a81eed186fe377a24003e1f63b8e0257df0d46c536d777f5912708667b4d0203010001a38201813082017d301f0603551d230418301680145673586495f9921ab0122a046279a14015882149301d0603551d0e04160414e36674bb70688d2c5d4e0ea64a8f9b37229c8292300e0603551d0f0101ff04040302018630120603551d130101ff040830060101ff020100301d0603551d250416301406082b0601050507030106082b06010505070302301b0603551d200414301230060604551d20003008060667810c01020230540603551d1f044d304b3049a047a0458643687474703a2f2f63726c2e7365637469676f2e636f6d2f5365637469676f5075626c696353657276657241757468656e7469636174696f6e526f6f745234362e63726c30818406082b0601050507010104783076304f06082b060105050730028643687474703a2f2f6372742e7365637469676f2e636f6d2f5365637469676f5075626c696353657276657241757468656e7469636174696f6e526f6f745234362e703763302306082b060105050730018617687474703a2f2f6f6373702e7365637469676f2e636f6d300d06092a864886f70d01010c050003820201000595d60c7582ddcb9b6ff7b52359338bc94f1622bf654a07d3db9f9953ab73939b607fd72a45947b148fa919302852abeebf0eb86fa9ed5341f2b89f5faba8a6a28082cbd9b59b2aee2005c34e13a3abcd731781b7512eb21ddc4386fc9db4113102c2860100ab086e5e9f4fe3c4f840405292c61abfbf9a1633724ac2d894fccda9533744dc2f05dbe9eaf803b46c1cc65290655bae35521aa18ca5b3cb308710de4872a945dc516ae4cb67ea65fb01afcb4a67acb109192cfd98e1267dba1d7bf5e8a51d8d1aa68727a6c88f2c4fbba52dc90188dba127ed4004a33002ac7cf4e8dc768d3018f44e8d781e97ba86c4c0b2b4db96519af825714446d41ad5db8b461c74e0c427bc337a06969512313290d9d92096365562dfa029d16d5842d932e45d8be5f75ecad1f0b173f9a2d488345f42a866c374718c8c952afbeef543d86359ecbf162616751278cfb6ab5cff88f52bcbec4363d302ebe22195e293d3de1529d155a7b2d71f8dbec2f53ed7b951a2543698ad8dfe704b541c1a22189b417c385582b007ce8173a792ea2aac73de0a1200ff53856c8e681f84af97a7834cf956334d36b741e577a7cc4e334730ab5a7ca19140f8e05ccf71585a90c87b98f43562a5c3d857b13c8f63f1de654579f5a92c9123924529837def302433d7e7cb81f7fee5b9dd06df1d29c5001c7df3f46b229abcdc034f0e147c9df8704c), CertificateDer(0x308206953082047da003020102021100d27fbbc1de359e5216ad6149586099c4300d06092a864886f70d01010c0500308188310b3009060355040613025553311330110603550408130a4e6577204a6572736579311430120603550407130b4a65727365792043697479311e301c060355040a131554686520555345525452555354204e6574776f726b312e302c06035504031325555345525472757374205253412043657274696669636174696f6e20417574686f72697479301e170d3231303332323030303030305a170d3338303131383233353935395a305f310b300906035504061302474231183016060355040a130f5365637469676f204c696d69746564313630340603550403132d5365637469676f205075626c6963205365727665722041757468656e7469636174696f6e20526f6f742052343630820222300d06092a864886f70d01010105000382020f003082020a028202010093bed5365275d80123a01c474249ee63b6b721fdc495d5482b267c145310da79fd2bb72da4d42cfaea32dd49c2b9bd0f483d7b5a9854af9e5d31744f07fc5021dda4cf684f1b12636d25994c2a99f3483061fa817c1ea7084adc3e2b1c1f184c71aa358cadf86ee83b4ad9e59402d6898413aa6dc84f33cc5096379233dc5f88e79f54d948f09843d666fd9f173843c501510bd7e3230f145d5b14e74bbeddf4c8da0337d1d639a121513083b06dd7304e965b91f07024abbf458164430dbd213a2f3ce99e0dcb20b54227ccda6f9bee64309039cd9365812131b52350333722e338edf83130cc45fe62f9d15d32794287df6acc5619404dceaabbf9b5764994f127f891a583e506b3630e80dce0125580a63b66b439872dc8f0d0d114e9e40d4d0ef65d5772c53b1c47569de2d5fb81618ccc4d8090345bb7d71475dcd804489fc0c12888b4e91ccaa7b1f156b77b494c59e52015a8840229fa3894699a49068fcd1f791417120c837ade1fb197eef9977828a4c84492e97d2605a658729b7913d8115faec538623468b286308ef890619e326cf50736cda24c6eec8a36edf2e699154470c37cbc9c39c0b4e16bf783252357d91280e549f0750fef8deb1c9b5428b4213cfc7c0affef7b6b75ff8b1da01905abfaf82b8142e838babbfbaafd3de0f3cadf4e979729edf31856e9a596acbdc39098b2e0f9a2d4a647437c6dcf0203010001a38201203082011c301f0603551d230418301680145379bf5aaa2b4acf5480e1d89bc09df2b20366cb301d0603551d0e041604145673586495f9921ab0122a046279a14015882149300e0603551d0f0101ff040403020186300f0603551d130101ff040530030101ff301d0603551d250416301406082b0601050507030106082b0601050507030230110603551d20040a300830060604551d200030500603551d1f044930473045a043a041863f687474703a2f2f63726c2e7573657274727573742e636f6d2f55534552547275737452534143657274696669636174696f6e417574686f726974792e63726c303506082b0601050507010104293027302506082b060105050730018619687474703a2f2f6f6373702e7573657274727573742e636f6d300d06092a864886f70d01010c050003820201003a6f04896aedb314d1c1434fff4ff7e06c802911810b344ba05feef252956307c1bcb4546bf1092d21adb8b42b60483596c46ec56c82942ad38e37d72ca8567dc795da2b82adb84657510ce3a2a446434c507dc02f4762dd6d847174d17786d82f0a0b5a65c281332802213ef79f23f0b7713d027d35c9b858d46ca2204b08cd8f0e981ed2e0a32fe1779f892d494b728fe0cc55ffa966d3eed12ab8e318a6c34a5998fc4cba8fabaccc886e0d6ba7de119b5ee983d71ab31695358ddf8d6f0de75cfb2c50a92ba0efd1c951070e66cecac835b3b6669e431b0f138f5457ff17c2b7d9b59698cabb381690fde19e10f1dcd718bf3ea84263c607336bb5ba3d139a0a5b9b6af77554a3e6f3e6825bbeeeed2c694764c518bea43ddc6c2b21628e972e9d1e55efdb14c9139f35dce3ac07055995caf2c6dbf45967c2e546ebbec92eff995535f90312ef5b9381e33b79b92fb307adb027f5affa35c602db5201c25e73888580258746f762fe32684b344b6b79c4cf1ea9148cdc9520a7874bb5c4278b714072a5288f81af16fba3e4ba8c90abc53daacf44a311b936faef972b21c144bdcaf719446c3b2e3971e23247fc18483d1f242010908f5be76bd4f38993abc3539ff210d46c72851bd3e6f03a76bdb8f3ff6247dfdaafc6c84f29596519fabee6494f9bbc994546138823006eac0d74bfe7b2a1764679f2a79f17452b49)])
+tls-socket: tls connected owner=vhttps-3@00:03.0 handle=14
+vhttps: request-sent host=api.openweathermap.org dev=0 handle=14 bytes=0 path=/data/3.0/onecall?lat=51.828835&lon=9.4466591&exclude=current,minutely,hourly,alerts&appid=9715912a7d8748d65bc3985b4a4274a0
+vhttps: first-data host=api.fxfeed.io dev=0 handle=12 bytes=588
+vhttps: first-data host=api.openweathermap.org dev=0 handle=14 bytes=4802
+ui2-weather: 8 daily rows
+3125467factory-ram-probe: binary blob appended bytes=924 phys=0x786000 sha256=d5e34e878ff3ccc663521cb79d4cf4fe5d5616f7dcf524fe539ec247337e1dea
+1673254[globalog] the log has been written

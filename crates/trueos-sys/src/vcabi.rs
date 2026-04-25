@@ -91,6 +91,51 @@ unsafe extern "C" {
     pub fn trueos_cabi_net_fetch_wait(op_id: u32, timeout_ms: u64) -> i32;
     pub fn trueos_cabi_net_fetch_bytes_wait(op_id: u32, timeout_ms: u64) -> i32;
 
+    pub fn trueos_cabi_socket_tcp_open(domain: i32, socket_type: i32, protocol: i32) -> i32;
+    pub fn trueos_cabi_socket_tcp_close(socket_id: u32) -> i32;
+    pub fn trueos_cabi_socket_tcp_set_nonblocking(socket_id: u32, nonblocking: u32) -> i32;
+    pub fn trueos_cabi_socket_tcp_bind_v4(socket_id: u32, addr_be: u32, port_be: u16) -> i32;
+    pub fn trueos_cabi_socket_tcp_bind_v6(socket_id: u32, addr_ptr: *const u8, port_be: u16)
+    -> i32;
+    pub fn trueos_cabi_socket_tcp_connect_v4(
+        socket_id: u32,
+        addr_be: u32,
+        port_be: u16,
+        nonblocking: u32,
+    ) -> i32;
+    pub fn trueos_cabi_socket_tcp_connect_v6(
+        socket_id: u32,
+        addr_ptr: *const u8,
+        port_be: u16,
+        nonblocking: u32,
+    ) -> i32;
+    pub fn trueos_cabi_socket_tcp_poll_connect(socket_id: u32, timeout_ms: u64) -> i32;
+    pub fn trueos_cabi_socket_tcp_send(
+        socket_id: u32,
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> isize;
+    pub fn trueos_cabi_socket_tcp_recv(
+        socket_id: u32,
+        out_ptr: *mut u8,
+        out_cap: usize,
+        flags: i32,
+        nonblocking: u32,
+        timeout_ms: u64,
+    ) -> isize;
+    pub fn trueos_cabi_socket_tcp_shutdown(socket_id: u32, how: u32) -> i32;
+    pub fn trueos_cabi_socket_tcp_take_error(socket_id: u32) -> i32;
+    pub fn trueos_cabi_socket_tcp_peer_v4(
+        socket_id: u32,
+        out_addr_be: *mut u32,
+        out_port_be: *mut u16,
+    ) -> i32;
+    pub fn trueos_cabi_socket_tcp_peer_v6(
+        socket_id: u32,
+        out_addr_ptr: *mut u8,
+        out_port_be: *mut u16,
+    ) -> i32;
+
     pub fn trueos_cabi_input_pop_mouse(
         out_buttons: *mut u8,
         out_dx: *mut i8,
