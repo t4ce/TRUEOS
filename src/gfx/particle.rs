@@ -279,7 +279,7 @@ fn spawn_remote_workers(seq: u64) -> usize {
                 break;
             }
 
-            let Some(spawner) = trueos_qjs::workers::spawner_for_slot(slot as u32) else {
+            let Some(spawner) = crate::workers::spawner_for_slot(slot as u32) else {
                 continue;
             };
 
@@ -294,7 +294,7 @@ fn spawn_remote_workers(seq: u64) -> usize {
     }
 
     if spawned == 0 {
-        if let Some(spawner) = trueos_qjs::workers::pick_background_spawner() {
+        if let Some(spawner) = crate::workers::pick_background_spawner() {
             PARTICLE_JOB_REMOTE_REMAINING.fetch_add(1, Ordering::AcqRel);
             if let Ok(token) = particle_worker_task(seq) {
                 spawner.spawn(token);

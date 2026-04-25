@@ -16,6 +16,14 @@ use std::io;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+#[cfg(target_os = "zkvm")]
+type TrueosBlockingJob = Box<dyn FnOnce() + Send + 'static>;
+
+#[cfg(target_os = "zkvm")]
+unsafe extern "Rust" {
+    fn trueos_tokio_spawn_blocking_job(job: TrueosBlockingJob) -> i32;
+}
+
 pub(crate) struct BlockingPool {
     spawner: Spawner,
     shutdown_rx: shutdown::Receiver,
@@ -418,24 +426,42 @@ impl Spawner {
                 if let Some(shutdown_tx) = shutdown_tx {
                     let id = shared.worker_thread_index;
 
-                    match self.spawn_thread(shutdown_tx, rt, id) {
-                        Ok(handle) => {
-                            self.inner.metrics.inc_num_threads();
-                            shared.worker_thread_index += 1;
-                            shared.worker_threads.insert(id, handle);
+                    #[cfg(target_os = "zkvm")]
+                    {
+                        match self.spawn_zkvm_worker(shutdown_tx, rt, id) {
+                            Ok(()) => {
+                                self.inner.metrics.inc_num_threads();
+                                shared.worker_thread_index += 1;
+                            }
+                            Err(e) => {
+                                // TRUEOS refused the worker and there is no worker to pick up
+                                // the task that has just been pushed to the queue.
+                                return Err(SpawnError::NoThreads(e));
+                            }
                         }
-                        Err(ref e)
-                            if is_temporary_os_thread_error(e)
-                                && self.inner.metrics.num_threads() > 0 =>
-                        {
-                            // OS temporarily failed to spawn a new thread.
-                            // The task will be picked up eventually by a currently
-                            // busy thread.
-                        }
-                        Err(e) => {
-                            // The OS refused to spawn the thread and there is no thread
-                            // to pick up the task that has just been pushed to the queue.
-                            return Err(SpawnError::NoThreads(e));
+                    }
+
+                    #[cfg(not(target_os = "zkvm"))]
+                    {
+                        match self.spawn_thread(shutdown_tx, rt, id) {
+                            Ok(handle) => {
+                                self.inner.metrics.inc_num_threads();
+                                shared.worker_thread_index += 1;
+                                shared.worker_threads.insert(id, handle);
+                            }
+                            Err(ref e)
+                                if is_temporary_os_thread_error(e)
+                                    && self.inner.metrics.num_threads() > 0 =>
+                            {
+                                // OS temporarily failed to spawn a new thread.
+                                // The task will be picked up eventually by a currently
+                                // busy thread.
+                            }
+                            Err(e) => {
+                                // The OS refused to spawn the thread and there is no thread
+                                // to pick up the task that has just been pushed to the queue.
+                                return Err(SpawnError::NoThreads(e));
+                            }
                         }
                     }
                 }
@@ -474,6 +500,31 @@ impl Spawner {
             rt.inner.blocking_spawner().inner.run(id);
             drop(shutdown_tx);
         })
+    }
+
+    #[cfg(target_os = "zkvm")]
+    fn spawn_zkvm_worker(
+        &self,
+        shutdown_tx: shutdown::Sender,
+        rt: &Handle,
+        id: usize,
+    ) -> io::Result<()> {
+        let rt = rt.clone();
+        let job: TrueosBlockingJob = Box::new(move || {
+            let _enter = rt.enter();
+            rt.inner.blocking_spawner().inner.run(id);
+            drop(shutdown_tx);
+        });
+
+        let rc = unsafe { trueos_tokio_spawn_blocking_job(job) };
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::Other,
+                "TRUEOS background worker spawn failed",
+            ))
+        }
     }
 }
 

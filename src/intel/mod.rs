@@ -63,7 +63,7 @@ static INIT: AtomicBool = AtomicBool::new(false);
 static CLAIMED_DEVICE: Mutex<Option<Dev>> = Mutex::new(None);
 
 fn pick_media_boot_demo_spawner() -> Option<(u32, SendSpawner)> {
-    let background_slots = trueos_qjs::workers::background_worker_slots();
+    let background_slots = crate::workers::background_worker_slots();
 
     let pick_slot = |predicate: fn(u32) -> bool| {
         background_slots.iter().copied().find(|slot| {
@@ -81,10 +81,10 @@ fn pick_media_boot_demo_spawner() -> Option<(u32, SendSpawner)> {
                 .copied()
                 .find(|slot| *slot >= MEDIA_BOOT_DEMO_PREFERRED_AP_SLOT)
         })
-        .or_else(|| pick_slot(|slot| slot >= 2))
-        .or_else(|| background_slots.iter().copied().find(|slot| *slot >= 2))?;
+        .or_else(|| pick_slot(|slot| slot > 2))
+        .or_else(|| background_slots.iter().copied().find(|slot| *slot > 2))?;
 
-    trueos_qjs::workers::spawner_for_slot(selected_slot).map(|spawner| (selected_slot, spawner))
+    crate::workers::spawner_for_slot(selected_slot).map(|spawner| (selected_slot, spawner))
 }
 
 fn log_media_demo_task_profile(origin: &str, requested_slot: u32, queued_at_ms: u64) {

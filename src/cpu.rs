@@ -32,7 +32,7 @@ impl CpuProfileRecord {
     const fn new() -> Self {
         Self {
             registered: AtomicU8::new(0),
-            core_kind: AtomicU8::new(trueos_qjs::workers::CORE_KIND_UNKNOWN),
+            core_kind: AtomicU8::new(crate::workers::CORE_KIND_UNKNOWN),
             lapic_id: AtomicU32::new(0),
         }
     }
@@ -107,8 +107,8 @@ impl CpuProfile {
 
     pub fn core_kind_name(self) -> &'static str {
         match self.core_kind {
-            trueos_qjs::workers::CORE_KIND_PERF => "perf",
-            trueos_qjs::workers::CORE_KIND_EFF => "eff",
+            crate::workers::CORE_KIND_PERF => "perf",
+            crate::workers::CORE_KIND_EFF => "eff",
             _ => "unknown",
         }
     }
@@ -118,15 +118,15 @@ impl CpuProfile {
     }
 
     pub const fn is_perf(self) -> bool {
-        self.core_kind == trueos_qjs::workers::CORE_KIND_PERF
+        self.core_kind == crate::workers::CORE_KIND_PERF
     }
 
     pub const fn is_eff(self) -> bool {
-        self.core_kind == trueos_qjs::workers::CORE_KIND_EFF
+        self.core_kind == crate::workers::CORE_KIND_EFF
     }
 
     pub fn register_worker_spawner(self, spawner: Spawner) {
-        trueos_qjs::workers::register_core_spawner(self.slot, self.core_kind, spawner);
+        crate::workers::register_core_spawner(self.slot, self.core_kind, spawner);
     }
 }
 
@@ -166,6 +166,9 @@ pub fn register_current_profile() -> Option<CpuProfile> {
 pub fn register_current_worker_spawner(spawner: Spawner) -> Option<CpuProfile> {
     let profile = register_current_profile()?;
     profile.register_worker_spawner(spawner);
+    if profile.slot() > 2 {
+        crate::r::readiness::set(crate::r::readiness::BACKGROUND_AP_WORKER_READY);
+    }
     Some(profile)
 }
 
@@ -260,20 +263,20 @@ fn detect_current_core_kind() -> u8 {
     let r0 = __cpuid(0);
     let max = r0.eax;
     if max < 0x1A {
-        return trueos_qjs::workers::CORE_KIND_UNKNOWN;
+        return crate::workers::CORE_KIND_UNKNOWN;
     }
     let r = __cpuid(0x1A);
     let core_type = (r.eax >> 24) as u8;
     match core_type {
-        0x40 => trueos_qjs::workers::CORE_KIND_PERF,
-        0x20 => trueos_qjs::workers::CORE_KIND_EFF,
-        _ => trueos_qjs::workers::CORE_KIND_UNKNOWN,
+        0x40 => crate::workers::CORE_KIND_PERF,
+        0x20 => crate::workers::CORE_KIND_EFF,
+        _ => crate::workers::CORE_KIND_UNKNOWN,
     }
 }
 
 #[cfg(not(target_arch = "x86_64"))]
 fn detect_current_core_kind() -> u8 {
-    trueos_qjs::workers::CORE_KIND_UNKNOWN
+    crate::workers::CORE_KIND_UNKNOWN
 }
 
 fn profile_record(slot: usize) -> Option<&'static CpuProfileRecord> {

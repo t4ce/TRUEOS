@@ -262,7 +262,7 @@ fn spawn_on_ap1<S: Send>(
     let Some(profile) = crate::cpu::CpuProfile::for_slot(1) else {
         return SpawnAttempt::Skipped;
     };
-    let Some(ap1_spawner) = trueos_qjs::workers::spawner_for_slot(profile.slot()) else {
+    let Some(ap1_spawner) = crate::workers::spawner_for_slot(profile.slot()) else {
         return SpawnAttempt::Skipped;
     };
     match task(ap1_spawner) {
@@ -279,7 +279,7 @@ fn spawn_on_worker<S: Send>(
     spawner: Spawner,
     task: impl FnOnce(SendSpawner) -> Result<SpawnToken<S>, SpawnError>,
 ) -> SpawnAttempt {
-    let Some(worker_spawner) = trueos_qjs::workers::pick_background_spawner() else {
+    let Some(worker_spawner) = crate::workers::pick_background_spawner() else {
         let _ = spawner;
         return SpawnAttempt::Skipped;
     };
@@ -610,7 +610,7 @@ pub fn spawn_truesurfer_tab_with_html() -> Option<u32> {
     let mut factory = TRUESURFER_FACTORY.lock();
     let browser_instance_id = factory.next_instance_id()?;
 
-    match trueos_qjs::workers::pick_background_spawner() {
+    match crate::workers::pick_background_spawner() {
         Some(worker_spawner) => {
             match trueos_qjs::browser_task::truesurfer_task(browser_instance_id) {
                 Ok(token) => {
