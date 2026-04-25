@@ -148,50 +148,50 @@ impl<'a> AlignedWriter<'a> {
     }
 
     fn clear_screen_home(&self) {
-        self.io.write_str("\x1b[2J\x1b[H");
+        self.io.raw_write_str("\x1b[2J\x1b[H");
     }
 
     fn set_scroll_region(&self, top: usize) {
         // Reserve header rows by scrolling only in [top..bottom].
-        self.io.write_fmt(format_args!("\x1b[{};999r", top.max(1)));
+        self.io.raw_write_fmt(format_args!("\x1b[{};999r", top.max(1)));
     }
 
     fn reset_scroll_region(&self) {
-        self.io.write_str("\x1b[r");
+        self.io.raw_write_str("\x1b[r");
     }
 
     fn move_to(&self, row: usize, col: usize) {
         self.io
-            .write_fmt(format_args!("\x1b[{};{}H", row.max(1), col.max(1)));
+            .raw_write_fmt(format_args!("\x1b[{};{}H", row.max(1), col.max(1)));
     }
 
     fn clear_line(&self) {
-        self.io.write_str("\x1b[2K");
+        self.io.raw_write_str("\x1b[2K");
     }
 
     fn transcript_line_at(&self, row: usize, source: LineSource, s: &str) {
         self.move_to(row, 1);
         self.clear_line();
-        self.io.write_str(ecma48::RESET);
+        self.io.raw_write_str(ecma48::RESET);
 
         match source {
             LineSource::User | LineSource::Native => {
-                self.io.write_str(s);
+                self.io.raw_write_str(s);
             }
             LineSource::System => {
                 let width = ecma48::visible_width(s);
                 let col = self.line_width().saturating_sub(width).saturating_add(1);
                 self.move_to(row, col);
                 self.io
-                    .write_fmt(format_args!("{}", ecma48::style(s).fg(SYSTEM_TEXT_RGB)));
+                    .raw_write_fmt(format_args!("{}", ecma48::style(s).fg(SYSTEM_TEXT_RGB)));
             }
         }
     }
 
     fn render_transcript(&self, transcript: &VecDeque<TranscriptEntry>) {
-        self.io.write_str(ecma48::SAVE_CURSOR);
+        self.io.raw_write_str(ecma48::SAVE_CURSOR);
         self.move_to(SCROLL_TOP_ROW, 1);
-        self.io.write_str("\x1b[J");
+        self.io.raw_write_str("\x1b[J");
 
         if transcript_prefers_chronological_layout(transcript) {
             for (idx, entry) in transcript.iter().enumerate() {
@@ -204,21 +204,21 @@ impl<'a> AlignedWriter<'a> {
                 self.transcript_line_at(row, entry.source, entry.text.as_str());
             }
         }
-        self.io.write_str(ecma48::RESTORE_CURSOR);
+        self.io.raw_write_str(ecma48::RESTORE_CURSOR);
     }
 
     fn push_transcript_line(&self, entry: &TranscriptEntry) {
-        self.io.write_str(ecma48::SAVE_CURSOR);
+        self.io.raw_write_str(ecma48::SAVE_CURSOR);
         self.move_to(SCROLL_TOP_ROW, 1);
-        self.io.write_str("\x1b[L");
+        self.io.raw_write_str("\x1b[L");
         self.transcript_line_at(SCROLL_TOP_ROW, entry.source, entry.text.as_str());
-        self.io.write_str(ecma48::RESTORE_CURSOR);
+        self.io.raw_write_str(ecma48::RESTORE_CURSOR);
     }
 
     fn banner(&self, output_mask: u8, mode: ShellMode2, time_text: &str) {
         self.move_to(BANNER_ROW, 1);
         self.clear_line();
-        self.io.write_str("TRUE OS ");
+        self.io.raw_write_str("TRUE OS ");
         let active_slot = matrix::active_slot_id(output_mask);
         let mut slot_label = AllocString::from("§");
         if !active_slot.is_empty() {
@@ -230,7 +230,7 @@ impl<'a> AlignedWriter<'a> {
                 .bold()
                 .fg(STATUS_SELECTED_RGB)
         );
-        self.io.write_str(styled.as_str());
+        self.io.raw_write_str(styled.as_str());
         self.center_text(BANNER_ROW, self.main_mode_text(mode).as_str());
         self.right_text(BANNER_ROW, time_text);
     }
@@ -263,7 +263,7 @@ impl<'a> AlignedWriter<'a> {
         } else if mode == ShellMode2::Irc {
             self.irc_status(irc_mode);
         }
-        self.io.write_str(ecma48::RESET);
+        self.io.raw_write_str(ecma48::RESET);
     }
 
     fn main_mode_text(&self, mode: ShellMode2) -> AllocString {
@@ -434,30 +434,30 @@ impl<'a> AlignedWriter<'a> {
     fn prompt(&self, _output_mask: u8) {
         self.move_to(PROMPT_ROW, 1);
         self.clear_line();
-        self.io.write_str("\x1b[0m");
-        self.io.write_str(ecma48::SHOW_CURSOR);
-        self.io.write_str(ecma48::CURSOR_COLOR_GRAY);
-        self.io.write_str(ecma48::CURSOR_BLINKING_BLOCK);
+        self.io.raw_write_str("\x1b[0m");
+        self.io.raw_write_str(ecma48::SHOW_CURSOR);
+        self.io.raw_write_str(ecma48::CURSOR_COLOR_GRAY);
+        self.io.raw_write_str(ecma48::CURSOR_BLINKING_BLOCK);
     }
 
     fn user_backspace(&self) {
-        self.io.write_str("\x08 \x08");
+        self.io.raw_write_str("\x08 \x08");
     }
 
     fn user_char(&self, ch: char) {
-        self.io.write_char(ch);
+        self.io.raw_write_char(ch);
     }
 
     fn left_text(&self, row: usize, text: &str) {
         self.move_to(row, 1);
-        self.io.write_str(text);
+        self.io.raw_write_str(text);
     }
 
     fn right_text(&self, row: usize, text: &str) {
         let width = ecma48::visible_width(text);
         let col = self.line_width().saturating_sub(width).saturating_add(1);
         self.move_to(row, col);
-        self.io.write_str(text);
+        self.io.raw_write_str(text);
     }
 
     fn center_text(&self, row: usize, text: &str) {
@@ -469,7 +469,7 @@ impl<'a> AlignedWriter<'a> {
             .unwrap_or(0)
             .saturating_add(1);
         self.move_to(row, col);
-        self.io.write_str(text);
+        self.io.raw_write_str(text);
     }
 }
 
@@ -783,7 +783,7 @@ fn show_status_row_message(out: &AlignedWriter<'_>, text: &str) {
     out.move_to(STATUS_ROW, 1);
     out.clear_line();
     out.center_text(STATUS_ROW, text);
-    out.io.write_str(ecma48::RESET);
+    out.io.raw_write_str(ecma48::RESET);
 }
 
 async fn run_plain_section_status(
@@ -980,7 +980,7 @@ fn redraw_status_preserving_cursor(
     cmd_status_text: Option<&str>,
     running_go2_phase: usize,
 ) {
-    out.io.write_str(ecma48::SAVE_CURSOR);
+    out.io.raw_write_str(ecma48::SAVE_CURSOR);
     out.mode_status(
         output_mask,
         mode,
@@ -991,7 +991,7 @@ fn redraw_status_preserving_cursor(
         cmd_status_text,
         running_go2_phase,
     );
-    out.io.write_str(ecma48::RESTORE_CURSOR);
+    out.io.raw_write_str(ecma48::RESTORE_CURSOR);
 }
 
 fn apply_matrix_operator_and_refresh(

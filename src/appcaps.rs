@@ -8,6 +8,10 @@ pub mod boot {
     pub const BSP_BOOT_STACK_BYTES: usize = 8 * 1024 * 1024;
 }
 
+pub mod probes {
+    pub const TOKIO_BOOT_PROBE: bool = false;
+}
+
 pub mod stackkeeper {
     pub const TOKIO_LANE_COUNT: usize = 16;
     pub const TOKIO_LANE_SCRATCH_BYTES: usize = 16 * 1024;

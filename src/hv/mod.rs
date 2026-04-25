@@ -29,7 +29,7 @@ use x86_64::registers::model_specific::Msr;
 use x86_64::registers::rflags;
 use x86_64::registers::segmentation::{CS, DS, ES, FS, GS, SS, Segment};
 
-use crate::shell2::{MatrixTarget, ShellBackend2, ShellIo2};
+use crate::shell2::{MatrixTarget, ShellBackend2};
 
 use guest_work::{VmLaneProfile, pick_vm_hull_lane};
 use memory::*;
@@ -144,6 +144,14 @@ pub struct HvStatus {
     pub vm1_marker_seen: bool,
     pub guest_module_present: bool,
     pub stored_vm_count: usize,
+    pub vm_id_limit: usize,
+    pub running_count: usize,
+    pub starting_count: usize,
+    pub active_vm_ids: [Option<u8>; TRUEOS_VM_ID_LIMIT],
+    pub vm_shared_heap_total_bytes: usize,
+    pub vm_shared_heap_free_bytes: usize,
+    pub vm_shared_stack_bytes: usize,
+    pub vm_shared_vmx_bytes: usize,
 }
 
 #[inline]
@@ -165,27 +173,44 @@ pub fn first_free_vm_id() -> Option<u8> {
     None
 }
 
+fn vm_activity_snapshot() -> (usize, usize, [Option<u8>; TRUEOS_VM_ID_LIMIT]) {
+    let mut active_vm_ids = [None; TRUEOS_VM_ID_LIMIT];
+    let mut running_count = 0usize;
+    let mut starting_count = 0usize;
+
+    for (idx, slot) in trueos_vm_ids.iter().enumerate() {
+        let running = slot.running.load(Ordering::Acquire);
+        let starting = slot.starting.load(Ordering::Acquire);
+        if running || starting {
+            active_vm_ids[idx] = Some(idx as u8);
+        }
+        if running {
+            running_count = running_count.saturating_add(1);
+        }
+        if starting {
+            starting_count = starting_count.saturating_add(1);
+        }
+    }
+
+    (running_count, starting_count, active_vm_ids)
+}
+
 pub(crate) fn current_vm_id() -> Option<u8> {
-    let cpu = crate::cpu::CpuProfile::current()?;
-    let slot = cpu.slot() as usize;
+    let slot = crate::percpu::current_slot_via_cpuid();
     let tagged = CURRENT_VM_ID_BY_CPU.get(slot)?.load(Ordering::Acquire);
     tagged.checked_sub(1)
 }
 
 fn set_current_vm_id(vm_id: u8) {
-    let Some(cpu) = crate::cpu::CpuProfile::current() else {
-        return;
-    };
-    if let Some(slot) = CURRENT_VM_ID_BY_CPU.get(cpu.slot() as usize) {
+    let slot_idx = crate::percpu::current_slot_via_cpuid();
+    if let Some(slot) = CURRENT_VM_ID_BY_CPU.get(slot_idx) {
         slot.store(vm_id.saturating_add(1), Ordering::Release);
     }
 }
 
 fn clear_current_vm_id() {
-    let Some(cpu) = crate::cpu::CpuProfile::current() else {
-        return;
-    };
-    if let Some(slot) = CURRENT_VM_ID_BY_CPU.get(cpu.slot() as usize) {
+    let slot_idx = crate::percpu::current_slot_via_cpuid();
+    if let Some(slot) = CURRENT_VM_ID_BY_CPU.get(slot_idx) {
         slot.store(0, Ordering::Release);
     }
 }
@@ -246,6 +271,8 @@ fn hvlog_console_enabled(line: &str) -> bool {
 pub fn status() -> HvStatus {
     let (vendor_intel, has_msr, has_vmx, fc_locked, fc_vmx_outside_smx) = vmx_caps();
     let vm1 = &trueos_vm_ids[VM1_ID as usize];
+    let (running_count, starting_count, active_vm_ids) = vm_activity_snapshot();
+    let vm_heap = crate::allocators::hv_guest_heap_stats();
     HvStatus {
         vendor_intel,
         has_msr,
@@ -257,6 +284,14 @@ pub fn status() -> HvStatus {
         vm1_marker_seen: vm1.marker_seen.load(Ordering::Acquire),
         guest_module_present: crate::limine::guest_kernel_bytes().is_some(),
         stored_vm_count: crate::hv::store::committed_vm_count(),
+        vm_id_limit: TRUEOS_VM_ID_LIMIT,
+        running_count,
+        starting_count,
+        active_vm_ids,
+        vm_shared_heap_total_bytes: vm_heap.usable_total,
+        vm_shared_heap_free_bytes: vm_heap.free_bytes,
+        vm_shared_stack_bytes: memory::active_guest_stack_bytes(),
+        vm_shared_vmx_bytes: core::mem::size_of::<VmxPage>() * 2,
     }
 }
 
@@ -411,32 +446,6 @@ pub fn stop(vm_id: u8) -> Result<bool, StopError> {
     } else {
         hvlogf(format_args!("hv: vm{} lifecycle: stop ignored (not running)", vm_id));
         Ok(false)
-    }
-}
-
-pub fn write_logs(io: &dyn ShellIo2) {
-    let mut lines: [Option<HvLogEntry>; HV_LOG_CAP] = core::array::from_fn(|_| None);
-    let mut n = 0usize;
-    {
-        let ring = HV_LOG_RING.lock();
-        for e in ring.iter() {
-            if n >= HV_LOG_CAP {
-                break;
-            }
-            lines[n] = Some(e.clone());
-            n += 1;
-        }
-    }
-
-    if n == 0 {
-        io.write_str("hv: log empty\r\n");
-        return;
-    }
-
-    for i in 0..n {
-        if let Some(e) = &lines[i] {
-            io.write_fmt(format_args!("hvlog[{}]: {}\r\n", e.seq, e.msg.as_str()));
-        }
     }
 }
 

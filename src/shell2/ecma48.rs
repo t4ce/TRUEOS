@@ -235,12 +235,12 @@ pub struct CursorGuard<'a> {
 
 impl Drop for CursorGuard<'_> {
     fn drop(&mut self) {
-        self.io.write_str(SHOW_CURSOR);
+        self.io.raw_write_str(SHOW_CURSOR);
     }
 }
 
 pub fn hide_cursor_guard(io: &dyn super::ShellBackend2) -> CursorGuard<'_> {
-    io.write_str(HIDE_CURSOR);
+    io.raw_write_str(HIDE_CURSOR);
     CursorGuard { io }
 }
 

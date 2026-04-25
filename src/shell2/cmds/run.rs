@@ -41,7 +41,7 @@ struct ArchiveEntry {
 }
 
 fn print_usage(io: &'static dyn ShellBackend2) {
-    print_shell_line(io, "run: usage `run` or `run <id> [args...]`");
+    print_shell_line(io, "hv run: usage `hv run` or `hv run <id> [args...]`");
 }
 
 fn embedded_archive_name(cmdline: &[u8]) -> Option<String> {
@@ -142,26 +142,26 @@ async fn execute_request(spawner: &Spawner, request: AppVmLaunchRequest) {
         print_matrix_target_line(&target, line);
     };
 
-    log(alloc::format!("run: worker start module={}", request.archive.as_str()).as_str());
-    log(alloc::format!("run: module bytes={}", request.module_bytes.len()).as_str());
+    log(alloc::format!("hv run: worker start module={}", request.archive.as_str()).as_str());
+    log(alloc::format!("hv run: module bytes={}", request.module_bytes.len()).as_str());
 
     let module = match blueprint::parse_blueprint(request.module_bytes.as_slice()) {
         Ok(module) => module,
         Err(err) => {
-            log(alloc::format!("run: {}", err).as_str());
+            log(alloc::format!("hv run: {}", err).as_str());
             return;
         }
     };
     let unpacked = match blueprint::unpack_blueprint(&module) {
         Ok(bytes) => bytes,
         Err(err) => {
-            log(alloc::format!("run: {}", err).as_str());
+            log(alloc::format!("hv run: {}", err).as_str());
             return;
         }
     };
 
     log(alloc::format!(
-        "run: module={} version={} flags={} entry_hint=sec:{}+0x{:x}",
+        "hv run: module={} version={} flags={} entry_hint=sec:{}+0x{:x}",
         request.archive,
         module.version,
         module.flags,
@@ -170,44 +170,44 @@ async fn execute_request(spawner: &Spawner, request: AppVmLaunchRequest) {
     )
     .as_str());
     log(alloc::format!(
-        "run: payload compressed={} unpacked={} header_raw={}",
+        "hv run: payload compressed={} unpacked={} header_raw={}",
         module.payload.len(),
         unpacked.len(),
         module.raw_payload_len
     )
     .as_str());
     if unpacked.len() != module.raw_payload_len {
-        log("run: warning: unpacked payload size does not match header_raw");
+        log("hv run: warning: unpacked payload size does not match header_raw");
     }
     if unpacked.starts_with(b"\x7fELF") {
         if let Some(kind) = blueprint::elf_type_name(unpacked.as_slice()) {
-            log(alloc::format!("run: unpacked payload looks like ELF type={}", kind).as_str());
+            log(alloc::format!("hv run: unpacked payload looks like ELF type={}", kind).as_str());
         } else {
-            log("run: unpacked payload looks like ELF");
+            log("hv run: unpacked payload looks like ELF");
         }
     } else {
-        log("run: unpacked payload does not look like ELF");
+        log("hv run: unpacked payload does not look like ELF");
     }
     if unpacked.starts_with(b"\x7fELF") {
         match blueprint::elf_imports(unpacked.as_slice()) {
             Ok(imports) => {
                 if imports.is_empty() {
-                    log("run: ELF imports=0");
+                    log("hv run: ELF imports=0");
                 } else {
                     let resolved = imports
                         .iter()
                         .filter(|import| import.resolved_addr.is_some())
                         .count();
-                    log(alloc::format!("run: ELF imports={} resolved={}", imports.len(), resolved)
+                    log(alloc::format!("hv run: ELF imports={} resolved={}", imports.len(), resolved)
                         .as_str());
                     for import in imports.iter() {
                         match import.resolved_addr {
                             Some(addr) => {
-                                log(alloc::format!("run: import {} -> 0x{:x}", import.name, addr)
+                                log(alloc::format!("hv run: import {} -> 0x{:x}", import.name, addr)
                                     .as_str())
                             }
                             None => {
-                                log(alloc::format!("run: import {} -> unresolved", import.name)
+                                log(alloc::format!("hv run: import {} -> unresolved", import.name)
                                     .as_str())
                             }
                         }
@@ -215,7 +215,7 @@ async fn execute_request(spawner: &Spawner, request: AppVmLaunchRequest) {
                 }
             }
             Err(err) => {
-                log(alloc::format!("run: ELF import scan failed: {}", err).as_str());
+                log(alloc::format!("hv run: ELF import scan failed: {}", err).as_str());
             }
         }
     }
@@ -223,18 +223,18 @@ async fn execute_request(spawner: &Spawner, request: AppVmLaunchRequest) {
     if !unpacked.starts_with(b"\x7fELF")
         || !matches!(blueprint::elf_type_name(unpacked.as_slice()), Some("REL"))
     {
-        log("run: only ELF REL blueprints are supported for app-vm launch");
+        log("hv run: only ELF REL blueprints are supported for app-vm launch");
         return;
     }
 
     if !crate::r::readiness::is_set(crate::r::readiness::APP_VM_READY) {
-        log("run: waiting for app_vm_ready");
+        log("hv run: waiting for app_vm_ready");
         crate::r::readiness::wait_for(crate::r::readiness::APP_VM_READY).await;
-        log("run: app_vm_ready=1");
+        log("hv run: app_vm_ready=1");
     }
 
     let Some(vm_id) = crate::hv::first_free_vm_id() else {
-        log("run: no free app-vm ids");
+        log("hv run: no free app-vm ids");
         return;
     };
 
@@ -244,16 +244,16 @@ async fn execute_request(spawner: &Spawner, request: AppVmLaunchRequest) {
         app_args: request.app_args.clone(),
         console_target: Some(target.clone()),
     }) {
-        log(alloc::format!("run: app-vm stage failed: {:?}", err).as_str());
+        log(alloc::format!("hv run: app-vm stage failed: {:?}", err).as_str());
         return;
     }
 
     match crate::hv::start(vm_id, spawner, &UART1_COM1_BACKEND, None) {
         Ok(()) => {
-            log(alloc::format!("run: app-vm{} launch requested", vm_id).as_str());
+            log(alloc::format!("hv run: app-vm{} launch requested", vm_id).as_str());
         }
         Err(err) => {
-            log(alloc::format!("run: app-vm start failed: {:?}", err).as_str());
+            log(alloc::format!("hv run: app-vm start failed: {:?}", err).as_str());
             let _ = crate::hv::take_blueprint_launch(vm_id);
             return;
         }
@@ -281,7 +281,7 @@ pub(crate) fn enqueue_blueprint_bytes(
     module_bytes: Vec<u8>,
     app_args: Vec<String>,
 ) {
-    print_matrix_target_line(&target, alloc::format!("run: queued {}", archive.as_str()).as_str());
+    print_matrix_target_line(&target, alloc::format!("hv run: queued {}", archive.as_str()).as_str());
     enqueue_request(AppVmLaunchRequest {
         archive,
         module_bytes,
@@ -295,7 +295,7 @@ pub(crate) fn submit_run(io: &'static dyn ShellBackend2, archive: String, app_ar
     let module_bytes = match crate::r::io::kfs::read_file(archive.as_str()) {
         Ok(bytes) => bytes,
         Err(_) => {
-            print_shell_line(io, "run: failed to read selected module from TRUEOSFS");
+            print_shell_line(io, "hv run: failed to read selected module from TRUEOSFS");
             return;
         }
     };
@@ -316,7 +316,7 @@ fn submit_archive_entry(
             let target = matrix_target_for_backend(io);
             let Some(module_bytes) = crate::limine::module_bytes_by_string(cmdline.as_bytes())
             else {
-                print_shell_line(io, "run: failed to read selected embedded module");
+                print_shell_line(io, "hv run: failed to read selected embedded module");
                 return;
             };
             enqueue_blueprint_bytes(target, entry.archive.clone(), module_bytes.to_vec(), app_args);
@@ -333,14 +333,14 @@ pub(crate) fn try_parse(
     let archives = match archive_entries() {
         Ok(archives) => archives,
         Err(err) => {
-            print_shell_line(io, alloc::format!("run: {}", err).as_str());
+            print_shell_line(io, alloc::format!("hv run: {}", err).as_str());
             return ParseOutcome::Handled;
         }
     };
 
     let Some(id_text) = args.next() else {
         if archives.is_empty() {
-            print_shell_line(io, "run: no .bp modules available");
+            print_shell_line(io, "hv run: no .bp modules available");
             return ParseOutcome::Handled;
         }
         print_archive_table(io, archives.as_slice());
@@ -356,7 +356,7 @@ pub(crate) fn try_parse(
     };
 
     let Some(archive) = archives.get(archive_index) else {
-        print_shell_line(io, "run: unknown archive id");
+        print_shell_line(io, "hv run: unknown archive id");
         print_archive_table(io, archives.as_slice());
         return ParseOutcome::Handled;
     };

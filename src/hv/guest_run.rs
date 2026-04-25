@@ -28,11 +28,11 @@ pub(crate) struct VmcallShellBackend;
 pub(crate) static VMCALL_SHELL: VmcallShellBackend = VmcallShellBackend;
 
 impl ShellIo2 for VmcallShellBackend {
-    fn write_str(&self, s: &str) {
+    fn raw_write_str(&self, s: &str) {
         vmcall::net_tcp_write(s.as_bytes());
     }
 
-    fn write_fmt(&self, args: core::fmt::Arguments<'_>) {
+    fn raw_write_fmt(&self, args: core::fmt::Arguments<'_>) {
         struct W;
         impl core::fmt::Write for W {
             fn write_str(&mut self, s: &str) -> core::fmt::Result {
@@ -43,13 +43,13 @@ impl ShellIo2 for VmcallShellBackend {
         let _ = core::fmt::Write::write_fmt(&mut W, args);
     }
 
-    fn write_char(&self, ch: char) {
+    fn raw_write_char(&self, ch: char) {
         let mut buf = [0u8; 4];
         let s = ch.encode_utf8(&mut buf);
         vmcall::net_tcp_write(s.as_bytes());
     }
 
-    fn write_byte(&self, b: u8) {
+    fn raw_write_byte(&self, b: u8) {
         vmcall::net_tcp_write(&[b]);
     }
 }

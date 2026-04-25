@@ -732,11 +732,11 @@ pub(crate) fn queue_ui2_keyboard_event(window_id: u32, event: TrueosKeyboardOutp
 }
 
 impl ShellIo2 for Ui2ShellBackend {
-    fn write_str(&self, s: &str) {
+    fn raw_write_str(&self, s: &str) {
         push_bytes(s.as_bytes());
     }
 
-    fn write_fmt(&self, args: core::fmt::Arguments<'_>) {
+    fn raw_write_fmt(&self, args: core::fmt::Arguments<'_>) {
         struct Writer;
         impl Write for Writer {
             fn write_str(&mut self, s: &str) -> core::fmt::Result {
@@ -747,13 +747,13 @@ impl ShellIo2 for Ui2ShellBackend {
         let _ = Writer.write_fmt(args);
     }
 
-    fn write_char(&self, ch: char) {
+    fn raw_write_char(&self, ch: char) {
         let mut utf8 = [0u8; 4];
         let text = ch.encode_utf8(&mut utf8);
         push_bytes(text.as_bytes());
     }
 
-    fn write_byte(&self, b: u8) {
+    fn raw_write_byte(&self, b: u8) {
         push_bytes(&[b]);
     }
 }

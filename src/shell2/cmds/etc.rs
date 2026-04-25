@@ -71,16 +71,16 @@ fn start_looping_chars(
         let mut idx = 0usize;
         loop {
             if mask != 0 && (GO_ACTIVE_MASK.load(Ordering::Acquire) & mask) == 0 {
-                io.write_str("\x08 \x08");
-                io.write_str(ecma48::RESET);
-                io.write_str(ecma48::SHOW_CURSOR);
-                io.write_str(ecma48::CURSOR_STEADY_BLOCK);
+                io.raw_write_str("\x08 \x08");
+                io.raw_write_str(ecma48::RESET);
+                io.raw_write_str(ecma48::SHOW_CURSOR);
+                io.raw_write_str(ecma48::CURSOR_STEADY_BLOCK);
                 let stopped = alloc::format!("etc: {} stopped", label);
                 print_shell_line(io, stopped.as_str());
                 break;
             }
-            io.write_char(chars[idx]);
-            io.write_str("\x08");
+            io.raw_write_char(chars[idx]);
+            io.raw_write_str("\x08");
             idx = (idx + 1) % chars.len();
             Timer::after(EmbassyDuration::from_millis(50)).await;
         }
@@ -88,7 +88,7 @@ fn start_looping_chars(
 }
 
 fn cmd_insane(io: &'static dyn ShellBackend2) {
-    io.write_str("insane: iterating U+0000..=U+087FFF (Ctrl-C to abort)\r\n");
+    io.raw_write_str("insane: iterating U+0000..=U+087FFF (Ctrl-C to abort)\r\n");
 
     let mut col = 0usize;
     for cp in 0u32..=INSANE_MAX_CP {
@@ -96,7 +96,7 @@ fn cmd_insane(io: &'static dyn ShellBackend2) {
             && let Some(b) = io.read_byte()
             && b == 0x03
         {
-            io.write_str("\r\ninsane: aborted\r\n");
+            io.raw_write_str("\r\ninsane: aborted\r\n");
             return;
         }
 
@@ -106,18 +106,18 @@ fn cmd_insane(io: &'static dyn ShellBackend2) {
             None => '\u{FFFD}',
         };
 
-        io.write_char(ch);
+        io.raw_write_char(ch);
         col += 1;
         if col >= DEFAULT_ECMA_COLS {
-            io.write_str("\r\n");
+            io.raw_write_str("\r\n");
             col = 0;
         }
     }
 
     if col != 0 {
-        io.write_str("\r\n");
+        io.raw_write_str("\r\n");
     }
-    io.write_str("insane: done\r\n");
+    io.raw_write_str("insane: done\r\n");
 }
 
 fn print_usage(io: &'static dyn ShellBackend2) {

@@ -1,21 +1,17 @@
+use alloc::string::String;
+use core::fmt::Write;
 use core::str::SplitWhitespace;
 
 use embassy_executor::Spawner;
 
-use super::super::ShellBackend2;
+use super::super::{ShellBackend2, print_shell_line};
 use super::tlb_helper::print_table;
 use crate::shell2::shell2_cmd::ParseOutcome;
 
 const HV_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
 const HV_MENU_ROWS: [[&str; 2]; 5] = [
-    [
-        "full [id]",
-        "Start vm[id] with full TRUEOS guest image mapping",
-    ],
-    [
-        "start [id] [stack_mb]",
-        "Start vm[id] as minimal trueos-vm hull guest",
-    ],
+    ["status", "Show VM slot and shared VM resource status"],
+    ["run [id] [args...]", "Launch a blueprint in an app VM"],
     ["pause [id]", "Alias for stop request on vm[id]"],
     ["stop [id]", "Request vm[id] stop"],
     [
@@ -32,46 +28,117 @@ fn print_usage(io: &'static dyn ShellBackend2) {
     print_table(io, &HV_MENU_HEADERS, &HV_MENU_ROWS);
 }
 
+fn line(io: &'static dyn ShellBackend2, text: &str) {
+    print_shell_line(io, text);
+}
+
 fn parse_optional_vm_id(io: &'static dyn ShellBackend2, raw: Option<&str>) -> Option<u8> {
     let Some(token) = raw else {
         return Some(HV_DEFAULT_VM_ID);
     };
 
     let Ok(id) = token.parse::<u8>() else {
-        io.write_fmt(format_args!(
-            "hv: invalid vm id '{}' (expected 0..={})\r\n",
-            token, HV_MAX_VM_ID
-        ));
+        line(
+            io,
+            alloc::format!("hv: invalid vm id '{}' (expected 0..={})", token, HV_MAX_VM_ID)
+                .as_str(),
+        );
         return None;
     };
 
     if id > HV_MAX_VM_ID {
-        io.write_fmt(format_args!(
-            "hv: vm id {} out of range (expected 0..={})\r\n",
-            id, HV_MAX_VM_ID
-        ));
+        line(
+            io,
+            alloc::format!("hv: vm id {} out of range (expected 0..={})", id, HV_MAX_VM_ID)
+                .as_str(),
+        );
         return None;
     }
 
     Some(id)
 }
 
-fn parse_optional_stack_mb(io: &'static dyn ShellBackend2, raw: Option<&str>) -> Option<usize> {
-    let Some(token) = raw else {
-        return Some(crate::hv::memory::guest_stack_default_mb());
-    };
+fn format_bytes(bytes: usize) -> String {
+    const KIB: usize = 1024;
+    const MIB: usize = 1024 * KIB;
+    const GIB: usize = 1024 * MIB;
 
-    let Ok(stack_mb) = token.parse::<usize>() else {
-        io.write_fmt(format_args!("hv: invalid stack size '{}' MiB (expected integer)\r\n", token));
-        return None;
-    };
-
-    if stack_mb == 0 {
-        io.write_str("hv: stack size must be >= 1 MiB\r\n");
-        return None;
+    if bytes >= GIB {
+        alloc::format!("{} GiB", bytes / GIB)
+    } else if bytes >= MIB {
+        alloc::format!("{} MiB", bytes / MIB)
+    } else if bytes >= KIB {
+        alloc::format!("{} KiB", bytes / KIB)
+    } else {
+        alloc::format!("{} B", bytes)
     }
+}
 
-    Some(crate::hv::memory::clamp_guest_stack_mb(stack_mb))
+fn active_vm_ids_text(status: &crate::hv::HvStatus) -> String {
+    let mut out = String::new();
+    for maybe_id in status.active_vm_ids {
+        if let Some(id) = maybe_id {
+            if !out.is_empty() {
+                out.push(',');
+            }
+            let _ = write!(out, "{}", id);
+        }
+    }
+    if out.is_empty() {
+        out.push('-');
+    }
+    out
+}
+
+fn print_status(io: &'static dyn ShellBackend2) {
+    let status = crate::hv::status();
+    let heap_used = status
+        .vm_shared_heap_total_bytes
+        .saturating_sub(status.vm_shared_heap_free_bytes);
+
+    line(
+        io,
+        alloc::format!(
+            "hv: vm slots running={} starting={} limit={} active={}",
+            status.running_count,
+            status.starting_count,
+            status.vm_id_limit,
+            active_vm_ids_text(&status)
+        )
+        .as_str(),
+    );
+    line(
+        io,
+        alloc::format!(
+            "hv: vm shared heap used={} total={} free={}",
+            format_bytes(heap_used),
+            format_bytes(status.vm_shared_heap_total_bytes),
+            format_bytes(status.vm_shared_heap_free_bytes)
+        )
+        .as_str(),
+    );
+    line(
+        io,
+        alloc::format!(
+            "hv: vm shared stack={} vmx_state={} stored_snapshots={}",
+            format_bytes(status.vm_shared_stack_bytes),
+            format_bytes(status.vm_shared_vmx_bytes),
+            status.stored_vm_count
+        )
+        .as_str(),
+    );
+    line(
+        io,
+        alloc::format!(
+            "hv: vmx vendor_intel={} has_vmx={} feature_control_locked={} outside_smx={} guest_module={}",
+            status.vendor_intel,
+            status.has_vmx,
+            status.feature_control_locked,
+            status.feature_control_vmx_outside_smx,
+            status.guest_module_present
+        )
+        .as_str(),
+    );
 }
 
 pub(crate) fn try_parse(
@@ -79,41 +146,19 @@ pub(crate) fn try_parse(
     io: &'static dyn ShellBackend2,
     args: &mut SplitWhitespace<'_>,
 ) -> ParseOutcome {
-    let op = args.next().unwrap_or("start").trim();
+    let op = args.next().unwrap_or("status").trim();
 
-    if op.is_empty() || op.eq_ignore_ascii_case("start") {
-        let vm_id = match parse_optional_vm_id(io, args.next()) {
-            Some(id) => id,
-            None => return ParseOutcome::Handled,
-        };
-        let stack_mb = match parse_optional_stack_mb(io, args.next()) {
-            Some(stack_mb) => stack_mb,
-            None => return ParseOutcome::Handled,
-        };
+    if op.is_empty() || op.eq_ignore_ascii_case("status") {
         if args.next().is_some() {
             print_usage(io);
             return ParseOutcome::Handled;
         }
-        match crate::hv::start(vm_id, spawner, io, Some(stack_mb)) {
-            Ok(()) => io.write_fmt(format_args!("hv: vm{} started\r\n", vm_id)),
-            Err(e) => io.write_fmt(format_args!("hv: start failed: {:?}\r\n", e)),
-        }
+        print_status(io);
         return ParseOutcome::Handled;
     }
 
-    if op.eq_ignore_ascii_case("full") {
-        let vm_id = match parse_optional_vm_id(io, args.next()) {
-            Some(id) => id,
-            None => return ParseOutcome::Handled,
-        };
-        if args.next().is_some() {
-            print_usage(io);
-            return ParseOutcome::Handled;
-        }
-        match crate::hv::start_full(vm_id, spawner, io) {
-            Ok(()) => io.write_fmt(format_args!("hv: vm{} full guest started\r\n", vm_id)),
-            Err(e) => io.write_fmt(format_args!("hv: full start failed: {:?}\r\n", e)),
-        }
+    if op.eq_ignore_ascii_case("run") {
+        super::run::try_parse(spawner, io, args);
         return ParseOutcome::Handled;
     }
 
@@ -127,9 +172,9 @@ pub(crate) fn try_parse(
             return ParseOutcome::Handled;
         }
         match crate::hv::stop(vm_id) {
-            Ok(true) => io.write_fmt(format_args!("hv: vm{} pause requested\r\n", vm_id)),
-            Ok(false) => io.write_fmt(format_args!("hv: vm{} not running\r\n", vm_id)),
-            Err(e) => io.write_fmt(format_args!("hv: pause failed: {:?}\r\n", e)),
+            Ok(true) => line(io, alloc::format!("hv: vm{} pause requested", vm_id).as_str()),
+            Ok(false) => line(io, alloc::format!("hv: vm{} not running", vm_id).as_str()),
+            Err(e) => line(io, alloc::format!("hv: pause failed: {:?}", e).as_str()),
         }
         return ParseOutcome::Handled;
     }
@@ -144,9 +189,9 @@ pub(crate) fn try_parse(
             return ParseOutcome::Handled;
         }
         match crate::hv::stop(vm_id) {
-            Ok(true) => io.write_fmt(format_args!("hv: vm{} stop requested\r\n", vm_id)),
-            Ok(false) => io.write_fmt(format_args!("hv: vm{} not running\r\n", vm_id)),
-            Err(e) => io.write_fmt(format_args!("hv: stop failed: {:?}\r\n", e)),
+            Ok(true) => line(io, alloc::format!("hv: vm{} stop requested", vm_id).as_str()),
+            Ok(false) => line(io, alloc::format!("hv: vm{} not running", vm_id).as_str()),
+            Err(e) => line(io, alloc::format!("hv: stop failed: {:?}", e).as_str()),
         }
         return ParseOutcome::Handled;
     }
@@ -161,11 +206,15 @@ pub(crate) fn try_parse(
             return ParseOutcome::Handled;
         }
         match crate::hv::save_snapshot(vm_id) {
-            Ok(bytes) => io.write_fmt(format_args!(
-                "hv: vm{} snapshot saved store=hv-ramdisk path=vm/vm{}.snapshot bytes={}\r\n",
-                vm_id, vm_id, bytes
-            )),
-            Err(e) => io.write_fmt(format_args!("hv: preserve failed: {:?}\r\n", e)),
+            Ok(bytes) => line(
+                io,
+                alloc::format!(
+                    "hv: vm{} snapshot saved store=hv-ramdisk path=vm/vm{}.snapshot bytes={}",
+                    vm_id, vm_id, bytes
+                )
+                .as_str(),
+            ),
+            Err(e) => line(io, alloc::format!("hv: preserve failed: {:?}", e).as_str()),
         }
         return ParseOutcome::Handled;
     }

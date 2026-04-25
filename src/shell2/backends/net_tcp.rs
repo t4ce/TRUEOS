@@ -43,14 +43,14 @@ pub(crate) fn net_shell_write_bytes(bytes: &[u8]) {
 
 impl ShellIo2 for NetTcpShellBackend {
     #[inline]
-    fn write_str(&self, s: &str) {
+    fn raw_write_str(&self, s: &str) {
         crate::shell2::crlf::write_bytes_crlf(s.as_bytes(), &NET_TCP_LAST_WAS_CR, |chunk| {
             net_shell_write_bytes(chunk);
         });
     }
 
     #[inline]
-    fn write_fmt(&self, args: core::fmt::Arguments<'_>) {
+    fn raw_write_fmt(&self, args: core::fmt::Arguments<'_>) {
         struct Writer;
 
         impl Write for Writer {
@@ -70,7 +70,7 @@ impl ShellIo2 for NetTcpShellBackend {
     }
 
     #[inline]
-    fn write_char(&self, ch: char) {
+    fn raw_write_char(&self, ch: char) {
         let mut buf = [0u8; 4];
         let s = ch.encode_utf8(&mut buf);
         crate::shell2::crlf::write_bytes_crlf(s.as_bytes(), &NET_TCP_LAST_WAS_CR, |chunk| {
@@ -79,7 +79,7 @@ impl ShellIo2 for NetTcpShellBackend {
     }
 
     #[inline]
-    fn write_byte(&self, b: u8) {
+    fn raw_write_byte(&self, b: u8) {
         crate::shell2::crlf::write_bytes_crlf(&[b], &NET_TCP_LAST_WAS_CR, |chunk| {
             net_shell_write_bytes(chunk);
         });

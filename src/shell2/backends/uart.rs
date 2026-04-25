@@ -10,14 +10,14 @@ static UART_LAST_WAS_CR: AtomicBool = AtomicBool::new(false);
 
 impl ShellIo2 for Uart1Com1Backend {
     #[inline]
-    fn write_str(&self, s: &str) {
+    fn raw_write_str(&self, s: &str) {
         crate::shell2::crlf::write_bytes_crlf(s.as_bytes(), &UART_LAST_WAS_CR, |chunk| {
             uart1_com1::write_bytes(chunk);
         });
     }
 
     #[inline]
-    fn write_fmt(&self, args: core::fmt::Arguments<'_>) {
+    fn raw_write_fmt(&self, args: core::fmt::Arguments<'_>) {
         use core::fmt::Write;
 
         struct Writer;
@@ -35,7 +35,7 @@ impl ShellIo2 for Uart1Com1Backend {
     }
 
     #[inline]
-    fn write_char(&self, ch: char) {
+    fn raw_write_char(&self, ch: char) {
         let mut buf = [0u8; 4];
         let s = ch.encode_utf8(&mut buf);
         crate::shell2::crlf::write_bytes_crlf(s.as_bytes(), &UART_LAST_WAS_CR, |chunk| {
@@ -44,7 +44,7 @@ impl ShellIo2 for Uart1Com1Backend {
     }
 
     #[inline]
-    fn write_byte(&self, b: u8) {
+    fn raw_write_byte(&self, b: u8) {
         crate::shell2::crlf::write_bytes_crlf(&[b], &UART_LAST_WAS_CR, |chunk| {
             uart1_com1::write_bytes(chunk);
         });
