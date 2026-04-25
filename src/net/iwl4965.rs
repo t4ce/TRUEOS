@@ -49,6 +49,17 @@ fn map_mmio(phys: u64, size: usize) -> Result<usize, ()> {
         .map_err(|_| ())
 }
 
+#[inline]
+fn io_delay() {
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        core::arch::asm!("out dx, al", in("dx") 0x80u16, in("al") 0u8, options(nomem, nostack));
+    }
+
+    #[cfg(not(target_arch = "x86_64"))]
+    core::hint::spin_loop();
+}
+
 // ============================================================================
 // PCI Device IDs
 // ============================================================================
@@ -613,9 +624,7 @@ impl Iwl4965 {
             if self.read_reg(CSR_GP_CNTRL) & CSR_GP_CNTRL_REG_VAL_MAC_ACCESS_EN != 0 {
                 return true;
             }
-            unsafe {
-                core::arch::asm!("out dx, al", in("dx") 0x80u16, in("al") 0u8, options(nomem, nostack));
-            }
+            io_delay();
         }
         false
     }
@@ -699,9 +708,7 @@ impl Iwl4965 {
         self.write_reg(CSR_RESET, CSR_RESET_REG_FLAG_SW_RESET);
         // Wait ~10ms for reset to take effect (port 0x80 ~1us each)
         for _ in 0..10_000 {
-            unsafe {
-                core::arch::asm!("out dx, al", in("dx") 0x80u16, in("al") 0u8, options(nomem, nostack));
-            }
+            io_delay();
         }
 
         // Clear INIT_DONE — let APM shut down completely
@@ -709,9 +716,7 @@ impl Iwl4965 {
         self.write_reg(CSR_GP_CNTRL, gp & !CSR_GP_CNTRL_REG_FLAG_INIT_DONE);
         // Wait ~10ms
         for _ in 0..10_000 {
-            unsafe {
-                core::arch::asm!("out dx, al", in("dx") 0x80u16, in("al") 0u8, options(nomem, nostack));
-            }
+            io_delay();
         }
     }
 
@@ -764,9 +769,7 @@ impl Iwl4965 {
                         break;
                     }
                     // ~1us per IO port write on real hardware
-                    unsafe {
-                        core::arch::asm!("out dx, al", in("dx") 0x80u16, in("al") 0u8, options(nomem, nostack));
-                    }
+                    io_delay();
                 }
                 if !mac_access_ok {
                     crate::log!(
@@ -1030,9 +1033,7 @@ impl Iwl4965 {
             self.write_reg(CSR_RESET, 0);
             // 25ms delay for CPU to start executing bootstrap
             for _ in 0..25_000 {
-                unsafe {
-                    core::arch::asm!("out dx, al", in("dx") 0x80u16, in("al") 0u8, options(nomem, nostack));
-                }
+                io_delay();
             }
             let rst_rb = self.read_reg(CSR_RESET);
             let gp_rb = self.read_reg(CSR_GP_CNTRL);
@@ -1088,9 +1089,7 @@ impl Iwl4965 {
         self.write_reg(CSR_RESET, CSR_RESET_REG_FLAG_NEVO_RESET | CSR_RESET_REG_FLAG_STOP_MASTER);
         // ~5ms for reset to take effect
         for _ in 0..5_000 {
-            unsafe {
-                core::arch::asm!("out dx, al", in("dx") 0x80u16, in("al") 0u8, options(nomem, nostack));
-            }
+            io_delay();
         }
 
         // 3. Re-enable APMG clocks (DMA + BSM) in case they were gated
@@ -1131,9 +1130,7 @@ impl Iwl4965 {
         self.write_reg(CSR_RESET, 0);
         // 25ms delay for CPU to start executing bootstrap
         for _ in 0..25_000 {
-            unsafe {
-                core::arch::asm!("out dx, al", in("dx") 0x80u16, in("al") 0u8, options(nomem, nostack));
-            }
+            io_delay();
         }
         let rst_rb = self.read_reg(CSR_RESET);
         let gp_rb = self.read_reg(CSR_GP_CNTRL);
@@ -1482,9 +1479,7 @@ impl Iwl4965 {
 
             // ~10ms delay between checks (port 0x80 ~1us each)
             for _ in 0..10_000 {
-                unsafe {
-                    core::arch::asm!("out dx, al", in("dx") 0x80u16, in("al") 0u8, options(nomem, nostack));
-                }
+                io_delay();
             }
         }
 

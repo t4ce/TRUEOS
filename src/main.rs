@@ -10,6 +10,7 @@ const _: f16 = 0.0_f16;
 pub extern crate alloc;
 
 mod allocators;
+mod appcaps;
 mod aud;
 mod blueprint;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
@@ -30,6 +31,10 @@ mod exceptions;
 mod gfx;
 mod globalog;
 mod host_api;
+#[cfg(target_arch = "x86_64")]
+mod hv;
+#[cfg(not(target_arch = "x86_64"))]
+#[path = "hv_disabled.rs"]
 mod hv;
 pub mod hvv;
 mod hyper_probe;
@@ -141,15 +146,13 @@ pub use r::time;
 pub use r::{io, path};
 
 // Provide a known-good BSP stack and switch to it immediately in `_start` for bigger stack
-const BSP_BOOT_STACK_BYTES: usize = 8 * 1024 * 1024;
+const BSP_BOOT_STACK_BYTES: usize = crate::appcaps::boot::BSP_BOOT_STACK_BYTES;
 
-#[cfg(target_arch = "x86_64")]
 #[repr(align(16))]
 struct BootStack {
     _bytes: [u8; BSP_BOOT_STACK_BYTES],
 }
 
-#[cfg(target_arch = "x86_64")]
 #[unsafe(link_section = ".bss")]
 static mut BSP_BOOT_STACK: BootStack = BootStack {
     _bytes: [0; BSP_BOOT_STACK_BYTES],
@@ -175,20 +178,40 @@ pub unsafe extern "C" fn _start() -> ! {
     );
 }
 
-// ARMTODO: `_start` is still an x86_64 bootstrap path that hard-codes `rsp`
-// setup via `naked_asm!`. A real ARM port needs its own early entry/stack
-// contract instead of this compile-time fallback.
-#[cfg(not(target_arch = "x86_64"))]
+#[cfg(target_arch = "aarch64")]
 #[unsafe(no_mangle)]
-pub extern "C" fn _start() -> ! {
-    start_dispatch()
+#[unsafe(naked)]
+pub unsafe extern "C" fn _start() -> ! {
+    core::arch::naked_asm!(
+        "adrp x0, {stack}",
+        "add x0, x0, :lo12:{stack}",
+        "movz x1, #{stack_size_0}",
+        "movk x1, #{stack_size_16}, lsl #16",
+        "movk x1, #{stack_size_32}, lsl #32",
+        "add x0, x0, x1",
+        "and x0, x0, #0xfffffffffffffff0",
+        "mov sp, x0",
+        "bl {dispatch}",
+        "brk #0",
+        stack = sym BSP_BOOT_STACK,
+        stack_size_0 = const (BSP_BOOT_STACK_BYTES & 0xffff),
+        stack_size_16 = const ((BSP_BOOT_STACK_BYTES >> 16) & 0xffff),
+        stack_size_32 = const ((BSP_BOOT_STACK_BYTES >> 32) & 0xffff),
+        dispatch = sym start_dispatch,
+    );
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn start_dispatch() -> ! {
+    #[cfg(target_arch = "x86_64")]
     if crate::hv::guest_boot_take() {
         unsafe { crate::hv::guest::entry() }
     } else {
+        kmain()
+    }
+
+    #[cfg(not(target_arch = "x86_64"))]
+    {
         kmain()
     }
 }
@@ -221,12 +244,16 @@ pub extern "C" fn kmain() -> ! {
             perf.exec_usec
         );
     }
-    let smp_resp = limine::smp_response().unwrap();
-    let lapic_ids: alloc::vec::Vec<u32> = smp_resp
-        .cpus()
-        .iter()
-        .map(|c| limine::mp_cpu_id(c))
-        .collect();
+    let smp_resp = limine::smp_response();
+    let lapic_ids: alloc::vec::Vec<u32> = if let Some(smp_resp) = smp_resp {
+        smp_resp
+            .cpus()
+            .iter()
+            .map(|c| limine::mp_cpu_id(c))
+            .collect()
+    } else {
+        alloc::vec![0]
+    };
     percpu::install_cpu_slot_lapic_order_owned(lapic_ids);
     cpu::init_profiles(percpu::total_slots());
     percpu::init_bsp();
@@ -283,12 +310,14 @@ pub extern "C" fn kmain() -> ! {
 fn _loop(
     executor: &'static Executor,
     _spawner: Spawner,
-    resp: &'static crate::limine::MpResponse,
+    resp: Option<&'static crate::limine::MpResponse>,
 ) -> ! {
-    resp.cpus()
-        .iter()
-        .filter(|c| limine::mp_cpu_id(c) != percpu::this_cpu().lapic_id())
-        .for_each(|c| c.bootstrap(cpu::ap_start, 0));
+    if let Some(resp) = resp {
+        resp.cpus()
+            .iter()
+            .filter(|c| limine::mp_cpu_id(c) != percpu::this_cpu().lapic_id())
+            .for_each(|c| c.bootstrap(cpu::ap_start, 0));
+    }
 
     match crate::r::spawn_service::spawn_service_task(_spawner) {
         Ok(token) => _spawner.spawn(token),

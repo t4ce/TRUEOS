@@ -17,6 +17,7 @@ static BOOT_TIMESTAMP_SECS_CACHE: AtomicU64 = AtomicU64::new(UNSET_U64);
 #[unsafe(link_section = ".limine_requests")]
 pub static BASE_REVISION: BaseRevision = BaseRevision::new();
 
+#[cfg(target_arch = "x86_64")]
 #[used]
 #[unsafe(link_section = ".limine_requests")]
 pub static SMP_REQUEST: request::MpRequest = request::MpRequest::new(0);
@@ -61,10 +62,12 @@ pub static DATE_AT_BOOT_REQUEST: request::DateAtBootRequest = request::DateAtBoo
 pub static BOOTLOADER_PERFORMANCE_REQUEST: BootloaderPerformanceRequest =
     BootloaderPerformanceRequest::new();
 
+#[cfg(target_arch = "x86_64")]
 #[used]
 #[unsafe(link_section = ".limine_requests")]
 pub static RSDP_REQUEST: request::RsdpRequest = request::RsdpRequest::new();
 
+#[cfg(target_arch = "x86_64")]
 #[used]
 #[unsafe(link_section = ".limine_requests")]
 pub static EFI_SYSTEM_TABLE_REQUEST: EfiSystemTableRequest = EfiSystemTableRequest::new();
@@ -125,8 +128,14 @@ fn bytes_from_limine_file(file: &limine::file::File) -> Option<&'static [u8]> {
     Some(unsafe { core::slice::from_raw_parts(data.as_ptr(), data.len()) })
 }
 
+#[cfg(target_arch = "x86_64")]
 pub fn smp_response() -> Option<&'static MpResponse> {
     SMP_REQUEST.response()
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+pub fn smp_response() -> Option<&'static MpResponse> {
+    None
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -166,13 +175,25 @@ pub fn bootloader_performance() -> Option<&'static BootloaderPerformanceResponse
     BOOTLOADER_PERFORMANCE_REQUEST.response()
 }
 
+#[cfg(target_arch = "x86_64")]
 pub fn efi_system_table_response() -> Option<&'static EfiSystemTableResponse> {
     EFI_SYSTEM_TABLE_REQUEST.response()
 }
 
+#[cfg(not(target_arch = "x86_64"))]
+pub fn efi_system_table_response() -> Option<&'static EfiSystemTableResponse> {
+    None
+}
+
+#[cfg(target_arch = "x86_64")]
 pub fn rsdp_address() -> Option<u64> {
     let resp = RSDP_REQUEST.response()?;
     Some(resp.address as u64)
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+pub fn rsdp_address() -> Option<u64> {
+    None
 }
 
 pub fn efi_system_table_address() -> Option<u64> {

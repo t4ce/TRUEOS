@@ -1,6 +1,6 @@
 use super::{HID_DEBUG_REPORT_LOGS, HidRuntime};
 
-const HID_KEYBOARD_RING_CAP: usize = 512;
+const HID_KEYBOARD_RING_CAP: usize = crate::appcaps::input::HID_KEYBOARD_RING_CAP;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]

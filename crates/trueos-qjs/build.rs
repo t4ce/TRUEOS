@@ -121,6 +121,42 @@ fn configure_darwin_baremetal_cc_tools(build: &mut cc::Build, target: &str) {
     }
 }
 
+fn configure_linux_aarch64_baremetal_cc_tools(build: &mut cc::Build, target: &str) {
+    if env::consts::OS != "linux" || !target.starts_with("aarch64-") {
+        return;
+    }
+
+    // Respect explicit target-specific overrides and non-default generic tools.
+    if env_var_set("CC_aarch64_unknown_none")
+        || env_var_set("CC_aarch64-unknown-none")
+        || env_var_set("AR_aarch64_unknown_none")
+        || env_var_set("AR_aarch64-unknown-none")
+    {
+        return;
+    }
+    if let Some(cc) = env_var_value("CC") {
+        if !cc.is_empty() && !is_default_cc_driver(&cc) {
+            return;
+        }
+    }
+    if let Some(ar) = env_var_value("AR") {
+        if !ar.is_empty() && !is_default_ar_driver(&ar) {
+            return;
+        }
+    }
+
+    let gcc = Path::new("/usr/bin/aarch64-linux-gnu-gcc");
+    let ar = Path::new("/usr/bin/aarch64-linux-gnu-ar");
+    if gcc.is_file() && ar.is_file() {
+        build.compiler(gcc);
+        build.archiver(ar);
+        println!(
+            "cargo:warning=trueos-qjs: using GNU AArch64 tools for bare-metal C build: {}",
+            gcc.display()
+        );
+    }
+}
+
 fn ensure_quickjs_checkout(out_dir: &Path) -> PathBuf {
     // User override: point directly at a QuickJS source tree.
     if let Ok(p) = env::var("TRUEOS_QJS_QUICKJS_DIR") {
@@ -662,6 +698,10 @@ fn main() {
     println!("cargo:rerun-if-env-changed=TRUEOS_QJS_EMBED_BYTECODE");
     println!("cargo:rerun-if-env-changed=CARGO_NET_OFFLINE");
     println!("cargo:rerun-if-env-changed=SDKROOT");
+    println!("cargo:rerun-if-env-changed=CC_aarch64_unknown_none");
+    println!("cargo:rerun-if-env-changed=CC_aarch64-unknown-none");
+    println!("cargo:rerun-if-env-changed=AR_aarch64_unknown_none");
+    println!("cargo:rerun-if-env-changed=AR_aarch64-unknown-none");
 
     let quickjs_dir = ensure_quickjs_checkout(&out_dir);
 
@@ -713,6 +753,7 @@ fn main() {
     build.target(&effective_target);
 
     configure_darwin_baremetal_cc_tools(&mut build, &effective_target);
+    configure_linux_aarch64_baremetal_cc_tools(&mut build, &effective_target);
 
     build
         .flag("-ffreestanding")

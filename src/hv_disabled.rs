@@ -1,18 +1,45 @@
 use alloc::string::String as AllocString;
 use alloc::vec::Vec as AllocVec;
-use core::sync::atomic::{AtomicBool, Ordering};
 
-use embassy_executor::{Spawner, task};
-use embassy_time::{Duration as EmbassyDuration, Timer};
-use spin::Mutex;
+use embassy_executor::Spawner;
 
-use crate::shell2::ShellBackend2;
+use crate::shell2::{MatrixTarget, ShellBackend2, ShellIo2};
 
-const VM1_ID: u8 = 0;
+pub mod memory {
+    pub const GUEST_STACK_DEFAULT_MIB: usize = crate::appcaps::hv::GUEST_STACK_DEFAULT_MIB;
+    pub const GUEST_STACK_MIN_MIB: usize = crate::appcaps::hv::GUEST_STACK_MIN_MIB;
+    pub const GUEST_STACK_MAX_MIB: usize = crate::appcaps::hv::GUEST_STACK_MAX_MIB;
 
-static GUEST_BOOT_ARMED: AtomicBool = AtomicBool::new(false);
-static BLUEPRINT_LAUNCH_STATE: Mutex<Option<BlueprintLaunchState>> = Mutex::new(None);
-static APP_WINDOW_SESSION: Mutex<Option<AppWindowSession>> = Mutex::new(None);
+    pub const fn guest_stack_default_mb() -> usize {
+        GUEST_STACK_DEFAULT_MIB
+    }
+
+    pub const fn clamp_guest_stack_mb(stack_mb: usize) -> usize {
+        if stack_mb < GUEST_STACK_MIN_MIB {
+            GUEST_STACK_MIN_MIB
+        } else if stack_mb > GUEST_STACK_MAX_MIB {
+            GUEST_STACK_MAX_MIB
+        } else {
+            stack_mb
+        }
+    }
+}
+
+pub mod store {
+    pub fn committed_vm_count() -> usize {
+        0
+    }
+
+    #[embassy_executor::task(pool_size = 1)]
+    pub async fn vm_store_task() {}
+
+    #[embassy_executor::task(pool_size = 1)]
+    pub async fn vm_store_replication_task() {}
+}
+
+pub mod vmm {
+    pub const MAX_VMS: usize = 10;
+}
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum StartError {
@@ -31,23 +58,28 @@ pub enum StopError {
     NotRunning,
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum SaveError {
     UnsupportedVmId,
-    NoRoot,
-    NoSnapshot,
     BeginWrite,
-    Io(crate::disc::block::Error),
+    Io(&'static str),
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum RestoreError {
     UnsupportedVmId,
-    NoRoot,
     MissingFile,
-    Read(crate::disc::block::Error),
-    BadSnapshot,
-    CodeMismatch,
+    Read(&'static str),
+    BadMagic,
+    BadVersion,
+    BadLength,
+    GuestMemoryUnavailable,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum VmBootMode {
+    Hull,
+    Full,
 }
 
 #[derive(Clone)]
@@ -55,14 +87,7 @@ pub struct BlueprintLaunchState {
     pub archive: AllocString,
     pub module_bytes: AllocVec<u8>,
     pub app_args: AllocVec<AllocString>,
-    pub console_target: Option<crate::shell2::MatrixTarget>,
-}
-
-#[derive(Clone)]
-struct AppWindowSession {
-    archive: AllocString,
-    window_ids: AllocVec<u32>,
-    console_target: Option<crate::shell2::MatrixTarget>,
+    pub console_target: Option<MatrixTarget>,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -79,55 +104,7 @@ pub struct HvStatus {
     pub stored_vm_count: usize,
 }
 
-pub mod guest {
-    pub unsafe fn entry() -> ! {
-        loop {
-            core::hint::spin_loop();
-        }
-    }
-}
-
-pub mod memory {
-    pub const fn guest_stack_default_mb() -> usize {
-        16
-    }
-
-    pub fn clamp_guest_stack_mb(stack_mb: usize) -> usize {
-        stack_mb.max(1)
-    }
-}
-
-pub mod store {
-    use super::*;
-
-    #[task]
-    pub async fn vm_store_task() {
-        loop {
-            Timer::after(EmbassyDuration::from_secs(60)).await;
-        }
-    }
-
-    #[task]
-    pub async fn vm_store_replication_task() {
-        loop {
-            Timer::after(EmbassyDuration::from_secs(60)).await;
-        }
-    }
-}
-
-pub fn guest_boot_take() -> bool {
-    GUEST_BOOT_ARMED.swap(false, Ordering::AcqRel)
-}
-
-pub fn guest_boot_active() -> bool {
-    GUEST_BOOT_ARMED.load(Ordering::Acquire)
-}
-
-pub fn hvlogf(args: core::fmt::Arguments<'_>) {
-    if crate::logflag::HV_LOGS {
-        crate::log!("hv(stub): {}\n", args);
-    }
-}
+pub fn hvlogf(_args: core::fmt::Arguments<'_>) {}
 
 pub fn status() -> HvStatus {
     HvStatus {
@@ -145,123 +122,64 @@ pub fn status() -> HvStatus {
 }
 
 pub fn start(
-    vm_id: u8,
+    _vm_id: u8,
     _spawner: &Spawner,
     _io: &'static dyn ShellBackend2,
     _stack_mb: Option<usize>,
 ) -> Result<(), StartError> {
-    if vm_id != VM1_ID {
-        return Err(StartError::UnsupportedVmId);
-    }
     Err(StartError::VmxUnsupported)
 }
 
 pub fn start_full(
-    vm_id: u8,
+    _vm_id: u8,
     _spawner: &Spawner,
     _io: &'static dyn ShellBackend2,
 ) -> Result<(), StartError> {
-    if vm_id != VM1_ID {
-        return Err(StartError::UnsupportedVmId);
-    }
     Err(StartError::VmxUnsupported)
 }
 
-pub fn stop(vm_id: u8) -> Result<bool, StopError> {
-    if vm_id != VM1_ID {
-        return Err(StopError::UnsupportedVmId);
-    }
+pub fn stop(_vm_id: u8) -> Result<bool, StopError> {
     Ok(false)
+}
+
+pub fn write_logs(_io: &dyn ShellIo2) {}
+
+pub fn save_snapshot(_vm_id: u8) -> Result<usize, SaveError> {
+    Err(SaveError::UnsupportedVmId)
+}
+
+pub fn restore_snapshot(_vm_id: u8) -> Result<usize, RestoreError> {
+    Err(RestoreError::MissingFile)
+}
+
+pub fn guest_boot_take() -> bool {
+    false
+}
+
+pub fn guest_boot_active() -> bool {
+    false
 }
 
 pub fn request_preserve_vm1() -> bool {
     false
 }
 
-pub fn save_snapshot(vm_id: u8) -> Result<usize, SaveError> {
-    if vm_id != VM1_ID {
-        return Err(SaveError::UnsupportedVmId);
-    }
-    Err(SaveError::NoSnapshot)
-}
-
-pub fn restore_snapshot(vm_id: u8) -> Result<usize, RestoreError> {
-    if vm_id != VM1_ID {
-        return Err(RestoreError::UnsupportedVmId);
-    }
-    Err(RestoreError::MissingFile)
-}
-
-pub fn stage_blueprint_launch(state: BlueprintLaunchState) {
-    *BLUEPRINT_LAUNCH_STATE.lock() = Some(state);
-}
+pub fn stage_blueprint_launch(_state: BlueprintLaunchState) {}
 
 pub fn take_blueprint_launch() -> Option<BlueprintLaunchState> {
-    BLUEPRINT_LAUNCH_STATE.lock().take()
+    None
 }
 
 pub fn blueprint_launch_active() -> bool {
-    BLUEPRINT_LAUNCH_STATE.lock().is_some()
+    false
 }
 
-pub fn log_blueprint_app_window_event(args: core::fmt::Arguments<'_>) {
-    hvlogf(args);
-}
+pub fn log_active_blueprint_console_line(_args: core::fmt::Arguments<'_>) {}
 
-pub fn begin_blueprint_app_window_session(
-    archive: &str,
-    console_target: Option<crate::shell2::MatrixTarget>,
-) {
-    *APP_WINDOW_SESSION.lock() = Some(AppWindowSession {
-        archive: AllocString::from(archive),
-        window_ids: AllocVec::new(),
-        console_target,
-    });
-    hvlogf(format_args!("app-window-broker(stub): session begin archive={}", archive));
-}
+pub fn log_blueprint_app_window_event(_args: core::fmt::Arguments<'_>) {}
 
-pub fn register_blueprint_app_window(window_id: u32, kind: &str, title: &str) {
-    let mut session = APP_WINDOW_SESSION.lock();
-    let Some(session) = session.as_mut() else {
-        hvlogf(format_args!(
-            "app-window-broker(stub): create without session kind={} window={} title={}",
-            kind, window_id, title
-        ));
-        return;
-    };
+pub fn begin_blueprint_app_window_session(_archive: &str) {}
 
-    if !session.window_ids.contains(&window_id) {
-        session.window_ids.push(window_id);
-    }
+pub fn register_blueprint_app_window(_window_id: u32, _kind: &str, _title: &str) {}
 
-    hvlogf(format_args!(
-        "app-window-broker(stub): created archive={} kind={} window={} title={}",
-        session.archive.as_str(),
-        kind,
-        window_id,
-        title
-    ));
-}
-
-pub fn finish_blueprint_app_window_session(close_windows: bool) {
-    let Some(session) = APP_WINDOW_SESSION.lock().take() else {
-        return;
-    };
-
-    hvlogf(format_args!(
-        "app-window-broker(stub): session end archive={} windows={} close_windows={}",
-        session.archive.as_str(),
-        session.window_ids.len(),
-        close_windows
-    ));
-
-    if let Some(target) = session.console_target.as_ref() {
-        crate::shell2::print_matrix_target_line(target, "app-window-broker(stub): session end");
-    }
-
-    if close_windows {
-        for window_id in session.window_ids {
-            let _ = crate::r::ui2::close_window(window_id);
-        }
-    }
-}
+pub fn finish_blueprint_app_window_session(_close_windows: bool) {}

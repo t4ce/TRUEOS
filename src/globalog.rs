@@ -405,7 +405,13 @@ mod debugcon {
 
     #[inline(always)]
     pub(super) fn write_byte_raw(b: u8) {
-        unsafe { crate::portio::outb(0xE9, b) };
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            crate::portio::outb(0xE9, b)
+        };
+
+        #[cfg(target_arch = "aarch64")]
+        let _ = b;
     }
 
     struct Writer;
