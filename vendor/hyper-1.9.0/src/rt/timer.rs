@@ -66,6 +66,25 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(target_os = "zkvm")]
+fn instant_now() -> Instant {
+    let duration = Duration::from_nanos(unsafe { trueos_tokio_time_now_nanos() });
+
+    // Rust's unsupported std time backend stores Instant as a single Duration.
+    // TRUEOS supplies the missing clock value through the std ABI shim.
+    unsafe { core::mem::transmute::<Duration, Instant>(duration) }
+}
+
+#[cfg(not(target_os = "zkvm"))]
+fn instant_now() -> Instant {
+    Instant::now()
+}
+
+#[cfg(target_os = "zkvm")]
+unsafe extern "C" {
+    fn trueos_tokio_time_now_nanos() -> u64;
+}
+
 /// A timer which provides timer-like functions.
 pub trait Timer {
     /// Return a future that resolves in `duration` time.
@@ -78,7 +97,7 @@ pub trait Timer {
     ///
     /// The default implementation returns [`Instant::now()`].
     fn now(&self) -> Instant {
-        Instant::now()
+        instant_now()
     }
 
     /// Reset a future to resolve at `new_deadline` instead.
@@ -118,9 +137,7 @@ impl dyn Sleep {
         if self.is::<T>() {
             unsafe {
                 let inner = Pin::into_inner_unchecked(self);
-                Some(Pin::new_unchecked(
-                    &mut *(&mut *inner as *mut dyn Sleep as *mut T),
-                ))
+                Some(Pin::new_unchecked(&mut *(&mut *inner as *mut dyn Sleep as *mut T)))
             }
         } else {
             None

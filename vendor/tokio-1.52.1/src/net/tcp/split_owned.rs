@@ -89,10 +89,7 @@ pub struct ReuniteError(pub OwnedReadHalf, pub OwnedWriteHalf);
 
 impl fmt::Display for ReuniteError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "tried to reunite halves that are not from the same socket"
-        )
+        write!(f, "tried to reunite halves that are not from the same socket")
     }
 }
 

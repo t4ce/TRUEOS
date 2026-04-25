@@ -298,6 +298,14 @@ impl TcpListener {
                 .map(|io| io.into_raw_fd())
                 .map(|raw_fd| unsafe { std::net::TcpListener::from_raw_fd(raw_fd) })
         }
+
+        #[cfg(target_os = "zkvm")]
+        {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "tokio zkvm TcpListener::into_std is not backed by raw fds",
+            ))
+        }
     }
 
     cfg_not_wasip1! {

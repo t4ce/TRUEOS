@@ -36,8 +36,8 @@ BP_EXAMPLE_PAIRS ?= $(strip $(shell awk 'BEGIN { in_example = 0; name = ""; path
 # Set BP_SKIP_BUILD to 1 to reuse existing dist/*.bp files even when stale.
 # Set BP_SKIP_EMBED to 1 to omit blueprints from the ISO.
 # Set both to 1 to stop both blueprint build and embedding.
-BP_SKIP_BUILD := 0
-BP_SKIP_EMBED := 0
+BP_SKIP_BUILD := 1
+BP_SKIP_EMBED := 1
 QEMU_ENV = env -i HOME="$(HOME)" PATH="/usr/bin:/bin" TERM="$${TERM:-xterm}" LANG="$${LANG:-C.UTF-8}" DISPLAY="$${DISPLAY:-}" WAYLAND_DISPLAY="$${WAYLAND_DISPLAY:-}" XDG_RUNTIME_DIR="$${XDG_RUNTIME_DIR:-}" XAUTHORITY="$${XAUTHORITY:-}"
 QEMU_BIN = $(QEMU_ENV) qemu-system-x86_64 -no-shutdown
 QEMU_UEFI_FIRMWARE = $(OVMF_BUNDLE_PATH)

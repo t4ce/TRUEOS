@@ -5,9 +5,7 @@ edition = "2024"
 
 [features]
 default = ["tokio-probe", "intel-hv"]
-# `tokio::net` is still deferred in the probe: `mio` socket construction works
-# on zkvm now, but selector-delivered socket readiness is not wired end-to-end yet.
-tokio-probe = ["dep:tokio", "dep:socket2", "dep:mio", "tokio/rt", "tokio/macros", "tokio/sync", "tokio/time", "tokio/io-util", "tokio/io-std", "tokio/fs", "tokio/parking_lot", "tokio/test-util"]
+tokio-probe = ["dep:tokio", "dep:socket2", "dep:mio", "tokio/rt", "tokio/macros", "tokio/sync", "tokio/time", "tokio/net", "tokio/io-util", "tokio/io-std", "tokio/fs", "tokio/parking_lot", "tokio/test-util"]
 hyper-probe = ["dep:hyper"]
 intel-hv = ["dep:trueos-vm"]
 

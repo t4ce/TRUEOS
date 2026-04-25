@@ -9,6 +9,25 @@ use std::{pin::Pin, time::Instant};
 use crate::rt::Sleep;
 use crate::rt::Timer;
 
+#[cfg(target_os = "zkvm")]
+fn instant_now() -> Instant {
+    let duration = std::time::Duration::from_nanos(unsafe { trueos_tokio_time_now_nanos() });
+
+    // Rust's unsupported std time backend stores Instant as a single Duration.
+    // TRUEOS supplies the missing clock value through the std ABI shim.
+    unsafe { core::mem::transmute::<std::time::Duration, Instant>(duration) }
+}
+
+#[cfg(not(target_os = "zkvm"))]
+fn instant_now() -> Instant {
+    Instant::now()
+}
+
+#[cfg(target_os = "zkvm")]
+unsafe extern "C" {
+    fn trueos_tokio_time_now_nanos() -> u64;
+}
+
 /// A user-provided timer to time background tasks.
 #[derive(Clone)]
 pub(crate) enum Time {
@@ -52,7 +71,7 @@ impl Time {
 
     pub(crate) fn now(&self) -> Instant {
         match *self {
-            Time::Empty => Instant::now(),
+            Time::Empty => instant_now(),
             Time::Timer(ref t) => t.now(),
         }
     }

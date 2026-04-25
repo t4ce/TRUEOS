@@ -6,6 +6,16 @@
 //! `test-util` feature flag is enabled, the values returned for `now()` are
 //! configurable.
 
+#[cfg(target_os = "zkvm")]
+fn std_now() -> std::time::Instant {
+    crate::time::zkvm::std_instant_now()
+}
+
+#[cfg(not(target_os = "zkvm"))]
+fn std_now() -> std::time::Instant {
+    std::time::Instant::now()
+}
+
 cfg_not_test_util! {
     use crate::time::{Instant};
 
@@ -13,7 +23,7 @@ cfg_not_test_util! {
     pub(crate) struct Clock {}
 
     pub(crate) fn now() -> Instant {
-        Instant::from_std(std::time::Instant::now())
+        Instant::from_std(std_now())
     }
 
     impl Clock {
@@ -190,7 +200,7 @@ cfg_test_util! {
                 return Err("time is not frozen");
             }
 
-            inner.unfrozen = Some(std::time::Instant::now());
+            inner.unfrozen = Some(std_now());
             Ok(())
         });
     }
@@ -283,14 +293,14 @@ cfg_test_util! {
     /// Returns the current instant, factoring in frozen time.
     pub(crate) fn now() -> Instant {
         if !DID_PAUSE_CLOCK.load(Ordering::Acquire) {
-            return Instant::from_std(std::time::Instant::now());
+            return Instant::from_std(std_now());
         }
 
         with_clock(|maybe_clock| {
             Ok(if let Some(clock) = maybe_clock {
                 clock.now()
             } else {
-                Instant::from_std(std::time::Instant::now())
+                Instant::from_std(std_now())
             })
         })
     }
@@ -299,7 +309,7 @@ cfg_test_util! {
         /// Returns a new `Clock` instance that uses the current execution context's
         /// source of time.
         pub(crate) fn new(enable_pausing: bool, start_paused: bool) -> Clock {
-            let now = std::time::Instant::now();
+            let now = std_now();
 
             let clock = Clock {
                 inner: Mutex::new(Inner {
@@ -331,8 +341,8 @@ cfg_test_util! {
             DID_PAUSE_CLOCK.store(true, Ordering::Release);
 
             let elapsed = match inner.unfrozen.as_ref() {
-                Some(v) => v.elapsed(),
-                None => return Err("time is already frozen")
+                Some(v) => std_now().saturating_duration_since(*v),
+                None => return Err("time is already frozen"),
             };
             inner.base += elapsed;
             inner.unfrozen = None;
@@ -373,7 +383,7 @@ cfg_test_util! {
             let mut ret = inner.base;
 
             if let Some(unfrozen) = inner.unfrozen {
-                ret += unfrozen.elapsed();
+                ret += std_now().saturating_duration_since(unfrozen);
             }
 
             Instant::from_std(ret)

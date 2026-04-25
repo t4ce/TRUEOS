@@ -90,6 +90,9 @@ cfg_test_util! {
     pub use clock::{advance, pause, resume};
 }
 
+#[cfg(target_os = "zkvm")]
+pub(crate) mod zkvm;
+
 pub mod error;
 
 mod instant;

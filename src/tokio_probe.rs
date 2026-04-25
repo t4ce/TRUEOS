@@ -5,11 +5,15 @@
 //! multi-thread scheduler yet.
 
 extern crate alloc;
+extern crate std;
 
 use alloc::sync::Arc;
 use socket2::{Domain, Protocol, Socket, Type};
+use std::io;
+use std::net::SocketAddr;
 
 const VNET_PROBE_PORT: u16 = 48_123;
+const TOKIO_NET_PROBE_PORT: u16 = 48_125;
 
 async fn probe_async_identity() -> u32 {
     0x544F_4B49
@@ -28,6 +32,16 @@ fn probe_socket2_surface() -> Result<(), &'static str> {
             Ok(())
         }
     }
+}
+
+fn log_io_failure(stage: &str, err: &io::Error) {
+    crate::log!("tokio_probe: failure {} kind={:?} err={}\n", stage, err.kind(), err);
+}
+
+fn primary_ipv4_probe_addr(port: u16) -> Option<SocketAddr> {
+    let dev_idx = crate::net::primary_device_index();
+    let ip = crate::net::adapter::ipv4_at(dev_idx)?;
+    Some(SocketAddr::from((ip, port)))
 }
 
 async fn probe_vnet_surface() -> Result<(), &'static str> {
@@ -74,6 +88,67 @@ async fn probe_vnet_surface() -> Result<(), &'static str> {
 
         tokio::task::yield_now().await;
     }
+}
+
+async fn wait_for_net_configured() -> bool {
+    let deadline = embassy_time::Instant::now() + embassy_time::Duration::from_millis(500);
+    while !crate::r::readiness::is_set(crate::r::readiness::NET_CONFIGURED) {
+        if embassy_time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(core::time::Duration::from_millis(10)).await;
+    }
+    true
+}
+
+async fn probe_tokio_net_surface() -> Result<(), &'static str> {
+    if !wait_for_net_configured().await {
+        crate::log!("tokio_probe: note net.tokio skipped (net not configured yet)\n");
+        return Ok(());
+    }
+
+    let Some(tcp_probe) = primary_ipv4_probe_addr(TOKIO_NET_PROBE_PORT) else {
+        crate::log!("tokio_probe: note net.tokio skipped (no primary ipv4 yet)\n");
+        return Ok(());
+    };
+
+    let Some(udp_probe) = primary_ipv4_probe_addr(0) else {
+        crate::log!("tokio_probe: note net.tokio skipped (no primary ipv4 yet)\n");
+        return Ok(());
+    };
+
+    match tokio::net::TcpListener::bind(tcp_probe).await {
+        Ok(listener) => {
+            let _ = listener.local_addr();
+            crate::log!("tokio_probe: success net.tokio.tcp_listener.bind\n");
+        }
+        Err(err) => {
+            log_io_failure("net.tokio.tcp_listener.bind", &err);
+            return Err("net.tokio.tcp_listener.bind");
+        }
+    }
+
+    let udp = match tokio::net::UdpSocket::bind(udp_probe).await {
+        Ok(udp) => {
+            crate::log!("tokio_probe: success net.tokio.udp_socket.bind\n");
+            udp
+        }
+        Err(err) => {
+            log_io_failure("net.tokio.udp_socket.bind", &err);
+            return Err("net.tokio.udp_socket.bind");
+        }
+    };
+
+    match tokio::time::timeout(core::time::Duration::from_millis(50), udp.writable()).await {
+        Ok(Ok(())) => crate::log!("tokio_probe: success net.tokio.udp_socket.writable\n"),
+        Ok(Err(err)) => {
+            log_io_failure("net.tokio.udp_socket.writable", &err);
+            return Err("net.tokio.udp_socket.writable");
+        }
+        Err(_) => return Err("net.tokio.udp_socket.writable_timeout"),
+    }
+
+    Ok(())
 }
 
 async fn run_probe_suite() -> Result<(), &'static str> {
@@ -291,6 +366,7 @@ async fn run_probe_suite() -> Result<(), &'static str> {
 
     probe_vnet_surface().await?;
     probe_socket2_surface()?;
+    probe_tokio_net_surface().await?;
 
     crate::log!(
         "tokio_probe: note blocking.spawn_blocking deferred on zkvm until Tokio blocking pool stops requiring host threads\n"
@@ -391,16 +467,14 @@ async fn run_probe_suite() -> Result<(), &'static str> {
 
 pub(crate) fn log_boot_probe() {
     crate::log!(
-        "tokio_probe: wired tokio 1.52.1 with feature rt+sync+time+io+fs via zkvm std-ABI shim (single-thread runtime probe)\n"
-    );
-    crate::log!(
-        "tokio_probe: note tokio::net remains deferred until mio surfaces socket readiness events through the zkvm selector\n"
+        "tokio_probe: wired tokio 1.52.1 with feature rt+sync+time+net+io+fs via zkvm std-ABI shim (single-thread runtime probe)\n"
     );
     crate::log!(
         "tokio_probe: note blocking/fs runtime ops deferred because Tokio blocking pool still expects host thread spawning on zkvm\n"
     );
 
     let mut runtime_builder = tokio::runtime::Builder::new_current_thread();
+    runtime_builder.enable_io();
     runtime_builder.enable_time();
 
     let runtime = match runtime_builder.build() {

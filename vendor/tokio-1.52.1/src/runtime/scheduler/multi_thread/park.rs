@@ -8,7 +8,7 @@ use crate::runtime::driver::{self, Driver};
 use crate::util::TryLock;
 
 use std::sync::atomic::Ordering::SeqCst;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 #[cfg(loom)]
 use crate::runtime::park::CURRENT_THREAD_PARK_COUNT;
@@ -180,17 +180,19 @@ impl Inner {
         }
 
         let timeout_at = duration.map(|d| {
-            Instant::now()
+            crate::time::Instant::now()
+                .into_std()
                 .checked_add(d)
                 // best effort to avoid overflow and still provide a usable timeout
-                .unwrap_or(Instant::now() + Duration::from_secs(1))
+                .unwrap_or(crate::time::Instant::now().into_std() + Duration::from_secs(1))
         });
 
         loop {
             let is_timeout;
             (m, is_timeout) = match timeout_at {
                 Some(timeout_at) => {
-                    let dur = timeout_at.saturating_duration_since(Instant::now());
+                    let dur = timeout_at
+                        .saturating_duration_since(crate::time::Instant::now().into_std());
                     if !dur.is_zero() {
                         // Ideally, we would use `condvar.wait_timeout_until` here, but it is not available
                         // in `loom`. So we manually compute the timeout.

@@ -1,7 +1,7 @@
+use std::collections::{HashMap, VecDeque};
 use std::io;
 #[cfg(unix)]
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
-use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -71,6 +71,10 @@ impl Selector {
             return Ok(());
         }
 
+        if self.drain_socket_ready(events) {
+            return Ok(());
+        }
+
         if matches!(timeout, Some(duration) if duration.is_zero()) {
             return Ok(());
         }
@@ -83,6 +87,10 @@ impl Selector {
         loop {
             crate::zkvm_compat::poll_once();
             if self.drain_ready(events) {
+                return Ok(());
+            }
+
+            if self.drain_socket_ready(events) {
                 return Ok(());
             }
 
@@ -141,6 +149,47 @@ impl Selector {
             events.push(event);
         }
         !events.is_empty()
+    }
+
+    #[cfg(target_os = "zkvm")]
+    fn drain_socket_ready(&self, events: &mut Events) -> bool {
+        let remaining = events.capacity().saturating_sub(events.len());
+        if remaining == 0 {
+            return !events.is_empty();
+        }
+
+        let mut raw_events = Vec::with_capacity(remaining);
+        crate::zkvm_net::selector_poll(self.id, &mut raw_events, Some(Duration::ZERO));
+        for raw in raw_events {
+            if events.len() >= events.capacity() {
+                break;
+            }
+            events.push(Event {
+                token: Token(raw.token),
+                readiness: Ready::from_zkvm_bits(raw.readiness),
+            });
+        }
+
+        !events.is_empty()
+    }
+
+    #[cfg(not(target_os = "zkvm"))]
+    fn drain_socket_ready(&self, events: &mut Events) -> bool {
+        !events.is_empty()
+    }
+}
+
+#[cfg(target_os = "zkvm")]
+impl Ready {
+    fn from_zkvm_bits(bits: u8) -> Self {
+        Self {
+            readable: (bits & crate::zkvm_net::READY_READABLE) != 0,
+            writable: (bits & crate::zkvm_net::READY_WRITABLE) != 0,
+            error: (bits & crate::zkvm_net::READY_ERROR) != 0,
+            read_closed: (bits & crate::zkvm_net::READY_READ_CLOSED) != 0,
+            write_closed: (bits & crate::zkvm_net::READY_WRITE_CLOSED) != 0,
+            ..Self::default()
+        }
     }
 }
 

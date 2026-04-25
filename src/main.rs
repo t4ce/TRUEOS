@@ -48,8 +48,6 @@ mod mio_probe;
 mod net;
 #[cfg(feature = "hyper-probe")]
 mod hyper_probe;
-#[cfg(feature = "octocrab-probe")]
-mod octocrab_probe;
 mod pci;
 mod percpu;
 mod phys;

@@ -3,6 +3,7 @@
 pub(crate) mod listener;
 
 cfg_not_wasip1! {
+    #[cfg(not(target_os = "zkvm"))]
     pub(crate) mod socket;
 }
 

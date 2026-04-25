@@ -209,6 +209,11 @@ mod variant {
     use super::Instant;
 
     pub(super) fn now() -> Instant {
+        #[cfg(target_os = "zkvm")]
+        {
+            return Instant::from_std(crate::time::zkvm::std_instant_now());
+        }
+
         Instant::from_std(std::time::Instant::now())
     }
 }
