@@ -145,7 +145,7 @@ pub fn dispatch() -> bool {
             }
             true
         }
-        #[cfg(all(feature = "tokio-probe", target_os = "zkvm"))]
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         OP_BP_NET_OPEN => {
             match crate::hv::blueprint_net::open_primary() {
                 Some(session_id) => write_response(seq, STATUS_OK, session_id as u64, 0),
@@ -153,7 +153,7 @@ pub fn dispatch() -> bool {
             }
             true
         }
-        #[cfg(all(feature = "tokio-probe", target_os = "zkvm"))]
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         OP_BP_NET_SUBMIT => {
             let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
             let p = host_ptr();
@@ -164,7 +164,7 @@ pub fn dispatch() -> bool {
             }
             true
         }
-        #[cfg(all(feature = "tokio-probe", target_os = "zkvm"))]
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         OP_BP_NET_POLL => {
             let p = host_ptr();
             let out = unsafe { &mut (&mut (*p).payload)[..PAYLOAD_CAP] };

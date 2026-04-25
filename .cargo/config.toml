@@ -17,6 +17,13 @@ rustflags = [
 	"-C", "force-frame-pointers=yes"
 ]
 
+[target.'cfg(target_os = "trueos")']
+rustflags = [
+	"--cfg", "getrandom_backend=\"custom\"",
+	"-C", "link-arg=-Tlinker.ld",
+	"-C", "force-frame-pointers=yes"
+]
+
 [target.'cfg(target_os = "zkvm")']
 rustflags = [
 	"--cfg", "getrandom_backend=\"custom\"",

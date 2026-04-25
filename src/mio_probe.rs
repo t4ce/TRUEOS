@@ -68,7 +68,7 @@ pub(crate) fn log_boot_probe() {
         Err(err) => {
             log_io_failure("poll.new", &err);
             crate::log!(
-                "mio_probe: note selector construction is the current root blocker for zkvm mio\n"
+                "mio_probe: note selector construction is the current root blocker for TRUEOS mio\n"
             );
             return;
         }

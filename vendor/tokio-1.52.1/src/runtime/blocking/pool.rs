@@ -511,7 +511,9 @@ impl Spawner {
     ) -> io::Result<()> {
         let rt = rt.clone();
         let job: TrueosBlockingJob = Box::new(move || {
-            let _enter = rt.enter();
+            // TRUEOS AP carriers are kernel executor tasks, not std OS threads.
+            // Do not enter Tokio's thread-local runtime context here; the TLS
+            // backend is not an independent per-AP worker context.
             rt.inner.blocking_spawner().inner.run(id);
             drop(shutdown_tx);
         });
