@@ -1,3 +1,4 @@
+#[cfg(not(target_os = "zkvm"))]
 use crate::fs::asyncify;
 
 use std::{io, path::Path};
@@ -56,6 +57,11 @@ use std::{io, path::Path};
 pub async fn read(path: impl AsRef<Path>) -> io::Result<Vec<u8>> {
     let path = path.as_ref().to_owned();
 
+    #[cfg(target_os = "zkvm")]
+    return crate::fs::trueos::read(&path).await;
+
+    #[cfg(not(target_os = "zkvm"))]
+    {
     #[cfg(all(
         tokio_unstable,
         feature = "io-uring",
@@ -77,4 +83,5 @@ pub async fn read(path: impl AsRef<Path>) -> io::Result<Vec<u8>> {
     }
 
     asyncify(move || std::fs::read(path)).await
+    }
 }

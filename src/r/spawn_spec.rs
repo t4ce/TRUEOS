@@ -17,7 +17,7 @@ pub(crate) enum SpawnPlacement {
 pub(super) struct TaskSpec {
     pub(super) name: &'static str,
     pub(super) placement: SpawnPlacement,
-    pub(super) disabled: &'static AtomicBool,
+    pub(super) disabled: AtomicBool,
     pub(super) required: u32,
     pub(super) gate: fn() -> bool,
     pub(super) started: &'static AtomicBool,
@@ -44,7 +44,7 @@ impl TaskSpec {
         Self {
             name,
             placement,
-            disabled: &TASK_NOT_DISABLED,
+            disabled: AtomicBool::new(false),
             required,
             gate: task_gate_always,
             started,
@@ -73,7 +73,7 @@ impl TaskSpec {
         Self {
             name,
             placement,
-            disabled: &TASK_NOT_DISABLED,
+            disabled: AtomicBool::new(false),
             required,
             gate,
             started,
@@ -84,25 +84,23 @@ impl TaskSpec {
     pub(super) const fn disabled(
         name: &'static str,
         required: u32,
-        disabled_flag: &'static AtomicBool,
         started: &'static AtomicBool,
         spawn: fn(Spawner) -> SpawnAttempt,
     ) -> Self {
-        Self::disabled_on(SpawnPlacement::Local, name, required, disabled_flag, started, spawn)
+        Self::disabled_on(SpawnPlacement::Local, name, required, started, spawn)
     }
 
     pub(super) const fn disabled_on(
         placement: SpawnPlacement,
         name: &'static str,
         required: u32,
-        disabled_flag: &'static AtomicBool,
         started: &'static AtomicBool,
         spawn: fn(Spawner) -> SpawnAttempt,
     ) -> Self {
         Self {
             name,
             placement,
-            disabled: disabled_flag,
+            disabled: AtomicBool::new(true),
             required,
             gate: task_gate_always,
             started,
@@ -114,19 +112,10 @@ impl TaskSpec {
         name: &'static str,
         required: u32,
         gate: fn() -> bool,
-        disabled_flag: &'static AtomicBool,
         started: &'static AtomicBool,
         spawn: fn(Spawner) -> SpawnAttempt,
     ) -> Self {
-        Self::disabled_gated_on(
-            SpawnPlacement::Local,
-            name,
-            required,
-            gate,
-            disabled_flag,
-            started,
-            spawn,
-        )
+        Self::disabled_gated_on(SpawnPlacement::Local, name, required, gate, started, spawn)
     }
 
     pub(super) const fn disabled_gated_on(
@@ -134,14 +123,13 @@ impl TaskSpec {
         name: &'static str,
         required: u32,
         gate: fn() -> bool,
-        disabled_flag: &'static AtomicBool,
         started: &'static AtomicBool,
         spawn: fn(Spawner) -> SpawnAttempt,
     ) -> Self {
         Self {
             name,
             placement,
-            disabled: disabled_flag,
+            disabled: AtomicBool::new(true),
             required,
             gate,
             started,
@@ -149,8 +137,6 @@ impl TaskSpec {
         }
     }
 }
-
-static TASK_NOT_DISABLED: AtomicBool = AtomicBool::new(false);
 
 pub(super) enum SpawnAttempt {
     Spawned,

@@ -1,3 +1,4 @@
+#[cfg(not(target_os = "zkvm"))]
 use crate::{fs::asyncify, util::as_ref::OwnedBuf};
 
 use std::{io, path::Path};
@@ -27,6 +28,11 @@ pub async fn write(path: impl AsRef<Path>, contents: impl AsRef<[u8]>) -> io::Re
     let path = path.as_ref();
     let contents = crate::util::as_ref::upgrade(contents);
 
+    #[cfg(target_os = "zkvm")]
+    return crate::fs::trueos::write(path, contents.as_ref()).await;
+
+    #[cfg(not(target_os = "zkvm"))]
+    {
     #[cfg(all(
         tokio_unstable,
         feature = "io-uring",
@@ -46,6 +52,7 @@ pub async fn write(path: impl AsRef<Path>, contents: impl AsRef<[u8]>) -> io::Re
     }
 
     write_spawn_blocking(path, contents).await
+    }
 }
 
 #[cfg(all(
@@ -93,6 +100,7 @@ async fn write_uring(path: &Path, mut buf: OwnedBuf) -> io::Result<()> {
     Ok(())
 }
 
+#[cfg(not(target_os = "zkvm"))]
 async fn write_spawn_blocking(path: &Path, contents: OwnedBuf) -> io::Result<()> {
     let path = path.to_owned();
     asyncify(move || std::fs::write(path, contents)).await

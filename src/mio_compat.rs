@@ -3,7 +3,7 @@ use alloc::{collections::VecDeque, vec::Vec};
 use spin::Mutex;
 use v::vnet as api;
 
-use crate::r::net::VNet;
+use crate::blueprint_net_broker::BlueprintNetBroker;
 
 const STATUS_OK: i32 = 0;
 const STATUS_UNSUPPORTED: i32 = -1;
@@ -112,7 +112,7 @@ struct SelectorRegistration {
 }
 
 struct MioCompat {
-    net: Option<VNet>,
+    net: Option<BlueprintNetBroker>,
     sockets: Vec<MioSocketState>,
     pending_opens: VecDeque<PendingOpen>,
     registrations: Vec<SelectorRegistration>,
@@ -142,7 +142,7 @@ impl MioCompat {
 
     fn ensure_net(&mut self) -> Result<(), i32> {
         if self.net.is_none() {
-            self.net = VNet::open_primary();
+            self.net = BlueprintNetBroker::open_primary();
         }
         if self.net.is_some() {
             Ok(())

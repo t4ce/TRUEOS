@@ -16,8 +16,11 @@ use std::net::SocketAddr;
 
 const VNET_PROBE_PORT: u16 = 48_123;
 const TOKIO_NET_PROBE_PORT: u16 = 48_125;
+const TOKIO_FS_PROBE_PATH: &str = "tokio-fs-probe.txt";
+const TOKIO_FS_PROBE_BYTES: &[u8] = b"TRUEOS tokio::fs probe\n";
 
 static TOKIO_NET_PROBE_TASK_SPAWNED: AtomicBool = AtomicBool::new(false);
+static TOKIO_FS_PROBE_TASK_SPAWNED: AtomicBool = AtomicBool::new(false);
 
 async fn probe_async_identity() -> u32 {
     0x544F_4B49
@@ -42,10 +45,240 @@ fn log_io_failure(stage: &str, err: &io::Error) {
     crate::log!("tokio_probe: failure {} kind={:?} err={}\n", stage, err.kind(), err);
 }
 
+fn log_fs_io_failure(stage: &str, err: &io::Error) {
+    crate::log!(
+        "tokio_probe: failure fs.runtime_ops.{} kind={:?} err={}\n",
+        stage,
+        err.kind(),
+        err
+    );
+}
+
 fn primary_ipv4_probe_addr(port: u16) -> Option<SocketAddr> {
     let dev_idx = crate::net::primary_device_index();
     let ip = crate::net::adapter::ipv4_at(dev_idx)?;
     Some(SocketAddr::from((ip, port)))
+}
+
+async fn probe_tokio_blocking_canary() -> bool {
+    #[cfg(target_os = "zkvm")]
+    {
+        crate::log!(
+            "tokio_probe: failure blocking.spawn_blocking_canary unsupported_on_zkvm_thread_facade\n"
+        );
+        return false;
+    }
+
+    #[cfg(not(target_os = "zkvm"))]
+    {
+    crate::log!("tokio_probe: enter blocking.spawn_blocking_canary\n");
+    let canary = tokio::time::timeout(
+        core::time::Duration::from_millis(50),
+        tokio::task::spawn_blocking(|| 0xB10C_0001u32),
+    )
+    .await;
+
+    match canary {
+        Ok(Ok(0xB10C_0001)) => {
+            crate::log!("tokio_probe: success blocking.spawn_blocking_canary\n");
+            true
+        }
+        Ok(Ok(value)) => {
+            crate::log!(
+                "tokio_probe: failure blocking.spawn_blocking_canary value=0x{:08X}\n",
+                value
+            );
+            false
+        }
+        Ok(Err(err)) => {
+            crate::log!(
+                "tokio_probe: failure blocking.spawn_blocking_canary join_cancelled={} join_panic={}\n",
+                err.is_cancelled(),
+                err.is_panic()
+            );
+            false
+        }
+        Err(_) => {
+            crate::log!("tokio_probe: failure blocking.spawn_blocking_canary_timeout\n");
+            false
+        }
+    }
+    }
+}
+
+async fn probe_tokio_fs_runtime_surface() {
+    crate::log!("tokio_probe: enter fs.runtime_ops probe\n");
+
+    match tokio::fs::write(TOKIO_FS_PROBE_PATH, TOKIO_FS_PROBE_BYTES).await {
+        Ok(()) => crate::log!("tokio_probe: success fs.runtime_ops.write\n"),
+        Err(err) => {
+            log_fs_io_failure("write", &err);
+            return;
+        }
+    }
+
+    match tokio::fs::read(TOKIO_FS_PROBE_PATH).await {
+        Ok(bytes) if bytes.as_slice() == TOKIO_FS_PROBE_BYTES => {
+            crate::log!("tokio_probe: success fs.runtime_ops.read\n")
+        }
+        Ok(bytes) => {
+            crate::log!(
+                "tokio_probe: failure fs.runtime_ops.read_value len={}\n",
+                bytes.len()
+            );
+            return;
+        }
+        Err(err) => {
+            log_fs_io_failure("read", &err);
+            return;
+        }
+    }
+
+    match tokio::fs::read_to_string(TOKIO_FS_PROBE_PATH).await {
+        Ok(text) if text.as_bytes() == TOKIO_FS_PROBE_BYTES => {
+            crate::log!("tokio_probe: success fs.runtime_ops.read_to_string\n")
+        }
+        Ok(text) => {
+            crate::log!(
+                "tokio_probe: failure fs.runtime_ops.read_to_string_value len={}\n",
+                text.len()
+            );
+            return;
+        }
+        Err(err) => {
+            log_fs_io_failure("read_to_string", &err);
+            return;
+        }
+    }
+
+    match tokio::fs::remove_file(TOKIO_FS_PROBE_PATH).await {
+        Ok(()) => crate::log!("tokio_probe: success fs.runtime_ops.remove_file\n"),
+        Err(err) => {
+            log_fs_io_failure("remove_file", &err);
+            return;
+        }
+    }
+
+    crate::log!("tokio_probe: success fs.runtime_ops.cabi_helpers\n");
+
+    if let Err(err) = tokio::fs::write(TOKIO_FS_PROBE_PATH, TOKIO_FS_PROBE_BYTES).await {
+        log_fs_io_failure("file_ops.prepare_write", &err);
+        return;
+    }
+
+    {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let mut file = match tokio::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .truncate(true)
+            .open(TOKIO_FS_PROBE_PATH)
+            .await
+        {
+            Ok(file) => file,
+            Err(err) => {
+                log_fs_io_failure("open_options.open", &err);
+                return;
+            }
+        };
+
+        if let Err(err) = file.write_all(TOKIO_FS_PROBE_BYTES).await {
+            log_fs_io_failure("file.write_all", &err);
+            return;
+        }
+        if let Err(err) = file.flush().await {
+            log_fs_io_failure("file.flush", &err);
+            return;
+        }
+        drop(file);
+        crate::log!("tokio_probe: success fs.runtime_ops.file_write_flush\n");
+
+        let mut file = match tokio::fs::File::open(TOKIO_FS_PROBE_PATH).await {
+            Ok(file) => file,
+            Err(err) => {
+                log_fs_io_failure("file.open", &err);
+                return;
+            }
+        };
+        let mut bytes = alloc::vec::Vec::new();
+        match file.read_to_end(&mut bytes).await {
+            Ok(_) if bytes.as_slice() == TOKIO_FS_PROBE_BYTES => {
+                crate::log!("tokio_probe: success fs.runtime_ops.file_read_to_end\n")
+            }
+            Ok(_) => {
+                crate::log!(
+                    "tokio_probe: failure fs.runtime_ops.file_read_to_end_value len={}\n",
+                    bytes.len()
+                );
+                return;
+            }
+            Err(err) => {
+                log_fs_io_failure("file.read_to_end", &err);
+                return;
+            }
+        }
+    }
+
+    match tokio::fs::remove_file(TOKIO_FS_PROBE_PATH).await {
+        Ok(()) => crate::log!("tokio_probe: success fs.runtime_ops.remove_file\n"),
+        Err(err) => {
+            log_fs_io_failure("remove_file", &err);
+            return;
+        }
+    }
+
+    crate::log!("tokio_probe: success fs.file_ops probe_suite\n");
+
+    if !probe_tokio_blocking_canary().await {
+        crate::log!(
+            "tokio_probe: note blocking.spawn_blocking still unsupported; fs.file_ops use TRUEOS CABI handle backend\n"
+        );
+    }
+}
+
+fn run_tokio_fs_probe_runtime() {
+    let mut runtime_builder = tokio::runtime::Builder::new_current_thread();
+    runtime_builder.enable_time();
+
+    let runtime = match runtime_builder.build() {
+        Ok(runtime) => runtime,
+        Err(_) => {
+            crate::log!("tokio_probe: failure fs.rt.build current_thread\n");
+            return;
+        }
+    };
+
+    runtime.block_on(probe_tokio_fs_runtime_surface());
+}
+
+#[task]
+async fn tokio_fs_probe_task() {
+    crate::r::readiness::wait_for(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED).await;
+    crate::log!("tokio_probe: resume fs.runtime_ops after TRUEOSFS_ROOT_MOUNTED\n");
+    run_tokio_fs_probe_runtime();
+}
+
+fn spawn_deferred_tokio_fs_probe() {
+    if crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED) {
+        return;
+    }
+
+    crate::log!("tokio_probe: note fs.runtime_ops deferred until TRUEOSFS_ROOT_MOUNTED\n");
+
+    if TOKIO_FS_PROBE_TASK_SPAWNED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    let Some(spawner) = trueos_qjs::workers::spawner_for_slot(0) else {
+        crate::log!("tokio_probe: note fs.runtime_ops task not spawned (no slot0 spawner)\n");
+        return;
+    };
+
+    match tokio_fs_probe_task() {
+        Ok(token) => spawner.spawn(token),
+        Err(err) => crate::log!("tokio_probe: note fs.runtime_ops task spawn failed: {:?}\n", err),
+    }
 }
 
 async fn probe_vnet_surface() -> Result<(), &'static str> {
@@ -490,9 +723,12 @@ async fn run_probe_suite() -> Result<(), &'static str> {
     {
         let _options = tokio::fs::OpenOptions::new();
         crate::log!("tokio_probe: success fs.open_options_surface\n");
-        crate::log!(
-            "tokio_probe: note fs.runtime_ops deferred on zkvm because tokio::fs currently routes through spawn_blocking\n"
-        );
+        crate::log!("tokio_probe: note fs.runtime_ops pulled through TRUEOS CABI backend\n");
+        if crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED) {
+            probe_tokio_fs_runtime_surface().await;
+        } else {
+            spawn_deferred_tokio_fs_probe();
+        }
     }
 
     {
@@ -524,7 +760,7 @@ pub(crate) fn log_boot_probe() {
         "tokio_probe: wired tokio 1.52.1 with feature rt+sync+time+net+io+fs via zkvm std-ABI shim (single-thread runtime probe)\n"
     );
     crate::log!(
-        "tokio_probe: note blocking/fs runtime ops deferred because Tokio blocking pool still expects host thread spawning on zkvm\n"
+        "tokio_probe: note blocking/File handle ops deferred because Tokio blocking pool still expects host thread spawning on zkvm\n"
     );
 
     let mut runtime_builder = tokio::runtime::Builder::new_current_thread();
@@ -546,4 +782,5 @@ pub(crate) fn log_boot_probe() {
     }
 
     spawn_deferred_tokio_net_probe();
+    spawn_deferred_tokio_fs_probe();
 }

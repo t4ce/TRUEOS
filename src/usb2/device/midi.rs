@@ -1,5 +1,5 @@
 use core::cmp::min;
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crab_usb::Device;
 use embassy_executor::Spawner;
@@ -15,6 +15,8 @@ const PIANO_QUEUE_PKTS: usize = 512;
 const MIDI_IDLE_SLEEP_MS: u64 = 25;
 const MIDI_READ_TIMEOUT_MS: u64 = 1000;
 const MAX_ACTIVE_MIDI_STREAMS: usize = 8;
+const PIANO_AUDIBLE_MIN_MS: u32 = 45;
+const PIANO_AUDIBLE_VEL_MS: u32 = 180;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum MidiAdapterKind {
@@ -43,12 +45,23 @@ struct ActiveMidiStream {
     slot_id: u32,
 }
 
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct PianoNoteSnapshot {
+    pub seq: u16,
+    pub note: u8,
+    pub velocity: u8,
+}
+
 static ACTIVE_MIDI_STREAMS: Mutex<Vec<ActiveMidiStream, MAX_ACTIVE_MIDI_STREAMS>> =
     Mutex::new(Vec::new());
 
 static PIANO_SLOT: AtomicU32 = AtomicU32::new(0);
 static PIANO_CONTROLLER: AtomicU32 = AtomicU32::new(0);
 static PIANO_LAST_HEARTBEAT_SECS: AtomicU64 = AtomicU64::new(u64::MAX);
+static PIANO_NOTE_SEQ: AtomicU32 = AtomicU32::new(0);
+static PIANO_LAST_NOTE: AtomicU32 = AtomicU32::new(0);
+static PIANO_AUDIO_ERRS: AtomicU32 = AtomicU32::new(0);
+static PIANO_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
 static PIANO_QUEUE: Mutex<Deque<[u8; 4], PIANO_QUEUE_PKTS>> = Mutex::new(Deque::new());
 
 fn select_adapter(dev_vid: u16, dev_pid: u16) -> MidiAdapterKind {
@@ -84,8 +97,58 @@ fn piano_set_disconnected(controller_id: u32, slot_id: u32) {
         PIANO_SLOT.store(0, Ordering::Release);
         PIANO_CONTROLLER.store(0, Ordering::Release);
         PIANO_LAST_HEARTBEAT_SECS.store(u64::MAX, Ordering::Release);
+        PIANO_LAST_NOTE.store(0, Ordering::Release);
         let mut q = PIANO_QUEUE.lock();
         while q.pop_front().is_some() {}
+    }
+}
+
+#[inline]
+fn pack_note_snapshot(seq: u16, note: u8, velocity: u8) -> u32 {
+    (u32::from(seq) << 16) | (u32::from(note) << 8) | u32::from(velocity)
+}
+
+#[inline]
+fn unpack_note_snapshot(packed: u32) -> Option<PianoNoteSnapshot> {
+    if packed == 0 {
+        return None;
+    }
+    Some(PianoNoteSnapshot {
+        seq: (packed >> 16) as u16,
+        note: ((packed >> 8) & 0xFF) as u8,
+        velocity: (packed & 0xFF) as u8,
+    })
+}
+
+fn piano_record_note_on(note: u8, velocity: u8) {
+    let seq = PIANO_NOTE_SEQ.fetch_add(1, Ordering::AcqRel).wrapping_add(1) as u16;
+    PIANO_LAST_NOTE.store(pack_note_snapshot(seq, note, velocity), Ordering::Release);
+}
+
+pub(crate) fn piano_note_snapshot() -> Option<PianoNoteSnapshot> {
+    if PIANO_SLOT.load(Ordering::Acquire) == 0 {
+        return None;
+    }
+    unpack_note_snapshot(PIANO_LAST_NOTE.load(Ordering::Acquire))
+}
+
+fn maybe_start_piano_drain(spawner: &Spawner) {
+    if PIANO_DRAIN_STARTED
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+
+    match piano_drain_loop() {
+        Ok(token) => {
+            spawner.spawn(token);
+            crate::log!("piano: drain loop started\n");
+        }
+        Err(err) => {
+            PIANO_DRAIN_STARTED.store(false, Ordering::Release);
+            crate::log!("piano: drain loop token failed: {:?}\n", err);
+        }
     }
 }
 
@@ -94,6 +157,32 @@ fn piano_push_packet(pkt: [u8; 4]) {
     if q.push_back(pkt).is_err() {
         let _ = q.pop_front();
         let _ = q.push_back(pkt);
+    }
+}
+
+#[inline]
+fn midi_note_on_from_packet(pkt: &[u8; 4]) -> Option<(u8, u8)> {
+    let cin = pkt[0] & 0x0F;
+    let status = pkt[1] & 0xF0;
+    if cin == 0x09 && status == 0x90 && pkt[3] != 0 {
+        Some((pkt[2].min(127), pkt[3].min(127)))
+    } else {
+        None
+    }
+}
+
+fn piano_play_packet(pkt: [u8; 4]) {
+    let Some((note, velocity)) = midi_note_on_from_packet(&pkt) else {
+        return;
+    };
+
+    let duration_ms =
+        PIANO_AUDIBLE_MIN_MS + (u32::from(velocity) * PIANO_AUDIBLE_VEL_MS / 127);
+    if let Err(err) = crate::aud::play_midi_note(note, velocity, duration_ms) {
+        let n = PIANO_AUDIO_ERRS.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
+        if n <= 4 {
+            crate::log!("piano: audible note failed err={}\n", err);
+        }
     }
 }
 
@@ -129,6 +218,8 @@ pub async fn piano_drain_loop() {
                     pkt[3]
                 );
             }
+
+            piano_play_packet(pkt);
         }
     }
     .await;
@@ -219,6 +310,9 @@ fn handle_midi_packets(adapter: MidiAdapterKind, sample: &[u8]) {
                     crate::time::unix_time_seconds().unwrap_or_else(crate::time::uptime_seconds);
                 PIANO_LAST_HEARTBEAT_SECS.store(now, Ordering::Release);
                 continue;
+            }
+            if let Some((note, velocity)) = midi_note_on_from_packet(&pkt) {
+                piano_record_note_on(note, velocity);
             }
             piano_push_packet(pkt);
         }
@@ -411,6 +505,11 @@ pub(crate) async fn maybe_start_midi(
     let desc = dev_info.descriptor();
     let vendor_id = desc.vendor_id;
     let product_id = desc.product_id;
+    let adapter = select_adapter(vendor_id, product_id);
+
+    if adapter == MidiAdapterKind::CasioCtk3500 {
+        maybe_start_piano_drain(spawner);
+    }
 
     let device = match host.open_device(dev_info).await {
         Ok(device) => device,

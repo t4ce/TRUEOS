@@ -12,6 +12,9 @@ pub const OP_PING: u32 = 0x02;
 pub const OP_UNIX_TIME: u32 = 0x03;
 pub const OP_NET_TCP_WRITE: u32 = 0x10;
 pub const OP_NET_TCP_READ: u32 = 0x11;
+pub const OP_BP_NET_OPEN: u32 = 0x20;
+pub const OP_BP_NET_SUBMIT: u32 = 0x21;
+pub const OP_BP_NET_POLL: u32 = 0x22;
 
 pub const STATUS_OK: u32 = 0;
 pub const STATUS_BAD_ARG: u32 = 2;

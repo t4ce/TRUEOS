@@ -164,6 +164,13 @@ fn trace_hv_guest_alloc_96_8(layout: Layout, domain: AllocDomain, message: &'sta
     }
 }
 
+#[inline]
+fn trace_alloc_96_8(layout: Layout, message: &'static str) {
+    if crate::logflag::HV_GUEST_ALLOC_TRACE_LOGS && layout.size() == 96 && layout.align() == 8 {
+        crate::log!("{}", message);
+    }
+}
+
 pub fn last_alloc_trace() -> AllocTrace {
     AllocTrace {
         seq: ALLOC_TRACE_SEQ.load(Ordering::Acquire),
@@ -276,7 +283,7 @@ impl FreeList {
             );
         }
 
-        let trace_enabled = true;
+        let trace_enabled = domain != AllocDomain::HvGuest;
         let mut current = self.head;
         trace_hv_guest_alloc_96_8(layout, domain, "hv-guest-alloc-96: before trace_entry\n");
         trace_alloc_entry(trace_enabled, layout, current);
@@ -614,8 +621,12 @@ unsafe impl GlobalAlloc for Allocator {
 static GLOBAL_ALLOCATOR: Allocator = Allocator;
 
 pub unsafe fn alloc_raw(layout: Layout) -> *mut u8 {
+    trace_alloc_96_8(layout, "alloc-96: alloc_raw enter\n");
     init_fallback_regions();
+    trace_alloc_96_8(layout, "alloc-96: alloc_raw after init_fallback_regions\n");
+    trace_alloc_96_8(layout, "alloc-96: alloc_raw before current_alloc_domain\n");
     let domain = current_alloc_domain();
+    trace_alloc_96_8(layout, "alloc-96: alloc_raw after current_alloc_domain\n");
     trace_hv_guest_alloc_96_8(layout, domain, "hv-guest-alloc-96: alloc_raw after domain\n");
     let mut guard = allocator_for_domain(domain).lock();
     trace_hv_guest_alloc_96_8(layout, domain, "hv-guest-alloc-96: alloc_raw after lock\n");
