@@ -30,13 +30,22 @@ pub(crate) mod hint {
 }
 
 pub(crate) mod rand {
+    #[cfg(not(target_os = "zkvm"))]
     use std::collections::hash_map::RandomState;
+    #[cfg(not(target_os = "zkvm"))]
     use std::hash::{BuildHasher, Hash, Hasher};
     use std::sync::atomic::AtomicU32;
     use std::sync::atomic::Ordering::Relaxed;
 
     static COUNTER: AtomicU32 = AtomicU32::new(1);
 
+    #[cfg(target_os = "zkvm")]
+    pub(crate) fn seed() -> u64 {
+        let value = COUNTER.fetch_add(1, Relaxed) as u64;
+        0x9e37_79b9_7f4a_7c15 ^ value.wrapping_mul(0xbf58_476d_1ce4_e5b9)
+    }
+
+    #[cfg(not(target_os = "zkvm"))]
     pub(crate) fn seed() -> u64 {
         let rand_state = RandomState::new();
         // Hash some unique-ish data to generate some new state
@@ -74,7 +83,7 @@ pub(crate) mod sync {
         pub(crate) use crate::loom::std::atomic_u64::AtomicU64;
         pub(crate) use crate::loom::std::atomic_usize::AtomicUsize;
 
-        pub(crate) use std::sync::atomic::{fence, AtomicBool, AtomicPtr, AtomicU8, Ordering};
+        pub(crate) use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, Ordering, fence};
     }
 
     pub(crate) use super::barrier::Barrier;
@@ -118,7 +127,7 @@ pub(crate) mod thread {
 
     #[allow(unused_imports)]
     pub(crate) use std::thread::{
-        current, panicking, park, park_timeout, sleep, spawn, AccessError, Builder, JoinHandle,
-        LocalKey, Result, Thread, ThreadId,
+        AccessError, Builder, JoinHandle, LocalKey, Result, Thread, ThreadId, current, panicking,
+        park, park_timeout, sleep, spawn,
     };
 }

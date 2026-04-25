@@ -35,6 +35,8 @@ pub mod hvv;
 #[cfg(not(feature = "intel-hv"))]
 #[path = "hvv_disabled.rs"]
 pub mod hvv;
+#[cfg(feature = "hyper-probe")]
+mod hyper_probe;
 mod intel;
 #[cfg(feature = "intel-hv")]
 mod intel_hda_probe;
@@ -46,8 +48,6 @@ mod mio_compat;
 #[cfg(feature = "tokio-probe")]
 mod mio_probe;
 mod net;
-#[cfg(feature = "hyper-probe")]
-mod hyper_probe;
 mod pci;
 mod percpu;
 mod phys;

@@ -124,7 +124,9 @@ pub fn guest_boot_active() -> bool {
 }
 
 pub fn hvlogf(args: core::fmt::Arguments<'_>) {
-    crate::log!("hv(stub): {}\n", args);
+    if crate::logflag::HV_LOGS {
+        crate::log!("hv(stub): {}\n", args);
+    }
 }
 
 pub fn status() -> HvStatus {

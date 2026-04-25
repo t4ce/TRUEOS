@@ -252,6 +252,7 @@ async fn execute_request(spawner: &Spawner, request: AppVmLaunchRequest) {
         archive: request.archive.clone(),
         module_bytes: request.module_bytes.clone(),
         app_args: request.app_args.clone(),
+        console_target: Some(target.clone()),
     });
 
     match crate::hv::start(APP_VM_ID, spawner, &UART1_COM1_BACKEND, None) {
