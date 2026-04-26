@@ -40,6 +40,7 @@ pub(crate) const INTEL_RENDER_NGIN_BATCH_LOGS: bool = !INTEL_STAGE1_LOGS;
 pub(crate) const INTEL_DISPLAY_NGIN_LOGS: bool = true;
 pub(crate) const INTEL_MEDIA_NGIN_LOGS: bool = true;
 pub(crate) const INTEL_MEDIA_FS_CACHE_ENABLED: bool = true;
+pub(crate) const INTEL_MEDIA_PRESENT_LUMA_ONLY: bool = true;
 pub(crate) const INTEL_COPY_NGIN_LOGS: bool = true;
 
 pub(crate) const GFX_CABI_FRAME_DEBUG_LOGS: bool = false;

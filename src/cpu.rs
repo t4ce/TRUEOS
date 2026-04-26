@@ -60,7 +60,7 @@ impl CpuProfile {
     }
 
     pub fn current() -> Option<Self> {
-        let cpu_ptr = percpu::this_cpu_ptr();
+        let cpu_ptr = percpu::try_this_cpu_ptr();
         if cpu_ptr.is_null() {
             return None;
         }
@@ -152,7 +152,7 @@ pub fn init_profiles(total_slots: usize) {
 }
 
 pub fn register_current_profile() -> Option<CpuProfile> {
-    let cpu_ptr = percpu::this_cpu_ptr();
+    let cpu_ptr = percpu::try_this_cpu_ptr();
     if cpu_ptr.is_null() {
         return None;
     }
