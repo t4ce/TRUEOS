@@ -271,12 +271,14 @@ fn submit_warm_render_batch(
         );
         log_triangle_stage_diagnosis(submit_name, completed, stats_before, stats_after);
         log_triangle_named_proofs(
+            dev,
             submit_name,
             completed,
             stats_before,
             stats_after,
             result3,
             result4,
+            result5,
             result6,
             result7,
         );
@@ -965,24 +967,33 @@ fn log_triangle_stage_diagnosis(
 }
 
 fn log_triangle_named_proofs(
+    dev: crate::intel::Dev,
     submit_name: &str,
     completed: bool,
     before: TriangleStageStats,
     after: TriangleStageStats,
     post_vf_marker: u32,
     post_vs_marker: u32,
+    post_ps_state_marker: u32,
     post_clip_marker: u32,
     post_raster_marker: u32,
 ) {
     let delta = after.delta_since(before);
     let vf_marker_ok = post_vf_marker == RCS_EXEC_RESULT_DRAW_POST_VF;
     let vs_marker_ok = post_vs_marker == RCS_EXEC_RESULT_DRAW_POST_VS;
+    let ps_state_marker_ok = post_ps_state_marker == RCS_EXEC_RESULT_DRAW_POST_PS_STATE;
     let clip_marker_ok = post_clip_marker == RCS_EXEC_RESULT_DRAW_POST_CLIP;
     let raster_marker_ok = post_raster_marker == RCS_EXEC_RESULT_DRAW_POST_RASTER;
     let vf_accept = delta.ia_vertices > 0 || delta.ia_primitives > 0;
     let vs_accept = delta.vs_invocations > 0;
     let clip_raster_accept = delta.cl_invocations > 0 || delta.cl_primitives > 0;
     let ps_accept = delta.ps_invocations > 0 || delta.cps_invocations > 0;
+    let clip_accept = delta.cl_invocations > 0 || delta.cl_primitives > 0;
+    let raster_packet_accept = clip_marker_ok && raster_marker_ok;
+    let ps_launch_input_ready = ps_state_marker_ok && raster_packet_accept && clip_accept;
+    let sc_instdone = crate::intel::mmio_read(dev, SC_INSTDONE);
+    let sc_extra = crate::intel::mmio_read(dev, SC_INSTDONE_EXTRA);
+    let sc_extra2 = crate::intel::mmio_read(dev, SC_INSTDONE_EXTRA2);
 
     intel_render_focus_log!(
         "intel/render: {} vf-proof accepted={} ia_vtx_delta={} ia_prim_delta={} post_vf=0x{:08X} post_vf_marker={} does_not_prove=vs_or_pixels\n",
@@ -1012,11 +1023,161 @@ fn log_triangle_named_proofs(
         (clip_marker_ok && raster_marker_ok) as u8,
     );
     intel_render_focus_log!(
-        "intel/render: {} ps-dispatch-proof accepted={} ps_delta={} cps_delta={} completed={} does_not_prove=rt_write_or_display\n",
+        "intel/render: {} clip-counter-proof accepted={} cl_delta={} cl_prim_delta={} does_not_prove=raster_samples_or_ps\n",
+        submit_name,
+        clip_accept as u8,
+        delta.cl_invocations,
+        delta.cl_primitives,
+    );
+    intel_render_focus_log!(
+        "intel/render: {} raster-packet-proof accepted={} post_clip=0x{:08X} post_raster=0x{:08X} clip_counter={} sc_instdone=0x{:08X} sc_extra=0x{:08X} sc_extra2=0x{:08X} does_not_prove=fragment_samples_or_ps\n",
+        submit_name,
+        raster_packet_accept as u8,
+        post_clip_marker,
+        post_raster_marker,
+        clip_accept as u8,
+        sc_instdone,
+        sc_extra,
+        sc_extra2,
+    );
+    intel_render_focus_log!(
+        "intel/render: {} ps-launch-frontier-proof accepted={} input_ready={} ps_state_marker={} raster_packet={} clip_counter={} ps_delta={} cps_delta={} ps_depth_delta={} sc_instdone=0x{:08X} does_not_prove=rt_write\n",
+        submit_name,
+        ps_accept as u8,
+        ps_launch_input_ready as u8,
+        ps_state_marker_ok as u8,
+        raster_packet_accept as u8,
+        clip_accept as u8,
+        delta.ps_invocations,
+        delta.cps_invocations,
+        delta.ps_depth,
+        sc_instdone,
+    );
+    if submit_name == "ps-launch-big-primitive" {
+        intel_render_focus_log!(
+            "intel/render: ps-launch-big-primitive-proof accepted={} input_ready={} oversized=1 ps_state_marker={} raster_packet={} clip_counter={} ps_delta={} cps_delta={} ps_depth_delta={} does_not_prove=rt_write\n",
+            ps_accept as u8,
+            ps_launch_input_ready as u8,
+            ps_state_marker_ok as u8,
+            raster_packet_accept as u8,
+            clip_accept as u8,
+            delta.ps_invocations,
+            delta.cps_invocations,
+            delta.ps_depth,
+        );
+    }
+    if submit_name == "ps-bt1-big-primitive" {
+        intel_render_focus_log!(
+            "intel/render: ps-bt1-big-primitive-proof accepted={} input_ready={} oversized=1 ps_bt_count=1 ps_state_marker={} raster_packet={} clip_counter={} ps_delta={} cps_delta={} ps_depth_delta={} does_not_prove=rt_write\n",
+            ps_accept as u8,
+            ps_launch_input_ready as u8,
+            ps_state_marker_ok as u8,
+            raster_packet_accept as u8,
+            clip_accept as u8,
+            delta.ps_invocations,
+            delta.cps_invocations,
+            delta.ps_depth,
+        );
+    }
+    if submit_name == "ps-wm-normal-big-primitive" {
+        intel_render_focus_log!(
+            "intel/render: ps-wm-normal-big-primitive-proof accepted={} input_ready={} oversized=1 wm_force=normal dispatch_qualifier=writeable_rt ps_state_marker={} raster_packet={} clip_counter={} ps_delta={} cps_delta={} ps_depth_delta={} does_not_prove=rt_write\n",
+            ps_accept as u8,
+            ps_launch_input_ready as u8,
+            ps_state_marker_ok as u8,
+            raster_packet_accept as u8,
+            clip_accept as u8,
+            delta.ps_invocations,
+            delta.cps_invocations,
+            delta.ps_depth,
+        );
+    }
+    if submit_name == "ps-dispatch-all-big-primitive" {
+        intel_render_focus_log!(
+            "intel/render: ps-dispatch-width-proof accepted={} input_ready={} oversized=1 dispatch=all ksp_slots=all-same ps_state_marker={} raster_packet={} clip_counter={} ps_delta={} cps_delta={} ps_depth_delta={} does_not_prove=rt_write\n",
+            ps_accept as u8,
+            ps_launch_input_ready as u8,
+            ps_state_marker_ok as u8,
+            raster_packet_accept as u8,
+            clip_accept as u8,
+            delta.ps_invocations,
+            delta.cps_invocations,
+            delta.ps_depth,
+        );
+    }
+    let dispatch_slot = match submit_name {
+        "ps-dispatch-slot0-big-primitive" => Some(0),
+        "ps-dispatch-slot1-big-primitive" => Some(1),
+        "ps-dispatch-slot2-big-primitive" => Some(2),
+        _ => None,
+    };
+    if let Some(slot) = dispatch_slot {
+        intel_render_focus_log!(
+            "intel/render: ps-dispatch-slot-proof accepted={} input_ready={} oversized=1 dispatch_slot={} ksp_slot={} ps_state_marker={} raster_packet={} clip_counter={} ps_delta={} cps_delta={} ps_depth_delta={} does_not_prove=rt_write\n",
+            ps_accept as u8,
+            ps_launch_input_ready as u8,
+            slot,
+            slot,
+            ps_state_marker_ok as u8,
+            raster_packet_accept as u8,
+            clip_accept as u8,
+            delta.ps_invocations,
+            delta.cps_invocations,
+            delta.ps_depth,
+        );
+    }
+    let payload_variant = match submit_name {
+        "ps-payload-push-big-primitive" => Some("push-constant-enable"),
+        "ps-payload-attr-big-primitive" => Some("attribute-enable"),
+        "ps-payload-simple-big-primitive" => Some("simple-ps-hint"),
+        "ps-payload-source-depth-w-big-primitive" => Some("source-depth-w"),
+        "ps-payload-bary-big-primitive" => Some("bary-plane-coeffs"),
+        _ => None,
+    };
+    if let Some(payload_variant) = payload_variant {
+        intel_render_focus_log!(
+            "intel/render: ps-payload-proof accepted={} input_ready={} oversized=1 payload_variant={} ps_state_marker={} raster_packet={} clip_counter={} ps_delta={} cps_delta={} ps_depth_delta={} does_not_prove=rt_write\n",
+            ps_accept as u8,
+            ps_launch_input_ready as u8,
+            payload_variant,
+            ps_state_marker_ok as u8,
+            raster_packet_accept as u8,
+            clip_accept as u8,
+            delta.ps_invocations,
+            delta.cps_invocations,
+            delta.ps_depth,
+        );
+    }
+    let grf_variant = match submit_name {
+        "ps-grf-start-r1-big-primitive" => Some("grf-start-r1"),
+        "ps-grf-start-r2-big-primitive" => Some("grf-start-r2"),
+        "ps-grf-start-r4-big-primitive" => Some("grf-start-r4"),
+        "ps-grf-maxthreads-31-big-primitive" => Some("maxthreads-31"),
+        "ps-grf-maxthreads-15-big-primitive" => Some("maxthreads-15"),
+        _ => None,
+    };
+    if let Some(grf_variant) = grf_variant {
+        intel_render_focus_log!(
+            "intel/render: ps-grf-proof accepted={} input_ready={} oversized=1 grf_variant={} ps_state_marker={} raster_packet={} clip_counter={} ps_delta={} cps_delta={} ps_depth_delta={} does_not_prove=rt_write\n",
+            ps_accept as u8,
+            ps_launch_input_ready as u8,
+            grf_variant,
+            ps_state_marker_ok as u8,
+            raster_packet_accept as u8,
+            clip_accept as u8,
+            delta.ps_invocations,
+            delta.cps_invocations,
+            delta.ps_depth,
+        );
+    }
+    intel_render_focus_log!(
+        "intel/render: {} ps-dispatch-proof accepted={} ps_delta={} cps_delta={} ps_depth_delta={} ps_state_marker={} completed={} does_not_prove=rt_write_or_display\n",
         submit_name,
         ps_accept as u8,
         delta.ps_invocations,
         delta.cps_invocations,
+        delta.ps_depth,
+        ps_state_marker_ok as u8,
         completed as u8,
     );
 }

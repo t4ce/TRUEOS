@@ -327,6 +327,30 @@ fn encode_result_store_probe_batch(
     Ok(6 * core::mem::size_of::<u32>())
 }
 
+fn encode_single_store_probe_batch(
+    batch_dwords: &mut [u32],
+    dst_gpu_addr: u64,
+    value: u32,
+    result_gpu_addr: u64,
+    done_value: u32,
+) -> Result<usize, &'static str> {
+    if batch_dwords.len() < 10 {
+        return Err("batch-too-small");
+    }
+
+    batch_dwords[0] = MI_STORE_DATA_IMM_GGTT_DW1;
+    batch_dwords[1] = dst_gpu_addr as u32;
+    batch_dwords[2] = (dst_gpu_addr >> 32) as u32;
+    batch_dwords[3] = value;
+    batch_dwords[4] = MI_STORE_DATA_IMM_GGTT_DW1;
+    batch_dwords[5] = result_gpu_addr as u32;
+    batch_dwords[6] = (result_gpu_addr >> 32) as u32;
+    batch_dwords[7] = done_value;
+    batch_dwords[8] = MI_BATCH_BUFFER_END;
+    batch_dwords[9] = MI_NOOP;
+    Ok(10 * core::mem::size_of::<u32>())
+}
+
 fn encode_vertical_stripe_store_batch(
     batch_dwords: &mut [u32],
     dst_gpu_addr: u64,

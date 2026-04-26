@@ -6,6 +6,9 @@
 // - `batch-submit-proof`: RCS/execlist accepted enough command stream to run
 //   markers.  Current captures still show `final_marker=0`, so full retire is
 //   not proven.
+// - `mi-scanout-store-proof`: RCS command streamer wrote one DWORD into the
+//   live scanout surface via MI_STORE_DATA_IMM.  This proves neither 3D stage
+//   progress nor PS/color-backend writes.
 // - `vertex-upload-proof`: CPU wrote/read back the triangle vertex bytes and
 //   flushed them.  This does not prove VF consumed them.
 // - `vf-proof`: IA/VF counters advance for three vertices.  Current captures

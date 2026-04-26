@@ -32,4 +32,7 @@ exec qemu-system-x86_64 \
     -cdrom "$iso" \
     -display gtk,gl=on \
     -vga none \
-    -device virtio-gpu-gl-pci,disable-modern=off,xres=1920,yres=1080
+    -device virtio-gpu-gl-pci,disable-modern=off,xres=1920,yres=1080 \
+    -audiodev none,id=snd0 \
+    -device ich9-intel-hda,id=hda0,bus=pcie.0,addr=0x7 \
+    -device hda-duplex,audiodev=snd0,bus=hda0.0
