@@ -1339,6 +1339,40 @@ impl HdaController {
         log::info!("[HDA] Stream reset (LPIB->0, reconfig done)");
     }
 
+    fn configure_output_loop_len(&mut self, byte_len: u32) -> Result<(), &'static str> {
+        if byte_len == 0 || byte_len > self.audio_buf_size {
+            return Err("HDA: invalid loop length");
+        }
+
+        let sd_base = self.osd_base(0);
+        let first_len = byte_len.min(524288);
+        let second_len = byte_len.saturating_sub(first_len);
+        let lvi = if second_len == 0 { 0 } else { 1 };
+        let fmt: u16 = 0x0011; // 48kHz, 16-bit, stereo
+
+        unsafe {
+            let bdl = self.bdl_virt as *mut BdlEntry;
+            (*bdl.add(0)).address = self.audio_buf_phys;
+            (*bdl.add(0)).length = first_len;
+            (*bdl.add(0)).ioc = 1;
+
+            (*bdl.add(1)).address = self.audio_buf_phys + u64::from(first_len);
+            (*bdl.add(1)).length = second_len;
+            (*bdl.add(1)).ioc = if second_len == 0 { 0 } else { 1 };
+
+            self.write32(sd_base + sd::CBL, byte_len);
+            self.write16(sd_base + sd::LVI, lvi);
+            self.write16(sd_base + sd::FMT, fmt);
+            self.write32(sd_base + sd::BDLPL, self.bdl_phys as u32);
+            self.write32(sd_base + sd::BDLPU, (self.bdl_phys >> 32) as u32);
+
+            let ctl_high = (self.stream_tag as u32) << (sctl::STREAM_TAG_SHIFT - 16);
+            self.write8(sd_base + sd::CTL + 2, ctl_high as u8);
+        }
+
+        Ok(())
+    }
+
     pub fn fill_tone(&mut self, freq_hz: u32, duration_ms: u32) {
         let sample_rate = 48000u32;
         let channels = 2u32;
@@ -1676,7 +1710,10 @@ pub fn start_looped_playback(samples: &[i16]) -> Result<(), &'static str> {
     // Copy samples to DMA buffer
     let buf = ctrl.audio_buf_virt as *mut i16;
     let buf_capacity = (ctrl.audio_buf_size / 2) as usize;
-    let to_copy = samples.len().min(buf_capacity);
+    let to_copy = samples.len().min(buf_capacity) & !1;
+    if to_copy == 0 {
+        return Err("HDA: no loop samples");
+    }
 
     unsafe {
         core::ptr::copy_nonoverlapping(samples.as_ptr(), buf, to_copy);
@@ -1687,6 +1724,7 @@ pub fn start_looped_playback(samples: &[i16]) -> Result<(), &'static str> {
     }
 
     let data_bytes = (to_copy * 2) as u32;
+    ctrl.configure_output_loop_len(data_bytes)?;
     log::info!(
         "[HDA] Looped playback: {} bytes ({} ms), buf={}",
         data_bytes,

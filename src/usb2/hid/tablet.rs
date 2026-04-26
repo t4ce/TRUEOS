@@ -3,7 +3,7 @@ use super::{
     sync_runtime_cursor_snapshot,
 };
 
-const HID_TABLET_RING_CAP: usize = crate::appcaps::input::HID_TABLET_RING_CAP;
+const HID_TABLET_RING_CAP: usize = crate::allcaps::input::HID_TABLET_RING_CAP;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]

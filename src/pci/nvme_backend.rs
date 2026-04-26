@@ -46,17 +46,17 @@ const NVME_IDENTIFY_CONTROLLER: u32 = 0x01;
 const NVME_IDENTIFY_ACTIVE_NSID_LIST: u32 = 0x02;
 
 const PAGE_SIZE: usize = 4096;
-const ADMIN_TIMEOUT_MS: u64 = crate::appcaps::storage::NVME_ADMIN_TIMEOUT_MS;
-const IO_TIMEOUT_MS: u64 = crate::appcaps::storage::NVME_IO_TIMEOUT_MS;
+const ADMIN_TIMEOUT_MS: u64 = crate::allcaps::storage::NVME_ADMIN_TIMEOUT_MS;
+const IO_TIMEOUT_MS: u64 = crate::allcaps::storage::NVME_IO_TIMEOUT_MS;
 // Keep a conservative floor even when CAP.TO reports a shorter controller timeout.
-const READY_TIMEOUT_MS: u64 = crate::appcaps::storage::NVME_READY_TIMEOUT_MS;
-const NVME_CAP_TO_GRANULARITY_MS: u64 = crate::appcaps::storage::NVME_CAP_TO_GRANULARITY_MS;
+const READY_TIMEOUT_MS: u64 = crate::allcaps::storage::NVME_READY_TIMEOUT_MS;
+const NVME_CAP_TO_GRANULARITY_MS: u64 = crate::allcaps::storage::NVME_CAP_TO_GRANULARITY_MS;
 // Bound a tiny hot-poll window before yielding so immediate completions do not
 // pay a full timer tick.
-const IO_HOT_POLL_LIMIT: usize = crate::appcaps::storage::NVME_IO_HOT_POLL_LIMIT;
-const IO_POLL_INTERVAL_MS: u64 = crate::appcaps::storage::NVME_IO_POLL_INTERVAL_MS;
-const QUEUE_DEPTH_CAP: u16 = crate::appcaps::storage::NVME_QUEUE_DEPTH_CAP;
-const IO_TRANSFER_PAGES_CAP: u64 = crate::appcaps::storage::NVME_IO_TRANSFER_PAGES_CAP;
+const IO_HOT_POLL_LIMIT: usize = crate::allcaps::storage::NVME_IO_HOT_POLL_LIMIT;
+const IO_POLL_INTERVAL_MS: u64 = crate::allcaps::storage::NVME_IO_POLL_INTERVAL_MS;
+const QUEUE_DEPTH_CAP: u16 = crate::allcaps::storage::NVME_QUEUE_DEPTH_CAP;
+const IO_TRANSFER_PAGES_CAP: u64 = crate::allcaps::storage::NVME_IO_TRANSFER_PAGES_CAP;
 const IO_QID: u16 = 1;
 
 #[derive(Copy, Clone)]

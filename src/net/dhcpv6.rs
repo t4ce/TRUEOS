@@ -7,8 +7,8 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-pub const CLIENT_PORT: u16 = 546;
-pub const SERVER_PORT: u16 = 547;
+pub const CLIENT_PORT: u16 = crate::allports::well_known::DHCPV6_CLIENT;
+pub const SERVER_PORT: u16 = crate::allports::well_known::DHCPV6_SERVER;
 
 // ff02::1:2 (All_DHCP_Relay_Agents_and_Servers)
 pub const ALL_SERVERS_MCAST: [u8; 16] =

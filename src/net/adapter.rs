@@ -141,15 +141,15 @@ struct InternalNetbenchCombinedLog {
 // Boot can involve several concurrent TCP/TLS connections (DoH/DoT, fetches,
 // net-shell, etc.). 8 was too tight and caused transient "no sockets available"
 // failures under load.
-const MAX_SOCKETS: usize = crate::appcaps::net::MAX_SOCKETS;
-const MAX_DRAIN_PER_LOOP: usize = crate::appcaps::net::MAX_DRAIN_PER_LOOP;
-const TCP_RX_BUF_BYTES: usize = crate::appcaps::net::TCP_RX_BUF_BYTES;
-const TCP_TX_BUF_BYTES: usize = crate::appcaps::net::TCP_TX_BUF_BYTES;
+const MAX_SOCKETS: usize = crate::allcaps::net::MAX_SOCKETS;
+const MAX_DRAIN_PER_LOOP: usize = crate::allcaps::net::MAX_DRAIN_PER_LOOP;
+const TCP_RX_BUF_BYTES: usize = crate::allcaps::net::TCP_RX_BUF_BYTES;
+const TCP_TX_BUF_BYTES: usize = crate::allcaps::net::TCP_TX_BUF_BYTES;
 const ICMP_IDENT: u16 = 0x1234;
-const ICMP_VNET_MAX_INFLIGHT: usize = crate::appcaps::net::ICMP_VNET_MAX_INFLIGHT;
-const ICMP_VNET_TIMEOUT_MS: i64 = crate::appcaps::net::ICMP_VNET_TIMEOUT_MS;
-const NET_POLL_SLEEP_US: u64 = crate::appcaps::net::NET_POLL_SLEEP_US;
-const NET_SERVICE_SLEEP_US: u64 = crate::appcaps::net::NET_SERVICE_SLEEP_US;
+const ICMP_VNET_MAX_INFLIGHT: usize = crate::allcaps::net::ICMP_VNET_MAX_INFLIGHT;
+const ICMP_VNET_TIMEOUT_MS: i64 = crate::allcaps::net::ICMP_VNET_TIMEOUT_MS;
+const NET_POLL_SLEEP_US: u64 = crate::allcaps::net::NET_POLL_SLEEP_US;
+const NET_SERVICE_SLEEP_US: u64 = crate::allcaps::net::NET_SERVICE_SLEEP_US;
 // DHCPv6 bring-up is easy to misdiagnose because failures often look like
 // "nothing happens". Keep a tiny amount of always-on logging on state changes
 // and a small RX sample to make it obvious whether we transmit/receive.
@@ -158,17 +158,17 @@ const NET_SERVICE_SLEEP_US: u64 = crate::appcaps::net::NET_SERVICE_SLEEP_US;
 // any IPv6 DNS yet (from either RA or DHCPv6).
 const DHCP6_EAGER_DNS: bool = true;
 
-const DHCP_DNS_MAX: usize = crate::appcaps::net::DNS_SERVER_MAX;
-const RA_DNS6_MAX: usize = crate::appcaps::net::DNS_SERVER_MAX;
-const DHCP6_DNS6_MAX: usize = crate::appcaps::net::DNS_SERVER_MAX;
-pub const MAX_NET_DEVICES: usize = crate::appcaps::net::MAX_NET_DEVICES;
+const DHCP_DNS_MAX: usize = crate::allcaps::net::DNS_SERVER_MAX;
+const RA_DNS6_MAX: usize = crate::allcaps::net::DNS_SERVER_MAX;
+const DHCP6_DNS6_MAX: usize = crate::allcaps::net::DNS_SERVER_MAX;
+pub const MAX_NET_DEVICES: usize = crate::allcaps::net::MAX_NET_DEVICES;
 const STATIC_FALLBACK_PREFIX_LEN: u8 = 24;
 const STATIC_FALLBACK_BASE_IPV4: [u8; 4] = [192, 168, 178, 111];
 const STATIC_FALLBACK_GATEWAY: [u8; 4] = [192, 168, 178, 1];
 
 const IPV6_LINK_LOCAL_PREFIX: [u8; 8] = [0xfe, 0x80, 0, 0, 0, 0, 0, 0];
 const IPV6_LINK_LOCAL_PREFIX_LEN: u8 = 64;
-const IPV6_RS_RETRY_MS: i64 = crate::appcaps::net::IPV6_RS_RETRY_MS;
+const IPV6_RS_RETRY_MS: i64 = crate::allcaps::net::IPV6_RS_RETRY_MS;
 
 // Best-effort primary DNS server snapshot (used by v-layer defaults).
 // Kept intentionally simple: we record what DHCP reports for the active primary NIC.

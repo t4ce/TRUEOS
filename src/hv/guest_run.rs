@@ -180,6 +180,9 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
     let process_args =
         blueprint::build_process_args(state.archive.as_str(), state.app_args.as_slice());
     let process_env = blueprint::build_process_env(state.archive.as_str());
+    let app_fs_root =
+        blueprint::app_fs_root_for_archive(state.archive.as_str(), state.module_bytes.as_slice());
+    let _ = crate::r::io::kfs::create_dir_all(app_fs_root.as_str());
     crate::hv::begin_blueprint_app_window_session(state.archive.as_str());
     crate::blueprint_net_broker::set_vmx_guest_net_backend(true);
     let invoke_result = blueprint::invoke_host_rel(
@@ -188,6 +191,7 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
         process_args,
         process_env,
         state.console_target.clone(),
+        Some(app_fs_root),
     );
     crate::blueprint_net_broker::set_vmx_guest_net_backend(false);
     match invoke_result {

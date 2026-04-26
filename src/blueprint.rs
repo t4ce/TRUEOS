@@ -4,6 +4,7 @@ use alloc::vec::Vec;
 use core::alloc::Layout;
 use core::ffi::c_char;
 use core::sync::atomic::{AtomicBool, Ordering};
+use sha2::{Digest, Sha256};
 use spin::Mutex;
 
 const BLUEPRINT_HEADER_LEN: usize = 24;
@@ -964,6 +965,44 @@ pub(crate) fn build_process_env(archive: &str) -> BTreeMap<String, String> {
     vars
 }
 
+fn sha256_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let digest = Sha256::digest(bytes);
+    let mut out = String::with_capacity(64);
+    for byte in digest {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
+}
+
+fn safe_archive_stem(archive: &str) -> String {
+    let mut out = String::new();
+    let stem = archive.trim().trim_end_matches(".bp");
+    for ch in stem.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' {
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push('_');
+        }
+    }
+    while out.starts_with('.') || out.starts_with('/') || out.starts_with('_') {
+        out.remove(0);
+    }
+    while out.ends_with('.') || out.ends_with('/') || out.ends_with('_') {
+        out.pop();
+    }
+    if out.is_empty() {
+        String::from("app")
+    } else {
+        out
+    }
+}
+
+pub(crate) fn app_fs_root_for_archive(archive: &str, module_bytes: &[u8]) -> String {
+    alloc::format!("apps/{}/{}", safe_archive_stem(archive), sha256_hex(module_bytes))
+}
+
 pub(crate) fn parse_blueprint(bytes: &[u8]) -> Result<BlueprintModule<'_>, &'static str> {
     if bytes.len() < BLUEPRINT_HEADER_LEN {
         return Err("module truncated");
@@ -1008,6 +1047,7 @@ pub(crate) fn invoke_host_rel(
     process_args: Vec<String>,
     process_env: BTreeMap<String, String>,
     console_target: Option<crate::shell2::MatrixTarget>,
+    app_fs_root: Option<String>,
 ) -> Result<(), String> {
     let image = load_rel_image(unpacked)?;
     let sections = parse_sections(unpacked)?;
@@ -1016,10 +1056,11 @@ pub(crate) fn invoke_host_rel(
     let (_arg_storage, argv) = build_argv(process_args.as_slice());
     let main_fn: extern "C" fn(usize, *const *const c_char) =
         unsafe { core::mem::transmute(main_addr) };
-    crate::r::io::env::with_launch_context_console(
+    crate::r::io::env::with_launch_context_console_and_fs_root(
         process_args,
         process_env,
         console_target,
+        app_fs_root,
         || {
             main_fn(
                 argv.len(),

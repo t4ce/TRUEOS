@@ -5,7 +5,7 @@ use v::vnet;
 
 use crate::r::net::{NetProfile, VNet};
 
-const SNTP_PORT: u16 = 123;
+const SNTP_PORT: u16 = crate::allports::well_known::SNTP;
 const SNTP_PACKET_LEN: usize = 48;
 const SNTP_OPEN_TIMEOUT_MS: u64 = 4000;
 const SNTP_IDLE_POLL_MS: u64 = 10;

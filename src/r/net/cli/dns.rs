@@ -180,7 +180,7 @@ pub const PUBLIC_DNS_SERVERS_V6: [[u8; 16]; 3] = [
     ],
 ];
 
-const DNS_PORT: u16 = 53;
+const DNS_PORT: u16 = crate::allports::well_known::DNS;
 
 const DNS_CACHE_CAP: usize = 8;
 // Keep this short; it's mainly to avoid repeated lookups during module loading.

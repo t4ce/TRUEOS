@@ -23,8 +23,8 @@ use crate::net::adapter::{
 pub type Queue<T> = adapter::NetQueue<T>;
 
 static VNET_SEQ: AtomicU32 = AtomicU32::new(1);
-const VNET_CMD_QUEUE_DEPTH: usize = crate::appcaps::net::VNET_CMD_QUEUE_DEPTH;
-const VNET_EVENT_QUEUE_DEPTH_DEFAULT: usize = crate::appcaps::net::VNET_EVENT_QUEUE_DEPTH_DEFAULT;
+const VNET_CMD_QUEUE_DEPTH: usize = crate::allcaps::net::VNET_CMD_QUEUE_DEPTH;
+const VNET_EVENT_QUEUE_DEPTH_DEFAULT: usize = crate::allcaps::net::VNET_EVENT_QUEUE_DEPTH_DEFAULT;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NetProfile {

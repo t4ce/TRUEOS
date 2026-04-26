@@ -210,7 +210,9 @@ pub(crate) fn try_parse(
                 io,
                 alloc::format!(
                     "hv: vm{} snapshot saved store=hv-ramdisk path=vm/vm{}.snapshot bytes={}",
-                    vm_id, vm_id, bytes
+                    vm_id,
+                    vm_id,
+                    bytes
                 )
                 .as_str(),
             ),

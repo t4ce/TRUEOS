@@ -153,7 +153,8 @@ impl<'a> AlignedWriter<'a> {
 
     fn set_scroll_region(&self, top: usize) {
         // Reserve header rows by scrolling only in [top..bottom].
-        self.io.raw_write_fmt(format_args!("\x1b[{};999r", top.max(1)));
+        self.io
+            .raw_write_fmt(format_args!("\x1b[{};999r", top.max(1)));
     }
 
     fn reset_scroll_region(&self) {
