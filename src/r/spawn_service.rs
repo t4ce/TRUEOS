@@ -1137,8 +1137,7 @@ static TASKS: [TaskSpec; 66] = [
         &INTEL_CURSOR_SERVICE_STARTED,
         spawn_intel_cursor_service_task,
     ),
-    TaskSpec::enabled_on(
-        SpawnPlacement::Worker,
+    TaskSpec::disabled(
         "intel-hda-probe",
         crate::r::readiness::INTEL_HDA_READY,
         &INTEL_HDA_PROBE_STARTED,
