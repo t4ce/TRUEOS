@@ -198,6 +198,13 @@ pub fn try_this_cpu_ptr() -> *mut PerCpu {
     if !PERCPU_READY.load(Ordering::Acquire) {
         return core::ptr::null_mut();
     }
+    #[cfg(target_arch = "x86_64")]
+    {
+        let gs_base = unsafe { Msr::new(MSR_IA32_GS_BASE).read() };
+        if gs_base == 0 {
+            return core::ptr::null_mut();
+        }
+    }
     let ptr = this_cpu_ptr();
     if ptr.is_null() {
         return core::ptr::null_mut();
