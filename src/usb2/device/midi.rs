@@ -134,6 +134,10 @@ pub(crate) fn piano_note_snapshot() -> Option<PianoNoteSnapshot> {
     unpack_note_snapshot(PIANO_LAST_NOTE.load(Ordering::Acquire))
 }
 
+pub(crate) fn piano_connected() -> bool {
+    PIANO_SLOT.load(Ordering::Acquire) != 0
+}
+
 fn maybe_start_piano_drain(spawner: &Spawner) {
     if PIANO_DRAIN_STARTED
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
