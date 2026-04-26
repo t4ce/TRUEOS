@@ -125,7 +125,7 @@ const PRIMARY_TRIANGLE_SUBMIT_ATTEMPTS: usize = 3;
 const PRIMARY_USE_MI_STRIPE_PROBE: bool = false;
 const PRIMARY_USE_3D_NO_DRAW_PROBE: bool = false;
 const PRIMARY_USE_DRAW_PATH_BOOT_ONCE: bool = true;
-const PRIMARY_DISABLE_RENDER_BRINGUP: bool = true;
+const PRIMARY_DISABLE_RENDER_BRINGUP: bool = false;
 const MI_STRIPE_COUNT: usize = 12;
 const MI_STRIPE_WIDTH_PX: usize = 4;
 const MI_STRIPE_X_STEP_PX: u32 = 1;
@@ -397,6 +397,16 @@ struct TriangleDrawPrep {
     rt_pitch: u32,
     target_w: u32,
     target_h: u32,
+}
+
+#[derive(Copy, Clone)]
+struct TriangleVertexUploadProof {
+    vertex_count: u32,
+    vertex_stride: u32,
+    byte_len: usize,
+    gpu_addr: u64,
+    signed_area_2x: f32,
+    cpu_readback_ok: bool,
 }
 
 #[derive(Copy, Clone)]
@@ -4913,49 +4923,7 @@ fn prepare_triangle_draw_resources(
         return None;
     }
 
-    let vertices = unsafe {
-        core::slice::from_raw_parts_mut(
-            warm.vertex_virt as *mut f32,
-            (warm.vertex_len / core::mem::size_of::<f32>())
-                .max(TRIANGLE_DRAW_VERTICES * TRIANGLE_DRAW_VERTEX_DWORDS),
-        )
-    };
-    vertices.fill(0.0);
-
-    // Keep the geometry comfortably inside the canonical clip volume so this
-    // proof path is a trivial-accept case for clipper rather than a test of
-    // clipping behavior itself.
-    let tri = [
-        [-0.25f32, -0.20, 0.0],
-        [0.25, -0.20, 0.0],
-        [0.00, 0.20, 0.0],
-    ];
-    let signed_area_2x = (tri[1][0] - tri[0][0]) * (tri[2][1] - tri[0][1])
-        - (tri[2][0] - tri[0][0]) * (tri[1][1] - tri[0][1]);
-    for (dst, src) in vertices
-        .chunks_exact_mut(TRIANGLE_DRAW_VERTEX_DWORDS)
-        .take(TRIANGLE_DRAW_VERTICES)
-        .zip(tri.iter())
-    {
-        dst.copy_from_slice(src);
-    }
-    crate::intel::dma_flush(warm.vertex_virt, TRIANGLE_DRAW_VERTICES * TRIANGLE_DRAW_VERTEX_STRIDE);
-    intel_render_verbose_log!(
-        "intel/render: draw-verts v0=[{:.3},{:.3},{:.3}] v1=[{:.3},{:.3},{:.3}] v2=[{:.3},{:.3},{:.3}] stride={} gpu=0x{:X} signed_area2={:.3} winding={}\n",
-        tri[0][0],
-        tri[0][1],
-        tri[0][2],
-        tri[1][0],
-        tri[1][1],
-        tri[1][2],
-        tri[2][0],
-        tri[2][1],
-        tri[2][2],
-        TRIANGLE_DRAW_VERTEX_STRIDE,
-        GPU_VA_VERTEX_BASE,
-        signed_area_2x,
-        if signed_area_2x >= 0.0 { "ccw" } else { "cw" }
-    );
+    let vertex_proof = write_canonical_triangle_vertices(warm)?;
 
     unsafe {
         core::ptr::write_bytes(warm.draw_state_virt, 0, warm.draw_state_len);
@@ -4963,14 +4931,105 @@ fn prepare_triangle_draw_resources(
     crate::intel::dma_flush(warm.draw_state_virt, warm.draw_state_len);
 
     Some(TriangleDrawPrep {
-        vertex_count: TRIANGLE_DRAW_VERTICES as u32,
-        vertex_stride: TRIANGLE_DRAW_VERTEX_STRIDE as u32,
-        vertex_gpu_addr: GPU_VA_VERTEX_BASE,
+        vertex_count: vertex_proof.vertex_count,
+        vertex_stride: vertex_proof.vertex_stride,
+        vertex_gpu_addr: vertex_proof.gpu_addr,
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_pitch,
         target_w,
         target_h,
+    })
+}
+
+fn write_canonical_triangle_vertices(warm: RenderWarmState) -> Option<TriangleVertexUploadProof> {
+    const TRIANGLE_NDC: [[f32; TRIANGLE_DRAW_VERTEX_DWORDS]; TRIANGLE_DRAW_VERTICES] = [
+        [-0.25, -0.20, 0.0],
+        [0.25, -0.20, 0.0],
+        [0.00, 0.20, 0.0],
+    ];
+
+    let byte_len = TRIANGLE_DRAW_VERTICES * TRIANGLE_DRAW_VERTEX_STRIDE;
+    if warm.vertex_len < byte_len || warm.vertex_virt.is_null() {
+        return None;
+    }
+
+    // This is deliberately only a CPU-side upload proof.
+    //
+    // Facts proven here:
+    //   1. the warm vertex allocation is large enough for three vertices,
+    //   2. the CPU can write the canonical triangle bytes,
+    //   3. the CPU can read back the exact bytes it wrote,
+    //   4. the cache maintenance hook has been issued for that byte range.
+    //
+    // Facts not proven here:
+    //   - the GGTT mapping points at this allocation,
+    //   - the command streamer consumed 3DSTATE_VERTEX_BUFFERS,
+    //   - vertex fetch read these bytes,
+    //   - any shader or raster stage produced pixels.
+    let vertices = unsafe {
+        core::slice::from_raw_parts_mut(
+            warm.vertex_virt as *mut f32,
+            warm.vertex_len / core::mem::size_of::<f32>(),
+        )
+    };
+    vertices.fill(0.0);
+
+    for (dst, src) in vertices
+        .chunks_exact_mut(TRIANGLE_DRAW_VERTEX_DWORDS)
+        .take(TRIANGLE_DRAW_VERTICES)
+        .zip(TRIANGLE_NDC.iter())
+    {
+        dst.copy_from_slice(src);
+    }
+
+    let mut expected = [0u32; TRIANGLE_DRAW_VERTICES * TRIANGLE_DRAW_VERTEX_DWORDS];
+    for (dst, src) in expected.iter_mut().zip(TRIANGLE_NDC.iter().flatten()) {
+        *dst = src.to_bits();
+    }
+
+    let readback = unsafe {
+        core::slice::from_raw_parts(
+            warm.vertex_virt as *const u32,
+            TRIANGLE_DRAW_VERTICES * TRIANGLE_DRAW_VERTEX_DWORDS,
+        )
+    };
+    let cpu_readback_ok = readback == expected.as_slice();
+
+    crate::intel::dma_flush(warm.vertex_virt, byte_len);
+
+    let signed_area_2x =
+        (TRIANGLE_NDC[1][0] - TRIANGLE_NDC[0][0]) * (TRIANGLE_NDC[2][1] - TRIANGLE_NDC[0][1])
+            - (TRIANGLE_NDC[2][0] - TRIANGLE_NDC[0][0])
+                * (TRIANGLE_NDC[1][1] - TRIANGLE_NDC[0][1]);
+
+    intel_render_verbose_log!(
+        "intel/render: vertex-upload-proof stage=cpu-write-readback bytes={} stride={} count={} gpu=0x{:X} readback_ok={} area2={:.3} winding={} v0=[{:.3},{:.3},{:.3}] v1=[{:.3},{:.3},{:.3}] v2=[{:.3},{:.3},{:.3}]\n",
+        byte_len,
+        TRIANGLE_DRAW_VERTEX_STRIDE,
+        TRIANGLE_DRAW_VERTICES,
+        GPU_VA_VERTEX_BASE,
+        cpu_readback_ok as u8,
+        signed_area_2x,
+        if signed_area_2x >= 0.0 { "ccw" } else { "cw" },
+        TRIANGLE_NDC[0][0],
+        TRIANGLE_NDC[0][1],
+        TRIANGLE_NDC[0][2],
+        TRIANGLE_NDC[1][0],
+        TRIANGLE_NDC[1][1],
+        TRIANGLE_NDC[1][2],
+        TRIANGLE_NDC[2][0],
+        TRIANGLE_NDC[2][1],
+        TRIANGLE_NDC[2][2],
+    );
+
+    Some(TriangleVertexUploadProof {
+        vertex_count: TRIANGLE_DRAW_VERTICES as u32,
+        vertex_stride: TRIANGLE_DRAW_VERTEX_STRIDE as u32,
+        byte_len,
+        gpu_addr: GPU_VA_VERTEX_BASE,
+        signed_area_2x,
+        cpu_readback_ok,
     })
 }
 

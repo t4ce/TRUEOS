@@ -87,19 +87,9 @@ impl TaskSpec {
         started: &'static AtomicBool,
         spawn: fn(Spawner) -> SpawnAttempt,
     ) -> Self {
-        Self::disabled_on(SpawnPlacement::Local, name, required, started, spawn)
-    }
-
-    pub(super) const fn disabled_on(
-        placement: SpawnPlacement,
-        name: &'static str,
-        required: u32,
-        started: &'static AtomicBool,
-        spawn: fn(Spawner) -> SpawnAttempt,
-    ) -> Self {
         Self {
             name,
-            placement,
+            placement: SpawnPlacement::Local,
             disabled: AtomicBool::new(true),
             required,
             gate: task_gate_always,
@@ -115,20 +105,9 @@ impl TaskSpec {
         started: &'static AtomicBool,
         spawn: fn(Spawner) -> SpawnAttempt,
     ) -> Self {
-        Self::disabled_gated_on(SpawnPlacement::Local, name, required, gate, started, spawn)
-    }
-
-    pub(super) const fn disabled_gated_on(
-        placement: SpawnPlacement,
-        name: &'static str,
-        required: u32,
-        gate: fn() -> bool,
-        started: &'static AtomicBool,
-        spawn: fn(Spawner) -> SpawnAttempt,
-    ) -> Self {
         Self {
             name,
-            placement,
+            placement: SpawnPlacement::Local,
             disabled: AtomicBool::new(true),
             required,
             gate,
