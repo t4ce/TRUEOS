@@ -291,6 +291,7 @@ fn encode_triangle_probe_batch(
     batch_mode: TriangleBatchMode,
     streamout_experiment: StreamoutProofExperiment,
     front_end_contract: TriangleFrontEndContract,
+    backend_probe_mode: BackendProbeMode,
 ) -> Result<usize, &'static str> {
     let mut cursor = 0usize;
     let vf_synthesized_vue = matches!(batch_mode, TriangleBatchMode::VfDraw);
@@ -449,8 +450,13 @@ fn encode_triangle_probe_batch(
         | (u32::from(front_end_contract.force_sbe_read_offset) << 28)
         | (u32::from(front_end_contract.force_sbe_read_length) << 29)
         | (sbe_vertex_read_length << 11);
-    let (ps_dispatch_8, ps_dispatch_16, ps_dispatch_32) =
-        stage_dispatch_bits(pipeline.ps.meta.kernel.dispatch_mode);
+    let (ps_dispatch_8, ps_dispatch_16, ps_dispatch_32) = match backend_probe_mode {
+        BackendProbeMode::PsDispatchSlot0 => (1, 0, 0),
+        BackendProbeMode::PsDispatchSlot1 => (0, 1, 0),
+        BackendProbeMode::PsDispatchSlot2 => (0, 0, 1),
+        BackendProbeMode::PsDispatchAllKspSlots => (1, 1, 1),
+        _ => stage_dispatch_bits(pipeline.ps.meta.kernel.dispatch_mode),
+    };
     // Keep CLIP close to Mesa's trivial path, but explicitly arm the clipper
     // counters for bring-up. ACCEPT_ALL keeps the unit logically enabled so
     // CL_INVOCATION/CL_PRIMITIVES can advance without depending on actual
@@ -475,15 +481,24 @@ fn encode_triangle_probe_batch(
     // Mesa's simple-shader path emits a nearly all-default WM packet here.
     // Keep this dedicated triangle path equally boring rather than forcing
     // point-rule / line-AA bits that the host reference never asked for.
+    let wm_barycentric_mode = if matches!(backend_probe_mode, BackendProbeMode::PsPayloadBaryPlanes)
+    {
+        1 << 11
+    } else {
+        0
+    };
     let wm_dw1 = (1 << 31)
-        | if matches!(batch_mode, TriangleBatchMode::VfDraw) {
+        | if matches!(batch_mode, TriangleBatchMode::VfDraw)
+            && !matches!(backend_probe_mode, BackendProbeMode::WmNormalDispatch)
+        {
             // The VF-fed draw path is our backend isolation probe, so make the
             // fragment launch condition explicit instead of inferring it from
             // the minimal Mesa-like defaults.
             2 << 19
         } else {
             0
-        };
+        }
+        | wm_barycentric_mode;
     let wm_depth_stencil_dw1 = 0;
     let wm_depth_stencil_dw2 = 0;
     let wm_depth_stencil_dw3 = 0;
@@ -509,23 +524,83 @@ fn encode_triangle_probe_batch(
     let gfx125_3d_mode_dw1 = gfx125_slice_hash.map(gfx125_3d_mode_dw1).unwrap_or(0);
     let gfx125_3d_mode_dw2 = 0;
     let gfx125_3d_mode_dw3 = gfx125_3d_mode_dw3();
-    let ps_dw3 =
-        (binding_table_entry_count_encoding(pipeline.ps.meta.kernel.binding_table_entry_count)
-            << 18)
-            | (sampler_count_encoding(pipeline.ps.meta.kernel.sampler_count) << 27)
-            | (u32::from(pipeline.ps.meta.uses_vmask) * PS_VECTOR_MASK_ENABLE);
+    let ps_binding_table_entry_count = match backend_probe_mode {
+        BackendProbeMode::MesaLike
+        | BackendProbeMode::WmNormalDispatch
+        | BackendProbeMode::PsDispatchSlot0
+        | BackendProbeMode::PsDispatchSlot1
+        | BackendProbeMode::PsDispatchSlot2
+        | BackendProbeMode::PsDispatchAllKspSlots
+        | BackendProbeMode::PsPayloadPushConstant
+        | BackendProbeMode::PsPayloadAttributeEnable
+        | BackendProbeMode::PsPayloadSimpleHint
+        | BackendProbeMode::PsPayloadSourceDepthW
+        | BackendProbeMode::PsPayloadBaryPlanes
+        | BackendProbeMode::PsGrfStartR1
+        | BackendProbeMode::PsGrfStartR2
+        | BackendProbeMode::PsGrfStartR4
+        | BackendProbeMode::PsGrfMaxThreads31
+        | BackendProbeMode::PsGrfMaxThreads15 => pipeline.ps.meta.kernel.binding_table_entry_count,
+        BackendProbeMode::PsBindingTableCountOne => {
+            pipeline.ps.meta.kernel.binding_table_entry_count.max(1)
+        }
+    };
+    let ps_dw3 = (binding_table_entry_count_encoding(ps_binding_table_entry_count) << 18)
+        | (sampler_count_encoding(pipeline.ps.meta.kernel.sampler_count) << 27)
+        | (u32::from(pipeline.ps.meta.uses_vmask) * PS_VECTOR_MASK_ENABLE);
+    let ps_push_constant_enable = pipeline.ps.meta.kernel.push_constant_bytes > 0
+        || matches!(backend_probe_mode, BackendProbeMode::PsPayloadPushConstant);
+    let ps_max_threads_per_psd = backend_probe_mode
+        .ps_max_threads_override()
+        .unwrap_or(TRIANGLE_PS_MAX_THREADS);
+    let ps_grf_start = backend_probe_mode
+        .ps_grf_start_override()
+        .unwrap_or(pipeline.ps.meta.kernel.grf_start_register);
     let ps_dw6 = ps_dispatch_8
         | (ps_dispatch_16 << 1)
         | (ps_dispatch_32 << 2)
-        | (u32::from(pipeline.ps.meta.kernel.push_constant_bytes > 0) * PS_PUSH_CONSTANT_ENABLE)
-        | ((TRIANGLE_PS_MAX_THREADS as u32) << PS_MAX_THREADS_SHIFT);
-    let ps_dw7 = (pipeline.ps.meta.kernel.grf_start_register as u32)
-        | ((pipeline.ps.meta.kernel.grf_start_register as u32) << 8)
-        | ((pipeline.ps.meta.kernel.grf_start_register as u32) << 16);
+        | (u32::from(ps_push_constant_enable) * PS_PUSH_CONSTANT_ENABLE)
+        | (ps_max_threads_per_psd << PS_MAX_THREADS_SHIFT);
+    let ps_dw7 =
+        (ps_grf_start as u32) | ((ps_grf_start as u32) << 8) | ((ps_grf_start as u32) << 16);
+    let ps_ksp_base = ps_ksp_offset & !0x3F;
+    let ps_ksp0 = if matches!(backend_probe_mode.ps_dispatch_slot(), Some(1 | 2)) {
+        0
+    } else {
+        ps_ksp_base
+    };
+    let ps_ksp1 = if matches!(
+        backend_probe_mode,
+        BackendProbeMode::PsDispatchSlot1 | BackendProbeMode::PsDispatchAllKspSlots
+    ) {
+        ps_ksp_base
+    } else {
+        0
+    };
+    let ps_ksp2 = if matches!(
+        backend_probe_mode,
+        BackendProbeMode::PsDispatchSlot2 | BackendProbeMode::PsDispatchAllKspSlots
+    ) {
+        ps_ksp_base
+    } else {
+        0
+    };
+    let ps_scratch_space_buffer = 0u32;
+    let ps_extra_attribute_enable = pipeline.ps.meta.num_varying_inputs > 0
+        || matches!(backend_probe_mode, BackendProbeMode::PsPayloadAttributeEnable);
     let ps_extra_dw1 = (u32::from(pipeline.ps.meta.computed_stencil)
         * PS_EXTRA_PIXEL_SHADER_COMPUTES_STENCIL)
         | (u32::from(pipeline.ps.meta.persample_dispatch) * PS_EXTRA_PIXEL_SHADER_IS_PER_SAMPLE)
-        | (u32::from(pipeline.ps.meta.num_varying_inputs > 0) * PS_EXTRA_ATTRIBUTE_ENABLE)
+        | (u32::from(ps_extra_attribute_enable) * PS_EXTRA_ATTRIBUTE_ENABLE)
+        | (u32::from(matches!(backend_probe_mode, BackendProbeMode::PsPayloadSimpleHint))
+            * PS_EXTRA_SIMPLE_PS_HINT)
+        | (u32::from(matches!(backend_probe_mode, BackendProbeMode::PsPayloadSourceDepthW))
+            * (PS_EXTRA_REQUIRES_SOURCE_DEPTH_W_PLANE
+                | PS_EXTRA_USES_SOURCE_W
+                | PS_EXTRA_USES_SOURCE_DEPTH))
+        | (u32::from(matches!(backend_probe_mode, BackendProbeMode::PsPayloadBaryPlanes))
+            * (PS_EXTRA_REQUIRES_NONPERSPECTIVE_BARY_PLANE
+                | PS_EXTRA_REQUIRES_PERSPECTIVE_BARY_PLANE))
         | ((pipeline.ps.meta.computed_depth_mode as u32) << 26)
         | PS_EXTRA_PIXEL_SHADER_VALID;
 
@@ -1093,16 +1168,16 @@ fn encode_triangle_probe_batch(
 
     log_batch_offset(cursor, "3DSTATE_PS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_PS)?;
-    push(batch_dwords, &mut cursor, ps_ksp_offset & !0x3F)?;
+    push(batch_dwords, &mut cursor, ps_ksp0)?;
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, ps_dw3)?;
-    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, ps_scratch_space_buffer)?;
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, ps_dw6)?;
     push(batch_dwords, &mut cursor, ps_dw7)?;
+    push(batch_dwords, &mut cursor, ps_ksp1)?;
     push(batch_dwords, &mut cursor, 0)?;
-    push(batch_dwords, &mut cursor, 0)?;
-    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, ps_ksp2)?;
     push(batch_dwords, &mut cursor, 0)?;
 
     log_batch_offset(cursor, "3DSTATE_PS_EXTRA");
@@ -1165,7 +1240,16 @@ fn encode_triangle_probe_batch(
     push(batch_dwords, &mut cursor, MI_NOOP)?;
 
     intel_render_verbose_log!(
-        "intel/render: probe-3d sbe=0x{:08X} clip=[0x{:08X},0x{:08X},0x{:08X}] sf=[0x{:08X},0x{:08X},0x{:08X}] raster=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] wm=0x{:08X} ps3=0x{:08X} ps6=0x{:08X} ps7=0x{:08X} ps_extra=0x{:08X}\n",
+        "intel/render: probe-3d backend={} ps_bt_count={} ps_ksp=[0x{:X},0x{:X},0x{:X}] ps_scratch=0x{:X} ps_dispatch_bits={}{}{} sbe=0x{:08X} clip=[0x{:08X},0x{:08X},0x{:08X}] sf=[0x{:08X},0x{:08X},0x{:08X}] raster=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] wm=0x{:08X} ps3=0x{:08X} ps6=0x{:08X} ps7=0x{:08X} ps_extra=0x{:08X}\n",
+        backend_probe_mode.label(),
+        ps_binding_table_entry_count,
+        ps_ksp0,
+        ps_ksp1,
+        ps_ksp2,
+        ps_scratch_space_buffer,
+        ps_dispatch_8,
+        ps_dispatch_16,
+        ps_dispatch_32,
         sbe_dw1,
         clip_dw1,
         clip_dw2,
@@ -1296,6 +1380,43 @@ fn encode_triangle_probe_batch(
         sbe_vertex_read_length,
         pipeline.ps.meta.num_varying_inputs,
         batch_mode.streamout_enabled() as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: probe-ps-payload-decoded backend={} push_constant_enable={} push_constant_bytes={} scratch=0x{:X} grf_start={} grf_used={} ps_extra=0x{:08X} attr_enable={} simple_hint={} src_depth={} src_w={} src_depth_w_coeff={} bary_coeffs={} wm_bary=0x{:X} ps_dispatch_bits={}{}{} does_not_prove=ps_thread_launch\n",
+        backend_probe_mode.label(),
+        ps_push_constant_enable as u8,
+        pipeline.ps.meta.kernel.push_constant_bytes,
+        ps_scratch_space_buffer,
+        ps_grf_start,
+        pipeline.ps.meta.kernel.grf_used,
+        ps_extra_dw1,
+        ((ps_extra_dw1 & PS_EXTRA_ATTRIBUTE_ENABLE) != 0) as u8,
+        ((ps_extra_dw1 & PS_EXTRA_SIMPLE_PS_HINT) != 0) as u8,
+        ((ps_extra_dw1 & PS_EXTRA_USES_SOURCE_DEPTH) != 0) as u8,
+        ((ps_extra_dw1 & PS_EXTRA_USES_SOURCE_W) != 0) as u8,
+        ((ps_extra_dw1 & PS_EXTRA_REQUIRES_SOURCE_DEPTH_W_PLANE) != 0) as u8,
+        ((ps_extra_dw1
+            & (PS_EXTRA_REQUIRES_NONPERSPECTIVE_BARY_PLANE
+                | PS_EXTRA_REQUIRES_PERSPECTIVE_BARY_PLANE))
+            != 0) as u8,
+        (wm_dw1 >> 11) & 0x3F,
+        ps_dispatch_8,
+        ps_dispatch_16,
+        ps_dispatch_32,
+    );
+    intel_render_focus_log!(
+        "intel/render: probe-ps-grf-decoded backend={} baked_grf_start={} programmed_grf_start={} grf_used={} register_blocks_16={} max_threads_per_psd={} ps_dw6=0x{:08X} ps_dw7=0x{:08X} dispatch_bits={}{}{} does_not_prove=ps_thread_launch\n",
+        backend_probe_mode.label(),
+        pipeline.ps.meta.kernel.grf_start_register,
+        ps_grf_start,
+        pipeline.ps.meta.kernel.grf_used,
+        (u32::from(pipeline.ps.meta.kernel.grf_used) + 15) / 16,
+        ps_max_threads_per_psd,
+        ps_dw6,
+        ps_dw7,
+        ps_dispatch_8,
+        ps_dispatch_16,
+        ps_dispatch_32,
     );
     intel_render_verbose_log!(
         "intel/render: 3dprimitive-setup mode={:?} topo={} vertices={} start_vertex=0 instances={} start_instance=0 base_vertex=0 vb=0x{:X} stride={} rt=0x{:X} pitch=0x{:X} rect={}x{}\n",

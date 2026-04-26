@@ -77,6 +77,25 @@ fn submit_primary_probe_now(reason: &'static str) -> bool {
         PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
         return false;
     }
+    if PRIMARY_USE_MI_SCANOUT_PROOF
+        && reason == "boot-once"
+        && !PRIMARY_MI_SCANOUT_PROOF_SUBMITTED.swap(true, Ordering::AcqRel)
+    {
+        let accepted = submit_mi_scanout_store_proof(
+            dev,
+            warm,
+            surface_gpu,
+            pitch_bytes,
+            width as usize,
+            height as usize,
+        );
+        if !accepted {
+            intel_render_verbose_log!(
+                "intel/render: primary-mi-scanout-store proof failed trigger={}\n",
+                reason
+            );
+        }
+    }
     let completed = if PRIMARY_USE_DRAW_PATH_BOOT_ONCE && reason == "boot-once" {
         let completed = submit_primary_triangle_with_retries(
             dev,
@@ -194,6 +213,7 @@ fn submit_primary_triangle_with_retries(
     }
 
     let vf_draw_precheck = submit_triangle_vf_draw_to_surface(
+        "vf-draw-path",
         dev,
         warm,
         surface_gpu,
@@ -201,12 +221,214 @@ fn submit_primary_triangle_with_retries(
         width,
         height,
         TriangleBlendProbeMode::ExplicitRt0,
+        VfPrimitiveGeometry::Canonical,
+        BackendProbeMode::MesaLike,
     );
     intel_render_verbose_log!(
         "intel/render: primary-vf-draw-precheck completed={}\n",
         vf_draw_precheck as u8,
     );
     if vf_draw_precheck {
+        return true;
+    }
+
+    let ps_launch_big_primitive = submit_triangle_vf_draw_to_surface(
+        "ps-launch-big-primitive",
+        dev,
+        warm,
+        surface_gpu,
+        pitch_bytes,
+        width,
+        height,
+        TriangleBlendProbeMode::ExplicitRt0,
+        VfPrimitiveGeometry::Oversized,
+        BackendProbeMode::MesaLike,
+    );
+    intel_render_verbose_log!(
+        "intel/render: primary-ps-launch-big-primitive completed={}\n",
+        ps_launch_big_primitive as u8,
+    );
+    if ps_launch_big_primitive {
+        return true;
+    }
+
+    let ps_bt1_big_primitive = submit_triangle_vf_draw_to_surface(
+        "ps-bt1-big-primitive",
+        dev,
+        warm,
+        surface_gpu,
+        pitch_bytes,
+        width,
+        height,
+        TriangleBlendProbeMode::ExplicitRt0,
+        VfPrimitiveGeometry::Oversized,
+        BackendProbeMode::PsBindingTableCountOne,
+    );
+    intel_render_verbose_log!(
+        "intel/render: primary-ps-bt1-big-primitive completed={}\n",
+        ps_bt1_big_primitive as u8,
+    );
+    if ps_bt1_big_primitive {
+        return true;
+    }
+
+    let ps_wm_normal_big_primitive = submit_triangle_vf_draw_to_surface(
+        "ps-wm-normal-big-primitive",
+        dev,
+        warm,
+        surface_gpu,
+        pitch_bytes,
+        width,
+        height,
+        TriangleBlendProbeMode::ExplicitRt0,
+        VfPrimitiveGeometry::Oversized,
+        BackendProbeMode::WmNormalDispatch,
+    );
+    intel_render_verbose_log!(
+        "intel/render: primary-ps-wm-normal-big-primitive completed={}\n",
+        ps_wm_normal_big_primitive as u8,
+    );
+    if ps_wm_normal_big_primitive {
+        return true;
+    }
+
+    let ps_dispatch_slot0_big_primitive = submit_triangle_vf_draw_to_surface(
+        "ps-dispatch-slot0-big-primitive",
+        dev,
+        warm,
+        surface_gpu,
+        pitch_bytes,
+        width,
+        height,
+        TriangleBlendProbeMode::ExplicitRt0,
+        VfPrimitiveGeometry::Oversized,
+        BackendProbeMode::PsDispatchSlot0,
+    );
+    intel_render_verbose_log!(
+        "intel/render: primary-ps-dispatch-slot0-big-primitive completed={}\n",
+        ps_dispatch_slot0_big_primitive as u8,
+    );
+    if ps_dispatch_slot0_big_primitive {
+        return true;
+    }
+
+    let ps_dispatch_slot1_big_primitive = submit_triangle_vf_draw_to_surface(
+        "ps-dispatch-slot1-big-primitive",
+        dev,
+        warm,
+        surface_gpu,
+        pitch_bytes,
+        width,
+        height,
+        TriangleBlendProbeMode::ExplicitRt0,
+        VfPrimitiveGeometry::Oversized,
+        BackendProbeMode::PsDispatchSlot1,
+    );
+    intel_render_verbose_log!(
+        "intel/render: primary-ps-dispatch-slot1-big-primitive completed={}\n",
+        ps_dispatch_slot1_big_primitive as u8,
+    );
+    if ps_dispatch_slot1_big_primitive {
+        return true;
+    }
+
+    let ps_dispatch_slot2_big_primitive = submit_triangle_vf_draw_to_surface(
+        "ps-dispatch-slot2-big-primitive",
+        dev,
+        warm,
+        surface_gpu,
+        pitch_bytes,
+        width,
+        height,
+        TriangleBlendProbeMode::ExplicitRt0,
+        VfPrimitiveGeometry::Oversized,
+        BackendProbeMode::PsDispatchSlot2,
+    );
+    intel_render_verbose_log!(
+        "intel/render: primary-ps-dispatch-slot2-big-primitive completed={}\n",
+        ps_dispatch_slot2_big_primitive as u8,
+    );
+    if ps_dispatch_slot2_big_primitive {
+        return true;
+    }
+
+    let payload_variants = [
+        ("ps-payload-push-big-primitive", BackendProbeMode::PsPayloadPushConstant),
+        ("ps-payload-attr-big-primitive", BackendProbeMode::PsPayloadAttributeEnable),
+        ("ps-payload-simple-big-primitive", BackendProbeMode::PsPayloadSimpleHint),
+        ("ps-payload-source-depth-w-big-primitive", BackendProbeMode::PsPayloadSourceDepthW),
+        ("ps-payload-bary-big-primitive", BackendProbeMode::PsPayloadBaryPlanes),
+    ];
+    for (payload_submit_name, payload_mode) in payload_variants {
+        let completed = submit_triangle_vf_draw_to_surface(
+            payload_submit_name,
+            dev,
+            warm,
+            surface_gpu,
+            pitch_bytes,
+            width,
+            height,
+            TriangleBlendProbeMode::ExplicitRt0,
+            VfPrimitiveGeometry::Oversized,
+            payload_mode,
+        );
+        intel_render_verbose_log!(
+            "intel/render: primary-{} completed={}\n",
+            payload_submit_name,
+            completed as u8,
+        );
+        if completed {
+            return true;
+        }
+    }
+
+    let grf_variants = [
+        ("ps-grf-start-r1-big-primitive", BackendProbeMode::PsGrfStartR1),
+        ("ps-grf-start-r2-big-primitive", BackendProbeMode::PsGrfStartR2),
+        ("ps-grf-start-r4-big-primitive", BackendProbeMode::PsGrfStartR4),
+        ("ps-grf-maxthreads-31-big-primitive", BackendProbeMode::PsGrfMaxThreads31),
+        ("ps-grf-maxthreads-15-big-primitive", BackendProbeMode::PsGrfMaxThreads15),
+    ];
+    for (grf_submit_name, grf_mode) in grf_variants {
+        let completed = submit_triangle_vf_draw_to_surface(
+            grf_submit_name,
+            dev,
+            warm,
+            surface_gpu,
+            pitch_bytes,
+            width,
+            height,
+            TriangleBlendProbeMode::ExplicitRt0,
+            VfPrimitiveGeometry::Oversized,
+            grf_mode,
+        );
+        intel_render_verbose_log!(
+            "intel/render: primary-{} completed={}\n",
+            grf_submit_name,
+            completed as u8,
+        );
+        if completed {
+            return true;
+        }
+    }
+
+    let ps_dispatch_all_big_primitive = submit_triangle_vf_draw_to_surface(
+        "ps-dispatch-all-big-primitive",
+        dev,
+        warm,
+        surface_gpu,
+        pitch_bytes,
+        width,
+        height,
+        TriangleBlendProbeMode::ExplicitRt0,
+        VfPrimitiveGeometry::Oversized,
+        BackendProbeMode::PsDispatchAllKspSlots,
+    );
+    intel_render_verbose_log!(
+        "intel/render: primary-ps-dispatch-all-big-primitive completed={}\n",
+        ps_dispatch_all_big_primitive as u8,
+    );
+    if ps_dispatch_all_big_primitive {
         return true;
     }
 
@@ -324,9 +546,15 @@ fn submit_triangle_vf_streamout_proof(
     rect_h: usize,
     experiment: StreamoutProofExperiment,
 ) -> bool {
-    let Some(draw) =
-        prepare_vf_streamout_proof_resources(warm, dst_gpu_addr, pitch, rect_w, rect_h, experiment)
-    else {
+    let Some(draw) = prepare_vf_streamout_proof_resources(
+        warm,
+        dst_gpu_addr,
+        pitch,
+        rect_w,
+        rect_h,
+        experiment,
+        VfPrimitiveGeometry::Canonical,
+    ) else {
         crate::log!(
             "intel/render: vf-streamout-proof skipped reason=resource-layout size={}x{} pitch=0x{:X}\n",
             rect_w,
@@ -418,6 +646,7 @@ fn submit_triangle_vf_streamout_proof(
 }
 
 fn submit_triangle_vf_draw_to_surface(
+    submit_name: &'static str,
     dev: crate::intel::Dev,
     warm: RenderWarmState,
     dst_gpu_addr: u64,
@@ -425,6 +654,8 @@ fn submit_triangle_vf_draw_to_surface(
     rect_w: usize,
     rect_h: usize,
     blend_mode: TriangleBlendProbeMode,
+    geometry: VfPrimitiveGeometry,
+    backend_probe_mode: BackendProbeMode,
 ) -> bool {
     let Some(draw) = prepare_vf_streamout_proof_resources(
         warm,
@@ -433,12 +664,15 @@ fn submit_triangle_vf_draw_to_surface(
         rect_w,
         rect_h,
         StreamoutProofExperiment::PositionSlot1,
+        geometry,
     ) else {
         crate::log!(
-            "intel/render: vf-draw-path staging skipped reason=resource-layout size={}x{} pitch=0x{:X}\n",
+            "intel/render: {} staging skipped reason=resource-layout size={}x{} pitch=0x{:X} geometry={}\n",
+            submit_name,
             rect_w,
             rect_h,
-            pitch
+            pitch,
+            geometry.label(),
         );
         return false;
     };
@@ -448,7 +682,8 @@ fn submit_triangle_vf_draw_to_surface(
     log_render_packet_encodings();
     if crate::intel::shader::triangle_pipeline_is_placeholder() {
         crate::log!(
-            "intel/render: vf-draw-path staged rt=0x{:X} vb=0x{:X} state=0x{:X} size={}x{} pitch=0x{:X} vertices={} stride={} status=awaiting-baked-shaders vs_src={} ps_src={} note={}\n",
+            "intel/render: {} staged rt=0x{:X} vb=0x{:X} state=0x{:X} size={}x{} pitch=0x{:X} vertices={} stride={} geometry={} status=awaiting-baked-shaders vs_src={} ps_src={} note={}\n",
+            submit_name,
             draw.rt_gpu_addr,
             draw.vertex_gpu_addr,
             draw.state_gpu_addr,
@@ -457,6 +692,7 @@ fn submit_triangle_vf_draw_to_surface(
             draw.rt_pitch,
             draw.vertex_count,
             draw.vertex_stride,
+            geometry.label(),
             crate::intel::shader::TRIANGLE_VERTEX_SOURCE_PATH,
             crate::intel::shader::TRIANGLE_FRAGMENT_SOURCE_PATH,
             crate::intel::shader::triangle_pipeline_note()
@@ -465,7 +701,8 @@ fn submit_triangle_vf_draw_to_surface(
     }
 
     intel_render_verbose_log!(
-        "intel/render: vf-draw-path ps-meta dispatch={:?} grf_start={} grf_used={} ksp_off=0x{:X} size={} header_only={} note={}\n",
+        "intel/render: {} ps-meta dispatch={:?} grf_start={} grf_used={} ksp_off=0x{:X} size={} header_only={} geometry={} backend={} note={}\n",
+        submit_name,
         pipeline.ps.meta.kernel.dispatch_mode,
         pipeline.ps.meta.kernel.grf_start_register,
         pipeline.ps.meta.kernel.grf_used,
@@ -473,6 +710,8 @@ fn submit_triangle_vf_draw_to_surface(
         pipeline.ps.meta.kernel.code_size_bytes,
         (pipeline.ps.meta.num_varying_inputs == 0
             && pipeline.ps.meta.kernel.push_constant_bytes == 0) as u8,
+        geometry.label(),
+        backend_probe_mode.label(),
         crate::intel::shader::triangle_pipeline_note()
     );
 
@@ -480,16 +719,73 @@ fn submit_triangle_vf_draw_to_surface(
         Ok(layout) => layout,
         Err(reason) => {
             crate::log!(
-                "intel/render: vf-draw-path staging skipped reason=shader-layout-error detail={} note={}\n",
+                "intel/render: {} staging skipped reason=shader-layout-error detail={} note={}\n",
+                submit_name,
                 reason,
                 crate::intel::shader::triangle_pipeline_note()
             );
             return false;
         }
     };
+    let ps_ksp_code_dword_index =
+        (pipeline.ps.meta.kernel.ksp_offset_bytes / core::mem::size_of::<u32>() as u32) as usize;
+    let ps_ksp_packet_offset = shader_layout
+        .ps
+        .code_offset_bytes
+        .saturating_add(shader_layout.ps.ksp_offset_bytes);
+    let ps_ksp_base = ps_ksp_packet_offset & !0x3F;
+    let ps_ksp0 = if matches!(backend_probe_mode.ps_dispatch_slot(), Some(1 | 2)) {
+        0
+    } else {
+        ps_ksp_base
+    };
+    let ps_ksp1 = if matches!(
+        backend_probe_mode,
+        BackendProbeMode::PsDispatchSlot1 | BackendProbeMode::PsDispatchAllKspSlots
+    ) {
+        ps_ksp_base
+    } else {
+        0
+    };
+    let ps_ksp2 = if matches!(
+        backend_probe_mode,
+        BackendProbeMode::PsDispatchSlot2 | BackendProbeMode::PsDispatchAllKspSlots
+    ) {
+        ps_ksp_base
+    } else {
+        0
+    };
+    let baked_ps_first = pipeline
+        .ps
+        .code
+        .get(ps_ksp_code_dword_index)
+        .copied()
+        .unwrap_or(0);
+    let uploaded_ps_first = unsafe {
+        let ptr = (warm.draw_state_virt as *const u8).add(
+            shader_layout.ps.code_offset_bytes as usize
+                + shader_layout.ps.ksp_offset_bytes as usize,
+        ) as *const u32;
+        core::ptr::read_volatile(ptr)
+    };
+    let ps_ksp_contract_ok = baked_ps_first != 0 && baked_ps_first == uploaded_ps_first;
+    intel_render_focus_log!(
+        "intel/render: {} ps-ksp-proof accepted={} backend={} ksp0=0x{:X} ksp1=0x{:X} ksp2=0x{:X} ksp_off=0x{:X} first_dw=0x{:08X} baked_first=0x{:08X} dispatch={:?} does_not_prove=ps_thread_launch\n",
+        submit_name,
+        ps_ksp_contract_ok as u8,
+        backend_probe_mode.label(),
+        ps_ksp0,
+        ps_ksp1,
+        ps_ksp2,
+        ps_ksp_packet_offset,
+        uploaded_ps_first,
+        baked_ps_first,
+        pipeline.ps.meta.kernel.dispatch_mode,
+    );
 
     intel_render_verbose_log!(
-        "intel/render: vf-draw-path staged rt=0x{:X} vb=0x{:X} state=0x{:X} used_end=0x{:X} state_off=0x{:X} state_region=0x{:X} free=0x{:X} size={}x{} pitch=0x{:X} vertices={} stride={} status=pipeline-ready vs_bytes={} vs_off=0x{:X} vs_gpu=0x{:X} vs_ksp_off=0x{:X} vs_ksp=0x{:X} ps_bytes={} ps_off=0x{:X} ps_gpu=0x{:X} ps_ksp_off=0x{:X} ps_ksp=0x{:X} varyings={} ps_dispatch={:?}\n",
+        "intel/render: {} staged rt=0x{:X} vb=0x{:X} state=0x{:X} used_end=0x{:X} state_off=0x{:X} state_region=0x{:X} free=0x{:X} size={}x{} pitch=0x{:X} vertices={} stride={} geometry={} backend={} status=pipeline-ready vs_bytes={} vs_off=0x{:X} vs_gpu=0x{:X} vs_ksp_off=0x{:X} vs_ksp=0x{:X} ps_bytes={} ps_off=0x{:X} ps_gpu=0x{:X} ps_ksp_off=0x{:X} ps_ksp=0x{:X} varyings={} ps_dispatch={:?}\n",
+        submit_name,
         draw.rt_gpu_addr,
         draw.vertex_gpu_addr,
         draw.state_gpu_addr,
@@ -503,6 +799,8 @@ fn submit_triangle_vf_draw_to_surface(
         draw.rt_pitch,
         draw.vertex_count,
         draw.vertex_stride,
+        geometry.label(),
+        backend_probe_mode.label(),
         shader_layout.vs.code_size_bytes,
         shader_layout.vs.code_offset_bytes,
         shader_layout.vs.code_gpu_addr,
@@ -521,7 +819,8 @@ fn submit_triangle_vf_draw_to_surface(
         Ok(layout) => layout,
         Err(reason) => {
             crate::log!(
-                "intel/render: vf-draw-path staging skipped reason=probe-state-error detail={}\n",
+                "intel/render: {} staging skipped reason=probe-state-error detail={}\n",
+                submit_name,
                 reason
             );
             return false;
@@ -554,11 +853,13 @@ fn submit_triangle_vf_draw_to_surface(
         TriangleBatchMode::VfDraw,
         StreamoutProofExperiment::PositionSlot1,
         TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
+        backend_probe_mode,
     ) {
         Ok(bytes) => bytes,
         Err(reason) => {
             crate::log!(
-                "intel/render: vf-draw-path staging skipped reason=probe-batch-error detail={}\n",
+                "intel/render: {} staging skipped reason=probe-batch-error detail={}\n",
+                submit_name,
                 reason
             );
             return false;
@@ -567,16 +868,23 @@ fn submit_triangle_vf_draw_to_surface(
     crate::intel::dma_flush(warm.batch_virt, batch_tail_bytes);
 
     intel_render_verbose_log!(
-        "intel/render: vf-draw-path batch-ready bytes=0x{:X} bt_off=0x{:X} samp_off=0x{:X} blend_off=0x{:X} cc_state_off=0x{:X} cc_vp_off=0x{:X} sf_vp_off=0x{:X}\n",
+        "intel/render: {} batch-ready bytes=0x{:X} bt_off=0x{:X} samp_off=0x{:X} blend_off=0x{:X} cc_state_off=0x{:X} cc_vp_off=0x{:X} sf_vp_off=0x{:X} geometry={}\n",
+        submit_name,
         batch_tail_bytes,
         probe_state.binding_table_offset_bytes,
         probe_state.sampler_state_offset_bytes,
         probe_state.blend_state_offset_bytes,
         probe_state.color_calc_state_offset_bytes,
         probe_state.cc_viewport_offset_bytes,
-        probe_state.sf_clip_viewport_offset_bytes
+        probe_state.sf_clip_viewport_offset_bytes,
+        geometry.label(),
     );
-    intel_render_verbose_log!("intel/render: vf-draw-path blend-probe={}\n", blend_mode.label());
+    intel_render_verbose_log!(
+        "intel/render: {} blend-probe={} geometry={}\n",
+        submit_name,
+        blend_mode.label(),
+        geometry.label(),
+    );
     log_triangle_probe_state(warm, shader_layout, probe_state);
 
     let completed = submit_warm_render_batch(
@@ -584,10 +892,10 @@ fn submit_triangle_vf_draw_to_surface(
         warm,
         RCS_EXEC_RESULT_DONE,
         RESULT_SLOT_FINAL_DWORD,
-        "vf-draw-path",
+        submit_name,
     );
     if !completed {
-        recover_render_engine_after_nonretired_submit(dev, warm, "vf-draw-path");
+        recover_render_engine_after_nonretired_submit(dev, warm, submit_name);
     }
     completed
 }
@@ -803,6 +1111,7 @@ fn submit_triangle_streamout_proof(
         TriangleBatchMode::StreamoutProof,
         experiment,
         TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
+        BackendProbeMode::MesaLike,
     ) {
         Ok(bytes) => bytes,
         Err(reason) => {
@@ -1129,6 +1438,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface(
         TriangleBatchMode::Draw,
         StreamoutProofExperiment::PositionSlot1,
         front_end_contract,
+        BackendProbeMode::MesaLike,
     ) {
         Ok(bytes) => bytes,
         Err(reason) => {

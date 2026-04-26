@@ -344,8 +344,9 @@ fn write_canonical_triangle_vertices(warm: RenderWarmState) -> Option<TriangleVe
         * (TRIANGLE_NDC[2][1] - TRIANGLE_NDC[0][1])
         - (TRIANGLE_NDC[2][0] - TRIANGLE_NDC[0][0]) * (TRIANGLE_NDC[1][1] - TRIANGLE_NDC[0][1]);
 
-    intel_render_verbose_log!(
-        "intel/render: vertex-upload-proof stage=cpu-write-readback bytes={} stride={} count={} gpu=0x{:X} readback_ok={} area2={:.3} winding={} v0=[{:.3},{:.3},{:.3}] v1=[{:.3},{:.3},{:.3}] v2=[{:.3},{:.3},{:.3}]\n",
+    intel_render_focus_log!(
+        "intel/render: vertex-upload-proof accepted={} stage=cpu-write-readback bytes={} stride={} count={} gpu=0x{:X} readback_ok={} flush=1 area2={:.3} winding={} v0=[{:.3},{:.3},{:.3}] v1=[{:.3},{:.3},{:.3}] v2=[{:.3},{:.3},{:.3}] does_not_prove=vf_fetch\n",
+        cpu_readback_ok as u8,
         byte_len,
         TRIANGLE_DRAW_VERTEX_STRIDE,
         TRIANGLE_DRAW_VERTICES,
@@ -381,6 +382,7 @@ fn prepare_vf_streamout_proof_resources(
     rect_w: usize,
     rect_h: usize,
     experiment: StreamoutProofExperiment,
+    geometry: VfPrimitiveGeometry,
 ) -> Option<TriangleDrawPrep> {
     let target_w = u32::try_from(rect_w).ok()?;
     let target_h = u32::try_from(rect_h).ok()?;
@@ -390,11 +392,7 @@ fn prepare_vf_streamout_proof_resources(
         return None;
     }
 
-    let tri = [
-        [-0.25f32, -0.20, 0.0],
-        [0.25, -0.20, 0.0],
-        [0.00, 0.20, 0.0],
-    ];
+    let tri = geometry.vertices();
     let words = unsafe {
         core::slice::from_raw_parts_mut(warm.vertex_virt as *mut u32, warm.vertex_len / 4)
     };
@@ -409,9 +407,10 @@ fn prepare_vf_streamout_proof_resources(
                 words[base + 2] = pos[2].to_bits();
                 words[base + 3] = 1.0f32.to_bits();
                 intel_render_verbose_log!(
-                    "intel/render: vf-streamout-source v{} experiment={} raw=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pos=[{:.3},{:.3},{:.3},{:.3}]\n",
+                    "intel/render: vf-streamout-source v{} experiment={} geometry={} raw=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pos=[{:.3},{:.3},{:.3},{:.3}]\n",
                     idx,
                     experiment.label(),
+                    geometry.label(),
                     words[base + 0],
                     words[base + 1],
                     words[base + 2],
@@ -433,9 +432,10 @@ fn prepare_vf_streamout_proof_resources(
                 words[base + 6] = pos[2].to_bits();
                 words[base + 7] = 1.0f32.to_bits();
                 intel_render_verbose_log!(
-                    "intel/render: vf-streamout-source v{} experiment={} hdr=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pos=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pos_f=[{:.3},{:.3},{:.3},{:.3}]\n",
+                    "intel/render: vf-streamout-source v{} experiment={} geometry={} hdr=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pos=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pos_f=[{:.3},{:.3},{:.3},{:.3}]\n",
                     idx,
                     experiment.label(),
+                    geometry.label(),
                     words[base + 0],
                     words[base + 1],
                     words[base + 2],
@@ -596,4 +596,91 @@ fn submit_vertical_stripes_to_surface(
     }
 
     submit_warm_render_batch(dev, warm, RCS_EXEC_RESULT_DONE, RESULT_SLOT_PRE3D_DWORD, "mi-stripes")
+}
+
+fn submit_mi_scanout_store_proof(
+    dev: crate::intel::Dev,
+    warm: RenderWarmState,
+    dst_gpu_addr: u64,
+    pitch: usize,
+    rect_w: usize,
+    rect_h: usize,
+) -> bool {
+    if rect_w == 0 || rect_h == 0 {
+        crate::log!("intel/render: mi-scanout-store-proof accepted=0 reason=empty-target\n");
+        return false;
+    }
+
+    let x = (rect_w / 2).min(rect_w.saturating_sub(1));
+    let y = (rect_h / 2).min(rect_h.saturating_sub(1));
+    let Some(before) = crate::intel::display::sample_primary_surface_pixel(x as u32, y as u32)
+    else {
+        crate::log!("intel/render: mi-scanout-store-proof accepted=0 reason=no-before-sample\n");
+        return false;
+    };
+    let color = before ^ 0x00FF_FFFF;
+    let Some(pixel_offset) = y
+        .checked_mul(pitch)
+        .and_then(|v| v.checked_add(x.saturating_mul(4)))
+    else {
+        crate::log!("intel/render: mi-scanout-store-proof accepted=0 reason=offset-overflow\n");
+        return false;
+    };
+    let pixel_gpu = dst_gpu_addr.saturating_add(pixel_offset as u64);
+
+    unsafe {
+        core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
+        core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
+        core::ptr::write_bytes(warm.result_virt, 0, warm.result_len);
+        core::ptr::write_volatile(warm.result_virt as *mut u32, RESULT_DEBUG_SENTINEL);
+    }
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+
+    let total_dwords = warm.batch_len / core::mem::size_of::<u32>();
+    let batch =
+        unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, total_dwords) };
+    let Ok(batch_tail_bytes) = encode_single_store_probe_batch(
+        batch,
+        pixel_gpu,
+        color,
+        GPU_VA_RESULT_BASE,
+        RCS_EXEC_RESULT_MI_SCANOUT_DONE,
+    ) else {
+        crate::log!("intel/render: mi-scanout-store-proof accepted=0 reason=batch-build\n");
+        return false;
+    };
+    crate::intel::dma_flush(warm.batch_virt, batch_tail_bytes);
+
+    let completed = submit_warm_render_batch(
+        dev,
+        warm,
+        RCS_EXEC_RESULT_MI_SCANOUT_DONE,
+        RESULT_SLOT_PRE3D_DWORD,
+        "mi-scanout-store",
+    );
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+    let marker = read_result_dword(warm, RESULT_SLOT_PRE3D_DWORD);
+    let after = crate::intel::display::sample_primary_surface_pixel(x as u32, y as u32)
+        .unwrap_or(0xFFFF_FFFF);
+    let accepted =
+        completed && marker == RCS_EXEC_RESULT_MI_SCANOUT_DONE && after == color && before != after;
+
+    intel_render_focus_log!(
+        "intel/render: mi-scanout-store-proof accepted={} completed={} marker=0x{:08X} xy={}x{} gpu=0x{:X} pitch=0x{:X} before=0x{:08X} after=0x{:08X} color=0x{:08X} does_not_prove=3d_pipeline_or_ps\n",
+        accepted as u8,
+        completed as u8,
+        marker,
+        x,
+        y,
+        pixel_gpu,
+        pitch,
+        before,
+        after,
+        color,
+    );
+
+    if !completed {
+        recover_render_engine_after_nonretired_submit(dev, warm, "mi-scanout-store");
+    }
+    accepted
 }

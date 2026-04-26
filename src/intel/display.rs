@@ -81,6 +81,9 @@ const PRIMARY_BYTES_PER_PIXEL: u32 = 4;
 const PRIMARY_BASELINE_COLOR: u32 = 0x00FF_37FF;
 const PRIMARY_BOOT_LOGO_JPEG: &[u8] = include_bytes!("../../logo.jpg");
 const PRIMARY_BOOT_LOGO_ENABLED: bool = true;
+const CPU_SCANOUT_PROOF_ENABLED: bool = true;
+const CPU_SCANOUT_PROOF_COLOR: u32 = 0x00FF_00FF;
+const CPU_SCANOUT_PROOF_SIZE: u32 = 8;
 const OVERLAY_PLANE_SLOT: usize = 1;
 const OVERLAY_MARGIN_X: u32 = 0;
 const OVERLAY_MARGIN_Y: u32 = 0;
@@ -368,6 +371,10 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
         false
     };
 
+    if CPU_SCANOUT_PROOF_ENABLED {
+        log_cpu_scanout_proof(dev, primary_surface);
+    }
+
     crate::log!(
         "intel/display: primary-boot-surface pipe={} size={}x{} pitch=0x{:X} gpu=0x{:X} phys=0x{:X} plane_enabled={} ctl_before=0x{:08X} ctl_after=0x{:08X} surf_before=0x{:08X} surf=0x{:08X} surf_live=0x{:08X} ok={} logo={}\n",
         pipe.name,
@@ -384,6 +391,72 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
         surf_live,
         ok as u8,
         logo_ok as u8
+    );
+}
+
+fn log_cpu_scanout_proof(dev: crate::intel::Dev, surface: PrimarySurface) {
+    if surface.width == 0
+        || surface.height == 0
+        || surface.pitch_bytes < PRIMARY_BYTES_PER_PIXEL
+        || surface.virt.is_null()
+    {
+        crate::log!("intel/display: cpu-scanout-proof accepted=0 reason=bad-surface\n");
+        return;
+    }
+
+    let marker_w = CPU_SCANOUT_PROOF_SIZE.min(surface.width);
+    let marker_h = CPU_SCANOUT_PROOF_SIZE.min(surface.height);
+    let x = surface.width.saturating_sub(marker_w).saturating_sub(16);
+    let y = surface.height.saturating_sub(marker_h).saturating_sub(16);
+    let pitch_bytes = surface.pitch_bytes as usize;
+    let pixel_offset = (y as usize)
+        .saturating_mul(pitch_bytes)
+        .saturating_add((x as usize).saturating_mul(PRIMARY_BYTES_PER_PIXEL as usize));
+    let sample_ptr = unsafe { surface.virt.add(pixel_offset) };
+    let before = unsafe { core::ptr::read_volatile(sample_ptr as *const u32) };
+
+    for row in 0..marker_h as usize {
+        let row_ptr = unsafe {
+            surface
+                .virt
+                .add((y as usize + row).saturating_mul(pitch_bytes))
+                .add((x as usize).saturating_mul(PRIMARY_BYTES_PER_PIXEL as usize))
+                as *mut u32
+        };
+        for col in 0..marker_w as usize {
+            unsafe {
+                core::ptr::write_volatile(row_ptr.add(col), CPU_SCANOUT_PROOF_COLOR);
+            }
+        }
+    }
+    let byte_len = pitch_bytes.saturating_mul(surface.height as usize);
+    crate::intel::dma_flush(surface.virt, byte_len);
+
+    let after = unsafe { core::ptr::read_volatile(sample_ptr as *const u32) };
+    let surf = crate::intel::mmio_read(dev, surface.pipe.plane_surf_off);
+    let surf_live = crate::intel::mmio_read(dev, surface.pipe.plane_surf_live_off);
+    let stride = crate::intel::mmio_read(dev, surface.pipe.plane_stride_off);
+    let want_surf = u32::try_from(crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE).unwrap_or(0);
+    let accepted =
+        after == CPU_SCANOUT_PROOF_COLOR && (surf == want_surf || surf_live == want_surf);
+
+    crate::log!(
+        "intel/display: cpu-scanout-proof accepted={} pipe={} gpu=0x{:X} phys=0x{:X} xy={}x{} size={}x{} pitch=0x{:X} stride_reg=0x{:08X} before=0x{:08X} after=0x{:08X} color=0x{:08X} flush=1 surf=0x{:08X} surf_live=0x{:08X} does_not_prove=render_backend_write\n",
+        accepted as u8,
+        surface.pipe.name,
+        crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE,
+        surface.phys,
+        x,
+        y,
+        marker_w,
+        marker_h,
+        surface.pitch_bytes,
+        stride,
+        before,
+        after,
+        CPU_SCANOUT_PROOF_COLOR,
+        surf,
+        surf_live
     );
 }
 
@@ -782,6 +855,11 @@ pub(crate) fn capture_primary_surface_samples() -> Option<PrimarySurfaceSampleSe
     capture_surface_samples(surface)
 }
 
+pub(crate) fn sample_primary_surface_pixel(x: u32, y: u32) -> Option<u32> {
+    let surface = (*PRIMARY_SURFACE.lock())?;
+    sample_surface_pixel(surface, x as usize, y as usize)
+}
+
 fn log_surface_samples(surface: PrimarySurface, label: &str) {
     let Some(samples) = capture_surface_samples(surface) else {
         return;
@@ -811,17 +889,6 @@ fn capture_surface_samples(surface: PrimarySurface) -> Option<PrimarySurfaceSamp
         return None;
     }
 
-    let sample = |x: usize, y: usize| -> u32 {
-        let clamped_x = x.min(width.saturating_sub(1));
-        let clamped_y = y.min(height.saturating_sub(1));
-        let byte_offset = clamped_y
-            .saturating_mul(pitch_bytes)
-            .saturating_add(clamped_x.saturating_mul(4));
-        let sample_ptr = unsafe { surface.virt.add(byte_offset) };
-        crate::intel::dma_flush(sample_ptr, core::mem::size_of::<u32>());
-        unsafe { core::ptr::read_volatile(sample_ptr as *const u32) }
-    };
-
     let clip_to_screen = |clip_x: f32, clip_y: f32| -> (usize, usize) {
         let sx = ((clip_x + 1.0) * 0.5 * width as f32).clamp(0.0, width.saturating_sub(1) as f32)
             as usize;
@@ -835,14 +902,32 @@ fn capture_surface_samples(surface: PrimarySurface) -> Option<PrimarySurfaceSamp
     let (centroid_x, centroid_y) = clip_to_screen(0.0, -0.15);
 
     Some(PrimarySurfaceSampleSet {
-        tl: sample(0, 0),
-        center: sample(width / 2, height / 2),
-        br: sample(width.saturating_sub(1), height.saturating_sub(1)),
-        apex: sample(apex_x, apex_y),
-        centroid: sample(centroid_x, centroid_y),
-        left: sample(left_x, left_y),
-        right: sample(right_x, right_y),
+        tl: sample_surface_pixel(surface, 0, 0)?,
+        center: sample_surface_pixel(surface, width / 2, height / 2)?,
+        br: sample_surface_pixel(surface, width.saturating_sub(1), height.saturating_sub(1))?,
+        apex: sample_surface_pixel(surface, apex_x, apex_y)?,
+        centroid: sample_surface_pixel(surface, centroid_x, centroid_y)?,
+        left: sample_surface_pixel(surface, left_x, left_y)?,
+        right: sample_surface_pixel(surface, right_x, right_y)?,
     })
+}
+
+fn sample_surface_pixel(surface: PrimarySurface, x: usize, y: usize) -> Option<u32> {
+    let width = surface.width as usize;
+    let height = surface.height as usize;
+    let pitch_bytes = surface.pitch_bytes as usize;
+    if width == 0 || height == 0 || pitch_bytes < 4 || surface.virt.is_null() {
+        return None;
+    }
+
+    let clamped_x = x.min(width.saturating_sub(1));
+    let clamped_y = y.min(height.saturating_sub(1));
+    let byte_offset = clamped_y
+        .checked_mul(pitch_bytes)?
+        .checked_add(clamped_x.checked_mul(4)?)?;
+    let sample_ptr = unsafe { surface.virt.add(byte_offset) };
+    crate::intel::dma_flush(sample_ptr, core::mem::size_of::<u32>());
+    Some(unsafe { core::ptr::read_volatile(sample_ptr as *const u32) })
 }
 
 fn notify_primary_surface_present(surface: PrimarySurface, reason: &str, byte_len: usize) -> bool {

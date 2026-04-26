@@ -182,6 +182,114 @@ enum TriangleBatchMode {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum BackendProbeMode {
+    MesaLike,
+    PsBindingTableCountOne,
+    WmNormalDispatch,
+    PsDispatchSlot0,
+    PsDispatchSlot1,
+    PsDispatchSlot2,
+    PsDispatchAllKspSlots,
+    PsPayloadPushConstant,
+    PsPayloadAttributeEnable,
+    PsPayloadSimpleHint,
+    PsPayloadSourceDepthW,
+    PsPayloadBaryPlanes,
+    PsGrfStartR1,
+    PsGrfStartR2,
+    PsGrfStartR4,
+    PsGrfMaxThreads31,
+    PsGrfMaxThreads15,
+}
+
+impl BackendProbeMode {
+    fn label(self) -> &'static str {
+        match self {
+            Self::MesaLike => "mesa-like",
+            Self::PsBindingTableCountOne => "ps-bt-count-1",
+            Self::WmNormalDispatch => "wm-normal-dispatch",
+            Self::PsDispatchSlot0 => "ps-dispatch-slot0",
+            Self::PsDispatchSlot1 => "ps-dispatch-slot1",
+            Self::PsDispatchSlot2 => "ps-dispatch-slot2",
+            Self::PsDispatchAllKspSlots => "ps-dispatch-all-ksp-slots",
+            Self::PsPayloadPushConstant => "ps-payload-push-constant",
+            Self::PsPayloadAttributeEnable => "ps-payload-attribute-enable",
+            Self::PsPayloadSimpleHint => "ps-payload-simple-hint",
+            Self::PsPayloadSourceDepthW => "ps-payload-source-depth-w",
+            Self::PsPayloadBaryPlanes => "ps-payload-bary-planes",
+            Self::PsGrfStartR1 => "ps-grf-start-r1",
+            Self::PsGrfStartR2 => "ps-grf-start-r2",
+            Self::PsGrfStartR4 => "ps-grf-start-r4",
+            Self::PsGrfMaxThreads31 => "ps-grf-maxthreads-31",
+            Self::PsGrfMaxThreads15 => "ps-grf-maxthreads-15",
+        }
+    }
+
+    fn ps_dispatch_slot(self) -> Option<u8> {
+        match self {
+            Self::PsDispatchSlot0 => Some(0),
+            Self::PsDispatchSlot1 => Some(1),
+            Self::PsDispatchSlot2 => Some(2),
+            _ => None,
+        }
+    }
+
+    fn is_payload_spectrum(self) -> bool {
+        matches!(
+            self,
+            Self::PsPayloadPushConstant
+                | Self::PsPayloadAttributeEnable
+                | Self::PsPayloadSimpleHint
+                | Self::PsPayloadSourceDepthW
+                | Self::PsPayloadBaryPlanes
+        )
+    }
+
+    fn ps_grf_start_override(self) -> Option<u8> {
+        match self {
+            Self::PsGrfStartR1 => Some(1),
+            Self::PsGrfStartR2 => Some(2),
+            Self::PsGrfStartR4 => Some(4),
+            _ => None,
+        }
+    }
+
+    fn ps_max_threads_override(self) -> Option<u32> {
+        match self {
+            Self::PsGrfMaxThreads31 => Some(31),
+            Self::PsGrfMaxThreads15 => Some(15),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum VfPrimitiveGeometry {
+    Canonical,
+    Oversized,
+}
+
+impl VfPrimitiveGeometry {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Canonical => "canonical",
+            Self::Oversized => "oversized",
+        }
+    }
+
+    fn vertices(self) -> [[f32; 3]; TRIANGLE_DRAW_VERTICES] {
+        match self {
+            Self::Canonical => [[-0.25, -0.20, 0.0], [0.25, -0.20, 0.0], [0.00, 0.20, 0.0]],
+            // Oversized fullscreen-style triangle.  This is intentionally
+            // boring geometry for the PS launch proof: if this still does not
+            // move PS counters, coverage of the tiny canonical triangle was
+            // not the blocker.
+            Self::Oversized => [[-1.0, -1.0, 0.0], [3.0, -1.0, 0.0], [-1.0, 3.0, 0.0]],
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum StreamoutProofExperiment {
     PositionSlot0,
     PositionSlot1,
@@ -302,7 +410,29 @@ fn is_triangle_debug_submit_name(submit_name: &str) -> bool {
 }
 
 fn is_surface_draw_submit_name(submit_name: &str) -> bool {
-    matches!(submit_name, "draw-path" | "vf-draw-path" | "vs-draw-frontier")
+    matches!(
+        submit_name,
+        "draw-path"
+            | "vf-draw-path"
+            | "ps-launch-big-primitive"
+            | "ps-bt1-big-primitive"
+            | "ps-wm-normal-big-primitive"
+            | "ps-dispatch-slot0-big-primitive"
+            | "ps-dispatch-slot1-big-primitive"
+            | "ps-dispatch-slot2-big-primitive"
+            | "ps-dispatch-all-big-primitive"
+            | "ps-payload-push-big-primitive"
+            | "ps-payload-attr-big-primitive"
+            | "ps-payload-simple-big-primitive"
+            | "ps-payload-source-depth-w-big-primitive"
+            | "ps-payload-bary-big-primitive"
+            | "ps-grf-start-r1-big-primitive"
+            | "ps-grf-start-r2-big-primitive"
+            | "ps-grf-start-r4-big-primitive"
+            | "ps-grf-maxthreads-31-big-primitive"
+            | "ps-grf-maxthreads-15-big-primitive"
+            | "vs-draw-frontier"
+    )
 }
 
 unsafe impl Send for RenderWarmState {}
@@ -311,6 +441,7 @@ unsafe impl Sync for RenderWarmState {}
 static WARM_STATE: Mutex<Option<RenderWarmState>> = Mutex::new(None);
 static PRIMARY_TRIANGLE_SUBMITTED: AtomicBool = AtomicBool::new(false);
 static PRIMARY_PROBE_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+static PRIMARY_MI_SCANOUT_PROOF_SUBMITTED: AtomicBool = AtomicBool::new(false);
 static WARM_BUFFERS_MAPPED: AtomicBool = AtomicBool::new(false);
 static PRIMARY_STRIPE_X_PHASE: AtomicU32 = AtomicU32::new(0);
 static PRIMARY_PROBE_SEQ: AtomicU32 = AtomicU32::new(0);

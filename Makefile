@@ -38,63 +38,17 @@ BP_EXAMPLE_PAIRS ?= $(strip $(shell awk 'BEGIN { in_example = 0; name = ""; path
 # Set both to 1 to stop both blueprint build and embedding.
 BP_SKIP_BUILD := 0
 BP_SKIP_EMBED := 0
-QEMU_ENV = env -i HOME="$(HOME)" PATH="/usr/bin:/bin" TERM="$${TERM:-xterm}" LANG="$${LANG:-C.UTF-8}" DISPLAY="$${DISPLAY:-}" WAYLAND_DISPLAY="$${WAYLAND_DISPLAY:-}" XDG_RUNTIME_DIR="$${XDG_RUNTIME_DIR:-}" XAUTHORITY="$${XAUTHORITY:-}"
-QEMU_BIN = $(QEMU_ENV) qemu-system-x86_64 -no-shutdown
+QEMU_RUNNER := tools/qemu/run.sh
+QEMU_BIN ?= qemu-system-x86_64
 QEMU_UEFI_FIRMWARE = $(OVMF_BUNDLE_PATH)
-comma := ,
-QEMU_VHOST ?= off
 QEMU_BRIDGE ?= br0
 QEMU_BRIDGE_HELPER ?= $(firstword $(wildcard /usr/lib/qemu/qemu-bridge-helper /usr/libexec/qemu-bridge-helper /usr/lib/qemu-bridge-helper))
-
-QEMU_NET_FLAGS = -netdev bridge,id=net1,br=$(QEMU_BRIDGE)$(if $(QEMU_BRIDGE_HELPER),$(comma)helper=$(QEMU_BRIDGE_HELPER)) -device virtio-net-pci,netdev=net1,disable-modern=off,bus=pcie.0,addr=0x3 \
-	#-netdev user,id=net1,net=10.0.2.0/24,dhcpstart=10.0.2.15,hostfwd=tcp::4245-:4245,hostfwd=tcp::8080-:80 -device e1000,netdev=net1 \
-	#-netdev user,id=net0,hostfwd=tcp::4243-:4243 -device e1000,netdev=net0 \
-	#-netdev user,id=net2,hostfwd=tcp::4245-:4245 -device virtio-net-pci,netdev=net2,disable-modern=off
-QEMU_RNG_FLAGS = -object rng-random,filename=/dev/urandom,id=rng0 -device virtio-rng-pci,rng=rng0,disable-modern=off,bus=pcie.0,addr=0x4
+QEMU_HDA_AUDIODEV ?= none,id=snd0
+QEMU_RUN_ENV = ISO_PATH="$(ISO_PATH)" QEMU_BIN="$(QEMU_BIN)" QEMU_UEFI_FIRMWARE="$(QEMU_UEFI_FIRMWARE)" QEMU_BRIDGE="$(QEMU_BRIDGE)" QEMU_BRIDGE_HELPER="$(QEMU_BRIDGE_HELPER)" QEMU_HDA_AUDIODEV="$(QEMU_HDA_AUDIODEV)"
 
 CARGO_BUILD_FLAGS ?=
 
 CARGO_GFX_FLAGS =
-QEMU_GFX_FLAGS = -display sdl,gl=on -vga none -device virtio-gpu-gl-pci,disable-modern=off,xres=1440,yres=900
-
-QEMU_ISO_FLAGS = $(QEMU_GFX_FLAGS) -enable-kvm -machine q35 -bios $(QEMU_UEFI_FIRMWARE) -boot order=d -cdrom $(ISO_PATH) -debugcon stdio -D bld/qemu.log -d int,guest_errors,cpu_reset,unimp -m 2000M -smp cores=8 -cpu host,host-phys-bits=true -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
-
-QEMU_ISO_FLAGS_DBG = $(QEMU_GFX_FLAGS) -machine q35 -bios $(QEMU_UEFI_FIRMWARE) -cdrom $(ISO_PATH) -debugcon stdio -D bld/qemu.log -d int,guest_errors,cpu_reset,unimp -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
-
-QEMU_UPDATE_TARGET_PCI ?= 0000:08:00.0
-QEMU_UPDATE_TARGET_FLAGS = -device vfio-pci,host=$(QEMU_UPDATE_TARGET_PCI),bus=pcie.0,addr=0x6
-
-QEMU_MOUSE1_HOSTBUS 	?= 3
-QEMU_MOUSE1_HOSTADDR 	?= 3
-QEMU_MOUSE2_HOSTBUS 	?= 3
-QEMU_MOUSE2_HOSTADDR 	?= 4
-
-QEMU_USB_HOST_FLAGS = \
-	-drive file=nvme.img,if=none,id=nvme \
-	-device nvme,serial=deadbeef,drive=nvme \
-	-device qemu-xhci,id=xhci,p2=8,p3=8,bus=pcie.0,addr=0x5  \
-	-device usb-mouse,bus=xhci.0,port=1,id=usbmouse \
-	-device usb-tablet,bus=xhci.0,port=2,id=usbtablet \
-	-device usb-kbd,bus=xhci.0,port=3,id=usbkbd \
-
-#	-drive file=disk.img,if=none,format=raw,id=usbdisk   \
-#	-device usb-storage,drive=usbdisk,bus=xhci.0,port=4,id=usbms   \	
-# 	-device usb-kbd,bus=xhci.0,port=3,id=usbkbd  \
-#	-device usb-host,vendorid=0x0951,productid=0x16a4,bus=xhci.0,port=5,id=usbaudio \
-# 	-device usb-host,vendorid=0x058f,productid=0x6387,bus=xhci.0,port=2,id=usbpendrive \	
-# 	-device usb-host,hostbus=$(QEMU_MOUSE1_HOSTBUS),hostaddr=$(QEMU_MOUSE1_HOSTADDR),bus=xhci.0,port=6,id=usbmice \
-#   -device usb-host,hostbus=$(QEMU_MOUSE2_HOSTBUS),hostaddr=$(QEMU_MOUSE2_HOSTADDR),bus=xhci.0,port=7,id=usbmice2 \
-#	-device usb-host,vendorid=0x22d4,productid=0x1321,bus=xhci.0,port=7,id=usbmice2 \
-#	
-#	-device usb-host,vendorid=0x303a,productid=0x1001,bus=xhci.0,port=1,id=usbtruekey \
-#	-device usb-host,vendorid=0x1462,productid=0x7e03,bus=xhci.0,port=2,id=usbleds 
-#   -device usb-host,vendorid=0x07cf,productid=0x6803,bus=xhci.0,port=0,id=usbpiano
-
-QEMU_USB_FLAGS = $(QEMU_USB_HOST_FLAGS)
-
-QEMU_ISO = $(QEMU_BIN) $(QEMU_ISO_FLAGS) $(QEMU_USB_FLAGS)
-QEMU_ISO_WITH_NVME = $(QEMU_BIN) $(QEMU_ISO_FLAGS) $(QEMU_USB_FLAGS) 
-QEMU_ISO_DBG = $(QEMU_BIN) $(QEMU_ISO_FLAGS_DBG) $(QEMU_USB_FLAGS)
 
 IMG_SIZE ?= 1G
 
@@ -290,12 +244,12 @@ snipe:
 	@killall -9 qemu-system-x86_64 || true
 
 dbg: snipe iso-debug
-	@($(QEMU_ISO) & $(SERIAL_CONSOLE_CMD))
+	@($(QEMU_RUN_ENV) $(QEMU_RUNNER) iso & $(SERIAL_CONSOLE_CMD))
 
 dbg-vscode: snipe iso-debug
 	@$(SERIAL_CONSOLE_CMD) &
 	@set -e; \
-		$(QEMU_ISO_DBG) -S -s & qemu_pid=$$!; \
+		$(QEMU_RUN_ENV) $(QEMU_RUNNER) iso-debug -S -s & qemu_pid=$$!; \
 		sleep 0.15; \
 		echo "GDB stub ready on 127.0.0.1:1234"; \
 		wait $$qemu_pid
@@ -303,17 +257,13 @@ dbg-vscode: snipe iso-debug
 # Default quick boot: boot the fresh ISO first while the handed-in NVMe is
 # attached for the kernel to probe and mount.
 run: snipe iso-debug
-	@($(QEMU_ISO_WITH_NVME) & $(SERIAL_CONSOLE_CMD))
+	@($(QEMU_RUN_ENV) $(QEMU_RUNNER) iso & $(SERIAL_CONSOLE_CMD))
 
 lc:
 	@./lc $(ARGS)
 
 run-with-nvme: snipe iso-debug
-	@($(QEMU_ISO_WITH_NVME) & $(SERIAL_CONSOLE_CMD))
-
-# Useful for validating GPT+ESP+Limine stage installation.
-QEMU_DISK_COMMON_FLAGS = -debugcon stdio -m 2000M -smp cores=6 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait
-QEMU_DISK_DRIVE_FLAGS = -drive file=disk.img,if=virtio,format=raw
+	@($(QEMU_RUN_ENV) $(QEMU_RUNNER) iso & $(SERIAL_CONSOLE_CMD))
 
 run-installed: snipe iso-debug
-	@($(QEMU_BIN) $(QEMU_GFX_FLAGS) -bios $(QEMU_UEFI_FIRMWARE) $(QEMU_DISK_COMMON_FLAGS) $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS) & $(SERIAL_CONSOLE_CMD))
+	@($(QEMU_RUN_ENV) $(QEMU_RUNNER) installed & $(SERIAL_CONSOLE_CMD))
