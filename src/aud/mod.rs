@@ -15,6 +15,7 @@ pub mod tables;
 
 use alloc::format;
 use alloc::string::String;
+use core::sync::atomic::{AtomicU32, Ordering};
 use spin::Mutex;
 
 use pattern::{Pattern, PatternBank, Step};
@@ -27,6 +28,7 @@ static SYNTH: Mutex<Option<SynthEngine>> = Mutex::new(None);
 static PATTERNS: Mutex<Option<PatternBank>> = Mutex::new(None);
 /// Global player
 static PLAYER: Mutex<Option<PatternPlayer>> = Mutex::new(None);
+static BASSLINE_TOGGLE_SEQ: AtomicU32 = AtomicU32::new(0);
 
 /// Initialize the audio subsystem (HDA driver + synth engine + pattern bank)
 pub fn init() -> Result<(), &'static str> {
@@ -178,6 +180,56 @@ pub fn stop() -> Result<(), &'static str> {
 fn play_samples(samples: &[i16], duration_ms: u32) -> Result<(), &'static str> {
     // Access HDA driver internals to copy samples into the DMA buffer
     crate::hda::write_samples_and_play(samples, duration_ms)
+}
+
+pub fn request_bassline_toggle() -> u32 {
+    BASSLINE_TOGGLE_SEQ
+        .fetch_add(1, Ordering::AcqRel)
+        .wrapping_add(1)
+}
+
+pub fn bassline_toggle_seq() -> u32 {
+    BASSLINE_TOGGLE_SEQ.load(Ordering::Acquire)
+}
+
+pub fn render_retro_bassline() -> Result<(alloc::vec::Vec<i16>, u16, u32), &'static str> {
+    ensure_patterns()?;
+
+    let bpm = 116;
+    let mut pattern = Pattern::new("retro-bass", 16, bpm);
+    pattern.waveform = Waveform::Sawtooth;
+    pattern.envelope = Envelope::new(2, 70, 42, 35);
+
+    let steps: [(u8, u8); 16] = [
+        (36, 96),
+        (36, 76),
+        (255, 0),
+        (39, 82),
+        (36, 92),
+        (255, 0),
+        (31, 76),
+        (255, 0),
+        (34, 90),
+        (34, 70),
+        (255, 0),
+        (32, 78),
+        (31, 86),
+        (255, 0),
+        (34, 72),
+        (255, 0),
+    ];
+
+    for (idx, &(note, velocity)) in steps.iter().enumerate() {
+        pattern.steps[idx] = if note == 255 {
+            Step::rest()
+        } else {
+            Step::note_vel(note, velocity)
+        };
+    }
+
+    let mut synth_lock = SYNTH.lock();
+    let engine = synth_lock.as_mut().ok_or("Synth not initialized")?;
+    Ok((pattern.render(engine), bpm, pattern.step_duration_ms()))
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

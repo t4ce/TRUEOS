@@ -12,7 +12,7 @@ use crate::net::tls::{KernelTlsRng, TlsClient, TlsClientConfig, TlsRoots, TlsTim
 use crate::r::net::{NetProfile, VNet};
 
 pub const SMTP_HOST: &str = "smtp.mail.com";
-pub const SMTP_PORT: u16 = 587;
+pub const SMTP_PORT: u16 = crate::allports::well_known::SMTP_SUBMISSION;
 pub const SMTP_EHLO_DOMAIN: &str = "trueos.local";
 
 #[derive(Debug)]

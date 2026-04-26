@@ -7,7 +7,7 @@ use mio::{Events, Poll, Token, Waker};
 use std::io;
 use std::net::SocketAddr;
 
-const MIO_NET_PROBE_PORT: u16 = 48_124;
+const MIO_NET_PROBE_PORT: u16 = crate::allports::probes::MIO_NET_PROBE_PORT;
 
 static MIO_NET_PROBE_TASK_SPAWNED: AtomicBool = AtomicBool::new(false);
 

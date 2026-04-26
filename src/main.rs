@@ -10,7 +10,8 @@ const _: f16 = 0.0_f16;
 pub extern crate alloc;
 
 mod allocators;
-mod appcaps;
+mod allcaps;
+pub mod allports;
 mod aud;
 mod blueprint;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
@@ -146,7 +147,7 @@ pub use r::time;
 pub use r::{io, path};
 
 // Provide a known-good BSP stack and switch to it immediately in `_start` for bigger stack
-const BSP_BOOT_STACK_BYTES: usize = crate::appcaps::boot::BSP_BOOT_STACK_BYTES;
+const BSP_BOOT_STACK_BYTES: usize = crate::allcaps::boot::BSP_BOOT_STACK_BYTES;
 
 #[repr(align(16))]
 struct BootStack {
@@ -289,7 +290,7 @@ pub extern "C" fn kmain() -> ! {
     tga::init_once();
     net::init();
 
-    if crate::appcaps::probes::TOKIO_BOOT_PROBE {
+    if crate::allcaps::probes::TOKIO_BOOT_PROBE {
         tokio_probe::log_boot_probe();
     }
     mio_probe::log_boot_probe();

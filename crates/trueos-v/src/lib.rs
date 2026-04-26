@@ -45,3 +45,31 @@ pub mod vnetfs;
 pub mod vshell;
 pub mod vsys;
 pub mod vui2;
+
+#[macro_export]
+macro_rules! shell_line {
+    ($($arg:tt)*) => {
+        $crate::shell::linef(format_args!($($arg)*))
+    };
+}
+
+#[macro_export]
+macro_rules! shell_ok {
+    ($($arg:tt)*) => {
+        $crate::shell::styled_linef(format_args!($($arg)*), $crate::shell::color::OK, false)
+    };
+}
+
+#[macro_export]
+macro_rules! shell_warn {
+    ($($arg:tt)*) => {
+        $crate::shell::styled_linef(format_args!($($arg)*), $crate::shell::color::WARN, true)
+    };
+}
+
+#[macro_export]
+macro_rules! shell_error {
+    ($($arg:tt)*) => {
+        $crate::shell::styled_linef(format_args!($($arg)*), $crate::shell::color::ERROR, true)
+    };
+}

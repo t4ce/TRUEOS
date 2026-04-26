@@ -11,8 +11,8 @@ use super::dns::{self, DnsConfig};
 use crate::net::tls::{KernelTlsRng, TlsClient, TlsClientConfig, TlsRoots, TlsTime};
 use crate::r::net::{NetProfile, VNet};
 
-pub const IRC_DEFAULT_PORT: u16 = 6667;
-pub const IRC_TLS_PORT: u16 = 6697;
+pub const IRC_DEFAULT_PORT: u16 = crate::allports::well_known::IRC;
+pub const IRC_TLS_PORT: u16 = crate::allports::well_known::IRC_TLS;
 
 #[derive(Debug)]
 pub enum IrcError {

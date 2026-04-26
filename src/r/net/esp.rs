@@ -337,3 +337,89 @@ pub async fn esp_gate_registry_task() {
         Timer::after(Duration::from_millis(ESP_STATUS_POLL_MS)).await;
     }
 }
+
+#[embassy_executor::task]
+pub async fn esp_piano_udp_task() {
+    crate::r::readiness::wait_for(crate::r::readiness::NET_CONFIGURED).await;
+
+    loop {
+        let Some(vnet) = VNet::open_primary() else {
+            Timer::after(Duration::from_millis(100)).await;
+            continue;
+        };
+
+        let mut piano = trueos_esp::piano::PianoUdpReceiver::new();
+        let _ = vnet.submit(piano.bootstrap_command());
+        crate::log!(
+            "esp-piano: starting udp listener port={} keys={}\n",
+            trueos_esp::piano::TRUEOS_PIANO_UDP_PORT,
+            trueos_esp::piano::PIANO_KEY_COUNT
+        );
+
+        loop {
+            if let Some(ev) = vnet.pop_event() {
+                match ev {
+                    v::vnet::Event::Opened { handle, kind } if kind == v::vnet::SocketKind::Udp => {
+                        piano.bind(handle);
+                        crate::log!(
+                            "esp-piano: udp listener bound handle={} port={}\n",
+                            handle.0,
+                            trueos_esp::piano::TRUEOS_PIANO_UDP_PORT
+                        );
+                    }
+                    v::vnet::Event::Closed { handle } if piano.unbind(handle) => {
+                        crate::log!("esp-piano: udp listener closed, reopening\n");
+                        let _ = vnet.submit(piano.bootstrap_command());
+                    }
+                    v::vnet::Event::UdpPacket { handle, from, data } => {
+                        let handled = piano.on_packet(handle, data.as_slice(), |event| {
+                            let duration_ms = 45 + (u32::from(event.velocity) * 140 / 127);
+                            crate::log!(
+                                "esp-piano: note key={} note={} velocity={} delta={} from={}.{}.{}.{}\n",
+                                event.key_index,
+                                event.note,
+                                event.velocity,
+                                event.delta,
+                                from.addr[0],
+                                from.addr[1],
+                                from.addr[2],
+                                from.addr[3]
+                            );
+                            if let Err(err) =
+                                crate::aud::play_midi_note(event.note, event.velocity, duration_ms)
+                            {
+                                crate::log!("esp-piano: note play err={}\n", err);
+                            }
+                        });
+                        if !handled {
+                            crate::log!(
+                                "esp-piano: ignored udp bytes={} from={}.{}.{}.{}:{}\n",
+                                data.len(),
+                                from.addr[0],
+                                from.addr[1],
+                                from.addr[2],
+                                from.addr[3],
+                                from.port
+                            );
+                        }
+                    }
+                    v::vnet::Event::Error { msg } => {
+                        crate::log!("esp-piano: error {}\n", msg);
+                    }
+                    v::vnet::Event::UdpPacketV6 { .. }
+                    | v::vnet::Event::TcpEstablished { .. }
+                    | v::vnet::Event::TcpData { .. }
+                    | v::vnet::Event::TcpSent { .. }
+                    | v::vnet::Event::IcmpReply { .. }
+                    | v::vnet::Event::IcmpReplyV6 { .. }
+                    | v::vnet::Event::Opened { .. }
+                    | v::vnet::Event::Closed { .. } => {}
+                }
+
+                continue;
+            }
+
+            Timer::after(Duration::from_millis(5)).await;
+        }
+    }
+}

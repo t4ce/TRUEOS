@@ -198,14 +198,20 @@ async fn execute_request(spawner: &Spawner, request: AppVmLaunchRequest) {
                         .iter()
                         .filter(|import| import.resolved_addr.is_some())
                         .count();
-                    log(alloc::format!("hv run: ELF imports={} resolved={}", imports.len(), resolved)
-                        .as_str());
+                    log(alloc::format!(
+                        "hv run: ELF imports={} resolved={}",
+                        imports.len(),
+                        resolved
+                    )
+                    .as_str());
                     for import in imports.iter() {
                         match import.resolved_addr {
-                            Some(addr) => {
-                                log(alloc::format!("hv run: import {} -> 0x{:x}", import.name, addr)
-                                    .as_str())
-                            }
+                            Some(addr) => log(alloc::format!(
+                                "hv run: import {} -> 0x{:x}",
+                                import.name,
+                                addr
+                            )
+                            .as_str()),
                             None => {
                                 log(alloc::format!("hv run: import {} -> unresolved", import.name)
                                     .as_str())
@@ -238,12 +244,15 @@ async fn execute_request(spawner: &Spawner, request: AppVmLaunchRequest) {
         return;
     };
 
-    if let Err(err) = crate::hv::stage_blueprint_launch(vm_id, crate::hv::BlueprintLaunchState {
-        archive: request.archive.clone(),
-        module_bytes: request.module_bytes.clone(),
-        app_args: request.app_args.clone(),
-        console_target: Some(target.clone()),
-    }) {
+    if let Err(err) = crate::hv::stage_blueprint_launch(
+        vm_id,
+        crate::hv::BlueprintLaunchState {
+            archive: request.archive.clone(),
+            module_bytes: request.module_bytes.clone(),
+            app_args: request.app_args.clone(),
+            console_target: Some(target.clone()),
+        },
+    ) {
         log(alloc::format!("hv run: app-vm stage failed: {:?}", err).as_str());
         return;
     }
@@ -281,7 +290,10 @@ pub(crate) fn enqueue_blueprint_bytes(
     module_bytes: Vec<u8>,
     app_args: Vec<String>,
 ) {
-    print_matrix_target_line(&target, alloc::format!("hv run: queued {}", archive.as_str()).as_str());
+    print_matrix_target_line(
+        &target,
+        alloc::format!("hv run: queued {}", archive.as_str()).as_str(),
+    );
     enqueue_request(AppVmLaunchRequest {
         archive,
         module_bytes,

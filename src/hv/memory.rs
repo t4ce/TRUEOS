@@ -11,9 +11,9 @@ fn primary_vm_id() -> u8 {
 pub const PAGE_SIZE_4K: usize = 4096;
 pub const PAGE_SIZE_2M: u64 = 2 * 1024 * 1024;
 pub const GUEST_STACK_VA_BASE: u64 = 0x0000_0000_0040_0000;
-pub const GUEST_STACK_MIN_MIB: usize = crate::appcaps::hv::GUEST_STACK_MIN_MIB;
-pub const GUEST_STACK_DEFAULT_MIB: usize = crate::appcaps::hv::GUEST_STACK_DEFAULT_MIB;
-pub const GUEST_STACK_MAX_MIB: usize = crate::appcaps::hv::GUEST_STACK_MAX_MIB;
+pub const GUEST_STACK_MIN_MIB: usize = crate::allcaps::hv::GUEST_STACK_MIN_MIB;
+pub const GUEST_STACK_DEFAULT_MIB: usize = crate::allcaps::hv::GUEST_STACK_DEFAULT_MIB;
+pub const GUEST_STACK_MAX_MIB: usize = crate::allcaps::hv::GUEST_STACK_MAX_MIB;
 pub const GUEST_STACK_MIN_BYTES: usize = GUEST_STACK_MIN_MIB * 1024 * 1024;
 pub const GUEST_STACK_DEFAULT_BYTES: usize = GUEST_STACK_DEFAULT_MIB * 1024 * 1024;
 pub const GUEST_STACK_MAX_BYTES: usize = GUEST_STACK_MAX_MIB * 1024 * 1024;
@@ -25,11 +25,11 @@ pub const GUEST_HEAP_PD_COUNT: usize = 8;
 pub const GUEST_HIGH_IMAGE_MAX_BYTES: u64 = GUEST_HIGH_IMAGE_PT_COUNT as u64 * PAGE_SIZE_2M;
 pub const ELF64_HEADER_LEN: usize = 64;
 const EPT_ROOT_PML4_INDEX: usize = 0;
-const EPT_DYNAMIC_PD_CAP: usize = crate::appcaps::hv::EPT_DYNAMIC_PD_CAP;
+const EPT_DYNAMIC_PD_CAP: usize = crate::allcaps::hv::EPT_DYNAMIC_PD_CAP;
 // Sparse EPT still maps only the spans we explicitly request, but those spans
 // include up to 1 GiB of host heap plus the guest heap, stack, and kernel image.
 // At 4 KiB granularity each PT covers 2 MiB, so we need a few hundred PT pages.
-const EPT_DYNAMIC_PT_CAP: usize = crate::appcaps::hv::EPT_DYNAMIC_PT_CAP;
+const EPT_DYNAMIC_PT_CAP: usize = crate::allcaps::hv::EPT_DYNAMIC_PT_CAP;
 
 // Page table entry flags
 pub const PT_ENTRY_PRESENT: u64 = 1 << 0;

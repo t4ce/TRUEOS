@@ -42,6 +42,7 @@ define_started_flags!(
     WS_TIME_STARTED,
     ESP_GATE_STARTED,
     ESP_GATE_REGISTRY_STARTED,
+    ESP_PIANO_UDP_STARTED,
     FTP_SERVER_STARTED,
     TGA_TASK_STARTED,
     GFX_VIRGL_READY_TASK_STARTED,
@@ -425,6 +426,10 @@ fn spawn_esp_gate(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_esp_gate_registry(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::net::esp::esp_gate_registry_task())
+}
+
+fn spawn_esp_piano_udp(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::r::net::esp::esp_piano_udp_task())
 }
 
 fn spawn_ftp_server(spawner: Spawner) -> SpawnAttempt {
@@ -1009,7 +1014,7 @@ const UI2_DEMO_READY: u32 =
 const WS_BOOT_READY: u32 = crate::r::readiness::NET_GATEWAY_REACHABLE
     | crate::r::readiness::TLS_SOCKET_SERVICE_READY
     | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
-static TASKS: [TaskSpec; 65] = [
+static TASKS: [TaskSpec; 66] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
         "globalog-persist-once",
@@ -1099,6 +1104,12 @@ static TASKS: [TaskSpec; 65] = [
     ),
     TaskSpec::enabled("esp-gate", 0, &ESP_GATE_STARTED, spawn_esp_gate),
     TaskSpec::enabled("esp-gate-registry", 0, &ESP_GATE_REGISTRY_STARTED, spawn_esp_gate_registry),
+    TaskSpec::enabled(
+        "esp-piano-udp",
+        crate::r::readiness::NET_CONFIGURED,
+        &ESP_PIANO_UDP_STARTED,
+        spawn_esp_piano_udp,
+    ),
     TaskSpec::disabled(
         "ftp-server",
         NET_CONFIGURED_AND_ROOT_READY,

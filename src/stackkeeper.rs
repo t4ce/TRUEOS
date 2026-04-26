@@ -1,9 +1,9 @@
 use core::ptr::addr_of_mut;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-pub const TOKIO_LANE_COUNT: usize = crate::appcaps::stackkeeper::TOKIO_LANE_COUNT;
-pub const TOKIO_LANE_SCRATCH_BYTES: usize = crate::appcaps::stackkeeper::TOKIO_LANE_SCRATCH_BYTES;
-const TOKIO_TLS_CPU_TRACK_COUNT: usize = crate::appcaps::stackkeeper::TOKIO_TLS_CPU_TRACK_COUNT;
+pub const TOKIO_LANE_COUNT: usize = crate::allcaps::stackkeeper::TOKIO_LANE_COUNT;
+pub const TOKIO_LANE_SCRATCH_BYTES: usize = crate::allcaps::stackkeeper::TOKIO_LANE_SCRATCH_BYTES;
+const TOKIO_TLS_CPU_TRACK_COUNT: usize = crate::allcaps::stackkeeper::TOKIO_TLS_CPU_TRACK_COUNT;
 
 const LANE_TAG_MAGIC: u32 = 0x304B_5453; // "STK0", little endian in memory.
 const NO_CPU_SLOT: u32 = u32::MAX;

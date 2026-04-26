@@ -205,6 +205,7 @@ pub mod env {
         args: Vec<String>,
         vars: BTreeMap<String, String>,
         console_target: Option<MatrixTarget>,
+        app_fs_root: Option<String>,
     }
 
     static CONTEXTS: spin::Mutex<BTreeMap<u32, Vec<LaunchContext>>> =
@@ -229,6 +230,16 @@ pub mod env {
         console_target: Option<MatrixTarget>,
         f: impl FnOnce() -> R,
     ) -> R {
+        with_launch_context_console_and_fs_root(args, vars, console_target, None, f)
+    }
+
+    pub(crate) fn with_launch_context_console_and_fs_root<R>(
+        args: Vec<String>,
+        vars: BTreeMap<String, String>,
+        console_target: Option<MatrixTarget>,
+        app_fs_root: Option<String>,
+        f: impl FnOnce() -> R,
+    ) -> R {
         let key = cpu_key();
         {
             let mut contexts = CONTEXTS.lock();
@@ -236,6 +247,7 @@ pub mod env {
                 args,
                 vars,
                 console_target,
+                app_fs_root,
             });
         }
 
@@ -289,6 +301,53 @@ pub mod env {
             .get(&cpu)
             .and_then(|stack| stack.last())
             .and_then(|ctx| ctx.console_target.clone())
+    }
+
+    fn normalize_app_path(path: &str, allow_empty: bool) -> Option<String> {
+        let mut out = String::new();
+        let t = path.trim();
+        if t.is_empty() {
+            return allow_empty.then_some(out);
+        }
+
+        for part in t.split('/') {
+            if part.is_empty() || part == "." {
+                continue;
+            }
+            if part == ".." {
+                return None;
+            }
+            if !out.is_empty() {
+                out.push('/');
+            }
+            out.push_str(part);
+        }
+
+        if out.is_empty() && !allow_empty {
+            return None;
+        }
+        Some(out)
+    }
+
+    pub(crate) fn resolve_fs_path(path: &str, allow_empty: bool) -> Option<String> {
+        let cpu = cpu_key();
+        let contexts = CONTEXTS.lock();
+        let app_fs_root = contexts
+            .get(&cpu)
+            .and_then(|stack| stack.last())
+            .and_then(|ctx| ctx.app_fs_root.clone());
+        drop(contexts);
+
+        let Some(root) = app_fs_root else {
+            return Some(String::from(path));
+        };
+
+        let rel = normalize_app_path(path, allow_empty)?;
+        if rel.is_empty() {
+            Some(root)
+        } else {
+            Some(alloc::format!("{}/{}", root.trim_matches('/'), rel))
+        }
     }
 }
 
@@ -593,7 +652,11 @@ pub mod cabi {
         let Ok(text) = core::str::from_utf8(data) else {
             return 0;
         };
-        crate::shell2::print_shell_line(&crate::shell2::UART1_COM1_BACKEND, text);
+        if let Some(target) = super::env::console_target() {
+            crate::shell2::print_matrix_target_line(&target, text);
+        } else {
+            crate::shell2::print_shell_line(&crate::shell2::UART1_COM1_BACKEND, text);
+        }
         data_len
     }
 
@@ -795,15 +858,21 @@ pub mod cabi {
         let Ok(path) = core::str::from_utf8(path_bytes) else {
             return FS_ERR_BAD_UTF8 as isize;
         };
+        let Some(path) = super::env::resolve_fs_path(path, false) else {
+            return FS_ERR_BAD_PATH as isize;
+        };
+        if path.len() > QJS_ASYNC_FS_MAX_PATH {
+            return FS_ERR_TOO_LARGE as isize;
+        };
 
         if out_ptr.is_null() || out_cap == 0 {
-            return match super::kfs::read_file_len(path) {
+            return match super::kfs::read_file_len(path.as_str()) {
                 Ok(len) => len as isize,
                 Err(e) => fs_error_to_code(e) as isize,
             };
         }
 
-        match super::kfs::read_file(path) {
+        match super::kfs::read_file(path.as_str()) {
             Ok(bytes) => {
                 if bytes.len() > out_cap {
                     return FS_ERR_NO_SPACE as isize;
@@ -835,7 +904,13 @@ pub mod cabi {
         let Ok(path) = core::str::from_utf8(path_bytes) else {
             return FS_ERR_BAD_UTF8;
         };
-        match super::kfs::write_file_begin(path, total_len) {
+        let Some(path) = super::env::resolve_fs_path(path, false) else {
+            return FS_ERR_BAD_PATH;
+        };
+        if path.len() > QJS_ASYNC_FS_MAX_PATH {
+            return FS_ERR_TOO_LARGE;
+        };
+        match super::kfs::write_file_begin(path.as_str(), total_len) {
             Ok(h) => {
                 *out_handle = h;
                 0
@@ -859,7 +934,13 @@ pub mod cabi {
         let Ok(path) = core::str::from_utf8(path_bytes) else {
             return FS_ERR_BAD_UTF8;
         };
-        match super::kfs::create_dir_all(path) {
+        let Some(path) = super::env::resolve_fs_path(path, true) else {
+            return FS_ERR_BAD_PATH;
+        };
+        if path.len() > QJS_ASYNC_FS_MAX_PATH {
+            return FS_ERR_TOO_LARGE;
+        };
+        match super::kfs::create_dir_all(path.as_str()) {
             Ok(()) => 0,
             Err(e) => fs_error_to_code(e),
         }
@@ -913,7 +994,13 @@ pub mod cabi {
         let Ok(path) = core::str::from_utf8(path_bytes) else {
             return FS_ERR_BAD_UTF8;
         };
-        match super::kfs::exists(path) {
+        let Some(path) = super::env::resolve_fs_path(path, false) else {
+            return FS_ERR_BAD_PATH;
+        };
+        if path.len() > QJS_ASYNC_FS_MAX_PATH {
+            return FS_ERR_TOO_LARGE;
+        };
+        match super::kfs::exists(path.as_str()) {
             Ok(true) => 1,
             Ok(false) => 0,
             Err(e) => fs_error_to_code(e),
@@ -932,7 +1019,13 @@ pub mod cabi {
         let Ok(path) = core::str::from_utf8(path_bytes) else {
             return FS_ERR_BAD_UTF8;
         };
-        match super::kfs::remove(path) {
+        let Some(path) = super::env::resolve_fs_path(path, false) else {
+            return FS_ERR_BAD_PATH;
+        };
+        if path.len() > QJS_ASYNC_FS_MAX_PATH {
+            return FS_ERR_TOO_LARGE;
+        };
+        match super::kfs::remove(path.as_str()) {
             Ok(()) => 0,
             Err(e) => fs_error_to_code(e),
         }

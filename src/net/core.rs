@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 use crate::net::device::{LinkState, NetDevice};
 use crate::net::ring::NetRing;
 
-const RX_QUEUE_SOFT_CAP: usize = crate::appcaps::net::RX_QUEUE_SOFT_CAP;
+const RX_QUEUE_SOFT_CAP: usize = crate::allcaps::net::RX_QUEUE_SOFT_CAP;
 
 pub trait VendorAdapter {
     fn mac(&self) -> [u8; 6];

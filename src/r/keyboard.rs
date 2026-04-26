@@ -430,6 +430,10 @@ pub fn apply_report(
                         codepoint,
                         KEYBOARD_OUTPUT_FLAG_PRESS,
                     );
+                    if key_code == KEYBOARD_KEY_F10 {
+                        let seq = crate::aud::request_bassline_toggle();
+                        crate::log!("keyboard: F10 bassline toggle request seq={}\n", seq);
+                    }
                     emitted_key_codes[idx] = key_code;
                 }
             }

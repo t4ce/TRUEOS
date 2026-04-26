@@ -222,6 +222,8 @@ bridge link show | grep -E "$BR|$UPLINK" || true
 konsole -e sh -c 'stty -echo -icanon cols 200 rows 60; nc 192.168.178.94 4245; stty sane'
 
 
+konsole -e sh -c 'stty -echo -icanon cols 200 rows 60; nc 192.168.178.94 1; stty sane'
+
 
 
 

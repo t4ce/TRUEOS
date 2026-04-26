@@ -15,8 +15,8 @@ use socket2::{Domain, Protocol, Socket, Type};
 use std::io;
 use std::net::SocketAddr;
 
-const VNET_PROBE_PORT: u16 = 48_123;
-const TOKIO_NET_PROBE_PORT: u16 = 48_125;
+const VNET_PROBE_PORT: u16 = crate::allports::probes::VNET_PROBE_PORT;
+const TOKIO_NET_PROBE_PORT: u16 = crate::allports::probes::TOKIO_NET_PROBE_PORT;
 const TOKIO_FS_PROBE_PATH: &str = "tokio-fs-probe.txt";
 const TOKIO_FS_PROBE_BYTES: &[u8] = b"TRUEOS tokio::fs probe\n";
 

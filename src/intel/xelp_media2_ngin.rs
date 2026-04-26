@@ -1815,11 +1815,12 @@ fn build_h264_decode_batch_skeleton(
     )?;
     batch[surface + 2] =
         ((coded_width.saturating_sub(1)) << 4) | ((coded_height.saturating_sub(1)) << 18);
-    // DW3: SurfaceFormat(31:28)=4(PLANAR_420_8/NV12), TiledSurface(27)=1,
-    //       TileWalk(26)=1(Y-major), SurfacePitch-1(17:3),
-    //       InterleaveChroma(1)=1: NV12 uses interleaved CbCr pairs.
+    // DW3: TileWalk(0)=Y-major, TiledSurface(1)=1, SurfacePitch-1(19:3),
+    //       InterleaveChroma(27)=1, SurfaceFormat(31:28)=PLANAR_420_8/NV12.
+    // Keep this layout in sync with the MFX_SURFACE_STATE genxml; these bit
+    // positions differ from render surface state packing.
     batch[surface + 3] =
-        (1 << 1) | ((output_pitch.saturating_sub(1)) << 3) | (1 << 26) | (1 << 27) | (4 << 28);
+        1 | (1 << 1) | ((output_pitch.saturating_sub(1)) << 3) | (1 << 27) | (4 << 28);
     batch[surface + 4] = chroma_y_offset;
     batch[surface + 5] = chroma_y_offset; // Y Offset for V(Cr) = same as U(Cb)
 

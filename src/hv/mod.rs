@@ -38,11 +38,11 @@ use vmm::VmManager;
 
 const MAIN_LOOP_MARKER: &[u8] = b"main: entering executor loop";
 const VMX_PAGE_SIZE: usize = 4096;
-const HV_LOG_CAP: usize = crate::appcaps::hv::LOG_CAP;
-const HV_LOG_LINE: usize = crate::appcaps::hv::LOG_LINE_BYTES;
-pub const TRUEOS_VM_ID_LIMIT: usize = crate::appcaps::hv::VM_ID_LIMIT;
-const TRUEOS_VM_TASK_POOL_SIZE: usize = crate::appcaps::hv::VM_TASK_POOL_SIZE;
-const TRUEOS_VM_CPU_SLOT_LIMIT: usize = crate::appcaps::hv::VM_CPU_SLOT_LIMIT;
+const HV_LOG_CAP: usize = crate::allcaps::hv::LOG_CAP;
+const HV_LOG_LINE: usize = crate::allcaps::hv::LOG_LINE_BYTES;
+pub const TRUEOS_VM_ID_LIMIT: usize = crate::allcaps::hv::VM_ID_LIMIT;
+const TRUEOS_VM_TASK_POOL_SIZE: usize = crate::allcaps::hv::VM_TASK_POOL_SIZE;
+const TRUEOS_VM_CPU_SLOT_LIMIT: usize = crate::allcaps::hv::VM_CPU_SLOT_LIMIT;
 
 struct TrueosVmId {
     running: AtomicBool,
@@ -518,19 +518,16 @@ fn snapshot_on_preserve_exit(vm_id: u8) {
         Ok(bytes) => match crate::hv::store::save_bytes(vm_id, bytes) {
             Ok(saved) => hvlogf(format_args!(
                 "hv: vm{} reporting: preserve snapshot saved store=hv-ramdisk path=vm/vm1.snapshot bytes={}",
-                vm_id,
-                saved
+                vm_id, saved
             )),
             Err(e) => hvlogf(format_args!(
                 "hv: vm{} reporting: preserve snapshot save failed ({:?})",
-                vm_id,
-                e
+                vm_id, e
             )),
         },
         Err(e) => hvlogf(format_args!(
             "hv: vm{} reporting: preserve snapshot bytes failed ({:?})",
-            vm_id,
-            e
+            vm_id, e
         )),
     }
 }
@@ -689,8 +686,7 @@ async fn vm_task(vm_id: u8) {
     } else {
         hvlogf(format_args!(
             "hv: vm{}-{} lifecycle: starting slot=unknown",
-            vm_id,
-            lineage_record.level
+            vm_id, lineage_record.level
         ));
     }
 
@@ -699,11 +695,7 @@ async fn vm_task(vm_id: u8) {
     match boot_mode {
         VmBootMode::Full => {
             let guest_len = guest.map(|b| b.len()).unwrap_or(0);
-            hvlogf(format_args!(
-                "hv: vm{} lifecycle: full guest bytes={}",
-                vm_id,
-                guest_len
-            ));
+            hvlogf(format_args!("hv: vm{} lifecycle: full guest bytes={}", vm_id, guest_len));
             if let Some(bytes) = guest {
                 if let Some(entry) = guest_kernel_elf_entry(bytes) {
                     hvlogf(format_args!(
@@ -767,9 +759,7 @@ async fn vm_task(vm_id: u8) {
         }
         Err(e) => hvlogf(format_args!(
             "hv: vm{}-{} reporting: vmlaunch/ept failed ({})",
-            vm_id,
-            lineage_record.level,
-            e
+            vm_id, lineage_record.level, e
         )),
     }
 
@@ -777,10 +767,7 @@ async fn vm_task(vm_id: u8) {
         if let Some(bytes) = guest {
             if contains_bytes(bytes, MAIN_LOOP_MARKER) {
                 vm.marker_seen.store(true, Ordering::Release);
-                hvlogf(format_args!(
-                    "hv: vm{} reporting: main: entering executor loop",
-                    vm_id
-                ));
+                hvlogf(format_args!("hv: vm{} reporting: main: entering executor loop", vm_id));
             }
         }
     }
@@ -1092,8 +1079,7 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
             }
             hvlogf(format_args!(
                 "hv: vm{} reporting: host preserve request armed at rip=0x{:016X}",
-                vm_id,
-                lr.guest_rip
+                vm_id, lr.guest_rip
             ));
             break;
         }

@@ -20,7 +20,7 @@ use crate::r::net::{NetProfile, Queue};
 
 // Hardcoded incoming POP3-over-TLS server.
 pub const POP3_HOST: &str = "pop.mail.com";
-pub const POP3_PORT: u16 = 995;
+pub const POP3_PORT: u16 = crate::allports::well_known::POP3_TLS;
 
 static POP3_TLS_SEQ: AtomicU32 = AtomicU32::new(1);
 

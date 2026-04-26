@@ -2,7 +2,7 @@ use super::{
     HID_DEBUG_REPORT_LOGS, HidRuntime, TrueosHidCursorEvent, clamp01, push_cursor_event,
     sync_runtime_cursor_snapshot,
 };
-const HID_MOUSE_RING_CAP: usize = crate::appcaps::input::HID_MOUSE_RING_CAP;
+const HID_MOUSE_RING_CAP: usize = crate::allcaps::input::HID_MOUSE_RING_CAP;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]

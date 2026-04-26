@@ -18,7 +18,7 @@ const HID_KIND_KEYBOARD: u8 = 1;
 const HID_KIND_MOUSE: u8 = crate::r::cursor::HID_KIND_MOUSE;
 const HID_KIND_TABLET: u8 = crate::r::cursor::HID_KIND_TABLET;
 const HID_KIND_VIRTUAL_CURSOR: u8 = crate::r::cursor::HID_KIND_VIRTUAL_CURSOR;
-const CURSOR_EVENT_RING_CAP: usize = crate::appcaps::input::HID_CURSOR_EVENT_RING_CAP;
+const CURSOR_EVENT_RING_CAP: usize = crate::allcaps::input::HID_CURSOR_EVENT_RING_CAP;
 
 const ZERO_CURSOR_EVENT: TrueosHidCursorEvent = TrueosHidCursorEvent {
     t_ms: 0,
