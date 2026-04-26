@@ -1,3 +1,16 @@
+// Intel bring-up source contracts.
+//
+// These comments intentionally mirror `may_help/stateoftheart`, but live next
+// to the code so the documentary facts do not drift away from the driver.
+//
+// Current proven hardware claim:
+// - PCI claim has reached `00:02.0 device=0x4680 rev=0x0C`.
+// - The observed MMIO aperture is `0x1000000` bytes.
+//
+// This module proves only ownership, MMIO bounds, shared address constants, and
+// top-level sequencing.  It does not prove render progress; render/display/GuC
+// modules must each emit their own named proof lines.
+
 mod display;
 pub(crate) mod format;
 mod guc;
