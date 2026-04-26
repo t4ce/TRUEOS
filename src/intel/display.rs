@@ -1,3 +1,14 @@
+// Display proof contract.
+//
+// Current evidence from the bring-up transcript:
+// - `primary-boot-surface` programs pipe-a at `2560x1440`, pitch `0x2800`.
+// - The surface GPU address is `0x02000000`.
+// - `surf_live` matches `surf`, and the boot logo path reports `ok=1`.
+//
+// This proves scanout handoff to known memory.  It does not prove the 3D
+// pipeline rendered that memory; render must separately produce `ps-rt-proof
+// accepted=1` before a displayed pixel can be attributed to GPU rendering.
+
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use spin::Mutex;
 

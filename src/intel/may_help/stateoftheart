@@ -1,0 +1,297 @@
+State of the art, current Intel GPU bring-up frontier
+======================================================
+
+This file is a raw proof transcript.  Read it like the HDA log: every line
+claims one hardware boundary and does not claim the next boundary.
+
+Current proven claims in this capture:
+
+- `pci-claim`: TrueOS claimed Intel GPU `00:02.0`, device `0x4680`,
+  revision `0x0C`, with `0x1000000` bytes of MMIO.
+- `guc-proof`: GuC firmware was found and bootstrap reached
+  `bootrom=JUMP_PASSED`, `ukernel=READY`, `auth=0x2`.
+- `display-proof`: primary boot surface is on `pipe-a`, live surface register
+  matches `0x02000000`, and the logo path reports `ok=1`.
+- `vf-proof`: `vf-streamout-proof`, `vf-draw-path`,
+  `vs-draw-frontier`, and `vs-streamout-proof` report
+  `vf-proof accepted=1` with IA counters moving.
+- `clip-raster-proof`: `vf-draw-path` reports
+  `clip-raster-proof accepted=1` with `cl_delta=1`, `cl_prim_delta=1`.
+- `vs-proof`: `vs-draw-frontier` and `vs-streamout-proof` report
+  `vs-proof accepted=1` with `vs_delta=3`, and shader upload matches the baked
+  blob.
+
+High-level checklist:
+
+| Step | Status | Certainty | Evidence in this capture | What it proves | What it does not prove |
+
+| Claim hardware / PCI | Proven | High | `intel: claimed 00:02.0 device=0x4680 rev=0x0C mmio_len=0x1000000` | TrueOS found and owns the expected Intel GPU function and BAR size. | MMIO access quality, forcewake, memory mappings, or engines. |
+
+| MMIO / forcewake | Mostly proven | Medium-high | Recovery logs end with `forcewake_ok=1`; many MMIO counter/register reads are coherent. | The register path is alive enough for RCS/display diagnostics and recovery. | A dedicated stable-read/write forcewake contract for every needed register island. |
+
+| GuC bootstrap | Proven | High | `bootstrap ready=1 ... bootrom=JUMP_PASSED ukernel=READY auth=0x2` | Firmware placement/auth/bootstrap reached ready state. | That render submission depends on GuC, or that GuC scheduling is being used correctly. |
+
+| Display handoff | Proven | High | `primary-boot-surface ... surf=0x02000000 surf_live=0x02000000 ok=1 logo=1` | The display pipe/plane can scan out the memory we think it can. | That 3D rendered the scanned-out pixels. |
+
+| GPU memory / GGTT for warm buffers | Partly proven | Medium | Streamout writes, batch/result markers, and display surface evidence all refer to expected GPU addresses. | Several GPU-visible buffers are usable by some blocks. | A single named `memory-proof` line that lists every warm buffer, cache flush, GGTT slot, and readback. |
+
+| Batch submit / RCS markers | Partly proven | Medium | New `batch-submit-proof` lines show `start_marker=1`; some paths also show `post3d_marker=1`; all current paths have `final_marker=0`. | RCS accepts enough command stream to run markers and some 3D packets. | Full retire; current traces still end `completed=0` / `final_marker=0`. |
+
+| Vertex upload | Implied, not directly logged here | Medium | VF proofs consume three vertices, but this capture does not include a fresh `vertex-upload-proof ... readback_ok=1` line. | The vertex memory is plausible and accepted by VF. | CPU write/readback layout proof for this exact boot capture. |
+
+| VF / input assembler | Proven | High | `vf-proof accepted=1 ia_vtx_delta=3`; streamout path also shows `delta_so0=3 delta_so_write0=96` with `delta_vs=0`. | VF can consume the declared vertex layout; one proof streams out without VS. | VS, clipper, PS, or render target writes. |
+
+| VS upload and execution | Proven | High | `shader-upload-verify ... vs_match=1 ...`; `vs-proof accepted=1 vs_delta=3` on `vs-draw-frontier` and `vs-streamout-proof`. | Baked VS bytes match upload and VS counters move for three vertices. | Correct VS output layout into clipper/SBE; VS paths still do not produce clipper counters. |
+
+| Clip / raster boundary | Partly proven | Medium-high for VF path, low for VS path | `vf-draw-path clip-raster-proof accepted=1 cl_delta=1 cl_prim_delta=1`; `vs-draw-frontier clip-raster-proof accepted=0` despite packet markers. | A VF-only path can produce clipper primitives. | Stable handoff from real VS output through clip/raster, or PS launch. |
+
+| Pixel shader dispatch | Not proven | High confidence negative | Backend logs say `dispatch_armed=1`; every `ps-dispatch-proof` line has `accepted=0 ps_delta=0 cps_delta=0`. | State appears armed enough to ask the PS question. | That any PS thread actually launched. |
+
+| Render target write | Not proven | High confidence negative | Every `ps-rt-proof` line has `accepted=0 ps_delta=0 rt_any_change=0 rt_triangle_change=0`. | Sampled pixels did not change in this capture. | Whether the blocker is PS dispatch, backend/color export, RT state, cache visibility, or hang-before-export. |
+
+| Displayed rendered pixel | Not proven | High confidence negative | Display proof is independent; `ps-rt-proof accepted=0`. | We can display known memory. | That render produced the displayed memory. |
+
+Certainty key:
+
+- High: one or more direct hardware observables agree, and the failure mode is
+  narrow.
+- Medium-high: direct observables agree, but the proof is inferred across
+  adjacent setup/recovery paths.
+- Medium: useful evidence exists, but a named proof line is still missing or
+  the success is not repeat-isolated.
+- Low: mostly hypothesis or stale archaeology.
+
+Current frontier:
+
+- We have not yet proven `ps-rt-proof`.  The backend state is armed
+  (`dispatch_armed=1`), but the captures below show `ps-dispatch-proof
+  accepted=0`, `ps-rt-proof accepted=0`, `ps_delta=0`, and
+  `rt_any_change=0`.
+- `vf-draw-path` proves clipper primitives, but `vs-draw-frontier` only proves
+  VS counters plus packet markers; it does not yet prove real VS-to-clipper
+  handoff.
+- We have not proven "triangle visible because render produced pixels."  The
+  display proof is real, but it is independent of the failing PS/render-target
+  boundary until `ps-rt-proof` changes a sampled pixel.
+
+Next best patch target:
+
+- Keep the VF/VS/clip proofs intact and make the next experiment isolate the
+  PS/backend gate: simplest PS, known writeable RT, no depth/stencil/HZ, sample
+  mask `0x1`, no varyings unless the VS/SBE contract is already proven for
+  that variant.
+
+intel: claimed 00:02.0 device=0x4680 rev=0x0C mmio_len=0x1000000
+intel/guc: firmware found phys=0x18C000 gpu=0x850000 len=0x54000 xfer=0x535C0
+intel/guc: bootstrap ready=1 status=0x8000F0EC bootrom=JUMP_PASSED ukernel=READY auth=0x2
+intel/display: primary-boot-surface pipe=pipe-a size=2560x1440 pitch=0x2800 gpu=0x2000000 phys=0xC0D000 plane_enabled=1 ctl_before=0x84000008 ctl_after=0x84100008 surf_before=0x00000000 surf=0x02000000 surf_live=0x02000000 ok=1 logo=1
+intel/render: vf-streamout-proof decl experiment=header+pos-slots01 read_len=1 so_pitch=32 decl=[0x00000001,0x00000002,0x0000000F,0x00000000,0x0000001F,0x00000000] slot_contract=slot0=header slot1=position
+intel/render: vf-streamout-proof contract experiment=header+pos-slots01 stages_disabled=vs|hs|te|ds|gs|ps sbe[read_offset=1 read_length=1 num_sf_attrs=1 force_offset=1 force_length=1] urb_vs[alloc_len=1 start=4 entries=192] vb[index=0 pitch=32 size=0x60] streamout[read_offset=0 read_length_field=1 rendering_disable=1 stats_enable=1 pitch=32 so_gpu=0x880000 size_dwords=0x3FF] topo=pointlist
+intel/render: vf-streamout-proof batch-submit-proof completed=0 start_marker=1 post3d_marker=1 final_marker=0 expected_slot=2 expected=0xC0DE7701 acthd=0x01800374 ipehr=0x7A000004 does_not_prove=3d_stage_progress
+intel/render: 3dprimitive-result completed=0 pre3d=true post3d=true final=false vf=true vs=true ps_state=true clip=false raster=false pre_draw_packet_markers=1 clip_raster_packet_markers=0 post_draw_retire_markers=0 acthd=0x01800374 ipehr=0x7A000004
+intel/render: vf-streamout-proof stall-detail acthd_batch_off=0x00000374 ipehr=0x7A000004 instdone_geom=0x00000000 sc_instdone=0xFFFFFFFF sc_extra=0xFFFFFFFF sc_extra2=0xFFFFFFFF
+intel/render: vf-streamout-proof stall-geom-not-done=VFL|VS|HS|TE|DS|GS|SOL|CL|SF|TDG1|URBM|SVG|TSG0|SDE
+intel/render: vf-streamout-proof stall-sc-not-done=none
+intel/render: vf-streamout-proof stall-sc-extra-not-done=none
+intel/render: vf-streamout-proof stall-sc-extra2-not-done=none
+intel/render: vf-streamout-proof stage-frontier completed=0 pre_raster_packets=1 ps_state_packet=1 clip_raster_packets=0 post_draw_retire=0 counter_frontier=vf-only-counters note=ps_state_programmed_but_no_ps_threads
+intel/render: vf-streamout-proof stage-diagnosis completed=0 verdict=streamout-wrote-no-retire delta_vs=0 delta_hs=0 delta_ds=0 delta_gs=0 delta_gs_prim=0 delta_cl=0 delta_cl_prim=0 delta_ps=0 delta_cps=0 delta_ps_depth=0 delta_so0=3 delta_so_write0=96
+intel/render: vf-streamout-proof vf-proof accepted=1 ia_vtx_delta=3 ia_prim_delta=3 post_vf=0xC0DE7723 post_vf_marker=1 does_not_prove=vs_or_pixels
+intel/render: vf-streamout-proof vs-proof accepted=0 vs_delta=0 post_vs=0xC0DE7724 post_vs_marker=1 does_not_prove=clip_raster_or_pixels
+intel/render: vf-streamout-proof clip-raster-proof accepted=0 cl_delta=0 cl_prim_delta=0 post_clip=0xC0DE7700 post_raster=0xC0DE7700 packet_markers=0 does_not_prove=ps_or_rt_write
+intel/render: vf-streamout-proof ps-dispatch-proof accepted=0 ps_delta=0 cps_delta=0 completed=0 does_not_prove=rt_write_or_display
+intel/render: vf-streamout-proof soft-accept accepted=1 reason=post3d-eop+vf-streamout-counters post3d_eop=0xC0DE7722 post3d_hi=0x00000000 delta_ia_vtx=3 delta_ia_prim=3 delta_vs=0 delta_so0=3 delta_so_write0=96 min_streamout_bytes=96
+intel/render: vf-streamout-proof recovery begin execlist_lo=0x00003098 mi_mode=0x00000000 acthd=0x01800374
+intel/render: vf-streamout-proof recovery end gdrst=0x00000000 execlist_lo=0x00000001 mi_mode=0x00000200 mode=0x00008008 forcewake_ok=1
+intel/render: mesa-compare target=device=0x4680 note=mesa-intel-vulkan simple-triangle dump target=gfx125 provisional=1 vs_sha=d648c75e7e36bc926b927c3700bd514f81d286db ps_sha=81edb0a9ed24ccfdfb1a2c3202f1008b202868df verified=0 host_sbe[read_offset=1 read_length=1 force_read_offset=1 force_read_length=1 num_sf_attrs=0] trueos_sbe[read_offset=1 read_length=1 force_read_offset=1 force_read_length=1 num_sf_attrs=0] host_clip[perspective_divide_disable=1] trueos_clip[perspective_divide_disable=1 clip_mode=4(CLIPMODE_ACCEPT_ALL) clip_enable=1 statistics=1] debug_sf[statistics=1] host_raster[cull_mode=none sample_mask=0x1] trueos_raster[cull_mode=1(none) sample_mask=1]
+intel/render: mesa-compare host_ps[vector_mask=0 binding_table_entry_count=0 push_constants=0 dispatch=simd8 max_threads_per_psd=63] trueos_ps[vector_mask=0 binding_table_entry_count=0 push_constants=0 dispatch=simd8 max_threads_per_psd=63] host_ps_extra[attribute_enable=0 per_sample=0 computed_depth=0 computes_stencil=0] trueos_ps_extra[attribute_enable=0 per_sample=0 computed_depth=0 computes_stencil=0] spec_pre_raster[baked_vs_urb_output_len=1 programmed_vs_urb_output_len=1 sbe_read_offset=1 sbe_read_length=1]
+intel/render: probe-backend-decoded wm[stats=1 force_thread_dispatch=2(force-on) edsc=0(EDSC_NORMAL)] ps_blend[writeable_rt=1 blend_enable=0 alpha_test=0 alpha_to_coverage=0] wm_depth_stencil[depth_test=0 depth_write=0 stencil_test=0 stencil_write=0 double_sided_stencil=0]
+intel/render: probe-backend-gate wm_hz_op[active=0 depth_clear=0 depth_resolve=0 hier_resolve=0 stencil_clear=0 stencil_resolve=0 full_surface_clear=0 partial_resolve=0 scissor=0 samples=0 sample_mask=0x0] ps_extra[valid=1 attribute_enable=0 per_sample=0 has_uav=0 kills=0 computed_depth=0 computes_stencil=0] dispatch_armed=1 reason=force-thread-dispatch-on
+intel/render: probe-clip-decoded topo=trilist patchlist=0 gs_active=0 ClipMode=4(CLIPMODE_ACCEPT_ALL) APIMode=0(APIMODE_OGL) GuardbandClipTestEnable=0 ViewportXYClipTestEnable=0 ClipEnable=1 PerspectiveDivideDisable=1 ForceClipMode=0 EarlyCullEnable=0 StatisticsEnable=1 VertexSubPixelPrecisionSelect=_8Bit TriangleFanProvokingVertexSelect=0 LineStripListProvokingVertexSelect=0 TriangleStripListProvokingVertexSelect=0 MaximumVPIndex=0 ForceZeroRTAIndexEnable=1
+intel/render: probe-sf-decoded ViewportTransformEnable=1 StatisticsEnable=1 LegacyGlobalDepthBiasEnable=0 DerefBlockSize=1(PerPoly) LineWidth=0x0 PointWidth=0x0 LastPixelEnable=0 TriangleStripListProvokingVertexSelect=0 LineStripListProvokingVertexSelect=0 TriangleFanProvokingVertexSelect=0
+intel/render: probe-raster-decoded sf_viewport=0x1180 cc_viewport=0x1140 scissor_ptr=0x11C0 cull=none fill_front=solid fill_back=solid front=cw scissor_enable=0 aa_enable=0 forced_samples=0 sample_mask=0x1
+intel/render: probe-prim-repl-decoded replication_count=0 replica_mask=0x1 rtai0=0
+intel/render: probe-handoff-decoded clip_out=sf vue_in_urb=1 baked_vs_urb_out_len=1 programmed_vs_urb_out_len=1 sbe_read_offset=1 sbe_read_len=1 ps_varyings=0 streamout=0
+intel/render: vf-draw-path batch-submit-proof completed=0 start_marker=1 post3d_marker=1 final_marker=0 expected_slot=2 expected=0xC0DE7701 acthd=0x018004E0 ipehr=0x7A000004 does_not_prove=3d_stage_progress
+intel/render: 3dprimitive-result completed=0 pre3d=true post3d=true final=false vf=true vs=true ps_state=true clip=true raster=true pre_draw_packet_markers=1 clip_raster_packet_markers=1 post_draw_retire_markers=0 acthd=0x018004E0 ipehr=0x7A000004
+intel/render: vf-draw-path stall-detail acthd_batch_off=0x000004E0 ipehr=0x7A000004 instdone_geom=0x00000000 sc_instdone=0xFFFFFFFF sc_extra=0xFFFFFFFF sc_extra2=0xFFFFFFFF
+intel/render: vf-draw-path stall-geom-not-done=VFL|VS|HS|TE|DS|GS|SOL|CL|SF|TDG1|URBM|SVG|TSG0|SDE
+intel/render: vf-draw-path stall-sc-not-done=none
+intel/render: vf-draw-path stall-sc-extra-not-done=none
+intel/render: vf-draw-path stall-sc-extra2-not-done=none
+intel/render: vf-draw-path stage-frontier completed=0 pre_raster_packets=1 ps_state_packet=1 clip_raster_packets=1 post_draw_retire=0 counter_frontier=clipper-thread note=ps_state_programmed_but_no_ps_threads
+intel/render: vf-draw-path stage-diagnosis completed=0 verdict=clip-stage-produced-primitives-no-ps delta_vs=0 delta_hs=0 delta_ds=0 delta_gs=0 delta_gs_prim=0 delta_cl=1 delta_cl_prim=1 delta_ps=0 delta_cps=0 delta_ps_depth=0 delta_so0=0 delta_so_write0=0
+intel/render: vf-draw-path vf-proof accepted=1 ia_vtx_delta=3 ia_prim_delta=1 post_vf=0xC0DE7723 post_vf_marker=1 does_not_prove=vs_or_pixels
+intel/render: vf-draw-path vs-proof accepted=0 vs_delta=0 post_vs=0xC0DE7724 post_vs_marker=1 does_not_prove=clip_raster_or_pixels
+intel/render: vf-draw-path clip-raster-proof accepted=1 cl_delta=1 cl_prim_delta=1 post_clip=0xC0DE7726 post_raster=0xC0DE7727 packet_markers=1 does_not_prove=ps_or_rt_write
+intel/render: vf-draw-path ps-dispatch-proof accepted=0 ps_delta=0 cps_delta=0 completed=0 does_not_prove=rt_write_or_display
+intel/render: vf-draw-path ps-rt-proof accepted=0 ps_delta=0 rt_any_change=0 rt_triangle_change=0 does_not_prove=display_scanout
+intel/render: vf-draw-path render-target completed=0 any_change=0 triangle_change=0 apex=10976678=>10976678 centroid=14145495=>14145495 left=12763842=>12763842 right=13882323=>13882323 center=14277081=>14277081
+intel/render: vf-draw-path recovery begin execlist_lo=0x00003098 mi_mode=0x00000000 acthd=0x018004E0
+intel/render: vf-draw-path recovery end gdrst=0x00000000 execlist_lo=0x00000001 mi_mode=0x00000200 mode=0x00008008 forcewake_ok=1
+intel/render: vs-draw-frontier contract variant=mesa-like baked_vs_urb_out_len=1 programmed_vs_urb_out_len=1 sbe[read_offset=1 read_length=1 force_offset=1 force_length=1 num_sf_attrs=0]
+intel/render: vs-draw-frontier shader-upload-verify note=mesa-intel-vulkan simple-triangle dump target=gfx125 provisional=1 vs_sha=d648c75e7e36bc926b927c3700bd514f81d286db ps_sha=81edb0a9ed24ccfdfb1a2c3202f1008b202868df verified=0 vs_match=1 vs_baked_sig=0x5CF2C07863307185 vs_uploaded_sig=0x5CF2C07863307185 vs_first=0x00030061/0x00030061 vs_last=0x02007744/0x02007744 ps_match=1 ps_baked_sig=0x41588EFFC130E4A3 ps_uploaded_sig=0x41588EFFC130E4A3
+intel/render: mesa-compare target=device=0x4680 note=mesa-intel-vulkan simple-triangle dump target=gfx125 provisional=1 vs_sha=d648c75e7e36bc926b927c3700bd514f81d286db ps_sha=81edb0a9ed24ccfdfb1a2c3202f1008b202868df verified=0 host_sbe[read_offset=1 read_length=1 force_read_offset=1 force_read_length=1 num_sf_attrs=0] trueos_sbe[read_offset=1 read_length=1 force_read_offset=1 force_read_length=1 num_sf_attrs=0] host_clip[perspective_divide_disable=1] trueos_clip[perspective_divide_disable=1 clip_mode=4(CLIPMODE_ACCEPT_ALL) clip_enable=1 statistics=1] debug_sf[statistics=1] host_raster[cull_mode=none sample_mask=0x1] trueos_raster[cull_mode=1(none) sample_mask=1]
+intel/render: mesa-compare host_ps[vector_mask=0 binding_table_entry_count=0 push_constants=0 dispatch=simd8 max_threads_per_psd=63] trueos_ps[vector_mask=0 binding_table_entry_count=0 push_constants=0 dispatch=simd8 max_threads_per_psd=63] host_ps_extra[attribute_enable=0 per_sample=0 computed_depth=0 computes_stencil=0] trueos_ps_extra[attribute_enable=0 per_sample=0 computed_depth=0 computes_stencil=0] spec_pre_raster[baked_vs_urb_output_len=1 programmed_vs_urb_output_len=1 sbe_read_offset=1 sbe_read_length=1]
+intel/render: probe-backend-decoded wm[stats=1 force_thread_dispatch=0(normal) edsc=0(EDSC_NORMAL)] ps_blend[writeable_rt=1 blend_enable=0 alpha_test=0 alpha_to_coverage=0] wm_depth_stencil[depth_test=0 depth_write=0 stencil_test=0 stencil_write=0 double_sided_stencil=0]
+intel/render: probe-backend-gate wm_hz_op[active=0 depth_clear=0 depth_resolve=0 hier_resolve=0 stencil_clear=0 stencil_resolve=0 full_surface_clear=0 partial_resolve=0 scissor=0 samples=0 sample_mask=0x0] ps_extra[valid=1 attribute_enable=0 per_sample=0 has_uav=0 kills=0 computed_depth=0 computes_stencil=0] dispatch_armed=1 reason=writeable-rt
+intel/render: probe-clip-decoded topo=trilist patchlist=0 gs_active=0 ClipMode=4(CLIPMODE_ACCEPT_ALL) APIMode=0(APIMODE_OGL) GuardbandClipTestEnable=0 ViewportXYClipTestEnable=0 ClipEnable=1 PerspectiveDivideDisable=1 ForceClipMode=0 EarlyCullEnable=0 StatisticsEnable=1 VertexSubPixelPrecisionSelect=_8Bit TriangleFanProvokingVertexSelect=0 LineStripListProvokingVertexSelect=0 TriangleStripListProvokingVertexSelect=0 MaximumVPIndex=0 ForceZeroRTAIndexEnable=1
+intel/render: probe-sf-decoded ViewportTransformEnable=1 StatisticsEnable=1 LegacyGlobalDepthBiasEnable=0 DerefBlockSize=1(PerPoly) LineWidth=0x0 PointWidth=0x0 LastPixelEnable=0 TriangleStripListProvokingVertexSelect=0 LineStripListProvokingVertexSelect=0 TriangleFanProvokingVertexSelect=0
+intel/render: probe-raster-decoded sf_viewport=0x1180 cc_viewport=0x1140 scissor_ptr=0x11C0 cull=none fill_front=solid fill_back=solid front=cw scissor_enable=0 aa_enable=0 forced_samples=0 sample_mask=0x1
+intel/render: probe-prim-repl-decoded replication_count=0 replica_mask=0x1 rtai0=0
+intel/render: probe-handoff-decoded clip_out=sf vue_in_urb=1 baked_vs_urb_out_len=1 programmed_vs_urb_out_len=1 sbe_read_offset=1 sbe_read_len=1 ps_varyings=0 streamout=0
+intel/render: vs-draw-frontier batch-submit-proof completed=0 start_marker=1 post3d_marker=0 final_marker=0 expected_slot=2 expected=0xC0DE7701 acthd=0x018004D8 ipehr=0x7A000004 does_not_prove=3d_stage_progress
+intel/render: 3dprimitive-result completed=0 pre3d=true post3d=false final=false vf=true vs=true ps_state=true clip=true raster=true pre_draw_packet_markers=1 clip_raster_packet_markers=1 post_draw_retire_markers=0 acthd=0x018004D8 ipehr=0x7A000004
+intel/render: vs-draw-frontier stall-detail acthd_batch_off=0x000004D8 ipehr=0x7A000004 instdone_geom=0x00000000 sc_instdone=0xFFFFFFFE sc_extra=0xFFFFFFFF sc_extra2=0xFFFFFFFF
+intel/render: vs-draw-frontier stall-geom-not-done=VFL|VS|HS|TE|DS|GS|SOL|CL|SF|TDG1|URBM|SVG|TSG0|SDE
+intel/render: vs-draw-frontier stall-sc-not-done=SVL
+intel/render: vs-draw-frontier stall-sc-extra-not-done=none
+intel/render: vs-draw-frontier stall-sc-extra2-not-done=none
+intel/render: vs-draw-frontier stage-frontier completed=0 pre_raster_packets=1 ps_state_packet=1 clip_raster_packets=1 post_draw_retire=0 counter_frontier=vs-only-counters note=state_packets_retired_through_raster_counters_only_show_no_clipper_or_ps_threads
+intel/render: vs-draw-frontier stage-diagnosis completed=0 verdict=vs-progress-no-clipper-or-ps-counters delta_vs=3 delta_hs=0 delta_ds=0 delta_gs=0 delta_gs_prim=0 delta_cl=0 delta_cl_prim=0 delta_ps=0 delta_cps=0 delta_ps_depth=0 delta_so0=0 delta_so_write0=0
+intel/render: vs-draw-frontier vf-proof accepted=1 ia_vtx_delta=3 ia_prim_delta=1 post_vf=0xC0DE7723 post_vf_marker=1 does_not_prove=vs_or_pixels
+intel/render: vs-draw-frontier vs-proof accepted=1 vs_delta=3 post_vs=0xC0DE7724 post_vs_marker=1 does_not_prove=clip_raster_or_pixels
+intel/render: vs-draw-frontier clip-raster-proof accepted=0 cl_delta=0 cl_prim_delta=0 post_clip=0xC0DE7726 post_raster=0xC0DE7727 packet_markers=1 does_not_prove=ps_or_rt_write
+intel/render: vs-draw-frontier ps-dispatch-proof accepted=0 ps_delta=0 cps_delta=0 completed=0 does_not_prove=rt_write_or_display
+intel/render: vs-draw-frontier ps-rt-proof accepted=0 ps_delta=0 rt_any_change=0 rt_triangle_change=0 does_not_prove=display_scanout
+intel/render: vs-draw-frontier render-target completed=0 any_change=0 triangle_change=0 apex=10976678=>10976678 centroid=14145495=>14145495 left=12763842=>12763842 right=13882323=>13882323 center=14277081=>14277081
+intel/render: vs-draw-frontier recovery begin execlist_lo=0x00003098 mi_mode=0x00000000 acthd=0x018004D8
+intel/render: vs-draw-frontier recovery end gdrst=0x00000000 execlist_lo=0x00000001 mi_mode=0x00000200 mode=0x00008008 forcewake_ok=1
+intel/render: vs-draw-frontier contract variant=slot0-read baked_vs_urb_out_len=1 programmed_vs_urb_out_len=1 sbe[read_offset=0 read_length=1 force_offset=1 force_length=1 num_sf_attrs=0]
+intel/render: vs-draw-frontier shader-upload-verify note=mesa-intel-vulkan simple-triangle dump target=gfx125 provisional=1 vs_sha=d648c75e7e36bc926b927c3700bd514f81d286db ps_sha=81edb0a9ed24ccfdfb1a2c3202f1008b202868df verified=0 vs_match=1 vs_baked_sig=0x5CF2C07863307185 vs_uploaded_sig=0x5CF2C07863307185 vs_first=0x00030061/0x00030061 vs_last=0x02007744/0x02007744 ps_match=1 ps_baked_sig=0x41588EFFC130E4A3 ps_uploaded_sig=0x41588EFFC130E4A3
+intel/render: mesa-compare target=device=0x4680 note=mesa-intel-vulkan simple-triangle dump target=gfx125 provisional=1 vs_sha=d648c75e7e36bc926b927c3700bd514f81d286db ps_sha=81edb0a9ed24ccfdfb1a2c3202f1008b202868df verified=0 host_sbe[read_offset=1 read_length=1 force_read_offset=1 force_read_length=1 num_sf_attrs=0] trueos_sbe[read_offset=0 read_length=1 force_read_offset=1 force_read_length=1 num_sf_attrs=0] host_clip[perspective_divide_disable=1] trueos_clip[perspective_divide_disable=1 clip_mode=4(CLIPMODE_ACCEPT_ALL) clip_enable=1 statistics=1] debug_sf[statistics=1] host_raster[cull_mode=none sample_mask=0x1] trueos_raster[cull_mode=1(none) sample_mask=1]
+intel/render: mesa-compare host_ps[vector_mask=0 binding_table_entry_count=0 push_constants=0 dispatch=simd8 max_threads_per_psd=63] trueos_ps[vector_mask=0 binding_table_entry_count=0 push_constants=0 dispatch=simd8 max_threads_per_psd=63] host_ps_extra[attribute_enable=0 per_sample=0 computed_depth=0 computes_stencil=0] trueos_ps_extra[attribute_enable=0 per_sample=0 computed_depth=0 computes_stencil=0] spec_pre_raster[baked_vs_urb_output_len=1 programmed_vs_urb_output_len=1 sbe_read_offset=0 sbe_read_length=1]
+intel/render: probe-backend-decoded wm[stats=1 force_thread_dispatch=0(normal) edsc=0(EDSC_NORMAL)] ps_blend[writeable_rt=1 blend_enable=0 alpha_test=0 alpha_to_coverage=0] wm_depth_stencil[depth_test=0 depth_write=0 stencil_test=0 stencil_write=0 double_sided_stencil=0]
+intel/render: probe-backend-gate wm_hz_op[active=0 depth_clear=0 depth_resolve=0 hier_resolve=0 stencil_clear=0 stencil_resolve=0 full_surface_clear=0 partial_resolve=0 scissor=0 samples=0 sample_mask=0x0] ps_extra[valid=1 attribute_enable=0 per_sample=0 has_uav=0 kills=0 computed_depth=0 computes_stencil=0] dispatch_armed=1 reason=writeable-rt
+intel/render: probe-clip-decoded topo=trilist patchlist=0 gs_active=0 ClipMode=4(CLIPMODE_ACCEPT_ALL) APIMode=0(APIMODE_OGL) GuardbandClipTestEnable=0 ViewportXYClipTestEnable=0 ClipEnable=1 PerspectiveDivideDisable=1 ForceClipMode=0 EarlyCullEnable=0 StatisticsEnable=1 VertexSubPixelPrecisionSelect=_8Bit TriangleFanProvokingVertexSelect=0 LineStripListProvokingVertexSelect=0 TriangleStripListProvokingVertexSelect=0 MaximumVPIndex=0 ForceZeroRTAIndexEnable=1
+intel/render: probe-sf-decoded ViewportTransformEnable=1 StatisticsEnable=1 LegacyGlobalDepthBiasEnable=0 DerefBlockSize=1(PerPoly) LineWidth=0x0 PointWidth=0x0 LastPixelEnable=0 TriangleStripListProvokingVertexSelect=0 LineStripListProvokingVertexSelect=0 TriangleFanProvokingVertexSelect=0
+intel/render: probe-raster-decoded sf_viewport=0x1180 cc_viewport=0x1140 scissor_ptr=0x11C0 cull=none fill_front=solid fill_back=solid front=cw scissor_enable=0 aa_enable=0 forced_samples=0 sample_mask=0x1
+intel/render: probe-prim-repl-decoded replication_count=0 replica_mask=0x1 rtai0=0
+intel/render: probe-handoff-decoded clip_out=sf vue_in_urb=1 baked_vs_urb_out_len=1 programmed_vs_urb_out_len=1 sbe_read_offset=0 sbe_read_len=1 ps_varyings=0 streamout=0
+intel/render: vs-draw-frontier batch-submit-proof completed=0 start_marker=1 post3d_marker=0 final_marker=0 expected_slot=2 expected=0xC0DE7701 acthd=0x018004D8 ipehr=0x7A000004 does_not_prove=3d_stage_progress
+intel/render: 3dprimitive-result completed=0 pre3d=true post3d=false final=false vf=true vs=true ps_state=true clip=true raster=true pre_draw_packet_markers=1 clip_raster_packet_markers=1 post_draw_retire_markers=0 acthd=0x018004D8 ipehr=0x7A000004
+intel/render: vs-draw-frontier stall-detail acthd_batch_off=0x000004D8 ipehr=0x7A000004 instdone_geom=0x00000000 sc_instdone=0xFFFFFFFE sc_extra=0xFFFFFFFF sc_extra2=0xFFFFFFFF
+intel/render: vs-draw-frontier stall-geom-not-done=VFL|VS|HS|TE|DS|GS|SOL|CL|SF|TDG1|URBM|SVG|TSG0|SDE
+intel/render: vs-draw-frontier stall-sc-not-done=SVL
+intel/render: vs-draw-frontier stall-sc-extra-not-done=none
+intel/render: vs-draw-frontier stall-sc-extra2-not-done=none
+intel/render: vs-draw-frontier stage-frontier completed=0 pre_raster_packets=1 ps_state_packet=1 clip_raster_packets=1 post_draw_retire=0 counter_frontier=vs-only-counters note=state_packets_retired_through_raster_counters_only_show_no_clipper_or_ps_threads
+intel/render: vs-draw-frontier stage-diagnosis completed=0 verdict=vs-progress-no-clipper-or-ps-counters delta_vs=3 delta_hs=0 delta_ds=0 delta_gs=0 delta_gs_prim=0 delta_cl=0 delta_cl_prim=0 delta_ps=0 delta_cps=0 delta_ps_depth=0 delta_so0=0 delta_so_write0=0
+intel/render: vs-draw-frontier vf-proof accepted=1 ia_vtx_delta=3 ia_prim_delta=1 post_vf=0xC0DE7723 post_vf_marker=1 does_not_prove=vs_or_pixels
+intel/render: vs-draw-frontier vs-proof accepted=1 vs_delta=3 post_vs=0xC0DE7724 post_vs_marker=1 does_not_prove=clip_raster_or_pixels
+intel/render: vs-draw-frontier clip-raster-proof accepted=0 cl_delta=0 cl_prim_delta=0 post_clip=0xC0DE7726 post_raster=0xC0DE7727 packet_markers=1 does_not_prove=ps_or_rt_write
+intel/render: vs-draw-frontier ps-dispatch-proof accepted=0 ps_delta=0 cps_delta=0 completed=0 does_not_prove=rt_write_or_display
+intel/render: vs-draw-frontier ps-rt-proof accepted=0 ps_delta=0 rt_any_change=0 rt_triangle_change=0 does_not_prove=display_scanout
+intel/render: vs-draw-frontier render-target completed=0 any_change=0 triangle_change=0 apex=10976678=>10976678 centroid=14145495=>14145495 left=12763842=>12763842 right=13882323=>13882323 center=14277081=>14277081
+intel/render: vs-draw-frontier recovery begin execlist_lo=0x00003098 mi_mode=0x00000000 acthd=0x018004D8
+intel/render: vs-draw-frontier recovery end gdrst=0x00000000 execlist_lo=0x00000001 mi_mode=0x00000200 mode=0x00008008 forcewake_ok=1
+intel/render: vs-draw-frontier contract variant=urb2 baked_vs_urb_out_len=1 programmed_vs_urb_out_len=2 sbe[read_offset=1 read_length=1 force_offset=1 force_length=1 num_sf_attrs=0]
+intel/render: vs-draw-frontier shader-upload-verify note=mesa-intel-vulkan simple-triangle dump target=gfx125 provisional=1 vs_sha=d648c75e7e36bc926b927c3700bd514f81d286db ps_sha=81edb0a9ed24ccfdfb1a2c3202f1008b202868df verified=0 vs_match=1 vs_baked_sig=0x5CF2C07863307185 vs_uploaded_sig=0x5CF2C07863307185 vs_first=0x00030061/0x00030061 vs_last=0x02007744/0x02007744 ps_match=1 ps_baked_sig=0x41588EFFC130E4A3 ps_uploaded_sig=0x41588EFFC130E4A3
+intel/render: mesa-compare target=device=0x4680 note=mesa-intel-vulkan simple-triangle dump target=gfx125 provisional=1 vs_sha=d648c75e7e36bc926b927c3700bd514f81d286db ps_sha=81edb0a9ed24ccfdfb1a2c3202f1008b202868df verified=0 host_sbe[read_offset=1 read_length=1 force_read_offset=1 force_read_length=1 num_sf_attrs=0] trueos_sbe[read_offset=1 read_length=1 force_read_offset=1 force_read_length=1 num_sf_attrs=0] host_clip[perspective_divide_disable=1] trueos_clip[perspective_divide_disable=1 clip_mode=4(CLIPMODE_ACCEPT_ALL) clip_enable=1 statistics=1] debug_sf[statistics=1] host_raster[cull_mode=none sample_mask=0x1] trueos_raster[cull_mode=1(none) sample_mask=1]
+intel/render: mesa-compare host_ps[vector_mask=0 binding_table_entry_count=0 push_constants=0 dispatch=simd8 max_threads_per_psd=63] trueos_ps[vector_mask=0 binding_table_entry_count=0 push_constants=0 dispatch=simd8 max_threads_per_psd=63] host_ps_extra[attribute_enable=0 per_sample=0 computed_depth=0 computes_stencil=0] trueos_ps_extra[attribute_enable=0 per_sample=0 computed_depth=0 computes_stencil=0] spec_pre_raster[baked_vs_urb_output_len=1 programmed_vs_urb_output_len=2 sbe_read_offset=1 sbe_read_length=1]
+intel/render: probe-backend-decoded wm[stats=1 force_thread_dispatch=0(normal) edsc=0(EDSC_NORMAL)] ps_blend[writeable_rt=1 blend_enable=0 alpha_test=0 alpha_to_coverage=0] wm_depth_stencil[depth_test=0 depth_write=0 stencil_test=0 stencil_write=0 double_sided_stencil=0]
+intel/render: probe-backend-gate wm_hz_op[active=0 depth_clear=0 depth_resolve=0 hier_resolve=0 stencil_clear=0 stencil_resolve=0 full_surface_clear=0 partial_resolve=0 scissor=0 samples=0 sample_mask=0x0] ps_extra[valid=1 attribute_enable=0 per_sample=0 has_uav=0 kills=0 computed_depth=0 computes_stencil=0] dispatch_armed=1 reason=writeable-rt
+intel/render: probe-clip-decoded topo=trilist patchlist=0 gs_active=0 ClipMode=4(CLIPMODE_ACCEPT_ALL) APIMode=0(APIMODE_OGL) GuardbandClipTestEnable=0 ViewportXYClipTestEnable=0 ClipEnable=1 PerspectiveDivideDisable=1 ForceClipMode=0 EarlyCullEnable=0 StatisticsEnable=1 VertexSubPixelPrecisionSelect=_8Bit TriangleFanProvokingVertexSelect=0 LineStripListProvokingVertexSelect=0 TriangleStripListProvokingVertexSelect=0 MaximumVPIndex=0 ForceZeroRTAIndexEnable=1
+intel/render: probe-sf-decoded ViewportTransformEnable=1 StatisticsEnable=1 LegacyGlobalDepthBiasEnable=0 DerefBlockSize=1(PerPoly) LineWidth=0x0 PointWidth=0x0 LastPixelEnable=0 TriangleStripListProvokingVertexSelect=0 LineStripListProvokingVertexSelect=0 TriangleFanProvokingVertexSelect=0
+intel/render: probe-raster-decoded sf_viewport=0x1180 cc_viewport=0x1140 scissor_ptr=0x11C0 cull=none fill_front=solid fill_back=solid front=cw scissor_enable=0 aa_enable=0 forced_samples=0 sample_mask=0x1
+intel/render: probe-prim-repl-decoded replication_count=0 replica_mask=0x1 rtai0=0
+intel/render: probe-handoff-decoded clip_out=sf vue_in_urb=1 baked_vs_urb_out_len=1 programmed_vs_urb_out_len=2 sbe_read_offset=1 sbe_read_len=1 ps_varyings=0 streamout=0
+intel/render: vs-draw-frontier batch-submit-proof completed=0 start_marker=1 post3d_marker=0 final_marker=0 expected_slot=2 expected=0xC0DE7701 acthd=0x018004D8 ipehr=0x7A000004 does_not_prove=3d_stage_progress
+intel/render: 3dprimitive-result completed=0 pre3d=true post3d=false final=false vf=true vs=true ps_state=true clip=true raster=true pre_draw_packet_markers=1 clip_raster_packet_markers=1 post_draw_retire_markers=0 acthd=0x018004D8 ipehr=0x7A000004
+intel/render: vs-draw-frontier stall-detail acthd_batch_off=0x000004D8 ipehr=0x7A000004 instdone_geom=0x00000000 sc_instdone=0xFFFFFFFE sc_extra=0xFFFFFFFF sc_extra2=0xFFFFFFFF
+intel/render: vs-draw-frontier stall-geom-not-done=VFL|VS|HS|TE|DS|GS|SOL|CL|SF|TDG1|URBM|SVG|TSG0|SDE
+intel/render: vs-draw-frontier stall-sc-not-done=SVL
+intel/render: vs-draw-frontier stall-sc-extra-not-done=none
+intel/render: vs-draw-frontier stall-sc-extra2-not-done=none
+intel/render: vs-draw-frontier stage-frontier completed=0 pre_raster_packets=1 ps_state_packet=1 clip_raster_packets=1 post_draw_retire=0 counter_frontier=vs-only-counters note=state_packets_retired_through_raster_counters_only_show_no_clipper_or_ps_threads
+intel/render: vs-draw-frontier stage-diagnosis completed=0 verdict=vs-progress-no-clipper-or-ps-counters delta_vs=3 delta_hs=0 delta_ds=0 delta_gs=0 delta_gs_prim=0 delta_cl=0 delta_cl_prim=0 delta_ps=0 delta_cps=0 delta_ps_depth=0 delta_so0=0 delta_so_write0=0
+intel/render: vs-draw-frontier vf-proof accepted=1 ia_vtx_delta=3 ia_prim_delta=1 post_vf=0xC0DE7723 post_vf_marker=1 does_not_prove=vs_or_pixels
+intel/render: vs-draw-frontier vs-proof accepted=1 vs_delta=3 post_vs=0xC0DE7724 post_vs_marker=1 does_not_prove=clip_raster_or_pixels
+intel/render: vs-draw-frontier clip-raster-proof accepted=0 cl_delta=0 cl_prim_delta=0 post_clip=0xC0DE7726 post_raster=0xC0DE7727 packet_markers=1 does_not_prove=ps_or_rt_write
+intel/render: vs-draw-frontier ps-dispatch-proof accepted=0 ps_delta=0 cps_delta=0 completed=0 does_not_prove=rt_write_or_display
+intel/render: vs-draw-frontier ps-rt-proof accepted=0 ps_delta=0 rt_any_change=0 rt_triangle_change=0 does_not_prove=display_scanout
+intel/render: vs-draw-frontier render-target completed=0 any_change=0 triangle_change=0 apex=10976678=>10976678 centroid=14145495=>14145495 left=12763842=>12763842 right=13882323=>13882323 center=14277081=>14277081
+intel/render: vs-draw-frontier recovery begin execlist_lo=0x00003098 mi_mode=0x00000000 acthd=0x018004D8
+intel/render: vs-draw-frontier recovery end gdrst=0x00000000 execlist_lo=0x00000001 mi_mode=0x00000200 mode=0x00008008 forcewake_ok=1
+intel/render: vs-draw-frontier contract variant=urb2-slot0-read baked_vs_urb_out_len=1 programmed_vs_urb_out_len=2 sbe[read_offset=0 read_length=1 force_offset=1 force_length=1 num_sf_attrs=0]
+intel/render: vs-draw-frontier shader-upload-verify note=mesa-intel-vulkan simple-triangle dump target=gfx125 provisional=1 vs_sha=d648c75e7e36bc926b927c3700bd514f81d286db ps_sha=81edb0a9ed24ccfdfb1a2c3202f1008b202868df verified=0 vs_match=1 vs_baked_sig=0x5CF2C07863307185 vs_uploaded_sig=0x5CF2C07863307185 vs_first=0x00030061/0x00030061 vs_last=0x02007744/0x02007744 ps_match=1 ps_baked_sig=0x41588EFFC130E4A3 ps_uploaded_sig=0x41588EFFC130E4A3
+intel/render: mesa-compare target=device=0x4680 note=mesa-intel-vulkan simple-triangle dump target=gfx125 provisional=1 vs_sha=d648c75e7e36bc926b927c3700bd514f81d286db ps_sha=81edb0a9ed24ccfdfb1a2c3202f1008b202868df verified=0 host_sbe[read_offset=1 read_length=1 force_read_offset=1 force_read_length=1 num_sf_attrs=0] trueos_sbe[read_offset=0 read_length=1 force_read_offset=1 force_read_length=1 num_sf_attrs=0] host_clip[perspective_divide_disable=1] trueos_clip[perspective_divide_disable=1 clip_mode=4(CLIPMODE_ACCEPT_ALL) clip_enable=1 statistics=1] debug_sf[statistics=1] host_raster[cull_mode=none sample_mask=0x1] trueos_raster[cull_mode=1(none) sample_mask=1]
+intel/render: mesa-compare host_ps[vector_mask=0 binding_table_entry_count=0 push_constants=0 dispatch=simd8 max_threads_per_psd=63] trueos_ps[vector_mask=0 binding_table_entry_count=0 push_constants=0 dispatch=simd8 max_threads_per_psd=63] host_ps_extra[attribute_enable=0 per_sample=0 computed_depth=0 computes_stencil=0] trueos_ps_extra[attribute_enable=0 per_sample=0 computed_depth=0 computes_stencil=0] spec_pre_raster[baked_vs_urb_output_len=1 programmed_vs_urb_output_len=2 sbe_read_offset=0 sbe_read_length=1]
+intel/render: probe-backend-decoded wm[stats=1 force_thread_dispatch=0(normal) edsc=0(EDSC_NORMAL)] ps_blend[writeable_rt=1 blend_enable=0 alpha_test=0 alpha_to_coverage=0] wm_depth_stencil[depth_test=0 depth_write=0 stencil_test=0 stencil_write=0 double_sided_stencil=0]
+intel/render: probe-backend-gate wm_hz_op[active=0 depth_clear=0 depth_resolve=0 hier_resolve=0 stencil_clear=0 stencil_resolve=0 full_surface_clear=0 partial_resolve=0 scissor=0 samples=0 sample_mask=0x0] ps_extra[valid=1 attribute_enable=0 per_sample=0 has_uav=0 kills=0 computed_depth=0 computes_stencil=0] dispatch_armed=1 reason=writeable-rt
+intel/render: probe-clip-decoded topo=trilist patchlist=0 gs_active=0 ClipMode=4(CLIPMODE_ACCEPT_ALL) APIMode=0(APIMODE_OGL) GuardbandClipTestEnable=0 ViewportXYClipTestEnable=0 ClipEnable=1 PerspectiveDivideDisable=1 ForceClipMode=0 EarlyCullEnable=0 StatisticsEnable=1 VertexSubPixelPrecisionSelect=_8Bit TriangleFanProvokingVertexSelect=0 LineStripListProvokingVertexSelect=0 TriangleStripListProvokingVertexSelect=0 MaximumVPIndex=0 ForceZeroRTAIndexEnable=1
+intel/render: probe-sf-decoded ViewportTransformEnable=1 StatisticsEnable=1 LegacyGlobalDepthBiasEnable=0 DerefBlockSize=1(PerPoly) LineWidth=0x0 PointWidth=0x0 LastPixelEnable=0 TriangleStripListProvokingVertexSelect=0 LineStripListProvokingVertexSelect=0 TriangleFanProvokingVertexSelect=0
+intel/render: probe-raster-decoded sf_viewport=0x1180 cc_viewport=0x1140 scissor_ptr=0x11C0 cull=none fill_front=solid fill_back=solid front=cw scissor_enable=0 aa_enable=0 forced_samples=0 sample_mask=0x1
+intel/render: probe-prim-repl-decoded replication_count=0 replica_mask=0x1 rtai0=0
+intel/render: probe-handoff-decoded clip_out=sf vue_in_urb=1 baked_vs_urb_out_len=1 programmed_vs_urb_out_len=2 sbe_read_offset=0 sbe_read_len=1 ps_varyings=0 streamout=0
+intel/render: vs-draw-frontier batch-submit-proof completed=0 start_marker=1 post3d_marker=0 final_marker=0 expected_slot=2 expected=0xC0DE7701 acthd=0x018004D8 ipehr=0x7A000004 does_not_prove=3d_stage_progress
+intel/render: 3dprimitive-result completed=0 pre3d=true post3d=false final=false vf=true vs=true ps_state=true clip=true raster=true pre_draw_packet_markers=1 clip_raster_packet_markers=1 post_draw_retire_markers=0 acthd=0x018004D8 ipehr=0x7A000004
+intel/render: vs-draw-frontier stall-detail acthd_batch_off=0x000004D8 ipehr=0x7A000004 instdone_geom=0x00000000 sc_instdone=0xFFFFFFFE sc_extra=0xFFFFFFFF sc_extra2=0xFFFFFFFF
+intel/render: vs-draw-frontier stall-geom-not-done=VFL|VS|HS|TE|DS|GS|SOL|CL|SF|TDG1|URBM|SVG|TSG0|SDE
+intel/render: vs-draw-frontier stall-sc-not-done=SVL
+intel/render: vs-draw-frontier stall-sc-extra-not-done=none
+intel/render: vs-draw-frontier stall-sc-extra2-not-done=none
+intel/render: vs-draw-frontier stage-frontier completed=0 pre_raster_packets=1 ps_state_packet=1 clip_raster_packets=1 post_draw_retire=0 counter_frontier=vs-only-counters note=state_packets_retired_through_raster_counters_only_show_no_clipper_or_ps_threads
+intel/render: vs-draw-frontier stage-diagnosis completed=0 verdict=vs-progress-no-clipper-or-ps-counters delta_vs=3 delta_hs=0 delta_ds=0 delta_gs=0 delta_gs_prim=0 delta_cl=0 delta_cl_prim=0 delta_ps=0 delta_cps=0 delta_ps_depth=0 delta_so0=0 delta_so_write0=0
+intel/render: vs-draw-frontier vf-proof accepted=1 ia_vtx_delta=3 ia_prim_delta=1 post_vf=0xC0DE7723 post_vf_marker=1 does_not_prove=vs_or_pixels
+intel/render: vs-draw-frontier vs-proof accepted=1 vs_delta=3 post_vs=0xC0DE7724 post_vs_marker=1 does_not_prove=clip_raster_or_pixels
+intel/render: vs-draw-frontier clip-raster-proof accepted=0 cl_delta=0 cl_prim_delta=0 post_clip=0xC0DE7726 post_raster=0xC0DE7727 packet_markers=1 does_not_prove=ps_or_rt_write
+intel/render: vs-draw-frontier ps-dispatch-proof accepted=0 ps_delta=0 cps_delta=0 completed=0 does_not_prove=rt_write_or_display
+intel/render: vs-draw-frontier ps-rt-proof accepted=0 ps_delta=0 rt_any_change=0 rt_triangle_change=0 does_not_prove=display_scanout
+intel/render: vs-draw-frontier render-target completed=0 any_change=0 triangle_change=0 apex=10976678=>10976678 centroid=14145495=>14145495 left=12763842=>12763842 right=13882323=>13882323 center=14277081=>14277081
+intel/render: vs-draw-frontier recovery begin execlist_lo=0x00003098 mi_mode=0x00000000 acthd=0x018004D8
+intel/render: vs-draw-frontier recovery end gdrst=0x00000000 execlist_lo=0x00000001 mi_mode=0x00000200 mode=0x00008008 forcewake_ok=1
+intel/render: vs-streamout-proof decl experiment=header+pos-slots01 read_len=1 so_pitch=32 decl=[0x00000001,0x00000002,0x0000000F,0x00000000,0x0000001F,0x00000000] slot_contract=slot0=header slot1=position
+intel/render: vs-streamout-proof contract experiment=header+pos-slots01 stages_disabled=hs|te|ds|gs|ps sbe[read_offset=1 read_length=1 num_sf_attrs=1 force_offset=1 force_length=1] urb_vs[alloc_len=1 start=4 entries=192] vb[index=0 pitch=12 size=0x24] streamout[read_offset=0 read_length_field=1 rendering_disable=1 stats_enable=1 pitch=32 so_gpu=0x880000 size_dwords=0x3FF] topo=pointlist
+intel/render: vs-streamout-proof batch-submit-proof completed=0 start_marker=1 post3d_marker=0 final_marker=0 expected_slot=2 expected=0xC0DE7701 acthd=0x0180036C ipehr=0x7A000004 does_not_prove=3d_stage_progress
+intel/render: 3dprimitive-result completed=0 pre3d=true post3d=false final=false vf=true vs=true ps_state=true clip=false raster=false pre_draw_packet_markers=1 clip_raster_packet_markers=0 post_draw_retire_markers=0 acthd=0x0180036C ipehr=0x7A000004
+intel/render: vs-streamout-proof stall-detail acthd_batch_off=0x0000036C ipehr=0x7A000004 instdone_geom=0x00000000 sc_instdone=0xFFFFFFFE sc_extra=0xFFFFFFFF sc_extra2=0xFFFFFFFF
+intel/render: vs-streamout-proof stall-geom-not-done=VFL|VS|HS|TE|DS|GS|SOL|CL|SF|TDG1|URBM|SVG|TSG0|SDE
+intel/render: vs-streamout-proof stall-sc-not-done=SVL
+intel/render: vs-streamout-proof stall-sc-extra-not-done=none
+intel/render: vs-streamout-proof stall-sc-extra2-not-done=none
+intel/render: vs-streamout-proof stage-frontier completed=0 pre_raster_packets=1 ps_state_packet=1 clip_raster_packets=0 post_draw_retire=0 counter_frontier=vs-only-counters note=ps_state_programmed_but_no_ps_threads
+intel/render: vs-streamout-proof stage-diagnosis completed=0 verdict=vs-progress-no-sol-write-or-offset delta_vs=3 delta_hs=0 delta_ds=0 delta_gs=0 delta_gs_prim=0 delta_cl=0 delta_cl_prim=0 delta_ps=0 delta_cps=0 delta_ps_depth=0 delta_so0=0 delta_so_write0=0
+intel/render: vs-streamout-proof vf-proof accepted=1 ia_vtx_delta=3 ia_prim_delta=3 post_vf=0xC0DE7723 post_vf_marker=1 does_not_prove=vs_or_pixels
+intel/render: vs-streamout-proof vs-proof accepted=1 vs_delta=3 post_vs=0xC0DE7724 post_vs_marker=1 does_not_prove=clip_raster_or_pixels
+intel/render: vs-streamout-proof clip-raster-proof accepted=0 cl_delta=0 cl_prim_delta=0 post_clip=0xC0DE7700 post_raster=0xC0DE7700 packet_markers=0 does_not_prove=ps_or_rt_write
+intel/render: vs-streamout-proof ps-dispatch-proof accepted=0 ps_delta=0 cps_delta=0 completed=0 does_not_prove=rt_write_or_display
+intel/render: vs-streamout-proof soft-accept accepted=0 reason=post3d-eop+vs+streamout-counters post3d_eop=0xC0DE7700 post3d_hi=0xC0DE7700 delta_ia_vtx=3 delta_ia_prim=3 delta_vs=3 delta_so0=0 delta_so_write0=0 min_streamout_bytes=96
+intel/render: vs-streamout-proof recovery begin execlist_lo=0x00003098 mi_mode=0x00000000 acthd=0x0180036C
+intel/render: vs-streamout-proof recovery end gdrst=0x00000000 execlist_lo=0x00000001 mi_mode=0x00000200 mode=0x00008008 forcewake_ok=1
+intel/render: vs-streamout-proof decl experiment=pos-slot0 read_len=1 so_pitch=16 decl=[0x00000001,0x00000001,0x0000000F,0x00000000,0x00000000,0x00000000] slot_contract=slot0=position
+intel/render: vs-streamout-proof contract experiment=pos-slot0 stages_disabled=hs|te|ds|gs|ps sbe[read_offset=1 read_length=1 num_sf_attrs=1 force_offset=1 force_length=1] urb_vs[alloc_len=1 start=4 entries=192] vb[index=0 pitch=12 size=0x24] streamout[read_offset=0 read_length_field=1 rendering_disable=1 stats_enable=1 pitch=16 so_gpu=0x880000 size_dwords=0x3FF] topo=pointlist
+intel/render: vs-streamout-proof batch-submit-proof completed=0 start_marker=1 post3d_marker=0 final_marker=0 expected_slot=2 expected=0xC0DE7701 acthd=0x01800364 ipehr=0x7A000004 does_not_prove=3d_stage_progress
+intel/render: 3dprimitive-result completed=0 pre3d=true post3d=false final=false vf=true vs=true ps_state=true clip=false raster=false pre_draw_packet_markers=1 clip_raster_packet_markers=0 post_draw_retire_markers=0 acthd=0x01800364 ipehr=0x7A000004
+intel/render: vs-streamout-proof stall-detail acthd_batch_off=0x00000364 ipehr=0x7A000004 instdone_geom=0x00000000 sc_instdone=0xFFFFFFFE sc_extra=0xFFFFFFFF sc_extra2=0xFFFFFFFF
+intel/render: vs-streamout-proof stall-geom-not-done=VFL|VS|HS|TE|DS|GS|SOL|CL|SF|TDG1|URBM|SVG|TSG0|SDE
+intel/render: vs-streamout-proof stall-sc-not-done=SVL
+intel/render: vs-streamout-proof stall-sc-extra-not-done=none
+intel/render: vs-streamout-proof stall-sc-extra2-not-done=none
+intel/render: vs-streamout-proof stage-frontier completed=0 pre_raster_packets=1 ps_state_packet=1 clip_raster_packets=0 post_draw_retire=0 counter_frontier=vs-only-counters note=ps_state_programmed_but_no_ps_threads
+intel/render: vs-streamout-proof stage-diagnosis completed=0 verdict=vs-progress-no-sol-write-or-offset delta_vs=3 delta_hs=0 delta_ds=0 delta_gs=0 delta_gs_prim=0 delta_cl=0 delta_cl_prim=0 delta_ps=0 delta_cps=0 delta_ps_depth=0 delta_so0=0 delta_so_write0=0
+intel/render: vs-streamout-proof vf-proof accepted=1 ia_vtx_delta=3 ia_prim_delta=3 post_vf=0xC0DE7723 post_vf_marker=1 does_not_prove=vs_or_pixels
+intel/render: vs-streamout-proof vs-proof accepted=1 vs_delta=3 post_vs=0xC0DE7724 post_vs_marker=1 does_not_prove=clip_raster_or_pixels
+intel/render: vs-streamout-proof clip-raster-proof accepted=0 cl_delta=0 cl_prim_delta=0 post_clip=0xC0DE7700 post_raster=0xC0DE7700 packet_markers=0 does_not_prove=ps_or_rt_write
+intel/render: vs-streamout-proof ps-dispatch-proof accepted=0 ps_delta=0 cps_delta=0 completed=0 does_not_prove=rt_write_or_display
+intel/render: vs-streamout-proof soft-accept accepted=0 reason=post3d-eop+vs+streamout-counters post3d_eop=0xC0DE7700 post3d_hi=0xC0DE7700 delta_ia_vtx=3 delta_ia_prim=3 delta_vs=3 delta_so0=0 delta_so_write0=0 min_streamout_bytes=48
+intel/render: vs-streamout-proof recovery begin execlist_lo=0x00003098 mi_mode=0x00000000 acthd=0x01800364
+intel/render: vs-streamout-proof recovery end gdrst=0x00000000 execlist_lo=0x00000001 mi_mode=0x00000200 mode=0x00008008 forcewake_ok=1
+intel/render: vs-streamout-proof decl experiment=pos-slot1 read_len=1 so_pitch=16 decl=[0x00000001,0x00000001,0x0000001F,0x00000000,0x00000000,0x00000000] slot_contract=slot0=zero slot1=position
+intel/render: vs-streamout-proof contract experiment=pos-slot1 stages_disabled=hs|te|ds|gs|ps sbe[read_offset=1 read_length=1 num_sf_attrs=1 force_offset=1 force_length=1] urb_vs[alloc_len=1 start=4 entries=192] vb[index=0 pitch=12 size=0x24] streamout[read_offset=0 read_length_field=1 rendering_disable=1 stats_enable=1 pitch=16 so_gpu=0x880000 size_dwords=0x3FF] topo=pointlist
+intel/render: vs-streamout-proof batch-submit-proof completed=0 start_marker=1 post3d_marker=0 final_marker=0 expected_slot=2 expected=0xC0DE7701 acthd=0x01800364 ipehr=0x7A000004 does_not_prove=3d_stage_progress
+intel/render: 3dprimitive-result completed=0 pre3d=true post3d=false final=false vf=true vs=true ps_state=true clip=false raster=false pre_draw_packet_markers=1 clip_raster_packet_markers=0 post_draw_retire_markers=0 acthd=0x01800364 ipehr=0x7A000004
+intel/render: vs-streamout-proof stall-detail acthd_batch_off=0x00000364 ipehr=0x7A000004 instdone_geom=0x00000000 sc_instdone=0xFFFFFFFE sc_extra=0xFFFFFFFF sc_extra2=0xFFFFFFFF
+intel/render: vs-streamout-proof stall-geom-not-done=VFL|VS|HS|TE|DS|GS|SOL|CL|SF|TDG1|URBM|SVG|TSG0|SDE
+intel/render: vs-streamout-proof stall-sc-not-done=SVL
+intel/render: vs-streamout-proof stall-sc-extra-not-done=none
+intel/render: vs-streamout-proof stall-sc-extra2-not-done=none
+intel/render: vs-streamout-proof stage-frontier completed=0 pre_raster_packets=1 ps_state_packet=1 clip_raster_packets=0 post_draw_retire=0 counter_frontier=vs-only-counters note=ps_state_programmed_but_no_ps_threads
+intel/render: vs-streamout-proof stage-diagnosis completed=0 verdict=vs-progress-no-sol-write-or-offset delta_vs=3 delta_hs=0 delta_ds=0 delta_gs=0 delta_gs_prim=0 delta_cl=0 delta_cl_prim=0 delta_ps=0 delta_cps=0 delta_ps_depth=0 delta_so0=0 delta_so_write0=0
+intel/render: vs-streamout-proof vf-proof accepted=1 ia_vtx_delta=3 ia_prim_delta=3 post_vf=0xC0DE7723 post_vf_marker=1 does_not_prove=vs_or_pixels
+intel/render: vs-streamout-proof vs-proof accepted=1 vs_delta=3 post_vs=0xC0DE7724 post_vs_marker=1 does_not_prove=clip_raster_or_pixels
+intel/render: vs-streamout-proof clip-raster-proof accepted=0 cl_delta=0 cl_prim_delta=0 post_clip=0xC0DE7700 post_raster=0xC0DE7700 packet_markers=0 does_not_prove=ps_or_rt_write
+intel/render: vs-streamout-proof ps-dispatch-proof accepted=0 ps_delta=0 cps_delta=0 completed=0 does_not_prove=rt_write_or_display
+intel/render: vs-streamout-proof soft-accept accepted=0 reason=post3d-eop+vs+streamout-counters post3d_eop=0xC0DE7700 post3d_hi=0xC0DE7700 delta_ia_vtx=3 delta_ia_prim=3 delta_vs=3 delta_so0=0 delta_so_write0=0 min_streamout_bytes=48
+intel/render: vs-streamout-proof recovery begin execlist_lo=0x00003098 mi_mode=0x00000000 acthd=0x01800364
+intel/render: vs-streamout-proof recovery end gdrst=0x00000000 execlist_lo=0x00000001 mi_mode=0x00000200 mode=0x00008008 forcewake_ok=1

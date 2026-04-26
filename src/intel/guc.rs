@@ -1,3 +1,14 @@
+// GuC proof contract.
+//
+// Current evidence from the bring-up transcript:
+// - Firmware is found and placed at GPU VA `0x0085_0000`.
+// - Bootstrap has reached `ready=1`, `bootrom=JUMP_PASSED`,
+//   `ukernel=READY`, and `auth=0x2`.
+//
+// This proves the firmware placement/auth/bootstrap path.  It does not prove
+// that render submission is GuC-backed, that GuC scheduling is configured, or
+// that RCS can retire a 3D batch; those are separate render proof boundaries.
+
 use core::sync::atomic::{AtomicBool, Ordering};
 
 const GUC_STATUS: usize = 0x0000_C000;
