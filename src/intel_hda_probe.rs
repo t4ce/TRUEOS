@@ -9,7 +9,7 @@ const PIANO_NOTE_POLL_DELAY_MS: u64 = 25;
 const BASSLINE_IDLE_POLL_DELAY_MS: u64 = 25;
 
 fn piano_claimed() -> bool {
-    crate::r::readiness::is_set(crate::r::readiness::PIANO_CLAIMED)
+    crate::usb2::midi::piano_connected()
 }
 
 fn play_default_probe_pattern() -> Result<&'static str, &'static str> {
