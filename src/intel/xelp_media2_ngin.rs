@@ -1622,6 +1622,86 @@ fn packet_write_addr64(batch: &mut [u32], packet_start: usize, dword_index: usiz
     batch[packet_start + dword_index + 1] = (gpu_addr >> 32) as u32;
 }
 
+#[allow(clippy::too_many_arguments)]
+fn log_media2_batch_geometry(
+    coded_width: u32,
+    coded_height: u32,
+    visible_width: u32,
+    visible_height: u32,
+    width_mbs: u32,
+    pic_height_mbs: u32,
+    output_pitch: u32,
+    output_surface_bytes: usize,
+    surface_dw2: u32,
+    surface_dw3: u32,
+    chroma_y_offset: u32,
+    pipe_post_attr: u32,
+    pipe_ref_attr: u32,
+    intra_row_addr: u64,
+    intra_row_attr: u32,
+    deblock_row_addr: u64,
+    deblock_row_attr: u32,
+    bsd_row_addr: u64,
+    bsd_row_attr: u32,
+    mpr_row_addr: u64,
+    mpr_row_attr: u32,
+) {
+    if !crate::logflag::INTEL_MEDIA_NGIN_LOGS {
+        return;
+    }
+
+    let tiles_per_row = output_pitch / MEDIA_YTILE_W as u32;
+    let frame_mbs_only = pic_height_mbs == coded_height / 16;
+    let intra_cls = width_mbs;
+    let deblock_cls = if frame_mbs_only {
+        width_mbs.saturating_mul(2)
+    } else {
+        width_mbs.saturating_mul(4)
+    };
+    let bsd_cls = if frame_mbs_only {
+        width_mbs
+    } else {
+        width_mbs.saturating_mul(2)
+    };
+    let mpr_cls = bsd_cls;
+    let row_total_cls = intra_cls
+        .saturating_add(deblock_cls)
+        .saturating_add(bsd_cls)
+        .saturating_add(mpr_cls);
+
+    crate::log!(
+        "intel/media2: batch-geometry coded={}x{} visible={}x{} mbs={}x{} pitch={} tiles_per_row={} bytes=0x{:X} surface_dw2=0x{:08X} surface_dw3=0x{:08X} chroma_y={} post_attr=0x{:08X} ref_attr=0x{:08X} rowstore_cls(intra={} deblock={} bsd={} mpr={} total={}/640) rowstore_ext(intra=0x{:X}/0x{:08X} deblock=0x{:X}/0x{:08X} bsd=0x{:X}/0x{:08X} mpr=0x{:X}/0x{:08X}) luma_only={}\n",
+        coded_width,
+        coded_height,
+        visible_width,
+        visible_height,
+        width_mbs,
+        pic_height_mbs,
+        output_pitch,
+        tiles_per_row,
+        output_surface_bytes,
+        surface_dw2,
+        surface_dw3,
+        chroma_y_offset,
+        pipe_post_attr,
+        pipe_ref_attr,
+        intra_cls,
+        deblock_cls,
+        bsd_cls,
+        mpr_cls,
+        row_total_cls,
+        intra_row_addr,
+        intra_row_attr,
+        deblock_row_addr,
+        deblock_row_attr,
+        bsd_row_addr,
+        bsd_row_attr,
+        mpr_row_addr,
+        mpr_row_attr,
+        crate::logflag::INTEL_MEDIA_PRESENT_LUMA_ONLY
+    );
+}
+
 fn emit_mfx_wait(batch: &mut [u32], idx: &mut usize) -> bool {
     if *idx >= batch.len() {
         return false;
@@ -1683,6 +1763,11 @@ fn build_h264_decode_batch_skeleton(
     let visible_height = frame_height as u32;
     let (coded_width, coded_height) = coded_h264_frame_dims(sps);
     let width_mbs = coded_width.saturating_add(15) / 16;
+    let pic_height = if sps.frame_mbs_only_flag {
+        sps.pic_height_in_map_units_minus1 + 1
+    } else {
+        (sps.pic_height_in_map_units_minus1 + 1) * 2
+    };
     let frame_dims = visible_width | (visible_height << 16);
     let output_pitch = align_up_u32(coded_width.max(128), 128); // Y-tile: 128-byte tile width
     // Y-tile NV12: chroma plane must start on a 32-row tile boundary so the
@@ -1823,6 +1908,8 @@ fn build_h264_decode_batch_skeleton(
         1 | (1 << 1) | ((output_pitch.saturating_sub(1)) << 3) | (1 << 27) | (4 << 28);
     batch[surface + 4] = chroma_y_offset;
     batch[surface + 5] = chroma_y_offset; // Y Offset for V(Cr) = same as U(Cb)
+    let surface_dw2 = batch[surface + 2];
+    let surface_dw3 = batch[surface + 3];
 
     // --- MFX_PIPE_BUF_ADDR_STATE ---
     let pipe_buf = begin_batch_packet(
@@ -1918,6 +2005,30 @@ fn build_h264_decode_batch_skeleton(
     batch[bsp + 6] = MFX_MOCS_UC; // MPR Row Store Attributes
     batch[bsp + 9] = MFX_MOCS_UC; // Bitplane Read Buffer Attributes
 
+    log_media2_batch_geometry(
+        coded_width,
+        coded_height,
+        visible_width,
+        visible_height,
+        width_mbs,
+        pic_height,
+        output_pitch,
+        output_surface_bytes,
+        surface_dw2,
+        surface_dw3,
+        chroma_y_offset,
+        batch[pipe_buf + 6],
+        batch[pipe_buf + 51],
+        scratch_gpu_addr,
+        batch[pipe_buf + 15],
+        scratch_gpu_addr + 0x08000,
+        batch[pipe_buf + 18],
+        scratch_gpu_addr + 0x10000,
+        batch[bsp + 3],
+        scratch_gpu_addr + 0x18000,
+        batch[bsp + 6],
+    );
+
     // --- MFD_AVC_DPB_STATE (27 DWords) ---
     // For non-IDR frames, mark frame store 0 as a valid short-term reference
     // pointing to the same output surface (self-reference).  For IDR frames
@@ -1972,11 +2083,6 @@ fn build_h264_decode_batch_skeleton(
     }
 
     // --- MFX_AVC_IMG_STATE (21 DWords) ---
-    let pic_height = if sps.frame_mbs_only_flag {
-        sps.pic_height_in_map_units_minus1 + 1
-    } else {
-        (sps.pic_height_in_map_units_minus1 + 1) * 2
-    };
     let avc_img = begin_batch_packet(
         batch,
         &mut idx,
