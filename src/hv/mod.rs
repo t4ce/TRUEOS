@@ -1177,7 +1177,7 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
                 let subleaf = regs.rcx as u32;
                 let out = unsafe { __cpuid_count(leaf, subleaf) };
                 regs.rax = out.eax as u64;
-                regs.rbx = out.ebx as u64;
+                regs.rbx = guest_cpuid_ebx(leaf, subleaf, out.ebx) as u64;
                 regs.rcx = out.ecx as u64;
                 regs.rdx = out.edx as u64;
                 crate::hv::vmx::set_guest_registers(regs);
@@ -1197,7 +1197,7 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
                             leaf,
                             subleaf,
                             out.eax,
-                            out.ebx,
+                            regs.rbx as u32,
                             out.ecx,
                             out.edx
                         ));
@@ -1282,6 +1282,18 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
         }
     }
     Ok(lr)
+}
+
+fn guest_cpuid_ebx(leaf: u32, subleaf: u32, ebx: u32) -> u32 {
+    if leaf != 0x0000_0001 || subleaf != 0 {
+        return ebx;
+    }
+
+    let slot = crate::percpu::current_slot_via_cpuid() as u32;
+    let Some(profile) = crate::cpu::CpuProfile::for_slot(slot) else {
+        return ebx;
+    };
+    (ebx & 0x00FF_FFFF) | ((profile.lapic_id() & 0xFF) << 24)
 }
 
 fn setup_vmcs_for_launch(

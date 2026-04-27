@@ -556,6 +556,7 @@ fn encode_triangle_probe_batch(
     let gfx125_3d_mode_dw3 = gfx125_3d_mode_dw3();
     let ps_binding_table_entry_count = match backend_probe_mode {
         BackendProbeMode::MesaLike
+        | BackendProbeMode::PsBindingTableCountZero
         | BackendProbeMode::WmNormalDispatch
         | BackendProbeMode::PsDispatchSlot0
         | BackendProbeMode::PsDispatchSlot1
@@ -574,6 +575,14 @@ fn encode_triangle_probe_batch(
         BackendProbeMode::PsBindingTableCountOne => {
             pipeline.ps.meta.kernel.binding_table_entry_count.max(1)
         }
+    };
+    let ps_binding_table_entry_count = if matches!(
+        backend_probe_mode,
+        BackendProbeMode::PsBindingTableCountZero
+    ) {
+        0
+    } else {
+        ps_binding_table_entry_count
     };
     let ps_dw3 = (binding_table_entry_count_encoding(ps_binding_table_entry_count) << 18)
         | (sampler_count_encoding(pipeline.ps.meta.kernel.sampler_count) << 27)
