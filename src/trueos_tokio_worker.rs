@@ -19,7 +19,7 @@ async fn tokio_blocking_job_task(job: TokioBlockingJob, lane: crate::stackkeeper
 
 fn reject_until_background_ap_ready() -> i32 {
     if !LOGGED_NO_WORKER.swap(true, Ordering::AcqRel) {
-        crate::log!("tokio-worker: no AP>2 background spawner yet; blocking job not launched\n");
+        crate::log!("tokio-worker: no AP2+ background spawner yet; blocking job not launched\n");
     }
     -2
 }
@@ -55,7 +55,7 @@ fn spawn_on_background_ap(job: TokioBlockingJob) -> i32 {
     if !LOGGED_SPAWN.swap(true, Ordering::AcqRel) {
         let tag = lane.tag();
         crate::log!(
-            "tokio-worker: using TRUEOS AP>2 background spawners for blocking jobs tag=0x{:08X} vm={} domain={} role={} lane{} cpu_slot={} core_kind={} scratch={:#x}+{}\n",
+            "tokio-worker: using TRUEOS AP2+ background spawners for blocking jobs tag=0x{:08X} vm={} domain={} role={} lane{} cpu_slot={} core_kind={} scratch={:#x}+{}\n",
             tag.magic,
             tag.vm_id,
             tag.domain,

@@ -82,6 +82,7 @@ fn submit_warm_render_batch(
         let result_post3d_light_hi =
             read_result_dword(warm, RESULT_SLOT_POST3D_LIGHT_PIPE_CONTROL_HI_DWORD);
         let result_final_after_light = read_result_dword(warm, RESULT_SLOT_FINAL_AFTER_LIGHT_DWORD);
+        let result_pre_light_pc = read_result_dword(warm, RESULT_SLOT_PRE_LIGHT_PC_DWORD);
         let observed = match expected_result_slot_dword {
             RESULT_SLOT_PRE3D_DWORD => result0,
             RESULT_SLOT_POST3D_DWORD => result1,
@@ -96,6 +97,7 @@ fn submit_warm_render_batch(
             RESULT_SLOT_POST3D_LIGHT_PIPE_CONTROL_LO_DWORD => result_post3d_light,
             RESULT_SLOT_POST3D_LIGHT_PIPE_CONTROL_HI_DWORD => result_post3d_light_hi,
             RESULT_SLOT_FINAL_AFTER_LIGHT_DWORD => result_final_after_light,
+            RESULT_SLOT_PRE_LIGHT_PC_DWORD => result_pre_light_pc,
             _ => result0,
         };
         if observed == expected_result {
@@ -123,7 +125,7 @@ fn submit_warm_render_batch(
                 result2
             );
             intel_render_verbose_log!(
-                "intel/render: {} poll-stage iter={} post_vf=0x{:08X} post_vs=0x{:08X} post_ps_state=0x{:08X} post_clip=0x{:08X} post_raster=0x{:08X} post3d_light=0x{:08X} post3d_light_hi=0x{:08X} final_after_light=0x{:08X} post3d_eop=0x{:08X} post3d_hi=0x{:08X}\n",
+                "intel/render: {} poll-stage iter={} post_vf=0x{:08X} post_vs=0x{:08X} post_ps_state=0x{:08X} post_clip=0x{:08X} post_raster=0x{:08X} pre_light_pc=0x{:08X} post3d_light=0x{:08X} post3d_light_hi=0x{:08X} final_after_light=0x{:08X} post3d_eop=0x{:08X} post3d_hi=0x{:08X}\n",
                 submit_name,
                 iter,
                 result3,
@@ -131,6 +133,7 @@ fn submit_warm_render_batch(
                 result5,
                 result6,
                 result7,
+                result_pre_light_pc,
                 result_post3d_light,
                 result_post3d_light_hi,
                 result_final_after_light,
@@ -177,9 +180,10 @@ fn submit_warm_render_batch(
     let result_post3d_light_hi =
         read_result_dword(warm, RESULT_SLOT_POST3D_LIGHT_PIPE_CONTROL_HI_DWORD);
     let result_final_after_light = read_result_dword(warm, RESULT_SLOT_FINAL_AFTER_LIGHT_DWORD);
+    let result_pre_light_pc = read_result_dword(warm, RESULT_SLOT_PRE_LIGHT_PC_DWORD);
     if should_log_primary_probe_detail() {
         crate::log!(
-            "intel/render: {} complete={} result0=0x{:08X} result1=0x{:08X} result2=0x{:08X} post_vf=0x{:08X} post_vs=0x{:08X} post_ps_state=0x{:08X} post_clip=0x{:08X} post_raster=0x{:08X} post3d_light=0x{:08X} post3d_light_hi=0x{:08X} final_after_light=0x{:08X} post3d_eop=0x{:08X} post3d_hi=0x{:08X} ctl=0x{:08X} instdone=0x{:08X}\n",
+            "intel/render: {} complete={} result0=0x{:08X} result1=0x{:08X} result2=0x{:08X} post_vf=0x{:08X} post_vs=0x{:08X} post_ps_state=0x{:08X} post_clip=0x{:08X} post_raster=0x{:08X} pre_light_pc=0x{:08X} post3d_light=0x{:08X} post3d_light_hi=0x{:08X} final_after_light=0x{:08X} post3d_eop=0x{:08X} post3d_hi=0x{:08X} ctl=0x{:08X} instdone=0x{:08X}\n",
             submit_name,
             completed as u8,
             result0,
@@ -190,6 +194,7 @@ fn submit_warm_render_batch(
             result5,
             result6,
             result7,
+            result_pre_light_pc,
             result_post3d_light,
             result_post3d_light_hi,
             result_final_after_light,
@@ -202,10 +207,11 @@ fn submit_warm_render_batch(
     }
     if is_triangle_debug_submit_name(submit_name) {
         intel_render_focus_log!(
-            "intel/render: {} batch-submit-proof completed={} start_marker={} post3d_light_marker={} final_after_light_marker={} post3d_marker={} final_marker={} expected_slot={} expected=0x{:08X} acthd=0x{:08X} ipehr=0x{:08X} does_not_prove=3d_stage_progress\n",
+            "intel/render: {} batch-submit-proof completed={} start_marker={} pre_light_pc_marker={} post3d_light_marker={} final_after_light_marker={} post3d_marker={} final_marker={} expected_slot={} expected=0x{:08X} acthd=0x{:08X} ipehr=0x{:08X} does_not_prove=3d_stage_progress\n",
             submit_name,
             completed as u8,
             (result0 == RCS_EXEC_RESULT_DRAW_PRE3D) as u8,
+            (result_pre_light_pc == RCS_EXEC_RESULT_DRAW_PRE_LIGHT_PC) as u8,
             (result_post3d_light == RCS_EXEC_RESULT_DRAW_POST3D && result_post3d_light_hi == 0)
                 as u8,
             (result_final_after_light == RCS_EXEC_RESULT_DRAW_FINAL_AFTER_LIGHT) as u8,
@@ -217,9 +223,10 @@ fn submit_warm_render_batch(
             crate::intel::mmio_read(dev, RCS_RING_IPEHR)
         );
         intel_render_focus_log!(
-            "intel/render: 3dprimitive-result completed={} pre3d={} post3d_light={} final_after_light={} post3d_heavy={} final={} vf={} vs={} ps_state={} clip={} raster={} pre_draw_packet_markers={} clip_raster_packet_markers={} post_draw_light_markers={} post_draw_final_after_light_markers={} post_draw_heavy_markers={} post_draw_retire_markers={} acthd=0x{:08X} ipehr=0x{:08X}\n",
+            "intel/render: 3dprimitive-result completed={} pre3d={} pre_light_pc={} post3d_light={} final_after_light={} post3d_heavy={} final={} vf={} vs={} ps_state={} clip={} raster={} pre_draw_packet_markers={} clip_raster_packet_markers={} post_draw_pre_light_markers={} post_draw_light_markers={} post_draw_final_after_light_markers={} post_draw_heavy_markers={} post_draw_retire_markers={} acthd=0x{:08X} ipehr=0x{:08X}\n",
             completed as u8,
             result0 == RCS_EXEC_RESULT_DRAW_PRE3D,
+            result_pre_light_pc == RCS_EXEC_RESULT_DRAW_PRE_LIGHT_PC,
             result_post3d_light == RCS_EXEC_RESULT_DRAW_POST3D && result_post3d_light_hi == 0,
             result_final_after_light == RCS_EXEC_RESULT_DRAW_FINAL_AFTER_LIGHT,
             result_post3d_eop == RCS_EXEC_RESULT_DRAW_POST3D && result_post3d_eop_hi == 0,
@@ -233,6 +240,7 @@ fn submit_warm_render_batch(
                 as u8,
             ((result6 == RCS_EXEC_RESULT_DRAW_POST_CLIP)
                 && (result7 == RCS_EXEC_RESULT_DRAW_POST_RASTER)) as u8,
+            (result_pre_light_pc == RCS_EXEC_RESULT_DRAW_PRE_LIGHT_PC) as u8,
             (result_post3d_light == RCS_EXEC_RESULT_DRAW_POST3D && result_post3d_light_hi == 0)
                 as u8,
             (result_final_after_light == RCS_EXEC_RESULT_DRAW_FINAL_AFTER_LIGHT) as u8,
@@ -242,6 +250,9 @@ fn submit_warm_render_batch(
             crate::intel::mmio_read(dev, RCS_RING_IPEHR)
         );
         if let Some(postdraw_variant) = PostDrawSyncVariant::from_submit_name(submit_name) {
+            let pre_light_pc_ok = result_pre_light_pc == RCS_EXEC_RESULT_DRAW_PRE_LIGHT_PC;
+            let final_after_light_ok =
+                result_final_after_light == RCS_EXEC_RESULT_DRAW_FINAL_AFTER_LIGHT;
             intel_render_focus_log!(
                 "intel/render: {} postdraw-flush-spectrum-proof accepted={} variant={} heavy_flags=0x{:08X} post3d_light={} final_after_light={} post3d_heavy={} final={} acthd=0x{:08X} ipehr=0x{:08X} does_not_prove=rt_write\n",
                 submit_name,
@@ -251,6 +262,24 @@ fn submit_warm_render_batch(
                 (result_post3d_light == RCS_EXEC_RESULT_DRAW_POST3D && result_post3d_light_hi == 0)
                     as u8,
                 (result_final_after_light == RCS_EXEC_RESULT_DRAW_FINAL_AFTER_LIGHT) as u8,
+                (result_post3d_eop == RCS_EXEC_RESULT_DRAW_POST3D && result_post3d_eop_hi == 0)
+                    as u8,
+                (result2 == RCS_EXEC_RESULT_DONE) as u8,
+                crate::intel::mmio_read(dev, RCS_RING_ACTHD),
+                crate::intel::mmio_read(dev, RCS_RING_IPEHR)
+            );
+            intel_render_focus_log!(
+                "intel/render: {} pc-retire-triad-proof accepted={} variant={} light_flags=0x{:08X} light_postsync={} light_cs_stall={} before_light={} post3d_light={} final_after_light={} post3d_heavy={} final={} acthd=0x{:08X} ipehr=0x{:08X} does_not_prove=rt_write\n",
+                submit_name,
+                (pre_light_pc_ok && final_after_light_ok) as u8,
+                postdraw_variant.label(),
+                postdraw_variant.light_sync_flags(),
+                postdraw_variant.light_post_sync_enabled() as u8,
+                postdraw_variant.light_cs_stall_enabled() as u8,
+                pre_light_pc_ok as u8,
+                (result_post3d_light == RCS_EXEC_RESULT_DRAW_POST3D && result_post3d_light_hi == 0)
+                    as u8,
+                final_after_light_ok as u8,
                 (result_post3d_eop == RCS_EXEC_RESULT_DRAW_POST3D && result_post3d_eop_hi == 0)
                     as u8,
                 (result2 == RCS_EXEC_RESULT_DONE) as u8,
@@ -305,6 +334,7 @@ fn submit_warm_render_batch(
             completed,
             stats_before,
             stats_after,
+            result_pre_light_pc,
             result_post3d_light,
             result_post3d_light_hi,
             result_final_after_light,
@@ -1270,6 +1300,7 @@ fn maybe_soft_accept_streamout_submit(
     let post3d_light = read_result_dword(warm, RESULT_SLOT_POST3D_LIGHT_PIPE_CONTROL_LO_DWORD);
     let post3d_light_hi = read_result_dword(warm, RESULT_SLOT_POST3D_LIGHT_PIPE_CONTROL_HI_DWORD);
     let final_after_light = read_result_dword(warm, RESULT_SLOT_FINAL_AFTER_LIGHT_DWORD);
+    let pre_light_pc = read_result_dword(warm, RESULT_SLOT_PRE_LIGHT_PC_DWORD);
     let post3d_eop = read_result_dword(warm, RESULT_SLOT_POST3D_PIPE_CONTROL_LO_DWORD);
     let post3d_hi = read_result_dword(warm, RESULT_SLOT_POST3D_PIPE_CONTROL_HI_DWORD);
     let post3d_light_ok = post3d_light == RCS_EXEC_RESULT_DRAW_POST3D && post3d_light_hi == 0;
@@ -1292,10 +1323,11 @@ fn maybe_soft_accept_streamout_submit(
             delta.vs_invocations == 0 && (delta.ia_vertices > 0 || delta.ia_primitives > 0)
         };
     intel_render_focus_log!(
-        "intel/render: {} soft-accept accepted={} reason={} post3d_light=0x{:08X} post3d_light_hi=0x{:08X} final_after_light=0x{:08X} post3d_eop=0x{:08X} post3d_hi=0x{:08X} delta_ia_vtx={} delta_ia_prim={} delta_vs={} delta_so0={} delta_so_write0={} min_streamout_bytes={}\n",
+        "intel/render: {} soft-accept accepted={} reason={} pre_light_pc=0x{:08X} post3d_light=0x{:08X} post3d_light_hi=0x{:08X} final_after_light=0x{:08X} post3d_eop=0x{:08X} post3d_hi=0x{:08X} delta_ia_vtx={} delta_ia_prim={} delta_vs={} delta_so0={} delta_so_write0={} min_streamout_bytes={}\n",
         submit_name,
         accept as u8,
         expected_reason,
+        pre_light_pc,
         post3d_light,
         post3d_light_hi,
         final_after_light,
@@ -1316,6 +1348,7 @@ fn log_triangle_stage_frontier(
     completed: bool,
     before: TriangleStageStats,
     after: TriangleStageStats,
+    result_pre_light_pc: u32,
     result_post3d_light: u32,
     result_post3d_light_hi: u32,
     result_final_after_light: u32,
@@ -1334,6 +1367,7 @@ fn log_triangle_stage_frontier(
     let ps_state_packet = (result5 == RCS_EXEC_RESULT_DRAW_POST_PS_STATE) as u8;
     let clip_raster_packets = ((result6 == RCS_EXEC_RESULT_DRAW_POST_CLIP)
         && (result7 == RCS_EXEC_RESULT_DRAW_POST_RASTER)) as u8;
+    let post_draw_before_light = (result_pre_light_pc == RCS_EXEC_RESULT_DRAW_PRE_LIGHT_PC) as u8;
     let post_draw_light = ((result_post3d_light == RCS_EXEC_RESULT_DRAW_POST3D)
         && (result_post3d_light_hi == 0)) as u8;
     let post_draw_final_after_light =
@@ -1341,6 +1375,9 @@ fn log_triangle_stage_frontier(
     let post_draw_heavy =
         ((result_post3d_eop == RCS_EXEC_RESULT_DRAW_POST3D) && (result_post3d_eop_hi == 0)) as u8;
     let post_draw_retire = (result2 == RCS_EXEC_RESULT_DONE) as u8;
+    let light_post_sync_expected = PostDrawSyncVariant::from_submit_name(submit_name)
+        .map(|variant| variant.light_post_sync_enabled())
+        .unwrap_or(true);
     let counter_frontier =
         if delta.ps_invocations > 0 || delta.cps_invocations > 0 || delta.ps_depth > 0 {
             "ps-thread"
@@ -1362,10 +1399,16 @@ fn log_triangle_stage_frontier(
         } else {
             "no-draw-counters"
         };
-    let note = if post_draw_light == 0 {
+    let note = if post_draw_before_light == 0 {
+        "draw_did_not_reach_pre_light_pc_marker"
+    } else if light_post_sync_expected && post_draw_light == 0 {
         "draw_not_retired_before_light_sync"
     } else if post_draw_final_after_light == 0 {
-        "draw_light_sync_wrote_but_tail_mi_store_did_not_retire"
+        if light_post_sync_expected {
+            "draw_light_sync_wrote_but_tail_mi_store_did_not_retire"
+        } else {
+            "draw_light_pc_did_not_retire_tail_mi_store"
+        }
     } else if post_draw_heavy == 0 {
         "draw_reached_light_sync_not_heavy_flush"
     } else if post_draw_retire == 0 {
@@ -1388,12 +1431,13 @@ fn log_triangle_stage_frontier(
         "draw_retired"
     };
     intel_render_focus_log!(
-        "intel/render: {} stage-frontier completed={} pre_raster_packets={} ps_state_packet={} clip_raster_packets={} post_draw_light={} post_draw_final_after_light={} post_draw_heavy={} post_draw_retire={} counter_frontier={} note={}\n",
+        "intel/render: {} stage-frontier completed={} pre_raster_packets={} ps_state_packet={} clip_raster_packets={} post_draw_before_light={} post_draw_light={} post_draw_final_after_light={} post_draw_heavy={} post_draw_retire={} counter_frontier={} note={}\n",
         submit_name,
         completed as u8,
         pre_raster_packets,
         ps_state_packet,
         clip_raster_packets,
+        post_draw_before_light,
         post_draw_light,
         post_draw_final_after_light,
         post_draw_heavy,

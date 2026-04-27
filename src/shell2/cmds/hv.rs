@@ -14,10 +14,7 @@ const HV_MENU_ROWS: [[&str; 2]; 5] = [
     ["run [id] [args...]", "Launch a blueprint in an app VM"],
     ["pause <id>", "Request vm[id] stop"],
     ["stop [id]", "Request vm[id] stop"],
-    [
-        "preserve <id>",
-        "Sleep vm[id] into the HV ramdisk TRUEOSFS",
-    ],
+    ["preserve <id>", "Sleep vm[id] into the HV ramdisk TRUEOSFS"],
 ];
 
 const HV_DEFAULT_VM_ID: u8 = 0;
@@ -65,10 +62,7 @@ fn parse_optional_vm_id(io: &'static dyn ShellBackend2, raw: Option<&str>) -> Op
     };
 
     let Ok(id) = token.parse::<u8>() else {
-        line(
-            io,
-            alloc::format!("hv: invalid vm id '{}'", token).as_str(),
-        );
+        line(io, alloc::format!("hv: invalid vm id '{}'", token).as_str());
         print_available_vms(io);
         return None;
     };
@@ -230,10 +224,7 @@ pub(crate) fn try_parse(
             return ParseOutcome::Handled;
         }
         match crate::hv::request_preserve(vm_id) {
-            Ok(true) => line(
-                io,
-                alloc::format!("hv: vm{} preserve requested", vm_id).as_str(),
-            ),
+            Ok(true) => line(io, alloc::format!("hv: vm{} preserve requested", vm_id).as_str()),
             Ok(false) => match crate::hv::save_snapshot(vm_id) {
                 Ok(bytes) => line(
                     io,

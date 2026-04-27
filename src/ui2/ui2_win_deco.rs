@@ -710,6 +710,24 @@ pub fn set_window_content_preserve_scale(id: u32, preserve_scale: bool) -> bool 
     noted
 }
 
+pub fn set_window_resize_mode(id: u32, resize_mode: Ui2WindowResizeMode) -> bool {
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    let Some(window) = window_mut(&mut state, id) else {
+        return false;
+    };
+    if window.resize_mode == resize_mode {
+        return true;
+    }
+    window.resize_mode = resize_mode;
+    state.compose_reason = "decor-resize-mode-window";
+    let noted = note_window_dirty(&mut state, id, "decor-resize-mode-window");
+    if noted {
+        refresh_window_hit_entries(&mut state, id);
+    }
+    noted
+}
+
 pub fn set_window_vertical_scrollbar_side(id: u32, side: Ui2WindowVerticalScrollbarSide) -> bool {
     let state_lock = init_state();
     let mut state = state_lock.lock();

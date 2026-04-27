@@ -102,6 +102,7 @@ pub(super) fn alloc_window(
         bottom_bar_visible: true,
         left_scrollbar_visible: true,
         bottom_scrollbar_visible: true,
+        resize_mode: Ui2WindowResizeMode::Auto,
         resize_maintain_aspect: false,
         content_preserve_scale: false,
         vertical_scrollbar_side: Ui2WindowVerticalScrollbarSide::Left,
@@ -115,6 +116,7 @@ pub(super) fn alloc_window(
         hosted_surface_interactives: Vec::new(),
         last_clicked_item_id: 0,
         last_clicked_item_seq: 0,
+        last_clicked_cursor_slot: 0,
         title_tex_id: window_title_tex_id(id),
         title_tex_w: 0,
         title_tex_h: 0,
@@ -577,6 +579,9 @@ pub(super) fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) 
     let next_bottom_bar_visible = source_window.bottom_bar_visible;
     let next_left_scrollbar_visible = source_window.left_scrollbar_visible;
     let next_bottom_scrollbar_visible = source_window.bottom_scrollbar_visible;
+    let next_resize_mode = source_window.resize_mode;
+    let next_resize_maintain_aspect = source_window.resize_maintain_aspect;
+    let next_content_preserve_scale = source_window.content_preserve_scale;
     let next_vertical_scrollbar_side = source_window.vertical_scrollbar_side;
     let next_horizontal_scrollbar_side = source_window.horizontal_scrollbar_side;
     let next_content_tex_blend = source_window.content_tex_blend;
@@ -642,6 +647,9 @@ pub(super) fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) 
         window.bottom_bar_visible = next_bottom_bar_visible;
         window.left_scrollbar_visible = next_left_scrollbar_visible;
         window.bottom_scrollbar_visible = next_bottom_scrollbar_visible;
+        window.resize_mode = next_resize_mode;
+        window.resize_maintain_aspect = next_resize_maintain_aspect;
+        window.content_preserve_scale = next_content_preserve_scale;
         window.vertical_scrollbar_side = next_vertical_scrollbar_side;
         window.horizontal_scrollbar_side = next_horizontal_scrollbar_side;
         window.state = Ui2WindowStateKind::Normal;
@@ -1094,12 +1102,18 @@ pub fn set_window_hosted_surface_interactives(
     noted
 }
 
-pub(super) fn note_window_item_click(state: &mut Ui2State, id: u32, item_id: u32) -> bool {
+pub(super) fn note_window_item_click(
+    state: &mut Ui2State,
+    id: u32,
+    item_id: u32,
+    cursor_slot: u32,
+) -> bool {
     let Some(window) = window_mut(state, id) else {
         return false;
     };
     window.last_clicked_item_id = item_id;
     window.last_clicked_item_seq = window.last_clicked_item_seq.wrapping_add(1).max(1);
+    window.last_clicked_cursor_slot = cursor_slot;
     true
 }
 
@@ -1717,6 +1731,10 @@ pub fn window_content_cursor_positions(id: u32) -> Vec<Ui2WindowCursorSample> {
 }
 
 pub fn take_window_last_clicked_item(id: u32) -> Option<(u32, u32)> {
+    take_window_last_clicked_item_with_cursor(id).map(|(seq, item_id, _slot)| (seq, item_id))
+}
+
+pub fn take_window_last_clicked_item_with_cursor(id: u32) -> Option<(u32, u32, u32)> {
     let state_lock = init_state();
     let mut state = state_lock.lock();
     let window = window_mut(&mut state, id)?;
@@ -1725,8 +1743,10 @@ pub fn take_window_last_clicked_item(id: u32) -> Option<(u32, u32)> {
     }
     let item_id = window.last_clicked_item_id;
     let seq = window.last_clicked_item_seq;
+    let cursor_slot = window.last_clicked_cursor_slot;
     window.last_clicked_item_id = 0;
-    Some((seq, item_id))
+    window.last_clicked_cursor_slot = 0;
+    Some((seq, item_id, cursor_slot))
 }
 
 pub fn move_window(id: u32, x: f32, y: f32) -> bool {

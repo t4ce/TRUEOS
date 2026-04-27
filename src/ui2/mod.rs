@@ -32,7 +32,9 @@ pub(crate) use self::ui2_font::{
 };
 pub(crate) use self::ui2_font_bucketproducer::*;
 use self::ui2_hid::*;
-pub(crate) use self::ui2_hid::{cursor_color_rgba8, cursor_color_rgba8_for_cursor_id};
+pub(crate) use self::ui2_hid::{
+    cursor_color_rgba8_for_cursor_id, cursor_spirit_choices, set_cursor_spirit_glyph,
+};
 pub(crate) use self::ui2_hit::ui2_hit_task;
 use self::ui2_hit::*;
 use self::ui2_hosted::*;
@@ -222,9 +224,11 @@ fn cursor_overlay_build_sprite_rgba(
 
 pub(crate) fn cursor_overlay_glyph_spec(
     cursor_id: u32,
+    slot_id: u32,
     view_h: u32,
 ) -> Option<Ui2CursorOverlayGlyphSpec> {
-    let ch = cursor_spirit_glyph_for_cursor_id(cursor_id)?;
+    let ch =
+        cursor_spirit_glyph(slot_id).or_else(|| cursor_spirit_glyph_for_cursor_id(cursor_id))?;
     let glyph = ui2_font_resolve_glyph(Ui2FontTier::OneX, ch)?;
     if !glyph.ready {
         return None;
@@ -350,6 +354,15 @@ enum Ui2WindowKind {
     Hosted3d,
 }
 
+#[repr(u32)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub enum Ui2WindowResizeMode {
+    #[default]
+    Auto = 0,
+    Live = 1,
+    PreviewCommit = 2,
+}
+
 #[derive(Copy, Clone, Debug, Default)]
 struct Ui2WindowMoveDrag {
     active: bool,
@@ -453,6 +466,7 @@ struct Ui2Window {
     bottom_bar_visible: bool,
     left_scrollbar_visible: bool,
     bottom_scrollbar_visible: bool,
+    resize_mode: Ui2WindowResizeMode,
     resize_maintain_aspect: bool,
     content_preserve_scale: bool,
     vertical_scrollbar_side: Ui2WindowVerticalScrollbarSide,
@@ -466,6 +480,7 @@ struct Ui2Window {
     hosted_surface_interactives: Vec<Ui2HostedInteractiveRect>,
     last_clicked_item_id: u32,
     last_clicked_item_seq: u32,
+    last_clicked_cursor_slot: u32,
     title_tex_id: u32,
     title_tex_w: u32,
     title_tex_h: u32,

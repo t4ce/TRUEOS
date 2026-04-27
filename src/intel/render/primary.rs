@@ -255,7 +255,7 @@ fn submit_primary_triangle_with_retries(
         return true;
     }
 
-    run_postdraw_flush_spectrum(dev, warm, surface_gpu, pitch_bytes, width, height);
+    run_postdraw_pc_retire_spectrum(dev, warm, surface_gpu, pitch_bytes, width, height);
 
     let fragment_candidate_ready = fragment_candidate_ready();
     let fragment_boundary_observed = fragment_boundary_observed();
@@ -566,7 +566,7 @@ fn submit_primary_triangle_with_retries(
     completed_any
 }
 
-fn run_postdraw_flush_spectrum(
+fn run_postdraw_pc_retire_spectrum(
     dev: crate::intel::Dev,
     warm: RenderWarmState,
     surface_gpu: u64,
@@ -574,7 +574,7 @@ fn run_postdraw_flush_spectrum(
     width: usize,
     height: usize,
 ) {
-    for variant in POST_DRAW_FLUSH_SPECTRUM {
+    for variant in POST_DRAW_PC_RETIRE_SPECTRUM {
         let submit_name = variant.submit_name();
         let completed = submit_triangle_vf_draw_to_surface(
             submit_name,
@@ -590,7 +590,7 @@ fn run_postdraw_flush_spectrum(
             variant,
         );
         intel_render_focus_log!(
-            "intel/render: postdraw-flush-spectrum submit={} variant={} completed={} note=diagnostic_only\n",
+            "intel/render: postdraw-pc-retire-spectrum submit={} variant={} completed={} note=diagnostic_only\n",
             submit_name,
             variant.label(),
             completed as u8,

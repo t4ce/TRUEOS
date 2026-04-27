@@ -1239,15 +1239,28 @@ fn encode_triangle_probe_batch(
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
 
-    log_batch_offset(cursor, "PIPE_CONTROL post-3d-light-marker");
-    push_pipe_control_post_sync_imm(
+    log_batch_offset(cursor, "MI_STORE_DATA_IMM pre-light-pipe-control");
+    push_store_data_imm(
         batch_dwords,
         &mut cursor,
-        0,
-        PIPE_CONTROL_POST_DRAW_LIGHT_SYNC_BITS,
-        result_gpu_addr + (RESULT_SLOT_POST3D_LIGHT_PIPE_CONTROL_LO_DWORD as u64) * 4,
-        post3d_value,
+        result_gpu_addr + (RESULT_SLOT_PRE_LIGHT_PC_DWORD as u64) * 4,
+        RCS_EXEC_RESULT_DRAW_PRE_LIGHT_PC,
     )?;
+
+    log_batch_offset(cursor, "PIPE_CONTROL post-3d-light-marker");
+    let light_sync_flags = post_draw_sync_variant.light_sync_flags();
+    if post_draw_sync_variant.light_post_sync_enabled() {
+        push_pipe_control_post_sync_imm(
+            batch_dwords,
+            &mut cursor,
+            0,
+            light_sync_flags,
+            result_gpu_addr + (RESULT_SLOT_POST3D_LIGHT_PIPE_CONTROL_LO_DWORD as u64) * 4,
+            post3d_value,
+        )?;
+    } else {
+        push_pipe_control(batch_dwords, &mut cursor, light_sync_flags)?;
+    }
 
     log_batch_offset(cursor, "MI_STORE_DATA_IMM final-after-light");
     push_store_data_imm(
@@ -1472,7 +1485,7 @@ fn encode_triangle_probe_batch(
         ps_dispatch_32,
     );
     intel_render_verbose_log!(
-        "intel/render: 3dprimitive-setup mode={:?} topo={} vertices={} start_vertex=0 instances={} start_instance=0 base_vertex=0 vb=0x{:X} stride={} rt=0x{:X} pitch=0x{:X} rect={}x{} postdraw_sync={}\n",
+        "intel/render: 3dprimitive-setup mode={:?} topo={} vertices={} start_vertex=0 instances={} start_instance=0 base_vertex=0 vb=0x{:X} stride={} rt=0x{:X} pitch=0x{:X} rect={}x{} postdraw_sync={} light_flags=0x{:08X}\n",
         batch_mode,
         primitive_topology_label(batch_mode.topology()),
         draw.vertex_count,
@@ -1484,6 +1497,7 @@ fn encode_triangle_probe_batch(
         draw.target_w,
         draw.target_h,
         post_draw_sync_variant.label(),
+        post_draw_sync_variant.light_sync_flags(),
     );
 
     Ok(cursor * core::mem::size_of::<u32>())
@@ -2141,6 +2155,14 @@ fn encode_minimal_streamout_proof_batch(
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
 
+    log_batch_offset(cursor, "MI_STORE_DATA_IMM pre-light-pipe-control");
+    push_store_data_imm(
+        batch_dwords,
+        &mut cursor,
+        result_gpu_addr + (RESULT_SLOT_PRE_LIGHT_PC_DWORD as u64) * 4,
+        RCS_EXEC_RESULT_DRAW_PRE_LIGHT_PC,
+    )?;
+
     log_batch_offset(cursor, "PIPE_CONTROL post-3d-light-marker");
     push_pipe_control_post_sync_imm(
         batch_dwords,
@@ -2179,7 +2201,7 @@ fn encode_minimal_streamout_proof_batch(
     push(batch_dwords, &mut cursor, MI_NOOP)?;
 
     intel_render_verbose_log!(
-        "intel/render: 3dprimitive-setup mode={:?} topo={} vertices={} start_vertex=0 instances=1 start_instance=0 base_vertex=0 vb=0x{:X} stride={} rt=0x{:X} pitch=0x{:X} rect={}x{} postdraw_sync={}\n",
+        "intel/render: 3dprimitive-setup mode={:?} topo={} vertices={} start_vertex=0 instances=1 start_instance=0 base_vertex=0 vb=0x{:X} stride={} rt=0x{:X} pitch=0x{:X} rect={}x{} postdraw_sync={} light_flags=0x{:08X}\n",
         batch_mode,
         primitive_topology_label(batch_mode.topology()),
         draw.vertex_count,
@@ -2190,6 +2212,7 @@ fn encode_minimal_streamout_proof_batch(
         draw.target_w,
         draw.target_h,
         PostDrawSyncVariant::HeavyAll.label(),
+        PostDrawSyncVariant::HeavyAll.light_sync_flags(),
     );
 
     Ok(cursor * core::mem::size_of::<u32>())
