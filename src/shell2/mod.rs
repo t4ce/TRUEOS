@@ -23,6 +23,7 @@ mod shell2_qjs;
 mod shell2_qjs_c4;
 mod shell2_qjs_c4_contract;
 mod shell2_surf;
+mod term_style;
 #[allow(unused_imports)]
 pub(crate) use crate::shell2::backends::{
     NET_TCP_SHELL_BACKEND, UART1_COM1_BACKEND, UI2_SHELL_BACKEND, Ui2ShellCell,
@@ -184,7 +185,7 @@ impl<'a> AlignedWriter<'a> {
                 let col = self.line_width().saturating_sub(width).saturating_add(1);
                 self.move_to(row, col);
                 self.io
-                    .raw_write_fmt(format_args!("{}", ecma48::style(s).fg(SYSTEM_TEXT_RGB)));
+                    .raw_write_fmt(format_args!("{}", term_style::paint(s).color(SYSTEM_TEXT_RGB)));
             }
         }
     }
@@ -227,9 +228,9 @@ impl<'a> AlignedWriter<'a> {
         }
         let styled = alloc::format!(
             "{}",
-            ecma48::style(slot_label.as_str())
+            term_style::paint(slot_label.as_str())
                 .bold()
-                .fg(STATUS_SELECTED_RGB)
+                .color(STATUS_SELECTED_RGB)
         );
         self.io.raw_write_str(styled.as_str());
         self.center_text(BANNER_ROW, self.main_mode_text(mode).as_str());
@@ -377,13 +378,14 @@ impl<'a> AlignedWriter<'a> {
     }
 
     fn push_function_key_label(&self, out: &mut AllocString, text: &str) {
-        let styled = alloc::format!("{}", ecma48::style(text).fg(FUNCTION_KEY_RGB));
+        let styled = alloc::format!("{}", term_style::paint(text).color(FUNCTION_KEY_RGB));
         out.push_str(styled.as_str());
     }
 
     fn push_ai_token(&self, out: &mut AllocString, text: &str, selected: bool) {
         if selected {
-            let styled = alloc::format!("{}", ecma48::style(text).bold().fg(STATUS_SELECTED_RGB));
+            let styled =
+                alloc::format!("{}", term_style::paint(text).bold().color(STATUS_SELECTED_RGB));
             out.push_str(styled.as_str());
         } else {
             out.push_str(text);
@@ -392,10 +394,11 @@ impl<'a> AlignedWriter<'a> {
 
     fn push_mode_token(&self, out: &mut AllocString, text: &str, selected: bool) {
         if selected {
-            let styled = alloc::format!("{}", ecma48::style(text).bold().fg(STATUS_SELECTED_RGB));
+            let styled =
+                alloc::format!("{}", term_style::paint(text).bold().color(STATUS_SELECTED_RGB));
             out.push_str(styled.as_str());
         } else {
-            let styled = alloc::format!("{}", ecma48::style(text).bold());
+            let styled = alloc::format!("{}", term_style::paint(text).bold());
             out.push_str(styled.as_str());
         }
     }
@@ -414,17 +417,25 @@ impl<'a> AlignedWriter<'a> {
             if slot.selected {
                 let styled = alloc::format!(
                     "{}",
-                    ecma48::style(label.as_str()).bold().fg(STATUS_SELECTED_RGB)
+                    term_style::paint(label.as_str())
+                        .bold()
+                        .color(STATUS_SELECTED_RGB)
                 );
                 out.push_str(styled.as_str());
             } else if slot.activity == matrix::MatrixSlotActivity::Running {
-                let styled =
-                    alloc::format!("{}", ecma48::style(label.as_str()).bold().fg(SYSTEM_TEXT_RGB));
+                let styled = alloc::format!(
+                    "{}",
+                    term_style::paint(label.as_str())
+                        .bold()
+                        .color(SYSTEM_TEXT_RGB)
+                );
                 out.push_str(styled.as_str());
             } else {
                 let styled = alloc::format!(
                     "{}",
-                    ecma48::style(label.as_str()).bold().fg(STATUS_NORMAL_RGB)
+                    term_style::paint(label.as_str())
+                        .bold()
+                        .color(STATUS_NORMAL_RGB)
                 );
                 out.push_str(styled.as_str());
             }
@@ -759,21 +770,13 @@ fn rainbow_status_text(phase: usize) -> AllocString {
         let styled = if ((idx + phase) & 1) == 0 {
             alloc::format!(
                 "{}",
-                ecma48::style(glyph.as_str())
+                term_style::paint(glyph.as_str())
                     .bold()
-                    .italic()
                     .underline()
-                    .fg8(color)
+                    .color(color)
             )
         } else {
-            alloc::format!(
-                "{}",
-                ecma48::style(glyph.as_str())
-                    .bold()
-                    .italic()
-                    .blink()
-                    .fg8(color)
-            )
+            alloc::format!("{}", term_style::paint(glyph.as_str()).bold().color(color))
         };
         out.push_str(styled.as_str());
     }
@@ -800,9 +803,9 @@ async fn run_plain_section_status(
 ) {
     let white = alloc::format!(
         "{}",
-        ecma48::style(SECTION_STATUS_TEXT)
+        term_style::paint(SECTION_STATUS_TEXT)
             .bold()
-            .fg((255, 255, 255))
+            .color((255, 255, 255))
     );
     show_status_row_message(out, white.as_str());
     Timer::after(EmbassyDuration::from_millis(SECTION_STATUS_HOLD_MS)).await;

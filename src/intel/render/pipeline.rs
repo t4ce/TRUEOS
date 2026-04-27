@@ -333,7 +333,7 @@ fn encode_triangle_probe_batch(
     }
 
     fn binding_table_entry_count_encoding(count: u8) -> u32 {
-        count.saturating_sub(1) as u32
+        count as u32
     }
 
     fn stage_dispatch_bits(mode: crate::intel::shader::DispatchMode) -> (u32, u32, u32) {
@@ -437,9 +437,38 @@ fn encode_triangle_probe_batch(
         push(batch_dwords, cursor, (size_bytes & 0xFFFF_F000) | u32::from(enable))
     }
 
+    fn binding_table_pool_base_dword(device_id: u16, base: u64) -> u32 {
+        let base = (base as u32) & BINDING_TABLE_POOL_BASE_MASK;
+        let mocs = RENDER_MOCS & BINDING_TABLE_POOL_MOCS_MASK;
+        if device_is_gfx125(device_id) {
+            base | mocs
+        } else {
+            base | BINDING_TABLE_POOL_ENABLE | mocs
+        }
+    }
+
     let binding_table_pool_size = warm
         .draw_state_len
         .saturating_sub(shader_layout.state_region_offset_bytes as usize);
+    let binding_table_pointer_offset = probe_state
+        .binding_table_offset_bytes
+        .saturating_sub(shader_layout.state_region_offset_bytes);
+    let binding_table_pool_base_dw =
+        binding_table_pool_base_dword(warm.device_id, shader_layout.state_region_gpu_addr);
+    let binding_table_pool_size_dw = u32::try_from(
+        crate::intel::align_up(binding_table_pool_size, 4096).ok_or("probe-binding-pool-align")?,
+    )
+    .map_err(|_| "probe-binding-pool-convert")?
+        & 0xFFFF_F000;
+    let binding_table_gpu_addr =
+        shader_layout.state_region_gpu_addr + binding_table_pointer_offset as u64;
+    let binding_table_entry0_gpu_addr =
+        GPU_VA_DRAW_STATE_BASE + probe_state.surface_state_offset_bytes as u64;
+    let binding_table_pool_enable = if device_is_gfx125(warm.device_id) {
+        "implicit-gfx125"
+    } else {
+        "bit11"
+    };
     let vs_ksp_offset = shader_layout.vs.code_offset_bytes + shader_layout.vs.ksp_offset_bytes;
     let ps_ksp_offset = shader_layout.ps.code_offset_bytes + shader_layout.ps.ksp_offset_bytes;
     let sbe_vertex_read_offset = front_end_contract.sbe_read_offset as u32;
@@ -690,19 +719,15 @@ fn encode_triangle_probe_batch(
         );
     }
 
+    log_batch_offset(cursor, "PIPE_CONTROL pre-binding-table-pool");
+    push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
     log_batch_offset(cursor, "3DSTATE_BINDING_TABLE_POOL_ALLOC");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_BINDING_TABLE_POOL_ALLOC)?;
-    push_addr(batch_dwords, &mut cursor, shader_layout.state_region_gpu_addr)?;
-    push(
-        batch_dwords,
-        &mut cursor,
-        u32::try_from(
-            crate::intel::align_up(binding_table_pool_size, 4096)
-                .ok_or("probe-binding-pool-align")?,
-        )
-        .map_err(|_| "probe-binding-pool-convert")?
-            & 0xFFFF_F000,
-    )?;
+    push(batch_dwords, &mut cursor, binding_table_pool_base_dw)?;
+    push(batch_dwords, &mut cursor, (shader_layout.state_region_gpu_addr >> 32) as u32)?;
+    push(batch_dwords, &mut cursor, binding_table_pool_size_dw)?;
+    log_batch_offset(cursor, "PIPE_CONTROL post-binding-table-pool");
+    push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS)?;
 
     log_batch_offset(cursor, "3DSTATE_SAMPLER_STATE_POINTERS_VS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_SAMPLER_STATE_POINTERS_VS)?;
@@ -710,11 +735,6 @@ fn encode_triangle_probe_batch(
     log_batch_offset(cursor, "3DSTATE_SAMPLER_STATE_POINTERS_PS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_SAMPLER_STATE_POINTERS_PS)?;
     push(batch_dwords, &mut cursor, probe_state.sampler_state_offset_bytes)?;
-
-    let binding_table_pool_base_offset = shader_layout.state_region_offset_bytes;
-    let binding_table_pointer_offset = probe_state
-        .binding_table_offset_bytes
-        .saturating_sub(binding_table_pool_base_offset);
 
     log_batch_offset(cursor, "3DSTATE_BINDING_TABLE_POINTERS_VS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_BINDING_TABLE_POINTERS_VS)?;
@@ -1157,6 +1177,16 @@ fn encode_triangle_probe_batch(
     push(batch_dwords, &mut cursor, CMD_3DSTATE_SAMPLE_MASK)?;
     push(batch_dwords, &mut cursor, 1)?;
 
+    log_batch_offset(cursor, "3DSTATE_DRAWING_RECTANGLE");
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_DRAWING_RECTANGLE)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(
+        batch_dwords,
+        &mut cursor,
+        draw.target_w.saturating_sub(1) | (draw.target_h.saturating_sub(1) << 16),
+    )?;
+    push(batch_dwords, &mut cursor, 0)?;
+
     // Clear inherited WM_HZ_OP clear/resolve overrides so PS dispatch only
     // depends on the explicit probe state we log below.
     log_batch_offset(cursor, "3DSTATE_WM_HZ_OP");
@@ -1190,16 +1220,6 @@ fn encode_triangle_probe_batch(
         result_gpu_addr + (RESULT_SLOT_POST_PS_STATE_DWORD as u64) * 4,
         RCS_EXEC_RESULT_DRAW_POST_PS_STATE,
     )?;
-
-    log_batch_offset(cursor, "3DSTATE_DRAWING_RECTANGLE");
-    push(batch_dwords, &mut cursor, CMD_3DSTATE_DRAWING_RECTANGLE)?;
-    push(batch_dwords, &mut cursor, 0)?;
-    push(
-        batch_dwords,
-        &mut cursor,
-        draw.target_w.saturating_sub(1) | (draw.target_h.saturating_sub(1) << 16),
-    )?;
-    push(batch_dwords, &mut cursor, 0)?;
 
     log_batch_offset(cursor, "MI_STORE_DATA_IMM pre-3d");
     push_store_data_imm(
@@ -1277,6 +1297,18 @@ fn encode_triangle_probe_batch(
         wm_hz_op_dw2,
         wm_hz_op_dw3,
         wm_hz_op_dw4,
+    );
+    intel_render_focus_log!(
+        "intel/render: probe-binding-table-pool base=0x{:X} base_dw=0x{:08X} size_dw=0x{:08X} mocs=0x{:X} enable={} ps_bt_ptr=0x{:X} bt_gpu=0x{:X} bt_entry0=0x{:08X} surf_gpu=0x{:X} contract=pool-relative\n",
+        shader_layout.state_region_gpu_addr,
+        binding_table_pool_base_dw,
+        binding_table_pool_size_dw,
+        RENDER_MOCS & BINDING_TABLE_POOL_MOCS_MASK,
+        binding_table_pool_enable,
+        binding_table_pointer_offset,
+        binding_table_gpu_addr,
+        probe_state.surface_state_offset_bytes,
+        binding_table_entry0_gpu_addr,
     );
     log_mesa_spec_cross_compare(
         warm,

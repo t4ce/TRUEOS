@@ -8,9 +8,9 @@ use super::super::{
     print_shell_line,
 };
 use crate::shell2::CommandSessionInputResult;
-use crate::shell2::ecma48;
 use crate::shell2::matrix::MatrixSlotId;
 use crate::shell2::shell2_cmd::{CommandSessionKind, ParseOutcome};
+use crate::shell2::term_style;
 
 const AMPLE_MENU_ROWS: [[&str; 2]; 8] = [
     ["help", "Show Ample commands"],
@@ -42,19 +42,19 @@ const AMPLE_NPC_RGB: (u8, u8, u8) = (50, 200, 50);
 const AMPLE_DESC_RGB: (u8, u8, u8) = (102, 208, 250);
 
 fn styled_heading(text: &str) -> alloc::string::String {
-    alloc::format!("{}", ecma48::style(text).fg(AMPLE_HIGHLIGHT_RGB))
+    alloc::format!("{}", term_style::paint(text).color(AMPLE_HIGHLIGHT_RGB))
 }
 
 fn styled_world_title(text: &str) -> alloc::string::String {
-    alloc::format!("{}", ecma48::style(text).fg(AMPLE_HIGHLIGHT_RGB))
+    alloc::format!("{}", term_style::paint(text).color(AMPLE_HIGHLIGHT_RGB))
 }
 
 fn styled_author(text: &str) -> alloc::string::String {
-    alloc::format!("{}", ecma48::style(text).fg(AMPLE_NPC_RGB).underline())
+    alloc::format!("{}", term_style::paint(text).color(AMPLE_NPC_RGB).underline())
 }
 
 fn styled_description(text: &str) -> alloc::string::String {
-    alloc::format!("{}", ecma48::style(text).fg(AMPLE_DESC_RGB))
+    alloc::format!("{}", term_style::paint(text).color(AMPLE_DESC_RGB))
 }
 
 fn print_usage(io: &'static dyn ShellBackend2) {
@@ -118,7 +118,7 @@ fn print_intro(target: &MatrixTarget) {
 fn print_startup_menu(io: &'static dyn ShellBackend2) {
     let choose = styled_heading("Choose a world or save:");
     print_native_line(io, choose.as_str());
-    let worlds = alloc::format!("{}", ecma48::style("Worlds").bold());
+    let worlds = alloc::format!("{}", term_style::paint("Worlds").bold());
     print_native_line(io, worlds.as_str());
     let world1 = alloc::format!(
         "  1. {} (by {}, v0.67.0-alpha)",

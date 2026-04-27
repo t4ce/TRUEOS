@@ -14,9 +14,9 @@ pub(crate) const VNET_EXERCISE_LOGS: bool = false;
 
 pub(crate) const R8125_VERBOSE_LOGS: bool = false;
 pub(crate) const BOOT_INFO_LOGS: bool = false;
-pub(crate) const HV_LOGS: bool = false;
-pub(crate) const PORTAL_LOGS: bool = false;
-pub(crate) const HV_GUEST_ALLOC_TRACE_LOGS: bool = false;
+pub(crate) const HV_LOGS: bool = true;
+pub(crate) const PORTAL_LOGS: bool = true;
+pub(crate) const HV_GUEST_ALLOC_TRACE_LOGS: bool = true;
 
 pub(crate) const UI2_ENABLE_VERBOSE_COMPOSE_LOGS: bool = false;
 pub(crate) const VHTTPS_VERBOSE: bool = true;
