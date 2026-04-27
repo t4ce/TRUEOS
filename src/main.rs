@@ -93,20 +93,18 @@ mod tst_net_tcp_shell;
 mod tst_smtp_smoke;
 #[path = "tst/ui2_bgrt.rs"]
 mod tst_ui2_bgrt;
-#[path = "tst/ui2_chart_demo.rs"]
-mod tst_ui2_chart_demo;
 #[path = "tst/ui2_coreticks_demo.rs"]
 mod tst_ui2_coreticks_demo;
 #[path = "tst/ui2_currency_demo.rs"]
 mod tst_ui2_currency_demo;
+#[path = "tst/ui2_cursorpicker_demo.rs"]
+mod tst_ui2_cursorpicker_demo;
 #[path = "tst/ui2_ids.rs"]
 mod tst_ui2_ids;
 #[path = "tst/ui2_mandelbrot_demo.rs"]
 mod tst_ui2_mandelbrot_demo;
 #[path = "tst/ui2_particle_demo.rs"]
 mod tst_ui2_particle_demo;
-#[path = "tst/ui2_petersen_demo.rs"]
-mod tst_ui2_petersen_demo;
 #[path = "tst/ui2_player_demo.rs"]
 mod tst_ui2_player_demo;
 #[path = "tst/ui2_raple_demo.rs"]
@@ -119,6 +117,8 @@ mod tst_ui2_smiley_fountain_demo;
 mod tst_ui2_svg_demo;
 #[path = "tst/ui2_swarm.rs"]
 mod tst_ui2_swarm;
+#[path = "tst/ui2_text_input_demo.rs"]
+mod tst_ui2_text_input_demo;
 #[path = "tst/ui2_triangle_demo.rs"]
 mod tst_ui2_triangle_demo;
 #[path = "tst/ui2_trueosfs_explorer_demo.rs"]

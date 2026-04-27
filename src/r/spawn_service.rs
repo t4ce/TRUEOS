@@ -62,13 +62,14 @@ define_started_flags!(
     UI2_ATHLAS_2X_DEMO_STARTED,
     UI2_PALATINO_1X_DEMO_STARTED,
     UI2_TWEMOJI_1X_STARTED,
+    UI2_TEXT_INPUT_DEMO_STARTED,
     UI2_TRIANGLE_DEMO_STARTED,
     UI2_BGRT_DEMO_STARTED,
     UI2_CORETICKS_DEMO_STARTED,
+    UI2_CURSORPICKER_DEMO_STARTED,
     UI2_MANDELBROT_DEMO_STARTED,
     UI2_PLAYER_DEMO_STARTED,
     UI2_RAPLE_DEMO_STARTED,
-    UI2_PETERSEN_DEMO_STARTED,
     UI2_PARTICLE_DEMO_STARTED,
     UI2_SMILEY_FOUNTAIN_DEMO_STARTED,
     UI2_SHELL_DEMO_STARTED,
@@ -76,7 +77,6 @@ define_started_flags!(
     UI2_SVG_DEMO_STARTED,
     UI2_TRUEOSFS_EXPLORER_DEMO_STARTED,
     UI2_WEATHER_DEMO_STARTED,
-    UI2_CHART_DEMO_STARTED,
     UI2_CURRENCY_DEMO_STARTED,
     USB_CONTROLLER_TASKS_STARTED,
     TRUEOSFS_READY_HOOK_STARTED,
@@ -101,20 +101,20 @@ macro_rules! define_stop_flags {
 
 define_stop_flags!(
     STOP_UI2_GFX_TETRIS,
+    STOP_UI2_TEXT_INPUT_DEMO,
     STOP_UI2_TRIANGLE_DEMO,
     STOP_UI2_BGRT_DEMO,
     STOP_UI2_CORETICKS_DEMO,
+    STOP_UI2_CURSORPICKER_DEMO,
     STOP_UI2_MANDELBROT_DEMO,
     STOP_UI2_PLAYER_DEMO,
     STOP_UI2_RAPLE_DEMO,
-    STOP_UI2_PETERSEN_DEMO,
     STOP_UI2_PARTICLE_DEMO,
     STOP_UI2_SMILEY_FOUNTAIN_DEMO,
     STOP_UI2_SHELL_DEMO,
     STOP_UI2_SWARM_DEMO,
     STOP_UI2_SVG_DEMO,
     STOP_UI2_WEATHER_DEMO,
-    STOP_UI2_CHART_DEMO,
     STOP_UI2_CURRENCY_DEMO,
     STOP_UI2_TRUEOSFS_EXPLORER_DEMO,
 );
@@ -122,20 +122,20 @@ define_stop_flags!(
 fn stop_flag_by_task_name(name: &str) -> Option<&'static AtomicBool> {
     match name {
         "ui2-gfx-tetris" => Some(&STOP_UI2_GFX_TETRIS),
+        "ui2-text-input-demo" => Some(&STOP_UI2_TEXT_INPUT_DEMO),
         "ui2-triangle-demo" => Some(&STOP_UI2_TRIANGLE_DEMO),
         "ui2-bgrt-demo" => Some(&STOP_UI2_BGRT_DEMO),
         "ui2-coreticks-demo" => Some(&STOP_UI2_CORETICKS_DEMO),
+        "ui2-cursorpicker-demo" => Some(&STOP_UI2_CURSORPICKER_DEMO),
         "ui2-mandelbrot-demo" => Some(&STOP_UI2_MANDELBROT_DEMO),
         "ui2-player-demo" => Some(&STOP_UI2_PLAYER_DEMO),
         "ui2-raple-demo" => Some(&STOP_UI2_RAPLE_DEMO),
-        "ui2-petersen-demo" => Some(&STOP_UI2_PETERSEN_DEMO),
         "ui2-particle-demo" => Some(&STOP_UI2_PARTICLE_DEMO),
         "ui2-smiley-fountain-demo" => Some(&STOP_UI2_SMILEY_FOUNTAIN_DEMO),
         "ui2-shell-demo" => Some(&STOP_UI2_SHELL_DEMO),
         "ui2-swarm-demo" => Some(&STOP_UI2_SWARM_DEMO),
         "ui2-svg-demo" => Some(&STOP_UI2_SVG_DEMO),
         "ui2-weather-demo" => Some(&STOP_UI2_WEATHER_DEMO),
-        "ui2-chart-demo" => Some(&STOP_UI2_CHART_DEMO),
         "ui2-currency-demo" => Some(&STOP_UI2_CURRENCY_DEMO),
         "ui2-trueosfs-explorer-demo" => Some(&STOP_UI2_TRUEOSFS_EXPLORER_DEMO),
         _ => None,
@@ -332,11 +332,11 @@ fn spawn_trueosfs_mount_service(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_hv_vm_store(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1(spawner, |_ap1_spawner| crate::hv::store::vm_store_task())
+    spawn_local(spawner, |_spawner| crate::hv::store::vm_store_task())
 }
 
 fn spawn_hv_vm_store_net(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1(spawner, |_ap1_spawner| crate::hv::store::vm_store_replication_task())
+    spawn_local(spawner, |_spawner| crate::hv::store::vm_store_replication_task())
 }
 
 fn spawn_net_poll_tasks(spawner: Spawner) -> SpawnAttempt {
@@ -703,52 +703,44 @@ fn spawn_ui2_gfx_tetris(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_ui2_athlas_half_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        let _ = worker_spawner;
-        crate::r::ui2::ui2_font_bucketproducer_demo_task(0)
-    })
+    spawn_on_ap1(spawner, |_ap1_spawner| crate::r::ui2::ui2_font_bucketproducer_demo_task(0))
 }
 
 fn spawn_ui2_athlas_third_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        let _ = worker_spawner;
-        crate::r::ui2::ui2_font_bucketproducer_demo_task(3)
-    })
+    spawn_on_ap1(spawner, |_ap1_spawner| crate::r::ui2::ui2_font_bucketproducer_demo_task(3))
 }
 
 fn spawn_ui2_athlas_1x_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        let _ = worker_spawner;
-        crate::r::ui2::ui2_font_bucketproducer_demo_task(1)
-    })
+    spawn_on_ap1(spawner, |_ap1_spawner| crate::r::ui2::ui2_font_bucketproducer_demo_task(1))
 }
 
 fn spawn_ui2_athlas_2x_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        let _ = worker_spawner;
-        crate::r::ui2::ui2_font_bucketproducer_demo_task(2)
-    })
+    spawn_on_ap1(spawner, |_ap1_spawner| crate::r::ui2::ui2_font_bucketproducer_demo_task(2))
 }
 
 fn spawn_ui2_palatino_1x_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
+    spawn_on_ap1(spawner, |ap1_spawner| {
         let token = crate::r::ui2::ui2_font_bucketproducer_palatino_demo_task()?;
-        worker_spawner.spawn(token);
+        ap1_spawner.spawn(token);
         crate::r::ui2::ui2_font_bucketproducer_palatino_bw_demo_task()
     })
 }
 
 fn spawn_ui2_twemoji_1x(spawner: Spawner) -> SpawnAttempt {
-    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        let _ = worker_spawner;
-        crate::r::ui2::ui2_font_twemoji_loader_task()
-    })
+    spawn_on_ap1(spawner, |_ap1_spawner| crate::r::ui2::ui2_font_twemoji_loader_task())
 }
 
 fn spawn_ui2_triangle_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
         let _ = worker_spawner;
         crate::tst_ui2_triangle_demo::ui2_triangle_demo_task()
+    })
+}
+
+fn spawn_ui2_text_input_demo(spawner: Spawner) -> SpawnAttempt {
+    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
+        let _ = worker_spawner;
+        crate::tst_ui2_text_input_demo::ui2_text_input_demo_task()
     })
 }
 
@@ -763,6 +755,13 @@ fn spawn_ui2_coreticks_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
         let _ = worker_spawner;
         crate::tst_ui2_coreticks_demo::ui2_coreticks_demo_task()
+    })
+}
+
+fn spawn_ui2_cursorpicker_demo(spawner: Spawner) -> SpawnAttempt {
+    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
+        let _ = worker_spawner;
+        crate::tst_ui2_cursorpicker_demo::ui2_cursorpicker_demo_task()
     })
 }
 
@@ -784,13 +783,6 @@ fn spawn_ui2_raple_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
         let _ = worker_spawner;
         crate::tst_ui2_raple_demo::ui2_raple_demo_task()
-    })
-}
-
-fn spawn_ui2_petersen_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        let _ = worker_spawner;
-        crate::tst_ui2_petersen_demo::ui2_petersen_demo_task()
     })
 }
 
@@ -837,13 +829,6 @@ fn spawn_ui2_weather_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
         let _ = worker_spawner;
         crate::tst_ui2_weather_demo::ui2_weather_demo_task()
-    })
-}
-
-fn spawn_ui2_chart_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        let _ = worker_spawner;
-        crate::tst_ui2_chart_demo::ui2_chart_demo_task()
     })
 }
 
@@ -1035,20 +1020,8 @@ static TASKS: [TaskSpec; 66] = [
         &TRUEOSFS_MOUNT_SERVICE_STARTED,
         spawn_trueosfs_mount_service,
     ),
-    TaskSpec::enabled_on(
-        SpawnPlacement::Ap1,
-        "hv-vm-store",
-        0,
-        &HV_VM_STORE_STARTED,
-        spawn_hv_vm_store,
-    ),
-    TaskSpec::enabled_on(
-        SpawnPlacement::Ap1,
-        "hv-vm-store-net",
-        0,
-        &HV_VM_STORE_NET_STARTED,
-        spawn_hv_vm_store_net,
-    ),
+    TaskSpec::enabled("hv-vm-store", 0, &HV_VM_STORE_STARTED, spawn_hv_vm_store),
+    TaskSpec::enabled("hv-vm-store-net", 0, &HV_VM_STORE_NET_STARTED, spawn_hv_vm_store_net),
     TaskSpec::enabled("net-poll-tasks", 0, &NET_POLL_STARTED, spawn_net_poll_tasks),
     TaskSpec::enabled("net-service", 0, &NET_SERVICE_STARTED, spawn_net_service),
     TaskSpec::enabled(
@@ -1124,7 +1097,8 @@ static TASKS: [TaskSpec; 66] = [
         &GFX_VIRGL_READY_TASK_STARTED,
         spawn_gfx_virgl_ready_task,
     ),
-    TaskSpec::enabled(
+    TaskSpec::enabled_on(
+        SpawnPlacement::Ap1,
         "gfx-virgl-cursor-overlay",
         crate::r::readiness::GFX_BACKEND_READY,
         &GFX_VIRGL_CURSOR_OVERLAY_STARTED,
@@ -1151,27 +1125,31 @@ static TASKS: [TaskSpec; 66] = [
         &HTML_SHACK_SERVICE_STARTED,
         html_fetch_service,
     ),
-    TaskSpec::enabled(
+    TaskSpec::enabled_on(
+        SpawnPlacement::Ap1,
         "gfx-texture-upload-service",
         crate::r::readiness::GFX_BACKEND_READY,
         &GFX_TEXTURE_UPLOAD_SERVICE_STARTED,
         spawn_gfx_texture_upload_service,
     ),
-    TaskSpec::enabled_gated(
+    TaskSpec::enabled_gated_on(
+        SpawnPlacement::Ap1,
         "ui2",
         crate::r::readiness::GFX_BACKEND_READY,
         ui2_core_task_gate,
         &UI2_STARTED,
         spawn_ui2,
     ),
-    TaskSpec::enabled_gated(
+    TaskSpec::enabled_gated_on(
+        SpawnPlacement::Ap1,
         "ui2-hosted",
         crate::r::readiness::GFX_BACKEND_READY,
         ui2_core_task_gate,
         &UI2_HOSTED_SYNC_TASK_STARTED,
         spawn_ui2_hosted,
     ),
-    TaskSpec::enabled_gated(
+    TaskSpec::enabled_gated_on(
+        SpawnPlacement::Ap1,
         "ui2-hit",
         crate::r::readiness::GFX_BACKEND_READY,
         ui2_core_task_gate,
@@ -1185,41 +1163,54 @@ static TASKS: [TaskSpec; 66] = [
         &UI2_GFX_TETRIS_STARTED,
         spawn_ui2_gfx_tetris,
     ),
-    TaskSpec::enabled(
+    TaskSpec::enabled_on(
+        SpawnPlacement::Ap1,
         "ui2-athlas-third-demo",
         UI2_DEMO_READY,
         &UI2_ATHLAS_THIRD_DEMO_STARTED,
         spawn_ui2_athlas_third_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::enabled_on(
+        SpawnPlacement::Ap1,
         "ui2-athlas-half-demo",
         UI2_DEMO_READY,
         &UI2_ATHLAS_HALF_DEMO_STARTED,
         spawn_ui2_athlas_half_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::enabled_on(
+        SpawnPlacement::Ap1,
         "ui2-athlas-1x-demo",
         UI2_DEMO_READY,
         &UI2_ATHLAS_1X_DEMO_STARTED,
         spawn_ui2_athlas_1x_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::enabled_on(
+        SpawnPlacement::Ap1,
         "ui2-athlas-2x-demo",
         UI2_DEMO_READY,
         &UI2_ATHLAS_2X_DEMO_STARTED,
         spawn_ui2_athlas_2x_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::enabled_on(
+        SpawnPlacement::Ap1,
         "ui2-palatino-1x-demo",
         UI2_DEMO_READY,
         &UI2_PALATINO_1X_DEMO_STARTED,
         spawn_ui2_palatino_1x_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::enabled_on(
+        SpawnPlacement::Ap1,
         "ui2-twemoji-1x",
         crate::r::readiness::GFX_TEXTURE_UPLOAD_SERVICE_READY,
         &UI2_TWEMOJI_1X_STARTED,
         spawn_ui2_twemoji_1x,
+    ),
+    TaskSpec::enabled_gated(
+        "ui2-text-input-demo",
+        UI2_DEMO_READY,
+        ui2_demo_task_gate,
+        &UI2_TEXT_INPUT_DEMO_STARTED,
+        spawn_ui2_text_input_demo,
     ),
     TaskSpec::enabled_gated(
         "ui2-triangle-demo",
@@ -1234,6 +1225,12 @@ static TASKS: [TaskSpec; 66] = [
         UI2_DEMO_READY,
         &UI2_CORETICKS_DEMO_STARTED,
         spawn_ui2_coreticks_demo,
+    ),
+    TaskSpec::enabled(
+        "ui2-cursorpicker-demo",
+        UI2_DEMO_READY,
+        &UI2_CURSORPICKER_DEMO_STARTED,
+        spawn_ui2_cursorpicker_demo,
     ),
     TaskSpec::disabled(
         "ui2-mandelbrot-demo",
@@ -1254,12 +1251,6 @@ static TASKS: [TaskSpec; 66] = [
         UI2_DEMO_READY,
         &UI2_RAPLE_DEMO_STARTED,
         spawn_ui2_raple_demo,
-    ),
-    TaskSpec::disabled(
-        "ui2-petersen-demo",
-        UI2_DEMO_READY,
-        &UI2_PETERSEN_DEMO_STARTED,
-        spawn_ui2_petersen_demo,
     ),
     TaskSpec::disabled(
         "ui2-particle-demo",
@@ -1291,12 +1282,6 @@ static TASKS: [TaskSpec; 66] = [
         UI2_DEMO_READY | crate::r::readiness::NET_CONFIGURED,
         &UI2_WEATHER_DEMO_STARTED,
         spawn_ui2_weather_demo,
-    ),
-    TaskSpec::enabled(
-        "ui2-chart-demo",
-        UI2_DEMO_READY,
-        &UI2_CHART_DEMO_STARTED,
-        spawn_ui2_chart_demo,
     ),
     TaskSpec::disabled(
         "ui2-currency-demo",
@@ -1433,7 +1418,6 @@ pub async fn spawn_service_task(spawner: Spawner) {
                                 | "ui2-gfx-tetris"
                                 | "ui2-triangle-demo"
                                 | "ui2-mandelbrot-demo"
-                                | "ui2-petersen-demo"
                                 | "ui2-shell-demo"
                         ) {
                             crate::log!("boot-probe: spawn {} ms={}\n", spec.name, boot_probe_ms());

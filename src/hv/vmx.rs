@@ -233,11 +233,7 @@ static mut VMX_GUEST_REGS_BY_SLOT: [GuestRegisters; VMX_SCRATCH_SLOTS] =
 
 fn current_scratch_slot() -> usize {
     let slot = crate::percpu::current_slot_via_cpuid();
-    if slot < VMX_SCRATCH_SLOTS {
-        slot
-    } else {
-        0
-    }
+    if slot < VMX_SCRATCH_SLOTS { slot } else { 0 }
 }
 
 fn wrapper_result_ptr() -> *mut LaunchResult {
@@ -304,11 +300,7 @@ pub fn vmread(field: u64) -> Option<u64> {
             fail = lateout(reg_byte) fail,
             options(nostack, preserves_flags),
         );
-        if fail == 0 {
-            Some(out)
-        } else {
-            None
-        }
+        if fail == 0 { Some(out) } else { None }
     }
 }
 
@@ -368,11 +360,7 @@ pub fn vmptrst() -> Option<u64> {
             fail = lateout(reg_byte) fail,
             options(nostack, preserves_flags),
         );
-        if fail == 0 {
-            Some(out)
-        } else {
-            None
-        }
+        if fail == 0 { Some(out) } else { None }
     }
 }
 
@@ -615,6 +603,8 @@ pub fn vmlaunch_once_wrapper(out: &mut LaunchResult) {
             "push r13",
             "push r14",
             "push r15",
+            "push {guest_regs_base}",
+            "push {result_base}",
             "mov rax, rsp",
             "mov rcx, {host_rsp_field}",
             "vmwrite rcx, rax",
@@ -640,7 +630,7 @@ pub fn vmlaunch_once_wrapper(out: &mut LaunchResult) {
 
             "vmlaunch",
             "setna al",
-            "mov r11, {result_base}",
+            "mov r11, [rsp]",
             "mov byte ptr [r11 + {launch_failed_off}], al",
             "cmp al, 0",
             "je 4f",
@@ -655,7 +645,7 @@ pub fn vmlaunch_once_wrapper(out: &mut LaunchResult) {
             "2:",
             "push r10",
             "push r11",
-            "mov r10, {guest_regs_base}",
+            "mov r10, [rsp + 24]",
             "mov [r10 + {guest_rax_off}], rax",
             "mov [r10 + {guest_rbx_off}], rbx",
             "mov [r10 + {guest_rcx_off}], rcx",
@@ -674,7 +664,7 @@ pub fn vmlaunch_once_wrapper(out: &mut LaunchResult) {
             "mov [r10 + {guest_r14_off}], r14",
             "mov [r10 + {guest_r15_off}], r15",
             "add rsp, 16",
-            "mov r11, {result_base}",
+            "mov r11, [rsp]",
             "mov byte ptr [r11 + {entered_off}], 1",
             "mov rcx, {exit_reason_field}",
             "vmread rax, rcx",
@@ -687,6 +677,7 @@ pub fn vmlaunch_once_wrapper(out: &mut LaunchResult) {
             "mov [r11 + {guest_rip_off}], rax",
             "3:",
             "cld",
+            "add rsp, 16",
             "pop r15",
             "pop r14",
             "pop r13",
@@ -744,6 +735,8 @@ pub fn vmresume_once_wrapper(out: &mut LaunchResult) {
             "push r13",
             "push r14",
             "push r15",
+            "push {guest_regs_base}",
+            "push {result_base}",
             "mov rax, rsp",
             "mov rcx, {host_rsp_field}",
             "vmwrite rcx, rax",
@@ -769,7 +762,7 @@ pub fn vmresume_once_wrapper(out: &mut LaunchResult) {
 
             "vmresume",
             "setna al",
-            "mov r11, {result_base}",
+            "mov r11, [rsp]",
             "mov byte ptr [r11 + {launch_failed_off}], al",
             "cmp al, 0",
             "je 4f",
@@ -784,7 +777,7 @@ pub fn vmresume_once_wrapper(out: &mut LaunchResult) {
             "2:",
             "push r10",
             "push r11",
-            "mov r10, {guest_regs_base}",
+            "mov r10, [rsp + 24]",
             "mov [r10 + {guest_rax_off}], rax",
             "mov [r10 + {guest_rbx_off}], rbx",
             "mov [r10 + {guest_rcx_off}], rcx",
@@ -803,7 +796,7 @@ pub fn vmresume_once_wrapper(out: &mut LaunchResult) {
             "mov [r10 + {guest_r14_off}], r14",
             "mov [r10 + {guest_r15_off}], r15",
             "add rsp, 16",
-            "mov r11, {result_base}",
+            "mov r11, [rsp]",
             "mov byte ptr [r11 + {entered_off}], 1",
             "mov rcx, {exit_reason_field}",
             "vmread rax, rcx",
@@ -816,6 +809,7 @@ pub fn vmresume_once_wrapper(out: &mut LaunchResult) {
             "mov [r11 + {guest_rip_off}], rax",
             "3:",
             "cld",
+            "add rsp, 16",
             "pop r15",
             "pop r14",
             "pop r13",

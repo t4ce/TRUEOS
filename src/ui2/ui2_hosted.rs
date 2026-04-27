@@ -562,11 +562,7 @@ fn bytes_look_like_ico(bytes: &[u8]) -> bool {
 }
 
 fn ico_dir_dim(byte: u8) -> u32 {
-    if byte == 0 {
-        256
-    } else {
-        byte as u32
-    }
+    if byte == 0 { 256 } else { byte as u32 }
 }
 
 fn ico_best_png_payload(bytes: &[u8]) -> Option<&[u8]> {

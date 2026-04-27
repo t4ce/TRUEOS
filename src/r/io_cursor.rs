@@ -148,8 +148,8 @@ fn append_kernel_cursor_overlay(
     let mut real: Vec<(u32, u32, f32, f32)> = Vec::new();
     collect_real_cursor_norm(&mut real, skip_slot_id);
 
-    for &(cursor_id, _slot_id, nx, ny) in real.iter() {
-        if let Some(glyph) = crate::r::ui2::cursor_overlay_glyph_spec(cursor_id, vp_h) {
+    for &(cursor_id, slot_id, nx, ny) in real.iter() {
+        if let Some(glyph) = crate::r::ui2::cursor_overlay_glyph_spec(cursor_id, slot_id, vp_h) {
             let (center_x_px, center_y_px) = cursor_overlay_center_px(nx, ny, vp_w, vp_h);
             let batch_idx = cursor_overlay_tex_batch_index(tex_batches, glyph.tex_id);
             append_cursor_glyph(
@@ -185,8 +185,8 @@ pub(super) fn append_kernel_cursor_overlay_draws(
     let mut real: Vec<(u32, u32, f32, f32)> = Vec::new();
     collect_real_cursor_norm(&mut real, skip_slot_id);
 
-    for &(cursor_id, _slot_id, nx, ny) in &real {
-        if let Some(glyph) = crate::r::ui2::cursor_overlay_glyph_spec(cursor_id, vp_h) {
+    for &(cursor_id, slot_id, nx, ny) in &real {
+        if let Some(glyph) = crate::r::ui2::cursor_overlay_glyph_spec(cursor_id, slot_id, vp_h) {
             let idx = glyph.tex_id.saturating_sub(1) as usize;
             let Some((image, sample_kind, origin)) = GFX_CABI_STATE
                 .lock()
@@ -230,8 +230,8 @@ pub(super) fn append_kernel_cursor_overlay_draws(
     }
 
     let blob_offset = rgb_blob.len();
-    for &(cursor_id, _slot_id, nx, ny) in &real {
-        if crate::r::ui2::cursor_overlay_glyph_spec(cursor_id, vp_h).is_some() {
+    for &(cursor_id, slot_id, nx, ny) in &real {
+        if crate::r::ui2::cursor_overlay_glyph_spec(cursor_id, slot_id, vp_h).is_some() {
             continue;
         }
         let ndc_x = nx * 2.0 - 1.0;

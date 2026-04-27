@@ -5,7 +5,7 @@ use embassy_executor::SendSpawner;
 
 use crate::r::spawn_spec::SpawnPlacement;
 
-const VM_RESERVED_FIRST_SLOT: u32 = 3;
+const VM_RESERVED_FIRST_SLOT: u32 = 2;
 const AP1_SERVICE_SLOT: u32 = 1;
 
 static GUEST_WORK_RR: AtomicU64 = AtomicU64::new(0);
@@ -34,8 +34,8 @@ impl VmLaneProfile {
     ///
     /// Keep guest hulls on HV-reserved VM lanes only:
     /// - never on BSP/local
-    /// - never on the first two AP service lanes
-    /// - prefer AP>2 perf workers, with AP>2 fallback when needed
+    /// - never on the AP1 UI2/service lane
+    /// - prefer AP2+ perf workers, with AP2+ fallback when needed
     ///
     /// This is the placement policy that future lane-indexed `vm[n]`
     /// scheduling must preserve as we scale past the current singleton path.
@@ -148,7 +148,7 @@ impl VmLanePickError {
             Self::LocalPlacementUnsupported => "local placement is not a VM lane",
             Self::MissingAp1Lane => "ap1 service lane is not registered",
             Self::MissingWorkerLane => "no disposable worker lanes are registered",
-            Self::MissingReservedVmLane => "no reserved VM lanes are registered at AP>2",
+            Self::MissingReservedVmLane => "no reserved VM lanes are registered at AP2+",
         }
     }
 }
@@ -212,8 +212,8 @@ fn pick_reserved_vm_lane() -> Result<VmLaneTarget, VmLanePickError> {
     let mut fallback: Vec<VmLaneTarget> = Vec::new();
 
     for target in pool {
-        // Slots <= 2 are reserved for BSP/local and service work.
-        // VM hull work must stay on AP>2 lanes so that hull execution and
+        // Slot 0 is BSP/local and slot 1 is UI2/service work.
+        // VM hull work must stay on AP2+ lanes so that hull execution and
         // future Tokio blocking keep sharing the same carrier substrate.
         if !target.is_reserved_vm_lane() {
             continue;

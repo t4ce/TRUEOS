@@ -2,7 +2,7 @@ use core::alloc::{GlobalAlloc, Layout};
 #[cfg(target_arch = "x86_64")]
 use core::arch::asm;
 use core::mem::{align_of, size_of};
-use core::ptr::{addr_of_mut, null_mut, NonNull};
+use core::ptr::{NonNull, addr_of_mut, null_mut};
 use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use spin::Mutex;
 

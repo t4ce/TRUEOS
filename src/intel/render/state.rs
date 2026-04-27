@@ -206,6 +206,8 @@ enum BackendProbeMode {
 enum PostDrawSyncVariant {
     HeavyAll,
     LightOnlyRetire,
+    LightPostSyncNoCs,
+    LightCsNoPostSync,
     FlushBit5Dc,
     FlushBit7,
     FlushBit12Rt,
@@ -213,13 +215,10 @@ enum PostDrawSyncVariant {
     FlushBit26Hdc,
 }
 
-const POST_DRAW_FLUSH_SPECTRUM: [PostDrawSyncVariant; 6] = [
+const POST_DRAW_PC_RETIRE_SPECTRUM: [PostDrawSyncVariant; 3] = [
     PostDrawSyncVariant::LightOnlyRetire,
-    PostDrawSyncVariant::FlushBit5Dc,
-    PostDrawSyncVariant::FlushBit7,
-    PostDrawSyncVariant::FlushBit12Rt,
-    PostDrawSyncVariant::FlushBit20Cs,
-    PostDrawSyncVariant::FlushBit26Hdc,
+    PostDrawSyncVariant::LightPostSyncNoCs,
+    PostDrawSyncVariant::LightCsNoPostSync,
 ];
 
 impl PostDrawSyncVariant {
@@ -227,6 +226,8 @@ impl PostDrawSyncVariant {
         match self {
             Self::HeavyAll => "heavy-all",
             Self::LightOnlyRetire => "light-only-retire",
+            Self::LightPostSyncNoCs => "pc-postsync-no-cs",
+            Self::LightCsNoPostSync => "pc-cs-no-postsync",
             Self::FlushBit5Dc => "bit5-dc-flush",
             Self::FlushBit7 => "bit7-flush-enable",
             Self::FlushBit12Rt => "bit12-rt-flush",
@@ -239,6 +240,8 @@ impl PostDrawSyncVariant {
         match self {
             Self::HeavyAll => "postdraw-heavy-all",
             Self::LightOnlyRetire => "postdraw-light-only-retire",
+            Self::LightPostSyncNoCs => "postdraw-pc-postsync-no-cs",
+            Self::LightCsNoPostSync => "postdraw-pc-cs-no-postsync",
             Self::FlushBit5Dc => "postdraw-flush-bit5",
             Self::FlushBit7 => "postdraw-flush-bit7",
             Self::FlushBit12Rt => "postdraw-flush-bit12",
@@ -250,6 +253,8 @@ impl PostDrawSyncVariant {
     fn from_submit_name(submit_name: &str) -> Option<Self> {
         match submit_name {
             "postdraw-light-only-retire" => Some(Self::LightOnlyRetire),
+            "postdraw-pc-postsync-no-cs" => Some(Self::LightPostSyncNoCs),
+            "postdraw-pc-cs-no-postsync" => Some(Self::LightCsNoPostSync),
             "postdraw-flush-bit5" => Some(Self::FlushBit5Dc),
             "postdraw-flush-bit7" => Some(Self::FlushBit7),
             "postdraw-flush-bit12" => Some(Self::FlushBit12Rt),
@@ -259,10 +264,28 @@ impl PostDrawSyncVariant {
         }
     }
 
+    fn light_sync_flags(self) -> u32 {
+        match self {
+            Self::LightPostSyncNoCs => PIPE_CONTROL_POST_DRAW_LIGHT_POSTSYNC_NO_STALL_BITS,
+            Self::LightCsNoPostSync => PIPE_CONTROL_POST_DRAW_LIGHT_CS_STALL_ONLY_BITS,
+            _ => PIPE_CONTROL_POST_DRAW_LIGHT_SYNC_BITS,
+        }
+    }
+
+    fn light_post_sync_enabled(self) -> bool {
+        (self.light_sync_flags() & PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE) != 0
+    }
+
+    fn light_cs_stall_enabled(self) -> bool {
+        (self.light_sync_flags() & PIPE_CONTROL_CS_STALL) != 0
+    }
+
     fn heavy_sync_flags(self) -> Option<u32> {
         let flags = match self {
             Self::HeavyAll => PIPE_CONTROL_POST_DRAW_SYNC_BITS,
             Self::LightOnlyRetire => return None,
+            Self::LightPostSyncNoCs => return None,
+            Self::LightCsNoPostSync => return None,
             Self::FlushBit5Dc => {
                 PIPE_CONTROL_POST_DRAW_LIGHT_SYNC_BITS | PIPE_CONTROL_DC_FLUSH_ENABLE
             }
@@ -516,6 +539,8 @@ fn is_surface_draw_submit_name(submit_name: &str) -> bool {
             | "postdraw-flush-bit12"
             | "postdraw-flush-bit20"
             | "postdraw-flush-bit26"
+            | "postdraw-pc-postsync-no-cs"
+            | "postdraw-pc-cs-no-postsync"
             | "vs-draw-frontier"
     )
 }

@@ -488,12 +488,12 @@ fn start_with_mode(
 
     // Preserve the VM hull execution contract:
     // actual guest work must stay on HV-reserved VM lanes only, never on BSP
-    // and never on the first AP service lane.
+    // and never on the AP1 UI2/service lane.
     if !profile.requires_reserved_vm_lane() || !target.supports(profile) {
         vm.starting.store(false, Ordering::Release);
         VMX_SINGLETON_ACTIVE.store(false, Ordering::Release);
         hvlogf(format_args!(
-            "hv: vm{} lane rejected: role={} placement={} slot={} requires reserved VM lane on AP>2",
+            "hv: vm{} lane rejected: role={} placement={} slot={} requires reserved VM lane on AP2+",
             vm_id,
             profile.role_name(),
             profile.placement_name(),
@@ -1922,9 +1922,6 @@ fn vmx_smoke() -> Result<(), &'static str> {
         ));
         return Err("vmxoff");
     }
-    hvlogf(format_args!(
-        "hv: vm{} reporting: vmxoff ok",
-        current_vm_id_for_log()
-    ));
+    hvlogf(format_args!("hv: vm{} reporting: vmxoff ok", current_vm_id_for_log()));
     Ok(())
 }

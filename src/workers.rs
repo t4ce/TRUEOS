@@ -11,8 +11,8 @@ pub const CORE_KIND_UNKNOWN: u8 = 0;
 pub const CORE_KIND_PERF: u8 = 1;
 pub const CORE_KIND_EFF: u8 = 2;
 
-// Slots <= 2 are reserved by the kernel; background worker carriers start at AP > 2.
-const FIRST_BACKGROUND_SLOT: u32 = 3;
+// Slot 0 is BSP and slot 1 is the UI2/service AP; background carriers start at AP2.
+const FIRST_BACKGROUND_SLOT: u32 = 2;
 
 static CORE_SPAWNERS: Mutex<BTreeMap<u32, SendSpawner>> = Mutex::new(BTreeMap::new());
 static CORE_KINDS: Mutex<BTreeMap<u32, u8>> = Mutex::new(BTreeMap::new());

@@ -9,15 +9,15 @@ pub enum Ui2DemoTexId {
     Particle = 4_709,
     Svg = 4_710,
     ParticleSprite = 4_711,
-    Petersen = 4_712,
     SmileyFountain = 4_713,
     Weather = 4_715,
     Coreticks = 4_716,
     Swarm = 4_720,
-    Chart = 4_721,
     Raple = 4_722,
     Currency = 4_723,
     Player = 4_724,
+    CursorPicker = 4_725,
+    TextInput = 4_726,
     TrueosfsExplorer = 4_901,
 }
 
@@ -36,10 +36,11 @@ pub enum Ui2DemoContentId {
     Coreticks = 45,
     Swarm = 46,
     Weather = 47,
-    Chart = 48,
     Raple = 49,
     Currency = 50,
     Player = 51,
+    CursorPicker = 52,
+    TextInput = 53,
 }
 
 impl Ui2DemoContentId {

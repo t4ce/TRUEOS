@@ -64,6 +64,8 @@ or display handoff.
 
 | 07c. Post-draw flush spectrum | Negative proof | High | `postdraw-light-only-retire postdraw-flush-spectrum-proof accepted=0 variant=light-only-retire heavy_flags=0x00000000 post3d_light=1 final_after_light=0 post3d_heavy=0 final=0`; bit5/bit7/bit12/bit20/bit26 variants all also report `final_after_light=0`. | The failure is not an individual heavy flush bit or cache domain: even the light-only variant fails before the optional heavy `PIPE_CONTROL`. | Which part of the light `PIPE_CONTROL` contract blocks retire; PS launch, RT export, or visible pixels. |
 
+| 07d. `PIPE_CONTROL` retire triad | Instrumented; pending next boot | High when logged | Expected lines: `batch-submit-proof ... pre_light_pc_marker=... post3d_light_marker=... final_after_light_marker=...`; `pc-retire-triad-proof accepted=... variant=light-only-retire|pc-postsync-no-cs|pc-cs-no-postsync light_flags=0x... light_postsync=... light_cs_stall=... before_light=... post3d_light=... final_after_light=...`. | Tests the exact post-draw tail: MI store immediately before the light `PIPE_CONTROL`, optional post-sync write inside the `PIPE_CONTROL`, then MI store immediately after it. The new variants split current behavior into post-sync+CS-stall, post-sync without CS-stall, and CS-stall without post-sync. | PS launch, RT export, or visible pixels; this accepts only when the after-light MI marker retires. |
+
 | 08. VF / input assembler | Proven | High | `vf-proof accepted=1 ia_vtx_delta=3`; streamout path also shows `delta_so0=3 delta_so_write0=96` with `delta_vs=0`, accepted by `post3d-light-eop+vf-streamout-counters`. | VF can consume the declared vertex layout; one proof streams out without VS and reaches the light post-draw sync. | VS, clipper, PS, render target writes, or light `PIPE_CONTROL` retire. |
 
 | 09. VS execution | Proven | High | `vs-proof accepted=1 vs_delta=3` on `vs-draw-frontier` and `vs-streamout-proof`. | VS counters move for the three submitted vertices. | Correct VS output layout into clipper/SBE; VS paths still do not produce clipper counters. |
@@ -92,7 +94,7 @@ or display handoff.
 
 | 11h. PS_EXTRA dependency/source bits | Blocked by 07b/10c | Medium-high only after fragment boundary | Expected line, once unblocked: `ps-extra-dep-proof accepted=... input_ready=1 ps_extra=... dep_on_cp=... source_depth_w=... bary=... ps_delta=...`. | Tests Gen12/XeLP `3DSTATE_PS_EXTRA` dependency/source/barycentric bits only after light `PIPE_CONTROL` retire and shape-to-fragment are no longer the active misses. | RT export or visible pixels; accepts only on PS/CPS/depth counter movement. |
 
-| 11i. Gen12/XeLP `PIPE_CONTROL` ordering / retire | Refined by 07c | High for post-draw retire, medium for PS order | Current evidence: `post_draw_light=1 post_draw_final_after_light=0 post_draw_heavy=0 post_draw_retire=0 note=draw_light_sync_wrote_but_tail_mi_store_did_not_retire`; row 07c shows `light-only-retire` also fails with `final_after_light=0`. | The useful ordering/flush axis is no longer "which heavy bit"; the next split is post-sync write vs `CS_STALL` vs draw dependency, using before/after MI markers around the light `PIPE_CONTROL`. | Shader correctness or RT export; accepts only on PS/CPS/depth counter movement. |
+| 11i. Gen12/XeLP `PIPE_CONTROL` ordering / retire | Instrumented via 07d | High for post-draw retire, medium for PS order | Current evidence: `post_draw_light=1 post_draw_final_after_light=0 post_draw_heavy=0 post_draw_retire=0 note=draw_light_sync_wrote_but_tail_mi_store_did_not_retire`; row 07c shows `light-only-retire` also fails with `final_after_light=0`. Next boot should add `pc-retire-triad-proof` lines. | The useful ordering/flush axis is no longer "which heavy bit"; row 07d now splits post-sync write vs `CS_STALL` vs draw dependency with before/after MI markers around the light `PIPE_CONTROL`. | Shader correctness or RT export; accepts only on PS/CPS/depth counter movement. |
 
 | 12. Render target write | Not proven | High confidence negative | `vf-draw-path ps-rt-proof accepted=0 ps_delta=0 rt_any_change=0 rt_triangle_change=0`; oversized primitive also reports `ps-rt-proof accepted=0` and unchanged sampled pixels while `post_draw_light=1 post_draw_final_after_light=0`. | Sampled pixels did not change in this capture, even after full-surface oversized coverage and coherent binding-table-pool logging. | Whether the blocker is PS dispatch, backend/color export, RT state, cache visibility, or the now-isolated light `PIPE_CONTROL` retire failure. |
 
@@ -173,18 +175,23 @@ Current frontier:
 - Row 07b and row 10c are now the active gates.  Row 07c is answered negative:
   `light-only-retire` fails before any optional heavy flush, and bit5/bit7/
   bit12/bit20/bit26 do not get a chance to distinguish themselves because
-  `final_after_light=0` every time.  The boot stops the PS-spectrum fanout
-  after the oversized shape probe unless `fragment_observed=1`; until then,
-  further PS-side negative probes are treated as blocked rather than
-  meaningful.
+  `final_after_light=0` every time.  Row 07d is now instrumented to tell
+  whether the command streamer reaches the MI marker before the light
+  `PIPE_CONTROL`, and whether post-sync, `CS_STALL`, or their combination
+  prevents the after-light MI marker from retiring.  The boot stops the
+  PS-spectrum fanout after the oversized shape probe unless
+  `fragment_observed=1`; until then, further PS-side negative probes are
+  treated as blocked rather than meaningful.
 
 Next best patch target:
 
-- Add a row-07d "PC retire triad": a `MI_STORE_DATA_IMM` immediately before
-  the light `PIPE_CONTROL`, the existing light post-sync write, and the current
-  `final_after_light` MI store immediately after it.  Then split variants for
-  post-sync without `CS_STALL` and `CS_STALL` without post-sync so the next log
-  can say whether the blocker is the write, the stall, or draw dependency.
+- Boot and read row 07d.  If `before_light=0`, the draw is not reaching even
+  the MI marker before the light `PIPE_CONTROL`.  If `before_light=1` and only
+  `pc-cs-no-postsync` reaches `final_after_light=1`, the post-sync write is the
+  suspect.  If only `pc-postsync-no-cs` reaches `final_after_light=1`,
+  `CS_STALL` is the suspect.  If both reach, the combination is the blocker; if
+  neither reaches, the draw dependency or `PIPE_CONTROL` placement is still the
+  active frontier.
 - Then keep row 10c honest: once the command tail can retire or deliberately
   bypass this `PIPE_CONTROL`, find or wire a real rasterizer sample / WM-input
   observable before reopening PS_EXTRA, WM-normal, or payload-spectrum probes.

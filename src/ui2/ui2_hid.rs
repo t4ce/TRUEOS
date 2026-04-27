@@ -6,6 +6,13 @@ use trueos_gfx_core::Rgba8;
 
 static UI2_CURSOR_CAP_DROP_COUNT: AtomicU32 = AtomicU32::new(0);
 pub(crate) const UI2_FUN_CURSOR_ICONS_ENABLED: bool = true;
+const UI2_CURSOR_SPIRIT_DEFAULTS: [char; 6] = ['🦋', '🦊', '🦎', '🦁', '🦄', '🐕'];
+const UI2_CURSOR_SPIRIT_CHOICES: [char; 24] = [
+    '🦋', '🦊', '🦎', '🦁', '🦄', '🐕', '🐈', '🐇', '🐢', '🐙', '🐳', '🐬', '🐘', '🦕', '🦖', '🦉',
+    '🦜', '🦚', '🦩', '🐝', '🐞', '🦀', '🐌', '🐧',
+];
+static UI2_CURSOR_SPIRIT_OVERRIDES: Mutex<[char; UI2_CURSOR_CAP]> =
+    Mutex::new(['\0'; UI2_CURSOR_CAP]);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Ui2CursorColor {
@@ -60,15 +67,37 @@ impl Ui2CursorColor {
 
     #[inline]
     pub(crate) const fn spirit_glyph(self) -> char {
-        match self {
-            Self::Blue => '🦋',
-            Self::Red => '🦊',
-            Self::Green => '🦎',
-            Self::Amber => '🦁',
-            Self::Violet => '🦄',
-            Self::Cyan => '🐕',
-        }
+        UI2_CURSOR_SPIRIT_DEFAULTS[self as usize]
     }
+}
+
+#[inline]
+pub(crate) fn cursor_spirit_choices() -> &'static [char] {
+    &UI2_CURSOR_SPIRIT_CHOICES
+}
+
+#[inline]
+fn cursor_spirit_override(slot_id: u32) -> Option<char> {
+    let idx = usize::try_from(slot_id.checked_sub(1)?).ok()?;
+    if idx >= UI2_CURSOR_CAP {
+        return None;
+    }
+    let ch = UI2_CURSOR_SPIRIT_OVERRIDES.lock()[idx];
+    (ch != '\0').then_some(ch)
+}
+
+pub(crate) fn set_cursor_spirit_glyph(slot_id: u32, glyph: char) -> bool {
+    let Some(idx) = slot_id
+        .checked_sub(1)
+        .and_then(|idx| usize::try_from(idx).ok())
+    else {
+        return false;
+    };
+    if idx >= UI2_CURSOR_CAP || !UI2_CURSOR_SPIRIT_CHOICES.contains(&glyph) {
+        return false;
+    }
+    UI2_CURSOR_SPIRIT_OVERRIDES.lock()[idx] = glyph;
+    true
 }
 
 #[inline]
@@ -83,7 +112,11 @@ pub(crate) fn cursor_color_rgba8(slot_id: u32) -> Rgba8 {
 
 #[inline]
 pub(crate) fn cursor_spirit_glyph(slot_id: u32) -> Option<char> {
-    UI2_FUN_CURSOR_ICONS_ENABLED.then_some(Ui2CursorColor::from_slot_id(slot_id).spirit_glyph())
+    if !UI2_FUN_CURSOR_ICONS_ENABLED {
+        return None;
+    }
+    cursor_spirit_override(slot_id)
+        .or_else(|| Some(Ui2CursorColor::from_slot_id(slot_id).spirit_glyph()))
 }
 
 #[inline]
@@ -441,8 +474,12 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHid
             select_window_id = Some(click_candidate_window_id);
         }
         if click_candidate_item_id != 0 {
-            let _ =
-                note_window_item_click(state, click_candidate_window_id, click_candidate_item_id);
+            let _ = note_window_item_click(
+                state,
+                click_candidate_window_id,
+                click_candidate_item_id,
+                slot_id,
+            );
         }
     }
 
@@ -754,8 +791,12 @@ pub(super) fn pump_keyboard_input(state: &mut Ui2State) {
 }
 
 #[inline]
-fn window_uses_live_resize(kind: Ui2WindowKind) -> bool {
-    !matches!(kind, Ui2WindowKind::HostedBrowser)
+fn window_uses_live_resize(window: &Ui2Window) -> bool {
+    match window.resize_mode {
+        Ui2WindowResizeMode::Auto => !matches!(window.kind, Ui2WindowKind::HostedBrowser),
+        Ui2WindowResizeMode::Live => true,
+        Ui2WindowResizeMode::PreviewCommit => false,
+    }
 }
 
 pub(super) fn pick_drag_cursor_slot(state: &Ui2State, window: &Ui2Window) -> Option<u32> {
@@ -906,7 +947,7 @@ pub(super) fn begin_window_resize_for_cursor(
             active: true,
             window_id,
             cursor_slot_id: slot_id,
-            live_apply: window_uses_live_resize(window.kind),
+            live_apply: window_uses_live_resize(&window),
             edge_mask,
             start_cursor_x: cursor.x,
             start_cursor_y: cursor.y,
