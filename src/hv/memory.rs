@@ -43,39 +43,19 @@ pub struct EptPage(pub [u64; 512]);
 #[derive(Copy, Clone)]
 pub struct GuestPage(pub [u64; 512]);
 
-static mut EPT_PML4: EptPage = EptPage([0u64; 512]);
-static mut EPT_PDPT: EptPage = EptPage([0u64; 512]);
-static mut EPT_PDS: [EptPage; EPT_DYNAMIC_PD_CAP] = [EptPage([0u64; 512]); EPT_DYNAMIC_PD_CAP];
-static mut EPT_PTS: [EptPage; EPT_DYNAMIC_PT_CAP] = [EptPage([0u64; 512]); EPT_DYNAMIC_PT_CAP];
+#[repr(C, align(4096))]
+struct EptTables {
+    pml4: EptPage,
+    pdpt: EptPage,
+    pds: [EptPage; EPT_DYNAMIC_PD_CAP],
+    pts: [EptPage; EPT_DYNAMIC_PT_CAP],
+    eptp_list: EptpList,
+}
 
-// EPTP list for VMFUNC leaf-0 (EPTP switching): 512 slots × 8 bytes = one 4K page.
+// EPTP list for VMFUNC leaf-0 (EPTP switching): 512 slots x 8 bytes = one 4K page.
 // Slot 0 = current identity EPT; remaining slots zero (unused).
 #[repr(C, align(4096))]
 pub struct EptpList(pub [u64; 512]);
-
-pub static mut EPTP_LIST: EptpList = EptpList([0u64; 512]);
-
-pub fn init_eptp_list(slot0_eptp: u64) -> Result<u64, &'static str> {
-    let list = unsafe { core::ptr::addr_of_mut!(EPTP_LIST.0) };
-    unsafe {
-        (*list)[0] = slot0_eptp;
-    }
-    kernel_va_to_pa(list as u64).ok_or("eptp list pa")
-}
-
-pub static mut GUEST_PML4: GuestPage = GuestPage([0u64; 512]);
-pub static mut GUEST_LOW_PDPT: GuestPage = GuestPage([0u64; 512]);
-pub static mut GUEST_LOW_PD: GuestPage = GuestPage([0u64; 512]);
-pub static mut GUEST_LOW_PTS: [GuestPage; GUEST_LOW_PT_COUNT] =
-    [GuestPage([0u64; 512]); GUEST_LOW_PT_COUNT];
-pub static mut GUEST_HIGH_PDPT: GuestPage = GuestPage([0u64; 512]);
-pub static mut GUEST_HIGH_PD: GuestPage = GuestPage([0u64; 512]);
-pub static mut GUEST_HEAP_PDPT: GuestPage = GuestPage([0u64; 512]);
-pub static mut GUEST_HEAP_PDS: [GuestPage; GUEST_HEAP_PD_COUNT] =
-    [GuestPage([0u64; 512]); GUEST_HEAP_PD_COUNT];
-pub static mut GUEST_IMAGE_PTS: [GuestPage; GUEST_HIGH_IMAGE_PT_COUNT] =
-    [GuestPage([0u64; 512]); GUEST_HIGH_IMAGE_PT_COUNT];
-pub static mut GUEST_CODE_PT: GuestPage = GuestPage([0u64; 512]);
 
 #[repr(C, align(4096))]
 struct GuestTables {
@@ -91,8 +71,14 @@ struct GuestTables {
     code_pt: GuestPage,
 }
 
-static GUEST_TABLES: Mutex<Option<usize>> = Mutex::new(None);
-static GUEST_TABLES_ARENA: Mutex<Option<HeapArena>> = Mutex::new(None);
+static EPT_TABLES: [Mutex<Option<usize>>; crate::allcaps::hv::VM_ID_LIMIT] =
+    [const { Mutex::new(None) }; crate::allcaps::hv::VM_ID_LIMIT];
+static EPT_TABLES_ARENAS: [Mutex<Option<HeapArena>>; crate::allcaps::hv::VM_ID_LIMIT] =
+    [const { Mutex::new(None) }; crate::allcaps::hv::VM_ID_LIMIT];
+static GUEST_TABLES: [Mutex<Option<usize>>; crate::allcaps::hv::VM_ID_LIMIT] =
+    [const { Mutex::new(None) }; crate::allcaps::hv::VM_ID_LIMIT];
+static GUEST_TABLES_ARENAS: [Mutex<Option<HeapArena>>; crate::allcaps::hv::VM_ID_LIMIT] =
+    [const { Mutex::new(None) }; crate::allcaps::hv::VM_ID_LIMIT];
 
 #[derive(Copy, Clone)]
 struct GuestStackBacking {
@@ -100,10 +86,13 @@ struct GuestStackBacking {
     active_bytes: usize,
 }
 
-static GUEST_STACK_BACKING: Mutex<GuestStackBacking> = Mutex::new(GuestStackBacking {
-    arena: None,
-    active_bytes: GUEST_STACK_DEFAULT_BYTES,
-});
+static GUEST_STACK_BACKINGS: [Mutex<GuestStackBacking>; crate::allcaps::hv::VM_ID_LIMIT] =
+    [const {
+        Mutex::new(GuestStackBacking {
+            arena: None,
+            active_bytes: GUEST_STACK_DEFAULT_BYTES,
+        })
+    }; crate::allcaps::hv::VM_ID_LIMIT];
 
 #[derive(Copy, Clone)]
 pub struct VmSnapshotMeta {
@@ -130,8 +119,57 @@ pub fn vm_restore_meta_lock(vm_id: u8) -> Option<&'static Mutex<Option<VmSnapsho
     VM_RESTORE_META.get(vm_id as usize)
 }
 
+fn current_vm_index() -> usize {
+    crate::hv::current_vm_id()
+        .map(|vm_id| vm_id as usize)
+        .filter(|idx| *idx < crate::allcaps::hv::VM_ID_LIMIT)
+        .unwrap_or(0)
+}
+
+fn vm_index(vm_id: u8) -> Result<usize, &'static str> {
+    let idx = vm_id as usize;
+    if idx < crate::allcaps::hv::VM_ID_LIMIT {
+        Ok(idx)
+    } else {
+        Err("unsupported vm id")
+    }
+}
+
+fn ept_tables_ptr() -> Result<*mut EptTables, &'static str> {
+    let idx = current_vm_index();
+    let mut ptr_guard = EPT_TABLES[idx].lock();
+    if let Some(ptr) = *ptr_guard {
+        return Ok(ptr as *mut EptTables);
+    }
+
+    let arena = crate::phys::reserve_heap_arena(core::mem::size_of::<EptTables>(), PAGE_SIZE_4K)
+        .ok_or("ept tables alloc")?;
+    unsafe {
+        core::ptr::write_bytes(arena.virt_start as *mut u8, 0, arena.length);
+    }
+    let ptr = arena.virt_start as *mut EptTables;
+    *EPT_TABLES_ARENAS[idx].lock() = Some(arena);
+    *ptr_guard = Some(ptr as usize);
+    Ok(ptr)
+}
+
+pub fn init_eptp_list(slot0_eptp: u64) -> Result<u64, &'static str> {
+    let tables = ept_tables_ptr()?;
+    let list = unsafe { core::ptr::addr_of_mut!((*tables).eptp_list.0) };
+    unsafe {
+        core::ptr::write_bytes(list as *mut u8, 0, PAGE_SIZE_4K);
+        (*list)[0] = slot0_eptp;
+    }
+    kernel_va_to_pa(list as u64).ok_or("eptp list pa")
+}
+
 fn guest_tables_ptr() -> Result<*mut GuestTables, &'static str> {
-    let mut ptr_guard = GUEST_TABLES.lock();
+    let idx = current_vm_index();
+    guest_tables_ptr_by_index(idx)
+}
+
+fn guest_tables_ptr_by_index(idx: usize) -> Result<*mut GuestTables, &'static str> {
+    let mut ptr_guard = GUEST_TABLES[idx].lock();
     if let Some(ptr) = *ptr_guard {
         return Ok(ptr as *mut GuestTables);
     }
@@ -142,17 +180,21 @@ fn guest_tables_ptr() -> Result<*mut GuestTables, &'static str> {
         core::ptr::write_bytes(arena.virt_start as *mut u8, 0, arena.length);
     }
     let ptr = arena.virt_start as *mut GuestTables;
-    *GUEST_TABLES_ARENA.lock() = Some(arena);
+    *GUEST_TABLES_ARENAS[idx].lock() = Some(arena);
     *ptr_guard = Some(ptr as usize);
     Ok(ptr)
 }
 
+fn guest_tables_ptr_for_vm(vm_id: u8) -> Result<*mut GuestTables, &'static str> {
+    guest_tables_ptr_by_index(vm_index(vm_id)?)
+}
+
 fn guest_tables_ptr_opt() -> Option<*mut GuestTables> {
-    (*GUEST_TABLES.lock()).map(|ptr| ptr as *mut GuestTables)
+    (*GUEST_TABLES[current_vm_index()].lock()).map(|ptr| ptr as *mut GuestTables)
 }
 
 fn guest_tables_arena() -> Option<HeapArena> {
-    *GUEST_TABLES_ARENA.lock()
+    *GUEST_TABLES_ARENAS[current_vm_index()].lock()
 }
 
 fn guest_pml4_page() -> Option<*const [u64; 512]> {
@@ -180,23 +222,26 @@ unsafe extern "C" {
 }
 
 pub fn build_ept_identity_4g() -> Result<u64, &'static str> {
+    crate::hv::security::before_building_guest_ept(current_vm_id_for_log());
+
     // VMX may need to walk guest paging structures before the guest executes
     // its first instruction, so make sure the backing arena exists before we
     // decide which physical spans sparse EPT must cover.
     let _ = guest_tables_ptr()?;
 
-    let pml4 = unsafe { core::ptr::addr_of_mut!(EPT_PML4.0) };
-    let pdpt = unsafe { core::ptr::addr_of_mut!(EPT_PDPT.0) };
+    let ept_tables = ept_tables_ptr()?;
+    let pml4 = unsafe { core::ptr::addr_of_mut!((*ept_tables).pml4.0) };
+    let pdpt = unsafe { core::ptr::addr_of_mut!((*ept_tables).pdpt.0) };
     unsafe {
         core::ptr::write_bytes(pml4 as *mut u8, 0, PAGE_SIZE_4K);
         core::ptr::write_bytes(pdpt as *mut u8, 0, PAGE_SIZE_4K);
     }
     for i in 0..EPT_DYNAMIC_PD_CAP {
-        let pd = unsafe { core::ptr::addr_of_mut!(EPT_PDS[i].0) };
+        let pd = unsafe { core::ptr::addr_of_mut!((*ept_tables).pds[i].0) };
         unsafe { core::ptr::write_bytes(pd as *mut u8, 0, PAGE_SIZE_4K) };
     }
     for i in 0..EPT_DYNAMIC_PT_CAP {
-        let pt = unsafe { core::ptr::addr_of_mut!(EPT_PTS[i].0) };
+        let pt = unsafe { core::ptr::addr_of_mut!((*ept_tables).pts[i].0) };
         unsafe { core::ptr::write_bytes(pt as *mut u8, 0, PAGE_SIZE_4K) };
     }
 
@@ -269,10 +314,14 @@ pub fn build_ept_identity_4g() -> Result<u64, &'static str> {
     }
 
     let host_heap = crate::allocators::heap_stats();
-    if host_heap.initialized
+    if crate::hv::security::legacy_host_heap_ept_enabled()
+        && host_heap.initialized
         && host_heap.phys_start != 0
         && host_heap.heap_end > host_heap.heap_start
     {
+        // Securit Risk and a Id to it: HVSR-0002
+        // This maps the host heap into guest EPT for bring-up compatibility.
+        // Harden by replacing it with explicit per-VM shared/copy buffers.
         map_ept_identity_span(
             pdpt,
             &mut next_pd,
@@ -281,6 +330,13 @@ pub fn build_ept_identity_4g() -> Result<u64, &'static str> {
             host_heap.heap_end.saturating_sub(host_heap.heap_start) as u64,
             "host-heap",
         )?;
+    } else if host_heap.initialized && host_heap.heap_end > host_heap.heap_start {
+        hvlogf(format_args!(
+            "hv: vm{} reporting: ept span host-heap skipped risk=HVSR-0002 virt=0x{:016X}..0x{:016X}",
+            current_vm_id_for_log(),
+            host_heap.heap_start as u64,
+            host_heap.heap_end as u64
+        ));
     }
 
     let guest_heap = crate::allocators::hv_guest_heap_stats(current_vm_id_for_log());
@@ -288,6 +344,9 @@ pub fn build_ept_identity_4g() -> Result<u64, &'static str> {
         && guest_heap.phys_start != 0
         && guest_heap.heap_end > guest_heap.heap_start
     {
+        // Securit Risk and a Id to it: HVSR-0003
+        // This span should remain guest-owned and non-executable once EPT
+        // permissions are narrowed per label.
         map_ept_identity_span(
             pdpt,
             &mut next_pd,
@@ -320,6 +379,7 @@ fn map_ept_identity_span(
     if bytes == 0 {
         return Ok(());
     }
+    let ept_tables = ept_tables_ptr()?;
 
     let start = page_align_down(phys_start);
     let end = page_align_up_4k(phys_start.checked_add(bytes).ok_or("ept span overflow")?);
@@ -336,7 +396,7 @@ fn map_ept_identity_span(
             pdpt,
             pdpt_idx,
             next_pd,
-            unsafe { core::ptr::addr_of_mut!(EPT_PDS[0].0) },
+            unsafe { core::ptr::addr_of_mut!((*ept_tables).pds[0].0) },
             EPT_DYNAMIC_PD_CAP,
             "ept pd pool",
         )?;
@@ -344,12 +404,13 @@ fn map_ept_identity_span(
             pd,
             pd_index(gpa),
             next_pt,
-            unsafe { core::ptr::addr_of_mut!(EPT_PTS[0].0) },
+            unsafe { core::ptr::addr_of_mut!((*ept_tables).pts[0].0) },
             EPT_DYNAMIC_PT_CAP,
             "ept pt pool",
         )?;
         unsafe {
-            (*pt)[pt_index(gpa)] = (gpa & 0x000F_FFFF_FFFF_F000) | 0x7 | (6 << 3);
+            let perms = crate::hv::security::ept_permissions_for_span(label, 0x7);
+            (*pt)[pt_index(gpa)] = (gpa & 0x000F_FFFF_FFFF_F000) | perms | (6 << 3);
         }
         gpa = gpa
             .checked_add(PAGE_SIZE_4K as u64)
@@ -439,19 +500,52 @@ fn mib_to_bytes(mib: usize) -> usize {
 }
 
 pub fn active_guest_stack_bytes() -> usize {
-    GUEST_STACK_BACKING.lock().active_bytes
+    active_guest_stack_bytes_for_vm(crate::hv::current_vm_id().unwrap_or(0))
+}
+
+pub fn active_guest_stack_bytes_for_vm(vm_id: u8) -> usize {
+    let Ok(idx) = vm_index(vm_id) else {
+        return GUEST_STACK_DEFAULT_BYTES;
+    };
+    GUEST_STACK_BACKINGS[idx].lock().active_bytes
 }
 
 pub fn active_guest_stack_mb() -> usize {
     active_guest_stack_bytes() / (1024 * 1024)
 }
 
+pub fn active_guest_stack_mb_for_vm(vm_id: u8) -> usize {
+    active_guest_stack_bytes_for_vm(vm_id) / (1024 * 1024)
+}
+
+pub fn active_guest_stack_bytes_total() -> usize {
+    let mut total = 0usize;
+    for backing in GUEST_STACK_BACKINGS.iter() {
+        let backing = *backing.lock();
+        if backing.arena.is_some() {
+            total = total.saturating_add(backing.active_bytes);
+        }
+    }
+    total
+}
+
 fn active_guest_stack_arena() -> Option<HeapArena> {
-    GUEST_STACK_BACKING.lock().arena
+    active_guest_stack_arena_for_vm(crate::hv::current_vm_id().unwrap_or(0))
+}
+
+fn active_guest_stack_arena_for_vm(vm_id: u8) -> Option<HeapArena> {
+    let Ok(idx) = vm_index(vm_id) else {
+        return None;
+    };
+    GUEST_STACK_BACKINGS[idx].lock().arena
 }
 
 pub fn guest_stack_slice() -> Option<&'static [u8]> {
-    let backing = *GUEST_STACK_BACKING.lock();
+    guest_stack_slice_for_vm(crate::hv::current_vm_id().unwrap_or(0))
+}
+
+pub fn guest_stack_slice_for_vm(vm_id: u8) -> Option<&'static [u8]> {
+    let backing = *GUEST_STACK_BACKINGS[vm_index(vm_id).ok()?].lock();
     let arena = backing.arena?;
     Some(unsafe {
         core::slice::from_raw_parts(arena.virt_start as *const u8, backing.active_bytes)
@@ -459,15 +553,31 @@ pub fn guest_stack_slice() -> Option<&'static [u8]> {
 }
 
 pub fn guest_stack_mut_ptr() -> Option<*mut u8> {
-    let backing = *GUEST_STACK_BACKING.lock();
+    guest_stack_mut_ptr_for_vm(crate::hv::current_vm_id().unwrap_or(0))
+}
+
+pub fn guest_stack_mut_ptr_for_vm(vm_id: u8) -> Option<*mut u8> {
+    let backing = *GUEST_STACK_BACKINGS[vm_index(vm_id).ok()?].lock();
     backing.arena.map(|arena| arena.virt_start as *mut u8)
 }
 
 pub fn prepare_guest_stack_mb(stack_mb: usize) -> Result<usize, &'static str> {
-    prepare_guest_stack_bytes(mib_to_bytes(clamp_guest_stack_mb(stack_mb)))
+    prepare_guest_stack_mb_for_vm(crate::hv::current_vm_id().unwrap_or(0), stack_mb)
+}
+
+pub fn prepare_guest_stack_mb_for_vm(vm_id: u8, stack_mb: usize) -> Result<usize, &'static str> {
+    prepare_guest_stack_bytes_for_vm(vm_id, mib_to_bytes(clamp_guest_stack_mb(stack_mb)))
 }
 
 pub fn prepare_guest_stack_bytes(requested_bytes: usize) -> Result<usize, &'static str> {
+    prepare_guest_stack_bytes_for_vm(crate::hv::current_vm_id().unwrap_or(0), requested_bytes)
+}
+
+pub fn prepare_guest_stack_bytes_for_vm(
+    vm_id: u8,
+    requested_bytes: usize,
+) -> Result<usize, &'static str> {
+    let idx = vm_index(vm_id)?;
     let bytes = requested_bytes
         .max(GUEST_STACK_MIN_BYTES)
         .min(GUEST_STACK_MAX_BYTES);
@@ -478,7 +588,7 @@ pub fn prepare_guest_stack_bytes(requested_bytes: usize) -> Result<usize, &'stat
     }
 
     let old = {
-        let mut backing = GUEST_STACK_BACKING.lock();
+        let mut backing = GUEST_STACK_BACKINGS[idx].lock();
         let old = backing.arena;
         backing.arena = Some(arena);
         backing.active_bytes = bytes;
@@ -494,6 +604,10 @@ pub fn prepare_guest_stack_bytes(requested_bytes: usize) -> Result<usize, &'stat
 
 pub fn guest_stack_top() -> u64 {
     (GUEST_STACK_VA_BASE + active_guest_stack_bytes() as u64) & !0xF
+}
+
+pub fn guest_stack_top_for_vm(vm_id: u8) -> u64 {
+    (GUEST_STACK_VA_BASE + active_guest_stack_bytes_for_vm(vm_id) as u64) & !0xF
 }
 
 pub fn guest_kernel_elf_entry(bytes: &[u8]) -> Option<u64> {
@@ -687,9 +801,12 @@ pub fn build_guest_cr3_with_mode(
         log_guest_mapping("stack-top-0x40", guest_rsp.saturating_sub(0x40));
         log_guest_mapping("comm-page", crate::hv::vmcall::comm_page_guest_va());
         log_guest_mapping("guest-rip", guest_rip);
-        let heap = crate::allocators::heap_stats();
-        log_guest_mapping("heap-start", heap.heap_start as u64);
-        log_guest_mapping("heap-end-8", (heap.heap_end as u64).saturating_sub(8));
+        let hv_guest_heap = crate::allocators::hv_guest_heap_stats(current_vm_id_for_log());
+        log_guest_mapping("hv-guest-heap-start", hv_guest_heap.heap_start as u64);
+        log_guest_mapping(
+            "hv-guest-heap-end-8",
+            (hv_guest_heap.heap_end as u64).saturating_sub(8),
+        );
         verify_guest_mapping_chain("guest-rip", guest_rip)?;
         verify_guest_mapping_chain("image-start", mapped_code_base)?;
         verify_guest_mapping_chain(
@@ -726,6 +843,12 @@ pub fn current_guest_cr3_pa() -> Result<u64, &'static str> {
     let Some(pml4) = guest_pml4_page() else {
         return Err("guest pml4 pa");
     };
+    host_va_to_pa(pml4 as u64).ok_or("guest pml4 pa")
+}
+
+pub fn guest_cr3_pa_for_vm(vm_id: u8) -> Result<u64, &'static str> {
+    let tables = guest_tables_ptr_for_vm(vm_id)?;
+    let pml4 = unsafe { core::ptr::addr_of!((*tables).pml4.0) };
     host_va_to_pa(pml4 as u64).ok_or("guest pml4 pa")
 }
 
@@ -1085,9 +1208,12 @@ fn classify_guest_va(guest_va: u64) -> &'static str {
         return "comm-page";
     }
 
-    let heap = crate::allocators::heap_stats();
-    if heap.initialized && guest_va >= heap.heap_start as u64 && guest_va < heap.heap_end as u64 {
-        return "heap";
+    let hv_guest_heap = crate::allocators::hv_guest_heap_stats(current_vm_id_for_log());
+    if hv_guest_heap.initialized
+        && guest_va >= hv_guest_heap.heap_start as u64
+        && guest_va < hv_guest_heap.heap_end as u64
+    {
+        return "hv-guest-heap";
     }
 
     if let Some(region) = classify_hull_guest_va(guest_va) {
@@ -1281,17 +1407,13 @@ fn map_guest_heap_span(
     image_start: u64,
     image_end: u64,
 ) -> Result<(), &'static str> {
-    let heap = crate::allocators::heap_stats();
     let hv_guest_heap = crate::allocators::hv_guest_heap_stats(current_vm_id_for_log());
-    let ranges = [
-        ("heap", heap.initialized, heap.heap_start as u64, heap.heap_end as u64),
-        (
-            "hv-guest-heap",
-            hv_guest_heap.initialized,
-            hv_guest_heap.heap_start as u64,
-            hv_guest_heap.heap_end as u64,
-        ),
-    ];
+    let ranges = [(
+        "hv-guest-heap",
+        hv_guest_heap.initialized,
+        hv_guest_heap.heap_start as u64,
+        hv_guest_heap.heap_end as u64,
+    )];
     if !ranges
         .iter()
         .any(|(_, initialized, start, end)| *initialized && *start != 0 && *end > *start)
@@ -1489,4 +1611,68 @@ pub unsafe fn copy_into_guest_page(dst: *mut [u64; 512], src: &[u8]) {
 
 pub unsafe fn push_guest_page(out: &mut alloc::vec::Vec<u8>, page: *const [u64; 512]) {
     out.extend_from_slice(core::slice::from_raw_parts(page.cast::<u8>(), PAGE_SIZE_4K));
+}
+
+pub unsafe fn push_current_guest_pages(out: &mut alloc::vec::Vec<u8>) -> Result<(), &'static str> {
+    push_guest_pages_for_vm(crate::hv::current_vm_id().unwrap_or(0), out)
+}
+
+pub unsafe fn push_guest_pages_for_vm(
+    vm_id: u8,
+    out: &mut alloc::vec::Vec<u8>,
+) -> Result<(), &'static str> {
+    let tables = guest_tables_ptr_for_vm(vm_id)?;
+    unsafe {
+        push_guest_page(out, core::ptr::addr_of!((*tables).pml4.0));
+        push_guest_page(out, core::ptr::addr_of!((*tables).low_pdpt.0));
+        push_guest_page(out, core::ptr::addr_of!((*tables).low_pd.0));
+        for i in 0..GUEST_LOW_PT_COUNT {
+            push_guest_page(out, core::ptr::addr_of!((*tables).low_pts[i].0));
+        }
+        push_guest_page(out, core::ptr::addr_of!((*tables).high_pdpt.0));
+        push_guest_page(out, core::ptr::addr_of!((*tables).high_pd.0));
+        for i in 0..GUEST_HIGH_IMAGE_PT_COUNT {
+            push_guest_page(out, core::ptr::addr_of!((*tables).image_pts[i].0));
+        }
+        push_guest_page(out, core::ptr::addr_of!((*tables).code_pt.0));
+    }
+    Ok(())
+}
+
+pub unsafe fn restore_current_guest_pages(
+    bytes: &[u8],
+    off: &mut usize,
+) -> Result<(), &'static str> {
+    restore_guest_pages_for_vm(crate::hv::current_vm_id().unwrap_or(0), bytes, off)
+}
+
+pub unsafe fn restore_guest_pages_for_vm(
+    vm_id: u8,
+    bytes: &[u8],
+    off: &mut usize,
+) -> Result<(), &'static str> {
+    let tables = guest_tables_ptr_for_vm(vm_id)?;
+    let mut take_page = |dst: *mut [u64; 512]| -> Result<(), &'static str> {
+        let end = off.checked_add(PAGE_SIZE_4K).ok_or("snapshot page overflow")?;
+        let src = bytes.get(*off..end).ok_or("snapshot page bounds")?;
+        unsafe { copy_into_guest_page(dst, src) };
+        *off = end;
+        Ok(())
+    };
+
+    unsafe {
+        take_page(core::ptr::addr_of_mut!((*tables).pml4.0))?;
+        take_page(core::ptr::addr_of_mut!((*tables).low_pdpt.0))?;
+        take_page(core::ptr::addr_of_mut!((*tables).low_pd.0))?;
+        for i in 0..GUEST_LOW_PT_COUNT {
+            take_page(core::ptr::addr_of_mut!((*tables).low_pts[i].0))?;
+        }
+        take_page(core::ptr::addr_of_mut!((*tables).high_pdpt.0))?;
+        take_page(core::ptr::addr_of_mut!((*tables).high_pd.0))?;
+        for i in 0..GUEST_HIGH_IMAGE_PT_COUNT {
+            take_page(core::ptr::addr_of_mut!((*tables).image_pts[i].0))?;
+        }
+        take_page(core::ptr::addr_of_mut!((*tables).code_pt.0))?;
+    }
+    Ok(())
 }

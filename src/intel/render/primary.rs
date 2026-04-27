@@ -595,6 +595,14 @@ fn run_postdraw_pc_retire_spectrum(
             variant.label(),
             completed as u8,
         );
+        if completed {
+            intel_render_focus_log!(
+                "intel/render: postdraw-pc-retire-spectrum cleanup submit={} variant={} reason=completed-diagnostic-not-a-fence\n",
+                submit_name,
+                variant.label(),
+            );
+            recover_render_engine_after_nonretired_submit(dev, warm, submit_name);
+        }
     }
 }
 

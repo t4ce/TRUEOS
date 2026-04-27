@@ -3,6 +3,7 @@ pub mod blueprint_net;
 pub mod guest_run;
 pub mod guest_work;
 pub mod memory;
+pub mod security;
 pub mod snapshot;
 pub mod store;
 pub mod vmcall;
@@ -74,10 +75,10 @@ static trueos_vm_ids: [TrueosVmId; TRUEOS_VM_ID_LIMIT] =
     [const { TrueosVmId::new() }; TRUEOS_VM_ID_LIMIT];
 static CURRENT_VM_ID_BY_CPU: [AtomicU8; TRUEOS_VM_CPU_SLOT_LIMIT] =
     [const { AtomicU8::new(0) }; TRUEOS_VM_CPU_SLOT_LIMIT];
-static VMX_SINGLETON_ACTIVE: AtomicBool = AtomicBool::new(false);
 static HV_LOG_SEQ: AtomicU64 = AtomicU64::new(0);
 static HV_CONTROL_NUDGE_SEQ: AtomicU64 = AtomicU64::new(1);
-static VM_BOOT_MODE: Mutex<VmBootMode> = Mutex::new(VmBootMode::Hull);
+static VM_BOOT_MODES: [Mutex<VmBootMode>; TRUEOS_VM_ID_LIMIT] =
+    [const { Mutex::new(VmBootMode::Hull) }; TRUEOS_VM_ID_LIMIT];
 static BLUEPRINT_LAUNCH_STATES: [Mutex<Option<BlueprintLaunchState>>; TRUEOS_VM_ID_LIMIT] =
     [const { Mutex::new(None) }; TRUEOS_VM_ID_LIMIT];
 static APP_WINDOW_SESSIONS: [Mutex<Option<AppWindowSession>>; TRUEOS_VM_ID_LIMIT] =
@@ -95,27 +96,35 @@ pub static mut VMXON_REGIONS: [VmxPage; TRUEOS_VM_CPU_SLOT_LIMIT] =
     [const { VmxPage([0u8; VMX_PAGE_SIZE]) }; TRUEOS_VM_CPU_SLOT_LIMIT];
 pub static mut VMCS_REGIONS: [VmxPage; TRUEOS_VM_CPU_SLOT_LIMIT] =
     [const { VmxPage([0u8; VMX_PAGE_SIZE]) }; TRUEOS_VM_CPU_SLOT_LIMIT];
-pub static mut HV_HOST_GDT: [u64; 8] = [0u64; 8];
-pub static mut HV_HOST_TSS: [u8; 104] = [0u8; 104];
+pub static mut HV_HOST_GDTS: [[u64; 8]; TRUEOS_VM_CPU_SLOT_LIMIT] =
+    [[0u64; 8]; TRUEOS_VM_CPU_SLOT_LIMIT];
+pub static mut HV_HOST_TSSS: [[u8; 104]; TRUEOS_VM_CPU_SLOT_LIMIT] =
+    [[0u8; 104]; TRUEOS_VM_CPU_SLOT_LIMIT];
 
 pub use snapshot::{RestoreError, SaveError};
 
-fn current_vmx_slot() -> usize {
+fn current_vmx_slot() -> Result<usize, &'static str> {
     let slot = crate::percpu::current_slot_via_cpuid();
     if slot < TRUEOS_VM_CPU_SLOT_LIMIT {
-        slot
+        Ok(slot)
     } else {
-        0
+        hvlogf(format_args!(
+            "hv: vm{} reporting: vmx abort unresolved cpu slot={} limit={}",
+            current_vm_id_for_log(),
+            slot,
+            TRUEOS_VM_CPU_SLOT_LIMIT
+        ));
+        Err("vmx cpu slot unresolved")
     }
 }
 
-fn current_vmx_pages() -> (*mut u8, *mut u8) {
-    let slot = current_vmx_slot();
+fn current_vmx_pages() -> Result<(*mut u8, *mut u8), &'static str> {
+    let slot = current_vmx_slot()?;
     unsafe {
-        (
+        Ok((
             core::ptr::addr_of_mut!(VMXON_REGIONS[slot].0) as *mut u8,
             core::ptr::addr_of_mut!(VMCS_REGIONS[slot].0) as *mut u8,
-        )
+        ))
     }
 }
 
@@ -219,15 +228,19 @@ fn vm_slot(vm_id: u8) -> Option<&'static TrueosVmId> {
 }
 
 pub fn first_free_vm_id() -> Option<u8> {
-    if VMX_SINGLETON_ACTIVE.load(Ordering::Acquire) {
-        return None;
-    }
     for (idx, slot) in trueos_vm_ids.iter().enumerate() {
         if !slot.running.load(Ordering::Acquire) && !slot.starting.load(Ordering::Acquire) {
             return Some(idx as u8);
         }
     }
     None
+}
+
+fn boot_mode_for_vm(vm_id: u8) -> VmBootMode {
+    VM_BOOT_MODES
+        .get(vm_id as usize)
+        .map(|mode| *mode.lock())
+        .unwrap_or(VmBootMode::Hull)
 }
 
 fn vm_activity_snapshot() -> (usize, usize, [Option<u8>; TRUEOS_VM_ID_LIMIT]) {
@@ -366,7 +379,7 @@ pub fn status() -> HvStatus {
         active_vm_ids,
         vm_shared_heap_total_bytes: vm_heap.usable_total,
         vm_shared_heap_free_bytes: vm_heap.free_bytes,
-        vm_shared_stack_bytes: memory::active_guest_stack_bytes(),
+        vm_shared_stack_bytes: memory::active_guest_stack_bytes_total(),
         vm_shared_vmx_bytes: core::mem::size_of::<VmxPage>() * 2 * TRUEOS_VM_CPU_SLOT_LIMIT,
     }
 }
@@ -399,20 +412,12 @@ fn start_with_mode(
         return Err(StartError::UnsupportedVmId);
     };
 
-    if VMX_SINGLETON_ACTIVE
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        return Err(StartError::AlreadyRunning);
-    }
-
     if vm.running.load(Ordering::Acquire)
         || vm
             .starting
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_err()
     {
-        VMX_SINGLETON_ACTIVE.store(false, Ordering::Release);
         return Err(StartError::AlreadyRunning);
     }
 
@@ -445,27 +450,26 @@ fn start_with_mode(
         let r1 = __cpuid(1);
         hvlogf(format_args!("hv: cpuid1 ecx=0x{:X} edx=0x{:X}", r1.ecx, r1.edx));
         vm.starting.store(false, Ordering::Release);
-        VMX_SINGLETON_ACTIVE.store(false, Ordering::Release);
         return Err(StartError::VmxUnsupported);
     }
 
     if boot_mode == VmBootMode::Full && crate::limine::guest_kernel_bytes().is_none() {
         vm.starting.store(false, Ordering::Release);
-        VMX_SINGLETON_ACTIVE.store(false, Ordering::Release);
         return Err(StartError::MissingGuestModule);
     }
 
     let requested_stack_mb = stack_mb.unwrap_or(memory::guest_stack_default_mb());
     let active_stack_mb = memory::clamp_guest_stack_mb(requested_stack_mb);
-    if memory::prepare_guest_stack_mb(active_stack_mb).is_err() {
+    if memory::prepare_guest_stack_mb_for_vm(vm_id, active_stack_mb).is_err() {
         vm.starting.store(false, Ordering::Release);
-        VMX_SINGLETON_ACTIVE.store(false, Ordering::Release);
         return Err(StartError::GuestMemoryUnavailable);
     }
 
     vm.stop_req.store(false, Ordering::Release);
     vm.marker_seen.store(false, Ordering::Release);
-    *VM_BOOT_MODE.lock() = boot_mode;
+    if let Some(mode) = VM_BOOT_MODES.get(vm_id as usize) {
+        *mode.lock() = boot_mode;
+    }
 
     let _ = spawner;
     let _ = io;
@@ -474,7 +478,6 @@ fn start_with_mode(
         Ok(target) => target,
         Err(error) => {
             vm.starting.store(false, Ordering::Release);
-            VMX_SINGLETON_ACTIVE.store(false, Ordering::Release);
             hvlogf(format_args!(
                 "hv: vm{} lane pick failed: role={} placement={} reason={}",
                 vm_id,
@@ -491,7 +494,6 @@ fn start_with_mode(
     // and never on the AP1 UI2/service lane.
     if !profile.requires_reserved_vm_lane() || !target.supports(profile) {
         vm.starting.store(false, Ordering::Release);
-        VMX_SINGLETON_ACTIVE.store(false, Ordering::Release);
         hvlogf(format_args!(
             "hv: vm{} lane rejected: role={} placement={} slot={} requires reserved VM lane on AP2+",
             vm_id,
@@ -510,14 +512,13 @@ fn start_with_mode(
         profile.placement_name(),
         target.slot,
         target.core_kind_name(),
-        memory::active_guest_stack_mb()
+        memory::active_guest_stack_mb_for_vm(vm_id)
     ));
 
     match vm_task(vm_id) {
         Ok(token) => target.spawner.spawn(token),
         Err(_) => {
             vm.starting.store(false, Ordering::Release);
-            VMX_SINGLETON_ACTIVE.store(false, Ordering::Release);
             return Err(StartError::SpawnFailed);
         }
     }
@@ -841,7 +842,7 @@ async fn vm_task(vm_id: u8) {
         ));
     }
 
-    let boot_mode = *VM_BOOT_MODE.lock();
+    let boot_mode = boot_mode_for_vm(vm_id);
     let guest = crate::limine::guest_kernel_bytes();
     match boot_mode {
         VmBootMode::Full => {
@@ -869,7 +870,7 @@ async fn vm_task(vm_id: u8) {
                 "hv: vm{} lifecycle: hull guest entry=0x{:016X} stack_mib={}",
                 vm_id,
                 guest_launch_rip(),
-                memory::active_guest_stack_mb()
+                memory::active_guest_stack_mb_for_vm(vm_id)
             ));
         }
     }
@@ -930,7 +931,6 @@ async fn vm_task(vm_id: u8) {
     vm.preserve_req.store(false, Ordering::Release);
     vm.preserve_exit.store(false, Ordering::Release);
     let _ = take_blueprint_launch(vm_id);
-    VMX_SINGLETON_ACTIVE.store(false, Ordering::Release);
     hvlogf(format_args!("hv: vm{} lifecycle: stopped", vm_id));
 }
 
@@ -992,7 +992,7 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
     let basic = unsafe { Msr::new(crate::hv::vmx::IA32_VMX_BASIC).read() };
     let revision = (basic & 0x7fff_ffff) as u32;
 
-    let (vmxon_va, vmcs_va) = current_vmx_pages();
+    let (vmxon_va, vmcs_va) = current_vmx_pages()?;
     unsafe {
         core::ptr::write_bytes(vmxon_va, 0, VMX_PAGE_SIZE);
         core::ptr::write_bytes(vmcs_va, 0, VMX_PAGE_SIZE);
@@ -1029,7 +1029,7 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
             return Err(e);
         }
     };
-    if let Err(e) = setup_vmcs_for_launch(vm_id, eptp, lineage_record, *VM_BOOT_MODE.lock()) {
+    if let Err(e) = setup_vmcs_for_launch(vm_id, eptp, lineage_record, boot_mode_for_vm(vm_id)) {
         let _ = vmxoff();
         return Err(e);
     }
@@ -1085,6 +1085,7 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
             break;
         }
 
+        crate::hv::security::before_host_handles_vmexit(vm_id);
         let reason = lr.exit_reason & 0xFFFF;
         crate::hv::vmx::log_vmexit_interrupt_info("vmexit");
         if reason == 0x0 {
@@ -1814,7 +1815,7 @@ fn vmx_smoke() -> Result<(), &'static str> {
     let basic = unsafe { Msr::new(vmx::IA32_VMX_BASIC).read() };
     let revision = (basic & 0x7fff_ffff) as u32;
 
-    let (vmxon_va, vmcs_va) = current_vmx_pages();
+    let (vmxon_va, vmcs_va) = current_vmx_pages()?;
     unsafe {
         core::ptr::write_bytes(vmxon_va, 0, VMX_PAGE_SIZE);
         core::ptr::write_bytes(vmcs_va, 0, VMX_PAGE_SIZE);

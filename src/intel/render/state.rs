@@ -217,8 +217,8 @@ enum PostDrawSyncVariant {
 
 const POST_DRAW_PC_RETIRE_SPECTRUM: [PostDrawSyncVariant; 3] = [
     PostDrawSyncVariant::LightOnlyRetire,
-    PostDrawSyncVariant::LightPostSyncNoCs,
     PostDrawSyncVariant::LightCsNoPostSync,
+    PostDrawSyncVariant::LightPostSyncNoCs,
 ];
 
 impl PostDrawSyncVariant {

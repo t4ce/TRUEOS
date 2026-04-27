@@ -560,8 +560,9 @@ pub fn tss_base_from_gdt(gdt_base: u64, tr_sel: u16) -> Option<u64> {
 }
 
 pub fn synthesize_host_gdt_tss() -> HvSyntheticHostState {
-    let gdt = unsafe { core::ptr::addr_of_mut!(super::HV_HOST_GDT) };
-    let tss = unsafe { core::ptr::addr_of_mut!(super::HV_HOST_TSS) };
+    let slot = current_scratch_slot();
+    let gdt = unsafe { core::ptr::addr_of_mut!(super::HV_HOST_GDTS[slot]) };
+    let tss = unsafe { core::ptr::addr_of_mut!(super::HV_HOST_TSSS[slot]) };
     let tss_base = tss as u64;
     let tss_limit = (core::mem::size_of::<[u8; 104]>() as u64) - 1;
 

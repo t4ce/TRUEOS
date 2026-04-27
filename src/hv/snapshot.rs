@@ -79,10 +79,10 @@ pub fn snapshot_bytes(vm_id: u8) -> Result<Vec<u8>, SaveError> {
         exit_reason: meta.exit_reason,
         exit_qualification: meta.exit_qualification,
         exit_guest_rip: meta.exit_guest_rip,
-        guest_stack_bytes: active_guest_stack_bytes() as u64,
+        guest_stack_bytes: active_guest_stack_bytes_for_vm(vm_id) as u64,
         guest_page_bytes: PAGE_SIZE_4K as u64,
     };
-    let guest_stack = guest_stack_slice().ok_or(SaveError::NoSnapshot)?;
+    let guest_stack = guest_stack_slice_for_vm(vm_id).ok_or(SaveError::NoSnapshot)?;
 
     let total = core::mem::size_of::<VmSnapshotHeader>()
         + (GUEST_SNAPSHOT_PAGE_COUNT * PAGE_SIZE_4K)
@@ -96,18 +96,7 @@ pub fn snapshot_bytes(vm_id: u8) -> Result<Vec<u8>, SaveError> {
         )
     });
     unsafe {
-        push_guest_page(&mut out, core::ptr::addr_of!(GUEST_PML4.0));
-        push_guest_page(&mut out, core::ptr::addr_of!(GUEST_LOW_PDPT.0));
-        push_guest_page(&mut out, core::ptr::addr_of!(GUEST_LOW_PD.0));
-        for i in 0..GUEST_LOW_PT_COUNT {
-            push_guest_page(&mut out, core::ptr::addr_of!(GUEST_LOW_PTS[i].0));
-        }
-        push_guest_page(&mut out, core::ptr::addr_of!(GUEST_HIGH_PDPT.0));
-        push_guest_page(&mut out, core::ptr::addr_of!(GUEST_HIGH_PD.0));
-        for i in 0..GUEST_HIGH_IMAGE_PT_COUNT {
-            push_guest_page(&mut out, core::ptr::addr_of!(GUEST_IMAGE_PTS[i].0));
-        }
-        push_guest_page(&mut out, core::ptr::addr_of!(GUEST_CODE_PT.0));
+        push_guest_pages_for_vm(vm_id, &mut out).map_err(|_| SaveError::NoSnapshot)?;
         push_bytes(&mut out, guest_stack);
         push_bytes(
             &mut out,
@@ -139,56 +128,13 @@ pub fn restore_snapshot_bytes(vm_id: u8, bytes: &[u8]) -> Result<(), RestoreErro
     }
     let header_stack_bytes =
         usize::try_from(header.guest_stack_bytes).map_err(|_| RestoreError::BadSnapshot)?;
-    prepare_guest_stack_bytes(header_stack_bytes).map_err(|_| RestoreError::BadSnapshot)?;
+    prepare_guest_stack_bytes_for_vm(vm_id, header_stack_bytes)
+        .map_err(|_| RestoreError::BadSnapshot)?;
 
     let mut off = header_len;
     unsafe {
-        copy_into_guest_page(
-            core::ptr::addr_of_mut!(GUEST_PML4.0),
-            &bytes[off..off + PAGE_SIZE_4K],
-        );
-        off += PAGE_SIZE_4K;
-        copy_into_guest_page(
-            core::ptr::addr_of_mut!(GUEST_LOW_PDPT.0),
-            &bytes[off..off + PAGE_SIZE_4K],
-        );
-        off += PAGE_SIZE_4K;
-        copy_into_guest_page(
-            core::ptr::addr_of_mut!(GUEST_LOW_PD.0),
-            &bytes[off..off + PAGE_SIZE_4K],
-        );
-        off += PAGE_SIZE_4K;
-        for i in 0..GUEST_LOW_PT_COUNT {
-            copy_into_guest_page(
-                core::ptr::addr_of_mut!(GUEST_LOW_PTS[i].0),
-                &bytes[off..off + PAGE_SIZE_4K],
-            );
-            off += PAGE_SIZE_4K;
-        }
-        copy_into_guest_page(
-            core::ptr::addr_of_mut!(GUEST_HIGH_PDPT.0),
-            &bytes[off..off + PAGE_SIZE_4K],
-        );
-        off += PAGE_SIZE_4K;
-        copy_into_guest_page(
-            core::ptr::addr_of_mut!(GUEST_HIGH_PD.0),
-            &bytes[off..off + PAGE_SIZE_4K],
-        );
-        off += PAGE_SIZE_4K;
-        for i in 0..GUEST_HIGH_IMAGE_PT_COUNT {
-            copy_into_guest_page(
-                core::ptr::addr_of_mut!(GUEST_IMAGE_PTS[i].0),
-                &bytes[off..off + PAGE_SIZE_4K],
-            );
-            off += PAGE_SIZE_4K;
-        }
-        copy_into_guest_page(
-            core::ptr::addr_of_mut!(GUEST_CODE_PT.0),
-            &bytes[off..off + PAGE_SIZE_4K],
-        );
-        off += PAGE_SIZE_4K;
-
-        let stack_ptr = guest_stack_mut_ptr().ok_or(RestoreError::BadSnapshot)?;
+        restore_guest_pages_for_vm(vm_id, bytes, &mut off).map_err(|_| RestoreError::BadSnapshot)?;
+        let stack_ptr = guest_stack_mut_ptr_for_vm(vm_id).ok_or(RestoreError::BadSnapshot)?;
         core::ptr::copy_nonoverlapping(
             bytes[off..off + header_stack_bytes].as_ptr(),
             stack_ptr,
@@ -205,7 +151,7 @@ pub fn restore_snapshot_bytes(vm_id: u8, bytes: &[u8]) -> Result<(), RestoreErro
         return Err(RestoreError::CodeMismatch);
     }
 
-    let guest_cr3 = current_guest_cr3_pa().map_err(|_| RestoreError::BadSnapshot)?;
+    let guest_cr3 = guest_cr3_pa_for_vm(vm_id).map_err(|_| RestoreError::BadSnapshot)?;
     let restored = VmSnapshotMeta {
         guest_cr3,
         guest_rip: header.guest_rip,

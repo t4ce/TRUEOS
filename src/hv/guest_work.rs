@@ -30,15 +30,15 @@ pub struct VmLaneProfile {
 }
 
 impl VmLaneProfile {
-    /// Default placement contract for TRUEOS VM hull execution.
-    ///
-    /// Keep guest hulls on HV-reserved VM lanes only:
-    /// - never on BSP/local
-    /// - never on the AP1 UI2/service lane
-    /// - prefer AP2+ perf workers, with AP2+ fallback when needed
-    ///
-    /// This is the placement policy that future lane-indexed `vm[n]`
-    /// scheduling must preserve as we scale past the current singleton path.
+/// Default placement contract for TRUEOS VM hull execution.
+///
+/// Keep guest hulls on HV-reserved VM lanes only:
+/// - never on BSP/local
+/// - never on the AP1 UI2/service lane
+/// - use every registered AP2+ worker lane
+///
+/// This is the placement policy that lane-indexed `vm[n]` scheduling must
+/// preserve now that VMXON/VMCS backing is per CPU slot.
     pub const fn vm_default() -> Self {
         Self {
             role: VmLaneRole::VmHull,
@@ -208,28 +208,18 @@ fn pick_background_worker() -> Result<VmLaneTarget, VmLanePickError> {
 
 fn pick_reserved_vm_lane() -> Result<VmLaneTarget, VmLanePickError> {
     let pool = collect_disposable_worker_lanes();
-    let mut perf: Vec<VmLaneTarget> = Vec::new();
-    let mut fallback: Vec<VmLaneTarget> = Vec::new();
+    let mut reserved: Vec<VmLaneTarget> = Vec::new();
 
     for target in pool {
         // Slot 0 is BSP/local and slot 1 is UI2/service work.
-        // VM hull work must stay on AP2+ lanes so that hull execution and
-        // future Tokio blocking keep sharing the same carrier substrate.
+        // VM hull work owns AP2+ lanes as the host/user reserved carrier set.
         if !target.is_reserved_vm_lane() {
             continue;
         }
-        if target.core_kind == crate::workers::CORE_KIND_PERF {
-            perf.push(target);
-        } else {
-            fallback.push(target);
-        }
+        reserved.push(target);
     }
 
-    if !perf.is_empty() {
-        pick_round_robin(&perf).ok_or(VmLanePickError::MissingReservedVmLane)
-    } else {
-        pick_round_robin(&fallback).ok_or(VmLanePickError::MissingReservedVmLane)
-    }
+    pick_round_robin(&reserved).ok_or(VmLanePickError::MissingReservedVmLane)
 }
 
 fn collect_disposable_worker_lanes() -> Vec<VmLaneTarget> {
