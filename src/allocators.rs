@@ -9,7 +9,7 @@ use spin::Mutex;
 use crate::phys::{self, HeapArena};
 
 pub const FALLBACK_HEAP_SIZE: usize = 256 * 1024;
-pub const HV_GUEST_HEAP_FALLBACK_SIZE: usize = 256 * 1024;
+pub const HV_GUEST_HEAP_FALLBACK_SIZE: usize = 8 * 1024 * 1024;
 const HV_GUEST_HEAP_ALIGN: usize = 2 * 1024 * 1024;
 const HV_GUEST_HEAP_CANDIDATES: [usize; 4] = [
     128 * 1024 * 1024,

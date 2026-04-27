@@ -651,7 +651,12 @@ pub fn build_guest_cr3_with_mode(
             primary_vm_id(),
             pt_slot
         ));
-        map_guest_heap_span(guest_pml4, &mut pt_slot)?;
+        map_guest_heap_span(
+            guest_pml4,
+            &mut pt_slot,
+            mapped_code_base,
+            mapped_code_base.saturating_add(mapped_code_len),
+        )?;
         hvlogf(format_args!(
             "hv: vm{} reporting: heap map done pt_used={}",
             primary_vm_id(),
@@ -1256,7 +1261,12 @@ fn map_guest_image_span(
     Ok(())
 }
 
-fn map_guest_heap_span(pml4: *mut [u64; 512], pt_slot: &mut usize) -> Result<(), &'static str> {
+fn map_guest_heap_span(
+    pml4: *mut [u64; 512],
+    pt_slot: &mut usize,
+    image_start: u64,
+    image_end: u64,
+) -> Result<(), &'static str> {
     let heap = crate::allocators::heap_stats();
     let hv_guest_heap = crate::allocators::hv_guest_heap_stats();
     let ranges = [
@@ -1281,18 +1291,34 @@ fn map_guest_heap_span(pml4: *mut [u64; 512], pt_slot: &mut usize) -> Result<(),
     let mut heap_pd_slots = [usize::MAX; 512];
     let mut heap_pd_count = 0usize;
 
-    for (_, initialized, start, end) in ranges {
+    for (label, initialized, start, end) in ranges {
         if !initialized || start == 0 || end <= start {
+            continue;
+        }
+        if range_covered_by(start, end, image_start, image_end) {
+            hvlogf(format_args!(
+                "hv: vm{} reporting: {} already covered by image map start=0x{:016X} end=0x{:016X}",
+                primary_vm_id(),
+                label,
+                start,
+                end
+            ));
             continue;
         }
         if pml4_index(start) != pml4_index(end.saturating_sub(1)) {
             return Err("guest heap pml4 range");
+        }
+        if pml4_index(start) == pml4_index(image_start) {
+            return Err("guest heap image pml4 collision");
         }
         map_table_entry(pml4, pml4_index(start), heap_pdpt_pa);
     }
 
     for (label, initialized, start, end) in ranges {
         if !initialized || start == 0 || end <= start {
+            continue;
+        }
+        if range_covered_by(start, end, image_start, image_end) {
             continue;
         }
         let start_chunk_base = page_align_down_2m(start);
@@ -1354,6 +1380,10 @@ fn map_guest_heap_span(pml4: *mut [u64; 512], pt_slot: &mut usize) -> Result<(),
         ));
     }
     Ok(())
+}
+
+fn range_covered_by(start: u64, end: u64, cover_start: u64, cover_end: u64) -> bool {
+    start >= cover_start && end <= cover_end
 }
 
 fn read_guest_high_pt_entry(guest_va: u64, pde: u64) -> u64 {

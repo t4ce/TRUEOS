@@ -12,16 +12,15 @@ const HV_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
 const HV_MENU_ROWS: [[&str; 2]; 5] = [
     ["status", "Show VM slot and shared VM resource status"],
     ["run [id] [args...]", "Launch a blueprint in an app VM"],
-    ["pause [id]", "Alias for stop request on vm[id]"],
+    ["pause <id>", "Request vm[id] stop"],
     ["stop [id]", "Request vm[id] stop"],
     [
-        "preserve [id]",
-        "Save vm[id] snapshot to HV ramdisk TRUEOSFS",
+        "preserve <id>",
+        "Sleep vm[id] into the HV ramdisk TRUEOSFS",
     ],
 ];
 
 const HV_DEFAULT_VM_ID: u8 = 0;
-const HV_MAX_VM_ID: u8 = 10;
 
 #[inline]
 fn print_usage(io: &'static dyn ShellBackend2) {
@@ -32,26 +31,51 @@ fn line(io: &'static dyn ShellBackend2, text: &str) {
     print_shell_line(io, text);
 }
 
+fn vm_state_text(vm_id: u8) -> String {
+    let state = crate::hv::vm_state(vm_id);
+    if !state.supported {
+        return alloc::format!("vm{} unsupported", vm_id);
+    }
+    let lifecycle = if state.running {
+        "running"
+    } else if state.starting {
+        "starting"
+    } else {
+        "offline"
+    };
+    let mut suffix = String::new();
+    if state.stop_requested {
+        suffix.push_str(" stop-pending");
+    }
+    if state.preserve_requested || state.preserve_exit {
+        suffix.push_str(" preserve-pending");
+    }
+    alloc::format!("vm{} {}{}", state.id, lifecycle, suffix)
+}
+
+fn print_available_vms(io: &'static dyn ShellBackend2) {
+    line(io, "hv: available app VMs");
+    line(io, alloc::format!("hv:   {}", vm_state_text(HV_DEFAULT_VM_ID)).as_str());
+}
+
 fn parse_optional_vm_id(io: &'static dyn ShellBackend2, raw: Option<&str>) -> Option<u8> {
     let Some(token) = raw else {
+        print_available_vms(io);
         return Some(HV_DEFAULT_VM_ID);
     };
 
     let Ok(id) = token.parse::<u8>() else {
         line(
             io,
-            alloc::format!("hv: invalid vm id '{}' (expected 0..={})", token, HV_MAX_VM_ID)
-                .as_str(),
+            alloc::format!("hv: invalid vm id '{}'", token).as_str(),
         );
+        print_available_vms(io);
         return None;
     };
 
-    if id > HV_MAX_VM_ID {
-        line(
-            io,
-            alloc::format!("hv: vm id {} out of range (expected 0..={})", id, HV_MAX_VM_ID)
-                .as_str(),
-        );
+    if !crate::hv::vm_state(id).supported {
+        line(io, alloc::format!("hv: vm{} is not available yet", id).as_str());
+        print_available_vms(io);
         return None;
     }
 
@@ -205,17 +229,24 @@ pub(crate) fn try_parse(
             print_usage(io);
             return ParseOutcome::Handled;
         }
-        match crate::hv::save_snapshot(vm_id) {
-            Ok(bytes) => line(
+        match crate::hv::request_preserve(vm_id) {
+            Ok(true) => line(
                 io,
-                alloc::format!(
-                    "hv: vm{} snapshot saved store=hv-ramdisk path=vm/vm{}.snapshot bytes={}",
-                    vm_id,
-                    vm_id,
-                    bytes
-                )
-                .as_str(),
+                alloc::format!("hv: vm{} preserve requested", vm_id).as_str(),
             ),
+            Ok(false) => match crate::hv::save_snapshot(vm_id) {
+                Ok(bytes) => line(
+                    io,
+                    alloc::format!(
+                        "hv: vm{} snapshot saved store=hv-ramdisk path=vm/vm{}.snapshot bytes={}",
+                        vm_id,
+                        vm_id,
+                        bytes
+                    )
+                    .as_str(),
+                ),
+                Err(e) => line(io, alloc::format!("hv: preserve failed: {:?}", e).as_str()),
+            },
             Err(e) => line(io, alloc::format!("hv: preserve failed: {:?}", e).as_str()),
         }
         return ParseOutcome::Handled;

@@ -292,6 +292,7 @@ fn encode_triangle_probe_batch(
     streamout_experiment: StreamoutProofExperiment,
     front_end_contract: TriangleFrontEndContract,
     backend_probe_mode: BackendProbeMode,
+    post_draw_sync_variant: PostDrawSyncVariant,
 ) -> Result<usize, &'static str> {
     let mut cursor = 0usize;
     let vf_synthesized_vue = matches!(batch_mode, TriangleBatchMode::VfDraw);
@@ -1238,15 +1239,35 @@ fn encode_triangle_probe_batch(
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
 
-    log_batch_offset(cursor, "PIPE_CONTROL post-3d-eop-sync");
+    log_batch_offset(cursor, "PIPE_CONTROL post-3d-light-marker");
     push_pipe_control_post_sync_imm(
         batch_dwords,
         &mut cursor,
         0,
-        PIPE_CONTROL_POST_DRAW_SYNC_BITS,
-        result_gpu_addr + (RESULT_SLOT_POST3D_PIPE_CONTROL_LO_DWORD as u64) * 4,
+        PIPE_CONTROL_POST_DRAW_LIGHT_SYNC_BITS,
+        result_gpu_addr + (RESULT_SLOT_POST3D_LIGHT_PIPE_CONTROL_LO_DWORD as u64) * 4,
         post3d_value,
     )?;
+
+    log_batch_offset(cursor, "MI_STORE_DATA_IMM final-after-light");
+    push_store_data_imm(
+        batch_dwords,
+        &mut cursor,
+        result_gpu_addr + (RESULT_SLOT_FINAL_AFTER_LIGHT_DWORD as u64) * 4,
+        RCS_EXEC_RESULT_DRAW_FINAL_AFTER_LIGHT,
+    )?;
+
+    if let Some(heavy_sync_flags) = post_draw_sync_variant.heavy_sync_flags() {
+        log_batch_offset(cursor, "PIPE_CONTROL post-3d-heavy-sync");
+        push_pipe_control_post_sync_imm(
+            batch_dwords,
+            &mut cursor,
+            0,
+            heavy_sync_flags,
+            result_gpu_addr + (RESULT_SLOT_POST3D_PIPE_CONTROL_LO_DWORD as u64) * 4,
+            post3d_value,
+        )?;
+    }
 
     log_batch_offset(cursor, "MI_STORE_DATA_IMM final");
     push_store_data_imm(
@@ -1451,7 +1472,7 @@ fn encode_triangle_probe_batch(
         ps_dispatch_32,
     );
     intel_render_verbose_log!(
-        "intel/render: 3dprimitive-setup mode={:?} topo={} vertices={} start_vertex=0 instances={} start_instance=0 base_vertex=0 vb=0x{:X} stride={} rt=0x{:X} pitch=0x{:X} rect={}x{}\n",
+        "intel/render: 3dprimitive-setup mode={:?} topo={} vertices={} start_vertex=0 instances={} start_instance=0 base_vertex=0 vb=0x{:X} stride={} rt=0x{:X} pitch=0x{:X} rect={}x{} postdraw_sync={}\n",
         batch_mode,
         primitive_topology_label(batch_mode.topology()),
         draw.vertex_count,
@@ -1461,7 +1482,8 @@ fn encode_triangle_probe_batch(
         draw.rt_gpu_addr,
         draw.rt_pitch,
         draw.target_w,
-        draw.target_h
+        draw.target_h,
+        post_draw_sync_variant.label(),
     );
 
     Ok(cursor * core::mem::size_of::<u32>())
@@ -2119,7 +2141,24 @@ fn encode_minimal_streamout_proof_batch(
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
 
-    log_batch_offset(cursor, "PIPE_CONTROL post-3d-eop-sync");
+    log_batch_offset(cursor, "PIPE_CONTROL post-3d-light-marker");
+    push_pipe_control_post_sync_imm(
+        batch_dwords,
+        &mut cursor,
+        PIPE_CONTROL_POST_DRAW_LIGHT_SYNC_BITS,
+        result_gpu_addr + (RESULT_SLOT_POST3D_LIGHT_PIPE_CONTROL_LO_DWORD as u64) * 4,
+        post3d_value,
+    )?;
+
+    log_batch_offset(cursor, "MI_STORE_DATA_IMM final-after-light");
+    push_store_data_imm(
+        batch_dwords,
+        &mut cursor,
+        result_gpu_addr + (RESULT_SLOT_FINAL_AFTER_LIGHT_DWORD as u64) * 4,
+        RCS_EXEC_RESULT_DRAW_FINAL_AFTER_LIGHT,
+    )?;
+
+    log_batch_offset(cursor, "PIPE_CONTROL post-3d-heavy-sync");
     push_pipe_control_post_sync_imm(
         batch_dwords,
         &mut cursor,
@@ -2140,7 +2179,7 @@ fn encode_minimal_streamout_proof_batch(
     push(batch_dwords, &mut cursor, MI_NOOP)?;
 
     intel_render_verbose_log!(
-        "intel/render: 3dprimitive-setup mode={:?} topo={} vertices={} start_vertex=0 instances=1 start_instance=0 base_vertex=0 vb=0x{:X} stride={} rt=0x{:X} pitch=0x{:X} rect={}x{}\n",
+        "intel/render: 3dprimitive-setup mode={:?} topo={} vertices={} start_vertex=0 instances=1 start_instance=0 base_vertex=0 vb=0x{:X} stride={} rt=0x{:X} pitch=0x{:X} rect={}x{} postdraw_sync={}\n",
         batch_mode,
         primitive_topology_label(batch_mode.topology()),
         draw.vertex_count,
@@ -2149,7 +2188,8 @@ fn encode_minimal_streamout_proof_batch(
         draw.rt_gpu_addr,
         draw.rt_pitch,
         draw.target_w,
-        draw.target_h
+        draw.target_h,
+        PostDrawSyncVariant::HeavyAll.label(),
     );
 
     Ok(cursor * core::mem::size_of::<u32>())

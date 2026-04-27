@@ -74,7 +74,9 @@ static trueos_vm_ids: [TrueosVmId; TRUEOS_VM_ID_LIMIT] =
     [const { TrueosVmId::new() }; TRUEOS_VM_ID_LIMIT];
 static CURRENT_VM_ID_BY_CPU: [AtomicU8; TRUEOS_VM_CPU_SLOT_LIMIT] =
     [const { AtomicU8::new(0) }; TRUEOS_VM_CPU_SLOT_LIMIT];
+static VMX_SINGLETON_ACTIVE: AtomicBool = AtomicBool::new(false);
 static HV_LOG_SEQ: AtomicU64 = AtomicU64::new(0);
+static HV_CONTROL_NUDGE_SEQ: AtomicU64 = AtomicU64::new(1);
 static VM_BOOT_MODE: Mutex<VmBootMode> = Mutex::new(VmBootMode::Hull);
 static BLUEPRINT_LAUNCH_STATES: [Mutex<Option<BlueprintLaunchState>>; TRUEOS_VM_ID_LIMIT] =
     [const { Mutex::new(None) }; TRUEOS_VM_ID_LIMIT];
@@ -88,12 +90,61 @@ struct HvLogEntry {
 
 static HV_LOG_RING: Mutex<Deque<HvLogEntry, HV_LOG_CAP>> = Mutex::new(Deque::new());
 
-pub static mut VMXON_REGION: VmxPage = VmxPage([0u8; VMX_PAGE_SIZE]);
-pub static mut VMCS_REGION: VmxPage = VmxPage([0u8; VMX_PAGE_SIZE]);
+pub static mut VMXON_REGIONS: [VmxPage; TRUEOS_VM_CPU_SLOT_LIMIT] =
+    [const { VmxPage([0u8; VMX_PAGE_SIZE]) }; TRUEOS_VM_CPU_SLOT_LIMIT];
+pub static mut VMCS_REGIONS: [VmxPage; TRUEOS_VM_CPU_SLOT_LIMIT] =
+    [const { VmxPage([0u8; VMX_PAGE_SIZE]) }; TRUEOS_VM_CPU_SLOT_LIMIT];
 pub static mut HV_HOST_GDT: [u64; 8] = [0u64; 8];
 pub static mut HV_HOST_TSS: [u8; 104] = [0u8; 104];
 
 pub use snapshot::{RestoreError, SaveError};
+
+fn current_vmx_slot() -> usize {
+    let slot = crate::percpu::current_slot_via_cpuid();
+    if slot < TRUEOS_VM_CPU_SLOT_LIMIT {
+        slot
+    } else {
+        0
+    }
+}
+
+fn current_vmx_pages() -> (*mut u8, *mut u8) {
+    let slot = current_vmx_slot();
+    unsafe {
+        (
+            core::ptr::addr_of_mut!(VMXON_REGIONS[slot].0) as *mut u8,
+            core::ptr::addr_of_mut!(VMCS_REGIONS[slot].0) as *mut u8,
+        )
+    }
+}
+
+fn hv_control_nudge_ap(arg: u64) -> u64 {
+    let vm_id = arg as u8;
+    let Some(vm) = vm_slot(vm_id) else {
+        return 0;
+    };
+    let current = current_vm_id();
+    let has_request = vm.stop_req.load(Ordering::Acquire)
+        || vm.preserve_req.load(Ordering::Acquire)
+        || vm.preserve_exit.load(Ordering::Acquire);
+    let on_vm_lane = current == Some(vm_id);
+    ((on_vm_lane as u64) << 1) | has_request as u64
+}
+
+fn nudge_vm_control(vm_id: u8, reason: &'static str) {
+    let seq = HV_CONTROL_NUDGE_SEQ.fetch_add(1, Ordering::Relaxed);
+    let report = crate::smp::submit_to_all_online_aps(hv_control_nudge_ap, vm_id as u64);
+    hvlogf(format_args!(
+        "hv: vm{} lifecycle: {} nudge soft-smp seq={} smp_seq={} targeted={} submitted={} busy={}",
+        vm_id,
+        reason,
+        seq,
+        report.seq,
+        report.targeted_aps,
+        report.submitted_aps,
+        report.busy_aps
+    ));
+}
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum StartError {
@@ -154,6 +205,17 @@ pub struct HvStatus {
     pub vm_shared_vmx_bytes: usize,
 }
 
+#[derive(Copy, Clone, Debug)]
+pub struct HvVmState {
+    pub id: u8,
+    pub supported: bool,
+    pub running: bool,
+    pub starting: bool,
+    pub stop_requested: bool,
+    pub preserve_requested: bool,
+    pub preserve_exit: bool,
+}
+
 #[inline]
 fn primary_vm_id() -> u8 {
     VM1_ID
@@ -165,12 +227,14 @@ fn vm_slot(vm_id: u8) -> Option<&'static TrueosVmId> {
 }
 
 pub fn first_free_vm_id() -> Option<u8> {
-    for (idx, slot) in trueos_vm_ids.iter().enumerate() {
-        if !slot.running.load(Ordering::Acquire) && !slot.starting.load(Ordering::Acquire) {
-            return Some(idx as u8);
-        }
+    if VMX_SINGLETON_ACTIVE.load(Ordering::Acquire) {
+        return None;
     }
-    None
+    let slot = vm_slot(VM1_ID)?;
+    if slot.running.load(Ordering::Acquire) || slot.starting.load(Ordering::Acquire) {
+        return None;
+    }
+    Some(VM1_ID)
 }
 
 fn vm_activity_snapshot() -> (usize, usize, [Option<u8>; TRUEOS_VM_ID_LIMIT]) {
@@ -193,6 +257,29 @@ fn vm_activity_snapshot() -> (usize, usize, [Option<u8>; TRUEOS_VM_ID_LIMIT]) {
     }
 
     (running_count, starting_count, active_vm_ids)
+}
+
+pub fn vm_state(vm_id: u8) -> HvVmState {
+    let Some(vm) = vm_slot(vm_id) else {
+        return HvVmState {
+            id: vm_id,
+            supported: false,
+            running: false,
+            starting: false,
+            stop_requested: false,
+            preserve_requested: false,
+            preserve_exit: false,
+        };
+    };
+    HvVmState {
+        id: vm_id,
+        supported: vm_id == VM1_ID,
+        running: vm.running.load(Ordering::Acquire),
+        starting: vm.starting.load(Ordering::Acquire),
+        stop_requested: vm.stop_req.load(Ordering::Acquire),
+        preserve_requested: vm.preserve_req.load(Ordering::Acquire),
+        preserve_exit: vm.preserve_exit.load(Ordering::Acquire),
+    }
 }
 
 pub(crate) fn current_vm_id() -> Option<u8> {
@@ -291,7 +378,7 @@ pub fn status() -> HvStatus {
         vm_shared_heap_total_bytes: vm_heap.usable_total,
         vm_shared_heap_free_bytes: vm_heap.free_bytes,
         vm_shared_stack_bytes: memory::active_guest_stack_bytes(),
-        vm_shared_vmx_bytes: core::mem::size_of::<VmxPage>() * 2,
+        vm_shared_vmx_bytes: core::mem::size_of::<VmxPage>() * 2 * TRUEOS_VM_CPU_SLOT_LIMIT,
     }
 }
 
@@ -323,12 +410,20 @@ fn start_with_mode(
         return Err(StartError::UnsupportedVmId);
     };
 
+    if VMX_SINGLETON_ACTIVE
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return Err(StartError::AlreadyRunning);
+    }
+
     if vm.running.load(Ordering::Acquire)
         || vm
             .starting
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_err()
     {
+        VMX_SINGLETON_ACTIVE.store(false, Ordering::Release);
         return Err(StartError::AlreadyRunning);
     }
 
@@ -361,11 +456,13 @@ fn start_with_mode(
         let r1 = __cpuid(1);
         hvlogf(format_args!("hv: cpuid1 ecx=0x{:X} edx=0x{:X}", r1.ecx, r1.edx));
         vm.starting.store(false, Ordering::Release);
+        VMX_SINGLETON_ACTIVE.store(false, Ordering::Release);
         return Err(StartError::VmxUnsupported);
     }
 
     if boot_mode == VmBootMode::Full && crate::limine::guest_kernel_bytes().is_none() {
         vm.starting.store(false, Ordering::Release);
+        VMX_SINGLETON_ACTIVE.store(false, Ordering::Release);
         return Err(StartError::MissingGuestModule);
     }
 
@@ -373,6 +470,7 @@ fn start_with_mode(
     let active_stack_mb = memory::clamp_guest_stack_mb(requested_stack_mb);
     if memory::prepare_guest_stack_mb(active_stack_mb).is_err() {
         vm.starting.store(false, Ordering::Release);
+        VMX_SINGLETON_ACTIVE.store(false, Ordering::Release);
         return Err(StartError::GuestMemoryUnavailable);
     }
 
@@ -387,6 +485,7 @@ fn start_with_mode(
         Ok(target) => target,
         Err(error) => {
             vm.starting.store(false, Ordering::Release);
+            VMX_SINGLETON_ACTIVE.store(false, Ordering::Release);
             hvlogf(format_args!(
                 "hv: vm{} lane pick failed: role={} placement={} reason={}",
                 vm_id,
@@ -403,6 +502,7 @@ fn start_with_mode(
     // and never on the first AP service lane.
     if !profile.requires_reserved_vm_lane() || !target.supports(profile) {
         vm.starting.store(false, Ordering::Release);
+        VMX_SINGLETON_ACTIVE.store(false, Ordering::Release);
         hvlogf(format_args!(
             "hv: vm{} lane rejected: role={} placement={} slot={} requires reserved VM lane on AP>2",
             vm_id,
@@ -428,6 +528,7 @@ fn start_with_mode(
         Ok(token) => target.spawner.spawn(token),
         Err(_) => {
             vm.starting.store(false, Ordering::Release);
+            VMX_SINGLETON_ACTIVE.store(false, Ordering::Release);
             return Err(StartError::SpawnFailed);
         }
     }
@@ -442,11 +543,33 @@ pub fn stop(vm_id: u8) -> Result<bool, StopError> {
     if vm.running.load(Ordering::Acquire) || vm.starting.load(Ordering::Acquire) {
         vm.stop_req.store(true, Ordering::Release);
         hvlogf(format_args!("hv: vm{} lifecycle: stop requested", vm_id));
+        nudge_vm_control(vm_id, "stop");
         Ok(true)
     } else {
         hvlogf(format_args!("hv: vm{} lifecycle: stop ignored (not running)", vm_id));
         Ok(false)
     }
+}
+
+pub fn request_preserve(vm_id: u8) -> Result<bool, StopError> {
+    let Some(vm) = vm_slot(vm_id) else {
+        return Err(StopError::UnsupportedVmId);
+    };
+    if vm_id != VM1_ID {
+        return Err(StopError::UnsupportedVmId);
+    }
+
+    let running = vm.running.load(Ordering::Acquire);
+    let starting = vm.starting.load(Ordering::Acquire);
+    if !running && !starting {
+        hvlogf(format_args!("hv: vm{} lifecycle: preserve ignored (not running)", vm_id));
+        return Ok(false);
+    }
+
+    vm.preserve_req.store(true, Ordering::Release);
+    hvlogf(format_args!("hv: vm{} lifecycle: preserve requested", vm_id));
+    nudge_vm_control(vm_id, "preserve");
+    Ok(true)
 }
 
 pub fn save_snapshot(vm_id: u8) -> Result<usize, SaveError> {
@@ -547,16 +670,7 @@ pub fn guest_boot_active() -> bool {
 }
 
 pub fn request_preserve_vm1() -> bool {
-    let Some(vm) = vm_slot(VM1_ID) else {
-        return false;
-    };
-    let running = vm.running.load(Ordering::Acquire);
-    let starting = vm.starting.load(Ordering::Acquire);
-    if !running && !starting {
-        return false;
-    }
-    vm.preserve_req.store(true, Ordering::Release);
-    true
+    request_preserve(VM1_ID).unwrap_or(false)
 }
 
 pub fn stage_blueprint_launch(vm_id: u8, state: BlueprintLaunchState) -> Result<(), StartError> {
@@ -779,6 +893,7 @@ async fn vm_task(vm_id: u8) {
     vm.preserve_req.store(false, Ordering::Release);
     vm.preserve_exit.store(false, Ordering::Release);
     let _ = take_blueprint_launch(vm_id);
+    VMX_SINGLETON_ACTIVE.store(false, Ordering::Release);
     hvlogf(format_args!("hv: vm{} lifecycle: stopped", vm_id));
 }
 
@@ -840,8 +955,7 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
     let basic = unsafe { Msr::new(crate::hv::vmx::IA32_VMX_BASIC).read() };
     let revision = (basic & 0x7fff_ffff) as u32;
 
-    let vmxon_va = unsafe { core::ptr::addr_of_mut!(VMXON_REGION.0) } as *mut u8;
-    let vmcs_va = unsafe { core::ptr::addr_of_mut!(VMCS_REGION.0) } as *mut u8;
+    let (vmxon_va, vmcs_va) = current_vmx_pages();
     unsafe {
         core::ptr::write_bytes(vmxon_va, 0, VMX_PAGE_SIZE);
         core::ptr::write_bytes(vmcs_va, 0, VMX_PAGE_SIZE);
@@ -892,6 +1006,18 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
     let mut cpuid_other_count = 0u32;
     let mut first = true;
     loop {
+        crate::smp::poll();
+        if vm
+            .map(|vm| vm.stop_req.load(Ordering::Acquire))
+            .unwrap_or(false)
+        {
+            hvlogf(format_args!(
+                "hv: vm{} reporting: host stop request consumed before guest entry/resume",
+                vm_id
+            ));
+            break;
+        }
+
         if first {
             if let Some(vm) = vm {
                 vm.guest_boot_armed.store(true, Ordering::Release);
@@ -1079,6 +1205,16 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
             }
             hvlogf(format_args!(
                 "hv: vm{} reporting: host preserve request armed at rip=0x{:016X}",
+                vm_id, lr.guest_rip
+            ));
+            break;
+        }
+        if vm
+            .map(|vm| vm.stop_req.load(Ordering::Acquire))
+            .unwrap_or(false)
+        {
+            hvlogf(format_args!(
+                "hv: vm{} reporting: host stop request consumed at rip=0x{:016X}",
                 vm_id, lr.guest_rip
             ));
             break;
@@ -1640,8 +1776,7 @@ fn vmx_smoke() -> Result<(), &'static str> {
     let basic = unsafe { Msr::new(vmx::IA32_VMX_BASIC).read() };
     let revision = (basic & 0x7fff_ffff) as u32;
 
-    let vmxon_va = unsafe { core::ptr::addr_of_mut!(VMXON_REGION.0) } as *mut u8;
-    let vmcs_va = unsafe { core::ptr::addr_of_mut!(VMCS_REGION.0) } as *mut u8;
+    let (vmxon_va, vmcs_va) = current_vmx_pages();
     unsafe {
         core::ptr::write_bytes(vmxon_va, 0, VMX_PAGE_SIZE);
         core::ptr::write_bytes(vmcs_va, 0, VMX_PAGE_SIZE);

@@ -223,6 +223,7 @@ fn submit_primary_triangle_with_retries(
         TriangleBlendProbeMode::ExplicitRt0,
         VfPrimitiveGeometry::Canonical,
         BackendProbeMode::MesaLike,
+        PostDrawSyncVariant::HeavyAll,
     );
     intel_render_verbose_log!(
         "intel/render: primary-vf-draw-precheck completed={}\n",
@@ -244,6 +245,7 @@ fn submit_primary_triangle_with_retries(
         TriangleBlendProbeMode::ExplicitRt0,
         VfPrimitiveGeometry::Oversized,
         BackendProbeMode::MesaLike,
+        PostDrawSyncVariant::HeavyAll,
     );
     intel_render_verbose_log!(
         "intel/render: primary-ps-launch-big-primitive completed={}\n",
@@ -252,6 +254,9 @@ fn submit_primary_triangle_with_retries(
     if ps_launch_big_primitive {
         return true;
     }
+
+    run_postdraw_flush_spectrum(dev, warm, surface_gpu, pitch_bytes, width, height);
+
     let fragment_candidate_ready = fragment_candidate_ready();
     let fragment_boundary_observed = fragment_boundary_observed();
     intel_render_focus_log!(
@@ -279,6 +284,7 @@ fn submit_primary_triangle_with_retries(
         TriangleBlendProbeMode::ExplicitRt0,
         VfPrimitiveGeometry::Oversized,
         BackendProbeMode::PsBindingTableCountOne,
+        PostDrawSyncVariant::HeavyAll,
     );
     intel_render_verbose_log!(
         "intel/render: primary-ps-bt1-big-primitive completed={}\n",
@@ -299,6 +305,7 @@ fn submit_primary_triangle_with_retries(
         TriangleBlendProbeMode::ExplicitRt0,
         VfPrimitiveGeometry::Oversized,
         BackendProbeMode::WmNormalDispatch,
+        PostDrawSyncVariant::HeavyAll,
     );
     intel_render_verbose_log!(
         "intel/render: primary-ps-wm-normal-big-primitive completed={}\n",
@@ -319,6 +326,7 @@ fn submit_primary_triangle_with_retries(
         TriangleBlendProbeMode::ExplicitRt0,
         VfPrimitiveGeometry::Oversized,
         BackendProbeMode::PsDispatchSlot0,
+        PostDrawSyncVariant::HeavyAll,
     );
     intel_render_verbose_log!(
         "intel/render: primary-ps-dispatch-slot0-big-primitive completed={}\n",
@@ -339,6 +347,7 @@ fn submit_primary_triangle_with_retries(
         TriangleBlendProbeMode::ExplicitRt0,
         VfPrimitiveGeometry::Oversized,
         BackendProbeMode::PsDispatchSlot1,
+        PostDrawSyncVariant::HeavyAll,
     );
     intel_render_verbose_log!(
         "intel/render: primary-ps-dispatch-slot1-big-primitive completed={}\n",
@@ -359,6 +368,7 @@ fn submit_primary_triangle_with_retries(
         TriangleBlendProbeMode::ExplicitRt0,
         VfPrimitiveGeometry::Oversized,
         BackendProbeMode::PsDispatchSlot2,
+        PostDrawSyncVariant::HeavyAll,
     );
     intel_render_verbose_log!(
         "intel/render: primary-ps-dispatch-slot2-big-primitive completed={}\n",
@@ -387,6 +397,7 @@ fn submit_primary_triangle_with_retries(
             TriangleBlendProbeMode::ExplicitRt0,
             VfPrimitiveGeometry::Oversized,
             payload_mode,
+            PostDrawSyncVariant::HeavyAll,
         );
         intel_render_verbose_log!(
             "intel/render: primary-{} completed={}\n",
@@ -417,6 +428,7 @@ fn submit_primary_triangle_with_retries(
             TriangleBlendProbeMode::ExplicitRt0,
             VfPrimitiveGeometry::Oversized,
             grf_mode,
+            PostDrawSyncVariant::HeavyAll,
         );
         intel_render_verbose_log!(
             "intel/render: primary-{} completed={}\n",
@@ -439,6 +451,7 @@ fn submit_primary_triangle_with_retries(
         TriangleBlendProbeMode::ExplicitRt0,
         VfPrimitiveGeometry::Oversized,
         BackendProbeMode::PsDispatchAllKspSlots,
+        PostDrawSyncVariant::HeavyAll,
     );
     intel_render_verbose_log!(
         "intel/render: primary-ps-dispatch-all-big-primitive completed={}\n",
@@ -551,6 +564,38 @@ fn submit_primary_triangle_with_retries(
         }
     }
     completed_any
+}
+
+fn run_postdraw_flush_spectrum(
+    dev: crate::intel::Dev,
+    warm: RenderWarmState,
+    surface_gpu: u64,
+    pitch_bytes: usize,
+    width: usize,
+    height: usize,
+) {
+    for variant in POST_DRAW_FLUSH_SPECTRUM {
+        let submit_name = variant.submit_name();
+        let completed = submit_triangle_vf_draw_to_surface(
+            submit_name,
+            dev,
+            warm,
+            surface_gpu,
+            pitch_bytes,
+            width,
+            height,
+            TriangleBlendProbeMode::ExplicitRt0,
+            VfPrimitiveGeometry::Canonical,
+            BackendProbeMode::MesaLike,
+            variant,
+        );
+        intel_render_focus_log!(
+            "intel/render: postdraw-flush-spectrum submit={} variant={} completed={} note=diagnostic_only\n",
+            submit_name,
+            variant.label(),
+            completed as u8,
+        );
+    }
 }
 
 fn submit_triangle_vf_streamout_proof(
@@ -672,6 +717,7 @@ fn submit_triangle_vf_draw_to_surface(
     blend_mode: TriangleBlendProbeMode,
     geometry: VfPrimitiveGeometry,
     backend_probe_mode: BackendProbeMode,
+    post_draw_sync_variant: PostDrawSyncVariant,
 ) -> bool {
     let Some(draw) = prepare_vf_streamout_proof_resources(
         warm,
@@ -717,7 +763,7 @@ fn submit_triangle_vf_draw_to_surface(
     }
 
     intel_render_verbose_log!(
-        "intel/render: {} ps-meta dispatch={:?} grf_start={} grf_used={} ksp_off=0x{:X} size={} header_only={} geometry={} backend={} note={}\n",
+        "intel/render: {} ps-meta dispatch={:?} grf_start={} grf_used={} ksp_off=0x{:X} size={} header_only={} geometry={} backend={} postdraw_sync={} note={}\n",
         submit_name,
         pipeline.ps.meta.kernel.dispatch_mode,
         pipeline.ps.meta.kernel.grf_start_register,
@@ -728,6 +774,7 @@ fn submit_triangle_vf_draw_to_surface(
             && pipeline.ps.meta.kernel.push_constant_bytes == 0) as u8,
         geometry.label(),
         backend_probe_mode.label(),
+        post_draw_sync_variant.label(),
         crate::intel::shader::triangle_pipeline_note()
     );
     if geometry.fullscreen_candidate() {
@@ -879,6 +926,7 @@ fn submit_triangle_vf_draw_to_surface(
         StreamoutProofExperiment::PositionSlot1,
         TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
         backend_probe_mode,
+        post_draw_sync_variant,
     ) {
         Ok(bytes) => bytes,
         Err(reason) => {
@@ -1137,6 +1185,7 @@ fn submit_triangle_streamout_proof(
         experiment,
         TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
         BackendProbeMode::MesaLike,
+        PostDrawSyncVariant::HeavyAll,
     ) {
         Ok(bytes) => bytes,
         Err(reason) => {
@@ -1464,6 +1513,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface(
         StreamoutProofExperiment::PositionSlot1,
         front_end_contract,
         BackendProbeMode::MesaLike,
+        PostDrawSyncVariant::HeavyAll,
     ) {
         Ok(bytes) => bytes,
         Err(reason) => {
