@@ -235,6 +235,16 @@ unsafe extern "C" {
     pub fn trueos_cabi_gfx_trace_set_enabled(enabled: u32) -> u32;
     pub fn trueos_cabi_gfx_trace_clear();
     pub fn trueos_cabi_gfx_trace_snapshot(out_ptr: *mut TrueosGfxTraceEntry, out_cap: u32) -> u32;
+    pub fn trueos_cabi_gfx_upload_texture_png(
+        tex_id: u32,
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> i32;
+    pub fn trueos_cabi_gfx_upload_texture_jpeg(
+        tex_id: u32,
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> i32;
     pub fn trueos_cabi_gfx_upload_texture_svg(
         tex_id: u32,
         data_ptr: *const u8,
@@ -244,6 +254,16 @@ unsafe extern "C" {
         tex_id: u32,
         width: u32,
         height: u32,
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> i32;
+    pub fn trueos_cabi_gfx_upload_texture_png_async(
+        tex_id: u32,
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> i32;
+    pub fn trueos_cabi_gfx_upload_texture_jpeg_async(
+        tex_id: u32,
         data_ptr: *const u8,
         data_len: usize,
     ) -> i32;

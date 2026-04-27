@@ -43,6 +43,48 @@ pub fn gfx_trace_snapshot(max_entries: u32) -> Vec<TrueosGfxTraceEntry> {
 }
 
 #[inline]
+pub fn upload_png_to_texture(tex_id: u32, png: &[u8]) -> i32 {
+    if png.is_empty() {
+        return -1;
+    }
+    unsafe { vcabi::trueos_cabi_gfx_upload_texture_png(tex_id, png.as_ptr(), png.len()) }
+}
+
+#[inline]
+pub fn upload_png_to_texture_async(tex_id: u32, png: &[u8]) -> i32 {
+    if png.is_empty() {
+        return -1;
+    }
+    unsafe { vcabi::trueos_cabi_gfx_upload_texture_png_async(tex_id, png.as_ptr(), png.len()) }
+}
+
+#[inline]
+pub fn probe_upload_png_to_texture_async(tex_id: u32) -> i32 {
+    unsafe { vcabi::trueos_cabi_gfx_upload_texture_png_async(tex_id, core::ptr::null(), 0) }
+}
+
+#[inline]
+pub fn upload_jpeg_to_texture(tex_id: u32, jpeg: &[u8]) -> i32 {
+    if jpeg.is_empty() {
+        return -1;
+    }
+    unsafe { vcabi::trueos_cabi_gfx_upload_texture_jpeg(tex_id, jpeg.as_ptr(), jpeg.len()) }
+}
+
+#[inline]
+pub fn upload_jpeg_to_texture_async(tex_id: u32, jpeg: &[u8]) -> i32 {
+    if jpeg.is_empty() {
+        return -1;
+    }
+    unsafe { vcabi::trueos_cabi_gfx_upload_texture_jpeg_async(tex_id, jpeg.as_ptr(), jpeg.len()) }
+}
+
+#[inline]
+pub fn probe_upload_jpeg_to_texture_async(tex_id: u32) -> i32 {
+    unsafe { vcabi::trueos_cabi_gfx_upload_texture_jpeg_async(tex_id, core::ptr::null(), 0) }
+}
+
+#[inline]
 pub fn upload_svg_to_texture(tex_id: u32, svg: &[u8]) -> i32 {
     if svg.is_empty() {
         return -1;

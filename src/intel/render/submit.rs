@@ -1401,6 +1401,11 @@ fn log_triangle_stage_frontier(
         };
     let note = if post_draw_before_light == 0 {
         "draw_did_not_reach_pre_light_pc_marker"
+    } else if light_post_sync_expected
+        && post_draw_light == 0
+        && post_draw_final_after_light != 0
+    {
+        "tail_retired_without_light_postsync_write"
     } else if light_post_sync_expected && post_draw_light == 0 {
         "draw_not_retired_before_light_sync"
     } else if post_draw_final_after_light == 0 {

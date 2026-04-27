@@ -166,7 +166,7 @@ pub fn register_current_profile() -> Option<CpuProfile> {
 pub fn register_current_worker_spawner(spawner: Spawner) -> Option<CpuProfile> {
     let profile = register_current_profile()?;
     profile.register_worker_spawner(spawner);
-    if profile.slot() > 2 {
+    if profile.slot() > 1 {
         crate::r::readiness::set(crate::r::readiness::BACKGROUND_AP_WORKER_READY);
     }
     Some(profile)
