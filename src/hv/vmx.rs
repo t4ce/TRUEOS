@@ -153,6 +153,7 @@ pub const HV_GDT_SEL_TSS: u16 = 0x18;
 pub const HV_GDT_DESC_CODE64: u64 = 0x00AF_9B00_0000_FFFF;
 pub const HV_GDT_DESC_DATA64: u64 = 0x00AF_9300_0000_FFFF;
 
+#[derive(Copy, Clone)]
 #[repr(C, align(4096))]
 pub struct VmxPage(pub [u8; 4096]);
 
@@ -195,7 +196,9 @@ pub struct HvSyntheticHostState {
     pub data_sel: u16,
 }
 
-static mut VMX_WRAPPER_RESULT: LaunchResult = LaunchResult {
+const VMX_SCRATCH_SLOTS: usize = crate::allcaps::hv::VM_CPU_SLOT_LIMIT;
+
+const EMPTY_LAUNCH_RESULT: LaunchResult = LaunchResult {
     entered: 0,
     launch_failed: 0,
     _pad: [0; 6],
@@ -205,7 +208,7 @@ static mut VMX_WRAPPER_RESULT: LaunchResult = LaunchResult {
     instr_err: 0,
 };
 
-static mut VMX_GUEST_REGS: GuestRegisters = GuestRegisters {
+const EMPTY_GUEST_REGISTERS: GuestRegisters = GuestRegisters {
     rax: 0,
     rbx: 0,
     rcx: 0,
@@ -223,19 +226,37 @@ static mut VMX_GUEST_REGS: GuestRegisters = GuestRegisters {
     r15: 0,
 };
 
+static mut VMX_WRAPPER_RESULTS: [LaunchResult; VMX_SCRATCH_SLOTS] =
+    [EMPTY_LAUNCH_RESULT; VMX_SCRATCH_SLOTS];
+static mut VMX_GUEST_REGS_BY_SLOT: [GuestRegisters; VMX_SCRATCH_SLOTS] =
+    [EMPTY_GUEST_REGISTERS; VMX_SCRATCH_SLOTS];
+
+fn current_scratch_slot() -> usize {
+    let slot = crate::percpu::current_slot_via_cpuid();
+    if slot < VMX_SCRATCH_SLOTS { slot } else { 0 }
+}
+
+fn wrapper_result_ptr() -> *mut LaunchResult {
+    unsafe { core::ptr::addr_of_mut!(VMX_WRAPPER_RESULTS[current_scratch_slot()]) }
+}
+
+fn guest_regs_ptr() -> *mut GuestRegisters {
+    unsafe { core::ptr::addr_of_mut!(VMX_GUEST_REGS_BY_SLOT[current_scratch_slot()]) }
+}
+
 pub fn reset_guest_registers() {
     unsafe {
-        VMX_GUEST_REGS = GuestRegisters::default();
+        guest_regs_ptr().write(EMPTY_GUEST_REGISTERS);
     }
 }
 
 pub fn guest_registers() -> GuestRegisters {
-    unsafe { VMX_GUEST_REGS }
+    unsafe { guest_regs_ptr().read() }
 }
 
 pub fn set_guest_registers(regs: GuestRegisters) {
     unsafe {
-        VMX_GUEST_REGS = regs;
+        guest_regs_ptr().write(regs);
     }
 }
 
@@ -572,7 +593,9 @@ pub fn synthesize_host_gdt_tss() -> HvSyntheticHostState {
 
 pub fn vmlaunch_once_wrapper(out: &mut LaunchResult) {
     unsafe {
-        VMX_WRAPPER_RESULT = LaunchResult::default();
+        let result_ptr = wrapper_result_ptr();
+        let guest_regs_ptr = guest_regs_ptr();
+        result_ptr.write(EMPTY_LAUNCH_RESULT);
         core::arch::asm!(
             "push rbx",
             "push rbp",
@@ -586,7 +609,7 @@ pub fn vmlaunch_once_wrapper(out: &mut LaunchResult) {
             "lea rax, [rip + 2f]",
             "mov rcx, {host_rip_field}",
             "vmwrite rcx, rax",
-            "lea r10, [rip + {guest_regs_base}]",
+            "mov r10, {guest_regs_base}",
             "mov rax, [r10 + {guest_rax_off}]",
             "mov rbx, [r10 + {guest_rbx_off}]",
             "mov rcx, [r10 + {guest_rcx_off}]",
@@ -605,7 +628,7 @@ pub fn vmlaunch_once_wrapper(out: &mut LaunchResult) {
 
             "vmlaunch",
             "setna al",
-            "lea r11, [rip + {result_base}]",
+            "mov r11, {result_base}",
             "mov byte ptr [r11 + {launch_failed_off}], al",
             "cmp al, 0",
             "je 4f",
@@ -620,7 +643,7 @@ pub fn vmlaunch_once_wrapper(out: &mut LaunchResult) {
             "2:",
             "push r10",
             "push r11",
-            "lea r10, [rip + {guest_regs_base}]",
+            "mov r10, {guest_regs_base}",
             "mov [r10 + {guest_rax_off}], rax",
             "mov [r10 + {guest_rbx_off}], rbx",
             "mov [r10 + {guest_rcx_off}], rcx",
@@ -639,7 +662,7 @@ pub fn vmlaunch_once_wrapper(out: &mut LaunchResult) {
             "mov [r10 + {guest_r14_off}], r14",
             "mov [r10 + {guest_r15_off}], r15",
             "add rsp, 16",
-            "lea r11, [rip + {result_base}]",
+            "mov r11, {result_base}",
             "mov byte ptr [r11 + {entered_off}], 1",
             "mov rcx, {exit_reason_field}",
             "vmread rax, rcx",
@@ -664,8 +687,8 @@ pub fn vmlaunch_once_wrapper(out: &mut LaunchResult) {
             exit_reason_field = const VMCS_EXIT_REASON,
             exit_qual_field = const VMCS_EXIT_QUALIFICATION,
             guest_rip_field = const VMCS_VMEXIT_GUEST_RIP,
-            guest_regs_base = sym VMX_GUEST_REGS,
-            result_base = sym VMX_WRAPPER_RESULT,
+            guest_regs_base = in(reg) guest_regs_ptr,
+            result_base = in(reg) result_ptr,
             entered_off = const core::mem::offset_of!(LaunchResult, entered),
             launch_failed_off = const core::mem::offset_of!(LaunchResult, launch_failed),
             exit_reason_off = const core::mem::offset_of!(LaunchResult, exit_reason),
@@ -693,13 +716,15 @@ pub fn vmlaunch_once_wrapper(out: &mut LaunchResult) {
             out("r11") _,
             clobber_abi("sysv64"),
         );
-        *out = VMX_WRAPPER_RESULT;
+        *out = result_ptr.read();
     }
 }
 
 pub fn vmresume_once_wrapper(out: &mut LaunchResult) {
     unsafe {
-        VMX_WRAPPER_RESULT = LaunchResult::default();
+        let result_ptr = wrapper_result_ptr();
+        let guest_regs_ptr = guest_regs_ptr();
+        result_ptr.write(EMPTY_LAUNCH_RESULT);
         core::arch::asm!(
             "push rbx",
             "push rbp",
@@ -713,7 +738,7 @@ pub fn vmresume_once_wrapper(out: &mut LaunchResult) {
             "lea rax, [rip + 2f]",
             "mov rcx, {host_rip_field}",
             "vmwrite rcx, rax",
-            "lea r10, [rip + {guest_regs_base}]",
+            "mov r10, {guest_regs_base}",
             "mov rax, [r10 + {guest_rax_off}]",
             "mov rbx, [r10 + {guest_rbx_off}]",
             "mov rcx, [r10 + {guest_rcx_off}]",
@@ -732,7 +757,7 @@ pub fn vmresume_once_wrapper(out: &mut LaunchResult) {
 
             "vmresume",
             "setna al",
-            "lea r11, [rip + {result_base}]",
+            "mov r11, {result_base}",
             "mov byte ptr [r11 + {launch_failed_off}], al",
             "cmp al, 0",
             "je 4f",
@@ -747,7 +772,7 @@ pub fn vmresume_once_wrapper(out: &mut LaunchResult) {
             "2:",
             "push r10",
             "push r11",
-            "lea r10, [rip + {guest_regs_base}]",
+            "mov r10, {guest_regs_base}",
             "mov [r10 + {guest_rax_off}], rax",
             "mov [r10 + {guest_rbx_off}], rbx",
             "mov [r10 + {guest_rcx_off}], rcx",
@@ -766,7 +791,7 @@ pub fn vmresume_once_wrapper(out: &mut LaunchResult) {
             "mov [r10 + {guest_r14_off}], r14",
             "mov [r10 + {guest_r15_off}], r15",
             "add rsp, 16",
-            "lea r11, [rip + {result_base}]",
+            "mov r11, {result_base}",
             "mov byte ptr [r11 + {entered_off}], 1",
             "mov rcx, {exit_reason_field}",
             "vmread rax, rcx",
@@ -791,8 +816,8 @@ pub fn vmresume_once_wrapper(out: &mut LaunchResult) {
             exit_reason_field = const VMCS_EXIT_REASON,
             exit_qual_field = const VMCS_EXIT_QUALIFICATION,
             guest_rip_field = const VMCS_VMEXIT_GUEST_RIP,
-            guest_regs_base = sym VMX_GUEST_REGS,
-            result_base = sym VMX_WRAPPER_RESULT,
+            guest_regs_base = in(reg) guest_regs_ptr,
+            result_base = in(reg) result_ptr,
             entered_off = const core::mem::offset_of!(LaunchResult, entered),
             launch_failed_off = const core::mem::offset_of!(LaunchResult, launch_failed),
             exit_reason_off = const core::mem::offset_of!(LaunchResult, exit_reason),
@@ -820,7 +845,7 @@ pub fn vmresume_once_wrapper(out: &mut LaunchResult) {
             out("r11") _,
             clobber_abi("sysv64"),
         );
-        *out = VMX_WRAPPER_RESULT;
+        *out = result_ptr.read();
     }
 }
 

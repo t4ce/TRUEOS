@@ -202,6 +202,81 @@ enum BackendProbeMode {
     PsGrfMaxThreads15,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum PostDrawSyncVariant {
+    HeavyAll,
+    LightOnlyRetire,
+    FlushBit5Dc,
+    FlushBit7,
+    FlushBit12Rt,
+    FlushBit20Cs,
+    FlushBit26Hdc,
+}
+
+const POST_DRAW_FLUSH_SPECTRUM: [PostDrawSyncVariant; 6] = [
+    PostDrawSyncVariant::LightOnlyRetire,
+    PostDrawSyncVariant::FlushBit5Dc,
+    PostDrawSyncVariant::FlushBit7,
+    PostDrawSyncVariant::FlushBit12Rt,
+    PostDrawSyncVariant::FlushBit20Cs,
+    PostDrawSyncVariant::FlushBit26Hdc,
+];
+
+impl PostDrawSyncVariant {
+    fn label(self) -> &'static str {
+        match self {
+            Self::HeavyAll => "heavy-all",
+            Self::LightOnlyRetire => "light-only-retire",
+            Self::FlushBit5Dc => "bit5-dc-flush",
+            Self::FlushBit7 => "bit7-flush-enable",
+            Self::FlushBit12Rt => "bit12-rt-flush",
+            Self::FlushBit20Cs => "bit20-cs-stall",
+            Self::FlushBit26Hdc => "bit26-hdc-flush",
+        }
+    }
+
+    fn submit_name(self) -> &'static str {
+        match self {
+            Self::HeavyAll => "postdraw-heavy-all",
+            Self::LightOnlyRetire => "postdraw-light-only-retire",
+            Self::FlushBit5Dc => "postdraw-flush-bit5",
+            Self::FlushBit7 => "postdraw-flush-bit7",
+            Self::FlushBit12Rt => "postdraw-flush-bit12",
+            Self::FlushBit20Cs => "postdraw-flush-bit20",
+            Self::FlushBit26Hdc => "postdraw-flush-bit26",
+        }
+    }
+
+    fn from_submit_name(submit_name: &str) -> Option<Self> {
+        match submit_name {
+            "postdraw-light-only-retire" => Some(Self::LightOnlyRetire),
+            "postdraw-flush-bit5" => Some(Self::FlushBit5Dc),
+            "postdraw-flush-bit7" => Some(Self::FlushBit7),
+            "postdraw-flush-bit12" => Some(Self::FlushBit12Rt),
+            "postdraw-flush-bit20" => Some(Self::FlushBit20Cs),
+            "postdraw-flush-bit26" => Some(Self::FlushBit26Hdc),
+            _ => None,
+        }
+    }
+
+    fn heavy_sync_flags(self) -> Option<u32> {
+        let flags = match self {
+            Self::HeavyAll => PIPE_CONTROL_POST_DRAW_SYNC_BITS,
+            Self::LightOnlyRetire => return None,
+            Self::FlushBit5Dc => {
+                PIPE_CONTROL_POST_DRAW_LIGHT_SYNC_BITS | PIPE_CONTROL_DC_FLUSH_ENABLE
+            }
+            Self::FlushBit7 => PIPE_CONTROL_POST_DRAW_LIGHT_SYNC_BITS | PIPE_CONTROL_FLUSH_ENABLE,
+            Self::FlushBit12Rt => {
+                PIPE_CONTROL_POST_DRAW_LIGHT_SYNC_BITS | PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH
+            }
+            Self::FlushBit20Cs => PIPE_CONTROL_POST_DRAW_LIGHT_SYNC_BITS,
+            Self::FlushBit26Hdc => PIPE_CONTROL_POST_DRAW_LIGHT_SYNC_BITS | PIPE_CONTROL_FLUSH_HDC,
+        };
+        Some(flags)
+    }
+}
+
 impl BackendProbeMode {
     fn label(self) -> &'static str {
         match self {
@@ -435,6 +510,12 @@ fn is_surface_draw_submit_name(submit_name: &str) -> bool {
             | "ps-grf-start-r4-big-primitive"
             | "ps-grf-maxthreads-31-big-primitive"
             | "ps-grf-maxthreads-15-big-primitive"
+            | "postdraw-light-only-retire"
+            | "postdraw-flush-bit5"
+            | "postdraw-flush-bit7"
+            | "postdraw-flush-bit12"
+            | "postdraw-flush-bit20"
+            | "postdraw-flush-bit26"
             | "vs-draw-frontier"
     )
 }

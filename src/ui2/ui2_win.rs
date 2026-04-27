@@ -417,12 +417,12 @@ fn toggle_vm_window_in_state(state: &mut Ui2State, window_id: u32) -> bool {
         if !crate::hv::request_preserve_vm1() {
             return false;
         }
+        set_window_visible_in_state(state, window_id, false)
     } else {
         request_vm1_resume();
+        state.compose_reason = "toggle-vm-window";
+        note_window_dirty(state, window_id, "toggle-vm-window")
     }
-
-    state.compose_reason = "toggle-vm-window";
-    note_window_dirty(state, window_id, "toggle-vm-window")
 }
 
 fn preserve_vm_window_in_state(state: &mut Ui2State, window_id: u32) -> bool {
