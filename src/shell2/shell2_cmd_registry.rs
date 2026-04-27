@@ -35,7 +35,7 @@ static API_CMD_REGISTRY: spin::Mutex<Vec<ApiShell2CmdEntry>> = spin::Mutex::new(
 
 const TOOL_JSON_ACPI: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["reboot","S1","S2","S3","S4","S5"],"description":"ACPI action to run."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_EMAIL: &str = r#"{"type":"object","properties":{"mode":{"type":"string","enum":["send","set_from"],"description":"Choose whether to send a mail log entry or set the default from address."},"to":{"type":"string","description":"Recipient address when mode=send."},"mail_text":{"type":"string","description":"Mail body text when mode=send."},"from":{"type":"string","description":"Sender address when mode=set_from."}},"required":["mode"],"additionalProperties":false}"#;
-const TOOL_JSON_ETC: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["ample","go","go2","insane","ecma"],"description":"etc subcommand to run."}},"required":["subcommand"],"additionalProperties":false}"#;
+const TOOL_JSON_ETC: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["ample","go","go2","insane"],"description":"etc subcommand to run."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_FILE: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","format","ramdisc"],"description":"file action to run."},"disk_id":{"type":"string","description":"Disk id string for action=format."},"size":{"type":"string","description":"Optional ramdisc size like 512MB or 1GiB for action=ramdisc."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_LC: &str = r#"{"type":"object","properties":{"prompt":{"type":"string","description":"Optional prompt text to pass into the dedicated localcoder task."},"continue":{"type":"boolean","description":"Continue the latest localcoder session."},"new":{"type":"boolean","description":"Start a fresh localcoder session."},"resume":{"type":"string","description":"Resume the specified localcoder session id."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_NET: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["icmp","irc","nic","hostname"],"description":"net subcommand to run."},"target":{"type":"string","description":"Target host for net icmp."},"selector":{"type":"string","description":"Optional NIC selector like index, vid:pid, or bb:dd.f."},"host":{"type":"string","description":"Host for net irc."},"channel":{"type":"string","description":"Optional channel like #trueos for net irc."},"name":{"type":"string","description":"Optional hostname for net hostname."}},"required":["subcommand"],"additionalProperties":false}"#;
@@ -352,7 +352,8 @@ pub(crate) fn command_names_status_text() -> AllocString {
             out.push(' ');
         }
         if let Some(color) = entry.color {
-            let styled = alloc::format!("{}", super::ecma48::style(entry.name).bold().fg(color));
+            let styled =
+                alloc::format!("{}", super::term_style::paint(entry.name).bold().color(color));
             out.push_str(styled.as_str());
         } else {
             out.push_str(entry.name);
@@ -365,8 +366,12 @@ pub(crate) fn command_names_status_text() -> AllocString {
             out.push(' ');
         }
         if let Some(color) = entry.color {
-            let styled =
-                alloc::format!("{}", super::ecma48::style(entry.name.as_str()).bold().fg(color));
+            let styled = alloc::format!(
+                "{}",
+                super::term_style::paint(entry.name.as_str())
+                    .bold()
+                    .color(color)
+            );
             out.push_str(styled.as_str());
         } else {
             out.push_str(entry.name.as_str());

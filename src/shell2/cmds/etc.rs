@@ -11,16 +11,15 @@ use crate::shell2::shell2_cmd::ParseOutcome;
 const GO_CHARS: [char; 9] = ['⣿', '⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'];
 const GO_TWO_CHARS: [char; 9] = ['⢈', '⡈', '⡐', '⡠', '⣀', '⢄', '⢂', '⢁', '⡁'];
 const INSANE_MAX_CP: u32 = 0x27FFF;
-const DEFAULT_ECMA_COLS: usize = 100;
+const DEFAULT_INSANE_COLS: usize = 100;
 const BACKEND_UART_MASK: u8 = 1 << 0;
 const BACKEND_NET_MASK: u8 = 1 << 1;
 const ETC_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
-const ETC_MENU_ROWS: [[&str; 2]; 5] = [
+const ETC_MENU_ROWS: [[&str; 2]; 4] = [
     ["ample", "Launch the text-mode Ample shell app"],
     ["go", "Loop spinner glyphs until interrupted"],
     ["go2", "Loop alternate spinner glyphs until interrupted"],
     ["insane", "Print a wide Unicode sweep"],
-    ["ecma", "Run the ECMA-48 terminal demo"],
 ];
 
 static GO_ACTIVE_MASK: AtomicU8 = AtomicU8::new(0);
@@ -108,7 +107,7 @@ fn cmd_insane(io: &'static dyn ShellBackend2) {
 
         io.raw_write_char(ch);
         col += 1;
-        if col >= DEFAULT_ECMA_COLS {
+        if col >= DEFAULT_INSANE_COLS {
             io.raw_write_str("\r\n");
             col = 0;
         }
@@ -138,13 +137,6 @@ pub(crate) fn try_parse(
         "go" => start_looping_chars(io, "go", &GO_CHARS),
         "go2" => start_looping_chars(io, "go2", &GO_TWO_CHARS),
         "insane" => cmd_insane(io),
-        "ecma" => {
-            if args.next().is_some() {
-                print_usage(io);
-                return ParseOutcome::Handled;
-            }
-            super::super::ecma48::demo_ecma48(io, DEFAULT_ECMA_COLS);
-        }
         _ => print_usage(io),
     }
 

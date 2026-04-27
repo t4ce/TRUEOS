@@ -287,6 +287,10 @@ impl VfPrimitiveGeometry {
             Self::Oversized => [[-1.0, -1.0, 0.0], [3.0, -1.0, 0.0], [-1.0, 3.0, 0.0]],
         }
     }
+
+    fn fullscreen_candidate(self) -> bool {
+        matches!(self, Self::Oversized)
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -435,6 +439,50 @@ fn is_surface_draw_submit_name(submit_name: &str) -> bool {
     )
 }
 
+fn is_fragment_candidate_submit_name(submit_name: &str) -> bool {
+    matches!(
+        submit_name,
+        "ps-launch-big-primitive"
+            | "ps-bt1-big-primitive"
+            | "ps-wm-normal-big-primitive"
+            | "ps-dispatch-slot0-big-primitive"
+            | "ps-dispatch-slot1-big-primitive"
+            | "ps-dispatch-slot2-big-primitive"
+            | "ps-payload-push-big-primitive"
+            | "ps-payload-attr-big-primitive"
+            | "ps-payload-simple-big-primitive"
+            | "ps-payload-source-depth-w-big-primitive"
+            | "ps-payload-bary-big-primitive"
+            | "ps-grf-start-r1-big-primitive"
+            | "ps-grf-start-r2-big-primitive"
+            | "ps-grf-start-r4-big-primitive"
+            | "ps-grf-maxthreads-31-big-primitive"
+            | "ps-grf-maxthreads-15-big-primitive"
+    )
+}
+
+fn reset_fragment_boundary_probe() {
+    FRAGMENT_CANDIDATE_READY.store(false, Ordering::Release);
+    FRAGMENT_BOUNDARY_OBSERVED.store(false, Ordering::Release);
+}
+
+fn record_fragment_boundary_probe(candidate_ready: bool, fragment_observed: bool) {
+    if candidate_ready {
+        FRAGMENT_CANDIDATE_READY.store(true, Ordering::Release);
+    }
+    if fragment_observed {
+        FRAGMENT_BOUNDARY_OBSERVED.store(true, Ordering::Release);
+    }
+}
+
+fn fragment_candidate_ready() -> bool {
+    FRAGMENT_CANDIDATE_READY.load(Ordering::Acquire)
+}
+
+fn fragment_boundary_observed() -> bool {
+    FRAGMENT_BOUNDARY_OBSERVED.load(Ordering::Acquire)
+}
+
 unsafe impl Send for RenderWarmState {}
 unsafe impl Sync for RenderWarmState {}
 
@@ -442,6 +490,8 @@ static WARM_STATE: Mutex<Option<RenderWarmState>> = Mutex::new(None);
 static PRIMARY_TRIANGLE_SUBMITTED: AtomicBool = AtomicBool::new(false);
 static PRIMARY_PROBE_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 static PRIMARY_MI_SCANOUT_PROOF_SUBMITTED: AtomicBool = AtomicBool::new(false);
+static FRAGMENT_CANDIDATE_READY: AtomicBool = AtomicBool::new(false);
+static FRAGMENT_BOUNDARY_OBSERVED: AtomicBool = AtomicBool::new(false);
 static WARM_BUFFERS_MAPPED: AtomicBool = AtomicBool::new(false);
 static PRIMARY_STRIPE_X_PHASE: AtomicU32 = AtomicU32::new(0);
 static PRIMARY_PROBE_SEQ: AtomicU32 = AtomicU32::new(0);

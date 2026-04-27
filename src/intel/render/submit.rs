@@ -919,8 +919,13 @@ fn log_triangle_stage_diagnosis(
             && !completed
         {
             "vs-progress-no-sol-write-or-offset"
-        } else if delta.cl_primitives > 0 && delta.ps_invocations == 0 && !completed {
-            "clip-stage-produced-primitives-no-ps"
+        } else if delta.cl_primitives > 0
+            && delta.ps_invocations == 0
+            && delta.cps_invocations == 0
+            && delta.ps_depth == 0
+            && !completed
+        {
+            "clip-stage-produced-primitives-no-retire-or-ps-observable"
         } else if delta.vs_invocations > 0
             && delta.cl_invocations == 0
             && delta.cl_primitives == 0
@@ -987,7 +992,7 @@ fn log_triangle_named_proofs(
     let vf_accept = delta.ia_vertices > 0 || delta.ia_primitives > 0;
     let vs_accept = delta.vs_invocations > 0;
     let clip_raster_accept = delta.cl_invocations > 0 || delta.cl_primitives > 0;
-    let ps_accept = delta.ps_invocations > 0 || delta.cps_invocations > 0;
+    let ps_accept = delta.ps_invocations > 0 || delta.cps_invocations > 0 || delta.ps_depth > 0;
     let clip_accept = delta.cl_invocations > 0 || delta.cl_primitives > 0;
     let raster_packet_accept = clip_marker_ok && raster_marker_ok;
     let ps_launch_input_ready = ps_state_marker_ok && raster_packet_accept && clip_accept;
@@ -1040,6 +1045,29 @@ fn log_triangle_named_proofs(
         sc_extra,
         sc_extra2,
     );
+    if is_fragment_candidate_submit_name(submit_name) {
+        let candidate_ready = clip_accept
+            && raster_packet_accept
+            && delta.ps_invocations == 0
+            && delta.cps_invocations == 0
+            && delta.ps_depth == 0;
+        let fragment_observed =
+            delta.ps_invocations > 0 || delta.cps_invocations > 0 || delta.ps_depth > 0;
+        record_fragment_boundary_probe(candidate_ready, fragment_observed);
+        intel_render_focus_log!(
+            "intel/render: {} fragment-candidate-proof accepted={} candidate_ready={} oversized=1 clip_counter={} raster_packet={} ps_state_marker={} fragment_observed={} ps_delta={} cps_delta={} ps_depth_delta={} observable=no_dedicated_fragment_counter_yet does_not_prove=rt_write\n",
+            submit_name,
+            candidate_ready as u8,
+            candidate_ready as u8,
+            clip_accept as u8,
+            raster_packet_accept as u8,
+            ps_state_marker_ok as u8,
+            fragment_observed as u8,
+            delta.ps_invocations,
+            delta.cps_invocations,
+            delta.ps_depth,
+        );
+    }
     intel_render_focus_log!(
         "intel/render: {} ps-launch-frontier-proof accepted={} input_ready={} ps_state_marker={} raster_packet={} clip_counter={} ps_delta={} cps_delta={} ps_depth_delta={} sc_instdone=0x{:08X} does_not_prove=rt_write\n",
         submit_name,
@@ -1245,36 +1273,43 @@ fn log_triangle_stage_frontier(
         && (result7 == RCS_EXEC_RESULT_DRAW_POST_RASTER)) as u8;
     let post_draw_retire = ((result_post3d_eop == RCS_EXEC_RESULT_DRAW_POST3D)
         && (result2 == RCS_EXEC_RESULT_DONE)) as u8;
-    let counter_frontier = if delta.ps_invocations > 0 {
-        "ps-thread"
-    } else if delta.cl_invocations > 0 || delta.cl_primitives > 0 {
-        "clipper-thread"
-    } else if is_vf_streamout_submit_name(submit_name)
-        && (delta.ia_vertices > 0 || delta.ia_primitives > 0)
-        && delta.vs_invocations == 0
-    {
-        "vf-only-counters"
-    } else if delta.gs_invocations > 0
-        || delta.ds_invocations > 0
-        || delta.hs_invocations > 0
-        || delta.gs_primitives > 0
-    {
-        "pre-raster-shader-thread"
-    } else if delta.vs_invocations > 0 || delta.ia_vertices > 0 || delta.ia_primitives > 0 {
-        "vs-only-counters"
-    } else {
-        "no-draw-counters"
-    };
-    let note = if clip_raster_packets != 0
+    let counter_frontier =
+        if delta.ps_invocations > 0 || delta.cps_invocations > 0 || delta.ps_depth > 0 {
+            "ps-thread"
+        } else if delta.cl_invocations > 0 || delta.cl_primitives > 0 {
+            "clipper-thread"
+        } else if is_vf_streamout_submit_name(submit_name)
+            && (delta.ia_vertices > 0 || delta.ia_primitives > 0)
+            && delta.vs_invocations == 0
+        {
+            "vf-only-counters"
+        } else if delta.gs_invocations > 0
+            || delta.ds_invocations > 0
+            || delta.hs_invocations > 0
+            || delta.gs_primitives > 0
+        {
+            "pre-raster-shader-thread"
+        } else if delta.vs_invocations > 0 || delta.ia_vertices > 0 || delta.ia_primitives > 0 {
+            "vs-only-counters"
+        } else {
+            "no-draw-counters"
+        };
+    let note = if post_draw_retire == 0 {
+        "draw_not_retired"
+    } else if clip_raster_packets != 0
         && delta.cl_invocations == 0
         && delta.cl_primitives == 0
         && delta.ps_invocations == 0
+        && delta.cps_invocations == 0
+        && delta.ps_depth == 0
     {
         "state_packets_retired_through_raster_counters_only_show_no_clipper_or_ps_threads"
-    } else if ps_state_packet != 0 && delta.ps_invocations == 0 {
+    } else if ps_state_packet != 0
+        && delta.ps_invocations == 0
+        && delta.cps_invocations == 0
+        && delta.ps_depth == 0
+    {
         "ps_state_programmed_but_no_ps_threads"
-    } else if post_draw_retire == 0 {
-        "draw_not_retired"
     } else {
         "draw_retired"
     };

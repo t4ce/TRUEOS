@@ -9,8 +9,8 @@ const _: f16 = 0.0_f16;
 #[macro_use]
 pub extern crate alloc;
 
-mod allocators;
 mod allcaps;
+mod allocators;
 pub mod allports;
 mod aud;
 mod blueprint;

@@ -232,6 +232,7 @@ fn submit_primary_triangle_with_retries(
         return true;
     }
 
+    reset_fragment_boundary_probe();
     let ps_launch_big_primitive = submit_triangle_vf_draw_to_surface(
         "ps-launch-big-primitive",
         dev,
@@ -250,6 +251,21 @@ fn submit_primary_triangle_with_retries(
     );
     if ps_launch_big_primitive {
         return true;
+    }
+    let fragment_candidate_ready = fragment_candidate_ready();
+    let fragment_boundary_observed = fragment_boundary_observed();
+    intel_render_focus_log!(
+        "intel/render: primary-fragment-boundary-gate candidate_ready={} fragment_observed={} action={} reason=shape_to_fragment_boundary_precedes_ps_spectrum\n",
+        fragment_candidate_ready as u8,
+        fragment_boundary_observed as u8,
+        if fragment_boundary_observed {
+            "continue-ps-spectrum"
+        } else {
+            "halt-ps-spectrum"
+        },
+    );
+    if !fragment_boundary_observed {
+        return false;
     }
 
     let ps_bt1_big_primitive = submit_triangle_vf_draw_to_surface(
@@ -714,6 +730,15 @@ fn submit_triangle_vf_draw_to_surface(
         backend_probe_mode.label(),
         crate::intel::shader::triangle_pipeline_note()
     );
+    if geometry.fullscreen_candidate() {
+        intel_render_focus_log!(
+            "intel/render: {} fragment-candidate-shape accepted=1 geometry={} ndc=v0[-1.000,-1.000] v1[3.000,-1.000] v2[-1.000,3.000] screen_bbox=[0,0..{},{}] sample_points=full-surface coverage_contract=oversized-triangle does_not_prove=raster_samples_or_ps\n",
+            submit_name,
+            geometry.label(),
+            draw.target_w.saturating_sub(1),
+            draw.target_h.saturating_sub(1),
+        );
+    }
 
     let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline) {
         Ok(layout) => layout,

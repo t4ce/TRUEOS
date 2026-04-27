@@ -63,7 +63,9 @@ or display handoff.
 
 | 10b. Raster packet frontier | Proven on VF path | Medium-high | `vf-draw-path raster-packet-proof accepted=1 post_clip=0xC0DE7726 post_raster=0xC0DE7727 clip_counter=1 sc_instdone=0xFFFFFFFF`. | The batch reaches raster/post-raster marker points after a clipper counter moved on the VF draw path. | That raster emitted samples/fragments; no standalone raster memory write exists here. |
 
-| 11. Pixel shader dispatch | Not proven | High confidence negative; 11f broadened next boot | `vf-draw-path ps-launch-frontier-proof accepted=0 input_ready=1 ps_state_marker=1 raster_packet=1 clip_counter=1 ps_delta=0 cps_delta=0 ps_depth_delta=0`; `ps-dispatch-slot-proof accepted=0 input_ready=1 dispatch_slot=0|1|2 ksp_slot=0|1|2 ...`; all five `ps-payload-proof` variants also preserve `input_ready=1` with `ps_delta=0 cps_delta=0 ps_depth_delta=0`. | The clean PS launch question is isolated through row 11g today. Next boot adds the row 11f GRF/start/max-thread spectrum. | That any PS/CPS thread actually launched, or that any RT/depth write happened. |
+| 10c. Shape-to-fragment boundary | Pending next boot | High when logged | Expected lines: `fragment-candidate-shape accepted=1 geometry=oversized ... screen_bbox=[0,0..W,H]`, `fragment-candidate-proof ... candidate_ready=1 ... fragment_observed=0`, and `primary-fragment-boundary-gate ... action=halt-ps-spectrum` until a real fragment/WM/PS-facing observable exists. | We give raster a deliberately oversized triangle that covers the full target, then stop the PS-spectrum fanout unless the shape-to-fragment boundary is actually observed. | Actual fragment/sample emission unless `fragment_observed=1`; the current observable is still only a coverage candidate plus clip/raster packet frontier. |
+
+| 11. Pixel shader dispatch | Not proven | High confidence negative through 11g | `vf-draw-path ps-launch-frontier-proof accepted=0 input_ready=1 ps_state_marker=1 raster_packet=1 clip_counter=1 ps_delta=0 cps_delta=0 ps_depth_delta=0`; `ps-dispatch-slot-proof accepted=0 input_ready=1 dispatch_slot=0|1|2 ksp_slot=0|1|2 ...`; all five `ps-grf-proof` and all five `ps-payload-proof` variants also preserve `input_ready=1` with `ps_delta=0 cps_delta=0 ps_depth_delta=0`. | The clean PS launch question is isolated through dispatch width, KSP location, GRF/start/max-thread knobs, and payload-spectrum variants. | That any PS/CPS thread actually launched, or that any RT/depth write happened. |
 
 | 11a. PS launch with oversized VF primitive | Negative proof | High | `ps-launch-big-primitive-proof accepted=0 input_ready=1 oversized=1 ps_state_marker=1 raster_packet=1 clip_counter=1 ps_delta=0 cps_delta=0 ps_depth_delta=0`. | The row-11 failure is not explained by the small canonical triangle missing coverage; the oversized VF primitive still reaches the PS launch frontier with no PS/CPS/depth counter motion. | Render target write or visible pixels; accepts only on PS/CPS/depth counter movement. |
 
@@ -75,15 +77,15 @@ or display handoff.
 
 | 11e. PS KSP / program-offset contract | Proven | High | `ps-ksp-proof accepted=1 ... first_dw=0xA07E0061 baked_first=0xA07E0061`; corrected slot probes show `ksp0=0xC0`, `ksp1=0xC0`, and `ksp2=0xC0` in their respective variants. | The uploaded baked PS code word is present and each corrected KSP slot points at it when selected. | PS thread launch, shader semantics, or RT export; this is a CPU readback contract, not a PS counter acceptance. |
 
-| 11f. PS GRF / registers-per-thread contract | Five-way next boot | Medium-high when logged | Expected lines: `probe-ps-grf-decoded ...` and `ps-grf-proof accepted=... input_ready=... grf_variant=grf-start-r1|grf-start-r2|grf-start-r4|maxthreads-31|maxthreads-15 ... ps_delta=...`. | Tests the exposed gfx12.5 PS register contract knobs: dispatch GRF start registers and max threads per PSD. There is no separate Gen12.5 `3DSTATE_PS` registers-per-thread field in this packet layout. | RT export or shader output correctness; accepts only on PS/CPS/depth counter movement. |
+| 11f. PS GRF / registers-per-thread contract | Negative proof | High | `probe-ps-grf-decoded` confirms the programmed variants: `grf-start-r1` has `ps_dw7=0x00010101`, `grf-start-r2` has `ps_dw7=0x00020202`, `grf-start-r4` has `ps_dw7=0x00040404`, `maxthreads-31` has `ps_dw6=0x0F800001`, and `maxthreads-15` has `ps_dw6=0x07800001`; each `ps-grf-proof` has `accepted=0 input_ready=1 ps_delta=0 cps_delta=0 ps_depth_delta=0`. | The exposed gfx12.5 PS register contract knobs are not the blocker: dispatch GRF start registers and max threads per PSD preserve the launch frontier but do not launch PS threads. There is no separate Gen12.5 `3DSTATE_PS` registers-per-thread field in this packet layout. | RT export or shader output correctness; accepts only on PS/CPS/depth counter movement. |
 
 | 11g. PS scratch / thread-payload contract | Negative proof | High | `probe-ps-payload-decoded` logs prove each variant was programmed; `ps-payload-proof accepted=0 input_ready=1` for `push-constant-enable`, `attribute-enable`, `simple-ps-hint`, `source-depth-w`, and `bary-plane-coeffs`, all with `ps_delta=0 cps_delta=0 ps_depth_delta=0`. | The PS launch gap is not fixed by push-constant enable, attribute payload enable, simple-PS hint, source Z/W payload phases, or barycentric plane payload phases. | RT export or correct color; accepts only on PS/CPS/depth counter movement. |
 
-| 11h. PS_EXTRA dependency/source bits | Pending | Medium-high when logged | Expected line: `ps-extra-dep-proof accepted=... input_ready=1 ps_extra=... dep_on_cp=... source_depth_w=... bary=... ps_delta=...`. | Tests Gen12/XeLP `3DSTATE_PS_EXTRA` dependency/source/barycentric bits that may be required for this PS payload. | RT export or visible pixels; accepts only on PS/CPS/depth counter movement. |
+| 11h. PS_EXTRA dependency/source bits | Blocked by 10c | Medium-high only after fragment boundary | Expected line, once unblocked: `ps-extra-dep-proof accepted=... input_ready=1 ps_extra=... dep_on_cp=... source_depth_w=... bary=... ps_delta=...`. | Tests Gen12/XeLP `3DSTATE_PS_EXTRA` dependency/source/barycentric bits only after the shape-to-fragment boundary is no longer the active miss. | RT export or visible pixels; accepts only on PS/CPS/depth counter movement. |
 
 | 11i. Gen12/XeLP 3DSTATE ordering / flush | Pending | Medium-high when logged | Expected line: `ps-ordering-proof accepted=... input_ready=1 order_variant=... flush_variant=... ps_delta=...`. | Tests whether PS launch depends on packet order or explicit invalidate/flush sequencing around PS, SBE, BLEND, WM, and draw. | Shader correctness or RT export; accepts only on PS/CPS/depth counter movement. |
 
-| 12. Render target write | Not proven | High confidence negative | Every `ps-rt-proof` line has `accepted=0 ps_delta=0 rt_any_change=0 rt_triangle_change=0`, including corrected dispatch-slot and all five payload variants. | Sampled pixels did not change in this capture, even after oversized coverage, PS BT-count, WM normal-dispatch, corrected single-slot dispatch, payload-spectrum tests, dispatch-all control, and KSP readback tests. | Whether the blocker is PS dispatch, backend/color export, RT state, cache visibility, or hang-before-export. |
+| 12. Render target write | Not proven | High confidence negative | Every `ps-rt-proof` line has `accepted=0 ps_delta=0 rt_any_change=0 rt_triangle_change=0`, including corrected dispatch-slot, all five GRF/max-thread variants, and all five payload variants. | Sampled pixels did not change in this capture, even after oversized coverage, PS BT-count, WM normal-dispatch, corrected single-slot dispatch, GRF/max-thread spectrum, payload-spectrum tests, dispatch-all control, and KSP readback tests. | Whether the blocker is PS dispatch, backend/color export, RT state, cache visibility, or hang-before-export. |
 
 | 13. Display handoff | Proven | High | `primary-boot-surface ... surf=0x02000000 surf_live=0x02000000 ok=1 logo=1` | The display pipe/plane can scan out the memory we think it can. | That 3D rendered the scanned-out pixels. |
 
@@ -140,6 +142,9 @@ Current frontier:
   all-slot dispatch still loses the normal `input_ready=1` frontier, keep
   treating dispatch-all as intentionally aggressive rather than as the main
   evidence path.
+- Row 11f is answered as a negative spectrum: GRF start `r1/r2/r4` and
+  max-threads-per-PSD `31/15` all preserve `input_ready=1` and still do not
+  move PS/CPS/depth counters.
 - Row 11g is answered as a negative spectrum: push-constant enable, attribute
   enable, simple-PS hint, source Z/W payload phases, and barycentric plane
   phases all preserve `input_ready=1` and still do not move PS/CPS/depth
@@ -152,9 +157,12 @@ Current frontier:
 - We have not proven "triangle visible because render produced pixels."  The
   display proof is real, but it is independent of the failing PS/render-target
   boundary until `ps-rt-proof` changes a sampled pixel.
+- Row 10c is now the active gate.  The boot stops the PS-spectrum fanout after
+  the oversized shape probe unless `fragment_observed=1`; until then, further
+  PS-side negative probes are treated as blocked rather than meaningful.
 
 Next best patch target:
 
-- Row 11f is now wired as a spectrum over the exposed gfx12.5 PS register
-  knobs: dispatch GRF start `r1/r2/r4` and max-threads-per-PSD `31/15`.  Read
-  `probe-ps-grf-decoded` first, then `ps-grf-proof`.
+- First read row 10c on the next boot.  If `primary-fragment-boundary-gate`
+  says `action=halt-ps-spectrum`, the next patch is not PS state; it is finding
+  or wiring a real rasterizer sample / WM-input observable.

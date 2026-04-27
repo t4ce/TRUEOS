@@ -2,11 +2,11 @@ use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use super::ecma48;
 pub(crate) use super::shell2_qjs_c4_contract::{
     Analysis, Diagnostic, ExprNodeKind, NodeRef, ResultHint, Span, SymbolRef, SymbolRole,
     TokenKind as C4TokenKind, TokenRef,
 };
+use super::term_style;
 
 const COLOR_STRING: (u8, u8, u8) = (80, 210, 80);
 const COLOR_NUMBER: (u8, u8, u8) = (225, 190, 70);
@@ -919,7 +919,7 @@ pub(crate) fn format_symbol_summary(analysis: &Analysis) -> Option<String> {
         text.push_str(", ...");
     }
 
-    Some(alloc::format!("{}", ecma48::style(text.as_str()).dim()))
+    Some(alloc::format!("{}", term_style::paint(text.as_str()).dim()))
 }
 
 fn hinted_or_text_kind(hint: ResultHint, text: &str) -> ResultHint {
@@ -959,31 +959,31 @@ fn hinted_or_text_kind(hint: ResultHint, text: &str) -> ResultHint {
 }
 
 fn style_punct(text: &str) -> String {
-    alloc::format!("{}", ecma48::style(text).fg(COLOR_PUNCT).dim())
+    alloc::format!("{}", term_style::paint(text).color(COLOR_PUNCT).dim())
 }
 
 fn style_string(text: &str) -> String {
-    alloc::format!("{}", ecma48::style(text).fg(COLOR_STRING))
+    alloc::format!("{}", term_style::paint(text).color(COLOR_STRING))
 }
 
 fn style_key(text: &str) -> String {
-    alloc::format!("{}", ecma48::style(text).fg(COLOR_KEY))
+    alloc::format!("{}", term_style::paint(text).color(COLOR_KEY))
 }
 
 fn style_number(text: &str) -> String {
-    alloc::format!("{}", ecma48::style(text).fg(COLOR_NUMBER))
+    alloc::format!("{}", term_style::paint(text).color(COLOR_NUMBER))
 }
 
 fn style_boolish(text: &str) -> String {
-    alloc::format!("{}", ecma48::style(text).fg(COLOR_BOOLISH).bold())
+    alloc::format!("{}", term_style::paint(text).color(COLOR_BOOLISH).bold())
 }
 
 fn style_function(text: &str) -> String {
-    alloc::format!("{}", ecma48::style(text).fg(COLOR_FUNCTION))
+    alloc::format!("{}", term_style::paint(text).color(COLOR_FUNCTION))
 }
 
 fn style_function_name(text: &str) -> String {
-    alloc::format!("{}", ecma48::style(text).fg(COLOR_FUNCTION).bold())
+    alloc::format!("{}", term_style::paint(text).color(COLOR_FUNCTION).bold())
 }
 
 fn is_special_number_text(text: &str) -> bool {
@@ -1077,7 +1077,7 @@ fn style_token_segment(text: &str, analysis: &Analysis, idx: usize) -> Option<St
             } else if matches!(prev.map(|token| token.kind), Some(C4TokenKind::Dot))
                 || token_has_covering_node(analysis, idx, ExprNodeKind::MemberAccess)
             {
-                alloc::format!("{}", ecma48::style(raw).fg(COLOR_OBJECTISH))
+                alloc::format!("{}", term_style::paint(raw).color(COLOR_OBJECTISH))
             } else {
                 String::from(raw)
             }
@@ -1100,7 +1100,7 @@ fn style_token_segment(text: &str, analysis: &Analysis, idx: usize) -> Option<St
         | C4TokenKind::Star
         | C4TokenKind::Slash => style_punct(raw),
         C4TokenKind::Let | C4TokenKind::Const | C4TokenKind::Var => {
-            alloc::format!("{}", ecma48::style(raw).fg(COLOR_OBJECTISH).bold())
+            alloc::format!("{}", term_style::paint(raw).color(COLOR_OBJECTISH).bold())
         }
         C4TokenKind::Eof | C4TokenKind::Unknown => String::from(raw),
     })
