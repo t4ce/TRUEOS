@@ -257,6 +257,32 @@ fn submit_primary_triangle_with_retries(
 
     run_postdraw_pc_retire_spectrum(dev, warm, surface_gpu, pitch_bytes, width, height);
 
+    unsafe {
+        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
+        core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
+    }
+    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+    let ps_bt0_scratch_rt = submit_triangle_vf_draw_to_surface(
+        "ps-bt0-scratch-rt",
+        dev,
+        warm,
+        GPU_VA_STREAMOUT_BASE,
+        8 * core::mem::size_of::<u32>(),
+        8,
+        8,
+        TriangleBlendProbeMode::MesaZeroedState,
+        VfPrimitiveGeometry::Oversized,
+        BackendProbeMode::PsBindingTableCountZero,
+        PostDrawSyncVariant::LightPostSyncNoCs,
+    );
+    intel_render_verbose_log!(
+        "intel/render: primary-ps-bt0-scratch-rt completed={}\n",
+        ps_bt0_scratch_rt as u8,
+    );
+    if ps_bt0_scratch_rt {
+        return true;
+    }
+
     let fragment_candidate_ready = fragment_candidate_ready();
     let fragment_boundary_observed = fragment_boundary_observed();
     intel_render_focus_log!(
@@ -968,6 +994,18 @@ fn submit_triangle_vf_draw_to_surface(
     );
     log_triangle_probe_state(warm, shader_layout, probe_state);
 
+    let scratch_rt_before = if is_scratch_rt_submit_name(submit_name) {
+        crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+        Some(unsafe { core::ptr::read_volatile(warm.streamout_virt as *const u32) })
+    } else {
+        None
+    };
+    let scratch_stats_before = if scratch_rt_before.is_some() {
+        Some(capture_triangle_stage_stats(dev))
+    } else {
+        None
+    };
+
     let completed = submit_warm_render_batch(
         dev,
         warm,
@@ -975,6 +1013,32 @@ fn submit_triangle_vf_draw_to_surface(
         RESULT_SLOT_FINAL_DWORD,
         submit_name,
     );
+    if let (Some(scratch_before), Some(stats_before)) = (scratch_rt_before, scratch_stats_before) {
+        crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+        let scratch_after = unsafe { core::ptr::read_volatile(warm.streamout_virt as *const u32) };
+        let delta = capture_triangle_stage_stats(dev).delta_since(stats_before);
+        let accepted = delta.ps_invocations > 0
+            || delta.cps_invocations > 0
+            || delta.ps_depth > 0
+            || scratch_after != scratch_before;
+        record_fragment_boundary_probe(true, accepted);
+        intel_render_focus_log!(
+            "intel/render: {} scratch-rt-fragment-proof accepted={} completed={} rt_gpu=0x{:X} size={}x{} pitch=0x{:X} before=0x{:08X} after=0x{:08X} changed={} ps_delta={} cps_delta={} ps_depth_delta={} does_not_prove=display_scanout\n",
+            submit_name,
+            accepted as u8,
+            completed as u8,
+            draw.rt_gpu_addr,
+            draw.target_w,
+            draw.target_h,
+            draw.rt_pitch,
+            scratch_before,
+            scratch_after,
+            (scratch_after != scratch_before) as u8,
+            delta.ps_invocations,
+            delta.cps_invocations,
+            delta.ps_depth,
+        );
+    }
     if !completed {
         recover_render_engine_after_nonretired_submit(dev, warm, submit_name);
     }
@@ -1304,12 +1368,72 @@ fn map_smoke_buffers(dev: crate::intel::Dev, warm: RenderWarmState) -> bool {
     }
 }
 
+fn read_first_dword(virt: *mut u8, len: usize) -> u32 {
+    if virt.is_null() || len < core::mem::size_of::<u32>() {
+        return 0;
+    }
+    unsafe { core::ptr::read_volatile(virt as *const u32) }
+}
+
+fn log_render_memory_proof(warm: RenderWarmState) {
+    crate::intel::dma_flush(warm.ring_virt, warm.ring_len);
+    crate::intel::dma_flush(warm.context_virt, warm.context_len);
+    crate::intel::dma_flush(warm.batch_virt, warm.batch_len);
+    crate::intel::dma_flush(warm.draw_state_virt, warm.draw_state_len);
+    crate::intel::dma_flush(warm.vertex_virt, warm.vertex_len);
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len);
+
+    let ring_rb = read_first_dword(warm.ring_virt, warm.ring_len);
+    let context_rb = read_first_dword(warm.context_virt, warm.context_len);
+    let batch_rb = read_first_dword(warm.batch_virt, warm.batch_len);
+    let state_rb = read_first_dword(warm.draw_state_virt, warm.draw_state_len);
+    let vertex_rb = read_first_dword(warm.vertex_virt, warm.vertex_len);
+    let result_rb = read_first_dword(warm.result_virt, warm.result_len);
+    let streamout_rb = read_first_dword(warm.streamout_virt, warm.streamout_len);
+
+    intel_render_focus_log!(
+        "intel/render: memory-proof accepted=1 map=1 ggtt_invalidated=1 flush=all readback=cpu-first-dword ring[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] context[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] batch[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] state[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] vertex[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] result[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] streamout[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] does_not_prove=fragment_ps_rt_progress\n",
+        warm.ring_phys,
+        GPU_VA_RING_BASE,
+        warm.ring_len,
+        ring_rb,
+        warm.context_phys,
+        GPU_VA_CONTEXT_BASE,
+        warm.context_len,
+        context_rb,
+        warm.batch_phys,
+        GPU_VA_BATCH_BASE,
+        warm.batch_len,
+        batch_rb,
+        warm.draw_state_phys,
+        GPU_VA_DRAW_STATE_BASE,
+        warm.draw_state_len,
+        state_rb,
+        warm.vertex_phys,
+        GPU_VA_VERTEX_BASE,
+        warm.vertex_len,
+        vertex_rb,
+        warm.result_phys,
+        GPU_VA_RESULT_BASE,
+        warm.result_len,
+        result_rb,
+        warm.streamout_phys,
+        GPU_VA_STREAMOUT_BASE,
+        warm.streamout_len,
+        streamout_rb,
+    );
+}
+
 fn ensure_smoke_buffers_mapped(dev: crate::intel::Dev, warm: RenderWarmState) -> bool {
     if WARM_BUFFERS_MAPPED.load(Ordering::Acquire) {
         return true;
     }
     if !map_smoke_buffers(dev, warm) {
         return false;
+    }
+    if !MEMORY_PROOF_LOGGED.swap(true, Ordering::AcqRel) {
+        log_render_memory_proof(warm);
     }
     WARM_BUFFERS_MAPPED.store(true, Ordering::Release);
     true

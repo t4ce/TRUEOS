@@ -9,6 +9,9 @@
 // - `mi-scanout-store-proof`: RCS command streamer wrote one DWORD into the
 //   live scanout surface via MI_STORE_DATA_IMM.  This proves neither 3D stage
 //   progress nor PS/color-backend writes.
+// - `memory-proof`: warm render buffers were mapped into their fixed GGTT
+//   slots, cache-flushed, and CPU-read back in one source-level proof line.
+//   This does not prove each 3D stage actually consumed its buffer.
 // - `vertex-upload-proof`: CPU wrote/read back the triangle vertex bytes and
 //   flushed them.  This does not prove VF consumed them.
 // - `vf-proof`: IA/VF counters advance for three vertices.  Current captures

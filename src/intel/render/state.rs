@@ -184,6 +184,7 @@ enum TriangleBatchMode {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum BackendProbeMode {
     MesaLike,
+    PsBindingTableCountZero,
     PsBindingTableCountOne,
     WmNormalDispatch,
     PsDispatchSlot0,
@@ -304,6 +305,7 @@ impl BackendProbeMode {
     fn label(self) -> &'static str {
         match self {
             Self::MesaLike => "mesa-like",
+            Self::PsBindingTableCountZero => "ps-bt-count-0",
             Self::PsBindingTableCountOne => "ps-bt-count-1",
             Self::WmNormalDispatch => "wm-normal-dispatch",
             Self::PsDispatchSlot0 => "ps-dispatch-slot0",
@@ -508,7 +510,13 @@ fn is_vf_streamout_submit_name(submit_name: &str) -> bool {
 }
 
 fn is_triangle_debug_submit_name(submit_name: &str) -> bool {
-    is_surface_draw_submit_name(submit_name) || is_streamout_submit_name(submit_name)
+    is_surface_draw_submit_name(submit_name)
+        || is_streamout_submit_name(submit_name)
+        || is_scratch_rt_submit_name(submit_name)
+}
+
+fn is_scratch_rt_submit_name(submit_name: &str) -> bool {
+    matches!(submit_name, "ps-bt0-scratch-rt")
 }
 
 fn is_surface_draw_submit_name(submit_name: &str) -> bool {
@@ -549,6 +557,7 @@ fn is_fragment_candidate_submit_name(submit_name: &str) -> bool {
     matches!(
         submit_name,
         "ps-launch-big-primitive"
+            | "ps-bt0-scratch-rt"
             | "ps-bt1-big-primitive"
             | "ps-wm-normal-big-primitive"
             | "ps-dispatch-slot0-big-primitive"
@@ -599,5 +608,6 @@ static PRIMARY_MI_SCANOUT_PROOF_SUBMITTED: AtomicBool = AtomicBool::new(false);
 static FRAGMENT_CANDIDATE_READY: AtomicBool = AtomicBool::new(false);
 static FRAGMENT_BOUNDARY_OBSERVED: AtomicBool = AtomicBool::new(false);
 static WARM_BUFFERS_MAPPED: AtomicBool = AtomicBool::new(false);
+static MEMORY_PROOF_LOGGED: AtomicBool = AtomicBool::new(false);
 static PRIMARY_STRIPE_X_PHASE: AtomicU32 = AtomicU32::new(0);
 static PRIMARY_PROBE_SEQ: AtomicU32 = AtomicU32::new(0);

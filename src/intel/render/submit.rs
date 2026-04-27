@@ -1185,6 +1185,19 @@ fn log_triangle_named_proofs(
             delta.ps_depth,
         );
     }
+    if submit_name == "ps-bt0-scratch-rt" {
+        intel_render_focus_log!(
+            "intel/render: ps-bt0-scratch-rt-frontier-proof accepted={} input_ready={} oversized=1 ps_bt_count=0 scratch_rt=1 ps_state_marker={} raster_packet={} clip_counter={} ps_delta={} cps_delta={} ps_depth_delta={} does_not_prove=scratch_rt_write\n",
+            ps_accept as u8,
+            ps_launch_input_ready as u8,
+            ps_state_marker_ok as u8,
+            raster_packet_accept as u8,
+            clip_accept as u8,
+            delta.ps_invocations,
+            delta.cps_invocations,
+            delta.ps_depth,
+        );
+    }
     if submit_name == "ps-wm-normal-big-primitive" {
         intel_render_focus_log!(
             "intel/render: ps-wm-normal-big-primitive-proof accepted={} input_ready={} oversized=1 wm_force=normal dispatch_qualifier=writeable_rt ps_state_marker={} raster_packet={} clip_counter={} ps_delta={} cps_delta={} ps_depth_delta={} does_not_prove=rt_write\n",

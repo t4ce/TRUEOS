@@ -45,6 +45,11 @@ QEMU_BRIDGE ?= br0
 QEMU_BRIDGE_HELPER ?= $(firstword $(wildcard /usr/lib/qemu/qemu-bridge-helper /usr/libexec/qemu-bridge-helper /usr/lib/qemu-bridge-helper))
 QEMU_HDA_AUDIODEV ?= none,id=snd0
 QEMU_RUN_ENV = ISO_PATH="$(ISO_PATH)" QEMU_BIN="$(QEMU_BIN)" QEMU_UEFI_FIRMWARE="$(QEMU_UEFI_FIRMWARE)" QEMU_BRIDGE="$(QEMU_BRIDGE)" QEMU_BRIDGE_HELPER="$(QEMU_BRIDGE_HELPER)" QEMU_HDA_AUDIODEV="$(QEMU_HDA_AUDIODEV)"
+BAREMETAL_LOG_DRAIN := tools/baremetal-log-drain.sh
+BAREMETAL_LOG_HOST ?= 192.168.178.94
+BAREMETAL_LOG_PORT ?= 1
+BAREMETAL_LOG_DELAY ?= 15
+BAREMETAL_LOG_DIR ?= bld/baremetal-logs
 
 CARGO_BUILD_FLAGS ?=
 
@@ -123,6 +128,7 @@ iso: artifacts images
 	rm -f $(ISO_PATH)
 	-fuser -k 7777/udp || true
 	python3 -c "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.bind(('',7777)); exec(\"while True:\n d,a=s.recvfrom(2048)\n if d==b'probe': s.sendto(b'ack',(a[0],7777)); break\")" &
+	@TRUEOS_BAREMETAL_LOG_HOST="$(BAREMETAL_LOG_HOST)" TRUEOS_BAREMETAL_LOG_PORT="$(BAREMETAL_LOG_PORT)" TRUEOS_BAREMETAL_LOG_DELAY="$(BAREMETAL_LOG_DELAY)" TRUEOS_BAREMETAL_LOG_DIR="$(BAREMETAL_LOG_DIR)" "$(BAREMETAL_LOG_DRAIN)" start
 	mkdir -p $(ISO_BOOT_DIR)
 	cp $(ARTIFACT_RUNTIME_ELF) $(ISO_BOOT_DIR)/TRUEOS.elf
 	mkdir -p $(ISO_DIR)/EFI/BOOT
@@ -254,16 +260,15 @@ dbg-vscode: snipe iso-debug
 		echo "GDB stub ready on 127.0.0.1:1234"; \
 		wait $$qemu_pid
 
-# Default quick boot: boot the fresh ISO first while the handed-in NVMe is
-# attached for the kernel to probe and mount.
-run: snipe iso-debug
+# Default quick boot: restart only the emulator, using the current ISO.
+run: snipe
 	@($(QEMU_RUN_ENV) $(QEMU_RUNNER) iso & $(SERIAL_CONSOLE_CMD))
 
 lc:
 	@./lc $(ARGS)
 
-run-with-nvme: snipe iso-debug
+run-with-nvme: snipe
 	@($(QEMU_RUN_ENV) $(QEMU_RUNNER) iso & $(SERIAL_CONSOLE_CMD))
 
-run-installed: snipe iso-debug
+run-installed: snipe
 	@($(QEMU_RUN_ENV) $(QEMU_RUNNER) installed & $(SERIAL_CONSOLE_CMD))

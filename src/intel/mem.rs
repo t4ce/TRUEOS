@@ -2,12 +2,12 @@
 //
 // Current evidence from the bring-up transcript is still only a partial
 // `memory-proof`: streamout writes, result markers, and display scanout all hit
-// expected GPU addresses, but there is not yet one source-level proof line that
-// lists every warm buffer, GGTT slot, cache flush, and CPU readback together.
+// expected GPU addresses.  Render bring-up now emits one source-level proof
+// line after the warm buffers are mapped:
 //
-// Next durable source contract to add here or in `render.rs`:
-// `intel/gpu: memory-proof ok name=<ring|ctx|batch|vertex|result|streamout>
-//  gpu=... phys=... bytes=... flush=... readback=...`
+// `intel/render: memory-proof accepted=1 map=1 ggtt_invalidated=1 flush=all
+//  readback=cpu-first-dword ring[...] context[...] batch[...] state[...]
+//  vertex[...] result[...] streamout[...]`
 //
 // MI commands currently relevant to the proof ladder:
 //

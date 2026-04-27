@@ -160,7 +160,7 @@ pub fn init_eptp_list(slot0_eptp: u64) -> Result<u64, &'static str> {
         core::ptr::write_bytes(list as *mut u8, 0, PAGE_SIZE_4K);
         (*list)[0] = slot0_eptp;
     }
-    kernel_va_to_pa(list as u64).ok_or("eptp list pa")
+    host_va_to_pa(list as u64).ok_or("eptp list pa")
 }
 
 fn guest_tables_ptr() -> Result<*mut GuestTables, &'static str> {
@@ -245,8 +245,8 @@ pub fn build_ept_identity_4g() -> Result<u64, &'static str> {
         unsafe { core::ptr::write_bytes(pt as *mut u8, 0, PAGE_SIZE_4K) };
     }
 
-    let pml4_pa = kernel_va_to_pa(pml4 as u64).ok_or("ept pml4 pa")?;
-    let pdpt_pa = kernel_va_to_pa(pdpt as u64).ok_or("ept pdpt pa")?;
+    let pml4_pa = host_va_to_pa(pml4 as u64).ok_or("ept pml4 pa")?;
+    let pdpt_pa = host_va_to_pa(pdpt as u64).ok_or("ept pdpt pa")?;
     unsafe {
         (*pml4)[EPT_ROOT_PML4_INDEX] = (pdpt_pa & 0x000F_FFFF_FFFF_F000) | 0x7;
     }
@@ -449,7 +449,7 @@ fn ensure_ept_table_entry(
     unsafe {
         core::ptr::write_bytes(slot_ptr as *mut u8, 0, PAGE_SIZE_4K);
     }
-    let slot_pa = kernel_va_to_pa(slot_ptr as u64).ok_or(err)?;
+    let slot_pa = host_va_to_pa(slot_ptr as u64).ok_or(err)?;
     unsafe {
         (*table)[index] = (slot_pa & 0x000F_FFFF_FFFF_F000) | 0x7;
     }
@@ -465,7 +465,7 @@ fn ept_table_ptr_from_pa(
     let mut i = 0usize;
     while i < pool_cap {
         let slot_ptr = unsafe { pool_base.add(i) };
-        let slot_pa = kernel_va_to_pa(slot_ptr as u64)?;
+        let slot_pa = host_va_to_pa(slot_ptr as u64)?;
         if slot_pa == target_pa {
             return Some(slot_ptr);
         }
