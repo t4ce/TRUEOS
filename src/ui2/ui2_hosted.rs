@@ -55,18 +55,19 @@ static UI2_HOSTED_SYNC_STARTED: AtomicBool = AtomicBool::new(false);
 static UI2_HOSTED_CONTAINER_SYNC_QUEUED: AtomicBool = AtomicBool::new(false);
 static HOSTED_BROWSER_DIRTY_CONTENT_MASK: AtomicU64 = AtomicU64::new(0);
 static HOSTED_BROWSER_DIRTY_INTERACTIVE_MASK: AtomicU64 = AtomicU64::new(0);
-static UI2_VM1_START_REQUESTED: AtomicBool = AtomicBool::new(false);
-static UI2_VM1_RUNNING_RENDERED: AtomicBool = AtomicBool::new(false);
+const UI2_HOSTED_VM_ID: u8 = 0;
+static UI2_VM_START_REQUESTED: AtomicBool = AtomicBool::new(false);
+static UI2_VM_RUNNING_RENDERED: AtomicBool = AtomicBool::new(false);
 
-pub(crate) fn request_vm1_resume() {
-    UI2_VM1_START_REQUESTED.store(true, Ordering::Release);
+pub(crate) fn request_vm_resume() {
+    UI2_VM_START_REQUESTED.store(true, Ordering::Release);
     queue_hosted_container_sync();
 }
 
 fn sync_vm_window_runtime_state(state: &mut Ui2State) {
     let hv_status = crate::hv::status();
-    let vm_running = hv_status.vm1_running || hv_status.vm1_starting;
-    let previous = UI2_VM1_RUNNING_RENDERED.swap(vm_running, Ordering::AcqRel);
+    let vm_running = hv_status.running_count != 0 || hv_status.starting_count != 0;
+    let previous = UI2_VM_RUNNING_RENDERED.swap(vm_running, Ordering::AcqRel);
     if previous == vm_running {
         return;
     }
@@ -95,16 +96,16 @@ fn sync_vm_window_runtime_state(state: &mut Ui2State) {
 }
 
 fn service_vm_resume_request(spawner: &Spawner) {
-    if !UI2_VM1_START_REQUESTED.swap(false, Ordering::AcqRel) {
+    if !UI2_VM_START_REQUESTED.swap(false, Ordering::AcqRel) {
         return;
     }
 
     let hv_status = crate::hv::status();
-    if hv_status.vm1_running || hv_status.vm1_starting {
+    if hv_status.running_count != 0 || hv_status.starting_count != 0 {
         return;
     }
 
-    match crate::hv::restore_snapshot(0) {
+    match crate::hv::restore_snapshot(UI2_HOSTED_VM_ID) {
         Ok(bytes) => crate::hv::hvlogf(format_args!(
             "ui2: vm window resume restored snapshot bytes={}",
             bytes
@@ -561,7 +562,11 @@ fn bytes_look_like_ico(bytes: &[u8]) -> bool {
 }
 
 fn ico_dir_dim(byte: u8) -> u32 {
-    if byte == 0 { 256 } else { byte as u32 }
+    if byte == 0 {
+        256
+    } else {
+        byte as u32
+    }
 }
 
 fn ico_best_png_payload(bytes: &[u8]) -> Option<&[u8]> {

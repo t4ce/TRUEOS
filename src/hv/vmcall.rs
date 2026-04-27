@@ -62,35 +62,44 @@ pub struct CommPage {
 #[repr(C, align(4096))]
 pub struct CommPageBacking([u8; 4096]);
 
-pub static mut COMM_PAGE: CommPageBacking = CommPageBacking([0u8; 4096]);
+pub static mut COMM_PAGES: [CommPageBacking; crate::hv::TRUEOS_VM_ID_LIMIT] =
+    [const { CommPageBacking([0u8; 4096]) }; crate::hv::TRUEOS_VM_ID_LIMIT];
 
 #[inline]
-fn host_ptr() -> *mut CommPage {
-    unsafe { core::ptr::addr_of_mut!(COMM_PAGE.0) as *mut CommPage }
+fn host_ptr(vm_id: u8) -> Option<*mut CommPage> {
+    if (vm_id as usize) >= crate::hv::TRUEOS_VM_ID_LIMIT {
+        return None;
+    }
+    Some(unsafe { core::ptr::addr_of_mut!(COMM_PAGES[vm_id as usize].0) as *mut CommPage })
 }
 
-pub fn pa() -> Option<u64> {
-    let va = unsafe { core::ptr::addr_of!(COMM_PAGE.0) as u64 };
+pub fn pa_for_vm(vm_id: u8) -> Option<u64> {
+    if (vm_id as usize) >= crate::hv::TRUEOS_VM_ID_LIMIT {
+        return None;
+    }
+    let va = unsafe { core::ptr::addr_of!(COMM_PAGES[vm_id as usize].0) as u64 };
     kernel_va_to_pa(va)
 }
 
 // ── transport helpers ────────────────────────────────────────────────────────
 
-fn read_request() -> (u32, u32, u64, u64, u32) {
-    let p = host_ptr();
+fn read_request(vm_id: u8) -> Option<(u32, u32, u64, u64, u32)> {
+    let p = host_ptr(vm_id)?;
     unsafe {
-        (
+        Some((
             core::ptr::read_volatile(&(*p).request_op),
             core::ptr::read_volatile(&(*p).request_seq),
             core::ptr::read_volatile(&(*p).request_arg0),
             core::ptr::read_volatile(&(*p).request_arg1),
             core::ptr::read_volatile(&(*p).request_len),
-        )
+        ))
     }
 }
 
-fn write_response(seq: u32, status: u32, data: u64, len: u32) {
-    let p = host_ptr();
+fn write_response(vm_id: u8, seq: u32, status: u32, data: u64, len: u32) {
+    let Some(p) = host_ptr(vm_id) else {
+        return;
+    };
     unsafe {
         core::ptr::write_volatile(&mut (*p).response_status, status);
         core::ptr::write_volatile(&mut (*p).response_data, data);
@@ -104,80 +113,98 @@ fn write_response(seq: u32, status: u32, data: u64, len: u32) {
 
 /// Called from the vmexit loop on every VMCALL exit.
 /// Returns `true` if the guest should be resumed, `false` to stop the loop.
-pub fn dispatch() -> bool {
-    let (op, seq, arg0, _arg1, req_len) = read_request();
+pub fn dispatch(vm_id: u8) -> bool {
+    let Some((op, seq, arg0, _arg1, req_len)) = read_request(vm_id) else {
+        hvlogf(format_args!("hv: vm{} reporting: vmcall bad vm id", vm_id));
+        return false;
+    };
     match op {
         OP_PRESERVE => {
-            write_response(seq, STATUS_OK, 0, 0);
+            write_response(vm_id, seq, STATUS_OK, 0, 0);
             false
         }
         OP_PING => {
-            write_response(seq, STATUS_OK, 0xCAFE_BABE, 0);
+            write_response(vm_id, seq, STATUS_OK, 0xCAFE_BABE, 0);
             true
         }
         OP_UNIX_TIME => {
             let t = crate::r::net::ntp::current_unix_seconds().unwrap_or(0);
-            write_response(seq, STATUS_OK, t, 0);
+            write_response(vm_id, seq, STATUS_OK, t, 0);
             true
         }
         OP_NET_TCP_WRITE => {
             let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
-            let p = host_ptr();
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return true;
+            };
             let bytes = unsafe { &(&(*p).payload)[..n] };
-            match crate::hv::vnet::tcp_write(1, bytes) {
-                Ok(written) => write_response(seq, STATUS_OK, written as u64, 0),
-                Err(_) => write_response(seq, STATUS_BAD_ARG, 0, 0),
+            match crate::hv::vnet::tcp_write(vm_id, bytes) {
+                Ok(written) => write_response(vm_id, seq, STATUS_OK, written as u64, 0),
+                Err(_) => write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0),
             }
             true
         }
         OP_NET_TCP_READ => {
             let want = core::cmp::min(arg0 as usize, PAYLOAD_CAP);
             if want == 0 {
-                write_response(seq, STATUS_BAD_ARG, 0, 0);
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return true;
             }
 
-            let p = host_ptr();
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return true;
+            };
             let out = unsafe { &mut (&mut (*p).payload)[..want] };
-            match crate::hv::vnet::tcp_read(1, out) {
-                Ok(got) => write_response(seq, STATUS_OK, got as u64, got as u32),
-                Err(_) => write_response(seq, STATUS_BAD_ARG, 0, 0),
+            match crate::hv::vnet::tcp_read(vm_id, out) {
+                Ok(got) => write_response(vm_id, seq, STATUS_OK, got as u64, got as u32),
+                Err(_) => write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0),
             }
             true
         }
         #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         OP_BP_NET_OPEN => {
             match crate::hv::blueprint_net::open_primary() {
-                Some(session_id) => write_response(seq, STATUS_OK, session_id as u64, 0),
-                None => write_response(seq, STATUS_BAD_ARG, 0, 0),
+                Some(session_id) => write_response(vm_id, seq, STATUS_OK, session_id as u64, 0),
+                None => write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0),
             }
             true
         }
         #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         OP_BP_NET_SUBMIT => {
             let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
-            let p = host_ptr();
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return true;
+            };
             let bytes = unsafe { &(&(*p).payload)[..n] };
             match crate::hv::blueprint_net::submit(arg0 as u32, bytes) {
-                Ok(()) => write_response(seq, STATUS_OK, 0, 0),
-                Err(()) => write_response(seq, STATUS_BAD_ARG, 0, 0),
+                Ok(()) => write_response(vm_id, seq, STATUS_OK, 0, 0),
+                Err(()) => write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0),
             }
             true
         }
         #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         OP_BP_NET_POLL => {
-            let p = host_ptr();
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return true;
+            };
             let out = unsafe { &mut (&mut (*p).payload)[..PAYLOAD_CAP] };
             match crate::hv::blueprint_net::poll_event(arg0 as u32, out) {
-                Ok(Some(len)) => write_response(seq, STATUS_OK, 1, len as u32),
-                Ok(None) => write_response(seq, STATUS_OK, 0, 0),
-                Err(()) => write_response(seq, STATUS_BAD_ARG, 0, 0),
+                Ok(Some(len)) => write_response(vm_id, seq, STATUS_OK, 1, len as u32),
+                Ok(None) => write_response(vm_id, seq, STATUS_OK, 0, 0),
+                Err(()) => write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0),
             }
             true
         }
         _ => {
-            hvlogf(format_args!("hv: vmcall unknown op=0x{:02X} seq={}", op, seq));
-            write_response(seq, STATUS_UNKNOWN_OP, 0, 0);
+            hvlogf(format_args!(
+                "hv: vm{} reporting: vmcall unknown op=0x{:02X} seq={}",
+                vm_id, op, seq
+            ));
+            write_response(vm_id, seq, STATUS_UNKNOWN_OP, 0, 0);
             true
         }
     }

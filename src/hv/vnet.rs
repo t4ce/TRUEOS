@@ -62,19 +62,17 @@ impl VmNetContext {
     }
 }
 
-static VM1_NET: Mutex<VmNetContext> = Mutex::new(VmNetContext::new(1));
+static VM_NET_CONTEXTS: [Mutex<VmNetContext>; crate::allcaps::hv::VM_ID_LIMIT] =
+    [const { Mutex::new(VmNetContext::new(0)) }; crate::allcaps::hv::VM_ID_LIMIT];
 static VM_NET_SEQ: AtomicU32 = AtomicU32::new(1);
 static VM_NET_DIAG_SEQ: AtomicU64 = AtomicU64::new(0);
 
-fn primary_vm_id() -> u8 {
-    crate::hv::snapshot::VM1_ID
+fn current_vm_id_for_log() -> u8 {
+    crate::hv::current_vm_id().unwrap_or(0)
 }
 
 fn context(vm_id: u8) -> Option<&'static Mutex<VmNetContext>> {
-    match vm_id {
-        1 => Some(&VM1_NET),
-        _ => None,
-    }
+    VM_NET_CONTEXTS.get(vm_id as usize)
 }
 
 fn record_request(ctx: &mut VmNetContext, op: u32, arg0: u64, arg1: u64, len: u32) -> u32 {
@@ -111,7 +109,7 @@ fn maybe_log(ctx: &VmNetContext, cpl: &VmNetCompletion) {
     if n <= 4 || n.is_power_of_two() {
         hvlogf(format_args!(
             "hv: vm{} reporting: vnet channel={} last-op=0x{:X} status={} data={} len={} tx_bytes={} rx_bytes={} recent_rx={}",
-            primary_vm_id(),
+            current_vm_id_for_log(),
             ctx.vm_id,
             ctx.last_req.map(|r| r.op).unwrap_or(0),
             cpl.status,
@@ -152,6 +150,7 @@ pub fn flush_console(vm_id: u8) {
     };
 
     let mut ctx = ctx_lock.lock();
+    ctx.vm_id = vm_id;
     if ctx.pending_console_text.is_empty() {
         return;
     }
@@ -169,6 +168,7 @@ pub fn tcp_write(vm_id: u8, bytes: &[u8]) -> Result<usize, VmNetStatus> {
     };
 
     let mut ctx = ctx_lock.lock();
+    ctx.vm_id = vm_id;
     push_console_bytes(&mut ctx, bytes);
     let seq = record_request(
         &mut ctx,
@@ -203,6 +203,7 @@ pub fn tcp_read(vm_id: u8, out: &mut [u8]) -> Result<usize, VmNetStatus> {
     }
 
     let mut ctx = ctx_lock.lock();
+    ctx.vm_id = vm_id;
     let seq =
         record_request(&mut ctx, VM_NET_OP_TCP_READ, out.len().min(u32::MAX as usize) as u64, 0, 0);
     for &b in &out[..got.min(VM_NET_INLINE_CAP)] {

@@ -18,7 +18,7 @@ Current proven claims in this capture:
   surface and CPU readback saw the commanded value.
 - `post-draw-light-sync-proof`: `vf-streamout-proof`, `vf-draw-path`, and
   `ps-launch-big-primitive` all report `post3d_light_marker=1` while
-  `post3d_marker=0` and `final_marker=0`.
+  `final_after_light_marker=0`, `post3d_marker=0`, and `final_marker=0`.
 - `vf-proof`: `vf-streamout-proof`, `vf-draw-path`,
   `vs-draw-frontier`, and `vs-streamout-proof` report
   `vf-proof accepted=1` with IA counters moving.
@@ -27,14 +27,14 @@ Current proven claims in this capture:
 - `ps-launch-frontier-proof`: on `vf-draw-path` and
   `ps-launch-big-primitive`, the PS launch input frontier reports
   `input_ready=1` while PS/CPS/depth counters all remain zero; both paths now
-  also show `post_draw_light=1 post_draw_heavy=0`.
+  also show `post_draw_light=1 post_draw_final_after_light=0`.
 - `vs-proof`: `vs-draw-frontier` and `vs-streamout-proof` report
   `vs-proof accepted=1` with `vs_delta=3`, and shader upload matches the baked
   blob.
-- Current negative frontier: the draw reaches a light post-3D sync marker but
-  not the heavy post-draw flush marker.  The oversized VF primitive proves a
-  full-surface coverage candidate, but `fragment_observed=0` and the PS
-  spectrum remains gated.
+- Current negative frontier: the draw reaches a light post-3D `PIPE_CONTROL`
+  post-sync write, but the following plain MI store does not retire.  The
+  oversized VF primitive proves a full-surface coverage candidate, but
+  `fragment_observed=0` and the PS spectrum remains gated.
 
 High-level checklist:
 
@@ -56,15 +56,15 @@ or display handoff.
 
 | 06. Shader upload | Proven | High | `shader-upload-verify ... vs_match=1 ps_match=1`; baked/uploaded signatures match for both VS and PS blobs. | The shader bytes used by the batch match the baked Mesa-derived blobs in memory. | That the VS output contract is correct, or that the PS ever dispatches. |
 
-| 07. Batch submit / RCS markers | Partly proven | Medium-high | `vf-streamout-proof`, `vf-draw-path`, and `ps-launch-big-primitive` report `batch-submit-proof completed=0 start_marker=1 post3d_light_marker=1 post3d_marker=0 final_marker=0`. | RCS accepts enough command stream to run markers, issue 3D work, and execute a light post-draw `PIPE_CONTROL` post-sync write. | Heavy post-draw flush/retire; current traces still end `completed=0` / `final_marker=0`. |
+| 07. Batch submit / RCS markers | Partly proven | Medium-high | `vf-streamout-proof`, `vf-draw-path`, and `ps-launch-big-primitive` report `batch-submit-proof completed=0 start_marker=1 post3d_light_marker=1 final_after_light_marker=0 post3d_marker=0 final_marker=0`. | RCS accepts enough command stream to run markers, issue 3D work, and execute a light post-draw `PIPE_CONTROL` post-sync write. | That the light post-sync `PIPE_CONTROL` retires into the MI tail, heavy post-draw flush/retire, or pixels. |
 
 | 07a. RCS MI scanout store | Proven | High | `mi-scanout-store-proof accepted=1 completed=1 marker=0xC0DE7713 xy=1280x720 gpu=0x2709400 pitch=0x2800 before=0x00D9D9D9 after=0x00262626 color=0x00262626`. | RCS command streamer can write one DWORD into the exact live scanout surface through GGTT. | VF, VS, clip/raster, PS dispatch, color backend, or render-target export. |
 
-| 07b. Post-draw heavy flush / retire | Negative frontier | High | `stage-frontier ... post_draw_light=1 post_draw_heavy=0 post_draw_retire=0 ... note=draw_reached_light_sync_not_heavy_flush`; `soft-accept ... reason=post3d-light-eop+vf-streamout-counters ... post3d_eop=0xC0DE7700`. | The split-sync patch isolated the current hang after draw and after a light post-sync marker, but before the heavy post-draw flush marker or final MI store. | Which heavy flush bit, cache domain, or downstream unit is holding the flush; it does not prove PS launch or RT export. |
+| 07b. Post-draw light `PIPE_CONTROL` retire | Negative frontier | High | `stage-frontier ... post_draw_light=1 post_draw_final_after_light=0 post_draw_heavy=0 post_draw_retire=0 ... note=draw_light_sync_wrote_but_tail_mi_store_did_not_retire`; `soft-accept ... post3d_light=0xC0DE7722 final_after_light=0xC0DE7700 post3d_eop=0xC0DE7700`. | The light post-sync write lands, but the command streamer does not advance to the following plain MI store; the current blocker is before the optional heavy flush marker. | Whether the failure is the post-sync operation, `CS_STALL`, a draw dependency, or packet ordering; it does not prove PS launch or RT export. |
 
-| 07c. Post-draw flush spectrum | Pending next boot | High when logged | Expected lines: `postdraw-flush-spectrum-proof accepted=... variant=light-only-retire|bit5-dc-flush|bit7-flush-enable|bit12-rt-flush|bit20-cs-stall|bit26-hdc-flush heavy_flags=0x... post3d_light=... final_after_light=... post3d_heavy=... final=...`; `batch-submit-proof ... final_after_light_marker=...`. | Tests whether command streamer advances past the light post-sync into a plain MI final marker, then isolates the heavy post-draw `PIPE_CONTROL` bit or cache domain that blocks retire. | PS launch, RT export, or visible pixels; this accepts only on marker/retire behavior. |
+| 07c. Post-draw flush spectrum | Negative proof | High | `postdraw-light-only-retire postdraw-flush-spectrum-proof accepted=0 variant=light-only-retire heavy_flags=0x00000000 post3d_light=1 final_after_light=0 post3d_heavy=0 final=0`; bit5/bit7/bit12/bit20/bit26 variants all also report `final_after_light=0`. | The failure is not an individual heavy flush bit or cache domain: even the light-only variant fails before the optional heavy `PIPE_CONTROL`. | Which part of the light `PIPE_CONTROL` contract blocks retire; PS launch, RT export, or visible pixels. |
 
-| 08. VF / input assembler | Proven | High | `vf-proof accepted=1 ia_vtx_delta=3`; streamout path also shows `delta_so0=3 delta_so_write0=96` with `delta_vs=0`, accepted by `post3d-light-eop+vf-streamout-counters`. | VF can consume the declared vertex layout; one proof streams out without VS and reaches the light post-draw sync. | VS, clipper, PS, render target writes, or heavy post-draw retire. |
+| 08. VF / input assembler | Proven | High | `vf-proof accepted=1 ia_vtx_delta=3`; streamout path also shows `delta_so0=3 delta_so_write0=96` with `delta_vs=0`, accepted by `post3d-light-eop+vf-streamout-counters`. | VF can consume the declared vertex layout; one proof streams out without VS and reaches the light post-draw sync. | VS, clipper, PS, render target writes, or light `PIPE_CONTROL` retire. |
 
 | 09. VS execution | Proven | High | `vs-proof accepted=1 vs_delta=3` on `vs-draw-frontier` and `vs-streamout-proof`. | VS counters move for the three submitted vertices. | Correct VS output layout into clipper/SBE; VS paths still do not produce clipper counters. |
 
@@ -74,13 +74,13 @@ or display handoff.
 
 | 10c. Shape-to-fragment boundary | Candidate proven; gate active | High | `fragment-candidate-shape accepted=1 geometry=oversized ... screen_bbox=[0,0..2559,1439]`; `fragment-candidate-proof accepted=1 candidate_ready=1 oversized=1 clip_counter=1 raster_packet=1 ps_state_marker=1 fragment_observed=0`; `primary-fragment-boundary-gate candidate_ready=1 fragment_observed=0 action=halt-ps-spectrum`. | The oversized VF primitive covers the full target and reaches the clip/raster/PS-state candidate frontier, so small-triangle coverage is not the explanation. | Actual fragment/sample emission, WM input, PS launch, or RT write; the gate intentionally stops deeper PS-spectrum probes while `fragment_observed=0`. |
 
-| 11. Pixel shader dispatch | Not proven; gated | High negative counters, medium PS blame | `vf-draw-path` and `ps-launch-big-primitive` still report `ps-launch-frontier-proof accepted=0 input_ready=1 ps_state_marker=1 raster_packet=1 clip_counter=1 ps_delta=0 cps_delta=0 ps_depth_delta=0`; both also report `post_draw_light=1 post_draw_heavy=0`, and the primary gate reports `fragment_observed=0 action=halt-ps-spectrum`. | No PS/CPS/depth counter movement is observed after the current candidate frontier. | That PS state is the blocker; the active blockers are now heavy post-draw flush/retire and the missing fragment/WM-input observable. |
+| 11. Pixel shader dispatch | Not proven; gated | High negative counters, medium PS blame | `vf-draw-path` and `ps-launch-big-primitive` still report `ps-launch-frontier-proof accepted=0 input_ready=1 ps_state_marker=1 raster_packet=1 clip_counter=1 ps_delta=0 cps_delta=0 ps_depth_delta=0`; both also report `post_draw_light=1 post_draw_final_after_light=0`, and the primary gate reports `fragment_observed=0 action=halt-ps-spectrum`. | No PS/CPS/depth counter movement is observed after the current candidate frontier. | That PS state is the blocker; the active blockers are now light `PIPE_CONTROL` retire and the missing fragment/WM-input observable. |
 
-| 11a. PS launch with oversized VF primitive | Negative at current observable | High | `ps-launch-big-primitive-proof accepted=0 input_ready=1 oversized=1 ps_state_marker=1 raster_packet=1 clip_counter=1 ps_delta=0 cps_delta=0 ps_depth_delta=0`; the same submit has `post3d_light_marker=1 post3d_marker=0 final_marker=0`. | The row-11 failure is not explained by small-triangle coverage; the oversized VF primitive reaches the current PS launch candidate frontier with no PS/CPS/depth counter motion. | Render target write, visible pixels, or a clean PS-side negative independent of the heavy-flush/frontier gate. |
+| 11a. PS launch with oversized VF primitive | Negative at current observable | High | `ps-launch-big-primitive-proof accepted=0 input_ready=1 oversized=1 ps_state_marker=1 raster_packet=1 clip_counter=1 ps_delta=0 cps_delta=0 ps_depth_delta=0`; the same submit has `post3d_light_marker=1 final_after_light_marker=0 post3d_marker=0 final_marker=0`. | The row-11 failure is not explained by small-triangle coverage; the oversized VF primitive reaches the current PS launch candidate frontier with no PS/CPS/depth counter motion. | Render target write, visible pixels, or a clean PS-side negative independent of the row-07 light-`PIPE_CONTROL` retire gate. |
 
 | 11b. PS binding-table / BT-count contract | Coherent state, PS still gated | Medium-high | Current boot: `probe-binding-table-pool ... enable=implicit-gfx125 ps_bt_ptr=0x0 bt_gpu=0x861000 bt_entry0=0x00001040 surf_gpu=0x861040 contract=pool-relative`; `mesa-compare host_ps[binding_table_entry_count=0] trueos_ps[binding_table_entry_count=1]`. Earlier BT-count variant still had `ps_delta=0 cps_delta=0 ps_depth_delta=0`. | The binding-table pool/base/surface-state address contract is no longer blind, and missing pool allocation is not the obvious blocker. | Whether Mesa-style PS BT count `0` vs TrueOS count `1` matters; current deeper BT-count experiments are gated by 07b/10c. |
 
-| 11c. WM normal dispatch variant | Archived negative; gated now | Medium-high | Earlier: `ps-wm-normal-big-primitive-proof accepted=0 input_ready=1 oversized=1 wm_force=normal dispatch_qualifier=writeable_rt ... ps_delta=0 cps_delta=0 ps_depth_delta=0`; current backend gate still shows `dispatch_armed=1 reason=force-thread-dispatch-on` on the baseline path. | The old force-thread-dispatch debug knob is unlikely to be the sole blocker. | A clean current WM-normal proof independent of the 07b heavy-flush miss and 10c fragment gate. |
+| 11c. WM normal dispatch variant | Archived negative; gated now | Medium-high | Earlier: `ps-wm-normal-big-primitive-proof accepted=0 input_ready=1 oversized=1 wm_force=normal dispatch_qualifier=writeable_rt ... ps_delta=0 cps_delta=0 ps_depth_delta=0`; current backend gate still shows `dispatch_armed=1 reason=force-thread-dispatch-on` on the baseline path. | The old force-thread-dispatch debug knob is unlikely to be the sole blocker. | A clean current WM-normal proof independent of the 07b light-`PIPE_CONTROL` retire miss and 10c fragment gate. |
 
 | 11d. PS dispatch-width / KSP-slot encoding | Negative proof | High | Corrected-layout lines: slot0 `ksp0=0xC0 ... ps_dispatch_bits=100`, slot1 `ksp1=0xC0 ... ps_dispatch_bits=010`, slot2 `ksp2=0xC0 ... ps_dispatch_bits=001`; each has `ps-dispatch-slot-proof accepted=0 input_ready=1 ... ps_delta=0 cps_delta=0 ps_depth_delta=0`. | Dispatch width and actual Gen12.5 KSP-slot placement are not the blocker; all single-slot variants preserve the launch frontier but do not launch PS threads. | RT export or visible pixels; accepts only on PS/CPS/depth counter movement. |
 
@@ -90,11 +90,11 @@ or display handoff.
 
 | 11g. PS scratch / thread-payload contract | Negative proof | High | `probe-ps-payload-decoded` logs prove each variant was programmed; `ps-payload-proof accepted=0 input_ready=1` for `push-constant-enable`, `attribute-enable`, `simple-ps-hint`, `source-depth-w`, and `bary-plane-coeffs`, all with `ps_delta=0 cps_delta=0 ps_depth_delta=0`. | The PS launch gap is not fixed by push-constant enable, attribute payload enable, simple-PS hint, source Z/W payload phases, or barycentric plane payload phases. | RT export or correct color; accepts only on PS/CPS/depth counter movement. |
 
-| 11h. PS_EXTRA dependency/source bits | Blocked by 07b/10c | Medium-high only after fragment boundary | Expected line, once unblocked: `ps-extra-dep-proof accepted=... input_ready=1 ps_extra=... dep_on_cp=... source_depth_w=... bary=... ps_delta=...`. | Tests Gen12/XeLP `3DSTATE_PS_EXTRA` dependency/source/barycentric bits only after heavy post-draw flush and shape-to-fragment are no longer the active misses. | RT export or visible pixels; accepts only on PS/CPS/depth counter movement. |
+| 11h. PS_EXTRA dependency/source bits | Blocked by 07b/10c | Medium-high only after fragment boundary | Expected line, once unblocked: `ps-extra-dep-proof accepted=... input_ready=1 ps_extra=... dep_on_cp=... source_depth_w=... bary=... ps_delta=...`. | Tests Gen12/XeLP `3DSTATE_PS_EXTRA` dependency/source/barycentric bits only after light `PIPE_CONTROL` retire and shape-to-fragment are no longer the active misses. | RT export or visible pixels; accepts only on PS/CPS/depth counter movement. |
 
-| 11i. Gen12/XeLP 3DSTATE ordering / flush | Instrumented via 07c | High for post-draw flush, medium for PS order | Current evidence: `post_draw_light=1 post_draw_heavy=0 post_draw_retire=0 note=draw_reached_light_sync_not_heavy_flush`; next boot should add row-07c per-bit flush lines. | The useful ordering/flush axis has moved from hypothesis into instrumentation: light-only retire and one-heavy-bit-at-a-time variants are now emitted before reopening PS launch variants. | Shader correctness or RT export; accepts only on PS/CPS/depth counter movement. |
+| 11i. Gen12/XeLP `PIPE_CONTROL` ordering / retire | Refined by 07c | High for post-draw retire, medium for PS order | Current evidence: `post_draw_light=1 post_draw_final_after_light=0 post_draw_heavy=0 post_draw_retire=0 note=draw_light_sync_wrote_but_tail_mi_store_did_not_retire`; row 07c shows `light-only-retire` also fails with `final_after_light=0`. | The useful ordering/flush axis is no longer "which heavy bit"; the next split is post-sync write vs `CS_STALL` vs draw dependency, using before/after MI markers around the light `PIPE_CONTROL`. | Shader correctness or RT export; accepts only on PS/CPS/depth counter movement. |
 
-| 12. Render target write | Not proven | High confidence negative | `vf-draw-path ps-rt-proof accepted=0 ps_delta=0 rt_any_change=0 rt_triangle_change=0`; oversized primitive also reports `ps-rt-proof accepted=0` and unchanged sampled pixels while `post_draw_light=1 post_draw_heavy=0`. | Sampled pixels did not change in this capture, even after full-surface oversized coverage and coherent binding-table-pool logging. | Whether the blocker is PS dispatch, backend/color export, RT state, cache visibility, or the now-isolated hang before heavy post-draw retire. |
+| 12. Render target write | Not proven | High confidence negative | `vf-draw-path ps-rt-proof accepted=0 ps_delta=0 rt_any_change=0 rt_triangle_change=0`; oversized primitive also reports `ps-rt-proof accepted=0` and unchanged sampled pixels while `post_draw_light=1 post_draw_final_after_light=0`. | Sampled pixels did not change in this capture, even after full-surface oversized coverage and coherent binding-table-pool logging. | Whether the blocker is PS dispatch, backend/color export, RT state, cache visibility, or the now-isolated light `PIPE_CONTROL` retire failure. |
 
 | 13. Display handoff | Proven | High | `primary-boot-surface ... surf=0x02000000 surf_live=0x02000000 ok=1 logo=1` | The display pipe/plane can scan out the memory we think it can. | That 3D rendered the scanned-out pixels. |
 
@@ -118,10 +118,12 @@ Current frontier:
   same live scanout surface that CPU/display already proved.  This narrows the
   problem below command-streamer/scanout memory access, without claiming any 3D
   pipeline stage.
-- The split-sync patch is now answered: all three current 3D submits reach
-  `post3d_light_marker=1`, then miss `post3d_marker` and `final_marker`.
-  The immediate row-07b frontier is therefore the heavy post-draw
-  `PIPE_CONTROL` flush/retire contract, not command submission in general.
+- The split-sync patch is now sharper: all three current 3D submits reach
+  `post3d_light_marker=1`, then miss `final_after_light_marker=0`,
+  `post3d_marker=0`, and `final_marker=0`.  The light post-sync write lands,
+  but the following plain MI store does not retire, so the row-07 frontier is
+  the light `PIPE_CONTROL` retire/ordering contract, not command submission in
+  general and not yet a heavy-flush-bit problem.
 - The binding-table-pool path is now explicit and coherent:
   `base=0x861000`, `ps_bt_ptr=0x0`, `bt_entry0=0x00001040`,
   `surf_gpu=0x861040`, `contract=pool-relative`.  Keep the Mesa comparison
@@ -129,7 +131,7 @@ Current frontier:
   programs `1`.
 - We have not yet proven `ps-rt-proof`.  The VF draw path and oversized VF
   primitive still reach `ps-launch-frontier-proof input_ready=1`, but the
-  captures also show `post_draw_heavy=0`, `ps-dispatch-proof accepted=0`,
+  captures also show `post_draw_final_after_light=0`, `ps-dispatch-proof accepted=0`,
   `ps-rt-proof accepted=0`, `ps_delta=0`, `cps_delta=0`,
   `ps_depth_delta=0`, and `rt_any_change=0`.
 - `vf-draw-path` proves clipper primitives, but `vs-draw-frontier` only proves
@@ -141,7 +143,8 @@ Current frontier:
   `candidate_ready=1` with `fragment_observed=0`, even for oversized coverage.
 - `ps-bt1-big-primitive-proof` and `ps-wm-normal-big-primitive-proof` remain
   useful archived negatives, but the current boot gates deeper PS-spectrum
-  fanout after row 10c and shows row 07b heavy-flush failure on the base paths.
+  fanout after row 10c and shows row 07b light-`PIPE_CONTROL` retire failure
+  on the base paths.
 - `ps-ksp-proof` is answered: CPU readback shows the programmed KSP offset
   points at the baked/uploaded PS code word.  Stop blaming a simple PS code
   upload or KSP offset mistake.
@@ -167,18 +170,21 @@ Current frontier:
 - We have not proven "triangle visible because render produced pixels."  The
   display proof is real, but it is independent of the failing PS/render-target
   boundary until `ps-rt-proof` changes a sampled pixel.
-- Row 07b and row 10c are now the active gates.  Row 07c is instrumented for
-  the next boot: it should tell whether light-only retire works and whether
-  bit5, bit7, bit12, bit20, or bit26 is the heavy flush blocker.  The boot stops the
-  PS-spectrum fanout after the oversized shape probe unless
-  `fragment_observed=1`; until then, further PS-side negative probes are
-  treated as blocked rather than meaningful.
+- Row 07b and row 10c are now the active gates.  Row 07c is answered negative:
+  `light-only-retire` fails before any optional heavy flush, and bit5/bit7/
+  bit12/bit20/bit26 do not get a chance to distinguish themselves because
+  `final_after_light=0` every time.  The boot stops the PS-spectrum fanout
+  after the oversized shape probe unless `fragment_observed=1`; until then,
+  further PS-side negative probes are treated as blocked rather than
+  meaningful.
 
 Next best patch target:
 
-- First read row 07c on the next boot.  If `light-only-retire` reaches
-  `final=1`, the command streamer can retire the draw tail without the heavy
-  flush.  If a single bit fails, that bit/cache domain is the next patch.
-- Then keep row 10c honest: once a submit can retire or deliberately skip the
-  heavy flush, find or wire a real rasterizer sample / WM-input observable
-  before reopening PS_EXTRA, WM-normal, or payload-spectrum probes.
+- Add a row-07d "PC retire triad": a `MI_STORE_DATA_IMM` immediately before
+  the light `PIPE_CONTROL`, the existing light post-sync write, and the current
+  `final_after_light` MI store immediately after it.  Then split variants for
+  post-sync without `CS_STALL` and `CS_STALL` without post-sync so the next log
+  can say whether the blocker is the write, the stall, or draw dependency.
+- Then keep row 10c honest: once the command tail can retire or deliberately
+  bypass this `PIPE_CONTROL`, find or wire a real rasterizer sample / WM-input
+  observable before reopening PS_EXTRA, WM-normal, or payload-spectrum probes.

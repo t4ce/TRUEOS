@@ -1,17 +1,19 @@
-use alloc::vec::Vec;
+use alloc::{format, string::String, vec::Vec};
 
 use super::hvlogf;
 use crate::hv::memory::*;
 
-pub const VM1_SNAPSHOT_MAGIC: u32 = 0x3153_4D56; // "VMS1"
-pub const VM1_SNAPSHOT_VERSION: u32 = 1;
-pub const VM1_SNAPSHOT_PATH: &str = "vm/vm1.snapshot";
-pub const VM1_ID: u8 = 0;
+pub const VM_SNAPSHOT_MAGIC: u32 = 0x3153_4D56; // "VMS1"
+pub const VM_SNAPSHOT_VERSION: u32 = 1;
 pub const GUEST_SNAPSHOT_PAGE_COUNT: usize = 6 + GUEST_LOW_PT_COUNT + GUEST_HIGH_IMAGE_PT_COUNT;
+
+pub fn snapshot_path(vm_id: u8) -> String {
+    format!("vm/vm{}.snapshot", vm_id)
+}
 
 #[repr(C)]
 #[derive(Copy, Clone)]
-pub struct Vm1SnapshotHeader {
+pub struct VmSnapshotHeader {
     pub magic: u32,
     pub version: u32,
     pub guest_cr3: u64,
@@ -45,8 +47,11 @@ pub enum RestoreError {
     CodeMismatch,
 }
 
-pub fn capture_snapshot_meta(lr: crate::hv::vmx::LaunchResult) {
-    let mut meta = VM1_SNAPSHOT_META.lock();
+pub fn capture_snapshot_meta(vm_id: u8, lr: crate::hv::vmx::LaunchResult) {
+    let Some(meta_lock) = vm_snapshot_meta_lock(vm_id) else {
+        return;
+    };
+    let mut meta = meta_lock.lock();
     if let Some(mut m) = *meta {
         m.exit_reason = lr.exit_reason;
         m.exit_qualification = lr.exit_qualification;
@@ -55,14 +60,17 @@ pub fn capture_snapshot_meta(lr: crate::hv::vmx::LaunchResult) {
     }
 }
 
-pub fn snapshot_bytes() -> Result<Vec<u8>, SaveError> {
-    let Some(meta) = *VM1_SNAPSHOT_META.lock() else {
+pub fn snapshot_bytes(vm_id: u8) -> Result<Vec<u8>, SaveError> {
+    let Some(meta_lock) = vm_snapshot_meta_lock(vm_id) else {
+        return Err(SaveError::UnsupportedVmId);
+    };
+    let Some(meta) = *meta_lock.lock() else {
         return Err(SaveError::NoSnapshot);
     };
 
-    let header = Vm1SnapshotHeader {
-        magic: VM1_SNAPSHOT_MAGIC,
-        version: VM1_SNAPSHOT_VERSION,
+    let header = VmSnapshotHeader {
+        magic: VM_SNAPSHOT_MAGIC,
+        version: VM_SNAPSHOT_VERSION,
         guest_cr3: meta.guest_cr3,
         guest_rip: meta.guest_rip,
         guest_rsp: meta.guest_rsp,
@@ -76,15 +84,15 @@ pub fn snapshot_bytes() -> Result<Vec<u8>, SaveError> {
     };
     let guest_stack = guest_stack_slice().ok_or(SaveError::NoSnapshot)?;
 
-    let total = core::mem::size_of::<Vm1SnapshotHeader>()
+    let total = core::mem::size_of::<VmSnapshotHeader>()
         + (GUEST_SNAPSHOT_PAGE_COUNT * PAGE_SIZE_4K)
         + guest_stack.len()
         + meta.code_len as usize;
     let mut out = Vec::with_capacity(total);
     push_bytes(&mut out, unsafe {
         core::slice::from_raw_parts(
-            (&header as *const Vm1SnapshotHeader).cast::<u8>(),
-            core::mem::size_of::<Vm1SnapshotHeader>(),
+            (&header as *const VmSnapshotHeader).cast::<u8>(),
+            core::mem::size_of::<VmSnapshotHeader>(),
         )
     });
     unsafe {
@@ -109,8 +117,14 @@ pub fn snapshot_bytes() -> Result<Vec<u8>, SaveError> {
     Ok(out)
 }
 
-pub fn restore_snapshot_bytes(bytes: &[u8]) -> Result<(), RestoreError> {
-    let header_len = core::mem::size_of::<Vm1SnapshotHeader>();
+pub fn restore_snapshot_bytes(vm_id: u8, bytes: &[u8]) -> Result<(), RestoreError> {
+    let Some(snapshot_meta_lock) = vm_snapshot_meta_lock(vm_id) else {
+        return Err(RestoreError::UnsupportedVmId);
+    };
+    let Some(restore_meta_lock) = vm_restore_meta_lock(vm_id) else {
+        return Err(RestoreError::UnsupportedVmId);
+    };
+    let header_len = core::mem::size_of::<VmSnapshotHeader>();
     if bytes.len() < header_len {
         return Err(RestoreError::BadSnapshot);
     }
@@ -192,7 +206,7 @@ pub fn restore_snapshot_bytes(bytes: &[u8]) -> Result<(), RestoreError> {
     }
 
     let guest_cr3 = current_guest_cr3_pa().map_err(|_| RestoreError::BadSnapshot)?;
-    let restored = Vm1SnapshotMeta {
+    let restored = VmSnapshotMeta {
         guest_cr3,
         guest_rip: header.guest_rip,
         guest_rsp: header.guest_rsp,
@@ -202,16 +216,20 @@ pub fn restore_snapshot_bytes(bytes: &[u8]) -> Result<(), RestoreError> {
         exit_qualification: header.exit_qualification,
         exit_guest_rip: header.exit_guest_rip,
     };
-    *VM1_SNAPSHOT_META.lock() = Some(restored);
-    *VM1_RESTORE_META.lock() = Some(restored);
+    *snapshot_meta_lock.lock() = Some(restored);
+    *restore_meta_lock.lock() = Some(restored);
     hvlogf(format_args!(
-        "hv: vm1 reporting: restore armed guest_cr3=0x{:016X} guest_rip=0x{:016X} guest_rsp=0x{:016X}",
-        restored.guest_cr3, restored.guest_rip, restored.guest_rsp
+        "hv: vm{} reporting: restore armed path={} guest_cr3=0x{:016X} guest_rip=0x{:016X} guest_rsp=0x{:016X}",
+        vm_id,
+        snapshot_path(vm_id).as_str(),
+        restored.guest_cr3,
+        restored.guest_rip,
+        restored.guest_rsp
     ));
     Ok(())
 }
 
-fn parse_snapshot_header(bytes: &[u8]) -> Result<Vm1SnapshotHeader, RestoreError> {
+fn parse_snapshot_header(bytes: &[u8]) -> Result<VmSnapshotHeader, RestoreError> {
     let mut off = 0usize;
     let magic = take_u32(bytes, &mut off)?;
     let version = take_u32(bytes, &mut off)?;
@@ -225,10 +243,10 @@ fn parse_snapshot_header(bytes: &[u8]) -> Result<Vm1SnapshotHeader, RestoreError
     let exit_guest_rip = take_u64(bytes, &mut off)?;
     let guest_stack_bytes = take_u64(bytes, &mut off)?;
     let guest_page_bytes = take_u64(bytes, &mut off)?;
-    if magic != VM1_SNAPSHOT_MAGIC || version != VM1_SNAPSHOT_VERSION {
+    if magic != VM_SNAPSHOT_MAGIC || version != VM_SNAPSHOT_VERSION {
         return Err(RestoreError::BadSnapshot);
     }
-    Ok(Vm1SnapshotHeader {
+    Ok(VmSnapshotHeader {
         magic,
         version,
         guest_cr3,
