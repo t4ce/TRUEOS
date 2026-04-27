@@ -2,7 +2,6 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::cmp::Ordering as CmpOrdering;
-use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use heapless::String as HString;
 
@@ -42,7 +41,8 @@ pub(crate) use self::ui2_hosted::{signal_hosted_browser_factory_mask, ui2_hosted
 pub use self::ui2_win::*;
 pub use self::ui2_win_deco::*;
 use trueos_gfx_core::{
-    RGB_VERTEX_SIZE, Rgba8, TEX_VERTEX_SIZE, ViewTransform, push_rgb_quad_px, push_tex_quad_px,
+    RGB_VERTEX_SIZE, Rgba8, TEX_VERTEX_SIZE, TexVertex, ViewTransform, push_rgb_quad_px,
+    push_tex_quad_px, push_tex_vertex_bytes,
 };
 
 const UI2_BAR_H: f32 = 26.0;
@@ -344,6 +344,8 @@ enum Ui2SystemButtonAction {
     Restore,
     ToggleMaximize,
     PreserveVm,
+    RotateLeft,
+    RotateRight,
     Close,
 }
 
@@ -464,6 +466,8 @@ struct Ui2Window {
     decoration_mode: Ui2WindowDecorationMode,
     titlebar_visible: bool,
     bottom_bar_visible: bool,
+    rotate_buttons_visible: bool,
+    content_rotation_quadrants: u8,
     left_scrollbar_visible: bool,
     bottom_scrollbar_visible: bool,
     resize_mode: Ui2WindowResizeMode,
@@ -533,6 +537,9 @@ fn ui2_window_min_size(window: &Ui2Window) -> (f32, f32) {
 
     if window.bottom_bar_visible && window.state == Ui2WindowStateKind::Normal {
         min_w = min_w.max(UI2_BOTTOM_BAR_H + 1.0);
+        if window.rotate_buttons_visible {
+            min_w = min_w.max(UI2_BOTTOM_BAR_H * 3.0 + 2.0);
+        }
     }
 
     (min_w, min_h)
@@ -1476,6 +1483,30 @@ pub unsafe extern "C" fn trueos_cabi_ui2_window_set_horizontal_scrollbar_side(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_ui2_window_set_rotate_buttons_visible(
+    window_id: u32,
+    visible: u32,
+) -> i32 {
+    if set_window_rotate_buttons_visible(window_id, visible != 0) {
+        0
+    } else {
+        -1
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_ui2_window_set_content_rotation_quadrants(
+    window_id: u32,
+    quadrants: u32,
+) -> i32 {
+    if set_window_content_rotation_quadrants(window_id, (quadrants % 4) as u8) {
+        0
+    } else {
+        -1
+    }
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_ui2_window_minimize(window_id: u32) -> i32 {
     if minimize_window(window_id) { 0 } else { -1 }
 }
@@ -1614,6 +1645,81 @@ fn draw_texture_rect_uv_rgba_no_present(
     let _ = unsafe {
         crate::r::io::cabi::trueos_cabi_gfx_set_blend(
             if blend_enabled || rgba.3 < 255 { 1 } else { 0 },
+            0x0302,
+            0x0303,
+            0x0302,
+            0x0303,
+            0,
+            0,
+        )
+    };
+    let rc = unsafe {
+        crate::r::io::cabi::trueos_cabi_gfx_draw_tex_triangles_no_present(
+            tex_id,
+            verts.as_ptr(),
+            verts.len(),
+        )
+    };
+    let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0) };
+    rc == 0
+}
+
+fn draw_texture_rect_uv_rotated_no_present(
+    tex_id: u32,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    u0: f32,
+    v0: f32,
+    u1: f32,
+    v1: f32,
+    rotation_quadrants: u8,
+    view_w: u32,
+    view_h: u32,
+    blend_enabled: bool,
+    alpha: u8,
+) -> bool {
+    if tex_id == 0 || !(width > 0.0 && height > 0.0) {
+        return false;
+    }
+    let color = Rgba8::new(255, 255, 255, alpha);
+    let transform = ViewTransform::from_extent(view_w, view_h);
+    let left = x;
+    let right = x + width;
+    let top = y;
+    let bottom = y + height;
+    let (uv_tl, uv_tr, uv_br, uv_bl) = match rotation_quadrants % 4 {
+        1 => ([u0, v1], [u0, v0], [u1, v0], [u1, v1]),
+        2 => ([u1, v1], [u0, v1], [u0, v0], [u1, v0]),
+        3 => ([u1, v0], [u1, v1], [u0, v1], [u0, v0]),
+        _ => ([u0, v0], [u1, v0], [u1, v1], [u0, v1]),
+    };
+    let mut verts = alloc::vec::Vec::with_capacity(6 * TEX_VERTEX_SIZE);
+    for (px, py, uv) in [
+        (left, bottom, uv_bl),
+        (right, bottom, uv_br),
+        (right, top, uv_tr),
+        (left, bottom, uv_bl),
+        (right, top, uv_tr),
+        (left, top, uv_tl),
+    ] {
+        let vertex = transform.tex_vertex_px(px, py, uv[0], uv[1], color);
+        push_tex_vertex_bytes(
+            &mut verts,
+            TexVertex {
+                x: vertex.x,
+                y: vertex.y,
+                u: vertex.u,
+                v: vertex.v,
+                color,
+            },
+        );
+    }
+    let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_set_sampler(0, 0, 0, 0) };
+    let _ = unsafe {
+        crate::r::io::cabi::trueos_cabi_gfx_set_blend(
+            if blend_enabled || alpha < 255 { 1 } else { 0 },
             0x0302,
             0x0303,
             0x0302,
@@ -1832,7 +1938,26 @@ fn draw_window_texture_content(
     content: Ui2Rect,
     tex_id: u32,
 ) -> bool {
+    let rotation = window.content_rotation_quadrants % 4;
     if !window.content_preserve_scale {
+        if rotation != 0 {
+            return draw_texture_rect_uv_rotated_no_present(
+                tex_id,
+                content.x,
+                content.y,
+                content.w,
+                content.h,
+                0.0,
+                0.0,
+                1.0,
+                1.0,
+                rotation,
+                state.view_w,
+                state.view_h,
+                window.content_tex_blend,
+                window.alpha,
+            );
+        }
         return draw_texture_rect_no_present(
             tex_id,
             content.x,
@@ -1868,21 +1993,40 @@ fn draw_window_texture_content(
     let u1 = (visible_x1 - draw_x) / draw_w;
     let v1 = (visible_y1 - draw_y) / draw_h;
 
-    draw_texture_rect_uv_no_present(
-        tex_id,
-        visible_x0,
-        visible_y0,
-        visible_w,
-        visible_h,
-        u0,
-        v0,
-        u1,
-        v1,
-        state.view_w,
-        state.view_h,
-        window.content_tex_blend,
-        window.alpha,
-    )
+    if rotation != 0 {
+        draw_texture_rect_uv_rotated_no_present(
+            tex_id,
+            visible_x0,
+            visible_y0,
+            visible_w,
+            visible_h,
+            u0,
+            v0,
+            u1,
+            v1,
+            rotation,
+            state.view_w,
+            state.view_h,
+            window.content_tex_blend,
+            window.alpha,
+        )
+    } else {
+        draw_texture_rect_uv_no_present(
+            tex_id,
+            visible_x0,
+            visible_y0,
+            visible_w,
+            visible_h,
+            u0,
+            v0,
+            u1,
+            v1,
+            state.view_w,
+            state.view_h,
+            window.content_tex_blend,
+            window.alpha,
+        )
+    }
 }
 
 fn draw_window_frame(state: &Ui2State, window: &Ui2Window) -> Ui2WindowDrawTiming {

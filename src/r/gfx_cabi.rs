@@ -3,6 +3,14 @@ extern crate alloc;
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::string::String;
 use alloc::vec::Vec;
+
+fn runtime_context_key() -> u32 {
+    if let Some(vm_id) = crate::hv::current_vm_id_by_lapic_low() {
+        return 0x8000_0000 | vm_id as u32;
+    }
+    crate::percpu::this_cpu().cpu_index()
+}
+
 /// Kernel-facing helpers for basic file I/O.
 ///
 /// These expose the TRUEOSFS root filesystem operations used by the shell,
@@ -213,7 +221,7 @@ pub mod env {
 
     #[inline]
     fn cpu_key() -> u32 {
-        crate::percpu::this_cpu().cpu_index()
+        super::runtime_context_key()
     }
 
     pub(crate) fn with_launch_context<R>(
@@ -390,7 +398,7 @@ pub mod cabi {
         spin::Mutex::new(BTreeMap::new());
 
     fn current_cpu_key() -> u32 {
-        crate::percpu::this_cpu().cpu_index()
+        super::runtime_context_key()
     }
 
     fn level_from_tag(level: &str) -> Option<log::Level> {

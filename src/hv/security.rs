@@ -7,6 +7,7 @@
 pub const HVSR_0001_VMEXIT_PREDICTOR_ISOLATION: &str = "HVSR-0001";
 pub const HVSR_0002_EPT_HOST_MEMORY_EXPOSURE: &str = "HVSR-0002";
 pub const HVSR_0003_EPT_PERMISSION_NARROWING: &str = "HVSR-0003";
+pub const HVSR_0004_GUEST_MSR_SURFACE: &str = "HVSR-0004";
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum VmexitMitigationMode {

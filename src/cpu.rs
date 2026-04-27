@@ -230,6 +230,10 @@ pub fn restart_current_worker_ap_from_panic() -> ! {
     crate::log!("PANIC PANIC PANIC: restarting worker ap slot={} lapic={}\n", slot, lapic_id);
 
     percpu::init_ap(lapic_id, slot);
+    if slot > 1 {
+        crate::hv::enter_vmx_root_for_current_cpu_contract()
+            .expect("VMX core contract failed during AP restart");
+    }
     let ex = percpu::init_executor();
     let spawner = ex.spawner();
     let restart_count = ATOMIC_BOMB_RESTARTS.fetch_add(1, Ordering::AcqRel) + 1;
@@ -249,6 +253,10 @@ pub unsafe extern "C" fn ap_start(cpu: &LimineCpu) -> ! {
     let lapic_id = crate::limine::mp_cpu_id(cpu);
     let slot = percpu::slot_for_lapic_id(lapic_id);
     percpu::init_ap(lapic_id, slot as u32);
+    if slot > 1 {
+        crate::hv::enter_vmx_root_for_current_cpu_contract()
+            .expect("VMX core contract failed during AP startup");
+    }
     let ex = percpu::init_executor();
     let spawner = ex.spawner();
     enter_ap_runtime(spawner)

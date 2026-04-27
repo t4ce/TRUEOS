@@ -30,6 +30,7 @@ pub const TRUEOSFS_ROOT_MOUNTED: u32 = 1 << 16;
 pub const QJS_ASYNC_FS_READY: u32 = 1 << 17;
 pub const INTEL_HDA_READY: u32 = 1 << 18;
 pub const GFX_VIRGL_READY: u32 = 1 << 19;
+pub const HTTP_TRUEOSFS_LISTENING: u32 = 1 << 20;
 pub const GFX_BACKEND_READY: u32 = 1 << 22;
 pub const UI2_READY: u32 = 1 << 23;
 pub const APP_VM_READY: u32 = 1 << 24;

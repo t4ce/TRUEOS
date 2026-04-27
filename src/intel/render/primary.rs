@@ -279,8 +279,42 @@ fn submit_primary_triangle_with_retries(
         "intel/render: primary-ps-bt0-scratch-rt completed={}\n",
         ps_bt0_scratch_rt as u8,
     );
+    intel_render_focus_log!(
+        "intel/render: primary-ps-bt0-scratch-rt diagnostic completed={} note=no-cs-tail-completion-is-not-a-fence\n",
+        ps_bt0_scratch_rt as u8,
+    );
     if ps_bt0_scratch_rt {
-        return true;
+        recover_render_engine_after_nonretired_submit(dev, warm, "ps-bt0-scratch-rt");
+    }
+
+    unsafe {
+        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
+        core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
+    }
+    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+    let raster_wm_oa_probe = submit_triangle_vf_draw_to_surface(
+        "raster-wm-oa-probe",
+        dev,
+        warm,
+        GPU_VA_STREAMOUT_BASE,
+        8 * core::mem::size_of::<u32>(),
+        8,
+        8,
+        TriangleBlendProbeMode::MesaZeroedState,
+        VfPrimitiveGeometry::Oversized,
+        BackendProbeMode::RasterWmInputOa,
+        PostDrawSyncVariant::LightPostSyncNoCs,
+    );
+    intel_render_verbose_log!(
+        "intel/render: primary-raster-wm-oa-probe completed={}\n",
+        raster_wm_oa_probe as u8,
+    );
+    intel_render_focus_log!(
+        "intel/render: primary-raster-wm-oa-probe diagnostic completed={} note=no-cs-tail-completion-is-not-a-fence\n",
+        raster_wm_oa_probe as u8,
+    );
+    if raster_wm_oa_probe {
+        recover_render_engine_after_nonretired_submit(dev, warm, "raster-wm-oa-probe");
     }
 
     let fragment_candidate_ready = fragment_candidate_ready();
@@ -1038,11 +1072,161 @@ fn submit_triangle_vf_draw_to_surface(
             delta.cps_invocations,
             delta.ps_depth,
         );
+        if is_raster_wm_oa_submit_name(submit_name) {
+            log_raster_wm_oa_probe(submit_name, warm, completed, draw, delta);
+        }
+    }
+    if is_raster_wm_oa_submit_name(submit_name) {
+        disable_raster_wm_oa_context(dev, submit_name);
     }
     if !completed {
         recover_render_engine_after_nonretired_submit(dev, warm, submit_name);
     }
     completed
+}
+
+fn disable_raster_wm_oa_context(dev: crate::intel::Dev, submit_name: &'static str) {
+    crate::intel::mmio_write(dev, RCS_OACTXCONTROL, 0);
+    crate::intel::mmio_write(dev, OAR_OACONTROL, 0);
+    crate::intel::mmio_write(
+        dev,
+        RCS_RING_CONTEXT_CONTROL,
+        masked_bits_update(CTX_CTRL_OAC_CONTEXT_ENABLE, 0),
+    );
+    intel_render_focus_log!(
+        "intel/render: {} raster-wm-oa cleanup oactx=0 oar=0 reason=diagnostic-counter-disable\n",
+        submit_name,
+    );
+}
+
+fn oa_report_slice(warm: RenderWarmState, base_dword: usize) -> Option<&'static [u32]> {
+    if base_dword
+        .checked_add(RESULT_OA_REPORT_DWORDS)?
+        .checked_mul(core::mem::size_of::<u32>())?
+        > warm.result_len
+    {
+        return None;
+    }
+    let dwords = unsafe {
+        core::slice::from_raw_parts(warm.result_virt as *const u32, warm.result_len / 4)
+    };
+    dwords.get(base_dword..base_dword + RESULT_OA_REPORT_DWORDS)
+}
+
+fn oa_counter_delta(before: u64, after: u64, bits: u32) -> u64 {
+    if after >= before {
+        after - before
+    } else {
+        (1u64 << bits).saturating_add(after).saturating_sub(before)
+    }
+}
+
+fn oa_a_counter_gfx125(report: &[u32], index: usize) -> Option<u64> {
+    if report.len() < RESULT_OA_REPORT_DWORDS || index >= 36 {
+        return None;
+    }
+    if index < 4 {
+        Some(report[4 + index] as u64)
+    } else if index < 24 {
+        let high_bytes = unsafe {
+            core::slice::from_raw_parts(report.as_ptr().add(40) as *const u8, 32)
+        };
+        Some(report[4 + index] as u64 | ((high_bytes[index] as u64) << 32))
+    } else if index < 28 {
+        Some(report[28 + (index - 24)] as u64)
+    } else if index < 32 {
+        let high_bytes = unsafe {
+            core::slice::from_raw_parts(report.as_ptr().add(40) as *const u8, 32)
+        };
+        Some(report[4 + index] as u64 | ((high_bytes[index] as u64) << 32))
+    } else {
+        Some(report[36 + (index - 32)] as u64)
+    }
+}
+
+fn oa_a_delta_gfx125(begin: &[u32], end: &[u32], index: usize) -> u64 {
+    let Some(before) = oa_a_counter_gfx125(begin, index) else {
+        return 0;
+    };
+    let Some(after) = oa_a_counter_gfx125(end, index) else {
+        return 0;
+    };
+    let bits = if (4..24).contains(&index) || (28..32).contains(&index) {
+        40
+    } else {
+        32
+    };
+    oa_counter_delta(before, after, bits)
+}
+
+fn log_raster_wm_oa_probe(
+    submit_name: &'static str,
+    warm: RenderWarmState,
+    completed: bool,
+    draw: TriangleDrawPrep,
+    delta: TriangleStageStats,
+) {
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+    let begin = oa_report_slice(warm, RESULT_OA_BEGIN_DWORD);
+    let end = oa_report_slice(warm, RESULT_OA_END_DWORD);
+    let begin_id = begin.and_then(|r| r.first().copied()).unwrap_or(0);
+    let end_id = end.and_then(|r| r.first().copied()).unwrap_or(0);
+    let reports_valid =
+        begin_id == RESULT_OA_RASTER_WM_BEGIN_ID && end_id == RESULT_OA_RASTER_WM_END_ID;
+
+    let (ps_threads_delta, raster_samples_delta, samples_killed_delta, postps_fail_delta) =
+        if reports_valid {
+            let begin = begin.unwrap_or(&[]);
+            let end = end.unwrap_or(&[]);
+            (
+                oa_a_delta_gfx125(begin, end, 6),
+                oa_a_delta_gfx125(begin, end, 21).saturating_mul(4),
+                oa_a_delta_gfx125(begin, end, 24).saturating_mul(4),
+                oa_a_delta_gfx125(begin, end, 25).saturating_mul(4),
+            )
+        } else {
+            (0, 0, 0, 0)
+        };
+    let (pixel_write_delta, pixel_blend_delta) = if reports_valid {
+        let begin = begin.unwrap_or(&[]);
+        let end = end.unwrap_or(&[]);
+        (
+            oa_a_delta_gfx125(begin, end, 26).saturating_mul(4),
+            oa_a_delta_gfx125(begin, end, 27).saturating_mul(4),
+        )
+    } else {
+        (0, 0)
+    };
+    let accepted = reports_valid
+        && (raster_samples_delta != 0
+            || ps_threads_delta != 0
+            || samples_killed_delta != 0
+            || postps_fail_delta != 0
+            || pixel_write_delta != 0
+            || pixel_blend_delta != 0);
+    record_fragment_boundary_probe(true, accepted);
+    intel_render_focus_log!(
+        "intel/render: {} raster-wm-input-proof accepted={} completed={} reports_valid={} begin_id=0x{:08X} end_id=0x{:08X} rt_gpu=0x{:X} size={}x{} pitch=0x{:X} raster_samples_delta={} ps_threads_delta={} samples_killed_delta={} postps_fail_delta={} pixel_write_delta={} pixel_blend_delta={} ps_delta={} cps_delta={} ps_depth_delta={} observable=oar-mi-rpc-a21 does_not_prove=rt_visible\n",
+        submit_name,
+        accepted as u8,
+        completed as u8,
+        reports_valid as u8,
+        begin_id,
+        end_id,
+        draw.rt_gpu_addr,
+        draw.target_w,
+        draw.target_h,
+        draw.rt_pitch,
+        raster_samples_delta,
+        ps_threads_delta,
+        samples_killed_delta,
+        postps_fail_delta,
+        pixel_write_delta,
+        pixel_blend_delta,
+        delta.ps_invocations,
+        delta.cps_invocations,
+        delta.ps_depth,
+    );
 }
 
 fn submit_triangle_vs_streamout_proof(

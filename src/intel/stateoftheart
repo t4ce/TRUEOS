@@ -47,7 +47,8 @@ Current proven claims in this capture:
   the command tail retire but loses the PC post-sync write.  The oversized VF
   primitive proves a full-surface coverage candidate; the new scratch-RT,
   BT-count-zero probe preserves that frontier and still reports
-  `fragment_observed=0`.
+  `fragment_observed=0`.  A direct no-CS OAR/MI_REPORT_PERF_COUNT raster-WM
+  probe is now wired for the next capture.
 
 High-level checklist:
 
@@ -89,7 +90,9 @@ or display handoff.
 
 | 10b. Raster packet frontier | Proven on VF path | Medium-high | `vf-draw-path raster-packet-proof accepted=1 post_clip=0xC0DE7726 post_raster=0xC0DE7727 clip_counter=1 sc_instdone=0xFFFFFFFF`. | The batch reaches raster/post-raster marker points after a clipper counter moved on the VF draw path. | That raster emitted samples/fragments; no standalone raster memory write exists here. |
 
-| 10c. Shape-to-fragment boundary | Candidate proven; still not observed | High | `fragment-candidate-shape accepted=1 geometry=oversized ...`; baseline full-surface candidate reports `fragment_observed=0`; the new `ps-bt0-scratch-rt` repeats the oversized candidate on an 8x8 scratch RT and also reports `fragment_observed=0`. | The oversized VF primitive covers the target and reaches the clip/raster/PS-state candidate frontier, so small-triangle coverage and scanout sampling are not the explanation. | Actual fragment/sample emission, WM input, PS launch, or RT write; no dedicated raster-sample/WM-input observable has moved yet. |
+| 10c. Shape-to-fragment boundary | Candidate proven; still not observed | High | `fragment-candidate-shape accepted=1 geometry=oversized ...`; baseline full-surface candidate reports `fragment_observed=0`; the new `ps-bt0-scratch-rt` repeats the oversized candidate on an 8x8 scratch RT and also reports `fragment_observed=0`. | The oversized VF primitive covers the target and reaches the clip/raster/PS-state candidate frontier, so small-triangle coverage and scanout sampling are not the explanation. | Actual fragment/sample emission, WM input, PS launch, or RT write; the dedicated raster/WM observable is now instrumented but not yet assessed in a fresh capture. |
+
+| 10d. Raster/WM input OA observable | Instrumented; pending capture | Medium until reports validate | Next expected line: `raster-wm-oa-probe raster-wm-input-proof accepted=... completed=... reports_valid=... raster_samples_delta=... ps_threads_delta=... pixel_write_delta=...`; this uses the no-CS tail-retiring path and OAR/MI_REPORT_PERF_COUNT snapshots around `3DPRIMITIVE`. | Gives row 10c a direct counter-side observable for raster samples / WM or backend-adjacent activity without relying on the post-draw `CS_STALL` retire path. | Until `reports_valid=1`, it only proves instrumentation was attempted. Even `accepted=1` would prove raster/WM/backend counter motion, not visible RT pixels. |
 
 | 11. Pixel shader dispatch | Not proven; stronger negative | High negative counters, medium PS blame | Baseline `vf-draw-path`/`ps-launch-big-primitive` report `ps-launch-frontier-proof accepted=0 input_ready=1 ... ps_delta=0 cps_delta=0 ps_depth_delta=0`; `postdraw-pc-postsync-no-cs` and `ps-bt0-scratch-rt` both complete the no-CS tail with `ps_delta=0 cps_delta=0 ps_depth_delta=0`. | No PS/CPS/depth counter movement is observed after the current candidate frontier, even when the command tail retires and Mesa-style PS BT count is used. | That PS state is the blocker; row 10c still lacks a real fragment/WM-input observable, and no-CS retire is not a post-sync fence. |
 
@@ -118,16 +121,6 @@ or display handoff.
 | 14. CPU scanout payload | Proven | High | `cpu-scanout-proof accepted=1 ... xy=2536x1416 size=8x8 before=0x00CACACA after=0x00FF00FF flush=1 surf=0x02000000 surf_live=0x02000000`; visually observed as a pink marker. | CPU can place a simple marker into the exact live scanout surface, and display memory/pitch/format are coherent. | Render backend write, PS dispatch, or that render produced the marker. |
 
 | 15. Displayed rendered pixel | Not proven | High confidence negative | Display proof is independent; `ps-rt-proof accepted=0`. | We can display known memory, and step 14 proves CPU payload placement is correct. | That render produced the displayed memory. |
-
-Certainty key:
-
-- High: one or more direct hardware observables agree, and the failure mode is
-  narrow.
-- Medium-high: direct observables agree, but the proof is inferred across
-  adjacent setup/recovery paths.
-- Medium: useful evidence exists, but a named proof line is still missing or
-  the success is not repeat-isolated.
-- Low: mostly hypothesis or stale archaeology.
 
 Current frontier:
 
@@ -165,6 +158,11 @@ Current frontier:
   `ps-launch-big-primitive-proof`.  The crisp current row-10c frontier is
   `candidate_ready=1` with `fragment_observed=0`, even for oversized coverage
   and the 8x8 scratch RT variant.
+- `raster-wm-oa-probe` is the next row-10d transport: it uses the no-CS
+  retiring tail and captures begin/end OAR reports with `MI_REPORT_PERF_COUNT`
+  around `3DPRIMITIVE`.  The first fresh boot should be judged first on
+  `reports_valid`, then on `raster_samples_delta`, `ps_threads_delta`,
+  `pixel_write_delta`, and `pixel_blend_delta`.
 - `ps-bt0-scratch-rt` is the new most useful row-11 negative: it uses
   Mesa-style PS BT count `0`, zeroed blend state, a CPU-readable scratch RT at
   `rt_gpu=0x880000`, and no-CS tail retire.  It reports
@@ -205,17 +203,7 @@ Current frontier:
   `final_after_light=0` every time.  Row 07d/07e is answered with a clean
   split: `CS_STALL` blocks retire even without the light post-sync write, while
   no-CS retires the tail but does not produce the PC post-sync marker.  The
-  boot now runs one safe scratch/BT0 probe before the old gate; until a
-  raster-sample/WM-input observable moves, broader PS-side negative probes are
-  treated as lower value than row-10c instrumentation.
+  boot now runs one safe scratch/BT0 probe before the old gate; the next patch
+  has added a row-10d OAR raster/WM observable, so broader PS-side negative
+  probes stay lower priority until that line is either accepted or falsified.
 
-Next best patch target:
-
-- Keep row 10c honest: use the no-CS completed path as a diagnostic transport
-  to find or wire a real rasterizer sample / WM-input observable.  The BT0
-  scratch probe says "not just PS BT count, not just scanout sampling"; the
-  missing proof is still before or at fragment/WM input.
-- In parallel, look for a spec-valid retiring fence that does not rely on
-  post-draw `CS_STALL`: either a different `PIPE_CONTROL` placement, a split
-  pre-draw/post-draw fence pair, or a non-PC observable that can be sampled
-  after the no-CS tail retires.

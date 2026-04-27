@@ -470,10 +470,25 @@ pub async fn http_trueosfs_task() {
             ports::HTTP_TRUEOSFS_TCP_PORT
         );
 
-        let mut server = vhttp_srv::HttpServer::new(ports::HTTP_TRUEOSFS_TCP_PORT, HTTP_TRUEOSFS_MAX_REQUEST_BYTES);
+        let mut server = vhttp_srv::HttpServer::new(
+            ports::HTTP_TRUEOSFS_TCP_PORT,
+            HTTP_TRUEOSFS_MAX_REQUEST_BYTES,
+        );
+        let mut listener_ready = false;
 
         loop {
             while let Some(ev) = vnet.pop_event() {
+                if !listener_ready
+                    && let api::Event::Opened {
+                        kind: api::SocketKind::Tcp,
+                        ..
+                    } = ev
+                {
+                    listener_ready = true;
+                    crate::r::readiness::set(crate::r::readiness::HTTP_TRUEOSFS_LISTENING);
+                    crate::log!("http-trueosfs: tcp listen opened and ready\n");
+                }
+
                 match server.on_event(ev) {
                     vhttp_srv::HttpServerEvent::None => {}
                     vhttp_srv::HttpServerEvent::Submit(cmd) => {
