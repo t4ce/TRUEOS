@@ -17,7 +17,7 @@ const VM_STORE_PROBE_PATH: &str = "vm/.probe";
 const VM_STORE_MANIFEST_PREFIX: &str = "vm/committed-";
 const VM_STORE_OBJECT_PREFIX: &str = "vm/object-";
 const VM_STORE_REPL_CHUNK: usize = 1200;
-const VM_STORE_MAX_VM_ID: u8 = 10;
+const VM_STORE_VM_ID_LIMIT: usize = crate::allcaps::hv::VM_ID_LIMIT;
 const VM_STORE_BLOCK_SIZE: u32 = 512;
 const VM_STORE_MIN_RAMDISK_BYTES: u64 = 64 * 1024 * 1024;
 const VM_STORE_RAMDISK_ALIGN_BYTES: u64 = 64 * 1024 * 1024;
@@ -236,6 +236,10 @@ fn vm_manifest_path(vm_id: u8) -> String {
     format!("{}{}", VM_STORE_MANIFEST_PREFIX, vm_id)
 }
 
+fn vm_id_supported(vm_id: u8) -> bool {
+    (vm_id as usize) < VM_STORE_VM_ID_LIMIT
+}
+
 async fn read_committed_bytes(
     disk: block::DeviceHandle,
     vm_id: u8,
@@ -270,7 +274,7 @@ pub fn online() -> bool {
 }
 
 pub fn save_bytes(vm_id: u8, bytes: Vec<u8>) -> Result<usize, VmStoreError> {
-    if vm_id > VM_STORE_MAX_VM_ID {
+    if !vm_id_supported(vm_id) {
         return Err(VmStoreError::ServiceOffline);
     }
     match enqueue(RequestKind::Save(vm_id, bytes))?.wait_blocking()? {
@@ -280,7 +284,7 @@ pub fn save_bytes(vm_id: u8, bytes: Vec<u8>) -> Result<usize, VmStoreError> {
 }
 
 pub fn load_bytes(vm_id: u8) -> Result<Vec<u8>, VmStoreError> {
-    if vm_id > VM_STORE_MAX_VM_ID {
+    if !vm_id_supported(vm_id) {
         return Err(VmStoreError::ServiceOffline);
     }
     match enqueue(RequestKind::Load(vm_id))?.wait_blocking()? {
@@ -339,7 +343,8 @@ fn push_line(out: &mut Vec<u8>, line: &str) {
 fn queue_vm_listing(out: &mut Vec<u8>) {
     let seqs = VM_STORE_COMMITTED_SEQS.lock();
     let mut has_any = false;
-    for vm_id in 0..=VM_STORE_MAX_VM_ID {
+    for vm_id in 0..VM_STORE_VM_ID_LIMIT {
+        let vm_id = vm_id as u8;
         if seqs.contains_key(&vm_id) {
             push_line(out, format!("VMS {}", vm_id).as_str());
             has_any = true;
@@ -507,7 +512,7 @@ pub async fn vm_store_replication_task() {
                                 queue_vm_listing(&mut tx_buf);
                             }
                             Some(VmStoreNetCmd::Pull(id)) => {
-                                if id > VM_STORE_MAX_VM_ID {
+                                if !vm_id_supported(id) {
                                     push_line(&mut tx_buf, "NO");
                                     continue;
                                 }

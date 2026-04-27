@@ -3,8 +3,8 @@ use crate::phys::HeapArena;
 use spin::Mutex;
 
 #[inline]
-fn primary_vm_id() -> u8 {
-    crate::hv::snapshot::VM1_ID
+fn current_vm_id_for_log() -> u8 {
+    crate::hv::current_vm_id().unwrap_or(0)
 }
 
 // Guest memory constants
@@ -106,7 +106,7 @@ static GUEST_STACK_BACKING: Mutex<GuestStackBacking> = Mutex::new(GuestStackBack
 });
 
 #[derive(Copy, Clone)]
-pub struct Vm1SnapshotMeta {
+pub struct VmSnapshotMeta {
     pub guest_cr3: u64,
     pub guest_rip: u64,
     pub guest_rsp: u64,
@@ -117,8 +117,18 @@ pub struct Vm1SnapshotMeta {
     pub exit_guest_rip: u64,
 }
 
-pub static VM1_SNAPSHOT_META: Mutex<Option<Vm1SnapshotMeta>> = Mutex::new(None);
-pub static VM1_RESTORE_META: Mutex<Option<Vm1SnapshotMeta>> = Mutex::new(None);
+pub static VM_SNAPSHOT_META: [Mutex<Option<VmSnapshotMeta>>; crate::allcaps::hv::VM_ID_LIMIT] =
+    [const { Mutex::new(None) }; crate::allcaps::hv::VM_ID_LIMIT];
+pub static VM_RESTORE_META: [Mutex<Option<VmSnapshotMeta>>; crate::allcaps::hv::VM_ID_LIMIT] =
+    [const { Mutex::new(None) }; crate::allcaps::hv::VM_ID_LIMIT];
+
+pub fn vm_snapshot_meta_lock(vm_id: u8) -> Option<&'static Mutex<Option<VmSnapshotMeta>>> {
+    VM_SNAPSHOT_META.get(vm_id as usize)
+}
+
+pub fn vm_restore_meta_lock(vm_id: u8) -> Option<&'static Mutex<Option<VmSnapshotMeta>>> {
+    VM_RESTORE_META.get(vm_id as usize)
+}
 
 fn guest_tables_ptr() -> Result<*mut GuestTables, &'static str> {
     let mut ptr_guard = GUEST_TABLES.lock();
@@ -223,7 +233,7 @@ pub fn build_ept_identity_4g() -> Result<u64, &'static str> {
         )?;
     }
 
-    if let Some(comm_pa) = crate::hv::vmcall::pa() {
+    if let Some(comm_pa) = crate::hv::vmcall::pa_for_vm(current_vm_id_for_log()) {
         map_ept_identity_span(
             pdpt,
             &mut next_pd,
@@ -273,7 +283,7 @@ pub fn build_ept_identity_4g() -> Result<u64, &'static str> {
         )?;
     }
 
-    let guest_heap = crate::allocators::hv_guest_heap_stats();
+    let guest_heap = crate::allocators::hv_guest_heap_stats(current_vm_id_for_log());
     if guest_heap.initialized
         && guest_heap.phys_start != 0
         && guest_heap.heap_end > guest_heap.heap_start
@@ -291,7 +301,7 @@ pub fn build_ept_identity_4g() -> Result<u64, &'static str> {
     let eptp = (pml4_pa & 0x000F_FFFF_FFFF_F000) | 6 | (3 << 3);
     hvlogf(format_args!(
         "hv: vm{} reporting: ept v1 sparse map ready eptp=0x{:016X} pd_used={} pt_used={}",
-        primary_vm_id(),
+        current_vm_id_for_log(),
         eptp,
         next_pd,
         next_pt,
@@ -348,7 +358,7 @@ fn map_ept_identity_span(
 
     hvlogf(format_args!(
         "hv: vm{} reporting: ept span {} phys=0x{:016X}..0x{:016X}",
-        primary_vm_id(),
+        current_vm_id_for_log(),
         label,
         start,
         end
@@ -575,7 +585,8 @@ pub fn build_guest_cr3_with_mode(
 
         // Map comm page at a fixed VA above the maximum supported stack span so
         // guest-side helpers can keep using a stable address.
-        let comm_pa = crate::hv::vmcall::pa().ok_or("comm page pa")?;
+        let comm_pa =
+            crate::hv::vmcall::pa_for_vm(current_vm_id_for_log()).ok_or("comm page pa")?;
         let comm_pt = core::ptr::addr_of_mut!((*tables).low_pts[GUEST_STACK_PT_CAP].0);
         let comm_pt_pa = host_va_to_pa(comm_pt as u64).ok_or("comm page pt pa")?;
         map_table_entry(
@@ -604,7 +615,7 @@ pub fn build_guest_cr3_with_mode(
                 let layout = crate::hv::guest::hull_image_layout();
                 hvlogf(format_args!(
                     "hv: vm{} reporting: hull sections text=[0x{:016X}..0x{:016X}) rodata=[0x{:016X}..0x{:016X}) data=[0x{:016X}..0x{:016X}) bss=[0x{:016X}..0x{:016X})",
-                    primary_vm_id(),
+                    current_vm_id_for_log(),
                     layout.text_start,
                     layout.text_end,
                     layout.rodata_start,
@@ -616,7 +627,7 @@ pub fn build_guest_cr3_with_mode(
                 ));
                 hvlogf(format_args!(
                     "hv: vm{} reporting: hull bss anchors vmcall=[0x{:016X}..0x{:016X}) vpanic=[0x{:016X}..0x{:016X}) demo=[0x{:016X}..0x{:016X})",
-                    primary_vm_id(),
+                    current_vm_id_for_log(),
                     layout.vmcall_bss_start,
                     layout.vmcall_bss_end,
                     layout.vpanic_bss_start,
@@ -648,7 +659,7 @@ pub fn build_guest_cr3_with_mode(
 
         hvlogf(format_args!(
             "hv: vm{} reporting: image map done pt_used={}",
-            primary_vm_id(),
+            current_vm_id_for_log(),
             pt_slot
         ));
         map_guest_heap_span(
@@ -659,13 +670,13 @@ pub fn build_guest_cr3_with_mode(
         )?;
         hvlogf(format_args!(
             "hv: vm{} reporting: heap map done pt_used={}",
-            primary_vm_id(),
+            current_vm_id_for_log(),
             pt_slot
         ));
 
         hvlogf(format_args!(
             "hv: vm{} reporting: guest-cr3=0x{:016X} code=0x{:016X} stack=0x{:016X} stack_mib={}",
-            primary_vm_id(),
+            current_vm_id_for_log(),
             pml4_pa,
             guest_rip,
             guest_rsp,
@@ -691,22 +702,24 @@ pub fn build_guest_cr3_with_mode(
                 .saturating_add(mapped_code_len)
                 .saturating_sub(8),
         )?;
-        *VM1_SNAPSHOT_META.lock() = Some(Vm1SnapshotMeta {
-            guest_cr3: pml4_pa,
-            guest_rip,
-            guest_rsp,
-            code_base: mapped_code_base,
-            code_len: mapped_code_len,
-            exit_reason: 0,
-            exit_qualification: 0,
-            exit_guest_rip: guest_rip,
-        });
+        if let Some(meta_lock) = vm_snapshot_meta_lock(current_vm_id_for_log()) {
+            *meta_lock.lock() = Some(VmSnapshotMeta {
+                guest_cr3: pml4_pa,
+                guest_rip,
+                guest_rsp,
+                code_base: mapped_code_base,
+                code_len: mapped_code_len,
+                exit_reason: 0,
+                exit_qualification: 0,
+                exit_guest_rip: guest_rip,
+            });
+        }
         Ok(pml4_pa)
     }
 }
 
-pub fn active_restore_meta() -> Option<Vm1SnapshotMeta> {
-    *VM1_RESTORE_META.lock()
+pub fn active_restore_meta(vm_id: u8) -> Option<VmSnapshotMeta> {
+    vm_restore_meta_lock(vm_id).and_then(|meta| *meta.lock())
 }
 
 pub fn current_guest_cr3_pa() -> Result<u64, &'static str> {
@@ -775,7 +788,7 @@ pub fn log_guest_mapping(label: &str, guest_va: u64) {
 
     hvlogf(format_args!(
         "hv: vm{} reporting: guest-map {} va=0x{:016X} region={} idx[pd={},pt={}] pde=0x{:016X} pte=0x{:016X}",
-        primary_vm_id(),
+        current_vm_id_for_log(),
         label,
         guest_va,
         classify_guest_va(guest_va),
@@ -809,7 +822,7 @@ pub fn log_guest_pt_context(label: &str, guest_va: u64) {
     let Some(pt_page) = guest_pt_page_from_pde(low_half, pde) else {
         hvlogf(format_args!(
             "hv: vm{} reporting: guest-pt {} va=0x{:016X} pt_pa=0x{:016X} page=unresolved",
-            primary_vm_id(),
+            current_vm_id_for_log(),
             label,
             guest_va,
             pde_addr(pde)
@@ -825,7 +838,7 @@ pub fn log_guest_pt_context(label: &str, guest_va: u64) {
         let entry = unsafe { read_guest_page_entry(pt_page, idx) };
         hvlogf(format_args!(
             "hv: vm{} reporting: guest-pt {} pt_pa=0x{:016X} idx={} entry=0x{:016X}",
-            primary_vm_id(),
+            current_vm_id_for_log(),
             label,
             pde_addr(pde),
             idx,
@@ -851,7 +864,7 @@ pub fn log_guest_mapping_from_cr3(label: &str, guest_cr3: u64, guest_va: u64) {
     if pml4_pa == 0 {
         hvlogf(format_args!(
             "hv: vm{} reporting: guest-walk {} va=0x{:016X} cr3=0x{:016X} pml4=missing",
-            primary_vm_id(),
+            current_vm_id_for_log(),
             label,
             guest_va,
             guest_cr3
@@ -878,7 +891,7 @@ pub fn log_guest_mapping_from_cr3(label: &str, guest_cr3: u64, guest_va: u64) {
 
     hvlogf(format_args!(
         "hv: vm{} reporting: guest-walk {} va=0x{:016X} cr3=0x{:016X} idx[pd={},pt={}] pml4e=0x{:016X} pdpte=0x{:016X} pde=0x{:016X} pte=0x{:016X}",
-        primary_vm_id(),
+        current_vm_id_for_log(),
         label,
         guest_va,
         guest_cr3,
@@ -919,7 +932,7 @@ pub fn log_guest_phys_pt_context(label: &str, guest_cr3: u64, guest_va: u64) {
         let entry = unsafe { read_phys_page_entry(pt_pa, idx) }.unwrap_or(0);
         hvlogf(format_args!(
             "hv: vm{} reporting: guest-phys-pt {} pt_pa=0x{:016X} idx={} entry=0x{:016X}",
-            primary_vm_id(),
+            current_vm_id_for_log(),
             label,
             pt_pa,
             idx,
@@ -953,7 +966,7 @@ fn verify_guest_mapping_chain(label: &str, guest_va: u64) -> Result<(), &'static
     if pml4e & PT_ENTRY_PRESENT == 0 {
         hvlogf(format_args!(
             "hv: vm{} reporting: guest-verify {} broken=pml4 va=0x{:016X} region={} idx[pml4={},pdpt={},pd={},pt={}] pml4e=0x{:016X}",
-            primary_vm_id(),
+            current_vm_id_for_log(),
             label,
             guest_va,
             classify_guest_va(guest_va),
@@ -976,7 +989,7 @@ fn verify_guest_mapping_chain(label: &str, guest_va: u64) -> Result<(), &'static
     if pdpte & PT_ENTRY_PRESENT == 0 {
         hvlogf(format_args!(
             "hv: vm{} reporting: guest-verify {} broken=pdpt va=0x{:016X} region={} idx[pml4={},pdpt={},pd={},pt={}] pml4e=0x{:016X} pdpte=0x{:016X}",
-            primary_vm_id(),
+            current_vm_id_for_log(),
             label,
             guest_va,
             classify_guest_va(guest_va),
@@ -1000,7 +1013,7 @@ fn verify_guest_mapping_chain(label: &str, guest_va: u64) -> Result<(), &'static
     if pde & PT_ENTRY_PRESENT == 0 {
         hvlogf(format_args!(
             "hv: vm{} reporting: guest-verify {} broken=pd va=0x{:016X} region={} idx[pml4={},pdpt={},pd={},pt={}] pml4e=0x{:016X} pdpte=0x{:016X} pde=0x{:016X}",
-            primary_vm_id(),
+            current_vm_id_for_log(),
             label,
             guest_va,
             classify_guest_va(guest_va),
@@ -1025,7 +1038,7 @@ fn verify_guest_mapping_chain(label: &str, guest_va: u64) -> Result<(), &'static
     if pte & PT_ENTRY_PRESENT == 0 {
         hvlogf(format_args!(
             "hv: vm{} reporting: guest-verify {} broken=pt va=0x{:016X} region={} idx[pml4={},pdpt={},pd={},pt={}] pml4e=0x{:016X} pdpte=0x{:016X} pde=0x{:016X} pte=0x{:016X}",
-            primary_vm_id(),
+            current_vm_id_for_log(),
             label,
             guest_va,
             classify_guest_va(guest_va),
@@ -1043,7 +1056,7 @@ fn verify_guest_mapping_chain(label: &str, guest_va: u64) -> Result<(), &'static
 
     hvlogf(format_args!(
         "hv: vm{} reporting: guest-verify {} ok va=0x{:016X} region={} idx[pml4={},pdpt={},pd={},pt={}] pml4e=0x{:016X} pdpte=0x{:016X} pde=0x{:016X} pte=0x{:016X}",
-        primary_vm_id(),
+        current_vm_id_for_log(),
         label,
         guest_va,
         classify_guest_va(guest_va),
@@ -1081,7 +1094,8 @@ fn classify_guest_va(guest_va: u64) -> &'static str {
         return region;
     }
 
-    if let Some(meta) = *VM1_SNAPSHOT_META.lock() {
+    if let Some(meta) = vm_snapshot_meta_lock(current_vm_id_for_log()).and_then(|meta| *meta.lock())
+    {
         let code_end = meta.code_base.saturating_add(meta.code_len);
         if guest_va >= meta.code_base && guest_va < code_end {
             return "image-window";
@@ -1210,7 +1224,7 @@ fn map_guest_image_span(
     let extra_chunks = total_chunks.saturating_sub(1);
     hvlogf(format_args!(
         "hv: vm{} reporting: {} image map start=0x{:016X} end=0x{:016X} span_mib={} extra_pts={} cap={} max_mib={}",
-        primary_vm_id(),
+        current_vm_id_for_log(),
         label,
         start,
         end,
@@ -1268,7 +1282,7 @@ fn map_guest_heap_span(
     image_end: u64,
 ) -> Result<(), &'static str> {
     let heap = crate::allocators::heap_stats();
-    let hv_guest_heap = crate::allocators::hv_guest_heap_stats();
+    let hv_guest_heap = crate::allocators::hv_guest_heap_stats(current_vm_id_for_log());
     let ranges = [
         ("heap", heap.initialized, heap.heap_start as u64, heap.heap_end as u64),
         (
@@ -1298,7 +1312,7 @@ fn map_guest_heap_span(
         if range_covered_by(start, end, image_start, image_end) {
             hvlogf(format_args!(
                 "hv: vm{} reporting: {} already covered by image map start=0x{:016X} end=0x{:016X}",
-                primary_vm_id(),
+                current_vm_id_for_log(),
                 label,
                 start,
                 end
@@ -1370,7 +1384,7 @@ fn map_guest_heap_span(
 
         hvlogf(format_args!(
             "hv: vm{} reporting: {} map start=0x{:016X} end=0x{:016X} span_mib={} pt_cap={} pt_used={}",
-            primary_vm_id(),
+            current_vm_id_for_log(),
             label,
             start,
             end,

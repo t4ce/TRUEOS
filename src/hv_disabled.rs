@@ -97,9 +97,6 @@ pub struct HvStatus {
     pub has_vmx: bool,
     pub feature_control_locked: bool,
     pub feature_control_vmx_outside_smx: bool,
-    pub vm1_running: bool,
-    pub vm1_starting: bool,
-    pub vm1_marker_seen: bool,
     pub guest_module_present: bool,
     pub stored_vm_count: usize,
     pub vm_id_limit: usize,
@@ -121,9 +118,6 @@ pub fn status() -> HvStatus {
         has_vmx: false,
         feature_control_locked: false,
         feature_control_vmx_outside_smx: false,
-        vm1_running: false,
-        vm1_starting: false,
-        vm1_marker_seen: false,
         guest_module_present: false,
         stored_vm_count: 0,
         vm_id_limit: crate::allcaps::hv::VM_ID_LIMIT,
@@ -176,7 +170,7 @@ pub fn guest_boot_active() -> bool {
     false
 }
 
-pub fn request_preserve_vm1() -> bool {
+pub fn request_preserve_active_vm() -> bool {
     false
 }
 
@@ -194,8 +188,8 @@ pub fn log_active_blueprint_console_line(_args: core::fmt::Arguments<'_>) {}
 
 pub fn log_blueprint_app_window_event(_args: core::fmt::Arguments<'_>) {}
 
-pub fn begin_blueprint_app_window_session(_archive: &str) {}
+pub fn begin_blueprint_app_window_session(_vm_id: u8, _archive: &str) {}
 
 pub fn register_blueprint_app_window(_window_id: u32, _kind: &str, _title: &str) {}
 
-pub fn finish_blueprint_app_window_session(_close_windows: bool) {}
+pub fn finish_blueprint_app_window_session(_vm_id: u8, _close_windows: bool) {}

@@ -243,7 +243,7 @@ fn portal_alloc_error_handler(layout: Layout) -> ! {
         layout.size(),
         layout.align()
     ));
-    let stats = crate::allocators::hv_guest_heap_stats();
+    let stats = crate::allocators::hv_guest_heap_stats(crate::hv::current_vm_id().unwrap_or(0));
     portal_logf(format_args!(
         "portal: hv-guest-heap virt=0x{:X}..0x{:X} phys=0x{:X} src={:?} usable_total={} free_bytes={} largest_free={} free_blocks={} init={}",
         stats.heap_start,

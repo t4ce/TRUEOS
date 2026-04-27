@@ -413,13 +413,13 @@ fn toggle_vm_window_in_state(state: &mut Ui2State, window_id: u32) -> bool {
     }
 
     let hv_status = crate::hv::status();
-    if hv_status.vm1_running || hv_status.vm1_starting {
-        if !crate::hv::request_preserve_vm1() {
+    if hv_status.running_count != 0 || hv_status.starting_count != 0 {
+        if !crate::hv::request_preserve_active_vm() {
             return false;
         }
         set_window_visible_in_state(state, window_id, false)
     } else {
-        request_vm1_resume();
+        request_vm_resume();
         state.compose_reason = "toggle-vm-window";
         note_window_dirty(state, window_id, "toggle-vm-window")
     }
@@ -435,7 +435,7 @@ fn preserve_vm_window_in_state(state: &mut Ui2State, window_id: u32) -> bool {
     if !vm_origin_hint {
         return false;
     }
-    if !crate::hv::request_preserve_vm1() {
+    if !crate::hv::request_preserve_active_vm() {
         return false;
     }
     set_window_visible_in_state(state, window_id, false)

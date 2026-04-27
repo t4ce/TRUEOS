@@ -233,7 +233,11 @@ static mut VMX_GUEST_REGS_BY_SLOT: [GuestRegisters; VMX_SCRATCH_SLOTS] =
 
 fn current_scratch_slot() -> usize {
     let slot = crate::percpu::current_slot_via_cpuid();
-    if slot < VMX_SCRATCH_SLOTS { slot } else { 0 }
+    if slot < VMX_SCRATCH_SLOTS {
+        slot
+    } else {
+        0
+    }
 }
 
 fn wrapper_result_ptr() -> *mut LaunchResult {
@@ -277,7 +281,7 @@ pub fn vmwrite(field: u64, val: u64) -> Result<(), &'static str> {
             let err = vmread(VMCS_VM_INSTRUCTION_ERROR).unwrap_or(!0u64);
             hvlogf(format_args!(
                 "hv: vm{} reporting: vmwrite failed field=0x{:X} val=0x{:016X} instr_err={} rip=0x{:016X}",
-                super::snapshot::VM1_ID,
+                crate::hv::current_vm_id().unwrap_or(0),
                 field,
                 val,
                 err,
@@ -300,7 +304,11 @@ pub fn vmread(field: u64) -> Option<u64> {
             fail = lateout(reg_byte) fail,
             options(nostack, preserves_flags),
         );
-        if fail == 0 { Some(out) } else { None }
+        if fail == 0 {
+            Some(out)
+        } else {
+            None
+        }
     }
 }
 
@@ -360,7 +368,11 @@ pub fn vmptrst() -> Option<u64> {
             fail = lateout(reg_byte) fail,
             options(nostack, preserves_flags),
         );
-        if fail == 0 { Some(out) } else { None }
+        if fail == 0 {
+            Some(out)
+        } else {
+            None
+        }
     }
 }
 
@@ -453,7 +465,7 @@ pub fn log_vmexit_interrupt_info(label: &str) {
 
     hvlogf(format_args!(
         "hv: vm{} reporting: {} vmexit intr vector={} name={} type={}({}) err_valid={} err=0x{:X} intr_info=0x{:08X}",
-        super::snapshot::VM1_ID,
+        crate::hv::current_vm_id().unwrap_or(0),
         label,
         vector,
         vector_name,
@@ -469,7 +481,7 @@ pub fn log_vmexit_interrupt_info(label: &str) {
     let guest_physical = vmread(VMCS_GUEST_PHYSICAL_ADDRESS).unwrap_or(0);
     hvlogf(format_args!(
         "hv: vm{} reporting: {} vmexit addr guest_linear=0x{:016X} guest_physical=0x{:016X} guest_rsp=0x{:016X}",
-        super::snapshot::VM1_ID,
+        crate::hv::current_vm_id().unwrap_or(0),
         label,
         guest_linear,
         guest_physical,

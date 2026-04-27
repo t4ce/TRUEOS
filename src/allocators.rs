@@ -2,7 +2,7 @@ use core::alloc::{GlobalAlloc, Layout};
 #[cfg(target_arch = "x86_64")]
 use core::arch::asm;
 use core::mem::{align_of, size_of};
-use core::ptr::{NonNull, addr_of_mut, null_mut};
+use core::ptr::{addr_of_mut, null_mut, NonNull};
 use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use spin::Mutex;
 
@@ -192,10 +192,9 @@ pub enum HeapSourceKind {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-#[repr(u8)]
 pub enum AllocDomain {
-    Host = 0,
-    HvGuest = 1,
+    Host,
+    HvGuest(u8),
 }
 
 struct FreeList {
@@ -254,7 +253,7 @@ impl FreeList {
             self.init_once();
         }
 
-        let trace_enabled = domain != AllocDomain::HvGuest;
+        let trace_enabled = matches!(domain, AllocDomain::Host);
         let mut current = self.head;
         trace_alloc_entry(trace_enabled, layout, current);
         let mut prev: Option<NonNull<FreeBlock>> = None;
@@ -331,7 +330,7 @@ impl FreeList {
             (tag_ptr as *mut AllocTag).write(AllocTag {
                 block_start,
                 block_size: alloc_block_size,
-                domain: domain as u8,
+                domain: alloc_domain_tag(domain),
             });
 
             trace_alloc_success(trace_enabled);
@@ -437,14 +436,32 @@ impl FreeList {
 struct Allocator;
 
 static ALLOCATOR: Mutex<FreeList> = Mutex::new(FreeList::new());
-static HV_GUEST_ALLOCATOR: Mutex<FreeList> = Mutex::new(FreeList::new());
+static HV_GUEST_ALLOCATORS: [Mutex<FreeList>; crate::allcaps::hv::VM_ID_LIMIT] =
+    [const { Mutex::new(FreeList::new()) }; crate::allcaps::hv::VM_ID_LIMIT];
 static HV_GUEST_ACTIVE_CPU_MASK: AtomicU64 = AtomicU64::new(0);
-static HV_GUEST_HEAP_READY: AtomicU32 = AtomicU32::new(0);
+static HV_GUEST_HEAP_READY_MASK: AtomicU64 = AtomicU64::new(0);
+
+const HOST_ALLOC_TAG: u8 = u8::MAX;
 
 fn alloc_domain_from_tag(tag: &AllocTag) -> AllocDomain {
-    match tag.domain {
-        x if x == AllocDomain::HvGuest as u8 => AllocDomain::HvGuest,
-        _ => AllocDomain::Host,
+    if (tag.domain as usize) < crate::allcaps::hv::VM_ID_LIMIT {
+        AllocDomain::HvGuest(tag.domain)
+    } else {
+        AllocDomain::Host
+    }
+}
+
+fn alloc_domain_tag(domain: AllocDomain) -> u8 {
+    match domain {
+        AllocDomain::Host => HOST_ALLOC_TAG,
+        AllocDomain::HvGuest(vm_id) => vm_id,
+    }
+}
+
+fn alloc_domain_vm_id(domain: AllocDomain) -> Option<u8> {
+    match domain {
+        AllocDomain::Host => None,
+        AllocDomain::HvGuest(vm_id) => Some(vm_id),
     }
 }
 
@@ -454,14 +471,19 @@ fn current_alloc_domain() -> AllocDomain {
     // flag is visible here and is enough to route early allocations to the
     // guest allocator without touching percpu discovery.
     if crate::hv::guest_boot_active() {
-        return AllocDomain::HvGuest;
+        if let Some(vm_id) = crate::hv::current_vm_id() {
+            return AllocDomain::HvGuest(vm_id);
+        }
     }
     let slot = crate::percpu::current_slot_via_cpuid();
     if slot >= 64 {
         return AllocDomain::Host;
     }
     if (HV_GUEST_ACTIVE_CPU_MASK.load(Ordering::Acquire) & (1u64 << slot)) != 0 {
-        AllocDomain::HvGuest
+        match crate::hv::current_vm_id() {
+            Some(vm_id) => AllocDomain::HvGuest(vm_id),
+            None => AllocDomain::Host,
+        }
     } else {
         AllocDomain::Host
     }
@@ -470,7 +492,9 @@ fn current_alloc_domain() -> AllocDomain {
 fn allocator_for_domain(domain: AllocDomain) -> &'static Mutex<FreeList> {
     match domain {
         AllocDomain::Host => &ALLOCATOR,
-        AllocDomain::HvGuest => &HV_GUEST_ALLOCATOR,
+        AllocDomain::HvGuest(vm_id) => HV_GUEST_ALLOCATORS
+            .get(vm_id as usize)
+            .unwrap_or(&HV_GUEST_ALLOCATORS[0]),
     }
 }
 
@@ -484,22 +508,23 @@ fn init_fallback_regions() {
             guard.fallback_len = FALLBACK_HEAP_SIZE;
         }
     }
-    {
-        let mut guard = HV_GUEST_ALLOCATOR.lock();
+    let per_vm_fallback_len = HV_GUEST_HEAP_FALLBACK_SIZE / crate::allcaps::hv::VM_ID_LIMIT;
+    for (idx, allocator) in HV_GUEST_ALLOCATORS.iter().enumerate() {
+        let mut guard = allocator.lock();
         if guard.fallback_virt_start == 0 {
-            guard.fallback_virt_start = hv_fallback;
-            guard.fallback_len = HV_GUEST_HEAP_FALLBACK_SIZE;
+            guard.fallback_virt_start = hv_fallback.saturating_add(idx * per_vm_fallback_len);
+            guard.fallback_len = per_vm_fallback_len;
         }
     }
 }
 
-pub fn enter_hv_guest_domain_current_cpu() -> bool {
+pub fn enter_hv_guest_domain_current_cpu(vm_id: u8) -> bool {
     init_fallback_regions();
     let slot = crate::percpu::current_slot_via_cpuid();
-    if slot >= 64 {
+    if slot >= 64 || (vm_id as usize) >= crate::allcaps::hv::VM_ID_LIMIT {
         return false;
     }
-    let _ = ensure_hv_guest_heap_ready();
+    let _ = ensure_hv_guest_heap_ready(vm_id);
     HV_GUEST_ACTIVE_CPU_MASK.fetch_or(1u64 << slot, Ordering::AcqRel);
     true
 }
@@ -512,15 +537,19 @@ pub fn leave_hv_guest_domain_current_cpu() {
     HV_GUEST_ACTIVE_CPU_MASK.fetch_and(!(1u64 << slot), Ordering::AcqRel);
 }
 
-pub fn ensure_hv_guest_heap_ready() -> bool {
+pub fn ensure_hv_guest_heap_ready(vm_id: u8) -> bool {
     init_fallback_regions();
-    if HV_GUEST_HEAP_READY.load(Ordering::Acquire) != 0 {
+    if (vm_id as usize) >= crate::allcaps::hv::VM_ID_LIMIT {
+        return false;
+    }
+    let ready_bit = 1u64 << vm_id;
+    if (HV_GUEST_HEAP_READY_MASK.load(Ordering::Acquire) & ready_bit) != 0 {
         return true;
     }
 
-    let mut guard = HV_GUEST_ALLOCATOR.lock();
+    let mut guard = HV_GUEST_ALLOCATORS[vm_id as usize].lock();
     if guard.initialized || guard.heap_len != 0 {
-        HV_GUEST_HEAP_READY.store(1, Ordering::Release);
+        HV_GUEST_HEAP_READY_MASK.fetch_or(ready_bit, Ordering::AcqRel);
         return true;
     }
 
@@ -529,9 +558,10 @@ pub fn ensure_hv_guest_heap_ready() -> bool {
             continue;
         };
         guard.install_heap(arena.virt_start, arena.phys_start as usize, arena.length);
-        HV_GUEST_HEAP_READY.store(1, Ordering::Release);
+        HV_GUEST_HEAP_READY_MASK.fetch_or(ready_bit, Ordering::AcqRel);
         crate::log!(
-            "heap: hv guest arena virt=0x{:X} phys=0x{:X} size={} MiB\n",
+            "heap: hv guest vm{} arena virt=0x{:X} phys=0x{:X} size={} MiB\n",
+            vm_id,
             arena.virt_start,
             arena.phys_start,
             arena.length / (1024 * 1024)
@@ -540,10 +570,11 @@ pub fn ensure_hv_guest_heap_ready() -> bool {
     }
 
     crate::log!(
-        "heap: hv guest arena unavailable, falling back to private {} KiB heap\n",
-        HV_GUEST_HEAP_FALLBACK_SIZE / 1024
+        "heap: hv guest vm{} arena unavailable, falling back to private {} KiB heap\n",
+        vm_id,
+        guard.fallback_len / 1024
     );
-    HV_GUEST_HEAP_READY.store(1, Ordering::Release);
+    HV_GUEST_HEAP_READY_MASK.fetch_or(ready_bit, Ordering::AcqRel);
     true
 }
 
@@ -554,7 +585,7 @@ unsafe impl GlobalAlloc for Allocator {
         let ptr = allocator_for_domain(domain).lock().alloc(domain, layout);
         if !ptr.is_null() {
             let tag_ptr = ptr.sub(size_of::<AllocTag>()) as *mut AllocTag;
-            (*tag_ptr).domain = domain as u8;
+            (*tag_ptr).domain = alloc_domain_tag(domain);
         }
         ptr
     }
@@ -581,12 +612,13 @@ pub unsafe fn alloc_raw(layout: Layout) -> *mut u8 {
     let ptr = guard.alloc(domain, layout);
     if !ptr.is_null() {
         let tag_ptr = ptr.sub(size_of::<AllocTag>()) as *mut AllocTag;
-        (*tag_ptr).domain = domain as u8;
-    } else if domain == AllocDomain::HvGuest {
-        let stats = hv_guest_heap_stats();
+        (*tag_ptr).domain = alloc_domain_tag(domain);
+    } else if let Some(vm_id) = alloc_domain_vm_id(domain) {
+        let stats = hv_guest_heap_stats(vm_id);
         let trace = last_alloc_trace();
         crate::log!(
-            "hv-guest-alloc: alloc_raw failed size={} align={} src={:?} usable_total={} free_bytes={} largest_free={} free_blocks={} init={}\n",
+            "hv-guest-alloc: vm{} alloc_raw failed size={} align={} src={:?} usable_total={} free_bytes={} largest_free={} free_blocks={} init={}\n",
+            vm_id,
             layout.size(),
             layout.align(),
             stats.source,
@@ -684,9 +716,7 @@ pub fn heap_stats() -> HeapStats {
     }
 }
 
-pub fn hv_guest_heap_stats() -> HeapStats {
-    init_fallback_regions();
-    let mut guard = HV_GUEST_ALLOCATOR.lock();
+fn heap_stats_from_guard(guard: &mut FreeList) -> HeapStats {
     unsafe {
         if !guard.initialized {
             guard.init_once();
@@ -724,6 +754,71 @@ pub fn hv_guest_heap_stats() -> HeapStats {
         initialized: guard.initialized,
         source: guard.heap_source,
     }
+}
+
+pub fn hv_guest_heap_stats(vm_id: u8) -> HeapStats {
+    init_fallback_regions();
+    let Some(allocator) = HV_GUEST_ALLOCATORS.get(vm_id as usize) else {
+        return HeapStats {
+            heap_start: 0,
+            heap_end: 0,
+            phys_start: 0,
+            usable_start: 0,
+            usable_total: 0,
+            free_bytes: 0,
+            largest_free_block: 0,
+            free_blocks: 0,
+            initialized: false,
+            source: HeapSourceKind::Fallback,
+        };
+    };
+    let mut guard = allocator.lock();
+    heap_stats_from_guard(&mut guard)
+}
+
+pub fn hv_guest_heap_stats_total() -> HeapStats {
+    init_fallback_regions();
+    let mut total = HeapStats {
+        heap_start: 0,
+        heap_end: 0,
+        phys_start: 0,
+        usable_start: 0,
+        usable_total: 0,
+        free_bytes: 0,
+        largest_free_block: 0,
+        free_blocks: 0,
+        initialized: false,
+        source: HeapSourceKind::Arena,
+    };
+
+    for allocator in HV_GUEST_ALLOCATORS.iter() {
+        let mut guard = allocator.lock();
+        if !guard.initialized && guard.heap_len == 0 {
+            continue;
+        }
+        let stats = heap_stats_from_guard(&mut guard);
+        if stats.heap_start != 0 && (total.heap_start == 0 || stats.heap_start < total.heap_start) {
+            total.heap_start = stats.heap_start;
+        }
+        total.heap_end = total.heap_end.max(stats.heap_end);
+        if total.phys_start == 0 {
+            total.phys_start = stats.phys_start;
+        }
+        if stats.usable_start != 0
+            && (total.usable_start == 0 || stats.usable_start < total.usable_start)
+        {
+            total.usable_start = stats.usable_start;
+        }
+        total.usable_total = total.usable_total.saturating_add(stats.usable_total);
+        total.free_bytes = total.free_bytes.saturating_add(stats.free_bytes);
+        total.largest_free_block = total.largest_free_block.max(stats.largest_free_block);
+        total.free_blocks = total.free_blocks.saturating_add(stats.free_blocks);
+        total.initialized |= stats.initialized;
+        if stats.source == HeapSourceKind::Fallback {
+            total.source = HeapSourceKind::Fallback;
+        }
+    }
+    total
 }
 
 pub fn install_heap_arena(arena: HeapArena) -> bool {

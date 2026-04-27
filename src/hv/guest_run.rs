@@ -114,13 +114,13 @@ pub extern "C" fn trueos_hv_guest_shell_run() -> ! {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_hv_guest_blueprint_launch_active() -> bool {
-    let vm_id = crate::hv::current_vm_id().unwrap_or(crate::hv::snapshot::VM1_ID);
+    let vm_id = crate::hv::current_vm_id().unwrap_or(0);
     crate::hv::blueprint_launch_active(vm_id)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
-    let vm_id = crate::hv::current_vm_id().unwrap_or(crate::hv::snapshot::VM1_ID);
+    let vm_id = crate::hv::current_vm_id().unwrap_or(0);
     let Some(state) = crate::hv::take_blueprint_launch(vm_id) else {
         return false;
     };
@@ -183,7 +183,7 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
     let app_fs_root =
         blueprint::app_fs_root_for_archive(state.archive.as_str(), state.module_bytes.as_slice());
     let _ = crate::r::io::kfs::create_dir_all(app_fs_root.as_str());
-    crate::hv::begin_blueprint_app_window_session(state.archive.as_str());
+    crate::hv::begin_blueprint_app_window_session(vm_id, state.archive.as_str());
     crate::blueprint_net_broker::set_vmx_guest_net_backend(true);
     let invoke_result = blueprint::invoke_host_rel(
         unpacked.as_slice(),
@@ -196,11 +196,11 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
     crate::blueprint_net_broker::set_vmx_guest_net_backend(false);
     match invoke_result {
         Ok(()) => {
-            crate::hv::finish_blueprint_app_window_session(true);
+            crate::hv::finish_blueprint_app_window_session(vm_id, true);
             log("run: guest blueprint returned");
         }
         Err(err) => {
-            crate::hv::finish_blueprint_app_window_session(true);
+            crate::hv::finish_blueprint_app_window_session(vm_id, true);
             log(alloc::format!("run: guest REL load failed: {}", err).as_str());
         }
     }
