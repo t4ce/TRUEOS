@@ -10,10 +10,17 @@
 extern crate alloc;
 
 pub mod ast;
+pub mod backend_rust;
+pub mod backend_vm;
 pub mod lexer;
 pub mod parser;
 
 pub use ast::{AssignKind, Expr, ExprKind, Program, Stmt, StmtKind, Symbol, Type};
+pub use backend_rust::emit_rust;
+pub use backend_vm::{
+    VmLocalReport, VmObject, VmObjectError, VmRunError, VmRunReport, VmValue, emit_vm_object,
+    run_vm_object,
+};
 pub use lexer::{LexError, Lexer, Span, Token, TokenKind};
 pub use parser::{ParseError, Parser};
 

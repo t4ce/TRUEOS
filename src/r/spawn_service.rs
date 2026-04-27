@@ -79,6 +79,7 @@ define_started_flags!(
     UI2_WEATHER_DEMO_STARTED,
     UI2_CURRENCY_DEMO_STARTED,
     USB_CONTROLLER_TASKS_STARTED,
+    C4_BOOT_PROBE_STARTED,
     TRUEOSFS_READY_HOOK_STARTED,
     BOOT_WS_SMOKE_STARTED,
     BOOT_NETBENCH_STARTED,
@@ -934,6 +935,10 @@ fn spawn_trueosfs_ready_hook(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| trueosfs_ready_hook_task())
 }
 
+fn spawn_c4_boot_probe(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::tst_c4_boot_probe::task())
+}
+
 fn spawn_boot_ws_smoke(spawner: Spawner) -> SpawnAttempt {
     let _ = spawner;
     SpawnAttempt::Skipped
@@ -999,7 +1004,7 @@ const UI2_DEMO_READY: u32 =
 const WS_BOOT_READY: u32 = crate::r::readiness::NET_GATEWAY_REACHABLE
     | crate::r::readiness::TLS_SOCKET_SERVICE_READY
     | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
-static TASKS: [TaskSpec; 66] = [
+static TASKS: [TaskSpec; 67] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
         "globalog-persist-once",
@@ -1294,6 +1299,12 @@ static TASKS: [TaskSpec; 66] = [
         UI2_DEMO_READY | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
         &UI2_TRUEOSFS_EXPLORER_DEMO_STARTED,
         spawn_ui2_trueosfs_explorer_demo,
+    ),
+    TaskSpec::disabled(
+        "c4-boot-probe",
+        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
+        &C4_BOOT_PROBE_STARTED,
+        spawn_c4_boot_probe,
     ),
     TaskSpec::enabled(
         "trueosfs-ready-hook",

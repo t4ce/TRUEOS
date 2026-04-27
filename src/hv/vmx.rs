@@ -232,7 +232,7 @@ static mut VMX_GUEST_REGS_BY_SLOT: [GuestRegisters; VMX_SCRATCH_SLOTS] =
     [EMPTY_GUEST_REGISTERS; VMX_SCRATCH_SLOTS];
 
 fn current_scratch_slot() -> usize {
-    let slot = crate::percpu::current_slot_via_cpuid();
+    let slot = crate::percpu::current_slot();
     if slot < VMX_SCRATCH_SLOTS { slot } else { 0 }
 }
 

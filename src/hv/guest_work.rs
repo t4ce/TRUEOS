@@ -30,15 +30,15 @@ pub struct VmLaneProfile {
 }
 
 impl VmLaneProfile {
-/// Default placement contract for TRUEOS VM hull execution.
-///
-/// Keep guest hulls on HV-reserved VM lanes only:
-/// - never on BSP/local
-/// - never on the AP1 UI2/service lane
-/// - use every registered AP2+ worker lane
-///
-/// This is the placement policy that lane-indexed `vm[n]` scheduling must
-/// preserve now that VMXON/VMCS backing is per CPU slot.
+    /// Default placement contract for TRUEOS VM hull execution.
+    ///
+    /// Keep guest hulls on HV-reserved VM lanes only:
+    /// - never on BSP/local
+    /// - never on the AP1 UI2/service lane
+    /// - use every registered AP2+ worker lane
+    ///
+    /// This is the placement policy that lane-indexed `vm[n]` scheduling must
+    /// preserve now that VMXON/VMCS backing is per CPU slot.
     pub const fn vm_default() -> Self {
         Self {
             role: VmLaneRole::VmHull,

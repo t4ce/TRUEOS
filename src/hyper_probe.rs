@@ -7,12 +7,19 @@ extern crate std;
 
 use core::convert::Infallible;
 use core::pin::Pin;
+use core::sync::atomic::{AtomicBool, Ordering};
 use core::task::{Context, Poll};
+use embassy_executor::task;
 use std::io;
+use std::net::SocketAddr;
 
 use hyper::body::{Body, Bytes, Frame, SizeHint};
 use hyper::rt::{Read, ReadBufCursor, Write};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+
+const HYPER_HTTP_PROBE_PORT: u16 = crate::allports::services::HTTP_TRUEOSFS_TCP_PORT;
+
+static HYPER_NET_PROBE_TASK_SPAWNED: AtomicBool = AtomicBool::new(false);
 
 struct EmptyBody;
 
@@ -36,17 +43,20 @@ impl Body for EmptyBody {
     }
 }
 
-struct HyperTokioIo {
-    inner: tokio::io::DuplexStream,
+struct HyperTokioIo<T> {
+    inner: T,
 }
 
-impl HyperTokioIo {
-    fn new(inner: tokio::io::DuplexStream) -> Self {
+impl<T> HyperTokioIo<T> {
+    fn new(inner: T) -> Self {
         Self { inner }
     }
 }
 
-impl Read for HyperTokioIo {
+impl<T> Read for HyperTokioIo<T>
+where
+    T: AsyncRead + Unpin,
+{
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -70,7 +80,10 @@ impl Read for HyperTokioIo {
     }
 }
 
-impl Write for HyperTokioIo {
+impl<T> Write for HyperTokioIo<T>
+where
+    T: AsyncWrite + Unpin,
+{
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -152,6 +165,123 @@ async fn probe_hyper_http1_loopback() -> Result<(), &'static str> {
     }
 }
 
+fn primary_ipv4_probe_addr(port: u16) -> Option<SocketAddr> {
+    let dev_idx = crate::net::primary_device_index();
+    let ip = crate::net::adapter::ipv4_at(dev_idx)?;
+    Some(SocketAddr::from((ip, port)))
+}
+
+async fn probe_hyper_http1_trueosfs() -> Result<(), &'static str> {
+    let Some(addr) = primary_ipv4_probe_addr(HYPER_HTTP_PROBE_PORT) else {
+        crate::log!("hyper_probe: note net.http1.trueosfs skipped (no primary ipv4 yet)\n");
+        return Ok(());
+    };
+
+    let connect_deadline = tokio::time::Instant::now() + core::time::Duration::from_millis(2_000);
+    let stream = loop {
+        match tokio::time::timeout(
+            core::time::Duration::from_millis(250),
+            tokio::net::TcpStream::connect(addr),
+        )
+        .await
+        {
+            Ok(Ok(stream)) => break stream,
+            Ok(Err(_)) if tokio::time::Instant::now() < connect_deadline => {
+                tokio::time::sleep(core::time::Duration::from_millis(25)).await;
+            }
+            Err(_) if tokio::time::Instant::now() < connect_deadline => {
+                tokio::time::sleep(core::time::Duration::from_millis(25)).await;
+            }
+            Ok(Err(_)) => return Err("net.http1.trueosfs.connect"),
+            Err(_) => return Err("net.http1.trueosfs.connect_timeout"),
+        }
+    };
+
+    let (mut sender, connection) =
+        hyper::client::conn::http1::handshake::<_, EmptyBody>(HyperTokioIo::new(stream))
+            .await
+            .map_err(|_| "net.http1.trueosfs.handshake")?;
+    let connection = tokio::spawn(async move { connection.await });
+
+    sender
+        .ready()
+        .await
+        .map_err(|_| "net.http1.trueosfs.ready")?;
+    let request = hyper::Request::builder()
+        .method(hyper::Method::GET)
+        .uri("/")
+        .header(hyper::header::HOST, "trueos.local")
+        .body(EmptyBody)
+        .map_err(|_| "net.http1.trueosfs.request_build")?;
+    let response = sender
+        .send_request(request)
+        .await
+        .map_err(|_| "net.http1.trueosfs.send_request")?;
+
+    if response.status() != hyper::StatusCode::OK {
+        return Err("net.http1.trueosfs.response_status");
+    }
+
+    crate::log!("hyper_probe: success net.http1.trueosfs GET / -> 200\n");
+
+    drop(response);
+    drop(sender);
+    match tokio::time::timeout(core::time::Duration::from_millis(250), connection).await {
+        Ok(Ok(Ok(()))) => Ok(()),
+        Ok(Ok(Err(_))) => Err("net.http1.trueosfs.connection"),
+        Ok(Err(_)) => Err("net.http1.trueosfs.connection_join"),
+        Err(_) => {
+            crate::log!("hyper_probe: note net.http1.trueosfs connection still draining\n");
+            Ok(())
+        }
+    }
+}
+
+fn run_hyper_net_probe_runtime() {
+    let mut runtime_builder = tokio::runtime::Builder::new_current_thread();
+    runtime_builder.enable_io();
+    runtime_builder.enable_time();
+
+    let runtime = match runtime_builder.build() {
+        Ok(runtime) => runtime,
+        Err(_) => {
+            crate::log!("hyper_probe: failure net.http1.rt_build\n");
+            return;
+        }
+    };
+
+    match runtime.block_on(probe_hyper_http1_trueosfs()) {
+        Ok(()) => crate::log!("hyper_probe: success net.http1 probe_suite\n"),
+        Err(stage) => crate::log!("hyper_probe: failure {}\n", stage),
+    }
+}
+
+#[task]
+async fn hyper_net_probe_task() {
+    crate::r::readiness::wait_for(
+        crate::r::readiness::NET_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
+    )
+    .await;
+    crate::log!("hyper_probe: resume net.http1 probe after NET_CONFIGURED+TRUEOSFS_ROOT_MOUNTED\n");
+    run_hyper_net_probe_runtime();
+}
+
+fn spawn_deferred_hyper_net_probe() {
+    if HYPER_NET_PROBE_TASK_SPAWNED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    let Some(spawner) = crate::workers::spawner_for_slot(0) else {
+        crate::log!("hyper_probe: note net.http1 task not spawned (no slot0 spawner)\n");
+        return;
+    };
+
+    match hyper_net_probe_task() {
+        Ok(token) => spawner.spawn(token),
+        Err(err) => crate::log!("hyper_probe: note net.http1 task spawn failed: {:?}\n", err),
+    }
+}
+
 pub(crate) fn log_boot_probe() {
     crate::log!("hyper_probe: wired hyper 1.9 client/http1 surface directly beside tokio\n");
 
@@ -173,5 +303,16 @@ pub(crate) fn log_boot_probe() {
     match runtime.block_on(probe_hyper_http1_loopback()) {
         Ok(()) => crate::log!("hyper_probe: success http1.loopback_request_response\n"),
         Err(stage) => crate::log!("hyper_probe: failure {}\n", stage),
+    }
+
+    if crate::r::readiness::is_set(
+        crate::r::readiness::NET_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
+    ) {
+        run_hyper_net_probe_runtime();
+    } else {
+        crate::log!(
+            "hyper_probe: note net.http1 deferred until NET_CONFIGURED+TRUEOSFS_ROOT_MOUNTED\n"
+        );
+        spawn_deferred_hyper_net_probe();
     }
 }

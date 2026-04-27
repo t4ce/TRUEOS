@@ -75,6 +75,7 @@ static trueos_vm_ids: [TrueosVmId; TRUEOS_VM_ID_LIMIT] =
     [const { TrueosVmId::new() }; TRUEOS_VM_ID_LIMIT];
 static CURRENT_VM_ID_BY_CPU: [AtomicU8; TRUEOS_VM_CPU_SLOT_LIMIT] =
     [const { AtomicU8::new(0) }; TRUEOS_VM_CPU_SLOT_LIMIT];
+static CURRENT_VM_ID_BY_LAPIC_LOW: [AtomicU8; 256] = [const { AtomicU8::new(0) }; 256];
 static HV_LOG_SEQ: AtomicU64 = AtomicU64::new(0);
 static HV_CONTROL_NUDGE_SEQ: AtomicU64 = AtomicU64::new(1);
 static VM_BOOT_MODES: [Mutex<VmBootMode>; TRUEOS_VM_ID_LIMIT] =
@@ -104,7 +105,7 @@ pub static mut HV_HOST_TSSS: [[u8; 104]; TRUEOS_VM_CPU_SLOT_LIMIT] =
 pub use snapshot::{RestoreError, SaveError};
 
 fn current_vmx_slot() -> Result<usize, &'static str> {
-    let slot = crate::percpu::current_slot_via_cpuid();
+    let slot = crate::percpu::current_slot();
     if slot < TRUEOS_VM_CPU_SLOT_LIMIT {
         Ok(slot)
     } else {
@@ -289,23 +290,34 @@ pub fn vm_state(vm_id: u8) -> HvVmState {
 }
 
 pub(crate) fn current_vm_id() -> Option<u8> {
-    let slot = crate::percpu::current_slot_via_cpuid();
+    let slot = crate::percpu::current_slot();
     let tagged = CURRENT_VM_ID_BY_CPU.get(slot)?.load(Ordering::Acquire);
     tagged.checked_sub(1)
 }
 
+pub(crate) fn current_vm_id_by_lapic_low() -> Option<u8> {
+    let lapic_id = crate::percpu::current_lapic_id_via_cpuid();
+    let tagged = CURRENT_VM_ID_BY_LAPIC_LOW[(lapic_id & 0xFF) as usize].load(Ordering::Acquire);
+    tagged.checked_sub(1)
+}
+
 fn set_current_vm_id(vm_id: u8) {
-    let slot_idx = crate::percpu::current_slot_via_cpuid();
+    let slot_idx = crate::percpu::current_slot();
     if let Some(slot) = CURRENT_VM_ID_BY_CPU.get(slot_idx) {
         slot.store(vm_id.saturating_add(1), Ordering::Release);
     }
+    let lapic_id = crate::percpu::current_lapic_id_via_cpuid();
+    CURRENT_VM_ID_BY_LAPIC_LOW[(lapic_id & 0xFF) as usize]
+        .store(vm_id.saturating_add(1), Ordering::Release);
 }
 
 fn clear_current_vm_id() {
-    let slot_idx = crate::percpu::current_slot_via_cpuid();
+    let slot_idx = crate::percpu::current_slot();
     if let Some(slot) = CURRENT_VM_ID_BY_CPU.get(slot_idx) {
         slot.store(0, Ordering::Release);
     }
+    let lapic_id = crate::percpu::current_lapic_id_via_cpuid();
+    CURRENT_VM_ID_BY_LAPIC_LOW[(lapic_id & 0xFF) as usize].store(0, Ordering::Release);
 }
 
 #[inline]
@@ -1289,7 +1301,7 @@ fn guest_cpuid_ebx(leaf: u32, subleaf: u32, ebx: u32) -> u32 {
         return ebx;
     }
 
-    let slot = crate::percpu::current_slot_via_cpuid() as u32;
+    let slot = crate::percpu::current_slot() as u32;
     let Some(profile) = crate::cpu::CpuProfile::for_slot(slot) else {
         return ebx;
     };

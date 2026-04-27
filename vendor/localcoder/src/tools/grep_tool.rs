@@ -21,6 +21,7 @@
 
 use crate::tools::Tool;
 use anyhow::{Result, anyhow};
+use glob::Pattern;
 use ignore::WalkBuilder;
 use regex::RegexBuilder;
 use serde_json::{Value, json};
@@ -360,7 +361,7 @@ fn passes_filters(path: &Path, type_exts: &Option<Vec<&str>>, glob_filter: Optio
     // Glob filter
     if let Some(glob_pat) = glob_filter {
         let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if !glob_match(glob_pat, filename) {
+        if !matches_glob_filter(glob_pat, filename) {
             return false;
         }
     }
@@ -368,9 +369,9 @@ fn passes_filters(path: &Path, type_exts: &Option<Vec<&str>>, glob_filter: Optio
     true
 }
 
-/// Simple glob matching: supports comma/space-separated patterns and brace expansion.
-fn glob_match(pattern: &str, name: &str) -> bool {
-    // Split on spaces first, then on commas — but preserve brace patterns intact.
+/// Glob filter matching: supports comma/space-separated patterns and brace expansion.
+fn matches_glob_filter(pattern: &str, name: &str) -> bool {
+    // Split on spaces first, then on commas, while preserving brace patterns intact.
     let patterns: Vec<&str> = pattern
         .split_whitespace()
         .flat_map(|token| {
@@ -394,31 +395,24 @@ fn glob_match(pattern: &str, name: &str) -> bool {
                     let inner = &pat[start + 1..end];
                     for alt in inner.split(',') {
                         let expanded = format!("{}{}{}", prefix, alt, suffix);
-                        if glob_match_single(&expanded, name) {
+                        if Pattern::new(expanded.as_str())
+                            .map(|p| p.matches(name))
+                            .unwrap_or(false)
+                        {
                             return true;
                         }
                     }
                 }
             }
-        } else if glob_match_single(pat, name) {
+        } else if Pattern::new(pat)
+            .map(|p| p.matches(name))
+            .unwrap_or(false)
+        {
             return true;
         }
     }
 
     false
-}
-
-/// Match a single glob pattern against a name.
-fn glob_match_single(pattern: &str, name: &str) -> bool {
-    let pat = pattern.trim();
-    if pat.starts_with("*.") {
-        // Simple extension match: *.rs → name ends with .rs
-        name.ends_with(&pat[1..])
-    } else if pat == "*" {
-        true
-    } else {
-        name == pat
-    }
 }
 
 /// Convert absolute path to relative if possible.
@@ -610,21 +604,21 @@ mod tests {
 
     #[test]
     fn glob_match_extension() {
-        assert!(glob_match("*.rs", "main.rs"));
-        assert!(!glob_match("*.rs", "main.ts"));
+        assert!(matches_glob_filter("*.rs", "main.rs"));
+        assert!(!matches_glob_filter("*.rs", "main.ts"));
     }
 
     #[test]
     fn glob_match_brace() {
-        assert!(glob_match("*.{rs,toml}", "Cargo.toml"));
-        assert!(glob_match("*.{rs,toml}", "main.rs"));
-        assert!(!glob_match("*.{rs,toml}", "main.ts"));
+        assert!(matches_glob_filter("*.{rs,toml}", "Cargo.toml"));
+        assert!(matches_glob_filter("*.{rs,toml}", "main.rs"));
+        assert!(!matches_glob_filter("*.{rs,toml}", "main.ts"));
     }
 
     #[test]
     fn glob_match_comma_separated() {
-        assert!(glob_match("*.rs, *.ts", "main.rs"));
-        assert!(glob_match("*.rs, *.ts", "main.ts"));
-        assert!(!glob_match("*.rs, *.ts", "main.py"));
+        assert!(matches_glob_filter("*.rs, *.ts", "main.rs"));
+        assert!(matches_glob_filter("*.rs, *.ts", "main.ts"));
+        assert!(!matches_glob_filter("*.rs, *.ts", "main.py"));
     }
 }

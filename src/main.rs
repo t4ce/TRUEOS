@@ -77,6 +77,8 @@ mod tokio_probe;
 mod trueos_tokio_worker;
 #[path = "tst/boot_factory_ram_probe.rs"]
 mod tst_boot_factory_ram_probe;
+#[path = "tst/c4_boot_probe.rs"]
+mod tst_c4_boot_probe;
 #[path = "tst/fps.rs"]
 mod tst_fps;
 #[path = "tst/gfx_tetris.rs"]

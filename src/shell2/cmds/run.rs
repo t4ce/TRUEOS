@@ -1,4 +1,5 @@
 use alloc::collections::VecDeque;
+use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::str::SplitWhitespace;
@@ -68,7 +69,7 @@ fn root_archives() -> Result<Vec<ArchiveEntry>, &'static str> {
     let mut out = listing
         .lines()
         .map(str::trim)
-        .filter(|name| name.ends_with(".bp"))
+        .filter(|name| is_runnable_root_artifact(name))
         .map(|name| ArchiveEntry {
             archive: String::from(name),
             source: ArchiveSource::TrueosfsRoot,
@@ -76,6 +77,18 @@ fn root_archives() -> Result<Vec<ArchiveEntry>, &'static str> {
         .collect::<Vec<_>>();
     out.sort_by(|a, b| a.archive.cmp(&b.archive));
     Ok(out)
+}
+
+fn is_runnable_root_artifact(name: &str) -> bool {
+    matches_glob(name, "*.bp") || matches_glob(name, "*.vm")
+}
+
+fn matches_glob(name: &str, pattern: &str) -> bool {
+    if let Some(suffix) = pattern.strip_prefix('*') {
+        name.ends_with(suffix)
+    } else {
+        name == pattern
+    }
 }
 
 fn embedded_archives() -> Vec<ArchiveEntry> {
@@ -144,6 +157,11 @@ async fn execute_request(spawner: &Spawner, request: AppVmLaunchRequest) {
 
     log(alloc::format!("hv run: worker start module={}", request.archive.as_str()).as_str());
     log(alloc::format!("hv run: module bytes={}", request.module_bytes.len()).as_str());
+
+    if request.module_bytes.starts_with(b"TC4O") || request.archive.ends_with(".vm") {
+        execute_tc4o(request.module_bytes.as_slice(), &log);
+        return;
+    }
 
     let module = match blueprint::parse_blueprint(request.module_bytes.as_slice()) {
         Ok(module) => module,
@@ -269,6 +287,48 @@ async fn execute_request(spawner: &Spawner, request: AppVmLaunchRequest) {
     }
 }
 
+fn execute_tc4o(module_bytes: &[u8], log: &dyn Fn(&str)) {
+    match trueos_c4::run_vm_object(module_bytes, 100_000) {
+        Ok(report) => {
+            log(format!(
+                "hv run: TC4O ok code={} symbols={} stack={} steps={}",
+                report.code_len, report.symbol_count, report.stack_bytes, report.steps
+            )
+            .as_str());
+            for local in report.locals.iter() {
+                log(format!("hv run: local {}", format_tc4o_local(local)).as_str());
+            }
+        }
+        Err(err) => {
+            log(format!("hv run: TC4O failed: {:?}", err).as_str());
+        }
+    }
+}
+
+fn format_tc4o_local(local: &trueos_c4::VmLocalReport) -> String {
+    match &local.value {
+        trueos_c4::VmValue::Int(value) => format!("{}={}", local.name, value),
+        trueos_c4::VmValue::Bool(value) => format!("{}={}", local.name, value),
+        trueos_c4::VmValue::FloatBits(value) => format!("{}=f64bits:0x{:016x}", local.name, value),
+        trueos_c4::VmValue::Bytes(bytes) => {
+            let mut out = format!("{}=[", local.name);
+            for (idx, chunk) in bytes.chunks(4).enumerate() {
+                if idx != 0 {
+                    out.push_str(", ");
+                }
+                if chunk.len() == 4 {
+                    let value = i32::from_le_bytes(chunk.try_into().unwrap());
+                    out.push_str(format!("{}", value).as_str());
+                } else {
+                    out.push('?');
+                }
+            }
+            out.push(']');
+            out
+        }
+    }
+}
+
 #[embassy_executor::task(pool_size = 1)]
 pub(crate) async fn app_vm_run_queue_task(spawner: Spawner) {
     loop {
@@ -352,7 +412,7 @@ pub(crate) fn try_parse(
 
     let Some(id_text) = args.next() else {
         if archives.is_empty() {
-            print_shell_line(io, "hv run: no .bp modules available");
+            print_shell_line(io, "hv run: no .bp or .vm modules available");
             return ParseOutcome::Handled;
         }
         print_archive_table(io, archives.as_slice());

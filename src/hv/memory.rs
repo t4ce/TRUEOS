@@ -86,13 +86,13 @@ struct GuestStackBacking {
     active_bytes: usize,
 }
 
-static GUEST_STACK_BACKINGS: [Mutex<GuestStackBacking>; crate::allcaps::hv::VM_ID_LIMIT] =
-    [const {
-        Mutex::new(GuestStackBacking {
-            arena: None,
-            active_bytes: GUEST_STACK_DEFAULT_BYTES,
-        })
-    }; crate::allcaps::hv::VM_ID_LIMIT];
+static GUEST_STACK_BACKINGS: [Mutex<GuestStackBacking>; crate::allcaps::hv::VM_ID_LIMIT] = [const {
+    Mutex::new(GuestStackBacking {
+        arena: None,
+        active_bytes: GUEST_STACK_DEFAULT_BYTES,
+    })
+};
+    crate::allcaps::hv::VM_ID_LIMIT];
 
 #[derive(Copy, Clone)]
 pub struct VmSnapshotMeta {
@@ -803,10 +803,7 @@ pub fn build_guest_cr3_with_mode(
         log_guest_mapping("guest-rip", guest_rip);
         let hv_guest_heap = crate::allocators::hv_guest_heap_stats(current_vm_id_for_log());
         log_guest_mapping("hv-guest-heap-start", hv_guest_heap.heap_start as u64);
-        log_guest_mapping(
-            "hv-guest-heap-end-8",
-            (hv_guest_heap.heap_end as u64).saturating_sub(8),
-        );
+        log_guest_mapping("hv-guest-heap-end-8", (hv_guest_heap.heap_end as u64).saturating_sub(8));
         verify_guest_mapping_chain("guest-rip", guest_rip)?;
         verify_guest_mapping_chain("image-start", mapped_code_base)?;
         verify_guest_mapping_chain(
@@ -1653,7 +1650,9 @@ pub unsafe fn restore_guest_pages_for_vm(
 ) -> Result<(), &'static str> {
     let tables = guest_tables_ptr_for_vm(vm_id)?;
     let mut take_page = |dst: *mut [u64; 512]| -> Result<(), &'static str> {
-        let end = off.checked_add(PAGE_SIZE_4K).ok_or("snapshot page overflow")?;
+        let end = off
+            .checked_add(PAGE_SIZE_4K)
+            .ok_or("snapshot page overflow")?;
         let src = bytes.get(*off..end).ok_or("snapshot page bounds")?;
         unsafe { copy_into_guest_page(dst, src) };
         *off = end;

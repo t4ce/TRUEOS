@@ -54,6 +54,7 @@ dependencies = [
  "spin 0.10.0",
  "tiny-skia-path",
  "tokio",
+ "trueos-c4",
  "trueos-esp",
  "trueos-fs",
  "trueos-gfx-core",
@@ -2854,6 +2855,10 @@ dependencies = [
  "quote",
  "syn 2.0.117",
 ]
+
+[[package]]
+name = "trueos-c4"
+version = "0.1.0"
 
 [[package]]
 name = "trueos-esp"

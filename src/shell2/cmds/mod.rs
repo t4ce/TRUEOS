@@ -3,6 +3,7 @@ use alloc::string::String as AllocString;
 pub(crate) mod acpi;
 pub(crate) mod ample;
 pub(crate) mod bench;
+pub(crate) mod c4;
 pub(crate) mod email;
 pub(crate) mod etc;
 pub(crate) mod file;
