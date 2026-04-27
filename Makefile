@@ -57,7 +57,7 @@ CARGO_GFX_FLAGS =
 
 IMG_SIZE ?= 1G
 
-.PHONY: kernel blueprints artifacts kernel-stages iso iso-release iso-debug snipe dbg dbg-vscode run run-with-nvme run-installed lc
+.PHONY: kernel blueprints artifacts kernel-stages baremetal-reboot-log iso iso-build iso-release iso-debug snipe dbg dbg-vscode run run-with-nvme run-installed lc
 
 images: disk.img nvme.img
 
@@ -123,12 +123,17 @@ artifacts: blueprints kernel
 
 kernel-stages: artifacts
 
-iso: artifacts images
-	rm -rf $(ISO_BOOT_DIR)
-	rm -f $(ISO_PATH)
+baremetal-reboot-log:
 	-fuser -k 7777/udp || true
 	python3 -c "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.bind(('',7777)); exec(\"while True:\n d,a=s.recvfrom(2048)\n if d==b'probe': s.sendto(b'ack',(a[0],7777)); break\")" &
 	@TRUEOS_BAREMETAL_LOG_HOST="$(BAREMETAL_LOG_HOST)" TRUEOS_BAREMETAL_LOG_PORT="$(BAREMETAL_LOG_PORT)" TRUEOS_BAREMETAL_LOG_DELAY="$(BAREMETAL_LOG_DELAY)" TRUEOS_BAREMETAL_LOG_DIR="$(BAREMETAL_LOG_DIR)" "$(BAREMETAL_LOG_DRAIN)" start
+
+iso: baremetal-reboot-log
+	@$(MAKE) iso-build
+
+iso-build: artifacts images
+	rm -rf $(ISO_BOOT_DIR)
+	rm -f $(ISO_PATH)
 	mkdir -p $(ISO_BOOT_DIR)
 	cp $(ARTIFACT_RUNTIME_ELF) $(ISO_BOOT_DIR)/TRUEOS.elf
 	mkdir -p $(ISO_DIR)/EFI/BOOT
@@ -218,7 +223,7 @@ iso: artifacts images
 
 iso-release: BUILD_MODE := release
 iso-release: CARGO_BUILD_FLAGS += --release
-iso-release: iso
+iso-release: iso-build
 	@if [ -z "$(OVMF_BUNDLE_PATH)" ] || [ ! -f "$(OVMF_BUNDLE_PATH)" ]; then \
 		echo "error: no OVMF firmware found to bundle"; \
 		echo "       install OVMF/edk2-ovmf or run: make iso-release OVMF_BUNDLE_PATH=/path/to/ovmf-code-x86_64.fd"; \
@@ -242,7 +247,7 @@ iso-release: iso
 	@count=$$(cat cnt 2>/dev/null || echo 0); count=$${count:-0}; printf '%s\n' $$((count + 1)) | tee cnt
 
 iso-debug: BUILD_MODE := debug
-iso-debug: iso
+iso-debug: iso-build
 
 SERIAL_CONSOLE_CMD = konsole -e sh -c 'stty -echo -icanon cols 100 rows 100; nc 127.0.0.1 5555; stty sane; echo "Connection closed. Press ENTER to exit..."; read'
 
@@ -260,15 +265,15 @@ dbg-vscode: snipe iso-debug
 		echo "GDB stub ready on 127.0.0.1:1234"; \
 		wait $$qemu_pid
 
-# Default quick boot: restart only the emulator, using the current ISO.
-run: snipe
+# Default quick boot: rebuild the emulator ISO, then restart only QEMU.
+run: snipe iso-debug
 	@($(QEMU_RUN_ENV) $(QEMU_RUNNER) iso & $(SERIAL_CONSOLE_CMD))
 
 lc:
 	@./lc $(ARGS)
 
-run-with-nvme: snipe
+run-with-nvme: snipe iso-debug
 	@($(QEMU_RUN_ENV) $(QEMU_RUNNER) iso & $(SERIAL_CONSOLE_CMD))
 
-run-installed: snipe
+run-installed: snipe iso-debug
 	@($(QEMU_RUN_ENV) $(QEMU_RUNNER) installed & $(SERIAL_CONSOLE_CMD))

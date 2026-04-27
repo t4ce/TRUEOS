@@ -120,8 +120,12 @@ pub fn cpu_slot_table_span() -> Option<(usize, usize)> {
     Some((ptr as usize, len.saturating_mul(core::mem::size_of::<CpuSlot>())))
 }
 
+// Securit Risk and a Id to it: HVSR-0002.
+// Keep the LAPIC-order table as boot/discovery plumbing. It is heap-backed on
+// the host and must not become the normal current-CPU identity path for VM
+// guests once broad host-heap EPT mappings are disabled.
 #[inline]
-pub fn slot_for_lapic_id(lapic_id: u32) -> usize {
+pub(crate) fn slot_for_lapic_id(lapic_id: u32) -> usize {
     let slots = cpu_slot_table();
     if !slots.is_empty() {
         for entry in slots {
@@ -237,7 +241,16 @@ pub fn current_lapic_id_via_cpuid() -> u32 {
 }
 
 #[inline(always)]
-pub fn current_slot_via_cpuid() -> usize {
+pub fn current_slot() -> usize {
+    let ptr = try_this_cpu_ptr();
+    if !ptr.is_null() {
+        return unsafe { (*ptr).cpu_index() as usize };
+    }
+    current_slot_via_cpuid()
+}
+
+#[inline(always)]
+pub(crate) fn current_slot_via_cpuid() -> usize {
     slot_for_lapic_id(current_lapic_id_via_cpuid())
 }
 

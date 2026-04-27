@@ -71,7 +71,7 @@ fn lane_scratch_base(lane_id: usize) -> usize {
 }
 
 fn cpu_slot_now() -> u32 {
-    let slot = crate::percpu::current_slot_via_cpuid();
+    let slot = crate::percpu::current_slot();
     if slot > u32::MAX as usize {
         NO_CPU_SLOT
     } else {

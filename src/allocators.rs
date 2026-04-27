@@ -466,6 +466,14 @@ fn alloc_domain_vm_id(domain: AllocDomain) -> Option<u8> {
 }
 
 fn current_alloc_domain() -> AllocDomain {
+    // Guest-side allocator routing must not depend on the host CPU slot table:
+    // after HVSR-0002, that table's heap backing is not mapped into guest page
+    // tables. The LAPIC-low table is fixed storage and is populated by the VM
+    // carrier before VMX entry.
+    if let Some(vm_id) = crate::hv::current_vm_id_by_lapic_low() {
+        return AllocDomain::HvGuest(vm_id);
+    }
+
     // During the first Hull guest entry, avoid CPUID/slot discovery entirely.
     // The guest shares the same image as the host, so the host-side boot-armed
     // flag is visible here and is enough to route early allocations to the
@@ -475,7 +483,7 @@ fn current_alloc_domain() -> AllocDomain {
             return AllocDomain::HvGuest(vm_id);
         }
     }
-    let slot = crate::percpu::current_slot_via_cpuid();
+    let slot = crate::percpu::current_slot();
     if slot >= 64 {
         return AllocDomain::Host;
     }
@@ -520,7 +528,7 @@ fn init_fallback_regions() {
 
 pub fn enter_hv_guest_domain_current_cpu(vm_id: u8) -> bool {
     init_fallback_regions();
-    let slot = crate::percpu::current_slot_via_cpuid();
+    let slot = crate::percpu::current_slot();
     if slot >= 64 || (vm_id as usize) >= crate::allcaps::hv::VM_ID_LIMIT {
         return false;
     }
@@ -530,7 +538,7 @@ pub fn enter_hv_guest_domain_current_cpu(vm_id: u8) -> bool {
 }
 
 pub fn leave_hv_guest_domain_current_cpu() {
-    let slot = crate::percpu::current_slot_via_cpuid();
+    let slot = crate::percpu::current_slot();
     if slot >= 64 {
         return;
     }

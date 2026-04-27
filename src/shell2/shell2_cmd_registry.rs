@@ -34,6 +34,7 @@ struct ApiShell2CmdEntry {
 static API_CMD_REGISTRY: spin::Mutex<Vec<ApiShell2CmdEntry>> = spin::Mutex::new(Vec::new());
 
 const TOOL_JSON_ACPI: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["reboot","S1","S2","S3","S4","S5"],"description":"ACPI action to run."}},"required":["action"],"additionalProperties":false}"#;
+const TOOL_JSON_C4: &str = r#"{"type":"object","properties":{"mode":{"type":"string","enum":["file","inline"],"description":"Compile from a TRUEOSFS file or inline C4 source."},"path":{"type":"string","description":"TRUEOSFS source path when mode=file."},"source":{"type":"string","description":"Inline C4 source when mode=inline."}},"required":["mode"],"additionalProperties":false}"#;
 const TOOL_JSON_EMAIL: &str = r#"{"type":"object","properties":{"mode":{"type":"string","enum":["send","set_from"],"description":"Choose whether to send a mail log entry or set the default from address."},"to":{"type":"string","description":"Recipient address when mode=send."},"mail_text":{"type":"string","description":"Mail body text when mode=send."},"from":{"type":"string","description":"Sender address when mode=set_from."}},"required":["mode"],"additionalProperties":false}"#;
 const TOOL_JSON_ETC: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["ample","go","go2","insane"],"description":"etc subcommand to run."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_FILE: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","format","ramdisc"],"description":"file action to run."},"disk_id":{"type":"string","description":"Disk id string for action=format."},"size":{"type":"string","description":"Optional ramdisc size like 512MB or 1GiB for action=ramdisc."}},"required":["action"],"additionalProperties":false}"#;
@@ -106,6 +107,10 @@ fn dispatch_bench(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str)
     super::cmds::bench::try_parse(spawner, io, &mut args)
 }
 
+fn dispatch_c4(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::c4::try_parse(io, rest)
+}
+
 fn dispatch_file(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
     super::cmds::file::try_parse(io, &mut args)
@@ -153,6 +158,14 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         handler: dispatch_bench,
         tool_description: None,
         tool_parameters_json: None,
+    },
+    BuiltinShell2CmdEntry {
+        name: "c4",
+        mode: "cmd",
+        color: Some((255, 190, 90)),
+        handler: dispatch_c4,
+        tool_description: Some("Compile C4 source to Rust and TC4O, then run the TC4O VM object."),
+        tool_parameters_json: Some(TOOL_JSON_C4),
     },
     BuiltinShell2CmdEntry {
         name: "etc",

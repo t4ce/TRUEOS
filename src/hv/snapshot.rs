@@ -133,7 +133,8 @@ pub fn restore_snapshot_bytes(vm_id: u8, bytes: &[u8]) -> Result<(), RestoreErro
 
     let mut off = header_len;
     unsafe {
-        restore_guest_pages_for_vm(vm_id, bytes, &mut off).map_err(|_| RestoreError::BadSnapshot)?;
+        restore_guest_pages_for_vm(vm_id, bytes, &mut off)
+            .map_err(|_| RestoreError::BadSnapshot)?;
         let stack_ptr = guest_stack_mut_ptr_for_vm(vm_id).ok_or(RestoreError::BadSnapshot)?;
         core::ptr::copy_nonoverlapping(
             bytes[off..off + header_stack_bytes].as_ptr(),
