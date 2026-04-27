@@ -415,6 +415,66 @@ fn encode_triangle_probe_batch(
         push(batch_dwords, cursor, value)
     }
 
+    fn push_mi_report_perf_count(
+        batch_dwords: &mut [u32],
+        cursor: &mut usize,
+        address: u64,
+        report_id: u32,
+    ) -> Result<(), &'static str> {
+        push(batch_dwords, cursor, MI_REPORT_PERF_COUNT_CMD)?;
+        push(
+            batch_dwords,
+            cursor,
+            (address as u32) | MI_REPORT_PERF_COUNT_USE_GLOBAL_GTT,
+        )?;
+        push(batch_dwords, cursor, (address >> 32) as u32)?;
+        push(batch_dwords, cursor, report_id)
+    }
+
+    fn push_raster_wm_oa_config(
+        batch_dwords: &mut [u32],
+        cursor: &mut usize,
+        enable: bool,
+    ) -> Result<(), &'static str> {
+        if enable {
+            // Mesa's ACMGT3 Ext1010 set uses these OAG selector defaults for
+            // rasterizer_sample_output/pixel_write/pixel_blend A counters.
+            push_load_register_imm(batch_dwords, cursor, OAG_OASTARTTRIG1, 0)?;
+            push_load_register_imm(batch_dwords, cursor, OAG_OASTARTTRIG2, 0x0080_0000)?;
+            push_load_register_imm(batch_dwords, cursor, OAG_OASTARTTRIG3, 0)?;
+            push_load_register_imm(batch_dwords, cursor, OAG_OASTARTTRIG4, 0x0080_0000)?;
+            push_load_register_imm(batch_dwords, cursor, OAG_OAREPORTTRIG1, 0)?;
+            push_load_register_imm(batch_dwords, cursor, OAG_SPCTR_CNF, 0)?;
+            push_load_register_imm(batch_dwords, cursor, OAA_LENABLE_REG, 0)?;
+            push_load_register_imm(batch_dwords, cursor, OAG_OA_PESS, 0)?;
+        }
+        push_load_register_imm(
+            batch_dwords,
+            cursor,
+            RCS_OACTXCONTROL,
+            if enable { OACTXCONTROL_COUNTER_RESUME } else { 0 },
+        )?;
+        push_load_register_imm(
+            batch_dwords,
+            cursor,
+            OAR_OACONTROL,
+            if enable {
+                OAR_OACONTROL_FORMAT_A24_A14_B8_C8 | OAR_OACONTROL_COUNTER_ENABLE
+            } else {
+                0
+            },
+        )?;
+        push_load_register_imm(
+            batch_dwords,
+            cursor,
+            RCS_RING_CONTEXT_CONTROL,
+            masked_bits_update(
+                CTX_CTRL_OAC_CONTEXT_ENABLE,
+                if enable { CTX_CTRL_OAC_CONTEXT_ENABLE } else { 0 },
+            ),
+        )
+    }
+
     fn push_sba_address(
         batch_dwords: &mut [u32],
         cursor: &mut usize,
@@ -571,14 +631,15 @@ fn encode_triangle_probe_batch(
         | BackendProbeMode::PsGrfStartR2
         | BackendProbeMode::PsGrfStartR4
         | BackendProbeMode::PsGrfMaxThreads31
-        | BackendProbeMode::PsGrfMaxThreads15 => pipeline.ps.meta.kernel.binding_table_entry_count,
+        | BackendProbeMode::PsGrfMaxThreads15
+        | BackendProbeMode::RasterWmInputOa => pipeline.ps.meta.kernel.binding_table_entry_count,
         BackendProbeMode::PsBindingTableCountOne => {
             pipeline.ps.meta.kernel.binding_table_entry_count.max(1)
         }
     };
     let ps_binding_table_entry_count = if matches!(
         backend_probe_mode,
-        BackendProbeMode::PsBindingTableCountZero
+        BackendProbeMode::PsBindingTableCountZero | BackendProbeMode::RasterWmInputOa
     ) {
         0
     } else {
@@ -1239,6 +1300,18 @@ fn encode_triangle_probe_batch(
         pre3d_value,
     )?;
 
+    if backend_probe_mode.uses_raster_wm_oa() {
+        log_batch_offset(cursor, "OA raster-wm enable");
+        push_raster_wm_oa_config(batch_dwords, &mut cursor, true)?;
+        log_batch_offset(cursor, "MI_REPORT_PERF_COUNT raster-wm begin");
+        push_mi_report_perf_count(
+            batch_dwords,
+            &mut cursor,
+            result_gpu_addr + (RESULT_OA_BEGIN_DWORD as u64) * 4,
+            RESULT_OA_RASTER_WM_BEGIN_ID,
+        )?;
+    }
+
     log_batch_offset(cursor, "3DPRIMITIVE");
     push(batch_dwords, &mut cursor, CMD_3DPRIMITIVE)?;
     push(batch_dwords, &mut cursor, batch_mode.topology())?;
@@ -1247,6 +1320,18 @@ fn encode_triangle_probe_batch(
     push(batch_dwords, &mut cursor, 1)?;
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
+
+    if backend_probe_mode.uses_raster_wm_oa() {
+        log_batch_offset(cursor, "MI_REPORT_PERF_COUNT raster-wm end");
+        push_mi_report_perf_count(
+            batch_dwords,
+            &mut cursor,
+            result_gpu_addr + (RESULT_OA_END_DWORD as u64) * 4,
+            RESULT_OA_RASTER_WM_END_ID,
+        )?;
+        log_batch_offset(cursor, "OA raster-wm disable");
+        push_raster_wm_oa_config(batch_dwords, &mut cursor, false)?;
+    }
 
     log_batch_offset(cursor, "MI_STORE_DATA_IMM pre-light-pipe-control");
     push_store_data_imm(

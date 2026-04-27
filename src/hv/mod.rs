@@ -1,3 +1,4 @@
+pub mod app_crash;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod blueprint_net;
 pub mod guest_run;
@@ -76,6 +77,10 @@ static trueos_vm_ids: [TrueosVmId; TRUEOS_VM_ID_LIMIT] =
 static CURRENT_VM_ID_BY_CPU: [AtomicU8; TRUEOS_VM_CPU_SLOT_LIMIT] =
     [const { AtomicU8::new(0) }; TRUEOS_VM_CPU_SLOT_LIMIT];
 static CURRENT_VM_ID_BY_LAPIC_LOW: [AtomicU8; 256] = [const { AtomicU8::new(0) }; 256];
+static GUEST_KERNEL_GS_BASE_BY_VM: [AtomicU64; TRUEOS_VM_ID_LIMIT] =
+    [const { AtomicU64::new(0) }; TRUEOS_VM_ID_LIMIT];
+static VMX_ROOT_ACTIVE_BY_CPU: [AtomicBool; TRUEOS_VM_CPU_SLOT_LIMIT] =
+    [const { AtomicBool::new(false) }; TRUEOS_VM_CPU_SLOT_LIMIT];
 static HV_LOG_SEQ: AtomicU64 = AtomicU64::new(0);
 static HV_CONTROL_NUDGE_SEQ: AtomicU64 = AtomicU64::new(1);
 static VM_BOOT_MODES: [Mutex<VmBootMode>; TRUEOS_VM_ID_LIMIT] =
@@ -127,6 +132,87 @@ fn current_vmx_pages() -> Result<(*mut u8, *mut u8), &'static str> {
             core::ptr::addr_of_mut!(VMCS_REGIONS[slot].0) as *mut u8,
         ))
     }
+}
+
+fn current_vmcs_page() -> Result<*mut u8, &'static str> {
+    let slot = current_vmx_slot()?;
+    unsafe { Ok(core::ptr::addr_of_mut!(VMCS_REGIONS[slot].0) as *mut u8) }
+}
+
+fn current_vmx_root_active() -> Result<bool, &'static str> {
+    let slot = current_vmx_slot()?;
+    Ok(VMX_ROOT_ACTIVE_BY_CPU[slot].load(Ordering::Acquire))
+}
+
+fn prepare_vmx_control_registers() -> Result<u32, &'static str> {
+    let (compatible, has_msr, _, locked, _) = vmx_caps();
+    if compatible && has_msr && !locked {
+        unsafe {
+            let mut val = Msr::new(vmx::IA32_FEATURE_CONTROL).read();
+            val |= vmx::IA32_FEATURE_CONTROL_LOCK | vmx::IA32_FEATURE_CONTROL_VMX_OUTSIDE_SMX;
+            Msr::new(vmx::IA32_FEATURE_CONTROL).write(val);
+        }
+    }
+
+    let caps = status();
+    if !caps.vendor_intel
+        || !caps.has_msr
+        || !caps.has_vmx
+        || !caps.feature_control_locked
+        || !caps.feature_control_vmx_outside_smx
+    {
+        return Err("vmx unsupported");
+    }
+
+    let cr0_fixed0 = unsafe { Msr::new(vmx::IA32_VMX_CR0_FIXED0).read() };
+    let cr0_fixed1 = unsafe { Msr::new(vmx::IA32_VMX_CR0_FIXED1).read() };
+    let cr4_fixed0 = unsafe { Msr::new(vmx::IA32_VMX_CR4_FIXED0).read() };
+    let cr4_fixed1 = unsafe { Msr::new(vmx::IA32_VMX_CR4_FIXED1).read() };
+
+    let mut cr0 = Cr0::read().bits();
+    let mut cr4 = Cr4::read().bits();
+    cr0 = (cr0 | cr0_fixed0) & cr0_fixed1;
+    cr4 = (cr4 | cr4_fixed0) & cr4_fixed1;
+    cr4 |= Cr4Flags::VIRTUAL_MACHINE_EXTENSIONS.bits();
+    unsafe {
+        Cr0::write(Cr0Flags::from_bits_truncate(cr0));
+        Cr4::write(Cr4Flags::from_bits_truncate(cr4));
+    }
+
+    let basic = unsafe { Msr::new(vmx::IA32_VMX_BASIC).read() };
+    Ok((basic & 0x7fff_ffff) as u32)
+}
+
+pub fn enter_vmx_root_for_current_cpu_contract() -> Result<(), &'static str> {
+    let slot = current_vmx_slot()?;
+    if slot <= 1 {
+        return Ok(());
+    }
+    if VMX_ROOT_ACTIVE_BY_CPU[slot].load(Ordering::Acquire) {
+        return Ok(());
+    }
+
+    let revision = prepare_vmx_control_registers()?;
+    let (vmxon_va, _) = current_vmx_pages()?;
+    unsafe {
+        core::ptr::write_bytes(vmxon_va, 0, VMX_PAGE_SIZE);
+        *(vmxon_va as *mut u32) = revision;
+    }
+    let vmxon_pa = kernel_va_to_pa(vmxon_va as u64).ok_or("vmxon pa")?;
+    if !vmx::vmxon(vmxon_pa) {
+        hvlogf(format_args!(
+            "hv: vmx core-contract failed slot={} vmxon_pa=0x{:016X}",
+            slot, vmxon_pa
+        ));
+        return Err("vmxon");
+    }
+
+    VMX_ROOT_ACTIVE_BY_CPU[slot].store(true, Ordering::Release);
+    hvlogf(format_args!(
+        "hv: vmx core-contract active slot={} revision=0x{:08X} vmxon_pa=0x{:016X}",
+        slot, revision, vmxon_pa
+    ));
+    Ok(())
 }
 
 fn hv_control_nudge_ap(arg: u64) -> u64 {
@@ -290,6 +376,13 @@ pub fn vm_state(vm_id: u8) -> HvVmState {
 }
 
 pub(crate) fn current_vm_id() -> Option<u8> {
+    // Guest-safe fast path: Hull guests share the host image but not the host
+    // heap/percpu pages. The LAPIC-low table is fixed storage populated before
+    // VM entry, so this avoids dereferencing GS-backed PerCpu state in guest.
+    if let Some(vm_id) = current_vm_id_by_lapic_low() {
+        return Some(vm_id);
+    }
+
     let slot = crate::percpu::current_slot();
     let tagged = CURRENT_VM_ID_BY_CPU.get(slot)?.load(Ordering::Acquire);
     tagged.checked_sub(1)
@@ -686,12 +779,20 @@ pub fn stage_blueprint_launch(vm_id: u8, state: BlueprintLaunchState) -> Result<
     let Some(slot) = BLUEPRINT_LAUNCH_STATES.get(vm_id as usize) else {
         return Err(StartError::UnsupportedVmId);
     };
-    *slot.lock() = Some(state);
+    let Some(guest_state) = crate::allocators::with_hv_guest_alloc_domain(vm_id, || state.clone())
+    else {
+        return Err(StartError::GuestMemoryUnavailable);
+    };
+    *slot.lock() = Some(guest_state);
     Ok(())
 }
 
 pub fn take_blueprint_launch(vm_id: u8) -> Option<BlueprintLaunchState> {
     BLUEPRINT_LAUNCH_STATES.get(vm_id as usize)?.lock().take()
+}
+
+fn blueprint_launch_snapshot(vm_id: u8) -> Option<BlueprintLaunchState> {
+    BLUEPRINT_LAUNCH_STATES.get(vm_id as usize)?.lock().clone()
 }
 
 pub fn blueprint_launch_active(vm_id: u8) -> bool {
@@ -904,11 +1005,20 @@ async fn vm_task(vm_id: u8) {
     let _entered_guest_alloc = crate::allocators::enter_hv_guest_domain_current_cpu(vm_id);
     let launch_result = vmx_launch_once_with_ept(lineage_record);
     crate::allocators::leave_hv_guest_domain_current_cpu();
+    let blueprint_crash_state = blueprint_launch_snapshot(vm_id);
+    let mut pending_crash = None;
     match launch_result {
         Ok(lr) => {
             capture_snapshot_meta(vm_id, lr);
-            if vmexit_is_preserve(lr) {
+            let preserve_exit = vmexit_is_preserve(lr);
+            if preserve_exit {
                 snapshot_on_preserve_exit(vm_id);
+            } else if let Some(state) = blueprint_crash_state.as_ref() {
+                pending_crash = Some(crate::hv::app_crash::prepare(
+                    vm_id,
+                    state,
+                    crate::hv::app_crash::CrashOutcome::Vmexit(lr),
+                ));
             }
             hvlogf(format_args!(
                 "hv: vm{}-{} reporting: vmlaunch entered={} launch_failed={} exit_reason=0x{:X} exit_qual=0x{:X} guest_rip=0x{:016X}",
@@ -921,10 +1031,19 @@ async fn vm_task(vm_id: u8) {
                 lr.guest_rip
             ));
         }
-        Err(e) => hvlogf(format_args!(
-            "hv: vm{}-{} reporting: vmlaunch/ept failed ({})",
-            vm_id, lineage_record.level, e
-        )),
+        Err(e) => {
+            if let Some(state) = blueprint_crash_state.as_ref() {
+                pending_crash = Some(crate::hv::app_crash::prepare(
+                    vm_id,
+                    state,
+                    crate::hv::app_crash::CrashOutcome::LaunchError(e),
+                ));
+            }
+            hvlogf(format_args!(
+                "hv: vm{}-{} reporting: vmlaunch/ept failed ({})",
+                vm_id, lineage_record.level, e
+            ));
+        }
     }
 
     if boot_mode == VmBootMode::Full {
@@ -944,6 +1063,9 @@ async fn vm_task(vm_id: u8) {
     vm.preserve_exit.store(false, Ordering::Release);
     let _ = take_blueprint_launch(vm_id);
     hvlogf(format_args!("hv: vm{} lifecycle: stopped", vm_id));
+    if let Some(pending) = pending_crash {
+        crate::hv::app_crash::write(vm_id, pending).await;
+    }
 }
 
 fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
@@ -981,68 +1103,44 @@ fn vmx_caps() -> (bool, bool, bool, bool, bool) {
 fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResult, &'static str> {
     let vm_id = current_vm_id().ok_or("vm context missing")?;
     let vm = vm_slot(vm_id);
-    let caps = status();
-    if !caps.vendor_intel || !caps.has_msr || !caps.has_vmx {
-        return Err("vmx unsupported");
-    }
-
-    let cr0_fixed0 = unsafe { Msr::new(vmx::IA32_VMX_CR0_FIXED0).read() };
-    let cr0_fixed1 = unsafe { Msr::new(vmx::IA32_VMX_CR0_FIXED1).read() };
-    let cr4_fixed0 = unsafe { Msr::new(vmx::IA32_VMX_CR4_FIXED0).read() };
-    let cr4_fixed1 = unsafe { Msr::new(vmx::IA32_VMX_CR4_FIXED1).read() };
-
-    let mut cr0 = Cr0::read().bits();
-    let mut cr4 = Cr4::read().bits();
-    cr0 = (cr0 | cr0_fixed0) & cr0_fixed1;
-    cr4 = (cr4 | cr4_fixed0) & cr4_fixed1;
-    cr4 |= Cr4Flags::VIRTUAL_MACHINE_EXTENSIONS.bits();
-    unsafe {
-        Cr0::write(Cr0Flags::from_bits_truncate(cr0));
-        Cr4::write(Cr4Flags::from_bits_truncate(cr4));
+    if !current_vmx_root_active()? {
+        hvlogf(format_args!(
+            "hv: vm{} reporting: vmx launch aborted: core contract not active slot={}",
+            current_vm_id_for_log(),
+            current_vmx_slot().unwrap_or(usize::MAX)
+        ));
+        return Err("vmx core contract inactive");
     }
 
     let basic = unsafe { Msr::new(crate::hv::vmx::IA32_VMX_BASIC).read() };
     let revision = (basic & 0x7fff_ffff) as u32;
 
-    let (vmxon_va, vmcs_va) = current_vmx_pages()?;
+    let vmcs_va = current_vmcs_page()?;
     unsafe {
-        core::ptr::write_bytes(vmxon_va, 0, VMX_PAGE_SIZE);
         core::ptr::write_bytes(vmcs_va, 0, VMX_PAGE_SIZE);
-        *(vmxon_va as *mut u32) = revision;
         *(vmcs_va as *mut u32) = revision;
     }
 
-    let vmxon_pa = kernel_va_to_pa(vmxon_va as u64).ok_or("vmxon pa")?;
     let vmcs_pa = kernel_va_to_pa(vmcs_va as u64).ok_or("vmcs pa")?;
     hvlogf(format_args!(
-        "hv: vm{} reporting: vmlaunch prep revision=0x{:08X} vmxon_pa=0x{:016X} vmcs_pa=0x{:016X}",
+        "hv: vm{} reporting: vmlaunch prep revision=0x{:08X} vmcs_pa=0x{:016X} root=core-contract",
         current_vm_id_for_log(),
         revision,
-        vmxon_pa,
         vmcs_pa
     ));
 
-    if !crate::hv::vmx::vmxon(vmxon_pa) {
-        return Err("vmxon");
-    }
     if !crate::hv::vmx::vmclear(vmcs_pa) {
-        let _ = crate::hv::vmx::vmxoff();
         return Err("vmclear");
     }
     if !crate::hv::vmx::vmptrld(vmcs_pa) {
-        let _ = crate::hv::vmx::vmxoff();
         return Err("vmptrld");
     }
 
     let eptp = match build_ept_identity_4g() {
         Ok(v) => v,
-        Err(e) => {
-            let _ = vmxoff();
-            return Err(e);
-        }
+        Err(e) => return Err(e),
     };
     if let Err(e) = setup_vmcs_for_launch(vm_id, eptp, lineage_record, boot_mode_for_vm(vm_id)) {
-        let _ = vmxoff();
         return Err(e);
     }
 
@@ -1138,6 +1236,32 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
                 guest_cr4,
                 guest_efer
             ));
+            let regs = crate::hv::vmx::guest_registers();
+            hvlogf(format_args!(
+                "hv: vm{} reporting: pf-regs rsi=0x{:016X} rdi=0x{:016X} rcx=0x{:016X} rdx=0x{:016X} exit_qual=0x{:016X}",
+                current_vm_id_for_log(),
+                regs.rsi,
+                regs.rdi,
+                regs.rcx,
+                regs.rdx,
+                lr.exit_qualification
+            ));
+            let host_heap = crate::allocators::heap_stats();
+            if host_heap.initialized && host_heap.heap_end > host_heap.heap_start {
+                let in_host_heap = |addr: u64| {
+                    let addr = addr as usize;
+                    addr >= host_heap.heap_start && addr < host_heap.heap_end
+                };
+                hvlogf(format_args!(
+                    "hv: vm{} reporting: pf-host-heap-risk src={} dst={} qual={} heap=0x{:016X}..0x{:016X} risk=HVSR-0002",
+                    current_vm_id_for_log(),
+                    in_host_heap(regs.rsi) as u8,
+                    in_host_heap(regs.rdi) as u8,
+                    in_host_heap(lr.exit_qualification) as u8,
+                    host_heap.heap_start as u64,
+                    host_heap.heap_end as u64
+                ));
+            }
             crate::hv::memory::log_guest_mapping("fault-linear", guest_linear);
             crate::hv::memory::log_guest_mapping("fault-rsp", guest_rsp);
             crate::hv::memory::log_guest_mapping("fault-rip", lr.guest_rip);
@@ -1216,6 +1340,16 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
                     }
                 }
             }
+            0x1F => {
+                if !handle_guest_rdmsr(vm_id, lr.guest_rip)? {
+                    break;
+                }
+            }
+            0x20 => {
+                if !handle_guest_wrmsr(vm_id, lr.guest_rip)? {
+                    break;
+                }
+            }
             0x30 => {
                 let guest_physical = vmread(VMCS_GUEST_PHYSICAL_ADDRESS).unwrap_or(0);
                 let read = (lr.exit_qualification & (1 << 0)) != 0;
@@ -1284,10 +1418,6 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
             cpuid_other_count
         ));
     }
-    // ─────────────────────────────────────────────────────────────────────────
-    if !crate::hv::vmx::vmxoff() {
-        return Err("vmxoff");
-    }
     if !preserve_requested {
         if let Some(vm) = vm {
             vm.preserve_exit.store(false, Ordering::Release);
@@ -1306,6 +1436,95 @@ fn guest_cpuid_ebx(leaf: u32, subleaf: u32, ebx: u32) -> u32 {
         return ebx;
     };
     (ebx & 0x00FF_FFFF) | ((profile.lapic_id() & 0xFF) << 24)
+}
+
+fn guest_rdmsr_value(vm_id: u8, msr: u32) -> Option<u64> {
+    match msr {
+        IA32_SYSENTER_CS => vmread(VMCS_GUEST_SYSENTER_CS),
+        IA32_SYSENTER_ESP => vmread(VMCS_GUEST_SYSENTER_ESP),
+        IA32_SYSENTER_EIP => vmread(VMCS_GUEST_SYSENTER_EIP),
+        IA32_DEBUGCTL => vmread(VMCS_GUEST_IA32_DEBUGCTL),
+        IA32_PAT => vmread(VMCS_GUEST_IA32_PAT),
+        IA32_PERF_GLOBAL_CTRL => vmread(VMCS_GUEST_IA32_PERF_GLOBAL_CTRL),
+        IA32_FS_BASE => vmread(VMCS_GUEST_FS_BASE),
+        IA32_GS_BASE => vmread(VMCS_GUEST_GS_BASE),
+        IA32_KERNEL_GS_BASE => Some(
+            GUEST_KERNEL_GS_BASE_BY_VM
+                .get(vm_id as usize)?
+                .load(Ordering::Acquire),
+        ),
+        IA32_EFER => vmread(VMCS_GUEST_IA32_EFER),
+        _ => None,
+    }
+}
+
+fn write_guest_msr_value(vm_id: u8, msr: u32, value: u64) -> bool {
+    match msr {
+        IA32_SYSENTER_CS => vmwrite(VMCS_GUEST_SYSENTER_CS, value).is_ok(),
+        IA32_SYSENTER_ESP => vmwrite(VMCS_GUEST_SYSENTER_ESP, value).is_ok(),
+        IA32_SYSENTER_EIP => vmwrite(VMCS_GUEST_SYSENTER_EIP, value).is_ok(),
+        IA32_DEBUGCTL => vmwrite(VMCS_GUEST_IA32_DEBUGCTL, value).is_ok(),
+        IA32_PAT => vmwrite(VMCS_GUEST_IA32_PAT, value).is_ok(),
+        IA32_PERF_GLOBAL_CTRL => vmwrite(VMCS_GUEST_IA32_PERF_GLOBAL_CTRL, value).is_ok(),
+        IA32_FS_BASE => vmwrite(VMCS_GUEST_FS_BASE, value).is_ok(),
+        IA32_GS_BASE => vmwrite(VMCS_GUEST_GS_BASE, value).is_ok(),
+        IA32_KERNEL_GS_BASE => {
+            let Some(slot) = GUEST_KERNEL_GS_BASE_BY_VM.get(vm_id as usize) else {
+                return false;
+            };
+            slot.store(value, Ordering::Release);
+            true
+        }
+        IA32_EFER => vmwrite(VMCS_GUEST_IA32_EFER, value).is_ok(),
+        _ => false,
+    }
+}
+
+fn handle_guest_rdmsr(vm_id: u8, guest_rip: u64) -> Result<bool, &'static str> {
+    let mut regs = crate::hv::vmx::guest_registers();
+    let msr = regs.rcx as u32;
+    let Some(value) = guest_rdmsr_value(vm_id, msr) else {
+        hvlogf(format_args!(
+            "hv: vm{} reporting: rdmsr unsupported msr=0x{:08X} rip=0x{:016X} risk={}",
+            current_vm_id_for_log(),
+            msr,
+            guest_rip,
+            crate::hv::security::HVSR_0004_GUEST_MSR_SURFACE
+        ));
+        return Ok(false);
+    };
+
+    // Securit Risk and a Id to it: HVSR-0004.
+    // Keep guest RDMSR on an allowlist backed by VMCS guest state. This avoids
+    // accidentally forwarding host-private MSRs while still letting shared-image
+    // guest code read its FS/GS/percpu bases.
+    regs.rax = value & 0xFFFF_FFFF;
+    regs.rdx = value >> 32;
+    crate::hv::vmx::set_guest_registers(regs);
+    let len = vmread(VMCS_VMEXIT_INSTRUCTION_LEN).ok_or("vmread instr len rdmsr")?;
+    vmwrite(VMCS_GUEST_RIP, guest_rip + len)?;
+    Ok(true)
+}
+
+fn handle_guest_wrmsr(vm_id: u8, guest_rip: u64) -> Result<bool, &'static str> {
+    let regs = crate::hv::vmx::guest_registers();
+    let msr = regs.rcx as u32;
+    let value = (regs.rax & 0xFFFF_FFFF) | ((regs.rdx & 0xFFFF_FFFF) << 32);
+    if !write_guest_msr_value(vm_id, msr, value) {
+        hvlogf(format_args!(
+            "hv: vm{} reporting: wrmsr unsupported msr=0x{:08X} value=0x{:016X} rip=0x{:016X} risk={}",
+            current_vm_id_for_log(),
+            msr,
+            value,
+            guest_rip,
+            crate::hv::security::HVSR_0004_GUEST_MSR_SURFACE
+        ));
+        return Ok(false);
+    }
+
+    let len = vmread(VMCS_VMEXIT_INSTRUCTION_LEN).ok_or("vmread instr len wrmsr")?;
+    vmwrite(VMCS_GUEST_RIP, guest_rip + len)?;
+    Ok(true)
 }
 
 fn setup_vmcs_for_launch(

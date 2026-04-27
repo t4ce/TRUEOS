@@ -100,6 +100,8 @@ pub(super) fn alloc_window(
         decoration_mode: Ui2WindowDecorationMode::System,
         titlebar_visible: true,
         bottom_bar_visible: true,
+        rotate_buttons_visible: false,
+        content_rotation_quadrants: 0,
         left_scrollbar_visible: true,
         bottom_scrollbar_visible: true,
         resize_mode: Ui2WindowResizeMode::Auto,
@@ -399,8 +401,27 @@ pub(super) fn handle_system_button_action(
             }
         }
         Ui2SystemButtonAction::PreserveVm => preserve_vm_window_in_state(state, window_id),
+        Ui2SystemButtonAction::RotateLeft => rotate_window_content_in_state(state, window_id, -1),
+        Ui2SystemButtonAction::RotateRight => rotate_window_content_in_state(state, window_id, 1),
         Ui2SystemButtonAction::Close => close_window_in_state(state, window_id),
     }
+}
+
+fn rotate_window_content_in_state(state: &mut Ui2State, id: u32, delta_quadrants: i8) -> bool {
+    let Some(window) = window_mut(state, id) else {
+        return false;
+    };
+    if !window.rotate_buttons_visible {
+        return false;
+    }
+    let current = (window.content_rotation_quadrants % 4) as i8;
+    let next = (current + delta_quadrants).rem_euclid(4) as u8;
+    if window.content_rotation_quadrants == next {
+        return true;
+    }
+    window.content_rotation_quadrants = next;
+    state.compose_reason = "rotate-window-content";
+    note_window_dirty(state, id, "rotate-window-content")
 }
 
 fn toggle_vm_window_in_state(state: &mut Ui2State, window_id: u32) -> bool {
@@ -577,6 +598,8 @@ pub(super) fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) 
     let next_decoration_mode = source_window.decoration_mode;
     let next_titlebar_visible = source_window.titlebar_visible;
     let next_bottom_bar_visible = source_window.bottom_bar_visible;
+    let next_rotate_buttons_visible = source_window.rotate_buttons_visible;
+    let next_content_rotation_quadrants = source_window.content_rotation_quadrants;
     let next_left_scrollbar_visible = source_window.left_scrollbar_visible;
     let next_bottom_scrollbar_visible = source_window.bottom_scrollbar_visible;
     let next_resize_mode = source_window.resize_mode;
@@ -645,6 +668,8 @@ pub(super) fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) 
         window.decoration_mode = next_decoration_mode;
         window.titlebar_visible = next_titlebar_visible;
         window.bottom_bar_visible = next_bottom_bar_visible;
+        window.rotate_buttons_visible = next_rotate_buttons_visible;
+        window.content_rotation_quadrants = next_content_rotation_quadrants;
         window.left_scrollbar_visible = next_left_scrollbar_visible;
         window.bottom_scrollbar_visible = next_bottom_scrollbar_visible;
         window.resize_mode = next_resize_mode;
@@ -1836,6 +1861,39 @@ pub fn set_window_title_twemoji(id: u32, ch: char) -> bool {
     window.title_twemoji = ch;
     state.compose_reason = "title-twemoji-window";
     note_window_dirty(&mut state, id, "title-twemoji-window")
+}
+
+pub fn set_window_rotate_buttons_visible(id: u32, visible: bool) -> bool {
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    let Some(window) = window_mut(&mut state, id) else {
+        return false;
+    };
+    if window.rotate_buttons_visible == visible {
+        return true;
+    }
+    window.rotate_buttons_visible = visible;
+    state.compose_reason = "rotate-buttons-window";
+    let noted = note_window_dirty(&mut state, id, "rotate-buttons-window");
+    if noted {
+        refresh_window_hit_entries(&mut state, id);
+    }
+    noted
+}
+
+pub fn set_window_content_rotation_quadrants(id: u32, quadrants: u8) -> bool {
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    let Some(window) = window_mut(&mut state, id) else {
+        return false;
+    };
+    let next = quadrants % 4;
+    if window.content_rotation_quadrants == next {
+        return true;
+    }
+    window.content_rotation_quadrants = next;
+    state.compose_reason = "rotate-window-content";
+    note_window_dirty(&mut state, id, "rotate-window-content")
 }
 
 pub fn raise_window(id: u32) -> bool {

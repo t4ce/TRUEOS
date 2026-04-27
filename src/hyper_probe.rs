@@ -7,19 +7,15 @@ extern crate std;
 
 use core::convert::Infallible;
 use core::pin::Pin;
-use core::sync::atomic::{AtomicBool, Ordering};
 use core::task::{Context, Poll};
-use embassy_executor::task;
 use std::io;
-use std::net::SocketAddr;
 
 use hyper::body::{Body, Bytes, Frame, SizeHint};
 use hyper::rt::{Read, ReadBufCursor, Write};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, DuplexStream};
+use v::vnet as api;
 
 const HYPER_HTTP_PROBE_PORT: u16 = crate::allports::services::HTTP_TRUEOSFS_TCP_PORT;
-
-static HYPER_NET_PROBE_TASK_SPAWNED: AtomicBool = AtomicBool::new(false);
 
 struct EmptyBody;
 
@@ -165,36 +161,138 @@ async fn probe_hyper_http1_loopback() -> Result<(), &'static str> {
     }
 }
 
-fn primary_ipv4_probe_addr(port: u16) -> Option<SocketAddr> {
+fn primary_ipv4_probe_endpoint(port: u16) -> Option<api::EndpointV4> {
     let dev_idx = crate::net::primary_device_index();
     let ip = crate::net::adapter::ipv4_at(dev_idx)?;
-    Some(SocketAddr::from((ip, port)))
+    Some(api::EndpointV4 { addr: ip, port })
+}
+
+async fn vnet_send_tcp_all(
+    vnet: &crate::r::net::VNet,
+    handle: api::NetHandle,
+    data: &[u8],
+) -> Result<(), &'static str> {
+    for chunk in data.chunks(api::MAX_MSG) {
+        let mut sent = false;
+        for _ in 0..64 {
+            if vnet
+                .submit(api::Command::SendTcp {
+                    handle,
+                    data: api::ByteBuf::from_slice_trunc(chunk),
+                })
+                .is_ok()
+            {
+                sent = true;
+                break;
+            }
+            tokio::time::sleep(core::time::Duration::from_millis(1)).await;
+        }
+        if !sent {
+            return Err("vnet.send_tcp");
+        }
+    }
+    Ok(())
+}
+
+async fn vnet_tcp_bridge(
+    vnet: crate::r::net::VNet,
+    handle: api::NetHandle,
+    mut io: DuplexStream,
+) -> Result<(), &'static str> {
+    let mut outbound = [0u8; 2048];
+    loop {
+        tokio::select! {
+            read = io.read(&mut outbound) => {
+                let n = read.map_err(|_| "vnet.bridge_read")?;
+                if n == 0 {
+                    break;
+                }
+                vnet_send_tcp_all(&vnet, handle, &outbound[..n]).await?;
+            }
+            _ = tokio::time::sleep(core::time::Duration::from_millis(1)) => {
+                for _ in 0..64 {
+                    let Some(ev) = vnet.pop_event() else {
+                        break;
+                    };
+                    match ev {
+                        api::Event::TcpData { handle: h, data } if h == handle => {
+                            io.write_all(data.as_slice())
+                                .await
+                                .map_err(|_| "vnet.bridge_write")?;
+                        }
+                        api::Event::Closed { handle: h } if h == handle => {
+                            let _ = io.shutdown().await;
+                            return Ok(());
+                        }
+                        api::Event::Error { .. } => return Err("vnet.bridge_error"),
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    let _ = vnet.submit(api::Command::Close { handle });
+    let _ = io.shutdown().await;
+    Ok(())
+}
+
+async fn connect_trueosfs_vnet() -> Result<DuplexStream, &'static str> {
+    let Some(remote) = primary_ipv4_probe_endpoint(HYPER_HTTP_PROBE_PORT) else {
+        crate::log!("hyper_probe: note net.http1.trueosfs skipped (no primary ipv4 yet)\n");
+        return Err("net.http1.trueosfs.no_ipv4");
+    };
+
+    let Some(vnet) = crate::r::net::VNet::open_primary() else {
+        return Err("net.http1.trueosfs.vnet_open");
+    };
+
+    vnet.submit(api::Command::OpenTcpConnect { remote })
+        .map_err(|_| "net.http1.trueosfs.vnet_connect_submit")?;
+
+    let connect_deadline = tokio::time::Instant::now() + core::time::Duration::from_millis(2_000);
+    let mut tcp_handle = None;
+    let handle = 'connect: loop {
+        while let Some(ev) = vnet.pop_event() {
+            match ev {
+                api::Event::Opened { handle, kind } if kind == api::SocketKind::Tcp => {
+                    tcp_handle = Some(handle);
+                }
+                api::Event::TcpEstablished { handle } => {
+                    if tcp_handle.is_none() {
+                        tcp_handle = Some(handle);
+                    }
+                    if tcp_handle == Some(handle) {
+                        break 'connect handle;
+                    }
+                }
+                api::Event::Error { .. } => return Err("net.http1.trueosfs.vnet_connect"),
+                _ => {}
+            }
+        }
+
+        if tokio::time::Instant::now() >= connect_deadline {
+            return Err("net.http1.trueosfs.vnet_connect_timeout");
+        }
+
+        tokio::time::sleep(core::time::Duration::from_millis(1)).await;
+    };
+
+    let (client_io, bridge_io) = tokio::io::duplex(16 * 1024);
+    tokio::spawn(async move {
+        if let Err(stage) = vnet_tcp_bridge(vnet, handle, bridge_io).await {
+            crate::log!("hyper_probe: note net.http1.trueosfs bridge ended at {}\n", stage);
+        }
+    });
+
+    Ok(client_io)
 }
 
 async fn probe_hyper_http1_trueosfs() -> Result<(), &'static str> {
-    let Some(addr) = primary_ipv4_probe_addr(HYPER_HTTP_PROBE_PORT) else {
-        crate::log!("hyper_probe: note net.http1.trueosfs skipped (no primary ipv4 yet)\n");
-        return Ok(());
-    };
-
-    let connect_deadline = tokio::time::Instant::now() + core::time::Duration::from_millis(2_000);
-    let stream = loop {
-        match tokio::time::timeout(
-            core::time::Duration::from_millis(250),
-            tokio::net::TcpStream::connect(addr),
-        )
-        .await
-        {
-            Ok(Ok(stream)) => break stream,
-            Ok(Err(_)) if tokio::time::Instant::now() < connect_deadline => {
-                tokio::time::sleep(core::time::Duration::from_millis(25)).await;
-            }
-            Err(_) if tokio::time::Instant::now() < connect_deadline => {
-                tokio::time::sleep(core::time::Duration::from_millis(25)).await;
-            }
-            Ok(Err(_)) => return Err("net.http1.trueosfs.connect"),
-            Err(_) => return Err("net.http1.trueosfs.connect_timeout"),
-        }
+    let stream = match connect_trueosfs_vnet().await {
+        Ok(stream) => stream,
+        Err("net.http1.trueosfs.no_ipv4") => return Ok(()),
+        Err(stage) => return Err(stage),
     };
 
     let (mut sender, connection) =
@@ -256,30 +354,18 @@ fn run_hyper_net_probe_runtime() {
     }
 }
 
-#[task]
-async fn hyper_net_probe_task() {
+#[embassy_executor::task]
+pub(crate) async fn hyper_net_probe_task() {
     crate::r::readiness::wait_for(
-        crate::r::readiness::NET_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
+        crate::r::readiness::NET_CONFIGURED
+            | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
+            | crate::r::readiness::HTTP_TRUEOSFS_LISTENING,
     )
     .await;
-    crate::log!("hyper_probe: resume net.http1 probe after NET_CONFIGURED+TRUEOSFS_ROOT_MOUNTED\n");
+    crate::log!(
+        "hyper_probe: resume net.http1 probe after NET_CONFIGURED+TRUEOSFS_ROOT_MOUNTED+HTTP_TRUEOSFS_LISTENING\n"
+    );
     run_hyper_net_probe_runtime();
-}
-
-fn spawn_deferred_hyper_net_probe() {
-    if HYPER_NET_PROBE_TASK_SPAWNED.swap(true, Ordering::AcqRel) {
-        return;
-    }
-
-    let Some(spawner) = crate::workers::spawner_for_slot(0) else {
-        crate::log!("hyper_probe: note net.http1 task not spawned (no slot0 spawner)\n");
-        return;
-    };
-
-    match hyper_net_probe_task() {
-        Ok(token) => spawner.spawn(token),
-        Err(err) => crate::log!("hyper_probe: note net.http1 task spawn failed: {:?}\n", err),
-    }
 }
 
 pub(crate) fn log_boot_probe() {
@@ -305,14 +391,5 @@ pub(crate) fn log_boot_probe() {
         Err(stage) => crate::log!("hyper_probe: failure {}\n", stage),
     }
 
-    if crate::r::readiness::is_set(
-        crate::r::readiness::NET_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
-    ) {
-        run_hyper_net_probe_runtime();
-    } else {
-        crate::log!(
-            "hyper_probe: note net.http1 deferred until NET_CONFIGURED+TRUEOSFS_ROOT_MOUNTED\n"
-        );
-        spawn_deferred_hyper_net_probe();
-    }
+    crate::log!("hyper_probe: net.http1 probe is managed by spawn-svc readiness gating\n");
 }

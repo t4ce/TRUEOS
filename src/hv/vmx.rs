@@ -17,10 +17,12 @@ pub const IA32_VMX_CR4_FIXED1: u32 = 0x489;
 pub const IA32_SYSENTER_CS: u32 = 0x174;
 pub const IA32_SYSENTER_ESP: u32 = 0x175;
 pub const IA32_SYSENTER_EIP: u32 = 0x176;
+pub const IA32_DEBUGCTL: u32 = 0x1D9;
 pub const IA32_PAT: u32 = 0x277;
 pub const IA32_PERF_GLOBAL_CTRL: u32 = 0x38F;
 pub const IA32_FS_BASE: u32 = 0xC000_0100;
 pub const IA32_GS_BASE: u32 = 0xC000_0101;
+pub const IA32_KERNEL_GS_BASE: u32 = 0xC000_0102;
 pub const IA32_EFER: u32 = 0xC000_0080;
 
 pub const IA32_FEATURE_CONTROL_LOCK: u64 = 1 << 0;

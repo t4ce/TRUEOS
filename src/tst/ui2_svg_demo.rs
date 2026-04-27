@@ -250,6 +250,7 @@ pub async fn ui2_svg_demo_task() {
         return;
     };
     let _ = surface.bind_spawn_task("ui2-svg-demo");
+    let _ = crate::r::ui2::set_window_rotate_buttons_visible(surface.window_id(), true);
 
     let (rgba, rendered) = compose_svg_demo_grid_rgba(surface_w, surface_h);
     if !surface.upload_rgba_owned(rgba, "ui2-svg-demo-upload") {

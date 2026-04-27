@@ -201,6 +201,7 @@ enum BackendProbeMode {
     PsGrfStartR4,
     PsGrfMaxThreads31,
     PsGrfMaxThreads15,
+    RasterWmInputOa,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -322,6 +323,7 @@ impl BackendProbeMode {
             Self::PsGrfStartR4 => "ps-grf-start-r4",
             Self::PsGrfMaxThreads31 => "ps-grf-maxthreads-31",
             Self::PsGrfMaxThreads15 => "ps-grf-maxthreads-15",
+            Self::RasterWmInputOa => "raster-wm-input-oa",
         }
     }
 
@@ -360,6 +362,10 @@ impl BackendProbeMode {
             Self::PsGrfMaxThreads15 => Some(15),
             _ => None,
         }
+    }
+
+    fn uses_raster_wm_oa(self) -> bool {
+        matches!(self, Self::RasterWmInputOa)
     }
 }
 
@@ -516,7 +522,11 @@ fn is_triangle_debug_submit_name(submit_name: &str) -> bool {
 }
 
 fn is_scratch_rt_submit_name(submit_name: &str) -> bool {
-    matches!(submit_name, "ps-bt0-scratch-rt")
+    matches!(submit_name, "ps-bt0-scratch-rt" | "raster-wm-oa-probe")
+}
+
+fn is_raster_wm_oa_submit_name(submit_name: &str) -> bool {
+    submit_name == "raster-wm-oa-probe"
 }
 
 fn is_surface_draw_submit_name(submit_name: &str) -> bool {
@@ -549,6 +559,7 @@ fn is_surface_draw_submit_name(submit_name: &str) -> bool {
             | "postdraw-flush-bit26"
             | "postdraw-pc-postsync-no-cs"
             | "postdraw-pc-cs-no-postsync"
+            | "raster-wm-oa-probe"
             | "vs-draw-frontier"
     )
 }
@@ -558,6 +569,7 @@ fn is_fragment_candidate_submit_name(submit_name: &str) -> bool {
         submit_name,
         "ps-launch-big-primitive"
             | "ps-bt0-scratch-rt"
+            | "raster-wm-oa-probe"
             | "ps-bt1-big-primitive"
             | "ps-wm-normal-big-primitive"
             | "ps-dispatch-slot0-big-primitive"

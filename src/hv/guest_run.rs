@@ -182,7 +182,11 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
     let process_env = blueprint::build_process_env(state.archive.as_str());
     let app_fs_root =
         blueprint::app_fs_root_for_archive(state.archive.as_str(), state.module_bytes.as_slice());
-    let _ = crate::r::io::kfs::create_dir_all(app_fs_root.as_str());
+    log(alloc::format!(
+        "run: guest app fs root prepared logically path={} fs_create=deferred-vm-service",
+        app_fs_root.as_str()
+    )
+    .as_str());
     crate::hv::begin_blueprint_app_window_session(vm_id, state.archive.as_str());
     crate::blueprint_net_broker::set_vmx_guest_net_backend(true);
     let invoke_result = blueprint::invoke_host_rel(

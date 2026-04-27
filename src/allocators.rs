@@ -3,7 +3,7 @@ use core::alloc::{GlobalAlloc, Layout};
 use core::arch::asm;
 use core::mem::{align_of, size_of};
 use core::ptr::{NonNull, addr_of_mut, null_mut};
-use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use spin::Mutex;
 
 use crate::phys::{self, HeapArena};
@@ -442,6 +442,7 @@ static HV_GUEST_ACTIVE_CPU_MASK: AtomicU64 = AtomicU64::new(0);
 static HV_GUEST_HEAP_READY_MASK: AtomicU64 = AtomicU64::new(0);
 
 const HOST_ALLOC_TAG: u8 = u8::MAX;
+static ALLOC_DOMAIN_OVERRIDE_BY_CPU: [AtomicU8; 64] = [const { AtomicU8::new(HOST_ALLOC_TAG) }; 64];
 
 fn alloc_domain_from_tag(tag: &AllocTag) -> AllocDomain {
     if (tag.domain as usize) < crate::allcaps::hv::VM_ID_LIMIT {
@@ -486,6 +487,10 @@ fn current_alloc_domain() -> AllocDomain {
     let slot = crate::percpu::current_slot();
     if slot >= 64 {
         return AllocDomain::Host;
+    }
+    let override_tag = ALLOC_DOMAIN_OVERRIDE_BY_CPU[slot].load(Ordering::Acquire);
+    if (override_tag as usize) < crate::allcaps::hv::VM_ID_LIMIT {
+        return AllocDomain::HvGuest(override_tag);
     }
     if (HV_GUEST_ACTIVE_CPU_MASK.load(Ordering::Acquire) & (1u64 << slot)) != 0 {
         match crate::hv::current_vm_id() {
@@ -543,6 +548,19 @@ pub fn leave_hv_guest_domain_current_cpu() {
         return;
     }
     HV_GUEST_ACTIVE_CPU_MASK.fetch_and(!(1u64 << slot), Ordering::AcqRel);
+}
+
+pub fn with_hv_guest_alloc_domain<T>(vm_id: u8, f: impl FnOnce() -> T) -> Option<T> {
+    init_fallback_regions();
+    if (vm_id as usize) >= crate::allcaps::hv::VM_ID_LIMIT || !ensure_hv_guest_heap_ready(vm_id) {
+        return None;
+    }
+    let slot = crate::percpu::current_slot();
+    let override_slot = ALLOC_DOMAIN_OVERRIDE_BY_CPU.get(slot)?;
+    let previous = override_slot.swap(vm_id, Ordering::AcqRel);
+    let out = f();
+    override_slot.store(previous, Ordering::Release);
+    Some(out)
 }
 
 pub fn ensure_hv_guest_heap_ready(vm_id: u8) -> bool {

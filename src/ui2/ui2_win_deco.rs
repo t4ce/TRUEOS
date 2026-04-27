@@ -17,6 +17,8 @@ const UI2_SYSTEM_BUTTON_VM_PAUSE_TWEMOJI: char = '\u{23F8}';
 const UI2_SYSTEM_BUTTON_TASK_OFFLINE_TWEMOJI: char = '\u{23EF}';
 const UI2_SYSTEM_BUTTON_CLOSE_HULL_TWEMOJI: char = '\u{2716}';
 const UI2_RESIZE_HANDLE_TWEMOJI: char = '\u{1F518}';
+const UI2_ROTATE_LEFT_LABEL: &str = "90L";
+const UI2_ROTATE_RIGHT_LABEL: &str = "90R";
 
 fn title_text_with_ellipsis(text: &str, max_width_px: f32) -> alloc::string::String {
     if text.is_empty() || max_width_px <= 0.0 {
@@ -163,6 +165,7 @@ fn window_system_button_twemoji(window: &Ui2Window, action: Ui2SystemButtonActio
         Ui2SystemButtonAction::PreserveVm => window
             .vm_origin_hint
             .then_some(UI2_SYSTEM_BUTTON_PRESERVE_VM_TWEMOJI),
+        Ui2SystemButtonAction::RotateLeft | Ui2SystemButtonAction::RotateRight => None,
         Ui2SystemButtonAction::Close => Some(if window.vm_origin_hint {
             let hv_status = crate::hv::status();
             if hv_status.running_count != 0 || hv_status.starting_count != 0 {
@@ -183,6 +186,31 @@ fn draw_window_bottom_resize_button(state: &Ui2State, window: &Ui2Window) {
         return;
     };
     draw_window_twemoji_button(state, window, rect, UI2_RESIZE_HANDLE_TWEMOJI);
+}
+
+fn draw_window_bottom_rotate_button(
+    state: &Ui2State,
+    window: &Ui2Window,
+    action: Ui2SystemButtonAction,
+) {
+    let Some(rect) = window_bottom_rotate_button_rect(state, window, action) else {
+        return;
+    };
+    let label = match action {
+        Ui2SystemButtonAction::RotateLeft => UI2_ROTATE_LEFT_LABEL,
+        Ui2SystemButtonAction::RotateRight => UI2_ROTATE_RIGHT_LABEL,
+        _ => return,
+    };
+    let _ = ui2_font_draw_text_line_in_rect_with_tier_rgba_no_present(
+        label,
+        rect,
+        UI2_CHROME_TITLE_FONT_TIER,
+        Ui2FontTextAlign::Center,
+        Ui2FontVerticalAlign::Center,
+        state.view_w,
+        state.view_h,
+        modulate_rgba_alpha(UI2_CHROME_TEXT_RGBA, window.alpha),
+    );
 }
 
 fn draw_window_system_scrollbars(state: &Ui2State, window: &Ui2Window) {
@@ -507,6 +535,8 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
     }
     if window.decoration_mode == Ui2WindowDecorationMode::System {
         draw_window_system_scrollbars(state, window);
+        draw_window_bottom_rotate_button(state, window, Ui2SystemButtonAction::RotateLeft);
+        draw_window_bottom_rotate_button(state, window, Ui2SystemButtonAction::RotateRight);
         draw_window_bottom_resize_button(state, window);
     }
 }
@@ -979,6 +1009,33 @@ pub(super) fn window_bottom_resize_button_hit_rect(
     window_bottom_resize_button_rect(state, window)
 }
 
+fn window_bottom_rotate_button_rect(
+    state: &Ui2State,
+    window: &Ui2Window,
+    action: Ui2SystemButtonAction,
+) -> Option<Ui2Rect> {
+    if !matches!(action, Ui2SystemButtonAction::RotateLeft | Ui2SystemButtonAction::RotateRight)
+        || !window.rotate_buttons_visible
+    {
+        return None;
+    }
+    if window.decoration_mode != Ui2WindowDecorationMode::System || !window.bottom_bar_visible {
+        return None;
+    }
+    if window.state != Ui2WindowStateKind::Normal {
+        return None;
+    }
+    let bar = window_bottom_bar_rect(state, window)?;
+    let button_size = bar.h;
+    let gap = 1.0f32;
+    let slot = if action == Ui2SystemButtonAction::RotateLeft {
+        0.0
+    } else {
+        1.0
+    };
+    Some(Ui2Rect::new(bar.x + slot * (button_size + gap), bar.y, button_size, button_size))
+}
+
 fn window_bottom_resize_button_anchor_rect(
     state: &Ui2State,
     window: &Ui2Window,
@@ -1070,9 +1127,13 @@ pub(super) fn system_button_action_at(
         Ui2SystemButtonAction::Restore,
         Ui2SystemButtonAction::ToggleMaximize,
         Ui2SystemButtonAction::PreserveVm,
+        Ui2SystemButtonAction::RotateLeft,
+        Ui2SystemButtonAction::RotateRight,
         Ui2SystemButtonAction::Close,
     ] {
-        let Some(rect) = window_system_button_rect(state, window, action) else {
+        let rect = window_system_button_rect(state, window, action)
+            .or_else(|| window_bottom_rotate_button_rect(state, window, action));
+        let Some(rect) = rect else {
             continue;
         };
         if rect_contains_point(rect, x, y) {
