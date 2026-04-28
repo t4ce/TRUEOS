@@ -3,6 +3,8 @@
 /// This is meant to be stable and portable for higher layers (e.g. containers).
 /// The kernel adapts these types to its internal network stack and device drivers.
 
+use core::fmt;
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct NetHandle(pub u32);
 
@@ -42,7 +44,7 @@ pub enum SocketKind {
 /// Fixed-size byte buffer used by vnet commands/events.
 ///
 /// vnet is `no_std`, so it can’t depend on `alloc::vec::Vec`.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub struct ByteBuf<const N: usize> {
     len: u16,
     data: [u8; N],
@@ -70,6 +72,54 @@ impl<const N: usize> ByteBuf<N> {
 
     pub fn as_slice(&self) -> &[u8] {
         &self.data[..self.len()]
+    }
+}
+
+struct BytePreview<'a>(&'a [u8]);
+
+impl fmt::Debug for BytePreview<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        const EDGE: usize = 10;
+
+        f.write_str("[")?;
+        let len = self.0.len();
+        let mut first = true;
+
+        let write_byte = |f: &mut fmt::Formatter<'_>, byte: u8, first: &mut bool| {
+            if !*first {
+                f.write_str(", ")?;
+            }
+            *first = false;
+            write!(f, "{:02X}", byte)
+        };
+
+        if len <= EDGE * 2 {
+            for &byte in self.0 {
+                write_byte(f, byte, &mut first)?;
+            }
+        } else {
+            for &byte in &self.0[..EDGE] {
+                write_byte(f, byte, &mut first)?;
+            }
+            f.write_str(", ... ")?;
+            first = true;
+            for &byte in &self.0[len - EDGE..] {
+                write_byte(f, byte, &mut first)?;
+            }
+        }
+
+        f.write_str("]")
+    }
+}
+
+impl<const N: usize> fmt::Debug for ByteBuf<N> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "ByteBuf {{ len: {}, data: {:?} }}",
+            self.len(),
+            BytePreview(self.as_slice())
+        )
     }
 }
 

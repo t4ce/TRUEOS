@@ -3,7 +3,7 @@ use alloc::{collections::VecDeque, vec::Vec};
 use spin::Mutex;
 use v::vnet as api;
 
-use crate::blueprint_net_broker::BlueprintNetBroker;
+use crate::blueprint_net_broker::VNetBridge;
 
 const STATUS_OK: i32 = 0;
 const STATUS_UNSUPPORTED: i32 = -1;
@@ -112,7 +112,7 @@ struct SelectorRegistration {
 }
 
 struct MioCompat {
-    net: Option<BlueprintNetBroker>,
+    net: Option<VNetBridge>,
     sockets: Vec<MioSocketState>,
     pending_opens: VecDeque<PendingOpen>,
     registrations: Vec<SelectorRegistration>,
@@ -142,7 +142,7 @@ impl MioCompat {
 
     fn ensure_net(&mut self) -> Result<(), i32> {
         if self.net.is_none() {
-            self.net = BlueprintNetBroker::open_primary();
+            self.net = VNetBridge::open_primary();
         }
         if self.net.is_some() {
             Ok(())
@@ -195,22 +195,6 @@ impl MioCompat {
             .map_err(|_| STATUS_WOULD_BLOCK)
     }
 
-    fn wait_for_open(&mut self, socket_id: u32) -> i32 {
-        for _ in 0..4096 {
-            self.pump();
-            if let Some(socket) = self.socket(socket_id) {
-                if socket.handle.is_some() {
-                    return STATUS_OK;
-                }
-                if socket.error != STATUS_OK {
-                    return socket.error;
-                }
-            }
-            crate::wait::spin_step();
-        }
-        STATUS_TIMED_OUT
-    }
-
     fn pump(&mut self) {
         while let Some(event) = self.net.as_ref().and_then(|net| net.pop_event()) {
             self.handle_event(event);
@@ -230,6 +214,11 @@ impl MioCompat {
                     socket.handle = Some(handle);
                     if socket.kind == MioSocketKind::Udp {
                         socket.connected = true;
+                        crate::log!(
+                            "mio_compat: udp opened socket={} handle={}\n",
+                            socket.id,
+                            handle.0
+                        );
                     }
                 }
             }
@@ -397,6 +386,16 @@ impl MioCompat {
                     continue;
                 }
 
+                if socket.kind == MioSocketKind::Udp && (readiness & READY_WRITABLE) != 0 {
+                    crate::log!(
+                        "mio_compat: udp selector-ready selector={} socket={} token={} readiness=0x{:02x}\n",
+                        selector_id,
+                        socket.id,
+                        reg.token,
+                        readiness
+                    );
+                }
+
                 unsafe {
                     out_events.add(written).write(TrueosMioReadyEvent {
                         token: reg.token,
@@ -459,7 +458,7 @@ pub unsafe extern "C" fn trueos_mio_tcp_listener_bind(
                     socket_id,
                     kind: api::SocketKind::Tcp,
                 });
-                compat.wait_for_open(socket_id)
+                STATUS_OK
             }
             Err(status) => status,
         };
@@ -516,7 +515,7 @@ pub unsafe extern "C" fn trueos_mio_tcp_stream_connect(
                     socket_id,
                     kind: api::SocketKind::Tcp,
                 });
-                compat.wait_for_open(socket_id)
+                STATUS_OK
             }
             Err(status) => status,
         };
@@ -587,7 +586,7 @@ pub unsafe extern "C" fn trueos_mio_udp_socket_bind(
                     socket_id,
                     kind: api::SocketKind::Udp,
                 });
-                compat.wait_for_open(socket_id)
+                STATUS_OK
             }
             Err(status) => status,
         };

@@ -36,6 +36,50 @@ pub enum DnsServer {
     V6([u8; 16]),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SecureDnsTransport {
+    Doh,
+    Dot,
+    Doh3,
+}
+
+impl SecureDnsTransport {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Doh => "doh",
+            Self::Dot => "dot",
+            Self::Doh3 => "doh3",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SecureDnsPolicy {
+    pub enabled: bool,
+    pub warn_on_disagreement: bool,
+    pub transports: [Option<SecureDnsTransport>; 3],
+}
+
+impl Default for SecureDnsPolicy {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            warn_on_disagreement: true,
+            transports: [
+                Some(SecureDnsTransport::Doh),
+                Some(SecureDnsTransport::Dot),
+                Some(SecureDnsTransport::Doh3),
+            ],
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DnsIpv4Candidate {
+    transport: SecureDnsTransport,
+    ip: [u8; 4],
+}
+
 impl Default for DnsConfig {
     fn default() -> Self {
         Self::for_profile(NetProfile::default())
@@ -122,6 +166,9 @@ impl DnsConfig {
     pub fn for_device_v4_only(dev_idx: usize) -> Self {
         let (dhcp4, dhcp4_count) = crate::net::adapter::dhcp_dns_snapshot_at(dev_idx)
             .unwrap_or_else(crate::net::adapter::primary_dhcp_dns_snapshot);
+        let router4 = crate::net::adapter::ipv4_router_snapshot_at(dev_idx)
+            .flatten()
+            .or_else(crate::net::adapter::primary_ipv4_router_snapshot);
 
         let mut servers = [DnsServer::V4([0u8; 4]); 8];
         let mut n: u8 = 0;
@@ -133,9 +180,24 @@ impl DnsConfig {
             servers[n as usize] = DnsServer::V4(dhcp4[i]);
             n = n.saturating_add(1);
         }
+        if let Some(router) = router4 {
+            let duplicate = servers[..(n as usize)]
+                .iter()
+                .any(|server| matches!(server, DnsServer::V4(addr) if *addr == router));
+            if !duplicate && (n as usize) < servers.len() {
+                servers[n as usize] = DnsServer::V4(router);
+                n = n.saturating_add(1);
+            }
+        }
         for s in PUBLIC_DNS_SERVERS_V4.iter() {
             if (n as usize) >= servers.len() {
                 break;
+            }
+            let duplicate = servers[..(n as usize)]
+                .iter()
+                .any(|server| matches!(server, DnsServer::V4(addr) if addr == s));
+            if duplicate {
+                continue;
             }
             servers[n as usize] = DnsServer::V4(*s);
             n = n.saturating_add(1);
@@ -199,6 +261,7 @@ struct DnsCacheEntry {
 static DNS_CACHE: Mutex<HVec<DnsCacheEntry, DNS_CACHE_CAP>> = Mutex::new(HVec::new());
 
 static DNS_SEQ: AtomicU32 = AtomicU32::new(1);
+static SECURE_DNS_STUB_LOGGED: AtomicU32 = AtomicU32::new(0);
 
 #[inline]
 fn alloc_dns_id() -> u16 {
@@ -220,6 +283,26 @@ fn log_dns_ip(prefix: &str, host: &str, dev_idx: usize, ip: [u8; 4]) {
     crate::log!(
         "{} host={} dev={} ip={}.{}.{}.{}\n",
         prefix,
+        host,
+        dev_idx,
+        ip[0],
+        ip[1],
+        ip[2],
+        ip[3]
+    );
+}
+
+fn log_dns_transport_ip(
+    prefix: &str,
+    transport: SecureDnsTransport,
+    host: &str,
+    dev_idx: usize,
+    ip: [u8; 4],
+) {
+    crate::log!(
+        "{} transport={} host={} dev={} ip={}.{}.{}.{}\n",
+        prefix,
+        transport.label(),
         host,
         dev_idx,
         ip[0],
@@ -657,10 +740,97 @@ async fn open_udp(net: &VNet, local_port: u16, timeout_ms: u64) -> Option<vnet::
     }
 }
 
+async fn resolve_ipv4_secure_transport_stub(
+    _transport: SecureDnsTransport,
+    _dev_idx: usize,
+    _host_trimmed: &str,
+    _cfg: DnsConfig,
+) -> Result<[u8; 4], DnsError> {
+    Err(DnsError::NoAnswer)
+}
+
+fn warn_secure_dns_disagreement(
+    host_trimmed: &str,
+    dev_idx: usize,
+    first: DnsIpv4Candidate,
+    other: DnsIpv4Candidate,
+) {
+    if first.ip == other.ip {
+        return;
+    }
+
+    crate::log!(
+        "dns: warning secure disagreement host={} dev={} first={} {}.{}.{}.{} other={} {}.{}.{}.{}\n",
+        host_trimmed,
+        dev_idx,
+        first.transport.label(),
+        first.ip[0],
+        first.ip[1],
+        first.ip[2],
+        first.ip[3],
+        other.transport.label(),
+        other.ip[0],
+        other.ip[1],
+        other.ip[2],
+        other.ip[3]
+    );
+}
+
+async fn resolve_ipv4_secure_policy_stub(
+    dev_idx: usize,
+    host_trimmed: &str,
+    cfg: DnsConfig,
+    policy: SecureDnsPolicy,
+) -> Result<[u8; 4], DnsError> {
+    if !policy.enabled {
+        return Err(DnsError::NoAnswer);
+    }
+
+    if SECURE_DNS_STUB_LOGGED
+        .compare_exchange(0, 1, Ordering::Relaxed, Ordering::Relaxed)
+        .is_ok()
+    {
+        crate::log!(
+            "dns: secure transport policy wired but transport implementations pending; fallback to udp\n"
+        );
+    }
+
+    let mut first_healthy: Option<DnsIpv4Candidate> = None;
+
+    for transport in policy.transports.iter().flatten().copied() {
+        match resolve_ipv4_secure_transport_stub(transport, dev_idx, host_trimmed, cfg).await {
+            Ok(ip) => {
+                let candidate = DnsIpv4Candidate { transport, ip };
+                log_dns_transport_ip("dns: secure resolved", transport, host_trimmed, dev_idx, ip);
+
+                if let Some(first) = first_healthy {
+                    if policy.warn_on_disagreement {
+                        warn_secure_dns_disagreement(host_trimmed, dev_idx, first, candidate);
+                    }
+                } else {
+                    first_healthy = Some(candidate);
+                }
+            }
+            Err(DnsError::NoAnswer) => {}
+            Err(err) => {
+                crate::log!(
+                    "dns: secure transport failed transport={} host={} dev={} err={:?}\n",
+                    transport.label(),
+                    host_trimmed,
+                    dev_idx,
+                    err
+                );
+            }
+        }
+    }
+
+    first_healthy.map(|candidate| candidate.ip).ok_or(DnsError::NoAnswer)
+}
+
 /// Resolve a hostname to an IPv4 address (A record) using UDP DNS over vnet.
 ///
 /// Supports limited CNAME chasing (bounded by `cfg.cname_depth`).
-pub async fn resolve_ipv4_for_device(
+async fn resolve_ipv4_udp_for_device(
     dev_idx: usize,
     host: &str,
     cfg: DnsConfig,
@@ -828,6 +998,27 @@ pub async fn resolve_ipv4_for_device(
             }
         }
     }
+}
+
+pub async fn resolve_ipv4_for_device(
+    dev_idx: usize,
+    host: &str,
+    cfg: DnsConfig,
+) -> Result<[u8; 4], DnsError> {
+    let host_trimmed = host.trim().trim_end_matches('.');
+    if host_trimmed.is_empty() {
+        return Err(DnsError::BadName);
+    }
+
+    if let Ok(ip) =
+        resolve_ipv4_secure_policy_stub(dev_idx, host_trimmed, cfg, SecureDnsPolicy::default()).await
+    {
+        dns_cache_insert(dev_idx, host_trimmed, ip);
+        dns_fs_cache_update(dev_idx, host_trimmed, ip).await;
+        return Ok(ip);
+    }
+
+    resolve_ipv4_udp_for_device(dev_idx, host_trimmed, cfg).await
 }
 
 /// Resolve a hostname to an IPv6 address (AAAA record) using UDP DNS over vnet.

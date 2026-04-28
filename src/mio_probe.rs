@@ -3,7 +3,8 @@ extern crate std;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use embassy_executor::task;
-use mio::{Events, Poll, Token, Waker};
+use embassy_time::{Duration as EmbassyDuration, Timer};
+use mio::{Events, Interest, Poll, Token, Waker};
 use std::io;
 use std::net::SocketAddr;
 
@@ -21,7 +22,7 @@ fn primary_ipv4_probe_addr(port: u16) -> Option<SocketAddr> {
     Some(SocketAddr::from((ip, port)))
 }
 
-fn log_net_surface_probe() {
+async fn log_net_surface_probe() {
     let Some(tcp_probe) = primary_ipv4_probe_addr(MIO_NET_PROBE_PORT) else {
         crate::log!("mio_probe: note net surface skipped (no primary ipv4 yet)\n");
         return;
@@ -43,7 +44,47 @@ fn log_net_surface_probe() {
     }
 
     match mio::net::UdpSocket::bind(udp_probe) {
-        Ok(_) => crate::log!("mio_probe: success net.udp_socket.bind\n"),
+        Ok(mut udp) => {
+            crate::log!("mio_probe: success net.udp_socket.bind\n");
+
+            let mut poll = match Poll::new() {
+                Ok(poll) => poll,
+                Err(err) => {
+                    log_io_failure("net.udp_socket.poll.new", &err);
+                    return;
+                }
+            };
+            let mut events = Events::with_capacity(4);
+            match poll
+                .registry()
+                .register(&mut udp, Token(0x4D11), Interest::WRITABLE)
+            {
+                Ok(()) => crate::log!("mio_probe: success net.udp_socket.register_writable\n"),
+                Err(err) => {
+                    log_io_failure("net.udp_socket.register_writable", &err);
+                    return;
+                }
+            }
+            let max_spins = crate::allcaps::probes::TOKIO_NET_WRITABLE_TIMEOUT_MS
+                .saturating_add(1)
+                .max(1);
+            for spin in 0..max_spins {
+                match poll.poll(&mut events, Some(core::time::Duration::ZERO)) {
+                    Ok(()) if events.iter().any(|event| event.is_writable()) => {
+                        crate::log!("mio_probe: success net.udp_socket.writable spins={}\n", spin);
+                        crate::r::readiness::set(crate::r::readiness::NET_SOCKET_READY);
+                        return;
+                    }
+                    Ok(()) => {}
+                    Err(err) => {
+                        log_io_failure("net.udp_socket.poll_writable", &err);
+                        return;
+                    }
+                }
+                Timer::after(EmbassyDuration::from_micros(0)).await;
+            }
+            crate::log!("mio_probe: failure net.udp_socket.writable_timeout events=0\n");
+        }
         Err(err) => log_io_failure("net.udp_socket.bind", &err),
     }
 }
@@ -52,7 +93,7 @@ fn log_net_surface_probe() {
 async fn mio_net_probe_task() {
     crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
     crate::log!("mio_probe: resume net surface after NET_ANY_CONFIGURED\n");
-    log_net_surface_probe();
+    log_net_surface_probe().await;
 }
 
 pub(crate) fn log_boot_probe() {
@@ -96,12 +137,16 @@ pub(crate) fn log_boot_probe() {
     }
 
     if crate::r::readiness::is_set(crate::r::readiness::NET_ANY_CONFIGURED) {
-        log_net_surface_probe();
+        spawn_deferred_mio_net_probe();
         return;
     }
 
     crate::log!("mio_probe: note net surface deferred until NET_ANY_CONFIGURED\n");
 
+    spawn_deferred_mio_net_probe();
+}
+
+fn spawn_deferred_mio_net_probe() {
     if MIO_NET_PROBE_TASK_SPAWNED.swap(true, Ordering::AcqRel) {
         return;
     }

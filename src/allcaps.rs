@@ -9,7 +9,8 @@ pub mod boot {
 }
 
 pub mod probes {
-    pub const TOKIO_BOOT_PROBE: bool = false;
+    pub const TOKIO_BOOT_PROBE: bool = true;
+    pub const TOKIO_NET_WRITABLE_TIMEOUT_MS: u64 = 1000;
 }
 
 pub mod blueprint {

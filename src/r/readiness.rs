@@ -30,6 +30,14 @@ pub const NET_V4_CONFIGURED: u32 = 1 << 13;
 pub const NET_V6_CONFIGURED: u32 = 1 << 14;
 pub const NET_CONFIGURED: u32 = NET_V4_CONFIGURED | NET_V6_CONFIGURED;
 
+// Socket readiness.
+//
+// `NET_SOCKET_READY` means the VNet/socket surface has proven forward progress:
+// an open command was processed, an Opened event returned, and selector
+// readiness reached a Mio/Tokio-style socket user. This is stronger than IP
+// configuration and is the right gate for Hyper/Hickory/Tokio socket clients.
+pub const NET_SOCKET_READY: u32 = 1 << 15;
+
 pub const TRUEOSFS_ROOT_MOUNTED: u32 = 1 << 16;
 pub const QJS_ASYNC_FS_READY: u32 = 1 << 17;
 pub const INTEL_HDA_READY: u32 = 1 << 18;
