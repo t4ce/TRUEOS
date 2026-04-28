@@ -81,11 +81,28 @@ impl<'a> Parser<'a> {
     }
 
     pub fn parse_program(mut self) -> Result<Program, ParseError> {
+        self.parse_rust_blueprint_preamble()?;
         let block = self.parse_block_stmt()?;
         if self.look.kind != TokenKind::Eof {
             return self.err("expected eof");
         }
         Ok(Program { block })
+    }
+
+    fn parse_rust_blueprint_preamble(&mut self) -> Result<(), ParseError> {
+        let mut saw_no_std = false;
+        let mut saw_no_main = false;
+        while matches!(self.look.kind, TokenKind::NoStd | TokenKind::NoMain) {
+            match self.look.kind {
+                TokenKind::NoStd if saw_no_std => return self.err("duplicate #![no_std]"),
+                TokenKind::NoStd => saw_no_std = true,
+                TokenKind::NoMain if saw_no_main => return self.err("duplicate #![no_main]"),
+                TokenKind::NoMain => saw_no_main = true,
+                _ => {}
+            }
+            let _ = self.bump()?;
+        }
+        Ok(())
     }
 
     fn parse_block_stmt(&mut self) -> Result<Stmt, ParseError> {
@@ -746,6 +763,32 @@ mod tests {
     #[test]
     fn rejects_break_outside_loop() {
         let src = "{ break; }";
+        assert!(Parser::new(src).unwrap().parse_program().is_err());
+    }
+
+    #[test]
+    fn accepts_tiny_rust_blueprint_preamble_tokens() {
+        let src = r#"
+        #![no_std]
+        #![no_main]
+        {
+            int x;
+            x = 1;
+        }
+        "#;
+        Parser::new(src).unwrap().parse_program().unwrap();
+    }
+
+    #[test]
+    fn rejects_duplicate_rust_blueprint_preamble_tokens() {
+        let src = r#"
+        #![no_std]
+        #![no_std]
+        {
+            int x;
+            x = 1;
+        }
+        "#;
         assert!(Parser::new(src).unwrap().parse_program().is_err());
     }
 }

@@ -297,6 +297,10 @@ pub fn committed_vm_count() -> usize {
     VM_STORE_COMMITTED_SEQS.lock().len()
 }
 
+pub fn has_committed_vm(vm_id: u8) -> bool {
+    VM_STORE_COMMITTED_SEQS.lock().contains_key(&vm_id)
+}
+
 fn enqueue(kind: RequestKind) -> Result<Arc<Completion>, VmStoreError> {
     if !wait_until_online(2000) {
         return Err(VmStoreError::ServiceOffline);

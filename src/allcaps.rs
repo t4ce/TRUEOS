@@ -12,6 +12,12 @@ pub mod probes {
     pub const TOKIO_BOOT_PROBE: bool = false;
 }
 
+pub mod blueprint {
+    pub const PORTAL_IMAGE_CAP_BYTES: usize = 16 * 1024 * 1024;
+    pub const PORTAL_IMAGE_COMPAT_SLOT_BYTES: usize = 8 * 1024 * 1024;
+    pub const PORTAL_IMAGE_COMPAT_SLOT_COUNT: usize = 4;
+}
+
 pub mod stackkeeper {
     pub const TOKIO_LANE_COUNT: usize = 16;
     pub const TOKIO_LANE_SCRATCH_BYTES: usize = 16 * 1024;

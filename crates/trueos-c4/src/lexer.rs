@@ -38,6 +38,8 @@ pub enum TokenKind {
     False,
     For,
     If,
+    NoMain,
+    NoStd,
     True,
     While,
     Basic(super::ast::Type),
@@ -131,6 +133,25 @@ impl<'a> Lexer<'a> {
                 span,
             });
         };
+
+        if self.src[self.idx..].starts_with("#![no_std]") {
+            for _ in 0.."#![no_std]".len() {
+                let _ = self.bump();
+            }
+            return Ok(Token {
+                kind: TokenKind::NoStd,
+                span,
+            });
+        }
+        if self.src[self.idx..].starts_with("#![no_main]") {
+            for _ in 0.."#![no_main]".len() {
+                let _ = self.bump();
+            }
+            return Ok(Token {
+                kind: TokenKind::NoMain,
+                span,
+            });
+        }
 
         let one = match ch {
             b'{' => Some(TokenKind::LBrace),

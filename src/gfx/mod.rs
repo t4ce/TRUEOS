@@ -272,9 +272,17 @@ pub fn with_system<R>(f: impl FnOnce(&mut System) -> R) -> Option<R> {
     with_system_tag(SystemLockOwner::Unknown, f)
 }
 
+#[inline]
+fn system_lock_requester_id() -> u32 {
+    if let Some(vm_id) = crate::hv::current_vm_id_by_lapic_low() {
+        return 0x8000_0000 | vm_id as u32;
+    }
+    crate::percpu::this_cpu().cpu_index() as u32
+}
+
 pub fn with_system_tag<R>(owner: SystemLockOwner, f: impl FnOnce(&mut System) -> R) -> Option<R> {
     let sys = SYSTEM.get()?;
-    let waiter_cpu = crate::percpu::this_cpu().cpu_index() as u32;
+    let waiter_cpu = system_lock_requester_id();
 
     // `spin::Mutex::lock()` is an unbounded spin. Backend switches can be invoked from the shell;
     // if any code path accidentally re-enters gfx while holding this lock, it can look like a

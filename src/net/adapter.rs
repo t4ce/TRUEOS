@@ -1054,7 +1054,9 @@ impl<'a> TxToken for AdapterTxTokenAt<'a> {
 
         // TX tap: only log IPv4/TCP frames for bring-up. This avoids drowning in
         // NDP/ARP chatter while still letting us confirm SYN emission.
-        if crate::logflag::NET_LOG_TX_TAP && new_dev_total <= 8192 {
+        if (crate::logflag::NET_LOG_TX_TAP || crate::logflag::NET_LOG_TCP_CONNECT_WIRE)
+            && new_dev_total <= 8192
+        {
             if buf.len() >= 14 {
                 let mut et = u16::from_be_bytes([buf[12], buf[13]]);
                 let mut l2_off = 14usize;
@@ -1381,6 +1383,7 @@ struct SocketRecord {
     kind: SocketKind,
     socket: SocketHandle,
     tcp_tx: VecDeque<u8>,
+    tcp_connect: bool,
     established: bool,
     last_tcp_state: Option<tcp::State>,
 }
@@ -2073,6 +2076,7 @@ impl NetService {
             kind: SocketKind::Udp,
             socket: sh,
             tcp_tx: VecDeque::new(),
+            tcp_connect: false,
             established: false,
             last_tcp_state: None,
         });
@@ -2099,6 +2103,7 @@ impl NetService {
             kind: SocketKind::Tcp,
             socket: sh,
             tcp_tx: VecDeque::new(),
+            tcp_connect: false,
             established: false,
             last_tcp_state: Some(initial_state),
         });
@@ -2156,12 +2161,21 @@ impl NetService {
 
         let handle = self.alloc_handle();
         let sh = self.sockets.add(socket);
+        if crate::logflag::NET_LOG_TCP_CONNECT_STATES {
+            crate::log!(
+                "net: tcp connect-open owner={} handle={} state={:?}\n",
+                owner,
+                handle.0,
+                initial_state
+            );
+        }
         self.records.push(SocketRecord {
             owner,
             handle,
             kind: SocketKind::Tcp,
             socket: sh,
             tcp_tx: VecDeque::new(),
+            tcp_connect: true,
             established: false,
             last_tcp_state: Some(initial_state),
         });
@@ -2208,12 +2222,21 @@ impl NetService {
 
         let handle = self.alloc_handle();
         let sh = self.sockets.add(socket);
+        if crate::logflag::NET_LOG_TCP_CONNECT_STATES {
+            crate::log!(
+                "net: tcp connect-open owner={} handle={} state={:?}\n",
+                owner,
+                handle.0,
+                initial_state
+            );
+        }
         self.records.push(SocketRecord {
             owner,
             handle,
             kind: SocketKind::Tcp,
             socket: sh,
             tcp_tx: VecDeque::new(),
+            tcp_connect: true,
             established: false,
             last_tcp_state: Some(initial_state),
         });
@@ -3413,7 +3436,9 @@ impl NetService {
             let last = self.records[idx].last_tcp_state;
             if last != Some(state) {
                 self.records[idx].last_tcp_state = Some(state);
-                if crate::logflag::NET_LOG_TCP_FLOW {
+                if crate::logflag::NET_LOG_TCP_FLOW
+                    || (crate::logflag::NET_LOG_TCP_CONNECT_STATES && self.records[idx].tcp_connect)
+                {
                     crate::log!(
                         "net: tcp state owner={} handle={} state={:?}\n",
                         owner,

@@ -78,6 +78,7 @@ pub(super) fn alloc_window(
         kind,
         spawn_task_index: None,
         vm_origin_hint: false,
+        vm_origin_vm_id: u8::MAX,
         browser_instance_id: if kind == Ui2WindowKind::HostedBrowser {
             PRIMARY_HOSTED_CONTENT_ID
         } else {
@@ -652,6 +653,7 @@ pub(super) fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) 
         window.browser_instance_id = next_browser_instance_id;
         window.spawn_task_index = None;
         window.vm_origin_hint = false;
+        window.vm_origin_vm_id = u8::MAX;
         window.icon_id = next_icon_id;
         window.title_twemoji = next_title_twemoji;
         window.title_icon_tex_id = next_title_icon_tex_id;
@@ -897,6 +899,23 @@ pub(crate) fn set_window_vm_origin_hint(id: u32, hinted: bool) -> bool {
     window.vm_origin_hint = hinted;
     state.compose_reason = "window-vm-origin-hint";
     note_window_dirty(&mut state, id, "window-vm-origin-hint")
+}
+
+pub(crate) fn set_window_vm_origin(id: u32, vm_id: Option<u8>) -> bool {
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    let Some(window) = window_mut(&mut state, id) else {
+        return false;
+    };
+    let next_hint = vm_id.is_some();
+    let next_vm_id = vm_id.unwrap_or(u8::MAX);
+    if window.vm_origin_hint == next_hint && window.vm_origin_vm_id == next_vm_id {
+        return true;
+    }
+    window.vm_origin_hint = next_hint;
+    window.vm_origin_vm_id = next_vm_id;
+    state.compose_reason = "window-vm-origin";
+    note_window_dirty(&mut state, id, "window-vm-origin")
 }
 
 pub fn create_hosted_browser_window(
