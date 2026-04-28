@@ -2,6 +2,7 @@ extern crate alloc;
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
+use core::fmt;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use embassy_executor::task;
@@ -111,7 +112,7 @@ pub enum TlsCommand {
     },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub enum TlsEvent {
     Opened {
         handle: vnet::NetHandle,
@@ -133,6 +134,62 @@ pub enum TlsEvent {
     TlsError {
         err: TlsError,
     },
+}
+
+struct TlsBytePreview<'a>(&'a [u8]);
+
+impl fmt::Debug for TlsBytePreview<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        const EDGE: usize = 10;
+
+        f.write_str("[")?;
+        let len = self.0.len();
+        let mut first = true;
+
+        let write_byte = |f: &mut fmt::Formatter<'_>, byte: u8, first: &mut bool| {
+            if !*first {
+                f.write_str(", ")?;
+            }
+            *first = false;
+            write!(f, "{:02X}", byte)
+        };
+
+        if len <= EDGE * 2 {
+            for &byte in self.0 {
+                write_byte(f, byte, &mut first)?;
+            }
+        } else {
+            for &byte in &self.0[..EDGE] {
+                write_byte(f, byte, &mut first)?;
+            }
+            f.write_str(", ... ")?;
+            first = true;
+            for &byte in &self.0[len - EDGE..] {
+                write_byte(f, byte, &mut first)?;
+            }
+        }
+
+        f.write_str("]")
+    }
+}
+
+impl fmt::Debug for TlsEvent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Opened { handle } => write!(f, "Opened {{ handle: {:?} }}", handle),
+            Self::Connected { handle } => write!(f, "Connected {{ handle: {:?} }}", handle),
+            Self::Data { handle, data } => write!(
+                f,
+                "Data {{ handle: {:?}, len: {}, data: {:?} }}",
+                handle,
+                data.len(),
+                TlsBytePreview(data.as_slice())
+            ),
+            Self::Closed { handle } => write!(f, "Closed {{ handle: {:?} }}", handle),
+            Self::Error { msg } => write!(f, "Error {{ msg: {:?} }}", msg),
+            Self::TlsError { err } => write!(f, "TlsError {{ err: {:?} }}", err),
+        }
+    }
 }
 
 struct KernelTime;

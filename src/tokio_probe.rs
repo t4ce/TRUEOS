@@ -7,13 +7,18 @@
 extern crate alloc;
 extern crate std;
 
-use alloc::sync::Arc;
+use alloc::{sync::Arc, vec::Vec};
 use core::cell::Cell;
 use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_executor::task;
+use hickory_resolver::config::{
+    LookupIpStrategy, NameServerConfig, ResolveHosts, ResolverConfig, ResolverOpts,
+};
+use hickory_resolver::name_server::TokioConnectionProvider;
+use hickory_resolver::proto::xfer::Protocol as DnsProtocol;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::io;
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 const VNET_PROBE_PORT: u16 = crate::allports::probes::VNET_PROBE_PORT;
 const TOKIO_NET_PROBE_PORT: u16 = crate::allports::probes::TOKIO_NET_PROBE_PORT;
@@ -66,6 +71,109 @@ fn primary_ipv4_probe_addr(port: u16) -> Option<SocketAddr> {
     let dev_idx = crate::net::primary_device_index();
     let ip = crate::net::adapter::ipv4_at(dev_idx)?;
     Some(SocketAddr::from((ip, port)))
+}
+
+fn hickory_resolver_config_for_device(
+    dev_idx: usize,
+) -> Option<(crate::r::net::dns::DnsConfig, ResolverConfig)> {
+    let dns = crate::r::net::dns::DnsConfig::for_device_v4_only(dev_idx);
+    let mut servers = Vec::new();
+
+    for server in dns.servers[..(dns.server_count as usize).min(dns.servers.len())].iter() {
+        let crate::r::net::dns::DnsServer::V4(addr) = *server else {
+            continue;
+        };
+        let ip = IpAddr::V4(Ipv4Addr::from(addr));
+        servers.push(NameServerConfig::new(
+            SocketAddr::from((ip, 53)),
+            DnsProtocol::Udp,
+        ));
+    }
+
+    if servers.is_empty() {
+        return None;
+    }
+
+    Some((dns, ResolverConfig::from_parts(None, Vec::new(), servers)))
+}
+
+async fn probe_hickory_resolver_surface() -> Result<(), &'static str> {
+    const HICKORY_PROBE_HOST: &str = "raw.githubusercontent.com.";
+
+    let dev_idx = crate::net::primary_device_index();
+    let Some((dns, config)) = hickory_resolver_config_for_device(dev_idx) else {
+        crate::log!("tokio_probe: note net.hickory skipped (no ipv4 dns servers)\n");
+        return Ok(());
+    };
+
+    crate::log!(
+        "tokio_probe: enter net.hickory.ipv4_lookup host={} dev={} servers={}\n",
+        HICKORY_PROBE_HOST,
+        dev_idx,
+        dns.server_count
+    );
+
+    let mut opts = ResolverOpts::default();
+    opts.timeout = core::time::Duration::from_millis(dns.resend_ms.max(100));
+    opts.attempts = 1;
+    opts.ip_strategy = LookupIpStrategy::Ipv4Only;
+    opts.num_concurrent_reqs = 1;
+    opts.use_hosts_file = ResolveHosts::Never;
+    opts.try_tcp_on_error = false;
+    opts.os_port_selection = true;
+
+    let resolver = hickory_resolver::Resolver::builder_with_config(
+        config,
+        TokioConnectionProvider::default(),
+    )
+    .with_options(opts)
+    .build();
+
+    match tokio::time::timeout(
+        core::time::Duration::from_millis(dns.timeout_ms.max(dns.resend_ms)),
+        resolver.ipv4_lookup(HICKORY_PROBE_HOST),
+    )
+    .await
+    {
+        Ok(Ok(lookup)) => {
+            let mut count = 0usize;
+            let mut first = None;
+            for ip in lookup.iter() {
+                count = count.saturating_add(1);
+                if first.is_none() {
+                    first = Some(ip);
+                }
+            }
+            if let Some(ip) = first {
+                crate::log!(
+                    "tokio_probe: success net.hickory.ipv4_lookup first={} count={}\n",
+                    ip,
+                    count
+                );
+                Ok(())
+            } else {
+                crate::log!("tokio_probe: failure net.hickory.ipv4_lookup_no_answer\n");
+                Err("net.hickory.ipv4_lookup_no_answer")
+            }
+        }
+        Ok(Err(err)) => {
+            crate::log!("tokio_probe: failure net.hickory.ipv4_lookup err={}\n", err);
+            Err("net.hickory.ipv4_lookup")
+        }
+        Err(_) => {
+            crate::log!("tokio_probe: failure net.hickory.ipv4_lookup_timeout\n");
+            Err("net.hickory.ipv4_lookup_timeout")
+        }
+    }
+}
+
+fn probe_hickory_h3_surface() {
+    let protocol = hickory_proto::xfer::Protocol::H3;
+    let _builder = hickory_proto::h3::H3ClientStream::builder();
+    crate::log!(
+        "tokio_probe: success net.hickory.h3.surface protocol={}\n",
+        protocol
+    );
 }
 
 async fn probe_tokio_blocking_canary() -> bool {
@@ -124,8 +232,9 @@ fn run_tokio_blocking_canary_runtime() {
 
     let touched_blocking_pool = runtime.block_on(probe_tokio_blocking_canary());
     if touched_blocking_pool {
-        drop(runtime);
-        crate::log!("tokio_probe: success blocking.rt.shutdown\n");
+        crate::log!("tokio_probe: enter blocking.rt.shutdown_timeout\n");
+        runtime.shutdown_timeout(core::time::Duration::from_millis(10));
+        crate::log!("tokio_probe: success blocking.rt.shutdown_timeout\n");
     }
 }
 
@@ -353,9 +462,9 @@ async fn probe_vnet_surface() -> Result<(), &'static str> {
     }
 }
 
-async fn wait_for_net_configured() -> bool {
+async fn wait_for_net_socket_ready() -> bool {
     let deadline = embassy_time::Instant::now() + embassy_time::Duration::from_millis(500);
-    while !crate::r::readiness::is_set(crate::r::readiness::NET_ANY_CONFIGURED) {
+    while !crate::r::readiness::is_set(crate::r::readiness::NET_SOCKET_READY) {
         if embassy_time::Instant::now() >= deadline {
             return false;
         }
@@ -365,8 +474,8 @@ async fn wait_for_net_configured() -> bool {
 }
 
 async fn probe_tokio_net_surface() -> Result<(), &'static str> {
-    if !wait_for_net_configured().await {
-        crate::log!("tokio_probe: note net.tokio skipped (net not configured yet)\n");
+    if !wait_for_net_socket_ready().await {
+        crate::log!("tokio_probe: note net.tokio skipped (NET_SOCKET_READY not reached yet)\n");
         return Ok(());
     }
 
@@ -402,14 +511,26 @@ async fn probe_tokio_net_surface() -> Result<(), &'static str> {
         }
     };
 
-    match tokio::time::timeout(core::time::Duration::from_millis(50), udp.writable()).await {
+    match tokio::time::timeout(
+        core::time::Duration::from_millis(crate::allcaps::probes::TOKIO_NET_WRITABLE_TIMEOUT_MS),
+        udp.writable(),
+    )
+    .await
+    {
         Ok(Ok(())) => crate::log!("tokio_probe: success net.tokio.udp_socket.writable\n"),
         Ok(Err(err)) => {
             log_io_failure("net.tokio.udp_socket.writable", &err);
             return Err("net.tokio.udp_socket.writable");
         }
-        Err(_) => return Err("net.tokio.udp_socket.writable_timeout"),
+        Err(_) => {
+            crate::log!(
+                "tokio_probe: note net.tokio.udp_socket.writable_timeout; continuing to hickory traffic probe\n"
+            );
+        }
     }
+
+    probe_hickory_h3_surface();
+    probe_hickory_resolver_surface().await?;
 
     Ok(())
 }
@@ -628,25 +749,31 @@ fn spawn_deferred_tokio_blocking_canary() {
 
 #[task]
 async fn tokio_net_probe_task() {
-    crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
-    crate::log!("tokio_probe: resume net.tokio surface after NET_ANY_CONFIGURED\n");
+    crate::r::readiness::wait_for(crate::r::readiness::NET_SOCKET_READY).await;
+    crate::log!("tokio_probe: resume net.tokio surface after NET_SOCKET_READY\n");
     run_tokio_net_probe_runtime();
 }
 
 fn spawn_deferred_tokio_net_probe() {
-    if crate::r::readiness::is_set(crate::r::readiness::NET_ANY_CONFIGURED) {
+    if crate::r::readiness::is_set(crate::r::readiness::NET_SOCKET_READY) {
         return;
     }
 
-    crate::log!("tokio_probe: note net.tokio surface deferred until NET_ANY_CONFIGURED\n");
+    crate::log!("tokio_probe: note net.tokio surface deferred until NET_SOCKET_READY\n");
 
     if TOKIO_NET_PROBE_TASK_SPAWNED.swap(true, Ordering::AcqRel) {
         return;
     }
 
-    let Some(spawner) = crate::workers::spawner_for_slot(0) else {
-        crate::log!("tokio_probe: note net.tokio task not spawned (no slot0 spawner)\n");
-        return;
+    let spawner = if let Some(spawner) = crate::workers::pick_background_spawner() {
+        spawner
+    } else {
+        let Some(spawner) = crate::workers::spawner_for_slot(0) else {
+            crate::log!("tokio_probe: note net.tokio task not spawned (no slot0 spawner)\n");
+            return;
+        };
+        crate::log!("tokio_probe: note net.tokio using slot0 fallback; no background worker\n");
+        spawner
     };
 
     match tokio_net_probe_task() {

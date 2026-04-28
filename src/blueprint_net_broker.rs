@@ -6,42 +6,44 @@ use crate::r::net::VNet;
 
 static VMX_GUEST_NET_BACKEND: AtomicBool = AtomicBool::new(false);
 
-pub(crate) struct BlueprintNetBroker {
-    backend: BrokerBackend,
+// One VNet bridge for compatibility code: local kernel clients use `VNet` directly,
+// VM guests cross the blueprint-net wire protocol and land back on host `VNet`.
+pub(crate) struct VNetBridge {
+    backend: VNetBridgeBackend,
 }
 
-enum BrokerBackend {
+enum VNetBridgeBackend {
     Vmx(VmxBroker),
     LocalVnet(VNet),
 }
 
-impl BlueprintNetBroker {
+impl VNetBridge {
     pub(crate) fn open_primary() -> Option<Self> {
         if VMX_GUEST_NET_BACKEND.load(Ordering::Acquire) {
             if let Some(vmx) = VmxBroker::open_primary() {
                 return Some(Self {
-                    backend: BrokerBackend::Vmx(vmx),
+                    backend: VNetBridgeBackend::Vmx(vmx),
                 });
             }
         }
 
         let vnet = VNet::open_primary()?;
         Some(Self {
-            backend: BrokerBackend::LocalVnet(vnet),
+            backend: VNetBridgeBackend::LocalVnet(vnet),
         })
     }
 
     pub(crate) fn submit(&self, command: api::Command) -> Result<(), ()> {
         match &self.backend {
-            BrokerBackend::Vmx(vmx) => vmx.submit(command),
-            BrokerBackend::LocalVnet(vnet) => vnet.submit(command),
+            VNetBridgeBackend::Vmx(vmx) => vmx.submit(command),
+            VNetBridgeBackend::LocalVnet(vnet) => vnet.submit(command),
         }
     }
 
     pub(crate) fn pop_event(&self) -> Option<api::Event> {
         match &self.backend {
-            BrokerBackend::Vmx(vmx) => vmx.pop_event(),
-            BrokerBackend::LocalVnet(vnet) => vnet.pop_event(),
+            VNetBridgeBackend::Vmx(vmx) => vmx.pop_event(),
+            VNetBridgeBackend::LocalVnet(vnet) => vnet.pop_event(),
         }
     }
 }

@@ -452,8 +452,13 @@ fn run_hyper_net_probe_runtime() {
 
 #[embassy_executor::task]
 pub(crate) async fn hyper_net_probe_task() {
-    crate::r::readiness::wait_for(crate::r::readiness::NET_V4_GATEWAY_REACHABLE).await;
-    crate::log!("hyper_probe: resume net.http1 example.de probe after NET_V4_GATEWAY_REACHABLE\n");
+    crate::r::readiness::wait_for(
+        crate::r::readiness::NET_SOCKET_READY | crate::r::readiness::NET_V4_GATEWAY_REACHABLE,
+    )
+    .await;
+    crate::log!(
+        "hyper_probe: resume net.http1 example.de probe after NET_SOCKET_READY+NET_V4_GATEWAY_REACHABLE\n"
+    );
     run_hyper_net_probe_runtime();
 }
 

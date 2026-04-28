@@ -138,6 +138,41 @@ fn dns_error_label(e: crate::r::net::dns::DnsError) -> &'static str {
     }
 }
 
+fn log_pciids_dns_config(dev_idx: usize, cfg: &crate::r::net::dns::DnsConfig) {
+    crate::log!(
+        "pciids: dns cfg host={} dev={} servers={}\n",
+        PCI_IDS_HOST,
+        dev_idx,
+        cfg.server_count
+    );
+    for idx in 0..(cfg.server_count as usize).min(cfg.servers.len()) {
+        match cfg.servers[idx] {
+            crate::r::net::dns::DnsServer::V4(addr) => {
+                crate::log!(
+                    "pciids: dns server dev={} idx={} v4={}.{}.{}.{}\n",
+                    dev_idx,
+                    idx,
+                    addr[0],
+                    addr[1],
+                    addr[2],
+                    addr[3]
+                );
+            }
+            crate::r::net::dns::DnsServer::V6(addr) => {
+                crate::log!(
+                    "pciids: dns server dev={} idx={} v6={:02x}{:02x}:{:02x}{:02x}:...\n",
+                    dev_idx,
+                    idx,
+                    addr[0],
+                    addr[1],
+                    addr[2],
+                    addr[3]
+                );
+            }
+        }
+    }
+}
+
 async fn vnet_send_tcp_all(
     net: &crate::r::net::VNet,
     handle: vnet::NetHandle,
@@ -345,10 +380,14 @@ async fn hyper_fetch_pciids_on_device(
 }
 
 async fn fetch_pciids_hyper_body() -> Result<Vec<u8>, &'static str> {
-    crate::r::readiness::wait_for(crate::r::readiness::NET_V4_CONFIGURED).await;
+    crate::r::readiness::wait_for(
+        crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::NET_SOCKET_READY,
+    )
+    .await;
 
     let dev_idx = crate::net::primary_device_index();
     let dns_cfg = crate::r::net::dns::DnsConfig::for_device_v4_only(dev_idx);
+    log_pciids_dns_config(dev_idx, &dns_cfg);
     let ip = match crate::r::net::dns::resolve_ipv4_for_device(dev_idx, PCI_IDS_HOST, dns_cfg).await
     {
         Ok(ip) => ip,

@@ -203,6 +203,17 @@ pub fn dhcp_dns_snapshot_at(index: usize) -> Option<([[u8; 4]; DHCP_DNS_MAX], u8
     Some((svc.dhcp_dns, svc.dhcp_dns_count))
 }
 
+pub fn ipv4_router_snapshot_at(index: usize) -> Option<Option<[u8; 4]>> {
+    let guard = NET_SERVICES.lock();
+    let services = guard.as_ref()?;
+    let svc = services.get(index)?.lock();
+    Some(svc.router_ipv4.map(|router| router.octets()))
+}
+
+pub fn primary_ipv4_router_snapshot() -> Option<[u8; 4]> {
+    ipv4_router_snapshot_at(crate::net::primary_device_index()).flatten()
+}
+
 pub fn ra_dns6_snapshot_at(index: usize) -> Option<([[u8; 16]; RA_DNS6_MAX], u8)> {
     let guard = NET_SERVICES.lock();
     let services = guard.as_ref()?;
