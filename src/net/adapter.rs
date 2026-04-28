@@ -2610,7 +2610,8 @@ impl NetService {
 
                 // SLAAC produced (or maintained) a usable global address.
                 crate::r::readiness::set(
-                    crate::r::readiness::NET_CONFIGURED | crate::r::readiness::NET_V6_CONFIGURED,
+                    crate::r::readiness::NET_ANY_CONFIGURED
+                        | crate::r::readiness::NET_V6_CONFIGURED,
                 );
             }
 
@@ -3177,7 +3178,7 @@ impl NetService {
 
         // Mark IPv6 as configured. This is distinct from NET_V6_GATEWAY_REACHABLE.
         crate::r::readiness::set(
-            crate::r::readiness::NET_CONFIGURED | crate::r::readiness::NET_V6_CONFIGURED,
+            crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::NET_V6_CONFIGURED,
         );
 
         // Preserve current IPv4 CIDR(s) while updating IPv6.
@@ -3772,7 +3773,8 @@ impl NetService {
                 // Network is configured (at least IPv4). This is intentionally weaker than
                 // NET_GATEWAY_REACHABLE, which depends on an ICMP-to-router probe.
                 crate::r::readiness::set(
-                    crate::r::readiness::NET_CONFIGURED | crate::r::readiness::NET_V4_CONFIGURED,
+                    crate::r::readiness::NET_ANY_CONFIGURED
+                        | crate::r::readiness::NET_V4_CONFIGURED,
                 );
             }
             Some(dhcpv4::Event::Deconfigured) => {

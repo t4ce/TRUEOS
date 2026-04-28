@@ -424,7 +424,7 @@ fn spawn_http_trueosfs(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_hyper_http1_probe(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::hyper_probe::hyper_net_probe_task())
+    spawn_on_worker(spawner, |_worker_spawner| crate::hyper_probe::hyper_net_probe_task())
 }
 
 fn spawn_ws_time(spawner: Spawner) -> SpawnAttempt {
@@ -1004,13 +1004,11 @@ fn spawn_atomic_bomb(spawner: Spawner) -> SpawnAttempt {
 
 // --- registry ---
 
-const NET_CONFIGURED_AND_ROOT_READY: u32 =
-    crate::r::readiness::NET_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
+const NET_ANY_CONFIGURED_AND_ROOT_READY: u32 =
+    crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
 const HTTP_TRUEOSFS_READY: u32 = crate::r::readiness::HTTP_TRUEOSFS_LISTENING;
-const HYPER_HTTP1_PROBE_READY: u32 = crate::r::readiness::NET_CONFIGURED
-    | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
-    | crate::r::readiness::HTTP_TRUEOSFS_LISTENING;
-const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_CONFIGURED
+const HYPER_HTTP1_PROBE_READY: u32 = crate::r::readiness::NET_V4_GATEWAY_REACHABLE;
+const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
     | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::QJS_ASYNC_FS_READY;
 const UI2_DEMO_READY: u32 =
@@ -1045,13 +1043,13 @@ static TASKS: [TaskSpec; 69] = [
     TaskSpec::enabled("net-service", 0, &NET_SERVICE_STARTED, spawn_net_service),
     TaskSpec::enabled(
         "tls-socket-service",
-        crate::r::readiness::NET_CONFIGURED,
+        crate::r::readiness::NET_ANY_CONFIGURED,
         &TLS_SOCKET_SERVICE_STARTED,
         spawn_tls_socket_service,
     ),
     TaskSpec::enabled(
         "ntp-sync",
-        crate::r::readiness::NET_CONFIGURED,
+        crate::r::readiness::NET_ANY_CONFIGURED,
         &NTP_SYNC_STARTED,
         spawn_ntp_sync,
     ),
@@ -1064,7 +1062,7 @@ static TASKS: [TaskSpec; 69] = [
     TaskSpec::enabled("net-shell", 0, &NET_SHELL_STARTED, spawn_net_shell),
     TaskSpec::enabled(
         "logtotcp",
-        crate::r::readiness::NET_CONFIGURED,
+        crate::r::readiness::NET_ANY_CONFIGURED,
         &LOGTOTCP_STARTED,
         spawn_logtotcp,
     ),
@@ -1076,14 +1074,14 @@ static TASKS: [TaskSpec; 69] = [
     ),
     TaskSpec::enabled(
         "localcoder-web",
-        crate::r::readiness::NET_CONFIGURED,
+        crate::r::readiness::NET_ANY_CONFIGURED,
         &LOCALCODER_WEB_STARTED,
         spawn_localcoder_web,
     ),
     TaskSpec::disabled("html-demo", 0, &HTML_DEMO_STARTED, spawn_html_demo),
     TaskSpec::enabled(
         "http-trueosfs",
-        NET_CONFIGURED_AND_ROOT_READY,
+        NET_ANY_CONFIGURED_AND_ROOT_READY,
         &HTTP_TRUEOSFS_STARTED,
         spawn_http_trueosfs,
     ),
@@ -1096,7 +1094,7 @@ static TASKS: [TaskSpec; 69] = [
     TaskSpec::enabled("app-vm-run-queue", 0, &APP_VM_RUN_QUEUE_STARTED, spawn_app_vm_run_queue),
     TaskSpec::enabled(
         "ws-time",
-        crate::r::readiness::NET_CONFIGURED,
+        crate::r::readiness::NET_ANY_CONFIGURED,
         &WS_TIME_STARTED,
         spawn_ws_time,
     ),
@@ -1110,13 +1108,13 @@ static TASKS: [TaskSpec; 69] = [
     TaskSpec::enabled("esp-gate-registry", 0, &ESP_GATE_REGISTRY_STARTED, spawn_esp_gate_registry),
     TaskSpec::enabled(
         "esp-piano-udp",
-        crate::r::readiness::NET_CONFIGURED,
+        crate::r::readiness::NET_ANY_CONFIGURED,
         &ESP_PIANO_UDP_STARTED,
         spawn_esp_piano_udp,
     ),
     TaskSpec::disabled(
         "ftp-server",
-        NET_CONFIGURED_AND_ROOT_READY,
+        NET_ANY_CONFIGURED_AND_ROOT_READY,
         &FTP_SERVER_STARTED,
         spawn_ftp_server,
     ),
@@ -1304,20 +1302,20 @@ static TASKS: [TaskSpec; 69] = [
     ),
     TaskSpec::disabled(
         "ui2-swarm-demo",
-        UI2_DEMO_READY | crate::r::readiness::NET_CONFIGURED,
+        UI2_DEMO_READY | crate::r::readiness::NET_ANY_CONFIGURED,
         &UI2_SWARM_DEMO_STARTED,
         spawn_ui2_swarm_demo,
     ),
     TaskSpec::disabled("ui2-svg-demo", UI2_DEMO_READY, &UI2_SVG_DEMO_STARTED, spawn_ui2_svg_demo),
     TaskSpec::disabled(
         "ui2-weather-demo",
-        UI2_DEMO_READY | crate::r::readiness::NET_CONFIGURED,
+        UI2_DEMO_READY | crate::r::readiness::NET_ANY_CONFIGURED,
         &UI2_WEATHER_DEMO_STARTED,
         spawn_ui2_weather_demo,
     ),
     TaskSpec::disabled(
         "ui2-currency-demo",
-        UI2_DEMO_READY | crate::r::readiness::NET_CONFIGURED,
+        UI2_DEMO_READY | crate::r::readiness::NET_ANY_CONFIGURED,
         &UI2_CURRENCY_DEMO_STARTED,
         spawn_ui2_currency_demo,
     ),

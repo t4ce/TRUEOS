@@ -332,7 +332,7 @@ pub mod logtotcp {
         const OWNER: &str = "logtotcp";
         const DRAIN_CHUNK: usize = 4096;
 
-        crate::r::readiness::wait_for(crate::r::readiness::NET_CONFIGURED).await;
+        crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
 
         let cmds = NetQueue::new_leaked("logtotcp-cmd", 64);
         let events = NetQueue::new_leaked("logtotcp-evt", 64);

@@ -20,11 +20,15 @@ pub const NET_V6_GATEWAY_REACHABLE: u32 = 1 << 11;
 
 // Network configuration readiness.
 //
-// These bits are about "we have an address configured" (DHCPv4, SLAAC/DHCPv6), not about
-// being able to ping the router. Some networks drop ICMP echo; TCP/DNS can still work.
-pub const NET_CONFIGURED: u32 = 1 << 12;
+// These bits are about address/config state, not about being able to ping the
+// router. Some networks drop ICMP echo; TCP/DNS can still work.
+//
+// `NET_ANY_CONFIGURED`: at least one IP stack has usable config.
+// `NET_CONFIGURED`: both IPv4 and IPv6 have usable config.
+pub const NET_ANY_CONFIGURED: u32 = 1 << 12;
 pub const NET_V4_CONFIGURED: u32 = 1 << 13;
 pub const NET_V6_CONFIGURED: u32 = 1 << 14;
+pub const NET_CONFIGURED: u32 = NET_V4_CONFIGURED | NET_V6_CONFIGURED;
 
 pub const TRUEOSFS_ROOT_MOUNTED: u32 = 1 << 16;
 pub const QJS_ASYNC_FS_READY: u32 = 1 << 17;
@@ -37,7 +41,7 @@ pub const APP_VM_READY: u32 = 1 << 24;
 pub const GFX_TEXTURE_UPLOAD_SERVICE_READY: u32 = 1 << 25;
 pub const BACKGROUND_AP_WORKER_READY: u32 = 1 << 26;
 
-const APP_VM_READY_REQUIRED: u32 = NET_CONFIGURED | TRUEOSFS_ROOT_MOUNTED;
+const APP_VM_READY_REQUIRED: u32 = NET_ANY_CONFIGURED | TRUEOSFS_ROOT_MOUNTED;
 
 static READY: AtomicU32 = AtomicU32::new(0);
 

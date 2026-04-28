@@ -21,7 +21,7 @@ pub async fn net_shell_task() {
             return;
         }
 
-        crate::r::readiness::wait_for(crate::r::readiness::NET_CONFIGURED).await;
+        crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
 
         // Route the shell over a NIC that is actually usable.
         // Historically this was pinned to dev0, but on real hardware dev0 is often the

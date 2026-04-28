@@ -80,7 +80,7 @@ async fn update_command_task(target: MatrixTarget, disk: crate::disc::block::Dev
 
         let info = disk.info();
         log("update: waiting for net");
-        crate::r::readiness::wait_for(crate::r::readiness::NET_CONFIGURED).await;
+        crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
 
         log(alloc::format!(
             "update: target id={} ({}) blocks={} bs={} writable={} label={:?}",

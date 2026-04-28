@@ -224,7 +224,7 @@ pub fn kernel_date_day_month_year() -> String {
 
 #[embassy_executor::task]
 pub async fn ntp_sync_task() {
-    crate::r::readiness::wait_for(crate::r::readiness::NET_CONFIGURED).await;
+    crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
 
     loop {
         let profile = NetProfile::default();

@@ -1056,7 +1056,7 @@ async fn netbench_task(target: MatrixTarget, session_id: u64, nic_index: usize) 
         let mut cancelled = false;
 
         log("bench net: waiting for net");
-        crate::r::readiness::wait_for(crate::r::readiness::NET_CONFIGURED).await;
+        crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
         if bench_cancel_requested(session_id) {
             cancelled = true;
         }

@@ -238,7 +238,7 @@ async fn poll_device_status(snapshot: &trueos_esp::gate::DeviceSnapshot) {
 
 #[embassy_executor::task]
 pub async fn esp_gate_task() {
-    crate::r::readiness::wait_for(crate::r::readiness::NET_CONFIGURED).await;
+    crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
 
     loop {
         let Some(vnet) = VNet::open_primary() else {
@@ -340,7 +340,7 @@ pub async fn esp_gate_registry_task() {
 
 #[embassy_executor::task]
 pub async fn esp_piano_udp_task() {
-    crate::r::readiness::wait_for(crate::r::readiness::NET_CONFIGURED).await;
+    crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
 
     loop {
         let Some(vnet) = VNet::open_primary() else {
