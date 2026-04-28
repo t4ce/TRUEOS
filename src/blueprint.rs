@@ -131,13 +131,12 @@ struct PortalImageCompatArena {
 
 static PORTAL_IMAGE_COMPAT_IN_USE: [AtomicBool; PORTAL_IMAGE_COMPAT_SLOT_COUNT] =
     [const { AtomicBool::new(false) }; PORTAL_IMAGE_COMPAT_SLOT_COUNT];
-static mut PORTAL_IMAGE_COMPAT_ARENAS: [PortalImageCompatArena; PORTAL_IMAGE_COMPAT_SLOT_COUNT] =
-    [const {
-        PortalImageCompatArena {
-            _bytes: [0; PORTAL_IMAGE_COMPAT_SLOT_BYTES],
-        }
-    };
-        PORTAL_IMAGE_COMPAT_SLOT_COUNT];
+static mut PORTAL_IMAGE_COMPAT_ARENAS: [PortalImageCompatArena; PORTAL_IMAGE_COMPAT_SLOT_COUNT] = [const {
+    PortalImageCompatArena {
+        _bytes: [0; PORTAL_IMAGE_COMPAT_SLOT_BYTES],
+    }
+};
+    PORTAL_IMAGE_COMPAT_SLOT_COUNT];
 
 struct PortalImageAllocation {
     base: *mut u8,
@@ -204,10 +203,7 @@ impl PortalImageAllocation {
         Ok(Self {
             base,
             guard: PortalImageAllocationGuard {
-                backing: Some(PortalImageBacking::Compat(PortalImageCompatLease {
-                    base,
-                    slot,
-                })),
+                backing: Some(PortalImageBacking::Compat(PortalImageCompatLease { base, slot })),
             },
         })
     }
