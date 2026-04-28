@@ -309,7 +309,7 @@ fn spawn_deferred_tokio_fs_probe() {
 
 async fn probe_vnet_surface() -> Result<(), &'static str> {
     let deadline = embassy_time::Instant::now() + embassy_time::Duration::from_millis(500);
-    while !crate::r::readiness::is_set(crate::r::readiness::NET_CONFIGURED) {
+    while !crate::r::readiness::is_set(crate::r::readiness::NET_ANY_CONFIGURED) {
         if embassy_time::Instant::now() >= deadline {
             crate::log!("tokio_probe: note vnet surface skipped (net not configured yet)\n");
             return Ok(());
@@ -355,7 +355,7 @@ async fn probe_vnet_surface() -> Result<(), &'static str> {
 
 async fn wait_for_net_configured() -> bool {
     let deadline = embassy_time::Instant::now() + embassy_time::Duration::from_millis(500);
-    while !crate::r::readiness::is_set(crate::r::readiness::NET_CONFIGURED) {
+    while !crate::r::readiness::is_set(crate::r::readiness::NET_ANY_CONFIGURED) {
         if embassy_time::Instant::now() >= deadline {
             return false;
         }
@@ -628,17 +628,17 @@ fn spawn_deferred_tokio_blocking_canary() {
 
 #[task]
 async fn tokio_net_probe_task() {
-    crate::r::readiness::wait_for(crate::r::readiness::NET_CONFIGURED).await;
-    crate::log!("tokio_probe: resume net.tokio surface after NET_CONFIGURED\n");
+    crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
+    crate::log!("tokio_probe: resume net.tokio surface after NET_ANY_CONFIGURED\n");
     run_tokio_net_probe_runtime();
 }
 
 fn spawn_deferred_tokio_net_probe() {
-    if crate::r::readiness::is_set(crate::r::readiness::NET_CONFIGURED) {
+    if crate::r::readiness::is_set(crate::r::readiness::NET_ANY_CONFIGURED) {
         return;
     }
 
-    crate::log!("tokio_probe: note net.tokio surface deferred until NET_CONFIGURED\n");
+    crate::log!("tokio_probe: note net.tokio surface deferred until NET_ANY_CONFIGURED\n");
 
     if TOKIO_NET_PROBE_TASK_SPAWNED.swap(true, Ordering::AcqRel) {
         return;

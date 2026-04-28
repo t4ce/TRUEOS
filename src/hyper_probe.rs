@@ -15,9 +15,9 @@ use hyper::rt::{Read, ReadBufCursor, Write};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, DuplexStream};
 use v::vnet as api;
 
-const HYPER_HTTP_PROBE_ADDR: [u8; 4] = [192, 168, 178, 77];
-const HYPER_HTTP_PROBE_PORT: u16 = crate::allports::services::HTTP_TRUEOSFS_TCP_PORT;
-const HYPER_HTTP_PROBE_HOST: &str = "PDJB.fritz.box";
+const HYPER_HTTP_PROBE_ADDR: [u8; 4] = [217, 160, 0, 248];
+const HYPER_HTTP_PROBE_PORT: u16 = 80;
+const HYPER_HTTP_PROBE_HOST: &str = "example.de";
 
 struct EmptyBody;
 
@@ -313,16 +313,17 @@ async fn vnet_tcp_bridge(
     Ok(())
 }
 
-async fn connect_trueosfs_vnet() -> Result<DuplexStream, &'static str> {
+async fn connect_example_de_vnet() -> Result<DuplexStream, &'static str> {
     let remote = hyper_http_probe_endpoint();
 
     let Some(vnet) = crate::r::net::VNet::open_primary() else {
-        return Err("net.http1.trueosfs.vnet_open");
+        return Err("net.http1.example_de.vnet_open");
     };
 
     crate::log!(
-        "hyper_probe: net.http1.trueosfs connect owner={} remote={}.{}.{}.{}:{}\n",
+        "hyper_probe: net.http1.example_de connect owner={} host={} remote={}.{}.{}.{}:{}\n",
         vnet.owner(),
+        HYPER_HTTP_PROBE_HOST,
         remote.addr[0],
         remote.addr[1],
         remote.addr[2],
@@ -331,15 +332,15 @@ async fn connect_trueosfs_vnet() -> Result<DuplexStream, &'static str> {
     );
 
     vnet.submit(api::Command::OpenTcpConnect { remote })
-        .map_err(|_| "net.http1.trueosfs.vnet_connect_submit")?;
+        .map_err(|_| "net.http1.example_de.vnet_connect_submit")?;
 
-    let connect_deadline = tokio::time::Instant::now() + core::time::Duration::from_millis(2_000);
+    let connect_deadline = tokio::time::Instant::now() + core::time::Duration::from_millis(10_000);
     let mut tcp_handle = None;
     let handle = 'connect: loop {
         while let Some(ev) = vnet.pop_event() {
             match ev {
                 api::Event::Opened { handle, kind } if kind == api::SocketKind::Tcp => {
-                    crate::log!("hyper_probe: net.http1.trueosfs opened handle={}\n", handle.0);
+                    crate::log!("hyper_probe: net.http1.example_de opened handle={}\n", handle.0);
                     tcp_handle = Some(handle);
                 }
                 api::Event::TcpEstablished { handle } => {
@@ -351,8 +352,8 @@ async fn connect_trueosfs_vnet() -> Result<DuplexStream, &'static str> {
                     }
                 }
                 api::Event::Error { msg } => {
-                    crate::log!("hyper_probe: net.http1.trueosfs vnet error {}\n", msg);
-                    return Err("net.http1.trueosfs.vnet_connect");
+                    crate::log!("hyper_probe: net.http1.example_de vnet error {}\n", msg);
+                    return Err("net.http1.example_de.vnet_connect");
                 }
                 _ => {}
             }
@@ -361,14 +362,14 @@ async fn connect_trueosfs_vnet() -> Result<DuplexStream, &'static str> {
         if tokio::time::Instant::now() >= connect_deadline {
             match tcp_handle {
                 Some(handle) => crate::log!(
-                    "hyper_probe: net.http1.trueosfs connect timeout after opened handle={}\n",
+                    "hyper_probe: net.http1.example_de connect timeout after opened handle={}\n",
                     handle.0
                 ),
                 None => crate::log!(
-                    "hyper_probe: net.http1.trueosfs connect timeout before opened event\n"
+                    "hyper_probe: net.http1.example_de connect timeout before opened event\n"
                 ),
             }
-            return Err("net.http1.trueosfs.vnet_connect_timeout");
+            return Err("net.http1.example_de.vnet_connect_timeout");
         }
 
         tokio::time::sleep(core::time::Duration::from_millis(1)).await;
@@ -377,15 +378,15 @@ async fn connect_trueosfs_vnet() -> Result<DuplexStream, &'static str> {
     let (client_io, bridge_io) = tokio::io::duplex(16 * 1024);
     tokio::spawn(async move {
         if let Err(stage) = vnet_tcp_bridge(vnet, handle, bridge_io).await {
-            crate::log!("hyper_probe: note net.http1.trueosfs bridge ended at {}\n", stage);
+            crate::log!("hyper_probe: note net.http1.example_de bridge ended at {}\n", stage);
         }
     });
 
     Ok(client_io)
 }
 
-async fn probe_hyper_http1_trueosfs() -> Result<(), &'static str> {
-    let stream = match connect_trueosfs_vnet().await {
+async fn probe_hyper_http1_example_de() -> Result<(), &'static str> {
+    let stream = match connect_example_de_vnet().await {
         Ok(stream) => stream,
         Err(stage) => return Err(stage),
     };
@@ -393,38 +394,38 @@ async fn probe_hyper_http1_trueosfs() -> Result<(), &'static str> {
     let (mut sender, connection) =
         hyper::client::conn::http1::handshake::<_, EmptyBody>(HyperTokioIo::new(stream))
             .await
-            .map_err(|_| "net.http1.trueosfs.handshake")?;
+            .map_err(|_| "net.http1.example_de.handshake")?;
     let connection = tokio::spawn(async move { connection.await });
 
     sender
         .ready()
         .await
-        .map_err(|_| "net.http1.trueosfs.ready")?;
+        .map_err(|_| "net.http1.example_de.ready")?;
     let request = hyper::Request::builder()
         .method(hyper::Method::GET)
         .uri("/")
         .header(hyper::header::HOST, HYPER_HTTP_PROBE_HOST)
         .body(EmptyBody)
-        .map_err(|_| "net.http1.trueosfs.request_build")?;
+        .map_err(|_| "net.http1.example_de.request_build")?;
     let response = sender
         .send_request(request)
         .await
-        .map_err(|_| "net.http1.trueosfs.send_request")?;
+        .map_err(|_| "net.http1.example_de.send_request")?;
 
     if response.status() != hyper::StatusCode::OK {
-        return Err("net.http1.trueosfs.response_status");
+        return Err("net.http1.example_de.response_status");
     }
 
-    crate::log!("hyper_probe: success net.http1.trueosfs GET / -> 200\n");
+    crate::log!("hyper_probe: success net.http1.example_de GET / -> 200\n");
 
     drop(response);
     drop(sender);
     match tokio::time::timeout(core::time::Duration::from_millis(250), connection).await {
         Ok(Ok(Ok(()))) => Ok(()),
-        Ok(Ok(Err(_))) => Err("net.http1.trueosfs.connection"),
-        Ok(Err(_)) => Err("net.http1.trueosfs.connection_join"),
+        Ok(Ok(Err(_))) => Err("net.http1.example_de.connection"),
+        Ok(Err(_)) => Err("net.http1.example_de.connection_join"),
         Err(_) => {
-            crate::log!("hyper_probe: note net.http1.trueosfs connection still draining\n");
+            crate::log!("hyper_probe: note net.http1.example_de connection still draining\n");
             Ok(())
         }
     }
@@ -443,7 +444,7 @@ fn run_hyper_net_probe_runtime() {
         }
     };
 
-    match runtime.block_on(probe_hyper_http1_trueosfs()) {
+    match runtime.block_on(probe_hyper_http1_example_de()) {
         Ok(()) => crate::log!("hyper_probe: success net.http1 probe_suite\n"),
         Err(stage) => crate::log!("hyper_probe: failure {}\n", stage),
     }
@@ -451,15 +452,8 @@ fn run_hyper_net_probe_runtime() {
 
 #[embassy_executor::task]
 pub(crate) async fn hyper_net_probe_task() {
-    crate::r::readiness::wait_for(
-        crate::r::readiness::NET_CONFIGURED
-            | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
-            | crate::r::readiness::HTTP_TRUEOSFS_LISTENING,
-    )
-    .await;
-    crate::log!(
-        "hyper_probe: resume net.http1 probe after NET_CONFIGURED+TRUEOSFS_ROOT_MOUNTED+HTTP_TRUEOSFS_LISTENING\n"
-    );
+    crate::r::readiness::wait_for(crate::r::readiness::NET_V4_GATEWAY_REACHABLE).await;
+    crate::log!("hyper_probe: resume net.http1 example.de probe after NET_V4_GATEWAY_REACHABLE\n");
     run_hyper_net_probe_runtime();
 }
 

@@ -14,7 +14,7 @@ pub mod probes {
 
 pub mod blueprint {
     pub const PORTAL_IMAGE_CAP_BYTES: usize = 16 * 1024 * 1024;
-    pub const PORTAL_IMAGE_COMPAT_SLOT_BYTES: usize = 8 * 1024 * 1024;
+    pub const PORTAL_IMAGE_COMPAT_SLOT_BYTES: usize = 4 * 1024 * 1024;
     pub const PORTAL_IMAGE_COMPAT_SLOT_COUNT: usize = 4;
 }
 

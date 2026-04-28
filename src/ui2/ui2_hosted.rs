@@ -861,37 +861,28 @@ fn sync_window_container(
 }
 
 pub(super) fn sync_pending_window_containers(state: &mut Ui2State) {
-    let pending: Vec<(u32, bool, Ui2WindowKind, HostedContentId, u32, Option<Ui2Rect>)> = state
-        .windows
-        .iter()
-        .filter(|window| window.container_sync_needed)
-        .map(|window| {
-            let renderable = window_content_participates_in_composition(window);
-            let content = if renderable {
-                window_content_rect(state, window)
-            } else {
-                None
-            };
-            (
-                window.id,
-                renderable,
-                window.kind,
-                window_hosted_content_id(window),
-                window.content_tex_id,
-                content,
-            )
-        })
-        .collect();
-
-    let mut synced_ids = Vec::new();
-    for (id, renderable, kind, content_id, content_tex_id, content) in pending {
-        if sync_window_container(id, renderable, kind, content_id, content_tex_id, content) {
-            synced_ids.push(id);
+    for index in 0..state.windows.len() {
+        let Some(window) = state.windows.get(index) else {
+            continue;
+        };
+        if !window.container_sync_needed {
+            continue;
         }
-    }
-    for id in synced_ids {
-        if let Some(window) = window_mut(state, id) {
-            window.container_sync_needed = false;
+        let renderable = window_content_participates_in_composition(window);
+        let content = if renderable {
+            window_content_rect(state, window)
+        } else {
+            None
+        };
+        let id = window.id;
+        let kind = window.kind;
+        let content_id = window_hosted_content_id(window);
+        let content_tex_id = window.content_tex_id;
+
+        if sync_window_container(id, renderable, kind, content_id, content_tex_id, content) {
+            if let Some(window) = state.windows.get_mut(index) {
+                window.container_sync_needed = false;
+            }
         }
     }
 }

@@ -20,8 +20,8 @@ const SMOKE_TIMEOUT_MS: u32 = 20_000;
 pub async fn smtp_smoke_task() {
     crate::log!("smtp-smoke: waiting 5 s for stack to settle\n");
     Timer::after(Duration::from_secs(5)).await;
-    crate::log!("smtp-smoke: waiting for NET_CONFIGURED\n");
-    crate::r::readiness::wait_for(crate::r::readiness::NET_CONFIGURED).await;
+    crate::log!("smtp-smoke: waiting for NET_ANY_CONFIGURED\n");
+    crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
     crate::log!("smtp-smoke: starting\n");
 
     match crate::r::net::smtp::SmtpClient::connect(SMOKE_TIMEOUT_MS).await {

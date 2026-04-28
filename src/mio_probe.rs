@@ -50,8 +50,8 @@ fn log_net_surface_probe() {
 
 #[task]
 async fn mio_net_probe_task() {
-    crate::r::readiness::wait_for(crate::r::readiness::NET_CONFIGURED).await;
-    crate::log!("mio_probe: resume net surface after NET_CONFIGURED\n");
+    crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
+    crate::log!("mio_probe: resume net surface after NET_ANY_CONFIGURED\n");
     log_net_surface_probe();
 }
 
@@ -95,12 +95,12 @@ pub(crate) fn log_boot_probe() {
         Err(err) => log_io_failure("poll.poll", &err),
     }
 
-    if crate::r::readiness::is_set(crate::r::readiness::NET_CONFIGURED) {
+    if crate::r::readiness::is_set(crate::r::readiness::NET_ANY_CONFIGURED) {
         log_net_surface_probe();
         return;
     }
 
-    crate::log!("mio_probe: note net surface deferred until NET_CONFIGURED\n");
+    crate::log!("mio_probe: note net surface deferred until NET_ANY_CONFIGURED\n");
 
     if MIO_NET_PROBE_TASK_SPAWNED.swap(true, Ordering::AcqRel) {
         return;

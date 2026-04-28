@@ -1328,6 +1328,7 @@ async fn vm_task(vm_id: u8) {
     let _entered_guest_alloc = crate::allocators::enter_hv_guest_domain_current_cpu(vm_id);
     let launch_result = vmx_launch_once_with_ept(lineage_record);
     crate::allocators::leave_hv_guest_domain_current_cpu();
+    clear_current_vm_id();
     let blueprint_crash_state = blueprint_launch_snapshot(vm_id);
     let mut pending_crash = None;
     match launch_result {
@@ -1380,7 +1381,6 @@ async fn vm_task(vm_id: u8) {
 
     materialize_deferred_blueprint_app_windows(vm_id);
 
-    clear_current_vm_id();
     vm.running.store(false, Ordering::Release);
     vm.starting.store(false, Ordering::Release);
     vm.stop_req.store(false, Ordering::Release);

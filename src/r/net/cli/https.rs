@@ -46,7 +46,7 @@ static CABI_NET_FETCH_WAIT_MODE_LOGGED: AtomicU8 = AtomicU8::new(0);
 #[inline]
 fn wait_on_net_fetch_queue_blocking(timeout_ms: u64) -> bool {
     let ready = crate::r::readiness::is_set(
-        crate::r::readiness::NET_CONFIGURED | crate::r::readiness::TLS_SOCKET_SERVICE_READY,
+        crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::TLS_SOCKET_SERVICE_READY,
     );
     if ready {
         if CABI_NET_FETCH_WAIT_MODE_LOGGED

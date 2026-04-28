@@ -283,7 +283,7 @@ async fn request_http_body(
     let parsed = parse_http_url(url).map_err(|_| HttpFetchError::BadUrl)?;
 
     let _ = crate::r::readiness::wait_for_timeout(
-        crate::r::readiness::NET_CONFIGURED,
+        crate::r::readiness::NET_ANY_CONFIGURED,
         EmbassyDuration::from_secs(3),
     )
     .await;
