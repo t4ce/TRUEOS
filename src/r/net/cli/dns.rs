@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 extern crate alloc;
+extern crate std;
 
 use alloc::{format, string::String, vec::Vec};
 use core::sync::atomic::{AtomicU32, Ordering};
@@ -262,6 +263,7 @@ static DNS_CACHE: Mutex<HVec<DnsCacheEntry, DNS_CACHE_CAP>> = Mutex::new(HVec::n
 
 static DNS_SEQ: AtomicU32 = AtomicU32::new(1);
 static SECURE_DNS_STUB_LOGGED: AtomicU32 = AtomicU32::new(0);
+static DOH_NOT_READY_LOGGED: AtomicU32 = AtomicU32::new(0);
 
 #[inline]
 fn alloc_dns_id() -> u16 {
@@ -741,12 +743,125 @@ async fn open_udp(net: &VNet, local_port: u16, timeout_ms: u64) -> Option<vnet::
 }
 
 async fn resolve_ipv4_secure_transport_stub(
-    _transport: SecureDnsTransport,
-    _dev_idx: usize,
-    _host_trimmed: &str,
-    _cfg: DnsConfig,
+    transport: SecureDnsTransport,
+    dev_idx: usize,
+    host_trimmed: &str,
+    cfg: DnsConfig,
 ) -> Result<[u8; 4], DnsError> {
-    Err(DnsError::NoAnswer)
+    match transport {
+        SecureDnsTransport::Doh => resolve_ipv4_doh_for_device(dev_idx, host_trimmed, cfg).await,
+        SecureDnsTransport::Dot | SecureDnsTransport::Doh3 => Err(DnsError::NoAnswer),
+    }
+}
+
+struct DohEndpoint {
+    ip: [u8; 4],
+    tls_name: &'static str,
+    path: &'static str,
+}
+
+const PUBLIC_DOH_ENDPOINTS_V4: [DohEndpoint; 3] = [
+    DohEndpoint {
+        ip: [1, 1, 1, 1],
+        tls_name: "cloudflare-dns.com",
+        path: "/dns-query",
+    },
+    DohEndpoint {
+        ip: [8, 8, 8, 8],
+        tls_name: "dns.google",
+        path: "/dns-query",
+    },
+    DohEndpoint {
+        ip: [9, 9, 9, 9],
+        tls_name: "dns.quad9.net",
+        path: "/dns-query",
+    },
+];
+
+fn doh_runtime_ready() -> bool {
+    crate::r::readiness::is_set(crate::r::readiness::NET_SOCKET_READY)
+        && tokio::runtime::Handle::try_current().is_ok()
+}
+
+fn doh_resolver_config() -> hickory_resolver::config::ResolverConfig {
+    use hickory_resolver::config::{NameServerConfig, ResolverConfig};
+    use hickory_resolver::proto::xfer::Protocol as DnsProtocol;
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+    let mut servers = Vec::new();
+    for endpoint in PUBLIC_DOH_ENDPOINTS_V4.iter() {
+        let mut server = NameServerConfig::new(
+            SocketAddr::from((IpAddr::V4(Ipv4Addr::from(endpoint.ip)), 443)),
+            DnsProtocol::Https,
+        );
+        server.tls_dns_name = Some(String::from(endpoint.tls_name));
+        server.http_endpoint = Some(String::from(endpoint.path));
+        server.trust_negative_responses = false;
+        servers.push(server);
+    }
+
+    ResolverConfig::from_parts(None, Vec::new(), servers)
+}
+
+async fn resolve_ipv4_doh_for_device(
+    dev_idx: usize,
+    host_trimmed: &str,
+    cfg: DnsConfig,
+) -> Result<[u8; 4], DnsError> {
+    if !doh_runtime_ready() {
+        if DOH_NOT_READY_LOGGED
+            .compare_exchange(0, 1, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
+            crate::log!(
+                "dns: doh skipped until tokio runtime and NET_SOCKET_READY are available\n"
+            );
+        }
+        return Err(DnsError::NoAnswer);
+    }
+
+    use hickory_resolver::config::{LookupIpStrategy, ResolveHosts, ResolverOpts};
+    use hickory_resolver::name_server::TokioConnectionProvider;
+
+    let mut opts = ResolverOpts::default();
+    opts.timeout = core::time::Duration::from_millis(cfg.resend_ms.max(100));
+    opts.attempts = 1;
+    opts.ip_strategy = LookupIpStrategy::Ipv4Only;
+    opts.num_concurrent_reqs = 1;
+    opts.use_hosts_file = ResolveHosts::Never;
+    opts.try_tcp_on_error = false;
+    opts.os_port_selection = true;
+
+    let resolver = hickory_resolver::Resolver::builder_with_config(
+        doh_resolver_config(),
+        TokioConnectionProvider::default(),
+    )
+    .with_options(opts)
+    .build();
+
+    match tokio::time::timeout(
+        core::time::Duration::from_millis(cfg.timeout_ms.max(cfg.resend_ms).max(100)),
+        resolver.ipv4_lookup(host_trimmed),
+    )
+    .await
+    {
+        Ok(Ok(lookup)) => {
+            if let Some(ip) = lookup.iter().next() {
+                return Ok(ip.octets());
+            }
+            Err(DnsError::NoAnswer)
+        }
+        Ok(Err(err)) => {
+            crate::log!(
+                "dns: doh lookup failed host={} dev={} err={}\n",
+                host_trimmed,
+                dev_idx,
+                err
+            );
+            Err(DnsError::NoAnswer)
+        }
+        Err(_) => Err(DnsError::Timeout),
+    }
 }
 
 fn warn_secure_dns_disagreement(
@@ -791,7 +906,7 @@ async fn resolve_ipv4_secure_policy_stub(
         .is_ok()
     {
         crate::log!(
-            "dns: secure transport policy wired but transport implementations pending; fallback to udp\n"
+            "dns: secure transport policy wired; trying available transports before udp fallback\n"
         );
     }
 
@@ -824,7 +939,9 @@ async fn resolve_ipv4_secure_policy_stub(
         }
     }
 
-    first_healthy.map(|candidate| candidate.ip).ok_or(DnsError::NoAnswer)
+    first_healthy
+        .map(|candidate| candidate.ip)
+        .ok_or(DnsError::NoAnswer)
 }
 
 /// Resolve a hostname to an IPv4 address (A record) using UDP DNS over vnet.
@@ -1011,7 +1128,8 @@ pub async fn resolve_ipv4_for_device(
     }
 
     if let Ok(ip) =
-        resolve_ipv4_secure_policy_stub(dev_idx, host_trimmed, cfg, SecureDnsPolicy::default()).await
+        resolve_ipv4_secure_policy_stub(dev_idx, host_trimmed, cfg, SecureDnsPolicy::default())
+            .await
     {
         dns_cache_insert(dev_idx, host_trimmed, ip);
         dns_fs_cache_update(dev_idx, host_trimmed, ip).await;

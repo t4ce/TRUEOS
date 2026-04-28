@@ -84,10 +84,7 @@ fn hickory_resolver_config_for_device(
             continue;
         };
         let ip = IpAddr::V4(Ipv4Addr::from(addr));
-        servers.push(NameServerConfig::new(
-            SocketAddr::from((ip, 53)),
-            DnsProtocol::Udp,
-        ));
+        servers.push(NameServerConfig::new(SocketAddr::from((ip, 53)), DnsProtocol::Udp));
     }
 
     if servers.is_empty() {
@@ -122,12 +119,10 @@ async fn probe_hickory_resolver_surface() -> Result<(), &'static str> {
     opts.try_tcp_on_error = false;
     opts.os_port_selection = true;
 
-    let resolver = hickory_resolver::Resolver::builder_with_config(
-        config,
-        TokioConnectionProvider::default(),
-    )
-    .with_options(opts)
-    .build();
+    let resolver =
+        hickory_resolver::Resolver::builder_with_config(config, TokioConnectionProvider::default())
+            .with_options(opts)
+            .build();
 
     match tokio::time::timeout(
         core::time::Duration::from_millis(dns.timeout_ms.max(dns.resend_ms)),
@@ -170,10 +165,7 @@ async fn probe_hickory_resolver_surface() -> Result<(), &'static str> {
 fn probe_hickory_h3_surface() {
     let protocol = hickory_proto::xfer::Protocol::H3;
     let _builder = hickory_proto::h3::H3ClientStream::builder();
-    crate::log!(
-        "tokio_probe: success net.hickory.h3.surface protocol={}\n",
-        protocol
-    );
+    crate::log!("tokio_probe: success net.hickory.h3.surface protocol={}\n", protocol);
 }
 
 async fn probe_tokio_blocking_canary() -> bool {
