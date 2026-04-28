@@ -47,6 +47,13 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
         }
     };
 
+    if looks_like_rust_source(source.as_str())
+        && !starts_with_c4_after_rust_preamble(source.as_str())
+    {
+        report_rust_blueprint_source(io, source_name.as_str(), source.as_str());
+        return ParseOutcome::Handled;
+    }
+
     let program = match trueos_c4::parse_program(source.as_str()) {
         Ok(program) => program,
         Err(err) => {
@@ -115,6 +122,7 @@ fn parse_input(rest: &str, io: &'static dyn ShellBackend2) -> Option<SourceInput
 
     let (head, tail) = split_first(rest);
     if head.eq_ignore_ascii_case("inline")
+        || head.eq_ignore_ascii_case("rust")
         || head.eq_ignore_ascii_case("source")
         || head.eq_ignore_ascii_case("src")
     {
@@ -170,6 +178,86 @@ fn artifact_path(stem: &str, suffix: &str) -> String {
     let mut out = String::from(stem);
     out.push_str(suffix);
     out
+}
+
+fn looks_like_rust_source(source: &str) -> bool {
+    let text = source.trim_start();
+    text.starts_with("#!")
+        || text.starts_with("#[")
+        || text.starts_with("extern crate ")
+        || text.starts_with("fn ")
+        || text.starts_with("pub ")
+        || text.starts_with("use ")
+        || text.starts_with("mod ")
+}
+
+fn starts_with_c4_after_rust_preamble(source: &str) -> bool {
+    let mut text = source.trim_start();
+    loop {
+        if let Some(rest) = text.strip_prefix("#![no_std]") {
+            text = rest.trim_start();
+            continue;
+        }
+        if let Some(rest) = text.strip_prefix("#![no_main]") {
+            text = rest.trim_start();
+            continue;
+        }
+        break;
+    }
+    text.starts_with('{')
+}
+
+fn report_rust_blueprint_source(io: &'static dyn ShellBackend2, source_name: &str, source: &str) {
+    let has_no_std = source.contains("#![no_std]");
+    let has_no_main = source.contains("#![no_main]");
+    let has_panic_handler = source.contains("#[panic_handler]");
+    let has_allocator = source.contains("#[global_allocator]");
+    let has_exported_main = has_no_mangle(source) && has_extern_c_main(source);
+    let contract_ok = has_no_std && has_no_main && has_panic_handler && has_exported_main;
+
+    print_shell_line(
+        io,
+        format!("c4: Rust backend intake source={} bytes={}", source_name, source.len()).as_str(),
+    );
+    print_shell_line(
+        io,
+        format!(
+            "c4: blueprint contract no_std={} no_main={} panic_handler={} exported_main={} allocator={}",
+            ok_text(has_no_std),
+            ok_text(has_no_main),
+            ok_text(has_panic_handler),
+            ok_text(has_exported_main),
+            if has_allocator { "present" } else { "optional" }
+        )
+        .as_str(),
+    );
+
+    if contract_ok {
+        print_shell_line(
+            io,
+            "c4: Rust source is accepted as Blueprint-shaped input; Rust-to-TC4O lowering is not wired yet",
+        );
+    } else {
+        print_shell_line(
+            io,
+            "c4: Rust source recognized, but it is missing required Blueprint entry contract pieces",
+        );
+    }
+}
+
+fn has_no_mangle(source: &str) -> bool {
+    source.contains("#[unsafe(no_mangle)]") || source.contains("#[no_mangle]")
+}
+
+fn has_extern_c_main(source: &str) -> bool {
+    source.contains("extern \"C\" fn main(")
+        || source.contains("extern\"C\"fn main(")
+        || source.contains("extern \"C\"fn main(")
+        || source.contains("extern\"C\" fn main(")
+}
+
+fn ok_text(ok: bool) -> &'static str {
+    if ok { "ok" } else { "missing" }
 }
 
 fn write_artifact(io: &'static dyn ShellBackend2, path: &str, bytes: &[u8]) {

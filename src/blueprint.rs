@@ -63,53 +63,182 @@ struct ElfSymbol {
 struct LoadedRelImage {
     base: *mut u8,
     used_len: usize,
+    backing: PortalImageBacking,
     section_bases: Vec<usize>,
-    _arena_lease: PortalImageArenaLease,
 }
 
 impl Drop for LoadedRelImage {
     fn drop(&mut self) {
         let _ = self.base;
+        let _ = &self.backing;
         let _ = self.used_len;
     }
 }
 
-const PORTAL_IMAGE_ARENA_BYTES: usize = 4 * 1024 * 1024;
+enum PortalImageBacking {
+    Dynamic { base: *mut u8, layout: Layout },
+    Compat(PortalImageCompatLease),
+}
+
+impl Drop for PortalImageBacking {
+    fn drop(&mut self) {
+        match self {
+            Self::Dynamic { base, layout } => {
+                unsafe {
+                    crate::allocators::dealloc_raw(*base);
+                }
+                let _ = layout;
+            }
+            Self::Compat(lease) => {
+                let _ = lease.slot;
+            }
+        }
+    }
+}
+
+struct PortalImageAllocationGuard {
+    backing: Option<PortalImageBacking>,
+}
+
+impl PortalImageAllocationGuard {
+    fn disarm(mut self) -> PortalImageBacking {
+        self.backing.take().expect("portal image backing missing")
+    }
+}
+
+impl Drop for PortalImageAllocationGuard {
+    fn drop(&mut self) {
+        let _ = self.backing.take();
+    }
+}
+
+struct PortalImageCompatLease {
+    base: *mut u8,
+    slot: usize,
+}
+
+impl Drop for PortalImageCompatLease {
+    fn drop(&mut self) {
+        PORTAL_IMAGE_COMPAT_IN_USE[self.slot].store(false, Ordering::Release);
+        let _ = self.base;
+    }
+}
 
 #[repr(align(4096))]
-struct PortalImageArena([u8; PORTAL_IMAGE_ARENA_BYTES]);
-
-static PORTAL_IMAGE_IN_USE: AtomicBool = AtomicBool::new(false);
-static mut PORTAL_IMAGE_ARENA: PortalImageArena = PortalImageArena([0; PORTAL_IMAGE_ARENA_BYTES]);
-static UNRESOLVED_IMPORT_STUBS: Mutex<Vec<UnresolvedImportStub>> = Mutex::new(Vec::new());
-
-struct PortalImageArenaLease {
-    armed: bool,
+struct PortalImageCompatArena {
+    _bytes: [u8; PORTAL_IMAGE_COMPAT_SLOT_BYTES],
 }
+
+static PORTAL_IMAGE_COMPAT_IN_USE: [AtomicBool; PORTAL_IMAGE_COMPAT_SLOT_COUNT] =
+    [const { AtomicBool::new(false) }; PORTAL_IMAGE_COMPAT_SLOT_COUNT];
+static mut PORTAL_IMAGE_COMPAT_ARENAS: [PortalImageCompatArena; PORTAL_IMAGE_COMPAT_SLOT_COUNT] =
+    [const {
+        PortalImageCompatArena {
+            _bytes: [0; PORTAL_IMAGE_COMPAT_SLOT_BYTES],
+        }
+    };
+        PORTAL_IMAGE_COMPAT_SLOT_COUNT];
+
+struct PortalImageAllocation {
+    base: *mut u8,
+    guard: PortalImageAllocationGuard,
+}
+
+impl PortalImageAllocation {
+    fn allocate(layout: Layout, needs_compat_base: bool) -> Result<Self, String> {
+        if needs_compat_base {
+            Self::allocate_compat(layout)
+        } else {
+            Self::allocate_dynamic(layout)
+        }
+    }
+
+    fn allocate_dynamic(layout: Layout) -> Result<Self, String> {
+        let base = unsafe { crate::allocators::alloc_raw(layout) };
+        if base.is_null() {
+            return Err(alloc::format!(
+                "portal image allocation failed size={} align={}",
+                layout.size(),
+                layout.align()
+            ));
+        }
+        Ok(Self {
+            base,
+            guard: PortalImageAllocationGuard {
+                backing: Some(PortalImageBacking::Dynamic { base, layout }),
+            },
+        })
+    }
+
+    fn allocate_compat(layout: Layout) -> Result<Self, String> {
+        let arena_align = 4096usize;
+        let slop = layout.align().saturating_sub(arena_align);
+        let needed = layout
+            .size()
+            .checked_add(slop)
+            .ok_or_else(|| String::from("portal image too large"))?;
+        if needed > PORTAL_IMAGE_COMPAT_SLOT_BYTES {
+            return Err(alloc::format!(
+                "portal image exceeds compat window size={} needed={} cap={}",
+                layout.size(),
+                needed,
+                PORTAL_IMAGE_COMPAT_SLOT_BYTES
+            ));
+        }
+
+        let Some(slot) = acquire_portal_image_compat_slot() else {
+            return Err(String::from("portal compat image windows busy"));
+        };
+
+        let arenas =
+            core::ptr::addr_of_mut!(PORTAL_IMAGE_COMPAT_ARENAS) as *mut PortalImageCompatArena;
+        let arena_ptr = unsafe { arenas.add(slot) } as *mut u8;
+        let base_addr = match align_up(arena_ptr as usize, layout.align()) {
+            Ok(addr) => addr,
+            Err(err) => {
+                PORTAL_IMAGE_COMPAT_IN_USE[slot].store(false, Ordering::Release);
+                return Err(String::from(err));
+            }
+        };
+        let base = base_addr as *mut u8;
+        Ok(Self {
+            base,
+            guard: PortalImageAllocationGuard {
+                backing: Some(PortalImageBacking::Compat(PortalImageCompatLease {
+                    base,
+                    slot,
+                })),
+            },
+        })
+    }
+
+    fn disarm(self) -> PortalImageBacking {
+        self.guard.disarm()
+    }
+}
+
+fn acquire_portal_image_compat_slot() -> Option<usize> {
+    for (slot, in_use) in PORTAL_IMAGE_COMPAT_IN_USE.iter().enumerate() {
+        if in_use
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            return Some(slot);
+        }
+    }
+    None
+}
+
+const PORTAL_IMAGE_CAP_BYTES: usize = crate::allcaps::blueprint::PORTAL_IMAGE_CAP_BYTES;
+const PORTAL_IMAGE_COMPAT_SLOT_BYTES: usize =
+    crate::allcaps::blueprint::PORTAL_IMAGE_COMPAT_SLOT_BYTES;
+const PORTAL_IMAGE_COMPAT_SLOT_COUNT: usize =
+    crate::allcaps::blueprint::PORTAL_IMAGE_COMPAT_SLOT_COUNT;
+static UNRESOLVED_IMPORT_STUBS: Mutex<Vec<UnresolvedImportStub>> = Mutex::new(Vec::new());
 
 struct UnresolvedImportStub {
     name: String,
     warned: bool,
-}
-
-impl PortalImageArenaLease {
-    fn acquire() -> Result<Self, String> {
-        if PORTAL_IMAGE_IN_USE
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
-            return Err(String::from("portal image arena busy"));
-        }
-        Ok(Self { armed: true })
-    }
-}
-
-impl Drop for PortalImageArenaLease {
-    fn drop(&mut self) {
-        if self.armed {
-            PORTAL_IMAGE_IN_USE.store(false, Ordering::Release);
-        }
-    }
 }
 
 macro_rules! unresolved_import_stubs {
@@ -517,20 +646,18 @@ fn load_rel_image(bytes: &[u8]) -> Result<LoadedRelImage, String> {
         return Err(String::from("ELF image has no allocatable sections"));
     }
 
+    let needs_compat_base = rel_image_needs_compat_base(bytes, sections.as_slice())?;
     let layout = Layout::from_size_align(total_size, max_align)
         .map_err(|_| String::from("bad ELF layout"))?;
-    let arena_align = 4096usize;
-    let slop = layout.align().saturating_sub(arena_align);
-    let needed = total_size
-        .checked_add(slop)
-        .ok_or_else(|| String::from("ELF image too large"))?;
-    if needed > PORTAL_IMAGE_ARENA_BYTES {
-        return Err(String::from("ELF image exceeds portal arena"));
+    if total_size > PORTAL_IMAGE_CAP_BYTES {
+        return Err(alloc::format!(
+            "portal image exceeds cap size={} cap={}",
+            total_size,
+            PORTAL_IMAGE_CAP_BYTES
+        ));
     }
-    let arena_lease = PortalImageArenaLease::acquire()?;
-    let arena_ptr = core::ptr::addr_of_mut!(PORTAL_IMAGE_ARENA) as *mut u8;
-    let base_addr = align_up(arena_ptr as usize, layout.align())?;
-    let base = base_addr as *mut u8;
+    let allocation = PortalImageAllocation::allocate(layout, needs_compat_base)?;
+    let base = allocation.base;
     unsafe {
         core::ptr::write_bytes(base, 0, total_size);
     }
@@ -633,12 +760,41 @@ fn load_rel_image(bytes: &[u8]) -> Result<LoadedRelImage, String> {
         }
     }
 
+    let backing = allocation.disarm();
     Ok(LoadedRelImage {
         base,
         used_len: total_size,
+        backing,
         section_bases,
-        _arena_lease: arena_lease,
     })
+}
+
+fn rel_image_needs_compat_base(bytes: &[u8], sections: &[ElfSection]) -> Result<bool, String> {
+    for section in sections.iter() {
+        if section.section_type != SHT_RELA {
+            continue;
+        }
+        let Some(target) = sections.get(section.info) else {
+            return Err(String::from("ELF relocation target out of range"));
+        };
+        if target.flags & SHF_ALLOC == 0 {
+            continue;
+        }
+        if section.entsize != ELF64_RELA_LEN {
+            return Err(String::from("unsupported ELF relocation size"));
+        }
+        let rela = bytes
+            .get(section.file_offset..section.file_offset + section.size)
+            .ok_or_else(|| String::from("ELF relocation section truncated"))?;
+        for chunk in rela.chunks_exact(ELF64_RELA_LEN) {
+            let r_info =
+                le_u64(chunk, 8).ok_or_else(|| String::from("ELF relocation truncated"))?;
+            if r_info as u32 == R_X86_64_32S {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }
 
 fn le_u16(bytes: &[u8], offset: usize) -> Option<u16> {

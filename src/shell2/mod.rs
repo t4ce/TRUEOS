@@ -14,7 +14,7 @@ mod interface;
 mod localcoder_service;
 mod localcoder_ui2_window;
 mod matrix;
-mod shell2_ai;
+mod shell2_apps;
 mod shell2_cmd;
 mod shell2_cmd_registry;
 mod shell2_irc;
@@ -32,7 +32,7 @@ pub(crate) use crate::shell2::backends::{
     ui2_shell_snapshot,
 };
 pub(crate) use interface::{ShellBackend2, ShellIo2};
-use shell2_ai::AiPromptMode;
+use shell2_apps::AppsPromptMode;
 use shell2_irc::IrcPromptMode;
 use shell2_qjs::QjsPromptMode;
 use shell2_surf::SurfPromptPrefix;
@@ -101,7 +101,7 @@ pub(crate) struct MatrixTarget {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ShellMode2 {
     Surf,
-    Ai,
+    Apps,
     Qjs,
     Cmd,
     Irc,
@@ -111,7 +111,7 @@ impl ShellMode2 {
     const fn function_key(self) -> &'static str {
         match self {
             Self::Surf => "F1",
-            Self::Ai => "F2",
+            Self::Apps => "F2",
             Self::Qjs => "F3",
             Self::Cmd => "F4",
             Self::Irc => "F5",
@@ -241,8 +241,8 @@ impl<'a> AlignedWriter<'a> {
         &self,
         output_mask: u8,
         mode: ShellMode2,
-        ai_mode: AiPromptMode,
         qjs_mode: QjsPromptMode,
+        apps_mode: AppsPromptMode,
         irc_mode: IrcPromptMode,
         surf_prefix: SurfPromptPrefix,
         cmd_status_text: Option<&str>,
@@ -256,8 +256,8 @@ impl<'a> AlignedWriter<'a> {
         }
         if mode == ShellMode2::Surf {
             self.surf_status(surf_prefix);
-        } else if mode == ShellMode2::Ai {
-            self.ai_status(ai_mode);
+        } else if mode == ShellMode2::Apps {
+            self.apps_status(apps_mode);
         } else if mode == ShellMode2::Qjs {
             self.qjs_status(qjs_mode);
         } else if mode == ShellMode2::Cmd {
@@ -272,7 +272,7 @@ impl<'a> AlignedWriter<'a> {
         let mut text = AllocString::new();
         self.push_mode_choice(&mut text, ShellMode2::Surf, mode == ShellMode2::Surf);
         self.push_plain(&mut text, " - ");
-        self.push_mode_choice(&mut text, ShellMode2::Ai, mode == ShellMode2::Ai);
+        self.push_mode_choice(&mut text, ShellMode2::Apps, mode == ShellMode2::Apps);
         self.push_plain(&mut text, " - ");
         self.push_mode_choice(&mut text, ShellMode2::Qjs, mode == ShellMode2::Qjs);
         self.push_plain(&mut text, " - ");
@@ -289,7 +289,7 @@ impl<'a> AlignedWriter<'a> {
             out,
             match mode {
                 ShellMode2::Surf => "surf",
-                ShellMode2::Ai => "ai",
+                ShellMode2::Apps => "apps",
                 ShellMode2::Qjs => "qjs",
                 ShellMode2::Cmd => "cmd",
                 ShellMode2::Irc => "irc",
@@ -328,20 +328,6 @@ impl<'a> AlignedWriter<'a> {
         self.right_text(STATUS_ROW, text.as_str());
     }
 
-    fn ai_status(&self, ai_mode: AiPromptMode) {
-        let mut text = AllocString::new();
-        self.push_function_key_label(&mut text, "[TAB]");
-        self.push_plain(&mut text, " ");
-        self.push_ai_token(&mut text, "normal", ai_mode == AiPromptMode::Normal);
-        self.push_plain(&mut text, " - ");
-        self.push_ai_token(&mut text, "inteldev", ai_mode == AiPromptMode::Inteldev);
-        self.push_plain(&mut text, " - ");
-        self.push_ai_token(&mut text, "driverdev", ai_mode == AiPromptMode::Driverdev);
-        self.push_plain(&mut text, " - ");
-        self.push_ai_token(&mut text, "newchat", ai_mode == AiPromptMode::NewChat);
-        self.right_text(STATUS_ROW, text.as_str());
-    }
-
     fn qjs_status(&self, qjs_mode: QjsPromptMode) {
         let mut text = AllocString::new();
         self.push_function_key_label(&mut text, "[TAB]");
@@ -349,6 +335,31 @@ impl<'a> AlignedWriter<'a> {
         self.push_ai_token(&mut text, "repl", qjs_mode == QjsPromptMode::Repl);
         self.push_plain(&mut text, " - ");
         self.push_ai_token(&mut text, "eval", qjs_mode == QjsPromptMode::Eval);
+        self.right_text(STATUS_ROW, text.as_str());
+    }
+
+    fn apps_status(&self, apps_mode: AppsPromptMode) {
+        let mut text = AllocString::new();
+        self.push_function_key_label(&mut text, "[TAB]");
+        self.push_plain(&mut text, " ");
+        for (idx, mode) in [
+            AppsPromptMode::Start,
+            AppsPromptMode::Pause,
+            AppsPromptMode::Unpause,
+            AppsPromptMode::Save,
+            AppsPromptMode::Load,
+            AppsPromptMode::Stop,
+            AppsPromptMode::Status,
+        ]
+        .iter()
+        .copied()
+        .enumerate()
+        {
+            if idx > 0 {
+                self.push_plain(&mut text, " - ");
+            }
+            self.push_ai_token(&mut text, mode.label(), apps_mode == mode);
+        }
         self.right_text(STATUS_ROW, text.as_str());
     }
 
@@ -694,13 +705,13 @@ pub(crate) fn repaint_backend_screen(io: &'static dyn ShellBackend2) {
 
     let (_, time_text) = clock_bucket_and_text();
     let mode = ShellMode2::Cmd;
-    let ai_mode = AiPromptMode::Normal;
     let qjs_mode = QjsPromptMode::Repl;
+    let apps_mode = AppsPromptMode::Start;
     let irc_mode = IrcPromptMode::User;
     let surf_prefix = SurfPromptPrefix::Https;
 
     out.banner(output_mask, mode, time_text.as_str());
-    out.mode_status(output_mask, mode, ai_mode, qjs_mode, irc_mode, surf_prefix, None, 0);
+    out.mode_status(output_mask, mode, qjs_mode, apps_mode, irc_mode, surf_prefix, None, 0);
     out.set_scroll_region(SCROLL_TOP_ROW);
 
     let transcript = current_transcript_for_task(io);
@@ -794,8 +805,8 @@ async fn run_plain_section_status(
     out: &AlignedWriter<'_>,
     output_mask: u8,
     mode: ShellMode2,
-    ai_mode: AiPromptMode,
     qjs_mode: QjsPromptMode,
+    apps_mode: AppsPromptMode,
     irc_mode: IrcPromptMode,
     surf_prefix: SurfPromptPrefix,
     cmd_status_text: Option<&str>,
@@ -819,8 +830,8 @@ async fn run_plain_section_status(
     out.mode_status(
         output_mask,
         mode,
-        ai_mode,
         qjs_mode,
+        apps_mode,
         irc_mode,
         surf_prefix,
         cmd_status_text,
@@ -832,8 +843,8 @@ fn handle_submit(
     spawner: &Spawner,
     io: &'static dyn ShellBackend2,
     mode: ShellMode2,
-    ai_mode: AiPromptMode,
     qjs_mode: QjsPromptMode,
+    apps_mode: AppsPromptMode,
     irc_mode: IrcPromptMode,
     surf_prefix: SurfPromptPrefix,
     submitted: &str,
@@ -868,12 +879,10 @@ fn handle_submit(
             shell2_qjs::submit(spawner, io, &target, qjs_mode, submitted);
             HandleSubmitResult::None
         }
-        ShellMode2::Ai => match shell2_ai::submit(spawner, io, ai_mode, submitted) {
-            shell2_ai::SubmitResult::Queued => HandleSubmitResult::None,
-            shell2_ai::SubmitResult::ResetToNormal => {
-                HandleSubmitResult::SetAiMode(AiPromptMode::Normal)
-            }
-        },
+        ShellMode2::Apps => {
+            shell2_apps::submit(spawner, io, apps_mode, submitted);
+            HandleSubmitResult::None
+        }
         ShellMode2::Irc => {
             shell2_irc::submit(io, irc_mode, submitted);
             HandleSubmitResult::None
@@ -883,7 +892,6 @@ fn handle_submit(
 
 enum HandleSubmitResult {
     None,
-    SetAiMode(AiPromptMode),
     SetLineWidth(usize),
     LaunchTetris,
     StartSession(shell2_cmd::CommandSessionKind),
@@ -935,7 +943,7 @@ fn handle_command_session_input(
 fn mode_from_function_key(index: u16) -> Option<ShellMode2> {
     match index {
         1 => Some(ShellMode2::Surf),
-        2 => Some(ShellMode2::Ai),
+        2 => Some(ShellMode2::Apps),
         3 => Some(ShellMode2::Qjs),
         4 => Some(ShellMode2::Cmd),
         5 => Some(ShellMode2::Irc),
@@ -947,8 +955,8 @@ fn apply_mode_toggle(
     out: &AlignedWriter<'_>,
     output_mask: u8,
     mode: ShellMode2,
-    ai_mode: AiPromptMode,
     qjs_mode: QjsPromptMode,
+    apps_mode: AppsPromptMode,
     irc_mode: IrcPromptMode,
     surf_prefix: SurfPromptPrefix,
     cmd_status_text: Option<&str>,
@@ -960,8 +968,8 @@ fn apply_mode_toggle(
     out.mode_status(
         output_mask,
         mode,
-        ai_mode,
         qjs_mode,
+        apps_mode,
         irc_mode,
         surf_prefix,
         cmd_status_text,
@@ -977,8 +985,8 @@ fn redraw_status_preserving_cursor(
     out: &AlignedWriter<'_>,
     output_mask: u8,
     mode: ShellMode2,
-    ai_mode: AiPromptMode,
     qjs_mode: QjsPromptMode,
+    apps_mode: AppsPromptMode,
     irc_mode: IrcPromptMode,
     surf_prefix: SurfPromptPrefix,
     cmd_status_text: Option<&str>,
@@ -988,8 +996,8 @@ fn redraw_status_preserving_cursor(
     out.mode_status(
         output_mask,
         mode,
-        ai_mode,
         qjs_mode,
+        apps_mode,
         irc_mode,
         surf_prefix,
         cmd_status_text,
@@ -998,13 +1006,21 @@ fn redraw_status_preserving_cursor(
     out.io.raw_write_str(ecma48::RESTORE_CURSOR);
 }
 
+fn redraw_clock_preserving_cursor(out: &AlignedWriter<'_>, time_text: &str) {
+    out.io.raw_write_str(ecma48::SAVE_CURSOR);
+    out.io.raw_write_str(ecma48::RESET);
+    out.right_text(BANNER_ROW, time_text);
+    out.io.raw_write_str(ecma48::RESET);
+    out.io.raw_write_str(ecma48::RESTORE_CURSOR);
+}
+
 fn apply_matrix_operator_and_refresh(
     out: &AlignedWriter<'_>,
     io: &'static dyn ShellBackend2,
     output_mask: u8,
     mode: &mut ShellMode2,
-    ai_mode: AiPromptMode,
     qjs_mode: QjsPromptMode,
+    apps_mode: AppsPromptMode,
     irc_mode: IrcPromptMode,
     surf_prefix: SurfPromptPrefix,
     cmd_status_text: Option<&str>,
@@ -1019,8 +1035,8 @@ fn apply_matrix_operator_and_refresh(
     out.mode_status(
         output_mask,
         *mode,
-        ai_mode,
         qjs_mode,
+        apps_mode,
         irc_mode,
         surf_prefix,
         cmd_status_text,
@@ -1093,8 +1109,8 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
     let mut mode = ShellMode2::Cmd;
     let mut surf_prefix = SurfPromptPrefix::Https;
     out.banner(output_mask, mode, time_text.as_str());
-    let mut ai_mode = AiPromptMode::Normal;
     let mut qjs_mode = QjsPromptMode::Repl;
+    let mut apps_mode = AppsPromptMode::Start;
     let mut irc_mode = IrcPromptMode::User;
     let mut cmd_status_text: Option<AllocString> = None;
     let mut command_sessions: alloc::vec::Vec<CommandSession> = alloc::vec::Vec::new();
@@ -1102,8 +1118,8 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
     out.mode_status(
         output_mask,
         mode,
-        ai_mode,
         qjs_mode,
+        apps_mode,
         irc_mode,
         surf_prefix,
         cmd_status_text.as_deref(),
@@ -1138,8 +1154,8 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                 &out,
                 output_mask,
                 mode,
-                ai_mode,
                 qjs_mode,
+                apps_mode,
                 irc_mode,
                 surf_prefix,
                 cmd_status_text.as_deref(),
@@ -1156,22 +1172,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
         let (minute_bucket, minute_text) = clock_bucket_and_text();
         if minute_bucket != last_minute_bucket {
             last_minute_bucket = minute_bucket;
-            out.banner(output_mask, mode, minute_text.as_str());
-            out.mode_status(
-                output_mask,
-                mode,
-                ai_mode,
-                qjs_mode,
-                irc_mode,
-                surf_prefix,
-                cmd_status_text.as_deref(),
-                running_go2_phase,
-            );
-            out.render_transcript(&transcript);
-            out.prompt(output_mask);
-            for ch in line.chars() {
-                out.user_char(ch);
-            }
+            redraw_clock_preserving_cursor(&out, minute_text.as_str());
         }
 
         if let Some(b) = io.read_byte() {
@@ -1231,8 +1232,8 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                     &out,
                                     output_mask,
                                     mode,
-                                    ai_mode,
                                     qjs_mode,
+                                    apps_mode,
                                     irc_mode,
                                     surf_prefix,
                                     cmd_status_text.as_deref(),
@@ -1252,7 +1253,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                 EscState::Ss3 => {
                     let next_mode = match b {
                         b'P' => Some(ShellMode2::Surf),
-                        b'Q' => Some(ShellMode2::Ai),
+                        b'Q' => Some(ShellMode2::Apps),
                         b'R' => Some(ShellMode2::Qjs),
                         b'S' => Some(ShellMode2::Cmd),
                         b'T' => Some(ShellMode2::Irc),
@@ -1264,8 +1265,8 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             &out,
                             output_mask,
                             mode,
-                            ai_mode,
                             qjs_mode,
+                            apps_mode,
                             irc_mode,
                             surf_prefix,
                             cmd_status_text.as_deref(),
@@ -1293,26 +1294,8 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                         out.mode_status(
                             output_mask,
                             mode,
-                            ai_mode,
                             qjs_mode,
-                            irc_mode,
-                            surf_prefix,
-                            cmd_status_text.as_deref(),
-                            running_go2_phase,
-                        );
-                        out.prompt(output_mask);
-                        for ch in line.chars() {
-                            out.user_char(ch);
-                        }
-                    }
-                    ShellMode2::Ai => {
-                        cmd_status_text = None;
-                        ai_mode = ai_mode.next();
-                        out.mode_status(
-                            output_mask,
-                            mode,
-                            ai_mode,
-                            qjs_mode,
+                            apps_mode,
                             irc_mode,
                             surf_prefix,
                             cmd_status_text.as_deref(),
@@ -1329,8 +1312,26 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                         out.mode_status(
                             output_mask,
                             mode,
-                            ai_mode,
                             qjs_mode,
+                            apps_mode,
+                            irc_mode,
+                            surf_prefix,
+                            cmd_status_text.as_deref(),
+                            running_go2_phase,
+                        );
+                        out.prompt(output_mask);
+                        for ch in line.chars() {
+                            out.user_char(ch);
+                        }
+                    }
+                    ShellMode2::Apps => {
+                        cmd_status_text = None;
+                        apps_mode = apps_mode.next();
+                        out.mode_status(
+                            output_mask,
+                            mode,
+                            qjs_mode,
+                            apps_mode,
                             irc_mode,
                             surf_prefix,
                             cmd_status_text.as_deref(),
@@ -1347,8 +1348,8 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             out.mode_status(
                                 output_mask,
                                 mode,
-                                ai_mode,
                                 qjs_mode,
+                                apps_mode,
                                 irc_mode,
                                 surf_prefix,
                                 cmd_status_text.as_deref(),
@@ -1363,8 +1364,8 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                         out.mode_status(
                             output_mask,
                             mode,
-                            ai_mode,
                             qjs_mode,
+                            apps_mode,
                             irc_mode,
                             surf_prefix,
                             cmd_status_text.as_deref(),
@@ -1398,8 +1399,8 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             io,
                             output_mask,
                             &mut mode,
-                            ai_mode,
                             qjs_mode,
+                            apps_mode,
                             irc_mode,
                             surf_prefix,
                             cmd_status_text.as_deref(),
@@ -1413,8 +1414,8 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             &out,
                             output_mask,
                             mode,
-                            ai_mode,
                             qjs_mode,
+                            apps_mode,
                             irc_mode,
                             surf_prefix,
                             cmd_status_text.as_deref(),
@@ -1427,8 +1428,8 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             io,
                             output_mask,
                             &mut mode,
-                            ai_mode,
                             qjs_mode,
+                            apps_mode,
                             irc_mode,
                             surf_prefix,
                             cmd_status_text.as_deref(),
@@ -1501,7 +1502,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             }
                             CommandSessionInputResult::KeepRunning => {}
                         }
-                    } else if !submitted.is_empty() {
+                    } else if !submitted.is_empty() || mode == ShellMode2::Apps {
                         if submitted_raw.starts_with('§') {
                             handle_matrix_operator(io, submitted);
                             mode = ShellMode2::Cmd;
@@ -1510,8 +1511,8 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             out.mode_status(
                                 output_mask,
                                 mode,
-                                ai_mode,
                                 qjs_mode,
+                                apps_mode,
                                 irc_mode,
                                 surf_prefix,
                                 cmd_status_text.as_deref(),
@@ -1522,7 +1523,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                         } else {
                             let eat_tetris_launch = mode == ShellMode2::Cmd
                                 && crate::shell2::cmds::tetris::is_launch_request(submitted);
-                            if !eat_tetris_launch {
+                            if !eat_tetris_launch && !submitted.is_empty() {
                                 record_user_line_for_active_slot(io, submitted);
                                 transcript = current_transcript_for_task(io);
                                 out.render_transcript(&transcript);
@@ -1531,25 +1532,12 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                 &spawner,
                                 io,
                                 mode,
-                                ai_mode,
                                 qjs_mode,
+                                apps_mode,
                                 irc_mode,
                                 surf_prefix,
                                 submitted,
                             ) {
-                                HandleSubmitResult::SetAiMode(next_ai_mode) => {
-                                    ai_mode = next_ai_mode;
-                                    out.mode_status(
-                                        output_mask,
-                                        mode,
-                                        ai_mode,
-                                        qjs_mode,
-                                        irc_mode,
-                                        surf_prefix,
-                                        cmd_status_text.as_deref(),
-                                        running_go2_phase,
-                                    );
-                                }
                                 HandleSubmitResult::SetLineWidth(width) => {
                                     out.set_line_width(width);
                                     matrix::set_active_line_width(output_mask, width);
@@ -1557,8 +1545,8 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                     out.mode_status(
                                         output_mask,
                                         mode,
-                                        ai_mode,
                                         qjs_mode,
+                                        apps_mode,
                                         irc_mode,
                                         surf_prefix,
                                         cmd_status_text.as_deref(),
@@ -1580,8 +1568,8 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                     out.mode_status(
                                         output_mask,
                                         mode,
-                                        ai_mode,
                                         qjs_mode,
+                                        apps_mode,
                                         irc_mode,
                                         surf_prefix,
                                         cmd_status_text.as_deref(),

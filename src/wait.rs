@@ -151,6 +151,17 @@ impl WaitQueue {
         }
     }
 
+    /// Publish an event without touching the waiter list.
+    ///
+    /// VM guests can execute mapped hull CABI code while the host heap is
+    /// deliberately unmapped (HVSR-0002). The waiter list stores host task
+    /// wakers in host heap memory, so guest-side signal paths must only bump
+    /// the sequence and let the host executor observe it on its next poll.
+    #[inline]
+    pub fn notify_guest_signal(&self) {
+        self.seq.fetch_add(1, Ordering::Release);
+    }
+
     #[inline]
     pub fn notify_one(&self) -> bool {
         self.seq.fetch_add(1, Ordering::Release);

@@ -26,6 +26,7 @@ pub mod services {
     pub const FTP_SERVER_PASV_MAX: u16 = 40_127;
     pub const VM_STORE_REPL_PORT: u16 = 32_123;
     pub const HTTP_TRUEOSFS_TCP_PORT: u16 = well_known::HTTP;
+    pub const LOCALCODER_WEB_TCP_PORT: u16 = 81;
 }
 
 pub mod esp {

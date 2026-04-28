@@ -208,6 +208,10 @@ pub mod env {
     use super::{BTreeMap, String, Vec};
     use crate::shell2::MatrixTarget;
 
+    const VM_CONTEXT_SLOTS: usize = crate::allcaps::hv::VM_ID_LIMIT;
+    const HOST_CONTEXT_SLOTS: usize = 64;
+    const CONTEXT_SLOTS: usize = VM_CONTEXT_SLOTS + HOST_CONTEXT_SLOTS;
+
     #[derive(Clone)]
     struct LaunchContext {
         args: Vec<String>,
@@ -216,12 +220,19 @@ pub mod env {
         app_fs_root: Option<String>,
     }
 
-    static CONTEXTS: spin::Mutex<BTreeMap<u32, Vec<LaunchContext>>> =
-        spin::Mutex::new(BTreeMap::new());
+    static CONTEXTS: [spin::Mutex<Vec<LaunchContext>>; CONTEXT_SLOTS] =
+        [const { spin::Mutex::new(Vec::new()) }; CONTEXT_SLOTS];
 
     #[inline]
-    fn cpu_key() -> u32 {
-        super::runtime_context_key()
+    fn context_slot() -> usize {
+        if let Some(vm_id) = crate::hv::current_vm_id_by_lapic_low() {
+            return (vm_id as usize).min(VM_CONTEXT_SLOTS.saturating_sub(1));
+        }
+        VM_CONTEXT_SLOTS + (crate::percpu::this_cpu().cpu_index() as usize % HOST_CONTEXT_SLOTS)
+    }
+
+    fn context_stack() -> &'static spin::Mutex<Vec<LaunchContext>> {
+        &CONTEXTS[context_slot()]
     }
 
     pub(crate) fn with_launch_context<R>(
@@ -248,10 +259,9 @@ pub mod env {
         app_fs_root: Option<String>,
         f: impl FnOnce() -> R,
     ) -> R {
-        let key = cpu_key();
         {
-            let mut contexts = CONTEXTS.lock();
-            contexts.entry(key).or_default().push(LaunchContext {
+            let mut stack = context_stack().lock();
+            stack.push(LaunchContext {
                 args,
                 vars,
                 console_target,
@@ -261,54 +271,33 @@ pub mod env {
 
         let out = f();
 
-        let mut contexts = CONTEXTS.lock();
-        if let Some(stack) = contexts.get_mut(&key) {
-            let _ = stack.pop();
-            if stack.is_empty() {
-                contexts.remove(&key);
-            }
+        let mut stack = context_stack().lock();
+        let _ = stack.pop();
+        if stack.is_empty() {
+            *stack = Vec::new();
         }
 
         out
     }
 
     pub fn arg_count() -> usize {
-        let key = cpu_key();
-        let contexts = CONTEXTS.lock();
-        contexts
-            .get(&key)
-            .and_then(|stack| stack.last())
-            .map(|ctx| ctx.args.len())
-            .unwrap_or(0)
+        let stack = context_stack().lock();
+        stack.last().map(|ctx| ctx.args.len()).unwrap_or(0)
     }
 
     pub fn arg(index: usize) -> Option<String> {
-        let key = cpu_key();
-        let contexts = CONTEXTS.lock();
-        contexts
-            .get(&key)
-            .and_then(|stack| stack.last())
-            .and_then(|ctx| ctx.args.get(index))
-            .cloned()
+        let stack = context_stack().lock();
+        stack.last().and_then(|ctx| ctx.args.get(index)).cloned()
     }
 
     pub fn var(key: &str) -> Option<String> {
-        let cpu = cpu_key();
-        let contexts = CONTEXTS.lock();
-        contexts
-            .get(&cpu)
-            .and_then(|stack| stack.last())
-            .and_then(|ctx| ctx.vars.get(key))
-            .cloned()
+        let stack = context_stack().lock();
+        stack.last().and_then(|ctx| ctx.vars.get(key)).cloned()
     }
 
     pub(crate) fn console_target() -> Option<MatrixTarget> {
-        let cpu = cpu_key();
-        let contexts = CONTEXTS.lock();
-        contexts
-            .get(&cpu)
-            .and_then(|stack| stack.last())
-            .and_then(|ctx| ctx.console_target.clone())
+        let stack = context_stack().lock();
+        stack.last().and_then(|ctx| ctx.console_target.clone())
     }
 
     fn normalize_app_path(path: &str, allow_empty: bool) -> Option<String> {
@@ -338,13 +327,9 @@ pub mod env {
     }
 
     pub(crate) fn resolve_fs_path(path: &str, allow_empty: bool) -> Option<String> {
-        let cpu = cpu_key();
-        let contexts = CONTEXTS.lock();
-        let app_fs_root = contexts
-            .get(&cpu)
-            .and_then(|stack| stack.last())
-            .and_then(|ctx| ctx.app_fs_root.clone());
-        drop(contexts);
+        let stack = context_stack().lock();
+        let app_fs_root = stack.last().and_then(|ctx| ctx.app_fs_root.clone());
+        drop(stack);
 
         let Some(root) = app_fs_root else {
             return Some(String::from(path));
@@ -463,6 +448,27 @@ pub mod cabi {
         }
     }
 
+    fn emit_vm_console_stream_line(stream: CStream, line: &str) {
+        match stream {
+            CStream::Stdout => {
+                crate::hv::log_active_blueprint_console_line(format_args!("guest: {}", line))
+            }
+            CStream::Stderr => {
+                crate::hv::log_active_blueprint_console_line(format_args!("guest error: {}", line))
+            }
+        }
+    }
+
+    fn process_vm_text_stream(stream: CStream, text: &str) {
+        for raw_line in text.split('\n') {
+            let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
+            if line.is_empty() {
+                continue;
+            }
+            emit_vm_console_stream_line(stream, line);
+        }
+    }
+
     fn process_text_stream(stream: CStream, text: &str) {
         let cpu = current_cpu_key();
         let mut lines = VecDeque::new();
@@ -521,6 +527,18 @@ pub mod cabi {
     #[inline]
     pub fn write_bytes(stream: CStream, bytes: &[u8]) {
         if bytes.is_empty() {
+            return;
+        }
+
+        if crate::hv::current_vm_id_by_lapic_low().is_some() {
+            if let Ok(text) = core::str::from_utf8(bytes) {
+                process_vm_text_stream(stream, text);
+            } else {
+                crate::hv::log_active_blueprint_console_line(format_args!(
+                    "guest: non-utf8 stream bytes={}",
+                    bytes.len()
+                ));
+            }
             return;
         }
 
@@ -660,6 +678,10 @@ pub mod cabi {
         let Ok(text) = core::str::from_utf8(data) else {
             return 0;
         };
+        if crate::hv::current_vm_id_by_lapic_low().is_some() {
+            crate::hv::log_active_blueprint_console_line(format_args!("guest: {}", text));
+            return data_len;
+        }
         if let Some(target) = super::env::console_target() {
             crate::shell2::print_matrix_target_line(&target, text);
         } else {
@@ -670,6 +692,10 @@ pub mod cabi {
 
     #[unsafe(no_mangle)]
     pub extern "C" fn trueos_cabi_poll_once() {
+        if crate::hv::current_vm_id_by_lapic_low().is_some() {
+            core::hint::spin_loop();
+            return;
+        }
         crate::wait::spin_step();
     }
 
@@ -746,6 +772,8 @@ pub mod cabi {
         align: usize,
     }
 
+    const VM_CABI_ALLOC_HEADER_BYTES: usize = 16;
+
     static CABI_ALLOC_TABLE: spin::Mutex<alloc::collections::BTreeMap<usize, AllocMeta>> =
         spin::Mutex::new(alloc::collections::BTreeMap::new());
 
@@ -762,8 +790,45 @@ pub mod cabi {
         alloc::alloc::Layout::from_size_align(size, align).ok()
     }
 
+    #[inline]
+    fn cabi_vm_alloc_active() -> bool {
+        crate::hv::current_vm_id_by_lapic_low().is_some()
+    }
+
+    #[inline]
+    fn cabi_vm_layout_for(size: usize) -> Option<alloc::alloc::Layout> {
+        let total = size.checked_add(VM_CABI_ALLOC_HEADER_BYTES)?;
+        cabi_layout_for(total, cabi_malloc_align())
+    }
+
+    unsafe fn cabi_vm_alloc(size: usize) -> *mut u8 {
+        let Some(layout) = cabi_vm_layout_for(size) else {
+            return core::ptr::null_mut();
+        };
+        let base = alloc::alloc::alloc(layout);
+        if base.is_null() {
+            return core::ptr::null_mut();
+        }
+        (base as *mut usize).write(size);
+        (base as *mut usize).add(1).write(cabi_malloc_align());
+        base.add(VM_CABI_ALLOC_HEADER_BYTES)
+    }
+
+    unsafe fn cabi_vm_meta(ptr: *const u8) -> Option<(usize, usize, *mut u8)> {
+        if ptr.is_null() {
+            return None;
+        }
+        let base = (ptr as *mut u8).sub(VM_CABI_ALLOC_HEADER_BYTES);
+        let size = (base as *const usize).read();
+        let align = (base as *const usize).add(1).read();
+        Some((size, align, base))
+    }
+
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_alloc(size: usize) -> *mut u8 {
+        if cabi_vm_alloc_active() {
+            return cabi_vm_alloc(size);
+        }
         let align = cabi_malloc_align();
         let Some(layout) = cabi_layout_for(size, align) else {
             return core::ptr::null_mut();
@@ -798,6 +863,18 @@ pub mod cabi {
         if ptr.is_null() {
             return;
         }
+        if cabi_vm_alloc_active() {
+            let Some((size, align, base)) = cabi_vm_meta(ptr) else {
+                return;
+            };
+            let Some(layout) =
+                cabi_layout_for(size.saturating_add(VM_CABI_ALLOC_HEADER_BYTES), align)
+            else {
+                return;
+            };
+            alloc::alloc::dealloc(base, layout);
+            return;
+        }
         let meta = CABI_ALLOC_TABLE.lock().remove(&(ptr as usize));
         let Some(meta) = meta else {
             return;
@@ -816,6 +893,19 @@ pub mod cabi {
         if size == 0 {
             trueos_cabi_free(ptr);
             return core::ptr::null_mut();
+        }
+
+        if cabi_vm_alloc_active() {
+            let Some((old_size, _, _)) = cabi_vm_meta(ptr) else {
+                return core::ptr::null_mut();
+            };
+            let new_ptr = cabi_vm_alloc(size);
+            if new_ptr.is_null() {
+                return core::ptr::null_mut();
+            }
+            core::ptr::copy_nonoverlapping(ptr, new_ptr, core::cmp::min(old_size, size));
+            trueos_cabi_free(ptr);
+            return new_ptr;
         }
 
         let old_meta = {
@@ -841,6 +931,9 @@ pub mod cabi {
     pub unsafe extern "C" fn trueos_cabi_malloc_usable_size(ptr: *const u8) -> usize {
         if ptr.is_null() {
             return 0;
+        }
+        if cabi_vm_alloc_active() {
+            return cabi_vm_meta(ptr).map(|(size, _, _)| size).unwrap_or(0);
         }
         CABI_ALLOC_TABLE
             .lock()
@@ -1130,8 +1223,9 @@ pub mod cabi {
         spin::Mutex::new(VecDeque::new());
     static ASYNC_SVG_REQS: spin::Mutex<VecDeque<AsyncSvgUploadReq>> =
         spin::Mutex::new(VecDeque::new());
-    static TEXTURE_UPLOAD_REQS: spin::Mutex<VecDeque<TextureWorkReq>> =
-        spin::Mutex::new(VecDeque::new());
+    const TEXTURE_UPLOAD_RING_CAP: usize = 64;
+    static TEXTURE_UPLOAD_REQS: spin::Mutex<TextureWorkRing> =
+        spin::Mutex::new(TextureWorkRing::new());
     static ASYNC_PNG_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
     static ASYNC_JPEG_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
     static ASYNC_SVG_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
@@ -1201,6 +1295,76 @@ pub mod cabi {
         DrawRgb(TextureDrawRgbReq),
         DrawMandelbrot(TextureDrawMandelbrotReq),
         DrawTex(TextureDrawTexReq),
+    }
+
+    struct TextureWorkRing {
+        slots: [Option<TextureWorkReq>; TEXTURE_UPLOAD_RING_CAP],
+        head: usize,
+        len: usize,
+    }
+
+    impl TextureWorkRing {
+        const fn new() -> Self {
+            Self {
+                slots: [const { None }; TEXTURE_UPLOAD_RING_CAP],
+                head: 0,
+                len: 0,
+            }
+        }
+
+        fn index(&self, offset: usize) -> usize {
+            (self.head + offset) % TEXTURE_UPLOAD_RING_CAP
+        }
+
+        fn replace_matching<F>(
+            &mut self,
+            req: TextureWorkReq,
+            mut matches: F,
+        ) -> Result<(), TextureWorkReq>
+        where
+            F: FnMut(&TextureWorkReq) -> bool,
+        {
+            for offset in 0..self.len {
+                let idx = self.index(offset);
+                if let Some(existing) = self.slots[idx].as_ref() {
+                    if matches(existing) {
+                        self.slots[idx] = Some(req);
+                        return Ok(());
+                    }
+                }
+            }
+            Err(req)
+        }
+
+        fn push_back(&mut self, req: TextureWorkReq) -> Result<(), TextureWorkReq> {
+            if self.len == TEXTURE_UPLOAD_RING_CAP {
+                return Err(req);
+            }
+            let idx = self.index(self.len);
+            self.slots[idx] = Some(req);
+            self.len += 1;
+            Ok(())
+        }
+
+        fn pop_front(&mut self) -> Option<TextureWorkReq> {
+            if self.len == 0 {
+                return None;
+            }
+            let req = self.slots[self.head].take();
+            self.head = self.index(1);
+            self.len -= 1;
+            req
+        }
+
+        fn push_front(&mut self, req: TextureWorkReq) -> Result<(), TextureWorkReq> {
+            if self.len == TEXTURE_UPLOAD_RING_CAP {
+                return Err(req);
+            }
+            self.head = (self.head + TEXTURE_UPLOAD_RING_CAP - 1) % TEXTURE_UPLOAD_RING_CAP;
+            self.slots[self.head] = Some(req);
+            self.len += 1;
+            Ok(())
+        }
     }
 
     const MAX_REASONABLE_TEX_ID: u32 = 100_000;
@@ -1291,6 +1455,14 @@ pub mod cabi {
         ASYNC_SVG_WAIT.notify_one();
     }
 
+    fn notify_texture_work_available() {
+        if crate::hv::current_vm_id_by_lapic_low().is_some() {
+            TEXTURE_UPLOAD_WAIT.notify_guest_signal();
+        } else {
+            TEXTURE_UPLOAD_WAIT.notify_one();
+        }
+    }
+
     fn take_async_png_upload() -> Option<AsyncPngUploadReq> {
         ASYNC_PNG_REQS.lock().pop_front()
     }
@@ -1304,63 +1476,83 @@ pub mod cabi {
     }
 
     fn enqueue_texture_upload(req: TextureUploadReq) {
+        let tex_id = req.tex_id;
         let mut queue = TEXTURE_UPLOAD_REQS.lock();
-        if let Some(existing) = queue.iter_mut().find(|entry| match entry {
-            TextureWorkReq::Upload(existing) => existing.tex_id == req.tex_id,
+        let work = TextureWorkReq::Upload(req);
+        let work = match queue.replace_matching(work, |entry| match entry {
+            TextureWorkReq::Upload(existing) => existing.tex_id == tex_id,
             TextureWorkReq::DrawRgb(_) => false,
             TextureWorkReq::DrawMandelbrot(_) => false,
             TextureWorkReq::DrawTex(_) => false,
         }) {
-            *existing = TextureWorkReq::Upload(req);
-        } else {
-            queue.push_back(TextureWorkReq::Upload(req));
-        }
-        TEXTURE_UPLOAD_WAIT.notify_one();
+            Ok(()) => {
+                notify_texture_work_available();
+                return;
+            }
+            Err(work) => work,
+        };
+        let _ = queue.push_back(work).map_err(drop_texture_work_overflow);
+        notify_texture_work_available();
     }
 
     fn enqueue_texture_draw_rgb(req: TextureDrawRgbReq) {
+        let tex_id = req.tex_id;
         let mut queue = TEXTURE_UPLOAD_REQS.lock();
-        if let Some(existing) = queue.iter_mut().find(|entry| match entry {
+        let work = TextureWorkReq::DrawRgb(req);
+        let work = match queue.replace_matching(work, |entry| match entry {
             TextureWorkReq::Upload(_) => false,
-            TextureWorkReq::DrawRgb(existing) => existing.tex_id == req.tex_id,
+            TextureWorkReq::DrawRgb(existing) => existing.tex_id == tex_id,
             TextureWorkReq::DrawMandelbrot(_) => false,
             TextureWorkReq::DrawTex(_) => false,
         }) {
-            *existing = TextureWorkReq::DrawRgb(req);
-        } else {
-            queue.push_back(TextureWorkReq::DrawRgb(req));
-        }
-        TEXTURE_UPLOAD_WAIT.notify_one();
+            Ok(()) => {
+                notify_texture_work_available();
+                return;
+            }
+            Err(work) => work,
+        };
+        let _ = queue.push_back(work).map_err(drop_texture_work_overflow);
+        notify_texture_work_available();
     }
 
     fn enqueue_texture_draw_mandelbrot(req: TextureDrawMandelbrotReq) {
+        let tex_id = req.tex_id;
         let mut queue = TEXTURE_UPLOAD_REQS.lock();
-        if let Some(existing) = queue.iter_mut().find(|entry| match entry {
+        let work = TextureWorkReq::DrawMandelbrot(req);
+        let work = match queue.replace_matching(work, |entry| match entry {
             TextureWorkReq::Upload(_) => false,
             TextureWorkReq::DrawRgb(_) => false,
-            TextureWorkReq::DrawMandelbrot(existing) => existing.tex_id == req.tex_id,
+            TextureWorkReq::DrawMandelbrot(existing) => existing.tex_id == tex_id,
             TextureWorkReq::DrawTex(_) => false,
         }) {
-            *existing = TextureWorkReq::DrawMandelbrot(req);
-        } else {
-            queue.push_back(TextureWorkReq::DrawMandelbrot(req));
-        }
-        TEXTURE_UPLOAD_WAIT.notify_one();
+            Ok(()) => {
+                notify_texture_work_available();
+                return;
+            }
+            Err(work) => work,
+        };
+        let _ = queue.push_back(work).map_err(drop_texture_work_overflow);
+        notify_texture_work_available();
     }
 
     fn enqueue_texture_draw_tex(req: TextureDrawTexReq) {
+        let target_tex_id = req.target_tex_id;
         let mut queue = TEXTURE_UPLOAD_REQS.lock();
-        if let Some(existing) = queue.iter_mut().find(|entry| match entry {
+        let work = TextureWorkReq::DrawTex(req);
+        let work = match queue.replace_matching(work, |entry| match entry {
             TextureWorkReq::Upload(_) => false,
             TextureWorkReq::DrawRgb(_) => false,
             TextureWorkReq::DrawMandelbrot(_) => false,
-            TextureWorkReq::DrawTex(existing) => existing.target_tex_id == req.target_tex_id,
+            TextureWorkReq::DrawTex(existing) => existing.target_tex_id == target_tex_id,
         }) {
-            *existing = TextureWorkReq::DrawTex(req);
-        } else {
-            queue.push_back(TextureWorkReq::DrawTex(req));
-        }
-        TEXTURE_UPLOAD_WAIT.notify_one();
+            Ok(()) => {
+                notify_texture_work_available();
+                return;
+            }
+            Err(work) => work,
+        };
+        let _ = queue.push_back(work).map_err(drop_texture_work_overflow);
+        notify_texture_work_available();
     }
 
     fn take_texture_upload() -> Option<TextureWorkReq> {
@@ -1368,8 +1560,25 @@ pub mod cabi {
     }
 
     fn requeue_texture_work_front(req: TextureWorkReq) {
-        TEXTURE_UPLOAD_REQS.lock().push_front(req);
-        TEXTURE_UPLOAD_WAIT.notify_one();
+        let _ = TEXTURE_UPLOAD_REQS
+            .lock()
+            .push_front(req)
+            .map_err(drop_texture_work_overflow);
+        notify_texture_work_available();
+    }
+
+    fn drop_texture_work_overflow(req: TextureWorkReq) {
+        let kind = match req {
+            TextureWorkReq::Upload(_) => "upload",
+            TextureWorkReq::DrawRgb(_) => "draw-rgb",
+            TextureWorkReq::DrawMandelbrot(_) => "draw-mandelbrot",
+            TextureWorkReq::DrawTex(_) => "draw-tex",
+        };
+        crate::log!(
+            "gfx-cabi: texture work queue full cap={} dropped={}\n",
+            TEXTURE_UPLOAD_RING_CAP,
+            kind
+        );
     }
 
     fn queue_texture_rgba_upload_owned(
@@ -4222,6 +4431,39 @@ pub mod cabi {
         sample_kind: TexSampleKind,
         call_init: bool,
     ) -> i32 {
+        if crate::hv::current_vm_id_by_lapic_low().is_some() {
+            let reason = if call_init {
+                "vm-upload-rgba"
+            } else {
+                "vm-upload-rgba-no-init"
+            };
+            if let Some(rgba) = owned_rgba.take() {
+                if queue_texture_rgba_upload_owned(
+                    tex_id,
+                    width,
+                    height,
+                    region,
+                    rgba,
+                    sample_kind,
+                    0,
+                    reason,
+                    false,
+                ) {
+                    return 0;
+                }
+                return -4;
+            }
+            return queue_texture_rgba_upload_from_ptr(
+                tex_id,
+                width,
+                height,
+                region,
+                data_ptr,
+                data_len,
+                sample_kind,
+                reason,
+            );
+        }
         if call_init {
             crate::gfx::init(None);
         }
@@ -4423,6 +4665,60 @@ pub mod cabi {
         ret
     }
 
+    fn queue_texture_rgba_upload_from_ptr(
+        tex_id: u32,
+        width: u32,
+        height: u32,
+        region: Option<ImageRegion>,
+        data_ptr: *const u8,
+        data_len: usize,
+        sample_kind: TexSampleKind,
+        repaint_reason: &'static str,
+    ) -> i32 {
+        if tex_id == 0 || width == 0 || height == 0 {
+            return -1;
+        }
+        if data_ptr.is_null() {
+            return -2;
+        }
+        let expected = match region {
+            Some(region) => {
+                if region.width == 0
+                    || region.height == 0
+                    || region.x.saturating_add(region.width) > width
+                    || region.y.saturating_add(region.height) > height
+                {
+                    return -1;
+                }
+                (region.width as usize)
+                    .saturating_mul(region.height as usize)
+                    .saturating_mul(4)
+            }
+            None => (width as usize)
+                .saturating_mul(height as usize)
+                .saturating_mul(4),
+        };
+        if data_len < expected {
+            return -3;
+        }
+        let data = unsafe { core::slice::from_raw_parts(data_ptr, expected) };
+        if queue_texture_rgba_upload_owned(
+            tex_id,
+            width,
+            height,
+            region,
+            data.to_vec(),
+            sample_kind,
+            0,
+            repaint_reason,
+            false,
+        ) {
+            0
+        } else {
+            -4
+        }
+    }
+
     #[inline]
     fn upload_texture_rgba_inner(
         tex_id: u32,
@@ -4433,6 +4729,18 @@ pub mod cabi {
         data_len: usize,
         sample_kind: TexSampleKind,
     ) -> i32 {
+        if crate::hv::current_vm_id_by_lapic_low().is_some() {
+            return queue_texture_rgba_upload_from_ptr(
+                tex_id,
+                width,
+                height,
+                region,
+                data_ptr,
+                data_len,
+                sample_kind,
+                "vm-upload-rgba",
+            );
+        }
         upload_texture_rgba_inner_impl(
             tex_id,
             width,

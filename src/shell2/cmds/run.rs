@@ -141,6 +141,16 @@ fn print_archive_table(io: &'static dyn ShellBackend2, archives: &[ArchiveEntry]
     table.emit_footer(|text| print_shell_line(io, text));
 }
 
+pub(crate) fn print_app_archive_table(io: &'static dyn ShellBackend2) {
+    match archive_entries() {
+        Ok(archives) if archives.is_empty() => {
+            print_shell_line(io, "apps: no .bp or .vm modules available");
+        }
+        Ok(archives) => print_archive_table(io, archives.as_slice()),
+        Err(err) => print_shell_line(io, alloc::format!("apps: {}", err).as_str()),
+    }
+}
+
 fn enqueue_request(request: AppVmLaunchRequest) {
     APP_VM_RUN_QUEUE.lock().push_back(request);
 }
@@ -394,6 +404,27 @@ fn submit_archive_entry(
             enqueue_blueprint_bytes(target, entry.archive.clone(), module_bytes.to_vec(), app_args);
         }
     }
+}
+
+pub(crate) fn submit_archive_id(
+    io: &'static dyn ShellBackend2,
+    id: usize,
+    app_args: Vec<String>,
+) -> bool {
+    let archives = match archive_entries() {
+        Ok(archives) => archives,
+        Err(err) => {
+            print_shell_line(io, alloc::format!("apps: {}", err).as_str());
+            return false;
+        }
+    };
+    let Some(archive) = id.checked_sub(1).and_then(|idx| archives.get(idx)) else {
+        print_shell_line(io, "apps: unknown app id");
+        print_archive_table(io, archives.as_slice());
+        return false;
+    };
+    submit_archive_entry(io, archive, app_args);
+    true
 }
 
 pub(crate) fn try_parse(

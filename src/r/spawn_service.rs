@@ -38,6 +38,7 @@ define_started_flags!(
     SNTP_SERVICE_STARTED,
     NET_SHELL_STARTED,
     AI_QJS_ONESHOT_STARTED,
+    LOCALCODER_WEB_STARTED,
     HTTP_TRUEOSFS_STARTED,
     HYPER_HTTP1_PROBE_STARTED,
     WS_TIME_STARTED,
@@ -408,6 +409,10 @@ fn spawn_logtotcp(spawner: Spawner) -> SpawnAttempt {
 fn spawn_ai_qjs_oneshot(spawner: Spawner) -> SpawnAttempt {
     let _ = spawner;
     SpawnAttempt::Skipped
+}
+
+fn spawn_localcoder_web(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::tst_localcoder_web::localcoder_web_task())
 }
 
 fn spawn_html_demo(spawner: Spawner) -> SpawnAttempt {
@@ -1001,8 +1006,10 @@ fn spawn_atomic_bomb(spawner: Spawner) -> SpawnAttempt {
 
 const NET_CONFIGURED_AND_ROOT_READY: u32 =
     crate::r::readiness::NET_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
-const HTTP_TRUEOSFS_READY: u32 =
-    NET_CONFIGURED_AND_ROOT_READY | crate::r::readiness::HTTP_TRUEOSFS_LISTENING;
+const HTTP_TRUEOSFS_READY: u32 = crate::r::readiness::HTTP_TRUEOSFS_LISTENING;
+const HYPER_HTTP1_PROBE_READY: u32 = crate::r::readiness::NET_CONFIGURED
+    | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
+    | crate::r::readiness::HTTP_TRUEOSFS_LISTENING;
 const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_CONFIGURED
     | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::QJS_ASYNC_FS_READY;
@@ -1011,7 +1018,7 @@ const UI2_DEMO_READY: u32 =
 const WS_BOOT_READY: u32 = crate::r::readiness::NET_GATEWAY_REACHABLE
     | crate::r::readiness::TLS_SOCKET_SERVICE_READY
     | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
-static TASKS: [TaskSpec; 68] = [
+static TASKS: [TaskSpec; 69] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
         "globalog-persist-once",
@@ -1067,6 +1074,12 @@ static TASKS: [TaskSpec; 68] = [
         &AI_QJS_ONESHOT_STARTED,
         spawn_ai_qjs_oneshot,
     ),
+    TaskSpec::enabled(
+        "localcoder-web",
+        crate::r::readiness::NET_CONFIGURED,
+        &LOCALCODER_WEB_STARTED,
+        spawn_localcoder_web,
+    ),
     TaskSpec::disabled("html-demo", 0, &HTML_DEMO_STARTED, spawn_html_demo),
     TaskSpec::enabled(
         "http-trueosfs",
@@ -1076,7 +1089,7 @@ static TASKS: [TaskSpec; 68] = [
     ),
     TaskSpec::enabled(
         "hyper-http1-probe",
-        HTTP_TRUEOSFS_READY,
+        HYPER_HTTP1_PROBE_READY,
         &HYPER_HTTP1_PROBE_STARTED,
         spawn_hyper_http1_probe,
     ),
@@ -1129,7 +1142,8 @@ static TASKS: [TaskSpec; 68] = [
         &INTEL_CURSOR_SERVICE_STARTED,
         spawn_intel_cursor_service_task,
     ),
-    TaskSpec::disabled(
+    TaskSpec::enabled_on(
+        SpawnPlacement::Worker,
         "intel-hda-probe",
         crate::r::readiness::INTEL_HDA_READY,
         &INTEL_HDA_PROBE_STARTED,
