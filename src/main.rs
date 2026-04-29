@@ -90,8 +90,6 @@ mod tst_html_demo;
 mod tst_html_shack;
 #[path = "tst/http_trueosfs.rs"]
 mod tst_http_trueosfs;
-#[path = "tst/localcoder_web.rs"]
-mod tst_localcoder_web;
 #[path = "tst/net_tcp_shell.rs"]
 mod tst_net_tcp_shell;
 #[path = "tst/smtp_smoke.rs"]

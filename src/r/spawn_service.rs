@@ -39,7 +39,6 @@ define_started_flags!(
     SNTP_SERVICE_STARTED,
     NET_SHELL_STARTED,
     AI_QJS_ONESHOT_STARTED,
-    LOCALCODER_WEB_STARTED,
     HTTP_TRUEOSFS_STARTED,
     HYPER_HTTP1_PROBE_STARTED,
     WS_TIME_STARTED,
@@ -415,10 +414,6 @@ fn spawn_logtotcp(spawner: Spawner) -> SpawnAttempt {
 fn spawn_ai_qjs_oneshot(spawner: Spawner) -> SpawnAttempt {
     let _ = spawner;
     SpawnAttempt::Skipped
-}
-
-fn spawn_localcoder_web(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::tst_localcoder_web::localcoder_web_task())
 }
 
 fn spawn_html_demo(spawner: Spawner) -> SpawnAttempt {
@@ -1030,7 +1025,7 @@ const UI2_DEMO_READY: u32 =
 const WS_BOOT_READY: u32 = crate::r::readiness::NET_GATEWAY_REACHABLE
     | crate::r::readiness::TLS_SOCKET_SERVICE_READY
     | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
-static TASKS: [TaskSpec; 71] = [
+static TASKS: [TaskSpec; 70] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
         "globalog-persist-once",
@@ -1091,12 +1086,6 @@ static TASKS: [TaskSpec; 71] = [
         AI_QJS_ONESHOT_READY,
         &AI_QJS_ONESHOT_STARTED,
         spawn_ai_qjs_oneshot,
-    ),
-    TaskSpec::enabled(
-        "localcoder-web",
-        crate::r::readiness::NET_ANY_CONFIGURED,
-        &LOCALCODER_WEB_STARTED,
-        spawn_localcoder_web,
     ),
     TaskSpec::disabled("html-demo", 0, &HTML_DEMO_STARTED, spawn_html_demo),
     TaskSpec::enabled(

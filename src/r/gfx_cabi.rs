@@ -2566,21 +2566,6 @@ pub mod cabi {
 
     pub use io_cursor::*;
 
-    pub fn localcoder_cursor_viewport_dimensions_px() -> (i32, i32) {
-        io_cursor::input_cursor_viewport_dimensions_px()
-    }
-
-    pub unsafe fn localcoder_input_write_cursor(
-        slot_id: u32,
-        x: i32,
-        y: i32,
-        buttons_down: u32,
-        wheel: i32,
-        flags: u32,
-    ) -> i32 {
-        io_cursor::trueos_cabi_input_write_cursor(slot_id, x, y, buttons_down, wheel, flags)
-    }
-
     impl GfxCabiState {
         const fn new() -> Self {
             Self {

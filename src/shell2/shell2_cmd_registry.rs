@@ -39,7 +39,6 @@ const TOOL_JSON_EMAIL: &str = r#"{"type":"object","properties":{"mode":{"type":"
 const TOOL_JSON_ETC: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["ample","go","go2","insane"],"description":"etc subcommand to run."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_FILE: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","format","ramdisc"],"description":"file action to run."},"disk_id":{"type":"string","description":"Disk id string for action=format."},"size":{"type":"string","description":"Optional ramdisc size like 512MB or 1GiB for action=ramdisc."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_HV: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["status","run","pause","stop","preserve"],"description":"HV subcommand to run."},"id":{"type":"integer","minimum":1,"description":"Blueprint archive id for run, or VM id for pause/stop/preserve."},"args":{"type":"array","items":{"type":"string"},"description":"CLI arguments passed to the selected blueprint when subcommand=run."}},"required":["subcommand"],"additionalProperties":false}"#;
-const TOOL_JSON_LC: &str = r#"{"type":"object","properties":{"prompt":{"type":"string","description":"Optional prompt text to pass into the dedicated localcoder task."},"continue":{"type":"boolean","description":"Continue the latest localcoder session."},"new":{"type":"boolean","description":"Start a fresh localcoder session."},"resume":{"type":"string","description":"Resume the specified localcoder session id."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_NET: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["icmp","irc","nic","hostname"],"description":"net subcommand to run."},"target":{"type":"string","description":"Target host for net icmp."},"selector":{"type":"string","description":"Optional NIC selector like index, vid:pid, or bb:dd.f."},"host":{"type":"string","description":"Host for net irc."},"channel":{"type":"string","description":"Optional channel like #trueos for net irc."},"name":{"type":"string","description":"Optional hostname for net hostname."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_PROBE: &str = r#"{"type":"object","properties":{"domain":{"type":"string","enum":["usb","nvme"],"description":"Probe domain."},"action":{"type":"string","enum":["status","snapshot","kick","rebind","recover","fix","mysterybox","probe","flr"],"description":"Action inside the selected domain."},"controller":{"type":"integer","minimum":0,"description":"Optional controller index for usb snapshot/kick/rebind/recover/fix/mysterybox."},"pci":{"type":"string","description":"PCI BDF like 00:1f.0 for nvme flr."}},"required":["domain","action"],"additionalProperties":false}"#;
 const TOOL_JSON_SET: &str = r#"{"type":"object","properties":{"width":{"type":"integer","minimum":50,"maximum":500,"description":"Shell line width."}},"required":["width"],"additionalProperties":false}"#;
@@ -70,11 +69,6 @@ fn dispatch_hv(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) ->
 fn dispatch_install(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
     super::cmds::install::try_parse(spawner, io, &mut args)
-}
-
-fn dispatch_lc(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    let mut args = rest.split_whitespace();
-    super::cmds::lc::try_parse(spawner, io, &mut args)
 }
 
 fn dispatch_set(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -206,14 +200,6 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         handler: dispatch_install,
         tool_description: None,
         tool_parameters_json: None,
-    },
-    BuiltinShell2CmdEntry {
-        name: "lc",
-        mode: "cmd",
-        color: Some((80, 200, 120)),
-        handler: dispatch_lc,
-        tool_description: Some("Start the dedicated shell2 localcoder worker task."),
-        tool_parameters_json: Some(TOOL_JSON_LC),
     },
     BuiltinShell2CmdEntry {
         name: "net",
