@@ -101,11 +101,8 @@ png = { path = "vendor/png-0.18.1" }
 fdeflate = { path = "vendor/fdeflate-0.3.7" }
 simd-adler32 = { path = "vendor/simd-adler32-0.3.8" }
 num-traits = { path = "vendor/num-traits-0.2.19" }
-http = { path = "vendor/http-1.4.0" }
-http-body = { path = "vendor/http-body-1.0.1" }
 usvg = { path = "vendor/usvg-0.45.1" }
 imagesize = { path = "vendor/imagesize-0.13.0" }
-httparse = { path = "vendor/httparse-1.10.1" }
 hyper = { path = "vendor/hyper-1.9.0" }
 itoa = { path = "vendor/itoa-1.0.18" }
 kurbo = { path = "vendor/kurbo-0.11.3" }
