@@ -1395,8 +1395,53 @@ struct SocketRecord {
     socket: SocketHandle,
     tcp_tx: VecDeque<u8>,
     tcp_connect: bool,
+    tcp_local_port: Option<u16>,
+    tcp_remote_v4: Option<NetEndpoint>,
+    tcp_remote_v6: Option<NetEndpointV6>,
     established: bool,
     last_tcp_state: Option<tcp::State>,
+}
+
+fn log_tcp_connect_record_state(prefix: &str, rec: &SocketRecord, state: tcp::State) {
+    if let Some(remote) = rec.tcp_remote_v4 {
+        let local_port = rec.tcp_local_port.unwrap_or(0);
+        crate::log!(
+            "{} owner={} handle={} local_port={} remote={}.{}.{}.{}:{} state={:?}\n",
+            prefix,
+            rec.owner,
+            rec.handle.0,
+            local_port,
+            remote.addr[0],
+            remote.addr[1],
+            remote.addr[2],
+            remote.addr[3],
+            remote.port,
+            state
+        );
+    } else if let Some(remote) = rec.tcp_remote_v6 {
+        let local_port = rec.tcp_local_port.unwrap_or(0);
+        crate::log!(
+            "{} owner={} handle={} local_port={} remote6={:02x}{:02x}:{:02x}{:02x}:...:{} state={:?}\n",
+            prefix,
+            rec.owner,
+            rec.handle.0,
+            local_port,
+            remote.addr[0],
+            remote.addr[1],
+            remote.addr[2],
+            remote.addr[3],
+            remote.port,
+            state
+        );
+    } else {
+        crate::log!(
+            "{} owner={} handle={} state={:?}\n",
+            prefix,
+            rec.owner,
+            rec.handle.0,
+            state
+        );
+    }
 }
 
 struct IcmpInflight {
@@ -2088,6 +2133,9 @@ impl NetService {
             socket: sh,
             tcp_tx: VecDeque::new(),
             tcp_connect: false,
+            tcp_local_port: None,
+            tcp_remote_v4: None,
+            tcp_remote_v6: None,
             established: false,
             last_tcp_state: None,
         });
@@ -2115,6 +2163,9 @@ impl NetService {
             socket: sh,
             tcp_tx: VecDeque::new(),
             tcp_connect: false,
+            tcp_local_port: Some(port),
+            tcp_remote_v4: None,
+            tcp_remote_v6: None,
             established: false,
             last_tcp_state: Some(initial_state),
         });
@@ -2143,6 +2194,7 @@ impl NetService {
         let local = IpEndpoint::new(IpAddress::Ipv4(local_ip), local_port);
         let remote_addr = remote.addr;
         let remote_port = remote.port;
+        let record_remote = remote;
         let remote =
             IpEndpoint::new(IpAddress::Ipv4(Ipv4Address::from_octets(remote_addr)), remote_port);
 
@@ -2174,9 +2226,19 @@ impl NetService {
         let sh = self.sockets.add(socket);
         if crate::logflag::NET_LOG_TCP_CONNECT_STATES {
             crate::log!(
-                "net: tcp connect-open owner={} handle={} state={:?}\n",
+                "net: tcp connect-open owner={} handle={} local={}.{}.{}.{}:{} remote={}.{}.{}.{}:{} state={:?}\n",
                 owner,
                 handle.0,
+                local_octets[0],
+                local_octets[1],
+                local_octets[2],
+                local_octets[3],
+                local_port,
+                remote_addr[0],
+                remote_addr[1],
+                remote_addr[2],
+                remote_addr[3],
+                remote_port,
                 initial_state
             );
         }
@@ -2187,6 +2249,9 @@ impl NetService {
             socket: sh,
             tcp_tx: VecDeque::new(),
             tcp_connect: true,
+            tcp_local_port: Some(local_port),
+            tcp_remote_v4: Some(record_remote),
+            tcp_remote_v6: None,
             established: false,
             last_tcp_state: Some(initial_state),
         });
@@ -2214,6 +2279,7 @@ impl NetService {
         let local = IpEndpoint::new(IpAddress::Ipv6(local_ip), local_port);
 
         let remote_ip = Ipv6Address::from_octets(remote.addr);
+        let record_remote = remote;
         let remote = IpEndpoint::new(IpAddress::Ipv6(remote_ip), remote.port);
 
         crate::log!(
@@ -2235,9 +2301,15 @@ impl NetService {
         let sh = self.sockets.add(socket);
         if crate::logflag::NET_LOG_TCP_CONNECT_STATES {
             crate::log!(
-                "net: tcp connect-open owner={} handle={} state={:?}\n",
+                "net: tcp6 connect-open owner={} handle={} local_port={} remote6={:02x}{:02x}:{:02x}{:02x}:...:{} state={:?}\n",
                 owner,
                 handle.0,
+                local_port,
+                record_remote.addr[0],
+                record_remote.addr[1],
+                record_remote.addr[2],
+                record_remote.addr[3],
+                record_remote.port,
                 initial_state
             );
         }
@@ -2248,6 +2320,9 @@ impl NetService {
             socket: sh,
             tcp_tx: VecDeque::new(),
             tcp_connect: true,
+            tcp_local_port: Some(local_port),
+            tcp_remote_v4: None,
+            tcp_remote_v6: Some(record_remote),
             established: false,
             last_tcp_state: Some(initial_state),
         });
@@ -3451,12 +3526,7 @@ impl NetService {
                 if crate::logflag::NET_LOG_TCP_FLOW
                     || (crate::logflag::NET_LOG_TCP_CONNECT_STATES && self.records[idx].tcp_connect)
                 {
-                    crate::log!(
-                        "net: tcp state owner={} handle={} state={:?}\n",
-                        owner,
-                        handle.0,
-                        state
-                    );
+                    log_tcp_connect_record_state("net: tcp state", &self.records[idx], state);
                 }
             }
 
@@ -3516,9 +3586,16 @@ impl NetService {
             }
             self.records[idx].established = true;
             let ok = push_event(owner, NetEvent::TcpEstablished { handle });
-            if crate::logflag::NET_LOG_TCP_FLOW {
+            if crate::logflag::NET_LOG_TCP_FLOW
+                || (crate::logflag::NET_LOG_TCP_CONNECT_STATES && self.records[idx].tcp_connect)
+            {
+                log_tcp_connect_record_state(
+                    "net: tcp established event",
+                    &self.records[idx],
+                    state,
+                );
                 crate::log!(
-                    "net: tcp established event owner={} handle={} queued={}\n",
+                    "net: tcp established queued owner={} handle={} queued={}\n",
                     owner,
                     handle.0,
                     ok
@@ -4299,6 +4376,17 @@ fn service_tick_once(device_index: usize) -> bool {
     svc.poll_sockets();
 
     busy
+}
+
+/// Synchronously advance the primary network service once.
+///
+/// This is used by std/Mio/Tokio compatibility shims that may be running inside
+/// a current-thread runtime during early boot. In that window the async
+/// `net_service_task` can be delayed by other bringup work, but socket clients
+/// still need submitted VNet commands to be drained promptly.
+pub fn service_tick_primary_once() -> bool {
+    let idx = crate::net::primary_device_index();
+    service_tick_once(idx)
 }
 
 /// Per-NIC RX poll loop.

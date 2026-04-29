@@ -215,11 +215,27 @@ impl MioCompat {
 
     fn submit(&mut self, cmd: api::Command) -> Result<(), i32> {
         self.ensure_net()?;
-        self.net
+        let result = self
+            .net
             .as_ref()
             .unwrap()
             .submit(cmd)
-            .map_err(|_| STATUS_WOULD_BLOCK)
+            .map_err(|_| STATUS_WOULD_BLOCK);
+
+        if result.is_ok() {
+            self.kick_net();
+        }
+
+        result
+    }
+
+    fn kick_net(&mut self) {
+        for _ in 0..4 {
+            if !crate::net::adapter::service_tick_primary_once() {
+                break;
+            }
+        }
+        self.pump();
     }
 
     fn pump(&mut self) {
@@ -415,6 +431,7 @@ impl MioCompat {
         let mut spins = 0u64;
 
         loop {
+            self.kick_net();
             self.pump();
 
             let mut written = 0usize;

@@ -265,27 +265,52 @@ struct DnsCacheEntry {
 static DNS_CACHE: Mutex<HVec<DnsCacheEntry, DNS_CACHE_CAP>> = Mutex::new(HVec::new());
 
 static SECURE_DNS_STUB_LOGGED: AtomicU32 = AtomicU32::new(0);
-static DOH_NOT_READY_LOGGED: AtomicU32 = AtomicU32::new(0);
-static DOT_NOT_READY_LOGGED: AtomicU32 = AtomicU32::new(0);
 static CLASSIC_DNS_DISABLED_LOGGED: AtomicU32 = AtomicU32::new(0);
 
 #[derive(Clone, Copy, Debug)]
+enum SecureEndpointAddr {
+    V4([u8; 4]),
+    V6([u8; 16]),
+}
+
+#[derive(Clone, Copy, Debug)]
 struct DotEndpoint {
-    addr: [u8; 4],
+    addr: SecureEndpointAddr,
     tls_name: &'static str,
 }
 
-const PUBLIC_DOT_ENDPOINTS: [DotEndpoint; 3] = [
+const PUBLIC_DOT_ENDPOINTS: [DotEndpoint; 6] = [
     DotEndpoint {
-        addr: [1, 1, 1, 1],
+        addr: SecureEndpointAddr::V4([1, 1, 1, 1]),
         tls_name: "cloudflare-dns.com",
     },
     DotEndpoint {
-        addr: [8, 8, 8, 8],
+        addr: SecureEndpointAddr::V4([8, 8, 8, 8]),
         tls_name: "dns.google",
     },
     DotEndpoint {
-        addr: [9, 9, 9, 9],
+        addr: SecureEndpointAddr::V4([9, 9, 9, 9]),
+        tls_name: "dns.quad9.net",
+    },
+    DotEndpoint {
+        addr: SecureEndpointAddr::V6([
+            0x26, 0x06, 0x47, 0x00, 0x47, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x11, 0x11,
+        ]),
+        tls_name: "cloudflare-dns.com",
+    },
+    DotEndpoint {
+        addr: SecureEndpointAddr::V6([
+            0x20, 0x01, 0x48, 0x60, 0x48, 0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x88, 0x88,
+        ]),
+        tls_name: "dns.google",
+    },
+    DotEndpoint {
+        addr: SecureEndpointAddr::V6([
+            0x26, 0x20, 0x00, 0xfe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0xfe,
+        ]),
         tls_name: "dns.quad9.net",
     },
 ];
@@ -483,8 +508,7 @@ async fn resolve_ipv4_secure_transport(
 }
 
 fn dot_runtime_ready() -> bool {
-    crate::r::readiness::is_set(crate::r::readiness::NET_SOCKET_READY)
-        && tokio::runtime::Handle::try_current().is_ok()
+    tokio::runtime::Handle::try_current().is_ok()
 }
 
 pub(crate) fn dot_resolver_config() -> hickory_resolver::config::ResolverConfig {
@@ -494,8 +518,16 @@ pub(crate) fn dot_resolver_config() -> hickory_resolver::config::ResolverConfig 
 
     let mut servers = Vec::new();
     for endpoint in PUBLIC_DOT_ENDPOINTS.iter() {
+        let socket_addr = match endpoint.addr {
+            SecureEndpointAddr::V4(addr) => {
+                SocketAddr::from((IpAddr::V4(Ipv4Addr::from(addr)), DOT_PORT))
+            }
+            SecureEndpointAddr::V6(addr) => {
+                SocketAddr::from((IpAddr::V6(std::net::Ipv6Addr::from(addr)), DOT_PORT))
+            }
+        };
         let mut server = NameServerConfig::new(
-            SocketAddr::from((IpAddr::V4(Ipv4Addr::from(endpoint.addr)), DOT_PORT)),
+            socket_addr,
             DnsProtocol::Tls,
         );
         server.tls_dns_name = Some(String::from(endpoint.tls_name));
@@ -512,16 +544,20 @@ async fn resolve_ipv4_dot_for_device(
     cfg: DnsConfig,
 ) -> Result<[u8; 4], DnsError> {
     if !dot_runtime_ready() {
-        if DOT_NOT_READY_LOGGED
-            .compare_exchange(0, 1, Ordering::Relaxed, Ordering::Relaxed)
-            .is_ok()
-        {
-            crate::log!(
-                "dns: dot skipped until tokio runtime and NET_SOCKET_READY are available\n"
-            );
-        }
+        crate::log!(
+            "dns: dot skipped; tokio runtime unavailable host={} dev={} qtype=A\n",
+            host_trimmed,
+            dev_idx
+        );
         return Err(DnsError::NoAnswer);
     }
+
+    crate::log!(
+        "dns: dot enter host={} dev={} qtype=A timeout_ms={}\n",
+        host_trimmed,
+        dev_idx,
+        cfg.timeout_ms.max(cfg.resend_ms).max(100)
+    );
 
     use hickory_resolver::config::{LookupIpStrategy, ResolveHosts, ResolverOpts};
     use hickory_resolver::name_server::TokioConnectionProvider;
@@ -542,6 +578,7 @@ async fn resolve_ipv4_dot_for_device(
     )
     .with_options(opts)
     .build();
+    crate::log!("dns: dot resolver built host={} dev={} qtype=A\n", host_trimmed, dev_idx);
 
     match tokio::time::timeout(
         core::time::Duration::from_millis(query_timeout_ms),
@@ -569,7 +606,15 @@ async fn resolve_ipv4_dot_for_device(
             );
             Err(DnsError::NoAnswer)
         }
-        Err(_) => Err(DnsError::Timeout),
+        Err(_) => {
+            crate::log!(
+                "dns: dot lookup timeout host={} dev={} qtype=A timeout_ms={}\n",
+                host_trimmed,
+                dev_idx,
+                query_timeout_ms
+            );
+            Err(DnsError::Timeout)
+        }
     }
 }
 
@@ -579,16 +624,20 @@ async fn resolve_ipv6_dot_for_device(
     cfg: DnsConfig,
 ) -> Result<[u8; 16], DnsError> {
     if !dot_runtime_ready() {
-        if DOT_NOT_READY_LOGGED
-            .compare_exchange(0, 1, Ordering::Relaxed, Ordering::Relaxed)
-            .is_ok()
-        {
-            crate::log!(
-                "dns: dot skipped until tokio runtime and NET_SOCKET_READY are available\n"
-            );
-        }
+        crate::log!(
+            "dns: dot skipped; tokio runtime unavailable host={} dev={} qtype=AAAA\n",
+            host_trimmed,
+            dev_idx
+        );
         return Err(DnsError::NoAnswer);
     }
+
+    crate::log!(
+        "dns: dot enter host={} dev={} qtype=AAAA timeout_ms={}\n",
+        host_trimmed,
+        dev_idx,
+        cfg.timeout_ms.max(cfg.resend_ms).max(100)
+    );
 
     use hickory_resolver::config::{LookupIpStrategy, ResolveHosts, ResolverOpts};
     use hickory_resolver::name_server::TokioConnectionProvider;
@@ -609,6 +658,11 @@ async fn resolve_ipv6_dot_for_device(
     )
     .with_options(opts)
     .build();
+    crate::log!(
+        "dns: dot resolver built host={} dev={} qtype=AAAA\n",
+        host_trimmed,
+        dev_idx
+    );
 
     match tokio::time::timeout(
         core::time::Duration::from_millis(query_timeout_ms),
@@ -636,37 +690,68 @@ async fn resolve_ipv6_dot_for_device(
             );
             Err(DnsError::NoAnswer)
         }
-        Err(_) => Err(DnsError::Timeout),
+        Err(_) => {
+            crate::log!(
+                "dns: dot lookup timeout host={} dev={} qtype=AAAA timeout_ms={}\n",
+                host_trimmed,
+                dev_idx,
+                query_timeout_ms
+            );
+            Err(DnsError::Timeout)
+        }
     }
 }
 
 struct DohEndpoint {
-    ip: [u8; 4],
+    addr: SecureEndpointAddr,
     tls_name: &'static str,
     path: &'static str,
 }
 
-const PUBLIC_DOH_ENDPOINTS_V4: [DohEndpoint; 3] = [
+const PUBLIC_DOH_ENDPOINTS: [DohEndpoint; 6] = [
     DohEndpoint {
-        ip: [1, 1, 1, 1],
+        addr: SecureEndpointAddr::V4([1, 1, 1, 1]),
         tls_name: "cloudflare-dns.com",
         path: "/dns-query",
     },
     DohEndpoint {
-        ip: [8, 8, 8, 8],
+        addr: SecureEndpointAddr::V4([8, 8, 8, 8]),
         tls_name: "dns.google",
         path: "/dns-query",
     },
     DohEndpoint {
-        ip: [9, 9, 9, 9],
+        addr: SecureEndpointAddr::V4([9, 9, 9, 9]),
+        tls_name: "dns.quad9.net",
+        path: "/dns-query",
+    },
+    DohEndpoint {
+        addr: SecureEndpointAddr::V6([
+            0x26, 0x06, 0x47, 0x00, 0x47, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x11, 0x11,
+        ]),
+        tls_name: "cloudflare-dns.com",
+        path: "/dns-query",
+    },
+    DohEndpoint {
+        addr: SecureEndpointAddr::V6([
+            0x20, 0x01, 0x48, 0x60, 0x48, 0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x88, 0x88,
+        ]),
+        tls_name: "dns.google",
+        path: "/dns-query",
+    },
+    DohEndpoint {
+        addr: SecureEndpointAddr::V6([
+            0x26, 0x20, 0x00, 0xfe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0xfe,
+        ]),
         tls_name: "dns.quad9.net",
         path: "/dns-query",
     },
 ];
 
 fn doh_runtime_ready() -> bool {
-    crate::r::readiness::is_set(crate::r::readiness::NET_SOCKET_READY)
-        && tokio::runtime::Handle::try_current().is_ok()
+    tokio::runtime::Handle::try_current().is_ok()
 }
 
 pub(crate) fn doh_resolver_config() -> hickory_resolver::config::ResolverConfig {
@@ -675,9 +760,17 @@ pub(crate) fn doh_resolver_config() -> hickory_resolver::config::ResolverConfig 
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
     let mut servers = Vec::new();
-    for endpoint in PUBLIC_DOH_ENDPOINTS_V4.iter() {
+    for endpoint in PUBLIC_DOH_ENDPOINTS.iter() {
+        let socket_addr = match endpoint.addr {
+            SecureEndpointAddr::V4(addr) => {
+                SocketAddr::from((IpAddr::V4(Ipv4Addr::from(addr)), 443))
+            }
+            SecureEndpointAddr::V6(addr) => {
+                SocketAddr::from((IpAddr::V6(std::net::Ipv6Addr::from(addr)), 443))
+            }
+        };
         let mut server = NameServerConfig::new(
-            SocketAddr::from((IpAddr::V4(Ipv4Addr::from(endpoint.ip)), 443)),
+            socket_addr,
             DnsProtocol::Https,
         );
         server.tls_dns_name = Some(String::from(endpoint.tls_name));
@@ -695,16 +788,20 @@ async fn resolve_ipv4_doh_for_device(
     cfg: DnsConfig,
 ) -> Result<[u8; 4], DnsError> {
     if !doh_runtime_ready() {
-        if DOH_NOT_READY_LOGGED
-            .compare_exchange(0, 1, Ordering::Relaxed, Ordering::Relaxed)
-            .is_ok()
-        {
-            crate::log!(
-                "dns: doh skipped until tokio runtime and NET_SOCKET_READY are available\n"
-            );
-        }
+        crate::log!(
+            "dns: doh skipped; tokio runtime unavailable host={} dev={} qtype=A\n",
+            host_trimmed,
+            dev_idx
+        );
         return Err(DnsError::NoAnswer);
     }
+
+    crate::log!(
+        "dns: doh enter host={} dev={} qtype=A timeout_ms={}\n",
+        host_trimmed,
+        dev_idx,
+        cfg.timeout_ms.max(cfg.resend_ms).max(100)
+    );
 
     use hickory_resolver::config::{LookupIpStrategy, ResolveHosts, ResolverOpts};
     use hickory_resolver::name_server::TokioConnectionProvider;
@@ -725,6 +822,7 @@ async fn resolve_ipv4_doh_for_device(
     )
     .with_options(opts)
     .build();
+    crate::log!("dns: doh resolver built host={} dev={} qtype=A\n", host_trimmed, dev_idx);
 
     match tokio::time::timeout(
         core::time::Duration::from_millis(query_timeout_ms),
@@ -752,7 +850,15 @@ async fn resolve_ipv4_doh_for_device(
             );
             Err(DnsError::NoAnswer)
         }
-        Err(_) => Err(DnsError::Timeout),
+        Err(_) => {
+            crate::log!(
+                "dns: doh lookup timeout host={} dev={} qtype=A timeout_ms={}\n",
+                host_trimmed,
+                dev_idx,
+                query_timeout_ms
+            );
+            Err(DnsError::Timeout)
+        }
     }
 }
 
@@ -762,16 +868,20 @@ async fn resolve_ipv6_doh_for_device(
     cfg: DnsConfig,
 ) -> Result<[u8; 16], DnsError> {
     if !doh_runtime_ready() {
-        if DOH_NOT_READY_LOGGED
-            .compare_exchange(0, 1, Ordering::Relaxed, Ordering::Relaxed)
-            .is_ok()
-        {
-            crate::log!(
-                "dns: doh skipped until tokio runtime and NET_SOCKET_READY are available\n"
-            );
-        }
+        crate::log!(
+            "dns: doh skipped; tokio runtime unavailable host={} dev={} qtype=AAAA\n",
+            host_trimmed,
+            dev_idx
+        );
         return Err(DnsError::NoAnswer);
     }
+
+    crate::log!(
+        "dns: doh enter host={} dev={} qtype=AAAA timeout_ms={}\n",
+        host_trimmed,
+        dev_idx,
+        cfg.timeout_ms.max(cfg.resend_ms).max(100)
+    );
 
     use hickory_resolver::config::{LookupIpStrategy, ResolveHosts, ResolverOpts};
     use hickory_resolver::name_server::TokioConnectionProvider;
@@ -792,6 +902,11 @@ async fn resolve_ipv6_doh_for_device(
     )
     .with_options(opts)
     .build();
+    crate::log!(
+        "dns: doh resolver built host={} dev={} qtype=AAAA\n",
+        host_trimmed,
+        dev_idx
+    );
 
     match tokio::time::timeout(
         core::time::Duration::from_millis(query_timeout_ms),
@@ -819,7 +934,15 @@ async fn resolve_ipv6_doh_for_device(
             );
             Err(DnsError::NoAnswer)
         }
-        Err(_) => Err(DnsError::Timeout),
+        Err(_) => {
+            crate::log!(
+                "dns: doh lookup timeout host={} dev={} qtype=AAAA timeout_ms={}\n",
+                host_trimmed,
+                dev_idx,
+                query_timeout_ms
+            );
+            Err(DnsError::Timeout)
+        }
     }
 }
 
