@@ -1,13 +1,18 @@
 extern crate alloc;
 extern crate std;
 
-use alloc::{format, string::String, vec::Vec};
+use alloc::{boxed::Box, format, string::String, vec::Vec};
 use core::sync::atomic::{AtomicU32, Ordering};
 
+use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use heapless::Vec as HVec;
 use spin::Mutex;
+use v::vnet;
 
+use crate::net::tls::{TlsClientConfig, TlsRoots};
+use crate::net::tls_socket::{TlsCommand, TlsEvent, TlsTimeouts, register_tls_app_queues};
 use crate::r::net::NetProfile;
+use crate::r::net::Queue;
 
 #[derive(Clone, Copy, Debug)]
 pub enum DnsError {
@@ -245,6 +250,9 @@ pub const PUBLIC_DNS_SERVERS_V6: [[u8; 16]; 3] = [
 ];
 
 const DOT_PORT: u16 = 853;
+const DOH_PORT: u16 = 443;
+const DNS_QTYPE_A: u16 = 1;
+const DNS_QTYPE_AAAA: u16 = 28;
 
 const DNS_CACHE_CAP: usize = 8;
 // Keep this short; it's mainly to avoid repeated lookups during module loading.
@@ -264,6 +272,8 @@ static DNS_CACHE: Mutex<HVec<DnsCacheEntry, DNS_CACHE_CAP>> = Mutex::new(HVec::n
 
 static SECURE_DNS_STUB_LOGGED: AtomicU32 = AtomicU32::new(0);
 static CLASSIC_DNS_DISABLED_LOGGED: AtomicU32 = AtomicU32::new(0);
+static DNS_TLS_SEQ: AtomicU32 = AtomicU32::new(1);
+static DNS_WIRE_QUERY_SEQ: AtomicU32 = AtomicU32::new(1);
 
 #[derive(Clone, Copy, Debug)]
 enum SecureEndpointAddr {
@@ -292,22 +302,22 @@ const PUBLIC_DOT_ENDPOINTS: [DotEndpoint; 6] = [
     },
     DotEndpoint {
         addr: SecureEndpointAddr::V6([
-            0x26, 0x06, 0x47, 0x00, 0x47, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x11, 0x11,
+            0x26, 0x06, 0x47, 0x00, 0x47, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x11, 0x11,
         ]),
         tls_name: "cloudflare-dns.com",
     },
     DotEndpoint {
         addr: SecureEndpointAddr::V6([
-            0x20, 0x01, 0x48, 0x60, 0x48, 0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x88, 0x88,
+            0x20, 0x01, 0x48, 0x60, 0x48, 0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x88, 0x88,
         ]),
         tls_name: "dns.google",
     },
     DotEndpoint {
         addr: SecureEndpointAddr::V6([
-            0x26, 0x20, 0x00, 0xfe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0xfe,
+            0x26, 0x20, 0x00, 0xfe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0xfe,
         ]),
         tls_name: "dns.quad9.net",
     },
@@ -430,11 +440,7 @@ fn parse_dns_fs_cache_line(line: &str) -> Option<(usize, &str, [u8; 4])> {
 }
 
 async fn dns_fs_cache_lookup(dev_idx: usize, host_trimmed: &str) -> Option<[u8; 4]> {
-    crate::log!(
-        "dns: fs-cache lookup begin host={} dev={}\n",
-        host_trimmed,
-        dev_idx
-    );
+    crate::log!("dns: fs-cache lookup begin host={} dev={}\n", host_trimmed, dev_idx);
     let disk = crate::r::fs::trueosfs::primary_root_handle()?;
     let bytes = crate::r::fs::trueosfs::file_out_if_index_ready_async(disk, DNS_FS_CACHE_PATH)
         .await
@@ -516,199 +522,152 @@ async fn resolve_ipv4_secure_transport(
     }
 }
 
-fn dot_runtime_ready() -> bool {
-    tokio::runtime::Handle::try_current().is_ok()
+fn dns_tls_owner(prefix: &str, dev_idx: usize) -> &'static str {
+    let seq = DNS_TLS_SEQ.fetch_add(1, Ordering::Relaxed);
+    let selector = if let Some((bus, slot, func)) = crate::net::bdf_at(dev_idx) {
+        format!("{:02x}:{:02x}.{}", bus, slot, func)
+    } else if let Some((vid, pid)) = crate::net::pci_id_at(dev_idx) {
+        format!("{:04x}:{:04x}", vid, pid)
+    } else {
+        format!("{}", dev_idx)
+    };
+    Box::leak(format!("{}-{}@{}", prefix, seq, selector).into_boxed_str())
 }
 
-pub(crate) fn dot_resolver_config() -> hickory_resolver::config::ResolverConfig {
-    use hickory_resolver::config::{NameServerConfig, ResolverConfig};
-    use hickory_resolver::proto::xfer::Protocol as DnsProtocol;
-    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+fn dns_tls_queues(owner: &'static str) -> (&'static Queue<TlsCommand>, &'static Queue<TlsEvent>) {
+    let cmds_name = Box::leak(format!("{}-tls-cmd", owner).into_boxed_str());
+    let evts_name = Box::leak(format!("{}-tls-evt", owner).into_boxed_str());
+    let cmds = Queue::new_leaked(cmds_name, 256);
+    let events = Queue::new_leaked(evts_name, 1024);
+    register_tls_app_queues(owner, cmds, events);
+    (cmds, events)
+}
 
-    let mut servers = Vec::new();
-    for endpoint in PUBLIC_DOT_ENDPOINTS.iter() {
-        let socket_addr = match endpoint.addr {
-            SecureEndpointAddr::V4(addr) => {
-                SocketAddr::from((IpAddr::V4(Ipv4Addr::from(addr)), DOT_PORT))
-            }
-            SecureEndpointAddr::V6(addr) => {
-                SocketAddr::from((IpAddr::V6(std::net::Ipv6Addr::from(addr)), DOT_PORT))
-            }
-        };
-        let mut server = NameServerConfig::new(
-            socket_addr,
-            DnsProtocol::Tls,
-        );
-        server.tls_dns_name = Some(String::from(endpoint.tls_name));
-        server.trust_negative_responses = false;
-        servers.push(server);
+fn build_dns_query(host_trimmed: &str, qtype: u16) -> Result<(u16, Vec<u8>), DnsError> {
+    let id = DNS_WIRE_QUERY_SEQ.fetch_add(1, Ordering::Relaxed) as u16;
+    let mut out = Vec::with_capacity(host_trimmed.len() + 18);
+    out.extend_from_slice(&id.to_be_bytes());
+    out.extend_from_slice(&0x0100u16.to_be_bytes()); // recursion desired
+    out.extend_from_slice(&1u16.to_be_bytes());
+    out.extend_from_slice(&0u16.to_be_bytes());
+    out.extend_from_slice(&0u16.to_be_bytes());
+    out.extend_from_slice(&0u16.to_be_bytes());
+
+    let mut total = 0usize;
+    for label in host_trimmed.trim_end_matches('.').split('.') {
+        if label.is_empty() || label.len() > 63 {
+            return Err(DnsError::BadName);
+        }
+        total = total.saturating_add(label.len() + 1);
+        if total > 254 {
+            return Err(DnsError::BadName);
+        }
+        out.push(label.len() as u8);
+        out.extend_from_slice(label.as_bytes());
     }
-
-    ResolverConfig::from_parts(None, Vec::new(), servers)
+    out.push(0);
+    out.extend_from_slice(&qtype.to_be_bytes());
+    out.extend_from_slice(&1u16.to_be_bytes()); // IN
+    Ok((id, out))
 }
 
-async fn resolve_ipv4_dot_for_device(
-    dev_idx: usize,
-    host_trimmed: &str,
-    cfg: DnsConfig,
-) -> Result<[u8; 4], DnsError> {
-    if !dot_runtime_ready() {
-        crate::log!(
-            "dns: dot skipped; tokio runtime unavailable host={} dev={} qtype=A\n",
-            host_trimmed,
-            dev_idx
-        );
+fn skip_dns_name(buf: &[u8], mut pos: usize) -> Option<usize> {
+    let mut jumps = 0usize;
+    loop {
+        let len = *buf.get(pos)?;
+        if len & 0xC0 == 0xC0 {
+            let _ = *buf.get(pos + 1)?;
+            return Some(pos + 2);
+        }
+        if len == 0 {
+            return Some(pos + 1);
+        }
+        if len & 0xC0 != 0 || len > 63 {
+            return None;
+        }
+        pos = pos.checked_add(1 + len as usize)?;
+        jumps += 1;
+        if jumps > 128 || pos > buf.len() {
+            return None;
+        }
+    }
+}
+
+fn parse_dns_response_addr<const N: usize>(
+    buf: &[u8],
+    expected_id: u16,
+    qtype: u16,
+) -> Result<[u8; N], DnsError> {
+    if buf.len() < 12 {
         return Err(DnsError::NoAnswer);
     }
-
-    crate::log!(
-        "dns: dot enter host={} dev={} qtype=A timeout_ms={}\n",
-        host_trimmed,
-        dev_idx,
-        cfg.timeout_ms.max(cfg.resend_ms).max(100)
-    );
-
-    use hickory_resolver::config::{LookupIpStrategy, ResolveHosts, ResolverOpts};
-    use hickory_resolver::name_server::TokioConnectionProvider;
-
-    let mut opts = ResolverOpts::default();
-    let query_timeout_ms = cfg.timeout_ms.max(cfg.resend_ms).max(100);
-    opts.timeout = core::time::Duration::from_millis(query_timeout_ms);
-    opts.attempts = 1;
-    opts.ip_strategy = LookupIpStrategy::Ipv4Only;
-    opts.num_concurrent_reqs = 1;
-    opts.use_hosts_file = ResolveHosts::Never;
-    opts.try_tcp_on_error = false;
-    opts.os_port_selection = true;
-
-    let resolver = hickory_resolver::Resolver::builder_with_config(
-        dot_resolver_config(),
-        TokioConnectionProvider::default(),
-    )
-    .with_options(opts)
-    .build();
-    crate::log!("dns: dot resolver built host={} dev={} qtype=A\n", host_trimmed, dev_idx);
-
-    match tokio::time::timeout(
-        core::time::Duration::from_millis(query_timeout_ms),
-        resolver.ipv4_lookup(host_trimmed),
-    )
-    .await
-    {
-        Ok(Ok(lookup)) => {
-            if let Some(ip) = lookup.iter().next() {
-                return Ok(ip.octets());
-            }
-            crate::log!(
-                "dns: dot lookup empty host={} dev={} qtype=A\n",
-                host_trimmed,
-                dev_idx
-            );
-            Err(DnsError::NoAnswer)
-        }
-        Ok(Err(err)) => {
-            crate::log!(
-                "dns: dot lookup failed host={} dev={} err={}\n",
-                host_trimmed,
-                dev_idx,
-                err
-            );
-            Err(DnsError::NoAnswer)
-        }
-        Err(_) => {
-            crate::log!(
-                "dns: dot lookup timeout host={} dev={} qtype=A timeout_ms={}\n",
-                host_trimmed,
-                dev_idx,
-                query_timeout_ms
-            );
-            Err(DnsError::Timeout)
-        }
-    }
-}
-
-async fn resolve_ipv6_dot_for_device(
-    dev_idx: usize,
-    host_trimmed: &str,
-    cfg: DnsConfig,
-) -> Result<[u8; 16], DnsError> {
-    if !dot_runtime_ready() {
-        crate::log!(
-            "dns: dot skipped; tokio runtime unavailable host={} dev={} qtype=AAAA\n",
-            host_trimmed,
-            dev_idx
-        );
+    let id = u16::from_be_bytes([buf[0], buf[1]]);
+    if id != expected_id {
         return Err(DnsError::NoAnswer);
     }
-
-    crate::log!(
-        "dns: dot enter host={} dev={} qtype=AAAA timeout_ms={}\n",
-        host_trimmed,
-        dev_idx,
-        cfg.timeout_ms.max(cfg.resend_ms).max(100)
-    );
-
-    use hickory_resolver::config::{LookupIpStrategy, ResolveHosts, ResolverOpts};
-    use hickory_resolver::name_server::TokioConnectionProvider;
-
-    let mut opts = ResolverOpts::default();
-    let query_timeout_ms = cfg.timeout_ms.max(cfg.resend_ms).max(100);
-    opts.timeout = core::time::Duration::from_millis(query_timeout_ms);
-    opts.attempts = 1;
-    opts.ip_strategy = LookupIpStrategy::Ipv6Only;
-    opts.num_concurrent_reqs = 1;
-    opts.use_hosts_file = ResolveHosts::Never;
-    opts.try_tcp_on_error = false;
-    opts.os_port_selection = true;
-
-    let resolver = hickory_resolver::Resolver::builder_with_config(
-        dot_resolver_config(),
-        TokioConnectionProvider::default(),
-    )
-    .with_options(opts)
-    .build();
-    crate::log!(
-        "dns: dot resolver built host={} dev={} qtype=AAAA\n",
-        host_trimmed,
-        dev_idx
-    );
-
-    match tokio::time::timeout(
-        core::time::Duration::from_millis(query_timeout_ms),
-        resolver.ipv6_lookup(host_trimmed),
-    )
-    .await
-    {
-        Ok(Ok(lookup)) => {
-            if let Some(ip) = lookup.iter().next() {
-                return Ok(ip.octets());
-            }
-            crate::log!(
-                "dns: dot lookup empty host={} dev={} qtype=AAAA\n",
-                host_trimmed,
-                dev_idx
-            );
-            Err(DnsError::NoAnswer)
-        }
-        Ok(Err(err)) => {
-            crate::log!(
-                "dns: dot ipv6 lookup failed host={} dev={} err={}\n",
-                host_trimmed,
-                dev_idx,
-                err
-            );
-            Err(DnsError::NoAnswer)
-        }
-        Err(_) => {
-            crate::log!(
-                "dns: dot lookup timeout host={} dev={} qtype=AAAA timeout_ms={}\n",
-                host_trimmed,
-                dev_idx,
-                query_timeout_ms
-            );
-            Err(DnsError::Timeout)
+    let flags = u16::from_be_bytes([buf[2], buf[3]]);
+    if flags & 0x8000 == 0 || flags & 0x000f != 0 {
+        return Err(DnsError::NoAnswer);
+    }
+    let qd = u16::from_be_bytes([buf[4], buf[5]]) as usize;
+    let an = u16::from_be_bytes([buf[6], buf[7]]) as usize;
+    let mut pos = 12usize;
+    for _ in 0..qd {
+        pos = skip_dns_name(buf, pos).ok_or(DnsError::NoAnswer)?;
+        pos = pos.checked_add(4).ok_or(DnsError::NoAnswer)?;
+        if pos > buf.len() {
+            return Err(DnsError::NoAnswer);
         }
     }
+    for _ in 0..an {
+        pos = skip_dns_name(buf, pos).ok_or(DnsError::NoAnswer)?;
+        if pos + 10 > buf.len() {
+            return Err(DnsError::NoAnswer);
+        }
+        let typ = u16::from_be_bytes([buf[pos], buf[pos + 1]]);
+        let class = u16::from_be_bytes([buf[pos + 2], buf[pos + 3]]);
+        let rdlen = u16::from_be_bytes([buf[pos + 8], buf[pos + 9]]) as usize;
+        pos += 10;
+        if pos + rdlen > buf.len() {
+            return Err(DnsError::NoAnswer);
+        }
+        if typ == qtype && class == 1 && rdlen == N {
+            let mut out = [0u8; N];
+            out.copy_from_slice(&buf[pos..pos + rdlen]);
+            return Ok(out);
+        }
+        pos += rdlen;
+    }
+    Err(DnsError::NoAnswer)
+}
+
+fn base64url_no_pad(input: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut out = String::new();
+    let mut i = 0usize;
+    while i + 3 <= input.len() {
+        let n = ((input[i] as u32) << 16) | ((input[i + 1] as u32) << 8) | input[i + 2] as u32;
+        out.push(TABLE[((n >> 18) & 0x3f) as usize] as char);
+        out.push(TABLE[((n >> 12) & 0x3f) as usize] as char);
+        out.push(TABLE[((n >> 6) & 0x3f) as usize] as char);
+        out.push(TABLE[(n & 0x3f) as usize] as char);
+        i += 3;
+    }
+    match input.len() - i {
+        1 => {
+            let n = (input[i] as u32) << 16;
+            out.push(TABLE[((n >> 18) & 0x3f) as usize] as char);
+            out.push(TABLE[((n >> 12) & 0x3f) as usize] as char);
+        }
+        2 => {
+            let n = ((input[i] as u32) << 16) | ((input[i + 1] as u32) << 8);
+            out.push(TABLE[((n >> 18) & 0x3f) as usize] as char);
+            out.push(TABLE[((n >> 12) & 0x3f) as usize] as char);
+            out.push(TABLE[((n >> 6) & 0x3f) as usize] as char);
+        }
+        _ => {}
+    }
+    out
 }
 
 struct DohEndpoint {
@@ -735,60 +694,309 @@ const PUBLIC_DOH_ENDPOINTS: [DohEndpoint; 6] = [
     },
     DohEndpoint {
         addr: SecureEndpointAddr::V6([
-            0x26, 0x06, 0x47, 0x00, 0x47, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x11, 0x11,
+            0x26, 0x06, 0x47, 0x00, 0x47, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x11, 0x11,
         ]),
         tls_name: "cloudflare-dns.com",
         path: "/dns-query",
     },
     DohEndpoint {
         addr: SecureEndpointAddr::V6([
-            0x20, 0x01, 0x48, 0x60, 0x48, 0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x88, 0x88,
+            0x20, 0x01, 0x48, 0x60, 0x48, 0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x88, 0x88,
         ]),
         tls_name: "dns.google",
         path: "/dns-query",
     },
     DohEndpoint {
         addr: SecureEndpointAddr::V6([
-            0x26, 0x20, 0x00, 0xfe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0xfe,
+            0x26, 0x20, 0x00, 0xfe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0xfe,
         ]),
         tls_name: "dns.quad9.net",
         path: "/dns-query",
     },
 ];
 
-fn doh_runtime_ready() -> bool {
-    tokio::runtime::Handle::try_current().is_ok()
+#[derive(Clone, Copy)]
+enum SecureTlsReply {
+    HttpBody,
+    DotMessage,
 }
 
-pub(crate) fn doh_resolver_config() -> hickory_resolver::config::ResolverConfig {
-    use hickory_resolver::config::{NameServerConfig, ResolverConfig};
-    use hickory_resolver::proto::xfer::Protocol as DnsProtocol;
-    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+fn find_header_end(buf: &[u8]) -> Option<usize> {
+    buf.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4)
+}
 
-    let mut servers = Vec::new();
-    for endpoint in PUBLIC_DOH_ENDPOINTS.iter() {
-        let socket_addr = match endpoint.addr {
-            SecureEndpointAddr::V4(addr) => {
-                SocketAddr::from((IpAddr::V4(Ipv4Addr::from(addr)), 443))
-            }
-            SecureEndpointAddr::V6(addr) => {
-                SocketAddr::from((IpAddr::V6(std::net::Ipv6Addr::from(addr)), 443))
-            }
+fn header_value_usize(headers: &[u8], name: &[u8]) -> Option<usize> {
+    for line in headers.split(|b| *b == b'\n') {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        let Some(colon) = line.iter().position(|b| *b == b':') else {
+            continue;
         };
-        let mut server = NameServerConfig::new(
-            socket_addr,
-            DnsProtocol::Https,
-        );
-        server.tls_dns_name = Some(String::from(endpoint.tls_name));
-        server.http_endpoint = Some(String::from(endpoint.path));
-        server.trust_negative_responses = false;
-        servers.push(server);
+        let key = &line[..colon];
+        let value = &line[colon + 1..];
+        if key.eq_ignore_ascii_case(name) {
+            let s = core::str::from_utf8(value).ok()?.trim();
+            return s.parse::<usize>().ok();
+        }
+    }
+    None
+}
+
+fn tls_reply_complete(
+    buf: &[u8],
+    mode: SecureTlsReply,
+    closed: bool,
+) -> Option<Result<Vec<u8>, DnsError>> {
+    match mode {
+        SecureTlsReply::DotMessage => {
+            if buf.len() < 2 {
+                return None;
+            }
+            let len = u16::from_be_bytes([buf[0], buf[1]]) as usize;
+            if buf.len() >= len + 2 {
+                return Some(Ok(buf[2..2 + len].to_vec()));
+            }
+            None
+        }
+        SecureTlsReply::HttpBody => {
+            let header_end = find_header_end(buf)?;
+            let headers = &buf[..header_end];
+            let body = &buf[header_end..];
+            if !(headers.starts_with(b"HTTP/1.1 2") || headers.starts_with(b"HTTP/1.0 2")) {
+                return Some(Err(DnsError::NoAnswer));
+            }
+            if let Some(len) = header_value_usize(headers, b"Content-Length") {
+                if body.len() >= len {
+                    return Some(Ok(body[..len].to_vec()));
+                }
+                return None;
+            }
+            if closed {
+                return Some(Ok(body.to_vec()));
+            }
+            None
+        }
+    }
+}
+
+async fn dns_tls_exchange_v4(
+    prefix: &str,
+    dev_idx: usize,
+    addr: [u8; 4],
+    port: u16,
+    server_name: &'static str,
+    payload: Vec<u8>,
+    timeout_ms: u64,
+    mode: SecureTlsReply,
+) -> Result<Vec<u8>, DnsError> {
+    let owner = dns_tls_owner(prefix, dev_idx);
+    let (cmds, events) = dns_tls_queues(owner);
+    let cfg = if port == DOH_PORT {
+        TlsClientConfig::new().with_alpn_protocols(&[b"http/1.1"])
+    } else {
+        TlsClientConfig::new()
+    };
+    let roots = TlsRoots::mozilla();
+    let timeouts = TlsTimeouts {
+        connect_ms: (timeout_ms as u32).max(1000),
+        tls_ms: (timeout_ms as u32).max(1000),
+        idle_ms: (timeout_ms as u32).max(1000),
+    };
+    cmds.push(TlsCommand::OpenTcpConnect {
+        remote: vnet::EndpointV4 { addr, port },
+        server_name,
+        cfg,
+        roots,
+        timeouts,
+    })
+    .map_err(|_| DnsError::NoAnswer)?;
+
+    let deadline = Instant::now() + EmbassyDuration::from_millis(timeout_ms);
+    let mut handle = None;
+    let mut sent = false;
+    let mut rx = Vec::new();
+
+    while Instant::now() < deadline {
+        for ev in events.drain(256) {
+            match ev {
+                TlsEvent::Opened { handle: h } => handle = Some(h),
+                TlsEvent::Connected { handle: h } if Some(h) == handle => {
+                    if !sent {
+                        let _ = cmds.push(TlsCommand::Send {
+                            handle: h,
+                            data: payload.clone(),
+                        });
+                        sent = true;
+                    }
+                }
+                TlsEvent::Data { handle: h, data } if Some(h) == handle => {
+                    rx.extend_from_slice(&data);
+                    if let Some(done) = tls_reply_complete(&rx, mode, false) {
+                        if let Some(h) = handle {
+                            let _ = cmds.push(TlsCommand::Close { handle: h });
+                        }
+                        return done;
+                    }
+                }
+                TlsEvent::Closed { handle: h } if Some(h) == handle => {
+                    if let Some(done) = tls_reply_complete(&rx, mode, true) {
+                        return done;
+                    }
+                    return Err(DnsError::NoAnswer);
+                }
+                TlsEvent::Error { msg } => {
+                    crate::log!("dns: secure tls-socket error owner={} msg={}\n", owner, msg);
+                    return Err(DnsError::NoAnswer);
+                }
+                TlsEvent::TlsError { err } => {
+                    crate::log!("dns: secure tls error owner={} err={:?}\n", owner, err);
+                    return Err(DnsError::NoAnswer);
+                }
+                _ => {}
+            }
+        }
+        Timer::after(EmbassyDuration::from_millis(5)).await;
     }
 
-    ResolverConfig::from_parts(None, Vec::new(), servers)
+    if let Some(h) = handle {
+        let _ = cmds.push(TlsCommand::Close { handle: h });
+    }
+    Err(DnsError::Timeout)
+}
+
+async fn resolve_doh_addr<const N: usize>(
+    dev_idx: usize,
+    host_trimmed: &str,
+    cfg: DnsConfig,
+    qtype: u16,
+    qtype_label: &'static str,
+) -> Result<[u8; N], DnsError> {
+    let timeout_ms = cfg.timeout_ms.max(cfg.resend_ms).max(100);
+    crate::log!(
+        "dns: doh enter host={} dev={} qtype={} timeout_ms={} tls=trueos\n",
+        host_trimmed,
+        dev_idx,
+        qtype_label,
+        timeout_ms
+    );
+
+    let (query_id, query) = build_dns_query(host_trimmed, qtype)?;
+    let encoded = base64url_no_pad(&query);
+    for endpoint in PUBLIC_DOH_ENDPOINTS.iter() {
+        let SecureEndpointAddr::V4(addr) = endpoint.addr else {
+            continue;
+        };
+        let path = format!("{}?dns={}", endpoint.path, encoded);
+        let req = format!(
+            "GET {} HTTP/1.1\r\nHost: {}\r\nAccept: application/dns-message\r\nConnection: close\r\nUser-Agent: TRUEOS/secure-dns\r\n\r\n",
+            path,
+            endpoint.tls_name
+        )
+        .into_bytes();
+        match dns_tls_exchange_v4(
+            "dns-doh",
+            dev_idx,
+            addr,
+            DOH_PORT,
+            endpoint.tls_name,
+            req,
+            timeout_ms,
+            SecureTlsReply::HttpBody,
+        )
+        .await
+        {
+            Ok(body) => match parse_dns_response_addr::<N>(&body, query_id, qtype) {
+                Ok(ip) => return Ok(ip),
+                Err(err) => {
+                    crate::log!(
+                        "dns: doh response parse failed host={} dev={} server={} qtype={} err={:?}\n",
+                        host_trimmed,
+                        dev_idx,
+                        endpoint.tls_name,
+                        qtype_label,
+                        err
+                    );
+                }
+            },
+            Err(err) => {
+                crate::log!(
+                    "dns: doh endpoint failed host={} dev={} server={} qtype={} err={:?}\n",
+                    host_trimmed,
+                    dev_idx,
+                    endpoint.tls_name,
+                    qtype_label,
+                    err
+                );
+            }
+        }
+    }
+    Err(DnsError::NoAnswer)
+}
+
+async fn resolve_dot_addr<const N: usize>(
+    dev_idx: usize,
+    host_trimmed: &str,
+    cfg: DnsConfig,
+    qtype: u16,
+    qtype_label: &'static str,
+) -> Result<[u8; N], DnsError> {
+    let timeout_ms = cfg.timeout_ms.max(cfg.resend_ms).max(100);
+    crate::log!(
+        "dns: dot enter host={} dev={} qtype={} timeout_ms={} tls=trueos\n",
+        host_trimmed,
+        dev_idx,
+        qtype_label,
+        timeout_ms
+    );
+
+    let (query_id, query) = build_dns_query(host_trimmed, qtype)?;
+    let mut payload = Vec::with_capacity(query.len() + 2);
+    payload.extend_from_slice(&(query.len() as u16).to_be_bytes());
+    payload.extend_from_slice(&query);
+    for endpoint in PUBLIC_DOT_ENDPOINTS.iter() {
+        let SecureEndpointAddr::V4(addr) = endpoint.addr else {
+            continue;
+        };
+        match dns_tls_exchange_v4(
+            "dns-dot",
+            dev_idx,
+            addr,
+            DOT_PORT,
+            endpoint.tls_name,
+            payload.clone(),
+            timeout_ms,
+            SecureTlsReply::DotMessage,
+        )
+        .await
+        {
+            Ok(body) => match parse_dns_response_addr::<N>(&body, query_id, qtype) {
+                Ok(ip) => return Ok(ip),
+                Err(err) => {
+                    crate::log!(
+                        "dns: dot response parse failed host={} dev={} server={} qtype={} err={:?}\n",
+                        host_trimmed,
+                        dev_idx,
+                        endpoint.tls_name,
+                        qtype_label,
+                        err
+                    );
+                }
+            },
+            Err(err) => {
+                crate::log!(
+                    "dns: dot endpoint failed host={} dev={} server={} qtype={} err={:?}\n",
+                    host_trimmed,
+                    dev_idx,
+                    endpoint.tls_name,
+                    qtype_label,
+                    err
+                );
+            }
+        }
+    }
+    Err(DnsError::NoAnswer)
 }
 
 async fn resolve_ipv4_doh_for_device(
@@ -796,79 +1004,7 @@ async fn resolve_ipv4_doh_for_device(
     host_trimmed: &str,
     cfg: DnsConfig,
 ) -> Result<[u8; 4], DnsError> {
-    if !doh_runtime_ready() {
-        crate::log!(
-            "dns: doh skipped; tokio runtime unavailable host={} dev={} qtype=A\n",
-            host_trimmed,
-            dev_idx
-        );
-        return Err(DnsError::NoAnswer);
-    }
-
-    crate::log!(
-        "dns: doh enter host={} dev={} qtype=A timeout_ms={}\n",
-        host_trimmed,
-        dev_idx,
-        cfg.timeout_ms.max(cfg.resend_ms).max(100)
-    );
-
-    use hickory_resolver::config::{LookupIpStrategy, ResolveHosts, ResolverOpts};
-    use hickory_resolver::name_server::TokioConnectionProvider;
-
-    let mut opts = ResolverOpts::default();
-    let query_timeout_ms = cfg.timeout_ms.max(cfg.resend_ms).max(100);
-    opts.timeout = core::time::Duration::from_millis(query_timeout_ms);
-    opts.attempts = 1;
-    opts.ip_strategy = LookupIpStrategy::Ipv4Only;
-    opts.num_concurrent_reqs = 1;
-    opts.use_hosts_file = ResolveHosts::Never;
-    opts.try_tcp_on_error = false;
-    opts.os_port_selection = true;
-
-    let resolver = hickory_resolver::Resolver::builder_with_config(
-        doh_resolver_config(),
-        TokioConnectionProvider::default(),
-    )
-    .with_options(opts)
-    .build();
-    crate::log!("dns: doh resolver built host={} dev={} qtype=A\n", host_trimmed, dev_idx);
-
-    match tokio::time::timeout(
-        core::time::Duration::from_millis(query_timeout_ms),
-        resolver.ipv4_lookup(host_trimmed),
-    )
-    .await
-    {
-        Ok(Ok(lookup)) => {
-            if let Some(ip) = lookup.iter().next() {
-                return Ok(ip.octets());
-            }
-            crate::log!(
-                "dns: doh lookup empty host={} dev={} qtype=A\n",
-                host_trimmed,
-                dev_idx
-            );
-            Err(DnsError::NoAnswer)
-        }
-        Ok(Err(err)) => {
-            crate::log!(
-                "dns: doh lookup failed host={} dev={} err={}\n",
-                host_trimmed,
-                dev_idx,
-                err
-            );
-            Err(DnsError::NoAnswer)
-        }
-        Err(_) => {
-            crate::log!(
-                "dns: doh lookup timeout host={} dev={} qtype=A timeout_ms={}\n",
-                host_trimmed,
-                dev_idx,
-                query_timeout_ms
-            );
-            Err(DnsError::Timeout)
-        }
-    }
+    resolve_doh_addr::<4>(dev_idx, host_trimmed, cfg, DNS_QTYPE_A, "A").await
 }
 
 async fn resolve_ipv6_doh_for_device(
@@ -876,83 +1012,23 @@ async fn resolve_ipv6_doh_for_device(
     host_trimmed: &str,
     cfg: DnsConfig,
 ) -> Result<[u8; 16], DnsError> {
-    if !doh_runtime_ready() {
-        crate::log!(
-            "dns: doh skipped; tokio runtime unavailable host={} dev={} qtype=AAAA\n",
-            host_trimmed,
-            dev_idx
-        );
-        return Err(DnsError::NoAnswer);
-    }
+    resolve_doh_addr::<16>(dev_idx, host_trimmed, cfg, DNS_QTYPE_AAAA, "AAAA").await
+}
 
-    crate::log!(
-        "dns: doh enter host={} dev={} qtype=AAAA timeout_ms={}\n",
-        host_trimmed,
-        dev_idx,
-        cfg.timeout_ms.max(cfg.resend_ms).max(100)
-    );
+async fn resolve_ipv4_dot_for_device(
+    dev_idx: usize,
+    host_trimmed: &str,
+    cfg: DnsConfig,
+) -> Result<[u8; 4], DnsError> {
+    resolve_dot_addr::<4>(dev_idx, host_trimmed, cfg, DNS_QTYPE_A, "A").await
+}
 
-    use hickory_resolver::config::{LookupIpStrategy, ResolveHosts, ResolverOpts};
-    use hickory_resolver::name_server::TokioConnectionProvider;
-
-    let mut opts = ResolverOpts::default();
-    let query_timeout_ms = cfg.timeout_ms.max(cfg.resend_ms).max(100);
-    opts.timeout = core::time::Duration::from_millis(query_timeout_ms);
-    opts.attempts = 1;
-    opts.ip_strategy = LookupIpStrategy::Ipv6Only;
-    opts.num_concurrent_reqs = 1;
-    opts.use_hosts_file = ResolveHosts::Never;
-    opts.try_tcp_on_error = false;
-    opts.os_port_selection = true;
-
-    let resolver = hickory_resolver::Resolver::builder_with_config(
-        doh_resolver_config(),
-        TokioConnectionProvider::default(),
-    )
-    .with_options(opts)
-    .build();
-    crate::log!(
-        "dns: doh resolver built host={} dev={} qtype=AAAA\n",
-        host_trimmed,
-        dev_idx
-    );
-
-    match tokio::time::timeout(
-        core::time::Duration::from_millis(query_timeout_ms),
-        resolver.ipv6_lookup(host_trimmed),
-    )
-    .await
-    {
-        Ok(Ok(lookup)) => {
-            if let Some(ip) = lookup.iter().next() {
-                return Ok(ip.octets());
-            }
-            crate::log!(
-                "dns: doh lookup empty host={} dev={} qtype=AAAA\n",
-                host_trimmed,
-                dev_idx
-            );
-            Err(DnsError::NoAnswer)
-        }
-        Ok(Err(err)) => {
-            crate::log!(
-                "dns: doh ipv6 lookup failed host={} dev={} err={}\n",
-                host_trimmed,
-                dev_idx,
-                err
-            );
-            Err(DnsError::NoAnswer)
-        }
-        Err(_) => {
-            crate::log!(
-                "dns: doh lookup timeout host={} dev={} qtype=AAAA timeout_ms={}\n",
-                host_trimmed,
-                dev_idx,
-                query_timeout_ms
-            );
-            Err(DnsError::Timeout)
-        }
-    }
+async fn resolve_ipv6_dot_for_device(
+    dev_idx: usize,
+    host_trimmed: &str,
+    cfg: DnsConfig,
+) -> Result<[u8; 16], DnsError> {
+    resolve_dot_addr::<16>(dev_idx, host_trimmed, cfg, DNS_QTYPE_AAAA, "AAAA").await
 }
 
 fn warn_secure_dns_disagreement(
@@ -1246,11 +1322,7 @@ pub async fn resolve_ipv4_for_device(
     if host_trimmed.is_empty() {
         return Err(DnsError::BadName);
     }
-    crate::log!(
-        "dns: resolve begin host={} dev={} qtype=A\n",
-        host_trimmed,
-        dev_idx
-    );
+    crate::log!("dns: resolve begin host={} dev={} qtype=A\n", host_trimmed, dev_idx);
 
     {
         let now = embassy_time_driver::now();

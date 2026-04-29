@@ -63,6 +63,16 @@ pub struct Ui2WindowCursorSample {
     pub y: f32,
 }
 
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+pub struct Ui2WindowCursorEvent {
+    pub slot_id: u32,
+    pub x: f32,
+    pub y: f32,
+    pub buttons_down: u32,
+    pub wheel: i16,
+    pub flags: u32,
+}
+
 pub(super) fn alloc_window(
     state: &mut Ui2State,
     kind: Ui2WindowKind,
@@ -120,6 +130,7 @@ pub(super) fn alloc_window(
         last_clicked_item_id: 0,
         last_clicked_item_seq: 0,
         last_clicked_cursor_slot: 0,
+        cursor_events: Vec::new(),
         title_tex_id: window_title_tex_id(id),
         title_tex_w: 0,
         title_tex_h: 0,
@@ -1758,6 +1769,9 @@ pub fn window_content_cursor_positions(id: u32) -> Vec<Ui2WindowCursorSample> {
 
     let mut cursors = Vec::new();
     for cursor in &state.cursors {
+        if cursor.selected_window_id != id {
+            continue;
+        }
         if cursor.x < content.x
             || cursor.y < content.y
             || cursor.x >= content.x + content.w
@@ -1772,6 +1786,17 @@ pub fn window_content_cursor_positions(id: u32) -> Vec<Ui2WindowCursorSample> {
         });
     }
     cursors
+}
+
+pub fn take_window_cursor_events(id: u32) -> Vec<Ui2WindowCursorEvent> {
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    let Some(window) = window_mut(&mut state, id) else {
+        return Vec::new();
+    };
+    let mut events = Vec::new();
+    core::mem::swap(&mut events, &mut window.cursor_events);
+    events
 }
 
 pub fn take_window_last_clicked_item(id: u32) -> Option<(u32, u32)> {

@@ -10,8 +10,8 @@ use super::http::{
     parse_http_status, parse_http_url, redirect_url_from_location,
 };
 use crate::r::net::{NetProfile, VNet};
-use crate::t::net::dns::{self, DnsConfig};
 use crate::r::stream::{ObjectDesc, ObjectSink};
+use crate::t::net::dns::{self, DnsConfig};
 
 const HTTP_FILE_WRITE_FALLBACK_CHUNK_BYTES: usize = 64 * 1024;
 const HTTP_FILE_WRITE_PROGRESS_BYTES: u64 = 512 * 1024;

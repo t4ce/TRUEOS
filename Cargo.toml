@@ -45,9 +45,9 @@ crc32fast = { version = "1.5.0", default-features = false }
 sha2 = { version = "0.11", default-features = false }
 embedded-websocket = { version = "0.9.4", default-features = false }
 smoltcp = { version = "0.13", default-features = false, features = ["alloc", "proto-ipv4", "proto-ipv6", "multicast", "socket-raw", "socket-udp", "socket-tcp", "socket-icmp", "socket-dhcpv4", "medium-ethernet"] }
-hickory-resolver = { version = "0.25.2", default-features = false, features = ["tokio", "https-ring", "tls-ring", "webpki-roots"] }
+hickory-resolver = { version = "0.25.2", default-features = false, features = ["tokio"] }
 hickory-client = { version = "0.25.2", default-features = false }
-hickory-proto = { version = "0.25.2", default-features = false, features = ["https-ring", "tls-ring", "webpki-roots"] }
+hickory-proto = { version = "0.25.2", default-features = false }
 crab-usb = { version = "0.6.2", default-features = false }
 dma-api = { version = "0.7.2", default-features = false }
 trueos-math = { path = "crates/trueos-math", features = ["alloc"] }
@@ -119,7 +119,6 @@ pin-project-lite = { path = "vendor/pin-project-lite-0.2.17" }
 smallvec = { path = "vendor/smallvec-1.15.1" }
 parking_lot = { path = "vendor/parking_lot-0.12.5" }
 parking_lot_core = { path = "vendor/parking_lot_core-0.9.12" }
-ring = { path = "vendor/ring-0.17.14" }
 tokio = { path = "vendor/tokio-1.52.1" }
 mio = { path = "vendor/mio-1.2.0" }
 socket2 = { path = "vendor/socket2-0.6.3" }

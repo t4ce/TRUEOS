@@ -1437,13 +1437,7 @@ fn log_tcp_connect_record_state(prefix: &str, rec: &SocketRecord, state: tcp::St
             state
         );
     } else {
-        crate::log!(
-            "{} owner={} handle={} state={:?}\n",
-            prefix,
-            rec.owner,
-            rec.handle.0,
-            state
-        );
+        crate::log!("{} owner={} handle={} state={:?}\n", prefix, rec.owner, rec.handle.0, state);
     }
 }
 

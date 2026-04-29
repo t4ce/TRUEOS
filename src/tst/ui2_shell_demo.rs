@@ -205,61 +205,47 @@ fn ui2_shell_position_to_cell(
     }
 }
 
-fn window_cursor_buttons(slot_id: u32) -> u32 {
-    crate::r::cursor::ordered_cursor_snapshot_with_slot_buttons()
-        .into_iter()
-        .find(|(cursor_slot_id, _, _, _)| *cursor_slot_id == slot_id)
-        .map(|(_, _, _, buttons_down)| buttons_down)
-        .unwrap_or(0)
-}
-
 fn update_selection_from_mouse(
     selection: &mut Ui2ShellSelectionState,
     window_id: u32,
     snapshot: &crate::shell2::Ui2ShellScreenSnapshot,
 ) -> bool {
-    let cursors = crate::r::ui2::window_content_cursor_positions(window_id);
-    if selection.drag_active {
-        let buttons_down = window_cursor_buttons(selection.drag_slot_id);
-        let mut changed = false;
-        if let Some(cursor) = cursors
-            .iter()
-            .find(|cursor| cursor.slot_id == selection.drag_slot_id)
-        {
-            let next_focus = ui2_shell_position_to_cell(snapshot, cursor.x, cursor.y);
+    let mut changed = false;
+    for event in crate::r::ui2::take_window_cursor_events(window_id) {
+        if selection.drag_active {
+            if event.slot_id != selection.drag_slot_id {
+                continue;
+            }
+            let next_focus = ui2_shell_position_to_cell(snapshot, event.x, event.y);
             if selection.focus != Some(next_focus) {
                 selection.focus = Some(next_focus);
                 changed = true;
             }
-        }
-        if (buttons_down & UI2_SHELL_PRIMARY_BUTTON_MASK) == 0 {
-            selection.drag_active = false;
-            selection.drag_slot_id = 0;
-            if selection.anchor == selection.focus && selection.anchor.is_some() {
-                selection.anchor = None;
-                selection.focus = None;
+            if (event.buttons_down & UI2_SHELL_PRIMARY_BUTTON_MASK) == 0 {
+                selection.drag_active = false;
+                selection.drag_slot_id = 0;
+                if selection.anchor == selection.focus && selection.anchor.is_some() {
+                    selection.anchor = None;
+                    selection.focus = None;
+                }
                 changed = true;
             }
-        }
-        return changed;
-    }
-
-    for cursor in &cursors {
-        let buttons_down = window_cursor_buttons(cursor.slot_id);
-        if (buttons_down & UI2_SHELL_PRIMARY_BUTTON_MASK) == 0 {
             continue;
         }
-        let anchor = ui2_shell_position_to_cell(snapshot, cursor.x, cursor.y);
+
+        if (event.buttons_down & UI2_SHELL_PRIMARY_BUTTON_MASK) == 0 {
+            continue;
+        }
+        let anchor = ui2_shell_position_to_cell(snapshot, event.x, event.y);
         *selection = Ui2ShellSelectionState {
             anchor: Some(anchor),
             focus: Some(anchor),
-            drag_slot_id: cursor.slot_id,
+            drag_slot_id: event.slot_id,
             drag_active: true,
         };
-        return true;
+        changed = true;
     }
-
-    false
+    changed
 }
 
 fn render_cell_glyph(

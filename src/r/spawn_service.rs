@@ -1016,10 +1016,9 @@ fn spawn_atomic_bomb(spawner: Spawner) -> SpawnAttempt {
 
 const NET_ANY_CONFIGURED_AND_ROOT_READY: u32 =
     crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
-const PCIIDS_GIT_READY: u32 =
-    crate::r::readiness::TOKIO_RUNTIME_READY
-        | crate::r::readiness::NET_ANY_CONFIGURED
-        | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
+const PCIIDS_GIT_READY: u32 = crate::r::readiness::TOKIO_RUNTIME_READY
+    | crate::r::readiness::NET_ANY_CONFIGURED
+    | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
 const HTTP_TRUEOSFS_READY: u32 = crate::r::readiness::HTTP_TRUEOSFS_LISTENING;
 const HYPER_HTTP1_PROBE_READY: u32 =
     crate::r::readiness::NET_SOCKET_READY | crate::r::readiness::NET_V4_GATEWAY_REACHABLE;
@@ -1106,12 +1105,7 @@ static TASKS: [TaskSpec; 71] = [
         &HTTP_TRUEOSFS_STARTED,
         spawn_http_trueosfs,
     ),
-    TaskSpec::enabled(
-        "pciids-git",
-        PCIIDS_GIT_READY,
-        &PCIIDS_GIT_STARTED,
-        spawn_pciids_git,
-    ),
+    TaskSpec::enabled("pciids-git", PCIIDS_GIT_READY, &PCIIDS_GIT_STARTED, spawn_pciids_git),
     TaskSpec::enabled(
         "hyper-http1-probe",
         HYPER_HTTP1_PROBE_READY,

@@ -11,8 +11,6 @@ use alloc::sync::Arc;
 use core::cell::Cell;
 use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_executor::task;
-use hickory_resolver::config::{LookupIpStrategy, ResolveHosts, ResolverOpts};
-use hickory_resolver::name_server::TokioConnectionProvider;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::io;
 use std::net::SocketAddr;
@@ -70,137 +68,38 @@ fn primary_ipv4_probe_addr(port: u16) -> Option<SocketAddr> {
     Some(SocketAddr::from((ip, port)))
 }
 
-async fn probe_hickory_secure_ipv4_lookup(
-    transport: crate::t::net::dns::SecureDnsTransport,
-    dns: crate::t::net::dns::DnsConfig,
-    dev_idx: usize,
-    host: &str,
-) -> Result<(), &'static str> {
-    let config = match transport {
-        crate::t::net::dns::SecureDnsTransport::Doh => crate::t::net::dns::doh_resolver_config(),
-        crate::t::net::dns::SecureDnsTransport::Dot => crate::t::net::dns::dot_resolver_config(),
-        crate::t::net::dns::SecureDnsTransport::Doh3 => {
-            return Err("net.hickory.doh3.ipv4_lookup_unwired");
-        }
-    };
-
-    crate::log!(
-        "tokio_probe: enter net.hickory.ipv4_lookup transport={} host={} dev={} secure=true\n",
-        transport.label(),
-        host,
-        dev_idx
-    );
-
-    let mut opts = ResolverOpts::default();
-    let query_timeout_ms = dns.timeout_ms.max(dns.resend_ms).max(100);
-    opts.timeout = core::time::Duration::from_millis(query_timeout_ms);
-    opts.attempts = 1;
-    opts.ip_strategy = LookupIpStrategy::Ipv4Only;
-    opts.num_concurrent_reqs = 1;
-    opts.use_hosts_file = ResolveHosts::Never;
-    opts.try_tcp_on_error = false;
-    opts.os_port_selection = true;
-
-    let resolver =
-        hickory_resolver::Resolver::builder_with_config(config, TokioConnectionProvider::default())
-            .with_options(opts)
-            .build();
-
-    match tokio::time::timeout(
-        core::time::Duration::from_millis(query_timeout_ms),
-        resolver.ipv4_lookup(host),
-    )
-    .await
-    {
-        Ok(Ok(lookup)) => {
-            let mut count = 0usize;
-            let mut first = None;
-            for ip in lookup.iter() {
-                count = count.saturating_add(1);
-                if first.is_none() {
-                    first = Some(ip);
-                }
-            }
-            if let Some(ip) = first {
-                crate::log!(
-                    "tokio_probe: success net.hickory.ipv4_lookup transport={} first={} count={}\n",
-                    transport.label(),
-                    ip,
-                    count
-                );
-                Ok(())
-            } else {
-                crate::log!(
-                    "tokio_probe: failure net.hickory.ipv4_lookup_no_answer transport={}\n",
-                    transport.label()
-                );
-                Err("net.hickory.ipv4_lookup_no_answer")
-            }
-        }
-        Ok(Err(err)) => {
-            crate::log!(
-                "tokio_probe: failure net.hickory.ipv4_lookup transport={} err={}\n",
-                transport.label(),
-                err
-            );
-            Err("net.hickory.ipv4_lookup")
-        }
-        Err(_) => {
-            crate::log!(
-                "tokio_probe: failure net.hickory.ipv4_lookup_timeout transport={}\n",
-                transport.label()
-            );
-            Err("net.hickory.ipv4_lookup_timeout")
-        }
-    }
-}
-
-async fn probe_hickory_resolver_surface() -> Result<(), &'static str> {
-    const HICKORY_PROBE_HOST: &str = "raw.githubusercontent.com.";
+async fn probe_secure_dns_surface() -> Result<(), &'static str> {
+    const SECURE_DNS_PROBE_HOST: &str = "raw.githubusercontent.com.";
 
     let dev_idx = crate::net::primary_device_index();
     let dns = crate::t::net::dns::DnsConfig::for_device_v4_only(dev_idx);
     if dns.server_count == 0 {
-        crate::log!("tokio_probe: note net.hickory skipped (no ipv4 dns config)\n");
+        crate::log!("tokio_probe: note net.secure_dns skipped (no ipv4 dns config)\n");
         return Ok(());
     }
 
     crate::log!(
-        "tokio_probe: enter net.hickory.secure_ipv4_lookup host={} dev={} transports=doh,dot\n",
-        HICKORY_PROBE_HOST,
+        "tokio_probe: enter net.secure_dns.ipv4_lookup host={} dev={} transports=doh,dot tls=trueos\n",
+        SECURE_DNS_PROBE_HOST,
         dev_idx
     );
 
-    let doh = probe_hickory_secure_ipv4_lookup(
-        crate::t::net::dns::SecureDnsTransport::Doh,
-        dns,
-        dev_idx,
-        HICKORY_PROBE_HOST,
-    )
-    .await;
-    if doh.is_ok() {
-        return Ok(());
+    match crate::t::net::dns::resolve_ipv4_for_device(dev_idx, SECURE_DNS_PROBE_HOST, dns).await {
+        Ok(ip) => {
+            crate::log!(
+                "tokio_probe: success net.secure_dns.ipv4_lookup first={}.{}.{}.{}\n",
+                ip[0],
+                ip[1],
+                ip[2],
+                ip[3]
+            );
+            Ok(())
+        }
+        Err(err) => {
+            crate::log!("tokio_probe: failure net.secure_dns.ipv4_lookup err={:?}\n", err);
+            Err("net.secure_dns.ipv4_lookup")
+        }
     }
-    if let Err(stage) = doh {
-        crate::log!("tokio_probe: note net.hickory.doh failed stage={}\n", stage);
-    }
-
-    let dot = probe_hickory_secure_ipv4_lookup(
-        crate::t::net::dns::SecureDnsTransport::Dot,
-        dns,
-        dev_idx,
-        HICKORY_PROBE_HOST,
-    )
-    .await;
-    if dot.is_ok() {
-        return Ok(());
-    }
-    if let Err(stage) = dot {
-        crate::log!("tokio_probe: note net.hickory.dot failed stage={}\n", stage);
-    }
-
-    crate::log!("tokio_probe: failure net.hickory.secure_ipv4_lookup\n");
-    Err("net.hickory.secure_ipv4_lookup")
 }
 
 async fn probe_tokio_blocking_canary() -> bool {
@@ -551,12 +450,12 @@ async fn probe_tokio_net_surface() -> Result<(), &'static str> {
         }
         Err(_) => {
             crate::log!(
-                "tokio_probe: note net.tokio.udp_socket.writable_timeout; continuing to hickory traffic probe\n"
+                "tokio_probe: note net.tokio.udp_socket.writable_timeout; continuing to secure dns probe\n"
             );
         }
     }
 
-    probe_hickory_resolver_surface().await?;
+    probe_secure_dns_surface().await?;
 
     Ok(())
 }
