@@ -505,7 +505,7 @@ pub mod cabi {
     fn fs_error_to_code(err: super::kfs::FsError) -> i32 {
         use super::kfs::FsError;
         match err {
-            FsError::NoRoot => FS_ERR_USBMS_NOT_FOUND,
+            FsError::NoRoot => FS_ERR_NOT_FOUND,
             FsError::BadPath => FS_ERR_BAD_PATH,
             FsError::NoSpace => FS_ERR_NO_SPACE,
             FsError::NotFound => FS_ERR_NOT_FOUND,
@@ -513,7 +513,7 @@ pub mod cabi {
             FsError::Device(e) => match e {
                 crate::disc::block::Error::InvalidParam => FS_ERR_BAD_PARAM,
                 crate::disc::block::Error::OutOfBounds => FS_ERR_BAD_PARAM,
-                crate::disc::block::Error::NotReady => FS_ERR_USBMS_NOT_FOUND,
+                crate::disc::block::Error::NotReady => FS_ERR_NOT_FOUND,
                 crate::disc::block::Error::NotSupported => FS_ERR_IO,
                 crate::disc::block::Error::Timeout => FS_ERR_IO,
                 crate::disc::block::Error::Io => FS_ERR_IO,

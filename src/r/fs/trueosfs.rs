@@ -524,9 +524,18 @@ fn file_record_cache_invalidate_disk(disk_id: block::DiscId) {
 }
 
 fn invalidate_root_index(disk_id: block::DiscId) {
-    let mut roots = ROOTS.lock();
-    if let Some(m) = roots.iter_mut().find(|m| m.disk_id == disk_id) {
-        m.index = None;
+    let should_request_warm = {
+        let mut roots = ROOTS.lock();
+        if let Some(m) = roots.iter_mut().find(|m| m.disk_id == disk_id) {
+            m.index = None;
+            !m.building_index
+        } else {
+            false
+        }
+    };
+
+    if should_request_warm {
+        request_warm_index(disk_id);
     }
 }
 
@@ -1092,6 +1101,7 @@ async fn ensure_index_async(
     placement: &TrueosFsPlacement,
 ) -> Result<(), block::Error> {
     let disk_id = disk.id();
+    let start_cache_gen;
 
     // Claim a single builder slot; all others wait until index becomes available.
     loop {
@@ -1105,6 +1115,7 @@ async fn ensure_index_async(
             }
             Some(m) => {
                 m.building_index = true;
+                start_cache_gen = m.cache_gen;
                 break;
             }
         }
@@ -1178,24 +1189,36 @@ async fn ensure_index_async(
         }
         .await;
 
-    // Always clear the build flag; publish the index only on success.
-    let mut roots = ROOTS.lock();
-    let mount = roots.iter_mut().find(|m| m.disk_id == disk_id);
-    match build_result {
+    // Always clear the build flag; publish the index only when no writer raced the build.
+    let mut needs_rebuild = false;
+    let result = match build_result {
         Ok(tree) => {
-            if let Some(m) = mount {
-                m.index = Some(tree);
+            let mut roots = ROOTS.lock();
+            if let Some(m) = roots.iter_mut().find(|m| m.disk_id == disk_id) {
+                if m.cache_gen == start_cache_gen {
+                    m.index = Some(tree);
+                } else {
+                    needs_rebuild = true;
+                }
                 m.building_index = false;
             }
             Ok(())
         }
         Err(e) => {
-            if let Some(m) = mount {
+            let mut roots = ROOTS.lock();
+            if let Some(m) = roots.iter_mut().find(|m| m.disk_id == disk_id) {
                 m.building_index = false;
             }
             Err(e)
         }
+    };
+
+    if needs_rebuild {
+        request_warm_index(disk_id);
+        return Err(block::Error::NotReady);
     }
+
+    result
 }
 
 /// Best-effort: build an HTML `<ul>/<li>` tree of the TRUEOSFS directory structure.
@@ -1537,17 +1560,37 @@ pub fn list_roots() -> Vec<RootInfo> {
     use core::cmp::Reverse;
 
     let roots = ROOTS.lock();
+    let index_queue = INDEX_QUEUE.lock();
     let mut out: Vec<RootInfo> = Vec::with_capacity(roots.len());
     for m in roots.iter() {
         out.push(RootInfo {
             disk_id: m.disk_id,
             seq: m.seq,
             index_ready: m.index.is_some(),
-            index_building: m.building_index,
+            index_building: m.building_index || index_queue.iter().any(|d| d.id() == m.disk_id),
         });
     }
     out.sort_by_key(|r| Reverse(r.seq));
     out
+}
+
+pub fn root_index_paths(disk_id: block::DiscId, max_paths: usize) -> Option<Vec<String>> {
+    let roots = ROOTS.lock();
+    let mount = roots.iter().find(|m| m.disk_id == disk_id)?;
+    let index = mount.index.as_ref()?;
+
+    let mut out = Vec::new();
+    for key in index.keys() {
+        if out.len() >= max_paths {
+            break;
+        }
+        if let Ok(path) = core::str::from_utf8(key.as_slice())
+            && !path.is_empty()
+        {
+            out.push(String::from(path));
+        }
+    }
+    Some(out)
 }
 
 pub fn request_warm_index(disk_id: block::DiscId) {

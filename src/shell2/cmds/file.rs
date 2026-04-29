@@ -1,5 +1,6 @@
 use core::str::SplitWhitespace;
 
+use alloc::collections::BTreeSet;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -127,6 +128,114 @@ enum TreeWorkItem {
 struct RootRender {
     root: crate::r::fs::trueosfs::RootInfo,
     lines: Result<Vec<String>, &'static str>,
+}
+
+fn index_child_names(paths: &[String], parent: &str) -> Vec<String> {
+    let prefix = if parent.is_empty() {
+        String::new()
+    } else {
+        let mut p = String::from(parent);
+        p.push('/');
+        p
+    };
+    let mut children = BTreeSet::new();
+
+    for path in paths.iter() {
+        let rest = if prefix.is_empty() {
+            path.as_str()
+        } else if let Some(rest) = path.strip_prefix(prefix.as_str()) {
+            rest
+        } else {
+            continue;
+        };
+
+        let seg = rest.split('/').next().unwrap_or("");
+        if !seg.is_empty() {
+            children.insert(String::from(seg));
+        }
+    }
+
+    children.into_iter().collect()
+}
+
+fn index_path_exists(paths: &[String], path: &str) -> bool {
+    paths.iter().any(|p| p == path)
+}
+
+fn index_has_descendant(paths: &[String], path: &str) -> bool {
+    let mut prefix = String::from(path);
+    prefix.push('/');
+    paths.iter().any(|p| p.starts_with(prefix.as_str()))
+}
+
+fn build_root_tree_lines_from_index(
+    root: crate::r::fs::trueosfs::RootInfo,
+) -> Result<Vec<String>, &'static str> {
+    let Some(paths) =
+        crate::r::fs::trueosfs::root_index_paths(root.disk_id, MAX_LINES_PER_ROOT * 4)
+    else {
+        return Err("index unavailable");
+    };
+
+    let mut out = Vec::new();
+    let mut work = Vec::new();
+    work.push(TreeWorkItem::VisitDir {
+        path: String::new(),
+        depth: 0,
+    });
+
+    while let Some(item) = work.pop() {
+        if out.len() >= MAX_LINES_PER_ROOT {
+            break;
+        }
+
+        match item {
+            TreeWorkItem::PrintLine(line) => out.push(line),
+            TreeWorkItem::VisitDir { path, depth } => {
+                if depth >= MAX_DEPTH {
+                    continue;
+                }
+
+                let children = index_child_names(paths.as_slice(), path.as_str());
+                if children.is_empty() {
+                    if depth == 0 {
+                        out.push(String::from("  (empty)"));
+                    }
+                    continue;
+                }
+
+                let indent = "  ".repeat(depth + 1);
+                if children.len() > MAX_CHILDREN_PER_DIR {
+                    work.push(TreeWorkItem::PrintLine(alloc::format!(
+                        "{}  ... {} more entries",
+                        indent,
+                        children.len() - MAX_CHILDREN_PER_DIR
+                    )));
+                }
+
+                for name in children.iter().take(MAX_CHILDREN_PER_DIR).rev() {
+                    let full_path = child_path(path.as_str(), name.as_str());
+                    let is_dir = index_has_descendant(paths.as_slice(), full_path.as_str())
+                        && !index_path_exists(paths.as_slice(), full_path.as_str());
+                    let line = if is_dir {
+                        alloc::format!("{}+ {}/", indent, name)
+                    } else {
+                        alloc::format!("{}- {}", indent, name)
+                    };
+
+                    if is_dir {
+                        work.push(TreeWorkItem::VisitDir {
+                            path: full_path,
+                            depth: depth + 1,
+                        });
+                    }
+                    work.push(TreeWorkItem::PrintLine(line));
+                }
+            }
+        }
+    }
+
+    Ok(out)
 }
 
 fn browse_path_label(path: &str) -> &str {
@@ -449,9 +558,7 @@ pub(crate) fn try_parse(
 
                 let render = RootRender {
                     root,
-                    lines: crate::wait::spawn_and_wait_local(async move {
-                        build_root_tree_lines_async(root).await
-                    }),
+                    lines: build_root_tree_lines_from_index(root),
                 };
 
                 let Ok(lines) = render.lines else {

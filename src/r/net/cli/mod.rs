@@ -1,14 +1,8 @@
-pub mod dns;
 pub mod ftp;
 pub mod html;
-pub mod http;
-pub mod http_stream;
-pub mod https;
-pub mod https_limits;
 pub mod irc;
 pub mod json;
 pub mod ntp;
-pub mod ping;
 pub mod pop3;
 pub mod smtp;
 pub mod ws;

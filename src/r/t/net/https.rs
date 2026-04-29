@@ -7,7 +7,7 @@ use crate::net::tls::{TlsClientConfig, TlsRoots};
 use crate::net::tls_socket::{TlsCommand, TlsEvent, register_tls_app_queues};
 use crate::r::io::cabi::{
     FS_ERR_BAD_PARAM, FS_ERR_BAD_PATH, FS_ERR_IO, FS_ERR_NO_SPACE, FS_ERR_NOT_FOUND,
-    FS_ERR_TIMEOUT, FS_ERR_TOO_LARGE, FS_ERR_USBMS_NOT_FOUND, NET_ERR_BAD_URL, NET_ERR_HTTP,
+    FS_ERR_TIMEOUT, FS_ERR_TOO_LARGE, NET_ERR_BAD_URL, NET_ERR_HTTP,
     NET_ERR_TIMEOUT, NET_ERR_TIMEOUT_BODY, NET_ERR_TIMEOUT_CONNECT, NET_ERR_TIMEOUT_DNS,
     NET_ERR_TIMEOUT_TLS, NET_ERR_TLS,
 };
@@ -1056,7 +1056,7 @@ async fn cabi_net_fetch_post_json_task_inner(
         Ok(bytes) => {
             crate::log!("net-fetch-post: response_body_len={}\n", bytes.len());
             if let Ok(s) = core::str::from_utf8(bytes.as_slice()) {
-                if let Some(summary) = super::json::summarize_openai_response_json(s) {
+                if let Some(summary) = crate::r::net::json::summarize_openai_response_json(s) {
                     crate::log!("net-fetch-post: summary {}\n", summary);
                 }
                 log_utf8_chunks("net-fetch-post: response_json: ", s);
@@ -1072,7 +1072,7 @@ async fn cabi_net_fetch_post_json_task_inner(
                     Err(e) => block_error_to_code(e),
                 }
             } else {
-                FS_ERR_USBMS_NOT_FOUND
+                FS_ERR_NOT_FOUND
             }
         }
         Err(rc) => rc,
@@ -1159,7 +1159,7 @@ async fn cabi_net_fetch_post_json_bytes_task_inner(
         Ok(bytes) => {
             crate::log!("net-fetch-post: response_body_len={}\n", bytes.len());
             if let Ok(s) = core::str::from_utf8(bytes.as_slice()) {
-                if let Some(summary) = super::json::summarize_openai_response_json(s) {
+                if let Some(summary) = crate::r::net::json::summarize_openai_response_json(s) {
                     crate::log!("net-fetch-post: summary {}\n", summary);
                 }
                 log_utf8_chunks("net-fetch-post: response_json: ", s);
@@ -1322,7 +1322,7 @@ fn block_error_to_code(err: crate::disc::block::Error) -> i32 {
     use crate::disc::block::Error;
     match err {
         Error::InvalidParam | Error::OutOfBounds => FS_ERR_BAD_PARAM,
-        Error::NotReady => FS_ERR_USBMS_NOT_FOUND,
+        Error::NotReady => FS_ERR_NOT_FOUND,
         Error::Corrupted
         | Error::Io
         | Error::Timeout
@@ -4217,16 +4217,10 @@ pub async fn fetch_https_to_file_with_profile_async(
 ) -> Result<(), i32> {
     let t0 = Instant::now();
     let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
-        return Err(FS_ERR_USBMS_NOT_FOUND);
+        return Err(FS_ERR_NOT_FOUND);
     };
 
     let key = normalize_rel(path, false)?;
-
-    match crate::r::fs::trueosfs::file_exists_async(disk, key.as_str()).await {
-        Ok(true) => return Ok(()),
-        Ok(false) => {}
-        Err(e) => return Err(block_error_to_code(e)),
-    }
 
     crate::log!("vhttps-cache: start key={} url={}\n", key, url);
 

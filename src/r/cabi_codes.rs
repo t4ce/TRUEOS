@@ -2,7 +2,6 @@ pub const FS_ERR_BAD_UTF8: i32 = -1;
 pub const FS_ERR_IO: i32 = -2;
 pub const FS_ERR_NO_SPACE: i32 = -3;
 pub const FS_ERR_BAD_PARAM: i32 = -4;
-pub const FS_ERR_USBMS_NOT_FOUND: i32 = -5;
 pub const FS_ERR_BAD_PATH: i32 = -6;
 pub const FS_ERR_TOO_LARGE: i32 = -7;
 pub const FS_ERR_NOT_FOUND: i32 = -8;
@@ -32,7 +31,6 @@ pub fn cabi_rc_name(rc: i32) -> &'static [u8] {
         FS_ERR_IO => b"FS_ERR_IO",
         FS_ERR_NO_SPACE => b"FS_ERR_NO_SPACE",
         FS_ERR_BAD_PARAM => b"FS_ERR_BAD_PARAM",
-        FS_ERR_USBMS_NOT_FOUND => b"FS_ERR_USBMS_NOT_FOUND",
         FS_ERR_BAD_PATH => b"FS_ERR_BAD_PATH",
         FS_ERR_TOO_LARGE => b"FS_ERR_TOO_LARGE",
         FS_ERR_NOT_FOUND => b"FS_ERR_NOT_FOUND",

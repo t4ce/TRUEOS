@@ -9,8 +9,8 @@ use super::http::{
     HttpBodyKind, HttpFetchError, find_http_header_end, is_redirect_status, parse_http_head,
     parse_http_status, parse_http_url, redirect_url_from_location,
 };
-use crate::r::net::dns::{self, DnsConfig};
 use crate::r::net::{NetProfile, VNet};
+use crate::r::t::net::dns::{self, DnsConfig};
 use crate::r::stream::{ObjectDesc, ObjectSink};
 
 const HTTP_FILE_WRITE_FALLBACK_CHUNK_BYTES: usize = 64 * 1024;

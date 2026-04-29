@@ -13,7 +13,7 @@ use v::vnet;
 use crate::net::tls::{TlsClientConfig, TlsRoots};
 use crate::net::tls_socket::{TlsCommand, TlsEvent, register_tls_app_queues};
 use crate::r::net::Queue;
-use crate::r::net::dns::{self, DnsConfig};
+use crate::r::t::net::dns::{self, DnsConfig};
 
 // Default host for the demo.
 // NOTE: We now resolve via the slirp DNS server so the demo is resilient to

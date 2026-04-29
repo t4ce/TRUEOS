@@ -121,7 +121,7 @@ pub async fn upload_app_to_device(
         target_name,
         body.len()
     );
-    crate::r::net::cli::http::post_http_body(
+    crate::r::t::net::http::post_http_body(
         upload_url.as_str(),
         &[("X-Filename", target_name)],
         body,
@@ -134,7 +134,7 @@ pub async fn upload_app_to_device(
     let Some(run_url) = iface.run_url() else {
         return Err(EspControlError::DeviceUnreachable);
     };
-    crate::r::net::cli::http::post_http_body(
+    crate::r::t::net::http::post_http_body(
         run_url.as_str(),
         &[],
         &[],
@@ -158,7 +158,7 @@ pub async fn restart_device(
     let Some(url) = manual_endpoint_url(&snapshot, trueos_esp::swarm::ESP_RESTART_PATH) else {
         return Err(EspControlError::DeviceUnreachable);
     };
-    let restart_requested = crate::r::net::cli::http::post_http_body(
+    let restart_requested = crate::r::t::net::http::post_http_body(
         url.as_str(),
         &[],
         &[],
@@ -190,7 +190,7 @@ async fn poll_device_status(snapshot: &trueos_esp::gate::DeviceSnapshot) {
         return;
     };
 
-    match crate::r::net::cli::http::fetch_http_body(
+    match crate::r::t::net::http::fetch_http_body(
         url.as_str(),
         ESP_STATUS_FETCH_TIMEOUT_MS,
         ESP_STATUS_FETCH_MAX_RX,
