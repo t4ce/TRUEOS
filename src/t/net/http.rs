@@ -2,7 +2,7 @@ extern crate alloc;
 
 use crate::r::net::NetProfile;
 use crate::r::net::VNet;
-use crate::r::t::net::dns::{self, DnsConfig};
+use crate::t::net::dns::{self, DnsConfig};
 use alloc::string::String;
 use alloc::vec::Vec;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};

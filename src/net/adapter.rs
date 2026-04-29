@@ -1198,21 +1198,24 @@ impl<'a> TxToken for AdapterTxTokenAt<'a> {
                                     let dport =
                                         u16::from_be_bytes([buf[tcp_off + 2], buf[tcp_off + 3]]);
                                     let flags = buf[tcp_off + 13];
-                                    crate::log!(
-                                        "net: tx-tap dev={} tcp {}.{}.{}.{}:{} -> {}.{}.{}.{}:{} flags=0x{:02x}\n",
-                                        self.index,
-                                        src_ip[0],
-                                        src_ip[1],
-                                        src_ip[2],
-                                        src_ip[3],
-                                        sport,
-                                        dst_ip[0],
-                                        dst_ip[1],
-                                        dst_ip[2],
-                                        dst_ip[3],
-                                        dport,
-                                        flags
-                                    );
+                                    let control = (flags & 0x07) != 0;
+                                    if crate::logflag::NET_LOG_TX_TAP || control {
+                                        crate::log!(
+                                            "net: tx-tap dev={} tcp {}.{}.{}.{}:{} -> {}.{}.{}.{}:{} flags=0x{:02x}\n",
+                                            self.index,
+                                            src_ip[0],
+                                            src_ip[1],
+                                            src_ip[2],
+                                            src_ip[3],
+                                            sport,
+                                            dst_ip[0],
+                                            dst_ip[1],
+                                            dst_ip[2],
+                                            dst_ip[3],
+                                            dport,
+                                            flags
+                                        );
+                                    }
                                 }
                             }
                         }

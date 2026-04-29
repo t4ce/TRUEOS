@@ -6,7 +6,7 @@ const PCI_IDS_TIMEOUT_MS: u32 = 120_000;
 const PCI_IDS_MAX_BYTES: usize = 4 * 1024 * 1024;
 
 pub fn download_once() -> Result<(), i32> {
-    crate::r::t::net::fetch_https_to_file(
+    crate::t::net::fetch_https_to_file(
         "pciids_git",
         PCI_IDS_URL,
         PCI_IDS_KEY,

@@ -432,8 +432,13 @@ fn parse_dns_fs_cache_line(line: &str) -> Option<(usize, &str, [u8; 4])> {
 }
 
 async fn dns_fs_cache_lookup(dev_idx: usize, host_trimmed: &str) -> Option<[u8; 4]> {
+    crate::log!(
+        "dns: fs-cache lookup begin host={} dev={}\n",
+        host_trimmed,
+        dev_idx
+    );
     let disk = crate::r::fs::trueosfs::primary_root_handle()?;
-    let bytes = crate::r::fs::trueosfs::file_out_async(disk, DNS_FS_CACHE_PATH)
+    let bytes = crate::r::fs::trueosfs::file_out_if_index_ready_async(disk, DNS_FS_CACHE_PATH)
         .await
         .ok()
         .flatten()?;
@@ -447,6 +452,12 @@ async fn dns_fs_cache_lookup(dev_idx: usize, host_trimmed: &str) -> Option<[u8; 
             found = Some(line_ip);
         }
     }
+    crate::log!(
+        "dns: fs-cache lookup done host={} dev={} hit={}\n",
+        host_trimmed,
+        dev_idx,
+        found.is_some()
+    );
     found
 }
 
@@ -455,7 +466,7 @@ async fn dns_fs_cache_update(dev_idx: usize, host_trimmed: &str, ip: [u8; 4]) {
         return;
     };
 
-    let existing = crate::r::fs::trueosfs::file_out_async(disk, DNS_FS_CACHE_PATH)
+    let existing = crate::r::fs::trueosfs::file_out_if_index_ready_async(disk, DNS_FS_CACHE_PATH)
         .await
         .ok()
         .flatten();
@@ -1237,6 +1248,11 @@ pub async fn resolve_ipv4_for_device(
     if host_trimmed.is_empty() {
         return Err(DnsError::BadName);
     }
+    crate::log!(
+        "dns: resolve begin host={} dev={} qtype=A\n",
+        host_trimmed,
+        dev_idx
+    );
 
     {
         let now = embassy_time_driver::now();

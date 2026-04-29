@@ -36,10 +36,7 @@ impl TcpStream {
     }
 
     pub fn shutdown(&self, _: Shutdown) -> io::Result<()> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "mio zkvm TcpStream::shutdown is not wired yet",
-        ))
+        self.inner.shutdown()
     }
 
     pub fn set_nodelay(&self, _: bool) -> io::Result<()> {

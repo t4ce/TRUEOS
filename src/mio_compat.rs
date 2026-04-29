@@ -213,6 +213,11 @@ impl MioCompat {
             .map(|socket| socket.id)
     }
 
+    fn drop_pending_open(&mut self, socket_id: u32) {
+        self.pending_opens
+            .retain(|pending| pending.socket_id != socket_id);
+    }
+
     fn submit(&mut self, cmd: api::Command) -> Result<(), i32> {
         self.ensure_net()?;
         let result = self
@@ -309,11 +314,13 @@ impl MioCompat {
                     }
 
                     if let Some(port) = port {
-                        let _ = self.submit(api::Command::OpenTcpListen { port });
                         self.pending_opens.push_back(PendingOpen {
                             socket_id: listener_id,
                             kind: api::SocketKind::Tcp,
                         });
+                        if self.submit(api::Command::OpenTcpListen { port }).is_err() {
+                            self.drop_pending_open(listener_id);
+                        }
                     }
                 } else if let Some(socket) = self.socket_by_handle_mut(handle) {
                     socket.connected = true;
@@ -453,7 +460,10 @@ impl MioCompat {
                     continue;
                 }
 
-                if socket.kind == MioSocketKind::Udp && (readiness & READY_WRITABLE) != 0 {
+                if crate::logflag::NET_LOG_TCP_FLOW
+                    && socket.kind == MioSocketKind::Udp
+                    && (readiness & READY_WRITABLE) != 0
+                {
                     crate::log!(
                         "mio_compat: udp selector-ready selector={} socket={} token={} readiness=0x{:02x}\n",
                         selector_id,
@@ -462,7 +472,10 @@ impl MioCompat {
                         readiness
                     );
                 }
-                if socket.kind == MioSocketKind::TcpStream && (readiness & READY_WRITABLE) != 0 {
+                if crate::logflag::NET_LOG_TCP_FLOW
+                    && socket.kind == MioSocketKind::TcpStream
+                    && (readiness & READY_WRITABLE) != 0
+                {
                     crate::log!(
                         "mio_compat: tcp selector-ready selector={} socket={} token={} readiness=0x{:02x}\n",
                         selector_id,
@@ -528,15 +541,17 @@ pub unsafe extern "C" fn trueos_mio_tcp_listener_bind(
             accept_queue: VecDeque::new(),
         });
 
+        compat.pending_opens.push_back(PendingOpen {
+            socket_id,
+            kind: api::SocketKind::Tcp,
+        });
+
         let status = match compat.submit(api::Command::OpenTcpListen { port }) {
-            Ok(()) => {
-                compat.pending_opens.push_back(PendingOpen {
-                    socket_id,
-                    kind: api::SocketKind::Tcp,
-                });
-                STATUS_OK
+            Ok(()) => STATUS_OK,
+            Err(status) => {
+                compat.drop_pending_open(socket_id);
+                status
             }
-            Err(status) => status,
         };
 
         if status == STATUS_OK {
@@ -578,6 +593,11 @@ pub unsafe extern "C" fn trueos_mio_tcp_stream_connect(
 
         log_tcp_endpoint("mio_compat: tcp connect", socket_id, 0, peer);
 
+        compat.pending_opens.push_back(PendingOpen {
+            socket_id,
+            kind: api::SocketKind::Tcp,
+        });
+
         let status = match peer {
             CompatAddr::V4 { addr, port } => compat.submit(api::Command::OpenTcpConnect {
                 remote: api::EndpointV4 { addr, port },
@@ -588,14 +608,11 @@ pub unsafe extern "C" fn trueos_mio_tcp_stream_connect(
         };
 
         let status = match status {
-            Ok(()) => {
-                compat.pending_opens.push_back(PendingOpen {
-                    socket_id,
-                    kind: api::SocketKind::Tcp,
-                });
-                STATUS_OK
+            Ok(()) => STATUS_OK,
+            Err(status) => {
+                compat.drop_pending_open(socket_id);
+                status
             }
-            Err(status) => status,
         };
 
         if status == STATUS_OK {
@@ -658,15 +675,17 @@ pub unsafe extern "C" fn trueos_mio_udp_socket_bind(
             CompatAddr::V4 { port, .. } | CompatAddr::V6 { port, .. } => port,
         };
 
+        compat.pending_opens.push_back(PendingOpen {
+            socket_id,
+            kind: api::SocketKind::Udp,
+        });
+
         let status = match compat.submit(api::Command::OpenUdp { port }) {
-            Ok(()) => {
-                compat.pending_opens.push_back(PendingOpen {
-                    socket_id,
-                    kind: api::SocketKind::Udp,
-                });
-                STATUS_OK
+            Ok(()) => STATUS_OK,
+            Err(status) => {
+                compat.drop_pending_open(socket_id);
+                status
             }
-            Err(status) => status,
         };
 
         if status == STATUS_OK {

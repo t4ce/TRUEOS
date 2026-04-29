@@ -1,7 +1,7 @@
 extern crate alloc;
 
-use crate::r::t::net::http::{self, HttpFetchError};
-use crate::r::t::net::https;
+use crate::t::net::http::{self, HttpFetchError};
+use crate::t::net::https;
 use alloc::collections::BTreeSet;
 use alloc::string::String;
 use alloc::vec::Vec;
