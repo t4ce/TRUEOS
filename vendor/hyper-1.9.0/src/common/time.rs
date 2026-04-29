@@ -11,7 +11,7 @@ use crate::rt::Timer;
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 fn instant_now() -> Instant {
-    let duration = std::time::Duration::from_nanos(unsafe { trueos_tokio_time_now_nanos() });
+    let duration = std::time::Duration::from_nanos(unsafe { trueos_time_monotonic_nanos() });
 
     // Rust's unsupported std time backend stores Instant as a single Duration.
     // TRUEOS supplies the missing clock value through the std ABI shim.
@@ -25,7 +25,7 @@ fn instant_now() -> Instant {
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 unsafe extern "C" {
-    fn trueos_tokio_time_now_nanos() -> u64;
+    fn trueos_time_monotonic_nanos() -> u64;
 }
 
 /// A user-provided timer to time background tasks.

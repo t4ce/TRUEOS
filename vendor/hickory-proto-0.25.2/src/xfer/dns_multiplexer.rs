@@ -44,7 +44,7 @@ use crate::{
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 fn hickory_system_time_now() -> SystemTime {
-    UNIX_EPOCH + std::time::Duration::from_secs(unsafe { trueos_octocrab_unix_time_seconds() })
+    UNIX_EPOCH + std::time::Duration::from_secs(unsafe { trueos_time_unix_seconds() })
 }
 
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
@@ -54,7 +54,7 @@ fn hickory_system_time_now() -> SystemTime {
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 unsafe extern "C" {
-    fn trueos_octocrab_unix_time_seconds() -> u64;
+    fn trueos_time_unix_seconds() -> u64;
 }
 
 const QOS_MAX_RECEIVE_MSGS: usize = 100; // max number of messages to receive from the UDP socket

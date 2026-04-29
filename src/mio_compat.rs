@@ -77,6 +77,33 @@ impl CompatAddr {
     }
 }
 
+fn log_tcp_endpoint(prefix: &str, socket_id: u32, handle_id: u32, peer: CompatAddr) {
+    match peer {
+        CompatAddr::V4 { addr, port } => crate::log!(
+            "{} socket={} handle={} peer={}.{}.{}.{}:{}\n",
+            prefix,
+            socket_id,
+            handle_id,
+            addr[0],
+            addr[1],
+            addr[2],
+            addr[3],
+            port
+        ),
+        CompatAddr::V6 { addr, port } => crate::log!(
+            "{} socket={} handle={} peer={:02x}{:02x}:{:02x}{:02x}:...:{}\n",
+            prefix,
+            socket_id,
+            handle_id,
+            addr[0],
+            addr[1],
+            addr[2],
+            addr[3],
+            port
+        ),
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MioSocketKind {
     TcpStream,
@@ -212,13 +239,26 @@ impl MioCompat {
                     && let Some(socket) = self.socket_mut(pending.socket_id)
                 {
                     socket.handle = Some(handle);
-                    if socket.kind == MioSocketKind::Udp {
-                        socket.connected = true;
-                        crate::log!(
-                            "mio_compat: udp opened socket={} handle={}\n",
-                            socket.id,
-                            handle.0
-                        );
+                    match socket.kind {
+                        MioSocketKind::Udp => {
+                            socket.connected = true;
+                            crate::log!(
+                                "mio_compat: udp opened socket={} handle={}\n",
+                                socket.id,
+                                handle.0
+                            );
+                        }
+                        MioSocketKind::TcpStream => {
+                            if let Some(peer) = socket.peer {
+                                log_tcp_endpoint(
+                                    "mio_compat: tcp opened",
+                                    socket.id,
+                                    handle.0,
+                                    peer,
+                                );
+                            }
+                        }
+                        MioSocketKind::TcpListener => {}
                     }
                 }
             }
@@ -261,6 +301,16 @@ impl MioCompat {
                     }
                 } else if let Some(socket) = self.socket_by_handle_mut(handle) {
                     socket.connected = true;
+                    if socket.kind == MioSocketKind::TcpStream
+                        && let Some(peer) = socket.peer
+                    {
+                        log_tcp_endpoint(
+                            "mio_compat: tcp established",
+                            socket.id,
+                            handle.0,
+                            peer,
+                        );
+                    }
                 }
             }
             api::Event::TcpData { handle, data } => {
@@ -395,6 +445,15 @@ impl MioCompat {
                         readiness
                     );
                 }
+                if socket.kind == MioSocketKind::TcpStream && (readiness & READY_WRITABLE) != 0 {
+                    crate::log!(
+                        "mio_compat: tcp selector-ready selector={} socket={} token={} readiness=0x{:02x}\n",
+                        selector_id,
+                        socket.id,
+                        reg.token,
+                        readiness
+                    );
+                }
 
                 unsafe {
                     out_events.add(written).write(TrueosMioReadyEvent {
@@ -499,6 +558,8 @@ pub unsafe extern "C" fn trueos_mio_tcp_stream_connect(
             rx_dgrams: VecDeque::new(),
             accept_queue: VecDeque::new(),
         });
+
+        log_tcp_endpoint("mio_compat: tcp connect", socket_id, 0, peer);
 
         let status = match peer {
             CompatAddr::V4 { addr, port } => compat.submit(api::Command::OpenTcpConnect {

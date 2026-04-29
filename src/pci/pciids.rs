@@ -379,14 +379,10 @@ async fn hyper_fetch_pciids_on_device(
     Ok(body)
 }
 
-async fn fetch_pciids_hyper_body() -> Result<Vec<u8>, &'static str> {
-    crate::r::readiness::wait_for(
-        crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::NET_SOCKET_READY,
-    )
-    .await;
-
-    let dev_idx = crate::net::primary_device_index();
-    let dns_cfg = crate::r::net::dns::DnsConfig::for_device_v4_only(dev_idx);
+async fn fetch_pciids_hyper_body_on_tokio(
+    dev_idx: usize,
+    dns_cfg: crate::r::net::dns::DnsConfig,
+) -> Result<Vec<u8>, &'static str> {
     log_pciids_dns_config(dev_idx, &dns_cfg);
     let ip = match crate::r::net::dns::resolve_ipv4_for_device(dev_idx, PCI_IDS_HOST, dns_cfg).await
     {
@@ -403,11 +399,22 @@ async fn fetch_pciids_hyper_body() -> Result<Vec<u8>, &'static str> {
         }
     };
 
+    hyper_fetch_pciids_on_device(dev_idx, ip).await
+}
+
+async fn fetch_pciids_hyper_body() -> Result<Vec<u8>, &'static str> {
+    crate::r::readiness::wait_for(
+        crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::NET_SOCKET_READY,
+    )
+    .await;
+
+    let dev_idx = crate::net::primary_device_index();
+    let dns_cfg = crate::r::net::dns::DnsConfig::for_device_v4_only(dev_idx);
     let mut runtime_builder = tokio::runtime::Builder::new_current_thread();
     runtime_builder.enable_io();
     runtime_builder.enable_time();
     let runtime = runtime_builder.build().map_err(|_| "tokio runtime")?;
-    runtime.block_on(hyper_fetch_pciids_on_device(dev_idx, ip))
+    runtime.block_on(fetch_pciids_hyper_body_on_tokio(dev_idx, dns_cfg))
 }
 
 async fn download_pciids_hyper_to_file(

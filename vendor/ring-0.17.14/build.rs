@@ -254,6 +254,7 @@ const LINUX_ABI: &[&str] = &[
     "linux",
     "redox",
     "solaris",
+    "trueos",
 ];
 
 const WIN32N: &str = "win32n";
@@ -571,6 +572,9 @@ fn configure_cc(c: &mut cc::Build, target: &Target, c_root_dir: &Path, include_d
     let _ = c.include(include_dir);
     for f in cpp_flags(&compiler) {
         let _ = c.flag(f);
+    }
+    if target.os == "trueos" && !compiler.is_like_msvc() {
+        let _ = c.flag("-fno-stack-protector");
     }
 
     if APPLE_ABI.contains(&target.os.as_str()) {

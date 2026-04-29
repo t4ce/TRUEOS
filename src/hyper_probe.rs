@@ -1,7 +1,6 @@
 //! Direct Hyper integration probe.
 //!
 //! This lets the kernel own a first-class Hyper dependency directly beside
-//! Tokio instead of relying on the temporary Octocrab path.
 
 extern crate std;
 

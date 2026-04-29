@@ -976,11 +976,14 @@ fn resolve_std_abi_import(name: &str) -> Option<usize> {
         "sys_cycle_count" => Some(crate::std_abi_shim::sys_cycle_count as *const () as usize),
         "sys_panic" => Some(crate::std_abi_shim::sys_panic as *const () as usize),
         "sys_halt" => Some(crate::std_abi_shim::sys_halt as *const () as usize),
-        "trueos_tokio_time_now_nanos" => {
-            Some(crate::std_abi_shim::trueos_tokio_time_now_nanos as *const () as usize)
+        "trueos_time_monotonic_nanos" => {
+            Some(crate::std_abi_shim::trueos_time_monotonic_nanos as *const () as usize)
         }
-        "trueos_octocrab_unix_time_seconds" => {
-            Some(crate::std_abi_shim::trueos_octocrab_unix_time_seconds as *const () as usize)
+        "trueos_time_unix_nanos" => {
+            Some(crate::std_abi_shim::trueos_time_unix_nanos as *const () as usize)
+        }
+        "trueos_time_unix_seconds" => {
+            Some(crate::std_abi_shim::trueos_time_unix_seconds as *const () as usize)
         }
         "trueos_mio_tcp_listener_bind" => {
             Some(crate::mio_compat::trueos_mio_tcp_listener_bind as *const () as usize)

@@ -17,17 +17,13 @@ pub use v::vcabi::{
     trueos_cabi_net_fetch_post_json_bytes_start, trueos_cabi_net_fetch_post_json_start,
     trueos_cabi_net_fetch_result, trueos_cabi_net_fetch_start, trueos_cabi_net_fetch_wait,
     trueos_cabi_net_prewarm_url_start, trueos_cabi_poll_once, trueos_cabi_qjs_mouse_pop,
-    trueos_cabi_shell_command_registry_json, trueos_cabi_shell_qjs_init,
-    trueos_cabi_shell_qjs_read, trueos_cabi_shell_qjs_read_byte, trueos_cabi_shell_qjs_write,
-    trueos_cabi_shell_qjs_write_byte, trueos_cabi_shell1_submit_input,
+    trueos_cabi_shell_command_registry_json, trueos_cabi_shell1_submit_input,
     trueos_cabi_shell2_print_line, trueos_cabi_trueosfs_json_all,
     trueos_cabi_trueosfs_primary_html_tree, trueos_cabi_uart1_shell_write,
 };
 pub use v::vgfx::capture_screenshot_data_url as gfx_capture_screenshot_data_url;
 pub use v::vshell::{
-    shell_command_registry_json, shell_qjs_init, shell_qjs_read, shell_qjs_read_byte,
-    shell_qjs_write, shell_qjs_write_byte, shell1_submit_input, shell2_print_line,
-    uart1_shell_write,
+    shell_command_registry_json, shell1_submit_input, shell2_print_line, uart1_shell_write,
 };
 pub use v::vsys::{log_error, log_info, write_log_stream};
 
