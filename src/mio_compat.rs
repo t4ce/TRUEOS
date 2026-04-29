@@ -327,12 +327,7 @@ impl MioCompat {
                     if socket.kind == MioSocketKind::TcpStream
                         && let Some(peer) = socket.peer
                     {
-                        log_tcp_endpoint(
-                            "mio_compat: tcp established",
-                            socket.id,
-                            handle.0,
-                            peer,
-                        );
+                        log_tcp_endpoint("mio_compat: tcp established", socket.id, handle.0, peer);
                     }
                 }
             }

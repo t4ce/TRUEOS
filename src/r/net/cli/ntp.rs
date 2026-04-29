@@ -7,8 +7,8 @@ use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
 use v::vnet;
 
-use crate::t::net::dns::{self, DnsConfig};
 use crate::r::net::{NetProfile, VNet};
+use crate::t::net::dns::{self, DnsConfig};
 
 const NTP_SERVER_HOSTS: [&str; 4] = [
     "time.google.com",

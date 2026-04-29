@@ -7,9 +7,9 @@ use crate::net::tls::{TlsClientConfig, TlsRoots};
 use crate::net::tls_socket::{TlsCommand, TlsEvent, register_tls_app_queues};
 use crate::r::io::cabi::{
     FS_ERR_BAD_PARAM, FS_ERR_BAD_PATH, FS_ERR_IO, FS_ERR_NO_SPACE, FS_ERR_NOT_FOUND,
-    FS_ERR_TIMEOUT, FS_ERR_TOO_LARGE, NET_ERR_BAD_URL, NET_ERR_HTTP,
-    NET_ERR_TIMEOUT, NET_ERR_TIMEOUT_BODY, NET_ERR_TIMEOUT_CONNECT, NET_ERR_TIMEOUT_DNS,
-    NET_ERR_TIMEOUT_TLS, NET_ERR_TLS,
+    FS_ERR_TIMEOUT, FS_ERR_TOO_LARGE, NET_ERR_BAD_URL, NET_ERR_HTTP, NET_ERR_TIMEOUT,
+    NET_ERR_TIMEOUT_BODY, NET_ERR_TIMEOUT_CONNECT, NET_ERR_TIMEOUT_DNS, NET_ERR_TIMEOUT_TLS,
+    NET_ERR_TLS,
 };
 use crate::r::net::{NetProfile, Queue};
 use crate::wait::WaitQueue;
@@ -277,29 +277,14 @@ async fn keepalive_prepare_ready(
         parsed.port
     );
     let conn = ensure_keepalive_conn(dev_idx, parsed.host.as_str(), parsed.port);
-    crate::log!(
-        "{}: prepare acquire host={} dev={}\n",
-        log_prefix,
-        parsed.host,
-        dev_idx
-    );
+    crate::log!("{}: prepare acquire host={} dev={}\n", log_prefix, parsed.host, dev_idx);
     keepalive_acquire(conn).await;
-    crate::log!(
-        "{}: prepare acquired host={} dev={}\n",
-        log_prefix,
-        parsed.host,
-        dev_idx
-    );
+    crate::log!("{}: prepare acquired host={} dev={}\n", log_prefix, parsed.host, dev_idx);
 
     // Drain pending events so each request starts from a clean boundary while
     // still preserving pooled socket state transitions.
     keepalive_sync_state(conn);
-    crate::log!(
-        "{}: prepare synced host={} dev={}\n",
-        log_prefix,
-        parsed.host,
-        dev_idx
-    );
+    crate::log!("{}: prepare synced host={} dev={}\n", log_prefix, parsed.host, dev_idx);
 
     let mut reused = false;
     {
@@ -319,12 +304,7 @@ async fn keepalive_prepare_ready(
 
     let mut ip: Option<[u8; 4]> = None;
     if !reused {
-        crate::log!(
-            "{}: dns begin host={} dev={}\n",
-            log_prefix,
-            parsed.host,
-            dev_idx
-        );
+        crate::log!("{}: dns begin host={} dev={}\n", log_prefix, parsed.host, dev_idx);
         match dns::resolve_ipv4_for_device(
             dev_idx,
             parsed.host.as_str(),

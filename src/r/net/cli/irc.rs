@@ -7,9 +7,9 @@ use alloc::{format, string::String, vec::Vec};
 use embassy_time::{Duration, Instant, Timer};
 use v::vnet::{self, ByteBuf, Command, EndpointV4, Event, NetHandle, SocketKind};
 
-use crate::t::net::dns::{self, DnsConfig};
 use crate::net::tls::{KernelTlsRng, TlsClient, TlsClientConfig, TlsRoots, TlsTime};
 use crate::r::net::{NetProfile, VNet};
+use crate::t::net::dns::{self, DnsConfig};
 
 pub const IRC_DEFAULT_PORT: u16 = crate::allports::well_known::IRC;
 pub const IRC_TLS_PORT: u16 = crate::allports::well_known::IRC_TLS;

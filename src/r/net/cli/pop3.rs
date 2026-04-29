@@ -13,10 +13,10 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use embassy_time::{Duration, Instant, Timer};
 use v::vnet::{self, EndpointV4};
 
-use crate::t::net::dns::{self, DnsConfig};
 use crate::net::tls::{TlsClientConfig, TlsRoots};
 use crate::net::tls_socket::{TlsCommand, TlsEvent, TlsTimeouts, register_tls_app_queues};
 use crate::r::net::{NetProfile, Queue};
+use crate::t::net::dns::{self, DnsConfig};
 
 // Hardcoded incoming POP3-over-TLS server.
 pub const POP3_HOST: &str = "pop.mail.com";

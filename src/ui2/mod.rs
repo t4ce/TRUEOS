@@ -486,6 +486,7 @@ struct Ui2Window {
     last_clicked_item_id: u32,
     last_clicked_item_seq: u32,
     last_clicked_cursor_slot: u32,
+    cursor_events: Vec<Ui2WindowCursorEvent>,
     title_tex_id: u32,
     title_tex_w: u32,
     title_tex_h: u32,

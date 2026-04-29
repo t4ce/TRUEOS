@@ -72,7 +72,7 @@ dependencies = [
  "unicode-segmentation",
  "usvg",
  "v",
- "webpki-roots 1.0.7",
+ "webpki-roots",
  "x86_64",
  "zeroize",
  "zune-core",
@@ -1296,25 +1296,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "h2"
-version = "0.4.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f44da3a8150a6703ed5d34e164b875fd14c2cdab9af1252a9a1020bde2bdc54"
-dependencies = [
- "atomic-waker",
- "bytes",
- "fnv",
- "futures-core",
- "futures-sink",
- "http",
- "indexmap",
- "slab",
- "tokio",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
 name = "hash32"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1390,28 +1371,22 @@ name = "hickory-proto"
 version = "0.25.2"
 dependencies = [
  "async-trait",
- "bytes",
  "cfg-if",
  "data-encoding",
  "enum-as-inner",
  "futures-channel",
  "futures-io",
  "futures-util",
- "h2",
- "http",
  "idna",
  "ipnet",
  "once_cell",
  "rand 0.9.4",
  "ring",
- "rustls",
  "thiserror",
  "tinyvec",
  "tokio",
- "tokio-rustls",
  "tracing",
  "url",
- "webpki-roots 0.26.11",
 ]
 
 [[package]]
@@ -1427,13 +1402,10 @@ dependencies = [
  "once_cell",
  "parking_lot",
  "rand 0.9.4",
- "rustls",
  "smallvec",
  "thiserror",
  "tokio",
- "tokio-rustls",
  "tracing",
- "webpki-roots 0.26.11",
 ]
 
 [[package]]
@@ -2470,6 +2442,8 @@ dependencies = [
 [[package]]
 name = "ring"
 version = "0.17.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4689e6c2294d81e88dc6261c768b63bc4fcdb852be6d1352498b114f61383b7"
 dependencies = [
  "cc",
  "cfg-if",
@@ -2523,7 +2497,6 @@ checksum = "69f9466fb2c14ea04357e91413efb882e2a6d4a406e625449bc0a5d360d53a21"
 dependencies = [
  "log",
  "once_cell",
- "ring",
  "rustls-pki-types",
  "rustls-webpki 0.103.12",
  "subtle",
@@ -3047,29 +3020,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tokio-rustls"
-version = "0.26.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1729aa945f29d91ba541258c8df89027d5792d85a8841fb65e8bf0f4ede4ef61"
-dependencies = [
- "rustls",
- "tokio",
-]
-
-[[package]]
-name = "tokio-util"
-version = "0.7.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9ae9cec805b01e8fc3fd2fe289f89149a9b66dd16786abd8b19cfa7b48cb0098"
-dependencies = [
- "bytes",
- "futures-core",
- "futures-sink",
- "pin-project-lite",
- "tokio",
-]
-
-[[package]]
 name = "tracing"
 version = "0.1.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3508,15 +3458,6 @@ dependencies = [
  "hashbrown 0.15.5",
  "indexmap",
  "semver",
-]
-
-[[package]]
-name = "webpki-roots"
-version = "0.26.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
-dependencies = [
- "webpki-roots 1.0.7",
 ]
 
 [[package]]

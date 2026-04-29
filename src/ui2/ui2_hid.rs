@@ -5,6 +5,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use trueos_gfx_core::Rgba8;
 
 static UI2_CURSOR_CAP_DROP_COUNT: AtomicU32 = AtomicU32::new(0);
+const UI2_WINDOW_CURSOR_EVENT_CAP: usize = 256;
 pub(crate) const UI2_FUN_CURSOR_ICONS_ENABLED: bool = true;
 const UI2_CURSOR_SPIRIT_DEFAULTS: [char; 6] = ['🦋', '🦊', '🦎', '🦁', '🦄', '🐕'];
 const UI2_CURSOR_SPIRIT_CHOICES: [char; 24] = [
@@ -290,6 +291,54 @@ fn set_cursor_selected_window(state: &mut Ui2State, slot_id: u32, next_window_id
     changed
 }
 
+fn queue_window_cursor_event(
+    state: &mut Ui2State,
+    window_id: u32,
+    slot_id: u32,
+    x: f32,
+    y: f32,
+    buttons_down: u32,
+    wheel: i16,
+    flags: u32,
+) -> bool {
+    if window_id == 0 {
+        return false;
+    }
+    let Some(content) = state
+        .windows
+        .iter()
+        .find(|window| window.id == window_id)
+        .and_then(|window| window_content_rect(state, window))
+    else {
+        return false;
+    };
+    let Some(window) = window_mut(state, window_id) else {
+        return false;
+    };
+    if window.cursor_events.len() >= UI2_WINDOW_CURSOR_EVENT_CAP {
+        window.cursor_events.remove(0);
+    }
+    window.cursor_events.push(Ui2WindowCursorEvent {
+        slot_id,
+        x: x - content.x,
+        y: y - content.y,
+        buttons_down,
+        wheel,
+        flags,
+    });
+    true
+}
+
+fn selected_window_content_contains_cursor(state: &Ui2State, window_id: u32, x: f32, y: f32) -> bool {
+    state
+        .windows
+        .iter()
+        .find(|window| window.id == window_id)
+        .and_then(|window| window_content_rect(state, window))
+        .map(|content| rect_contains_point(content, x, y))
+        .unwrap_or(false)
+}
+
 fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHidCursorEvent) {
     let slot_id = event.slot_id;
     if slot_id == 0 {
@@ -354,6 +403,7 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHid
     let mut click_press_x = 0.0f32;
     let mut click_press_y = 0.0f32;
     let mut try_offline_dock = false;
+    let mut cursor_capture_window_id = 0u32;
     {
         let cursor = &mut state.cursors[cursor_idx];
         let prev_buttons_down = cursor.buttons_down;
@@ -377,6 +427,10 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHid
             cursor.press_armed = press_window_id != 0;
             begin_move_drag = true;
         } else if primary_was_down && !primary_is_down {
+            if cursor.selected_window_id != 0 && cursor.press_window_id == cursor.selected_window_id
+            {
+                cursor_capture_window_id = cursor.selected_window_id;
+            }
             if cursor.press_armed
                 && cursor.press_window_id != 0
                 && cursor.press_window_id == release_window_id
@@ -404,6 +458,14 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHid
             cursor.press_item_id = 0;
         }
 
+        if cursor_capture_window_id == 0
+            && cursor.selected_window_id != 0
+            && cursor.press_window_id == cursor.selected_window_id
+            && primary_is_down
+        {
+            cursor_capture_window_id = cursor.selected_window_id;
+        }
+
         if !middle_was_down
             && middle_is_down
             && let Some(target) = press_hit
@@ -412,6 +474,27 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHid
             begin_scroll_pan_window_id = target.owner_window_id;
         }
     }
+
+    let selected_window_id = state.cursors[cursor_idx].selected_window_id;
+    let route_window_id = if cursor_capture_window_id != 0 {
+        cursor_capture_window_id
+    } else if selected_window_id != 0
+        && selected_window_content_contains_cursor(state, selected_window_id, px, py)
+    {
+        selected_window_id
+    } else {
+        0
+    };
+    let _ = queue_window_cursor_event(
+        state,
+        route_window_id,
+        slot_id,
+        px,
+        py,
+        event.buttons_down,
+        event.wheel,
+        event.flags,
+    );
 
     // Deferred offline dock click (after cursor borrow is released).
     if try_offline_dock {
