@@ -1,5 +1,6 @@
 BUILD_MODE ?= debug
-KERNEL_BIN = tgt/86_64/$(BUILD_MODE)/TRUEOS
+KERNEL_TARGET_DIR = x86_64-unknown-trueos
+KERNEL_BIN = tgt/$(KERNEL_TARGET_DIR)/$(BUILD_MODE)/TRUEOS
 ARTIFACT_BUILD_ID ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 ARTIFACT_DIR = bld/artifacts/$(BUILD_MODE)-$(ARTIFACT_BUILD_ID)
 ARTIFACT_FULL_ELF = $(ARTIFACT_DIR)/TRUEOS.full.elf

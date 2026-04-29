@@ -36,7 +36,7 @@ use super::ALPN_H3;
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 fn hickory_instant_now() -> std::time::Instant {
-    let duration = std::time::Duration::from_nanos(unsafe { trueos_tokio_time_now_nanos() });
+    let duration = std::time::Duration::from_nanos(unsafe { trueos_time_monotonic_nanos() });
     // TRUEOS currently uses Rust's unsupported std-time layout shim; Hyper uses
     // the same representation bridge for target-local Instant construction.
     unsafe { core::mem::transmute::<std::time::Duration, std::time::Instant>(duration) }
@@ -49,7 +49,7 @@ fn hickory_instant_now() -> std::time::Instant {
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 unsafe extern "C" {
-    fn trueos_tokio_time_now_nanos() -> u64;
+    fn trueos_time_monotonic_nanos() -> u64;
 }
 
 /// A DNS client connection for DNS-over-HTTP/3

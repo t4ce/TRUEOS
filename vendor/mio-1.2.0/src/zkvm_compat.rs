@@ -3,7 +3,7 @@ use std::{fmt, io};
 
 unsafe extern "C" {
     fn trueos_cabi_poll_once();
-    fn trueos_tokio_time_now_nanos() -> u64;
+    fn trueos_time_monotonic_nanos() -> u64;
 }
 
 pub(crate) fn unsupported_io_error(detail: &'static str) -> io::Error {
@@ -17,7 +17,7 @@ pub(crate) fn poll_once() {
 
 #[inline]
 pub(crate) fn now_nanos() -> u64 {
-    unsafe { trueos_tokio_time_now_nanos() }
+    unsafe { trueos_time_monotonic_nanos() }
 }
 
 #[inline]

@@ -7,18 +7,15 @@
 extern crate alloc;
 extern crate std;
 
-use alloc::{sync::Arc, vec::Vec};
+use alloc::sync::Arc;
 use core::cell::Cell;
 use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_executor::task;
-use hickory_resolver::config::{
-    LookupIpStrategy, NameServerConfig, ResolveHosts, ResolverConfig, ResolverOpts,
-};
+use hickory_resolver::config::{LookupIpStrategy, ResolveHosts, ResolverOpts};
 use hickory_resolver::name_server::TokioConnectionProvider;
-use hickory_resolver::proto::xfer::Protocol as DnsProtocol;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::io;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 
 const VNET_PROBE_PORT: u16 = crate::allports::probes::VNET_PROBE_PORT;
 const TOKIO_NET_PROBE_PORT: u16 = crate::allports::probes::TOKIO_NET_PROBE_PORT;
@@ -73,45 +70,30 @@ fn primary_ipv4_probe_addr(port: u16) -> Option<SocketAddr> {
     Some(SocketAddr::from((ip, port)))
 }
 
-fn hickory_resolver_config_for_device(
+async fn probe_hickory_secure_ipv4_lookup(
+    transport: crate::r::net::dns::SecureDnsTransport,
+    dns: crate::r::net::dns::DnsConfig,
     dev_idx: usize,
-) -> Option<(crate::r::net::dns::DnsConfig, ResolverConfig)> {
-    let dns = crate::r::net::dns::DnsConfig::for_device_v4_only(dev_idx);
-    let mut servers = Vec::new();
-
-    for server in dns.servers[..(dns.server_count as usize).min(dns.servers.len())].iter() {
-        let crate::r::net::dns::DnsServer::V4(addr) = *server else {
-            continue;
-        };
-        let ip = IpAddr::V4(Ipv4Addr::from(addr));
-        servers.push(NameServerConfig::new(SocketAddr::from((ip, 53)), DnsProtocol::Udp));
-    }
-
-    if servers.is_empty() {
-        return None;
-    }
-
-    Some((dns, ResolverConfig::from_parts(None, Vec::new(), servers)))
-}
-
-async fn probe_hickory_resolver_surface() -> Result<(), &'static str> {
-    const HICKORY_PROBE_HOST: &str = "raw.githubusercontent.com.";
-
-    let dev_idx = crate::net::primary_device_index();
-    let Some((dns, config)) = hickory_resolver_config_for_device(dev_idx) else {
-        crate::log!("tokio_probe: note net.hickory skipped (no ipv4 dns servers)\n");
-        return Ok(());
+    host: &str,
+) -> Result<(), &'static str> {
+    let config = match transport {
+        crate::r::net::dns::SecureDnsTransport::Doh => crate::r::net::dns::doh_resolver_config(),
+        crate::r::net::dns::SecureDnsTransport::Dot => crate::r::net::dns::dot_resolver_config(),
+        crate::r::net::dns::SecureDnsTransport::Doh3 => {
+            return Err("net.hickory.doh3.ipv4_lookup_unwired");
+        }
     };
 
     crate::log!(
-        "tokio_probe: enter net.hickory.ipv4_lookup host={} dev={} servers={}\n",
-        HICKORY_PROBE_HOST,
-        dev_idx,
-        dns.server_count
+        "tokio_probe: enter net.hickory.ipv4_lookup transport={} host={} dev={} secure=true\n",
+        transport.label(),
+        host,
+        dev_idx
     );
 
     let mut opts = ResolverOpts::default();
-    opts.timeout = core::time::Duration::from_millis(dns.resend_ms.max(100));
+    let query_timeout_ms = dns.timeout_ms.max(dns.resend_ms).max(100);
+    opts.timeout = core::time::Duration::from_millis(query_timeout_ms);
     opts.attempts = 1;
     opts.ip_strategy = LookupIpStrategy::Ipv4Only;
     opts.num_concurrent_reqs = 1;
@@ -125,8 +107,8 @@ async fn probe_hickory_resolver_surface() -> Result<(), &'static str> {
             .build();
 
     match tokio::time::timeout(
-        core::time::Duration::from_millis(dns.timeout_ms.max(dns.resend_ms)),
-        resolver.ipv4_lookup(HICKORY_PROBE_HOST),
+        core::time::Duration::from_millis(query_timeout_ms),
+        resolver.ipv4_lookup(host),
     )
     .await
     {
@@ -141,25 +123,84 @@ async fn probe_hickory_resolver_surface() -> Result<(), &'static str> {
             }
             if let Some(ip) = first {
                 crate::log!(
-                    "tokio_probe: success net.hickory.ipv4_lookup first={} count={}\n",
+                    "tokio_probe: success net.hickory.ipv4_lookup transport={} first={} count={}\n",
+                    transport.label(),
                     ip,
                     count
                 );
                 Ok(())
             } else {
-                crate::log!("tokio_probe: failure net.hickory.ipv4_lookup_no_answer\n");
+                crate::log!(
+                    "tokio_probe: failure net.hickory.ipv4_lookup_no_answer transport={}\n",
+                    transport.label()
+                );
                 Err("net.hickory.ipv4_lookup_no_answer")
             }
         }
         Ok(Err(err)) => {
-            crate::log!("tokio_probe: failure net.hickory.ipv4_lookup err={}\n", err);
+            crate::log!(
+                "tokio_probe: failure net.hickory.ipv4_lookup transport={} err={}\n",
+                transport.label(),
+                err
+            );
             Err("net.hickory.ipv4_lookup")
         }
         Err(_) => {
-            crate::log!("tokio_probe: failure net.hickory.ipv4_lookup_timeout\n");
+            crate::log!(
+                "tokio_probe: failure net.hickory.ipv4_lookup_timeout transport={}\n",
+                transport.label()
+            );
             Err("net.hickory.ipv4_lookup_timeout")
         }
     }
+}
+
+async fn probe_hickory_resolver_surface() -> Result<(), &'static str> {
+    const HICKORY_PROBE_HOST: &str = "raw.githubusercontent.com.";
+
+    let dev_idx = crate::net::primary_device_index();
+    let dns = crate::r::net::dns::DnsConfig::for_device_v4_only(dev_idx);
+    if dns.server_count == 0 {
+        crate::log!("tokio_probe: note net.hickory skipped (no ipv4 dns config)\n");
+        return Ok(());
+    }
+
+    crate::log!(
+        "tokio_probe: enter net.hickory.secure_ipv4_lookup host={} dev={} transports=doh,dot\n",
+        HICKORY_PROBE_HOST,
+        dev_idx
+    );
+
+    let doh = probe_hickory_secure_ipv4_lookup(
+        crate::r::net::dns::SecureDnsTransport::Doh,
+        dns,
+        dev_idx,
+        HICKORY_PROBE_HOST,
+    )
+    .await;
+    if doh.is_ok() {
+        return Ok(());
+    }
+    if let Err(stage) = doh {
+        crate::log!("tokio_probe: note net.hickory.doh failed stage={}\n", stage);
+    }
+
+    let dot = probe_hickory_secure_ipv4_lookup(
+        crate::r::net::dns::SecureDnsTransport::Dot,
+        dns,
+        dev_idx,
+        HICKORY_PROBE_HOST,
+    )
+    .await;
+    if dot.is_ok() {
+        return Ok(());
+    }
+    if let Err(stage) = dot {
+        crate::log!("tokio_probe: note net.hickory.dot failed stage={}\n", stage);
+    }
+
+    crate::log!("tokio_probe: failure net.hickory.secure_ipv4_lookup\n");
+    Err("net.hickory.secure_ipv4_lookup")
 }
 
 fn probe_hickory_h3_surface() {

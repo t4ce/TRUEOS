@@ -162,13 +162,20 @@ pub unsafe extern "C" fn sys_cycle_count() -> usize {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn trueos_tokio_time_now_nanos() -> u64 {
+pub extern "C" fn trueos_time_monotonic_nanos() -> u64 {
     crate::chronos::monotonic_nanos()
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn trueos_octocrab_unix_time_seconds() -> u64 {
+pub extern "C" fn trueos_time_unix_seconds() -> u64 {
     crate::chronos::best_effort_unix_time_seconds().unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_time_unix_nanos() -> u64 {
+    crate::chronos::best_effort_unix_time_seconds()
+        .unwrap_or(0)
+        .saturating_mul(1_000_000_000)
 }
 
 #[unsafe(no_mangle)]
