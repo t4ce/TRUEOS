@@ -142,6 +142,11 @@ impl Socket {
         }
     }
 
+    pub(crate) fn shutdown(&self) -> io::Result<()> {
+        let status = unsafe { trueos_mio_socket_close(self.id) };
+        status_to_result(status, "mio zkvm socket shutdown failed")
+    }
+
     pub(crate) fn read(&self, buf: &mut [u8]) -> io::Result<usize> {
         let status = unsafe { trueos_mio_tcp_stream_read(self.id, buf.as_mut_ptr(), buf.len()) };
         read_write_result(status, "mio zkvm tcp read failed")

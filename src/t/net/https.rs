@@ -146,15 +146,23 @@ fn ensure_keepalive_conn(dev_idx: usize, host: &str, port: u16) -> &'static Keep
 }
 
 async fn keepalive_acquire(conn: &'static KeepAliveConn) {
+    let mut waited_ms = 0u64;
     loop {
         if conn
             .in_use
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
         {
+            if waited_ms != 0 {
+                crate::log!("vhttps-ka: acquire waited_ms={}\n", waited_ms);
+            }
             return;
         }
         Timer::after(EmbassyDuration::from_millis(1)).await;
+        waited_ms = waited_ms.saturating_add(1);
+        if waited_ms == 250 || waited_ms == 1000 || waited_ms % 5000 == 0 {
+            crate::log!("vhttps-ka: acquire still waiting waited_ms={}\n", waited_ms);
+        }
     }
 }
 
@@ -261,12 +269,37 @@ async fn keepalive_prepare_ready(
     timeout_ms: u32,
     log_prefix: &str,
 ) -> Result<KeepAliveReady, FetchError> {
+    crate::log!(
+        "{}: prepare begin host={} dev={} port={}\n",
+        log_prefix,
+        parsed.host,
+        dev_idx,
+        parsed.port
+    );
     let conn = ensure_keepalive_conn(dev_idx, parsed.host.as_str(), parsed.port);
+    crate::log!(
+        "{}: prepare acquire host={} dev={}\n",
+        log_prefix,
+        parsed.host,
+        dev_idx
+    );
     keepalive_acquire(conn).await;
+    crate::log!(
+        "{}: prepare acquired host={} dev={}\n",
+        log_prefix,
+        parsed.host,
+        dev_idx
+    );
 
     // Drain pending events so each request starts from a clean boundary while
     // still preserving pooled socket state transitions.
     keepalive_sync_state(conn);
+    crate::log!(
+        "{}: prepare synced host={} dev={}\n",
+        log_prefix,
+        parsed.host,
+        dev_idx
+    );
 
     let mut reused = false;
     {
@@ -286,6 +319,12 @@ async fn keepalive_prepare_ready(
 
     let mut ip: Option<[u8; 4]> = None;
     if !reused {
+        crate::log!(
+            "{}: dns begin host={} dev={}\n",
+            log_prefix,
+            parsed.host,
+            dev_idx
+        );
         match dns::resolve_ipv4_for_device(
             dev_idx,
             parsed.host.as_str(),
@@ -293,12 +332,26 @@ async fn keepalive_prepare_ready(
         )
         .await
         {
-            Ok(v) => ip = Some(v),
+            Ok(v) => {
+                crate::log!(
+                    "{}: dns ok host={} dev={} ip={}.{}.{}.{}\n",
+                    log_prefix,
+                    parsed.host,
+                    dev_idx,
+                    v[0],
+                    v[1],
+                    v[2],
+                    v[3]
+                );
+                ip = Some(v);
+            }
             Err(dns::DnsError::Timeout) => {
+                crate::log!("{}: dns timeout host={} dev={}\n", log_prefix, parsed.host, dev_idx);
                 keepalive_release(conn);
                 return Err(FetchError::DnsTimeout);
             }
             Err(_) => {
+                crate::log!("{}: dns failed host={} dev={}\n", log_prefix, parsed.host, dev_idx);
                 keepalive_release(conn);
                 return Err(FetchError::DnsFailed);
             }
