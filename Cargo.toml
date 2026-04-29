@@ -47,7 +47,7 @@ embedded-websocket = { version = "0.9.4", default-features = false }
 smoltcp = { version = "0.13", default-features = false, features = ["alloc", "proto-ipv4", "proto-ipv6", "multicast", "socket-raw", "socket-udp", "socket-tcp", "socket-icmp", "socket-dhcpv4", "medium-ethernet"] }
 hickory-resolver = { version = "0.25.2", default-features = false, features = ["tokio", "https-ring", "tls-ring", "webpki-roots"] }
 hickory-client = { version = "0.25.2", default-features = false }
-hickory-proto = { version = "0.25.2", default-features = false, features = ["h3-ring", "https-ring", "tls-ring", "webpki-roots"] }
+hickory-proto = { version = "0.25.2", default-features = false, features = ["https-ring", "tls-ring", "webpki-roots"] }
 crab-usb = { version = "0.6.2", default-features = false }
 dma-api = { version = "0.7.2", default-features = false }
 trueos-math = { path = "crates/trueos-math", features = ["alloc"] }
@@ -125,5 +125,3 @@ mio = { path = "vendor/mio-1.2.0" }
 socket2 = { path = "vendor/socket2-0.6.3" }
 try-lock = { path = "vendor/try-lock-0.2.5" }
 want = { path = "vendor/want-0.3.1" }
-quinn-udp = { path = "vendor/quinn-udp-0.5.14" }
-quinn = { path = "vendor/quinn-0.11.9" }

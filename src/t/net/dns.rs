@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 extern crate alloc;
 extern crate std;
 

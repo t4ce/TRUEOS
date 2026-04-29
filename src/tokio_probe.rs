@@ -203,12 +203,6 @@ async fn probe_hickory_resolver_surface() -> Result<(), &'static str> {
     Err("net.hickory.secure_ipv4_lookup")
 }
 
-fn probe_hickory_h3_surface() {
-    let protocol = hickory_proto::xfer::Protocol::H3;
-    let _builder = hickory_proto::h3::H3ClientStream::builder();
-    crate::log!("tokio_probe: success net.hickory.h3.surface protocol={}\n", protocol);
-}
-
 async fn probe_tokio_blocking_canary() -> bool {
     if !tokio_background_worker_ready() {
         crate::log!(
@@ -562,7 +556,6 @@ async fn probe_tokio_net_surface() -> Result<(), &'static str> {
         }
     }
 
-    probe_hickory_h3_surface();
     probe_hickory_resolver_surface().await?;
 
     Ok(())
