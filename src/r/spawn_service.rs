@@ -29,6 +29,7 @@ define_started_flags!(
     GLOBALOG_PERSIST_ONCE_STARTED,
     QJS_ASYNC_FS_SERVICE_STARTED,
     TRUEOSFS_MOUNT_SERVICE_STARTED,
+    TRUEOSFS_INDEX_SERVICE_STARTED,
     HV_VM_STORE_STARTED,
     HV_VM_STORE_NET_STARTED,
     NET_POLL_STARTED,
@@ -91,6 +92,7 @@ define_started_flags!(
     UART_SHELL_STARTED,
     NET_TCP_SHELL_STARTED,
     LOGTOTCP_STARTED,
+    PCIIDS_GIT_STARTED,
     ATOMIC_BOMB_STARTED,
     HTML_DEMO_STARTED,
     SURFER_FACTORY_STARTED
@@ -332,6 +334,10 @@ fn spawn_qjs_async_fs_service(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_trueosfs_mount_service(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::fs::trueosfs::mount_service_task())
+}
+
+fn spawn_trueosfs_index_service(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::r::fs::trueosfs::index_service_task())
 }
 
 fn spawn_hv_vm_store(spawner: Spawner) -> SpawnAttempt {
@@ -980,6 +986,10 @@ fn spawn_net_tcp_shell(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
+fn spawn_pciids_git(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_worker(spawner, |_worker_spawner| crate::pci::pciids::pciids_git_task())
+}
+
 #[embassy_executor::task]
 async fn atomic_bomb_task() {
     Timer::after(EmbassyDuration::from_secs(5)).await;
@@ -1006,6 +1016,10 @@ fn spawn_atomic_bomb(spawner: Spawner) -> SpawnAttempt {
 
 const NET_ANY_CONFIGURED_AND_ROOT_READY: u32 =
     crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
+const PCIIDS_GIT_READY: u32 =
+    crate::r::readiness::TOKIO_RUNTIME_READY
+        | crate::r::readiness::NET_ANY_CONFIGURED
+        | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
 const HTTP_TRUEOSFS_READY: u32 = crate::r::readiness::HTTP_TRUEOSFS_LISTENING;
 const HYPER_HTTP1_PROBE_READY: u32 =
     crate::r::readiness::NET_SOCKET_READY | crate::r::readiness::NET_V4_GATEWAY_REACHABLE;
@@ -1017,7 +1031,7 @@ const UI2_DEMO_READY: u32 =
 const WS_BOOT_READY: u32 = crate::r::readiness::NET_GATEWAY_REACHABLE
     | crate::r::readiness::TLS_SOCKET_SERVICE_READY
     | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
-static TASKS: [TaskSpec; 69] = [
+static TASKS: [TaskSpec; 71] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
         "globalog-persist-once",
@@ -1037,6 +1051,12 @@ static TASKS: [TaskSpec; 69] = [
         0,
         &TRUEOSFS_MOUNT_SERVICE_STARTED,
         spawn_trueosfs_mount_service,
+    ),
+    TaskSpec::enabled(
+        "trueosfs-index-service",
+        0,
+        &TRUEOSFS_INDEX_SERVICE_STARTED,
+        spawn_trueosfs_index_service,
     ),
     TaskSpec::enabled("hv-vm-store", 0, &HV_VM_STORE_STARTED, spawn_hv_vm_store),
     TaskSpec::enabled("hv-vm-store-net", 0, &HV_VM_STORE_NET_STARTED, spawn_hv_vm_store_net),
@@ -1085,6 +1105,12 @@ static TASKS: [TaskSpec; 69] = [
         NET_ANY_CONFIGURED_AND_ROOT_READY,
         &HTTP_TRUEOSFS_STARTED,
         spawn_http_trueosfs,
+    ),
+    TaskSpec::enabled(
+        "pciids-git",
+        PCIIDS_GIT_READY,
+        &PCIIDS_GIT_STARTED,
+        spawn_pciids_git,
     ),
     TaskSpec::enabled(
         "hyper-http1-probe",

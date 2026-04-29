@@ -64,6 +64,8 @@ static FILE_RECORD_CACHE: Mutex<Vec<FileRecordCacheEntry>> = Mutex::new(Vec::new
 
 static MOUNT_REQUESTED: AtomicBool = AtomicBool::new(false);
 static MOUNT_QUEUE: Mutex<heapless::Vec<block::DeviceHandle, 8>> = Mutex::new(heapless::Vec::new());
+static INDEX_REQUESTED: AtomicBool = AtomicBool::new(false);
+static INDEX_QUEUE: Mutex<heapless::Vec<block::DeviceHandle, 8>> = Mutex::new(heapless::Vec::new());
 
 struct FileWriteStream {
     disk: block::DeviceHandle,
@@ -95,6 +97,15 @@ pub fn request_mount_root(disk: block::DeviceHandle) {
     MOUNT_REQUESTED.store(true, Ordering::Release);
 }
 
+fn request_mount_existing_visible_roots() {
+    for disk in block::device_handles().into_iter() {
+        let info = disk.info();
+        if info.parent.is_none() && info.user_visible {
+            request_mount_root(disk);
+        }
+    }
+}
+
 /// Background task that performs deferred TRUEOSFS probing/mounting.
 /// Eagerly build the in-memory index for `disk` right after mounting, so later
 /// callers (e.g. vhttps-cache) don't pay the log-replay cost on their first access.
@@ -111,11 +122,9 @@ async fn warm_index_async(disk: block::DeviceHandle) {
 #[embassy_executor::task]
 pub async fn mount_service_task() {
     async move {
+        request_mount_existing_visible_roots();
         loop {
             if MOUNT_REQUESTED.swap(false, Ordering::AcqRel) {
-                // Allow the device to settle after registration.
-                Timer::after(EmbassyDuration::from_millis(100)).await;
-
                 let mut local: heapless::Vec<block::DeviceHandle, 8> = heapless::Vec::new();
                 {
                     let mut q = MOUNT_QUEUE.lock();
@@ -129,7 +138,7 @@ pub async fn mount_service_task() {
                     match mount_root_async(disk).await {
                         Ok(Some(disk_id)) => {
                             crate::log!("trueosfs: mounted root disk_id={}\n", disk_id.raw());
-                            warm_index_async(disk).await;
+                            request_warm_index(disk_id);
                         }
                         Ok(None) => {}
                         Err(e) => {
@@ -140,6 +149,31 @@ pub async fn mount_service_task() {
             }
 
             Timer::after(EmbassyDuration::from_millis(50)).await;
+        }
+    }
+    .await;
+}
+
+#[embassy_executor::task]
+pub async fn index_service_task() {
+    async move {
+        loop {
+            if INDEX_REQUESTED.swap(false, Ordering::AcqRel) {
+                let mut local: heapless::Vec<block::DeviceHandle, 8> = heapless::Vec::new();
+                {
+                    let mut q = INDEX_QUEUE.lock();
+                    while let Some(d) = q.pop() {
+                        let _ = local.push(d);
+                    }
+                }
+
+                for disk in local.iter().copied() {
+                    warm_index_async(disk).await;
+                    Timer::after(EmbassyDuration::from_millis(1)).await;
+                }
+            }
+
+            Timer::after(EmbassyDuration::from_millis(25)).await;
         }
     }
     .await;
@@ -1521,9 +1555,29 @@ pub fn request_warm_index(disk_id: block::DiscId) {
         return;
     };
 
-    crate::wait::spawn_local_detached(async move {
-        warm_index_async(disk).await;
-    });
+    {
+        let roots = ROOTS.lock();
+        if roots
+            .iter()
+            .find(|m| m.disk_id == disk_id)
+            .is_some_and(|m| m.index.is_some() || m.building_index)
+        {
+            return;
+        }
+    }
+
+    {
+        let mut q = INDEX_QUEUE.lock();
+        if q.iter().any(|d| d.id() == disk_id) {
+            return;
+        }
+        if q.push(disk).is_err() {
+            crate::log!("trueosfs: index queue full disk_id={}\n", disk_id.raw());
+            return;
+        }
+    }
+
+    INDEX_REQUESTED.store(true, Ordering::Release);
 }
 
 /// Returns the most recently mounted TRUEOSFS root disk id (best-effort).

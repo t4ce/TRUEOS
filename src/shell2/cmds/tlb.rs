@@ -8,6 +8,7 @@ use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use embassy_executor::Spawner;
 
 use super::super::{ShellBackend2, line_width_for_backend, print_shell_line};
 use super::tlb_helper::TlbTable;
@@ -15,16 +16,15 @@ use crate::shell2::shell2_cmd::ParseOutcome;
 
 pub(crate) const DUMP_FILE_PATH: &str = "trueos/pci/tlb.txt";
 
-const TLB_USAGE: &str = "tlb: usage `tlb [pci|pciids|pcibar|mem|cpu|acpi [sig [index]]|aml [ec|symbol <path>|prefix <path>]|facp|madt|hpet|mcfg|ssdt|uefi|x2apic|usb [probe]|dump]`";
+const TLB_USAGE: &str = "tlb: usage `tlb [pci|pcibar|mem|cpu|acpi [sig [index]]|aml [ec|symbol <path>|prefix <path>]|facp|madt|hpet|mcfg|ssdt|uefi|x2apic|usb [probe]|dump]`";
 const TLB_ACPI_USAGE: &str = "tlb: usage `tlb acpi [sig [index]]`";
 const TLB_AML_USAGE: &str = "tlb: usage `tlb aml [ec|symbol <path>|prefix <path>]`";
 const ACPI_HEXDUMP_MAX_BYTES: usize = 512;
 const ACPI_HEXDUMP_ROW_BYTES: usize = 16;
 const ACPI_AML_DUMP_MAX_BYTES: usize = 1024;
 const TLB_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
-const TLB_MENU_ROWS: [(&str, &str); 16] = [
+const TLB_MENU_ROWS: [(&str, &str); 15] = [
     ("pci", "List PCI devices"),
-    ("pciids", "Download pci.ids once"),
     ("pcibar", "List PCI BAR windows"),
     ("mem", "List memory map"),
     ("cpu", "List CPU cores"),
@@ -1047,12 +1047,6 @@ fn cmd_tlb_pci(io: &'static dyn ShellBackend2) {
     for row in pci_device_rows(db.as_deref()) {
         emit_table_row(io, &cols, &[&row.name, &row.addr, &row.vid, &row.pid]);
     }
-}
-
-fn cmd_tlb_pciids(io: &'static dyn ShellBackend2) {
-    crate::pci::pciids::download_once_detached();
-    line(io, "tlb pciids: scheduled background download");
-    line(io, "tlb pciids: check global log for success/timeout/failure");
 }
 
 fn cmd_tlb_pci_bar(io: &'static dyn ShellBackend2) {
@@ -2963,13 +2957,13 @@ fn ensure_no_args(
 }
 
 pub(crate) fn try_parse(
+    _spawner: &Spawner,
     io: &'static dyn ShellBackend2,
     args: &mut SplitWhitespace<'_>,
 ) -> ParseOutcome {
     match args.next() {
         None => print_menu(io),
         Some("pci") if ensure_no_args(io, args, "tlb: usage `tlb pci`") => cmd_tlb_pci(io),
-        Some("pciids") if ensure_no_args(io, args, "tlb: usage `tlb pciids`") => cmd_tlb_pciids(io),
         Some("pcibar") if ensure_no_args(io, args, "tlb: usage `tlb pcibar`") => {
             cmd_tlb_pci_bar(io)
         }

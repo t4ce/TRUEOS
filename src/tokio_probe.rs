@@ -1156,7 +1156,10 @@ pub(crate) fn log_boot_probe() {
     crate::log!("tokio_probe: success rt.build current_thread\n");
 
     match runtime.block_on(run_probe_suite()) {
-        Ok(()) => crate::log!("tokio_probe: success rt.block_on probe_suite\n"),
+        Ok(()) => {
+            crate::log!("tokio_probe: success rt.block_on probe_suite\n");
+            crate::r::readiness::set(crate::r::readiness::TOKIO_RUNTIME_READY);
+        }
         Err(stage) => crate::log!("tokio_probe: failure {}\n", stage),
     }
 
