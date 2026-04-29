@@ -7,7 +7,7 @@ use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
 use v::vnet;
 
-use crate::r::net::dns::{self, DnsConfig};
+use crate::r::t::net::dns::{self, DnsConfig};
 use crate::r::net::{NetProfile, VNet};
 
 const NTP_SERVER_HOSTS: [&str; 4] = [

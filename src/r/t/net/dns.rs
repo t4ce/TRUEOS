@@ -1270,7 +1270,9 @@ pub async fn resolve_ipv4_for_device(
         .is_ok()
     {
         crate::log!(
-            "dns: classic udp dns disabled; secure lookup failure has no kernel fallback\n"
+            "dns: no secure dns possible host={} dev={} qtype=A; network lookup discarded\n",
+            host_trimmed,
+            dev_idx
         );
     }
     Err(DnsError::NoAnswer)
@@ -1297,7 +1299,9 @@ pub async fn resolve_ipv6_for_device(
         .is_ok()
     {
         crate::log!(
-            "dns: classic udp dns disabled; secure lookup failure has no kernel fallback\n"
+            "dns: no secure dns possible host={} dev={} qtype=AAAA; network lookup discarded\n",
+            host_trimmed,
+            dev_idx
         );
     }
     Err(DnsError::NoAnswer)

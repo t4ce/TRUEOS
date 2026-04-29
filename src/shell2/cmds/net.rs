@@ -114,17 +114,17 @@ fn cmd_net_icmp(
     crate::wait::spawn_and_wait_local(async move {
         let ip_res = match device_index {
             Some(dev_idx) => {
-                crate::r::net::dns::resolve_ipv4_for_device(
+                crate::r::t::net::dns::resolve_ipv4_for_device(
                     dev_idx,
                     target.as_str(),
-                    crate::r::net::dns::DnsConfig::for_device(dev_idx),
+                    crate::r::t::net::dns::DnsConfig::for_device(dev_idx),
                 )
                 .await
             }
             None => {
-                crate::r::net::dns::resolve_ipv4_primary(
+                crate::r::t::net::dns::resolve_ipv4_primary(
                     target.as_str(),
-                    crate::r::net::dns::DnsConfig::default(),
+                    crate::r::t::net::dns::DnsConfig::default(),
                 )
                 .await
             }

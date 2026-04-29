@@ -3,6 +3,18 @@
 //! This is the home for the contract between Tokio's socket model and TRUEOS
 //! VNet readiness, Mio, socket2, Hickory, and Hyper surfaces.
 
+extern crate alloc;
+
+pub mod dns;
+pub mod http;
+pub mod http_stream;
+pub mod https;
+pub mod https_limits;
+pub mod ping;
+
+use alloc::string::String;
+use heapless::String as HString;
+
 pub fn fetch_https_to_file(
     job: &'static str,
     url: &'static str,
@@ -11,13 +23,27 @@ pub fn fetch_https_to_file(
     max_bytes: usize,
 ) -> Result<(), i32> {
     crate::log!("r/t/net: {} tokio https begin url={} key={}\n", job, url, key);
-    match crate::r::t::block_on_io(crate::r::net::https::fetch_https_to_file_async(
+    match crate::r::t::block_on_io(crate::r::t::net::https::fetch_https_to_file_async(
         url, key, timeout_ms, max_bytes,
     )) {
         Ok(result) => result,
         Err(_) => {
             crate::log!("r/t/net: {} tokio runtime build failed url={}\n", job, url);
             Err(-1)
+        }
+    }
+}
+
+pub fn fetch_html_best_effort(
+    job: &'static str,
+    url: HString<256>,
+) -> Result<String, &'static str> {
+    crate::log!("r/t/net: {} tokio html begin url={}\n", job, url.as_str());
+    match crate::r::t::block_on_io(crate::r::net::html::fetch_html_best_effort(url)) {
+        Ok(result) => result,
+        Err(_) => {
+            crate::log!("r/t/net: {} tokio runtime build failed\n", job);
+            Err("tokio runtime build failed")
         }
     }
 }

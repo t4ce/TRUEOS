@@ -1074,21 +1074,21 @@ async fn netbench_task(target: MatrixTarget, session_id: u64, nic_index: usize) 
 
         let (ip4, ip6) = match parsed.target {
             HostTarget::V4(ip) => (Ok(ip), None),
-            HostTarget::V6(ip) => (Err(crate::r::net::dns::DnsError::NoAnswer), Some(ip)),
+            HostTarget::V6(ip) => (Err(crate::r::t::net::dns::DnsError::NoAnswer), Some(ip)),
             HostTarget::Name(host) => {
                 log(format!("bench net: resolving {}", host).as_str());
-                let ip4 = crate::r::net::dns::resolve_ipv4_for_device(
+                let ip4 = crate::r::t::net::dns::resolve_ipv4_for_device(
                     nic_index,
                     host.as_str(),
-                    crate::r::net::dns::DnsConfig::for_device(nic_index),
+                    crate::r::t::net::dns::DnsConfig::for_device(nic_index),
                 )
                 .await;
 
                 let ip6 = if ip4.is_err() {
-                    crate::r::net::dns::resolve_ipv6_for_device(
+                    crate::r::t::net::dns::resolve_ipv6_for_device(
                         nic_index,
                         host.as_str(),
-                        crate::r::net::dns::DnsConfig::for_device(nic_index),
+                        crate::r::t::net::dns::DnsConfig::for_device(nic_index),
                     )
                     .await
                     .ok()

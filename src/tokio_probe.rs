@@ -71,15 +71,15 @@ fn primary_ipv4_probe_addr(port: u16) -> Option<SocketAddr> {
 }
 
 async fn probe_hickory_secure_ipv4_lookup(
-    transport: crate::r::net::dns::SecureDnsTransport,
-    dns: crate::r::net::dns::DnsConfig,
+    transport: crate::r::t::net::dns::SecureDnsTransport,
+    dns: crate::r::t::net::dns::DnsConfig,
     dev_idx: usize,
     host: &str,
 ) -> Result<(), &'static str> {
     let config = match transport {
-        crate::r::net::dns::SecureDnsTransport::Doh => crate::r::net::dns::doh_resolver_config(),
-        crate::r::net::dns::SecureDnsTransport::Dot => crate::r::net::dns::dot_resolver_config(),
-        crate::r::net::dns::SecureDnsTransport::Doh3 => {
+        crate::r::t::net::dns::SecureDnsTransport::Doh => crate::r::t::net::dns::doh_resolver_config(),
+        crate::r::t::net::dns::SecureDnsTransport::Dot => crate::r::t::net::dns::dot_resolver_config(),
+        crate::r::t::net::dns::SecureDnsTransport::Doh3 => {
             return Err("net.hickory.doh3.ipv4_lookup_unwired");
         }
     };
@@ -159,7 +159,7 @@ async fn probe_hickory_resolver_surface() -> Result<(), &'static str> {
     const HICKORY_PROBE_HOST: &str = "raw.githubusercontent.com.";
 
     let dev_idx = crate::net::primary_device_index();
-    let dns = crate::r::net::dns::DnsConfig::for_device_v4_only(dev_idx);
+    let dns = crate::r::t::net::dns::DnsConfig::for_device_v4_only(dev_idx);
     if dns.server_count == 0 {
         crate::log!("tokio_probe: note net.hickory skipped (no ipv4 dns config)\n");
         return Ok(());
@@ -172,7 +172,7 @@ async fn probe_hickory_resolver_surface() -> Result<(), &'static str> {
     );
 
     let doh = probe_hickory_secure_ipv4_lookup(
-        crate::r::net::dns::SecureDnsTransport::Doh,
+        crate::r::t::net::dns::SecureDnsTransport::Doh,
         dns,
         dev_idx,
         HICKORY_PROBE_HOST,
@@ -186,7 +186,7 @@ async fn probe_hickory_resolver_surface() -> Result<(), &'static str> {
     }
 
     let dot = probe_hickory_secure_ipv4_lookup(
-        crate::r::net::dns::SecureDnsTransport::Dot,
+        crate::r::t::net::dns::SecureDnsTransport::Dot,
         dns,
         dev_idx,
         HICKORY_PROBE_HOST,

@@ -134,7 +134,7 @@ async fn fetch_demo_wav_body() -> Option<(&'static str, Vec<u8>)> {
             AUDIO_HTTP_DEMO_MAX_BYTES
         );
         if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
-            match crate::r::net::cli::http_stream::fetch_http_to_file_async(
+            match crate::r::t::net::http_stream::fetch_http_to_file_async(
                 url,
                 disk,
                 AUDIO_DEMO_CACHE_PATH,
@@ -176,7 +176,7 @@ async fn fetch_demo_wav_body() -> Option<(&'static str, Vec<u8>)> {
                 }
             }
         }
-        match crate::r::net::cli::http::fetch_http_body(
+        match crate::r::t::net::http::fetch_http_body(
             url,
             AUDIO_HTTP_DEMO_TIMEOUT_MS,
             AUDIO_HTTP_DEMO_MAX_BYTES,

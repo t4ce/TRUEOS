@@ -260,7 +260,7 @@ pub async fn html_fetch_service() {
             continue;
         }
 
-        match crate::r::net::html::fetch_html_best_effort(fetch_url_buf).await {
+        match crate::r::t::net::fetch_html_best_effort("html_shack", fetch_url_buf) {
             Ok(html) => {
                 if HTML_SHACK_PREVIEW_ENABLE {
                     log_html_preview(fetch_url.as_str(), html.as_str());
