@@ -76,8 +76,8 @@ pub use token::Token;
 #[cfg(not(target_os = "wasi"))]
 pub use waker::Waker;
 
-#[cfg(all(unix, feature = "os-ext"))]
-#[cfg_attr(docsrs, doc(cfg(all(unix, feature = "os-ext"))))]
+#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm")), feature = "os-ext"))]
+#[cfg_attr(docsrs, doc(cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm")), feature = "os-ext"))))]
 pub mod unix {
     //! Unix only extensions.
 

@@ -1,7 +1,7 @@
 #![cfg_attr(any(target_os = "trueos", target_os = "zkvm"), allow(dead_code))]
 
 use std::ops::{Deref, DerefMut};
-#[cfg(any(unix, target_os = "wasi"))]
+#[cfg(any(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))), target_os = "wasi"))]
 use std::os::fd::AsRawFd;
 // TODO: once <https://github.com/rust-lang/rust/issues/126198> is fixed this
 // can use `std::os::fd` and be merged with the above.
@@ -108,7 +108,7 @@ impl<T> DerefMut for IoSource<T> {
 }
 
 #[cfg(any(
-    unix,
+    all(unix, not(any(target_os = "trueos", target_os = "zkvm"))),
     target_os = "hermit",
     all(target_os = "wasi", not(target_env = "p1"))
 ))]

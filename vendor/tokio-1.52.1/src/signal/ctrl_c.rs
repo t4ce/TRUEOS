@@ -1,4 +1,4 @@
-#[cfg(unix)]
+#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
 use super::unix::{self as os_impl};
 #[cfg(windows)]
 use super::windows::{self as os_impl};

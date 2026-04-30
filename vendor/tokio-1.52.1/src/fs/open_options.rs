@@ -18,7 +18,7 @@ use std::fs::OpenOptions as StdOpenOptions;
 #[cfg(all(not(test), any(target_os = "trueos", target_os = "zkvm")))]
 use crate::fs::trueos::TrueosOpenOptions as StdOpenOptions;
 
-#[cfg(unix)]
+#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
 use std::os::unix::fs::OpenOptionsExt;
 #[cfg(windows)]
 use std::os::windows::fs::OpenOptionsExt;
@@ -572,7 +572,7 @@ impl OpenOptions {
 }
 
 feature! {
-    #![unix]
+    #![all(unix, not(any(target_os = "trueos", target_os = "zkvm")))]
 
     impl OpenOptions {
         /// Sets the mode bits that a new file will be created with.

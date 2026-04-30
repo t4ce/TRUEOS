@@ -109,7 +109,7 @@ macro_rules! from {
     ($from: ty, $for: ty) => {
         impl From<$from> for $for {
             fn from(socket: $from) -> $for {
-                #[cfg(any(unix, all(target_os = "wasi", not(target_env = "p1"))))]
+                #[cfg(any(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))), all(target_os = "wasi", not(target_env = "p1"))))]
                 unsafe {
                     <$for>::from_raw_fd(socket.into_raw_fd())
                 }
@@ -182,7 +182,7 @@ mod socket;
 mod sockref;
 
 #[cfg_attr(
-    any(unix, all(target_os = "wasi", not(target_env = "p1"))),
+    any(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))), all(target_os = "wasi", not(target_env = "p1"))),
     path = "sys/unix.rs"
 )]
 #[cfg_attr(any(target_os = "trueos", target_os = "zkvm"), path = "sys/zkvm.rs")]

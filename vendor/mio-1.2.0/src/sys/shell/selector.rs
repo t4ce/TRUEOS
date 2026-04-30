@@ -193,7 +193,7 @@ impl Ready {
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
 cfg_os_ext! {
     impl Selector {
         pub fn register(&self, _: RawFd, _: Token, _: Interest) -> io::Result<()> {
