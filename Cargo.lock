@@ -1691,8 +1691,6 @@ dependencies = [
 [[package]]
 name = "libc"
 version = "0.2.185"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52ff2c0fe9bc6cb6b14a0592c2ff4fa9ceb83eea9db979b0487cd054946a2b8f"
 
 [[package]]
 name = "libm"
@@ -2456,7 +2454,6 @@ version = "0.23.38"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69f9466fb2c14ea04357e91413efb882e2a6d4a406e625449bc0a5d360d53a21"
 dependencies = [
- "log",
  "once_cell",
  "rustls-pki-types",
  "rustls-webpki 0.103.12",
