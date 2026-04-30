@@ -450,12 +450,18 @@ async fn probe_tokio_net_surface() -> Result<(), &'static str> {
         }
         Err(_) => {
             crate::log!(
-                "tokio_probe: note net.tokio.udp_socket.writable_timeout; continuing to secure dns probe\n"
+                "tokio_probe: note net.tokio.udp_socket.writable_timeout; continuing lightweight net probe\n"
             );
         }
     }
 
-    probe_secure_dns_surface().await?;
+    if crate::allcaps::probes::TOKIO_SECURE_DNS_BOOT_PROBE {
+        probe_secure_dns_surface().await?;
+    } else {
+        crate::log!(
+            "tokio_probe: note net.secure_dns skipped (disabled for lightweight boot probe)\n"
+        );
+    }
 
     Ok(())
 }

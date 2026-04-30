@@ -33,8 +33,8 @@ unicode-normalization = { version = "0.1", default-features = false }
 log = { version = "0.4", default-features = false }
 trueos-qjs = { path = "crates/trueos-qjs", features = ["trueos", "yoga-native"] }
 trueos-gfx-core = { path = "crates/trueos-gfx-core", features = ["alloc"] }
-rustls = { version = "0.23", default-features = false, features = ["custom-provider", "logging", "tls12"] }
-rustls-rustcrypto = { version = "0.0.2-alpha", default-features = false, features = ["alloc", "logging", "tls12", "zeroize"] }
+rustls = { version = "0.23", default-features = false, features = ["custom-provider", "tls12"] }
+rustls-rustcrypto = { version = "0.0.2-alpha", default-features = false, features = ["alloc", "tls12", "zeroize"] }
 webpki-roots = { version = "1.0.7", default-features = false }
 miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }
 lzma-rust2 = { version = "0.16.2", default-features = false }
@@ -92,6 +92,7 @@ opt-level = 2
 trueos-limloader = { path = "crates/trueos-limloader" }
 
 [patch.crates-io]
+libc = { path = "vendor/libc-0.2.185" }
 atomic-waker = { path = "vendor/atomic-waker-1.1.2" }
 bytes = { path = "vendor/bytes-1.11.1" }
 futures-channel = { path = "vendor/futures-channel-0.3.32" }
