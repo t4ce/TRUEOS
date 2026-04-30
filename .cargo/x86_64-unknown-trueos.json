@@ -11,6 +11,7 @@
   "executables": true,
   "linker-flavor": "ld.lld",
   "linker": "rust-lld",
+  "no-default-libraries": true,
   "panic-strategy": "abort",
   "disable-redzone": true,
   "relocation-model": "static",

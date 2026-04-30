@@ -1,6 +1,7 @@
 BUILD_MODE ?= debug
 KERNEL_TARGET_DIR = x86_64-unknown-trueos
 KERNEL_BIN = tgt/$(KERNEL_TARGET_DIR)/$(BUILD_MODE)/TRUEOS
+KERNEL_EMPTY_LIB_DIR = bld/empty-libs
 ARTIFACT_BUILD_ID ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 ARTIFACT_DIR = bld/artifacts/$(BUILD_MODE)-$(ARTIFACT_BUILD_ID)
 ARTIFACT_FULL_ELF = $(ARTIFACT_DIR)/TRUEOS.full.elf
@@ -58,7 +59,7 @@ CARGO_GFX_FLAGS =
 
 IMG_SIZE ?= 1G
 
-.PHONY: kernel blueprints artifacts kernel-stages baremetal-reboot-log iso iso-build iso-release iso-debug snipe dbg dbg-vscode run run-with-nvme run-installed lc
+.PHONY: kernel empty-libs blueprints artifacts kernel-stages baremetal-reboot-log iso iso-build iso-release iso-debug snipe dbg dbg-vscode run run-with-nvme run-installed lc
 
 images: disk.img nvme.img
 
@@ -68,7 +69,13 @@ disk.img:
 nvme.img:
 	truncate -s $(IMG_SIZE) $@
 
-kernel:
+empty-libs:
+	mkdir -p $(KERNEL_EMPTY_LIB_DIR)
+	: > $(KERNEL_EMPTY_LIB_DIR)/empty.o
+	ar crs $(KERNEL_EMPTY_LIB_DIR)/libc.a
+	ar crs $(KERNEL_EMPTY_LIB_DIR)/libgcc_s.a
+
+kernel: empty-libs
 	cargo +nightly build $(CARGO_GFX_FLAGS) $(CARGO_BUILD_FLAGS) -Z build-std=core,compiler_builtins,alloc,std,panic_abort -Z json-target-spec --target .cargo/x86_64-unknown-trueos.json
 
 blueprints:

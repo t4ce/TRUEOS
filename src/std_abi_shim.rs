@@ -6,8 +6,18 @@
 //! basic stdio through TRUEOS facilities while we probe Tokio's `rt` feature.
 
 use core::alloc::Layout;
+use core::ffi::{c_char, c_int, c_void};
 use core::ptr;
 use core::slice;
+use core::sync::atomic::AtomicI32;
+
+static TRUEOS_ERRNO: AtomicI32 = AtomicI32::new(0);
+
+#[repr(C)]
+struct Iovec {
+    base: *const u8,
+    len: usize,
+}
 
 fn uart_write(bytes: &[u8]) {
     if bytes.is_empty() {
@@ -194,4 +204,370 @@ pub unsafe extern "C" fn sys_halt() -> ! {
     loop {
         core::hint::spin_loop();
     }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn errno_location() -> *mut c_int {
+    (&TRUEOS_ERRNO as *const AtomicI32).cast_mut().cast::<c_int>()
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __errno_location() -> *mut c_int {
+    unsafe { errno_location() }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn strerror_r(errnum: c_int, buf: *mut c_char, buflen: usize) -> c_int {
+    if buf.is_null() || buflen == 0 {
+        return 0;
+    }
+
+    let prefix = b"trueos errno ";
+    let mut pos = 0usize;
+    let out = unsafe { slice::from_raw_parts_mut(buf.cast::<u8>(), buflen) };
+    for byte in prefix {
+        if pos + 1 >= out.len() {
+            break;
+        }
+        out[pos] = *byte;
+        pos += 1;
+    }
+
+    let mut digits = [0u8; 12];
+    let mut n = if errnum < 0 {
+        if pos + 1 < out.len() {
+            out[pos] = b'-';
+            pos += 1;
+        }
+        errnum.saturating_neg() as u32
+    } else {
+        errnum as u32
+    };
+    let mut len = 0usize;
+    loop {
+        digits[len] = b'0' + (n % 10) as u8;
+        len += 1;
+        n /= 10;
+        if n == 0 {
+            break;
+        }
+    }
+    while len != 0 && pos + 1 < out.len() {
+        len -= 1;
+        out[pos] = digits[len];
+        pos += 1;
+    }
+    out[pos.min(out.len() - 1)] = 0;
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn posix_memalign(
+    memptr: *mut *mut c_void,
+    align: usize,
+    size: usize,
+) -> c_int {
+    if memptr.is_null() {
+        return 22;
+    }
+
+    let ptr = unsafe { alloc_bytes(size, align) }.cast::<c_void>();
+    if ptr.is_null() && size != 0 {
+        return 12;
+    }
+
+    unsafe { *memptr = ptr };
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn getenv(_name: *const c_char) -> *mut c_char {
+    ptr::null_mut()
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn getcwd(buf: *mut c_char, size: usize) -> *mut c_char {
+    if buf.is_null() || size < 2 {
+        TRUEOS_ERRNO.store(34, core::sync::atomic::Ordering::Relaxed);
+        return ptr::null_mut();
+    }
+    let out = unsafe { slice::from_raw_parts_mut(buf.cast::<u8>(), size) };
+    out[0] = b'/';
+    out[1] = 0;
+    buf
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn write(fd: c_int, buf: *const c_void, count: usize) -> isize {
+    if buf.is_null() {
+        return -1;
+    }
+    unsafe { sys_write(fd as u32, buf.cast::<u8>(), count) };
+    count as isize
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn writev(fd: c_int, iov: *const Iovec, iovcnt: c_int) -> isize {
+    if iov.is_null() || iovcnt < 0 {
+        return -1;
+    }
+    let entries = unsafe { slice::from_raw_parts(iov, iovcnt as usize) };
+    let mut written = 0usize;
+    for entry in entries {
+        if !entry.base.is_null() && entry.len != 0 {
+            unsafe { sys_write(fd as u32, entry.base, entry.len) };
+            written = written.saturating_add(entry.len);
+        }
+    }
+    written as isize
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pow(x: f64, y: f64) -> f64 {
+    libm::pow(x, y)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn acos(x: f64) -> f64 {
+    libm::acos(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn asin(x: f64) -> f64 {
+    libm::asin(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn atan(x: f64) -> f64 {
+    libm::atan(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn atan2(y: f64, x: f64) -> f64 {
+    libm::atan2(y, x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn cbrt(x: f64) -> f64 {
+    libm::cbrt(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ceil(x: f64) -> f64 {
+    libm::ceil(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn cos(x: f64) -> f64 {
+    libm::cos(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn cosh(x: f64) -> f64 {
+    libm::cosh(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn exp(x: f64) -> f64 {
+    libm::exp(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn expm1(x: f64) -> f64 {
+    libm::expm1(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn fabs(x: f64) -> f64 {
+    libm::fabs(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn floor(x: f64) -> f64 {
+    libm::floor(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn fmod(x: f64, y: f64) -> f64 {
+    libm::fmod(x, y)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn hypot(x: f64, y: f64) -> f64 {
+    libm::hypot(x, y)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn log(x: f64) -> f64 {
+    libm::log(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn log1p(x: f64) -> f64 {
+    libm::log1p(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn log2(x: f64) -> f64 {
+    libm::log2(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn log10(x: f64) -> f64 {
+    libm::log10(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn round(x: f64) -> f64 {
+    libm::round(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sin(x: f64) -> f64 {
+    libm::sin(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sinh(x: f64) -> f64 {
+    libm::sinh(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sqrt(x: f64) -> f64 {
+    libm::sqrt(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn tan(x: f64) -> f64 {
+    libm::tan(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn tanh(x: f64) -> f64 {
+    libm::tanh(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trunc(x: f64) -> f64 {
+    libm::trunc(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sched_yield() -> c_int {
+    core::hint::spin_loop();
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_mutexattr_init(_attr: *mut c_void) -> c_int {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_mutexattr_settype(_attr: *mut c_void, _kind: c_int) -> c_int {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_mutexattr_destroy(_attr: *mut c_void) -> c_int {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_mutex_init(_mutex: *mut c_void, _attr: *const c_void) -> c_int {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_mutex_destroy(_mutex: *mut c_void) -> c_int {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_mutex_lock(_mutex: *mut c_void) -> c_int {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_mutex_trylock(_mutex: *mut c_void) -> c_int {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_mutex_unlock(_mutex: *mut c_void) -> c_int {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_cond_init(_cond: *mut c_void, _attr: *const c_void) -> c_int {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_condattr_init(_attr: *mut c_void) -> c_int {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_condattr_setclock(_attr: *mut c_void, _clock: c_int) -> c_int {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_condattr_destroy(_attr: *mut c_void) -> c_int {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_cond_destroy(_cond: *mut c_void) -> c_int {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_cond_wait(_cond: *mut c_void, _mutex: *mut c_void) -> c_int {
+    core::hint::spin_loop();
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_cond_timedwait(
+    _cond: *mut c_void,
+    _mutex: *mut c_void,
+    _abstime: *const c_void,
+) -> c_int {
+    core::hint::spin_loop();
+    110
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_cond_signal(_cond: *mut c_void) -> c_int {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_cond_broadcast(_cond: *mut c_void) -> c_int {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_join(_thread: usize, _retval: *mut *mut c_void) -> c_int {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_detach(_thread: usize) -> c_int {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _Unwind_GetIP(_ctx: *mut c_void) -> usize {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _Unwind_Backtrace(
+    _trace: unsafe extern "C" fn(*mut c_void, *mut c_void) -> c_int,
+    _arg: *mut c_void,
+) -> c_int {
+    0
 }

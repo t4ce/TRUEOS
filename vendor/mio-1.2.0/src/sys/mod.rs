@@ -51,7 +51,7 @@ cfg_os_poll! {
 }
 
 #[cfg(any(
-    unix,
+    all(unix, not(any(target_os = "trueos", target_os = "zkvm"))),
     target_os = "hermit",
     all(target_os = "wasi", not(target_env = "p1"))
 ))]
