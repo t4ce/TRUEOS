@@ -7,7 +7,6 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
-use rayon::prelude::*;
 use v::vnet as api;
 
 use super::super::{
@@ -34,10 +33,8 @@ const MODEL_BENCH_DEFAULT_SECONDS: u64 = 5;
 const MODEL_BENCH_MAX_SECONDS: u64 = 60;
 const MODEL_BENCH_DIM: usize = 256;
 const MODEL_BENCH_PROBE_BYTES: usize = 8 * 1024 * 1024;
-const RAYON_BENCH_ITEMS: usize = 4096;
-const RAYON_BENCH_EXPECTED_SUM: u64 = 25_159_680;
 const BENCH_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
-const BENCH_MENU_ROWS: [[&str; 2]; 6] = [
+const BENCH_MENU_ROWS: [[&str; 2]; 5] = [
     ["cpu", "Run CPU-only compute benchmark"],
     ["disc [id]", "Gentle disc read throughput bench"],
     [
@@ -49,7 +46,6 @@ const BENCH_MENU_ROWS: [[&str; 2]; 6] = [
         "netk",
         "Run internal netbench (literal URL, default 2 flows)",
     ],
-    ["rayon", "Run vendored Rayon smoke benchmark"],
 ];
 
 #[derive(Clone)]
@@ -467,19 +463,6 @@ pub(crate) fn try_parse(
                 ParseOutcome::Handled
             }
         }
-        "rayon" => {
-            if args.next().is_some() {
-                print_usage(io);
-                return ParseOutcome::Handled;
-            }
-            if let Some(session_id) = submit_rayonbench(spawner, io) {
-                ParseOutcome::StartSession(
-                    crate::shell2::shell2_cmd::CommandSessionKind::BenchRunning(session_id),
-                )
-            } else {
-                ParseOutcome::Handled
-            }
-        }
         "model" => {
             let seconds = match args.next() {
                 Some(raw) => match raw.parse::<u64>() {
@@ -562,24 +545,6 @@ fn submit_cpubench(spawner: &Spawner, io: &'static dyn ShellBackend2) -> Option<
     Some(session_id)
 }
 
-fn submit_rayonbench(spawner: &Spawner, io: &'static dyn ShellBackend2) -> Option<u64> {
-    let target = matrix_target_for_backend(io);
-    let session_id = bench_session_start();
-
-    print_matrix_target_line(&target, "bench rayon: starting vendored Rayon smoke");
-    set_matrix_target_active(&target, true);
-    match rayonbench_task(target.clone(), session_id) {
-        Ok(token) => spawner.spawn(token),
-        Err(_) => {
-            bench_session_finish(session_id);
-            set_matrix_target_active(&target, false);
-            print_shell_line(io, "bench rayon: spawn failed");
-            return None;
-        }
-    }
-    Some(session_id)
-}
-
 fn submit_modelbench(
     spawner: &Spawner,
     io: &'static dyn ShellBackend2,
@@ -609,69 +574,6 @@ fn submit_modelbench(
     }
     print_matrix_target_line(&target, "bench model: send `q` in this slot to stop");
     Some(session_id)
-}
-
-#[embassy_executor::task(pool_size = 2)]
-async fn rayonbench_task(target: MatrixTarget, session_id: u64) {
-    let task_target = target.clone();
-    async move {
-        Timer::after(EmbassyDuration::from_millis(1)).await;
-
-        let log = |line: &str| {
-            print_matrix_target_line(&task_target, line);
-        };
-        if !crate::trueos_rayon_worker::init_global_pool() {
-            log("bench rayon: skipped; TRUEOS Rayon global pool needs dedicated worker carriers");
-            return;
-        }
-
-        let start_tick = embassy_time_driver::now();
-        log(
-            format!(
-                "bench rayon: enter items={} threads={}",
-                RAYON_BENCH_ITEMS,
-                rayon::current_num_threads()
-            )
-            .as_str(),
-        );
-
-        let sum: u64 = (0..RAYON_BENCH_ITEMS)
-            .into_par_iter()
-            .map(|value| (value as u64).wrapping_mul(3))
-            .sum();
-
-        let elapsed_ms = elapsed_ms_since(start_tick);
-        let status = if sum == RAYON_BENCH_EXPECTED_SUM {
-            "ok"
-        } else {
-            "bad"
-        };
-        log(
-            format!(
-                "bench rayon: pass1 status={} sum={} expected={} elapsed={}ms threads={}",
-                status,
-                sum,
-                RAYON_BENCH_EXPECTED_SUM,
-                elapsed_ms,
-                rayon::current_num_threads()
-            )
-            .as_str(),
-        );
-
-        if !bench_cancel_requested(session_id) {
-            let checksum: u64 = (0..(RAYON_BENCH_ITEMS * 2))
-                .into_par_iter()
-                .map(|value| {
-                    let value = value as u64;
-                    value.rotate_left((value & 31) as u32) ^ 0x9e37_79b9
-                })
-                .reduce(|| 0, |left, right| left ^ right);
-            log(format!("bench rayon: pass2 checksum=0x{:016x}", checksum).as_str());
-        }
-    }
-    .await;
-    bench_session_finish(session_id);
-    set_matrix_target_active(&target, false);
 }
 
 fn bench_session_start() -> u64 {
