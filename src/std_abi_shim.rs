@@ -324,7 +324,9 @@ pub unsafe extern "C" fn sys_halt() -> ! {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn errno_location() -> *mut c_int {
-    (&TRUEOS_ERRNO as *const AtomicI32).cast_mut().cast::<c_int>()
+    (&TRUEOS_ERRNO as *const AtomicI32)
+        .cast_mut()
+        .cast::<c_int>()
 }
 
 #[unsafe(no_mangle)]

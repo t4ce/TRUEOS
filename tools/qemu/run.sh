@@ -75,8 +75,8 @@ case "$mode" in
             -debugcon stdio \
             -D bld/qemu.log \
             -d int,guest_errors,cpu_reset,unimp \
-            -m 2000M \
-            -smp cores=8 \
+            -m 8000M \
+            -smp cores=14 \
             -cpu host,host-phys-bits=true \
             -serial tcp:127.0.0.1:5555,server,nowait \
             "${net_flags[@]}" \

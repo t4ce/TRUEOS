@@ -3552,8 +3552,7 @@ impl NetService {
                         }
                         Ok(Some(_)) => break,
                         Ok(None) => {
-                            rx_event_drops_this_poll =
-                                rx_event_drops_this_poll.saturating_add(1);
+                            rx_event_drops_this_poll = rx_event_drops_this_poll.saturating_add(1);
                             rx_backpressured = true;
                             break;
                         }

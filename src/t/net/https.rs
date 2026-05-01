@@ -4310,6 +4310,44 @@ pub async fn fetch_https_body_async(
     fetch_https_body_with_profile_async(url, NetProfile::default(), timeout_ms, max_bytes).await
 }
 
+pub async fn fetch_https_body_hyper_async(
+    url: &str,
+    timeout_ms: u32,
+    max_bytes: usize,
+) -> Result<Vec<u8>, FetchError> {
+    fetch_https_body_hyper_with_profile_async(url, NetProfile::default(), timeout_ms, max_bytes)
+        .await
+}
+
+pub async fn fetch_https_body_hyper_with_profile_async(
+    url: &str,
+    profile: NetProfile,
+    timeout_ms: u32,
+    max_bytes: usize,
+) -> Result<Vec<u8>, FetchError> {
+    let dev_idx = fetch_device_index(profile)?;
+
+    const MAX_REDIRECTS: usize = 3;
+    let mut current_url = String::from(url);
+
+    for hop in 0..=MAX_REDIRECTS {
+        let parsed = parse_https_url(current_url.as_str()).ok_or(FetchError::BadUrl)?;
+
+        match fetch_on_device_hyper(&parsed, dev_idx, timeout_ms, max_bytes).await {
+            Ok(v) => return Ok(v),
+            Err(FetchError::Redirect { status, url }) => {
+                if hop >= MAX_REDIRECTS {
+                    return Err(FetchError::Http(status));
+                }
+                current_url = url;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    Err(FetchError::Http(0))
+}
+
 pub async fn fetch_https_body_with_profile_async(
     url: &str,
     profile: NetProfile,

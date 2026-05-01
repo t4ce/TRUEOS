@@ -11,3 +11,4 @@ package-lock.json
 vid/
 *.gguf
 tools/*.gguf
+tinyllama/

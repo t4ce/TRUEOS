@@ -39,8 +39,14 @@ const HARDCODED_HTTP_ASSETS = [
   },
   {
     kind: "model",
-    label: "gemma-4-e4b-it-q4-k-m",
-    filePath: "tools/gemma-4-E4B-it-Q4_K_M.gguf",
+    label: "tinyllama-model-safetensors",
+    filePath: "tools/tinyllama/model.safetensors",
+    contentType: "application/octet-stream",
+  },
+  {
+    kind: "tokenizer",
+    label: "tinyllama-tokenizer-json",
+    filePath: "tools/tinyllama/tokenizer.json",
     contentType: "application/octet-stream",
   },
 ];
