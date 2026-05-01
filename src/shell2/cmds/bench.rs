@@ -621,7 +621,7 @@ async fn rayonbench_task(target: MatrixTarget, session_id: u64) {
             print_matrix_target_line(&task_target, line);
         };
         if !crate::trueos_rayon_worker::init_global_pool() {
-            log("bench rayon: skipped; TRUEOS Rayon AP2+ global pool not ready");
+            log("bench rayon: skipped; TRUEOS Rayon global pool needs dedicated worker carriers");
             return;
         }
 

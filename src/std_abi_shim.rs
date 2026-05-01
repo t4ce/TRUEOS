@@ -5,16 +5,23 @@
 //! narrow symbol surface that Rust `std` expects so it can allocate and do
 //! basic stdio through TRUEOS facilities while we probe Tokio's `rt` feature.
 
+extern crate alloc;
+
+use alloc::collections::BTreeMap;
 use core::alloc::Layout;
 use core::ffi::{c_char, c_int, c_void};
 use core::ptr;
 use core::slice;
-use core::sync::atomic::AtomicI32;
+use core::sync::atomic::{AtomicI32, Ordering};
+use spin::Mutex;
 
 static TRUEOS_ERRNO: AtomicI32 = AtomicI32::new(0);
 
 const TRUEOS_EAGAIN: c_int = 11;
+const TRUEOS_EBUSY: c_int = 16;
+const TRUEOS_EINVAL: c_int = 22;
 const TRUEOS_ENOSYS: c_int = 38;
+const TRUEOS_ETIMEDOUT: c_int = 110;
 const TRUEOS_SC_PAGESIZE: c_int = 30;
 const TRUEOS_SC_PAGE_SIZE: c_int = TRUEOS_SC_PAGESIZE;
 const TRUEOS_SC_NPROCESSORS_ONLN: c_int = 84;
@@ -25,6 +32,21 @@ struct Iovec {
     base: *const u8,
     len: usize,
 }
+
+#[derive(Clone, Copy)]
+struct PthreadMutexState {
+    locked: bool,
+    owner: usize,
+}
+
+#[derive(Clone, Copy)]
+struct PthreadCondState {
+    generation: u64,
+}
+
+static PTHREAD_MUTEXES: Mutex<BTreeMap<usize, PthreadMutexState>> = Mutex::new(BTreeMap::new());
+static PTHREAD_CONDS: Mutex<BTreeMap<usize, PthreadCondState>> = Mutex::new(BTreeMap::new());
+static LOGGED_PTHREAD_SYNC: AtomicI32 = AtomicI32::new(0);
 
 fn uart_write(bytes: &[u8]) {
     if bytes.is_empty() {
@@ -44,6 +66,93 @@ unsafe fn alloc_bytes(size: usize, align: usize) -> *mut u8 {
     };
 
     unsafe { crate::allocators::alloc_raw(layout) }
+}
+
+fn pthread_key(ptr: *mut c_void) -> Option<usize> {
+    let key = ptr as usize;
+    if key == 0 { None } else { Some(key) }
+}
+
+fn pthread_current_id() -> usize {
+    crate::percpu::current_slot().saturating_add(1)
+}
+
+fn pthread_sync_probe_log() {
+    if LOGGED_PTHREAD_SYNC
+        .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        crate::log!("std-abi: pthread mutex/cond shim using TRUEOS spin wait states\n");
+    }
+}
+
+fn pthread_mutex_unlock_key(key: usize) -> c_int {
+    let owner = pthread_current_id();
+    let mut table = PTHREAD_MUTEXES.lock();
+    let state = table.entry(key).or_insert(PthreadMutexState {
+        locked: false,
+        owner: 0,
+    });
+    if state.locked && state.owner != owner {
+        return TRUEOS_EINVAL;
+    }
+    state.locked = false;
+    state.owner = 0;
+    0
+}
+
+fn pthread_mutex_lock_key(key: usize) -> c_int {
+    pthread_sync_probe_log();
+    let owner = pthread_current_id();
+    loop {
+        {
+            let mut table = PTHREAD_MUTEXES.lock();
+            let state = table.entry(key).or_insert(PthreadMutexState {
+                locked: false,
+                owner: 0,
+            });
+            if !state.locked {
+                state.locked = true;
+                state.owner = owner;
+                return 0;
+            }
+        }
+        core::hint::spin_loop();
+    }
+}
+
+fn pthread_mutex_trylock_key(key: usize) -> c_int {
+    pthread_sync_probe_log();
+    let owner = pthread_current_id();
+    let mut table = PTHREAD_MUTEXES.lock();
+    let state = table.entry(key).or_insert(PthreadMutexState {
+        locked: false,
+        owner: 0,
+    });
+    if state.locked {
+        TRUEOS_EBUSY
+    } else {
+        state.locked = true;
+        state.owner = owner;
+        0
+    }
+}
+
+fn pthread_cond_generation(key: usize) -> u64 {
+    let mut table = PTHREAD_CONDS.lock();
+    table
+        .entry(key)
+        .or_insert(PthreadCondState { generation: 0 })
+        .generation
+}
+
+fn pthread_cond_notify_key(key: usize) -> c_int {
+    let mut table = PTHREAD_CONDS.lock();
+    let state = table
+        .entry(key)
+        .or_insert(PthreadCondState { generation: 0 });
+    state.generation = state.generation.wrapping_add(1);
+    0
 }
 
 #[unsafe(no_mangle)]
@@ -542,32 +651,60 @@ pub unsafe extern "C" fn sysconf(name: c_int) -> isize {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pthread_mutex_init(_mutex: *mut c_void, _attr: *const c_void) -> c_int {
+pub unsafe extern "C" fn pthread_mutex_init(mutex: *mut c_void, _attr: *const c_void) -> c_int {
+    let Some(key) = pthread_key(mutex) else {
+        return TRUEOS_EINVAL;
+    };
+    PTHREAD_MUTEXES.lock().insert(
+        key,
+        PthreadMutexState {
+            locked: false,
+            owner: 0,
+        },
+    );
     0
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pthread_mutex_destroy(_mutex: *mut c_void) -> c_int {
+pub unsafe extern "C" fn pthread_mutex_destroy(mutex: *mut c_void) -> c_int {
+    if let Some(key) = pthread_key(mutex) {
+        PTHREAD_MUTEXES.lock().remove(&key);
+    }
     0
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pthread_mutex_lock(_mutex: *mut c_void) -> c_int {
-    0
+pub unsafe extern "C" fn pthread_mutex_lock(mutex: *mut c_void) -> c_int {
+    let Some(key) = pthread_key(mutex) else {
+        return TRUEOS_EINVAL;
+    };
+    pthread_mutex_lock_key(key)
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pthread_mutex_trylock(_mutex: *mut c_void) -> c_int {
-    0
+pub unsafe extern "C" fn pthread_mutex_trylock(mutex: *mut c_void) -> c_int {
+    let Some(key) = pthread_key(mutex) else {
+        return TRUEOS_EINVAL;
+    };
+    pthread_mutex_trylock_key(key)
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pthread_mutex_unlock(_mutex: *mut c_void) -> c_int {
-    0
+pub unsafe extern "C" fn pthread_mutex_unlock(mutex: *mut c_void) -> c_int {
+    let Some(key) = pthread_key(mutex) else {
+        return TRUEOS_EINVAL;
+    };
+    pthread_mutex_unlock_key(key)
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pthread_cond_init(_cond: *mut c_void, _attr: *const c_void) -> c_int {
+pub unsafe extern "C" fn pthread_cond_init(cond: *mut c_void, _attr: *const c_void) -> c_int {
+    let Some(key) = pthread_key(cond) else {
+        return TRUEOS_EINVAL;
+    };
+    PTHREAD_CONDS
+        .lock()
+        .insert(key, PthreadCondState { generation: 0 });
     0
 }
 
@@ -587,34 +724,79 @@ pub unsafe extern "C" fn pthread_condattr_destroy(_attr: *mut c_void) -> c_int {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pthread_cond_destroy(_cond: *mut c_void) -> c_int {
+pub unsafe extern "C" fn pthread_cond_destroy(cond: *mut c_void) -> c_int {
+    if let Some(key) = pthread_key(cond) {
+        PTHREAD_CONDS.lock().remove(&key);
+    }
     0
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pthread_cond_wait(_cond: *mut c_void, _mutex: *mut c_void) -> c_int {
-    core::hint::spin_loop();
-    0
+pub unsafe extern "C" fn pthread_cond_wait(cond: *mut c_void, mutex: *mut c_void) -> c_int {
+    let Some(cond_key) = pthread_key(cond) else {
+        return TRUEOS_EINVAL;
+    };
+    let Some(mutex_key) = pthread_key(mutex) else {
+        return TRUEOS_EINVAL;
+    };
+
+    let generation = pthread_cond_generation(cond_key);
+    let unlock_rc = pthread_mutex_unlock_key(mutex_key);
+    if unlock_rc != 0 {
+        return unlock_rc;
+    }
+
+    while pthread_cond_generation(cond_key) == generation {
+        core::hint::spin_loop();
+    }
+
+    pthread_mutex_lock_key(mutex_key)
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pthread_cond_timedwait(
-    _cond: *mut c_void,
-    _mutex: *mut c_void,
+    cond: *mut c_void,
+    mutex: *mut c_void,
     _abstime: *const c_void,
 ) -> c_int {
-    core::hint::spin_loop();
-    110
+    let Some(cond_key) = pthread_key(cond) else {
+        return TRUEOS_EINVAL;
+    };
+    let Some(mutex_key) = pthread_key(mutex) else {
+        return TRUEOS_EINVAL;
+    };
+
+    let generation = pthread_cond_generation(cond_key);
+    let unlock_rc = pthread_mutex_unlock_key(mutex_key);
+    if unlock_rc != 0 {
+        return unlock_rc;
+    }
+
+    for _ in 0..4096 {
+        if pthread_cond_generation(cond_key) != generation {
+            return pthread_mutex_lock_key(mutex_key);
+        }
+        core::hint::spin_loop();
+    }
+
+    let _ = pthread_mutex_lock_key(mutex_key);
+    TRUEOS_ETIMEDOUT
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pthread_cond_signal(_cond: *mut c_void) -> c_int {
-    0
+pub unsafe extern "C" fn pthread_cond_signal(cond: *mut c_void) -> c_int {
+    let Some(key) = pthread_key(cond) else {
+        return TRUEOS_EINVAL;
+    };
+    pthread_cond_notify_key(key)
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pthread_cond_broadcast(_cond: *mut c_void) -> c_int {
-    0
+pub unsafe extern "C" fn pthread_cond_broadcast(cond: *mut c_void) -> c_int {
+    let Some(key) = pthread_key(cond) else {
+        return TRUEOS_EINVAL;
+    };
+    pthread_cond_notify_key(key)
 }
 
 #[unsafe(no_mangle)]
