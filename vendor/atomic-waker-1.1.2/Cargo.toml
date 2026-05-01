@@ -51,6 +51,3 @@ default-features = false
 
 [dev-dependencies.futures]
 version = "0.3.5"
-
-[dev-dependencies.rayon]
-version = "1.7.0"
