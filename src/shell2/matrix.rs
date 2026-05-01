@@ -94,6 +94,10 @@ fn normalize_slot_id(requested: &str) -> MatrixSlotId {
     id
 }
 
+pub(crate) fn slot_id_from_name(requested: &str) -> MatrixSlotId {
+    normalize_slot_id(requested)
+}
+
 fn ensure_slot_index(slots: &mut Vec<MatrixSlot>, id: &MatrixSlotId) -> usize {
     if let Some(idx) = slots.iter().position(|slot| slot.id == *id) {
         return idx;

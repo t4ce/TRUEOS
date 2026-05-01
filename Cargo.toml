@@ -58,6 +58,7 @@ trueos-tetris = { path = "crates/trueos-tetris" }
 trueos-weather = { path = "crates/trueos-weather" }
 trueos-vm = { path = "crates/trueos-vm" }
 trueos-esp = { path = "crates/trueos-esp" }
+trueos-chat = { path = "crates/trueos-chat" }
 lyon_geom = { version = "1.0.19", default-features = false }
 lyon_tessellation = { version = "1.0.20", default-features = false }
 euclid = { version = "=0.22.13", default-features = false }

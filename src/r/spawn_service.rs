@@ -41,6 +41,7 @@ define_started_flags!(
     AI_QJS_ONESHOT_STARTED,
     HTTP_TRUEOSFS_STARTED,
     HYPER_HTTP1_PROBE_STARTED,
+    CHAT_HTTP_STARTED,
     WS_TIME_STARTED,
     ESP_GATE_STARTED,
     ESP_GATE_REGISTRY_STARTED,
@@ -92,6 +93,7 @@ define_started_flags!(
     UART_SHELL_STARTED,
     NET_TCP_SHELL_STARTED,
     LOGTOTCP_STARTED,
+    LUMEN_SERVICE_STARTED,
     PCIIDS_GIT_STARTED,
     ATOMIC_BOMB_STARTED,
     HTML_DEMO_STARTED,
@@ -412,6 +414,10 @@ fn spawn_logtotcp(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::globalog::logtotcp::logtotcp_task())
 }
 
+fn spawn_lumen_service(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::r::lumen_service::lumen_service_task())
+}
+
 fn spawn_ai_qjs_oneshot(spawner: Spawner) -> SpawnAttempt {
     let _ = spawner;
     SpawnAttempt::Skipped
@@ -427,6 +433,10 @@ fn spawn_http_trueosfs(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_hyper_http1_probe(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |_worker_spawner| crate::hyper_probe::hyper_net_probe_task())
+}
+
+fn spawn_chat_http(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_worker(spawner, |_worker_spawner| crate::r::net::srv::chat::chat_http_service_task())
 }
 
 fn spawn_ws_time(spawner: Spawner) -> SpawnAttempt {
@@ -1172,7 +1182,7 @@ const UI2_DEMO_READY: u32 =
 const WS_BOOT_READY: u32 = crate::r::readiness::NET_GATEWAY_REACHABLE
     | crate::r::readiness::TLS_SOCKET_SERVICE_READY
     | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
-static TASKS: [TaskSpec; 71] = [
+static TASKS: [TaskSpec; 73] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
         "globalog-persist-once",
@@ -1247,6 +1257,12 @@ static TASKS: [TaskSpec; 71] = [
         HYPER_HTTP1_PROBE_READY,
         &HYPER_HTTP1_PROBE_STARTED,
         spawn_hyper_http1_probe,
+    ),
+    TaskSpec::enabled(
+        "chat-http",
+        crate::r::readiness::NET_V4_CONFIGURED,
+        &CHAT_HTTP_STARTED,
+        spawn_chat_http,
     ),
     TaskSpec::enabled("app-vm-run-queue", 0, &APP_VM_RUN_QUEUE_STARTED, spawn_app_vm_run_queue),
     TaskSpec::enabled(
@@ -1493,6 +1509,12 @@ static TASKS: [TaskSpec; 71] = [
         crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
         &TRUEOSFS_READY_HOOK_STARTED,
         spawn_trueosfs_ready_hook,
+    ),
+    TaskSpec::enabled(
+        "lumen-service",
+        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
+        &LUMEN_SERVICE_STARTED,
+        spawn_lumen_service,
     ),
     TaskSpec::disabled("boot-ws-smoke", WS_BOOT_READY, &BOOT_WS_SMOKE_STARTED, spawn_boot_ws_smoke),
     TaskSpec::disabled("smtp-smoke", 0, &SMTP_SMOKE_STARTED, spawn_smtp_smoke),

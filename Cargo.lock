@@ -58,6 +58,7 @@ dependencies = [
  "tiny-skia-path",
  "tokio",
  "trueos-c4",
+ "trueos-chat",
  "trueos-esp",
  "trueos-fs",
  "trueos-gfx-core",
@@ -3126,6 +3127,14 @@ dependencies = [
 [[package]]
 name = "trueos-c4"
 version = "0.1.0"
+
+[[package]]
+name = "trueos-chat"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "trueos-esp"

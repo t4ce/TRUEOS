@@ -536,7 +536,7 @@ fn submit_cpubench(spawner: &Spawner, io: &'static dyn ShellBackend2) -> Option<
     Some(session_id)
 }
 
-pub(super) fn bench_session_start() -> u64 {
+pub(crate) fn bench_session_start() -> u64 {
     let id = NEXT_BENCH_SESSION_ID.fetch_add(1, Ordering::Relaxed);
     BENCH_SESSIONS.lock().push(BenchSessionState {
         id,
@@ -545,7 +545,7 @@ pub(super) fn bench_session_start() -> u64 {
     id
 }
 
-pub(super) fn bench_session_finish(session_id: u64) {
+pub(crate) fn bench_session_finish(session_id: u64) {
     let mut sessions = BENCH_SESSIONS.lock();
     if let Some(idx) = sessions.iter().position(|s| s.id == session_id) {
         let _ = sessions.remove(idx);

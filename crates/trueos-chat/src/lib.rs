@@ -1,0 +1,493 @@
+#![no_std]
+
+extern crate alloc;
+
+use alloc::{collections::VecDeque, format, string::String, vec::Vec};
+
+use serde::Serialize;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChatConfig {
+    pub max_rooms: usize,
+    pub max_messages_per_room: usize,
+    pub max_name_len: usize,
+    pub max_message_len: usize,
+}
+
+impl Default for ChatConfig {
+    fn default() -> Self {
+        Self {
+            max_rooms: 32,
+            max_messages_per_room: 128,
+            max_name_len: 32,
+            max_message_len: 1024,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChatMethod {
+    Get,
+    Post,
+    Other,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChatRequest {
+    pub method: ChatMethod,
+    pub path: String,
+    pub query: Option<String>,
+    pub body: Vec<u8>,
+    pub now_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChatResponse {
+    pub status: u16,
+    pub content_type: &'static str,
+    pub body: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct Message {
+    id: u64,
+    user: String,
+    text: String,
+    unix_ms: u64,
+}
+
+#[derive(Clone, Debug)]
+struct Room {
+    name: String,
+    messages: VecDeque<Message>,
+}
+
+#[derive(Debug)]
+pub struct ChatHub {
+    config: ChatConfig,
+    next_id: u64,
+    rooms: Vec<Room>,
+}
+
+#[derive(Serialize)]
+struct RoomsJson<'a> {
+    rooms: Vec<RoomJson<'a>>,
+}
+
+#[derive(Serialize)]
+struct RoomJson<'a> {
+    room: &'a str,
+    messages: usize,
+}
+
+#[derive(Serialize)]
+struct MessagesJson<'a> {
+    room: &'a str,
+    messages: Vec<&'a Message>,
+}
+
+#[derive(Serialize)]
+struct PostOkJson {
+    ok: bool,
+    id: u64,
+}
+
+#[derive(Serialize)]
+struct ErrorJson<'a> {
+    ok: bool,
+    error: &'a str,
+}
+
+impl ChatHub {
+    pub fn new(config: ChatConfig) -> Self {
+        Self {
+            config,
+            next_id: 1,
+            rooms: Vec::new(),
+        }
+    }
+
+    pub fn room_count(&self) -> usize {
+        self.rooms.len()
+    }
+
+    pub fn message_count(&self, room: &str) -> usize {
+        let Some(name) = sanitize_name(room, self.config.max_name_len) else {
+            return 0;
+        };
+        self.rooms
+            .iter()
+            .find(|candidate| candidate.name == name)
+            .map(|room| room.messages.len())
+            .unwrap_or(0)
+    }
+
+    pub fn handle(&mut self, req: ChatRequest) -> ChatResponse {
+        match (req.method, req.path.as_str()) {
+            (ChatMethod::Get, "/") => html_response(index_html()),
+            (ChatMethod::Get, "/api/rooms") => self.rooms_response(),
+            _ => {
+                if let Some(room) = api_room_messages_path(&req.path) {
+                    match req.method {
+                        ChatMethod::Get => self.messages_response(room, req.query.as_deref()),
+                        ChatMethod::Post => self.post_message_response(room, &req.body, req.now_ms),
+                        ChatMethod::Other => error_response(405, "method not allowed"),
+                    }
+                } else {
+                    error_response(404, "not found")
+                }
+            }
+        }
+    }
+
+    fn rooms_response(&self) -> ChatResponse {
+        let rooms = self
+            .rooms
+            .iter()
+            .map(|room| RoomJson {
+                room: room.name.as_str(),
+                messages: room.messages.len(),
+            })
+            .collect();
+        json_response(200, &RoomsJson { rooms })
+    }
+
+    fn messages_response(&self, room: &str, query: Option<&str>) -> ChatResponse {
+        let Some(room_name) = sanitize_name(room, self.config.max_name_len) else {
+            return error_response(400, "invalid room");
+        };
+        let since = query.and_then(parse_since).unwrap_or(0);
+        let messages = self
+            .rooms
+            .iter()
+            .find(|room| room.name == room_name)
+            .map(|room| {
+                room.messages
+                    .iter()
+                    .filter(|message| message.id > since)
+                    .collect()
+            })
+            .unwrap_or_else(Vec::new);
+        json_response(
+            200,
+            &MessagesJson {
+                room: room_name.as_str(),
+                messages,
+            },
+        )
+    }
+
+    fn post_message_response(&mut self, room: &str, body: &[u8], now_ms: u64) -> ChatResponse {
+        let Some(room_name) = sanitize_name(room, self.config.max_name_len) else {
+            return error_response(400, "invalid room");
+        };
+        let user_raw = form_value(body, "user");
+        let text_raw = form_value(body, "text");
+        let Some(user) = user_raw.and_then(|value| sanitize_text(&value, self.config.max_name_len))
+        else {
+            return error_response(400, "invalid user");
+        };
+        let Some(text) =
+            text_raw.and_then(|value| sanitize_text(&value, self.config.max_message_len))
+        else {
+            return error_response(400, "invalid text");
+        };
+
+        if self.rooms.iter().all(|room| room.name != room_name) {
+            if self.rooms.len() >= self.config.max_rooms {
+                return error_response(507, "room limit reached");
+            }
+            self.rooms.push(Room {
+                name: room_name.clone(),
+                messages: VecDeque::new(),
+            });
+        }
+
+        let id = self.next_id;
+        self.next_id = self.next_id.saturating_add(1).max(1);
+        let unix_ms = if now_ms == 0 { id } else { now_ms };
+        let message = Message {
+            id,
+            user,
+            text,
+            unix_ms,
+        };
+        if let Some(room) = self.rooms.iter_mut().find(|room| room.name == room_name) {
+            room.messages.push_back(message);
+            while room.messages.len() > self.config.max_messages_per_room {
+                room.messages.pop_front();
+            }
+        }
+
+        json_response(200, &PostOkJson { ok: true, id })
+    }
+}
+
+fn api_room_messages_path(path: &str) -> Option<&str> {
+    let rest = path.strip_prefix("/api/rooms/")?;
+    rest.strip_suffix("/messages")
+}
+
+fn parse_since(query: &str) -> Option<u64> {
+    for pair in query.split('&') {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        if key == "since" {
+            return value.parse().ok();
+        }
+    }
+    None
+}
+
+fn sanitize_name(raw: &str, max_len: usize) -> Option<String> {
+    let mut out = String::new();
+    for ch in raw.trim().chars() {
+        let mapped = match ch {
+            'a'..='z' | 'A'..='Z' | '0'..='9' => ch.to_ascii_lowercase(),
+            '-' | '_' => ch,
+            ' ' => '-',
+            _ => continue,
+        };
+        if out.len() < max_len {
+            out.push(mapped);
+        }
+    }
+    if out.is_empty() { None } else { Some(out) }
+}
+
+fn sanitize_text(raw: &str, max_len: usize) -> Option<String> {
+    let mut out = String::new();
+    for ch in raw.trim().chars() {
+        if ch == '\0' || ch == '\r' {
+            continue;
+        }
+        if out.len() + ch.len_utf8() > max_len {
+            break;
+        }
+        out.push(ch);
+    }
+    if out.trim().is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+fn form_value(body: &[u8], key: &str) -> Option<String> {
+    let body = core::str::from_utf8(body).ok()?;
+    for pair in body.split('&') {
+        let (raw_key, raw_value) = pair.split_once('=').unwrap_or((pair, ""));
+        if url_decode(raw_key, 64).as_deref() == Some(key) {
+            return url_decode(raw_value, 8 * 1024);
+        }
+    }
+    None
+}
+
+fn url_decode(raw: &str, max_len: usize) -> Option<String> {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::new();
+    let mut idx = 0;
+    while idx < bytes.len() {
+        let byte = match bytes[idx] {
+            b'+' => {
+                idx += 1;
+                b' '
+            }
+            b'%' if idx + 2 < bytes.len() => {
+                let hi = hex(bytes[idx + 1])?;
+                let lo = hex(bytes[idx + 2])?;
+                idx += 3;
+                (hi << 4) | lo
+            }
+            b'%' => return None,
+            other => {
+                idx += 1;
+                other
+            }
+        };
+        if out.len() >= max_len {
+            break;
+        }
+        out.push(byte);
+    }
+    String::from_utf8(out).ok()
+}
+
+fn hex(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn html_escape(raw: &str) -> String {
+    let mut out = String::new();
+    for ch in raw.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+fn index_html() -> Vec<u8> {
+    let title = html_escape("TRUEOS Chat");
+    format!(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{title}</title>
+<style>
+body{{font:16px system-ui,sans-serif;margin:0;background:#101820;color:#eef3f7}}
+main{{max-width:760px;margin:0 auto;padding:24px}}
+label{{display:block;margin:12px 0 4px;color:#b7c6d1}}
+input,button{{font:inherit;border:1px solid #41515e;background:#17242e;color:#eef3f7;padding:10px;border-radius:6px}}
+input{{box-sizing:border-box;width:100%}}
+button{{cursor:pointer;background:#2d6cdf;border-color:#2d6cdf}}
+#messages{{list-style:none;padding:0;margin:20px 0;display:grid;gap:10px}}
+#messages li{{background:#17242e;border:1px solid #2c3c48;border-radius:6px;padding:10px}}
+.meta{{color:#91a7b8;font-size:13px;margin-bottom:4px}}
+form{{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end}}
+</style>
+</head>
+<body>
+<main>
+<h1>TRUEOS Chat</h1>
+<label for="room">Room</label><input id="room" value="lobby" maxlength="32">
+<label for="user">Display name</label><input id="user" value="guest" maxlength="32">
+<ul id="messages"></ul>
+<form id="post"><input id="text" autocomplete="off" maxlength="1024"><button>Send</button></form>
+</main>
+<script>
+let since=0;
+const esc=s=>s.replace(/[&<>"']/g,c=>({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[c]));
+const clean=s=>s.trim().replace(/\s+/g,'-')||'lobby';
+async function poll(){{
+  const room=encodeURIComponent(clean(document.querySelector('#room').value));
+  const r=await fetch(`/api/rooms/${{room}}/messages?since=${{since}}`,{{cache:'no-store'}});
+  if(r.ok){{
+    const data=await r.json();
+    for(const m of data.messages){{
+      since=Math.max(since,m.id);
+      const li=document.createElement('li');
+      li.innerHTML=`<div class="meta">${{esc(m.user)}} #${{m.id}}</div><div>${{esc(m.text)}}</div>`;
+      document.querySelector('#messages').appendChild(li);
+    }}
+  }}
+}}
+document.querySelector('#room').addEventListener('change',()=>{{since=0;document.querySelector('#messages').replaceChildren();poll();}});
+document.querySelector('#post').addEventListener('submit',async e=>{{
+  e.preventDefault();
+  const room=encodeURIComponent(clean(document.querySelector('#room').value));
+  const body=new URLSearchParams({{user:document.querySelector('#user').value,text:document.querySelector('#text').value}});
+  const r=await fetch(`/api/rooms/${{room}}/messages`,{{method:'POST',body}});
+  if(r.ok)document.querySelector('#text').value='';
+  poll();
+}});
+setInterval(poll,1500);poll();
+</script>
+</body>
+</html>
+"#
+    )
+    .into_bytes()
+}
+
+fn html_response(body: Vec<u8>) -> ChatResponse {
+    ChatResponse {
+        status: 200,
+        content_type: "text/html; charset=utf-8",
+        body,
+    }
+}
+
+fn json_response<T: Serialize>(status: u16, value: &T) -> ChatResponse {
+    let body = serde_json::to_vec(value).unwrap_or_else(|_| b"{\"ok\":false}".to_vec());
+    ChatResponse {
+        status,
+        content_type: "application/json; charset=utf-8",
+        body,
+    }
+}
+
+fn error_response(status: u16, error: &'static str) -> ChatResponse {
+    json_response(status, &ErrorJson { ok: false, error })
+}
+
+#[cfg(test)]
+extern crate std;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::string::ToString;
+
+    #[test]
+    fn post_and_poll_messages() {
+        let mut hub = ChatHub::new(ChatConfig::default());
+        let post = hub.handle(ChatRequest {
+            method: ChatMethod::Post,
+            path: "/api/rooms/Lobby/messages".to_string(),
+            query: None,
+            body: b"user=Ada&text=hello+there".to_vec(),
+            now_ms: 42,
+        });
+        assert_eq!(post.status, 200);
+        assert_eq!(hub.room_count(), 1);
+        assert_eq!(hub.message_count("lobby"), 1);
+
+        let get = hub.handle(ChatRequest {
+            method: ChatMethod::Get,
+            path: "/api/rooms/lobby/messages".to_string(),
+            query: Some("since=0".to_string()),
+            body: Vec::new(),
+            now_ms: 0,
+        });
+        assert_eq!(get.status, 200);
+        let text = String::from_utf8(get.body).unwrap();
+        assert!(text.contains("\"user\":\"Ada\""));
+        assert!(text.contains("\"text\":\"hello there\""));
+    }
+
+    #[test]
+    fn caps_room_history() {
+        let mut hub = ChatHub::new(ChatConfig {
+            max_messages_per_room: 1,
+            ..ChatConfig::default()
+        });
+        for text in ["one", "two"] {
+            let body = format!("user=Ada&text={}", text).into_bytes();
+            assert_eq!(
+                hub.handle(ChatRequest {
+                    method: ChatMethod::Post,
+                    path: "/api/rooms/lobby/messages".to_string(),
+                    query: None,
+                    body,
+                    now_ms: 0,
+                })
+                .status,
+                200
+            );
+        }
+        assert_eq!(hub.message_count("lobby"), 1);
+        let get = hub.handle(ChatRequest {
+            method: ChatMethod::Get,
+            path: "/api/rooms/lobby/messages".to_string(),
+            query: Some("since=0".to_string()),
+            body: Vec::new(),
+            now_ms: 0,
+        });
+        let text = String::from_utf8(get.body).unwrap();
+        assert!(!text.contains("\"one\""));
+        assert!(text.contains("\"two\""));
+    }
+}
