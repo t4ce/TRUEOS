@@ -3,6 +3,10 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkGroup, Crit
 
 use std::sync::Arc;
 use std::task::{Wake, Waker};
+use std::thread;
+
+const HIGH_CONTENTION_THREADS: usize = 8;
+const HIGH_CONTENTION_ITERS: usize = 100_000;
 
 enum Contention {
     Low,
@@ -13,11 +17,11 @@ impl Contention {
     fn bench<M>(
         self,
         group: &mut BenchmarkGroup<'_, M>,
-        f: impl Fn(&AtomicWaker) + Send + Sync + Clone,
+        f: impl Fn(&AtomicWaker) + Send + Sync + Clone + 'static,
     ) where
         M: criterion::measurement::Measurement,
     {
-        let waker = AtomicWaker::new();
+        let waker = Arc::new(AtomicWaker::new());
 
         match self {
             Self::Low => {
@@ -35,8 +39,27 @@ impl Contention {
                 // Run the benchmark with high contention.
                 group.bench_function("high contention", move |b| {
                     b.iter(|| {
-                        use rayon::prelude::*;
-                        (0..100_000).into_par_iter().for_each(|_| f(&waker));
+                        let mut handles = Vec::with_capacity(HIGH_CONTENTION_THREADS);
+
+                        for thread_index in 0..HIGH_CONTENTION_THREADS {
+                            let f = f.clone();
+                            let waker = Arc::clone(&waker);
+
+                            handles.push(thread::spawn(move || {
+                                let start =
+                                    thread_index * HIGH_CONTENTION_ITERS / HIGH_CONTENTION_THREADS;
+                                let end = (thread_index + 1) * HIGH_CONTENTION_ITERS
+                                    / HIGH_CONTENTION_THREADS;
+
+                                for _ in start..end {
+                                    f(&waker);
+                                }
+                            }));
+                        }
+
+                        for handle in handles {
+                            handle.join().unwrap();
+                        }
                     })
                 });
             }
@@ -44,7 +67,11 @@ impl Contention {
     }
 }
 
-fn run_lo_hi(c: &mut Criterion, name: &str, f: impl Fn(&AtomicWaker) + Send + Sync + Clone) {
+fn run_lo_hi(
+    c: &mut Criterion,
+    name: &str,
+    f: impl Fn(&AtomicWaker) + Send + Sync + Clone + 'static,
+) {
     let mut group = c.benchmark_group(name);
 
     Contention::Low.bench(&mut group, f.clone());
