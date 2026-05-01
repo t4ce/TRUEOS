@@ -307,7 +307,7 @@ impl ObjectSink for TrueosFsObjectSink {
 fn trueosfs_forward_read_chunk_bytes(info: &crate::disc::block::DeviceInfo) -> usize {
     let block_size = usize::max(info.block_size as usize, 1);
     let raw = if info.max_transfer_bytes > 0 {
-        info.max_transfer_bytes as usize
+        (info.max_transfer_bytes as usize).saturating_mul(7) / 8
     } else {
         TRUEOSFS_FORWARD_READ_FALLBACK_BYTES
     };
@@ -340,6 +340,72 @@ pub async fn read_trueosfs_file_range_into_async(
         else {
             return Ok(false);
         };
+        if read == 0 {
+            break;
+        }
+        written = written.saturating_add(read);
+        cursor = cursor.saturating_add(read as u64);
+    }
+
+    if written != dst.len() {
+        return Err(crate::disc::block::Error::OutOfBounds);
+    }
+    Ok(true)
+}
+
+pub async fn read_trueosfs_file_range_into_logged_async(
+    disk: crate::disc::block::DeviceHandle,
+    key: &str,
+    offset: u64,
+    dst: &mut [u8],
+    log_label: &str,
+) -> Result<bool, crate::disc::block::Error> {
+    if dst.is_empty() {
+        return Ok(true);
+    }
+
+    let mut cursor = offset;
+    let mut written = 0usize;
+    let chunk_bytes = trueosfs_forward_read_chunk_bytes(&disk.info());
+    crate::log!(
+        "{} read chunks start path={} offset={} bytes={} chunk={}\n",
+        log_label,
+        key,
+        offset,
+        dst.len(),
+        chunk_bytes
+    );
+    while written < dst.len() {
+        let chunk_end = usize::min(written.saturating_add(chunk_bytes), dst.len());
+        let want = chunk_end.saturating_sub(written);
+        crate::log!(
+            "{} read chunk begin path={} offset={} want={} done={}/{}\n",
+            log_label,
+            key,
+            cursor,
+            want,
+            written,
+            dst.len()
+        );
+        let Some(read) = crate::r::fs::trueosfs::file_read_range_async(
+            disk,
+            key,
+            cursor,
+            &mut dst[written..chunk_end],
+        )
+        .await?
+        else {
+            return Ok(false);
+        };
+        crate::log!(
+            "{} read chunk done path={} offset={} got={} done={}/{}\n",
+            log_label,
+            key,
+            cursor,
+            read,
+            written.saturating_add(read),
+            dst.len()
+        );
         if read == 0 {
             break;
         }

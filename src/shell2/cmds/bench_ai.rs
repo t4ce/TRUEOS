@@ -29,7 +29,6 @@ const LUMEN_SAFETENSORS_MAX_HEADER_BYTES: usize = 64 * 1024 * 1024;
 const LUMEN_KERNEL_PROBE_ROWS: usize = 16;
 const LUMEN_KERNEL_PROBE_ITERS: usize = 256;
 const LUMEN_STATIC_HI_PROMPT: &str = "Hi";
-const LUMEN_STATIC_HI_ROWS: usize = 1024;
 const LUMEN_REAL_HI_LM_HEAD_CHUNK_ROWS: usize = 512;
 const LUMEN_AP_CHUNKS_PER_WORKER: usize = 4;
 const LUMEN_AP_MIN_CHUNK_ROWS: usize = 16;
@@ -37,7 +36,9 @@ const LUMEN_AP_MAX_CHUNK_ROWS: usize = 256;
 const LUMEN_RUNTIME_MAX_SEQ_LEN: usize = 384;
 const LUMEN_RUNTIME_MAX_NEW_TOKENS: usize = 256;
 const LUMEN_RUNTIME_PROGRESS_TENSORS: usize = 16;
+const LUMEN_RUNTIME_EARLY_PROGRESS_TENSORS: usize = 2;
 const LUMEN_RUNTIME_HEAP_EXTRA_BYTES: usize = 512 * 1024 * 1024;
+const LUMEN_RESPONSE_LINE_CHARS: usize = 96;
 const LUMEN_HI_TOKEN_CANDIDATES: [&str; 6] =
     ["Hi", "\u{2581}Hi", "hi", "\u{2581}hi", "H", "\u{2581}H"];
 const LUMEN_COMPUTE_PROBE_CASES: [LumenComputeProbeCase; 3] = [
@@ -225,6 +226,28 @@ fn tokenizer_vocab_token_id(vocab: &serde_json::Value, token: &str) -> Option<us
     None
 }
 
+fn tokenizer_token_id(tokenizer: &serde_json::Value, token: &str) -> Option<usize> {
+    tokenizer
+        .get("model")
+        .and_then(|model| model.get("vocab"))
+        .and_then(|vocab| tokenizer_vocab_token_id(vocab, token))
+        .or_else(|| {
+            tokenizer
+                .get("added_tokens")?
+                .as_array()?
+                .iter()
+                .find_map(|item| {
+                    let content = item.get("content").and_then(|value| value.as_str())?;
+                    if content != token {
+                        return None;
+                    }
+                    item.get("id")
+                        .and_then(|value| value.as_u64())
+                        .and_then(|id| usize::try_from(id).ok())
+                })
+        })
+}
+
 fn tokenizer_vocab_entries(tokenizer: &serde_json::Value) -> Vec<(AllocString, usize)> {
     let Some(vocab) = tokenizer.get("model").and_then(|model| model.get("vocab")) else {
         return Vec::new();
@@ -248,15 +271,32 @@ fn tokenizer_vocab_entries(tokenizer: &serde_json::Value) -> Vec<(AllocString, u
             }
         }
     }
+    if let Some(arr) = tokenizer
+        .get("added_tokens")
+        .and_then(|value| value.as_array())
+    {
+        for item in arr {
+            let Some(piece) = item.get("content").and_then(|value| value.as_str()) else {
+                continue;
+            };
+            let Some(id) = item
+                .get("id")
+                .and_then(|value| value.as_u64())
+                .and_then(|id| usize::try_from(id).ok())
+            else {
+                continue;
+            };
+            if !out.iter().any(|(_, existing_id)| *existing_id == id) {
+                out.push((AllocString::from(piece), id));
+            }
+        }
+    }
     out
 }
 
 fn find_hi_token_id(tokenizer: &serde_json::Value) -> Option<(&'static str, usize)> {
-    let vocab = tokenizer
-        .get("model")
-        .and_then(|model| model.get("vocab"))?;
     for token in LUMEN_HI_TOKEN_CANDIDATES {
-        if let Some(id) = tokenizer_vocab_token_id(vocab, token) {
+        if let Some(id) = tokenizer_token_id(tokenizer, token) {
             return Some((token, id));
         }
     }
@@ -264,10 +304,6 @@ fn find_hi_token_id(tokenizer: &serde_json::Value) -> Option<(&'static str, usiz
 }
 
 fn tokenizer_stop_ids(tokenizer: &serde_json::Value) -> Vec<usize> {
-    let Some(vocab) = tokenizer.get("model").and_then(|model| model.get("vocab")) else {
-        return Vec::new();
-    };
-
     let mut out = Vec::new();
     for token in [
         "</s>",
@@ -277,7 +313,7 @@ fn tokenizer_stop_ids(tokenizer: &serde_json::Value) -> Vec<usize> {
         "<|user|>",
         "<|assistant|>",
     ] {
-        if let Some(id) = tokenizer_vocab_token_id(vocab, token) {
+        if let Some(id) = tokenizer_token_id(tokenizer, token) {
             out.push(id);
         }
     }
@@ -287,6 +323,25 @@ fn tokenizer_stop_ids(tokenizer: &serde_json::Value) -> Vec<usize> {
 }
 
 fn tokenizer_piece_for_id(tokenizer: &serde_json::Value, token_id: usize) -> Option<&str> {
+    if let Some(piece) = tokenizer
+        .get("added_tokens")
+        .and_then(|value| value.as_array())
+        .and_then(|arr| {
+            arr.iter().find_map(|item| {
+                let id = item
+                    .get("id")
+                    .and_then(|value| value.as_u64())
+                    .and_then(|id| usize::try_from(id).ok())?;
+                if id != token_id {
+                    return None;
+                }
+                item.get("content").and_then(|value| value.as_str())
+            })
+        })
+    {
+        return Some(piece);
+    }
+
     let vocab = tokenizer
         .get("model")
         .and_then(|model| model.get("vocab"))?;
@@ -313,19 +368,22 @@ fn normalize_prompt_for_vocab(prompt: &str) -> AllocString {
     }
 
     out.push('▁');
-    let mut last_was_space = false;
     for ch in trimmed.chars() {
-        if ch.is_whitespace() {
-            if !last_was_space {
-                out.push('▁');
-                last_was_space = true;
-            }
+        if ch == ' ' {
+            out.push('▁');
+        } else if ch == '\r' {
+            continue;
+        } else if ch == '\n' {
+            out.push_str("<0x0A>");
         } else {
             out.push(ch);
-            last_was_space = false;
         }
     }
     out
+}
+
+fn lumen_chat_prompt(user: &str) -> AllocString {
+    format!("User: {}\nAssistant:", user.trim())
 }
 
 fn encode_prompt_lossy(prompt: &str, vocab_entries: &[(AllocString, usize)]) -> Vec<usize> {
@@ -363,10 +421,70 @@ fn token_piece_to_text(piece: &str) -> AllocString {
         if rest.is_empty() {
             AllocString::from(" ")
         } else {
-            format!(" {}", rest)
+            let mut out = AllocString::from(" ");
+            out.push_str(token_piece_to_text(rest).as_str());
+            out
+        }
+    } else if let Some(hex) = piece
+        .strip_prefix("<0x")
+        .and_then(|rest| rest.strip_suffix('>'))
+    {
+        if hex.len() == 2
+            && let Ok(byte) = u8::from_str_radix(hex, 16)
+        {
+            AllocString::from(char::from(byte))
+        } else {
+            AllocString::from(piece)
         }
     } else {
         AllocString::from(piece)
+    }
+}
+
+fn print_lumen_response(target: &MatrixTarget, answer: &str) {
+    if answer.trim().is_empty() {
+        print_matrix_target_line(target, "lumen: <empty>");
+        return;
+    }
+
+    let mut first = true;
+    for raw_line in answer.lines() {
+        let mut line = raw_line.trim_end();
+        if line.is_empty() {
+            print_matrix_target_line(target, if first { "lumen:" } else { "" });
+            first = false;
+            continue;
+        }
+
+        while !line.is_empty() {
+            let mut end = 0usize;
+            let mut chars = 0usize;
+            let mut last_space = None;
+            for (idx, ch) in line.char_indices() {
+                if chars >= LUMEN_RESPONSE_LINE_CHARS {
+                    break;
+                }
+                if ch == ' ' {
+                    last_space = Some(idx);
+                }
+                end = idx + ch.len_utf8();
+                chars += 1;
+            }
+            if end < line.len() {
+                end = last_space.filter(|idx| *idx > 0).unwrap_or(end);
+            }
+
+            let text = line[..end].trim();
+            if !text.is_empty() {
+                if first {
+                    print_matrix_target_line(target, format!("lumen: {}", text).as_str());
+                    first = false;
+                } else {
+                    print_matrix_target_line(target, text);
+                }
+            }
+            line = line[end..].trim_start();
+        }
     }
 }
 
@@ -393,6 +511,23 @@ fn tensor_from_token_ids(ids: &[usize]) -> Result<Tensor, AllocString> {
     Ok(tensor)
 }
 
+fn trim_lumen_turn_markers(answer: &str) -> AllocString {
+    let mut end = answer.len();
+    for marker in [
+        "\nUser:",
+        "\nAssistant:",
+        "\nSystem:",
+        "User:",
+        "Assistant:",
+        "System:",
+    ] {
+        if let Some(idx) = answer.find(marker) {
+            end = end.min(idx);
+        }
+    }
+    answer[..end].trim().to_string()
+}
+
 fn generate_lumen_answer(
     model: &LlamaModel,
     tokenizer_json: &serde_json::Value,
@@ -400,7 +535,8 @@ fn generate_lumen_answer(
     stop_ids: &[usize],
     prompt: &str,
 ) -> Result<(AllocString, usize), AllocString> {
-    let prompt_tokens = encode_prompt_lossy(prompt, vocab_entries);
+    let chat_prompt = lumen_chat_prompt(prompt);
+    let prompt_tokens = encode_prompt_lossy(chat_prompt.as_str(), vocab_entries);
     if prompt_tokens.is_empty() {
         return Err(AllocString::from("tokenizer produced no tokens"));
     }
@@ -442,6 +578,9 @@ fn generate_lumen_answer(
             }
             answer.push_str(token_piece_to_text(piece).as_str());
             generated = generated.saturating_add(1);
+            if answer.contains("\nUser:") || answer.contains("\nAssistant:") {
+                break;
+            }
 
             let input = tensor_from_token_ids(&[next_token])?;
             next_token = model.forward_last_argmax(input, &mut kv_caches, 0);
@@ -457,7 +596,7 @@ fn generate_lumen_answer(
         Ok(())
     })?;
 
-    Ok((answer.trim().to_string(), generated))
+    Ok((trim_lumen_turn_markers(answer.as_str()), generated))
 }
 
 fn safetensor_dtype_nbytes(dtype: &str) -> Option<usize> {
@@ -482,28 +621,6 @@ fn lumen_probe_hidden(k_dim: usize) -> Vec<f32> {
     for idx in 0..k_dim {
         let lane = ((idx.wrapping_mul(17).wrapping_add(3)) & 0x3f) as f32;
         hidden.push((lane - 31.0) / 32.0);
-    }
-    hidden
-}
-
-fn lumen_prompt_probe_hidden(prompt: &str, k_dim: usize) -> Vec<f32> {
-    let bytes = prompt.as_bytes();
-    if bytes.is_empty() {
-        return lumen_probe_hidden(k_dim);
-    }
-
-    let mut state = 0x811C_9DC5u32;
-    for byte in bytes {
-        state ^= *byte as u32;
-        state = state.wrapping_mul(0x0100_0193);
-    }
-
-    let mut hidden: Vec<f32> = Vec::with_capacity(k_dim);
-    for idx in 0..k_dim {
-        state ^= (idx as u32).wrapping_mul(0x9E37_79B9);
-        state = state.rotate_left(13).wrapping_mul(0x85EB_CA6B);
-        let lane = ((state >> 24) & 0x7f) as f32;
-        hidden.push((lane - 63.0) / 64.0);
     }
     hidden
 }
@@ -793,13 +910,19 @@ async fn load_lumen_model_from_trueosfs(
 
         loaded_tensors = loaded_tensors.saturating_add(1);
         loaded_bytes = loaded_bytes.saturating_add(byte_count as u64);
-        if loaded_tensors % LUMEN_RUNTIME_PROGRESS_TENSORS == 0 {
+        let should_log_progress = loaded_tensors == 1
+            || (loaded_tensors < LUMEN_RUNTIME_PROGRESS_TENSORS
+                && loaded_tensors % LUMEN_RUNTIME_EARLY_PROGRESS_TENSORS == 0)
+            || loaded_tensors % LUMEN_RUNTIME_PROGRESS_TENSORS == 0;
+        if should_log_progress {
             let elapsed_ms = elapsed_ms_since(progress_start);
             let step_ms = elapsed_ms_since(last_progress_tick);
             let step_bytes = loaded_bytes.saturating_sub(last_progress_bytes);
             crate::log!(
-                "bench lumen: runtime-hi loading tensors={} bytes={} elapsed={}ms speed={} step_bytes={} step_ms={} step_speed={}\n",
+                "bench lumen: runtime-hi loading tensors={} tensor={} tensor_bytes={} bytes={} elapsed={}ms speed={} step_bytes={} step_ms={} step_speed={}\n",
                 loaded_tensors,
+                name,
+                format_bytes(byte_count as u64),
                 format_bytes(loaded_bytes),
                 elapsed_ms,
                 format_speed(bps_from_progress(loaded_bytes, elapsed_ms)),
@@ -1124,6 +1247,70 @@ async fn lumenbench_task(target: MatrixTarget, session_id: u64) {
             return;
         }
 
+        let Ok(tokenizer_len) = usize::try_from(tokenizer_info.data_len) else {
+            log("bench lumen: runtime skipped; tokenizer length overflows usize");
+            return;
+        };
+        log(
+            format!(
+                "bench lumen: tokenizer read start path={} bytes={}",
+                LUMEN_TOKENIZER_PATH,
+                format_bytes(tokenizer_len as u64)
+            )
+            .as_str(),
+        );
+        let tokenizer_start = embassy_time_driver::now();
+        let mut tokenizer_bytes = vec![0u8; tokenizer_len];
+        match crate::r::stream::read_trueosfs_file_range_into_logged_async(
+            disk,
+            LUMEN_TOKENIZER_PATH,
+            0,
+            tokenizer_bytes.as_mut_slice(),
+            "bench lumen: tokenizer",
+        )
+        .await
+        {
+            Ok(true) => {}
+            Ok(false) => {
+                log("bench lumen: runtime skipped; tokenizer disappeared");
+                return;
+            }
+            Err(err) => {
+                log(
+                    format!(
+                        "bench lumen: runtime skipped; tokenizer read failed err={:?}",
+                        err
+                    )
+                    .as_str(),
+                );
+                return;
+            }
+        };
+        let tokenizer_ms = elapsed_ms_since(tokenizer_start);
+        log(
+            format!(
+                "bench lumen: tokenizer read done bytes={} elapsed={}ms speed={}",
+                format_bytes(tokenizer_len as u64),
+                tokenizer_ms,
+                format_speed(bps_from_progress(tokenizer_len as u64, tokenizer_ms))
+            )
+            .as_str(),
+        );
+        let tokenizer_json = match serde_json::from_slice::<serde_json::Value>(&tokenizer_bytes) {
+            Ok(value) => value,
+            Err(err) => {
+                log(
+                    format!(
+                        "bench lumen: runtime skipped; tokenizer JSON parse failed err={}",
+                        err
+                    )
+                    .as_str(),
+                );
+                return;
+            }
+        };
+
+        if crate::allcaps::lumen::RUNTIME_DIAGNOSTIC_PROBES {
         let Some((lm_name, lm_value)) = lm_head else {
             log("bench lumen: kernel probe skipped; lm_head.weight missing");
             return;
@@ -1397,60 +1584,6 @@ async fn lumenbench_task(target: MatrixTarget, session_id: u64) {
             return;
         }
 
-        let Ok(tokenizer_len) = usize::try_from(tokenizer_info.data_len) else {
-            log("bench lumen: real-hi skipped; tokenizer length overflows usize");
-            return;
-        };
-        let tokenizer_start = embassy_time_driver::now();
-        let tokenizer_bytes = match crate::r::stream::read_trueosfs_file_range_via_pipe_async(
-            disk,
-            LUMEN_TOKENIZER_PATH,
-            0,
-            tokenizer_len,
-        )
-        .await
-        {
-            Ok(Some(bytes)) if bytes.len() == tokenizer_len => bytes,
-            Ok(Some(bytes)) => {
-                log(
-                    format!(
-                        "bench lumen: real-hi skipped; short tokenizer read got={} need={}",
-                        format_bytes(bytes.len() as u64),
-                        format_bytes(tokenizer_len as u64)
-                    )
-                    .as_str(),
-                );
-                return;
-            }
-            Ok(None) => {
-                log("bench lumen: real-hi skipped; tokenizer disappeared");
-                return;
-            }
-            Err(err) => {
-                log(
-                    format!(
-                        "bench lumen: real-hi skipped; tokenizer read failed err={:?}",
-                        err
-                    )
-                    .as_str(),
-                );
-                return;
-            }
-        };
-        let tokenizer_ms = elapsed_ms_since(tokenizer_start);
-        let tokenizer_json = match serde_json::from_slice::<serde_json::Value>(&tokenizer_bytes) {
-            Ok(value) => value,
-            Err(err) => {
-                log(
-                    format!(
-                        "bench lumen: real-hi skipped; tokenizer JSON parse failed err={}",
-                        err
-                    )
-                    .as_str(),
-                );
-                return;
-            }
-        };
         let Some((hi_token_piece, hi_token_id)) = find_hi_token_id(&tokenizer_json) else {
             log("bench lumen: real-hi skipped; no Hi candidate token in tokenizer vocab");
             return;
@@ -1676,6 +1809,7 @@ async fn lumenbench_task(target: MatrixTarget, session_id: u64) {
             log("bench lumen: stopped before LUMEN runtime Hi probe");
             return;
         }
+        }
 
         let heap = crate::allocators::heap_stats();
         let runtime_heap_need = usize::try_from(weights_info.data_len)
@@ -1698,10 +1832,10 @@ async fn lumenbench_task(target: MatrixTarget, session_id: u64) {
 
         log(
             format!(
-                "bench lumen: runtime-hi start prompt={:?} token_id={} parameter_dtype=bf16 runtime_dtype=bf16 max_seq_len={} heap_free={} heap_total={} note=full-LlamaModel-load-from-TRUEOSFS",
-                LUMEN_STATIC_HI_PROMPT,
-                hi_token_id,
+                "bench lumen: runtime start parameter_dtype=bf16 runtime_dtype=bf16 max_seq_len={} max_new_tokens={} tokenizer_read={}ms heap_free={} heap_total={} note=interactive-until-q",
                 LUMEN_RUNTIME_MAX_SEQ_LEN,
+                LUMEN_RUNTIME_MAX_NEW_TOKENS,
+                tokenizer_ms,
                 format_bytes(heap.free_bytes as u64),
                 format_bytes(heap.usable_total as u64)
             )
@@ -1795,11 +1929,7 @@ async fn lumenbench_task(target: MatrixTarget, session_id: u64) {
                         tokens,
                         infer_ms
                     );
-                    if answer.is_empty() {
-                        print_matrix_target_line(&task_target, "lumen: <empty>");
-                    } else {
-                        print_matrix_target_line(&task_target, format!("lumen: {}", answer).as_str());
-                    }
+                    print_lumen_response(&task_target, answer.as_str());
                 }
                 Err(err) => {
                     print_matrix_target_line(
@@ -1810,70 +1940,6 @@ async fn lumenbench_task(target: MatrixTarget, session_id: u64) {
             }
         }
         unregister_lumen_interactive_session(session_id);
-
-        if crate::allcaps::lumen::RUNTIME_STATIC_HI_WARM_PROBE {
-            if bench_cancel_requested(session_id) {
-                log("bench lumen: stopped before static Hi warm probe");
-                return;
-            }
-
-            let hi_rows = LUMEN_STATIC_HI_ROWS.min(lm_shape[0]).min(max_compute_rows);
-            let hi_bytes = hi_rows.saturating_mul(k_dim).saturating_mul(2);
-            if hi_rows > rows && hi_bytes != 0 && hi_bytes <= compute_rows_bytes.len() {
-                let static_hi_chunk_rows = lumen_dynamic_chunk_rows(hi_rows, ap_worker_count);
-                let hidden = lumen_prompt_probe_hidden(LUMEN_STATIC_HI_PROMPT, k_dim);
-                let slot_counts_before =
-                    crate::burn_baby::poll_counts_for_slots(&slots_for_counts);
-                match run_bf16_compute_lane_probe_with_hidden(
-                    &compute_rows_bytes[..hi_bytes],
-                    hi_rows,
-                    k_dim,
-                    hidden.as_slice(),
-                    static_hi_chunk_rows,
-                    1,
-                ) {
-                    Ok((checksum, top, ops_per_s, stats_before, stats_after)) => {
-                        let slot_counts_after =
-                            crate::burn_baby::poll_counts_for_slots(&slots_for_counts);
-                        let submitted = stats_after
-                            .submitted_jobs
-                            .saturating_sub(stats_before.submitted_jobs);
-                        let completed = stats_after
-                            .completed_jobs
-                            .saturating_sub(stats_before.completed_jobs);
-                        let polled = stats_after
-                            .polled_jobs
-                            .saturating_sub(stats_before.polled_jobs);
-                        let top_line = top
-                            .map(|(idx, value)| format!("sample_argmax_row={}:{:.4}", idx, value))
-                            .unwrap_or_else(|| AllocString::from("sample_argmax_row=?"));
-                        log(
-                            format!(
-                                "bench lumen: static-hi warm prompt={:?} lm_head={} rows={} hidden={} chunk_rows={} iters=1 bytes={} compute={}/s jobs={}/{} polled={} queued={} workers={} {} checksum={:.4} note=no-token-decode prompt-seeded-hidden",
-                                LUMEN_STATIC_HI_PROMPT,
-                                lm_name,
-                                hi_rows,
-                                k_dim,
-                                static_hi_chunk_rows,
-                                format_bytes(hi_bytes as u64),
-                                format_metric_units(ops_per_s, "ops"),
-                                completed,
-                                submitted,
-                                polled,
-                                stats_after.queued_jobs,
-                                compute_slot_delta_line(&slot_counts_before, &slot_counts_after),
-                                top_line,
-                                checksum
-                            )
-                            .as_str(),
-                        );
-                    }
-                    Err(err) => {
-                        log(format!("bench lumen: static-hi warm skipped; err={:?}", err).as_str());
-                    }
-                }
-            }
-        }
 
         Timer::after(EmbassyDuration::from_millis(1)).await;
     }

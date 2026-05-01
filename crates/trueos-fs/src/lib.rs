@@ -350,12 +350,12 @@ async fn read_exact_bytes<D: BlockIo>(
         return Err(FsError::InvalidParam);
     }
 
-    const MAX_BLOCKS_PER_READ: usize = 128;
+    const MAX_BLOCKS_PER_READ: usize = 2048;
     let max_bytes = dev.max_transfer_bytes();
     let safe_bytes = if max_bytes == 0 {
         256 * 1024
     } else {
-        max_bytes.saturating_mul(9) / 10
+        max_bytes.saturating_mul(7) / 8
     };
     let max_blocks_by_bytes = core::cmp::max(1, safe_bytes / bs);
     let mut remaining = out;

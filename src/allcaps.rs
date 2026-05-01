@@ -15,7 +15,7 @@ pub mod probes {
 }
 
 pub mod lumen {
-    pub const RUNTIME_STATIC_HI_WARM_PROBE: bool = false;
+    pub const RUNTIME_DIAGNOSTIC_PROBES: bool = false;
 }
 
 pub mod blueprint {
