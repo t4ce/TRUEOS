@@ -1,5 +1,5 @@
 use core::ptr::addr_of_mut;
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 pub const TOKIO_LANE_COUNT: usize = crate::allcaps::stackkeeper::TOKIO_LANE_COUNT;
 pub const TOKIO_LANE_SCRATCH_BYTES: usize = crate::allcaps::stackkeeper::TOKIO_LANE_SCRATCH_BYTES;
@@ -40,8 +40,6 @@ static LOGGED_TOKIO_LANE: [AtomicBool; TOKIO_LANE_COUNT] =
     [const { AtomicBool::new(false) }; TOKIO_LANE_COUNT];
 static TOKIO_CURRENT_LANE_BY_CPU: [AtomicU32; TOKIO_TLS_CPU_TRACK_COUNT] =
     [const { AtomicU32::new(u32::MAX) }; TOKIO_TLS_CPU_TRACK_COUNT];
-static RAYON_WORKER_THREAD_BY_TOKIO_LANE: [AtomicUsize; TOKIO_LANE_COUNT] =
-    [const { AtomicUsize::new(0) }; TOKIO_LANE_COUNT];
 static LOGGED_TOKIO_LANE_BUSY: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Copy, Debug)]
@@ -107,41 +105,6 @@ pub extern "Rust" fn trueos_tokio_tls_current_slot() -> u32 {
         fallback
     } else {
         fallback.saturating_add(cpu_slot)
-    }
-}
-
-fn active_tokio_lane_index() -> Option<usize> {
-    let lane_id = trueos_tokio_tls_current_slot() as usize;
-    if lane_id < TOKIO_LANE_COUNT {
-        Some(lane_id)
-    } else {
-        None
-    }
-}
-
-#[unsafe(no_mangle)]
-pub extern "Rust" fn trueos_rayon_worker_thread_current() -> usize {
-    active_tokio_lane_index()
-        .map(|lane_id| RAYON_WORKER_THREAD_BY_TOKIO_LANE[lane_id].load(Ordering::Acquire))
-        .unwrap_or(0)
-}
-
-#[unsafe(no_mangle)]
-pub extern "Rust" fn trueos_rayon_worker_thread_set(worker_thread: usize) {
-    if let Some(lane_id) = active_tokio_lane_index() {
-        RAYON_WORKER_THREAD_BY_TOKIO_LANE[lane_id].store(worker_thread, Ordering::Release);
-    }
-}
-
-#[unsafe(no_mangle)]
-pub extern "Rust" fn trueos_rayon_worker_thread_clear_if(worker_thread: usize) {
-    if let Some(lane_id) = active_tokio_lane_index() {
-        let _ = RAYON_WORKER_THREAD_BY_TOKIO_LANE[lane_id].compare_exchange(
-            worker_thread,
-            0,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        );
     }
 }
 

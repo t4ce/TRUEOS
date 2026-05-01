@@ -86,7 +86,6 @@ define_started_flags!(
     BOOT_WS_SMOKE_STARTED,
     BOOT_NETBENCH_STARTED,
     BOOT_GEMMA_MODEL_FETCH_STARTED,
-    RAYON_GLOBAL_POOL_STARTED,
     APP_VM_RUN_QUEUE_STARTED,
     SMTP_SMOKE_STARTED,
     FACTORY_RAM_PROBE_STARTED,
@@ -1089,23 +1088,6 @@ fn spawn_boot_gemma_model_fetch(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| boot_gemma_model_fetch_task())
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
-#[embassy_executor::task]
-async fn rayon_global_pool_task() {
-    crate::trueos_rayon_worker::init_global_pool();
-}
-
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
-fn spawn_rayon_global_pool(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| rayon_global_pool_task())
-}
-
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-fn spawn_rayon_global_pool(spawner: Spawner) -> SpawnAttempt {
-    let _ = spawner;
-    SpawnAttempt::Skipped
-}
-
 fn spawn_app_vm_run_queue(spawner: Spawner) -> SpawnAttempt {
     match crate::shell2::spawn_app_vm_run_queue(spawner) {
         Ok(()) => SpawnAttempt::Spawned,
@@ -1171,7 +1153,7 @@ const UI2_DEMO_READY: u32 =
 const WS_BOOT_READY: u32 = crate::r::readiness::NET_GATEWAY_REACHABLE
     | crate::r::readiness::TLS_SOCKET_SERVICE_READY
     | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
-static TASKS: [TaskSpec; 72] = [
+static TASKS: [TaskSpec; 71] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
         "globalog-persist-once",
@@ -1501,12 +1483,6 @@ static TASKS: [TaskSpec; 72] = [
         0,
         &BOOT_GEMMA_MODEL_FETCH_STARTED,
         spawn_boot_gemma_model_fetch,
-    ),
-    TaskSpec::enabled(
-        "rayon-global-pool",
-        crate::r::readiness::BACKGROUND_AP_WORKER_READY,
-        &RAYON_GLOBAL_POOL_STARTED,
-        spawn_rayon_global_pool,
     ),
     TaskSpec::enabled("uart-shell", 0, &UART_SHELL_STARTED, spawn_uart_shell),
     TaskSpec::enabled("net-tcp-shell", 0, &NET_TCP_SHELL_STARTED, spawn_net_tcp_shell),
