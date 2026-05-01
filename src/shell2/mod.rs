@@ -217,6 +217,12 @@ impl<'a> AlignedWriter<'a> {
     fn banner(&self, output_mask: u8, mode: ShellMode2, time_text: &str) {
         self.move_to(BANNER_ROW, 1);
         self.clear_line();
+        self.banner_left(output_mask, time_text);
+        self.right_text(BANNER_ROW, self.main_mode_text(mode).as_str());
+    }
+
+    fn banner_left(&self, output_mask: u8, time_text: &str) {
+        self.move_to(BANNER_ROW, 1);
         self.io.raw_write_str("TRUE OS ");
         let active_slot = matrix::active_slot_id(output_mask);
         let mut slot_label = AllocString::from("§");
@@ -230,8 +236,8 @@ impl<'a> AlignedWriter<'a> {
                 .color(STATUS_SELECTED_RGB)
         );
         self.io.raw_write_str(styled.as_str());
-        self.center_text(BANNER_ROW, self.main_mode_text(mode).as_str());
-        self.right_text(BANNER_ROW, time_text);
+        self.io.raw_write_char(' ');
+        self.io.raw_write_str(time_text);
     }
 
     fn mode_status(
@@ -1003,10 +1009,10 @@ fn redraw_status_preserving_cursor(
     out.io.raw_write_str(ecma48::RESTORE_CURSOR);
 }
 
-fn redraw_clock_preserving_cursor(out: &AlignedWriter<'_>, time_text: &str) {
+fn redraw_clock_preserving_cursor(out: &AlignedWriter<'_>, output_mask: u8, time_text: &str) {
     out.io.raw_write_str(ecma48::SAVE_CURSOR);
     out.io.raw_write_str(ecma48::RESET);
-    out.right_text(BANNER_ROW, time_text);
+    out.banner_left(output_mask, time_text);
     out.io.raw_write_str(ecma48::RESET);
     out.io.raw_write_str(ecma48::RESTORE_CURSOR);
 }
@@ -1169,7 +1175,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
         let (minute_bucket, minute_text) = clock_bucket_and_text();
         if minute_bucket != last_minute_bucket {
             last_minute_bucket = minute_bucket;
-            redraw_clock_preserving_cursor(&out, minute_text.as_str());
+            redraw_clock_preserving_cursor(&out, output_mask, minute_text.as_str());
         }
 
         if let Some(b) = io.read_byte() {
