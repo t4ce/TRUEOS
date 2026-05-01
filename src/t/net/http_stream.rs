@@ -439,10 +439,7 @@ async fn request_http_to_file(
                                 );
                                 return Err(HttpFetchError::TimedOut);
                             }
-                            crate::log!(
-                                "http-stream: content-length finish ok path={}\n",
-                                path,
-                            );
+                            crate::log!("http-stream: content-length finish ok path={}\n", path,);
                             return Ok(());
                         }
                         continue;
@@ -499,23 +496,25 @@ async fn request_http_to_file(
 
                         match head.body {
                             HttpBodyKind::ContentLength(len) => {
-                                let mut stream =
-                                    match begin_http_file_stream(disk, path, len as u64).await {
-                                        Ok(stream) => stream,
-                                        Err(err) => {
-                                            if let Some(h) = tcp_handle {
-                                                let _ =
-                                                    net.submit(api::Command::Close { handle: h });
-                                            }
-                                            crate::log!(
-                                                "http-stream: content-length begin failed path={} len={} err={:?}\n",
-                                                path,
-                                                len,
-                                                err,
-                                            );
-                                            return Err(http_stream_error_to_fetch_error(err));
+                                let mut stream = match begin_http_file_stream(
+                                    disk, path, len as u64,
+                                )
+                                .await
+                                {
+                                    Ok(stream) => stream,
+                                    Err(err) => {
+                                        if let Some(h) = tcp_handle {
+                                            let _ = net.submit(api::Command::Close { handle: h });
                                         }
-                                    };
+                                        crate::log!(
+                                            "http-stream: content-length begin failed path={} len={} err={:?}\n",
+                                            path,
+                                            len,
+                                            err,
+                                        );
+                                        return Err(http_stream_error_to_fetch_error(err));
+                                    }
+                                };
 
                                 let take = initial_body.len().min(len);
                                 if take > 0

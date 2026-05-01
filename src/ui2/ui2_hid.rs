@@ -329,7 +329,12 @@ fn queue_window_cursor_event(
     true
 }
 
-fn selected_window_content_contains_cursor(state: &Ui2State, window_id: u32, x: f32, y: f32) -> bool {
+fn selected_window_content_contains_cursor(
+    state: &Ui2State,
+    window_id: u32,
+    x: f32,
+    y: f32,
+) -> bool {
     state
         .windows
         .iter()

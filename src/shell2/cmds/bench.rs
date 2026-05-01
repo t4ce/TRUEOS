@@ -29,18 +29,14 @@ const DISC_BENCH_READS_PER_STEP: usize = 8;
 const DISC_BENCH_STEP_COOLDOWN_MS: u64 = 75;
 const DISC_BENCH_READ_TIMEOUT_MS: u64 = 5_000;
 const DISC_BENCH_LOG_EACH_SUCCESS: bool = false;
-const MODEL_BENCH_DEFAULT_SECONDS: u64 = 5;
-const MODEL_BENCH_MAX_SECONDS: u64 = 60;
-const MODEL_BENCH_DIM: usize = 256;
-const MODEL_BENCH_PROBE_BYTES: usize = 8 * 1024 * 1024;
+const LUMEN_WEIGHTS_PATH: &str = crate::r::spawn_service::BOOT_LUMEN_WEIGHTS_PATH;
+const LUMEN_TOKENIZER_PATH: &str = crate::r::spawn_service::BOOT_LUMEN_TOKENIZER_PATH;
+const LUMEN_SAFETENSORS_MAX_HEADER_BYTES: usize = 64 * 1024 * 1024;
 const BENCH_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
 const BENCH_MENU_ROWS: [[&str; 2]; 5] = [
     ["cpu", "Run CPU-only compute benchmark"],
     ["disc [id]", "Gentle disc read throughput bench"],
-    [
-        "model [sec]",
-        "RAM-load expected GGUF from TRUEOSFS; CPU token-loop probe",
-    ],
+    ["lumen", "LUMEN load-only preflight for safetensors + tokenizer"],
     ["net", "Run network throughput benchmark"],
     [
         "netk",
@@ -463,25 +459,12 @@ pub(crate) fn try_parse(
                 ParseOutcome::Handled
             }
         }
-        "model" => {
-            let seconds = match args.next() {
-                Some(raw) => match raw.parse::<u64>() {
-                    Ok(n) if (1..=MODEL_BENCH_MAX_SECONDS).contains(&n) => n,
-                    _ => {
-                        print_shell_line(
-                            io,
-                            "bench model: seconds must be 1..=60; usage `bench model [sec]`",
-                        );
-                        return ParseOutcome::Handled;
-                    }
-                },
-                None => MODEL_BENCH_DEFAULT_SECONDS,
-            };
+        "lumen" | "model" => {
             if args.next().is_some() {
-                print_shell_line(io, "bench model: usage `bench model [sec]`");
+                print_shell_line(io, "bench lumen: usage `bench lumen`");
                 return ParseOutcome::Handled;
             }
-            if let Some(session_id) = submit_modelbench(spawner, io, seconds) {
+            if let Some(session_id) = submit_lumenbench(spawner, io) {
                 ParseOutcome::StartSession(
                     crate::shell2::shell2_cmd::CommandSessionKind::BenchRunning(session_id),
                 )
@@ -545,10 +528,9 @@ fn submit_cpubench(spawner: &Spawner, io: &'static dyn ShellBackend2) -> Option<
     Some(session_id)
 }
 
-fn submit_modelbench(
+fn submit_lumenbench(
     spawner: &Spawner,
     io: &'static dyn ShellBackend2,
-    seconds: u64,
 ) -> Option<u64> {
     let target = matrix_target_for_backend(io);
     let session_id = bench_session_start();
@@ -556,23 +538,22 @@ fn submit_modelbench(
     print_matrix_target_line(
         &target,
         format!(
-            "bench model: waiting for TRUEOSFS root file={} seconds={}",
-            crate::r::spawn_service::BOOT_GEMMA_MODEL_PATH,
-            seconds
+            "bench lumen: waiting for TRUEOSFS root weights={} tokenizer={}",
+            LUMEN_WEIGHTS_PATH, LUMEN_TOKENIZER_PATH
         )
         .as_str(),
     );
     set_matrix_target_active(&target, true);
-    match modelbench_task(target.clone(), session_id, seconds) {
+    match lumenbench_task(target.clone(), session_id) {
         Ok(token) => spawner.spawn(token),
         Err(_) => {
             bench_session_finish(session_id);
             set_matrix_target_active(&target, false);
-            print_shell_line(io, "bench model: spawn failed");
+            print_shell_line(io, "bench lumen: spawn failed");
             return None;
         }
     }
-    print_matrix_target_line(&target, "bench model: send `q` in this slot to stop");
+    print_matrix_target_line(&target, "bench lumen: send `q` in this slot to stop");
     Some(session_id)
 }
 
@@ -958,38 +939,8 @@ async fn cpubench_task(target: MatrixTarget, session_id: u64) {
     set_matrix_target_active(&target, false);
 }
 
-fn modelbench_token_step(
-    weights: &[u8],
-    layers: usize,
-    state: &mut [i16],
-    scratch: &mut [i16],
-    token: u32,
-) -> u32 {
-    let dim = state.len();
-    for layer in 0..layers {
-        let base = layer * dim * dim;
-        for row in 0..dim {
-            let row_base = base + row * dim;
-            let mut acc = ((token as i32) & 0xff) - 128 + row as i32;
-            for col in 0..dim {
-                let weight = weights[row_base + col].wrapping_sub(128) as i8;
-                acc = acc.wrapping_add(weight as i32 * state[col] as i32);
-            }
-            let mixed = (acc >> 8).wrapping_add(state[(row + layer) & (dim - 1)] as i32);
-            scratch[row] = mixed.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
-        }
-        state.copy_from_slice(scratch);
-    }
-
-    let mut next = token.wrapping_mul(1664525).wrapping_add(1013904223);
-    for (idx, value) in state.iter().enumerate().step_by(17) {
-        next ^= (*value as u32).rotate_left((idx & 31) as u32);
-    }
-    next & 0xffff
-}
-
 #[embassy_executor::task(pool_size = 2)]
-async fn modelbench_task(target: MatrixTarget, session_id: u64, seconds: u64) {
+async fn lumenbench_task(target: MatrixTarget, session_id: u64) {
     let task_target = target.clone();
     async move {
         Timer::after(EmbassyDuration::from_millis(1)).await;
@@ -999,17 +950,17 @@ async fn modelbench_task(target: MatrixTarget, session_id: u64, seconds: u64) {
         };
 
         let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
-            log("bench model: skipped; no TRUEOSFS root mounted");
+            log("bench lumen: skipped; no TRUEOSFS root mounted");
             return;
         };
-        let path = crate::r::spawn_service::BOOT_GEMMA_MODEL_PATH;
-        let info = match crate::r::fs::trueosfs::file_info_async(disk, path).await {
+
+        let weights_info = match crate::r::fs::trueosfs::file_info_async(disk, LUMEN_WEIGHTS_PATH).await {
             Ok(Some(info)) if info.data_len >= 16 => info,
             Ok(Some(info)) => {
                 log(
                     format!(
-                        "bench model: skipped; expected file incomplete path={} bytes={}",
-                        path, info.data_len
+                        "bench lumen: skipped; weights incomplete path={} bytes={}",
+                        LUMEN_WEIGHTS_PATH, info.data_len
                     )
                     .as_str(),
                 );
@@ -1018,8 +969,8 @@ async fn modelbench_task(target: MatrixTarget, session_id: u64, seconds: u64) {
             Ok(None) => {
                 log(
                     format!(
-                        "bench model: skipped; expected file not stored yet path={}",
-                        path
+                        "bench lumen: skipped; missing TinyLlama weights path={} tokenizer path={}",
+                        LUMEN_WEIGHTS_PATH, LUMEN_TOKENIZER_PATH
                     )
                     .as_str(),
                 );
@@ -1028,8 +979,8 @@ async fn modelbench_task(target: MatrixTarget, session_id: u64, seconds: u64) {
             Err(err) => {
                 log(
                     format!(
-                        "bench model: skipped; file probe failed path={} err={:?}",
-                        path, err
+                        "bench lumen: skipped; weights probe failed path={} err={:?}",
+                        LUMEN_WEIGHTS_PATH, err
                     )
                     .as_str(),
                 );
@@ -1037,28 +988,70 @@ async fn modelbench_task(target: MatrixTarget, session_id: u64, seconds: u64) {
             }
         };
 
-        let mut magic = [0u8; 4];
-        match crate::r::fs::trueosfs::file_read_range_async(disk, path, 0, &mut magic).await {
-            Ok(Some(4)) if magic == *b"GGUF" => {}
+        let tokenizer_info =
+            match crate::r::fs::trueosfs::file_info_async(disk, LUMEN_TOKENIZER_PATH).await {
+                Ok(Some(info)) if info.data_len > 0 => info,
+                Ok(Some(info)) => {
+                    log(
+                        format!(
+                            "bench lumen: skipped; tokenizer empty path={} bytes={}",
+                            LUMEN_TOKENIZER_PATH, info.data_len
+                        )
+                        .as_str(),
+                    );
+                    return;
+                }
+                Ok(None) => {
+                    log(
+                        format!(
+                            "bench lumen: skipped; missing tokenizer path={} for LUMEN CLI contract",
+                            LUMEN_TOKENIZER_PATH
+                        )
+                        .as_str(),
+                    );
+                    return;
+                }
+                Err(err) => {
+                    log(
+                        format!(
+                            "bench lumen: skipped; tokenizer probe failed path={} err={:?}",
+                            LUMEN_TOKENIZER_PATH, err
+                        )
+                        .as_str(),
+                    );
+                    return;
+                }
+            };
+
+        let mut header_len_bytes = [0u8; 8];
+        match crate::r::fs::trueosfs::file_read_range_async(
+            disk,
+            LUMEN_WEIGHTS_PATH,
+            0,
+            &mut header_len_bytes,
+        )
+        .await
+        {
+            Ok(Some(8)) => {}
             Ok(Some(n)) => {
                 log(
                     format!(
-                        "bench model: skipped; short magic read path={} bytes={}",
-                        path, n
+                        "bench lumen: skipped; short safetensors header read path={} bytes={}",
+                        LUMEN_WEIGHTS_PATH, n
                     )
                     .as_str(),
                 );
                 return;
             }
             Ok(None) => {
-                log(format!("bench model: skipped; disappeared path={}", path).as_str());
+                log(format!("bench lumen: skipped; disappeared path={}", LUMEN_WEIGHTS_PATH).as_str());
                 return;
             }
             Err(err) => {
                 log(
                     format!(
-                        "bench model: skipped; magic read failed path={} err={:?}",
-                        path, err
+                        "bench lumen: skipped; safetensors header read failed path={} err={:?}",
+                        LUMEN_WEIGHTS_PATH, err
                     )
                     .as_str(),
                 );
@@ -1066,26 +1059,56 @@ async fn modelbench_task(target: MatrixTarget, session_id: u64, seconds: u64) {
             }
         }
 
+        let header_len_u64 = u64::from_le_bytes(header_len_bytes);
+        let Ok(header_len) = usize::try_from(header_len_u64) else {
+            log("bench lumen: skipped; safetensors header length overflows usize");
+            return;
+        };
+        if header_len == 0
+            || header_len > LUMEN_SAFETENSORS_MAX_HEADER_BYTES
+            || header_len_u64.saturating_add(8) > weights_info.data_len
+        {
+            log(
+                format!(
+                    "bench lumen: skipped; invalid safetensors header_len={} file_size={}",
+                    format_bytes(header_len_u64),
+                    format_bytes(weights_info.data_len)
+                )
+                .as_str(),
+            );
+            return;
+        }
+
         log(
             format!(
-                "bench model: RAM loading path={} size={}",
-                path,
-                format_bytes(info.data_len)
+                "bench lumen: load-only preflight weights={} size={} header={} tokenizer={} size={}",
+                LUMEN_WEIGHTS_PATH,
+                format_bytes(weights_info.data_len),
+                format_bytes(header_len_u64),
+                LUMEN_TOKENIZER_PATH,
+                format_bytes(tokenizer_info.data_len)
             )
             .as_str(),
         );
         let load_start = embassy_time_driver::now();
-        let model = match crate::r::stream::load_trueosfs_file_via_pipe_async(disk, path).await {
+        let header = match crate::r::stream::read_trueosfs_file_range_via_pipe_async(
+            disk,
+            LUMEN_WEIGHTS_PATH,
+            8,
+            header_len,
+        )
+        .await
+        {
             Ok(Some(bytes)) => bytes,
             Ok(None) => {
-                log(format!("bench model: skipped; load returned missing path={}", path).as_str());
+                log(format!("bench lumen: skipped; load returned missing path={}", LUMEN_WEIGHTS_PATH).as_str());
                 return;
             }
             Err(err) => {
                 log(
                     format!(
-                        "bench model: skipped; RAM load failed path={} err={:?}",
-                        path, err
+                        "bench lumen: skipped; safetensors header load failed path={} err={:?}",
+                        LUMEN_WEIGHTS_PATH, err
                     )
                     .as_str(),
                 );
@@ -1093,104 +1116,55 @@ async fn modelbench_task(target: MatrixTarget, session_id: u64, seconds: u64) {
             }
         };
         let load_ms = elapsed_ms_since(load_start);
-        let load_bps = bps_from_progress(model.len() as u64, load_ms);
-
-        if model.len() < MODEL_BENCH_DIM * MODEL_BENCH_DIM {
-            log(
-                format!(
-                    "bench model: skipped; file too small for probe path={} bytes={}",
-                    path,
-                    model.len()
-                )
-                .as_str(),
-            );
-            return;
-        }
-
-        let layer_bytes = MODEL_BENCH_DIM * MODEL_BENCH_DIM;
-        let probe_bytes = usize::min(model.len(), MODEL_BENCH_PROBE_BYTES);
-        let layers = (probe_bytes / layer_bytes).max(1);
-        let weight_bytes = layers * layer_bytes;
-        let token_ops = layers as u64 * MODEL_BENCH_DIM as u64 * MODEL_BENCH_DIM as u64 * 2;
-
-        log(
-            format!(
-                "bench model: RAM loaded bytes={} load={} elapsed={}ms; probing window={} dim={} layers={} est_ops/token={}",
-                format_bytes(model.len() as u64),
-                format_speed(load_bps),
-                load_ms,
-                format_bytes(weight_bytes as u64),
-                MODEL_BENCH_DIM,
-                layers,
-                format_metric_units(token_ops, "ops")
-            )
-            .as_str(),
-        );
-
-        let mut state: Vec<i16> = (0..MODEL_BENCH_DIM)
-            .map(|idx| ((idx as i16).wrapping_mul(31)).wrapping_sub(2048))
-            .collect();
-        let mut scratch: Vec<i16> = vec![0; MODEL_BENCH_DIM];
-        let mut token = 1u32;
-        let mut tokens = 0u64;
-        let run_start = embassy_time_driver::now();
-        let deadline = Instant::now() + EmbassyDuration::from_secs(seconds);
-        let mut next_progress = Instant::now() + EmbassyDuration::from_millis(1000);
-
-        let weights = &model[..weight_bytes];
-
-        loop {
-            if bench_cancel_requested(session_id) {
-                log("bench model: cancelled");
-                break;
-            }
-            if Instant::now() >= deadline {
-                break;
-            }
-
-            token = modelbench_token_step(
-                weights,
-                layers,
-                state.as_mut_slice(),
-                scratch.as_mut_slice(),
-                token,
-            );
-            tokens = tokens.saturating_add(1);
-
-            if Instant::now() >= next_progress {
-                let elapsed_ms = elapsed_ms_since(run_start);
-                let ops = tokens.saturating_mul(token_ops);
-                let tps = bps_from_progress(tokens, elapsed_ms);
-                let ops_s = bps_from_progress(ops, elapsed_ms);
+        let header_value = match serde_json::from_slice::<serde_json::Value>(&header) {
+            Ok(value) => value,
+            Err(err) => {
                 log(
                     format!(
-                        "bench model: progress tokens={} rate={} tok/s est={}ops/s elapsed={}ms marker={}",
-                        tokens,
-                        tps,
-                        format_metric_units(ops_s, ""),
-                        elapsed_ms,
-                        token
+                        "bench lumen: skipped; safetensors header JSON parse failed err={}",
+                        err
                     )
                     .as_str(),
                 );
-                next_progress = Instant::now() + EmbassyDuration::from_millis(1000);
-                Timer::after(EmbassyDuration::from_millis(0)).await;
+                return;
             }
+        };
+        let Some(obj) = header_value.as_object() else {
+            log("bench lumen: skipped; safetensors header root is not an object");
+            return;
+        };
+
+        let tensor_count = obj.keys().filter(|key| key.as_str() != "__metadata__").count();
+        let first_tensor = obj
+            .iter()
+            .find(|(key, _)| key.as_str() != "__metadata__");
+        let mut first_line = AllocString::from("none");
+        if let Some((name, value)) = first_tensor {
+            let dtype = value
+                .get("dtype")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            let shape = value
+                .get("shape")
+                .map(|v| format!("{}", v))
+                .unwrap_or_else(|| AllocString::from("?"));
+            let offsets = value
+                .get("data_offsets")
+                .map(|v| format!("{}", v))
+                .unwrap_or_else(|| AllocString::from("?"));
+            first_line = format!(
+                "name={} dtype={} shape={} offsets={}",
+                name, dtype, shape, offsets
+            );
         }
 
-        let elapsed_ms = elapsed_ms_since(run_start);
-        let ops = tokens.saturating_mul(token_ops);
-        let tps = bps_from_progress(tokens, elapsed_ms);
-        let ops_s = bps_from_progress(ops, elapsed_ms);
         log(
             format!(
-                "bench model: done tokens={} rate={} tok/s est_ops={} est_rate={}/s elapsed={}ms marker={}",
-                tokens,
-                tps,
-                format_metric_units(ops, "ops"),
-                format_metric_units(ops_s, "ops"),
-                elapsed_ms,
-                token
+                "bench lumen: load-only preflight ok tensors={} header_load={} elapsed={}ms first_tensor=({})",
+                tensor_count,
+                format_speed(bps_from_progress(header.len() as u64, load_ms)),
+                load_ms,
+                first_line
             )
             .as_str(),
         );

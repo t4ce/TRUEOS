@@ -139,7 +139,7 @@ pub(crate) async fn fetch_media_source_async() -> Option<MediaSource> {
             MEDIA_HTTP_LOCAL_DEMO_TIMEOUT_MS,
             MEDIA_HTTP_LOCAL_DEMO_MAX_BYTES,
         );
-        match crate::t::net::http::fetch_http_body(
+        match crate::t::net::http::fetch_http_body_hyper(
             url,
             MEDIA_HTTP_LOCAL_DEMO_TIMEOUT_MS,
             MEDIA_HTTP_LOCAL_DEMO_MAX_BYTES,
