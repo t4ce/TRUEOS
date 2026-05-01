@@ -4,13 +4,17 @@ extern crate std;
 use crate::r::net::NetProfile;
 use crate::r::net::VNet;
 use crate::t::net::dns::{self, DnsConfig};
-use crate::t::net::hyper_io::{HyperEmptyBody, HyperTokioIo};
-use alloc::string::String;
+use crate::t::net::hyper_io::HyperTokioIo;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use core::pin::Pin;
+use core::{
+    convert::Infallible,
+    pin::Pin,
+    task::{Context, Poll},
+};
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use heapless::String as HString;
-use hyper::body::Body;
+use hyper::body::{Body, Bytes, Frame, SizeHint};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
 use v::vnet as api;
 
@@ -44,6 +48,41 @@ pub enum HttpFetchError {
     ResponseTooLarge,
     NoSpace,
     Truncated,
+}
+
+struct HyperBytesBody {
+    bytes: Option<Bytes>,
+}
+
+impl HyperBytesBody {
+    fn new(bytes: &[u8]) -> Self {
+        Self {
+            bytes: Some(Bytes::copy_from_slice(bytes)),
+        }
+    }
+}
+
+impl Body for HyperBytesBody {
+    type Data = Bytes;
+    type Error = Infallible;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+        Poll::Ready(self.bytes.take().map(|bytes| Ok(Frame::data(bytes))))
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.bytes.is_none()
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        match self.bytes.as_ref() {
+            Some(bytes) => SizeHint::with_exact(bytes.len() as u64),
+            None => SizeHint::with_exact(0),
+        }
+    }
 }
 
 pub fn parse_http_url(url: &str) -> Result<ParsedHttpUrl, &'static str> {
@@ -885,25 +924,66 @@ pub async fn fetch_http_body_hyper(
     timeout_ms: u32,
     max_rx: usize,
 ) -> Result<Vec<u8>, HttpFetchError> {
+    request_http_body_hyper(
+        hyper::Method::GET,
+        url,
+        "application/octet-stream",
+        &[],
+        timeout_ms,
+        max_rx,
+    )
+    .await
+}
+
+pub async fn post_http_body_hyper(
+    url: &str,
+    content_type: &str,
+    body_bytes: &[u8],
+    timeout_ms: u32,
+    max_rx: usize,
+) -> Result<Vec<u8>, HttpFetchError> {
+    request_http_body_hyper(hyper::Method::POST, url, content_type, body_bytes, timeout_ms, max_rx)
+        .await
+}
+
+async fn request_http_body_hyper(
+    method: hyper::Method,
+    url: &str,
+    content_type: &str,
+    body_bytes: &[u8],
+    timeout_ms: u32,
+    max_rx: usize,
+) -> Result<Vec<u8>, HttpFetchError> {
     let parsed = parse_http_url(url).map_err(|_| HttpFetchError::BadUrl)?;
     let stream = connect_hyper_tcp_stream(&parsed, timeout_ms).await?;
     let (mut sender, connection) =
-        hyper::client::conn::http1::handshake::<_, HyperEmptyBody>(HyperTokioIo::new(stream))
+        hyper::client::conn::http1::handshake::<_, HyperBytesBody>(HyperTokioIo::new(stream))
             .await
             .map_err(|_| HttpFetchError::TimedOut)?;
     let connection = tokio::spawn(async move { connection.await });
 
     sender.ready().await.map_err(|_| HttpFetchError::TimedOut)?;
-    crate::log!("http-hyper: request host={} path={}\n", parsed.host, parsed.path);
-    let request = hyper::Request::builder()
-        .method(hyper::Method::GET)
+    crate::log!(
+        "http-hyper: request method={} host={} path={}\n",
+        method.as_str(),
+        parsed.host,
+        parsed.path
+    );
+    let mut builder = hyper::Request::builder()
+        .method(method)
         .uri(parsed.path.as_str())
         .header(hyper::header::HOST, parsed.host.as_str())
         .header(hyper::header::USER_AGENT, "TRUEOS hyper")
         .header(hyper::header::ACCEPT, "*/*")
         .header(hyper::header::ACCEPT_ENCODING, "identity")
-        .header(hyper::header::CONNECTION, "close")
-        .body(HyperEmptyBody)
+        .header(hyper::header::CONNECTION, "close");
+    if !body_bytes.is_empty() {
+        builder = builder
+            .header(hyper::header::CONTENT_TYPE, content_type)
+            .header(hyper::header::CONTENT_LENGTH, body_bytes.len().to_string());
+    }
+    let request = builder
+        .body(HyperBytesBody::new(body_bytes))
         .map_err(|_| HttpFetchError::BadUrl)?;
     let response = tokio::time::timeout(
         core::time::Duration::from_millis(timeout_ms as u64),

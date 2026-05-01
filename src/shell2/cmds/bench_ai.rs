@@ -39,6 +39,9 @@ const LUMEN_RUNTIME_PROGRESS_TENSORS: usize = 16;
 const LUMEN_RUNTIME_EARLY_PROGRESS_TENSORS: usize = 2;
 const LUMEN_RUNTIME_HEAP_EXTRA_BYTES: usize = 512 * 1024 * 1024;
 const LUMEN_RESPONSE_LINE_CHARS: usize = 96;
+const LUMEN_PREFLIGHT_WAIT_MS: u64 = 75_000;
+const LUMEN_PREFLIGHT_POLL_MS: u64 = 250;
+const LUMEN_PREFLIGHT_LOG_MS: u64 = 2_000;
 const LUMEN_HI_TOKEN_CANDIDATES: [&str; 6] =
     ["Hi", "\u{2581}Hi", "hi", "\u{2581}hi", "H", "\u{2581}H"];
 const LUMEN_COMPUTE_PROBE_CASES: [LumenComputeProbeCase; 3] = [
@@ -79,6 +82,7 @@ struct LumenInteractiveSession {
 pub(crate) struct LumenPromptRequest {
     pub(crate) target: MatrixTarget,
     pub(crate) prompt: AllocString,
+    pub(crate) respond_to_chat: bool,
 }
 
 static LUMEN_INTERACTIVE_SESSIONS: spin::Mutex<Vec<LumenInteractiveSession>> =
@@ -122,6 +126,26 @@ pub(crate) fn push_lumen_prompt(session_id: u64, target: &MatrixTarget, prompt: 
     session.prompts.push_back(LumenPromptRequest {
         target: target.clone(),
         prompt: AllocString::from(prompt),
+        respond_to_chat: false,
+    });
+    true
+}
+
+pub(crate) fn push_lumen_chat_prompt(session_id: u64, prompt: &str) -> bool {
+    let prompt = prompt.trim();
+    if prompt.is_empty() {
+        return true;
+    }
+    let target =
+        crate::shell2::matrix_target_for_slot_name(crate::shell2::OUTPUT_UART1_MASK, "LUM");
+    let mut sessions = LUMEN_INTERACTIVE_SESSIONS.lock();
+    let Some(session) = sessions.iter_mut().find(|session| session.id == session_id) else {
+        return false;
+    };
+    session.prompts.push_back(LumenPromptRequest {
+        target,
+        prompt: AllocString::from(prompt),
+        respond_to_chat: true,
     });
     true
 }
@@ -827,6 +851,90 @@ struct LumenRuntimeLoadReport {
     missing_tensors: usize,
 }
 
+fn lumen_preflight_retryable_error(err: crate::disc::block::Error) -> bool {
+    matches!(
+        err,
+        crate::disc::block::Error::NotReady
+            | crate::disc::block::Error::Timeout
+            | crate::disc::block::Error::Io
+    )
+}
+
+async fn wait_lumen_file_info(
+    disk: crate::disc::block::DeviceHandle,
+    path: &str,
+    min_bytes: u64,
+    session_id: u64,
+) -> Result<crate::r::fs::trueosfs::FileInfo, AllocString> {
+    let start = embassy_time_driver::now();
+    let mut last_log_ms = 0u64;
+
+    loop {
+        if bench_cancel_requested(session_id) {
+            return Err(format!("cancelled while waiting for {}", path));
+        }
+
+        let last_status = match crate::r::fs::trueosfs::file_info_async(disk, path).await {
+            Ok(Some(info)) if info.data_len >= min_bytes => return Ok(info),
+            Ok(Some(info)) => format!("incomplete bytes={} need>={}", info.data_len, min_bytes),
+            Ok(None) => AllocString::from("missing"),
+            Err(err) if lumen_preflight_retryable_error(err) => format!("err={:?}", err),
+            Err(err) => {
+                return Err(format!("probe failed path={} err={:?}", path, err));
+            }
+        };
+
+        let waited_ms = elapsed_ms_since(start);
+        if waited_ms >= LUMEN_PREFLIGHT_WAIT_MS {
+            return Err(format!(
+                "timeout waiting path={} waited={}ms status={}",
+                path, waited_ms, last_status
+            ));
+        }
+
+        if waited_ms.saturating_sub(last_log_ms) >= LUMEN_PREFLIGHT_LOG_MS {
+            last_log_ms = waited_ms;
+            crate::log!(
+                "bench lumen: waiting for TRUEOSFS file path={} waited={}ms status={}\n",
+                path,
+                waited_ms,
+                last_status
+            );
+        }
+
+        Timer::after(EmbassyDuration::from_millis(LUMEN_PREFLIGHT_POLL_MS)).await;
+    }
+}
+
+async fn wait_lumen_root_handle(
+    session_id: u64,
+) -> Result<crate::disc::block::DeviceHandle, AllocString> {
+    let start = embassy_time_driver::now();
+    let mut last_log_ms = 0u64;
+
+    loop {
+        if bench_cancel_requested(session_id) {
+            return Err(AllocString::from("cancelled while waiting for TRUEOSFS root"));
+        }
+
+        if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
+            return Ok(disk);
+        }
+
+        let waited_ms = elapsed_ms_since(start);
+        if waited_ms >= LUMEN_PREFLIGHT_WAIT_MS {
+            return Err(format!("timeout waiting TRUEOSFS root waited={}ms", waited_ms));
+        }
+
+        if waited_ms.saturating_sub(last_log_ms) >= LUMEN_PREFLIGHT_LOG_MS {
+            last_log_ms = waited_ms;
+            crate::log!("bench lumen: waiting for TRUEOSFS root waited={}ms\n", waited_ms);
+        }
+
+        Timer::after(EmbassyDuration::from_millis(LUMEN_PREFLIGHT_POLL_MS)).await;
+    }
+}
+
 async fn load_lumen_model_from_trueosfs(
     disk: crate::disc::block::DeviceHandle,
     header_len: usize,
@@ -982,76 +1090,28 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
             crate::log!("{}\n", line);
         };
 
-        let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
-            log("bench lumen: skipped; no TRUEOSFS root mounted");
-            return;
+        let disk = match wait_lumen_root_handle(session_id).await {
+            Ok(disk) => disk,
+            Err(err) => {
+                log(format!("bench lumen: skipped; {}", err).as_str());
+                return;
+            }
         };
 
-        let weights_info = match crate::r::fs::trueosfs::file_info_async(disk, LUMEN_WEIGHTS_PATH).await {
-            Ok(Some(info)) if info.data_len >= 16 => info,
-            Ok(Some(info)) => {
-                log(
-                    format!(
-                        "bench lumen: skipped; weights incomplete path={} bytes={}",
-                        LUMEN_WEIGHTS_PATH, info.data_len
-                    )
-                    .as_str(),
-                );
-                return;
-            }
-            Ok(None) => {
-                log(
-                    format!(
-                        "bench lumen: skipped; missing TinyLlama weights path={} tokenizer path={}",
-                        LUMEN_WEIGHTS_PATH, LUMEN_TOKENIZER_PATH
-                    )
-                    .as_str(),
-                );
-                return;
-            }
+        let weights_info = match wait_lumen_file_info(disk, LUMEN_WEIGHTS_PATH, 16, session_id).await
+        {
+            Ok(info) => info,
             Err(err) => {
-                log(
-                    format!(
-                        "bench lumen: skipped; weights probe failed path={} err={:?}",
-                        LUMEN_WEIGHTS_PATH, err
-                    )
-                    .as_str(),
-                );
+                log(format!("bench lumen: skipped; weights {}", err).as_str());
                 return;
             }
         };
 
         let tokenizer_info =
-            match crate::r::fs::trueosfs::file_info_async(disk, LUMEN_TOKENIZER_PATH).await {
-                Ok(Some(info)) if info.data_len > 0 => info,
-                Ok(Some(info)) => {
-                    log(
-                        format!(
-                            "bench lumen: skipped; tokenizer empty path={} bytes={}",
-                            LUMEN_TOKENIZER_PATH, info.data_len
-                        )
-                        .as_str(),
-                    );
-                    return;
-                }
-                Ok(None) => {
-                    log(
-                        format!(
-                            "bench lumen: skipped; missing tokenizer path={} for LUMEN CLI contract",
-                            LUMEN_TOKENIZER_PATH
-                        )
-                        .as_str(),
-                    );
-                    return;
-                }
+            match wait_lumen_file_info(disk, LUMEN_TOKENIZER_PATH, 1, session_id).await {
+                Ok(info) => info,
                 Err(err) => {
-                    log(
-                        format!(
-                            "bench lumen: skipped; tokenizer probe failed path={} err={:?}",
-                            LUMEN_TOKENIZER_PATH, err
-                        )
-                        .as_str(),
-                    );
+                    log(format!("bench lumen: skipped; tokenizer {}", err).as_str());
                     return;
                 }
             };
@@ -1960,6 +2020,9 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
                         infer_ms
                     );
                     print_lumen_response(&request.target, answer.as_str());
+                    if request.respond_to_chat {
+                        crate::r::lumen_service::submit_chat_answer(answer.as_str());
+                    }
                 }
                 Err(err) => {
                     print_matrix_target_line(

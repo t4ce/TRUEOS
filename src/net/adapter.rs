@@ -1397,6 +1397,7 @@ struct SocketRecord {
     kind: SocketKind,
     socket: SocketHandle,
     tcp_tx: VecDeque<u8>,
+    tcp_loopback_peer: Option<NetHandle>,
     tcp_connect: bool,
     tcp_local_port: Option<u16>,
     tcp_remote_v4: Option<NetEndpoint>,
@@ -1439,6 +1440,11 @@ fn log_tcp_connect_record_state(prefix: &str, rec: &SocketRecord, state: tcp::St
     } else {
         crate::log!("{} owner={} handle={} state={:?}\n", prefix, rec.owner, rec.handle.0, state);
     }
+}
+
+#[inline]
+fn is_ipv4_loopback(addr: [u8; 4]) -> bool {
+    addr[0] == 127
 }
 
 struct IcmpInflight {
@@ -2129,6 +2135,7 @@ impl NetService {
             kind: SocketKind::Udp,
             socket: sh,
             tcp_tx: VecDeque::new(),
+            tcp_loopback_peer: None,
             tcp_connect: false,
             tcp_local_port: None,
             tcp_remote_v4: None,
@@ -2159,6 +2166,7 @@ impl NetService {
             kind: SocketKind::Tcp,
             socket: sh,
             tcp_tx: VecDeque::new(),
+            tcp_loopback_peer: None,
             tcp_connect: false,
             tcp_local_port: Some(port),
             tcp_remote_v4: None,
@@ -2167,6 +2175,92 @@ impl NetService {
             last_tcp_state: Some(initial_state),
         });
         Ok(handle)
+    }
+
+    fn open_loopback_tcp_connect(
+        &mut self,
+        owner: &'static str,
+        remote: NetEndpoint,
+    ) -> Result<(NetHandle, NetHandle, &'static str), &'static str> {
+        if self.records.len().saturating_add(2) > MAX_SOCKETS {
+            return Err("no sockets available");
+        }
+
+        let listener_owner = self
+            .records
+            .iter()
+            .find(|rec| {
+                rec.kind == SocketKind::Tcp
+                    && rec.tcp_loopback_peer.is_none()
+                    && !rec.tcp_connect
+                    && rec.tcp_local_port == Some(remote.port)
+                    && rec.tcp_remote_v4.is_none()
+                    && rec.tcp_remote_v6.is_none()
+            })
+            .map(|rec| rec.owner)
+            .ok_or("connect failed")?;
+
+        let local_port = self.tcp_next_ephemeral;
+        self.tcp_next_ephemeral = self.tcp_next_ephemeral.wrapping_add(1).max(49152);
+
+        let client_handle = self.alloc_handle();
+        let server_handle = self.alloc_handle();
+
+        let client_rx = tcp::SocketBuffer::new(vec![0; TCP_RX_BUF_BYTES]);
+        let client_tx = tcp::SocketBuffer::new(vec![0; TCP_TX_BUF_BYTES]);
+        let mut client_socket = tcp::Socket::new(client_rx, client_tx);
+        client_socket.set_keep_alive(Some(SmolDuration::from_secs(30)));
+        let client_socket = self.sockets.add(client_socket);
+
+        let server_rx = tcp::SocketBuffer::new(vec![0; TCP_RX_BUF_BYTES]);
+        let server_tx = tcp::SocketBuffer::new(vec![0; TCP_TX_BUF_BYTES]);
+        let mut server_socket = tcp::Socket::new(server_rx, server_tx);
+        server_socket.set_keep_alive(Some(SmolDuration::from_secs(30)));
+        let server_socket = self.sockets.add(server_socket);
+
+        self.records.push(SocketRecord {
+            owner,
+            handle: client_handle,
+            kind: SocketKind::Tcp,
+            socket: client_socket,
+            tcp_tx: VecDeque::new(),
+            tcp_loopback_peer: Some(server_handle),
+            tcp_connect: true,
+            tcp_local_port: Some(local_port),
+            tcp_remote_v4: Some(remote),
+            tcp_remote_v6: None,
+            established: true,
+            last_tcp_state: None,
+        });
+
+        self.records.push(SocketRecord {
+            owner: listener_owner,
+            handle: server_handle,
+            kind: SocketKind::Tcp,
+            socket: server_socket,
+            tcp_tx: VecDeque::new(),
+            tcp_loopback_peer: Some(client_handle),
+            tcp_connect: false,
+            tcp_local_port: Some(remote.port),
+            tcp_remote_v4: Some(NetEndpoint {
+                addr: [127, 0, 0, 1],
+                port: local_port,
+            }),
+            tcp_remote_v6: None,
+            established: true,
+            last_tcp_state: None,
+        });
+
+        if crate::logflag::NET_LOG_TCP_FLOW {
+            crate::log!(
+                "net: loopback tcp connect port={} client={} server={}\n",
+                remote.port,
+                client_handle.0,
+                server_handle.0
+            );
+        }
+
+        Ok((client_handle, server_handle, listener_owner))
     }
 
     fn open_tcp_connect(
@@ -2245,6 +2339,7 @@ impl NetService {
             kind: SocketKind::Tcp,
             socket: sh,
             tcp_tx: VecDeque::new(),
+            tcp_loopback_peer: None,
             tcp_connect: true,
             tcp_local_port: Some(local_port),
             tcp_remote_v4: Some(record_remote),
@@ -2316,6 +2411,7 @@ impl NetService {
             kind: SocketKind::Tcp,
             socket: sh,
             tcp_tx: VecDeque::new(),
+            tcp_loopback_peer: None,
             tcp_connect: true,
             tcp_local_port: Some(local_port),
             tcp_remote_v4: None,
@@ -2324,6 +2420,69 @@ impl NetService {
             last_tcp_state: Some(initial_state),
         });
         Ok(handle)
+    }
+
+    fn send_loopback_tcp(&mut self, handle: NetHandle, data: Vec<u8>) -> Option<Result<(), ()>> {
+        let idx = self.records.iter().position(|r| r.handle == handle)?;
+        if self.records[idx].kind != SocketKind::Tcp {
+            return Some(Err(()));
+        }
+
+        let peer = self.records[idx].tcp_loopback_peer?;
+        let owner = self.records[idx].owner;
+        let peer_owner = match self.records.iter().find(|r| r.handle == peer) {
+            Some(rec) => rec.owner,
+            None => {
+                let _ = push_event(owner, NetEvent::Closed { handle });
+                self.remove_record(handle);
+                return Some(Ok(()));
+            }
+        };
+
+        let len = data.len();
+        let _ = push_event(peer_owner, NetEvent::TcpData { handle: peer, data });
+        let _ = push_event(owner, NetEvent::TcpSent { handle, len });
+        Some(Ok(()))
+    }
+
+    fn close_loopback_tcp(&mut self, handle: NetHandle) -> bool {
+        let Some(idx) = self.records.iter().position(|r| r.handle == handle) else {
+            return false;
+        };
+        let Some(peer) = self.records[idx].tcp_loopback_peer else {
+            return false;
+        };
+
+        let owner = self.records[idx].owner;
+        let peer_info = self
+            .records
+            .iter()
+            .find(|r| r.handle == peer)
+            .map(|r| (r.owner, r.handle));
+
+        if let Some(peer_idx) = self.records.iter().position(|r| r.handle == peer) {
+            if peer_idx > idx {
+                self.remove_record(peer);
+                self.remove_record(handle);
+            } else {
+                self.remove_record(handle);
+                self.remove_record(peer);
+            }
+        } else {
+            self.remove_record(handle);
+        }
+
+        let _ = push_event(owner, NetEvent::Closed { handle });
+        if let Some((peer_owner, peer_handle)) = peer_info {
+            let _ = push_event(
+                peer_owner,
+                NetEvent::Closed {
+                    handle: peer_handle,
+                },
+            );
+        }
+
+        true
     }
 
     fn flush_tcp_tx(&mut self, idx: usize) {
@@ -3316,32 +3475,63 @@ impl NetService {
                     let _ = push_event(owner, NetEvent::Error { msg });
                 }
             },
-            NetCommand::OpenTcpConnect { remote } => match self.open_tcp_connect(owner, remote) {
-                Ok(handle) => {
-                    if crate::logflag::NET_LOG_TCP_FLOW {
-                        crate::log!(
-                            "net: open-tcp cmd owner={} remote={}.{}.{}.{}:{} handle={}\n",
-                            owner,
-                            remote.addr[0],
-                            remote.addr[1],
-                            remote.addr[2],
-                            remote.addr[3],
-                            remote.port,
-                            handle.0
-                        );
+            NetCommand::OpenTcpConnect { remote } => {
+                if is_ipv4_loopback(remote.addr) {
+                    match self.open_loopback_tcp_connect(owner, remote) {
+                        Ok((client_handle, server_handle, server_owner)) => {
+                            let _ = push_event(
+                                owner,
+                                NetEvent::Opened {
+                                    handle: client_handle,
+                                    kind: SocketKind::Tcp,
+                                },
+                            );
+                            let _ = push_event(
+                                owner,
+                                NetEvent::TcpEstablished {
+                                    handle: client_handle,
+                                },
+                            );
+                            let _ = push_event(
+                                server_owner,
+                                NetEvent::TcpEstablished {
+                                    handle: server_handle,
+                                },
+                            );
+                        }
+                        Err(msg) => {
+                            let _ = push_event(owner, NetEvent::Error { msg });
+                        }
                     }
-                    let _ = push_event(
-                        owner,
-                        NetEvent::Opened {
-                            handle,
-                            kind: SocketKind::Tcp,
-                        },
-                    );
+                } else {
+                    match self.open_tcp_connect(owner, remote) {
+                        Ok(handle) => {
+                            if crate::logflag::NET_LOG_TCP_FLOW {
+                                crate::log!(
+                                    "net: open-tcp cmd owner={} remote={}.{}.{}.{}:{} handle={}\n",
+                                    owner,
+                                    remote.addr[0],
+                                    remote.addr[1],
+                                    remote.addr[2],
+                                    remote.addr[3],
+                                    remote.port,
+                                    handle.0
+                                );
+                            }
+                            let _ = push_event(
+                                owner,
+                                NetEvent::Opened {
+                                    handle,
+                                    kind: SocketKind::Tcp,
+                                },
+                            );
+                        }
+                        Err(msg) => {
+                            let _ = push_event(owner, NetEvent::Error { msg });
+                        }
+                    }
                 }
-                Err(msg) => {
-                    let _ = push_event(owner, NetEvent::Error { msg });
-                }
-            },
+            }
             NetCommand::OpenTcpConnectV6 { remote } => {
                 match self.open_tcp_connect_v6(owner, remote) {
                     Ok(handle) => {
@@ -3415,6 +3605,13 @@ impl NetService {
                 }
             }
             NetCommand::SendTcp { handle, data } => {
+                if let Some(result) = self.send_loopback_tcp(handle, data.clone()) {
+                    if result.is_err() {
+                        let _ = push_event(owner, NetEvent::Error { msg: "not tcp" });
+                    }
+                    return;
+                }
+
                 if let Some(idx) = self.records.iter().position(|r| r.handle == handle) {
                     if self.records[idx].kind != SocketKind::Tcp {
                         let _ = push_event(owner, NetEvent::Error { msg: "not tcp" });
@@ -3443,8 +3640,10 @@ impl NetService {
                 self.send_icmp_echo_v6(owner, target, seq, data);
             }
             NetCommand::Close { handle } => {
-                self.remove_record(handle);
-                let _ = push_event(owner, NetEvent::Closed { handle });
+                if !self.close_loopback_tcp(handle) {
+                    self.remove_record(handle);
+                    let _ = push_event(owner, NetEvent::Closed { handle });
+                }
             }
         }
     }
@@ -3499,6 +3698,9 @@ impl NetService {
 
     fn poll_tcp(&mut self, idx: usize) -> bool {
         if self.records.get(idx).map(|r| r.kind) != Some(SocketKind::Tcp) {
+            return false;
+        }
+        if self.records[idx].tcp_loopback_peer.is_some() {
             return false;
         }
 
