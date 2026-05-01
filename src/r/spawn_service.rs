@@ -85,6 +85,7 @@ define_started_flags!(
     TRUEOSFS_READY_HOOK_STARTED,
     BOOT_WS_SMOKE_STARTED,
     BOOT_NETBENCH_STARTED,
+    BOOT_GEMMA_MODEL_FETCH_STARTED,
     APP_VM_RUN_QUEUE_STARTED,
     SMTP_SMOKE_STARTED,
     FACTORY_RAM_PROBE_STARTED,
@@ -960,6 +961,133 @@ fn spawn_boot_netbench(spawner: Spawner) -> SpawnAttempt {
     SpawnAttempt::Skipped
 }
 
+const BOOT_GEMMA_MODEL_URLS: [&str; 1] = [
+    "http://192.168.178.112:8080/tools/gemma-4-E4B-it-Q4_K_M.gguf",
+];
+pub(crate) const BOOT_GEMMA_MODEL_PATH: &str = "gemma-4-E4B-it-Q4_K_M.gguf";
+const BOOT_GEMMA_MODEL_DELAY_SECS: u64 = 60;
+const BOOT_GEMMA_MODEL_MOUNT_RETRY_SECS: u64 = 10;
+const BOOT_GEMMA_MODEL_TIMEOUT_MS: u32 = 180_000;
+const BOOT_GEMMA_MODEL_MAX_BYTES: usize = 8 * 1024 * 1024 * 1024;
+
+#[embassy_executor::task]
+async fn boot_gemma_model_fetch_task() {
+    crate::log!(
+        "spawn-svc: boot-gemma-model-fetch sleeping {}s before first mount check\n",
+        BOOT_GEMMA_MODEL_DELAY_SECS
+    );
+    Timer::after(EmbassyDuration::from_secs(BOOT_GEMMA_MODEL_DELAY_SECS)).await;
+
+    let disk = loop {
+        if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
+            let info = disk.info();
+            crate::log!(
+                "spawn-svc: boot-gemma-model-fetch root mounted disk_id={} readonly={} label={}\n",
+                info.id.raw(),
+                info.is_read_only() as u8,
+                info.label.as_deref().unwrap_or("-")
+            );
+            break disk;
+        }
+
+        crate::log!(
+            "spawn-svc: boot-gemma-model-fetch no TRUEOSFS root mounted; retry in {}s\n",
+            BOOT_GEMMA_MODEL_MOUNT_RETRY_SECS
+        );
+        Timer::after(EmbassyDuration::from_secs(BOOT_GEMMA_MODEL_MOUNT_RETRY_SECS)).await;
+    };
+
+    match crate::r::fs::trueosfs::file_info_async(disk, BOOT_GEMMA_MODEL_PATH).await {
+        Ok(Some(info)) if info.data_len != 0 => {
+            crate::log!(
+                "spawn-svc: boot-gemma-model-fetch skip existing path={} bytes={}\n",
+                BOOT_GEMMA_MODEL_PATH,
+                info.data_len
+            );
+            return;
+        }
+        Ok(_) => {}
+        Err(err) => {
+            crate::log!(
+                "spawn-svc: boot-gemma-model-fetch existing-file probe failed path={} err={:?}\n",
+                BOOT_GEMMA_MODEL_PATH,
+                err
+            );
+        }
+    }
+
+    let _ = crate::r::readiness::wait_for_timeout(
+        crate::r::readiness::NET_ANY_CONFIGURED,
+        EmbassyDuration::from_secs(30),
+    )
+    .await;
+
+    for url in BOOT_GEMMA_MODEL_URLS {
+        crate::log!(
+            "spawn-svc: boot-gemma-model-fetch start url={} path={} max_bytes={}\n",
+            url,
+            BOOT_GEMMA_MODEL_PATH,
+            BOOT_GEMMA_MODEL_MAX_BYTES
+        );
+        match crate::t::net::http_stream::fetch_http_to_file_async(
+            url,
+            disk,
+            BOOT_GEMMA_MODEL_PATH,
+            BOOT_GEMMA_MODEL_TIMEOUT_MS,
+            BOOT_GEMMA_MODEL_MAX_BYTES,
+        )
+        .await
+        {
+            Ok(()) => {
+                match crate::r::fs::trueosfs::file_info_async(disk, BOOT_GEMMA_MODEL_PATH).await {
+                    Ok(Some(info)) => {
+                        crate::log!(
+                            "spawn-svc: boot-gemma-model-fetch post-fetch stat ok path={} bytes={}\n",
+                            BOOT_GEMMA_MODEL_PATH,
+                            info.data_len
+                        );
+                    }
+                    Ok(None) => {
+                        crate::log!(
+                            "spawn-svc: boot-gemma-model-fetch post-fetch stat missing path={}\n",
+                            BOOT_GEMMA_MODEL_PATH
+                        );
+                    }
+                    Err(err) => {
+                        crate::log!(
+                            "spawn-svc: boot-gemma-model-fetch post-fetch stat failed path={} err={:?}\n",
+                            BOOT_GEMMA_MODEL_PATH,
+                            err
+                        );
+                    }
+                }
+                crate::log!(
+                    "spawn-svc: boot-gemma-model-fetch success url={} path={}\n",
+                    url,
+                    BOOT_GEMMA_MODEL_PATH
+                );
+                return;
+            }
+            Err(err) => {
+                crate::log!(
+                    "spawn-svc: boot-gemma-model-fetch failed url={} err={:?}\n",
+                    url,
+                    err
+                );
+            }
+        }
+    }
+
+    crate::log!(
+        "spawn-svc: boot-gemma-model-fetch exhausted urls path={}\n",
+        BOOT_GEMMA_MODEL_PATH
+    );
+}
+
+fn spawn_boot_gemma_model_fetch(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| boot_gemma_model_fetch_task())
+}
+
 fn spawn_app_vm_run_queue(spawner: Spawner) -> SpawnAttempt {
     match crate::shell2::spawn_app_vm_run_queue(spawner) {
         Ok(()) => SpawnAttempt::Spawned,
@@ -1025,7 +1153,7 @@ const UI2_DEMO_READY: u32 =
 const WS_BOOT_READY: u32 = crate::r::readiness::NET_GATEWAY_REACHABLE
     | crate::r::readiness::TLS_SOCKET_SERVICE_READY
     | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
-static TASKS: [TaskSpec; 70] = [
+static TASKS: [TaskSpec; 71] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
         "globalog-persist-once",
@@ -1350,6 +1478,12 @@ static TASKS: [TaskSpec; 70] = [
     TaskSpec::disabled("boot-ws-smoke", WS_BOOT_READY, &BOOT_WS_SMOKE_STARTED, spawn_boot_ws_smoke),
     TaskSpec::disabled("smtp-smoke", 0, &SMTP_SMOKE_STARTED, spawn_smtp_smoke),
     TaskSpec::disabled("boot-netbench", 0, &BOOT_NETBENCH_STARTED, spawn_boot_netbench),
+    TaskSpec::enabled(
+        "boot-gemma-model-fetch",
+        0,
+        &BOOT_GEMMA_MODEL_FETCH_STARTED,
+        spawn_boot_gemma_model_fetch,
+    ),
     TaskSpec::enabled("uart-shell", 0, &UART_SHELL_STARTED, spawn_uart_shell),
     TaskSpec::enabled("net-tcp-shell", 0, &NET_TCP_SHELL_STARTED, spawn_net_tcp_shell),
     TaskSpec::disabled("atomic_bomb", 0, &ATOMIC_BOMB_STARTED, spawn_atomic_bomb),

@@ -1,8 +1,10 @@
 extern crate alloc;
+extern crate std;
 
 use super::dns::{self, DnsConfig};
 use super::http::{self, HttpFetchError};
 use super::https_limits::HttpsLimits;
+use super::hyper_io::{HyperEmptyBody, HyperTokioIo};
 use crate::net::tls::{TlsClientConfig, TlsRoots};
 use crate::net::tls_socket::{TlsCommand, TlsEvent, register_tls_app_queues};
 use crate::r::io::cabi::{
@@ -16,10 +18,13 @@ use crate::wait::WaitQueue;
 use alloc::{boxed::Box, collections::BTreeMap, format, string::String, vec::Vec};
 use core::{
     fmt::Write as _,
+    pin::Pin,
     sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicUsize, Ordering},
 };
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+use hyper::body::Body;
 use spin::Mutex;
+use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
 use v::vnet;
 
 static CABI_NET_FETCH_SEQ: AtomicU32 = AtomicU32::new(1);
@@ -42,6 +47,7 @@ static CABI_NET_FETCH_BYTES_RESULTS: Mutex<BTreeMap<u32, CabiNetFetchBytesResult
     Mutex::new(BTreeMap::new());
 static CABI_NET_FETCH_WAIT: WaitQueue = WaitQueue::new();
 static CABI_NET_FETCH_WAIT_MODE_LOGGED: AtomicU8 = AtomicU8::new(0);
+static VHTTPS_HYPER_FILE_TMP_SEQ: AtomicU32 = AtomicU32::new(1);
 
 #[inline]
 fn wait_on_net_fetch_queue_blocking(timeout_ms: u64) -> bool {
@@ -181,7 +187,8 @@ fn keepalive_sync_state(conn: &'static KeepAliveConn) {
             }
             TlsEvent::Connected { handle } => {
                 let mut st = conn.state.lock();
-                if st.handle == Some(handle) {
+                if st.handle.is_none() || st.handle == Some(handle) {
+                    st.handle = Some(handle);
                     st.connected = true;
                 }
             }
@@ -411,14 +418,17 @@ async fn keepalive_prepare_ready(
                 TlsEvent::Connected { handle } => {
                     let matched = {
                         let mut st = conn.state.lock();
-                        if st.handle == Some(handle) {
+                        if st.handle.is_none() || st.handle == Some(handle) {
+                            let recovered_open = st.handle.is_none();
+                            st.handle = Some(handle);
                             st.connected = true;
                             crate::log!(
-                                "{}: tls-connected host={} dev={} handle={}\n",
+                                "{}: tls-connected host={} dev={} handle={} recovered_open={}\n",
                                 log_prefix,
                                 parsed.host,
                                 dev_idx,
-                                handle.0
+                                handle.0,
+                                if recovered_open { 1 } else { 0 }
                             );
                             ready_handle = Some(handle);
                             true
@@ -1493,6 +1503,11 @@ fn normalize_rel(path: &str, allow_empty: bool) -> Result<String, i32> {
     Ok(out)
 }
 
+fn hyper_file_tmp_key_for(key: &str) -> String {
+    let seq = VHTTPS_HYPER_FILE_TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    format!("{}.tmp.vhttps-hyper.{}", key, seq)
+}
+
 #[derive(Clone, Debug)]
 struct ParsedHttpsUrl {
     host: String,
@@ -1858,6 +1873,292 @@ async fn write_body_to_tmp_file(
         .await
         .map_err(block_error_to_code)?;
     Ok(())
+}
+
+async fn tls_send_plaintext(
+    cmds: &'static Queue<TlsCommand>,
+    handle: vnet::NetHandle,
+    bytes: &[u8],
+) -> Result<(), FetchError> {
+    for chunk in bytes.chunks(16 * 1024) {
+        let mut sent = false;
+        for _ in 0..64 {
+            if cmds
+                .push(TlsCommand::Send {
+                    handle,
+                    data: chunk.to_vec(),
+                })
+                .is_ok()
+            {
+                sent = true;
+                break;
+            }
+            tokio::time::sleep(core::time::Duration::from_millis(1)).await;
+        }
+        if !sent {
+            return Err(FetchError::BodyTimeout);
+        }
+    }
+    Ok(())
+}
+
+async fn tls_duplex_bridge(
+    cmds: &'static Queue<TlsCommand>,
+    events: &'static Queue<TlsEvent>,
+    handle: vnet::NetHandle,
+    mut io: DuplexStream,
+) -> Result<(), FetchError> {
+    let mut outbound = [0u8; 4096];
+    loop {
+        tokio::select! {
+            read = io.read(&mut outbound) => {
+                let n = read.map_err(|_| FetchError::BodyTimeout)?;
+                if n == 0 {
+                    break;
+                }
+                tls_send_plaintext(cmds, handle, &outbound[..n]).await?;
+            }
+            _ = tokio::time::sleep(core::time::Duration::from_millis(1)) => {
+                for ev in events.drain(128) {
+                    match ev {
+                        TlsEvent::Data { handle: h, data } if h == handle => {
+                            io.write_all(data.as_slice())
+                                .await
+                                .map_err(|_| FetchError::BodyTimeout)?;
+                        }
+                        TlsEvent::Closed { handle: h } if h == handle => {
+                            let _ = io.shutdown().await;
+                            return Ok(());
+                        }
+                        TlsEvent::Error { .. } | TlsEvent::TlsError { .. } => {
+                            let _ = io.shutdown().await;
+                            return Err(FetchError::Tls);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    let _ = cmds.push(TlsCommand::Close { handle });
+    let _ = io.shutdown().await;
+    Ok(())
+}
+
+async fn connect_hyper_tls_stream(
+    parsed: &ParsedHttpsUrl,
+    dev_idx: usize,
+    timeout_ms: u32,
+) -> Result<DuplexStream, FetchError> {
+    crate::log!("vhttps-hyper: dns begin host={} dev={}\n", parsed.host, dev_idx);
+    let ip = match dns::resolve_ipv4_for_device(
+        dev_idx,
+        parsed.host.as_str(),
+        DnsConfig::for_device(dev_idx),
+    )
+    .await
+    {
+        Ok(ip) => ip,
+        Err(dns::DnsError::Timeout) => return Err(FetchError::DnsTimeout),
+        Err(_) => return Err(FetchError::DnsFailed),
+    };
+    crate::log!(
+        "vhttps-hyper: dns ok host={} dev={} ip={}.{}.{}.{}\n",
+        parsed.host,
+        dev_idx,
+        ip[0],
+        ip[1],
+        ip[2],
+        ip[3]
+    );
+
+    let seq = VHTTPS_SEQ.fetch_add(1, Ordering::Relaxed);
+    let selector = if let Some((bus, slot, func)) = crate::net::bdf_at(dev_idx) {
+        format!("{:02x}:{:02x}.{}", bus, slot, func)
+    } else if let Some((vid, pid)) = crate::net::pci_id_at(dev_idx) {
+        format!("{:04x}:{:04x}", vid, pid)
+    } else {
+        format!("{}", dev_idx)
+    };
+    let owner = leak_str(format!("vhttps-hyper-{}@{}", seq, selector));
+    let cmds_name = leak_str(format!("{}-tls-cmd", owner));
+    let evts_name = leak_str(format!("{}-tls-evt", owner));
+    let cmds = Queue::new_leaked(cmds_name, 256);
+    let events = Queue::new_leaked(evts_name, 4096);
+    register_tls_app_queues(owner, cmds, events);
+
+    let roots = TlsRoots::mozilla();
+    let cfg = TlsClientConfig::new().with_alpn_protocols(&[b"http/1.1"]);
+    let server_name = leak_str(parsed.host.clone());
+    let deadline = Instant::now() + EmbassyDuration::from_millis(timeout_ms as u64);
+    crate::log!(
+        "vhttps-hyper: connect host={} dev={} port={}\n",
+        parsed.host,
+        dev_idx,
+        parsed.port
+    );
+    cmds.push(TlsCommand::OpenTcpConnect {
+        remote: vnet::EndpointV4 {
+            addr: ip,
+            port: parsed.port,
+        },
+        server_name,
+        cfg,
+        roots,
+        timeouts: crate::net::tls_socket::TlsTimeouts {
+            connect_ms: (timeout_ms / 4).max(5_000),
+            tls_ms: (timeout_ms / 4).max(5_000),
+            idle_ms: timeout_ms,
+        },
+    })
+    .map_err(|_| FetchError::ConnectTimeout)?;
+
+    let mut opened = None;
+    let handle = 'connect_wait: loop {
+        for ev in events.drain(256) {
+            match ev {
+                TlsEvent::Opened { handle } => {
+                    opened = Some(handle);
+                    crate::log!(
+                        "vhttps-hyper: opened host={} dev={} handle={}\n",
+                        parsed.host,
+                        dev_idx,
+                        handle.0
+                    );
+                }
+                TlsEvent::Connected { handle } => {
+                    if opened.is_none() {
+                        opened = Some(handle);
+                    }
+                    if opened == Some(handle) {
+                        crate::log!(
+                            "vhttps-hyper: tls-connected host={} dev={} handle={}\n",
+                            parsed.host,
+                            dev_idx,
+                            handle.0
+                        );
+                        break 'connect_wait handle;
+                    }
+                }
+                TlsEvent::Closed { handle } if opened == Some(handle) => {
+                    return Err(FetchError::Tls);
+                }
+                TlsEvent::Error { .. } | TlsEvent::TlsError { .. } => return Err(FetchError::Tls),
+                _ => {}
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err(if opened.is_some() {
+                FetchError::TlsTimeout
+            } else {
+                FetchError::ConnectTimeout
+            });
+        }
+        Timer::after(EmbassyDuration::from_millis(2)).await;
+    };
+
+    let (client_io, bridge_io) = tokio::io::duplex(64 * 1024);
+    tokio::spawn(async move {
+        if let Err(err) = tls_duplex_bridge(cmds, events, handle, bridge_io).await {
+            crate::log!("vhttps-hyper: bridge ended err={:?}\n", err);
+        }
+    });
+
+    Ok(client_io)
+}
+
+fn hyper_redirect_url_from_location(
+    current: &ParsedHttpsUrl,
+    headers: &hyper::HeaderMap,
+) -> Option<String> {
+    let loc = headers.get(hyper::header::LOCATION)?.to_str().ok()?.trim();
+    if loc.is_empty() {
+        return None;
+    }
+    if loc.starts_with("https://") {
+        return Some(String::from(loc));
+    }
+    if loc.starts_with("http://") {
+        return None;
+    }
+    if loc.starts_with('/') {
+        if current.port == 443 {
+            return Some(format!("https://{}{}", current.host, loc));
+        }
+        return Some(format!("https://{}:{}{}", current.host, current.port, loc));
+    }
+    None
+}
+
+async fn fetch_on_device_hyper(
+    parsed: &ParsedHttpsUrl,
+    dev_idx: usize,
+    timeout_ms: u32,
+    max_bytes: usize,
+) -> Result<Vec<u8>, FetchError> {
+    let stream = connect_hyper_tls_stream(parsed, dev_idx, timeout_ms).await?;
+    let (mut sender, connection) =
+        hyper::client::conn::http1::handshake::<_, HyperEmptyBody>(HyperTokioIo::new(stream))
+            .await
+            .map_err(|_| FetchError::Tls)?;
+    let connection = tokio::spawn(async move { connection.await });
+
+    sender.ready().await.map_err(|_| FetchError::BodyTimeout)?;
+    crate::log!("vhttps-hyper: request host={} path={}\n", parsed.host, parsed.path);
+    let request = hyper::Request::builder()
+        .method(hyper::Method::GET)
+        .uri(parsed.path.as_str())
+        .header(hyper::header::HOST, parsed.host.as_str())
+        .header(hyper::header::USER_AGENT, "TRUEOS hyper")
+        .header(hyper::header::ACCEPT, "*/*")
+        .header(hyper::header::ACCEPT_ENCODING, "identity")
+        .header(hyper::header::CONNECTION, "close")
+        .body(HyperEmptyBody)
+        .map_err(|_| FetchError::BadUrl)?;
+    let response = tokio::time::timeout(
+        core::time::Duration::from_millis(timeout_ms as u64),
+        sender.send_request(request),
+    )
+    .await
+    .map_err(|_| FetchError::BodyTimeout)?
+    .map_err(|_| FetchError::BodyTimeout)?;
+
+    let status = response.status().as_u16();
+    if is_redirect_status(status) {
+        if let Some(url) = hyper_redirect_url_from_location(parsed, response.headers()) {
+            return Err(FetchError::Redirect { status, url });
+        }
+    }
+    if status != 200 {
+        return Err(FetchError::Http(status));
+    }
+
+    let mut body = response.into_body();
+    let mut out = Vec::new();
+    loop {
+        let next = tokio::time::timeout(
+            core::time::Duration::from_millis(timeout_ms as u64),
+            core::future::poll_fn(|cx| Pin::new(&mut body).poll_frame(cx)),
+        )
+        .await
+        .map_err(|_| FetchError::BodyTimeout)?;
+        let Some(frame) = next else {
+            break;
+        };
+        let frame = frame.map_err(|_| FetchError::BodyTimeout)?;
+        if let Ok(data) = frame.into_data() {
+            if out.len().saturating_add(data.len()) > max_bytes {
+                return Err(FetchError::ResponseTooLarge);
+            }
+            out.extend_from_slice(&data);
+        }
+    }
+
+    drop(sender);
+    let _ = tokio::time::timeout(core::time::Duration::from_millis(250), connection).await;
+    crate::log!("vhttps-hyper: body-complete host={} bytes={}\n", parsed.host, out.len());
+    Ok(out)
 }
 
 static VHTTPS_SEQ: AtomicU32 = AtomicU32::new(1);
@@ -4239,6 +4540,93 @@ pub async fn fetch_https_to_file_async(
 ) -> Result<(), i32> {
     fetch_https_to_file_with_profile_async(url, NetProfile::default(), path, timeout_ms, max_bytes)
         .await
+}
+
+pub async fn fetch_https_to_file_hyper_async(
+    url: &str,
+    path: &str,
+    timeout_ms: u32,
+    max_bytes: usize,
+) -> Result<(), i32> {
+    fetch_https_to_file_hyper_with_profile_async(
+        url,
+        NetProfile::default(),
+        path,
+        timeout_ms,
+        max_bytes,
+    )
+    .await
+}
+
+pub async fn fetch_https_to_file_hyper_with_profile_async(
+    url: &str,
+    profile: NetProfile,
+    path: &str,
+    timeout_ms: u32,
+    max_bytes: usize,
+) -> Result<(), i32> {
+    let t0 = Instant::now();
+    let key = normalize_rel(path, false)?;
+    let dev_idx = fetch_device_index(profile).map_err(fetch_error_to_code)?;
+
+    crate::log!("vhttps-hyper-file: start key={} url={}\n", key, url);
+
+    const MAX_REDIRECTS: usize = 3;
+    let tmp_key = hyper_file_tmp_key_for(key.as_str());
+    let mut current_url = String::from(url);
+    for hop in 0..=MAX_REDIRECTS {
+        let parsed = parse_https_url(current_url.as_str())
+            .ok_or(FetchError::BadUrl)
+            .map_err(fetch_error_to_code)?;
+        match fetch_on_device_hyper(&parsed, dev_idx, timeout_ms, max_bytes).await {
+            Ok(body) => {
+                if body.len() > max_bytes {
+                    return Err(fetch_error_to_code(FetchError::ResponseTooLarge));
+                }
+                if let Err(err) = tokio::fs::write(tmp_key.as_str(), body.as_slice()).await {
+                    crate::log!(
+                        "vhttps-hyper-file: tokio-fs-temp-write failed key={} tmp={} err={}\n",
+                        key,
+                        tmp_key,
+                        err
+                    );
+                    let _ = tokio::fs::remove_file(tmp_key.as_str()).await;
+                    return Err(FS_ERR_IO);
+                }
+                if let Err(err) = tokio::fs::write(key.as_str(), body.as_slice()).await {
+                    crate::log!(
+                        "vhttps-hyper-file: tokio-fs-publish failed key={} tmp={} err={}\n",
+                        key,
+                        tmp_key,
+                        err
+                    );
+                    let _ = tokio::fs::remove_file(tmp_key.as_str()).await;
+                    return Err(FS_ERR_IO);
+                }
+                let _ = tokio::fs::remove_file(tmp_key.as_str()).await;
+                let total_ms = Instant::now().saturating_duration_since(t0).as_millis();
+                crate::log!(
+                    "vhttps-hyper-file: done key={} bytes={} ms_total={}\n",
+                    key,
+                    body.len(),
+                    total_ms
+                );
+                return Ok(());
+            }
+            Err(FetchError::Redirect { status, url }) => {
+                if hop >= MAX_REDIRECTS {
+                    return Err(fetch_error_to_code(FetchError::Http(status)));
+                }
+                current_url = url;
+            }
+            Err(err) => {
+                let _ = tokio::fs::remove_file(tmp_key.as_str()).await;
+                return Err(fetch_error_to_code(err));
+            }
+        }
+    }
+
+    Err(fetch_error_to_code(FetchError::Http(0)))
 }
 
 pub async fn fetch_https_to_file_with_profile_async(

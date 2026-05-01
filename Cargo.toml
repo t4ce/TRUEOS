@@ -72,6 +72,7 @@ tokio = { version = "1.52.1", default-features = false, features = ["rt", "rt-mu
 socket2 = { version = "0.6.3", default-features = false }
 mio = { version = "1.2.0", default-features = false, features = ["os-poll", "net"] }
 hyper = { version = "1.9.0", default-features = false, features = ["client", "server", "http1"] }
+rayon = "1.12.0"
 
 [target.'cfg(target_arch = "x86_64")'.dependencies]
 rdrand = { version = "0.8", default-features = false }
@@ -121,3 +122,8 @@ mio = { path = "vendor/mio-1.2.0" }
 socket2 = { path = "vendor/socket2-0.6.3" }
 try-lock = { path = "vendor/try-lock-0.2.5" }
 want = { path = "vendor/want-0.3.1" }
+rayon = { path = "vendor/rayon-1.12.0" }
+rayon-core = { path = "vendor/rayon-core-1.13.0" }
+crossbeam-deque = { path = "vendor/crossbeam-deque-0.8.6" }
+crossbeam-epoch = { path = "vendor/crossbeam-epoch-0.9.18" }
+crossbeam-utils = { path = "vendor/crossbeam-utils-0.8.21" }

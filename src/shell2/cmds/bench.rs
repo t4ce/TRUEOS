@@ -29,10 +29,18 @@ const DISC_BENCH_READS_PER_STEP: usize = 8;
 const DISC_BENCH_STEP_COOLDOWN_MS: u64 = 75;
 const DISC_BENCH_READ_TIMEOUT_MS: u64 = 5_000;
 const DISC_BENCH_LOG_EACH_SUCCESS: bool = false;
+const MODEL_BENCH_DEFAULT_SECONDS: u64 = 5;
+const MODEL_BENCH_MAX_SECONDS: u64 = 60;
+const MODEL_BENCH_DIM: usize = 256;
+const MODEL_BENCH_PROBE_BYTES: usize = 8 * 1024 * 1024;
 const BENCH_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
-const BENCH_MENU_ROWS: [[&str; 2]; 4] = [
+const BENCH_MENU_ROWS: [[&str; 2]; 5] = [
     ["cpu", "Run CPU-only compute benchmark"],
     ["disc [id]", "Gentle disc read throughput bench"],
+    [
+        "model [sec]",
+        "RAM-load expected GGUF from TRUEOSFS; CPU token-loop probe",
+    ],
     ["net", "Run network throughput benchmark"],
     [
         "netk",
@@ -455,6 +463,32 @@ pub(crate) fn try_parse(
                 ParseOutcome::Handled
             }
         }
+        "model" => {
+            let seconds = match args.next() {
+                Some(raw) => match raw.parse::<u64>() {
+                    Ok(n) if (1..=MODEL_BENCH_MAX_SECONDS).contains(&n) => n,
+                    _ => {
+                        print_shell_line(
+                            io,
+                            "bench model: seconds must be 1..=60; usage `bench model [sec]`",
+                        );
+                        return ParseOutcome::Handled;
+                    }
+                },
+                None => MODEL_BENCH_DEFAULT_SECONDS,
+            };
+            if args.next().is_some() {
+                print_shell_line(io, "bench model: usage `bench model [sec]`");
+                return ParseOutcome::Handled;
+            }
+            if let Some(session_id) = submit_modelbench(spawner, io, seconds) {
+                ParseOutcome::StartSession(
+                    crate::shell2::shell2_cmd::CommandSessionKind::BenchRunning(session_id),
+                )
+            } else {
+                ParseOutcome::Handled
+            }
+        }
         "disc" | "disk" => {
             let id_arg = args.next();
             if args.next().is_some() {
@@ -508,6 +542,37 @@ fn submit_cpubench(spawner: &Spawner, io: &'static dyn ShellBackend2) -> Option<
         }
     }
     print_matrix_target_line(&target, "bench cpu: send `q` in this slot to stop");
+    Some(session_id)
+}
+
+fn submit_modelbench(
+    spawner: &Spawner,
+    io: &'static dyn ShellBackend2,
+    seconds: u64,
+) -> Option<u64> {
+    let target = matrix_target_for_backend(io);
+    let session_id = bench_session_start();
+
+    print_matrix_target_line(
+        &target,
+        format!(
+            "bench model: waiting for TRUEOSFS root file={} seconds={}",
+            crate::r::spawn_service::BOOT_GEMMA_MODEL_PATH,
+            seconds
+        )
+        .as_str(),
+    );
+    set_matrix_target_active(&target, true);
+    match modelbench_task(target.clone(), session_id, seconds) {
+        Ok(token) => spawner.spawn(token),
+        Err(_) => {
+            bench_session_finish(session_id);
+            set_matrix_target_active(&target, false);
+            print_shell_line(io, "bench model: spawn failed");
+            return None;
+        }
+    }
+    print_matrix_target_line(&target, "bench model: send `q` in this slot to stop");
     Some(session_id)
 }
 
@@ -887,6 +952,248 @@ async fn cpubench_task(target: MatrixTarget, session_id: u64) {
 
         let elapsed_ms = elapsed_ms_since(bench_start_tick);
         log(format!("bench cpu: session elapsed={}ms", elapsed_ms).as_str());
+    }
+    .await;
+    bench_session_finish(session_id);
+    set_matrix_target_active(&target, false);
+}
+
+fn modelbench_token_step(
+    weights: &[u8],
+    layers: usize,
+    state: &mut [i16],
+    scratch: &mut [i16],
+    token: u32,
+) -> u32 {
+    let dim = state.len();
+    for layer in 0..layers {
+        let base = layer * dim * dim;
+        for row in 0..dim {
+            let row_base = base + row * dim;
+            let mut acc = ((token as i32) & 0xff) - 128 + row as i32;
+            for col in 0..dim {
+                let weight = weights[row_base + col].wrapping_sub(128) as i8;
+                acc = acc.wrapping_add(weight as i32 * state[col] as i32);
+            }
+            let mixed = (acc >> 8).wrapping_add(state[(row + layer) & (dim - 1)] as i32);
+            scratch[row] = mixed.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+        }
+        state.copy_from_slice(scratch);
+    }
+
+    let mut next = token.wrapping_mul(1664525).wrapping_add(1013904223);
+    for (idx, value) in state.iter().enumerate().step_by(17) {
+        next ^= (*value as u32).rotate_left((idx & 31) as u32);
+    }
+    next & 0xffff
+}
+
+#[embassy_executor::task(pool_size = 2)]
+async fn modelbench_task(target: MatrixTarget, session_id: u64, seconds: u64) {
+    let task_target = target.clone();
+    async move {
+        Timer::after(EmbassyDuration::from_millis(1)).await;
+
+        let log = |line: &str| {
+            print_matrix_target_line(&task_target, line);
+        };
+
+        let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
+            log("bench model: skipped; no TRUEOSFS root mounted");
+            return;
+        };
+        let path = crate::r::spawn_service::BOOT_GEMMA_MODEL_PATH;
+        let info = match crate::r::fs::trueosfs::file_info_async(disk, path).await {
+            Ok(Some(info)) if info.data_len >= 16 => info,
+            Ok(Some(info)) => {
+                log(
+                    format!(
+                        "bench model: skipped; expected file incomplete path={} bytes={}",
+                        path, info.data_len
+                    )
+                    .as_str(),
+                );
+                return;
+            }
+            Ok(None) => {
+                log(
+                    format!(
+                        "bench model: skipped; expected file not stored yet path={}",
+                        path
+                    )
+                    .as_str(),
+                );
+                return;
+            }
+            Err(err) => {
+                log(
+                    format!(
+                        "bench model: skipped; file probe failed path={} err={:?}",
+                        path, err
+                    )
+                    .as_str(),
+                );
+                return;
+            }
+        };
+
+        let mut magic = [0u8; 4];
+        match crate::r::fs::trueosfs::file_read_range_async(disk, path, 0, &mut magic).await {
+            Ok(Some(4)) if magic == *b"GGUF" => {}
+            Ok(Some(n)) => {
+                log(
+                    format!(
+                        "bench model: skipped; short magic read path={} bytes={}",
+                        path, n
+                    )
+                    .as_str(),
+                );
+                return;
+            }
+            Ok(None) => {
+                log(format!("bench model: skipped; disappeared path={}", path).as_str());
+                return;
+            }
+            Err(err) => {
+                log(
+                    format!(
+                        "bench model: skipped; magic read failed path={} err={:?}",
+                        path, err
+                    )
+                    .as_str(),
+                );
+                return;
+            }
+        }
+
+        log(
+            format!(
+                "bench model: RAM loading path={} size={}",
+                path,
+                format_bytes(info.data_len)
+            )
+            .as_str(),
+        );
+        let load_start = embassy_time_driver::now();
+        let model = match crate::r::stream::load_trueosfs_file_via_pipe_async(disk, path).await {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => {
+                log(format!("bench model: skipped; load returned missing path={}", path).as_str());
+                return;
+            }
+            Err(err) => {
+                log(
+                    format!(
+                        "bench model: skipped; RAM load failed path={} err={:?}",
+                        path, err
+                    )
+                    .as_str(),
+                );
+                return;
+            }
+        };
+        let load_ms = elapsed_ms_since(load_start);
+        let load_bps = bps_from_progress(model.len() as u64, load_ms);
+
+        if model.len() < MODEL_BENCH_DIM * MODEL_BENCH_DIM {
+            log(
+                format!(
+                    "bench model: skipped; file too small for probe path={} bytes={}",
+                    path,
+                    model.len()
+                )
+                .as_str(),
+            );
+            return;
+        }
+
+        let layer_bytes = MODEL_BENCH_DIM * MODEL_BENCH_DIM;
+        let probe_bytes = usize::min(model.len(), MODEL_BENCH_PROBE_BYTES);
+        let layers = (probe_bytes / layer_bytes).max(1);
+        let weight_bytes = layers * layer_bytes;
+        let token_ops = layers as u64 * MODEL_BENCH_DIM as u64 * MODEL_BENCH_DIM as u64 * 2;
+
+        log(
+            format!(
+                "bench model: RAM loaded bytes={} load={} elapsed={}ms; probing window={} dim={} layers={} est_ops/token={}",
+                format_bytes(model.len() as u64),
+                format_speed(load_bps),
+                load_ms,
+                format_bytes(weight_bytes as u64),
+                MODEL_BENCH_DIM,
+                layers,
+                format_metric_units(token_ops, "ops")
+            )
+            .as_str(),
+        );
+
+        let mut state: Vec<i16> = (0..MODEL_BENCH_DIM)
+            .map(|idx| ((idx as i16).wrapping_mul(31)).wrapping_sub(2048))
+            .collect();
+        let mut scratch: Vec<i16> = vec![0; MODEL_BENCH_DIM];
+        let mut token = 1u32;
+        let mut tokens = 0u64;
+        let run_start = embassy_time_driver::now();
+        let deadline = Instant::now() + EmbassyDuration::from_secs(seconds);
+        let mut next_progress = Instant::now() + EmbassyDuration::from_millis(1000);
+
+        let weights = &model[..weight_bytes];
+
+        loop {
+            if bench_cancel_requested(session_id) {
+                log("bench model: cancelled");
+                break;
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+
+            token = modelbench_token_step(
+                weights,
+                layers,
+                state.as_mut_slice(),
+                scratch.as_mut_slice(),
+                token,
+            );
+            tokens = tokens.saturating_add(1);
+
+            if Instant::now() >= next_progress {
+                let elapsed_ms = elapsed_ms_since(run_start);
+                let ops = tokens.saturating_mul(token_ops);
+                let tps = bps_from_progress(tokens, elapsed_ms);
+                let ops_s = bps_from_progress(ops, elapsed_ms);
+                log(
+                    format!(
+                        "bench model: progress tokens={} rate={} tok/s est={}ops/s elapsed={}ms marker={}",
+                        tokens,
+                        tps,
+                        format_metric_units(ops_s, ""),
+                        elapsed_ms,
+                        token
+                    )
+                    .as_str(),
+                );
+                next_progress = Instant::now() + EmbassyDuration::from_millis(1000);
+                Timer::after(EmbassyDuration::from_millis(0)).await;
+            }
+        }
+
+        let elapsed_ms = elapsed_ms_since(run_start);
+        let ops = tokens.saturating_mul(token_ops);
+        let tps = bps_from_progress(tokens, elapsed_ms);
+        let ops_s = bps_from_progress(ops, elapsed_ms);
+        log(
+            format!(
+                "bench model: done tokens={} rate={} tok/s est_ops={} est_rate={}/s elapsed={}ms marker={}",
+                tokens,
+                tps,
+                format_metric_units(ops, "ops"),
+                format_metric_units(ops_s, "ops"),
+                elapsed_ms,
+                token
+            )
+            .as_str(),
+        );
     }
     .await;
     bench_session_finish(session_id);
