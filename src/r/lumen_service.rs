@@ -112,12 +112,22 @@ fn chat_post_body(user: &str, text: &str) -> AllocString {
 }
 
 fn post_chat_message(user: &str, text: &str) -> bool {
+    if crate::r::net::srv::chat::post_local_message(CHAT_ROOM, user, text) {
+        crate::log!(
+            "lumen-service: inserted chat message user={} bytes={}\n",
+            user,
+            text.len()
+        );
+        return true;
+    }
+
     let Some(port) = crate::r::net::srv::chat::current_port() else {
+        crate::log!("lumen-service: chat post failed; no chat port\n");
         return false;
     };
     let url = chat_message_url(port, None);
     let body = chat_post_body(user, text);
-    matches!(
+    let ok = matches!(
         crate::t::block_on_io(crate::t::net::http::post_http_body_hyper(
             url.as_str(),
             "application/x-www-form-urlencoded",
@@ -126,7 +136,11 @@ fn post_chat_message(user: &str, text: &str) -> bool {
             CHAT_HTTP_MAX_RX,
         )),
         Ok(Ok(_))
-    )
+    );
+    if !ok {
+        crate::log!("lumen-service: chat post failed via http user={} bytes={}\n", user, text.len());
+    }
+    ok
 }
 
 pub(crate) fn submit_chat_answer(answer: &str) {

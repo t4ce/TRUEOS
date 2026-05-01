@@ -98,6 +98,10 @@ fn submit_warm_render_batch(
             RESULT_SLOT_POST3D_LIGHT_PIPE_CONTROL_HI_DWORD => result_post3d_light_hi,
             RESULT_SLOT_FINAL_AFTER_LIGHT_DWORD => result_final_after_light,
             RESULT_SLOT_PRE_LIGHT_PC_DWORD => result_pre_light_pc,
+            RESULT_SLOT_GPGPU_PREFLIGHT_MARKER_DWORD => read_result_dword(
+                warm,
+                RESULT_SLOT_GPGPU_PREFLIGHT_MARKER_DWORD,
+            ),
             _ => result0,
         };
         if observed == expected_result {

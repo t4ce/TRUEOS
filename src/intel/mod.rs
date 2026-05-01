@@ -65,9 +65,9 @@ const GUC_WOPCM_OFFSET_ALIGNMENT: u32 = 1 << GUC_WOPCM_OFFSET_SHIFT;
 pub(crate) const GS_BOOTROM_MASK: u32 = 0x7F << 1;
 pub(crate) const GS_UKERNEL_MASK: u32 = 0xFF << 8;
 pub(crate) const GS_AUTH_STATUS_MASK: u32 = 0x03 << 30;
-const DISPLAY_PLANE1_BOOT_DEMO_ENABLED: bool = false;
+const DISPLAY_PLANE1_BOOT_DEMO_ENABLED: bool = true;
 const RENDER_BOOT_PROBE_LOOP_ENABLED: bool = false;
-const RENDER_BOOT_PROBE_INTERVAL_MS: u64 = 16;
+const RENDER_BOOT_PROBE_INTERVAL_MS: u64 = 250;
 const MEDIA_BOOT_DEMO_ENABLED: bool = false;
 const MEDIA_BOOT_DEMO_DELAY_MS: u64 = 5_000;
 const MEDIA_BOOT_DEMO_PREFERRED_AP_SLOT: u32 = 3;
@@ -228,6 +228,7 @@ pub fn init_once() {
         self::render::forcewake_render_sanity(warm);
     }
     self::render::submit_primary_triangle_once();
+    self::render::submit_gpgpu_preflight_once();
     if RENDER_BOOT_PROBE_LOOP_ENABLED {
         crate::log!(
             "intel/render: scheduled periodic probe interval_ms={}\n",
@@ -297,6 +298,22 @@ pub(crate) fn claimed_device() -> Option<Dev> {
 
 pub fn warm_state() -> Option<self::render::RenderWarmState> {
     self::render::warm_state()
+}
+
+pub fn guc_status(warm: self::render::RenderWarmState) -> u32 {
+    self::guc::status(Dev {
+        bus: 0,
+        slot: 0,
+        function: 0,
+        device_id: warm.device_id,
+        revision_id: warm.revision_id,
+        mmio: warm.mmio_base as *mut u8,
+        mmio_len: warm.mmio_len,
+    })
+}
+
+pub(crate) fn log_guc_submission_contract(dev: Dev, label: &'static str) {
+    self::guc::log_submission_contract(dev, label);
 }
 
 pub fn active_scanout_dimensions() -> Option<(u32, u32)> {

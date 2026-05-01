@@ -128,6 +128,45 @@ impl Endpoint {
         TransferId(self.ring.enque_transfer(trb))
     }
 
+    fn enque_bulk_or_interrupt(&mut self, bus_addr: u64, len: usize) -> TransferId {
+        const MAX_NORMAL_TRB_BYTES: usize = 64 * 1024;
+
+        if len <= MAX_NORMAL_TRB_BYTES {
+            let trb = transfer::Allowed::Normal(
+                *Normal::new()
+                    .set_data_buffer_pointer(bus_addr as _)
+                    .set_trb_transfer_length(len as _)
+                    .set_interrupter_target(0)
+                    .set_interrupt_on_short_packet()
+                    .set_interrupt_on_completion(),
+            );
+            return self.enque_trb(trb);
+        }
+
+        let mut handle = TransferId(BusAddr(0));
+        let mut offset = 0usize;
+        while offset < len {
+            let chunk = core::cmp::min(MAX_NORMAL_TRB_BYTES, len - offset);
+            let last = offset + chunk >= len;
+            let mut trb = *Normal::new()
+                .set_data_buffer_pointer(bus_addr + offset as u64)
+                .set_trb_transfer_length(chunk as _)
+                .set_interrupter_target(0);
+
+            if last {
+                trb.set_interrupt_on_short_packet()
+                    .set_interrupt_on_completion();
+            } else {
+                trb.set_chain_bit();
+            }
+
+            handle = self.enque_trb(transfer::Allowed::Normal(trb));
+            offset += chunk;
+        }
+
+        handle
+    }
+
     fn enque_iso(&mut self, bus_addr: u64, buff_len: usize, num_iso_packets: usize) -> TransferId {
         if buff_len == 0 || num_iso_packets < 2 {
             self.enque_iso_trb(bus_addr, buff_len)
@@ -296,15 +335,7 @@ impl EndpointOp for Endpoint {
                 handle.0 = self.ring.enque_transfer(status.into());
             }
             TransferKind::Interrupt | TransferKind::Bulk => {
-                let trb = transfer::Allowed::Normal(
-                    *Normal::new()
-                        .set_data_buffer_pointer(data_bus_addr as _)
-                        .set_trb_transfer_length(data_len as _)
-                        .set_interrupter_target(0)
-                        .set_interrupt_on_short_packet()
-                        .set_interrupt_on_completion(),
-                );
-                handle.0 = self.ring.enque_transfer(trb);
+                handle = self.enque_bulk_or_interrupt(data_bus_addr, data_len);
             }
             TransferKind::Isochronous { num_pkgs } => {
                 handle = self.enque_iso(data_bus_addr, data_len, *num_pkgs);
