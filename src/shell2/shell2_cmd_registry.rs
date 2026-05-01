@@ -102,6 +102,18 @@ fn dispatch_bench(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str)
     super::cmds::bench::try_parse(spawner, io, &mut args)
 }
 
+fn dispatch_lumen(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    if !rest.trim().is_empty() {
+        print_shell_line(io, "lumen: usage `lumen`");
+        return ParseOutcome::Handled;
+    }
+    if let Some(session_id) = super::cmds::bench_ai::submit_lumen(spawner, io) {
+        ParseOutcome::StartSession(super::shell2_cmd::CommandSessionKind::BenchRunning(session_id))
+    } else {
+        ParseOutcome::Handled
+    }
+}
+
 fn dispatch_c4(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     super::cmds::c4::try_parse(io, rest)
 }
@@ -199,6 +211,14 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         color: Some((255, 55, 255)),
         handler: dispatch_install,
         tool_description: None,
+        tool_parameters_json: None,
+    },
+    BuiltinShell2CmdEntry {
+        name: "lumen",
+        mode: "cmd",
+        color: Some((80, 220, 200)),
+        handler: dispatch_lumen,
+        tool_description: Some("Warm and run the local LUMEN model runtime."),
         tool_parameters_json: None,
     },
     BuiltinShell2CmdEntry {

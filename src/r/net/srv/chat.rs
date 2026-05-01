@@ -1,7 +1,7 @@
 extern crate alloc;
 extern crate std;
 
-use alloc::{boxed::Box, string::ToString, vec::Vec};
+use alloc::{boxed::Box, string::String as AllocString, string::ToString, vec::Vec};
 use core::{
     convert::Infallible,
     pin::Pin,
@@ -88,6 +88,78 @@ fn now_ms() -> u64 {
         .saturating_mul(1000)
 }
 
+fn chat_form_value(body: &[u8], key: &str, max_len: usize) -> Option<AllocString> {
+    let body = core::str::from_utf8(body).ok()?;
+    for pair in body.split('&') {
+        let (raw_key, raw_value) = pair.split_once('=').unwrap_or((pair, ""));
+        if chat_url_decode(raw_key, 64).as_deref() == Some(key) {
+            return chat_url_decode(raw_value, max_len);
+        }
+    }
+    None
+}
+
+fn chat_url_decode(raw: &str, max_len: usize) -> Option<AllocString> {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::new();
+    let mut idx = 0usize;
+    while idx < bytes.len() {
+        let byte = match bytes[idx] {
+            b'+' => {
+                idx += 1;
+                b' '
+            }
+            b'%' if idx + 2 < bytes.len() => {
+                let hi = chat_hex(bytes[idx + 1])?;
+                let lo = chat_hex(bytes[idx + 2])?;
+                idx += 3;
+                (hi << 4) | lo
+            }
+            b'%' => return None,
+            other => {
+                idx += 1;
+                other
+            }
+        };
+        if out.len() >= max_len {
+            break;
+        }
+        out.push(byte);
+    }
+    AllocString::from_utf8(out).ok()
+}
+
+fn chat_hex(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn maybe_submit_lumen_chat_post(method: ChatMethod, path: &str, body: &[u8], status: u16) {
+    if method != ChatMethod::Post || status != 200 || !path.ends_with("/messages") {
+        return;
+    }
+    let Some(user) = chat_form_value(body, "user", 64) else {
+        return;
+    };
+    if user.trim().eq_ignore_ascii_case("lumen") {
+        return;
+    }
+    let Some(text) = chat_form_value(body, "text", 8 * 1024) else {
+        return;
+    };
+    if !text.to_ascii_lowercase().contains("lumen") {
+        return;
+    }
+
+    let prompt = alloc::format!("{}: {:?}", user.trim(), text.trim());
+    crate::r::lumen_service::submit_chatroom_mention(prompt.as_str());
+    crate::log!("chat: queued lumen prompt via POST path={}\n", path);
+}
+
 async fn incoming_to_vec(mut body: Incoming, limit: usize) -> Result<Vec<u8>, ()> {
     let mut out = Vec::new();
     loop {
@@ -134,12 +206,13 @@ async fn handle_hyper_request(
         let hub = guard.get_or_insert_with(|| ChatHub::new(ChatConfig::default()));
         hub.handle(ChatRequest {
             method,
-            path,
+            path: path.clone(),
             query,
-            body,
+            body: body.clone(),
             now_ms: now_ms(),
         })
     };
+    maybe_submit_lumen_chat_post(method, path.as_str(), body.as_slice(), response.status);
     let no_cache = response.content_type.starts_with("application/json");
     let mut builder = hyper::Response::builder()
         .status(status_code(response.status))
