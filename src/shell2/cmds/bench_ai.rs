@@ -72,7 +72,13 @@ struct LumenComputeProbeCase {
 
 struct LumenInteractiveSession {
     id: u64,
-    prompts: VecDeque<AllocString>,
+    prompts: VecDeque<LumenPromptRequest>,
+}
+
+#[derive(Clone)]
+pub(crate) struct LumenPromptRequest {
+    pub(crate) target: MatrixTarget,
+    pub(crate) prompt: AllocString,
 }
 
 static LUMEN_INTERACTIVE_SESSIONS: spin::Mutex<Vec<LumenInteractiveSession>> =
@@ -96,12 +102,28 @@ fn unregister_lumen_interactive_session(session_id: u64) {
     }
 }
 
-fn pop_lumen_prompt(session_id: u64) -> Option<AllocString> {
+fn pop_lumen_prompt(session_id: u64) -> Option<LumenPromptRequest> {
     LUMEN_INTERACTIVE_SESSIONS
         .lock()
         .iter_mut()
         .find(|session| session.id == session_id)
         .and_then(|session| session.prompts.pop_front())
+}
+
+pub(crate) fn push_lumen_prompt(session_id: u64, target: &MatrixTarget, prompt: &str) -> bool {
+    let prompt = prompt.trim();
+    if prompt.is_empty() {
+        return true;
+    }
+    let mut sessions = LUMEN_INTERACTIVE_SESSIONS.lock();
+    let Some(session) = sessions.iter_mut().find(|session| session.id == session_id) else {
+        return false;
+    };
+    session.prompts.push_back(LumenPromptRequest {
+        target: target.clone(),
+        prompt: AllocString::from(prompt),
+    });
+    true
 }
 
 pub(crate) fn handle_lumen_session_input(
@@ -110,15 +132,18 @@ pub(crate) fn handle_lumen_session_input(
     submitted: &str,
 ) -> Option<CommandSessionInputResult> {
     let prompt = submitted.trim();
-    let mut sessions = LUMEN_INTERACTIVE_SESSIONS.lock();
-    let session = sessions
-        .iter_mut()
-        .find(|session| session.id == session_id)?;
+    if !LUMEN_INTERACTIVE_SESSIONS
+        .lock()
+        .iter()
+        .any(|session| session.id == session_id)
+    {
+        return None;
+    }
     if prompt.is_empty() {
         return Some(CommandSessionInputResult::KeepRunning);
     }
 
-    session.prompts.push_back(AllocString::from(prompt));
+    let _ = push_lumen_prompt(session_id, target, prompt);
     print_matrix_target_line(target, "lumen: thinking...");
     Some(CommandSessionInputResult::KeepRunning)
 }
@@ -944,7 +969,11 @@ async fn load_lumen_model_from_trueosfs(
 }
 
 #[embassy_executor::task(pool_size = 2)]
-async fn lumenbench_task(target: MatrixTarget, session_id: u64) {
+pub(crate) async fn lumenbench_task(target: MatrixTarget, session_id: u64) {
+    run_lumen_session(target, session_id).await;
+}
+
+pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
     let task_target = target.clone();
     async move {
         Timer::after(EmbassyDuration::from_millis(1)).await;
@@ -1902,13 +1931,14 @@ async fn lumenbench_task(target: MatrixTarget, session_id: u64) {
         let vocab_entries = tokenizer_vocab_entries(&tokenizer_json);
         let stop_ids = tokenizer_stop_ids(&tokenizer_json);
         register_lumen_interactive_session(session_id);
+        crate::r::lumen_service::mark_online(session_id);
         print_matrix_target_line(
             &task_target,
             "lumen: ready; type a prompt, or q to stop",
         );
 
         while !bench_cancel_requested(session_id) {
-            let Some(prompt) = pop_lumen_prompt(session_id) else {
+            let Some(request) = pop_lumen_prompt(session_id) else {
                 Timer::after(EmbassyDuration::from_millis(25)).await;
                 continue;
             };
@@ -1919,26 +1949,27 @@ async fn lumenbench_task(target: MatrixTarget, session_id: u64) {
                 &tokenizer_json,
                 vocab_entries.as_slice(),
                 stop_ids.as_slice(),
-                prompt.as_str(),
+                request.prompt.as_str(),
             ) {
                 Ok((answer, tokens)) => {
                     let infer_ms = elapsed_ms_since(infer_start);
                     crate::log!(
                         "bench lumen: prompt done prompt={:?} tokens={} infer={}ms\n",
-                        prompt.as_str(),
+                        request.prompt.as_str(),
                         tokens,
                         infer_ms
                     );
-                    print_lumen_response(&task_target, answer.as_str());
+                    print_lumen_response(&request.target, answer.as_str());
                 }
                 Err(err) => {
                     print_matrix_target_line(
-                        &task_target,
+                        &request.target,
                         format!("lumen: prompt failed: {}", err).as_str(),
                     );
                 }
             }
         }
+        crate::r::lumen_service::mark_offline(session_id);
         unregister_lumen_interactive_session(session_id);
 
         Timer::after(EmbassyDuration::from_millis(1)).await;

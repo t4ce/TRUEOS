@@ -1336,7 +1336,7 @@ impl HdaController {
             self.write8(sd_base + sd::CTL + 2, ctl_high as u8);
         }
         self.playing = false;
-        log::info!("[HDA] Stream reset (LPIB->0, reconfig done)");
+        log::warn!("[HDA] Stream reset (LPIB->0, reconfig done)");
     }
 
     fn configure_output_loop_len(&mut self, byte_len: u32) -> Result<(), &'static str> {
@@ -1443,7 +1443,7 @@ impl HdaController {
                 self.write8(sd_base + sd::CTL, (ctl | sctl::RUN as u8) & !(sctl::IOCE as u8));
 
                 self.playing = true;
-                log::info!("[HDA] Playback started");
+                log::warn!("[HDA] Playback started");
             } else {
                 // Stop stream
                 let ctl = self.read8(sd_base + sd::CTL);
@@ -1681,7 +1681,7 @@ pub fn reset_stream() {
             let ctl_high = (ctrl.stream_tag as u32) << (sctl::STREAM_TAG_SHIFT - 16);
             ctrl.write8(sd_base + sd::CTL + 2, ctl_high as u8);
         }
-        log::info!("[HDA] Stream reset (LPIB->0, reconfig done)");
+        log::warn!("[HDA] Stream reset (LPIB->0, reconfig done)");
     }
 }
 

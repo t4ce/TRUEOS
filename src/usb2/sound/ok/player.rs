@@ -100,14 +100,14 @@ impl PatternPlayer {
 
         let step_ms = pattern.step_duration_ms();
 
-        log::info!(
+        log::warn!(
             "[PLAYER] Visual playback \"{}\" - {} loops, {} BPM, {}ms/step",
             pattern.name_str(),
             self.loop_count,
             pattern.bpm,
             step_ms
         );
-        log::info!(
+        log::warn!(
             "[PLAYER] {} | {} BPM | {} steps | {}",
             pattern.name_str(),
             pattern.bpm,
@@ -146,7 +146,7 @@ impl PatternPlayer {
                 }
             }
 
-            log::info!("[PLAYER] {} {}", loop_label, step_visual);
+            log::warn!("[PLAYER] {} {}", loop_label, step_visual);
 
             // Play the entire loop audio
             let duration_ms = pattern.total_duration_ms();
