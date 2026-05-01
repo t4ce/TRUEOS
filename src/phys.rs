@@ -164,7 +164,10 @@ where
     const GIB: usize = 1024 * MIB;
 
     const HEAP_ALIGN: usize = 2 * MIB;
-    const HEAP_CANDIDATES: [usize; 7] = [
+    const HEAP_CANDIDATES: [usize; 10] = [
+        4 * GIB,
+        3 * GIB,
+        2 * GIB,
         GIB,
         512 * MIB,
         256 * MIB,

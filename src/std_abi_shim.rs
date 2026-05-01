@@ -404,6 +404,15 @@ pub unsafe extern "C" fn getenv(_name: *const c_char) -> *mut c_char {
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_atfork(
+    _prepare: Option<unsafe extern "C" fn()>,
+    _parent: Option<unsafe extern "C" fn()>,
+    _child: Option<unsafe extern "C" fn()>,
+) -> c_int {
+    0
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn getcwd(buf: *mut c_char, size: usize) -> *mut c_char {
     if buf.is_null() || size < 2 {
         TRUEOS_ERRNO.store(34, core::sync::atomic::Ordering::Relaxed);

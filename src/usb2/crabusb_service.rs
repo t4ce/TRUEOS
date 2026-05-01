@@ -30,6 +30,10 @@ static EVENT_HANDLER: [Mutex<Option<EventHandler>>; MAX_XHCI_CONTROLLERS] =
 static OBSERVED_DEVICES: [Mutex<Vec<ObservedUsbDevice>>; MAX_XHCI_CONTROLLERS] =
     [const { Mutex::new(Vec::new()) }; MAX_XHCI_CONTROLLERS];
 
+const EVENT_PUMP_NOT_READY_SLEEP_MS: u64 = 10;
+const EVENT_PUMP_HOT_IDLE_YIELDS: u8 = 64;
+const EVENT_PUMP_IDLE_SLEEP_US: u64 = 100;
+
 #[inline]
 fn usb_log_all_enabled() -> bool {
     crate::logflag::USB_LOG_ALL.load(Ordering::Relaxed)
@@ -672,9 +676,11 @@ pub(crate) fn observed_devices(
 
 #[embassy_executor::task(pool_size = MAX_XHCI_CONTROLLERS)]
 pub async fn event_pump_task(controller_id: usize) {
+    let mut idle_yields = 0u8;
     loop {
         if !EVENT_HANDLER_READY[controller_id].load(Ordering::Acquire) {
-            Timer::after(EmbassyDuration::from_millis(10)).await;
+            idle_yields = 0;
+            Timer::after(EmbassyDuration::from_millis(EVENT_PUMP_NOT_READY_SLEEP_MS)).await;
             continue;
         }
 
@@ -685,9 +691,15 @@ pub async fn event_pump_task(controller_id: usize) {
 
         match event {
             Some(Event::Nothing) | None => {
-                Timer::after(EmbassyDuration::from_millis(1)).await;
+                if idle_yields < EVENT_PUMP_HOT_IDLE_YIELDS {
+                    idle_yields = idle_yields.saturating_add(1);
+                    Timer::after(EmbassyDuration::from_micros(0)).await;
+                } else {
+                    Timer::after(EmbassyDuration::from_micros(EVENT_PUMP_IDLE_SLEEP_US)).await;
+                }
             }
             Some(Event::PortChange { port }) => {
+                idle_yields = 0;
                 let already_pending = PROBE_REQUESTED[controller_id].swap(true, Ordering::AcqRel);
                 if usb_log_all_enabled() && !already_pending {
                     crate::log!(
@@ -698,6 +710,7 @@ pub async fn event_pump_task(controller_id: usize) {
                 }
             }
             Some(Event::Stopped) => {
+                idle_yields = 0;
                 if usb_log_all_enabled() {
                     crate::log!("crabusb: pump stopped ctrl={}\n", controller_id);
                 }
