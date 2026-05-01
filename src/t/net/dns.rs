@@ -767,6 +767,12 @@ fn tls_reply_complete(
             if !(headers.starts_with(b"HTTP/1.1 2") || headers.starts_with(b"HTTP/1.0 2")) {
                 return Some(Err(DnsError::NoAnswer));
             }
+            if super::http::header_contains_token(headers, b"Transfer-Encoding", b"chunked") {
+                if let Some(decoded) = super::http::decode_http_chunked(body) {
+                    return Some(Ok(decoded));
+                }
+                return closed.then_some(Err(DnsError::NoAnswer));
+            }
             if let Some(len) = header_value_usize(headers, b"Content-Length") {
                 if body.len() >= len {
                     return Some(Ok(body[..len].to_vec()));
@@ -822,13 +828,23 @@ async fn dns_tls_exchange_v4(
         for ev in events.drain(256) {
             match ev {
                 TlsEvent::Opened { handle: h } => handle = Some(h),
-                TlsEvent::Connected { handle: h } if Some(h) == handle => {
-                    if !sent {
-                        let _ = cmds.push(TlsCommand::Send {
-                            handle: h,
-                            data: payload.clone(),
-                        });
-                        sent = true;
+                TlsEvent::Connected { handle: h } => {
+                    if handle.is_none() || Some(h) == handle {
+                        if handle.is_none() {
+                            crate::log!(
+                                "dns: secure tls recovered-open owner={} handle={}\n",
+                                owner,
+                                h.0
+                            );
+                        }
+                        handle = Some(h);
+                        if !sent {
+                            let _ = cmds.push(TlsCommand::Send {
+                                handle: h,
+                                data: payload.clone(),
+                            });
+                            sent = true;
+                        }
                     }
                 }
                 TlsEvent::Data { handle: h, data } if Some(h) == handle => {

@@ -37,6 +37,12 @@ const HARDCODED_HTTP_ASSETS = [
     filePath: "tools/aud/demo.wav",
     contentType: "audio/wav",
   },
+  {
+    kind: "model",
+    label: "gemma-4-e4b-it-q4-k-m",
+    filePath: "tools/gemma-4-E4B-it-Q4_K_M.gguf",
+    contentType: "application/octet-stream",
+  },
 ];
  
 // (UEFI x86_64 client arch code is 7 per RFC 4578.)

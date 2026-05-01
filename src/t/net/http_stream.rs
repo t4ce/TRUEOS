@@ -126,14 +126,51 @@ async fn finish_http_file_stream(
     path: &str,
 ) -> Result<(), crate::r::stream::HvStreamError> {
     crate::log!(
-        "http-stream: file write flush path={} written={} elapsed_ms={}\n",
+        "http-stream: file write flush start path={} written={} total={} elapsed_ms={}\n",
         path,
         stream.written,
+        stream.total_len,
         stream.started.elapsed().as_millis(),
     );
 
-    stream.writer.flush().await?;
-    stream.sink.commit().await?;
+    if let Err(err) = stream.writer.flush().await {
+        crate::log!(
+            "http-stream: file write flush failed path={} written={} total={} err={:?} elapsed_ms={}\n",
+            path,
+            stream.written,
+            stream.total_len,
+            err,
+            stream.started.elapsed().as_millis(),
+        );
+        return Err(err);
+    }
+
+    crate::log!(
+        "http-stream: file write flush ok path={} written={} total={} elapsed_ms={}\n",
+        path,
+        stream.written,
+        stream.total_len,
+        stream.started.elapsed().as_millis(),
+    );
+    crate::log!(
+        "http-stream: file write commit start path={} written={} total={} elapsed_ms={}\n",
+        path,
+        stream.written,
+        stream.total_len,
+        stream.started.elapsed().as_millis(),
+    );
+
+    if let Err(err) = stream.sink.commit().await {
+        crate::log!(
+            "http-stream: file write commit failed path={} written={} total={} err={:?} elapsed_ms={}\n",
+            path,
+            stream.written,
+            stream.total_len,
+            err,
+            stream.started.elapsed().as_millis(),
+        );
+        return Err(err);
+    }
 
     crate::log!(
         "http-stream: file write committed path={} bytes={} bps={} elapsed_ms={}\n",
@@ -369,12 +406,24 @@ async fn request_http_to_file(
 
                         *remaining = remaining.saturating_sub(take);
                         if *remaining == 0 {
+                            crate::log!(
+                                "http-stream: content-length received all bytes path={} written={} total={}\n",
+                                path,
+                                stream.written,
+                                stream.total_len,
+                            );
                             if let Some(h) = tcp_handle {
                                 let _ = net.submit(api::Command::Close { handle: h });
                             }
                             let Some(stream) = file_stream.take() else {
                                 return Err(HttpFetchError::TimedOut);
                             };
+                            crate::log!(
+                                "http-stream: content-length finish start path={} written={} total={}\n",
+                                path,
+                                stream.written,
+                                stream.total_len,
+                            );
                             if let Err(err) = finish_http_file_stream(stream, path).await {
                                 crate::log!(
                                     "http-stream: content-length finish failed path={} err={:?}\n",
@@ -383,6 +432,10 @@ async fn request_http_to_file(
                                 );
                                 return Err(HttpFetchError::TimedOut);
                             }
+                            crate::log!(
+                                "http-stream: content-length finish ok path={}\n",
+                                path,
+                            );
                             return Ok(());
                         }
                         continue;
@@ -476,9 +529,21 @@ async fn request_http_to_file(
 
                                 let remaining = len.saturating_sub(take);
                                 if remaining == 0 {
+                                    crate::log!(
+                                        "http-stream: content-length received all bytes path={} written={} total={}\n",
+                                        path,
+                                        stream.written,
+                                        stream.total_len,
+                                    );
                                     if let Some(h) = tcp_handle {
                                         let _ = net.submit(api::Command::Close { handle: h });
                                     }
+                                    crate::log!(
+                                        "http-stream: content-length finish start path={} written={} total={}\n",
+                                        path,
+                                        stream.written,
+                                        stream.total_len,
+                                    );
                                     if let Err(err) = finish_http_file_stream(stream, path).await {
                                         crate::log!(
                                             "http-stream: content-length immediate finish failed path={} err={:?}\n",
@@ -487,6 +552,10 @@ async fn request_http_to_file(
                                         );
                                         return Err(HttpFetchError::TimedOut);
                                     }
+                                    crate::log!(
+                                        "http-stream: content-length finish ok path={}\n",
+                                        path,
+                                    );
                                     return Ok(());
                                 }
 
