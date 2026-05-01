@@ -75,6 +75,8 @@ mod t;
 mod tga;
 mod tokio_probe;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+mod trueos_rayon_worker;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod trueos_tokio_worker;
 #[path = "tst/boot_factory_ram_probe.rs"]
 mod tst_boot_factory_ram_probe;

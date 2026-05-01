@@ -1406,6 +1406,8 @@ fn http_fetch_error_to_code(err: HttpFetchError) -> i32 {
         }
         HttpFetchError::Redirect(_) => NET_ERR_HTTP,
         HttpFetchError::ResponseTooLarge => FS_ERR_TOO_LARGE,
+        HttpFetchError::NoSpace => FS_ERR_NO_SPACE,
+        HttpFetchError::Truncated => NET_ERR_TIMEOUT_BODY,
     }
 }
 

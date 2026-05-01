@@ -41,6 +41,7 @@ pub enum HvStreamError {
     NotOpen,
     AlreadyOpen,
     EmptyKey,
+    NoSpace,
     LengthOverflow,
     Truncated,
     Backend(i32),
@@ -75,6 +76,7 @@ impl fmt::Display for HvStreamError {
             HvStreamError::NotOpen => write!(f, "stream not open"),
             HvStreamError::AlreadyOpen => write!(f, "stream already open"),
             HvStreamError::EmptyKey => write!(f, "empty object key"),
+            HvStreamError::NoSpace => write!(f, "no space for object"),
             HvStreamError::LengthOverflow => write!(f, "object length overflow"),
             HvStreamError::Truncated => write!(f, "stream truncated"),
             HvStreamError::Backend(code) => write!(f, "backend error code {}", code),
@@ -89,6 +91,7 @@ impl embedded_io_async::Error for HvStreamError {
         match self {
             HvStreamError::InvalidState
             | HvStreamError::EmptyKey
+            | HvStreamError::NoSpace
             | HvStreamError::LengthOverflow => ErrorKind::InvalidInput,
             HvStreamError::NotOpen | HvStreamError::AlreadyOpen => ErrorKind::Other,
             HvStreamError::Truncated => ErrorKind::InvalidData,
@@ -269,9 +272,7 @@ impl ObjectSink for TrueosFsObjectSink {
                 .await
                 .map_err(HvStreamError::from)?
         else {
-            return Err(HvStreamError::Backend(HvStreamError::backend_code(
-                crate::disc::block::Error::Io,
-            )));
+            return Err(HvStreamError::NoSpace);
         };
 
         let session = Rc::new(RefCell::new(TrueosFsWriteSession {
