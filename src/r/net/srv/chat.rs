@@ -138,6 +138,47 @@ fn chat_hex(byte: u8) -> Option<u8> {
     }
 }
 
+fn chat_form_push_encoded(out: &mut AllocString, value: &str) {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    for byte in value.as_bytes().iter().copied() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(char::from(byte));
+            }
+            b' ' => out.push('+'),
+            other => {
+                out.push('%');
+                out.push(char::from(HEX[(other >> 4) as usize]));
+                out.push(char::from(HEX[(other & 0x0f) as usize]));
+            }
+        }
+    }
+}
+
+fn chat_post_body(user: &str, text: &str) -> Vec<u8> {
+    let mut body = AllocString::from("user=");
+    chat_form_push_encoded(&mut body, user);
+    body.push_str("&text=");
+    chat_form_push_encoded(&mut body, text);
+    body.into_bytes()
+}
+
+pub fn post_local_message(room: &str, user: &str, text: &str) -> bool {
+    let body = chat_post_body(user, text);
+    let response = {
+        let mut guard = CHAT_HUB.lock();
+        let hub = guard.get_or_insert_with(|| ChatHub::new(ChatConfig::default()));
+        hub.handle(ChatRequest {
+            method: ChatMethod::Post,
+            path: alloc::format!("/api/rooms/{}/messages", room),
+            query: None,
+            body,
+            now_ms: now_ms(),
+        })
+    };
+    response.status == 200
+}
+
 fn maybe_submit_lumen_chat_post(method: ChatMethod, path: &str, body: &[u8], status: u16) {
     if method != ChatMethod::Post || status != 200 || !path.ends_with("/messages") {
         return;

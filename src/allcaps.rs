@@ -86,10 +86,10 @@ pub mod storage {
     pub const USB_MASS_RUNTIME_WAIT_LIMIT: u16 = 500;
     pub const USB_MASS_RUNTIME_WAIT_DELAY_MS: u64 = 10;
     pub const USB_MASS_MIN_IO_BYTES: usize = 8 * 1024;
-    pub const USB_MASS_MAX_IO_BYTES: usize = 128 * 1024;
+    pub const USB_MASS_MAX_IO_BYTES: usize = 1024 * 1024;
     pub const USB_MASS_IO_GROW_SUCCESS_TARGET: u16 = 16;
     pub const USB_MASS_IO_GROW_SUCCESS_TARGET_FAST_BOT: u16 = 4;
-    pub const USB_MASS_FAST_BOT_INITIAL_IO_BYTES: usize = 128 * 1024;
+    pub const USB_MASS_FAST_BOT_INITIAL_IO_BYTES: usize = 1024 * 1024;
     pub const USB_MASS_FAST_BOT_WRITE_MAX_IO_BYTES: usize = 128 * 1024;
 }
 

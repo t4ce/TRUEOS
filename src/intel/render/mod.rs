@@ -12,6 +12,9 @@
 // - `memory-proof`: warm render buffers were mapped into their fixed GGTT
 //   slots, cache-flushed, and CPU-read back in one source-level proof line.
 //   This does not prove each 3D stage actually consumed its buffer.
+// - `gpgpu-preflight`: RCS submission writes deterministic vector proof results
+//   into the warm result buffer. This proves the buffer/result runway we need
+//   for GPGPU bring-up, but not EU thread execution or matmul arithmetic yet.
 // - `vertex-upload-proof`: CPU wrote/read back the triangle vertex bytes and
 //   flushed them.  This does not prove VF consumed them.
 // - `vf-proof`: IA/VF counters advance for three vertices.  Current captures
@@ -60,5 +63,6 @@ include!("warmup.rs");
 include!("primary.rs");
 include!("pipeline.rs");
 include!("resources.rs");
+include!("gpgpu.rs");
 include!("submit.rs");
 include!("lrc.rs");

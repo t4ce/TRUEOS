@@ -352,28 +352,33 @@ main{{max-width:760px;margin:0 auto;padding:24px}}
 label{{display:block;margin:12px 0 4px;color:#b7c6d1}}
 input,button{{font:inherit;border:1px solid #41515e;background:#17242e;color:#eef3f7;padding:10px;border-radius:6px}}
 input{{box-sizing:border-box;width:100%}}
+input:disabled{{color:#b7c6d1;background:#13202a;cursor:not-allowed;opacity:1}}
 button{{cursor:pointer;background:#2d6cdf;border-color:#2d6cdf}}
+.settings{{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:end}}
 #messages{{list-style:none;padding:0;margin:20px 0;display:grid;gap:10px}}
 #messages li{{background:#17242e;border:1px solid #2c3c48;border-radius:6px;padding:10px}}
 .meta{{color:#91a7b8;font-size:13px;margin-bottom:4px}}
 form{{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end}}
+@media (max-width:560px){{.settings{{grid-template-columns:1fr}}}}
 </style>
 </head>
 <body>
 <main>
 <h1>TRUEOS Chat</h1>
-<label for="room">Room</label><input id="room" value="lobby" maxlength="32">
-<label for="user">Display name</label><input id="user" value="guest" maxlength="32">
+<div class="settings">
+<div><label for="room">Room</label><input id="room" value="lobby" maxlength="32" disabled></div>
+<div><label for="user">Display name</label><input id="user" value="guest" maxlength="32"></div>
+</div>
 <ul id="messages"></ul>
 <form id="post"><input id="text" autocomplete="off" maxlength="1024"><button>Send</button></form>
 </main>
 <script>
 let since=0;
+const room='lobby';
 const esc=s=>s.replace(/[&<>"']/g,c=>({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[c]));
-const clean=s=>s.trim().replace(/\s+/g,'-')||'lobby';
 async function poll(){{
-  const room=encodeURIComponent(clean(document.querySelector('#room').value));
-  const r=await fetch(`/api/rooms/${{room}}/messages?since=${{since}}`,{{cache:'no-store'}});
+  const encodedRoom=encodeURIComponent(room);
+  const r=await fetch(`/api/rooms/${{encodedRoom}}/messages?since=${{since}}`,{{cache:'no-store'}});
   if(r.ok){{
     const data=await r.json();
     for(const m of data.messages){{
@@ -384,12 +389,11 @@ async function poll(){{
     }}
   }}
 }}
-document.querySelector('#room').addEventListener('change',()=>{{since=0;document.querySelector('#messages').replaceChildren();poll();}});
 document.querySelector('#post').addEventListener('submit',async e=>{{
   e.preventDefault();
-  const room=encodeURIComponent(clean(document.querySelector('#room').value));
+  const encodedRoom=encodeURIComponent(room);
   const body=new URLSearchParams({{user:document.querySelector('#user').value,text:document.querySelector('#text').value}});
-  const r=await fetch(`/api/rooms/${{room}}/messages`,{{method:'POST',body}});
+  const r=await fetch(`/api/rooms/${{encodedRoom}}/messages`,{{method:'POST',body}});
   if(r.ok)document.querySelector('#text').value='';
   poll();
 }});

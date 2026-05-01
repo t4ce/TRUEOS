@@ -194,16 +194,25 @@ async fn probe_tokio_fs_runtime_surface() {
     }
 
     crate::log!("tokio_probe: enter fs.runtime_ops.read\n");
-    match tokio::fs::read(TOKIO_FS_PROBE_PATH).await {
-        Ok(bytes) if bytes.as_slice() == TOKIO_FS_PROBE_BYTES => {
+    match tokio::time::timeout(
+        core::time::Duration::from_millis(2_000),
+        tokio::fs::read(TOKIO_FS_PROBE_PATH),
+    )
+    .await
+    {
+        Ok(Ok(bytes)) if bytes.as_slice() == TOKIO_FS_PROBE_BYTES => {
             crate::log!("tokio_probe: success fs.runtime_ops.read\n")
         }
-        Ok(bytes) => {
+        Ok(Ok(bytes)) => {
             crate::log!("tokio_probe: failure fs.runtime_ops.read_value len={}\n", bytes.len());
             return;
         }
-        Err(err) => {
+        Ok(Err(err)) => {
             log_fs_io_failure("read", &err);
+            return;
+        }
+        Err(_) => {
+            crate::log!("tokio_probe: failure fs.runtime_ops.read timeout_ms=2000\n");
             return;
         }
     }

@@ -1306,8 +1306,8 @@ static TASKS: [TaskSpec; 73] = [
         &INTEL_CURSOR_SERVICE_STARTED,
         spawn_intel_cursor_service_task,
     ),
-    TaskSpec::enabled_on(
-        SpawnPlacement::Worker,
+    TaskSpec::disabled(
+      //  SpawnPlacement::Worker,
         "intel-hda-probe",
         crate::r::readiness::INTEL_HDA_READY,
         &INTEL_HDA_PROBE_STARTED,
@@ -1466,7 +1466,7 @@ static TASKS: [TaskSpec; 73] = [
         &UI2_SHELL_DEMO_STARTED,
         spawn_ui2_shell_demo,
     ),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "ui2-swarm-demo",
         UI2_DEMO_READY | crate::r::readiness::NET_ANY_CONFIGURED,
         &UI2_SWARM_DEMO_STARTED,
