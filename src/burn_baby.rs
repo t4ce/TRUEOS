@@ -14,6 +14,8 @@ const MAX_COMPUTE_POLL_SLOTS: usize = 256;
 static FALLBACK_QUEUE: Mutex<VecDeque<ComputeJob>> = Mutex::new(VecDeque::new());
 static LOGGED_QUEUE_LANE: AtomicBool = AtomicBool::new(false);
 static LOGGED_POLL_LANE: AtomicBool = AtomicBool::new(false);
+#[cfg(target_arch = "x86_64")]
+static LOGGED_BF16_SSE2_LANE: AtomicBool = AtomicBool::new(false);
 static SUBMITTED_JOBS: AtomicU64 = AtomicU64::new(0);
 static COMPLETED_JOBS: AtomicU64 = AtomicU64::new(0);
 static POLLED_JOBS: AtomicU64 = AtomicU64::new(0);
@@ -193,7 +195,9 @@ pub fn matvec_rowmajor_f32(
         crate::runtime::poll_local_executor();
         crate::smp::poll();
         log_compute_wait_progress(&done, submitted, &mut last_wait_log, "f32");
-        core::hint::spin_loop();
+        if !poll_compute_lane() {
+            core::hint::spin_loop();
+        }
     }
 
     Ok(())
@@ -267,7 +271,9 @@ pub fn matvec_rowmajor_bf16(
         crate::runtime::poll_local_executor();
         crate::smp::poll();
         log_compute_wait_progress(&done, submitted, &mut last_wait_log, "bf16");
-        core::hint::spin_loop();
+        if !poll_compute_lane() {
+            core::hint::spin_loop();
+        }
     }
 
     Ok(())
@@ -423,6 +429,22 @@ fn matvec_rows_bf16(
     row_start: usize,
     row_end: usize,
 ) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if !LOGGED_BF16_SSE2_LANE.swap(true, Ordering::AcqRel) {
+            crate::log!(
+                "burn-baby: bf16 matvec SSE2 lane active rows={} k_dim={}\n",
+                row_end.saturating_sub(row_start),
+                k_dim
+            );
+        }
+        unsafe {
+            matvec_rows_bf16_sse2(x, w_rowmajor_bf16, k_dim, out, row_start, row_end);
+        }
+        return;
+    }
+
+    #[cfg(not(target_arch = "x86_64"))]
     for row in row_start..row_end {
         let base = row * k_dim * 2;
         let weights = &w_rowmajor_bf16[base..base + k_dim * 2];
@@ -431,6 +453,72 @@ fn matvec_rows_bf16(
             let off = idx * 2;
             let bits = u16::from_le_bytes([weights[off], weights[off + 1]]);
             acc += x[idx] * bf16_to_f32(bits);
+        }
+        out[row] = acc;
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "sse2")]
+unsafe fn matvec_rows_bf16_sse2(
+    x: &[f32],
+    w_rowmajor_bf16: &[u8],
+    k_dim: usize,
+    out: &mut [f32],
+    row_start: usize,
+    row_end: usize,
+) {
+    use core::arch::x86_64::{
+        __m128, __m128i, _mm_add_ps, _mm_castsi128_ps, _mm_loadl_epi64, _mm_loadu_ps, _mm_mul_ps,
+        _mm_setzero_ps, _mm_setzero_si128, _mm_slli_epi32, _mm_storeu_ps, _mm_unpacklo_epi16,
+    };
+
+    #[inline(always)]
+    unsafe fn load_bf16x4_as_f32(ptr: *const u8) -> __m128 {
+        let raw = unsafe { _mm_loadl_epi64(ptr.cast::<__m128i>()) };
+        let widened = _mm_unpacklo_epi16(raw, _mm_setzero_si128());
+        _mm_castsi128_ps(_mm_slli_epi32(widened, 16))
+    }
+
+    #[inline(always)]
+    unsafe fn reduce_f32x4(v: __m128) -> f32 {
+        let mut lanes = [0.0f32; 4];
+        unsafe { _mm_storeu_ps(lanes.as_mut_ptr(), v) };
+        lanes[0] + lanes[1] + lanes[2] + lanes[3]
+    }
+
+    for row in row_start..row_end {
+        let base = row * k_dim * 2;
+        let weights = unsafe { w_rowmajor_bf16.as_ptr().add(base) };
+        let mut idx = 0usize;
+        let mut acc0 = _mm_setzero_ps();
+        let mut acc1 = _mm_setzero_ps();
+
+        while idx + 8 <= k_dim {
+            let x0 = unsafe { _mm_loadu_ps(x.as_ptr().add(idx)) };
+            let x1 = unsafe { _mm_loadu_ps(x.as_ptr().add(idx + 4)) };
+            let w0 = unsafe { load_bf16x4_as_f32(weights.add(idx * 2)) };
+            let w1 = unsafe { load_bf16x4_as_f32(weights.add((idx + 4) * 2)) };
+            acc0 = _mm_add_ps(acc0, _mm_mul_ps(x0, w0));
+            acc1 = _mm_add_ps(acc1, _mm_mul_ps(x1, w1));
+            idx += 8;
+        }
+
+        while idx + 4 <= k_dim {
+            let x0 = unsafe { _mm_loadu_ps(x.as_ptr().add(idx)) };
+            let w0 = unsafe { load_bf16x4_as_f32(weights.add(idx * 2)) };
+            acc0 = _mm_add_ps(acc0, _mm_mul_ps(x0, w0));
+            idx += 4;
+        }
+
+        let mut acc = unsafe { reduce_f32x4(acc0) + reduce_f32x4(acc1) };
+        while idx < k_dim {
+            let off = idx * 2;
+            let lo = unsafe { *weights.add(off) };
+            let hi = unsafe { *weights.add(off + 1) };
+            let bits = u16::from_le_bytes([lo, hi]);
+            acc += x[idx] * bf16_to_f32(bits);
+            idx += 1;
         }
         out[row] = acc;
     }

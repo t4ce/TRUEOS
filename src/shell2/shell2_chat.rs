@@ -30,7 +30,7 @@ const CHAT_HTTP_MAX_RX: usize = 16 * 1024;
 
 fn channel_slot_label(slot_id: &matrix::MatrixSlotId) -> AllocString {
     if slot_id.is_empty() || slot_id.as_str() == DEFAULT_CHAT_SLOT {
-        AllocString::from("Default Channel")
+        AllocString::from("Room lobby")
     } else if let Some(id) = slot_id.as_str().strip_prefix("AI") {
         format!("channel{}", id)
     } else {

@@ -33,8 +33,8 @@ const LUMEN_REAL_HI_LM_HEAD_CHUNK_ROWS: usize = 512;
 const LUMEN_AP_CHUNKS_PER_WORKER: usize = 4;
 const LUMEN_AP_MIN_CHUNK_ROWS: usize = 16;
 const LUMEN_AP_MAX_CHUNK_ROWS: usize = 256;
-const LUMEN_RUNTIME_MAX_SEQ_LEN: usize = 384;
-const LUMEN_RUNTIME_MAX_NEW_TOKENS: usize = 256;
+const LUMEN_RUNTIME_MAX_SEQ_LEN: usize = 1024;
+const LUMEN_RUNTIME_MAX_NEW_TOKENS: usize = 128;
 const LUMEN_RUNTIME_PROGRESS_TENSORS: usize = 16;
 const LUMEN_RUNTIME_EARLY_PROGRESS_TENSORS: usize = 2;
 const LUMEN_RUNTIME_HEAP_EXTRA_BYTES: usize = 512 * 1024 * 1024;
@@ -172,15 +172,27 @@ pub(crate) fn handle_lumen_session_input(
     Some(CommandSessionInputResult::KeepRunning)
 }
 
+pub(crate) fn submit_lumen(spawner: &Spawner, io: &'static dyn ShellBackend2) -> Option<u64> {
+    submit_lumen_runtime(spawner, io, "lumen")
+}
+
 pub(crate) fn submit_lumenbench(spawner: &Spawner, io: &'static dyn ShellBackend2) -> Option<u64> {
+    submit_lumen_runtime(spawner, io, "bench lumen")
+}
+
+fn submit_lumen_runtime(
+    spawner: &Spawner,
+    io: &'static dyn ShellBackend2,
+    label: &str,
+) -> Option<u64> {
     let target = matrix_target_for_backend(io);
     let session_id = bench_session_start();
 
     print_matrix_target_line(
         &target,
         format!(
-            "bench lumen: waiting for TRUEOSFS root weights={} tokenizer={}",
-            LUMEN_WEIGHTS_PATH, LUMEN_TOKENIZER_PATH
+            "{}: waiting for TRUEOSFS root weights={} tokenizer={}",
+            label, LUMEN_WEIGHTS_PATH, LUMEN_TOKENIZER_PATH
         )
         .as_str(),
     );
@@ -190,11 +202,11 @@ pub(crate) fn submit_lumenbench(spawner: &Spawner, io: &'static dyn ShellBackend
         Err(_) => {
             bench_session_finish(session_id);
             set_matrix_target_active(&target, false);
-            print_shell_line(io, "bench lumen: spawn failed");
+            print_shell_line(io, format!("{}: spawn failed", label).as_str());
             return None;
         }
     }
-    print_matrix_target_line(&target, "bench lumen: send `q` in this slot to stop");
+    print_matrix_target_line(&target, format!("{}: send `q` in this slot to stop", label).as_str());
     Some(session_id)
 }
 
@@ -577,13 +589,27 @@ fn trim_lumen_turn_markers(answer: &str) -> AllocString {
     answer[..end].trim().to_string()
 }
 
+struct LumenGenerateReport {
+    answer: AllocString,
+    prompt_tokens: usize,
+    generated_tokens: usize,
+    first_token_ms: u64,
+}
+
+fn format_tokens_per_second(tokens: usize, elapsed_ms: u64) -> AllocString {
+    if tokens == 0 || elapsed_ms == 0 {
+        return AllocString::from("0 tok/s");
+    }
+    format!("{:.2} tok/s", tokens as f64 * 1000.0 / elapsed_ms as f64)
+}
+
 fn generate_lumen_answer(
     model: &LlamaModel,
     tokenizer_json: &serde_json::Value,
     vocab_entries: &[(AllocString, usize)],
     stop_ids: &[usize],
     prompt: &str,
-) -> Result<(AllocString, usize), AllocString> {
+) -> Result<LumenGenerateReport, AllocString> {
     let chat_prompt = lumen_chat_prompt(prompt);
     let prompt_tokens = encode_prompt_lossy(chat_prompt.as_str(), vocab_entries);
     if prompt_tokens.is_empty() {
@@ -606,10 +632,16 @@ fn generate_lumen_answer(
     model.reset_kv_caches(&mut kv_caches);
     let mut answer = AllocString::new();
     let mut generated = 0usize;
+    let mut first_token_ms = 0u64;
 
     no_grad(|| {
         let mut next_token = match tensor_from_token_ids(prompt_tokens.as_slice()) {
-            Ok(input) => model.forward_last_argmax(input, &mut kv_caches, 0),
+            Ok(input) => {
+                let first_token_start = embassy_time_driver::now();
+                let token = model.forward_last_argmax(input, &mut kv_caches, 0);
+                first_token_ms = elapsed_ms_since(first_token_start);
+                token
+            }
             Err(err) => return Err(err),
         };
 
@@ -645,7 +677,12 @@ fn generate_lumen_answer(
         Ok(())
     })?;
 
-    Ok((trim_lumen_turn_markers(answer.as_str()), generated))
+    Ok(LumenGenerateReport {
+        answer: trim_lumen_turn_markers(answer.as_str()),
+        prompt_tokens: prompt_tokens.len(),
+        generated_tokens: generated,
+        first_token_ms,
+    })
 }
 
 fn safetensor_dtype_nbytes(dtype: &str) -> Option<usize> {
@@ -2004,6 +2041,7 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
             };
 
             let infer_start = embassy_time_driver::now();
+            let compute_before = crate::burn_baby::stats();
             match generate_lumen_answer(
                 &model,
                 &tokenizer_json,
@@ -2011,24 +2049,47 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
                 stop_ids.as_slice(),
                 request.prompt.as_str(),
             ) {
-                Ok((answer, tokens)) => {
+                Ok(report) => {
                     let infer_ms = elapsed_ms_since(infer_start);
+                    let compute_after = crate::burn_baby::stats();
+                    let submitted_jobs = compute_after
+                        .submitted_jobs
+                        .saturating_sub(compute_before.submitted_jobs);
+                    let completed_jobs = compute_after
+                        .completed_jobs
+                        .saturating_sub(compute_before.completed_jobs);
+                    let polled_jobs = compute_after
+                        .polled_jobs
+                        .saturating_sub(compute_before.polled_jobs);
                     crate::log!(
-                        "bench lumen: prompt done prompt={:?} tokens={} infer={}ms\n",
+                        "lumen: answer stats prompt={:?} prompt_tokens={} generated_tokens={} first_token={}ms infer={}ms speed={} jobs={}/{} polled={} queued={}\n",
                         request.prompt.as_str(),
-                        tokens,
-                        infer_ms
+                        report.prompt_tokens,
+                        report.generated_tokens,
+                        report.first_token_ms,
+                        infer_ms,
+                        format_tokens_per_second(report.generated_tokens, infer_ms),
+                        completed_jobs,
+                        submitted_jobs,
+                        polled_jobs,
+                        compute_after.queued_jobs
                     );
-                    print_lumen_response(&request.target, answer.as_str());
                     if request.respond_to_chat {
-                        crate::r::lumen_service::submit_chat_answer(answer.as_str());
+                        crate::r::lumen_service::submit_chat_answer(report.answer.as_str());
+                    } else {
+                        print_lumen_response(&request.target, report.answer.as_str());
                     }
                 }
                 Err(err) => {
-                    print_matrix_target_line(
-                        &request.target,
-                        format!("lumen: prompt failed: {}", err).as_str(),
-                    );
+                    let message = format!("prompt failed: {}", err);
+                    if request.respond_to_chat {
+                        crate::r::lumen_service::submit_chat_answer(message.as_str());
+                    } else {
+                        print_matrix_target_line(
+                            &request.target,
+                            format!("lumen: {}", message).as_str(),
+                        );
+                    }
                 }
             }
         }

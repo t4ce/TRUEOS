@@ -311,6 +311,14 @@ pub extern "C" fn kmain() -> ! {
         }
         Err(e) => crate::log!("dma_nic_fpga: init failed: {:?}\n", e),
     }
+    let simd = cpu::simd_status();
+    crate::log!(
+        "cpu-simd: avx-state={} reason={} avx2-fma={} reason={}\n",
+        if simd.avx_state_enabled { "yes" } else { "no" },
+        simd.avx_state_reason.as_str(),
+        if simd.avx2_fma_ready { "yes" } else { "no" },
+        simd.avx2_fma_reason.as_str()
+    );
     _loop(executor, spawner, smp_resp)
 }
 

@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::__cpuid;
 use core::ptr::null_mut;
-use core::sync::atomic::{AtomicPtr, AtomicU8, AtomicU32, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicU32, AtomicUsize, Ordering};
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 #[cfg(target_arch = "x86_64")]
@@ -41,6 +41,59 @@ impl CpuProfileRecord {
 static CPU_PROFILE_PTR: AtomicPtr<CpuProfileRecord> = AtomicPtr::new(null_mut());
 static CPU_PROFILE_LEN: AtomicUsize = AtomicUsize::new(0);
 static CPU_PROFILE_INIT: spin::Once<()> = spin::Once::new();
+#[cfg(target_arch = "x86_64")]
+static XSAVE_AVX_ENABLED: AtomicBool = AtomicBool::new(false);
+#[cfg(target_arch = "x86_64")]
+static XSAVE_AVX_REASON: AtomicU8 = AtomicU8::new(SimdReason::NotProbed as u8);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum SimdReason {
+    NotProbed = 0,
+    Enabled = 1,
+    MissingXsave = 2,
+    MissingAvx = 3,
+    MissingAvx2 = 4,
+    MissingFma = 5,
+    Xcr0MissingYmm = 6,
+    NonX86 = 7,
+}
+
+impl SimdReason {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NotProbed => "not-probed",
+            Self::Enabled => "enabled",
+            Self::MissingXsave => "cpuid-missing-xsave",
+            Self::MissingAvx => "cpuid-missing-avx",
+            Self::MissingAvx2 => "cpuid-missing-avx2",
+            Self::MissingFma => "cpuid-missing-fma",
+            Self::Xcr0MissingYmm => "xcr0-missing-ymm",
+            Self::NonX86 => "non-x86",
+        }
+    }
+
+    const fn from_u8(value: u8) -> Self {
+        match value {
+            1 => Self::Enabled,
+            2 => Self::MissingXsave,
+            3 => Self::MissingAvx,
+            4 => Self::MissingAvx2,
+            5 => Self::MissingFma,
+            6 => Self::Xcr0MissingYmm,
+            7 => Self::NonX86,
+            _ => Self::NotProbed,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SimdStatus {
+    pub avx_state_enabled: bool,
+    pub avx_state_reason: SimdReason,
+    pub avx2_fma_ready: bool,
+    pub avx2_fma_reason: SimdReason,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CpuProfile {
@@ -330,7 +383,29 @@ pub unsafe fn enable_sse() {
 
     let mut cr4 = Cr4::read();
     cr4.insert(Cr4Flags::OSFXSR | Cr4Flags::OSXMMEXCPT_ENABLE);
+    let avx_state_probe = probe_xsave_avx_state();
+    if avx_state_probe == SimdReason::Enabled {
+        cr4.insert(Cr4Flags::OSXSAVE);
+    }
     Cr4::write(cr4);
+
+    if avx_state_probe == SimdReason::Enabled {
+        const XCR0_X87: u64 = 1 << 0;
+        const XCR0_SSE: u64 = 1 << 1;
+        const XCR0_YMM: u64 = 1 << 2;
+        unsafe { xsetbv(0, XCR0_X87 | XCR0_SSE | XCR0_YMM) };
+        let xcr0 = unsafe { xgetbv(0) };
+        if (xcr0 & (XCR0_X87 | XCR0_SSE | XCR0_YMM)) == (XCR0_X87 | XCR0_SSE | XCR0_YMM) {
+            XSAVE_AVX_ENABLED.store(true, Ordering::Release);
+            XSAVE_AVX_REASON.store(SimdReason::Enabled as u8, Ordering::Release);
+        } else {
+            XSAVE_AVX_ENABLED.store(false, Ordering::Release);
+            XSAVE_AVX_REASON.store(SimdReason::Xcr0MissingYmm as u8, Ordering::Release);
+        }
+    } else {
+        XSAVE_AVX_ENABLED.store(false, Ordering::Release);
+        XSAVE_AVX_REASON.store(avx_state_probe as u8, Ordering::Release);
+    }
 
     // Reset the x87 and SSE control state so newly started cores begin from a
     // known-good environment before any C/Rust/QuickJS float code runs.
@@ -341,6 +416,115 @@ pub unsafe fn enable_sse() {
         mxcsr_ptr = in(reg) &mxcsr,
         options(nostack, preserves_flags, readonly),
     );
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline]
+pub(crate) fn xsave_avx_enabled() -> bool {
+    XSAVE_AVX_ENABLED.load(Ordering::Acquire)
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+#[inline]
+pub(crate) fn xsave_avx_enabled() -> bool {
+    false
+}
+
+#[cfg(target_arch = "x86_64")]
+pub fn simd_status() -> SimdStatus {
+    let avx_state_enabled = XSAVE_AVX_ENABLED.load(Ordering::Acquire);
+    let avx_state_reason = SimdReason::from_u8(XSAVE_AVX_REASON.load(Ordering::Acquire));
+    let avx2_fma_reason = if avx_state_enabled {
+        probe_avx2_fma()
+    } else {
+        avx_state_reason
+    };
+    SimdStatus {
+        avx_state_enabled,
+        avx_state_reason,
+        avx2_fma_ready: avx2_fma_reason == SimdReason::Enabled,
+        avx2_fma_reason,
+    }
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+pub fn simd_status() -> SimdStatus {
+    SimdStatus {
+        avx_state_enabled: false,
+        avx_state_reason: SimdReason::NonX86,
+        avx2_fma_ready: false,
+        avx2_fma_reason: SimdReason::NonX86,
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+fn probe_xsave_avx_state() -> SimdReason {
+    let r = __cpuid(1);
+    const CPUID1_ECX_XSAVE: u32 = 1 << 26;
+    const CPUID1_ECX_AVX: u32 = 1 << 28;
+    if (r.ecx & CPUID1_ECX_XSAVE) == 0 {
+        SimdReason::MissingXsave
+    } else if (r.ecx & CPUID1_ECX_AVX) == 0 {
+        SimdReason::MissingAvx
+    } else {
+        SimdReason::Enabled
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+fn probe_avx2_fma() -> SimdReason {
+    use core::arch::x86_64::__cpuid_count;
+
+    let r1 = __cpuid(1);
+    const CPUID1_ECX_FMA: u32 = 1 << 12;
+    const CPUID1_ECX_AVX: u32 = 1 << 28;
+    if (r1.ecx & CPUID1_ECX_AVX) == 0 {
+        return SimdReason::MissingAvx;
+    }
+    if (r1.ecx & CPUID1_ECX_FMA) == 0 {
+        return SimdReason::MissingFma;
+    }
+
+    let r7 = __cpuid_count(7, 0);
+    const CPUID7_EBX_AVX2: u32 = 1 << 5;
+    if (r7.ebx & CPUID7_EBX_AVX2) == 0 {
+        return SimdReason::MissingAvx2;
+    }
+
+    SimdReason::Enabled
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+unsafe fn xsetbv(xcr: u32, value: u64) {
+    let eax = value as u32;
+    let edx = (value >> 32) as u32;
+    unsafe {
+        core::arch::asm!(
+            "xsetbv",
+            in("ecx") xcr,
+            in("eax") eax,
+            in("edx") edx,
+            options(nostack, preserves_flags),
+        );
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+unsafe fn xgetbv(xcr: u32) -> u64 {
+    let eax: u32;
+    let edx: u32;
+    unsafe {
+        core::arch::asm!(
+            "xgetbv",
+            in("ecx") xcr,
+            out("eax") eax,
+            out("edx") edx,
+            options(nostack, preserves_flags),
+        );
+    }
+    ((edx as u64) << 32) | eax as u64
 }
 
 #[cfg(not(target_arch = "x86_64"))]

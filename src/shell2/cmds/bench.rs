@@ -35,7 +35,7 @@ const BENCH_MENU_ROWS: [[&str; 2]; 5] = [
     ["disc [id]", "Gentle disc read throughput bench"],
     [
         "lumen",
-        "LUMEN load-only preflight for safetensors + tokenizer",
+        "Compatibility alias for the local LUMEN runtime; prefer `lumen`",
     ],
     ["net", "Run network throughput benchmark"],
     [
@@ -472,6 +472,7 @@ pub(crate) fn try_parse(
                 print_shell_line(io, "bench lumen: usage `bench lumen`");
                 return ParseOutcome::Handled;
             }
+            print_shell_line(io, "bench lumen: compatibility alias; prefer `lumen`");
             if let Some(session_id) = super::bench_ai::submit_lumenbench(spawner, io) {
                 ParseOutcome::StartSession(
                     crate::shell2::shell2_cmd::CommandSessionKind::BenchRunning(session_id),
