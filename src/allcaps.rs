@@ -14,6 +14,10 @@ pub mod probes {
     pub const TOKIO_NET_WRITABLE_TIMEOUT_MS: u64 = 1000;
 }
 
+pub mod lumen {
+    pub const RUNTIME_STATIC_HI_WARM_PROBE: bool = false;
+}
+
 pub mod blueprint {
     pub const PORTAL_IMAGE_CAP_BYTES: usize = 16 * 1024 * 1024;
     pub const PORTAL_IMAGE_COMPAT_SLOT_BYTES: usize = 4 * 1024 * 1024;
@@ -85,8 +89,8 @@ pub mod storage {
     pub const USB_MASS_MAX_IO_BYTES: usize = 128 * 1024;
     pub const USB_MASS_IO_GROW_SUCCESS_TARGET: u16 = 16;
     pub const USB_MASS_IO_GROW_SUCCESS_TARGET_FAST_BOT: u16 = 4;
-    pub const USB_MASS_FAST_BOT_INITIAL_IO_BYTES: usize = 64 * 1024;
-    pub const USB_MASS_FAST_BOT_WRITE_MAX_IO_BYTES: usize = 64 * 1024;
+    pub const USB_MASS_FAST_BOT_INITIAL_IO_BYTES: usize = 128 * 1024;
+    pub const USB_MASS_FAST_BOT_WRITE_MAX_IO_BYTES: usize = 128 * 1024;
 }
 
 pub mod input {

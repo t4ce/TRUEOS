@@ -1,5 +1,5 @@
 use alloc::format;
-use alloc::string::{String as AllocString, ToString};
+use alloc::string::String as AllocString;
 use alloc::vec::Vec;
 use core::net::{Ipv4Addr, Ipv6Addr};
 use core::str::SplitWhitespace;
@@ -23,40 +23,12 @@ const CPUBENCH_PHASE_MS: u64 = 10_000;
 const CPUBENCH_STOP_GRACE_MS: u64 = 2_000;
 const PROGRESS_LOG_MS: u64 = 3000;
 const DISC_BENCH_INITIAL_BLOCKS: usize = 1;
-const DISC_BENCH_MAX_BLOCKS: usize = 512;
+const DISC_BENCH_MAX_BLOCKS: usize = 2048;
 const DISC_BENCH_WARMUP_READS: usize = 1;
 const DISC_BENCH_READS_PER_STEP: usize = 8;
 const DISC_BENCH_STEP_COOLDOWN_MS: u64 = 75;
 const DISC_BENCH_READ_TIMEOUT_MS: u64 = 5_000;
 const DISC_BENCH_LOG_EACH_SUCCESS: bool = false;
-const LUMEN_WEIGHTS_PATH: &str = crate::r::spawn_service::BOOT_LUMEN_WEIGHTS_PATH;
-const LUMEN_TOKENIZER_PATH: &str = crate::r::spawn_service::BOOT_LUMEN_TOKENIZER_PATH;
-const LUMEN_SAFETENSORS_MAX_HEADER_BYTES: usize = 64 * 1024 * 1024;
-const LUMEN_KERNEL_PROBE_ROWS: usize = 16;
-const LUMEN_KERNEL_PROBE_ITERS: usize = 256;
-const LUMEN_STATIC_HI_PROMPT: &str = "Hi";
-const LUMEN_STATIC_HI_ROWS: usize = 4096;
-const LUMEN_STATIC_HI_CHUNK_ROWS: usize = 64;
-const LUMEN_COMPUTE_PROBE_CASES: [LumenComputeProbeCase; 3] = [
-    LumenComputeProbeCase {
-        label: "lm-head-1mb",
-        rows: 256,
-        chunk_rows: 16,
-        iters: 16,
-    },
-    LumenComputeProbeCase {
-        label: "lm-head-4mb",
-        rows: 1024,
-        chunk_rows: 32,
-        iters: 8,
-    },
-    LumenComputeProbeCase {
-        label: "lm-head-16mb",
-        rows: 4096,
-        chunk_rows: 64,
-        iters: 4,
-    },
-];
 const BENCH_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
 const BENCH_MENU_ROWS: [[&str; 2]; 5] = [
     ["cpu", "Run CPU-only compute benchmark"],
@@ -92,14 +64,6 @@ struct CpuBenchPhase {
     probe_js: &'static str,
     kernel_js: &'static str,
     marker_js: &'static str,
-}
-
-#[derive(Clone, Copy)]
-struct LumenComputeProbeCase {
-    label: &'static str,
-    rows: usize,
-    chunk_rows: usize,
-    iters: usize,
 }
 
 const CPUBENCH_PHASES: [CpuBenchPhase; 3] = [
@@ -147,7 +111,7 @@ const CPUBENCH_PHASES: [CpuBenchPhase; 3] = [
     },
 ];
 
-fn format_speed(bps: u64) -> AllocString {
+pub(super) fn format_speed(bps: u64) -> AllocString {
     if bps < 100 {
         return format!("{} B/s", bps);
     }
@@ -167,7 +131,7 @@ fn format_speed(bps: u64) -> AllocString {
     format!("{:.1} TB/s", tb)
 }
 
-fn format_bytes(bytes: u64) -> AllocString {
+pub(super) fn format_bytes(bytes: u64) -> AllocString {
     if bytes < 1024 {
         return format!("{} B", bytes);
     }
@@ -186,7 +150,7 @@ fn format_bytes(bytes: u64) -> AllocString {
     format!("{:.1} TB", gb / 1024.0)
 }
 
-fn format_metric_units(value: u64, unit: &str) -> AllocString {
+pub(super) fn format_metric_units(value: u64, unit: &str) -> AllocString {
     if value < 1_000 {
         return format!("{} {}", value, unit);
     }
@@ -205,7 +169,7 @@ fn format_metric_units(value: u64, unit: &str) -> AllocString {
     format!("{:.1} T{}", g / 1_000.0, unit)
 }
 
-fn elapsed_ms_since(start_tick: u64) -> u64 {
+pub(super) fn elapsed_ms_since(start_tick: u64) -> u64 {
     let now_tick = embassy_time_driver::now();
     let elapsed_ticks = now_tick.saturating_sub(start_tick);
     let hz = embassy_time_driver::TICK_HZ;
@@ -216,7 +180,7 @@ fn elapsed_ms_since(start_tick: u64) -> u64 {
     }
 }
 
-fn bps_from_progress(bytes: u64, elapsed_ms: u64) -> u64 {
+pub(super) fn bps_from_progress(bytes: u64, elapsed_ms: u64) -> u64 {
     if elapsed_ms == 0 {
         0
     } else {
@@ -224,216 +188,11 @@ fn bps_from_progress(bytes: u64, elapsed_ms: u64) -> u64 {
     }
 }
 
-fn units_per_second_from_ticks(units: u64, elapsed_ticks: u64) -> u64 {
+pub(super) fn units_per_second_from_ticks(units: u64, elapsed_ticks: u64) -> u64 {
     if elapsed_ticks == 0 {
         0
     } else {
         units.saturating_mul(embassy_time_driver::TICK_HZ) / elapsed_ticks
-    }
-}
-
-fn safetensor_shape(value: &serde_json::Value) -> Option<Vec<usize>> {
-    value
-        .get("shape")?
-        .as_array()?
-        .iter()
-        .map(|v| v.as_u64().and_then(|n| usize::try_from(n).ok()))
-        .collect()
-}
-
-fn safetensor_offsets(value: &serde_json::Value) -> Option<(usize, usize)> {
-    let arr = value.get("data_offsets")?.as_array()?;
-    let start = usize::try_from(arr.first()?.as_u64()?).ok()?;
-    let end = usize::try_from(arr.get(1)?.as_u64()?).ok()?;
-    Some((start, end))
-}
-
-fn find_tensor<'a>(
-    obj: &'a serde_json::Map<AllocString, serde_json::Value>,
-    exact: &str,
-) -> Option<(&'a str, &'a serde_json::Value)> {
-    obj.get_key_value(exact)
-        .map(|(key, value)| (key.as_str(), value))
-        .or_else(|| {
-            obj.iter()
-                .find(|(key, _)| key.as_str() != "__metadata__" && key.ends_with(exact))
-                .map(|(key, value)| (key.as_str(), value))
-        })
-}
-
-fn tensor_shape_line(shape: Option<&[usize]>) -> AllocString {
-    match shape {
-        Some(shape) => format!("{:?}", shape),
-        None => AllocString::from("?"),
-    }
-}
-
-fn bf16_to_f32(bits: u16) -> f32 {
-    f32::from_bits((bits as u32) << 16)
-}
-
-fn lumen_probe_hidden(k_dim: usize) -> Vec<f32> {
-    let mut hidden: Vec<f32> = Vec::with_capacity(k_dim);
-    for idx in 0..k_dim {
-        let lane = ((idx.wrapping_mul(17).wrapping_add(3)) & 0x3f) as f32;
-        hidden.push((lane - 31.0) / 32.0);
-    }
-    hidden
-}
-
-fn lumen_prompt_probe_hidden(prompt: &str, k_dim: usize) -> Vec<f32> {
-    let bytes = prompt.as_bytes();
-    if bytes.is_empty() {
-        return lumen_probe_hidden(k_dim);
-    }
-
-    let mut state = 0x811C_9DC5u32;
-    for byte in bytes {
-        state ^= *byte as u32;
-        state = state.wrapping_mul(0x0100_0193);
-    }
-
-    let mut hidden: Vec<f32> = Vec::with_capacity(k_dim);
-    for idx in 0..k_dim {
-        state ^= (idx as u32).wrapping_mul(0x9E37_79B9);
-        state = state.rotate_left(13).wrapping_mul(0x85EB_CA6B);
-        let lane = ((state >> 24) & 0x7f) as f32;
-        hidden.push((lane - 63.0) / 64.0);
-    }
-    hidden
-}
-
-fn checksum_f32(values: &[f32]) -> f32 {
-    values
-        .iter()
-        .copied()
-        .fold(0.0f32, |acc, value| acc + value)
-}
-
-fn top_f32(values: &[f32]) -> Option<(usize, f32)> {
-    values
-        .iter()
-        .copied()
-        .enumerate()
-        .max_by(|(_, a), (_, b)| a.total_cmp(b))
-}
-
-fn run_bf16_matvec_probe(rows_bf16: &[u8], rows: usize, k_dim: usize) -> (f32, u64) {
-    let hidden = lumen_probe_hidden(k_dim);
-    let mut checksum = 0.0f32;
-    let start = embassy_time_driver::now();
-    for _ in 0..LUMEN_KERNEL_PROBE_ITERS {
-        for row in 0..rows {
-            let mut acc = 0.0f32;
-            let row_base = row.saturating_mul(k_dim).saturating_mul(2);
-            for col in 0..k_dim {
-                let off = row_base + col * 2;
-                let bits = u16::from_le_bytes([rows_bf16[off], rows_bf16[off + 1]]);
-                acc += hidden[col] * bf16_to_f32(bits);
-            }
-            checksum += acc;
-        }
-    }
-    let elapsed_ticks = embassy_time_driver::now().saturating_sub(start);
-    let ops = (rows as u64)
-        .saturating_mul(k_dim as u64)
-        .saturating_mul(LUMEN_KERNEL_PROBE_ITERS as u64)
-        .saturating_mul(2);
-    (checksum, units_per_second_from_ticks(ops, elapsed_ticks))
-}
-
-fn run_bf16_compute_lane_probe(
-    rows_bf16: &[u8],
-    rows: usize,
-    k_dim: usize,
-    chunk_rows: usize,
-    iters: usize,
-) -> Result<
-    (
-        f32,
-        Option<(usize, f32)>,
-        u64,
-        crate::burn_baby::ComputeStats,
-        crate::burn_baby::ComputeStats,
-    ),
-    crate::burn_baby::ComputeError,
-> {
-    let hidden = lumen_probe_hidden(k_dim);
-    run_bf16_compute_lane_probe_with_hidden(
-        rows_bf16,
-        rows,
-        k_dim,
-        hidden.as_slice(),
-        chunk_rows,
-        iters,
-    )
-}
-
-fn run_bf16_compute_lane_probe_with_hidden(
-    rows_bf16: &[u8],
-    rows: usize,
-    k_dim: usize,
-    hidden: &[f32],
-    chunk_rows: usize,
-    iters: usize,
-) -> Result<
-    (
-        f32,
-        Option<(usize, f32)>,
-        u64,
-        crate::burn_baby::ComputeStats,
-        crate::burn_baby::ComputeStats,
-    ),
-    crate::burn_baby::ComputeError,
-> {
-    let mut out = Vec::new();
-    out.resize(rows, 0.0f32);
-
-    let stats_before = crate::burn_baby::stats();
-    let start = embassy_time_driver::now();
-    for _ in 0..iters {
-        crate::burn_baby::matvec_rowmajor_bf16(
-            hidden,
-            rows_bf16,
-            rows,
-            k_dim,
-            out.as_mut_slice(),
-            chunk_rows,
-        )?;
-    }
-    let elapsed_ticks = embassy_time_driver::now().saturating_sub(start);
-    let stats_after = crate::burn_baby::stats();
-    let ops = (rows as u64)
-        .saturating_mul(k_dim as u64)
-        .saturating_mul(iters as u64)
-        .saturating_mul(2);
-    Ok((
-        checksum_f32(out.as_slice()),
-        top_f32(out.as_slice()),
-        units_per_second_from_ticks(ops, elapsed_ticks),
-        stats_before,
-        stats_after,
-    ))
-}
-
-fn compute_slot_delta_line(before: &[(u32, u64)], after: &[(u32, u64)]) -> AllocString {
-    let mut parts: Vec<AllocString> = Vec::new();
-    for (slot, after_count) in after.iter().copied() {
-        let before_count = before
-            .iter()
-            .find(|(before_slot, _)| *before_slot == slot)
-            .map(|(_, count)| *count)
-            .unwrap_or(0);
-        let delta = after_count.saturating_sub(before_count);
-        if delta != 0 {
-            parts.push(format!("{}:{}", slot, delta));
-        }
-    }
-
-    if parts.is_empty() {
-        AllocString::from("[]")
-    } else {
-        format!("[{}]", parts.join(", "))
     }
 }
 
@@ -547,7 +306,7 @@ fn parse_kv_u64(text: &str, key: &str) -> Option<u64> {
     digits[..end].parse::<u64>().ok()
 }
 
-fn online_background_worker_slots() -> Vec<u32> {
+pub(super) fn online_background_worker_slots() -> Vec<u32> {
     let mut slots: Vec<u32> = crate::workers::background_worker_slots()
         .into_iter()
         .filter(|slot| {
@@ -713,7 +472,7 @@ pub(crate) fn try_parse(
                 print_shell_line(io, "bench lumen: usage `bench lumen`");
                 return ParseOutcome::Handled;
             }
-            if let Some(session_id) = submit_lumenbench(spawner, io) {
+            if let Some(session_id) = super::bench_ai::submit_lumenbench(spawner, io) {
                 ParseOutcome::StartSession(
                     crate::shell2::shell2_cmd::CommandSessionKind::BenchRunning(session_id),
                 )
@@ -777,33 +536,7 @@ fn submit_cpubench(spawner: &Spawner, io: &'static dyn ShellBackend2) -> Option<
     Some(session_id)
 }
 
-fn submit_lumenbench(spawner: &Spawner, io: &'static dyn ShellBackend2) -> Option<u64> {
-    let target = matrix_target_for_backend(io);
-    let session_id = bench_session_start();
-
-    print_matrix_target_line(
-        &target,
-        format!(
-            "bench lumen: waiting for TRUEOSFS root weights={} tokenizer={}",
-            LUMEN_WEIGHTS_PATH, LUMEN_TOKENIZER_PATH
-        )
-        .as_str(),
-    );
-    set_matrix_target_active(&target, true);
-    match lumenbench_task(target.clone(), session_id) {
-        Ok(token) => spawner.spawn(token),
-        Err(_) => {
-            bench_session_finish(session_id);
-            set_matrix_target_active(&target, false);
-            print_shell_line(io, "bench lumen: spawn failed");
-            return None;
-        }
-    }
-    print_matrix_target_line(&target, "bench lumen: send `q` in this slot to stop");
-    Some(session_id)
-}
-
-fn bench_session_start() -> u64 {
+pub(super) fn bench_session_start() -> u64 {
     let id = NEXT_BENCH_SESSION_ID.fetch_add(1, Ordering::Relaxed);
     BENCH_SESSIONS.lock().push(BenchSessionState {
         id,
@@ -812,14 +545,14 @@ fn bench_session_start() -> u64 {
     id
 }
 
-fn bench_session_finish(session_id: u64) {
+pub(super) fn bench_session_finish(session_id: u64) {
     let mut sessions = BENCH_SESSIONS.lock();
     if let Some(idx) = sessions.iter().position(|s| s.id == session_id) {
         let _ = sessions.remove(idx);
     }
 }
 
-fn bench_cancel_requested(session_id: u64) -> bool {
+pub(super) fn bench_cancel_requested(session_id: u64) -> bool {
     BENCH_SESSIONS
         .lock()
         .iter()
@@ -857,6 +590,11 @@ pub(crate) fn handle_session_input(
             }
         }
         return CommandSessionInputResult::KeepRunning;
+    }
+
+    if let Some(result) = super::bench_ai::handle_lumen_session_input(session_id, target, submitted)
+    {
+        return result;
     }
 
     print_matrix_target_line(target, "bench: running; send `q` to stop");
@@ -1179,606 +917,6 @@ async fn cpubench_task(target: MatrixTarget, session_id: u64) {
 
         let elapsed_ms = elapsed_ms_since(bench_start_tick);
         log(format!("bench cpu: session elapsed={}ms", elapsed_ms).as_str());
-    }
-    .await;
-    bench_session_finish(session_id);
-    set_matrix_target_active(&target, false);
-}
-
-#[embassy_executor::task(pool_size = 2)]
-async fn lumenbench_task(target: MatrixTarget, session_id: u64) {
-    let task_target = target.clone();
-    async move {
-        Timer::after(EmbassyDuration::from_millis(1)).await;
-
-        let log = |line: &str| {
-            print_matrix_target_line(&task_target, line);
-        };
-
-        let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
-            log("bench lumen: skipped; no TRUEOSFS root mounted");
-            return;
-        };
-
-        let weights_info = match crate::r::fs::trueosfs::file_info_async(disk, LUMEN_WEIGHTS_PATH).await {
-            Ok(Some(info)) if info.data_len >= 16 => info,
-            Ok(Some(info)) => {
-                log(
-                    format!(
-                        "bench lumen: skipped; weights incomplete path={} bytes={}",
-                        LUMEN_WEIGHTS_PATH, info.data_len
-                    )
-                    .as_str(),
-                );
-                return;
-            }
-            Ok(None) => {
-                log(
-                    format!(
-                        "bench lumen: skipped; missing TinyLlama weights path={} tokenizer path={}",
-                        LUMEN_WEIGHTS_PATH, LUMEN_TOKENIZER_PATH
-                    )
-                    .as_str(),
-                );
-                return;
-            }
-            Err(err) => {
-                log(
-                    format!(
-                        "bench lumen: skipped; weights probe failed path={} err={:?}",
-                        LUMEN_WEIGHTS_PATH, err
-                    )
-                    .as_str(),
-                );
-                return;
-            }
-        };
-
-        let tokenizer_info =
-            match crate::r::fs::trueosfs::file_info_async(disk, LUMEN_TOKENIZER_PATH).await {
-                Ok(Some(info)) if info.data_len > 0 => info,
-                Ok(Some(info)) => {
-                    log(
-                        format!(
-                            "bench lumen: skipped; tokenizer empty path={} bytes={}",
-                            LUMEN_TOKENIZER_PATH, info.data_len
-                        )
-                        .as_str(),
-                    );
-                    return;
-                }
-                Ok(None) => {
-                    log(
-                        format!(
-                            "bench lumen: skipped; missing tokenizer path={} for LUMEN CLI contract",
-                            LUMEN_TOKENIZER_PATH
-                        )
-                        .as_str(),
-                    );
-                    return;
-                }
-                Err(err) => {
-                    log(
-                        format!(
-                            "bench lumen: skipped; tokenizer probe failed path={} err={:?}",
-                            LUMEN_TOKENIZER_PATH, err
-                        )
-                        .as_str(),
-                    );
-                    return;
-                }
-            };
-
-        let mut header_len_bytes = [0u8; 8];
-        match crate::r::fs::trueosfs::file_read_range_async(
-            disk,
-            LUMEN_WEIGHTS_PATH,
-            0,
-            &mut header_len_bytes,
-        )
-        .await
-        {
-            Ok(Some(8)) => {}
-            Ok(Some(n)) => {
-                log(
-                    format!(
-                        "bench lumen: skipped; short safetensors header read path={} bytes={}",
-                        LUMEN_WEIGHTS_PATH, n
-                    )
-                    .as_str(),
-                );
-                return;
-            }
-            Ok(None) => {
-                log(format!("bench lumen: skipped; disappeared path={}", LUMEN_WEIGHTS_PATH).as_str());
-                return;
-            }
-            Err(err) => {
-                log(
-                    format!(
-                        "bench lumen: skipped; safetensors header read failed path={} err={:?}",
-                        LUMEN_WEIGHTS_PATH, err
-                    )
-                    .as_str(),
-                );
-                return;
-            }
-        }
-
-        let header_len_u64 = u64::from_le_bytes(header_len_bytes);
-        let Ok(header_len) = usize::try_from(header_len_u64) else {
-            log("bench lumen: skipped; safetensors header length overflows usize");
-            return;
-        };
-        if header_len == 0
-            || header_len > LUMEN_SAFETENSORS_MAX_HEADER_BYTES
-            || header_len_u64.saturating_add(8) > weights_info.data_len
-        {
-            log(
-                format!(
-                    "bench lumen: skipped; invalid safetensors header_len={} file_size={}",
-                    format_bytes(header_len_u64),
-                    format_bytes(weights_info.data_len)
-                )
-                .as_str(),
-            );
-            return;
-        }
-
-        log(
-            format!(
-                "bench lumen: load-only preflight weights={} size={} header={} tokenizer={} size={}",
-                LUMEN_WEIGHTS_PATH,
-                format_bytes(weights_info.data_len),
-                format_bytes(header_len_u64),
-                LUMEN_TOKENIZER_PATH,
-                format_bytes(tokenizer_info.data_len)
-            )
-            .as_str(),
-        );
-        let load_start = embassy_time_driver::now();
-        let header = match crate::r::stream::read_trueosfs_file_range_via_pipe_async(
-            disk,
-            LUMEN_WEIGHTS_PATH,
-            8,
-            header_len,
-        )
-        .await
-        {
-            Ok(Some(bytes)) => bytes,
-            Ok(None) => {
-                log(format!("bench lumen: skipped; load returned missing path={}", LUMEN_WEIGHTS_PATH).as_str());
-                return;
-            }
-            Err(err) => {
-                log(
-                    format!(
-                        "bench lumen: skipped; safetensors header load failed path={} err={:?}",
-                        LUMEN_WEIGHTS_PATH, err
-                    )
-                    .as_str(),
-                );
-                return;
-            }
-        };
-        let load_ms = elapsed_ms_since(load_start);
-        let header_value = match serde_json::from_slice::<serde_json::Value>(&header) {
-            Ok(value) => value,
-            Err(err) => {
-                log(
-                    format!(
-                        "bench lumen: skipped; safetensors header JSON parse failed err={}",
-                        err
-                    )
-                    .as_str(),
-                );
-                return;
-            }
-        };
-        let Some(obj) = header_value.as_object() else {
-            log("bench lumen: skipped; safetensors header root is not an object");
-            return;
-        };
-
-        let tensor_count = obj.keys().filter(|key| key.as_str() != "__metadata__").count();
-        let first_tensor = obj
-            .iter()
-            .find(|(key, _)| key.as_str() != "__metadata__");
-        let mut first_line = AllocString::from("none");
-        if let Some((name, value)) = first_tensor {
-            let dtype = value
-                .get("dtype")
-                .and_then(|v| v.as_str())
-                .unwrap_or("?");
-            let shape = value
-                .get("shape")
-                .map(|v| format!("{}", v))
-                .unwrap_or_else(|| AllocString::from("?"));
-            let offsets = value
-                .get("data_offsets")
-                .map(|v| format!("{}", v))
-                .unwrap_or_else(|| AllocString::from("?"));
-            first_line = format!(
-                "name={} dtype={} shape={} offsets={}",
-                name, dtype, shape, offsets
-            );
-        }
-
-        log(
-            format!(
-                "bench lumen: load-only preflight ok tensors={} header_load={} elapsed={}ms first_tensor=({})",
-                tensor_count,
-                format_speed(bps_from_progress(header.len() as u64, load_ms)),
-                load_ms,
-                first_line
-            )
-            .as_str(),
-        );
-        log(
-            format!(
-                "bench lumen: runtime backend={} contract={} fp_backend={} int8_backend={} trueos_cpu={} x86_fp={} x86_i8={}",
-                lumen::backend::default_backend_name(),
-                lumen::backend::trueos_parallel_contract(),
-                lumen::ops::fp_kernels::active_float_backend_name(),
-                lumen::ops::int8_kernels::active_int8_backend_name(),
-                lumen::arch::trueos_cpu_backend_compiled(),
-                lumen::arch::x86_fp_kernel_runtime_available(),
-                lumen::arch::x86_i8_kernel_runtime_available(),
-            )
-            .as_str(),
-        );
-
-        let lm_head = find_tensor(obj, "lm_head.weight");
-        let embed = find_tensor(obj, "model.embed_tokens.weight");
-        let rms = find_tensor(obj, "model.norm.weight");
-        let q_proj = find_tensor(obj, "self_attn.q_proj.weight");
-        let gate_proj = find_tensor(obj, "mlp.gate_proj.weight");
-
-        let lm_shape = lm_head.and_then(|(_, value)| safetensor_shape(value));
-        let embed_shape = embed.and_then(|(_, value)| safetensor_shape(value));
-        let rms_shape = rms.and_then(|(_, value)| safetensor_shape(value));
-        let q_shape = q_proj.and_then(|(_, value)| safetensor_shape(value));
-        let gate_shape = gate_proj.and_then(|(_, value)| safetensor_shape(value));
-
-        let vocab = lm_shape
-            .as_ref()
-            .and_then(|shape| shape.first().copied())
-            .or_else(|| embed_shape.as_ref().and_then(|shape| shape.first().copied()));
-        let hidden = lm_shape
-            .as_ref()
-            .and_then(|shape| shape.get(1).copied())
-            .or_else(|| embed_shape.as_ref().and_then(|shape| shape.get(1).copied()));
-        let layers = obj
-            .keys()
-            .filter_map(|key| {
-                let rest = key.strip_prefix("model.layers.")?;
-                let (idx, _) = rest.split_once('.')?;
-                idx.parse::<usize>().ok()
-            })
-            .max()
-            .map(|idx| idx + 1);
-
-        let online_slots = online_background_worker_slots();
-        let all_slots = crate::workers::background_worker_slots();
-        log(
-            format!(
-                "bench lumen: model-shape vocab={} hidden={} layers={} lm_head={} embed={} rms={} q_proj={} gate_proj={} ap_online={}/{} slots={:?}",
-                vocab
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| AllocString::from("?")),
-                hidden
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| AllocString::from("?")),
-                layers
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| AllocString::from("?")),
-                tensor_shape_line(lm_shape.as_deref()),
-                tensor_shape_line(embed_shape.as_deref()),
-                tensor_shape_line(rms_shape.as_deref()),
-                tensor_shape_line(q_shape.as_deref()),
-                tensor_shape_line(gate_shape.as_deref()),
-                online_slots.len(),
-                all_slots.len(),
-                online_slots
-            )
-            .as_str(),
-        );
-
-        if bench_cancel_requested(session_id) {
-            log("bench lumen: stopped after preflight");
-            return;
-        }
-
-        let Some((lm_name, lm_value)) = lm_head else {
-            log("bench lumen: kernel probe skipped; lm_head.weight missing");
-            return;
-        };
-        let lm_dtype = lm_value
-            .get("dtype")
-            .and_then(|v| v.as_str())
-            .unwrap_or("?");
-        let Some(lm_shape) = lm_shape.as_ref() else {
-            log("bench lumen: kernel probe skipped; lm_head.weight shape missing");
-            return;
-        };
-        if lm_dtype != "BF16" || lm_shape.len() != 2 {
-            log(
-                format!(
-                    "bench lumen: kernel probe skipped; lm_head dtype={} shape={:?}",
-                    lm_dtype, lm_shape
-                )
-                .as_str(),
-            );
-            return;
-        }
-        let rows = LUMEN_KERNEL_PROBE_ROWS.min(lm_shape[0]);
-        let k_dim = lm_shape[1];
-        let Some((data_start, data_end)) = safetensor_offsets(lm_value) else {
-            log("bench lumen: kernel probe skipped; lm_head offsets missing");
-            return;
-        };
-        let bytes_needed = rows.saturating_mul(k_dim).saturating_mul(2);
-        if bytes_needed == 0 || data_start.saturating_add(bytes_needed) > data_end {
-            log("bench lumen: kernel probe skipped; lm_head range invalid");
-            return;
-        }
-        let Some(payload_offset) = 8usize
-            .checked_add(header_len)
-            .and_then(|base| base.checked_add(data_start))
-            .and_then(|offset| u64::try_from(offset).ok())
-        else {
-            log("bench lumen: kernel probe skipped; lm_head file offset overflow");
-            return;
-        };
-
-        let kernel_start = embassy_time_driver::now();
-        let rows_bytes = match crate::r::stream::read_trueosfs_file_range_via_pipe_async(
-            disk,
-            LUMEN_WEIGHTS_PATH,
-            payload_offset,
-            bytes_needed,
-        )
-        .await
-        {
-            Ok(Some(bytes)) if bytes.len() == bytes_needed => bytes,
-            Ok(Some(bytes)) => {
-                log(
-                    format!(
-                        "bench lumen: kernel probe skipped; short lm_head read got={} need={}",
-                        format_bytes(bytes.len() as u64),
-                        format_bytes(bytes_needed as u64)
-                    )
-                    .as_str(),
-                );
-                return;
-            }
-            Ok(None) => {
-                log("bench lumen: kernel probe skipped; weights disappeared");
-                return;
-            }
-            Err(err) => {
-                log(
-                    format!(
-                        "bench lumen: kernel probe skipped; lm_head read failed err={:?}",
-                        err
-                    )
-                    .as_str(),
-                );
-                return;
-            }
-        };
-        let read_ms = elapsed_ms_since(kernel_start);
-        let (checksum, ops_per_s) = run_bf16_matvec_probe(&rows_bytes, rows, k_dim);
-        log(
-            format!(
-                "bench lumen: kernel probe lm_head={} rows={} hidden={} iters={} bytes={} read={}ms compute={}/s checksum={:.4}",
-                lm_name,
-                rows,
-                k_dim,
-                LUMEN_KERNEL_PROBE_ITERS,
-                format_bytes(bytes_needed as u64),
-                read_ms,
-                format_metric_units(ops_per_s, "ops"),
-                checksum
-            )
-            .as_str(),
-        );
-
-        if bench_cancel_requested(session_id) {
-            log("bench lumen: stopped after serial kernel probe");
-            return;
-        }
-
-        let max_compute_rows = LUMEN_COMPUTE_PROBE_CASES
-            .iter()
-            .map(|case| case.rows)
-            .max()
-            .unwrap_or(0)
-            .min(lm_shape[0]);
-        let max_compute_bytes = max_compute_rows.saturating_mul(k_dim).saturating_mul(2);
-        if max_compute_rows <= rows || data_start.saturating_add(max_compute_bytes) > data_end {
-            log("bench lumen: compute-lane probe skipped; lm_head range too small");
-            return;
-        }
-
-        log(
-            format!(
-                "bench lumen: compute telemetry start lm_head={} max_rows={} hidden={} cases={} bytes={} note=no-token-decode synthetic-hidden",
-                lm_name,
-                max_compute_rows,
-                k_dim,
-                LUMEN_COMPUTE_PROBE_CASES.len(),
-                format_bytes(max_compute_bytes as u64)
-            )
-            .as_str(),
-        );
-
-        let compute_read_start = embassy_time_driver::now();
-        let compute_rows_bytes = match crate::r::stream::read_trueosfs_file_range_via_pipe_async(
-            disk,
-            LUMEN_WEIGHTS_PATH,
-            payload_offset,
-            max_compute_bytes,
-        )
-        .await
-        {
-            Ok(Some(bytes)) if bytes.len() == max_compute_bytes => bytes,
-            Ok(Some(bytes)) => {
-                log(
-                    format!(
-                        "bench lumen: compute-lane probe skipped; short lm_head read got={} need={}",
-                        format_bytes(bytes.len() as u64),
-                        format_bytes(max_compute_bytes as u64)
-                    )
-                    .as_str(),
-                );
-                return;
-            }
-            Ok(None) => {
-                log("bench lumen: compute-lane probe skipped; weights disappeared");
-                return;
-            }
-            Err(err) => {
-                log(
-                    format!(
-                        "bench lumen: compute-lane probe skipped; lm_head read failed err={:?}",
-                        err
-                    )
-                    .as_str(),
-                );
-                return;
-            }
-        };
-        let compute_read_ms = elapsed_ms_since(compute_read_start);
-
-        let slots_for_counts = online_background_worker_slots();
-        for case in LUMEN_COMPUTE_PROBE_CASES {
-            if bench_cancel_requested(session_id) {
-                log("bench lumen: stopped during compute-lane probes");
-                return;
-            }
-
-            let compute_rows = case.rows.min(lm_shape[0]).min(max_compute_rows);
-            let compute_bytes = compute_rows.saturating_mul(k_dim).saturating_mul(2);
-            if compute_rows <= rows || compute_bytes == 0 || compute_bytes > compute_rows_bytes.len() {
-                continue;
-            }
-
-            let slot_counts_before = crate::burn_baby::poll_counts_for_slots(&slots_for_counts);
-            match run_bf16_compute_lane_probe(
-                &compute_rows_bytes[..compute_bytes],
-                compute_rows,
-                k_dim,
-                case.chunk_rows,
-                case.iters,
-            ) {
-                Ok((checksum, top, ops_per_s, stats_before, stats_after)) => {
-                    let slot_counts_after = crate::burn_baby::poll_counts_for_slots(&slots_for_counts);
-                    let submitted = stats_after
-                        .submitted_jobs
-                        .saturating_sub(stats_before.submitted_jobs);
-                    let completed = stats_after
-                        .completed_jobs
-                        .saturating_sub(stats_before.completed_jobs);
-                    let polled = stats_after
-                        .polled_jobs
-                        .saturating_sub(stats_before.polled_jobs);
-                    let top_line = top
-                        .map(|(idx, value)| format!("sample_argmax_row={}:{:.4}", idx, value))
-                        .unwrap_or_else(|| AllocString::from("sample_argmax_row=?"));
-                    log(
-                        format!(
-                            "bench lumen: compute-lane probe label={} lm_head={} rows={} hidden={} chunk_rows={} iters={} bytes={} read={}ms compute={}/s jobs={}/{} polled={} queued={} workers={} {} checksum={:.4}",
-                            case.label,
-                            lm_name,
-                            compute_rows,
-                            k_dim,
-                            case.chunk_rows,
-                            case.iters,
-                            format_bytes(compute_bytes as u64),
-                            compute_read_ms,
-                            format_metric_units(ops_per_s, "ops"),
-                            completed,
-                            submitted,
-                            polled,
-                            stats_after.queued_jobs,
-                            compute_slot_delta_line(&slot_counts_before, &slot_counts_after),
-                            top_line,
-                            checksum
-                        )
-                        .as_str(),
-                    );
-                }
-                Err(err) => {
-                    log(
-                        format!(
-                            "bench lumen: compute-lane probe label={} skipped; err={:?}",
-                            case.label, err
-                        )
-                        .as_str(),
-                    );
-                }
-            }
-        }
-
-        if bench_cancel_requested(session_id) {
-            log("bench lumen: stopped before static Hi warm probe");
-            return;
-        }
-
-        let hi_rows = LUMEN_STATIC_HI_ROWS.min(lm_shape[0]).min(max_compute_rows);
-        let hi_bytes = hi_rows.saturating_mul(k_dim).saturating_mul(2);
-        if hi_rows > rows && hi_bytes != 0 && hi_bytes <= compute_rows_bytes.len() {
-            let hidden = lumen_prompt_probe_hidden(LUMEN_STATIC_HI_PROMPT, k_dim);
-            let slot_counts_before = crate::burn_baby::poll_counts_for_slots(&slots_for_counts);
-            match run_bf16_compute_lane_probe_with_hidden(
-                &compute_rows_bytes[..hi_bytes],
-                hi_rows,
-                k_dim,
-                hidden.as_slice(),
-                LUMEN_STATIC_HI_CHUNK_ROWS,
-                1,
-            ) {
-                Ok((checksum, top, ops_per_s, stats_before, stats_after)) => {
-                    let slot_counts_after = crate::burn_baby::poll_counts_for_slots(&slots_for_counts);
-                    let submitted = stats_after
-                        .submitted_jobs
-                        .saturating_sub(stats_before.submitted_jobs);
-                    let completed = stats_after
-                        .completed_jobs
-                        .saturating_sub(stats_before.completed_jobs);
-                    let polled = stats_after
-                        .polled_jobs
-                        .saturating_sub(stats_before.polled_jobs);
-                    let top_line = top
-                        .map(|(idx, value)| format!("sample_argmax_row={}:{:.4}", idx, value))
-                        .unwrap_or_else(|| AllocString::from("sample_argmax_row=?"));
-                    log(
-                        format!(
-                            "bench lumen: static-hi warm prompt={:?} lm_head={} rows={} hidden={} chunk_rows={} iters=1 bytes={} compute={}/s jobs={}/{} polled={} queued={} workers={} {} checksum={:.4} note=no-token-decode prompt-seeded-hidden",
-                            LUMEN_STATIC_HI_PROMPT,
-                            lm_name,
-                            hi_rows,
-                            k_dim,
-                            LUMEN_STATIC_HI_CHUNK_ROWS,
-                            format_bytes(hi_bytes as u64),
-                            format_metric_units(ops_per_s, "ops"),
-                            completed,
-                            submitted,
-                            polled,
-                            stats_after.queued_jobs,
-                            compute_slot_delta_line(&slot_counts_before, &slot_counts_after),
-                            top_line,
-                            checksum
-                        )
-                        .as_str(),
-                    );
-                }
-                Err(err) => {
-                    log(format!("bench lumen: static-hi warm skipped; err={:?}", err).as_str());
-                }
-            }
-        }
     }
     .await;
     bench_session_finish(session_id);

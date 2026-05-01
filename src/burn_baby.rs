@@ -6,7 +6,9 @@ use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use spin::Mutex;
 
-const DEFAULT_CHUNK_ROWS: usize = 16;
+const TARGET_CHUNKS_PER_WORKER: usize = 4;
+const MIN_CHUNK_ROWS: usize = 16;
+const MAX_CHUNK_ROWS: usize = 256;
 const MAX_COMPUTE_POLL_SLOTS: usize = 256;
 
 static FALLBACK_QUEUE: Mutex<VecDeque<ComputeJob>> = Mutex::new(VecDeque::new());
@@ -89,6 +91,24 @@ pub fn poll_counts_for_slots(slots: &[u32]) -> Vec<(u32, u64)> {
         .collect()
 }
 
+pub fn online_worker_count() -> usize {
+    online_background_worker_slots().len().max(1)
+}
+
+pub fn recommended_chunk_rows(n_rows: usize) -> usize {
+    if n_rows == 0 {
+        return 0;
+    }
+
+    let target_chunks = online_worker_count()
+        .saturating_mul(TARGET_CHUNKS_PER_WORKER)
+        .max(1);
+    let chunk_rows = n_rows.div_ceil(target_chunks);
+    chunk_rows
+        .clamp(MIN_CHUNK_ROWS.min(n_rows), MAX_CHUNK_ROWS.min(n_rows))
+        .max(1)
+}
+
 pub fn poll_compute_lane() -> bool {
     let job = FALLBACK_QUEUE.lock().pop_front();
     let Some(job) = job else {
@@ -127,7 +147,7 @@ pub fn matvec_rowmajor_f32(
     }
 
     let chunk_rows = if chunk_rows == 0 {
-        DEFAULT_CHUNK_ROWS
+        recommended_chunk_rows(n_rows)
     } else {
         chunk_rows
     };
@@ -201,7 +221,7 @@ pub fn matvec_rowmajor_bf16(
     }
 
     let chunk_rows = if chunk_rows == 0 {
-        DEFAULT_CHUNK_ROWS
+        recommended_chunk_rows(n_rows)
     } else {
         chunk_rows
     };
@@ -253,6 +273,41 @@ pub fn matvec_rowmajor_bf16(
     Ok(())
 }
 
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_trueos_matvec_rowmajor_f32_bf16(
+    x: *const f32,
+    x_len: usize,
+    w_rowmajor_bf16: *const u8,
+    w_len: usize,
+    n_rows: usize,
+    k_dim: usize,
+    out: *mut f32,
+    out_len: usize,
+) -> i32 {
+    if x.is_null() || w_rowmajor_bf16.is_null() || out.is_null() {
+        return -1;
+    }
+
+    let Some(expected_w_len) = n_rows
+        .checked_mul(k_dim)
+        .and_then(|values| values.checked_mul(2))
+    else {
+        return -1;
+    };
+    if x_len < k_dim || w_len < expected_w_len || out_len < n_rows {
+        return -1;
+    }
+
+    let x = unsafe { core::slice::from_raw_parts(x, x_len) };
+    let w = unsafe { core::slice::from_raw_parts(w_rowmajor_bf16, w_len) };
+    let out = unsafe { core::slice::from_raw_parts_mut(out, out_len) };
+
+    match matvec_rowmajor_bf16(x, w, n_rows, k_dim, out, 0) {
+        Ok(()) => 0,
+        Err(_) => -1,
+    }
+}
+
 fn log_compute_wait_progress(
     done: &AtomicUsize,
     submitted: usize,
@@ -292,8 +347,8 @@ fn online_background_worker_slots() -> Vec<u32> {
 fn submit_job(job: ComputeJob) {
     SUBMITTED_JOBS.fetch_add(1, Ordering::AcqRel);
 
-    let slots = online_background_worker_slots();
     if !LOGGED_QUEUE_LANE.swap(true, Ordering::AcqRel) {
+        let slots = online_background_worker_slots();
         crate::log!(
             "burn-baby: queued compute jobs for AP poll lane workers={} slots={:?}\n",
             slots.len(),
