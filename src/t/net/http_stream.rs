@@ -14,7 +14,7 @@ use crate::r::stream::{ObjectDesc, ObjectSink};
 use crate::t::net::dns::{self, DnsConfig};
 
 const HTTP_FILE_WRITE_FALLBACK_CHUNK_BYTES: usize = 64 * 1024;
-const HTTP_FILE_WRITE_PROGRESS_BYTES: u64 = 512 * 1024;
+const HTTP_FILE_WRITE_PROGRESS_BYTES: u64 = 512 * 1024 * 1024;
 const HTTP_FILE_WRITE_YIELD_EVERY_BYTES: u64 = 256 * 1024;
 
 fn http_file_write_chunk_bytes(info: &crate::disc::block::DeviceInfo) -> usize {
@@ -34,6 +34,13 @@ fn http_file_write_bps(written: u64, started: Instant) -> u64 {
         0
     } else {
         ((written as u128).saturating_mul(1000) / elapsed_ms as u128) as u64
+    }
+}
+
+fn http_stream_error_to_fetch_error(err: crate::r::stream::HvStreamError) -> HttpFetchError {
+    match err {
+        crate::r::stream::HvStreamError::NoSpace => HttpFetchError::NoSpace,
+        _ => HttpFetchError::TimedOut,
     }
 }
 
@@ -492,17 +499,23 @@ async fn request_http_to_file(
 
                         match head.body {
                             HttpBodyKind::ContentLength(len) => {
-                                let mut stream = begin_http_file_stream(disk, path, len as u64)
-                                    .await
-                                    .map_err(|err| {
-                                        crate::log!(
-                                            "http-stream: content-length begin failed path={} len={} err={:?}\n",
-                                            path,
-                                            len,
-                                            err,
-                                        );
-                                        HttpFetchError::TimedOut
-                                    })?;
+                                let mut stream =
+                                    match begin_http_file_stream(disk, path, len as u64).await {
+                                        Ok(stream) => stream,
+                                        Err(err) => {
+                                            if let Some(h) = tcp_handle {
+                                                let _ =
+                                                    net.submit(api::Command::Close { handle: h });
+                                            }
+                                            crate::log!(
+                                                "http-stream: content-length begin failed path={} len={} err={:?}\n",
+                                                path,
+                                                len,
+                                                err,
+                                            );
+                                            return Err(http_stream_error_to_fetch_error(err));
+                                        }
+                                    };
 
                                 let take = initial_body.len().min(len);
                                 if take > 0
@@ -596,8 +609,18 @@ async fn request_http_to_file(
                 api::Event::Closed { handle } => {
                     if tcp_handle == Some(handle) {
                         if file_stream.is_some() {
+                            if let Some(stream) = file_stream.as_ref() {
+                                let remaining = content_remaining.unwrap_or(0);
+                                crate::log!(
+                                    "http-stream: content-length closed before complete path={} written={} total={} remaining={}\n",
+                                    path,
+                                    stream.written,
+                                    stream.total_len,
+                                    remaining,
+                                );
+                            }
                             abort_http_file_stream(&mut file_stream, path).await;
-                            return Err(HttpFetchError::TimedOut);
+                            return Err(HttpFetchError::Truncated);
                         }
 
                         let Some(kind) = buffered_kind else {

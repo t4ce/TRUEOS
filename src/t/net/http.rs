@@ -37,6 +37,8 @@ pub enum HttpFetchError {
     HttpStatus(u16),
     Redirect(String),
     ResponseTooLarge,
+    NoSpace,
+    Truncated,
 }
 
 pub fn parse_http_url(url: &str) -> Result<ParsedHttpUrl, &'static str> {

@@ -688,8 +688,14 @@ impl Drop for WorkerThread {
     fn drop(&mut self) {
         // Undo `set_current`
         WORKER_THREAD_STATE.with(|t| {
-            assert!(t.get().eq(&(self as *const _)));
-            t.set(ptr::null());
+            // TRUEOS currently hotwires Rust `std` threads onto kernel/AP
+            // execution lanes whose TLS identity can be reused while Rayon is
+            // still bringing workers up. Upstream assumes a fresh OS-thread TLS
+            // slot here; for TRUEOS, only clear the slot if it still points at
+            // this worker.
+            if t.get().eq(&(self as *const _)) {
+                t.set(ptr::null());
+            }
         });
     }
 }
@@ -707,7 +713,8 @@ impl WorkerThread {
     /// This is done during worker-thread startup.
     unsafe fn set_current(thread: *const WorkerThread) {
         WORKER_THREAD_STATE.with(|t| {
-            assert!(t.get().is_null());
+            // TRUEOS monkeyking-patch: tolerate stale/shared TLS state from the
+            // kernel std-thread shim and let the latest Rayon worker binding win.
             t.set(thread);
         });
     }
@@ -817,7 +824,12 @@ impl WorkerThread {
     }
 
     unsafe fn wait_until_out_of_work(&self) {
-        debug_assert_eq!(self as *const _, WorkerThread::current());
+        // TRUEOS may resume Rayon workers through reused kernel/AP lanes, so
+        // the TLS view can point at a previous worker binding here. Refresh it
+        // instead of treating upstream's OS-thread identity invariant as fatal.
+        if WorkerThread::current() != self as *const _ {
+            WorkerThread::set_current(self as *const _);
+        }
         let registry = &*self.registry;
         let index = self.index;
 

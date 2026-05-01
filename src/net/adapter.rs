@@ -3527,22 +3527,37 @@ impl NetService {
                 }
             }
 
-            if socket.is_active() && socket.may_recv() {
-                // Match vnet MAX_MSG (8KiB) to avoid large stack buffers per poll.
-                let mut buf_guard = POLL_SCRATCH_BUF.lock();
-                let buf = &mut *buf_guard;
+            let mut rx_backpressured = false;
 
-                while let Ok(len) = socket.recv_slice(buf) {
-                    if len == 0 {
-                        break;
-                    }
-                    let data = buf[..len].to_vec();
-                    let queued = push_event(owner, NetEvent::TcpData { handle, data });
-                    rx_bytes_this_poll = rx_bytes_this_poll.saturating_add(len);
-                    if queued {
-                        rx_events_this_poll = rx_events_this_poll.saturating_add(1);
-                    } else {
-                        rx_event_drops_this_poll = rx_event_drops_this_poll.saturating_add(1);
+            if socket.is_active() && socket.may_recv() {
+                while socket.can_recv() {
+                    let result = socket.recv(|buf| {
+                        let len = core::cmp::min(buf.len(), v::vnet::MAX_MSG);
+                        if len == 0 {
+                            return (0, Some(0usize));
+                        }
+
+                        let data = buf[..len].to_vec();
+                        if push_event(owner, NetEvent::TcpData { handle, data }) {
+                            (len, Some(len))
+                        } else {
+                            (0, None)
+                        }
+                    });
+
+                    match result {
+                        Ok(Some(len)) if len > 0 => {
+                            rx_bytes_this_poll = rx_bytes_this_poll.saturating_add(len);
+                            rx_events_this_poll = rx_events_this_poll.saturating_add(1);
+                        }
+                        Ok(Some(_)) => break,
+                        Ok(None) => {
+                            rx_event_drops_this_poll =
+                                rx_event_drops_this_poll.saturating_add(1);
+                            rx_backpressured = true;
+                            break;
+                        }
+                        Err(_) => break,
                     }
                 }
             }
@@ -3554,7 +3569,7 @@ impl NetService {
             //
             // Convert CLOSE-WAIT into an orderly local close so we eventually emit
             // `NetEvent::Closed`.
-            if socket.state() == tcp::State::CloseWait {
+            if socket.state() == tcp::State::CloseWait && !rx_backpressured && !socket.can_recv() {
                 if crate::logflag::NET_LOG_TCP_FLOW {
                     crate::log!(
                         "net: tcp closewait owner={} handle={} rx_bytes_this_poll={} rx_events={} rx_drops={}\n",

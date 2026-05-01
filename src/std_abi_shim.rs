@@ -13,6 +13,13 @@ use core::sync::atomic::AtomicI32;
 
 static TRUEOS_ERRNO: AtomicI32 = AtomicI32::new(0);
 
+const TRUEOS_EAGAIN: c_int = 11;
+const TRUEOS_ENOSYS: c_int = 38;
+const TRUEOS_SC_PAGESIZE: c_int = 30;
+const TRUEOS_SC_PAGE_SIZE: c_int = TRUEOS_SC_PAGESIZE;
+const TRUEOS_SC_NPROCESSORS_ONLN: c_int = 84;
+const TRUEOS_SC_NPROCESSORS_CONF: c_int = 83;
+
 #[repr(C)]
 struct Iovec {
     base: *const u8,
@@ -471,6 +478,67 @@ pub unsafe extern "C" fn pthread_mutexattr_settype(_attr: *mut c_void, _kind: c_
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pthread_mutexattr_destroy(_attr: *mut c_void) -> c_int {
     0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_attr_init(_attr: *mut c_void) -> c_int {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_attr_setstacksize(
+    _attr: *mut c_void,
+    _stack_size: usize,
+) -> c_int {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_attr_setguardsize(
+    _attr: *mut c_void,
+    _guard_size: usize,
+) -> c_int {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_attr_destroy(_attr: *mut c_void) -> c_int {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_create(
+    _thread: *mut usize,
+    _attr: *const c_void,
+    _start: *mut c_void,
+    _arg: *mut c_void,
+) -> c_int {
+    TRUEOS_ERRNO.store(TRUEOS_ENOSYS, core::sync::atomic::Ordering::Relaxed);
+    TRUEOS_EAGAIN
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_self() -> usize {
+    crate::percpu::current_slot().saturating_add(1)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_setname_np(_thread: usize, _name: *const c_char) -> c_int {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sysconf(name: c_int) -> isize {
+    match name {
+        TRUEOS_SC_PAGESIZE | TRUEOS_SC_PAGE_SIZE => 4096,
+        TRUEOS_SC_NPROCESSORS_ONLN | TRUEOS_SC_NPROCESSORS_CONF => {
+            crate::workers::background_worker_slots().len().max(1) as isize
+        }
+        _ => {
+            TRUEOS_ERRNO.store(TRUEOS_ENOSYS, core::sync::atomic::Ordering::Relaxed);
+            -1
+        }
+    }
 }
 
 #[unsafe(no_mangle)]

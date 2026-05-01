@@ -57,7 +57,7 @@ CARGO_BUILD_FLAGS ?=
 
 CARGO_GFX_FLAGS =
 
-IMG_SIZE ?= 1G
+IMG_SIZE ?= 25G
 
 .PHONY: kernel empty-libs blueprints artifacts kernel-stages baremetal-reboot-log iso iso-build iso-release iso-debug snipe dbg dbg-vscode run run-with-nvme run-installed lc
 
