@@ -387,12 +387,8 @@ impl Spawner {
         let fut =
             blocking_task::<F, BlockingTask<F>>(BlockingTask::new(func), spawn_meta, id.as_u64());
 
-        let (task, handle) = task::unowned(
-            fut,
-            BlockingSchedule::new(rt),
-            id,
-            task::SpawnLocation::capture(),
-        );
+        let (task, handle) =
+            task::unowned(fut, BlockingSchedule::new(rt), id, task::SpawnLocation::capture());
 
         let spawned = self.spawn_task(Task::new(task, is_mandatory), rt);
         (handle, spawned)
@@ -511,9 +507,7 @@ impl Spawner {
     ) -> io::Result<()> {
         let rt = rt.clone();
         let job: TrueosBlockingJob = Box::new(move || {
-            // TRUEOS AP carriers are kernel executor tasks, not std OS threads.
-            // Do not enter Tokio's thread-local runtime context here; the TLS
-            // backend is not an independent per-AP worker context.
+            let _enter = rt.enter();
             rt.inner.blocking_spawner().inner.run(id);
             drop(shutdown_tx);
         });
@@ -522,10 +516,7 @@ impl Spawner {
         if rc == 0 {
             Ok(())
         } else {
-            Err(io::Error::new(
-                io::ErrorKind::Other,
-                "TRUEOS background worker spawn failed",
-            ))
+            Err(io::Error::new(io::ErrorKind::Other, "TRUEOS background worker spawn failed"))
         }
     }
 }
@@ -634,10 +625,7 @@ impl Inner {
             // with a descriptive message if it is not the
             // case.
             let prev_idle = self.metrics.dec_num_idle_threads();
-            assert_ne!(
-                prev_idle, 0,
-                "`num_idle_threads` underflowed on thread exit"
-            );
+            assert_ne!(prev_idle, 0, "`num_idle_threads` underflowed on thread exit");
         }
 
         if shared.shutdown && self.metrics.num_threads() == 0 {

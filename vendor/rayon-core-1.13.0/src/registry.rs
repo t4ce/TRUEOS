@@ -662,13 +662,20 @@ pub(super) struct WorkerThread {
     registry: Arc<Registry>,
 }
 
-// This is a bit sketchy, but basically: the WorkerThread is
-// allocated on the stack of the worker on entry and stored into this
-// thread-local variable. So it will remain valid at least until the
-// worker is fully unwound. Using an unsafe pointer avoids the need
-// for a RefCell<T> etc.
+// This is a bit sketchy, but basically: the WorkerThread is allocated
+// on the stack of the worker on entry and stored into thread-local
+// storage. So it will remain valid at least until the worker is fully
+// unwound. Using an unsafe pointer avoids the need for a RefCell<T> etc.
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 thread_local! {
     static WORKER_THREAD_STATE: Cell<*const WorkerThread> = const { Cell::new(ptr::null()) };
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+unsafe extern "Rust" {
+    fn trueos_rayon_worker_thread_current() -> usize;
+    fn trueos_rayon_worker_thread_set(worker_thread: usize);
+    fn trueos_rayon_worker_thread_clear_if(worker_thread: usize);
 }
 
 impl From<ThreadBuilder> for WorkerThread {
@@ -687,16 +694,17 @@ impl From<ThreadBuilder> for WorkerThread {
 impl Drop for WorkerThread {
     fn drop(&mut self) {
         // Undo `set_current`
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         WORKER_THREAD_STATE.with(|t| {
-            // TRUEOS currently hotwires Rust `std` threads onto kernel/AP
-            // execution lanes whose TLS identity can be reused while Rayon is
-            // still bringing workers up. Upstream assumes a fresh OS-thread TLS
-            // slot here; for TRUEOS, only clear the slot if it still points at
-            // this worker.
             if t.get().eq(&(self as *const _)) {
                 t.set(ptr::null());
             }
         });
+
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        unsafe {
+            trueos_rayon_worker_thread_clear_if(self as *const _ as usize);
+        }
     }
 }
 
@@ -706,17 +714,29 @@ impl WorkerThread {
     /// anywhere on the current thread.
     #[inline]
     pub(super) fn current() -> *const WorkerThread {
-        WORKER_THREAD_STATE.get()
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+        {
+            WORKER_THREAD_STATE.get()
+        }
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        unsafe {
+            trueos_rayon_worker_thread_current() as *const WorkerThread
+        }
     }
 
     /// Sets `self` as the worker-thread index for the current thread.
     /// This is done during worker-thread startup.
     unsafe fn set_current(thread: *const WorkerThread) {
-        WORKER_THREAD_STATE.with(|t| {
-            // TRUEOS monkeyking-patch: tolerate stale/shared TLS state from the
-            // kernel std-thread shim and let the latest Rayon worker binding win.
-            t.set(thread);
-        });
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+        {
+            WORKER_THREAD_STATE.with(|t| {
+                t.set(thread);
+            });
+        }
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        unsafe {
+            trueos_rayon_worker_thread_set(thread as usize);
+        }
     }
 
     /// Returns the registry that owns this worker thread.

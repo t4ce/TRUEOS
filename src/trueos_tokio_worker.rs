@@ -8,13 +8,33 @@ type TokioBlockingJob = Box<dyn FnOnce() + Send + 'static>;
 static LOGGED_NO_WORKER: AtomicBool = AtomicBool::new(false);
 static LOGGED_NO_LANE: AtomicBool = AtomicBool::new(false);
 static LOGGED_SPAWN: AtomicBool = AtomicBool::new(false);
+static LOGGED_SUBMITTED: AtomicBool = AtomicBool::new(false);
+static LOGGED_TASK_ENTER: AtomicBool = AtomicBool::new(false);
+static LOGGED_TASK_EXIT: AtomicBool = AtomicBool::new(false);
 
 #[embassy_executor::task(pool_size = 64)]
-async fn tokio_blocking_job_task(job: TokioBlockingJob, lane: crate::stackkeeper::TokioLaneLease) {
-    let _guard = crate::stackkeeper::enter_tokio_lane(lane, "tokio-blocking-job");
+async fn tokio_blocking_job_task(
+    job: TokioBlockingJob,
+    lane: crate::stackkeeper::TokioLaneLease,
+    purpose: &'static str,
+) {
+    if !LOGGED_TASK_ENTER.swap(true, Ordering::AcqRel) {
+        let tag = lane.tag();
+        crate::log!(
+            "tokio-worker: entered {} lane{} cpu_slot={} core_kind={}\n",
+            purpose,
+            tag.lane_id,
+            crate::percpu::current_slot(),
+            tag.core_kind
+        );
+    }
+    let _guard = crate::stackkeeper::enter_tokio_lane(lane, purpose);
     job();
     drop(_guard);
     let _ = crate::stackkeeper::release_tokio_lane(lane);
+    if !LOGGED_TASK_EXIT.swap(true, Ordering::AcqRel) {
+        crate::log!("tokio-worker: exited {}\n", purpose);
+    }
 }
 
 fn reject_until_background_ap_ready() -> i32 {
@@ -24,27 +44,27 @@ fn reject_until_background_ap_ready() -> i32 {
     -2
 }
 
-fn spawn_on_background_ap(job: TokioBlockingJob) -> i32 {
+fn spawn_on_background_ap(job: TokioBlockingJob, purpose: &'static str) -> i32 {
     let Some((cpu_slot, core_kind, spawner)) = crate::workers::pick_background_spawner_with_slot()
     else {
         let _ = job;
         return reject_until_background_ap_ready();
     };
 
-    let Some(lane) =
-        crate::stackkeeper::try_acquire_tokio_lane(cpu_slot, core_kind, "tokio-blocking-job")
+    let Some(lane) = crate::stackkeeper::try_acquire_tokio_lane(cpu_slot, core_kind, purpose)
     else {
         let _ = job;
         if !LOGGED_NO_LANE.swap(true, Ordering::AcqRel) {
             crate::log!(
-                "tokio-worker: no free TRUEOS Tokio lane for cpu_slot={}; blocking job not launched\n",
-                cpu_slot
+                "tokio-worker: no free TRUEOS Tokio lane for cpu_slot={}; {} not launched\n",
+                cpu_slot,
+                purpose
             );
         }
         return -4;
     };
 
-    let token = match tokio_blocking_job_task(job, lane) {
+    let token = match tokio_blocking_job_task(job, lane, purpose) {
         Ok(token) => token,
         Err(_) => {
             let _ = crate::stackkeeper::release_tokio_lane(lane);
@@ -55,7 +75,8 @@ fn spawn_on_background_ap(job: TokioBlockingJob) -> i32 {
     if !LOGGED_SPAWN.swap(true, Ordering::AcqRel) {
         let tag = lane.tag();
         crate::log!(
-            "tokio-worker: using TRUEOS AP2+ background spawners for blocking jobs tag=0x{:08X} vm={} domain={} role={} lane{} cpu_slot={} core_kind={} scratch={:#x}+{}\n",
+            "tokio-worker: using TRUEOS AP2+ background spawners for {} tag=0x{:08X} vm={} domain={} role={} lane{} cpu_slot={} core_kind={} scratch={:#x}+{}\n",
+            purpose,
             tag.magic,
             tag.vm_id,
             tag.domain,
@@ -69,10 +90,20 @@ fn spawn_on_background_ap(job: TokioBlockingJob) -> i32 {
     }
 
     spawner.spawn(token);
+    if !LOGGED_SUBMITTED.swap(true, Ordering::AcqRel) {
+        crate::log!("tokio-worker: submitted {}\n", purpose);
+    }
     0
+}
+
+pub fn spawn_blocking_job_with_purpose(
+    job: Box<dyn FnOnce() + Send + 'static>,
+    purpose: &'static str,
+) -> i32 {
+    spawn_on_background_ap(job, purpose)
 }
 
 #[unsafe(no_mangle)]
 pub extern "Rust" fn trueos_tokio_spawn_blocking_job(job: TokioBlockingJob) -> i32 {
-    spawn_on_background_ap(job)
+    spawn_blocking_job_with_purpose(job, "tokio-blocking-job")
 }

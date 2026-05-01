@@ -9,7 +9,7 @@ extern crate std;
 
 use alloc::sync::Arc;
 use core::cell::Cell;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use embassy_executor::task;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::io;
@@ -28,6 +28,17 @@ static TOKIO_RT_MULTI_THREAD_TASK_SPAWNED: AtomicBool = AtomicBool::new(false);
 
 std::thread_local! {
     static TOKIO_STD_TLS_CANARY: Cell<u32> = const { Cell::new(0) };
+    static TOKIO_STD_TLS_ISOLATION: Cell<u32> = const { Cell::new(0) };
+}
+
+#[derive(Clone, Copy)]
+struct StdTlsIsolationSample {
+    label: u32,
+    cpu_slot: u32,
+    tokio_lane: u32,
+    before: u32,
+    after: u32,
+    leaked: u32,
 }
 
 async fn probe_async_identity() -> u32 {
@@ -156,7 +167,13 @@ fn run_tokio_blocking_canary_runtime() {
         }
     };
 
-    let touched_blocking_pool = runtime.block_on(probe_tokio_blocking_canary());
+    let touched_blocking_pool = runtime.block_on(async {
+        let touched_blocking_pool = probe_tokio_blocking_canary().await;
+        if touched_blocking_pool {
+            probe_std_thread_local_isolation_surface().await;
+        }
+        touched_blocking_pool
+    });
     if touched_blocking_pool {
         crate::log!("tokio_probe: enter blocking.rt.shutdown_timeout\n");
         runtime.shutdown_timeout(core::time::Duration::from_millis(10));
@@ -289,7 +306,9 @@ async fn probe_tokio_fs_runtime_surface() {
 
     crate::log!("tokio_probe: success fs.file_ops probe_suite\n");
 
-    if !probe_tokio_blocking_canary().await {
+    if probe_tokio_blocking_canary().await {
+        probe_std_thread_local_isolation_surface().await;
+    } else {
         crate::log!(
             "tokio_probe: note blocking.spawn_blocking still unsupported; fs.file_ops use TRUEOS CABI handle backend\n"
         );
@@ -518,6 +537,106 @@ fn probe_std_sync_surface() {
         Err(std::sync::TryLockError::Poisoned(_)) => {
             crate::log!("tokio_probe: failure std.sync.mutex.poisoned\n");
         }
+    }
+}
+
+fn run_std_tls_isolation_worker(label: u32, release: Arc<AtomicU32>) -> StdTlsIsolationSample {
+    while release.load(Ordering::Acquire) == 0 {
+        core::hint::spin_loop();
+    }
+
+    let before = TOKIO_STD_TLS_ISOLATION.with(|slot| slot.get());
+    TOKIO_STD_TLS_ISOLATION.with(|slot| slot.set(label));
+
+    let mut leaked = 0;
+    for _ in 0..4096 {
+        let seen = TOKIO_STD_TLS_ISOLATION.with(|slot| slot.get());
+        if seen != label {
+            leaked = seen;
+            break;
+        }
+        core::hint::spin_loop();
+    }
+
+    let after = TOKIO_STD_TLS_ISOLATION.with(|slot| slot.get());
+    StdTlsIsolationSample {
+        label,
+        cpu_slot: crate::stackkeeper::trueos_tokio_tls_current_cpu_slot(),
+        tokio_lane: crate::stackkeeper::trueos_tokio_tls_current_slot(),
+        before,
+        after,
+        leaked,
+    }
+}
+
+async fn probe_std_thread_local_isolation_surface() {
+    if !tokio_background_worker_ready() {
+        crate::log!(
+            "tokio_probe: note std.thread_local carrier_isolation deferred until BACKGROUND_AP_WORKER_READY\n"
+        );
+        return;
+    }
+
+    crate::log!("tokio_probe: enter std.thread_local carrier_isolation\n");
+
+    let release = Arc::new(AtomicU32::new(0));
+    let left_release = release.clone();
+    let right_release = release.clone();
+    let left = tokio::task::spawn_blocking(move || {
+        run_std_tls_isolation_worker(0x7151_0001, left_release)
+    });
+    let right = tokio::task::spawn_blocking(move || {
+        run_std_tls_isolation_worker(0x7151_0002, right_release)
+    });
+
+    tokio::task::yield_now().await;
+    release.store(1, Ordering::Release);
+
+    let joined = tokio::time::timeout(core::time::Duration::from_millis(150), async {
+        let left = left.await.map_err(|_| "left")?;
+        let right = right.await.map_err(|_| "right")?;
+        Ok::<(StdTlsIsolationSample, StdTlsIsolationSample), &'static str>((left, right))
+    })
+    .await;
+
+    let Ok(Ok((left, right))) = joined else {
+        crate::log!("tokio_probe: failure std.thread_local carrier_isolation_timeout\n");
+        return;
+    };
+
+    let same_lane = left.tokio_lane == right.tokio_lane;
+    let isolated = !same_lane
+        && left.before == 0
+        && right.before == 0
+        && left.after == left.label
+        && right.after == right.label
+        && left.leaked == 0
+        && right.leaked == 0;
+
+    if isolated {
+        crate::log!(
+            "tokio_probe: success std.thread_local carrier_isolation left_cpu={} left_lane={} right_cpu={} right_lane={}\n",
+            left.cpu_slot,
+            left.tokio_lane,
+            right.cpu_slot,
+            right.tokio_lane
+        );
+    } else {
+        crate::log!(
+            "tokio_probe: failure std.thread_local carrier_isolation left(label=0x{:08X} cpu={} lane={} before=0x{:08X} after=0x{:08X} leaked=0x{:08X}) right(label=0x{:08X} cpu={} lane={} before=0x{:08X} after=0x{:08X} leaked=0x{:08X}); thread-local worker identity unsafe for Rayon-style schedulers\n",
+            left.label,
+            left.cpu_slot,
+            left.tokio_lane,
+            left.before,
+            left.after,
+            left.leaked,
+            right.label,
+            right.cpu_slot,
+            right.tokio_lane,
+            right.before,
+            right.after,
+            right.leaked
+        );
     }
 }
 
@@ -933,6 +1052,7 @@ async fn run_probe_suite() -> Result<(), &'static str> {
     probe_tokio_net_surface().await?;
 
     probe_tokio_blocking_canary().await;
+    probe_std_thread_local_isolation_surface().await;
 
     {
         crate::log!("tokio_probe: enter time.sleep\n");
