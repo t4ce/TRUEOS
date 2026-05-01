@@ -5,6 +5,7 @@ use alloc::{boxed::Box, string::ToString, vec::Vec};
 use core::{
     convert::Infallible,
     pin::Pin,
+    sync::atomic::{AtomicU16, Ordering},
     task::{Context, Poll},
 };
 use std::{future::poll_fn, io};
@@ -18,11 +19,23 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream, ReadHalf, WriteHalf};
 use trueos_chat::{ChatConfig, ChatHub, ChatMethod, ChatRequest};
 use v::vnet as api;
 
-use crate::{r::net::VNet, t::net::hyper_io::HyperTokioIo};
+use crate::{allports::services::CHAT_HTTP_TCP_PORT, r::net::VNet, t::net::hyper_io::HyperTokioIo};
 
 const CHAT_HTTP_BODY_MAX: usize = 64 * 1024;
-const CHAT_HTTP_PORT_RANGES: &[core::ops::RangeInclusive<u16>] = &[82..=128, 8080..=8090];
+const CHAT_HTTP_PORT_RANGES: &[core::ops::RangeInclusive<u16>] = &[
+    CHAT_HTTP_TCP_PORT..=CHAT_HTTP_TCP_PORT,
+    82..=128,
+    8080..=8090,
+];
 static CHAT_HUB: spin::Mutex<Option<ChatHub>> = spin::Mutex::new(None);
+static CHAT_HTTP_PORT: AtomicU16 = AtomicU16::new(0);
+
+pub fn current_port() -> Option<u16> {
+    match CHAT_HTTP_PORT.load(Ordering::Acquire) {
+        0 => None,
+        port => Some(port),
+    }
+}
 
 pub struct HyperBytesBody {
     bytes: Option<Bytes>,
@@ -250,8 +263,10 @@ async fn chat_http_runtime() {
         if listener.is_none() {
             listener = open_lowest_available_listener(vnet_ref).await;
             if let Some((_, port)) = listener {
+                CHAT_HTTP_PORT.store(port, Ordering::Release);
                 crate::log!("chat-http: listening on tcp {}\n", port);
             } else {
+                CHAT_HTTP_PORT.store(0, Ordering::Release);
                 crate::log!("chat-http: no free tcp port in service ranges\n");
                 tokio::time::sleep(core::time::Duration::from_secs(5)).await;
                 continue;
@@ -286,6 +301,7 @@ async fn chat_http_runtime() {
                 api::Event::Closed { handle } => {
                     if listener.map(|(listener_handle, _)| listener_handle) == Some(handle) {
                         crate::log!("chat-http: listener closed, reopening\n");
+                        CHAT_HTTP_PORT.store(0, Ordering::Release);
                         listener = None;
                     }
                     if let Some(idx) = sessions.iter().position(|session| session.handle == handle)

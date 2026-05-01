@@ -23,6 +23,10 @@ impl ChatPromptMode {
 
 static NEXT_CHAT_CHANNEL: AtomicU32 = AtomicU32::new(1);
 pub(crate) const DEFAULT_CHAT_SLOT: &str = "LUM";
+const DEFAULT_CHAT_ROOM: &str = "lobby";
+const SHELL_CHAT_USER: &str = "shell";
+const CHAT_HTTP_TIMEOUT_MS: u32 = 5_000;
+const CHAT_HTTP_MAX_RX: usize = 16 * 1024;
 
 fn channel_slot_label(slot_id: &matrix::MatrixSlotId) -> AllocString {
     if slot_id.is_empty() || slot_id.as_str() == DEFAULT_CHAT_SLOT {
@@ -70,6 +74,61 @@ fn create_channel(io: &'static dyn ShellBackend2, current: &MatrixTarget) {
     let _ = io;
 }
 
+fn form_push_encoded(out: &mut AllocString, value: &str) {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    for byte in value.as_bytes().iter().copied() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(char::from(byte));
+            }
+            b' ' => out.push('+'),
+            other => {
+                out.push('%');
+                out.push(char::from(HEX[(other >> 4) as usize]));
+                out.push(char::from(HEX[(other & 0x0f) as usize]));
+            }
+        }
+    }
+}
+
+fn form_body(user: &str, text: &str) -> AllocString {
+    let mut body = AllocString::from("user=");
+    form_push_encoded(&mut body, user);
+    body.push_str("&text=");
+    form_push_encoded(&mut body, text);
+    body
+}
+
+fn chat_url(port: u16, room: &str) -> AllocString {
+    format!("http://127.0.0.1:{}/api/rooms/{}/messages", port, room)
+}
+
+#[embassy_executor::task(pool_size = 4)]
+async fn shell_chat_post_task(target: MatrixTarget, text: AllocString) {
+    let Some(port) = crate::r::net::srv::chat::current_port() else {
+        print_matrix_target_line(&target, "chat: service offline");
+        return;
+    };
+    let url = chat_url(port, DEFAULT_CHAT_ROOM);
+    let body = form_body(SHELL_CHAT_USER, text.as_str());
+    let result = crate::t::block_on_io(crate::t::net::http::post_http_body_hyper(
+        url.as_str(),
+        "application/x-www-form-urlencoded",
+        body.as_bytes(),
+        CHAT_HTTP_TIMEOUT_MS,
+        CHAT_HTTP_MAX_RX,
+    ));
+    match result {
+        Ok(Ok(_)) => {
+            print_matrix_target_line(&target, format!("{}: {}", SHELL_CHAT_USER, text).as_str())
+        }
+        Ok(Err(err)) => {
+            print_matrix_target_line(&target, format!("chat: post failed: {:?}", err).as_str())
+        }
+        Err(_) => print_matrix_target_line(&target, "chat: runtime build failed"),
+    }
+}
+
 pub(crate) fn submit(
     io: &'static dyn ShellBackend2,
     mode: ChatPromptMode,
@@ -87,5 +146,15 @@ pub(crate) fn submit(
 
     ensure_default_channel(target.output_mask);
     let active_target = matrix_target_for_backend(io);
-    crate::r::lumen_service::submit_chat(active_target, trimmed);
+    let text = AllocString::from(trimmed);
+    match shell_chat_post_task(active_target.clone(), text.clone()) {
+        Ok(token) => {
+            if let Some(spawner) = crate::workers::pick_background_spawner() {
+                spawner.spawn(token);
+            } else {
+                print_matrix_target_line(&active_target, "chat: no worker spawner");
+            }
+        }
+        Err(_) => print_matrix_target_line(&active_target, "chat: submit busy"),
+    }
 }

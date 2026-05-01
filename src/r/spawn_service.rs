@@ -995,18 +995,11 @@ const BOOT_TINYLLAMA_ASSETS: [BootLumenAsset; 2] = [
         max_bytes: 64 * 1024 * 1024,
     },
 ];
-const BOOT_TINYLLAMA_DELAY_SECS: u64 = 60;
 const BOOT_TINYLLAMA_MOUNT_RETRY_SECS: u64 = 10;
 const BOOT_TINYLLAMA_TIMEOUT_MS: u32 = 180_000;
 
 #[embassy_executor::task]
 async fn boot_tinyllama_fetch_task() {
-    crate::log!(
-        "spawn-svc: boot-tinyllama-fetch sleeping {}s before first mount check\n",
-        BOOT_TINYLLAMA_DELAY_SECS
-    );
-    Timer::after(EmbassyDuration::from_secs(BOOT_TINYLLAMA_DELAY_SECS)).await;
-
     let disk = loop {
         if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
             let info = disk.info();
