@@ -4,7 +4,7 @@ extern crate alloc;
 
 use alloc::{collections::VecDeque, format, string::String, vec::Vec};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ChatConfig {
@@ -48,7 +48,7 @@ pub struct ChatResponse {
     pub body: Vec<u8>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct Message {
     id: u64,
     user: String,
@@ -56,7 +56,7 @@ struct Message {
     unix_ms: u64,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct Room {
     name: String,
     messages: VecDeque<Message>,
@@ -98,6 +98,12 @@ struct ErrorJson<'a> {
     error: &'a str,
 }
 
+#[derive(Deserialize, Serialize)]
+struct ChatSnapshot {
+    next_id: u64,
+    rooms: Vec<Room>,
+}
+
 impl ChatHub {
     pub fn new(config: ChatConfig) -> Self {
         Self {
@@ -120,6 +126,61 @@ impl ChatHub {
             .find(|candidate| candidate.name == name)
             .map(|room| room.messages.len())
             .unwrap_or(0)
+    }
+
+    pub fn to_json_bytes(&self) -> Vec<u8> {
+        serde_json::to_vec(&ChatSnapshot {
+            next_id: self.next_id,
+            rooms: self.rooms.clone(),
+        })
+        .unwrap_or_else(|_| b"{\"next_id\":1,\"rooms\":[]}".to_vec())
+    }
+
+    pub fn from_json_bytes(config: ChatConfig, bytes: &[u8]) -> Result<Self, ()> {
+        let snapshot: ChatSnapshot = serde_json::from_slice(bytes).map_err(|_| ())?;
+        let mut rooms = Vec::new();
+        let mut max_id = 0u64;
+
+        for mut room in snapshot.rooms.into_iter() {
+            if rooms.len() >= config.max_rooms {
+                break;
+            }
+            let Some(name) = sanitize_name(room.name.as_str(), config.max_name_len) else {
+                continue;
+            };
+            if rooms.iter().any(|candidate: &Room| candidate.name == name) {
+                continue;
+            }
+
+            let mut messages = VecDeque::new();
+            for mut message in room.messages.drain(..) {
+                if message.id == 0 {
+                    continue;
+                }
+                let Some(user) = sanitize_text(message.user.as_str(), config.max_name_len) else {
+                    continue;
+                };
+                let Some(text) = sanitize_text(message.text.as_str(), config.max_message_len)
+                else {
+                    continue;
+                };
+                message.user = user;
+                message.text = text;
+                max_id = max_id.max(message.id);
+                messages.push_back(message);
+                while messages.len() > config.max_messages_per_room {
+                    messages.pop_front();
+                }
+            }
+
+            rooms.push(Room { name, messages });
+        }
+
+        Ok(Self {
+            config,
+            next_id: snapshot.next_id.max(max_id.saturating_add(1)).max(1),
+            rooms,
+        })
     }
 
     pub fn handle(&mut self, req: ChatRequest) -> ChatResponse {

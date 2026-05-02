@@ -113,11 +113,7 @@ fn chat_post_body(user: &str, text: &str) -> AllocString {
 
 fn post_chat_message(user: &str, text: &str) -> bool {
     if crate::r::net::srv::chat::post_local_message(CHAT_ROOM, user, text) {
-        crate::log!(
-            "lumen-service: inserted chat message user={} bytes={}\n",
-            user,
-            text.len()
-        );
+        crate::log!("lumen-service: inserted chat message user={} bytes={}\n", user, text.len());
         return true;
     }
 
@@ -138,7 +134,11 @@ fn post_chat_message(user: &str, text: &str) -> bool {
         Ok(Ok(_))
     );
     if !ok {
-        crate::log!("lumen-service: chat post failed via http user={} bytes={}\n", user, text.len());
+        crate::log!(
+            "lumen-service: chat post failed via http user={} bytes={}\n",
+            user,
+            text.len()
+        );
     }
     ok
 }

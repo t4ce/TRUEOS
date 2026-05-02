@@ -1,6 +1,46 @@
 const GPGPU_PREFLIGHT_LANES: usize = 4;
+const GPGPU_BURN_MIN_ROWS: usize = 512;
+const GPGPU_BURN_MIN_K_DIM: usize = 512;
 
 static GPGPU_PREFLIGHT_SUBMITTED: AtomicBool = AtomicBool::new(false);
+static GPGPU_PREFLIGHT_ACCEPTED: AtomicBool = AtomicBool::new(false);
+static GPGPU_PREFLIGHT_COMPLETED: AtomicBool = AtomicBool::new(false);
+static GPGPU_PREFLIGHT_MARKER: AtomicU32 = AtomicU32::new(0);
+static GPGPU_PREFLIGHT_DOT: AtomicU32 = AtomicU32::new(0);
+static GPGPU_PREFLIGHT_SUM_A: AtomicU32 = AtomicU32::new(0);
+static GPGPU_PREFLIGHT_SUM_B: AtomicU32 = AtomicU32::new(0);
+static GPGPU_PREFLIGHT_LANES_OBSERVED: AtomicU32 = AtomicU32::new(0);
+
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct GpgpuPreflightStatus {
+    pub(crate) submitted: bool,
+    pub(crate) accepted: bool,
+    pub(crate) completed: bool,
+    pub(crate) guc_ready: bool,
+    pub(crate) marker: u32,
+    pub(crate) dot: u32,
+    pub(crate) sum_a: u32,
+    pub(crate) sum_b: u32,
+    pub(crate) lanes: u32,
+    pub(crate) min_burn_rows: usize,
+    pub(crate) min_burn_k_dim: usize,
+}
+
+pub(crate) fn gpgpu_preflight_status() -> GpgpuPreflightStatus {
+    GpgpuPreflightStatus {
+        submitted: GPGPU_PREFLIGHT_SUBMITTED.load(Ordering::Acquire),
+        accepted: GPGPU_PREFLIGHT_ACCEPTED.load(Ordering::Acquire),
+        completed: GPGPU_PREFLIGHT_COMPLETED.load(Ordering::Acquire),
+        guc_ready: crate::intel::guc_ready(),
+        marker: GPGPU_PREFLIGHT_MARKER.load(Ordering::Acquire),
+        dot: GPGPU_PREFLIGHT_DOT.load(Ordering::Acquire),
+        sum_a: GPGPU_PREFLIGHT_SUM_A.load(Ordering::Acquire),
+        sum_b: GPGPU_PREFLIGHT_SUM_B.load(Ordering::Acquire),
+        lanes: GPGPU_PREFLIGHT_LANES_OBSERVED.load(Ordering::Acquire),
+        min_burn_rows: GPGPU_BURN_MIN_ROWS,
+        min_burn_k_dim: GPGPU_BURN_MIN_K_DIM,
+    }
+}
 
 pub(crate) fn submit_gpgpu_preflight_once() {
     if GPGPU_PREFLIGHT_SUBMITTED.swap(true, Ordering::AcqRel) {
@@ -101,6 +141,13 @@ fn submit_gpgpu_preflight(dev: crate::intel::Dev, warm: RenderWarmState) -> bool
         && gpu_sum_a == sum_a
         && gpu_sum_b == sum_b
         && gpu_lanes == GPGPU_PREFLIGHT_LANES as u32;
+    GPGPU_PREFLIGHT_COMPLETED.store(completed, Ordering::Release);
+    GPGPU_PREFLIGHT_ACCEPTED.store(accepted, Ordering::Release);
+    GPGPU_PREFLIGHT_MARKER.store(marker, Ordering::Release);
+    GPGPU_PREFLIGHT_DOT.store(gpu_dot, Ordering::Release);
+    GPGPU_PREFLIGHT_SUM_A.store(gpu_sum_a, Ordering::Release);
+    GPGPU_PREFLIGHT_SUM_B.store(gpu_sum_b, Ordering::Release);
+    GPGPU_PREFLIGHT_LANES_OBSERVED.store(gpu_lanes, Ordering::Release);
 
     crate::log!(
         "intel/gpgpu: preflight accepted={} completed={} backend=rcs-mi-store-constants guc_ready={} guc_status=0x{:08X} lanes={} marker=0x{:08X} dot={} sum_a={} sum_b={} batch_bytes=0x{:X} input_a_gpu=0x{:X} input_b_gpu=0x{:X} result_gpu=0x{:X} next=eu-kernel-dispatch does_not_prove=eu_thread_execution_or_matmul_or_guc_scheduling\n",

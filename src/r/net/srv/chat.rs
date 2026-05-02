@@ -5,7 +5,7 @@ use alloc::{boxed::Box, string::String as AllocString, string::ToString, vec::Ve
 use core::{
     convert::Infallible,
     pin::Pin,
-    sync::atomic::{AtomicU16, Ordering},
+    sync::atomic::{AtomicBool, AtomicU16, Ordering},
     task::{Context, Poll},
 };
 use std::{future::poll_fn, io};
@@ -22,12 +22,15 @@ use v::vnet as api;
 use crate::{allports::services::CHAT_HTTP_TCP_PORT, r::net::VNet, t::net::hyper_io::HyperTokioIo};
 
 const CHAT_HTTP_BODY_MAX: usize = 64 * 1024;
+const CHAT_STORE_DIR: &str = "chat";
+const CHAT_STORE_PATH: &str = "chat/rooms.json";
 const CHAT_HTTP_PORT_RANGES: &[core::ops::RangeInclusive<u16>] = &[
     CHAT_HTTP_TCP_PORT..=CHAT_HTTP_TCP_PORT,
     82..=128,
     8080..=8090,
 ];
 static CHAT_HUB: spin::Mutex<Option<ChatHub>> = spin::Mutex::new(None);
+static CHAT_HUB_LOADED: AtomicBool = AtomicBool::new(false);
 static CHAT_HTTP_PORT: AtomicU16 = AtomicU16::new(0);
 
 pub fn current_port() -> Option<u16> {
@@ -86,6 +89,77 @@ fn now_ms() -> u64 {
         .or_else(crate::time::unix_time_seconds)
         .unwrap_or_else(crate::time::uptime_seconds)
         .saturating_mul(1000)
+}
+
+fn load_chat_hub_once_sync() {
+    if CHAT_HUB_LOADED.load(Ordering::Acquire) {
+        return;
+    }
+    {
+        let guard = CHAT_HUB.lock();
+        if guard.is_some() {
+            CHAT_HUB_LOADED.store(true, Ordering::Release);
+            return;
+        }
+    }
+
+    let bytes = match crate::r::io::kfs::read_file(CHAT_STORE_PATH) {
+        Ok(bytes) => bytes,
+        Err(crate::r::io::kfs::FsError::NoRoot) => return,
+        Err(crate::r::io::kfs::FsError::NotFound) => {
+            CHAT_HUB_LOADED.store(true, Ordering::Release);
+            return;
+        }
+        Err(err) => {
+            crate::log!("chat: load {} failed {:?}\n", CHAT_STORE_PATH, err);
+            return;
+        }
+    };
+
+    match ChatHub::from_json_bytes(ChatConfig::default(), bytes.as_slice()) {
+        Ok(hub) => {
+            let room_count = hub.room_count();
+            let mut guard = CHAT_HUB.lock();
+            if guard.is_none() {
+                *guard = Some(hub);
+                crate::log!("chat: loaded {} room(s) from {}\n", room_count, CHAT_STORE_PATH);
+            }
+            CHAT_HUB_LOADED.store(true, Ordering::Release);
+        }
+        Err(()) => {
+            crate::log!("chat: ignored invalid {}\n", CHAT_STORE_PATH);
+            CHAT_HUB_LOADED.store(true, Ordering::Release);
+        }
+    }
+}
+
+fn chat_hub_snapshot_bytes() -> Option<Vec<u8>> {
+    let guard = CHAT_HUB.lock();
+    guard.as_ref().map(ChatHub::to_json_bytes)
+}
+
+fn save_chat_hub_snapshot_sync() {
+    let Some(bytes) = chat_hub_snapshot_bytes() else {
+        return;
+    };
+    if crate::r::io::kfs::create_dir_all(CHAT_STORE_DIR).is_err() {
+        return;
+    }
+    let handle = match crate::r::io::kfs::write_file_begin(CHAT_STORE_PATH, bytes.len() as u64) {
+        Ok(handle) => handle,
+        Err(err) => {
+            crate::log!("chat: save {} begin failed {:?}\n", CHAT_STORE_PATH, err);
+            return;
+        }
+    };
+    if let Err(err) = crate::r::io::kfs::write_file_chunk(handle, bytes.as_slice()) {
+        let _ = crate::r::io::kfs::write_file_abort(handle);
+        crate::log!("chat: save {} chunk failed {:?}\n", CHAT_STORE_PATH, err);
+        return;
+    }
+    if let Err(err) = crate::r::io::kfs::write_file_finish(handle) {
+        crate::log!("chat: save {} finish failed {:?}\n", CHAT_STORE_PATH, err);
+    }
 }
 
 fn chat_form_value(body: &[u8], key: &str, max_len: usize) -> Option<AllocString> {
@@ -164,6 +238,7 @@ fn chat_post_body(user: &str, text: &str) -> Vec<u8> {
 }
 
 pub fn post_local_message(room: &str, user: &str, text: &str) -> bool {
+    load_chat_hub_once_sync();
     let body = chat_post_body(user, text);
     let response = {
         let mut guard = CHAT_HUB.lock();
@@ -176,7 +251,11 @@ pub fn post_local_message(room: &str, user: &str, text: &str) -> bool {
             now_ms: now_ms(),
         })
     };
-    response.status == 200
+    let ok = response.status == 200;
+    if ok {
+        save_chat_hub_snapshot_sync();
+    }
+    ok
 }
 
 fn maybe_submit_lumen_chat_post(method: ChatMethod, path: &str, body: &[u8], status: u16) {
@@ -221,6 +300,7 @@ async fn incoming_to_vec(mut body: Incoming, limit: usize) -> Result<Vec<u8>, ()
 async fn handle_hyper_request(
     request: hyper::Request<Incoming>,
 ) -> Result<hyper::Response<HyperBytesBody>, Infallible> {
+    load_chat_hub_once_sync();
     let method = match *request.method() {
         hyper::Method::GET => ChatMethod::Get,
         hyper::Method::POST => ChatMethod::Post,
@@ -254,6 +334,9 @@ async fn handle_hyper_request(
         })
     };
     maybe_submit_lumen_chat_post(method, path.as_str(), body.as_slice(), response.status);
+    if method == ChatMethod::Post && response.status == 200 {
+        save_chat_hub_snapshot_sync();
+    }
     let no_cache = response.content_type.starts_with("application/json");
     let mut builder = hyper::Response::builder()
         .status(status_code(response.status))
@@ -363,6 +446,8 @@ async fn open_lowest_available_listener(vnet: &VNet) -> Option<(api::NetHandle, 
 }
 
 async fn chat_http_runtime() {
+    load_chat_hub_once_sync();
+
     let vnet_ref: &'static VNet = loop {
         if let Some(vnet) = VNet::open_primary() {
             break Box::leak(Box::new(vnet));

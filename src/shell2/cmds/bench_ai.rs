@@ -34,7 +34,10 @@ const LUMEN_AP_CHUNKS_PER_WORKER: usize = 4;
 const LUMEN_AP_MIN_CHUNK_ROWS: usize = 16;
 const LUMEN_AP_MAX_CHUNK_ROWS: usize = 256;
 const LUMEN_RUNTIME_MAX_SEQ_LEN: usize = 1024;
-const LUMEN_RUNTIME_MAX_NEW_TOKENS: usize = 128;
+const LUMEN_RUNTIME_MAX_NEW_TOKENS: usize = 64;
+const LUMEN_RUNTIME_SOFT_STOP_TOKENS: usize = 48;
+const LUMEN_RUNTIME_MIN_SENTENCE_TOKENS: usize = 24;
+const LUMEN_RUNTIME_MAX_ANSWER_CHARS: usize = 512;
 const LUMEN_RUNTIME_PROGRESS_TENSORS: usize = 16;
 const LUMEN_RUNTIME_EARLY_PROGRESS_TENSORS: usize = 2;
 const LUMEN_RUNTIME_HEAP_EXTRA_BYTES: usize = 512 * 1024 * 1024;
@@ -444,7 +447,10 @@ fn normalize_prompt_for_vocab(prompt: &str) -> AllocString {
 }
 
 fn lumen_chat_prompt(user: &str) -> AllocString {
-    format!("User: {}\nAssistant:", user.trim())
+    format!(
+        "System: You are Lumen, a friendly local chat assistant. Reply directly and briefly.\nUser: {}\nAssistant:",
+        user.trim()
+    )
 }
 
 fn encode_prompt_lossy(prompt: &str, vocab_entries: &[(AllocString, usize)]) -> Vec<usize> {
@@ -589,6 +595,28 @@ fn trim_lumen_turn_markers(answer: &str) -> AllocString {
     answer[..end].trim().to_string()
 }
 
+fn lumen_answer_has_sentence_end(answer: &str) -> bool {
+    let trimmed = answer.trim_end();
+    let trimmed = trimmed.trim_end_matches(['"', '\'', ')', ']', '}']);
+    trimmed
+        .chars()
+        .next_back()
+        .map(|ch| matches!(ch, '.' | '?' | '!'))
+        .unwrap_or(false)
+}
+
+fn lumen_should_stop_reasonably(answer: &str, generated_tokens: usize) -> bool {
+    if answer.len() >= LUMEN_RUNTIME_MAX_ANSWER_CHARS {
+        return true;
+    }
+    if generated_tokens >= LUMEN_RUNTIME_SOFT_STOP_TOKENS && lumen_answer_has_sentence_end(answer) {
+        return true;
+    }
+    generated_tokens >= LUMEN_RUNTIME_MIN_SENTENCE_TOKENS
+        && answer.len() >= 80
+        && lumen_answer_has_sentence_end(answer)
+}
+
 struct LumenGenerateReport {
     answer: AllocString,
     prompt_tokens: usize,
@@ -660,6 +688,9 @@ fn generate_lumen_answer(
             answer.push_str(token_piece_to_text(piece).as_str());
             generated = generated.saturating_add(1);
             if answer.contains("\nUser:") || answer.contains("\nAssistant:") {
+                break;
+            }
+            if lumen_should_stop_reasonably(answer.as_str(), generated) {
                 break;
             }
 
@@ -1958,9 +1989,11 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
 
         log(
             format!(
-                "bench lumen: runtime start parameter_dtype=bf16 runtime_dtype=bf16 max_seq_len={} max_new_tokens={} tokenizer_read={}ms heap_free={} heap_total={} note=interactive-until-q",
+                "bench lumen: runtime start parameter_dtype=bf16 runtime_dtype=bf16 max_seq_len={} max_new_tokens={} soft_stop_tokens={} min_sentence_tokens={} tokenizer_read={}ms heap_free={} heap_total={} note=interactive-until-q",
                 LUMEN_RUNTIME_MAX_SEQ_LEN,
                 LUMEN_RUNTIME_MAX_NEW_TOKENS,
+                LUMEN_RUNTIME_SOFT_STOP_TOKENS,
+                LUMEN_RUNTIME_MIN_SENTENCE_TOKENS,
                 tokenizer_ms,
                 format_bytes(heap.free_bytes as u64),
                 format_bytes(heap.usable_total as u64)

@@ -300,6 +300,10 @@ pub fn warm_state() -> Option<self::render::RenderWarmState> {
     self::render::warm_state()
 }
 
+pub(crate) fn gpgpu_preflight_status() -> self::render::GpgpuPreflightStatus {
+    self::render::gpgpu_preflight_status()
+}
+
 pub fn guc_status(warm: self::render::RenderWarmState) -> u32 {
     self::guc::status(Dev {
         bus: 0,
