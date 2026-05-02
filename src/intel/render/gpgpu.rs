@@ -14,6 +14,9 @@ static GPGPU_TILE_ARENA_MAPPED: AtomicBool = AtomicBool::new(false);
 static GPGPU_TILE_ARENA_STATUS_LOGGED: AtomicBool = AtomicBool::new(false);
 static GPGPU_EU_KERNEL_UPLOADED: AtomicBool = AtomicBool::new(false);
 static GPGPU_EU_WALKER_ENCODED: AtomicBool = AtomicBool::new(false);
+static GPGPU_EU_WALKER_SUBMITTED: AtomicBool = AtomicBool::new(false);
+static GPGPU_EU_WALKER_RETIRED: AtomicBool = AtomicBool::new(false);
+static GPGPU_EU_DISPATCH_DELTA: AtomicU32 = AtomicU32::new(0);
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct GpgpuPreflightStatus {
@@ -35,6 +38,9 @@ pub(crate) struct GpgpuPreflightStatus {
     pub(crate) enough_for_shape: bool,
     pub(crate) eu_kernel_uploaded: bool,
     pub(crate) eu_walker_encoded: bool,
+    pub(crate) eu_walker_submitted: bool,
+    pub(crate) eu_walker_retired: bool,
+    pub(crate) eu_dispatch_delta: u32,
 }
 
 pub(crate) fn gpgpu_preflight_status() -> GpgpuPreflightStatus {
@@ -59,6 +65,9 @@ pub(crate) fn gpgpu_preflight_status() -> GpgpuPreflightStatus {
         enough_for_shape: gpgpu_arena_enough_for_shape(arena_bytes),
         eu_kernel_uploaded: GPGPU_EU_KERNEL_UPLOADED.load(Ordering::Acquire),
         eu_walker_encoded: GPGPU_EU_WALKER_ENCODED.load(Ordering::Acquire),
+        eu_walker_submitted: GPGPU_EU_WALKER_SUBMITTED.load(Ordering::Acquire),
+        eu_walker_retired: GPGPU_EU_WALKER_RETIRED.load(Ordering::Acquire),
+        eu_dispatch_delta: GPGPU_EU_DISPATCH_DELTA.load(Ordering::Acquire),
     }
 }
 
@@ -99,6 +108,13 @@ pub(crate) fn submit_gpgpu_preflight_once() {
     }
     let eu_artifact = prepare_gpgpu_eu_artifact(warm, accepted);
     log_gpgpu_eu_artifact_status(eu_artifact);
+    if eu_artifact.walker_encoded {
+        let walker = submit_gpgpu_compute_walker_probe(dev, warm);
+        if !walker.retired {
+            recover_render_engine_after_nonretired_submit(dev, warm, "gpgpu-compute-walker");
+        }
+        log_gpgpu_compute_walker_status(walker);
+    }
 }
 
 fn gpgpu_arena_gpu_base(arena_bytes: usize) -> u64 {
@@ -426,6 +442,228 @@ fn log_gpgpu_eu_artifact_status(proof: GpgpuEuArtifactProof) {
     );
 }
 
+#[derive(Copy, Clone)]
+struct GpgpuComputeWalkerProof {
+    submitted: bool,
+    retired: bool,
+    marker: u32,
+    dispatch_before: u64,
+    dispatch_after: u64,
+    dispatch_delta: u64,
+    batch_bytes: usize,
+}
+
+fn submit_gpgpu_compute_walker_probe(
+    dev: crate::intel::Dev,
+    warm: RenderWarmState,
+) -> GpgpuComputeWalkerProof {
+    let dispatch_before = read_gpgpu_threads_dispatched(dev);
+    let marker_slot = RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD;
+    unsafe {
+        let slot = warm
+            .result_virt
+            .add(marker_slot * core::mem::size_of::<u32>()) as *mut u32;
+        core::ptr::write_volatile(slot, 0);
+        core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
+        core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
+    }
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+
+    let total_dwords = warm.batch_len / core::mem::size_of::<u32>();
+    let batch =
+        unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, total_dwords) };
+    let batch_bytes = match encode_gfx125_compute_walker_probe_batch(batch) {
+        Ok(bytes) => bytes,
+        Err(reason) => {
+            crate::log!("intel/gpgpu: compute-walker accepted=0 reason={}\n", reason);
+            return GpgpuComputeWalkerProof {
+                submitted: false,
+                retired: false,
+                marker: 0,
+                dispatch_before,
+                dispatch_after: dispatch_before,
+                dispatch_delta: 0,
+                batch_bytes: 0,
+            };
+        }
+    };
+    crate::intel::dma_flush(warm.batch_virt, batch_bytes);
+
+    GPGPU_EU_WALKER_SUBMITTED.store(true, Ordering::Release);
+    let retired = submit_warm_render_batch(
+        dev,
+        warm,
+        RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD,
+        "gpgpu-compute-walker",
+    );
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+
+    let marker = read_result_dword(warm, RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD);
+    let dispatch_after = read_gpgpu_threads_dispatched(dev);
+    let dispatch_delta = dispatch_after.saturating_sub(dispatch_before);
+    GPGPU_EU_WALKER_RETIRED.store(retired, Ordering::Release);
+    GPGPU_EU_DISPATCH_DELTA.store(dispatch_delta.min(u32::MAX as u64) as u32, Ordering::Release);
+
+    GpgpuComputeWalkerProof {
+        submitted: true,
+        retired,
+        marker,
+        dispatch_before,
+        dispatch_after,
+        dispatch_delta,
+        batch_bytes,
+    }
+}
+
+fn read_gpgpu_threads_dispatched(dev: crate::intel::Dev) -> u64 {
+    let lo = crate::intel::mmio_read(dev, TS_GPGPU_THREADS_DISPATCHED_LO) as u64;
+    let hi = crate::intel::mmio_read(dev, TS_GPGPU_THREADS_DISPATCHED_HI) as u64;
+    (hi << 32) | lo
+}
+
+fn encode_gfx125_compute_walker_probe_batch(
+    batch_dwords: &mut [u32],
+) -> Result<usize, &'static str> {
+    const STATE_COMPUTE_MODE_CMD: u32 = (3 << 29) | (1 << 24) | (5 << 16);
+    const CFE_STATE_CMD: u32 = (3 << 29) | (2 << 27) | (2 << 24) | 4;
+    const COMPUTE_WALKER_CMD: u32 = (3 << 29) | (2 << 27) | (2 << 24) | (2 << 18) | 37;
+    const PIPELINE_SELECT_GPGPU: u32 =
+        (3 << 29) | (1 << 27) | (1 << 24) | (4 << 16) | (0x03 << 8) | 2;
+    const GFX125_L1CC_WB: u32 = 2;
+    const COMPUTE_SBA_SPAN_BYTES: usize = 0x1000_0000;
+
+    fn push(batch_dwords: &mut [u32], cursor: &mut usize, value: u32) -> Result<(), &'static str> {
+        if *cursor >= batch_dwords.len() {
+            return Err("compute-walker-batch-exhausted");
+        }
+        batch_dwords[*cursor] = value;
+        *cursor += 1;
+        Ok(())
+    }
+
+    fn push_pipe_control(
+        batch_dwords: &mut [u32],
+        cursor: &mut usize,
+        flags: u32,
+    ) -> Result<(), &'static str> {
+        push(batch_dwords, cursor, PIPE_CONTROL_CMD)?;
+        push(batch_dwords, cursor, flags)?;
+        push(batch_dwords, cursor, 0)?;
+        push(batch_dwords, cursor, 0)?;
+        push(batch_dwords, cursor, 0)?;
+        push(batch_dwords, cursor, 0)
+    }
+
+    fn push_sba_address(
+        batch_dwords: &mut [u32],
+        cursor: &mut usize,
+        enable: bool,
+        mocs: u32,
+        address: u64,
+    ) -> Result<(), &'static str> {
+        let low = ((address as u32) & 0xFFFF_F000) | (mocs << 4) | u32::from(enable);
+        push(batch_dwords, cursor, low)?;
+        push(batch_dwords, cursor, (address >> 32) as u32)
+    }
+
+    fn push_sba_size(
+        batch_dwords: &mut [u32],
+        cursor: &mut usize,
+        enable: bool,
+        size_bytes: usize,
+    ) -> Result<(), &'static str> {
+        let size_bytes =
+            crate::intel::align_up(size_bytes, 4096).ok_or("compute-sba-size-align")?;
+        let size_bytes = u32::try_from(size_bytes).map_err(|_| "compute-sba-size-convert")?;
+        push(batch_dwords, cursor, (size_bytes & 0xFFFF_F000) | u32::from(enable))
+    }
+
+    batch_dwords.fill(0);
+    let mut cursor = 0usize;
+
+    push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_FLUSH_BITS)?;
+    push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS)?;
+    push(batch_dwords, &mut cursor, PIPELINE_SELECT_GPGPU)?;
+    push(batch_dwords, &mut cursor, STATE_BASE_ADDRESS_CMD)?;
+    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
+    push(
+        batch_dwords,
+        &mut cursor,
+        (RENDER_MOCS << 16) | (GFX125_L1CC_WB << 23),
+    )?;
+    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
+    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
+    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
+    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
+    push_sba_size(batch_dwords, &mut cursor, true, COMPUTE_SBA_SPAN_BYTES)?;
+    push_sba_size(batch_dwords, &mut cursor, true, COMPUTE_SBA_SPAN_BYTES)?;
+    push_sba_size(batch_dwords, &mut cursor, true, COMPUTE_SBA_SPAN_BYTES)?;
+    push_sba_size(batch_dwords, &mut cursor, true, COMPUTE_SBA_SPAN_BYTES)?;
+    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push_pipe_control(
+        batch_dwords,
+        &mut cursor,
+        PIPE_CONTROL_FLUSH_BITS | PIPE_CONTROL_INVALIDATE_BITS,
+    )?;
+    push(batch_dwords, &mut cursor, STATE_COMPUTE_MODE_CMD)?;
+    push(batch_dwords, &mut cursor, 0xFFFF_0000)?;
+    push(batch_dwords, &mut cursor, CFE_STATE_CMD)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, (64 << 16) | (1 << 3))?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    let walker_start = cursor;
+    for _ in 0..39 {
+        push(batch_dwords, &mut cursor, 0)?;
+    }
+    batch_dwords[walker_start] = COMPUTE_WALKER_CMD;
+    batch_dwords[walker_start + 5] = 0xFFFF_FFFF;
+    batch_dwords[walker_start + 6] = 0;
+    batch_dwords[walker_start + 7] = 1;
+    batch_dwords[walker_start + 8] = 1;
+    batch_dwords[walker_start + 9] = 1;
+
+    let idd = walker_start + 18;
+    batch_dwords[idd] = (GPU_VA_DRAW_STATE_BASE + GPGPU_EU_KERNEL_OFFSET_BYTES as u64) as u32;
+    batch_dwords[idd + 5] = 1;
+
+    let post = walker_start + 26;
+    batch_dwords[post] = 1 | (1 << 2) | (RENDER_MOCS << 4);
+    let dst = GPU_VA_RESULT_BASE
+        + (RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD as u64) * core::mem::size_of::<u32>() as u64;
+    batch_dwords[post + 1] = dst as u32;
+    batch_dwords[post + 2] = (dst >> 32) as u32;
+    batch_dwords[post + 3] = RCS_EXEC_RESULT_COMPUTE_WALKER_DONE;
+    batch_dwords[post + 4] = 0;
+
+    push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_FLUSH_BITS)?;
+    push(batch_dwords, &mut cursor, MI_BATCH_BUFFER_END)?;
+    push(batch_dwords, &mut cursor, MI_NOOP)?;
+
+    Ok(cursor * core::mem::size_of::<u32>())
+}
+
+fn log_gpgpu_compute_walker_status(proof: GpgpuComputeWalkerProof) {
+    let eu_dispatch_observed = proof.dispatch_delta != 0;
+    crate::log!(
+        "intel/gpgpu: compute-walker-proof submitted={} retired={} marker=0x{:08X} marker_expected=0x{:08X} dispatch_before={} dispatch_after={} dispatch_delta={} batch_bytes=0x{:X} eu_execution_runs={} result_c_changed_by_eu=0 cpu_reads_c_back=1 backend=gfx125-compute-walker next=replace-eot-only-kernel-with-c-store-kernel does_not_prove=eu_memory_store_or_matmul\n",
+        proof.submitted as u8,
+        proof.retired as u8,
+        proof.marker,
+        RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        proof.dispatch_before,
+        proof.dispatch_after,
+        proof.dispatch_delta,
+        proof.batch_bytes,
+        eu_dispatch_observed as u8,
+    );
+}
+
 fn encode_gpgpu_preflight_batch(
     batch_dwords: &mut [u32],
     dot: u32,
@@ -433,17 +671,11 @@ fn encode_gpgpu_preflight_batch(
     sum_b: u32,
 ) -> Result<usize, &'static str> {
     const STORES: [(usize, fn(u32, u32, u32) -> u32); 5] = [
-        (
-            RESULT_SLOT_GPGPU_PREFLIGHT_MARKER_DWORD,
-            |_, _, _| RCS_EXEC_RESULT_GPGPU_PREFLIGHT_DONE,
-        ),
+        (RESULT_SLOT_GPGPU_PREFLIGHT_MARKER_DWORD, |_, _, _| RCS_EXEC_RESULT_GPGPU_PREFLIGHT_DONE),
         (RESULT_SLOT_GPGPU_PREFLIGHT_DOT_DWORD, |dot, _, _| dot),
         (RESULT_SLOT_GPGPU_PREFLIGHT_SUM_A_DWORD, |_, sum_a, _| sum_a),
         (RESULT_SLOT_GPGPU_PREFLIGHT_SUM_B_DWORD, |_, _, sum_b| sum_b),
-        (
-            RESULT_SLOT_GPGPU_PREFLIGHT_LANES_DWORD,
-            |_, _, _| GPGPU_PREFLIGHT_LANES as u32,
-        ),
+        (RESULT_SLOT_GPGPU_PREFLIGHT_LANES_DWORD, |_, _, _| GPGPU_PREFLIGHT_LANES as u32),
     ];
     const STORE_DWORDS: usize = 4;
     const END_DWORDS: usize = 2;

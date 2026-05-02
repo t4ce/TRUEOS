@@ -222,6 +222,9 @@ pub fn enter_vmx_root_for_current_cpu_contract() -> Result<(), &'static str> {
     }
 
     VMX_ROOT_ACTIVE_BY_CPU[slot].store(true, Ordering::Release);
+    if slot >= 2 {
+        crate::r::readiness::set(crate::r::readiness::VTHREAD_HW_TAG_READY);
+    }
     hvlogf(format_args!(
         "hv: vmx core-contract active slot={} revision=0x{:08X} vmxon_pa=0x{:016X}",
         slot, revision, vmxon_pa

@@ -64,7 +64,7 @@ constant. The exact value matters less than never accepting untagged FS values.
 New module
 ----------
 
-Add `src/th/vthread.rs` once the code patch starts. It should own:
+`src/th/vthread.rs` owns:
 
 ```rust
 pub fn current_record() -> Option<&'static VThreadRecord>;
@@ -119,7 +119,7 @@ been proven.
 One-shot probe
 --------------
 
-Add a boot probe gated on:
+The boot probe is gated on:
 
 ```text
 VTHREAD_HW_TAG_READY | BACKGROUND_AP_WORKER_READY | TOKIO_RUNTIME_READY

@@ -16,6 +16,7 @@ use super::scsi::{self, SenseKey};
 const MAX_MASS_RUNTIMES: usize = crate::allcaps::storage::USB_MASS_MAX_RUNTIMES;
 const MAX_ACTIVE_STREAMS: usize = crate::allcaps::storage::USB_MASS_MAX_ACTIVE_STREAMS;
 const MASS_BOT_KEEPALIVE_ENABLED: bool = crate::allcaps::storage::USB_MASS_BOT_KEEPALIVE_ENABLED;
+const FORCE_CONSERVATIVE_BOT: bool = crate::allcaps::storage::USB_MASS_FORCE_CONSERVATIVE_BOT;
 const MASS_KEEPALIVE_MS: u64 = crate::allcaps::storage::USB_MASS_KEEPALIVE_MS;
 const MASS_IO_RETRY_LIMIT: u8 = crate::allcaps::storage::USB_MASS_IO_RETRY_LIMIT;
 const MASS_IO_RETRY_DELAY_MS: u64 = crate::allcaps::storage::USB_MASS_IO_RETRY_DELAY_MS;
@@ -269,6 +270,10 @@ fn choose_mass_io_profile(
     port_speed: usb_if::Speed,
     target: &MassTarget,
 ) -> MassIoProfile {
+    if transport_kind == mass::MassTransportKind::Bot && FORCE_CONSERVATIVE_BOT {
+        return MassIoProfile::ConservativeBot;
+    }
+
     if transport_kind == mass::MassTransportKind::Bot
         && matches!(port_speed, usb_if::Speed::SuperSpeed | usb_if::Speed::SuperSpeedPlus)
         && target.bulk_in_max_packet_size >= 1024
