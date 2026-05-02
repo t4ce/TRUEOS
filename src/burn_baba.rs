@@ -1,0 +1,251 @@
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+static LOGGED_BF16_SHARE: AtomicBool = AtomicBool::new(false);
+static SEEN_BF16_MATVECS: AtomicU64 = AtomicU64::new(0);
+static GPU_SHAPE_CANDIDATES: AtomicU64 = AtomicU64::new(0);
+static GPU_READY_CANDIDATES: AtomicU64 = AtomicU64::new(0);
+
+const GPGPU_PILOT_MAX_TILES: usize = 3;
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum InferenceWorkload {
+    Decode,
+    BatchedDecode,
+    Prefill,
+    Training,
+}
+
+impl InferenceWorkload {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Decode => "decode",
+            Self::BatchedDecode => "batched-decode",
+            Self::Prefill => "prefill",
+            Self::Training => "training",
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum KernelFamily {
+    Matvec,
+    BatchedGemm,
+    FusedAttention,
+    FusedDecodeBlock,
+}
+
+impl KernelFamily {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Matvec => "matvec",
+            Self::BatchedGemm => "batched-gemm",
+            Self::FusedAttention => "fused-attention",
+            Self::FusedDecodeBlock => "fused-decode-block",
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum PrecisionLane {
+    Bf16,
+    Fp16,
+    Fp8,
+    Int8WeightOnly,
+    Int4WeightOnly,
+    MixedLowestQualitySafe,
+}
+
+impl PrecisionLane {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Bf16 => "bf16",
+            Self::Fp16 => "fp16",
+            Self::Fp8 => "fp8",
+            Self::Int8WeightOnly => "int8-weight-only",
+            Self::Int4WeightOnly => "int4-weight-only",
+            Self::MixedLowestQualitySafe => "mixed-lowest-quality-safe",
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum MemoryLayoutPlan {
+    RowMajorBf16,
+    TiledGemm,
+    PackedWeightOnly,
+    KvCachePaged,
+}
+
+impl MemoryLayoutPlan {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::RowMajorBf16 => "rowmajor-bf16",
+            Self::TiledGemm => "tiled-gemm",
+            Self::PackedWeightOnly => "packed-weight-only",
+            Self::KvCachePaged => "kv-cache-paged",
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct InferenceKernelPlan {
+    pub(crate) workload: InferenceWorkload,
+    pub(crate) kernel: KernelFamily,
+    pub(crate) precision: PrecisionLane,
+    pub(crate) memory_layout: MemoryLayoutPlan,
+    pub(crate) batch_rows: usize,
+    pub(crate) gpu_ready: bool,
+    pub(crate) next_kernel: KernelFamily,
+    pub(crate) next_precision: PrecisionLane,
+    pub(crate) next_memory_layout: MemoryLayoutPlan,
+}
+
+impl InferenceKernelPlan {
+    const fn baseline_bf16_decode_matvec(
+        batch_rows: usize,
+        gpu_ready: bool,
+    ) -> InferenceKernelPlan {
+        InferenceKernelPlan {
+            workload: InferenceWorkload::Decode,
+            kernel: KernelFamily::Matvec,
+            precision: PrecisionLane::Bf16,
+            memory_layout: MemoryLayoutPlan::RowMajorBf16,
+            batch_rows,
+            gpu_ready,
+            next_kernel: KernelFamily::BatchedGemm,
+            next_precision: PrecisionLane::MixedLowestQualitySafe,
+            next_memory_layout: MemoryLayoutPlan::TiledGemm,
+        }
+    }
+}
+
+// BF16 matvec is a solid practical baseline for LLM decode, and it gives
+// Lumen a simple shared CPU/GPU contract today. The real pinnacle is
+// hardware-aware fused kernels using the lowest precision that preserves
+// model quality, with batching and memory layout optimized for the workload.
+pub(crate) fn share_matvec_rowmajor_bf16(n_rows: usize, k_dim: usize, chunk_rows: usize) {
+    SEEN_BF16_MATVECS.fetch_add(1, Ordering::AcqRel);
+
+    let gpu = crate::intel::gpgpu_preflight_status();
+    let shape_candidate =
+        n_rows >= gpu.min_burn_rows && k_dim >= gpu.min_burn_k_dim && chunk_rows != 0;
+    if shape_candidate {
+        GPU_SHAPE_CANDIDATES.fetch_add(1, Ordering::AcqRel);
+    }
+
+    let gpu_ready = shape_candidate && gpu.accepted && gpu.guc_ready;
+    if gpu_ready {
+        GPU_READY_CANDIDATES.fetch_add(1, Ordering::AcqRel);
+    }
+    let plan = plan_bf16_decode_matvec(n_rows, chunk_rows, gpu_ready);
+    let pilot = plan_gpgpu_pilot(n_rows, k_dim, shape_candidate, gpu.tile_rows, gpu.max_tiles);
+
+    if LOGGED_BF16_SHARE.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    crate::log!(
+        "burn-baba: shared-inference-plan workload={} kernel={} precision={} layout={} batch_rows={} preflight_submitted={} accepted={} completed={} guc_ready={} lanes={} marker=0x{:08X} dot={} sum_a={} sum_b={} rows={} k_dim={} chunk_rows={} min_rows={} min_k_dim={} shape_candidate={} gpu_ready={} action=cpu-ap-and-gpu-eu-shared cpu_ap_continues=1 gpu_action=await-eu-kernel-submit next_kernel={} next_precision={} next_layout={} next=batched-gemm-attention-kv-fusion-mixed-precision does_not_prove=gpu_matmul\n",
+        plan.workload.as_str(),
+        plan.kernel.as_str(),
+        plan.precision.as_str(),
+        plan.memory_layout.as_str(),
+        plan.batch_rows,
+        gpu.submitted as u8,
+        gpu.accepted as u8,
+        gpu.completed as u8,
+        gpu.guc_ready as u8,
+        gpu.lanes,
+        gpu.marker,
+        gpu.dot,
+        gpu.sum_a,
+        gpu.sum_b,
+        n_rows,
+        k_dim,
+        chunk_rows,
+        gpu.min_burn_rows,
+        gpu.min_burn_k_dim,
+        shape_candidate as u8,
+        plan.gpu_ready as u8,
+        plan.next_kernel.as_str(),
+        plan.next_precision.as_str(),
+        plan.next_memory_layout.as_str(),
+    );
+    crate::log!(
+        "burn-baba: gpgpu-pilot-plan eligible={} gpu_ready={} arena_ready={} arena_gpu_base=0x{:X} arena_bytes=0x{:X} arena_max_tiles={} pilot_tiles={} candidate_tiles={} tile_rows={} tile_k={} x_bytes={} weight_tile_bytes={} output_tile_bytes={} compare=cpu-reference-first dispatch=disabled reason=missing-guc-owned-eu-kernel cpu_ap_continues=1 does_not_prove=gpu_matmul\n",
+        pilot.eligible as u8,
+        plan.gpu_ready as u8,
+        gpu.enough_for_shape as u8,
+        gpu.arena_gpu_base,
+        gpu.arena_bytes,
+        gpu.max_tiles,
+        pilot.pilot_tiles,
+        pilot.candidate_tiles,
+        pilot.tile_rows,
+        pilot.tile_k,
+        pilot.x_bytes,
+        pilot.weight_tile_bytes,
+        pilot.output_tile_bytes,
+    );
+}
+
+pub(crate) fn plan_bf16_decode_matvec(
+    n_rows: usize,
+    chunk_rows: usize,
+    gpu_ready: bool,
+) -> InferenceKernelPlan {
+    let batch_rows = if chunk_rows == 0 {
+        n_rows
+    } else {
+        chunk_rows.min(n_rows).max(1)
+    };
+    InferenceKernelPlan::baseline_bf16_decode_matvec(batch_rows, gpu_ready)
+}
+
+#[derive(Copy, Clone, Debug)]
+struct GpgpuPilotPlan {
+    eligible: bool,
+    pilot_tiles: usize,
+    candidate_tiles: usize,
+    tile_rows: usize,
+    tile_k: usize,
+    x_bytes: usize,
+    weight_tile_bytes: usize,
+    output_tile_bytes: usize,
+}
+
+fn plan_gpgpu_pilot(
+    n_rows: usize,
+    k_dim: usize,
+    eligible: bool,
+    arena_tile_rows: usize,
+    arena_max_tiles: usize,
+) -> GpgpuPilotPlan {
+    let tile_rows = arena_tile_rows.max(1).min(n_rows).max(1);
+    let candidate_tiles = if eligible {
+        n_rows.div_ceil(tile_rows)
+    } else {
+        0
+    };
+    let pilot_tiles = candidate_tiles
+        .min(GPGPU_PILOT_MAX_TILES)
+        .min(arena_max_tiles);
+    let x_bytes = k_dim.saturating_mul(core::mem::size_of::<f32>());
+    let weight_tile_bytes = tile_rows.saturating_mul(k_dim).saturating_mul(2);
+    let output_tile_bytes = tile_rows.saturating_mul(core::mem::size_of::<f32>());
+
+    GpgpuPilotPlan {
+        eligible,
+        pilot_tiles,
+        candidate_tiles,
+        tile_rows,
+        tile_k: k_dim,
+        x_bytes,
+        weight_tile_bytes,
+        output_tile_bytes,
+    }
+}

@@ -68,6 +68,9 @@ pub struct RenderWarmState {
     pub streamout_phys: u64,
     pub streamout_virt: *mut u8,
     pub streamout_len: usize,
+    pub gpgpu_arena_phys: u64,
+    pub gpgpu_arena_virt: *mut u8,
+    pub gpgpu_arena_len: usize,
 }
 
 #[derive(Copy, Clone)]

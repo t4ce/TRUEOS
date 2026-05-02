@@ -18,6 +18,7 @@ mod blueprint;
 mod blueprint_net_broker;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod blueprint_net_wire;
+mod burn_baba;
 mod burn_baby;
 #[path = "Chronos.rs"]
 mod chronos;
