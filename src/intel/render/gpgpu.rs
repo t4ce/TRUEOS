@@ -1,16 +1,15 @@
 const GPGPU_PREFLIGHT_LANES: usize = 4;
 const GPGPU_BURN_MIN_ROWS: usize = 512;
 const GPGPU_BURN_MIN_K_DIM: usize = 512;
-const GPGPU_EU_C_STORE_EXPECTED: u32 = RCS_EXEC_RESULT_GPGPU_EU_C_STORE_DONE;
+const GPU_PROGRAM_SHARED_RAM_WRITE_EXPECTED: u32 = RCS_EXEC_RESULT_GPGPU_EU_C_STORE_DONE;
 
-// Gfx12.5 proof kernel reserved for the compute walker path.  This keeps the
-// GPGPU artifact owned by compute bring-up instead of borrowing the triangle
-// PS blob; the acceptance bit still comes only from result C readback below.
-static GPGPU_C_STORE_PROOF_KERNEL: [u32; 12] = [
+// Tiny Gfx12 GPU program code reserved for the shared-RAM write proof.  The
+// command path is accepted only when CPU readback sees C change below.
+static GPU_PROGRAM_SHARED_RAM_WRITE_CODE: [u32; 12] = [
     0xA07E0061,
     0x00010000,
     0xA0780061,
-    GPGPU_EU_C_STORE_EXPECTED,
+    GPU_PROGRAM_SHARED_RAM_WRITE_EXPECTED,
     0xA07A0061,
     0x3F810000,
     0xA07C0061,
@@ -20,6 +19,16 @@ static GPGPU_C_STORE_PROOF_KERNEL: [u32; 12] = [
     0x50007E14,
     0x00C47834,
 ];
+
+const GPGPU_C_STORE_KERNEL_SEND_DWORD: usize = 11;
+const GPGPU_C_STORE_KERNEL_IMM_DWORD: usize = 3;
+const GPGPU_STORE_BINDING_TABLE_OFFSET_BYTES: usize = 0x3400;
+const GPGPU_STORE_SURFACE_STATE_OFFSET_BYTES: usize = 0x3500;
+const GPGPU_STORE_BINDING_TABLE_INDEX: usize = 0x34;
+const GPGPU_STORE_BINDING_TABLE_ENTRIES: usize = GPGPU_STORE_BINDING_TABLE_INDEX + 1;
+const GPGPU_STORE_SURFACE_DWORDS: usize = 16;
+const SURFTYPE_BUFFER: u32 = 4;
+const SURFACE_FORMAT_RAW: u32 = 0x1FF;
 
 static GPGPU_PREFLIGHT_SUBMITTED: AtomicBool = AtomicBool::new(false);
 static GPGPU_PREFLIGHT_ACCEPTED: AtomicBool = AtomicBool::new(false);
@@ -94,7 +103,8 @@ pub(crate) fn gpgpu_preflight_status() -> GpgpuPreflightStatus {
         eu_walker_retired: GPGPU_EU_WALKER_RETIRED.load(Ordering::Acquire),
         eu_dispatch_delta,
         eu_c_store_value,
-        result_c_changed_by_eu: eu_dispatch_delta != 0 && eu_c_store_value == GPGPU_EU_C_STORE_EXPECTED,
+        result_c_changed_by_eu: eu_dispatch_delta != 0
+            && eu_c_store_value == GPU_PROGRAM_SHARED_RAM_WRITE_EXPECTED,
     }
 }
 
@@ -124,11 +134,11 @@ pub(crate) fn submit_gpgpu_preflight_once() {
     if PRIMARY_DISABLE_RENDER_BRINGUP && !GPGPU_SUBMIT_WHEN_PRIMARY_RENDER_DISABLED {
         let arena_mapped = ensure_gpgpu_tile_arena_mapped(dev, warm);
         log_gpgpu_tile_arena_status(warm, arena_mapped);
-        let eu_artifact = prepare_gpgpu_eu_artifact(warm, false);
-        log_gpgpu_eu_artifact_status(eu_artifact);
+        let eu_artifact = prepare_gpgpu_program_artifact(warm, false);
+        log_gpgpu_program_artifact_status(eu_artifact);
         crate::log!(
-            "intel/gpgpu: preflight skipped reason=render-bringup-disabled artifact_only=1 kernel_uploaded={} walker_encoded={}\n",
-            eu_artifact.kernel_uploaded as u8,
+            "intel/gpgpu: preflight skipped reason=render-bringup-disabled artifact_only=1 gpu_program_uploaded={} start_command_encoded={}\n",
+            eu_artifact.program_uploaded as u8,
             eu_artifact.walker_encoded as u8,
         );
         return;
@@ -155,8 +165,8 @@ pub(crate) fn submit_gpgpu_preflight_once() {
     if !accepted {
         recover_render_engine_after_nonretired_submit(dev, warm, "gpgpu-preflight");
     }
-    let eu_artifact = prepare_gpgpu_eu_artifact(warm, accepted);
-    log_gpgpu_eu_artifact_status(eu_artifact);
+    let eu_artifact = prepare_gpgpu_program_artifact(warm, accepted);
+    log_gpgpu_program_artifact_status(eu_artifact);
     if eu_artifact.walker_encoded {
         let walker = submit_gpgpu_compute_walker_probe(dev, warm);
         if !walker.retired {
@@ -371,72 +381,84 @@ fn submit_gpgpu_preflight(dev: crate::intel::Dev, warm: RenderWarmState) -> bool
 }
 
 #[derive(Copy, Clone)]
-struct GpgpuEuArtifactProof {
-    kernel_uploaded: bool,
+struct GpgpuProgramArtifactProof {
+    program_uploaded: bool,
     walker_encoded: bool,
     result_changed_by_current_backend: bool,
-    kernel_gpu: u64,
-    kernel_bytes: usize,
-    kernel_sig: u64,
+    program_gpu: u64,
+    program_bytes: usize,
+    program_sig: u64,
     walker_gpu: u64,
     walker_bytes: usize,
 }
 
-fn prepare_gpgpu_eu_artifact(
+#[derive(Copy, Clone)]
+struct GpgpuStoreSurfaceState {
+    ready: bool,
+    binding_table_offset: usize,
+    surface_state_offset: usize,
+    binding_table_index: usize,
+    surface_gpu: u64,
+    target_gpu: u64,
+    surface_dword0: u32,
+    binding_entry: u32,
+}
+
+fn prepare_gpgpu_program_artifact(
     warm: RenderWarmState,
     result_changed_by_current_backend: bool,
-) -> GpgpuEuArtifactProof {
-    let kernel: &'static [u32] = &GPGPU_C_STORE_PROOF_KERNEL;
-    let kernel_bytes = kernel.len() * core::mem::size_of::<u32>();
-    let kernel_gpu = GPU_VA_DRAW_STATE_BASE + GPGPU_EU_KERNEL_OFFSET_BYTES as u64;
+) -> GpgpuProgramArtifactProof {
+    let program: &'static [u32] = &GPU_PROGRAM_SHARED_RAM_WRITE_CODE;
+    let program_bytes = program.len() * core::mem::size_of::<u32>();
+    let program_gpu = GPU_VA_DRAW_STATE_BASE + GPGPU_EU_KERNEL_OFFSET_BYTES as u64;
     let walker_gpu = GPU_VA_BATCH_BASE + GPGPU_WALKER_SCRATCH_OFFSET_BYTES as u64;
 
-    let kernel_uploaded = kernel_bytes != 0
+    let program_uploaded = program_bytes != 0
         && GPGPU_EU_KERNEL_OFFSET_BYTES
-            .checked_add(kernel_bytes)
+            .checked_add(program_bytes)
             .is_some_and(|end| end <= warm.draw_state_len)
-        && upload_and_verify_eu_kernel(warm, kernel);
-    GPGPU_EU_KERNEL_UPLOADED.store(kernel_uploaded, Ordering::Release);
+        && upload_and_verify_gpu_program(warm, program);
+    GPGPU_EU_KERNEL_UPLOADED.store(program_uploaded, Ordering::Release);
 
     let walker_bytes = core::mem::size_of::<GpgpuWalkerCandidate>();
-    let walker_encoded = kernel_uploaded
+    let walker_encoded = program_uploaded
         && GPGPU_WALKER_SCRATCH_OFFSET_BYTES
             .checked_add(walker_bytes)
             .is_some_and(|end| end <= warm.batch_len)
-        && encode_gpgpu_walker_candidate(warm, kernel_gpu, kernel_bytes as u32);
+        && encode_gpgpu_walker_candidate(warm, program_gpu, program_bytes as u32);
     GPGPU_EU_WALKER_ENCODED.store(walker_encoded, Ordering::Release);
 
-    GpgpuEuArtifactProof {
-        kernel_uploaded,
+    GpgpuProgramArtifactProof {
+        program_uploaded,
         walker_encoded,
         result_changed_by_current_backend,
-        kernel_gpu,
-        kernel_bytes,
-        kernel_sig: shader_word_signature(kernel),
+        program_gpu,
+        program_bytes,
+        program_sig: shader_word_signature(program),
         walker_gpu,
         walker_bytes,
     }
 }
 
-fn upload_and_verify_eu_kernel(warm: RenderWarmState, kernel: &'static [u32]) -> bool {
+fn upload_and_verify_gpu_program(warm: RenderWarmState, program: &'static [u32]) -> bool {
     unsafe {
         core::ptr::copy_nonoverlapping(
-            kernel.as_ptr() as *const u8,
+            program.as_ptr() as *const u8,
             warm.draw_state_virt.add(GPGPU_EU_KERNEL_OFFSET_BYTES),
-            core::mem::size_of_val(kernel),
+            core::mem::size_of_val(program),
         );
     }
     crate::intel::dma_flush(
         unsafe { warm.draw_state_virt.add(GPGPU_EU_KERNEL_OFFSET_BYTES) },
-        core::mem::size_of_val(kernel),
+        core::mem::size_of_val(program),
     );
     let uploaded = unsafe {
         core::slice::from_raw_parts(
             warm.draw_state_virt.add(GPGPU_EU_KERNEL_OFFSET_BYTES) as *const u32,
-            kernel.len(),
+            program.len(),
         )
     };
-    uploaded == kernel
+    uploaded == program
 }
 
 #[repr(C)]
@@ -493,30 +515,151 @@ fn encode_gpgpu_walker_candidate(
     true
 }
 
-fn log_gpgpu_eu_artifact_status(proof: GpgpuEuArtifactProof) {
+fn log_gpgpu_program_artifact_status(proof: GpgpuProgramArtifactProof) {
     crate::log!(
-        "intel/gpgpu: eu-offload-proof-ladder input_buffer_a_in_ggtt=1 input_buffer_b_in_ggtt=1 input_a_gpu=0x{:X} input_b_gpu=0x{:X} kernel_shader_uploaded={} eu_kernel_uploaded={} eu_walker_encoded={} gpu_eu_execution_runs=0 result_buffer_c_gpu=0x{:X} result_buffer_c_changed_by_current_backend={} result_buffer_c_changed_by_eu=0 cpu_reads_c_back=1 current_backend=rcs-mi-store-constants walker_submitted=0 blocker=submit-gpgpu-walker next=submit-walker-and-compare-c does_not_prove=eu_thread_execution_or_matmul_or_guc_scheduling\n",
+        "intel/gpgpu: gpu-shared-ram-ladder input_buffer_a_in_ggtt=1 input_buffer_b_in_ggtt=1 input_a_gpu=0x{:X} input_b_gpu=0x{:X} gpu_program_uploaded={} gpu_start_command_encoded={} gpu_program_started=0 shared_ram_c_gpu=0x{:X} shared_ram_c_changed_by_current_backend={} shared_ram_c_changed_by_program=0 cpu_reads_c_back=1 current_backend=rcs-command-store-constants start_submitted=0 blocker=start-gpu-program next=start-program-and-compare-shared-ram does_not_prove=program_body_or_matmul\n",
         GPU_VA_VERTEX_BASE,
         GPU_VA_STREAMOUT_BASE,
-        proof.kernel_uploaded as u8,
-        proof.kernel_uploaded as u8,
+        proof.program_uploaded as u8,
         proof.walker_encoded as u8,
         GPU_VA_RESULT_BASE,
         proof.result_changed_by_current_backend as u8,
     );
 
     crate::log!(
-        "intel/gpgpu: eu-artifact-proof eu_kernel_uploaded={} eu_walker_encoded={} kernel_source=gfx125-c-store-proof-kernel kernel_gpu=0x{:X} kernel_bytes=0x{:X} kernel_sig=0x{:016X} walker_gpu=0x{:X} walker_bytes=0x{:X} c_store_slot={} c_store_expected=0x{:08X} submitted=0 eu_execution_runs=0 result_c_changed_by_eu=0 next=submit-walker-and-compare-c does_not_prove=eu_thread_execution_or_matmul\n",
-        proof.kernel_uploaded as u8,
+        "intel/gpgpu: gpu-program-artifact gpu_program_uploaded={} gpu_start_command_encoded={} program_source=gfx12-write-shared-ram-program program_gpu=0x{:X} program_bytes=0x{:X} program_sig=0x{:016X} start_command_gpu=0x{:X} start_command_bytes=0x{:X} shared_ram_slot={} shared_ram_expected=0x{:08X} submitted=0 started=0 wrote_shared_ram=0 next=start-program-and-compare-shared-ram does_not_prove=program_body_or_matmul\n",
+        proof.program_uploaded as u8,
         proof.walker_encoded as u8,
-        proof.kernel_gpu,
-        proof.kernel_bytes,
-        proof.kernel_sig,
+        proof.program_gpu,
+        proof.program_bytes,
+        proof.program_sig,
         proof.walker_gpu,
         proof.walker_bytes,
         RESULT_SLOT_GPGPU_EU_C_STORE_DWORD,
-        GPGPU_EU_C_STORE_EXPECTED,
+        GPU_PROGRAM_SHARED_RAM_WRITE_EXPECTED,
     );
+    log_gpgpu_program_contract(proof);
+}
+
+fn log_gpgpu_program_contract(proof: GpgpuProgramArtifactProof) {
+    let program = &GPU_PROGRAM_SHARED_RAM_WRITE_CODE;
+    let send_descriptor = program
+        .get(GPGPU_C_STORE_KERNEL_SEND_DWORD)
+        .copied()
+        .unwrap_or(0);
+    let immediate = program
+        .get(GPGPU_C_STORE_KERNEL_IMM_DWORD)
+        .copied()
+        .unwrap_or(0);
+    crate::log!(
+        "intel/gpgpu: gpu-program-contract source=gfx12-write-shared-ram-program uploaded={} program_gpu=0x{:X} words={} w0=0x{:08X} w1=0x{:08X} w2=0x{:08X} w3=0x{:08X} w8=0x{:08X} w9=0x{:08X} w10=0x{:08X} w11=0x{:08X} immediate_expected=0x{:08X} send_desc=0x{:08X} shared_ram_c_gpu=0x{:X} shared_ram_slot={} binding_table_present=0 surface_state_present=0 curbe_present=0 expected_failure_if_send_needs_surface=1 microscope=program-store-contract does_not_prove=shared_ram_store_or_matmul\n",
+        proof.program_uploaded as u8,
+        proof.program_gpu,
+        program.len(),
+        program.first().copied().unwrap_or(0),
+        program.get(1).copied().unwrap_or(0),
+        program.get(2).copied().unwrap_or(0),
+        immediate,
+        program.get(8).copied().unwrap_or(0),
+        program.get(9).copied().unwrap_or(0),
+        program.get(10).copied().unwrap_or(0),
+        send_descriptor,
+        GPU_PROGRAM_SHARED_RAM_WRITE_EXPECTED,
+        send_descriptor,
+        GPU_VA_RESULT_BASE + (RESULT_SLOT_GPGPU_EU_C_STORE_DWORD as u64) * core::mem::size_of::<u32>() as u64,
+        RESULT_SLOT_GPGPU_EU_C_STORE_DWORD,
+    );
+}
+
+fn prepare_gpgpu_store_surface_state(warm: RenderWarmState) -> GpgpuStoreSurfaceState {
+    let target_gpu = GPU_VA_RESULT_BASE
+        + (RESULT_SLOT_GPGPU_EU_C_STORE_DWORD as u64) * core::mem::size_of::<u32>() as u64;
+    let binding_table_bytes = GPGPU_STORE_BINDING_TABLE_ENTRIES * core::mem::size_of::<u32>();
+    let surface_bytes = GPGPU_STORE_SURFACE_DWORDS * core::mem::size_of::<u32>();
+    let binding_end = GPGPU_STORE_BINDING_TABLE_OFFSET_BYTES.saturating_add(binding_table_bytes);
+    let surface_end = GPGPU_STORE_SURFACE_STATE_OFFSET_BYTES.saturating_add(surface_bytes);
+    let binding_table_aligned = GPGPU_STORE_BINDING_TABLE_OFFSET_BYTES & 0x3F == 0;
+    let surface_aligned = GPGPU_STORE_SURFACE_STATE_OFFSET_BYTES & 0x3F == 0;
+    let ready = binding_table_aligned
+        && surface_aligned
+        && binding_end <= warm.draw_state_len
+        && surface_end <= warm.draw_state_len;
+    if !ready {
+        crate::log!(
+            "intel/gpgpu: gpu-program-surface-state ready=0 reason=draw-state-bounds bt_off=0x{:X} bt_bytes=0x{:X} surf_off=0x{:X} surf_bytes=0x{:X} draw_state_len=0x{:X}\n",
+            GPGPU_STORE_BINDING_TABLE_OFFSET_BYTES,
+            binding_table_bytes,
+            GPGPU_STORE_SURFACE_STATE_OFFSET_BYTES,
+            surface_bytes,
+            warm.draw_state_len,
+        );
+        return GpgpuStoreSurfaceState {
+            ready: false,
+            binding_table_offset: GPGPU_STORE_BINDING_TABLE_OFFSET_BYTES,
+            surface_state_offset: GPGPU_STORE_SURFACE_STATE_OFFSET_BYTES,
+            binding_table_index: GPGPU_STORE_BINDING_TABLE_INDEX,
+            surface_gpu: GPU_VA_DRAW_STATE_BASE + GPGPU_STORE_SURFACE_STATE_OFFSET_BYTES as u64,
+            target_gpu,
+            surface_dword0: 0,
+            binding_entry: 0,
+        };
+    }
+
+    let binding_entry = GPGPU_STORE_SURFACE_STATE_OFFSET_BYTES as u32;
+    let surface_dword0 = (SURFTYPE_BUFFER << 29) | (SURFACE_FORMAT_RAW << 18);
+    unsafe {
+        let binding_table =
+            warm.draw_state_virt.add(GPGPU_STORE_BINDING_TABLE_OFFSET_BYTES) as *mut u32;
+        for index in 0..GPGPU_STORE_BINDING_TABLE_ENTRIES {
+            core::ptr::write_volatile(binding_table.add(index), binding_entry);
+        }
+
+        let surface = warm
+            .draw_state_virt
+            .add(GPGPU_STORE_SURFACE_STATE_OFFSET_BYTES) as *mut u32;
+        for index in 0..GPGPU_STORE_SURFACE_DWORDS {
+            core::ptr::write_volatile(surface.add(index), 0);
+        }
+        core::ptr::write_volatile(surface.add(0), surface_dword0);
+        core::ptr::write_volatile(surface.add(1), RENDER_MOCS << 24);
+        core::ptr::write_volatile(surface.add(2), 3);
+        core::ptr::write_volatile(surface.add(3), 0);
+        core::ptr::write_volatile(surface.add(8), target_gpu as u32);
+        core::ptr::write_volatile(surface.add(9), (target_gpu >> 32) as u32);
+    }
+    crate::intel::dma_flush(
+        unsafe { warm.draw_state_virt.add(GPGPU_STORE_BINDING_TABLE_OFFSET_BYTES) },
+        binding_table_bytes,
+    );
+    crate::intel::dma_flush(
+        unsafe { warm.draw_state_virt.add(GPGPU_STORE_SURFACE_STATE_OFFSET_BYTES) },
+        surface_bytes,
+    );
+    crate::log!(
+        "intel/gpgpu: gpu-program-surface-state ready=1 bti=0x{:02X} bt_off=0x{:X} bt_entries={} bt_entry=0x{:08X} surf_off=0x{:X} surf_gpu=0x{:X} target_gpu=0x{:X} surf0=0x{:08X} surf1=0x{:08X} surf2=0x{:08X} surf3=0x{:08X} note=bind-send-bti-to-result-raw-buffer\n",
+        GPGPU_STORE_BINDING_TABLE_INDEX,
+        GPGPU_STORE_BINDING_TABLE_OFFSET_BYTES,
+        GPGPU_STORE_BINDING_TABLE_ENTRIES,
+        binding_entry,
+        GPGPU_STORE_SURFACE_STATE_OFFSET_BYTES,
+        GPU_VA_DRAW_STATE_BASE + GPGPU_STORE_SURFACE_STATE_OFFSET_BYTES as u64,
+        target_gpu,
+        surface_dword0,
+        RENDER_MOCS << 24,
+        3,
+        0,
+    );
+
+    GpgpuStoreSurfaceState {
+        ready: true,
+        binding_table_offset: GPGPU_STORE_BINDING_TABLE_OFFSET_BYTES,
+        surface_state_offset: GPGPU_STORE_SURFACE_STATE_OFFSET_BYTES,
+        binding_table_index: GPGPU_STORE_BINDING_TABLE_INDEX,
+        surface_gpu: GPU_VA_DRAW_STATE_BASE + GPGPU_STORE_SURFACE_STATE_OFFSET_BYTES as u64,
+        target_gpu,
+        surface_dword0,
+        binding_entry,
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -556,7 +699,8 @@ fn submit_gpgpu_compute_walker_probe(
     let total_dwords = warm.batch_len / core::mem::size_of::<u32>();
     let batch =
         unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, total_dwords) };
-    let batch_bytes = match encode_gfx12_gpgpu_walker_probe_batch(batch) {
+    let store_surface = prepare_gpgpu_store_surface_state(warm);
+    let batch_bytes = match encode_gfx12_gpgpu_walker_probe_batch(batch, store_surface) {
         Ok(bytes) => bytes,
         Err(reason) => {
             crate::log!("intel/gpgpu: compute-walker accepted=0 reason={}\n", reason);
@@ -593,7 +737,8 @@ fn submit_gpgpu_compute_walker_probe(
     let post_cfe = read_result_dword(warm, 26);
     let dispatch_after = read_gpgpu_threads_dispatched(dev);
     let dispatch_delta = dispatch_after.saturating_sub(dispatch_before);
-    let result_c_changed_by_eu = c_value == GPGPU_EU_C_STORE_EXPECTED && dispatch_delta != 0;
+    let result_c_changed_by_eu =
+        c_value == GPU_PROGRAM_SHARED_RAM_WRITE_EXPECTED && dispatch_delta != 0;
     GPGPU_EU_WALKER_RETIRED.store(retired, Ordering::Release);
     GPGPU_EU_DISPATCH_DELTA.store(dispatch_delta.min(u32::MAX as u64) as u32, Ordering::Release);
     GPGPU_EU_C_STORE_VALUE.store(c_value, Ordering::Release);
@@ -626,6 +771,7 @@ fn read_gpgpu_threads_dispatched(dev: crate::intel::Dev) -> u64 {
 
 fn encode_gfx12_gpgpu_walker_probe_batch(
     batch_dwords: &mut [u32],
+    store_surface: GpgpuStoreSurfaceState,
 ) -> Result<usize, &'static str> {
     const STATE_COMPUTE_MODE_CMD: u32 = (3 << 29) | (1 << 24) | (5 << 16);
     const MEDIA_VFE_STATE_CMD: u32 = (3 << 29) | (2 << 27) | 7;
@@ -771,7 +917,11 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     batch_dwords[idd_index + 1] = (kernel_gpu >> 32) as u32;
     batch_dwords[idd_index + 2] = 0;
     batch_dwords[idd_index + 3] = 0;
-    batch_dwords[idd_index + 4] = 0;
+    batch_dwords[idd_index + 4] = if store_surface.ready {
+        (store_surface.binding_table_offset as u32) | 31
+    } else {
+        0
+    };
     batch_dwords[idd_index + 5] = 0;
     batch_dwords[idd_index + 6] = 1;
     batch_dwords[idd_index + 7] = 0;
@@ -779,7 +929,13 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     push(batch_dwords, &mut cursor, STATE_BASE_ADDRESS_CMD)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
     push(batch_dwords, &mut cursor, RENDER_MOCS << 16)?;
-    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
+    push_sba_address(
+        batch_dwords,
+        &mut cursor,
+        true,
+        RENDER_MOCS,
+        GPU_VA_DRAW_STATE_BASE,
+    )?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
@@ -862,7 +1018,7 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     let batch_bytes = command_bytes.max(IDD_OFFSET_BYTES + IDD_DWORDS * core::mem::size_of::<u32>());
 
     crate::log!(
-        "intel/gpgpu: compute-walker-layout vfe_off=0x{:X} vfe_dw3=0x{:08X} id_load_off=0x{:X} walker_off=0x{:X} walker_cmd=0x{:08X} exec_mask=0x{:08X} idd_gpu=0x{:X} idd_dw6=0x{:08X} tail_off=0x{:X} cs_marker=0x{:08X} note=gen12-media-vfe-midl-gpgpu-walker\n",
+        "intel/gpgpu: compute-walker-layout vfe_off=0x{:X} vfe_dw3=0x{:08X} id_load_off=0x{:X} walker_off=0x{:X} walker_cmd=0x{:08X} exec_mask=0x{:08X} idd_gpu=0x{:X} idd_dw4=0x{:08X} idd_dw6=0x{:08X} surface_base=0x{:X} tail_off=0x{:X} cs_marker=0x{:08X} note=gen12-media-vfe-midl-gpgpu-walker\n",
         vfe_start * core::mem::size_of::<u32>(),
         batch_dwords[vfe_start + 3],
         id_load_start * core::mem::size_of::<u32>(),
@@ -870,9 +1026,23 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
         batch_dwords[walker_start],
         batch_dwords[walker_start + 13],
         GPU_VA_BATCH_BASE + IDD_OFFSET_BYTES as u64,
+        batch_dwords[idd_index + 4],
         batch_dwords[idd_index + 6],
+        GPU_VA_DRAW_STATE_BASE,
         command_bytes,
         RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+    );
+    crate::log!(
+        "intel/gpgpu: compute-walker-store-contract send_bti=0x{:02X} expected_bti=0x{:02X} binding_ready={} bt_off=0x{:X} bt_entry=0x{:08X} surf_off=0x{:X} surf_gpu=0x{:X} target_gpu=0x{:X} surf0=0x{:08X} note=kernel-send-resource-contract\n",
+        GPU_PROGRAM_SHARED_RAM_WRITE_CODE[GPGPU_C_STORE_KERNEL_SEND_DWORD] & 0xFF,
+        store_surface.binding_table_index,
+        store_surface.ready as u8,
+        store_surface.binding_table_offset,
+        store_surface.binding_entry,
+        store_surface.surface_state_offset,
+        store_surface.surface_gpu,
+        store_surface.target_gpu,
+        store_surface.surface_dword0,
     );
     crate::log!(
         "intel/gpgpu: compute-walker-dwords w0=0x{:08X} w1=0x{:08X} w2=0x{:08X} w3=0x{:08X} w4=0x{:08X} w5=0x{:08X} w6=0x{:08X} w7=0x{:08X} w8=0x{:08X} w9=0x{:08X} w10=0x{:08X} w11=0x{:08X} w12=0x{:08X} w13=0x{:08X} w14=0x{:08X} idd0=0x{:08X} idd1=0x{:08X} idd2=0x{:08X} idd3=0x{:08X} idd4=0x{:08X} idd5=0x{:08X} idd6=0x{:08X} idd7=0x{:08X} midl0=0x{:08X} midl2=0x{:08X} midl3=0x{:08X}\n",
@@ -908,9 +1078,20 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
 }
 
 fn log_gpgpu_compute_walker_status(proof: GpgpuComputeWalkerProof) {
-    let eu_dispatch_observed = proof.dispatch_delta != 0;
+    let gpu_program_started = proof.dispatch_delta != 0;
+    let failure_class = if proof.result_c_changed_by_eu {
+        "shared-ram-write-proven"
+    } else if gpu_program_started && !proof.retired && proof.c_value == 0 {
+        "program-started-did-not-finish-or-store"
+    } else if gpu_program_started && proof.retired && proof.c_value == 0 {
+        "program-started-no-shared-ram-write"
+    } else if !gpu_program_started {
+        "program-not-started"
+    } else {
+        "unexpected-shared-ram-value"
+    };
     crate::log!(
-        "intel/gpgpu: compute-walker-proof submitted={} retired={} marker=0x{:08X} marker_expected=0x{:08X} dispatch_before={} dispatch_after={} dispatch_delta={} batch_bytes=0x{:X} eu_execution_runs={} result_c_slot={} result_c_value=0x{:08X} result_c_expected=0x{:08X} result_c_changed_by_eu={} cpu_reads_c_back=1 backend=gfx12-gpgpu-walker next=prove-eu-c-store-then-scale-tiles does_not_prove=matmul\n",
+        "intel/gpgpu: gpu-program-proof start_submitted={} finished={} finish_marker=0x{:08X} finish_expected=0x{:08X} starts_before={} starts_after={} starts_delta={} start_command_bytes=0x{:X} gpu_program_started={} shared_ram_slot={} shared_ram_value=0x{:08X} shared_ram_expected=0x{:08X} wrote_shared_ram={} failure_class={} cpu_reads_c_back=1 backend=gfx12-gpgpu-start-command next=fix-gpu-program-shared-ram-store-then-scale-tiles does_not_prove=matmul\n",
         proof.submitted as u8,
         proof.retired as u8,
         proof.marker,
@@ -919,11 +1100,12 @@ fn log_gpgpu_compute_walker_status(proof: GpgpuComputeWalkerProof) {
         proof.dispatch_after,
         proof.dispatch_delta,
         proof.batch_bytes,
-        eu_dispatch_observed as u8,
+        gpu_program_started as u8,
         RESULT_SLOT_GPGPU_EU_C_STORE_DWORD,
         proof.c_value,
-        GPGPU_EU_C_STORE_EXPECTED,
+        GPU_PROGRAM_SHARED_RAM_WRITE_EXPECTED,
         proof.result_c_changed_by_eu as u8,
+        failure_class,
     );
 }
 
