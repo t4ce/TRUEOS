@@ -1307,7 +1307,7 @@ static TASKS: [TaskSpec; 73] = [
         spawn_intel_cursor_service_task,
     ),
     TaskSpec::disabled(
-      //  SpawnPlacement::Worker,
+        //  SpawnPlacement::Worker,
         "intel-hda-probe",
         crate::r::readiness::INTEL_HDA_READY,
         &INTEL_HDA_PROBE_STARTED,

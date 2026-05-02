@@ -10,7 +10,7 @@ use spin::Mutex;
 use crate::disc::block;
 
 use super::api::claim_interface;
-use super::mass::{self, MassProbeInfo, MassTarget};
+use super::mass::{self, MassProbeInfo, MassTarget, UasTarget};
 use super::scsi::{self, SenseKey};
 
 const MAX_MASS_RUNTIMES: usize = crate::allcaps::storage::USB_MASS_MAX_RUNTIMES;
@@ -29,6 +29,9 @@ const FAST_BOT_INITIAL_IO_BYTES: usize =
     crate::allcaps::storage::USB_MASS_FAST_BOT_INITIAL_IO_BYTES;
 const FAST_BOT_WRITE_MAX_IO_BYTES: usize =
     crate::allcaps::storage::USB_MASS_FAST_BOT_WRITE_MAX_IO_BYTES;
+const UAC_SKHYNIX_TEST: bool = crate::allcaps::storage::USB_MASS_UAC_SKHYNIX_TEST;
+const UAS_PROBE_THEN_BOT_FALLBACK: bool =
+    crate::allcaps::storage::USB_MASS_UAS_PROBE_THEN_BOT_FALLBACK;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct ActiveMassStream {
@@ -40,6 +43,20 @@ struct ActiveMassStream {
 enum MassIoProfile {
     ConservativeBot,
     FastBot,
+    UasSkhynix,
+}
+
+enum UsbMassEndpoints {
+    Bot {
+        bulk_in: EndpointBulkIn,
+        bulk_out: EndpointBulkOut,
+    },
+    UasSkhynix {
+        command_out: EndpointBulkOut,
+        status_in: EndpointBulkIn,
+        data_in: EndpointBulkIn,
+        data_out: EndpointBulkOut,
+    },
 }
 
 struct UsbMassRuntime {
@@ -52,8 +69,7 @@ struct UsbMassRuntime {
     interface_number: u8,
     bulk_in_ep: u8,
     bulk_out_ep: u8,
-    bulk_in: EndpointBulkIn,
-    bulk_out: EndpointBulkOut,
+    endpoints: UsbMassEndpoints,
     transport_kind: mass::MassTransportKind,
     io_profile: MassIoProfile,
     port_speed: usb_if::Speed,
@@ -243,6 +259,7 @@ fn mass_io_profile_label(profile: MassIoProfile) -> &'static str {
     match profile {
         MassIoProfile::ConservativeBot => "bot-safe",
         MassIoProfile::FastBot => "bot-fast",
+        MassIoProfile::UasSkhynix => "uas-skhynix",
     }
 }
 
@@ -270,6 +287,7 @@ fn initial_mass_io_bytes(
 ) -> usize {
     let wanted = match profile {
         MassIoProfile::ConservativeBot => MIN_IO_BYTES,
+        MassIoProfile::UasSkhynix => MAX_IO_BYTES,
         MassIoProfile::FastBot => {
             if matches!(port_speed, usb_if::Speed::SuperSpeedPlus)
                 || (target.bulk_in_max_packet_size >= 1024
@@ -288,6 +306,7 @@ fn mass_io_grow_success_target(rt: &UsbMassRuntime) -> u16 {
     match rt.io_profile {
         MassIoProfile::ConservativeBot => MASS_IO_GROW_SUCCESS_TARGET,
         MassIoProfile::FastBot => MASS_IO_GROW_SUCCESS_TARGET_FAST_BOT,
+        MassIoProfile::UasSkhynix => MASS_IO_GROW_SUCCESS_TARGET_FAST_BOT,
     }
 }
 
@@ -299,6 +318,7 @@ fn current_mass_write_io_bytes(rt: &UsbMassRuntime, block_size: usize) -> usize 
     let cur = current_mass_io_bytes(rt, block_size);
     match rt.io_profile {
         MassIoProfile::ConservativeBot => cur,
+        MassIoProfile::UasSkhynix => cur,
         MassIoProfile::FastBot => {
             core::cmp::min(cur, clamp_mass_io_bytes(block_size, FAST_BOT_WRITE_MAX_IO_BYTES))
         }
@@ -438,15 +458,36 @@ impl block::BlockDevice for UsbMassBlockDevice {
 
                         let mut attempts = 0u8;
                         loop {
-                            let result = mass::read_blocks_bot(
-                                &mut rt.bulk_out,
-                                &mut rt.bulk_in,
-                                cur_lba as u32,
-                                blocks_here as u16,
-                                &mut remaining[..bytes_here],
-                                rt.bot_tag,
-                            )
-                            .await;
+                            let result = match &mut rt.endpoints {
+                                UsbMassEndpoints::Bot { bulk_in, bulk_out } => {
+                                    mass::read_blocks_bot(
+                                        bulk_out,
+                                        bulk_in,
+                                        cur_lba as u32,
+                                        blocks_here as u16,
+                                        &mut remaining[..bytes_here],
+                                        rt.bot_tag,
+                                    )
+                                    .await
+                                }
+                                UsbMassEndpoints::UasSkhynix {
+                                    command_out,
+                                    status_in,
+                                    data_in,
+                                    ..
+                                } => {
+                                    mass::read_blocks_uas_skhynix(
+                                        command_out,
+                                        status_in,
+                                        data_in,
+                                        cur_lba as u32,
+                                        blocks_here as u16,
+                                        &mut remaining[..bytes_here],
+                                        rt.bot_tag,
+                                    )
+                                    .await
+                                }
+                            };
                             rt.bot_tag = rt.bot_tag.wrapping_add(1);
 
                             match result {
@@ -456,15 +497,36 @@ impl block::BlockDevice for UsbMassBlockDevice {
                                 }
                                 Err(err) => {
                                     mass_io_backoff(rt, block_size);
-                                    if recover_runtime_transport(rt, "read-10", err).await.is_ok()
-                                        && attempts < MASS_IO_RETRY_LIMIT
+                                    let recovered = if matches!(rt.endpoints, UsbMassEndpoints::Bot { .. }) {
+                                        recover_runtime_transport(rt, "read-10", err).await.is_ok()
+                                    } else {
+                                        false
+                                    };
+                                    if recovered && attempts < MASS_IO_RETRY_LIMIT
                                     {
                                         attempts = attempts.wrapping_add(1);
                                         Timer::after(EmbassyDuration::from_millis(MASS_IO_RETRY_DELAY_MS)).await;
                                         continue;
                                     }
-                                    let sense =
-                                        mass::request_sense_fixed(&mut rt.bulk_out, &mut rt.bulk_in, rt.bot_tag).await;
+                                    let sense = match &mut rt.endpoints {
+                                        UsbMassEndpoints::Bot { bulk_in, bulk_out } => {
+                                            mass::request_sense_fixed(bulk_out, bulk_in, rt.bot_tag).await
+                                        }
+                                        UsbMassEndpoints::UasSkhynix {
+                                            command_out,
+                                            status_in,
+                                            data_in,
+                                            ..
+                                        } => {
+                                            mass::request_sense_fixed_uas_skhynix(
+                                                command_out,
+                                                status_in,
+                                                data_in,
+                                                rt.bot_tag,
+                                            )
+                                            .await
+                                        }
+                                    };
                                     rt.bot_tag = rt.bot_tag.wrapping_add(1);
                                     if let Some(sense) = sense
                                         && sense_is_transient(sense.sense_key)
@@ -534,15 +596,36 @@ impl block::BlockDevice for UsbMassBlockDevice {
 
                     let mut attempts = 0u8;
                     loop {
-                        let result = mass::write_blocks_bot(
-                            &mut rt.bulk_out,
-                            &mut rt.bulk_in,
-                            cur_lba as u32,
-                            blocks_here as u16,
-                            &remaining[..bytes_here],
-                            rt.bot_tag,
-                        )
-                        .await;
+                        let result = match &mut rt.endpoints {
+                            UsbMassEndpoints::Bot { bulk_in, bulk_out } => {
+                                mass::write_blocks_bot(
+                                    bulk_out,
+                                    bulk_in,
+                                    cur_lba as u32,
+                                    blocks_here as u16,
+                                    &remaining[..bytes_here],
+                                    rt.bot_tag,
+                                )
+                                .await
+                            }
+                            UsbMassEndpoints::UasSkhynix {
+                                command_out,
+                                status_in,
+                                data_out,
+                                ..
+                            } => {
+                                mass::write_blocks_uas_skhynix(
+                                    command_out,
+                                    status_in,
+                                    data_out,
+                                    cur_lba as u32,
+                                    blocks_here as u16,
+                                    &remaining[..bytes_here],
+                                    rt.bot_tag,
+                                )
+                                .await
+                            }
+                        };
                         rt.bot_tag = rt.bot_tag.wrapping_add(1);
 
                         match result {
@@ -552,15 +635,36 @@ impl block::BlockDevice for UsbMassBlockDevice {
                             }
                             Err(err) => {
                                 mass_io_backoff(&mut rt, block_size);
-                                if recover_runtime_transport(&mut rt, "write-10", err).await.is_ok()
-                                    && attempts < MASS_IO_RETRY_LIMIT
+                                let recovered = if matches!(rt.endpoints, UsbMassEndpoints::Bot { .. }) {
+                                    recover_runtime_transport(&mut rt, "write-10", err).await.is_ok()
+                                } else {
+                                    false
+                                };
+                                if recovered && attempts < MASS_IO_RETRY_LIMIT
                                 {
                                     attempts = attempts.wrapping_add(1);
                                     Timer::after(EmbassyDuration::from_millis(MASS_IO_RETRY_DELAY_MS)).await;
                                     continue;
                                 }
-                                let sense =
-                                    mass::request_sense_fixed(&mut rt.bulk_out, &mut rt.bulk_in, rt.bot_tag).await;
+                                let sense = match &mut rt.endpoints {
+                                    UsbMassEndpoints::Bot { bulk_in, bulk_out } => {
+                                        mass::request_sense_fixed(bulk_out, bulk_in, rt.bot_tag).await
+                                    }
+                                    UsbMassEndpoints::UasSkhynix {
+                                        command_out,
+                                        status_in,
+                                        data_in,
+                                        ..
+                                    } => {
+                                        mass::request_sense_fixed_uas_skhynix(
+                                            command_out,
+                                            status_in,
+                                            data_in,
+                                            rt.bot_tag,
+                                        )
+                                        .await
+                                    }
+                                };
                                 rt.bot_tag = rt.bot_tag.wrapping_add(1);
                                 if let Some(sense) = sense
                                     && sense_is_transient(sense.sense_key)
@@ -615,15 +719,52 @@ impl block::BlockDevice for UsbMassBlockDevice {
                         return Ok(());
                     }
 
-                    match mass::synchronize_cache_bot(&mut rt.bulk_out, &mut rt.bulk_in, rt.bot_tag).await {
+                    let sync_result = match &mut rt.endpoints {
+                        UsbMassEndpoints::Bot { bulk_in, bulk_out } => {
+                            mass::synchronize_cache_bot(bulk_out, bulk_in, rt.bot_tag).await
+                        }
+                        UsbMassEndpoints::UasSkhynix {
+                            command_out,
+                            status_in,
+                            ..
+                        } => {
+                            mass::synchronize_cache_uas_skhynix(
+                                command_out,
+                                status_in,
+                                rt.bot_tag,
+                            )
+                            .await
+                        }
+                    };
+                    match sync_result {
                         Ok(()) => {
                             rt.bot_tag = rt.bot_tag.wrapping_add(1);
                             Ok(())
                         }
                         Err(err) => {
-                            let _ = recover_runtime_transport(rt, "sync-cache-10", err).await;
+                            if matches!(rt.endpoints, UsbMassEndpoints::Bot { .. }) {
+                                let _ = recover_runtime_transport(rt, "sync-cache-10", err).await;
+                            }
                             rt.bot_tag = rt.bot_tag.wrapping_add(1);
-                            let sense = mass::request_sense_fixed(&mut rt.bulk_out, &mut rt.bulk_in, rt.bot_tag).await;
+                            let sense = match &mut rt.endpoints {
+                                UsbMassEndpoints::Bot { bulk_in, bulk_out } => {
+                                    mass::request_sense_fixed(bulk_out, bulk_in, rt.bot_tag).await
+                                }
+                                UsbMassEndpoints::UasSkhynix {
+                                    command_out,
+                                    status_in,
+                                    data_in,
+                                    ..
+                                } => {
+                                    mass::request_sense_fixed_uas_skhynix(
+                                        command_out,
+                                        status_in,
+                                        data_in,
+                                        rt.bot_tag,
+                                    )
+                                    .await
+                                }
+                            };
                             rt.bot_tag = rt.bot_tag.wrapping_add(1);
                             if let Some(sense) = sense
                                 && sense.sense_key == scsi::SenseKey::IllegalRequest
@@ -766,6 +907,33 @@ pub async fn mass_storage_task(
 
     let mut bulk_out = bulk_out;
     let mut bulk_in = bulk_in;
+    if UAS_PROBE_THEN_BOT_FALLBACK
+        && UAC_SKHYNIX_TEST
+        && vendor_id == 0x152E
+        && product_id == 0x7001
+        && uas_candidate_count != 0
+    {
+        crate::log!(
+            "crabusb: mass {:04X}:{:04X} bot pre-probe recovery after uas-preflight\n",
+            vendor_id,
+            product_id
+        );
+        if let Err(err) = mass::bot_recovery(
+            &mut device,
+            target.interface_number,
+            target.bulk_out,
+            target.bulk_in,
+        )
+        .await
+        {
+            crate::log!(
+                "crabusb: mass {:04X}:{:04X} bot pre-probe recovery ignored err={:?}\n",
+                vendor_id,
+                product_id,
+                err
+            );
+        }
+    }
     let probe = match mass::probe_mass_bot(
         &mut device,
         &mut bulk_out,
@@ -837,8 +1005,7 @@ pub async fn mass_storage_task(
         interface_number: target.interface_number,
         bulk_in_ep: target.bulk_in,
         bulk_out_ep: target.bulk_out,
-        bulk_in,
-        bulk_out,
+        endpoints: UsbMassEndpoints::Bot { bulk_in, bulk_out },
         transport_kind,
         io_profile,
         port_speed,
@@ -856,11 +1023,26 @@ pub async fn mass_storage_task(
         };
 
         let mut recovered = false;
-        let keepalive = mass::keepalive_mass_bot(&mut rt.bulk_out, &mut rt.bulk_in, 0).await;
+        let keepalive = match &mut rt.endpoints {
+            UsbMassEndpoints::Bot { bulk_in, bulk_out } => {
+                mass::keepalive_mass_bot(bulk_out, bulk_in, 0).await
+            }
+            UsbMassEndpoints::UasSkhynix {
+                command_out,
+                status_in,
+                ..
+            } => {
+                let result =
+                    mass::keepalive_mass_uas_skhynix(command_out, status_in, rt.bot_tag).await;
+                rt.bot_tag = rt.bot_tag.wrapping_add(1);
+                result
+            }
+        };
         if let Err(err) = keepalive {
-            if recover_runtime_transport(&mut rt, "test-unit-ready", err)
-                .await
-                .is_ok()
+            if matches!(rt.endpoints, UsbMassEndpoints::Bot { .. })
+                && recover_runtime_transport(&mut rt, "test-unit-ready", err)
+                    .await
+                    .is_ok()
             {
                 recovered = true;
             } else {
@@ -887,6 +1069,398 @@ pub async fn mass_storage_task(
     }
 
     unregister_active_mass_stream(active_stream);
+}
+
+#[embassy_executor::task(pool_size = 2)]
+pub async fn mass_storage_uas_skhynix_task(
+    mut device: Device,
+    controller_id: u32,
+    target: UasTarget,
+    port_speed: usb_if::Speed,
+    uas_candidate_count: u8,
+) {
+    let desc = device.descriptor();
+    let vendor_id = desc.vendor_id;
+    let product_id = desc.product_id;
+    let slot = device.slot_id();
+    let active_stream = ActiveMassStream {
+        controller_id,
+        slot_id: u32::from(slot),
+    };
+
+    if let Err(err) = device
+        .ep_ctrl()
+        .set_configuration(target.configuration_value)
+        .await
+    {
+        crate::log!(
+            "crabusb: mass {:04X}:{:04X} uas-skhynix set cfg={} failed: {:?}\n",
+            vendor_id,
+            product_id,
+            target.configuration_value,
+            err
+        );
+    }
+
+    let mut interface =
+        match claim_interface(&mut device, target.interface_number, target.alternate_setting).await
+        {
+            Ok(interface) => interface,
+            Err(err) => {
+                crate::log!(
+                    "crabusb: mass {:04X}:{:04X} uas-skhynix claim failed if#{} alt={}: {:?}\n",
+                    vendor_id,
+                    product_id,
+                    target.interface_number,
+                    target.alternate_setting,
+                    err
+                );
+                unregister_active_mass_stream(active_stream);
+                return;
+            }
+        };
+    if crate::logflag::USB_MASS_UAS_ADVANCED_PROBE_LOGS {
+        crate::log!(
+            "crabusb: mass {:04X}:{:04X} uas-adv claimed if#{} alt={} cfg={} cmd_out=0x{:02X} status_in=0x{:02X} data_in=0x{:02X} data_out=0x{:02X}\n",
+            vendor_id,
+            product_id,
+            target.interface_number,
+            target.alternate_setting,
+            target.configuration_value,
+            target.command_out,
+            target.status_in,
+            target.data_in,
+            target.data_out
+        );
+    }
+
+    let command_out = match interface.endpoint_bulk_out(target.command_out).await {
+        Ok(ep) => ep,
+        Err(err) => {
+            crate::log!(
+                "crabusb: mass {:04X}:{:04X} uas-skhynix command_out open failed ep=0x{:02X}: {:?}\n",
+                vendor_id,
+                product_id,
+                target.command_out,
+                err
+            );
+            unregister_active_mass_stream(active_stream);
+            return;
+        }
+    };
+    let data_out = match interface.endpoint_bulk_out(target.data_out).await {
+        Ok(ep) => ep,
+        Err(err) => {
+            crate::log!(
+                "crabusb: mass {:04X}:{:04X} uas-skhynix data_out open failed ep=0x{:02X}: {:?}\n",
+                vendor_id,
+                product_id,
+                target.data_out,
+                err
+            );
+            unregister_active_mass_stream(active_stream);
+            return;
+        }
+    };
+    let status_in = match interface.endpoint_bulk_in(target.status_in).await {
+        Ok(ep) => ep,
+        Err(err) => {
+            crate::log!(
+                "crabusb: mass {:04X}:{:04X} uas-skhynix status_in open failed ep=0x{:02X}: {:?}\n",
+                vendor_id,
+                product_id,
+                target.status_in,
+                err
+            );
+            unregister_active_mass_stream(active_stream);
+            return;
+        }
+    };
+    let data_in = match interface.endpoint_bulk_in(target.data_in).await {
+        Ok(ep) => ep,
+        Err(err) => {
+            crate::log!(
+                "crabusb: mass {:04X}:{:04X} uas-skhynix data_in open failed ep=0x{:02X}: {:?}\n",
+                vendor_id,
+                product_id,
+                target.data_in,
+                err
+            );
+            unregister_active_mass_stream(active_stream);
+            return;
+        }
+    };
+    if crate::logflag::USB_MASS_UAS_ADVANCED_PROBE_LOGS {
+        crate::log!(
+            "crabusb: mass {:04X}:{:04X} uas-adv endpoints-open cmd_out=0x{:02X}/{} status_in=0x{:02X}/{} data_in=0x{:02X}/{} data_out=0x{:02X}/{}\n",
+            vendor_id,
+            product_id,
+            target.command_out,
+            target.command_out_max_packet_size,
+            target.status_in,
+            target.status_in_max_packet_size,
+            target.data_in,
+            target.data_in_max_packet_size,
+            target.data_out,
+            target.data_out_max_packet_size
+        );
+    }
+    drop(interface);
+
+    let mut command_out = command_out;
+    let mut status_in = status_in;
+    let mut data_in = data_in;
+    let probe =
+        match mass::probe_mass_uas_skhynix(&mut command_out, &mut status_in, &mut data_in).await {
+            Ok(info) => info,
+            Err(err) => {
+                crate::log!(
+                    "crabusb: mass {:04X}:{:04X} uas-skhynix probe failed: {:?}\n",
+                    vendor_id,
+                    product_id,
+                    err
+                );
+                unregister_active_mass_stream(active_stream);
+                return;
+            }
+        };
+
+    let identity = build_mass_identity(&mut device, controller_id, u32::from(slot)).await;
+    let existing_handle = registered_disk(identity.runtime_key);
+    let handle = register_block_device(&identity, vendor_id, product_id, &probe);
+    let attach_mode = if existing_handle.is_some() {
+        "reattached"
+    } else {
+        "registered"
+    };
+    let initial_io_bytes = clamp_mass_io_bytes(probe.block_size as usize, MAX_IO_BYTES);
+    crate::log!(
+        "crabusb: mass {:04X}:{:04X} uas-skhynix ready slot={} if#{} alt={} cfg={} cmd_out=0x{:02X} status_in=0x{:02X} data_in=0x{:02X} data_out=0x{:02X} mps={}/{}/{}/{} disk={} mode={} label={:?} serial={:?} key={} transport={} profile={} init_io={} speed={:?} uas_candidates={} bs={} blocks={} vendor='{}' product='{}'\n",
+        vendor_id,
+        product_id,
+        slot,
+        target.interface_number,
+        target.alternate_setting,
+        target.configuration_value,
+        target.command_out,
+        target.status_in,
+        target.data_in,
+        target.data_out,
+        target.command_out_max_packet_size,
+        target.status_in_max_packet_size,
+        target.data_in_max_packet_size,
+        target.data_out_max_packet_size,
+        handle.id(),
+        attach_mode,
+        handle.info().label,
+        identity.serial.as_deref(),
+        identity.key_kind,
+        mass_transport_label(mass::MassTransportKind::Uas),
+        mass_io_profile_label(MassIoProfile::UasSkhynix),
+        initial_io_bytes,
+        port_speed,
+        uas_candidate_count,
+        probe.block_size,
+        probe.block_count,
+        probe.vendor,
+        probe.product
+    );
+
+    register_runtime(UsbMassRuntime {
+        controller_id,
+        slot_id: u32::from(slot),
+        runtime_key: identity.runtime_key,
+        vendor_id,
+        product_id,
+        device,
+        interface_number: target.interface_number,
+        bulk_in_ep: target.status_in,
+        bulk_out_ep: target.command_out,
+        endpoints: UsbMassEndpoints::UasSkhynix {
+            command_out,
+            status_in,
+            data_in,
+            data_out,
+        },
+        transport_kind: mass::MassTransportKind::Uas,
+        io_profile: MassIoProfile::UasSkhynix,
+        port_speed,
+        uas_candidate_count,
+        bot_tag: 0x5541_0000 | u32::from(slot),
+        sync_cache_unsupported: false,
+        current_max_io_bytes: initial_io_bytes,
+        io_success_streak: 0,
+    });
+
+    loop {
+        Timer::after(EmbassyDuration::from_millis(MASS_KEEPALIVE_MS)).await;
+        let Some(mut rt) = take_runtime(identity.runtime_key) else {
+            continue;
+        };
+
+        let keepalive = match &mut rt.endpoints {
+            UsbMassEndpoints::UasSkhynix {
+                command_out,
+                status_in,
+                ..
+            } => {
+                let result =
+                    mass::keepalive_mass_uas_skhynix(command_out, status_in, rt.bot_tag).await;
+                rt.bot_tag = rt.bot_tag.wrapping_add(1);
+                result
+            }
+            UsbMassEndpoints::Bot { bulk_in, bulk_out } => {
+                mass::keepalive_mass_bot(bulk_out, bulk_in, 0).await
+            }
+        };
+        if let Err(err) = keepalive {
+            crate::log!(
+                "crabusb: mass {:04X}:{:04X} uas-skhynix lifecycle stop slot={} err={:?}\n",
+                vendor_id,
+                product_id,
+                slot,
+                err
+            );
+            break;
+        }
+
+        register_runtime(rt);
+    }
+
+    unregister_active_mass_stream(active_stream);
+}
+
+async fn probe_uas_skhynix_before_bot_fallback(mut device: Device, target: UasTarget) -> Device {
+    let desc = device.descriptor();
+    let vendor_id = desc.vendor_id;
+    let product_id = desc.product_id;
+
+    if let Err(err) = device
+        .ep_ctrl()
+        .set_configuration(target.configuration_value)
+        .await
+    {
+        crate::log!(
+            "crabusb: mass {:04X}:{:04X} uas-preflight set cfg={} failed before bot fallback: {:?}\n",
+            vendor_id,
+            product_id,
+            target.configuration_value,
+            err
+        );
+        return device;
+    }
+
+    let mut interface = match claim_interface(
+        &mut device,
+        target.interface_number,
+        target.alternate_setting,
+    )
+    .await
+    {
+        Ok(interface) => interface,
+        Err(err) => {
+            crate::log!(
+                "crabusb: mass {:04X}:{:04X} uas-preflight claim failed if#{} alt={} before bot fallback: {:?}\n",
+                vendor_id,
+                product_id,
+                target.interface_number,
+                target.alternate_setting,
+                err
+            );
+            return device;
+        }
+    };
+
+    let command_out = match interface.endpoint_bulk_out(target.command_out).await {
+        Ok(ep) => ep,
+        Err(err) => {
+            crate::log!(
+                "crabusb: mass {:04X}:{:04X} uas-preflight command_out open failed ep=0x{:02X}: {:?}\n",
+                vendor_id,
+                product_id,
+                target.command_out,
+                err
+            );
+            return device;
+        }
+    };
+    let status_in = match interface.endpoint_bulk_in(target.status_in).await {
+        Ok(ep) => ep,
+        Err(err) => {
+            crate::log!(
+                "crabusb: mass {:04X}:{:04X} uas-preflight status_in open failed ep=0x{:02X}: {:?}\n",
+                vendor_id,
+                product_id,
+                target.status_in,
+                err
+            );
+            return device;
+        }
+    };
+    let data_in = match interface.endpoint_bulk_in(target.data_in).await {
+        Ok(ep) => ep,
+        Err(err) => {
+            crate::log!(
+                "crabusb: mass {:04X}:{:04X} uas-preflight data_in open failed ep=0x{:02X}: {:?}\n",
+                vendor_id,
+                product_id,
+                target.data_in,
+                err
+            );
+            return device;
+        }
+    };
+    drop(interface);
+
+    let mut command_out = command_out;
+    let mut status_in = status_in;
+    let mut data_in = data_in;
+    match mass::probe_mass_uas_skhynix(&mut command_out, &mut status_in, &mut data_in).await {
+        Ok(info) => crate::log!(
+            "crabusb: mass {:04X}:{:04X} uas-preflight unexpectedly succeeded bs={} blocks={} vendor='{}' product='{}'; continuing bot fallback test\n",
+            vendor_id,
+            product_id,
+            info.block_size,
+            info.block_count,
+            info.vendor,
+            info.product
+        ),
+        Err(err) => crate::log!(
+            "crabusb: mass {:04X}:{:04X} uas-preflight failed as probe-only before bot fallback: {:?}\n",
+            vendor_id,
+            product_id,
+            err
+        ),
+    }
+
+    if let Err(err) = device
+        .control_out(
+            usb_if::host::ControlSetup {
+                request_type: usb_if::transfer::RequestType::Standard,
+                recipient: usb_if::transfer::Recipient::Interface,
+                request: usb_if::transfer::Request::SetInterface,
+                value: 0,
+                index: u16::from(target.interface_number),
+            },
+            &[],
+        )
+        .await
+    {
+        crate::log!(
+            "crabusb: mass {:04X}:{:04X} uas-preflight set-interface-alt0 failed before bot fallback: {:?}\n",
+            vendor_id,
+            product_id,
+            err
+        );
+    } else {
+        crate::log!(
+            "crabusb: mass {:04X}:{:04X} uas-preflight set-interface-alt0 ok before bot fallback\n",
+            vendor_id,
+            product_id
+        );
+    }
+
+    device
 }
 
 pub(crate) async fn maybe_start_mass_storage(
@@ -942,17 +1516,99 @@ pub(crate) async fn maybe_start_mass_storage(
         );
     }
 
-    let device = match host.open_device(dev_info).await {
-        Ok(device) => device,
-        Err(err) => {
+    let mut bot_fallback_device = None;
+
+    if UAC_SKHYNIX_TEST
+        && let Some(uas_target) =
+            mass::pick_skhynix_uas_target(vendor_id, product_id, &transport_plan.uas)
+    {
+        let device = match host.open_device(dev_info).await {
+            Ok(device) => device,
+            Err(err) => {
+                crate::log!(
+                    "crabusb: mass {:04X}:{:04X} uas-skhynix open failed: {:?}\n",
+                    vendor_id,
+                    product_id,
+                    err
+                );
+                return true;
+            }
+        };
+
+        if UAS_PROBE_THEN_BOT_FALLBACK {
             crate::log!(
-                "crabusb: mass {:04X}:{:04X} open failed: {:?}\n",
+                "crabusb: mass {:04X}:{:04X} uac_skhynix preflight enabled; will fall back to bot after probe\n",
                 vendor_id,
-                product_id,
-                err
+                product_id
             );
+            bot_fallback_device =
+                Some(probe_uas_skhynix_before_bot_fallback(device, uas_target).await);
+        } else {
+            let active_stream = ActiveMassStream {
+                controller_id,
+                slot_id: u32::from(device.slot_id()),
+            };
+            if !register_active_mass_stream(active_stream) {
+                return true;
+            }
+
+            match mass_storage_uas_skhynix_task(
+                device,
+                controller_id,
+                uas_target,
+                topology.port_speed,
+                uas_candidate_count,
+            ) {
+                Ok(token) => {
+                    spawner.spawn(token);
+                    crate::log!(
+                        "crabusb: mass {:04X}:{:04X} uac_skhynix handoff if#{} alt={} cfg={} cmd_out=0x{:02X} status_in=0x{:02X} data_in=0x{:02X} data_out=0x{:02X} transport={} profile={} speed={:?} uas_candidates={}\n",
+                        vendor_id,
+                        product_id,
+                        uas_target.interface_number,
+                        uas_target.alternate_setting,
+                        uas_target.configuration_value,
+                        uas_target.command_out,
+                        uas_target.status_in,
+                        uas_target.data_in,
+                        uas_target.data_out,
+                        mass_transport_label(mass::MassTransportKind::Uas),
+                        mass_io_profile_label(MassIoProfile::UasSkhynix),
+                        topology.port_speed,
+                        uas_candidate_count,
+                    );
+                }
+                Err(err) => {
+                    unregister_active_mass_stream(active_stream);
+                    crate::log!(
+                        "crabusb: mass {:04X}:{:04X} uac_skhynix spawn failed if#{} alt={}: {:?}\n",
+                        vendor_id,
+                        product_id,
+                        uas_target.interface_number,
+                        uas_target.alternate_setting,
+                        err
+                    );
+                }
+            }
+
             return true;
         }
+    }
+
+    let device = match bot_fallback_device {
+        Some(device) => device,
+        None => match host.open_device(dev_info).await {
+            Ok(device) => device,
+            Err(err) => {
+                crate::log!(
+                    "crabusb: mass {:04X}:{:04X} open failed: {:?}\n",
+                    vendor_id,
+                    product_id,
+                    err
+                );
+                return true;
+            }
+        },
     };
 
     let active_stream = ActiveMassStream {

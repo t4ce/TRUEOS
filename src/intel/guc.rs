@@ -282,8 +282,8 @@ pub(crate) fn log_submission_contract(dev: crate::intel::Dev, label: &'static st
     let (bootrom, ukernel, auth) = describe_status(status);
     let ready = ready();
     let dist_dbs = crate::intel::mmio_read(dev, DIST_DBS_POPULATED);
-    let doorbells = ((dist_dbs & DOORBELLS_PER_SQIDI_MASK) >> DOORBELLS_PER_SQIDI_SHIFT)
-        .saturating_add(1);
+    let doorbells =
+        ((dist_dbs & DOORBELLS_PER_SQIDI_MASK) >> DOORBELLS_PER_SQIDI_SHIFT).saturating_add(1);
     let scratch0 = crate::intel::mmio_read(dev, SOFT_SCRATCH_BASE);
     let scratch_ads = crate::intel::mmio_read(dev, SOFT_SCRATCH_BASE + 5 * 4);
     let scratch_devid = crate::intel::mmio_read(dev, SOFT_SCRATCH_BASE + 6 * 4);
