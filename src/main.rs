@@ -74,6 +74,8 @@ mod stackkeeper;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod std_abi_shim;
 mod t;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+mod th;
 mod tga;
 mod tokio_probe;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]

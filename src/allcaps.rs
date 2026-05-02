@@ -28,6 +28,7 @@ pub mod stackkeeper {
     pub const TOKIO_LANE_COUNT: usize = 16;
     pub const TOKIO_LANE_SCRATCH_BYTES: usize = 16 * 1024;
     pub const TOKIO_TLS_CPU_TRACK_COUNT: usize = 64;
+    pub const TOKIO_BLOCKING_VTHREAD_BACKING: bool = true;
 }
 
 pub mod hv {
@@ -81,6 +82,9 @@ pub mod storage {
     pub const USB_MASS_MAX_RUNTIMES: usize = 8;
     pub const USB_MASS_MAX_ACTIVE_STREAMS: usize = 8;
     pub const USB_MASS_BOT_KEEPALIVE_ENABLED: bool = false;
+    pub const USB_MASS_FORCE_CONSERVATIVE_BOT: bool = true;
+    pub const USB_MASS_BOT_IO_TIMEOUT_MS: u64 = 60_000;
+    pub const USB_MASS_BOT_RECOVERY_SETTLE_MS: u64 = 1_000;
     pub const USB_MASS_KEEPALIVE_MS: u64 = 2_000;
     pub const USB_MASS_IO_RETRY_LIMIT: u8 = 8;
     pub const USB_MASS_IO_RETRY_DELAY_MS: u64 = 25;

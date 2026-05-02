@@ -74,6 +74,11 @@ fn pthread_key(ptr: *mut c_void) -> Option<usize> {
 }
 
 fn pthread_current_id() -> usize {
+    if crate::th::vthread::tokio_blocking_backing_enabled()
+        && let Some(vtid) = crate::th::vthread::current_id()
+    {
+        return 0x1_0000usize.saturating_add(vtid as usize);
+    }
     crate::percpu::current_slot().saturating_add(1)
 }
 
@@ -769,7 +774,7 @@ pub unsafe extern "C" fn pthread_create(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pthread_self() -> usize {
-    crate::percpu::current_slot().saturating_add(1)
+    pthread_current_id()
 }
 
 #[unsafe(no_mangle)]

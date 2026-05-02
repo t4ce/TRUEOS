@@ -11,6 +11,7 @@ static LOGGED_SPAWN: AtomicBool = AtomicBool::new(false);
 static LOGGED_SUBMITTED: AtomicBool = AtomicBool::new(false);
 static LOGGED_TASK_ENTER: AtomicBool = AtomicBool::new(false);
 static LOGGED_TASK_EXIT: AtomicBool = AtomicBool::new(false);
+static LOGGED_VTHREAD_BACKING: AtomicBool = AtomicBool::new(false);
 
 #[embassy_executor::task(pool_size = 64)]
 async fn tokio_blocking_job_task(
@@ -28,9 +29,18 @@ async fn tokio_blocking_job_task(
             tag.core_kind
         );
     }
+    let _vthread_guard = if crate::th::vthread::tokio_blocking_backing_enabled() {
+        if !LOGGED_VTHREAD_BACKING.swap(true, Ordering::AcqRel) {
+            crate::log!("tokio-worker: vthread backing enabled for blocking workers\n");
+        }
+        Some(crate::th::vthread::enter(lane.vthread_record()))
+    } else {
+        None
+    };
     let _guard = crate::stackkeeper::enter_tokio_lane(lane, purpose);
     job();
     drop(_guard);
+    drop(_vthread_guard);
     let _ = crate::stackkeeper::release_tokio_lane(lane);
     if !LOGGED_TASK_EXIT.swap(true, Ordering::AcqRel) {
         crate::log!("tokio-worker: exited {}\n", purpose);

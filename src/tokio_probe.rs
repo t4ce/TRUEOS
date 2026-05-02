@@ -25,6 +25,7 @@ static TOKIO_FS_PROBE_TASK_SPAWNED: AtomicBool = AtomicBool::new(false);
 static TOKIO_BLOCKING_CANARY_TASK_SPAWNED: AtomicBool = AtomicBool::new(false);
 static TOKIO_STD_TLS_CANARY_TASK_SPAWNED: AtomicBool = AtomicBool::new(false);
 static TOKIO_RT_MULTI_THREAD_TASK_SPAWNED: AtomicBool = AtomicBool::new(false);
+static VTHREAD_IDENTITY_PROBE_TASK_SPAWNED: AtomicBool = AtomicBool::new(false);
 
 std::thread_local! {
     static TOKIO_STD_TLS_CANARY: Cell<u32> = const { Cell::new(0) };
@@ -39,6 +40,11 @@ struct StdTlsIsolationSample {
     before: u32,
     after: u32,
     leaked: u32,
+}
+
+struct VThreadIdentitySample {
+    label: u32,
+    probe: crate::th::vthread::VThreadTlsProbe,
 }
 
 async fn probe_async_identity() -> u32 {
@@ -518,6 +524,14 @@ fn tokio_background_worker_ready() -> bool {
         && crate::workers::has_background_worker_slot()
 }
 
+fn vthread_identity_probe_ready() -> bool {
+    crate::r::readiness::is_set(
+        crate::r::readiness::VTHREAD_HW_TAG_READY
+            | crate::r::readiness::BACKGROUND_AP_WORKER_READY
+            | crate::r::readiness::TOKIO_RUNTIME_READY,
+    ) && crate::workers::has_background_worker_slot()
+}
+
 fn mark_std_tls_canary_on_boot_cpu() {
     TOKIO_STD_TLS_CANARY.with(|canary| canary.set(0xB5B5_0001));
     crate::log!("tokio_probe: note std.thread_local boot canary armed\n");
@@ -630,6 +644,22 @@ async fn probe_std_thread_local_isolation_surface() {
             right.cpu_slot,
             right.tokio_lane
         );
+    } else if crate::th::vthread::tokio_blocking_backing_enabled() {
+        crate::log!(
+            "tokio_probe: note std.thread_local carrier_isolation accepted under vthread backing left(label=0x{:08X} cpu={} lane={} before=0x{:08X} after=0x{:08X} leaked=0x{:08X}) right(label=0x{:08X} cpu={} lane={} before=0x{:08X} after=0x{:08X} leaked=0x{:08X}); use vthread TLS identity for Rayon-style schedulers\n",
+            left.label,
+            left.cpu_slot,
+            left.tokio_lane,
+            left.before,
+            left.after,
+            left.leaked,
+            right.label,
+            right.cpu_slot,
+            right.tokio_lane,
+            right.before,
+            right.after,
+            right.leaked
+        );
     } else {
         crate::log!(
             "tokio_probe: failure std.thread_local carrier_isolation left(label=0x{:08X} cpu={} lane={} before=0x{:08X} after=0x{:08X} leaked=0x{:08X}) right(label=0x{:08X} cpu={} lane={} before=0x{:08X} after=0x{:08X} leaked=0x{:08X}); thread-local worker identity unsafe for Rayon-style schedulers\n",
@@ -646,6 +676,152 @@ async fn probe_std_thread_local_isolation_surface() {
             right.after,
             right.leaked
         );
+    }
+}
+
+fn run_vthread_identity_worker(label: u32, release: Arc<AtomicU32>) -> VThreadIdentitySample {
+    while release.load(Ordering::Acquire) == 0 {
+        core::hint::spin_loop();
+    }
+
+    VThreadIdentitySample {
+        label,
+        probe: crate::th::vthread::probe_tls_touch(label),
+    }
+}
+
+async fn probe_vthread_identity_surface() {
+    if !vthread_identity_probe_ready() {
+        crate::log!(
+            "vthread-probe: note deferred until VTHREAD_HW_TAG_READY|BACKGROUND_AP_WORKER_READY|TOKIO_RUNTIME_READY\n"
+        );
+        return;
+    }
+
+    crate::log!("vthread-probe: enter fsbase_identity tls_address\n");
+
+    let release = Arc::new(AtomicU32::new(0));
+    let left_release = release.clone();
+    let right_release = release.clone();
+    let left = tokio::task::spawn_blocking(move || {
+        run_vthread_identity_worker(0x7454_0001, left_release)
+    });
+    let right = tokio::task::spawn_blocking(move || {
+        run_vthread_identity_worker(0x7454_0002, right_release)
+    });
+
+    tokio::task::yield_now().await;
+    release.store(1, Ordering::Release);
+
+    let joined = tokio::time::timeout(core::time::Duration::from_millis(250), async {
+        let left = left.await.map_err(|_| "left")?;
+        let right = right.await.map_err(|_| "right")?;
+        Ok::<(VThreadIdentitySample, VThreadIdentitySample), &'static str>((left, right))
+    })
+    .await;
+
+    let Ok(Ok((left, right))) = joined else {
+        crate::log!("vthread-probe: failure timeout\n");
+        return;
+    };
+
+    let Some(left_snapshot) = left.probe.snapshot else {
+        crate::log!("vthread-probe: failure bad_magic side=left\n");
+        return;
+    };
+    let Some(right_snapshot) = right.probe.snapshot else {
+        crate::log!("vthread-probe: failure bad_magic side=right\n");
+        return;
+    };
+
+    if left_snapshot.record_addr == right_snapshot.record_addr {
+        crate::log!(
+            "vthread-probe: failure same_fs_record left_vtid={} right_vtid={} fs=0x{:016X}\n",
+            left_snapshot.vtid,
+            right_snapshot.vtid,
+            left_snapshot.record_addr
+        );
+        return;
+    }
+
+    if left.probe.tls_addr == right.probe.tls_addr {
+        crate::log!(
+            "vthread-probe: failure same_tls_addr left_slot={} right_slot={} tls=0x{:016X}\n",
+            left_snapshot.tls_slot,
+            right_snapshot.tls_slot,
+            left.probe.tls_addr
+        );
+        return;
+    }
+
+    if left.probe.after != left.label || right.probe.after != right.label {
+        crate::log!(
+            "vthread-probe: failure value_leak left(label=0x{:08X} before=0x{:08X} after=0x{:08X}) right(label=0x{:08X} before=0x{:08X} after=0x{:08X})\n",
+            left.label,
+            left.probe.before,
+            left.probe.after,
+            right.label,
+            right.probe.before,
+            right.probe.after
+        );
+        return;
+    }
+
+    crate::log!(
+        "vthread-probe: success left_vtid={} left_fs=0x{:016X} left_tls=0x{:016X} left_slot={} left_cpu={} right_vtid={} right_fs=0x{:016X} right_tls=0x{:016X} right_slot={} right_cpu={}\n",
+        left_snapshot.vtid,
+        left_snapshot.record_addr,
+        left.probe.tls_addr,
+        left_snapshot.tls_slot,
+        left_snapshot.cpu_slot,
+        right_snapshot.vtid,
+        right_snapshot.record_addr,
+        right.probe.tls_addr,
+        right_snapshot.tls_slot,
+        right_snapshot.cpu_slot
+    );
+}
+
+fn run_vthread_identity_probe_runtime() {
+    let mut runtime_builder = tokio::runtime::Builder::new_current_thread();
+    runtime_builder.enable_time();
+
+    let runtime = match runtime_builder.build() {
+        Ok(runtime) => runtime,
+        Err(_) => {
+            crate::log!("vthread-probe: failure rt.build current_thread\n");
+            return;
+        }
+    };
+
+    runtime.block_on(probe_vthread_identity_surface());
+}
+
+#[task]
+async fn vthread_identity_probe_task() {
+    crate::r::readiness::wait_for(
+        crate::r::readiness::VTHREAD_HW_TAG_READY
+            | crate::r::readiness::BACKGROUND_AP_WORKER_READY
+            | crate::r::readiness::TOKIO_RUNTIME_READY,
+    )
+    .await;
+    crate::log!("vthread-probe: resume after hardware tag and tokio readiness\n");
+    run_vthread_identity_probe_runtime();
+}
+
+fn spawn_deferred_vthread_identity_probe() {
+    if VTHREAD_IDENTITY_PROBE_TASK_SPAWNED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    let Some(spawner) = crate::workers::spawner_for_slot(0) else {
+        crate::log!("vthread-probe: note task not spawned (no slot0 spawner)\n");
+        return;
+    };
+
+    match vthread_identity_probe_task() {
+        Ok(token) => spawner.spawn(token),
+        Err(err) => crate::log!("vthread-probe: note task spawn failed: {:?}\n", err),
     }
 }
 
@@ -1186,6 +1362,7 @@ pub(crate) fn log_boot_probe() {
         Ok(()) => {
             crate::log!("tokio_probe: success rt.block_on probe_suite\n");
             crate::r::readiness::set(crate::r::readiness::TOKIO_RUNTIME_READY);
+            spawn_deferred_vthread_identity_probe();
         }
         Err(stage) => crate::log!("tokio_probe: failure {}\n", stage),
     }

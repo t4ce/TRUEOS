@@ -98,10 +98,12 @@ fn submit_warm_render_batch(
             RESULT_SLOT_POST3D_LIGHT_PIPE_CONTROL_HI_DWORD => result_post3d_light_hi,
             RESULT_SLOT_FINAL_AFTER_LIGHT_DWORD => result_final_after_light,
             RESULT_SLOT_PRE_LIGHT_PC_DWORD => result_pre_light_pc,
-            RESULT_SLOT_GPGPU_PREFLIGHT_MARKER_DWORD => read_result_dword(
-                warm,
-                RESULT_SLOT_GPGPU_PREFLIGHT_MARKER_DWORD,
-            ),
+            RESULT_SLOT_GPGPU_PREFLIGHT_MARKER_DWORD => {
+                read_result_dword(warm, RESULT_SLOT_GPGPU_PREFLIGHT_MARKER_DWORD)
+            }
+            RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD => {
+                read_result_dword(warm, RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD)
+            }
             _ => result0,
         };
         if observed == expected_result {
@@ -1418,10 +1420,7 @@ fn log_triangle_stage_frontier(
         };
     let note = if post_draw_before_light == 0 {
         "draw_did_not_reach_pre_light_pc_marker"
-    } else if light_post_sync_expected
-        && post_draw_light == 0
-        && post_draw_final_after_light != 0
-    {
+    } else if light_post_sync_expected && post_draw_light == 0 && post_draw_final_after_light != 0 {
         "tail_retired_without_light_postsync_write"
     } else if light_post_sync_expected && post_draw_light == 0 {
         "draw_not_retired_before_light_sync"
