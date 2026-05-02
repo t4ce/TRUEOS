@@ -80,6 +80,7 @@ pub mod storage {
 
     pub const USB_MASS_MAX_RUNTIMES: usize = 8;
     pub const USB_MASS_MAX_ACTIVE_STREAMS: usize = 8;
+    pub const USB_MASS_BOT_KEEPALIVE_ENABLED: bool = false;
     pub const USB_MASS_KEEPALIVE_MS: u64 = 2_000;
     pub const USB_MASS_IO_RETRY_LIMIT: u8 = 8;
     pub const USB_MASS_IO_RETRY_DELAY_MS: u64 = 25;
@@ -91,8 +92,8 @@ pub mod storage {
     pub const USB_MASS_IO_GROW_SUCCESS_TARGET_FAST_BOT: u16 = 4;
     pub const USB_MASS_FAST_BOT_INITIAL_IO_BYTES: usize = 1024 * 1024;
     pub const USB_MASS_FAST_BOT_WRITE_MAX_IO_BYTES: usize = 128 * 1024;
-    pub const USB_MASS_UAC_SKHYNIX_TEST: bool = true;
-    pub const USB_MASS_UAS_PROBE_THEN_BOT_FALLBACK: bool = true;
+    pub const USB_MASS_UAC_SKHYNIX_TEST: bool = false;
+    pub const USB_MASS_UAS_PROBE_THEN_BOT_FALLBACK: bool = false;
 }
 
 pub mod input {

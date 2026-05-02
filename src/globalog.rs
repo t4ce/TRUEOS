@@ -51,13 +51,13 @@ pub fn log_with_purpose(purpose: Option<&str>, args: fmt::Arguments<'_>) {
                 if let Some(purpose) = self.purpose {
                     debugcon::log(format_args!("[{}] ", purpose));
                     logtotcp::log(format_args!("[{}] ", purpose));
-                    placeholder::log(format_args!("[{}] ", purpose));
+                    persist_ring_log(format_args!("[{}] ", purpose));
                 }
                 self.wrote_prefix = true;
             }
             debugcon::log(format_args!("{}", s));
             logtotcp::log(format_args!("{}", s));
-            placeholder::log(format_args!("{}", s));
+            persist_ring_log(format_args!("{}", s));
             Ok(())
         }
     }
@@ -165,10 +165,16 @@ fn excerpt_lines(src: &str, range: LogRange, count: usize) -> alloc::string::Str
 }
 
 pub fn snapshot() -> alloc::vec::Vec<u8> {
+    if crate::logflag::dont_persist_globalog {
+        return alloc::vec::Vec::new();
+    }
     placeholder::snapshot()
 }
 
 pub(crate) fn append_raw(bytes: &[u8]) {
+    if crate::logflag::dont_persist_globalog {
+        return;
+    }
     placeholder::write_bytes_raw(bytes);
 }
 
@@ -182,6 +188,10 @@ pub async fn persist_once_task() {
     use embassy_time::{Duration as EmbassyDuration, Timer};
 
     const RETRY_MS: u64 = 1_000;
+
+    if crate::logflag::dont_persist_globalog {
+        return;
+    }
 
     Timer::after(EmbassyDuration::from_secs(10)).await;
 
@@ -227,6 +237,13 @@ async fn persist_snapshot(
     }
 
     crate::r::fs::trueosfs::file_write_finish_async(handle).await
+}
+
+fn persist_ring_log(args: fmt::Arguments<'_>) {
+    if crate::logflag::dont_persist_globalog {
+        return;
+    }
+    placeholder::log(args);
 }
 
 pub mod logtotcp {

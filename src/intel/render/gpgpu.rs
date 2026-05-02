@@ -12,6 +12,8 @@ static GPGPU_PREFLIGHT_SUM_B: AtomicU32 = AtomicU32::new(0);
 static GPGPU_PREFLIGHT_LANES_OBSERVED: AtomicU32 = AtomicU32::new(0);
 static GPGPU_TILE_ARENA_MAPPED: AtomicBool = AtomicBool::new(false);
 static GPGPU_TILE_ARENA_STATUS_LOGGED: AtomicBool = AtomicBool::new(false);
+static GPGPU_EU_KERNEL_UPLOADED: AtomicBool = AtomicBool::new(false);
+static GPGPU_EU_WALKER_ENCODED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct GpgpuPreflightStatus {
@@ -31,6 +33,8 @@ pub(crate) struct GpgpuPreflightStatus {
     pub(crate) tile_rows: usize,
     pub(crate) max_tiles: usize,
     pub(crate) enough_for_shape: bool,
+    pub(crate) eu_kernel_uploaded: bool,
+    pub(crate) eu_walker_encoded: bool,
 }
 
 pub(crate) fn gpgpu_preflight_status() -> GpgpuPreflightStatus {
@@ -53,6 +57,8 @@ pub(crate) fn gpgpu_preflight_status() -> GpgpuPreflightStatus {
         tile_rows: GPGPU_TILE_ROWS,
         max_tiles: gpgpu_arena_max_tiles(arena_bytes),
         enough_for_shape: gpgpu_arena_enough_for_shape(arena_bytes),
+        eu_kernel_uploaded: GPGPU_EU_KERNEL_UPLOADED.load(Ordering::Acquire),
+        eu_walker_encoded: GPGPU_EU_WALKER_ENCODED.load(Ordering::Acquire),
     }
 }
 
@@ -91,6 +97,8 @@ pub(crate) fn submit_gpgpu_preflight_once() {
     if !accepted {
         recover_render_engine_after_nonretired_submit(dev, warm, "gpgpu-preflight");
     }
+    let eu_artifact = prepare_gpgpu_eu_artifact(warm, accepted);
+    log_gpgpu_eu_artifact_status(eu_artifact);
 }
 
 fn gpgpu_arena_gpu_base(arena_bytes: usize) -> u64 {
@@ -228,6 +236,29 @@ fn submit_gpgpu_preflight(dev: crate::intel::Dev, warm: RenderWarmState) -> bool
     GPGPU_PREFLIGHT_LANES_OBSERVED.store(gpu_lanes, Ordering::Release);
 
     crate::log!(
+        "intel/gpgpu: preflight-readback accepted={} completed={} result_gpu=0x{:X} marker_slot={} marker_expected=0x{:08X} marker_observed=0x{:08X} dot_slot={} dot_expected={} dot_observed={} sum_a_slot={} sum_a_expected={} sum_a_observed={} sum_b_slot={} sum_b_expected={} sum_b_observed={} lanes_slot={} lanes_expected={} lanes_observed={} batch_bytes=0x{:X} does_not_prove=eu_thread_execution_or_matmul_or_guc_scheduling\n",
+        accepted as u8,
+        completed as u8,
+        GPU_VA_RESULT_BASE,
+        RESULT_SLOT_GPGPU_PREFLIGHT_MARKER_DWORD,
+        RCS_EXEC_RESULT_GPGPU_PREFLIGHT_DONE,
+        marker,
+        RESULT_SLOT_GPGPU_PREFLIGHT_DOT_DWORD,
+        dot,
+        gpu_dot,
+        RESULT_SLOT_GPGPU_PREFLIGHT_SUM_A_DWORD,
+        sum_a,
+        gpu_sum_a,
+        RESULT_SLOT_GPGPU_PREFLIGHT_SUM_B_DWORD,
+        sum_b,
+        gpu_sum_b,
+        RESULT_SLOT_GPGPU_PREFLIGHT_LANES_DWORD,
+        GPGPU_PREFLIGHT_LANES,
+        gpu_lanes,
+        batch_tail_bytes,
+    );
+
+    crate::log!(
         "intel/gpgpu: preflight accepted={} completed={} backend=rcs-mi-store-constants guc_ready={} guc_status=0x{:08X} lanes={} marker=0x{:08X} dot={} sum_a={} sum_b={} batch_bytes=0x{:X} input_a_gpu=0x{:X} input_b_gpu=0x{:X} result_gpu=0x{:X} next=eu-kernel-dispatch does_not_prove=eu_thread_execution_or_matmul_or_guc_scheduling\n",
         accepted as u8,
         completed as u8,
@@ -245,6 +276,154 @@ fn submit_gpgpu_preflight(dev: crate::intel::Dev, warm: RenderWarmState) -> bool
     );
 
     accepted
+}
+
+#[derive(Copy, Clone)]
+struct GpgpuEuArtifactProof {
+    kernel_uploaded: bool,
+    walker_encoded: bool,
+    result_changed_by_current_backend: bool,
+    kernel_gpu: u64,
+    kernel_bytes: usize,
+    kernel_sig: u64,
+    walker_gpu: u64,
+    walker_bytes: usize,
+}
+
+fn prepare_gpgpu_eu_artifact(
+    warm: RenderWarmState,
+    result_changed_by_current_backend: bool,
+) -> GpgpuEuArtifactProof {
+    let pipeline = crate::intel::shader::triangle_pipeline();
+    let kernel = pipeline.ps.code;
+    let kernel_bytes = kernel.len() * core::mem::size_of::<u32>();
+    let kernel_gpu = GPU_VA_DRAW_STATE_BASE + GPGPU_EU_KERNEL_OFFSET_BYTES as u64;
+    let walker_gpu = GPU_VA_BATCH_BASE + GPGPU_WALKER_SCRATCH_OFFSET_BYTES as u64;
+
+    let kernel_uploaded = kernel_bytes != 0
+        && GPGPU_EU_KERNEL_OFFSET_BYTES
+            .checked_add(kernel_bytes)
+            .is_some_and(|end| end <= warm.draw_state_len)
+        && upload_and_verify_eu_kernel(warm, kernel);
+    GPGPU_EU_KERNEL_UPLOADED.store(kernel_uploaded, Ordering::Release);
+
+    let walker_bytes = core::mem::size_of::<GpgpuWalkerCandidate>();
+    let walker_encoded = kernel_uploaded
+        && GPGPU_WALKER_SCRATCH_OFFSET_BYTES
+            .checked_add(walker_bytes)
+            .is_some_and(|end| end <= warm.batch_len)
+        && encode_gpgpu_walker_candidate(warm, kernel_gpu, kernel_bytes as u32);
+    GPGPU_EU_WALKER_ENCODED.store(walker_encoded, Ordering::Release);
+
+    GpgpuEuArtifactProof {
+        kernel_uploaded,
+        walker_encoded,
+        result_changed_by_current_backend,
+        kernel_gpu,
+        kernel_bytes,
+        kernel_sig: shader_word_signature(kernel),
+        walker_gpu,
+        walker_bytes,
+    }
+}
+
+fn upload_and_verify_eu_kernel(warm: RenderWarmState, kernel: &'static [u32]) -> bool {
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            kernel.as_ptr() as *const u8,
+            warm.draw_state_virt.add(GPGPU_EU_KERNEL_OFFSET_BYTES),
+            core::mem::size_of_val(kernel),
+        );
+    }
+    crate::intel::dma_flush(
+        unsafe { warm.draw_state_virt.add(GPGPU_EU_KERNEL_OFFSET_BYTES) },
+        core::mem::size_of_val(kernel),
+    );
+    let uploaded = unsafe {
+        core::slice::from_raw_parts(
+            warm.draw_state_virt.add(GPGPU_EU_KERNEL_OFFSET_BYTES) as *const u32,
+            kernel.len(),
+        )
+    };
+    uploaded == kernel
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct GpgpuWalkerCandidate {
+    magic: u32,
+    version: u32,
+    simd_lanes: u32,
+    kernel_gpu_lo: u32,
+    kernel_gpu_hi: u32,
+    kernel_bytes: u32,
+    input_a_gpu_lo: u32,
+    input_a_gpu_hi: u32,
+    input_b_gpu_lo: u32,
+    input_b_gpu_hi: u32,
+    result_c_gpu_lo: u32,
+    result_c_gpu_hi: u32,
+    lanes: u32,
+    reserved: [u32; 3],
+}
+
+fn encode_gpgpu_walker_candidate(
+    warm: RenderWarmState,
+    kernel_gpu: u64,
+    kernel_bytes: u32,
+) -> bool {
+    let candidate = GpgpuWalkerCandidate {
+        magic: 0x4750_4757,
+        version: 1,
+        simd_lanes: 8,
+        kernel_gpu_lo: kernel_gpu as u32,
+        kernel_gpu_hi: (kernel_gpu >> 32) as u32,
+        kernel_bytes,
+        input_a_gpu_lo: GPU_VA_VERTEX_BASE as u32,
+        input_a_gpu_hi: (GPU_VA_VERTEX_BASE >> 32) as u32,
+        input_b_gpu_lo: GPU_VA_STREAMOUT_BASE as u32,
+        input_b_gpu_hi: (GPU_VA_STREAMOUT_BASE >> 32) as u32,
+        result_c_gpu_lo: GPU_VA_RESULT_BASE as u32,
+        result_c_gpu_hi: (GPU_VA_RESULT_BASE >> 32) as u32,
+        lanes: GPGPU_PREFLIGHT_LANES as u32,
+        reserved: [0; 3],
+    };
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            core::ptr::addr_of!(candidate) as *const u8,
+            warm.batch_virt.add(GPGPU_WALKER_SCRATCH_OFFSET_BYTES),
+            core::mem::size_of::<GpgpuWalkerCandidate>(),
+        );
+    }
+    crate::intel::dma_flush(
+        unsafe { warm.batch_virt.add(GPGPU_WALKER_SCRATCH_OFFSET_BYTES) },
+        core::mem::size_of::<GpgpuWalkerCandidate>(),
+    );
+    true
+}
+
+fn log_gpgpu_eu_artifact_status(proof: GpgpuEuArtifactProof) {
+    crate::log!(
+        "intel/gpgpu: eu-offload-proof-ladder input_buffer_a_in_ggtt=1 input_buffer_b_in_ggtt=1 input_a_gpu=0x{:X} input_b_gpu=0x{:X} kernel_shader_uploaded={} eu_kernel_uploaded={} eu_walker_encoded={} gpu_eu_execution_runs=0 result_buffer_c_gpu=0x{:X} result_buffer_c_changed_by_current_backend={} result_buffer_c_changed_by_eu=0 cpu_reads_c_back=1 current_backend=rcs-mi-store-constants walker_submitted=0 blocker=submit-gpgpu-walker next=submit-walker-and-compare-c does_not_prove=eu_thread_execution_or_matmul_or_guc_scheduling\n",
+        GPU_VA_VERTEX_BASE,
+        GPU_VA_STREAMOUT_BASE,
+        proof.kernel_uploaded as u8,
+        proof.kernel_uploaded as u8,
+        proof.walker_encoded as u8,
+        GPU_VA_RESULT_BASE,
+        proof.result_changed_by_current_backend as u8,
+    );
+
+    crate::log!(
+        "intel/gpgpu: eu-artifact-proof eu_kernel_uploaded={} eu_walker_encoded={} kernel_source=triangle-ps-simd8-eu-blob kernel_gpu=0x{:X} kernel_bytes=0x{:X} kernel_sig=0x{:016X} walker_gpu=0x{:X} walker_bytes=0x{:X} submitted=0 eu_execution_runs=0 result_c_changed_by_eu=0 next=submit-walker-and-compare-c does_not_prove=eu_thread_execution_or_matmul\n",
+        proof.kernel_uploaded as u8,
+        proof.walker_encoded as u8,
+        proof.kernel_gpu,
+        proof.kernel_bytes,
+        proof.kernel_sig,
+        proof.walker_gpu,
+        proof.walker_bytes,
+    );
 }
 
 fn encode_gpgpu_preflight_batch(

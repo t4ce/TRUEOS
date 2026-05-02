@@ -1244,7 +1244,7 @@ static TASKS: [TaskSpec; 73] = [
         &HTTP_TRUEOSFS_STARTED,
         spawn_http_trueosfs,
     ),
-    TaskSpec::enabled("pciids-git", PCIIDS_GIT_READY, &PCIIDS_GIT_STARTED, spawn_pciids_git),
+    TaskSpec::disabled("pciids-git", PCIIDS_GIT_READY, &PCIIDS_GIT_STARTED, spawn_pciids_git),
     TaskSpec::enabled(
         "hyper-http1-probe",
         HYPER_HTTP1_PROBE_READY,

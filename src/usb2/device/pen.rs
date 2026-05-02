@@ -15,6 +15,7 @@ use super::scsi::{self, SenseKey};
 
 const MAX_MASS_RUNTIMES: usize = crate::allcaps::storage::USB_MASS_MAX_RUNTIMES;
 const MAX_ACTIVE_STREAMS: usize = crate::allcaps::storage::USB_MASS_MAX_ACTIVE_STREAMS;
+const MASS_BOT_KEEPALIVE_ENABLED: bool = crate::allcaps::storage::USB_MASS_BOT_KEEPALIVE_ENABLED;
 const MASS_KEEPALIVE_MS: u64 = crate::allcaps::storage::USB_MASS_KEEPALIVE_MS;
 const MASS_IO_RETRY_LIMIT: u8 = crate::allcaps::storage::USB_MASS_IO_RETRY_LIMIT;
 const MASS_IO_RETRY_DELAY_MS: u64 = crate::allcaps::storage::USB_MASS_IO_RETRY_DELAY_MS;
@@ -458,11 +459,15 @@ impl block::BlockDevice for UsbMassBlockDevice {
 
                         let mut attempts = 0u8;
                         loop {
+                            let bulk_out_ep = rt.bulk_out_ep;
+                            let bulk_in_ep = rt.bulk_in_ep;
                             let result = match &mut rt.endpoints {
                                 UsbMassEndpoints::Bot { bulk_in, bulk_out } => {
                                     mass::read_blocks_bot(
                                         bulk_out,
                                         bulk_in,
+                                        bulk_out_ep,
+                                        bulk_in_ep,
                                         cur_lba as u32,
                                         blocks_here as u16,
                                         &mut remaining[..bytes_here],
@@ -510,7 +515,14 @@ impl block::BlockDevice for UsbMassBlockDevice {
                                     }
                                     let sense = match &mut rt.endpoints {
                                         UsbMassEndpoints::Bot { bulk_in, bulk_out } => {
-                                            mass::request_sense_fixed(bulk_out, bulk_in, rt.bot_tag).await
+                                            mass::request_sense_fixed(
+                                                bulk_out,
+                                                bulk_in,
+                                                bulk_out_ep,
+                                                bulk_in_ep,
+                                                rt.bot_tag,
+                                            )
+                                            .await
                                         }
                                         UsbMassEndpoints::UasSkhynix {
                                             command_out,
@@ -596,11 +608,15 @@ impl block::BlockDevice for UsbMassBlockDevice {
 
                     let mut attempts = 0u8;
                     loop {
+                        let bulk_out_ep = rt.bulk_out_ep;
+                        let bulk_in_ep = rt.bulk_in_ep;
                         let result = match &mut rt.endpoints {
                             UsbMassEndpoints::Bot { bulk_in, bulk_out } => {
                                 mass::write_blocks_bot(
                                     bulk_out,
                                     bulk_in,
+                                    bulk_out_ep,
+                                    bulk_in_ep,
                                     cur_lba as u32,
                                     blocks_here as u16,
                                     &remaining[..bytes_here],
@@ -648,7 +664,14 @@ impl block::BlockDevice for UsbMassBlockDevice {
                                 }
                                 let sense = match &mut rt.endpoints {
                                     UsbMassEndpoints::Bot { bulk_in, bulk_out } => {
-                                        mass::request_sense_fixed(bulk_out, bulk_in, rt.bot_tag).await
+                                        mass::request_sense_fixed(
+                                            bulk_out,
+                                            bulk_in,
+                                            bulk_out_ep,
+                                            bulk_in_ep,
+                                            rt.bot_tag,
+                                        )
+                                        .await
                                     }
                                     UsbMassEndpoints::UasSkhynix {
                                         command_out,
@@ -719,9 +742,18 @@ impl block::BlockDevice for UsbMassBlockDevice {
                         return Ok(());
                     }
 
+                    let bulk_out_ep = rt.bulk_out_ep;
+                    let bulk_in_ep = rt.bulk_in_ep;
                     let sync_result = match &mut rt.endpoints {
                         UsbMassEndpoints::Bot { bulk_in, bulk_out } => {
-                            mass::synchronize_cache_bot(bulk_out, bulk_in, rt.bot_tag).await
+                            mass::synchronize_cache_bot(
+                                bulk_out,
+                                bulk_in,
+                                bulk_out_ep,
+                                bulk_in_ep,
+                                rt.bot_tag,
+                            )
+                            .await
                         }
                         UsbMassEndpoints::UasSkhynix {
                             command_out,
@@ -748,7 +780,14 @@ impl block::BlockDevice for UsbMassBlockDevice {
                             rt.bot_tag = rt.bot_tag.wrapping_add(1);
                             let sense = match &mut rt.endpoints {
                                 UsbMassEndpoints::Bot { bulk_in, bulk_out } => {
-                                    mass::request_sense_fixed(bulk_out, bulk_in, rt.bot_tag).await
+                                    mass::request_sense_fixed(
+                                        bulk_out,
+                                        bulk_in,
+                                        bulk_out_ep,
+                                        bulk_in_ep,
+                                        rt.bot_tag,
+                                    )
+                                    .await
                                 }
                                 UsbMassEndpoints::UasSkhynix {
                                     command_out,
@@ -1023,9 +1062,15 @@ pub async fn mass_storage_task(
         };
 
         let mut recovered = false;
+        let bulk_out_ep = rt.bulk_out_ep;
+        let bulk_in_ep = rt.bulk_in_ep;
         let keepalive = match &mut rt.endpoints {
             UsbMassEndpoints::Bot { bulk_in, bulk_out } => {
-                mass::keepalive_mass_bot(bulk_out, bulk_in, 0).await
+                if MASS_BOT_KEEPALIVE_ENABLED {
+                    mass::keepalive_mass_bot(bulk_out, bulk_in, bulk_out_ep, bulk_in_ep, 0).await
+                } else {
+                    Ok(())
+                }
             }
             UsbMassEndpoints::UasSkhynix {
                 command_out,
@@ -1298,6 +1343,8 @@ pub async fn mass_storage_uas_skhynix_task(
             continue;
         };
 
+        let bulk_out_ep = rt.bulk_out_ep;
+        let bulk_in_ep = rt.bulk_in_ep;
         let keepalive = match &mut rt.endpoints {
             UsbMassEndpoints::UasSkhynix {
                 command_out,
@@ -1310,7 +1357,7 @@ pub async fn mass_storage_uas_skhynix_task(
                 result
             }
             UsbMassEndpoints::Bot { bulk_in, bulk_out } => {
-                mass::keepalive_mass_bot(bulk_out, bulk_in, 0).await
+                mass::keepalive_mass_bot(bulk_out, bulk_in, bulk_out_ep, bulk_in_ep, 0).await
             }
         };
         if let Err(err) = keepalive {
