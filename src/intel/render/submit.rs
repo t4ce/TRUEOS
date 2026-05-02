@@ -381,6 +381,58 @@ fn submit_warm_render_batch(
             crate::intel::mmio_read(dev, SC_INSTDONE_EXTRA),
             crate::intel::mmio_read(dev, SC_INSTDONE_EXTRA2),
         );
+        let gpr = [
+            read_rcs_cs_gpr(dev, 0),
+            read_rcs_cs_gpr(dev, 1),
+            read_rcs_cs_gpr(dev, 2),
+            read_rcs_cs_gpr(dev, 3),
+            read_rcs_cs_gpr(dev, 4),
+            read_rcs_cs_gpr(dev, 5),
+            read_rcs_cs_gpr(dev, 6),
+            read_rcs_cs_gpr(dev, 7),
+            read_rcs_cs_gpr(dev, 8),
+            read_rcs_cs_gpr(dev, 9),
+            read_rcs_cs_gpr(dev, 10),
+            read_rcs_cs_gpr(dev, 11),
+            read_rcs_cs_gpr(dev, 12),
+            read_rcs_cs_gpr(dev, 13),
+            read_rcs_cs_gpr(dev, 14),
+            read_rcs_cs_gpr(dev, 15),
+        ];
+        crate::log!(
+            "intel/render: {} rcs-cs-gpr base=0x{:05X} count={} gpr0=0x{:016X} gpr1=0x{:016X} gpr2=0x{:016X} gpr3=0x{:016X}\n",
+            submit_name,
+            RCS_CS_GPR_BASE,
+            RCS_CS_GPR_COUNT,
+            gpr[0],
+            gpr[1],
+            gpr[2],
+            gpr[3],
+        );
+        crate::log!(
+            "intel/render: {} rcs-cs-gpr gpr4=0x{:016X} gpr5=0x{:016X} gpr6=0x{:016X} gpr7=0x{:016X}\n",
+            submit_name,
+            gpr[4],
+            gpr[5],
+            gpr[6],
+            gpr[7],
+        );
+        crate::log!(
+            "intel/render: {} rcs-cs-gpr gpr8=0x{:016X} gpr9=0x{:016X} gpr10=0x{:016X} gpr11=0x{:016X}\n",
+            submit_name,
+            gpr[8],
+            gpr[9],
+            gpr[10],
+            gpr[11],
+        );
+        crate::log!(
+            "intel/render: {} rcs-cs-gpr gpr12=0x{:016X} gpr13=0x{:016X} gpr14=0x{:016X} gpr15=0x{:016X}\n",
+            submit_name,
+            gpr[12],
+            gpr[13],
+            gpr[14],
+            gpr[15],
+        );
     }
     if is_triangle_debug_submit_name(submit_name) {
         let stats_after = capture_triangle_stage_stats(dev);
@@ -881,6 +933,10 @@ fn read_stat_counter64(dev: crate::intel::Dev, reg: usize) -> u64 {
     let low = crate::intel::mmio_read(dev, reg) as u64;
     let high = crate::intel::mmio_read(dev, reg + 4) as u64;
     low | (high << 32)
+}
+
+fn read_rcs_cs_gpr(dev: crate::intel::Dev, index: usize) -> u64 {
+    read_stat_counter64(dev, RCS_CS_GPR_BASE + index * 8)
 }
 
 fn capture_triangle_stage_stats(dev: crate::intel::Dev) -> TriangleStageStats {
