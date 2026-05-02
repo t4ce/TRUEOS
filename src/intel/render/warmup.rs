@@ -31,6 +31,9 @@ pub(crate) fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
             streamout_phys: 0,
             streamout_virt: core::ptr::null_mut(),
             streamout_len: 0,
+            gpgpu_arena_phys: 0,
+            gpgpu_arena_virt: core::ptr::null_mut(),
+            gpgpu_arena_len: 0,
         };
         *WARM_STATE.lock() = Some(warm);
         crate::log!("intel/render: warm alloc failed part=ring size=0x{:X}\n", WARM_RING_BYTES);
@@ -65,6 +68,9 @@ pub(crate) fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
             streamout_phys: 0,
             streamout_virt: core::ptr::null_mut(),
             streamout_len: 0,
+            gpgpu_arena_phys: 0,
+            gpgpu_arena_virt: core::ptr::null_mut(),
+            gpgpu_arena_len: 0,
         };
         *WARM_STATE.lock() = Some(warm);
         crate::log!(
@@ -102,6 +108,9 @@ pub(crate) fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
             streamout_phys: 0,
             streamout_virt: core::ptr::null_mut(),
             streamout_len: 0,
+            gpgpu_arena_phys: 0,
+            gpgpu_arena_virt: core::ptr::null_mut(),
+            gpgpu_arena_len: 0,
         };
         *WARM_STATE.lock() = Some(warm);
         crate::log!("intel/render: warm alloc failed part=batch size=0x{:X}\n", WARM_BATCH_BYTES);
@@ -136,6 +145,9 @@ pub(crate) fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
             streamout_phys: 0,
             streamout_virt: core::ptr::null_mut(),
             streamout_len: 0,
+            gpgpu_arena_phys: 0,
+            gpgpu_arena_virt: core::ptr::null_mut(),
+            gpgpu_arena_len: 0,
         };
         *WARM_STATE.lock() = Some(warm);
         crate::log!(
@@ -173,6 +185,9 @@ pub(crate) fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
             streamout_phys: 0,
             streamout_virt: core::ptr::null_mut(),
             streamout_len: 0,
+            gpgpu_arena_phys: 0,
+            gpgpu_arena_virt: core::ptr::null_mut(),
+            gpgpu_arena_len: 0,
         };
         *WARM_STATE.lock() = Some(warm);
         crate::log!("intel/render: warm alloc failed part=vertex size=0x{:X}\n", WARM_VERTEX_BYTES);
@@ -207,6 +222,9 @@ pub(crate) fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
             streamout_phys: 0,
             streamout_virt: core::ptr::null_mut(),
             streamout_len: 0,
+            gpgpu_arena_phys: 0,
+            gpgpu_arena_virt: core::ptr::null_mut(),
+            gpgpu_arena_len: 0,
         };
         *WARM_STATE.lock() = Some(warm);
         crate::log!("intel/render: warm alloc failed part=result size=0x{:X}\n", WARM_RESULT_BYTES);
@@ -241,6 +259,9 @@ pub(crate) fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
             streamout_phys: 0,
             streamout_virt: core::ptr::null_mut(),
             streamout_len: 0,
+            gpgpu_arena_phys: 0,
+            gpgpu_arena_virt: core::ptr::null_mut(),
+            gpgpu_arena_len: 0,
         };
         *WARM_STATE.lock() = Some(warm);
         crate::log!(
@@ -249,6 +270,18 @@ pub(crate) fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
         );
         return warm;
     };
+    let (gpgpu_arena_phys, gpgpu_arena_virt, gpgpu_arena_len) =
+        match crate::dma::alloc(GPGPU_TILE_ARENA_BYTES, crate::intel::WARM_ALIGN) {
+            Some((phys, virt)) => (phys, virt, GPGPU_TILE_ARENA_BYTES),
+            None => {
+                crate::log!(
+                    "intel/gpgpu: arena alloc failed arena_bytes=0x{:X} tile_rows={} max_tiles=0 enough_for_shape=0\n",
+                    GPGPU_TILE_ARENA_BYTES,
+                    GPGPU_TILE_ROWS,
+                );
+                (0, core::ptr::null_mut(), 0)
+            }
+        };
 
     unsafe {
         core::ptr::write_bytes(ring_virt, 0, WARM_RING_BYTES);
@@ -258,6 +291,9 @@ pub(crate) fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
         core::ptr::write_bytes(vertex_virt, 0, WARM_VERTEX_BYTES);
         core::ptr::write_bytes(result_virt, 0, WARM_RESULT_BYTES);
         core::ptr::write_bytes(streamout_virt, 0, WARM_STREAMOUT_BYTES);
+        if !gpgpu_arena_virt.is_null() {
+            core::ptr::write_bytes(gpgpu_arena_virt, 0, gpgpu_arena_len);
+        }
     }
 
     let warm = RenderWarmState {
@@ -286,6 +322,9 @@ pub(crate) fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
         streamout_phys,
         streamout_virt,
         streamout_len: WARM_STREAMOUT_BYTES,
+        gpgpu_arena_phys,
+        gpgpu_arena_virt,
+        gpgpu_arena_len,
     };
     *WARM_STATE.lock() = Some(warm);
     warm

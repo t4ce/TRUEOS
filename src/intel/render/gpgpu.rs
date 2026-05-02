@@ -10,6 +10,8 @@ static GPGPU_PREFLIGHT_DOT: AtomicU32 = AtomicU32::new(0);
 static GPGPU_PREFLIGHT_SUM_A: AtomicU32 = AtomicU32::new(0);
 static GPGPU_PREFLIGHT_SUM_B: AtomicU32 = AtomicU32::new(0);
 static GPGPU_PREFLIGHT_LANES_OBSERVED: AtomicU32 = AtomicU32::new(0);
+static GPGPU_TILE_ARENA_MAPPED: AtomicBool = AtomicBool::new(false);
+static GPGPU_TILE_ARENA_STATUS_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct GpgpuPreflightStatus {
@@ -24,9 +26,16 @@ pub(crate) struct GpgpuPreflightStatus {
     pub(crate) lanes: u32,
     pub(crate) min_burn_rows: usize,
     pub(crate) min_burn_k_dim: usize,
+    pub(crate) arena_gpu_base: u64,
+    pub(crate) arena_bytes: usize,
+    pub(crate) tile_rows: usize,
+    pub(crate) max_tiles: usize,
+    pub(crate) enough_for_shape: bool,
 }
 
 pub(crate) fn gpgpu_preflight_status() -> GpgpuPreflightStatus {
+    let warm = warm_state();
+    let arena_bytes = warm.map_or(0, |warm| warm.gpgpu_arena_len);
     GpgpuPreflightStatus {
         submitted: GPGPU_PREFLIGHT_SUBMITTED.load(Ordering::Acquire),
         accepted: GPGPU_PREFLIGHT_ACCEPTED.load(Ordering::Acquire),
@@ -39,6 +48,11 @@ pub(crate) fn gpgpu_preflight_status() -> GpgpuPreflightStatus {
         lanes: GPGPU_PREFLIGHT_LANES_OBSERVED.load(Ordering::Acquire),
         min_burn_rows: GPGPU_BURN_MIN_ROWS,
         min_burn_k_dim: GPGPU_BURN_MIN_K_DIM,
+        arena_gpu_base: gpgpu_arena_gpu_base(arena_bytes),
+        arena_bytes,
+        tile_rows: GPGPU_TILE_ROWS,
+        max_tiles: gpgpu_arena_max_tiles(arena_bytes),
+        enough_for_shape: gpgpu_arena_enough_for_shape(arena_bytes),
     }
 }
 
@@ -70,11 +84,75 @@ pub(crate) fn submit_gpgpu_preflight_once() {
         return;
     }
 
+    let arena_mapped = ensure_gpgpu_tile_arena_mapped(dev, warm);
+    log_gpgpu_tile_arena_status(warm, arena_mapped);
     crate::intel::log_guc_submission_contract(dev, "gpgpu-preflight");
     let accepted = submit_gpgpu_preflight(dev, warm);
     if !accepted {
         recover_render_engine_after_nonretired_submit(dev, warm, "gpgpu-preflight");
     }
+}
+
+fn gpgpu_arena_gpu_base(arena_bytes: usize) -> u64 {
+    if arena_bytes == 0 {
+        0
+    } else {
+        GPU_VA_GPGPU_TILE_ARENA_BASE
+    }
+}
+
+fn gpgpu_arena_max_tiles(arena_bytes: usize) -> usize {
+    if arena_bytes <= GPGPU_X_VECTOR_BYTES {
+        return 0;
+    }
+    (arena_bytes - GPGPU_X_VECTOR_BYTES) / (GPGPU_WEIGHT_TILE_BYTES + GPGPU_OUTPUT_TILE_BYTES)
+}
+
+fn gpgpu_arena_enough_for_shape(arena_bytes: usize) -> bool {
+    gpgpu_arena_max_tiles(arena_bytes) >= GPGPU_TILE_TARGET_TILES
+}
+
+fn ensure_gpgpu_tile_arena_mapped(dev: crate::intel::Dev, warm: RenderWarmState) -> bool {
+    if GPGPU_TILE_ARENA_MAPPED.load(Ordering::Acquire) {
+        return true;
+    }
+    if warm.gpgpu_arena_len == 0 {
+        return false;
+    }
+
+    let mapped = super::map_ggtt(
+        dev,
+        warm.gpgpu_arena_phys,
+        warm.gpgpu_arena_len,
+        GPU_VA_GPGPU_TILE_ARENA_BASE,
+    );
+    if mapped {
+        super::ggtt_invalidate(dev);
+        GPGPU_TILE_ARENA_MAPPED.store(true, Ordering::Release);
+    }
+    mapped
+}
+
+fn log_gpgpu_tile_arena_status(warm: RenderWarmState, mapped: bool) {
+    if GPGPU_TILE_ARENA_STATUS_LOGGED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    let arena_bytes = warm.gpgpu_arena_len;
+    crate::log!(
+        "intel/gpgpu: arena mapped={} arena_gpu_base=0x{:X} arena_bytes=0x{:X} tile_rows={} max_tiles={} enough_for_shape={} tile_k={} weight_tile_bytes=0x{:X} x_bytes=0x{:X} output_tile_bytes=0x{:X} target_tiles={} does_not_prove=eu_thread_execution_or_matvec\n",
+        mapped as u8,
+        gpgpu_arena_gpu_base(arena_bytes),
+        arena_bytes,
+        GPGPU_TILE_ROWS,
+        gpgpu_arena_max_tiles(arena_bytes),
+        gpgpu_arena_enough_for_shape(arena_bytes) as u8,
+        GPGPU_TILE_K_DIM,
+        GPGPU_WEIGHT_TILE_BYTES,
+        GPGPU_X_VECTOR_BYTES,
+        GPGPU_OUTPUT_TILE_BYTES,
+        GPGPU_TILE_TARGET_TILES,
+    );
 }
 
 fn submit_gpgpu_preflight(dev: crate::intel::Dev, warm: RenderWarmState) -> bool {

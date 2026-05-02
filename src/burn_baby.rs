@@ -16,7 +16,6 @@ static LOGGED_QUEUE_LANE: AtomicBool = AtomicBool::new(false);
 static LOGGED_POLL_LANE: AtomicBool = AtomicBool::new(false);
 #[cfg(target_arch = "x86_64")]
 static LOGGED_BF16_SSE2_LANE: AtomicBool = AtomicBool::new(false);
-static LOGGED_GPGPU_BF16_GATE: AtomicBool = AtomicBool::new(false);
 static SUBMITTED_JOBS: AtomicU64 = AtomicU64::new(0);
 static COMPLETED_JOBS: AtomicU64 = AtomicU64::new(0);
 static POLLED_JOBS: AtomicU64 = AtomicU64::new(0);
@@ -239,7 +238,7 @@ pub fn matvec_rowmajor_bf16(
         matvec_rows_bf16(x, w_rowmajor_bf16, k_dim, out, 0, n_rows);
         return Ok(());
     }
-    log_gpgpu_bf16_gate(n_rows, k_dim, chunk_rows);
+    crate::burn_baba::share_matvec_rowmajor_bf16(n_rows, k_dim, chunk_rows);
 
     let done = AtomicUsize::new(0);
     let done_ptr = &done as *const AtomicUsize as usize;
@@ -279,33 +278,6 @@ pub fn matvec_rowmajor_bf16(
     }
 
     Ok(())
-}
-
-fn log_gpgpu_bf16_gate(n_rows: usize, k_dim: usize, chunk_rows: usize) {
-    if LOGGED_GPGPU_BF16_GATE.swap(true, Ordering::AcqRel) {
-        return;
-    }
-    let gpu = crate::intel::gpgpu_preflight_status();
-    let shape_candidate =
-        n_rows >= gpu.min_burn_rows && k_dim >= gpu.min_burn_k_dim && chunk_rows != 0;
-    crate::log!(
-        "burn-baby: gpgpu bf16 matvec gate preflight_submitted={} accepted={} completed={} guc_ready={} lanes={} marker=0x{:08X} dot={} sum_a={} sum_b={} rows={} k_dim={} chunk_rows={} min_rows={} min_k_dim={} shape_candidate={} action=cpu-ap-lane-until-eu-kernel does_not_prove=gpu_matmul\n",
-        gpu.submitted as u8,
-        gpu.accepted as u8,
-        gpu.completed as u8,
-        gpu.guc_ready as u8,
-        gpu.lanes,
-        gpu.marker,
-        gpu.dot,
-        gpu.sum_a,
-        gpu.sum_b,
-        n_rows,
-        k_dim,
-        chunk_rows,
-        gpu.min_burn_rows,
-        gpu.min_burn_k_dim,
-        shape_candidate as u8,
-    );
 }
 
 #[unsafe(no_mangle)]

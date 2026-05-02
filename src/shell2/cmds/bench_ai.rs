@@ -661,6 +661,13 @@ fn generate_lumen_answer(
     let mut answer = AllocString::new();
     let mut generated = 0usize;
     let mut first_token_ms = 0u64;
+    let generate_start = embassy_time_driver::now();
+    crate::log!(
+        "lumen: generation start prompt_tokens={} max_new_tokens={} max_seq_len={} note=first-token-can-be-long\n",
+        prompt_tokens.len(),
+        LUMEN_RUNTIME_MAX_NEW_TOKENS,
+        LUMEN_RUNTIME_MAX_SEQ_LEN
+    );
 
     no_grad(|| {
         let mut next_token = match tensor_from_token_ids(prompt_tokens.as_slice()) {
@@ -668,6 +675,12 @@ fn generate_lumen_answer(
                 let first_token_start = embassy_time_driver::now();
                 let token = model.forward_last_argmax(input, &mut kv_caches, 0);
                 first_token_ms = elapsed_ms_since(first_token_start);
+                crate::log!(
+                    "lumen: first-token done token_id={} first_token={}ms total={}ms\n",
+                    token,
+                    first_token_ms,
+                    elapsed_ms_since(generate_start)
+                );
                 token
             }
             Err(err) => return Err(err),
@@ -687,6 +700,14 @@ fn generate_lumen_answer(
             }
             answer.push_str(token_piece_to_text(piece).as_str());
             generated = generated.saturating_add(1);
+            if generated == 1 || generated.is_multiple_of(4) {
+                crate::log!(
+                    "lumen: token progress generated={} last_token={} elapsed={}ms\n",
+                    generated,
+                    next_token,
+                    elapsed_ms_since(generate_start)
+                );
+            }
             if answer.contains("\nUser:") || answer.contains("\nAssistant:") {
                 break;
             }
@@ -704,6 +725,12 @@ fn generate_lumen_answer(
                 break;
             }
         }
+
+        crate::log!(
+            "lumen: generation done generated={} elapsed={}ms\n",
+            generated,
+            elapsed_ms_since(generate_start)
+        );
 
         Ok(())
     })?;
