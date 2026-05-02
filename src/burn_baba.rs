@@ -175,8 +175,19 @@ pub(crate) fn share_matvec_rowmajor_bf16(n_rows: usize, k_dim: usize, chunk_rows
         plan.next_precision.as_str(),
         plan.next_memory_layout.as_str(),
     );
+    let pilot_reason = if gpu.result_c_changed_by_eu {
+        "eu-c-store-proven-pilot-still-guarded"
+    } else if gpu.eu_walker_retired {
+        "eu-walker-retired-awaiting-c-store"
+    } else if gpu.eu_walker_submitted {
+        "eu-walker-not-retired"
+    } else if gpu.eu_walker_encoded {
+        "eu-walker-encoded-awaiting-submit"
+    } else {
+        "eu-c-store-kernel-not-proven"
+    };
     crate::log!(
-        "burn-baba: gpgpu-pilot-plan eligible={} gpu_ready={} arena_ready={} arena_gpu_base=0x{:X} arena_bytes=0x{:X} arena_max_tiles={} pilot_tiles={} candidate_tiles={} tile_rows={} tile_k={} x_bytes={} weight_tile_bytes={} output_tile_bytes={} compare=cpu-reference-first dispatch=disabled reason=eu-c-store-kernel-not-proven cpu_ap_continues=1 does_not_prove=gpu_matmul\n",
+        "burn-baba: gpgpu-pilot-plan eligible={} gpu_ready={} arena_ready={} arena_gpu_base=0x{:X} arena_bytes=0x{:X} arena_max_tiles={} pilot_tiles={} candidate_tiles={} tile_rows={} tile_k={} x_bytes={} weight_tile_bytes={} output_tile_bytes={} compare=cpu-reference-first dispatch=disabled reason={} cpu_ap_continues=1 does_not_prove=gpu_matmul\n",
         pilot.eligible as u8,
         plan.gpu_ready as u8,
         gpu.enough_for_shape as u8,
@@ -190,10 +201,33 @@ pub(crate) fn share_matvec_rowmajor_bf16(n_rows: usize, k_dim: usize, chunk_rows
         pilot.x_bytes,
         pilot.weight_tile_bytes,
         pilot.output_tile_bytes,
+        pilot_reason,
     );
     let eu_execution_runs = gpu.eu_dispatch_delta != 0;
+    let gate_blocker = if gpu.result_c_changed_by_eu {
+        "pilot-scale-disabled-until-cpu-reference-compare"
+    } else if gpu.eu_walker_retired {
+        "eu-c-store-readback"
+    } else if gpu.eu_walker_submitted {
+        "eu-walker-retire"
+    } else if gpu.eu_walker_encoded {
+        "eu-walker-submit"
+    } else {
+        "eu-c-store-kernel"
+    };
+    let gate_next = if gpu.result_c_changed_by_eu {
+        "enable-one-tile-gpu-shadow-compare"
+    } else if gpu.eu_walker_retired {
+        "fix-eu-c-store-message"
+    } else if gpu.eu_walker_submitted {
+        "fix-compute-walker-retire"
+    } else if gpu.eu_walker_encoded {
+        "submit-compute-walker"
+    } else {
+        "upload-gfx125-c-store-kernel"
+    };
     crate::log!(
-        "burn-baba: gpgpu-dispatch-gate h2g_mmio={} input_buffers_ab_in_ggtt={} ctb_enabled=0 guc_context_registered=0 guc_sched_enabled=0 eu_kernel_uploaded={} eu_walker_encoded={} eu_walker_submitted={} eu_walker_retired={} eu_execution_runs={} eu_dispatch_delta={} result_c_changed_by_eu=0 cpu_reads_c_back={} arena_ready={} cpu_reference_compare=1 dispatch=disabled blocker=eu-c-store-kernel next=replace-eot-only-kernel-with-c-store-kernel does_not_prove=gpu_matmul\n",
+        "burn-baba: gpgpu-dispatch-gate h2g_mmio={} input_buffers_ab_in_ggtt={} ctb_enabled=0 guc_context_registered=0 guc_sched_enabled=0 eu_kernel_uploaded={} eu_walker_encoded={} eu_walker_submitted={} eu_walker_retired={} eu_execution_runs={} eu_dispatch_delta={} result_c_slot={} result_c_value=0x{:08X} result_c_changed_by_eu={} cpu_reads_c_back={} arena_ready={} cpu_reference_compare=1 dispatch=disabled blocker={} next={} does_not_prove=gpu_matmul\n",
         crate::intel::guc_h2g_mmio_accepted() as u8,
         gpu.accepted as u8,
         gpu.eu_kernel_uploaded as u8,
@@ -202,8 +236,13 @@ pub(crate) fn share_matvec_rowmajor_bf16(n_rows: usize, k_dim: usize, chunk_rows
         gpu.eu_walker_retired as u8,
         eu_execution_runs as u8,
         gpu.eu_dispatch_delta,
+        22,
+        gpu.eu_c_store_value,
+        gpu.result_c_changed_by_eu as u8,
         gpu.accepted as u8,
         gpu.enough_for_shape as u8,
+        gate_blocker,
+        gate_next,
     );
 }
 

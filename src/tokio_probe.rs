@@ -703,9 +703,8 @@ async fn probe_vthread_identity_surface() {
     let release = Arc::new(AtomicU32::new(0));
     let left_release = release.clone();
     let right_release = release.clone();
-    let left = tokio::task::spawn_blocking(move || {
-        run_vthread_identity_worker(0x7454_0001, left_release)
-    });
+    let left =
+        tokio::task::spawn_blocking(move || run_vthread_identity_worker(0x7454_0001, left_release));
     let right = tokio::task::spawn_blocking(move || {
         run_vthread_identity_worker(0x7454_0002, right_release)
     });

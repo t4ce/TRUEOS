@@ -91,6 +91,13 @@ pub(crate) struct LumenPromptRequest {
 static LUMEN_INTERACTIVE_SESSIONS: spin::Mutex<Vec<LumenInteractiveSession>> =
     spin::Mutex::new(Vec::new());
 
+#[inline]
+fn lumen_cooperate() {
+    crate::time::poll();
+    crate::runtime::poll_local_executor();
+    crate::smp::poll();
+}
+
 fn register_lumen_interactive_session(session_id: u64) {
     let mut sessions = LUMEN_INTERACTIVE_SESSIONS.lock();
     if sessions.iter().any(|session| session.id == session_id) {
@@ -110,11 +117,19 @@ fn unregister_lumen_interactive_session(session_id: u64) {
 }
 
 fn pop_lumen_prompt(session_id: u64) -> Option<LumenPromptRequest> {
-    LUMEN_INTERACTIVE_SESSIONS
-        .lock()
+    let mut sessions = LUMEN_INTERACTIVE_SESSIONS.lock();
+    let session = sessions
         .iter_mut()
-        .find(|session| session.id == session_id)
-        .and_then(|session| session.prompts.pop_front())
+        .find(|session| session.id == session_id)?;
+    let request = session.prompts.pop_front()?;
+    crate::log!(
+        "lumen: prompt dequeue session={} respond_to_chat={} remaining={} bytes={}\n",
+        session_id,
+        request.respond_to_chat as u8,
+        session.prompts.len(),
+        request.prompt.len()
+    );
+    Some(request)
 }
 
 pub(crate) fn push_lumen_prompt(session_id: u64, target: &MatrixTarget, prompt: &str) -> bool {
@@ -124,6 +139,7 @@ pub(crate) fn push_lumen_prompt(session_id: u64, target: &MatrixTarget, prompt: 
     }
     let mut sessions = LUMEN_INTERACTIVE_SESSIONS.lock();
     let Some(session) = sessions.iter_mut().find(|session| session.id == session_id) else {
+        crate::log!("lumen: prompt enqueue missed session={}\n", session_id);
         return false;
     };
     session.prompts.push_back(LumenPromptRequest {
@@ -131,6 +147,12 @@ pub(crate) fn push_lumen_prompt(session_id: u64, target: &MatrixTarget, prompt: 
         prompt: AllocString::from(prompt),
         respond_to_chat: false,
     });
+    crate::log!(
+        "lumen: prompt enqueue session={} respond_to_chat=0 queued={} bytes={}\n",
+        session_id,
+        session.prompts.len(),
+        prompt.len()
+    );
     true
 }
 
@@ -143,6 +165,7 @@ pub(crate) fn push_lumen_chat_prompt(session_id: u64, prompt: &str) -> bool {
         crate::shell2::matrix_target_for_slot_name(crate::shell2::OUTPUT_UART1_MASK, "LUM");
     let mut sessions = LUMEN_INTERACTIVE_SESSIONS.lock();
     let Some(session) = sessions.iter_mut().find(|session| session.id == session_id) else {
+        crate::log!("lumen: chat prompt enqueue missed session={}\n", session_id);
         return false;
     };
     session.prompts.push_back(LumenPromptRequest {
@@ -150,6 +173,12 @@ pub(crate) fn push_lumen_chat_prompt(session_id: u64, prompt: &str) -> bool {
         prompt: AllocString::from(prompt),
         respond_to_chat: true,
     });
+    crate::log!(
+        "lumen: prompt enqueue session={} respond_to_chat=1 queued={} bytes={}\n",
+        session_id,
+        session.prompts.len(),
+        prompt.len()
+    );
     true
 }
 
@@ -663,28 +692,39 @@ fn generate_lumen_answer(
     let mut first_token_ms = 0u64;
     let generate_start = embassy_time_driver::now();
     crate::log!(
-        "lumen: generation start prompt_tokens={} max_new_tokens={} max_seq_len={} note=first-token-can-be-long\n",
+        "lumen: generation start prompt_tokens={} max_new_tokens={} max_seq_len={} prefill_mode=incremental-decode-ap note=first-token-is-prompt-ingest\n",
         prompt_tokens.len(),
         LUMEN_RUNTIME_MAX_NEW_TOKENS,
         LUMEN_RUNTIME_MAX_SEQ_LEN
     );
+    lumen_cooperate();
 
     no_grad(|| {
-        let mut next_token = match tensor_from_token_ids(prompt_tokens.as_slice()) {
-            Ok(input) => {
-                let first_token_start = embassy_time_driver::now();
-                let token = model.forward_last_argmax(input, &mut kv_caches, 0);
-                first_token_ms = elapsed_ms_since(first_token_start);
+        let first_token_start = embassy_time_driver::now();
+        let mut next_token = 0usize;
+        for (idx, prompt_token) in prompt_tokens.iter().copied().enumerate() {
+            lumen_cooperate();
+            let input = tensor_from_token_ids(&[prompt_token])?;
+            next_token = model.forward_last_argmax(input, &mut kv_caches, 0);
+            lumen_cooperate();
+            let consumed = idx + 1;
+            if consumed == 1 || consumed == prompt_tokens.len() || consumed.is_multiple_of(4) {
                 crate::log!(
-                    "lumen: first-token done token_id={} first_token={}ms total={}ms\n",
-                    token,
-                    first_token_ms,
+                    "lumen: prefill progress consumed={} total={} next_token={} elapsed={}ms\n",
+                    consumed,
+                    prompt_tokens.len(),
+                    next_token,
                     elapsed_ms_since(generate_start)
                 );
-                token
             }
-            Err(err) => return Err(err),
-        };
+        }
+        first_token_ms = elapsed_ms_since(first_token_start);
+        crate::log!(
+            "lumen: first-token done token_id={} first_token={}ms total={}ms prefill_mode=incremental-decode-ap\n",
+            next_token,
+            first_token_ms,
+            elapsed_ms_since(generate_start)
+        );
 
         for _ in 0..LUMEN_RUNTIME_MAX_NEW_TOKENS {
             if stop_ids.binary_search(&next_token).is_ok() {
@@ -715,8 +755,10 @@ fn generate_lumen_answer(
                 break;
             }
 
+            lumen_cooperate();
             let input = tensor_from_token_ids(&[next_token])?;
             next_token = model.forward_last_argmax(input, &mut kv_caches, 0);
+            lumen_cooperate();
             if kv_caches
                 .first()
                 .map(|cache| cache.borrow().len.saturating_add(2) >= LUMEN_RUNTIME_MAX_SEQ_LEN)
@@ -732,7 +774,7 @@ fn generate_lumen_answer(
             elapsed_ms_since(generate_start)
         );
 
-        Ok(())
+        Ok::<(), AllocString>(())
     })?;
 
     Ok(LumenGenerateReport {

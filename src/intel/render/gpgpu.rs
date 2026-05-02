@@ -1,6 +1,25 @@
 const GPGPU_PREFLIGHT_LANES: usize = 4;
 const GPGPU_BURN_MIN_ROWS: usize = 512;
 const GPGPU_BURN_MIN_K_DIM: usize = 512;
+const GPGPU_EU_C_STORE_EXPECTED: u32 = RCS_EXEC_RESULT_GPGPU_EU_C_STORE_DONE;
+
+// Gfx12.5 proof kernel reserved for the compute walker path.  This keeps the
+// GPGPU artifact owned by compute bring-up instead of borrowing the triangle
+// PS blob; the acceptance bit still comes only from result C readback below.
+static GPGPU_C_STORE_PROOF_KERNEL: [u32; 12] = [
+    0xA07E0061,
+    0x00010000,
+    0xA0780061,
+    GPGPU_EU_C_STORE_EXPECTED,
+    0xA07A0061,
+    0x3F810000,
+    0xA07C0061,
+    0x3F810000,
+    0x00040132,
+    0x00000004,
+    0x50007E14,
+    0x00C47834,
+];
 
 static GPGPU_PREFLIGHT_SUBMITTED: AtomicBool = AtomicBool::new(false);
 static GPGPU_PREFLIGHT_ACCEPTED: AtomicBool = AtomicBool::new(false);
@@ -17,6 +36,7 @@ static GPGPU_EU_WALKER_ENCODED: AtomicBool = AtomicBool::new(false);
 static GPGPU_EU_WALKER_SUBMITTED: AtomicBool = AtomicBool::new(false);
 static GPGPU_EU_WALKER_RETIRED: AtomicBool = AtomicBool::new(false);
 static GPGPU_EU_DISPATCH_DELTA: AtomicU32 = AtomicU32::new(0);
+static GPGPU_EU_C_STORE_VALUE: AtomicU32 = AtomicU32::new(0);
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct GpgpuPreflightStatus {
@@ -41,11 +61,15 @@ pub(crate) struct GpgpuPreflightStatus {
     pub(crate) eu_walker_submitted: bool,
     pub(crate) eu_walker_retired: bool,
     pub(crate) eu_dispatch_delta: u32,
+    pub(crate) eu_c_store_value: u32,
+    pub(crate) result_c_changed_by_eu: bool,
 }
 
 pub(crate) fn gpgpu_preflight_status() -> GpgpuPreflightStatus {
     let warm = warm_state();
     let arena_bytes = warm.map_or(0, |warm| warm.gpgpu_arena_len);
+    let eu_dispatch_delta = GPGPU_EU_DISPATCH_DELTA.load(Ordering::Acquire);
+    let eu_c_store_value = GPGPU_EU_C_STORE_VALUE.load(Ordering::Acquire);
     GpgpuPreflightStatus {
         submitted: GPGPU_PREFLIGHT_SUBMITTED.load(Ordering::Acquire),
         accepted: GPGPU_PREFLIGHT_ACCEPTED.load(Ordering::Acquire),
@@ -67,7 +91,9 @@ pub(crate) fn gpgpu_preflight_status() -> GpgpuPreflightStatus {
         eu_walker_encoded: GPGPU_EU_WALKER_ENCODED.load(Ordering::Acquire),
         eu_walker_submitted: GPGPU_EU_WALKER_SUBMITTED.load(Ordering::Acquire),
         eu_walker_retired: GPGPU_EU_WALKER_RETIRED.load(Ordering::Acquire),
-        eu_dispatch_delta: GPGPU_EU_DISPATCH_DELTA.load(Ordering::Acquire),
+        eu_dispatch_delta,
+        eu_c_store_value,
+        result_c_changed_by_eu: eu_dispatch_delta != 0 && eu_c_store_value == GPGPU_EU_C_STORE_EXPECTED,
     }
 }
 
@@ -88,7 +114,7 @@ pub(crate) fn submit_gpgpu_preflight_once() {
         || warm.vertex_len < GPGPU_PREFLIGHT_LANES * core::mem::size_of::<u32>()
         || warm.streamout_len < GPGPU_PREFLIGHT_LANES * core::mem::size_of::<u32>()
         || warm.result_len
-            < (RESULT_SLOT_GPGPU_PREFLIGHT_LANES_DWORD + 1) * core::mem::size_of::<u32>()
+            < (RESULT_SLOT_GPGPU_EU_C_STORE_DWORD + 1) * core::mem::size_of::<u32>()
     {
         crate::log!("intel/gpgpu: preflight skipped reason=warm-buffers\n");
         return;
@@ -310,8 +336,7 @@ fn prepare_gpgpu_eu_artifact(
     warm: RenderWarmState,
     result_changed_by_current_backend: bool,
 ) -> GpgpuEuArtifactProof {
-    let pipeline = crate::intel::shader::triangle_pipeline();
-    let kernel = pipeline.ps.code;
+    let kernel: &'static [u32] = &GPGPU_C_STORE_PROOF_KERNEL;
     let kernel_bytes = kernel.len() * core::mem::size_of::<u32>();
     let kernel_gpu = GPU_VA_DRAW_STATE_BASE + GPGPU_EU_KERNEL_OFFSET_BYTES as u64;
     let walker_gpu = GPU_VA_BATCH_BASE + GPGPU_WALKER_SCRATCH_OFFSET_BYTES as u64;
@@ -431,7 +456,7 @@ fn log_gpgpu_eu_artifact_status(proof: GpgpuEuArtifactProof) {
     );
 
     crate::log!(
-        "intel/gpgpu: eu-artifact-proof eu_kernel_uploaded={} eu_walker_encoded={} kernel_source=triangle-ps-simd8-eu-blob kernel_gpu=0x{:X} kernel_bytes=0x{:X} kernel_sig=0x{:016X} walker_gpu=0x{:X} walker_bytes=0x{:X} submitted=0 eu_execution_runs=0 result_c_changed_by_eu=0 next=submit-walker-and-compare-c does_not_prove=eu_thread_execution_or_matmul\n",
+        "intel/gpgpu: eu-artifact-proof eu_kernel_uploaded={} eu_walker_encoded={} kernel_source=gfx125-c-store-proof-kernel kernel_gpu=0x{:X} kernel_bytes=0x{:X} kernel_sig=0x{:016X} walker_gpu=0x{:X} walker_bytes=0x{:X} c_store_slot={} c_store_expected=0x{:08X} submitted=0 eu_execution_runs=0 result_c_changed_by_eu=0 next=submit-walker-and-compare-c does_not_prove=eu_thread_execution_or_matmul\n",
         proof.kernel_uploaded as u8,
         proof.walker_encoded as u8,
         proof.kernel_gpu,
@@ -439,6 +464,8 @@ fn log_gpgpu_eu_artifact_status(proof: GpgpuEuArtifactProof) {
         proof.kernel_sig,
         proof.walker_gpu,
         proof.walker_bytes,
+        RESULT_SLOT_GPGPU_EU_C_STORE_DWORD,
+        GPGPU_EU_C_STORE_EXPECTED,
     );
 }
 
@@ -450,6 +477,8 @@ struct GpgpuComputeWalkerProof {
     dispatch_before: u64,
     dispatch_after: u64,
     dispatch_delta: u64,
+    c_value: u32,
+    result_c_changed_by_eu: bool,
     batch_bytes: usize,
 }
 
@@ -464,6 +493,11 @@ fn submit_gpgpu_compute_walker_probe(
             .result_virt
             .add(marker_slot * core::mem::size_of::<u32>()) as *mut u32;
         core::ptr::write_volatile(slot, 0);
+        let c_slot = warm
+            .result_virt
+            .add(RESULT_SLOT_GPGPU_EU_C_STORE_DWORD * core::mem::size_of::<u32>())
+            as *mut u32;
+        core::ptr::write_volatile(c_slot, 0);
         core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
         core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
     }
@@ -483,6 +517,8 @@ fn submit_gpgpu_compute_walker_probe(
                 dispatch_before,
                 dispatch_after: dispatch_before,
                 dispatch_delta: 0,
+                c_value: 0,
+                result_c_changed_by_eu: false,
                 batch_bytes: 0,
             };
         }
@@ -500,10 +536,13 @@ fn submit_gpgpu_compute_walker_probe(
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
 
     let marker = read_result_dword(warm, RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD);
+    let c_value = read_result_dword(warm, RESULT_SLOT_GPGPU_EU_C_STORE_DWORD);
     let dispatch_after = read_gpgpu_threads_dispatched(dev);
     let dispatch_delta = dispatch_after.saturating_sub(dispatch_before);
+    let result_c_changed_by_eu = c_value == GPGPU_EU_C_STORE_EXPECTED && dispatch_delta != 0;
     GPGPU_EU_WALKER_RETIRED.store(retired, Ordering::Release);
     GPGPU_EU_DISPATCH_DELTA.store(dispatch_delta.min(u32::MAX as u64) as u32, Ordering::Release);
+    GPGPU_EU_C_STORE_VALUE.store(c_value, Ordering::Release);
 
     GpgpuComputeWalkerProof {
         submitted: true,
@@ -512,6 +551,8 @@ fn submit_gpgpu_compute_walker_probe(
         dispatch_before,
         dispatch_after,
         dispatch_delta,
+        c_value,
+        result_c_changed_by_eu,
         batch_bytes,
     }
 }
@@ -611,10 +652,11 @@ fn encode_gfx125_compute_walker_probe_batch(
     )?;
     push(batch_dwords, &mut cursor, STATE_COMPUTE_MODE_CMD)?;
     push(batch_dwords, &mut cursor, 0xFFFF_0000)?;
+    let cfe_start = cursor;
     push(batch_dwords, &mut cursor, CFE_STATE_CMD)?;
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
-    push(batch_dwords, &mut cursor, (64 << 16) | (1 << 3))?;
+    push(batch_dwords, &mut cursor, 64 << 16)?;
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
     let walker_start = cursor;
@@ -645,13 +687,23 @@ fn encode_gfx125_compute_walker_probe_batch(
     push(batch_dwords, &mut cursor, MI_BATCH_BUFFER_END)?;
     push(batch_dwords, &mut cursor, MI_NOOP)?;
 
+    crate::log!(
+        "intel/gpgpu: compute-walker-layout cfe_off=0x{:X} cfe_dw3=0x{:08X} walker_off=0x{:X} idd_off=0x{:X} post_sync_off=0x{:X} tail_off=0x{:X} note=cfe-number-of-walkers-default\n",
+        cfe_start * core::mem::size_of::<u32>(),
+        batch_dwords[cfe_start + 3],
+        walker_start * core::mem::size_of::<u32>(),
+        idd * core::mem::size_of::<u32>(),
+        post * core::mem::size_of::<u32>(),
+        cursor * core::mem::size_of::<u32>(),
+    );
+
     Ok(cursor * core::mem::size_of::<u32>())
 }
 
 fn log_gpgpu_compute_walker_status(proof: GpgpuComputeWalkerProof) {
     let eu_dispatch_observed = proof.dispatch_delta != 0;
     crate::log!(
-        "intel/gpgpu: compute-walker-proof submitted={} retired={} marker=0x{:08X} marker_expected=0x{:08X} dispatch_before={} dispatch_after={} dispatch_delta={} batch_bytes=0x{:X} eu_execution_runs={} result_c_changed_by_eu=0 cpu_reads_c_back=1 backend=gfx125-compute-walker next=replace-eot-only-kernel-with-c-store-kernel does_not_prove=eu_memory_store_or_matmul\n",
+        "intel/gpgpu: compute-walker-proof submitted={} retired={} marker=0x{:08X} marker_expected=0x{:08X} dispatch_before={} dispatch_after={} dispatch_delta={} batch_bytes=0x{:X} eu_execution_runs={} result_c_slot={} result_c_value=0x{:08X} result_c_expected=0x{:08X} result_c_changed_by_eu={} cpu_reads_c_back=1 backend=gfx125-compute-walker next=prove-eu-c-store-then-scale-tiles does_not_prove=matmul\n",
         proof.submitted as u8,
         proof.retired as u8,
         proof.marker,
@@ -661,6 +713,10 @@ fn log_gpgpu_compute_walker_status(proof: GpgpuComputeWalkerProof) {
         proof.dispatch_delta,
         proof.batch_bytes,
         eu_dispatch_observed as u8,
+        RESULT_SLOT_GPGPU_EU_C_STORE_DWORD,
+        proof.c_value,
+        GPGPU_EU_C_STORE_EXPECTED,
+        proof.result_c_changed_by_eu as u8,
     );
 }
 
