@@ -418,6 +418,14 @@ fn spawn_lumen_service(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::lumen_service::lumen_service_task())
 }
 
+fn boot_lumen_service_enabled() -> bool {
+    crate::allcaps::lumen::BOOT_MODEL_SERVICE
+}
+
+fn boot_tinyllama_fetch_enabled() -> bool {
+    crate::allcaps::lumen::BOOT_TINYLLAMA_FETCH
+}
+
 fn spawn_ai_qjs_oneshot(spawner: Spawner) -> SpawnAttempt {
     let _ = spawner;
     SpawnAttempt::Skipped
@@ -1503,18 +1511,20 @@ static TASKS: [TaskSpec; 73] = [
         &TRUEOSFS_READY_HOOK_STARTED,
         spawn_trueosfs_ready_hook,
     ),
-    TaskSpec::enabled(
+    TaskSpec::enabled_gated(
         "lumen-service",
         crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
+        boot_lumen_service_enabled,
         &LUMEN_SERVICE_STARTED,
         spawn_lumen_service,
     ),
     TaskSpec::disabled("boot-ws-smoke", WS_BOOT_READY, &BOOT_WS_SMOKE_STARTED, spawn_boot_ws_smoke),
     TaskSpec::disabled("smtp-smoke", 0, &SMTP_SMOKE_STARTED, spawn_smtp_smoke),
     TaskSpec::disabled("boot-netbench", 0, &BOOT_NETBENCH_STARTED, spawn_boot_netbench),
-    TaskSpec::enabled(
+    TaskSpec::enabled_gated(
         "boot-tinyllama-fetch",
         0,
+        boot_tinyllama_fetch_enabled,
         &BOOT_TINYLLAMA_FETCH_STARTED,
         spawn_boot_tinyllama_fetch,
     ),

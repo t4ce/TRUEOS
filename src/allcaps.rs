@@ -15,6 +15,8 @@ pub mod probes {
 }
 
 pub mod lumen {
+    pub const BOOT_MODEL_SERVICE: bool = false;
+    pub const BOOT_TINYLLAMA_FETCH: bool = false;
     pub const RUNTIME_DIAGNOSTIC_PROBES: bool = false;
 }
 

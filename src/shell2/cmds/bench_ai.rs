@@ -4,6 +4,7 @@ use alloc::string::{String as AllocString, ToString};
 use alloc::vec::Vec;
 
 use embassy_executor::Spawner;
+use embassy_sync::signal::Signal;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use lumen::autograd::{Tensor, TensorRawData, no_grad};
 use lumen::init::{ParameterInitMode, with_parameter_init_mode};
@@ -90,6 +91,7 @@ pub(crate) struct LumenPromptRequest {
 
 static LUMEN_INTERACTIVE_SESSIONS: spin::Mutex<Vec<LumenInteractiveSession>> =
     spin::Mutex::new(Vec::new());
+static LUMEN_PROMPT_SIGNAL: Signal<crate::wait::EmbassySpinRawMutex, u64> = Signal::new();
 
 #[inline]
 fn lumen_cooperate() {
@@ -137,22 +139,26 @@ pub(crate) fn push_lumen_prompt(session_id: u64, target: &MatrixTarget, prompt: 
     if prompt.is_empty() {
         return true;
     }
-    let mut sessions = LUMEN_INTERACTIVE_SESSIONS.lock();
-    let Some(session) = sessions.iter_mut().find(|session| session.id == session_id) else {
-        crate::log!("lumen: prompt enqueue missed session={}\n", session_id);
-        return false;
+    let queued = {
+        let mut sessions = LUMEN_INTERACTIVE_SESSIONS.lock();
+        let Some(session) = sessions.iter_mut().find(|session| session.id == session_id) else {
+            crate::log!("lumen: prompt enqueue missed session={}\n", session_id);
+            return false;
+        };
+        session.prompts.push_back(LumenPromptRequest {
+            target: target.clone(),
+            prompt: AllocString::from(prompt),
+            respond_to_chat: false,
+        });
+        session.prompts.len()
     };
-    session.prompts.push_back(LumenPromptRequest {
-        target: target.clone(),
-        prompt: AllocString::from(prompt),
-        respond_to_chat: false,
-    });
     crate::log!(
         "lumen: prompt enqueue session={} respond_to_chat=0 queued={} bytes={}\n",
         session_id,
-        session.prompts.len(),
+        queued,
         prompt.len()
     );
+    LUMEN_PROMPT_SIGNAL.signal(session_id);
     true
 }
 
@@ -163,22 +169,26 @@ pub(crate) fn push_lumen_chat_prompt(session_id: u64, prompt: &str) -> bool {
     }
     let target =
         crate::shell2::matrix_target_for_slot_name(crate::shell2::OUTPUT_UART1_MASK, "LUM");
-    let mut sessions = LUMEN_INTERACTIVE_SESSIONS.lock();
-    let Some(session) = sessions.iter_mut().find(|session| session.id == session_id) else {
-        crate::log!("lumen: chat prompt enqueue missed session={}\n", session_id);
-        return false;
+    let queued = {
+        let mut sessions = LUMEN_INTERACTIVE_SESSIONS.lock();
+        let Some(session) = sessions.iter_mut().find(|session| session.id == session_id) else {
+            crate::log!("lumen: chat prompt enqueue missed session={}\n", session_id);
+            return false;
+        };
+        session.prompts.push_back(LumenPromptRequest {
+            target,
+            prompt: AllocString::from(prompt),
+            respond_to_chat: true,
+        });
+        session.prompts.len()
     };
-    session.prompts.push_back(LumenPromptRequest {
-        target,
-        prompt: AllocString::from(prompt),
-        respond_to_chat: true,
-    });
     crate::log!(
         "lumen: prompt enqueue session={} respond_to_chat=1 queued={} bytes={}\n",
         session_id,
-        session.prompts.len(),
+        queued,
         prompt.len()
     );
+    LUMEN_PROMPT_SIGNAL.signal(session_id);
     true
 }
 
@@ -2135,12 +2145,38 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
             &task_target,
             "lumen: ready; type a prompt, or q to stop",
         );
+        let mut idle_waits = 0u64;
+        let mut last_wait_log_tick = embassy_time_driver::now();
 
         while !bench_cancel_requested(session_id) {
             let Some(request) = pop_lumen_prompt(session_id) else {
-                Timer::after(EmbassyDuration::from_millis(25)).await;
+                idle_waits = idle_waits.saturating_add(1);
+                let now = embassy_time_driver::now();
+                if now.saturating_sub(last_wait_log_tick)
+                    >= embassy_time_driver::TICK_HZ.saturating_mul(5)
+                {
+                    crate::log!(
+                        "lumen: prompt wait idle session={} waits={} mode=signal-or-timeout\n",
+                        session_id,
+                        idle_waits
+                    );
+                    last_wait_log_tick = now;
+                }
+                let wake = embassy_time::with_timeout(
+                    EmbassyDuration::from_millis(1_000),
+                    LUMEN_PROMPT_SIGNAL.wait(),
+                )
+                .await;
+                if let Ok(wake_session_id) = wake {
+                    crate::log!(
+                        "lumen: prompt wake session={} signal_session={}\n",
+                        session_id,
+                        wake_session_id
+                    );
+                }
                 continue;
             };
+            idle_waits = 0;
 
             let infer_start = embassy_time_driver::now();
             let compute_before = crate::burn_baby::stats();

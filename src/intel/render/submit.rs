@@ -14,6 +14,14 @@ fn submit_warm_render_batch(
     if is_triangle_debug_submit_name(submit_name) {
         log_triangle_stage_stats(submit_name, "before-submit", true, stats_before, None);
     }
+    if is_gpgpu_submit_name(submit_name) {
+        recover_render_engine_after_nonretired_submit(dev, warm, "gpgpu-pre-submit");
+        crate::intel::mmio_write(
+            dev,
+            GEN12_RCU_MODE,
+            masked_bit_enable(GEN12_RCU_MODE_CCS_ENABLE),
+        );
+    }
     let ring_tail_bytes = build_ring_batch_start(warm, GPU_VA_BATCH_BASE);
     let Some(ring_ctl) = ring_ctl_value(warm.ring_len) else {
         return false;
@@ -28,6 +36,7 @@ fn submit_warm_render_batch(
     }
     let (context_desc_lo, context_desc_hi) = build_execlist_context_descriptor(GPU_VA_CONTEXT_BASE);
     write_lrc_ring_tail(warm, ring_tail_bytes as u32);
+    log_lrc_ring_image(warm, submit_name);
     let pphwsp_gpu = (GPU_VA_CONTEXT_BASE & !0xFFF) as u32;
 
     crate::intel::mmio_write(
@@ -35,31 +44,37 @@ fn submit_warm_render_batch(
         RCS_RING_MODE_GEN7,
         masked_bit_enable(GFX_RUN_LIST_ENABLE | GEN11_GFX_DISABLE_LEGACY_MODE),
     );
-    let ctx_ctl_after = masked_bits_update(
-        CTX_CTRL_RS_CTX_ENABLE,
-        CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT
-            | CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT
-            | CTX_CTRL_INHIBIT_SYN_CTX_SWITCH,
-    );
+    let ctx_ctl_after = rcs_ctx_control_value(false);
     crate::intel::mmio_write(dev, RCS_RING_CONTEXT_CONTROL, ctx_ctl_after);
     crate::intel::mmio_write(dev, RCS_RING_CONTEXT_CONTROL_REF, ctx_ctl_after);
+    crate::intel::mmio_write(
+        dev,
+        RCS_RING_MI_MODE,
+        masked_bit_disable(RING_MI_MODE_STOP_RING),
+    );
     crate::intel::mmio_write(dev, RCS_RING_HWS_PGA, pphwsp_gpu);
     let hws_after = crate::intel::mmio_read(dev, RCS_RING_HWS_PGA);
 
+    crate::intel::ggtt_invalidate(dev);
     core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
     execlist_submit_port_push(dev, context_desc_lo, context_desc_hi, 0, 0);
     crate::intel::mmio_write(dev, RCS_RING_EXECLIST_CONTROL, EL_CTRL_LOAD);
 
     if should_log_primary_probe_detail() {
         crate::log!(
-            "intel/render: {} execlist-start desc=0x{:08X}:0x{:08X} hws=0x{:08X} sq=0x{:08X}:0x{:08X} ctx_ctl=0x{:08X}\n",
+            "intel/render: {} execlist-start desc=0x{:08X}:0x{:08X} hws=0x{:08X} sq0=0x{:08X}:0x{:08X} sq1=0x{:08X}:0x{:08X} ctx_ctl=0x{:08X} mi_mode=0x{:08X} tail_req=0x{:08X} tail_rb=0x{:08X} gen12_sq_load=1\n",
             submit_name,
             context_desc_hi,
             context_desc_lo,
             hws_after,
             crate::intel::mmio_read(dev, RCS_RING_EXECLIST_SQ_HI),
             crate::intel::mmio_read(dev, RCS_RING_EXECLIST_SQ_LO),
-            crate::intel::mmio_read(dev, RCS_RING_CONTEXT_CONTROL)
+            crate::intel::mmio_read(dev, RCS_RING_EXECLIST_SQ_HI + 8),
+            crate::intel::mmio_read(dev, RCS_RING_EXECLIST_SQ_LO + 8),
+            crate::intel::mmio_read(dev, RCS_RING_CONTEXT_CONTROL),
+            crate::intel::mmio_read(dev, RCS_RING_MI_MODE),
+            ring_tail_bytes as u32,
+            crate::intel::mmio_read(dev, RCS_RING_TAIL),
         );
     }
 
@@ -324,6 +339,47 @@ fn submit_warm_render_batch(
             "stall-sc-extra2-not-done",
             sc_extra2,
             SC_INSTDONE_EXTRA2_BITS,
+        );
+    }
+    if !completed && is_gpgpu_submit_name(submit_name) {
+        let acthd = crate::intel::mmio_read(dev, RCS_RING_ACTHD);
+        let acthd_batch_off = acthd.saturating_sub(GPU_VA_BATCH_BASE as u32);
+        let fault_gen8 = crate::intel::mmio_read(dev, GEN8_RING_FAULT_REG);
+        let fault_gen12 = crate::intel::mmio_read(dev, GEN12_RING_FAULT_REG);
+        let fault_active = if fault_gen12 & 1 != 0 {
+            fault_gen12
+        } else {
+            fault_gen8
+        };
+        let fault_valid = fault_active & 1;
+        let fault_type = (fault_active >> 1) & 0x3;
+        let fault_srcid = (fault_active >> 3) & 0xFF;
+        let fault_engine = (fault_active >> 12) & 0x1F;
+        crate::log!(
+            "intel/render: {} gpgpu-stall-detail acthd_batch_off=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} instdone=0x{:08X} instpm=0x{:08X} fault_gen8=0x{:08X} fault_gen12=0x{:08X} fault_valid={} fault_type={} fault_srcid={} fault_engine={} fault8_data0=0x{:08X} fault8_data1=0x{:08X} fault12_data0=0x{:08X} fault12_data1=0x{:08X} error=0x{:08X} gfx_mode=0x{:08X} rcu_mode=0x{:08X} sc_instdone=0x{:08X} sc_extra=0x{:08X} sc_extra2=0x{:08X}\n",
+            submit_name,
+            acthd_batch_off,
+            crate::intel::mmio_read(dev, RCS_RING_IPEIR),
+            crate::intel::mmio_read(dev, RCS_RING_IPEHR),
+            crate::intel::mmio_read(dev, RCS_RING_EIR),
+            crate::intel::mmio_read(dev, RCS_RING_INSTDONE),
+            crate::intel::mmio_read(dev, RCS_RING_INSTPM),
+            fault_gen8,
+            fault_gen12,
+            fault_valid,
+            fault_type,
+            fault_srcid,
+            fault_engine,
+            crate::intel::mmio_read(dev, GEN8_FAULT_TLB_DATA0),
+            crate::intel::mmio_read(dev, GEN8_FAULT_TLB_DATA1),
+            crate::intel::mmio_read(dev, GEN12_FAULT_TLB_DATA0),
+            crate::intel::mmio_read(dev, GEN12_FAULT_TLB_DATA1),
+            crate::intel::mmio_read(dev, ERROR_GEN6),
+            crate::intel::mmio_read(dev, GFX_MODE),
+            crate::intel::mmio_read(dev, GEN12_RCU_MODE),
+            crate::intel::mmio_read(dev, SC_INSTDONE),
+            crate::intel::mmio_read(dev, SC_INSTDONE_EXTRA),
+            crate::intel::mmio_read(dev, SC_INSTDONE_EXTRA2),
         );
     }
     if is_triangle_debug_submit_name(submit_name) {
@@ -1561,6 +1617,10 @@ fn read_result_dword(warm: RenderWarmState, index: usize) -> u32 {
     unsafe { core::ptr::read_volatile((warm.result_virt as *const u32).add(index)) }
 }
 
+fn is_gpgpu_submit_name(name: &str) -> bool {
+    matches!(name, "gpgpu-preflight" | "gpgpu-compute-walker")
+}
+
 fn seed_result_debug_slots(warm: RenderWarmState) {
     unsafe {
         for i in 0..RESULT_DEBUG_DWORD_COUNT {
@@ -1661,6 +1721,9 @@ fn masked_bits_update(set_bits: u32, clear_bits: u32) -> u32 {
 }
 
 fn build_execlist_context_descriptor(context_gpu_addr: u64) -> (u32, u32) {
+    static RCS_SUBMIT_COUNTER: core::sync::atomic::AtomicU32 =
+        core::sync::atomic::AtomicU32::new(0);
+
     let base = (context_gpu_addr as u32) & 0xFFFF_F000;
     let desc = base
         | GEN8_CTX_VALID
@@ -1668,7 +1731,22 @@ fn build_execlist_context_descriptor(context_gpu_addr: u64) -> (u32, u32) {
         | GEN8_CTX_PRIVILEGE
         | GEN12_CTX_PRIORITY_NORMAL
         | (INTEL_LEGACY_64B_CONTEXT << GEN8_CTX_ADDRESSING_MODE_SHIFT);
-    (desc, (context_gpu_addr >> 32) as u32)
+    let sw_context_id = (((context_gpu_addr >> 12) as u32) & 0x7FF).max(1);
+    let _ = RCS_SUBMIT_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    // Xe_HP / Gfx12.5 descriptor high dword:
+    // bits 39:54 are SW context ID. The Xe execlist path leaves the old
+    // Gen11 SW-counter field out for this layout.
+    let desc_hi = ((context_gpu_addr >> 32) as u32) | (sw_context_id << 7);
+    (desc, desc_hi)
+}
+
+fn rcs_ctx_control_value(inhibit_restore: bool) -> u32 {
+    let mut ctl =
+        masked_bits_update(CTX_CTRL_INHIBIT_SYN_CTX_SWITCH, CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT);
+    if inhibit_restore {
+        ctl |= CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT;
+    }
+    ctl
 }
 
 fn execlist_submit_port_push(
@@ -1678,24 +1756,59 @@ fn execlist_submit_port_push(
     context1_lo: u32,
     context1_hi: u32,
 ) {
+    // Gen12 ELSP submission uses the scheduler queue registers plus LOAD.
+    // Fill both entries so slot 1 cannot retain stale descriptor data.
     crate::intel::mmio_write(dev, RCS_RING_EXECLIST_SQ_LO, context0_lo);
     crate::intel::mmio_write(dev, RCS_RING_EXECLIST_SQ_HI, context0_hi);
-    crate::intel::mmio_write(dev, RCS_RING_EXECLIST_SUBMIT_PORT, context0_lo);
-    crate::intel::mmio_write(dev, RCS_RING_EXECLIST_SUBMIT_PORT, context0_hi);
-    crate::intel::mmio_write(dev, RCS_RING_EXECLIST_SUBMIT_PORT, context1_lo);
-    crate::intel::mmio_write(dev, RCS_RING_EXECLIST_SUBMIT_PORT, context1_hi);
+    crate::intel::mmio_write(dev, RCS_RING_EXECLIST_SQ_LO + 8, context1_lo);
+    crate::intel::mmio_write(dev, RCS_RING_EXECLIST_SQ_HI + 8, context1_hi);
 }
 
 fn write_lrc_ring_tail(warm: RenderWarmState, ring_tail: u32) {
+    const LRC_CONTEXT_CONTROL_VALUE_DW: usize = 3;
+    const LRC_RING_TAIL_VALUE_DW: usize = 7;
+
     let total_dwords = warm.context_len / core::mem::size_of::<u32>();
-    if total_dwords <= LRC_STATE_OFFSET_DWORDS + 3 {
+    if total_dwords <= LRC_STATE_OFFSET_DWORDS + LRC_RING_TAIL_VALUE_DW {
         return;
     }
 
     let dwords =
         unsafe { core::slice::from_raw_parts_mut(warm.context_virt as *mut u32, total_dwords) };
-    dwords[LRC_STATE_OFFSET_DWORDS + 3] = ring_tail;
+    let ctx_ctl = dwords[LRC_STATE_OFFSET_DWORDS + LRC_CONTEXT_CONTROL_VALUE_DW];
+    dwords[LRC_STATE_OFFSET_DWORDS + LRC_RING_TAIL_VALUE_DW] = ring_tail;
+    dwords[LRC_STATE_OFFSET_DWORDS + LRC_CONTEXT_CONTROL_VALUE_DW] = ctx_ctl;
     crate::intel::dma_flush(warm.context_virt, warm.context_len);
+}
+
+fn log_lrc_ring_image(warm: RenderWarmState, submit_name: &str) {
+    const LRC_CONTEXT_CONTROL_VALUE_DW: usize = 3;
+    const LRC_RING_HEAD_VALUE_DW: usize = 5;
+    const LRC_RING_TAIL_VALUE_DW: usize = 7;
+    const LRC_RING_START_VALUE_DW: usize = 9;
+    const LRC_RING_CTL_VALUE_DW: usize = 11;
+
+    if !should_log_primary_probe_detail() {
+        return;
+    }
+
+    let total_dwords = warm.context_len / core::mem::size_of::<u32>();
+    if total_dwords <= LRC_STATE_OFFSET_DWORDS + LRC_RING_CTL_VALUE_DW {
+        return;
+    }
+
+    let dwords =
+        unsafe { core::slice::from_raw_parts(warm.context_virt as *const u32, total_dwords) };
+    let state = &dwords[LRC_STATE_OFFSET_DWORDS..];
+    crate::log!(
+        "intel/render: {} lrc-ring-image ctx_ctl=0x{:08X} head=0x{:08X} tail=0x{:08X} start=0x{:08X} ctl=0x{:08X}\n",
+        submit_name,
+        state[LRC_CONTEXT_CONTROL_VALUE_DW],
+        state[LRC_RING_HEAD_VALUE_DW],
+        state[LRC_RING_TAIL_VALUE_DW],
+        state[LRC_RING_START_VALUE_DW],
+        state[LRC_RING_CTL_VALUE_DW],
+    );
 }
 
 fn mi_lri_num_regs(num_regs: u32) -> u32 {

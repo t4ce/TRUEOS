@@ -24,7 +24,7 @@ fn init_gen12_lrc_context_image(
     state[idx] = mi_lri_cmd(13, MI_LRI_FORCE_POSTED);
     idx += 1;
     state[idx] = 0x2244;
-    state[idx + 1] = 0x0009_0009;
+    state[idx + 1] = rcs_ctx_control_value(false);
     state[idx + 2] = 0x2034;
     state[idx + 3] = 0;
     state[idx + 4] = 0x2030;
