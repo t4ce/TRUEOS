@@ -48,33 +48,62 @@ pub(crate) fn mark_offline(session_id: u64) {
         .ok();
 }
 
+fn queue_pending_prompt(prompt: &str, reason: &str) {
+    let mut pending = PENDING_CHATROOM.lock();
+    pending.push(AllocString::from(prompt));
+    crate::log!(
+        "lumen-service: buffered chatroom prompt reason={} pending={} bytes={}\n",
+        reason,
+        pending.len(),
+        prompt.len()
+    );
+}
+
 fn flush_pending(session_id: u64) {
     let mut pending = PENDING_CHATROOM.lock();
     let queued = core::mem::take(&mut *pending);
     drop(pending);
+    if !queued.is_empty() {
+        crate::log!(
+            "lumen-service: flushing pending chatroom prompts session={} count={}\n",
+            session_id,
+            queued.len()
+        );
+    }
     for prompt in queued {
-        let _ = crate::shell2::cmds::bench_ai::push_lumen_chat_prompt(session_id, prompt.as_str());
+        if !crate::shell2::cmds::bench_ai::push_lumen_chat_prompt(session_id, prompt.as_str()) {
+            queue_pending_prompt(prompt.as_str(), "flush-missed-session");
+            break;
+        }
     }
 }
 
-pub(crate) fn submit_chatroom_mention(prompt: &str) {
+pub(crate) fn submit_chatroom_mention(prompt: &str) -> bool {
     let prompt = prompt.trim();
     if prompt.is_empty() {
-        return;
+        return false;
     }
 
     let session_id = SERVICE_SESSION_ID.load(Ordering::Acquire);
     if session_id != 0 && is_online() {
-        let _ = crate::shell2::cmds::bench_ai::push_lumen_chat_prompt(session_id, prompt);
-        return;
+        if crate::shell2::cmds::bench_ai::push_lumen_chat_prompt(session_id, prompt) {
+            crate::log!(
+                "lumen-service: accepted chatroom prompt session={} bytes={}\n",
+                session_id,
+                prompt.len()
+            );
+            return true;
+        }
+        queue_pending_prompt(prompt, "online-missed-session");
+        return false;
     }
 
     if SERVICE_LOADING.load(Ordering::Acquire) {
-        PENDING_CHATROOM.lock().push(AllocString::from(prompt));
-        crate::log!("lumen-service: queued chatroom prompt while warming\n");
+        queue_pending_prompt(prompt, "warming");
     } else {
         crate::log!("lumen-service: dropped chatroom prompt; service offline\n");
     }
+    false
 }
 
 fn form_push_encoded(out: &mut AllocString, value: &str) {

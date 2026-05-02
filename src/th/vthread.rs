@@ -170,11 +170,7 @@ fn record_from_fs_base(fs_base: usize) -> Option<&'static VThreadRecord> {
 
     let index = offset / stride;
     let record = &VTHREAD_RECORDS[index];
-    if record.valid() {
-        Some(record)
-    } else {
-        None
-    }
+    if record.valid() { Some(record) } else { None }
 }
 
 #[inline]

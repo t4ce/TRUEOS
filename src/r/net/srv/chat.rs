@@ -276,8 +276,11 @@ fn maybe_submit_lumen_chat_post(method: ChatMethod, path: &str, body: &[u8], sta
     }
 
     let prompt = alloc::format!("{}: {:?}", user.trim(), text.trim());
-    crate::r::lumen_service::submit_chatroom_mention(prompt.as_str());
-    crate::log!("chat: queued lumen prompt via POST path={}\n", path);
+    if crate::r::lumen_service::submit_chatroom_mention(prompt.as_str()) {
+        crate::log!("chat: accepted lumen prompt via POST path={}\n", path);
+    } else {
+        crate::log!("chat: deferred lumen prompt via POST path={}\n", path);
+    }
 }
 
 async fn incoming_to_vec(mut body: Incoming, limit: usize) -> Result<Vec<u8>, ()> {

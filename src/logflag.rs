@@ -10,10 +10,10 @@ pub(crate) const dont_persist_globalog: bool = true;
 pub(crate) const NET_LOG_RX_TAP: bool = false;
 pub(crate) const NET_LOG_TX_TAP: bool = false;
 pub(crate) const NET_LOG_TCP_FLOW: bool = false;
-pub(crate) const NET_LOG_TCP_CONNECT_STATES: bool = true;
-pub(crate) const NET_LOG_TCP_CONNECT_WIRE: bool = true;
+pub(crate) const NET_LOG_TCP_CONNECT_STATES: bool = false;
+pub(crate) const NET_LOG_TCP_CONNECT_WIRE: bool = false;
 pub(crate) const NET_LOG_TCP_SEND_FLUSH: bool = false;
-pub(crate) const NET_LOG_ARP_RX: bool = true;
+pub(crate) const NET_LOG_ARP_RX: bool = false;
 pub(crate) const NET_LOG_DHCP_VERBOSE: bool = false;
 pub(crate) const NET_LOG_IPV6_RA: bool = false;
 pub(crate) const NET_LOG_DHCP6_SAMPLES: usize = 8;
@@ -26,9 +26,9 @@ pub(crate) const PORTAL_LOGS: bool = true;
 pub(crate) const HV_GUEST_ALLOC_TRACE_LOGS: bool = true;
 
 pub(crate) const UI2_ENABLE_VERBOSE_COMPOSE_LOGS: bool = false;
-pub(crate) const VHTTPS_VERBOSE: bool = true;
+pub(crate) const VHTTPS_VERBOSE: bool = false;
 pub(crate) const GFX_FRAME_PROGRESS_LOGS: bool = false;
-pub(crate) const INTEL_STAGE1_LOGS: bool = true;
+pub(crate) const INTEL_STAGE1_LOGS: bool = false;
 
 pub(crate) const VIRGL_DRAW_DIAGNOSTICS_LOGS: bool = false;
 pub(crate) static VIRGL_TEX_DEBUG_LOGS: AtomicU32 = AtomicU32::new(0);
