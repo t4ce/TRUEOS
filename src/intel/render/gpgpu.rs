@@ -556,7 +556,7 @@ fn submit_gpgpu_compute_walker_probe(
     let total_dwords = warm.batch_len / core::mem::size_of::<u32>();
     let batch =
         unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, total_dwords) };
-    let batch_bytes = match encode_gfx125_compute_walker_probe_batch(batch) {
+    let batch_bytes = match encode_gfx12_gpgpu_walker_probe_batch(batch) {
         Ok(bytes) => bytes,
         Err(reason) => {
             crate::log!("intel/gpgpu: compute-walker accepted=0 reason={}\n", reason);
@@ -624,17 +624,27 @@ fn read_gpgpu_threads_dispatched(dev: crate::intel::Dev) -> u64 {
     (hi << 32) | lo
 }
 
-fn encode_gfx125_compute_walker_probe_batch(
+fn encode_gfx12_gpgpu_walker_probe_batch(
     batch_dwords: &mut [u32],
 ) -> Result<usize, &'static str> {
     const STATE_COMPUTE_MODE_CMD: u32 = (3 << 29) | (1 << 24) | (5 << 16);
-    const CFE_STATE_CMD: u32 = (3 << 29) | (2 << 27) | (2 << 24) | 4;
-    const COMPUTE_WALKER_CMD: u32 = (3 << 29) | (2 << 27) | (2 << 24) | (2 << 18) | 37;
-    const PIPELINE_SELECT_GPGPU: u32 =
-        (3 << 29) | (1 << 27) | (1 << 24) | (4 << 16) | (0x3 << 8) | 2;
-    const GFX125_L1CC_WB: u32 = 2;
-    const GFX125_IDD_TG_DISPATCH_SIZE_1: u32 = 3 << 26;
+    const MEDIA_VFE_STATE_CMD: u32 = (3 << 29) | (2 << 27) | 7;
+    const MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD: u32 = (3 << 29) | (2 << 27) | (2 << 16) | 2;
+    const GPGPU_WALKER_CMD: u32 = (3 << 29) | (2 << 27) | (1 << 24) | (5 << 16) | 13;
+    const MEDIA_STATE_FLUSH_CMD: u32 = (3 << 29) | (2 << 27) | (4 << 16);
+    const PIPELINE_SELECT_BASE: u32 = (3 << 29) | (1 << 27) | (1 << 24) | (4 << 16);
+    const PIPELINE_SELECT_GFX12_MASK: u32 = 0x13 << 8;
+    const PIPELINE_SELECT_MEDIA_SAMPLER_DOP_CG_ENABLE: u32 = 1 << 4;
+    const PIPELINE_SELECT_3D: u32 = PIPELINE_SELECT_BASE
+        | PIPELINE_SELECT_GFX12_MASK
+        | PIPELINE_SELECT_MEDIA_SAMPLER_DOP_CG_ENABLE;
+    const PIPELINE_SELECT_GPGPU: u32 = PIPELINE_SELECT_3D | 2;
     const COMPUTE_SBA_SPAN_BYTES: usize = 0x1000_0000;
+    const CS_GPR_STAMP_HI: u32 = 0x0000_0001;
+    const CS_GPR0_STAMP_LO: u32 = 0xC5A0_2600;
+    const CS_GPR1_STAMP_LO: u32 = 0xC5A0_2608;
+    const IDD_OFFSET_BYTES: usize = GPGPU_WALKER_SCRATCH_OFFSET_BYTES;
+    const IDD_DWORDS: usize = 8;
 
     fn push(batch_dwords: &mut [u32], cursor: &mut usize, value: u32) -> Result<(), &'static str> {
         if *cursor >= batch_dwords.len() {
@@ -678,6 +688,18 @@ fn encode_gfx125_compute_walker_probe_batch(
         push(batch_dwords, cursor, dst as u32)?;
         push(batch_dwords, cursor, (dst >> 32) as u32)?;
         push(batch_dwords, cursor, value)
+    }
+
+    fn push_cs_gpr_stamp(batch_dwords: &mut [u32], cursor: &mut usize) -> Result<(), &'static str> {
+        push(batch_dwords, cursor, mi_lri_cmd(4, MI_LRI_FORCE_POSTED))?;
+        push(batch_dwords, cursor, RCS_CS_GPR_REL_BASE as u32)?;
+        push(batch_dwords, cursor, CS_GPR0_STAMP_LO)?;
+        push(batch_dwords, cursor, (RCS_CS_GPR_REL_BASE + 4) as u32)?;
+        push(batch_dwords, cursor, CS_GPR_STAMP_HI)?;
+        push(batch_dwords, cursor, (RCS_CS_GPR_REL_BASE + 8) as u32)?;
+        push(batch_dwords, cursor, CS_GPR1_STAMP_LO)?;
+        push(batch_dwords, cursor, (RCS_CS_GPR_REL_BASE + 12) as u32)?;
+        push(batch_dwords, cursor, CS_GPR_STAMP_HI)
     }
 
     fn push_sba_address(
@@ -726,9 +748,37 @@ fn encode_gfx125_compute_walker_probe_batch(
         PIPE_CONTROL_HDC_PIPELINE_FLUSH_HEADER,
         PIPE_CONTROL_CS_STALL,
     )?;
+
+    // Wa_1607854226/TGL: non-pipelined state may not latch when emitted under
+    // GPGPU pipeline select.  Program SBA/SCM while temporarily in 3D, then
+    // switch back before MEDIA_VFE_STATE and GPGPU_WALKER.
+    push(batch_dwords, &mut cursor, PIPELINE_SELECT_3D)?;
+    push_pipe_control_full(
+        batch_dwords,
+        &mut cursor,
+        PIPE_CONTROL_HDC_PIPELINE_FLUSH_HEADER | PIPE_CONTROL_UNTYPED_DATAPORT_FLUSH_HEADER,
+        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL,
+    )?;
+    let idd_index = IDD_OFFSET_BYTES / core::mem::size_of::<u32>();
+    if idd_index
+        .checked_add(IDD_DWORDS)
+        .is_none_or(|end| end > batch_dwords.len())
+    {
+        return Err("gpgpu-idd-scratch-exhausted");
+    }
+    let kernel_gpu = GPU_VA_DRAW_STATE_BASE + GPGPU_EU_KERNEL_OFFSET_BYTES as u64;
+    batch_dwords[idd_index] = kernel_gpu as u32;
+    batch_dwords[idd_index + 1] = (kernel_gpu >> 32) as u32;
+    batch_dwords[idd_index + 2] = 0;
+    batch_dwords[idd_index + 3] = 0;
+    batch_dwords[idd_index + 4] = 0;
+    batch_dwords[idd_index + 5] = 0;
+    batch_dwords[idd_index + 6] = 1;
+    batch_dwords[idd_index + 7] = 0;
+
     push(batch_dwords, &mut cursor, STATE_BASE_ADDRESS_CMD)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
-    push(batch_dwords, &mut cursor, (RENDER_MOCS << 16) | (GFX125_L1CC_WB << 23))?;
+    push(batch_dwords, &mut cursor, RENDER_MOCS << 16)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
@@ -742,61 +792,90 @@ fn encode_gfx125_compute_walker_probe_batch(
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
     push_store_marker(batch_dwords, &mut cursor, 24, 0xC0DE_7802)?;
+    push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS)?;
     push(batch_dwords, &mut cursor, STATE_COMPUTE_MODE_CMD)?;
     push(batch_dwords, &mut cursor, 0xFFFF_0000)?;
     push_store_marker(batch_dwords, &mut cursor, 25, 0xC0DE_7803)?;
-    let cfe_start = cursor;
-    push(batch_dwords, &mut cursor, CFE_STATE_CMD)?;
+    push_pipe_control_full(
+        batch_dwords,
+        &mut cursor,
+        PIPE_CONTROL_HDC_PIPELINE_FLUSH_HEADER | PIPE_CONTROL_UNTYPED_DATAPORT_FLUSH_HEADER,
+        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL,
+    )?;
+    push(batch_dwords, &mut cursor, PIPELINE_SELECT_GPGPU)?;
+    push_pipe_control_full(
+        batch_dwords,
+        &mut cursor,
+        PIPE_CONTROL_HDC_PIPELINE_FLUSH_HEADER,
+        PIPE_CONTROL_CS_STALL,
+    )?;
+    push_cs_gpr_stamp(batch_dwords, &mut cursor)?;
+    let vfe_start = cursor;
+    push(batch_dwords, &mut cursor, MEDIA_VFE_STATE_CMD)?;
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
-    push(batch_dwords, &mut cursor, (224 << 16) | (2 << 14))?;
+    push(batch_dwords, &mut cursor, (64 << 16) | (2 << 8))?;
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push_store_marker(batch_dwords, &mut cursor, 26, 0xC0DE_7804)?;
+    let id_load_start = cursor;
+    push(batch_dwords, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, (IDD_DWORDS * core::mem::size_of::<u32>()) as u32)?;
+    push(
+        batch_dwords,
+        &mut cursor,
+        (GPU_VA_BATCH_BASE + IDD_OFFSET_BYTES as u64) as u32,
+    )?;
     let walker_start = cursor;
-    for _ in 0..39 {
-        push(batch_dwords, &mut cursor, 0)?;
-    }
-    batch_dwords[walker_start] = COMPUTE_WALKER_CMD;
-    // COMPUTE_WALKER_BODY is embedded at instruction dword 1.  The genxml
-    // body dword offsets therefore need one instruction dword added here.
-    batch_dwords[walker_start + 5] = 0xFFFF_FFFF;
-    batch_dwords[walker_start + 6] = 0;
-    batch_dwords[walker_start + 7] = 1;
-    batch_dwords[walker_start + 8] = 1;
-    batch_dwords[walker_start + 9] = 1;
-
-    let idd = walker_start + 18;
-    batch_dwords[idd] = (GPU_VA_DRAW_STATE_BASE + GPGPU_EU_KERNEL_OFFSET_BYTES as u64) as u32;
-    batch_dwords[idd + 5] = 1 | GFX125_IDD_TG_DISPATCH_SIZE_1;
-
-    let post = walker_start + 26;
-    batch_dwords[post] = 1 | (1 << 2) | (RENDER_MOCS << 4);
-    let dst = GPU_VA_RESULT_BASE
-        + (RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD as u64) * core::mem::size_of::<u32>() as u64;
-    batch_dwords[post + 1] = dst as u32;
-    batch_dwords[post + 2] = (dst >> 32) as u32;
-    batch_dwords[post + 3] = RCS_EXEC_RESULT_COMPUTE_WALKER_DONE;
-    batch_dwords[post + 4] = 0;
+    push(batch_dwords, &mut cursor, GPGPU_WALKER_CMD)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 1)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 1)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 1)?;
+    push(batch_dwords, &mut cursor, 0xFFFF_FFFF)?;
+    push(batch_dwords, &mut cursor, 0xFFFF_FFFF)?;
+    push(batch_dwords, &mut cursor, MEDIA_STATE_FLUSH_CMD)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push_store_marker(
+        batch_dwords,
+        &mut cursor,
+        RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD,
+        RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+    )?;
 
     push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_FLUSH_BITS)?;
     push(batch_dwords, &mut cursor, MI_BATCH_BUFFER_END)?;
     push(batch_dwords, &mut cursor, MI_NOOP)?;
+    let command_bytes = cursor * core::mem::size_of::<u32>();
+    let batch_bytes = command_bytes.max(IDD_OFFSET_BYTES + IDD_DWORDS * core::mem::size_of::<u32>());
 
     crate::log!(
-        "intel/gpgpu: compute-walker-layout cfe_off=0x{:X} cfe_dw3=0x{:08X} walker_off=0x{:X} walker_cmd=0x{:08X} exec_mask=0x{:08X} idd_off=0x{:X} idd_dw5=0x{:08X} post_sync_off=0x{:X} tail_off=0x{:X} cs_marker=0x{:08X} note=cfe-direct-walker-no-post-pc\n",
-        cfe_start * core::mem::size_of::<u32>(),
-        batch_dwords[cfe_start + 3],
+        "intel/gpgpu: compute-walker-layout vfe_off=0x{:X} vfe_dw3=0x{:08X} id_load_off=0x{:X} walker_off=0x{:X} walker_cmd=0x{:08X} exec_mask=0x{:08X} idd_gpu=0x{:X} idd_dw6=0x{:08X} tail_off=0x{:X} cs_marker=0x{:08X} note=gen12-media-vfe-midl-gpgpu-walker\n",
+        vfe_start * core::mem::size_of::<u32>(),
+        batch_dwords[vfe_start + 3],
+        id_load_start * core::mem::size_of::<u32>(),
         walker_start * core::mem::size_of::<u32>(),
         batch_dwords[walker_start],
-        batch_dwords[walker_start + 5],
-        idd * core::mem::size_of::<u32>(),
-        batch_dwords[idd + 5],
-        post * core::mem::size_of::<u32>(),
-        cursor * core::mem::size_of::<u32>(),
+        batch_dwords[walker_start + 13],
+        GPU_VA_BATCH_BASE + IDD_OFFSET_BYTES as u64,
+        batch_dwords[idd_index + 6],
+        command_bytes,
         RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
     );
     crate::log!(
-        "intel/gpgpu: compute-walker-dwords w0=0x{:08X} w1=0x{:08X} w2=0x{:08X} w3=0x{:08X} w4=0x{:08X} w5=0x{:08X} w6=0x{:08X} w7=0x{:08X} w8=0x{:08X} w9=0x{:08X} idd0=0x{:08X} idd1=0x{:08X} idd2=0x{:08X} idd3=0x{:08X} idd4=0x{:08X} idd5=0x{:08X} idd6=0x{:08X} idd7=0x{:08X} post0=0x{:08X} post1=0x{:08X} post2=0x{:08X} post3=0x{:08X} post4=0x{:08X}\n",
+        "intel/gpgpu: compute-walker-dwords w0=0x{:08X} w1=0x{:08X} w2=0x{:08X} w3=0x{:08X} w4=0x{:08X} w5=0x{:08X} w6=0x{:08X} w7=0x{:08X} w8=0x{:08X} w9=0x{:08X} w10=0x{:08X} w11=0x{:08X} w12=0x{:08X} w13=0x{:08X} w14=0x{:08X} idd0=0x{:08X} idd1=0x{:08X} idd2=0x{:08X} idd3=0x{:08X} idd4=0x{:08X} idd5=0x{:08X} idd6=0x{:08X} idd7=0x{:08X} midl0=0x{:08X} midl2=0x{:08X} midl3=0x{:08X}\n",
         batch_dwords[walker_start],
         batch_dwords[walker_start + 1],
         batch_dwords[walker_start + 2],
@@ -807,28 +886,31 @@ fn encode_gfx125_compute_walker_probe_batch(
         batch_dwords[walker_start + 7],
         batch_dwords[walker_start + 8],
         batch_dwords[walker_start + 9],
-        batch_dwords[idd],
-        batch_dwords[idd + 1],
-        batch_dwords[idd + 2],
-        batch_dwords[idd + 3],
-        batch_dwords[idd + 4],
-        batch_dwords[idd + 5],
-        batch_dwords[idd + 6],
-        batch_dwords[idd + 7],
-        batch_dwords[post],
-        batch_dwords[post + 1],
-        batch_dwords[post + 2],
-        batch_dwords[post + 3],
-        batch_dwords[post + 4],
+        batch_dwords[walker_start + 10],
+        batch_dwords[walker_start + 11],
+        batch_dwords[walker_start + 12],
+        batch_dwords[walker_start + 13],
+        batch_dwords[walker_start + 14],
+        batch_dwords[idd_index],
+        batch_dwords[idd_index + 1],
+        batch_dwords[idd_index + 2],
+        batch_dwords[idd_index + 3],
+        batch_dwords[idd_index + 4],
+        batch_dwords[idd_index + 5],
+        batch_dwords[idd_index + 6],
+        batch_dwords[idd_index + 7],
+        batch_dwords[id_load_start],
+        batch_dwords[id_load_start + 2],
+        batch_dwords[id_load_start + 3],
     );
 
-    Ok(cursor * core::mem::size_of::<u32>())
+    Ok(batch_bytes)
 }
 
 fn log_gpgpu_compute_walker_status(proof: GpgpuComputeWalkerProof) {
     let eu_dispatch_observed = proof.dispatch_delta != 0;
     crate::log!(
-        "intel/gpgpu: compute-walker-proof submitted={} retired={} marker=0x{:08X} marker_expected=0x{:08X} dispatch_before={} dispatch_after={} dispatch_delta={} batch_bytes=0x{:X} eu_execution_runs={} result_c_slot={} result_c_value=0x{:08X} result_c_expected=0x{:08X} result_c_changed_by_eu={} cpu_reads_c_back=1 backend=gfx125-compute-walker next=prove-eu-c-store-then-scale-tiles does_not_prove=matmul\n",
+        "intel/gpgpu: compute-walker-proof submitted={} retired={} marker=0x{:08X} marker_expected=0x{:08X} dispatch_before={} dispatch_after={} dispatch_delta={} batch_bytes=0x{:X} eu_execution_runs={} result_c_slot={} result_c_value=0x{:08X} result_c_expected=0x{:08X} result_c_changed_by_eu={} cpu_reads_c_back=1 backend=gfx12-gpgpu-walker next=prove-eu-c-store-then-scale-tiles does_not_prove=matmul\n",
         proof.submitted as u8,
         proof.retired as u8,
         proof.marker,
