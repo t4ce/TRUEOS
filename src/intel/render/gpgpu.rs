@@ -10,17 +10,19 @@ struct GpgpuEuProgram {
     expects_store: bool,
 }
 
-// First active proof target: copy the thread payload header from R0 into a
-// required high GRF payload slot, then use Mesa's gfx12.5 Gateway EOT send.
-// Assembled locally with Mesa brw_asm from .codex_tmp/gfx125_gateway_eot_g127.asm.
+// First active proof target for this machine: copy the thread payload header
+// from R0 into a high GRF payload slot, then use Mesa's GFX12/TGL Thread
+// Spawner EOT send.  8086:4680 is ADL-S GT1/UHD 770, which Mesa maps to
+// GFX12.0; do not use the GFX12.5 Gateway/COMPUTE_WALKER path here.
+// Assembled locally with Mesa brw_asm from .codex_tmp/gfx12_eot_g127.asm.
 static GPU_PROGRAM_EOT_ONLY_CODE: [u32; 8] = [
     0x80030061,
     0x7F050220,
     0x00460005,
     0x00000000,
-    0x80030931,
+    0x80030131,
     0x00000004,
-    0x30007F0C,
+    0x70007F0C,
     0x00000000,
 ];
 
@@ -43,7 +45,7 @@ static GPU_PROGRAM_SHARED_RAM_WRITE_CODE: [u32; 12] = [
 
 fn selected_gpgpu_eu_program() -> GpgpuEuProgram {
     GpgpuEuProgram {
-        name: "gfx125-gateway-eot-r0-to-g127-assembled",
+        name: "gfx12-ts-eot-r0-to-g127-ksp-relative",
         words: &GPU_PROGRAM_EOT_ONLY_CODE,
         expects_store: false,
     }
@@ -772,11 +774,7 @@ fn submit_gpgpu_compute_walker_probe(
     } else {
         disabled_gpgpu_store_surface_state()
     };
-    let batch_bytes = match if device_uses_gfx125_compute_walker(dev.device_id) {
-        encode_gfx125_compute_walker_probe_batch(batch, store_surface, program)
-    } else {
-        encode_gfx12_gpgpu_walker_probe_batch(batch, store_surface, program)
-    } {
+    let batch_bytes = match encode_gfx12_gpgpu_walker_probe_batch(batch, store_surface, program) {
         Ok(bytes) => bytes,
         Err(reason) => {
             crate::log!("intel/gpgpu: compute-walker accepted=0 reason={}\n", reason);
@@ -850,16 +848,11 @@ fn read_gpgpu_threads_dispatched(dev: crate::intel::Dev) -> u64 {
     (hi << 32) | lo
 }
 
-fn device_uses_gfx125_compute_walker(device_id: u16) -> bool {
-    // Mesa maps the current baremetal target, 0x4680 ADL-S GT1/UHD 770, to
-    // GFX12.0.  GFX12.0 uses MEDIA_VFE_STATE + MEDIA_INTERFACE_DESCRIPTOR_LOAD
-    // + GPGPU_WALKER; COMPUTE_WALKER appears in gen125 and later.
-    matches!(
-        device_id,
-        0x5690..=0x56BF | 0x56C0..=0x56CF | 0x56A0..=0x56AF | 0x4F80..=0x4F8F
-    )
-}
-
+// Disabled reference only.  COMPUTE_WALKER/CFE_STATE is for GFX12.5+ (for
+// example DG2); the current baremetal target is 8086:4680 ADL-S GT1/UHD 770,
+// a GFX12.0 part.  Submitting this path on that device pins at CFE_STATE before
+// any EU thread starts, so runtime dispatch intentionally never calls it.
+#[allow(dead_code)]
 fn encode_gfx125_compute_walker_probe_batch(
     batch_dwords: &mut [u32],
     store_surface: GpgpuStoreSurfaceState,
@@ -1150,7 +1143,6 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     store_surface: GpgpuStoreSurfaceState,
     program: GpgpuEuProgram,
 ) -> Result<usize, &'static str> {
-    const STATE_COMPUTE_MODE_CMD: u32 = (3 << 29) | (1 << 24) | (5 << 16);
     const MEDIA_VFE_STATE_CMD: u32 = (3 << 29) | (2 << 27) | 7;
     const MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD: u32 = (3 << 29) | (2 << 27) | (2 << 16) | 2;
     const GPGPU_WALKER_CMD: u32 = (3 << 29) | (2 << 27) | (1 << 24) | (5 << 16) | 13;
@@ -1289,9 +1281,9 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     {
         return Err("gpgpu-idd-scratch-exhausted");
     }
-    let kernel_gpu = GPU_VA_DRAW_STATE_BASE + GPGPU_EU_KERNEL_OFFSET_BYTES as u64;
+    let kernel_gpu = GPGPU_EU_KERNEL_OFFSET_BYTES as u64;
     batch_dwords[idd_index] = kernel_gpu as u32;
-    batch_dwords[idd_index + 1] = (kernel_gpu >> 32) as u32;
+    batch_dwords[idd_index + 1] = 0;
     batch_dwords[idd_index + 2] = 0;
     batch_dwords[idd_index + 3] = 0;
     batch_dwords[idd_index + 4] = if program.expects_store && store_surface.ready {
@@ -1315,7 +1307,13 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     )?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
-    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
+    push_sba_address(
+        batch_dwords,
+        &mut cursor,
+        true,
+        RENDER_MOCS,
+        GPU_VA_DRAW_STATE_BASE,
+    )?;
     push_sba_size(batch_dwords, &mut cursor, true, COMPUTE_SBA_SPAN_BYTES)?;
     push_sba_size(batch_dwords, &mut cursor, true, COMPUTE_SBA_SPAN_BYTES)?;
     push_sba_size(batch_dwords, &mut cursor, true, COMPUTE_SBA_SPAN_BYTES)?;
@@ -1326,8 +1324,6 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     push(batch_dwords, &mut cursor, 0)?;
     push_store_marker(batch_dwords, &mut cursor, 24, 0xC0DE_7802)?;
     push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS)?;
-    push(batch_dwords, &mut cursor, STATE_COMPUTE_MODE_CMD)?;
-    push(batch_dwords, &mut cursor, 0xFFFF_0000)?;
     push_store_marker(batch_dwords, &mut cursor, 25, 0xC0DE_7803)?;
     push_pipe_control_full(
         batch_dwords,
@@ -1347,15 +1343,19 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     push(batch_dwords, &mut cursor, MEDIA_VFE_STATE_CMD)?;
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
-    push(batch_dwords, &mut cursor, (63 << 16) | (2 << 8))?;
-    push(batch_dwords, &mut cursor, 0)?;
-    push(batch_dwords, &mut cursor, 1)?;
+    push(batch_dwords, &mut cursor, (64 << 16) | (2 << 8))?;
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, 0)?;
+    push_pipe_control_full(
+        batch_dwords,
+        &mut cursor,
+        PIPE_CONTROL_HDC_PIPELINE_FLUSH_HEADER,
+        PIPE_CONTROL_CS_STALL,
+    )?;
     push_store_marker(batch_dwords, &mut cursor, 26, 0xC0DE_7804)?;
-    push(batch_dwords, &mut cursor, MEDIA_STATE_FLUSH_CMD)?;
-    push(batch_dwords, &mut cursor, 0)?;
     let id_load_start = cursor;
     push(batch_dwords, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD)?;
     push(batch_dwords, &mut cursor, 0)?;
