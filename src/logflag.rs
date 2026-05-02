@@ -1,8 +1,11 @@
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
+use core::sync::atomic::{AtomicBool, AtomicU32};
 use log::{Level, LevelFilter};
 use spin::Once;
 
 pub(crate) const GLOBAL_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
+
+#[allow(non_upper_case_globals)]
+pub(crate) const dont_persist_globalog: bool = true;
 
 pub(crate) const NET_LOG_RX_TAP: bool = false;
 pub(crate) const NET_LOG_TX_TAP: bool = false;

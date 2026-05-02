@@ -216,6 +216,9 @@ pub fn init_once() {
         ukernel,
         auth
     );
+    if ready {
+        self::guc::prove_h2g_mmio_once(dev, "boot-control-ctb-disable");
+    }
     let warm = self::render::warm_once(dev);
     self::render::log_cursor_plane_info(warm);
     self::render::log_sprite_plane_info(warm);
@@ -286,6 +289,10 @@ pub fn init_once() {
 
 pub fn guc_ready() -> bool {
     self::guc::ready()
+}
+
+pub(crate) fn guc_h2g_mmio_accepted() -> bool {
+    self::guc::h2g_mmio_accepted()
 }
 
 pub fn has_claimed_device() -> bool {

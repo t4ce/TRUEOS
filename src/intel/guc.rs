@@ -9,13 +9,15 @@
 // that render submission is GuC-backed, that GuC scheduling is configured, or
 // that RCS can retire a 3D batch; those are separate render proof boundaries.
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 const GUC_STATUS: usize = 0x0000_C000;
 const SOFT_SCRATCH_BASE: usize = 0x0000_C180;
+const GEN11_SOFT_SCRATCH_BASE: usize = 0x0019_0240;
 const GDRST: usize = 0x0000_941C;
 const GUC_SHIM_CONTROL: usize = 0x0000_C064;
 const GUC_SHIM_CONTROL2: usize = 0x0000_C068;
+const GEN11_GUC_HOST_INTERRUPT: usize = 0x0019_01F0;
 const PMINTRMSK: usize = 0x0000_A168;
 const GT_PM_CONFIG: usize = 0x0013_816C;
 const DIST_DBS_POPULATED: usize = 0x0000_0D08;
@@ -54,6 +56,16 @@ const GUC_ADS_ADDR_SHIFT: u32 = 1;
 const GS_AUTH_STATUS_BAD: u32 = 1;
 const GRDOM_GUC: u32 = 1 << 3;
 const INTEL_GUC_LOAD_STATUS_READY: u32 = 0xF0;
+const GUC_HXG_ORIGIN_GUC: u32 = 1;
+const GUC_HXG_TYPE_REQUEST: u32 = 0;
+const GUC_HXG_TYPE_NO_RESPONSE_BUSY: u32 = 3;
+const GUC_HXG_TYPE_NO_RESPONSE_RETRY: u32 = 5;
+const GUC_HXG_TYPE_RESPONSE_FAILURE: u32 = 6;
+const GUC_HXG_TYPE_RESPONSE_SUCCESS: u32 = 7;
+const GUC_ACTION_HOST2GUC_CONTROL_CTB: u32 = 0x4509;
+const GUC_CTB_CONTROL_DISABLE: u32 = 0;
+const GUC_SEND_TRIGGER: u32 = 1 << 0;
+const GUC_MMIO_POLL_ITERS: usize = 100_000;
 const GUC_MAX_ENGINE_CLASSES: usize = 16;
 const GUC_MAX_INSTANCES_PER_CLASS: usize = 32;
 const GLOBAL_POLICY_MAX_NUM_WI: u32 = 15;
@@ -62,6 +74,10 @@ const DOORBELLS_PER_SQIDI_MASK: u32 = 0x00FF_0000;
 const DOORBELLS_PER_SQIDI_SHIFT: u32 = 16;
 
 static READY: AtomicBool = AtomicBool::new(false);
+static H2G_MMIO_PROBED: AtomicBool = AtomicBool::new(false);
+static H2G_MMIO_ACCEPTED: AtomicBool = AtomicBool::new(false);
+static H2G_MMIO_RESPONSE: AtomicU32 = AtomicU32::new(0);
+static H2G_MMIO_ERROR: AtomicU32 = AtomicU32::new(0);
 
 #[repr(C, packed)]
 #[derive(Copy, Clone)]
@@ -277,6 +293,42 @@ pub(crate) fn status(dev: crate::intel::Dev) -> u32 {
     crate::intel::mmio_read(dev, GUC_STATUS)
 }
 
+pub(crate) fn h2g_mmio_accepted() -> bool {
+    H2G_MMIO_ACCEPTED.load(Ordering::Acquire)
+}
+
+pub(crate) fn prove_h2g_mmio_once(dev: crate::intel::Dev, label: &'static str) -> bool {
+    if H2G_MMIO_PROBED.swap(true, Ordering::AcqRel) {
+        return H2G_MMIO_ACCEPTED.load(Ordering::Acquire);
+    }
+    if !ready() {
+        crate::log!("intel/guc: h2g-mmio-proof label={} accepted=0 reason=not-ready\n", label);
+        return false;
+    }
+
+    let request = [
+        hxg_request_header(GUC_ACTION_HOST2GUC_CONTROL_CTB),
+        GUC_CTB_CONTROL_DISABLE,
+    ];
+    let result = send_mmio_hxg(dev, &request);
+    H2G_MMIO_RESPONSE.store(result.response, Ordering::Release);
+    H2G_MMIO_ERROR.store(result.error, Ordering::Release);
+    H2G_MMIO_ACCEPTED.store(result.accepted, Ordering::Release);
+
+    crate::log!(
+        "intel/guc: h2g-mmio-proof label={} accepted={} action=HOST2GUC_CONTROL_CTB control=disable transport=gen11-soft-scratch notify=0x{:X} response=0x{:08X} response_type={} error={} poll_iters={} does_not_prove=ctb_enabled_or_guc_owned_render_submission_or_eu_execution\n",
+        label,
+        result.accepted as u8,
+        GEN11_GUC_HOST_INTERRUPT,
+        result.response,
+        result.response_type,
+        result.error,
+        result.poll_iters,
+    );
+
+    result.accepted
+}
+
 pub(crate) fn log_submission_contract(dev: crate::intel::Dev, label: &'static str) {
     let status = status(dev);
     let (bootrom, ukernel, auth) = describe_status(status);
@@ -289,7 +341,7 @@ pub(crate) fn log_submission_contract(dev: crate::intel::Dev, label: &'static st
     let scratch_devid = crate::intel::mmio_read(dev, SOFT_SCRATCH_BASE + 6 * 4);
 
     crate::log!(
-        "intel/guc: submission-contract label={} ready={} status=0x{:08X} bootrom={} ukernel={} auth=0x{:X} doorbells={} dist_dbs=0x{:08X} scratch0=0x{:08X} scratch_ads=0x{:08X} scratch_devid=0x{:08X} submission=rcs-execlist guc_sched=not-enabled-yet next=guc-doorbell-or-host2guc does_not_prove=guc_owns_batch_submission\n",
+        "intel/guc: submission-contract label={} ready={} status=0x{:08X} bootrom={} ukernel={} auth=0x{:X} doorbells={} dist_dbs=0x{:08X} scratch0=0x{:08X} scratch_ads=0x{:08X} scratch_devid=0x{:08X} h2g_mmio_probed={} h2g_mmio_accepted={} h2g_mmio_response=0x{:08X} submission=rcs-execlist guc_sched=not-enabled-yet next=ctb-h2g-context-register does_not_prove=guc_owns_batch_submission\n",
         label,
         ready as u8,
         status,
@@ -301,6 +353,9 @@ pub(crate) fn log_submission_contract(dev: crate::intel::Dev, label: &'static st
         scratch0,
         scratch_ads,
         scratch_devid,
+        H2G_MMIO_PROBED.load(Ordering::Acquire) as u8,
+        H2G_MMIO_ACCEPTED.load(Ordering::Acquire) as u8,
+        H2G_MMIO_RESPONSE.load(Ordering::Acquire),
     );
 }
 
@@ -442,6 +497,79 @@ fn terminal(s: u32) -> Option<bool> {
             0x13 | 0x50 | 0x73 | 0x74 | 0x75 | 0x77 | 0x79 | 0x7A | 0x7E | 0x2B => Some(false),
             _ => None,
         }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+struct MmioH2gResult {
+    accepted: bool,
+    response: u32,
+    response_type: u32,
+    error: u32,
+    poll_iters: usize,
+}
+
+fn hxg_request_header(action: u32) -> u32 {
+    (GUC_HXG_TYPE_REQUEST << 28) | (action & 0xFFFF)
+}
+
+fn hxg_origin(value: u32) -> u32 {
+    (value >> 31) & 0x1
+}
+
+fn hxg_type(value: u32) -> u32 {
+    (value >> 28) & 0x7
+}
+
+fn send_mmio_hxg(dev: crate::intel::Dev, request: &[u32]) -> MmioH2gResult {
+    let len = request.len().min(4);
+    if len == 0 {
+        return MmioH2gResult {
+            accepted: false,
+            response: 0,
+            response_type: 0,
+            error: 1,
+            poll_iters: 0,
+        };
+    }
+
+    for i in 0..4 {
+        crate::intel::mmio_write(dev, GEN11_SOFT_SCRATCH_BASE + i * 4, 0);
+    }
+    for (i, value) in request.iter().copied().take(len).enumerate() {
+        crate::intel::mmio_write(dev, GEN11_SOFT_SCRATCH_BASE + i * 4, value);
+    }
+    let _ = crate::intel::mmio_read(dev, GEN11_SOFT_SCRATCH_BASE + (len - 1) * 4);
+    crate::intel::mmio_write(dev, GEN11_GUC_HOST_INTERRUPT, GUC_SEND_TRIGGER);
+
+    let mut response = 0u32;
+    let mut poll_iters = 0usize;
+    while poll_iters < GUC_MMIO_POLL_ITERS {
+        response = crate::intel::mmio_read(dev, GEN11_SOFT_SCRATCH_BASE);
+        if hxg_origin(response) == GUC_HXG_ORIGIN_GUC {
+            break;
+        }
+        poll_iters += 1;
+        core::hint::spin_loop();
+    }
+
+    let response_type = hxg_type(response);
+    let error = match response_type {
+        GUC_HXG_TYPE_RESPONSE_SUCCESS => 0,
+        GUC_HXG_TYPE_NO_RESPONSE_BUSY => 2,
+        GUC_HXG_TYPE_NO_RESPONSE_RETRY => 3,
+        GUC_HXG_TYPE_RESPONSE_FAILURE => response & 0xFFFF,
+        _ if poll_iters >= GUC_MMIO_POLL_ITERS => 4,
+        _ => 5,
+    };
+
+    MmioH2gResult {
+        accepted: hxg_origin(response) == GUC_HXG_ORIGIN_GUC
+            && response_type == GUC_HXG_TYPE_RESPONSE_SUCCESS,
+        response,
+        response_type,
+        error,
+        poll_iters,
     }
 }
 

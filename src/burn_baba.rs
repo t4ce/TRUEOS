@@ -176,7 +176,7 @@ pub(crate) fn share_matvec_rowmajor_bf16(n_rows: usize, k_dim: usize, chunk_rows
         plan.next_memory_layout.as_str(),
     );
     crate::log!(
-        "burn-baba: gpgpu-pilot-plan eligible={} gpu_ready={} arena_ready={} arena_gpu_base=0x{:X} arena_bytes=0x{:X} arena_max_tiles={} pilot_tiles={} candidate_tiles={} tile_rows={} tile_k={} x_bytes={} weight_tile_bytes={} output_tile_bytes={} compare=cpu-reference-first dispatch=disabled reason=missing-guc-owned-eu-kernel cpu_ap_continues=1 does_not_prove=gpu_matmul\n",
+        "burn-baba: gpgpu-pilot-plan eligible={} gpu_ready={} arena_ready={} arena_gpu_base=0x{:X} arena_bytes=0x{:X} arena_max_tiles={} pilot_tiles={} candidate_tiles={} tile_rows={} tile_k={} x_bytes={} weight_tile_bytes={} output_tile_bytes={} compare=cpu-reference-first dispatch=disabled reason=walker-not-submitted cpu_ap_continues=1 does_not_prove=gpu_matmul\n",
         pilot.eligible as u8,
         plan.gpu_ready as u8,
         gpu.enough_for_shape as u8,
@@ -190,6 +190,15 @@ pub(crate) fn share_matvec_rowmajor_bf16(n_rows: usize, k_dim: usize, chunk_rows
         pilot.x_bytes,
         pilot.weight_tile_bytes,
         pilot.output_tile_bytes,
+    );
+    crate::log!(
+        "burn-baba: gpgpu-dispatch-gate h2g_mmio={} input_buffers_ab_in_ggtt={} ctb_enabled=0 guc_context_registered=0 guc_sched_enabled=0 eu_kernel_uploaded={} eu_walker_encoded={} eu_execution_runs=0 result_c_changed_by_eu=0 cpu_reads_c_back={} arena_ready={} cpu_reference_compare=1 dispatch=disabled blocker=submit-gpgpu-walker next=submit-walker-and-compare-c does_not_prove=gpu_matmul\n",
+        crate::intel::guc_h2g_mmio_accepted() as u8,
+        gpu.accepted as u8,
+        gpu.eu_kernel_uploaded as u8,
+        gpu.eu_walker_encoded as u8,
+        gpu.accepted as u8,
+        gpu.enough_for_shape as u8,
     );
 }
 
