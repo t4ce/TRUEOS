@@ -75,6 +75,14 @@ struct RoomsJson<'a> {
 }
 
 #[derive(Serialize)]
+struct ApiJson {
+    ok: bool,
+    transport: &'static str,
+    endpoints: &'static [&'static str],
+    post_body: &'static str,
+}
+
+#[derive(Serialize)]
 struct RoomJson<'a> {
     room: &'a str,
     messages: usize,
@@ -90,6 +98,13 @@ struct MessagesJson<'a> {
 struct PostOkJson {
     ok: bool,
     id: u64,
+    message: Message,
+}
+
+#[derive(Deserialize)]
+struct PostMessageJson {
+    user: String,
+    text: String,
 }
 
 #[derive(Serialize)]
@@ -186,6 +201,7 @@ impl ChatHub {
     pub fn handle(&mut self, req: ChatRequest) -> ChatResponse {
         match (req.method, req.path.as_str()) {
             (ChatMethod::Get, "/") => html_response(index_html()),
+            (ChatMethod::Get, "/api") => api_response(),
             (ChatMethod::Get, "/api/rooms") => self.rooms_response(),
             _ => {
                 if let Some(room) = api_room_messages_path(&req.path) {
@@ -242,8 +258,7 @@ impl ChatHub {
         let Some(room_name) = sanitize_name(room, self.config.max_name_len) else {
             return error_response(400, "invalid room");
         };
-        let user_raw = form_value(body, "user");
-        let text_raw = form_value(body, "text");
+        let (user_raw, text_raw) = post_message_fields(body);
         let Some(user) = user_raw.and_then(|value| sanitize_text(&value, self.config.max_name_len))
         else {
             return error_response(400, "invalid user");
@@ -274,13 +289,20 @@ impl ChatHub {
             unix_ms,
         };
         if let Some(room) = self.rooms.iter_mut().find(|room| room.name == room_name) {
-            room.messages.push_back(message);
+            room.messages.push_back(message.clone());
             while room.messages.len() > self.config.max_messages_per_room {
                 room.messages.pop_front();
             }
         }
 
-        json_response(200, &PostOkJson { ok: true, id })
+        json_response(
+            200,
+            &PostOkJson {
+                ok: true,
+                id,
+                message,
+            },
+        )
     }
 }
 
@@ -297,6 +319,26 @@ fn parse_since(query: &str) -> Option<u64> {
         }
     }
     None
+}
+
+fn post_message_fields(body: &[u8]) -> (Option<String>, Option<String>) {
+    let trimmed = trim_ascii_ws(body);
+    if trimmed.first() == Some(&b'{') {
+        if let Ok(json) = serde_json::from_slice::<PostMessageJson>(trimmed) {
+            return (Some(json.user), Some(json.text));
+        }
+    }
+    (form_value(body, "user"), form_value(body, "text"))
+}
+
+fn trim_ascii_ws(mut bytes: &[u8]) -> &[u8] {
+    while matches!(bytes.first(), Some(b' ' | b'\n' | b'\r' | b'\t')) {
+        bytes = &bytes[1..];
+    }
+    while matches!(bytes.last(), Some(b' ' | b'\n' | b'\r' | b'\t')) {
+        bytes = &bytes[..bytes.len().saturating_sub(1)];
+    }
+    bytes
 }
 
 fn sanitize_name(raw: &str, max_len: usize) -> Option<String> {
@@ -415,10 +457,12 @@ input,button{{font:inherit;border:1px solid #41515e;background:#17242e;color:#ee
 input{{box-sizing:border-box;width:100%}}
 input:disabled{{color:#b7c6d1;background:#13202a;cursor:not-allowed;opacity:1}}
 button{{cursor:pointer;background:#2d6cdf;border-color:#2d6cdf}}
+button:disabled{{cursor:wait;opacity:.72}}
 .settings{{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:end}}
 #messages{{list-style:none;padding:0;margin:20px 0;display:grid;gap:10px}}
 #messages li{{background:#17242e;border:1px solid #2c3c48;border-radius:6px;padding:10px}}
 .meta{{color:#91a7b8;font-size:13px;margin-bottom:4px}}
+.status{{margin:14px 0 0;color:#b7c6d1;font-size:13px;min-height:18px}}
 form{{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end}}
 @media (max-width:560px){{.settings{{grid-template-columns:1fr}}}}
 </style>
@@ -431,32 +475,63 @@ form{{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end}}
 <div><label for="user">Display name</label><input id="user" value="guest" maxlength="32"></div>
 </div>
 <ul id="messages"></ul>
+<div id="status" class="status" aria-live="polite"></div>
 <form id="post"><input id="text" autocomplete="off" maxlength="1024"><button>Send</button></form>
 </main>
 <script>
 let since=0;
 const room='lobby';
+const seen=new Set();
+const status=document.querySelector('#status');
+const textInput=document.querySelector('#text');
+const sendButton=document.querySelector('#post button');
 const esc=s=>s.replace(/[&<>"']/g,c=>({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[c]));
+function setStatus(text){{status.textContent=text;}}
+function showMessage(m,source){{
+  if(seen.has(m.id))return;
+  seen.add(m.id);
+  since=Math.max(since,m.id);
+  const li=document.createElement('li');
+  li.innerHTML=`<div class="meta">${{esc(m.user)}} #${{m.id}} - ${{source}}</div><div>${{esc(m.text)}}</div>`;
+  document.querySelector('#messages').appendChild(li);
+}}
 async function poll(){{
   const encodedRoom=encodeURIComponent(room);
-  const r=await fetch(`/api/rooms/${{encodedRoom}}/messages?since=${{since}}`,{{cache:'no-store'}});
-  if(r.ok){{
+  const started=Date.now();
+  try{{
+    const r=await fetch(`/api/rooms/${{encodedRoom}}/messages?since=${{since}}`,{{cache:'no-store'}});
+    const ms=Date.now()-started;
+    if(!r.ok){{setStatus(`poll failed HTTP ${{r.status}} after ${{ms}}ms`);return;}}
     const data=await r.json();
-    for(const m of data.messages){{
-      since=Math.max(since,m.id);
-      const li=document.createElement('li');
-      li.innerHTML=`<div class="meta">${{esc(m.user)}} #${{m.id}}</div><div>${{esc(m.text)}}</div>`;
-      document.querySelector('#messages').appendChild(li);
-    }}
+    for(const m of data.messages)showMessage(m,'poll');
+    setStatus(`poll ok ${{ms}}ms - since #${{since}}`);
+  }}catch(err){{
+    setStatus(`poll error: ${{err&&err.message?err.message:'network'}}`);
   }}
 }}
 document.querySelector('#post').addEventListener('submit',async e=>{{
   e.preventDefault();
+  const text=textInput.value;
+  if(!text.trim())return;
   const encodedRoom=encodeURIComponent(room);
-  const body=new URLSearchParams({{user:document.querySelector('#user').value,text:document.querySelector('#text').value}});
-  const r=await fetch(`/api/rooms/${{encodedRoom}}/messages`,{{method:'POST',body}});
-  if(r.ok)document.querySelector('#text').value='';
-  poll();
+  const body=JSON.stringify({{user:document.querySelector('#user').value,text}});
+  const started=Date.now();
+  sendButton.disabled=true;
+  setStatus('sending...');
+  try{{
+    const r=await fetch(`/api/rooms/${{encodedRoom}}/messages`,{{method:'POST',headers:{{'content-type':'application/json'}},body}});
+    const ms=Date.now()-started;
+    if(!r.ok){{setStatus(`send failed HTTP ${{r.status}} after ${{ms}}ms`);return;}}
+    const data=await r.json();
+    if(data.message)showMessage(data.message,'ack');
+    textInput.value='';
+    setStatus(`send ack #${{data.id}} ${{ms}}ms`);
+  }}catch(err){{
+    setStatus(`send error: ${{err&&err.message?err.message:'network'}}`);
+  }}finally{{
+    sendButton.disabled=false;
+    textInput.focus();
+  }}
 }});
 setInterval(poll,1500);poll();
 </script>
@@ -473,6 +548,24 @@ fn html_response(body: Vec<u8>) -> ChatResponse {
         content_type: "text/html; charset=utf-8",
         body,
     }
+}
+
+fn api_response() -> ChatResponse {
+    json_response(
+        200,
+        &ApiJson {
+            ok: true,
+            transport: "http-post",
+            endpoints: &[
+                "GET /",
+                "GET /api",
+                "GET /api/rooms",
+                "GET /api/rooms/{room}/messages?since={id}",
+                "POST /api/rooms/{room}/messages",
+            ],
+            post_body: "application/json {\"user\":\"name\",\"text\":\"message\"}; form user=&text= is also accepted",
+        },
+    )
 }
 
 fn json_response<T: Serialize>(status: u16, value: &T) -> ChatResponse {
@@ -507,6 +600,10 @@ mod tests {
             now_ms: 42,
         });
         assert_eq!(post.status, 200);
+        let post_text = String::from_utf8(post.body).unwrap();
+        assert!(post_text.contains("\"id\":1"));
+        assert!(post_text.contains("\"message\""));
+        assert!(post_text.contains("\"text\":\"hello there\""));
         assert_eq!(hub.room_count(), 1);
         assert_eq!(hub.message_count("lobby"), 1);
 
@@ -521,6 +618,50 @@ mod tests {
         let text = String::from_utf8(get.body).unwrap();
         assert!(text.contains("\"user\":\"Ada\""));
         assert!(text.contains("\"text\":\"hello there\""));
+    }
+
+    #[test]
+    fn post_json_message() {
+        let mut hub = ChatHub::new(ChatConfig::default());
+        let post = hub.handle(ChatRequest {
+            method: ChatMethod::Post,
+            path: "/api/rooms/Lobby/messages".to_string(),
+            query: None,
+            body: br#"{"user":"Ada","text":"hello json"}"#.to_vec(),
+            now_ms: 42,
+        });
+        assert_eq!(post.status, 200);
+        let post_text = String::from_utf8(post.body).unwrap();
+        assert!(post_text.contains("\"message\""));
+        assert!(post_text.contains("\"text\":\"hello json\""));
+        assert_eq!(hub.message_count("lobby"), 1);
+
+        let get = hub.handle(ChatRequest {
+            method: ChatMethod::Get,
+            path: "/api/rooms/lobby/messages".to_string(),
+            query: Some("since=0".to_string()),
+            body: Vec::new(),
+            now_ms: 0,
+        });
+        let text = String::from_utf8(get.body).unwrap();
+        assert!(text.contains("\"user\":\"Ada\""));
+        assert!(text.contains("\"text\":\"hello json\""));
+    }
+
+    #[test]
+    fn api_endpoint_describes_http_contract() {
+        let mut hub = ChatHub::new(ChatConfig::default());
+        let get = hub.handle(ChatRequest {
+            method: ChatMethod::Get,
+            path: "/api".to_string(),
+            query: None,
+            body: Vec::new(),
+            now_ms: 0,
+        });
+        assert_eq!(get.status, 200);
+        let text = String::from_utf8(get.body).unwrap();
+        assert!(text.contains("\"transport\":\"http-post\""));
+        assert!(text.contains("POST /api/rooms/{room}/messages"));
     }
 
     #[test]

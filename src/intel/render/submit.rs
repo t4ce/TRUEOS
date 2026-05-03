@@ -355,8 +355,15 @@ fn submit_warm_render_batch(
         let fault_type = (fault_active >> 1) & 0x3;
         let fault_srcid = (fault_active >> 3) & 0xFF;
         let fault_engine = (fault_active >> 12) & 0x1F;
+        let cs_debug_mode1 = crate::intel::mmio_read(dev, RCS_CS_DEBUG_MODE1);
+        let cs_debug_mode2 = crate::intel::mmio_read(dev, RCS_CS_DEBUG_MODE2);
+        let sampler_instdone = crate::intel::mmio_read(dev, SAMPLER_INSTDONE);
+        let row_instdone = crate::intel::mmio_read(dev, ROW_INSTDONE);
+        let sc_instdone = crate::intel::mmio_read(dev, SC_INSTDONE);
+        let sc_extra = crate::intel::mmio_read(dev, SC_INSTDONE_EXTRA);
+        let sc_extra2 = crate::intel::mmio_read(dev, SC_INSTDONE_EXTRA2);
         crate::log!(
-            "intel/render: {} gpgpu-stall-detail acthd_batch_off=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} instdone=0x{:08X} instpm=0x{:08X} fault_gen8=0x{:08X} fault_gen12=0x{:08X} fault_valid={} fault_type={} fault_srcid={} fault_engine={} fault8_data0=0x{:08X} fault8_data1=0x{:08X} fault12_data0=0x{:08X} fault12_data1=0x{:08X} error=0x{:08X} gfx_mode=0x{:08X} rcu_mode=0x{:08X} sc_instdone=0x{:08X} sc_extra=0x{:08X} sc_extra2=0x{:08X}\n",
+            "intel/render: {} gpgpu-stall-detail acthd_batch_off=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} instdone=0x{:08X} instpm=0x{:08X} fault_gen8=0x{:08X} fault_gen12=0x{:08X} fault_valid={} fault_type={} fault_srcid={} fault_engine={} fault8_data0=0x{:08X} fault8_data1=0x{:08X} fault12_data0=0x{:08X} fault12_data1=0x{:08X} error=0x{:08X} gfx_mode=0x{:08X} rcu_mode=0x{:08X} cs_debug1=0x{:08X} cs_debug2=0x{:08X} sc_instdone=0x{:08X} sc_extra=0x{:08X} sc_extra2=0x{:08X} sampler_instdone=0x{:08X} row_instdone=0x{:08X}\n",
             submit_name,
             acthd_batch_off,
             crate::intel::mmio_read(dev, RCS_RING_IPEIR),
@@ -377,9 +384,28 @@ fn submit_warm_render_batch(
             crate::intel::mmio_read(dev, ERROR_GEN6),
             crate::intel::mmio_read(dev, GFX_MODE),
             crate::intel::mmio_read(dev, GEN12_RCU_MODE),
-            crate::intel::mmio_read(dev, SC_INSTDONE),
-            crate::intel::mmio_read(dev, SC_INSTDONE_EXTRA),
-            crate::intel::mmio_read(dev, SC_INSTDONE_EXTRA2),
+            cs_debug_mode1,
+            cs_debug_mode2,
+            sc_instdone,
+            sc_extra,
+            sc_extra2,
+            sampler_instdone,
+            row_instdone,
+        );
+        crate::log!(
+            "intel/render: {} gpgpu-debug-units sc_dc0_done={} sc_dc1_done={} sc_dc2_done={} sc_gw0_done={} sc_gw1_done={} sc_gw2_done={} sampler_st_done={} sampler_vafe_done={} row_tdl_done={} row_eu00_ss0_done={} row_eu00_ss1_done={} note=public-instdone-debug-not-eu-grf-dump\n",
+            submit_name,
+            ((sc_instdone >> 16) & 1),
+            ((sc_instdone >> 17) & 1),
+            ((sc_instdone >> 18) & 1),
+            ((sc_instdone >> 20) & 1),
+            ((sc_instdone >> 21) & 1),
+            ((sc_instdone >> 22) & 1),
+            ((sampler_instdone >> 8) & 1),
+            ((sampler_instdone >> 13) & 1),
+            ((row_instdone >> 6) & 1),
+            ((row_instdone >> 16) & 1),
+            ((row_instdone >> 7) & 1),
         );
         let gpr = [
             read_rcs_cs_gpr(dev, 0),
