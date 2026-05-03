@@ -1,0 +1,238 @@
+use crate::{EuArtifact, EuArtifactKind, EuIsa};
+
+pub const STORE_SENTINEL_U32: u32 = 0xC0DE_7733;
+pub const HDC1_BTI34_STORE_SEND_DWORD: usize = 11;
+pub const HDC1_BTI34_STORE_IMM_DWORD: usize = 3;
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum Gfx12EotVariant {
+    TsR0ToG112,
+    TsR0ToG120,
+    TsR0ToG126,
+    TsR0ToG127,
+    TsR0ToG127Send1,
+    GatewayR0ToG127,
+    GatewayR0ToG127Dg2,
+    TsR0ToG127AccClear,
+}
+
+pub static TS_EOT_R0_TO_G112_WORDS: [u32; 8] = [
+    0x80030061, 0x70050220, 0x00460005, 0x00000000, 0x80030131, 0x00000004, 0x7000700C, 0x00000000,
+];
+
+pub static TS_EOT_R0_TO_G112: EuArtifact = EuArtifact {
+    name: "gfx12-ts-eot-r0-to-g112-assembled",
+    isa: EuIsa::Gfx12,
+    kind: EuArtifactKind::ThreadSpawnerEot,
+    words: &TS_EOT_R0_TO_G112_WORDS,
+    expects_store: false,
+};
+
+pub static TS_EOT_R0_TO_G120_WORDS: [u32; 8] = [
+    0x80030061, 0x78050220, 0x00460005, 0x00000000, 0x80030131, 0x00000004, 0x7000780C, 0x00000000,
+];
+
+pub static TS_EOT_R0_TO_G120: EuArtifact = EuArtifact {
+    name: "gfx12-ts-eot-r0-to-g120-assembled",
+    isa: EuIsa::Gfx12,
+    kind: EuArtifactKind::ThreadSpawnerEot,
+    words: &TS_EOT_R0_TO_G120_WORDS,
+    expects_store: false,
+};
+
+pub static TS_EOT_R0_TO_G126_WORDS: [u32; 8] = [
+    0x80030061, 0x7E050220, 0x00460005, 0x00000000, 0x80030131, 0x00000004, 0x70007E0C, 0x00000000,
+];
+
+pub static TS_EOT_R0_TO_G126: EuArtifact = EuArtifact {
+    name: "gfx12-ts-eot-r0-to-g126-assembled",
+    isa: EuIsa::Gfx12,
+    kind: EuArtifactKind::ThreadSpawnerEot,
+    words: &TS_EOT_R0_TO_G126_WORDS,
+    expects_store: false,
+};
+
+// Mesa brw_asm source:
+//
+// mov(8)  g127<1>UD  g0<8,8,1>UD
+// send(8) nullUD     g127UD nullUD 0x02000000 0x00000000
+//         ts/btd MsgDesc: mlen 1 ex_mlen 0 rlen 0 EOT
+pub static TS_EOT_R0_TO_G127_WORDS: [u32; 8] = [
+    0x80030061, 0x7F050220, 0x00460005, 0x00000000, 0x80030131, 0x00000004, 0x70007F0C, 0x00000000,
+];
+
+pub static TS_EOT_R0_TO_G127: EuArtifact = EuArtifact {
+    name: "gfx12-ts-eot-r0-to-g127-assembled",
+    isa: EuIsa::Gfx12,
+    kind: EuArtifactKind::ThreadSpawnerEot,
+    words: &TS_EOT_R0_TO_G127_WORDS,
+    expects_store: false,
+};
+
+pub static TS_EOT_R0_TO_G127_SEND1_WORDS: [u32; 8] = [
+    0x80030061, 0x7F050220, 0x00460005, 0x00000000, 0x80000131, 0x00000004, 0x70007F0C, 0x00000000,
+];
+
+pub static TS_EOT_R0_TO_G127_SEND1: EuArtifact = EuArtifact {
+    name: "gfx12-ts-eot-r0-to-g127-send1-assembled",
+    isa: EuIsa::Gfx12,
+    kind: EuArtifactKind::ThreadSpawnerEotSend1,
+    words: &TS_EOT_R0_TO_G127_SEND1_WORDS,
+    expects_store: false,
+};
+
+pub static GATEWAY_EOT_R0_TO_G127_WORDS: [u32; 8] = [
+    0x80030061, 0x7F050220, 0x00460005, 0x00000000, 0x80030131, 0x00000004, 0x30007F0C, 0x00000000,
+];
+
+pub static GATEWAY_EOT_R0_TO_G127: EuArtifact = EuArtifact {
+    name: "gfx12-gateway-eot-r0-to-g127-assembled",
+    isa: EuIsa::Gfx12,
+    kind: EuArtifactKind::GatewayEot,
+    words: &GATEWAY_EOT_R0_TO_G127_WORDS,
+    expects_store: false,
+};
+
+pub static GATEWAY_EOT_R0_TO_G127_DG2_WORDS: [u32; 8] = [
+    0x80030061, 0x7F050220, 0x00460005, 0x00000000, 0x80030931, 0x00000004, 0x30007F0C, 0x00000000,
+];
+
+pub static GATEWAY_EOT_R0_TO_G127_DG2: EuArtifact = EuArtifact {
+    name: "gfx125-gateway-eot-r0-to-g127-dg2-assembled",
+    isa: EuIsa::Gfx12,
+    kind: EuArtifactKind::GatewayEot,
+    words: &GATEWAY_EOT_R0_TO_G127_DG2_WORDS,
+    expects_store: false,
+};
+
+pub static TS_EOT_R0_TO_G127_ACC_CLEAR_WORDS: [u32; 12] = [
+    0x80040061, 0x20014AA0, 0x00000000, 0x00000000, 0x80030061, 0x7F050220, 0x00460005, 0x00000000,
+    0x80030131, 0x00000004, 0x70007F0C, 0x00000000,
+];
+
+pub static TS_EOT_R0_TO_G127_ACC_CLEAR: EuArtifact = EuArtifact {
+    name: "gfx12-ts-eot-r0-to-g127-acc-clear-assembled",
+    isa: EuIsa::Gfx12,
+    kind: EuArtifactKind::ThreadSpawnerEot,
+    words: &TS_EOT_R0_TO_G127_ACC_CLEAR_WORDS,
+    expects_store: false,
+};
+
+pub static EOT_CATALOG: [EuArtifact; 8] = [
+    TS_EOT_R0_TO_G112,
+    TS_EOT_R0_TO_G120,
+    TS_EOT_R0_TO_G126,
+    TS_EOT_R0_TO_G127,
+    TS_EOT_R0_TO_G127_SEND1,
+    GATEWAY_EOT_R0_TO_G127,
+    GATEWAY_EOT_R0_TO_G127_DG2,
+    TS_EOT_R0_TO_G127_ACC_CLEAR,
+];
+
+pub const fn eot_artifact(variant: Gfx12EotVariant) -> EuArtifact {
+    match variant {
+        Gfx12EotVariant::TsR0ToG112 => TS_EOT_R0_TO_G112,
+        Gfx12EotVariant::TsR0ToG120 => TS_EOT_R0_TO_G120,
+        Gfx12EotVariant::TsR0ToG126 => TS_EOT_R0_TO_G126,
+        Gfx12EotVariant::TsR0ToG127 => TS_EOT_R0_TO_G127,
+        Gfx12EotVariant::TsR0ToG127Send1 => TS_EOT_R0_TO_G127_SEND1,
+        Gfx12EotVariant::GatewayR0ToG127 => GATEWAY_EOT_R0_TO_G127,
+        Gfx12EotVariant::GatewayR0ToG127Dg2 => GATEWAY_EOT_R0_TO_G127_DG2,
+        Gfx12EotVariant::TsR0ToG127AccClear => TS_EOT_R0_TO_G127_ACC_CLEAR,
+    }
+}
+
+// Mesa brw_asm source:
+//
+// mov(8)  g4<1>UD    0xC0DE7733UD
+// mov(8)  g127<1>UD  0UD
+// send    HDC1 untyped surface write, BTI 0x34, SIMD8
+// mov(8)  g127<1>UD  g0<8,8,1>UD
+// send    Thread Spawner EOT from g127
+pub static HDC1_BTI34_STORE_THEN_TS_EOT_WORDS: [u32; 20] = [
+    0x80030061,
+    0x04054660,
+    0x00000000,
+    STORE_SENTINEL_U32,
+    0x80030061,
+    0x7F054220,
+    0x00000000,
+    0x00000000,
+    0x00030131,
+    0x00000000,
+    0xCC687F0C,
+    0x009A040C,
+    0x80030061,
+    0x7F050220,
+    0x00460005,
+    0x00000000,
+    0x80030131,
+    0x00000004,
+    0x70007F0C,
+    0x00000000,
+];
+
+pub static HDC1_BTI34_STORE_THEN_TS_EOT: EuArtifact = EuArtifact {
+    name: "gfx12-hdc1-bti34-store-then-ts-eot",
+    isa: EuIsa::Gfx12,
+    kind: EuArtifactKind::Hdc1BtiStoreThenThreadSpawnerEot,
+    words: &HDC1_BTI34_STORE_THEN_TS_EOT_WORDS,
+    expects_store: true,
+};
+
+#[cfg(feature = "alloc")]
+pub mod builder {
+    use alloc::vec::Vec;
+
+    use super::{
+        HDC1_BTI34_STORE_THEN_TS_EOT_WORDS, TS_EOT_R0_TO_G112_WORDS, TS_EOT_R0_TO_G120_WORDS,
+        TS_EOT_R0_TO_G126_WORDS, TS_EOT_R0_TO_G127_SEND1_WORDS, TS_EOT_R0_TO_G127_WORDS,
+    };
+
+    #[derive(Clone, Debug, Default)]
+    pub struct Program {
+        words: Vec<u32>,
+    }
+
+    impl Program {
+        pub fn new() -> Self {
+            Self { words: Vec::new() }
+        }
+
+        pub fn push_template(&mut self, words: &[u32]) {
+            self.words.extend_from_slice(words);
+        }
+
+        pub fn push_ts_eot_r0_to_g127(&mut self) {
+            self.push_template(&TS_EOT_R0_TO_G127_WORDS);
+        }
+
+        pub fn push_ts_eot_r0_to_g126(&mut self) {
+            self.push_template(&TS_EOT_R0_TO_G126_WORDS);
+        }
+
+        pub fn push_ts_eot_r0_to_g120(&mut self) {
+            self.push_template(&TS_EOT_R0_TO_G120_WORDS);
+        }
+
+        pub fn push_ts_eot_r0_to_g112(&mut self) {
+            self.push_template(&TS_EOT_R0_TO_G112_WORDS);
+        }
+
+        pub fn push_ts_eot_r0_to_g127_send1(&mut self) {
+            self.push_template(&TS_EOT_R0_TO_G127_SEND1_WORDS);
+        }
+
+        pub fn push_hdc1_bti34_store_then_ts_eot(&mut self) {
+            self.push_template(&HDC1_BTI34_STORE_THEN_TS_EOT_WORDS);
+        }
+
+        pub fn words(&self) -> &[u32] {
+            &self.words
+        }
+
+        pub fn into_words(self) -> Vec<u32> {
+            self.words
+        }
+    }
+}
