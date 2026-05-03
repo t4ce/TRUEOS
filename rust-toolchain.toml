@@ -4,22 +4,7 @@ components = [
 	"rust-src",
 	"rustfmt",
 	"rust-analyzer",
+	"clippy",
+	"llvm-tools-preview",
 ]
 profile = "minimal"
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

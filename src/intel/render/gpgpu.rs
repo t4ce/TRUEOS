@@ -769,6 +769,11 @@ struct GpgpuComputeWalkerProof {
     dispatch_delta: u64,
     c_value: u32,
     result_c_changed_by_eu: bool,
+    expected_hits_mask: u64,
+    post_pipeline: u32,
+    post_sba: u32,
+    post_scm: u32,
+    post_cfe: u32,
     batch_bytes: usize,
 }
 
@@ -817,6 +822,11 @@ fn submit_gpgpu_compute_walker_probe(
                 dispatch_delta: 0,
                 c_value: 0,
                 result_c_changed_by_eu: false,
+                expected_hits_mask: 0,
+                post_pipeline: 0,
+                post_sba: 0,
+                post_scm: 0,
+                post_cfe: 0,
                 batch_bytes: 0,
             };
         }
@@ -853,37 +863,24 @@ fn submit_gpgpu_compute_walker_probe(
     GPGPU_EU_WALKER_RETIRED.store(retired, Ordering::Release);
     GPGPU_EU_DISPATCH_DELTA.store(dispatch_delta.min(u32::MAX as u64) as u32, Ordering::Release);
     GPGPU_EU_C_STORE_VALUE.store(c_value, Ordering::Release);
+    let breadcrumbs_ok = post_pipeline == 0xC0DE_7801
+        && post_sba == 0xC0DE_7802
+        && post_scm == 0xC0DE_7803
+        && post_cfe == 0xC0DE_7804;
     crate::log!(
-        "intel/gpgpu: compute-walker-breadcrumbs post_pipeline=0x{:08X} post_sba=0x{:08X} post_scm=0x{:08X} post_cfe=0x{:08X}\n",
-        post_pipeline,
-        post_sba,
-        post_scm,
-        post_cfe,
-    );
-    crate::log!(
-        "intel/gpgpu: result-window-scan expected=0x{:08X} expected_hits_mask_lo64=0x{:016X} target_slot={} target_gpu=0x{:X} s16=0x{:08X} s17=0x{:08X} s18=0x{:08X} s19=0x{:08X} s20=0x{:08X} s21=0x{:08X} s22=0x{:08X} s23=0x{:08X} s24=0x{:08X} s25=0x{:08X} s26=0x{:08X} s27=0x{:08X} s28=0x{:08X} s29=0x{:08X} s30=0x{:08X} s31=0x{:08X} note=checks-nearby-result-buffer-for-misplaced-eu-store\n",
+        "intel/gpgpu: result-store-scan expected=0x{:08X} hits_mask_lo64=0x{:016X} target_slot={} target_gpu=0x{:X} target_value=0x{:08X} breadcrumbs_ok={} post_pipeline=0x{:08X} post_sba=0x{:08X} post_scm=0x{:08X} post_cfe=0x{:08X} note=scans-result-slots-0-63-for-misplaced-eu-store\n",
         GPU_PROGRAM_SHARED_RAM_WRITE_EXPECTED,
         expected_hits_mask,
         RESULT_SLOT_GPGPU_EU_C_STORE_DWORD,
         GPU_VA_RESULT_BASE
             + (RESULT_SLOT_GPGPU_EU_C_STORE_DWORD as u64)
                 * core::mem::size_of::<u32>() as u64,
-        read_result_dword(warm, 16),
-        read_result_dword(warm, 17),
-        read_result_dword(warm, 18),
-        read_result_dword(warm, 19),
-        read_result_dword(warm, 20),
-        read_result_dword(warm, 21),
-        read_result_dword(warm, 22),
-        read_result_dword(warm, 23),
-        read_result_dword(warm, 24),
-        read_result_dword(warm, 25),
-        read_result_dword(warm, 26),
-        read_result_dword(warm, 27),
-        read_result_dword(warm, 28),
-        read_result_dword(warm, 29),
-        read_result_dword(warm, 30),
-        read_result_dword(warm, 31),
+        c_value,
+        breadcrumbs_ok as u8,
+        post_pipeline,
+        post_sba,
+        post_scm,
+        post_cfe,
     );
 
     GpgpuComputeWalkerProof {
@@ -897,6 +894,11 @@ fn submit_gpgpu_compute_walker_probe(
         dispatch_delta,
         c_value,
         result_c_changed_by_eu,
+        expected_hits_mask,
+        post_pipeline,
+        post_sba,
+        post_scm,
+        post_cfe,
         batch_bytes,
     }
 }
@@ -1526,10 +1528,18 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
 fn log_gpgpu_compute_walker_status(proof: GpgpuComputeWalkerProof) {
     let gpu_program_started = proof.dispatch_delta != 0;
     let eot_only_retired = !proof.expects_store && gpu_program_started && proof.retired;
+    let store_landed_anywhere = proof.expected_hits_mask != 0;
+    let breadcrumbs_ok = proof.post_pipeline == 0xC0DE_7801
+        && proof.post_sba == 0xC0DE_7802
+        && proof.post_scm == 0xC0DE_7803
+        && proof.post_cfe == 0xC0DE_7804;
+    let post_walker_marker_retired = proof.marker == RCS_EXEC_RESULT_COMPUTE_WALKER_DONE;
     let failure_class = if eot_only_retired {
         "thread-eot-retired-proven"
     } else if proof.result_c_changed_by_eu {
         "shared-ram-write-proven"
+    } else if gpu_program_started && !proof.retired && !store_landed_anywhere {
+        "eu-thread-started-no-eot-no-store-hit"
     } else if gpu_program_started && !proof.retired && proof.c_value == 0 {
         "program-started-did-not-finish-or-store"
     } else if gpu_program_started && proof.retired && proof.c_value == 0 {
@@ -1539,8 +1549,31 @@ fn log_gpgpu_compute_walker_status(proof: GpgpuComputeWalkerProof) {
     } else {
         "unexpected-shared-ram-value"
     };
+    let next = if proof.result_c_changed_by_eu {
+        "add-read-alu-write-kernel"
+    } else if eot_only_retired {
+        "add-dataport-store-after-clean-eot"
+    } else if gpu_program_started && !proof.retired {
+        "fix-ts-eot-or-enable-sip-exception-capture-before-dataport-store"
+    } else {
+        "fix-walker-thread-start"
+    };
     crate::log!(
-        "intel/gpgpu: gpu-program-proof program_source={} expects_store={} start_submitted={} finished={} finish_marker=0x{:08X} finish_expected=0x{:08X} starts_before={} starts_after={} starts_delta={} start_command_bytes=0x{:X} gpu_program_started={} shared_ram_slot={} shared_ram_value=0x{:08X} shared_ram_expected=0x{:08X} wrote_shared_ram={} eot_retired={} failure_class={} cpu_reads_c_back=1 backend=gfx12-gpgpu-start-command next=fix-eot-then-dataport-store-then-scale-tiles does_not_prove=matmul\n",
+        "intel/gpgpu: eu-frontier program_source={} command_breadcrumbs_ok={} post_walker_marker={} thread_dispatch_delta={} store_expected=0x{:08X} store_target_slot={} store_target_value=0x{:08X} store_hits_mask_lo64=0x{:016X} eot_retired={} frontier={} next={}\n",
+        proof.program_name,
+        breadcrumbs_ok as u8,
+        post_walker_marker_retired as u8,
+        proof.dispatch_delta,
+        GPU_PROGRAM_SHARED_RAM_WRITE_EXPECTED,
+        RESULT_SLOT_GPGPU_EU_C_STORE_DWORD,
+        proof.c_value,
+        proof.expected_hits_mask,
+        eot_only_retired as u8,
+        failure_class,
+        next,
+    );
+    crate::log!(
+        "intel/gpgpu: gpu-program-proof program_source={} expects_store={} start_submitted={} finished={} finish_marker=0x{:08X} finish_expected=0x{:08X} starts_before={} starts_after={} starts_delta={} start_command_bytes=0x{:X} gpu_program_started={} shared_ram_slot={} shared_ram_value=0x{:08X} shared_ram_expected=0x{:08X} wrote_shared_ram={} store_landed_anywhere={} eot_retired={} command_breadcrumbs_ok={} post_walker_marker={} failure_class={} cpu_reads_c_back=1 backend=gfx12-gpgpu-start-command next={} does_not_prove=matmul\n",
         proof.program_name,
         proof.expects_store as u8,
         proof.submitted as u8,
@@ -1556,8 +1589,12 @@ fn log_gpgpu_compute_walker_status(proof: GpgpuComputeWalkerProof) {
         proof.c_value,
         GPU_PROGRAM_SHARED_RAM_WRITE_EXPECTED,
         proof.result_c_changed_by_eu as u8,
+        store_landed_anywhere as u8,
         eot_only_retired as u8,
+        breadcrumbs_ok as u8,
+        post_walker_marker_retired as u8,
         failure_class,
+        next,
     );
 }
 

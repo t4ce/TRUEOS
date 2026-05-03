@@ -3,7 +3,6 @@ use alloc::format;
 use alloc::string::{String as AllocString, ToString};
 use alloc::vec::Vec;
 
-use embassy_executor::Spawner;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use lumen::autograd::{Tensor, TensorRawData, no_grad};
@@ -13,16 +12,12 @@ use lumen::precision::{
     DType, PrecisionConfig, with_precision_config, with_runtime_component_dtypes,
 };
 
-use super::super::{
-    MatrixTarget, ShellBackend2, matrix_target_for_backend, print_matrix_target_line,
-    print_shell_line, set_matrix_target_active,
-};
+use super::super::{MatrixTarget, print_matrix_target_line, set_matrix_target_active};
 use super::bench::{
-    bench_cancel_requested, bench_session_finish, bench_session_start, bps_from_progress,
-    elapsed_ms_since, format_bytes, format_metric_units, format_speed,
-    online_background_worker_slots, units_per_second_from_ticks,
+    bench_cancel_requested, bench_session_finish, bps_from_progress, elapsed_ms_since,
+    format_bytes, format_metric_units, format_speed, online_background_worker_slots,
+    units_per_second_from_ticks,
 };
-use crate::shell2::CommandSessionInputResult;
 
 const LUMEN_WEIGHTS_PATH: &str = crate::r::spawn_service::BOOT_LUMEN_WEIGHTS_PATH;
 const LUMEN_TOKENIZER_PATH: &str = crate::r::spawn_service::BOOT_LUMEN_TOKENIZER_PATH;
@@ -42,7 +37,6 @@ const LUMEN_RUNTIME_MAX_ANSWER_CHARS: usize = 512;
 const LUMEN_RUNTIME_PROGRESS_TENSORS: usize = 16;
 const LUMEN_RUNTIME_EARLY_PROGRESS_TENSORS: usize = 2;
 const LUMEN_RUNTIME_HEAP_EXTRA_BYTES: usize = 512 * 1024 * 1024;
-const LUMEN_RESPONSE_LINE_CHARS: usize = 96;
 const LUMEN_PREFLIGHT_WAIT_MS: u64 = 75_000;
 const LUMEN_PREFLIGHT_POLL_MS: u64 = 250;
 const LUMEN_PREFLIGHT_LOG_MS: u64 = 2_000;
@@ -84,9 +78,7 @@ struct LumenInteractiveSession {
 
 #[derive(Clone)]
 pub(crate) struct LumenPromptRequest {
-    pub(crate) target: MatrixTarget,
     pub(crate) prompt: AllocString,
-    pub(crate) respond_to_chat: bool,
 }
 
 static LUMEN_INTERACTIVE_SESSIONS: spin::Mutex<Vec<LumenInteractiveSession>> =
@@ -125,41 +117,12 @@ fn pop_lumen_prompt(session_id: u64) -> Option<LumenPromptRequest> {
         .find(|session| session.id == session_id)?;
     let request = session.prompts.pop_front()?;
     crate::log!(
-        "lumen: prompt dequeue session={} respond_to_chat={} remaining={} bytes={}\n",
+        "lumen: prompt dequeue session={} remaining={} bytes={}\n",
         session_id,
-        request.respond_to_chat as u8,
         session.prompts.len(),
         request.prompt.len()
     );
     Some(request)
-}
-
-pub(crate) fn push_lumen_prompt(session_id: u64, target: &MatrixTarget, prompt: &str) -> bool {
-    let prompt = prompt.trim();
-    if prompt.is_empty() {
-        return true;
-    }
-    let queued = {
-        let mut sessions = LUMEN_INTERACTIVE_SESSIONS.lock();
-        let Some(session) = sessions.iter_mut().find(|session| session.id == session_id) else {
-            crate::log!("lumen: prompt enqueue missed session={}\n", session_id);
-            return false;
-        };
-        session.prompts.push_back(LumenPromptRequest {
-            target: target.clone(),
-            prompt: AllocString::from(prompt),
-            respond_to_chat: false,
-        });
-        session.prompts.len()
-    };
-    crate::log!(
-        "lumen: prompt enqueue session={} respond_to_chat=0 queued={} bytes={}\n",
-        session_id,
-        queued,
-        prompt.len()
-    );
-    LUMEN_PROMPT_SIGNAL.signal(session_id);
-    true
 }
 
 pub(crate) fn push_lumen_chat_prompt(session_id: u64, prompt: &str) -> bool {
@@ -167,8 +130,6 @@ pub(crate) fn push_lumen_chat_prompt(session_id: u64, prompt: &str) -> bool {
     if prompt.is_empty() {
         return true;
     }
-    let target =
-        crate::shell2::matrix_target_for_slot_name(crate::shell2::OUTPUT_UART1_MASK, "LUM");
     let queued = {
         let mut sessions = LUMEN_INTERACTIVE_SESSIONS.lock();
         let Some(session) = sessions.iter_mut().find(|session| session.id == session_id) else {
@@ -176,80 +137,18 @@ pub(crate) fn push_lumen_chat_prompt(session_id: u64, prompt: &str) -> bool {
             return false;
         };
         session.prompts.push_back(LumenPromptRequest {
-            target,
             prompt: AllocString::from(prompt),
-            respond_to_chat: true,
         });
         session.prompts.len()
     };
     crate::log!(
-        "lumen: prompt enqueue session={} respond_to_chat=1 queued={} bytes={}\n",
+        "lumen: prompt enqueue session={} queued={} bytes={}\n",
         session_id,
         queued,
         prompt.len()
     );
     LUMEN_PROMPT_SIGNAL.signal(session_id);
     true
-}
-
-pub(crate) fn handle_lumen_session_input(
-    session_id: u64,
-    target: &MatrixTarget,
-    submitted: &str,
-) -> Option<CommandSessionInputResult> {
-    let prompt = submitted.trim();
-    if !LUMEN_INTERACTIVE_SESSIONS
-        .lock()
-        .iter()
-        .any(|session| session.id == session_id)
-    {
-        return None;
-    }
-    if prompt.is_empty() {
-        return Some(CommandSessionInputResult::KeepRunning);
-    }
-
-    let _ = push_lumen_prompt(session_id, target, prompt);
-    print_matrix_target_line(target, "lumen: thinking...");
-    Some(CommandSessionInputResult::KeepRunning)
-}
-
-pub(crate) fn submit_lumen(spawner: &Spawner, io: &'static dyn ShellBackend2) -> Option<u64> {
-    submit_lumen_runtime(spawner, io, "lumen")
-}
-
-pub(crate) fn submit_lumenbench(spawner: &Spawner, io: &'static dyn ShellBackend2) -> Option<u64> {
-    submit_lumen_runtime(spawner, io, "bench lumen")
-}
-
-fn submit_lumen_runtime(
-    spawner: &Spawner,
-    io: &'static dyn ShellBackend2,
-    label: &str,
-) -> Option<u64> {
-    let target = matrix_target_for_backend(io);
-    let session_id = bench_session_start();
-
-    print_matrix_target_line(
-        &target,
-        format!(
-            "{}: waiting for TRUEOSFS root weights={} tokenizer={}",
-            label, LUMEN_WEIGHTS_PATH, LUMEN_TOKENIZER_PATH
-        )
-        .as_str(),
-    );
-    set_matrix_target_active(&target, true);
-    match lumenbench_task(target.clone(), session_id) {
-        Ok(token) => spawner.spawn(token),
-        Err(_) => {
-            bench_session_finish(session_id);
-            set_matrix_target_active(&target, false);
-            print_shell_line(io, format!("{}: spawn failed", label).as_str());
-            return None;
-        }
-    }
-    print_matrix_target_line(&target, format!("{}: send `q` in this slot to stop", label).as_str());
-    Some(session_id)
 }
 
 fn safetensor_shape(value: &serde_json::Value) -> Option<Vec<usize>> {
@@ -544,53 +443,6 @@ fn token_piece_to_text(piece: &str) -> AllocString {
         }
     } else {
         AllocString::from(piece)
-    }
-}
-
-fn print_lumen_response(target: &MatrixTarget, answer: &str) {
-    if answer.trim().is_empty() {
-        print_matrix_target_line(target, "lumen: <empty>");
-        return;
-    }
-
-    let mut first = true;
-    for raw_line in answer.lines() {
-        let mut line = raw_line.trim_end();
-        if line.is_empty() {
-            print_matrix_target_line(target, if first { "lumen:" } else { "" });
-            first = false;
-            continue;
-        }
-
-        while !line.is_empty() {
-            let mut end = 0usize;
-            let mut chars = 0usize;
-            let mut last_space = None;
-            for (idx, ch) in line.char_indices() {
-                if chars >= LUMEN_RESPONSE_LINE_CHARS {
-                    break;
-                }
-                if ch == ' ' {
-                    last_space = Some(idx);
-                }
-                end = idx + ch.len_utf8();
-                chars += 1;
-            }
-            if end < line.len() {
-                end = last_space.filter(|idx| *idx > 0).unwrap_or(end);
-            }
-
-            let text = line[..end].trim();
-            if !text.is_empty() {
-                if first {
-                    print_matrix_target_line(target, format!("lumen: {}", text).as_str());
-                    first = false;
-                } else {
-                    print_matrix_target_line(target, text);
-                }
-            }
-            line = line[end..].trim_start();
-        }
     }
 }
 
@@ -2143,7 +1995,7 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
         crate::r::lumen_service::mark_online(session_id);
         print_matrix_target_line(
             &task_target,
-            "lumen: ready; type a prompt, or q to stop",
+            "lumen: ready in lobby chat",
         );
         let mut idle_waits = 0u64;
         let mut last_wait_log_tick = embassy_time_driver::now();
@@ -2212,22 +2064,11 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
                         polled_jobs,
                         compute_after.queued_jobs
                     );
-                    if request.respond_to_chat {
-                        crate::r::lumen_service::submit_chat_answer(report.answer.as_str());
-                    } else {
-                        print_lumen_response(&request.target, report.answer.as_str());
-                    }
+                    crate::r::lumen_service::submit_chat_answer(report.answer.as_str());
                 }
                 Err(err) => {
                     let message = format!("prompt failed: {}", err);
-                    if request.respond_to_chat {
-                        crate::r::lumen_service::submit_chat_answer(message.as_str());
-                    } else {
-                        print_matrix_target_line(
-                            &request.target,
-                            format!("lumen: {}", message).as_str(),
-                        );
-                    }
+                    crate::r::lumen_service::submit_chat_answer(message.as_str());
                 }
             }
         }

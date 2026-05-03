@@ -30,13 +30,9 @@ const DISC_BENCH_STEP_COOLDOWN_MS: u64 = 75;
 const DISC_BENCH_READ_TIMEOUT_MS: u64 = 5_000;
 const DISC_BENCH_LOG_EACH_SUCCESS: bool = false;
 const BENCH_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
-const BENCH_MENU_ROWS: [[&str; 2]; 5] = [
+const BENCH_MENU_ROWS: [[&str; 2]; 4] = [
     ["cpu", "Run CPU-only compute benchmark"],
     ["disc [id]", "Gentle disc read throughput bench"],
-    [
-        "lumen",
-        "Compatibility alias for the local LUMEN runtime; prefer `lumen`",
-    ],
     ["net", "Run network throughput benchmark"],
     [
         "netk",
@@ -467,20 +463,6 @@ pub(crate) fn try_parse(
                 ParseOutcome::Handled
             }
         }
-        "lumen" | "model" => {
-            if args.next().is_some() {
-                print_shell_line(io, "bench lumen: usage `bench lumen`");
-                return ParseOutcome::Handled;
-            }
-            print_shell_line(io, "bench lumen: compatibility alias; prefer `lumen`");
-            if let Some(session_id) = super::bench_ai::submit_lumenbench(spawner, io) {
-                ParseOutcome::StartSession(
-                    crate::shell2::shell2_cmd::CommandSessionKind::BenchRunning(session_id),
-                )
-            } else {
-                ParseOutcome::Handled
-            }
-        }
         "disc" | "disk" => {
             let id_arg = args.next();
             if args.next().is_some() {
@@ -591,11 +573,6 @@ pub(crate) fn handle_session_input(
             }
         }
         return CommandSessionInputResult::KeepRunning;
-    }
-
-    if let Some(result) = super::bench_ai::handle_lumen_session_input(session_id, target, submitted)
-    {
-        return result;
     }
 
     print_matrix_target_line(target, "bench: running; send `q` to stop");

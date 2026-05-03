@@ -46,6 +46,7 @@ pub(crate) fn mark_offline(session_id: u64) {
     CHAT_HELLO_SESSION_ID
         .compare_exchange(session_id, 0, Ordering::AcqRel, Ordering::Acquire)
         .ok();
+    clear_pending_prompts("offline");
 }
 
 fn queue_pending_prompt(prompt: &str, reason: &str) {
@@ -57,6 +58,19 @@ fn queue_pending_prompt(prompt: &str, reason: &str) {
         pending.len(),
         prompt.len()
     );
+}
+
+fn clear_pending_prompts(reason: &str) {
+    let mut pending = PENDING_CHATROOM.lock();
+    let count = pending.len();
+    pending.clear();
+    if count != 0 {
+        crate::log!(
+            "lumen-service: cleared pending chatroom prompts reason={} count={}\n",
+            reason,
+            count
+        );
+    }
 }
 
 fn flush_pending(session_id: u64) {
@@ -242,6 +256,7 @@ pub async fn lumen_service_task() {
     SERVICE_ONLINE.store(false, Ordering::Release);
     SERVICE_SESSION_ID.store(0, Ordering::Release);
     SERVICE_OWNED_SESSION.store(0, Ordering::Release);
+    clear_pending_prompts("service-stopped");
     crate::shell2::cmds::bench::bench_session_finish(session_id);
     print_matrix_target_line(&target, "lumen-service: stopped");
 
