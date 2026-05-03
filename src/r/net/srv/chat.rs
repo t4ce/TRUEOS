@@ -173,6 +173,37 @@ fn chat_form_value(body: &[u8], key: &str, max_len: usize) -> Option<AllocString
     None
 }
 
+fn chat_json_value(body: &[u8], key: &str, max_len: usize) -> Option<AllocString> {
+    let trimmed = chat_trim_ascii_ws(body);
+    if trimmed.first() != Some(&b'{') {
+        return None;
+    }
+    let value = serde_json::from_slice::<serde_json::Value>(trimmed).ok()?;
+    let raw = value.get(key)?.as_str()?.trim();
+    let mut out = AllocString::new();
+    for ch in raw.chars() {
+        if out.len().saturating_add(ch.len_utf8()) > max_len {
+            break;
+        }
+        out.push(ch);
+    }
+    Some(out)
+}
+
+fn chat_message_value(body: &[u8], key: &str, max_len: usize) -> Option<AllocString> {
+    chat_json_value(body, key, max_len).or_else(|| chat_form_value(body, key, max_len))
+}
+
+fn chat_trim_ascii_ws(mut bytes: &[u8]) -> &[u8] {
+    while matches!(bytes.first(), Some(b' ' | b'\n' | b'\r' | b'\t')) {
+        bytes = &bytes[1..];
+    }
+    while matches!(bytes.last(), Some(b' ' | b'\n' | b'\r' | b'\t')) {
+        bytes = &bytes[..bytes.len().saturating_sub(1)];
+    }
+    bytes
+}
+
 fn chat_url_decode(raw: &str, max_len: usize) -> Option<AllocString> {
     let bytes = raw.as_bytes();
     let mut out = Vec::new();
@@ -262,13 +293,22 @@ fn maybe_submit_lumen_chat_post(method: ChatMethod, path: &str, body: &[u8], sta
     if method != ChatMethod::Post || status != 200 || !path.ends_with("/messages") {
         return;
     }
-    let Some(user) = chat_form_value(body, "user", 64) else {
+    let Some(room) = path
+        .strip_prefix("/api/rooms/")
+        .and_then(|rest| rest.strip_suffix("/messages"))
+    else {
+        return;
+    };
+    if !room.eq_ignore_ascii_case("lobby") {
+        return;
+    }
+    let Some(user) = chat_message_value(body, "user", 64) else {
         return;
     };
     if user.trim().eq_ignore_ascii_case("lumen") {
         return;
     }
-    let Some(text) = chat_form_value(body, "text", 8 * 1024) else {
+    let Some(text) = chat_message_value(body, "text", 8 * 1024) else {
         return;
     };
     if !text.to_ascii_lowercase().contains("lumen") {
@@ -279,7 +319,7 @@ fn maybe_submit_lumen_chat_post(method: ChatMethod, path: &str, body: &[u8], sta
     if crate::r::lumen_service::submit_chatroom_mention(prompt.as_str()) {
         crate::log!("chat: accepted lumen prompt via POST path={}\n", path);
     } else {
-        crate::log!("chat: deferred lumen prompt via POST path={}\n", path);
+        crate::log!("chat: lumen prompt not accepted via POST path={}\n", path);
     }
 }
 

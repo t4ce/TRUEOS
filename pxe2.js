@@ -1,26 +1,9 @@
 #!/usr/bin/env node
-/*
-  TRUEOS PXE (Router LAN) - ProxyDHCP + TFTP
-
-  - Keeps your router (e.g. FRITZ!Box) as the only DHCP server for IP leases
-  - This script only provides PXE boot info (ProxyDHCP) + TFTP service via dnsmasq
-  - Does NOT modify interface IP configuration
-
-  Usage:
-    sudo node pxe2.js
-    sudo node pxe2.js --iface <dev>
-    sudo node pxe2.js --tftp-root ./bld
-
-  Notes:
-    - Requires UEFI x86_64 PXE clients (arch=7)
-    - Ensure firewall allows UDP 67, 69, 4011 (plus TFTP data UDP ports)
-*/
 
 const fs = require("fs");
 const http = require("http");
 const path = require("path");
 const { spawn, spawnSync } = require("child_process");
-
 const BOOTFILE = "EFI/BOOT/BOOTX64.EFI";
 const LEASES = "/tmp/trueos-pxe2.leases";
 const DEFAULT_HTTP_PORT = 8080;
