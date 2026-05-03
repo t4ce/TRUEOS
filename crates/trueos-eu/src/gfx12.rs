@@ -52,7 +52,15 @@ pub static TS_EOT_R0_TO_G126: EuArtifact = EuArtifact {
     expects_store: false,
 };
 
-// Mesa brw_asm source:
+// Gfx12.0/Xe-LP Thread Spawner EOT, assembled with Mesa brw_asm for `tgl`.
+// This is the PRM path for media/GPGPU root threads launched by
+// MEDIA_INTERFACE_DESCRIPTOR_LOAD + GPGPU_WALKER on ADL-S 8086:4680.
+//
+// PRM TS_EOT descriptor contract:
+// - SFID_TS = 7 on Gfx12.0 and earlier.
+// - desc = 0x02000000: mlen 1, rlen 0, message type End Thread.
+// - send EOT control is set in the extended descriptor sideband.
+// - payload is one GRF copied from the R0 thread payload.
 //
 // mov(8)  g127<1>UD  g0<8,8,1>UD
 // send(8) nullUD     g127UD nullUD 0x02000000 0x00000000
@@ -93,6 +101,8 @@ pub static GATEWAY_EOT_R0_TO_G127: EuArtifact = EuArtifact {
     expects_store: false,
 };
 
+// Kept as an explicitly non-mainline probe: on Gfx12.5+ SFID 7 no longer means
+// Thread Spawner in the same way, so this is not the ADL-S 8086:4680 EOT path.
 pub static GATEWAY_EOT_R0_TO_G127_DG2_WORDS: [u32; 8] = [
     0x80030061, 0x7F050220, 0x00460005, 0x00000000, 0x80030931, 0x00000004, 0x30007F0C, 0x00000000,
 ];

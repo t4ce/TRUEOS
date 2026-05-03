@@ -2,8 +2,11 @@ const GPGPU_PREFLIGHT_LANES: usize = 4;
 const GPGPU_BURN_MIN_ROWS: usize = 512;
 const GPGPU_BURN_MIN_K_DIM: usize = 512;
 const GPU_PROGRAM_SHARED_RAM_WRITE_EXPECTED: u32 = trueos_eu::gfx12::STORE_SENTINEL_U32;
+// ADL-S 8086:4680 is Gfx12.0/Xe-LP.  For Mesa's GFX_VERx10 < 125 path,
+// MEDIA_INTERFACE_DESCRIPTOR_LOAD + GPGPU_WALKER dispatches media/GPGPU root
+// threads, and PRM requires their EOT send to target Thread Spawner/SFID_TS.
 const ACTIVE_GFX12_EOT_VARIANT: trueos_eu::gfx12::Gfx12EotVariant =
-    trueos_eu::gfx12::Gfx12EotVariant::GatewayR0ToG127Dg2;
+    trueos_eu::gfx12::Gfx12EotVariant::TsR0ToG127;
 
 #[derive(Copy, Clone)]
 struct GpgpuEuProgram {
@@ -607,6 +610,61 @@ fn log_gpgpu_program_contract(proof: GpgpuProgramArtifactProof) {
         proof.expects_store as u8,
         proof.expects_store as u8,
     );
+    log_gpgpu_eot_send_contract(proof.program_name, proof.program_uploaded, program);
+}
+
+fn log_gpgpu_eot_send_contract(program_name: &'static str, uploaded: bool, program: &'static [u32]) {
+    if program.len() < 4 {
+        return;
+    }
+    let send_base = program.len() - 4;
+    let send_w0 = program[send_base];
+    let send_w1 = program[send_base + 1];
+    let send_w2 = program[send_base + 2];
+    let send_w3 = program[send_base + 3];
+    let eot_bit = (send_w1 >> 2) & 1;
+    let desc_is_reg = (send_w1 >> 16) & 1;
+    let exdesc_is_reg = (send_w1 >> 17) & 1;
+    let dst_reg_file = (send_w1 >> 18) & 1;
+    let response_len = (send_w1 >> 19) & 0x1F;
+    let dst_reg_num = (send_w1 >> 24) & 0xFF;
+    let src0_mlen = (send_w2 >> 3) & 0xF;
+    let src0_reg_num = (send_w2 >> 8) & 0xFF;
+    let sfid = (send_w2 >> 28) & 0xF;
+    let dst_null_like = dst_reg_file == 0 && dst_reg_num == 0 && response_len == 0;
+    let desc_immediate = desc_is_reg == 0;
+    let exdesc_immediate = exdesc_is_reg == 0;
+    let src_in_eot_safe_window = (112..=127).contains(&src0_reg_num);
+    crate::log!(
+        "intel/gpgpu: eot-send-contract source={} uploaded={} send_word_off={} send_w0=0x{:08X} send_w1=0x{:08X} send_w2=0x{:08X} send_w3=0x{:08X} eot_bit={} desc_is_reg={} exdesc_is_reg={} desc_immediate={} exdesc_immediate={} dst_reg_file={} dst_reg_num={} response_len={} dst_null_like={} src0_g={} src0_mlen={} src_in_eot_safe_window={} sfid={} sfid_ts={} prm_rules_ok={} note=decoded-from-gfx12-send-format\n",
+        program_name,
+        uploaded as u8,
+        send_base,
+        send_w0,
+        send_w1,
+        send_w2,
+        send_w3,
+        eot_bit,
+        desc_is_reg,
+        exdesc_is_reg,
+        desc_immediate as u8,
+        exdesc_immediate as u8,
+        dst_reg_file,
+        dst_reg_num,
+        response_len,
+        dst_null_like as u8,
+        src0_reg_num,
+        src0_mlen,
+        src_in_eot_safe_window as u8,
+        sfid,
+        (sfid == 7) as u8,
+        (eot_bit == 1
+            && desc_immediate
+            && exdesc_immediate
+            && dst_null_like
+            && src_in_eot_safe_window
+            && sfid == 7) as u8,
+    );
 }
 
 fn prepare_gpgpu_store_surface_state(warm: RenderWarmState) -> GpgpuStoreSurfaceState {
@@ -1179,6 +1237,11 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     const CS_GPR1_STAMP_LO: u32 = 0xC5A0_2608;
     const IDD_OFFSET_BYTES: usize = GPGPU_WALKER_SCRATCH_OFFSET_BYTES;
     const IDD_DWORDS: usize = 8;
+    const GPGPU_VFE_MAX_THREADS: u32 = 64;
+    const GPGPU_VFE_FUSED_EU_DISPATCH_LEGACY_MODE: u32 = 1 << 6;
+    const GPGPU_INSTRUCTION_BASE: u64 = GPU_VA_DRAW_STATE_BASE;
+    const GPGPU_WALKER_SIMD8_RIGHT_MASK: u32 = 0x0000_00FF;
+    const GPGPU_WALKER_BOTTOM_MASK: u32 = 0xFFFF_FFFF;
 
     fn push(batch_dwords: &mut [u32], cursor: &mut usize, value: u32) -> Result<(), &'static str> {
         if *cursor >= batch_dwords.len() {
@@ -1300,10 +1363,14 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     {
         return Err("gpgpu-idd-scratch-exhausted");
     }
-    let kernel_gpu = GPU_VA_DRAW_STATE_BASE + GPGPU_EU_KERNEL_OFFSET_BYTES as u64;
-    batch_dwords[idd_index] = kernel_gpu as u32;
-    batch_dwords[idd_index + 1] = (kernel_gpu >> 32) as u32;
-    batch_dwords[idd_index + 2] = 0;
+    // MEDIA IDD Kernel Start Pointer is tested PRM-style: relative to the
+    // Instruction Base programmed in STATE_BASE_ADDRESS.
+    let kernel_start_pointer = GPGPU_EU_KERNEL_OFFSET_BYTES as u64;
+    batch_dwords[idd_index] = kernel_start_pointer as u32;
+    batch_dwords[idd_index + 1] = (kernel_start_pointer >> 32) as u32;
+    // PRM/Mesa-style compute IDD policy: disable thread preemption while we are
+    // probing tiny EU termination kernels, keeping exception enables unchanged.
+    batch_dwords[idd_index + 2] = 1 << 20;
     batch_dwords[idd_index + 3] = 0;
     batch_dwords[idd_index + 4] = if program.expects_store && store_surface.ready {
         (store_surface.binding_table_offset as u32) | 31
@@ -1328,7 +1395,13 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_DRAW_STATE_BASE)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
-    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
+    push_sba_address(
+        batch_dwords,
+        &mut cursor,
+        true,
+        RENDER_MOCS,
+        GPGPU_INSTRUCTION_BASE,
+    )?;
     push_sba_size(batch_dwords, &mut cursor, true, COMPUTE_SBA_SPAN_BYTES)?;
     push_sba_size(batch_dwords, &mut cursor, true, COMPUTE_SBA_SPAN_BYTES)?;
     push_sba_size(batch_dwords, &mut cursor, true, COMPUTE_SBA_SPAN_BYTES)?;
@@ -1358,7 +1431,11 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     push(batch_dwords, &mut cursor, MEDIA_VFE_STATE_CMD)?;
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
-    push(batch_dwords, &mut cursor, (223 << 16) | (2 << 8))?;
+    push(
+        batch_dwords,
+        &mut cursor,
+        (GPGPU_VFE_MAX_THREADS << 16) | (2 << 8) | GPGPU_VFE_FUSED_EU_DISPATCH_LEGACY_MODE,
+    )?;
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 2 << 16)?;
     push(batch_dwords, &mut cursor, 0)?;
@@ -1381,6 +1458,8 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
+    // SIMD8, one thread in the thread group: width/height/depth maxima all 0.
+    // This matches IDD.NumberOfThreadsInGPGPUThreadGroup = 1.
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
@@ -1390,8 +1469,8 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     push(batch_dwords, &mut cursor, 1)?;
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 1)?;
-    push(batch_dwords, &mut cursor, 0xFFFF_FFFF)?;
-    push(batch_dwords, &mut cursor, 0xFFFF_FFFF)?;
+    push(batch_dwords, &mut cursor, GPGPU_WALKER_SIMD8_RIGHT_MASK)?;
+    push(batch_dwords, &mut cursor, GPGPU_WALKER_BOTTOM_MASK)?;
     push(batch_dwords, &mut cursor, MEDIA_STATE_FLUSH_CMD)?;
     push(batch_dwords, &mut cursor, 0)?;
     push_store_marker(
@@ -1409,7 +1488,7 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
         command_bytes.max(IDD_OFFSET_BYTES + IDD_DWORDS * core::mem::size_of::<u32>());
 
     crate::log!(
-        "intel/gpgpu: compute-walker-layout program_source={} expects_store={} vfe_off=0x{:X} vfe_dw3=0x{:08X} vfe_dw5=0x{:08X} id_load_off=0x{:X} walker_off=0x{:X} walker_cmd=0x{:08X} exec_mask=0x{:08X} idd_gpu=0x{:X} idd_dw2=0x{:08X} idd_dw4=0x{:08X} idd_dw6=0x{:08X} surface_base=0x{:X} tail_off=0x{:X} cs_marker=0x{:08X} note=gen12-media-vfe-midl-gpgpu-walker\n",
+        "intel/gpgpu: compute-walker-layout program_source={} expects_store={} vfe_off=0x{:X} vfe_dw3=0x{:08X} vfe_dw5=0x{:08X} id_load_off=0x{:X} walker_off=0x{:X} walker_cmd=0x{:08X} exec_mask=0x{:08X} idd_gpu=0x{:X} idd_ksp=0x{:08X} instruction_base=0x{:X} ksp_resolves_to=0x{:X} idd_dw2=0x{:08X} idd_dw4=0x{:08X} idd_dw6=0x{:08X} surface_base=0x{:X} tail_off=0x{:X} cs_marker=0x{:08X} note=gen12-media-vfe-midl-gpgpu-walker\n",
         program.name,
         program.expects_store as u8,
         vfe_start * core::mem::size_of::<u32>(),
@@ -1420,6 +1499,9 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
         batch_dwords[walker_start],
         batch_dwords[walker_start + 13],
         GPU_VA_BATCH_BASE + IDD_OFFSET_BYTES as u64,
+        batch_dwords[idd_index],
+        GPGPU_INSTRUCTION_BASE,
+        GPGPU_INSTRUCTION_BASE + kernel_start_pointer,
         batch_dwords[idd_index + 2],
         batch_dwords[idd_index + 4],
         batch_dwords[idd_index + 6],
@@ -1520,6 +1602,15 @@ fn log_gpgpu_compute_walker_status(proof: GpgpuComputeWalkerProof) {
         eot_only_retired as u8,
         failure_class,
         next,
+    );
+    crate::log!(
+        "intel/gpgpu: started-thread-snapshot started={} command_stream_reached_walker={} threads_started={} worker_done_signal_seen={} command_after_worker_ran={} store_seen={} plain=\"gpu accepted the walker and TS counted launched EU threads; command stream is now waiting for those workers to say done before the post-walker marker can execute\"\n",
+        gpu_program_started as u8,
+        breadcrumbs_ok as u8,
+        proof.dispatch_delta,
+        eot_only_retired as u8,
+        post_walker_marker_retired as u8,
+        store_landed_anywhere as u8,
     );
     crate::log!(
         "intel/gpgpu: gpu-program-proof program_source={} expects_store={} start_submitted={} finished={} finish_marker=0x{:08X} finish_expected=0x{:08X} starts_before={} starts_after={} starts_delta={} start_command_bytes=0x{:X} gpu_program_started={} shared_ram_slot={} shared_ram_value=0x{:08X} shared_ram_expected=0x{:08X} wrote_shared_ram={} store_landed_anywhere={} eot_retired={} command_breadcrumbs_ok={} post_walker_marker={} failure_class={} cpu_reads_c_back=1 backend=gfx12-gpgpu-start-command next={} does_not_prove=matmul\n",

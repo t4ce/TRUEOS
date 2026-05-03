@@ -344,6 +344,11 @@ fn submit_warm_render_batch(
     if !completed && is_gpgpu_submit_name(submit_name) {
         let acthd = crate::intel::mmio_read(dev, RCS_RING_ACTHD);
         let acthd_batch_off = acthd.saturating_sub(GPU_VA_BATCH_BASE as u32);
+        let ipeir = crate::intel::mmio_read(dev, RCS_RING_IPEIR);
+        let ipehr = crate::intel::mmio_read(dev, RCS_RING_IPEHR);
+        let eir = crate::intel::mmio_read(dev, RCS_RING_EIR);
+        let instdone = crate::intel::mmio_read(dev, RCS_RING_INSTDONE);
+        let instpm = crate::intel::mmio_read(dev, RCS_RING_INSTPM);
         let fault_gen8 = crate::intel::mmio_read(dev, GEN8_RING_FAULT_REG);
         let fault_gen12 = crate::intel::mmio_read(dev, GEN12_RING_FAULT_REG);
         let fault_active = if fault_gen12 & 1 != 0 {
@@ -362,15 +367,42 @@ fn submit_warm_render_batch(
         let sc_instdone = crate::intel::mmio_read(dev, SC_INSTDONE);
         let sc_extra = crate::intel::mmio_read(dev, SC_INSTDONE_EXTRA);
         let sc_extra2 = crate::intel::mmio_read(dev, SC_INSTDONE_EXTRA2);
+        let acthd_hi = crate::intel::mmio_read(dev, RCS_RING_ACTHD_UDW);
+        let bbaddr_lo = crate::intel::mmio_read(dev, RCS_RING_BBADDR);
+        let bbaddr_hi = crate::intel::mmio_read(dev, RCS_RING_BBADDR_UDW);
+        let dma_fadd_lo = crate::intel::mmio_read(dev, RCS_RING_DMA_FADD);
+        let dma_fadd_hi = crate::intel::mmio_read(dev, RCS_RING_DMA_FADD_UDW);
+        let acthd64 = ((acthd_hi as u64) << 32) | acthd as u64;
+        let bbaddr64 = ((bbaddr_hi as u64) << 32) | bbaddr_lo as u64;
+        let dma_fadd64 = ((dma_fadd_hi as u64) << 32) | dma_fadd_lo as u64;
+        let bbstate = crate::intel::mmio_read(dev, RCS_RING_BBSTATE);
+        let esr = crate::intel::mmio_read(dev, RCS_RING_ESR);
+        let instps = crate::intel::mmio_read(dev, RCS_RING_INSTPS);
+        let psmi_ctl = crate::intel::mmio_read(dev, RCS_RING_PSMI_CTL);
+        let nopid = crate::intel::mmio_read(dev, RCS_RING_NOPID);
+        let tdl_thr_status0 = crate::intel::mmio_read(dev, TDL_THR_STATUS0);
+        let tdl_thr_status1 = crate::intel::mmio_read(dev, TDL_THR_STATUS1);
+        let tdl_thr_disp_count = crate::intel::mmio_read(dev, TDL_THR_DISP_COUNT);
+        let tdl_thr_pf_count = crate::intel::mmio_read(dev, TDL_THR_PF_COUNT);
+        let tdl_thr_pf_status0 = crate::intel::mmio_read(dev, TDL_THR_PF_STATUS0);
+        let tdl_thr_pf_status1 = crate::intel::mmio_read(dev, TDL_THR_PF_STATUS1);
+        let tdl_disp_threads = tdl_thr_disp_count & 0x3F;
+        let tdl_pf_threads = tdl_thr_pf_count & 0x3F;
+        let tdl_pf_canonical = (tdl_thr_pf_count >> 31) & 1;
+        let row_eu00_ss0_done = (row_instdone >> 16) & 1;
+        let row_eu00_ss1_done = (row_instdone >> 7) & 1;
+        let walker_header_seen = (ipehr & 0xFFFF_FFFF) == 0x7105_000D;
+        let eu_row_waiting = row_eu00_ss0_done == 0 || row_eu00_ss1_done == 0;
+        let cs_fault_seen = ipeir != 0 || eir != 0 || fault_valid != 0;
         crate::log!(
             "intel/render: {} gpgpu-stall-detail acthd_batch_off=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} instdone=0x{:08X} instpm=0x{:08X} fault_gen8=0x{:08X} fault_gen12=0x{:08X} fault_valid={} fault_type={} fault_srcid={} fault_engine={} fault8_data0=0x{:08X} fault8_data1=0x{:08X} fault12_data0=0x{:08X} fault12_data1=0x{:08X} error=0x{:08X} gfx_mode=0x{:08X} rcu_mode=0x{:08X} cs_debug1=0x{:08X} cs_debug2=0x{:08X} sc_instdone=0x{:08X} sc_extra=0x{:08X} sc_extra2=0x{:08X} sampler_instdone=0x{:08X} row_instdone=0x{:08X}\n",
             submit_name,
             acthd_batch_off,
-            crate::intel::mmio_read(dev, RCS_RING_IPEIR),
-            crate::intel::mmio_read(dev, RCS_RING_IPEHR),
-            crate::intel::mmio_read(dev, RCS_RING_EIR),
-            crate::intel::mmio_read(dev, RCS_RING_INSTDONE),
-            crate::intel::mmio_read(dev, RCS_RING_INSTPM),
+            ipeir,
+            ipehr,
+            eir,
+            instdone,
+            instpm,
             fault_gen8,
             fault_gen12,
             fault_valid,
@@ -393,6 +425,41 @@ fn submit_warm_render_batch(
             row_instdone,
         );
         crate::log!(
+            "intel/render: {} gpgpu-engine-snapshot acthd64=0x{:016X} bbaddr64=0x{:016X} dma_fadd64=0x{:016X} bbstate=0x{:08X} esr=0x{:08X} instps=0x{:08X} psmi_ctl=0x{:08X} nopid=0x{:08X}\n",
+            submit_name,
+            acthd64,
+            bbaddr64,
+            dma_fadd64,
+            bbstate,
+            esr,
+            instps,
+            psmi_ctl,
+            nopid,
+        );
+        crate::log!(
+            "intel/render: {} gpgpu-tdl-status thr_status0=0x{:08X} thr_status1=0x{:08X} disp_count=0x{:08X} disp_threads={} pf_count=0x{:08X} pf_threads={} pf_canonical={} pf_status0=0x{:08X} pf_status1=0x{:08X}\n",
+            submit_name,
+            tdl_thr_status0,
+            tdl_thr_status1,
+            tdl_thr_disp_count,
+            tdl_disp_threads,
+            tdl_thr_pf_count,
+            tdl_pf_threads,
+            tdl_pf_canonical,
+            tdl_thr_pf_status0,
+            tdl_thr_pf_status1,
+        );
+        crate::log!(
+            "intel/render: {} gpgpu-middle-state walker_header_seen={} cs_parked_at_walker={} eu_row_waiting={} cs_fault_seen={} row_eu00_ss0_done={} row_eu00_ss1_done={} plain=\"threads were dispatched and the command streamer is waiting at GPGPU_WALKER; public regs show EU row not done, but not per-thread GRFs\"\n",
+            submit_name,
+            walker_header_seen as u8,
+            walker_header_seen as u8,
+            eu_row_waiting as u8,
+            cs_fault_seen as u8,
+            row_eu00_ss0_done,
+            row_eu00_ss1_done,
+        );
+        crate::log!(
             "intel/render: {} gpgpu-debug-units sc_dc0_done={} sc_dc1_done={} sc_dc2_done={} sc_gw0_done={} sc_gw1_done={} sc_gw2_done={} sampler_st_done={} sampler_vafe_done={} row_tdl_done={} row_eu00_ss0_done={} row_eu00_ss1_done={} note=public-instdone-debug-not-eu-grf-dump\n",
             submit_name,
             ((sc_instdone >> 16) & 1),
@@ -404,8 +471,8 @@ fn submit_warm_render_batch(
             ((sampler_instdone >> 8) & 1),
             ((sampler_instdone >> 13) & 1),
             ((row_instdone >> 6) & 1),
-            ((row_instdone >> 16) & 1),
-            ((row_instdone >> 7) & 1),
+            row_eu00_ss0_done,
+            row_eu00_ss1_done,
         );
         let gpr = [
             read_rcs_cs_gpr(dev, 0),
