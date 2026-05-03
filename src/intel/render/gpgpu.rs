@@ -1,7 +1,9 @@
 const GPGPU_PREFLIGHT_LANES: usize = 4;
 const GPGPU_BURN_MIN_ROWS: usize = 512;
 const GPGPU_BURN_MIN_K_DIM: usize = 512;
-const GPU_PROGRAM_SHARED_RAM_WRITE_EXPECTED: u32 = RCS_EXEC_RESULT_GPGPU_EU_C_STORE_DONE;
+const GPU_PROGRAM_SHARED_RAM_WRITE_EXPECTED: u32 = trueos_eu::gfx12::STORE_SENTINEL_U32;
+const ACTIVE_GFX12_EOT_VARIANT: trueos_eu::gfx12::Gfx12EotVariant =
+    trueos_eu::gfx12::Gfx12EotVariant::GatewayR0ToG127Dg2;
 
 #[derive(Copy, Clone)]
 struct GpgpuEuProgram {
@@ -9,22 +11,6 @@ struct GpgpuEuProgram {
     words: &'static [u32],
     expects_store: bool,
 }
-
-// First active proof target for this machine: copy the thread payload header
-// from R0 into a high GRF payload slot, then use Mesa's GFX12/TGL Thread
-// Spawner EOT send.  8086:4680 is ADL-S GT1/UHD 770, which Mesa maps to
-// GFX12.0; do not use the GFX12.5 Gateway/COMPUTE_WALKER path here.
-// Assembled locally with Mesa brw_asm from .codex_tmp/gfx12_eot_g127.asm.
-static GPU_PROGRAM_EOT_ONLY_CODE: [u32; 8] = [
-    0x80030061,
-    0x7F050220,
-    0x00460005,
-    0x00000000,
-    0x80030131,
-    0x00000004,
-    0x70007F0C,
-    0x00000000,
-];
 
 // Legacy diagnostic dataport probe.  This hand-written EU blob is not the final
 // Burn/matmul kernel path; it is only a bounded oscilloscope for the current
@@ -45,40 +31,12 @@ static GPU_PROGRAM_SHARED_RAM_WRITE_CODE: [u32; 12] = [
     0x00C47834,
 ];
 
-// Assembled with Mesa brw_asm from:
-// .codex_tmp/gfx12_hdc1_bti34_store_eot.asm
-//
-// This follows Mesa executor's GFX12.0 write shape: hdc1 untyped surface write,
-// SIMD8, Mask = 0xe.  This variant targets BTI 0x34, which the command stream
-// binds to the CPU-readback dword surface, then attempts normal TS EOT.
-static GPU_PROGRAM_HDC1_BTI34_STORE_EOT_CODE: [u32; 20] = [
-    0x80030061,
-    0x04054660,
-    0x00000000,
-    0xC0DE7733,
-    0x80030061,
-    0x7F054220,
-    0x00000000,
-    0x00000000,
-    0x00030131,
-    0x00000000,
-    0xCC687F0C,
-    0x009A040C,
-    0x80030061,
-    0x7F050220,
-    0x00460005,
-    0x00000000,
-    0x80030131,
-    0x00000004,
-    0x70007F0C,
-    0x00000000,
-];
-
 fn selected_gpgpu_eu_program() -> GpgpuEuProgram {
+    let artifact = trueos_eu::gfx12::eot_artifact(ACTIVE_GFX12_EOT_VARIANT);
     GpgpuEuProgram {
-        name: "gfx12-hdc1-bti34-store-then-ts-eot",
-        words: &GPU_PROGRAM_HDC1_BTI34_STORE_EOT_CODE,
-        expects_store: true,
+        name: artifact.name,
+        words: artifact.words,
+        expects_store: artifact.expects_store,
     }
 }
 
@@ -90,8 +48,8 @@ fn gpgpu_store_eot_program() -> GpgpuEuProgram {
     }
 }
 
-const GPGPU_C_STORE_KERNEL_SEND_DWORD: usize = 11;
-const GPGPU_C_STORE_KERNEL_IMM_DWORD: usize = 3;
+const GPGPU_C_STORE_KERNEL_SEND_DWORD: usize = trueos_eu::gfx12::HDC1_BTI34_STORE_SEND_DWORD;
+const GPGPU_C_STORE_KERNEL_IMM_DWORD: usize = trueos_eu::gfx12::HDC1_BTI34_STORE_IMM_DWORD;
 const GPGPU_STORE_BINDING_TABLE_OFFSET_BYTES: usize = 0x3400;
 const GPGPU_STORE_SURFACE_STATE_OFFSET_BYTES: usize = 0x3500;
 const GPGPU_STORE_BINDING_TABLE_INDEX: usize = 0x34;
@@ -194,8 +152,7 @@ pub(crate) fn submit_gpgpu_preflight_once() {
         || warm.batch_len == 0
         || warm.vertex_len < GPGPU_PREFLIGHT_LANES * core::mem::size_of::<u32>()
         || warm.streamout_len < GPGPU_PREFLIGHT_LANES * core::mem::size_of::<u32>()
-        || warm.result_len
-            < (RESULT_SLOT_GPGPU_EU_C_STORE_DWORD + 1) * core::mem::size_of::<u32>()
+        || warm.result_len < (RESULT_SLOT_GPGPU_EU_C_STORE_DWORD + 1) * core::mem::size_of::<u32>()
     {
         crate::log!("intel/gpgpu: preflight skipped reason=warm-buffers\n");
         return;
@@ -689,8 +646,9 @@ fn prepare_gpgpu_store_surface_state(warm: RenderWarmState) -> GpgpuStoreSurface
     let binding_entry = GPGPU_STORE_SURFACE_STATE_OFFSET_BYTES as u32;
     let surface_dword0 = (SURFTYPE_BUFFER << 29) | (SURFACE_FORMAT_RAW << 18);
     unsafe {
-        let binding_table =
-            warm.draw_state_virt.add(GPGPU_STORE_BINDING_TABLE_OFFSET_BYTES) as *mut u32;
+        let binding_table = warm
+            .draw_state_virt
+            .add(GPGPU_STORE_BINDING_TABLE_OFFSET_BYTES) as *mut u32;
         for index in 0..GPGPU_STORE_BINDING_TABLE_ENTRIES {
             core::ptr::write_volatile(binding_table.add(index), binding_entry);
         }
@@ -709,11 +667,17 @@ fn prepare_gpgpu_store_surface_state(warm: RenderWarmState) -> GpgpuStoreSurface
         core::ptr::write_volatile(surface.add(9), (target_gpu >> 32) as u32);
     }
     crate::intel::dma_flush(
-        unsafe { warm.draw_state_virt.add(GPGPU_STORE_BINDING_TABLE_OFFSET_BYTES) },
+        unsafe {
+            warm.draw_state_virt
+                .add(GPGPU_STORE_BINDING_TABLE_OFFSET_BYTES)
+        },
         binding_table_bytes,
     );
     crate::intel::dma_flush(
-        unsafe { warm.draw_state_virt.add(GPGPU_STORE_SURFACE_STATE_OFFSET_BYTES) },
+        unsafe {
+            warm.draw_state_virt
+                .add(GPGPU_STORE_SURFACE_STATE_OFFSET_BYTES)
+        },
         surface_bytes,
     );
     crate::log!(
@@ -1044,13 +1008,7 @@ fn encode_gfx125_compute_walker_probe_batch(
     push(batch_dwords, &mut cursor, STATE_BASE_ADDRESS_CMD)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
     push(batch_dwords, &mut cursor, RENDER_MOCS << 16)?;
-    push_sba_address(
-        batch_dwords,
-        &mut cursor,
-        true,
-        RENDER_MOCS,
-        GPU_VA_DRAW_STATE_BASE,
-    )?;
+    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_DRAW_STATE_BASE)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
@@ -1367,13 +1325,7 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     push(batch_dwords, &mut cursor, STATE_BASE_ADDRESS_CMD)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
     push(batch_dwords, &mut cursor, RENDER_MOCS << 16)?;
-    push_sba_address(
-        batch_dwords,
-        &mut cursor,
-        true,
-        RENDER_MOCS,
-        GPU_VA_DRAW_STATE_BASE,
-    )?;
+    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_DRAW_STATE_BASE)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
@@ -1423,11 +1375,7 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     push(batch_dwords, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD)?;
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, (IDD_DWORDS * core::mem::size_of::<u32>()) as u32)?;
-    push(
-        batch_dwords,
-        &mut cursor,
-        (GPU_VA_BATCH_BASE + IDD_OFFSET_BYTES as u64) as u32,
-    )?;
+    push(batch_dwords, &mut cursor, (GPU_VA_BATCH_BASE + IDD_OFFSET_BYTES as u64) as u32)?;
     let walker_start = cursor;
     push(batch_dwords, &mut cursor, GPGPU_WALKER_CMD)?;
     push(batch_dwords, &mut cursor, 0)?;
@@ -1457,7 +1405,8 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     push(batch_dwords, &mut cursor, MI_BATCH_BUFFER_END)?;
     push(batch_dwords, &mut cursor, MI_NOOP)?;
     let command_bytes = cursor * core::mem::size_of::<u32>();
-    let batch_bytes = command_bytes.max(IDD_OFFSET_BYTES + IDD_DWORDS * core::mem::size_of::<u32>());
+    let batch_bytes =
+        command_bytes.max(IDD_OFFSET_BYTES + IDD_DWORDS * core::mem::size_of::<u32>());
 
     crate::log!(
         "intel/gpgpu: compute-walker-layout program_source={} expects_store={} vfe_off=0x{:X} vfe_dw3=0x{:08X} vfe_dw5=0x{:08X} id_load_off=0x{:X} walker_off=0x{:X} walker_cmd=0x{:08X} exec_mask=0x{:08X} idd_gpu=0x{:X} idd_dw2=0x{:08X} idd_dw4=0x{:08X} idd_dw6=0x{:08X} surface_base=0x{:X} tail_off=0x{:X} cs_marker=0x{:08X} note=gen12-media-vfe-midl-gpgpu-walker\n",
