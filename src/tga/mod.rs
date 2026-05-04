@@ -1,4 +1,4 @@
-use core::ptr::{NonNull, write_volatile};
+use core::ptr::{NonNull, read_volatile, write_volatile};
 use core::sync::atomic::{AtomicU32, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
@@ -14,7 +14,21 @@ const TGA_EXPECTED_BAR0_SIZE: u64 = 1024; // 1 KiB
 // - BAR0 + 0x00 is a 32-bit LED bitfield
 //   - bit0..bit5: usr_led0..usr_led5
 //   - other bits ignored
+// - BAR0 + 0x28 starts the tiny ADD unit after ARG0/ARG1 are written
+//   - RESULT becomes ARG0 + ARG1, STATUS.DONE is set, RETIRE_COUNT increments
 const TGA_LED_SET_OFF: usize = 0x00;
+const TGA_ADD_STATUS_OFF: usize = 0x24;
+const TGA_ADD_CMD_OFF: usize = 0x28;
+const TGA_ADD_ARG0_OFF: usize = 0x2C;
+const TGA_ADD_ARG1_OFF: usize = 0x30;
+const TGA_ADD_RESULT_OFF: usize = 0x34;
+const TGA_ADD_RETIRE_COUNT_OFF: usize = 0x38;
+const TGA_ADD_ERROR_OFF: usize = 0x3C;
+
+const TGA_CMD_ADD_U32: u32 = 1;
+const TGA_STATUS_BUSY: u32 = 1 << 0;
+const TGA_STATUS_DONE: u32 = 1 << 1;
+const TGA_ADD_POLL_LIMIT: usize = 10_000;
 
 struct Tga {
     bus: u8,
@@ -26,6 +40,13 @@ struct Tga {
     bar_assigned_by_os: bool,
     mmio_base: usize,
     led_reg: usize,
+    add_status_reg: usize,
+    add_cmd_reg: usize,
+    add_arg0_reg: usize,
+    add_arg1_reg: usize,
+    add_result_reg: usize,
+    add_retire_count_reg: usize,
+    add_error_reg: usize,
 }
 
 #[derive(Copy, Clone)]
@@ -43,10 +64,72 @@ struct TgaHotplugSnapshot {
 // Safety: `Tga` contains an MMIO pointer and is always accessed behind the `TGA` mutex.
 unsafe impl Send for Tga {}
 
+#[derive(Copy, Clone)]
+pub struct TgaAddProof {
+    pub a: u32,
+    pub b: u32,
+    pub expected: u32,
+    pub result: u32,
+    pub status: u32,
+    pub retire_count: u32,
+    pub error: u32,
+    pub polls: usize,
+    pub done: bool,
+    pub ok: bool,
+}
+
 impl Tga {
     #[inline(always)]
     fn write_led(&self, value: u32) {
         unsafe { write_volatile(self.led_reg as *mut u32, value) };
+    }
+
+    #[inline(always)]
+    fn read_reg(reg: usize) -> u32 {
+        unsafe { read_volatile(reg as *const u32) }
+    }
+
+    #[inline(always)]
+    fn write_reg(reg: usize, value: u32) {
+        unsafe { write_volatile(reg as *mut u32, value) };
+    }
+
+    fn add_u32(&self, a: u32, b: u32) -> TgaAddProof {
+        let expected = a.wrapping_add(b);
+
+        Self::write_reg(self.add_status_reg, 0);
+        Self::write_reg(self.add_arg0_reg, a);
+        Self::write_reg(self.add_arg1_reg, b);
+        Self::write_reg(self.add_cmd_reg, TGA_CMD_ADD_U32);
+
+        let mut status = 0;
+        let mut polls = 0usize;
+        while polls < TGA_ADD_POLL_LIMIT {
+            status = Self::read_reg(self.add_status_reg);
+            if (status & TGA_STATUS_DONE) != 0 && (status & TGA_STATUS_BUSY) == 0 {
+                break;
+            }
+            polls += 1;
+        }
+
+        let result = Self::read_reg(self.add_result_reg);
+        let retire_count = Self::read_reg(self.add_retire_count_reg);
+        let error = Self::read_reg(self.add_error_reg);
+        let done = (status & TGA_STATUS_DONE) != 0 && (status & TGA_STATUS_BUSY) == 0;
+        let ok = done && result == expected && error == 0;
+
+        TgaAddProof {
+            a,
+            b,
+            expected,
+            result,
+            status,
+            retire_count,
+            error,
+            polls,
+            done,
+            ok,
+        }
     }
 }
 
@@ -256,6 +339,25 @@ pub fn tga_led_set(on: bool) {
     tga_led_write(if on { 1 } else { 0 });
 }
 
+pub fn tga_add_u32(a: u32, b: u32) -> Option<TgaAddProof> {
+    let guard = TGA.lock();
+    let proof = guard.as_ref()?.add_u32(a, b);
+    crate::log!(
+        "tga: add-proof a=0x{:08X} b=0x{:08X} result=0x{:08X} expected=0x{:08X} ok={} done={} polls={} status=0x{:08X} retire={} error=0x{:08X}\n",
+        proof.a,
+        proof.b,
+        proof.result,
+        proof.expected,
+        proof.ok as u8,
+        proof.done as u8,
+        proof.polls,
+        proof.status,
+        proof.retire_count,
+        proof.error
+    );
+    Some(proof)
+}
+
 pub fn try_init() -> bool {
     if is_online() {
         return true;
@@ -301,6 +403,7 @@ pub fn try_init() -> bool {
     *TGA.lock() = Some(tga);
     // Keep contract explicit: default to LED off.
     tga_led_set(false);
+    let _ = tga_add_u32(0x1234_5678, 0x1111_2222);
     true
 }
 
@@ -460,6 +563,13 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
 
     let base = mapped.as_ptr() as usize;
     let led_reg = base + TGA_LED_SET_OFF;
+    let add_status_reg = base + TGA_ADD_STATUS_OFF;
+    let add_cmd_reg = base + TGA_ADD_CMD_OFF;
+    let add_arg0_reg = base + TGA_ADD_ARG0_OFF;
+    let add_arg1_reg = base + TGA_ADD_ARG1_OFF;
+    let add_result_reg = base + TGA_ADD_RESULT_OFF;
+    let add_retire_count_reg = base + TGA_ADD_RETIRE_COUNT_OFF;
+    let add_error_reg = base + TGA_ADD_ERROR_OFF;
 
     let cmd_after = crate::pci::config_read_u16(dev.bus, dev.slot, dev.function, 0x04);
 
@@ -486,6 +596,13 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
         bar_assigned_by_os,
         mmio_base: base,
         led_reg,
+        add_status_reg,
+        add_cmd_reg,
+        add_arg0_reg,
+        add_arg1_reg,
+        add_result_reg,
+        add_retire_count_reg,
+        add_error_reg,
     };
     tga.write_led(0);
     Some(tga)

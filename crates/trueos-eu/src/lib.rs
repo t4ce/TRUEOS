@@ -15,6 +15,7 @@ pub enum EuArtifactKind {
     ThreadSpawnerEot,
     ThreadSpawnerEotSend1,
     GatewayEot,
+    IllegalInstructionTrap,
     Hdc1BtiStoreThenThreadSpawnerEot,
 }
 
