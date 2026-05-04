@@ -16,8 +16,6 @@ pub(crate) mod format;
 mod guc;
 pub mod hda;
 mod hw_cursor;
-mod render;
-pub(crate) mod shader;
 pub(crate) mod state;
 pub(crate) mod stats;
 pub(crate) mod xelp_media2_ngin;
@@ -66,14 +64,50 @@ pub(crate) const GS_BOOTROM_MASK: u32 = 0x7F << 1;
 pub(crate) const GS_UKERNEL_MASK: u32 = 0xFF << 8;
 pub(crate) const GS_AUTH_STATUS_MASK: u32 = 0x03 << 30;
 const DISPLAY_PLANE1_BOOT_DEMO_ENABLED: bool = true;
-const RENDER_BOOT_PROBE_LOOP_ENABLED: bool = false;
-const RENDER_BOOT_PROBE_INTERVAL_MS: u64 = 250;
 const MEDIA_BOOT_DEMO_ENABLED: bool = false;
 const MEDIA_BOOT_DEMO_DELAY_MS: u64 = 5_000;
 const MEDIA_BOOT_DEMO_PREFERRED_AP_SLOT: u32 = 3;
+const GPGPU_BURN_MIN_ROWS: usize = 512;
+const GPGPU_BURN_MIN_K_DIM: usize = 512;
+const GPGPU_TILE_ROWS: usize = 256;
 
 static INIT: AtomicBool = AtomicBool::new(false);
 static CLAIMED_DEVICE: Mutex<Option<Dev>> = Mutex::new(None);
+
+#[derive(Copy, Clone, Debug)]
+pub struct RenderWarmState {
+    pub device_id: u16,
+    pub revision_id: u8,
+    pub mmio_base: usize,
+    pub mmio_len: usize,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct GpgpuPreflightStatus {
+    pub(crate) submitted: bool,
+    pub(crate) accepted: bool,
+    pub(crate) completed: bool,
+    pub(crate) guc_ready: bool,
+    pub(crate) marker: u32,
+    pub(crate) dot: u32,
+    pub(crate) sum_a: u32,
+    pub(crate) sum_b: u32,
+    pub(crate) lanes: u32,
+    pub(crate) min_burn_rows: usize,
+    pub(crate) min_burn_k_dim: usize,
+    pub(crate) arena_gpu_base: u64,
+    pub(crate) arena_bytes: usize,
+    pub(crate) tile_rows: usize,
+    pub(crate) max_tiles: usize,
+    pub(crate) enough_for_shape: bool,
+    pub(crate) eu_kernel_uploaded: bool,
+    pub(crate) eu_walker_encoded: bool,
+    pub(crate) eu_walker_submitted: bool,
+    pub(crate) eu_walker_retired: bool,
+    pub(crate) eu_dispatch_delta: u32,
+    pub(crate) eu_c_store_value: u32,
+    pub(crate) result_c_changed_by_eu: bool,
+}
 
 fn pick_media_boot_demo_spawner() -> Option<(u32, SendSpawner)> {
     let background_slots = crate::workers::background_worker_slots();
@@ -219,31 +253,12 @@ pub fn init_once() {
     if ready {
         self::guc::prove_h2g_mmio_once(dev, "boot-control-ctb-disable");
     }
-    let warm = self::render::warm_once(dev);
-    self::render::log_cursor_plane_info(warm);
-    self::render::log_sprite_plane_info(warm);
     if DISPLAY_PLANE1_BOOT_DEMO_ENABLED {
         self::display::init_primary_boot_surface(dev);
     } else {
         crate::log!("intel/display: plane1 boot demo disabled\n");
     }
-    if self::render::forcewake_render_acquire(warm) {
-        self::render::forcewake_render_sanity(warm);
-    }
-    self::render::submit_primary_triangle_once();
-    self::render::submit_gpgpu_preflight_once();
-    if RENDER_BOOT_PROBE_LOOP_ENABLED {
-        crate::log!(
-            "intel/render: scheduled periodic probe interval_ms={}\n",
-            RENDER_BOOT_PROBE_INTERVAL_MS
-        );
-        crate::wait::spawn_local_detached(async move {
-            loop {
-                Timer::after(EmbassyDuration::from_millis(RENDER_BOOT_PROBE_INTERVAL_MS)).await;
-                self::render::submit_primary_probe_periodic();
-            }
-        });
-    }
+    crate::log!("intel/render: disabled reason=render-module-removed\n");
     crate::log!("intel/media: source warmup disabled trigger=trueosfs-root-mounted\n",);
     if MEDIA_BOOT_DEMO_ENABLED {
         crate::log!("intel/media: scheduled boot demo delay_ms={}\n", MEDIA_BOOT_DEMO_DELAY_MS);
@@ -303,15 +318,44 @@ pub(crate) fn claimed_device() -> Option<Dev> {
     *CLAIMED_DEVICE.lock()
 }
 
-pub fn warm_state() -> Option<self::render::RenderWarmState> {
-    self::render::warm_state()
+pub fn warm_state() -> Option<RenderWarmState> {
+    claimed_device().map(|dev| RenderWarmState {
+        device_id: dev.device_id,
+        revision_id: dev.revision_id,
+        mmio_base: dev.mmio as usize,
+        mmio_len: dev.mmio_len,
+    })
 }
 
-pub(crate) fn gpgpu_preflight_status() -> self::render::GpgpuPreflightStatus {
-    self::render::gpgpu_preflight_status()
+pub(crate) fn gpgpu_preflight_status() -> GpgpuPreflightStatus {
+    GpgpuPreflightStatus {
+        submitted: false,
+        accepted: false,
+        completed: false,
+        guc_ready: guc_ready(),
+        marker: 0,
+        dot: 0,
+        sum_a: 0,
+        sum_b: 0,
+        lanes: 0,
+        min_burn_rows: GPGPU_BURN_MIN_ROWS,
+        min_burn_k_dim: GPGPU_BURN_MIN_K_DIM,
+        arena_gpu_base: 0,
+        arena_bytes: 0,
+        tile_rows: GPGPU_TILE_ROWS,
+        max_tiles: 0,
+        enough_for_shape: false,
+        eu_kernel_uploaded: false,
+        eu_walker_encoded: false,
+        eu_walker_submitted: false,
+        eu_walker_retired: false,
+        eu_dispatch_delta: 0,
+        eu_c_store_value: 0,
+        result_c_changed_by_eu: false,
+    }
 }
 
-pub fn guc_status(warm: self::render::RenderWarmState) -> u32 {
+pub fn guc_status(warm: RenderWarmState) -> u32 {
     self::guc::status(Dev {
         bus: 0,
         slot: 0,

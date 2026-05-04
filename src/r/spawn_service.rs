@@ -1292,7 +1292,12 @@ static TASKS: [TaskSpec; 73] = [
         &FTP_SERVER_STARTED,
         spawn_ftp_server,
     ),
-    TaskSpec::disabled("tga", 0, &TGA_TASK_STARTED, spawn_tga_task),
+    TaskSpec::enabled(
+        "tga",
+        crate::r::readiness::NET_ANY_CONFIGURED,
+        &TGA_TASK_STARTED,
+        spawn_tga_task,
+    ),
     TaskSpec::enabled_gated(
         "gfx-virgl-backend-ready",
         0,

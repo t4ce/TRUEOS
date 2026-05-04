@@ -29,6 +29,9 @@ const TGA_CMD_ADD_U32: u32 = 1;
 const TGA_STATUS_BUSY: u32 = 1 << 0;
 const TGA_STATUS_DONE: u32 = 1 << 1;
 const TGA_ADD_POLL_LIMIT: usize = 10_000;
+const TGA_BOOT_MMIO_TOUCH_ENABLED: bool = false;
+const TGA_HEARTBEAT_MMIO_ENABLED: bool = true;
+const TGA_ADD_PROOF_ON_CONNECT_ENABLED: bool = false;
 
 struct Tga {
     bus: u8,
@@ -142,6 +145,7 @@ static TGA_LAST_DISCONNECT: Mutex<Option<TgaHotplugSnapshot>> = Mutex::new(None)
 static TGA_HEARTBEAT_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 const TGA_HEARTBEAT_PERIOD_MS: u64 = 100;
+const TGA_HEARTBEAT_LOG_EVERY_WRITES: u32 = 50;
 const TGA_PRESENCE_PROBE_PERIOD_MS: u64 = 1000;
 const TGA_OFFLINE_RETRY_MS: u64 = 250;
 const TGA_PRESENCE_MISS_THRESHOLD: u8 = 10;
@@ -241,6 +245,32 @@ fn write_led_raw(value: u32) {
         return;
     };
     tga.write_led(value);
+}
+
+fn write_heartbeat_led(value: u32, count: u32) {
+    let guard = TGA.lock();
+    let Some(tga) = guard.as_ref() else {
+        return;
+    };
+    tga.write_led(value);
+    if count % TGA_HEARTBEAT_LOG_EVERY_WRITES == 0 {
+        let bus = tga.bus;
+        let slot = tga.slot;
+        let function = tga.function;
+        let bar_phys = tga.bar_phys;
+        let led_reg = tga.led_reg;
+        drop(guard);
+        crate::log!(
+            "tga: heartbeat mmio write count={} led=0x{:02X} bdf={:02X}:{:02X}.{} bar0=0x{:016X} virt=0x{:016X}\n",
+            count,
+            value,
+            bus,
+            slot,
+            function,
+            bar_phys,
+            led_reg
+        );
+    }
 }
 
 fn snapshot_from_tga(tga: &Tga) -> TgaHotplugSnapshot {
@@ -401,14 +431,18 @@ pub fn try_init() -> bool {
     }
 
     *TGA.lock() = Some(tga);
-    // Keep contract explicit: default to LED off.
-    tga_led_set(false);
-    let _ = tga_add_u32(0x1234_5678, 0x1111_2222);
+    if TGA_BOOT_MMIO_TOUCH_ENABLED {
+        // Keep contract explicit when MMIO touch is enabled: default to LED off.
+        tga_led_set(false);
+    }
+    if TGA_ADD_PROOF_ON_CONNECT_ENABLED {
+        let _ = tga_add_u32(0x1234_5678, 0x1111_2222);
+    }
     true
 }
 
 pub fn init_once() {
-    let _ = try_init();
+    crate::log!("tga: init_once deferred; task owns hotplug/probe after network readiness\n");
 }
 
 fn is_present(tga: &Tga) -> bool {
@@ -604,7 +638,9 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
         add_retire_count_reg,
         add_error_reg,
     };
-    tga.write_led(0);
+    if TGA_BOOT_MMIO_TOUCH_ENABLED {
+        tga.write_led(0);
+    }
     Some(tga)
 }
 
@@ -659,8 +695,10 @@ pub(crate) async fn tga_task() {
         }
 
         let t = TGA_HEARTBEAT_COUNTER.fetch_add(1, Ordering::Relaxed);
-        // Send 0..31 then wrap.
-        write_led_raw(t & 0x1F);
+        if TGA_HEARTBEAT_MMIO_ENABLED {
+            // Send 0..31 then wrap.
+            write_heartbeat_led(t & 0x1F, t);
+        }
 
         let now = Instant::now();
         if next_tick <= now {
