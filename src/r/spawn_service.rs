@@ -8,6 +8,10 @@ use spin::Mutex;
 use crate::r::spawn_spec::{SpawnAttempt, SpawnPlacement, TaskSpec};
 // NOTE: This file is intended to become the single source of truth for Embassy task startup.
 
+const SPAWN_SERVICE_AFTER_START_MS: u64 = 25;
+const SPAWN_SERVICE_PENDING_MS: u64 = 100;
+const SPAWN_SERVICE_IDLE_MS: u64 = 500;
+
 /// Central task orchestrator ("FSM spawn service").
 ///
 /// Ideal-world model:
@@ -444,7 +448,7 @@ fn spawn_hyper_http1_probe(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_chat_http(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_worker(spawner, |_worker_spawner| crate::r::net::srv::chat::chat_http_service_task())
+    spawn_local(spawner, |_spawner| crate::r::net::srv::chat::chat_http_service_task())
 }
 
 fn spawn_ws_time(spawner: Spawner) -> SpawnAttempt {
@@ -1261,7 +1265,7 @@ static TASKS: [TaskSpec; 73] = [
     ),
     TaskSpec::enabled(
         "chat-http",
-        crate::r::readiness::NET_V4_CONFIGURED,
+        crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
         &CHAT_HTTP_STARTED,
         spawn_chat_http,
     ),
@@ -1669,11 +1673,11 @@ pub async fn spawn_service_task(spawner: Spawner) {
                 }
             }
             let sleep_ms = if started_any {
-                10
+                SPAWN_SERVICE_AFTER_START_MS
             } else if pending == 0 {
-                250
+                SPAWN_SERVICE_IDLE_MS
             } else {
-                50
+                SPAWN_SERVICE_PENDING_MS
             };
             Timer::after(EmbassyDuration::from_millis(sleep_ms)).await;
         }

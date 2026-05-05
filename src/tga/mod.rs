@@ -1,5 +1,5 @@
 use core::ptr::{NonNull, read_volatile, write_volatile};
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
 
@@ -14,9 +14,11 @@ const TGA_EXPECTED_BAR0_SIZE: u64 = 1024; // 1 KiB
 // - BAR0 + 0x00 is a 32-bit LED bitfield
 //   - bit0..bit5: usr_led0..usr_led5
 //   - other bits ignored
+// - BAR0 + 0x20 is reserved for a future 32-bit read-only protocol magic ("TGAT")
 // - BAR0 + 0x28 starts the tiny ADD unit after ARG0/ARG1 are written
 //   - RESULT becomes ARG0 + ARG1, STATUS.DONE is set, RETIRE_COUNT increments
 const TGA_LED_SET_OFF: usize = 0x00;
+const TGA_MAGIC_OFF: usize = 0x20;
 const TGA_ADD_STATUS_OFF: usize = 0x24;
 const TGA_ADD_CMD_OFF: usize = 0x28;
 const TGA_ADD_ARG0_OFF: usize = 0x2C;
@@ -31,7 +33,11 @@ const TGA_STATUS_DONE: u32 = 1 << 1;
 const TGA_ADD_POLL_LIMIT: usize = 10_000;
 const TGA_BOOT_MMIO_TOUCH_ENABLED: bool = false;
 const TGA_HEARTBEAT_MMIO_ENABLED: bool = true;
+const TGA_READBACK_DOORBELL_ENABLED: bool = true;
 const TGA_ADD_PROOF_ON_CONNECT_ENABLED: bool = false;
+const TGA_READBACK_DOORBELL_AFTER_WRITES: u32 = 20;
+const TGA_READBACK_DOORBELL_LED_VALUE: u32 = 0x1F;
+const TGA_MAGIC_EXPECTED: u32 = 0x5453_4154;
 
 struct Tga {
     bus: u8,
@@ -43,6 +49,7 @@ struct Tga {
     bar_assigned_by_os: bool,
     mmio_base: usize,
     led_reg: usize,
+    magic_reg: usize,
     add_status_reg: usize,
     add_cmd_reg: usize,
     add_arg0_reg: usize,
@@ -143,6 +150,7 @@ static TGA_LAST_DISCONNECT: Mutex<Option<TgaHotplugSnapshot>> = Mutex::new(None)
 // Heartbeat policy: write a visible changing pattern as a "driver alive" indicator.
 // We send 0..31 (wrap) so the FPGA can display the low 5 bits.
 static TGA_HEARTBEAT_COUNTER: AtomicU32 = AtomicU32::new(0);
+static TGA_READBACK_DOORBELL_DONE: AtomicBool = AtomicBool::new(false);
 
 const TGA_HEARTBEAT_PERIOD_MS: u64 = 100;
 const TGA_HEARTBEAT_LOG_EVERY_WRITES: u32 = 50;
@@ -271,6 +279,41 @@ fn write_heartbeat_led(value: u32, count: u32) {
             led_reg
         );
     }
+}
+
+fn try_readback_doorbell(count: u32) {
+    if !TGA_READBACK_DOORBELL_ENABLED || count < TGA_READBACK_DOORBELL_AFTER_WRITES {
+        return;
+    }
+    if TGA_READBACK_DOORBELL_DONE.swap(true, Ordering::Relaxed) {
+        return;
+    }
+
+    let guard = TGA.lock();
+    let Some(tga) = guard.as_ref() else {
+        TGA_READBACK_DOORBELL_DONE.store(false, Ordering::Relaxed);
+        return;
+    };
+    let bus = tga.bus;
+    let slot = tga.slot;
+    let function = tga.function;
+    let bar_phys = tga.bar_phys;
+    let led_reg = tga.led_reg;
+    let magic_reg = tga.magic_reg;
+    tga.write_led(TGA_READBACK_DOORBELL_LED_VALUE);
+    drop(guard);
+
+    crate::log!(
+        "tga: readback-doorbell posted led=0x{:02X} future_magic_expected=0x{:08X} bdf={:02X}:{:02X}.{} bar0=0x{:016X} led_virt=0x{:016X} magic_virt=0x{:016X}\n",
+        TGA_READBACK_DOORBELL_LED_VALUE,
+        TGA_MAGIC_EXPECTED,
+        bus,
+        slot,
+        function,
+        bar_phys,
+        led_reg,
+        magic_reg
+    );
 }
 
 fn snapshot_from_tga(tga: &Tga) -> TgaHotplugSnapshot {
@@ -431,6 +474,7 @@ pub fn try_init() -> bool {
     }
 
     *TGA.lock() = Some(tga);
+    TGA_READBACK_DOORBELL_DONE.store(false, Ordering::Relaxed);
     if TGA_BOOT_MMIO_TOUCH_ENABLED {
         // Keep contract explicit when MMIO touch is enabled: default to LED off.
         tga_led_set(false);
@@ -577,7 +621,7 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
         crate::pci::enable_mem_and_bus_master(dev.bus, dev.slot, dev.function);
     }
 
-    // We only need BAR0+0, so mapping 1 page keeps it minimal.
+    // We only need the first few BAR0 registers, so mapping 1 page keeps it minimal.
     let mapped = {
         let last = *TGA_LAST_MAP.lock();
         if let Some((last_phys, last_base)) = last {
@@ -597,6 +641,7 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
 
     let base = mapped.as_ptr() as usize;
     let led_reg = base + TGA_LED_SET_OFF;
+    let magic_reg = base + TGA_MAGIC_OFF;
     let add_status_reg = base + TGA_ADD_STATUS_OFF;
     let add_cmd_reg = base + TGA_ADD_CMD_OFF;
     let add_arg0_reg = base + TGA_ADD_ARG0_OFF;
@@ -630,6 +675,7 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
         bar_assigned_by_os,
         mmio_base: base,
         led_reg,
+        magic_reg,
         add_status_reg,
         add_cmd_reg,
         add_arg0_reg,
@@ -699,6 +745,7 @@ pub(crate) async fn tga_task() {
             // Send 0..31 then wrap.
             write_heartbeat_led(t & 0x1F, t);
         }
+        try_readback_doorbell(t);
 
         let now = Instant::now();
         if next_tick <= now {

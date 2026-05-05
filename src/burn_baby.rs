@@ -2,7 +2,7 @@ extern crate alloc;
 
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 use spin::Mutex;
 
@@ -15,12 +15,27 @@ static FALLBACK_QUEUE: Mutex<VecDeque<ComputeJob>> = Mutex::new(VecDeque::new())
 static LOGGED_QUEUE_LANE: AtomicBool = AtomicBool::new(false);
 static LOGGED_POLL_LANE: AtomicBool = AtomicBool::new(false);
 #[cfg(target_arch = "x86_64")]
+static LOGGED_BF16_SIMD_PROBE: AtomicBool = AtomicBool::new(false);
+#[cfg(target_arch = "x86_64")]
+static LOGGED_BF16_DISPATCH_PLAN: AtomicBool = AtomicBool::new(false);
+#[cfg(target_arch = "x86_64")]
+static LOGGED_BF16_AVX2_LANE: AtomicBool = AtomicBool::new(false);
+#[cfg(target_arch = "x86_64")]
 static LOGGED_BF16_SSE2_LANE: AtomicBool = AtomicBool::new(false);
+#[cfg(target_arch = "x86_64")]
+static BF16_SIMD_LANE: AtomicU8 = AtomicU8::new(BF16_SIMD_LANE_UNKNOWN);
 static SUBMITTED_JOBS: AtomicU64 = AtomicU64::new(0);
 static COMPLETED_JOBS: AtomicU64 = AtomicU64::new(0);
 static POLLED_JOBS: AtomicU64 = AtomicU64::new(0);
 static POLLED_JOBS_BY_SLOT: [AtomicU64; MAX_COMPUTE_POLL_SLOTS] =
     [const { AtomicU64::new(0) }; MAX_COMPUTE_POLL_SLOTS];
+
+#[cfg(target_arch = "x86_64")]
+const BF16_SIMD_LANE_UNKNOWN: u8 = 0;
+#[cfg(target_arch = "x86_64")]
+const BF16_SIMD_LANE_AVX2_FMA: u8 = 1;
+#[cfg(target_arch = "x86_64")]
+const BF16_SIMD_LANE_SSE2: u8 = 2;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ComputeError {
@@ -112,12 +127,16 @@ pub fn recommended_chunk_rows(n_rows: usize) -> usize {
 }
 
 pub fn poll_compute_lane() -> bool {
+    let slot = crate::percpu::current_slot() as u32;
+    if !crate::workers::is_background_worker_slot(slot) {
+        return false;
+    }
+
     let job = FALLBACK_QUEUE.lock().pop_front();
     let Some(job) = job else {
         return false;
     };
 
-    let slot = crate::percpu::current_slot();
     if !LOGGED_POLL_LANE.swap(true, Ordering::AcqRel) {
         crate::log!("burn-baby: AP poll compute lane active slot={}\n", slot);
     }
@@ -192,7 +211,6 @@ pub fn matvec_rowmajor_f32(
     let mut last_wait_log = wait_start;
     while done.load(Ordering::Acquire) != submitted {
         crate::time::poll();
-        crate::runtime::poll_local_executor();
         crate::smp::poll();
         log_compute_wait_progress(&done, submitted, &mut last_wait_log, "f32");
         if !poll_compute_lane() {
@@ -234,6 +252,7 @@ pub fn matvec_rowmajor_bf16(
     }
 
     let chunks = n_rows.div_ceil(chunk_rows);
+    log_bf16_dispatch_plan(n_rows, k_dim, chunk_rows, chunks);
     if chunks <= 1 || !crate::workers::has_background_worker_slot() {
         matvec_rows_bf16(x, w_rowmajor_bf16, k_dim, out, 0, n_rows);
         return Ok(());
@@ -269,7 +288,6 @@ pub fn matvec_rowmajor_bf16(
     let mut last_wait_log = wait_start;
     while done.load(Ordering::Acquire) != submitted {
         crate::time::poll();
-        crate::runtime::poll_local_executor();
         crate::smp::poll();
         log_compute_wait_progress(&done, submitted, &mut last_wait_log, "bf16");
         if !poll_compute_lane() {
@@ -432,6 +450,20 @@ fn matvec_rows_bf16(
 ) {
     #[cfg(target_arch = "x86_64")]
     {
+        if bf16_simd_lane() == BF16_SIMD_LANE_AVX2_FMA {
+            if !LOGGED_BF16_AVX2_LANE.swap(true, Ordering::AcqRel) {
+                crate::log!(
+                    "burn-baby: bf16 matvec AVX2/FMA lane active rows={} k_dim={}\n",
+                    row_end.saturating_sub(row_start),
+                    k_dim
+                );
+            }
+            unsafe {
+                matvec_rows_bf16_avx2_fma(x, w_rowmajor_bf16, k_dim, out, row_start, row_end);
+            }
+            return;
+        }
+
         if !LOGGED_BF16_SSE2_LANE.swap(true, Ordering::AcqRel) {
             crate::log!(
                 "burn-baby: bf16 matvec SSE2 lane active rows={} k_dim={}\n",
@@ -454,6 +486,139 @@ fn matvec_rows_bf16(
             let off = idx * 2;
             let bits = u16::from_le_bytes([weights[off], weights[off + 1]]);
             acc += x[idx] * bf16_to_f32(bits);
+        }
+        out[row] = acc;
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+fn log_bf16_dispatch_plan(n_rows: usize, k_dim: usize, chunk_rows: usize, chunks: usize) {
+    if LOGGED_BF16_DISPATCH_PLAN.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    let lane = match bf16_simd_lane() {
+        BF16_SIMD_LANE_AVX2_FMA => "avx2-fma",
+        BF16_SIMD_LANE_SSE2 => "sse2",
+        _ => "unknown",
+    };
+    crate::log!(
+        "burn-baby: bf16 dispatch plan rows={} k_dim={} chunk_rows={} chunks={} workers={} lane={}\n",
+        n_rows,
+        k_dim,
+        chunk_rows,
+        chunks,
+        online_worker_count(),
+        lane
+    );
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+#[inline]
+fn log_bf16_dispatch_plan(_n_rows: usize, _k_dim: usize, _chunk_rows: usize, _chunks: usize) {}
+
+#[cfg(target_arch = "x86_64")]
+fn bf16_simd_lane() -> u8 {
+    let cached = BF16_SIMD_LANE.load(Ordering::Acquire);
+    if cached != BF16_SIMD_LANE_UNKNOWN {
+        return cached;
+    }
+
+    let status = crate::cpu::simd_status();
+    let selected = if status.avx2_fma_ready {
+        BF16_SIMD_LANE_AVX2_FMA
+    } else {
+        BF16_SIMD_LANE_SSE2
+    };
+
+    let _ = BF16_SIMD_LANE.compare_exchange(
+        BF16_SIMD_LANE_UNKNOWN,
+        selected,
+        Ordering::AcqRel,
+        Ordering::Acquire,
+    );
+
+    if !LOGGED_BF16_SIMD_PROBE.swap(true, Ordering::AcqRel) {
+        let lane = if selected == BF16_SIMD_LANE_AVX2_FMA {
+            "avx2-fma"
+        } else {
+            "sse2"
+        };
+        crate::log!(
+            "burn-baby: bf16 simd probe avx_state={} reason={} avx2_fma={} reason={} selected={}\n",
+            status.avx_state_enabled,
+            status.avx_state_reason.as_str(),
+            status.avx2_fma_ready,
+            status.avx2_fma_reason.as_str(),
+            lane
+        );
+    }
+
+    BF16_SIMD_LANE.load(Ordering::Acquire)
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma")]
+unsafe fn matvec_rows_bf16_avx2_fma(
+    x: &[f32],
+    w_rowmajor_bf16: &[u8],
+    k_dim: usize,
+    out: &mut [f32],
+    row_start: usize,
+    row_end: usize,
+) {
+    use core::arch::x86_64::{
+        __m256, __m256i, _mm_loadu_si128, _mm256_add_ps, _mm256_castsi256_ps,
+        _mm256_cvtepu16_epi32, _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_setzero_ps,
+        _mm256_slli_epi32, _mm256_storeu_ps,
+    };
+
+    #[inline(always)]
+    unsafe fn load_bf16x8_as_f32(ptr: *const u8) -> __m256 {
+        let raw = unsafe { _mm_loadu_si128(ptr.cast::<core::arch::x86_64::__m128i>()) };
+        let widened: __m256i = _mm256_cvtepu16_epi32(raw);
+        _mm256_castsi256_ps(_mm256_slli_epi32(widened, 16))
+    }
+
+    #[inline(always)]
+    unsafe fn reduce_f32x8(v: __m256) -> f32 {
+        let mut lanes = [0.0f32; 8];
+        unsafe { _mm256_storeu_ps(lanes.as_mut_ptr(), v) };
+        lanes[0] + lanes[1] + lanes[2] + lanes[3] + lanes[4] + lanes[5] + lanes[6] + lanes[7]
+    }
+
+    for row in row_start..row_end {
+        let base = row * k_dim * 2;
+        let weights = unsafe { w_rowmajor_bf16.as_ptr().add(base) };
+        let mut idx = 0usize;
+        let mut acc0 = _mm256_setzero_ps();
+        let mut acc1 = _mm256_setzero_ps();
+
+        while idx + 16 <= k_dim {
+            let x0 = unsafe { _mm256_loadu_ps(x.as_ptr().add(idx)) };
+            let x1 = unsafe { _mm256_loadu_ps(x.as_ptr().add(idx + 8)) };
+            let w0 = unsafe { load_bf16x8_as_f32(weights.add(idx * 2)) };
+            let w1 = unsafe { load_bf16x8_as_f32(weights.add((idx + 8) * 2)) };
+            acc0 = _mm256_fmadd_ps(x0, w0, acc0);
+            acc1 = _mm256_fmadd_ps(x1, w1, acc1);
+            idx += 16;
+        }
+
+        while idx + 8 <= k_dim {
+            let x0 = unsafe { _mm256_loadu_ps(x.as_ptr().add(idx)) };
+            let w0 = unsafe { load_bf16x8_as_f32(weights.add(idx * 2)) };
+            acc0 = _mm256_fmadd_ps(x0, w0, acc0);
+            idx += 8;
+        }
+
+        let mut acc = unsafe { reduce_f32x8(_mm256_add_ps(acc0, acc1)) };
+        while idx < k_dim {
+            let off = idx * 2;
+            let lo = unsafe { *weights.add(off) };
+            let hi = unsafe { *weights.add(off + 1) };
+            let bits = u16::from_le_bytes([lo, hi]);
+            acc += x[idx] * bf16_to_f32(bits);
+            idx += 1;
         }
         out[row] = acc;
     }

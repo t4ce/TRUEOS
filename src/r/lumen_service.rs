@@ -18,6 +18,7 @@ static SERVICE_LOADING: AtomicBool = AtomicBool::new(false);
 static SERVICE_ONLINE: AtomicBool = AtomicBool::new(false);
 static SERVICE_OWNED_SESSION: AtomicU64 = AtomicU64::new(0);
 static CHAT_HELLO_SESSION_ID: AtomicU64 = AtomicU64::new(0);
+static CHAT_STATEMENT_ID: AtomicU64 = AtomicU64::new(1);
 static PENDING_CHATROOM: Mutex<alloc::vec::Vec<AllocString>> = Mutex::new(alloc::vec::Vec::new());
 
 pub(crate) fn is_online() -> bool {
@@ -146,16 +147,30 @@ fn chat_message_url(port: u16, since: Option<u64>) -> AllocString {
     }
 }
 
-fn chat_post_body(user: &str, text: &str) -> AllocString {
+fn chat_post_body(user: &str, text: &str, statement: Option<&str>) -> AllocString {
     let mut body = AllocString::from("user=");
     form_push_encoded(&mut body, user);
     body.push_str("&text=");
     form_push_encoded(&mut body, text);
+    if let Some(statement) = statement {
+        body.push_str("&statement=");
+        form_push_encoded(&mut body, statement);
+    }
     body
 }
 
 fn post_chat_message(user: &str, text: &str) -> bool {
-    if crate::r::net::srv::chat::post_local_message(CHAT_ROOM, user, text) {
+    post_chat_statement(user, None, text)
+}
+
+fn post_chat_statement(user: &str, statement: Option<&str>, text: &str) -> bool {
+    let local_ok = match statement {
+        Some(statement) => crate::r::net::srv::chat::post_local_statement_volatile(
+            CHAT_ROOM, user, statement, text,
+        ),
+        None => crate::r::net::srv::chat::post_local_message_volatile(CHAT_ROOM, user, text),
+    };
+    if local_ok {
         crate::log!("lumen-service: inserted chat message user={} bytes={}\n", user, text.len());
         return true;
     }
@@ -165,7 +180,7 @@ fn post_chat_message(user: &str, text: &str) -> bool {
         return false;
     };
     let url = chat_message_url(port, None);
-    let body = chat_post_body(user, text);
+    let body = chat_post_body(user, text, statement);
     let ok = matches!(
         crate::t::block_on_io(crate::t::net::http::post_http_body_hyper(
             url.as_str(),
@@ -193,6 +208,19 @@ pub(crate) fn submit_chat_answer(answer: &str) {
     } else {
         let _ = post_chat_message(CHAT_AI_NAME, answer);
     }
+}
+
+pub(crate) fn next_chat_statement_tag() -> AllocString {
+    let id = CHAT_STATEMENT_ID.fetch_add(1, Ordering::AcqRel);
+    format!("lumen:{}", id)
+}
+
+pub(crate) fn submit_chat_statement_delta(statement: &str, delta: &str) {
+    let delta = delta.trim_start_matches('\0');
+    if delta.is_empty() {
+        return;
+    }
+    let _ = post_chat_statement(CHAT_AI_NAME, Some(statement), delta);
 }
 
 fn emit_ready_hello(session_id: u64) {
@@ -241,6 +269,10 @@ async fn lumen_chat_ready_hello_task(session_id: u64) {
 
 #[embassy_executor::task]
 pub async fn lumen_service_task() {
+    let cpu_slot = crate::percpu::current_slot();
+    let lapic_id = crate::percpu::current_lapic_id_via_cpuid();
+    crate::log!("lumen-service: task start cpu_slot={} lapic={}\n", cpu_slot, lapic_id);
+
     let target =
         crate::shell2::matrix_target_for_slot_name(crate::shell2::OUTPUT_UART1_MASK, SERVICE_SLOT);
     let session_id = crate::shell2::cmds::bench::bench_session_start();

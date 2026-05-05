@@ -31,7 +31,7 @@ const FAST_BOT_INITIAL_IO_BYTES: usize =
     crate::allcaps::storage::USB_MASS_FAST_BOT_INITIAL_IO_BYTES;
 const FAST_BOT_WRITE_MAX_IO_BYTES: usize =
     crate::allcaps::storage::USB_MASS_FAST_BOT_WRITE_MAX_IO_BYTES;
-const UAC_SKHYNIX_TEST: bool = crate::allcaps::storage::USB_MASS_UAC_SKHYNIX_TEST;
+const UAS_SKHYNIX_TEST: bool = crate::allcaps::storage::USB_MASS_UAS_SKHYNIX_TEST;
 const UAS_PROBE_THEN_BOT_FALLBACK: bool =
     crate::allcaps::storage::USB_MASS_UAS_PROBE_THEN_BOT_FALLBACK;
 
@@ -265,20 +265,35 @@ fn mass_io_profile_label(profile: MassIoProfile) -> &'static str {
     }
 }
 
+fn is_skhynix_pssd_x31(vendor_id: u16, product_id: u16) -> bool {
+    vendor_id == 0x152E && product_id == 0x7001
+}
+
+fn is_superspeed_bulk_bot(port_speed: usb_if::Speed, target: &MassTarget) -> bool {
+    matches!(port_speed, usb_if::Speed::SuperSpeed | usb_if::Speed::SuperSpeedPlus)
+        && target.bulk_in_max_packet_size >= 1024
+        && target.bulk_out_max_packet_size >= 1024
+}
+
 fn choose_mass_io_profile(
     transport_kind: mass::MassTransportKind,
+    vendor_id: u16,
+    product_id: u16,
     port_speed: usb_if::Speed,
     target: &MassTarget,
 ) -> MassIoProfile {
+    let fast_bot_capable = transport_kind == mass::MassTransportKind::Bot
+        && is_superspeed_bulk_bot(port_speed, target);
+
+    if fast_bot_capable && is_skhynix_pssd_x31(vendor_id, product_id) {
+        return MassIoProfile::FastBot;
+    }
+
     if transport_kind == mass::MassTransportKind::Bot && FORCE_CONSERVATIVE_BOT {
         return MassIoProfile::ConservativeBot;
     }
 
-    if transport_kind == mass::MassTransportKind::Bot
-        && matches!(port_speed, usb_if::Speed::SuperSpeed | usb_if::Speed::SuperSpeedPlus)
-        && target.bulk_in_max_packet_size >= 1024
-        && target.bulk_out_max_packet_size >= 1024
-    {
+    if fast_bot_capable {
         MassIoProfile::FastBot
     } else {
         MassIoProfile::ConservativeBot
@@ -952,7 +967,7 @@ pub async fn mass_storage_task(
     let mut bulk_out = bulk_out;
     let mut bulk_in = bulk_in;
     if UAS_PROBE_THEN_BOT_FALLBACK
-        && UAC_SKHYNIX_TEST
+        && UAS_SKHYNIX_TEST
         && vendor_id == 0x152E
         && product_id == 0x7001
         && uas_candidate_count != 0
@@ -1531,7 +1546,8 @@ pub(crate) async fn maybe_start_mass_storage(
     let product_id = desc.product_id;
     let topology = dev_info.topology();
     let transport_kind = mass::MassTransportKind::Bot;
-    let io_profile = choose_mass_io_profile(transport_kind, topology.port_speed, &target);
+    let io_profile =
+        choose_mass_io_profile(transport_kind, vendor_id, product_id, topology.port_speed, &target);
     let uas_candidate_count = transport_plan.uas.len().min(u8::MAX as usize) as u8;
 
     for uas in transport_plan.uas.iter() {
@@ -1570,7 +1586,7 @@ pub(crate) async fn maybe_start_mass_storage(
 
     let mut bot_fallback_device = None;
 
-    if UAC_SKHYNIX_TEST
+    if UAS_SKHYNIX_TEST
         && let Some(uas_target) =
             mass::pick_skhynix_uas_target(vendor_id, product_id, &transport_plan.uas)
     {
@@ -1589,7 +1605,7 @@ pub(crate) async fn maybe_start_mass_storage(
 
         if UAS_PROBE_THEN_BOT_FALLBACK {
             crate::log!(
-                "crabusb: mass {:04X}:{:04X} uac_skhynix preflight enabled; will fall back to bot after probe\n",
+                "crabusb: mass {:04X}:{:04X} uas-skhynix preflight enabled; will fall back to bot after probe\n",
                 vendor_id,
                 product_id
             );
@@ -1614,7 +1630,7 @@ pub(crate) async fn maybe_start_mass_storage(
                 Ok(token) => {
                     spawner.spawn(token);
                     crate::log!(
-                        "crabusb: mass {:04X}:{:04X} uac_skhynix handoff if#{} alt={} cfg={} cmd_out=0x{:02X} status_in=0x{:02X} data_in=0x{:02X} data_out=0x{:02X} transport={} profile={} speed={:?} uas_candidates={}\n",
+                        "crabusb: mass {:04X}:{:04X} uas-skhynix handoff if#{} alt={} cfg={} cmd_out=0x{:02X} status_in=0x{:02X} data_in=0x{:02X} data_out=0x{:02X} transport={} profile={} speed={:?} uas_candidates={}\n",
                         vendor_id,
                         product_id,
                         uas_target.interface_number,
@@ -1633,7 +1649,7 @@ pub(crate) async fn maybe_start_mass_storage(
                 Err(err) => {
                     unregister_active_mass_stream(active_stream);
                     crate::log!(
-                        "crabusb: mass {:04X}:{:04X} uac_skhynix spawn failed if#{} alt={}: {:?}\n",
+                        "crabusb: mass {:04X}:{:04X} uas-skhynix spawn failed if#{} alt={}: {:?}\n",
                         vendor_id,
                         product_id,
                         uas_target.interface_number,

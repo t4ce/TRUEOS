@@ -2,11 +2,13 @@ use alloc::collections::VecDeque;
 use alloc::format;
 use alloc::string::{String as AllocString, ToString};
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use lumen::autograd::{Tensor, TensorRawData, no_grad};
 use lumen::init::{ParameterInitMode, with_parameter_init_mode};
+use lumen::layers::KVCache;
 use lumen::models::{LlamaConfig, LlamaModel};
 use lumen::precision::{
     DType, PrecisionConfig, with_precision_config, with_runtime_component_dtypes,
@@ -29,10 +31,11 @@ const LUMEN_REAL_HI_LM_HEAD_CHUNK_ROWS: usize = 512;
 const LUMEN_AP_CHUNKS_PER_WORKER: usize = 4;
 const LUMEN_AP_MIN_CHUNK_ROWS: usize = 16;
 const LUMEN_AP_MAX_CHUNK_ROWS: usize = 256;
-const LUMEN_RUNTIME_MAX_SEQ_LEN: usize = 1024;
-const LUMEN_RUNTIME_MAX_NEW_TOKENS: usize = 64;
-const LUMEN_RUNTIME_SOFT_STOP_TOKENS: usize = 48;
-const LUMEN_RUNTIME_MIN_SENTENCE_TOKENS: usize = 24;
+const LUMEN_RUNTIME_MAX_SEQ_LEN: usize = 512;
+const LUMEN_RUNTIME_MAX_NEW_TOKENS: usize = 48;
+const LUMEN_RUNTIME_SOFT_STOP_TOKENS: usize = 24;
+const LUMEN_RUNTIME_MIN_SENTENCE_TOKENS: usize = 12;
+const LUMEN_RUNTIME_STREAM_TOKENS: usize = 5;
 const LUMEN_RUNTIME_MAX_ANSWER_CHARS: usize = 512;
 const LUMEN_RUNTIME_PROGRESS_TENSORS: usize = 16;
 const LUMEN_RUNTIME_EARLY_PROGRESS_TENSORS: usize = 2;
@@ -84,11 +87,16 @@ pub(crate) struct LumenPromptRequest {
 static LUMEN_INTERACTIVE_SESSIONS: spin::Mutex<Vec<LumenInteractiveSession>> =
     spin::Mutex::new(Vec::new());
 static LUMEN_PROMPT_SIGNAL: Signal<crate::wait::EmbassySpinRawMutex, u64> = Signal::new();
+static LUMEN_INFER_NEXT_ID: AtomicU64 = AtomicU64::new(1);
+static LUMEN_INFER_REQUESTS: spin::Mutex<VecDeque<LumenInferenceRequest>> =
+    spin::Mutex::new(VecDeque::new());
+static LUMEN_INFER_RESULTS: spin::Mutex<Vec<LumenInferenceResult>> = spin::Mutex::new(Vec::new());
+static LUMEN_INFER_REQUEST_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
+static LUMEN_INFER_RESULT_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
 
 #[inline]
 fn lumen_cooperate() {
     crate::time::poll();
-    crate::runtime::poll_local_executor();
     crate::smp::poll();
 }
 
@@ -391,6 +399,10 @@ fn lumen_chat_prompt(user: &str) -> AllocString {
     )
 }
 
+fn lumen_chat_next_turn_prompt(user: &str) -> AllocString {
+    format!("User: {}\nAssistant:", user.trim())
+}
+
 fn encode_prompt_lossy(prompt: &str, vocab_entries: &[(AllocString, usize)]) -> Vec<usize> {
     let normalized = normalize_prompt_for_vocab(prompt);
     let mut tokens = Vec::new();
@@ -469,7 +481,7 @@ fn tensor_from_token_ids(ids: &[usize]) -> Result<Tensor, AllocString> {
     Ok(tensor)
 }
 
-fn trim_lumen_turn_markers(answer: &str) -> AllocString {
+fn lumen_turn_marker_end(answer: &str) -> usize {
     let mut end = answer.len();
     for marker in [
         "\nUser:",
@@ -483,7 +495,11 @@ fn trim_lumen_turn_markers(answer: &str) -> AllocString {
             end = end.min(idx);
         }
     }
-    answer[..end].trim().to_string()
+    end
+}
+
+fn trim_lumen_turn_markers(answer: &str) -> AllocString {
+    answer[..lumen_turn_marker_end(answer)].trim().to_string()
 }
 
 fn lumen_answer_has_sentence_end(answer: &str) -> bool {
@@ -513,6 +529,77 @@ struct LumenGenerateReport {
     prompt_tokens: usize,
     generated_tokens: usize,
     first_token_ms: u64,
+    streamed: bool,
+}
+
+struct LumenInferenceRequest {
+    id: u64,
+    session_id: u64,
+    prompt: AllocString,
+}
+
+struct LumenInferenceResult {
+    id: u64,
+    result: Result<LumenGenerateReport, AllocString>,
+}
+
+enum LumenInferEngine {
+    Local {
+        model: LlamaModel,
+        chat_state: LumenChatState,
+    },
+    Worker,
+}
+
+struct LumenAp2Model(LlamaModel);
+
+struct LumenAp2Runtime {
+    model: LlamaModel,
+    chat_state: LumenChatState,
+}
+
+// Lumen tensors are Rc-backed, so the model is not Send by default. For this
+// worker path we transfer exclusive ownership once, then keep all model/state
+// access on the chosen AP2 executor task.
+unsafe impl Send for LumenAp2Model {}
+unsafe impl Send for LumenAp2Runtime {}
+
+impl LumenAp2Runtime {
+    fn new(model: LlamaModel) -> Self {
+        let chat_state = LumenChatState::new(&model);
+        Self { model, chat_state }
+    }
+}
+
+struct LumenChatState {
+    kv_caches: Vec<KVCache>,
+    all_tokens: Vec<usize>,
+    first_turn: bool,
+}
+
+impl LumenChatState {
+    fn new(model: &LlamaModel) -> Self {
+        let mut kv_caches = model.init_kv_caches(1);
+        model.reset_kv_caches(&mut kv_caches);
+        Self {
+            kv_caches,
+            all_tokens: Vec::new(),
+            first_turn: true,
+        }
+    }
+
+    fn reset(&mut self, model: &LlamaModel) {
+        self.all_tokens.clear();
+        model.reset_kv_caches(&mut self.kv_caches);
+        self.first_turn = true;
+    }
+
+    fn cache_len(&self) -> usize {
+        self.kv_caches
+            .first()
+            .map(|cache| cache.borrow().len)
+            .unwrap_or(0)
+    }
 }
 
 fn format_tokens_per_second(tokens: usize, elapsed_ms: u64) -> AllocString {
@@ -524,16 +611,63 @@ fn format_tokens_per_second(tokens: usize, elapsed_ms: u64) -> AllocString {
 
 fn generate_lumen_answer(
     model: &LlamaModel,
+    state: &mut LumenChatState,
     tokenizer_json: &serde_json::Value,
     vocab_entries: &[(AllocString, usize)],
     stop_ids: &[usize],
     prompt: &str,
 ) -> Result<LumenGenerateReport, AllocString> {
-    let chat_prompt = lumen_chat_prompt(prompt);
+    let chat_prompt = if state.first_turn {
+        lumen_chat_prompt(prompt)
+    } else {
+        lumen_chat_next_turn_prompt(prompt)
+    };
     let prompt_tokens = encode_prompt_lossy(chat_prompt.as_str(), vocab_entries);
     if prompt_tokens.is_empty() {
         return Err(AllocString::from("tokenizer produced no tokens"));
     }
+    if state.cache_len() == 0
+        && prompt_tokens
+            .len()
+            .saturating_add(LUMEN_RUNTIME_MAX_NEW_TOKENS)
+            .saturating_add(8)
+            >= LUMEN_RUNTIME_MAX_SEQ_LEN
+    {
+        return Err(format!(
+            "prompt too long tokens={} max_seq_len={}",
+            prompt_tokens.len(),
+            LUMEN_RUNTIME_MAX_SEQ_LEN
+        ));
+    }
+
+    let mut prompt_tokens = prompt_tokens;
+    let projected_len = state
+        .cache_len()
+        .saturating_add(prompt_tokens.len())
+        .saturating_add(LUMEN_RUNTIME_MAX_NEW_TOKENS)
+        .saturating_add(8);
+    if state.cache_len() != 0 && projected_len >= LUMEN_RUNTIME_MAX_SEQ_LEN {
+        let old_cache_len = state.cache_len();
+        crate::log!(
+            "lumen: context full; resetting conversation cache_len={} remembered_tokens={} new_prompt_tokens={} max_new_tokens={} max_seq_len={} action=new-conversation\n",
+            old_cache_len,
+            state.all_tokens.len(),
+            prompt_tokens.len(),
+            LUMEN_RUNTIME_MAX_NEW_TOKENS,
+            LUMEN_RUNTIME_MAX_SEQ_LEN
+        );
+        crate::r::lumen_service::submit_chat_answer(
+            "context size full, starting a new conversation.",
+        );
+        state.reset(model);
+
+        let fresh_prompt = lumen_chat_prompt(prompt);
+        prompt_tokens = encode_prompt_lossy(fresh_prompt.as_str(), vocab_entries);
+        if prompt_tokens.is_empty() {
+            return Err(AllocString::from("tokenizer produced no tokens"));
+        }
+    }
+
     if prompt_tokens
         .len()
         .saturating_add(LUMEN_RUNTIME_MAX_NEW_TOKENS)
@@ -547,15 +681,19 @@ fn generate_lumen_answer(
         ));
     }
 
-    let mut kv_caches = model.init_kv_caches(1);
-    model.reset_kv_caches(&mut kv_caches);
     let mut answer = AllocString::new();
     let mut generated = 0usize;
     let mut first_token_ms = 0u64;
+    let stream_statement = crate::r::lumen_service::next_chat_statement_tag();
+    let mut streamed_answer_len = 0usize;
+    let mut streamed = false;
     let generate_start = embassy_time_driver::now();
+    let prefill_start_len = state.cache_len();
+    state.all_tokens.extend_from_slice(&prompt_tokens);
     crate::log!(
-        "lumen: generation start prompt_tokens={} max_new_tokens={} max_seq_len={} prefill_mode=incremental-decode-ap note=first-token-is-prompt-ingest\n",
+        "lumen: generation start prompt_tokens={} context_tokens={} max_new_tokens={} max_seq_len={} prefill_mode=incremental-decode-ap note=first-token-is-prompt-ingest\n",
         prompt_tokens.len(),
+        prefill_start_len,
         LUMEN_RUNTIME_MAX_NEW_TOKENS,
         LUMEN_RUNTIME_MAX_SEQ_LEN
     );
@@ -567,7 +705,7 @@ fn generate_lumen_answer(
         for (idx, prompt_token) in prompt_tokens.iter().copied().enumerate() {
             lumen_cooperate();
             let input = tensor_from_token_ids(&[prompt_token])?;
-            next_token = model.forward_last_argmax(input, &mut kv_caches, 0);
+            next_token = model.forward_last_argmax(input, &mut state.kv_caches, 0);
             lumen_cooperate();
             let consumed = idx + 1;
             if consumed == 1 || consumed == prompt_tokens.len() || consumed.is_multiple_of(4) {
@@ -601,6 +739,7 @@ fn generate_lumen_answer(
                 break;
             }
             answer.push_str(token_piece_to_text(piece).as_str());
+            state.all_tokens.push(next_token);
             generated = generated.saturating_add(1);
             if generated == 1 || generated.is_multiple_of(4) {
                 crate::log!(
@@ -610,24 +749,41 @@ fn generate_lumen_answer(
                     elapsed_ms_since(generate_start)
                 );
             }
-            if answer.contains("\nUser:") || answer.contains("\nAssistant:") {
-                break;
+
+            let stop_after_emit = answer.contains("\nUser:")
+                || answer.contains("\nAssistant:")
+                || lumen_should_stop_reasonably(answer.as_str(), generated);
+            let cache_nearly_full = state
+                .kv_caches
+                .first()
+                .map(|cache| cache.borrow().len.saturating_add(2) >= LUMEN_RUNTIME_MAX_SEQ_LEN)
+                .unwrap_or(false);
+            if !stop_after_emit
+                && !cache_nearly_full
+                && generated.is_multiple_of(LUMEN_RUNTIME_STREAM_TOKENS)
+                && answer.len() > streamed_answer_len
+            {
+                crate::r::lumen_service::submit_chat_statement_delta(
+                    stream_statement.as_str(),
+                    &answer[streamed_answer_len..],
+                );
+                streamed_answer_len = answer.len();
+                streamed = true;
             }
-            if lumen_should_stop_reasonably(answer.as_str(), generated) {
+            if stop_after_emit || cache_nearly_full {
+                if !cache_nearly_full {
+                    lumen_cooperate();
+                    let input = tensor_from_token_ids(&[next_token])?;
+                    let _ = model.forward_last_argmax(input, &mut state.kv_caches, 0);
+                    lumen_cooperate();
+                }
                 break;
             }
 
             lumen_cooperate();
             let input = tensor_from_token_ids(&[next_token])?;
-            next_token = model.forward_last_argmax(input, &mut kv_caches, 0);
+            next_token = model.forward_last_argmax(input, &mut state.kv_caches, 0);
             lumen_cooperate();
-            if kv_caches
-                .first()
-                .map(|cache| cache.borrow().len.saturating_add(2) >= LUMEN_RUNTIME_MAX_SEQ_LEN)
-                .unwrap_or(false)
-            {
-                break;
-            }
         }
 
         crate::log!(
@@ -639,12 +795,103 @@ fn generate_lumen_answer(
         Ok::<(), AllocString>(())
     })?;
 
+    state.first_turn = false;
+    let visible_answer_end = lumen_turn_marker_end(answer.as_str());
+    let final_answer = trim_lumen_turn_markers(answer.as_str());
+    if streamed_answer_len == 0 {
+        if !final_answer.is_empty() {
+            crate::r::lumen_service::submit_chat_statement_delta(
+                stream_statement.as_str(),
+                final_answer.as_str(),
+            );
+            streamed = true;
+        }
+    } else if visible_answer_end > streamed_answer_len {
+        crate::r::lumen_service::submit_chat_statement_delta(
+            stream_statement.as_str(),
+            &answer[streamed_answer_len..visible_answer_end],
+        );
+        streamed = true;
+    }
+
     Ok(LumenGenerateReport {
-        answer: trim_lumen_turn_markers(answer.as_str()),
+        answer: final_answer,
         prompt_tokens: prompt_tokens.len(),
         generated_tokens: generated,
         first_token_ms,
+        streamed,
     })
+}
+
+fn submit_lumen_inference(session_id: u64, prompt: &str) -> u64 {
+    let id = LUMEN_INFER_NEXT_ID.fetch_add(1, Ordering::AcqRel);
+    LUMEN_INFER_REQUESTS.lock().push_back(LumenInferenceRequest {
+        id,
+        session_id,
+        prompt: AllocString::from(prompt),
+    });
+    LUMEN_INFER_REQUEST_WAIT.notify_one();
+    id
+}
+
+fn take_lumen_inference_result(id: u64) -> Option<Result<LumenGenerateReport, AllocString>> {
+    let mut results = LUMEN_INFER_RESULTS.lock();
+    let idx = results.iter().position(|result| result.id == id)?;
+    Some(results.remove(idx).result)
+}
+
+async fn wait_lumen_inference_result(
+    session_id: u64,
+    id: u64,
+) -> Result<LumenGenerateReport, AllocString> {
+    loop {
+        if let Some(result) = take_lumen_inference_result(id) {
+            return result;
+        }
+        if bench_cancel_requested(session_id) {
+            return Err(AllocString::from("cancelled"));
+        }
+        LUMEN_INFER_RESULT_WAIT.wait_for_event_timeout(1_000).await;
+    }
+}
+
+#[embassy_executor::task(pool_size = 1)]
+async fn lumen_inference_worker_task(
+    session_id: u64,
+    model: LumenAp2Model,
+    tokenizer_json: serde_json::Value,
+    vocab_entries: Vec<(AllocString, usize)>,
+    stop_ids: Vec<usize>,
+) {
+    let mut runtime = LumenAp2Runtime::new(model.0);
+    loop {
+        let request = {
+            let mut requests = LUMEN_INFER_REQUESTS.lock();
+            requests
+                .iter()
+                .position(|request| request.session_id == session_id)
+                .and_then(|idx| requests.remove(idx))
+        };
+        let Some(request) = request else {
+            if bench_cancel_requested(session_id) {
+                return;
+            }
+            LUMEN_INFER_REQUEST_WAIT.wait_for_event_timeout(1_000).await;
+            continue;
+        };
+        let result = generate_lumen_answer(
+            &runtime.model,
+            &mut runtime.chat_state,
+            &tokenizer_json,
+            vocab_entries.as_slice(),
+            stop_ids.as_slice(),
+            request.prompt.as_str(),
+        );
+        LUMEN_INFER_RESULTS
+            .lock()
+            .push(LumenInferenceResult { id: request.id, result });
+        LUMEN_INFER_RESULT_WAIT.notify_all();
+    }
 }
 
 fn safetensor_dtype_nbytes(dtype: &str) -> Option<usize> {
@@ -1991,6 +2238,43 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
         );
         let vocab_entries = tokenizer_vocab_entries(&tokenizer_json);
         let stop_ids = tokenizer_stop_ids(&tokenizer_json);
+        let mut infer_engine = match crate::workers::pick_background_spawner_with_slot() {
+            Some((slot, kind, spawner)) => {
+                match lumen_inference_worker_task(
+                    session_id,
+                    LumenAp2Model(model),
+                    tokenizer_json.clone(),
+                    vocab_entries.clone(),
+                    stop_ids.clone(),
+                ) {
+                    Ok(token) => {
+                        spawner.spawn(token);
+                        crate::log!(
+                            "lumen: inference worker spawned slot={} kind={} session={}\n",
+                            slot,
+                            kind,
+                            session_id
+                        );
+                        LumenInferEngine::Worker
+                    }
+                    Err(err) => {
+                        log(
+                            format!(
+                                "bench lumen: skipped; inference worker spawn failed err={:?}",
+                                err
+                            )
+                            .as_str(),
+                        );
+                        return;
+                    }
+                }
+            }
+            None => {
+                crate::log!("lumen: no AP2+ inference worker; using local fallback\n");
+                let chat_state = LumenChatState::new(&model);
+                LumenInferEngine::Local { model, chat_state }
+            }
+        };
         register_lumen_interactive_session(session_id);
         crate::r::lumen_service::mark_online(session_id);
         print_matrix_target_line(
@@ -2032,13 +2316,21 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
 
             let infer_start = embassy_time_driver::now();
             let compute_before = crate::burn_baby::stats();
-            match generate_lumen_answer(
-                &model,
-                &tokenizer_json,
-                vocab_entries.as_slice(),
-                stop_ids.as_slice(),
-                request.prompt.as_str(),
-            ) {
+            let generate_result = match &mut infer_engine {
+                LumenInferEngine::Local { model, chat_state } => generate_lumen_answer(
+                    model,
+                    chat_state,
+                    &tokenizer_json,
+                    vocab_entries.as_slice(),
+                    stop_ids.as_slice(),
+                    request.prompt.as_str(),
+                ),
+                LumenInferEngine::Worker => {
+                    let request_id = submit_lumen_inference(session_id, request.prompt.as_str());
+                    wait_lumen_inference_result(session_id, request_id).await
+                }
+            };
+            match generate_result {
                 Ok(report) => {
                     let infer_ms = elapsed_ms_since(infer_start);
                     let compute_after = crate::burn_baby::stats();
@@ -2064,7 +2356,9 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
                         polled_jobs,
                         compute_after.queued_jobs
                     );
-                    crate::r::lumen_service::submit_chat_answer(report.answer.as_str());
+                    if !report.streamed {
+                        crate::r::lumen_service::submit_chat_answer(report.answer.as_str());
+                    }
                 }
                 Err(err) => {
                     let message = format!("prompt failed: {}", err);
