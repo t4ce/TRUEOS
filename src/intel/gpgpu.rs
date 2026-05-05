@@ -2447,7 +2447,8 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     };
     const GPGPU_VFE_MAX_THREADS: u32 = 64;
     const GPGPU_VFE_URB_ENTRIES: u32 = 2;
-    const GPGPU_VFE_URB_ENTRY_ALLOCATION_32B: u32 = 0;
+    const GPGPU_VFE_FUSED_EU_DISPATCH_LEGACY_MODE: u32 = 1 << 6;
+    const GPGPU_VFE_URB_ENTRY_ALLOCATION_32B: u32 = 2;
     const GPGPU_DYNAMIC_STATE_BASE: u64 = 0;
     const IDD_DYNAMIC_OFFSET_BYTES: usize =
         GPU_VA_DRAW_STATE_BASE as usize + IDD_STATE_OFFSET_BYTES;
@@ -2468,10 +2469,10 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     const GPGPU_WALKER_BOTTOM_MASK: u32 = 0xFFFF_FFFF;
     const STATE_SIP_CMD: u32 = 0x6102_0001;
     const GPGPU_ENABLE_SIP_EXCEPTIONS: bool = false;
-    // Mesa's minimal Gfx12 executor leaves IDD DW2 at zero for the no-constants
-    // one-thread GPGPU_WALKER case.  Keep exception/preemption policy boring
-    // while proving EOT retirement.
-    const IDD_THREAD_PREEMPTION_DISABLE: u32 = 0;
+    // The repeatable stall sits at GPGPU_WALKER with no visible TDL dispatch.
+    // Restore the older active path's non-preemptible root thread policy while
+    // keeping exception/SIP routing as a separate diagnostic knob.
+    const IDD_THREAD_PREEMPTION_DISABLE: u32 = 1 << 20;
     const IDD_ILLEGAL_OPCODE_EXCEPTION_ENABLE: u32 = 1 << 13;
     const IDD_SOFTWARE_EXCEPTION_ENABLE: u32 = 1 << 7;
 
@@ -2734,7 +2735,13 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     push(batch_dwords, &mut cursor, MEDIA_VFE_STATE_CMD)?;
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
-    push(batch_dwords, &mut cursor, (GPGPU_VFE_MAX_THREADS << 16) | (GPGPU_VFE_URB_ENTRIES << 8))?;
+    push(
+        batch_dwords,
+        &mut cursor,
+        (GPGPU_VFE_MAX_THREADS << 16)
+            | (GPGPU_VFE_URB_ENTRIES << 8)
+            | GPGPU_VFE_FUSED_EU_DISPATCH_LEGACY_MODE,
+    )?;
     push(batch_dwords, &mut cursor, 0)?;
     push(
         batch_dwords,
@@ -2835,12 +2842,14 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     let bottom_lanes_consumed = (batch_dwords[walker_start + 10] & simd_mask).count_ones();
 
     crate::log!(
-        "intel/gpgpu: compute-walker-layout program_source={} expects_store={} vfe_off=0x{:X} vfe_dw3=0x{:08X} vfe_dw5=0x{:08X} curbe_present={} curbe_bytes=0x{:X} curbe_read_len_8dw={} id_load_off=0x{:X} id_load_bytes=0x{:X} idd_payload_bytes=0x{:X} walker_off=0x{:X} walker_cmd=0x{:08X} exec_mask=0x{:08X} idd_gpu=0x{:X} idd_dynamic_offset=0x{:X} idd_ksp=0x{:08X} instruction_base=0x{:X} ksp_resolves_to=0x{:X} idd_dw2=0x{:08X} idd_dw4=0x{:08X} idd_dw6=0x{:08X} surface_base=0x{:X} dynamic_state_base=0x{:X} contiguous_vfe_idd_walker={} tail_off=0x{:X} cs_marker=0x{:08X} note=idd-in-draw-state-dynamic-relative-probe\n",
+        "intel/gpgpu: compute-walker-layout program_source={} expects_store={} vfe_off=0x{:X} vfe_dw3=0x{:08X} vfe_dw5=0x{:08X} fused_eu_dispatch_legacy={} urb_entry_alloc_32b={} curbe_present={} curbe_bytes=0x{:X} curbe_read_len_8dw={} id_load_off=0x{:X} id_load_bytes=0x{:X} idd_payload_bytes=0x{:X} walker_off=0x{:X} walker_cmd=0x{:08X} exec_mask=0x{:08X} idd_gpu=0x{:X} idd_dynamic_offset=0x{:X} idd_ksp=0x{:08X} instruction_base=0x{:X} ksp_resolves_to=0x{:X} idd_dw2=0x{:08X} idd_dw4=0x{:08X} idd_dw6=0x{:08X} surface_base=0x{:X} dynamic_state_base=0x{:X} contiguous_vfe_idd_walker={} tail_off=0x{:X} cs_marker=0x{:08X} note=legacy-vfe-dispatch-with-len9-walker\n",
         program.name,
         program.expects_store as u8,
         vfe_start * core::mem::size_of::<u32>(),
         batch_dwords[vfe_start + 3],
         batch_dwords[vfe_start + 5],
+        ((batch_dwords[vfe_start + 3] & GPGPU_VFE_FUSED_EU_DISPATCH_LEGACY_MODE) != 0) as u8,
+        GPGPU_VFE_URB_ENTRY_ALLOCATION_32B,
         GPGPU_LOAD_DUMMY_CURBE as u8,
         CURBE_TOTAL_BYTES,
         CURBE_READ_LENGTH_8DW,
@@ -2865,7 +2874,7 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
         RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
     );
     crate::log!(
-        "intel/gpgpu: compute-walker-resource-contract program_source={} walker_dw2=0x{:08X} simd_size={} simd_mask_bits={} thread_width={} thread_height={} thread_depth={} walker_group_threads={} idd_threads_in_group={} group_count_matches_idd={} idd_barrier_enable={} idd_slm_size={} x_dim={} y_dim={} z_dim={} right_mask=0x{:08X} bottom_mask=0x{:08X} right_lanes_consumed={} bottom_lanes_consumed={} raw_right_mask_bits={} raw_bottom_mask_bits={} expected_hw_threads=1 probe=len9-one-group-pure-eot expected_good=post-walker-marker-or-eot-retired failure_disproves=legacy-walker-dword-layout note=one-group-simd8-mask\n",
+        "intel/gpgpu: compute-walker-resource-contract program_source={} walker_dw2=0x{:08X} simd_size={} simd_mask_bits={} thread_width={} thread_height={} thread_depth={} walker_group_threads={} idd_threads_in_group={} group_count_matches_idd={} idd_barrier_enable={} idd_slm_size={} x_dim={} y_dim={} z_dim={} right_mask=0x{:08X} bottom_mask=0x{:08X} right_lanes_consumed={} bottom_lanes_consumed={} raw_right_mask_bits={} raw_bottom_mask_bits={} expected_hw_threads=1 probe=len9-one-group-legacy-vfe expected_good=post-walker-marker-or-eot-retired failure_disproves=legacy-walker-dword-layout note=one-group-simd8-mask\n",
         program.name,
         walker_dw2,
         (walker_dw2 >> 30) & 0x3,
@@ -3014,14 +3023,20 @@ fn log_gpgpu_compute_walker_status(proof: GpgpuComputeWalkerProof) {
         failure_class,
         next,
     );
+    let started_plain = if gpu_program_started {
+        "gpu accepted the walker and TS counted launched EU threads; command stream is waiting for those workers to say done before the post-walker marker can execute"
+    } else {
+        "gpu accepted the walker and command stream is parked there; TS/TDL counters did not show launched EU threads"
+    };
     crate::log!(
-        "intel/gpgpu: started-thread-snapshot started={} command_stream_reached_walker={} threads_started={} worker_done_signal_seen={} command_after_worker_ran={} store_seen={} plain=\"gpu accepted the walker and TS counted launched EU threads; command stream is now waiting for those workers to say done before the post-walker marker can execute\"\n",
+        "intel/gpgpu: started-thread-snapshot started={} command_stream_reached_walker={} threads_started={} worker_done_signal_seen={} command_after_worker_ran={} store_seen={} plain=\"{}\"\n",
         gpu_program_started as u8,
         breadcrumbs_ok as u8,
         proof.dispatch_delta,
         eot_only_retired as u8,
         post_walker_marker_retired as u8,
         store_landed_anywhere as u8,
+        started_plain,
     );
     crate::log!(
         "intel/gpgpu: gpu-program-proof program_source={} expects_store={} start_submitted={} finished={} finish_marker=0x{:08X} finish_expected=0x{:08X} starts_before={} starts_after={} starts_delta={} start_command_bytes=0x{:X} gpu_program_started={} shared_ram_slot={} shared_ram_value=0x{:08X} shared_ram_expected=0x{:08X} wrote_shared_ram={} store_landed_anywhere={} eot_retired={} command_breadcrumbs_ok={} post_walker_marker={} failure_class={} cpu_reads_c_back=1 backend=gfx12-gpgpu-start-command next={} does_not_prove=matmul\n",

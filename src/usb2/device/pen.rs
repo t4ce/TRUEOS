@@ -720,7 +720,7 @@ fn log_transport_mismatch(rt: &UsbMassRuntime, stage: &'static str) {
     let submit = crab_usb::debug_last_submit();
     let event = crab_usb::debug_last_event();
     crate::log!(
-        "crabusb: mass {:04X}:{:04X} transport stage={} key=0x{:X} expect[ctrl={} slot={} out_ep=0x{:02X} in_ep=0x{:02X}] last_submit[dci={} dir={} len={} ptr=0x{:X}] last_event[slot={} ep={} cc={} residual={} ptr=0x{:X}]\n",
+        "crabusb: mass {:04X}:{:04X} transport stage={} key=0x{:X} expect[ctrl={} slot={} out_ep=0x{:02X} in_ep=0x{:02X}] last_submit[slot={} dci={} dir={} stream={} len={} ptr=0x{:X} ring=0x{:X}] last_event[slot={} ep={} cc={} residual={} ptr=0x{:X}]\n",
         rt.vendor_id,
         rt.product_id,
         stage,
@@ -729,10 +729,13 @@ fn log_transport_mismatch(rt: &UsbMassRuntime, stage: &'static str) {
         rt.slot_id,
         rt.bulk_out_ep,
         rt.bulk_in_ep,
+        submit.slot_id,
         submit.dci,
         submit.direction,
+        submit.stream_id,
         submit.len,
         submit.ptr,
+        submit.ring_ptr,
         event.slot_id,
         event.ep_id,
         event.completion_code,
@@ -1587,8 +1590,9 @@ pub async fn mass_storage_uas_skhynix_task(
         }
     };
     if crate::logflag::USB_MASS_UAS_ADVANCED_PROBE_LOGS {
+        let stream_cfg = crab_usb::debug_last_stream_config();
         crate::log!(
-            "crabusb: mass {:04X}:{:04X} uas-adv endpoints-open cmd_out=0x{:02X}/{} status_in=0x{:02X}/{} data_in=0x{:02X}/{} data_out=0x{:02X}/{}\n",
+            "crabusb: mass {:04X}:{:04X} uas-adv endpoints-open cmd_out=0x{:02X}/{} status_in=0x{:02X}/{} data_in=0x{:02X}/{} data_out=0x{:02X}/{} last_stream_cfg[slot={} dci={} ep=0x{:02X} count={} maxp={} burst={} mps={} ctx=0x{:X} ring1=0x{:X}]\n",
             vendor_id,
             product_id,
             target.command_out,
@@ -1598,7 +1602,16 @@ pub async fn mass_storage_uas_skhynix_task(
             target.data_in,
             target.data_in_max_packet_size,
             target.data_out,
-            target.data_out_max_packet_size
+            target.data_out_max_packet_size,
+            stream_cfg.slot_id,
+            stream_cfg.dci,
+            stream_cfg.ep_addr,
+            stream_cfg.stream_count,
+            stream_cfg.max_primary_streams,
+            stream_cfg.max_burst,
+            stream_cfg.max_packet_size,
+            stream_cfg.ctx_ptr,
+            stream_cfg.ring1_ptr
         );
     }
     drop(interface);

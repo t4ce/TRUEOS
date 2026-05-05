@@ -25,6 +25,7 @@ const UAS_IU_STATUS: u8 = 0x03;
 const UAS_IU_READ_READY: u8 = 0x06;
 const UAS_IU_WRITE_READY: u8 = 0x07;
 const UAS_STATUS_GOOD: u8 = 0x00;
+const UAS_XHCI_STREAM_COUNT: u16 = 32;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum MassTransportKind {
@@ -343,8 +344,7 @@ fn cdb_read_buffer_echo(len: usize) -> [u8; 10] {
 }
 
 fn uas_tag(tag: u32) -> u16 {
-    let tag = (tag & 0xFFFF) as u16;
-    if tag == 0 { 1 } else { tag }
+    ((tag.max(1) - 1) % u32::from(UAS_XHCI_STREAM_COUNT - 1) + 1) as u16
 }
 
 fn parse_uas_tag(iu: &[u8]) -> Option<u16> {
@@ -410,12 +410,15 @@ fn log_transport_debug(stage: &'static str) {
     let submit = crab_usb::debug_last_submit();
     let event = crab_usb::debug_last_event();
     crate::log!(
-        "crabusb: mass debug stage={} last_submit[dci={} dir={} len={} ptr=0x{:X}] last_event[slot={} ep={} cc={} residual={} ptr=0x{:X}]\n",
+        "crabusb: mass debug stage={} last_submit[slot={} dci={} dir={} stream={} len={} ptr=0x{:X} ring=0x{:X}] last_event[slot={} ep={} cc={} residual={} ptr=0x{:X}]\n",
         stage,
+        submit.slot_id,
         submit.dci,
         submit.direction,
+        submit.stream_id,
         submit.len,
         submit.ptr,
+        submit.ring_ptr,
         event.slot_id,
         event.ep_id,
         event.completion_code,
@@ -436,7 +439,7 @@ fn log_bot_transport_debug(
     let submit = crab_usb::debug_last_submit();
     let event = crab_usb::debug_last_event();
     crate::log!(
-        "crabusb: mass bot-debug stage={} cmd={} tag=0x{:08X} expect[dci={} ep=0x{:02X} dir={} len={} ptr=0x{:X}] last_submit[dci={} dir={} len={} ptr=0x{:X}] last_event[slot={} ep={} cc={} residual={} ptr=0x{:X}]\n",
+        "crabusb: mass bot-debug stage={} cmd={} tag=0x{:08X} expect[dci={} ep=0x{:02X} dir={} len={} ptr=0x{:X}] last_submit[slot={} dci={} dir={} stream={} len={} ptr=0x{:X} ring=0x{:X}] last_event[slot={} ep={} cc={} residual={} ptr=0x{:X}]\n",
         stage,
         cmd,
         tag,
@@ -445,10 +448,13 @@ fn log_bot_transport_debug(
         direction,
         len,
         ptr as usize,
+        submit.slot_id,
         submit.dci,
         submit.direction,
+        submit.stream_id,
         submit.len,
         submit.ptr,
+        submit.ring_ptr,
         event.slot_id,
         event.ep_id,
         event.completion_code,
@@ -468,15 +474,28 @@ fn log_uas_debug(stage: &'static str, cmd: &'static str, tag: u16) {
 
     let submit = crab_usb::debug_last_submit();
     let event = crab_usb::debug_last_event();
+    let stream_cfg = crab_usb::debug_last_stream_config();
     crate::log!(
-        "crabusb: mass uas-debug stage={} cmd={} tag=0x{:04X} last_submit[dci={} dir={} len={} ptr=0x{:X}] last_event[slot={} ep={} cc={} residual={} ptr=0x{:X}]\n",
+        "crabusb: mass uas-debug stage={} cmd={} tag=0x{:04X} last_submit[slot={} dci={} dir={} stream={} len={} ptr=0x{:X} ring=0x{:X}] last_stream_cfg[slot={} dci={} ep=0x{:02X} count={} maxp={} burst={} mps={} ctx=0x{:X} ring1=0x{:X}] last_event[slot={} ep={} cc={} residual={} ptr=0x{:X}]\n",
         stage,
         cmd,
         tag,
+        submit.slot_id,
         submit.dci,
         submit.direction,
+        submit.stream_id,
         submit.len,
         submit.ptr,
+        submit.ring_ptr,
+        stream_cfg.slot_id,
+        stream_cfg.dci,
+        stream_cfg.ep_addr,
+        stream_cfg.stream_count,
+        stream_cfg.max_primary_streams,
+        stream_cfg.max_burst,
+        stream_cfg.max_packet_size,
+        stream_cfg.ctx_ptr,
+        stream_cfg.ring1_ptr,
         event.slot_id,
         event.ep_id,
         event.completion_code,
@@ -911,15 +930,19 @@ async fn uas_send_command(
 async fn uas_read_iu(
     status_in: &mut EndpointBulkIn,
     cmd: &'static str,
+    stream_id: u16,
     buf: &mut [u8],
 ) -> Result<usize, MassProbeError> {
-    let got = with_timeout_or_none(status_in.submit_and_wait(buf), UAS_IO_TIMEOUT_MS)
-        .await
-        .ok_or_else(|| {
-            log_transport_debug("uas-status-timeout");
-            MassProbeError::Transport("uas-status-timeout")
-        })?
-        .map_err(|_| MassProbeError::Transport("uas-status-in"))?;
+    let got = with_timeout_or_none(
+        status_in.submit_on_stream_and_wait(stream_id, buf),
+        UAS_IO_TIMEOUT_MS,
+    )
+    .await
+    .ok_or_else(|| {
+        log_transport_debug("uas-status-timeout");
+        MassProbeError::Transport("uas-status-timeout")
+    })?
+    .map_err(|_| MassProbeError::Transport("uas-status-in"))?;
     if got < 4 {
         return Err(MassProbeError::ShortData { cmd, got, need: 4 });
     }
@@ -933,7 +956,7 @@ async fn uas_expect_ready(
     expected_iu: u8,
 ) -> Result<(), MassProbeError> {
     let mut iu = [0u8; 16];
-    let got = uas_read_iu(status_in, cmd, &mut iu).await?;
+    let got = uas_read_iu(status_in, cmd, expected_tag, &mut iu).await?;
     let iu = &iu[..got.min(iu.len())];
     let iu_id = iu[0];
     let tag = parse_uas_tag(iu).unwrap_or(0);
@@ -955,7 +978,7 @@ async fn uas_read_status(
     expected_tag: u16,
 ) -> Result<(), MassProbeError> {
     let mut status = [0u8; 96];
-    let got = uas_read_iu(status_in, cmd, &mut status).await?;
+    let got = uas_read_iu(status_in, cmd, expected_tag, &mut status).await?;
     log_uas_iu("status-iu", cmd, expected_tag, &status[..got.min(status.len())]);
     validate_uas_status(cmd, &status[..got.min(status.len())], expected_tag)
 }
@@ -972,9 +995,13 @@ async fn uas_command_in(
     let tag = uas_tag(tag);
     let mut ready_iu = [0u8; 16];
     let ready_handle = status_in
-        .submit(&mut ready_iu)
+        .submit_on_stream(tag, &mut ready_iu)
         .map_err(|_| MassProbeError::Transport("uas-status-submit"))?;
     log_uas_debug("status-submit", cmd, tag);
+    let data_handle = data_in
+        .submit_on_stream(tag, data)
+        .map_err(|_| MassProbeError::Transport("uas-data-submit"))?;
+    log_uas_debug("data-in-submit", cmd, tag);
     uas_send_command(command_out, cmd, cdb, tag).await?;
 
     let ready_got = with_timeout_or_none(ready_handle, UAS_IO_TIMEOUT_MS)
@@ -1006,14 +1033,14 @@ async fn uas_command_in(
         });
     }
 
-    log_uas_debug("data-in-submit", cmd, tag);
-    let got = with_timeout_or_none(data_in.submit_and_wait(data), UAS_IO_TIMEOUT_MS)
+    let got = with_timeout_or_none(data_handle, UAS_IO_TIMEOUT_MS)
         .await
         .ok_or_else(|| {
             log_uas_debug("data-in-timeout", cmd, tag);
             MassProbeError::Transport("uas-data-timeout")
         })?
-        .map_err(|_| MassProbeError::Transport("uas-data-in"))?;
+        .map_err(|_| MassProbeError::Transport("uas-data-in"))?
+        .transfer_len;
     log_uas_debug("data-in-complete", cmd, tag);
     uas_read_status(status_in, cmd, tag).await?;
     Ok(got)
@@ -1031,9 +1058,13 @@ async fn uas_command_out(
     let tag = uas_tag(tag);
     let mut ready_iu = [0u8; 16];
     let ready_handle = status_in
-        .submit(&mut ready_iu)
+        .submit_on_stream(tag, &mut ready_iu)
         .map_err(|_| MassProbeError::Transport("uas-status-submit"))?;
     log_uas_debug("status-submit", cmd, tag);
+    let data_handle = data_out
+        .submit_on_stream(tag, data)
+        .map_err(|_| MassProbeError::Transport("uas-data-submit"))?;
+    log_uas_debug("data-out-submit", cmd, tag);
     uas_send_command(command_out, cmd, cdb, tag).await?;
 
     let ready_got = with_timeout_or_none(ready_handle, UAS_IO_TIMEOUT_MS)
@@ -1065,13 +1096,14 @@ async fn uas_command_out(
         });
     }
 
-    let sent = with_timeout_or_none(data_out.submit_and_wait(data), UAS_IO_TIMEOUT_MS)
+    let sent = with_timeout_or_none(data_handle, UAS_IO_TIMEOUT_MS)
         .await
         .ok_or_else(|| {
             log_uas_debug("data-out-timeout", cmd, tag);
             MassProbeError::Transport("uas-data-timeout")
         })?
-        .map_err(|_| MassProbeError::Transport("uas-data-out"))?;
+        .map_err(|_| MassProbeError::Transport("uas-data-out"))?
+        .transfer_len;
     log_uas_debug("data-out-complete", cmd, tag);
     if sent != data.len() {
         return Err(MassProbeError::ShortData {
@@ -1093,7 +1125,7 @@ async fn uas_command_no_data(
     let tag = uas_tag(tag);
     let mut status = [0u8; 96];
     let status_handle = status_in
-        .submit(&mut status)
+        .submit_on_stream(tag, &mut status)
         .map_err(|_| MassProbeError::Transport("uas-status-submit"))?;
     log_uas_debug("status-submit", cmd, tag);
     uas_send_command(command_out, cmd, cdb, tag).await?;

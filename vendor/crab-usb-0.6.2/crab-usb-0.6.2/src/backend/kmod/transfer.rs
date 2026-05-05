@@ -34,6 +34,7 @@ impl Transfer {
         Self {
             kind,
             direction,
+            stream_id: 0,
             mapping,
             transfer_len: 0,
         }
