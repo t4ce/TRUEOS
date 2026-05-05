@@ -83,7 +83,6 @@ define_started_flags!(
     UI2_SWARM_DEMO_STARTED,
     UI2_SVG_DEMO_STARTED,
     UI2_TRUEOSFS_EXPLORER_DEMO_STARTED,
-    UI2_WEATHER_DEMO_STARTED,
     UI2_CURRENCY_DEMO_STARTED,
     USB_CONTROLLER_TASKS_STARTED,
     C4_BOOT_PROBE_STARTED,
@@ -125,7 +124,6 @@ define_stop_flags!(
     STOP_UI2_SHELL_DEMO,
     STOP_UI2_SWARM_DEMO,
     STOP_UI2_SVG_DEMO,
-    STOP_UI2_WEATHER_DEMO,
     STOP_UI2_CURRENCY_DEMO,
     STOP_UI2_TRUEOSFS_EXPLORER_DEMO,
 );
@@ -146,7 +144,6 @@ fn stop_flag_by_task_name(name: &str) -> Option<&'static AtomicBool> {
         "ui2-shell-demo" => Some(&STOP_UI2_SHELL_DEMO),
         "ui2-swarm-demo" => Some(&STOP_UI2_SWARM_DEMO),
         "ui2-svg-demo" => Some(&STOP_UI2_SVG_DEMO),
-        "ui2-weather-demo" => Some(&STOP_UI2_WEATHER_DEMO),
         "ui2-currency-demo" => Some(&STOP_UI2_CURRENCY_DEMO),
         "ui2-trueosfs-explorer-demo" => Some(&STOP_UI2_TRUEOSFS_EXPLORER_DEMO),
         _ => None,
@@ -860,13 +857,6 @@ fn spawn_ui2_swarm_demo(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
-fn spawn_ui2_weather_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        let _ = worker_spawner;
-        crate::tst_ui2_weather_demo::ui2_weather_demo_task()
-    })
-}
-
 fn spawn_ui2_currency_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
         let _ = worker_spawner;
@@ -1187,7 +1177,7 @@ const UI2_DEMO_READY: u32 =
 const WS_BOOT_READY: u32 = crate::r::readiness::NET_GATEWAY_REACHABLE
     | crate::r::readiness::TLS_SOCKET_SERVICE_READY
     | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
-static TASKS: [TaskSpec; 73] = [
+static TASKS: [TaskSpec; 72] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
         "globalog-persist-once",
@@ -1490,12 +1480,6 @@ static TASKS: [TaskSpec; 73] = [
         spawn_ui2_swarm_demo,
     ),
     TaskSpec::disabled("ui2-svg-demo", UI2_DEMO_READY, &UI2_SVG_DEMO_STARTED, spawn_ui2_svg_demo),
-    TaskSpec::disabled(
-        "ui2-weather-demo",
-        UI2_DEMO_READY | crate::r::readiness::NET_ANY_CONFIGURED,
-        &UI2_WEATHER_DEMO_STARTED,
-        spawn_ui2_weather_demo,
-    ),
     TaskSpec::disabled(
         "ui2-currency-demo",
         UI2_DEMO_READY | crate::r::readiness::NET_ANY_CONFIGURED,

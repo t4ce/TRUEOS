@@ -1,0 +1,8 @@
+[package]
+name = "trueos-locale"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "trueos_locale"
+path = "src/lib.rs"
