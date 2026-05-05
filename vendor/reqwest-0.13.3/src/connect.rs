@@ -696,9 +696,12 @@ impl ConnectorService {
     }
 
     /// Connect over a local transport: Unix Domain Socket (on Unix) or Windows Named Pipe (on Windows).
-    #[cfg(any(unix, target_os = "windows"))]
+    #[cfg(any(
+        all(unix, not(any(target_os = "trueos", target_os = "zkvm"))),
+        target_os = "windows"
+    ))]
     async fn connect_local_transport(self, dst: Uri) -> Result<Conn, BoxError> {
-        #[cfg(unix)]
+        #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
         let svc = {
             let path = self
                 .unix_socket
@@ -891,9 +894,12 @@ impl ConnectorService {
         self.connect_with_maybe_proxy(proxy_dst, true).await
     }
 
-    #[cfg(any(unix, target_os = "windows"))]
+    #[cfg(any(
+        all(unix, not(any(target_os = "trueos", target_os = "zkvm"))),
+        target_os = "windows"
+    ))]
     fn should_use_local_transport(&self) -> bool {
-        #[cfg(unix)]
+        #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
         return self.unix_socket.is_some();
 
         #[cfg(target_os = "windows")]
@@ -930,7 +936,10 @@ impl Service<Uri> for ConnectorService {
         let timeout = self.simple_timeout;
 
         // Local transports (UDS, Windows Named Pipes) skip proxies
-        #[cfg(any(unix, target_os = "windows"))]
+        #[cfg(any(
+            all(unix, not(any(target_os = "trueos", target_os = "zkvm"))),
+            target_os = "windows"
+        ))]
         if self.should_use_local_transport() {
             return Box::pin(with_timeout(
                 self.clone().connect_local_transport(dst),
@@ -1058,7 +1067,7 @@ impl TlsInfoFactory for hyper_rustls::MaybeHttpsStream<TokioIo<tokio::net::TcpSt
 // ===== UnixStream =====
 
 #[cfg(feature = "__tls")]
-#[cfg(unix)]
+#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
 impl TlsInfoFactory for tokio::net::UnixStream {
     fn tls_info(&self) -> Option<crate::tls::TlsInfo> {
         None
@@ -1066,7 +1075,7 @@ impl TlsInfoFactory for tokio::net::UnixStream {
 }
 
 #[cfg(feature = "__native-tls")]
-#[cfg(unix)]
+#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
 impl TlsInfoFactory for tokio_native_tls::TlsStream<TokioIo<TokioIo<tokio::net::UnixStream>>> {
     fn tls_info(&self) -> Option<crate::tls::TlsInfo> {
         let peer_certificate = self
@@ -1080,7 +1089,7 @@ impl TlsInfoFactory for tokio_native_tls::TlsStream<TokioIo<TokioIo<tokio::net::
 }
 
 #[cfg(feature = "__native-tls")]
-#[cfg(unix)]
+#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
 impl TlsInfoFactory
     for tokio_native_tls::TlsStream<
         TokioIo<hyper_tls::MaybeHttpsStream<TokioIo<tokio::net::UnixStream>>>,
@@ -1098,7 +1107,7 @@ impl TlsInfoFactory
 }
 
 #[cfg(feature = "__native-tls")]
-#[cfg(unix)]
+#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
 impl TlsInfoFactory for hyper_tls::MaybeHttpsStream<TokioIo<tokio::net::UnixStream>> {
     fn tls_info(&self) -> Option<crate::tls::TlsInfo> {
         match self {
@@ -1109,7 +1118,7 @@ impl TlsInfoFactory for hyper_tls::MaybeHttpsStream<TokioIo<tokio::net::UnixStre
 }
 
 #[cfg(feature = "__rustls")]
-#[cfg(unix)]
+#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
 impl TlsInfoFactory for tokio_rustls::client::TlsStream<TokioIo<TokioIo<tokio::net::UnixStream>>> {
     fn tls_info(&self) -> Option<crate::tls::TlsInfo> {
         let peer_certificate = self
@@ -1123,7 +1132,7 @@ impl TlsInfoFactory for tokio_rustls::client::TlsStream<TokioIo<TokioIo<tokio::n
 }
 
 #[cfg(feature = "__rustls")]
-#[cfg(unix)]
+#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
 impl TlsInfoFactory
     for tokio_rustls::client::TlsStream<
         TokioIo<hyper_rustls::MaybeHttpsStream<TokioIo<tokio::net::UnixStream>>>,
@@ -1141,7 +1150,7 @@ impl TlsInfoFactory
 }
 
 #[cfg(feature = "__rustls")]
-#[cfg(unix)]
+#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
 impl TlsInfoFactory for hyper_rustls::MaybeHttpsStream<TokioIo<tokio::net::UnixStream>> {
     fn tls_info(&self) -> Option<crate::tls::TlsInfo> {
         match self {
@@ -1515,7 +1524,7 @@ mod native_tls_conn {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
     impl Connection for NativeTlsConn<TokioIo<TokioIo<tokio::net::UnixStream>>> {
         fn connected(&self) -> Connected {
             let connected = Connected::new();
@@ -1529,7 +1538,7 @@ mod native_tls_conn {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
     impl Connection for NativeTlsConn<TokioIo<MaybeHttpsStream<TokioIo<tokio::net::UnixStream>>>> {
         fn connected(&self) -> Connected {
             let connected = Connected::new();
@@ -1692,7 +1701,7 @@ mod rustls_tls_conn {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
     impl Connection for RustlsTlsConn<TokioIo<TokioIo<tokio::net::UnixStream>>> {
         fn connected(&self) -> Connected {
             if self.inner.inner().get_ref().1.alpn_protocol() == Some(b"h2") {
@@ -1709,7 +1718,7 @@ mod rustls_tls_conn {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
     impl Connection for RustlsTlsConn<TokioIo<MaybeHttpsStream<TokioIo<tokio::net::UnixStream>>>> {
         fn connected(&self) -> Connected {
             if self.inner.inner().get_ref().1.alpn_protocol() == Some(b"h2") {

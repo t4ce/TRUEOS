@@ -757,6 +757,17 @@ impl Xhci {
             .context_size()
     }
 
+    pub(crate) fn max_primary_stream_array_entries(&self) -> usize {
+        let max_psa = self
+            .reg
+            .read()
+            .capability
+            .hccparams1
+            .read_volatile()
+            .maximum_primary_stream_array_size() as usize;
+        1usize << (max_psa + 1)
+    }
+
     pub(crate) fn new_slot_bell(&self, slot: SlotId) -> SlotBell {
         SlotBell::new(slot, self.reg.read().clone())
     }

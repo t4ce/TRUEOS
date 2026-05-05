@@ -110,10 +110,6 @@ pub mod input {
 }
 
 pub mod ui_shell {
-    pub const LOCALCODER_SERVICE_QUEUE_CAP: usize = 32;
-    pub const LOCALCODER_SERVICE_IDLE_MS: u64 = 8;
-    pub const LOCALCODER_SERVICE_STEP_MS: u64 = 12;
-
     pub const SHELL_MAX_LINE: usize = 192;
     pub const SHELL_SECTION_STATUS_HOLD_MS: u64 = 1000;
     pub const SHELL_SECTION_RAINBOW_FRAME_MS: u64 = 120;

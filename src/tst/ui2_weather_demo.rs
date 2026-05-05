@@ -448,7 +448,7 @@ pub async fn ui2_weather_demo_task() {
         WEATHER_CITY, WEATHER_API_KEY
     );
 
-    let geo = match crate::r::net::json::get_json(geo_url.as_str()).await {
+    let geo = match crate::r::net::json::get_json_hyper(geo_url.as_str()).await {
         Ok(raw) => parse_geo_response(raw.as_str()),
         Err(e) => {
             crate::log!("ui2-weather: geo request failed: {:?}\n", e);
@@ -492,7 +492,7 @@ pub async fn ui2_weather_demo_task() {
         WEATHER_API_KEY
     );
 
-    let weather_response = match crate::r::net::json::get_json(weather_url.as_str()).await {
+    let weather_response = match crate::r::net::json::get_json_hyper(weather_url.as_str()).await {
         Ok(raw) => trueos_weather::oc3::decode_onecall_raw_safe(raw.as_str()).ok(),
         Err(e) => {
             crate::log!("ui2-weather: onecall request failed: {:?}\n", e);
@@ -522,7 +522,8 @@ pub async fn ui2_weather_demo_task() {
             break;
         }
 
-        let weather_response = match crate::r::net::json::get_json(weather_url.as_str()).await {
+        let weather_response = match crate::r::net::json::get_json_hyper(weather_url.as_str()).await
+        {
             Ok(raw) => trueos_weather::oc3::decode_onecall_raw_safe(raw.as_str()).ok(),
             Err(_) => None,
         };

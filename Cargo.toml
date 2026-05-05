@@ -110,6 +110,7 @@ usvg = { path = "vendor/usvg-0.45.1" }
 imagesize = { path = "vendor/imagesize-0.13.0" }
 hyper = { path = "vendor/hyper-1.9.0" }
 hyper-util = { path = "vendor/hyper-util-0.1.20" }
+reqwest = { path = "vendor/reqwest-0.13.3" }
 itoa = { path = "vendor/itoa-1.0.18" }
 kurbo = { path = "vendor/kurbo-0.11.3" }
 svgtypes = { path = "vendor/svgtypes-0.15.3" }
