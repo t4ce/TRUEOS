@@ -21,6 +21,7 @@ impl TransferKind {
 pub struct Transfer {
     pub kind: TransferKind,
     pub direction: usb_if::transfer::Direction,
+    pub stream_id: u16,
     #[cfg(kmod)]
     pub mapping: Option<dma_api::SArrayPtr<u8>>,
     #[cfg(umod)]

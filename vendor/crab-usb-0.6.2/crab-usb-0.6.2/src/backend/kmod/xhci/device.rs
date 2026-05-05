@@ -11,7 +11,8 @@ use usb_if::descriptor::DeviceDescriptorBase;
 use usb_if::err::USBError;
 use usb_if::{
     descriptor::{
-        ConfigurationDescriptor, DescriptorType, DeviceDescriptor, EndpointDescriptor, EndpointType,
+        ConfigurationDescriptor, DescriptorType, DeviceDescriptor, EndpointDescriptor,
+        EndpointType, InterfaceDescriptor,
     },
     host::{ControlSetup, hub::Speed},
     transfer::{Recipient, RequestType},
@@ -39,6 +40,7 @@ use crate::{
             ep::{EndpointBase, EndpointControl},
         },
     },
+    debug_record_stream_config,
     err::Result,
 };
 
@@ -213,7 +215,7 @@ impl Device {
     }
 
     fn new_ep(&mut self, dci: Dci) -> Result<Endpoint> {
-        let ep = Endpoint::new(dci, &self.kernel, self.bell.clone())?;
+        let ep = Endpoint::new(self.id.as_u8(), dci, &self.kernel, self.bell.clone())?;
         self.transfer_result_handler
             .register_queue(self.id.as_u8(), dci.as_u8(), ep.ring());
 
@@ -814,13 +816,47 @@ impl Device {
             if dci > max_dci {
                 max_dci = dci;
             }
-            let ep_raw = self.new_ep(dci.into())?;
-            let ring_addr = ep_raw.bus_addr();
+            let mut ep_raw = self.new_ep(dci.into())?;
+            let max_burst_size = self.xhci_bulk_max_burst_size(interface, alternate, &desc);
+            if self.should_enable_skhynix_uas_streams(interface, alternate, &desc) {
+                ep_raw.enable_primary_streams(32)?;
+                for ring in ep_raw.stream_rings() {
+                    self.transfer_result_handler
+                        .add_queue(self.id.as_u8(), dci, ring);
+                }
+                let ring1_ptr = ep_raw
+                    .stream_rings()
+                    .next()
+                    .map(|ring| ring.bus_addr().raw())
+                    .unwrap_or(0);
+                debug_record_stream_config(
+                    self.id.as_u8(),
+                    dci,
+                    desc.address,
+                    32,
+                    ep_raw.max_primary_streams(),
+                    max_burst_size,
+                    desc.max_packet_size,
+                    ep_raw.config_dequeue_pointer().raw(),
+                    ring1_ptr,
+                );
+            }
+            let ring_addr = ep_raw.config_dequeue_pointer();
+            let has_primary_streams = ep_raw.has_primary_streams();
+            let max_primary_streams = ep_raw.max_primary_streams();
             self.eps.insert(dci.into(), EndpointBase::new(ep_raw));
 
             let xhci_interval =
                 self.calculate_xhci_interval(desc.interval, desc.transfer_type, desc.interval);
-            configured_eps.push((desc, dci, ring_addr.raw(), xhci_interval));
+            configured_eps.push((
+                desc,
+                dci,
+                ring_addr.raw(),
+                xhci_interval,
+                has_primary_streams,
+                max_primary_streams,
+                max_burst_size,
+            ));
         }
 
         self.ctx.with_empty_input(|input| {
@@ -831,7 +867,16 @@ impl Device {
                 .slot_mut()
                 .set_context_entries(max_dci + 1);
 
-            for (desc, dci, ring_addr, xhci_interval) in &configured_eps {
+            for (
+                desc,
+                dci,
+                ring_addr,
+                xhci_interval,
+                has_primary_streams,
+                max_primary_streams,
+                max_burst_size,
+            ) in &configured_eps
+            {
                 input.control_mut().set_add_context_flag(*dci as _);
 
                 debug!(
@@ -850,8 +895,15 @@ impl Device {
                 ep_mut.set_tr_dequeue_pointer(*ring_addr);
                 ep_mut.set_max_packet_size(desc.max_packet_size);
                 ep_mut.set_error_count(3);
-                ep_mut.set_dequeue_cycle_state();
-                ep_mut.set_max_primary_streams(0);
+                if *has_primary_streams {
+                    ep_mut.clear_dequeue_cycle_state();
+                    ep_mut.set_max_primary_streams(*max_primary_streams);
+                    ep_mut.set_linear_stream_array();
+                } else {
+                    ep_mut.set_dequeue_cycle_state();
+                    ep_mut.set_max_primary_streams(0);
+                    ep_mut.clear_linear_stream_array();
+                }
                 ep_mut.set_mult(0);
 
                 match desc.transfer_type {
@@ -868,7 +920,7 @@ impl Device {
                             ep_mut.set_max_endpoint_service_time_interval_payload_low(esit);
                     }
                     EndpointType::Bulk | EndpointType::Control => {
-                        ep_mut.set_max_burst_size(0);
+                        ep_mut.set_max_burst_size(*max_burst_size);
                         ep_mut.set_average_trb_length((desc.max_packet_size & 0x7ff) as _);
                     }
                 }
@@ -907,18 +959,58 @@ impl Device {
         interface: u8,
         alternate: u8,
     ) -> Result<&[EndpointDescriptor]> {
+        Ok(&self.find_interface_alt(interface, alternate)?.endpoints)
+    }
+
+    fn find_interface_alt(&self, interface: u8, alternate: u8) -> Result<&InterfaceDescriptor> {
         for config in &self.config_desc {
             for iface in &config.interfaces {
                 if iface.interface_number == interface {
                     for alt in &iface.alt_settings {
                         if alt.alternate_setting == alternate {
-                            return Ok(&alt.endpoints);
+                            return Ok(alt);
                         }
                     }
                 }
             }
         }
         Err(USBError::NotFound)
+    }
+
+    fn is_skhynix_uas_alt(&self, interface: u8, alternate: u8) -> bool {
+        let Ok(alt) = self.find_interface_alt(interface, alternate) else {
+            return false;
+        };
+        self.desc.vendor_id == 0x152E
+            && self.desc.product_id == 0x7001
+            && matches!(self.port_speed, Speed::SuperSpeed | Speed::SuperSpeedPlus)
+            && alt.class == 0x08
+            && alt.subclass == 0x06
+            && alt.protocol == 0x62
+    }
+
+    fn should_enable_skhynix_uas_streams(
+        &self,
+        interface: u8,
+        alternate: u8,
+        desc: &EndpointDescriptor,
+    ) -> bool {
+        self.is_skhynix_uas_alt(interface, alternate)
+            && matches!(desc.transfer_type, EndpointType::Bulk)
+            && matches!(desc.address, 0x81 | 0x83 | 0x02)
+    }
+
+    fn xhci_bulk_max_burst_size(
+        &self,
+        interface: u8,
+        alternate: u8,
+        desc: &EndpointDescriptor,
+    ) -> u8 {
+        if self.should_enable_skhynix_uas_streams(interface, alternate, desc) {
+            15
+        } else {
+            0
+        }
     }
 
     /// 根据 XHCI 规范计算端点的 interval 值

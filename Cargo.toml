@@ -75,6 +75,7 @@ socket2 = { version = "0.6.3", default-features = false }
 mio = { version = "1.2.0", default-features = false, features = ["os-poll", "net"] }
 hyper = { version = "1.9.0", default-features = false, features = ["client", "server", "http1"] }
 lumen = { path = "vendor/lumen", default-features = false, features = ["cpu-trueos"] }
+tower = { version = "0.5.3", default-features = false, features = ["util"] }
 
 [target.'cfg(target_arch = "x86_64")'.dependencies]
 rdrand = { version = "0.8", default-features = false }

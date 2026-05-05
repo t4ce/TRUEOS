@@ -232,6 +232,7 @@ impl EndpointOp for EndpointImpl {
         Transfer {
             kind,
             direction,
+            stream_id: 0,
             buffer: buff,
             transfer_len: 0,
         }

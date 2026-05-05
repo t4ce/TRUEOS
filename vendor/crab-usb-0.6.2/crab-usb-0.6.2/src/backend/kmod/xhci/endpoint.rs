@@ -2,7 +2,7 @@ use core::ptr::NonNull;
 
 use alloc::{collections::BTreeMap, sync::Arc};
 
-use dma_api::DmaDirection;
+use dma_api::{DArray, DmaDirection};
 use mbarrier::mb;
 use spin::Mutex;
 use usb_if::{
@@ -28,14 +28,33 @@ use crate::{
             transfer::{Transfer, TransferKind},
         },
     },
-    debug_record_submit,
-    err::ConvertXhciError,
+    debug_record_submit_stream,
+    err::{ConvertXhciError, HostError},
     osal::Kernel,
 };
 
+const STREAM_CONTEXT_ALIGNMENT: usize = 64;
+const STREAM_CONTEXT_SCT_PRIMARY_TR: u64 = 1 << 1;
+const STREAM_CONTEXT_DCS: u64 = 1;
+
+#[derive(Clone, Copy)]
+#[repr(transparent)]
+pub struct StreamContext([u32; 4]);
+
+impl StreamContext {
+    fn primary_transfer_ring(ring: BusAddr) -> Self {
+        let raw = ring.raw() | STREAM_CONTEXT_SCT_PRIMARY_TR | STREAM_CONTEXT_DCS;
+        Self([raw as u32, (raw >> 32) as u32, 0, 0])
+    }
+}
+
 pub struct Endpoint {
+    slot_id: u8,
     dci: Dci,
     pub ring: SendRing<TransferEvent>,
+    stream_contexts: Option<DArray<StreamContext>>,
+    stream_rings: BTreeMap<u16, SendRing<TransferEvent>>,
+    max_primary_streams: u8,
     bell: Arc<Mutex<SlotBell>>,
     transfers: BTreeMap<TransferId, Transfer>,
     kernel: Kernel,
@@ -45,12 +64,21 @@ unsafe impl Send for Endpoint {}
 unsafe impl Sync for Endpoint {}
 
 impl Endpoint {
-    pub fn new(dci: Dci, kernel: &Kernel, bell: Arc<Mutex<SlotBell>>) -> crate::err::Result<Self> {
+    pub fn new(
+        slot_id: u8,
+        dci: Dci,
+        kernel: &Kernel,
+        bell: Arc<Mutex<SlotBell>>,
+    ) -> crate::err::Result<Self> {
         let ring = SendRing::new(DmaDirection::Bidirectional, kernel)?;
 
         Ok(Self {
+            slot_id,
             dci,
             ring,
+            stream_contexts: None,
+            stream_rings: BTreeMap::new(),
+            max_primary_streams: 0,
             bell,
             transfers: BTreeMap::new(),
             kernel: kernel.clone(),
@@ -61,9 +89,68 @@ impl Endpoint {
         self.ring.bus_addr()
     }
 
-    fn doorbell(&mut self) {
+    pub fn config_dequeue_pointer(&self) -> BusAddr {
+        self.stream_contexts
+            .as_ref()
+            .map(|contexts| contexts.dma_addr().as_u64().into())
+            .unwrap_or_else(|| self.ring.bus_addr())
+    }
+
+    pub fn has_primary_streams(&self) -> bool {
+        self.stream_contexts.is_some()
+    }
+
+    pub fn max_primary_streams(&self) -> u8 {
+        self.max_primary_streams
+    }
+
+    pub fn stream_rings(&self) -> impl Iterator<Item = &SendRing<TransferEvent>> {
+        self.stream_rings.values()
+    }
+
+    pub fn enable_primary_streams(
+        &mut self,
+        stream_context_count: usize,
+    ) -> crate::err::Result<()> {
+        assert!(stream_context_count.is_power_of_two());
+        assert!(stream_context_count >= 2);
+
+        let mut contexts = self
+            .kernel
+            .array_zero_with_align::<StreamContext>(
+                stream_context_count,
+                STREAM_CONTEXT_ALIGNMENT,
+                DmaDirection::ToDevice,
+            )
+            .map_err(HostError::from)?;
+        let mut stream_rings = BTreeMap::new();
+
+        for stream_id in 1..stream_context_count {
+            let ring = SendRing::new(DmaDirection::Bidirectional, &self.kernel)?;
+            contexts.set(stream_id, StreamContext::primary_transfer_ring(ring.bus_addr()));
+            stream_rings.insert(stream_id as u16, ring);
+        }
+
+        self.max_primary_streams = (stream_context_count.trailing_zeros() as u8).saturating_sub(1);
+        self.stream_contexts = Some(contexts);
+        self.stream_rings = stream_rings;
+
+        info!(
+            "crabusb/xhci/ep: primary-streams dci={} contexts={} max_pstreams={} ctx=0x{:x}",
+            self.dci.as_u8(),
+            stream_context_count,
+            self.max_primary_streams,
+            self.config_dequeue_pointer().raw()
+        );
+        Ok(())
+    }
+
+    fn doorbell(&mut self, stream_id: u16) {
         let mut bell = doorbell::Register::default();
         bell.set_doorbell_target(self.dci.into());
+        if stream_id != 0 {
+            bell.set_doorbell_stream_id(stream_id);
+        }
         self.bell.lock().ring(bell);
     }
 
@@ -128,7 +215,15 @@ impl Endpoint {
         TransferId(self.ring.enque_transfer(trb))
     }
 
-    fn enque_bulk_or_interrupt(&mut self, bus_addr: u64, len: usize) -> TransferId {
+    fn enque_trb_on(ring: &mut SendRing<TransferEvent>, trb: transfer::Allowed) -> TransferId {
+        TransferId(ring.enque_transfer(trb))
+    }
+
+    fn enque_bulk_or_interrupt_on(
+        ring: &mut SendRing<TransferEvent>,
+        bus_addr: u64,
+        len: usize,
+    ) -> TransferId {
         const MAX_NORMAL_TRB_BYTES: usize = 64 * 1024;
 
         if len <= MAX_NORMAL_TRB_BYTES {
@@ -140,7 +235,7 @@ impl Endpoint {
                     .set_interrupt_on_short_packet()
                     .set_interrupt_on_completion(),
             );
-            return self.enque_trb(trb);
+            return Self::enque_trb_on(ring, trb);
         }
 
         let mut handle = TransferId(BusAddr(0));
@@ -160,11 +255,41 @@ impl Endpoint {
                 trb.set_chain_bit();
             }
 
-            handle = self.enque_trb(transfer::Allowed::Normal(trb));
+            handle = Self::enque_trb_on(ring, transfer::Allowed::Normal(trb));
             offset += chunk;
         }
 
         handle
+    }
+
+    fn transfer_ring(&self, stream_id: u16) -> Option<&SendRing<TransferEvent>> {
+        if stream_id == 0 {
+            if self.has_primary_streams() {
+                None
+            } else {
+                Some(&self.ring)
+            }
+        } else {
+            self.stream_rings.get(&stream_id)
+        }
+    }
+
+    fn transfer_ring_mut(
+        &mut self,
+        stream_id: u16,
+    ) -> Result<&mut SendRing<TransferEvent>, TransferError> {
+        if stream_id == 0 {
+            if self.has_primary_streams() {
+                return Err(TransferError::Other(anyhow!(
+                    "stream-capable endpoint requires a non-zero stream id"
+                )));
+            }
+            Ok(&mut self.ring)
+        } else {
+            self.stream_rings.get_mut(&stream_id).ok_or_else(|| {
+                TransferError::Other(anyhow!("endpoint stream id {} is not configured", stream_id))
+            })
+        }
     }
 
     fn enque_iso(&mut self, bus_addr: u64, buff_len: usize, num_iso_packets: usize) -> TransferId {
@@ -284,8 +409,13 @@ impl EndpointOp for Endpoint {
 
         let data_len = transfer.buffer_len();
         let dir = transfer.direction;
+        let stream_id = match &transfer.kind {
+            TransferKind::Bulk | TransferKind::Interrupt => transfer.stream_id,
+            _ => 0,
+        };
 
         let mut handle = TransferId(BusAddr(0));
+        let mut ring_ptr = self.ring.bus_addr().raw();
 
         match &transfer.kind {
             TransferKind::Control(t) => {
@@ -335,21 +465,26 @@ impl EndpointOp for Endpoint {
                 handle.0 = self.ring.enque_transfer(status.into());
             }
             TransferKind::Interrupt | TransferKind::Bulk => {
-                handle = self.enque_bulk_or_interrupt(data_bus_addr, data_len);
+                let ring = self.transfer_ring_mut(stream_id)?;
+                ring_ptr = ring.bus_addr().raw();
+                handle = Self::enque_bulk_or_interrupt_on(ring, data_bus_addr, data_len);
             }
             TransferKind::Isochronous { num_pkgs } => {
                 handle = self.enque_iso(data_bus_addr, data_len, *num_pkgs);
             }
         }
         self.transfers.insert(handle, transfer);
-        debug_record_submit(
+        debug_record_submit_stream(
+            self.slot_id,
             self.dci.as_u8(),
             if matches!(dir, Direction::In) { 1 } else { 2 },
+            stream_id,
             data_len as u32,
             handle.0.raw(),
+            ring_ptr,
         );
         mb();
-        self.doorbell();
+        self.doorbell(stream_id);
 
         Ok(TransferHandle::new(handle.0.raw(), self))
     }
@@ -359,13 +494,26 @@ impl EndpointOp for Endpoint {
         id: u64,
     ) -> Option<Result<crate::backend::ty::transfer::Transfer, TransferError>> {
         let id = BusAddr(id);
-        let c = self.ring.get_finished(id)?;
+        let stream_id = self
+            .transfers
+            .get(&TransferId(id))
+            .map(|transfer| transfer.stream_id)
+            .unwrap_or(0);
+        let c = self.transfer_ring(stream_id)?.get_finished(id)?;
         let res = self.handle_transfer_completion(&c, id);
         Some(res)
     }
 
     fn register_cx(&self, id: u64, cx: &mut core::task::Context<'_>) {
-        self.ring.register_cx(BusAddr(id), cx);
+        let id = BusAddr(id);
+        let stream_id = self
+            .transfers
+            .get(&TransferId(id))
+            .map(|transfer| transfer.stream_id)
+            .unwrap_or(0);
+        if let Some(ring) = self.transfer_ring(stream_id) {
+            ring.register_cx(id, cx);
+        }
     }
 
     fn new_transfer(
