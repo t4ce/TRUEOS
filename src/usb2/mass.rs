@@ -1023,6 +1023,20 @@ async fn uas_command_in(
     log_uas_iu("ready-iu", cmd, tag, ready);
     let ready_id = ready[0];
     let ready_tag = parse_uas_tag(ready).unwrap_or(0);
+    if ready_id == UAS_IU_STATUS && ready_tag == tag {
+        validate_uas_status(cmd, ready, tag)?;
+        log_uas_debug("status-before-data", cmd, tag);
+        let got = with_timeout_or_none(data_handle, UAS_IO_TIMEOUT_MS)
+            .await
+            .ok_or_else(|| {
+                log_uas_debug("data-in-timeout-after-status", cmd, tag);
+                MassProbeError::Transport("uas-data-timeout")
+            })?
+            .map_err(|_| MassProbeError::Transport("uas-data-in"))?
+            .transfer_len;
+        log_uas_debug("data-in-complete-after-status", cmd, tag);
+        return Ok(got);
+    }
     if ready_id != UAS_IU_READ_READY || ready_tag != tag {
         return Err(MassProbeError::Csw {
             cmd,
@@ -1086,6 +1100,27 @@ async fn uas_command_out(
     log_uas_iu("ready-iu", cmd, tag, ready);
     let ready_id = ready[0];
     let ready_tag = parse_uas_tag(ready).unwrap_or(0);
+    if ready_id == UAS_IU_STATUS && ready_tag == tag {
+        validate_uas_status(cmd, ready, tag)?;
+        log_uas_debug("status-before-data", cmd, tag);
+        let sent = with_timeout_or_none(data_handle, UAS_IO_TIMEOUT_MS)
+            .await
+            .ok_or_else(|| {
+                log_uas_debug("data-out-timeout-after-status", cmd, tag);
+                MassProbeError::Transport("uas-data-timeout")
+            })?
+            .map_err(|_| MassProbeError::Transport("uas-data-out"))?
+            .transfer_len;
+        log_uas_debug("data-out-complete-after-status", cmd, tag);
+        if sent != data.len() {
+            return Err(MassProbeError::ShortData {
+                cmd,
+                got: sent,
+                need: data.len(),
+            });
+        }
+        return Ok(());
+    }
     if ready_id != UAS_IU_WRITE_READY || ready_tag != tag {
         return Err(MassProbeError::Csw {
             cmd,

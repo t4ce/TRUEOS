@@ -267,13 +267,14 @@ impl ChatHub {
         else {
             return error_response(400, "invalid user");
         };
-        let Some(text) =
-            text_raw.and_then(|value| sanitize_text(&value, self.config.max_message_len))
-        else {
-            return error_response(400, "invalid text");
-        };
         let statement =
             statement_raw.and_then(|value| sanitize_statement(&value, self.config.max_name_len));
+        let text = match text_raw.and_then(|value| sanitize_text(&value, self.config.max_message_len))
+        {
+            Some(text) => text,
+            None if statement.is_some() => String::new(),
+            None => return error_response(400, "invalid text"),
+        };
 
         if self.rooms.iter().all(|room| room.name != room_name) {
             if self.rooms.len() >= self.config.max_rooms {
@@ -522,6 +523,11 @@ button:disabled{{cursor:wait;opacity:.72}}
 .settings{{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:end}}
 #messages{{list-style:none;padding:0;margin:20px 0;display:grid;gap:10px}}
 #messages li{{background:#17242e;border:1px solid #2c3c48;border-radius:6px;padding:10px}}
+#messages li.waiting{{border-color:#3f5f75}}
+.body{{min-height:20px;white-space:pre-wrap}}
+.waiting .body::after{{content:"";display:inline-block;width:36px;height:10px;border-radius:999px;background:#91a7b8;opacity:.42}}
+.animate-pulse{{animation:pulse 1.35s cubic-bezier(.4,0,.6,1) infinite}}
+@keyframes pulse{{0%,100%{{opacity:.45}}50%{{opacity:.18}}}}
 .meta{{color:#91a7b8;font-size:13px;margin-bottom:4px}}
 .status{{margin:14px 0 0;color:#b7c6d1;font-size:13px;min-height:18px}}
 form{{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end}}
@@ -557,8 +563,10 @@ function showMessage(m,source){{
     bubbles.set(key,li);
     document.querySelector('#messages').appendChild(li);
   }}
+  const waiting=m.statement&&!m.text;
+  li.className=waiting?'waiting animate-pulse':'';
   const tag=m.statement?` statement ${{esc(m.statement)}}`:'';
-  li.innerHTML=`<div class="meta">${{esc(m.user)}} #${{m.id}}${{tag}} - ${{source}}</div><div>${{esc(m.text)}}</div>`;
+  li.innerHTML=`<div class="meta">${{esc(m.user)}} #${{m.id}}${{tag}} - ${{source}}</div><div class="body">${{esc(m.text)}}</div>`;
 }}
 async function poll(){{
   const encodedRoom=encodeURIComponent(room);

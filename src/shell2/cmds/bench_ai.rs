@@ -81,6 +81,7 @@ struct LumenInteractiveSession {
 #[derive(Clone)]
 pub(crate) struct LumenPromptRequest {
     pub(crate) prompt: AllocString,
+    pub(crate) statement: Option<AllocString>,
 }
 
 static LUMEN_INTERACTIVE_SESSIONS: spin::Mutex<Vec<LumenInteractiveSession>> =
@@ -130,7 +131,11 @@ fn pop_lumen_prompt(session_id: u64) -> Option<LumenPromptRequest> {
     Some(request)
 }
 
-pub(crate) fn push_lumen_chat_prompt(session_id: u64, prompt: &str) -> bool {
+pub(crate) fn push_lumen_chat_prompt(
+    session_id: u64,
+    prompt: &str,
+    statement: Option<&str>,
+) -> bool {
     let prompt = prompt.trim();
     if prompt.is_empty() {
         return true;
@@ -143,6 +148,7 @@ pub(crate) fn push_lumen_chat_prompt(session_id: u64, prompt: &str) -> bool {
         };
         session.prompts.push_back(LumenPromptRequest {
             prompt: AllocString::from(prompt),
+            statement: statement.map(AllocString::from),
         });
         session.prompts.len()
     };
@@ -533,6 +539,7 @@ struct LumenInferenceRequest {
     id: u64,
     session_id: u64,
     prompt: AllocString,
+    statement: Option<AllocString>,
 }
 
 struct LumenInferenceResult {
@@ -644,6 +651,7 @@ fn generate_lumen_answer(
     vocab_entries: &[(AllocString, usize)],
     stop_ids: &[usize],
     prompt: &str,
+    statement: Option<&str>,
 ) -> Result<LumenGenerateReport, AllocString> {
     let chat_prompt = if state.first_turn {
         lumen_chat_prompt(prompt)
@@ -712,7 +720,9 @@ fn generate_lumen_answer(
     let mut answer = AllocString::new();
     let mut generated = 0usize;
     let mut first_token_ms = 0u64;
-    let stream_statement = crate::r::lumen_service::next_chat_statement_tag();
+    let stream_statement = statement
+        .map(AllocString::from)
+        .unwrap_or_else(crate::r::lumen_service::next_chat_statement_tag);
     let mut streamed_answer_len = 0usize;
     let mut streamed = false;
     let generate_start = embassy_time_driver::now();
@@ -851,7 +861,11 @@ fn generate_lumen_answer(
     })
 }
 
-fn submit_lumen_inference(session_id: u64, prompt: &str) -> Result<u64, AllocString> {
+fn submit_lumen_inference(
+    session_id: u64,
+    prompt: &str,
+    statement: Option<&str>,
+) -> Result<u64, AllocString> {
     let mut mailbox = LUMEN_INFER_MAILBOX.lock();
     if mailbox.busy || mailbox.pending.is_some() || mailbox.result.is_some() {
         return Err(AllocString::from("inference mailbox busy"));
@@ -862,6 +876,7 @@ fn submit_lumen_inference(session_id: u64, prompt: &str) -> Result<u64, AllocStr
         id,
         session_id,
         prompt: AllocString::from(prompt),
+        statement: statement.map(AllocString::from),
     });
     mailbox.busy = true;
     drop(mailbox);
@@ -988,6 +1003,7 @@ async fn lumen_inference_worker_task(
             vocab_entries.as_slice(),
             stop_ids.as_slice(),
             request.prompt.as_str(),
+            request.statement.as_deref(),
         );
         {
             let mut mailbox = LUMEN_INFER_MAILBOX.lock();
@@ -2444,9 +2460,14 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
                     vocab_entries.as_slice(),
                     stop_ids.as_slice(),
                     request.prompt.as_str(),
+                    request.statement.as_deref(),
                 ),
                 LumenInferEngine::Worker => {
-                    match submit_lumen_inference(session_id, request.prompt.as_str()) {
+                    match submit_lumen_inference(
+                        session_id,
+                        request.prompt.as_str(),
+                        request.statement.as_deref(),
+                    ) {
                         Ok(request_id) => wait_lumen_inference_result(session_id, request_id).await,
                         Err(err) => Err(err),
                     }
@@ -2478,13 +2499,27 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
                         polled_jobs,
                         compute_after.queued_jobs
                     );
-                    if !report.streamed {
+                    if !report.streamed && request.statement.is_some() {
+                        crate::r::lumen_service::submit_chat_statement_delta(
+                            request.statement.as_deref().unwrap_or(""),
+                            "<empty>",
+                        );
+                    } else if !report.streamed {
                         crate::r::lumen_service::submit_chat_answer(report.answer.as_str());
                     }
+                    crate::r::lumen_service::mark_chat_prompt_complete("answer-ready");
                 }
                 Err(err) => {
                     let message = format!("prompt failed: {}", err);
-                    crate::r::lumen_service::submit_chat_answer(message.as_str());
+                    if let Some(statement) = request.statement.as_deref() {
+                        crate::r::lumen_service::submit_chat_statement_delta(
+                            statement,
+                            message.as_str(),
+                        );
+                    } else {
+                        crate::r::lumen_service::submit_chat_answer(message.as_str());
+                    }
+                    crate::r::lumen_service::mark_chat_prompt_complete("answer-error");
                 }
             }
         }
