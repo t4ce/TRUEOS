@@ -10,6 +10,7 @@ const SERVICE_SLOT: &str = "LUM";
 const CHAT_ROOM: &str = "lobby";
 const CHAT_AI_NAME: &str = "lumen";
 const CHAT_READY_HELLO: &str = "hi, I am lumen. Mention lumen to talk to me.";
+const CHAT_BUSY_TEXT: &str = "lumen busy, still working on the previous prompt.";
 const CHAT_HTTP_TIMEOUT_MS: u32 = 5_000;
 const CHAT_HTTP_MAX_RX: usize = 128 * 1024;
 
@@ -19,7 +20,14 @@ static SERVICE_ONLINE: AtomicBool = AtomicBool::new(false);
 static SERVICE_OWNED_SESSION: AtomicU64 = AtomicU64::new(0);
 static CHAT_HELLO_SESSION_ID: AtomicU64 = AtomicU64::new(0);
 static CHAT_STATEMENT_ID: AtomicU64 = AtomicU64::new(1);
-static PENDING_CHATROOM: Mutex<alloc::vec::Vec<AllocString>> = Mutex::new(alloc::vec::Vec::new());
+static CHAT_PROMPT_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+static PENDING_CHATROOM: Mutex<alloc::vec::Vec<PendingChatroomPrompt>> =
+    Mutex::new(alloc::vec::Vec::new());
+
+struct PendingChatroomPrompt {
+    prompt: AllocString,
+    statement: AllocString,
+}
 
 pub(crate) fn is_online() -> bool {
     SERVICE_ONLINE.load(Ordering::Acquire)
@@ -50,9 +58,21 @@ pub(crate) fn mark_offline(session_id: u64) {
     clear_pending_prompts("offline");
 }
 
-fn queue_pending_prompt(prompt: &str, reason: &str) {
+fn queue_pending_prompt(prompt: &str, statement: &str, reason: &str) {
     let mut pending = PENDING_CHATROOM.lock();
-    pending.push(AllocString::from(prompt));
+    if !pending.is_empty() {
+        crate::log!(
+            "lumen-service: rejected extra pending chatroom prompt reason={} pending={} bytes={}\n",
+            reason,
+            pending.len(),
+            prompt.len()
+        );
+        return;
+    }
+    pending.push(PendingChatroomPrompt {
+        prompt: AllocString::from(prompt),
+        statement: AllocString::from(statement),
+    });
     crate::log!(
         "lumen-service: buffered chatroom prompt reason={} pending={} bytes={}\n",
         reason,
@@ -65,6 +85,7 @@ fn clear_pending_prompts(reason: &str) {
     let mut pending = PENDING_CHATROOM.lock();
     let count = pending.len();
     pending.clear();
+    CHAT_PROMPT_IN_FLIGHT.store(false, Ordering::Release);
     if count != 0 {
         crate::log!(
             "lumen-service: cleared pending chatroom prompts reason={} count={}\n",
@@ -86,8 +107,16 @@ fn flush_pending(session_id: u64) {
         );
     }
     for prompt in queued {
-        if !crate::shell2::cmds::bench_ai::push_lumen_chat_prompt(session_id, prompt.as_str()) {
-            queue_pending_prompt(prompt.as_str(), "flush-missed-session");
+        if !crate::shell2::cmds::bench_ai::push_lumen_chat_prompt(
+            session_id,
+            prompt.prompt.as_str(),
+            Some(prompt.statement.as_str()),
+        ) {
+            queue_pending_prompt(
+                prompt.prompt.as_str(),
+                prompt.statement.as_str(),
+                "flush-missed-session",
+            );
             break;
         }
     }
@@ -99,9 +128,24 @@ pub(crate) fn submit_chatroom_mention(prompt: &str) -> bool {
         return false;
     }
 
+    if CHAT_PROMPT_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        crate::log!("lumen-service: rejected chatroom prompt reason=busy bytes={}\n", prompt.len());
+        let _ = post_chat_message(CHAT_AI_NAME, CHAT_BUSY_TEXT);
+        return false;
+    }
+
     let session_id = SERVICE_SESSION_ID.load(Ordering::Acquire);
+    let statement = next_chat_statement_tag();
     if session_id != 0 && is_online() {
-        if crate::shell2::cmds::bench_ai::push_lumen_chat_prompt(session_id, prompt) {
+        if crate::shell2::cmds::bench_ai::push_lumen_chat_prompt(
+            session_id,
+            prompt,
+            Some(statement.as_str()),
+        ) {
+            submit_chat_statement_placeholder(statement.as_str());
             crate::log!(
                 "lumen-service: accepted chatroom prompt session={} bytes={}\n",
                 session_id,
@@ -109,16 +153,25 @@ pub(crate) fn submit_chatroom_mention(prompt: &str) -> bool {
             );
             return true;
         }
-        queue_pending_prompt(prompt, "online-missed-session");
+        queue_pending_prompt(prompt, statement.as_str(), "online-missed-session");
         return false;
     }
 
     if SERVICE_LOADING.load(Ordering::Acquire) {
-        queue_pending_prompt(prompt, "warming");
+        submit_chat_statement_placeholder(statement.as_str());
+        queue_pending_prompt(prompt, statement.as_str(), "warming");
     } else {
         crate::log!("lumen-service: dropped chatroom prompt; service offline\n");
+        CHAT_PROMPT_IN_FLIGHT.store(false, Ordering::Release);
     }
     false
+}
+
+pub(crate) fn mark_chat_prompt_complete(reason: &'static str) {
+    let was_busy = CHAT_PROMPT_IN_FLIGHT.swap(false, Ordering::AcqRel);
+    if was_busy {
+        crate::log!("lumen-service: chat prompt complete reason={}\n", reason);
+    }
 }
 
 fn form_push_encoded(out: &mut AllocString, value: &str) {
@@ -221,6 +274,10 @@ pub(crate) fn submit_chat_statement_delta(statement: &str, delta: &str) {
         return;
     }
     let _ = post_chat_statement(CHAT_AI_NAME, Some(statement), delta);
+}
+
+fn submit_chat_statement_placeholder(statement: &str) {
+    let _ = post_chat_statement(CHAT_AI_NAME, Some(statement), "");
 }
 
 fn emit_ready_hello(session_id: u64) {

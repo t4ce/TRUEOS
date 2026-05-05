@@ -70,7 +70,6 @@ dependencies = [
  "trueos-qjs",
  "trueos-tetris",
  "trueos-vm",
- "trueos-weather",
  "twoway",
  "unicode-normalization",
  "unicode-segmentation",
@@ -3283,6 +3282,10 @@ name = "trueos-limloader"
 version = "0.1.0"
 
 [[package]]
+name = "trueos-locale"
+version = "0.1.0"
+
+[[package]]
 name = "trueos-math"
 version = "0.1.0"
 dependencies = [
@@ -3302,8 +3305,8 @@ dependencies = [
  "parry2d",
  "spin 0.10.0",
  "trueos-gfx-core",
+ "trueos-locale",
  "trueos-math",
- "trueos-weather",
  "usvg",
  "v",
 ]
@@ -3324,15 +3327,6 @@ name = "trueos-vm"
 version = "0.1.0"
 dependencies = [
  "v",
-]
-
-[[package]]
-name = "trueos-weather"
-version = "0.1.0"
-dependencies = [
- "libm",
- "serde",
- "serde_json",
 ]
 
 [[package]]
