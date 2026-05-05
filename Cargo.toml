@@ -76,6 +76,7 @@ mio = { version = "1.2.0", default-features = false, features = ["os-poll", "net
 hyper = { version = "1.9.0", default-features = false, features = ["client", "server", "http1"] }
 lumen = { path = "vendor/lumen", default-features = false, features = ["cpu-trueos"] }
 tower = { version = "0.5.3", default-features = false, features = ["util"] }
+reqwest = { version = "0.13.3", default-features = false }
 
 [target.'cfg(target_arch = "x86_64")'.dependencies]
 rdrand = { version = "0.8", default-features = false }
@@ -108,6 +109,7 @@ num-traits = { path = "vendor/num-traits-0.2.19" }
 usvg = { path = "vendor/usvg-0.45.1" }
 imagesize = { path = "vendor/imagesize-0.13.0" }
 hyper = { path = "vendor/hyper-1.9.0" }
+hyper-util = { path = "vendor/hyper-util-0.1.20" }
 itoa = { path = "vendor/itoa-1.0.18" }
 kurbo = { path = "vendor/kurbo-0.11.3" }
 svgtypes = { path = "vendor/svgtypes-0.15.3" }
