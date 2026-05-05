@@ -1,5 +1,5 @@
-use core::ptr::{NonNull, read_volatile, write_volatile};
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use core::ptr::{NonNull, read_volatile, write_bytes, write_volatile};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering, fence};
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
 
@@ -26,14 +26,26 @@ const TGA_ADD_ARG1_OFF: usize = 0x30;
 const TGA_ADD_RESULT_OFF: usize = 0x34;
 const TGA_ADD_RETIRE_COUNT_OFF: usize = 0x38;
 const TGA_ADD_ERROR_OFF: usize = 0x3C;
+const TGA_HOST_MB_ADDR_LO_OFF: usize = 0x40;
+const TGA_HOST_MB_ADDR_HI_OFF: usize = 0x44;
+const TGA_HOST_MB_BYTES_OFF: usize = 0x48;
+const TGA_HOST_MB_DOORBELL_OFF: usize = 0x4C;
 
 const TGA_CMD_ADD_U32: u32 = 1;
 const TGA_STATUS_BUSY: u32 = 1 << 0;
 const TGA_STATUS_DONE: u32 = 1 << 1;
 const TGA_ADD_POLL_LIMIT: usize = 10_000;
+const TGA_HOST_MB_BYTES: usize = 4096;
+const TGA_HOST_MB_ALIGN: usize = 4096;
+const TGA_HOST_MB_DOORBELL_MAGIC: u32 = 0x484D_4231; // "HMB1"
+const TGA_HOST_MB_MAGIC_OFF: usize = 0x00;
+const TGA_HOST_MB_SEQ_OFF: usize = 0x04;
+const TGA_HOST_MB_VALUE_OFF: usize = 0x08;
+const TGA_HOST_MB_STATUS_OFF: usize = 0x0C;
 const TGA_BOOT_MMIO_TOUCH_ENABLED: bool = false;
 const TGA_HEARTBEAT_MMIO_ENABLED: bool = true;
 const TGA_READBACK_DOORBELL_ENABLED: bool = true;
+const TGA_HOST_MAILBOX_ENABLED: bool = true;
 const TGA_ADD_PROOF_ON_CONNECT_ENABLED: bool = false;
 const TGA_READBACK_DOORBELL_AFTER_WRITES: u32 = 20;
 const TGA_READBACK_DOORBELL_LED_VALUE: u32 = 0x1F;
@@ -69,6 +81,13 @@ struct TgaHotplugSnapshot {
     bar_is_64: bool,
     bar_assigned_by_os: bool,
     mmio_base: usize,
+}
+
+#[derive(Copy, Clone)]
+struct TgaHostMailbox {
+    phys: u64,
+    virt: usize,
+    len: usize,
 }
 
 // Safety: `Tga` contains an MMIO pointer and is always accessed behind the `TGA` mutex.
@@ -146,11 +165,14 @@ impl Tga {
 static TGA: Mutex<Option<Tga>> = Mutex::new(None);
 static TGA_LAST_MAP: Mutex<Option<(u64, usize)>> = Mutex::new(None);
 static TGA_LAST_DISCONNECT: Mutex<Option<TgaHotplugSnapshot>> = Mutex::new(None);
+static TGA_HOST_MAILBOX: Mutex<Option<TgaHostMailbox>> = Mutex::new(None);
 
 // Heartbeat policy: write a visible changing pattern as a "driver alive" indicator.
 // We send 0..31 (wrap) so the FPGA can display the low 5 bits.
 static TGA_HEARTBEAT_COUNTER: AtomicU32 = AtomicU32::new(0);
 static TGA_READBACK_DOORBELL_DONE: AtomicBool = AtomicBool::new(false);
+static TGA_HOST_MAILBOX_LAST_SEQ: AtomicU32 = AtomicU32::new(0);
+static TGA_HOST_MAILBOX_LAST_MAGIC: AtomicU32 = AtomicU32::new(0);
 
 const TGA_HEARTBEAT_PERIOD_MS: u64 = 100;
 const TGA_HEARTBEAT_LOG_EVERY_WRITES: u32 = 50;
@@ -279,6 +301,121 @@ fn write_heartbeat_led(value: u32, count: u32) {
             led_reg
         );
     }
+}
+
+fn ensure_host_mailbox() -> Option<TgaHostMailbox> {
+    if !TGA_HOST_MAILBOX_ENABLED {
+        return None;
+    }
+
+    {
+        let guard = TGA_HOST_MAILBOX.lock();
+        if let Some(mb) = *guard {
+            return Some(mb);
+        }
+    }
+
+    let Some((phys, virt)) = crate::dma::alloc(TGA_HOST_MB_BYTES, TGA_HOST_MB_ALIGN) else {
+        crate::log!(
+            "tga: host-mailbox alloc failed bytes={} align={}\n",
+            TGA_HOST_MB_BYTES,
+            TGA_HOST_MB_ALIGN
+        );
+        return None;
+    };
+
+    unsafe { write_bytes(virt, 0, TGA_HOST_MB_BYTES) };
+    fence(Ordering::Release);
+
+    let mb = TgaHostMailbox {
+        phys,
+        virt: virt as usize,
+        len: TGA_HOST_MB_BYTES,
+    };
+
+    *TGA_HOST_MAILBOX.lock() = Some(mb);
+    crate::log!(
+        "tga: host-mailbox allocated phys=0x{:016X} virt=0x{:016X} bytes=0x{:X} layout magic+0 seq+4 value+8 status+12\n",
+        mb.phys,
+        mb.virt,
+        mb.len
+    );
+    Some(mb)
+}
+
+fn publish_host_mailbox() {
+    if !TGA_HOST_MAILBOX_ENABLED {
+        return;
+    }
+    let Some(mb) = ensure_host_mailbox() else {
+        return;
+    };
+
+    let guard = TGA.lock();
+    let Some(tga) = guard.as_ref() else {
+        return;
+    };
+    let bus = tga.bus;
+    let slot = tga.slot;
+    let function = tga.function;
+    let bar_phys = tga.bar_phys;
+    let base = tga.mmio_base;
+
+    Tga::write_reg(base + TGA_HOST_MB_ADDR_LO_OFF, mb.phys as u32);
+    Tga::write_reg(base + TGA_HOST_MB_ADDR_HI_OFF, (mb.phys >> 32) as u32);
+    Tga::write_reg(base + TGA_HOST_MB_BYTES_OFF, mb.len as u32);
+    fence(Ordering::Release);
+    Tga::write_reg(base + TGA_HOST_MB_DOORBELL_OFF, TGA_HOST_MB_DOORBELL_MAGIC);
+    drop(guard);
+
+    crate::log!(
+        "tga: host-mailbox published bdf={:02X}:{:02X}.{} bar0=0x{:016X} phys=0x{:016X} bytes=0x{:X} doorbell=0x{:08X}\n",
+        bus,
+        slot,
+        function,
+        bar_phys,
+        mb.phys,
+        mb.len,
+        TGA_HOST_MB_DOORBELL_MAGIC
+    );
+}
+
+fn poll_host_mailbox() {
+    if !TGA_HOST_MAILBOX_ENABLED {
+        return;
+    }
+    let Some(mb) = *TGA_HOST_MAILBOX.lock() else {
+        return;
+    };
+
+    fence(Ordering::Acquire);
+    let base = mb.virt;
+    let magic = unsafe { read_volatile((base + TGA_HOST_MB_MAGIC_OFF) as *const u32) };
+    let seq = unsafe { read_volatile((base + TGA_HOST_MB_SEQ_OFF) as *const u32) };
+    let value = unsafe { read_volatile((base + TGA_HOST_MB_VALUE_OFF) as *const u32) };
+    let status = unsafe { read_volatile((base + TGA_HOST_MB_STATUS_OFF) as *const u32) };
+
+    let last_seq = TGA_HOST_MAILBOX_LAST_SEQ.load(Ordering::Relaxed);
+    let last_magic = TGA_HOST_MAILBOX_LAST_MAGIC.load(Ordering::Relaxed);
+    if magic == 0 && seq == 0 && value == 0 && status == 0 {
+        return;
+    }
+    if magic == last_magic && seq == last_seq {
+        return;
+    }
+
+    TGA_HOST_MAILBOX_LAST_MAGIC.store(magic, Ordering::Relaxed);
+    TGA_HOST_MAILBOX_LAST_SEQ.store(seq, Ordering::Relaxed);
+    crate::log!(
+        "tga: host-mailbox rx magic=0x{:08X} expected=0x{:08X} ok={} seq={} value=0x{:08X} status=0x{:08X} phys=0x{:016X}\n",
+        magic,
+        TGA_MAGIC_EXPECTED,
+        (magic == TGA_MAGIC_EXPECTED) as u8,
+        seq,
+        value,
+        status,
+        mb.phys
+    );
 }
 
 fn try_readback_doorbell(count: u32) {
@@ -475,6 +612,9 @@ pub fn try_init() -> bool {
 
     *TGA.lock() = Some(tga);
     TGA_READBACK_DOORBELL_DONE.store(false, Ordering::Relaxed);
+    TGA_HOST_MAILBOX_LAST_MAGIC.store(0, Ordering::Relaxed);
+    TGA_HOST_MAILBOX_LAST_SEQ.store(0, Ordering::Relaxed);
+    publish_host_mailbox();
     if TGA_BOOT_MMIO_TOUCH_ENABLED {
         // Keep contract explicit when MMIO touch is enabled: default to LED off.
         tga_led_set(false);
@@ -746,6 +886,7 @@ pub(crate) async fn tga_task() {
             write_heartbeat_led(t & 0x1F, t);
         }
         try_readback_doorbell(t);
+        poll_host_mailbox();
 
         let now = Instant::now();
         if next_tick <= now {

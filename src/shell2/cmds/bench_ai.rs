@@ -2,7 +2,6 @@ use alloc::collections::VecDeque;
 use alloc::format;
 use alloc::string::{String as AllocString, ToString};
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU64, Ordering};
 
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration as EmbassyDuration, Timer};
@@ -87,10 +86,8 @@ pub(crate) struct LumenPromptRequest {
 static LUMEN_INTERACTIVE_SESSIONS: spin::Mutex<Vec<LumenInteractiveSession>> =
     spin::Mutex::new(Vec::new());
 static LUMEN_PROMPT_SIGNAL: Signal<crate::wait::EmbassySpinRawMutex, u64> = Signal::new();
-static LUMEN_INFER_NEXT_ID: AtomicU64 = AtomicU64::new(1);
-static LUMEN_INFER_REQUESTS: spin::Mutex<VecDeque<LumenInferenceRequest>> =
-    spin::Mutex::new(VecDeque::new());
-static LUMEN_INFER_RESULTS: spin::Mutex<Vec<LumenInferenceResult>> = spin::Mutex::new(Vec::new());
+static LUMEN_INFER_MAILBOX: spin::Mutex<LumenInferMailbox> =
+    spin::Mutex::new(LumenInferMailbox::new());
 static LUMEN_INFER_REQUEST_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
 static LUMEN_INFER_RESULT_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
 
@@ -540,7 +537,26 @@ struct LumenInferenceRequest {
 
 struct LumenInferenceResult {
     id: u64,
+    session_id: u64,
     result: Result<LumenGenerateReport, AllocString>,
+}
+
+struct LumenInferMailbox {
+    pending: Option<LumenInferenceRequest>,
+    result: Option<LumenInferenceResult>,
+    busy: bool,
+    next_job_id: u64,
+}
+
+impl LumenInferMailbox {
+    const fn new() -> Self {
+        Self {
+            pending: None,
+            result: None,
+            busy: false,
+            next_job_id: 1,
+        }
+    }
 }
 
 enum LumenInferEngine {
@@ -551,23 +567,35 @@ enum LumenInferEngine {
     Worker,
 }
 
-struct LumenAp2Model(LlamaModel);
+struct ExclusiveAp2LumenModel {
+    model: LlamaModel,
+}
 
-struct LumenAp2Runtime {
+struct ExclusiveAp2LumenRuntime {
     model: LlamaModel,
     chat_state: LumenChatState,
 }
 
-// Lumen tensors are Rc-backed, so the model is not Send by default. For this
-// worker path we transfer exclusive ownership once, then keep all model/state
-// access on the chosen AP2 executor task.
-unsafe impl Send for LumenAp2Model {}
-unsafe impl Send for LumenAp2Runtime {}
+// Safety: LlamaModel tensors are Rc/RefCell-backed, so the model is not Send in
+// the general case. This wrapper exists only for the one-time BSP -> AP2+
+// handoff: BSP constructs/loads the model, wraps it exactly once, then moves it
+// into lumen_inference_worker_task. The wrapper is not Clone, and after this
+// move BSP must not borrow, dereference, or otherwise touch the model or its
+// Rc/RefCell internals. The AP2+ worker owns the model, KV caches, and scratch
+// state until the worker exits. Burn-baby AP jobs may still receive raw weight
+// memory chunks for numeric kernels; they never own or access this LlamaModel.
+unsafe impl Send for ExclusiveAp2LumenModel {}
+unsafe impl Send for ExclusiveAp2LumenRuntime {}
 
-impl LumenAp2Runtime {
+impl ExclusiveAp2LumenModel {
     fn new(model: LlamaModel) -> Self {
+        Self { model }
+    }
+
+    fn into_runtime(self) -> ExclusiveAp2LumenRuntime {
+        let model = self.model;
         let chat_state = LumenChatState::new(&model);
-        Self { model, chat_state }
+        ExclusiveAp2LumenRuntime { model, chat_state }
     }
 }
 
@@ -823,21 +851,73 @@ fn generate_lumen_answer(
     })
 }
 
-fn submit_lumen_inference(session_id: u64, prompt: &str) -> u64 {
-    let id = LUMEN_INFER_NEXT_ID.fetch_add(1, Ordering::AcqRel);
-    LUMEN_INFER_REQUESTS.lock().push_back(LumenInferenceRequest {
+fn submit_lumen_inference(session_id: u64, prompt: &str) -> Result<u64, AllocString> {
+    let mut mailbox = LUMEN_INFER_MAILBOX.lock();
+    if mailbox.busy || mailbox.pending.is_some() || mailbox.result.is_some() {
+        return Err(AllocString::from("inference mailbox busy"));
+    }
+    let id = mailbox.next_job_id;
+    mailbox.next_job_id = mailbox.next_job_id.saturating_add(1).max(1);
+    mailbox.pending = Some(LumenInferenceRequest {
         id,
         session_id,
         prompt: AllocString::from(prompt),
     });
+    mailbox.busy = true;
+    drop(mailbox);
     LUMEN_INFER_REQUEST_WAIT.notify_one();
-    id
+    Ok(id)
 }
 
 fn take_lumen_inference_result(id: u64) -> Option<Result<LumenGenerateReport, AllocString>> {
-    let mut results = LUMEN_INFER_RESULTS.lock();
-    let idx = results.iter().position(|result| result.id == id)?;
-    Some(results.remove(idx).result)
+    let mut mailbox = LUMEN_INFER_MAILBOX.lock();
+    if mailbox.result.as_ref().map(|result| result.id) != Some(id) {
+        return None;
+    }
+    mailbox.result.take().map(|result| result.result)
+}
+
+fn cleanup_lumen_inference_mailbox(session_id: u64, reason: &str) {
+    let (removed_requests, removed_results, cleared_busy) = {
+        let mut mailbox = LUMEN_INFER_MAILBOX.lock();
+        let removed_requests = usize::from(
+            mailbox
+                .pending
+                .as_ref()
+                .map(|request| request.session_id == session_id)
+                .unwrap_or(false),
+        );
+        if removed_requests != 0 {
+            mailbox.pending = None;
+        }
+        let removed_results = usize::from(
+            mailbox
+                .result
+                .as_ref()
+                .map(|result| result.session_id == session_id)
+                .unwrap_or(false),
+        );
+        if removed_results != 0 {
+            mailbox.result = None;
+        }
+        let cleared_busy = mailbox.busy && (removed_requests != 0 || removed_results != 0);
+        if cleared_busy {
+            mailbox.busy = false;
+        }
+        (removed_requests, removed_results, cleared_busy)
+    };
+    let request_waiters = LUMEN_INFER_REQUEST_WAIT.notify_all();
+    let result_waiters = LUMEN_INFER_RESULT_WAIT.notify_all();
+    crate::log!(
+        "lumen: inference mailbox cleanup session={} reason={} removed_requests={} removed_results={} cleared_busy={} woke_request_waiters={} woke_result_waiters={}\n",
+        session_id,
+        reason,
+        removed_requests,
+        removed_results,
+        cleared_busy,
+        request_waiters,
+        result_waiters
+    );
 }
 
 async fn wait_lumen_inference_result(
@@ -849,6 +929,7 @@ async fn wait_lumen_inference_result(
             return result;
         }
         if bench_cancel_requested(session_id) {
+            cleanup_lumen_inference_mailbox(session_id, "session-cancel-wait");
             return Err(AllocString::from("cancelled"));
         }
         LUMEN_INFER_RESULT_WAIT.wait_for_event_timeout(1_000).await;
@@ -858,22 +939,43 @@ async fn wait_lumen_inference_result(
 #[embassy_executor::task(pool_size = 1)]
 async fn lumen_inference_worker_task(
     session_id: u64,
-    model: LumenAp2Model,
+    model: ExclusiveAp2LumenModel,
     tokenizer_json: serde_json::Value,
     vocab_entries: Vec<(AllocString, usize)>,
     stop_ids: Vec<usize>,
 ) {
-    let mut runtime = LumenAp2Runtime::new(model.0);
+    let cpu_slot = crate::percpu::current_slot();
+    let lapic_id = crate::percpu::current_lapic_id_via_cpuid();
+    crate::log!(
+        "lumen: AP2+ inference worker start cpu_slot={} lapic={} session={} ownership=exclusive-model-kv-scratch\n",
+        cpu_slot,
+        lapic_id,
+        session_id
+    );
+    let mut runtime = model.into_runtime();
     loop {
         let request = {
-            let mut requests = LUMEN_INFER_REQUESTS.lock();
-            requests
-                .iter()
-                .position(|request| request.session_id == session_id)
-                .and_then(|idx| requests.remove(idx))
+            let mut mailbox = LUMEN_INFER_MAILBOX.lock();
+            if mailbox
+                .pending
+                .as_ref()
+                .map(|request| request.session_id == session_id)
+                .unwrap_or(false)
+            {
+                mailbox.pending.take()
+            } else {
+                None
+            }
         };
         let Some(request) = request else {
             if bench_cancel_requested(session_id) {
+                cleanup_lumen_inference_mailbox(session_id, "worker-cancel");
+                crate::log!(
+                    "lumen: AP2+ inference worker exit cpu_slot={} lapic={} session={} reason=cancel ownership=released\n",
+                    cpu_slot,
+                    lapic_id,
+                    session_id
+                );
                 return;
             }
             LUMEN_INFER_REQUEST_WAIT.wait_for_event_timeout(1_000).await;
@@ -887,9 +989,15 @@ async fn lumen_inference_worker_task(
             stop_ids.as_slice(),
             request.prompt.as_str(),
         );
-        LUMEN_INFER_RESULTS
-            .lock()
-            .push(LumenInferenceResult { id: request.id, result });
+        {
+            let mut mailbox = LUMEN_INFER_MAILBOX.lock();
+            mailbox.result = Some(LumenInferenceResult {
+                id: request.id,
+                session_id,
+                result,
+            });
+            mailbox.busy = false;
+        }
         LUMEN_INFER_RESULT_WAIT.notify_all();
     }
 }
@@ -2240,9 +2348,21 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
         let stop_ids = tokenizer_stop_ids(&tokenizer_json);
         let mut infer_engine = match crate::workers::pick_background_spawner_with_slot() {
             Some((slot, kind, spawner)) => {
+                let bsp_cpu_slot = crate::percpu::current_slot();
+                let bsp_lapic_id = crate::percpu::current_lapic_id_via_cpuid();
+                crate::log!(
+                    "lumen: BSP transferring exclusive LlamaModel ownership to AP2+ worker target_slot={} kind={} session={} bsp_cpu_slot={} bsp_lapic={} invariant=bsp-model-dead-after-move\n",
+                    slot,
+                    kind,
+                    session_id,
+                    bsp_cpu_slot,
+                    bsp_lapic_id
+                );
+                // Ownership boundary: this consumes model; Worker keeps no BSP handle.
+                let exclusive_model = ExclusiveAp2LumenModel::new(model);
                 match lumen_inference_worker_task(
                     session_id,
-                    LumenAp2Model(model),
+                    exclusive_model,
                     tokenizer_json.clone(),
                     vocab_entries.clone(),
                     stop_ids.clone(),
@@ -2250,7 +2370,7 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
                     Ok(token) => {
                         spawner.spawn(token);
                         crate::log!(
-                            "lumen: inference worker spawned slot={} kind={} session={}\n",
+                            "lumen: AP2+ inference worker spawned slot={} kind={} session={} ownership=transferred-exclusive\n",
                             slot,
                             kind,
                             session_id
@@ -2326,8 +2446,10 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
                     request.prompt.as_str(),
                 ),
                 LumenInferEngine::Worker => {
-                    let request_id = submit_lumen_inference(session_id, request.prompt.as_str());
-                    wait_lumen_inference_result(session_id, request_id).await
+                    match submit_lumen_inference(session_id, request.prompt.as_str()) {
+                        Ok(request_id) => wait_lumen_inference_result(session_id, request_id).await,
+                        Err(err) => Err(err),
+                    }
                 }
             };
             match generate_result {
@@ -2368,6 +2490,7 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
         }
         crate::r::lumen_service::mark_offline(session_id);
         unregister_lumen_interactive_session(session_id);
+        cleanup_lumen_inference_mailbox(session_id, "session-end");
 
         Timer::after(EmbassyDuration::from_millis(1)).await;
     }

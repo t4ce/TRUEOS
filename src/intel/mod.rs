@@ -13,6 +13,7 @@
 
 mod display;
 pub(crate) mod format;
+mod gpgpu;
 mod guc;
 pub mod hda;
 mod hw_cursor;
@@ -258,7 +259,10 @@ pub fn init_once() {
     } else {
         crate::log!("intel/display: plane1 boot demo disabled\n");
     }
-    crate::log!("intel/render: disabled reason=render-module-removed\n");
+    crate::log!(
+        "intel/render: disabled reason=primary-render-module-removed gpgpu_probe=enabled\n"
+    );
+    self::gpgpu::submit_gpgpu_preflight_once();
     crate::log!("intel/media: source warmup disabled trigger=trueosfs-root-mounted\n",);
     if MEDIA_BOOT_DEMO_ENABLED {
         crate::log!("intel/media: scheduled boot demo delay_ms={}\n", MEDIA_BOOT_DEMO_DELAY_MS);
@@ -328,30 +332,31 @@ pub fn warm_state() -> Option<RenderWarmState> {
 }
 
 pub(crate) fn gpgpu_preflight_status() -> GpgpuPreflightStatus {
+    let status = self::gpgpu::gpgpu_preflight_status();
     GpgpuPreflightStatus {
-        submitted: false,
-        accepted: false,
-        completed: false,
-        guc_ready: guc_ready(),
-        marker: 0,
-        dot: 0,
-        sum_a: 0,
-        sum_b: 0,
-        lanes: 0,
-        min_burn_rows: GPGPU_BURN_MIN_ROWS,
-        min_burn_k_dim: GPGPU_BURN_MIN_K_DIM,
-        arena_gpu_base: 0,
-        arena_bytes: 0,
-        tile_rows: GPGPU_TILE_ROWS,
-        max_tiles: 0,
-        enough_for_shape: false,
-        eu_kernel_uploaded: false,
-        eu_walker_encoded: false,
-        eu_walker_submitted: false,
-        eu_walker_retired: false,
-        eu_dispatch_delta: 0,
-        eu_c_store_value: 0,
-        result_c_changed_by_eu: false,
+        submitted: status.submitted,
+        accepted: status.accepted,
+        completed: status.completed,
+        guc_ready: status.guc_ready,
+        marker: status.marker,
+        dot: status.dot,
+        sum_a: status.sum_a,
+        sum_b: status.sum_b,
+        lanes: status.lanes,
+        min_burn_rows: status.min_burn_rows,
+        min_burn_k_dim: status.min_burn_k_dim,
+        arena_gpu_base: status.arena_gpu_base,
+        arena_bytes: status.arena_bytes,
+        tile_rows: status.tile_rows,
+        max_tiles: status.max_tiles,
+        enough_for_shape: status.enough_for_shape,
+        eu_kernel_uploaded: status.eu_kernel_uploaded,
+        eu_walker_encoded: status.eu_walker_encoded,
+        eu_walker_submitted: status.eu_walker_submitted,
+        eu_walker_retired: status.eu_walker_retired,
+        eu_dispatch_delta: status.eu_dispatch_delta,
+        eu_c_store_value: status.eu_c_store_value,
+        result_c_changed_by_eu: status.result_c_changed_by_eu,
     }
 }
 
