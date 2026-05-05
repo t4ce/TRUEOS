@@ -54,11 +54,30 @@ pub struct Device {
     kernel: Kernel,
     current_config_value: Option<u8>,
     config_desc: Vec<ConfigurationDescriptor>,
+    raw_config_desc: Vec<Vec<u8>>,
+    max_primary_stream_array_entries: usize,
     port_speed: Speed,
     root_port_id: u8,
     port_id: u8,
     eps: BTreeMap<Dci, EndpointBase>,
     cmd: CommandRing,
+}
+
+#[derive(Clone, Copy)]
+struct SuperSpeedEndpointCompanion {
+    max_burst: u8,
+    attributes: u8,
+}
+
+impl SuperSpeedEndpointCompanion {
+    fn max_stream_ids(self) -> usize {
+        let exponent = self.attributes & 0x1f;
+        if exponent == 0 {
+            0
+        } else {
+            1usize << usize::from(exponent.min(16))
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -206,6 +225,8 @@ impl Device {
             transfer_result_handler: host.transfer_result_handler.clone(),
             current_config_value: None,
             config_desc: vec![],
+            raw_config_desc: vec![],
+            max_primary_stream_array_entries: 0,
             port_speed: Speed::Full,
             root_port_id: 0,
             port_id: 0,
@@ -265,6 +286,7 @@ impl Device {
         self.port_id = info.port_id;
         // Keep the raw PORTSC.PortSpeed encoding for interval calculations
         self.port_speed = info.port_speed;
+        self.max_primary_stream_array_entries = host.max_primary_stream_array_entries();
         // let speed = info.port_speed.to_xhci_portsc_value();
 
         let ep = self.new_ep(Dci::CTRL)?;
@@ -737,13 +759,26 @@ impl Device {
             CommandLifecycleStage::GetConfigurationDescriptor,
             u32::from(index),
         );
-        match self.ep_ctrl().get_configuration_descriptor(index).await {
-            Ok(desc) => {
-                lifecycle.ok(
-                    CommandLifecycleStage::GetConfigurationDescriptor,
-                    u32::from(desc.configuration_value),
-                );
-                Ok(desc)
+        match self.ep_ctrl().get_configuration_descriptor_bytes(index).await {
+            Ok(raw) => match ConfigurationDescriptor::parse(&raw) {
+                Some(desc) => {
+                    lifecycle.ok(
+                        CommandLifecycleStage::GetConfigurationDescriptor,
+                        u32::from(desc.configuration_value),
+                    );
+                    self.raw_config_desc.push(raw);
+                    Ok(desc)
+                }
+                None => {
+                    let err = USBError::Other(anyhow!("config descriptor parse err"));
+                    self.abort_command_lifecycle(
+                        lifecycle,
+                        CommandLifecycleStage::GetConfigurationDescriptor,
+                        &err,
+                    )
+                    .await;
+                    Err(err.into())
+                }
             }
             Err(err) => {
                 self.abort_command_lifecycle(
@@ -818,8 +853,10 @@ impl Device {
             }
             let mut ep_raw = self.new_ep(dci.into())?;
             let max_burst_size = self.xhci_bulk_max_burst_size(interface, alternate, &desc);
-            if self.should_enable_skhynix_uas_streams(interface, alternate, &desc) {
-                ep_raw.enable_primary_streams(32)?;
+            if let Some(stream_context_count) =
+                self.xhci_bulk_stream_context_count(interface, alternate, &desc)
+            {
+                ep_raw.enable_primary_streams(stream_context_count)?;
                 for ring in ep_raw.stream_rings() {
                     self.transfer_result_handler
                         .add_queue(self.id.as_u8(), dci, ring);
@@ -833,7 +870,7 @@ impl Device {
                     self.id.as_u8(),
                     dci,
                     desc.address,
-                    32,
+                    stream_context_count.min(u16::MAX as usize) as u16,
                     ep_raw.max_primary_streams(),
                     max_burst_size,
                     desc.max_packet_size,
@@ -989,15 +1026,91 @@ impl Device {
             && alt.protocol == 0x62
     }
 
-    fn should_enable_skhynix_uas_streams(
+    fn ss_endpoint_companion(
         &self,
         interface: u8,
         alternate: u8,
         desc: &EndpointDescriptor,
-    ) -> bool {
-        self.is_skhynix_uas_alt(interface, alternate)
-            && matches!(desc.transfer_type, EndpointType::Bulk)
-            && matches!(desc.address, 0x81 | 0x83 | 0x02)
+    ) -> Option<SuperSpeedEndpointCompanion> {
+        let current_config = self
+            .current_config_value
+            .or_else(|| self.config_desc.first().map(|cfg| cfg.configuration_value));
+
+        for (index, config) in self.config_desc.iter().enumerate() {
+            if Some(config.configuration_value) != current_config {
+                continue;
+            }
+            let Some(raw) = self.raw_config_desc.get(index) else {
+                continue;
+            };
+            let mut offset = 0usize;
+            let mut current_interface = None;
+            let mut current_alternate = None;
+            let mut current_endpoint = None;
+
+            while offset + 2 <= raw.len() {
+                let len = raw[offset] as usize;
+                let ty = raw[offset + 1];
+                if len < 2 || offset + len > raw.len() {
+                    break;
+                }
+
+                match ty {
+                    0x04 if len >= 9 => {
+                        current_interface = Some(raw[offset + 2]);
+                        current_alternate = Some(raw[offset + 3]);
+                        current_endpoint = None;
+                    }
+                    0x05 if len >= 7 => {
+                        current_endpoint = Some(raw[offset + 2]);
+                    }
+                    0x30
+                        if len >= 6
+                            && current_interface == Some(interface)
+                            && current_alternate == Some(alternate)
+                            && current_endpoint == Some(desc.address) =>
+                    {
+                        return Some(SuperSpeedEndpointCompanion {
+                            max_burst: raw[offset + 2],
+                            attributes: raw[offset + 3],
+                        });
+                    }
+                    _ => {}
+                }
+
+                offset += len;
+            }
+        }
+
+        None
+    }
+
+    fn xhci_bulk_stream_context_count(
+        &self,
+        interface: u8,
+        alternate: u8,
+        desc: &EndpointDescriptor,
+    ) -> Option<usize> {
+        if !self.is_skhynix_uas_alt(interface, alternate)
+            || !matches!(desc.transfer_type, EndpointType::Bulk)
+        {
+            return None;
+        }
+
+        let companion = self.ss_endpoint_companion(interface, alternate, desc)?;
+        let device_stream_ids = companion.max_stream_ids();
+        let host_context_limit = self.max_primary_stream_array_entries;
+        if device_stream_ids == 0 || host_context_limit < 4 {
+            return None;
+        }
+
+        let requested_contexts = (device_stream_ids + 1).next_power_of_two();
+        let context_count = requested_contexts.min(host_context_limit);
+        if context_count < 4 {
+            None
+        } else {
+            Some(context_count)
+        }
     }
 
     fn xhci_bulk_max_burst_size(
@@ -1006,11 +1119,9 @@ impl Device {
         alternate: u8,
         desc: &EndpointDescriptor,
     ) -> u8 {
-        if self.should_enable_skhynix_uas_streams(interface, alternate, desc) {
-            15
-        } else {
-            0
-        }
+        self.ss_endpoint_companion(interface, alternate, desc)
+            .map(|companion| companion.max_burst)
+            .unwrap_or(0)
     }
 
     /// 根据 XHCI 规范计算端点的 interval 值

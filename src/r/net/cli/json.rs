@@ -8,7 +8,7 @@ use alloc::{
     vec::Vec,
 };
 
-use crate::t::net::https::{FetchError, fetch_https_body_async, post_https_json_async};
+use crate::t::net::https::{fetch_https_body_hyper_async, post_https_json_async, FetchError};
 
 #[derive(Clone, Debug)]
 pub enum JsonError {
@@ -110,7 +110,7 @@ impl JsonClient {
             return Err(JsonError::EmptyUrl);
         }
 
-        let body = fetch_https_body_async(url, self.timeout_ms, self.max_bytes).await?;
+        let body = fetch_https_body_hyper_async(url, self.timeout_ms, self.max_bytes).await?;
         String::from_utf8(body).map_err(|_| JsonError::InvalidUtf8)
     }
 
@@ -204,6 +204,11 @@ fn hex(n: u8) -> char {
 
 pub async fn get_json(url: &str) -> Result<String, JsonError> {
     JsonClient::default().get(url).await
+}
+
+/// Preferred kernel JSON GET path: Hyper HTTP/1 over TRUEOS TLS/VNet.
+pub async fn get_json_hyper(url: &str) -> Result<String, JsonError> {
+    get_json(url).await
 }
 
 pub async fn get_json_with_query(

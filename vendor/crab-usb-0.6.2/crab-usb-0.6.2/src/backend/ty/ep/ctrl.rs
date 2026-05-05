@@ -1,5 +1,6 @@
 use core::ptr::NonNull;
 
+use alloc::vec::Vec;
 use usb_if::descriptor::{ConfigurationDescriptor, DescriptorType, DeviceDescriptor};
 use usb_if::err::{TransferError, USBError};
 use usb_if::host::ControlSetup;
@@ -134,6 +135,18 @@ impl EndpointControl {
         &mut self,
         index: u8,
     ) -> Result<ConfigurationDescriptor, USBError> {
+        let full_data = self.get_configuration_descriptor_bytes(index).await?;
+
+        let parsed_config = ConfigurationDescriptor::parse(&full_data)
+            .ok_or(anyhow!("config descriptor parse err"))?;
+
+        Ok(parsed_config)
+    }
+
+    pub async fn get_configuration_descriptor_bytes(
+        &mut self,
+        index: u8,
+    ) -> Result<Vec<u8>, USBError> {
         let mut header = alloc::vec![0u8; ConfigurationDescriptor::LEN]; // 配置描述符头部固定为9字节
         self.get_descriptor(DescriptorType::CONFIGURATION, index, 0, &mut header)
             .await?;
@@ -145,10 +158,7 @@ impl EndpointControl {
         self.get_descriptor(DescriptorType::CONFIGURATION, index, 0, &mut full_data)
             .await?;
 
-        let parsed_config = ConfigurationDescriptor::parse(&full_data)
-            .ok_or(anyhow!("config descriptor parse err"))?;
-
-        Ok(parsed_config)
+        Ok(full_data)
     }
 }
 
