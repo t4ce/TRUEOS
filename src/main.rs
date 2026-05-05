@@ -130,8 +130,6 @@ mod tst_ui2_text_input_demo;
 mod tst_ui2_triangle_demo;
 #[path = "tst/ui2_trueosfs_explorer_demo.rs"]
 mod tst_ui2_trueosfs_explorer_demo;
-#[path = "tst/ui2_weather_demo.rs"]
-mod tst_ui2_weather_demo;
 #[path = "tst/ws_time.rs"]
 mod tst_ws_time;
 #[cfg(target_arch = "x86_64")]

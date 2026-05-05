@@ -1291,23 +1291,17 @@ unsafe fn locale_profile_from_arg0(
     ctx: *mut qjs::JSContext,
     argc: c_int,
     argv: *const qjs::JSValueConst,
-) -> &'static trueos_weather::lang::IntlLocaleProfile {
+) -> &'static trueos_locale::IntlLocaleProfile {
     if argv.is_null() || argc <= 0 {
-        return trueos_weather::lang::intl_locale_profile(
-            trueos_weather::lang::DEFAULT_INTL_LOCALE,
-        );
+        return trueos_locale::intl_locale_profile(trueos_locale::DEFAULT_INTL_LOCALE);
     }
     let args = core::slice::from_raw_parts(argv, argc as usize);
     let Some(locale) = qjs::jsbind::JsStringRef::new(ctx, args[0]) else {
-        return trueos_weather::lang::intl_locale_profile(
-            trueos_weather::lang::DEFAULT_INTL_LOCALE,
-        );
+        return trueos_locale::intl_locale_profile(trueos_locale::DEFAULT_INTL_LOCALE);
     };
     match locale.as_str() {
-        Some(s) => trueos_weather::lang::intl_locale_profile(s),
-        None => {
-            trueos_weather::lang::intl_locale_profile(trueos_weather::lang::DEFAULT_INTL_LOCALE)
-        }
+        Some(s) => trueos_locale::intl_locale_profile(s),
+        None => trueos_locale::intl_locale_profile(trueos_locale::DEFAULT_INTL_LOCALE),
     }
 }
 
@@ -1323,7 +1317,7 @@ unsafe fn set_char_prop(ctx: *mut qjs::JSContext, obj: qjs::JSValue, key: &[u8],
 
 unsafe fn make_resolved_options(
     ctx: *mut qjs::JSContext,
-    profile: &trueos_weather::lang::IntlLocaleProfile,
+    profile: &trueos_locale::IntlLocaleProfile,
     kind: &str,
 ) -> qjs::JSValue {
     let out = qjs::JS_NewObject(ctx);
@@ -1386,7 +1380,7 @@ unsafe extern "C" fn intl_format(
 
 unsafe fn make_formatter_object(
     ctx: *mut qjs::JSContext,
-    profile: &trueos_weather::lang::IntlLocaleProfile,
+    profile: &trueos_locale::IntlLocaleProfile,
     kind: &str,
 ) -> qjs::JSValue {
     let obj = qjs::JS_NewObject(ctx);

@@ -22,7 +22,7 @@ libm = { version = "0.2", default-features = false, optional = true }
 v = { path = "../trueos-v", default-features = false }
 trueos-gfx-core = { path = "../trueos-gfx-core", default-features = false, features = ["alloc"], optional = true }
 trueos-math = { path = "../trueos-math", default-features = false, optional = true }
-trueos-weather = { path = "../trueos-weather", default-features = false, optional = true }
+trueos-locale = { path = "../trueos-locale", default-features = false, optional = true }
 lightningcss = { version = "1.0.0-alpha.70", default-features = false, optional = true }
 usvg = { version = "0.45.1", default-features = false }
 parry2d = { version = "0.26", default-features = false, features = ["dim2", "f32"], optional = true }
@@ -33,7 +33,7 @@ yoga-native = []
 lightningcss-native = ["dep:lightningcss"]
 
 # TRUEOS-only helpers (kernel logging via trueos_cabi_write + Complex-backed module smoke).
-trueos = ["dep:trueos-gfx-core", "dep:trueos-math", "dep:trueos-weather", "dep:embassy-time-driver", "dep:embassy-executor", "dep:embassy-time", "dep:embassy-sync", "dep:libm", "dep:parry2d"]
+trueos = ["dep:trueos-gfx-core", "dep:trueos-math", "dep:trueos-locale", "dep:embassy-time-driver", "dep:embassy-executor", "dep:embassy-time", "dep:embassy-sync", "dep:libm", "dep:parry2d"]
 
 [patch.crates-io]
 num-traits = { path = "../../vendor/num-traits-0.2.19" }

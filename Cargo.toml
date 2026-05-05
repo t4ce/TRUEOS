@@ -56,7 +56,6 @@ trueos-fs = { path = "crates/trueos-fs" }
 trueos-c4 = { path = "crates/trueos-c4" }
 v = { path = "crates/trueos-v" }
 trueos-tetris = { path = "crates/trueos-tetris" }
-trueos-weather = { path = "crates/trueos-weather" }
 trueos-vm = { path = "crates/trueos-vm" }
 trueos-esp = { path = "crates/trueos-esp" }
 trueos-chat = { path = "crates/trueos-chat" }

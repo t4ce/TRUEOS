@@ -1,3 +1,5 @@
+#![no_std]
+
 #[derive(Copy, Clone, Debug)]
 pub struct Language {
     pub code: &'static str,
