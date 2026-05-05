@@ -14,6 +14,8 @@ const MAX_COMPUTE_POLL_SLOTS: usize = 256;
 static FALLBACK_QUEUE: Mutex<VecDeque<ComputeJob>> = Mutex::new(VecDeque::new());
 static LOGGED_QUEUE_LANE: AtomicBool = AtomicBool::new(false);
 static LOGGED_POLL_LANE: AtomicBool = AtomicBool::new(false);
+static LOGGED_SERVICE_PROTECTED_LANE: AtomicBool = AtomicBool::new(false);
+static SERVICE_PROTECTED_SLOTS: AtomicU64 = AtomicU64::new(0);
 #[cfg(target_arch = "x86_64")]
 static LOGGED_BF16_SIMD_PROBE: AtomicBool = AtomicBool::new(false);
 #[cfg(target_arch = "x86_64")]
@@ -109,7 +111,7 @@ pub fn poll_counts_for_slots(slots: &[u32]) -> Vec<(u32, u64)> {
 }
 
 pub fn online_worker_count() -> usize {
-    online_background_worker_slots().len().max(1)
+    online_compute_worker_slots().len().max(1)
 }
 
 pub fn recommended_chunk_rows(n_rows: usize) -> usize {
@@ -131,6 +133,9 @@ pub fn poll_compute_lane() -> bool {
     if !crate::workers::is_background_worker_slot(slot) {
         return false;
     }
+    if should_skip_compute_slot(slot) {
+        return false;
+    }
 
     let job = FALLBACK_QUEUE.lock().pop_front();
     let Some(job) = job else {
@@ -147,6 +152,21 @@ pub fn poll_compute_lane() -> bool {
     POLLED_JOBS.fetch_add(1, Ordering::AcqRel);
     execute_job(job);
     true
+}
+
+pub fn protect_service_compute_slot(cpu_slot: u32, purpose: &'static str) {
+    if !crate::workers::is_background_worker_slot(cpu_slot) || cpu_slot >= 64 {
+        return;
+    }
+    let bit = 1u64 << cpu_slot;
+    let previous = SERVICE_PROTECTED_SLOTS.fetch_or(bit, Ordering::AcqRel);
+    if previous & bit == 0 {
+        crate::log!(
+            "burn-baby: service-protected compute slot={} purpose={} action=skip-ap-poll-chunks\n",
+            cpu_slot,
+            purpose
+        );
+    }
 }
 
 pub fn matvec_rowmajor_f32(
@@ -369,15 +389,52 @@ fn online_background_worker_slots() -> Vec<u32> {
         .collect()
 }
 
+fn online_compute_worker_slots() -> Vec<u32> {
+    let slots = online_background_worker_slots();
+    let mut compute_slots: Vec<u32> = slots
+        .iter()
+        .copied()
+        .filter(|slot| !is_service_protected_slot(*slot))
+        .collect();
+    if compute_slots.is_empty() {
+        compute_slots = slots;
+    }
+    compute_slots
+}
+
+fn is_service_protected_slot(cpu_slot: u32) -> bool {
+    if cpu_slot >= 64 {
+        return false;
+    }
+    (SERVICE_PROTECTED_SLOTS.load(Ordering::Acquire) & (1u64 << cpu_slot)) != 0
+}
+
+fn should_skip_compute_slot(cpu_slot: u32) -> bool {
+    if !is_service_protected_slot(cpu_slot) {
+        return false;
+    }
+    let has_other_compute_slot = online_background_worker_slots()
+        .into_iter()
+        .any(|slot| slot != cpu_slot && !is_service_protected_slot(slot));
+    if has_other_compute_slot && !LOGGED_SERVICE_PROTECTED_LANE.swap(true, Ordering::AcqRel) {
+        crate::log!(
+            "burn-baby: AP poll compute lane protected slot={} action=leave-for-service\n",
+            cpu_slot
+        );
+    }
+    has_other_compute_slot
+}
+
 fn submit_job(job: ComputeJob) {
     SUBMITTED_JOBS.fetch_add(1, Ordering::AcqRel);
 
     if !LOGGED_QUEUE_LANE.swap(true, Ordering::AcqRel) {
-        let slots = online_background_worker_slots();
+        let slots = online_compute_worker_slots();
         crate::log!(
-            "burn-baby: queued compute jobs for AP poll lane workers={} slots={:?}\n",
+            "burn-baby: queued compute jobs for AP poll lane workers={} slots={:?} protected_mask=0x{:016X}\n",
             slots.len(),
-            slots
+            slots,
+            SERVICE_PROTECTED_SLOTS.load(Ordering::Acquire)
         );
     }
     FALLBACK_QUEUE.lock().push_back(job);

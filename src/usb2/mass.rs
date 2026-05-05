@@ -1,4 +1,4 @@
-use alloc::{boxed::Box, string::String, vec::Vec};
+use alloc::{boxed::Box, string::String, vec, vec::Vec};
 use core::{
     future::Future,
     ptr::{read_unaligned, read_volatile},
@@ -18,6 +18,7 @@ const USB_PROTO_BULK_ONLY: u8 = 0x50;
 const USB_PROTO_UAS: u8 = 0x62;
 const BOT_IO_RETRIES: usize = 8;
 const BOT_IO_TIMEOUT_MS: u64 = crate::allcaps::storage::USB_MASS_BOT_IO_TIMEOUT_MS;
+const UAS_IO_TIMEOUT_MS: u64 = crate::allcaps::storage::USB_MASS_UAS_IO_TIMEOUT_MS;
 const BOT_RECOVERY_SETTLE_MS: u64 = crate::allcaps::storage::USB_MASS_BOT_RECOVERY_SETTLE_MS;
 const UAS_IU_COMMAND: u8 = 0x01;
 const UAS_IU_STATUS: u8 = 0x03;
@@ -307,6 +308,38 @@ fn make_uas_command_iu(tag: u16, cdb: &[u8]) -> [u8; 32] {
     let cdb_len = cdb.len().min(16);
     iu[16..16 + cdb_len].copy_from_slice(&cdb[..cdb_len]);
     iu
+}
+
+fn cdb_write_buffer_echo(len: usize) -> [u8; 10] {
+    let len = len.min(0x00FF_FFFF);
+    [
+        0x3B,
+        0x0A,
+        0,
+        0,
+        0,
+        0,
+        ((len >> 16) & 0xFF) as u8,
+        ((len >> 8) & 0xFF) as u8,
+        (len & 0xFF) as u8,
+        0,
+    ]
+}
+
+fn cdb_read_buffer_echo(len: usize) -> [u8; 10] {
+    let len = len.min(0x00FF_FFFF);
+    [
+        0x3C,
+        0x0A,
+        0,
+        0,
+        0,
+        0,
+        ((len >> 16) & 0xFF) as u8,
+        ((len >> 8) & 0xFF) as u8,
+        (len & 0xFF) as u8,
+        0,
+    ]
 }
 
 fn uas_tag(tag: u32) -> u16 {
@@ -857,7 +890,7 @@ async fn uas_send_command(
     if uas_probe_logs_enabled() {
         log_uas_iu("command-iu", cmd, tag, &iu);
     }
-    let sent = with_timeout_or_none(command_out.submit_and_wait(&iu), BOT_IO_TIMEOUT_MS)
+    let sent = with_timeout_or_none(command_out.submit_and_wait(&iu), UAS_IO_TIMEOUT_MS)
         .await
         .ok_or_else(|| {
             log_uas_debug("command-timeout", cmd, tag);
@@ -880,7 +913,7 @@ async fn uas_read_iu(
     cmd: &'static str,
     buf: &mut [u8],
 ) -> Result<usize, MassProbeError> {
-    let got = with_timeout_or_none(status_in.submit_and_wait(buf), BOT_IO_TIMEOUT_MS)
+    let got = with_timeout_or_none(status_in.submit_and_wait(buf), UAS_IO_TIMEOUT_MS)
         .await
         .ok_or_else(|| {
             log_transport_debug("uas-status-timeout");
@@ -942,13 +975,9 @@ async fn uas_command_in(
         .submit(&mut ready_iu)
         .map_err(|_| MassProbeError::Transport("uas-status-submit"))?;
     log_uas_debug("status-submit", cmd, tag);
-    let data_handle = data_in
-        .submit(data)
-        .map_err(|_| MassProbeError::Transport("uas-data-submit"))?;
-    log_uas_debug("data-in-submit", cmd, tag);
     uas_send_command(command_out, cmd, cdb, tag).await?;
 
-    let ready_got = with_timeout_or_none(ready_handle, BOT_IO_TIMEOUT_MS)
+    let ready_got = with_timeout_or_none(ready_handle, UAS_IO_TIMEOUT_MS)
         .await
         .ok_or_else(|| {
             log_uas_debug("ready-timeout", cmd, tag);
@@ -977,14 +1006,14 @@ async fn uas_command_in(
         });
     }
 
-    let got = with_timeout_or_none(data_handle, BOT_IO_TIMEOUT_MS)
+    log_uas_debug("data-in-submit", cmd, tag);
+    let got = with_timeout_or_none(data_in.submit_and_wait(data), UAS_IO_TIMEOUT_MS)
         .await
         .ok_or_else(|| {
             log_uas_debug("data-in-timeout", cmd, tag);
             MassProbeError::Transport("uas-data-timeout")
         })?
-        .map_err(|_| MassProbeError::Transport("uas-data-in"))?
-        .transfer_len;
+        .map_err(|_| MassProbeError::Transport("uas-data-in"))?;
     log_uas_debug("data-in-complete", cmd, tag);
     uas_read_status(status_in, cmd, tag).await?;
     Ok(got)
@@ -1007,7 +1036,7 @@ async fn uas_command_out(
     log_uas_debug("status-submit", cmd, tag);
     uas_send_command(command_out, cmd, cdb, tag).await?;
 
-    let ready_got = with_timeout_or_none(ready_handle, BOT_IO_TIMEOUT_MS)
+    let ready_got = with_timeout_or_none(ready_handle, UAS_IO_TIMEOUT_MS)
         .await
         .ok_or_else(|| {
             log_uas_debug("ready-timeout", cmd, tag);
@@ -1036,7 +1065,7 @@ async fn uas_command_out(
         });
     }
 
-    let sent = with_timeout_or_none(data_out.submit_and_wait(data), BOT_IO_TIMEOUT_MS)
+    let sent = with_timeout_or_none(data_out.submit_and_wait(data), UAS_IO_TIMEOUT_MS)
         .await
         .ok_or_else(|| {
             log_uas_debug("data-out-timeout", cmd, tag);
@@ -1068,7 +1097,7 @@ async fn uas_command_no_data(
         .map_err(|_| MassProbeError::Transport("uas-status-submit"))?;
     log_uas_debug("status-submit", cmd, tag);
     uas_send_command(command_out, cmd, cdb, tag).await?;
-    let got = with_timeout_or_none(status_handle, BOT_IO_TIMEOUT_MS)
+    let got = with_timeout_or_none(status_handle, UAS_IO_TIMEOUT_MS)
         .await
         .ok_or_else(|| {
             log_uas_debug("status-timeout", cmd, tag);
@@ -1440,6 +1469,113 @@ pub(crate) async fn synchronize_cache_uas_skhynix(
 ) -> Result<(), MassProbeError> {
     let cdb = scsi::cdb_synchronize_cache_10();
     uas_command_no_data(command_out, status_in, "sync-cache-10", &cdb, tag).await
+}
+
+async fn echo_buffer_uas_skhynix(
+    command_out: &mut EndpointBulkOut,
+    status_in: &mut EndpointBulkIn,
+    data_in: &mut EndpointBulkIn,
+    data_out: &mut EndpointBulkOut,
+) -> Result<(), MassProbeError> {
+    let pattern = [
+        0x54, 0x52, 0x55, 0x45, 0x4F, 0x53, 0x2D, 0x55, 0x41, 0x53, 0x2D, 0x45, 0x43, 0x48, 0x4F,
+        0x21,
+    ];
+    let write_cdb = cdb_write_buffer_echo(pattern.len());
+    uas_command_out(
+        command_out,
+        status_in,
+        data_out,
+        "write-buffer-echo",
+        &write_cdb,
+        &pattern,
+        0x5541_EC01,
+    )
+    .await?;
+
+    let mut echoed = [0u8; 16];
+    let read_cdb = cdb_read_buffer_echo(echoed.len());
+    let got = uas_command_in(
+        command_out,
+        status_in,
+        data_in,
+        "read-buffer-echo",
+        &read_cdb,
+        &mut echoed,
+        0x5541_EC02,
+    )
+    .await?;
+    if got < pattern.len() {
+        return Err(MassProbeError::ShortData {
+            cmd: "read-buffer-echo",
+            got,
+            need: pattern.len(),
+        });
+    }
+    if echoed != pattern {
+        return Err(MassProbeError::Transport("uas-echo-mismatch"));
+    }
+    Ok(())
+}
+
+pub(crate) async fn exercise_mass_uas_skhynix(
+    command_out: &mut EndpointBulkOut,
+    status_in: &mut EndpointBulkIn,
+    data_in: &mut EndpointBulkIn,
+    data_out: &mut EndpointBulkOut,
+) -> Result<MassProbeInfo, MassProbeError> {
+    let info = probe_mass_uas_skhynix(command_out, status_in, data_in).await?;
+
+    let block_size = info.block_size as usize;
+    if block_size == 0 || block_size > 1024 * 1024 {
+        return Err(MassProbeError::ShortData {
+            cmd: "uas-exercise-block-size",
+            got: block_size,
+            need: 1,
+        });
+    }
+
+    let mut first_block = vec![0u8; block_size];
+    read_blocks_uas_skhynix(
+        command_out,
+        status_in,
+        data_in,
+        0,
+        1,
+        first_block.as_mut_slice(),
+        0x5541_EC10,
+    )
+    .await?;
+    let checksum = first_block
+        .iter()
+        .fold(0u32, |acc, &byte| acc.wrapping_mul(33).wrapping_add(u32::from(byte)));
+    crate::log!(
+        "crabusb: mass uas-skhynix exercise read-lba0 bytes={} checksum=0x{:08X}\n",
+        first_block.len(),
+        checksum
+    );
+
+    match echo_buffer_uas_skhynix(command_out, status_in, data_in, data_out).await {
+        Ok(()) => crate::log!("crabusb: mass uas-skhynix exercise echo-buffer ok\n"),
+        Err(err) => {
+            crate::log!(
+                "crabusb: mass uas-skhynix exercise echo-buffer optional failed: {:?}\n",
+                err
+            );
+            if let Some(sense) =
+                request_sense_fixed_uas_skhynix(command_out, status_in, data_in, 0x5541_EC03).await
+            {
+                crate::log!(
+                    "crabusb: mass uas-skhynix exercise echo-buffer sense={:?} asc=0x{:02X} ascq=0x{:02X}\n",
+                    sense.sense_key,
+                    sense.asc,
+                    sense.ascq
+                );
+            }
+        }
+    }
+
+    Ok(info)
 }
 
 async fn read_capacity_16(

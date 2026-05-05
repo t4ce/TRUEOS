@@ -26,6 +26,8 @@ const CHAT_HTTP_IDLE_POLL_MS: u64 = 10;
 const CHAT_HTTP_VNET_OPEN_RETRY_MS: u64 = 100;
 const CHAT_HTTP_LISTEN_POLL_MS: u64 = 25;
 const CHAT_HTTP_BLOCKING_LANE_RETRY_MS: u64 = 1000;
+const CHAT_SAVE_BATCH_MS: u64 = 10_000;
+const CHAT_SAVE_IDLE_MS: u64 = 1000;
 const CHAT_STORE_DIR: &str = "chat";
 const CHAT_STORE_PATH: &str = "chat/rooms.json";
 const CHAT_HTTP_PORT_RANGES: &[core::ops::RangeInclusive<u16>] = &[
@@ -35,6 +37,8 @@ const CHAT_HTTP_PORT_RANGES: &[core::ops::RangeInclusive<u16>] = &[
 ];
 static CHAT_HUB: spin::Mutex<Option<ChatHub>> = spin::Mutex::new(None);
 static CHAT_HUB_LOADED: AtomicBool = AtomicBool::new(false);
+static CHAT_SAVE_REQUESTED: AtomicBool = AtomicBool::new(false);
+static CHAT_STORE_DIR_READY: AtomicBool = AtomicBool::new(false);
 static CHAT_HTTP_PORT: AtomicU16 = AtomicU16::new(0);
 
 pub fn current_port() -> Option<u16> {
@@ -142,27 +146,81 @@ fn chat_hub_snapshot_bytes() -> Option<Vec<u8>> {
     guard.as_ref().map(ChatHub::to_json_bytes)
 }
 
-fn save_chat_hub_snapshot_sync() {
+async fn ensure_chat_store_dir_async(disk: crate::disc::block::DeviceHandle) -> bool {
+    if CHAT_STORE_DIR_READY.load(Ordering::Acquire) {
+        return true;
+    }
+    let marker = alloc::format!("{}/.keep", CHAT_STORE_DIR);
+    match crate::r::fs::trueosfs::file_in_async(disk, marker.as_str(), &[]).await {
+        Ok(true) => {
+            CHAT_STORE_DIR_READY.store(true, Ordering::Release);
+            true
+        }
+        Ok(false) => false,
+        Err(err) => {
+            crate::log!("chat: save {} marker failed {:?}\n", CHAT_STORE_DIR, err);
+            false
+        }
+    }
+}
+
+async fn save_chat_hub_snapshot_async() {
     let Some(bytes) = chat_hub_snapshot_bytes() else {
         return;
     };
-    if crate::r::io::kfs::create_dir_all(CHAT_STORE_DIR).is_err() {
+    let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
+        return;
+    };
+    if !ensure_chat_store_dir_async(disk).await {
         return;
     }
-    let handle = match crate::r::io::kfs::write_file_begin(CHAT_STORE_PATH, bytes.len() as u64) {
-        Ok(handle) => handle,
+    let handle = match crate::r::fs::trueosfs::file_write_begin_async(
+        disk,
+        CHAT_STORE_PATH,
+        bytes.len() as u64,
+    )
+    .await
+    {
+        Ok(Some(handle)) => handle,
+        Ok(None) => {
+            crate::log!("chat: save {} begin failed NoSpace\n", CHAT_STORE_PATH);
+            return;
+        }
         Err(err) => {
             crate::log!("chat: save {} begin failed {:?}\n", CHAT_STORE_PATH, err);
             return;
         }
     };
-    if let Err(err) = crate::r::io::kfs::write_file_chunk(handle, bytes.as_slice()) {
-        let _ = crate::r::io::kfs::write_file_abort(handle);
+    if let Err(err) = crate::r::fs::trueosfs::file_write_chunk_async(handle, bytes.as_slice()).await
+    {
+        let _ = crate::r::fs::trueosfs::file_write_abort_async(handle).await;
         crate::log!("chat: save {} chunk failed {:?}\n", CHAT_STORE_PATH, err);
         return;
     }
-    if let Err(err) = crate::r::io::kfs::write_file_finish(handle) {
+    if let Err(err) = crate::r::fs::trueosfs::file_write_finish_async(handle).await {
         crate::log!("chat: save {} finish failed {:?}\n", CHAT_STORE_PATH, err);
+    }
+}
+
+fn request_chat_hub_save(reason: &'static str) {
+    let was_pending = CHAT_SAVE_REQUESTED.swap(true, Ordering::AcqRel);
+    if !was_pending {
+        crate::log!("chat: save requested reason={} mode=deferred\n", reason);
+    }
+}
+
+async fn chat_hub_save_loop() -> ! {
+    loop {
+        if !CHAT_SAVE_REQUESTED.swap(false, Ordering::AcqRel) {
+            Timer::after(EmbassyDuration::from_millis(CHAT_SAVE_IDLE_MS)).await;
+            continue;
+        }
+
+        Timer::after(EmbassyDuration::from_millis(CHAT_SAVE_BATCH_MS)).await;
+        let coalesced = CHAT_SAVE_REQUESTED.swap(false, Ordering::AcqRel);
+        crate::log!("chat: save begin mode=batched\n");
+        save_chat_hub_snapshot_async().await;
+        crate::log!("chat: save done mode=batched coalesced_requests={}\n", coalesced);
     }
 }
 
@@ -310,7 +368,7 @@ fn post_local_message_with_persistence(
     };
     let ok = response.status == 200;
     if ok && persist {
-        save_chat_hub_snapshot_sync();
+        request_chat_hub_save("local-post");
     }
     ok
 }
@@ -404,7 +462,7 @@ async fn handle_hyper_request(
     };
     maybe_submit_lumen_chat_post(method, path.as_str(), body.as_slice(), response.status);
     if method == ChatMethod::Post && response.status == 200 {
-        save_chat_hub_snapshot_sync();
+        request_chat_hub_save("http-post");
     }
     let no_cache = response.content_type.starts_with("application/json");
     let mut builder = hyper::Response::builder()
@@ -625,7 +683,7 @@ pub async fn chat_http_service_task() {
         );
         if rc == 0 {
             crate::log!("chat-http: submitted Tokio runtime to blocking lane\n");
-            return;
+            chat_hub_save_loop().await;
         }
         crate::log!(
             "chat-http: blocking lane unavailable rc={} retry={}ms\n",
