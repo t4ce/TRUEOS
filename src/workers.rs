@@ -65,6 +65,10 @@ pub fn background_worker_slots() -> Vec<u32> {
     out
 }
 
+pub fn is_background_worker_slot(cpu_slot: u32) -> bool {
+    cpu_slot >= FIRST_BACKGROUND_SLOT
+}
+
 #[unsafe(no_mangle)]
 pub extern "Rust" fn trueos_kernel_worker_background_worker_slots() -> Vec<u32> {
     background_worker_slots()

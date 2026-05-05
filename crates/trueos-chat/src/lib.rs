@@ -53,6 +53,8 @@ struct Message {
     id: u64,
     user: String,
     text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    statement: Option<String>,
     unix_ms: u64,
 }
 
@@ -105,6 +107,8 @@ struct PostOkJson {
 struct PostMessageJson {
     user: String,
     text: String,
+    #[serde(default)]
+    statement: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -258,7 +262,7 @@ impl ChatHub {
         let Some(room_name) = sanitize_name(room, self.config.max_name_len) else {
             return error_response(400, "invalid room");
         };
-        let (user_raw, text_raw) = post_message_fields(body);
+        let (user_raw, text_raw, statement_raw) = post_message_fields(body);
         let Some(user) = user_raw.and_then(|value| sanitize_text(&value, self.config.max_name_len))
         else {
             return error_response(400, "invalid user");
@@ -268,6 +272,8 @@ impl ChatHub {
         else {
             return error_response(400, "invalid text");
         };
+        let statement =
+            statement_raw.and_then(|value| sanitize_statement(&value, self.config.max_name_len));
 
         if self.rooms.iter().all(|room| room.name != room_name) {
             if self.rooms.len() >= self.config.max_rooms {
@@ -282,14 +288,36 @@ impl ChatHub {
         let id = self.next_id;
         self.next_id = self.next_id.saturating_add(1).max(1);
         let unix_ms = if now_ms == 0 { id } else { now_ms };
-        let message = Message {
+
+        let mut message = Message {
             id,
             user,
             text,
+            statement: statement.clone(),
             unix_ms,
         };
         if let Some(room) = self.rooms.iter_mut().find(|room| room.name == room_name) {
-            room.messages.push_back(message.clone());
+            if let Some(statement) = statement.as_deref() {
+                if let Some(existing) = room
+                    .messages
+                    .iter_mut()
+                    .find(|message| message.statement.as_deref() == Some(statement))
+                {
+                    existing.id = id;
+                    existing.unix_ms = unix_ms;
+                    existing.user = message.user.clone();
+                    existing.text = append_limited_text(
+                        existing.text.as_str(),
+                        message.text.as_str(),
+                        self.config.max_message_len,
+                    );
+                    message = existing.clone();
+                } else {
+                    room.messages.push_back(message.clone());
+                }
+            } else {
+                room.messages.push_back(message.clone());
+            }
             while room.messages.len() > self.config.max_messages_per_room {
                 room.messages.pop_front();
             }
@@ -321,14 +349,29 @@ fn parse_since(query: &str) -> Option<u64> {
     None
 }
 
-fn post_message_fields(body: &[u8]) -> (Option<String>, Option<String>) {
+fn post_message_fields(body: &[u8]) -> (Option<String>, Option<String>, Option<String>) {
     let trimmed = trim_ascii_ws(body);
     if trimmed.first() == Some(&b'{') {
         if let Ok(json) = serde_json::from_slice::<PostMessageJson>(trimmed) {
-            return (Some(json.user), Some(json.text));
+            return (Some(json.user), Some(json.text), json.statement);
         }
     }
-    (form_value(body, "user"), form_value(body, "text"))
+    (
+        form_value(body, "user"),
+        form_value(body, "text"),
+        form_value(body, "statement"),
+    )
+}
+
+fn append_limited_text(existing: &str, delta: &str, max_len: usize) -> String {
+    let mut out = String::new();
+    for ch in existing.chars().chain(delta.chars()) {
+        if out.len().saturating_add(ch.len_utf8()) > max_len {
+            break;
+        }
+        out.push(ch);
+    }
+    out
 }
 
 fn trim_ascii_ws(mut bytes: &[u8]) -> &[u8] {
@@ -352,6 +395,24 @@ fn sanitize_name(raw: &str, max_len: usize) -> Option<String> {
         };
         if out.len() < max_len {
             out.push(mapped);
+        }
+    }
+    if out.is_empty() { None } else { Some(out) }
+}
+
+fn sanitize_statement(raw: &str, max_len: usize) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut out = String::new();
+    for ch in trimmed.chars() {
+        if out.len().saturating_add(ch.len_utf8()) > max_len {
+            break;
+        }
+        match ch {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' | ':' => out.push(ch),
+            _ => return None,
         }
     }
     if out.is_empty() { None } else { Some(out) }
@@ -481,19 +542,23 @@ form{{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end}}
 <script>
 let since=0;
 const room='lobby';
-const seen=new Set();
+const bubbles=new Map();
 const status=document.querySelector('#status');
 const textInput=document.querySelector('#text');
 const sendButton=document.querySelector('#post button');
 const esc=s=>s.replace(/[&<>"']/g,c=>({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[c]));
 function setStatus(text){{status.textContent=text;}}
 function showMessage(m,source){{
-  if(seen.has(m.id))return;
-  seen.add(m.id);
   since=Math.max(since,m.id);
-  const li=document.createElement('li');
-  li.innerHTML=`<div class="meta">${{esc(m.user)}} #${{m.id}} - ${{source}}</div><div>${{esc(m.text)}}</div>`;
-  document.querySelector('#messages').appendChild(li);
+  const key=m.statement?`statement:${{m.statement}}`:`message:${{m.id}}`;
+  let li=bubbles.get(key);
+  if(!li){{
+    li=document.createElement('li');
+    bubbles.set(key,li);
+    document.querySelector('#messages').appendChild(li);
+  }}
+  const tag=m.statement?` statement ${{esc(m.statement)}}`:'';
+  li.innerHTML=`<div class="meta">${{esc(m.user)}} #${{m.id}}${{tag}} - ${{source}}</div><div>${{esc(m.text)}}</div>`;
 }}
 async function poll(){{
   const encodedRoom=encodeURIComponent(room);
@@ -563,7 +628,7 @@ fn api_response() -> ChatResponse {
                 "GET /api/rooms/{room}/messages?since={id}",
                 "POST /api/rooms/{room}/messages",
             ],
-            post_body: "application/json {\"user\":\"name\",\"text\":\"message\"}; form user=&text= is also accepted",
+            post_body: "application/json {\"user\":\"name\",\"text\":\"message\",\"statement\":\"optional-tag\"}; form user=&text=&statement= is also accepted",
         },
     )
 }

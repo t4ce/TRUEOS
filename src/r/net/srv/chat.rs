@@ -22,6 +22,10 @@ use v::vnet as api;
 use crate::{allports::services::CHAT_HTTP_TCP_PORT, r::net::VNet, t::net::hyper_io::HyperTokioIo};
 
 const CHAT_HTTP_BODY_MAX: usize = 64 * 1024;
+const CHAT_HTTP_IDLE_POLL_MS: u64 = 10;
+const CHAT_HTTP_VNET_OPEN_RETRY_MS: u64 = 100;
+const CHAT_HTTP_LISTEN_POLL_MS: u64 = 25;
+const CHAT_HTTP_BLOCKING_LANE_RETRY_MS: u64 = 1000;
 const CHAT_STORE_DIR: &str = "chat";
 const CHAT_STORE_PATH: &str = "chat/rooms.json";
 const CHAT_HTTP_PORT_RANGES: &[core::ops::RangeInclusive<u16>] = &[
@@ -260,17 +264,39 @@ fn chat_form_push_encoded(out: &mut AllocString, value: &str) {
     }
 }
 
-fn chat_post_body(user: &str, text: &str) -> Vec<u8> {
+fn chat_post_body(user: &str, text: &str, statement: Option<&str>) -> Vec<u8> {
     let mut body = AllocString::from("user=");
     chat_form_push_encoded(&mut body, user);
     body.push_str("&text=");
     chat_form_push_encoded(&mut body, text);
+    if let Some(statement) = statement {
+        body.push_str("&statement=");
+        chat_form_push_encoded(&mut body, statement);
+    }
     body.into_bytes()
 }
 
 pub fn post_local_message(room: &str, user: &str, text: &str) -> bool {
+    post_local_message_with_persistence(room, user, text, None, true)
+}
+
+pub fn post_local_message_volatile(room: &str, user: &str, text: &str) -> bool {
+    post_local_message_with_persistence(room, user, text, None, false)
+}
+
+pub fn post_local_statement_volatile(room: &str, user: &str, statement: &str, text: &str) -> bool {
+    post_local_message_with_persistence(room, user, text, Some(statement), false)
+}
+
+fn post_local_message_with_persistence(
+    room: &str,
+    user: &str,
+    text: &str,
+    statement: Option<&str>,
+    persist: bool,
+) -> bool {
     load_chat_hub_once_sync();
-    let body = chat_post_body(user, text);
+    let body = chat_post_body(user, text, statement);
     let response = {
         let mut guard = CHAT_HUB.lock();
         let hub = guard.get_or_insert_with(|| ChatHub::new(ChatConfig::default()));
@@ -283,7 +309,7 @@ pub fn post_local_message(room: &str, user: &str, text: &str) -> bool {
         })
     };
     let ok = response.status == 200;
-    if ok {
+    if ok && persist {
         save_chat_hub_snapshot_sync();
     }
     ok
@@ -481,7 +507,8 @@ async fn open_lowest_available_listener(vnet: &VNet) -> Option<(api::NetHandle, 
                     crate::log!("chat-http: tcp {} listen timeout\n", port);
                     break;
                 }
-                tokio::time::sleep(core::time::Duration::from_millis(10)).await;
+                tokio::time::sleep(core::time::Duration::from_millis(CHAT_HTTP_LISTEN_POLL_MS))
+                    .await;
             }
         }
     }
@@ -495,7 +522,7 @@ async fn chat_http_runtime() {
         if let Some(vnet) = VNet::open_primary() {
             break Box::leak(Box::new(vnet));
         }
-        tokio::time::sleep(core::time::Duration::from_millis(50)).await;
+        tokio::time::sleep(core::time::Duration::from_millis(CHAT_HTTP_VNET_OPEN_RETRY_MS)).await;
     };
 
     let mut listener: Option<(api::NetHandle, u16)> = None;
@@ -564,7 +591,7 @@ async fn chat_http_runtime() {
             }
         }
 
-        tokio::time::sleep(core::time::Duration::from_millis(1)).await;
+        tokio::time::sleep(core::time::Duration::from_millis(CHAT_HTTP_IDLE_POLL_MS)).await;
     }
 }
 
@@ -579,10 +606,32 @@ fn run_chat_http_runtime() -> Result<(), io::Error> {
 
 #[embassy_executor::task]
 pub async fn chat_http_service_task() {
-    crate::r::readiness::wait_for(crate::r::readiness::NET_V4_CONFIGURED).await;
-    crate::log!("chat-http: starting after NET_V4_CONFIGURED\n");
-    Timer::after(EmbassyDuration::from_millis(1)).await;
-    if let Err(err) = run_chat_http_runtime() {
-        crate::log!("chat-http: runtime failed {:?}\n", err);
+    crate::r::readiness::wait_for(
+        crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
+    )
+    .await;
+    crate::log!(
+        "chat-http: launching Tokio runtime after NET_V4_CONFIGURED+TRUEOSFS_ROOT_MOUNTED\n"
+    );
+
+    loop {
+        let rc = crate::trueos_tokio_worker::spawn_blocking_job_with_purpose(
+            Box::new(|| {
+                if let Err(err) = run_chat_http_runtime() {
+                    crate::log!("chat-http: runtime failed {:?}\n", err);
+                }
+            }),
+            "chat-http-runtime",
+        );
+        if rc == 0 {
+            crate::log!("chat-http: submitted Tokio runtime to blocking lane\n");
+            return;
+        }
+        crate::log!(
+            "chat-http: blocking lane unavailable rc={} retry={}ms\n",
+            rc,
+            CHAT_HTTP_BLOCKING_LANE_RETRY_MS
+        );
+        Timer::after(EmbassyDuration::from_millis(CHAT_HTTP_BLOCKING_LANE_RETRY_MS)).await;
     }
 }

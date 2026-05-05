@@ -176,6 +176,10 @@ sudo ip link add NIC type dummy
 sudo ip link set dev NIC address 5c:60:ba:b5:58:0f
 Bus 003 Device 003: ID 0403:6010 Future Technology Devices International, Ltd FT2232C/D/H Dual UART/FIFO IC
 
+cd /home/t4ce/REPOS/TRUEGA
+sudo tools/flash_sram.sh
+
+
 ## LAN bridge for QEMU (rerunnable)
 sudo nmcli con up br0-enp5s0
 sudo nmcli con up br0
