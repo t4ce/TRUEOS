@@ -9,13 +9,13 @@ pub mod boot {
 }
 
 pub mod probes {
-    pub const TOKIO_BOOT_PROBE: bool = true;
+    pub const TOKIO_BOOT_PROBE: bool = false;
     pub const TOKIO_SECURE_DNS_BOOT_PROBE: bool = false;
     pub const TOKIO_NET_WRITABLE_TIMEOUT_MS: u64 = 1000;
 }
 
 pub mod lumen {
-    pub const BOOT_MODEL_SERVICE: bool = true;
+    pub const BOOT_MODEL_SERVICE: bool = false;
     pub const BOOT_TINYLLAMA_FETCH: bool = false;
     pub const RUNTIME_DIAGNOSTIC_PROBES: bool = false;
     pub const ROUTE_BF16_MATVEC_TO_NET_BACKEND: bool = false;

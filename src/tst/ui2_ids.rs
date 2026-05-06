@@ -1,13 +1,11 @@
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Ui2DemoTexId {
-    Triangle = 4_700,
     Tetris = 4_701,
     Mandelbrot = 4_702,
     Bgrt = 4_704,
     Shell = 4_705,
     Particle = 4_709,
-    Svg = 4_710,
     ParticleSprite = 4_711,
     SmileyFountain = 4_713,
     Coreticks = 4_716,
