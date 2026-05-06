@@ -1089,7 +1089,7 @@ fn spawn_cabi_net_fetch_bytes(op_id: u32, url: String, timeout_ms: u32, max_byte
 
 #[inline]
 fn vmx_guest_cabi_context() -> bool {
-    crate::hv::current_vm_id_by_lapic_low().is_some()
+    crate::hv::current_hull_guest_context_vm_id().is_some()
 }
 
 fn guest_fetch_bytes_start(url: &[u8]) -> u32 {

@@ -530,7 +530,7 @@ pub mod cabi {
             return;
         }
 
-        if crate::hv::current_vm_id_by_lapic_low().is_some() {
+        if crate::hv::current_hull_guest_context_vm_id().is_some() {
             if let Ok(text) = core::str::from_utf8(bytes) {
                 process_vm_text_stream(stream, text);
             } else {
@@ -706,7 +706,7 @@ pub mod cabi {
         let Ok(text) = core::str::from_utf8(data) else {
             return 0;
         };
-        if crate::hv::current_vm_id_by_lapic_low().is_some() {
+        if crate::hv::current_hull_guest_context_vm_id().is_some() {
             crate::hv::log_active_blueprint_console_line(format_args!("guest: {}", text));
             return data_len;
         }
@@ -720,7 +720,7 @@ pub mod cabi {
 
     #[unsafe(no_mangle)]
     pub extern "C" fn trueos_cabi_poll_once() {
-        if crate::hv::current_vm_id_by_lapic_low().is_some() {
+        if crate::hv::current_hull_guest_context_vm_id().is_some() {
             crate::hv::vmcall::guest_yield();
             return;
         }
@@ -729,7 +729,7 @@ pub mod cabi {
 
     #[unsafe(no_mangle)]
     pub extern "C" fn trueos_cabi_sleep_ms(ms: u64) {
-        if crate::hv::current_vm_id_by_lapic_low().is_some() {
+        if crate::hv::current_hull_guest_context_vm_id().is_some() {
             crate::hv::vmcall::guest_sleep_ms(ms);
             return;
         }
@@ -833,7 +833,7 @@ pub mod cabi {
 
     #[inline]
     fn cabi_vm_alloc_active() -> bool {
-        crate::hv::current_vm_id_by_lapic_low().is_some()
+        crate::hv::current_hull_guest_context_vm_id().is_some()
     }
 
     #[inline]
@@ -1332,7 +1332,7 @@ pub mod cabi {
 
     #[inline]
     fn gfx_cabi_vm_context() -> bool {
-        crate::hv::current_vm_id_by_lapic_low().is_some()
+        crate::hv::current_hull_guest_context_vm_id().is_some()
     }
 
     struct AsyncPngUploadReq {
@@ -1515,7 +1515,7 @@ pub mod cabi {
     }
 
     fn host_texture_id_for_current_context(tex_id: u32) -> u32 {
-        match crate::hv::current_vm_id_by_lapic_low() {
+        match crate::hv::current_hull_guest_context_vm_id() {
             Some(vm_id) => host_texture_id_for_vm(vm_id, tex_id),
             None => tex_id,
         }
