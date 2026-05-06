@@ -165,7 +165,7 @@ pub fn host_heap_contains_addr(addr: usize) -> bool {
 
 #[inline]
 fn reject_hv_guest_host_heap_dealloc(ptr: *mut u8) -> bool {
-    if crate::hv::current_vm_id_by_lapic_low().is_none() {
+    if crate::hv::current_hull_guest_context_vm_id().is_none() {
         return false;
     }
     if !host_heap_contains_addr(ptr as usize) {
@@ -522,11 +522,10 @@ fn cpuid_slot() -> Option<usize> {
 }
 
 fn current_alloc_domain() -> AllocDomain {
-    // Guest-side allocator routing must not depend on the host CPU slot table:
-    // after HVSR-0002, that table's heap backing is not mapped into guest page
-    // tables. The LAPIC-low table is fixed storage and is populated by the VM
-    // carrier before VMX entry.
-    if let Some(vm_id) = crate::hv::current_vm_id_by_lapic_low() {
+    // Guest-side allocator routing must prove that execution is actually inside
+    // the Hull guest stack. Host services can run on VM-tagged lanes while
+    // servicing CABI work and must keep using the host heap.
+    if let Some(vm_id) = crate::hv::current_hull_guest_context_vm_id() {
         return AllocDomain::HvGuest(vm_id);
     }
 
@@ -599,10 +598,7 @@ pub fn enter_hv_guest_domain_current_cpu(vm_id: u8) -> bool {
     if slot >= 64 || (vm_id as usize) >= crate::allcaps::hv::VM_ID_LIMIT {
         return false;
     }
-    let _ = ensure_hv_guest_heap_ready(vm_id);
-    ALLOC_DOMAIN_OVERRIDE_BY_CPU[slot].store(vm_id, Ordering::Release);
-    HV_GUEST_ACTIVE_CPU_MASK.fetch_or(1u64 << slot, Ordering::AcqRel);
-    true
+    ensure_hv_guest_heap_ready(vm_id)
 }
 
 pub fn leave_hv_guest_domain_current_cpu() {

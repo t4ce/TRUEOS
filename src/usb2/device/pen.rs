@@ -92,6 +92,9 @@ struct UsbMassRuntime {
     port_speed: usb_if::Speed,
     uas_candidate_count: u8,
     io_tag: u32,
+    uas_next_stream_tag: u16,
+    uas_dead_stream_mask: u32,
+    uas_stream_faults: u32,
     sync_cache_unsupported: bool,
     current_max_io_bytes: usize,
     io_success_streak: u16,
@@ -206,6 +209,8 @@ pub(crate) struct UasBenchProgress {
     pub cwnd: usize,
     pub ssthresh: usize,
     pub chunk_bytes: usize,
+    pub timeouts: u32,
+    pub dead_streams: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -216,6 +221,8 @@ pub(crate) struct UasBenchStats {
     pub final_cwnd: usize,
     pub max_inflight: usize,
     pub chunk_bytes: usize,
+    pub timeouts: u32,
+    pub dead_streams: u32,
 }
 
 struct UasBenchFlight {
@@ -233,13 +240,23 @@ struct UasBenchFlight {
     status_good_seen: bool,
 }
 
+enum UasBenchStep {
+    Completed(UasBenchFlight),
+    TimedOut(UasBenchFlight),
+}
+
 fn uas_bench_stream_in_use(flights: &AllocVec<UasBenchFlight>, tag: u16) -> bool {
     flights.iter().any(|flight| flight.tag == tag)
+}
+
+fn uas_bench_stream_disabled(disabled_stream_mask: u32, tag: u16) -> bool {
+    disabled_stream_mask & (1u32 << u32::from(tag)) != 0
 }
 
 fn uas_bench_next_stream_tag(
     next_tag: &mut u16,
     flights: &AllocVec<UasBenchFlight>,
+    disabled_stream_mask: u32,
 ) -> Option<u16> {
     for _ in 0..mass::UAS_XHCI_MAX_STREAM_ID {
         let tag = (*next_tag).clamp(1, mass::UAS_XHCI_MAX_STREAM_ID);
@@ -248,11 +265,19 @@ fn uas_bench_next_stream_tag(
         } else {
             tag + 1
         };
-        if !uas_bench_stream_in_use(flights, tag) {
+        if !uas_bench_stream_disabled(disabled_stream_mask, tag)
+            && !uas_bench_stream_in_use(flights, tag)
+        {
             return Some(tag);
         }
     }
     None
+}
+
+fn uas_bench_inflight_bytes(flights: &AllocVec<UasBenchFlight>) -> u64 {
+    flights
+        .iter()
+        .fold(0u64, |sum, flight| sum.saturating_add(flight.bytes as u64))
 }
 
 fn mass_runtime_key_for_disk(handle: block::DeviceHandle) -> Option<u64> {
@@ -379,11 +404,12 @@ fn uas_bench_poll_flights(
     data_in: &mut EndpointBulkIn,
     flights: &mut AllocVec<UasBenchFlight>,
     cx: &mut core::task::Context<'_>,
-) -> block::Result<Option<usize>> {
+) -> block::Result<Option<UasBenchStep>> {
     let now_ms = uas_bench_now_ms();
     let mut idx = 0usize;
     while idx < flights.len() {
         let mut completed = false;
+        let mut timed_out = false;
         let mut step_err = None;
         {
             let flight = &mut flights[idx];
@@ -401,10 +427,10 @@ fn uas_bench_poll_flights(
                     flight.read_ready_seen,
                     flight.status_good_seen
                 );
-                step_err = Some(block::Error::Timeout);
+                timed_out = true;
             }
 
-            if step_err.is_none() {
+            if !timed_out && step_err.is_none() {
                 if let Some(ticket) = flight.data_ticket {
                     match data_in.poll_detached(ticket, cx) {
                         Poll::Ready(Ok(got)) => {
@@ -430,7 +456,7 @@ fn uas_bench_poll_flights(
                 }
             }
 
-            if step_err.is_none() {
+            if !timed_out && step_err.is_none() {
                 if let Some(ticket) = flight.status_ticket {
                     match status_in.poll_detached(ticket, cx) {
                         Poll::Ready(Ok(got)) => {
@@ -456,7 +482,8 @@ fn uas_bench_poll_flights(
                 }
             }
 
-            if step_err.is_none()
+            if !timed_out
+                && step_err.is_none()
                 && flight.read_ready_seen
                 && flight.data_len.is_some()
                 && !flight.status_good_seen
@@ -473,6 +500,11 @@ fn uas_bench_poll_flights(
             }
         }
 
+        if timed_out {
+            let flight = flights.swap_remove(idx);
+            return Ok(Some(UasBenchStep::TimedOut(flight)));
+        }
+
         if let Some(err) = step_err {
             uas_bench_forget_pending(flights);
             return Err(err);
@@ -480,7 +512,7 @@ fn uas_bench_poll_flights(
 
         if completed {
             let flight = flights.swap_remove(idx);
-            return Ok(Some(flight.bytes));
+            return Ok(Some(UasBenchStep::Completed(flight)));
         }
 
         idx += 1;
@@ -493,11 +525,11 @@ async fn uas_bench_wait_one(
     status_in: &mut EndpointBulkIn,
     data_in: &mut EndpointBulkIn,
     flights: &mut AllocVec<UasBenchFlight>,
-) -> block::Result<Option<usize>> {
+) -> block::Result<Option<UasBenchStep>> {
     let mut tick = core::pin::pin!(Timer::after(EmbassyDuration::from_millis(UAS_BENCH_TICK_MS)));
     poll_fn(|cx| {
         match uas_bench_poll_flights(status_in, data_in, flights, cx) {
-            Ok(Some(bytes)) => return Poll::Ready(Ok(Some(bytes))),
+            Ok(Some(step)) => return Poll::Ready(Ok(Some(step))),
             Err(err) => return Poll::Ready(Err(err)),
             Ok(None) => {}
         }
@@ -523,6 +555,8 @@ fn uas_bench_report<F>(
     cwnd: usize,
     ssthresh: usize,
     chunk_bytes: usize,
+    timeouts: u32,
+    disabled_stream_mask: u32,
 ) where
     F: FnMut(UasBenchProgress),
 {
@@ -541,6 +575,8 @@ fn uas_bench_report<F>(
         cwnd,
         ssthresh,
         chunk_bytes,
+        timeouts,
+        dead_streams: disabled_stream_mask.count_ones(),
     });
     *last_report_ms = now_ms;
     *last_report_bytes = completed_bytes;
@@ -597,6 +633,8 @@ where
         let mut completed_bytes = 0u64;
         let mut submitted_bytes = 0u64;
         let mut reads_completed = 0u64;
+        let mut timeouts = 0u32;
+        let mut disabled_stream_mask = 0u32;
         let mut cwnd = 1usize;
         let mut ssthresh = max_inflight;
         let mut additive_acks = 0usize;
@@ -619,6 +657,8 @@ where
             cwnd,
             ssthresh,
             chunk_bytes,
+            timeouts,
+            disabled_stream_mask,
         );
 
         while completed_bytes < target_bytes || !flights.is_empty() {
@@ -643,7 +683,12 @@ where
                     return Err(block::Error::InvalidParam);
                 }
 
-                let Some(stream_tag) = uas_bench_next_stream_tag(&mut next_tag, &flights) else {
+                let Some(stream_tag) =
+                    uas_bench_next_stream_tag(&mut next_tag, &flights, disabled_stream_mask)
+                else {
+                    if flights.is_empty() {
+                        return Err(block::Error::Timeout);
+                    }
                     break;
                 };
                 let flight = {
@@ -683,10 +728,13 @@ where
             }
 
             if flights.is_empty() {
-                break;
+                if submitted_bytes >= target_bytes {
+                    break;
+                }
+                continue;
             }
 
-            let completed_now = {
+            let step_now = {
                 let endpoints = &mut rt.endpoints;
                 let UsbMassEndpoints::UasSkhynix {
                     status_in, data_in, ..
@@ -697,21 +745,55 @@ where
                 uas_bench_wait_one(status_in, data_in, &mut flights).await?
             };
 
-            if let Some(bytes) = completed_now {
-                completed_bytes = completed_bytes.saturating_add(bytes as u64);
-                reads_completed = reads_completed.saturating_add(1);
-                if cwnd < ssthresh {
-                    cwnd = core::cmp::min(max_inflight, cwnd.saturating_mul(2).max(1));
-                    phase = "slow-start";
-                } else if cwnd < max_inflight {
-                    additive_acks = additive_acks.saturating_add(1);
-                    if additive_acks >= cwnd {
-                        cwnd += 1;
-                        additive_acks = 0;
+            if let Some(step) = step_now {
+                match step {
+                    UasBenchStep::Completed(flight) => {
+                        completed_bytes = completed_bytes.saturating_add(flight.bytes as u64);
+                        reads_completed = reads_completed.saturating_add(1);
+                        if cwnd < ssthresh {
+                            cwnd = core::cmp::min(max_inflight, cwnd.saturating_mul(2).max(1));
+                            phase = "slow-start";
+                        } else if cwnd < max_inflight {
+                            additive_acks = additive_acks.saturating_add(1);
+                            if additive_acks >= cwnd {
+                                cwnd += 1;
+                                additive_acks = 0;
+                            }
+                            phase = "avoidance";
+                        } else {
+                            phase = "steady";
+                        }
                     }
-                    phase = "avoidance";
-                } else {
-                    phase = "steady";
+                    UasBenchStep::TimedOut(flight) => {
+                        let retry_lba = flight.lba;
+                        let lost_tag = flight.tag;
+                        core::mem::forget(flight);
+
+                        timeouts = timeouts.saturating_add(1);
+                        disabled_stream_mask |= 1u32 << u32::from(lost_tag);
+                        if disabled_stream_mask.count_ones()
+                            >= u32::from(mass::UAS_XHCI_MAX_STREAM_ID)
+                        {
+                            return Err(block::Error::Timeout);
+                        }
+
+                        ssthresh = core::cmp::max(1, cwnd / 2);
+                        cwnd = 1;
+                        additive_acks = 0;
+                        phase = "timeout";
+                        next_lba = u64::from(retry_lba);
+                        submitted_bytes =
+                            completed_bytes.saturating_add(uas_bench_inflight_bytes(&flights));
+                        crate::log!(
+                            "crabusb: mass uas-bench backoff lost_tag=0x{:04X} retry_lba={} cwnd={} ssthresh={} dead_streams={} timeouts={}\n",
+                            lost_tag,
+                            retry_lba,
+                            cwnd,
+                            ssthresh,
+                            disabled_stream_mask.count_ones(),
+                            timeouts
+                        );
+                    }
                 }
             }
 
@@ -730,6 +812,8 @@ where
                     cwnd,
                     ssthresh,
                     chunk_bytes,
+                    timeouts,
+                    disabled_stream_mask,
                 );
             }
         }
@@ -750,6 +834,8 @@ where
                 cwnd,
                 ssthresh,
                 chunk_bytes,
+                timeouts,
+                disabled_stream_mask,
             );
         }
 
@@ -760,6 +846,8 @@ where
             final_cwnd: cwnd,
             max_inflight,
             chunk_bytes,
+            timeouts,
+            dead_streams: disabled_stream_mask.count_ones(),
         })
     }
     .await;
@@ -1306,6 +1394,83 @@ fn mass_io_backoff(rt: &mut UsbMassRuntime, block_size: usize) {
     rt.io_success_streak = 0;
 }
 
+fn uas_stream_mask(tag: u16) -> u32 {
+    if tag == 0 || tag > mass::UAS_XHCI_MAX_STREAM_ID {
+        0
+    } else {
+        1u32 << u32::from(tag)
+    }
+}
+
+fn uas_runtime_alloc_stream(rt: &mut UsbMassRuntime) -> Option<u16> {
+    for _ in 0..mass::UAS_XHCI_MAX_STREAM_ID {
+        let tag = rt
+            .uas_next_stream_tag
+            .clamp(1, mass::UAS_XHCI_MAX_STREAM_ID);
+        rt.uas_next_stream_tag = if tag >= mass::UAS_XHCI_MAX_STREAM_ID {
+            1
+        } else {
+            tag + 1
+        };
+
+        if rt.uas_dead_stream_mask & uas_stream_mask(tag) == 0 {
+            rt.io_tag = u32::from(tag);
+            return Some(tag);
+        }
+    }
+    None
+}
+
+fn uas_error_retires_stream(err: mass::MassProbeError) -> bool {
+    matches!(
+        err.transport_reason(),
+        Some("uas-command-timeout" | "uas-status-timeout" | "uas-data-timeout" | "uas-in-timeout")
+    )
+}
+
+fn uas_runtime_note_error(
+    rt: &mut UsbMassRuntime,
+    stage: &'static str,
+    tag: u16,
+    err: mass::MassProbeError,
+    block_size: usize,
+) {
+    mass_io_backoff(rt, block_size);
+    if !uas_error_retires_stream(err) {
+        return;
+    }
+
+    let mask = uas_stream_mask(tag);
+    if mask == 0 || rt.uas_dead_stream_mask & mask != 0 {
+        return;
+    }
+
+    rt.uas_dead_stream_mask |= mask;
+    rt.uas_stream_faults = rt.uas_stream_faults.saturating_add(1);
+    crate::globalog::log_with_level(log::Level::Warn, format_args!(
+        "crabusb: mass {:04X}:{:04X} uas-stream retire stage={} tag=0x{:04X} err={:?} dead={} faults={} io_limit={}\n",
+        rt.vendor_id,
+        rt.product_id,
+        stage,
+        tag,
+        err,
+        rt.uas_dead_stream_mask.count_ones(),
+        rt.uas_stream_faults,
+        current_mass_io_bytes(rt, block_size)
+    ));
+}
+
+fn uas_runtime_log_exhausted(rt: &UsbMassRuntime, stage: &'static str) {
+    crate::globalog::log_with_level(log::Level::Warn, format_args!(
+        "crabusb: mass {:04X}:{:04X} uas-stream exhausted stage={} dead={} faults={}\n",
+        rt.vendor_id,
+        rt.product_id,
+        stage,
+        rt.uas_dead_stream_mask.count_ones(),
+        rt.uas_stream_faults
+    ));
+}
+
 fn log_transport_mismatch(rt: &UsbMassRuntime, stage: &'static str) {
     let submit = crab_usb::debug_last_submit();
     let event = crab_usb::debug_last_event();
@@ -1429,6 +1594,20 @@ impl block::BlockDevice for UsbMassBlockDevice {
                         loop {
                             let bulk_out_ep = rt.bulk_out_ep;
                             let bulk_in_ep = rt.bulk_in_ep;
+                            let uas_tag = if matches!(&rt.endpoints, UsbMassEndpoints::UasSkhynix { .. }) {
+                                let Some(tag) = uas_runtime_alloc_stream(rt) else {
+                                    uas_runtime_log_exhausted(rt, "read-10");
+                                    return Err(block::Error::Timeout);
+                                };
+                                tag
+                            } else {
+                                0
+                            };
+                            let command_tag = if uas_tag != 0 {
+                                u32::from(uas_tag)
+                            } else {
+                                rt.io_tag
+                            };
                             let result = match &mut rt.endpoints {
                                 UsbMassEndpoints::Bot { bulk_in, bulk_out } => {
                                     mass::read_blocks_bot(
@@ -1439,7 +1618,7 @@ impl block::BlockDevice for UsbMassBlockDevice {
                                         cur_lba as u32,
                                         blocks_here as u16,
                                         &mut remaining[..bytes_here],
-                                        rt.io_tag,
+                                        command_tag,
                                     )
                                     .await
                                 }
@@ -1456,12 +1635,14 @@ impl block::BlockDevice for UsbMassBlockDevice {
                                         cur_lba as u32,
                                         blocks_here as u16,
                                         &mut remaining[..bytes_here],
-                                        rt.io_tag,
+                                        command_tag,
                                     )
                                     .await
                                 }
                             };
-                            rt.io_tag = rt.io_tag.wrapping_add(1);
+                            if uas_tag == 0 {
+                                rt.io_tag = rt.io_tag.wrapping_add(1);
+                            }
 
                             match result {
                                 Ok(()) => {
@@ -1469,45 +1650,78 @@ impl block::BlockDevice for UsbMassBlockDevice {
                                     break;
                                 }
                                 Err(err) => {
-                                    mass_io_backoff(rt, block_size);
-                                    let recovered = if matches!(rt.endpoints, UsbMassEndpoints::Bot { .. }) {
+                                    let recovered = if uas_tag != 0 {
+                                        uas_runtime_note_error(rt, "read-10", uas_tag, err, block_size);
+                                        false
+                                    } else if matches!(rt.endpoints, UsbMassEndpoints::Bot { .. }) {
+                                        mass_io_backoff(rt, block_size);
                                         recover_runtime_transport(rt, "read-10", err).await.is_ok()
                                     } else {
+                                        mass_io_backoff(rt, block_size);
                                         false
                                     };
-                                    if recovered && attempts < MASS_IO_RETRY_LIMIT
+                                    if (recovered || (uas_tag != 0 && uas_error_retires_stream(err)))
+                                        && attempts < MASS_IO_RETRY_LIMIT
                                     {
                                         attempts = attempts.wrapping_add(1);
                                         Timer::after(EmbassyDuration::from_millis(MASS_IO_RETRY_DELAY_MS)).await;
                                         continue;
                                     }
-                                    let sense = match &mut rt.endpoints {
-                                        UsbMassEndpoints::Bot { bulk_in, bulk_out } => {
-                                            mass::request_sense_fixed(
-                                                bulk_out,
-                                                bulk_in,
-                                                bulk_out_ep,
-                                                bulk_in_ep,
-                                                rt.io_tag,
-                                            )
-                                            .await
-                                        }
-                                        UsbMassEndpoints::UasSkhynix {
-                                            command_out,
-                                            status_in,
-                                            data_in,
-                                            ..
-                                        } => {
-                                            mass::request_sense_fixed_uas_skhynix(
+                                    if uas_tag != 0 && uas_error_retires_stream(err) {
+                                        return Err(block::Error::Timeout);
+                                    }
+                                    let sense = if uas_tag != 0 {
+                                        let Some(sense_tag) = uas_runtime_alloc_stream(rt) else {
+                                            uas_runtime_log_exhausted(rt, "request-sense");
+                                            return Err(block::Error::Timeout);
+                                        };
+                                        match &mut rt.endpoints {
+                                            UsbMassEndpoints::UasSkhynix {
                                                 command_out,
                                                 status_in,
                                                 data_in,
-                                                rt.io_tag,
-                                            )
-                                            .await
+                                                ..
+                                            } => {
+                                                match mass::request_sense_fixed_uas_skhynix_result(
+                                                    command_out,
+                                                    status_in,
+                                                    data_in,
+                                                    u32::from(sense_tag),
+                                                )
+                                                .await
+                                                {
+                                                    Ok(sense) => sense,
+                                                    Err(sense_err) => {
+                                                        uas_runtime_note_error(
+                                                            rt,
+                                                            "request-sense",
+                                                            sense_tag,
+                                                            sense_err,
+                                                            block_size,
+                                                        );
+                                                        None
+                                                    }
+                                                }
+                                            }
+                                            UsbMassEndpoints::Bot { .. } => None,
                                         }
+                                    } else {
+                                        let sense = match &mut rt.endpoints {
+                                            UsbMassEndpoints::Bot { bulk_in, bulk_out } => {
+                                                mass::request_sense_fixed(
+                                                    bulk_out,
+                                                    bulk_in,
+                                                    bulk_out_ep,
+                                                    bulk_in_ep,
+                                                    rt.io_tag,
+                                                )
+                                                .await
+                                            }
+                                            UsbMassEndpoints::UasSkhynix { .. } => None,
+                                        };
+                                        rt.io_tag = rt.io_tag.wrapping_add(1);
+                                        sense
                                     };
-                                    rt.io_tag = rt.io_tag.wrapping_add(1);
                                     if let Some(sense) = sense
                                         && sense_is_transient(sense.sense_key)
                                         && attempts < MASS_IO_RETRY_LIMIT
@@ -1578,6 +1792,21 @@ impl block::BlockDevice for UsbMassBlockDevice {
                     loop {
                         let bulk_out_ep = rt.bulk_out_ep;
                         let bulk_in_ep = rt.bulk_in_ep;
+                        let uas_tag =
+                            if matches!(&rt.endpoints, UsbMassEndpoints::UasSkhynix { .. }) {
+                                let Some(tag) = uas_runtime_alloc_stream(&mut rt) else {
+                                    uas_runtime_log_exhausted(&rt, "write-10");
+                                    return Err(block::Error::Timeout);
+                                };
+                                tag
+                            } else {
+                                0
+                            };
+                        let command_tag = if uas_tag != 0 {
+                            u32::from(uas_tag)
+                        } else {
+                            rt.io_tag
+                        };
                         let result = match &mut rt.endpoints {
                             UsbMassEndpoints::Bot { bulk_in, bulk_out } => {
                                 mass::write_blocks_bot(
@@ -1588,7 +1817,7 @@ impl block::BlockDevice for UsbMassBlockDevice {
                                     cur_lba as u32,
                                     blocks_here as u16,
                                     &remaining[..bytes_here],
-                                    rt.io_tag,
+                                    command_tag,
                                 )
                                 .await
                             }
@@ -1605,12 +1834,14 @@ impl block::BlockDevice for UsbMassBlockDevice {
                                     cur_lba as u32,
                                     blocks_here as u16,
                                     &remaining[..bytes_here],
-                                    rt.io_tag,
+                                    command_tag,
                                 )
                                 .await
                             }
                         };
-                        rt.io_tag = rt.io_tag.wrapping_add(1);
+                        if uas_tag == 0 {
+                            rt.io_tag = rt.io_tag.wrapping_add(1);
+                        }
 
                         match result {
                             Ok(()) => {
@@ -1618,45 +1849,80 @@ impl block::BlockDevice for UsbMassBlockDevice {
                                 break;
                             }
                             Err(err) => {
-                                mass_io_backoff(&mut rt, block_size);
-                                let recovered = if matches!(rt.endpoints, UsbMassEndpoints::Bot { .. }) {
+                                let recovered = if uas_tag != 0 {
+                                    uas_runtime_note_error(
+                                        &mut rt, "write-10", uas_tag, err, block_size,
+                                    );
+                                    false
+                                } else if matches!(rt.endpoints, UsbMassEndpoints::Bot { .. }) {
+                                    mass_io_backoff(&mut rt, block_size);
                                     recover_runtime_transport(&mut rt, "write-10", err).await.is_ok()
                                 } else {
+                                    mass_io_backoff(&mut rt, block_size);
                                     false
                                 };
-                                if recovered && attempts < MASS_IO_RETRY_LIMIT
+                                if (recovered || (uas_tag != 0 && uas_error_retires_stream(err)))
+                                    && attempts < MASS_IO_RETRY_LIMIT
                                 {
                                     attempts = attempts.wrapping_add(1);
                                     Timer::after(EmbassyDuration::from_millis(MASS_IO_RETRY_DELAY_MS)).await;
                                     continue;
                                 }
-                                let sense = match &mut rt.endpoints {
-                                    UsbMassEndpoints::Bot { bulk_in, bulk_out } => {
-                                        mass::request_sense_fixed(
-                                            bulk_out,
-                                            bulk_in,
-                                            bulk_out_ep,
-                                            bulk_in_ep,
-                                            rt.io_tag,
-                                        )
-                                        .await
-                                    }
-                                    UsbMassEndpoints::UasSkhynix {
-                                        command_out,
-                                        status_in,
-                                        data_in,
-                                        ..
-                                    } => {
-                                        mass::request_sense_fixed_uas_skhynix(
+                                if uas_tag != 0 && uas_error_retires_stream(err) {
+                                    return Err(block::Error::Timeout);
+                                }
+                                let sense = if uas_tag != 0 {
+                                    let Some(sense_tag) = uas_runtime_alloc_stream(&mut rt) else {
+                                        uas_runtime_log_exhausted(&rt, "request-sense");
+                                        return Err(block::Error::Timeout);
+                                    };
+                                    match &mut rt.endpoints {
+                                        UsbMassEndpoints::UasSkhynix {
                                             command_out,
                                             status_in,
                                             data_in,
-                                            rt.io_tag,
-                                        )
-                                        .await
+                                            ..
+                                        } => {
+                                            match mass::request_sense_fixed_uas_skhynix_result(
+                                                command_out,
+                                                status_in,
+                                                data_in,
+                                                u32::from(sense_tag),
+                                            )
+                                            .await
+                                            {
+                                                Ok(sense) => sense,
+                                                Err(sense_err) => {
+                                                    uas_runtime_note_error(
+                                                        &mut rt,
+                                                        "request-sense",
+                                                        sense_tag,
+                                                        sense_err,
+                                                        block_size,
+                                                    );
+                                                    None
+                                                }
+                                            }
+                                        }
+                                        UsbMassEndpoints::Bot { .. } => None,
                                     }
+                                } else {
+                                    let sense = match &mut rt.endpoints {
+                                        UsbMassEndpoints::Bot { bulk_in, bulk_out } => {
+                                            mass::request_sense_fixed(
+                                                bulk_out,
+                                                bulk_in,
+                                                bulk_out_ep,
+                                                bulk_in_ep,
+                                                rt.io_tag,
+                                            )
+                                            .await
+                                        }
+                                        UsbMassEndpoints::UasSkhynix { .. } => None,
+                                    };
+                                    rt.io_tag = rt.io_tag.wrapping_add(1);
+                                    sense
                                 };
-                                rt.io_tag = rt.io_tag.wrapping_add(1);
                                 if let Some(sense) = sense
                                     && sense_is_transient(sense.sense_key)
                                     && attempts < MASS_IO_RETRY_LIMIT
@@ -1704,6 +1970,7 @@ impl block::BlockDevice for UsbMassBlockDevice {
 
     fn flush<'a>(&'a mut self) -> block::BoxFuture<'a, block::Result<()>> {
         Box::pin(async move {
+            let block_size = (self.block_size as usize).max(1);
             self.with_runtime(|rt| {
                 Box::pin(async move {
                     if rt.sync_cache_unsupported {
@@ -1712,6 +1979,21 @@ impl block::BlockDevice for UsbMassBlockDevice {
 
                     let bulk_out_ep = rt.bulk_out_ep;
                     let bulk_in_ep = rt.bulk_in_ep;
+                    let uas_tag =
+                        if matches!(&rt.endpoints, UsbMassEndpoints::UasSkhynix { .. }) {
+                            let Some(tag) = uas_runtime_alloc_stream(rt) else {
+                                uas_runtime_log_exhausted(rt, "sync-cache-10");
+                                return Err(block::Error::Timeout);
+                            };
+                            tag
+                        } else {
+                            0
+                        };
+                    let command_tag = if uas_tag != 0 {
+                        u32::from(uas_tag)
+                    } else {
+                        rt.io_tag
+                    };
                     let sync_result = match &mut rt.endpoints {
                         UsbMassEndpoints::Bot { bulk_in, bulk_out } => {
                             mass::synchronize_cache_bot(
@@ -1719,7 +2001,7 @@ impl block::BlockDevice for UsbMassBlockDevice {
                                 bulk_in,
                                 bulk_out_ep,
                                 bulk_in_ep,
-                                rt.io_tag,
+                                command_tag,
                             )
                             .await
                         }
@@ -1731,48 +2013,86 @@ impl block::BlockDevice for UsbMassBlockDevice {
                             mass::synchronize_cache_uas_skhynix(
                                 command_out,
                                 status_in,
-                                rt.io_tag,
+                                command_tag,
                             )
                             .await
                         }
                     };
                     match sync_result {
                         Ok(()) => {
-                            rt.io_tag = rt.io_tag.wrapping_add(1);
+                            if uas_tag == 0 {
+                                rt.io_tag = rt.io_tag.wrapping_add(1);
+                            }
                             Ok(())
                         }
                         Err(err) => {
-                            if matches!(rt.endpoints, UsbMassEndpoints::Bot { .. }) {
+                            if uas_tag != 0 {
+                                uas_runtime_note_error(
+                                    rt,
+                                    "sync-cache-10",
+                                    uas_tag,
+                                    err,
+                                    block_size,
+                                );
+                            } else if matches!(rt.endpoints, UsbMassEndpoints::Bot { .. }) {
                                 let _ = recover_runtime_transport(rt, "sync-cache-10", err).await;
+                                rt.io_tag = rt.io_tag.wrapping_add(1);
                             }
-                            rt.io_tag = rt.io_tag.wrapping_add(1);
-                            let sense = match &mut rt.endpoints {
-                                UsbMassEndpoints::Bot { bulk_in, bulk_out } => {
-                                    mass::request_sense_fixed(
-                                        bulk_out,
-                                        bulk_in,
-                                        bulk_out_ep,
-                                        bulk_in_ep,
-                                        rt.io_tag,
-                                    )
-                                    .await
-                                }
-                                UsbMassEndpoints::UasSkhynix {
-                                    command_out,
-                                    status_in,
-                                    data_in,
-                                    ..
-                                } => {
-                                    mass::request_sense_fixed_uas_skhynix(
+                            if uas_tag != 0 && uas_error_retires_stream(err) {
+                                return Err(block::Error::Timeout);
+                            }
+                            let sense = if uas_tag != 0 {
+                                let Some(sense_tag) = uas_runtime_alloc_stream(rt) else {
+                                    uas_runtime_log_exhausted(rt, "request-sense");
+                                    return Err(block::Error::Timeout);
+                                };
+                                match &mut rt.endpoints {
+                                    UsbMassEndpoints::UasSkhynix {
                                         command_out,
                                         status_in,
                                         data_in,
-                                        rt.io_tag,
-                                    )
-                                    .await
+                                        ..
+                                    } => {
+                                        match mass::request_sense_fixed_uas_skhynix_result(
+                                            command_out,
+                                            status_in,
+                                            data_in,
+                                            u32::from(sense_tag),
+                                        )
+                                        .await
+                                        {
+                                            Ok(sense) => sense,
+                                            Err(sense_err) => {
+                                                uas_runtime_note_error(
+                                                    rt,
+                                                    "request-sense",
+                                                    sense_tag,
+                                                    sense_err,
+                                                    block_size,
+                                                );
+                                                None
+                                            }
+                                        }
+                                    }
+                                    UsbMassEndpoints::Bot { .. } => None,
                                 }
+                            } else {
+                                let sense = match &mut rt.endpoints {
+                                    UsbMassEndpoints::Bot { bulk_in, bulk_out } => {
+                                        mass::request_sense_fixed(
+                                            bulk_out,
+                                            bulk_in,
+                                            bulk_out_ep,
+                                            bulk_in_ep,
+                                            rt.io_tag,
+                                        )
+                                        .await
+                                    }
+                                    UsbMassEndpoints::UasSkhynix { .. } => None,
+                                };
+                                rt.io_tag = rt.io_tag.wrapping_add(1);
+                                sense
                             };
-                            rt.io_tag = rt.io_tag.wrapping_add(1);
                             if let Some(sense) = sense
                                 && sense.sense_key == scsi::SenseKey::IllegalRequest
                             {
@@ -1991,6 +2311,9 @@ pub async fn mass_storage_task(
         port_speed,
         uas_candidate_count,
         io_tag: 0x544F_0000 | u32::from(slot),
+        uas_next_stream_tag: 1,
+        uas_dead_stream_mask: 0,
+        uas_stream_faults: 0,
         sync_cache_unsupported: false,
         current_max_io_bytes: initial_io_bytes,
         io_success_streak: 0,
@@ -2293,6 +2616,9 @@ pub async fn mass_storage_uas_skhynix_task(
         port_speed,
         uas_candidate_count,
         io_tag: 0x5541_0000 | u32::from(slot),
+        uas_next_stream_tag: mass::uas_stream_id_from_tag(0x5541_0000 | u32::from(slot)),
+        uas_dead_stream_mask: 0,
+        uas_stream_faults: 0,
         sync_cache_unsupported: false,
         current_max_io_bytes: initial_io_bytes,
         io_success_streak: 0,
@@ -2306,6 +2632,15 @@ pub async fn mass_storage_uas_skhynix_task(
 
         let bulk_out_ep = rt.bulk_out_ep;
         let bulk_in_ep = rt.bulk_in_ep;
+        let uas_tag = if matches!(&rt.endpoints, UsbMassEndpoints::UasSkhynix { .. }) {
+            let Some(tag) = uas_runtime_alloc_stream(&mut rt) else {
+                uas_runtime_log_exhausted(&rt, "test-unit-ready");
+                break;
+            };
+            tag
+        } else {
+            0
+        };
         let keepalive = match &mut rt.endpoints {
             UsbMassEndpoints::UasSkhynix {
                 command_out,
@@ -2313,8 +2648,8 @@ pub async fn mass_storage_uas_skhynix_task(
                 ..
             } => {
                 let result =
-                    mass::keepalive_mass_uas_skhynix(command_out, status_in, rt.io_tag).await;
-                rt.io_tag = rt.io_tag.wrapping_add(1);
+                    mass::keepalive_mass_uas_skhynix(command_out, status_in, u32::from(uas_tag))
+                        .await;
                 result
             }
             UsbMassEndpoints::Bot { bulk_in, bulk_out } => {
@@ -2322,6 +2657,22 @@ pub async fn mass_storage_uas_skhynix_task(
             }
         };
         if let Err(err) = keepalive {
+            if uas_tag != 0 {
+                uas_runtime_note_error(
+                    &mut rt,
+                    "test-unit-ready",
+                    uas_tag,
+                    err,
+                    probe.block_size as usize,
+                );
+                if uas_error_retires_stream(err)
+                    && rt.uas_dead_stream_mask.count_ones()
+                        < u32::from(mass::UAS_XHCI_MAX_STREAM_ID)
+                {
+                    register_runtime(rt);
+                    continue;
+                }
+            }
             crate::log!(
                 "crabusb: mass {:04X}:{:04X} uas-skhynix lifecycle stop slot={} err={:?}\n",
                 vendor_id,

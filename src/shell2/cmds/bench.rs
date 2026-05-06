@@ -861,7 +861,7 @@ async fn uasbench_task(
                 print_matrix_target_line(
                     &progress_target,
                     format!(
-                        "bench uas: {} read={}/{} rate={} avg={} cwnd={} ssthresh={} in_flight={} reads={} chunk={}",
+                        "bench uas: {} read={}/{} rate={} avg={} cwnd={} ssthresh={} in_flight={} reads={} chunk={} timeouts={} dead={}",
                         progress.phase,
                         format_bytes(progress.completed_bytes),
                         format_bytes(progress.target_bytes),
@@ -871,7 +871,9 @@ async fn uasbench_task(
                         progress.ssthresh,
                         progress.in_flight,
                         progress.reads_completed,
-                        format_bytes(progress.chunk_bytes as u64)
+                        format_bytes(progress.chunk_bytes as u64),
+                        progress.timeouts,
+                        progress.dead_streams
                     )
                     .as_str(),
                 );
@@ -884,14 +886,16 @@ async fn uasbench_task(
                 let avg = bps_from_progress(stats.completed_bytes, stats.elapsed_ms);
                 log(
                     format!(
-                        "bench uas: done read={} reads={} avg={} elapsed={}ms final_cwnd={} max_inflight={} chunk={}",
+                        "bench uas: done read={} reads={} avg={} elapsed={}ms final_cwnd={} max_inflight={} chunk={} timeouts={} dead={}",
                         format_bytes(stats.completed_bytes),
                         stats.reads_completed,
                         format_speed(avg),
                         stats.elapsed_ms,
                         stats.final_cwnd,
                         stats.max_inflight,
-                        format_bytes(stats.chunk_bytes as u64)
+                        format_bytes(stats.chunk_bytes as u64),
+                        stats.timeouts,
+                        stats.dead_streams
                     )
                     .as_str(),
                 );
