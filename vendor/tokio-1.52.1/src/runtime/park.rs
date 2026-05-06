@@ -6,6 +6,13 @@ use crate::loom::sync::{Arc, Condvar, Mutex};
 use std::sync::atomic::Ordering::SeqCst;
 use std::time::Duration;
 
+#[cfg(target_os = "zkvm")]
+unsafe extern "C" {
+    fn trueos_cabi_poll_once();
+    fn trueos_cabi_sleep_ms(ms: u64);
+    fn trueos_time_monotonic_nanos() -> u64;
+}
+
 #[derive(Debug)]
 pub(crate) struct ParkThread {
     inner: Arc<Inner>,
@@ -27,6 +34,34 @@ struct Inner {
 const EMPTY: usize = 0;
 const PARKED: usize = 1;
 const NOTIFIED: usize = 2;
+
+#[cfg(target_os = "zkvm")]
+fn trueos_now_nanos() -> u64 {
+    unsafe { trueos_time_monotonic_nanos() }
+}
+
+#[cfg(target_os = "zkvm")]
+fn trueos_duration_nanos(duration: Duration) -> u64 {
+    duration
+        .as_secs()
+        .saturating_mul(1_000_000_000)
+        .saturating_add(u64::from(duration.subsec_nanos()))
+}
+
+#[cfg(target_os = "zkvm")]
+fn trueos_park_step(remaining_nanos: Option<u64>) {
+    // zkvm std has no thread sleep backend; yield through TRUEOS CABI instead.
+    let sleep_ms = match remaining_nanos {
+        Some(nanos) => (nanos / 1_000_000).min(1),
+        None => 1,
+    };
+
+    if sleep_ms == 0 {
+        unsafe { trueos_cabi_poll_once() };
+    } else {
+        unsafe { trueos_cabi_sleep_ms(sleep_ms) };
+    }
+}
 
 tokio_thread_local! {
     static CURRENT_PARKER: ParkThread = ParkThread::new();
@@ -88,7 +123,7 @@ impl Inner {
         }
 
         // Otherwise we need to coordinate going to sleep
-        let mut m = self.mutex.lock();
+        let m = self.mutex.lock();
 
         match self.state.compare_exchange(EMPTY, PARKED, SeqCst, SeqCst) {
             Ok(_) => {}
@@ -107,19 +142,36 @@ impl Inner {
             Err(actual) => panic!("inconsistent park state; actual = {actual}"),
         }
 
-        loop {
-            m = self.condvar.wait(m).unwrap();
+        #[cfg(target_os = "zkvm")]
+        {
+            drop(m);
 
-            if self
-                .state
-                .compare_exchange(NOTIFIED, EMPTY, SeqCst, SeqCst)
-                .is_ok()
-            {
-                // got a notification
-                return;
+            loop {
+                match self.state.compare_exchange(NOTIFIED, EMPTY, SeqCst, SeqCst) {
+                    Ok(_) => return,
+                    Err(PARKED) => trueos_park_step(None),
+                    Err(actual) => panic!("inconsistent park state; actual = {actual}"),
+                }
             }
+        }
 
-            // spurious wakeup, go back to sleep
+        #[cfg(not(target_os = "zkvm"))]
+        {
+            let mut m = m;
+            loop {
+                m = self.condvar.wait(m).unwrap();
+
+                if self
+                    .state
+                    .compare_exchange(NOTIFIED, EMPTY, SeqCst, SeqCst)
+                    .is_ok()
+                {
+                    // got a notification
+                    return;
+                }
+
+                // spurious wakeup, go back to sleep
+            }
         }
     }
 
@@ -153,14 +205,42 @@ impl Inner {
             Err(actual) => panic!("inconsistent park_timeout state; actual = {actual}"),
         }
 
-        #[cfg(not(all(target_family = "wasm", not(target_feature = "atomics"))))]
+        #[cfg(target_os = "zkvm")]
+        {
+            drop(m);
+            let deadline = trueos_now_nanos().saturating_add(trueos_duration_nanos(dur));
+
+            loop {
+                match self.state.load(SeqCst) {
+                    NOTIFIED => break,
+                    PARKED => {}
+                    actual => panic!("inconsistent park_timeout state: {actual}"),
+                }
+
+                let now = trueos_now_nanos();
+                if now >= deadline {
+                    break;
+                }
+
+                trueos_park_step(Some(deadline.saturating_sub(now)));
+            }
+        }
+
+        #[cfg(all(
+            not(target_os = "zkvm"),
+            not(all(target_family = "wasm", not(target_feature = "atomics")))
+        ))]
         // Wait with a timeout, and if we spuriously wake up or otherwise wake up
         // from a notification, we just want to unconditionally set the state back to
         // empty, either consuming a notification or un-flagging ourselves as
         // parked.
         let (_m, _result) = self.condvar.wait_timeout(m, dur).unwrap();
 
-        #[cfg(all(target_family = "wasm", not(target_feature = "atomics")))]
+        #[cfg(all(
+            not(target_os = "zkvm"),
+            target_family = "wasm",
+            not(target_feature = "atomics")
+        ))]
         // Wasm without atomics doesn't have threads, so just sleep.
         {
             let _m = m;

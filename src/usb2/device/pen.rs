@@ -233,6 +233,28 @@ struct UasBenchFlight {
     status_good_seen: bool,
 }
 
+fn uas_bench_stream_in_use(flights: &AllocVec<UasBenchFlight>, tag: u16) -> bool {
+    flights.iter().any(|flight| flight.tag == tag)
+}
+
+fn uas_bench_next_stream_tag(
+    next_tag: &mut u16,
+    flights: &AllocVec<UasBenchFlight>,
+) -> Option<u16> {
+    for _ in 0..mass::UAS_XHCI_MAX_STREAM_ID {
+        let tag = (*next_tag).clamp(1, mass::UAS_XHCI_MAX_STREAM_ID);
+        *next_tag = if tag >= mass::UAS_XHCI_MAX_STREAM_ID {
+            1
+        } else {
+            tag + 1
+        };
+        if !uas_bench_stream_in_use(flights, tag) {
+            return Some(tag);
+        }
+    }
+    None
+}
+
 fn mass_runtime_key_for_disk(handle: block::DeviceHandle) -> Option<u64> {
     let disks = REGISTERED_MASS_DISKS.lock();
     disks
@@ -308,16 +330,21 @@ fn uas_bench_submit_data(
         .map_err(|_| uas_bench_transfer_error("data-submit"))
 }
 
+fn uas_bench_forget_pending(flights: &mut AllocVec<UasBenchFlight>) {
+    while let Some(flight) = flights.pop() {
+        core::mem::forget(flight);
+    }
+}
+
 async fn uas_bench_submit_read(
     command_out: &mut EndpointBulkOut,
     status_in: &mut EndpointBulkIn,
     data_in: &mut EndpointBulkIn,
-    io_tag: u32,
+    tag: u16,
     lba: u32,
     blocks: u16,
     bytes: usize,
 ) -> block::Result<UasBenchFlight> {
-    let tag = mass::uas_stream_id_from_tag(io_tag);
     let mut status = alloc::vec![0u8; UAS_BENCH_STATUS_BYTES];
     let mut data = alloc::vec![0u8; bytes];
     let status_ticket = uas_bench_submit_status(status_in, tag, &mut status)?;
@@ -338,7 +365,8 @@ async fn uas_bench_submit_read(
         status_good_seen: false,
     };
 
-    if let Err(err) = mass::send_read10_uas_skhynix(command_out, lba, blocks, io_tag).await {
+    if let Err(err) = mass::send_read10_uas_skhynix(command_out, lba, blocks, u32::from(tag)).await
+    {
         core::mem::forget(flight);
         return Err(map_io_error(err));
     }
@@ -356,74 +384,98 @@ fn uas_bench_poll_flights(
     let mut idx = 0usize;
     while idx < flights.len() {
         let mut completed = false;
+        let mut step_err = None;
         {
             let flight = &mut flights[idx];
             if now_ms.saturating_sub(flight.submitted_ms) > UAS_BENCH_FLIGHT_TIMEOUT_MS {
                 crate::log!(
-                    "crabusb: mass uas-bench timeout tag=0x{:04X} lba={} blocks={} bytes={} age_ms={}\n",
+                    "crabusb: mass uas-bench timeout tag=0x{:04X} lba={} blocks={} bytes={} age_ms={} data_pending={} status_pending={} data_len={} ready={} good={}\n",
                     flight.tag,
                     flight.lba,
                     flight.blocks,
                     flight.bytes,
-                    now_ms.saturating_sub(flight.submitted_ms)
+                    now_ms.saturating_sub(flight.submitted_ms),
+                    flight.data_ticket.is_some(),
+                    flight.status_ticket.is_some(),
+                    flight.data_len.unwrap_or(0),
+                    flight.read_ready_seen,
+                    flight.status_good_seen
                 );
-                return Err(block::Error::Timeout);
+                step_err = Some(block::Error::Timeout);
             }
 
-            if let Some(ticket) = flight.data_ticket {
-                match data_in.poll_detached(ticket, cx) {
-                    Poll::Ready(Ok(got)) => {
-                        flight.data_ticket = None;
-                        if got < flight.bytes {
-                            crate::log!(
-                                "crabusb: mass uas-bench short-data tag=0x{:04X} lba={} got={} need={}\n",
-                                flight.tag,
-                                flight.lba,
-                                got,
-                                flight.bytes
-                            );
-                            return Err(block::Error::Io);
+            if step_err.is_none() {
+                if let Some(ticket) = flight.data_ticket {
+                    match data_in.poll_detached(ticket, cx) {
+                        Poll::Ready(Ok(got)) => {
+                            flight.data_ticket = None;
+                            if got < flight.bytes {
+                                crate::log!(
+                                    "crabusb: mass uas-bench short-data tag=0x{:04X} lba={} got={} need={}\n",
+                                    flight.tag,
+                                    flight.lba,
+                                    got,
+                                    flight.bytes
+                                );
+                                step_err = Some(block::Error::Io);
+                            } else {
+                                flight.data_len = Some(got);
+                            }
                         }
-                        flight.data_len = Some(got);
+                        Poll::Ready(Err(_)) => {
+                            step_err = Some(uas_bench_transfer_error("data-complete"));
+                        }
+                        Poll::Pending => {}
                     }
-                    Poll::Ready(Err(_)) => return Err(uas_bench_transfer_error("data-complete")),
-                    Poll::Pending => {}
                 }
             }
 
-            if let Some(ticket) = flight.status_ticket {
-                match status_in.poll_detached(ticket, cx) {
-                    Poll::Ready(Ok(got)) => {
-                        flight.status_ticket = None;
-                        let status = &flight.status[..got.min(flight.status.len())];
-                        match mass::classify_uas_read_status_iu("read-10", status, flight.tag)
-                            .map_err(map_io_error)?
-                        {
-                            mass::UasReadStatusKind::ReadReady => {
-                                flight.read_ready_seen = true;
-                            }
-                            mass::UasReadStatusKind::StatusGood => {
-                                flight.status_good_seen = true;
+            if step_err.is_none() {
+                if let Some(ticket) = flight.status_ticket {
+                    match status_in.poll_detached(ticket, cx) {
+                        Poll::Ready(Ok(got)) => {
+                            flight.status_ticket = None;
+                            let status = &flight.status[..got.min(flight.status.len())];
+                            match mass::classify_uas_read_status_iu("read-10", status, flight.tag) {
+                                Ok(mass::UasReadStatusKind::ReadReady) => {
+                                    flight.read_ready_seen = true;
+                                }
+                                Ok(mass::UasReadStatusKind::StatusGood) => {
+                                    flight.status_good_seen = true;
+                                }
+                                Err(err) => {
+                                    step_err = Some(map_io_error(err));
+                                }
                             }
                         }
+                        Poll::Ready(Err(_)) => {
+                            step_err = Some(uas_bench_transfer_error("status-complete"));
+                        }
+                        Poll::Pending => {}
                     }
-                    Poll::Ready(Err(_)) => return Err(uas_bench_transfer_error("status-complete")),
-                    Poll::Pending => {}
                 }
             }
 
-            if flight.read_ready_seen
+            if step_err.is_none()
+                && flight.read_ready_seen
                 && flight.data_len.is_some()
                 && !flight.status_good_seen
                 && flight.status_ticket.is_none()
             {
-                let ticket = uas_bench_submit_status(status_in, flight.tag, &mut flight.status)?;
-                flight.status_ticket = Some(ticket);
+                match uas_bench_submit_status(status_in, flight.tag, &mut flight.status) {
+                    Ok(ticket) => flight.status_ticket = Some(ticket),
+                    Err(err) => step_err = Some(err),
+                }
             }
 
-            if flight.data_len.is_some() && flight.status_good_seen {
+            if step_err.is_none() && flight.data_len.is_some() && flight.status_good_seen {
                 completed = true;
             }
+        }
+
+        if let Some(err) = step_err {
+            uas_bench_forget_pending(flights);
+            return Err(err);
         }
 
         if completed {
@@ -550,7 +602,9 @@ where
         let mut additive_acks = 0usize;
         let mut phase = "slow-start";
         let mut next_lba = 0u64;
+        let mut next_tag = mass::uas_stream_id_from_tag(rt.io_tag);
         let mut flights: AllocVec<UasBenchFlight> = AllocVec::new();
+        let mut stop_requested = false;
 
         uas_bench_report(
             &mut report,
@@ -567,8 +621,12 @@ where
             chunk_bytes,
         );
 
-        while (completed_bytes < target_bytes || !flights.is_empty()) && !should_stop() {
-            while flights.len() < cwnd && submitted_bytes < target_bytes && !should_stop() {
+        while completed_bytes < target_bytes || !flights.is_empty() {
+            if should_stop() {
+                stop_requested = true;
+            }
+
+            while !stop_requested && flights.len() < cwnd && submitted_bytes < target_bytes {
                 let remaining_bytes = target_bytes.saturating_sub(submitted_bytes);
                 let wanted_bytes = core::cmp::min(chunk_bytes as u64, remaining_bytes) as usize;
                 let mut blocks = (wanted_bytes / block_size)
@@ -585,7 +643,9 @@ where
                     return Err(block::Error::InvalidParam);
                 }
 
-                let io_tag = rt.io_tag;
+                let Some(stream_tag) = uas_bench_next_stream_tag(&mut next_tag, &flights) else {
+                    break;
+                };
                 let flight = {
                     let endpoints = &mut rt.endpoints;
                     let UsbMassEndpoints::UasSkhynix {
@@ -597,16 +657,23 @@ where
                     else {
                         return Err(block::Error::NotSupported);
                     };
-                    uas_bench_submit_read(
+                    match uas_bench_submit_read(
                         command_out,
                         status_in,
                         data_in,
-                        io_tag,
+                        stream_tag,
                         next_lba as u32,
                         blocks as u16,
                         bytes,
                     )
-                    .await?
+                    .await
+                    {
+                        Ok(flight) => flight,
+                        Err(err) => {
+                            uas_bench_forget_pending(&mut flights);
+                            return Err(err);
+                        }
+                    }
                 };
                 rt.io_tag = rt.io_tag.wrapping_add(1);
                 flights.push(flight);
@@ -667,7 +734,7 @@ where
             }
         }
 
-        if should_stop() {
+        if stop_requested {
             ssthresh = core::cmp::max(1, cwnd / 2);
             cwnd = 1;
             uas_bench_report(

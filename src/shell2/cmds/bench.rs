@@ -30,7 +30,10 @@ const BENCH_MENU_ROWS: [[&str; 2]; 4] = [
         "netk",
         "Run internal netbench (literal URL, default 2 flows)",
     ],
-    ["uas [disc] [MiB]", "Run UAS stream-window read benchmark"],
+    [
+        "uas [disc] [MiB] [KiB] [inflight]",
+        "Run UAS stream-window read benchmark",
+    ],
 ];
 
 #[derive(Clone)]
@@ -459,11 +462,18 @@ pub(crate) fn try_parse(
         "uas" => {
             let disk_arg = args.next();
             let total_arg = args.next();
+            let chunk_arg = args.next();
+            let inflight_arg = args.next();
             if args.next().is_some() {
-                print_shell_line(io, "bench uas: usage `bench uas [disc-id] [MiB]`");
+                print_shell_line(
+                    io,
+                    "bench uas: usage `bench uas [disc-id] [MiB] [chunk-KiB] [inflight]`",
+                );
                 return ParseOutcome::Handled;
             }
-            if let Some(session_id) = submit_uasbench(spawner, io, disk_arg, total_arg) {
+            if let Some(session_id) =
+                submit_uasbench(spawner, io, disk_arg, total_arg, chunk_arg, inflight_arg)
+            {
                 ParseOutcome::StartSession(
                     crate::shell2::shell2_cmd::CommandSessionKind::BenchRunning(session_id),
                 )
@@ -513,6 +523,42 @@ fn parse_uasbench_total_bytes(
     }
 }
 
+fn parse_uasbench_chunk_bytes(
+    io: &'static dyn ShellBackend2,
+    chunk_arg: Option<&str>,
+) -> Option<usize> {
+    match chunk_arg {
+        Some(raw) => match raw.parse::<usize>() {
+            Ok(kib) if (1..=1024).contains(&kib) => Some(kib.saturating_mul(1024)),
+            _ => {
+                print_shell_line(io, "bench uas: chunk KiB must be 1..=1024");
+                None
+            }
+        },
+        None => Some(crate::usb2::pen::UAS_BENCH_DEFAULT_CHUNK_BYTES),
+    }
+}
+
+fn parse_uasbench_max_inflight(
+    io: &'static dyn ShellBackend2,
+    inflight_arg: Option<&str>,
+) -> Option<usize> {
+    match inflight_arg {
+        Some(raw) => match raw.parse::<usize>() {
+            Ok(inflight)
+                if (1..=crate::usb2::pen::UAS_BENCH_DEFAULT_MAX_INFLIGHT).contains(&inflight) =>
+            {
+                Some(inflight)
+            }
+            _ => {
+                print_shell_line(io, "bench uas: inflight must be 1..=8");
+                None
+            }
+        },
+        None => Some(crate::usb2::pen::UAS_BENCH_DEFAULT_MAX_INFLIGHT),
+    }
+}
+
 fn select_uasbench_disk(
     io: &'static dyn ShellBackend2,
     disk_arg: Option<&str>,
@@ -548,9 +594,13 @@ fn submit_uasbench(
     io: &'static dyn ShellBackend2,
     disk_arg: Option<&str>,
     total_arg: Option<&str>,
+    chunk_arg: Option<&str>,
+    inflight_arg: Option<&str>,
 ) -> Option<u64> {
     let disk = select_uasbench_disk(io, disk_arg)?;
     let total_bytes = parse_uasbench_total_bytes(io, total_arg)?;
+    let chunk_bytes = parse_uasbench_chunk_bytes(io, chunk_arg)?;
+    let max_inflight = parse_uasbench_max_inflight(io, inflight_arg)?;
     let target = matrix_target_for_backend(io);
     let session_id = bench_session_start();
     let info = disk.info();
@@ -562,14 +612,21 @@ fn submit_uasbench(
             disk.id(),
             info.label.as_deref().unwrap_or("-"),
             format_bytes(total_bytes),
-            format_bytes(crate::usb2::pen::UAS_BENCH_DEFAULT_CHUNK_BYTES as u64),
-            crate::usb2::pen::UAS_BENCH_DEFAULT_MAX_INFLIGHT
+            format_bytes(chunk_bytes as u64),
+            max_inflight
         )
         .as_str(),
     );
 
     set_matrix_target_active(&target, true);
-    match uasbench_task(target.clone(), session_id, disk.id().raw(), total_bytes) {
+    match uasbench_task(
+        target.clone(),
+        session_id,
+        disk.id().raw(),
+        total_bytes,
+        chunk_bytes,
+        max_inflight,
+    ) {
         Ok(token) => spawner.spawn(token),
         Err(_) => {
             bench_session_finish(session_id);
@@ -764,7 +821,14 @@ fn submit_internal_netbench(
 }
 
 #[embassy_executor::task(pool_size = 1)]
-async fn uasbench_task(target: MatrixTarget, session_id: u64, disk_raw: u32, total_bytes: u64) {
+async fn uasbench_task(
+    target: MatrixTarget,
+    session_id: u64,
+    disk_raw: u32,
+    total_bytes: u64,
+    chunk_bytes: usize,
+    max_inflight: usize,
+) {
     let task_target = target.clone();
     async move {
         Timer::after(EmbassyDuration::from_millis(1)).await;
@@ -781,8 +845,8 @@ async fn uasbench_task(target: MatrixTarget, session_id: u64, disk_raw: u32, tot
 
         let config = crate::usb2::pen::UasBenchConfig {
             total_bytes,
-            chunk_bytes: crate::usb2::pen::UAS_BENCH_DEFAULT_CHUNK_BYTES,
-            max_inflight: crate::usb2::pen::UAS_BENCH_DEFAULT_MAX_INFLIGHT,
+            chunk_bytes,
+            max_inflight,
         };
 
         let progress_target = task_target.clone();

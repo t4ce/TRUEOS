@@ -27,6 +27,7 @@ const UAS_IU_READ_READY: u8 = 0x06;
 const UAS_IU_WRITE_READY: u8 = 0x07;
 const UAS_STATUS_GOOD: u8 = 0x00;
 const UAS_XHCI_STREAM_COUNT: u16 = 32;
+pub(crate) const UAS_XHCI_MAX_STREAM_ID: u16 = UAS_XHCI_STREAM_COUNT - 1;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum MassTransportKind {
@@ -347,7 +348,7 @@ fn cdb_read_buffer_echo(len: usize) -> [u8; 10] {
 }
 
 fn uas_tag(tag: u32) -> u16 {
-    ((tag.max(1) - 1) % u32::from(UAS_XHCI_STREAM_COUNT - 1) + 1) as u16
+    ((tag.max(1) - 1) % u32::from(UAS_XHCI_MAX_STREAM_ID) + 1) as u16
 }
 
 pub(crate) fn uas_stream_id_from_tag(tag: u32) -> u16 {

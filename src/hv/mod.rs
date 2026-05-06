@@ -469,6 +469,23 @@ pub(crate) fn current_vm_id_by_lapic_low() -> Option<u8> {
     tagged.checked_sub(1)
 }
 
+pub(crate) fn current_hull_guest_context_vm_id() -> Option<u8> {
+    let vm_id = current_vm_id_by_lapic_low()?;
+    let rsp: u64;
+    unsafe {
+        core::arch::asm!(
+            "mov {}, rsp",
+            out(reg) rsp,
+            options(nomem, nostack, preserves_flags)
+        );
+    }
+    if rsp >= memory::GUEST_STACK_VA_BASE && rsp < memory::GUEST_COMM_PAGE_VA {
+        Some(vm_id)
+    } else {
+        None
+    }
+}
+
 fn set_current_vm_id(vm_id: u8) {
     let slot_idx = crate::percpu::current_slot();
     if let Some(slot) = CURRENT_VM_ID_BY_CPU.get(slot_idx) {
