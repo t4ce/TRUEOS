@@ -24,6 +24,10 @@ pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
 pub const OP_BP_NET_SUBMIT: u32 = 0x21; // request payload is wire Command
 pub const OP_BP_NET_POLL: u32 = 0x22; // response payload is optional wire Event
+pub const OP_BP_FETCH_BYTES_START: u32 = 0x23; // request payload is URL, response is op id
+pub const OP_BP_FETCH_BYTES_RESULT_LEN: u32 = 0x24; // arg0 is op id, response is signed len/rc
+pub const OP_BP_FETCH_BYTES_READ: u32 = 0x25; // arg0 op id, arg1 offset, response payload bytes
+pub const OP_BP_FETCH_BYTES_DISCARD: u32 = 0x26; // arg0 is op id
 
 // ── response status codes (u32, written by host) ────────────────────────────
 pub const STATUS_OK: u32 = 0;
@@ -151,7 +155,7 @@ pub fn guest_sleep_ms(ms: u64) {
 
 /// Called from the vmexit loop on every VMCALL exit.
 pub fn dispatch(vm_id: u8) -> DispatchOutcome {
-    let Some((op, seq, arg0, _arg1, req_len)) = read_request(vm_id) else {
+    let Some((op, seq, arg0, arg1, req_len)) = read_request(vm_id) else {
         hvlogf(format_args!("hv: vm{} reporting: vmcall bad vm id", vm_id));
         return DispatchOutcome::Stop;
     };
@@ -243,6 +247,56 @@ pub fn dispatch(vm_id: u8) -> DispatchOutcome {
                 Ok(None) => write_response(vm_id, seq, STATUS_OK, 0, 0),
                 Err(()) => write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0),
             }
+            DispatchOutcome::Resume
+        }
+        OP_BP_FETCH_BYTES_START => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let bytes = unsafe { &(&(*p).payload)[..n] };
+            let Ok(url) = core::str::from_utf8(bytes) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            const TIMEOUT_MS: u32 = 45_000;
+            const MAX_BYTES: usize = 8 * 1024 * 1024;
+            let op_id =
+                crate::t::net::https::cabi_net_fetch_bytes_start_host(url, TIMEOUT_MS, MAX_BYTES);
+            if op_id == 0 {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+            } else {
+                write_response(vm_id, seq, STATUS_OK, op_id as u64, 0);
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_FETCH_BYTES_RESULT_LEN => {
+            let rc = crate::t::net::https::cabi_net_fetch_bytes_result_len_host(arg0 as u32);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_FETCH_BYTES_READ => {
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let out = unsafe { &mut (&mut (*p).payload)[..PAYLOAD_CAP] };
+            let rc = crate::t::net::https::cabi_net_fetch_bytes_read_chunk_host(
+                arg0 as u32,
+                arg1 as usize,
+                out,
+            );
+            if rc < 0 {
+                write_response(vm_id, seq, STATUS_BAD_ARG, (rc as i64) as u64, 0);
+            } else {
+                write_response(vm_id, seq, STATUS_OK, rc as u64, rc as u32);
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_FETCH_BYTES_DISCARD => {
+            let rc = crate::t::net::https::cabi_net_fetch_bytes_discard_host(arg0 as u32);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
         _ => {

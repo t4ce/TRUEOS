@@ -17,6 +17,10 @@ pub const OP_NET_TCP_READ: u32 = 0x11;
 pub const OP_BP_NET_OPEN: u32 = 0x20;
 pub const OP_BP_NET_SUBMIT: u32 = 0x21;
 pub const OP_BP_NET_POLL: u32 = 0x22;
+pub const OP_BP_FETCH_BYTES_START: u32 = 0x23;
+pub const OP_BP_FETCH_BYTES_RESULT_LEN: u32 = 0x24;
+pub const OP_BP_FETCH_BYTES_READ: u32 = 0x25;
+pub const OP_BP_FETCH_BYTES_DISCARD: u32 = 0x26;
 
 pub const STATUS_OK: u32 = 0;
 pub const STATUS_BAD_ARG: u32 = 2;
