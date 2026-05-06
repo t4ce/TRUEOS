@@ -25,8 +25,8 @@ pub mod topology;
 pub use crate::backend::DeviceId;
 pub use crate::backend::ty::Event;
 pub use crate::backend::ty::ep::{
-    EndpointBulkIn, EndpointBulkOut, EndpointControl, EndpointInterruptIn, EndpointInterruptOut,
-    EndpointIsoIn, EndpointIsoOut, EndpointKind,
+    DetachedTransfer, EndpointBulkIn, EndpointBulkOut, EndpointControl, EndpointInterruptIn,
+    EndpointInterruptOut, EndpointIsoIn, EndpointIsoOut, EndpointKind,
 };
 pub use crate::topology::DeviceHandle;
 pub use host::*;

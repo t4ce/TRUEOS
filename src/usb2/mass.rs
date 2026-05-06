@@ -350,11 +350,21 @@ fn uas_tag(tag: u32) -> u16 {
     ((tag.max(1) - 1) % u32::from(UAS_XHCI_STREAM_COUNT - 1) + 1) as u16
 }
 
+pub(crate) fn uas_stream_id_from_tag(tag: u32) -> u16 {
+    uas_tag(tag)
+}
+
 fn parse_uas_tag(iu: &[u8]) -> Option<u16> {
     if iu.len() < 4 {
         return None;
     }
     Some(u16::from_be_bytes([iu[2], iu[3]]))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum UasReadStatusKind {
+    ReadReady,
+    StatusGood,
 }
 
 fn validate_uas_status(
@@ -382,6 +392,47 @@ fn validate_uas_status(
         });
     }
     Ok(())
+}
+
+pub(crate) fn classify_uas_read_status_iu(
+    cmd: &'static str,
+    iu: &[u8],
+    expected_tag: u16,
+) -> Result<UasReadStatusKind, MassProbeError> {
+    if iu.len() < 4 {
+        return Err(MassProbeError::ShortData {
+            cmd,
+            got: iu.len(),
+            need: 4,
+        });
+    }
+
+    let iu_id = iu[0];
+    let tag = parse_uas_tag(iu).unwrap_or(0);
+    if tag != expected_tag {
+        return Err(MassProbeError::Csw {
+            cmd,
+            sig: u32::from(iu_id),
+            tag: u32::from(tag),
+            expected_tag: u32::from(expected_tag),
+            status: 0xFF,
+        });
+    }
+
+    match iu_id {
+        UAS_IU_READ_READY => Ok(UasReadStatusKind::ReadReady),
+        UAS_IU_STATUS => {
+            validate_uas_status(cmd, iu, expected_tag)?;
+            Ok(UasReadStatusKind::StatusGood)
+        }
+        _ => Err(MassProbeError::Csw {
+            cmd,
+            sig: u32::from(iu_id),
+            tag: u32::from(tag),
+            expected_tag: u32::from(expected_tag),
+            status: 0xFF,
+        }),
+    }
 }
 
 async fn with_timeout_or_none<F: Future>(fut: F, timeout_ms: u64) -> Option<F::Output> {
@@ -928,6 +979,18 @@ async fn uas_send_command(
         });
     }
     Ok(())
+}
+
+pub(crate) async fn send_read10_uas_skhynix(
+    command_out: &mut EndpointBulkOut,
+    lba: u32,
+    blocks: u16,
+    tag: u32,
+) -> Result<u16, MassProbeError> {
+    let tag = uas_tag(tag);
+    let cdb = scsi::cdb_read_10(lba, blocks);
+    uas_send_command(command_out, "read-10", &cdb, tag).await?;
+    Ok(tag)
 }
 
 async fn uas_read_iu(

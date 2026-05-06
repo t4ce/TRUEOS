@@ -1,8 +1,13 @@
 use core::ptr::NonNull;
 
+use core::task::{Context, Poll};
+
 use usb_if::{err::TransferError, transfer::Direction};
 
-use crate::backend::ty::{ep::TransferHandle, transfer::TransferKind};
+use crate::backend::ty::{
+    ep::{DetachedTransfer, TransferHandle},
+    transfer::TransferKind,
+};
 
 use super::EndpointBase;
 
@@ -48,6 +53,39 @@ impl EndpointBulkIn {
         transfer.stream_id = stream_id;
 
         self.raw.submit(transfer)
+    }
+
+    /// Submit a stream transfer without holding an endpoint borrow in the returned ticket.
+    ///
+    /// # Safety
+    ///
+    /// The caller must keep `buff` alive, at a stable address, and exclusively owned until
+    /// `poll_detached` returns `Ready` for the returned ticket.
+    pub unsafe fn submit_on_stream_detached(
+        &mut self,
+        stream_id: u16,
+        buff: &mut [u8],
+    ) -> Result<DetachedTransfer, TransferError> {
+        let buff = if buff.is_empty() {
+            None
+        } else {
+            Some((NonNull::new(buff.as_mut_ptr()).unwrap(), buff.len()))
+        };
+
+        let mut transfer = self
+            .raw
+            .new_transfer(TransferKind::Bulk, Direction::In, buff);
+        transfer.stream_id = stream_id;
+
+        unsafe { self.raw.submit_detached(transfer) }
+    }
+
+    pub fn poll_detached(
+        &mut self,
+        ticket: DetachedTransfer,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<usize, TransferError>> {
+        self.raw.poll_detached(ticket, cx)
     }
 }
 
@@ -98,6 +136,38 @@ impl EndpointBulkOut {
         transfer.stream_id = stream_id;
 
         self.raw.submit(transfer)
+    }
+
+    /// Submit a stream transfer without holding an endpoint borrow in the returned ticket.
+    ///
+    /// # Safety
+    ///
+    /// The caller must keep `buff` alive, at a stable address, and immutable until
+    /// `poll_detached` returns `Ready` for the returned ticket.
+    pub unsafe fn submit_on_stream_detached(
+        &mut self,
+        stream_id: u16,
+        buff: &[u8],
+    ) -> Result<DetachedTransfer, TransferError> {
+        let buff = if buff.is_empty() {
+            None
+        } else {
+            Some((NonNull::new(buff.as_ptr() as *mut u8).unwrap(), buff.len()))
+        };
+        let mut transfer = self
+            .raw
+            .new_transfer(TransferKind::Bulk, Direction::Out, buff);
+        transfer.stream_id = stream_id;
+
+        unsafe { self.raw.submit_detached(transfer) }
+    }
+
+    pub fn poll_detached(
+        &mut self,
+        ticket: DetachedTransfer,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<usize, TransferError>> {
+        self.raw.poll_detached(ticket, cx)
     }
 }
 
