@@ -1087,6 +1087,161 @@ fn spawn_cabi_net_fetch_bytes(op_id: u32, url: String, timeout_ms: u32, max_byte
     });
 }
 
+#[inline]
+fn vmx_guest_cabi_context() -> bool {
+    crate::hv::current_vm_id_by_lapic_low().is_some()
+}
+
+fn guest_fetch_bytes_start(url: &[u8]) -> u32 {
+    if url.is_empty() || url.len() > trueos_vm::vmcall::PAYLOAD_CAP {
+        return 0;
+    }
+    let mut out = [0u8; 1];
+    let (status, op_id) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_FETCH_BYTES_START,
+        0,
+        0,
+        url,
+        &mut out,
+    );
+    if status == trueos_vm::vmcall::STATUS_OK {
+        op_id as u32
+    } else {
+        0
+    }
+}
+
+fn guest_fetch_bytes_result_len(op_id: u32) -> isize {
+    let (status, value) =
+        trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_FETCH_BYTES_RESULT_LEN, op_id as u64, 0);
+    if status == trueos_vm::vmcall::STATUS_OK {
+        (value as i64) as isize
+    } else {
+        FS_ERR_BAD_PARAM as isize
+    }
+}
+
+fn guest_fetch_bytes_read(op_id: u32, out_ptr: *mut u8, out_cap: usize) -> isize {
+    let len = guest_fetch_bytes_result_len(op_id);
+    if len < 0 {
+        return len;
+    }
+    let len = len as usize;
+    if out_ptr.is_null() || out_cap == 0 {
+        return len as isize;
+    }
+    if len > out_cap {
+        return FS_ERR_NO_SPACE as isize;
+    }
+
+    let mut copied = 0usize;
+    while copied < len {
+        let mut chunk = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
+        let (status, value) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_FETCH_BYTES_READ,
+            op_id as u64,
+            copied as u64,
+            &[],
+            &mut chunk,
+        );
+        if status != trueos_vm::vmcall::STATUS_OK {
+            return (value as i64) as isize;
+        }
+        let got = value as usize;
+        if got == 0 {
+            return FS_ERR_IO as isize;
+        }
+        let n = core::cmp::min(got, len.saturating_sub(copied));
+        unsafe { core::ptr::copy_nonoverlapping(chunk.as_ptr(), out_ptr.add(copied), n) };
+        copied += n;
+    }
+
+    if len == 0 {
+        let mut out = [0u8; 1];
+        let _ = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_FETCH_BYTES_READ,
+            op_id as u64,
+            0,
+            &[],
+            &mut out,
+        );
+    }
+
+    copied as isize
+}
+
+fn guest_fetch_bytes_discard(op_id: u32) -> i32 {
+    let (status, value) =
+        trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_FETCH_BYTES_DISCARD, op_id as u64, 0);
+    if status == trueos_vm::vmcall::STATUS_OK {
+        value as i32
+    } else {
+        FS_ERR_BAD_PARAM
+    }
+}
+
+pub(crate) fn cabi_net_fetch_bytes_start_host(
+    url_s: &str,
+    timeout_ms: u32,
+    max_bytes: usize,
+) -> u32 {
+    let op_id = CABI_NET_FETCH_SEQ.fetch_add(1, Ordering::Relaxed);
+    CABI_NET_FETCH_BYTES_RESULTS
+        .lock()
+        .insert(op_id, CabiNetFetchBytesResult::default());
+    spawn_cabi_net_fetch_bytes(op_id, String::from(url_s), timeout_ms, max_bytes);
+    op_id
+}
+
+pub(crate) fn cabi_net_fetch_bytes_result_len_host(op_id: u32) -> isize {
+    let map = CABI_NET_FETCH_BYTES_RESULTS.lock();
+    match map.get(&op_id) {
+        Some(v) => match v.rc {
+            Some(0) => v.body.len() as isize,
+            Some(rc) => rc as isize,
+            None => FS_ERR_NOT_FOUND as isize,
+        },
+        None => FS_ERR_NOT_FOUND as isize,
+    }
+}
+
+pub(crate) fn cabi_net_fetch_bytes_read_chunk_host(
+    op_id: u32,
+    offset: usize,
+    out: &mut [u8],
+) -> isize {
+    let mut map = CABI_NET_FETCH_BYTES_RESULTS.lock();
+    let Some(entry) = map.get(&op_id) else {
+        return FS_ERR_NOT_FOUND as isize;
+    };
+    let Some(rc) = entry.rc else {
+        return FS_ERR_NOT_FOUND as isize;
+    };
+    if rc != 0 {
+        map.remove(&op_id);
+        return rc as isize;
+    }
+    let len = entry.body.len();
+    if offset > len {
+        return FS_ERR_BAD_PARAM as isize;
+    }
+    let n = core::cmp::min(out.len(), len.saturating_sub(offset));
+    if n != 0 {
+        unsafe {
+            core::ptr::copy_nonoverlapping(entry.body.as_ptr().add(offset), out.as_mut_ptr(), n)
+        };
+    }
+    if offset.saturating_add(n) >= len {
+        map.remove(&op_id);
+    }
+    n as isize
+}
+
+pub(crate) fn cabi_net_fetch_bytes_discard_host(op_id: u32) -> i32 {
+    CABI_NET_FETCH_BYTES_RESULTS.lock().remove(&op_id);
+    0
+}
+
 async fn cabi_net_fetch_post_json_task_inner(
     op_id: u32,
     key: String,
@@ -4840,6 +4995,9 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_bytes_start(
     }
 
     let url_bytes = core::slice::from_raw_parts(url_ptr, url_len);
+    if vmx_guest_cabi_context() {
+        return guest_fetch_bytes_start(url_bytes);
+    }
     let Ok(url_s) = core::str::from_utf8(url_bytes) else {
         return 0;
     };
@@ -4847,12 +5005,7 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_bytes_start(
     const TIMEOUT_MS: u32 = 45_000;
     const MAX_BYTES: usize = 8 * 1024 * 1024;
 
-    let op_id = CABI_NET_FETCH_SEQ.fetch_add(1, Ordering::Relaxed);
-    CABI_NET_FETCH_BYTES_RESULTS
-        .lock()
-        .insert(op_id, CabiNetFetchBytesResult::default());
-    spawn_cabi_net_fetch_bytes(op_id, String::from(url_s), TIMEOUT_MS, MAX_BYTES);
-    op_id
+    cabi_net_fetch_bytes_start_host(url_s, TIMEOUT_MS, MAX_BYTES)
 }
 
 #[unsafe(no_mangle)]
@@ -5083,15 +5236,10 @@ pub extern "C" fn trueos_cabi_net_fetch_discard(op_id: u32) -> i32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_net_fetch_bytes_result_len(op_id: u32) -> isize {
-    let map = CABI_NET_FETCH_BYTES_RESULTS.lock();
-    match map.get(&op_id) {
-        Some(v) => match v.rc {
-            Some(0) => v.body.len() as isize,
-            Some(rc) => rc as isize,
-            None => FS_ERR_NOT_FOUND as isize,
-        },
-        None => FS_ERR_NOT_FOUND as isize,
+    if vmx_guest_cabi_context() {
+        return guest_fetch_bytes_result_len(op_id);
     }
+    cabi_net_fetch_bytes_result_len_host(op_id)
 }
 
 #[unsafe(no_mangle)]
@@ -5100,6 +5248,9 @@ pub extern "C" fn trueos_cabi_net_fetch_bytes_read(
     out_ptr: *mut u8,
     out_cap: usize,
 ) -> isize {
+    if vmx_guest_cabi_context() {
+        return guest_fetch_bytes_read(op_id, out_ptr, out_cap);
+    }
     let mut map = CABI_NET_FETCH_BYTES_RESULTS.lock();
     let Some(entry) = map.get(&op_id) else {
         return FS_ERR_NOT_FOUND as isize;
@@ -5125,8 +5276,10 @@ pub extern "C" fn trueos_cabi_net_fetch_bytes_read(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_net_fetch_bytes_discard(op_id: u32) -> i32 {
-    CABI_NET_FETCH_BYTES_RESULTS.lock().remove(&op_id);
-    0
+    if vmx_guest_cabi_context() {
+        return guest_fetch_bytes_discard(op_id);
+    }
+    cabi_net_fetch_bytes_discard_host(op_id)
 }
 
 #[unsafe(no_mangle)]
