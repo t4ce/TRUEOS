@@ -701,6 +701,40 @@ pub(crate) fn print_matrix_target_native_text(target: &MatrixTarget, text: &str)
     }
 }
 
+pub(crate) fn raw_write_matrix_target(target: &MatrixTarget, bytes: &[u8]) -> usize {
+    if bytes.is_empty() {
+        return 0;
+    }
+
+    let io: &'static dyn ShellIo2 = if (target.output_mask & OUTPUT_NET_TCP_MASK) != 0 {
+        &NET_TCP_SHELL_BACKEND
+    } else if (target.output_mask & OUTPUT_UI2_MASK) != 0 {
+        &UI2_SHELL_BACKEND
+    } else {
+        &UART1_COM1_BACKEND
+    };
+
+    match core::str::from_utf8(bytes) {
+        Ok(text) => io.raw_write_str(text),
+        Err(_) => {
+            for &b in bytes {
+                io.raw_write_byte(b);
+            }
+        }
+    }
+    bytes.len()
+}
+
+pub(crate) fn read_matrix_target_byte(target: &MatrixTarget) -> Option<u8> {
+    if (target.output_mask & OUTPUT_NET_TCP_MASK) != 0 {
+        NET_TCP_SHELL_BACKEND.read_byte()
+    } else if (target.output_mask & OUTPUT_UI2_MASK) != 0 {
+        UI2_SHELL_BACKEND.read_byte()
+    } else {
+        UART1_COM1_BACKEND.read_byte()
+    }
+}
+
 fn current_transcript_for_task(io: &'static dyn ShellBackend2) -> VecDeque<TranscriptEntry> {
     matrix::active_lines(output_target_for_backend(io))
 }
@@ -864,7 +898,6 @@ fn handle_submit(
             shell2_cmd::ParseOutcome::SetLineWidth(width) => {
                 HandleSubmitResult::SetLineWidth(width)
             }
-            shell2_cmd::ParseOutcome::LaunchTetris => HandleSubmitResult::LaunchTetris,
             shell2_cmd::ParseOutcome::StartSession(kind) => HandleSubmitResult::StartSession(kind),
             _ => HandleSubmitResult::None,
         },
@@ -904,7 +937,6 @@ fn handle_submit(
 enum HandleSubmitResult {
     None,
     SetLineWidth(usize),
-    LaunchTetris,
     StartSession(shell2_cmd::CommandSessionKind),
 }
 
@@ -1541,10 +1573,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             transcript = current_transcript_for_task(io);
                             out.render_transcript(&transcript);
                         } else {
-                            let eat_tetris_launch = mode == ShellMode2::Cmd
-                                && crate::shell2::cmds::tetris::is_launch_request(submitted);
-                            if !eat_tetris_launch
-                                && !submitted.is_empty()
+                            if !submitted.is_empty()
                                 && !(mode == ShellMode2::Chat && chat_mode == ChatPromptMode::Add)
                             {
                                 record_user_line_for_active_slot(io, submitted);
@@ -1564,29 +1593,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                 HandleSubmitResult::SetLineWidth(width) => {
                                     out.set_line_width(width);
                                     matrix::set_active_line_width(output_mask, width);
-                                    out.banner(output_mask, mode, minute_text.as_str());
-                                    out.mode_status(
-                                        output_mask,
-                                        mode,
-                                        qjs_mode,
-                                        apps_mode,
-                                        chat_mode,
-                                        surf_prefix,
-                                        cmd_status_text.as_deref(),
-                                        running_go2_phase,
-                                    );
-                                    transcript = current_transcript_for_task(io);
-                                    out.render_transcript(&transcript);
-                                }
-                                HandleSubmitResult::LaunchTetris => {
-                                    line.clear();
-                                    crate::shell2::cmds::tetris::run(
-                                        io,
-                                        matrix::active_line_width(output_mask),
-                                        crate::shell2::cmds::tetris::SHELL2_TETRIS_ROWS,
-                                        SCROLL_TOP_ROW,
-                                    )
-                                    .await;
                                     out.banner(output_mask, mode, minute_text.as_str());
                                     out.mode_status(
                                         output_mask,

@@ -181,6 +181,14 @@ unsafe extern "C" {
         modifiers: u32,
         flags: u32,
     ) -> i32;
+    pub fn trueos_cabi_input_pop_keyboard_output(out: *mut TrueosKeyboardOutputEvent) -> i32;
+    pub fn trueos_cabi_input_read_keyboard_output_since(
+        read_seq: u64,
+        out: *mut TrueosKeyboardOutputEvent,
+        out_cap: u32,
+        out_next_seq: *mut u64,
+        out_dropped: *mut u32,
+    ) -> u32;
     pub fn trueos_cabi_mouse_poll(out: *mut TrueosMouseState) -> i32;
     pub fn trueos_cabi_qjs_mouse_pop(out: *mut TrueosMouseState) -> i32;
 
@@ -195,6 +203,8 @@ unsafe extern "C" {
     ) -> isize;
     pub fn trueos_cabi_shell2_print_line(data_ptr: *const u8, data_len: usize) -> usize;
     pub fn trueos_cabi_shell1_submit_input(data_ptr: *const u8, data_len: usize) -> usize;
+    pub fn trueos_cabi_shell_attached_write(data_ptr: *const u8, data_len: usize) -> usize;
+    pub fn trueos_cabi_shell_attached_read_byte() -> i32;
     pub fn trueos_cabi_shell_command_registry_json(out_ptr: *mut u8, out_cap: usize) -> isize;
     pub fn trueos_cabi_shell_history_lines_all() -> usize;
     pub fn trueos_cabi_shell_history_lines(
@@ -375,6 +385,26 @@ pub struct TrueosHidKeyboardSample {
     pub reserved1: u16,
     pub keys: [u8; 6],
     pub ascii: [u8; 6],
+    pub flags: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosKeyboardOutputEvent {
+    pub t_ms: u32,
+    pub seq: u32,
+    pub device_seq: u32,
+    pub controller_id: u32,
+    pub slot_id: u32,
+    pub ep_target: u32,
+    pub modifiers: u8,
+    pub kind: u8,
+    pub utf8_len: u8,
+    pub reserved0: u8,
+    pub key_code: u16,
+    pub reserved1: u16,
+    pub codepoint: u32,
+    pub utf8: [u8; 4],
     pub flags: u32,
 }
 

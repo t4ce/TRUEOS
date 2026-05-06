@@ -62,7 +62,6 @@ define_started_flags!(
     UI2_HOSTED_SYNC_TASK_STARTED,
     UI2_HIT_TASK_STARTED,
     UI2_STARTED,
-    UI2_GFX_TETRIS_STARTED,
     UI2_ATHLAS_THIRD_DEMO_STARTED,
     UI2_ATHLAS_HALF_DEMO_STARTED,
     UI2_ATHLAS_1X_DEMO_STARTED,
@@ -108,7 +107,6 @@ macro_rules! define_stop_flags {
 }
 
 define_stop_flags!(
-    STOP_UI2_GFX_TETRIS,
     STOP_UI2_TEXT_INPUT_DEMO,
     STOP_UI2_BGRT_DEMO,
     STOP_UI2_CORETICKS_DEMO,
@@ -126,7 +124,6 @@ define_stop_flags!(
 
 fn stop_flag_by_task_name(name: &str) -> Option<&'static AtomicBool> {
     match name {
-        "ui2-gfx-tetris" => Some(&STOP_UI2_GFX_TETRIS),
         "ui2-text-input-demo" => Some(&STOP_UI2_TEXT_INPUT_DEMO),
         "ui2-bgrt-demo" => Some(&STOP_UI2_BGRT_DEMO),
         "ui2-coreticks-demo" => Some(&STOP_UI2_CORETICKS_DEMO),
@@ -721,13 +718,6 @@ where
     spawn_on_worker(spawner, spawn)
 }
 
-fn spawn_ui2_gfx_tetris(spawner: Spawner) -> SpawnAttempt {
-    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        let _ = worker_spawner;
-        crate::tst_gfx_tetris::ui2_gfx_tetris_task()
-    })
-}
-
 fn spawn_ui2_athlas_half_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1(spawner, |_ap1_spawner| crate::r::ui2::ui2_font_bucketproducer_demo_task(0))
 }
@@ -1157,7 +1147,7 @@ const UI2_DEMO_READY: u32 =
 const WS_BOOT_READY: u32 = crate::r::readiness::NET_GATEWAY_REACHABLE
     | crate::r::readiness::TLS_SOCKET_SERVICE_READY
     | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
-static TASKS: [TaskSpec; 70] = [
+static TASKS: [TaskSpec; 69] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
         "globalog-persist-once",
@@ -1340,12 +1330,6 @@ static TASKS: [TaskSpec; 70] = [
         spawn_ui2_hit,
     ),
     TaskSpec::enabled("truesurfer-factory", 0, &SURFER_FACTORY_STARTED, spawn_truesurfer_factory),
-    TaskSpec::disabled(
-        "ui2-gfx-tetris",
-        UI2_DEMO_READY,
-        &UI2_GFX_TETRIS_STARTED,
-        spawn_ui2_gfx_tetris,
-    ),
     TaskSpec::enabled_on(
         SpawnPlacement::Ap1,
         "ui2-athlas-third-demo",
@@ -1604,7 +1588,6 @@ pub async fn spawn_service_task(spawner: Spawner) {
                             "gfx_loadscreen"
                                 | "ui2"
                                 | "ui2-gfx-browser"
-                                | "ui2-gfx-tetris"
                                 | "ui2-mandelbrot-demo"
                                 | "ui2-shell-demo"
                         ) {

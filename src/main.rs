@@ -87,8 +87,6 @@ mod tst_boot_factory_ram_probe;
 mod tst_c4_boot_probe;
 #[path = "tst/fps.rs"]
 mod tst_fps;
-#[path = "tst/gfx_tetris.rs"]
-mod tst_gfx_tetris;
 #[path = "tst/html_demo.rs"]
 mod tst_html_demo;
 #[path = "tst/html_shack.rs"]

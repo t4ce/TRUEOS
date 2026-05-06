@@ -3,7 +3,6 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::alloc::Layout;
 use core::ffi::c_char;
-use core::sync::atomic::{AtomicBool, Ordering};
 use sha2::{Digest, Sha256};
 use spin::Mutex;
 
@@ -25,7 +24,10 @@ const R_X86_64_NONE: u32 = 0;
 const R_X86_64_64: u32 = 1;
 const R_X86_64_PC32: u32 = 2;
 const R_X86_64_PLT32: u32 = 4;
+const R_X86_64_GOTPCREL: u32 = 9;
 const R_X86_64_32S: u32 = 11;
+const IMPORT_THUNK_ALIGN: usize = 16;
+const IMPORT_THUNK_SIZE: usize = 16;
 
 pub(crate) struct BlueprintModule<'a> {
     pub(crate) version: u16,
@@ -77,7 +79,6 @@ impl Drop for LoadedRelImage {
 
 enum PortalImageBacking {
     Dynamic { base: *mut u8, layout: Layout },
-    Compat(PortalImageCompatLease),
 }
 
 impl Drop for PortalImageBacking {
@@ -88,9 +89,6 @@ impl Drop for PortalImageBacking {
                     crate::allocators::dealloc_raw(*base);
                 }
                 let _ = layout;
-            }
-            Self::Compat(lease) => {
-                let _ = lease.slot;
             }
         }
     }
@@ -112,47 +110,13 @@ impl Drop for PortalImageAllocationGuard {
     }
 }
 
-struct PortalImageCompatLease {
-    base: *mut u8,
-    slot: usize,
-}
-
-impl Drop for PortalImageCompatLease {
-    fn drop(&mut self) {
-        PORTAL_IMAGE_COMPAT_IN_USE[self.slot].store(false, Ordering::Release);
-        let _ = self.base;
-    }
-}
-
-#[repr(align(4096))]
-struct PortalImageCompatArena {
-    _bytes: [u8; PORTAL_IMAGE_COMPAT_SLOT_BYTES],
-}
-
-static PORTAL_IMAGE_COMPAT_IN_USE: [AtomicBool; PORTAL_IMAGE_COMPAT_SLOT_COUNT] =
-    [const { AtomicBool::new(false) }; PORTAL_IMAGE_COMPAT_SLOT_COUNT];
-static mut PORTAL_IMAGE_COMPAT_ARENAS: [PortalImageCompatArena; PORTAL_IMAGE_COMPAT_SLOT_COUNT] = [const {
-    PortalImageCompatArena {
-        _bytes: [0; PORTAL_IMAGE_COMPAT_SLOT_BYTES],
-    }
-};
-    PORTAL_IMAGE_COMPAT_SLOT_COUNT];
-
 struct PortalImageAllocation {
     base: *mut u8,
     guard: PortalImageAllocationGuard,
 }
 
 impl PortalImageAllocation {
-    fn allocate(layout: Layout, needs_compat_base: bool) -> Result<Self, String> {
-        if needs_compat_base {
-            Self::allocate_compat(layout)
-        } else {
-            Self::allocate_dynamic(layout)
-        }
-    }
-
-    fn allocate_dynamic(layout: Layout) -> Result<Self, String> {
+    fn allocate(layout: Layout) -> Result<Self, String> {
         let base = unsafe { crate::allocators::alloc_raw(layout) };
         if base.is_null() {
             return Err(alloc::format!(
@@ -169,67 +133,12 @@ impl PortalImageAllocation {
         })
     }
 
-    fn allocate_compat(layout: Layout) -> Result<Self, String> {
-        let arena_align = 4096usize;
-        let slop = layout.align().saturating_sub(arena_align);
-        let needed = layout
-            .size()
-            .checked_add(slop)
-            .ok_or_else(|| String::from("portal image too large"))?;
-        if needed > PORTAL_IMAGE_COMPAT_SLOT_BYTES {
-            return Err(alloc::format!(
-                "portal image exceeds compat window size={} needed={} cap={}",
-                layout.size(),
-                needed,
-                PORTAL_IMAGE_COMPAT_SLOT_BYTES
-            ));
-        }
-
-        let Some(slot) = acquire_portal_image_compat_slot() else {
-            return Err(String::from("portal compat image windows busy"));
-        };
-
-        let arenas =
-            core::ptr::addr_of_mut!(PORTAL_IMAGE_COMPAT_ARENAS) as *mut PortalImageCompatArena;
-        let arena_ptr = unsafe { arenas.add(slot) } as *mut u8;
-        let base_addr = match align_up(arena_ptr as usize, layout.align()) {
-            Ok(addr) => addr,
-            Err(err) => {
-                PORTAL_IMAGE_COMPAT_IN_USE[slot].store(false, Ordering::Release);
-                return Err(String::from(err));
-            }
-        };
-        let base = base_addr as *mut u8;
-        Ok(Self {
-            base,
-            guard: PortalImageAllocationGuard {
-                backing: Some(PortalImageBacking::Compat(PortalImageCompatLease { base, slot })),
-            },
-        })
-    }
-
     fn disarm(self) -> PortalImageBacking {
         self.guard.disarm()
     }
 }
 
-fn acquire_portal_image_compat_slot() -> Option<usize> {
-    for (slot, in_use) in PORTAL_IMAGE_COMPAT_IN_USE.iter().enumerate() {
-        if in_use
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-        {
-            return Some(slot);
-        }
-    }
-    None
-}
-
 const PORTAL_IMAGE_CAP_BYTES: usize = crate::allcaps::blueprint::PORTAL_IMAGE_CAP_BYTES;
-const PORTAL_IMAGE_COMPAT_SLOT_BYTES: usize =
-    crate::allcaps::blueprint::PORTAL_IMAGE_COMPAT_SLOT_BYTES;
-const PORTAL_IMAGE_COMPAT_SLOT_COUNT: usize =
-    crate::allcaps::blueprint::PORTAL_IMAGE_COMPAT_SLOT_COUNT;
 static UNRESOLVED_IMPORT_STUBS: Mutex<Vec<UnresolvedImportStub>> = Mutex::new(Vec::new());
 
 struct UnresolvedImportStub {
@@ -508,13 +417,12 @@ fn find_symtab(sections: &[ElfSection]) -> Result<usize, &'static str> {
         .ok_or("ELF symbol table missing")
 }
 
-fn rel_symbol_value(
-    bytes: &[u8],
+fn read_symbol_with_name<'a>(
+    bytes: &'a [u8],
     sections: &[ElfSection],
-    loaded: &[usize],
     symtab_index: usize,
     sym_index: usize,
-) -> Result<usize, String> {
+) -> Result<(ElfSymbol, &'a str), String> {
     let symtab_section = sections
         .get(symtab_index)
         .ok_or("ELF symbol table missing")?;
@@ -528,11 +436,22 @@ fn rel_symbol_value(
         .get(strtab_section.file_offset..strtab_section.file_offset + strtab_section.size)
         .ok_or("ELF string table truncated")?;
     let sym = read_symbol(symtab, sym_index)?;
+    let name = sym_name(strtab, &sym)?;
+    Ok((sym, name))
+}
+
+fn rel_symbol_value(
+    bytes: &[u8],
+    sections: &[ElfSection],
+    loaded: &[usize],
+    symtab_index: usize,
+    sym_index: usize,
+) -> Result<usize, String> {
+    let (sym, name) = read_symbol_with_name(bytes, sections, symtab_index, sym_index)?;
     let bind = sym.info >> 4;
 
     match sym.section_index {
         SHN_UNDEF => {
-            let name = sym_name(strtab, &sym)?;
             if name.is_empty() {
                 return Ok(0);
             }
@@ -616,12 +535,112 @@ fn find_main_addr(
     Err(String::from("ELF main symbol missing"))
 }
 
+fn collect_gotpc_rel_symbols(bytes: &[u8], sections: &[ElfSection]) -> Result<Vec<usize>, String> {
+    let mut symbols = BTreeMap::new();
+    for section in sections.iter() {
+        if section.section_type != SHT_RELA {
+            continue;
+        }
+        let Some(target) = sections.get(section.info) else {
+            return Err(String::from("ELF relocation target out of range"));
+        };
+        if target.flags & SHF_ALLOC == 0 {
+            continue;
+        }
+        if section.entsize != ELF64_RELA_LEN {
+            return Err(String::from("unsupported ELF relocation size"));
+        }
+        let rela = bytes
+            .get(section.file_offset..section.file_offset + section.size)
+            .ok_or_else(|| String::from("ELF relocation section truncated"))?;
+        for chunk in rela.chunks_exact(ELF64_RELA_LEN) {
+            let r_info =
+                le_u64(chunk, 8).ok_or_else(|| String::from("ELF relocation truncated"))?;
+            if r_info as u32 == R_X86_64_GOTPCREL {
+                symbols.insert((r_info >> 32) as usize, ());
+            }
+        }
+    }
+    Ok(symbols.keys().copied().collect())
+}
+
+fn collect_pc_relative_import_symbols(
+    bytes: &[u8],
+    sections: &[ElfSection],
+    symtab_index: usize,
+) -> Result<BTreeMap<usize, usize>, String> {
+    let mut imports = BTreeMap::new();
+    for section in sections.iter() {
+        if section.section_type != SHT_RELA {
+            continue;
+        }
+        let Some(target) = sections.get(section.info) else {
+            return Err(String::from("ELF relocation target out of range"));
+        };
+        if target.flags & SHF_ALLOC == 0 {
+            continue;
+        }
+        if section.entsize != ELF64_RELA_LEN {
+            return Err(String::from("unsupported ELF relocation size"));
+        }
+        let rela = bytes
+            .get(section.file_offset..section.file_offset + section.size)
+            .ok_or_else(|| String::from("ELF relocation section truncated"))?;
+        for chunk in rela.chunks_exact(ELF64_RELA_LEN) {
+            let r_info =
+                le_u64(chunk, 8).ok_or_else(|| String::from("ELF relocation truncated"))?;
+            let r_sym = (r_info >> 32) as usize;
+            match r_info as u32 {
+                R_X86_64_PC32 | R_X86_64_PLT32 => {}
+                _ => continue,
+            }
+            let (sym, name) = read_symbol_with_name(bytes, sections, symtab_index, r_sym)?;
+            if sym.section_index != SHN_UNDEF || name.is_empty() {
+                continue;
+            }
+            if let Some(addr) = resolve_import(name) {
+                imports.insert(r_sym, addr);
+                continue;
+            }
+            if sym.info >> 4 == STB_WEAK {
+                continue;
+            }
+            return Err(alloc::format!(
+                "unresolved import: {} (sym={} bind={})",
+                name,
+                r_sym,
+                sym.info >> 4
+            ));
+        }
+    }
+    Ok(imports)
+}
+
+unsafe fn write_import_thunk(thunk: *mut u8, target: usize) {
+    // movabs r11, target; jmp r11. Keeps PC-relative calls inside the image.
+    unsafe {
+        *thunk.add(0) = 0x49;
+        *thunk.add(1) = 0xBB;
+        (thunk.add(2) as *mut u64).write_unaligned(target as u64);
+        *thunk.add(10) = 0x41;
+        *thunk.add(11) = 0xFF;
+        *thunk.add(12) = 0xE3;
+        for offset in 13..IMPORT_THUNK_SIZE {
+            *thunk.add(offset) = 0x90;
+        }
+    }
+}
+
 fn load_rel_image(bytes: &[u8]) -> Result<LoadedRelImage, String> {
     let sections = parse_sections(bytes)?;
     let mut section_offsets = vec![0usize; sections.len()];
     let mut section_bases = vec![0usize; sections.len()];
     let mut total_size = 0usize;
     let mut max_align = 1usize;
+    let symtab_index = find_symtab(sections.as_slice())?;
+    let got_symbols = collect_gotpc_rel_symbols(bytes, sections.as_slice())?;
+    let import_thunk_symbols =
+        collect_pc_relative_import_symbols(bytes, sections.as_slice(), symtab_index)?;
 
     for (index, section) in sections.iter().enumerate() {
         if section.flags & SHF_ALLOC == 0 {
@@ -642,7 +661,38 @@ fn load_rel_image(bytes: &[u8]) -> Result<LoadedRelImage, String> {
         return Err(String::from("ELF image has no allocatable sections"));
     }
 
-    let needs_compat_base = rel_image_needs_compat_base(bytes, sections.as_slice())?;
+    let synthetic_got_offset = if got_symbols.is_empty() {
+        None
+    } else {
+        max_align = max_align.max(8);
+        total_size = align_up(total_size, 8)?;
+        let offset = total_size;
+        let got_bytes = got_symbols
+            .len()
+            .checked_mul(core::mem::size_of::<u64>())
+            .ok_or_else(|| String::from("ELF synthetic GOT too large"))?;
+        total_size = total_size
+            .checked_add(got_bytes)
+            .ok_or_else(|| String::from("ELF image too large"))?;
+        Some(offset)
+    };
+
+    let synthetic_import_thunk_offset = if import_thunk_symbols.is_empty() {
+        None
+    } else {
+        max_align = max_align.max(IMPORT_THUNK_ALIGN);
+        total_size = align_up(total_size, IMPORT_THUNK_ALIGN)?;
+        let offset = total_size;
+        let thunk_bytes = import_thunk_symbols
+            .len()
+            .checked_mul(IMPORT_THUNK_SIZE)
+            .ok_or_else(|| String::from("ELF import thunk table too large"))?;
+        total_size = total_size
+            .checked_add(thunk_bytes)
+            .ok_or_else(|| String::from("ELF image too large"))?;
+        Some(offset)
+    };
+
     let layout = Layout::from_size_align(total_size, max_align)
         .map_err(|_| String::from("bad ELF layout"))?;
     if total_size > PORTAL_IMAGE_CAP_BYTES {
@@ -652,7 +702,7 @@ fn load_rel_image(bytes: &[u8]) -> Result<LoadedRelImage, String> {
             PORTAL_IMAGE_CAP_BYTES
         ));
     }
-    let allocation = PortalImageAllocation::allocate(layout, needs_compat_base)?;
+    let allocation = PortalImageAllocation::allocate(layout)?;
     let base = allocation.base;
     unsafe {
         core::ptr::write_bytes(base, 0, total_size);
@@ -681,7 +731,34 @@ fn load_rel_image(bytes: &[u8]) -> Result<LoadedRelImage, String> {
         }
     }
 
-    let symtab_index = find_symtab(sections.as_slice())?;
+    let mut synthetic_got_entries = BTreeMap::new();
+    if let Some(got_offset) = synthetic_got_offset {
+        for (slot, sym_index) in got_symbols.iter().copied().enumerate() {
+            let entry = unsafe { base.add(got_offset + slot * core::mem::size_of::<u64>()) };
+            let sym = rel_symbol_value(
+                bytes,
+                sections.as_slice(),
+                section_bases.as_slice(),
+                symtab_index,
+                sym_index,
+            )?;
+            unsafe {
+                (entry as *mut u64).write_unaligned(sym as u64);
+            }
+            synthetic_got_entries.insert(sym_index, entry as usize);
+        }
+    }
+    let mut synthetic_import_thunks = BTreeMap::new();
+    if let Some(thunk_offset) = synthetic_import_thunk_offset {
+        for (slot, (sym_index, target)) in import_thunk_symbols.iter().enumerate() {
+            let thunk = unsafe { base.add(thunk_offset + slot * IMPORT_THUNK_SIZE) };
+            unsafe {
+                write_import_thunk(thunk, *target);
+            }
+            synthetic_import_thunks.insert(*sym_index, thunk as usize);
+        }
+    }
+
     for section in sections.iter() {
         if section.section_type != SHT_RELA {
             continue;
@@ -742,12 +819,29 @@ fn load_rel_image(bytes: &[u8]) -> Result<LoadedRelImage, String> {
                         (place as *mut i32).write_unaligned(value_i32);
                     }
                     R_X86_64_PC32 | R_X86_64_PLT32 => {
-                        let value = sym
+                        let target = synthetic_import_thunks
+                            .get(&r_sym)
+                            .copied()
+                            .unwrap_or(sym as usize) as i64;
+                        let value = target
                             .checked_add(r_addend)
                             .and_then(|v| v.checked_sub(place_i64))
                             .ok_or_else(|| String::from("R_X86_64_PC32 overflow"))?;
                         let value_i32 = i32::try_from(value)
                             .map_err(|_| String::from("R_X86_64_PC32 out of range"))?;
+                        (place as *mut i32).write_unaligned(value_i32);
+                    }
+                    R_X86_64_GOTPCREL => {
+                        let got_entry = *synthetic_got_entries
+                            .get(&r_sym)
+                            .ok_or_else(|| String::from("R_X86_64_GOTPCREL missing GOT entry"))?
+                            as i64;
+                        let value = got_entry
+                            .checked_add(r_addend)
+                            .and_then(|v| v.checked_sub(place_i64))
+                            .ok_or_else(|| String::from("R_X86_64_GOTPCREL overflow"))?;
+                        let value_i32 = i32::try_from(value)
+                            .map_err(|_| String::from("R_X86_64_GOTPCREL out of range"))?;
                         (place as *mut i32).write_unaligned(value_i32);
                     }
                     _ => return Err(alloc::format!("unsupported ELF relocation type: {}", r_type)),
@@ -763,34 +857,6 @@ fn load_rel_image(bytes: &[u8]) -> Result<LoadedRelImage, String> {
         backing,
         section_bases,
     })
-}
-
-fn rel_image_needs_compat_base(bytes: &[u8], sections: &[ElfSection]) -> Result<bool, String> {
-    for section in sections.iter() {
-        if section.section_type != SHT_RELA {
-            continue;
-        }
-        let Some(target) = sections.get(section.info) else {
-            return Err(String::from("ELF relocation target out of range"));
-        };
-        if target.flags & SHF_ALLOC == 0 {
-            continue;
-        }
-        if section.entsize != ELF64_RELA_LEN {
-            return Err(String::from("unsupported ELF relocation size"));
-        }
-        let rela = bytes
-            .get(section.file_offset..section.file_offset + section.size)
-            .ok_or_else(|| String::from("ELF relocation section truncated"))?;
-        for chunk in rela.chunks_exact(ELF64_RELA_LEN) {
-            let r_info =
-                le_u64(chunk, 8).ok_or_else(|| String::from("ELF relocation truncated"))?;
-            if r_info as u32 == R_X86_64_32S {
-                return Ok(true);
-            }
-        }
-    }
-    Ok(false)
 }
 
 fn le_u16(bytes: &[u8], offset: usize) -> Option<u16> {

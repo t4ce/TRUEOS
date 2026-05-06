@@ -967,6 +967,26 @@ pub fn defer_blueprint_app_window_create(
         ));
         return 0;
     };
+    if tex_id != 0 && !crate::r::io::cabi::claim_vm_texture_id_for_vm(vm_id, tex_id, "vm-window") {
+        app_window_broker_log(format_args!(
+            "app-window-broker: vm{} deferred create rejected kind={} title={} tex={}",
+            vm_id, kind, title, tex_id
+        ));
+        return 0;
+    }
+    let host_tex_id = if tex_id == 0 {
+        0
+    } else {
+        crate::r::io::cabi::host_texture_id_for_vm(vm_id, tex_id)
+    };
+    if tex_id != 0 && host_tex_id == 0 {
+        app_window_broker_log(format_args!(
+            "app-window-broker: vm{} deferred create rejected kind={} title={} tex={}",
+            vm_id, kind, title, tex_id
+        ));
+        return 0;
+    }
+
     *slot = DeferredAppWindowRecord {
         active: true,
         materialized_window_id: 0,
@@ -980,14 +1000,14 @@ pub fn defer_blueprint_app_window_create(
         height: height.max(1),
         z,
         alpha: alpha.min(255),
-        tex_id,
+        tex_id: host_tex_id,
         blend_enabled,
         repaint_requested: false,
         close_requested: false,
     };
     app_window_broker_log(format_args!(
-        "app-window-broker: vm{} deferred create kind={} window={} seq={} title={} rect=({},{} {}x{}) tex={} materialize=host-service",
-        vm_id, kind, id, seq, title, x, y, width, height, tex_id
+        "app-window-broker: vm{} deferred create kind={} window={} seq={} title={} rect=({},{} {}x{}) tex={} host_tex={} materialize=host-service",
+        vm_id, kind, id, seq, title, x, y, width, height, tex_id, host_tex_id
     ));
     id
 }
@@ -1329,6 +1349,11 @@ async fn vm_task(vm_id: u8) {
             stats.free_blocks
         ));
     }
+    hvlogf(format_args!(
+        "hv: vm{} reporting: vthread hull fs_base=0x{:016X}",
+        vm_id,
+        crate::th::vthread::vm_hull_fs_base(vm_id)
+    ));
     let _entered_guest_alloc = crate::allocators::enter_hv_guest_domain_current_cpu(vm_id);
     let launch_result = vmx_launch_once_with_ept(lineage_record).await;
     crate::allocators::leave_hv_guest_domain_current_cpu();
@@ -2026,6 +2051,7 @@ fn setup_vmcs_for_launch(
             ));
             let fs_base = unsafe { Msr::new(crate::hv::vmx::IA32_FS_BASE).read() };
             let gs_base = unsafe { Msr::new(crate::hv::vmx::IA32_GS_BASE).read() };
+            let guest_fs_base = crate::th::vthread::vm_hull_fs_base(vm_id);
             let sysenter_cs = unsafe { Msr::new(crate::hv::vmx::IA32_SYSENTER_CS).read() };
             let sysenter_esp = unsafe { Msr::new(crate::hv::vmx::IA32_SYSENTER_ESP).read() };
             let sysenter_eip = unsafe { Msr::new(crate::hv::vmx::IA32_SYSENTER_EIP).read() };
@@ -2172,7 +2198,7 @@ fn setup_vmcs_for_launch(
             vmwrite(VMCS_GUEST_SS_BASE, 0)?;
             vmwrite(VMCS_GUEST_DS_BASE, 0)?;
             vmwrite(VMCS_GUEST_ES_BASE, 0)?;
-            vmwrite(VMCS_GUEST_FS_BASE, fs_base)?;
+            vmwrite(VMCS_GUEST_FS_BASE, guest_fs_base)?;
             vmwrite(VMCS_GUEST_GS_BASE, gs_base)?;
             vmwrite(VMCS_GUEST_TR_BASE, tr_base)?;
             vmwrite(VMCS_GUEST_LDTR_BASE, 0)?;
@@ -2212,6 +2238,7 @@ fn setup_vmcs_for_launch(
     };
     let fs_base = unsafe { Msr::new(crate::hv::vmx::IA32_FS_BASE).read() };
     let gs_base = unsafe { Msr::new(crate::hv::vmx::IA32_GS_BASE).read() };
+    let guest_fs_base = crate::th::vthread::vm_hull_fs_base(vm_id);
     let sysenter_cs = unsafe { Msr::new(crate::hv::vmx::IA32_SYSENTER_CS).read() };
     let sysenter_esp = unsafe { Msr::new(crate::hv::vmx::IA32_SYSENTER_ESP).read() };
     let sysenter_eip = unsafe { Msr::new(crate::hv::vmx::IA32_SYSENTER_EIP).read() };
@@ -2359,7 +2386,7 @@ fn setup_vmcs_for_launch(
     vmwrite(VMCS_GUEST_SS_BASE, 0)?;
     vmwrite(VMCS_GUEST_DS_BASE, 0)?;
     vmwrite(VMCS_GUEST_ES_BASE, 0)?;
-    vmwrite(VMCS_GUEST_FS_BASE, fs_base)?;
+    vmwrite(VMCS_GUEST_FS_BASE, guest_fs_base)?;
     vmwrite(VMCS_GUEST_GS_BASE, gs_base)?;
     vmwrite(VMCS_GUEST_TR_BASE, tr_base)?;
     vmwrite(VMCS_GUEST_LDTR_BASE, 0)?;

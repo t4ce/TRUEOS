@@ -1026,9 +1026,21 @@ async fn cabi_net_fetch_bytes_task_inner(
         crate::log!("net-fetch-bytes: skipped op_id={} reason=no_interest_after_slot\n", op_id);
         return;
     }
-    let (rc, body) = match fetch_https_body_async(url.as_str(), timeout_ms, max_bytes).await {
-        Ok(body) => (0, body),
-        Err(code) => (fetch_error_to_code(code), Vec::new()),
+    let (rc, body) = match crate::t::block_on_io(fetch_https_body_hyper_async(
+        url.as_str(),
+        timeout_ms,
+        max_bytes,
+    )) {
+        Ok(Ok(body)) => (0, body),
+        Ok(Err(code)) => (fetch_error_to_code(code), Vec::new()),
+        Err(_) => {
+            crate::log!(
+                "net-fetch-bytes: hyper runtime build failed op_id={} url={}\n",
+                op_id,
+                url
+            );
+            (FS_ERR_IO, Vec::new())
+        }
     };
     net_fetch_release_slot();
     let total_ms = t0.elapsed().as_millis();
@@ -1041,7 +1053,7 @@ async fn cabi_net_fetch_bytes_task_inner(
     }
 
     crate::log!(
-        "net-fetch-bytes: done op_id={} rc={} ms={} wait_ms={} fetch_ms={} len={}\n",
+        "net-fetch-bytes: done transport=hyper op_id={} rc={} ms={} wait_ms={} fetch_ms={} len={}\n",
         op_id,
         rc,
         total_ms,

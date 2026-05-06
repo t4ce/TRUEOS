@@ -69,7 +69,6 @@ dependencies = [
  "trueos-limloader",
  "trueos-math",
  "trueos-qjs",
- "trueos-tetris",
  "trueos-vm",
  "twoway",
  "unicode-normalization",
@@ -3334,13 +3333,6 @@ dependencies = [
 [[package]]
 name = "trueos-sys"
 version = "0.1.0"
-
-[[package]]
-name = "trueos-tetris"
-version = "0.1.0"
-dependencies = [
- "v",
-]
 
 [[package]]
 name = "trueos-vm"

@@ -31,16 +31,13 @@ pub(crate) enum ParseOutcome {
     Handled,
     NotCommand,
     SetLineWidth(usize),
-    LaunchTetris,
     StartSession(CommandSessionKind),
 }
 
 impl ParseOutcome {
     pub(crate) const fn handled(self) -> bool {
         match self {
-            Self::Handled | Self::SetLineWidth(_) | Self::LaunchTetris | Self::StartSession(_) => {
-                true
-            }
+            Self::Handled | Self::SetLineWidth(_) | Self::StartSession(_) => true,
             Self::NotCommand => false,
         }
     }
