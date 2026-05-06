@@ -255,6 +255,13 @@ fn device_endpoint_text(snapshot: &trueos_esp::gate::DeviceSnapshot) -> String {
     }
 }
 
+fn device_class_text(class: trueos_esp::gate::DeviceClass) -> &'static str {
+    match class {
+        trueos_esp::gate::DeviceClass::EspUploader => "esp",
+        trueos_esp::gate::DeviceClass::TrueOsHost => "trueos",
+    }
+}
+
 fn selected_device_lines(snapshot: Option<&trueos_esp::gate::DeviceSnapshot>) -> Vec<String> {
     let mut lines = Vec::new();
     let Some(snapshot) = snapshot else {
@@ -263,10 +270,16 @@ fn selected_device_lines(snapshot: Option<&trueos_esp::gate::DeviceSnapshot>) ->
         return lines;
     };
 
-    lines.push(format!("selected={}  {}", snapshot.handle.0, snapshot.tag.as_str()));
+    lines.push(format!(
+        "selected={}  class={}",
+        snapshot.handle.0,
+        device_class_text(snapshot.class)
+    ));
     lines.push(format!("endpoint={}", device_endpoint_text(snapshot)));
 
-    if let Some(status) = snapshot.status.as_ref() {
+    if snapshot.class == trueos_esp::gate::DeviceClass::TrueOsHost {
+        lines.push(format!("node=0x{:016X} caps=0x{:08X}", snapshot.node_id, snapshot.caps));
+    } else if let Some(status) = snapshot.status.as_ref() {
         lines.push(format!(
             "run={} app={} hb={} {}",
             if status.running { "y" } else { "n" },
@@ -291,7 +304,7 @@ fn build_scene(
         .and_then(|handle| devices.iter().find(|snapshot| snapshot.handle == handle));
 
     SwarmScene {
-        title: format!("ESP32 swarm  [{} devices]", devices.len()),
+        title: format!("TRUEOS swarm  [{} devices]", devices.len()),
         selected_handle,
         selected_lines: selected_device_lines(selected_snapshot),
         action_text: String::from(action_text),
@@ -556,13 +569,15 @@ fn render_scene(
         );
         stroke_rect_rgba(pixels.as_mut_slice(), width, height, rect, border);
 
-        let line0 = format!("ESP {}", snapshot.handle.0);
+        let line0 = format!("{} {}", device_class_text(snapshot.class), snapshot.handle.0);
         let line1 = elide_text_to_width(
             UI2_SWARM_BODY_FONT_TIER,
             UI2_SWARM_TILE_W.saturating_sub(16),
             device_endpoint_text(snapshot).as_str(),
         );
-        let line2 = if let Some(status) = snapshot.status.as_ref() {
+        let line2 = if snapshot.class == trueos_esp::gate::DeviceClass::TrueOsHost {
+            format!("node=0x{:X}", snapshot.node_id)
+        } else if let Some(status) = snapshot.status.as_ref() {
             format!(
                 "run={} app={} hb={}",
                 if status.running { "y" } else { "n" },
@@ -679,7 +694,7 @@ pub async fn ui2_swarm_demo_task() {
     }
 
     let Some(surface) = crate::r::ui2::Ui2SurfaceWindow::get_or_create_for_hosted_content_with_size(
-        "ESP32 Swarm",
+        "TRUEOS Swarm",
         Ui2Rect {
             x: UI2_SWARM_WINDOW_X,
             y: UI2_SWARM_WINDOW_Y,
@@ -760,6 +775,16 @@ pub async fn ui2_swarm_demo_task() {
                 match item_id {
                     UI2_SWARM_ITEM_RESTART => {
                         if let Some(handle) = selected_handle {
+                            if devices
+                                .iter()
+                                .find(|snapshot| snapshot.handle == handle)
+                                .map(|snapshot| snapshot.class)
+                                != Some(trueos_esp::gate::DeviceClass::EspUploader)
+                            {
+                                action_text = String::from("restart is only for ESP upload nodes");
+                                needs_render = true;
+                                continue;
+                            }
                             match crate::r::net::esp::restart_device(handle).await {
                                 Ok(result) => {
                                     action_text = if result.restart_requested {
@@ -791,6 +816,16 @@ pub async fn ui2_swarm_demo_task() {
                     }
                     UI2_SWARM_ITEM_UPLOAD => {
                         if let Some(handle) = selected_handle {
+                            if devices
+                                .iter()
+                                .find(|snapshot| snapshot.handle == handle)
+                                .map(|snapshot| snapshot.class)
+                                != Some(trueos_esp::gate::DeviceClass::EspUploader)
+                            {
+                                action_text = String::from("upload is only for ESP upload nodes");
+                                needs_render = true;
+                                continue;
+                            }
                             let sketch = &SWARM_SKETCHES[sketch_index % SWARM_SKETCHES.len()];
                             match crate::r::net::esp::upload_app_to_device(
                                 handle,

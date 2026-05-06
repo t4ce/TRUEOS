@@ -46,6 +46,7 @@ mod intel_hda_probe;
 mod iso9660;
 mod limine;
 mod logflag;
+mod lumen_net;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod mio_compat;
 mod mio_probe;
@@ -141,6 +142,7 @@ mod usb2;
 mod wait;
 mod workers;
 mod x2apic;
+mod yaml_probe;
 mod z7;
 
 pub(crate) use crate::intel::hda;
@@ -300,6 +302,7 @@ pub extern "C" fn kmain() -> ! {
     }
     mio_probe::log_boot_probe();
     hyper_probe::log_boot_probe();
+    yaml_probe::log_boot_probe();
 
     match pci::nic_fpga_dma::init_default_once() {
         Ok(region) => {

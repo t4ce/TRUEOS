@@ -399,7 +399,7 @@ fn maybe_submit_lumen_chat_post(method: ChatMethod, path: &str, body: &[u8], sta
         return;
     }
 
-    let prompt = alloc::format!("{}: {:?}", user.trim(), text.trim());
+    let prompt = alloc::format!("{}: {}", user.trim(), text.trim());
     if crate::r::lumen_service::submit_chatroom_mention(prompt.as_str()) {
         crate::log!("chat: accepted lumen prompt via POST path={}\n", path);
     } else {

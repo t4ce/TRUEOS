@@ -20,7 +20,7 @@ static SERVICE_ONLINE: AtomicBool = AtomicBool::new(false);
 static SERVICE_OWNED_SESSION: AtomicU64 = AtomicU64::new(0);
 static CHAT_HELLO_SESSION_ID: AtomicU64 = AtomicU64::new(0);
 static CHAT_STATEMENT_ID: AtomicU64 = AtomicU64::new(1);
-static CHAT_PROMPT_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+static SERVICE_PROMPT_RUNNING: AtomicBool = AtomicBool::new(false);
 static PENDING_CHATROOM: Mutex<alloc::vec::Vec<PendingChatroomPrompt>> =
     Mutex::new(alloc::vec::Vec::new());
 
@@ -31,6 +31,35 @@ struct PendingChatroomPrompt {
 
 pub(crate) fn is_online() -> bool {
     SERVICE_ONLINE.load(Ordering::Acquire)
+}
+
+pub(crate) fn is_prompt_running() -> bool {
+    SERVICE_PROMPT_RUNNING.load(Ordering::Acquire)
+}
+
+pub(crate) fn remote_work_capacity() -> u32 {
+    if !is_online() || SERVICE_LOADING.load(Ordering::Acquire) || is_prompt_running() {
+        return 0;
+    }
+    crate::burn_baby::online_worker_count().min(u32::MAX as usize) as u32
+}
+
+pub(crate) fn mark_prompt_running(reason: &'static str) -> bool {
+    match SERVICE_PROMPT_RUNNING.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+    {
+        Ok(_) => {
+            crate::log!("lumen-service: prompt running reason={}\n", reason);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+pub(crate) fn mark_prompt_complete(reason: &'static str) {
+    let was_busy = SERVICE_PROMPT_RUNNING.swap(false, Ordering::AcqRel);
+    if was_busy {
+        crate::log!("lumen-service: prompt complete reason={}\n", reason);
+    }
 }
 
 pub(crate) fn mark_online(session_id: u64) {
@@ -85,7 +114,7 @@ fn clear_pending_prompts(reason: &str) {
     let mut pending = PENDING_CHATROOM.lock();
     let count = pending.len();
     pending.clear();
-    CHAT_PROMPT_IN_FLIGHT.store(false, Ordering::Release);
+    SERVICE_PROMPT_RUNNING.store(false, Ordering::Release);
     if count != 0 {
         crate::log!(
             "lumen-service: cleared pending chatroom prompts reason={} count={}\n",
@@ -128,14 +157,13 @@ pub(crate) fn submit_chatroom_mention(prompt: &str) -> bool {
         return false;
     }
 
-    if CHAT_PROMPT_IN_FLIGHT
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
+    if !mark_prompt_running("chatroom-submit") {
         crate::log!("lumen-service: rejected chatroom prompt reason=busy bytes={}\n", prompt.len());
         let _ = post_chat_message(CHAT_AI_NAME, CHAT_BUSY_TEXT);
         return false;
     }
+
+    crate::r::net::esp::request_lumen_work_capacity_probe();
 
     let session_id = SERVICE_SESSION_ID.load(Ordering::Acquire);
     let statement = next_chat_statement_tag();
@@ -162,16 +190,9 @@ pub(crate) fn submit_chatroom_mention(prompt: &str) -> bool {
         queue_pending_prompt(prompt, statement.as_str(), "warming");
     } else {
         crate::log!("lumen-service: dropped chatroom prompt; service offline\n");
-        CHAT_PROMPT_IN_FLIGHT.store(false, Ordering::Release);
+        mark_prompt_complete("offline-drop");
     }
     false
-}
-
-pub(crate) fn mark_chat_prompt_complete(reason: &'static str) {
-    let was_busy = CHAT_PROMPT_IN_FLIGHT.swap(false, Ordering::AcqRel);
-    if was_busy {
-        crate::log!("lumen-service: chat prompt complete reason={}\n", reason);
-    }
 }
 
 fn form_push_encoded(out: &mut AllocString, value: &str) {

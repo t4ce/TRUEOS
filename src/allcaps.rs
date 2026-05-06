@@ -18,6 +18,7 @@ pub mod lumen {
     pub const BOOT_MODEL_SERVICE: bool = true;
     pub const BOOT_TINYLLAMA_FETCH: bool = false;
     pub const RUNTIME_DIAGNOSTIC_PROBES: bool = false;
+    pub const ROUTE_BF16_MATVEC_TO_NET_BACKEND: bool = false;
 }
 
 pub mod blueprint {
@@ -69,6 +70,10 @@ pub mod net {
     pub const DNS_SERVER_MAX: usize = 4;
     pub const IPV6_RS_RETRY_MS: i64 = 5_000;
     pub const MAX_NET_DEVICES: usize = 8;
+
+    pub const TRUEOS_SWARM_HOST_CAP: usize = 16;
+    pub const TRUEOS_SWARM_PEER_LINK_CAP: usize = TRUEOS_SWARM_HOST_CAP;
+    pub const TRUEOS_SWARM_PEER_RX_BUF_BYTES: usize = 1024;
 }
 
 pub mod storage {

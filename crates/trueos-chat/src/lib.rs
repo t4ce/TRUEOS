@@ -269,11 +269,14 @@ impl ChatHub {
         };
         let statement =
             statement_raw.and_then(|value| sanitize_statement(&value, self.config.max_name_len));
-        let text = match text_raw.and_then(|value| sanitize_text(&value, self.config.max_message_len))
-        {
-            Some(text) => text,
-            None if statement.is_some() => String::new(),
-            None => return error_response(400, "invalid text"),
+        let text = match (text_raw, statement.is_some()) {
+            (Some(value), true) => sanitize_statement_text(&value, self.config.max_message_len),
+            (Some(value), false) => sanitize_text(&value, self.config.max_message_len),
+            (None, true) => Some(String::new()),
+            (None, false) => None,
+        };
+        let Some(text) = text else {
+            return error_response(400, "invalid text");
         };
 
         if self.rooms.iter().all(|room| room.name != room_name) {
@@ -431,6 +434,24 @@ fn sanitize_text(raw: &str, max_len: usize) -> Option<String> {
         out.push(ch);
     }
     if out.trim().is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+fn sanitize_statement_text(raw: &str, max_len: usize) -> Option<String> {
+    let mut out = String::new();
+    for ch in raw.chars() {
+        if ch == '\0' || ch == '\r' {
+            continue;
+        }
+        if out.len() + ch.len_utf8() > max_len {
+            break;
+        }
+        out.push(ch);
+    }
+    if out.is_empty() && !raw.is_empty() {
         None
     } else {
         Some(out)
