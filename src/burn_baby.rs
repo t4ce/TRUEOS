@@ -278,6 +278,25 @@ pub fn matvec_rowmajor_bf16(
         return Ok(());
     }
     crate::burn_baba::share_matvec_rowmajor_bf16(n_rows, k_dim, chunk_rows);
+    let remote = crate::lumen_net::enqueue_remote_bf16_matvec_suffix(
+        x,
+        w_rowmajor_bf16,
+        n_rows,
+        k_dim,
+        out,
+        chunk_rows,
+    );
+    let local_row_end = remote.map(|ticket| ticket.row_start).unwrap_or(n_rows);
+    if let Some(ticket) = remote {
+        crate::log!(
+            "burn-baby: bf16 matvec split local_rows=0..{} remote_rows={}..{} remote_job={} remote_pending={} completion=not-wired\n",
+            local_row_end,
+            ticket.row_start,
+            ticket.row_end,
+            ticket.job_id,
+            crate::lumen_net::pending_remote_bf16_matvecs()
+        );
+    }
 
     let done = AtomicUsize::new(0);
     let done_ptr = &done as *const AtomicUsize as usize;
@@ -287,8 +306,8 @@ pub fn matvec_rowmajor_bf16(
 
     let mut submitted = 0usize;
     let mut row_start = 0usize;
-    while row_start < n_rows {
-        let row_end = row_start.saturating_add(chunk_rows).min(n_rows);
+    while row_start < local_row_end {
+        let row_end = row_start.saturating_add(chunk_rows).min(local_row_end);
         let job = ComputeJob::MatvecRowsBf16(MatvecRowsBf16 {
             x: x_ptr,
             w_rowmajor_bf16: w_ptr,

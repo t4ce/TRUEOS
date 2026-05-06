@@ -32,6 +32,7 @@ pub mod services {
 pub mod esp {
     pub const UDP_BROADCAST_PORT: u16 = 32_343;
     pub const HTTP_UPLOAD_PORT: u16 = 8080;
+    pub const TRUEOS_PEER_TCP_PORT: u16 = 32_344;
 }
 
 pub mod probes {

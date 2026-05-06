@@ -927,6 +927,12 @@ fn resolve_known_import(name: &str) -> Option<usize> {
         "memset" => Some(trueos_qjs::trueos_shims::memset as *const () as usize),
         "memcmp" => Some(trueos_qjs::trueos_shims::memcmp as *const () as usize),
         "strlen" => Some(trueos_qjs::trueos_shims::strlen as *const () as usize),
+        "trueos_tokio_tls_current_slot" => {
+            Some(crate::stackkeeper::trueos_tokio_tls_current_slot as *const () as usize)
+        }
+        "trueos_tokio_tls_current_cpu_slot" => {
+            Some(crate::stackkeeper::trueos_tokio_tls_current_cpu_slot as *const () as usize)
+        }
         "__rust_alloc"
         | "_RNvCs75cmLyI1ip2_7___rustc12___rust_alloc"
         | "_RNvCs2csqI13tepL_7___rustc12___rust_alloc" => {

@@ -3,7 +3,7 @@ use core::str;
 use heapless::String;
 use v::vnet as api;
 
-use crate::gate::{DeviceIp, DeviceSnapshot};
+use crate::gate::{DeviceClass, DeviceIp, DeviceSnapshot};
 
 pub const ESP_STATUS_PATH: &str = "/status";
 pub const ESP_UPLOAD_PATH: &str = "/upload";
@@ -18,6 +18,7 @@ pub const DEVICE_STATUS_URL_CAP: usize = 96;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DeviceInterface {
     pub handle: api::NetHandle,
+    pub class: DeviceClass,
     pub ip: Option<DeviceIp>,
     pub service_port: u16,
 }
@@ -26,6 +27,7 @@ impl DeviceInterface {
     pub fn from_snapshot(snapshot: &DeviceSnapshot) -> Self {
         Self {
             handle: snapshot.handle,
+            class: snapshot.class,
             ip: snapshot.ip,
             service_port: snapshot.service_port,
         }
@@ -56,6 +58,10 @@ impl DeviceInterface {
     }
 
     fn path_url(&self, path: &str) -> Option<String<DEVICE_STATUS_URL_CAP>> {
+        if self.class != DeviceClass::EspUploader {
+            return None;
+        }
+
         match self.ip {
             Some(DeviceIp::V4(addr)) => {
                 let mut out = String::new();
@@ -199,9 +205,12 @@ mod tests {
     fn builds_status_url_from_snapshot() {
         let snapshot = DeviceSnapshot {
             handle: api::NetHandle(1),
+            class: DeviceClass::EspUploader,
             tag: String::new(),
             ip: Some(DeviceIp::V4([192, 168, 178, 102])),
             service_port: 8080,
+            node_id: 0,
+            caps: 0,
             connected_at_ms: 0,
             last_activity_ms: 0,
             status: None,

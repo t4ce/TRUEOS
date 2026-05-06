@@ -2449,6 +2449,7 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
                 continue;
             };
             idle_waits = 0;
+            let _ = crate::r::lumen_service::mark_prompt_running("dequeue");
 
             let infer_start = embassy_time_driver::now();
             let compute_before = crate::burn_baby::stats();
@@ -2507,7 +2508,7 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
                     } else if !report.streamed {
                         crate::r::lumen_service::submit_chat_answer(report.answer.as_str());
                     }
-                    crate::r::lumen_service::mark_chat_prompt_complete("answer-ready");
+                    crate::r::lumen_service::mark_prompt_complete("answer-ready");
                 }
                 Err(err) => {
                     let message = format!("prompt failed: {}", err);
@@ -2519,10 +2520,11 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
                     } else {
                         crate::r::lumen_service::submit_chat_answer(message.as_str());
                     }
-                    crate::r::lumen_service::mark_chat_prompt_complete("answer-error");
+                    crate::r::lumen_service::mark_prompt_complete("answer-error");
                 }
             }
         }
+        crate::r::lumen_service::mark_prompt_complete("session-end");
         crate::r::lumen_service::mark_offline(session_id);
         unregister_lumen_interactive_session(session_id);
         cleanup_lumen_inference_mailbox(session_id, "session-end");

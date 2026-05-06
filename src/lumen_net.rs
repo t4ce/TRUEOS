@@ -1,0 +1,217 @@
+extern crate alloc;
+
+use alloc::collections::VecDeque;
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+use spin::Mutex;
+
+const MIN_REMOTE_ROWS: usize = 64;
+const FRAME_MAGIC: u32 = 0x4C4E_4554; // LNET
+pub(crate) const PROTOCOL_VERSION: u16 = 1;
+pub(crate) const CAP_BF16_MATVEC_ROWS: u32 = 1 << 0;
+pub(crate) const CAP_MODEL_RESIDENT_MATRIX_COOKIE: u32 = 1 << 1;
+pub(crate) const CAP_ROW_RANGE_OUTPUT_F32: u32 = 1 << 2;
+
+const OP_BF16_MATVEC_ROWS: u16 = 1;
+
+static NEXT_JOB_ID: AtomicU64 = AtomicU64::new(1);
+static LOGGED_DISABLED: AtomicBool = AtomicBool::new(false);
+static LOGGED_ENQUEUE: AtomicBool = AtomicBool::new(false);
+static PENDING_BF16_MATVECS: Mutex<VecDeque<RemoteBf16MatvecJob>> = Mutex::new(VecDeque::new());
+
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct LumenNetBackendTelemetry {
+    pub(crate) protocol_version: u16,
+    pub(crate) caps: u32,
+    pub(crate) capacity_lanes: u32,
+    pub(crate) local_workers: u32,
+    pub(crate) pending_bf16_matvecs: u32,
+    pub(crate) min_remote_rows: u32,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct RemoteBf16MatvecTicket {
+    pub(crate) job_id: u64,
+    pub(crate) row_start: usize,
+    pub(crate) row_end: usize,
+}
+
+#[derive(Copy, Clone, Debug)]
+struct RemoteBf16MatvecJob {
+    job_id: u64,
+    matrix_cookie: u64,
+    row_start: usize,
+    row_end: usize,
+    n_rows: usize,
+    k_dim: usize,
+    x_ptr: usize,
+    x_len: usize,
+    w_rowmajor_bf16_ptr: usize,
+    w_rowmajor_bf16_len: usize,
+    out_ptr: usize,
+    out_len: usize,
+}
+
+#[derive(Copy, Clone, Debug)]
+#[repr(C)]
+struct LumenNetFrameHeader {
+    magic: u32,
+    version: u16,
+    opcode: u16,
+    job_id: u64,
+    matrix_cookie: u64,
+    row_start: u64,
+    row_count: u64,
+    n_rows: u64,
+    k_dim: u64,
+    x_bytes: u64,
+    output_bytes: u64,
+}
+
+pub(crate) fn enqueue_remote_bf16_matvec_suffix(
+    x: &[f32],
+    w_rowmajor_bf16: &[u8],
+    n_rows: usize,
+    k_dim: usize,
+    out: &mut [f32],
+    chunk_rows: usize,
+) -> Option<RemoteBf16MatvecTicket> {
+    if !route_bf16_matvec_to_net_backend() {
+        if !LOGGED_DISABLED.swap(true, Ordering::AcqRel) {
+            crate::log!(
+                "lumen-net: remote bf16 matvec adapter present route_enabled=0 action=local-burn-baby-only\n"
+            );
+        }
+        return None;
+    }
+
+    if n_rows < MIN_REMOTE_ROWS || chunk_rows == 0 || x.len() < k_dim || out.len() < n_rows {
+        return None;
+    }
+
+    let Some(expected_w_len) = n_rows
+        .checked_mul(k_dim)
+        .and_then(|values| values.checked_mul(2))
+    else {
+        return None;
+    };
+    if w_rowmajor_bf16.len() < expected_w_len {
+        return None;
+    }
+
+    let half = n_rows / 2;
+    let row_start = half
+        .div_ceil(chunk_rows)
+        .saturating_mul(chunk_rows)
+        .min(n_rows);
+    if row_start >= n_rows {
+        return None;
+    }
+
+    let job_id = NEXT_JOB_ID.fetch_add(1, Ordering::AcqRel);
+    let job = RemoteBf16MatvecJob {
+        job_id,
+        matrix_cookie: matrix_cookie(w_rowmajor_bf16.as_ptr() as usize, expected_w_len),
+        row_start,
+        row_end: n_rows,
+        n_rows,
+        k_dim,
+        x_ptr: x.as_ptr() as usize,
+        x_len: k_dim,
+        w_rowmajor_bf16_ptr: w_rowmajor_bf16.as_ptr() as usize,
+        w_rowmajor_bf16_len: expected_w_len,
+        out_ptr: out.as_mut_ptr() as usize,
+        out_len: n_rows,
+    };
+
+    let header = encode_bf16_matvec_header(&job);
+    let host_cookie = host_descriptor_cookie(&job);
+    PENDING_BF16_MATVECS.lock().push_back(job);
+    if !LOGGED_ENQUEUE.swap(true, Ordering::AcqRel) {
+        crate::log!(
+            "lumen-net: bf16 matvec remote enqueue job={} rows={}..{} n_rows={} k_dim={} matrix=0x{:016X} host=0x{:016X} frame_magic=0x{:08X} opcode={} note=tcp-send-and-result-completion-not-wired\n",
+            job.job_id,
+            job.row_start,
+            job.row_end,
+            job.n_rows,
+            job.k_dim,
+            job.matrix_cookie,
+            host_cookie,
+            header.magic,
+            header.opcode
+        );
+    }
+
+    // Intended wire shape:
+    //   1. TCP connect/write LumenNetFrameHeader.
+    //   2. Write x[0..k_dim] as little-endian f32 bytes.
+    //   3. Peer has same model epoch/weights loaded and resolves matrix_cookie
+    //      to its local row-major BF16 matrix.
+    //   4. Peer returns job_id + row_start + row_count + f32 outputs.
+    //   5. Completion copies returned outputs into out[row_start..row_end].
+    //
+    // This first half deliberately only claims the row range and queues the
+    // descriptor. Do not enable ROUTE_BF16_MATVEC_TO_NET_BACKEND until the
+    // TCP/result side can complete or shadow-compare.
+
+    Some(RemoteBf16MatvecTicket {
+        job_id,
+        row_start,
+        row_end: n_rows,
+    })
+}
+
+pub(crate) fn pending_remote_bf16_matvecs() -> usize {
+    PENDING_BF16_MATVECS.lock().len()
+}
+
+pub(crate) fn route_bf16_matvec_to_net_backend() -> bool {
+    crate::allcaps::lumen::ROUTE_BF16_MATVEC_TO_NET_BACKEND
+}
+
+pub(crate) fn backend_telemetry(capacity_lanes: u32) -> LumenNetBackendTelemetry {
+    LumenNetBackendTelemetry {
+        protocol_version: PROTOCOL_VERSION,
+        caps: CAP_BF16_MATVEC_ROWS | CAP_MODEL_RESIDENT_MATRIX_COOKIE | CAP_ROW_RANGE_OUTPUT_F32,
+        capacity_lanes,
+        local_workers: crate::burn_baby::online_worker_count().min(u32::MAX as usize) as u32,
+        pending_bf16_matvecs: pending_remote_bf16_matvecs().min(u32::MAX as usize) as u32,
+        min_remote_rows: MIN_REMOTE_ROWS.min(u32::MAX as usize) as u32,
+    }
+}
+
+fn encode_bf16_matvec_header(job: &RemoteBf16MatvecJob) -> LumenNetFrameHeader {
+    LumenNetFrameHeader {
+        magic: FRAME_MAGIC,
+        version: PROTOCOL_VERSION,
+        opcode: OP_BF16_MATVEC_ROWS,
+        job_id: job.job_id,
+        matrix_cookie: job.matrix_cookie,
+        row_start: job.row_start as u64,
+        row_count: job.row_end.saturating_sub(job.row_start) as u64,
+        n_rows: job.n_rows as u64,
+        k_dim: job.k_dim as u64,
+        x_bytes: job.x_len.saturating_mul(core::mem::size_of::<f32>()) as u64,
+        output_bytes: job
+            .row_end
+            .saturating_sub(job.row_start)
+            .saturating_mul(core::mem::size_of::<f32>()) as u64,
+    }
+}
+
+fn matrix_cookie(ptr: usize, len: usize) -> u64 {
+    let mut value = 0x9E37_79B9_7F4A_7C15u64;
+    value ^= ptr as u64;
+    value = value.rotate_left(13) ^ len as u64;
+    value
+}
+
+fn host_descriptor_cookie(job: &RemoteBf16MatvecJob) -> u64 {
+    let mut value = job.x_ptr as u64;
+    value ^= (job.x_len as u64).rotate_left(7);
+    value ^= (job.w_rowmajor_bf16_ptr as u64).rotate_left(17);
+    value ^= (job.w_rowmajor_bf16_len as u64).rotate_left(23);
+    value ^= (job.out_ptr as u64).rotate_left(31);
+    value ^= (job.out_len as u64).rotate_left(43);
+    value
+}
