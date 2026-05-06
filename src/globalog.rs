@@ -70,6 +70,20 @@ pub fn log_with_purpose(purpose: Option<&str>, args: fmt::Arguments<'_>) {
     let _ = fmt::write(&mut writer, args);
 }
 
+pub fn purpose_for_level(level: log::Level) -> &'static str {
+    match level {
+        log::Level::Trace => "trace",
+        log::Level::Debug => "debug",
+        log::Level::Info => "info",
+        log::Level::Warn => "warn",
+        log::Level::Error => "error",
+    }
+}
+
+pub fn log_with_level(level: log::Level, args: fmt::Arguments<'_>) {
+    log_with_purpose(Some(purpose_for_level(level)), args);
+}
+
 struct KernelLogFacade;
 
 impl log::Log for KernelLogFacade {
@@ -81,13 +95,7 @@ impl log::Log for KernelLogFacade {
         if !self.enabled(record.metadata()) {
             return;
         }
-        let purpose = match record.level() {
-            log::Level::Trace => "trace",
-            log::Level::Debug => "debug",
-            log::Level::Info => "info",
-            log::Level::Warn => "warn",
-            log::Level::Error => "error",
-        };
+        let purpose = purpose_for_level(record.level());
         let module_path = record.module_path().unwrap_or("");
         let target = record.target();
         let is_usb_vendor_log = module_path.contains("crab_usb") || target.contains("crab_usb");

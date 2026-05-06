@@ -2267,12 +2267,15 @@ async fn fetch_on_device_hyper(
     max_bytes: usize,
 ) -> Result<Vec<u8>, FetchError> {
     let stream = connect_hyper_tls_stream(parsed, dev_idx, timeout_ms).await?;
+    crate::log!("vhttps-hyper: handshake begin host={}\n", parsed.host);
     let (mut sender, connection) =
         hyper::client::conn::http1::handshake::<_, HyperEmptyBody>(HyperTokioIo::new(stream))
             .await
             .map_err(|_| FetchError::Tls)?;
+    crate::log!("vhttps-hyper: handshake ok host={}\n", parsed.host);
     let connection = tokio::spawn(async move { connection.await });
 
+    crate::log!("vhttps-hyper: sender ready begin host={}\n", parsed.host);
     sender.ready().await.map_err(|_| FetchError::BodyTimeout)?;
     crate::log!("vhttps-hyper: request host={} path={}\n", parsed.host, parsed.path);
     let request = hyper::Request::builder()

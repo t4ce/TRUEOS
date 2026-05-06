@@ -518,19 +518,19 @@ fn log_bot_transport_debug(
     );
 }
 
-fn uas_probe_logs_enabled() -> bool {
-    crate::logflag::USB_MASS_UAS_ADVANCED_PROBE_LOGS
+fn uas_trace_logs_enabled() -> bool {
+    crate::logflag::USB_MASS_UAS_TRACE_LOGS
 }
 
 fn log_uas_debug(stage: &'static str, cmd: &'static str, tag: u16) {
-    if !uas_probe_logs_enabled() {
+    if !uas_trace_logs_enabled() {
         return;
     }
 
     let submit = crab_usb::debug_last_submit();
     let event = crab_usb::debug_last_event();
     let stream_cfg = crab_usb::debug_last_stream_config();
-    crate::log!(
+    crate::globalog::log_with_level(log::Level::Trace, format_args!(
         "crabusb: mass uas-debug stage={} cmd={} tag=0x{:04X} last_submit[slot={} dci={} dir={} stream={} len={} ptr=0x{:X} ring=0x{:X}] last_stream_cfg[slot={} dci={} ep=0x{:02X} count={} maxp={} burst={} mps={} ctx=0x{:X} ring1=0x{:X}] last_event[slot={} ep={} cc={} residual={} ptr=0x{:X}]\n",
         stage,
         cmd,
@@ -556,18 +556,18 @@ fn log_uas_debug(stage: &'static str, cmd: &'static str, tag: u16) {
         event.completion_code,
         event.residual,
         event.ptr
-    );
+    ));
 }
 
 fn log_uas_iu(stage: &'static str, cmd: &'static str, tag: u16, iu: &[u8]) {
-    if !uas_probe_logs_enabled() {
+    if !uas_trace_logs_enabled() {
         return;
     }
 
     let mut bytes = [0u8; 16];
     let n = iu.len().min(bytes.len());
     bytes[..n].copy_from_slice(&iu[..n]);
-    crate::log!(
+    crate::globalog::log_with_level(log::Level::Trace, format_args!(
         "crabusb: mass uas-iu stage={} cmd={} tag=0x{:04X} len={} bytes={:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}\n",
         stage,
         cmd,
@@ -589,7 +589,7 @@ fn log_uas_iu(stage: &'static str, cmd: &'static str, tag: u16, iu: &[u8]) {
         bytes[13],
         bytes[14],
         bytes[15]
-    );
+    ));
 }
 
 fn read_mmio_u32(base: *const u8, offset: usize) -> u32 {
@@ -961,9 +961,7 @@ async fn uas_send_command(
     tag: u16,
 ) -> Result<(), MassProbeError> {
     let iu = make_uas_command_iu(tag, cdb);
-    if uas_probe_logs_enabled() {
-        log_uas_iu("command-iu", cmd, tag, &iu);
-    }
+    log_uas_iu("command-iu", cmd, tag, &iu);
     let sent = with_timeout_or_none(command_out.submit_and_wait(&iu), UAS_IO_TIMEOUT_MS)
         .await
         .ok_or_else(|| {
@@ -1639,14 +1637,25 @@ pub(crate) async fn request_sense_fixed_uas_skhynix(
     data_in: &mut EndpointBulkIn,
     tag: u32,
 ) -> Option<scsi::SenseFixed> {
+    request_sense_fixed_uas_skhynix_result(command_out, status_in, data_in, tag)
+        .await
+        .ok()
+        .flatten()
+}
+
+pub(crate) async fn request_sense_fixed_uas_skhynix_result(
+    command_out: &mut EndpointBulkOut,
+    status_in: &mut EndpointBulkIn,
+    data_in: &mut EndpointBulkIn,
+    tag: u32,
+) -> Result<Option<scsi::SenseFixed>, MassProbeError> {
     let mut sense = [0u8; 18];
     let cdb = scsi::cdb_request_sense(18);
     let got =
         uas_command_in(command_out, status_in, data_in, "request-sense", &cdb, &mut sense, tag)
-            .await
-            .ok()?;
+            .await?;
 
-    scsi::parse_request_sense_fixed(&sense[..got.min(sense.len())])
+    Ok(scsi::parse_request_sense_fixed(&sense[..got.min(sense.len())]))
 }
 
 pub(crate) async fn keepalive_mass_uas_skhynix(
