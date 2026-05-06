@@ -245,6 +245,24 @@ pub fn shell1_submit_input(bytes: &[u8]) -> usize {
 }
 
 #[inline]
+pub fn attached_write(bytes: &[u8]) -> usize {
+    if bytes.is_empty() {
+        return 0;
+    }
+    unsafe { vcabi::trueos_cabi_shell_attached_write(bytes.as_ptr(), bytes.len()) }
+}
+
+#[inline]
+pub fn attached_read_byte() -> Option<u8> {
+    let value = unsafe { vcabi::trueos_cabi_shell_attached_read_byte() };
+    if (0..=255).contains(&value) {
+        Some(value as u8)
+    } else {
+        None
+    }
+}
+
+#[inline]
 pub fn shell_command_registry_json() -> Option<String> {
     let len = unsafe { vcabi::trueos_cabi_shell_command_registry_json(core::ptr::null_mut(), 0) };
     if len <= 0 {

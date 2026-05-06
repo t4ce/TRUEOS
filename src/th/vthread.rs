@@ -9,10 +9,12 @@ const IA32_FS_BASE: u32 = 0xC000_0100;
 pub const VTHREAD_MAGIC: u64 = 0x4452_4854_4555_5254; // "TRUETHRD", stable tag.
 pub const VTHREAD_VERSION: u32 = 1;
 pub const VTHREAD_ROLE_TOKIO_BLOCKING: u32 = 1;
+pub const VTHREAD_ROLE_VM_HULL: u32 = 2;
 pub const VTHREAD_NO_ID: u32 = u32::MAX;
 
-const VTHREAD_RECORD_COUNT: usize = crate::allcaps::stackkeeper::TOKIO_LANE_COUNT;
 const TLS_SLOT_COUNT: usize = 64;
+const VM_TLS_SLOT_BASE: u32 = crate::allcaps::stackkeeper::TOKIO_LANE_COUNT as u32;
+const VM_VTID_BASE: u32 = 0x8000;
 
 #[repr(C, align(64))]
 pub struct VThreadRecord {
@@ -51,17 +53,30 @@ pub struct VThreadGuard {
 }
 
 impl VThreadRecord {
-    const fn new(lane_id: u32) -> Self {
+    const fn new(role: u32, vtid: u32, lane_id: u32, tls_slot: u32) -> Self {
         Self {
             magic: VTHREAD_MAGIC,
             version: VTHREAD_VERSION,
-            vtid: lane_id.saturating_add(1),
-            role: VTHREAD_ROLE_TOKIO_BLOCKING,
+            vtid,
+            role,
             lane_id,
             tls_epoch: AtomicU32::new(1),
-            tls_slot: lane_id,
+            tls_slot,
             scratch_base: 0,
         }
+    }
+
+    const fn new_tokio_lane(lane_id: u32) -> Self {
+        Self::new(VTHREAD_ROLE_TOKIO_BLOCKING, lane_id.saturating_add(1), lane_id, lane_id)
+    }
+
+    const fn new_vm_hull(vm_id: u32) -> Self {
+        Self::new(
+            VTHREAD_ROLE_VM_HULL,
+            VM_VTID_BASE.saturating_add(vm_id),
+            vm_id,
+            VM_TLS_SLOT_BASE.saturating_add(vm_id),
+        )
     }
 
     #[inline]
@@ -95,28 +110,63 @@ impl VThreadRecord {
             lane_id: self.lane_id,
             tls_slot: self.tls_slot,
             fs_base,
-            cpu_slot: crate::percpu::current_slot() as u32,
+            cpu_slot: current_cpu_slot_for_snapshot(),
         }
     }
 }
 
-static VTHREAD_RECORDS: [VThreadRecord; VTHREAD_RECORD_COUNT] = [
-    VThreadRecord::new(0),
-    VThreadRecord::new(1),
-    VThreadRecord::new(2),
-    VThreadRecord::new(3),
-    VThreadRecord::new(4),
-    VThreadRecord::new(5),
-    VThreadRecord::new(6),
-    VThreadRecord::new(7),
-    VThreadRecord::new(8),
-    VThreadRecord::new(9),
-    VThreadRecord::new(10),
-    VThreadRecord::new(11),
-    VThreadRecord::new(12),
-    VThreadRecord::new(13),
-    VThreadRecord::new(14),
-    VThreadRecord::new(15),
+static VTHREAD_RECORDS: [VThreadRecord; crate::allcaps::stackkeeper::TOKIO_LANE_COUNT] = [
+    VThreadRecord::new_tokio_lane(0),
+    VThreadRecord::new_tokio_lane(1),
+    VThreadRecord::new_tokio_lane(2),
+    VThreadRecord::new_tokio_lane(3),
+    VThreadRecord::new_tokio_lane(4),
+    VThreadRecord::new_tokio_lane(5),
+    VThreadRecord::new_tokio_lane(6),
+    VThreadRecord::new_tokio_lane(7),
+    VThreadRecord::new_tokio_lane(8),
+    VThreadRecord::new_tokio_lane(9),
+    VThreadRecord::new_tokio_lane(10),
+    VThreadRecord::new_tokio_lane(11),
+    VThreadRecord::new_tokio_lane(12),
+    VThreadRecord::new_tokio_lane(13),
+    VThreadRecord::new_tokio_lane(14),
+    VThreadRecord::new_tokio_lane(15),
+];
+
+static VM_VTHREAD_RECORDS: [VThreadRecord; crate::allcaps::hv::VM_ID_LIMIT] = [
+    VThreadRecord::new_vm_hull(0),
+    VThreadRecord::new_vm_hull(1),
+    VThreadRecord::new_vm_hull(2),
+    VThreadRecord::new_vm_hull(3),
+    VThreadRecord::new_vm_hull(4),
+    VThreadRecord::new_vm_hull(5),
+    VThreadRecord::new_vm_hull(6),
+    VThreadRecord::new_vm_hull(7),
+    VThreadRecord::new_vm_hull(8),
+    VThreadRecord::new_vm_hull(9),
+    VThreadRecord::new_vm_hull(10),
+    VThreadRecord::new_vm_hull(11),
+    VThreadRecord::new_vm_hull(12),
+    VThreadRecord::new_vm_hull(13),
+    VThreadRecord::new_vm_hull(14),
+    VThreadRecord::new_vm_hull(15),
+    VThreadRecord::new_vm_hull(16),
+    VThreadRecord::new_vm_hull(17),
+    VThreadRecord::new_vm_hull(18),
+    VThreadRecord::new_vm_hull(19),
+    VThreadRecord::new_vm_hull(20),
+    VThreadRecord::new_vm_hull(21),
+    VThreadRecord::new_vm_hull(22),
+    VThreadRecord::new_vm_hull(23),
+    VThreadRecord::new_vm_hull(24),
+    VThreadRecord::new_vm_hull(25),
+    VThreadRecord::new_vm_hull(26),
+    VThreadRecord::new_vm_hull(27),
+    VThreadRecord::new_vm_hull(28),
+    VThreadRecord::new_vm_hull(29),
+    VThreadRecord::new_vm_hull(30),
+    VThreadRecord::new_vm_hull(31),
 ];
 
 static PROBE_TLS_CELLS: [AtomicU32; TLS_SLOT_COUNT] = [const { AtomicU32::new(0) }; TLS_SLOT_COUNT];
@@ -129,6 +179,16 @@ pub fn tokio_blocking_backing_enabled() -> bool {
 #[inline]
 pub fn record_for_lane(lane_id: usize) -> &'static VThreadRecord {
     &VTHREAD_RECORDS[lane_id.min(VTHREAD_RECORDS.len().saturating_sub(1))]
+}
+
+#[inline]
+pub fn record_for_vm_hull(vm_id: u8) -> &'static VThreadRecord {
+    &VM_VTHREAD_RECORDS[(vm_id as usize).min(VM_VTHREAD_RECORDS.len().saturating_sub(1))]
+}
+
+#[inline]
+pub fn vm_hull_fs_base(vm_id: u8) -> u64 {
+    record_for_vm_hull(vm_id) as *const VThreadRecord as u64
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -154,9 +214,12 @@ fn write_fs_base(value: usize) {
 fn write_fs_base(_value: usize) {}
 
 #[inline]
-fn record_from_fs_base(fs_base: usize) -> Option<&'static VThreadRecord> {
-    let start = VTHREAD_RECORDS.as_ptr() as usize;
-    let end = start.saturating_add(core::mem::size_of_val(&VTHREAD_RECORDS));
+fn record_from_slice(
+    records: &'static [VThreadRecord],
+    fs_base: usize,
+) -> Option<&'static VThreadRecord> {
+    let start = records.as_ptr() as usize;
+    let end = start.saturating_add(core::mem::size_of_val(records));
     let stride = core::mem::size_of::<VThreadRecord>();
 
     if fs_base < start || fs_base >= end || stride == 0 {
@@ -169,8 +232,28 @@ fn record_from_fs_base(fs_base: usize) -> Option<&'static VThreadRecord> {
     }
 
     let index = offset / stride;
-    let record = &VTHREAD_RECORDS[index];
+    let record = &records[index];
     if record.valid() { Some(record) } else { None }
+}
+
+#[inline]
+fn record_from_fs_base(fs_base: usize) -> Option<&'static VThreadRecord> {
+    record_from_slice(&VTHREAD_RECORDS, fs_base)
+        .or_else(|| record_from_slice(&VM_VTHREAD_RECORDS, fs_base))
+}
+
+#[inline]
+fn current_cpu_slot_for_snapshot() -> u32 {
+    if crate::hv::current_vm_id_by_lapic_low().is_some() {
+        return VTHREAD_NO_ID;
+    }
+
+    let slot = crate::percpu::current_slot();
+    if slot > u32::MAX as usize {
+        VTHREAD_NO_ID
+    } else {
+        slot as u32
+    }
 }
 
 #[inline]

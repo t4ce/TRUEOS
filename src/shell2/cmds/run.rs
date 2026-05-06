@@ -427,6 +427,28 @@ pub(crate) fn submit_archive_id(
     true
 }
 
+pub(crate) fn submit_archive_name(
+    io: &'static dyn ShellBackend2,
+    archive_name: &str,
+    app_args: Vec<String>,
+) -> bool {
+    let archives = match archive_entries() {
+        Ok(archives) => archives,
+        Err(err) => {
+            print_shell_line(io, alloc::format!("apps: {}", err).as_str());
+            return false;
+        }
+    };
+    let Some(archive) = archives
+        .iter()
+        .find(|entry| entry.archive.as_str() == archive_name)
+    else {
+        return false;
+    };
+    submit_archive_entry(io, archive, app_args);
+    true
+}
+
 pub(crate) fn try_parse(
     spawner: &Spawner,
     io: &'static dyn ShellBackend2,

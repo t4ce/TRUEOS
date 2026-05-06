@@ -122,11 +122,6 @@ fn dispatch_tlb(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -
     super::cmds::tlb::try_parse(spawner, io, &mut args)
 }
 
-fn dispatch_tetris(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    let mut args = rest.split_whitespace();
-    super::cmds::tetris::try_parse(io, &mut args)
-}
-
 fn dispatch_turbo(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
     super::cmds::turbo::try_parse(io, &mut args)
@@ -218,14 +213,6 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         handler: dispatch_tlb,
         tool_description: Some("Print one of the table and hardware inspection views."),
         tool_parameters_json: Some(TOOL_JSON_TLB),
-    },
-    BuiltinShell2CmdEntry {
-        name: "tetris",
-        mode: "cmd",
-        color: None,
-        handler: dispatch_tetris,
-        tool_description: None,
-        tool_parameters_json: None,
     },
     BuiltinShell2CmdEntry {
         name: "turbo",

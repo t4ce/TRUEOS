@@ -591,6 +591,34 @@ pub mod cabi {
         crate::shell2::uart1_com1::inject_bytes(data)
     }
 
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_shell_attached_write(
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> usize {
+        if data_ptr.is_null() || data_len == 0 {
+            return 0;
+        }
+        let data = core::slice::from_raw_parts(data_ptr, data_len);
+        if let Some(target) = super::env::console_target() {
+            return crate::shell2::raw_write_matrix_target(&target, data);
+        }
+        crate::shell2::uart1_com1::write_bytes(data);
+        data_len
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn trueos_cabi_shell_attached_read_byte() -> i32 {
+        if let Some(target) = super::env::console_target() {
+            return crate::shell2::read_matrix_target_byte(&target)
+                .map(i32::from)
+                .unwrap_or(-1);
+        }
+        crate::shell2::uart1_com1::read_byte()
+            .map(i32::from)
+            .unwrap_or(-1)
+    }
+
     fn copy_cabi_text(bytes: &[u8], out_ptr: *mut u8, out_cap: usize) -> isize {
         if out_ptr.is_null() || out_cap == 0 {
             return bytes.len() as isize;
@@ -1250,11 +1278,36 @@ pub mod cabi {
         core::sync::atomic::AtomicBool::new(false);
     static ASYNC_SVG_WORKER_STARTED: core::sync::atomic::AtomicBool =
         core::sync::atomic::AtomicBool::new(false);
+    const VM_TEXTURE_OWNER_CAP: usize = 256;
     const VM_TEXTURE_META_CAP: usize = 256;
+    const VM_TEXTURE_GUEST_ID_LIMIT: u32 = 8_191;
+    const VM_TEXTURE_HOST_BASE: u32 = 50_000;
+    const VM_TEXTURE_HOST_STRIDE: u32 = 8_192;
+    static VM_TEXTURE_OWNER_GENERATION: core::sync::atomic::AtomicU32 =
+        core::sync::atomic::AtomicU32::new(1);
     static VM_TEXTURE_META_GENERATION: core::sync::atomic::AtomicU32 =
         core::sync::atomic::AtomicU32::new(1);
+    static VM_TEXTURE_OWNERS: spin::Mutex<[VmTextureOwner; VM_TEXTURE_OWNER_CAP]> =
+        spin::Mutex::new([VmTextureOwner::EMPTY; VM_TEXTURE_OWNER_CAP]);
     static VM_TEXTURE_META: spin::Mutex<[VmTextureMeta; VM_TEXTURE_META_CAP]> =
         spin::Mutex::new([VmTextureMeta::EMPTY; VM_TEXTURE_META_CAP]);
+
+    #[derive(Clone, Copy)]
+    struct VmTextureOwner {
+        ctx_key: u32,
+        tex_id: u32,
+        generation: u32,
+        valid: bool,
+    }
+
+    impl VmTextureOwner {
+        const EMPTY: Self = Self {
+            ctx_key: 0,
+            tex_id: 0,
+            generation: 0,
+            valid: false,
+        };
+    }
 
     #[derive(Clone, Copy)]
     struct VmTextureMeta {
@@ -1427,7 +1480,46 @@ pub mod cabi {
         }
     }
 
-    const MAX_REASONABLE_TEX_ID: u32 = 100_000;
+    const MAX_REASONABLE_TEX_ID: u32 = VM_TEXTURE_HOST_BASE
+        + (crate::allcaps::hv::VM_ID_LIMIT as u32).saturating_mul(VM_TEXTURE_HOST_STRIDE);
+
+    #[inline]
+    fn vm_context_key_for_id(vm_id: u8) -> u32 {
+        0x8000_0000 | vm_id as u32
+    }
+
+    #[inline]
+    fn vm_guest_texture_id_valid(tex_id: u32, op: &'static str) -> bool {
+        if tex_id == 0 {
+            return false;
+        }
+        if tex_id > VM_TEXTURE_GUEST_ID_LIMIT {
+            crate::log!(
+                "gfx-cabi: reject vm texture id tex={} op={} max_guest={}\n",
+                tex_id,
+                op,
+                VM_TEXTURE_GUEST_ID_LIMIT
+            );
+            return false;
+        }
+        true
+    }
+
+    pub fn host_texture_id_for_vm(vm_id: u8, tex_id: u32) -> u32 {
+        if !vm_guest_texture_id_valid(tex_id, "host-texture-map") {
+            return 0;
+        }
+        VM_TEXTURE_HOST_BASE
+            .saturating_add((vm_id as u32).saturating_mul(VM_TEXTURE_HOST_STRIDE))
+            .saturating_add(tex_id)
+    }
+
+    fn host_texture_id_for_current_context(tex_id: u32) -> u32 {
+        match crate::hv::current_vm_id_by_lapic_low() {
+            Some(vm_id) => host_texture_id_for_vm(vm_id, tex_id),
+            None => tex_id,
+        }
+    }
 
     #[inline]
     fn reject_unreasonable_tex_id(tex_id: u32, op: &'static str) -> bool {
@@ -1494,11 +1586,90 @@ pub mod cabi {
             .unwrap_or(ASYNC_TEX_STATUS_UNKNOWN)
     }
 
+    fn vm_texture_owned_by_ctx(ctx_key: u32, tex_id: u32) -> bool {
+        if tex_id == 0 {
+            return false;
+        }
+        VM_TEXTURE_OWNERS
+            .lock()
+            .iter()
+            .any(|entry| entry.valid && entry.ctx_key == ctx_key && entry.tex_id == tex_id)
+    }
+
+    fn claim_vm_texture_id_for_ctx(ctx_key: u32, tex_id: u32, reason: &'static str) -> bool {
+        if !vm_guest_texture_id_valid(tex_id, reason) {
+            return false;
+        }
+        let generation = VM_TEXTURE_OWNER_GENERATION
+            .fetch_add(1, core::sync::atomic::Ordering::Relaxed)
+            .wrapping_add(1);
+        let mut owners = VM_TEXTURE_OWNERS.lock();
+        let mut replace_idx = 0usize;
+        let mut oldest_generation = u32::MAX;
+
+        for (idx, entry) in owners.iter_mut().enumerate() {
+            if entry.valid && entry.ctx_key == ctx_key && entry.tex_id == tex_id {
+                entry.generation = generation;
+                return true;
+            }
+            if !entry.valid {
+                replace_idx = idx;
+                break;
+            }
+            if entry.generation < oldest_generation {
+                oldest_generation = entry.generation;
+                replace_idx = idx;
+            }
+        }
+
+        owners[replace_idx] = VmTextureOwner {
+            ctx_key,
+            tex_id,
+            generation,
+            valid: true,
+        };
+        true
+    }
+
+    pub fn claim_vm_texture_id_for_vm(vm_id: u8, tex_id: u32, reason: &'static str) -> bool {
+        claim_vm_texture_id_for_ctx(vm_context_key_for_id(vm_id), tex_id, reason)
+    }
+
+    fn claim_current_vm_texture_id(tex_id: u32, reason: &'static str) -> bool {
+        if !gfx_cabi_vm_context() {
+            return true;
+        }
+        claim_vm_texture_id_for_ctx(super::runtime_context_key(), tex_id, reason)
+    }
+
+    fn require_current_vm_texture_owner(tex_id: u32, op: &'static str) -> bool {
+        if !gfx_cabi_vm_context() {
+            return true;
+        }
+        if !vm_guest_texture_id_valid(tex_id, op) {
+            return false;
+        }
+        let ctx_key = super::runtime_context_key();
+        if vm_texture_owned_by_ctx(ctx_key, tex_id) {
+            return true;
+        }
+        crate::log!(
+            "gfx-cabi: reject unowned vm texture tex={} op={} ctx=0x{:08X}\n",
+            tex_id,
+            op,
+            ctx_key
+        );
+        false
+    }
+
     fn record_vm_texture_dimensions(tex_id: u32, width: u32, height: u32) {
         if !gfx_cabi_vm_context() {
             return;
         }
         if tex_id == 0 || width == 0 || height == 0 {
+            return;
+        }
+        if !claim_current_vm_texture_id(tex_id, "vm-texture-meta-owner") {
             return;
         }
         if reject_unreasonable_tex_id(tex_id, "vm-texture-meta") {
@@ -1542,6 +1713,9 @@ pub mod cabi {
 
     fn vm_texture_dimensions(tex_id: u32) -> Option<(u32, u32)> {
         if tex_id == 0 {
+            return None;
+        }
+        if !require_current_vm_texture_owner(tex_id, "vm-texture-dimensions-owner") {
             return None;
         }
         if reject_unreasonable_tex_id(tex_id, "vm-texture-dimensions") {
@@ -1764,6 +1938,14 @@ pub mod cabi {
         if reject_unreasonable_tex_id(tex_id, "queue-texture-upload") {
             return false;
         }
+        if !claim_current_vm_texture_id(tex_id, "queue-texture-upload-owner") {
+            return false;
+        }
+        let host_tex_id = host_texture_id_for_current_context(tex_id);
+        if host_tex_id == 0 || reject_unreasonable_tex_id(host_tex_id, "queue-texture-upload-host")
+        {
+            return false;
+        }
         if checked_reasonable_rgba_len(width, height).is_none() {
             crate::log!(
                 "gfx-cabi: reject texture-upload queue tex={} size={}x{} repaint={} window={}\n",
@@ -1797,7 +1979,7 @@ pub mod cabi {
         }
         record_vm_texture_dimensions(tex_id, width, height);
         enqueue_texture_upload(TextureUploadReq {
-            tex_id,
+            tex_id: host_tex_id,
             width,
             height,
             region,
@@ -1916,6 +2098,13 @@ pub mod cabi {
         if reject_unreasonable_tex_id(tex_id, "queue-draw-rgb") {
             return false;
         }
+        if !claim_current_vm_texture_id(tex_id, "queue-draw-rgb-owner") {
+            return false;
+        }
+        let host_tex_id = host_texture_id_for_current_context(tex_id);
+        if host_tex_id == 0 || reject_unreasonable_tex_id(host_tex_id, "queue-draw-rgb-host") {
+            return false;
+        }
         if vtx.is_empty() {
             return true;
         }
@@ -1926,7 +2115,7 @@ pub mod cabi {
         }
 
         enqueue_texture_draw_rgb(TextureDrawRgbReq {
-            tex_id,
+            tex_id: host_tex_id,
             clear_rgb,
             verts: vtx[..usable].to_vec(),
             repaint_window_id,
@@ -1948,8 +2137,16 @@ pub mod cabi {
         if reject_unreasonable_tex_id(tex_id, "queue-draw-mandelbrot") {
             return false;
         }
+        if !claim_current_vm_texture_id(tex_id, "queue-draw-mandelbrot-owner") {
+            return false;
+        }
+        let host_tex_id = host_texture_id_for_current_context(tex_id);
+        if host_tex_id == 0 || reject_unreasonable_tex_id(host_tex_id, "queue-draw-mandelbrot-host")
+        {
+            return false;
+        }
         enqueue_texture_draw_mandelbrot(TextureDrawMandelbrotReq {
-            tex_id,
+            tex_id: host_tex_id,
             ticks,
             tick_hz,
             repaint_window_id,
@@ -1972,6 +2169,26 @@ pub mod cabi {
         if reject_unreasonable_tex_pair(target_tex_id, source_tex_id, "queue-draw-tex") {
             return false;
         }
+        if !claim_current_vm_texture_id(target_tex_id, "queue-draw-tex-target-owner") {
+            return false;
+        }
+        if source_tex_id != target_tex_id
+            && !require_current_vm_texture_owner(source_tex_id, "queue-draw-tex-source-owner")
+        {
+            return false;
+        }
+        let host_target_tex_id = host_texture_id_for_current_context(target_tex_id);
+        let host_source_tex_id = host_texture_id_for_current_context(source_tex_id);
+        if host_target_tex_id == 0
+            || host_source_tex_id == 0
+            || reject_unreasonable_tex_pair(
+                host_target_tex_id,
+                host_source_tex_id,
+                "queue-draw-tex-host",
+            )
+        {
+            return false;
+        }
         if vtx.is_empty() {
             return true;
         }
@@ -1982,8 +2199,8 @@ pub mod cabi {
         }
 
         enqueue_texture_draw_tex(TextureDrawTexReq {
-            target_tex_id,
-            source_tex_id,
+            target_tex_id: host_target_tex_id,
+            source_tex_id: host_source_tex_id,
             clear_rgb,
             verts: vtx[..usable].to_vec(),
             particle_shader: false,
@@ -2007,6 +2224,26 @@ pub mod cabi {
         if reject_unreasonable_tex_pair(target_tex_id, source_tex_id, "queue-draw-particle-tex") {
             return false;
         }
+        if !claim_current_vm_texture_id(target_tex_id, "queue-draw-particle-target-owner") {
+            return false;
+        }
+        if source_tex_id != target_tex_id
+            && !require_current_vm_texture_owner(source_tex_id, "queue-draw-particle-source-owner")
+        {
+            return false;
+        }
+        let host_target_tex_id = host_texture_id_for_current_context(target_tex_id);
+        let host_source_tex_id = host_texture_id_for_current_context(source_tex_id);
+        if host_target_tex_id == 0
+            || host_source_tex_id == 0
+            || reject_unreasonable_tex_pair(
+                host_target_tex_id,
+                host_source_tex_id,
+                "queue-draw-particle-tex-host",
+            )
+        {
+            return false;
+        }
         if vtx.is_empty() {
             return true;
         }
@@ -2017,8 +2254,8 @@ pub mod cabi {
         }
 
         enqueue_texture_draw_tex(TextureDrawTexReq {
-            target_tex_id,
-            source_tex_id,
+            target_tex_id: host_target_tex_id,
+            source_tex_id: host_source_tex_id,
             clear_rgb,
             verts: vtx[..usable].to_vec(),
             particle_shader: true,

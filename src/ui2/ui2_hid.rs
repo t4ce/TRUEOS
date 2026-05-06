@@ -852,10 +852,6 @@ pub(super) fn pump_keyboard_input(state: &mut Ui2State) {
                             ) {
                                 continue;
                             }
-                            let _ = crate::tst_gfx_tetris::queue_ui2_keyboard_event(
-                                target_window_id,
-                                event,
-                            );
                         }
                     }
                 }

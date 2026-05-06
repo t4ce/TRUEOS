@@ -1,7 +1,6 @@
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Ui2DemoTexId {
-    Tetris = 4_701,
     Mandelbrot = 4_702,
     Bgrt = 4_704,
     Shell = 4_705,

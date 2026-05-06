@@ -19,6 +19,7 @@ const USB_PROTO_UAS: u8 = 0x62;
 const BOT_IO_RETRIES: usize = 8;
 const BOT_IO_TIMEOUT_MS: u64 = crate::allcaps::storage::USB_MASS_BOT_IO_TIMEOUT_MS;
 const UAS_IO_TIMEOUT_MS: u64 = crate::allcaps::storage::USB_MASS_UAS_IO_TIMEOUT_MS;
+const UAS_STATUS_GRACE_MS: u64 = 100;
 const BOT_RECOVERY_SETTLE_MS: u64 = crate::allcaps::storage::USB_MASS_BOT_RECOVERY_SETTLE_MS;
 const UAS_IU_COMMAND: u8 = 0x01;
 const UAS_IU_STATUS: u8 = 0x03;
@@ -311,6 +312,7 @@ fn make_uas_command_iu(tag: u16, cdb: &[u8]) -> [u8; 32] {
     iu
 }
 
+#[allow(dead_code)]
 fn cdb_write_buffer_echo(len: usize) -> [u8; 10] {
     let len = len.min(0x00FF_FFFF);
     [
@@ -327,6 +329,7 @@ fn cdb_write_buffer_echo(len: usize) -> [u8; 10] {
     ]
 }
 
+#[allow(dead_code)]
 fn cdb_read_buffer_echo(len: usize) -> [u8; 10] {
     let len = len.min(0x00FF_FFFF);
     [
@@ -983,6 +986,34 @@ async fn uas_read_status(
     validate_uas_status(cmd, &status[..got.min(status.len())], expected_tag)
 }
 
+async fn uas_drain_status_grace(
+    status_in: &mut EndpointBulkIn,
+    cmd: &'static str,
+    tag: u16,
+) -> Result<(), MassProbeError> {
+    let mut status = [0u8; 96];
+    match with_timeout_or_none(
+        status_in.submit_on_stream_and_wait(tag, &mut status),
+        UAS_STATUS_GRACE_MS,
+    )
+    .await
+    {
+        Some(Ok(got)) => {
+            if got < 4 {
+                log_uas_debug("status-short-after-ready-data", cmd, tag);
+                return Ok(());
+            }
+            let status = &status[..got.min(status.len())];
+            log_uas_iu("status-iu-after-ready-data", cmd, tag, status);
+            validate_uas_status(cmd, status, tag)?;
+            log_uas_debug("status-after-ready-data", cmd, tag);
+        }
+        Some(Err(_)) => log_uas_debug("status-error-after-ready-data", cmd, tag),
+        None => log_uas_debug("status-timeout-after-ready-data", cmd, tag),
+    }
+    Ok(())
+}
+
 async fn uas_command_in(
     command_out: &mut EndpointBulkOut,
     status_in: &mut EndpointBulkIn,
@@ -1004,60 +1035,128 @@ async fn uas_command_in(
     log_uas_debug("data-in-submit", cmd, tag);
     uas_send_command(command_out, cmd, cdb, tag).await?;
 
-    let ready_got = with_timeout_or_none(ready_handle, UAS_IO_TIMEOUT_MS)
-        .await
-        .ok_or_else(|| {
-            log_uas_debug("ready-timeout", cmd, tag);
-            MassProbeError::Transport("uas-status-timeout")
-        })?
-        .map_err(|_| MassProbeError::Transport("uas-status-in"))?
-        .transfer_len;
-    if ready_got < 4 {
-        return Err(MassProbeError::ShortData {
-            cmd,
-            got: ready_got,
-            need: 4,
-        });
-    }
-    let ready = &ready_iu[..ready_got.min(ready_iu.len())];
-    log_uas_iu("ready-iu", cmd, tag, ready);
-    let ready_id = ready[0];
-    let ready_tag = parse_uas_tag(ready).unwrap_or(0);
-    if ready_id == UAS_IU_STATUS && ready_tag == tag {
-        validate_uas_status(cmd, ready, tag)?;
-        log_uas_debug("status-before-data", cmd, tag);
-        let got = with_timeout_or_none(data_handle, UAS_IO_TIMEOUT_MS)
-            .await
-            .ok_or_else(|| {
-                log_uas_debug("data-in-timeout-after-status", cmd, tag);
-                MassProbeError::Transport("uas-data-timeout")
-            })?
-            .map_err(|_| MassProbeError::Transport("uas-data-in"))?
-            .transfer_len;
-        log_uas_debug("data-in-complete-after-status", cmd, tag);
-        return Ok(got);
-    }
-    if ready_id != UAS_IU_READ_READY || ready_tag != tag {
-        return Err(MassProbeError::Csw {
-            cmd,
-            sig: u32::from(ready_id),
-            tag: u32::from(ready_tag),
-            expected_tag: u32::from(tag),
-            status: 0xFF,
-        });
+    enum FirstInCompletion {
+        Status(Result<usize, MassProbeError>),
+        Data(Result<usize, MassProbeError>),
+        Timeout,
     }
 
-    let got = with_timeout_or_none(data_handle, UAS_IO_TIMEOUT_MS)
-        .await
-        .ok_or_else(|| {
-            log_uas_debug("data-in-timeout", cmd, tag);
-            MassProbeError::Transport("uas-data-timeout")
-        })?
-        .map_err(|_| MassProbeError::Transport("uas-data-in"))?
-        .transfer_len;
-    log_uas_debug("data-in-complete", cmd, tag);
-    uas_read_status(status_in, cmd, tag).await?;
-    Ok(got)
+    let mut ready_handle = core::pin::pin!(ready_handle);
+    let mut data_handle = core::pin::pin!(data_handle);
+    let mut timeout =
+        core::pin::pin!(Timer::after(EmbassyDuration::from_millis(UAS_IO_TIMEOUT_MS)));
+    let first = core::future::poll_fn(|cx| {
+        if let Poll::Ready(result) = data_handle.as_mut().poll(cx) {
+            return Poll::Ready(FirstInCompletion::Data(
+                result
+                    .map(|transfer| transfer.transfer_len)
+                    .map_err(|_| MassProbeError::Transport("uas-data-in")),
+            ));
+        }
+        if let Poll::Ready(result) = ready_handle.as_mut().poll(cx) {
+            return Poll::Ready(FirstInCompletion::Status(
+                result
+                    .map(|transfer| transfer.transfer_len)
+                    .map_err(|_| MassProbeError::Transport("uas-status-in")),
+            ));
+        }
+        if timeout.as_mut().poll(cx).is_ready() {
+            return Poll::Ready(FirstInCompletion::Timeout);
+        }
+        Poll::Pending
+    })
+    .await;
+
+    match first {
+        FirstInCompletion::Data(got) => {
+            let got = got?;
+            log_uas_debug("data-in-complete-before-status", cmd, tag);
+            match with_timeout_or_none(ready_handle.as_mut(), UAS_STATUS_GRACE_MS).await {
+                Some(Ok(transfer)) => {
+                    let ready_got = transfer.transfer_len;
+                    if ready_got >= 4 {
+                        let ready = &ready_iu[..ready_got.min(ready_iu.len())];
+                        log_uas_iu("post-data-iu", cmd, tag, ready);
+                        let ready_id = ready[0];
+                        let ready_tag = parse_uas_tag(ready).unwrap_or(0);
+                        if ready_id == UAS_IU_STATUS && ready_tag == tag {
+                            validate_uas_status(cmd, ready, tag)?;
+                            log_uas_debug("status-after-data", cmd, tag);
+                        } else if ready_id == UAS_IU_READ_READY && ready_tag == tag {
+                            log_uas_debug("ready-after-data", cmd, tag);
+                            uas_drain_status_grace(status_in, cmd, tag).await?;
+                        } else {
+                            return Err(MassProbeError::Csw {
+                                cmd,
+                                sig: u32::from(ready_id),
+                                tag: u32::from(ready_tag),
+                                expected_tag: u32::from(tag),
+                                status: 0xFF,
+                            });
+                        }
+                    } else {
+                        log_uas_debug("status-short-after-data", cmd, tag);
+                    }
+                }
+                Some(Err(_)) => log_uas_debug("status-error-after-data", cmd, tag),
+                None => log_uas_debug("status-timeout-after-data", cmd, tag),
+            }
+            Ok(got)
+        }
+        FirstInCompletion::Status(ready_got) => {
+            let ready_got = ready_got?;
+            if ready_got < 4 {
+                return Err(MassProbeError::ShortData {
+                    cmd,
+                    got: ready_got,
+                    need: 4,
+                });
+            }
+            let ready = &ready_iu[..ready_got.min(ready_iu.len())];
+            log_uas_iu("ready-iu", cmd, tag, ready);
+            let ready_id = ready[0];
+            let ready_tag = parse_uas_tag(ready).unwrap_or(0);
+            if ready_id == UAS_IU_STATUS && ready_tag == tag {
+                validate_uas_status(cmd, ready, tag)?;
+                log_uas_debug("status-before-data", cmd, tag);
+                let got = with_timeout_or_none(data_handle.as_mut(), UAS_IO_TIMEOUT_MS)
+                    .await
+                    .ok_or_else(|| {
+                        log_uas_debug("data-in-timeout-after-status", cmd, tag);
+                        MassProbeError::Transport("uas-data-timeout")
+                    })?
+                    .map_err(|_| MassProbeError::Transport("uas-data-in"))?
+                    .transfer_len;
+                log_uas_debug("data-in-complete-after-status", cmd, tag);
+                return Ok(got);
+            }
+            if ready_id != UAS_IU_READ_READY || ready_tag != tag {
+                return Err(MassProbeError::Csw {
+                    cmd,
+                    sig: u32::from(ready_id),
+                    tag: u32::from(ready_tag),
+                    expected_tag: u32::from(tag),
+                    status: 0xFF,
+                });
+            }
+            log_uas_debug("ready-before-data", cmd, tag);
+            let got = with_timeout_or_none(data_handle.as_mut(), UAS_IO_TIMEOUT_MS)
+                .await
+                .ok_or_else(|| {
+                    log_uas_debug("data-in-timeout-after-ready", cmd, tag);
+                    MassProbeError::Transport("uas-data-timeout")
+                })?
+                .map_err(|_| MassProbeError::Transport("uas-data-in"))?
+                .transfer_len;
+            log_uas_debug("data-in-complete-after-ready", cmd, tag);
+            uas_drain_status_grace(status_in, cmd, tag).await?;
+            Ok(got)
+        }
+        FirstInCompletion::Timeout => {
+            log_uas_debug("in-timeout", cmd, tag);
+            Err(MassProbeError::Transport("uas-in-timeout"))
+        }
+    }
 }
 
 async fn uas_command_out(
@@ -1538,6 +1637,7 @@ pub(crate) async fn synchronize_cache_uas_skhynix(
     uas_command_no_data(command_out, status_in, "sync-cache-10", &cdb, tag).await
 }
 
+#[allow(dead_code)]
 async fn echo_buffer_uas_skhynix(
     command_out: &mut EndpointBulkOut,
     status_in: &mut EndpointBulkIn,
@@ -1589,7 +1689,7 @@ pub(crate) async fn exercise_mass_uas_skhynix(
     command_out: &mut EndpointBulkOut,
     status_in: &mut EndpointBulkIn,
     data_in: &mut EndpointBulkIn,
-    data_out: &mut EndpointBulkOut,
+    _data_out: &mut EndpointBulkOut,
 ) -> Result<MassProbeInfo, MassProbeError> {
     let info = probe_mass_uas_skhynix(command_out, status_in, data_in).await?;
 
@@ -1622,25 +1722,7 @@ pub(crate) async fn exercise_mass_uas_skhynix(
         checksum
     );
 
-    match echo_buffer_uas_skhynix(command_out, status_in, data_in, data_out).await {
-        Ok(()) => crate::log!("crabusb: mass uas-skhynix exercise echo-buffer ok\n"),
-        Err(err) => {
-            crate::log!(
-                "crabusb: mass uas-skhynix exercise echo-buffer optional failed: {:?}\n",
-                err
-            );
-            if let Some(sense) =
-                request_sense_fixed_uas_skhynix(command_out, status_in, data_in, 0x5541_EC03).await
-            {
-                crate::log!(
-                    "crabusb: mass uas-skhynix exercise echo-buffer sense={:?} asc=0x{:02X} ascq=0x{:02X}\n",
-                    sense.sense_key,
-                    sense.asc,
-                    sense.ascq
-                );
-            }
-        }
-    }
+    crate::log!("crabusb: mass uas-skhynix exercise echo-buffer skipped reason=read-bringup\n");
 
     Ok(info)
 }
