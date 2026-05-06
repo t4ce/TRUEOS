@@ -1,8 +1,10 @@
 use alloc::{boxed::Box, string::String, vec::Vec as AllocVec};
 use core::fmt::Write as _;
+use core::future::{Future, poll_fn};
+use core::task::Poll;
 
 use crab_usb::usb_if;
-use crab_usb::{Device, EndpointBulkIn, EndpointBulkOut};
+use crab_usb::{DetachedTransfer, Device, EndpointBulkIn, EndpointBulkOut};
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::Vec;
@@ -41,6 +43,12 @@ const UAS_PIPE_ID_COMMAND: u8 = 1;
 const UAS_PIPE_ID_STATUS: u8 = 2;
 const UAS_PIPE_ID_DATA_IN: u8 = 3;
 const UAS_PIPE_ID_DATA_OUT: u8 = 4;
+pub(crate) const UAS_BENCH_DEFAULT_TOTAL_BYTES: u64 = 128 * 1024 * 1024;
+pub(crate) const UAS_BENCH_DEFAULT_CHUNK_BYTES: usize = 256 * 1024;
+pub(crate) const UAS_BENCH_DEFAULT_MAX_INFLIGHT: usize = 8;
+const UAS_BENCH_STATUS_BYTES: usize = 96;
+const UAS_BENCH_TICK_MS: u64 = 1;
+const UAS_BENCH_FLIGHT_TIMEOUT_MS: u64 = 5_000;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct ActiveMassStream {
@@ -176,6 +184,521 @@ fn remember_registered_disk(runtime_key: u64, handle: block::DeviceHandle) {
         runtime_key,
         handle,
     });
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct UasBenchConfig {
+    pub total_bytes: u64,
+    pub chunk_bytes: usize,
+    pub max_inflight: usize,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct UasBenchProgress {
+    pub phase: &'static str,
+    pub elapsed_ms: u64,
+    pub interval_ms: u64,
+    pub completed_bytes: u64,
+    pub interval_bytes: u64,
+    pub target_bytes: u64,
+    pub reads_completed: u64,
+    pub in_flight: usize,
+    pub cwnd: usize,
+    pub ssthresh: usize,
+    pub chunk_bytes: usize,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct UasBenchStats {
+    pub elapsed_ms: u64,
+    pub completed_bytes: u64,
+    pub reads_completed: u64,
+    pub final_cwnd: usize,
+    pub max_inflight: usize,
+    pub chunk_bytes: usize,
+}
+
+struct UasBenchFlight {
+    tag: u16,
+    lba: u32,
+    blocks: u16,
+    bytes: usize,
+    submitted_ms: u64,
+    _data: AllocVec<u8>,
+    status: AllocVec<u8>,
+    data_ticket: Option<DetachedTransfer>,
+    status_ticket: Option<DetachedTransfer>,
+    data_len: Option<usize>,
+    read_ready_seen: bool,
+    status_good_seen: bool,
+}
+
+fn mass_runtime_key_for_disk(handle: block::DeviceHandle) -> Option<u64> {
+    let disks = REGISTERED_MASS_DISKS.lock();
+    disks
+        .iter()
+        .find(|known| known.handle == handle)
+        .map(|known| known.runtime_key)
+}
+
+pub(crate) fn is_uas_skhynix_disk(handle: block::DeviceHandle) -> bool {
+    let Some(runtime_key) = mass_runtime_key_for_disk(handle) else {
+        return false;
+    };
+    let runtimes = MASS_RUNTIMES.lock();
+    runtimes
+        .iter()
+        .find(|rt| rt.runtime_key == runtime_key)
+        .map(|rt| matches!(rt.endpoints, UsbMassEndpoints::UasSkhynix { .. }))
+        .unwrap_or(false)
+}
+
+fn uas_bench_now_ms() -> u64 {
+    let ticks = embassy_time_driver::now();
+    let hz = embassy_time_driver::TICK_HZ;
+    if hz == 0 {
+        0
+    } else {
+        ticks.saturating_mul(1000) / hz
+    }
+}
+
+fn uas_bench_transfer_error(stage: &'static str) -> block::Error {
+    let submit = crab_usb::debug_last_submit();
+    let event = crab_usb::debug_last_event();
+    crate::log!(
+        "crabusb: mass uas-bench transfer-error stage={} last_submit[slot={} dci={} dir={} stream={} len={} ptr=0x{:X} ring=0x{:X}] last_event[slot={} ep={} cc={} residual={} ptr=0x{:X}]\n",
+        stage,
+        submit.slot_id,
+        submit.dci,
+        submit.direction,
+        submit.stream_id,
+        submit.len,
+        submit.ptr,
+        submit.ring_ptr,
+        event.slot_id,
+        event.ep_id,
+        event.completion_code,
+        event.residual,
+        event.ptr
+    );
+    block::Error::Io
+}
+
+fn uas_bench_submit_status(
+    status_in: &mut EndpointBulkIn,
+    tag: u16,
+    status: &mut AllocVec<u8>,
+) -> block::Result<DetachedTransfer> {
+    for byte in status.iter_mut() {
+        *byte = 0;
+    }
+    // The flight owns this heap buffer and keeps it alive until this ticket completes.
+    unsafe { status_in.submit_on_stream_detached(tag, status.as_mut_slice()) }
+        .map_err(|_| uas_bench_transfer_error("status-submit"))
+}
+
+fn uas_bench_submit_data(
+    data_in: &mut EndpointBulkIn,
+    tag: u16,
+    data: &mut AllocVec<u8>,
+) -> block::Result<DetachedTransfer> {
+    // The flight owns this heap buffer and keeps it alive until this ticket completes.
+    unsafe { data_in.submit_on_stream_detached(tag, data.as_mut_slice()) }
+        .map_err(|_| uas_bench_transfer_error("data-submit"))
+}
+
+async fn uas_bench_submit_read(
+    command_out: &mut EndpointBulkOut,
+    status_in: &mut EndpointBulkIn,
+    data_in: &mut EndpointBulkIn,
+    io_tag: u32,
+    lba: u32,
+    blocks: u16,
+    bytes: usize,
+) -> block::Result<UasBenchFlight> {
+    let tag = mass::uas_stream_id_from_tag(io_tag);
+    let mut status = alloc::vec![0u8; UAS_BENCH_STATUS_BYTES];
+    let mut data = alloc::vec![0u8; bytes];
+    let status_ticket = uas_bench_submit_status(status_in, tag, &mut status)?;
+    let data_ticket = uas_bench_submit_data(data_in, tag, &mut data)?;
+
+    let flight = UasBenchFlight {
+        tag,
+        lba,
+        blocks,
+        bytes,
+        submitted_ms: uas_bench_now_ms(),
+        _data: data,
+        status,
+        data_ticket: Some(data_ticket),
+        status_ticket: Some(status_ticket),
+        data_len: None,
+        read_ready_seen: false,
+        status_good_seen: false,
+    };
+
+    if let Err(err) = mass::send_read10_uas_skhynix(command_out, lba, blocks, io_tag).await {
+        core::mem::forget(flight);
+        return Err(map_io_error(err));
+    }
+
+    Ok(flight)
+}
+
+fn uas_bench_poll_flights(
+    status_in: &mut EndpointBulkIn,
+    data_in: &mut EndpointBulkIn,
+    flights: &mut AllocVec<UasBenchFlight>,
+    cx: &mut core::task::Context<'_>,
+) -> block::Result<Option<usize>> {
+    let now_ms = uas_bench_now_ms();
+    let mut idx = 0usize;
+    while idx < flights.len() {
+        let mut completed = false;
+        {
+            let flight = &mut flights[idx];
+            if now_ms.saturating_sub(flight.submitted_ms) > UAS_BENCH_FLIGHT_TIMEOUT_MS {
+                crate::log!(
+                    "crabusb: mass uas-bench timeout tag=0x{:04X} lba={} blocks={} bytes={} age_ms={}\n",
+                    flight.tag,
+                    flight.lba,
+                    flight.blocks,
+                    flight.bytes,
+                    now_ms.saturating_sub(flight.submitted_ms)
+                );
+                return Err(block::Error::Timeout);
+            }
+
+            if let Some(ticket) = flight.data_ticket {
+                match data_in.poll_detached(ticket, cx) {
+                    Poll::Ready(Ok(got)) => {
+                        flight.data_ticket = None;
+                        if got < flight.bytes {
+                            crate::log!(
+                                "crabusb: mass uas-bench short-data tag=0x{:04X} lba={} got={} need={}\n",
+                                flight.tag,
+                                flight.lba,
+                                got,
+                                flight.bytes
+                            );
+                            return Err(block::Error::Io);
+                        }
+                        flight.data_len = Some(got);
+                    }
+                    Poll::Ready(Err(_)) => return Err(uas_bench_transfer_error("data-complete")),
+                    Poll::Pending => {}
+                }
+            }
+
+            if let Some(ticket) = flight.status_ticket {
+                match status_in.poll_detached(ticket, cx) {
+                    Poll::Ready(Ok(got)) => {
+                        flight.status_ticket = None;
+                        let status = &flight.status[..got.min(flight.status.len())];
+                        match mass::classify_uas_read_status_iu("read-10", status, flight.tag)
+                            .map_err(map_io_error)?
+                        {
+                            mass::UasReadStatusKind::ReadReady => {
+                                flight.read_ready_seen = true;
+                            }
+                            mass::UasReadStatusKind::StatusGood => {
+                                flight.status_good_seen = true;
+                            }
+                        }
+                    }
+                    Poll::Ready(Err(_)) => return Err(uas_bench_transfer_error("status-complete")),
+                    Poll::Pending => {}
+                }
+            }
+
+            if flight.read_ready_seen
+                && flight.data_len.is_some()
+                && !flight.status_good_seen
+                && flight.status_ticket.is_none()
+            {
+                let ticket = uas_bench_submit_status(status_in, flight.tag, &mut flight.status)?;
+                flight.status_ticket = Some(ticket);
+            }
+
+            if flight.data_len.is_some() && flight.status_good_seen {
+                completed = true;
+            }
+        }
+
+        if completed {
+            let flight = flights.swap_remove(idx);
+            return Ok(Some(flight.bytes));
+        }
+
+        idx += 1;
+    }
+
+    Ok(None)
+}
+
+async fn uas_bench_wait_one(
+    status_in: &mut EndpointBulkIn,
+    data_in: &mut EndpointBulkIn,
+    flights: &mut AllocVec<UasBenchFlight>,
+) -> block::Result<Option<usize>> {
+    let mut tick = core::pin::pin!(Timer::after(EmbassyDuration::from_millis(UAS_BENCH_TICK_MS)));
+    poll_fn(|cx| {
+        match uas_bench_poll_flights(status_in, data_in, flights, cx) {
+            Ok(Some(bytes)) => return Poll::Ready(Ok(Some(bytes))),
+            Err(err) => return Poll::Ready(Err(err)),
+            Ok(None) => {}
+        }
+        if tick.as_mut().poll(cx).is_ready() {
+            return Poll::Ready(Ok(None));
+        }
+        Poll::Pending
+    })
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+fn uas_bench_report<F>(
+    report: &mut F,
+    phase: &'static str,
+    start_ms: u64,
+    last_report_ms: &mut u64,
+    last_report_bytes: &mut u64,
+    completed_bytes: u64,
+    target_bytes: u64,
+    reads_completed: u64,
+    in_flight: usize,
+    cwnd: usize,
+    ssthresh: usize,
+    chunk_bytes: usize,
+) where
+    F: FnMut(UasBenchProgress),
+{
+    let now_ms = uas_bench_now_ms();
+    let interval_ms = now_ms.saturating_sub(*last_report_ms);
+    let interval_bytes = completed_bytes.saturating_sub(*last_report_bytes);
+    report(UasBenchProgress {
+        phase,
+        elapsed_ms: now_ms.saturating_sub(start_ms),
+        interval_ms,
+        completed_bytes,
+        interval_bytes,
+        target_bytes,
+        reads_completed,
+        in_flight,
+        cwnd,
+        ssthresh,
+        chunk_bytes,
+    });
+    *last_report_ms = now_ms;
+    *last_report_bytes = completed_bytes;
+}
+
+pub(crate) async fn run_uas_skhynix_stream_bench<F, S>(
+    disk: block::DeviceHandle,
+    config: UasBenchConfig,
+    should_stop: S,
+    mut report: F,
+) -> block::Result<UasBenchStats>
+where
+    F: FnMut(UasBenchProgress),
+    S: Fn() -> bool,
+{
+    let Some(runtime_key) = mass_runtime_key_for_disk(disk) else {
+        return Err(block::Error::NotSupported);
+    };
+    let mut rt = take_runtime_wait(runtime_key)
+        .await
+        .ok_or(block::Error::NotReady)?;
+
+    let result = async {
+        if !matches!(rt.endpoints, UsbMassEndpoints::UasSkhynix { .. }) {
+            crate::log!(
+                "crabusb: mass {:04X}:{:04X} uas-bench rejected transport={}\n",
+                rt.vendor_id,
+                rt.product_id,
+                mass_transport_label(rt.transport_kind)
+            );
+            return Err(block::Error::NotSupported);
+        }
+
+        let info = disk.info();
+        let block_size = info.block_size as usize;
+        if block_size == 0 || info.block_count == 0 {
+            return Err(block::Error::InvalidParam);
+        }
+        let max_lba_blocks = core::cmp::min(info.block_count, u32::MAX as u64);
+        if max_lba_blocks == 0 {
+            return Err(block::Error::OutOfBounds);
+        }
+
+        let max_read_bytes = core::cmp::min(MAX_IO_BYTES, u16::MAX as usize * block_size);
+        let wanted_chunk = config.chunk_bytes.clamp(block_size, max_read_bytes);
+        let chunk_bytes = clamp_mass_io_bytes(block_size, wanted_chunk);
+        let max_inflight = config.max_inflight.clamp(1, UAS_BENCH_DEFAULT_MAX_INFLIGHT);
+        let target_bytes = config.total_bytes.max(chunk_bytes as u64);
+        let blocks_per_read = (chunk_bytes / block_size).max(1).min(u16::MAX as usize) as u16;
+
+        let start_ms = uas_bench_now_ms();
+        let mut last_report_ms = start_ms;
+        let mut last_report_bytes = 0u64;
+        let mut completed_bytes = 0u64;
+        let mut submitted_bytes = 0u64;
+        let mut reads_completed = 0u64;
+        let mut cwnd = 1usize;
+        let mut ssthresh = max_inflight;
+        let mut additive_acks = 0usize;
+        let mut phase = "slow-start";
+        let mut next_lba = 0u64;
+        let mut flights: AllocVec<UasBenchFlight> = AllocVec::new();
+
+        uas_bench_report(
+            &mut report,
+            "start",
+            start_ms,
+            &mut last_report_ms,
+            &mut last_report_bytes,
+            completed_bytes,
+            target_bytes,
+            reads_completed,
+            flights.len(),
+            cwnd,
+            ssthresh,
+            chunk_bytes,
+        );
+
+        while (completed_bytes < target_bytes || !flights.is_empty()) && !should_stop() {
+            while flights.len() < cwnd && submitted_bytes < target_bytes && !should_stop() {
+                let remaining_bytes = target_bytes.saturating_sub(submitted_bytes);
+                let wanted_bytes = core::cmp::min(chunk_bytes as u64, remaining_bytes) as usize;
+                let mut blocks = (wanted_bytes / block_size)
+                    .max(1)
+                    .min(blocks_per_read as usize);
+                if next_lba.saturating_add(blocks as u64) > max_lba_blocks {
+                    next_lba = 0;
+                }
+                if next_lba.saturating_add(blocks as u64) > max_lba_blocks {
+                    blocks = max_lba_blocks as usize;
+                }
+                let bytes = blocks.saturating_mul(block_size);
+                if bytes == 0 {
+                    return Err(block::Error::InvalidParam);
+                }
+
+                let io_tag = rt.io_tag;
+                let flight = {
+                    let endpoints = &mut rt.endpoints;
+                    let UsbMassEndpoints::UasSkhynix {
+                        command_out,
+                        status_in,
+                        data_in,
+                        ..
+                    } = endpoints
+                    else {
+                        return Err(block::Error::NotSupported);
+                    };
+                    uas_bench_submit_read(
+                        command_out,
+                        status_in,
+                        data_in,
+                        io_tag,
+                        next_lba as u32,
+                        blocks as u16,
+                        bytes,
+                    )
+                    .await?
+                };
+                rt.io_tag = rt.io_tag.wrapping_add(1);
+                flights.push(flight);
+
+                submitted_bytes = submitted_bytes.saturating_add(bytes as u64);
+                next_lba = next_lba.saturating_add(blocks as u64);
+            }
+
+            if flights.is_empty() {
+                break;
+            }
+
+            let completed_now = {
+                let endpoints = &mut rt.endpoints;
+                let UsbMassEndpoints::UasSkhynix {
+                    status_in, data_in, ..
+                } = endpoints
+                else {
+                    return Err(block::Error::NotSupported);
+                };
+                uas_bench_wait_one(status_in, data_in, &mut flights).await?
+            };
+
+            if let Some(bytes) = completed_now {
+                completed_bytes = completed_bytes.saturating_add(bytes as u64);
+                reads_completed = reads_completed.saturating_add(1);
+                if cwnd < ssthresh {
+                    cwnd = core::cmp::min(max_inflight, cwnd.saturating_mul(2).max(1));
+                    phase = "slow-start";
+                } else if cwnd < max_inflight {
+                    additive_acks = additive_acks.saturating_add(1);
+                    if additive_acks >= cwnd {
+                        cwnd += 1;
+                        additive_acks = 0;
+                    }
+                    phase = "avoidance";
+                } else {
+                    phase = "steady";
+                }
+            }
+
+            let now_ms = uas_bench_now_ms();
+            if now_ms.saturating_sub(last_report_ms) >= 1000 || completed_bytes >= target_bytes {
+                uas_bench_report(
+                    &mut report,
+                    phase,
+                    start_ms,
+                    &mut last_report_ms,
+                    &mut last_report_bytes,
+                    completed_bytes,
+                    target_bytes,
+                    reads_completed,
+                    flights.len(),
+                    cwnd,
+                    ssthresh,
+                    chunk_bytes,
+                );
+            }
+        }
+
+        if should_stop() {
+            ssthresh = core::cmp::max(1, cwnd / 2);
+            cwnd = 1;
+            uas_bench_report(
+                &mut report,
+                "stopped",
+                start_ms,
+                &mut last_report_ms,
+                &mut last_report_bytes,
+                completed_bytes,
+                target_bytes,
+                reads_completed,
+                flights.len(),
+                cwnd,
+                ssthresh,
+                chunk_bytes,
+            );
+        }
+
+        Ok(UasBenchStats {
+            elapsed_ms: uas_bench_now_ms().saturating_sub(start_ms),
+            completed_bytes,
+            reads_completed,
+            final_cwnd: cwnd,
+            max_inflight,
+            chunk_bytes,
+        })
+    }
+    .await;
+
+    register_runtime(rt);
+    result
 }
 
 #[derive(Clone)]

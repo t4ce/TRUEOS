@@ -23,6 +23,11 @@ pub use ctrl::*;
 pub use int::*;
 pub use iso::*;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DetachedTransfer {
+    id: u64,
+}
+
 pub enum EndpointKind {
     Control(EndpointControl),
     IsochronousIn(EndpointIsoIn),
@@ -64,6 +69,28 @@ impl EndpointBase {
 
     pub fn submit(&mut self, transfer: Transfer) -> Result<TransferHandle<'_>, TransferError> {
         self.raw.submit(transfer)
+    }
+
+    pub unsafe fn submit_detached(
+        &mut self,
+        transfer: Transfer,
+    ) -> Result<DetachedTransfer, TransferError> {
+        let handle = self.raw.submit(transfer)?;
+        let id = handle.id;
+        drop(handle);
+        Ok(DetachedTransfer { id })
+    }
+
+    pub fn poll_detached(
+        &mut self,
+        ticket: DetachedTransfer,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<usize, TransferError>> {
+        self.raw.register_cx(ticket.id, cx);
+        match self.raw.query_transfer(ticket.id) {
+            Some(result) => Poll::Ready(result.map(|transfer| transfer.transfer_len)),
+            None => Poll::Pending,
+        }
     }
 
     #[allow(unused)]
