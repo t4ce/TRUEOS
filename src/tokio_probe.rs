@@ -309,12 +309,16 @@ async fn probe_tokio_fs_runtime_surface() {
                 return;
             }
         }
+        crate::log!("tokio_probe: enter fs.runtime_ops.file_read_drop\n");
+        drop(file);
+        crate::log!("tokio_probe: success fs.runtime_ops.file_read_drop\n");
     }
 
+    crate::log!("tokio_probe: enter fs.runtime_ops.file_remove_after_read\n");
     match tokio::fs::remove_file(TOKIO_FS_PROBE_PATH).await {
-        Ok(()) => crate::log!("tokio_probe: success fs.runtime_ops.remove_file\n"),
+        Ok(()) => crate::log!("tokio_probe: success fs.runtime_ops.file_remove_after_read\n"),
         Err(err) => {
-            log_fs_io_failure("remove_file", &err);
+            log_fs_io_failure("file_remove_after_read", &err);
             return;
         }
     }

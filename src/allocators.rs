@@ -41,6 +41,9 @@ static ALLOC_TRACE_BLOCK_SIZE: AtomicUsize = AtomicUsize::new(0);
 static ALLOC_TRACE_BLOCK_NEXT: AtomicUsize = AtomicUsize::new(0);
 static ALLOC_TRACE_PAYLOAD: AtomicUsize = AtomicUsize::new(0);
 static ALLOC_TRACE_ALIGNED_USED: AtomicUsize = AtomicUsize::new(0);
+static HOST_HEAP_VIRT_START: AtomicUsize = AtomicUsize::new(0);
+static HOST_HEAP_VIRT_END: AtomicUsize = AtomicUsize::new(0);
+static HV_GUEST_HOST_DEALLOC_LOGGED: AtomicU32 = AtomicU32::new(0);
 
 #[derive(Copy, Clone, Debug)]
 pub struct AllocTrace {
@@ -142,6 +145,42 @@ fn trace_alloc_success(trace_enabled: bool) {
         return;
     }
     ALLOC_TRACE_STAGE.store(ALLOC_TRACE_STAGE_SUCCESS, Ordering::Release);
+}
+
+#[inline]
+fn publish_host_heap_range(start: usize, len: usize) {
+    if start == 0 || len == 0 {
+        return;
+    }
+    HOST_HEAP_VIRT_START.store(start, Ordering::Release);
+    HOST_HEAP_VIRT_END.store(start.saturating_add(len), Ordering::Release);
+}
+
+#[inline]
+pub fn host_heap_contains_addr(addr: usize) -> bool {
+    let start = HOST_HEAP_VIRT_START.load(Ordering::Acquire);
+    let end = HOST_HEAP_VIRT_END.load(Ordering::Acquire);
+    start != 0 && end > start && addr >= start && addr < end
+}
+
+#[inline]
+fn reject_hv_guest_host_heap_dealloc(ptr: *mut u8) -> bool {
+    if crate::hv::current_vm_id_by_lapic_low().is_none() {
+        return false;
+    }
+    if !host_heap_contains_addr(ptr as usize) {
+        return false;
+    }
+    if HV_GUEST_HOST_DEALLOC_LOGGED
+        .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        crate::log!(
+            "hv-guest-alloc: ignored host-heap dealloc ptr=0x{:X} risk=HVSR-0002\n",
+            ptr as usize
+        );
+    }
+    true
 }
 
 #[inline]
@@ -644,6 +683,9 @@ unsafe impl GlobalAlloc for Allocator {
         if ptr.is_null() {
             return;
         }
+        if reject_hv_guest_host_heap_dealloc(ptr) {
+            return;
+        }
         let tag_ptr = ptr.sub(size_of::<AllocTag>()) as *mut AllocTag;
         let tag = *tag_ptr;
         allocator_for_domain(alloc_domain_from_tag(&tag))
@@ -700,6 +742,9 @@ pub unsafe fn alloc_raw(layout: Layout) -> *mut u8 {
 
 pub unsafe fn dealloc_raw(ptr: *mut u8) {
     if ptr.is_null() {
+        return;
+    }
+    if reject_hv_guest_host_heap_dealloc(ptr) {
         return;
     }
     let tag_ptr = ptr.sub(size_of::<AllocTag>()) as *mut AllocTag;
@@ -889,6 +934,7 @@ pub fn install_heap_arena(arena: HeapArena) -> bool {
     }
 
     guard.install_heap(arena.virt_start, arena.phys_start as usize, arena.length);
+    publish_host_heap_range(arena.virt_start, arena.length);
     phys::register_heap(arena.virt_start, arena.phys_start as usize, arena.length);
     if crate::logflag::BOOT_INFO_LOGS {
         crate::log!(

@@ -70,7 +70,6 @@ define_started_flags!(
     UI2_PALATINO_1X_DEMO_STARTED,
     UI2_TWEMOJI_1X_STARTED,
     UI2_TEXT_INPUT_DEMO_STARTED,
-    UI2_TRIANGLE_DEMO_STARTED,
     UI2_BGRT_DEMO_STARTED,
     UI2_CORETICKS_DEMO_STARTED,
     UI2_CURSORPICKER_DEMO_STARTED,
@@ -81,7 +80,6 @@ define_started_flags!(
     UI2_SMILEY_FOUNTAIN_DEMO_STARTED,
     UI2_SHELL_DEMO_STARTED,
     UI2_SWARM_DEMO_STARTED,
-    UI2_SVG_DEMO_STARTED,
     UI2_TRUEOSFS_EXPLORER_DEMO_STARTED,
     UI2_CURRENCY_DEMO_STARTED,
     USB_CONTROLLER_TASKS_STARTED,
@@ -112,7 +110,6 @@ macro_rules! define_stop_flags {
 define_stop_flags!(
     STOP_UI2_GFX_TETRIS,
     STOP_UI2_TEXT_INPUT_DEMO,
-    STOP_UI2_TRIANGLE_DEMO,
     STOP_UI2_BGRT_DEMO,
     STOP_UI2_CORETICKS_DEMO,
     STOP_UI2_CURSORPICKER_DEMO,
@@ -123,7 +120,6 @@ define_stop_flags!(
     STOP_UI2_SMILEY_FOUNTAIN_DEMO,
     STOP_UI2_SHELL_DEMO,
     STOP_UI2_SWARM_DEMO,
-    STOP_UI2_SVG_DEMO,
     STOP_UI2_CURRENCY_DEMO,
     STOP_UI2_TRUEOSFS_EXPLORER_DEMO,
 );
@@ -132,7 +128,6 @@ fn stop_flag_by_task_name(name: &str) -> Option<&'static AtomicBool> {
     match name {
         "ui2-gfx-tetris" => Some(&STOP_UI2_GFX_TETRIS),
         "ui2-text-input-demo" => Some(&STOP_UI2_TEXT_INPUT_DEMO),
-        "ui2-triangle-demo" => Some(&STOP_UI2_TRIANGLE_DEMO),
         "ui2-bgrt-demo" => Some(&STOP_UI2_BGRT_DEMO),
         "ui2-coreticks-demo" => Some(&STOP_UI2_CORETICKS_DEMO),
         "ui2-cursorpicker-demo" => Some(&STOP_UI2_CURSORPICKER_DEMO),
@@ -143,7 +138,6 @@ fn stop_flag_by_task_name(name: &str) -> Option<&'static AtomicBool> {
         "ui2-smiley-fountain-demo" => Some(&STOP_UI2_SMILEY_FOUNTAIN_DEMO),
         "ui2-shell-demo" => Some(&STOP_UI2_SHELL_DEMO),
         "ui2-swarm-demo" => Some(&STOP_UI2_SWARM_DEMO),
-        "ui2-svg-demo" => Some(&STOP_UI2_SVG_DEMO),
         "ui2-currency-demo" => Some(&STOP_UI2_CURRENCY_DEMO),
         "ui2-trueosfs-explorer-demo" => Some(&STOP_UI2_TRUEOSFS_EXPLORER_DEMO),
         _ => None,
@@ -762,13 +756,6 @@ fn spawn_ui2_twemoji_1x(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1(spawner, |_ap1_spawner| crate::r::ui2::ui2_font_twemoji_loader_task())
 }
 
-fn spawn_ui2_triangle_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        let _ = worker_spawner;
-        crate::tst_ui2_triangle_demo::ui2_triangle_demo_task()
-    })
-}
-
 fn spawn_ui2_text_input_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
         let _ = worker_spawner;
@@ -840,13 +827,6 @@ fn spawn_ui2_shell_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
         let _ = worker_spawner;
         crate::tst_ui2_shell_demo::ui2_shell_demo_task()
-    })
-}
-
-fn spawn_ui2_svg_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        let _ = worker_spawner;
-        crate::tst_ui2_svg_demo::ui2_svg_demo_task()
     })
 }
 
@@ -1177,7 +1157,7 @@ const UI2_DEMO_READY: u32 =
 const WS_BOOT_READY: u32 = crate::r::readiness::NET_GATEWAY_REACHABLE
     | crate::r::readiness::TLS_SOCKET_SERVICE_READY
     | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
-static TASKS: [TaskSpec; 72] = [
+static TASKS: [TaskSpec; 70] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
         "globalog-persist-once",
@@ -1415,13 +1395,6 @@ static TASKS: [TaskSpec; 72] = [
         &UI2_TEXT_INPUT_DEMO_STARTED,
         spawn_ui2_text_input_demo,
     ),
-    TaskSpec::enabled_gated(
-        "ui2-triangle-demo",
-        UI2_DEMO_READY,
-        ui2_demo_task_gate,
-        &UI2_TRIANGLE_DEMO_STARTED,
-        spawn_ui2_triangle_demo,
-    ),
     TaskSpec::enabled("ui2-bgrt-demo", UI2_DEMO_READY, &UI2_BGRT_DEMO_STARTED, spawn_ui2_bgrt_demo),
     TaskSpec::enabled(
         "ui2-coreticks-demo",
@@ -1479,7 +1452,6 @@ static TASKS: [TaskSpec; 72] = [
         &UI2_SWARM_DEMO_STARTED,
         spawn_ui2_swarm_demo,
     ),
-    TaskSpec::disabled("ui2-svg-demo", UI2_DEMO_READY, &UI2_SVG_DEMO_STARTED, spawn_ui2_svg_demo),
     TaskSpec::disabled(
         "ui2-currency-demo",
         UI2_DEMO_READY | crate::r::readiness::NET_ANY_CONFIGURED,
@@ -1633,7 +1605,6 @@ pub async fn spawn_service_task(spawner: Spawner) {
                                 | "ui2"
                                 | "ui2-gfx-browser"
                                 | "ui2-gfx-tetris"
-                                | "ui2-triangle-demo"
                                 | "ui2-mandelbrot-demo"
                                 | "ui2-shell-demo"
                         ) {

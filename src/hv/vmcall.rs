@@ -11,11 +11,14 @@
 
 use crate::hv::hvlogf;
 use crate::hv::memory::kernel_va_to_pa;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 // ── op codes (u32, written by guest before vmcall) ──────────────────────────
 pub const OP_PRESERVE: u32 = 0x01; // snapshot + stop
 pub const OP_PING: u32 = 0x02; // response_data = 0xCAFE_BABE
 pub const OP_UNIX_TIME: u32 = 0x03; // response_data = unix seconds
+pub const OP_YIELD: u32 = 0x04; // cooperative host yield point
+pub const OP_SLEEP_MS: u32 = 0x05; // cooperative host sleep before resume
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -26,6 +29,7 @@ pub const OP_BP_NET_POLL: u32 = 0x22; // response payload is optional wire Event
 pub const STATUS_OK: u32 = 0;
 pub const STATUS_UNKNOWN_OP: u32 = 1;
 pub const STATUS_BAD_ARG: u32 = 2;
+const MAX_GUEST_SLEEP_MS: u64 = 10_000;
 
 // ── shared page ─────────────────────────────────────────────────────────────
 
@@ -57,6 +61,16 @@ pub struct CommPage {
     pub response_pad: u32,
     pub payload: [u8; PAYLOAD_CAP],
 }
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum DispatchOutcome {
+    Resume,
+    Stop,
+    Yield,
+    SleepMs(u64),
+}
+
+static GUEST_CABI_SEQ: AtomicU32 = AtomicU32::new(1);
 
 /// Static 4 K backing page for CommPage.
 #[repr(C, align(4096))]
@@ -109,59 +123,91 @@ fn write_response(vm_id: u8, seq: u32, status: u32, data: u64, len: u32) {
     }
 }
 
+pub fn guest_call(op: u32, arg0: u64, arg1: u64) -> (u32, u64) {
+    let seq = GUEST_CABI_SEQ.fetch_add(1, Ordering::Relaxed);
+    let p = comm_page_guest_va() as *mut CommPage;
+    unsafe {
+        core::ptr::write_volatile(&mut (*p).request_arg0, arg0);
+        core::ptr::write_volatile(&mut (*p).request_arg1, arg1);
+        core::ptr::write_volatile(&mut (*p).request_len, 0);
+        core::ptr::write_volatile(&mut (*p).request_seq, seq);
+        core::ptr::write_volatile(&mut (*p).request_op, op);
+        core::arch::asm!("vmcall", options(nostack, preserves_flags));
+        let status = core::ptr::read_volatile(&(*p).response_status);
+        let data = core::ptr::read_volatile(&(*p).response_data);
+        (status, data)
+    }
+}
+
+pub fn guest_yield() {
+    let _ = guest_call(OP_YIELD, 0, 0);
+}
+
+pub fn guest_sleep_ms(ms: u64) {
+    let _ = guest_call(OP_SLEEP_MS, ms, 0);
+}
+
 // ── exec dispatch ────────────────────────────────────────────────────────────
 
 /// Called from the vmexit loop on every VMCALL exit.
-/// Returns `true` if the guest should be resumed, `false` to stop the loop.
-pub fn dispatch(vm_id: u8) -> bool {
+pub fn dispatch(vm_id: u8) -> DispatchOutcome {
     let Some((op, seq, arg0, _arg1, req_len)) = read_request(vm_id) else {
         hvlogf(format_args!("hv: vm{} reporting: vmcall bad vm id", vm_id));
-        return false;
+        return DispatchOutcome::Stop;
     };
     match op {
         OP_PRESERVE => {
             write_response(vm_id, seq, STATUS_OK, 0, 0);
-            false
+            DispatchOutcome::Stop
         }
         OP_PING => {
             write_response(vm_id, seq, STATUS_OK, 0xCAFE_BABE, 0);
-            true
+            DispatchOutcome::Resume
         }
         OP_UNIX_TIME => {
             let t = crate::r::net::ntp::current_unix_seconds().unwrap_or(0);
             write_response(vm_id, seq, STATUS_OK, t, 0);
-            true
+            DispatchOutcome::Resume
+        }
+        OP_YIELD => {
+            write_response(vm_id, seq, STATUS_OK, 0, 0);
+            DispatchOutcome::Yield
+        }
+        OP_SLEEP_MS => {
+            let sleep_ms = arg0.min(MAX_GUEST_SLEEP_MS);
+            write_response(vm_id, seq, STATUS_OK, sleep_ms, 0);
+            DispatchOutcome::SleepMs(sleep_ms)
         }
         OP_NET_TCP_WRITE => {
             let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
             let Some(p) = host_ptr(vm_id) else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
-                return true;
+                return DispatchOutcome::Resume;
             };
             let bytes = unsafe { &(&(*p).payload)[..n] };
             match crate::hv::vnet::tcp_write(vm_id, bytes) {
                 Ok(written) => write_response(vm_id, seq, STATUS_OK, written as u64, 0),
                 Err(_) => write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0),
             }
-            true
+            DispatchOutcome::Resume
         }
         OP_NET_TCP_READ => {
             let want = core::cmp::min(arg0 as usize, PAYLOAD_CAP);
             if want == 0 {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
-                return true;
+                return DispatchOutcome::Resume;
             }
 
             let Some(p) = host_ptr(vm_id) else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
-                return true;
+                return DispatchOutcome::Resume;
             };
             let out = unsafe { &mut (&mut (*p).payload)[..want] };
             match crate::hv::vnet::tcp_read(vm_id, out) {
                 Ok(got) => write_response(vm_id, seq, STATUS_OK, got as u64, got as u32),
                 Err(_) => write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0),
             }
-            true
+            DispatchOutcome::Resume
         }
         #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         OP_BP_NET_OPEN => {
@@ -169,27 +215,27 @@ pub fn dispatch(vm_id: u8) -> bool {
                 Some(session_id) => write_response(vm_id, seq, STATUS_OK, session_id as u64, 0),
                 None => write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0),
             }
-            true
+            DispatchOutcome::Resume
         }
         #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         OP_BP_NET_SUBMIT => {
             let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
             let Some(p) = host_ptr(vm_id) else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
-                return true;
+                return DispatchOutcome::Resume;
             };
             let bytes = unsafe { &(&(*p).payload)[..n] };
             match crate::hv::blueprint_net::submit(arg0 as u32, bytes) {
                 Ok(()) => write_response(vm_id, seq, STATUS_OK, 0, 0),
                 Err(()) => write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0),
             }
-            true
+            DispatchOutcome::Resume
         }
         #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         OP_BP_NET_POLL => {
             let Some(p) = host_ptr(vm_id) else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
-                return true;
+                return DispatchOutcome::Resume;
             };
             let out = unsafe { &mut (&mut (*p).payload)[..PAYLOAD_CAP] };
             match crate::hv::blueprint_net::poll_event(arg0 as u32, out) {
@@ -197,7 +243,7 @@ pub fn dispatch(vm_id: u8) -> bool {
                 Ok(None) => write_response(vm_id, seq, STATUS_OK, 0, 0),
                 Err(()) => write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0),
             }
-            true
+            DispatchOutcome::Resume
         }
         _ => {
             hvlogf(format_args!(
@@ -205,7 +251,7 @@ pub fn dispatch(vm_id: u8) -> bool {
                 vm_id, op, seq
             ));
             write_response(vm_id, seq, STATUS_UNKNOWN_OP, 0, 0);
-            true
+            DispatchOutcome::Resume
         }
     }
 }

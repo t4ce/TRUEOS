@@ -24,6 +24,7 @@ use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 
 use embassy_executor::{Spawner, task};
+use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::{Deque, String, Vec as HVec};
 use spin::Mutex;
 use x86_64::instructions::tables::{sgdt, sidt};
@@ -1329,7 +1330,7 @@ async fn vm_task(vm_id: u8) {
         ));
     }
     let _entered_guest_alloc = crate::allocators::enter_hv_guest_domain_current_cpu(vm_id);
-    let launch_result = vmx_launch_once_with_ept(lineage_record);
+    let launch_result = vmx_launch_once_with_ept(lineage_record).await;
     crate::allocators::leave_hv_guest_domain_current_cpu();
     clear_current_vm_id();
     let blueprint_crash_state = blueprint_launch_snapshot(vm_id);
@@ -1428,7 +1429,9 @@ fn vmx_caps() -> (bool, bool, bool, bool, bool) {
     (known_compatible, has_msr, has_vmx, feature_control_locked, feature_control_vmx_outside_smx)
 }
 
-fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResult, &'static str> {
+async fn vmx_launch_once_with_ept(
+    lineage_record: LineageRecord,
+) -> Result<LaunchResult, &'static str> {
     let vm_id = current_vm_id().ok_or("vm context missing")?;
     let vm = vm_slot(vm_id);
     if !current_vmx_root_active()? {
@@ -1625,8 +1628,21 @@ fn vmx_launch_once_with_ept(lineage_record: LineageRecord) -> Result<LaunchResul
             VMEXIT_REASON_VMCALL => {
                 let len = vmread(VMCS_VMEXIT_INSTRUCTION_LEN).ok_or("vmread instr len")?;
                 vmwrite(VMCS_GUEST_RIP, lr.guest_rip + len)?;
-                if !crate::hv::vmcall::dispatch(vm_id) {
-                    break; // preserve — stop the loop
+                match crate::hv::vmcall::dispatch(vm_id) {
+                    crate::hv::vmcall::DispatchOutcome::Resume => {}
+                    crate::hv::vmcall::DispatchOutcome::Stop => break,
+                    crate::hv::vmcall::DispatchOutcome::Yield => {
+                        materialize_deferred_blueprint_app_windows(vm_id);
+                        Timer::after(EmbassyDuration::from_millis(1)).await;
+                    }
+                    crate::hv::vmcall::DispatchOutcome::SleepMs(ms) => {
+                        materialize_deferred_blueprint_app_windows(vm_id);
+                        if ms == 0 {
+                            Timer::after(EmbassyDuration::from_millis(1)).await;
+                        } else {
+                            Timer::after(EmbassyDuration::from_millis(ms)).await;
+                        }
+                    }
                 }
                 // service vmcall — loop → vmresume
             }

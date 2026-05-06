@@ -1410,11 +1410,13 @@ fn vm_deferred_window_ok(window_id: u32, op: &'static str) -> Option<i32> {
         ));
         return Some(-1);
     };
-    crate::hv::log_blueprint_app_window_event(format_args!(
-        "app-window-broker: vm{} deferred window op={} window={} status=queued",
-        current_vm_id, op, window_id
-    ));
     let _ = crate::hv::note_deferred_blueprint_app_window_op(window_id, op);
+    if op != "request-repaint" {
+        crate::hv::log_blueprint_app_window_event(format_args!(
+            "app-window-broker: vm{} deferred window op={} window={} status=queued",
+            current_vm_id, op, window_id
+        ));
+    }
     Some(0)
 }
 

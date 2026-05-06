@@ -10,6 +10,8 @@ use core::sync::atomic::{AtomicU32, Ordering};
 pub const OP_PRESERVE: u32 = 0x01;
 pub const OP_PING: u32 = 0x02;
 pub const OP_UNIX_TIME: u32 = 0x03;
+pub const OP_YIELD: u32 = 0x04;
+pub const OP_SLEEP_MS: u32 = 0x05;
 pub const OP_NET_TCP_WRITE: u32 = 0x10;
 pub const OP_NET_TCP_READ: u32 = 0x11;
 pub const OP_BP_NET_OPEN: u32 = 0x20;
@@ -108,6 +110,14 @@ pub fn ping() -> bool {
 pub fn unix_time() -> u64 {
     let (_s, d) = call(OP_UNIX_TIME, 0, 0);
     d
+}
+
+pub fn yield_now() {
+    let _ = call(OP_YIELD, 0, 0);
+}
+
+pub fn sleep_ms(ms: u64) {
+    let _ = call(OP_SLEEP_MS, ms, 0);
 }
 
 pub fn net_tcp_write(bytes: &[u8]) -> usize {

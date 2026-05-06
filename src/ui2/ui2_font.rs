@@ -59,9 +59,16 @@ impl Ui2FontTier {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Ui2FontGlyphSource {
+    Athlas,
+    Twemoji,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Ui2FontGlyph {
     pub ch: char,
     pub tier: Ui2FontTier,
+    source: Ui2FontGlyphSource,
     pub advance_px: u16,
     pub line_height_px: u16,
     pub draw_w_px: u16,
@@ -166,11 +173,10 @@ pub(super) fn ui2_font_cpu_atlas_for_glyph<'a>(
     atlases: &'a Ui2FontCpuAtlases,
     glyph: &Ui2FontGlyph,
 ) -> Option<&'a DecodedPng> {
-    let texture = glyph.texture?;
-    if texture.tex_id == twemoji::TWEMOJI_TEX_ID {
-        return Some(&atlases.twemoji);
+    match glyph.source {
+        Ui2FontGlyphSource::Athlas => atlases.variant_buckets.get(glyph.region.bucket as usize),
+        Ui2FontGlyphSource::Twemoji => Some(&atlases.twemoji),
     }
-    atlases.variant_buckets.get(glyph.region.bucket as usize)
 }
 
 fn ui2_font_blit_glyph_rgba(
@@ -185,10 +191,7 @@ fn ui2_font_blit_glyph_rgba(
     let Some(atlas) = ui2_font_cpu_atlas_for_glyph(atlases, glyph) else {
         return false;
     };
-    let is_color = glyph
-        .texture
-        .map(|t| t.tex_id == twemoji::TWEMOJI_TEX_ID)
-        .unwrap_or(false);
+    let is_color = glyph.source == Ui2FontGlyphSource::Twemoji;
     let draw_rect = ui2_font_place_glyph_top_center(glyph, cell_rect);
     let glyph_w = glyph.region.src_w as usize;
     let glyph_h = glyph.region.src_h as usize;
@@ -264,6 +267,7 @@ pub(super) fn ui2_font_resolve_glyph(tier: Ui2FontTier, ch: char) -> Option<Ui2F
         return Some(Ui2FontGlyph {
             ch,
             tier,
+            source: Ui2FontGlyphSource::Athlas,
             advance_px: glyph.region.src_w.max(1),
             line_height_px: glyph.region.src_h.max(tier.atlas_line_height_px()),
             draw_w_px: glyph.region.src_w.max(1),
@@ -396,6 +400,7 @@ fn ui2_font_resolve_twemoji_glyph(tier: Ui2FontTier, ch: char) -> Option<Ui2Font
     Some(Ui2FontGlyph {
         ch,
         tier,
+        source: Ui2FontGlyphSource::Twemoji,
         advance_px: draw_w_px,
         line_height_px: target_h,
         draw_w_px,
