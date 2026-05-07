@@ -88,6 +88,13 @@ struct ChatSession {
     inbound: WriteHalf<DuplexStream>,
 }
 
+struct ChatEndpoint {
+    vnet: &'static VNet,
+    listener: Option<(api::NetHandle, u16)>,
+    sessions: Vec<ChatSession>,
+    dev_idx: usize,
+}
+
 fn status_code(status: u16) -> hyper::StatusCode {
     hyper::StatusCode::from_u16(status).unwrap_or(hyper::StatusCode::INTERNAL_SERVER_ERROR)
 }
@@ -573,79 +580,166 @@ async fn open_lowest_available_listener(vnet: &VNet) -> Option<(api::NetHandle, 
     None
 }
 
+fn chat_dev_usable(dev_idx: usize) -> bool {
+    crate::net::adapter::ipv4_at(dev_idx).is_some()
+        || crate::net::link_state_at(dev_idx)
+            .map(|state| state.up)
+            .unwrap_or(false)
+}
+
+fn log_chat_endpoint(dev_idx: usize, vnet: &VNet, port: u16) {
+    let name = crate::net::device_name_at(dev_idx).unwrap_or("?");
+    match crate::net::adapter::ipv4_at(dev_idx) {
+        Some([a, b, c, d]) => crate::log!(
+            "chat-http: listening on tcp {} owner={} dev={} {} ip={}.{}.{}.{}\n",
+            port,
+            vnet.owner(),
+            dev_idx,
+            name,
+            a,
+            b,
+            c,
+            d
+        ),
+        None => crate::log!(
+            "chat-http: listening on tcp {} owner={} dev={} {} ip=none\n",
+            port,
+            vnet.owner(),
+            dev_idx,
+            name
+        ),
+    }
+}
+
+async fn chat_add_endpoints(endpoints: &mut Vec<ChatEndpoint>) -> usize {
+    let mut added = 0;
+    for dev_idx in 0..crate::net::device_count() {
+        if endpoints.iter().any(|endpoint| endpoint.dev_idx == dev_idx) {
+            continue;
+        }
+        if !chat_dev_usable(dev_idx) {
+            continue;
+        }
+        let Some(vnet) = VNet::open(dev_idx) else {
+            continue;
+        };
+        let listener = open_lowest_available_listener(&vnet).await;
+        let Some((_, port)) = listener else {
+            crate::log!("chat-http: no free tcp port dev={}\n", dev_idx);
+            continue;
+        };
+        let vnet_ref: &'static VNet = Box::leak(Box::new(vnet));
+        if CHAT_HTTP_PORT.load(Ordering::Acquire) == 0 {
+            CHAT_HTTP_PORT.store(port, Ordering::Release);
+        }
+        log_chat_endpoint(dev_idx, vnet_ref, port);
+        endpoints.push(ChatEndpoint {
+            vnet: vnet_ref,
+            listener,
+            sessions: Vec::new(),
+            dev_idx,
+        });
+        added += 1;
+    }
+    added
+}
+
 async fn chat_http_runtime() {
     load_chat_hub_once_sync();
 
-    let vnet_ref: &'static VNet = loop {
-        if let Some(vnet) = VNet::open_primary() {
-            break Box::leak(Box::new(vnet));
-        }
-        tokio::time::sleep(core::time::Duration::from_millis(CHAT_HTTP_VNET_OPEN_RETRY_MS)).await;
-    };
-
-    let mut listener: Option<(api::NetHandle, u16)> = None;
-    let mut sessions: Vec<ChatSession> = Vec::new();
-
+    let mut endpoints: Vec<ChatEndpoint> = Vec::new();
     loop {
-        if listener.is_none() {
-            listener = open_lowest_available_listener(vnet_ref).await;
-            if let Some((_, port)) = listener {
-                CHAT_HTTP_PORT.store(port, Ordering::Release);
-                crate::log!("chat-http: listening on tcp {}\n", port);
-            } else {
-                CHAT_HTTP_PORT.store(0, Ordering::Release);
-                crate::log!("chat-http: no free tcp port in service ranges\n");
-                tokio::time::sleep(core::time::Duration::from_secs(5)).await;
-                continue;
-            }
+        chat_add_endpoints(&mut endpoints).await;
+        if !endpoints.is_empty() {
+            break;
         }
+        CHAT_HTTP_PORT.store(0, Ordering::Release);
+        crate::log!("chat-http: waiting for a usable NIC\n");
+        tokio::time::sleep(core::time::Duration::from_millis(CHAT_HTTP_VNET_OPEN_RETRY_MS)).await;
+    }
 
-        while let Some(ev) = vnet_ref.pop_event() {
-            match ev {
-                api::Event::TcpEstablished { handle } => {
-                    if sessions.iter().all(|session| session.handle != handle) {
-                        sessions.push(spawn_hyper_session(vnet_ref, handle));
-                    }
-                }
-                api::Event::TcpData { handle, data } => {
-                    let idx = match sessions.iter().position(|session| session.handle == handle) {
-                        Some(idx) => idx,
-                        None => {
-                            sessions.push(spawn_hyper_session(vnet_ref, handle));
-                            sessions.len().saturating_sub(1)
+    let mut endpoint_discovery_ticks = 0u32;
+    loop {
+        if endpoint_discovery_ticks == 0 {
+            chat_add_endpoints(&mut endpoints).await;
+        }
+        endpoint_discovery_ticks = (endpoint_discovery_ticks + 1) % 100;
+
+        for endpoint in endpoints.iter_mut() {
+            while let Some(ev) = endpoint.vnet.pop_event() {
+                match ev {
+                    api::Event::TcpEstablished { handle } => {
+                        crate::log!(
+                            "chat-http: tcp established dev={} handle={}\n",
+                            endpoint.dev_idx,
+                            handle.0
+                        );
+                        if endpoint
+                            .sessions
+                            .iter()
+                            .all(|session| session.handle != handle)
+                        {
+                            endpoint
+                                .sessions
+                                .push(spawn_hyper_session(endpoint.vnet, handle));
                         }
-                    };
-                    if sessions[idx]
-                        .inbound
-                        .write_all(data.as_slice())
-                        .await
-                        .is_err()
-                    {
-                        let _ = vnet_ref.submit(api::Command::Close { handle });
-                        sessions.swap_remove(idx);
                     }
-                }
-                api::Event::Closed { handle } => {
-                    if listener.map(|(listener_handle, _)| listener_handle) == Some(handle) {
-                        crate::log!("chat-http: listener closed, reopening\n");
-                        CHAT_HTTP_PORT.store(0, Ordering::Release);
-                        listener = None;
+                    api::Event::TcpData { handle, data } => {
+                        let idx = match endpoint
+                            .sessions
+                            .iter()
+                            .position(|session| session.handle == handle)
+                        {
+                            Some(idx) => idx,
+                            None => {
+                                endpoint
+                                    .sessions
+                                    .push(spawn_hyper_session(endpoint.vnet, handle));
+                                endpoint.sessions.len().saturating_sub(1)
+                            }
+                        };
+                        if endpoint.sessions[idx]
+                            .inbound
+                            .write_all(data.as_slice())
+                            .await
+                            .is_err()
+                        {
+                            let _ = endpoint.vnet.submit(api::Command::Close { handle });
+                            endpoint.sessions.swap_remove(idx);
+                        }
                     }
-                    if let Some(idx) = sessions.iter().position(|session| session.handle == handle)
-                    {
-                        let mut session = sessions.swap_remove(idx);
-                        let _ = session.inbound.shutdown().await;
+                    api::Event::Closed { handle } => {
+                        if endpoint.listener.map(|(listener_handle, _)| listener_handle)
+                            == Some(handle)
+                        {
+                            crate::log!(
+                                "chat-http: listener closed dev={}, reopening\n",
+                                endpoint.dev_idx
+                            );
+                            endpoint.listener = open_lowest_available_listener(endpoint.vnet).await;
+                            if let Some((_, port)) = endpoint.listener {
+                                log_chat_endpoint(endpoint.dev_idx, endpoint.vnet, port);
+                            }
+                        }
+                        if let Some(idx) = endpoint
+                            .sessions
+                            .iter()
+                            .position(|session| session.handle == handle)
+                        {
+                            let mut session = endpoint.sessions.swap_remove(idx);
+                            let _ = session.inbound.shutdown().await;
+                        }
                     }
+                    api::Event::Error { msg } => {
+                        crate::log!("chat-http: vnet error dev={} {}\n", endpoint.dev_idx, msg);
+                    }
+                    api::Event::Opened { .. }
+                    | api::Event::TcpSent { .. }
+                    | api::Event::UdpPacket { .. }
+                    | api::Event::UdpPacketV6 { .. }
+                    | api::Event::IcmpReply { .. }
+                    | api::Event::IcmpReplyV6 { .. } => {}
                 }
-                api::Event::Error { msg } => {
-                    crate::log!("chat-http: vnet error {}\n", msg);
-                }
-                api::Event::Opened { .. }
-                | api::Event::TcpSent { .. }
-                | api::Event::UdpPacket { .. }
-                | api::Event::UdpPacketV6 { .. }
-                | api::Event::IcmpReply { .. }
-                | api::Event::IcmpReplyV6 { .. } => {}
             }
         }
 

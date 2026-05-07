@@ -1,3 +1,6 @@
+simple_triangle_dump: physical[0] vendor=0x10DE device=0x2489 type=discrete api=0x00404149 driver=0x94CE80C0 name="NVIDIA GeForce RTX 3060 Ti"
+simple_triangle_dump: physical[1] vendor=0x8086 device=0xA780 type=integrated api=0x0040413E driver=0x06402008 name="Intel(R) Graphics (RPL-S)"
+simple_triangle_dump: selected vendor=0x8086 device=0xA780 queue_family=0 name="Intel(R) Graphics (RPL-S)"
 host-state summary: path=mesa genX_simple_shader trivial-triangle target=gfx125
 host-state cc_viewport min_depth=0.0 max_depth=1.0
 host-state clip perspective_divide_disable=1
