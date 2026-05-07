@@ -44,9 +44,11 @@ static LOGGED_SHADOW_ENQUEUE: AtomicBool = AtomicBool::new(false);
 static LOGGED_SHADOW_DROPPED: AtomicBool = AtomicBool::new(false);
 static LOGGED_MISSING_MATRIX: AtomicBool = AtomicBool::new(false);
 static LOGGED_ENQUEUE: AtomicBool = AtomicBool::new(false);
+static REMOTE_ROUTE_AVAILABLE: AtomicBool = AtomicBool::new(false);
 static MATRIX_MANIFEST: Mutex<Vec<LumenMatrixManifestEntry>> = Mutex::new(Vec::new());
 static SHADOW_BF16_MATVEC_FRAMES: Mutex<VecDeque<Vec<u8>>> = Mutex::new(VecDeque::new());
 static PENDING_BF16_MATVECS: Mutex<VecDeque<RemoteBf16MatvecJob>> = Mutex::new(VecDeque::new());
+static RESULT_BF16_MATVECS: Mutex<Vec<RemoteBf16MatvecResultReassembly>> = Mutex::new(Vec::new());
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct LumenNetBackendTelemetry {
@@ -87,6 +89,25 @@ struct RemoteBf16MatvecJob {
     w_rowmajor_bf16_len: usize,
     out_ptr: usize,
     out_len: usize,
+}
+
+#[derive(Debug)]
+struct RemoteBf16MatvecResultReassembly {
+    job_id: u64,
+    total_bytes: usize,
+    received_bytes: usize,
+    chunks: usize,
+    data: Vec<u8>,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct RemoteBf16MatvecResultUpdate {
+    pub(crate) received_bytes: usize,
+    pub(crate) total_bytes: usize,
+    pub(crate) chunks: usize,
+    pub(crate) complete: bool,
+    pub(crate) copied_rows: usize,
+    pub(crate) checksum: u64,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -190,9 +211,8 @@ pub(crate) fn enqueue_remote_bf16_matvec_suffix(
     out: &mut [f32],
     chunk_rows: usize,
 ) -> Option<RemoteBf16MatvecTicket> {
-    enqueue_shadow_bf16_matvec_suffix(x, w_rowmajor_bf16, n_rows, k_dim, out, chunk_rows);
-
     if !route_bf16_matvec_to_net_backend() {
+        enqueue_shadow_bf16_matvec_suffix(x, w_rowmajor_bf16, n_rows, k_dim, out, chunk_rows);
         if !LOGGED_DISABLED.swap(true, Ordering::AcqRel) {
             crate::log!(
                 "lumen-net: remote bf16 matvec adapter present route_enabled=0 action=local-burn-baby-only\n"
@@ -256,10 +276,32 @@ pub(crate) fn enqueue_remote_bf16_matvec_suffix(
 
     let header = encode_bf16_matvec_header(&job);
     let host_cookie = host_descriptor_cookie(&job);
+    let x_bytes = k_dim.saturating_mul(core::mem::size_of::<f32>());
+    let x_chunk_bytes = shadow_x_chunk_bytes();
+    let x_chunks = x_bytes.div_ceil(x_chunk_bytes);
+    let needed_frames = x_chunks.saturating_add(1);
+
+    {
+        let mut queue = SHADOW_BF16_MATVEC_FRAMES.lock();
+        let frame_cap = crate::allcaps::lumen::NET_BF16_MATVEC_SHADOW_FRAME_QUEUE_CAP;
+        if queue.len().saturating_add(needed_frames) > frame_cap {
+            if !LOGGED_SHADOW_DROPPED.swap(true, Ordering::AcqRel) {
+                crate::log!(
+                    "lumen-net: bf16 matvec remote drop reason=frame-queue-full cap={} need={} pending_frames={}\n",
+                    frame_cap,
+                    needed_frames,
+                    queue.len(),
+                );
+            }
+            return None;
+        }
+        push_bf16_matvec_frames(&mut queue, &job, x_chunk_bytes);
+    }
+
     PENDING_BF16_MATVECS.lock().push_back(job);
     if !LOGGED_ENQUEUE.swap(true, Ordering::AcqRel) {
         crate::log!(
-            "lumen-net: bf16 matvec remote enqueue job={} rows={}..{} n_rows={} k_dim={} matrix=0x{:016X} host=0x{:016X} frame_magic=0x{:08X} opcode={} note=tcp-send-and-result-completion-not-wired\n",
+            "lumen-net: bf16 matvec remote enqueue job={} rows={}..{} n_rows={} k_dim={} matrix=0x{:016X} host=0x{:016X} frame_magic=0x{:08X} opcode={} x_bytes={} frames={} completion=tcp-result\n",
             job.job_id,
             job.row_start,
             job.row_end,
@@ -268,21 +310,11 @@ pub(crate) fn enqueue_remote_bf16_matvec_suffix(
             job.matrix_id,
             host_cookie,
             header.magic,
-            header.opcode
+            header.opcode,
+            x_bytes,
+            needed_frames
         );
     }
-
-    // Intended wire shape:
-    //   1. TCP connect/write LumenNetFrameHeader.
-    //   2. Write x[0..k_dim] as little-endian f32 bytes.
-    //   3. Peer has same model epoch/weights loaded and resolves matrix_id
-    //      to its local row-major BF16 matrix.
-    //   4. Peer returns job_id + row_start + row_count + f32 outputs.
-    //   5. Completion copies returned outputs into out[row_start..row_end].
-    //
-    // This first half deliberately only claims the row range and queues the
-    // descriptor. Do not enable ROUTE_BF16_MATVEC_TO_NET_BACKEND until the
-    // TCP/result side can complete or shadow-compare.
 
     Some(RemoteBf16MatvecTicket {
         job_id,
@@ -382,25 +414,7 @@ fn enqueue_shadow_bf16_matvec_suffix(
         return;
     }
 
-    queue.push_back(encode_shadow_descriptor_frame(&job));
-    for (chunk_index, offset) in (0..x_bytes).step_by(x_chunk_bytes).enumerate() {
-        let end = offset.saturating_add(x_chunk_bytes).min(x_bytes);
-        // `x` is the live activation slice for this matvec call; encode the
-        // bytes into owned queue frames before returning to inference.
-        let chunk = unsafe {
-            core::slice::from_raw_parts(
-                (job.x_ptr as *const u8).add(offset),
-                end.saturating_sub(offset),
-            )
-        };
-        queue.push_back(encode_shadow_x_chunk_frame(
-            job.job_id,
-            chunk_index,
-            offset,
-            x_bytes,
-            chunk,
-        ));
-    }
+    push_bf16_matvec_frames(&mut queue, &job, x_chunk_bytes);
 
     if !LOGGED_SHADOW_ENQUEUE.swap(true, Ordering::AcqRel) {
         crate::log!(
@@ -430,6 +444,158 @@ pub(crate) fn take_shadow_bf16_matvec_frame() -> Option<Vec<u8>> {
     SHADOW_BF16_MATVEC_FRAMES.lock().pop_front()
 }
 
+pub(crate) fn record_remote_bf16_matvec_result_chunk(
+    job_id: u64,
+    offset: usize,
+    total_bytes: usize,
+    chunk: &[u8],
+) -> Option<RemoteBf16MatvecResultUpdate> {
+    if chunk.is_empty()
+        || total_bytes == 0
+        || offset.saturating_add(chunk.len()) > total_bytes
+        || total_bytes % core::mem::size_of::<f32>() != 0
+    {
+        return None;
+    }
+
+    let mut results = RESULT_BF16_MATVECS.lock();
+    let index = if let Some(index) = results.iter().position(|entry| entry.job_id == job_id) {
+        index
+    } else {
+        let mut data = Vec::new();
+        data.resize(total_bytes, 0);
+        results.push(RemoteBf16MatvecResultReassembly {
+            job_id,
+            total_bytes,
+            received_bytes: 0,
+            chunks: 0,
+            data,
+        });
+        results.len().saturating_sub(1)
+    };
+
+    let entry = &mut results[index];
+    if entry.total_bytes != total_bytes || entry.data.len() != total_bytes {
+        return None;
+    }
+    entry.data[offset..offset.saturating_add(chunk.len())].copy_from_slice(chunk);
+    entry.received_bytes = entry
+        .received_bytes
+        .saturating_add(chunk.len())
+        .min(total_bytes);
+    entry.chunks = entry.chunks.saturating_add(1);
+    let complete = entry.received_bytes >= entry.total_bytes;
+    let checksum = if complete {
+        fnv1a64(entry.data.as_slice())
+    } else {
+        0
+    };
+    let received_bytes = if complete {
+        total_bytes
+    } else {
+        entry.received_bytes
+    };
+    let chunks = entry.chunks;
+    let mut copied_rows = 0usize;
+
+    if complete {
+        let mut pending = PENDING_BF16_MATVECS.lock();
+        if let Some(pending_index) = pending.iter().position(|job| job.job_id == job_id) {
+            let job = pending[pending_index];
+            let expected_bytes = job
+                .row_end
+                .saturating_sub(job.row_start)
+                .saturating_mul(core::mem::size_of::<f32>());
+            if expected_bytes == entry.total_bytes && job.out_len >= job.row_end {
+                let out = unsafe {
+                    core::slice::from_raw_parts_mut(job.out_ptr as *mut f32, job.out_len)
+                };
+                for (idx, bytes) in entry.data.chunks_exact(4).enumerate() {
+                    out[job.row_start + idx] =
+                        f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                    copied_rows = copied_rows.saturating_add(1);
+                }
+                pending.remove(pending_index);
+            }
+        }
+        results.remove(index);
+    }
+
+    Some(RemoteBf16MatvecResultUpdate {
+        received_bytes,
+        total_bytes,
+        chunks,
+        complete,
+        copied_rows,
+        checksum,
+    })
+}
+
+pub(crate) fn remote_bf16_matvec_pending(job_id: u64) -> bool {
+    PENDING_BF16_MATVECS
+        .lock()
+        .iter()
+        .any(|job| job.job_id == job_id)
+}
+
+pub(crate) fn cancel_remote_bf16_matvec(job_id: u64) -> bool {
+    RESULT_BF16_MATVECS
+        .lock()
+        .retain(|entry| entry.job_id != job_id);
+    let mut pending = PENDING_BF16_MATVECS.lock();
+    if let Some(index) = pending.iter().position(|job| job.job_id == job_id) {
+        pending.remove(index);
+        true
+    } else {
+        false
+    }
+}
+
+pub(crate) fn wait_remote_bf16_matvec(ticket: RemoteBf16MatvecTicket) -> bool {
+    let start = embassy_time_driver::now();
+    let timeout_ticks = crate::allcaps::lumen::NET_BF16_MATVEC_RESULT_WAIT_TIMEOUT_MS
+        .saturating_mul(embassy_time_driver::TICK_HZ.max(1))
+        / 1000;
+    loop {
+        if !remote_bf16_matvec_pending(ticket.job_id) {
+            return true;
+        }
+        crate::time::poll();
+        crate::smp::poll();
+        if timeout_ticks != 0 && embassy_time_driver::now().saturating_sub(start) > timeout_ticks {
+            return false;
+        }
+        core::hint::spin_loop();
+    }
+}
+
+fn push_bf16_matvec_frames(
+    queue: &mut VecDeque<Vec<u8>>,
+    job: &RemoteBf16MatvecJob,
+    x_chunk_bytes: usize,
+) {
+    let x_bytes = job.x_len.saturating_mul(core::mem::size_of::<f32>());
+    queue.push_back(encode_shadow_descriptor_frame(job));
+    for (chunk_index, offset) in (0..x_bytes).step_by(x_chunk_bytes.max(1)).enumerate() {
+        let end = offset.saturating_add(x_chunk_bytes).min(x_bytes);
+        // `x` is the live activation slice for this matvec call; encode the
+        // bytes into owned queue frames before returning to inference.
+        let chunk = unsafe {
+            core::slice::from_raw_parts(
+                (job.x_ptr as *const u8).add(offset),
+                end.saturating_sub(offset),
+            )
+        };
+        queue.push_back(encode_shadow_x_chunk_frame(
+            job.job_id,
+            chunk_index,
+            offset,
+            x_bytes,
+            chunk,
+        ));
+    }
+}
+
 pub(crate) fn compute_shadow_bf16_matvec_proof(
     matrix_id: u64,
     row_start: usize,
@@ -439,10 +605,25 @@ pub(crate) fn compute_shadow_bf16_matvec_proof(
     x_bytes: &[u8],
     max_rows: usize,
 ) -> Option<ShadowBf16MatvecProof> {
+    compute_shadow_bf16_matvec_result_bytes(
+        matrix_id, row_start, row_count, n_rows, k_dim, x_bytes, max_rows,
+    )
+    .map(|(proof, _result)| proof)
+}
+
+pub(crate) fn compute_shadow_bf16_matvec_result_bytes(
+    matrix_id: u64,
+    row_start: usize,
+    row_count: usize,
+    n_rows: usize,
+    k_dim: usize,
+    x_bytes: &[u8],
+    max_proof_rows: usize,
+) -> Option<(ShadowBf16MatvecProof, Vec<u8>)> {
     if !crate::allcaps::lumen::NET_BF16_MATVEC_SHADOW_COMPUTE_PROOF {
         return None;
     }
-    if row_count == 0 || n_rows == 0 || k_dim == 0 || max_rows == 0 {
+    if row_count == 0 || n_rows == 0 || k_dim == 0 || max_proof_rows == 0 {
         return None;
     }
     if row_start >= n_rows || x_bytes.len() != k_dim.saturating_mul(core::mem::size_of::<f32>()) {
@@ -454,7 +635,8 @@ pub(crate) fn compute_shadow_bf16_matvec_proof(
     }
 
     let matrix = resolve_bf16_matrix_by_id(matrix_id, n_rows, k_dim)?;
-    let proof_rows = row_end.saturating_sub(row_start).min(max_rows);
+    let all_rows = row_end.saturating_sub(row_start);
+    let proof_rows = all_rows.min(max_proof_rows);
     let mut x = Vec::with_capacity(k_dim);
     for chunk in x_bytes.chunks_exact(4) {
         x.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
@@ -471,7 +653,8 @@ pub(crate) fn compute_shadow_bf16_matvec_proof(
     let mut checksum = 0xCBF2_9CE4_8422_2325u64;
     let mut first = 0.0f32;
     let mut last = 0.0f32;
-    for (proof_idx, row) in (row_start..row_start.saturating_add(proof_rows)).enumerate() {
+    let mut result = Vec::with_capacity(all_rows.saturating_mul(core::mem::size_of::<f32>()));
+    for (result_idx, row) in (row_start..row_end).enumerate() {
         let base = row.checked_mul(k_dim)?.checked_mul(2)?;
         let row_weights = weights.get(base..base.saturating_add(k_dim.saturating_mul(2)))?;
         let mut acc = 0.0f32;
@@ -480,22 +663,29 @@ pub(crate) fn compute_shadow_bf16_matvec_proof(
             let bits = u16::from_le_bytes([row_weights[off], row_weights[off + 1]]);
             acc += x[idx] * bf16_to_f32(bits);
         }
-        if proof_idx == 0 {
+        if result_idx == 0 {
             first = acc;
         }
         last = acc;
-        for byte in acc.to_bits().to_le_bytes() {
-            checksum ^= byte as u64;
-            checksum = checksum.wrapping_mul(0x0000_0100_0000_01B3);
+        let acc_bytes = acc.to_le_bytes();
+        result.extend_from_slice(&acc_bytes);
+        if result_idx < proof_rows {
+            for byte in acc_bytes {
+                checksum ^= byte as u64;
+                checksum = checksum.wrapping_mul(0x0000_0100_0000_01B3);
+            }
         }
     }
 
-    Some(ShadowBf16MatvecProof {
-        rows: proof_rows,
-        checksum,
-        first,
-        last,
-    })
+    Some((
+        ShadowBf16MatvecProof {
+            rows: proof_rows,
+            checksum,
+            first,
+            last,
+        },
+        result,
+    ))
 }
 
 fn encode_shadow_descriptor_frame(job: &RemoteBf16MatvecJob) -> Vec<u8> {
@@ -538,12 +728,26 @@ fn encode_shadow_x_chunk_frame(
     out
 }
 
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash = 0xCBF2_9CE4_8422_2325u64;
+    for byte in bytes {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01B3);
+    }
+    hash
+}
+
 pub(crate) fn route_bf16_matvec_to_net_backend() -> bool {
     crate::allcaps::lumen::ROUTE_BF16_MATVEC_TO_NET_BACKEND
+        && REMOTE_ROUTE_AVAILABLE.load(Ordering::Acquire)
 }
 
 pub(crate) fn shadow_bf16_matvec_to_net_backend() -> bool {
     crate::allcaps::lumen::SHADOW_BF16_MATVEC_TO_NET_BACKEND
+}
+
+pub(crate) fn set_remote_bf16_route_available(available: bool) {
+    REMOTE_ROUTE_AVAILABLE.store(available, Ordering::Release);
 }
 
 pub(crate) fn backend_telemetry(capacity_lanes: u32) -> LumenNetBackendTelemetry {

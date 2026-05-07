@@ -1,4 +1,6 @@
-use super::{DriverStatus, NetStats, NetworkDriver};
+#![allow(dead_code)]
+
+use super::{DriverStatus, NetworkDriver};
 use crate::pci::PciDevice;
 use alloc::boxed::Box;
 use alloc::string::String;

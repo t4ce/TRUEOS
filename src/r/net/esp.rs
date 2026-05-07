@@ -20,6 +20,7 @@ const TRUEOS_LUMEN_WORK_PROBE_PREFIX: &str = "C0DEC0DE LUMEN_CAN_TAKE_WORK";
 const TRUEOS_LUMEN_WORK_CAP_PREFIX: &str = "C0DEC0DE LUMEN_WORK_CAP";
 const TRUEOS_LUMEN_MATVEC_SHADOW_PREFIX: &str = "C0DEC0DE LUMEN_MATVEC_SHADOW";
 const TRUEOS_LUMEN_MATVEC_XCHUNK_PREFIX: &str = "C0DEC0DE LUMEN_MATVEC_XCHUNK";
+const TRUEOS_LUMEN_MATVEC_RESULT_CHUNK_PREFIX: &str = "C0DEC0DE LUMEN_MATVEC_RESULT_CHUNK";
 const TRUEOS_LUMEN_APP_MAGIC: u32 = 0x3153_4F4C; // LOS1
 const TRUEOS_LUMEN_APP_HEADER_BYTES: usize = 12;
 const TRUEOS_LUMEN_APP_RX_BUF_BYTES: usize = v::vnet::MAX_MSG * 4;
@@ -292,10 +293,16 @@ fn parse_usize_field(part: &str, name: &str) -> Option<usize> {
 }
 
 fn parse_trueos_lumen_work_capacity(data: &[u8]) -> Option<LumenWorkCapacity> {
-    let text = core::str::from_utf8(data).ok()?;
-    let line = text
-        .lines()
-        .find(|line| line.trim_start().starts_with(TRUEOS_LUMEN_WORK_CAP_PREFIX))?;
+    let prefix = TRUEOS_LUMEN_WORK_CAP_PREFIX.as_bytes();
+    let start = data
+        .windows(prefix.len())
+        .position(|window| window == prefix)?;
+    let end = data[start..]
+        .iter()
+        .position(|byte| *byte == b'\n' || *byte == b'\r')
+        .map(|offset| start.saturating_add(offset))
+        .unwrap_or(data.len());
+    let line = core::str::from_utf8(&data[start..end]).ok()?;
     let mut out = LumenWorkCapacity::default();
     for part in line.split_ascii_whitespace() {
         if let Some(value) = parse_u32_field(part, "n=") {
@@ -317,6 +324,16 @@ fn parse_trueos_lumen_work_capacity(data: &[u8]) -> Option<LumenWorkCapacity> {
 
 #[derive(Copy, Clone, Debug)]
 struct LumenMatvecXChunk<'a> {
+    job_id: u64,
+    chunk_index: usize,
+    offset: usize,
+    bytes: usize,
+    total: usize,
+    hex: &'a str,
+}
+
+#[derive(Copy, Clone, Debug)]
+struct LumenMatvecResultChunk<'a> {
     job_id: u64,
     chunk_index: usize,
     offset: usize,
@@ -377,6 +394,38 @@ fn parse_lumen_matvec_xchunk(line: &str) -> Option<LumenMatvecXChunk<'_>> {
         }
     }
     Some(LumenMatvecXChunk {
+        job_id: job_id?,
+        chunk_index: chunk_index?,
+        offset: offset?,
+        bytes: bytes?,
+        total: total?,
+        hex: hex?,
+    })
+}
+
+fn parse_lumen_matvec_result_chunk(line: &str) -> Option<LumenMatvecResultChunk<'_>> {
+    let mut job_id = None;
+    let mut chunk_index = None;
+    let mut offset = None;
+    let mut bytes = None;
+    let mut total = None;
+    let mut hex = None;
+    for part in line.split_ascii_whitespace() {
+        if let Some(value) = parse_u64_field(part, "job=") {
+            job_id = Some(value);
+        } else if let Some(value) = parse_usize_field(part, "chunk=") {
+            chunk_index = Some(value);
+        } else if let Some(value) = parse_usize_field(part, "offset=") {
+            offset = Some(value);
+        } else if let Some(value) = parse_usize_field(part, "bytes=") {
+            bytes = Some(value);
+        } else if let Some(value) = parse_usize_field(part, "total=") {
+            total = Some(value);
+        } else if let Some(value) = part.strip_prefix("hex=") {
+            hex = Some(value);
+        }
+    }
+    Some(LumenMatvecResultChunk {
         job_id: job_id?,
         chunk_index: chunk_index?,
         offset: offset?,
@@ -524,6 +573,28 @@ fn hex_nibble(byte: u8) -> Option<u8> {
     }
 }
 
+fn decode_hex_exact(hex: &str, bytes: usize) -> Option<Vec<u8>> {
+    if hex.len() < bytes.saturating_mul(2) {
+        return None;
+    }
+    let hex = hex.as_bytes();
+    let mut out = Vec::with_capacity(bytes);
+    for i in 0..bytes {
+        let hi = hex_nibble(hex[i.saturating_mul(2)])?;
+        let lo = hex_nibble(hex[i.saturating_mul(2).saturating_add(1)])?;
+        out.push((hi << 4) | lo);
+    }
+    Some(out)
+}
+
+fn append_hex(out: &mut Vec<u8>, bytes: &[u8]) {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize]);
+        out.push(HEX[(byte & 0x0F) as usize]);
+    }
+}
+
 fn fnv1a64(bytes: &[u8]) -> u64 {
     let mut hash = 0xCBF2_9CE4_8422_2325u64;
     for byte in bytes {
@@ -534,6 +605,7 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 }
 
 fn process_lumen_app_text_payload(
+    vnet: &VNet,
     handle: v::vnet::NetHandle,
     payload: &[u8],
     shadow_descriptors: &mut Vec<LumenMatvecShadowDescriptor>,
@@ -553,6 +625,35 @@ fn process_lumen_app_text_payload(
     let Ok(text) = core::str::from_utf8(payload) else {
         return;
     };
+    for line in text.lines().filter(|line| {
+        line.trim_start()
+            .starts_with(TRUEOS_LUMEN_MATVEC_RESULT_CHUNK_PREFIX)
+    }) {
+        if let Some(chunk) = parse_lumen_matvec_result_chunk(line)
+            && let Some(bytes) = decode_hex_exact(chunk.hex, chunk.bytes)
+            && let Some(update) = crate::lumen::lumen_net::record_remote_bf16_matvec_result_chunk(
+                chunk.job_id,
+                chunk.offset,
+                chunk.total,
+                bytes.as_slice(),
+            )
+        {
+            crate::log!(
+                "esp-gate: lumen matvec result chunk received handle={} job={} chunk={} offset={} bytes={} total={} got={} chunks={} complete={} copied_rows={} checksum=0x{:016X}\n",
+                handle.0,
+                chunk.job_id,
+                chunk.chunk_index,
+                chunk.offset,
+                chunk.bytes,
+                chunk.total,
+                update.received_bytes,
+                update.chunks,
+                if update.complete { 1 } else { 0 },
+                update.copied_rows,
+                update.checksum
+            );
+        }
+    }
     for line in text.lines().filter(|line| {
         line.trim_start()
             .starts_with(TRUEOS_LUMEN_MATVEC_XCHUNK_PREFIX)
@@ -576,8 +677,8 @@ fn process_lumen_app_text_payload(
                         shadow_descriptor_for_job(shadow_descriptors.as_slice(), chunk.job_id)
                         && let Some(x_bytes) =
                             shadow_x_data_for_job(shadow_x_reassemblies.as_slice(), chunk.job_id)
-                        && let Some(proof) =
-                            crate::lumen::lumen_net::compute_shadow_bf16_matvec_proof(
+                        && let Some((proof, result_bytes)) =
+                            crate::lumen::lumen_net::compute_shadow_bf16_matvec_result_bytes(
                                 descriptor.matrix_id,
                                 descriptor.row_start,
                                 descriptor.row_end.saturating_sub(descriptor.row_start),
@@ -587,8 +688,14 @@ fn process_lumen_app_text_payload(
                                 crate::allcaps::lumen::NET_BF16_MATVEC_SHADOW_COMPUTE_PROOF_ROWS,
                             )
                     {
+                        let result_frames = submit_trueos_lumen_result_frames(
+                            vnet,
+                            handle,
+                            chunk.job_id,
+                            result_bytes.as_slice(),
+                        );
                         crate::log!(
-                            "esp-gate: lumen matvec x reassembled job={} bytes={} chunks={} checksum=0x{:016X} proof=remote-bf16-matvec rows={} matrix=0x{:016X} result_checksum=0x{:016X} first={:.6} last={:.6}\n",
+                            "esp-gate: lumen matvec x reassembled job={} bytes={} chunks={} checksum=0x{:016X} proof=remote-bf16-matvec rows={} matrix=0x{:016X} result_checksum=0x{:016X} first={:.6} last={:.6} result_bytes={} result_frames={}\n",
                             chunk.job_id,
                             update.total_bytes,
                             update.chunks,
@@ -597,7 +704,9 @@ fn process_lumen_app_text_payload(
                             descriptor.matrix_id,
                             proof.checksum,
                             proof.first,
-                            proof.last
+                            proof.last,
+                            result_bytes.len(),
+                            result_frames
                         );
                     } else {
                         crate::log!(
@@ -712,6 +821,65 @@ fn submit_trueos_lumen_shadow_frame_to_first_peer(
         crate::lumen::lumen_net::pending_shadow_bf16_matvecs()
     );
     true
+}
+
+fn encode_lumen_matvec_result_chunk_frame(
+    job_id: u64,
+    chunk_index: usize,
+    offset: usize,
+    total_bytes: usize,
+    chunk: &[u8],
+) -> Vec<u8> {
+    let mut out = format!(
+        "C0DEC0DE LUMEN_MATVEC_RESULT_CHUNK v=1 job={} chunk={} offset={} bytes={} total={} hex=",
+        job_id,
+        chunk_index,
+        offset,
+        chunk.len(),
+        total_bytes,
+    )
+    .into_bytes();
+    append_hex(&mut out, chunk);
+    out.push(b'\n');
+    out
+}
+
+fn submit_trueos_lumen_result_frames(
+    vnet: &VNet,
+    handle: v::vnet::NetHandle,
+    job_id: u64,
+    result_bytes: &[u8],
+) -> usize {
+    let chunk_bytes = crate::allcaps::lumen::NET_BF16_MATVEC_RESULT_CHUNK_BYTES.max(1);
+    let mut sent = 0usize;
+    for (chunk_index, offset) in (0..result_bytes.len()).step_by(chunk_bytes).enumerate() {
+        let end = offset.saturating_add(chunk_bytes).min(result_bytes.len());
+        let payload = encode_lumen_matvec_result_chunk_frame(
+            job_id,
+            chunk_index,
+            offset,
+            result_bytes.len(),
+            &result_bytes[offset..end],
+        );
+        let Some(frame) = encode_lumen_app_text_frame(payload.as_slice()) else {
+            continue;
+        };
+        if frame.len() > v::vnet::MAX_MSG {
+            crate::log!(
+                "esp-gate: lumen matvec result send skipped job={} chunk={} reason=frame-too-large wire_bytes={}\n",
+                job_id,
+                chunk_index,
+                frame.len()
+            );
+            continue;
+        }
+        let _ = vnet.submit(v::vnet::Command::SendTcp {
+            handle,
+            data: v::vnet::ByteBuf::from_slice_trunc(frame.as_slice()),
+        });
+        sent = sent.saturating_add(1);
+    }
+    sent
 }
 
 fn advertise_trueos_peer(vnet: &VNet, udp_handle: v::vnet::NetHandle, node_id: u64) {
@@ -1143,6 +1311,7 @@ pub async fn esp_gate_task() {
                                 |frame| {
                                     if frame.opcode == TRUEOS_LUMEN_APP_OP_TEXT {
                                         process_lumen_app_text_payload(
+                                            &vnet,
                                             handle,
                                             frame.payload,
                                             &mut shadow_descriptors,
@@ -1161,6 +1330,9 @@ pub async fn esp_gate_task() {
                             if let Some(capacity) =
                                 parse_trueos_lumen_work_capacity(data.as_slice())
                             {
+                                if capacity.lanes != 0 {
+                                    crate::lumen::lumen_net::set_remote_bf16_route_available(true);
+                                }
                                 let now_ms = monotonic_ms();
                                 let node_id =
                                     trueos_peer_link_node_id(peer_links.as_slice(), handle);
@@ -1215,6 +1387,9 @@ pub async fn esp_gate_task() {
                     }
                     v::vnet::Event::Closed { handle } => {
                         if remove_trueos_peer_link(peer_links.as_mut_slice(), handle) {
+                            if trueos_peer_link_count(peer_links.as_slice()) == 0 {
+                                crate::lumen::lumen_net::set_remote_bf16_route_available(false);
+                            }
                             crate::log!(
                                 "esp-gate: trueos peer tcp closed handle={} active_links={}\n",
                                 handle.0,
@@ -1338,6 +1513,7 @@ pub async fn esp_gate_task() {
                     submit_trueos_lumen_work_probe_to_all(&vnet, peer_links.as_slice());
                 if lumen_work_probe_sent == 0 {
                     lumen_work_probe_deadline_ms = 0;
+                    crate::lumen::lumen_net::set_remote_bf16_route_available(false);
                     crate::log!(
                         "esp-gate: lumen work capacity probe seq={} skipped reason=no-peers\n",
                         lumen_work_probe_seq
@@ -1345,6 +1521,7 @@ pub async fn esp_gate_task() {
                 } else {
                     lumen_work_probe_deadline_ms =
                         now_ms.saturating_add(TRUEOS_LUMEN_WORK_PROBE_TIMEOUT_MS);
+                    crate::lumen::lumen_net::set_remote_bf16_route_available(true);
                     crate::log!(
                         "esp-gate: lumen work capacity probe seq={} sent={} timeout_ms={}\n",
                         lumen_work_probe_seq,
@@ -1355,6 +1532,9 @@ pub async fn esp_gate_task() {
             }
 
             if lumen_work_probe_deadline_ms != 0 && now_ms >= lumen_work_probe_deadline_ms {
+                if lumen_work_probe_replies == 0 {
+                    crate::lumen::lumen_net::set_remote_bf16_route_available(false);
+                }
                 crate::log!(
                     "esp-gate: lumen work capacity probe seq={} complete sent={} replies={} best={}\n",
                     lumen_work_probe_seq,
