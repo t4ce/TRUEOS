@@ -21,7 +21,6 @@ pub(crate) mod lumen_service;
 use crate::shell2::cmds::bench::{
     bench_cancel_requested, bench_session_finish, bps_from_progress, elapsed_ms_since,
     format_bytes, format_metric_units, format_speed, online_background_worker_slots,
-    units_per_second_from_ticks,
 };
 use crate::shell2::{MatrixTarget, print_matrix_target_line, set_matrix_target_active};
 
@@ -1054,6 +1053,14 @@ fn checksum_f32(values: &[f32]) -> f32 {
         .iter()
         .copied()
         .fold(0.0f32, |acc, value| acc + value)
+}
+
+fn units_per_second_from_ticks(units: u64, elapsed_ticks: u64) -> u64 {
+    if elapsed_ticks == 0 {
+        0
+    } else {
+        units.saturating_mul(embassy_time_driver::TICK_HZ) / elapsed_ticks
+    }
 }
 
 fn top_f32(values: &[f32]) -> Option<(usize, f32)> {
