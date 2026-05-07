@@ -325,6 +325,16 @@ struct LumenMatvecXChunk<'a> {
     hex: &'a str,
 }
 
+#[derive(Copy, Clone, Debug)]
+struct LumenMatvecShadowDescriptor {
+    job_id: u64,
+    matrix_id: u64,
+    row_start: usize,
+    row_end: usize,
+    n_rows: usize,
+    k_dim: usize,
+}
+
 #[derive(Debug)]
 struct ShadowXReassembly {
     job_id: u64,
@@ -373,6 +383,38 @@ fn parse_lumen_matvec_xchunk(line: &str) -> Option<LumenMatvecXChunk<'_>> {
         bytes: bytes?,
         total: total?,
         hex: hex?,
+    })
+}
+
+fn parse_lumen_matvec_shadow_descriptor(line: &str) -> Option<LumenMatvecShadowDescriptor> {
+    let mut job_id = None;
+    let mut matrix_id = None;
+    let mut row_start = None;
+    let mut row_end = None;
+    let mut n_rows = None;
+    let mut k_dim = None;
+    for part in line.split_ascii_whitespace() {
+        if let Some(value) = parse_u64_field(part, "job=") {
+            job_id = Some(value);
+        } else if let Some(value) = parse_u64_field(part, "matrix=") {
+            matrix_id = Some(value);
+        } else if let Some(value) = part.strip_prefix("rows=") {
+            let (start, end) = value.split_once("..")?;
+            row_start = start.parse::<usize>().ok();
+            row_end = end.parse::<usize>().ok();
+        } else if let Some(value) = parse_usize_field(part, "n_rows=") {
+            n_rows = Some(value);
+        } else if let Some(value) = parse_usize_field(part, "k_dim=") {
+            k_dim = Some(value);
+        }
+    }
+    Some(LumenMatvecShadowDescriptor {
+        job_id: job_id?,
+        matrix_id: matrix_id?,
+        row_start: row_start?,
+        row_end: row_end?,
+        n_rows: n_rows?,
+        k_dim: k_dim?,
     })
 }
 
@@ -442,6 +484,37 @@ fn record_shadow_x_chunk(
     })
 }
 
+fn record_shadow_descriptor(
+    descriptors: &mut Vec<LumenMatvecShadowDescriptor>,
+    descriptor: LumenMatvecShadowDescriptor,
+) {
+    if let Some(existing) = descriptors
+        .iter_mut()
+        .find(|item| item.job_id == descriptor.job_id)
+    {
+        *existing = descriptor;
+        return;
+    }
+    descriptors.push(descriptor);
+}
+
+fn shadow_descriptor_for_job(
+    descriptors: &[LumenMatvecShadowDescriptor],
+    job_id: u64,
+) -> Option<LumenMatvecShadowDescriptor> {
+    descriptors
+        .iter()
+        .copied()
+        .find(|item| item.job_id == job_id)
+}
+
+fn shadow_x_data_for_job(reassemblies: &[ShadowXReassembly], job_id: u64) -> Option<&[u8]> {
+    reassemblies
+        .iter()
+        .find(|entry| entry.job_id == job_id && entry.complete)
+        .map(|entry| entry.data.as_slice())
+}
+
 fn hex_nibble(byte: u8) -> Option<u8> {
     match byte {
         b'0'..=b'9' => Some(byte - b'0'),
@@ -463,6 +536,7 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 fn process_lumen_app_text_payload(
     handle: v::vnet::NetHandle,
     payload: &[u8],
+    shadow_descriptors: &mut Vec<LumenMatvecShadowDescriptor>,
     shadow_x_reassemblies: &mut Vec<ShadowXReassembly>,
 ) {
     if let Some(line) = trueos_lumen_matvec_shadow_received(payload) {
@@ -472,6 +546,9 @@ fn process_lumen_app_text_payload(
             payload.len(),
             line
         );
+        if let Some(descriptor) = parse_lumen_matvec_shadow_descriptor(line) {
+            record_shadow_descriptor(shadow_descriptors, descriptor);
+        }
     }
     let Ok(text) = core::str::from_utf8(payload) else {
         return;
@@ -495,13 +572,42 @@ fn process_lumen_app_text_payload(
                     if update.complete { 1 } else { 0 }
                 );
                 if update.complete {
-                    crate::log!(
-                        "esp-gate: lumen matvec x reassembled job={} bytes={} chunks={} checksum=0x{:016X} note=shadow-no-compute\n",
-                        chunk.job_id,
-                        update.total_bytes,
-                        update.chunks,
-                        update.checksum
-                    );
+                    if let Some(descriptor) =
+                        shadow_descriptor_for_job(shadow_descriptors.as_slice(), chunk.job_id)
+                        && let Some(x_bytes) =
+                            shadow_x_data_for_job(shadow_x_reassemblies.as_slice(), chunk.job_id)
+                        && let Some(proof) =
+                            crate::lumen::lumen_net::compute_shadow_bf16_matvec_proof(
+                                descriptor.matrix_id,
+                                descriptor.row_start,
+                                descriptor.row_end.saturating_sub(descriptor.row_start),
+                                descriptor.n_rows,
+                                descriptor.k_dim,
+                                x_bytes,
+                                crate::allcaps::lumen::NET_BF16_MATVEC_SHADOW_COMPUTE_PROOF_ROWS,
+                            )
+                    {
+                        crate::log!(
+                            "esp-gate: lumen matvec x reassembled job={} bytes={} chunks={} checksum=0x{:016X} proof=remote-bf16-matvec rows={} matrix=0x{:016X} result_checksum=0x{:016X} first={:.6} last={:.6}\n",
+                            chunk.job_id,
+                            update.total_bytes,
+                            update.chunks,
+                            update.checksum,
+                            proof.rows,
+                            descriptor.matrix_id,
+                            proof.checksum,
+                            proof.first,
+                            proof.last
+                        );
+                    } else {
+                        crate::log!(
+                            "esp-gate: lumen matvec x reassembled job={} bytes={} chunks={} checksum=0x{:016X} proof=unavailable\n",
+                            chunk.job_id,
+                            update.total_bytes,
+                            update.chunks,
+                            update.checksum
+                        );
+                    }
                 }
             } else {
                 crate::log!(
@@ -945,6 +1051,7 @@ pub async fn esp_gate_task() {
         let mut lumen_work_probe_replies = 0usize;
         let mut lumen_work_probe_best = 0u32;
         let mut lumen_work_probe_seen_nodes: Vec<u64> = Vec::new();
+        let mut shadow_descriptors: Vec<LumenMatvecShadowDescriptor> = Vec::new();
         let mut shadow_x_reassemblies: Vec<ShadowXReassembly> = Vec::new();
         let _ = vnet.submit(gate.bootstrap_command());
         let _ = vnet.submit(v::vnet::Command::OpenTcpListen {
@@ -1038,6 +1145,7 @@ pub async fn esp_gate_task() {
                                         process_lumen_app_text_payload(
                                             handle,
                                             frame.payload,
+                                            &mut shadow_descriptors,
                                             &mut shadow_x_reassemblies,
                                         );
                                     } else {
@@ -1090,10 +1198,16 @@ pub async fn esp_gate_task() {
                     }
                     v::vnet::Event::Closed { handle } if peer_listener == Some(handle) => {
                         peer_listener = None;
-                        let _ = remove_trueos_peer_link(peer_links.as_mut_slice(), handle);
+                        let retained_peer_node =
+                            trueos_peer_link_node_id(peer_links.as_slice(), handle);
+                        if retained_peer_node == 0 {
+                            let _ = remove_trueos_peer_link(peer_links.as_mut_slice(), handle);
+                        }
                         crate::log!(
-                            "esp-gate: trueos peer tcp listener closed, reopening port={}\n",
-                            trueos_esp::gate::TRUEOS_PEER_TCP_PORT
+                            "esp-gate: trueos peer tcp listener closed, reopening port={} retained_peer_node=0x{:016X} active_links={}\n",
+                            trueos_esp::gate::TRUEOS_PEER_TCP_PORT,
+                            retained_peer_node,
+                            trueos_peer_link_count(peer_links.as_slice())
                         );
                         let _ = vnet.submit(v::vnet::Command::OpenTcpListen {
                             port: trueos_esp::gate::TRUEOS_PEER_TCP_PORT,

@@ -3,9 +3,6 @@ use core::ptr::NonNull;
 
 use crate::{disc::block, pci::mmio};
 
-#[allow(unused_imports)]
-pub(crate) use crate::pci::nvme_backend::{NvmeDiagController, diag_snapshot};
-
 macro_rules! nvme_verbose_log {
     ($($arg:tt)*) => {
         if crate::logflag::NVME_VERBOSE {

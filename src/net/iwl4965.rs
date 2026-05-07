@@ -674,7 +674,8 @@ impl Iwl4965 {
 
     /// Map BAR0 to virtual memory and return base address
     fn map_bar0(&mut self, pci_dev: &PciDevice) -> Result<(), &'static str> {
-        if !pci_dev.bar_is_memory(0) {
+        let (bar_lo, _) = crate::pci::read_bar_raw(pci_dev.bus, pci_dev.slot, pci_dev.function, 0);
+        if bar_lo == 0 || (bar_lo & 0x1) != 0 {
             return Err("BAR0 is I/O, need memory");
         }
 
@@ -2661,7 +2662,8 @@ pub fn debug_read_csr(offset: u32) -> Option<u32> {
     });
     if let Some(dev) = found {
         if dev.vendor_id == INTEL_VENDOR && IWL_SUPPORTED_IDS.contains(&dev.device_id) {
-            if !dev.bar_is_memory(0) {
+            let (bar_lo, _) = crate::pci::read_bar_raw(dev.bus, dev.slot, dev.function, 0);
+            if bar_lo == 0 || (bar_lo & 0x1) != 0 {
                 return None;
             }
             let phys = dev.bar_address(0)?;
@@ -2724,7 +2726,8 @@ fn debug_get_mmio() -> Option<usize> {
     });
     if let Some(dev) = found {
         if dev.vendor_id == INTEL_VENDOR && IWL_SUPPORTED_IDS.contains(&dev.device_id) {
-            if !dev.bar_is_memory(0) {
+            let (bar_lo, _) = crate::pci::read_bar_raw(dev.bus, dev.slot, dev.function, 0);
+            if bar_lo == 0 || (bar_lo & 0x1) != 0 {
                 return None;
             }
             let phys = dev.bar_address(0)?;

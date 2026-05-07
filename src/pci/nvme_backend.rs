@@ -8,7 +8,7 @@ use core::{
 
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 
-use crate::{disc::block, dma, pci::mmio, wait};
+use crate::{disc::block, dma, wait};
 
 const NVME_REG_CAP: usize = 0x00;
 const NVME_REG_VS: usize = 0x08;
@@ -585,18 +585,6 @@ impl NvmeIoRuntime {
         Ok(())
     }
 
-    fn flush_blocking(
-        &self,
-        queue: &mut QueuePair,
-        nsid: u32,
-    ) -> core::result::Result<(), block::Error> {
-        let mut sqe = NvmeSqe { d: [0; 16] };
-        sqe.d[0] = NVME_NVM_FLUSH as u32;
-        sqe.d[1] = nsid;
-        let _ = self.io_cmd_blocking(queue, sqe)?;
-        Ok(())
-    }
-
     async fn flush_async(
         &self,
         queue: &mut QueuePair,
@@ -654,12 +642,6 @@ unsafe impl Send for NvmeController {}
 impl NvmeController {
     fn reg32(&self, offset: usize) -> u32 {
         unsafe { read_volatile(self.mmio.as_ptr().add(offset) as *const u32) }
-    }
-
-    fn reg64(&self, offset: usize) -> u64 {
-        let lo = self.reg32(offset) as u64;
-        let hi = self.reg32(offset + 4) as u64;
-        lo | (hi << 32)
     }
 
     fn write32(&self, offset: usize, value: u32) {
@@ -1267,86 +1249,6 @@ impl block::BlockDevice for NvmeWorkerBackend {
     fn flush<'a>(&'a mut self) -> block::BoxFuture<'a, block::Result<()>> {
         Box::pin(async move { self.do_flush().await })
     }
-}
-
-#[derive(Clone)]
-pub(crate) struct NvmeDiagController {
-    pub pci: block::PciAddress,
-    pub bar_base: u64,
-    pub bar_assigned: bool,
-    pub cap: Option<u64>,
-    pub vs: Option<u32>,
-    pub cc: Option<u32>,
-    pub csts: Option<u32>,
-    pub registered: bool,
-}
-
-fn pci_matches(a: &block::PciAddress, b: &block::PciAddress) -> bool {
-    a.bus == b.bus && a.slot == b.slot && a.function == b.function
-}
-
-pub(crate) fn diag_snapshot() -> Vec<NvmeDiagController> {
-    crate::pci::enumerate_impl();
-
-    let registered = crate::disc::block::devices()
-        .into_iter()
-        .filter(|info| info.kind == block::DeviceKind::Nvme)
-        .filter_map(|info| info.pci)
-        .collect::<Vec<_>>();
-
-    let mut out = Vec::new();
-    crate::pci::with_devices(|list| {
-        for dev in list {
-            let class_match = dev.class == 0x01 && dev.subclass == 0x08 && dev.prog_if == 0x02;
-            let samsung_sm961_family = dev.vendor == 0x144D && dev.device == 0xA804;
-            if !(class_match || samsung_sm961_family) {
-                continue;
-            }
-
-            let (bar_lo, bar_hi) =
-                crate::pci::read_bar0_raw_legacy(dev.bus, dev.slot, dev.function);
-            let is_64 = ((bar_lo >> 1) & 0x3) == 0x2;
-            let mut base = (bar_lo & 0xFFFF_FFF0) as u64;
-            if is_64 {
-                base |= (bar_hi.unwrap_or(0) as u64) << 32;
-            }
-            let bar_assigned = base != 0 && base < 0x40_0000_0000;
-
-            let (cap, vs, cc, csts) = if bar_assigned {
-                match mmio::map_mmio_region(base, 0x4000) {
-                    Ok(mmio_ptr) => unsafe {
-                        (
-                            Some(read_volatile(mmio_ptr.as_ptr().add(NVME_REG_CAP) as *const u64)),
-                            Some(read_volatile(mmio_ptr.as_ptr().add(NVME_REG_VS) as *const u32)),
-                            Some(read_volatile(mmio_ptr.as_ptr().add(NVME_REG_CC) as *const u32)),
-                            Some(read_volatile(mmio_ptr.as_ptr().add(NVME_REG_CSTS) as *const u32)),
-                        )
-                    },
-                    Err(_) => (None, None, None, None),
-                }
-            } else {
-                (None, None, None, None)
-            };
-
-            let pci = block::PciAddress::new(dev.bus, dev.slot, dev.function);
-            let registered = registered
-                .iter()
-                .any(|registered_pci| pci_matches(registered_pci, &pci));
-
-            out.push(NvmeDiagController {
-                pci,
-                bar_base: base,
-                bar_assigned,
-                cap,
-                vs,
-                cc,
-                csts,
-                registered,
-            });
-        }
-    });
-
-    out
 }
 
 pub(crate) fn register_mapped_controller(mmio: NonNull<u8>, pci: block::PciAddress) -> bool {
