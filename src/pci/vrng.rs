@@ -4,7 +4,7 @@
 //! when RDSEED/RDRAND are unavailable.
 
 use crate::wait;
-use spin::{Mutex, Once};
+use spin::Mutex;
 
 const VIRTIO_PCI_VENDOR: u16 = 0x1AF4;
 // Transitional (legacy) virtio-rng PCI device id.
@@ -350,16 +350,6 @@ impl VirtioRng {
 }
 
 static VRNG: Mutex<Option<VirtioRng>> = Mutex::new(None);
-static VRNG_SMOKE_ONCE: Once<()> = Once::new();
-
-fn fnv1a64(data: &[u8]) -> u64 {
-    let mut hash: u64 = 0xcbf29ce484222325;
-    for &b in data {
-        hash ^= b as u64;
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    hash
-}
 
 /// Initialize/attach virtio-rng if present.
 ///
@@ -387,30 +377,6 @@ pub fn init_once() {
             crate::log!("pci/vrng: init failed: {:?}\n", e);
         }
     }
-}
-
-/// One-time functional test: attempts to read a small buffer from the device.
-///
-/// Logs only a hash of the bytes (not the bytes themselves) to avoid dumping entropy
-/// into the console.
-pub fn smoke_test_once() {
-    VRNG_SMOKE_ONCE.call_once(|| {
-        let mut buf = [0u8; 32];
-        match try_fill_bytes(&mut buf) {
-            Ok(()) => {
-                let h = fnv1a64(&buf);
-                crate::log!("pci/vrng: smoke ok (fnv1a64=0x{:016x})\n", h);
-            }
-            Err(Error::NotFound) => {
-                if crate::logflag::BOOT_INFO_LOGS {
-                    crate::log!("pci/vrng: smoke skipped (not present)\n");
-                }
-            }
-            Err(e) => {
-                crate::log!("pci/vrng: smoke failed: {:?}\n", e);
-            }
-        }
-    });
 }
 
 fn find_virtio_rng_device() -> Option<crate::pci::PciDevice> {

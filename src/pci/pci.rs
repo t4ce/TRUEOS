@@ -58,14 +58,8 @@ struct BridgeAlloc {
 static BRIDGE_ALLOCS: Mutex<Vec<BridgeAlloc, MAX_BRIDGE_ALLOCS>> = Mutex::new(Vec::new());
 
 pub mod class {
-    pub const UNCLASSIFIED: u8 = 0x00;
-    pub const MASS_STORAGE: u8 = 0x01;
     pub const NETWORK: u8 = 0x02;
-    pub const DISPLAY: u8 = 0x03;
     pub const MULTIMEDIA: u8 = 0x04;
-    pub const MEMORY: u8 = 0x05;
-    pub const BRIDGE: u8 = 0x06;
-    pub const SERIAL_BUS: u8 = 0x0C;
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -108,26 +102,6 @@ impl PciDevice {
         } else {
             Some(addr_lo)
         }
-    }
-
-    /// Returns true when BAR `index` is present and memory-mapped.
-    pub fn bar_is_memory(&self, index: usize) -> bool {
-        if index >= 6 {
-            return false;
-        }
-
-        let (bar_lo, _) = read_bar_raw(self.bus, self.slot, self.function, index as u8);
-        bar_lo != 0 && (bar_lo & 0x1) == 0
-    }
-
-    /// Returns true when BAR `index` is present and I/O-port based.
-    pub fn bar_is_io(&self, index: usize) -> bool {
-        if index >= 6 {
-            return false;
-        }
-
-        let (bar_lo, _) = read_bar_raw(self.bus, self.slot, self.function, index as u8);
-        bar_lo != 0 && (bar_lo & 0x1) != 0
     }
 }
 
@@ -514,11 +488,6 @@ pub fn try_function_level_reset(bus: u8, slot: u8, function: u8) -> bool {
     // PCIe FLR requires software to wait 100ms before touching config space again.
     let _ = crate::wait::spin_until_timeout(100, || false);
     true
-}
-
-/// Walk the standard PCI capability list and return the capability offset.
-pub fn find_capability(dev: &PciDevice, cap_id: u8) -> Option<u16> {
-    find_capability_bdf(dev.bus, dev.slot, dev.function, cap_id)
 }
 
 fn find_capability_bdf(bus: u8, slot: u8, function: u8, cap_id: u8) -> Option<u16> {

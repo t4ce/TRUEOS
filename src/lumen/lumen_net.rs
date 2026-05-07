@@ -59,6 +59,14 @@ pub(crate) struct LumenNetBackendTelemetry {
 }
 
 #[derive(Copy, Clone, Debug)]
+pub(crate) struct ShadowBf16MatvecProof {
+    pub(crate) rows: usize,
+    pub(crate) checksum: u64,
+    pub(crate) first: f32,
+    pub(crate) last: f32,
+}
+
+#[derive(Copy, Clone, Debug)]
 pub(crate) struct RemoteBf16MatvecTicket {
     pub(crate) job_id: u64,
     pub(crate) row_start: usize,
@@ -422,6 +430,74 @@ pub(crate) fn take_shadow_bf16_matvec_frame() -> Option<Vec<u8>> {
     SHADOW_BF16_MATVEC_FRAMES.lock().pop_front()
 }
 
+pub(crate) fn compute_shadow_bf16_matvec_proof(
+    matrix_id: u64,
+    row_start: usize,
+    row_count: usize,
+    n_rows: usize,
+    k_dim: usize,
+    x_bytes: &[u8],
+    max_rows: usize,
+) -> Option<ShadowBf16MatvecProof> {
+    if !crate::allcaps::lumen::NET_BF16_MATVEC_SHADOW_COMPUTE_PROOF {
+        return None;
+    }
+    if row_count == 0 || n_rows == 0 || k_dim == 0 || max_rows == 0 {
+        return None;
+    }
+    if row_start >= n_rows || x_bytes.len() != k_dim.saturating_mul(core::mem::size_of::<f32>()) {
+        return None;
+    }
+    let row_end = row_start.saturating_add(row_count).min(n_rows);
+    if row_end <= row_start {
+        return None;
+    }
+
+    let matrix = resolve_bf16_matrix_by_id(matrix_id, n_rows, k_dim)?;
+    let proof_rows = row_end.saturating_sub(row_start).min(max_rows);
+    let mut x = Vec::with_capacity(k_dim);
+    for chunk in x_bytes.chunks_exact(4) {
+        x.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+    }
+    if x.len() != k_dim {
+        return None;
+    }
+
+    let w_len = n_rows.checked_mul(k_dim)?.checked_mul(2)?;
+    if matrix.byte_len < w_len {
+        return None;
+    }
+    let weights = unsafe { core::slice::from_raw_parts(matrix.data_ptr as *const u8, w_len) };
+    let mut checksum = 0xCBF2_9CE4_8422_2325u64;
+    let mut first = 0.0f32;
+    let mut last = 0.0f32;
+    for (proof_idx, row) in (row_start..row_start.saturating_add(proof_rows)).enumerate() {
+        let base = row.checked_mul(k_dim)?.checked_mul(2)?;
+        let row_weights = weights.get(base..base.saturating_add(k_dim.saturating_mul(2)))?;
+        let mut acc = 0.0f32;
+        for idx in 0..k_dim {
+            let off = idx.saturating_mul(2);
+            let bits = u16::from_le_bytes([row_weights[off], row_weights[off + 1]]);
+            acc += x[idx] * bf16_to_f32(bits);
+        }
+        if proof_idx == 0 {
+            first = acc;
+        }
+        last = acc;
+        for byte in acc.to_bits().to_le_bytes() {
+            checksum ^= byte as u64;
+            checksum = checksum.wrapping_mul(0x0000_0100_0000_01B3);
+        }
+    }
+
+    Some(ShadowBf16MatvecProof {
+        rows: proof_rows,
+        checksum,
+        first,
+        last,
+    })
+}
+
 fn encode_shadow_descriptor_frame(job: &RemoteBf16MatvecJob) -> Vec<u8> {
     let header = encode_bf16_matvec_header(job);
     let text = alloc::format!(
@@ -527,6 +603,25 @@ fn resolve_bf16_matrix(
             && entry.rows as usize == rows
             && entry.k_dim as usize == k_dim
     })
+}
+
+fn resolve_bf16_matrix_by_id(
+    matrix_id: u64,
+    rows: usize,
+    k_dim: usize,
+) -> Option<LumenMatrixManifestEntry> {
+    let byte_len = rows.checked_mul(k_dim)?.checked_mul(2)?;
+    let manifest = MATRIX_MANIFEST.lock();
+    manifest.iter().copied().find(|entry| {
+        entry.matrix_id == matrix_id
+            && entry.byte_len == byte_len
+            && entry.rows as usize == rows
+            && entry.k_dim as usize == k_dim
+    })
+}
+
+fn bf16_to_f32(bits: u16) -> f32 {
+    f32::from_bits((bits as u32) << 16)
 }
 
 fn stable_name_hash(name: &str) -> u64 {
