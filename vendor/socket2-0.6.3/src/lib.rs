@@ -109,7 +109,10 @@ macro_rules! from {
     ($from: ty, $for: ty) => {
         impl From<$from> for $for {
             fn from(socket: $from) -> $for {
-                #[cfg(any(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))), all(target_os = "wasi", not(target_env = "p1"))))]
+                #[cfg(any(
+                    all(unix, not(any(target_os = "trueos", target_os = "zkvm"))),
+                    all(target_os = "wasi", not(target_env = "p1"))
+                ))]
                 unsafe {
                     <$for>::from_raw_fd(socket.into_raw_fd())
                 }
@@ -182,14 +185,22 @@ mod socket;
 mod sockref;
 
 #[cfg_attr(
-    any(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))), all(target_os = "wasi", not(target_env = "p1"))),
+    any(
+        all(unix, not(any(target_os = "trueos", target_os = "zkvm"))),
+        all(target_os = "wasi", not(target_env = "p1"))
+    ),
     path = "sys/unix.rs"
 )]
 #[cfg_attr(any(target_os = "trueos", target_os = "zkvm"), path = "sys/zkvm.rs")]
 #[cfg_attr(windows, path = "sys/windows.rs")]
 mod sys;
 
-#[cfg(not(any(windows, unix, any(target_os = "trueos", target_os = "zkvm"), all(target_os = "wasi", not(target_env = "p1")))))]
+#[cfg(not(any(
+    windows,
+    unix,
+    any(target_os = "trueos", target_os = "zkvm"),
+    all(target_os = "wasi", not(target_env = "p1"))
+)))]
 compile_error!("Socket2 doesn't support the compile target");
 
 use sys::c_int;
@@ -651,11 +662,8 @@ impl<'name, 'bufs, 'control> fmt::Debug for MsgHdr<'name, 'bufs, 'control> {
 pub struct MsgHdrMut<'addr, 'bufs, 'control> {
     inner: sys::msghdr,
     #[allow(clippy::type_complexity)]
-    _lifetimes: PhantomData<(
-        &'addr mut SockAddr,
-        &'bufs mut MaybeUninitSlice<'bufs>,
-        &'control mut [u8],
-    )>,
+    _lifetimes:
+        PhantomData<(&'addr mut SockAddr, &'bufs mut MaybeUninitSlice<'bufs>, &'control mut [u8])>,
 }
 
 #[cfg(not(any(target_os = "redox", target_os = "wasi")))]

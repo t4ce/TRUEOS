@@ -360,6 +360,23 @@ unsafe extern "C" {
     pub fn trueos_cabi_ui2_window_close(window_id: u32) -> i32;
     pub fn trueos_cabi_ui2_window_begin_move(window_id: u32) -> i32;
     pub fn trueos_cabi_ui2_window_begin_resize(window_id: u32, edge_mask: u32) -> i32;
+    pub fn trueos_cabi_ui2_font_line_height_px(tier: u32) -> u32;
+    pub fn trueos_cabi_ui2_font_blit_text_rgba(
+        dst_ptr: *mut u8,
+        dst_len: usize,
+        dst_width: u32,
+        dst_height: u32,
+        tier: u32,
+        x: u32,
+        y: u32,
+        max_width_px: u32,
+        text_ptr: *const u8,
+        text_len: usize,
+        r: u32,
+        g: u32,
+        b: u32,
+        a: u32,
+    ) -> usize;
 }
 
 #[repr(C)]

@@ -2,7 +2,10 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
 use std::ops::Deref;
-#[cfg(any(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))), all(target_os = "wasi", not(target_env = "p1"))))]
+#[cfg(any(
+    all(unix, not(any(target_os = "trueos", target_os = "zkvm"))),
+    all(target_os = "wasi", not(target_env = "p1"))
+))]
 use std::os::fd::{AsFd, AsRawFd, FromRawFd};
 #[cfg(windows)]
 use std::os::windows::io::{AsRawSocket, AsSocket, FromRawSocket};
@@ -77,7 +80,10 @@ impl<'s> Deref for SockRef<'s> {
 }
 
 /// On Windows, a corresponding `From<&impl AsSocket>` implementation exists.
-#[cfg(any(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))), all(target_os = "wasi", not(target_env = "p1"))))]
+#[cfg(any(
+    all(unix, not(any(target_os = "trueos", target_os = "zkvm"))),
+    all(target_os = "wasi", not(target_env = "p1"))
+))]
 impl<'s, S> From<&'s S> for SockRef<'s>
 where
     S: AsFd,

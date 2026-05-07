@@ -5827,6 +5827,91 @@ pub mod cabi {
         0
     }
 
+    fn ui2_font_tier_from_cabi(tier: u32) -> Option<crate::r::ui2::Ui2FontTier> {
+        match tier {
+            0 => Some(crate::r::ui2::Ui2FontTier::Half),
+            1 => Some(crate::r::ui2::Ui2FontTier::OneX),
+            2 => Some(crate::r::ui2::Ui2FontTier::TwoX),
+            3 => Some(crate::r::ui2::Ui2FontTier::Third),
+            _ => None,
+        }
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn trueos_cabi_ui2_font_line_height_px(tier: u32) -> u32 {
+        let Some(tier) = ui2_font_tier_from_cabi(tier) else {
+            return 0;
+        };
+        u32::from(crate::r::ui2::ui2_font_native_line_height_px(tier))
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_ui2_font_blit_text_rgba(
+        dst_ptr: *mut u8,
+        dst_len: usize,
+        dst_width: u32,
+        dst_height: u32,
+        tier: u32,
+        x: u32,
+        y: u32,
+        max_width_px: u32,
+        text_ptr: *const u8,
+        text_len: usize,
+        r: u32,
+        g: u32,
+        b: u32,
+        a: u32,
+    ) -> usize {
+        if dst_ptr.is_null()
+            || dst_width == 0
+            || dst_height == 0
+            || max_width_px == 0
+            || text_ptr.is_null()
+            || text_len == 0
+        {
+            return 0;
+        }
+
+        let Some(tier) = ui2_font_tier_from_cabi(tier) else {
+            return 0;
+        };
+        let Some(expected_len) = (dst_width as usize)
+            .checked_mul(dst_height as usize)
+            .and_then(|px| px.checked_mul(4))
+        else {
+            return 0;
+        };
+        if dst_len < expected_len {
+            return 0;
+        }
+
+        let bytes = unsafe { core::slice::from_raw_parts(text_ptr, text_len) };
+        let Ok(text) = core::str::from_utf8(bytes) else {
+            return 0;
+        };
+        let Some(atlases) = crate::r::ui2::ui2_font_decode_cpu_atlases(tier.size_case()) else {
+            return 0;
+        };
+        let dst = unsafe { core::slice::from_raw_parts_mut(dst_ptr, expected_len) };
+        crate::r::ui2::ui2_font_blit_text_rgba(
+            dst,
+            dst_width as usize,
+            dst_height as usize,
+            &atlases,
+            tier,
+            x as usize,
+            y as usize,
+            max_width_px as usize,
+            text,
+            [
+                r.min(u8::MAX as u32) as u8,
+                g.min(u8::MAX as u32) as u8,
+                b.min(u8::MAX as u32) as u8,
+                a.min(u8::MAX as u32) as u8,
+            ],
+        )
+    }
+
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_gfx_end_frame() -> i32 {
         if gfx_cabi_vm_context() {

@@ -1027,14 +1027,7 @@ pub(crate) fn set_nonblocking(fd: RawSocket, nonblocking: bool) -> io::Result<()
 
 #[cfg(target_os = "vita")]
 pub(crate) fn set_nonblocking(fd: RawSocket, nonblocking: bool) -> io::Result<()> {
-    unsafe {
-        setsockopt(
-            fd,
-            libc::SOL_SOCKET,
-            libc::SO_NONBLOCK,
-            nonblocking as c_int,
-        )
-    }
+    unsafe { setsockopt(fd, libc::SOL_SOCKET, libc::SO_NONBLOCK, nonblocking as c_int) }
 }
 
 pub(crate) fn shutdown(fd: RawSocket, how: Shutdown) -> io::Result<()> {
@@ -1047,13 +1040,8 @@ pub(crate) fn shutdown(fd: RawSocket, how: Shutdown) -> io::Result<()> {
 }
 
 pub(crate) fn recv(fd: RawSocket, buf: &mut [MaybeUninit<u8>], flags: c_int) -> io::Result<usize> {
-    syscall!(recv(
-        fd,
-        buf.as_mut_ptr().cast(),
-        min(buf.len(), MAX_BUF_LEN),
-        flags,
-    ))
-    .map(|n| n as usize)
+    syscall!(recv(fd, buf.as_mut_ptr().cast(), min(buf.len(), MAX_BUF_LEN), flags,))
+        .map(|n| n as usize)
 }
 
 pub(crate) fn recv_from(
@@ -1129,13 +1117,7 @@ pub(crate) fn recvmsg(
 }
 
 pub(crate) fn send(fd: RawSocket, buf: &[u8], flags: c_int) -> io::Result<usize> {
-    syscall!(send(
-        fd,
-        buf.as_ptr().cast(),
-        min(buf.len(), MAX_BUF_LEN),
-        flags,
-    ))
-    .map(|n| n as usize)
+    syscall!(send(fd, buf.as_ptr().cast(), min(buf.len(), MAX_BUF_LEN), flags,)).map(|n| n as usize)
 }
 
 #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
@@ -1330,14 +1312,7 @@ fn fcntl_remove(fd: RawSocket, get_cmd: c_int, set_cmd: c_int, flag: c_int) -> i
 pub(crate) unsafe fn getsockopt<T>(fd: RawSocket, opt: c_int, val: c_int) -> io::Result<T> {
     let mut payload: MaybeUninit<T> = MaybeUninit::uninit();
     let mut len = size_of::<T>() as libc::socklen_t;
-    syscall!(getsockopt(
-        fd,
-        opt,
-        val,
-        payload.as_mut_ptr().cast(),
-        &mut len,
-    ))
-    .map(|_| {
+    syscall!(getsockopt(fd, opt, val, payload.as_mut_ptr().cast(), &mut len,)).map(|_| {
         debug_assert_eq!(len as usize, size_of::<T>());
         // Safety: `getsockopt` initialised `payload` for us.
         payload.assume_init()
@@ -1352,14 +1327,7 @@ pub(crate) unsafe fn setsockopt<T>(
     payload: T,
 ) -> io::Result<()> {
     let payload = ptr::addr_of!(payload).cast();
-    syscall!(setsockopt(
-        fd,
-        opt,
-        val,
-        payload,
-        mem::size_of::<T>() as libc::socklen_t,
-    ))
-    .map(|_| ())
+    syscall!(setsockopt(fd, opt, val, payload, mem::size_of::<T>() as libc::socklen_t,)).map(|_| ())
 }
 
 pub(crate) const fn to_in_addr(addr: &Ipv4Addr) -> in_addr {
@@ -1425,13 +1393,7 @@ pub(crate) fn original_dst_v4(fd: RawSocket) -> io::Result<SockAddr> {
     // Safety: `getsockopt` initialises the `SockAddr` for us.
     unsafe {
         SockAddr::try_init(|storage, len| {
-            syscall!(getsockopt(
-                fd,
-                libc::SOL_IP,
-                libc::SO_ORIGINAL_DST,
-                storage.cast(),
-                len
-            ))
+            syscall!(getsockopt(fd, libc::SOL_IP, libc::SO_ORIGINAL_DST, storage.cast(), len))
         })
     }
     .map(|(_, addr)| addr)
@@ -1531,19 +1493,9 @@ impl crate::Socket {
     #[cfg(not(target_os = "vita"))]
     pub(crate) fn _set_cloexec(&self, close_on_exec: bool) -> io::Result<()> {
         if close_on_exec {
-            fcntl_add(
-                self.as_raw(),
-                libc::F_GETFD,
-                libc::F_SETFD,
-                libc::FD_CLOEXEC,
-            )
+            fcntl_add(self.as_raw(), libc::F_GETFD, libc::F_SETFD, libc::FD_CLOEXEC)
         } else {
-            fcntl_remove(
-                self.as_raw(),
-                libc::F_GETFD,
-                libc::F_SETFD,
-                libc::FD_CLOEXEC,
-            )
+            fcntl_remove(self.as_raw(), libc::F_GETFD, libc::F_SETFD, libc::FD_CLOEXEC)
         }
     }
 
@@ -1562,13 +1514,9 @@ impl crate::Socket {
     #[cfg(target_os = "cygwin")]
     #[cfg(any(doc, target_os = "cygwin"))]
     pub fn set_no_peercred(&self) -> io::Result<()> {
-        syscall!(setsockopt(
-            self.as_raw(),
-            libc::SOL_SOCKET,
-            libc::SO_PEERCRED,
-            ptr::null_mut(),
-            0,
-        ))
+        syscall!(
+            setsockopt(self.as_raw(), libc::SOL_SOCKET, libc::SO_PEERCRED, ptr::null_mut(), 0,)
+        )
         .map(|_| ())
     }
 
@@ -1596,12 +1544,7 @@ impl crate::Socket {
     ))]
     pub(crate) fn _set_nosigpipe(&self, nosigpipe: bool) -> io::Result<()> {
         unsafe {
-            setsockopt(
-                self.as_raw(),
-                libc::SOL_SOCKET,
-                libc::SO_NOSIGPIPE,
-                nosigpipe as c_int,
-            )
+            setsockopt(self.as_raw(), libc::SOL_SOCKET, libc::SO_NOSIGPIPE, nosigpipe as c_int)
         }
     }
 
@@ -1624,14 +1567,7 @@ impl crate::Socket {
     /// available on TCP sockets.
     #[cfg(all(feature = "all", not(any(target_os = "redox", target_os = "wasi"))))]
     pub fn set_tcp_mss(&self, mss: u32) -> io::Result<()> {
-        unsafe {
-            setsockopt(
-                self.as_raw(),
-                libc::IPPROTO_TCP,
-                libc::TCP_MAXSEG,
-                mss as c_int,
-            )
-        }
+        unsafe { setsockopt(self.as_raw(), libc::IPPROTO_TCP, libc::TCP_MAXSEG, mss as c_int) }
     }
 
     /// Returns `true` if `listen(2)` was called on this socket by checking the
@@ -1721,12 +1657,7 @@ impl crate::Socket {
     ))]
     pub fn set_mark(&self, mark: u32) -> io::Result<()> {
         unsafe {
-            setsockopt::<c_int>(
-                self.as_raw(),
-                libc::SOL_SOCKET,
-                libc::SO_MARK,
-                mark as c_int,
-            )
+            setsockopt::<c_int>(self.as_raw(), libc::SOL_SOCKET, libc::SO_MARK, mark as c_int)
         }
     }
 
@@ -1757,14 +1688,7 @@ impl crate::Socket {
         any(target_os = "android", target_os = "fuchsia", target_os = "linux")
     ))]
     pub fn set_tcp_cork(&self, cork: bool) -> io::Result<()> {
-        unsafe {
-            setsockopt(
-                self.as_raw(),
-                libc::IPPROTO_TCP,
-                libc::TCP_CORK,
-                cork as c_int,
-            )
-        }
+        unsafe { setsockopt(self.as_raw(), libc::IPPROTO_TCP, libc::TCP_CORK, cork as c_int) }
     }
 
     /// Get the value of the `TCP_QUICKACK` option on this socket.
@@ -1805,12 +1729,7 @@ impl crate::Socket {
     ))]
     pub fn set_tcp_quickack(&self, quickack: bool) -> io::Result<()> {
         unsafe {
-            setsockopt(
-                self.as_raw(),
-                libc::IPPROTO_TCP,
-                libc::TCP_QUICKACK,
-                quickack as c_int,
-            )
+            setsockopt(self.as_raw(), libc::IPPROTO_TCP, libc::TCP_QUICKACK, quickack as c_int)
         }
     }
 
@@ -1825,12 +1744,8 @@ impl crate::Socket {
     ))]
     pub fn tcp_thin_linear_timeouts(&self) -> io::Result<bool> {
         unsafe {
-            getsockopt::<Bool>(
-                self.as_raw(),
-                libc::IPPROTO_TCP,
-                libc::TCP_THIN_LINEAR_TIMEOUTS,
-            )
-            .map(|timeouts| timeouts != 0)
+            getsockopt::<Bool>(self.as_raw(), libc::IPPROTO_TCP, libc::TCP_THIN_LINEAR_TIMEOUTS)
+                .map(|timeouts| timeouts != 0)
         }
     }
 
@@ -1874,12 +1789,7 @@ impl crate::Socket {
     #[cfg(all(feature = "all", any(target_os = "android", target_os = "linux")))]
     pub fn set_tcp_notsent_lowat(&self, lowat: u32) -> io::Result<()> {
         unsafe {
-            setsockopt(
-                self.as_raw(),
-                libc::IPPROTO_TCP,
-                libc::TCP_NOTSENT_LOWAT,
-                lowat as c_int,
-            )
+            setsockopt(self.as_raw(), libc::IPPROTO_TCP, libc::TCP_NOTSENT_LOWAT, lowat as c_int)
         }
     }
 
@@ -1995,12 +1905,7 @@ impl crate::Socket {
 
         #[cfg(any(target_os = "linux", target_os = "android",))]
         unsafe {
-            setsockopt(
-                self.as_raw(),
-                libc::SOL_SOCKET,
-                libc::SO_BINDTOIFINDEX,
-                index,
-            )
+            setsockopt(self.as_raw(), libc::SOL_SOCKET, libc::SO_BINDTOIFINDEX, index)
         }
     }
 
@@ -2046,12 +1951,7 @@ impl crate::Socket {
 
         #[cfg(any(target_os = "linux", target_os = "android",))]
         unsafe {
-            setsockopt(
-                self.as_raw(),
-                libc::SOL_SOCKET,
-                libc::SO_BINDTOIFINDEX,
-                index,
-            )
+            setsockopt(self.as_raw(), libc::SOL_SOCKET, libc::SO_BINDTOIFINDEX, index)
         }
     }
 
@@ -2154,14 +2054,7 @@ impl crate::Socket {
     /// Sets the CPU affinity of the socket.
     #[cfg(all(feature = "all", target_os = "linux"))]
     pub fn set_cpu_affinity(&self, cpu: usize) -> io::Result<()> {
-        unsafe {
-            setsockopt(
-                self.as_raw(),
-                libc::SOL_SOCKET,
-                libc::SO_INCOMING_CPU,
-                cpu as c_int,
-            )
-        }
+        unsafe { setsockopt(self.as_raw(), libc::SOL_SOCKET, libc::SO_INCOMING_CPU, cpu as c_int) }
     }
 
     /// Get the value of the `SO_REUSEPORT` option on this socket.
@@ -2200,14 +2093,7 @@ impl crate::Socket {
         ))
     ))]
     pub fn set_reuse_port(&self, reuse: bool) -> io::Result<()> {
-        unsafe {
-            setsockopt(
-                self.as_raw(),
-                libc::SOL_SOCKET,
-                libc::SO_REUSEPORT,
-                reuse as c_int,
-            )
-        }
+        unsafe { setsockopt(self.as_raw(), libc::SOL_SOCKET, libc::SO_REUSEPORT, reuse as c_int) }
     }
 
     /// Get the value of the `SO_REUSEPORT_LB` option on this socket.
@@ -2230,12 +2116,7 @@ impl crate::Socket {
     #[cfg(all(feature = "all", target_os = "freebsd"))]
     pub fn set_reuse_port_lb(&self, reuse: bool) -> io::Result<()> {
         unsafe {
-            setsockopt(
-                self.as_raw(),
-                libc::SOL_SOCKET,
-                libc::SO_REUSEPORT_LB,
-                reuse as c_int,
-            )
+            setsockopt(self.as_raw(), libc::SOL_SOCKET, libc::SO_REUSEPORT_LB, reuse as c_int)
         }
     }
 
@@ -2267,14 +2148,7 @@ impl crate::Socket {
         any(target_os = "android", target_os = "fuchsia", target_os = "linux")
     ))]
     pub fn set_freebind_v4(&self, freebind: bool) -> io::Result<()> {
-        unsafe {
-            setsockopt(
-                self.as_raw(),
-                libc::SOL_IP,
-                libc::IP_FREEBIND,
-                freebind as c_int,
-            )
-        }
+        unsafe { setsockopt(self.as_raw(), libc::SOL_IP, libc::IP_FREEBIND, freebind as c_int) }
     }
 
     /// Get the value of the `IPV6_FREEBIND` option on this socket.
@@ -2324,14 +2198,7 @@ impl crate::Socket {
     /// ```
     #[cfg(all(feature = "all", any(target_os = "android", target_os = "linux")))]
     pub fn set_freebind_v6(&self, freebind: bool) -> io::Result<()> {
-        unsafe {
-            setsockopt(
-                self.as_raw(),
-                libc::SOL_IPV6,
-                libc::IPV6_FREEBIND,
-                freebind as c_int,
-            )
-        }
+        unsafe { setsockopt(self.as_raw(), libc::SOL_IPV6, libc::IPV6_FREEBIND, freebind as c_int) }
     }
 
     /// Copies data between a `file` and this socket using the `sendfile(2)`
@@ -2402,15 +2269,8 @@ impl crate::Socket {
             // A value of `0` means send all bytes.
             None => 0,
         };
-        syscall!(sendfile(
-            file,
-            self.as_raw(),
-            offset,
-            &mut length,
-            ptr::null_mut(),
-            0,
-        ))
-        .map(|_| length as usize)
+        syscall!(sendfile(file, self.as_raw(), offset, &mut length, ptr::null_mut(), 0,))
+            .map(|_| length as usize)
     }
 
     #[cfg(all(feature = "all", any(target_os = "android", target_os = "linux")))]
@@ -2442,16 +2302,8 @@ impl crate::Socket {
             None => 0,
         };
         let mut sbytes: libc::off_t = 0;
-        syscall!(sendfile(
-            file,
-            self.as_raw(),
-            offset,
-            nbytes,
-            ptr::null_mut(),
-            &mut sbytes,
-            0,
-        ))
-        .map(|_| sbytes as usize)
+        syscall!(sendfile(file, self.as_raw(), offset, nbytes, ptr::null_mut(), &mut sbytes, 0,))
+            .map(|_| sbytes as usize)
     }
 
     #[cfg(all(feature = "all", target_os = "aix"))]
@@ -2505,17 +2357,9 @@ impl crate::Socket {
         )
     ))]
     pub fn set_tcp_user_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
-        let timeout = timeout.map_or(0, |to| {
-            min(to.as_millis(), libc::c_uint::MAX as u128) as libc::c_uint
-        });
-        unsafe {
-            setsockopt(
-                self.as_raw(),
-                libc::IPPROTO_TCP,
-                libc::TCP_USER_TIMEOUT,
-                timeout,
-            )
-        }
+        let timeout =
+            timeout.map_or(0, |to| min(to.as_millis(), libc::c_uint::MAX as u128) as libc::c_uint);
+        unsafe { setsockopt(self.as_raw(), libc::IPPROTO_TCP, libc::TCP_USER_TIMEOUT, timeout) }
     }
 
     /// Get the value of the `TCP_USER_TIMEOUT` option on this socket.
@@ -2559,14 +2403,7 @@ impl crate::Socket {
             filter: filters.as_ptr() as *mut _,
         };
 
-        unsafe {
-            setsockopt(
-                self.as_raw(),
-                libc::SOL_SOCKET,
-                libc::SO_ATTACH_FILTER,
-                prog,
-            )
-        }
+        unsafe { setsockopt(self.as_raw(), libc::SOL_SOCKET, libc::SO_ATTACH_FILTER, prog) }
     }
 
     /// Detach Berkeley Packet Filter(BPF) from this socket.
@@ -2635,14 +2472,7 @@ impl crate::Socket {
         )
     ))]
     pub fn set_tclass_v6(&self, tclass: u32) -> io::Result<()> {
-        unsafe {
-            setsockopt(
-                self.as_raw(),
-                IPPROTO_IPV6,
-                libc::IPV6_TCLASS,
-                tclass as c_int,
-            )
-        }
+        unsafe { setsockopt(self.as_raw(), IPPROTO_IPV6, libc::IPV6_TCLASS, tclass as c_int) }
     }
 
     /// Get the value of the `TCP_CONGESTION` option for this socket.
@@ -2694,14 +2524,7 @@ impl crate::Socket {
     /// [`bind`]: crate::Socket::bind
     #[cfg(all(feature = "all", target_os = "linux"))]
     pub fn set_dccp_service(&self, code: u32) -> io::Result<()> {
-        unsafe {
-            setsockopt(
-                self.as_raw(),
-                libc::SOL_DCCP,
-                libc::DCCP_SOCKOPT_SERVICE,
-                code,
-            )
-        }
+        unsafe { setsockopt(self.as_raw(), libc::SOL_DCCP, libc::DCCP_SOCKOPT_SERVICE, code) }
     }
 
     /// Get the value of the `DCCP_SOCKOPT_SERVICE` option on this socket.
@@ -2765,13 +2588,7 @@ impl crate::Socket {
     /// [`set_dccp_server_timewait`]: crate::Socket::set_dccp_server_timewait
     #[cfg(all(feature = "all", target_os = "linux"))]
     pub fn dccp_server_timewait(&self) -> io::Result<bool> {
-        unsafe {
-            getsockopt(
-                self.as_raw(),
-                libc::SOL_DCCP,
-                libc::DCCP_SOCKOPT_SERVER_TIMEWAIT,
-            )
-        }
+        unsafe { getsockopt(self.as_raw(), libc::SOL_DCCP, libc::DCCP_SOCKOPT_SERVER_TIMEWAIT) }
     }
 
     /// Set value for the `DCCP_SOCKOPT_SEND_CSCOV` option on this socket.
@@ -2783,14 +2600,7 @@ impl crate::Socket {
     /// it must be enabled at the receiver too, with suitable choice of CsCov.
     #[cfg(all(feature = "all", target_os = "linux"))]
     pub fn set_dccp_send_cscov(&self, level: u32) -> io::Result<()> {
-        unsafe {
-            setsockopt(
-                self.as_raw(),
-                libc::SOL_DCCP,
-                libc::DCCP_SOCKOPT_SEND_CSCOV,
-                level,
-            )
-        }
+        unsafe { setsockopt(self.as_raw(), libc::SOL_DCCP, libc::DCCP_SOCKOPT_SEND_CSCOV, level) }
     }
 
     /// Get the value of the `DCCP_SOCKOPT_SEND_CSCOV` option on this socket.
@@ -2810,14 +2620,7 @@ impl crate::Socket {
     /// [`set_dccp_send_cscov`]: crate::Socket::set_dccp_send_cscov
     #[cfg(all(feature = "all", target_os = "linux"))]
     pub fn set_dccp_recv_cscov(&self, level: u32) -> io::Result<()> {
-        unsafe {
-            setsockopt(
-                self.as_raw(),
-                libc::SOL_DCCP,
-                libc::DCCP_SOCKOPT_RECV_CSCOV,
-                level,
-            )
-        }
+        unsafe { setsockopt(self.as_raw(), libc::SOL_DCCP, libc::DCCP_SOCKOPT_RECV_CSCOV, level) }
     }
 
     /// Get the value of the `DCCP_SOCKOPT_RECV_CSCOV` option on this socket.
@@ -2837,12 +2640,7 @@ impl crate::Socket {
     #[cfg(all(feature = "all", target_os = "linux"))]
     pub fn set_dccp_qpolicy_txqlen(&self, length: u32) -> io::Result<()> {
         unsafe {
-            setsockopt(
-                self.as_raw(),
-                libc::SOL_DCCP,
-                libc::DCCP_SOCKOPT_QPOLICY_TXQLEN,
-                length,
-            )
+            setsockopt(self.as_raw(), libc::SOL_DCCP, libc::DCCP_SOCKOPT_QPOLICY_TXQLEN, length)
         }
     }
 
@@ -2853,13 +2651,7 @@ impl crate::Socket {
     /// [`set_dccp_qpolicy_txqlen`]: crate::Socket::set_dccp_qpolicy_txqlen
     #[cfg(all(feature = "all", target_os = "linux"))]
     pub fn dccp_qpolicy_txqlen(&self) -> io::Result<u32> {
-        unsafe {
-            getsockopt(
-                self.as_raw(),
-                libc::SOL_DCCP,
-                libc::DCCP_SOCKOPT_QPOLICY_TXQLEN,
-            )
-        }
+        unsafe { getsockopt(self.as_raw(), libc::SOL_DCCP, libc::DCCP_SOCKOPT_QPOLICY_TXQLEN) }
     }
 
     /// Get the value of the `DCCP_SOCKOPT_AVAILABLE_CCIDS` option on this socket.
@@ -2891,13 +2683,7 @@ impl crate::Socket {
     /// payload size) in bytes.
     #[cfg(all(feature = "all", target_os = "linux"))]
     pub fn dccp_cur_mps(&self) -> io::Result<u32> {
-        unsafe {
-            getsockopt(
-                self.as_raw(),
-                libc::SOL_DCCP,
-                libc::DCCP_SOCKOPT_GET_CUR_MPS,
-            )
-        }
+        unsafe { getsockopt(self.as_raw(), libc::SOL_DCCP, libc::DCCP_SOCKOPT_GET_CUR_MPS) }
     }
 
     /// Get the value for the `SO_BUSY_POLL` option on this socket.
@@ -2914,12 +2700,7 @@ impl crate::Socket {
     #[cfg(all(feature = "all", target_os = "linux"))]
     pub fn set_busy_poll(&self, busy_poll: u32) -> io::Result<()> {
         unsafe {
-            setsockopt(
-                self.as_raw(),
-                libc::SOL_SOCKET,
-                libc::SO_BUSY_POLL,
-                busy_poll as c_int,
-            )
+            setsockopt(self.as_raw(), libc::SOL_SOCKET, libc::SO_BUSY_POLL, busy_poll as c_int)
         }
     }
 }

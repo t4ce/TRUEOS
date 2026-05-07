@@ -139,7 +139,7 @@ default_entry: 1\n\
 /TRUEOS\n\
 protocol: limine\n\
 kernel_path: boot():/TRUEOS.ELF\n\
-resolution: 1920x1080x32\n\n";
+resolution: 2560x1440x32\n\n";
 
     log("install: stage=format_esp_fat32");
     log(alloc::format!(
