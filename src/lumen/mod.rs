@@ -3,22 +3,27 @@ use alloc::format;
 use alloc::string::{String as AllocString, ToString};
 use alloc::vec::Vec;
 
-use embassy_sync::signal::Signal;
-use embassy_time::{Duration as EmbassyDuration, Timer};
-use lumen::autograd::{Tensor, TensorRawData, no_grad};
-use lumen::init::{ParameterInitMode, with_parameter_init_mode};
-use lumen::layers::KVCache;
-use lumen::models::{LlamaConfig, LlamaModel};
-use lumen::precision::{
+use ::lumen::autograd::{Tensor, TensorRawData, no_grad};
+use ::lumen::init::{ParameterInitMode, with_parameter_init_mode};
+use ::lumen::layers::KVCache;
+use ::lumen::models::{LlamaConfig, LlamaModel};
+use ::lumen::precision::{
     DType, PrecisionConfig, with_precision_config, with_runtime_component_dtypes,
 };
+use embassy_sync::signal::Signal;
+use embassy_time::{Duration as EmbassyDuration, Timer};
 
-use super::super::{MatrixTarget, print_matrix_target_line, set_matrix_target_active};
-use super::bench::{
+pub(crate) mod burn_baba;
+pub(crate) mod burn_baby;
+pub(crate) mod lumen_net;
+pub(crate) mod lumen_service;
+
+use crate::shell2::cmds::bench::{
     bench_cancel_requested, bench_session_finish, bps_from_progress, elapsed_ms_since,
     format_bytes, format_metric_units, format_speed, online_background_worker_slots,
     units_per_second_from_ticks,
 };
+use crate::shell2::{MatrixTarget, print_matrix_target_line, set_matrix_target_active};
 
 const LUMEN_WEIGHTS_PATH: &str = crate::r::spawn_service::BOOT_LUMEN_WEIGHTS_PATH;
 const LUMEN_TOKENIZER_PATH: &str = crate::r::spawn_service::BOOT_LUMEN_TOKENIZER_PATH;
@@ -692,7 +697,7 @@ fn generate_lumen_answer(
             LUMEN_RUNTIME_MAX_NEW_TOKENS,
             LUMEN_RUNTIME_MAX_SEQ_LEN
         );
-        crate::r::lumen_service::submit_chat_answer(
+        crate::lumen::lumen_service::submit_chat_answer(
             "context size full, starting a new conversation.",
         );
         state.reset(model);
@@ -722,7 +727,7 @@ fn generate_lumen_answer(
     let mut first_token_ms = 0u64;
     let stream_statement = statement
         .map(AllocString::from)
-        .unwrap_or_else(crate::r::lumen_service::next_chat_statement_tag);
+        .unwrap_or_else(crate::lumen::lumen_service::next_chat_statement_tag);
     let mut streamed_answer_len = 0usize;
     let mut streamed = false;
     let generate_start = embassy_time_driver::now();
@@ -801,7 +806,7 @@ fn generate_lumen_answer(
                 && generated.is_multiple_of(LUMEN_RUNTIME_STREAM_TOKENS)
                 && answer.len() > streamed_answer_len
             {
-                crate::r::lumen_service::submit_chat_statement_delta(
+                crate::lumen::lumen_service::submit_chat_statement_delta(
                     stream_statement.as_str(),
                     &answer[streamed_answer_len..],
                 );
@@ -838,14 +843,14 @@ fn generate_lumen_answer(
     let final_answer = trim_lumen_turn_markers(answer.as_str());
     if streamed_answer_len == 0 {
         if !final_answer.is_empty() {
-            crate::r::lumen_service::submit_chat_statement_delta(
+            crate::lumen::lumen_service::submit_chat_statement_delta(
                 stream_statement.as_str(),
                 final_answer.as_str(),
             );
             streamed = true;
         }
     } else if visible_answer_end > streamed_answer_len {
-        crate::r::lumen_service::submit_chat_statement_delta(
+        crate::lumen::lumen_service::submit_chat_statement_delta(
             stream_statement.as_str(),
             &answer[streamed_answer_len..visible_answer_end],
         );
@@ -1094,10 +1099,10 @@ fn run_bf16_compute_lane_probe(
         f32,
         Option<(usize, f32)>,
         u64,
-        crate::burn_baby::ComputeStats,
-        crate::burn_baby::ComputeStats,
+        crate::lumen::burn_baby::ComputeStats,
+        crate::lumen::burn_baby::ComputeStats,
     ),
-    crate::burn_baby::ComputeError,
+    crate::lumen::burn_baby::ComputeError,
 > {
     let hidden = lumen_probe_hidden(k_dim);
     run_bf16_compute_lane_probe_with_hidden(
@@ -1122,18 +1127,18 @@ fn run_bf16_compute_lane_probe_with_hidden(
         f32,
         Option<(usize, f32)>,
         u64,
-        crate::burn_baby::ComputeStats,
-        crate::burn_baby::ComputeStats,
+        crate::lumen::burn_baby::ComputeStats,
+        crate::lumen::burn_baby::ComputeStats,
     ),
-    crate::burn_baby::ComputeError,
+    crate::lumen::burn_baby::ComputeError,
 > {
     let mut out = Vec::new();
     out.resize(rows, 0.0f32);
 
-    let stats_before = crate::burn_baby::stats();
+    let stats_before = crate::lumen::burn_baby::stats();
     let start = embassy_time_driver::now();
     for _ in 0..iters {
-        crate::burn_baby::matvec_rowmajor_bf16(
+        crate::lumen::burn_baby::matvec_rowmajor_bf16(
             hidden,
             rows_bf16,
             rows,
@@ -1143,7 +1148,7 @@ fn run_bf16_compute_lane_probe_with_hidden(
         )?;
     }
     let elapsed_ticks = embassy_time_driver::now().saturating_sub(start);
-    let stats_after = crate::burn_baby::stats();
+    let stats_after = crate::lumen::burn_baby::stats();
     let ops = (rows as u64)
         .saturating_mul(k_dim as u64)
         .saturating_mul(iters as u64)
@@ -1365,7 +1370,7 @@ async fn load_lumen_model_from_trueosfs(
     let mut last_progress_bytes = 0u64;
     let mut phase_ms = LumenRuntimeLoadPhaseMs::default();
     let mut last_progress_phase_ms = phase_ms;
-    crate::lumen_net::begin_matrix_manifest_load();
+    crate::lumen::lumen_net::begin_matrix_manifest_load();
     for (_, name, tensor) in ordered {
         if bench_cancel_requested(session_id) {
             return Err(AllocString::from("cancelled"));
@@ -1451,7 +1456,7 @@ async fn load_lumen_model_from_trueosfs(
 
         let manifest_start = embassy_time_driver::now();
         if let Some((ptr, len)) = tensor.bf16_storage_ptr_len_bytes() {
-            crate::lumen_net::register_loaded_matrix(name, dtype, &shape, ptr as usize, len);
+            crate::lumen::lumen_net::register_loaded_matrix(name, dtype, &shape, ptr as usize, len);
         }
         phase_ms.manifest = phase_ms
             .manifest
@@ -1693,13 +1698,13 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
         log(
             format!(
                 "bench lumen: runtime backend={} contract={} fp_backend={} int8_backend={} trueos_cpu={} x86_fp={} x86_i8={}",
-                lumen::backend::default_backend_name(),
-                lumen::backend::trueos_parallel_contract(),
-                lumen::ops::fp_kernels::active_float_backend_name(),
-                lumen::ops::int8_kernels::active_int8_backend_name(),
-                lumen::arch::trueos_cpu_backend_compiled(),
-                lumen::arch::x86_fp_kernel_runtime_available(),
-                lumen::arch::x86_i8_kernel_runtime_available(),
+                ::lumen::backend::default_backend_name(),
+                ::lumen::backend::trueos_parallel_contract(),
+                ::lumen::ops::fp_kernels::active_float_backend_name(),
+                ::lumen::ops::int8_kernels::active_int8_backend_name(),
+                ::lumen::arch::trueos_cpu_backend_compiled(),
+                ::lumen::arch::x86_fp_kernel_runtime_available(),
+                ::lumen::arch::x86_i8_kernel_runtime_available(),
             )
             .as_str(),
         );
@@ -2017,7 +2022,7 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
             }
 
             let chunk_rows = lumen_dynamic_chunk_rows(compute_rows, ap_worker_count);
-            let slot_counts_before = crate::burn_baby::poll_counts_for_slots(&slots_for_counts);
+            let slot_counts_before = crate::lumen::burn_baby::poll_counts_for_slots(&slots_for_counts);
             match run_bf16_compute_lane_probe(
                 &compute_rows_bytes[..compute_bytes],
                 compute_rows,
@@ -2026,7 +2031,7 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
                 case.iters,
             ) {
                 Ok((checksum, top, ops_per_s, stats_before, stats_after)) => {
-                    let slot_counts_after = crate::burn_baby::poll_counts_for_slots(&slots_for_counts);
+                    let slot_counts_after = crate::lumen::burn_baby::poll_counts_for_slots(&slots_for_counts);
                     let submitted = stats_after
                         .submitted_jobs
                         .saturating_sub(stats_before.submitted_jobs);
@@ -2198,8 +2203,8 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
         );
 
         let real_hi_start = embassy_time_driver::now();
-        let stats_before = crate::burn_baby::stats();
-        let slot_counts_before = crate::burn_baby::poll_counts_for_slots(&slots_for_counts);
+        let stats_before = crate::lumen::burn_baby::stats();
+        let slot_counts_before = crate::lumen::burn_baby::poll_counts_for_slots(&slots_for_counts);
         let mut global_top: Option<(usize, f32)> = None;
         let mut global_checksum = 0.0f32;
         let mut scanned_rows = 0usize;
@@ -2289,8 +2294,8 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
             .saturating_mul(k_dim as u64)
             .saturating_mul(2);
         let ops_per_s = units_per_second_from_ticks(ops, elapsed_ticks);
-        let stats_after = crate::burn_baby::stats();
-        let slot_counts_after = crate::burn_baby::poll_counts_for_slots(&slots_for_counts);
+        let stats_after = crate::lumen::burn_baby::stats();
+        let slot_counts_after = crate::lumen::burn_baby::poll_counts_for_slots(&slots_for_counts);
         let submitted = stats_after
             .submitted_jobs
             .saturating_sub(stats_before.submitted_jobs);
@@ -2477,7 +2482,7 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
             }
         };
         register_lumen_interactive_session(session_id);
-        crate::r::lumen_service::mark_online(session_id);
+        crate::lumen::lumen_service::mark_online(session_id);
         print_matrix_target_line(
             &task_target,
             "lumen: ready in lobby chat",
@@ -2514,10 +2519,10 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
                 continue;
             };
             idle_waits = 0;
-            let _ = crate::r::lumen_service::mark_prompt_running("dequeue");
+            let _ = crate::lumen::lumen_service::mark_prompt_running("dequeue");
 
             let infer_start = embassy_time_driver::now();
-            let compute_before = crate::burn_baby::stats();
+            let compute_before = crate::lumen::burn_baby::stats();
             let generate_result = match &mut infer_engine {
                 LumenInferEngine::Local { model, chat_state } => generate_lumen_answer(
                     model,
@@ -2542,7 +2547,7 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
             match generate_result {
                 Ok(report) => {
                     let infer_ms = elapsed_ms_since(infer_start);
-                    let compute_after = crate::burn_baby::stats();
+                    let compute_after = crate::lumen::burn_baby::stats();
                     let submitted_jobs = compute_after
                         .submitted_jobs
                         .saturating_sub(compute_before.submitted_jobs);
@@ -2566,31 +2571,31 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
                         compute_after.queued_jobs
                     );
                     if !report.streamed && request.statement.is_some() {
-                        crate::r::lumen_service::submit_chat_statement_delta(
+                        crate::lumen::lumen_service::submit_chat_statement_delta(
                             request.statement.as_deref().unwrap_or(""),
                             "<empty>",
                         );
                     } else if !report.streamed {
-                        crate::r::lumen_service::submit_chat_answer(report.answer.as_str());
+                        crate::lumen::lumen_service::submit_chat_answer(report.answer.as_str());
                     }
-                    crate::r::lumen_service::mark_prompt_complete("answer-ready");
+                    crate::lumen::lumen_service::mark_prompt_complete("answer-ready");
                 }
                 Err(err) => {
                     let message = format!("prompt failed: {}", err);
                     if let Some(statement) = request.statement.as_deref() {
-                        crate::r::lumen_service::submit_chat_statement_delta(
+                        crate::lumen::lumen_service::submit_chat_statement_delta(
                             statement,
                             message.as_str(),
                         );
                     } else {
-                        crate::r::lumen_service::submit_chat_answer(message.as_str());
+                        crate::lumen::lumen_service::submit_chat_answer(message.as_str());
                     }
-                    crate::r::lumen_service::mark_prompt_complete("answer-error");
+                    crate::lumen::lumen_service::mark_prompt_complete("answer-error");
                 }
             }
         }
-        crate::r::lumen_service::mark_prompt_complete("session-end");
-        crate::r::lumen_service::mark_offline(session_id);
+        crate::lumen::lumen_service::mark_prompt_complete("session-end");
+        crate::lumen::lumen_service::mark_offline(session_id);
         unregister_lumen_interactive_session(session_id);
         cleanup_lumen_inference_mailbox(session_id, "session-end");
 

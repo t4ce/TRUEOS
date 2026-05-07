@@ -41,7 +41,7 @@ pub(crate) fn remote_work_capacity() -> u32 {
     if !is_online() || SERVICE_LOADING.load(Ordering::Acquire) || is_prompt_running() {
         return 0;
     }
-    crate::burn_baby::online_worker_count().min(u32::MAX as usize) as u32
+    crate::lumen::burn_baby::online_worker_count().min(u32::MAX as usize) as u32
 }
 
 pub(crate) fn mark_prompt_running(reason: &'static str) -> bool {
@@ -136,7 +136,7 @@ fn flush_pending(session_id: u64) {
         );
     }
     for prompt in queued {
-        if !crate::shell2::cmds::bench_ai::push_lumen_chat_prompt(
+        if !crate::lumen::push_lumen_chat_prompt(
             session_id,
             prompt.prompt.as_str(),
             Some(prompt.statement.as_str()),
@@ -168,11 +168,7 @@ pub(crate) fn submit_chatroom_mention(prompt: &str) -> bool {
     let session_id = SERVICE_SESSION_ID.load(Ordering::Acquire);
     let statement = next_chat_statement_tag();
     if session_id != 0 && is_online() {
-        if crate::shell2::cmds::bench_ai::push_lumen_chat_prompt(
-            session_id,
-            prompt,
-            Some(statement.as_str()),
-        ) {
+        if crate::lumen::push_lumen_chat_prompt(session_id, prompt, Some(statement.as_str())) {
             submit_chat_statement_placeholder(statement.as_str());
             crate::log!(
                 "lumen-service: accepted chatroom prompt session={} bytes={}\n",
@@ -360,7 +356,7 @@ pub async fn lumen_service_task() {
     SERVICE_ONLINE.store(false, Ordering::Release);
 
     print_matrix_target_line(&target, "lumen-service: warming model from TRUEOSFS");
-    crate::shell2::cmds::bench_ai::run_lumen_session(target.clone(), session_id).await;
+    crate::lumen::run_lumen_session(target.clone(), session_id).await;
 
     SERVICE_LOADING.store(false, Ordering::Release);
     SERVICE_ONLINE.store(false, Ordering::Release);

@@ -277,8 +277,8 @@ pub fn matvec_rowmajor_bf16(
         matvec_rows_bf16(x, w_rowmajor_bf16, k_dim, out, 0, n_rows);
         return Ok(());
     }
-    crate::burn_baba::share_matvec_rowmajor_bf16(n_rows, k_dim, chunk_rows);
-    let remote = crate::lumen_net::enqueue_remote_bf16_matvec_suffix(
+    crate::lumen::burn_baba::share_matvec_rowmajor_bf16(n_rows, k_dim, chunk_rows);
+    let remote = crate::lumen::lumen_net::enqueue_remote_bf16_matvec_suffix(
         x,
         w_rowmajor_bf16,
         n_rows,
@@ -294,7 +294,7 @@ pub fn matvec_rowmajor_bf16(
             ticket.row_start,
             ticket.row_end,
             ticket.job_id,
-            crate::lumen_net::pending_remote_bf16_matvecs()
+            crate::lumen::lumen_net::pending_remote_bf16_matvecs()
         );
     }
 

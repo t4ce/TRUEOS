@@ -103,7 +103,7 @@ const CPUBENCH_PHASES: [CpuBenchPhase; 3] = [
     },
 ];
 
-pub(super) fn format_speed(bps: u64) -> AllocString {
+pub(crate) fn format_speed(bps: u64) -> AllocString {
     if bps < 100 {
         return format!("{} B/s", bps);
     }
@@ -123,7 +123,7 @@ pub(super) fn format_speed(bps: u64) -> AllocString {
     format!("{:.1} TB/s", tb)
 }
 
-pub(super) fn format_bytes(bytes: u64) -> AllocString {
+pub(crate) fn format_bytes(bytes: u64) -> AllocString {
     if bytes < 1024 {
         return format!("{} B", bytes);
     }
@@ -142,7 +142,7 @@ pub(super) fn format_bytes(bytes: u64) -> AllocString {
     format!("{:.1} TB", gb / 1024.0)
 }
 
-pub(super) fn format_metric_units(value: u64, unit: &str) -> AllocString {
+pub(crate) fn format_metric_units(value: u64, unit: &str) -> AllocString {
     if value < 1_000 {
         return format!("{} {}", value, unit);
     }
@@ -161,7 +161,7 @@ pub(super) fn format_metric_units(value: u64, unit: &str) -> AllocString {
     format!("{:.1} T{}", g / 1_000.0, unit)
 }
 
-pub(super) fn elapsed_ms_since(start_tick: u64) -> u64 {
+pub(crate) fn elapsed_ms_since(start_tick: u64) -> u64 {
     let now_tick = embassy_time_driver::now();
     let elapsed_ticks = now_tick.saturating_sub(start_tick);
     let hz = embassy_time_driver::TICK_HZ;
@@ -172,7 +172,7 @@ pub(super) fn elapsed_ms_since(start_tick: u64) -> u64 {
     }
 }
 
-pub(super) fn bps_from_progress(bytes: u64, elapsed_ms: u64) -> u64 {
+pub(crate) fn bps_from_progress(bytes: u64, elapsed_ms: u64) -> u64 {
     if elapsed_ms == 0 {
         0
     } else {
@@ -180,7 +180,7 @@ pub(super) fn bps_from_progress(bytes: u64, elapsed_ms: u64) -> u64 {
     }
 }
 
-pub(super) fn units_per_second_from_ticks(units: u64, elapsed_ticks: u64) -> u64 {
+pub(crate) fn units_per_second_from_ticks(units: u64, elapsed_ticks: u64) -> u64 {
     if elapsed_ticks == 0 {
         0
     } else {
@@ -298,7 +298,7 @@ fn parse_kv_u64(text: &str, key: &str) -> Option<u64> {
     digits[..end].parse::<u64>().ok()
 }
 
-pub(super) fn online_background_worker_slots() -> Vec<u32> {
+pub(crate) fn online_background_worker_slots() -> Vec<u32> {
     let mut slots: Vec<u32> = crate::workers::background_worker_slots()
         .into_iter()
         .filter(|slot| {
@@ -655,7 +655,7 @@ pub(crate) fn bench_session_finish(session_id: u64) {
     }
 }
 
-pub(super) fn bench_cancel_requested(session_id: u64) -> bool {
+pub(crate) fn bench_cancel_requested(session_id: u64) -> bool {
     BENCH_SESSIONS
         .lock()
         .iter()

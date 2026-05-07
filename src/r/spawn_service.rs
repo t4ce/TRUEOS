@@ -408,7 +408,7 @@ fn spawn_logtotcp(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_lumen_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::r::lumen_service::lumen_service_task())
+    spawn_local(spawner, |_spawner| crate::lumen::lumen_service::lumen_service_task())
 }
 
 fn boot_lumen_service_enabled() -> bool {
