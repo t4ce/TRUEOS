@@ -15,13 +15,13 @@
 //!
 //! Reference: Intel iwlwifi driver (Linux), iwl4965 datasheet
 
+#![allow(dead_code)]
+
 use alloc::boxed::Box;
-use alloc::format;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::ptr::{read_volatile, write_volatile};
-use core::sync::atomic::{AtomicBool, Ordering};
 
 use super::wifi::{WifiDriver, WifiNetwork, WifiSecurity, WifiState};
 use super::{Driver, DriverCategory, DriverInfo, DriverStatus, NetStats, NetworkDriver};

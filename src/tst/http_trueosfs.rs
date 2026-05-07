@@ -64,6 +64,78 @@ const HTTP_OCTET_STREAM: &str = "application/octet-stream";
 const HTTP_MULTIPART_BOUNDARY: &str = "trueosfs-boundary";
 const HTTP_MULTIPART_CONTENT_TYPE: &str = "multipart/byteranges; boundary=trueosfs-boundary";
 
+struct HttpTrueosfsEndpoint {
+    vnet: VNet,
+    server: vhttp_srv::HttpServer,
+    listener_ready: bool,
+    dev_idx: usize,
+}
+
+fn http_trueosfs_open_endpoint(dev_idx: usize) -> Option<HttpTrueosfsEndpoint> {
+    let usable = crate::net::adapter::ipv4_at(dev_idx).is_some()
+        || crate::net::link_state_at(dev_idx)
+            .map(|state| state.up)
+            .unwrap_or(false);
+    if !usable {
+        return None;
+    }
+    let vnet = VNet::open(dev_idx)?;
+    if vnet
+        .submit(api::Command::OpenTcpListen {
+            port: ports::HTTP_TRUEOSFS_TCP_PORT,
+        })
+        .is_err()
+    {
+        crate::log!("http-trueosfs: listen submit failed dev={} owner={}\n", dev_idx, vnet.owner());
+        return None;
+    }
+    let ip = crate::net::adapter::ipv4_at(dev_idx);
+    let name = crate::net::device_name_at(dev_idx).unwrap_or("?");
+    match ip {
+        Some([a, b, c, d]) => crate::log!(
+            "http-trueosfs: listening on tcp {} owner={} dev={} {} ip={}.{}.{}.{}\n",
+            ports::HTTP_TRUEOSFS_TCP_PORT,
+            vnet.owner(),
+            dev_idx,
+            name,
+            a,
+            b,
+            c,
+            d
+        ),
+        None => crate::log!(
+            "http-trueosfs: listening on tcp {} owner={} dev={} {} ip=none\n",
+            ports::HTTP_TRUEOSFS_TCP_PORT,
+            vnet.owner(),
+            dev_idx,
+            name
+        ),
+    }
+    Some(HttpTrueosfsEndpoint {
+        vnet,
+        server: vhttp_srv::HttpServer::new(
+            ports::HTTP_TRUEOSFS_TCP_PORT,
+            HTTP_TRUEOSFS_MAX_REQUEST_BYTES,
+        ),
+        listener_ready: false,
+        dev_idx,
+    })
+}
+
+fn http_trueosfs_add_endpoints(endpoints: &mut Vec<HttpTrueosfsEndpoint>) -> usize {
+    let mut added = 0;
+    for dev_idx in 0..crate::net::device_count() {
+        if endpoints.iter().any(|endpoint| endpoint.dev_idx == dev_idx) {
+            continue;
+        }
+        if let Some(endpoint) = http_trueosfs_open_endpoint(dev_idx) {
+            endpoints.push(endpoint);
+            added += 1;
+        }
+    }
+    added
+}
+
 fn http_stream_chunk_bytes(disk: DeviceHandle) -> usize {
     let mut base = disk.max_transfer_bytes() as usize;
     if base == 0 {
@@ -447,52 +519,42 @@ fn http_mount_page(roots_html: &str, has_roots: bool) -> HttpResponsePlan {
 #[embassy_executor::task]
 pub async fn http_trueosfs_task() {
     async move {
-        // Once the network is reachable, `open_primary()` should succeed; keep it strict.
-        let vnet = loop {
-            if let Some(v) = VNet::open_primary() {
-                break v;
+        let mut endpoints: Vec<HttpTrueosfsEndpoint> = Vec::new();
+        loop {
+            http_trueosfs_add_endpoints(&mut endpoints);
+            if !endpoints.is_empty() {
+                break;
             }
-            Timer::after(EmbassyDuration::from_millis(50)).await;
-        };
-
-        if vnet
-            .submit(api::Command::OpenTcpListen {
-                port: ports::HTTP_TRUEOSFS_TCP_PORT,
-            })
-            .is_err()
-        {
-            crate::log!("http-trueosfs: listen submit failed\n");
-            return;
+            crate::log!("http-trueosfs: waiting for a usable NIC\n");
+            Timer::after(EmbassyDuration::from_millis(250)).await;
         }
 
-        crate::log!(
-            "http-trueosfs: listening on tcp {} (hostfwd localhost:8080 -> guest:80)\n",
-            ports::HTTP_TRUEOSFS_TCP_PORT
-        );
-
-        let mut server = vhttp_srv::HttpServer::new(
-            ports::HTTP_TRUEOSFS_TCP_PORT,
-            HTTP_TRUEOSFS_MAX_REQUEST_BYTES,
-        );
-        let mut listener_ready = false;
-
+        let mut endpoint_discovery_ticks = 0u32;
         loop {
-            while let Some(ev) = vnet.pop_event() {
-                if !listener_ready
-                    && let api::Event::Opened {
-                        kind: api::SocketKind::Tcp,
-                        ..
-                    } = ev
-                {
-                    listener_ready = true;
-                    crate::r::readiness::set(crate::r::readiness::HTTP_TRUEOSFS_LISTENING);
-                    crate::log!("http-trueosfs: tcp listen opened and ready\n");
-                }
+            if endpoint_discovery_ticks == 0 {
+                http_trueosfs_add_endpoints(&mut endpoints);
+            }
+            endpoint_discovery_ticks = (endpoint_discovery_ticks + 1) % 100;
+            for endpoint in endpoints.iter_mut() {
+                while let Some(ev) = endpoint.vnet.pop_event() {
+                    if !endpoint.listener_ready
+                        && let api::Event::Opened {
+                            kind: api::SocketKind::Tcp,
+                            ..
+                        } = ev
+                    {
+                        endpoint.listener_ready = true;
+                        crate::r::readiness::set(crate::r::readiness::HTTP_TRUEOSFS_LISTENING);
+                        crate::log!(
+                            "http-trueosfs: tcp listen opened and ready dev={}\n",
+                            endpoint.dev_idx
+                        );
+                    }
 
-                match server.on_event(ev) {
+                    match endpoint.server.on_event(ev) {
                     vhttp_srv::HttpServerEvent::None => {}
                     vhttp_srv::HttpServerEvent::Submit(cmd) => {
-                        let _ = vnet.submit(cmd);
+                        let _ = endpoint.vnet.submit(cmd);
                     }
                     vhttp_srv::HttpServerEvent::Error(msg) => {
                         crate::log!("http-trueosfs: error {}\n", msg);
@@ -509,9 +571,9 @@ pub async fn http_trueosfs_task() {
                             body.len() as u64,
                             false,
                         );
-                        server.mark_response(handle, pending, false);
+                        endpoint.server.mark_response(handle, pending, false);
                         vhttp_srv::queue_send_bytes(&mut cmds, handle, body);
-                        http_submit_commands(&vnet, cmds);
+                        http_submit_commands(&endpoint.vnet, cmds);
                     }
                     vhttp_srv::HttpServerEvent::BadRequest { handle } => {
                         crate::log!("http-trueosfs: 400 bad request line/header parse\n");
@@ -526,9 +588,9 @@ pub async fn http_trueosfs_task() {
                             body.len() as u64,
                             false,
                         );
-                        server.mark_response(handle, pending, false);
+                        endpoint.server.mark_response(handle, pending, false);
                         vhttp_srv::queue_send_bytes(&mut cmds, handle, body);
-                        http_submit_commands(&vnet, cmds);
+                        http_submit_commands(&endpoint.vnet, cmds);
                     }
                     vhttp_srv::HttpServerEvent::RequestReady { handle, request } => {
                         let method = request.method().to_string();
@@ -812,8 +874,8 @@ pub async fn http_trueosfs_task() {
                             body_len,
                             request.keep_alive(),
                         );
-                        server.mark_response(handle, pending, request.keep_alive());
-                        http_submit_commands(&vnet, cmds);
+                        endpoint.server.mark_response(handle, pending, request.keep_alive());
+                        http_submit_commands(&endpoint.vnet, cmds);
 
                         let mut perf = HttpPerf::default();
 
@@ -821,7 +883,7 @@ pub async fn http_trueosfs_task() {
                             HttpBodyPlan::Bytes(bytes) => {
                                 let mut cmds = Vec::new();
                                 vhttp_srv::queue_send_bytes(&mut cmds, handle, bytes.as_slice());
-                                http_submit_commands(&vnet, cmds);
+                                http_submit_commands(&endpoint.vnet, cmds);
                             }
                             HttpBodyPlan::File {
                                 disk,
@@ -854,7 +916,7 @@ pub async fn http_trueosfs_task() {
                                     let t2 = tsc_now();
                                     let mut cmds = Vec::new();
                                     vhttp_srv::queue_send_bytes(&mut cmds, handle, &buf[..read]);
-                                    http_submit_commands(&vnet, cmds);
+                                    http_submit_commands(&endpoint.vnet, cmds);
                                     let t3 = tsc_now();
                                     perf.record_submit(t3.wrapping_sub(t2), read);
                                     off = off.saturating_add(read as u64);
@@ -871,7 +933,7 @@ pub async fn http_trueosfs_task() {
                                 for part in parts {
                                     let mut cmds = Vec::new();
                                     vhttp_srv::queue_send_bytes(&mut cmds, handle, part.header.as_bytes());
-                                    http_submit_commands(&vnet, cmds);
+                                    http_submit_commands(&endpoint.vnet, cmds);
                                     let mut remaining = part.end.saturating_sub(part.start).saturating_add(1);
                                     let mut off = part.start;
                                     while remaining > 0 {
@@ -896,7 +958,7 @@ pub async fn http_trueosfs_task() {
                                         let t2 = tsc_now();
                                         let mut cmds = Vec::new();
                                         vhttp_srv::queue_send_bytes(&mut cmds, handle, &buf[..read]);
-                                        http_submit_commands(&vnet, cmds);
+                                        http_submit_commands(&endpoint.vnet, cmds);
                                         let t3 = tsc_now();
                                         perf.record_submit(t3.wrapping_sub(t2), read);
                                         off = off.saturating_add(read as u64);
@@ -904,12 +966,12 @@ pub async fn http_trueosfs_task() {
                                     }
                                     let mut cmds = Vec::new();
                                     vhttp_srv::queue_send_bytes(&mut cmds, handle, b"\r\n");
-                                    http_submit_commands(&vnet, cmds);
+                                    http_submit_commands(&endpoint.vnet, cmds);
                                 }
                                 let closing = format!("--{}--\r\n", boundary);
                                 let mut cmds = Vec::new();
                                 vhttp_srv::queue_send_bytes(&mut cmds, handle, closing.as_bytes());
-                                http_submit_commands(&vnet, cmds);
+                                http_submit_commands(&endpoint.vnet, cmds);
                             }
                             HttpBodyPlan::None => {}
                         }
@@ -917,6 +979,7 @@ pub async fn http_trueosfs_task() {
                         perf.log();
                     }
                 }
+            }
             }
 
             Timer::after(EmbassyDuration::from_millis(10)).await;

@@ -83,6 +83,17 @@ That command:
 - runs the host Vulkan triangle and saves its verification log
 - validates `.codex_tmp/generated_simple.rs` against the host proof log
 
+On hybrid systems, the dumper logs every Vulkan physical device and then picks
+the first Intel graphics queue. To force a specific Intel device, set one of:
+
+```bash
+TRUEOS_VK_DEVICE_ID=0xA780 python3 tools/xe_lp_shader_bake/run_host_validation.py
+TRUEOS_VK_DEVICE_NAME='Intel(R) Graphics' python3 tools/xe_lp_shader_bake/run_host_validation.py
+```
+
+The dump log records the chosen `vendor`, `device`, queue family, and device
+name before the pipeline-cache and executable dumps.
+
 If you later have fresh `triangle_vs.bin` / `triangle_ps.bin` plus metadata,
 the same script can package and validate them in one go:
 

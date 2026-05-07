@@ -61,7 +61,7 @@ impl NetProfile {
         match self.nic_index {
             Some(idx) if idx < count => Some(idx),
             Some(_) => None,
-            None => Some(crate::net::default_device_index()),
+            None => Some(crate::net::primary_device_index()),
         }
     }
 }

@@ -96,6 +96,71 @@ static const char *stage_name(VkShaderStageFlags stage) {
     }
 }
 
+static const char *device_type_name(VkPhysicalDeviceType type) {
+    switch (type) {
+        case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU:
+            return "integrated";
+        case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
+            return "discrete";
+        case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:
+            return "virtual";
+        case VK_PHYSICAL_DEVICE_TYPE_CPU:
+            return "cpu";
+        default:
+            return "other";
+    }
+}
+
+static int parse_u32_env(const char *name, uint32_t *out) {
+    const char *value = getenv(name);
+    if (!value || !value[0]) {
+        return 0;
+    }
+    char *end = NULL;
+    unsigned long parsed = strtoul(value, &end, 0);
+    if (end == value || *end != '\0' || parsed > UINT32_MAX) {
+        fprintf(stderr, "invalid %s=%s\n", name, value);
+        exit(1);
+    }
+    *out = (uint32_t)parsed;
+    return 1;
+}
+
+static int physical_device_has_extension(VkPhysicalDevice physical_device, const char *wanted) {
+    uint32_t count = 0;
+    CHECK_VK(vkEnumerateDeviceExtensionProperties(physical_device, NULL, &count, NULL));
+    VkExtensionProperties *extensions = calloc(count, sizeof(*extensions));
+    if (!extensions) {
+        fprintf(stderr, "oom enumerating device extensions\n");
+        exit(1);
+    }
+    CHECK_VK(vkEnumerateDeviceExtensionProperties(physical_device, NULL, &count, extensions));
+    int found = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        if (strcmp(extensions[i].extensionName, wanted) == 0) {
+            found = 1;
+            break;
+        }
+    }
+    free(extensions);
+    return found;
+}
+
+static int physical_device_matches_selector(const VkPhysicalDeviceProperties *props) {
+    uint32_t wanted_device_id = 0;
+    if (parse_u32_env("TRUEOS_VK_DEVICE_ID", &wanted_device_id) &&
+        props->deviceID != wanted_device_id) {
+        return 0;
+    }
+
+    const char *wanted_name = getenv("TRUEOS_VK_DEVICE_NAME");
+    if (wanted_name && wanted_name[0] && strstr(props->deviceName, wanted_name) == NULL) {
+        return 0;
+    }
+
+    return 1;
+}
+
 static void sanitize_name(const char *src, char *dst, size_t dst_size) {
     size_t j = 0;
     if (dst_size == 0) {
@@ -403,10 +468,35 @@ int main(int argc, char **argv) {
 
     VkPhysicalDevice physical_device = VK_NULL_HANDLE;
     uint32_t graphics_family = UINT32_MAX;
+    VkPhysicalDeviceProperties selected_props = { 0 };
     for (uint32_t i = 0; i < physical_count; ++i) {
         VkPhysicalDeviceProperties props;
         vkGetPhysicalDeviceProperties(physical_devices[i], &props);
+        printf(
+            "simple_triangle_dump: physical[%u] vendor=0x%04X device=0x%04X type=%s api=0x%08X driver=0x%08X name=\"%s\"\n",
+            i,
+            props.vendorID,
+            props.deviceID,
+            device_type_name(props.deviceType),
+            props.apiVersion,
+            props.driverVersion,
+            props.deviceName
+        );
         if (props.vendorID != 0x8086) {
+            continue;
+        }
+        if (!physical_device_matches_selector(&props)) {
+            continue;
+        }
+        if (!physical_device_has_extension(
+                physical_devices[i],
+                VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME
+            )) {
+            printf(
+                "simple_triangle_dump: skip device=0x%04X missing %s\n",
+                props.deviceID,
+                VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME
+            );
             continue;
         }
         uint32_t queue_count = 0;
@@ -417,6 +507,7 @@ int main(int argc, char **argv) {
             if (queues[q].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
                 physical_device = physical_devices[i];
                 graphics_family = q;
+                selected_props = props;
                 break;
             }
         }
@@ -430,6 +521,13 @@ int main(int argc, char **argv) {
         fprintf(stderr, "failed to find intel graphics queue\n");
         return 1;
     }
+    printf(
+        "simple_triangle_dump: selected vendor=0x%04X device=0x%04X queue_family=%u name=\"%s\"\n",
+        selected_props.vendorID,
+        selected_props.deviceID,
+        graphics_family,
+        selected_props.deviceName
+    );
 
     const float queue_priority = 1.0f;
     const VkDeviceQueueCreateInfo queue_info = {
