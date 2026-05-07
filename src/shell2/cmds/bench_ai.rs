@@ -1219,6 +1219,36 @@ struct LumenRuntimeLoadReport {
     loaded_tensors: usize,
     loaded_bytes: u64,
     missing_tensors: usize,
+    phase_ms: LumenRuntimeLoadPhaseMs,
+}
+
+#[derive(Clone, Copy, Default)]
+struct LumenRuntimeLoadPhaseMs {
+    alloc: u64,
+    read: u64,
+    decode: u64,
+    import: u64,
+    manifest: u64,
+}
+
+impl LumenRuntimeLoadPhaseMs {
+    fn total(self) -> u64 {
+        self.alloc
+            .saturating_add(self.read)
+            .saturating_add(self.decode)
+            .saturating_add(self.import)
+            .saturating_add(self.manifest)
+    }
+
+    fn saturating_sub(self, previous: Self) -> Self {
+        Self {
+            alloc: self.alloc.saturating_sub(previous.alloc),
+            read: self.read.saturating_sub(previous.read),
+            decode: self.decode.saturating_sub(previous.decode),
+            import: self.import.saturating_sub(previous.import),
+            manifest: self.manifest.saturating_sub(previous.manifest),
+        }
+    }
 }
 
 fn lumen_preflight_retryable_error(err: crate::disc::block::Error) -> bool {
@@ -1333,6 +1363,8 @@ async fn load_lumen_model_from_trueosfs(
     let progress_start = embassy_time_driver::now();
     let mut last_progress_tick = progress_start;
     let mut last_progress_bytes = 0u64;
+    let mut phase_ms = LumenRuntimeLoadPhaseMs::default();
+    let mut last_progress_phase_ms = phase_ms;
     crate::lumen_net::begin_matrix_manifest_load();
     for (_, name, tensor) in ordered {
         if bench_cancel_requested(session_id) {
@@ -1372,53 +1404,58 @@ async fn load_lumen_model_from_trueosfs(
             return Err(format!("{} safetensors range invalid", name));
         }
 
-        let bytes = match crate::r::stream::read_trueosfs_file_range_via_pipe_async(
+        let alloc_start = embassy_time_driver::now();
+        let mut bytes = vec![0u8; byte_count];
+        phase_ms.alloc = phase_ms.alloc.saturating_add(elapsed_ms_since(alloc_start));
+
+        let read_start = embassy_time_driver::now();
+        match crate::r::stream::read_trueosfs_file_range_into_async(
             disk,
             LUMEN_WEIGHTS_PATH,
             loc.file_offset,
-            byte_count,
+            bytes.as_mut_slice(),
         )
         .await
         {
-            Ok(Some(bytes)) if bytes.len() == byte_count => bytes,
-            Ok(Some(bytes)) => {
-                return Err(format!(
-                    "{} short read got={} need={}",
-                    name,
-                    format_bytes(bytes.len() as u64),
-                    format_bytes(byte_count as u64)
-                ));
-            }
-            Ok(None) => return Err(format!("{} disappeared during weight load", name)),
+            Ok(true) => {}
+            Ok(false) => return Err(format!("{} disappeared during weight load", name)),
             Err(err) => return Err(format!("{} read failed err={:?}", name, err)),
-        };
+        }
+        phase_ms.read = phase_ms.read.saturating_add(elapsed_ms_since(read_start));
 
-        match dtype {
-            "BF16" => tensor
-                .import_raw(
-                    shape.clone(),
-                    DType::BF16,
-                    TensorRawData::BF16(bytes_to_u16_vec(&bytes)),
-                )
-                .map_err(|err| format!("{} BF16 import failed: {}", name, err))?,
-            "F16" => tensor
-                .import_raw(shape.clone(), DType::F16, TensorRawData::F16(bytes_to_u16_vec(&bytes)))
-                .map_err(|err| format!("{} F16 import failed: {}", name, err))?,
+        let decode_start = embassy_time_driver::now();
+        let raw = match dtype {
+            "BF16" => (DType::BF16, TensorRawData::BF16(bytes_to_u16_vec(&bytes))),
+            "F16" => (DType::F16, TensorRawData::F16(bytes_to_u16_vec(&bytes))),
             "F32" => {
                 let mut values = Vec::with_capacity(bytes.len() / 4);
                 for chunk in bytes.chunks_exact(4) {
                     values.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
                 }
-                tensor
-                    .import_raw(shape.clone(), DType::F32, TensorRawData::F32(values))
-                    .map_err(|err| format!("{} F32 import failed: {}", name, err))?;
+                (DType::F32, TensorRawData::F32(values))
             }
             other => return Err(format!("{} unsupported runtime import dtype={}", name, other)),
-        }
+        };
+        phase_ms.decode = phase_ms
+            .decode
+            .saturating_add(elapsed_ms_since(decode_start));
+        drop(bytes);
 
+        let import_start = embassy_time_driver::now();
+        tensor
+            .import_raw(shape.clone(), raw.0, raw.1)
+            .map_err(|err| format!("{} {} import failed: {}", name, dtype, err))?;
+        phase_ms.import = phase_ms
+            .import
+            .saturating_add(elapsed_ms_since(import_start));
+
+        let manifest_start = embassy_time_driver::now();
         if let Some((ptr, len)) = tensor.bf16_storage_ptr_len_bytes() {
             crate::lumen_net::register_loaded_matrix(name, dtype, &shape, ptr as usize, len);
         }
+        phase_ms.manifest = phase_ms
+            .manifest
+            .saturating_add(elapsed_ms_since(manifest_start));
 
         loaded_tensors = loaded_tensors.saturating_add(1);
         loaded_bytes = loaded_bytes.saturating_add(byte_count as u64);
@@ -1430,8 +1467,9 @@ async fn load_lumen_model_from_trueosfs(
             let elapsed_ms = elapsed_ms_since(progress_start);
             let step_ms = elapsed_ms_since(last_progress_tick);
             let step_bytes = loaded_bytes.saturating_sub(last_progress_bytes);
+            let step_phase_ms = phase_ms.saturating_sub(last_progress_phase_ms);
             crate::log!(
-                "bench lumen: runtime-hi loading tensors={} tensor={} tensor_bytes={} bytes={} elapsed={}ms speed={} step_bytes={} step_ms={} step_speed={}\n",
+                "bench lumen: runtime-hi loading tensors={} tensor={} tensor_bytes={} bytes={} elapsed={}ms speed={} step_bytes={} step_ms={} step_speed={} phase_ms=alloc:{} read:{} decode:{} import:{} manifest:{} step_phase_ms=alloc:{} read:{} decode:{} import:{} manifest:{}\n",
                 loaded_tensors,
                 name,
                 format_bytes(byte_count as u64),
@@ -1440,10 +1478,21 @@ async fn load_lumen_model_from_trueosfs(
                 format_speed(bps_from_progress(loaded_bytes, elapsed_ms)),
                 format_bytes(step_bytes),
                 step_ms,
-                format_speed(bps_from_progress(step_bytes, step_ms))
+                format_speed(bps_from_progress(step_bytes, step_ms)),
+                phase_ms.alloc,
+                phase_ms.read,
+                phase_ms.decode,
+                phase_ms.import,
+                phase_ms.manifest,
+                step_phase_ms.alloc,
+                step_phase_ms.read,
+                step_phase_ms.decode,
+                step_phase_ms.import,
+                step_phase_ms.manifest
             );
             last_progress_tick = embassy_time_driver::now();
             last_progress_bytes = loaded_bytes;
+            last_progress_phase_ms = phase_ms;
             Timer::after(EmbassyDuration::from_millis(1)).await;
         }
     }
@@ -1452,6 +1501,7 @@ async fn load_lumen_model_from_trueosfs(
         loaded_tensors,
         loaded_bytes,
         missing_tensors,
+        phase_ms,
     })
 }
 
@@ -2358,13 +2408,19 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
         let total_ms = elapsed_ms_since(runtime_start);
         log(
             format!(
-                "bench lumen: runtime loaded load={}ms load_speed={} total={}ms tensors={} missing={} bytes={} max_new_tokens={} note=interactive-until-q",
+                "bench lumen: runtime loaded load={}ms load_speed={} total={}ms tensors={} missing={} bytes={} phase_ms=alloc:{} read:{} decode:{} import:{} manifest:{} accounted:{} max_new_tokens={} note=interactive-until-q",
                 load_ms,
                 format_speed(bps_from_progress(load_report.loaded_bytes, load_ms)),
                 total_ms,
                 load_report.loaded_tensors,
                 load_report.missing_tensors,
                 format_bytes(load_report.loaded_bytes),
+                load_report.phase_ms.alloc,
+                load_report.phase_ms.read,
+                load_report.phase_ms.decode,
+                load_report.phase_ms.import,
+                load_report.phase_ms.manifest,
+                load_report.phase_ms.total(),
                 LUMEN_RUNTIME_MAX_NEW_TOKENS
             )
             .as_str(),

@@ -86,6 +86,19 @@ pub fn pick_background_spawner() -> Option<SendSpawner> {
 }
 
 pub fn pick_background_spawner_with_slot() -> Option<(u32, u8, SendSpawner)> {
+    pick_background_spawner_with_filter(|_| true)
+}
+
+pub fn pick_background_spawner_excluding_slot(
+    excluded_slot: u32,
+) -> Option<(u32, u8, SendSpawner)> {
+    pick_background_spawner_with_filter(|slot| slot != excluded_slot)
+}
+
+fn pick_background_spawner_with_filter<F>(accept_slot: F) -> Option<(u32, u8, SendSpawner)>
+where
+    F: Fn(u32) -> bool,
+{
     let map = CORE_SPAWNERS.lock();
     if map.is_empty() {
         return None;
@@ -94,7 +107,7 @@ pub fn pick_background_spawner_with_slot() -> Option<(u32, u8, SendSpawner)> {
     let kinds = CORE_KINDS.lock();
     let perf_count = map
         .iter()
-        .filter(|(slot, _)| **slot >= FIRST_BACKGROUND_SLOT)
+        .filter(|(slot, _)| **slot >= FIRST_BACKGROUND_SLOT && accept_slot(**slot))
         .filter(|(slot, _)| kinds.get(slot).copied().unwrap_or(CORE_KIND_UNKNOWN) == CORE_KIND_PERF)
         .count();
 
@@ -102,7 +115,7 @@ pub fn pick_background_spawner_with_slot() -> Option<(u32, u8, SendSpawner)> {
         let idx = SPAWN_RR.fetch_add(1, Ordering::Relaxed) as usize % perf_count;
         let mut seen = 0;
         for (slot, spawner) in map.iter() {
-            if *slot < FIRST_BACKGROUND_SLOT {
+            if *slot < FIRST_BACKGROUND_SLOT || !accept_slot(*slot) {
                 continue;
             }
             let kind = kinds.get(slot).copied().unwrap_or(CORE_KIND_UNKNOWN);
@@ -119,7 +132,7 @@ pub fn pick_background_spawner_with_slot() -> Option<(u32, u8, SendSpawner)> {
 
     let eligible_count = map
         .keys()
-        .filter(|slot| **slot >= FIRST_BACKGROUND_SLOT)
+        .filter(|slot| **slot >= FIRST_BACKGROUND_SLOT && accept_slot(**slot))
         .count();
     if eligible_count == 0 {
         return None;
@@ -128,7 +141,7 @@ pub fn pick_background_spawner_with_slot() -> Option<(u32, u8, SendSpawner)> {
     let idx = SPAWN_RR.fetch_add(1, Ordering::Relaxed) as usize % eligible_count;
     let mut seen = 0;
     for (slot, spawner) in map.iter() {
-        if *slot < FIRST_BACKGROUND_SLOT {
+        if *slot < FIRST_BACKGROUND_SLOT || !accept_slot(*slot) {
             continue;
         }
         if seen == idx {

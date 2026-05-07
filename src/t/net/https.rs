@@ -990,7 +990,15 @@ fn spawn_cabi_net_fetch(
     timeout_ms: u32,
     max_bytes: usize,
 ) {
-    if let Some(spawner) = crate::workers::pick_background_spawner()
+    let caller_slot = crate::percpu::current_slot() as u32;
+    let picked_spawner = if crate::workers::is_background_worker_slot(caller_slot) {
+        crate::workers::pick_background_spawner_excluding_slot(caller_slot)
+            .or_else(crate::workers::pick_background_spawner_with_slot)
+    } else {
+        crate::workers::pick_background_spawner_with_slot()
+    };
+
+    if let Some((_cpu_slot, _core_kind, spawner)) = picked_spawner
         && let Ok(token) = cabi_net_fetch_task(
             op_id,
             key.clone(),
@@ -1092,13 +1100,21 @@ async fn cabi_net_fetch_bytes_task(op_id: u32, url: String, timeout_ms: u32, max
 }
 
 fn spawn_cabi_net_fetch_bytes(op_id: u32, url: String, timeout_ms: u32, max_bytes: usize) {
-    if let Some((cpu_slot, core_kind, spawner)) =
+    let caller_slot = crate::percpu::current_slot() as u32;
+    let picked_spawner = if crate::workers::is_background_worker_slot(caller_slot) {
+        crate::workers::pick_background_spawner_excluding_slot(caller_slot)
+            .or_else(crate::workers::pick_background_spawner_with_slot)
+    } else {
         crate::workers::pick_background_spawner_with_slot()
+    };
+
+    if let Some((cpu_slot, core_kind, spawner)) = picked_spawner
         && let Ok(token) = cabi_net_fetch_bytes_task(op_id, url.clone(), timeout_ms, max_bytes)
     {
         crate::log!(
-            "net-fetch-bytes: spawn op_id={} lane=background cpu_slot={} core_kind={} timeout_ms={} max_bytes={} url_len={}\n",
+            "net-fetch-bytes: spawn op_id={} lane=background caller_slot={} cpu_slot={} core_kind={} timeout_ms={} max_bytes={} url_len={}\n",
             op_id,
+            caller_slot,
             cpu_slot,
             core_kind,
             timeout_ms,
@@ -1110,8 +1126,9 @@ fn spawn_cabi_net_fetch_bytes(op_id: u32, url: String, timeout_ms: u32, max_byte
     }
 
     crate::log!(
-        "net-fetch-bytes: spawn op_id={} lane=local timeout_ms={} max_bytes={} url_len={}\n",
+        "net-fetch-bytes: spawn op_id={} lane=local caller_slot={} timeout_ms={} max_bytes={} url_len={}\n",
         op_id,
+        caller_slot,
         timeout_ms,
         max_bytes,
         url.len()

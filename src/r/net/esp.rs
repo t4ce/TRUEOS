@@ -18,6 +18,7 @@ const TRUEOS_LUMEN_WORK_FRAME_MAX: usize = 256;
 const TRUEOS_LUMEN_WORK_PROBE_TIMEOUT_MS: u64 = 3000;
 const TRUEOS_LUMEN_WORK_PROBE_PREFIX: &str = "C0DEC0DE LUMEN_CAN_TAKE_WORK";
 const TRUEOS_LUMEN_WORK_CAP_PREFIX: &str = "C0DEC0DE LUMEN_WORK_CAP";
+const TRUEOS_LUMEN_MATVEC_SHADOW_PREFIX: &str = "C0DEC0DE LUMEN_MATVEC_SHADOW";
 const TRUEOS_SWARM_HOST_CAP: usize = crate::allcaps::net::TRUEOS_SWARM_HOST_CAP;
 const TRUEOS_PEER_LINK_CAP: usize = crate::allcaps::net::TRUEOS_SWARM_PEER_LINK_CAP;
 const TRUEOS_PEER_RX_BUF_BYTES: usize = crate::allcaps::net::TRUEOS_SWARM_PEER_RX_BUF_BYTES;
@@ -139,6 +140,14 @@ fn trueos_lumen_work_probe_received(data: &[u8]) -> bool {
         .unwrap_or(false)
 }
 
+fn trueos_lumen_matvec_shadow_received(data: &[u8]) -> Option<&str> {
+    let text = core::str::from_utf8(data).ok()?;
+    text.lines().find(|line| {
+        line.trim_start()
+            .starts_with(TRUEOS_LUMEN_MATVEC_SHADOW_PREFIX)
+    })
+}
+
 #[derive(Copy, Clone, Debug, Default)]
 struct LumenWorkCapacity {
     lanes: u32,
@@ -238,6 +247,27 @@ fn submit_trueos_lumen_work_probe_to_all(vnet: &VNet, links: &[TrueOsPeerLink]) 
         }
     }
     sent
+}
+
+fn submit_trueos_lumen_shadow_frame_to_first_peer(
+    vnet: &VNet,
+    links: &[TrueOsPeerLink],
+    frame: &[u8],
+) -> bool {
+    let Some(handle) = links.iter().find_map(|link| link.handle) else {
+        return false;
+    };
+    let _ = vnet.submit(v::vnet::Command::SendTcp {
+        handle,
+        data: v::vnet::ByteBuf::from_slice_trunc(frame),
+    });
+    crate::log!(
+        "esp-gate: lumen matvec shadow sent handle={} bytes={} pending={}\n",
+        handle.0,
+        frame.len().min(v::vnet::MAX_MSG),
+        crate::lumen_net::pending_shadow_bf16_matvecs()
+    );
+    true
 }
 
 fn advertise_trueos_peer(vnet: &VNet, udp_handle: v::vnet::NetHandle, node_id: u64) {
@@ -576,6 +606,14 @@ pub async fn esp_gate_task() {
                         if trueos_lumen_work_probe_received(data.as_slice()) {
                             submit_trueos_lumen_work_capacity(&vnet, handle);
                         }
+                        if let Some(line) = trueos_lumen_matvec_shadow_received(data.as_slice()) {
+                            crate::log!(
+                                "esp-gate: lumen matvec shadow received handle={} bytes={} {}\n",
+                                handle.0,
+                                data.len(),
+                                line
+                            );
+                        }
                         if let Some(capacity) = parse_trueos_lumen_work_capacity(data.as_slice()) {
                             let now_ms = monotonic_ms();
                             if lumen_work_probe_deadline_ms != 0
@@ -769,6 +807,19 @@ pub async fn esp_gate_task() {
                     lumen_work_probe_best
                 );
                 lumen_work_probe_deadline_ms = 0;
+            }
+
+            if let Some(frame) = crate::lumen_net::take_shadow_bf16_matvec_frame()
+                && !submit_trueos_lumen_shadow_frame_to_first_peer(
+                    &vnet,
+                    peer_links.as_slice(),
+                    frame.as_slice(),
+                )
+            {
+                crate::log!(
+                    "esp-gate: lumen matvec shadow drop reason=no-peers bytes={}\n",
+                    frame.len()
+                );
             }
 
             Timer::after(Duration::from_millis(10)).await;
