@@ -83,12 +83,9 @@ const PIPE_BIND_BLENDABLE: u32 = 1 << 2;
 // Gallium bind flag used for textures sampled by a shader.
 const PIPE_BIND_SAMPLER_VIEW: u32 = 1 << 3;
 const PIPE_BIND_VERTEX_BUFFER: u32 = 1 << 4;
-const PIPE_BIND_DISPLAY_TARGET: u32 = 1 << 8;
-const PIPE_BIND_SCANOUT: u32 = 1 << 14;
 
 // Virgl format IDs (see virgl_hw.h):
 const VIRGL_FORMAT_B8G8R8A8_UNORM: u32 = 1;
-const VIRGL_FORMAT_B8G8R8X8_UNORM: u32 = 2;
 // virgl_hw.h: VIRGL_FORMAT_R8G8B8A8_UNORM = 67
 const VIRGL_FORMAT_R8G8B8A8_UNORM: u32 = 67;
 const VIRGL_FORMAT_R8_UNORM: u32 = 64;
@@ -736,7 +733,6 @@ struct CmdSubmit3d {
 }
 
 pub struct VirtioGpu3d {
-    common: core::ptr::NonNull<VirtioPciCommonCfg>,
     notify: core::ptr::NonNull<u8>,
     notify_mult: u32,
     ctrlq: VirtQueue,
@@ -789,7 +785,6 @@ impl VirtioGpu3d {
         let resp = DmaRegion::alloc(4 * 1024, 16)?;
 
         Some(Self {
-            common,
             notify,
             notify_mult: caps.notify_mult,
             ctrlq,
@@ -1388,7 +1383,6 @@ IMM[2] FLT32 { 0.700000, 0.820000, 0.980000, 0.000000 }\n\
    21: MUL OUT[0].w, TEMP[3].xxxx, IMM[2].zzzz\n\
    22: END\n";
 
-const TEX_PIPELINE_FS_MASK_TAG_RAW: u32 = 0x4D41_534B;
 const TEX_PIPELINE_FS_RGBA_TAG_RAW: u32 = 0x5247_4241;
 const TEX_PIPELINE_FS_PARTICLE_TAG_RAW: u32 = 0x5052_5443;
 
@@ -1571,7 +1565,7 @@ pub struct VirglGfxBackend {
     height: u32,
     scanout_res: u32,
     // Keep backing ownership alive for the lifetime of the backend.
-    scanout_backing: DmaRegion,
+    _scanout_backing: DmaRegion,
     rt_res: u32,
     rt_surf_handle: u32,
 
@@ -2069,7 +2063,7 @@ impl VirglGfxBackend {
             width: present_w,
             height: present_h,
             scanout_res,
-            scanout_backing,
+            _scanout_backing: scanout_backing,
             rt_res,
             rt_surf_handle: surf_handle,
             vbo_res,
@@ -2879,7 +2873,6 @@ impl GfxDevice for VirglGfxBackend {
                     if last_framebuffer_surface != Some(surf) {
                         encode_set_framebuffer(&mut cmd, surf);
                         last_framebuffer_surface = Some(surf);
-                        did_work = true;
                     }
                     clear_ops = clear_ops.saturating_add(1);
                     let (r, g, b) = Self::rgb_to_f32(rgb);
@@ -3998,7 +3991,6 @@ fn encode_create_blend(
     // Values from Mesa pipe/p_defines.h (virgl uses the Gallium enums).
     // NOTE: We only rely on a tiny subset that we have validated with virglrenderer.
     const PIPE_BLEND_ADD: u32 = 0;
-    const PIPE_BLENDFACTOR_ONE: u32 = 1;
 
     buf.push(blend_handle);
     buf.push(0); // s0

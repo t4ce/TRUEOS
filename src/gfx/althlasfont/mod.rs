@@ -84,30 +84,12 @@ pub fn athlas_mark_tier_ready(size_case: usize) -> Option<u32> {
 }
 
 #[inline]
-pub fn athlas_tier_ready(size_case: usize) -> bool {
-    let runtime = ATHLAS_RUNTIME.lock();
-    runtime
-        .get(size_case)
-        .map(|tier| tier.ready)
-        .unwrap_or(false)
-}
-
-#[inline]
 pub fn athlas_tier_ready_seq(size_case: usize) -> u32 {
     let runtime = ATHLAS_RUNTIME.lock();
     runtime
         .get(size_case)
         .map(|tier| tier.ready_seq)
         .unwrap_or(0)
-}
-
-#[inline]
-pub fn athlas_bucket_texture(size_case: usize, bucket: usize) -> Option<AthlasBucketTexture> {
-    let runtime = ATHLAS_RUNTIME.lock();
-    runtime
-        .get(size_case)
-        .and_then(|tier| tier.buckets.get(bucket).copied())
-        .filter(|bucket_tex| bucket_tex.tex_id != 0)
 }
 
 pub fn athlas_resolve_glyph(size_case: usize, ch: char) -> Option<AthlasResolvedGlyph> {

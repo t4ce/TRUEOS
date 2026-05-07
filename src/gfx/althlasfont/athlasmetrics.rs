@@ -8,8 +8,6 @@
 #[derive(Clone, Copy, Debug)]
 pub struct AthlasFontInfo {
     pub units_per_em: u16,
-    pub ascent: i16,
-    pub descent: i16,
     pub line_height: u16,
 }
 
@@ -52,24 +50,11 @@ pub struct AthlasGlyphRegion {
     pub atlas_h: u16,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AthlasLineMetrics {
-    pub line_height_px: u16,
-    pub ascent_px: u16,
-    pub descent_px: i16,
-}
-
-pub const ATHLAS_METRICS_VERSION: u32 = 1;
 pub const ATHLAS_BUCKET_COUNT: usize = 8;
-pub const ATHLAS_VARIANT_HALF: usize = 0;
-pub const ATHLAS_VARIANT_1X: usize = 1;
-pub const ATHLAS_VARIANT_2X: usize = 2;
 pub const ATHLAS_VARIANT_THIRD: usize = 3;
 
 pub const ATHLAS_FONT_INFO: AthlasFontInfo = AthlasFontInfo {
     units_per_em: 2048,
-    ascent: 2246,
-    descent: -901,
     line_height: 3147,
 };
 
@@ -514,11 +499,6 @@ pub const ATHLAS_BUCKET_UNPLACED: [&[u32]; ATHLAS_BUCKET_COUNT] = [
 ];
 
 #[inline]
-pub fn athlas_bucket_codepoints(bucket: u8) -> Option<&'static [u32]> {
-    ATHLAS_BUCKET_LUTS.get(bucket as usize).copied()
-}
-
-#[inline]
 pub fn athlas_bucket_unplaced_codepoints(size_case: usize, bucket: u8) -> Option<&'static [u32]> {
     if size_case == ATHLAS_VARIANT_THIRD && bucket == 0 {
         return Some(ATHLAS_BUCKET_0_UNPLACED_THIRD);
@@ -536,33 +516,6 @@ pub fn athlas_variant_line_height_px(size_case: usize) -> Option<u16> {
 }
 
 #[inline]
-pub fn athlas_variant_line_metrics(size_case: usize) -> Option<AthlasLineMetrics> {
-    let line_height_px = athlas_variant_line_height_px(size_case)?;
-    let font_line_height = i32::from(ATHLAS_FONT_INFO.line_height.max(1));
-    let ascent = i32::from(ATHLAS_FONT_INFO.ascent);
-    let descent = i32::from(ATHLAS_FONT_INFO.descent);
-    let line_height_px_i32 = i32::from(line_height_px);
-    let ascent_px = ((ascent * line_height_px_i32) + (font_line_height / 2)) / font_line_height;
-    let descent_px = ((descent * line_height_px_i32) - (font_line_height / 2)) / font_line_height;
-    Some(AthlasLineMetrics {
-        line_height_px,
-        ascent_px: ascent_px.clamp(0, i32::from(u16::MAX)) as u16,
-        descent_px: descent_px.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16,
-    })
-}
-
-#[inline]
-pub fn athlas_variant_ascent_px(size_case: usize) -> Option<u16> {
-    athlas_variant_line_metrics(size_case).map(|metrics| metrics.ascent_px)
-}
-
-#[inline]
-pub fn athlas_line_top_from_baseline_px(size_case: usize, baseline_y: i32) -> Option<i32> {
-    let metrics = athlas_variant_line_metrics(size_case)?;
-    Some(baseline_y.saturating_sub(i32::from(metrics.ascent_px)))
-}
-
-#[inline]
 pub fn athlas_bucket_atlas_metrics(
     size_case: usize,
     bucket: usize,
@@ -573,26 +526,8 @@ pub fn athlas_bucket_atlas_metrics(
 }
 
 #[inline]
-pub fn athlas_variant_max_cell_width(size_case: usize) -> Option<u16> {
-    ATHLAS_VARIANT_BUCKET_ATLAS_METRICS
-        .get(size_case)
-        .map(|variant| {
-            variant
-                .iter()
-                .fold(0u16, |widest, metrics| widest.max(metrics.cell_w))
-        })
-}
-
-#[inline]
 pub fn athlas_bucket_width_stage(bucket: usize) -> Option<u8> {
     athlas_bucket_metrics(bucket).map(|it| it.width_stage_from_widest)
-}
-
-#[inline]
-pub fn athlas_bucket_has_uniform_width(bucket: usize) -> bool {
-    athlas_bucket_metrics(bucket)
-        .map(|it| it.uniform_width)
-        .unwrap_or(false)
 }
 
 #[inline]
@@ -607,11 +542,6 @@ fn athlas_lookup_bucket_slot(size_case: usize, bucket: usize, codepoint: u32) ->
     raw_index
         .checked_sub(skipped)
         .and_then(|slot| u16::try_from(slot).ok())
-}
-
-#[inline]
-pub fn athlas_lookup_codepoint(codepoint: u32) -> Option<AthlasGlyphLookup> {
-    athlas_lookup_codepoint_in_size_case(ATHLAS_VARIANT_HALF, codepoint)
 }
 
 #[inline]
@@ -631,11 +561,6 @@ pub fn athlas_lookup_codepoint_in_size_case(
         }
     }
     None
-}
-
-#[inline]
-pub fn athlas_lookup_char(ch: char) -> Option<AthlasGlyphLookup> {
-    athlas_lookup_char_in_size_case(ATHLAS_VARIANT_HALF, ch)
 }
 
 #[inline]

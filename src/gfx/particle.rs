@@ -35,9 +35,7 @@ unsafe impl Sync for ParticleSystem {}
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct UpdateReport {
-    pub alive_before: usize,
     pub alive_after: usize,
-    pub chunk_len: usize,
     pub remote_workers_spawned: usize,
     pub local_fallback: bool,
 }
@@ -69,15 +67,6 @@ impl ParticleSystem {
     #[inline]
     pub fn alive_count(&self) -> usize {
         self.alive_count
-    }
-
-    #[inline]
-    pub fn max_count(&self) -> usize {
-        self.max_count
-    }
-
-    pub fn spawn(&mut self, x: f32, y: f32, vx: f32, vy: f32, life: f32) {
-        self.spawn_styled(x, y, vx, vy, life, 2.0, 0xFFFFFFFF);
     }
 
     pub fn spawn_styled(
@@ -137,9 +126,7 @@ impl ParticleSystem {
 
         let chunk_len = choose_chunk_len(alive_before);
         let mut report = UpdateReport {
-            alive_before,
             alive_after: alive_before,
-            chunk_len,
             remote_workers_spawned: 0,
             local_fallback: false,
         };
@@ -190,18 +177,6 @@ impl ParticleSystem {
         self.compact_dead();
         report.alive_after = self.alive_count;
         report
-    }
-
-    pub fn pos_x(&self) -> &[f32] {
-        unsafe { &(&*self.pos_x.get())[..self.alive_count] }
-    }
-
-    pub fn pos_y(&self) -> &[f32] {
-        unsafe { &(&*self.pos_y.get())[..self.alive_count] }
-    }
-
-    pub fn life(&self) -> &[f32] {
-        unsafe { &(&*self.life.get())[..self.alive_count] }
     }
 
     pub fn snapshot_into(&self, out: &mut Vec<ParticleSnapshot>) {
