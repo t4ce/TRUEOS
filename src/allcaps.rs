@@ -20,6 +20,8 @@ pub mod lumen {
     pub const RUNTIME_DIAGNOSTIC_PROBES: bool = false;
     pub const SHADOW_BF16_MATVEC_TO_NET_BACKEND: bool = true;
     pub const NET_BF16_MATVEC_SHADOW_MAX_JOBS_PER_BOOT: u64 = 8;
+    pub const NET_BF16_MATVEC_SHADOW_FRAME_QUEUE_CAP: usize = 96;
+    pub const NET_BF16_MATVEC_SHADOW_X_CHUNK_BYTES: usize = 3000;
     pub const ROUTE_BF16_MATVEC_TO_NET_BACKEND: bool = false;
 }
 

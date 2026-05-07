@@ -113,9 +113,38 @@ fn embedded_archives() -> Vec<ArchiveEntry> {
     out
 }
 
+fn embedded_module_bytes_by_archive_name(
+    archive_name: &str,
+) -> Result<Option<Vec<u8>>, &'static str> {
+    let Some(resp) = crate::limine::MODULE_REQUEST.response() else {
+        return Ok(None);
+    };
+
+    for module in resp.modules().iter() {
+        let cmdline = module.cmdline().as_bytes();
+        let Some(archive) = embedded_archive_name(cmdline) else {
+            continue;
+        };
+        if archive.as_str() != archive_name {
+            continue;
+        }
+        let Some(module_bytes) = crate::limine::module_bytes_by_string(cmdline) else {
+            return Err("failed to read selected embedded module");
+        };
+        return Ok(Some(module_bytes.to_vec()));
+    }
+
+    Ok(None)
+}
+
 fn archive_entries() -> Result<Vec<ArchiveEntry>, &'static str> {
-    let mut out = embedded_archives();
-    out.extend(root_archives()?);
+    let mut out = root_archives()?;
+    for entry in embedded_archives() {
+        if !out.iter().any(|existing| existing.archive == entry.archive) {
+            out.push(entry);
+        }
+    }
+    out.sort_by(|a, b| a.archive.cmp(&b.archive));
     Ok(out)
 }
 
@@ -401,6 +430,29 @@ pub(crate) fn submit_archive_name_to_target(
     }
 
     Ok(())
+}
+
+pub(crate) async fn submit_archive_name_to_target_prefer_trueosfs_async(
+    target: MatrixTarget,
+    archive_name: &str,
+    app_args: Vec<String>,
+) -> Result<&'static str, &'static str> {
+    if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
+        if let Some(module_bytes) = crate::r::fs::trueosfs::file_out_async(disk, archive_name)
+            .await
+            .map_err(|_| "failed to read selected module from TRUEOSFS")?
+        {
+            enqueue_blueprint_bytes(target, String::from(archive_name), module_bytes, app_args);
+            return Ok("TRUEOSFS root");
+        }
+    }
+
+    if let Some(module_bytes) = embedded_module_bytes_by_archive_name(archive_name)? {
+        enqueue_blueprint_bytes(target, String::from(archive_name), module_bytes, app_args);
+        return Ok("boot embedded");
+    }
+
+    Err("archive not found")
 }
 
 pub(crate) fn submit_run(io: &'static dyn ShellBackend2, archive: String, app_args: Vec<String>) {

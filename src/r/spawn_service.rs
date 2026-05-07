@@ -1125,6 +1125,8 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[BlueprintAutostart::Weather];
 
 #[embassy_executor::task]
 async fn bp_autostart_task() {
+    crate::r::readiness::wait_for(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED).await;
+
     for config in BP_AUTOSTARTS {
         let settle_ms = config.settle_ms();
         if settle_ms != 0 {
@@ -1136,16 +1138,26 @@ async fn bp_autostart_task() {
             config.slot(),
         );
 
-        match crate::shell2::cmds::run::submit_archive_name_to_target(
+        crate::log!(
+            "spawn-svc: bp-autostart begin label={} archive={} slot={}\n",
+            config.label(),
+            config.archive(),
+            config.slot()
+        );
+
+        match crate::shell2::cmds::run::submit_archive_name_to_target_prefer_trueosfs_async(
             target,
             config.archive(),
             Vec::new(),
-        ) {
-            Ok(()) => crate::log!(
-                "spawn-svc: bp-autostart queued label={} archive={} slot={}\n",
+        )
+        .await
+        {
+            Ok(source) => crate::log!(
+                "spawn-svc: bp-autostart queued label={} archive={} slot={} source={}\n",
                 config.label(),
                 config.archive(),
-                config.slot()
+                config.slot(),
+                source
             ),
             Err(err) => crate::log!(
                 "spawn-svc: bp-autostart skipped label={} archive={} slot={} err={}\n",

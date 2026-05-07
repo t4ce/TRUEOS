@@ -16,8 +16,9 @@ extern crate alloc;
 // This keeps ownership simple: weights stay resident and read-only on each
 // rig, activation vectors/results cross the wire, and hard row-splitting must
 // stay disabled until TCP result completion or shadow-compare is wired.
-// Current shadow mode sends descriptor-only work frames so peer routing can be
-// proven without changing generation math.
+// Current shadow mode sends owned descriptor + x-vector chunk frames so peer
+// routing and payload reassembly can be proven without changing generation
+// math.
 
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
@@ -26,7 +27,6 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use spin::Mutex;
 
 const MIN_REMOTE_ROWS: usize = 64;
-const SHADOW_QUEUE_CAP: usize = 8;
 const FRAME_MAGIC: u32 = 0x4C4E_4554; // LNET
 pub(crate) const PROTOCOL_VERSION: u16 = 1;
 pub(crate) const CAP_BF16_MATVEC_ROWS: u32 = 1 << 0;
@@ -45,7 +45,7 @@ static LOGGED_SHADOW_DROPPED: AtomicBool = AtomicBool::new(false);
 static LOGGED_MISSING_MATRIX: AtomicBool = AtomicBool::new(false);
 static LOGGED_ENQUEUE: AtomicBool = AtomicBool::new(false);
 static MATRIX_MANIFEST: Mutex<Vec<LumenMatrixManifestEntry>> = Mutex::new(Vec::new());
-static SHADOW_BF16_MATVECS: Mutex<VecDeque<RemoteBf16MatvecJob>> = Mutex::new(VecDeque::new());
+static SHADOW_BF16_MATVEC_FRAMES: Mutex<VecDeque<Vec<u8>>> = Mutex::new(VecDeque::new());
 static PENDING_BF16_MATVECS: Mutex<VecDeque<RemoteBf16MatvecJob>> = Mutex::new(VecDeque::new());
 
 #[derive(Copy, Clone, Debug)]
@@ -354,28 +354,58 @@ fn enqueue_shadow_bf16_matvec_suffix(
         out_len: n_rows,
     };
 
-    let mut queue = SHADOW_BF16_MATVECS.lock();
-    if queue.len() >= SHADOW_QUEUE_CAP {
+    let x_bytes = k_dim.saturating_mul(core::mem::size_of::<f32>());
+    let x_chunk_bytes = shadow_x_chunk_bytes();
+    let x_chunks = x_bytes.div_ceil(x_chunk_bytes);
+    let needed_frames = x_chunks.saturating_add(1);
+
+    let mut queue = SHADOW_BF16_MATVEC_FRAMES.lock();
+    let frame_cap = crate::allcaps::lumen::NET_BF16_MATVEC_SHADOW_FRAME_QUEUE_CAP;
+    if queue.len().saturating_add(needed_frames) > frame_cap {
         if !LOGGED_SHADOW_DROPPED.swap(true, Ordering::AcqRel) {
             crate::log!(
-                "lumen-net: shadow bf16 matvec drop reason=queue-full cap={} submitted={}\n",
-                SHADOW_QUEUE_CAP,
-                submitted.saturating_add(1)
+                "lumen-net: shadow bf16 matvec drop reason=frame-queue-full cap={} need={} pending_frames={} submitted={}\n",
+                frame_cap,
+                needed_frames,
+                queue.len(),
+                submitted.saturating_add(1),
             );
         }
         return;
     }
-    queue.push_back(job);
+
+    queue.push_back(encode_shadow_descriptor_frame(&job));
+    for (chunk_index, offset) in (0..x_bytes).step_by(x_chunk_bytes).enumerate() {
+        let end = offset.saturating_add(x_chunk_bytes).min(x_bytes);
+        // `x` is the live activation slice for this matvec call; encode the
+        // bytes into owned queue frames before returning to inference.
+        let chunk = unsafe {
+            core::slice::from_raw_parts(
+                (job.x_ptr as *const u8).add(offset),
+                end.saturating_sub(offset),
+            )
+        };
+        queue.push_back(encode_shadow_x_chunk_frame(
+            job.job_id,
+            chunk_index,
+            offset,
+            x_bytes,
+            chunk,
+        ));
+    }
+
     if !LOGGED_SHADOW_ENQUEUE.swap(true, Ordering::AcqRel) {
         crate::log!(
-            "lumen-net: shadow bf16 matvec enqueue job={} matrix=0x{:016X} rows={}..{} n_rows={} k_dim={} x_bytes={} note=descriptor-only-local-compute-full-width\n",
+            "lumen-net: shadow bf16 matvec enqueue job={} matrix=0x{:016X} rows={}..{} n_rows={} k_dim={} x_bytes={} x_chunks={} frames={} note=descriptor-and-x-chunks-local-compute-full-width\n",
             job.job_id,
             job.matrix_id,
             job.row_start,
             job.row_end,
             job.n_rows,
             job.k_dim,
-            job.x_len.saturating_mul(core::mem::size_of::<f32>())
+            x_bytes,
+            x_chunks,
+            needed_frames,
         );
     }
 }
@@ -385,14 +415,17 @@ pub(crate) fn pending_remote_bf16_matvecs() -> usize {
 }
 
 pub(crate) fn pending_shadow_bf16_matvecs() -> usize {
-    SHADOW_BF16_MATVECS.lock().len()
+    SHADOW_BF16_MATVEC_FRAMES.lock().len()
 }
 
 pub(crate) fn take_shadow_bf16_matvec_frame() -> Option<Vec<u8>> {
-    let job = SHADOW_BF16_MATVECS.lock().pop_front()?;
-    let header = encode_bf16_matvec_header(&job);
+    SHADOW_BF16_MATVEC_FRAMES.lock().pop_front()
+}
+
+fn encode_shadow_descriptor_frame(job: &RemoteBf16MatvecJob) -> Vec<u8> {
+    let header = encode_bf16_matvec_header(job);
     let text = alloc::format!(
-        "C0DEC0DE LUMEN_MATVEC_SHADOW v=1 job={} matrix=0x{:016X} rows={}..{} n_rows={} k_dim={} row_count={} x_bytes={} out_bytes={} frame_magic=0x{:08X} opcode={} note=descriptor-only\n",
+        "C0DEC0DE LUMEN_MATVEC_SHADOW v=1 job={} matrix=0x{:016X} rows={}..{} n_rows={} k_dim={} row_count={} x_bytes={} out_bytes={} frame_magic=0x{:08X} opcode={} note=descriptor-before-x-chunks\n",
         job.job_id,
         job.matrix_id,
         job.row_start,
@@ -405,7 +438,28 @@ pub(crate) fn take_shadow_bf16_matvec_frame() -> Option<Vec<u8>> {
         header.magic,
         header.opcode
     );
-    Some(text.into_bytes())
+    text.into_bytes()
+}
+
+fn encode_shadow_x_chunk_frame(
+    job_id: u64,
+    chunk_index: usize,
+    offset: usize,
+    total_bytes: usize,
+    chunk: &[u8],
+) -> Vec<u8> {
+    let mut out = alloc::format!(
+        "C0DEC0DE LUMEN_MATVEC_XCHUNK v=1 job={} chunk={} offset={} bytes={} total={} hex=",
+        job_id,
+        chunk_index,
+        offset,
+        chunk.len(),
+        total_bytes,
+    )
+    .into_bytes();
+    append_hex(&mut out, chunk);
+    out.push(b'\n');
+    out
 }
 
 pub(crate) fn route_bf16_matvec_to_net_backend() -> bool {
@@ -445,6 +499,18 @@ fn encode_bf16_matvec_header(job: &RemoteBf16MatvecJob) -> LumenNetFrameHeader {
             .row_end
             .saturating_sub(job.row_start)
             .saturating_mul(core::mem::size_of::<f32>()) as u64,
+    }
+}
+
+fn shadow_x_chunk_bytes() -> usize {
+    crate::allcaps::lumen::NET_BF16_MATVEC_SHADOW_X_CHUNK_BYTES.max(1)
+}
+
+fn append_hex(out: &mut Vec<u8>, bytes: &[u8]) {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize]);
+        out.push(HEX[(byte & 0x0F) as usize]);
     }
 }
 
