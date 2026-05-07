@@ -51,12 +51,12 @@ mod interest;
 mod poll;
 mod sys;
 mod token;
+#[cfg(not(target_os = "wasi"))]
+mod waker;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod zkvm_compat;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod zkvm_net;
-#[cfg(not(target_os = "wasi"))]
-mod waker;
 
 pub mod event;
 
@@ -76,8 +76,19 @@ pub use token::Token;
 #[cfg(not(target_os = "wasi"))]
 pub use waker::Waker;
 
-#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm")), feature = "os-ext"))]
-#[cfg_attr(docsrs, doc(cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm")), feature = "os-ext"))))]
+#[cfg(all(
+    unix,
+    not(any(target_os = "trueos", target_os = "zkvm")),
+    feature = "os-ext"
+))]
+#[cfg_attr(
+    docsrs,
+    doc(cfg(all(
+        unix,
+        not(any(target_os = "trueos", target_os = "zkvm")),
+        feature = "os-ext"
+    )))
+)]
 pub mod unix {
     //! Unix only extensions.
 

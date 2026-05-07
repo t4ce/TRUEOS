@@ -118,13 +118,7 @@ macro_rules! syscall {
     }};
 }
 
-impl_debug!(
-    crate::Domain,
-    self::AF_INET,
-    self::AF_INET6,
-    self::AF_UNIX,
-    self::AF_UNSPEC,
-);
+impl_debug!(crate::Domain, self::AF_INET, self::AF_INET6, self::AF_UNIX, self::AF_UNSPEC,);
 
 /// Windows only API.
 impl Type {
@@ -281,35 +275,20 @@ pub(crate) fn socket(family: c_int, mut ty: c_int, protocol: c_int) -> io::Resul
     };
 
     syscall!(
-        WSASocketW(
-            family,
-            ty,
-            protocol,
-            ptr::null_mut(),
-            0,
-            WSA_FLAG_OVERLAPPED | flags,
-        ),
+        WSASocketW(family, ty, protocol, ptr::null_mut(), 0, WSA_FLAG_OVERLAPPED | flags,),
         PartialEq::eq,
         INVALID_SOCKET
     )
 }
 
 pub(crate) fn bind(socket: RawSocket, addr: &SockAddr) -> io::Result<()> {
-    syscall!(
-        bind(socket, addr.as_ptr().cast::<sockaddr>(), addr.len()),
-        PartialEq::ne,
-        0
-    )
-    .map(|_| ())
+    syscall!(bind(socket, addr.as_ptr().cast::<sockaddr>(), addr.len()), PartialEq::ne, 0)
+        .map(|_| ())
 }
 
 pub(crate) fn connect(socket: RawSocket, addr: &SockAddr) -> io::Result<()> {
-    syscall!(
-        connect(socket, addr.as_ptr().cast::<sockaddr>(), addr.len()),
-        PartialEq::ne,
-        0
-    )
-    .map(|_| ())
+    syscall!(connect(socket, addr.as_ptr().cast::<sockaddr>(), addr.len()), PartialEq::ne, 0)
+        .map(|_| ())
 }
 
 pub(crate) fn poll_connect(socket: &crate::Socket, timeout: Duration) -> io::Result<()> {
@@ -330,11 +309,7 @@ pub(crate) fn poll_connect(socket: &crate::Socket, timeout: Duration) -> io::Res
         let timeout = (timeout - elapsed).as_millis();
         let timeout = clamp(timeout, 1, c_int::MAX as u128) as c_int;
 
-        match syscall!(
-            WSAPoll(&mut fd_array, 1, timeout),
-            PartialEq::eq,
-            SOCKET_ERROR
-        ) {
+        match syscall!(WSAPoll(&mut fd_array, 1, timeout), PartialEq::eq, SOCKET_ERROR) {
             Ok(0) => return Err(io::ErrorKind::TimedOut.into()),
             Ok(_) => {
                 // Error or hang up indicates an error (or failure to connect).
@@ -383,11 +358,7 @@ pub(crate) fn accept(socket: RawSocket) -> io::Result<(RawSocket, SockAddr)> {
     // Safety: `accept` initialises the `SockAddr` for us.
     unsafe {
         SockAddr::try_init(|storage, len| {
-            syscall!(
-                accept(socket, storage.cast(), len),
-                PartialEq::eq,
-                INVALID_SOCKET
-            )
+            syscall!(accept(socket, storage.cast(), len), PartialEq::eq, INVALID_SOCKET)
         })
     }
 }
@@ -396,11 +367,7 @@ pub(crate) fn getsockname(socket: RawSocket) -> io::Result<SockAddr> {
     // Safety: `getsockname` initialises the `SockAddr` for us.
     unsafe {
         SockAddr::try_init(|storage, len| {
-            syscall!(
-                getsockname(socket, storage.cast(), len),
-                PartialEq::eq,
-                SOCKET_ERROR
-            )
+            syscall!(getsockname(socket, storage.cast(), len), PartialEq::eq, SOCKET_ERROR)
         })
     }
     .map(|(_, addr)| addr)
@@ -410,11 +377,7 @@ pub(crate) fn getpeername(socket: RawSocket) -> io::Result<SockAddr> {
     // Safety: `getpeername` initialises the `SockAddr` for us.
     unsafe {
         SockAddr::try_init(|storage, len| {
-            syscall!(
-                getpeername(socket, storage.cast(), len),
-                PartialEq::eq,
-                SOCKET_ERROR
-            )
+            syscall!(getpeername(socket, storage.cast(), len), PartialEq::eq, SOCKET_ERROR)
         })
     }
     .map(|(_, addr)| addr)
@@ -465,12 +428,7 @@ pub(crate) fn recv(
     flags: c_int,
 ) -> io::Result<usize> {
     let res = syscall!(
-        recv(
-            socket,
-            buf.as_mut_ptr().cast(),
-            min(buf.len(), MAX_BUF_LEN) as c_int,
-            flags,
-        ),
+        recv(socket, buf.as_mut_ptr().cast(), min(buf.len(), MAX_BUF_LEN) as c_int, flags,),
         PartialEq::eq,
         SOCKET_ERROR
     );
@@ -614,12 +572,7 @@ pub(crate) fn recv_from_vectored(
 
 pub(crate) fn send(socket: RawSocket, buf: &[u8], flags: c_int) -> io::Result<usize> {
     syscall!(
-        send(
-            socket,
-            buf.as_ptr().cast(),
-            min(buf.len(), MAX_BUF_LEN) as c_int,
-            flags,
-        ),
+        send(socket, buf.as_ptr().cast(), min(buf.len(), MAX_BUF_LEN) as c_int, flags,),
         PartialEq::eq,
         SOCKET_ERROR
     )
@@ -715,14 +668,7 @@ pub(crate) fn sendmsg(
 ) -> io::Result<usize> {
     let mut nsent = 0;
     syscall!(
-        WSASendMsg(
-            socket,
-            &msg.inner,
-            flags as u32,
-            &mut nsent,
-            ptr::null_mut(),
-            None,
-        ),
+        WSASendMsg(socket, &msg.inner, flags as u32, &mut nsent, ptr::null_mut(), None,),
         PartialEq::eq,
         SOCKET_ERROR
     )
@@ -763,9 +709,7 @@ fn into_ms(duration: Option<Duration>) -> u32 {
     // * Nanosecond precision is rounded up
     // * Greater than u32::MAX milliseconds (50 days) is rounded up to
     //   INFINITE (never time out).
-    duration.map_or(0, |duration| {
-        min(duration.as_millis(), INFINITE as u128) as u32
-    })
+    duration.map_or(0, |duration| min(duration.as_millis(), INFINITE as u128) as u32)
 }
 
 pub(crate) fn set_tcp_keepalive(socket: RawSocket, keepalive: &TcpKeepalive) -> io::Result<()> {
@@ -792,14 +736,7 @@ pub(crate) fn set_tcp_keepalive(socket: RawSocket, keepalive: &TcpKeepalive) -> 
         SOCKET_ERROR
     )?;
     if let Some(retries) = keepalive.retries {
-        unsafe {
-            setsockopt(
-                socket,
-                WinSock::IPPROTO_TCP,
-                WinSock::TCP_KEEPCNT,
-                retries as c_int,
-            )?
-        }
+        unsafe { setsockopt(socket, WinSock::IPPROTO_TCP, WinSock::TCP_KEEPCNT, retries as c_int)? }
     }
     Ok(())
 }
@@ -835,13 +772,7 @@ pub(crate) unsafe fn getsockopt<T>(socket: RawSocket, level: c_int, optname: i32
     let mut optval: MaybeUninit<T> = MaybeUninit::uninit();
     let mut optlen = mem::size_of::<T>() as c_int;
     syscall!(
-        getsockopt(
-            socket,
-            level as i32,
-            optname,
-            optval.as_mut_ptr().cast(),
-            &mut optlen,
-        ),
+        getsockopt(socket, level as i32, optname, optval.as_mut_ptr().cast(), &mut optlen,),
         PartialEq::eq,
         SOCKET_ERROR
     )
@@ -875,12 +806,7 @@ pub(crate) unsafe fn setsockopt<T>(
 }
 
 fn ioctlsocket(socket: RawSocket, cmd: i32, payload: &mut u32) -> io::Result<()> {
-    syscall!(
-        ioctlsocket(socket, cmd, payload),
-        PartialEq::eq,
-        SOCKET_ERROR
-    )
-    .map(|_| ())
+    syscall!(ioctlsocket(socket, cmd, payload), PartialEq::eq, SOCKET_ERROR).map(|_| ())
 }
 
 pub(crate) fn to_in_addr(addr: &Ipv4Addr) -> IN_ADDR {
@@ -941,13 +867,7 @@ pub(crate) fn original_dst_v4(socket: RawSocket) -> io::Result<SockAddr> {
     unsafe {
         SockAddr::try_init(|storage, len| {
             syscall!(
-                getsockopt(
-                    socket,
-                    SOL_IP as i32,
-                    SO_ORIGINAL_DST as i32,
-                    storage.cast(),
-                    len,
-                ),
+                getsockopt(socket, SOL_IP as i32, SO_ORIGINAL_DST as i32, storage.cast(), len,),
                 PartialEq::eq,
                 SOCKET_ERROR
             )
@@ -1032,11 +952,7 @@ impl crate::Socket {
         // NOTE: can't use `syscall!` because it expects the function in the
         // `windows_sys::Win32::Networking::WinSock::` path.
         let res = unsafe {
-            SetHandleInformation(
-                self.as_raw() as HANDLE,
-                HANDLE_FLAG_INHERIT,
-                !no_inherit as _,
-            )
+            SetHandleInformation(self.as_raw() as HANDLE, HANDLE_FLAG_INHERIT, !no_inherit as _)
         };
         if res == 0 {
             // Zero means error.
@@ -1110,10 +1026,7 @@ fn in_addr_convertion() {
 
     let ip = Ipv4Addr::new(127, 34, 4, 12);
     let raw = to_in_addr(&ip);
-    assert_eq!(
-        unsafe { raw.S_un.S_addr },
-        127 << 0 | 34 << 8 | 4 << 16 | 12 << 24
-    );
+    assert_eq!(unsafe { raw.S_un.S_addr }, 127 << 0 | 34 << 8 | 4 << 16 | 12 << 24);
     assert_eq!(from_in_addr(raw), ip);
 }
 

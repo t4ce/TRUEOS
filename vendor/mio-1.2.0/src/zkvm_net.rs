@@ -164,7 +164,12 @@ impl Socket {
 
     pub(crate) fn udp_send_to(&self, buf: &[u8], addr: SocketAddr) -> io::Result<usize> {
         let status = unsafe {
-            trueos_mio_udp_socket_send_to(self.id, socket_addr_to_raw(addr), buf.as_ptr(), buf.len())
+            trueos_mio_udp_socket_send_to(
+                self.id,
+                socket_addr_to_raw(addr),
+                buf.as_ptr(),
+                buf.len(),
+            )
         };
         read_write_result(status, "mio zkvm udp send failed")
     }
@@ -174,10 +179,7 @@ impl Socket {
         let status = unsafe {
             trueos_mio_udp_socket_recv_from(self.id, &mut addr, buf.as_mut_ptr(), buf.len())
         };
-        Ok((
-            read_write_result(status, "mio zkvm udp recv failed")?,
-            raw_to_socket_addr(addr)?,
-        ))
+        Ok((read_write_result(status, "mio zkvm udp recv failed")?, raw_to_socket_addr(addr)?))
     }
 
     pub(crate) fn register(
@@ -207,7 +209,8 @@ impl Socket {
     }
 
     pub(crate) fn deregister(&self, registry: &Registry) -> io::Result<()> {
-        let status = unsafe { trueos_mio_selector_deregister_socket(registry.selector().id(), self.id) };
+        let status =
+            unsafe { trueos_mio_selector_deregister_socket(registry.selector().id(), self.id) };
         status_to_result(status, "mio zkvm socket deregistration failed")
     }
 }
@@ -226,7 +229,9 @@ pub(crate) fn selector_poll(
     let timeout_nanos = timeout
         .map(crate::zkvm_compat::duration_to_nanos)
         .unwrap_or(u64::MAX);
-    let len = unsafe { trueos_mio_selector_poll(selector_id, raw.as_mut_ptr(), raw.len(), timeout_nanos) };
+    let len = unsafe {
+        trueos_mio_selector_poll(selector_id, raw.as_mut_ptr(), raw.len(), timeout_nanos)
+    };
     out_events.extend(raw.into_iter().take(len));
 }
 
@@ -253,7 +258,10 @@ fn raw_to_socket_addr(raw: SocketAddrRaw) -> io::Result<SocketAddr> {
     match raw.family {
         4 => Ok(SocketAddr::from(([raw.addr[0], raw.addr[1], raw.addr[2], raw.addr[3]], raw.port))),
         6 => Ok(SocketAddr::from((raw.addr, raw.port))),
-        _ => Err(io::Error::new(io::ErrorKind::InvalidInput, "mio zkvm invalid socket address family")),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "mio zkvm invalid socket address family",
+        )),
     }
 }
 

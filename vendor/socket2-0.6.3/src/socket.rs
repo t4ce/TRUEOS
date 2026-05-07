@@ -14,7 +14,10 @@ use std::mem::MaybeUninit;
 #[cfg(not(target_os = "nto"))]
 use std::net::Ipv6Addr;
 use std::net::{self, Ipv4Addr, Shutdown};
-#[cfg(any(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))), all(target_os = "wasi", not(target_env = "p1"))))]
+#[cfg(any(
+    all(unix, not(any(target_os = "trueos", target_os = "zkvm"))),
+    all(target_os = "wasi", not(target_env = "p1"))
+))]
 use std::os::fd::{FromRawFd, IntoRawFd};
 #[cfg(windows)]
 use std::os::windows::io::{FromRawSocket, IntoRawSocket};
@@ -889,14 +892,7 @@ impl Socket {
     /// When enabled, this socket is allowed to send packets to a broadcast
     /// address.
     pub fn set_broadcast(&self, broadcast: bool) -> io::Result<()> {
-        unsafe {
-            setsockopt(
-                self.as_raw(),
-                sys::SOL_SOCKET,
-                sys::SO_BROADCAST,
-                broadcast as c_int,
-            )
-        }
+        unsafe { setsockopt(self.as_raw(), sys::SOL_SOCKET, sys::SO_BROADCAST, broadcast as c_int) }
     }
 
     /// Get the value of the `SO_ERROR` option on this socket.
@@ -928,14 +924,7 @@ impl Socket {
     ///
     /// Enable sending of keep-alive messages on connection-oriented sockets.
     pub fn set_keepalive(&self, keepalive: bool) -> io::Result<()> {
-        unsafe {
-            setsockopt(
-                self.as_raw(),
-                sys::SOL_SOCKET,
-                sys::SO_KEEPALIVE,
-                keepalive as c_int,
-            )
-        }
+        unsafe { setsockopt(self.as_raw(), sys::SOL_SOCKET, sys::SO_KEEPALIVE, keepalive as c_int) }
     }
 
     /// Get the value of the `SO_LINGER` option on this socket.
@@ -991,12 +980,7 @@ impl Socket {
     #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
     pub fn set_out_of_band_inline(&self, oob_inline: bool) -> io::Result<()> {
         unsafe {
-            setsockopt(
-                self.as_raw(),
-                sys::SOL_SOCKET,
-                sys::SO_OOBINLINE,
-                oob_inline as c_int,
-            )
+            setsockopt(self.as_raw(), sys::SOL_SOCKET, sys::SO_OOBINLINE, oob_inline as c_int)
         }
     }
 
@@ -1019,14 +1003,7 @@ impl Socket {
     /// control messages.
     #[cfg(any(target_os = "linux", target_os = "cygwin"))]
     pub fn set_passcred(&self, passcred: bool) -> io::Result<()> {
-        unsafe {
-            setsockopt(
-                self.as_raw(),
-                sys::SOL_SOCKET,
-                sys::SO_PASSCRED,
-                passcred as c_int,
-            )
-        }
+        unsafe { setsockopt(self.as_raw(), sys::SOL_SOCKET, sys::SO_PASSCRED, passcred as c_int) }
     }
 
     /// Get value for the `SO_PRIORITY` option on this socket.
@@ -1054,14 +1031,7 @@ impl Socket {
         any(target_os = "linux", target_os = "android", target_os = "fuchsia")
     ))]
     pub fn set_priority(&self, priority: u32) -> io::Result<()> {
-        unsafe {
-            setsockopt(
-                self.as_raw(),
-                sys::SOL_SOCKET,
-                sys::SO_PRIORITY,
-                priority as c_int,
-            )
-        }
+        unsafe { setsockopt(self.as_raw(), sys::SOL_SOCKET, sys::SO_PRIORITY, priority as c_int) }
     }
 
     /// Get value for the `SO_RCVBUF` option on this socket.
@@ -1081,14 +1051,7 @@ impl Socket {
     /// Changes the size of the operating system's receive buffer associated
     /// with the socket.
     pub fn set_recv_buffer_size(&self, size: usize) -> io::Result<()> {
-        unsafe {
-            setsockopt(
-                self.as_raw(),
-                sys::SOL_SOCKET,
-                sys::SO_RCVBUF,
-                size as c_int,
-            )
-        }
+        unsafe { setsockopt(self.as_raw(), sys::SOL_SOCKET, sys::SO_RCVBUF, size as c_int) }
     }
 
     /// Get value for the `SO_RCVTIMEO` option on this socket.
@@ -1125,14 +1088,7 @@ impl Socket {
     /// addresses. For IPv4 sockets this means that a socket may bind even when
     /// there's a socket already listening on this port.
     pub fn set_reuse_address(&self, reuse: bool) -> io::Result<()> {
-        unsafe {
-            setsockopt(
-                self.as_raw(),
-                sys::SOL_SOCKET,
-                sys::SO_REUSEADDR,
-                reuse as c_int,
-            )
-        }
+        unsafe { setsockopt(self.as_raw(), sys::SOL_SOCKET, sys::SO_REUSEADDR, reuse as c_int) }
     }
 
     /// Get the value of the `SO_SNDBUF` option on this socket.
@@ -1152,14 +1108,7 @@ impl Socket {
     /// Changes the size of the operating system's send buffer associated with
     /// the socket.
     pub fn set_send_buffer_size(&self, size: usize) -> io::Result<()> {
-        unsafe {
-            setsockopt(
-                self.as_raw(),
-                sys::SOL_SOCKET,
-                sys::SO_SNDBUF,
-                size as c_int,
-            )
-        }
+        unsafe { setsockopt(self.as_raw(), sys::SOL_SOCKET, sys::SO_SNDBUF, size as c_int) }
     }
 
     /// Get value for the `SO_SNDTIMEO` option on this socket.
@@ -1242,14 +1191,7 @@ impl Socket {
         not(any(target_os = "redox", target_os = "espidf", target_os = "wasi"))
     ))]
     pub fn set_header_included_v4(&self, included: bool) -> io::Result<()> {
-        unsafe {
-            setsockopt(
-                self.as_raw(),
-                sys::IPPROTO_IP,
-                sys::IP_HDRINCL,
-                included as c_int,
-            )
-        }
+        unsafe { setsockopt(self.as_raw(), sys::IPPROTO_IP, sys::IP_HDRINCL, included as c_int) }
     }
 
     /// Get the value of the `IP_TRANSPARENT` option on this socket.
@@ -1283,12 +1225,7 @@ impl Socket {
     #[cfg(all(feature = "all", any(target_os = "linux", target_os = "android")))]
     pub fn set_ip_transparent_v4(&self, transparent: bool) -> io::Result<()> {
         unsafe {
-            setsockopt(
-                self.as_raw(),
-                sys::IPPROTO_IP,
-                libc::IP_TRANSPARENT,
-                transparent as c_int,
-            )
+            setsockopt(self.as_raw(), sys::IPPROTO_IP, libc::IP_TRANSPARENT, transparent as c_int)
         }
     }
 
@@ -1317,14 +1254,7 @@ impl Socket {
             imr_multiaddr: sys::to_in_addr(multiaddr),
             imr_interface: sys::to_in_addr(interface),
         };
-        unsafe {
-            setsockopt(
-                self.as_raw(),
-                sys::IPPROTO_IP,
-                sys::IP_DROP_MEMBERSHIP,
-                mreq,
-            )
-        }
+        unsafe { setsockopt(self.as_raw(), sys::IPPROTO_IP, sys::IP_DROP_MEMBERSHIP, mreq) }
     }
 
     /// Join a multicast group using `IP_ADD_MEMBERSHIP` option on this socket.
@@ -1353,14 +1283,7 @@ impl Socket {
         interface: &InterfaceIndexOrAddress,
     ) -> io::Result<()> {
         let mreqn = sys::to_mreqn(multiaddr, interface);
-        unsafe {
-            setsockopt(
-                self.as_raw(),
-                sys::IPPROTO_IP,
-                sys::IP_ADD_MEMBERSHIP,
-                mreqn,
-            )
-        }
+        unsafe { setsockopt(self.as_raw(), sys::IPPROTO_IP, sys::IP_ADD_MEMBERSHIP, mreqn) }
     }
 
     /// Leave a multicast group using `IP_DROP_MEMBERSHIP` option on this socket.
@@ -1388,14 +1311,7 @@ impl Socket {
         interface: &InterfaceIndexOrAddress,
     ) -> io::Result<()> {
         let mreqn = sys::to_mreqn(multiaddr, interface);
-        unsafe {
-            setsockopt(
-                self.as_raw(),
-                sys::IPPROTO_IP,
-                sys::IP_DROP_MEMBERSHIP,
-                mreqn,
-            )
-        }
+        unsafe { setsockopt(self.as_raw(), sys::IPPROTO_IP, sys::IP_DROP_MEMBERSHIP, mreqn) }
     }
 
     /// Join a multicast SSM channel using `IP_ADD_SOURCE_MEMBERSHIP` option on this socket.
@@ -1429,14 +1345,7 @@ impl Socket {
             imr_interface: sys::to_in_addr(interface),
             imr_sourceaddr: sys::to_in_addr(source),
         };
-        unsafe {
-            setsockopt(
-                self.as_raw(),
-                sys::IPPROTO_IP,
-                sys::IP_ADD_SOURCE_MEMBERSHIP,
-                mreqs,
-            )
-        }
+        unsafe { setsockopt(self.as_raw(), sys::IPPROTO_IP, sys::IP_ADD_SOURCE_MEMBERSHIP, mreqs) }
     }
 
     /// Leave a multicast group using `IP_DROP_SOURCE_MEMBERSHIP` option on this socket.
@@ -1468,14 +1377,7 @@ impl Socket {
             imr_interface: sys::to_in_addr(interface),
             imr_sourceaddr: sys::to_in_addr(source),
         };
-        unsafe {
-            setsockopt(
-                self.as_raw(),
-                sys::IPPROTO_IP,
-                sys::IP_DROP_SOURCE_MEMBERSHIP,
-                mreqs,
-            )
-        }
+        unsafe { setsockopt(self.as_raw(), sys::IPPROTO_IP, sys::IP_DROP_SOURCE_MEMBERSHIP, mreqs) }
     }
 
     /// Get the value of the `IP_MULTICAST_ALL` option for this socket.
@@ -1503,14 +1405,7 @@ impl Socket {
     /// this particular socket.
     #[cfg(all(feature = "all", target_os = "linux"))]
     pub fn set_multicast_all_v4(&self, all: bool) -> io::Result<()> {
-        unsafe {
-            setsockopt(
-                self.as_raw(),
-                sys::IPPROTO_IP,
-                libc::IP_MULTICAST_ALL,
-                all as c_int,
-            )
-        }
+        unsafe { setsockopt(self.as_raw(), sys::IPPROTO_IP, libc::IP_MULTICAST_ALL, all as c_int) }
     }
 
     /// Get the value of the `IP_MULTICAST_IF` option for this socket.
@@ -1531,14 +1426,7 @@ impl Socket {
     #[cfg(not(target_os = "wasi"))]
     pub fn set_multicast_if_v4(&self, interface: &Ipv4Addr) -> io::Result<()> {
         let interface = sys::to_in_addr(interface);
-        unsafe {
-            setsockopt(
-                self.as_raw(),
-                sys::IPPROTO_IP,
-                sys::IP_MULTICAST_IF,
-                interface,
-            )
-        }
+        unsafe { setsockopt(self.as_raw(), sys::IPPROTO_IP, sys::IP_MULTICAST_IF, interface) }
     }
 
     /// Get the value of the `IP_MULTICAST_LOOP` option for this socket.
@@ -1559,12 +1447,7 @@ impl Socket {
     /// Note that this may not have any affect on IPv6 sockets.
     pub fn set_multicast_loop_v4(&self, loop_v4: bool) -> io::Result<()> {
         unsafe {
-            setsockopt(
-                self.as_raw(),
-                sys::IPPROTO_IP,
-                sys::IP_MULTICAST_LOOP,
-                loop_v4 as c_int,
-            )
+            setsockopt(self.as_raw(), sys::IPPROTO_IP, sys::IP_MULTICAST_LOOP, loop_v4 as c_int)
         }
     }
 
@@ -1588,14 +1471,7 @@ impl Socket {
     ///
     /// Note that this may not have any affect on IPv6 sockets.
     pub fn set_multicast_ttl_v4(&self, ttl: u32) -> io::Result<()> {
-        unsafe {
-            setsockopt(
-                self.as_raw(),
-                sys::IPPROTO_IP,
-                sys::IP_MULTICAST_TTL,
-                ttl as c_int,
-            )
-        }
+        unsafe { setsockopt(self.as_raw(), sys::IPPROTO_IP, sys::IP_MULTICAST_TTL, ttl as c_int) }
     }
 
     /// Get the value of the `IP_TTL` option for this socket.
@@ -1681,14 +1557,7 @@ impl Socket {
         target_os = "wasi",
     )))]
     pub fn set_recv_tos_v4(&self, recv_tos: bool) -> io::Result<()> {
-        unsafe {
-            setsockopt(
-                self.as_raw(),
-                sys::IPPROTO_IP,
-                sys::IP_RECVTOS,
-                recv_tos as c_int,
-            )
-        }
+        unsafe { setsockopt(self.as_raw(), sys::IPPROTO_IP, sys::IP_RECVTOS, recv_tos as c_int) }
     }
 
     /// Get the value of the `IP_RECVTOS` option for this socket.
@@ -1857,14 +1726,7 @@ impl Socket {
             // NOTE: some OSs use `c_int`, others use `c_uint`.
             ipv6mr_interface: interface as _,
         };
-        unsafe {
-            setsockopt(
-                self.as_raw(),
-                sys::IPPROTO_IPV6,
-                sys::IPV6_ADD_MEMBERSHIP,
-                mreq,
-            )
-        }
+        unsafe { setsockopt(self.as_raw(), sys::IPPROTO_IPV6, sys::IPV6_ADD_MEMBERSHIP, mreq) }
     }
 
     /// Leave a multicast group using `IPV6_DROP_MEMBERSHIP` option on this socket.
@@ -1881,14 +1743,7 @@ impl Socket {
             // NOTE: some OSs use `c_int`, others use `c_uint`.
             ipv6mr_interface: interface as _,
         };
-        unsafe {
-            setsockopt(
-                self.as_raw(),
-                sys::IPPROTO_IPV6,
-                sys::IPV6_DROP_MEMBERSHIP,
-                mreq,
-            )
-        }
+        unsafe { setsockopt(self.as_raw(), sys::IPPROTO_IPV6, sys::IPV6_DROP_MEMBERSHIP, mreq) }
     }
 
     /// Get the value of the `IPV6_MULTICAST_HOPS` option for this socket
@@ -1912,12 +1767,7 @@ impl Socket {
     #[cfg(not(target_os = "wasi"))]
     pub fn set_multicast_hops_v6(&self, hops: u32) -> io::Result<()> {
         unsafe {
-            setsockopt(
-                self.as_raw(),
-                sys::IPPROTO_IPV6,
-                sys::IPV6_MULTICAST_HOPS,
-                hops as c_int,
-            )
+            setsockopt(self.as_raw(), sys::IPPROTO_IPV6, sys::IPV6_MULTICAST_HOPS, hops as c_int)
         }
     }
 
@@ -1947,12 +1797,7 @@ impl Socket {
     #[cfg(all(feature = "all", target_os = "linux"))]
     pub fn set_multicast_all_v6(&self, all: bool) -> io::Result<()> {
         unsafe {
-            setsockopt(
-                self.as_raw(),
-                sys::IPPROTO_IPV6,
-                libc::IPV6_MULTICAST_ALL,
-                all as c_int,
-            )
+            setsockopt(self.as_raw(), sys::IPPROTO_IPV6, libc::IPV6_MULTICAST_ALL, all as c_int)
         }
     }
 
@@ -1977,12 +1822,7 @@ impl Socket {
     #[cfg(not(target_os = "wasi"))]
     pub fn set_multicast_if_v6(&self, interface: u32) -> io::Result<()> {
         unsafe {
-            setsockopt(
-                self.as_raw(),
-                sys::IPPROTO_IPV6,
-                sys::IPV6_MULTICAST_IF,
-                interface as c_int,
-            )
+            setsockopt(self.as_raw(), sys::IPPROTO_IPV6, sys::IPV6_MULTICAST_IF, interface as c_int)
         }
     }
 
@@ -2004,12 +1844,7 @@ impl Socket {
     /// Note that this may not have any affect on IPv4 sockets.
     pub fn set_multicast_loop_v6(&self, loop_v6: bool) -> io::Result<()> {
         unsafe {
-            setsockopt(
-                self.as_raw(),
-                sys::IPPROTO_IPV6,
-                sys::IPV6_MULTICAST_LOOP,
-                loop_v6 as c_int,
-            )
+            setsockopt(self.as_raw(), sys::IPPROTO_IPV6, sys::IPV6_MULTICAST_LOOP, loop_v6 as c_int)
         }
     }
 
@@ -2028,12 +1863,7 @@ impl Socket {
     /// Specifies the hop limit for ipv6 unicast packets
     pub fn set_unicast_hops_v6(&self, hops: u32) -> io::Result<()> {
         unsafe {
-            setsockopt(
-                self.as_raw(),
-                sys::IPPROTO_IPV6,
-                sys::IPV6_UNICAST_HOPS,
-                hops as c_int,
-            )
+            setsockopt(self.as_raw(), sys::IPPROTO_IPV6, sys::IPV6_UNICAST_HOPS, hops as c_int)
         }
     }
 
@@ -2058,14 +1888,7 @@ impl Socket {
     /// If this is set to `false` then the socket can be used to send and
     /// receive packets from an IPv4-mapped IPv6 address.
     pub fn set_only_v6(&self, only_v6: bool) -> io::Result<()> {
-        unsafe {
-            setsockopt(
-                self.as_raw(),
-                sys::IPPROTO_IPV6,
-                sys::IPV6_V6ONLY,
-                only_v6 as c_int,
-            )
-        }
+        unsafe { setsockopt(self.as_raw(), sys::IPPROTO_IPV6, sys::IPV6_V6ONLY, only_v6 as c_int) }
     }
 
     /// Get the value of the `IPV6_RECVTCLASS` option for this socket.
@@ -2115,12 +1938,7 @@ impl Socket {
     )))]
     pub fn set_recv_tclass_v6(&self, recv_tclass: bool) -> io::Result<()> {
         unsafe {
-            setsockopt(
-                self.as_raw(),
-                sys::IPPROTO_IPV6,
-                sys::IPV6_RECVTCLASS,
-                recv_tclass as c_int,
-            )
+            setsockopt(self.as_raw(), sys::IPPROTO_IPV6, sys::IPV6_RECVTCLASS, recv_tclass as c_int)
         }
     }
 
@@ -2348,14 +2166,7 @@ impl Socket {
     /// sufficient amount to send out, thereby avoiding the frequent sending of
     /// small packets.
     pub fn set_tcp_nodelay(&self, nodelay: bool) -> io::Result<()> {
-        unsafe {
-            setsockopt(
-                self.as_raw(),
-                sys::IPPROTO_TCP,
-                sys::TCP_NODELAY,
-                nodelay as c_int,
-            )
-        }
+        unsafe { setsockopt(self.as_raw(), sys::IPPROTO_TCP, sys::TCP_NODELAY, nodelay as c_int) }
     }
 
     /// On Windows this invokes the `SIO_TCP_SET_ACK_FREQUENCY` IOCTL which

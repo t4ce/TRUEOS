@@ -298,7 +298,11 @@ impl SockAddr {
                 ip,
                 port,
                 addr.sin6_flowinfo,
-                #[cfg(any(unix, any(target_os = "trueos", target_os = "zkvm"), all(target_os = "wasi", not(target_env = "p1"))))]
+                #[cfg(any(
+                    unix,
+                    any(target_os = "trueos", target_os = "zkvm"),
+                    all(target_os = "wasi", not(target_env = "p1"))
+                ))]
                 addr.sin6_scope_id,
                 #[cfg(windows)]
                 unsafe {
@@ -393,7 +397,11 @@ impl From<SocketAddrV6> for SockAddr {
             storage.sin6_port = addr.port().to_be();
             storage.sin6_addr = crate::sys::to_in6_addr(addr.ip());
             storage.sin6_flowinfo = addr.flowinfo();
-            #[cfg(any(unix, any(target_os = "trueos", target_os = "zkvm"), all(target_os = "wasi", not(target_env = "p1"))))]
+            #[cfg(any(
+                unix,
+                any(target_os = "trueos", target_os = "zkvm"),
+                all(target_os = "wasi", not(target_env = "p1"))
+            ))]
             {
                 storage.sin6_scope_id = addr.scope_id();
             }
@@ -535,11 +543,7 @@ mod tests {
         let std1 = SocketAddrV4::new(Ipv4Addr::new(1, 2, 3, 4), 9876);
         let std2 = SocketAddrV4::new(Ipv4Addr::new(5, 6, 7, 8), 8765);
 
-        test_eq(
-            SockAddr::from(std1),
-            SockAddr::from(std1),
-            SockAddr::from(std2),
-        );
+        test_eq(SockAddr::from(std1), SockAddr::from(std1), SockAddr::from(std2));
     }
 
     #[test]
@@ -549,11 +553,7 @@ mod tests {
         let std1 = SocketAddrV4::new(Ipv4Addr::new(1, 2, 3, 4), 9876);
         let std2 = SocketAddrV4::new(Ipv4Addr::new(5, 6, 7, 8), 8765);
 
-        test_hash(
-            SockAddr::from(std1),
-            SockAddr::from(std1),
-            SockAddr::from(std2),
-        );
+        test_hash(SockAddr::from(std1), SockAddr::from(std1), SockAddr::from(std2));
     }
 
     #[test]
@@ -563,11 +563,7 @@ mod tests {
         let std1 = SocketAddrV6::new(Ipv6Addr::new(1, 2, 3, 4, 5, 6, 7, 8), 9876, 11, 12);
         let std2 = SocketAddrV6::new(Ipv6Addr::new(3, 4, 5, 6, 7, 8, 9, 0), 7654, 13, 14);
 
-        test_eq(
-            SockAddr::from(std1),
-            SockAddr::from(std1),
-            SockAddr::from(std2),
-        );
+        test_eq(SockAddr::from(std1), SockAddr::from(std1), SockAddr::from(std2));
     }
 
     #[test]
@@ -577,11 +573,7 @@ mod tests {
         let std1 = SocketAddrV6::new(Ipv6Addr::new(1, 2, 3, 4, 5, 6, 7, 8), 9876, 11, 12);
         let std2 = SocketAddrV6::new(Ipv6Addr::new(3, 4, 5, 6, 7, 8, 9, 0), 7654, 13, 14);
 
-        test_hash(
-            SockAddr::from(std1),
-            SockAddr::from(std1),
-            SockAddr::from(std2),
-        );
+        test_hash(SockAddr::from(std1), SockAddr::from(std1), SockAddr::from(std2));
     }
 
     #[test]
@@ -592,17 +584,9 @@ mod tests {
         let std1 = SocketAddrV4::new(Ipv4Addr::new(1, 2, 3, 4), 9876);
         let std2 = SocketAddrV6::new(Ipv6Addr::new(1, 2, 3, 4, 5, 6, 7, 8), 9876, 11, 12);
 
-        test_eq(
-            SockAddr::from(std1),
-            SockAddr::from(std1),
-            SockAddr::from(std2),
-        );
+        test_eq(SockAddr::from(std1), SockAddr::from(std1), SockAddr::from(std2));
 
-        test_eq(
-            SockAddr::from(std2),
-            SockAddr::from(std2),
-            SockAddr::from(std1),
-        );
+        test_eq(SockAddr::from(std2), SockAddr::from(std2), SockAddr::from(std1));
     }
 
     #[test]
@@ -613,17 +597,9 @@ mod tests {
         let std1 = SocketAddrV4::new(Ipv4Addr::new(1, 2, 3, 4), 9876);
         let std2 = SocketAddrV6::new(Ipv6Addr::new(1, 2, 3, 4, 5, 6, 7, 8), 9876, 11, 12);
 
-        test_hash(
-            SockAddr::from(std1),
-            SockAddr::from(std1),
-            SockAddr::from(std2),
-        );
+        test_hash(SockAddr::from(std1), SockAddr::from(std1), SockAddr::from(std2));
 
-        test_hash(
-            SockAddr::from(std2),
-            SockAddr::from(std2),
-            SockAddr::from(std1),
-        );
+        test_hash(SockAddr::from(std2), SockAddr::from(std2), SockAddr::from(std1));
     }
 
     #[allow(clippy::eq_op)] // allow a0 == a0 check

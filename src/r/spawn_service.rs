@@ -87,7 +87,7 @@ define_started_flags!(
     BP_AUTOSTART_STARTED,
     BOOT_WS_SMOKE_STARTED,
     BOOT_NETBENCH_STARTED,
-    BOOT_TINYLLAMA_FETCH_STARTED,
+    BOOT_ASSET_FETCH_STARTED,
     APP_VM_RUN_QUEUE_STARTED,
     SMTP_SMOKE_STARTED,
     FACTORY_RAM_PROBE_STARTED,
@@ -415,8 +415,8 @@ fn boot_lumen_service_enabled() -> bool {
     crate::allcaps::lumen::BOOT_MODEL_SERVICE
 }
 
-fn boot_tinyllama_fetch_enabled() -> bool {
-    crate::allcaps::lumen::BOOT_TINYLLAMA_FETCH
+fn boot_asset_fetch_enabled() -> bool {
+    crate::allcaps::lumen::BOOT_ASSET_FETCH
 }
 
 fn spawn_ai_qjs_oneshot(spawner: Spawner) -> SpawnAttempt {
@@ -944,7 +944,7 @@ fn spawn_boot_netbench(spawner: Spawner) -> SpawnAttempt {
     SpawnAttempt::Skipped
 }
 
-struct BootLumenAsset {
+struct BootAsset {
     label: &'static str,
     url: &'static str,
     path: &'static str,
@@ -954,30 +954,30 @@ struct BootLumenAsset {
 pub(crate) const BOOT_LUMEN_WEIGHTS_PATH: &str = "model.safetensors";
 pub(crate) const BOOT_LUMEN_TOKENIZER_PATH: &str = "tokenizer.json";
 
-const BOOT_TINYLLAMA_ASSETS: [BootLumenAsset; 2] = [
-    BootLumenAsset {
+const BOOT_ASSETS: [BootAsset; 2] = [
+    BootAsset {
         label: "weights",
         url: "http://192.168.178.112:8080/tools/tinyllama/model.safetensors",
         path: BOOT_LUMEN_WEIGHTS_PATH,
         max_bytes: 4 * 1024 * 1024 * 1024,
     },
-    BootLumenAsset {
+    BootAsset {
         label: "tokenizer",
         url: "http://192.168.178.112:8080/tools/tinyllama/tokenizer.json",
         path: BOOT_LUMEN_TOKENIZER_PATH,
         max_bytes: 64 * 1024 * 1024,
     },
 ];
-const BOOT_TINYLLAMA_MOUNT_RETRY_SECS: u64 = 10;
-const BOOT_TINYLLAMA_TIMEOUT_MS: u32 = 180_000;
+const BOOT_ASSET_MOUNT_RETRY_SECS: u64 = 10;
+const BOOT_ASSET_TIMEOUT_MS: u32 = 180_000;
 
 #[embassy_executor::task]
-async fn boot_tinyllama_fetch_task() {
+async fn boot_asset_fetch_task() {
     let disk = loop {
         if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
             let info = disk.info();
             crate::log!(
-                "spawn-svc: boot-tinyllama-fetch root mounted disk_id={} readonly={} label={}\n",
+                "spawn-svc: boot-asset-fetch root mounted disk_id={} readonly={} label={}\n",
                 info.id.raw(),
                 info.is_read_only() as u8,
                 info.label.as_deref().unwrap_or("-")
@@ -986,10 +986,10 @@ async fn boot_tinyllama_fetch_task() {
         }
 
         crate::log!(
-            "spawn-svc: boot-tinyllama-fetch no TRUEOSFS root mounted; retry in {}s\n",
-            BOOT_TINYLLAMA_MOUNT_RETRY_SECS
+            "spawn-svc: boot-asset-fetch no TRUEOSFS root mounted; retry in {}s\n",
+            BOOT_ASSET_MOUNT_RETRY_SECS
         );
-        Timer::after(EmbassyDuration::from_secs(BOOT_TINYLLAMA_MOUNT_RETRY_SECS)).await;
+        Timer::after(EmbassyDuration::from_secs(BOOT_ASSET_MOUNT_RETRY_SECS)).await;
     };
 
     let _ = crate::r::readiness::wait_for_timeout(
@@ -998,11 +998,11 @@ async fn boot_tinyllama_fetch_task() {
     )
     .await;
 
-    for asset in BOOT_TINYLLAMA_ASSETS {
+    for asset in BOOT_ASSETS {
         match crate::r::fs::trueosfs::file_info_async(disk, asset.path).await {
             Ok(Some(info)) if info.data_len != 0 => {
                 crate::log!(
-                    "spawn-svc: boot-tinyllama-fetch skip existing {} path={} bytes={}\n",
+                    "spawn-svc: boot-asset-fetch skip existing {} path={} bytes={}\n",
                     asset.label,
                     asset.path,
                     info.data_len
@@ -1012,7 +1012,7 @@ async fn boot_tinyllama_fetch_task() {
             Ok(_) => {}
             Err(err) => {
                 crate::log!(
-                    "spawn-svc: boot-tinyllama-fetch existing-file probe failed {} path={} err={:?}\n",
+                    "spawn-svc: boot-asset-fetch existing-file probe failed {} path={} err={:?}\n",
                     asset.label,
                     asset.path,
                     err
@@ -1021,7 +1021,7 @@ async fn boot_tinyllama_fetch_task() {
         }
 
         crate::log!(
-            "spawn-svc: boot-tinyllama-fetch start {} url={} path={} max_bytes={}\n",
+            "spawn-svc: boot-asset-fetch start {} url={} path={} max_bytes={}\n",
             asset.label,
             asset.url,
             asset.path,
@@ -1031,7 +1031,7 @@ async fn boot_tinyllama_fetch_task() {
             asset.url,
             disk,
             asset.path,
-            BOOT_TINYLLAMA_TIMEOUT_MS,
+            BOOT_ASSET_TIMEOUT_MS,
             asset.max_bytes,
         )
         .await
@@ -1039,7 +1039,7 @@ async fn boot_tinyllama_fetch_task() {
             Ok(()) => match crate::r::fs::trueosfs::file_info_async(disk, asset.path).await {
                 Ok(Some(info)) => {
                     crate::log!(
-                        "spawn-svc: boot-tinyllama-fetch success {} path={} bytes={}\n",
+                        "spawn-svc: boot-asset-fetch success {} path={} bytes={}\n",
                         asset.label,
                         asset.path,
                         info.data_len
@@ -1047,14 +1047,14 @@ async fn boot_tinyllama_fetch_task() {
                 }
                 Ok(None) => {
                     crate::log!(
-                        "spawn-svc: boot-tinyllama-fetch post-fetch stat missing {} path={}\n",
+                        "spawn-svc: boot-asset-fetch post-fetch stat missing {} path={}\n",
                         asset.label,
                         asset.path
                     );
                 }
                 Err(err) => {
                     crate::log!(
-                        "spawn-svc: boot-tinyllama-fetch post-fetch stat failed {} path={} err={:?}\n",
+                        "spawn-svc: boot-asset-fetch post-fetch stat failed {} path={} err={:?}\n",
                         asset.label,
                         asset.path,
                         err
@@ -1063,7 +1063,7 @@ async fn boot_tinyllama_fetch_task() {
             },
             Err(err) => {
                 crate::log!(
-                    "spawn-svc: boot-tinyllama-fetch failed {} url={} err={:?}\n",
+                    "spawn-svc: boot-asset-fetch failed {} url={} err={:?}\n",
                     asset.label,
                     asset.url,
                     err
@@ -1073,14 +1073,14 @@ async fn boot_tinyllama_fetch_task() {
     }
 
     crate::log!(
-        "spawn-svc: boot-tinyllama-fetch done weights={} tokenizer={}\n",
+        "spawn-svc: boot-asset-fetch done weights={} tokenizer={}\n",
         BOOT_LUMEN_WEIGHTS_PATH,
         BOOT_LUMEN_TOKENIZER_PATH
     );
 }
 
-fn spawn_boot_tinyllama_fetch(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| boot_tinyllama_fetch_task())
+fn spawn_boot_asset_fetch(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| boot_asset_fetch_task())
 }
 
 fn spawn_app_vm_run_queue(spawner: Spawner) -> SpawnAttempt {
@@ -1567,11 +1567,11 @@ static TASKS: [TaskSpec; 70] = [
     TaskSpec::disabled("smtp-smoke", 0, &SMTP_SMOKE_STARTED, spawn_smtp_smoke),
     TaskSpec::disabled("boot-netbench", 0, &BOOT_NETBENCH_STARTED, spawn_boot_netbench),
     TaskSpec::enabled_gated(
-        "boot-tinyllama-fetch",
-        0,
-        boot_tinyllama_fetch_enabled,
-        &BOOT_TINYLLAMA_FETCH_STARTED,
-        spawn_boot_tinyllama_fetch,
+        "boot-asset-fetch",
+        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
+        boot_asset_fetch_enabled,
+        &BOOT_ASSET_FETCH_STARTED,
+        spawn_boot_asset_fetch,
     ),
     TaskSpec::enabled("uart-shell", 0, &UART_SHELL_STARTED, spawn_uart_shell),
     TaskSpec::enabled("net-tcp-shell", 0, &NET_TCP_SHELL_STARTED, spawn_net_tcp_shell),
