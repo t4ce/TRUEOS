@@ -56,11 +56,6 @@ fn atlas_set() -> Option<&'static TwemojiAtlasSet> {
 }
 
 #[inline]
-pub fn twemoji_cell_width_px() -> u16 {
-    atlas_set().map(|set| set.atlas.cell_w).unwrap_or(0)
-}
-
-#[inline]
 pub fn twemoji_cell_height_px() -> u16 {
     atlas_set().map(|set| set.atlas.cell_h).unwrap_or(0)
 }
@@ -92,11 +87,6 @@ pub fn twemoji_mark_ready() -> Option<u32> {
 #[inline]
 pub fn twemoji_ready() -> bool {
     TWEMOJI_RUNTIME.lock().ready
-}
-
-#[inline]
-pub fn twemoji_ready_seq() -> u32 {
-    TWEMOJI_RUNTIME.lock().ready_seq
 }
 
 pub fn twemoji_lookup_glyph_region(ch: char) -> Option<AthlasGlyphRegion> {

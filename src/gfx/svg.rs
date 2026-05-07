@@ -31,8 +31,6 @@ pub struct SvgTextureInfo {
 pub struct SvgMeshInfo {
     pub width: u32,
     pub height: u32,
-    pub svg_width: f32,
-    pub svg_height: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -379,19 +377,6 @@ pub fn upload_svg_bytes_to_texture(tex_id: u32, bytes: &[u8]) -> Result<SvgTextu
     upload_svg_text_to_texture(tex_id, svg_text)
 }
 
-pub fn tessellate_svg_bytes(bytes: &[u8]) -> Result<SvgMeshDocument, i32> {
-    let svg_text = str::from_utf8(bytes).map_err(|_| ERR_SVG_INVALID_UTF8)?;
-    tessellate_svg_text(svg_text)
-}
-
-pub fn tessellate_svg_bytes_at_height(
-    bytes: &[u8],
-    target_height: u32,
-) -> Result<SvgMeshDocument, i32> {
-    let svg_text = str::from_utf8(bytes).map_err(|_| ERR_SVG_INVALID_UTF8)?;
-    tessellate_svg_text_at_height(svg_text, target_height)
-}
-
 pub fn rasterize_svg_bytes_rgba(bytes: &[u8]) -> Result<(SvgTextureInfo, Vec<u8>), i32> {
     let svg_text = str::from_utf8(bytes).map_err(|_| ERR_SVG_INVALID_UTF8)?;
     rasterize_svg_text_rgba(svg_text)
@@ -400,16 +385,6 @@ pub fn rasterize_svg_bytes_rgba(bytes: &[u8]) -> Result<(SvgTextureInfo, Vec<u8>
 pub fn tessellate_svg_text(svg_text: &str) -> Result<SvgMeshDocument, i32> {
     let tree = Tree::from_str(svg_text, &Options::default()).map_err(|_| ERR_SVG_PARSE)?;
     let (width, height, svg_w, svg_h) = choose_output_size(&tree)?;
-    tessellate_svg_tree_with_size(&tree, width, height, svg_w, svg_h)
-}
-
-pub fn tessellate_svg_text_at_height(
-    svg_text: &str,
-    target_height: u32,
-) -> Result<SvgMeshDocument, i32> {
-    let tree = Tree::from_str(svg_text, &Options::default()).map_err(|_| ERR_SVG_PARSE)?;
-    let (_, _, svg_w, svg_h) = choose_output_size(&tree)?;
-    let (width, height) = choose_mesh_size_for_height(svg_w, svg_h, target_height)?;
     tessellate_svg_tree_with_size(&tree, width, height, svg_w, svg_h)
 }
 
@@ -426,35 +401,9 @@ fn tessellate_svg_tree_with_size(
         info: SvgMeshInfo {
             width,
             height,
-            svg_width: svg_w,
-            svg_height: svg_h,
         },
         primitives: builder.primitives,
     })
-}
-
-fn choose_mesh_size_for_height(
-    svg_w: f32,
-    svg_h: f32,
-    target_height: u32,
-) -> Result<(u32, u32), i32> {
-    if !(svg_w > 0.0 && svg_h > 0.0) {
-        return Err(ERR_SVG_SIZE);
-    }
-
-    let mut height = target_height.max(1).min(SVG_MAX_TEXTURE_SIDE);
-    let aspect = svg_w / svg_h;
-    let mut width = floorf((height as f32 * aspect).max(1.0) + 0.5) as u32;
-    if width == 0 {
-        width = 1;
-    }
-    if width > SVG_MAX_TEXTURE_SIDE {
-        let scale = SVG_MAX_TEXTURE_SIDE as f32 / width as f32;
-        width = SVG_MAX_TEXTURE_SIDE;
-        height = floorf((height as f32 * scale).max(1.0) + 0.5) as u32;
-    }
-
-    Ok((width.max(1), height.max(1)))
 }
 
 pub fn rasterize_svg_text_rgba(svg_text: &str) -> Result<(SvgTextureInfo, Vec<u8>), i32> {

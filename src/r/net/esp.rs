@@ -661,6 +661,22 @@ fn trueos_peer_link_known(links: &[TrueOsPeerLink], node_id: u64) -> bool {
             .any(|link| link.handle.is_some() && link.node_id == node_id)
 }
 
+fn trueos_peer_duplicate_handle(
+    links: &[TrueOsPeerLink],
+    node_id: u64,
+    current: v::vnet::NetHandle,
+) -> Option<v::vnet::NetHandle> {
+    if node_id == 0 {
+        return None;
+    }
+
+    links
+        .iter()
+        .filter(|link| link.node_id == node_id)
+        .filter_map(|link| link.handle)
+        .find(|handle| *handle != current)
+}
+
 fn trueos_peer_link_has_room_or_known(links: &[TrueOsPeerLink], node_id: u64) -> bool {
     trueos_peer_link_known(links, node_id) || trueos_peer_link_count(links) < TRUEOS_PEER_LINK_CAP
 }
@@ -981,6 +997,7 @@ pub async fn esp_gate_task() {
                         submit_trueos_peer_hello(&vnet, handle, local_node_id);
                     }
                     v::vnet::Event::TcpData { handle, data } => {
+                        let mut close_duplicate_peer = false;
                         if let Some(advertisement) = record_trueos_peer_data(
                             peer_links.as_mut_slice(),
                             handle,
@@ -992,61 +1009,83 @@ pub async fn esp_gate_task() {
                                 advertisement.node_id,
                                 data.len()
                             );
-                        }
-                        if trueos_lumen_work_probe_received(data.as_slice()) {
-                            submit_trueos_lumen_work_capacity(&vnet, handle);
-                        }
-                        drain_lumen_app_data_for_handle(
-                            peer_links.as_mut_slice(),
-                            handle,
-                            data.as_slice(),
-                            |frame| {
-                                if frame.opcode == TRUEOS_LUMEN_APP_OP_TEXT {
-                                    process_lumen_app_text_payload(
-                                        handle,
-                                        frame.payload,
-                                        &mut shadow_x_reassemblies,
-                                    );
-                                } else {
-                                    crate::log!(
-                                        "esp-gate: lumen app frame ignored handle={} opcode={} bytes={}\n",
-                                        handle.0,
-                                        frame.opcode,
-                                        frame.payload.len()
-                                    );
-                                }
-                            },
-                        );
-                        if let Some(capacity) = parse_trueos_lumen_work_capacity(data.as_slice()) {
-                            let now_ms = monotonic_ms();
-                            let node_id = trueos_peer_link_node_id(peer_links.as_slice(), handle);
-                            let mut counted = false;
-                            if lumen_work_probe_deadline_ms != 0
-                                && now_ms <= lumen_work_probe_deadline_ms
-                            {
-                                if node_id == 0 || !lumen_work_probe_seen_nodes.contains(&node_id) {
-                                    if node_id != 0 {
-                                        lumen_work_probe_seen_nodes.push(node_id);
-                                    }
-                                    lumen_work_probe_replies =
-                                        lumen_work_probe_replies.saturating_add(1);
-                                    lumen_work_probe_best =
-                                        lumen_work_probe_best.max(capacity.lanes);
-                                    counted = true;
-                                }
+                            if let Some(retained) = trueos_peer_duplicate_handle(
+                                peer_links.as_slice(),
+                                advertisement.node_id,
+                                handle,
+                            ) {
+                                crate::log!(
+                                    "esp-gate: trueos peer duplicate handle={} retained_handle={} node=0x{:016X} action=close-duplicate\n",
+                                    handle.0,
+                                    retained.0,
+                                    advertisement.node_id
+                                );
+                                let _ = remove_trueos_peer_link(peer_links.as_mut_slice(), handle);
+                                let _ = vnet.submit(v::vnet::Command::Close { handle });
+                                close_duplicate_peer = true;
                             }
-                            crate::log!(
-                                "esp-gate: lumen work capacity received handle={} node=0x{:016X} n={} proto={} caps=0x{:08X} workers={} pending={} min_rows={} counted={}\n",
-                                handle.0,
-                                node_id,
-                                capacity.lanes,
-                                capacity.protocol_version,
-                                capacity.caps,
-                                capacity.workers,
-                                capacity.pending,
-                                capacity.min_rows,
-                                if counted { 1 } else { 0 }
+                        }
+                        if !close_duplicate_peer {
+                            if trueos_lumen_work_probe_received(data.as_slice()) {
+                                submit_trueos_lumen_work_capacity(&vnet, handle);
+                            }
+                            drain_lumen_app_data_for_handle(
+                                peer_links.as_mut_slice(),
+                                handle,
+                                data.as_slice(),
+                                |frame| {
+                                    if frame.opcode == TRUEOS_LUMEN_APP_OP_TEXT {
+                                        process_lumen_app_text_payload(
+                                            handle,
+                                            frame.payload,
+                                            &mut shadow_x_reassemblies,
+                                        );
+                                    } else {
+                                        crate::log!(
+                                            "esp-gate: lumen app frame ignored handle={} opcode={} bytes={}\n",
+                                            handle.0,
+                                            frame.opcode,
+                                            frame.payload.len()
+                                        );
+                                    }
+                                },
                             );
+                            if let Some(capacity) =
+                                parse_trueos_lumen_work_capacity(data.as_slice())
+                            {
+                                let now_ms = monotonic_ms();
+                                let node_id =
+                                    trueos_peer_link_node_id(peer_links.as_slice(), handle);
+                                let mut counted = false;
+                                if lumen_work_probe_deadline_ms != 0
+                                    && now_ms <= lumen_work_probe_deadline_ms
+                                {
+                                    if node_id == 0
+                                        || !lumen_work_probe_seen_nodes.contains(&node_id)
+                                    {
+                                        if node_id != 0 {
+                                            lumen_work_probe_seen_nodes.push(node_id);
+                                        }
+                                        lumen_work_probe_replies =
+                                            lumen_work_probe_replies.saturating_add(1);
+                                        lumen_work_probe_best =
+                                            lumen_work_probe_best.max(capacity.lanes);
+                                        counted = true;
+                                    }
+                                }
+                                crate::log!(
+                                    "esp-gate: lumen work capacity received handle={} node=0x{:016X} n={} proto={} caps=0x{:08X} workers={} pending={} min_rows={} counted={}\n",
+                                    handle.0,
+                                    node_id,
+                                    capacity.lanes,
+                                    capacity.protocol_version,
+                                    capacity.caps,
+                                    capacity.workers,
+                                    capacity.pending,
+                                    capacity.min_rows,
+                                    if counted { 1 } else { 0 }
+                                );
+                            }
                         }
                     }
                     v::vnet::Event::Closed { handle } if peer_listener == Some(handle) => {

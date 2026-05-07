@@ -2,7 +2,6 @@ use alloc::vec::Vec;
 use bytes::{BufMut, Bytes, BytesMut};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use crc32fast::Hasher as Crc32;
-use embassy_time::{Duration as EmbassyDuration, Timer};
 use miniz_oxide::deflate::compress_to_vec_zlib;
 use spin::Mutex;
 
@@ -155,18 +154,6 @@ impl ScreenshotAwait {
     const fn new(core: &'static LastScreenshotBuffer) -> Self {
         Self { core }
     }
-
-    pub async fn next_frame(&self, seen_seq: u64, poll_ms: u64) -> (u64, ImageBuffer) {
-        self.core.arm_capture();
-        let delay_ms = poll_ms.max(1);
-        loop {
-            if let Some(next) = self.core.copy_if_newer(seen_seq) {
-                return next;
-            }
-
-            Timer::after(EmbassyDuration::from_millis(delay_ms)).await;
-        }
-    }
 }
 
 fn next_frame_blocking(timeout_ms: u64) -> Option<ImageBuffer> {
@@ -302,16 +289,8 @@ static LAST_SCREENSHOT_BUFFER: LastScreenshotBuffer = LastScreenshotBuffer::new(
 static ENCODED_SCREENSHOT_BUFFER: EncodedScreenshotBuffer = EncodedScreenshotBuffer::new();
 static VIRGL_SCREENSHOT_AWAIT: ScreenshotAwait = ScreenshotAwait::new(&LAST_SCREENSHOT_BUFFER);
 
-pub fn virgl_screenshot_await() -> &'static ScreenshotAwait {
-    &VIRGL_SCREENSHOT_AWAIT
-}
-
 pub(crate) fn screenshot_capture_armed() -> bool {
     LAST_SCREENSHOT_BUFFER.is_capture_armed()
-}
-
-pub(crate) fn publish_screenshot_image_buffer(width: u32, height: u32, pixels: &[u32]) -> u64 {
-    LAST_SCREENSHOT_BUFFER.publish_copy(width, height, pixels)
 }
 
 pub(crate) fn publish_screenshot_rgba_buffer(width: u32, height: u32, rgba: &[u8]) -> u64 {
@@ -328,12 +307,4 @@ pub(crate) fn publish_screenshot_rgba_buffer(width: u32, height: u32, rgba: &[u8
         pixels.resize(need_pixels, 0);
     }
     LAST_SCREENSHOT_BUFFER.publish_copy(width, height, pixels.as_slice())
-}
-
-pub(crate) fn virgl_screenshot_capture_armed() -> bool {
-    screenshot_capture_armed()
-}
-
-pub(crate) fn publish_virgl_image_buffer(width: u32, height: u32, pixels: &[u32]) -> u64 {
-    publish_screenshot_image_buffer(width, height, pixels)
 }
