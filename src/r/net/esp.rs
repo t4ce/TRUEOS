@@ -39,6 +39,10 @@ static STATUS_EVENTS: Mutex<VecDeque<trueos_esp::swarm::StatusChangeEvent>> =
     Mutex::new(VecDeque::new());
 static REGISTRY_CHANGE_SEQ: AtomicU32 = AtomicU32::new(1);
 static LUMEN_WORK_PROBE_SEQ: AtomicU32 = AtomicU32::new(1);
+static LUMEN_WORK_PROBE_RESULT_SEQ: AtomicU32 = AtomicU32::new(1);
+static LUMEN_WORK_PROBE_RESULT_SENT: AtomicU32 = AtomicU32::new(0);
+static LUMEN_WORK_PROBE_RESULT_REPLIES: AtomicU32 = AtomicU32::new(0);
+static LUMEN_WORK_PROBE_RESULT_BEST: AtomicU32 = AtomicU32::new(0);
 
 fn monotonic_ms() -> u64 {
     let hz = embassy_time_driver::TICK_HZ.max(1);
@@ -87,15 +91,56 @@ pub fn registry_change_seq() -> u32 {
     REGISTRY_CHANGE_SEQ.load(Ordering::Acquire)
 }
 
-pub(crate) fn request_lumen_work_capacity_probe() {
+pub(crate) fn request_lumen_work_capacity_probe() -> u32 {
     let seq = LUMEN_WORK_PROBE_SEQ
         .fetch_add(1, Ordering::AcqRel)
         .wrapping_add(1);
+    crate::lumen::lumen_net::set_remote_bf16_route_available(false);
     crate::log!(
         "esp-gate: lumen work capacity probe requested seq={} timeout_ms={}\n",
         seq,
         TRUEOS_LUMEN_WORK_PROBE_TIMEOUT_MS
     );
+    seq
+}
+
+pub(crate) fn prepare_lumen_offload_for_prompt() -> bool {
+    let seq = request_lumen_work_capacity_probe();
+    let start = embassy_time_driver::now();
+    let timeout_ticks = TRUEOS_LUMEN_WORK_PROBE_TIMEOUT_MS
+        .saturating_mul(embassy_time_driver::TICK_HZ.max(1))
+        / 1000;
+
+    loop {
+        if LUMEN_WORK_PROBE_RESULT_SEQ.load(Ordering::Acquire) == seq {
+            let sent = LUMEN_WORK_PROBE_RESULT_SENT.load(Ordering::Acquire);
+            let replies = LUMEN_WORK_PROBE_RESULT_REPLIES.load(Ordering::Acquire);
+            let best = LUMEN_WORK_PROBE_RESULT_BEST.load(Ordering::Acquire);
+            let enabled = sent != 0 && replies != 0 && best != 0;
+            crate::lumen::lumen_net::set_remote_bf16_route_available(enabled);
+            crate::log!(
+                "esp-gate: lumen prompt offload gate seq={} sent={} replies={} best={} enabled={}\n",
+                seq,
+                sent,
+                replies,
+                best,
+                if enabled { 1 } else { 0 }
+            );
+            return enabled;
+        }
+
+        crate::time::poll();
+        crate::smp::poll();
+        if timeout_ticks != 0 && embassy_time_driver::now().saturating_sub(start) > timeout_ticks {
+            crate::lumen::lumen_net::set_remote_bf16_route_available(false);
+            crate::log!(
+                "esp-gate: lumen prompt offload gate seq={} result=timeout enabled=0\n",
+                seq
+            );
+            return false;
+        }
+        core::hint::spin_loop();
+    }
 }
 
 fn note_registry_change() {
@@ -320,6 +365,13 @@ fn parse_trueos_lumen_work_capacity(data: &[u8]) -> Option<LumenWorkCapacity> {
         }
     }
     Some(out)
+}
+
+fn publish_lumen_work_probe_result(seq: u32, sent: usize, replies: usize, best: u32) {
+    LUMEN_WORK_PROBE_RESULT_SENT.store(sent.min(u32::MAX as usize) as u32, Ordering::Release);
+    LUMEN_WORK_PROBE_RESULT_REPLIES.store(replies.min(u32::MAX as usize) as u32, Ordering::Release);
+    LUMEN_WORK_PROBE_RESULT_BEST.store(best, Ordering::Release);
+    LUMEN_WORK_PROBE_RESULT_SEQ.store(seq, Ordering::Release);
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -983,6 +1035,18 @@ fn remove_trueos_peer_link(links: &mut [TrueOsPeerLink], handle: v::vnet::NetHan
     true
 }
 
+fn clear_trueos_peer_links(links: &mut [TrueOsPeerLink]) -> usize {
+    let mut cleared = 0usize;
+    for link in links.iter_mut().filter(|link| link.handle.is_some()) {
+        link.handle = None;
+        link.node_id = 0;
+        link.rx.clear();
+        link.lumen_rx.clear();
+        cleared = cleared.saturating_add(1);
+    }
+    cleared
+}
+
 fn drain_lumen_app_data_for_handle<F>(
     links: &mut [TrueOsPeerLink],
     handle: v::vnet::NetHandle,
@@ -1239,6 +1303,14 @@ pub async fn esp_gate_task() {
             if let Some(ev) = vnet.pop_event() {
                 if let v::vnet::Event::Error { msg } = ev {
                     crate::log!("esp-gate: error {}\n", msg);
+                    if msg == "bad handle" {
+                        let cleared = clear_trueos_peer_links(peer_links.as_mut_slice());
+                        crate::lumen::lumen_net::set_remote_bf16_route_available(false);
+                        crate::log!(
+                            "esp-gate: peer links cleared reason=bad-handle count={}\n",
+                            cleared
+                        );
+                    }
                 }
 
                 match ev {
@@ -1330,9 +1402,6 @@ pub async fn esp_gate_task() {
                             if let Some(capacity) =
                                 parse_trueos_lumen_work_capacity(data.as_slice())
                             {
-                                if capacity.lanes != 0 {
-                                    crate::lumen::lumen_net::set_remote_bf16_route_available(true);
-                                }
                                 let now_ms = monotonic_ms();
                                 let node_id =
                                     trueos_peer_link_node_id(peer_links.as_slice(), handle);
@@ -1351,6 +1420,14 @@ pub async fn esp_gate_task() {
                                         lumen_work_probe_best =
                                             lumen_work_probe_best.max(capacity.lanes);
                                         counted = true;
+                                    }
+                                    if counted && lumen_work_probe_best != 0 {
+                                        publish_lumen_work_probe_result(
+                                            lumen_work_probe_seq,
+                                            lumen_work_probe_sent,
+                                            lumen_work_probe_replies,
+                                            lumen_work_probe_best,
+                                        );
                                     }
                                 }
                                 crate::log!(
@@ -1372,9 +1449,7 @@ pub async fn esp_gate_task() {
                         peer_listener = None;
                         let retained_peer_node =
                             trueos_peer_link_node_id(peer_links.as_slice(), handle);
-                        if retained_peer_node == 0 {
-                            let _ = remove_trueos_peer_link(peer_links.as_mut_slice(), handle);
-                        }
+                        let _ = remove_trueos_peer_link(peer_links.as_mut_slice(), handle);
                         crate::log!(
                             "esp-gate: trueos peer tcp listener closed, reopening port={} retained_peer_node=0x{:016X} active_links={}\n",
                             trueos_esp::gate::TRUEOS_PEER_TCP_PORT,
@@ -1514,6 +1589,7 @@ pub async fn esp_gate_task() {
                 if lumen_work_probe_sent == 0 {
                     lumen_work_probe_deadline_ms = 0;
                     crate::lumen::lumen_net::set_remote_bf16_route_available(false);
+                    publish_lumen_work_probe_result(lumen_work_probe_seq, 0, 0, 0);
                     crate::log!(
                         "esp-gate: lumen work capacity probe seq={} skipped reason=no-peers\n",
                         lumen_work_probe_seq
@@ -1521,7 +1597,6 @@ pub async fn esp_gate_task() {
                 } else {
                     lumen_work_probe_deadline_ms =
                         now_ms.saturating_add(TRUEOS_LUMEN_WORK_PROBE_TIMEOUT_MS);
-                    crate::lumen::lumen_net::set_remote_bf16_route_available(true);
                     crate::log!(
                         "esp-gate: lumen work capacity probe seq={} sent={} timeout_ms={}\n",
                         lumen_work_probe_seq,
@@ -1535,6 +1610,12 @@ pub async fn esp_gate_task() {
                 if lumen_work_probe_replies == 0 {
                     crate::lumen::lumen_net::set_remote_bf16_route_available(false);
                 }
+                publish_lumen_work_probe_result(
+                    lumen_work_probe_seq,
+                    lumen_work_probe_sent,
+                    lumen_work_probe_replies,
+                    lumen_work_probe_best,
+                );
                 crate::log!(
                     "esp-gate: lumen work capacity probe seq={} complete sent={} replies={} best={}\n",
                     lumen_work_probe_seq,

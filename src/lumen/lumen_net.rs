@@ -738,8 +738,7 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 }
 
 pub(crate) fn route_bf16_matvec_to_net_backend() -> bool {
-    crate::allcaps::lumen::ROUTE_BF16_MATVEC_TO_NET_BACKEND
-        && REMOTE_ROUTE_AVAILABLE.load(Ordering::Acquire)
+    REMOTE_ROUTE_AVAILABLE.load(Ordering::Acquire)
 }
 
 pub(crate) fn shadow_bf16_matvec_to_net_backend() -> bool {
