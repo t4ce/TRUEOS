@@ -372,6 +372,37 @@ pub(crate) fn enqueue_blueprint_bytes(
     });
 }
 
+pub(crate) fn submit_archive_name_to_target(
+    target: MatrixTarget,
+    archive_name: &str,
+    app_args: Vec<String>,
+) -> Result<(), &'static str> {
+    let archives = archive_entries()?;
+    let Some(entry) = archives
+        .iter()
+        .find(|entry| entry.archive.as_str() == archive_name)
+    else {
+        return Err("archive not found");
+    };
+
+    match &entry.source {
+        ArchiveSource::TrueosfsRoot => {
+            let module_bytes = crate::r::io::kfs::read_file(entry.archive.as_str())
+                .map_err(|_| "failed to read selected module from TRUEOSFS")?;
+            enqueue_blueprint_bytes(target, entry.archive.clone(), module_bytes, app_args);
+        }
+        ArchiveSource::EmbeddedModule { cmdline } => {
+            let Some(module_bytes) = crate::limine::module_bytes_by_string(cmdline.as_bytes())
+            else {
+                return Err("failed to read selected embedded module");
+            };
+            enqueue_blueprint_bytes(target, entry.archive.clone(), module_bytes.to_vec(), app_args);
+        }
+    }
+
+    Ok(())
+}
+
 pub(crate) fn submit_run(io: &'static dyn ShellBackend2, archive: String, app_args: Vec<String>) {
     let target = matrix_target_for_backend(io);
     let module_bytes = match crate::r::io::kfs::read_file(archive.as_str()) {

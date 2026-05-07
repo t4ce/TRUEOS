@@ -27,6 +27,10 @@ const MASS_RUNTIME_WAIT_LIMIT: u16 = crate::allcaps::storage::USB_MASS_RUNTIME_W
 const MASS_RUNTIME_WAIT_DELAY_MS: u64 = crate::allcaps::storage::USB_MASS_RUNTIME_WAIT_DELAY_MS;
 const MIN_IO_BYTES: usize = crate::allcaps::storage::USB_MASS_MIN_IO_BYTES;
 const MAX_IO_BYTES: usize = crate::allcaps::storage::USB_MASS_MAX_IO_BYTES;
+const UAS_READ_WINDOW_MAX_INFLIGHT: usize =
+    crate::allcaps::storage::USB_MASS_UAS_READ_WINDOW_MAX_INFLIGHT;
+const UAS_READ_WINDOW_MAX_TRANSFER_BYTES: usize =
+    crate::allcaps::storage::USB_MASS_UAS_READ_WINDOW_MAX_TRANSFER_BYTES;
 const MASS_IO_GROW_SUCCESS_TARGET: u16 = crate::allcaps::storage::USB_MASS_IO_GROW_SUCCESS_TARGET;
 const MASS_IO_GROW_SUCCESS_TARGET_FAST_BOT: u16 =
     crate::allcaps::storage::USB_MASS_IO_GROW_SUCCESS_TARGET_FAST_BOT;
@@ -231,7 +235,7 @@ struct UasBenchFlight {
     blocks: u16,
     bytes: usize,
     submitted_ms: u64,
-    _data: AllocVec<u8>,
+    data: AllocVec<u8>,
     status: AllocVec<u8>,
     data_ticket: Option<DetachedTransfer>,
     status_ticket: Option<DetachedTransfer>,
@@ -314,7 +318,7 @@ fn uas_bench_transfer_error(stage: &'static str) -> block::Error {
     let submit = crab_usb::debug_last_submit();
     let event = crab_usb::debug_last_event();
     crate::log!(
-        "crabusb: mass uas-bench transfer-error stage={} last_submit[slot={} dci={} dir={} stream={} len={} ptr=0x{:X} ring=0x{:X}] last_event[slot={} ep={} cc={} residual={} ptr=0x{:X}]\n",
+        "crabusb: mass uas-stream transfer-error stage={} last_submit[slot={} dci={} dir={} stream={} len={} ptr=0x{:X} ring=0x{:X}] last_event[slot={} ep={} cc={} residual={} ptr=0x{:X}]\n",
         stage,
         submit.slot_id,
         submit.dci,
@@ -381,7 +385,7 @@ async fn uas_bench_submit_read(
         blocks,
         bytes,
         submitted_ms: uas_bench_now_ms(),
-        _data: data,
+        data,
         status,
         data_ticket: Some(data_ticket),
         status_ticket: Some(status_ticket),
@@ -415,7 +419,7 @@ fn uas_bench_poll_flights(
             let flight = &mut flights[idx];
             if now_ms.saturating_sub(flight.submitted_ms) > UAS_BENCH_FLIGHT_TIMEOUT_MS {
                 crate::log!(
-                    "crabusb: mass uas-bench timeout tag=0x{:04X} lba={} blocks={} bytes={} age_ms={} data_pending={} status_pending={} data_len={} ready={} good={}\n",
+                    "crabusb: mass uas-stream timeout tag=0x{:04X} lba={} blocks={} bytes={} age_ms={} data_pending={} status_pending={} data_len={} ready={} good={}\n",
                     flight.tag,
                     flight.lba,
                     flight.blocks,
@@ -437,7 +441,7 @@ fn uas_bench_poll_flights(
                             flight.data_ticket = None;
                             if got < flight.bytes {
                                 crate::log!(
-                                    "crabusb: mass uas-bench short-data tag=0x{:04X} lba={} got={} need={}\n",
+                                    "crabusb: mass uas-stream short-data tag=0x{:04X} lba={} got={} need={}\n",
                                     flight.tag,
                                     flight.lba,
                                     got,
@@ -1447,28 +1451,252 @@ fn uas_runtime_note_error(
 
     rt.uas_dead_stream_mask |= mask;
     rt.uas_stream_faults = rt.uas_stream_faults.saturating_add(1);
-    crate::globalog::log_with_level(log::Level::Warn, format_args!(
-        "crabusb: mass {:04X}:{:04X} uas-stream retire stage={} tag=0x{:04X} err={:?} dead={} faults={} io_limit={}\n",
-        rt.vendor_id,
-        rt.product_id,
-        stage,
-        tag,
-        err,
-        rt.uas_dead_stream_mask.count_ones(),
-        rt.uas_stream_faults,
-        current_mass_io_bytes(rt, block_size)
-    ));
+    crate::globalog::log_with_level(
+        log::Level::Warn,
+        format_args!(
+            "crabusb: mass {:04X}:{:04X} uas-stream retire stage={} tag=0x{:04X} err={:?} dead={} faults={} io_limit={}\n",
+            rt.vendor_id,
+            rt.product_id,
+            stage,
+            tag,
+            err,
+            rt.uas_dead_stream_mask.count_ones(),
+            rt.uas_stream_faults,
+            current_mass_io_bytes(rt, block_size)
+        ),
+    );
 }
 
 fn uas_runtime_log_exhausted(rt: &UsbMassRuntime, stage: &'static str) {
-    crate::globalog::log_with_level(log::Level::Warn, format_args!(
-        "crabusb: mass {:04X}:{:04X} uas-stream exhausted stage={} dead={} faults={}\n",
-        rt.vendor_id,
-        rt.product_id,
-        stage,
-        rt.uas_dead_stream_mask.count_ones(),
-        rt.uas_stream_faults
-    ));
+    crate::globalog::log_with_level(
+        log::Level::Warn,
+        format_args!(
+            "crabusb: mass {:04X}:{:04X} uas-stream exhausted stage={} dead={} faults={}\n",
+            rt.vendor_id,
+            rt.product_id,
+            stage,
+            rt.uas_dead_stream_mask.count_ones(),
+            rt.uas_stream_faults
+        ),
+    );
+}
+
+async fn read_blocks_uas_skhynix_windowed(
+    rt: &mut UsbMassRuntime,
+    lba: u64,
+    blocks: usize,
+    out: &mut [u8],
+    block_size: usize,
+) -> block::Result<()> {
+    if blocks == 0 {
+        return Ok(());
+    }
+    if block_size == 0 || !out.len().is_multiple_of(block_size) {
+        return Err(block::Error::InvalidParam);
+    }
+    if lba > u64::from(u32::MAX) {
+        return Err(block::Error::OutOfBounds);
+    }
+
+    let total_bytes = blocks
+        .checked_mul(block_size)
+        .ok_or(block::Error::InvalidParam)?;
+    if total_bytes != out.len() {
+        return Err(block::Error::InvalidParam);
+    }
+
+    let live_streams = (mass::UAS_XHCI_MAX_STREAM_ID as usize)
+        .saturating_sub(rt.uas_dead_stream_mask.count_ones() as usize);
+    if live_streams == 0 {
+        uas_runtime_log_exhausted(rt, "read-window");
+        return Err(block::Error::Timeout);
+    }
+
+    let max_inflight = UAS_READ_WINDOW_MAX_INFLIGHT
+        .max(1)
+        .min(live_streams)
+        .min(mass::UAS_XHCI_MAX_STREAM_ID as usize);
+    let max_read_bytes =
+        core::cmp::min(current_mass_io_bytes(rt, block_size), u16::MAX as usize * block_size);
+    let blocks_per_read = (max_read_bytes / block_size).max(1).min(u16::MAX as usize);
+    let request_end_lba = lba
+        .checked_add(blocks as u64)
+        .ok_or(block::Error::OutOfBounds)?;
+
+    let mut completed_bytes = 0u64;
+    let mut submitted_bytes = 0u64;
+    let mut next_lba = lba;
+    let mut flights: AllocVec<UasBenchFlight> = AllocVec::new();
+    let mut cwnd = 1usize;
+    let mut ssthresh = max_inflight;
+    let mut additive_acks = 0usize;
+    let mut timeouts = 0u32;
+
+    while completed_bytes < total_bytes as u64 || !flights.is_empty() {
+        while flights.len() < cwnd && submitted_bytes < total_bytes as u64 {
+            if next_lba >= request_end_lba {
+                break;
+            }
+            if next_lba > u64::from(u32::MAX) {
+                uas_bench_forget_pending(&mut flights);
+                return Err(block::Error::OutOfBounds);
+            }
+
+            let remaining_request_blocks = (request_end_lba - next_lba) as usize;
+            let remaining_target_bytes = total_bytes.saturating_sub(submitted_bytes as usize);
+            let wanted_blocks = (remaining_target_bytes / block_size)
+                .max(1)
+                .min(remaining_request_blocks)
+                .min(blocks_per_read);
+            let bytes = wanted_blocks.saturating_mul(block_size);
+            if bytes == 0 {
+                uas_bench_forget_pending(&mut flights);
+                return Err(block::Error::InvalidParam);
+            }
+
+            let Some(stream_tag) = uas_runtime_alloc_stream(rt) else {
+                if flights.is_empty() {
+                    uas_runtime_log_exhausted(rt, "read-window");
+                    return Err(block::Error::Timeout);
+                }
+                break;
+            };
+
+            let flight = {
+                let endpoints = &mut rt.endpoints;
+                let UsbMassEndpoints::UasSkhynix {
+                    command_out,
+                    status_in,
+                    data_in,
+                    ..
+                } = endpoints
+                else {
+                    uas_bench_forget_pending(&mut flights);
+                    return Err(block::Error::NotSupported);
+                };
+                match uas_bench_submit_read(
+                    command_out,
+                    status_in,
+                    data_in,
+                    stream_tag,
+                    next_lba as u32,
+                    wanted_blocks as u16,
+                    bytes,
+                )
+                .await
+                {
+                    Ok(flight) => flight,
+                    Err(err) => {
+                        uas_bench_forget_pending(&mut flights);
+                        mass_io_backoff(rt, block_size);
+                        return Err(err);
+                    }
+                }
+            };
+
+            flights.push(flight);
+            submitted_bytes = submitted_bytes.saturating_add(bytes as u64);
+            next_lba = next_lba.saturating_add(wanted_blocks as u64);
+        }
+
+        if flights.is_empty() {
+            if submitted_bytes >= total_bytes as u64 {
+                break;
+            }
+            continue;
+        }
+
+        let step = {
+            let endpoints = &mut rt.endpoints;
+            let UsbMassEndpoints::UasSkhynix {
+                status_in, data_in, ..
+            } = endpoints
+            else {
+                uas_bench_forget_pending(&mut flights);
+                return Err(block::Error::NotSupported);
+            };
+            uas_bench_wait_one(status_in, data_in, &mut flights).await
+        };
+
+        let Some(step) = (match step {
+            Ok(step) => step,
+            Err(err) => {
+                mass_io_backoff(rt, block_size);
+                return Err(err);
+            }
+        }) else {
+            continue;
+        };
+
+        match step {
+            UasBenchStep::Completed(flight) => {
+                let offset_blocks = u64::from(flight.lba)
+                    .checked_sub(lba)
+                    .ok_or(block::Error::Corrupted)?;
+                let out_off = usize::try_from(offset_blocks)
+                    .ok()
+                    .and_then(|blocks| blocks.checked_mul(block_size))
+                    .ok_or(block::Error::OutOfBounds)?;
+                let out_end = out_off
+                    .checked_add(flight.bytes)
+                    .ok_or(block::Error::OutOfBounds)?;
+                if out_end > out.len() || flight.data.len() < flight.bytes {
+                    return Err(block::Error::Corrupted);
+                }
+                out[out_off..out_end].copy_from_slice(&flight.data[..flight.bytes]);
+                completed_bytes = completed_bytes.saturating_add(flight.bytes as u64);
+                mass_io_note_success(rt, block_size);
+
+                if cwnd < ssthresh {
+                    cwnd = core::cmp::min(max_inflight, cwnd.saturating_mul(2).max(1));
+                } else if cwnd < max_inflight {
+                    additive_acks = additive_acks.saturating_add(1);
+                    if additive_acks >= cwnd {
+                        cwnd += 1;
+                        additive_acks = 0;
+                    }
+                }
+            }
+            UasBenchStep::TimedOut(flight) => {
+                let retry_lba = flight.lba;
+                let lost_tag = flight.tag;
+                core::mem::forget(flight);
+
+                timeouts = timeouts.saturating_add(1);
+                uas_runtime_note_error(
+                    rt,
+                    "read-window",
+                    lost_tag,
+                    mass::MassProbeError::Transport("uas-in-timeout"),
+                    block_size,
+                );
+                if rt.uas_dead_stream_mask.count_ones() >= u32::from(mass::UAS_XHCI_MAX_STREAM_ID) {
+                    uas_bench_forget_pending(&mut flights);
+                    return Err(block::Error::Timeout);
+                }
+
+                ssthresh = core::cmp::max(1, cwnd / 2);
+                cwnd = 1;
+                additive_acks = 0;
+                next_lba = u64::from(retry_lba);
+                submitted_bytes =
+                    completed_bytes.saturating_add(uas_bench_inflight_bytes(&flights));
+                crate::log!(
+                    "crabusb: mass {:04X}:{:04X} uas-window backoff lost_tag=0x{:04X} retry_lba={} cwnd={} ssthresh={} dead_streams={} timeouts={}\n",
+                    rt.vendor_id,
+                    rt.product_id,
+                    lost_tag,
+                    retry_lba,
+                    cwnd,
+                    ssthresh,
+                    rt.uas_dead_stream_mask.count_ones(),
+                    timeouts
+                );
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn log_transport_mismatch(rt: &UsbMassRuntime, stage: &'static str) {
@@ -1526,6 +1754,7 @@ struct UsbMassBlockDevice {
     runtime_key: u64,
     block_size: u32,
     block_count: u64,
+    max_transfer_bytes: u64,
 }
 
 impl UsbMassBlockDevice {
@@ -1583,6 +1812,18 @@ impl block::BlockDevice for UsbMassBlockDevice {
 
             self.with_runtime(|rt| {
                 Box::pin(async move {
+                    if matches!(rt.endpoints, UsbMassEndpoints::UasSkhynix { .. }) {
+                        read_blocks_uas_skhynix_windowed(
+                            rt,
+                            lba,
+                            blocks,
+                            out.as_mut_slice(),
+                            block_size,
+                        )
+                        .await?;
+                        return Ok(core::mem::take(&mut out));
+                    }
+
                     let mut cur_lba = lba;
                     let mut remaining = out.as_mut_slice();
                     while !remaining.is_empty() {
@@ -1961,7 +2202,7 @@ impl block::BlockDevice for UsbMassBlockDevice {
     }
 
     fn max_transfer_bytes(&self) -> u64 {
-        MAX_IO_BYTES as u64
+        self.max_transfer_bytes
     }
 
     fn supports_write(&self) -> bool {
@@ -2128,6 +2369,7 @@ fn register_block_device(
     vendor_id: u16,
     product_id: u16,
     probe: &MassProbeInfo,
+    max_transfer_bytes: u64,
 ) -> block::DeviceHandle {
     if let Some(handle) = registered_disk(identity.runtime_key) {
         return handle;
@@ -2145,6 +2387,7 @@ fn register_block_device(
             runtime_key: identity.runtime_key,
             block_size: probe.block_size.max(1),
             block_count: probe.block_count.max(1),
+            max_transfer_bytes: max_transfer_bytes.max(u64::from(probe.block_size.max(1))),
         },
     );
     remember_registered_disk(identity.runtime_key, handle);
@@ -2259,7 +2502,8 @@ pub async fn mass_storage_task(
 
     let identity = build_mass_identity(&mut device, controller_id, u32::from(slot)).await;
     let existing_handle = registered_disk(identity.runtime_key);
-    let handle = register_block_device(&identity, vendor_id, product_id, &probe);
+    let handle =
+        register_block_device(&identity, vendor_id, product_id, &probe, MAX_IO_BYTES as u64);
     let attach_mode = if existing_handle.is_some() {
         "reattached"
     } else {
@@ -2268,7 +2512,7 @@ pub async fn mass_storage_task(
     let initial_io_bytes =
         initial_mass_io_bytes(io_profile, port_speed, &target, probe.block_size as usize);
     crate::log!(
-        "crabusb: mass {:04X}:{:04X} ready slot={} if#{} alt={} cfg={} bulk_in=0x{:02X} bulk_out=0x{:02X} in_mps={} out_mps={} disk={} mode={} label={:?} serial={:?} key={} transport={} profile={} init_io={} speed={:?} uas_candidates={} bs={} blocks={} vendor='{}' product='{}'\n",
+        "crabusb: mass {:04X}:{:04X} ready slot={} if#{} alt={} cfg={} bulk_in=0x{:02X} bulk_out=0x{:02X} in_mps={} out_mps={} disk={} mode={} label={:?} serial={:?} key={} transport={} profile={} init_io={} max_xfer={} speed={:?} uas_candidates={} bs={} blocks={} vendor='{}' product='{}'\n",
         vendor_id,
         product_id,
         slot,
@@ -2287,6 +2531,7 @@ pub async fn mass_storage_task(
         mass_transport_label(transport_kind),
         mass_io_profile_label(io_profile),
         initial_io_bytes,
+        handle.info().max_transfer_bytes,
         port_speed,
         uas_candidate_count,
         probe.block_size,
@@ -2556,7 +2801,13 @@ pub async fn mass_storage_uas_skhynix_task(
 
     let identity = build_mass_identity(&mut device, controller_id, u32::from(slot)).await;
     let existing_handle = registered_disk(identity.runtime_key);
-    let handle = register_block_device(&identity, vendor_id, product_id, &probe);
+    let handle = register_block_device(
+        &identity,
+        vendor_id,
+        product_id,
+        &probe,
+        UAS_READ_WINDOW_MAX_TRANSFER_BYTES as u64,
+    );
     let attach_mode = if existing_handle.is_some() {
         "reattached"
     } else {
@@ -2564,7 +2815,7 @@ pub async fn mass_storage_uas_skhynix_task(
     };
     let initial_io_bytes = clamp_mass_io_bytes(probe.block_size as usize, MAX_IO_BYTES);
     crate::log!(
-        "crabusb: mass {:04X}:{:04X} uas-skhynix ready slot={} if#{} alt={} cfg={} cmd_out=0x{:02X} status_in=0x{:02X} data_in=0x{:02X} data_out=0x{:02X} mps={}/{}/{}/{} disk={} mode={} label={:?} serial={:?} key={} transport={} profile={} init_io={} speed={:?} uas_candidates={} bs={} blocks={} vendor='{}' product='{}'\n",
+        "crabusb: mass {:04X}:{:04X} uas-skhynix ready slot={} if#{} alt={} cfg={} cmd_out=0x{:02X} status_in=0x{:02X} data_in=0x{:02X} data_out=0x{:02X} mps={}/{}/{}/{} disk={} mode={} label={:?} serial={:?} key={} transport={} profile={} init_io={} max_xfer={} speed={:?} uas_candidates={} bs={} blocks={} vendor='{}' product='{}'\n",
         vendor_id,
         product_id,
         slot,
@@ -2587,6 +2838,7 @@ pub async fn mass_storage_uas_skhynix_task(
         mass_transport_label(mass::MassTransportKind::Uas),
         mass_io_profile_label(MassIoProfile::UasSkhynix),
         initial_io_bytes,
+        handle.info().max_transfer_bytes,
         port_speed,
         uas_candidate_count,
         probe.block_size,

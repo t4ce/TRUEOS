@@ -1333,6 +1333,7 @@ async fn load_lumen_model_from_trueosfs(
     let progress_start = embassy_time_driver::now();
     let mut last_progress_tick = progress_start;
     let mut last_progress_bytes = 0u64;
+    crate::lumen_net::begin_matrix_manifest_load();
     for (_, name, tensor) in ordered {
         if bench_cancel_requested(session_id) {
             return Err(AllocString::from("cancelled"));
@@ -1394,10 +1395,14 @@ async fn load_lumen_model_from_trueosfs(
 
         match dtype {
             "BF16" => tensor
-                .import_raw(shape, DType::BF16, TensorRawData::BF16(bytes_to_u16_vec(&bytes)))
+                .import_raw(
+                    shape.clone(),
+                    DType::BF16,
+                    TensorRawData::BF16(bytes_to_u16_vec(&bytes)),
+                )
                 .map_err(|err| format!("{} BF16 import failed: {}", name, err))?,
             "F16" => tensor
-                .import_raw(shape, DType::F16, TensorRawData::F16(bytes_to_u16_vec(&bytes)))
+                .import_raw(shape.clone(), DType::F16, TensorRawData::F16(bytes_to_u16_vec(&bytes)))
                 .map_err(|err| format!("{} F16 import failed: {}", name, err))?,
             "F32" => {
                 let mut values = Vec::with_capacity(bytes.len() / 4);
@@ -1405,10 +1410,14 @@ async fn load_lumen_model_from_trueosfs(
                     values.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
                 }
                 tensor
-                    .import_raw(shape, DType::F32, TensorRawData::F32(values))
+                    .import_raw(shape.clone(), DType::F32, TensorRawData::F32(values))
                     .map_err(|err| format!("{} F32 import failed: {}", name, err))?;
             }
             other => return Err(format!("{} unsupported runtime import dtype={}", name, other)),
+        }
+
+        if let Some((ptr, len)) = tensor.bf16_storage_ptr_len_bytes() {
+            crate::lumen_net::register_loaded_matrix(name, dtype, &shape, ptr as usize, len);
         }
 
         loaded_tensors = loaded_tensors.saturating_add(1);

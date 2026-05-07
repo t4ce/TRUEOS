@@ -1015,12 +1015,29 @@ async fn cabi_net_fetch_bytes_task_inner(
     timeout_ms: u32,
     max_bytes: usize,
 ) {
+    let cpu_slot = crate::percpu::current_slot();
+    let lapic_id = crate::percpu::current_lapic_id_via_cpuid();
     let t0 = Instant::now();
+    crate::log!(
+        "net-fetch-bytes: enter op_id={} cpu_slot={} lapic={} timeout_ms={} max_bytes={}\n",
+        op_id,
+        cpu_slot,
+        lapic_id,
+        timeout_ms,
+        max_bytes
+    );
     if !net_fetch_acquire_slot_while(|| net_fetch_bytes_op_is_live(op_id)).await {
         crate::log!("net-fetch-bytes: skipped op_id={} reason=no_interest_before_slot\n", op_id);
         return;
     }
     let t_fetch_start = Instant::now();
+    crate::log!(
+        "net-fetch-bytes: acquired op_id={} wait_ms={} cpu_slot={} lapic={}\n",
+        op_id,
+        t_fetch_start.saturating_duration_since(t0).as_millis(),
+        cpu_slot,
+        lapic_id
+    );
     if !net_fetch_bytes_op_is_live(op_id) {
         net_fetch_release_slot();
         crate::log!("net-fetch-bytes: skipped op_id={} reason=no_interest_after_slot\n", op_id);
@@ -1075,13 +1092,30 @@ async fn cabi_net_fetch_bytes_task(op_id: u32, url: String, timeout_ms: u32, max
 }
 
 fn spawn_cabi_net_fetch_bytes(op_id: u32, url: String, timeout_ms: u32, max_bytes: usize) {
-    if let Some(spawner) = crate::workers::pick_background_spawner()
+    if let Some((cpu_slot, core_kind, spawner)) =
+        crate::workers::pick_background_spawner_with_slot()
         && let Ok(token) = cabi_net_fetch_bytes_task(op_id, url.clone(), timeout_ms, max_bytes)
     {
+        crate::log!(
+            "net-fetch-bytes: spawn op_id={} lane=background cpu_slot={} core_kind={} timeout_ms={} max_bytes={} url_len={}\n",
+            op_id,
+            cpu_slot,
+            core_kind,
+            timeout_ms,
+            max_bytes,
+            url.len()
+        );
         spawner.spawn(token);
         return;
     }
 
+    crate::log!(
+        "net-fetch-bytes: spawn op_id={} lane=local timeout_ms={} max_bytes={} url_len={}\n",
+        op_id,
+        timeout_ms,
+        max_bytes,
+        url.len()
+    );
     crate::wait::spawn_local_detached(async move {
         cabi_net_fetch_bytes_task_inner(op_id, url, timeout_ms, max_bytes).await;
     });

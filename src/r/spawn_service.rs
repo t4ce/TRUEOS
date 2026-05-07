@@ -84,6 +84,7 @@ define_started_flags!(
     USB_CONTROLLER_TASKS_STARTED,
     C4_BOOT_PROBE_STARTED,
     TRUEOSFS_READY_HOOK_STARTED,
+    BP_AUTOSTART_STARTED,
     BOOT_WS_SMOKE_STARTED,
     BOOT_NETBENCH_STARTED,
     BOOT_TINYLLAMA_FETCH_STARTED,
@@ -1089,6 +1090,78 @@ fn spawn_app_vm_run_queue(spawner: Spawner) -> SpawnAttempt {
     }
 }
 
+#[derive(Clone, Copy)]
+enum BlueprintAutostart {
+    Weather,
+}
+
+impl BlueprintAutostart {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Weather => "weather",
+        }
+    }
+
+    const fn archive(self) -> &'static str {
+        match self {
+            Self::Weather => "weather.bp",
+        }
+    }
+
+    const fn slot(self) -> &'static str {
+        match self {
+            Self::Weather => "wx",
+        }
+    }
+
+    const fn settle_ms(self) -> u64 {
+        match self {
+            Self::Weather => 750,
+        }
+    }
+}
+
+const BP_AUTOSTARTS: &[BlueprintAutostart] = &[BlueprintAutostart::Weather];
+
+#[embassy_executor::task]
+async fn bp_autostart_task() {
+    for config in BP_AUTOSTARTS {
+        let settle_ms = config.settle_ms();
+        if settle_ms != 0 {
+            Timer::after(EmbassyDuration::from_millis(settle_ms)).await;
+        }
+
+        let target = crate::shell2::matrix_target_for_slot_name(
+            crate::shell2::OUTPUT_UI2_MASK,
+            config.slot(),
+        );
+
+        match crate::shell2::cmds::run::submit_archive_name_to_target(
+            target,
+            config.archive(),
+            Vec::new(),
+        ) {
+            Ok(()) => crate::log!(
+                "spawn-svc: bp-autostart queued label={} archive={} slot={}\n",
+                config.label(),
+                config.archive(),
+                config.slot()
+            ),
+            Err(err) => crate::log!(
+                "spawn-svc: bp-autostart skipped label={} archive={} slot={} err={}\n",
+                config.label(),
+                config.archive(),
+                config.slot(),
+                err
+            ),
+        }
+    }
+}
+
+fn spawn_bp_autostart(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| bp_autostart_task())
+}
+
 fn spawn_smtp_smoke(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::tst_smtp_smoke::smtp_smoke_task())
 }
@@ -1144,10 +1217,15 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
     | crate::r::readiness::QJS_ASYNC_FS_READY;
 const UI2_DEMO_READY: u32 =
     crate::r::readiness::UI2_READY | crate::r::readiness::GFX_TEXTURE_UPLOAD_SERVICE_READY;
+const BP_AUTOSTART_READY: u32 = crate::r::readiness::APP_VM_READY
+    | crate::r::readiness::UI2_READY
+    | crate::r::readiness::GFX_TEXTURE_UPLOAD_SERVICE_READY
+    | crate::r::readiness::NET_SOCKET_READY
+    | crate::r::readiness::TLS_SOCKET_SERVICE_READY;
 const WS_BOOT_READY: u32 = crate::r::readiness::NET_GATEWAY_REACHABLE
     | crate::r::readiness::TLS_SOCKET_SERVICE_READY
     | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
-static TASKS: [TaskSpec; 69] = [
+static TASKS: [TaskSpec; 70] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
         "globalog-persist-once",
@@ -1230,6 +1308,12 @@ static TASKS: [TaskSpec; 69] = [
         spawn_chat_http,
     ),
     TaskSpec::enabled("app-vm-run-queue", 0, &APP_VM_RUN_QUEUE_STARTED, spawn_app_vm_run_queue),
+    TaskSpec::enabled(
+        "bp-autostart",
+        BP_AUTOSTART_READY,
+        &BP_AUTOSTART_STARTED,
+        spawn_bp_autostart,
+    ),
     TaskSpec::enabled(
         "ws-time",
         crate::r::readiness::NET_ANY_CONFIGURED,
