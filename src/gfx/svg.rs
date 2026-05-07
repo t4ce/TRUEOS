@@ -398,10 +398,7 @@ fn tessellate_svg_tree_with_size(
     let mut builder = SvgMeshBuilder::new(width, height, svg_w, svg_h);
     builder.tessellate_group(tree.root(), 1.0);
     Ok(SvgMeshDocument {
-        info: SvgMeshInfo {
-            width,
-            height,
-        },
+        info: SvgMeshInfo { width, height },
         primitives: builder.primitives,
     })
 }

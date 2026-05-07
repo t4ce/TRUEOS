@@ -180,14 +180,6 @@ pub(crate) fn bps_from_progress(bytes: u64, elapsed_ms: u64) -> u64 {
     }
 }
 
-pub(crate) fn units_per_second_from_ticks(units: u64, elapsed_ticks: u64) -> u64 {
-    if elapsed_ticks == 0 {
-        0
-    } else {
-        units.saturating_mul(embassy_time_driver::TICK_HZ) / elapsed_ticks
-    }
-}
-
 #[derive(Clone, Copy)]
 struct CpuBenchWorker {
     slot: u32,
