@@ -235,23 +235,6 @@ pub mod env {
         &CONTEXTS[context_slot()]
     }
 
-    pub(crate) fn with_launch_context<R>(
-        args: Vec<String>,
-        vars: BTreeMap<String, String>,
-        f: impl FnOnce() -> R,
-    ) -> R {
-        with_launch_context_console(args, vars, None, f)
-    }
-
-    pub(crate) fn with_launch_context_console<R>(
-        args: Vec<String>,
-        vars: BTreeMap<String, String>,
-        console_target: Option<MatrixTarget>,
-        f: impl FnOnce() -> R,
-    ) -> R {
-        with_launch_context_console_and_fs_root(args, vars, console_target, None, f)
-    }
-
     pub(crate) fn with_launch_context_console_and_fs_root<R>(
         args: Vec<String>,
         vars: BTreeMap<String, String>,
@@ -2706,8 +2689,6 @@ pub mod cabi {
         cur_scissor: Option<ScissorRect>,
         // Active render target texture id for the current frame; 0 means swapchain.
         frame_render_target_tex_id: u32,
-        last_missing_tex_id: u32,
-        missing_tex_logs: u32,
     }
 
     #[derive(Clone, Copy)]
@@ -3043,8 +3024,6 @@ pub mod cabi {
                 cur_blend: BlendDesc::disabled(),
                 cur_scissor: None,
                 frame_render_target_tex_id: 0,
-                last_missing_tex_id: 0,
-                missing_tex_logs: 0,
             }
         }
     }
@@ -3067,24 +3046,6 @@ pub mod cabi {
             out.extend_from_slice(&src[off + 16..off + VTX_SIZE]);
             off += VTX_SIZE;
         }
-    }
-
-    #[inline]
-    fn frame_target_extent(st: &GfxCabiState) -> (u32, u32) {
-        let tex_id = st.frame_render_target_tex_id;
-        if tex_id != 0 {
-            let idx = tex_id.saturating_sub(1) as usize;
-            if let Some((w, h)) = st
-                .tex_images
-                .as_ref()
-                .and_then(|images| images.get(idx))
-                .and_then(|entry| entry.as_ref())
-                .map(|img| (img.width, img.height))
-            {
-                return (w.max(1), h.max(1));
-            }
-        }
-        (st.swapchain_desc.extent.width.max(1), st.swapchain_desc.extent.height.max(1))
     }
 
     fn texture_dimensions_inner(tex_id: u32) -> Option<(u32, u32)> {
@@ -5195,25 +5156,6 @@ pub mod cabi {
             Some(rgba),
             sample_kind,
             true,
-        )
-    }
-
-    pub(crate) fn upload_texture_rgba_mask_no_init(
-        tex_id: u32,
-        width: u32,
-        height: u32,
-        data: &[u8],
-    ) -> i32 {
-        upload_texture_rgba_inner_impl(
-            tex_id,
-            width,
-            height,
-            None,
-            data.as_ptr(),
-            data.len(),
-            None,
-            TexSampleKind::Mask,
-            false,
         )
     }
 

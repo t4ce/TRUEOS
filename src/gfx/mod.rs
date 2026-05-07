@@ -1,6 +1,5 @@
 pub mod althlasfont;
 pub mod backends;
-pub mod cursor;
 pub mod jpeg_codec;
 pub mod lyon;
 pub mod mandelbrot;
@@ -21,7 +20,6 @@ pub(crate) use screenshot::{publish_screenshot_rgba_buffer, screenshot_capture_a
 static SYSTEM: Once<Mutex<System>> = Once::new();
 static CABI_FRAME_LOCK: AtomicBool = AtomicBool::new(false);
 static BACKEND_EPOCH: AtomicU64 = AtomicU64::new(1);
-static PRESENT_OWNER: AtomicU8 = AtomicU8::new(0);
 static SYSTEM_LOCK_OWNER: AtomicU32 = AtomicU32::new(SystemLockOwner::Unknown as u32);
 static SYSTEM_LOCK_OWNER_CPU: AtomicU32 = AtomicU32::new(u32::MAX);
 static SYSTEM_LOCK_OWNER_SINCE: AtomicU64 = AtomicU64::new(0);
@@ -268,10 +266,6 @@ pub extern "C" fn trueos_cabi_gfx_frame_lock_end() {
     cabi_frame_lock_end();
 }
 
-pub fn with_system<R>(f: impl FnOnce(&mut System) -> R) -> Option<R> {
-    with_system_tag(SystemLockOwner::Unknown, f)
-}
-
 #[inline]
 fn system_lock_requester_id() -> u32 {
     if let Some(vm_id) = crate::hv::current_vm_id_by_lapic_low() {
@@ -351,15 +345,6 @@ pub fn with_system_tag<R>(owner: SystemLockOwner, f: impl FnOnce(&mut System) ->
     Some(ret)
 }
 
-#[inline]
-pub fn cursor_overlay_tick() -> i32 {
-    cursor::cursor_overlay_tick()
-}
-
-pub fn with_context<R>(f: impl FnOnce(&mut dyn GfxContext) -> R) -> Option<R> {
-    with_context_tag(SystemLockOwner::Unknown, f)
-}
-
 pub fn with_context_tag<R>(
     owner: SystemLockOwner,
     f: impl FnOnce(&mut dyn GfxContext) -> R,
@@ -420,25 +405,4 @@ pub fn switch_to_virgl() -> bool {
 pub enum BackendKind {
     Virgl,
     None,
-}
-
-pub fn backend_kind() -> Option<BackendKind> {
-    backend_kind_cached()
-}
-
-pub fn toggle_backend() -> BackendKind {
-    let Some(kind) = backend_kind() else {
-        return BackendKind::None;
-    };
-
-    match kind {
-        BackendKind::Virgl => BackendKind::Virgl,
-        BackendKind::None => {
-            if switch_to_virgl() {
-                return BackendKind::Virgl;
-            }
-
-            BackendKind::None
-        }
-    }
 }

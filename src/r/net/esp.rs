@@ -19,6 +19,12 @@ const TRUEOS_LUMEN_WORK_PROBE_TIMEOUT_MS: u64 = 3000;
 const TRUEOS_LUMEN_WORK_PROBE_PREFIX: &str = "C0DEC0DE LUMEN_CAN_TAKE_WORK";
 const TRUEOS_LUMEN_WORK_CAP_PREFIX: &str = "C0DEC0DE LUMEN_WORK_CAP";
 const TRUEOS_LUMEN_MATVEC_SHADOW_PREFIX: &str = "C0DEC0DE LUMEN_MATVEC_SHADOW";
+const TRUEOS_LUMEN_MATVEC_XCHUNK_PREFIX: &str = "C0DEC0DE LUMEN_MATVEC_XCHUNK";
+const TRUEOS_LUMEN_APP_MAGIC: u32 = 0x3153_4F4C; // LOS1
+const TRUEOS_LUMEN_APP_HEADER_BYTES: usize = 12;
+const TRUEOS_LUMEN_APP_RX_BUF_BYTES: usize = v::vnet::MAX_MSG * 4;
+const TRUEOS_LUMEN_APP_VERSION: u8 = 1;
+const TRUEOS_LUMEN_APP_OP_TEXT: u8 = 1;
 const TRUEOS_SWARM_HOST_CAP: usize = crate::allcaps::net::TRUEOS_SWARM_HOST_CAP;
 const TRUEOS_PEER_LINK_CAP: usize = crate::allcaps::net::TRUEOS_SWARM_PEER_LINK_CAP;
 const TRUEOS_PEER_RX_BUF_BYTES: usize = crate::allcaps::net::TRUEOS_SWARM_PEER_RX_BUF_BYTES;
@@ -148,6 +154,111 @@ fn trueos_lumen_matvec_shadow_received(data: &[u8]) -> Option<&str> {
     })
 }
 
+#[derive(Copy, Clone, Debug)]
+struct LumenAppFrame<'a> {
+    opcode: u8,
+    payload: &'a [u8],
+}
+
+#[derive(Copy, Clone, Debug)]
+enum LumenAppDrain {
+    Incomplete,
+    BadMagic,
+    BadVersion,
+    BadLength,
+    Frame { opcode: u8, payload_len: usize },
+}
+
+fn encode_lumen_app_text_frame(payload: &[u8]) -> Option<Vec<u8>> {
+    if payload.len() > u32::MAX as usize {
+        return None;
+    }
+    let mut out = Vec::with_capacity(TRUEOS_LUMEN_APP_HEADER_BYTES.saturating_add(payload.len()));
+    out.extend_from_slice(&TRUEOS_LUMEN_APP_MAGIC.to_le_bytes());
+    out.push(TRUEOS_LUMEN_APP_VERSION);
+    out.push(TRUEOS_LUMEN_APP_OP_TEXT);
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    out.extend_from_slice(payload);
+    Some(out)
+}
+
+fn next_lumen_app_frame(buffer: &[u8]) -> LumenAppDrain {
+    if buffer.len() < TRUEOS_LUMEN_APP_HEADER_BYTES {
+        return LumenAppDrain::Incomplete;
+    }
+    let magic = u32::from_le_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]);
+    if magic != TRUEOS_LUMEN_APP_MAGIC {
+        return LumenAppDrain::BadMagic;
+    }
+    if buffer[4] != TRUEOS_LUMEN_APP_VERSION {
+        return LumenAppDrain::BadVersion;
+    }
+    let payload_len = u32::from_le_bytes([buffer[8], buffer[9], buffer[10], buffer[11]]) as usize;
+    if payload_len > v::vnet::MAX_MSG {
+        return LumenAppDrain::BadLength;
+    }
+    let frame_len = TRUEOS_LUMEN_APP_HEADER_BYTES.saturating_add(payload_len);
+    if buffer.len() < frame_len {
+        return LumenAppDrain::Incomplete;
+    }
+    LumenAppDrain::Frame {
+        opcode: buffer[5],
+        payload_len,
+    }
+}
+
+fn drain_lumen_app_frames<F>(buffer: &mut Vec<u8>, mut on_frame: F)
+where
+    F: FnMut(LumenAppFrame<'_>),
+{
+    loop {
+        match next_lumen_app_frame(buffer.as_slice()) {
+            LumenAppDrain::Incomplete => break,
+            LumenAppDrain::BadMagic => {
+                if let Some(offset) = find_lumen_app_magic(buffer.as_slice(), 1) {
+                    buffer.drain(..offset);
+                } else {
+                    let keep = buffer.len().min(TRUEOS_LUMEN_APP_HEADER_BYTES - 1);
+                    if keep == 0 {
+                        buffer.clear();
+                    } else {
+                        let start = buffer.len().saturating_sub(keep);
+                        buffer.drain(..start);
+                    }
+                    break;
+                }
+            }
+            LumenAppDrain::BadVersion | LumenAppDrain::BadLength => {
+                buffer.drain(..1);
+            }
+            LumenAppDrain::Frame {
+                opcode,
+                payload_len,
+            } => {
+                let start = TRUEOS_LUMEN_APP_HEADER_BYTES;
+                let end = start.saturating_add(payload_len);
+                on_frame(LumenAppFrame {
+                    opcode,
+                    payload: &buffer[start..end],
+                });
+                buffer.drain(..end);
+            }
+        }
+    }
+}
+
+fn find_lumen_app_magic(buffer: &[u8], start: usize) -> Option<usize> {
+    let needle = TRUEOS_LUMEN_APP_MAGIC.to_le_bytes();
+    if buffer.len() < needle.len() || start >= buffer.len() {
+        return None;
+    }
+    buffer[start..]
+        .windows(needle.len())
+        .position(|window| window == needle)
+        .map(|offset| offset.saturating_add(start))
+}
+
 #[derive(Copy, Clone, Debug, Default)]
 struct LumenWorkCapacity {
     lanes: u32,
@@ -165,6 +276,19 @@ fn parse_u32_field(part: &str, name: &str) -> Option<u32> {
     } else {
         value.parse::<u32>().ok()
     }
+}
+
+fn parse_u64_field(part: &str, name: &str) -> Option<u64> {
+    let value = part.strip_prefix(name)?;
+    if let Some(hex) = value.strip_prefix("0x") {
+        u64::from_str_radix(hex, 16).ok()
+    } else {
+        value.parse::<u64>().ok()
+    }
+}
+
+fn parse_usize_field(part: &str, name: &str) -> Option<usize> {
+    parse_u64_field(part, name).and_then(|value| usize::try_from(value).ok())
 }
 
 fn parse_trueos_lumen_work_capacity(data: &[u8]) -> Option<LumenWorkCapacity> {
@@ -189,6 +313,205 @@ fn parse_trueos_lumen_work_capacity(data: &[u8]) -> Option<LumenWorkCapacity> {
         }
     }
     Some(out)
+}
+
+#[derive(Copy, Clone, Debug)]
+struct LumenMatvecXChunk<'a> {
+    job_id: u64,
+    chunk_index: usize,
+    offset: usize,
+    bytes: usize,
+    total: usize,
+    hex: &'a str,
+}
+
+#[derive(Debug)]
+struct ShadowXReassembly {
+    job_id: u64,
+    total_bytes: usize,
+    received_bytes: usize,
+    chunks: usize,
+    complete: bool,
+    data: Vec<u8>,
+}
+
+#[derive(Copy, Clone, Debug)]
+struct ShadowXUpdate {
+    received_bytes: usize,
+    total_bytes: usize,
+    chunks: usize,
+    complete: bool,
+    checksum: u64,
+}
+
+fn parse_lumen_matvec_xchunk(line: &str) -> Option<LumenMatvecXChunk<'_>> {
+    let mut job_id = None;
+    let mut chunk_index = None;
+    let mut offset = None;
+    let mut bytes = None;
+    let mut total = None;
+    let mut hex = None;
+    for part in line.split_ascii_whitespace() {
+        if let Some(value) = parse_u64_field(part, "job=") {
+            job_id = Some(value);
+        } else if let Some(value) = parse_usize_field(part, "chunk=") {
+            chunk_index = Some(value);
+        } else if let Some(value) = parse_usize_field(part, "offset=") {
+            offset = Some(value);
+        } else if let Some(value) = parse_usize_field(part, "bytes=") {
+            bytes = Some(value);
+        } else if let Some(value) = parse_usize_field(part, "total=") {
+            total = Some(value);
+        } else if let Some(value) = part.strip_prefix("hex=") {
+            hex = Some(value);
+        }
+    }
+    Some(LumenMatvecXChunk {
+        job_id: job_id?,
+        chunk_index: chunk_index?,
+        offset: offset?,
+        bytes: bytes?,
+        total: total?,
+        hex: hex?,
+    })
+}
+
+fn record_shadow_x_chunk(
+    reassemblies: &mut Vec<ShadowXReassembly>,
+    chunk: LumenMatvecXChunk<'_>,
+) -> Option<ShadowXUpdate> {
+    if chunk.bytes == 0
+        || chunk.total == 0
+        || chunk.offset.saturating_add(chunk.bytes) > chunk.total
+        || chunk.hex.len() < chunk.bytes.saturating_mul(2)
+    {
+        return None;
+    }
+
+    let index = if let Some(index) = reassemblies
+        .iter()
+        .position(|entry| entry.job_id == chunk.job_id)
+    {
+        index
+    } else {
+        reassemblies.push(ShadowXReassembly {
+            job_id: chunk.job_id,
+            total_bytes: chunk.total,
+            received_bytes: 0,
+            chunks: 0,
+            complete: false,
+            data: {
+                let mut data = Vec::new();
+                data.resize(chunk.total, 0);
+                data
+            },
+        });
+        reassemblies.len().saturating_sub(1)
+    };
+
+    let entry = &mut reassemblies[index];
+    if entry.total_bytes != chunk.total || entry.data.len() != chunk.total {
+        return None;
+    }
+
+    let hex = chunk.hex.as_bytes();
+    for i in 0..chunk.bytes {
+        let hi = hex_nibble(hex[i.saturating_mul(2)])?;
+        let lo = hex_nibble(hex[i.saturating_mul(2).saturating_add(1)])?;
+        entry.data[chunk.offset + i] = (hi << 4) | lo;
+    }
+    entry.received_bytes = entry
+        .received_bytes
+        .saturating_add(chunk.bytes)
+        .min(chunk.total);
+    entry.chunks = entry.chunks.saturating_add(1);
+    if entry.received_bytes >= entry.total_bytes {
+        entry.complete = true;
+    }
+
+    Some(ShadowXUpdate {
+        received_bytes: entry.received_bytes,
+        total_bytes: entry.total_bytes,
+        chunks: entry.chunks,
+        complete: entry.complete,
+        checksum: if entry.complete {
+            fnv1a64(entry.data.as_slice())
+        } else {
+            0
+        },
+    })
+}
+
+fn hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash = 0xCBF2_9CE4_8422_2325u64;
+    for byte in bytes {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01B3);
+    }
+    hash
+}
+
+fn process_lumen_app_text_payload(
+    handle: v::vnet::NetHandle,
+    payload: &[u8],
+    shadow_x_reassemblies: &mut Vec<ShadowXReassembly>,
+) {
+    if let Some(line) = trueos_lumen_matvec_shadow_received(payload) {
+        crate::log!(
+            "esp-gate: lumen matvec shadow received handle={} bytes={} {}\n",
+            handle.0,
+            payload.len(),
+            line
+        );
+    }
+    let Ok(text) = core::str::from_utf8(payload) else {
+        return;
+    };
+    for line in text.lines().filter(|line| {
+        line.trim_start()
+            .starts_with(TRUEOS_LUMEN_MATVEC_XCHUNK_PREFIX)
+    }) {
+        if let Some(chunk) = parse_lumen_matvec_xchunk(line) {
+            if let Some(update) = record_shadow_x_chunk(shadow_x_reassemblies, chunk) {
+                crate::log!(
+                    "esp-gate: lumen matvec xchunk received handle={} job={} chunk={} offset={} bytes={} total={} got={} chunks={} complete={}\n",
+                    handle.0,
+                    chunk.job_id,
+                    chunk.chunk_index,
+                    chunk.offset,
+                    chunk.bytes,
+                    chunk.total,
+                    update.received_bytes,
+                    update.chunks,
+                    if update.complete { 1 } else { 0 }
+                );
+                if update.complete {
+                    crate::log!(
+                        "esp-gate: lumen matvec x reassembled job={} bytes={} chunks={} checksum=0x{:016X} note=shadow-no-compute\n",
+                        chunk.job_id,
+                        update.total_bytes,
+                        update.chunks,
+                        update.checksum
+                    );
+                }
+            } else {
+                crate::log!(
+                    "esp-gate: lumen matvec xchunk rejected handle={} payload_bytes={}\n",
+                    handle.0,
+                    payload.len()
+                );
+            }
+        }
+    }
 }
 
 fn submit_trueos_lumen_work_capacity(vnet: &VNet, handle: v::vnet::NetHandle) {
@@ -240,7 +563,14 @@ fn submit_trueos_lumen_work_probe(vnet: &VNet, handle: v::vnet::NetHandle) {
 
 fn submit_trueos_lumen_work_probe_to_all(vnet: &VNet, links: &[TrueOsPeerLink]) -> usize {
     let mut sent = 0usize;
+    let mut seen_nodes = Vec::new();
     for link in links.iter().filter(|link| link.handle.is_some()) {
+        if link.node_id != 0 {
+            if seen_nodes.contains(&link.node_id) {
+                continue;
+            }
+            seen_nodes.push(link.node_id);
+        }
         if let Some(handle) = link.handle {
             submit_trueos_lumen_work_probe(vnet, handle);
             sent = sent.saturating_add(1);
@@ -252,19 +582,27 @@ fn submit_trueos_lumen_work_probe_to_all(vnet: &VNet, links: &[TrueOsPeerLink]) 
 fn submit_trueos_lumen_shadow_frame_to_first_peer(
     vnet: &VNet,
     links: &[TrueOsPeerLink],
-    frame: &[u8],
+    payload: &[u8],
 ) -> bool {
     let Some(handle) = links.iter().find_map(|link| link.handle) else {
         return false;
     };
+    let Some(frame) = encode_lumen_app_text_frame(payload) else {
+        return false;
+    };
+    if frame.len() > v::vnet::MAX_MSG {
+        return false;
+    }
     let _ = vnet.submit(v::vnet::Command::SendTcp {
         handle,
-        data: v::vnet::ByteBuf::from_slice_trunc(frame),
+        data: v::vnet::ByteBuf::from_slice_trunc(frame.as_slice()),
     });
     crate::log!(
-        "esp-gate: lumen matvec shadow sent handle={} bytes={} pending={}\n",
+        "esp-gate: lumen app frame sent handle={} opcode={} payload_bytes={} wire_bytes={} pending={}\n",
         handle.0,
-        frame.len().min(v::vnet::MAX_MSG),
+        TRUEOS_LUMEN_APP_OP_TEXT,
+        payload.len(),
+        frame.len(),
         crate::lumen_net::pending_shadow_bf16_matvecs()
     );
     true
@@ -288,6 +626,7 @@ struct TrueOsPeerLink {
     handle: Option<v::vnet::NetHandle>,
     node_id: u64,
     rx: Vec<u8>,
+    lumen_rx: Vec<u8>,
 }
 
 fn allocate_trueos_peer_links() -> Vec<TrueOsPeerLink> {
@@ -297,6 +636,7 @@ fn allocate_trueos_peer_links() -> Vec<TrueOsPeerLink> {
             handle: None,
             node_id: 0,
             rx: Vec::with_capacity(TRUEOS_PEER_RX_BUF_BYTES),
+            lumen_rx: Vec::with_capacity(v::vnet::MAX_MSG.saturating_mul(2)),
         });
     }
     links
@@ -304,6 +644,14 @@ fn allocate_trueos_peer_links() -> Vec<TrueOsPeerLink> {
 
 fn trueos_peer_link_count(links: &[TrueOsPeerLink]) -> usize {
     links.iter().filter(|link| link.handle.is_some()).count()
+}
+
+fn trueos_peer_link_node_id(links: &[TrueOsPeerLink], handle: v::vnet::NetHandle) -> u64 {
+    links
+        .iter()
+        .find(|link| link.handle == Some(handle))
+        .map(|link| link.node_id)
+        .unwrap_or(0)
 }
 
 fn trueos_peer_link_known(links: &[TrueOsPeerLink], node_id: u64) -> bool {
@@ -329,6 +677,7 @@ fn ensure_trueos_peer_link(links: &mut [TrueOsPeerLink], handle: v::vnet::NetHan
     link.handle = Some(handle);
     link.node_id = 0;
     link.rx.clear();
+    link.lumen_rx.clear();
     true
 }
 
@@ -340,7 +689,31 @@ fn remove_trueos_peer_link(links: &mut [TrueOsPeerLink], handle: v::vnet::NetHan
     link.handle = None;
     link.node_id = 0;
     link.rx.clear();
+    link.lumen_rx.clear();
     true
+}
+
+fn drain_lumen_app_data_for_handle<F>(
+    links: &mut [TrueOsPeerLink],
+    handle: v::vnet::NetHandle,
+    data: &[u8],
+    mut on_frame: F,
+) where
+    F: FnMut(LumenAppFrame<'_>),
+{
+    let Some(link) = links.iter_mut().find(|link| link.handle == Some(handle)) else {
+        return;
+    };
+    if link.lumen_rx.len().saturating_add(data.len()) > TRUEOS_LUMEN_APP_RX_BUF_BYTES {
+        link.lumen_rx.clear();
+        crate::log!(
+            "esp-gate: lumen app rx reset handle={} reason=overflow cap={}\n",
+            handle.0,
+            TRUEOS_LUMEN_APP_RX_BUF_BYTES
+        );
+    }
+    link.lumen_rx.extend_from_slice(data);
+    drain_lumen_app_frames(&mut link.lumen_rx, |frame| on_frame(frame));
 }
 
 fn record_trueos_peer_data(
@@ -349,6 +722,9 @@ fn record_trueos_peer_data(
     data: &[u8],
 ) -> Option<trueos_esp::gate::TrueOsHostAdvertisement> {
     let link = links.iter_mut().find(|link| link.handle == Some(handle))?;
+    if link.node_id != 0 {
+        return None;
+    }
 
     if link.rx.len().saturating_add(data.len()) > TRUEOS_PEER_RX_BUF_BYTES {
         link.rx.clear();
@@ -552,6 +928,8 @@ pub async fn esp_gate_task() {
         let mut lumen_work_probe_sent = 0usize;
         let mut lumen_work_probe_replies = 0usize;
         let mut lumen_work_probe_best = 0u32;
+        let mut lumen_work_probe_seen_nodes: Vec<u64> = Vec::new();
+        let mut shadow_x_reassemblies: Vec<ShadowXReassembly> = Vec::new();
         let _ = vnet.submit(gate.bootstrap_command());
         let _ = vnet.submit(v::vnet::Command::OpenTcpListen {
             port: trueos_esp::gate::TRUEOS_PEER_TCP_PORT,
@@ -603,37 +981,6 @@ pub async fn esp_gate_task() {
                         submit_trueos_peer_hello(&vnet, handle, local_node_id);
                     }
                     v::vnet::Event::TcpData { handle, data } => {
-                        if trueos_lumen_work_probe_received(data.as_slice()) {
-                            submit_trueos_lumen_work_capacity(&vnet, handle);
-                        }
-                        if let Some(line) = trueos_lumen_matvec_shadow_received(data.as_slice()) {
-                            crate::log!(
-                                "esp-gate: lumen matvec shadow received handle={} bytes={} {}\n",
-                                handle.0,
-                                data.len(),
-                                line
-                            );
-                        }
-                        if let Some(capacity) = parse_trueos_lumen_work_capacity(data.as_slice()) {
-                            let now_ms = monotonic_ms();
-                            if lumen_work_probe_deadline_ms != 0
-                                && now_ms <= lumen_work_probe_deadline_ms
-                            {
-                                lumen_work_probe_replies =
-                                    lumen_work_probe_replies.saturating_add(1);
-                                lumen_work_probe_best = lumen_work_probe_best.max(capacity.lanes);
-                            }
-                            crate::log!(
-                                "esp-gate: lumen work capacity received handle={} n={} proto={} caps=0x{:08X} workers={} pending={} min_rows={}\n",
-                                handle.0,
-                                capacity.lanes,
-                                capacity.protocol_version,
-                                capacity.caps,
-                                capacity.workers,
-                                capacity.pending,
-                                capacity.min_rows
-                            );
-                        }
                         if let Some(advertisement) = record_trueos_peer_data(
                             peer_links.as_mut_slice(),
                             handle,
@@ -644,6 +991,61 @@ pub async fn esp_gate_task() {
                                 handle.0,
                                 advertisement.node_id,
                                 data.len()
+                            );
+                        }
+                        if trueos_lumen_work_probe_received(data.as_slice()) {
+                            submit_trueos_lumen_work_capacity(&vnet, handle);
+                        }
+                        drain_lumen_app_data_for_handle(
+                            peer_links.as_mut_slice(),
+                            handle,
+                            data.as_slice(),
+                            |frame| {
+                                if frame.opcode == TRUEOS_LUMEN_APP_OP_TEXT {
+                                    process_lumen_app_text_payload(
+                                        handle,
+                                        frame.payload,
+                                        &mut shadow_x_reassemblies,
+                                    );
+                                } else {
+                                    crate::log!(
+                                        "esp-gate: lumen app frame ignored handle={} opcode={} bytes={}\n",
+                                        handle.0,
+                                        frame.opcode,
+                                        frame.payload.len()
+                                    );
+                                }
+                            },
+                        );
+                        if let Some(capacity) = parse_trueos_lumen_work_capacity(data.as_slice()) {
+                            let now_ms = monotonic_ms();
+                            let node_id = trueos_peer_link_node_id(peer_links.as_slice(), handle);
+                            let mut counted = false;
+                            if lumen_work_probe_deadline_ms != 0
+                                && now_ms <= lumen_work_probe_deadline_ms
+                            {
+                                if node_id == 0 || !lumen_work_probe_seen_nodes.contains(&node_id) {
+                                    if node_id != 0 {
+                                        lumen_work_probe_seen_nodes.push(node_id);
+                                    }
+                                    lumen_work_probe_replies =
+                                        lumen_work_probe_replies.saturating_add(1);
+                                    lumen_work_probe_best =
+                                        lumen_work_probe_best.max(capacity.lanes);
+                                    counted = true;
+                                }
+                            }
+                            crate::log!(
+                                "esp-gate: lumen work capacity received handle={} node=0x{:016X} n={} proto={} caps=0x{:08X} workers={} pending={} min_rows={} counted={}\n",
+                                handle.0,
+                                node_id,
+                                capacity.lanes,
+                                capacity.protocol_version,
+                                capacity.caps,
+                                capacity.workers,
+                                capacity.pending,
+                                capacity.min_rows,
+                                if counted { 1 } else { 0 }
                             );
                         }
                     }
@@ -778,6 +1180,7 @@ pub async fn esp_gate_task() {
                 lumen_work_probe_seq = requested_lumen_work_probe_seq;
                 lumen_work_probe_replies = 0;
                 lumen_work_probe_best = 0;
+                lumen_work_probe_seen_nodes.clear();
                 lumen_work_probe_sent =
                     submit_trueos_lumen_work_probe_to_all(&vnet, peer_links.as_slice());
                 if lumen_work_probe_sent == 0 {
@@ -809,17 +1212,19 @@ pub async fn esp_gate_task() {
                 lumen_work_probe_deadline_ms = 0;
             }
 
-            if let Some(frame) = crate::lumen_net::take_shadow_bf16_matvec_frame()
-                && !submit_trueos_lumen_shadow_frame_to_first_peer(
-                    &vnet,
-                    peer_links.as_slice(),
-                    frame.as_slice(),
-                )
-            {
-                crate::log!(
-                    "esp-gate: lumen matvec shadow drop reason=no-peers bytes={}\n",
-                    frame.len()
-                );
+            if trueos_peer_link_count(peer_links.as_slice()) != 0 {
+                if let Some(frame) = crate::lumen_net::take_shadow_bf16_matvec_frame()
+                    && !submit_trueos_lumen_shadow_frame_to_first_peer(
+                        &vnet,
+                        peer_links.as_slice(),
+                        frame.as_slice(),
+                    )
+                {
+                    crate::log!(
+                        "esp-gate: lumen matvec shadow send failed bytes={}\n",
+                        frame.len()
+                    );
+                }
             }
 
             Timer::after(Duration::from_millis(10)).await;
