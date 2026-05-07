@@ -26,7 +26,6 @@ pub mod lumen {
     pub const NET_BF16_MATVEC_SHADOW_COMPUTE_PROOF_ROWS: usize = 4;
     pub const NET_BF16_MATVEC_RESULT_CHUNK_BYTES: usize = 3000;
     pub const NET_BF16_MATVEC_RESULT_WAIT_TIMEOUT_MS: u64 = 10000;
-    pub const ROUTE_BF16_MATVEC_TO_NET_BACKEND: bool = true;
 }
 
 pub mod blueprint {

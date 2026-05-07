@@ -18,6 +18,7 @@ use spin::Mutex;
 use crate::net::core::NetCore;
 use crate::net::device::NetDevice;
 use crate::net::r8125::R8125Adapter;
+use crate::net::r8169::Rtl8169Driver;
 use crate::net::ring::NetRing;
 use crate::net::vio::VirtioNetAdapter;
 use crate::pci::PciDevice;
@@ -95,6 +96,7 @@ const ENABLE_R8125: bool = true;
 enum ActiveDevice {
     Virtio(NetCore<VirtioNetAdapter>),
     //E1000(NetCore<E1000Adapter>),
+    Rtl8169(NetCore<Rtl8169Driver>),
     R8125(NetCore<R8125Adapter>),
 }
 
@@ -103,6 +105,7 @@ impl NetDevice for ActiveDevice {
         match self {
             ActiveDevice::Virtio(dev) => dev.mac(),
             //ActiveDevice::E1000(dev) => dev.mac(),
+            ActiveDevice::Rtl8169(dev) => dev.mac(),
             ActiveDevice::R8125(dev) => dev.mac(),
         }
     }
@@ -111,6 +114,7 @@ impl NetDevice for ActiveDevice {
         match self {
             ActiveDevice::Virtio(dev) => dev.poll_rx(),
             //ActiveDevice::E1000(dev) => dev.poll_rx(),
+            ActiveDevice::Rtl8169(dev) => dev.poll_rx(),
             ActiveDevice::R8125(dev) => dev.poll_rx(),
         }
     }
@@ -119,6 +123,7 @@ impl NetDevice for ActiveDevice {
         match self {
             ActiveDevice::Virtio(dev) => dev.pop_rx(),
             // ActiveDevice::E1000(dev) => dev.pop_rx(),
+            ActiveDevice::Rtl8169(dev) => dev.pop_rx(),
             ActiveDevice::R8125(dev) => dev.pop_rx(),
         }
     }
@@ -127,6 +132,7 @@ impl NetDevice for ActiveDevice {
         match self {
             ActiveDevice::Virtio(dev) => dev.rx_queue_len(),
             //   ActiveDevice::E1000(dev) => dev.rx_queue_len(),
+            ActiveDevice::Rtl8169(dev) => dev.rx_queue_len(),
             ActiveDevice::R8125(dev) => dev.rx_queue_len(),
         }
     }
@@ -135,6 +141,7 @@ impl NetDevice for ActiveDevice {
         match self {
             ActiveDevice::Virtio(dev) => dev.drain_rx(limit),
             //  ActiveDevice::E1000(dev) => dev.drain_rx(limit),
+            ActiveDevice::Rtl8169(dev) => dev.drain_rx(limit),
             ActiveDevice::R8125(dev) => dev.drain_rx(limit),
         }
     }
@@ -143,6 +150,7 @@ impl NetDevice for ActiveDevice {
         match self {
             ActiveDevice::Virtio(dev) => dev.drain_rx_each(limit, f),
             //  ActiveDevice::E1000(dev) => dev.drain_rx_each(limit, f),
+            ActiveDevice::Rtl8169(dev) => dev.drain_rx_each(limit, f),
             ActiveDevice::R8125(dev) => dev.drain_rx_each(limit, f),
         }
     }
@@ -151,6 +159,7 @@ impl NetDevice for ActiveDevice {
         match self {
             ActiveDevice::Virtio(dev) => dev.transmit(frame),
             //  ActiveDevice::E1000(dev) => dev.transmit(frame),
+            ActiveDevice::Rtl8169(dev) => dev.transmit(frame),
             ActiveDevice::R8125(dev) => dev.transmit(frame),
         }
     }
@@ -159,6 +168,7 @@ impl NetDevice for ActiveDevice {
         match self {
             ActiveDevice::Virtio(dev) => dev.link_state(),
             //  ActiveDevice::E1000(dev) => dev.link_state(),
+            ActiveDevice::Rtl8169(dev) => dev.link_state(),
             ActiveDevice::R8125(dev) => dev.link_state(),
         }
     }
@@ -171,6 +181,7 @@ pub fn device_name_at(index: usize) -> Option<&'static str> {
     Some(match dev {
         ActiveDevice::Virtio(_) => "Virtio Net",
         // ActiveDevice::E1000(_) => "Intel E1000",
+        ActiveDevice::Rtl8169(_) => "Realtek RTL8169/8168",
         ActiveDevice::R8125(_) => "Realtek RTL8125",
     })
 }
@@ -181,6 +192,7 @@ pub fn pci_device_at(index: usize) -> Option<PciDevice> {
     match dev {
         ActiveDevice::Virtio(n) => n.pci_device(),
         //  ActiveDevice::E1000(n) => n.pci_device(),
+        ActiveDevice::Rtl8169(n) => n.pci_device(),
         ActiveDevice::R8125(n) => n.pci_device(),
     }
 }
@@ -372,6 +384,13 @@ pub fn init() {
         added += 1;
     }
     */
+    for adapter in Rtl8169Driver::init_all() {
+        let ring = NetRing::new(RX_DESC_COUNT, RX_BUF_SIZE, POLL_BUDGET);
+        let mut guard = DEVICES.lock();
+        guard.push(ActiveDevice::Rtl8169(NetCore::new(adapter, ring)));
+        added += 1;
+    }
+
     if ENABLE_R8125 {
         for adapter in R8125Adapter::init_all() {
             let ring = NetRing::new(RX_DESC_COUNT, RX_BUF_SIZE, POLL_BUDGET);
@@ -386,17 +405,6 @@ pub fn init() {
             dormant_detected += 1;
             crate::log!(
                 "net: detected rtl8139 bdf={:02x}:{:02x}.{} vid={:04x} did={:04x} (not wired)\n",
-                dev.bus,
-                dev.slot,
-                dev.function,
-                dev.vendor_id,
-                dev.device_id
-            );
-        }
-        for dev in r8169::detect_all() {
-            dormant_detected += 1;
-            crate::log!(
-                "net: detected rtl8169-family bdf={:02x}:{:02x}.{} vid={:04x} did={:04x} (not wired)\n",
                 dev.bus,
                 dev.slot,
                 dev.function,

@@ -163,8 +163,6 @@ pub(crate) fn submit_chatroom_mention(prompt: &str) -> bool {
         return false;
     }
 
-    crate::r::net::esp::request_lumen_work_capacity_probe();
-
     let session_id = SERVICE_SESSION_ID.load(Ordering::Acquire);
     let statement = next_chat_statement_tag();
     if session_id != 0 && is_online() {

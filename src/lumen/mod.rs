@@ -2527,6 +2527,12 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
             };
             idle_waits = 0;
             let _ = crate::lumen::lumen_service::mark_prompt_running("dequeue");
+            let offload_enabled = crate::r::net::esp::prepare_lumen_offload_for_prompt();
+            crate::log!(
+                "lumen: prompt offload decision session={} enabled={}\n",
+                session_id,
+                if offload_enabled { 1 } else { 0 }
+            );
 
             let infer_start = embassy_time_driver::now();
             let compute_before = crate::lumen::burn_baby::stats();

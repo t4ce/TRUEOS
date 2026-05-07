@@ -10,13 +10,15 @@
 //! - MAC address read
 //! - Polled packet send/receive
 
-use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::ptr::{read_volatile, write_volatile};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use super::{Driver, DriverCategory, DriverInfo, DriverStatus, NetStats, NetworkDriver};
+use crate::net::core::VendorAdapter;
+use crate::net::device::LinkState;
+use crate::net::ring::NetRing;
 use crate::pci::PciDevice;
 
 #[inline]
@@ -46,9 +48,7 @@ const REG_IMR: u32 = 0x3C; // Interrupt Mask Register (16-bit)
 const REG_ISR: u32 = 0x3E; // Interrupt Status Register (16-bit)
 const REG_TX_CONFIG: u32 = 0x40; // TX Configuration
 const REG_RX_CONFIG: u32 = 0x44; // RX Configuration
-const REG_MPC: u32 = 0x4C; // Missed Packet Counter
 const REG_9346CR: u32 = 0x50; // 93C46 Command Register (8-bit)
-const REG_CONFIG1: u32 = 0x52; // Configuration 1
 const REG_PHY_STATUS: u32 = 0x6C; // PHY Status
 const REG_RX_MAX_SIZE: u32 = 0xDA; // RX Max Packet Size (16-bit)
 const REG_CPCR: u32 = 0xE0; // C+ Command Register (16-bit)
@@ -80,16 +80,13 @@ const TX_CFG_IFG: u32 = 0x03 << 24; // Inter-frame gap (standard)
 const TX_CFG_DMA_BURST: u32 = 0x07 << 8; // max DMA burst (unlimited)
 
 // RX Config
-const RX_CFG_AAP: u32 = 1 << 0; // Accept All Packets
 const RX_CFG_APM: u32 = 1 << 1; // Accept Physical Match
 const RX_CFG_AM: u32 = 1 << 2; // Accept Multicast
 const RX_CFG_AB: u32 = 1 << 3; // Accept Broadcast
-const RX_CFG_WRAP: u32 = 1 << 7; // No wrap (not used in C+ mode)
 const RX_CFG_DMA_BURST: u32 = 0x07 << 8; // Max DMA burst
 const RX_CFG_NO_THRESHOLD: u32 = 0x07 << 13; // No FIFO threshold
 
 // C+ Command Register
-const CPCR_RX_VLAN: u16 = 1 << 6;
 const CPCR_RX_CHKSUM: u16 = 1 << 5;
 const CPCR_PCI_MUL_RW: u16 = 1 << 3;
 
@@ -144,6 +141,7 @@ impl Default for Descriptor {
 
 pub struct Rtl8169Driver {
     status: DriverStatus,
+    pci: Option<PciDevice>,
     mmio_base: u64,
     mac: [u8; 6],
 
@@ -168,12 +166,14 @@ pub struct Rtl8169Driver {
     // State
     link_up: AtomicBool,
     initialized: AtomicBool,
+    ring: Option<*mut NetRing>,
 }
 
 impl Rtl8169Driver {
     pub fn new() -> Self {
         Self {
             status: DriverStatus::Unloaded,
+            pci: None,
             mmio_base: 0,
             mac: [0x52, 0x54, 0x00, 0x81, 0x69, 0x00],
             rx_descs: Vec::new(),
@@ -190,7 +190,30 @@ impl Rtl8169Driver {
             rx_errors: AtomicU64::new(0),
             link_up: AtomicBool::new(false),
             initialized: AtomicBool::new(false),
+            ring: None,
         }
+    }
+
+    pub fn init_all() -> Vec<Self> {
+        let mut out = Vec::new();
+        for dev in detect_all() {
+            let mut driver = Self::new();
+            match driver.probe(&dev) {
+                Ok(()) => out.push(driver),
+                Err(err) => {
+                    crate::log!(
+                        "net/r8169: init failed for {:02x}:{:02x}.{} vid={:04x} did={:04x}: {}\n",
+                        dev.bus,
+                        dev.slot,
+                        dev.function,
+                        dev.vendor_id,
+                        dev.device_id,
+                        err
+                    );
+                }
+            }
+        }
+        out
     }
 
     // ---- MMIO register helpers ----
@@ -418,7 +441,31 @@ impl Rtl8169Driver {
             crate::log!("[RTL8169] Link up at {} Mbps", speed);
         }
     }
+
+    fn poll_rx_ring(&mut self) {
+        <Self as NetworkDriver>::poll(self);
+
+        let Some(ring_ptr) = self.ring else {
+            return;
+        };
+
+        let mut processed = 0usize;
+        while processed < NUM_RX_DESC {
+            let Some(packet) = <Self as NetworkDriver>::receive(self) else {
+                break;
+            };
+            unsafe {
+                if (*ring_ptr).push_rx_packet(&packet).is_err() {
+                    self.rx_errors.fetch_add(1, Ordering::Relaxed);
+                    break;
+                }
+            }
+            processed += 1;
+        }
+    }
 }
+
+unsafe impl Send for Rtl8169Driver {}
 
 // ============================================================================
 // Driver trait implementation
@@ -431,6 +478,7 @@ impl Driver for Rtl8169Driver {
 
     fn probe(&mut self, pci_device: &PciDevice) -> Result<(), &'static str> {
         self.status = DriverStatus::Loading;
+        self.pci = Some(*pci_device);
 
         crate::log!("[RTL8169] Probing {:04X}:{:04X}", pci_device.vendor_id, pci_device.device_id);
 
@@ -510,6 +558,40 @@ impl Driver for Rtl8169Driver {
 
     fn handle_interrupt(&mut self) {
         self.poll();
+    }
+}
+
+impl VendorAdapter for Rtl8169Driver {
+    fn mac(&self) -> [u8; 6] {
+        self.mac
+    }
+
+    fn poll_rx(&mut self) {
+        self.poll_rx_ring();
+    }
+
+    fn pop_rx(&mut self) -> Option<Vec<u8>> {
+        <Self as NetworkDriver>::receive(self)
+    }
+
+    fn transmit(&mut self, frame: &[u8]) -> Result<(), ()> {
+        <Self as NetworkDriver>::send(self, frame).map_err(|_| ())
+    }
+
+    fn link_state(&self) -> LinkState {
+        LinkState {
+            up: <Self as NetworkDriver>::link_up(self),
+            speed_mbps: <Self as NetworkDriver>::link_speed(self),
+            full_duplex: false,
+        }
+    }
+
+    fn pci_device(&self) -> Option<PciDevice> {
+        self.pci
+    }
+
+    fn bind_ring(&mut self, ring: *mut NetRing) {
+        self.ring = Some(ring);
     }
 }
 
@@ -678,20 +760,6 @@ impl NetworkDriver for Rtl8169Driver {
             rx_dropped: 0,
         }
     }
-
-    fn set_promiscuous(&mut self, enabled: bool) -> Result<(), &'static str> {
-        if !self.initialized.load(Ordering::Relaxed) {
-            return Err("Not initialized");
-        }
-        let mut rxcfg = self.read32(REG_RX_CONFIG);
-        if enabled {
-            rxcfg |= RX_CFG_AAP; // Accept all packets
-        } else {
-            rxcfg &= !RX_CFG_AAP;
-        }
-        self.write32(REG_RX_CONFIG, rxcfg);
-        Ok(())
-    }
 }
 
 impl Rtl8169Driver {
@@ -723,16 +791,6 @@ const DRIVER_INFO: DriverInfo = DriverInfo {
         (0x10EC, 0x8136), // RTL8101E/8102E
     ],
 };
-
-pub fn register() {
-    let _ = DRIVER_INFO;
-    let _ = Box::new(Rtl8169Driver::new());
-}
-
-/// Check if the RTL8169 driver is initialized and active
-pub fn is_initialized() -> bool {
-    false
-}
 
 pub fn detect_all() -> Vec<PciDevice> {
     let mut out = Vec::new();
