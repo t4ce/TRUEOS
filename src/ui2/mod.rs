@@ -365,6 +365,17 @@ pub enum Ui2WindowResizeMode {
     PreviewCommit = 2,
 }
 
+impl Ui2WindowResizeMode {
+    fn from_u32(value: u32) -> Option<Self> {
+        match value {
+            0 => Some(Self::Auto),
+            1 => Some(Self::Live),
+            2 => Some(Self::PreviewCommit),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug, Default)]
 struct Ui2WindowMoveDrag {
     active: bool,
@@ -1560,6 +1571,81 @@ pub unsafe extern "C" fn trueos_cabi_ui2_window_set_hit_test_visible(
         return rc;
     }
     if set_window_hit_test_visible(window_id, visible != 0) {
+        0
+    } else {
+        -1
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_ui2_window_set_vertical_scrollbar_visible(
+    window_id: u32,
+    visible: u32,
+) -> i32 {
+    if let Some(rc) = vm_deferred_window_ok(window_id, "set-vertical-scrollbar-visible") {
+        return rc;
+    }
+    if set_window_left_scrollbar_visible(window_id, visible != 0) {
+        0
+    } else {
+        -1
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_ui2_window_set_horizontal_scrollbar_visible(
+    window_id: u32,
+    visible: u32,
+) -> i32 {
+    if let Some(rc) = vm_deferred_window_ok(window_id, "set-horizontal-scrollbar-visible") {
+        return rc;
+    }
+    if set_window_bottom_scrollbar_visible(window_id, visible != 0) {
+        0
+    } else {
+        -1
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_ui2_window_set_resize_maintain_aspect(
+    window_id: u32,
+    maintain_aspect: u32,
+) -> i32 {
+    if let Some(rc) = vm_deferred_window_ok(window_id, "set-resize-maintain-aspect") {
+        return rc;
+    }
+    if set_window_resize_maintain_aspect(window_id, maintain_aspect != 0) {
+        0
+    } else {
+        -1
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_ui2_window_set_content_preserve_scale(
+    window_id: u32,
+    preserve_scale: u32,
+) -> i32 {
+    if let Some(rc) = vm_deferred_window_ok(window_id, "set-content-preserve-scale") {
+        return rc;
+    }
+    if set_window_content_preserve_scale(window_id, preserve_scale != 0) {
+        0
+    } else {
+        -1
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_ui2_window_set_resize_mode(window_id: u32, mode: u32) -> i32 {
+    let Some(mode) = Ui2WindowResizeMode::from_u32(mode) else {
+        return -1;
+    };
+    if let Some(rc) = vm_deferred_window_ok(window_id, "set-resize-mode") {
+        return rc;
+    }
+    if set_window_resize_mode(window_id, mode) {
         0
     } else {
         -1

@@ -709,7 +709,9 @@ async fn chat_http_runtime() {
                         }
                     }
                     api::Event::Closed { handle } => {
-                        if endpoint.listener.map(|(listener_handle, _)| listener_handle)
+                        if endpoint
+                            .listener
+                            .map(|(listener_handle, _)| listener_handle)
                             == Some(handle)
                         {
                             crate::log!(

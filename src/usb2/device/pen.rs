@@ -418,8 +418,10 @@ fn uas_bench_poll_flights(
         {
             let flight = &mut flights[idx];
             if now_ms.saturating_sub(flight.submitted_ms) > UAS_BENCH_FLIGHT_TIMEOUT_MS {
+                let submit = crab_usb::debug_last_submit();
+                let event = crab_usb::debug_last_event();
                 crate::log!(
-                    "crabusb: mass uas-stream timeout tag=0x{:04X} lba={} blocks={} bytes={} age_ms={} data_pending={} status_pending={} data_len={} ready={} good={}\n",
+                    "crabusb: mass uas-stream timeout tag=0x{:04X} lba={} blocks={} bytes={} age_ms={} data_pending={} status_pending={} data_len={} ready={} good={} last_submit[dci={} stream={} len={} ptr=0x{:X}] last_event[ep={} cc={} residual={} ptr=0x{:X}]\n",
                     flight.tag,
                     flight.lba,
                     flight.blocks,
@@ -429,7 +431,15 @@ fn uas_bench_poll_flights(
                     flight.status_ticket.is_some(),
                     flight.data_len.unwrap_or(0),
                     flight.read_ready_seen,
-                    flight.status_good_seen
+                    flight.status_good_seen,
+                    submit.dci,
+                    submit.stream_id,
+                    submit.len,
+                    submit.ptr,
+                    event.ep_id,
+                    event.completion_code,
+                    event.residual,
+                    event.ptr
                 );
                 timed_out = true;
             }
