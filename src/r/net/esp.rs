@@ -515,8 +515,8 @@ fn process_lumen_app_text_payload(
 }
 
 fn submit_trueos_lumen_work_capacity(vnet: &VNet, handle: v::vnet::NetHandle) {
-    let capacity = crate::r::lumen_service::remote_work_capacity();
-    let telemetry = crate::lumen_net::backend_telemetry(capacity);
+    let capacity = crate::lumen::lumen_service::remote_work_capacity();
+    let telemetry = crate::lumen::lumen_net::backend_telemetry(capacity);
     let reply = format!(
         "{} LUMEN_WORK_CAP v=1 n={} proto={} caps=0x{:08X} workers={} pending={} min_rows={}\n",
         trueos_esp::gate::TRUEOS_SWARM_MAGIC_TEXT,
@@ -542,8 +542,8 @@ fn submit_trueos_lumen_work_capacity(vnet: &VNet, handle: v::vnet::NetHandle) {
         telemetry.local_workers,
         telemetry.pending_bf16_matvecs,
         telemetry.min_remote_rows,
-        crate::r::lumen_service::is_online(),
-        crate::r::lumen_service::is_prompt_running()
+        crate::lumen::lumen_service::is_online(),
+        crate::lumen::lumen_service::is_prompt_running()
     );
 }
 
@@ -603,7 +603,7 @@ fn submit_trueos_lumen_shadow_frame_to_first_peer(
         TRUEOS_LUMEN_APP_OP_TEXT,
         payload.len(),
         frame.len(),
-        crate::lumen_net::pending_shadow_bf16_matvecs()
+        crate::lumen::lumen_net::pending_shadow_bf16_matvecs()
     );
     true
 }
@@ -1252,7 +1252,7 @@ pub async fn esp_gate_task() {
             }
 
             if trueos_peer_link_count(peer_links.as_slice()) != 0 {
-                if let Some(frame) = crate::lumen_net::take_shadow_bf16_matvec_frame()
+                if let Some(frame) = crate::lumen::lumen_net::take_shadow_bf16_matvec_frame()
                     && !submit_trueos_lumen_shadow_frame_to_first_peer(
                         &vnet,
                         peer_links.as_slice(),

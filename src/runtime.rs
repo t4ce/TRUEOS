@@ -33,7 +33,7 @@ pub fn run_ap_forever() -> ! {
     loop {
         crate::time::poll();
         poll_local_executor();
-        crate::burn_baby::poll_compute_lane();
+        crate::lumen::burn_baby::poll_compute_lane();
 
         if counter.is_multiple_of(100_000) {
             crate::smp::poll();

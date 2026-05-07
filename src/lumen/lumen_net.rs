@@ -475,7 +475,7 @@ pub(crate) fn backend_telemetry(capacity_lanes: u32) -> LumenNetBackendTelemetry
         protocol_version: PROTOCOL_VERSION,
         caps: CAP_BF16_MATVEC_ROWS | CAP_MODEL_RESIDENT_MATRIX_ID | CAP_ROW_RANGE_OUTPUT_F32,
         capacity_lanes,
-        local_workers: crate::burn_baby::online_worker_count().min(u32::MAX as usize) as u32,
+        local_workers: crate::lumen::burn_baby::online_worker_count().min(u32::MAX as usize) as u32,
         pending_bf16_matvecs: pending_remote_bf16_matvecs()
             .saturating_add(pending_shadow_bf16_matvecs())
             .min(u32::MAX as usize) as u32,

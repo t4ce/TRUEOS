@@ -18,8 +18,6 @@ mod blueprint;
 mod blueprint_net_broker;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod blueprint_net_wire;
-mod burn_baba;
-mod burn_baby;
 #[path = "Chronos.rs"]
 mod chronos;
 mod cpu;
@@ -46,7 +44,7 @@ mod intel_hda_probe;
 mod iso9660;
 mod limine;
 mod logflag;
-mod lumen_net;
+mod lumen;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod mio_compat;
 mod mio_probe;
@@ -136,6 +134,7 @@ mod usb2;
 mod wait;
 mod workers;
 mod x2apic;
+#[path = "tst/yaml_probe.rs"]
 mod yaml_probe;
 mod z7;
 

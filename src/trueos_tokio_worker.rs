@@ -99,7 +99,7 @@ fn spawn_on_background_ap(job: TokioBlockingJob, purpose: &'static str) -> i32 {
         );
     }
     if purpose == "chat-http-runtime" {
-        crate::burn_baby::protect_service_compute_slot(cpu_slot, purpose);
+        crate::lumen::burn_baby::protect_service_compute_slot(cpu_slot, purpose);
     }
 
     spawner.spawn(token);
