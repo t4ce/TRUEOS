@@ -9,13 +9,15 @@ extern crate alloc;
 // manifest: every contiguous BF16 2D weight receives a stable `matrix_id`
 // derived from tensor name + shape + dtype. Runtime matvec calls still arrive
 // from Lumen as raw pointers, but those pointers are only used locally to look
-// up the manifest entry. The network protocol carries `matrix_id`, row range,
-// shape, and the live input vector `x`; the peer resolves `matrix_id` against
-// its own manifest and computes against its own resident weights.
+// up the manifest entry. The network protocol will carry `matrix_id`, row
+// range, shape, and the live input vector `x`; the peer resolves `matrix_id`
+// against its own manifest and computes against its own resident weights.
 //
 // This keeps ownership simple: weights stay resident and read-only on each
 // rig, activation vectors/results cross the wire, and hard row-splitting must
 // stay disabled until TCP result completion or shadow-compare is wired.
+// Current shadow mode sends descriptor-only work frames so peer routing can be
+// proven without changing generation math.
 
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
@@ -24,6 +26,7 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use spin::Mutex;
 
 const MIN_REMOTE_ROWS: usize = 64;
+const SHADOW_QUEUE_CAP: usize = 8;
 const FRAME_MAGIC: u32 = 0x4C4E_4554; // LNET
 pub(crate) const PROTOCOL_VERSION: u16 = 1;
 pub(crate) const CAP_BF16_MATVEC_ROWS: u32 = 1 << 0;
@@ -34,10 +37,15 @@ const OP_BF16_MATVEC_ROWS: u16 = 1;
 
 static NEXT_JOB_ID: AtomicU64 = AtomicU64::new(1);
 static MATRIX_EPOCH: AtomicU64 = AtomicU64::new(0);
+static SHADOW_SUBMITTED: AtomicU64 = AtomicU64::new(0);
 static LOGGED_DISABLED: AtomicBool = AtomicBool::new(false);
+static LOGGED_SHADOW_DISABLED: AtomicBool = AtomicBool::new(false);
+static LOGGED_SHADOW_ENQUEUE: AtomicBool = AtomicBool::new(false);
+static LOGGED_SHADOW_DROPPED: AtomicBool = AtomicBool::new(false);
 static LOGGED_MISSING_MATRIX: AtomicBool = AtomicBool::new(false);
 static LOGGED_ENQUEUE: AtomicBool = AtomicBool::new(false);
 static MATRIX_MANIFEST: Mutex<Vec<LumenMatrixManifestEntry>> = Mutex::new(Vec::new());
+static SHADOW_BF16_MATVECS: Mutex<VecDeque<RemoteBf16MatvecJob>> = Mutex::new(VecDeque::new());
 static PENDING_BF16_MATVECS: Mutex<VecDeque<RemoteBf16MatvecJob>> = Mutex::new(VecDeque::new());
 
 #[derive(Copy, Clone, Debug)]
@@ -174,6 +182,8 @@ pub(crate) fn enqueue_remote_bf16_matvec_suffix(
     out: &mut [f32],
     chunk_rows: usize,
 ) -> Option<RemoteBf16MatvecTicket> {
+    enqueue_shadow_bf16_matvec_suffix(x, w_rowmajor_bf16, n_rows, k_dim, out, chunk_rows);
+
     if !route_bf16_matvec_to_net_backend() {
         if !LOGGED_DISABLED.swap(true, Ordering::AcqRel) {
             crate::log!(
@@ -273,12 +283,137 @@ pub(crate) fn enqueue_remote_bf16_matvec_suffix(
     })
 }
 
+fn enqueue_shadow_bf16_matvec_suffix(
+    x: &[f32],
+    w_rowmajor_bf16: &[u8],
+    n_rows: usize,
+    k_dim: usize,
+    out: &mut [f32],
+    chunk_rows: usize,
+) {
+    if !shadow_bf16_matvec_to_net_backend() {
+        if !LOGGED_SHADOW_DISABLED.swap(true, Ordering::AcqRel) {
+            crate::log!("lumen-net: shadow bf16 matvec route_enabled=0 action=no-shadow-frames\n");
+        }
+        return;
+    }
+
+    if n_rows < MIN_REMOTE_ROWS || chunk_rows == 0 || x.len() < k_dim || out.len() < n_rows {
+        return;
+    }
+    let Some(expected_w_len) = n_rows
+        .checked_mul(k_dim)
+        .and_then(|values| values.checked_mul(2))
+    else {
+        return;
+    };
+    if w_rowmajor_bf16.len() < expected_w_len {
+        return;
+    }
+    let Some(matrix) =
+        resolve_bf16_matrix(w_rowmajor_bf16.as_ptr() as usize, expected_w_len, n_rows, k_dim)
+    else {
+        if !LOGGED_MISSING_MATRIX.swap(true, Ordering::AcqRel) {
+            crate::log!(
+                "lumen-net: shadow bf16 matvec skipped reason=no-stable-matrix-id rows={} k_dim={} bytes={}\n",
+                n_rows,
+                k_dim,
+                expected_w_len
+            );
+        }
+        return;
+    };
+
+    let submitted = SHADOW_SUBMITTED.fetch_add(1, Ordering::AcqRel);
+    if submitted >= crate::allcaps::lumen::NET_BF16_MATVEC_SHADOW_MAX_JOBS_PER_BOOT {
+        return;
+    }
+
+    let half = n_rows / 2;
+    let row_start = half
+        .div_ceil(chunk_rows)
+        .saturating_mul(chunk_rows)
+        .min(n_rows);
+    if row_start >= n_rows {
+        return;
+    }
+
+    let job_id = NEXT_JOB_ID.fetch_add(1, Ordering::AcqRel);
+    let job = RemoteBf16MatvecJob {
+        job_id,
+        matrix_id: matrix.matrix_id,
+        row_start,
+        row_end: n_rows,
+        n_rows,
+        k_dim,
+        x_ptr: x.as_ptr() as usize,
+        x_len: k_dim,
+        w_rowmajor_bf16_ptr: w_rowmajor_bf16.as_ptr() as usize,
+        w_rowmajor_bf16_len: expected_w_len,
+        out_ptr: out.as_mut_ptr() as usize,
+        out_len: n_rows,
+    };
+
+    let mut queue = SHADOW_BF16_MATVECS.lock();
+    if queue.len() >= SHADOW_QUEUE_CAP {
+        if !LOGGED_SHADOW_DROPPED.swap(true, Ordering::AcqRel) {
+            crate::log!(
+                "lumen-net: shadow bf16 matvec drop reason=queue-full cap={} submitted={}\n",
+                SHADOW_QUEUE_CAP,
+                submitted.saturating_add(1)
+            );
+        }
+        return;
+    }
+    queue.push_back(job);
+    if !LOGGED_SHADOW_ENQUEUE.swap(true, Ordering::AcqRel) {
+        crate::log!(
+            "lumen-net: shadow bf16 matvec enqueue job={} matrix=0x{:016X} rows={}..{} n_rows={} k_dim={} x_bytes={} note=descriptor-only-local-compute-full-width\n",
+            job.job_id,
+            job.matrix_id,
+            job.row_start,
+            job.row_end,
+            job.n_rows,
+            job.k_dim,
+            job.x_len.saturating_mul(core::mem::size_of::<f32>())
+        );
+    }
+}
+
 pub(crate) fn pending_remote_bf16_matvecs() -> usize {
     PENDING_BF16_MATVECS.lock().len()
 }
 
+pub(crate) fn pending_shadow_bf16_matvecs() -> usize {
+    SHADOW_BF16_MATVECS.lock().len()
+}
+
+pub(crate) fn take_shadow_bf16_matvec_frame() -> Option<Vec<u8>> {
+    let job = SHADOW_BF16_MATVECS.lock().pop_front()?;
+    let header = encode_bf16_matvec_header(&job);
+    let text = alloc::format!(
+        "C0DEC0DE LUMEN_MATVEC_SHADOW v=1 job={} matrix=0x{:016X} rows={}..{} n_rows={} k_dim={} row_count={} x_bytes={} out_bytes={} frame_magic=0x{:08X} opcode={} note=descriptor-only\n",
+        job.job_id,
+        job.matrix_id,
+        job.row_start,
+        job.row_end,
+        job.n_rows,
+        job.k_dim,
+        job.row_end.saturating_sub(job.row_start),
+        header.x_bytes,
+        header.output_bytes,
+        header.magic,
+        header.opcode
+    );
+    Some(text.into_bytes())
+}
+
 pub(crate) fn route_bf16_matvec_to_net_backend() -> bool {
     crate::allcaps::lumen::ROUTE_BF16_MATVEC_TO_NET_BACKEND
+}
+
+pub(crate) fn shadow_bf16_matvec_to_net_backend() -> bool {
+    crate::allcaps::lumen::SHADOW_BF16_MATVEC_TO_NET_BACKEND
 }
 
 pub(crate) fn backend_telemetry(capacity_lanes: u32) -> LumenNetBackendTelemetry {
@@ -287,7 +422,9 @@ pub(crate) fn backend_telemetry(capacity_lanes: u32) -> LumenNetBackendTelemetry
         caps: CAP_BF16_MATVEC_ROWS | CAP_MODEL_RESIDENT_MATRIX_ID | CAP_ROW_RANGE_OUTPUT_F32,
         capacity_lanes,
         local_workers: crate::burn_baby::online_worker_count().min(u32::MAX as usize) as u32,
-        pending_bf16_matvecs: pending_remote_bf16_matvecs().min(u32::MAX as usize) as u32,
+        pending_bf16_matvecs: pending_remote_bf16_matvecs()
+            .saturating_add(pending_shadow_bf16_matvecs())
+            .min(u32::MAX as usize) as u32,
         min_remote_rows: MIN_REMOTE_ROWS.min(u32::MAX as usize) as u32,
     }
 }

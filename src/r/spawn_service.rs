@@ -1116,7 +1116,7 @@ impl BlueprintAutostart {
 
     const fn settle_ms(self) -> u64 {
         match self {
-            Self::Weather => 750,
+            Self::Weather => 0,
         }
     }
 }
