@@ -237,6 +237,20 @@ unsafe extern "C" {
         vtx_len: usize,
         repaint_window_id: u32,
     ) -> i32;
+    pub fn trueos_cabi_gfx_queue_render_tex_triangles_to_texture(
+        target_tex_id: u32,
+        source_tex_id: u32,
+        clear_rgb: u32,
+        vtx_ptr: *const u8,
+        vtx_len: usize,
+        repaint_window_id: u32,
+    ) -> i32;
+    pub fn trueos_cabi_gfx_queue_render_mandelbrot_to_texture(
+        tex_id: u32,
+        ticks: u64,
+        tick_hz: u64,
+        repaint_window_id: u32,
+    ) -> i32;
     pub fn trueos_cabi_gfx_end_frame() -> i32;
     pub fn trueos_cabi_gfx_trace_set_enabled(enabled: u32) -> u32;
     pub fn trueos_cabi_gfx_trace_clear();
