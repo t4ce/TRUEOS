@@ -351,6 +351,23 @@ unsafe extern "C" {
     pub fn trueos_cabi_ui2_window_set_size(window_id: u32, width: u32, height: u32) -> i32;
     pub fn trueos_cabi_ui2_window_set_decorations(window_id: u32, mode: u32) -> i32;
     pub fn trueos_cabi_ui2_window_set_hit_test_visible(window_id: u32, visible: u32) -> i32;
+    pub fn trueos_cabi_ui2_window_set_vertical_scrollbar_visible(
+        window_id: u32,
+        visible: u32,
+    ) -> i32;
+    pub fn trueos_cabi_ui2_window_set_horizontal_scrollbar_visible(
+        window_id: u32,
+        visible: u32,
+    ) -> i32;
+    pub fn trueos_cabi_ui2_window_set_resize_maintain_aspect(
+        window_id: u32,
+        maintain_aspect: u32,
+    ) -> i32;
+    pub fn trueos_cabi_ui2_window_set_content_preserve_scale(
+        window_id: u32,
+        preserve_scale: u32,
+    ) -> i32;
+    pub fn trueos_cabi_ui2_window_set_resize_mode(window_id: u32, mode: u32) -> i32;
     pub fn trueos_cabi_ui2_window_set_vertical_scrollbar_side(window_id: u32, side: u32) -> i32;
     pub fn trueos_cabi_ui2_window_set_horizontal_scrollbar_side(window_id: u32, side: u32) -> i32;
     pub fn trueos_cabi_ui2_window_minimize(window_id: u32) -> i32;

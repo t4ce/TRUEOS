@@ -89,6 +89,7 @@ const APP_WINDOW_DEFERRED_ID_FLAG: u32 = 0x8000_0000;
 const APP_WINDOW_DEFERRED_VM_SHIFT: u32 = 24;
 const APP_WINDOW_DEFERRED_SEQ_MASK: u32 = 0x00FF_FFFF;
 const APP_WINDOW_DEFERRED_CAP: usize = 16;
+const APP_WINDOW_PENDING_CLOSE_CAP: usize = 32;
 const APP_WINDOW_TITLE_CAP: usize = 96;
 const APP_WINDOW_DEFERRED_KIND_PLAIN: u8 = 1;
 const APP_WINDOW_DEFERRED_KIND_SURFACE: u8 = 2;
@@ -104,6 +105,8 @@ static APP_WINDOW_DEFERRED_RECORDS: [Mutex<[DeferredAppWindowRecord; APP_WINDOW_
     TRUEOS_VM_ID_LIMIT] =
     [const { Mutex::new([const { DeferredAppWindowRecord::empty() }; APP_WINDOW_DEFERRED_CAP]) };
         TRUEOS_VM_ID_LIMIT];
+static APP_WINDOW_PENDING_CLOSES: [Mutex<HVec<u32, APP_WINDOW_PENDING_CLOSE_CAP>>;
+    TRUEOS_VM_ID_LIMIT] = [const { Mutex::new(HVec::new()) }; TRUEOS_VM_ID_LIMIT];
 
 #[derive(Clone)]
 struct HvLogEntry {
@@ -917,6 +920,62 @@ pub fn log_blueprint_app_window_event(args: core::fmt::Arguments<'_>) {
     app_window_broker_log(args);
 }
 
+fn close_or_defer_app_window(vm_id: u8, window_id: u32, reason: &'static str) {
+    if current_hull_guest_context_vm_id().is_none() {
+        let _ = crate::r::ui2::close_window(window_id);
+        return;
+    }
+
+    let Some(pending_lock) = APP_WINDOW_PENDING_CLOSES.get(vm_id as usize) else {
+        app_window_broker_log(format_args!(
+            "app-window-broker: vm{} close defer failed window={} reason={} status=unsupported-vm",
+            vm_id, window_id, reason
+        ));
+        return;
+    };
+
+    let mut pending = pending_lock.lock();
+    if pending.contains(&window_id) {
+        return;
+    }
+    if pending.push(window_id).is_ok() {
+        app_window_broker_log(format_args!(
+            "app-window-broker: vm{} deferred close window={} reason={} status=queued",
+            vm_id, window_id, reason
+        ));
+    } else {
+        app_window_broker_log(format_args!(
+            "app-window-broker: vm{} deferred close window={} reason={} status=full cap={}",
+            vm_id, window_id, reason, APP_WINDOW_PENDING_CLOSE_CAP
+        ));
+    }
+}
+
+fn drain_deferred_app_window_closes(vm_id: u8) -> usize {
+    let Some(pending_lock) = APP_WINDOW_PENDING_CLOSES.get(vm_id as usize) else {
+        return 0;
+    };
+    let mut pending_windows: HVec<u32, APP_WINDOW_PENDING_CLOSE_CAP> = HVec::new();
+    {
+        let mut pending = pending_lock.lock();
+        for window_id in pending.iter().copied() {
+            let _ = pending_windows.push(window_id);
+        }
+        pending.clear();
+    }
+
+    let mut closed = 0usize;
+    for window_id in pending_windows {
+        let _ = crate::r::ui2::close_window(window_id);
+        closed += 1;
+        app_window_broker_log(format_args!(
+            "app-window-broker: vm{} deferred close window={} status=closed",
+            vm_id, window_id
+        ));
+    }
+    closed
+}
+
 fn deferred_app_window_kind_name(kind: u8) -> &'static str {
     match kind {
         APP_WINDOW_DEFERRED_KIND_PLAIN => "plain",
@@ -931,6 +990,30 @@ fn deferred_app_window_kind(kind: &str) -> u8 {
         "surface" => APP_WINDOW_DEFERRED_KIND_SURFACE,
         _ => 0,
     }
+}
+
+fn seed_deferred_surface_texture(tex_id: u32, width: u32, height: u32) -> bool {
+    if tex_id == 0 || width == 0 || height == 0 {
+        return false;
+    }
+    let Some(pixel_count) = (width as usize).checked_mul(height as usize) else {
+        return false;
+    };
+    let Some(byte_len) = pixel_count.checked_mul(4) else {
+        return false;
+    };
+    let mut pixels = AllocVec::with_capacity(byte_len);
+    for _ in 0..pixel_count {
+        pixels.extend_from_slice(&[0x08, 0x0C, 0x12, 0xFF]);
+    }
+    crate::r::io::cabi::queue_texture_rgba_image_upload_owned(
+        tex_id,
+        width,
+        height,
+        pixels,
+        0,
+        "vm-surface-init",
+    )
 }
 
 fn truncate_deferred_app_window_title(title: &str) -> String<APP_WINDOW_TITLE_CAP> {
@@ -1003,6 +1086,18 @@ pub fn defer_blueprint_app_window_create(
         ));
         return 0;
     }
+    let width = width.max(1);
+    let height = height.max(1);
+    if kind_id == APP_WINDOW_DEFERRED_KIND_SURFACE
+        && tex_id != 0
+        && !seed_deferred_surface_texture(tex_id, width, height)
+    {
+        app_window_broker_log(format_args!(
+            "app-window-broker: vm{} deferred surface texture init failed title={} tex={} host_tex={} size={}x{}",
+            vm_id, title, tex_id, host_tex_id, width, height
+        ));
+        return 0;
+    }
 
     *slot = DeferredAppWindowRecord {
         active: true,
@@ -1013,8 +1108,8 @@ pub fn defer_blueprint_app_window_create(
         title: truncate_deferred_app_window_title(title),
         x,
         y,
-        width: width.max(1),
-        height: height.max(1),
+        width,
+        height,
         z,
         alpha: alpha.min(255),
         tex_id: host_tex_id,
@@ -1072,6 +1167,25 @@ pub fn deferred_blueprint_app_window_current_vm(window_id: u32) -> Option<u8> {
     }
 }
 
+pub fn materialized_blueprint_app_window_id(window_id: u32) -> Option<u32> {
+    let vm_id = deferred_blueprint_app_window_vm_id(window_id)?;
+    let records_lock = APP_WINDOW_DEFERRED_RECORDS.get(vm_id as usize)?;
+    records_lock
+        .lock()
+        .iter()
+        .find(|record| {
+            record.active
+                && record.deferred_id == window_id
+                && record.materialized_window_id != 0
+                && record.materialized_window_id != DeferredAppWindowRecord::MATERIALIZING
+        })
+        .map(|record| record.materialized_window_id)
+}
+
+pub fn host_blueprint_app_window_id(window_id: u32) -> u32 {
+    materialized_blueprint_app_window_id(window_id).unwrap_or(window_id)
+}
+
 pub fn begin_blueprint_app_window_session(vm_id: u8, archive: &str) {
     let Some(session_lock) = APP_WINDOW_SESSIONS.get(vm_id as usize) else {
         app_window_broker_log(format_args!(
@@ -1099,7 +1213,7 @@ pub fn begin_blueprint_app_window_session(vm_id: u8, archive: &str) {
             previous.window_ids.len()
         ));
         for window_id in previous.window_ids {
-            let _ = crate::r::ui2::close_window(window_id);
+            close_or_defer_app_window(vm_id, window_id, "session-replaced");
         }
     }
     app_window_broker_log(format_args!(
@@ -1151,6 +1265,8 @@ pub fn register_blueprint_app_window(window_id: u32, kind: &str, title: &str) {
 }
 
 pub fn materialize_deferred_blueprint_app_windows(vm_id: u8) -> usize {
+    drain_deferred_app_window_closes(vm_id);
+
     let Some(records_lock) = APP_WINDOW_DEFERRED_RECORDS.get(vm_id as usize) else {
         return 0;
     };
@@ -1240,6 +1356,7 @@ pub fn materialize_deferred_blueprint_app_windows(vm_id: u8) -> usize {
             record.title.as_str()
         ));
     }
+    drain_deferred_app_window_closes(vm_id);
     materialized
 }
 
@@ -1269,7 +1386,7 @@ pub fn finish_blueprint_app_window_session(vm_id: u8, close_windows: bool) {
 
     if close_windows {
         for window_id in session.window_ids {
-            let _ = crate::r::ui2::close_window(window_id);
+            close_or_defer_app_window(vm_id, window_id, "session-end");
         }
     }
     if let Some(records_lock) = APP_WINDOW_DEFERRED_RECORDS.get(vm_id as usize) {

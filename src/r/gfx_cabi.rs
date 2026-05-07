@@ -1757,17 +1757,6 @@ pub mod cabi {
     fn enqueue_texture_upload(req: TextureUploadReq) {
         let tex_id = req.tex_id;
         let mut queue = TEXTURE_UPLOAD_REQS.lock();
-        if gfx_cabi_vm_context()
-            && queue.contains_matching(|entry| match entry {
-                TextureWorkReq::Upload(existing) => existing.tex_id == tex_id,
-                TextureWorkReq::DrawRgb(_) => false,
-                TextureWorkReq::DrawMandelbrot(_) => false,
-                TextureWorkReq::DrawTex(_) => false,
-            })
-        {
-            notify_texture_work_available();
-            return;
-        }
         let work = TextureWorkReq::Upload(req);
         let work = match queue.replace_matching(work, |entry| match entry {
             TextureWorkReq::Upload(existing) => existing.tex_id == tex_id,
@@ -1788,17 +1777,6 @@ pub mod cabi {
     fn enqueue_texture_draw_rgb(req: TextureDrawRgbReq) {
         let tex_id = req.tex_id;
         let mut queue = TEXTURE_UPLOAD_REQS.lock();
-        if gfx_cabi_vm_context()
-            && queue.contains_matching(|entry| match entry {
-                TextureWorkReq::Upload(_) => false,
-                TextureWorkReq::DrawRgb(existing) => existing.tex_id == tex_id,
-                TextureWorkReq::DrawMandelbrot(_) => false,
-                TextureWorkReq::DrawTex(_) => false,
-            })
-        {
-            notify_texture_work_available();
-            return;
-        }
         let work = TextureWorkReq::DrawRgb(req);
         let work = match queue.replace_matching(work, |entry| match entry {
             TextureWorkReq::Upload(_) => false,
@@ -1819,17 +1797,6 @@ pub mod cabi {
     fn enqueue_texture_draw_mandelbrot(req: TextureDrawMandelbrotReq) {
         let tex_id = req.tex_id;
         let mut queue = TEXTURE_UPLOAD_REQS.lock();
-        if gfx_cabi_vm_context()
-            && queue.contains_matching(|entry| match entry {
-                TextureWorkReq::Upload(_) => false,
-                TextureWorkReq::DrawRgb(_) => false,
-                TextureWorkReq::DrawMandelbrot(existing) => existing.tex_id == tex_id,
-                TextureWorkReq::DrawTex(_) => false,
-            })
-        {
-            notify_texture_work_available();
-            return;
-        }
         let work = TextureWorkReq::DrawMandelbrot(req);
         let work = match queue.replace_matching(work, |entry| match entry {
             TextureWorkReq::Upload(_) => false,
@@ -1850,17 +1817,6 @@ pub mod cabi {
     fn enqueue_texture_draw_tex(req: TextureDrawTexReq) {
         let target_tex_id = req.target_tex_id;
         let mut queue = TEXTURE_UPLOAD_REQS.lock();
-        if gfx_cabi_vm_context()
-            && queue.contains_matching(|entry| match entry {
-                TextureWorkReq::Upload(_) => false,
-                TextureWorkReq::DrawRgb(_) => false,
-                TextureWorkReq::DrawMandelbrot(_) => false,
-                TextureWorkReq::DrawTex(existing) => existing.target_tex_id == target_tex_id,
-            })
-        {
-            notify_texture_work_available();
-            return;
-        }
         let work = TextureWorkReq::DrawTex(req);
         let work = match queue.replace_matching(work, |entry| match entry {
             TextureWorkReq::Upload(_) => false,
@@ -1880,6 +1836,33 @@ pub mod cabi {
 
     fn take_texture_upload() -> Option<TextureWorkReq> {
         TEXTURE_UPLOAD_REQS.lock().pop_front()
+    }
+
+    fn request_texture_work_present(window_id: u32, reason: &'static str) {
+        if window_id == 0 {
+            return;
+        }
+        let host_window_id = crate::hv::host_blueprint_app_window_id(window_id);
+        let _ = crate::r::ui2::request_window_content_present(host_window_id, reason);
+    }
+
+    fn log_texture_work_failed(
+        op: &'static str,
+        rc: i32,
+        target_tex_id: u32,
+        source_tex_id: u32,
+        repaint_window_id: u32,
+        reason: &'static str,
+    ) {
+        crate::log!(
+            "gfx-cabi: texture work failed op={} rc={} target={} source={} repaint_window={} reason={}\n",
+            op,
+            rc,
+            target_tex_id,
+            source_tex_id,
+            repaint_window_id,
+            reason
+        );
     }
 
     fn requeue_texture_work_front(req: TextureWorkReq) {
@@ -2312,8 +2295,14 @@ pub mod cabi {
                             set_async_tex_status(req.tex_id, rc);
                         }
                     }
-                    if rc == 0 && req.repaint_window_id != 0 {
-                        let _ = crate::r::ui2::request_window_content_present(
+                    if rc == 0 {
+                        request_texture_work_present(req.repaint_window_id, req.repaint_reason);
+                    } else {
+                        log_texture_work_failed(
+                            "upload",
+                            rc,
+                            req.tex_id,
+                            0,
                             req.repaint_window_id,
                             req.repaint_reason,
                         );
@@ -2325,8 +2314,14 @@ pub mod cabi {
                         req.clear_rgb,
                         req.verts.as_slice(),
                     );
-                    if rc == 0 && req.repaint_window_id != 0 {
-                        let _ = crate::r::ui2::request_window_content_present(
+                    if rc == 0 {
+                        request_texture_work_present(req.repaint_window_id, req.repaint_reason);
+                    } else {
+                        log_texture_work_failed(
+                            "draw-rgb",
+                            rc,
+                            req.tex_id,
+                            0,
                             req.repaint_window_id,
                             req.repaint_reason,
                         );
@@ -2334,8 +2329,14 @@ pub mod cabi {
                 }
                 TextureWorkReq::DrawMandelbrot(req) => {
                     let rc = render_mandelbrot_to_texture_now(req.tex_id, req.ticks, req.tick_hz);
-                    if rc == 0 && req.repaint_window_id != 0 {
-                        let _ = crate::r::ui2::request_window_content_present(
+                    if rc == 0 {
+                        request_texture_work_present(req.repaint_window_id, req.repaint_reason);
+                    } else {
+                        log_texture_work_failed(
+                            "draw-mandelbrot",
+                            rc,
+                            req.tex_id,
+                            0,
                             req.repaint_window_id,
                             req.repaint_reason,
                         );
@@ -2349,8 +2350,14 @@ pub mod cabi {
                         req.verts.as_slice(),
                         req.particle_shader,
                     );
-                    if rc == 0 && req.repaint_window_id != 0 {
-                        let _ = crate::r::ui2::request_window_content_present(
+                    if rc == 0 {
+                        request_texture_work_present(req.repaint_window_id, req.repaint_reason);
+                    } else {
+                        log_texture_work_failed(
+                            "draw-tex",
+                            rc,
+                            req.target_tex_id,
+                            req.source_tex_id,
                             req.repaint_window_id,
                             req.repaint_reason,
                         );

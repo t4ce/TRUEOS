@@ -21,6 +21,9 @@ pub const OP_BP_FETCH_BYTES_START: u32 = 0x23;
 pub const OP_BP_FETCH_BYTES_RESULT_LEN: u32 = 0x24;
 pub const OP_BP_FETCH_BYTES_READ: u32 = 0x25;
 pub const OP_BP_FETCH_BYTES_DISCARD: u32 = 0x26;
+pub const OP_BP_FETCH_FILE_START: u32 = 0x27;
+pub const OP_BP_FETCH_FILE_RESULT: u32 = 0x28;
+pub const OP_BP_FETCH_FILE_DISCARD: u32 = 0x29;
 
 pub const STATUS_OK: u32 = 0;
 pub const STATUS_BAD_ARG: u32 = 2;

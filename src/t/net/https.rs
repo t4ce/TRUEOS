@@ -618,7 +618,9 @@ async fn cabi_net_fetch_task_inner(
         return;
     }
     let rc =
-        match fetch_https_to_file_async(url.as_str(), path.as_str(), timeout_ms, max_bytes).await {
+        match fetch_https_to_file_hyper_async(url.as_str(), path.as_str(), timeout_ms, max_bytes)
+            .await
+        {
             Ok(()) => 0,
             Err(code) => code,
         };
@@ -917,6 +919,129 @@ fn guest_fetch_bytes_discard(op_id: u32) -> i32 {
     } else {
         FS_ERR_BAD_PARAM
     }
+}
+
+fn guest_fetch_file_start(url: &[u8], path: &[u8]) -> u32 {
+    if url.is_empty() || path.is_empty() {
+        return 0;
+    }
+    let Some(payload_len) = url.len().checked_add(path.len()) else {
+        return 0;
+    };
+    if payload_len > trueos_vm::vmcall::PAYLOAD_CAP {
+        return 0;
+    }
+
+    let mut payload = Vec::with_capacity(payload_len);
+    payload.extend_from_slice(url);
+    payload.extend_from_slice(path);
+
+    let mut out = [0u8; 1];
+    let (status, op_id) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_FETCH_FILE_START,
+        url.len() as u64,
+        0,
+        payload.as_slice(),
+        &mut out,
+    );
+    if status == trueos_vm::vmcall::STATUS_OK {
+        op_id as u32
+    } else {
+        0
+    }
+}
+
+fn guest_fetch_file_result(op_id: u32) -> i32 {
+    let (status, value) =
+        trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_FETCH_FILE_RESULT, op_id as u64, 0);
+    if status == trueos_vm::vmcall::STATUS_OK {
+        (value as i64) as i32
+    } else {
+        FS_ERR_BAD_PARAM
+    }
+}
+
+fn guest_fetch_file_discard(op_id: u32) -> i32 {
+    let (status, value) =
+        trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_FETCH_FILE_DISCARD, op_id as u64, 0);
+    if status == trueos_vm::vmcall::STATUS_OK {
+        (value as i64) as i32
+    } else {
+        FS_ERR_BAD_PARAM
+    }
+}
+
+fn wait_on_net_fetch_or_guest_sleep(step: EmbassyDuration) {
+    let ms = step.as_millis() as u64;
+    if vmx_guest_cabi_context() {
+        trueos_vm::vmcall::sleep_ms(ms.max(1));
+    } else {
+        let _ = wait_on_net_fetch_queue_blocking(ms);
+    }
+}
+
+pub(crate) fn cabi_net_fetch_start_host(
+    url_s: &str,
+    path_s: &str,
+    timeout_ms: u32,
+    max_bytes: usize,
+) -> u32 {
+    let key = match normalize_rel(path_s, false) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+
+    let url = String::from(url_s);
+    let path = String::from(path_s);
+    let op_id = CABI_NET_FETCH_SEQ.fetch_add(1, Ordering::Relaxed);
+    CABI_NET_FETCH_RESULTS.lock().insert(op_id, None);
+
+    {
+        let mut inflight = CABI_NET_FETCH_INFLIGHT.lock();
+        if let Some(entry) = inflight.get_mut(&key) {
+            entry.followers.push(op_id);
+            return op_id;
+        }
+        inflight.insert(
+            key.clone(),
+            InflightFetch {
+                owner_op_id: op_id,
+                followers: Vec::new(),
+            },
+        );
+    }
+
+    spawn_cabi_net_fetch(op_id, key, url, path, timeout_ms, max_bytes);
+    op_id
+}
+
+pub(crate) fn cabi_net_fetch_result_host(op_id: u32) -> i32 {
+    let map = CABI_NET_FETCH_RESULTS.lock();
+    match map.get(&op_id) {
+        Some(Some(rc)) => *rc,
+        Some(None) => FS_ERR_NOT_FOUND,
+        None => FS_ERR_NOT_FOUND,
+    }
+}
+
+pub(crate) fn cabi_net_fetch_discard_host(op_id: u32) -> i32 {
+    let mut map = CABI_NET_FETCH_RESULTS.lock();
+    map.remove(&op_id);
+
+    {
+        let mut inflight = CABI_NET_FETCH_INFLIGHT.lock();
+        let mut dead_keys: Vec<String> = Vec::new();
+        for (k, v) in inflight.iter_mut() {
+            v.followers.retain(|&id| id != op_id);
+            if !inflight_fetch_has_live_interest(v.owner_op_id, v.followers.as_slice(), &map) {
+                dead_keys.push(k.clone());
+            }
+        }
+        for key in dead_keys {
+            inflight.remove(&key);
+        }
+    }
+    0
 }
 
 pub(crate) fn cabi_net_fetch_bytes_start_host(
@@ -3975,6 +4100,9 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_start(
 
     let url_bytes = core::slice::from_raw_parts(url_ptr, url_len);
     let path_bytes = core::slice::from_raw_parts(path_ptr, path_len);
+    if vmx_guest_cabi_context() {
+        return guest_fetch_file_start(url_bytes, path_bytes);
+    }
     let Ok(url_s) = core::str::from_utf8(url_bytes) else {
         return 0;
     };
@@ -3990,35 +4118,7 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_start(
     const TIMEOUT_MS: u32 = 45_000;
     const MAX_BYTES: usize = 8 * 1024 * 1024;
 
-    // Normalize the cache key so coalescing matches how fetch_https_to_file_async resolves paths.
-    let key = match normalize_rel(path_s, false) {
-        Ok(v) => v,
-        Err(_) => return 0,
-    };
-
-    let url = String::from(url_s);
-    let path = String::from(path_s);
-    let op_id = CABI_NET_FETCH_SEQ.fetch_add(1, Ordering::Relaxed);
-    CABI_NET_FETCH_RESULTS.lock().insert(op_id, None);
-
-    // Coalesce duplicates: if the same cache key is already being fetched, register as follower.
-    {
-        let mut inflight = CABI_NET_FETCH_INFLIGHT.lock();
-        if let Some(entry) = inflight.get_mut(&key) {
-            entry.followers.push(op_id);
-            return op_id;
-        }
-        inflight.insert(
-            key.clone(),
-            InflightFetch {
-                owner_op_id: op_id,
-                followers: Vec::new(),
-            },
-        );
-    }
-
-    spawn_cabi_net_fetch(op_id, key, url, path, TIMEOUT_MS, MAX_BYTES);
-    op_id
+    cabi_net_fetch_start_host(url_s, path_s, TIMEOUT_MS, MAX_BYTES)
 }
 
 /// TRUEOS C ABI: start async HTTPS fetch to in-memory bytes.
@@ -4060,6 +4160,9 @@ pub unsafe extern "C" fn trueos_cabi_net_prewarm_url_start(
     };
     if parse_https_url(url_s).is_none() {
         return -3;
+    }
+    if vmx_guest_cabi_context() {
+        return 0;
     }
 
     spawn_cabi_net_prewarm_url(String::from(url_s));
@@ -4239,36 +4342,19 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_post_json_bytes_start_with_timeou
 /// - negative error code on completion failure
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_net_fetch_result(op_id: u32) -> i32 {
-    let map = CABI_NET_FETCH_RESULTS.lock();
-    match map.get(&op_id) {
-        Some(Some(rc)) => *rc,
-        Some(None) => FS_ERR_NOT_FOUND,
-        None => FS_ERR_NOT_FOUND,
+    if vmx_guest_cabi_context() {
+        return guest_fetch_file_result(op_id);
     }
+    cabi_net_fetch_result_host(op_id)
 }
 
 /// TRUEOS C ABI: discard async HTTPS fetch state.
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_net_fetch_discard(op_id: u32) -> i32 {
-    let mut map = CABI_NET_FETCH_RESULTS.lock();
-    map.remove(&op_id);
-
-    // Best-effort: remove from any follower lists so coalescing maps don't retain dead ids.
-    // (Leader tasks may still complete; they will simply skip removed result slots.)
-    {
-        let mut inflight = CABI_NET_FETCH_INFLIGHT.lock();
-        let mut dead_keys: Vec<String> = Vec::new();
-        for (k, v) in inflight.iter_mut() {
-            v.followers.retain(|&id| id != op_id);
-            if !inflight_fetch_has_live_interest(v.owner_op_id, v.followers.as_slice(), &map) {
-                dead_keys.push(k.clone());
-            }
-        }
-        for key in dead_keys {
-            inflight.remove(&key);
-        }
+    if vmx_guest_cabi_context() {
+        return guest_fetch_file_discard(op_id);
     }
-    0
+    cabi_net_fetch_discard_host(op_id)
 }
 
 #[unsafe(no_mangle)]
@@ -4350,7 +4436,7 @@ pub extern "C" fn trueos_cabi_net_fetch_bytes_wait(op_id: u32, timeout_ms: u64) 
         }
         let remain = timeout - elapsed;
         let step = core::cmp::min(remain, EmbassyDuration::from_millis(100));
-        let _ = wait_on_net_fetch_queue_blocking(step.as_millis() as u64);
+        wait_on_net_fetch_or_guest_sleep(step);
     }
 }
 
@@ -4385,6 +4471,6 @@ pub extern "C" fn trueos_cabi_net_fetch_wait(op_id: u32, timeout_ms: u64) -> i32
         }
         let remain = timeout - elapsed;
         let step = core::cmp::min(remain, EmbassyDuration::from_millis(100));
-        let _ = wait_on_net_fetch_queue_blocking(step.as_millis() as u64);
+        wait_on_net_fetch_or_guest_sleep(step);
     }
 }

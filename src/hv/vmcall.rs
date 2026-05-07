@@ -28,6 +28,9 @@ pub const OP_BP_FETCH_BYTES_START: u32 = 0x23; // request payload is URL, respon
 pub const OP_BP_FETCH_BYTES_RESULT_LEN: u32 = 0x24; // arg0 is op id, response is signed len/rc
 pub const OP_BP_FETCH_BYTES_READ: u32 = 0x25; // arg0 op id, arg1 offset, response payload bytes
 pub const OP_BP_FETCH_BYTES_DISCARD: u32 = 0x26; // arg0 is op id
+pub const OP_BP_FETCH_FILE_START: u32 = 0x27; // arg0 url len, payload is URL || cache path
+pub const OP_BP_FETCH_FILE_RESULT: u32 = 0x28; // arg0 is op id, response is signed rc/pending
+pub const OP_BP_FETCH_FILE_DISCARD: u32 = 0x29; // arg0 is op id
 
 // ── response status codes (u32, written by host) ────────────────────────────
 pub const STATUS_OK: u32 = 0;
@@ -296,6 +299,47 @@ pub fn dispatch(vm_id: u8) -> DispatchOutcome {
         }
         OP_BP_FETCH_BYTES_DISCARD => {
             let rc = crate::t::net::https::cabi_net_fetch_bytes_discard_host(arg0 as u32);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_FETCH_FILE_START => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let url_len = arg0 as usize;
+            if url_len == 0 || url_len >= n {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            }
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let bytes = unsafe { &(&(*p).payload)[..n] };
+            let Ok(url) = core::str::from_utf8(&bytes[..url_len]) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let Ok(path) = core::str::from_utf8(&bytes[url_len..]) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            const TIMEOUT_MS: u32 = 45_000;
+            const MAX_BYTES: usize = 8 * 1024 * 1024;
+            let op_id =
+                crate::t::net::https::cabi_net_fetch_start_host(url, path, TIMEOUT_MS, MAX_BYTES);
+            if op_id == 0 {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+            } else {
+                write_response(vm_id, seq, STATUS_OK, op_id as u64, 0);
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_FETCH_FILE_RESULT => {
+            let rc = crate::t::net::https::cabi_net_fetch_result_host(arg0 as u32);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_FETCH_FILE_DISCARD => {
+            let rc = crate::t::net::https::cabi_net_fetch_discard_host(arg0 as u32);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }

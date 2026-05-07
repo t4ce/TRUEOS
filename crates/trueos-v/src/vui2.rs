@@ -50,6 +50,44 @@ impl WindowId {
         }
     }
 
+    pub fn set_vertical_scrollbar_visible(self, visible: bool) -> bool {
+        unsafe {
+            vcabi::trueos_cabi_ui2_window_set_vertical_scrollbar_visible(self.0, u32::from(visible))
+                == 0
+        }
+    }
+
+    pub fn set_horizontal_scrollbar_visible(self, visible: bool) -> bool {
+        unsafe {
+            vcabi::trueos_cabi_ui2_window_set_horizontal_scrollbar_visible(
+                self.0,
+                u32::from(visible),
+            ) == 0
+        }
+    }
+
+    pub fn set_resize_maintain_aspect(self, maintain_aspect: bool) -> bool {
+        unsafe {
+            vcabi::trueos_cabi_ui2_window_set_resize_maintain_aspect(
+                self.0,
+                u32::from(maintain_aspect),
+            ) == 0
+        }
+    }
+
+    pub fn set_content_preserve_scale(self, preserve_scale: bool) -> bool {
+        unsafe {
+            vcabi::trueos_cabi_ui2_window_set_content_preserve_scale(
+                self.0,
+                u32::from(preserve_scale),
+            ) == 0
+        }
+    }
+
+    pub fn set_resize_mode(self, mode: WindowResizeMode) -> bool {
+        unsafe { vcabi::trueos_cabi_ui2_window_set_resize_mode(self.0, mode as u32) == 0 }
+    }
+
     pub fn set_vertical_scrollbar_side(self, side: VerticalScrollbarSide) -> bool {
         unsafe {
             vcabi::trueos_cabi_ui2_window_set_vertical_scrollbar_side(self.0, side as u32) == 0
@@ -189,6 +227,13 @@ pub enum WindowDecorationMode {
     System = 0,
     Client = 1,
     None = 2,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum WindowResizeMode {
+    Auto = 0,
+    Live = 1,
+    PreviewCommit = 2,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
