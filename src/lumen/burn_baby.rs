@@ -289,7 +289,7 @@ pub fn matvec_rowmajor_bf16(
     let local_row_end = remote.map(|ticket| ticket.row_start).unwrap_or(n_rows);
     if let Some(ticket) = remote {
         crate::log!(
-            "burn-baby: bf16 matvec split local_rows=0..{} remote_rows={}..{} remote_job={} remote_pending={} completion=not-wired\n",
+            "burn-baby: bf16 matvec split local_rows=0..{} remote_rows={}..{} remote_job={} remote_pending={} completion=tcp-result\n",
             local_row_end,
             ticket.row_start,
             ticket.row_end,
@@ -332,6 +332,19 @@ pub fn matvec_rowmajor_bf16(
         if !poll_compute_lane() {
             core::hint::spin_loop();
         }
+    }
+
+    if let Some(ticket) = remote
+        && !crate::lumen::lumen_net::wait_remote_bf16_matvec(ticket)
+    {
+        let _ = crate::lumen::lumen_net::cancel_remote_bf16_matvec(ticket.job_id);
+        crate::log!(
+            "burn-baby: bf16 remote result timeout job={} rows={}..{} action=local-suffix-fallback\n",
+            ticket.job_id,
+            ticket.row_start,
+            ticket.row_end
+        );
+        matvec_rows_bf16(x, w_rowmajor_bf16, k_dim, out, ticket.row_start, ticket.row_end);
     }
 
     Ok(())
