@@ -530,33 +530,36 @@ fn log_uas_debug(stage: &'static str, cmd: &'static str, tag: u16) {
     let submit = crab_usb::debug_last_submit();
     let event = crab_usb::debug_last_event();
     let stream_cfg = crab_usb::debug_last_stream_config();
-    crate::globalog::log_with_level(log::Level::Trace, format_args!(
-        "crabusb: mass uas-debug stage={} cmd={} tag=0x{:04X} last_submit[slot={} dci={} dir={} stream={} len={} ptr=0x{:X} ring=0x{:X}] last_stream_cfg[slot={} dci={} ep=0x{:02X} count={} maxp={} burst={} mps={} ctx=0x{:X} ring1=0x{:X}] last_event[slot={} ep={} cc={} residual={} ptr=0x{:X}]\n",
-        stage,
-        cmd,
-        tag,
-        submit.slot_id,
-        submit.dci,
-        submit.direction,
-        submit.stream_id,
-        submit.len,
-        submit.ptr,
-        submit.ring_ptr,
-        stream_cfg.slot_id,
-        stream_cfg.dci,
-        stream_cfg.ep_addr,
-        stream_cfg.stream_count,
-        stream_cfg.max_primary_streams,
-        stream_cfg.max_burst,
-        stream_cfg.max_packet_size,
-        stream_cfg.ctx_ptr,
-        stream_cfg.ring1_ptr,
-        event.slot_id,
-        event.ep_id,
-        event.completion_code,
-        event.residual,
-        event.ptr
-    ));
+    crate::globalog::log_with_level(
+        log::Level::Trace,
+        format_args!(
+            "crabusb: mass uas-debug stage={} cmd={} tag=0x{:04X} last_submit[slot={} dci={} dir={} stream={} len={} ptr=0x{:X} ring=0x{:X}] last_stream_cfg[slot={} dci={} ep=0x{:02X} count={} maxp={} burst={} mps={} ctx=0x{:X} ring1=0x{:X}] last_event[slot={} ep={} cc={} residual={} ptr=0x{:X}]\n",
+            stage,
+            cmd,
+            tag,
+            submit.slot_id,
+            submit.dci,
+            submit.direction,
+            submit.stream_id,
+            submit.len,
+            submit.ptr,
+            submit.ring_ptr,
+            stream_cfg.slot_id,
+            stream_cfg.dci,
+            stream_cfg.ep_addr,
+            stream_cfg.stream_count,
+            stream_cfg.max_primary_streams,
+            stream_cfg.max_burst,
+            stream_cfg.max_packet_size,
+            stream_cfg.ctx_ptr,
+            stream_cfg.ring1_ptr,
+            event.slot_id,
+            event.ep_id,
+            event.completion_code,
+            event.residual,
+            event.ptr
+        ),
+    );
 }
 
 fn log_uas_iu(stage: &'static str, cmd: &'static str, tag: u16, iu: &[u8]) {
@@ -567,29 +570,32 @@ fn log_uas_iu(stage: &'static str, cmd: &'static str, tag: u16, iu: &[u8]) {
     let mut bytes = [0u8; 16];
     let n = iu.len().min(bytes.len());
     bytes[..n].copy_from_slice(&iu[..n]);
-    crate::globalog::log_with_level(log::Level::Trace, format_args!(
-        "crabusb: mass uas-iu stage={} cmd={} tag=0x{:04X} len={} bytes={:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}\n",
-        stage,
-        cmd,
-        tag,
-        iu.len(),
-        bytes[0],
-        bytes[1],
-        bytes[2],
-        bytes[3],
-        bytes[4],
-        bytes[5],
-        bytes[6],
-        bytes[7],
-        bytes[8],
-        bytes[9],
-        bytes[10],
-        bytes[11],
-        bytes[12],
-        bytes[13],
-        bytes[14],
-        bytes[15]
-    ));
+    crate::globalog::log_with_level(
+        log::Level::Trace,
+        format_args!(
+            "crabusb: mass uas-iu stage={} cmd={} tag=0x{:04X} len={} bytes={:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}\n",
+            stage,
+            cmd,
+            tag,
+            iu.len(),
+            bytes[0],
+            bytes[1],
+            bytes[2],
+            bytes[3],
+            bytes[4],
+            bytes[5],
+            bytes[6],
+            bytes[7],
+            bytes[8],
+            bytes[9],
+            bytes[10],
+            bytes[11],
+            bytes[12],
+            bytes[13],
+            bytes[14],
+            bytes[15]
+        ),
+    );
 }
 
 fn read_mmio_u32(base: *const u8, offset: usize) -> u32 {
