@@ -177,11 +177,12 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
         }
     }
 
-    let process_args =
-        blueprint::build_process_args(state.archive.as_str(), state.app_args.as_slice());
-    let process_env = blueprint::build_process_env(state.archive.as_str());
     let app_fs_root =
         blueprint::app_fs_root_for_archive(state.archive.as_str(), state.module_bytes.as_slice());
+    let process_args =
+        blueprint::build_process_args(state.archive.as_str(), state.app_args.as_slice());
+    let process_env =
+        blueprint::build_process_env(state.archive.as_str(), Some(app_fs_root.as_str()));
     log(alloc::format!(
         "run: guest app fs root prepared logically path={} fs_create=deferred-vm-service",
         app_fs_root.as_str()

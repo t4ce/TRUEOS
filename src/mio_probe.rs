@@ -137,16 +137,16 @@ pub(crate) fn log_boot_probe() {
     }
 
     if crate::r::readiness::is_set(crate::r::readiness::NET_ANY_CONFIGURED) {
-        spawn_deferred_mio_net_probe();
+        spawn_deferred_net_readiness_probe();
         return;
     }
 
     crate::log!("mio_probe: note net surface deferred until NET_ANY_CONFIGURED\n");
 
-    spawn_deferred_mio_net_probe();
+    spawn_deferred_net_readiness_probe();
 }
 
-fn spawn_deferred_mio_net_probe() {
+pub(crate) fn spawn_deferred_net_readiness_probe() {
     if MIO_NET_PROBE_TASK_SPAWNED.swap(true, Ordering::AcqRel) {
         return;
     }

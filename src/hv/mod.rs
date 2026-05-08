@@ -305,6 +305,18 @@ struct DeferredAppWindowRecord {
     alpha: u32,
     tex_id: u32,
     blend_enabled: bool,
+    icon_id: Option<u32>,
+    decoration_mode: Option<u32>,
+    hit_test_visible: Option<bool>,
+    vertical_scrollbar_visible: Option<bool>,
+    horizontal_scrollbar_visible: Option<bool>,
+    vertical_scrollbar_side: Option<u32>,
+    horizontal_scrollbar_side: Option<u32>,
+    rotate_buttons_visible: Option<bool>,
+    content_rotation_quadrants: Option<u32>,
+    resize_maintain_aspect: Option<bool>,
+    content_preserve_scale: Option<bool>,
+    resize_mode: Option<u32>,
     repaint_requested: bool,
     close_requested: bool,
 }
@@ -328,6 +340,18 @@ impl DeferredAppWindowRecord {
             alpha: 0,
             tex_id: 0,
             blend_enabled: false,
+            icon_id: None,
+            decoration_mode: None,
+            hit_test_visible: None,
+            vertical_scrollbar_visible: None,
+            horizontal_scrollbar_visible: None,
+            vertical_scrollbar_side: None,
+            horizontal_scrollbar_side: None,
+            rotate_buttons_visible: None,
+            content_rotation_quadrants: None,
+            resize_maintain_aspect: None,
+            content_preserve_scale: None,
+            resize_mode: None,
             repaint_requested: false,
             close_requested: false,
         }
@@ -1114,6 +1138,18 @@ pub fn defer_blueprint_app_window_create(
         alpha: alpha.min(255),
         tex_id: host_tex_id,
         blend_enabled,
+        icon_id: None,
+        decoration_mode: None,
+        hit_test_visible: None,
+        vertical_scrollbar_visible: None,
+        horizontal_scrollbar_visible: None,
+        vertical_scrollbar_side: None,
+        horizontal_scrollbar_side: None,
+        rotate_buttons_visible: None,
+        content_rotation_quadrants: None,
+        resize_maintain_aspect: None,
+        content_preserve_scale: None,
+        resize_mode: None,
         repaint_requested: false,
         close_requested: false,
     };
@@ -1144,6 +1180,85 @@ pub fn note_deferred_blueprint_app_window_op(window_id: u32, op: &'static str) -
         _ => {}
     }
     true
+}
+
+pub fn note_deferred_blueprint_app_window_title(window_id: u32, title: &str) -> bool {
+    with_deferred_blueprint_app_window_record(window_id, |record| {
+        record.title = truncate_deferred_app_window_title(title);
+        true
+    })
+    .unwrap_or(false)
+}
+
+pub fn note_deferred_blueprint_app_window_position(window_id: u32, x: i32, y: i32) -> bool {
+    with_deferred_blueprint_app_window_record(window_id, |record| {
+        record.x = x;
+        record.y = y;
+        true
+    })
+    .unwrap_or(false)
+}
+
+pub fn note_deferred_blueprint_app_window_size(window_id: u32, width: u32, height: u32) -> bool {
+    with_deferred_blueprint_app_window_record(window_id, |record| {
+        record.width = width.max(1);
+        record.height = height.max(1);
+        true
+    })
+    .unwrap_or(false)
+}
+
+pub fn note_deferred_blueprint_app_window_u32(
+    window_id: u32,
+    op: &'static str,
+    value: u32,
+) -> bool {
+    with_deferred_blueprint_app_window_record(window_id, |record| {
+        match op {
+            "set-icon" => record.icon_id = Some(value),
+            "set-decorations" => record.decoration_mode = Some(value),
+            "set-vertical-scrollbar-side" => record.vertical_scrollbar_side = Some(value),
+            "set-horizontal-scrollbar-side" => record.horizontal_scrollbar_side = Some(value),
+            "set-content-rotation" => record.content_rotation_quadrants = Some(value % 4),
+            "set-resize-mode" => record.resize_mode = Some(value),
+            _ => {}
+        }
+        true
+    })
+    .unwrap_or(false)
+}
+
+pub fn note_deferred_blueprint_app_window_bool(
+    window_id: u32,
+    op: &'static str,
+    value: bool,
+) -> bool {
+    with_deferred_blueprint_app_window_record(window_id, |record| {
+        match op {
+            "set-hit-test-visible" => record.hit_test_visible = Some(value),
+            "set-vertical-scrollbar-visible" => record.vertical_scrollbar_visible = Some(value),
+            "set-horizontal-scrollbar-visible" => record.horizontal_scrollbar_visible = Some(value),
+            "set-rotate-buttons-visible" => record.rotate_buttons_visible = Some(value),
+            "set-resize-maintain-aspect" => record.resize_maintain_aspect = Some(value),
+            "set-content-preserve-scale" => record.content_preserve_scale = Some(value),
+            _ => {}
+        }
+        true
+    })
+    .unwrap_or(false)
+}
+
+fn with_deferred_blueprint_app_window_record<R>(
+    window_id: u32,
+    f: impl FnOnce(&mut DeferredAppWindowRecord) -> R,
+) -> Option<R> {
+    let vm_id = deferred_blueprint_app_window_vm_id(window_id)?;
+    let records_lock = APP_WINDOW_DEFERRED_RECORDS.get(vm_id as usize)?;
+    let mut records = records_lock.lock();
+    let record = records
+        .iter_mut()
+        .find(|record| record.active && record.deferred_id == window_id)?;
+    Some(f(record))
 }
 
 pub fn deferred_blueprint_app_window_vm_id(window_id: u32) -> Option<u8> {
@@ -1330,6 +1445,7 @@ pub fn materialize_deferred_blueprint_app_windows(vm_id: u8) -> usize {
         }
 
         let _ = crate::r::ui2::set_window_vm_origin(window_id, Some(vm_id));
+        apply_deferred_app_window_properties(window_id, &record);
         let _ = crate::r::ui2::focus_window(window_id);
         if record.repaint_requested {
             let _ =
@@ -1358,6 +1474,90 @@ pub fn materialize_deferred_blueprint_app_windows(vm_id: u8) -> usize {
     }
     drain_deferred_app_window_closes(vm_id);
     materialized
+}
+
+fn apply_deferred_app_window_properties(window_id: u32, record: &DeferredAppWindowRecord) {
+    if let Some(icon_id) = record.icon_id {
+        let _ = crate::r::ui2::set_window_icon(window_id, icon_id);
+    }
+    if let Some(mode) = record.decoration_mode.and_then(deferred_decoration_mode) {
+        let _ = crate::r::ui2::set_window_decorations(window_id, mode);
+    }
+    if let Some(visible) = record.hit_test_visible {
+        let _ = crate::r::ui2::set_window_hit_test_visible(window_id, visible);
+    }
+    if let Some(visible) = record.vertical_scrollbar_visible {
+        let _ = crate::r::ui2::set_window_left_scrollbar_visible(window_id, visible);
+    }
+    if let Some(visible) = record.horizontal_scrollbar_visible {
+        let _ = crate::r::ui2::set_window_bottom_scrollbar_visible(window_id, visible);
+    }
+    if let Some(side) = record
+        .vertical_scrollbar_side
+        .and_then(deferred_vertical_scrollbar_side)
+    {
+        let _ = crate::r::ui2::set_window_vertical_scrollbar_side(window_id, side);
+    }
+    if let Some(side) = record
+        .horizontal_scrollbar_side
+        .and_then(deferred_horizontal_scrollbar_side)
+    {
+        let _ = crate::r::ui2::set_window_horizontal_scrollbar_side(window_id, side);
+    }
+    if let Some(visible) = record.rotate_buttons_visible {
+        let _ = crate::r::ui2::set_window_rotate_buttons_visible(window_id, visible);
+    }
+    if let Some(quadrants) = record.content_rotation_quadrants {
+        let _ =
+            crate::r::ui2::set_window_content_rotation_quadrants(window_id, (quadrants % 4) as u8);
+    }
+    if let Some(maintain_aspect) = record.resize_maintain_aspect {
+        let _ = crate::r::ui2::set_window_resize_maintain_aspect(window_id, maintain_aspect);
+    }
+    if let Some(preserve_scale) = record.content_preserve_scale {
+        let _ = crate::r::ui2::set_window_content_preserve_scale(window_id, preserve_scale);
+    }
+    if let Some(mode) = record.resize_mode.and_then(deferred_resize_mode) {
+        let _ = crate::r::ui2::set_window_resize_mode(window_id, mode);
+    }
+}
+
+fn deferred_decoration_mode(value: u32) -> Option<crate::r::ui2::Ui2WindowDecorationMode> {
+    match value {
+        0 => Some(crate::r::ui2::Ui2WindowDecorationMode::System),
+        1 => Some(crate::r::ui2::Ui2WindowDecorationMode::Client),
+        2 => Some(crate::r::ui2::Ui2WindowDecorationMode::None),
+        _ => None,
+    }
+}
+
+fn deferred_resize_mode(value: u32) -> Option<crate::r::ui2::Ui2WindowResizeMode> {
+    match value {
+        0 => Some(crate::r::ui2::Ui2WindowResizeMode::Auto),
+        1 => Some(crate::r::ui2::Ui2WindowResizeMode::Live),
+        2 => Some(crate::r::ui2::Ui2WindowResizeMode::PreviewCommit),
+        _ => None,
+    }
+}
+
+fn deferred_vertical_scrollbar_side(
+    value: u32,
+) -> Option<crate::r::ui2::Ui2WindowVerticalScrollbarSide> {
+    match value {
+        0 => Some(crate::r::ui2::Ui2WindowVerticalScrollbarSide::Left),
+        1 => Some(crate::r::ui2::Ui2WindowVerticalScrollbarSide::Right),
+        _ => None,
+    }
+}
+
+fn deferred_horizontal_scrollbar_side(
+    value: u32,
+) -> Option<crate::r::ui2::Ui2WindowHorizontalScrollbarSide> {
+    match value {
+        0 => Some(crate::r::ui2::Ui2WindowHorizontalScrollbarSide::Top),
+        1 => Some(crate::r::ui2::Ui2WindowHorizontalScrollbarSide::Bottom),
+        _ => None,
+    }
 }
 
 pub fn materialize_pending_deferred_blueprint_app_windows() -> usize {
