@@ -1,4 +1,7 @@
-use core::ptr::NonNull;
+use core::{
+    ptr::NonNull,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use alloc::{collections::BTreeMap, sync::Arc};
 
@@ -18,24 +21,51 @@ use xhci::{
     },
 };
 
-use super::{DirectionExt, reg::SlotBell, ring::SendRing, transfer::TransferId};
+use super::{reg::SlotBell, ring::SendRing, transfer::TransferId, DirectionExt};
 use crate::{
-    BusAddr,
     backend::{
-        Dci,
         ty::{
             ep::{EndpointOp, TransferHandle},
             transfer::{Transfer, TransferKind},
         },
+        Dci,
     },
     debug_record_submit_stream,
     err::{ConvertXhciError, HostError},
     osal::Kernel,
+    BusAddr,
 };
 
 const STREAM_CONTEXT_ALIGNMENT: usize = 64;
 const STREAM_CONTEXT_SCT_PRIMARY_TR: u64 = 1 << 1;
 const STREAM_CONTEXT_DCS: u64 = 1;
+static XHCI_COMPLETION_LAST_LOG_TICK: AtomicU64 = AtomicU64::new(0);
+
+fn xhci_completion_log_allowed() -> bool {
+    let interval = embassy_time_driver::TICK_HZ.max(1);
+    let now = embassy_time_driver::now();
+    let now_marker = now.saturating_add(1);
+    let mut previous_marker = XHCI_COMPLETION_LAST_LOG_TICK.load(Ordering::Relaxed);
+
+    loop {
+        if previous_marker != 0 {
+            let previous = previous_marker.saturating_sub(1);
+            if now >= previous && now.saturating_sub(previous) < interval {
+                return false;
+            }
+        }
+
+        match XHCI_COMPLETION_LAST_LOG_TICK.compare_exchange_weak(
+            previous_marker,
+            now_marker,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => return true,
+            Err(actual) => previous_marker = actual,
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 #[repr(transparent)]
@@ -198,16 +228,18 @@ impl Endpoint {
                 .saturating_sub(c.trb_transfer_length() as usize);
         }
         t.transfer_len = transfer_len;
-        info!(
-            "crabusb/xhci/ep: completion dci={} dir={:?} requested={} residual={} actual={} code={:?} ptr=0x{:x}",
-            self.dci.as_u8(),
-            t.direction,
-            t.buffer_len(),
-            c.trb_transfer_length(),
-            t.transfer_len,
-            completion_code,
-            handle.raw()
-        );
+        if xhci_completion_log_allowed() {
+            info!(
+                "crabusb/xhci/ep: completion dci={} dir={:?} requested={} residual={} actual={} code={:?} ptr=0x{:x}",
+                self.dci.as_u8(),
+                t.direction,
+                t.buffer_len(),
+                c.trb_transfer_length(),
+                t.transfer_len,
+                completion_code,
+                handle.raw()
+            );
+        }
         Ok(t)
     }
 
@@ -306,7 +338,7 @@ impl Endpoint {
             .set_trb_transfer_length(buff_len as _)
             .set_interrupter_target(0)
             .set_interrupt_on_completion();
-    trb.set_start_isoch_asap();
+        trb.set_start_isoch_asap();
         // 创建Isoch TRB
         let trb = transfer::Allowed::Isoch(trb);
         self.enque_trb(trb)
@@ -342,17 +374,17 @@ impl Endpoint {
                     // 第一个TRB必须是Isoch TRB
                     id = self.enque_iso_trb(current_addr, current_size as _);
                 } else {
-                        // Each subsequent packet is its own isoch TD with SIA so the
-                        // controller schedules it at the next available service interval.
-                        let mut trb = Isoch::new();
-                        trb.set_data_buffer_pointer(current_addr as _)
-                            .set_trb_transfer_length(current_size as _)
-                            .set_interrupter_target(0)
-                            .set_start_isoch_asap();
+                    // Each subsequent packet is its own isoch TD with SIA so the
+                    // controller schedules it at the next available service interval.
+                    let mut trb = Isoch::new();
+                    trb.set_data_buffer_pointer(current_addr as _)
+                        .set_trb_transfer_length(current_size as _)
+                        .set_interrupter_target(0)
+                        .set_start_isoch_asap();
                     if is_last {
                         trb.set_interrupt_on_completion();
                     }
-                        let trb = transfer::Allowed::Isoch(trb);
+                    let trb = transfer::Allowed::Isoch(trb);
                     id = self.enque_trb(trb);
                 }
             }

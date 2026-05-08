@@ -1,6 +1,10 @@
 use alloc::{string::String, vec, vec::Vec};
-use core::{future::Future, task::Poll};
-use crab_usb::{EndpointBulkIn, EndpointBulkOut, err::TransferError, usb_if};
+use core::{
+    future::Future,
+    sync::atomic::{AtomicU64, Ordering},
+    task::Poll,
+};
+use crab_usb::{err::TransferError, usb_if, EndpointBulkIn, EndpointBulkOut};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use usb_if::host::ControlSetup;
 use usb_if::transfer::{Recipient, Request, RequestType};
@@ -22,6 +26,8 @@ const UAS_IU_WRITE_READY: u8 = 0x07;
 const UAS_STATUS_GOOD: u8 = 0x00;
 const UAS_XHCI_STREAM_COUNT: u16 = 32;
 pub(crate) const UAS_XHCI_MAX_STREAM_ID: u16 = UAS_XHCI_STREAM_COUNT - 1;
+static UAS_TRACE_DEBUG_LAST_LOG_TICK: AtomicU64 = AtomicU64::new(0);
+static UAS_TRACE_IU_LAST_LOG_TICK: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum MassTransportKind {
@@ -479,8 +485,43 @@ fn uas_trace_logs_enabled() -> bool {
     crate::logflag::USB_MASS_UAS_TRACE_LOGS
 }
 
+fn uas_trace_rate_limit_allows(last_marker: &AtomicU64) -> bool {
+    let interval = embassy_time_driver::TICK_HZ.max(1);
+    let now = embassy_time_driver::now();
+    let now_marker = now.saturating_add(1);
+    let mut previous_marker = last_marker.load(Ordering::Relaxed);
+
+    loop {
+        if previous_marker != 0 {
+            let previous = previous_marker.saturating_sub(1);
+            if now >= previous && now.saturating_sub(previous) < interval {
+                return false;
+            }
+        }
+
+        match last_marker.compare_exchange_weak(
+            previous_marker,
+            now_marker,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => return true,
+            Err(actual) => previous_marker = actual,
+        }
+    }
+}
+
+fn uas_trace_stage_always_log(stage: &'static str) -> bool {
+    stage.contains("timeout") || stage.contains("error") || stage.contains("short")
+}
+
 fn log_uas_debug(stage: &'static str, cmd: &'static str, tag: u16) {
     if !uas_trace_logs_enabled() {
+        return;
+    }
+    if !uas_trace_stage_always_log(stage)
+        && !uas_trace_rate_limit_allows(&UAS_TRACE_DEBUG_LAST_LOG_TICK)
+    {
         return;
     }
 
@@ -521,6 +562,9 @@ fn log_uas_debug(stage: &'static str, cmd: &'static str, tag: u16) {
 
 fn log_uas_iu(stage: &'static str, cmd: &'static str, tag: u16, iu: &[u8]) {
     if !uas_trace_logs_enabled() {
+        return;
+    }
+    if !uas_trace_rate_limit_allows(&UAS_TRACE_IU_LAST_LOG_TICK) {
         return;
     }
 

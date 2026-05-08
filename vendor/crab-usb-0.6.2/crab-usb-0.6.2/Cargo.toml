@@ -67,6 +67,10 @@ default-features = false
 [dependencies.dma-api]
 version = "0.7"
 
+[dependencies.embassy-time-driver]
+version = "0.2.2"
+default-features = false
+
 [dependencies.enum_dispatch]
 version = "0.3"
 

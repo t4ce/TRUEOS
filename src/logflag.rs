@@ -2,7 +2,7 @@ use core::sync::atomic::{AtomicBool, AtomicU32};
 use log::{Level, LevelFilter};
 use spin::Once;
 
-pub(crate) const GLOBAL_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
+pub(crate) const GLOBAL_LOG_LEVEL: LevelFilter = LevelFilter::Info;
 
 #[allow(non_upper_case_globals)]
 pub(crate) const dont_persist_globalog: bool = true;
@@ -58,12 +58,12 @@ pub(crate) static GFX_CABI_VIRGL_END_FRAME_DIAG_LOGS: AtomicU32 = AtomicU32::new
 pub(crate) static GFX_CABI_VIRGL_FIRST_FRAME_SEEN: AtomicBool = AtomicBool::new(true);
 
 pub(crate) static USB_LOG_ALL: AtomicBool = AtomicBool::new(true);
-pub(crate) const USB_VENDOR_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
+pub(crate) const USB_VENDOR_LOG_LEVEL: LevelFilter = LevelFilter::Info;
 pub(crate) const BLUEPRINT_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
 pub(crate) const USB_AUDIO_DEBUG_LOGS: bool = true;
 pub(crate) const HID_DEBUG_REPORT_LOGS: bool = true;
 pub(crate) const USB_MASS_UAS_ADVANCED_PROBE_LOGS: bool = true;
-pub(crate) const USB_MASS_UAS_TRACE_LOGS: bool = false;
+pub(crate) const USB_MASS_UAS_TRACE_LOGS: bool = true;
 
 pub(crate) const NVME_VERBOSE: bool = false;
 
