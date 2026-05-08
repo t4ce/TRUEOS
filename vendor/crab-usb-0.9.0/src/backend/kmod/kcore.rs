@@ -69,9 +69,17 @@ impl Core {
         let hub_ids: Vec<Id<Hub>> = self.hubs.iter().map(|(id, _)| id).collect();
 
         for id in hub_ids {
+            crate::debug_set_usb_probe_progress(1, 0, 0, 0, id.index() as u32);
             let addr_infos = self.hub_changed_ports(id).await?;
             let parent_hub_id = self.hubs.get(id).unwrap().backend.slot_id();
             for addr_info in addr_infos {
+                crate::debug_set_usb_probe_progress(
+                    2,
+                    addr_info.root_port_id,
+                    addr_info.port_id,
+                    parent_hub_id,
+                    addr_info.port_speed as u32,
+                );
                 let info = DeviceAddressInfo {
                     root_port_id: addr_info.root_port_id,
                     port_speed: addr_info.port_speed,

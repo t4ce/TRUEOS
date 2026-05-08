@@ -88,7 +88,7 @@ impl Device {
     }
 
     fn new_ep(&mut self, dci: Dci) -> Result<XhciEndpoint> {
-        let ep = XhciEndpoint::new(dci, &self.kernel, self.bell.clone())?;
+        let ep = XhciEndpoint::new(self.id.as_u8(), dci, &self.kernel, self.bell.clone())?;
         self.transfer_result_handler
             .register_queue(self.id.as_u8(), dci.as_u8(), ep.ring());
 
@@ -104,26 +104,72 @@ impl Device {
     }
 
     pub(crate) async fn init(&mut self, host: &mut Xhci, info: &DeviceAddressInfo) -> Result {
+        crate::debug_set_usb_probe_progress(
+            3,
+            info.root_port_id,
+            info.port_id,
+            self.id.as_u8(),
+            info.port_speed as u32,
+        );
         // Keep the raw PORTSC.PortSpeed encoding for interval calculations
         self.port_speed = info.port_speed;
         // let speed = info.port_speed.to_xhci_portsc_value();
 
         let ep = self.new_ep(Dci::CTRL)?;
         self.ctrl_ep = Some(Endpoint::new(EndpointInfo::control(), ep));
+        crate::debug_set_usb_probe_progress(
+            4,
+            info.root_port_id,
+            info.port_id,
+            self.id.as_u8(),
+            Dci::CTRL.as_u8() as u32,
+        );
+        crate::debug_record_stream_config(
+            self.id.as_u8(),
+            Dci::CTRL.as_u8(),
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            self.control_endpoint()
+                .info()
+                .max_packet_size
+                .map(u64::from)
+                .unwrap_or_default(),
+        );
         self.address(host, info).await?;
         // self.dump_device_out();
+        crate::debug_set_usb_probe_progress(6, info.root_port_id, info.port_id, self.id.as_u8(), 8);
         let base = self.get_device_descriptor_base().await?;
         debug!("Device Descriptor Base: {:#x?}", base);
 
+        crate::debug_set_usb_probe_progress(
+            7,
+            info.root_port_id,
+            info.port_id,
+            self.id.as_u8(),
+            base.max_packet_size_0 as u32,
+        );
         self.setup_max_packet(base).await?;
 
         // 读取当前配置（应该返回 0，表示未配置）
+        crate::debug_set_usb_probe_progress(8, info.root_port_id, info.port_id, self.id.as_u8(), 0);
         let current_config = self.get_configuration().await?;
         debug!("Current configuration value: {}", current_config);
 
+        crate::debug_set_usb_probe_progress(9, info.root_port_id, info.port_id, self.id.as_u8(), 0);
         self.read_descriptor().await?;
 
         // 读取所有配置描述符
+        crate::debug_set_usb_probe_progress(
+            10,
+            info.root_port_id,
+            info.port_id,
+            self.id.as_u8(),
+            self.desc.num_configurations as u32,
+        );
         for i in 0..self.desc.num_configurations {
             let config_desc = self
                 .control_endpoint_mut()
@@ -137,9 +183,23 @@ impl Device {
         if !self.config_desc.is_empty() {
             let config_value = self.config_desc[0].configuration_value;
             debug!("Setting device configuration to {}", config_value);
+            crate::debug_set_usb_probe_progress(
+                11,
+                info.root_port_id,
+                info.port_id,
+                self.id.as_u8(),
+                config_value as u32,
+            );
             self._set_configuration(config_value).await?;
         }
 
+        crate::debug_set_usb_probe_progress(
+            12,
+            info.root_port_id,
+            info.port_id,
+            self.id.as_u8(),
+            self.desc.num_configurations as u32,
+        );
         debug!("device descriptor ok");
         Ok(())
     }
@@ -460,6 +520,17 @@ impl Device {
                 desc.interval,
             );
             let ring_addr = ep_raw.bus_addr();
+            crate::debug_record_stream_config(
+                self.id.as_u8(),
+                dci,
+                desc.address,
+                0,
+                0,
+                periodic_burst_size,
+                desc.max_packet_size,
+                0,
+                ring_addr.raw(),
+            );
             self.eps
                 .insert(desc.address, Endpoint::new((&desc).into(), ep_raw));
             self.ep_interfaces.insert(desc.address, interface);

@@ -9,6 +9,8 @@ const _: f16 = 0.0_f16;
 #[macro_use]
 pub extern crate alloc;
 
+#[allow(non_snake_case)]
+mod Tyche;
 mod allcaps;
 mod allocators;
 pub mod allports;
@@ -64,7 +66,6 @@ mod rapl;
 #[cfg(not(target_arch = "x86_64"))]
 #[path = "rapl_disabled.rs"]
 mod rapl;
-mod rng;
 mod runtime;
 mod shell2;
 mod smp;
@@ -269,7 +270,7 @@ pub extern "C" fn kmain() -> ! {
 
     pci::vrng::init_once();
     //pci::vrng::smoke_test_once();
-    crate::rng::init();
+    crate::Tyche::init();
 
     disc::probe_once();
     efi::acpi::ensure_tables();

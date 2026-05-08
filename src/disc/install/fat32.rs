@@ -436,7 +436,7 @@ pub async fn format_and_populate_esp_fat32_with_log(
     boot[64] = 0x80;
     boot[66] = 0x29;
     let mut vol_id = [0u8; 4];
-    if !crate::rng::fill_bytes(&mut vol_id) {
+    if !crate::Tyche::fill_bytes(&mut vol_id) {
         vol_id = 0x12345678u32.to_le_bytes();
     }
     boot[67..71].copy_from_slice(&vol_id);
