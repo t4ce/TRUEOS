@@ -98,9 +98,6 @@ trueos-limloader = { path = "crates/trueos-limloader" }
 [patch.crates-io]
 libc = { path = "vendor/libc-0.2.185" }
 atomic-waker = { path = "vendor/atomic-waker-1.1.2" }
-bytes = { path = "vendor/bytes-1.11.1" }
-futures-channel = { path = "vendor/futures-channel-0.3.32" }
-futures-core = { path = "vendor/futures-core-0.3.32" }
 png = { path = "vendor/png-0.18.1" }
 fdeflate = { path = "vendor/fdeflate-0.3.7" }
 simd-adler32 = { path = "vendor/simd-adler32-0.3.8" }
@@ -118,7 +115,6 @@ crc32fast = { path = "vendor/crc32fast-1.5.0" }
 embedded-websocket = { path = "vendor/embedded-websocket-0.9.4" }
 hickory-proto = { path = "vendor/hickory-proto-0.25.2" }
 crab-usb = { path = "vendor/crab-usb-0.6.2/crab-usb-0.6.2" }
-pin-project-lite = { path = "vendor/pin-project-lite-0.2.17" }
 smallvec = { path = "vendor/smallvec-1.15.1" }
 parking_lot = { path = "vendor/parking_lot-0.12.5" }
 parking_lot_core = { path = "vendor/parking_lot_core-0.9.12" }

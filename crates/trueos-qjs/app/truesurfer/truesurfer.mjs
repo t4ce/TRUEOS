@@ -75,6 +75,13 @@ function log(line) {
   }
 }
 
+function globalLogLine(line) {
+  if (typeof root.__trueosGlobalLogLine !== 'function') return;
+  try {
+    root.__trueosGlobalLogLine(String(line || ''));
+  } catch (_) {}
+}
+
 function safeString(value) {
   if (typeof value === 'string') {
     return value;
@@ -148,9 +155,11 @@ function ensureBrowserAssetManager() {
   };
   browserAssetManager = createBrowserAssetManagerFn({
     host: root,
+    browserId,
     paint: publish,
     resolveNavigationUrl: (href) => resolveNavigationUrl(currentNavigationUrl, href),
     onAssetStateChanged: publish,
+    traceVideoSourceLine: globalLogLine,
   });
   return browserAssetManager;
 }
@@ -337,6 +346,9 @@ function setHtml(nextHtml, meta) {
   try {
     const parsed = extractDocumentArtifactsFn(html);
     currentBaseGadgetSnapshot = cloneGadgetSnapshot(parsed.gadgetSnapshot);
+    if (assetManager && typeof assetManager.traceHtmlVideoSources === 'function') {
+      assetManager.traceHtmlVideoSources(html, { pageUrl: url });
+    }
     currentSceneImageUrls = assetManager
       ? assetManager.primeHtmlImageUrls(html, { maxCount: TRUESURFER_MAX_SCENE_IMAGES })
       : [];

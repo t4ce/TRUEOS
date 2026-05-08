@@ -3,17 +3,19 @@ extern crate alloc;
 use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use alloc::string::String;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::String as HString;
 use spin::Mutex;
 
-const HTML_FETCH_IDLE_MS: u64 = 100;
+const HTML_FETCH_IDLE_MS: u64 = 250;
 const HTML_PREVIEW_FRONT_LINES: usize = 5;
 const HTML_PREVIEW_LINE_CHARS: usize = 160;
 const HTML_SHACK_BROWSER_HANDOFF_ENABLE: bool = true;
 const HTML_SHACK_PREVIEW_ENABLE: bool = false;
 static HTML_FETCH_IDLE_LOGS: AtomicU32 = AtomicU32::new(0);
+static HTML_FETCH_WAITING_FOR_TOKIO_LOGGED: AtomicBool = AtomicBool::new(false);
+static HTML_FETCH_TOKIO_READY_LOGGED: AtomicBool = AtomicBool::new(false);
 
 /// A fetched HTML document.
 ///
@@ -272,20 +274,30 @@ pub async fn html_fetch_service() {
     );
     loop {
         if !crate::t::shared_tokio_runtime_ready() {
-            if crate::logflag::HTML_SHACK_VERBOSE {
+            if crate::logflag::HTML_SHACK_VERBOSE
+                && !HTML_FETCH_WAITING_FOR_TOKIO_LOGGED.swap(true, Ordering::AcqRel)
+            {
+                crate::log!("html_shack: waiting for shared tokio runtime\n");
+            }
+            if crate::logflag::HTML_SHACK_IDLE_LOGS {
                 let n = HTML_FETCH_IDLE_LOGS.fetch_add(1, Ordering::Relaxed);
-                if n < 8 || n.is_multiple_of(64) {
+                if n.is_multiple_of(256) {
                     crate::log!("html_shack: waiting for shared tokio runtime polls={}\n", n + 1);
                 }
             }
             Timer::after(EmbassyDuration::from_millis(HTML_FETCH_IDLE_MS)).await;
             continue;
         }
+        if crate::logflag::HTML_SHACK_VERBOSE
+            && !HTML_FETCH_TOKIO_READY_LOGGED.swap(true, Ordering::AcqRel)
+        {
+            crate::log!("html_shack: shared tokio runtime ready\n");
+        }
 
         let Some((mut request, dropped_requests)) = pop_latest_request() else {
-            if crate::logflag::HTML_SHACK_VERBOSE {
+            if crate::logflag::HTML_SHACK_IDLE_LOGS {
                 let n = HTML_FETCH_IDLE_LOGS.fetch_add(1, Ordering::Relaxed);
-                if n < 8 || n.is_multiple_of(64) {
+                if n.is_multiple_of(256) {
                     crate::log!("html_shack: fetch service idle polls={}\n", n + 1);
                 }
             }

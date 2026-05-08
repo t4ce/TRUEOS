@@ -3,6 +3,17 @@ import { Buffer } from 'node:buffer';
 
 const MAX_FETCHED_IMAGE_BINARIES = 64;
 const DEFAULT_MAX_SCENE_IMAGES = 5;
+const TRUESURFER_TRACE_VIDEO_SOURCES = true;
+const MAX_VIDEO_SOURCE_TRACE = 64;
+const VIDEO_URL_HINT_RE = /\.(?:mp4|m4v|webm|ogv|ogg|mov|m3u8|mpd|ts)(?:[?#]|$)/i;
+const VIDEO_ATTR_NAMES = [
+  'src',
+  'data-src',
+  'data-video-src',
+  'data-hd-src',
+  'data-file',
+  'data-url',
+];
 
 function getNodeAttr(node, name) {
   const wanted = String(name || '').toLowerCase();
@@ -17,6 +28,109 @@ function getNodeAttr(node, name) {
 
 function isImageNode(node) {
   return !!node && typeof node === 'object' && String(node.tagName || '').toLowerCase() === 'img';
+}
+
+function isVideoMime(value) {
+  const text = String(value || '').trim().toLowerCase();
+  return text.startsWith('video/') || text.includes('mpegurl') || text.includes('dash+xml');
+}
+
+function trimForLog(value, maxLen = 360) {
+  const text = String(value || '').replace(/[\r\n\t]+/g, ' ').trim();
+  if (text.length <= maxLen) return text;
+  return `${text.slice(0, maxLen - 3)}...`;
+}
+
+function firstSrcsetCandidate(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const first = text.split(',')[0] || '';
+  return String(first).trim().split(/\s+/)[0] || '';
+}
+
+function isLikelyVideoSource(tagName, attrName, rawUrl, typeValue, insideVideo) {
+  if (!rawUrl) return false;
+  if (insideVideo) return true;
+  if (tagName === 'video' || tagName === 'track') return true;
+  if (tagName === 'source' && isVideoMime(typeValue)) return true;
+  if (isVideoMime(typeValue)) return true;
+  if (VIDEO_URL_HINT_RE.test(rawUrl)) return true;
+  return attrName.includes('video');
+}
+
+function collectVideoSourceTargets(node, options = {}, out = null, insideVideo = false) {
+  const targets = Array.isArray(out) ? out : [];
+  if (!node || typeof node !== 'object') return targets;
+
+  const tagName = String(node.tagName || '').toLowerCase();
+  const nextInsideVideo = insideVideo || tagName === 'video';
+  const typeValue = getNodeAttr(node, 'type');
+
+  for (let i = 0; i < VIDEO_ATTR_NAMES.length; i += 1) {
+    const attrName = VIDEO_ATTR_NAMES[i];
+    const rawUrl = String(getNodeAttr(node, attrName) || '').trim();
+    if (!isLikelyVideoSource(tagName, attrName, rawUrl, typeValue, nextInsideVideo)) continue;
+    targets.push({
+      tag: tagName || 'node',
+      attr: attrName,
+      type: typeValue,
+      url: options.resolveUrl ? options.resolveUrl(rawUrl) : rawUrl,
+    });
+  }
+
+  const srcsetUrl = firstSrcsetCandidate(getNodeAttr(node, 'srcset'));
+  if (isLikelyVideoSource(tagName, 'srcset', srcsetUrl, typeValue, nextInsideVideo)) {
+    targets.push({
+      tag: tagName || 'node',
+      attr: 'srcset',
+      type: typeValue,
+      url: options.resolveUrl ? options.resolveUrl(srcsetUrl) : srcsetUrl,
+    });
+  }
+
+  const poster = String(getNodeAttr(node, 'poster') || '').trim();
+  if (tagName === 'video' && poster) {
+    targets.push({
+      tag: 'video',
+      attr: 'poster',
+      type: 'poster',
+      url: options.resolveUrl ? options.resolveUrl(poster) : poster,
+    });
+  }
+
+  const kids = Array.isArray(node.childNodes) ? node.childNodes : [];
+  for (let i = 0; i < kids.length; i += 1) {
+    collectVideoSourceTargets(kids[i], options, targets, nextInsideVideo);
+  }
+  return targets;
+}
+
+function traceVideoSourcesFromParsed(parsed, options = {}) {
+  if (!TRUESURFER_TRACE_VIDEO_SOURCES) return [];
+  const logLine = typeof options.logLine === 'function' ? options.logLine : null;
+  if (!logLine || !parsed) return [];
+
+  const seen = new Set();
+  const pageUrl = trimForLog(options.pageUrl || '', 240);
+  const browserId = Math.max(0, Number(options.browserId || 0) | 0);
+  const targets = collectVideoSourceTargets(parsed, {
+    resolveUrl: typeof options.resolveUrl === 'function' ? options.resolveUrl : (url) => String(url || ''),
+  }, []);
+
+  let emitted = 0;
+  for (let i = 0; i < targets.length && emitted < MAX_VIDEO_SOURCE_TRACE; i += 1) {
+    const target = targets[i] || {};
+    const url = String(target.url || '').trim();
+    if (!url) continue;
+    const key = `${target.tag}|${target.attr}|${url}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    logLine(
+      `video-src: browser=${browserId} tag=${trimForLog(target.tag, 32)} attr=${trimForLog(target.attr, 32)} type=${trimForLog(target.type || '', 80)} page=${pageUrl} url=${trimForLog(url)}`,
+    );
+    emitted += 1;
+  }
+  return Array.from(seen);
 }
 
 export function createBrowserAssetManager(options = {}) {
@@ -39,6 +153,10 @@ export function createBrowserAssetManager(options = {}) {
   const onAssetStateChanged = typeof options.onAssetStateChanged === 'function'
     ? options.onAssetStateChanged
     : () => {};
+  const traceVideoSourceLine = typeof options.traceVideoSourceLine === 'function'
+    ? options.traceVideoSourceLine
+    : null;
+  const browserId = Math.max(0, Number(options.browserId || 0) | 0);
 
   const imageTextureCache = new Map();
   const imageTextureLoads = new Map();
@@ -534,6 +652,23 @@ export function createBrowserAssetManager(options = {}) {
     return urls;
   }
 
+  function traceHtmlVideoSources(html, options = {}) {
+    const source = String(html || '');
+    if (!source || !TRUESURFER_TRACE_VIDEO_SOURCES || !traceVideoSourceLine) return [];
+    let parsed;
+    try {
+      parsed = parse5.parse(source);
+    } catch (_) {
+      return [];
+    }
+    return traceVideoSourcesFromParsed(parsed, {
+      browserId,
+      pageUrl: String(options.pageUrl || ''),
+      logLine: traceVideoSourceLine,
+      resolveUrl: resolveNavigationUrl,
+    });
+  }
+
   function summarizeImageUrls(urls) {
     const unique = new Set();
     const source = Array.isArray(urls) ? urls : [];
@@ -575,6 +710,7 @@ export function createBrowserAssetManager(options = {}) {
     getCachedImageTexture,
     requestAssetsForRows,
     primeHtmlImageUrls,
+    traceHtmlVideoSources,
     summarizeImageUrls,
   };
 }
