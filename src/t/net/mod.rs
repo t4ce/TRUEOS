@@ -47,3 +47,19 @@ pub fn fetch_html_best_effort(
         }
     }
 }
+
+pub async fn fetch_html_best_effort_shared(
+    job: &'static str,
+    url: HString<256>,
+) -> Result<String, &'static str> {
+    crate::log!("t/net: {} shared-tokio html begin url={}\n", job, url.as_str());
+    match crate::t::run_on_shared_tokio(move || crate::r::net::html::fetch_html_best_effort(url))
+        .await
+    {
+        Ok(result) => result,
+        Err(_) => {
+            crate::log!("t/net: {} shared tokio runtime unavailable\n", job);
+            Err("shared tokio runtime unavailable")
+        }
+    }
+}

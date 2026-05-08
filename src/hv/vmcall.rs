@@ -43,6 +43,7 @@ pub const OP_BP_FS_WRITE_ABORT: u32 = 0x31; // arg0 handle -> rc
 pub const OP_BP_FS_CREATE_DIR_ALL: u32 = 0x32; // payload path -> rc
 pub const OP_BP_FS_EXISTS: u32 = 0x33; // payload path -> 0/1/rc
 pub const OP_BP_FS_REMOVE: u32 = 0x34; // payload path -> rc
+pub const OP_BP_FS_STAT: u32 = 0x60; // payload path -> rc + kind in response_data[63:32]
 pub const OP_BP_SOCKET_TCP_OPEN: u32 = 0x35; // arg0 domain/type, arg1 protocol -> socket/rc
 pub const OP_BP_SOCKET_TCP_CLOSE: u32 = 0x36; // arg0 socket -> rc
 pub const OP_BP_SOCKET_TCP_SET_NONBLOCKING: u32 = 0x37; // arg0 socket, arg1 bool -> rc
@@ -581,6 +582,30 @@ pub fn dispatch(vm_id: u8) -> DispatchOutcome {
             };
             let rc = crate::r::io::cabi::fs_exists_host(path);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_FS_STAT => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let path_bytes = unsafe { &(&(*p).payload)[..n] };
+            let Ok(path) = core::str::from_utf8(path_bytes) else {
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_OK,
+                    (crate::r::io::cabi::FS_ERR_BAD_UTF8 as i64) as u64,
+                    0,
+                );
+                return DispatchOutcome::Resume;
+            };
+            let mut kind = 0u32;
+            let mut len = 0u64;
+            let rc = crate::r::io::cabi::fs_stat_host(path, &mut kind, &mut len);
+            let data = (rc as u32 as u64) | ((kind as u64) << 32);
+            write_response(vm_id, seq, STATUS_OK, data, 0);
             DispatchOutcome::Resume
         }
         OP_BP_FS_REMOVE => {

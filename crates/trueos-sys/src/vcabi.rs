@@ -26,6 +26,12 @@ unsafe extern "C" {
     pub fn trueos_cabi_fs_write_finish(handle: u32) -> i32;
     pub fn trueos_cabi_fs_write_abort(handle: u32) -> i32;
     pub fn trueos_cabi_fs_exists(path_ptr: *const u8, path_len: usize) -> i32;
+    pub fn trueos_cabi_fs_stat(
+        path_ptr: *const u8,
+        path_len: usize,
+        out_kind: *mut u32,
+        out_len: *mut u64,
+    ) -> i32;
     pub fn trueos_cabi_trueosfs_primary_html_tree(
         max_entries: u32,
         out_ptr: *mut u8,
@@ -210,10 +216,8 @@ unsafe extern "C" {
         ep_target: u32,
     ) -> i32;
     pub fn trueos_cabi_hid_hut_read_mice(out: *mut TrueosHidHutMouseState, out_cap: u32) -> u32;
-    pub fn trueos_cabi_hid_hut_read_tablets(
-        out: *mut TrueosHidHutTabletState,
-        out_cap: u32,
-    ) -> u32;
+    pub fn trueos_cabi_hid_hut_read_tablets(out: *mut TrueosHidHutTabletState, out_cap: u32)
+    -> u32;
     pub fn trueos_cabi_hid_hut_read_keyboards(
         out: *mut TrueosHidHutKeyboardState,
         out_cap: u32,

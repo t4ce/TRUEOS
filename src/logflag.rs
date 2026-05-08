@@ -26,7 +26,8 @@ pub(crate) const PORTAL_LOGS: bool = true;
 pub(crate) const HV_GUEST_ALLOC_TRACE_LOGS: bool = true;
 
 pub(crate) const UI2_ENABLE_VERBOSE_COMPOSE_LOGS: bool = false;
-pub(crate) const VHTTPS_VERBOSE: bool = false;
+pub(crate) const VHTTPS_VERBOSE: bool = true;
+pub(crate) const HTML_SHACK_VERBOSE: bool = true;
 pub(crate) const GFX_FRAME_PROGRESS_LOGS: bool = false;
 pub(crate) const INTEL_STAGE1_LOGS: bool = true;
 

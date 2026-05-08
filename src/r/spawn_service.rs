@@ -576,17 +576,7 @@ fn gfx_switched() -> bool {
 }
 
 fn html_fetch_service(spawner: Spawner) -> SpawnAttempt {
-    let mut result = SpawnAttempt::Skipped;
-    for _ in 0..3 {
-        let attempt = spawn_on_worker(spawner, |worker_spawner| {
-            let _ = worker_spawner;
-            crate::tst_html_shack::html_fetch_service()
-        });
-        if matches!(attempt, SpawnAttempt::Spawned) {
-            result = SpawnAttempt::Spawned;
-        }
-    }
-    result
+    spawn_local(spawner, |_spawner| crate::tst_html_shack::html_fetch_service())
 }
 
 fn spawn_truesurfer_batch(spawner: Spawner, requested: u32) -> SpawnAttempt {
@@ -1402,9 +1392,9 @@ static TASKS: [TaskSpec; 71] = [
     ),
     TaskSpec::enabled("raple-service", 0, &RAPLE_SERVICE_STARTED, spawn_raple_service),
     TaskSpec::enabled_on(
-        SpawnPlacement::Worker,
+        SpawnPlacement::Local,
         "html_fetch_service",
-        0,
+        crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
         &HTML_SHACK_SERVICE_STARTED,
         html_fetch_service,
     ),

@@ -23,6 +23,18 @@ pub mod kfs {
     pub type Result<T> = core::result::Result<T, FsError>;
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum FsNodeKind {
+        File,
+        Directory,
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub struct FsStat {
+        pub kind: FsNodeKind,
+        pub len: u64,
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub enum FsError {
         /// No TRUEOSFS root is currently mounted/selected.
         NoRoot,
@@ -94,6 +106,38 @@ pub mod kfs {
                 Some(info) => Ok(info.data_len as usize),
                 None => Err(FsError::NotFound),
             }
+        })
+    }
+
+    #[inline]
+    pub fn stat(path: &str) -> Result<FsStat> {
+        let disk = root_disk()?;
+        let name = normalize_rel(path, true)?;
+        crate::wait::spawn_and_wait_local(async move {
+            if name.is_empty() {
+                return Ok(FsStat {
+                    kind: FsNodeKind::Directory,
+                    len: 0,
+                });
+            }
+
+            if let Some(info) = crate::r::fs::trueosfs::file_info_async(disk, name.as_str()).await?
+            {
+                return Ok(FsStat {
+                    kind: FsNodeKind::File,
+                    len: info.data_len,
+                });
+            }
+
+            let marker = alloc::format!("{}/.keep", name);
+            if crate::r::fs::trueosfs::file_exists_async(disk, marker.as_str()).await? {
+                return Ok(FsStat {
+                    kind: FsNodeKind::Directory,
+                    len: 0,
+                });
+            }
+
+            Err(FsError::NotFound)
         })
     }
 
@@ -1142,6 +1186,29 @@ pub mod cabi {
         }
     }
 
+    pub(crate) fn fs_stat_host(path: &str, out_kind: &mut u32, out_len: &mut u64) -> i32 {
+        if path.len() > QJS_ASYNC_FS_MAX_PATH {
+            return FS_ERR_TOO_LARGE;
+        }
+        let Some(path) = super::env::resolve_fs_path(path, true) else {
+            return FS_ERR_BAD_PATH;
+        };
+        if path.len() > QJS_ASYNC_FS_MAX_PATH {
+            return FS_ERR_TOO_LARGE;
+        }
+        match super::kfs::stat(path.as_str()) {
+            Ok(stat) => {
+                *out_kind = match stat.kind {
+                    super::kfs::FsNodeKind::File => 1,
+                    super::kfs::FsNodeKind::Directory => 2,
+                };
+                *out_len = stat.len;
+                0
+            }
+            Err(e) => fs_error_to_code(e),
+        }
+    }
+
     pub(crate) fn fs_remove_host(path: &str) -> i32 {
         if path.len() > QJS_ASYNC_FS_MAX_PATH {
             return FS_ERR_TOO_LARGE;
@@ -1282,6 +1349,43 @@ pub mod cabi {
             return FS_ERR_BAD_PARAM;
         }
         vmcall_signed_i32(rc)
+    }
+
+    fn guest_fs_stat(path_bytes: &[u8], out_kind: *mut u32, out_len: *mut u64) -> i32 {
+        if out_kind.is_null() || out_len.is_null() {
+            return FS_ERR_BAD_PARAM;
+        }
+        if path_bytes.len() > trueos_vm::vmcall::PAYLOAD_CAP {
+            return FS_ERR_TOO_LARGE;
+        }
+        let mut out = [0u8; 1];
+        let (status, data) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_FS_STAT,
+            0,
+            0,
+            path_bytes,
+            &mut out,
+        );
+        if status != trueos_vm::vmcall::STATUS_OK {
+            return FS_ERR_BAD_PARAM;
+        }
+        let rc = vmcall_signed_i32(data);
+        if rc != 0 {
+            return rc;
+        }
+        unsafe {
+            *out_kind = (data >> 32) as u32;
+            *out_len = if *out_kind == 1 {
+                let len = guest_fs_read_file(path_bytes, core::ptr::null_mut(), 0);
+                if len < 0 {
+                    return len as i32;
+                }
+                len as u64
+            } else {
+                0
+            };
+        }
+        0
     }
 
     #[unsafe(no_mangle)]
@@ -1435,6 +1539,32 @@ pub mod cabi {
             return guest_fs_simple_path_op(trueos_vm::vmcall::OP_BP_FS_EXISTS, path_bytes);
         }
         fs_exists_host(path)
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_fs_stat(
+        path_ptr: *const u8,
+        path_len: usize,
+        out_kind: *mut u32,
+        out_len: *mut u64,
+    ) -> i32 {
+        if out_kind.is_null() || out_len.is_null() {
+            return FS_ERR_BAD_PARAM;
+        }
+        if path_ptr.is_null() && path_len != 0 {
+            return FS_ERR_BAD_PARAM;
+        }
+        if path_len > QJS_ASYNC_FS_MAX_PATH {
+            return FS_ERR_TOO_LARGE;
+        }
+        let path_bytes = core::slice::from_raw_parts(path_ptr, path_len);
+        let Ok(path) = core::str::from_utf8(path_bytes) else {
+            return FS_ERR_BAD_UTF8;
+        };
+        if crate::hv::current_hull_guest_context_vm_id().is_some() {
+            return guest_fs_stat(path_bytes, out_kind, out_len);
+        }
+        fs_stat_host(path, &mut *out_kind, &mut *out_len)
     }
 
     #[unsafe(no_mangle)]

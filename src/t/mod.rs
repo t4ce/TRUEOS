@@ -5,11 +5,109 @@
 
 pub mod net;
 
+extern crate alloc;
+
+use alloc::boxed::Box;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::future::Future;
+use core::pin::Pin;
+use core::sync::atomic::{AtomicBool, Ordering};
+use spin::Mutex;
+
+use crate::wait::WaitQueue;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RunError {
     Build,
+    NoSharedRuntime,
+}
+
+type SharedTokioJob =
+    Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = ()> + 'static>> + Send + 'static>;
+
+static SHARED_TOKIO_JOBS: Mutex<Vec<SharedTokioJob>> = Mutex::new(Vec::new());
+static SHARED_TOKIO_WAIT: WaitQueue = WaitQueue::new();
+static SHARED_TOKIO_READY: AtomicBool = AtomicBool::new(false);
+static SHARED_TOKIO_PUMP_LOGGED: AtomicBool = AtomicBool::new(false);
+static SHARED_TOKIO_UNREADY_LOGGED: AtomicBool = AtomicBool::new(false);
+
+struct SharedTokioResult<T> {
+    value: Mutex<Option<T>>,
+    wait: WaitQueue,
+}
+
+pub fn shared_tokio_runtime_ready() -> bool {
+    SHARED_TOKIO_READY.load(Ordering::Acquire)
+}
+
+pub fn spawn_on_shared_tokio<F, MakeFuture>(make_future: MakeFuture) -> Result<(), RunError>
+where
+    F: Future<Output = ()> + 'static,
+    MakeFuture: FnOnce() -> F + Send + 'static,
+{
+    if !shared_tokio_runtime_ready() {
+        if !SHARED_TOKIO_UNREADY_LOGGED.swap(true, Ordering::AcqRel) {
+            crate::log!("t/tokio: shared runtime unavailable; job rejected\n");
+        }
+        return Err(RunError::NoSharedRuntime);
+    }
+
+    SHARED_TOKIO_JOBS
+        .lock()
+        .push(Box::new(move || Box::pin(make_future())));
+    SHARED_TOKIO_WAIT.notify_one();
+    Ok(())
+}
+
+pub async fn run_on_shared_tokio<F, T, MakeFuture>(make_future: MakeFuture) -> Result<T, RunError>
+where
+    F: Future<Output = T> + 'static,
+    T: Send + 'static,
+    MakeFuture: FnOnce() -> F + Send + 'static,
+{
+    let state = Arc::new(SharedTokioResult {
+        value: Mutex::new(None),
+        wait: WaitQueue::new(),
+    });
+    let notify_state = state.clone();
+
+    spawn_on_shared_tokio(move || async move {
+        let result = make_future().await;
+        *notify_state.value.lock() = Some(result);
+        notify_state.wait.notify_all();
+    })?;
+
+    loop {
+        if let Some(result) = state.value.lock().take() {
+            return Ok(result);
+        }
+        state.wait.wait_for_event().await;
+    }
+}
+
+pub async fn shared_tokio_job_pump() {
+    SHARED_TOKIO_READY.store(true, Ordering::Release);
+    if !SHARED_TOKIO_PUMP_LOGGED.swap(true, Ordering::AcqRel) {
+        crate::log!("t/tokio: shared job pump online\n");
+    }
+
+    loop {
+        let job = {
+            let mut jobs = SHARED_TOKIO_JOBS.lock();
+            if jobs.is_empty() {
+                None
+            } else {
+                Some(jobs.remove(0))
+            }
+        };
+
+        if let Some(make_job) = job {
+            tokio::task::spawn_local(make_job());
+        } else {
+            SHARED_TOKIO_WAIT.wait_for_event_timeout(25).await;
+        }
+    }
 }
 
 pub fn block_on_io<F>(future: F) -> Result<F::Output, RunError>
