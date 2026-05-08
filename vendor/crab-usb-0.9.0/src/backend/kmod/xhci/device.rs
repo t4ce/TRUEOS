@@ -116,6 +116,7 @@ impl Device {
         // let speed = info.port_speed.to_xhci_portsc_value();
 
         let ep = self.new_ep(Dci::CTRL)?;
+        let ctrl_ring_addr = ep.bus_addr();
         self.ctrl_ep = Some(Endpoint::new(EndpointInfo::control(), ep));
         crate::debug_set_usb_probe_progress(
             4,
@@ -133,11 +134,7 @@ impl Device {
             0,
             0,
             0,
-            self.control_endpoint()
-                .info()
-                .max_packet_size
-                .map(u64::from)
-                .unwrap_or_default(),
+            ctrl_ring_addr.raw(),
         );
         self.address(host, info).await?;
         // self.dump_device_out();
@@ -526,7 +523,7 @@ impl Device {
                 desc.address,
                 0,
                 0,
-                periodic_burst_size,
+                periodic_burst_size.min(u8::MAX as usize) as u8,
                 desc.max_packet_size,
                 0,
                 ring_addr.raw(),
