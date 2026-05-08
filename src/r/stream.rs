@@ -3,12 +3,13 @@
 extern crate alloc;
 
 use alloc::rc::Rc;
+use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 use core::cell::RefCell;
 use core::fmt;
 
-use embedded_io_async::{ErrorKind, ErrorType, Read, Seek, Write};
+use embedded_io_async::{ErrorKind, ErrorType, Read, Seek, SeekFrom, Write};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct HvObjectDesc<'a> {
@@ -211,6 +212,173 @@ pub trait ObjectSink {
 struct TrueosFsWriteSession {
     handle: u32,
     bytes_written: u64,
+}
+
+pub struct TrueosFsObjectReader {
+    disk: crate::disc::block::DeviceHandle,
+    key: String,
+    total_len: u64,
+    offset: u64,
+    closed: bool,
+}
+
+impl TrueosFsObjectReader {
+    pub async fn open(
+        disk: crate::disc::block::DeviceHandle,
+        key: &str,
+    ) -> Result<Option<Self>, crate::disc::block::Error> {
+        if key.is_empty() {
+            return Err(crate::disc::block::Error::InvalidParam);
+        }
+        let Some(info) = crate::r::fs::trueosfs::file_info_async(disk, key).await? else {
+            return Ok(None);
+        };
+        Ok(Some(Self {
+            disk,
+            key: key.to_string(),
+            total_len: info.data_len,
+            offset: 0,
+            closed: false,
+        }))
+    }
+
+    #[inline]
+    pub const fn total_len(&self) -> u64 {
+        self.total_len
+    }
+
+    #[inline]
+    pub const fn position(&self) -> u64 {
+        self.offset
+    }
+
+    pub async fn read_exact_at(
+        &mut self,
+        offset: u64,
+        dst: &mut [u8],
+    ) -> Result<bool, crate::disc::block::Error> {
+        if self.closed {
+            return Err(crate::disc::block::Error::NotReady);
+        }
+        if dst.is_empty() {
+            self.offset = offset;
+            return Ok(true);
+        }
+        let end = offset
+            .checked_add(dst.len() as u64)
+            .ok_or(crate::disc::block::Error::OutOfBounds)?;
+        if end > self.total_len {
+            return Err(crate::disc::block::Error::OutOfBounds);
+        }
+
+        let Some(read) = crate::r::fs::trueosfs::file_read_range_async(
+            self.disk,
+            self.key.as_str(),
+            offset,
+            dst,
+        )
+        .await?
+        else {
+            return Ok(false);
+        };
+        if read != dst.len() {
+            return Err(crate::disc::block::Error::OutOfBounds);
+        }
+        self.offset = end;
+        Ok(true)
+    }
+
+    pub fn close(&mut self) -> Result<(), HvStreamError> {
+        if self.closed {
+            return Err(HvStreamError::NotOpen);
+        }
+        self.closed = true;
+        Ok(())
+    }
+
+    fn seek_position(&self, pos: SeekFrom) -> Result<u64, HvStreamError> {
+        let next = match pos {
+            SeekFrom::Start(offset) => offset as i128,
+            SeekFrom::End(delta) => self.total_len as i128 + delta as i128,
+            SeekFrom::Current(delta) => self.offset as i128 + delta as i128,
+        };
+        if next < 0 || next > u64::MAX as i128 {
+            return Err(HvStreamError::InvalidState);
+        }
+        Ok(next as u64)
+    }
+}
+
+impl ErrorType for TrueosFsObjectReader {
+    type Error = HvStreamError;
+}
+
+impl Read for TrueosFsObjectReader {
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        if self.closed {
+            return Err(HvStreamError::NotOpen);
+        }
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        if self.offset >= self.total_len {
+            return Ok(0);
+        }
+
+        let remaining = self.total_len.saturating_sub(self.offset);
+        let want = core::cmp::min(buf.len(), remaining as usize);
+        let Some(read) = crate::r::fs::trueosfs::file_read_range_async(
+            self.disk,
+            self.key.as_str(),
+            self.offset,
+            &mut buf[..want],
+        )
+        .await
+        .map_err(HvStreamError::from)?
+        else {
+            return Err(HvStreamError::Backend(HvStreamError::backend_code(
+                crate::disc::block::Error::NotReady,
+            )));
+        };
+        self.offset = self.offset.saturating_add(read as u64);
+        Ok(read)
+    }
+}
+
+impl Seek for TrueosFsObjectReader {
+    async fn seek(&mut self, pos: SeekFrom) -> Result<u64, Self::Error> {
+        if self.closed {
+            return Err(HvStreamError::NotOpen);
+        }
+        let next = self.seek_position(pos)?;
+        self.offset = next;
+        Ok(next)
+    }
+}
+
+pub struct TrueosFsObjectSource {
+    disk: crate::disc::block::DeviceHandle,
+}
+
+impl TrueosFsObjectSource {
+    pub const fn new(disk: crate::disc::block::DeviceHandle) -> Self {
+        Self { disk }
+    }
+}
+
+impl ObjectSource for TrueosFsObjectSource {
+    type Reader = TrueosFsObjectReader;
+
+    async fn open(&mut self, key: &str) -> Result<ObjectOpen<Self::Reader>, Error> {
+        let Some(reader) = TrueosFsObjectReader::open(self.disk, key)
+            .await
+            .map_err(HvStreamError::from)?
+        else {
+            return Err(HvStreamError::NotOpen);
+        };
+        let total_len = Some(reader.total_len());
+        Ok(ObjectOpen::new(reader, total_len))
+    }
 }
 
 pub struct TrueosFsObjectWriter {

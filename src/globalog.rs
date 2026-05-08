@@ -1,7 +1,12 @@
-use core::fmt;
+use core::{
+    fmt,
+    sync::atomic::{AtomicU64, Ordering},
+};
 use log::{Metadata, Record};
 
 extern crate alloc;
+
+static USB_XHCI_COMPLETION_LAST_LOG_TICK: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LogRange {
@@ -84,6 +89,39 @@ pub fn log_with_level(level: log::Level, args: fmt::Arguments<'_>) {
     log_with_purpose(Some(purpose_for_level(level)), args);
 }
 
+fn one_second_rate_limit_allows(last_marker: &AtomicU64) -> bool {
+    let interval = embassy_time_driver::TICK_HZ.max(1);
+    let now = embassy_time_driver::now();
+    let now_marker = now.saturating_add(1);
+    let mut previous_marker = last_marker.load(Ordering::Relaxed);
+
+    loop {
+        if previous_marker != 0 {
+            let previous = previous_marker.saturating_sub(1);
+            if now >= previous && now.saturating_sub(previous) < interval {
+                return false;
+            }
+        }
+
+        match last_marker.compare_exchange_weak(
+            previous_marker,
+            now_marker,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => return true,
+            Err(actual) => previous_marker = actual,
+        }
+    }
+}
+
+fn usb_vendor_rendered_log_allowed(rendered: &str) -> bool {
+    if rendered.starts_with("crabusb/xhci/ep: completion") {
+        return one_second_rate_limit_allows(&USB_XHCI_COMPLETION_LAST_LOG_TICK);
+    }
+    true
+}
+
 struct KernelLogFacade;
 
 impl log::Log for KernelLogFacade {
@@ -104,6 +142,9 @@ impl log::Log for KernelLogFacade {
                 return;
             }
             let rendered = alloc::format!("{}", record.args());
+            if !usb_vendor_rendered_log_allowed(rendered.as_str()) {
+                return;
+            }
             let rendered = rendered.trim_end();
             log_with_purpose(Some(purpose), format_args!("crabusb: {}\n", rendered));
             return;
@@ -350,7 +391,7 @@ pub mod logtotcp {
         use embassy_time::{Duration as EmbassyDuration, Timer};
 
         use crate::net::adapter::{
-            NetCommand, NetEvent, NetHandle, NetQueue, SocketKind, register_app_queues,
+            register_app_queues, NetCommand, NetEvent, NetHandle, NetQueue, SocketKind,
         };
         use crate::r::net::ports;
 

@@ -90,6 +90,8 @@ struct UsbMassRuntime {
     interface_number: u8,
     bulk_in_ep: u8,
     bulk_out_ep: u8,
+    uas_data_in_ep: u8,
+    uas_data_out_ep: u8,
     endpoints: UsbMassEndpoints,
     transport_kind: mass::MassTransportKind,
     io_profile: MassIoProfile,
@@ -363,6 +365,91 @@ fn uas_bench_forget_pending(flights: &mut AllocVec<UasBenchFlight>) {
     }
 }
 
+async fn uas_skhynix_reset_endpoint(
+    rt: &mut UsbMassRuntime,
+    stage: &'static str,
+    endpoint: u8,
+) -> block::Result<()> {
+    if endpoint == 0 {
+        return Ok(());
+    }
+    match rt.device.debug_reset_endpoint(endpoint, false).await {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            crate::log!(
+                "crabusb: mass {:04X}:{:04X} uas-window reset-endpoint failed stage={} ep=0x{:02X} err={:?}\n",
+                rt.vendor_id,
+                rt.product_id,
+                stage,
+                endpoint,
+                err
+            );
+            Err(block::Error::Io)
+        }
+    }
+}
+
+async fn uas_skhynix_reset_transport(
+    rt: &mut UsbMassRuntime,
+    stage: &'static str,
+) -> block::Result<()> {
+    let command_out = rt.bulk_out_ep;
+    let status_in = rt.bulk_in_ep;
+    let data_in = rt.uas_data_in_ep;
+    let data_out = rt.uas_data_out_ep;
+
+    uas_skhynix_reset_endpoint(rt, stage, command_out).await?;
+    uas_skhynix_reset_endpoint(rt, stage, status_in).await?;
+    uas_skhynix_reset_endpoint(rt, stage, data_in).await?;
+    uas_skhynix_reset_endpoint(rt, stage, data_out).await?;
+    crate::log!(
+        "crabusb: mass {:04X}:{:04X} uas-window reset transport stage={} cmd=0x{:02X} status=0x{:02X} data_in=0x{:02X} data_out=0x{:02X}\n",
+        rt.vendor_id,
+        rt.product_id,
+        stage,
+        command_out,
+        status_in,
+        data_in,
+        data_out
+    );
+    Ok(())
+}
+
+async fn uas_skhynix_abort_pending_window(
+    rt: &mut UsbMassRuntime,
+    flights: &mut AllocVec<UasBenchFlight>,
+    stage: &'static str,
+    block_size: usize,
+) {
+    let mut pending = 0usize;
+    while let Some(flight) = flights.pop() {
+        let tag = flight.tag;
+        uas_runtime_note_error(
+            rt,
+            stage,
+            tag,
+            mass::MassProbeError::Transport("uas-abort-pending"),
+            block_size,
+        );
+        pending = pending.saturating_add(1);
+        core::mem::forget(flight);
+    }
+
+    if pending == 0 {
+        return;
+    }
+
+    crate::log!(
+        "crabusb: mass {:04X}:{:04X} uas-window abort pending={} stage={} dead_streams={}\n",
+        rt.vendor_id,
+        rt.product_id,
+        pending,
+        stage,
+        rt.uas_dead_stream_mask.count_ones()
+    );
+    let _ = uas_skhynix_reset_transport(rt, stage).await;
+}
+
 async fn uas_bench_submit_read(
     command_out: &mut EndpointBulkOut,
     status_in: &mut EndpointBulkIn,
@@ -518,7 +605,6 @@ fn uas_bench_poll_flights(
         }
 
         if let Some(err) = step_err {
-            uas_bench_forget_pending(flights);
             return Err(err);
         }
 
@@ -754,7 +840,13 @@ where
                 else {
                     return Err(block::Error::NotSupported);
                 };
-                uas_bench_wait_one(status_in, data_in, &mut flights).await?
+                match uas_bench_wait_one(status_in, data_in, &mut flights).await {
+                    Ok(step) => step,
+                    Err(err) => {
+                        uas_bench_forget_pending(&mut flights);
+                        return Err(err);
+                    }
+                }
             };
 
             if let Some(step) = step_now {
@@ -1436,7 +1528,13 @@ fn uas_runtime_alloc_stream(rt: &mut UsbMassRuntime) -> Option<u16> {
 fn uas_error_retires_stream(err: mass::MassProbeError) -> bool {
     matches!(
         err.transport_reason(),
-        Some("uas-command-timeout" | "uas-status-timeout" | "uas-data-timeout" | "uas-in-timeout")
+        Some(
+            "uas-command-timeout"
+                | "uas-status-timeout"
+                | "uas-data-timeout"
+                | "uas-in-timeout"
+                | "uas-abort-pending"
+        )
     )
 }
 
@@ -1546,7 +1644,13 @@ async fn read_blocks_uas_skhynix_windowed(
                 break;
             }
             if next_lba > u64::from(u32::MAX) {
-                uas_bench_forget_pending(&mut flights);
+                uas_skhynix_abort_pending_window(
+                    rt,
+                    &mut flights,
+                    "read-window-out-of-bounds",
+                    block_size,
+                )
+                .await;
                 return Err(block::Error::OutOfBounds);
             }
 
@@ -1558,7 +1662,13 @@ async fn read_blocks_uas_skhynix_windowed(
                 .min(blocks_per_read);
             let bytes = wanted_blocks.saturating_mul(block_size);
             if bytes == 0 {
-                uas_bench_forget_pending(&mut flights);
+                uas_skhynix_abort_pending_window(
+                    rt,
+                    &mut flights,
+                    "read-window-invalid",
+                    block_size,
+                )
+                .await;
                 return Err(block::Error::InvalidParam);
             }
 
@@ -1579,7 +1689,13 @@ async fn read_blocks_uas_skhynix_windowed(
                     ..
                 } = endpoints
                 else {
-                    uas_bench_forget_pending(&mut flights);
+                    uas_skhynix_abort_pending_window(
+                        rt,
+                        &mut flights,
+                        "read-window-transport",
+                        block_size,
+                    )
+                    .await;
                     return Err(block::Error::NotSupported);
                 };
                 match uas_bench_submit_read(
@@ -1595,7 +1711,13 @@ async fn read_blocks_uas_skhynix_windowed(
                 {
                     Ok(flight) => flight,
                     Err(err) => {
-                        uas_bench_forget_pending(&mut flights);
+                        uas_skhynix_abort_pending_window(
+                            rt,
+                            &mut flights,
+                            "read-window-submit",
+                            block_size,
+                        )
+                        .await;
                         mass_io_backoff(rt, block_size);
                         return Err(err);
                     }
@@ -1620,7 +1742,13 @@ async fn read_blocks_uas_skhynix_windowed(
                 status_in, data_in, ..
             } = endpoints
             else {
-                uas_bench_forget_pending(&mut flights);
+                uas_skhynix_abort_pending_window(
+                    rt,
+                    &mut flights,
+                    "read-window-transport",
+                    block_size,
+                )
+                .await;
                 return Err(block::Error::NotSupported);
             };
             uas_bench_wait_one(status_in, data_in, &mut flights).await
@@ -1629,6 +1757,13 @@ async fn read_blocks_uas_skhynix_windowed(
         let Some(step) = (match step {
             Ok(step) => step,
             Err(err) => {
+                uas_skhynix_abort_pending_window(
+                    rt,
+                    &mut flights,
+                    "read-window-poll-error",
+                    block_size,
+                )
+                .await;
                 mass_io_backoff(rt, block_size);
                 return Err(err);
             }
@@ -1679,16 +1814,32 @@ async fn read_blocks_uas_skhynix_windowed(
                     block_size,
                 );
                 if rt.uas_dead_stream_mask.count_ones() >= u32::from(mass::UAS_XHCI_MAX_STREAM_ID) {
-                    uas_bench_forget_pending(&mut flights);
+                    uas_skhynix_abort_pending_window(
+                        rt,
+                        &mut flights,
+                        "read-window-exhausted",
+                        block_size,
+                    )
+                    .await;
                     return Err(block::Error::Timeout);
+                }
+                let had_pending = !flights.is_empty();
+                uas_skhynix_abort_pending_window(
+                    rt,
+                    &mut flights,
+                    "read-window-timeout",
+                    block_size,
+                )
+                .await;
+                if !had_pending {
+                    let _ = uas_skhynix_reset_transport(rt, "read-window-timeout").await;
                 }
 
                 ssthresh = core::cmp::max(1, cwnd / 2);
                 cwnd = 1;
                 additive_acks = 0;
                 next_lba = u64::from(retry_lba);
-                submitted_bytes =
-                    completed_bytes.saturating_add(uas_bench_inflight_bytes(&flights));
+                submitted_bytes = completed_bytes;
                 crate::log!(
                     "crabusb: mass {:04X}:{:04X} uas-window backoff lost_tag=0x{:04X} retry_lba={} cwnd={} ssthresh={} dead_streams={} timeouts={}\n",
                     rt.vendor_id,
@@ -2558,6 +2709,8 @@ pub async fn mass_storage_task(
         interface_number: target.interface_number,
         bulk_in_ep: target.bulk_in,
         bulk_out_ep: target.bulk_out,
+        uas_data_in_ep: 0,
+        uas_data_out_ep: 0,
         endpoints: UsbMassEndpoints::Bot { bulk_in, bulk_out },
         transport_kind,
         io_profile,
@@ -2863,6 +3016,8 @@ pub async fn mass_storage_uas_skhynix_task(
         interface_number: target.interface_number,
         bulk_in_ep: target.status_in,
         bulk_out_ep: target.command_out,
+        uas_data_in_ep: target.data_in,
+        uas_data_out_ep: target.data_out,
         endpoints: UsbMassEndpoints::UasSkhynix {
             command_out,
             status_in,

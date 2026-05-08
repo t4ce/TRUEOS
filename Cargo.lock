@@ -472,6 +472,7 @@ dependencies = [
  "crossbeam",
  "crossbeam-skiplist",
  "dma-api",
+ "embassy-time-driver",
  "enum_dispatch",
  "futures",
  "id-arena",

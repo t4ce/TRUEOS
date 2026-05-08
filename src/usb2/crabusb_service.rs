@@ -500,17 +500,11 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
     let mut current_devices: Vec<ObservedUsbDevice> = Vec::new();
     for dev in devices.iter() {
         let desc = dev.descriptor();
-        let skip_optional_descriptor_reads =
-            super::descriptor::hid_optional_descriptor_skip_reason(desc.vendor_id, desc.product_id)
-                .is_some();
-        let strings = if skip_optional_descriptor_reads {
-            super::descriptor::UsbDeviceStrings::default()
-        } else {
-            match host.open_device(dev).await {
-                Ok(mut device) => super::descriptor::read_device_strings(&mut device).await,
-                Err(_) => super::descriptor::UsbDeviceStrings::default(),
-            }
-        };
+        // Keep the observation pass non-consuming. The kmod crabusb backend
+        // transfers leaf ownership on open_device(); doing that here just to
+        // decorate the table with strings forces the later class bind path to
+        // re-address an already-addressed physical device.
+        let strings = super::descriptor::UsbDeviceStrings::default();
         let topo = dev.topology();
         let location = dev.location();
         current_devices.push(ObservedUsbDevice {

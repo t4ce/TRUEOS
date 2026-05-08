@@ -1378,9 +1378,30 @@ async fn load_lumen_model_from_trueosfs(
     let mut phase_ms = LumenRuntimeLoadPhaseMs::default();
     let mut last_progress_phase_ms = phase_ms;
     crate::lumen::lumen_net::begin_matrix_manifest_load();
+    let mut weights_reader =
+        match crate::r::stream::TrueosFsObjectReader::open(disk, LUMEN_WEIGHTS_PATH).await {
+            Ok(Some(reader)) => reader,
+            Ok(None) => {
+                return Err(format!("{} unavailable during weight load", LUMEN_WEIGHTS_PATH));
+            }
+            Err(err) => return Err(format!("{} open failed err={:?}", LUMEN_WEIGHTS_PATH, err)),
+        };
+    crate::log!(
+        "bench lumen: runtime-hi vlayer-read open path={} bytes={}\n",
+        LUMEN_WEIGHTS_PATH,
+        weights_reader.total_len()
+    );
+
+    macro_rules! fail_load {
+        ($err:expr) => {{
+            let _ = weights_reader.close();
+            return Err($err);
+        }};
+    }
+
     for (_, name, tensor) in ordered {
         if bench_cancel_requested(session_id) {
-            return Err(AllocString::from("cancelled"));
+            fail_load!(AllocString::from("cancelled"));
         }
 
         let Some(value) = obj.get(name) else {
@@ -1388,10 +1409,12 @@ async fn load_lumen_model_from_trueosfs(
             continue;
         };
         let dtype = value.get("dtype").and_then(|v| v.as_str()).unwrap_or("?");
-        let shape =
-            safetensor_shape(value).ok_or_else(|| format!("{} missing safetensors shape", name))?;
+        let shape = match safetensor_shape(value) {
+            Some(shape) => shape,
+            None => fail_load!(format!("{} missing safetensors shape", name)),
+        };
         if shape != tensor.shape_vec() {
-            return Err(format!(
+            fail_load!(format!(
                 "{} shape mismatch safetensors={:?} model={:?}",
                 name,
                 shape,
@@ -1399,21 +1422,25 @@ async fn load_lumen_model_from_trueosfs(
             ));
         }
         let Some(dtype_bytes) = safetensor_dtype_nbytes(dtype) else {
-            return Err(format!("{} unsupported safetensors dtype={}", name, dtype));
+            fail_load!(format!("{} unsupported safetensors dtype={}", name, dtype));
         };
         let Some(loc) = safetensor_location(header_len, value) else {
-            return Err(format!("{} missing safetensors offsets", name));
+            fail_load!(format!("{} missing safetensors offsets", name));
         };
-        let elem_count = shape
+        let elem_count = match shape
             .iter()
             .copied()
             .try_fold(1usize, |acc, dim| acc.checked_mul(dim))
-            .ok_or_else(|| format!("{} element count overflow", name))?;
-        let byte_count = elem_count
-            .checked_mul(dtype_bytes)
-            .ok_or_else(|| format!("{} byte count overflow", name))?;
+        {
+            Some(count) => count,
+            None => fail_load!(format!("{} element count overflow", name)),
+        };
+        let byte_count = match elem_count.checked_mul(dtype_bytes) {
+            Some(count) => count,
+            None => fail_load!(format!("{} byte count overflow", name)),
+        };
         if loc.data_start.saturating_add(byte_count) > loc.data_end {
-            return Err(format!("{} safetensors range invalid", name));
+            fail_load!(format!("{} safetensors range invalid", name));
         }
 
         let alloc_start = embassy_time_driver::now();
@@ -1421,17 +1448,13 @@ async fn load_lumen_model_from_trueosfs(
         phase_ms.alloc = phase_ms.alloc.saturating_add(elapsed_ms_since(alloc_start));
 
         let read_start = embassy_time_driver::now();
-        match crate::r::stream::read_trueosfs_file_range_into_async(
-            disk,
-            LUMEN_WEIGHTS_PATH,
-            loc.file_offset,
-            bytes.as_mut_slice(),
-        )
-        .await
+        match weights_reader
+            .read_exact_at(loc.file_offset, bytes.as_mut_slice())
+            .await
         {
             Ok(true) => {}
-            Ok(false) => return Err(format!("{} disappeared during weight load", name)),
-            Err(err) => return Err(format!("{} read failed err={:?}", name, err)),
+            Ok(false) => fail_load!(format!("{} disappeared during weight load", name)),
+            Err(err) => fail_load!(format!("{} read failed err={:?}", name, err)),
         }
         phase_ms.read = phase_ms.read.saturating_add(elapsed_ms_since(read_start));
 
@@ -1446,7 +1469,7 @@ async fn load_lumen_model_from_trueosfs(
                 }
                 (DType::F32, TensorRawData::F32(values))
             }
-            other => return Err(format!("{} unsupported runtime import dtype={}", name, other)),
+            other => fail_load!(format!("{} unsupported runtime import dtype={}", name, other)),
         };
         phase_ms.decode = phase_ms
             .decode
@@ -1454,9 +1477,9 @@ async fn load_lumen_model_from_trueosfs(
         drop(bytes);
 
         let import_start = embassy_time_driver::now();
-        tensor
-            .import_raw(shape.clone(), raw.0, raw.1)
-            .map_err(|err| format!("{} {} import failed: {}", name, dtype, err))?;
+        if let Err(err) = tensor.import_raw(shape.clone(), raw.0, raw.1) {
+            fail_load!(format!("{} {} import failed: {}", name, dtype, err));
+        }
         phase_ms.import = phase_ms
             .import
             .saturating_add(elapsed_ms_since(import_start));
@@ -1508,6 +1531,13 @@ async fn load_lumen_model_from_trueosfs(
             Timer::after(EmbassyDuration::from_millis(1)).await;
         }
     }
+
+    let _ = weights_reader.close();
+    crate::log!(
+        "bench lumen: runtime-hi vlayer-read close path={} loaded_bytes={}\n",
+        LUMEN_WEIGHTS_PATH,
+        loaded_bytes
+    );
 
     Ok(LumenRuntimeLoadReport {
         loaded_tensors,
