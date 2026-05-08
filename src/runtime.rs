@@ -45,6 +45,10 @@ pub fn run_ap_forever() -> ! {
             }
         }
         counter = counter.wrapping_add(1);
-        crate::power::idle_hint();
+        // AP executors accept cross-core work through SendSpawner, but their
+        // raw executors currently have no APIC/IPI-backed pender. Halting here
+        // can strand newly submitted VM hull work until an unrelated interrupt
+        // arrives, so AP carrier lanes must remain polling/spinning for now.
+        core::hint::spin_loop();
     }
 }

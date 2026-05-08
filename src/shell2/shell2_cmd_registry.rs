@@ -1,5 +1,4 @@
 use alloc::string::String as AllocString;
-use alloc::vec::Vec;
 
 use embassy_executor::Spawner;
 
@@ -8,11 +7,6 @@ use super::print_shell_line;
 use super::shell2_cmd::ParseOutcome;
 
 pub(crate) type Shell2CmdHandler = fn(&Spawner, &'static dyn ShellBackend2, &str) -> ParseOutcome;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RegisterCommandError {
-    DuplicateName,
-}
 
 #[derive(Clone, Copy)]
 struct BuiltinShell2CmdEntry {
@@ -24,15 +18,6 @@ struct BuiltinShell2CmdEntry {
     tool_parameters_json: Option<&'static str>,
 }
 
-struct ApiShell2CmdEntry {
-    name: AllocString,
-    mode: AllocString,
-    color: Option<(u8, u8, u8)>,
-    handler: Shell2CmdHandler,
-}
-
-static API_CMD_REGISTRY: spin::Mutex<Vec<ApiShell2CmdEntry>> = spin::Mutex::new(Vec::new());
-
 const TOOL_JSON_ACPI: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["reboot","S1","S2","S3","S4","S5"],"description":"ACPI action to run."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_C4: &str = r#"{"type":"object","properties":{"mode":{"type":"string","enum":["file","inline"],"description":"Compile from a TRUEOSFS file or inline C4 source."},"path":{"type":"string","description":"TRUEOSFS source path when mode=file."},"source":{"type":"string","description":"Inline C4 source when mode=inline."}},"required":["mode"],"additionalProperties":false}"#;
 const TOOL_JSON_EMAIL: &str = r#"{"type":"object","properties":{"mode":{"type":"string","enum":["send","set_from"],"description":"Choose whether to send a mail log entry or set the default from address."},"to":{"type":"string","description":"Recipient address when mode=send."},"mail_text":{"type":"string","description":"Mail body text when mode=send."},"from":{"type":"string","description":"Sender address when mode=set_from."}},"required":["mode"],"additionalProperties":false}"#;
@@ -40,7 +25,6 @@ const TOOL_JSON_ETC: &str = r#"{"type":"object","properties":{"subcommand":{"typ
 const TOOL_JSON_FILE: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","format","ramdisc"],"description":"file action to run."},"disk_id":{"type":"string","description":"Disk id string for action=format."},"size":{"type":"string","description":"Optional ramdisc size like 512MB or 1GiB for action=ramdisc."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_HV: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["status","run","pause","stop","preserve"],"description":"HV subcommand to run."},"id":{"type":"integer","minimum":1,"description":"Blueprint archive id for run, or VM id for pause/stop/preserve."},"args":{"type":"array","items":{"type":"string"},"description":"CLI arguments passed to the selected blueprint when subcommand=run."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_NET: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["icmp","irc","nic","hostname"],"description":"net subcommand to run."},"target":{"type":"string","description":"Target host for net icmp."},"selector":{"type":"string","description":"Optional NIC selector like index, vid:pid, or bb:dd.f."},"host":{"type":"string","description":"Host for net irc."},"channel":{"type":"string","description":"Optional channel like #trueos for net irc."},"name":{"type":"string","description":"Optional hostname for net hostname."}},"required":["subcommand"],"additionalProperties":false}"#;
-const TOOL_JSON_PROBE: &str = r#"{"type":"object","properties":{"domain":{"type":"string","enum":["usb","nvme"],"description":"Probe domain."},"action":{"type":"string","enum":["status","snapshot","kick","rebind","recover","fix","mysterybox","probe","flr"],"description":"Action inside the selected domain."},"controller":{"type":"integer","minimum":0,"description":"Optional controller index for usb snapshot/kick/rebind/recover/fix/mysterybox."},"pci":{"type":"string","description":"PCI BDF like 00:1f.0 for nvme flr."}},"required":["domain","action"],"additionalProperties":false}"#;
 const TOOL_JSON_SET: &str = r#"{"type":"object","properties":{"width":{"type":"integer","minimum":50,"maximum":500,"description":"Shell line width."}},"required":["width"],"additionalProperties":false}"#;
 const TOOL_JSON_SMP: &str = r#"{"type":"object","properties":{"slot":{"type":"integer","minimum":0,"description":"Optional SMP slot. Omit to list all slots."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_TLB: &str = r#"{"type":"object","properties":{"target":{"type":"string","enum":["pci","pcibar","mem","cpu","acpi","aml","facp","madt","hpet","mcfg","ssdt","uefi","x2apic","usb","usb_probe","dump"],"description":"Table or view to print."},"signature":{"type":"string","minLength":4,"maxLength":4,"description":"Optional ACPI signature when target=acpi, for example SSDT or FACP."},"index":{"type":"integer","minimum":1,"description":"Optional 1-based instance index when target=acpi and the signature repeats."},"subcommand":{"type":"string","enum":["ec","symbol","prefix"],"description":"Optional AML subcommand when target=aml."},"path":{"type":"string","description":"Optional AML path or prefix when target=aml and subcommand is symbol or prefix."}},"required":["target"],"additionalProperties":false}"#;
@@ -275,40 +259,6 @@ fn starts_with_command<'a>(submitted: &'a str, name: &str) -> Option<&'a str> {
     }
 }
 
-fn name_in_use(name: &str) -> bool {
-    if BUILTIN_CMD_REGISTRY
-        .iter()
-        .any(|entry| entry.name.eq_ignore_ascii_case(name))
-    {
-        return true;
-    }
-
-    API_CMD_REGISTRY
-        .lock()
-        .iter()
-        .any(|entry| entry.name.eq_ignore_ascii_case(name))
-}
-
-pub fn register_command(
-    name: &str,
-    mode: &str,
-    color: Option<(u8, u8, u8)>,
-    handler: Shell2CmdHandler,
-) -> Result<(), RegisterCommandError> {
-    if name_in_use(name) {
-        return Err(RegisterCommandError::DuplicateName);
-    }
-
-    API_CMD_REGISTRY.lock().push(ApiShell2CmdEntry {
-        name: AllocString::from(name),
-        mode: AllocString::from(mode),
-        color,
-        handler,
-    });
-
-    Ok(())
-}
-
 pub(crate) fn try_dispatch(
     spawner: &Spawner,
     io: &'static dyn ShellBackend2,
@@ -316,13 +266,6 @@ pub(crate) fn try_dispatch(
 ) -> ParseOutcome {
     for entry in BUILTIN_CMD_REGISTRY {
         if let Some(rest) = starts_with_command(submitted, entry.name) {
-            return (entry.handler)(spawner, io, rest);
-        }
-    }
-
-    let api_registry = API_CMD_REGISTRY.lock();
-    for entry in api_registry.iter() {
-        if let Some(rest) = starts_with_command(submitted, entry.name.as_str()) {
             return (entry.handler)(spawner, io, rest);
         }
     }
@@ -343,24 +286,6 @@ pub(crate) fn command_names_status_text() -> AllocString {
             out.push_str(styled.as_str());
         } else {
             out.push_str(entry.name);
-        }
-    }
-
-    let api_registry = API_CMD_REGISTRY.lock();
-    for entry in api_registry.iter() {
-        if !out.is_empty() {
-            out.push(' ');
-        }
-        if let Some(color) = entry.color {
-            let styled = alloc::format!(
-                "{}",
-                super::term_style::paint(entry.name.as_str())
-                    .bold()
-                    .color(color)
-            );
-            out.push_str(styled.as_str());
-        } else {
-            out.push_str(entry.name.as_str());
         }
     }
 
@@ -391,19 +316,6 @@ pub(crate) fn command_registry_json() -> AllocString {
             out.push('}');
         }
         out.push('}');
-    }
-
-    let api_registry = API_CMD_REGISTRY.lock();
-    for entry in api_registry.iter() {
-        if !first {
-            out.push(',');
-        }
-        first = false;
-        out.push_str("{\"name\":\"");
-        out.push_str(entry.name.as_str());
-        out.push_str("\",\"mode\":\"");
-        out.push_str(entry.mode.as_str());
-        out.push_str("\"}");
     }
 
     out.push_str("]}");

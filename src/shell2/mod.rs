@@ -547,34 +547,6 @@ pub(crate) fn line_width_for_backend(io: &'static dyn ShellBackend2) -> usize {
     matrix::active_line_width(output_target_for_backend(io))
 }
 
-pub(crate) fn print_broadcast_line(text: &str) {
-    let outputs = REGISTERED_OUTPUTS.load(Ordering::Relaxed);
-    if (outputs & OUTPUT_UART1_MASK) != 0 {
-        print_shell_line(&UART1_COM1_BACKEND, text);
-    }
-    if (outputs & OUTPUT_NET_TCP_MASK) != 0 {
-        print_shell_line(&NET_TCP_SHELL_BACKEND, text);
-    }
-    if (outputs & OUTPUT_UI2_MASK) != 0 {
-        print_shell_line(&UI2_SHELL_BACKEND, text);
-    }
-}
-
-pub(crate) fn print_targeted_line(target_mask: u8, text: &str) {
-    if (target_mask & OUTPUT_UART1_MASK) != 0 {
-        print_shell_line(&UART1_COM1_BACKEND, text);
-    }
-    if (target_mask & OUTPUT_NET_TCP_MASK) != 0 {
-        print_shell_line(&NET_TCP_SHELL_BACKEND, text);
-    }
-    if (target_mask & OUTPUT_UI2_MASK) != 0 {
-        print_shell_line(&UI2_SHELL_BACKEND, text);
-    }
-    if target_mask == 0 {
-        print_broadcast_line(text);
-    }
-}
-
 pub(crate) fn output_target_for_backend(io: &'static dyn ShellBackend2) -> u8 {
     let uart_io: &'static dyn ShellIo2 = &UART1_COM1_BACKEND;
     if same_backend_task(io, uart_io) {
@@ -692,13 +664,6 @@ pub(crate) fn print_matrix_target_line(target: &MatrixTarget, text: &str) {
 
 pub(crate) fn print_matrix_target_native_line(target: &MatrixTarget, text: &str) {
     matrix::record_line_in_slot(&target.slot_id, LineSource::Native, text);
-}
-
-pub(crate) fn print_matrix_target_native_text(target: &MatrixTarget, text: &str) {
-    for line in text.split('\n') {
-        let line = line.strip_suffix('\r').unwrap_or(line);
-        matrix::record_line_in_slot(&target.slot_id, LineSource::Native, line);
-    }
 }
 
 pub(crate) fn raw_write_matrix_target(target: &MatrixTarget, bytes: &[u8]) -> usize {

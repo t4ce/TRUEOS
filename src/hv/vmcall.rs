@@ -19,6 +19,7 @@ pub const OP_PING: u32 = 0x02; // response_data = 0xCAFE_BABE
 pub const OP_UNIX_TIME: u32 = 0x03; // response_data = unix seconds
 pub const OP_YIELD: u32 = 0x04; // cooperative host yield point
 pub const OP_SLEEP_MS: u32 = 0x05; // cooperative host sleep before resume
+pub const OP_RAND_BYTES: u32 = 0x06; // arg0 requested bytes, response payload is random bytes
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -187,6 +188,24 @@ pub fn dispatch(vm_id: u8) -> DispatchOutcome {
             let sleep_ms = arg0.min(MAX_GUEST_SLEEP_MS);
             write_response(vm_id, seq, STATUS_OK, sleep_ms, 0);
             DispatchOutcome::SleepMs(sleep_ms)
+        }
+        OP_RAND_BYTES => {
+            let want = core::cmp::min(arg0 as usize, PAYLOAD_CAP);
+            if want == 0 {
+                write_response(vm_id, seq, STATUS_OK, 0, 0);
+                return DispatchOutcome::Resume;
+            }
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let out = unsafe { &mut (&mut (*p).payload)[..want] };
+            if crate::rng::fill_bytes(out) {
+                write_response(vm_id, seq, STATUS_OK, want as u64, want as u32);
+            } else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+            }
+            DispatchOutcome::Resume
         }
         OP_NET_TCP_WRITE => {
             let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
