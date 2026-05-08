@@ -1231,7 +1231,6 @@ const NET_ANY_CONFIGURED_AND_ROOT_READY: u32 =
 const PCIIDS_GIT_READY: u32 = crate::r::readiness::TOKIO_RUNTIME_READY
     | crate::r::readiness::NET_ANY_CONFIGURED
     | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
-const HTTP_TRUEOSFS_READY: u32 = crate::r::readiness::HTTP_TRUEOSFS_LISTENING;
 const HYPER_HTTP1_PROBE_READY: u32 =
     crate::r::readiness::NET_SOCKET_READY | crate::r::readiness::NET_V4_GATEWAY_REACHABLE;
 const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED

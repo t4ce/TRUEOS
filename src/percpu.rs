@@ -1,6 +1,8 @@
 #[cfg(target_arch = "x86_64")]
 use core::arch::asm;
-use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+#[cfg(not(target_arch = "x86_64"))]
+use core::sync::atomic::AtomicPtr;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
@@ -15,6 +17,7 @@ static CPU_SLOT_TABLE: core::sync::atomic::AtomicPtr<CpuSlot> =
     core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
 static CPU_SLOT_LEN: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 static PERCPU_READY: AtomicBool = AtomicBool::new(false);
+#[cfg(not(target_arch = "x86_64"))]
 static CURRENT_CPU_PTR: AtomicPtr<PerCpu> = AtomicPtr::new(core::ptr::null_mut());
 
 #[repr(C)]
