@@ -2,6 +2,8 @@
 
 This is the small boot baseline we care about for Tokio-class runtime work. It is not a general log transcript; it records the probe surfaces that are currently meaningful for VMX blueprints, kernel services, and the TRUEOS std-ABI shim.
 
+Operational default: the kernel Tokio, Mio/socket2, secure-DNS, and Hyper probe cluster is flagged off after validation so normal boot and blueprint sessions stay quiet. Re-enable the `allcaps::probes` switches when refreshing this baseline.
+
 ## Version Surface
 
 - Tokio is wired as `tokio 1.52.1` with `feature full` through the TRUEOS std-ABI shim.

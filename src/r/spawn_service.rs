@@ -439,6 +439,10 @@ fn spawn_hyper_http1_probe(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |_worker_spawner| crate::hyper_probe::hyper_net_probe_task())
 }
 
+fn hyper_http1_probe_enabled() -> bool {
+    crate::allcaps::probes::HYPER_HTTP1_NET_PROBE
+}
+
 fn spawn_chat_http(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::net::srv::chat::chat_http_service_task())
 }
@@ -1316,9 +1320,10 @@ static TASKS: [TaskSpec; 71] = [
         spawn_http_trueosfs,
     ),
     TaskSpec::disabled("pciids-git", PCIIDS_GIT_READY, &PCIIDS_GIT_STARTED, spawn_pciids_git),
-    TaskSpec::enabled(
+    TaskSpec::enabled_gated(
         "hyper-http1-probe",
         HYPER_HTTP1_PROBE_READY,
+        hyper_http1_probe_enabled,
         &HYPER_HTTP1_PROBE_STARTED,
         spawn_hyper_http1_probe,
     ),
