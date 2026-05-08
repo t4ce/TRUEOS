@@ -78,13 +78,17 @@ The VMX blueprint `tokio_net.bp` reaches the guest net bootstrap before the firs
 - `runtime.current_thread_net.build` passes
 - the first observed failure point was `net.socket2.new`
 - after the TCP socket CABI bridge, `net.socket2.new` passes
-- the next observed failure point is `mio.net.udp.bind`
+- after the direct Mio VM-call bridge, `mio.net.udp.bind` passes with an ephemeral local port
+- `net.udp.bind` passes with an ephemeral local port
+- current frontier is `net.tcp.loopback_roundtrip`
 
 The `net.socket2.new` failure resolved to the direct `trueos_cabi_socket_tcp_open` path touching the host `SOCKETS` registry. That registry uses host heap-backed `BTreeMap` storage, and host heap is intentionally not mapped into the VMX guest EPT. The HV log correctly reported `pf-host-heap-risk src=1`.
 
 The `mio.net.udp.bind` failure is the same class one layer higher: BP guest code enters the direct `trueos_mio_*` host compatibility surface, whose socket vectors and selector registration state live in host memory.
 
-Code-side status: the TCP socket CABI now has a VM-call bridge for open, close, nonblocking, bind, connect, poll-connect, send, recv, shutdown, take-error, and peer address queries. The direct Mio compatibility CABI now also has a VM-call bridge for listener bind, stream connect, UDP bind/connect/send/recv, socket close/address/error helpers, accept, selector registration, deregistration, and poll. `tokio_net.bp` still needs a fresh boot validation before being promoted from "Mio/socket bridge in code" to "guest net baseline passes".
+The first TCP loopback run after those bridges showed the listener reporting `127.0.0.1:0`, followed by a client connect to `127.0.0.1:0`. That is a compat-layer local-address materialization issue, not a Tokio runtime failure: TCP listener bind-0 must allocate and store a real ephemeral port before `local_addr()` is handed back to the blueprint.
+
+Code-side status: the TCP socket CABI now has a VM-call bridge for open, close, nonblocking, bind, connect, poll-connect, send, recv, shutdown, take-error, and peer address queries. The direct Mio compatibility CABI now also has a VM-call bridge for listener bind, stream connect, UDP bind/connect/send/recv, socket close/address/error helpers, accept, selector registration, deregistration, and poll. TCP and UDP bind-0 in the Mio compat layer now materialize an ephemeral port into the stored local address. `tokio_net.bp` still needs a fresh boot validation before being promoted from "Mio/socket bridge in code" to "guest net baseline passes".
 
 Secure DNS is probe-sensitive:
 
@@ -164,6 +168,7 @@ Green:
 - FS runtime ops after root mount
 - Hyper HTTP/1 loopback
 - `tokio_fs.bp` guest FS baseline
+- `tokio_rt.bp` guest runtime baseline through tasks, sync, IO, and basic time
 
 Watch:
 
@@ -171,3 +176,4 @@ Watch:
 - carrier lane ownership when VMX blueprints and Tokio blocking jobs run together
 - any `std.thread_local` user that assumes OS-thread identity instead of vthread identity
 - `tokio_net.bp` after the socket and Mio CABI VM-call bridges land in a boot image
+- timer probes that use very small nested deadlines; VMX exit scheduling can make multiple Tokio timers ready in one poll, and `timeout` polls the wrapped future before its delay

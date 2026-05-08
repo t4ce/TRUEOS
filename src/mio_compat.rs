@@ -12,7 +12,6 @@ const STATUS_NOT_CONNECTED: i32 = -3;
 const STATUS_INVALID_INPUT: i32 = -4;
 const STATUS_NOT_FOUND: i32 = -5;
 const STATUS_IO: i32 = -6;
-const STATUS_TIMED_OUT: i32 = -7;
 const STATUS_NO_DEVICE: i32 = -8;
 
 const READY_READABLE: u8 = 0b0000_0001;
@@ -145,6 +144,7 @@ struct MioCompat {
     registrations: Vec<SelectorRegistration>,
     next_socket_id: u32,
     udp_next_ephemeral: u16,
+    tcp_listen_next_ephemeral: u16,
 }
 
 static MIO_COMPAT: Mutex<Option<MioCompat>> = Mutex::new(None);
@@ -248,6 +248,7 @@ impl MioCompat {
             registrations: Vec::new(),
             next_socket_id: 1,
             udp_next_ephemeral: 49_152,
+            tcp_listen_next_ephemeral: 50_000,
         }
     }
 
@@ -271,6 +272,12 @@ impl MioCompat {
     fn alloc_udp_port(&mut self) -> u16 {
         let port = self.udp_next_ephemeral;
         self.udp_next_ephemeral = self.udp_next_ephemeral.wrapping_add(1).max(49_152);
+        port
+    }
+
+    fn alloc_tcp_listen_port(&mut self) -> u16 {
+        let port = self.tcp_listen_next_ephemeral;
+        self.tcp_listen_next_ephemeral = self.tcp_listen_next_ephemeral.wrapping_add(1).max(50_000);
         port
     }
 
@@ -598,11 +605,30 @@ pub(crate) unsafe fn mio_tcp_listener_bind_host(
     let Some(local) = CompatAddr::from_raw(addr) else {
         return STATUS_INVALID_INPUT;
     };
-    let port = match local {
-        CompatAddr::V4 { port, .. } | CompatAddr::V6 { port, .. } => port,
-    };
 
     with_compat(|compat| {
+        let local = match local {
+            CompatAddr::V4 { addr, port } => CompatAddr::V4 {
+                addr,
+                port: if port == 0 {
+                    compat.alloc_tcp_listen_port()
+                } else {
+                    port
+                },
+            },
+            CompatAddr::V6 { addr, port } => CompatAddr::V6 {
+                addr,
+                port: if port == 0 {
+                    compat.alloc_tcp_listen_port()
+                } else {
+                    port
+                },
+            },
+        };
+        let port = match local {
+            CompatAddr::V4 { port, .. } | CompatAddr::V6 { port, .. } => port,
+        };
+
         let socket_id = compat.alloc_socket_id();
         compat.sockets.push(MioSocketState {
             id: socket_id,

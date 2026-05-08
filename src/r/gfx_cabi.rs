@@ -1716,21 +1716,6 @@ pub mod cabi {
             Err(req)
         }
 
-        fn contains_matching<F>(&self, mut matches: F) -> bool
-        where
-            F: FnMut(&TextureWorkReq) -> bool,
-        {
-            for offset in 0..self.len {
-                let idx = self.index(offset);
-                if let Some(existing) = self.slots[idx].as_ref()
-                    && matches(existing)
-                {
-                    return true;
-                }
-            }
-            false
-        }
-
         fn push_back(&mut self, req: TextureWorkReq) -> Result<(), TextureWorkReq> {
             if self.len == TEXTURE_UPLOAD_RING_CAP {
                 return Err(req);
