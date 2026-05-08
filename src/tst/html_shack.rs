@@ -3,6 +3,7 @@ extern crate alloc;
 use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use alloc::string::String;
+use core::sync::atomic::{AtomicU32, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::String as HString;
 use spin::Mutex;
@@ -12,6 +13,7 @@ const HTML_PREVIEW_FRONT_LINES: usize = 5;
 const HTML_PREVIEW_LINE_CHARS: usize = 160;
 const HTML_SHACK_BROWSER_HANDOFF_ENABLE: bool = true;
 const HTML_SHACK_PREVIEW_ENABLE: bool = false;
+static HTML_FETCH_IDLE_LOGS: AtomicU32 = AtomicU32::new(0);
 
 /// A fetched HTML document.
 ///
@@ -105,13 +107,31 @@ impl HtmlShack {
         road: HtmlRoad,
         auto_handoff_callback: Option<HtmlAutoHandoffCallback>,
     ) -> usize {
-        self.html_request_queue
-            .push_back(HtmlRequest::new(url, road, auto_handoff_callback));
+        let request = HtmlRequest::new(url, road, auto_handoff_callback);
+        if crate::logflag::HTML_SHACK_VERBOSE {
+            crate::log!(
+                "html_shack: enqueue url={} road={:?} pending_before={}\n",
+                request.url,
+                request.road,
+                self.html_request_queue.len()
+            );
+        }
+        self.html_request_queue.push_back(request);
         self.html_request_queue.len()
     }
 
-    pub fn pop_next(&mut self) -> Option<HtmlRequest> {
-        self.html_request_queue.pop_front()
+    pub fn pop_latest(&mut self) -> Option<(HtmlRequest, usize)> {
+        let dropped = self.html_request_queue.len().saturating_sub(1);
+        let latest = self.html_request_queue.pop_back()?;
+        self.html_request_queue.clear();
+        if crate::logflag::HTML_SHACK_VERBOSE {
+            crate::log!(
+                "html_shack: pop_latest url={} dropped={} pending_after=0\n",
+                latest.url,
+                dropped
+            );
+        }
+        Some((latest, dropped))
     }
 
     pub fn put_ready_html(&mut self, html: Html) -> usize {
@@ -153,8 +173,8 @@ pub fn get_ready_file_html(file_ref: &str) -> Result<usize, HtmlShackFileError> 
     with_html_shack(|shack| shack.get_ready_file_html(file_ref))
 }
 
-fn pop_next_request() -> Option<HtmlRequest> {
-    with_html_shack(HtmlShack::pop_next)
+fn pop_latest_request() -> Option<(HtmlRequest, usize)> {
+    with_html_shack(HtmlShack::pop_latest)
 }
 
 async fn store_ready_html(html: Html) -> usize {
@@ -245,22 +265,53 @@ fn log_html_preview(url: &str, html: &str) {
     }
 }
 
-#[embassy_executor::task(pool_size = 3)]
+#[embassy_executor::task]
 pub async fn html_fetch_service() {
+    crate::log!(
+        "html_shack: fetch service started executor=local transport=shared-tokio latest_wins=1\n"
+    );
     loop {
-        let Some(mut request) = pop_next_request() else {
+        if !crate::t::shared_tokio_runtime_ready() {
+            if crate::logflag::HTML_SHACK_VERBOSE {
+                let n = HTML_FETCH_IDLE_LOGS.fetch_add(1, Ordering::Relaxed);
+                if n < 8 || n.is_multiple_of(64) {
+                    crate::log!("html_shack: waiting for shared tokio runtime polls={}\n", n + 1);
+                }
+            }
+            Timer::after(EmbassyDuration::from_millis(HTML_FETCH_IDLE_MS)).await;
+            continue;
+        }
+
+        let Some((mut request, dropped_requests)) = pop_latest_request() else {
+            if crate::logflag::HTML_SHACK_VERBOSE {
+                let n = HTML_FETCH_IDLE_LOGS.fetch_add(1, Ordering::Relaxed);
+                if n < 8 || n.is_multiple_of(64) {
+                    crate::log!("html_shack: fetch service idle polls={}\n", n + 1);
+                }
+            }
             Timer::after(EmbassyDuration::from_millis(HTML_FETCH_IDLE_MS)).await;
             continue;
         };
 
         let fetch_url = resolve_request_url(&request);
+        if dropped_requests > 0 {
+            crate::log!(
+                "html_shack: dropped stale navigation requests count={} newest={}\n",
+                dropped_requests,
+                fetch_url
+            );
+        }
+
         let mut fetch_url_buf: HString<256> = HString::new();
         if fetch_url_buf.push_str(fetch_url.as_str()).is_err() {
             crate::log!("html_shack: drop url={} reason=url too long max=256\n", fetch_url);
             continue;
         }
 
-        match crate::t::net::fetch_html_best_effort("html_shack", fetch_url_buf) {
+        if crate::logflag::HTML_SHACK_VERBOSE {
+            crate::log!("html_shack: fetch begin url={}\n", fetch_url);
+        }
+        match crate::t::net::fetch_html_best_effort_shared("html_shack", fetch_url_buf).await {
             Ok(html) => {
                 if HTML_SHACK_PREVIEW_ENABLE {
                     log_html_preview(fetch_url.as_str(), html.as_str());

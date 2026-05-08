@@ -645,6 +645,7 @@ async fn chat_add_endpoints(endpoints: &mut Vec<ChatEndpoint>) -> usize {
 }
 
 async fn chat_http_runtime() {
+    tokio::task::spawn_local(crate::t::shared_tokio_job_pump());
     load_chat_hub_once_sync();
 
     let mut endpoints: Vec<ChatEndpoint> = Vec::new();
@@ -754,7 +755,8 @@ fn run_chat_http_runtime() -> Result<(), io::Error> {
     builder.enable_io();
     builder.enable_time();
     let runtime = builder.build()?;
-    runtime.block_on(chat_http_runtime());
+    let local = tokio::task::LocalSet::new();
+    local.block_on(&runtime, chat_http_runtime());
     Ok(())
 }
 

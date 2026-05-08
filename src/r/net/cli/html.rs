@@ -9,7 +9,7 @@ use heapless::String as HString;
 
 const SURF_TIMEOUT_MS: u32 = 35_000;
 const SURF_MAX_BYTES: usize = 4 * 1024 * 1024;
-const SURF_HTTPS_TIMEOUT_MS: u32 = SURF_TIMEOUT_MS * 4;
+const SURF_HTTPS_TIMEOUT_MS: u32 = SURF_TIMEOUT_MS;
 const HTML_PREVIEW_FRONT_LINES: usize = 5;
 const HTML_PREVIEW_LINE_CHARS: usize = 160;
 

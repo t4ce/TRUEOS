@@ -36,6 +36,7 @@ pub const OP_BP_FS_WRITE_ABORT: u32 = 0x31;
 pub const OP_BP_FS_CREATE_DIR_ALL: u32 = 0x32;
 pub const OP_BP_FS_EXISTS: u32 = 0x33;
 pub const OP_BP_FS_REMOVE: u32 = 0x34;
+pub const OP_BP_FS_STAT: u32 = 0x60;
 pub const OP_BP_SOCKET_TCP_OPEN: u32 = 0x35;
 pub const OP_BP_SOCKET_TCP_CLOSE: u32 = 0x36;
 pub const OP_BP_SOCKET_TCP_SET_NONBLOCKING: u32 = 0x37;
