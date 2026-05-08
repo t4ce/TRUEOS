@@ -14,6 +14,7 @@ pub enum Ui2DemoTexId {
     Player = 4_724,
     CursorPicker = 4_725,
     TextInput = 4_726,
+    AnalogClock = 4_727,
     TrueosfsExplorer = 4_901,
 }
 
@@ -35,6 +36,7 @@ pub enum Ui2DemoContentId {
     Player = 51,
     CursorPicker = 52,
     TextInput = 53,
+    AnalogClock = 54,
 }
 
 impl Ui2DemoContentId {

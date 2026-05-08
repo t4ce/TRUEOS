@@ -95,6 +95,8 @@ mod tst_http_trueosfs;
 mod tst_net_tcp_shell;
 #[path = "tst/smtp_smoke.rs"]
 mod tst_smtp_smoke;
+#[path = "tst/ui2_analog_clock_demo.rs"]
+mod tst_ui2_analog_clock_demo;
 #[path = "tst/ui2_bgrt.rs"]
 mod tst_ui2_bgrt;
 #[path = "tst/ui2_coreticks_demo.rs"]

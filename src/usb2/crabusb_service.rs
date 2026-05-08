@@ -29,6 +29,8 @@ static EVENT_HANDLER: [Mutex<Option<EventHandler>>; MAX_XHCI_CONTROLLERS] =
     [const { Mutex::new(None) }; MAX_XHCI_CONTROLLERS];
 static OBSERVED_DEVICES: [Mutex<Vec<ObservedUsbDevice>>; MAX_XHCI_CONTROLLERS] =
     [const { Mutex::new(Vec::new()) }; MAX_XHCI_CONTROLLERS];
+static CONTROLLER_RUNTIME_DIAG: [Mutex<super::UsbControllerRuntimeDiag>; MAX_XHCI_CONTROLLERS] =
+    [const { Mutex::new(super::UsbControllerRuntimeDiag::new()) }; MAX_XHCI_CONTROLLERS];
 
 const EVENT_PUMP_NOT_READY_SLEEP_MS: u64 = 10;
 const EVENT_PUMP_HOT_IDLE_YIELDS: u8 = 64;
@@ -78,7 +80,29 @@ struct ObservedUsbDevice {
     protocol: u8,
     num_configurations: u8,
     max_packet_size_0: u8,
+    manufacturer: Option<String>,
+    product: Option<String>,
+    serial: Option<String>,
     configurations: Vec<super::TlbUsbConfiguration>,
+}
+
+#[inline]
+fn update_runtime_diag(
+    controller_id: usize,
+    update: impl FnOnce(&mut super::UsbControllerRuntimeDiag),
+) {
+    if controller_id >= MAX_XHCI_CONTROLLERS {
+        return;
+    }
+    let mut guard = CONTROLLER_RUNTIME_DIAG[controller_id].lock();
+    update(&mut guard);
+}
+
+pub(crate) fn runtime_diag(controller_id: usize) -> super::UsbControllerRuntimeDiag {
+    if controller_id >= MAX_XHCI_CONTROLLERS {
+        return super::UsbControllerRuntimeDiag::new();
+    }
+    *CONTROLLER_RUNTIME_DIAG[controller_id].lock()
 }
 
 #[inline]
@@ -421,155 +445,190 @@ fn install_event_handler(controller_id: usize, handler: EventHandler) {
     *EVENT_HANDLER[controller_id].lock() = Some(handler);
     EVENT_HANDLER_READY[controller_id].store(true, Ordering::Release);
     PROBE_REQUESTED[controller_id].store(false, Ordering::Release);
+    update_runtime_diag(controller_id, |diag| {
+        diag.event_handler_ready = true;
+        diag.probe_requested = false;
+        diag.controller_phase = "event-ready";
+        diag.root_hub_lifecycle = "running";
+    });
 }
 
 fn uninstall_event_handler(controller_id: usize) {
     EVENT_HANDLER_READY[controller_id].store(false, Ordering::Release);
     *EVENT_HANDLER[controller_id].lock() = None;
+    update_runtime_diag(controller_id, |diag| {
+        diag.event_handler_ready = false;
+        diag.controller_phase = "event-stopped";
+        diag.root_hub_lifecycle = "stopped";
+    });
 }
 
 async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawner: &Spawner) {
-    if let Ok(devices) = host.probe_devices().await {
-        if usb_log_all_enabled() && !devices.is_empty() {
-            crate::log!("crabusb: probe ctrl={} devices={}\n", info.index, devices.len());
+    update_runtime_diag(info.index, |diag| {
+        diag.controller_phase = "probing";
+        diag.probe_requested = PROBE_REQUESTED[info.index].load(Ordering::Acquire);
+    });
+    let devices = match host.probe_devices().await {
+        Ok(devices) => devices,
+        Err(_) => {
+            update_runtime_diag(info.index, |diag| {
+                diag.controller_phase = "probe-error";
+                diag.last_probe_state = "error";
+                diag.probe_fail_streak = diag.probe_fail_streak.saturating_add(1);
+            });
+            return;
         }
+    };
 
-        let current_devices: Vec<ObservedUsbDevice> = devices
+    update_runtime_diag(info.index, |diag| {
+        diag.controller_phase = "probe-ok";
+        diag.root_hub_lifecycle = "enumerated";
+        diag.last_probe_state = "ok";
+        diag.last_probe_device_count = devices.len() as u32;
+        diag.probe_fail_streak = 0;
+        if devices.is_empty() {
+            diag.empty_probe_streak = diag.empty_probe_streak.saturating_add(1);
+        } else {
+            diag.empty_probe_streak = 0;
+        }
+    });
+
+    if usb_log_all_enabled() && !devices.is_empty() {
+        crate::log!("crabusb: probe ctrl={} devices={}\n", info.index, devices.len());
+    }
+
+    let mut current_devices: Vec<ObservedUsbDevice> = Vec::new();
+    for dev in devices.iter() {
+        let strings = match host.open_device(dev).await {
+            Ok(mut device) => super::descriptor::read_device_strings(&mut device).await,
+            Err(_) => super::descriptor::UsbDeviceStrings::default(),
+        };
+        let desc = dev.descriptor();
+        let topo = dev.topology();
+        let location = dev.location();
+        current_devices.push(ObservedUsbDevice {
+            backend_id: dev.id(),
+            slot_id: dev.id() as u32,
+            stable_id: dev.stable_id().raw(),
+            root_port_id: topo.root_port_id,
+            port_id: topo.port_id,
+            route_string: location.route_string,
+            speed: speed_label(topo.port_speed),
+            vendor_id: desc.vendor_id,
+            product_id: desc.product_id,
+            class: desc.class,
+            subclass: desc.subclass,
+            protocol: desc.protocol,
+            num_configurations: desc.num_configurations,
+            max_packet_size_0: desc.max_packet_size_0,
+            manufacturer: strings.manufacturer,
+            product: strings.product,
+            serial: strings.serial,
+            configurations: collect_tlb_usb_configurations(dev.configurations()),
+        });
+    }
+    let (connected, disconnected) = sync_observed_devices(info.index, current_devices.as_slice());
+    for dev in disconnected {
+        note_disconnected_device(info.index, dev);
+    }
+    for dev in connected {
+        note_connected_device(info.index, dev);
+    }
+
+    for dev in devices.iter() {
+        let desc = dev.descriptor();
+        let topo = dev.topology();
+        let if_count: usize = dev
+            .configurations()
             .iter()
-            .map(|dev| {
-                let desc = dev.descriptor();
-                let topo = dev.topology();
-                let location = dev.location();
-                ObservedUsbDevice {
-                    backend_id: dev.id(),
-                    slot_id: dev.id() as u32,
-                    stable_id: dev.stable_id().raw(),
-                    root_port_id: topo.root_port_id,
-                    port_id: topo.port_id,
-                    route_string: location.route_string,
-                    speed: speed_label(topo.port_speed),
-                    vendor_id: desc.vendor_id,
-                    product_id: desc.product_id,
-                    class: desc.class,
-                    subclass: desc.subclass,
-                    protocol: desc.protocol,
-                    num_configurations: desc.num_configurations,
-                    max_packet_size_0: desc.max_packet_size_0,
-                    configurations: collect_tlb_usb_configurations(dev.configurations()),
-                }
-            })
-            .collect();
-        let (connected, disconnected) =
-            sync_observed_devices(info.index, current_devices.as_slice());
-        for dev in disconnected {
-            note_disconnected_device(info.index, dev);
-        }
-        for dev in connected {
-            note_connected_device(info.index, dev);
-        }
+            .map(|cfg| cfg.interfaces.len())
+            .sum();
+        let ep_count: usize = dev
+            .configurations()
+            .iter()
+            .flat_map(|cfg| cfg.interfaces.iter())
+            .flat_map(|interface| interface.alt_settings.iter())
+            .map(|alt| alt.endpoints.len())
+            .sum();
 
-        for dev in devices.iter() {
-            let desc = dev.descriptor();
-            let topo = dev.topology();
-            let if_count: usize = dev
-                .configurations()
-                .iter()
-                .map(|cfg| cfg.interfaces.len())
-                .sum();
-            let ep_count: usize = dev
-                .configurations()
-                .iter()
-                .flat_map(|cfg| cfg.interfaces.iter())
-                .flat_map(|interface| interface.alt_settings.iter())
-                .map(|alt| alt.endpoints.len())
-                .sum();
+        if usb_log_all_enabled() {
+            crate::log!(
+                "crabusb: dev ctrl={} root_port={} vid={:04X} pid={:04X} class={:02X} subclass={:02X} proto={:02X} speed={} ifs={} eps={}\n",
+                info.index,
+                topo.root_port_id,
+                desc.vendor_id,
+                desc.product_id,
+                desc.class,
+                desc.subclass,
+                desc.protocol,
+                speed_label(topo.port_speed),
+                if_count,
+                ep_count
+            );
+            crate::log!(
+                "crabusb: descriptor check ctrl={} root_port={} ok cfgs={}\n",
+                info.index,
+                topo.root_port_id,
+                dev.configurations().len()
+            );
 
-            if usb_log_all_enabled() {
-                crate::log!(
-                    "crabusb: dev ctrl={} root_port={} vid={:04X} pid={:04X} class={:02X} subclass={:02X} proto={:02X} speed={} ifs={} eps={}\n",
-                    info.index,
-                    topo.root_port_id,
-                    desc.vendor_id,
-                    desc.product_id,
-                    desc.class,
-                    desc.subclass,
-                    desc.protocol,
-                    speed_label(topo.port_speed),
-                    if_count,
-                    ep_count
-                );
-                crate::log!(
-                    "crabusb: descriptor check ctrl={} root_port={} ok cfgs={}\n",
-                    info.index,
-                    topo.root_port_id,
-                    dev.configurations().len()
-                );
-
-                // Log all interfaces for mass-storage-class devices so we can
-                // tell whether BOT or UAS (or neither) is available.
-                for cfg in dev.configurations().iter() {
-                    for iface in cfg.interfaces.iter() {
-                        for alt in iface.alt_settings.iter() {
-                            if alt.class == 0x08 {
-                                crate::log!(
-                                    "crabusb:   if#{} alt={} class={:02X} sub={:02X} proto={:02X} eps={}\n",
-                                    iface.interface_number,
-                                    alt.alternate_setting,
-                                    alt.class,
-                                    alt.subclass,
-                                    alt.protocol,
-                                    alt.endpoints.len()
-                                );
-                            }
+            // Log all interfaces for mass-storage-class devices so we can
+            // tell whether BOT or UAS (or neither) is available.
+            for cfg in dev.configurations().iter() {
+                for iface in cfg.interfaces.iter() {
+                    for alt in iface.alt_settings.iter() {
+                        if alt.class == 0x08 {
+                            crate::log!(
+                                "crabusb:   if#{} alt={} class={:02X} sub={:02X} proto={:02X} eps={}\n",
+                                iface.interface_number,
+                                alt.alternate_setting,
+                                alt.class,
+                                alt.subclass,
+                                alt.protocol,
+                                alt.endpoints.len()
+                            );
                         }
                     }
                 }
             }
+        }
 
-            let controller_id = info.index as u32;
-            let mut bound_any = false;
-            let mut shared_led_device = None;
-            if super::hid::leds::should_share_probe_device(dev) {
-                match host.open_device(dev).await {
-                    Ok(mut device) => {
-                        super::descriptor::log_hid_report_descriptors_on_device(&mut device, dev)
-                            .await;
-                        shared_led_device = Some(device);
-                    }
-                    Err(err) => {
-                        crate::log!(
-                            "crabusb: hid+led {:04X}:{:04X} shared open failed: {:?}\n",
-                            desc.vendor_id,
-                            desc.product_id,
-                            err
-                        );
-                    }
+        let controller_id = info.index as u32;
+        let mut bound_any = false;
+        let mut shared_led_device = None;
+        if usb_log_all_enabled() && desc.class == 0x03 {
+            super::descriptor::log_hid_report_descriptors(host, dev).await;
+        }
+        if super::hid::leds::should_share_probe_device(dev) {
+            match host.open_device(dev).await {
+                Ok(mut device) => {
+                    super::descriptor::log_hid_report_descriptors_on_device(&mut device, dev).await;
+                    shared_led_device = Some(device);
+                }
+                Err(err) => {
+                    crate::log!(
+                        "crabusb: hid+led {:04X}:{:04X} shared open failed: {:?}\n",
+                        desc.vendor_id,
+                        desc.product_id,
+                        err
+                    );
                 }
             }
-            if super::hid::boot::maybe_start_hid_boot_streams(
-                host,
-                dev,
-                spawner,
-                controller_id,
-                shared_led_device.is_none(),
-            )
-            .await
-            {
-                bound_any = true;
-            }
-            if let Some(device) = shared_led_device {
-                if super::hid::leds::maybe_start_led_controller_with_device(
-                    device,
-                    dev,
-                    spawner,
-                    controller_id,
-                )
-                .await
-                {
-                    bound_any = true;
-                }
-            } else if super::hid::leds::maybe_start_led_controller(
-                host,
+        }
+        if super::hid::boot::maybe_start_hid_boot_streams(
+            host,
+            dev,
+            spawner,
+            controller_id,
+            shared_led_device.is_none(),
+        )
+        .await
+        {
+            bound_any = true;
+        }
+        if let Some(device) = shared_led_device {
+            if super::hid::leds::maybe_start_led_controller_with_device(
+                device,
                 dev,
                 spawner,
                 controller_id,
@@ -578,39 +637,43 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
             {
                 bound_any = true;
             }
-            if super::midi::maybe_start_midi(host, dev, spawner, controller_id).await {
-                bound_any = true;
-            }
-            if super::video::cam::maybe_start_camera(host, dev, spawner, controller_id).await {
-                bound_any = true;
-            }
-            let audio_started = super::sound::maybe_start_target_audio(host, dev, spawner).await;
-            if audio_started {
-                bound_any = true;
-            }
-            if !audio_started
-                && super::hid::mediacontrol::maybe_start_media_control(
-                    host,
-                    dev,
-                    spawner,
-                    controller_id,
-                )
-                .await
-            {
-                bound_any = true;
-            }
-            if super::pen::maybe_start_mass_storage(host, dev, spawner, controller_id).await {
-                bound_any = true;
-            }
-            if bound_any && usb_log_all_enabled() {
-                crate::log!(
-                    "crabusb: bind ctrl={} root_port={} vid={:04X} pid={:04X} handoff=true\n",
-                    info.index,
-                    topo.root_port_id,
-                    desc.vendor_id,
-                    desc.product_id
-                );
-            }
+        } else if super::hid::leds::maybe_start_led_controller(host, dev, spawner, controller_id)
+            .await
+        {
+            bound_any = true;
+        }
+        if super::midi::maybe_start_midi(host, dev, spawner, controller_id).await {
+            bound_any = true;
+        }
+        if super::video::cam::maybe_start_camera(host, dev, spawner, controller_id).await {
+            bound_any = true;
+        }
+        let audio_started = super::sound::maybe_start_target_audio(host, dev, spawner).await;
+        if audio_started {
+            bound_any = true;
+        }
+        if !audio_started
+            && super::hid::mediacontrol::maybe_start_media_control(
+                host,
+                dev,
+                spawner,
+                controller_id,
+            )
+            .await
+        {
+            bound_any = true;
+        }
+        if super::pen::maybe_start_mass_storage(host, dev, spawner, controller_id).await {
+            bound_any = true;
+        }
+        if bound_any && usb_log_all_enabled() {
+            crate::log!(
+                "crabusb: bind ctrl={} root_port={} vid={:04X} pid={:04X} handoff=true\n",
+                info.index,
+                topo.root_port_id,
+                desc.vendor_id,
+                desc.product_id
+            );
         }
     }
 }
@@ -637,6 +700,7 @@ pub(crate) fn observed_device_summaries(
             class: Some(dev.class),
             subclass: Some(dev.subclass),
             protocol: Some(dev.protocol),
+            product: dev.product,
         })
         .collect())
 }
@@ -669,6 +733,9 @@ pub(crate) fn observed_devices(
             protocol: dev.protocol,
             num_configurations: dev.num_configurations,
             max_packet_size_0: dev.max_packet_size_0,
+            manufacturer: dev.manufacturer,
+            product: dev.product,
+            serial: dev.serial,
             configurations: dev.configurations,
         })
         .collect())
@@ -701,6 +768,12 @@ pub async fn event_pump_task(controller_id: usize) {
             Some(Event::PortChange { port }) => {
                 idle_yields = 0;
                 let already_pending = PROBE_REQUESTED[controller_id].swap(true, Ordering::AcqRel);
+                update_runtime_diag(controller_id, |diag| {
+                    diag.probe_requested = true;
+                    diag.root_port_change_seen = true;
+                    diag.controller_phase = "port-change";
+                    diag.root_hub_lifecycle = "changed";
+                });
                 if usb_log_all_enabled() && !already_pending {
                     crate::log!(
                         "crabusb: pump port change ctrl={} root_port={}\n",
@@ -711,6 +784,11 @@ pub async fn event_pump_task(controller_id: usize) {
             }
             Some(Event::Stopped) => {
                 idle_yields = 0;
+                update_runtime_diag(controller_id, |diag| {
+                    diag.event_handler_ready = false;
+                    diag.controller_phase = "event-stopped";
+                    diag.root_hub_lifecycle = "stopped";
+                });
                 if usb_log_all_enabled() {
                     crate::log!("crabusb: pump stopped ctrl={}\n", controller_id);
                 }
@@ -883,9 +961,24 @@ pub async fn bsp_service(controller_index: usize) {
                 }
                 Timer::after(EmbassyDuration::from_millis(20)).await;
             }
+        } else {
+            update_runtime_diag(info.index, |diag| {
+                diag.controller_phase = "init-error";
+                diag.root_hub_lifecycle = "retry";
+                diag.probe_fail_streak = diag.probe_fail_streak.saturating_add(1);
+            });
         }
 
         clear_observed_devices(controller_index);
+        update_runtime_diag(controller_index, |diag| {
+            diag.event_handler_ready =
+                EVENT_HANDLER_READY[controller_index].load(Ordering::Acquire);
+            diag.probe_requested = PROBE_REQUESTED[controller_index].load(Ordering::Acquire);
+            if diag.controller_phase != "init-error" {
+                diag.controller_phase = "retry";
+            }
+            diag.root_hub_lifecycle = "retry";
+        });
 
         Timer::after(EmbassyDuration::from_millis(RETRY_MS)).await;
     }
