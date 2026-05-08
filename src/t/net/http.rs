@@ -608,7 +608,6 @@ async fn request_http_body(
                 }
                 api::Event::Closed { handle } => {
                     if tcp_handle == Some(handle) {
-                        last_progress = Instant::now();
                         if crate::logflag::VHTTPS_VERBOSE {
                             crate::log!(
                                 "http: closed host={} port={} handle={} rx_bytes={} hdr_end={}\n",
@@ -917,22 +916,6 @@ fn hyper_redirect_url_from_location(
         return Some(alloc::format!("http://{}:{}{}", current.host, current.port, loc));
     }
     None
-}
-
-pub async fn fetch_http_body_hyper(
-    url: &str,
-    timeout_ms: u32,
-    max_rx: usize,
-) -> Result<Vec<u8>, HttpFetchError> {
-    request_http_body_hyper(
-        hyper::Method::GET,
-        url,
-        "application/octet-stream",
-        &[],
-        timeout_ms,
-        max_rx,
-    )
-    .await
 }
 
 pub async fn post_http_body_hyper(

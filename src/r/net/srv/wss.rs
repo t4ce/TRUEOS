@@ -189,8 +189,6 @@ impl WssConnection {
 
         // Wait for handshake response; must call `client_accept` to transition to Open.
         let mut handshake_response = Vec::new();
-        let mut rx_buf = Vec::new();
-
         loop {
             let mut got_event = false;
             while let Some(ev) = events.pop() {
@@ -203,7 +201,6 @@ impl WssConnection {
                             match client.client_accept(&ws_key, handshake_response.as_slice()) {
                                 Ok((consumed, _subproto)) => {
                                     let extra = handshake_response.split_off(consumed);
-                                    rx_buf = extra;
                                     // Handshake complete.
                                     return Ok(Self {
                                         cmds,
@@ -212,7 +209,7 @@ impl WssConnection {
                                         client,
                                         connected: true,
                                         closed: false,
-                                        rx_buf,
+                                        rx_buf: extra,
                                     });
                                 }
                                 Err(embedded_websocket::Error::HttpHeaderIncomplete) => {}
@@ -364,7 +361,6 @@ impl WssConnection {
                         self.closed = true;
                         None
                     }
-                    _ => None,
                 }
             }
             // Error handling matching ws.rs

@@ -24,24 +24,15 @@ pub enum DnsError {
 
 #[derive(Clone, Copy, Debug)]
 pub struct DnsConfig {
-    pub servers: [DnsServer; 8],
     pub server_count: u8,
     pub timeout_ms: u64,
     pub resend_ms: u64,
-    pub cname_depth: u8,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DnsServer {
-    V4([u8; 4]),
-    V6([u8; 16]),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SecureDnsTransport {
     Doh,
     Dot,
-    Doh3,
 }
 
 impl SecureDnsTransport {
@@ -49,7 +40,6 @@ impl SecureDnsTransport {
         match self {
             Self::Doh => "doh",
             Self::Dot => "dot",
-            Self::Doh3 => "doh3",
         }
     }
 }
@@ -115,53 +105,45 @@ impl DnsConfig {
         // - v6-only networks (need v6 resolvers)
         // - v4-only networks (need v4 resolvers)
         // - dual-stack (either)
-        let mut servers = [DnsServer::V4([0u8; 4]); 8];
         let mut n: u8 = 0;
 
-        for i in 0..(ra6_count as usize).min(ra6.len()) {
-            if (n as usize) >= servers.len() {
+        for _ in 0..(ra6_count as usize).min(ra6.len()) {
+            if (n as usize) >= 8 {
                 break;
             }
-            servers[n as usize] = DnsServer::V6(ra6[i]);
             n = n.saturating_add(1);
         }
-        for i in 0..(dhcp6_count as usize).min(dhcp6.len()) {
-            if (n as usize) >= servers.len() {
+        for _ in 0..(dhcp6_count as usize).min(dhcp6.len()) {
+            if (n as usize) >= 8 {
                 break;
             }
-            servers[n as usize] = DnsServer::V6(dhcp6[i]);
             n = n.saturating_add(1);
         }
-        for i in 0..(dhcp4_count as usize).min(dhcp4.len()) {
-            if (n as usize) >= servers.len() {
+        for _ in 0..(dhcp4_count as usize).min(dhcp4.len()) {
+            if (n as usize) >= 8 {
                 break;
             }
-            servers[n as usize] = DnsServer::V4(dhcp4[i]);
             n = n.saturating_add(1);
         }
-        for s in PUBLIC_DNS_SERVERS_V6.iter() {
-            if (n as usize) >= servers.len() {
+        for _ in PUBLIC_DNS_SERVERS_V6.iter() {
+            if (n as usize) >= 8 {
                 break;
             }
-            servers[n as usize] = DnsServer::V6(*s);
             n = n.saturating_add(1);
         }
-        for s in PUBLIC_DNS_SERVERS_V4.iter() {
-            if (n as usize) >= servers.len() {
+        for _ in PUBLIC_DNS_SERVERS_V4.iter() {
+            if (n as usize) >= 8 {
                 break;
             }
-            servers[n as usize] = DnsServer::V4(*s);
             n = n.saturating_add(1);
         }
 
         Self {
-            servers,
             server_count: n,
             // Loader/CDN imports are sensitive to resolver jitter; use a less aggressive
             // default than 1.5s to avoid spurious NET_ERR_TIMEOUT_DNS.
             timeout_ms: 4000,
             resend_ms: 500,
-            cname_depth: 6,
         }
     }
 
@@ -177,45 +159,40 @@ impl DnsConfig {
             .flatten()
             .or_else(crate::net::adapter::primary_ipv4_router_snapshot);
 
-        let mut servers = [DnsServer::V4([0u8; 4]); 8];
         let mut n: u8 = 0;
 
-        for i in 0..(dhcp4_count as usize).min(dhcp4.len()) {
-            if (n as usize) >= servers.len() {
+        for _ in 0..(dhcp4_count as usize).min(dhcp4.len()) {
+            if (n as usize) >= 8 {
                 break;
             }
-            servers[n as usize] = DnsServer::V4(dhcp4[i]);
             n = n.saturating_add(1);
         }
         if let Some(router) = router4 {
-            let duplicate = servers[..(n as usize)]
+            let duplicate = dhcp4[..(dhcp4_count as usize).min(dhcp4.len())]
                 .iter()
-                .any(|server| matches!(server, DnsServer::V4(addr) if *addr == router));
-            if !duplicate && (n as usize) < servers.len() {
-                servers[n as usize] = DnsServer::V4(router);
+                .any(|addr| *addr == router);
+            if !duplicate && (n as usize) < 8 {
                 n = n.saturating_add(1);
             }
         }
         for s in PUBLIC_DNS_SERVERS_V4.iter() {
-            if (n as usize) >= servers.len() {
+            if (n as usize) >= 8 {
                 break;
             }
-            let duplicate = servers[..(n as usize)]
+            let duplicate = dhcp4[..(dhcp4_count as usize).min(dhcp4.len())]
                 .iter()
-                .any(|server| matches!(server, DnsServer::V4(addr) if addr == s));
+                .any(|addr| addr == s)
+                || router4 == Some(*s);
             if duplicate {
                 continue;
             }
-            servers[n as usize] = DnsServer::V4(*s);
             n = n.saturating_add(1);
         }
 
         Self {
-            servers,
             server_count: n,
             timeout_ms: 4000,
             resend_ms: 500,
-            cname_depth: 6,
         }
     }
 }
@@ -276,49 +253,22 @@ static DNS_TLS_SEQ: AtomicU32 = AtomicU32::new(1);
 static DNS_WIRE_QUERY_SEQ: AtomicU32 = AtomicU32::new(1);
 
 #[derive(Clone, Copy, Debug)]
-enum SecureEndpointAddr {
-    V4([u8; 4]),
-    V6([u8; 16]),
-}
-
-#[derive(Clone, Copy, Debug)]
 struct DotEndpoint {
-    addr: SecureEndpointAddr,
+    addr: [u8; 4],
     tls_name: &'static str,
 }
 
-const PUBLIC_DOT_ENDPOINTS: [DotEndpoint; 6] = [
+const PUBLIC_DOT_ENDPOINTS: [DotEndpoint; 3] = [
     DotEndpoint {
-        addr: SecureEndpointAddr::V4([1, 1, 1, 1]),
+        addr: [1, 1, 1, 1],
         tls_name: "cloudflare-dns.com",
     },
     DotEndpoint {
-        addr: SecureEndpointAddr::V4([8, 8, 8, 8]),
+        addr: [8, 8, 8, 8],
         tls_name: "dns.google",
     },
     DotEndpoint {
-        addr: SecureEndpointAddr::V4([9, 9, 9, 9]),
-        tls_name: "dns.quad9.net",
-    },
-    DotEndpoint {
-        addr: SecureEndpointAddr::V6([
-            0x26, 0x06, 0x47, 0x00, 0x47, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x11, 0x11,
-        ]),
-        tls_name: "cloudflare-dns.com",
-    },
-    DotEndpoint {
-        addr: SecureEndpointAddr::V6([
-            0x20, 0x01, 0x48, 0x60, 0x48, 0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x88, 0x88,
-        ]),
-        tls_name: "dns.google",
-    },
-    DotEndpoint {
-        addr: SecureEndpointAddr::V6([
-            0x26, 0x20, 0x00, 0xfe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0xfe,
-        ]),
+        addr: [9, 9, 9, 9],
         tls_name: "dns.quad9.net",
     },
 ];
@@ -518,7 +468,6 @@ async fn resolve_ipv4_secure_transport(
     match transport {
         SecureDnsTransport::Doh => resolve_ipv4_doh_for_device(dev_idx, host_trimmed, cfg).await,
         SecureDnsTransport::Dot => resolve_ipv4_dot_for_device(dev_idx, host_trimmed, cfg).await,
-        SecureDnsTransport::Doh3 => Err(DnsError::NoAnswer),
     }
 }
 
@@ -671,48 +620,24 @@ fn base64url_no_pad(input: &[u8]) -> String {
 }
 
 struct DohEndpoint {
-    addr: SecureEndpointAddr,
+    addr: [u8; 4],
     tls_name: &'static str,
     path: &'static str,
 }
 
-const PUBLIC_DOH_ENDPOINTS: [DohEndpoint; 6] = [
+const PUBLIC_DOH_ENDPOINTS: [DohEndpoint; 3] = [
     DohEndpoint {
-        addr: SecureEndpointAddr::V4([1, 1, 1, 1]),
+        addr: [1, 1, 1, 1],
         tls_name: "cloudflare-dns.com",
         path: "/dns-query",
     },
     DohEndpoint {
-        addr: SecureEndpointAddr::V4([8, 8, 8, 8]),
+        addr: [8, 8, 8, 8],
         tls_name: "dns.google",
         path: "/dns-query",
     },
     DohEndpoint {
-        addr: SecureEndpointAddr::V4([9, 9, 9, 9]),
-        tls_name: "dns.quad9.net",
-        path: "/dns-query",
-    },
-    DohEndpoint {
-        addr: SecureEndpointAddr::V6([
-            0x26, 0x06, 0x47, 0x00, 0x47, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x11, 0x11,
-        ]),
-        tls_name: "cloudflare-dns.com",
-        path: "/dns-query",
-    },
-    DohEndpoint {
-        addr: SecureEndpointAddr::V6([
-            0x20, 0x01, 0x48, 0x60, 0x48, 0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x88, 0x88,
-        ]),
-        tls_name: "dns.google",
-        path: "/dns-query",
-    },
-    DohEndpoint {
-        addr: SecureEndpointAddr::V6([
-            0x26, 0x20, 0x00, 0xfe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0xfe,
-        ]),
+        addr: [9, 9, 9, 9],
         tls_name: "dns.quad9.net",
         path: "/dns-query",
     },
@@ -901,9 +826,6 @@ async fn resolve_doh_addr<const N: usize>(
     let (query_id, query) = build_dns_query(host_trimmed, qtype)?;
     let encoded = base64url_no_pad(&query);
     for endpoint in PUBLIC_DOH_ENDPOINTS.iter() {
-        let SecureEndpointAddr::V4(addr) = endpoint.addr else {
-            continue;
-        };
         let path = format!("{}?dns={}", endpoint.path, encoded);
         let req = format!(
             "GET {} HTTP/1.1\r\nHost: {}\r\nAccept: application/dns-message\r\nConnection: close\r\nUser-Agent: TRUEOS/secure-dns\r\n\r\n",
@@ -914,7 +836,7 @@ async fn resolve_doh_addr<const N: usize>(
         match dns_tls_exchange_v4(
             "dns-doh",
             dev_idx,
-            addr,
+            endpoint.addr,
             DOH_PORT,
             endpoint.tls_name,
             req,
@@ -972,13 +894,10 @@ async fn resolve_dot_addr<const N: usize>(
     payload.extend_from_slice(&(query.len() as u16).to_be_bytes());
     payload.extend_from_slice(&query);
     for endpoint in PUBLIC_DOT_ENDPOINTS.iter() {
-        let SecureEndpointAddr::V4(addr) = endpoint.addr else {
-            continue;
-        };
         match dns_tls_exchange_v4(
             "dns-dot",
             dev_idx,
-            addr,
+            endpoint.addr,
             DOT_PORT,
             endpoint.tls_name,
             payload.clone(),
@@ -1258,7 +1177,6 @@ async fn resolve_ipv6_secure_transport(
     match transport {
         SecureDnsTransport::Doh => resolve_ipv6_doh_for_device(dev_idx, host_trimmed, cfg).await,
         SecureDnsTransport::Dot => resolve_ipv6_dot_for_device(dev_idx, host_trimmed, cfg).await,
-        SecureDnsTransport::Doh3 => Err(DnsError::NoAnswer),
     }
 }
 
