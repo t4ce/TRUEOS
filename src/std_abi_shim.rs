@@ -290,7 +290,7 @@ pub unsafe extern "C" fn sys_rand(recv_buf: *mut u32, words: usize) {
     let ok = if vmx_guest_std_context() {
         guest_rand_fill(bytes)
     } else {
-        crate::rng::fill_bytes(bytes)
+        crate::Tyche::fill_bytes(bytes)
     };
     if !ok {
         ptr::write_bytes(recv_buf, 0, words);

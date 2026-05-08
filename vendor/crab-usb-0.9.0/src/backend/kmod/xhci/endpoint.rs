@@ -90,6 +90,7 @@ struct IsoPacketTd {
 }
 
 pub struct Endpoint {
+    slot_id: u8,
     dci: Dci,
     pub ring: SendRing<TransferEvent>,
     bell: Arc<Mutex<SlotBell>>,
@@ -111,11 +112,17 @@ unsafe impl Sync for Endpoint {}
 const ENDPOINT_RING_PAGES: usize = 16;
 
 impl Endpoint {
-    pub fn new(dci: Dci, kernel: &Kernel, bell: Arc<Mutex<SlotBell>>) -> crate::err::Result<Self> {
+    pub fn new(
+        slot_id: u8,
+        dci: Dci,
+        kernel: &Kernel,
+        bell: Arc<Mutex<SlotBell>>,
+    ) -> crate::err::Result<Self> {
         let ring =
             SendRing::new_with_pages(ENDPOINT_RING_PAGES, DmaDirection::Bidirectional, kernel)?;
 
         Ok(Self {
+            slot_id,
             dci,
             ring,
             bell,
@@ -220,6 +227,18 @@ impl Endpoint {
         event_trb: TransferId,
         event: TransferEvent,
     ) -> Result<Transfer, TransferError> {
+        let completion_code = match event.completion_code() {
+            Ok(code) => code as u8,
+            Err(raw) => raw,
+        };
+        crate::debug_record_event(
+            self.slot_id,
+            self.dci.as_u8(),
+            completion_code,
+            event.trb_transfer_length(),
+            event_trb.0.raw(),
+        );
+
         let submitted = self.inflight.remove(&request_id).ok_or_else(|| {
             warn!(
                 "xhci: completion for missing request dci={} request_id={} event_trb={:#x}",
@@ -713,6 +732,15 @@ impl EndpointOp for Endpoint {
             }
         };
 
+        let debug_trb_ptr = match &kind {
+            SubmittedTdKind::Normal { completion_trb } => completion_trb.0.raw(),
+            SubmittedTdKind::Control(control_td) => control_td.status_trb.0.raw(),
+            SubmittedTdKind::Iso { packets } => packets
+                .first()
+                .map(|packet| packet.trb.0.raw())
+                .unwrap_or_default(),
+        };
+
         self.outstanding_trbs += required_trbs;
         self.inflight.insert(
             request_id,
@@ -722,6 +750,15 @@ impl EndpointOp for Endpoint {
                 trb_count: required_trbs,
                 cancelled: false,
             },
+        );
+        crate::debug_record_submit_stream(
+            self.slot_id,
+            self.dci.as_u8(),
+            if matches!(dir, Direction::In) { 1 } else { 2 },
+            0,
+            data_len as u32,
+            debug_trb_ptr,
+            self.ring.bus_addr().raw(),
         );
         mb();
         self.doorbell();

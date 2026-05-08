@@ -9,7 +9,7 @@ use xhci::{
 };
 
 use super::{reg::XhciRegisters, ring::SendRing};
-use crate::{err::ConvertXhciError, osal::Kernel, queue::Finished};
+use crate::{debug_record_event, debug_record_submit, err::ConvertXhciError, osal::Kernel, queue::Finished};
 
 #[derive(Clone)]
 pub struct CommandRing(Arc<Mutex<Inner>>);
@@ -47,6 +47,7 @@ impl CommandRing {
         let fur = {
             let mut inner = self.0.lock();
             let trb_addr = inner.ring.enque_command(trb);
+            debug_record_submit(0xFF, 0, 0, trb_addr.raw());
             let fur = inner.ring.take_finished_future(trb_addr);
             wmb();
             inner
@@ -58,6 +59,17 @@ impl CommandRing {
         };
 
         let res = fur.await;
+        let completion_code = match res.completion_code() {
+            Ok(code) => code as u8,
+            Err(raw) => raw,
+        };
+        debug_record_event(
+            res.slot_id(),
+            0xFF,
+            completion_code,
+            res.command_completion_parameter(),
+            res.command_trb_pointer(),
+        );
 
         match res.completion_code() {
             Ok(code) => code.to_result()?,

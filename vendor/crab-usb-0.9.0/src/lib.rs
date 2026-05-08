@@ -1,4 +1,4 @@
-#![cfg_attr(target_os = "none", no_std)]
+#![cfg_attr(any(target_os = "none", target_os = "trueos", target_os = "zkvm"), no_std)]
 #[macro_use]
 extern crate alloc;
 #[macro_use]
@@ -14,12 +14,14 @@ pub use usb_if;
 mod _macros;
 
 pub(crate) mod backend;
+mod debug;
 pub mod device;
 pub mod err;
 mod host;
 
 pub use crate::backend::ty::Event;
 pub use crate::backend::ty::ep::Endpoint;
+pub use crate::debug::*;
 pub use host::*;
 
 #[allow(unused_imports)]

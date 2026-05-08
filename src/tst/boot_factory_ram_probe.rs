@@ -58,8 +58,8 @@ fn build_random_sample(page_phys: u64) -> FactoryRamProbeState {
         core::slice::from_raw_parts(page_virt as *const u8, FACTORY_RAM_PROBE_PAGE_BYTES)
     };
 
-    let mut seed = crate::rng::rdrand_u64()
-        .or_else(|| crate::rng::rdseed_u64())
+    let mut seed = crate::Tyche::rdrand_u64()
+        .or_else(|| crate::Tyche::rdseed_u64())
         .unwrap_or(page_phys ^ crate::time::uptime_seconds());
     seed ^= page[0] as u64;
     seed ^= (page[FACTORY_RAM_PROBE_PAGE_BYTES / 2] as u64) << 8;

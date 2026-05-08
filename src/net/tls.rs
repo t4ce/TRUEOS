@@ -88,7 +88,7 @@ impl KernelTlsRng {
 
 impl TlsRng for KernelTlsRng {
     fn fill(&mut self, out: &mut [u8]) -> Result<(), TlsError> {
-        if crate::rng::fill_bytes(out) {
+        if crate::Tyche::fill_bytes(out) {
             Ok(())
         } else {
             Err(TlsError::Io)
