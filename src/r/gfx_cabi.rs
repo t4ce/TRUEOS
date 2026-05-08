@@ -6596,6 +6596,27 @@ pub mod cabi {
     }
 
     #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_input_pop_tablet(
+        out: *mut crate::usb2::input::TabletEvent,
+    ) -> i32 {
+        if out.is_null() {
+            return -1;
+        }
+        let Some(t) = crate::usb2::input::pop_tablet_event() else {
+            return 0;
+        };
+        (*out).slot_id = t.slot_id;
+        (*out).buttons = t.buttons;
+        (*out).report_id = t.report_id;
+        (*out).x_raw = t.x_raw;
+        (*out).y_raw = t.y_raw;
+        (*out).x_norm_q15 = t.x_norm_q15;
+        (*out).y_norm_q15 = t.y_norm_q15;
+        (*out).flags = t.flags;
+        1
+    }
+
+    #[unsafe(no_mangle)]
     pub extern "C" fn trueos_cabi_input_keyboard_count() -> u32 {
         crate::r::keyboard::keyboard_count()
     }

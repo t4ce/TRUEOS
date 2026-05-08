@@ -103,7 +103,8 @@ pub(crate) fn set_cursor_spirit_glyph(slot_id: u32, glyph: char) -> bool {
 
 #[inline]
 pub(crate) fn cursor_color(slot_id: u32) -> (u8, u8, u8, u8) {
-    Ui2CursorColor::from_slot_id(slot_id).rgba()
+    let color = cursor_color_rgba8(slot_id);
+    (color.r, color.g, color.b, color.a)
 }
 
 #[inline]
@@ -127,7 +128,8 @@ pub(crate) fn cursor_color_for_cursor_id(cursor_id: u32) -> (u8, u8, u8, u8) {
 
 #[inline]
 pub(crate) fn cursor_color_rgba8_for_cursor_id(cursor_id: u32) -> Rgba8 {
-    Ui2CursorColor::from_cursor_id(cursor_id).rgba8()
+    let (r, g, b, a) = cursor_color_for_cursor_id(cursor_id);
+    Rgba8::new(r, g, b, a)
 }
 
 #[inline]
