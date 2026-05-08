@@ -336,6 +336,57 @@ pub(crate) fn remove_hid_slot(controller_id: u32, slot_id: u32) {
     let _ = crate::r::keyboard::remove_snapshots(controller_id, slot_id);
 }
 
+#[inline]
+fn cabi_hut_source_kind(value: u8) -> hut::HidSourceKind {
+    match value {
+        1 => hut::HidSourceKind::Human,
+        2 => hut::HidSourceKind::Ai,
+        _ => hut::HidSourceKind::Unknown,
+    }
+}
+
+#[inline]
+fn cabi_utf8<'a>(ptr: *const u8, len: usize) -> Option<&'a str> {
+    if len == 0 {
+        return Some("");
+    }
+    if ptr.is_null() {
+        return None;
+    }
+    let bytes = unsafe { core::slice::from_raw_parts(ptr, len) };
+    core::str::from_utf8(bytes).ok()
+}
+
+fn mouse_ring_read(
+    controller_id: u32,
+    slot_id: u32,
+    ep_target: u32,
+    out: &mut [mouse::TrueosHidMouseSample],
+) -> (u32, usize) {
+    let mut runtimes = HID_RUNTIMES.lock();
+    let Some(runtime) = runtimes.iter_mut().find(|runtime| {
+        runtime.controller_id == controller_id
+            && runtime.slot_id == slot_id
+            && runtime.ep_target == ep_target
+            && runtime.hid_kind == HID_KIND_MOUSE
+    }) else {
+        return (0, 0);
+    };
+
+    let dropped = runtime.mouse_ring.dropped;
+    runtime.mouse_ring.dropped = 0;
+
+    let mut wrote = 0usize;
+    while wrote < out.len() {
+        let Some(sample) = runtime.mouse_ring.pop() else {
+            break;
+        };
+        out[wrote] = sample;
+        wrote += 1;
+    }
+    (dropped, wrote)
+}
+
 fn keyboard_ring_read(
     controller_id: u32,
     slot_id: u32,
@@ -397,6 +448,30 @@ fn tablet_ring_read(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_hid_mouse_read(
+    controller_id: u32,
+    slot_id: u32,
+    ep_target: u32,
+    out: *mut mouse::TrueosHidMouseSample,
+    out_cap: u32,
+    out_dropped: *mut u32,
+) -> u32 {
+    if !out_dropped.is_null() {
+        *out_dropped = 0;
+    }
+    if out_cap == 0 || out.is_null() {
+        return 0;
+    }
+
+    let out_slice = core::slice::from_raw_parts_mut(out, out_cap as usize);
+    let (dropped, wrote) = mouse_ring_read(controller_id, slot_id, ep_target, out_slice);
+    if !out_dropped.is_null() {
+        *out_dropped = dropped;
+    }
+    wrote as u32
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_hid_keyboard_read(
     controller_id: u32,
     slot_id: u32,
@@ -442,4 +517,123 @@ pub unsafe extern "C" fn trueos_cabi_hid_tablet_read(
         *out_dropped = dropped;
     }
     wrote as u32
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_hid_hut_upsert_combo(
+    combo_id: u32,
+    source_kind: u8,
+    source_tag_ptr: *const u8,
+    source_tag_len: usize,
+) -> i32 {
+    let Some(source_tag) = cabi_utf8(source_tag_ptr, source_tag_len) else {
+        return -1;
+    };
+    if hut::upsert_combo(combo_id, cabi_hut_source_kind(source_kind), source_tag) {
+        0
+    } else {
+        -1
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_hid_hut_bind_combo_mouse(
+    combo_id: u32,
+    controller_id: u32,
+    slot_id: u32,
+    ep_target: u32,
+) -> i32 {
+    if hut::bind_combo_mouse(combo_id, controller_id, slot_id, ep_target) {
+        0
+    } else {
+        -1
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_hid_hut_bind_combo_keyboard(
+    combo_id: u32,
+    controller_id: u32,
+    slot_id: u32,
+    ep_target: u32,
+) -> i32 {
+    if hut::bind_combo_keyboard(combo_id, controller_id, slot_id, ep_target) {
+        0
+    } else {
+        -1
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_hid_hut_bind_combo_tablet(
+    combo_id: u32,
+    controller_id: u32,
+    slot_id: u32,
+    ep_target: u32,
+) -> i32 {
+    if hut::bind_combo_tablet(combo_id, controller_id, slot_id, ep_target) {
+        0
+    } else {
+        -1
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_hid_hut_read_mice(
+    out: *mut hut::TrueosHidHutMouseState,
+    out_cap: u32,
+) -> u32 {
+    if out_cap == 0 {
+        return hut::mice_snapshot().len() as u32;
+    }
+    if out.is_null() {
+        return 0;
+    }
+    let out_slice = core::slice::from_raw_parts_mut(out, out_cap as usize);
+    hut::read_mice_snapshot(out_slice) as u32
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_hid_hut_read_tablets(
+    out: *mut hut::TrueosHidHutTabletState,
+    out_cap: u32,
+) -> u32 {
+    if out_cap == 0 {
+        return hut::tablets_snapshot().len() as u32;
+    }
+    if out.is_null() {
+        return 0;
+    }
+    let out_slice = core::slice::from_raw_parts_mut(out, out_cap as usize);
+    hut::read_tablets_snapshot(out_slice) as u32
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_hid_hut_read_keyboards(
+    out: *mut hut::TrueosHidHutKeyboardState,
+    out_cap: u32,
+) -> u32 {
+    if out_cap == 0 {
+        return hut::keyboards_snapshot().len() as u32;
+    }
+    if out.is_null() {
+        return 0;
+    }
+    let out_slice = core::slice::from_raw_parts_mut(out, out_cap as usize);
+    hut::read_keyboards_snapshot(out_slice) as u32
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_hid_hut_read_combos(
+    out: *mut hut::TrueosHidHutCombo,
+    out_cap: u32,
+) -> u32 {
+    if out_cap == 0 {
+        return hut::combos_snapshot().len() as u32;
+    }
+    if out.is_null() {
+        return 0;
+    }
+    let out_slice = core::slice::from_raw_parts_mut(out, out_cap as usize);
+    hut::read_combos_snapshot(out_slice) as u32
 }

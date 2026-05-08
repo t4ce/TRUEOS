@@ -118,6 +118,14 @@ fn pick_hid_boot_targets(
                 let kind = match (alt.class, alt.subclass, alt.protocol) {
                     (0x03, 0x01, 0x01) => HidBootKind::Keyboard,
                     (0x03, 0x01, 0x02) => HidBootKind::Mouse,
+                    _ if super::tablet::matches_interface(
+                        alt.class,
+                        alt.subclass,
+                        alt.protocol,
+                    ) =>
+                    {
+                        HidBootKind::Tablet
+                    }
                     _ if super::eyetracker::matches_interface(
                         alt.class,
                         alt.subclass,

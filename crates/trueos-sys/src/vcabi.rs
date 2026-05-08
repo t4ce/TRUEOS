@@ -143,6 +143,7 @@ unsafe extern "C" {
         out_dy: *mut i8,
         out_wheel: *mut i8,
     ) -> i32;
+    pub fn trueos_cabi_input_pop_tablet(out: *mut TrueosTabletEvent) -> i32;
     pub fn trueos_cabi_input_cursor_pos(cursor_id: u32, out_x: *mut i32, out_y: *mut i32) -> i32;
     pub fn trueos_cabi_input_cursor_buttons(cursor_id: u32, out_buttons_down: *mut u32) -> i32;
     pub fn trueos_cabi_input_read_cursor_events_since(
@@ -168,6 +169,56 @@ unsafe extern "C" {
         out_cap: u32,
         out_dropped: *mut u32,
     ) -> u32;
+    pub fn trueos_cabi_hid_mouse_read(
+        controller_id: u32,
+        slot_id: u32,
+        ep_target: u32,
+        out: *mut TrueosHidMouseSample,
+        out_cap: u32,
+        out_dropped: *mut u32,
+    ) -> u32;
+    pub fn trueos_cabi_hid_tablet_read(
+        controller_id: u32,
+        slot_id: u32,
+        ep_target: u32,
+        out: *mut TrueosHidTabletSample,
+        out_cap: u32,
+        out_dropped: *mut u32,
+    ) -> u32;
+    pub fn trueos_cabi_hid_hut_upsert_combo(
+        combo_id: u32,
+        source_kind: u8,
+        source_tag_ptr: *const u8,
+        source_tag_len: usize,
+    ) -> i32;
+    pub fn trueos_cabi_hid_hut_bind_combo_mouse(
+        combo_id: u32,
+        controller_id: u32,
+        slot_id: u32,
+        ep_target: u32,
+    ) -> i32;
+    pub fn trueos_cabi_hid_hut_bind_combo_keyboard(
+        combo_id: u32,
+        controller_id: u32,
+        slot_id: u32,
+        ep_target: u32,
+    ) -> i32;
+    pub fn trueos_cabi_hid_hut_bind_combo_tablet(
+        combo_id: u32,
+        controller_id: u32,
+        slot_id: u32,
+        ep_target: u32,
+    ) -> i32;
+    pub fn trueos_cabi_hid_hut_read_mice(out: *mut TrueosHidHutMouseState, out_cap: u32) -> u32;
+    pub fn trueos_cabi_hid_hut_read_tablets(
+        out: *mut TrueosHidHutTabletState,
+        out_cap: u32,
+    ) -> u32;
+    pub fn trueos_cabi_hid_hut_read_keyboards(
+        out: *mut TrueosHidHutKeyboardState,
+        out_cap: u32,
+    ) -> u32;
+    pub fn trueos_cabi_hid_hut_read_combos(out: *mut TrueosHidHutCombo, out_cap: u32) -> u32;
     pub fn trueos_cabi_input_write_keyboard_text(
         slot_id: u32,
         text_ptr: *const u8,
@@ -424,6 +475,32 @@ pub struct TrueosMouseState {
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosTabletEvent {
+    pub slot_id: u32,
+    pub buttons: u8,
+    pub report_id: u8,
+    pub x_raw: u16,
+    pub y_raw: u16,
+    pub x_norm_q15: u16,
+    pub y_norm_q15: u16,
+    pub flags: u8,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosHidMouseSample {
+    pub t_ms: u32,
+    pub seq: u32,
+    pub slot_id: u32,
+    pub buttons: u8,
+    pub dx: i8,
+    pub dy: i8,
+    pub wheel: i8,
+    pub flags: u8,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
 pub struct TrueosHidKeyboardSample {
     pub t_ms: u32,
     pub seq: u32,
@@ -434,6 +511,22 @@ pub struct TrueosHidKeyboardSample {
     pub keys: [u8; 6],
     pub ascii: [u8; 6],
     pub flags: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosHidTabletSample {
+    pub t_ms: u32,
+    pub seq: u32,
+    pub slot_id: u32,
+    pub buttons: u8,
+    pub report_id: u8,
+    pub flags: u8,
+    pub reserved0: u8,
+    pub x_raw: u16,
+    pub y_raw: u16,
+    pub x_norm_q15: u16,
+    pub y_norm_q15: u16,
 }
 
 #[repr(C)]
@@ -473,6 +566,77 @@ pub struct TrueosHidCursorEvent {
     pub x: f64,
     pub y: f64,
     pub flags: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosHidHutMouseState {
+    pub controller_id: u32,
+    pub slot_id: u32,
+    pub ep_target: u32,
+    pub buttons_down: u32,
+    pub combo_id: u32,
+    pub source_kind: u8,
+    pub virtual_device: u8,
+    pub source_tag_len: u8,
+    pub reserved0: u8,
+    pub source_tag: [u8; 32],
+    pub x: f64,
+    pub y: f64,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosHidHutTabletState {
+    pub controller_id: u32,
+    pub slot_id: u32,
+    pub ep_target: u32,
+    pub x_raw: u16,
+    pub y_raw: u16,
+    pub buttons_down: u32,
+    pub report_id: u8,
+    pub source_kind: u8,
+    pub virtual_device: u8,
+    pub source_tag_len: u8,
+    pub combo_id: u32,
+    pub source_tag: [u8; 32],
+    pub x: f64,
+    pub y: f64,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosHidHutKeyboardState {
+    pub controller_id: u32,
+    pub slot_id: u32,
+    pub ep_target: u32,
+    pub combo_id: u32,
+    pub modifiers: u8,
+    pub source_kind: u8,
+    pub virtual_device: u8,
+    pub source_tag_len: u8,
+    pub keys: [u8; 6],
+    pub ascii: [u8; 6],
+    pub source_tag: [u8; 32],
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosHidHutCombo {
+    pub combo_id: u32,
+    pub source_kind: u8,
+    pub source_tag_len: u8,
+    pub reserved0: u16,
+    pub source_tag: [u8; 32],
+    pub mouse_controller_id: u32,
+    pub mouse_slot_id: u32,
+    pub mouse_ep_target: u32,
+    pub keyboard_controller_id: u32,
+    pub keyboard_slot_id: u32,
+    pub keyboard_ep_target: u32,
+    pub tablet_controller_id: u32,
+    pub tablet_slot_id: u32,
+    pub tablet_ep_target: u32,
 }
 
 #[repr(C)]

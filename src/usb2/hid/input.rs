@@ -130,7 +130,8 @@ pub struct MouseEvent {
     pub has_wheel: bool, // true=4-byte, false=3-byte
 }
 
-#[derive(Copy, Clone, Debug)]
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
 pub struct TabletEvent {
     pub slot_id: u32,
     pub buttons: u8,

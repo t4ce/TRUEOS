@@ -498,10 +498,6 @@ struct Ui2Window {
     last_clicked_item_seq: u32,
     last_clicked_cursor_slot: u32,
     cursor_events: Vec<Ui2WindowCursorEvent>,
-    title_tex_id: u32,
-    title_tex_w: u32,
-    title_tex_h: u32,
-    title_tex_alpha: u8,
     container_sync_needed: bool,
     selected_cursor_slots: Vec<u32>,
     dirty: bool,
@@ -593,7 +589,6 @@ struct Ui2ComposeWindowStats {
     hosted_surface_windows: usize,
 }
 
-const UI2_WINDOW_TITLE_TEX_ID_BASE: u32 = 20_000;
 const UI2_WINDOW_TITLE_ICON_TEX_ID_BASE: u32 = 21_000;
 
 #[derive(Clone, Debug)]
@@ -1405,11 +1400,6 @@ pub unsafe extern "C" fn trueos_cabi_app_surface_window_create(
 }
 
 #[inline]
-fn vm_deferred_window_id(window_id: u32) -> bool {
-    crate::hv::deferred_blueprint_app_window_current_vm(window_id).is_some()
-}
-
-#[inline]
 fn vm_deferred_window_ok(window_id: u32, op: &'static str) -> Option<i32> {
     let Some(owner_vm_id) = crate::hv::deferred_blueprint_app_window_vm_id(window_id) else {
         return None;
@@ -2122,11 +2112,6 @@ fn texture_is_drawable(tex_id: u32) -> bool {
     const ASYNC_TEX_STATUS_READY: i32 = 2;
     tex_id != 0
         && crate::r::io::cabi::trueos_cabi_gfx_texture_status(tex_id) == ASYNC_TEX_STATUS_READY
-}
-
-#[inline]
-fn window_title_tex_id(window_id: u32) -> u32 {
-    UI2_WINDOW_TITLE_TEX_ID_BASE.saturating_add(window_id.saturating_sub(1))
 }
 
 #[inline]

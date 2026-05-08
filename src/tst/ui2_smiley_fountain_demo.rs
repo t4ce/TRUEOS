@@ -188,16 +188,6 @@ fn seed_particles(particles: &mut [SmileyParticle], rng: &mut DemoRng, width: u3
     }
 }
 
-fn update_particles(
-    particles: &mut [SmileyParticle],
-    width: u32,
-    height: u32,
-    dt: f32,
-    rng: &mut DemoRng,
-) {
-    update_particles_with_cursors(particles, width, height, dt, rng, &[]);
-}
-
 fn update_particles_with_cursors(
     particles: &mut [SmileyParticle],
     width: u32,

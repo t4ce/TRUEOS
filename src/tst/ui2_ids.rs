@@ -29,7 +29,6 @@ impl Ui2DemoTexId {
 pub enum Ui2DemoContentId {
     Shell = 43,
     TrueosfsExplorer = 44,
-    Coreticks = 45,
     Swarm = 46,
     Raple = 49,
     Currency = 50,
