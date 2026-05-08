@@ -24,7 +24,7 @@ use alloc::vec::Vec;
 use core::ptr::{read_volatile, write_volatile};
 
 use super::wifi::{WifiDriver, WifiNetwork, WifiSecurity, WifiState};
-use super::{Driver, DriverCategory, DriverInfo, DriverStatus, NetStats, NetworkDriver};
+use super::{Driver, DriverInfo, DriverStatus, NetworkDriver};
 use crate::pci::PciDevice;
 
 #[inline]
@@ -548,9 +548,6 @@ pub struct Iwl4965 {
     // RX packet queue (received frames waiting for upper layer)
     rx_pending: Vec<Vec<u8>>,
 
-    // Statistics
-    stats: NetStats,
-
     // NIC alive flag
     initialized: bool,
 }
@@ -581,7 +578,6 @@ impl Iwl4965 {
             current_channel: 0,
             signal_dbm: 0,
             rx_pending: Vec::new(),
-            stats: NetStats::default(),
             initialized: false,
         }
     }
@@ -1733,18 +1729,13 @@ impl Iwl4965 {
             REPLY_RXON | REPLY_RXON_ASSOC => {
                 crate::log!("[IWL4965] RX: RXON response");
             }
-            REPLY_TX => {
-                // TX completion notification
-                self.stats.tx_packets += 1;
-            }
+            REPLY_TX => {}
             // RX data frames from firmware (typically cmd IDs 0xC0+ are data)
             0xC1 | 0xC3 => {
                 // Data frame received — extract Ethernet payload
                 if data.len() > 32 {
                     // Firmware strips 802.11 header and delivers Ethernet-like frame
                     let frame = data[16..].to_vec(); // Skip internal header
-                    self.stats.rx_packets += 1;
-                    self.stats.rx_bytes += frame.len() as u64;
                     if self.rx_pending.len() < 64 {
                         self.rx_pending.push(frame);
                     }
@@ -2387,42 +2378,12 @@ impl Driver for Iwl4965 {
         Ok(())
     }
 
-    fn stop(&mut self) -> Result<(), &'static str> {
-        // Disable interrupts
-        self.write_reg(CSR_INT_MASK, 0);
-        // Stop master
-        self.write_reg(CSR_RESET, CSR_RESET_REG_FLAG_STOP_MASTER);
-        self.status = DriverStatus::Suspended;
-        self.wifi_state = WifiState::Disabled;
-        Ok(())
-    }
-
     fn status(&self) -> DriverStatus {
         self.status
-    }
-
-    fn handle_interrupt(&mut self) {
-        let int_status = self.read_reg(CSR_INT);
-        if int_status == 0 || int_status == 0xFFFFFFFF {
-            return;
-        }
-        self.write_reg(CSR_INT, int_status);
-
-        // Process RX queue on any interrupt
-        self.poll_rx();
-
-        // Process scan if active
-        if self.scanning {
-            self.poll_scan();
-        }
     }
 }
 
 impl NetworkDriver for Iwl4965 {
-    fn mac_address(&self) -> [u8; 6] {
-        self.mac_addr
-    }
-
     fn link_up(&self) -> bool {
         self.wifi_state == WifiState::Connected
     }
@@ -2472,8 +2433,6 @@ impl NetworkDriver for Iwl4965 {
         let wrptr_val = txq.write_ptr as u32;
         self.write_reg(0x060, wrptr_val); // HBUS_TARG_WRPTR for queue 0
 
-        self.stats.tx_packets += 1;
-        self.stats.tx_bytes += len as u64;
         Ok(())
     }
 
@@ -2490,10 +2449,6 @@ impl NetworkDriver for Iwl4965 {
         if self.scanning {
             self.poll_scan();
         }
-    }
-
-    fn stats(&self) -> NetStats {
-        self.stats
     }
 }
 
@@ -2567,9 +2522,6 @@ unsafe impl Sync for Iwl4965 {}
 
 static DRIVER_INFO: DriverInfo = DriverInfo {
     name: "Intel WiFi (iwl4965)",
-    version: "0.1.0",
-    author: "TrustOS",
-    category: DriverCategory::Network,
     vendor_ids: &[(INTEL_VENDOR, 0xFFFF)], // Match all Intel, filter in probe
 };
 

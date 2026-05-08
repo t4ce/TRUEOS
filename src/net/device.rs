@@ -23,13 +23,6 @@ pub trait NetDevice {
         drained
     }
 
-    /// Drain multiple received frames, up to `limit`.
-    fn drain_rx(&mut self, limit: usize) -> Vec<Vec<u8>> {
-        let mut out = Vec::with_capacity(limit.min(64));
-        self.drain_rx_each(limit, &mut |pkt| out.push(pkt));
-        out
-    }
-
     /// Return the number of pending RX frames.
     fn rx_queue_len(&self) -> usize {
         0

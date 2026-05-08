@@ -28,24 +28,15 @@ const RX_BUF_SIZE: usize = 2048;
 const POLL_BUDGET: usize = 512;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DriverCategory {
-    Network,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DriverStatus {
     Unloaded,
     Loading,
     Running,
-    Suspended,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct DriverInfo {
     pub name: &'static str,
-    pub version: &'static str,
-    pub author: &'static str,
-    pub category: DriverCategory,
     pub vendor_ids: &'static [(u16, u16)],
 }
 
@@ -53,25 +44,10 @@ pub trait Driver {
     fn info(&self) -> &DriverInfo;
     fn probe(&mut self, pci_dev: &PciDevice) -> Result<(), &'static str>;
     fn start(&mut self) -> Result<(), &'static str>;
-    fn stop(&mut self) -> Result<(), &'static str>;
     fn status(&self) -> DriverStatus;
-    fn handle_interrupt(&mut self);
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NetStats {
-    pub tx_packets: u64,
-    pub rx_packets: u64,
-    pub tx_bytes: u64,
-    pub rx_bytes: u64,
-    pub tx_errors: u64,
-    pub rx_errors: u64,
-    pub tx_dropped: u64,
-    pub rx_dropped: u64,
 }
 
 pub trait NetworkDriver: Driver {
-    fn mac_address(&self) -> [u8; 6];
     fn link_up(&self) -> bool;
     fn link_speed(&self) -> u32 {
         0
@@ -79,13 +55,6 @@ pub trait NetworkDriver: Driver {
     fn send(&mut self, data: &[u8]) -> Result<(), &'static str>;
     fn receive(&mut self) -> Option<alloc::vec::Vec<u8>>;
     fn poll(&mut self);
-    fn stats(&self) -> NetStats;
-    fn set_promiscuous(&mut self, _enabled: bool) -> Result<(), &'static str> {
-        Err("Not supported")
-    }
-    fn add_multicast(&mut self, _mac: [u8; 6]) -> Result<(), &'static str> {
-        Err("Not supported")
-    }
 }
 
 // Keep RTL8125 enabled, but keep RTL8168 as the primary NIC (dev0) by init order.
@@ -134,15 +103,6 @@ impl NetDevice for ActiveDevice {
             //   ActiveDevice::E1000(dev) => dev.rx_queue_len(),
             ActiveDevice::Rtl8169(dev) => dev.rx_queue_len(),
             ActiveDevice::R8125(dev) => dev.rx_queue_len(),
-        }
-    }
-
-    fn drain_rx(&mut self, limit: usize) -> alloc::vec::Vec<alloc::vec::Vec<u8>> {
-        match self {
-            ActiveDevice::Virtio(dev) => dev.drain_rx(limit),
-            //  ActiveDevice::E1000(dev) => dev.drain_rx(limit),
-            ActiveDevice::Rtl8169(dev) => dev.drain_rx(limit),
-            ActiveDevice::R8125(dev) => dev.drain_rx(limit),
         }
     }
 
@@ -311,50 +271,6 @@ pub fn device_index_from_owner(owner: &str) -> Option<usize> {
 static DEVICES: Mutex<alloc::vec::Vec<ActiveDevice>> = Mutex::new(alloc::vec::Vec::new());
 static PRIMARY_DEVICE_INDEX: AtomicUsize = AtomicUsize::new(0);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct DmaFpgaStreamStatus {
-    pub active: bool,
-    pub filter_enabled: bool,
-    pub rx_packets_seen: u64,
-    pub rx_packets_matched: u64,
-    pub queued_packets: u64,
-    pub queue_failures: u64,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DmaFpgaIpProto {
-    Tcp,
-    Udp,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct DmaFpgaFlowFilter {
-    pub proto: DmaFpgaIpProto,
-    pub src_ip: Option<[u8; 4]>,
-    pub dst_ip: Option<[u8; 4]>,
-    pub src_port: Option<u16>,
-    pub dst_port: Option<u16>,
-}
-
-#[derive(Clone, Copy)]
-struct DmaFpgaStreamState {
-    active: bool,
-    filter: Option<DmaFpgaFlowFilter>,
-    rx_packets_seen: u64,
-    rx_packets_matched: u64,
-    queued_packets: u64,
-    queue_failures: u64,
-}
-
-static DMA_FPGA_STREAM_STATE: Mutex<DmaFpgaStreamState> = Mutex::new(DmaFpgaStreamState {
-    active: false,
-    filter: None,
-    rx_packets_seen: 0,
-    rx_packets_matched: 0,
-    queued_packets: 0,
-    queue_failures: 0,
-});
-
 pub fn init() {
     {
         let mut guard = DEVICES.lock();
@@ -482,10 +398,6 @@ pub fn poll_at(index: usize) -> bool {
     with_device_at(index, |dev| dev.poll_rx()).unwrap_or(false)
 }
 
-pub fn drain_rx_packets_at(index: usize, limit: usize) -> alloc::vec::Vec<alloc::vec::Vec<u8>> {
-    with_device_at(index, |dev| dev.drain_rx(limit)).unwrap_or_else(alloc::vec::Vec::new)
-}
-
 pub fn drain_rx_packets_each_at(
     index: usize,
     limit: usize,
@@ -555,104 +467,4 @@ fn with_device_at<R>(index: usize, f: impl FnOnce(&mut dyn NetDevice) -> R) -> O
     let mut guard = DEVICES.lock();
     let dev = guard.get_mut(index)?;
     Some(f(dev))
-}
-
-fn rx_packet_matches_filter(packet: &[u8], filter: DmaFpgaFlowFilter) -> bool {
-    if packet.len() < 14 {
-        return false;
-    }
-
-    let mut ether_type = u16::from_be_bytes([packet[12], packet[13]]);
-    let mut l2_off = 14usize;
-    if ether_type == 0x8100 {
-        if packet.len() < 18 {
-            return false;
-        }
-        ether_type = u16::from_be_bytes([packet[16], packet[17]]);
-        l2_off = 18;
-    }
-    if ether_type != 0x0800 || packet.len() < l2_off + 20 {
-        return false;
-    }
-
-    let ver_ihl = packet[l2_off];
-    if (ver_ihl >> 4) != 4 {
-        return false;
-    }
-    let ihl = ((ver_ihl & 0x0F) as usize) * 4;
-    if ihl < 20 || packet.len() < l2_off + ihl {
-        return false;
-    }
-
-    let proto = packet[l2_off + 9];
-    let want_proto = match filter.proto {
-        DmaFpgaIpProto::Tcp => 6u8,
-        DmaFpgaIpProto::Udp => 17u8,
-    };
-    if proto != want_proto {
-        return false;
-    }
-
-    let src_ip = [
-        packet[l2_off + 12],
-        packet[l2_off + 13],
-        packet[l2_off + 14],
-        packet[l2_off + 15],
-    ];
-    let dst_ip = [
-        packet[l2_off + 16],
-        packet[l2_off + 17],
-        packet[l2_off + 18],
-        packet[l2_off + 19],
-    ];
-
-    if let Some(want) = filter.src_ip {
-        if src_ip != want {
-            return false;
-        }
-    }
-    if let Some(want) = filter.dst_ip {
-        if dst_ip != want {
-            return false;
-        }
-    }
-
-    let l4_off = l2_off + ihl;
-    if packet.len() < l4_off + 4 {
-        return false;
-    }
-    let src_port = u16::from_be_bytes([packet[l4_off], packet[l4_off + 1]]);
-    let dst_port = u16::from_be_bytes([packet[l4_off + 2], packet[l4_off + 3]]);
-
-    if let Some(want) = filter.src_port {
-        if src_port != want {
-            return false;
-        }
-    }
-    if let Some(want) = filter.dst_port {
-        if dst_port != want {
-            return false;
-        }
-    }
-
-    true
-}
-
-pub(crate) fn dma_fpga_stream_on_rx_packet(packet: &[u8]) {
-    let mut st = DMA_FPGA_STREAM_STATE.lock();
-    if !st.active {
-        return;
-    }
-
-    st.rx_packets_seen = st.rx_packets_seen.saturating_add(1);
-    if let Some(filter) = st.filter {
-        if !rx_packet_matches_filter(packet, filter) {
-            return;
-        }
-    }
-    st.rx_packets_matched = st.rx_packets_matched.saturating_add(1);
-    match crate::pci::nic_fpga_dma::submit_nic_frame_copy(packet) {
-        Ok(_) => st.queued_packets = st.queued_packets.saturating_add(1),
-        Err(_) => st.queue_failures = st.queue_failures.saturating_add(1),
-    }
 }

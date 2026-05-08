@@ -15,7 +15,7 @@ use alloc::vec::Vec;
 use core::ptr::{read_volatile, write_volatile};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use super::{Driver, DriverCategory, DriverInfo, DriverStatus, NetStats, NetworkDriver};
+use super::{Driver, DriverInfo, DriverStatus, NetworkDriver};
 use crate::net::core::VendorAdapter;
 use crate::net::device::LinkState;
 use crate::net::ring::NetRing;
@@ -543,21 +543,8 @@ impl Driver for Rtl8169Driver {
         Ok(())
     }
 
-    fn stop(&mut self) -> Result<(), &'static str> {
-        // Disable RX + TX
-        self.write8(REG_CMD, 0);
-        // Mask all interrupts
-        self.write16(REG_IMR, 0);
-        self.status = DriverStatus::Suspended;
-        Ok(())
-    }
-
     fn status(&self) -> DriverStatus {
         self.status
-    }
-
-    fn handle_interrupt(&mut self) {
-        self.poll();
     }
 }
 
@@ -600,10 +587,6 @@ impl VendorAdapter for Rtl8169Driver {
 // ============================================================================
 
 impl NetworkDriver for Rtl8169Driver {
-    fn mac_address(&self) -> [u8; 6] {
-        self.mac
-    }
-
     fn link_up(&self) -> bool {
         if self.mmio_base != 0 {
             self.read32(REG_PHY_STATUS) & PHY_STATUS_LINK != 0
@@ -747,19 +730,6 @@ impl NetworkDriver for Rtl8169Driver {
                 .store(phy & PHY_STATUS_LINK != 0, Ordering::SeqCst);
         }
     }
-
-    fn stats(&self) -> NetStats {
-        NetStats {
-            tx_packets: self.tx_packets.load(Ordering::Relaxed),
-            rx_packets: self.rx_packets.load(Ordering::Relaxed),
-            tx_bytes: self.tx_bytes.load(Ordering::Relaxed),
-            rx_bytes: self.rx_bytes.load(Ordering::Relaxed),
-            tx_errors: self.tx_errors.load(Ordering::Relaxed),
-            rx_errors: self.rx_errors.load(Ordering::Relaxed),
-            tx_dropped: 0,
-            rx_dropped: 0,
-        }
-    }
 }
 
 impl Rtl8169Driver {
@@ -781,9 +751,6 @@ impl Rtl8169Driver {
 
 const DRIVER_INFO: DriverInfo = DriverInfo {
     name: "rtl8169",
-    version: "1.0.0",
-    author: "TrustOS Team",
-    category: DriverCategory::Network,
     vendor_ids: &[
         (0x10EC, 0x8169), // RTL8169
         (0x10EC, 0x8168), // RTL8168/8111

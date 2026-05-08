@@ -43,6 +43,36 @@ pub const OP_BP_FS_WRITE_ABORT: u32 = 0x31; // arg0 handle -> rc
 pub const OP_BP_FS_CREATE_DIR_ALL: u32 = 0x32; // payload path -> rc
 pub const OP_BP_FS_EXISTS: u32 = 0x33; // payload path -> 0/1/rc
 pub const OP_BP_FS_REMOVE: u32 = 0x34; // payload path -> rc
+pub const OP_BP_SOCKET_TCP_OPEN: u32 = 0x35; // arg0 domain/type, arg1 protocol -> socket/rc
+pub const OP_BP_SOCKET_TCP_CLOSE: u32 = 0x36; // arg0 socket -> rc
+pub const OP_BP_SOCKET_TCP_SET_NONBLOCKING: u32 = 0x37; // arg0 socket, arg1 bool -> rc
+pub const OP_BP_SOCKET_TCP_BIND_V4: u32 = 0x38; // arg0 socket, arg1 addr/port -> rc
+pub const OP_BP_SOCKET_TCP_BIND_V6: u32 = 0x39; // arg0 socket, arg1 port, payload addr -> rc
+pub const OP_BP_SOCKET_TCP_CONNECT_V4: u32 = 0x3A; // arg0 socket, arg1 addr/port/nb -> rc
+pub const OP_BP_SOCKET_TCP_CONNECT_V6: u32 = 0x3B; // arg0 socket, arg1 port/nb, payload addr -> rc
+pub const OP_BP_SOCKET_TCP_POLL_CONNECT: u32 = 0x3C; // arg0 socket, arg1 timeout -> rc
+pub const OP_BP_SOCKET_TCP_SEND: u32 = 0x3D; // arg0 socket, payload data -> signed count/rc
+pub const OP_BP_SOCKET_TCP_RECV: u32 = 0x3E; // arg0 socket, arg1 cap, payload recv opts -> data
+pub const OP_BP_SOCKET_TCP_SHUTDOWN: u32 = 0x3F; // arg0 socket, arg1 how -> rc
+pub const OP_BP_SOCKET_TCP_TAKE_ERROR: u32 = 0x40; // arg0 socket -> rc
+pub const OP_BP_SOCKET_TCP_PEER_V4: u32 = 0x41; // arg0 socket -> rc + addr/port payload
+pub const OP_BP_SOCKET_TCP_PEER_V6: u32 = 0x42; // arg0 socket -> rc + addr/port payload
+pub const OP_BP_MIO_TCP_LISTENER_BIND: u32 = 0x50; // payload addr -> socket id/status
+pub const OP_BP_MIO_TCP_STREAM_CONNECT: u32 = 0x51; // payload addr -> socket id/status
+pub const OP_BP_MIO_UDP_SOCKET_BIND: u32 = 0x52; // payload addr -> socket id/status
+pub const OP_BP_MIO_SOCKET_CLOSE: u32 = 0x53; // arg0 socket -> status
+pub const OP_BP_MIO_SOCKET_LOCAL_ADDR: u32 = 0x54; // arg0 socket -> addr/status
+pub const OP_BP_MIO_SOCKET_PEER_ADDR: u32 = 0x55; // arg0 socket -> addr/status
+pub const OP_BP_MIO_SOCKET_TAKE_ERROR: u32 = 0x56; // arg0 socket -> status
+pub const OP_BP_MIO_TCP_STREAM_READ: u32 = 0x57; // arg0 socket, arg1 cap -> bytes/status
+pub const OP_BP_MIO_TCP_STREAM_WRITE: u32 = 0x58; // arg0 socket, payload bytes -> signed rc
+pub const OP_BP_MIO_UDP_SOCKET_CONNECT: u32 = 0x59; // arg0 socket, payload addr -> status
+pub const OP_BP_MIO_UDP_SOCKET_SEND_TO: u32 = 0x5A; // arg0 socket, payload addr+bytes -> rc
+pub const OP_BP_MIO_UDP_SOCKET_RECV_FROM: u32 = 0x5B; // arg0 socket, arg1 cap -> addr+bytes
+pub const OP_BP_MIO_TCP_LISTENER_ACCEPT: u32 = 0x5C; // arg0 socket -> child+addr/status
+pub const OP_BP_MIO_SELECTOR_REGISTER_SOCKET: u32 = 0x5D; // selector/socket/token/interests
+pub const OP_BP_MIO_SELECTOR_DEREGISTER_SOCKET: u32 = 0x5E; // selector/socket
+pub const OP_BP_MIO_SELECTOR_POLL: u32 = 0x5F; // selector/cap/timeout -> ready events
 
 // ── response status codes (u32, written by host) ────────────────────────────
 pub const STATUS_OK: u32 = 0;
@@ -164,6 +194,28 @@ pub fn guest_yield() {
 
 pub fn guest_sleep_ms(ms: u64) {
     let _ = guest_call(OP_SLEEP_MS, ms, 0);
+}
+
+const MIO_ADDR_BYTES: usize = core::mem::size_of::<crate::mio_compat::TrueosMioSocketAddr>();
+const MIO_READY_EVENT_BYTES: usize = core::mem::size_of::<crate::mio_compat::TrueosMioReadyEvent>();
+
+fn read_mio_addr(bytes: &[u8]) -> Option<crate::mio_compat::TrueosMioSocketAddr> {
+    if bytes.len() < MIO_ADDR_BYTES {
+        return None;
+    }
+    Some(unsafe {
+        core::ptr::read_unaligned(bytes.as_ptr() as *const crate::mio_compat::TrueosMioSocketAddr)
+    })
+}
+
+fn write_mio_addr(out: &mut [u8], addr: crate::mio_compat::TrueosMioSocketAddr) -> bool {
+    if out.len() < MIO_ADDR_BYTES {
+        return false;
+    }
+    let bytes =
+        unsafe { core::slice::from_raw_parts(&addr as *const _ as *const u8, MIO_ADDR_BYTES) };
+    out[..MIO_ADDR_BYTES].copy_from_slice(bytes);
+    true
 }
 
 // ── exec dispatch ────────────────────────────────────────────────────────────
@@ -550,6 +602,452 @@ pub fn dispatch(vm_id: u8) -> DispatchOutcome {
             };
             let rc = crate::r::io::cabi::fs_remove_host(path);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_SOCKET_TCP_OPEN => {
+            let domain = arg0 as u32 as i32;
+            let socket_type = (arg0 >> 32) as u32 as i32;
+            let protocol = arg1 as u32 as i32;
+            let rc =
+                crate::r::net::socket_cabi::socket_tcp_open_host(domain, socket_type, protocol);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_SOCKET_TCP_CLOSE => {
+            let rc = crate::r::net::socket_cabi::socket_tcp_close_host(arg0 as u32);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_SOCKET_TCP_SET_NONBLOCKING => {
+            let rc = crate::r::net::socket_cabi::socket_tcp_set_nonblocking_host(
+                arg0 as u32,
+                arg1 as u32,
+            );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_SOCKET_TCP_BIND_V4 => {
+            let addr_be = arg1 as u32;
+            let port_be = ((arg1 >> 32) & 0xFFFF) as u16;
+            let rc =
+                crate::r::net::socket_cabi::socket_tcp_bind_v4_host(arg0 as u32, addr_be, port_be);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_SOCKET_TCP_BIND_V6 => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            if n < 16 {
+                write_response(vm_id, seq, STATUS_OK, (-22i64) as u64, 0);
+                return DispatchOutcome::Resume;
+            }
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let mut addr = [0u8; 16];
+            unsafe {
+                addr.copy_from_slice(&(&(*p).payload)[..16]);
+            }
+            let rc =
+                crate::r::net::socket_cabi::socket_tcp_bind_v6_host(arg0 as u32, addr, arg1 as u16);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_SOCKET_TCP_CONNECT_V4 => {
+            let addr_be = arg1 as u32;
+            let port_be = ((arg1 >> 32) & 0xFFFF) as u16;
+            let nonblocking = ((arg1 >> 48) & 1) as u32;
+            let rc = crate::r::net::socket_cabi::socket_tcp_connect_v4_host(
+                arg0 as u32,
+                addr_be,
+                port_be,
+                nonblocking,
+            );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_SOCKET_TCP_CONNECT_V6 => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            if n < 16 {
+                write_response(vm_id, seq, STATUS_OK, (-22i64) as u64, 0);
+                return DispatchOutcome::Resume;
+            }
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let mut addr = [0u8; 16];
+            unsafe {
+                addr.copy_from_slice(&(&(*p).payload)[..16]);
+            }
+            let port_be = arg1 as u16;
+            let nonblocking = ((arg1 >> 16) & 1) as u32;
+            let rc = crate::r::net::socket_cabi::socket_tcp_connect_v6_host(
+                arg0 as u32,
+                addr,
+                port_be,
+                nonblocking,
+            );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_SOCKET_TCP_POLL_CONNECT => {
+            let rc = crate::r::net::socket_cabi::socket_tcp_poll_connect_host(arg0 as u32, arg1);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_SOCKET_TCP_SEND => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let bytes = unsafe { &(&(*p).payload)[..n] };
+            let rc = crate::r::net::socket_cabi::socket_tcp_send_host(arg0 as u32, bytes);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_SOCKET_TCP_RECV => {
+            let want = core::cmp::min(arg1 as usize, PAYLOAD_CAP);
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            if n < 16 {
+                write_response(vm_id, seq, STATUS_OK, (-22i64) as u64, 0);
+                return DispatchOutcome::Resume;
+            }
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let payload = unsafe { &mut (*p).payload };
+            let flags = i32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
+            let nonblocking = u32::from_le_bytes([payload[4], payload[5], payload[6], payload[7]]);
+            let timeout_ms = u64::from_le_bytes([
+                payload[8],
+                payload[9],
+                payload[10],
+                payload[11],
+                payload[12],
+                payload[13],
+                payload[14],
+                payload[15],
+            ]);
+            let rc = crate::r::net::socket_cabi::socket_tcp_recv_host(
+                arg0 as u32,
+                &mut payload[..want],
+                flags,
+                nonblocking,
+                timeout_ms,
+            );
+            let out_len = if rc > 0 { rc as u32 } else { 0 };
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, out_len);
+            DispatchOutcome::Resume
+        }
+        OP_BP_SOCKET_TCP_SHUTDOWN => {
+            let rc = crate::r::net::socket_cabi::socket_tcp_shutdown_host(arg0 as u32, arg1 as u32);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_SOCKET_TCP_TAKE_ERROR => {
+            let rc = crate::r::net::socket_cabi::socket_tcp_take_error_host(arg0 as u32);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_SOCKET_TCP_PEER_V4 => {
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            match crate::r::net::socket_cabi::socket_tcp_peer_v4_host(arg0 as u32) {
+                Ok((addr, port)) => {
+                    unsafe {
+                        (&mut (*p).payload)[..4].copy_from_slice(&addr.to_le_bytes());
+                        (&mut (*p).payload)[4..6].copy_from_slice(&port.to_le_bytes());
+                    }
+                    write_response(vm_id, seq, STATUS_OK, 0, 6);
+                }
+                Err(rc) => write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0),
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_SOCKET_TCP_PEER_V6 => {
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            match crate::r::net::socket_cabi::socket_tcp_peer_v6_host(arg0 as u32) {
+                Ok((addr, port)) => {
+                    unsafe {
+                        (&mut (*p).payload)[..16].copy_from_slice(&addr);
+                        (&mut (*p).payload)[16..18].copy_from_slice(&port.to_le_bytes());
+                    }
+                    write_response(vm_id, seq, STATUS_OK, 0, 18);
+                }
+                Err(rc) => write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0),
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_MIO_TCP_LISTENER_BIND | OP_BP_MIO_TCP_STREAM_CONNECT | OP_BP_MIO_UDP_SOCKET_BIND => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let bytes = unsafe { &(&(*p).payload)[..n] };
+            let Some(addr) = read_mio_addr(bytes) else {
+                write_response(vm_id, seq, STATUS_OK, (-4i64) as u64, 0);
+                return DispatchOutcome::Resume;
+            };
+            let mut socket_id = 0u32;
+            let status = match op {
+                OP_BP_MIO_TCP_LISTENER_BIND => unsafe {
+                    crate::mio_compat::mio_tcp_listener_bind_host(addr, &mut socket_id)
+                },
+                OP_BP_MIO_TCP_STREAM_CONNECT => unsafe {
+                    crate::mio_compat::mio_tcp_stream_connect_host(addr, &mut socket_id)
+                },
+                _ => unsafe { crate::mio_compat::mio_udp_socket_bind_host(addr, &mut socket_id) },
+            };
+            if status == 0 {
+                write_response(vm_id, seq, STATUS_OK, socket_id as u64, 0);
+            } else {
+                write_response(vm_id, seq, STATUS_OK, (status as i64) as u64, 0);
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_MIO_SOCKET_CLOSE => {
+            let rc = unsafe { crate::mio_compat::mio_socket_close_host(arg0 as u32) };
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_MIO_SOCKET_LOCAL_ADDR | OP_BP_MIO_SOCKET_PEER_ADDR => {
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let mut addr = crate::mio_compat::TrueosMioSocketAddr::default();
+            let rc = if op == OP_BP_MIO_SOCKET_LOCAL_ADDR {
+                unsafe { crate::mio_compat::mio_socket_local_addr_host(arg0 as u32, &mut addr) }
+            } else {
+                unsafe { crate::mio_compat::mio_socket_peer_addr_host(arg0 as u32, &mut addr) }
+            };
+            if rc == 0 {
+                let out = unsafe { &mut (&mut (*p).payload)[..PAYLOAD_CAP] };
+                let len = if write_mio_addr(out, addr) {
+                    MIO_ADDR_BYTES as u32
+                } else {
+                    0
+                };
+                write_response(vm_id, seq, STATUS_OK, 0, len);
+            } else {
+                write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_MIO_SOCKET_TAKE_ERROR => {
+            let rc = unsafe { crate::mio_compat::mio_socket_take_error_host(arg0 as u32) };
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_MIO_TCP_STREAM_READ => {
+            let want = core::cmp::min(arg1 as usize, PAYLOAD_CAP);
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let out = unsafe { &mut (&mut (*p).payload)[..want] };
+            let rc = unsafe {
+                crate::mio_compat::mio_tcp_stream_read_host(arg0 as u32, out.as_mut_ptr(), want)
+            };
+            let len = if rc > 0 { rc as u32 } else { 0 };
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, len);
+            DispatchOutcome::Resume
+        }
+        OP_BP_MIO_TCP_STREAM_WRITE => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let bytes = unsafe { &(&(*p).payload)[..n] };
+            let rc = unsafe {
+                crate::mio_compat::mio_tcp_stream_write_host(
+                    arg0 as u32,
+                    bytes.as_ptr(),
+                    bytes.len(),
+                )
+            };
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_MIO_UDP_SOCKET_CONNECT => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let bytes = unsafe { &(&(*p).payload)[..n] };
+            let Some(addr) = read_mio_addr(bytes) else {
+                write_response(vm_id, seq, STATUS_OK, (-4i64) as u64, 0);
+                return DispatchOutcome::Resume;
+            };
+            let rc = unsafe { crate::mio_compat::mio_udp_socket_connect_host(arg0 as u32, addr) };
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_MIO_UDP_SOCKET_SEND_TO => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let bytes = unsafe { &(&(*p).payload)[..n] };
+            let Some(addr) = read_mio_addr(bytes) else {
+                write_response(vm_id, seq, STATUS_OK, (-4i64) as u64, 0);
+                return DispatchOutcome::Resume;
+            };
+            let data_len = core::cmp::min(arg1 as usize, n.saturating_sub(MIO_ADDR_BYTES));
+            let data = &bytes[MIO_ADDR_BYTES..MIO_ADDR_BYTES + data_len];
+            let rc = unsafe {
+                crate::mio_compat::mio_udp_socket_send_to_host(
+                    arg0 as u32,
+                    addr,
+                    data.as_ptr(),
+                    data.len(),
+                )
+            };
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_MIO_UDP_SOCKET_RECV_FROM => {
+            let want = core::cmp::min(arg1 as usize, PAYLOAD_CAP.saturating_sub(MIO_ADDR_BYTES));
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let payload = unsafe { &mut (*p).payload };
+            let mut addr = crate::mio_compat::TrueosMioSocketAddr::default();
+            let rc = unsafe {
+                crate::mio_compat::mio_udp_socket_recv_from_host(
+                    arg0 as u32,
+                    &mut addr,
+                    payload[MIO_ADDR_BYTES..].as_mut_ptr(),
+                    want,
+                )
+            };
+            if rc > 0 {
+                let _ = write_mio_addr(&mut payload[..MIO_ADDR_BYTES], addr);
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_OK,
+                    rc as u64,
+                    (MIO_ADDR_BYTES + rc as usize) as u32,
+                );
+            } else {
+                write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_MIO_TCP_LISTENER_ACCEPT => {
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let mut socket_id = 0u32;
+            let mut addr = crate::mio_compat::TrueosMioSocketAddr::default();
+            let rc = unsafe {
+                crate::mio_compat::mio_tcp_listener_accept_host(
+                    arg0 as u32,
+                    &mut socket_id,
+                    &mut addr,
+                )
+            };
+            if rc == 0 {
+                let out = unsafe { &mut (&mut (*p).payload)[..PAYLOAD_CAP] };
+                let len = if write_mio_addr(out, addr) {
+                    MIO_ADDR_BYTES as u32
+                } else {
+                    0
+                };
+                write_response(vm_id, seq, STATUS_OK, socket_id as u64, len);
+            } else {
+                write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_MIO_SELECTOR_REGISTER_SOCKET => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            if n < 8 {
+                write_response(vm_id, seq, STATUS_OK, (-4i64) as u64, 0);
+                return DispatchOutcome::Resume;
+            }
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let bytes = unsafe { &(&(*p).payload)[..n] };
+            let token = u64::from_le_bytes([
+                bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+            ]) as usize;
+            let socket_id = arg1 as u32;
+            let interests = ((arg1 >> 32) & 0xFF) as u8;
+            let rc = unsafe {
+                crate::mio_compat::mio_selector_register_socket_host(
+                    arg0 as usize,
+                    socket_id,
+                    token,
+                    interests,
+                )
+            };
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_MIO_SELECTOR_DEREGISTER_SOCKET => {
+            let rc = unsafe {
+                crate::mio_compat::mio_selector_deregister_socket_host(arg0 as usize, arg1 as u32)
+            };
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_MIO_SELECTOR_POLL => {
+            let max_events = core::cmp::min(
+                arg1 as usize,
+                PAYLOAD_CAP / core::cmp::max(MIO_READY_EVENT_BYTES, 1),
+            );
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let timeout_nanos = if n >= 8 {
+                let Some(p) = host_ptr(vm_id) else {
+                    write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                    return DispatchOutcome::Resume;
+                };
+                let bytes = unsafe { &(&(*p).payload)[..n] };
+                u64::from_le_bytes([
+                    bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+                ])
+            } else {
+                u64::MAX
+            };
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let out = unsafe { &mut (&mut (*p).payload)[..PAYLOAD_CAP] };
+            let count = unsafe {
+                crate::mio_compat::mio_selector_poll_host(
+                    arg0 as usize,
+                    out.as_mut_ptr() as *mut crate::mio_compat::TrueosMioReadyEvent,
+                    max_events,
+                    timeout_nanos,
+                )
+            };
+            let count = core::cmp::min(count, max_events);
+            write_response(
+                vm_id,
+                seq,
+                STATUS_OK,
+                count as u64,
+                (count * MIO_READY_EVENT_BYTES) as u32,
+            );
             DispatchOutcome::Resume
         }
         _ => {

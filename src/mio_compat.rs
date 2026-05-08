@@ -155,6 +155,90 @@ fn with_compat<R>(f: impl FnOnce(&mut MioCompat) -> R) -> R {
     f(compat)
 }
 
+const MIO_ADDR_BYTES: usize = core::mem::size_of::<TrueosMioSocketAddr>();
+const MIO_READY_EVENT_BYTES: usize = core::mem::size_of::<TrueosMioReadyEvent>();
+
+#[inline]
+fn vm_guest_active() -> bool {
+    crate::hv::current_hull_guest_context_vm_id().is_some()
+}
+
+#[inline]
+fn vmcall_i32(data: u64) -> i32 {
+    (data as i64) as i32
+}
+
+#[inline]
+fn vmcall_isize(data: u64) -> isize {
+    (data as i64) as isize
+}
+
+#[inline]
+fn addr_bytes(addr: &TrueosMioSocketAddr) -> &[u8] {
+    unsafe { core::slice::from_raw_parts(addr as *const _ as *const u8, MIO_ADDR_BYTES) }
+}
+
+fn read_addr(bytes: &[u8]) -> Option<TrueosMioSocketAddr> {
+    if bytes.len() < MIO_ADDR_BYTES {
+        return None;
+    }
+    Some(unsafe { core::ptr::read_unaligned(bytes.as_ptr() as *const TrueosMioSocketAddr) })
+}
+
+fn guest_mio_socket_out(op: u32, addr: TrueosMioSocketAddr, out_socket_id: *mut u32) -> i32 {
+    if out_socket_id.is_null() {
+        return STATUS_INVALID_INPUT;
+    }
+    let mut out = [0u8; 1];
+    let (status, data) =
+        trueos_vm::vmcall::call_with_payload(op, 0, 0, addr_bytes(&addr), &mut out);
+    if status != trueos_vm::vmcall::STATUS_OK {
+        return STATUS_INVALID_INPUT;
+    }
+    let rc = vmcall_i32(data);
+    if rc > 0 {
+        unsafe {
+            *out_socket_id = rc as u32;
+        }
+        STATUS_OK
+    } else {
+        rc
+    }
+}
+
+fn guest_mio_addr_out(op: u32, socket_id: u32, out_addr: *mut TrueosMioSocketAddr) -> i32 {
+    if out_addr.is_null() {
+        return STATUS_INVALID_INPUT;
+    }
+    let mut bytes = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
+    let (status, data) =
+        trueos_vm::vmcall::call_with_payload(op, socket_id as u64, 0, &[], &mut bytes);
+    if status != trueos_vm::vmcall::STATUS_OK {
+        return STATUS_INVALID_INPUT;
+    }
+    let rc = vmcall_i32(data);
+    if rc != STATUS_OK {
+        return rc;
+    }
+    let Some(addr) = read_addr(&bytes[..MIO_ADDR_BYTES]) else {
+        return STATUS_INVALID_INPUT;
+    };
+    unsafe {
+        *out_addr = addr;
+    }
+    STATUS_OK
+}
+
+fn guest_mio_signed_payload(op: u32, arg0: u64, arg1: u64, req: &[u8]) -> isize {
+    let mut out = [0u8; 1];
+    let (status, data) = trueos_vm::vmcall::call_with_payload(op, arg0, arg1, req, &mut out);
+    if status == trueos_vm::vmcall::STATUS_OK {
+        vmcall_isize(data)
+    } else {
+        STATUS_INVALID_INPUT as isize
+    }
+}
+
 impl MioCompat {
     fn new() -> Self {
         Self {
@@ -504,8 +588,7 @@ impl MioCompat {
     }
 }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_mio_tcp_listener_bind(
+pub(crate) unsafe fn mio_tcp_listener_bind_host(
     addr: TrueosMioSocketAddr,
     out_socket_id: *mut u32,
 ) -> i32 {
@@ -558,7 +641,21 @@ pub unsafe extern "C" fn trueos_mio_tcp_listener_bind(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_mio_tcp_stream_connect(
+pub unsafe extern "C" fn trueos_mio_tcp_listener_bind(
+    addr: TrueosMioSocketAddr,
+    out_socket_id: *mut u32,
+) -> i32 {
+    if vm_guest_active() {
+        return guest_mio_socket_out(
+            trueos_vm::vmcall::OP_BP_MIO_TCP_LISTENER_BIND,
+            addr,
+            out_socket_id,
+        );
+    }
+    mio_tcp_listener_bind_host(addr, out_socket_id)
+}
+
+pub(crate) unsafe fn mio_tcp_stream_connect_host(
     addr: TrueosMioSocketAddr,
     out_socket_id: *mut u32,
 ) -> i32 {
@@ -619,7 +716,21 @@ pub unsafe extern "C" fn trueos_mio_tcp_stream_connect(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_mio_udp_socket_bind(
+pub unsafe extern "C" fn trueos_mio_tcp_stream_connect(
+    addr: TrueosMioSocketAddr,
+    out_socket_id: *mut u32,
+) -> i32 {
+    if vm_guest_active() {
+        return guest_mio_socket_out(
+            trueos_vm::vmcall::OP_BP_MIO_TCP_STREAM_CONNECT,
+            addr,
+            out_socket_id,
+        );
+    }
+    mio_tcp_stream_connect_host(addr, out_socket_id)
+}
+
+pub(crate) unsafe fn mio_udp_socket_bind_host(
     addr: TrueosMioSocketAddr,
     out_socket_id: *mut u32,
 ) -> i32 {
@@ -692,7 +803,21 @@ pub unsafe extern "C" fn trueos_mio_udp_socket_bind(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_mio_socket_close(socket_id: u32) -> i32 {
+pub unsafe extern "C" fn trueos_mio_udp_socket_bind(
+    addr: TrueosMioSocketAddr,
+    out_socket_id: *mut u32,
+) -> i32 {
+    if vm_guest_active() {
+        return guest_mio_socket_out(
+            trueos_vm::vmcall::OP_BP_MIO_UDP_SOCKET_BIND,
+            addr,
+            out_socket_id,
+        );
+    }
+    mio_udp_socket_bind_host(addr, out_socket_id)
+}
+
+pub(crate) unsafe fn mio_socket_close_host(socket_id: u32) -> i32 {
     with_compat(|compat| {
         compat.pump();
         let Some(socket) = compat.socket_mut(socket_id) else {
@@ -708,7 +833,20 @@ pub unsafe extern "C" fn trueos_mio_socket_close(socket_id: u32) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_mio_socket_local_addr(
+pub unsafe extern "C" fn trueos_mio_socket_close(socket_id: u32) -> i32 {
+    if vm_guest_active() {
+        let (status, data) =
+            trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_MIO_SOCKET_CLOSE, socket_id as u64, 0);
+        return if status == trueos_vm::vmcall::STATUS_OK {
+            vmcall_i32(data)
+        } else {
+            STATUS_INVALID_INPUT
+        };
+    }
+    mio_socket_close_host(socket_id)
+}
+
+pub(crate) unsafe fn mio_socket_local_addr_host(
     socket_id: u32,
     out_addr: *mut TrueosMioSocketAddr,
 ) -> i32 {
@@ -729,7 +867,21 @@ pub unsafe extern "C" fn trueos_mio_socket_local_addr(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_mio_socket_peer_addr(
+pub unsafe extern "C" fn trueos_mio_socket_local_addr(
+    socket_id: u32,
+    out_addr: *mut TrueosMioSocketAddr,
+) -> i32 {
+    if vm_guest_active() {
+        return guest_mio_addr_out(
+            trueos_vm::vmcall::OP_BP_MIO_SOCKET_LOCAL_ADDR,
+            socket_id,
+            out_addr,
+        );
+    }
+    mio_socket_local_addr_host(socket_id, out_addr)
+}
+
+pub(crate) unsafe fn mio_socket_peer_addr_host(
     socket_id: u32,
     out_addr: *mut TrueosMioSocketAddr,
 ) -> i32 {
@@ -750,7 +902,21 @@ pub unsafe extern "C" fn trueos_mio_socket_peer_addr(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_mio_socket_take_error(socket_id: u32) -> i32 {
+pub unsafe extern "C" fn trueos_mio_socket_peer_addr(
+    socket_id: u32,
+    out_addr: *mut TrueosMioSocketAddr,
+) -> i32 {
+    if vm_guest_active() {
+        return guest_mio_addr_out(
+            trueos_vm::vmcall::OP_BP_MIO_SOCKET_PEER_ADDR,
+            socket_id,
+            out_addr,
+        );
+    }
+    mio_socket_peer_addr_host(socket_id, out_addr)
+}
+
+pub(crate) unsafe fn mio_socket_take_error_host(socket_id: u32) -> i32 {
     with_compat(|compat| {
         compat.pump();
         let Some(socket) = compat.socket_mut(socket_id) else {
@@ -763,7 +929,23 @@ pub unsafe extern "C" fn trueos_mio_socket_take_error(socket_id: u32) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_mio_tcp_stream_read(
+pub unsafe extern "C" fn trueos_mio_socket_take_error(socket_id: u32) -> i32 {
+    if vm_guest_active() {
+        let (status, data) = trueos_vm::vmcall::call(
+            trueos_vm::vmcall::OP_BP_MIO_SOCKET_TAKE_ERROR,
+            socket_id as u64,
+            0,
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK {
+            vmcall_i32(data)
+        } else {
+            STATUS_INVALID_INPUT
+        };
+    }
+    mio_socket_take_error_host(socket_id)
+}
+
+pub(crate) unsafe fn mio_tcp_stream_read_host(
     socket_id: u32,
     out_ptr: *mut u8,
     out_cap: usize,
@@ -800,7 +982,39 @@ pub unsafe extern "C" fn trueos_mio_tcp_stream_read(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_mio_tcp_stream_write(
+pub unsafe extern "C" fn trueos_mio_tcp_stream_read(
+    socket_id: u32,
+    out_ptr: *mut u8,
+    out_cap: usize,
+) -> isize {
+    if vm_guest_active() {
+        if out_ptr.is_null() && out_cap != 0 {
+            return STATUS_INVALID_INPUT as isize;
+        }
+        let want = out_cap.min(trueos_vm::vmcall::PAYLOAD_CAP);
+        let mut bytes = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
+        let (status, data) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_MIO_TCP_STREAM_READ,
+            socket_id as u64,
+            want as u64,
+            &[],
+            &mut bytes,
+        );
+        if status != trueos_vm::vmcall::STATUS_OK {
+            return STATUS_INVALID_INPUT as isize;
+        }
+        let rc = vmcall_isize(data);
+        if rc <= 0 {
+            return rc;
+        }
+        let got = (rc as usize).min(want);
+        core::ptr::copy_nonoverlapping(bytes.as_ptr(), out_ptr, got);
+        return got as isize;
+    }
+    mio_tcp_stream_read_host(socket_id, out_ptr, out_cap)
+}
+
+pub(crate) unsafe fn mio_tcp_stream_write_host(
     socket_id: u32,
     data_ptr: *const u8,
     data_len: usize,
@@ -840,10 +1054,39 @@ pub unsafe extern "C" fn trueos_mio_tcp_stream_write(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_mio_udp_socket_connect(
+pub unsafe extern "C" fn trueos_mio_tcp_stream_write(
     socket_id: u32,
-    addr: TrueosMioSocketAddr,
-) -> i32 {
+    data_ptr: *const u8,
+    data_len: usize,
+) -> isize {
+    if vm_guest_active() {
+        if data_ptr.is_null() && data_len != 0 {
+            return STATUS_INVALID_INPUT as isize;
+        }
+        let data = core::slice::from_raw_parts(data_ptr, data_len);
+        let mut sent = 0usize;
+        while sent < data.len() {
+            let end = (sent + trueos_vm::vmcall::PAYLOAD_CAP).min(data.len());
+            let rc = guest_mio_signed_payload(
+                trueos_vm::vmcall::OP_BP_MIO_TCP_STREAM_WRITE,
+                socket_id as u64,
+                0,
+                &data[sent..end],
+            );
+            if rc < 0 {
+                return if sent == 0 { rc } else { sent as isize };
+            }
+            if rc == 0 {
+                return sent as isize;
+            }
+            sent += (rc as usize).min(end - sent);
+        }
+        return sent as isize;
+    }
+    mio_tcp_stream_write_host(socket_id, data_ptr, data_len)
+}
+
+pub(crate) unsafe fn mio_udp_socket_connect_host(socket_id: u32, addr: TrueosMioSocketAddr) -> i32 {
     let Some(peer) = CompatAddr::from_raw(addr) else {
         return STATUS_INVALID_INPUT;
     };
@@ -860,7 +1103,29 @@ pub unsafe extern "C" fn trueos_mio_udp_socket_connect(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_mio_udp_socket_send_to(
+pub unsafe extern "C" fn trueos_mio_udp_socket_connect(
+    socket_id: u32,
+    addr: TrueosMioSocketAddr,
+) -> i32 {
+    if vm_guest_active() {
+        let mut out = [0u8; 1];
+        let (status, data) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_MIO_UDP_SOCKET_CONNECT,
+            socket_id as u64,
+            0,
+            addr_bytes(&addr),
+            &mut out,
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK {
+            vmcall_i32(data)
+        } else {
+            STATUS_INVALID_INPUT
+        };
+    }
+    mio_udp_socket_connect_host(socket_id, addr)
+}
+
+pub(crate) unsafe fn mio_udp_socket_send_to_host(
     socket_id: u32,
     addr: TrueosMioSocketAddr,
     data_ptr: *const u8,
@@ -907,7 +1172,36 @@ pub unsafe extern "C" fn trueos_mio_udp_socket_send_to(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_mio_udp_socket_recv_from(
+pub unsafe extern "C" fn trueos_mio_udp_socket_send_to(
+    socket_id: u32,
+    addr: TrueosMioSocketAddr,
+    data_ptr: *const u8,
+    data_len: usize,
+) -> isize {
+    if vm_guest_active() {
+        if data_ptr.is_null() && data_len != 0 {
+            return STATUS_INVALID_INPUT as isize;
+        }
+        let data = core::slice::from_raw_parts(data_ptr, data_len);
+        let mut req = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
+        if MIO_ADDR_BYTES >= req.len() {
+            return STATUS_INVALID_INPUT as isize;
+        }
+        req[..MIO_ADDR_BYTES].copy_from_slice(addr_bytes(&addr));
+        let data_cap = req.len() - MIO_ADDR_BYTES;
+        let n = data.len().min(data_cap);
+        req[MIO_ADDR_BYTES..MIO_ADDR_BYTES + n].copy_from_slice(&data[..n]);
+        return guest_mio_signed_payload(
+            trueos_vm::vmcall::OP_BP_MIO_UDP_SOCKET_SEND_TO,
+            socket_id as u64,
+            n as u64,
+            &req[..MIO_ADDR_BYTES + n],
+        );
+    }
+    mio_udp_socket_send_to_host(socket_id, addr, data_ptr, data_len)
+}
+
+pub(crate) unsafe fn mio_udp_socket_recv_from_host(
     socket_id: u32,
     out_addr: *mut TrueosMioSocketAddr,
     out_ptr: *mut u8,
@@ -937,7 +1231,44 @@ pub unsafe extern "C" fn trueos_mio_udp_socket_recv_from(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_mio_tcp_listener_accept(
+pub unsafe extern "C" fn trueos_mio_udp_socket_recv_from(
+    socket_id: u32,
+    out_addr: *mut TrueosMioSocketAddr,
+    out_ptr: *mut u8,
+    out_cap: usize,
+) -> isize {
+    if vm_guest_active() {
+        if out_addr.is_null() || (out_ptr.is_null() && out_cap != 0) {
+            return STATUS_INVALID_INPUT as isize;
+        }
+        let want = out_cap.min(trueos_vm::vmcall::PAYLOAD_CAP - MIO_ADDR_BYTES);
+        let mut bytes = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
+        let (status, data) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_MIO_UDP_SOCKET_RECV_FROM,
+            socket_id as u64,
+            want as u64,
+            &[],
+            &mut bytes,
+        );
+        if status != trueos_vm::vmcall::STATUS_OK {
+            return STATUS_INVALID_INPUT as isize;
+        }
+        let rc = vmcall_isize(data);
+        if rc <= 0 {
+            return rc;
+        }
+        let Some(addr) = read_addr(&bytes[..MIO_ADDR_BYTES]) else {
+            return STATUS_INVALID_INPUT as isize;
+        };
+        let got = (rc as usize).min(want);
+        *out_addr = addr;
+        core::ptr::copy_nonoverlapping(bytes[MIO_ADDR_BYTES..].as_ptr(), out_ptr, got);
+        return got as isize;
+    }
+    mio_udp_socket_recv_from_host(socket_id, out_addr, out_ptr, out_cap)
+}
+
+pub(crate) unsafe fn mio_tcp_listener_accept_host(
     socket_id: u32,
     out_socket_id: *mut u32,
     out_addr: *mut TrueosMioSocketAddr,
@@ -965,7 +1296,41 @@ pub unsafe extern "C" fn trueos_mio_tcp_listener_accept(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_mio_selector_register_socket(
+pub unsafe extern "C" fn trueos_mio_tcp_listener_accept(
+    socket_id: u32,
+    out_socket_id: *mut u32,
+    out_addr: *mut TrueosMioSocketAddr,
+) -> i32 {
+    if vm_guest_active() {
+        if out_socket_id.is_null() || out_addr.is_null() {
+            return STATUS_INVALID_INPUT;
+        }
+        let mut bytes = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
+        let (status, data) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_MIO_TCP_LISTENER_ACCEPT,
+            socket_id as u64,
+            0,
+            &[],
+            &mut bytes,
+        );
+        if status != trueos_vm::vmcall::STATUS_OK {
+            return STATUS_INVALID_INPUT;
+        }
+        let child_id = vmcall_i32(data);
+        if child_id <= 0 {
+            return child_id;
+        }
+        let Some(addr) = read_addr(&bytes[..MIO_ADDR_BYTES]) else {
+            return STATUS_INVALID_INPUT;
+        };
+        *out_socket_id = child_id as u32;
+        *out_addr = addr;
+        return STATUS_OK;
+    }
+    mio_tcp_listener_accept_host(socket_id, out_socket_id, out_addr)
+}
+
+pub(crate) unsafe fn mio_selector_register_socket_host(
     selector_id: usize,
     socket_id: u32,
     token: usize,
@@ -997,7 +1362,35 @@ pub unsafe extern "C" fn trueos_mio_selector_register_socket(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_mio_selector_deregister_socket(
+pub unsafe extern "C" fn trueos_mio_selector_register_socket(
+    selector_id: usize,
+    socket_id: u32,
+    token: usize,
+    interests: u8,
+) -> i32 {
+    if vm_guest_active() {
+        let arg0 = selector_id as u64;
+        let arg1 = (socket_id as u64) | ((interests as u64) << 32);
+        let mut req = [0u8; 8];
+        req.copy_from_slice(&(token as u64).to_le_bytes());
+        let mut out = [0u8; 1];
+        let (status, data) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_MIO_SELECTOR_REGISTER_SOCKET,
+            arg0,
+            arg1,
+            &req,
+            &mut out,
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK {
+            vmcall_i32(data)
+        } else {
+            STATUS_INVALID_INPUT
+        };
+    }
+    mio_selector_register_socket_host(selector_id, socket_id, token, interests)
+}
+
+pub(crate) unsafe fn mio_selector_deregister_socket_host(
     selector_id: usize,
     socket_id: u32,
 ) -> i32 {
@@ -1010,7 +1403,26 @@ pub unsafe extern "C" fn trueos_mio_selector_deregister_socket(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_mio_selector_poll(
+pub unsafe extern "C" fn trueos_mio_selector_deregister_socket(
+    selector_id: usize,
+    socket_id: u32,
+) -> i32 {
+    if vm_guest_active() {
+        let (status, data) = trueos_vm::vmcall::call(
+            trueos_vm::vmcall::OP_BP_MIO_SELECTOR_DEREGISTER_SOCKET,
+            selector_id as u64,
+            socket_id as u64,
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK {
+            vmcall_i32(data)
+        } else {
+            STATUS_INVALID_INPUT
+        };
+    }
+    mio_selector_deregister_socket_host(selector_id, socket_id)
+}
+
+pub(crate) unsafe fn mio_selector_poll_host(
     selector_id: usize,
     out_events: *mut TrueosMioReadyEvent,
     out_cap: usize,
@@ -1020,4 +1432,44 @@ pub unsafe extern "C" fn trueos_mio_selector_poll(
         return 0;
     }
     with_compat(|compat| compat.selector_poll(selector_id, out_events, out_cap, timeout_nanos))
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_mio_selector_poll(
+    selector_id: usize,
+    out_events: *mut TrueosMioReadyEvent,
+    out_cap: usize,
+    timeout_nanos: u64,
+) -> usize {
+    if vm_guest_active() {
+        if out_events.is_null() && out_cap != 0 {
+            return 0;
+        }
+        let max_events = (trueos_vm::vmcall::PAYLOAD_CAP / MIO_READY_EVENT_BYTES).min(out_cap);
+        if max_events == 0 {
+            return 0;
+        }
+        let mut bytes = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
+        let timeout = timeout_nanos.to_le_bytes();
+        let (status, count) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_MIO_SELECTOR_POLL,
+            selector_id as u64,
+            max_events as u64,
+            &timeout,
+            &mut bytes,
+        );
+        if status != trueos_vm::vmcall::STATUS_OK {
+            return 0;
+        }
+        let count = (count as usize).min(max_events);
+        if count != 0 {
+            core::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                out_events as *mut u8,
+                count * MIO_READY_EVENT_BYTES,
+            );
+        }
+        return count;
+    }
+    mio_selector_poll_host(selector_id, out_events, out_cap, timeout_nanos)
 }

@@ -211,6 +211,76 @@ fn finish_connect(socket_id: u32, timeout_ms: Option<u64>) -> Result<(), i32> {
     if ready { result } else { Err(-ETIMEDOUT) }
 }
 
+#[inline]
+fn vm_guest_active() -> bool {
+    crate::hv::current_hull_guest_context_vm_id().is_some()
+}
+
+#[inline]
+fn vmcall_i32(data: u64) -> i32 {
+    (data as i64) as i32
+}
+
+#[inline]
+fn vmcall_isize(data: u64) -> isize {
+    (data as i64) as isize
+}
+
+#[inline]
+fn pack_i32_pair(a: i32, b: i32) -> u64 {
+    (a as u32 as u64) | ((b as u32 as u64) << 32)
+}
+
+#[inline]
+fn pack_v4_port(addr_be: u32, port_be: u16) -> u64 {
+    (addr_be as u64) | ((port_be as u64) << 32)
+}
+
+#[inline]
+fn unpack_v4_port(bits: u64) -> (u32, u16) {
+    (bits as u32, ((bits >> 32) & 0xFFFF) as u16)
+}
+
+#[inline]
+fn pack_v4_port_nonblocking(addr_be: u32, port_be: u16, nonblocking: u32) -> u64 {
+    pack_v4_port(addr_be, port_be) | (((nonblocking != 0) as u64) << 48)
+}
+
+#[inline]
+fn unpack_v4_port_nonblocking(bits: u64) -> (u32, u16, u32) {
+    let (addr, port) = unpack_v4_port(bits);
+    (addr, port, ((bits >> 48) & 1) as u32)
+}
+
+#[inline]
+fn pack_port_nonblocking(port_be: u16, nonblocking: u32) -> u64 {
+    (port_be as u64) | (((nonblocking != 0) as u64) << 16)
+}
+
+#[inline]
+fn unpack_port_nonblocking(bits: u64) -> (u16, u32) {
+    (bits as u16, ((bits >> 16) & 1) as u32)
+}
+
+fn guest_call_i32(op: u32, arg0: u64, arg1: u64) -> i32 {
+    let (status, data) = trueos_vm::vmcall::call(op, arg0, arg1);
+    if status == trueos_vm::vmcall::STATUS_OK {
+        vmcall_i32(data)
+    } else {
+        -EINVAL
+    }
+}
+
+fn guest_call_i32_payload(op: u32, arg0: u64, arg1: u64, req: &[u8]) -> i32 {
+    let mut out = [0u8; 1];
+    let (status, data) = trueos_vm::vmcall::call_with_payload(op, arg0, arg1, req, &mut out);
+    if status == trueos_vm::vmcall::STATUS_OK {
+        vmcall_i32(data)
+    } else {
+        -EINVAL
+    }
+}
+
 fn connect_inner(socket_id: u32, remote: RemoteAddr, nonblocking: bool) -> Result<(), i32> {
     with_socket_mut(socket_id, |socket| {
         if socket.connected {
@@ -303,8 +373,7 @@ fn recv_inner(socket_id: u32, out: &mut [u8], flags: i32) -> Result<Option<usize
     })
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_socket_tcp_open(domain: i32, socket_type: i32, protocol: i32) -> i32 {
+pub(crate) fn socket_tcp_open_host(domain: i32, socket_type: i32, protocol: i32) -> i32 {
     if !matches!(domain, AF_INET | AF_INET6) {
         return -EAFNOSUPPORT;
     }
@@ -322,8 +391,7 @@ pub extern "C" fn trueos_cabi_socket_tcp_open(domain: i32, socket_type: i32, pro
     socket_id as i32
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_socket_tcp_close(socket_id: u32) -> i32 {
+pub(crate) fn socket_tcp_close_host(socket_id: u32) -> i32 {
     let Some(mut socket) = SOCKETS.lock().remove(&socket_id) else {
         return -EBADF;
     };
@@ -331,8 +399,7 @@ pub extern "C" fn trueos_cabi_socket_tcp_close(socket_id: u32) -> i32 {
     0
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_socket_tcp_set_nonblocking(socket_id: u32, nonblocking: u32) -> i32 {
+pub(crate) fn socket_tcp_set_nonblocking_host(socket_id: u32, nonblocking: u32) -> i32 {
     match with_socket_mut(socket_id, |socket| {
         let _ = nonblocking;
         let _ = socket.domain;
@@ -343,12 +410,7 @@ pub extern "C" fn trueos_cabi_socket_tcp_set_nonblocking(socket_id: u32, nonbloc
     }
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_socket_tcp_bind_v4(
-    socket_id: u32,
-    addr_be: u32,
-    port_be: u16,
-) -> i32 {
+pub(crate) fn socket_tcp_bind_v4_host(socket_id: u32, addr_be: u32, port_be: u16) -> i32 {
     let addr = addr_be.to_be_bytes();
     match with_socket_mut(socket_id, |socket| {
         if socket.domain != AF_INET {
@@ -365,20 +427,7 @@ pub extern "C" fn trueos_cabi_socket_tcp_bind_v4(
     }
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_socket_tcp_bind_v6(
-    socket_id: u32,
-    addr_ptr: *const u8,
-    port_be: u16,
-) -> i32 {
-    if addr_ptr.is_null() {
-        return -EINVAL;
-    }
-
-    let mut addr = [0u8; 16];
-    // SAFETY: the caller provides a 16-byte IPv6 buffer.
-    unsafe { addr.copy_from_slice(slice::from_raw_parts(addr_ptr, 16)) };
-
+pub(crate) fn socket_tcp_bind_v6_host(socket_id: u32, addr: [u8; 16], port_be: u16) -> i32 {
     match with_socket_mut(socket_id, |socket| {
         if socket.domain != AF_INET6 {
             return Err(-EAFNOSUPPORT);
@@ -394,8 +443,7 @@ pub extern "C" fn trueos_cabi_socket_tcp_bind_v6(
     }
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_socket_tcp_connect_v4(
+pub(crate) fn socket_tcp_connect_v4_host(
     socket_id: u32,
     addr_be: u32,
     port_be: u16,
@@ -411,52 +459,31 @@ pub extern "C" fn trueos_cabi_socket_tcp_connect_v4(
     }
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_socket_tcp_connect_v6(
+pub(crate) fn socket_tcp_connect_v6_host(
     socket_id: u32,
-    addr_ptr: *const u8,
+    addr: [u8; 16],
     port_be: u16,
     nonblocking: u32,
 ) -> i32 {
-    if addr_ptr.is_null() {
-        return -EINVAL;
-    }
-
-    let mut addr = [0u8; 16];
-    // SAFETY: the caller provides a 16-byte IPv6 buffer.
-    unsafe { addr.copy_from_slice(slice::from_raw_parts(addr_ptr, 16)) };
-
     match connect_inner(socket_id, RemoteAddr::V6(addr, u16::from_be(port_be)), nonblocking != 0) {
         Ok(()) => 0,
         Err(err) => err,
     }
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_socket_tcp_poll_connect(socket_id: u32, timeout_ms: u64) -> i32 {
+pub(crate) fn socket_tcp_poll_connect_host(socket_id: u32, timeout_ms: u64) -> i32 {
     match finish_connect(socket_id, Some(timeout_ms)) {
         Ok(()) => 0,
         Err(err) => err,
     }
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_socket_tcp_send(
-    socket_id: u32,
-    data_ptr: *const u8,
-    data_len: usize,
-) -> isize {
-    if data_len == 0 {
+pub(crate) fn socket_tcp_send_host(socket_id: u32, data: &[u8]) -> isize {
+    if data.is_empty() {
         return 0;
     }
-    if data_ptr.is_null() {
-        return -EINVAL as isize;
-    }
 
-    // SAFETY: the caller provides a valid pointer for `data_len` bytes.
-    let data = unsafe { slice::from_raw_parts(data_ptr, data_len) };
     let mut sent = 0usize;
-
     while sent < data.len() {
         let end = (sent + api::MAX_MSG).min(data.len());
         let result = with_socket_mut(socket_id, |socket| {
@@ -498,27 +525,17 @@ pub extern "C" fn trueos_cabi_socket_tcp_send(
     sent as isize
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_socket_tcp_recv(
+pub(crate) fn socket_tcp_recv_host(
     socket_id: u32,
-    out_ptr: *mut u8,
-    out_cap: usize,
+    out: &mut [u8],
     flags: i32,
     nonblocking: u32,
     timeout_ms: u64,
 ) -> isize {
-    if out_cap == 0 {
+    if out.is_empty() {
         return 0;
     }
-    if out_ptr.is_null() {
-        return -EINVAL as isize;
-    }
-    if out_cap > isize::MAX as usize {
-        return -EMSGSIZE as isize;
-    }
 
-    // SAFETY: the caller provides a valid output buffer for `out_cap` bytes.
-    let out = unsafe { slice::from_raw_parts_mut(out_ptr, out_cap) };
     match recv_inner(socket_id, out, flags) {
         Ok(Some(count)) => return count as isize,
         Ok(None) => {}
@@ -557,8 +574,7 @@ pub extern "C" fn trueos_cabi_socket_tcp_recv(
     }
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_socket_tcp_shutdown(socket_id: u32, _how: u32) -> i32 {
+pub(crate) fn socket_tcp_shutdown_host(socket_id: u32, _how: u32) -> i32 {
     match with_socket_mut(socket_id, |socket| {
         close_socket_state(socket);
         Ok(())
@@ -568,8 +584,7 @@ pub extern "C" fn trueos_cabi_socket_tcp_shutdown(socket_id: u32, _how: u32) -> 
     }
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_socket_tcp_take_error(socket_id: u32) -> i32 {
+pub(crate) fn socket_tcp_take_error_host(socket_id: u32) -> i32 {
     match with_socket_mut(socket_id, |socket| {
         pump_socket(socket);
         let err = socket.last_error;
@@ -581,6 +596,269 @@ pub extern "C" fn trueos_cabi_socket_tcp_take_error(socket_id: u32) -> i32 {
     }
 }
 
+pub(crate) fn socket_tcp_peer_v4_host(socket_id: u32) -> Result<(u32, u16), i32> {
+    with_socket_mut(socket_id, |socket| match socket.remote {
+        Some(RemoteAddr::V4(addr, port)) => Ok((u32::from_be_bytes(addr), port.to_be())),
+        Some(RemoteAddr::V6(_, _)) => Err(-EAFNOSUPPORT),
+        None => Err(-ENOTCONN),
+    })
+}
+
+pub(crate) fn socket_tcp_peer_v6_host(socket_id: u32) -> Result<([u8; 16], u16), i32> {
+    with_socket_mut(socket_id, |socket| match socket.remote {
+        Some(RemoteAddr::V6(addr, port)) => Ok((addr, port.to_be())),
+        Some(RemoteAddr::V4(_, _)) => Err(-EAFNOSUPPORT),
+        None => Err(-ENOTCONN),
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_socket_tcp_open(domain: i32, socket_type: i32, protocol: i32) -> i32 {
+    if vm_guest_active() {
+        return guest_call_i32(
+            trueos_vm::vmcall::OP_BP_SOCKET_TCP_OPEN,
+            pack_i32_pair(domain, socket_type),
+            protocol as u32 as u64,
+        );
+    }
+    socket_tcp_open_host(domain, socket_type, protocol)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_socket_tcp_close(socket_id: u32) -> i32 {
+    if vm_guest_active() {
+        return guest_call_i32(trueos_vm::vmcall::OP_BP_SOCKET_TCP_CLOSE, socket_id as u64, 0);
+    }
+    socket_tcp_close_host(socket_id)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_socket_tcp_set_nonblocking(socket_id: u32, nonblocking: u32) -> i32 {
+    if vm_guest_active() {
+        return guest_call_i32(
+            trueos_vm::vmcall::OP_BP_SOCKET_TCP_SET_NONBLOCKING,
+            socket_id as u64,
+            nonblocking as u64,
+        );
+    }
+    socket_tcp_set_nonblocking_host(socket_id, nonblocking)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_socket_tcp_bind_v4(
+    socket_id: u32,
+    addr_be: u32,
+    port_be: u16,
+) -> i32 {
+    if vm_guest_active() {
+        return guest_call_i32(
+            trueos_vm::vmcall::OP_BP_SOCKET_TCP_BIND_V4,
+            socket_id as u64,
+            pack_v4_port(addr_be, port_be),
+        );
+    }
+    socket_tcp_bind_v4_host(socket_id, addr_be, port_be)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_socket_tcp_bind_v6(
+    socket_id: u32,
+    addr_ptr: *const u8,
+    port_be: u16,
+) -> i32 {
+    if addr_ptr.is_null() {
+        return -EINVAL;
+    }
+
+    let mut addr = [0u8; 16];
+    // SAFETY: the caller provides a 16-byte IPv6 buffer.
+    unsafe { addr.copy_from_slice(slice::from_raw_parts(addr_ptr, 16)) };
+
+    if vm_guest_active() {
+        return guest_call_i32_payload(
+            trueos_vm::vmcall::OP_BP_SOCKET_TCP_BIND_V6,
+            socket_id as u64,
+            port_be as u64,
+            &addr,
+        );
+    }
+    socket_tcp_bind_v6_host(socket_id, addr, port_be)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_socket_tcp_connect_v4(
+    socket_id: u32,
+    addr_be: u32,
+    port_be: u16,
+    nonblocking: u32,
+) -> i32 {
+    if vm_guest_active() {
+        return guest_call_i32(
+            trueos_vm::vmcall::OP_BP_SOCKET_TCP_CONNECT_V4,
+            socket_id as u64,
+            pack_v4_port_nonblocking(addr_be, port_be, nonblocking),
+        );
+    }
+    socket_tcp_connect_v4_host(socket_id, addr_be, port_be, nonblocking)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_socket_tcp_connect_v6(
+    socket_id: u32,
+    addr_ptr: *const u8,
+    port_be: u16,
+    nonblocking: u32,
+) -> i32 {
+    if addr_ptr.is_null() {
+        return -EINVAL;
+    }
+
+    let mut addr = [0u8; 16];
+    // SAFETY: the caller provides a 16-byte IPv6 buffer.
+    unsafe { addr.copy_from_slice(slice::from_raw_parts(addr_ptr, 16)) };
+
+    if vm_guest_active() {
+        return guest_call_i32_payload(
+            trueos_vm::vmcall::OP_BP_SOCKET_TCP_CONNECT_V6,
+            socket_id as u64,
+            pack_port_nonblocking(port_be, nonblocking),
+            &addr,
+        );
+    }
+    socket_tcp_connect_v6_host(socket_id, addr, port_be, nonblocking)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_socket_tcp_poll_connect(socket_id: u32, timeout_ms: u64) -> i32 {
+    if vm_guest_active() {
+        return guest_call_i32(
+            trueos_vm::vmcall::OP_BP_SOCKET_TCP_POLL_CONNECT,
+            socket_id as u64,
+            timeout_ms,
+        );
+    }
+    socket_tcp_poll_connect_host(socket_id, timeout_ms)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_socket_tcp_send(
+    socket_id: u32,
+    data_ptr: *const u8,
+    data_len: usize,
+) -> isize {
+    if data_len == 0 {
+        return 0;
+    }
+    if data_ptr.is_null() {
+        return -EINVAL as isize;
+    }
+
+    // SAFETY: the caller provides a valid pointer for `data_len` bytes.
+    let data = unsafe { slice::from_raw_parts(data_ptr, data_len) };
+    if vm_guest_active() {
+        let mut sent = 0usize;
+        while sent < data.len() {
+            let end = core::cmp::min(sent + trueos_vm::vmcall::PAYLOAD_CAP, data.len());
+            let mut out = [0u8; 1];
+            let (status, rc) = trueos_vm::vmcall::call_with_payload(
+                trueos_vm::vmcall::OP_BP_SOCKET_TCP_SEND,
+                socket_id as u64,
+                0,
+                &data[sent..end],
+                &mut out,
+            );
+            if status != trueos_vm::vmcall::STATUS_OK {
+                return if sent == 0 {
+                    -EINVAL as isize
+                } else {
+                    sent as isize
+                };
+            }
+            let rc = vmcall_isize(rc);
+            if rc < 0 {
+                return if sent == 0 { rc } else { sent as isize };
+            }
+            if rc == 0 {
+                return sent as isize;
+            }
+            sent += core::cmp::min(rc as usize, end - sent);
+        }
+        return sent as isize;
+    }
+    socket_tcp_send_host(socket_id, data)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_socket_tcp_recv(
+    socket_id: u32,
+    out_ptr: *mut u8,
+    out_cap: usize,
+    flags: i32,
+    nonblocking: u32,
+    timeout_ms: u64,
+) -> isize {
+    if out_cap == 0 {
+        return 0;
+    }
+    if out_ptr.is_null() {
+        return -EINVAL as isize;
+    }
+    if out_cap > isize::MAX as usize {
+        return -EMSGSIZE as isize;
+    }
+
+    // SAFETY: the caller provides a valid output buffer for `out_cap` bytes.
+    let out = unsafe { slice::from_raw_parts_mut(out_ptr, out_cap) };
+    if vm_guest_active() {
+        let want = core::cmp::min(out.len(), trueos_vm::vmcall::PAYLOAD_CAP);
+        let mut req = [0u8; 16];
+        req[..4].copy_from_slice(&flags.to_le_bytes());
+        req[4..8].copy_from_slice(&nonblocking.to_le_bytes());
+        req[8..16].copy_from_slice(&timeout_ms.to_le_bytes());
+        let mut bytes = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
+        let (status, rc) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_SOCKET_TCP_RECV,
+            socket_id as u64,
+            want as u64,
+            &req,
+            &mut bytes,
+        );
+        if status != trueos_vm::vmcall::STATUS_OK {
+            return -EINVAL as isize;
+        }
+        let rc = vmcall_isize(rc);
+        if rc <= 0 {
+            return rc;
+        }
+        let got = core::cmp::min(rc as usize, want);
+        unsafe {
+            core::ptr::copy_nonoverlapping(bytes.as_ptr(), out_ptr, got);
+        }
+        return got as isize;
+    }
+    socket_tcp_recv_host(socket_id, out, flags, nonblocking, timeout_ms)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_socket_tcp_shutdown(socket_id: u32, _how: u32) -> i32 {
+    if vm_guest_active() {
+        return guest_call_i32(
+            trueos_vm::vmcall::OP_BP_SOCKET_TCP_SHUTDOWN,
+            socket_id as u64,
+            _how as u64,
+        );
+    }
+    socket_tcp_shutdown_host(socket_id, _how)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_socket_tcp_take_error(socket_id: u32) -> i32 {
+    if vm_guest_active() {
+        return guest_call_i32(trueos_vm::vmcall::OP_BP_SOCKET_TCP_TAKE_ERROR, socket_id as u64, 0);
+    }
+    socket_tcp_take_error_host(socket_id)
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_socket_tcp_peer_v4(
     socket_id: u32,
@@ -590,19 +868,42 @@ pub extern "C" fn trueos_cabi_socket_tcp_peer_v4(
     if out_addr_be.is_null() || out_port_be.is_null() {
         return -EINVAL;
     }
-    match with_socket_mut(socket_id, |socket| match socket.remote {
-        Some(RemoteAddr::V4(addr, port)) => {
+    if vm_guest_active() {
+        let mut bytes = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
+        let (status, rc) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_SOCKET_TCP_PEER_V4,
+            socket_id as u64,
+            0,
+            &[],
+            &mut bytes,
+        );
+        if status != trueos_vm::vmcall::STATUS_OK {
+            return -EINVAL;
+        }
+        let rc = vmcall_i32(rc);
+        if rc != 0 {
+            return rc;
+        }
+        let mut addr = [0u8; 4];
+        addr.copy_from_slice(&bytes[..4]);
+        let mut port = [0u8; 2];
+        port.copy_from_slice(&bytes[4..6]);
+        // SAFETY: output pointers are validated above.
+        unsafe {
+            *out_addr_be = u32::from_le_bytes(addr);
+            *out_port_be = u16::from_le_bytes(port);
+        }
+        return 0;
+    }
+    match socket_tcp_peer_v4_host(socket_id) {
+        Ok((addr, port)) => {
             // SAFETY: output pointers are validated above.
             unsafe {
-                *out_addr_be = u32::from_be_bytes(addr);
-                *out_port_be = port.to_be();
+                *out_addr_be = addr;
+                *out_port_be = port;
             }
-            Ok(())
+            0
         }
-        Some(RemoteAddr::V6(_, _)) => Err(-EAFNOSUPPORT),
-        None => Err(-ENOTCONN),
-    }) {
-        Ok(()) => 0,
         Err(err) => err,
     }
 }
@@ -616,19 +917,40 @@ pub extern "C" fn trueos_cabi_socket_tcp_peer_v6(
     if out_addr_ptr.is_null() || out_port_be.is_null() {
         return -EINVAL;
     }
-    match with_socket_mut(socket_id, |socket| match socket.remote {
-        Some(RemoteAddr::V6(addr, port)) => {
+    if vm_guest_active() {
+        let mut bytes = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
+        let (status, rc) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_SOCKET_TCP_PEER_V6,
+            socket_id as u64,
+            0,
+            &[],
+            &mut bytes,
+        );
+        if status != trueos_vm::vmcall::STATUS_OK {
+            return -EINVAL;
+        }
+        let rc = vmcall_i32(rc);
+        if rc != 0 {
+            return rc;
+        }
+        let mut port = [0u8; 2];
+        port.copy_from_slice(&bytes[16..18]);
+        // SAFETY: output pointers are validated above.
+        unsafe {
+            slice::from_raw_parts_mut(out_addr_ptr, 16).copy_from_slice(&bytes[..16]);
+            *out_port_be = u16::from_le_bytes(port);
+        }
+        return 0;
+    }
+    match socket_tcp_peer_v6_host(socket_id) {
+        Ok((addr, port)) => {
             // SAFETY: output pointers are validated above.
             unsafe {
                 slice::from_raw_parts_mut(out_addr_ptr, 16).copy_from_slice(&addr);
-                *out_port_be = port.to_be();
+                *out_port_be = port;
             }
-            Ok(())
+            0
         }
-        Some(RemoteAddr::V4(_, _)) => Err(-EAFNOSUPPORT),
-        None => Err(-ENOTCONN),
-    }) {
-        Ok(()) => 0,
         Err(err) => err,
     }
 }
