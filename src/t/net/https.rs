@@ -47,6 +47,11 @@ static CABI_NET_FETCH_BYTES_RESULTS: Mutex<BTreeMap<u32, CabiNetFetchBytesResult
 static CABI_NET_FETCH_WAIT: WaitQueue = WaitQueue::new();
 static CABI_NET_FETCH_WAIT_MODE_LOGGED: AtomicU8 = AtomicU8::new(0);
 static VHTTPS_HYPER_FILE_TMP_SEQ: AtomicU32 = AtomicU32::new(1);
+const CABI_NET_FETCH_TASK_POOL_SIZE: usize = crate::allcaps::net::CABI_NET_FETCH_TASK_POOL_SIZE;
+const NET_FETCH_MAX_CONCURRENCY: usize = crate::allcaps::net::CABI_NET_FETCH_MAX_CONCURRENCY;
+static NET_FETCH_ACTIVE: AtomicUsize = AtomicUsize::new(0);
+static NET_FETCH_CONCURRENCY_CAP_LOG_COUNT: AtomicU32 = AtomicU32::new(0);
+static CABI_NET_FETCH_TASK_POOL_CAP_LOG_COUNT: AtomicU32 = AtomicU32::new(0);
 
 #[inline]
 fn wait_on_net_fetch_queue_blocking(timeout_ms: u64) -> bool {
@@ -75,8 +80,6 @@ fn wait_on_net_fetch_queue_blocking(timeout_ms: u64) -> bool {
 // Net-fetch scheduler (used by QJS URL module cache):
 // - coalesces concurrent requests for the same cache key
 // - caps concurrency to avoid TLS-handshake storms starving the executor
-const NET_FETCH_MAX_CONCURRENCY: usize = 4;
-static NET_FETCH_ACTIVE: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug, Default)]
 struct InflightFetch {
@@ -86,6 +89,39 @@ struct InflightFetch {
 
 static CABI_NET_FETCH_INFLIGHT: Mutex<BTreeMap<String, InflightFetch>> =
     Mutex::new(BTreeMap::new());
+
+#[inline]
+fn should_log_net_fetch_cap(count: u32) -> bool {
+    count <= 8 || count.is_multiple_of(64)
+}
+
+fn log_net_fetch_concurrency_cap(op_kind: &'static str, op_id: u32, active: usize) {
+    let count = NET_FETCH_CONCURRENCY_CAP_LOG_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    if should_log_net_fetch_cap(count) {
+        crate::log!(
+            "WARNING net-fetch: concurrency cap reached kind={} op_id={} active={} cap={} count={}\n",
+            op_kind,
+            op_id,
+            active,
+            NET_FETCH_MAX_CONCURRENCY,
+            count
+        );
+    }
+}
+
+fn log_net_fetch_task_pool_cap(op_kind: &'static str, op_id: u32, caller_slot: u32) {
+    let count = CABI_NET_FETCH_TASK_POOL_CAP_LOG_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    if should_log_net_fetch_cap(count) {
+        crate::log!(
+            "WARNING net-fetch: task pool cap reached kind={} op_id={} caller_slot={} pool_cap={} count={}\n",
+            op_kind,
+            op_id,
+            caller_slot,
+            CABI_NET_FETCH_TASK_POOL_SIZE,
+            count
+        );
+    }
+}
 
 async fn net_fetch_acquire_slot() {
     loop {
@@ -97,12 +133,13 @@ async fn net_fetch_acquire_slot() {
         {
             return;
         }
+        log_net_fetch_concurrency_cap("legacy", 0, cur);
         // Cooperative backoff.
         Timer::after(EmbassyDuration::from_millis(1)).await;
     }
 }
 
-async fn net_fetch_acquire_slot_while<F>(is_needed: F) -> bool
+async fn net_fetch_acquire_slot_while<F>(op_kind: &'static str, op_id: u32, is_needed: F) -> bool
 where
     F: Fn() -> bool,
 {
@@ -124,6 +161,7 @@ where
             return true;
         }
 
+        log_net_fetch_concurrency_cap(op_kind, op_id, cur);
         // Cooperative backoff.
         Timer::after(EmbassyDuration::from_millis(1)).await;
     }
@@ -170,7 +208,10 @@ async fn cabi_net_fetch_task_inner(
     max_bytes: usize,
 ) {
     let t0 = Instant::now();
-    if !net_fetch_acquire_slot_while(|| net_fetch_file_task_has_interest(op_id, key.as_str())).await
+    if !net_fetch_acquire_slot_while("file", op_id, || {
+        net_fetch_file_task_has_interest(op_id, key.as_str())
+    })
+    .await
     {
         crate::log!("net-fetch: skipped key={} reason=no_interest_before_slot\n", key);
         return;
@@ -224,7 +265,7 @@ async fn cabi_net_fetch_task_inner(
     CABI_NET_FETCH_WAIT.notify_all();
 }
 
-#[embassy_executor::task]
+#[embassy_executor::task(pool_size = CABI_NET_FETCH_TASK_POOL_SIZE)]
 async fn cabi_net_fetch_task(
     op_id: u32,
     key: String,
@@ -252,17 +293,41 @@ fn spawn_cabi_net_fetch(
         crate::workers::pick_background_spawner_with_slot()
     };
 
-    if let Some((_cpu_slot, _core_kind, spawner)) = picked_spawner
-        && let Ok(token) = cabi_net_fetch_task(
+    if let Some((_cpu_slot, _core_kind, spawner)) = picked_spawner {
+        if let Ok(token) = cabi_net_fetch_task(
             op_id,
             key.clone(),
             url.clone(),
             path.clone(),
             timeout_ms,
             max_bytes,
-        )
-    {
-        spawner.spawn(token);
+        ) {
+            spawner.spawn(token);
+            return;
+        }
+        log_net_fetch_task_pool_cap("file", op_id, caller_slot);
+    }
+
+    if vmx_guest_cabi_context() {
+        crate::log!(
+            "net-fetch: spawn op_id={} refused local fallback caller_slot={} reason=vmx_guest_context\n",
+            op_id,
+            caller_slot
+        );
+        if let Some(slot) = CABI_NET_FETCH_RESULTS.lock().get_mut(&op_id) {
+            *slot = Some(FS_ERR_IO);
+        }
+        {
+            let mut inflight = CABI_NET_FETCH_INFLIGHT.lock();
+            if inflight
+                .get(&key)
+                .map(|entry| entry.owner_op_id == op_id)
+                .unwrap_or(false)
+            {
+                inflight.remove(&key);
+            }
+        }
+        CABI_NET_FETCH_WAIT.notify_all();
         return;
     }
 
@@ -288,7 +353,7 @@ async fn cabi_net_fetch_bytes_task_inner(
         timeout_ms,
         max_bytes
     );
-    if !net_fetch_acquire_slot_while(|| net_fetch_bytes_op_is_live(op_id)).await {
+    if !net_fetch_acquire_slot_while("bytes", op_id, || net_fetch_bytes_op_is_live(op_id)).await {
         crate::log!("net-fetch-bytes: skipped op_id={} reason=no_interest_before_slot\n", op_id);
         return;
     }
@@ -348,7 +413,7 @@ async fn cabi_net_fetch_bytes_task_inner(
     CABI_NET_FETCH_WAIT.notify_all();
 }
 
-#[embassy_executor::task]
+#[embassy_executor::task(pool_size = CABI_NET_FETCH_TASK_POOL_SIZE)]
 async fn cabi_net_fetch_bytes_task(op_id: u32, url: String, timeout_ms: u32, max_bytes: usize) {
     cabi_net_fetch_bytes_task_inner(op_id, url, timeout_ms, max_bytes).await;
 }
@@ -362,23 +427,37 @@ fn spawn_cabi_net_fetch_bytes(op_id: u32, url: String, timeout_ms: u32, max_byte
         crate::workers::pick_background_spawner_with_slot()
     };
 
-    if let Some((cpu_slot, core_kind, spawner)) = picked_spawner
-        && let Ok(token) = cabi_net_fetch_bytes_task(op_id, url.clone(), timeout_ms, max_bytes)
-    {
-        crate::log!(
-            "net-fetch-bytes: spawn op_id={} lane=background caller_slot={} cpu_slot={} core_kind={} timeout_ms={} max_bytes={} url_len={}\n",
-            op_id,
-            caller_slot,
-            cpu_slot,
-            core_kind,
-            timeout_ms,
-            max_bytes,
-            url.len()
-        );
-        spawner.spawn(token);
-        return;
+    if let Some((cpu_slot, core_kind, spawner)) = picked_spawner {
+        if let Ok(token) = cabi_net_fetch_bytes_task(op_id, url.clone(), timeout_ms, max_bytes) {
+            crate::log!(
+                "net-fetch-bytes: spawn op_id={} lane=background caller_slot={} cpu_slot={} core_kind={} timeout_ms={} max_bytes={} url_len={}\n",
+                op_id,
+                caller_slot,
+                cpu_slot,
+                core_kind,
+                timeout_ms,
+                max_bytes,
+                url.len()
+            );
+            spawner.spawn(token);
+            return;
+        }
+        log_net_fetch_task_pool_cap("bytes", op_id, caller_slot);
     }
 
+    if vmx_guest_cabi_context() {
+        crate::log!(
+            "net-fetch-bytes: spawn op_id={} refused local fallback caller_slot={} reason=vmx_guest_context\n",
+            op_id,
+            caller_slot
+        );
+        if let Some(slot) = CABI_NET_FETCH_BYTES_RESULTS.lock().get_mut(&op_id) {
+            slot.rc = Some(FS_ERR_IO);
+            slot.body.clear();
+        }
+        CABI_NET_FETCH_WAIT.notify_all();
+        return;
+    }
     crate::log!(
         "net-fetch-bytes: spawn op_id={} lane=local caller_slot={} timeout_ms={} max_bytes={} url_len={}\n",
         op_id,

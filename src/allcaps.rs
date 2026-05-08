@@ -74,6 +74,8 @@ pub mod net {
     pub const ICMP_VNET_TIMEOUT_MS: i64 = 2000;
     pub const NET_POLL_SLEEP_US: u64 = 100;
     pub const NET_SERVICE_SLEEP_US: u64 = 100;
+    pub const CABI_NET_FETCH_TASK_POOL_SIZE: usize = 16;
+    pub const CABI_NET_FETCH_MAX_CONCURRENCY: usize = 8;
 
     pub const DNS_SERVER_MAX: usize = 4;
     pub const IPV6_RS_RETRY_MS: i64 = 5_000;

@@ -319,6 +319,7 @@ struct DeferredAppWindowRecord {
     resize_mode: Option<u32>,
     repaint_requested: bool,
     close_requested: bool,
+    cached_info: Option<crate::r::ui2::TrueosUi2WindowInfo>,
 }
 
 impl DeferredAppWindowRecord {
@@ -354,6 +355,7 @@ impl DeferredAppWindowRecord {
             resize_mode: None,
             repaint_requested: false,
             close_requested: false,
+            cached_info: None,
         }
     }
 }
@@ -1161,6 +1163,7 @@ pub fn defer_blueprint_app_window_create(
         resize_mode: None,
         repaint_requested: false,
         close_requested: false,
+        cached_info: None,
     };
     app_window_broker_log(format_args!(
         "app-window-broker: vm{} deferred create kind={} window={} seq={} title={} rect=({},{} {}x{}) tex={} host_tex={} materialize=host-service",
@@ -1308,6 +1311,20 @@ pub fn materialized_blueprint_app_window_id(window_id: u32) -> Option<u32> {
 
 pub fn host_blueprint_app_window_id(window_id: u32) -> u32 {
     materialized_blueprint_app_window_id(window_id).unwrap_or(window_id)
+}
+
+pub fn deferred_blueprint_app_window_info_current_vm(
+    window_id: u32,
+) -> Option<crate::r::ui2::TrueosUi2WindowInfo> {
+    let vm_id = deferred_blueprint_app_window_current_vm(window_id)?;
+    let records_lock = APP_WINDOW_DEFERRED_RECORDS.get(vm_id as usize)?;
+    let mut info = records_lock
+        .lock()
+        .iter()
+        .find(|record| record.active && record.deferred_id == window_id)
+        .and_then(|record| record.cached_info)?;
+    info.id = window_id;
+    Some(info)
 }
 
 pub fn begin_blueprint_app_window_session(vm_id: u8, archive: &str) {
@@ -1470,6 +1487,7 @@ pub fn materialize_deferred_blueprint_app_windows(vm_id: u8) -> usize {
                 .find(|slot| slot.active && slot.deferred_id == record.deferred_id)
             {
                 slot.materialized_window_id = window_id;
+                slot.cached_info = crate::r::ui2::window_info_by_id(window_id);
             }
         }
         app_window_broker_log(format_args!(
@@ -1483,6 +1501,64 @@ pub fn materialize_deferred_blueprint_app_windows(vm_id: u8) -> usize {
     }
     drain_deferred_app_window_closes(vm_id);
     materialized
+}
+
+fn sync_materialized_deferred_blueprint_app_window_updates(vm_id: u8) {
+    let Some(records_lock) = APP_WINDOW_DEFERRED_RECORDS.get(vm_id as usize) else {
+        return;
+    };
+    let mut pending: HVec<DeferredAppWindowRecord, APP_WINDOW_DEFERRED_CAP> = HVec::new();
+    {
+        let records = records_lock.lock();
+        for record in records.iter() {
+            if record.active
+                && record.materialized_window_id != 0
+                && record.materialized_window_id != DeferredAppWindowRecord::MATERIALIZING
+                && !record.close_requested
+            {
+                let _ = pending.push(record.clone());
+            }
+        }
+    }
+
+    let mut clear_repaint: HVec<u32, APP_WINDOW_DEFERRED_CAP> = HVec::new();
+    let mut info_updates: HVec<(u32, crate::r::ui2::TrueosUi2WindowInfo), APP_WINDOW_DEFERRED_CAP> =
+        HVec::new();
+    for record in pending {
+        let window_id = record.materialized_window_id;
+        let _ = crate::r::ui2::set_window_title(window_id, record.title.as_str());
+        if let Some(info) = crate::r::ui2::window_info_by_id(window_id) {
+            let _ = info_updates.push((record.deferred_id, info));
+        }
+        if record.repaint_requested
+            && crate::r::ui2::request_window_content_present(
+                window_id,
+                "vm-deferred-request-repaint",
+            )
+        {
+            let _ = clear_repaint.push(record.deferred_id);
+        }
+    }
+
+    if !clear_repaint.is_empty() || !info_updates.is_empty() {
+        let mut records = records_lock.lock();
+        for (deferred_id, info) in info_updates {
+            if let Some(record) = records
+                .iter_mut()
+                .find(|record| record.active && record.deferred_id == deferred_id)
+            {
+                record.cached_info = Some(info);
+            }
+        }
+        for deferred_id in clear_repaint {
+            if let Some(record) = records
+                .iter_mut()
+                .find(|record| record.active && record.deferred_id == deferred_id)
+            {
+                record.repaint_requested = false;
+            }
+        }
+    }
 }
 
 fn apply_deferred_app_window_properties(window_id: u32, record: &DeferredAppWindowRecord) {
@@ -1573,6 +1649,7 @@ pub fn materialize_pending_deferred_blueprint_app_windows() -> usize {
     let mut materialized = 0usize;
     for vm_id in 0..TRUEOS_VM_ID_LIMIT {
         materialized += materialize_deferred_blueprint_app_windows(vm_id as u8);
+        sync_materialized_deferred_blueprint_app_window_updates(vm_id as u8);
     }
     materialized
 }

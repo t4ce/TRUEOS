@@ -499,11 +499,18 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
 
     let mut current_devices: Vec<ObservedUsbDevice> = Vec::new();
     for dev in devices.iter() {
-        let strings = match host.open_device(dev).await {
-            Ok(mut device) => super::descriptor::read_device_strings(&mut device).await,
-            Err(_) => super::descriptor::UsbDeviceStrings::default(),
-        };
         let desc = dev.descriptor();
+        let skip_optional_descriptor_reads =
+            super::descriptor::hid_optional_descriptor_skip_reason(desc.vendor_id, desc.product_id)
+                .is_some();
+        let strings = if skip_optional_descriptor_reads {
+            super::descriptor::UsbDeviceStrings::default()
+        } else {
+            match host.open_device(dev).await {
+                Ok(mut device) => super::descriptor::read_device_strings(&mut device).await,
+                Err(_) => super::descriptor::UsbDeviceStrings::default(),
+            }
+        };
         let topo = dev.topology();
         let location = dev.location();
         current_devices.push(ObservedUsbDevice {
@@ -596,7 +603,14 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
         let controller_id = info.index as u32;
         let mut bound_any = false;
         let mut shared_led_device = None;
-        if usb_log_all_enabled() && desc.class == 0x03 {
+        if usb_log_all_enabled()
+            && desc.class == 0x03
+            && super::descriptor::hid_optional_descriptor_skip_reason(
+                desc.vendor_id,
+                desc.product_id,
+            )
+            .is_none()
+        {
             super::descriptor::log_hid_report_descriptors(host, dev).await;
         }
         if super::hid::leds::should_share_probe_device(dev) {

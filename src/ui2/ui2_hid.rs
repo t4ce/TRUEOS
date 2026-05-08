@@ -347,6 +347,10 @@ fn selected_window_content_contains_cursor(
 }
 
 fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHidCursorEvent) {
+    if !cursor_event_is_physical(&event) {
+        return;
+    }
+
     let slot_id = event.slot_id;
     if slot_id == 0 {
         return;
@@ -483,6 +487,19 @@ fn process_cursor_event(state: &mut Ui2State, event: crate::usb2::hid::TrueosHid
     }
 
     let selected_window_id = state.cursors[cursor_idx].selected_window_id;
+    let press_routes_to_window = begin_move_drag
+        && press_window_id != 0
+        && press_hit
+            .map(|target| {
+                matches!(target.kind, Ui2HitKind::WindowBody | Ui2HitKind::BrowserInteractive)
+            })
+            .unwrap_or(false);
+    if press_routes_to_window {
+        cursor_capture_window_id = press_window_id;
+        if selected_window_id != press_window_id {
+            select_window_id = Some(press_window_id);
+        }
+    }
     let route_window_id = if cursor_capture_window_id != 0 {
         cursor_capture_window_id
     } else if selected_window_id != 0
