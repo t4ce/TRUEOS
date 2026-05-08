@@ -577,6 +577,42 @@ unsafe extern "C" fn trueos_prewarm_url(
     js_int32(rc)
 }
 
+unsafe extern "C" fn trueos_global_log_line(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    const MAX_LOG_LINE_BYTES: usize = 1024;
+
+    if argv.is_null() || argc <= 0 {
+        return js_int32(-1);
+    }
+
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let mut line_len: usize = 0;
+    let line_c = qjs::JS_ToCStringLen2(ctx, &mut line_len as *mut usize, args[0], 0);
+    if line_c.is_null() {
+        return js_int32(-1);
+    }
+
+    let raw = core::slice::from_raw_parts(line_c as *const u8, line_len);
+    let take_len = raw.len().min(MAX_LOG_LINE_BYTES);
+    let mut line = Vec::with_capacity(take_len + 1);
+    for b in raw.iter().take(take_len).copied() {
+        match b {
+            b'\n' | b'\r' | b'\t' => line.push(b' '),
+            0x20..=0x7e => line.push(b),
+            _ => line.push(b'?'),
+        }
+    }
+    line.push(b'\n');
+
+    v::vcabi::trueos_cabi_write(1, line.as_ptr(), line.len());
+    qjs::JS_FreeCString(ctx, line_c);
+    js_int32(0)
+}
+
 unsafe extern "C" fn trueos_resolve_ready_image_texture(
     ctx: *mut qjs::JSContext,
     _this_val: qjs::JSValueConst,
@@ -858,6 +894,21 @@ unsafe fn ensure_global_fetch(ctx: *mut qjs::JSContext) {
         global,
         b"__trueosPrewarmUrl\0".as_ptr() as *const c_char,
         prewarm_helper,
+    );
+
+    let global_log_helper = qjs::JS_NewCFunction2(
+        ctx,
+        Some(trueos_global_log_line),
+        b"__trueosGlobalLogLine\0".as_ptr() as *const c_char,
+        1,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"__trueosGlobalLogLine\0".as_ptr() as *const c_char,
+        global_log_helper,
     );
 
     let image_helper = qjs::JS_NewCFunction2(
