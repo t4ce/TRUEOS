@@ -97,7 +97,6 @@ trueos-limloader = { path = "crates/trueos-limloader" }
 
 [patch.crates-io]
 libc = { path = "vendor/libc-0.2.185" }
-atomic-waker = { path = "vendor/atomic-waker-1.1.2" }
 png = { path = "vendor/png-0.18.1" }
 fdeflate = { path = "vendor/fdeflate-0.3.7" }
 simd-adler32 = { path = "vendor/simd-adler32-0.3.8" }
@@ -107,7 +106,6 @@ imagesize = { path = "vendor/imagesize-0.13.0" }
 hyper = { path = "vendor/hyper-1.9.0" }
 hyper-util = { path = "vendor/hyper-util-0.1.20" }
 reqwest = { path = "vendor/reqwest-0.13.3" }
-itoa = { path = "vendor/itoa-1.0.18" }
 kurbo = { path = "vendor/kurbo-0.11.3" }
 svgtypes = { path = "vendor/svgtypes-0.15.3" }
 xmlwriter = { path = "vendor/xmlwriter-0.1.0" }
@@ -115,11 +113,8 @@ crc32fast = { path = "vendor/crc32fast-1.5.0" }
 embedded-websocket = { path = "vendor/embedded-websocket-0.9.4" }
 hickory-proto = { path = "vendor/hickory-proto-0.25.2" }
 crab-usb = { path = "vendor/crab-usb-0.6.2/crab-usb-0.6.2" }
-smallvec = { path = "vendor/smallvec-1.15.1" }
 parking_lot = { path = "vendor/parking_lot-0.12.5" }
 parking_lot_core = { path = "vendor/parking_lot_core-0.9.12" }
 tokio = { path = "vendor/tokio-1.52.1" }
 mio = { path = "vendor/mio-1.2.0" }
 socket2 = { path = "vendor/socket2-0.6.3" }
-try-lock = { path = "vendor/try-lock-0.2.5" }
-want = { path = "vendor/want-0.3.1" }
