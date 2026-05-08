@@ -17,6 +17,7 @@ static LOGGED_VTHREAD_BACKING: AtomicBool = AtomicBool::new(false);
 async fn tokio_blocking_job_task(
     job: TokioBlockingJob,
     lane: crate::stackkeeper::TokioLaneLease,
+    _carrier_lease: crate::r::lane::LaneLease,
     purpose: &'static str,
 ) {
     if !LOGGED_TASK_ENTER.swap(true, Ordering::AcqRel) {
@@ -55,11 +56,27 @@ fn reject_until_background_ap_ready() -> i32 {
 }
 
 fn spawn_on_background_ap(job: TokioBlockingJob, purpose: &'static str) -> i32 {
-    let Some((cpu_slot, core_kind, spawner)) = crate::workers::pick_background_spawner_with_slot()
-    else {
-        let _ = job;
-        return reject_until_background_ap_ready();
+    let carrier = match crate::r::lane::pick_tokio_blocking_lane() {
+        Ok(carrier) => carrier,
+        Err(crate::r::lane::LanePickError::MissingWorkerLane) => {
+            let _ = job;
+            return reject_until_background_ap_ready();
+        }
+        Err(error) => {
+            let _ = job;
+            if !LOGGED_NO_LANE.swap(true, Ordering::AcqRel) {
+                crate::log!(
+                    "tokio-worker: no TRUEOS runtime carrier lane for {}; reason={}\n",
+                    purpose,
+                    error.as_str()
+                );
+            }
+            return -4;
+        }
     };
+    let cpu_slot = carrier.slot;
+    let core_kind = carrier.core_kind;
+    let spawner = carrier.spawner.clone();
 
     let Some(lane) = crate::stackkeeper::try_acquire_tokio_lane(cpu_slot, core_kind, purpose)
     else {
@@ -74,7 +91,7 @@ fn spawn_on_background_ap(job: TokioBlockingJob, purpose: &'static str) -> i32 {
         return -4;
     };
 
-    let token = match tokio_blocking_job_task(job, lane, purpose) {
+    let token = match tokio_blocking_job_task(job, lane, carrier.lease, purpose) {
         Ok(token) => token,
         Err(_) => {
             let _ = crate::stackkeeper::release_tokio_lane(lane);

@@ -739,7 +739,7 @@ fn start_with_mode(
         memory::active_guest_stack_mb_for_vm(vm_id)
     ));
 
-    match vm_task(vm_id) {
+    match vm_task(vm_id, target.lease) {
         Ok(token) => {
             target.spawner.spawn(token);
             hvlogf(format_args!(
@@ -1618,7 +1618,7 @@ impl LineageRecord {
 }
 
 #[task(pool_size = 32)]
-async fn vm_task(vm_id: u8) {
+async fn vm_task(vm_id: u8, _lane_lease: crate::r::lane::LaneLease) {
     let Some(vm) = vm_slot(vm_id) else {
         return;
     };
