@@ -8,7 +8,7 @@
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 
-use super::{Driver, DriverCategory, DriverInfo, DriverStatus, NetStats, NetworkDriver};
+use super::{Driver, DriverInfo, DriverStatus, NetworkDriver};
 use crate::pci::PciDevice;
 
 pub struct Rtl8139Driver {
@@ -41,23 +41,12 @@ impl Driver for Rtl8139Driver {
         Ok(())
     }
 
-    fn stop(&mut self) -> Result<(), &'static str> {
-        self.status = DriverStatus::Suspended;
-        Ok(())
-    }
-
     fn status(&self) -> DriverStatus {
         self.status
     }
-
-    fn handle_interrupt(&mut self) {}
 }
 
 impl NetworkDriver for Rtl8139Driver {
-    fn mac_address(&self) -> [u8; 6] {
-        self.mac
-    }
-
     fn link_up(&self) -> bool {
         false
     }
@@ -71,17 +60,10 @@ impl NetworkDriver for Rtl8139Driver {
     }
 
     fn poll(&mut self) {}
-
-    fn stats(&self) -> NetStats {
-        NetStats::default()
-    }
 }
 
 const DRIVER_INFO: DriverInfo = DriverInfo {
     name: "rtl8139",
-    version: "0.1.0",
-    author: "T-RustOs Team",
-    category: DriverCategory::Network,
     vendor_ids: &[
         (0x10EC, 0x8139), // RTL8139
     ],

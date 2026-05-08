@@ -700,7 +700,6 @@ impl<'a> Device for AdapterDeviceAt<'a> {
         };
 
         Some(packet).map(|packet| {
-            crate::net::dma_fpga_stream_on_rx_packet(&packet);
             let new_total = NET_RX_FRAMES.fetch_add(1, Ordering::Relaxed) + 1;
             let new_dev_total = NET_RX_FRAMES_AT
                 .get(self.index)
