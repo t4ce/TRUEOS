@@ -1,3 +1,5 @@
+use core::sync::atomic::{AtomicU32, Ordering};
+
 const CURSOR_TICK_SUPPRESS_AFTER_BASE_MS: u64 = 60;
 const CURSOR_HALF_SPAN_VIEWPORT_RATIO: f32 = 0.013;
 const CURSOR_HALF_SPAN_MIN_PX: f32 = 12.0;
@@ -5,6 +7,7 @@ const CURSOR_HALF_SPAN_MAX_PX: f32 = 24.0;
 const CURSOR_THICKNESS_RATIO: f32 = 0.22;
 const CURSOR_THICKNESS_MIN_PX: f32 = 2.0;
 const CURSOR_THICKNESS_MAX_PX: f32 = 6.0;
+static VM_CURSOR_WRITE_REJECT_COUNT: AtomicU32 = AtomicU32::new(0);
 
 #[inline]
 fn cursor_cross_metrics_px(vp_h: u32) -> (f32, f32) {
@@ -335,6 +338,23 @@ fn input_write_cursor_event(
     flags: u32,
 ) -> i32 {
     if slot_id == 0 {
+        return -1;
+    }
+    if let Some(vm_id) = crate::hv::current_hull_guest_context_vm_id() {
+        let count = VM_CURSOR_WRITE_REJECT_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+        if count <= 8 || count.is_multiple_of(64) {
+            crate::log!(
+                "WARNING input-cursor: rejected vm cursor write vm={} slot={} x={} y={} buttons=0x{:X} wheel={} flags=0x{:X} count={}\n",
+                vm_id,
+                slot_id,
+                x_px,
+                y_px,
+                buttons_down,
+                wheel,
+                flags,
+                count
+            );
+        }
         return -1;
     }
 

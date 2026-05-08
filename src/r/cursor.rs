@@ -30,13 +30,13 @@ impl KernelHwCursorSourceKind {
 
     pub const fn kernel_hw_cursor_priority(self) -> u8 {
         // Contract for kernel-hw-cursor source promotion:
-        // service/virtual provides the baseline authority today,
-        // physical mouse may supersede lower-fidelity sources,
+        // service/virtual provides only a fallback authority,
+        // physical pointing devices supersede virtual app cursors,
         // and eyetracker is reserved as the final/highest-priority source.
         match self {
-            Self::Tablet => 1,
-            Self::Mouse => 2,
-            Self::VirtualService => 3,
+            Self::VirtualService => 1,
+            Self::Tablet => 2,
+            Self::Mouse => 3,
             Self::EyeTracker => 4,
         }
     }

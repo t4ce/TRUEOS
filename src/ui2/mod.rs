@@ -1458,7 +1458,11 @@ pub unsafe extern "C" fn trueos_cabi_ui2_window_info(
     }
     let window_id = ui2_cabi_target_window_id(window_id);
     if vm_deferred_window_any(window_id) {
-        return -1;
+        let Some(info) = crate::hv::deferred_blueprint_app_window_info_current_vm(window_id) else {
+            return -1;
+        };
+        *out_info = info;
+        return 0;
     }
     let Some(info) = window_info_by_id(window_id) else {
         return -1;

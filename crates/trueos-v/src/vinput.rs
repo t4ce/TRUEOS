@@ -32,7 +32,7 @@ pub fn pop_mouse_delta() -> Option<(u8, i8, i8, i8)> {
     let mut wheel = 0i8;
     let rc =
         unsafe { vcabi::trueos_cabi_input_pop_mouse(&mut buttons, &mut dx, &mut dy, &mut wheel) };
-    if rc == 0 {
+    if rc == 1 {
         Some((buttons, dx, dy, wheel))
     } else {
         None
