@@ -34,15 +34,6 @@ pub(crate) enum ParseOutcome {
     StartSession(CommandSessionKind),
 }
 
-impl ParseOutcome {
-    pub(crate) const fn handled(self) -> bool {
-        match self {
-            Self::Handled | Self::SetLineWidth(_) | Self::StartSession(_) => true,
-            Self::NotCommand => false,
-        }
-    }
-}
-
 pub(crate) fn try_parse(
     spawner: &Spawner,
     io: &'static dyn ShellBackend2,

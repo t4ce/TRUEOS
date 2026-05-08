@@ -143,6 +143,26 @@ fn env_var_into(key: &str, out: &mut [u8]) -> Option<usize> {
     Some(bytes.len())
 }
 
+fn guest_rand_fill(dest: &mut [u8]) -> bool {
+    let mut offset = 0usize;
+    while offset < dest.len() {
+        let end = core::cmp::min(offset + trueos_vm::vmcall::PAYLOAD_CAP, dest.len());
+        let out = &mut dest[offset..end];
+        let (status, got) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_RAND_BYTES,
+            out.len() as u64,
+            0,
+            &[],
+            out,
+        );
+        if status != trueos_vm::vmcall::STATUS_OK || got as usize != out.len() {
+            return false;
+        }
+        offset = end;
+    }
+    true
+}
+
 #[inline]
 unsafe fn alloc_bytes(size: usize, align: usize) -> *mut u8 {
     if size == 0 {
@@ -267,7 +287,12 @@ pub unsafe extern "C" fn sys_rand(recv_buf: *mut u32, words: usize) {
 
     let byte_len = words.saturating_mul(core::mem::size_of::<u32>());
     let bytes = unsafe { slice::from_raw_parts_mut(recv_buf.cast::<u8>(), byte_len) };
-    if !crate::rng::fill_bytes(bytes) {
+    let ok = if vmx_guest_std_context() {
+        guest_rand_fill(bytes)
+    } else {
+        crate::rng::fill_bytes(bytes)
+    };
+    if !ok {
         ptr::write_bytes(recv_buf, 0, words);
     }
 }

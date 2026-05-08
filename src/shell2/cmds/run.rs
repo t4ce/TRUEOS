@@ -401,37 +401,6 @@ pub(crate) fn enqueue_blueprint_bytes(
     });
 }
 
-pub(crate) fn submit_archive_name_to_target(
-    target: MatrixTarget,
-    archive_name: &str,
-    app_args: Vec<String>,
-) -> Result<(), &'static str> {
-    let archives = archive_entries()?;
-    let Some(entry) = archives
-        .iter()
-        .find(|entry| entry.archive.as_str() == archive_name)
-    else {
-        return Err("archive not found");
-    };
-
-    match &entry.source {
-        ArchiveSource::TrueosfsRoot => {
-            let module_bytes = crate::r::io::kfs::read_file(entry.archive.as_str())
-                .map_err(|_| "failed to read selected module from TRUEOSFS")?;
-            enqueue_blueprint_bytes(target, entry.archive.clone(), module_bytes, app_args);
-        }
-        ArchiveSource::EmbeddedModule { cmdline } => {
-            let Some(module_bytes) = crate::limine::module_bytes_by_string(cmdline.as_bytes())
-            else {
-                return Err("failed to read selected embedded module");
-            };
-            enqueue_blueprint_bytes(target, entry.archive.clone(), module_bytes.to_vec(), app_args);
-        }
-    }
-
-    Ok(())
-}
-
 pub(crate) async fn submit_archive_name_to_target_prefer_trueosfs_async(
     target: MatrixTarget,
     archive_name: &str,
@@ -504,28 +473,6 @@ pub(crate) fn submit_archive_id(
     let Some(archive) = id.checked_sub(1).and_then(|idx| archives.get(idx)) else {
         print_shell_line(io, "apps: unknown app id");
         print_archive_table(io, archives.as_slice());
-        return false;
-    };
-    submit_archive_entry(io, archive, app_args);
-    true
-}
-
-pub(crate) fn submit_archive_name(
-    io: &'static dyn ShellBackend2,
-    archive_name: &str,
-    app_args: Vec<String>,
-) -> bool {
-    let archives = match archive_entries() {
-        Ok(archives) => archives,
-        Err(err) => {
-            print_shell_line(io, alloc::format!("apps: {}", err).as_str());
-            return false;
-        }
-    };
-    let Some(archive) = archives
-        .iter()
-        .find(|entry| entry.archive.as_str() == archive_name)
-    else {
         return false;
     };
     submit_archive_entry(io, archive, app_args);

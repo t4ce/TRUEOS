@@ -740,7 +740,16 @@ fn start_with_mode(
     ));
 
     match vm_task(vm_id) {
-        Ok(token) => target.spawner.spawn(token),
+        Ok(token) => {
+            target.spawner.spawn(token);
+            hvlogf(format_args!(
+                "hv: vm{} lane spawn submitted: role={} placement={} slot={}",
+                vm_id,
+                profile.role_name(),
+                profile.placement_name(),
+                target.slot
+            ));
+        }
         Err(_) => {
             vm.starting.store(false, Ordering::Release);
             return Err(StartError::SpawnFailed);
