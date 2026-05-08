@@ -1427,6 +1427,14 @@ fn vm_deferred_window_any(window_id: u32) -> bool {
 }
 
 #[inline]
+fn ui2_cabi_target_window_id(window_id: u32) -> u32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return window_id;
+    }
+    crate::hv::host_blueprint_app_window_id(window_id)
+}
+
+#[inline]
 fn current_vm_origin_id() -> Option<u8> {
     crate::hv::current_vm_id_by_lapic_low()
 }
@@ -1448,6 +1456,7 @@ pub unsafe extern "C" fn trueos_cabi_ui2_window_info(
     if out_info.is_null() {
         return -1;
     }
+    let window_id = ui2_cabi_target_window_id(window_id);
     if vm_deferred_window_any(window_id) {
         return -1;
     }
@@ -1471,7 +1480,9 @@ pub unsafe extern "C" fn trueos_cabi_ui2_window_set_title(
     let Ok(title) = core::str::from_utf8(title) else {
         return -1;
     };
+    let window_id = ui2_cabi_target_window_id(window_id);
     if let Some(rc) = vm_deferred_window_ok(window_id, "set-title") {
+        let _ = crate::hv::note_deferred_blueprint_app_window_title(window_id, title);
         return rc;
     }
     if set_window_title(window_id, title) {
@@ -1483,6 +1494,7 @@ pub unsafe extern "C" fn trueos_cabi_ui2_window_set_title(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_ui2_window_request_repaint(window_id: u32) -> i32 {
+    let window_id = ui2_cabi_target_window_id(window_id);
     if let Some(rc) = vm_deferred_window_ok(window_id, "request-repaint") {
         return rc;
     }
@@ -1495,7 +1507,9 @@ pub unsafe extern "C" fn trueos_cabi_ui2_window_request_repaint(window_id: u32) 
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_ui2_window_set_icon(window_id: u32, icon_id: u32) -> i32 {
+    let window_id = ui2_cabi_target_window_id(window_id);
     if let Some(rc) = vm_deferred_window_ok(window_id, "set-icon") {
+        let _ = crate::hv::note_deferred_blueprint_app_window_u32(window_id, "set-icon", icon_id);
         return rc;
     }
     if set_window_icon(window_id, icon_id) {
@@ -1511,7 +1525,9 @@ pub unsafe extern "C" fn trueos_cabi_ui2_window_set_position(
     x: i32,
     y: i32,
 ) -> i32 {
+    let window_id = ui2_cabi_target_window_id(window_id);
     if let Some(rc) = vm_deferred_window_ok(window_id, "set-position") {
+        let _ = crate::hv::note_deferred_blueprint_app_window_position(window_id, x, y);
         return rc;
     }
     if move_window(window_id, x as f32, y as f32) {
@@ -1527,7 +1543,9 @@ pub unsafe extern "C" fn trueos_cabi_ui2_window_set_size(
     width: u32,
     height: u32,
 ) -> i32 {
+    let window_id = ui2_cabi_target_window_id(window_id);
     if let Some(rc) = vm_deferred_window_ok(window_id, "set-size") {
+        let _ = crate::hv::note_deferred_blueprint_app_window_size(window_id, width, height);
         return rc;
     }
     if resize_window(window_id, width as f32, height as f32) {
@@ -1542,7 +1560,13 @@ pub unsafe extern "C" fn trueos_cabi_ui2_window_set_decorations(window_id: u32, 
     let Some(mode) = Ui2WindowDecorationMode::from_u32(mode) else {
         return -1;
     };
+    let window_id = ui2_cabi_target_window_id(window_id);
     if let Some(rc) = vm_deferred_window_ok(window_id, "set-decorations") {
+        let _ = crate::hv::note_deferred_blueprint_app_window_u32(
+            window_id,
+            "set-decorations",
+            mode as u32,
+        );
         return rc;
     }
     if set_window_decorations(window_id, mode) {
@@ -1557,7 +1581,13 @@ pub unsafe extern "C" fn trueos_cabi_ui2_window_set_hit_test_visible(
     window_id: u32,
     visible: u32,
 ) -> i32 {
+    let window_id = ui2_cabi_target_window_id(window_id);
     if let Some(rc) = vm_deferred_window_ok(window_id, "set-hit-test-visible") {
+        let _ = crate::hv::note_deferred_blueprint_app_window_bool(
+            window_id,
+            "set-hit-test-visible",
+            visible != 0,
+        );
         return rc;
     }
     if set_window_hit_test_visible(window_id, visible != 0) {
@@ -1572,7 +1602,13 @@ pub unsafe extern "C" fn trueos_cabi_ui2_window_set_vertical_scrollbar_visible(
     window_id: u32,
     visible: u32,
 ) -> i32 {
+    let window_id = ui2_cabi_target_window_id(window_id);
     if let Some(rc) = vm_deferred_window_ok(window_id, "set-vertical-scrollbar-visible") {
+        let _ = crate::hv::note_deferred_blueprint_app_window_bool(
+            window_id,
+            "set-vertical-scrollbar-visible",
+            visible != 0,
+        );
         return rc;
     }
     if set_window_left_scrollbar_visible(window_id, visible != 0) {
@@ -1587,7 +1623,13 @@ pub unsafe extern "C" fn trueos_cabi_ui2_window_set_horizontal_scrollbar_visible
     window_id: u32,
     visible: u32,
 ) -> i32 {
+    let window_id = ui2_cabi_target_window_id(window_id);
     if let Some(rc) = vm_deferred_window_ok(window_id, "set-horizontal-scrollbar-visible") {
+        let _ = crate::hv::note_deferred_blueprint_app_window_bool(
+            window_id,
+            "set-horizontal-scrollbar-visible",
+            visible != 0,
+        );
         return rc;
     }
     if set_window_bottom_scrollbar_visible(window_id, visible != 0) {
@@ -1602,7 +1644,13 @@ pub unsafe extern "C" fn trueos_cabi_ui2_window_set_resize_maintain_aspect(
     window_id: u32,
     maintain_aspect: u32,
 ) -> i32 {
+    let window_id = ui2_cabi_target_window_id(window_id);
     if let Some(rc) = vm_deferred_window_ok(window_id, "set-resize-maintain-aspect") {
+        let _ = crate::hv::note_deferred_blueprint_app_window_bool(
+            window_id,
+            "set-resize-maintain-aspect",
+            maintain_aspect != 0,
+        );
         return rc;
     }
     if set_window_resize_maintain_aspect(window_id, maintain_aspect != 0) {
@@ -1617,7 +1665,13 @@ pub unsafe extern "C" fn trueos_cabi_ui2_window_set_content_preserve_scale(
     window_id: u32,
     preserve_scale: u32,
 ) -> i32 {
+    let window_id = ui2_cabi_target_window_id(window_id);
     if let Some(rc) = vm_deferred_window_ok(window_id, "set-content-preserve-scale") {
+        let _ = crate::hv::note_deferred_blueprint_app_window_bool(
+            window_id,
+            "set-content-preserve-scale",
+            preserve_scale != 0,
+        );
         return rc;
     }
     if set_window_content_preserve_scale(window_id, preserve_scale != 0) {
@@ -1632,7 +1686,13 @@ pub unsafe extern "C" fn trueos_cabi_ui2_window_set_resize_mode(window_id: u32, 
     let Some(mode) = Ui2WindowResizeMode::from_u32(mode) else {
         return -1;
     };
+    let window_id = ui2_cabi_target_window_id(window_id);
     if let Some(rc) = vm_deferred_window_ok(window_id, "set-resize-mode") {
+        let _ = crate::hv::note_deferred_blueprint_app_window_u32(
+            window_id,
+            "set-resize-mode",
+            mode as u32,
+        );
         return rc;
     }
     if set_window_resize_mode(window_id, mode) {
@@ -1650,7 +1710,13 @@ pub unsafe extern "C" fn trueos_cabi_ui2_window_set_vertical_scrollbar_side(
     let Some(side) = Ui2WindowVerticalScrollbarSide::from_u32(side) else {
         return -1;
     };
+    let window_id = ui2_cabi_target_window_id(window_id);
     if let Some(rc) = vm_deferred_window_ok(window_id, "set-vertical-scrollbar-side") {
+        let _ = crate::hv::note_deferred_blueprint_app_window_u32(
+            window_id,
+            "set-vertical-scrollbar-side",
+            side as u32,
+        );
         return rc;
     }
     if set_window_vertical_scrollbar_side(window_id, side) {
@@ -1668,7 +1734,13 @@ pub unsafe extern "C" fn trueos_cabi_ui2_window_set_horizontal_scrollbar_side(
     let Some(side) = Ui2WindowHorizontalScrollbarSide::from_u32(side) else {
         return -1;
     };
+    let window_id = ui2_cabi_target_window_id(window_id);
     if let Some(rc) = vm_deferred_window_ok(window_id, "set-horizontal-scrollbar-side") {
+        let _ = crate::hv::note_deferred_blueprint_app_window_u32(
+            window_id,
+            "set-horizontal-scrollbar-side",
+            side as u32,
+        );
         return rc;
     }
     if set_window_horizontal_scrollbar_side(window_id, side) {
@@ -1683,7 +1755,13 @@ pub unsafe extern "C" fn trueos_cabi_ui2_window_set_rotate_buttons_visible(
     window_id: u32,
     visible: u32,
 ) -> i32 {
+    let window_id = ui2_cabi_target_window_id(window_id);
     if let Some(rc) = vm_deferred_window_ok(window_id, "set-rotate-buttons-visible") {
+        let _ = crate::hv::note_deferred_blueprint_app_window_bool(
+            window_id,
+            "set-rotate-buttons-visible",
+            visible != 0,
+        );
         return rc;
     }
     if set_window_rotate_buttons_visible(window_id, visible != 0) {
@@ -1698,7 +1776,13 @@ pub unsafe extern "C" fn trueos_cabi_ui2_window_set_content_rotation_quadrants(
     window_id: u32,
     quadrants: u32,
 ) -> i32 {
+    let window_id = ui2_cabi_target_window_id(window_id);
     if let Some(rc) = vm_deferred_window_ok(window_id, "set-content-rotation") {
+        let _ = crate::hv::note_deferred_blueprint_app_window_u32(
+            window_id,
+            "set-content-rotation",
+            quadrants % 4,
+        );
         return rc;
     }
     if set_window_content_rotation_quadrants(window_id, (quadrants % 4) as u8) {
@@ -1710,6 +1794,7 @@ pub unsafe extern "C" fn trueos_cabi_ui2_window_set_content_rotation_quadrants(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_ui2_window_minimize(window_id: u32) -> i32 {
+    let window_id = ui2_cabi_target_window_id(window_id);
     if let Some(rc) = vm_deferred_window_ok(window_id, "minimize") {
         return rc;
     }
@@ -1718,6 +1803,7 @@ pub unsafe extern "C" fn trueos_cabi_ui2_window_minimize(window_id: u32) -> i32 
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_ui2_window_maximize(window_id: u32) -> i32 {
+    let window_id = ui2_cabi_target_window_id(window_id);
     if let Some(rc) = vm_deferred_window_ok(window_id, "maximize") {
         return rc;
     }
@@ -1726,6 +1812,7 @@ pub unsafe extern "C" fn trueos_cabi_ui2_window_maximize(window_id: u32) -> i32 
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_ui2_window_restore(window_id: u32) -> i32 {
+    let window_id = ui2_cabi_target_window_id(window_id);
     if let Some(rc) = vm_deferred_window_ok(window_id, "restore") {
         return rc;
     }
@@ -1734,6 +1821,7 @@ pub unsafe extern "C" fn trueos_cabi_ui2_window_restore(window_id: u32) -> i32 {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_ui2_window_focus(window_id: u32) -> i32 {
+    let window_id = ui2_cabi_target_window_id(window_id);
     if let Some(rc) = vm_deferred_window_ok(window_id, "focus") {
         return rc;
     }
@@ -1742,6 +1830,7 @@ pub unsafe extern "C" fn trueos_cabi_ui2_window_focus(window_id: u32) -> i32 {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_ui2_window_close(window_id: u32) -> i32 {
+    let window_id = ui2_cabi_target_window_id(window_id);
     if let Some(rc) = vm_deferred_window_ok(window_id, "close") {
         return rc;
     }
@@ -1750,6 +1839,7 @@ pub unsafe extern "C" fn trueos_cabi_ui2_window_close(window_id: u32) -> i32 {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_ui2_window_begin_move(window_id: u32) -> i32 {
+    let window_id = ui2_cabi_target_window_id(window_id);
     if let Some(rc) = vm_deferred_window_ok(window_id, "begin-move") {
         return rc;
     }
@@ -1761,6 +1851,7 @@ pub unsafe extern "C" fn trueos_cabi_ui2_window_begin_resize(
     window_id: u32,
     edge_mask: u32,
 ) -> i32 {
+    let window_id = ui2_cabi_target_window_id(window_id);
     if let Some(rc) = vm_deferred_window_ok(window_id, "begin-resize") {
         return rc;
     }

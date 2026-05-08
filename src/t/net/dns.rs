@@ -391,12 +391,45 @@ fn parse_dns_fs_cache_line(line: &str) -> Option<(usize, &str, [u8; 4])> {
 
 async fn dns_fs_cache_lookup(dev_idx: usize, host_trimmed: &str) -> Option<[u8; 4]> {
     crate::log!("dns: fs-cache lookup begin host={} dev={}\n", host_trimmed, dev_idx);
-    let disk = crate::r::fs::trueosfs::primary_root_handle()?;
-    let bytes = crate::r::fs::trueosfs::file_out_if_index_ready_async(disk, DNS_FS_CACHE_PATH)
+    let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
+        crate::log!(
+            "dns: fs-cache lookup done host={} dev={} status=no-root\n",
+            host_trimmed,
+            dev_idx
+        );
+        return None;
+    };
+    let bytes = match crate::r::fs::trueosfs::file_out_if_index_ready_async(disk, DNS_FS_CACHE_PATH)
         .await
-        .ok()
-        .flatten()?;
-    let text = core::str::from_utf8(bytes.as_slice()).ok()?;
+    {
+        Ok(Some(bytes)) => bytes,
+        Ok(None) => {
+            crate::log!(
+                "dns: fs-cache lookup done host={} dev={} status=miss-or-index-not-ready\n",
+                host_trimmed,
+                dev_idx
+            );
+            return None;
+        }
+        Err(err) => {
+            crate::log!(
+                "dns: fs-cache lookup done host={} dev={} status=error err={:?}\n",
+                host_trimmed,
+                dev_idx,
+                err
+            );
+            return None;
+        }
+    };
+    let Ok(text) = core::str::from_utf8(bytes.as_slice()) else {
+        crate::log!(
+            "dns: fs-cache lookup done host={} dev={} status=bad-utf8 bytes={}\n",
+            host_trimmed,
+            dev_idx,
+            bytes.len()
+        );
+        return None;
+    };
     let mut found: Option<[u8; 4]> = None;
     for line in text.lines() {
         let Some((line_dev_idx, line_host, line_ip)) = parse_dns_fs_cache_line(line) else {
@@ -1277,6 +1310,14 @@ pub async fn resolve_ipv4_for_device(
         return Ok(ip);
     }
 
+    crate::log!(
+        "dns: secure lookup begin host={} dev={} qtype=A servers={} timeout_ms={} resend_ms={}\n",
+        host_trimmed,
+        dev_idx,
+        cfg.server_count,
+        cfg.timeout_ms,
+        cfg.resend_ms
+    );
     if let Ok(ip) =
         resolve_ipv4_secure_policy(dev_idx, host_trimmed, cfg, SecureDnsPolicy::default()).await
     {
@@ -1284,6 +1325,7 @@ pub async fn resolve_ipv4_for_device(
         dns_fs_cache_update(dev_idx, host_trimmed, ip).await;
         return Ok(ip);
     }
+    crate::log!("dns: secure lookup failed host={} dev={} qtype=A\n", host_trimmed, dev_idx);
 
     if CLASSIC_DNS_DISABLED_LOGGED
         .compare_exchange(0, 1, Ordering::Relaxed, Ordering::Relaxed)

@@ -113,60 +113,6 @@ pub fn cdb_synchronize_cache_10() -> [u8; 10] {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct InquiryBasic {
-    pub peripheral_type: u8,
-    pub removable: bool,
-    pub vendor: [u8; 8],
-    pub product: [u8; 16],
-    pub revision: [u8; 4],
-}
-
-pub fn parse_inquiry_basic(buf: &[u8]) -> Option<InquiryBasic> {
-    if buf.len() < 36 {
-        return None;
-    }
-
-    let peripheral_type = buf[0] & 0x1F;
-    let removable = (buf[1] & 0x80) != 0;
-
-    let mut vendor = [0u8; 8];
-    vendor.copy_from_slice(&buf[8..16]);
-
-    let mut product = [0u8; 16];
-    product.copy_from_slice(&buf[16..32]);
-
-    let mut revision = [0u8; 4];
-    revision.copy_from_slice(&buf[32..36]);
-
-    Some(InquiryBasic {
-        peripheral_type,
-        removable,
-        vendor,
-        product,
-        revision,
-    })
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct Capacity10 {
-    pub last_lba: u32,
-    pub block_size: u32,
-}
-
-pub fn parse_read_capacity_10(buf: &[u8]) -> Option<Capacity10> {
-    if buf.len() < 8 {
-        return None;
-    }
-
-    let last_lba = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]);
-    let block_size = u32::from_be_bytes([buf[4], buf[5], buf[6], buf[7]]);
-    Some(Capacity10 {
-        last_lba,
-        block_size,
-    })
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct SenseFixed {
     pub response_code: u8,
     pub sense_key: SenseKey,

@@ -4,8 +4,8 @@ mod localcoder;
 #[cfg(unix)]
 mod unix_tests {
     use super::localcoder::{
-        chat, status, LocalCoderBinSource, LocalCoderChatRequest, LocalCoderCommandStrategy,
-        LOCALCODER_ARGS_ENV, LOCALCODER_BIN_ENV,
+        LOCALCODER_ARGS_ENV, LOCALCODER_BIN_ENV, LocalCoderBinSource, LocalCoderChatRequest,
+        LocalCoderCommandStrategy, chat, status,
     };
     use std::env;
     use std::ffi::{OsStr, OsString};
@@ -144,11 +144,13 @@ mod unix_tests {
 
         assert!(!response.available);
         assert!(response.bin_path.is_none());
-        assert!(response
-            .message
-            .as_deref()
-            .unwrap_or("")
-            .contains("not found"));
+        assert!(
+            response
+                .message
+                .as_deref()
+                .unwrap_or("")
+                .contains("not found")
+        );
     }
 
     fn write_executable(path: &Path, contents: &str) {

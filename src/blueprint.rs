@@ -1185,10 +1185,16 @@ pub(crate) fn build_process_args(archive: &str, app_args: &[String]) -> Vec<Stri
     args
 }
 
-pub(crate) fn build_process_env(archive: &str) -> BTreeMap<String, String> {
+pub(crate) fn build_process_env(
+    archive: &str,
+    app_fs_root: Option<&str>,
+) -> BTreeMap<String, String> {
     let mut vars = BTreeMap::new();
     vars.insert(String::from("PWD"), String::from("/"));
     vars.insert(String::from("TRUEOS_APP_ARCHIVE"), String::from(archive));
+    if let Some(root) = app_fs_root {
+        vars.insert(String::from("TRUEOS_APP_FS_ROOT"), String::from(root));
+    }
     vars
 }
 

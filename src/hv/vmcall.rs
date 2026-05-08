@@ -31,6 +31,9 @@ pub const OP_BP_FETCH_BYTES_DISCARD: u32 = 0x26; // arg0 is op id
 pub const OP_BP_FETCH_FILE_START: u32 = 0x27; // arg0 url len, payload is URL || cache path
 pub const OP_BP_FETCH_FILE_RESULT: u32 = 0x28; // arg0 is op id, response is signed rc/pending
 pub const OP_BP_FETCH_FILE_DISCARD: u32 = 0x29; // arg0 is op id
+pub const OP_BP_ENV_ARGS_COUNT: u32 = 0x2A; // response is argc
+pub const OP_BP_ENV_ARG: u32 = 0x2B; // arg0 is index, response payload is arg bytes
+pub const OP_BP_ENV_VAR: u32 = 0x2C; // request payload is key, response payload is value bytes
 
 // ── response status codes (u32, written by host) ────────────────────────────
 pub const STATUS_OK: u32 = 0;
@@ -341,6 +344,51 @@ pub fn dispatch(vm_id: u8) -> DispatchOutcome {
         OP_BP_FETCH_FILE_DISCARD => {
             let rc = crate::t::net::https::cabi_net_fetch_discard_host(arg0 as u32);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_ENV_ARGS_COUNT => {
+            let count = crate::r::io::env::arg_count();
+            write_response(vm_id, seq, STATUS_OK, count as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_ENV_ARG => {
+            let Some(arg) = crate::r::io::env::arg(arg0 as usize) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let bytes = arg.as_bytes();
+            let n = core::cmp::min(bytes.len(), PAYLOAD_CAP);
+            unsafe {
+                (&mut (&mut (*p).payload)[..n]).copy_from_slice(&bytes[..n]);
+            }
+            write_response(vm_id, seq, STATUS_OK, bytes.len() as u64, n as u32);
+            DispatchOutcome::Resume
+        }
+        OP_BP_ENV_VAR => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let key_bytes = unsafe { &(&(*p).payload)[..n] };
+            let Ok(key) = core::str::from_utf8(key_bytes) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let Some(value) = crate::r::io::env::var(key) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let bytes = value.as_bytes();
+            let out_n = core::cmp::min(bytes.len(), PAYLOAD_CAP);
+            unsafe {
+                (&mut (&mut (*p).payload)[..out_n]).copy_from_slice(&bytes[..out_n]);
+            }
+            write_response(vm_id, seq, STATUS_OK, bytes.len() as u64, out_n as u32);
             DispatchOutcome::Resume
         }
         _ => {

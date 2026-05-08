@@ -93,8 +93,6 @@ struct UsbMassRuntime {
     endpoints: UsbMassEndpoints,
     transport_kind: mass::MassTransportKind,
     io_profile: MassIoProfile,
-    port_speed: usb_if::Speed,
-    uas_candidate_count: u8,
     io_tag: u32,
     uas_next_stream_tag: u16,
     uas_dead_stream_mask: u32,
@@ -1284,8 +1282,8 @@ fn sense_is_transient(key: SenseKey) -> bool {
 fn map_io_error(err: mass::MassProbeError) -> block::Error {
     match err {
         mass::MassProbeError::Transport(_) => block::Error::Io,
-        mass::MassProbeError::ShortData { .. } => block::Error::Corrupted,
-        mass::MassProbeError::Csw { .. } => block::Error::Io,
+        mass::MassProbeError::ShortData => block::Error::Corrupted,
+        mass::MassProbeError::Csw => block::Error::Io,
     }
 }
 
@@ -2563,8 +2561,6 @@ pub async fn mass_storage_task(
         endpoints: UsbMassEndpoints::Bot { bulk_in, bulk_out },
         transport_kind,
         io_profile,
-        port_speed,
-        uas_candidate_count,
         io_tag: 0x544F_0000 | u32::from(slot),
         uas_next_stream_tag: 1,
         uas_dead_stream_mask: 0,
@@ -2875,8 +2871,6 @@ pub async fn mass_storage_uas_skhynix_task(
         },
         transport_kind: mass::MassTransportKind::Uas,
         io_profile: MassIoProfile::UasSkhynix,
-        port_speed,
-        uas_candidate_count,
         io_tag: 0x5541_0000 | u32::from(slot),
         uas_next_stream_tag: mass::uas_stream_id_from_tag(0x5541_0000 | u32::from(slot)),
         uas_dead_stream_mask: 0,

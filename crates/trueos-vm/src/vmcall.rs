@@ -24,6 +24,9 @@ pub const OP_BP_FETCH_BYTES_DISCARD: u32 = 0x26;
 pub const OP_BP_FETCH_FILE_START: u32 = 0x27;
 pub const OP_BP_FETCH_FILE_RESULT: u32 = 0x28;
 pub const OP_BP_FETCH_FILE_DISCARD: u32 = 0x29;
+pub const OP_BP_ENV_ARGS_COUNT: u32 = 0x2A;
+pub const OP_BP_ENV_ARG: u32 = 0x2B;
+pub const OP_BP_ENV_VAR: u32 = 0x2C;
 
 pub const STATUS_OK: u32 = 0;
 pub const STATUS_BAD_ARG: u32 = 2;

@@ -9,7 +9,7 @@ extern crate alloc;
 
 use alloc::collections::BTreeMap;
 use core::alloc::Layout;
-use core::ffi::{c_char, c_int, c_void};
+use core::ffi::{CStr, c_char, c_int, c_void};
 use core::ptr;
 use core::slice;
 use core::sync::atomic::{AtomicI32, Ordering};
@@ -20,6 +20,7 @@ static TRUEOS_ERRNO: AtomicI32 = AtomicI32::new(0);
 const TRUEOS_EAGAIN: c_int = 11;
 const TRUEOS_EBUSY: c_int = 16;
 const TRUEOS_EINVAL: c_int = 22;
+const TRUEOS_ERANGE: c_int = 34;
 const TRUEOS_ENOSYS: c_int = 38;
 const TRUEOS_ETIMEDOUT: c_int = 110;
 const TRUEOS_SC_PAGESIZE: c_int = 30;
@@ -53,6 +54,93 @@ fn uart_write(bytes: &[u8]) {
         return;
     }
     crate::shell2::uart1_com1::write_bytes(bytes);
+}
+
+fn copy_bytes_to_words(out_words: *mut u32, out_nwords: usize, bytes: &[u8]) -> usize {
+    if !out_words.is_null() && out_nwords != 0 {
+        let cap = out_nwords.saturating_mul(core::mem::size_of::<u32>());
+        if cap >= bytes.len() {
+            unsafe {
+                ptr::copy_nonoverlapping(bytes.as_ptr(), out_words.cast::<u8>(), bytes.len());
+            }
+        }
+    }
+    bytes.len()
+}
+
+unsafe fn cstr_to_str<'a>(ptr: *const c_char) -> Option<&'a str> {
+    if ptr.is_null() {
+        return None;
+    }
+    unsafe { CStr::from_ptr(ptr).to_str().ok() }
+}
+
+#[inline]
+fn vmx_guest_std_context() -> bool {
+    crate::hv::current_hull_guest_context_vm_id().is_some()
+}
+
+fn env_arg_count_value() -> usize {
+    if vmx_guest_std_context() {
+        let (status, count) =
+            trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_ENV_ARGS_COUNT, 0, 0);
+        if status == trueos_vm::vmcall::STATUS_OK {
+            return count as usize;
+        }
+        return 0;
+    }
+    crate::r::io::env::arg_count()
+}
+
+fn env_arg_into(index: usize, out: &mut [u8]) -> Option<usize> {
+    if vmx_guest_std_context() {
+        let (status, len) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_ENV_ARG,
+            index as u64,
+            0,
+            &[],
+            out,
+        );
+        if status == trueos_vm::vmcall::STATUS_OK && len as usize <= out.len() {
+            return Some(len as usize);
+        }
+        return None;
+    }
+
+    let arg = crate::r::io::env::arg(index)?;
+    let bytes = arg.as_bytes();
+    if bytes.len() > out.len() {
+        return None;
+    }
+    out[..bytes.len()].copy_from_slice(bytes);
+    Some(bytes.len())
+}
+
+fn env_var_into(key: &str, out: &mut [u8]) -> Option<usize> {
+    if vmx_guest_std_context() {
+        if key.len() > trueos_vm::vmcall::PAYLOAD_CAP {
+            return None;
+        }
+        let (status, len) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_ENV_VAR,
+            0,
+            0,
+            key.as_bytes(),
+            out,
+        );
+        if status == trueos_vm::vmcall::STATUS_OK && len as usize <= out.len() {
+            return Some(len as usize);
+        }
+        return None;
+    }
+
+    let value = crate::r::io::env::var(key)?;
+    let bytes = value.as_bytes();
+    if bytes.len() > out.len() {
+        return None;
+    }
+    out[..bytes.len()].copy_from_slice(bytes);
+    Some(bytes.len())
 }
 
 #[inline]
@@ -225,26 +313,41 @@ pub unsafe extern "C" fn sys_read(_fd: u32, recv_buf: *mut u8, nrequested: usize
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sys_getenv(
-    _recv_buf: *mut u32,
-    _words: usize,
-    _varname: *const u8,
-    _varname_len: usize,
+    recv_buf: *mut u32,
+    words: usize,
+    varname: *const u8,
+    varname_len: usize,
 ) -> usize {
-    usize::MAX
+    if varname.is_null() {
+        return usize::MAX;
+    }
+    let key_bytes = unsafe { slice::from_raw_parts(varname, varname_len) };
+    let Ok(key) = core::str::from_utf8(key_bytes) else {
+        return usize::MAX;
+    };
+    let mut value = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
+    let Some(len) = env_var_into(key, &mut value) else {
+        return usize::MAX;
+    };
+    copy_bytes_to_words(recv_buf, words, &value[..len])
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sys_argc() -> usize {
-    0
+    env_arg_count_value()
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sys_argv(
-    _out_words: *mut u32,
-    _out_nwords: usize,
-    _arg_index: usize,
+    out_words: *mut u32,
+    out_nwords: usize,
+    arg_index: usize,
 ) -> usize {
-    0
+    let mut arg = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
+    let Some(len) = env_arg_into(arg_index, &mut arg) else {
+        return 0;
+    };
+    copy_bytes_to_words(out_words, out_nwords, &arg[..len])
 }
 
 #[unsafe(no_mangle)]
@@ -404,8 +507,23 @@ pub unsafe extern "C" fn posix_memalign(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn getenv(_name: *const c_char) -> *mut c_char {
-    ptr::null_mut()
+pub unsafe extern "C" fn getenv(name: *const c_char) -> *mut c_char {
+    let Some(key) = (unsafe { cstr_to_str(name) }) else {
+        return ptr::null_mut();
+    };
+    let mut value = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
+    let Some(len) = env_var_into(key, &mut value) else {
+        return ptr::null_mut();
+    };
+    let out = unsafe { alloc_bytes(len.saturating_add(1), 1) };
+    if out.is_null() {
+        return ptr::null_mut();
+    }
+    unsafe {
+        ptr::copy_nonoverlapping(value.as_ptr(), out, len);
+        *out.add(len) = 0;
+    }
+    out.cast::<c_char>()
 }
 
 #[unsafe(no_mangle)]
@@ -419,13 +537,25 @@ pub unsafe extern "C" fn pthread_atfork(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn getcwd(buf: *mut c_char, size: usize) -> *mut c_char {
-    if buf.is_null() || size < 2 {
-        TRUEOS_ERRNO.store(34, core::sync::atomic::Ordering::Relaxed);
+    if buf.is_null() {
+        TRUEOS_ERRNO.store(TRUEOS_ERANGE, core::sync::atomic::Ordering::Relaxed);
         return ptr::null_mut();
     }
+
+    let mut cwd_storage = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
+    let cwd = match env_var_into("PWD", &mut cwd_storage) {
+        Some(0) | None => &b"/"[..],
+        Some(len) => &cwd_storage[..len],
+    };
+    let need = cwd.len().saturating_add(1);
+    if size < need {
+        TRUEOS_ERRNO.store(TRUEOS_ERANGE, core::sync::atomic::Ordering::Relaxed);
+        return ptr::null_mut();
+    }
+
     let out = unsafe { slice::from_raw_parts_mut(buf.cast::<u8>(), size) };
-    out[0] = b'/';
-    out[1] = 0;
+    out[..cwd.len()].copy_from_slice(cwd);
+    out[cwd.len()] = 0;
     buf
 }
 

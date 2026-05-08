@@ -617,6 +617,13 @@ pub(crate) fn cabi_net_fetch_bytes_start_host(
     CABI_NET_FETCH_BYTES_RESULTS
         .lock()
         .insert(op_id, CabiNetFetchBytesResult::default());
+    crate::log!(
+        "net-fetch-bytes: start op_id={} timeout_ms={} max_bytes={} url={}\n",
+        op_id,
+        timeout_ms,
+        max_bytes,
+        url_s
+    );
     spawn_cabi_net_fetch_bytes(op_id, String::from(url_s), timeout_ms, max_bytes);
     op_id
 }
@@ -1447,8 +1454,23 @@ async fn connect_hyper_tls_stream(
     .await
     {
         Ok(ip) => ip,
-        Err(dns::DnsError::Timeout) => return Err(FetchError::DnsTimeout),
-        Err(_) => return Err(FetchError::DnsFailed),
+        Err(dns::DnsError::Timeout) => {
+            crate::log!(
+                "vhttps-hyper: dns failed host={} dev={} err=timeout\n",
+                parsed.host,
+                dev_idx
+            );
+            return Err(FetchError::DnsTimeout);
+        }
+        Err(err) => {
+            crate::log!(
+                "vhttps-hyper: dns failed host={} dev={} err={:?}\n",
+                parsed.host,
+                dev_idx,
+                err
+            );
+            return Err(FetchError::DnsFailed);
+        }
     };
     crate::log!(
         "vhttps-hyper: dns ok host={} dev={} ip={}.{}.{}.{}\n",

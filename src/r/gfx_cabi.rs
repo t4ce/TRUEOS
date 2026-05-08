@@ -615,8 +615,40 @@ pub mod cabi {
         bytes.len() as isize
     }
 
+    fn copy_guest_text_response(
+        status: u32,
+        len: u64,
+        bytes: &[u8],
+        out_ptr: *mut u8,
+        out_cap: usize,
+    ) -> isize {
+        if status != trueos_vm::vmcall::STATUS_OK {
+            return -1;
+        }
+        let len = len as usize;
+        if out_ptr.is_null() || out_cap == 0 || out_cap < len {
+            return len as isize;
+        }
+        if len > bytes.len() {
+            return -1;
+        }
+        unsafe {
+            core::ptr::copy_nonoverlapping(bytes.as_ptr(), out_ptr, len);
+        }
+        len as isize
+    }
+
     #[unsafe(no_mangle)]
     pub extern "C" fn trueos_cabi_env_args_count() -> usize {
+        if crate::hv::current_hull_guest_context_vm_id().is_some() {
+            let (status, count) =
+                trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_ENV_ARGS_COUNT, 0, 0);
+            return if status == trueos_vm::vmcall::STATUS_OK {
+                count as usize
+            } else {
+                0
+            };
+        }
         crate::r::io::env::arg_count()
     }
 
@@ -626,6 +658,17 @@ pub mod cabi {
         out_ptr: *mut u8,
         out_cap: usize,
     ) -> isize {
+        if crate::hv::current_hull_guest_context_vm_id().is_some() {
+            let mut bytes = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
+            let (status, len) = trueos_vm::vmcall::call_with_payload(
+                trueos_vm::vmcall::OP_BP_ENV_ARG,
+                index as u64,
+                0,
+                &[],
+                &mut bytes,
+            );
+            return copy_guest_text_response(status, len, &bytes, out_ptr, out_cap);
+        }
         let Some(arg) = crate::r::io::env::arg(index) else {
             return -1;
         };
@@ -643,6 +686,20 @@ pub mod cabi {
             return -1;
         }
         let key_bytes = core::slice::from_raw_parts(key_ptr, key_len);
+        if crate::hv::current_hull_guest_context_vm_id().is_some() {
+            if key_bytes.len() > trueos_vm::vmcall::PAYLOAD_CAP {
+                return -1;
+            }
+            let mut bytes = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
+            let (status, len) = trueos_vm::vmcall::call_with_payload(
+                trueos_vm::vmcall::OP_BP_ENV_VAR,
+                0,
+                0,
+                key_bytes,
+                &mut bytes,
+            );
+            return copy_guest_text_response(status, len, &bytes, out_ptr, out_cap);
+        }
         let Ok(key) = core::str::from_utf8(key_bytes) else {
             return -1;
         };

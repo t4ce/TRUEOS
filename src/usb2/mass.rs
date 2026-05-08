@@ -1,17 +1,11 @@
-use alloc::{boxed::Box, string::String, vec, vec::Vec};
-use core::{
-    future::Future,
-    ptr::{read_unaligned, read_volatile},
-    task::Poll,
-};
+use alloc::{string::String, vec, vec::Vec};
+use core::{future::Future, task::Poll};
 use crab_usb::{EndpointBulkIn, EndpointBulkOut, err::TransferError, usb_if};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use usb_if::host::ControlSetup;
 use usb_if::transfer::{Recipient, Request, RequestType};
 
 use super::scsi;
-use crate::disc::block;
-
 const USB_CLASS_MASS_STORAGE: u8 = 0x08;
 const USB_SUBCLASS_SCSI: u8 = 0x06;
 const USB_PROTO_BULK_ONLY: u8 = 0x50;
@@ -256,7 +250,6 @@ pub(crate) fn pick_mass_target(
 
 #[derive(Clone, Debug)]
 pub(crate) struct MassProbeInfo {
-    pub max_lun: u8,
     pub block_size: u32,
     pub block_count: u64,
     pub vendor: String,
@@ -266,18 +259,8 @@ pub(crate) struct MassProbeInfo {
 #[derive(Copy, Clone, Debug)]
 pub(crate) enum MassProbeError {
     Transport(&'static str),
-    ShortData {
-        cmd: &'static str,
-        got: usize,
-        need: usize,
-    },
-    Csw {
-        cmd: &'static str,
-        sig: u32,
-        tag: u32,
-        expected_tag: u32,
-        status: u8,
-    },
+    ShortData,
+    Csw,
 }
 
 impl MassProbeError {
@@ -369,28 +352,18 @@ pub(crate) enum UasReadStatusKind {
 }
 
 fn validate_uas_status(
-    cmd: &'static str,
+    _cmd: &'static str,
     iu: &[u8],
     expected_tag: u16,
 ) -> Result<(), MassProbeError> {
     if iu.len() < 10 {
-        return Err(MassProbeError::ShortData {
-            cmd,
-            got: iu.len(),
-            need: 10,
-        });
+        return Err(MassProbeError::ShortData);
     }
     let iu_id = iu[0];
     let tag = parse_uas_tag(iu).unwrap_or(0);
     let status = iu[6];
     if iu_id != UAS_IU_STATUS || tag != expected_tag || status != UAS_STATUS_GOOD {
-        return Err(MassProbeError::Csw {
-            cmd,
-            sig: u32::from(iu_id),
-            tag: u32::from(tag),
-            expected_tag: u32::from(expected_tag),
-            status,
-        });
+        return Err(MassProbeError::Csw);
     }
     Ok(())
 }
@@ -401,23 +374,13 @@ pub(crate) fn classify_uas_read_status_iu(
     expected_tag: u16,
 ) -> Result<UasReadStatusKind, MassProbeError> {
     if iu.len() < 4 {
-        return Err(MassProbeError::ShortData {
-            cmd,
-            got: iu.len(),
-            need: 4,
-        });
+        return Err(MassProbeError::ShortData);
     }
 
     let iu_id = iu[0];
     let tag = parse_uas_tag(iu).unwrap_or(0);
     if tag != expected_tag {
-        return Err(MassProbeError::Csw {
-            cmd,
-            sig: u32::from(iu_id),
-            tag: u32::from(tag),
-            expected_tag: u32::from(expected_tag),
-            status: 0xFF,
-        });
+        return Err(MassProbeError::Csw);
     }
 
     match iu_id {
@@ -426,13 +389,7 @@ pub(crate) fn classify_uas_read_status_iu(
             validate_uas_status(cmd, iu, expected_tag)?;
             Ok(UasReadStatusKind::StatusGood)
         }
-        _ => Err(MassProbeError::Csw {
-            cmd,
-            sig: u32::from(iu_id),
-            tag: u32::from(tag),
-            expected_tag: u32::from(expected_tag),
-            status: 0xFF,
-        }),
+        _ => Err(MassProbeError::Csw),
     }
 }
 
@@ -598,14 +555,6 @@ fn log_uas_iu(stage: &'static str, cmd: &'static str, tag: u16, iu: &[u8]) {
     );
 }
 
-fn read_mmio_u32(base: *const u8, offset: usize) -> u32 {
-    unsafe { read_volatile(base.add(offset) as *const u32) }
-}
-
-fn read_mmio_u64(base: *const u8, offset: usize) -> u64 {
-    unsafe { read_volatile(base.add(offset) as *const u64) }
-}
-
 fn endpoint_dci(endpoint_addr: u8) -> u8 {
     let ep_num = endpoint_addr & 0x0F;
     if ep_num == 0 {
@@ -613,73 +562,6 @@ fn endpoint_dci(endpoint_addr: u8) -> u8 {
     } else {
         (ep_num << 1) | if (endpoint_addr & 0x80) != 0 { 1 } else { 0 }
     }
-}
-
-fn log_endpoint_context(label: &str, ctx_ptr: *const u8) {
-    let mut dw = [0u32; 8];
-    for (idx, slot) in dw.iter_mut().enumerate() {
-        *slot = unsafe { read_unaligned(ctx_ptr.add(idx * 4) as *const u32) };
-    }
-
-    let state = dw[0] & 0x7;
-    let interval = (dw[0] >> 16) & 0xFF;
-    let ep_type = (dw[1] >> 3) & 0x7;
-    let max_burst = (dw[1] >> 8) & 0xFF;
-    let max_packet_size = (dw[1] >> 16) & 0xFFFF;
-    let dequeue_ptr = (((dw[3] as u64) << 32) | (dw[2] as u64)) & !0xFu64;
-    let dcs = dw[2] & 0x1;
-    let avg_trb_len = dw[4] & 0xFFFF;
-    let max_esit_payload = (dw[4] >> 16) & 0xFFFF;
-
-    crate::log!(
-        "crabusb: xhci {} state={} type={} interval={} mps={} burst={} dcs={} tr_deq=0x{:X} avg_trb={} max_esit_payload={} raw=[{:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}]\n",
-        label,
-        state,
-        ep_type,
-        interval,
-        max_packet_size,
-        max_burst,
-        dcs,
-        dequeue_ptr,
-        avg_trb_len,
-        max_esit_payload,
-        dw[0],
-        dw[1],
-        dw[2],
-        dw[3],
-        dw[4],
-        dw[5],
-        dw[6],
-        dw[7]
-    );
-}
-
-fn log_slot_context(ctx_ptr: *const u8) {
-    let mut dw = [0u32; 8];
-    for (idx, slot) in dw.iter_mut().enumerate() {
-        *slot = unsafe { read_unaligned(ctx_ptr.add(idx * 4) as *const u32) };
-    }
-    let route = dw[0] & 0xFFFFF;
-    let speed = (dw[0] >> 20) & 0xF;
-    let context_entries = (dw[0] >> 27) & 0x1F;
-    let root_port = (dw[1] >> 16) & 0xFF;
-    let max_exit_latency = dw[1] & 0xFFFF;
-    crate::log!(
-        "crabusb: xhci slot route=0x{:X} speed={} entries={} root_port={} max_exit_latency={} raw=[{:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}]\n",
-        route,
-        speed,
-        context_entries,
-        root_port,
-        max_exit_latency,
-        dw[0],
-        dw[1],
-        dw[2],
-        dw[3],
-        dw[4],
-        dw[5],
-        dw[6],
-        dw[7]
-    );
 }
 
 async fn read_and_validate_csw(
@@ -722,24 +604,14 @@ async fn read_and_validate_csw(
         }
     }
     if csw_got != csw.len() {
-        return Err(MassProbeError::ShortData {
-            cmd,
-            got: csw_got,
-            need: csw.len(),
-        });
+        return Err(MassProbeError::ShortData);
     }
 
     let sig = u32::from_le_bytes([csw[0], csw[1], csw[2], csw[3]]);
     let csw_tag = u32::from_le_bytes([csw[4], csw[5], csw[6], csw[7]]);
     let status = csw[12];
     if sig != 0x5342_5355 || csw_tag != expected_tag || status != 0 {
-        return Err(MassProbeError::Csw {
-            cmd,
-            sig,
-            tag: csw_tag,
-            expected_tag,
-            status,
-        });
+        return Err(MassProbeError::Csw);
     }
 
     Ok(())
@@ -784,11 +656,7 @@ async fn bot_command_in(
         }
     }
     if sent != cbw.len() {
-        return Err(MassProbeError::ShortData {
-            cmd,
-            got: sent,
-            need: cbw.len(),
-        });
+        return Err(MassProbeError::ShortData);
     }
 
     let mut got = 0usize;
@@ -859,11 +727,7 @@ async fn bot_command_no_data(
         }
     }
     if sent != cbw.len() {
-        return Err(MassProbeError::ShortData {
-            cmd,
-            got: sent,
-            need: cbw.len(),
-        });
+        return Err(MassProbeError::ShortData);
     }
 
     read_and_validate_csw(bulk_in, cmd, tag, bulk_in_ep).await
@@ -908,11 +772,7 @@ async fn bot_command_out(
         }
     }
     if sent != cbw.len() {
-        return Err(MassProbeError::ShortData {
-            cmd,
-            got: sent,
-            need: cbw.len(),
-        });
+        return Err(MassProbeError::ShortData);
     }
 
     let mut data_sent = 0usize;
@@ -950,11 +810,7 @@ async fn bot_command_out(
         }
     }
     if data_sent != data.len() {
-        return Err(MassProbeError::ShortData {
-            cmd,
-            got: data_sent,
-            need: data.len(),
-        });
+        return Err(MassProbeError::ShortData);
     }
 
     read_and_validate_csw(bulk_in, cmd, tag, bulk_in_ep).await
@@ -977,11 +833,7 @@ async fn uas_send_command(
         .map_err(|_| MassProbeError::Transport("uas-command-out"))?;
     log_uas_debug("command-complete", cmd, tag);
     if sent != iu.len() {
-        return Err(MassProbeError::ShortData {
-            cmd,
-            got: sent,
-            need: iu.len(),
-        });
+        return Err(MassProbeError::ShortData);
     }
     Ok(())
 }
@@ -1000,7 +852,7 @@ pub(crate) async fn send_read10_uas_skhynix(
 
 async fn uas_read_iu(
     status_in: &mut EndpointBulkIn,
-    cmd: &'static str,
+    _cmd: &'static str,
     stream_id: u16,
     buf: &mut [u8],
 ) -> Result<usize, MassProbeError> {
@@ -1015,32 +867,9 @@ async fn uas_read_iu(
     })?
     .map_err(|_| MassProbeError::Transport("uas-status-in"))?;
     if got < 4 {
-        return Err(MassProbeError::ShortData { cmd, got, need: 4 });
+        return Err(MassProbeError::ShortData);
     }
     Ok(got)
-}
-
-async fn uas_expect_ready(
-    status_in: &mut EndpointBulkIn,
-    cmd: &'static str,
-    expected_tag: u16,
-    expected_iu: u8,
-) -> Result<(), MassProbeError> {
-    let mut iu = [0u8; 16];
-    let got = uas_read_iu(status_in, cmd, expected_tag, &mut iu).await?;
-    let iu = &iu[..got.min(iu.len())];
-    let iu_id = iu[0];
-    let tag = parse_uas_tag(iu).unwrap_or(0);
-    if iu_id != expected_iu || tag != expected_tag {
-        return Err(MassProbeError::Csw {
-            cmd,
-            sig: u32::from(iu_id),
-            tag: u32::from(tag),
-            expected_tag: u32::from(expected_tag),
-            status: 0xFF,
-        });
-    }
-    Ok(())
 }
 
 async fn uas_read_status(
@@ -1154,13 +983,7 @@ async fn uas_command_in(
                             log_uas_debug("ready-after-data", cmd, tag);
                             uas_drain_status_grace(status_in, cmd, tag).await?;
                         } else {
-                            return Err(MassProbeError::Csw {
-                                cmd,
-                                sig: u32::from(ready_id),
-                                tag: u32::from(ready_tag),
-                                expected_tag: u32::from(tag),
-                                status: 0xFF,
-                            });
+                            return Err(MassProbeError::Csw);
                         }
                     } else {
                         log_uas_debug("status-short-after-data", cmd, tag);
@@ -1174,11 +997,7 @@ async fn uas_command_in(
         FirstInCompletion::Status(ready_got) => {
             let ready_got = ready_got?;
             if ready_got < 4 {
-                return Err(MassProbeError::ShortData {
-                    cmd,
-                    got: ready_got,
-                    need: 4,
-                });
+                return Err(MassProbeError::ShortData);
             }
             let ready = &ready_iu[..ready_got.min(ready_iu.len())];
             log_uas_iu("ready-iu", cmd, tag, ready);
@@ -1199,13 +1018,7 @@ async fn uas_command_in(
                 return Ok(got);
             }
             if ready_id != UAS_IU_READ_READY || ready_tag != tag {
-                return Err(MassProbeError::Csw {
-                    cmd,
-                    sig: u32::from(ready_id),
-                    tag: u32::from(ready_tag),
-                    expected_tag: u32::from(tag),
-                    status: 0xFF,
-                });
+                return Err(MassProbeError::Csw);
             }
             log_uas_debug("ready-before-data", cmd, tag);
             let got = with_timeout_or_none(data_handle.as_mut(), UAS_IO_TIMEOUT_MS)
@@ -1257,11 +1070,7 @@ async fn uas_command_out(
         .map_err(|_| MassProbeError::Transport("uas-status-in"))?
         .transfer_len;
     if ready_got < 4 {
-        return Err(MassProbeError::ShortData {
-            cmd,
-            got: ready_got,
-            need: 4,
-        });
+        return Err(MassProbeError::ShortData);
     }
     let ready = &ready_iu[..ready_got.min(ready_iu.len())];
     log_uas_iu("ready-iu", cmd, tag, ready);
@@ -1280,22 +1089,12 @@ async fn uas_command_out(
             .transfer_len;
         log_uas_debug("data-out-complete-after-status", cmd, tag);
         if sent != data.len() {
-            return Err(MassProbeError::ShortData {
-                cmd,
-                got: sent,
-                need: data.len(),
-            });
+            return Err(MassProbeError::ShortData);
         }
         return Ok(());
     }
     if ready_id != UAS_IU_WRITE_READY || ready_tag != tag {
-        return Err(MassProbeError::Csw {
-            cmd,
-            sig: u32::from(ready_id),
-            tag: u32::from(ready_tag),
-            expected_tag: u32::from(tag),
-            status: 0xFF,
-        });
+        return Err(MassProbeError::Csw);
     }
 
     let sent = with_timeout_or_none(data_handle, UAS_IO_TIMEOUT_MS)
@@ -1308,11 +1107,7 @@ async fn uas_command_out(
         .transfer_len;
     log_uas_debug("data-out-complete", cmd, tag);
     if sent != data.len() {
-        return Err(MassProbeError::ShortData {
-            cmd,
-            got: sent,
-            need: data.len(),
-        });
+        return Err(MassProbeError::ShortData);
     }
     uas_read_status(status_in, cmd, tag).await
 }
@@ -1601,11 +1396,7 @@ pub(crate) async fn read_blocks_bot(
         bot_command_in(bulk_out, bulk_in, bulk_out_ep, bulk_in_ep, "read-10", 0, &cdb, out, tag)
             .await?;
     if got < out.len() {
-        return Err(MassProbeError::ShortData {
-            cmd: "read-10",
-            got,
-            need: out.len(),
-        });
+        return Err(MassProbeError::ShortData);
     }
     Ok(())
 }
@@ -1685,11 +1476,7 @@ pub(crate) async fn read_blocks_uas_skhynix(
     let cdb = scsi::cdb_read_10(lba, blocks);
     let got = uas_command_in(command_out, status_in, data_in, "read-10", &cdb, out, tag).await?;
     if got < out.len() {
-        return Err(MassProbeError::ShortData {
-            cmd: "read-10",
-            got,
-            need: out.len(),
-        });
+        return Err(MassProbeError::ShortData);
     }
     Ok(())
 }
@@ -1752,11 +1539,7 @@ async fn echo_buffer_uas_skhynix(
     )
     .await?;
     if got < pattern.len() {
-        return Err(MassProbeError::ShortData {
-            cmd: "read-buffer-echo",
-            got,
-            need: pattern.len(),
-        });
+        return Err(MassProbeError::ShortData);
     }
     if echoed != pattern {
         return Err(MassProbeError::Transport("uas-echo-mismatch"));
@@ -1774,11 +1557,7 @@ pub(crate) async fn exercise_mass_uas_skhynix(
 
     let block_size = info.block_size as usize;
     if block_size == 0 || block_size > 1024 * 1024 {
-        return Err(MassProbeError::ShortData {
-            cmd: "uas-exercise-block-size",
-            got: block_size,
-            need: 1,
-        });
+        return Err(MassProbeError::ShortData);
     }
 
     let mut first_block = vec![0u8; block_size];
@@ -1846,11 +1625,7 @@ async fn read_capacity_16(
     )
     .await?;
     if got < 12 {
-        return Err(MassProbeError::ShortData {
-            cmd: "read-capacity16",
-            got,
-            need: 12,
-        });
+        return Err(MassProbeError::ShortData);
     }
     let last_lba = u64::from_be_bytes([
         read_capacity[0],
@@ -1905,11 +1680,7 @@ async fn read_format_capacities(
     )
     .await?;
     if got < 12 {
-        return Err(MassProbeError::ShortData {
-            cmd: "read-format-capacities",
-            got,
-            need: 12,
-        });
+        return Err(MassProbeError::ShortData);
     }
     let descriptor_code = buf[8 + 4] & 0x03;
     let block_count = u32::from_be_bytes([buf[8], buf[9], buf[10], buf[11]]) as u64;
@@ -1959,11 +1730,7 @@ async fn read_capacity_16_uas_skhynix(
     )
     .await?;
     if got < 12 {
-        return Err(MassProbeError::ShortData {
-            cmd: "read-capacity16",
-            got,
-            need: 12,
-        });
+        return Err(MassProbeError::ShortData);
     }
     let last_lba = u64::from_be_bytes([
         read_capacity[0],
@@ -1989,7 +1756,6 @@ pub(crate) async fn probe_mass_uas_skhynix(
     status_in: &mut EndpointBulkIn,
     data_in: &mut EndpointBulkIn,
 ) -> Result<MassProbeInfo, MassProbeError> {
-    let max_lun = 0u8;
     let mut inquiry = [0u8; 36];
     let inquiry_cdb = scsi::cdb_inquiry(inquiry.len() as u16);
     let inquiry_read = uas_command_in(
@@ -2003,11 +1769,7 @@ pub(crate) async fn probe_mass_uas_skhynix(
     )
     .await?;
     if inquiry_read < 32 {
-        return Err(MassProbeError::ShortData {
-            cmd: "inquiry",
-            got: inquiry_read,
-            need: 32,
-        });
+        return Err(MassProbeError::ShortData);
     }
 
     let removable = (inquiry[1] & 0x80) != 0;
@@ -2033,11 +1795,7 @@ pub(crate) async fn probe_mass_uas_skhynix(
     {
         Ok(read_capacity_read) => {
             if read_capacity_read < read_capacity.len() {
-                return Err(MassProbeError::ShortData {
-                    cmd: "read-capacity10",
-                    got: read_capacity_read,
-                    need: read_capacity.len(),
-                });
+                return Err(MassProbeError::ShortData);
             }
             let last_lba = u32::from_be_bytes([
                 read_capacity[0],
@@ -2064,18 +1822,13 @@ pub(crate) async fn probe_mass_uas_skhynix(
         }
     };
     if block_size == 0 {
-        return Err(MassProbeError::ShortData {
-            cmd: "read-capacity10",
-            got: 0,
-            need: 1,
-        });
+        return Err(MassProbeError::ShortData);
     }
 
     let vendor = decode_ascii_field(&inquiry[8..16]);
     let product = decode_ascii_field(&inquiry[16..32]);
 
     Ok(MassProbeInfo {
-        max_lun,
         block_size,
         block_count,
         vendor,
@@ -2091,26 +1844,6 @@ pub(crate) async fn probe_mass_bot(
     bulk_out_ep: u8,
     bulk_in_ep: u8,
 ) -> Result<MassProbeInfo, MassProbeError> {
-    let mut max_lun_buf = [0u8; 1];
-    let max_lun = match device
-        .control_in(
-            ControlSetup {
-                request_type: RequestType::Class,
-                recipient: Recipient::Interface,
-                request: Request::Other(0xFE),
-                value: 0,
-                index: interface_number as u16,
-            },
-            &mut max_lun_buf,
-        )
-        .await
-    {
-        Ok(read) if read >= 1 => max_lun_buf[0],
-        Ok(_) => 0,
-        Err(TransferError::Stall) => 0,
-        Err(_) => return Err(MassProbeError::Transport("get-max-lun")),
-    };
-
     let lun = 0u8;
     let mut inquiry = [0u8; 36];
     let inquiry_cdb = [0x12, 0, 0, 0, inquiry.len() as u8, 0];
@@ -2149,11 +1882,7 @@ pub(crate) async fn probe_mass_bot(
         }
     };
     if inquiry_read < 32 {
-        return Err(MassProbeError::ShortData {
-            cmd: "inquiry",
-            got: inquiry_read,
-            need: 32,
-        });
+        return Err(MassProbeError::ShortData);
     }
 
     let removable = (inquiry[1] & 0x80) != 0;
@@ -2177,11 +1906,7 @@ pub(crate) async fn probe_mass_bot(
     {
         Ok(read_capacity_read) => {
             if read_capacity_read < read_capacity.len() {
-                return Err(MassProbeError::ShortData {
-                    cmd: "read-capacity10",
-                    got: read_capacity_read,
-                    need: read_capacity.len(),
-                });
+                return Err(MassProbeError::ShortData);
             }
             let last_lba = u32::from_be_bytes([
                 read_capacity[0],
@@ -2230,61 +1955,16 @@ pub(crate) async fn probe_mass_bot(
         }
     };
     if block_size == 0 {
-        return Err(MassProbeError::ShortData {
-            cmd: "read-capacity10",
-            got: 0,
-            need: 1,
-        });
+        return Err(MassProbeError::ShortData);
     }
 
     let vendor = decode_ascii_field(&inquiry[8..16]);
     let product = decode_ascii_field(&inquiry[16..32]);
 
     Ok(MassProbeInfo {
-        max_lun,
         block_size,
         block_count,
         vendor,
         product,
     })
-}
-
-struct UsbMassGeometryPlaceholderDevice {
-    block_size: u32,
-    block_count: u64,
-}
-
-impl block::BlockDevice for UsbMassGeometryPlaceholderDevice {
-    fn block_size_bytes(&self) -> u32 {
-        self.block_size
-    }
-
-    fn block_count(&self) -> u64 {
-        self.block_count
-    }
-
-    fn read_blocks<'a>(
-        &'a mut self,
-        _lba: u64,
-        _blocks: usize,
-    ) -> block::BoxFuture<'a, block::Result<Vec<u8>>> {
-        Box::pin(async { Err(block::Error::NotSupported) })
-    }
-}
-
-pub(crate) fn register_mass_geometry_placeholder(
-    vendor_id: u16,
-    product_id: u16,
-    block_size: u32,
-    block_count: u64,
-) -> block::DeviceHandle {
-    let label = alloc::format!("usbms-{:04X}:{:04X}", vendor_id, product_id);
-    let desc = block::DeviceDescriptor::new(block::DeviceKind::Unknown).with_label(label);
-    block::register_device(
-        desc,
-        UsbMassGeometryPlaceholderDevice {
-            block_size: block_size.max(1),
-            block_count: block_count.max(1),
-        },
-    )
 }
