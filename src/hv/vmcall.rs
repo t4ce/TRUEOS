@@ -35,6 +35,14 @@ pub const OP_BP_FETCH_FILE_DISCARD: u32 = 0x29; // arg0 is op id
 pub const OP_BP_ENV_ARGS_COUNT: u32 = 0x2A; // response is argc
 pub const OP_BP_ENV_ARG: u32 = 0x2B; // arg0 is index, response payload is arg bytes
 pub const OP_BP_ENV_VAR: u32 = 0x2C; // request payload is key, response payload is value bytes
+pub const OP_BP_FS_READ_FILE: u32 = 0x2D; // arg0 offset, arg1 cap; payload path -> payload bytes
+pub const OP_BP_FS_WRITE_BEGIN: u32 = 0x2E; // arg0 total len, payload path -> response handle/rc
+pub const OP_BP_FS_WRITE_CHUNK: u32 = 0x2F; // arg0 handle, payload chunk -> rc
+pub const OP_BP_FS_WRITE_FINISH: u32 = 0x30; // arg0 handle -> rc
+pub const OP_BP_FS_WRITE_ABORT: u32 = 0x31; // arg0 handle -> rc
+pub const OP_BP_FS_CREATE_DIR_ALL: u32 = 0x32; // payload path -> rc
+pub const OP_BP_FS_EXISTS: u32 = 0x33; // payload path -> 0/1/rc
+pub const OP_BP_FS_REMOVE: u32 = 0x34; // payload path -> rc
 
 // ── response status codes (u32, written by host) ────────────────────────────
 pub const STATUS_OK: u32 = 0;
@@ -408,6 +416,140 @@ pub fn dispatch(vm_id: u8) -> DispatchOutcome {
                 (&mut (&mut (*p).payload)[..out_n]).copy_from_slice(&bytes[..out_n]);
             }
             write_response(vm_id, seq, STATUS_OK, bytes.len() as u64, out_n as u32);
+            DispatchOutcome::Resume
+        }
+        OP_BP_FS_READ_FILE => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let path_bytes = unsafe { &(&(*p).payload)[..n] };
+            let Ok(path) = core::str::from_utf8(path_bytes) else {
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_OK,
+                    (crate::r::io::cabi::FS_ERR_BAD_UTF8 as i64) as u64,
+                    0,
+                );
+                return DispatchOutcome::Resume;
+            };
+            if arg1 == 0 {
+                let rc = crate::r::io::cabi::fs_read_file_len_host(path);
+                write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+                return DispatchOutcome::Resume;
+            }
+            let want = core::cmp::min(arg1 as usize, PAYLOAD_CAP);
+            let out = unsafe { &mut (&mut (*p).payload)[..want] };
+            let rc = crate::r::io::cabi::fs_read_file_chunk_host(path, arg0 as usize, out);
+            let out_len = if rc > 0 { rc as u32 } else { 0 };
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, out_len);
+            DispatchOutcome::Resume
+        }
+        OP_BP_FS_WRITE_BEGIN => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let path_bytes = unsafe { &(&(*p).payload)[..n] };
+            let Ok(path) = core::str::from_utf8(path_bytes) else {
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_OK,
+                    (crate::r::io::cabi::FS_ERR_BAD_UTF8 as i64) as u64,
+                    0,
+                );
+                return DispatchOutcome::Resume;
+            };
+            let rc = crate::r::io::cabi::fs_write_begin_host(path, arg0);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_FS_WRITE_CHUNK => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let bytes = unsafe { &(&(*p).payload)[..n] };
+            let rc = crate::r::io::cabi::fs_write_chunk_host(arg0 as u32, bytes);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_FS_WRITE_FINISH => {
+            let rc = crate::r::io::cabi::fs_write_finish_host(arg0 as u32);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_FS_WRITE_ABORT => {
+            let rc = crate::r::io::cabi::fs_write_abort_host(arg0 as u32);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_FS_CREATE_DIR_ALL => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let path_bytes = unsafe { &(&(*p).payload)[..n] };
+            let Ok(path) = core::str::from_utf8(path_bytes) else {
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_OK,
+                    (crate::r::io::cabi::FS_ERR_BAD_UTF8 as i64) as u64,
+                    0,
+                );
+                return DispatchOutcome::Resume;
+            };
+            let rc = crate::r::io::cabi::fs_create_dir_all_host(path);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_FS_EXISTS => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let path_bytes = unsafe { &(&(*p).payload)[..n] };
+            let Ok(path) = core::str::from_utf8(path_bytes) else {
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_OK,
+                    (crate::r::io::cabi::FS_ERR_BAD_UTF8 as i64) as u64,
+                    0,
+                );
+                return DispatchOutcome::Resume;
+            };
+            let rc = crate::r::io::cabi::fs_exists_host(path);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_FS_REMOVE => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let path_bytes = unsafe { &(&(*p).payload)[..n] };
+            let Ok(path) = core::str::from_utf8(path_bytes) else {
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_OK,
+                    (crate::r::io::cabi::FS_ERR_BAD_UTF8 as i64) as u64,
+                    0,
+                );
+                return DispatchOutcome::Resume;
+            };
+            let rc = crate::r::io::cabi::fs_remove_host(path);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
         _ => {

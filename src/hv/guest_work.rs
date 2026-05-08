@@ -1,14 +1,9 @@
-use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU64, Ordering};
-
 use embassy_executor::SendSpawner;
 
 use crate::r::spawn_spec::SpawnPlacement;
 
 const VM_RESERVED_FIRST_SLOT: u32 = 2;
 const AP1_SERVICE_SLOT: u32 = 1;
-
-static GUEST_WORK_RR: AtomicU64 = AtomicU64::new(0);
 
 /// TRUEOS carrier-lane roles.
 ///
@@ -100,11 +95,11 @@ impl VmLaneProfile {
     }
 }
 
-#[derive(Clone)]
 pub struct VmLaneTarget {
     pub slot: u32,
     pub core_kind: u8,
     pub spawner: SendSpawner,
+    pub lease: crate::r::lane::LaneLease,
 }
 
 impl VmLaneTarget {
@@ -140,6 +135,7 @@ pub enum VmLanePickError {
     MissingAp1Lane,
     MissingWorkerLane,
     MissingReservedVmLane,
+    Busy,
 }
 
 impl VmLanePickError {
@@ -149,6 +145,7 @@ impl VmLanePickError {
             Self::MissingAp1Lane => "ap1 service lane is not registered",
             Self::MissingWorkerLane => "no disposable worker lanes are registered",
             Self::MissingReservedVmLane => "no reserved VM lanes are registered at AP2+",
+            Self::Busy => "matching runtime carrier lanes are currently leased",
         }
     }
 }
@@ -157,12 +154,23 @@ pub type GuestWorkProfile = VmLaneProfile;
 pub type GuestWorkTarget = VmLaneTarget;
 
 pub fn select_vm_lane_target(profile: VmLaneProfile) -> Result<VmLaneTarget, VmLanePickError> {
-    match profile.placement {
-        SpawnPlacement::ReservedVmLane => pick_reserved_vm_lane(),
-        SpawnPlacement::Worker => pick_background_worker(),
-        SpawnPlacement::Ap1 => pick_ap1_lane(),
-        SpawnPlacement::Local => Err(VmLanePickError::LocalPlacementUnsupported),
-    }
+    let target = crate::r::lane::pick_carrier_lane(crate::r::lane::LaneProfile {
+        role: match profile.role {
+            VmLaneRole::VmHull => crate::r::lane::LaneRole::VmHull,
+            VmLaneRole::TokioBlocking => crate::r::lane::LaneRole::TokioBlocking,
+            VmLaneRole::Worker => crate::r::lane::LaneRole::Worker,
+            VmLaneRole::Service => crate::r::lane::LaneRole::Service,
+        },
+        placement: profile.placement,
+    })
+    .map_err(map_lane_pick_error)?;
+
+    Ok(VmLaneTarget {
+        slot: target.slot,
+        core_kind: target.core_kind,
+        spawner: target.spawner,
+        lease: target.lease,
+    })
 }
 
 pub fn pick_vm_lane_target(profile: VmLaneProfile) -> Option<VmLaneTarget> {
@@ -189,63 +197,16 @@ pub fn pick_guest_work_target(profile: GuestWorkProfile) -> Option<GuestWorkTarg
     pick_vm_lane_target(profile)
 }
 
-fn pick_ap1_lane() -> Result<VmLaneTarget, VmLanePickError> {
-    let profile = crate::cpu::CpuProfile::for_slot(AP1_SERVICE_SLOT)
-        .ok_or(VmLanePickError::MissingAp1Lane)?;
-    let spawner =
-        crate::workers::spawner_for_slot(profile.slot()).ok_or(VmLanePickError::MissingAp1Lane)?;
-    Ok(VmLaneTarget {
-        slot: profile.slot(),
-        core_kind: profile.core_kind(),
-        spawner,
-    })
-}
-
-fn pick_background_worker() -> Result<VmLaneTarget, VmLanePickError> {
-    let pool = collect_disposable_worker_lanes();
-    pick_round_robin(&pool).ok_or(VmLanePickError::MissingWorkerLane)
-}
-
-fn pick_reserved_vm_lane() -> Result<VmLaneTarget, VmLanePickError> {
-    let pool = collect_disposable_worker_lanes();
-    let mut reserved: Vec<VmLaneTarget> = Vec::new();
-
-    for target in pool {
-        // Slot 0 is BSP/local and slot 1 is UI2/service work.
-        // VM hull work owns AP2+ lanes as the host/user reserved carrier set.
-        if !target.is_reserved_vm_lane() {
-            continue;
+fn map_lane_pick_error(error: crate::r::lane::LanePickError) -> VmLanePickError {
+    match error {
+        crate::r::lane::LanePickError::LocalPlacementUnsupported => {
+            VmLanePickError::LocalPlacementUnsupported
         }
-        reserved.push(target);
+        crate::r::lane::LanePickError::MissingAp1Lane => VmLanePickError::MissingAp1Lane,
+        crate::r::lane::LanePickError::MissingWorkerLane => VmLanePickError::MissingWorkerLane,
+        crate::r::lane::LanePickError::MissingReservedVmLane => {
+            VmLanePickError::MissingReservedVmLane
+        }
+        crate::r::lane::LanePickError::Busy => VmLanePickError::Busy,
     }
-
-    pick_round_robin(&reserved).ok_or(VmLanePickError::MissingReservedVmLane)
-}
-
-fn collect_disposable_worker_lanes() -> Vec<VmLaneTarget> {
-    let slots = crate::workers::background_worker_slots();
-    let mut pool: Vec<VmLaneTarget> = Vec::new();
-    for slot in slots {
-        let Some(spawner) = crate::workers::spawner_for_slot(slot) else {
-            continue;
-        };
-        let profile = crate::cpu::CpuProfile::for_slot(slot);
-        let core_kind = profile
-            .map(|profile| profile.core_kind())
-            .unwrap_or(crate::workers::CORE_KIND_UNKNOWN);
-        pool.push(VmLaneTarget {
-            slot,
-            core_kind,
-            spawner,
-        });
-    }
-    pool
-}
-
-fn pick_round_robin(pool: &[VmLaneTarget]) -> Option<VmLaneTarget> {
-    if pool.is_empty() {
-        return None;
-    }
-    let idx = GUEST_WORK_RR.fetch_add(1, Ordering::Relaxed) as usize;
-    Some(pool[idx % pool.len()].clone())
 }

@@ -28,6 +28,14 @@ pub const OP_BP_FETCH_FILE_DISCARD: u32 = 0x29;
 pub const OP_BP_ENV_ARGS_COUNT: u32 = 0x2A;
 pub const OP_BP_ENV_ARG: u32 = 0x2B;
 pub const OP_BP_ENV_VAR: u32 = 0x2C;
+pub const OP_BP_FS_READ_FILE: u32 = 0x2D;
+pub const OP_BP_FS_WRITE_BEGIN: u32 = 0x2E;
+pub const OP_BP_FS_WRITE_CHUNK: u32 = 0x2F;
+pub const OP_BP_FS_WRITE_FINISH: u32 = 0x30;
+pub const OP_BP_FS_WRITE_ABORT: u32 = 0x31;
+pub const OP_BP_FS_CREATE_DIR_ALL: u32 = 0x32;
+pub const OP_BP_FS_EXISTS: u32 = 0x33;
+pub const OP_BP_FS_REMOVE: u32 = 0x34;
 
 pub const STATUS_OK: u32 = 0;
 pub const STATUS_BAD_ARG: u32 = 2;
