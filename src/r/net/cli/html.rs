@@ -90,7 +90,7 @@ async fn fetch_html_attempt_with_redirects(url: &str) -> Result<Vec<u8>, &'stati
         }
 
         if current_url.starts_with("https://") {
-            match https::fetch_https_body_async(
+            match https::fetch_https_body_hyper_async(
                 current_url.as_str(),
                 SURF_HTTPS_TIMEOUT_MS,
                 SURF_MAX_BYTES,
@@ -128,7 +128,8 @@ async fn fetch_html_attempt_with_redirects(url: &str) -> Result<Vec<u8>, &'stati
                 Err(_) => break,
             }
         } else if current_url.starts_with("http://") {
-            match http::fetch_http_body(current_url.as_str(), SURF_TIMEOUT_MS, SURF_MAX_BYTES).await
+            match http::fetch_http_body_hyper(current_url.as_str(), SURF_TIMEOUT_MS, SURF_MAX_BYTES)
+                .await
             {
                 Ok(body) => return Ok(body),
                 Err(HttpFetchError::Redirect(next)) => {

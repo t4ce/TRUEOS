@@ -929,6 +929,14 @@ pub async fn post_http_body_hyper(
         .await
 }
 
+pub async fn fetch_http_body_hyper(
+    url: &str,
+    timeout_ms: u32,
+    max_rx: usize,
+) -> Result<Vec<u8>, HttpFetchError> {
+    request_http_body_hyper(hyper::Method::GET, url, "", &[], timeout_ms, max_rx).await
+}
+
 async fn request_http_body_hyper(
     method: hyper::Method,
     url: &str,

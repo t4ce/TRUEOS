@@ -1,3 +1,4 @@
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use crate::fs::asyncify;
 
 use std::fs::Metadata;
@@ -42,5 +43,8 @@ use std::path::Path;
 /// ```
 pub async fn metadata(path: impl AsRef<Path>) -> io::Result<Metadata> {
     let path = path.as_ref().to_owned();
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    return crate::fs::trueos::metadata(&path).await;
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     asyncify(|| std::fs::metadata(path)).await
 }
