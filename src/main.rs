@@ -297,10 +297,10 @@ pub extern "C" fn kmain() -> ! {
     }
     if crate::allcaps::probes::MIO_BOOT_PROBE {
         mio_probe::log_boot_probe();
-    } else {
-        mio_probe::spawn_deferred_net_readiness_probe();
     }
-    hyper_probe::log_boot_probe();
+    if crate::allcaps::probes::HYPER_BOOT_PROBE {
+        hyper_probe::log_boot_probe();
+    }
     yaml_probe::log_boot_probe();
 
     match pci::nic_fpga_dma::init_default_once() {
