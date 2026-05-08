@@ -2330,7 +2330,22 @@ fn is_usb_mass_storage_label(label: Option<&str>) -> bool {
 }
 
 fn usb_interface_class_text(interface: &crate::usb2::TlbUsbInterface) -> String {
-    alloc::format!("{:02X}/{:02X}/{:02X}", interface.class, interface.subclass, interface.protocol)
+    let triple = crate::usb2::class::UsbClassTriple::from_codes(
+        interface.class,
+        interface.subclass,
+        interface.protocol,
+    );
+    let base = triple.base_class();
+    alloc::format!(
+        "{:02X}/{:02X}/{:02X} {} {} {} ({})",
+        base.code(),
+        interface.subclass,
+        interface.protocol,
+        triple.short_name(),
+        base.descriptor_usage().as_str(),
+        triple.description(),
+        base.description()
+    )
 }
 
 fn emit_usb_endpoint_rows(
@@ -2356,9 +2371,12 @@ fn emit_usb_endpoint_rows(
                         interface.interface_number,
                         interface.alternate_setting
                     ),
+                    dev.slot_id.to_string(),
+                    alloc::format!("0x{:05X}", dev.route_string),
                     alloc::format!("cfg={}", cfg.configuration_value),
                     usb_interface_class_text(interface),
                     String::from("no-ep"),
+                    dev.product.clone().unwrap_or_else(|| String::from("-")),
                     alloc::format!("{:08X}", dev.stable_id),
                 ];
                 table.emit_row(&row, |text| print_shell_line(io, text));
@@ -2381,6 +2399,8 @@ fn emit_usb_endpoint_rows(
                         interface.interface_number,
                         interface.alternate_setting
                     ),
+                    dev.slot_id.to_string(),
+                    alloc::format!("0x{:05X}", dev.route_string),
                     alloc::format!("ep=0x{:02X}", endpoint.address),
                     usb_interface_class_text(interface),
                     alloc::format!(
@@ -2390,6 +2410,7 @@ fn emit_usb_endpoint_rows(
                         endpoint.interval,
                         cfg.configuration_value
                     ),
+                    dev.product.clone().unwrap_or_else(|| String::from("-")),
                     alloc::format!("{:08X}", dev.stable_id),
                 ];
                 table.emit_row(&row, |text| print_shell_line(io, text));
@@ -2417,9 +2438,12 @@ fn append_usb_endpoint_rows(out: &mut String, table: &TlbTable, dev: &crate::usb
                         interface.interface_number,
                         interface.alternate_setting
                     ),
+                    dev.slot_id.to_string(),
+                    alloc::format!("0x{:05X}", dev.route_string),
                     alloc::format!("cfg={}", cfg.configuration_value),
                     usb_interface_class_text(interface),
                     String::from("no-ep"),
+                    dev.product.clone().unwrap_or_else(|| String::from("-")),
                     alloc::format!("{:08X}", dev.stable_id),
                 ];
                 table.emit_row(&row, |text| {
@@ -2444,6 +2468,8 @@ fn append_usb_endpoint_rows(out: &mut String, table: &TlbTable, dev: &crate::usb
                         interface.interface_number,
                         interface.alternate_setting
                     ),
+                    dev.slot_id.to_string(),
+                    alloc::format!("0x{:05X}", dev.route_string),
                     alloc::format!("ep=0x{:02X}", endpoint.address),
                     usb_interface_class_text(interface),
                     alloc::format!(
@@ -2453,6 +2479,7 @@ fn append_usb_endpoint_rows(out: &mut String, table: &TlbTable, dev: &crate::usb
                         endpoint.interval,
                         cfg.configuration_value
                     ),
+                    dev.product.clone().unwrap_or_else(|| String::from("-")),
                     alloc::format!("{:08X}", dev.stable_id),
                 ];
                 table.emit_row(&row, |text| {
@@ -2464,9 +2491,10 @@ fn append_usb_endpoint_rows(out: &mut String, table: &TlbTable, dev: &crate::usb
 }
 
 fn append_usb_overview_dump(out: &mut String) {
-    const USB_DUMP_TABLE_WIDTH: usize = 158;
+    const USB_DUMP_TABLE_WIDTH: usize = 180;
 
-    let controllers = crate::usb2::pci_usb_controllers();
+    let snapshot = crate::usb2::tlb_usb_snapshot();
+    let controllers = snapshot.controllers.as_slice();
     if controllers.is_empty() {
         writeln!(out, "No xHCI USB controllers found.").unwrap();
         writeln!(out).unwrap();
@@ -2511,9 +2539,22 @@ fn append_usb_overview_dump(out: &mut String) {
         .map(|ctrl| alloc::format!("{}={:04X}:{:04X}", ctrl.index, ctrl.vendor_id, ctrl.device_id))
         .collect::<Vec<_>>()
         .join(" ");
+    let first_controller = crate::usb2::discover_first_controller()
+        .map(|ctrl| alloc::format!("{}={:04X}:{:04X}", ctrl.index, ctrl.vendor_id, ctrl.device_id))
+        .unwrap_or_else(|| String::from("-"));
 
-    writeln!(out, "USB Overview (usbms registered={} ctrls={})", usbms_count, controller_list)
-        .unwrap();
+    writeln!(
+        out,
+        "USB Overview (usbms registered={} ctrls={} first={} observed={} devices={} topology={} probe_error={})",
+        usbms_count,
+        controller_list,
+        first_controller,
+        snapshot.probe_device_count.unwrap_or(0),
+        snapshot.devices.len(),
+        snapshot.topology.len(),
+        snapshot.probe_error.unwrap_or("-")
+    )
+    .unwrap();
     let headers = [
         "#",
         "BDF",
@@ -2525,13 +2566,16 @@ fn append_usb_overview_dump(out: &mut String) {
         "Speed",
         "PLS",
         "Dev Port",
+        "Slot",
+        "Route",
         "Dev VID:PID",
         "Class",
         "Kind",
+        "Product",
         "Stable",
     ];
     let table = TlbTable::with_width(&headers, USB_DUMP_TABLE_WIDTH)
-        .with_max_col_widths(&[1, 9, 2, 1, 1, 1, 1, 5, 2, 2, 0, 8, 0, 8]);
+        .with_max_col_widths(&[1, 9, 2, 1, 1, 1, 1, 5, 2, 2, 4, 8, 0, 8, 0, 10, 8]);
     table.emit_header(|text| {
         writeln!(out, "{text}").unwrap();
     });
@@ -2553,7 +2597,10 @@ fn append_usb_overview_dump(out: &mut String) {
                 String::from("-"),
                 String::from("-"),
                 String::from("-"),
+                String::from("-"),
                 String::from("no-mmio"),
+                String::from("-"),
+                String::from("-"),
                 String::from("-"),
             ];
             table.emit_row(&row, |text| {
@@ -2561,6 +2608,49 @@ fn append_usb_overview_dump(out: &mut String) {
             });
             continue;
         };
+        let runtime = crate::usb2::crabusb_runtime_diag(ctrl.index);
+        writeln!(
+            out,
+            "ctrl {} runtime phase={} lifecycle={} event={} probe_req={} port_change={} empty={} fail={} early_fatal={} last={} devices={} recovery(quiescent_before={} q={}ms init={}ms quiet={}ms skip_delayed={})",
+            ctrl.index,
+            ctrl.controller_phase,
+            ctrl.root_hub_lifecycle,
+            yn(ctrl.event_ready),
+            yn(runtime.probe_requested),
+            yn(ctrl.root_port_change_seen),
+            ctrl.empty_probe_streak,
+            runtime.probe_fail_streak,
+            runtime.early_fatal_rebind_streak,
+            runtime.last_probe_state,
+            runtime.last_probe_device_count,
+            yn(runtime.recovery_quiescent_before_bind),
+            runtime.recovery_quiescent_ms,
+            runtime.recovery_initial_settle_ms,
+            runtime.recovery_probe_quiet_ms,
+            yn(runtime.recovery_skip_delayed_event_handler)
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "ctrl {} xhci caplen={} hcs1=0x{:08X} hcc1=0x{:08X} dboff=0x{:X} rtsoff=0x{:X} usbcmd=0x{:08X} usbsts=0x{:08X} crcr=0x{:016X} dcbaap=0x{:016X} config=0x{:08X} iman=0x{:08X} imod=0x{:08X} erstsz={} erstba=0x{:016X} erdp=0x{:016X}",
+            ctrl.index,
+            diag.caplen,
+            diag.hcsparams1,
+            diag.hccparams1,
+            diag.dboff,
+            diag.rtsoff,
+            diag.usbcmd,
+            diag.usbsts,
+            diag.crcr,
+            diag.dcbaap,
+            diag.config,
+            diag.iman,
+            diag.imod,
+            diag.erstsz,
+            diag.erstba,
+            diag.erdp
+        )
+        .unwrap();
 
         let mut disconnected_ports: Vec<String> = Vec::new();
         for port in diag.ports.iter() {
@@ -2594,11 +2684,19 @@ fn append_usb_overview_dump(out: &mut String) {
                         yn((portsc & (1 << 9)) != 0).to_string(),
                         yn((portsc & (1 << 4)) != 0).to_string(),
                         usb_port_speed_text(portsc).to_string(),
-                        usb_port_pls_text(portsc).to_string(),
+                        alloc::format!(
+                            "{} pmsc={:08X} li={:08X}",
+                            usb_port_pls_text(portsc),
+                            port.portpmsc,
+                            port.portli
+                        ),
                         dev.port.to_string(),
+                        dev.slot_id.to_string(),
+                        alloc::format!("0x{:05X}", dev.route_string),
                         dev_vidpid,
                         class,
                         String::from(dev.kind),
+                        dev.product.clone().unwrap_or_else(|| String::from("-")),
                         stable,
                     ];
                     table.emit_row(&row, |text| {
@@ -2623,7 +2721,15 @@ fn append_usb_overview_dump(out: &mut String) {
                     yn((portsc & (1 << 9)) != 0).to_string(),
                     yn((portsc & (1 << 4)) != 0).to_string(),
                     usb_port_speed_text(portsc).to_string(),
-                    usb_port_pls_text(portsc).to_string(),
+                    alloc::format!(
+                        "{} pmsc={:08X} li={:08X}",
+                        usb_port_pls_text(portsc),
+                        port.portpmsc,
+                        port.portli
+                    ),
+                    String::from("-"),
+                    String::from("-"),
+                    String::from("-"),
                     String::from("-"),
                     String::from("-"),
                     String::from("-"),
@@ -2657,7 +2763,8 @@ fn append_usb_overview_dump(out: &mut String) {
 }
 
 fn append_usb_stashed_detail_dump(out: &mut String) {
-    let controllers = crate::usb2::pci_usb_controllers();
+    let snapshot = crate::usb2::tlb_usb_snapshot();
+    let controllers = snapshot.controllers.as_slice();
     if controllers.is_empty() {
         writeln!(out, "No xHCI USB controllers found.").unwrap();
         writeln!(out).unwrap();
@@ -2665,12 +2772,62 @@ fn append_usb_stashed_detail_dump(out: &mut String) {
     }
 
     for ctrl in controllers.iter() {
+        let runtime = crate::usb2::crabusb_runtime_diag(ctrl.index);
         writeln!(
             out,
-            "Controller {} {:02X}:{:02X}.{} {:04X}:{:04X}",
-            ctrl.index, ctrl.bus, ctrl.slot, ctrl.function, ctrl.vendor_id, ctrl.device_id
+            "Controller {} {:02X}:{:02X}.{} {:04X}:{:04X} phase={} lifecycle={} event={} probe_req={} port_change={} empty={} fail={} early_fatal={} last={} devices={} recovery_quiescent_before={}",
+            ctrl.index,
+            ctrl.bus,
+            ctrl.slot,
+            ctrl.function,
+            ctrl.vendor_id,
+            ctrl.device_id,
+            ctrl.controller_phase,
+            ctrl.root_hub_lifecycle,
+            yn(ctrl.event_ready),
+            yn(runtime.probe_requested),
+            yn(ctrl.root_port_change_seen),
+            ctrl.empty_probe_streak,
+            runtime.probe_fail_streak,
+            runtime.early_fatal_rebind_streak,
+            runtime.last_probe_state,
+            runtime.last_probe_device_count,
+            yn(runtime.recovery_quiescent_before_bind)
         )
         .unwrap();
+        for node in snapshot
+            .topology
+            .iter()
+            .filter(|node| node.controller_index == ctrl.index)
+        {
+            let kind = match node.kind {
+                crate::usb2::TlbUsbTopologyNodeKind::RootPort => "root",
+                crate::usb2::TlbUsbTopologyNodeKind::Hub => "hub",
+                crate::usb2::TlbUsbTopologyNodeKind::Device => "dev",
+            };
+            writeln!(
+                out,
+                "  Topology kind={} root={} port={} depth={} slot={} parent={} speed={} vid:pid={} class={}",
+                kind,
+                node.root_port_id,
+                node.port_id,
+                node.depth,
+                node.slot_id.map(|v| v.to_string()).unwrap_or_else(|| String::from("-")),
+                node.parent_slot_id.map(|v| v.to_string()).unwrap_or_else(|| String::from("-")),
+                node.speed,
+                match (node.vendor_id, node.product_id) {
+                    (Some(vid), Some(pid)) => alloc::format!("{:04X}:{:04X}", vid, pid),
+                    _ => String::from("-"),
+                },
+                match (node.class, node.subclass, node.protocol) {
+                    (Some(class), Some(subclass), Some(protocol)) => {
+                        alloc::format!("{:02X}/{:02X}/{:02X}", class, subclass, protocol)
+                    }
+                    _ => String::from("-"),
+                }
+            )
+            .unwrap();
+        }
 
         match crate::usb2::crabusb_observed_devices(ctrl.index) {
             Ok(devices) if !devices.is_empty() => {
@@ -2693,6 +2850,16 @@ fn append_usb_stashed_detail_dump(out: &mut String) {
                         dev.max_packet_size_0
                     )
                     .unwrap();
+                    if dev.manufacturer.is_some() || dev.product.is_some() || dev.serial.is_some() {
+                        writeln!(
+                            out,
+                            "    Strings manufacturer={} product={} serial={}",
+                            dev.manufacturer.as_deref().unwrap_or("-"),
+                            dev.product.as_deref().unwrap_or("-"),
+                            dev.serial.as_deref().unwrap_or("-")
+                        )
+                        .unwrap();
+                    }
 
                     if !dev.path.is_empty() {
                         writeln!(out, "    Path: {:?}", dev.path.as_slice()).unwrap();
@@ -2760,7 +2927,8 @@ fn append_usb_stashed_detail_dump(out: &mut String) {
 }
 
 fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
-    let controllers = crate::usb2::pci_usb_controllers();
+    let snapshot = crate::usb2::tlb_usb_snapshot();
+    let controllers = snapshot.controllers.as_slice();
     if controllers.is_empty() {
         line(io, "No xHCI USB controllers found.");
         return;
@@ -2804,11 +2972,23 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
         .map(|ctrl| alloc::format!("{}={:04X}:{:04X}", ctrl.index, ctrl.vendor_id, ctrl.device_id))
         .collect::<Vec<_>>()
         .join(" ");
+    let first_controller = crate::usb2::discover_first_controller()
+        .map(|ctrl| alloc::format!("{}={:04X}:{:04X}", ctrl.index, ctrl.vendor_id, ctrl.device_id))
+        .unwrap_or_else(|| String::from("-"));
 
     line(
         io,
-        alloc::format!("USB Overview (usbms registered={} ctrls={})", usbms_count, controller_list)
-            .as_str(),
+        alloc::format!(
+            "USB Overview (usbms registered={} ctrls={} first={} observed={} devices={} topology={} probe_error={})",
+            usbms_count,
+            controller_list,
+            first_controller,
+            snapshot.probe_device_count.unwrap_or(0),
+            snapshot.devices.len(),
+            snapshot.topology.len(),
+            snapshot.probe_error.unwrap_or("-")
+        )
+        .as_str(),
     );
     let headers = [
         "#",
@@ -2821,13 +3001,16 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
         "Speed",
         "PLS",
         "Dev Port",
+        "Slot",
+        "Route",
         "Dev VID:PID",
         "Class",
         "Kind",
+        "Product",
         "Stable",
     ];
     let table = TlbTable::with_width(&headers, line_width_for_backend(io).saturating_sub(2))
-        .with_max_col_widths(&[1, 9, 2, 1, 1, 1, 1, 5, 2, 2, 0, 8, 0, 8]);
+        .with_max_col_widths(&[1, 9, 2, 1, 1, 1, 1, 5, 2, 2, 4, 8, 0, 8, 0, 10, 8]);
     table.emit_header(|text| print_shell_line(io, text));
     let mut disconnected_ports_summary: Vec<String> = Vec::new();
 
@@ -2847,12 +3030,62 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
                 String::from("-"),
                 String::from("-"),
                 String::from("-"),
+                String::from("-"),
                 String::from("no-mmio"),
+                String::from("-"),
+                String::from("-"),
                 String::from("-"),
             ];
             table.emit_row(&row, |text| print_shell_line(io, text));
             continue;
         };
+        let runtime = crate::usb2::crabusb_runtime_diag(ctrl.index);
+        line(
+            io,
+            alloc::format!(
+                "ctrl {} runtime phase={} lifecycle={} event={} probe_req={} port_change={} empty={} fail={} early_fatal={} last={} devices={} recovery(quiescent_before={} q={}ms init={}ms quiet={}ms skip_delayed={})",
+                ctrl.index,
+                ctrl.controller_phase,
+                ctrl.root_hub_lifecycle,
+                yn(ctrl.event_ready),
+                yn(runtime.probe_requested),
+                yn(ctrl.root_port_change_seen),
+                ctrl.empty_probe_streak,
+                runtime.probe_fail_streak,
+                runtime.early_fatal_rebind_streak,
+                runtime.last_probe_state,
+                runtime.last_probe_device_count,
+                yn(runtime.recovery_quiescent_before_bind),
+                runtime.recovery_quiescent_ms,
+                runtime.recovery_initial_settle_ms,
+                runtime.recovery_probe_quiet_ms,
+                yn(runtime.recovery_skip_delayed_event_handler)
+            )
+            .as_str(),
+        );
+        line(
+            io,
+            alloc::format!(
+                "ctrl {} xhci caplen={} hcs1=0x{:08X} hcc1=0x{:08X} dboff=0x{:X} rtsoff=0x{:X} usbcmd=0x{:08X} usbsts=0x{:08X} crcr=0x{:016X} dcbaap=0x{:016X} config=0x{:08X} iman=0x{:08X} imod=0x{:08X} erstsz={} erstba=0x{:016X} erdp=0x{:016X}",
+                ctrl.index,
+                diag.caplen,
+                diag.hcsparams1,
+                diag.hccparams1,
+                diag.dboff,
+                diag.rtsoff,
+                diag.usbcmd,
+                diag.usbsts,
+                diag.crcr,
+                diag.dcbaap,
+                diag.config,
+                diag.iman,
+                diag.imod,
+                diag.erstsz,
+                diag.erstba,
+                diag.erdp
+            )
+            .as_str(),
+        );
 
         let mut disconnected_ports: Vec<String> = Vec::new();
 
@@ -2886,11 +3119,19 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
                         yn((portsc & (1 << 9)) != 0).to_string(),
                         yn((portsc & (1 << 4)) != 0).to_string(),
                         usb_port_speed_text(portsc).to_string(),
-                        usb_port_pls_text(portsc).to_string(),
+                        alloc::format!(
+                            "{} pmsc={:08X} li={:08X}",
+                            usb_port_pls_text(portsc),
+                            port.portpmsc,
+                            port.portli
+                        ),
                         dev.port.to_string(),
+                        dev.slot_id.to_string(),
+                        alloc::format!("0x{:05X}", dev.route_string),
                         dev_vidpid,
                         class,
                         String::from(dev.kind),
+                        dev.product.clone().unwrap_or_else(|| String::from("-")),
                         stable,
                     ];
                     table.emit_row(&row, |text| print_shell_line(io, text));
@@ -2913,7 +3154,15 @@ fn cmd_tlb_usb(io: &'static dyn ShellBackend2) {
                     yn((portsc & (1 << 9)) != 0).to_string(),
                     yn((portsc & (1 << 4)) != 0).to_string(),
                     usb_port_speed_text(portsc).to_string(),
-                    usb_port_pls_text(portsc).to_string(),
+                    alloc::format!(
+                        "{} pmsc={:08X} li={:08X}",
+                        usb_port_pls_text(portsc),
+                        port.portpmsc,
+                        port.portli
+                    ),
+                    String::from("-"),
+                    String::from("-"),
+                    String::from("-"),
                     String::from("-"),
                     String::from("-"),
                     String::from("-"),

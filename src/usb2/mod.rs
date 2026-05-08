@@ -1,6 +1,6 @@
 extern crate alloc;
 
-use alloc::vec::Vec;
+use alloc::{string::String, vec::Vec};
 use core::ptr::NonNull;
 use spin::Mutex;
 
@@ -36,7 +36,7 @@ static USB_CONTROLLER_MMIO_CACHE: Mutex<Vec<CachedUsbControllerMmio>> = Mutex::n
 
 pub(crate) use self::hid::{hut, input};
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct UsbDeviceSummary {
     pub stable_id: u32,
     pub slot_id: u32,
@@ -49,6 +49,7 @@ pub(crate) struct UsbDeviceSummary {
     pub class: Option<u8>,
     pub subclass: Option<u8>,
     pub protocol: Option<u8>,
+    pub product: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -120,6 +121,9 @@ pub(crate) struct TlbUsbDevice {
     pub protocol: u8,
     pub num_configurations: u8,
     pub max_packet_size_0: u8,
+    pub manufacturer: Option<String>,
+    pub product: Option<String>,
+    pub serial: Option<String>,
     pub configurations: Vec<TlbUsbConfiguration>,
 }
 
@@ -172,6 +176,28 @@ pub(crate) struct UsbControllerRuntimeDiag {
     pub recovery_skip_delayed_event_handler: bool,
     pub recovery_initial_settle_ms: u64,
     pub recovery_probe_quiet_ms: u64,
+}
+
+impl UsbControllerRuntimeDiag {
+    pub(crate) const fn new() -> Self {
+        Self {
+            event_handler_ready: false,
+            probe_requested: false,
+            root_port_change_seen: false,
+            controller_phase: "init",
+            root_hub_lifecycle: "init",
+            empty_probe_streak: 0,
+            probe_fail_streak: 0,
+            last_probe_state: "never",
+            last_probe_device_count: 0,
+            early_fatal_rebind_streak: 0,
+            recovery_quiescent_before_bind: false,
+            recovery_quiescent_ms: 0,
+            recovery_skip_delayed_event_handler: false,
+            recovery_initial_settle_ms: 0,
+            recovery_probe_quiet_ms: 0,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -289,19 +315,21 @@ pub(crate) fn pci_usb_controllers() -> Vec<TlbUsbController> {
                 continue;
             };
 
+            let index = ctrls.len();
+            let runtime = self::crabusb_service::runtime_diag(index);
             ctrls.push(TlbUsbController {
-                index: ctrls.len(),
+                index,
                 bus: dev.bus,
                 slot: dev.slot,
                 function: dev.function,
                 vendor_id: dev.vendor,
                 device_id: dev.device,
                 mmio_base,
-                controller_phase: "init",
-                root_hub_lifecycle: "init",
-                event_ready: false,
-                root_port_change_seen: false,
-                empty_probe_streak: 0,
+                controller_phase: runtime.controller_phase,
+                root_hub_lifecycle: runtime.root_hub_lifecycle,
+                event_ready: runtime.event_handler_ready,
+                root_port_change_seen: runtime.root_port_change_seen,
+                empty_probe_streak: runtime.empty_probe_streak,
             });
         }
     });
@@ -390,8 +418,82 @@ pub(crate) fn controller_mmio_diag(controller_id: usize) -> Option<UsbController
     }
 }
 
+pub(crate) fn usb_topology_nodes(
+    controllers: &[TlbUsbController],
+    devices: &[TlbUsbDevice],
+) -> Vec<TlbUsbTopologyNode> {
+    let mut nodes = Vec::new();
+    for ctrl in controllers {
+        if let Some(diag) = controller_mmio_diag(ctrl.index) {
+            for port in diag.ports {
+                nodes.push(TlbUsbTopologyNode {
+                    controller_index: ctrl.index,
+                    kind: TlbUsbTopologyNodeKind::RootPort,
+                    slot_id: None,
+                    root_port_id: port.port_id,
+                    port_id: port.port_id,
+                    depth: 0,
+                    parent_slot_id: None,
+                    vendor_id: None,
+                    product_id: None,
+                    class: None,
+                    subclass: None,
+                    protocol: None,
+                    speed: "root",
+                });
+            }
+        }
+    }
+
+    for dev in devices {
+        let kind = if dev.class == 0x09 {
+            TlbUsbTopologyNodeKind::Hub
+        } else {
+            TlbUsbTopologyNodeKind::Device
+        };
+        nodes.push(TlbUsbTopologyNode {
+            controller_index: dev.controller_index,
+            kind,
+            slot_id: Some(dev.slot_id),
+            root_port_id: dev.root_port_id,
+            port_id: dev.port_id,
+            depth: dev.hub_path.len() as u8,
+            parent_slot_id: dev.parent_hub_slot_id,
+            vendor_id: Some(dev.vendor_id),
+            product_id: Some(dev.product_id),
+            class: Some(dev.class),
+            subclass: Some(dev.subclass),
+            protocol: Some(dev.protocol),
+            speed: dev.speed,
+        });
+    }
+    nodes
+}
+
+pub(crate) fn tlb_usb_snapshot() -> TlbUsbSnapshot {
+    let controllers = pci_usb_controllers();
+    let mut devices = Vec::new();
+    let mut probe_error = None;
+    for ctrl in controllers.iter() {
+        match crabusb_observed_devices(ctrl.index) {
+            Ok(mut observed) => devices.append(&mut observed),
+            Err(err) => probe_error = Some(err),
+        }
+    }
+    let topology = usb_topology_nodes(controllers.as_slice(), devices.as_slice());
+    let probe_device_count = Some(devices.len() as u32);
+    TlbUsbSnapshot {
+        controllers,
+        devices,
+        topology,
+        probe_error,
+        probe_device_count,
+    }
+}
+
 pub(crate) mod syscall {}
 
 pub(crate) use self::crabusb_service::bsp_service as crabusb_bsp_service;
 pub(crate) use self::crabusb_service::observed_device_summaries as crabusb_observed_device_summaries;
 pub(crate) use self::crabusb_service::observed_devices as crabusb_observed_devices;
+pub(crate) use self::crabusb_service::runtime_diag as crabusb_runtime_diag;

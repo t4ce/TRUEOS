@@ -187,12 +187,14 @@ async fn media_control_task(
 
     let mut interrupt_in = match interface.endpoint_interrupt_in(target.in_endpoint).await {
         Ok(endpoint) => endpoint,
-        Err(InterfaceEndpointError::WrongKind { .. }) => {
+        Err(InterfaceEndpointError::WrongKind { address, expected }) => {
             crate::log!(
-                "crabusb: hid mediacontrol {:04X}:{:04X} interrupt endpoint kind mismatch ep=0x{:02X}\n",
+                "crabusb: hid mediacontrol {:04X}:{:04X} interrupt endpoint kind mismatch ep=0x{:02X} got=0x{:02X} expected={}\n",
                 vendor_id,
                 product_id,
-                target.in_endpoint
+                target.in_endpoint,
+                address,
+                expected
             );
             unregister_active_stream(active_stream);
             return;

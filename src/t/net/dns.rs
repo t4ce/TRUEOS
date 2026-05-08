@@ -4,7 +4,7 @@ extern crate std;
 use alloc::{boxed::Box, format, string::String, vec::Vec};
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+use embassy_time::{Duration as EmbassyDuration, Instant, Timer, with_timeout};
 use heapless::Vec as HVec;
 use spin::Mutex;
 use v::vnet;
@@ -236,6 +236,8 @@ const DNS_CACHE_CAP: usize = 8;
 const DNS_CACHE_TTL_TICKS: u64 = 15 * embassy_time_driver::TICK_HZ;
 const DNS_FS_CACHE_PATH: &str = "net_dns_v4.cache";
 const DNS_FS_CACHE_MAX_ENTRIES: usize = 32;
+const DNS_FS_CACHE_LOOKUP_TIMEOUT_MS: u64 = 150;
+const DNS_FS_CACHE_UPDATE_TIMEOUT_MS: u64 = 250;
 
 #[derive(Clone, Debug)]
 struct DnsCacheEntry {
@@ -399,11 +401,14 @@ async fn dns_fs_cache_lookup(dev_idx: usize, host_trimmed: &str) -> Option<[u8; 
         );
         return None;
     };
-    let bytes = match crate::r::fs::trueosfs::file_out_if_index_ready_async(disk, DNS_FS_CACHE_PATH)
-        .await
-    {
-        Ok(Some(bytes)) => bytes,
-        Ok(None) => {
+    let lookup = with_timeout(
+        EmbassyDuration::from_millis(DNS_FS_CACHE_LOOKUP_TIMEOUT_MS),
+        crate::r::fs::trueosfs::file_out_if_index_ready_async(disk, DNS_FS_CACHE_PATH),
+    )
+    .await;
+    let bytes = match lookup {
+        Ok(Ok(Some(bytes))) => bytes,
+        Ok(Ok(None)) => {
             crate::log!(
                 "dns: fs-cache lookup done host={} dev={} status=miss-or-index-not-ready\n",
                 host_trimmed,
@@ -411,12 +416,21 @@ async fn dns_fs_cache_lookup(dev_idx: usize, host_trimmed: &str) -> Option<[u8; 
             );
             return None;
         }
-        Err(err) => {
+        Ok(Err(err)) => {
             crate::log!(
                 "dns: fs-cache lookup done host={} dev={} status=error err={:?}\n",
                 host_trimmed,
                 dev_idx,
                 err
+            );
+            return None;
+        }
+        Err(_timeout) => {
+            crate::log!(
+                "dns: fs-cache lookup done host={} dev={} status=timeout timeout_ms={}\n",
+                host_trimmed,
+                dev_idx,
+                DNS_FS_CACHE_LOOKUP_TIMEOUT_MS
             );
             return None;
         }
@@ -490,6 +504,23 @@ async fn dns_fs_cache_update(dev_idx: usize, host_trimmed: &str, ip: [u8; 4]) {
         body.push_str(line.as_str());
     }
     let _ = crate::r::fs::trueosfs::file_in_async(disk, DNS_FS_CACHE_PATH, body.as_bytes()).await;
+}
+
+async fn dns_fs_cache_update_bounded(dev_idx: usize, host_trimmed: &str, ip: [u8; 4]) {
+    match with_timeout(
+        EmbassyDuration::from_millis(DNS_FS_CACHE_UPDATE_TIMEOUT_MS),
+        dns_fs_cache_update(dev_idx, host_trimmed, ip),
+    )
+    .await
+    {
+        Ok(()) => {}
+        Err(_timeout) => crate::log!(
+            "dns: fs-cache update done host={} dev={} status=timeout timeout_ms={}\n",
+            host_trimmed,
+            dev_idx,
+            DNS_FS_CACHE_UPDATE_TIMEOUT_MS
+        ),
+    }
 }
 
 async fn resolve_ipv4_secure_transport(
@@ -1322,7 +1353,7 @@ pub async fn resolve_ipv4_for_device(
         resolve_ipv4_secure_policy(dev_idx, host_trimmed, cfg, SecureDnsPolicy::default()).await
     {
         dns_cache_insert(dev_idx, host_trimmed, ip);
-        dns_fs_cache_update(dev_idx, host_trimmed, ip).await;
+        dns_fs_cache_update_bounded(dev_idx, host_trimmed, ip).await;
         return Ok(ip);
     }
     crate::log!("dns: secure lookup failed host={} dev={} qtype=A\n", host_trimmed, dev_idx);

@@ -68,6 +68,7 @@ define_started_flags!(
     UI2_ATHLAS_2X_DEMO_STARTED,
     UI2_PALATINO_1X_DEMO_STARTED,
     UI2_TWEMOJI_1X_STARTED,
+    UI2_ANALOG_CLOCK_DEMO_STARTED,
     UI2_TEXT_INPUT_DEMO_STARTED,
     UI2_BGRT_DEMO_STARTED,
     UI2_CORETICKS_DEMO_STARTED,
@@ -109,6 +110,7 @@ macro_rules! define_stop_flags {
 
 define_stop_flags!(
     STOP_UI2_TEXT_INPUT_DEMO,
+    STOP_UI2_ANALOG_CLOCK_DEMO,
     STOP_UI2_BGRT_DEMO,
     STOP_UI2_CORETICKS_DEMO,
     STOP_UI2_CURSORPICKER_DEMO,
@@ -126,6 +128,7 @@ define_stop_flags!(
 fn stop_flag_by_task_name(name: &str) -> Option<&'static AtomicBool> {
     match name {
         "ui2-text-input-demo" => Some(&STOP_UI2_TEXT_INPUT_DEMO),
+        "ui2-analog-clock-demo" => Some(&STOP_UI2_ANALOG_CLOCK_DEMO),
         "ui2-bgrt-demo" => Some(&STOP_UI2_BGRT_DEMO),
         "ui2-coreticks-demo" => Some(&STOP_UI2_CORETICKS_DEMO),
         "ui2-cursorpicker-demo" => Some(&STOP_UI2_CURSORPICKER_DEMO),
@@ -754,6 +757,13 @@ fn spawn_ui2_text_input_demo(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
+fn spawn_ui2_analog_clock_demo(spawner: Spawner) -> SpawnAttempt {
+    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
+        let _ = worker_spawner;
+        crate::tst_ui2_analog_clock_demo::ui2_analog_clock_demo_task()
+    })
+}
+
 fn spawn_ui2_bgrt_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
         let _ = worker_spawner;
@@ -1237,7 +1247,7 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::APP_VM_READY
 const WS_BOOT_READY: u32 = crate::r::readiness::NET_GATEWAY_REACHABLE
     | crate::r::readiness::TLS_SOCKET_SERVICE_READY
     | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
-static TASKS: [TaskSpec; 70] = [
+static TASKS: [TaskSpec; 71] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
         "globalog-persist-once",
@@ -1474,6 +1484,12 @@ static TASKS: [TaskSpec; 70] = [
         ui2_demo_task_gate,
         &UI2_TEXT_INPUT_DEMO_STARTED,
         spawn_ui2_text_input_demo,
+    ),
+    TaskSpec::enabled(
+        "ui2-analog-clock-demo",
+        UI2_DEMO_READY,
+        &UI2_ANALOG_CLOCK_DEMO_STARTED,
+        spawn_ui2_analog_clock_demo,
     ),
     TaskSpec::enabled("ui2-bgrt-demo", UI2_DEMO_READY, &UI2_BGRT_DEMO_STARTED, spawn_ui2_bgrt_demo),
     TaskSpec::enabled(

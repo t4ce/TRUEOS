@@ -7,10 +7,7 @@ use crab_usb::{Device, USBHost, usb_if};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum UsbDescriptorScope {
-    Device,
     Interface(u8),
-    Endpoint(u8),
-    Other(u16),
 }
 
 // We paused this descriptor-modeling work here after planning a GUI app for
@@ -90,6 +87,18 @@ impl UsbDescriptorType {
             Self::DeviceCapability => "device-cap",
             Self::Unknown(_) => "unknown",
         }
+    }
+}
+
+pub(crate) fn descriptor_scope_label(scope: UsbDescriptorScope) -> &'static str {
+    match scope {
+        UsbDescriptorScope::Interface(_) => "interface",
+    }
+}
+
+pub(crate) const fn descriptor_scope_index(scope: UsbDescriptorScope) -> u16 {
+    match scope {
+        UsbDescriptorScope::Interface(interface_number) => interface_number as u16,
     }
 }
 
@@ -391,19 +400,32 @@ pub(crate) async fn log_hid_report_descriptors_on_device(
         {
             Ok(read_len) => {
                 let read_len = read_len.min(hid_desc.len());
+                let scope = UsbDescriptorScope::Interface(interface_number);
                 crate::log!(
-                    "crabusb: hid desc slot={} if#{} bytes={:02X?}\n",
+                    "crabusb: hid desc slot={} scope={} if#{} bytes={:02X?}\n",
                     slot_id,
-                    interface_number,
+                    descriptor_scope_label(scope),
+                    descriptor_scope_index(scope),
                     &hid_desc[..read_len]
                 );
 
-                let report_len =
-                    if read_len >= 9 && hid_desc[6] == UsbDescriptorType::HidReport.code() {
-                        u16::from(hid_desc[7]) | (u16::from(hid_desc[8]) << 8)
-                    } else {
-                        HID_DESC_FALLBACK_REPORT_LEN
-                    };
+                let desc_type = if read_len >= 7 {
+                    UsbDescriptorType::from_u8(hid_desc[6])
+                } else {
+                    UsbDescriptorType::Unknown(0)
+                };
+                let report_len = if read_len >= 9 && desc_type == UsbDescriptorType::HidReport {
+                    u16::from(hid_desc[7]) | (u16::from(hid_desc[8]) << 8)
+                } else {
+                    HID_DESC_FALLBACK_REPORT_LEN
+                };
+                crate::log!(
+                    "crabusb: hid desc slot={} if#{} report_type={} report_len={}\n",
+                    slot_id,
+                    interface_number,
+                    desc_type.short_name(),
+                    report_len
+                );
 
                 let mut report_desc = alloc::vec![0u8; usize::from(report_len)];
                 match device

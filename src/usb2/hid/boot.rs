@@ -42,7 +42,12 @@ fn should_skip_descriptor_logging(vendor_id: u16, product_id: u16, kind: HidBoot
     // Narrow workaround for QEMU's simple emulated USB boot HID devices, which can
     // wedge on the optional HID descriptor dump path before the interrupt stream starts.
     let _ = kind;
-    super::super::descriptor::hid_optional_descriptor_skip_reason(vendor_id, product_id).is_some()
+    super::super::descriptor::hid_optional_descriptor_skip_reason(vendor_id, product_id)
+        .map(|reason| {
+            let _ = reason.as_str();
+            true
+        })
+        .unwrap_or(false)
 }
 
 #[inline]
@@ -348,13 +353,15 @@ async fn hid_boot_stream_task(
 
     let mut interrupt_in = match interface.endpoint_interrupt_in(target.in_endpoint).await {
         Ok(endpoint) => endpoint,
-        Err(InterfaceEndpointError::WrongKind { .. }) => {
+        Err(InterfaceEndpointError::WrongKind { address, expected }) => {
             crate::log!(
-                "crabusb: hid {} {:04X}:{:04X} interrupt endpoint kind mismatch ep=0x{:02X}\n",
+                "crabusb: hid {} {:04X}:{:04X} interrupt endpoint kind mismatch ep=0x{:02X} got=0x{:02X} expected={}\n",
                 target.kind.as_str(),
                 vendor_id,
                 product_id,
-                target.in_endpoint
+                target.in_endpoint,
+                address,
+                expected
             );
             let _ = unregister_active_hid_stream(active_stream);
             return;

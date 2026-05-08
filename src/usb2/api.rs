@@ -1,6 +1,6 @@
 use crab_usb::{
-    Device, EndpointBulkIn, EndpointBulkOut, EndpointInterruptIn, EndpointInterruptOut,
-    EndpointIsoIn, EndpointKind, err::USBError,
+    Device, EndpointBulkIn, EndpointBulkOut, EndpointInterruptIn, EndpointIsoIn, EndpointKind,
+    err::USBError,
 };
 
 #[derive(Debug)]
@@ -83,19 +83,6 @@ impl ClaimedInterface<'_> {
             _ => Err(InterfaceEndpointError::WrongKind {
                 address,
                 expected: "interrupt-in",
-            }),
-        }
-    }
-
-    pub(crate) async fn endpoint_interrupt_out(
-        &mut self,
-        address: u8,
-    ) -> Result<EndpointInterruptOut, InterfaceEndpointError> {
-        match self.device.get_endpoint(address).await? {
-            EndpointKind::InterruptOut(endpoint) => Ok(endpoint),
-            _ => Err(InterfaceEndpointError::WrongKind {
-                address,
-                expected: "interrupt-out",
             }),
         }
     }

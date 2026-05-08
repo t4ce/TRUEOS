@@ -372,12 +372,14 @@ pub async fn midi_stream_task(mut device: Device, controller_id: u32, target: Mi
 
     let mut bulk_in = match interface.endpoint_bulk_in(target.ep_in.addr).await {
         Ok(ep) => ep,
-        Err(InterfaceEndpointError::WrongKind { .. }) => {
+        Err(InterfaceEndpointError::WrongKind { address, expected }) => {
             crate::log!(
-                "crabusb: midi {:04X}:{:04X} bulk_in kind mismatch ep=0x{:02X}\n",
+                "crabusb: midi {:04X}:{:04X} bulk_in kind mismatch ep=0x{:02X} got=0x{:02X} expected={}\n",
                 vendor_id,
                 product_id,
-                target.ep_in.addr
+                target.ep_in.addr,
+                address,
+                expected
             );
             unregister_active_midi_stream(active_stream);
             return;
@@ -398,12 +400,14 @@ pub async fn midi_stream_task(mut device: Device, controller_id: u32, target: Mi
     let bulk_out_opened = match target.ep_out {
         Some(ep_out) => match interface.endpoint_bulk_out(ep_out.addr).await {
             Ok(_ep) => true,
-            Err(InterfaceEndpointError::WrongKind { .. }) => {
+            Err(InterfaceEndpointError::WrongKind { address, expected }) => {
                 crate::log!(
-                    "crabusb: midi {:04X}:{:04X} bulk_out kind mismatch ep=0x{:02X}\n",
+                    "crabusb: midi {:04X}:{:04X} bulk_out kind mismatch ep=0x{:02X} got=0x{:02X} expected={}\n",
                     vendor_id,
                     product_id,
-                    ep_out.addr
+                    ep_out.addr,
+                    address,
+                    expected
                 );
                 false
             }
