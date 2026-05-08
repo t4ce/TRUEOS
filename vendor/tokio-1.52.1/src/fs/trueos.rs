@@ -1,7 +1,8 @@
 use crate::io::ReadBuf;
 use std::fmt;
+use std::fs::Metadata;
 use std::io::{self, Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 
 unsafe extern "C" {
@@ -27,11 +28,39 @@ unsafe extern "C" {
 
 fn path_bytes(path: &Path) -> io::Result<&[u8]> {
     path.to_str().map(str::as_bytes).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "TRUEOS fs CABI paths must be valid UTF-8",
-        )
+        io::Error::new(io::ErrorKind::InvalidInput, "TRUEOS fs CABI paths must be valid UTF-8")
     })
+}
+
+fn normalize_app_path(path: &Path) -> io::Result<PathBuf> {
+    let mut out = PathBuf::new();
+
+    for component in path.components() {
+        match component {
+            Component::CurDir | Component::RootDir => {}
+            Component::Normal(part) => out.push(part),
+            Component::ParentDir => {
+                if !out.pop() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "TRUEOS fs path escapes the blueprint app root",
+                    ));
+                }
+            }
+            Component::Prefix(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "TRUEOS fs paths do not support platform prefixes",
+                ));
+            }
+        }
+    }
+
+    if out.as_os_str().is_empty() {
+        Ok(PathBuf::from("/"))
+    } else {
+        Ok(PathBuf::from("/").join(out))
+    }
 }
 
 fn fs_status_to_io(rc: i32, op: &'static str) -> io::Error {
@@ -48,9 +77,8 @@ fn fs_status_to_io(rc: i32, op: &'static str) -> io::Error {
 
 fn read_sync(path: &Path) -> io::Result<Vec<u8>> {
     let path = path_bytes(path)?;
-    let len = unsafe {
-        trueos_cabi_fs_read_file(path.as_ptr(), path.len(), core::ptr::null_mut(), 0)
-    };
+    let len =
+        unsafe { trueos_cabi_fs_read_file(path.as_ptr(), path.len(), core::ptr::null_mut(), 0) };
     if len < 0 {
         return Err(fs_status_to_io(len as i32, "read.len"));
     }
@@ -71,12 +99,7 @@ fn write_sync(path: &Path, contents: &[u8]) -> io::Result<()> {
     let path = path_bytes(path)?;
     let mut handle = 0u32;
     let rc = unsafe {
-        trueos_cabi_fs_write_begin(
-            path.as_ptr(),
-            path.len(),
-            contents.len() as u64,
-            &mut handle,
-        )
+        trueos_cabi_fs_write_begin(path.as_ptr(), path.len(), contents.len() as u64, &mut handle)
     };
     if rc != 0 {
         return Err(fs_status_to_io(rc, "write_begin"));
@@ -180,7 +203,9 @@ impl TrueosOpenOptions {
 
         let mut data = match read_sync(&path) {
             Ok(bytes) => bytes,
-            Err(err) if err.kind() == io::ErrorKind::NotFound && (self.create || self.create_new) => {
+            Err(err)
+                if err.kind() == io::ErrorKind::NotFound && (self.create || self.create_new) =>
+            {
                 Vec::new()
             }
             Err(err) => return Err(err),
@@ -221,9 +246,10 @@ struct TrueosFileInner {
 
 impl TrueosFile {
     pub(crate) fn poll_read_into(&self, dst: &mut ReadBuf<'_>) -> io::Result<()> {
-        let mut inner = self.inner.lock().map_err(|_| {
-            io::Error::new(io::ErrorKind::Other, "TRUEOS fs file mutex poisoned")
-        })?;
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "TRUEOS fs file mutex poisoned"))?;
         if !inner.read {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
@@ -238,9 +264,10 @@ impl TrueosFile {
     }
 
     pub(crate) fn poll_write_from(&self, src: &[u8]) -> io::Result<usize> {
-        let mut inner = self.inner.lock().map_err(|_| {
-            io::Error::new(io::ErrorKind::Other, "TRUEOS fs file mutex poisoned")
-        })?;
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "TRUEOS fs file mutex poisoned"))?;
         if !inner.write {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
@@ -269,14 +296,17 @@ impl TrueosFile {
     }
 
     pub(crate) fn seek_inner(&self, pos: SeekFrom) -> io::Result<u64> {
-        let mut inner = self.inner.lock().map_err(|_| {
-            io::Error::new(io::ErrorKind::Other, "TRUEOS fs file mutex poisoned")
-        })?;
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "TRUEOS fs file mutex poisoned"))?;
         let base = match pos {
-            SeekFrom::Start(n) => return {
-                inner.pos = n;
-                Ok(n)
-            },
+            SeekFrom::Start(n) => {
+                return {
+                    inner.pos = n;
+                    Ok(n)
+                };
+            }
             SeekFrom::End(n) => inner.data.len() as i128 + n as i128,
             SeekFrom::Current(n) => inner.pos as i128 + n as i128,
         };
@@ -298,9 +328,10 @@ impl TrueosFile {
     }
 
     pub(crate) fn sync_all(&self) -> io::Result<()> {
-        let mut inner = self.inner.lock().map_err(|_| {
-            io::Error::new(io::ErrorKind::Other, "TRUEOS fs file mutex poisoned")
-        })?;
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "TRUEOS fs file mutex poisoned"))?;
         if inner.dirty {
             write_sync(&inner.path, &inner.data)?;
             inner.dirty = false;
@@ -316,9 +347,10 @@ impl TrueosFile {
         let size = usize::try_from(size).map_err(|_| {
             io::Error::new(io::ErrorKind::InvalidInput, "TRUEOS fs length is too large")
         })?;
-        let mut inner = self.inner.lock().map_err(|_| {
-            io::Error::new(io::ErrorKind::Other, "TRUEOS fs file mutex poisoned")
-        })?;
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "TRUEOS fs file mutex poisoned"))?;
         if !inner.write {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
@@ -341,9 +373,10 @@ impl TrueosFile {
     }
 
     pub(crate) fn try_clone(&self) -> io::Result<TrueosFile> {
-        let inner = self.inner.lock().map_err(|_| {
-            io::Error::new(io::ErrorKind::Other, "TRUEOS fs file mutex poisoned")
-        })?;
+        let inner = self
+            .inner
+            .lock()
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "TRUEOS fs file mutex poisoned"))?;
         Ok(TrueosFile {
             inner: Mutex::new(TrueosFileInner {
                 path: inner.path.clone(),
@@ -379,9 +412,10 @@ impl fmt::Debug for TrueosFile {
 
 impl Read for &TrueosFile {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let mut inner = self.inner.lock().map_err(|_| {
-            io::Error::new(io::ErrorKind::Other, "TRUEOS fs file mutex poisoned")
-        })?;
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "TRUEOS fs file mutex poisoned"))?;
         if !inner.read {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
@@ -419,10 +453,7 @@ pub(crate) async fn read(path: &Path) -> io::Result<Vec<u8>> {
 pub(crate) async fn read_to_string(path: &Path) -> io::Result<String> {
     let bytes = read(path).await?;
     String::from_utf8(bytes).map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            "TRUEOS fs CABI file is not valid UTF-8",
-        )
+        io::Error::new(io::ErrorKind::InvalidData, "TRUEOS fs CABI file is not valid UTF-8")
     })
 }
 
@@ -445,6 +476,29 @@ pub(crate) async fn create_dir_all(path: &Path) -> io::Result<()> {
 
 pub(crate) async fn try_exists(path: &Path) -> io::Result<bool> {
     exists_sync(path)
+}
+
+pub(crate) async fn canonicalize(path: &Path) -> io::Result<PathBuf> {
+    let canonical = normalize_app_path(path)?;
+    if canonical == Path::new("/") {
+        return Ok(canonical);
+    }
+
+    if !exists_sync(&canonical)? {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "TRUEOS fs canonicalize target does not exist",
+        ));
+    }
+
+    Ok(canonical)
+}
+
+pub(crate) async fn metadata(_path: &Path) -> io::Result<Metadata> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "TRUEOS fs metadata is not exposed through CABI yet",
+    ))
 }
 
 pub(crate) async fn remove_file(path: &Path) -> io::Result<()> {

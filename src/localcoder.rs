@@ -11,6 +11,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
+use tokio::fs as async_fs;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
@@ -124,7 +125,23 @@ struct CommandPlan {
 }
 
 pub async fn status() -> LocalCoderStatusResponse {
-    status_sync()
+    let report = discover_binary_async().await;
+    match report.binary {
+        Some(binary) => LocalCoderStatusResponse {
+            available: true,
+            bin_path: Some(path_to_string(&binary.path)),
+            source: Some(binary.source),
+            message: None,
+            checked_candidates: report.checked_candidates,
+        },
+        None => LocalCoderStatusResponse {
+            available: false,
+            bin_path: None,
+            source: None,
+            message: Some("localcoder executable not found".to_string()),
+            checked_candidates: report.checked_candidates,
+        },
+    }
 }
 
 pub fn status_sync() -> LocalCoderStatusResponse {
@@ -150,7 +167,7 @@ pub fn status_sync() -> LocalCoderStatusResponse {
 pub async fn chat(
     request: LocalCoderChatRequest,
 ) -> Result<LocalCoderChatResponse, LocalCoderError> {
-    let report = discover_binary();
+    let report = discover_binary_async().await;
     let Some(binary) = report.binary else {
         return Err(LocalCoderError {
             kind: LocalCoderErrorKind::Unavailable,
@@ -345,6 +362,63 @@ fn discover_binary() -> DiscoveryReport {
     }
 }
 
+async fn discover_binary_async() -> DiscoveryReport {
+    let mut checked_candidates = Vec::new();
+
+    if let Some(configured) = env_os_nonempty(LOCALCODER_BIN_ENV) {
+        for path in executable_candidates_for_path(PathBuf::from(configured)) {
+            checked_candidates.push(path_to_string(&path));
+            if is_executable_file_async(&path).await {
+                return DiscoveryReport {
+                    binary: Some(DiscoveredBinary {
+                        path: canonical_or_original_async(path).await,
+                        source: LocalCoderBinSource::EnvVar,
+                    }),
+                    checked_candidates,
+                };
+            }
+        }
+    }
+
+    for candidate in RELATIVE_BIN_CANDIDATES {
+        for path in executable_candidates_for_path(PathBuf::from(candidate)) {
+            checked_candidates.push(path_to_string(&path));
+            if is_executable_file_async(&path).await {
+                return DiscoveryReport {
+                    binary: Some(DiscoveredBinary {
+                        path: canonical_or_original_async(path).await,
+                        source: LocalCoderBinSource::RelativeCandidate,
+                    }),
+                    checked_candidates,
+                };
+            }
+        }
+    }
+
+    if let Some(path_var) = env::var_os("PATH") {
+        for dir in env::split_paths(&path_var) {
+            for name in path_binary_names() {
+                let path = dir.join(name);
+                checked_candidates.push(path_to_string(&path));
+                if is_executable_file_async(&path).await {
+                    return DiscoveryReport {
+                        binary: Some(DiscoveredBinary {
+                            path: canonical_or_original_async(path).await,
+                            source: LocalCoderBinSource::Path,
+                        }),
+                        checked_candidates,
+                    };
+                }
+            }
+        }
+    }
+
+    DiscoveryReport {
+        binary: None,
+        checked_candidates,
+    }
+}
+
 fn split_args(input: &str) -> Result<Vec<String>, String> {
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum Quote {
@@ -479,8 +553,40 @@ fn is_executable_file(path: &Path) -> bool {
     }
 }
 
+async fn is_executable_file_async(path: &Path) -> bool {
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    {
+        async_fs::try_exists(path).await.unwrap_or(false)
+    }
+
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+    {
+        let Ok(metadata) = async_fs::metadata(path).await else {
+            return false;
+        };
+        if !metadata.is_file() {
+            return false;
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            metadata.permissions().mode() & 0o111 != 0
+        }
+
+        #[cfg(not(unix))]
+        {
+            true
+        }
+    }
+}
+
 fn canonical_or_original(path: PathBuf) -> PathBuf {
     fs::canonicalize(&path).unwrap_or(path)
+}
+
+async fn canonical_or_original_async(path: PathBuf) -> PathBuf {
+    async_fs::canonicalize(&path).await.unwrap_or(path)
 }
 
 fn path_to_string(path: &Path) -> String {

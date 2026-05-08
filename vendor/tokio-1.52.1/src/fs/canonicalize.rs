@@ -1,3 +1,4 @@
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use crate::fs::asyncify;
 
 use std::io;
@@ -45,5 +46,8 @@ use std::path::{Path, PathBuf};
 /// ```
 pub async fn canonicalize(path: impl AsRef<Path>) -> io::Result<PathBuf> {
     let path = path.as_ref().to_owned();
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    return crate::fs::trueos::canonicalize(&path).await;
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     asyncify(move || std::fs::canonicalize(path)).await
 }
