@@ -298,7 +298,6 @@ impl WsConnection {
                         self.closed = true;
                         None
                     }
-                    _ => None,
                 }
             }
             Err(_) => {

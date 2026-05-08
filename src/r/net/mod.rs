@@ -9,7 +9,7 @@ pub mod ports;
 pub mod socket_cabi;
 pub mod srv;
 
-pub use cli::{ftp, html, irc, json, ntp, pop3, smtp, ws};
+pub use cli::{ftp, html, json, ntp, smtp};
 pub use srv::sntp;
 
 use v::vnet as api;

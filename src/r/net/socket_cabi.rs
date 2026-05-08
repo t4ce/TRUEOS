@@ -490,7 +490,7 @@ pub extern "C" fn trueos_cabi_socket_tcp_send(
 
         match result {
             Ok(()) => sent = end,
-            Err(err) if sent != 0 => return sent as isize,
+            Err(_) if sent != 0 => return sent as isize,
             Err(err) => return err as isize,
         }
     }
