@@ -1,11 +1,13 @@
 use log::*;
-use std::{
+use core::{
     default::Default,
     fmt,
-    io::{Cursor, ErrorKind, Read, Write},
     mem,
     result::Result as StdResult,
-    str::Utf8Error,
+    str::{self, Utf8Error},
+};
+use std::{
+    io::{Cursor, ErrorKind, Read, Write},
     string::String,
 };
 
@@ -273,7 +275,7 @@ impl Frame {
     /// Get frame payload as `&str`.
     #[inline]
     pub fn to_text(&self) -> Result<&str, Utf8Error> {
-        std::str::from_utf8(&self.payload)
+        str::from_utf8(&self.payload)
     }
 
     /// Consume the frame into a closing frame.
@@ -375,7 +377,7 @@ impl Frame {
 
 impl fmt::Display for Frame {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use std::fmt::Write;
+        use core::fmt::Write;
 
         write!(
             f,

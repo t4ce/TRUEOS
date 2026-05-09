@@ -356,6 +356,7 @@ struct UasWriteFlight {
     tag: u16,
     lba: u32,
     blocks: u16,
+    data_offset: usize,
     bytes: usize,
     submitted_ms: u64,
     status: AllocVec<u8>,
@@ -468,6 +469,30 @@ pub(crate) async fn set_uas_skhynix_write_window_for_bench(
             rt.skhynix_write_window_max_inflight
         );
         Ok((cap, rt.skhynix_write_window_max_inflight))
+    }
+    .await;
+    register_runtime(rt);
+    result
+}
+
+pub(crate) async fn reset_uas_skhynix_transport_for_bench(
+    handle: block::DeviceHandle,
+    stage: &'static str,
+) -> block::Result<()> {
+    let Some(runtime_key) = mass_runtime_key_for_disk(handle) else {
+        return Err(block::Error::NotSupported);
+    };
+    let mut rt = take_runtime_wait(runtime_key)
+        .await
+        .ok_or(block::Error::NotReady)?;
+    let result = async {
+        if !matches!(rt.endpoints, UsbMassEndpoints::UasSkhynix { .. }) {
+            return Err(block::Error::NotSupported);
+        }
+        uas_skhynix_reset_transport(&mut rt, stage).await?;
+        rt.uas_dead_stream_mask = 0;
+        rt.io_success_streak = 0;
+        Ok(())
     }
     .await;
     register_runtime(rt);
@@ -676,24 +701,24 @@ async fn uas_bench_submit_read(
 async fn uas_bench_submit_write(
     command_out: &mut EndpointBulkOut,
     status_in: &mut EndpointBulkIn,
-    data_out: &mut EndpointBulkOut,
     tag: u16,
     lba: u32,
     blocks: u16,
-    data: &[u8],
+    data_offset: usize,
+    bytes: usize,
 ) -> block::Result<UasWriteFlight> {
     let mut status = alloc::vec![0u8; UAS_BENCH_STATUS_BYTES];
     let status_ticket = uas_bench_submit_status(status_in, tag, &mut status)?;
-    let data_ticket = uas_bench_submit_data_out(data_out, tag, data)?;
 
     let flight = UasWriteFlight {
         tag,
         lba,
         blocks,
-        bytes: data.len(),
+        data_offset,
+        bytes,
         submitted_ms: uas_bench_now_ms(),
         status,
-        data_ticket: Some(data_ticket),
+        data_ticket: None,
         status_ticket: Some(status_ticket),
         data_done: false,
         write_ready_seen: false,
@@ -863,6 +888,7 @@ async fn uas_bench_wait_one(
 fn uas_write_poll_flights(
     status_in: &mut EndpointBulkIn,
     data_out: &mut EndpointBulkOut,
+    source: &[u8],
     flights: &mut AllocVec<UasWriteFlight>,
     cx: &mut core::task::Context<'_>,
 ) -> block::Result<Option<UasWriteStep>> {
@@ -901,6 +927,56 @@ fn uas_write_poll_flights(
             }
 
             if !timed_out && step_err.is_none() {
+                if let Some(ticket) = flight.status_ticket {
+                    match status_in.poll_detached(ticket, cx) {
+                        Poll::Ready(Ok(got)) => {
+                            flight.status_ticket = None;
+                            let status = &flight.status[..got.min(flight.status.len())];
+                            match mass::classify_uas_write_status_iu("write-10", status, flight.tag)
+                            {
+                                Ok(mass::UasWriteStatusKind::WriteReady) => {
+                                    flight.write_ready_seen = true;
+                                }
+                                Ok(mass::UasWriteStatusKind::StatusGood) => {
+                                    if flight.write_ready_seen || flight.data_done {
+                                        flight.status_good_seen = true;
+                                    } else {
+                                        crate::log!(
+                                            "crabusb: mass uas-write-window status-before-write-ready tag=0x{:04X} lba={} bytes={}\n",
+                                            flight.tag,
+                                            flight.lba,
+                                            flight.bytes
+                                        );
+                                        step_err = Some(block::Error::Io);
+                                    }
+                                }
+                                Err(err) => step_err = Some(map_io_error(err)),
+                            }
+                        }
+                        Poll::Ready(Err(_)) => {
+                            step_err = Some(uas_bench_transfer_error("write-status-complete"));
+                        }
+                        Poll::Pending => {}
+                    }
+                }
+            }
+
+            if !timed_out && step_err.is_none() {
+                if flight.write_ready_seen && !flight.data_done && flight.data_ticket.is_none() {
+                    let start = flight.data_offset;
+                    let end = start.saturating_add(flight.bytes);
+                    if end > source.len() {
+                        step_err = Some(block::Error::OutOfBounds);
+                    } else {
+                        match uas_bench_submit_data_out(data_out, flight.tag, &source[start..end]) {
+                            Ok(ticket) => flight.data_ticket = Some(ticket),
+                            Err(err) => step_err = Some(err),
+                        }
+                    }
+                }
+            }
+
+            if !timed_out && step_err.is_none() {
                 if let Some(ticket) = flight.data_ticket {
                     match data_out.poll_detached(ticket, cx) {
                         Poll::Ready(Ok(got)) => {
@@ -920,31 +996,6 @@ fn uas_write_poll_flights(
                         }
                         Poll::Ready(Err(_)) => {
                             step_err = Some(uas_bench_transfer_error("write-data-complete"));
-                        }
-                        Poll::Pending => {}
-                    }
-                }
-            }
-
-            if !timed_out && step_err.is_none() {
-                if let Some(ticket) = flight.status_ticket {
-                    match status_in.poll_detached(ticket, cx) {
-                        Poll::Ready(Ok(got)) => {
-                            flight.status_ticket = None;
-                            let status = &flight.status[..got.min(flight.status.len())];
-                            match mass::classify_uas_write_status_iu("write-10", status, flight.tag)
-                            {
-                                Ok(mass::UasWriteStatusKind::WriteReady) => {
-                                    flight.write_ready_seen = true;
-                                }
-                                Ok(mass::UasWriteStatusKind::StatusGood) => {
-                                    flight.status_good_seen = true;
-                                }
-                                Err(err) => step_err = Some(map_io_error(err)),
-                            }
-                        }
-                        Poll::Ready(Err(_)) => {
-                            step_err = Some(uas_bench_transfer_error("write-status-complete"));
                         }
                         Poll::Pending => {}
                     }
@@ -998,11 +1049,12 @@ fn uas_write_poll_flights(
 async fn uas_write_wait_one(
     status_in: &mut EndpointBulkIn,
     data_out: &mut EndpointBulkOut,
+    source: &[u8],
     flights: &mut AllocVec<UasWriteFlight>,
 ) -> block::Result<Option<UasWriteStep>> {
     let mut tick = core::pin::pin!(Timer::after(EmbassyDuration::from_millis(UAS_BENCH_TICK_MS)));
     poll_fn(|cx| {
-        match uas_write_poll_flights(status_in, data_out, flights, cx) {
+        match uas_write_poll_flights(status_in, data_out, source, flights, cx) {
             Ok(Some(step)) => return Poll::Ready(Ok(Some(step))),
             Err(err) => return Poll::Ready(Err(err)),
             Ok(None) => {}
@@ -2287,7 +2339,11 @@ async fn write_blocks_uas_skhynix_windowed(
     let mut submitted_bytes = 0u64;
     let mut next_lba = lba;
     let mut flights: AllocVec<UasWriteFlight> = AllocVec::new();
-    let mut cwnd = 1usize;
+    let mut cwnd = if rt.skhynix_write_probe_fail_fast {
+        max_inflight
+    } else {
+        1
+    };
     let ssthresh = max_inflight;
     let mut additive_acks = 0usize;
     let mut writes_completed = 0u64;
@@ -2341,7 +2397,6 @@ async fn write_blocks_uas_skhynix_windowed(
                 let UsbMassEndpoints::UasSkhynix {
                     command_out,
                     status_in,
-                    data_out,
                     ..
                 } = endpoints
                 else {
@@ -2351,11 +2406,11 @@ async fn write_blocks_uas_skhynix_windowed(
                 match uas_bench_submit_write(
                     command_out,
                     status_in,
-                    data_out,
                     stream_tag,
                     next_lba as u32,
                     wanted_blocks as u16,
-                    &buf[off..end],
+                    off,
+                    bytes,
                 )
                 .await
                 {
@@ -2392,7 +2447,7 @@ async fn write_blocks_uas_skhynix_windowed(
                 uas_write_forget_pending(&mut flights);
                 return Err(block::Error::NotSupported);
             };
-            uas_write_wait_one(status_in, data_out, &mut flights).await
+            uas_write_wait_one(status_in, data_out, buf, &mut flights).await
         };
 
         let Some(step) = (match step {

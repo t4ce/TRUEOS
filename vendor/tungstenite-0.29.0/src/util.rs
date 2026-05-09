@@ -1,8 +1,8 @@
 //! Helper traits to ease non-blocking handling.
 
+use core::result::Result as StdResult;
 use std::{
     io::{Error as IoError, ErrorKind as IoErrorKind},
-    result::Result as StdResult,
 };
 
 use crate::error::Error;

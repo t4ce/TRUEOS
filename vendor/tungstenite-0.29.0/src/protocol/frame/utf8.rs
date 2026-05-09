@@ -1,6 +1,11 @@
 use bytes::{Bytes, BytesMut};
-use core::str;
-use std::fmt::Display;
+use core::{
+    borrow::Borrow,
+    cmp::Ordering,
+    fmt::{self, Display},
+    ops::Deref,
+    str,
+};
 
 /// Utf8 payload.
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
@@ -30,7 +35,7 @@ impl Utf8Bytes {
     }
 }
 
-impl std::ops::Deref for Utf8Bytes {
+impl Deref for Utf8Bytes {
     type Target = str;
 
     /// ```
@@ -72,7 +77,7 @@ impl AsRef<Bytes> for Utf8Bytes {
     }
 }
 
-impl std::borrow::Borrow<str> for Utf8Bytes {
+impl Borrow<str> for Utf8Bytes {
     fn borrow(&self) -> &str {
         self.as_str()
     }
@@ -85,13 +90,13 @@ impl core::hash::Hash for Utf8Bytes {
 }
 
 impl PartialOrd for Utf8Bytes {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for Utf8Bytes {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> Ordering {
         self.as_str().cmp(other.as_str())
     }
 }
@@ -115,7 +120,7 @@ where
 
 impl Display for Utf8Bytes {
     #[inline]
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }

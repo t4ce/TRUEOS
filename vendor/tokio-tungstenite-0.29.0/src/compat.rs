@@ -1,9 +1,9 @@
 use log::*;
-use std::{
-    io::{Read, Write},
+use core::{
     pin::Pin,
     task::{Context, Poll},
 };
+use std::io::{Read, Write};
 
 use futures_util::task;
 use std::sync::Arc;

@@ -1,13 +1,13 @@
 #[cfg(feature = "handshake")]
 use crate::compat::SetWaker;
 use crate::{compat::AllowStd, WebSocketStream};
-use log::*;
-use std::{
+use core::{
     future::Future,
-    io::{Read, Write},
     pin::Pin,
     task::{Context, Poll},
 };
+use log::*;
+use std::io::{Read, Write};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tungstenite::WebSocket;
 #[cfg(feature = "handshake")]

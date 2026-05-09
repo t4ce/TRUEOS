@@ -35,10 +35,10 @@ const UAS_RAMP_READ_CANDIDATES: [(usize, usize); 4] = [
 ];
 const UAS_RAMP_WRITE_CANDIDATES: [(usize, usize); 5] = [
     (1024 * 1024, 1),
-    (2 * 1024 * 1024, 1),
-    (4 * 1024 * 1024, 1),
-    (8 * 1024 * 1024, 1),
-    (8 * 1024 * 1024, 2),
+    (1024 * 1024, 2),
+    (1024 * 1024, 4),
+    (1024 * 1024, 8),
+    (512 * 1024, 4),
 ];
 const BENCH_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
 const BENCH_MENU_ROWS: [[&str; 2]; 4] = [
@@ -1092,6 +1092,9 @@ async fn uasbench_task(target: MatrixTarget, session_id: u64) {
                         )
                         .as_str(),
                     );
+                    let _ =
+                        crate::usb2::pen::reset_uas_skhynix_transport_for_bench(disk, "bench-write-fail")
+                            .await;
                     break;
                 }
             }) else {

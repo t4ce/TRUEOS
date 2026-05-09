@@ -5,9 +5,9 @@
 //! `Read + Write` traits.
 
 #[cfg(feature = "__rustls-tls")]
-use std::ops::Deref;
+use core::ops::Deref;
+use core::fmt::{self, Debug};
 use std::{
-    fmt::{self, Debug},
     io::{Read, Result as IoResult, Write},
 };
 

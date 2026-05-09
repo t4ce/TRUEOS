@@ -1,6 +1,8 @@
 //! Error handling.
 
-use std::{io, result, str, string};
+use alloc::string;
+use core::{result, str};
+use std::io;
 
 use crate::protocol::{frame::coding::Data, Message};
 #[cfg(feature = "handshake")]
@@ -318,19 +320,19 @@ impl From<rustls::Error> for TlsError {
 mod test {
     #[test]
     fn error_size() {
-        let size = std::mem::size_of::<crate::Error>();
+        let size = core::mem::size_of::<crate::Error>();
         assert!(size <= 32, "Error is large: {size}");
     }
 
     #[test]
     fn tls_error_size() {
-        let size = std::mem::size_of::<crate::error::TlsError>();
+        let size = core::mem::size_of::<crate::error::TlsError>();
         assert!(size <= 16, "TlsError is large: {size}");
     }
 
     #[test]
     fn protocol_error_size() {
-        let size = std::mem::size_of::<crate::error::ProtocolError>();
+        let size = core::mem::size_of::<crate::error::ProtocolError>();
         assert!(size <= 16, "ProtocolError is large: {size}");
     }
 }

@@ -1,9 +1,8 @@
 //! Server handshake machine.
 
+use core::{marker::PhantomData, result::Result as StdResult};
 use std::{
     io::{self, Read, Write},
-    marker::PhantomData,
-    result::Result as StdResult,
 };
 
 use http::{

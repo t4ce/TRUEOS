@@ -3,7 +3,7 @@ use crate::{
     error::{CapacityError, Error, Result},
     protocol::frame::Utf8Bytes,
 };
-use std::{fmt, result::Result as StdResult, str};
+use core::{fmt, result::Result as StdResult, str};
 
 mod string_collect {
     use crate::utf8::DecodeError;
