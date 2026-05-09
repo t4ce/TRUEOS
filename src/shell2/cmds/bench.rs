@@ -6,7 +6,7 @@ use core::str::SplitWhitespace;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use embassy_executor::Spawner;
-use embassy_time::{Duration as EmbassyDuration, Instant, Timer, with_timeout};
+use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use v::vnet as api;
 
 use super::super::{

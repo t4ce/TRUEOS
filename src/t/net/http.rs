@@ -4,17 +4,13 @@ extern crate std;
 use crate::r::net::NetProfile;
 use crate::r::net::VNet;
 use crate::t::net::dns::{self, DnsConfig};
-use crate::t::net::hyper_io::HyperTokioIo;
+use crate::t::net::hyper_io::{HyperBytesBody, HyperTokioIo};
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use core::{
-    convert::Infallible,
-    pin::Pin,
-    task::{Context, Poll},
-};
+use core::pin::Pin;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use heapless::String as HString;
-use hyper::body::{Body, Bytes, Frame, SizeHint};
+use hyper::body::Body;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
 use v::vnet as api;
 
@@ -48,41 +44,6 @@ pub enum HttpFetchError {
     ResponseTooLarge,
     NoSpace,
     Truncated,
-}
-
-struct HyperBytesBody {
-    bytes: Option<Bytes>,
-}
-
-impl HyperBytesBody {
-    fn new(bytes: &[u8]) -> Self {
-        Self {
-            bytes: Some(Bytes::copy_from_slice(bytes)),
-        }
-    }
-}
-
-impl Body for HyperBytesBody {
-    type Data = Bytes;
-    type Error = Infallible;
-
-    fn poll_frame(
-        mut self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
-        Poll::Ready(self.bytes.take().map(|bytes| Ok(Frame::data(bytes))))
-    }
-
-    fn is_end_stream(&self) -> bool {
-        self.bytes.is_none()
-    }
-
-    fn size_hint(&self) -> SizeHint {
-        match self.bytes.as_ref() {
-            Some(bytes) => SizeHint::with_exact(bytes.len() as u64),
-            None => SizeHint::with_exact(0),
-        }
-    }
 }
 
 pub fn parse_http_url(url: &str) -> Result<ParsedHttpUrl, &'static str> {
@@ -142,34 +103,7 @@ pub fn parse_http_url(url: &str) -> Result<ParsedHttpUrl, &'static str> {
     })
 }
 
-pub(super) fn find_http_header_end(buf: &[u8]) -> Option<usize> {
-    buf.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4)
-}
-
-pub(super) fn parse_http_status(buf: &[u8]) -> Option<u16> {
-    if !buf.starts_with(b"HTTP/") {
-        return None;
-    }
-    let mut i = 0;
-    while i < buf.len() && buf[i] != b' ' {
-        i += 1;
-    }
-    while i < buf.len() && buf[i] == b' ' {
-        i += 1;
-    }
-    if i + 3 > buf.len() {
-        return None;
-    }
-    let a = *buf.get(i)?;
-    let b = *buf.get(i + 1)?;
-    let c = *buf.get(i + 2)?;
-    if !a.is_ascii_digit() || !b.is_ascii_digit() || !c.is_ascii_digit() {
-        return None;
-    }
-    Some(((a - b'0') as u16) * 100 + ((b - b'0') as u16) * 10 + ((c - b'0') as u16))
-}
-
-pub(super) fn header_get_value<'a>(headers: &'a [u8], name: &[u8]) -> Option<&'a [u8]> {
+fn header_get_value<'a>(headers: &'a [u8], name: &[u8]) -> Option<&'a [u8]> {
     let mut i = 0;
     while i < headers.len() {
         let line_start = i;
@@ -229,12 +163,6 @@ pub(super) fn header_contains_token(headers: &[u8], name: &[u8], token: &[u8]) -
     header_value_contains_token(v, token)
 }
 
-pub(super) fn header_parse_content_length(headers: &[u8]) -> Option<usize> {
-    let v = header_get_value(headers, b"content-length")?;
-    let v = core::str::from_utf8(v).ok()?;
-    v.trim().parse::<usize>().ok()
-}
-
 pub(super) fn decode_http_chunked(body: &[u8]) -> Option<Vec<u8>> {
     let mut out: Vec<u8> = Vec::new();
     let mut i = 0usize;
@@ -260,460 +188,8 @@ pub(super) fn decode_http_chunked(body: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum HttpBodyKind {
-    ContentLength(usize),
-    Chunked,
-    UntilClose,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct HttpHead {
-    pub(super) status: u16,
-    pub(super) body: HttpBodyKind,
-}
-
-pub(super) fn parse_http_head(headers: &[u8]) -> Option<HttpHead> {
-    let status = parse_http_status(headers)?;
-    if header_contains_token(headers, b"transfer-encoding", b"chunked") {
-        return Some(HttpHead {
-            status,
-            body: HttpBodyKind::Chunked,
-        });
-    }
-    if let Some(len) = header_parse_content_length(headers) {
-        return Some(HttpHead {
-            status,
-            body: HttpBodyKind::ContentLength(len),
-        });
-    }
-    Some(HttpHead {
-        status,
-        body: HttpBodyKind::UntilClose,
-    })
-}
-
 pub(super) fn is_redirect_status(status: u16) -> bool {
     matches!(status, 301 | 302 | 303 | 307 | 308)
-}
-
-pub(super) fn redirect_url_from_location(
-    current: &ParsedHttpUrl,
-    headers: &[u8],
-) -> Option<String> {
-    let loc = header_get_value(headers, b"location")?;
-    let loc = core::str::from_utf8(loc).ok()?.trim();
-    if loc.is_empty() {
-        return None;
-    }
-    if loc.starts_with("http://") || loc.starts_with("https://") {
-        return Some(String::from(loc));
-    }
-    if loc.starts_with('/') {
-        if current.port == 80 {
-            return Some(alloc::format!("http://{}{}", current.host, loc));
-        }
-        return Some(alloc::format!("http://{}:{}{}", current.host, current.port, loc));
-    }
-    None
-}
-
-async fn request_http_body(
-    method: &[u8],
-    url: &str,
-    extra_headers: &[(&str, &str)],
-    body: &[u8],
-    timeout_ms: u32,
-    max_rx: usize,
-) -> Result<Vec<u8>, HttpFetchError> {
-    let parsed = parse_http_url(url).map_err(|_| HttpFetchError::BadUrl)?;
-
-    let _ = crate::r::readiness::wait_for_timeout(
-        crate::r::readiness::NET_ANY_CONFIGURED,
-        EmbassyDuration::from_secs(3),
-    )
-    .await;
-
-    let profile = NetProfile::default();
-    let ip = if let Some(ip) = parse_ipv4_literal(parsed.host.as_str()) {
-        ip
-    } else {
-        let Ok(ip) = dns::resolve_ipv4_with_profile(
-            parsed.host.as_str(),
-            profile,
-            DnsConfig::for_profile(profile),
-        )
-        .await
-        else {
-            return Err(HttpFetchError::DnsFailed);
-        };
-        ip
-    };
-
-    let net = loop {
-        if let Some(v) = VNet::open_with_profile(profile) {
-            break v;
-        }
-        Timer::after(EmbassyDuration::from_millis(50)).await;
-    };
-
-    let mut open_sent = false;
-    for _ in 0..64 {
-        if net
-            .submit(api::Command::OpenTcpConnect {
-                remote: api::EndpointV4 {
-                    addr: ip,
-                    port: parsed.port,
-                },
-            })
-            .is_ok()
-        {
-            open_sent = true;
-            if crate::logflag::VHTTPS_VERBOSE {
-                crate::log!(
-                    "http: open-submitted host={} ip={}.{}.{}.{} port={}\n",
-                    parsed.host,
-                    ip[0],
-                    ip[1],
-                    ip[2],
-                    ip[3],
-                    parsed.port,
-                );
-            }
-            break;
-        }
-        Timer::after(EmbassyDuration::from_millis(1)).await;
-    }
-    if !open_sent {
-        crate::log!("http: open failed host={} port={}\n", parsed.host, parsed.port);
-        return Err(HttpFetchError::TimedOut);
-    }
-
-    let mut tcp_handle: Option<api::NetHandle> = None;
-    let mut saw_opened = false;
-    let mut saw_established = false;
-    let mut sent_request = false;
-    let mut send_submit_failures = 0u32;
-    let mut last_error: Option<&'static str> = None;
-    let mut rx: Vec<u8> = Vec::new();
-    let mut truncated = false;
-    let timeout_window = EmbassyDuration::from_millis(timeout_ms as u64);
-    let mut last_progress = Instant::now();
-
-    async fn send_tcp_all(net: &VNet, handle: api::NetHandle, data: &[u8]) -> Result<(), ()> {
-        for chunk in data.chunks(api::MAX_MSG) {
-            let mut sent = false;
-            for _ in 0..64 {
-                if net
-                    .submit(api::Command::SendTcp {
-                        handle,
-                        data: api::ByteBuf::from_slice_trunc(chunk),
-                    })
-                    .is_ok()
-                {
-                    sent = true;
-                    break;
-                }
-                Timer::after(EmbassyDuration::from_millis(1)).await;
-            }
-            if !sent {
-                return Err(());
-            }
-        }
-        Ok(())
-    }
-
-    loop {
-        for _ in 0..256 {
-            let Some(ev) = net.pop_event() else { break };
-            match ev {
-                api::Event::Opened { handle, kind } => {
-                    if matches!(kind, api::SocketKind::Tcp) {
-                        tcp_handle = Some(handle);
-                        saw_opened = true;
-                        last_progress = Instant::now();
-                        if crate::logflag::VHTTPS_VERBOSE {
-                            crate::log!(
-                                "http: opened host={} port={} handle={}\n",
-                                parsed.host,
-                                parsed.port,
-                                handle.0,
-                            );
-                        }
-                    }
-                }
-                api::Event::TcpEstablished { handle } => {
-                    if tcp_handle.is_none() {
-                        tcp_handle = Some(handle);
-                    }
-                    if tcp_handle != Some(handle) {
-                        continue;
-                    }
-                    saw_established = true;
-                    if crate::logflag::VHTTPS_VERBOSE {
-                        crate::log!(
-                            "http: established host={} port={} handle={}\n",
-                            parsed.host,
-                            parsed.port,
-                            handle.0,
-                        );
-                    }
-                    if !sent_request {
-                        let mut req: Vec<u8> = Vec::new();
-                        req.extend_from_slice(method);
-                        req.extend_from_slice(b" ");
-                        req.extend_from_slice(parsed.path.as_str().as_bytes());
-                        req.extend_from_slice(b" HTTP/1.1\r\nHost: ");
-                        req.extend_from_slice(parsed.host.as_str().as_bytes());
-                        req.extend_from_slice(
-                            b"\r\nUser-Agent: TRUEOS\r\nAccept: */*\r\nConnection: close\r\n",
-                        );
-                        if !body.is_empty() {
-                            req.extend_from_slice(b"Content-Length: ");
-                            req.extend_from_slice(alloc::format!("{}", body.len()).as_bytes());
-                            req.extend_from_slice(b"\r\n");
-                        }
-                        for (name, value) in extra_headers.iter().copied() {
-                            req.extend_from_slice(name.as_bytes());
-                            req.extend_from_slice(b": ");
-                            req.extend_from_slice(value.as_bytes());
-                            req.extend_from_slice(b"\r\n");
-                        }
-                        req.extend_from_slice(b"\r\n");
-                        req.extend_from_slice(body);
-
-                        if let Some(h) = tcp_handle {
-                            if send_tcp_all(&net, h, req.as_slice()).await.is_ok() {
-                                sent_request = true;
-                                last_progress = Instant::now();
-                                if crate::logflag::VHTTPS_VERBOSE {
-                                    crate::log!(
-                                        "http: request-sent host={} ip={}.{}.{}.{} port={} handle={} method={} path={} req_len={} body_len={} extra_headers={}\n",
-                                        parsed.host,
-                                        ip[0],
-                                        ip[1],
-                                        ip[2],
-                                        ip[3],
-                                        parsed.port,
-                                        h.0,
-                                        if method == b"POST" { "POST" } else { "GET" },
-                                        parsed.path,
-                                        req.len(),
-                                        body.len(),
-                                        extra_headers.len(),
-                                    );
-                                }
-                            } else {
-                                send_submit_failures = send_submit_failures.saturating_add(1);
-                                last_error = Some("request submit failed");
-                                crate::log!(
-                                    "http: request submit failed host={} handle={}\n",
-                                    parsed.host,
-                                    h.0
-                                );
-                            }
-                        }
-                    }
-                }
-                api::Event::TcpData { handle, data } => {
-                    if tcp_handle != Some(handle) {
-                        continue;
-                    }
-                    let data = data.as_slice();
-                    if !data.is_empty() {
-                        if crate::logflag::VHTTPS_VERBOSE && rx.is_empty() {
-                            crate::log!(
-                                "http: first-data host={} port={} handle={} bytes={}\n",
-                                parsed.host,
-                                parsed.port,
-                                handle.0,
-                                data.len(),
-                            );
-                        }
-                        last_progress = Instant::now();
-                    }
-                    if rx.len() < max_rx {
-                        let room = max_rx - rx.len();
-                        let take = data.len().min(room);
-                        rx.extend_from_slice(&data[..take]);
-                        if take < data.len() {
-                            truncated = true;
-                        }
-                    } else {
-                        truncated = true;
-                    }
-
-                    if let Some(hdr_end) = find_http_header_end(&rx) {
-                        let headers = &rx[..hdr_end];
-                        let status = parse_http_status(headers).unwrap_or(0);
-                        if crate::logflag::VHTTPS_VERBOSE {
-                            let content_length = header_parse_content_length(headers).unwrap_or(0);
-                            let chunked =
-                                header_contains_token(headers, b"transfer-encoding", b"chunked");
-                            crate::log!(
-                                "http: headers host={} port={} handle={} status={} hdr_bytes={} body_bytes={} chunked={} content_length={}\n",
-                                parsed.host,
-                                parsed.port,
-                                handle.0,
-                                status,
-                                hdr_end,
-                                rx.len().saturating_sub(hdr_end),
-                                chunked as u8,
-                                content_length,
-                            );
-                        }
-                        if is_redirect_status(status) {
-                            if let Some(next) = redirect_url_from_location(&parsed, headers) {
-                                if let Some(h) = tcp_handle {
-                                    let _ = net.submit(api::Command::Close { handle: h });
-                                }
-                                return Err(HttpFetchError::Redirect(next));
-                            }
-                        }
-                        if status >= 400 {
-                            if let Some(h) = tcp_handle {
-                                let _ = net.submit(api::Command::Close { handle: h });
-                            }
-                            return Err(HttpFetchError::HttpStatus(status));
-                        }
-                        if let Some(head) = parse_http_head(headers) {
-                            match head.body {
-                                HttpBodyKind::ContentLength(len) => {
-                                    let body_len = rx.len().saturating_sub(hdr_end);
-                                    if body_len >= len {
-                                        if let Some(h) = tcp_handle {
-                                            let _ = net.submit(api::Command::Close { handle: h });
-                                        }
-                                        if truncated {
-                                            return Err(HttpFetchError::ResponseTooLarge);
-                                        }
-                                        return Ok(rx[hdr_end..hdr_end + len].to_vec());
-                                    }
-                                }
-                                HttpBodyKind::Chunked => {
-                                    if let Some(body) = decode_http_chunked(&rx[hdr_end..]) {
-                                        if let Some(h) = tcp_handle {
-                                            let _ = net.submit(api::Command::Close { handle: h });
-                                        }
-                                        if truncated {
-                                            return Err(HttpFetchError::ResponseTooLarge);
-                                        }
-                                        return Ok(body);
-                                    }
-                                }
-                                HttpBodyKind::UntilClose => {}
-                            }
-                        }
-                    }
-                }
-                api::Event::Closed { handle } => {
-                    if tcp_handle == Some(handle) {
-                        if crate::logflag::VHTTPS_VERBOSE {
-                            crate::log!(
-                                "http: closed host={} port={} handle={} rx_bytes={} hdr_end={}\n",
-                                parsed.host,
-                                parsed.port,
-                                handle.0,
-                                rx.len(),
-                                find_http_header_end(&rx).is_some() as u8,
-                            );
-                        }
-                        let Some(hdr_end) = find_http_header_end(&rx) else {
-                            crate::log!(
-                                "http: closed before complete headers host={} port={} rx_bytes={} last_error={}\n",
-                                parsed.host,
-                                parsed.port,
-                                rx.len(),
-                                last_error.unwrap_or("none"),
-                            );
-                            return Err(HttpFetchError::HttpStatus(0));
-                        };
-                        let Some(status) = parse_http_status(&rx) else {
-                            crate::log!(
-                                "http: closed with invalid status line host={} port={} rx_bytes={} last_error={}\n",
-                                parsed.host,
-                                parsed.port,
-                                rx.len(),
-                                last_error.unwrap_or("none"),
-                            );
-                            return Err(HttpFetchError::HttpStatus(0));
-                        };
-                        if is_redirect_status(status) {
-                            if let Some(next) = redirect_url_from_location(&parsed, &rx[..hdr_end])
-                            {
-                                return Err(HttpFetchError::Redirect(next));
-                            }
-                        }
-                        if status >= 400 {
-                            return Err(HttpFetchError::HttpStatus(status));
-                        }
-                        let body = rx.split_off(hdr_end);
-                        if truncated {
-                            return Err(HttpFetchError::ResponseTooLarge);
-                        }
-                        return Ok(body);
-                    }
-                }
-                api::Event::Error { msg } => {
-                    last_error = Some(msg);
-                    if crate::logflag::VHTTPS_VERBOSE {
-                        crate::log!(
-                            "http: event-error host={} port={} msg={}\n",
-                            parsed.host,
-                            parsed.port,
-                            msg,
-                        );
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        if Instant::now().saturating_duration_since(last_progress) >= timeout_window {
-            if let Some(h) = tcp_handle {
-                let _ = net.submit(api::Command::Close { handle: h });
-            }
-            let phase = if !saw_opened {
-                "waiting-open"
-            } else if !saw_established {
-                "waiting-establish"
-            } else if !sent_request {
-                "waiting-send-submit"
-            } else if rx.is_empty() {
-                "waiting-response"
-            } else {
-                "receiving-response"
-            };
-            crate::log!(
-                "http: timeout host={} ip={}.{}.{}.{} port={} handle={} phase={} sent_request={} rx_bytes={} hdr_end={} idle_ms={} send_submit_failures={} last_error={}\n",
-                parsed.host,
-                ip[0],
-                ip[1],
-                ip[2],
-                ip[3],
-                parsed.port,
-                tcp_handle.map(|h| h.0).unwrap_or(0),
-                phase,
-                sent_request as u8,
-                rx.len(),
-                find_http_header_end(&rx).is_some() as u8,
-                timeout_ms,
-                send_submit_failures,
-                last_error.unwrap_or("none"),
-            );
-            return Err(HttpFetchError::TimedOut);
-        }
-
-        Timer::after(EmbassyDuration::from_millis(50)).await;
-    }
-}
-
-pub async fn fetch_http_body(
-    url: &str,
-    timeout_ms: u32,
-    max_rx: usize,
-) -> Result<Vec<u8>, HttpFetchError> {
-    request_http_body(b"GET", url, &[], &[], timeout_ms, max_rx).await
 }
 
 async fn send_tcp_all_hyper_bridge(
@@ -787,7 +263,7 @@ async fn tcp_duplex_bridge(
     Ok(())
 }
 
-async fn connect_hyper_tcp_stream(
+pub(super) async fn connect_hyper_tcp_stream(
     parsed: &ParsedHttpUrl,
     timeout_ms: u32,
 ) -> Result<DuplexStream, HttpFetchError> {
@@ -898,7 +374,7 @@ async fn connect_hyper_tcp_stream(
     Ok(client_io)
 }
 
-fn hyper_redirect_url_from_location(
+pub(super) fn hyper_redirect_url_from_location(
     current: &ParsedHttpUrl,
     headers: &hyper::HeaderMap,
 ) -> Option<String> {
@@ -925,8 +401,27 @@ pub async fn post_http_body_hyper(
     timeout_ms: u32,
     max_rx: usize,
 ) -> Result<Vec<u8>, HttpFetchError> {
-    request_http_body_hyper(hyper::Method::POST, url, content_type, body_bytes, timeout_ms, max_rx)
-        .await
+    post_http_body_hyper_with_headers(url, content_type, &[], body_bytes, timeout_ms, max_rx).await
+}
+
+pub async fn post_http_body_hyper_with_headers(
+    url: &str,
+    content_type: &str,
+    extra_headers: &[(&str, &str)],
+    body_bytes: &[u8],
+    timeout_ms: u32,
+    max_rx: usize,
+) -> Result<Vec<u8>, HttpFetchError> {
+    request_http_body_hyper(
+        hyper::Method::POST,
+        url,
+        content_type,
+        extra_headers,
+        body_bytes,
+        timeout_ms,
+        max_rx,
+    )
+    .await
 }
 
 pub async fn fetch_http_body_hyper(
@@ -934,13 +429,14 @@ pub async fn fetch_http_body_hyper(
     timeout_ms: u32,
     max_rx: usize,
 ) -> Result<Vec<u8>, HttpFetchError> {
-    request_http_body_hyper(hyper::Method::GET, url, "", &[], timeout_ms, max_rx).await
+    request_http_body_hyper(hyper::Method::GET, url, "", &[], &[], timeout_ms, max_rx).await
 }
 
 async fn request_http_body_hyper(
     method: hyper::Method,
     url: &str,
     content_type: &str,
+    extra_headers: &[(&str, &str)],
     body_bytes: &[u8],
     timeout_ms: u32,
     max_rx: usize,
@@ -972,6 +468,9 @@ async fn request_http_body_hyper(
         builder = builder
             .header(hyper::header::CONTENT_TYPE, content_type)
             .header(hyper::header::CONTENT_LENGTH, body_bytes.len().to_string());
+    }
+    for (name, value) in extra_headers {
+        builder = builder.header(*name, *value);
     }
     let request = builder
         .body(HyperBytesBody::new(body_bytes))
@@ -1019,14 +518,4 @@ async fn request_http_body_hyper(
     let _ = tokio::time::timeout(core::time::Duration::from_millis(250), connection).await;
     crate::log!("http-hyper: body-complete host={} bytes={}\n", parsed.host, out.len());
     Ok(out)
-}
-
-pub async fn post_http_body(
-    url: &str,
-    extra_headers: &[(&str, &str)],
-    body: &[u8],
-    timeout_ms: u32,
-    max_rx: usize,
-) -> Result<Vec<u8>, HttpFetchError> {
-    request_http_body(b"POST", url, extra_headers, body, timeout_ms, max_rx).await
 }

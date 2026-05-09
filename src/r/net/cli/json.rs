@@ -8,7 +8,9 @@ use alloc::{
     vec::Vec,
 };
 
-use crate::t::net::https::{FetchError, fetch_https_body_hyper_async, post_https_json_async};
+use crate::t::net::https::{
+    FetchError, fetch_https_body_hyper_async, post_https_json_hyper_async,
+};
 
 #[derive(Clone, Debug)]
 pub enum JsonError {
@@ -128,7 +130,7 @@ impl JsonClient {
             return Err(JsonError::EmptyUrl);
         }
 
-        let body = post_https_json_async(
+        let body = post_https_json_hyper_async(
             url,
             String::from(body_json),
             self.auth_token.as_deref(),
@@ -145,7 +147,7 @@ impl JsonClient {
             return Err(JsonError::EmptyUrl);
         }
 
-        post_https_json_async(
+        post_https_json_hyper_async(
             url,
             String::from(body_json),
             self.auth_token.as_deref(),

@@ -3,7 +3,7 @@ extern crate std;
 
 use super::dns::{self, DnsConfig};
 use super::http::{self, HttpFetchError};
-use super::hyper_io::{HyperEmptyBody, HyperTokioIo};
+use super::hyper_io::{HyperBytesBody, HyperTokioIo};
 use crate::net::tls::{TlsClientConfig, TlsRoots};
 use crate::net::tls_socket::{TlsCommand, TlsEvent, register_tls_app_queues};
 use crate::r::io::cabi::{
@@ -14,9 +14,14 @@ use crate::r::io::cabi::{
 };
 use crate::r::net::{NetProfile, Queue};
 use crate::wait::WaitQueue;
-use alloc::{boxed::Box, collections::BTreeMap, format, string::String, vec::Vec};
+use alloc::{
+    boxed::Box,
+    collections::BTreeMap,
+    format,
+    string::{String, ToString},
+    vec::Vec,
+};
 use core::{
-    fmt::Write as _,
     pin::Pin,
     sync::atomic::{AtomicU8, AtomicU32, AtomicUsize, Ordering},
 };
@@ -997,7 +1002,7 @@ fn spawn_cabi_net_prewarm_url(url: String) {
     });
 }
 
-/// Errors returned by [`fetch_https_body_async`].
+/// Errors returned by hyper HTTPS fetch helpers.
 #[derive(Clone, Debug)]
 pub enum FetchError {
     NoNic,
@@ -1011,14 +1016,6 @@ pub enum FetchError {
     Http(u16),
     Redirect { status: u16, url: String },
     ResponseTooLarge,
-}
-
-/// Progress callback for HTTPS body fetches.
-///
-/// `received` counts body bytes received so far (not including headers).
-/// `total` is the Content-Length when known.
-pub trait FetchProgress {
-    fn on_progress(&mut self, received: usize, total: Option<usize>);
 }
 
 #[inline]
@@ -1086,25 +1083,28 @@ async fn post_json_body_async(
     if url.starts_with("http://") {
         let auth_header = bearer.map(|token| alloc::format!("Bearer {}", token));
         let headers_with_auth = [
-            ("Content-Type", "application/json"),
             ("Accept", "application/json"),
             ("Authorization", auth_header.as_deref().unwrap_or_default()),
         ];
-        let headers_without_auth = [
-            ("Content-Type", "application/json"),
-            ("Accept", "application/json"),
-        ];
+        let headers_without_auth = [("Accept", "application/json")];
         let headers = if auth_header.is_some() {
             &headers_with_auth[..]
         } else {
             &headers_without_auth[..]
         };
-        return http::post_http_body(url, headers, body_json.as_bytes(), timeout_ms, max_bytes)
-            .await
-            .map_err(http_fetch_error_to_code);
+        return http::post_http_body_hyper_with_headers(
+            url,
+            "application/json",
+            headers,
+            body_json.as_bytes(),
+            timeout_ms,
+            max_bytes,
+        )
+        .await
+        .map_err(http_fetch_error_to_code);
     }
 
-    post_https_json_async(url, body_json, bearer, timeout_ms, max_bytes)
+    post_https_json_hyper_async(url, body_json, bearer, timeout_ms, max_bytes)
         .await
         .map_err(fetch_error_to_code)
 }
@@ -1112,32 +1112,6 @@ async fn post_json_body_async(
 #[inline]
 fn is_redirect_status(status: u16) -> bool {
     matches!(status, 301 | 302 | 303 | 307 | 308)
-}
-
-fn redirect_url_from_location(current: &ParsedHttpsUrl, headers: &[u8]) -> Option<String> {
-    let loc = header_get_value(headers, b"location")?;
-    let loc = core::str::from_utf8(loc).ok()?.trim();
-    if loc.is_empty() {
-        return None;
-    }
-
-    // Only follow HTTPS redirects.
-    if loc.starts_with("https://") {
-        return Some(String::from(loc));
-    }
-    if loc.starts_with("http://") {
-        return None;
-    }
-
-    // Origin-relative redirect: "/path".
-    if loc.starts_with('/') {
-        if current.port == 443 {
-            return Some(format!("https://{}{}", current.host, loc));
-        }
-        return Some(format!("https://{}:{}{}", current.host, current.port, loc));
-    }
-
-    None
 }
 
 fn normalize_rel(path: &str, allow_empty: bool) -> Result<String, i32> {
@@ -1182,62 +1156,6 @@ struct ParsedHttpsUrl {
     path: String,
 }
 
-#[derive(Clone, Copy)]
-enum HttpRequestMethod {
-    Get,
-    Post,
-}
-
-#[derive(Clone, Copy)]
-enum HttpConnectionMode {
-    Close,
-}
-
-struct HttpRequestSpec<'a> {
-    method: HttpRequestMethod,
-    host: &'a str,
-    path: &'a str,
-    connection: HttpConnectionMode,
-    accept: &'a str,
-    accept_encoding_identity: bool,
-    content_type: Option<&'a str>,
-    body: Option<&'a str>,
-    auth_bearer: Option<&'a str>,
-}
-
-fn build_http_request(spec: HttpRequestSpec<'_>) -> String {
-    let method = match spec.method {
-        HttpRequestMethod::Get => "GET",
-        HttpRequestMethod::Post => "POST",
-    };
-    let connection = match spec.connection {
-        HttpConnectionMode::Close => "close",
-    };
-
-    let mut req = String::new();
-    let _ = write!(
-        &mut req,
-        "{} {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS vhttps\r\nConnection: {}\r\n",
-        method, spec.path, spec.host, connection,
-    );
-    if let Some(content_type) = spec.content_type {
-        let _ = write!(&mut req, "Content-Type: {}\r\n", content_type);
-    }
-    let _ = write!(&mut req, "Accept: {}\r\n", spec.accept);
-    if spec.accept_encoding_identity {
-        req.push_str("Accept-Encoding: identity\r\n");
-    }
-    if let Some(token) = spec.auth_bearer {
-        let _ = write!(&mut req, "Authorization: Bearer {}\r\n", token);
-    }
-    if let Some(body) = spec.body {
-        let _ = write!(&mut req, "Content-Length: {}\r\n\r\n{}", body.len(), body);
-    } else {
-        req.push_str("\r\n");
-    }
-    req
-}
-
 fn parse_https_url(url: &str) -> Option<ParsedHttpsUrl> {
     let url = url.strip_prefix("https://")?;
 
@@ -1273,158 +1191,6 @@ fn parse_https_url(url: &str) -> Option<ParsedHttpsUrl> {
 
 fn leak_str(s: String) -> &'static str {
     Box::leak(s.into_boxed_str())
-}
-
-fn find_http_header_end(buf: &[u8]) -> Option<usize> {
-    buf.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4)
-}
-
-fn parse_http_status(buf: &[u8]) -> Option<u16> {
-    // Expect: HTTP/1.1 200 ...\r\n
-    if !buf.starts_with(b"HTTP/") {
-        return None;
-    }
-    let mut i = 0;
-    while i < buf.len() && buf[i] != b' ' {
-        i += 1;
-    }
-    while i < buf.len() && buf[i] == b' ' {
-        i += 1;
-    }
-    if i + 3 > buf.len() {
-        return None;
-    }
-    let a = *buf.get(i)?;
-    let b = *buf.get(i + 1)?;
-    let c = *buf.get(i + 2)?;
-    if !a.is_ascii_digit() || !b.is_ascii_digit() || !c.is_ascii_digit() {
-        return None;
-    }
-    Some(((a - b'0') as u16) * 100 + ((b - b'0') as u16) * 10 + ((c - b'0') as u16))
-}
-
-fn header_get_value<'a>(headers: &'a [u8], name: &[u8]) -> Option<&'a [u8]> {
-    // Case-insensitive header match. Returns trimmed value bytes.
-    let mut i = 0;
-    while i < headers.len() {
-        let line_start = i;
-        while i < headers.len() && headers[i] != b'\n' {
-            i += 1;
-        }
-        let mut line = &headers[line_start..i];
-        if i < headers.len() && headers[i] == b'\n' {
-            i += 1;
-        }
-        if let Some((&b'\r', rest)) = line.split_last() {
-            line = rest;
-        }
-        if line.is_empty() {
-            continue;
-        }
-        let Some(colon) = line.iter().position(|b| *b == b':') else {
-            continue;
-        };
-        let (k, mut v) = line.split_at(colon);
-        // Skip ':'
-        v = v.get(1..).unwrap_or(&[]);
-        if k.len() != name.len() {
-            continue;
-        }
-        if !k
-            .iter()
-            .zip(name.iter())
-            .all(|(a, b)| a.eq_ignore_ascii_case(b))
-        {
-            continue;
-        }
-        while !v.is_empty() && (v[0] == b' ' || v[0] == b'\t') {
-            v = &v[1..];
-        }
-        return Some(v);
-    }
-    None
-}
-
-fn header_value_contains_token(value: &[u8], token: &[u8]) -> bool {
-    let v = value
-        .iter()
-        .map(|b| b.to_ascii_lowercase())
-        .collect::<Vec<u8>>();
-    let t = token
-        .iter()
-        .map(|b| b.to_ascii_lowercase())
-        .collect::<Vec<u8>>();
-
-    v.split(|b| *b == b',' || *b == b' ' || *b == b'\t')
-        .any(|part| part == t.as_slice())
-}
-
-fn header_contains_token(headers: &[u8], name: &[u8], token: &[u8]) -> bool {
-    let Some(v) = header_get_value(headers, name) else {
-        return false;
-    };
-    header_value_contains_token(v, token)
-}
-
-fn header_parse_content_length(headers: &[u8]) -> Option<usize> {
-    let v = header_get_value(headers, b"content-length")?;
-    let v = core::str::from_utf8(v).ok()?;
-    v.trim().parse::<usize>().ok()
-}
-
-fn decode_http_chunked(body: &[u8]) -> Option<Vec<u8>> {
-    // Minimal chunked decoder. Returns decoded bytes if fully present.
-    let mut out: Vec<u8> = Vec::new();
-    let mut i = 0usize;
-
-    loop {
-        // Read chunk size line.
-        let line_end = body[i..].windows(2).position(|w| w == b"\r\n")?;
-        let line = &body[i..i + line_end];
-        i += line_end + 2;
-
-        // Strip extensions.
-        let line = line.split(|b| *b == b';').next().unwrap_or(line);
-        let line_str = core::str::from_utf8(line).ok()?;
-        let size = usize::from_str_radix(line_str.trim(), 16).ok()?;
-
-        if size == 0 {
-            // Ignore trailers; we're done.
-            return Some(out);
-        }
-
-        if i + size > body.len() {
-            return None;
-        }
-        out.extend_from_slice(&body[i..i + size]);
-        i += size;
-
-        // Expect CRLF after data.
-        if i + 2 > body.len() || &body[i..i + 2] != b"\r\n" {
-            return None;
-        }
-        i += 2;
-    }
-}
-
-fn decode_http_body_lossy(headers: &[u8], body: &[u8]) -> Vec<u8> {
-    if header_contains_token(headers, b"transfer-encoding", b"chunked") {
-        decode_http_chunked(body).unwrap_or_else(|| body.to_vec())
-    } else if let Some(len) = header_parse_content_length(headers) {
-        body.get(..len).unwrap_or(body).to_vec()
-    } else {
-        body.to_vec()
-    }
-}
-
-fn log_http_error_response(status: u16, headers: &[u8], body: &[u8]) {
-    let decoded_body = decode_http_body_lossy(headers, body);
-    crate::log!("vhttps: http_error status={} body_len={}\n", status, decoded_body.len());
-    if let Ok(s) = core::str::from_utf8(decoded_body.as_slice()) {
-        log_utf8_chunks("vhttps: http_error_body: ", s);
-    } else {
-        crate::log!("vhttps: http_error_body: [non-utf8]\n");
-    }
 }
 
 fn log_utf8_chunks(prefix: &str, s: &str) {
@@ -1685,10 +1451,35 @@ async fn fetch_on_device_hyper(
     timeout_ms: u32,
     max_bytes: usize,
 ) -> Result<Vec<u8>, FetchError> {
+    request_on_device_hyper(
+        parsed,
+        dev_idx,
+        hyper::Method::GET,
+        "*/*",
+        None,
+        &[],
+        None,
+        timeout_ms,
+        max_bytes,
+    )
+    .await
+}
+
+async fn request_on_device_hyper(
+    parsed: &ParsedHttpsUrl,
+    dev_idx: usize,
+    method: hyper::Method,
+    accept: &str,
+    content_type: Option<&str>,
+    body_bytes: &[u8],
+    auth_token: Option<&str>,
+    timeout_ms: u32,
+    max_bytes: usize,
+) -> Result<Vec<u8>, FetchError> {
     let stream = connect_hyper_tls_stream(parsed, dev_idx, timeout_ms).await?;
     crate::log!("vhttps-hyper: handshake begin host={}\n", parsed.host);
     let (mut sender, connection) =
-        hyper::client::conn::http1::handshake::<_, HyperEmptyBody>(HyperTokioIo::new(stream))
+        hyper::client::conn::http1::handshake::<_, HyperBytesBody>(HyperTokioIo::new(stream))
             .await
             .map_err(|_| FetchError::Tls)?;
     crate::log!("vhttps-hyper: handshake ok host={}\n", parsed.host);
@@ -1696,16 +1487,31 @@ async fn fetch_on_device_hyper(
 
     crate::log!("vhttps-hyper: sender ready begin host={}\n", parsed.host);
     sender.ready().await.map_err(|_| FetchError::BodyTimeout)?;
-    crate::log!("vhttps-hyper: request host={} path={}\n", parsed.host, parsed.path);
-    let request = hyper::Request::builder()
-        .method(hyper::Method::GET)
+    crate::log!(
+        "vhttps-hyper: request method={} host={} path={}\n",
+        method.as_str(),
+        parsed.host,
+        parsed.path
+    );
+    let mut builder = hyper::Request::builder()
+        .method(method)
         .uri(parsed.path.as_str())
         .header(hyper::header::HOST, parsed.host.as_str())
         .header(hyper::header::USER_AGENT, "TRUEOS hyper")
-        .header(hyper::header::ACCEPT, "*/*")
+        .header(hyper::header::ACCEPT, accept)
         .header(hyper::header::ACCEPT_ENCODING, "identity")
-        .header(hyper::header::CONNECTION, "close")
-        .body(HyperEmptyBody)
+        .header(hyper::header::CONNECTION, "close");
+    if !body_bytes.is_empty() {
+        builder = builder.header(hyper::header::CONTENT_LENGTH, body_bytes.len().to_string());
+        if let Some(content_type) = content_type {
+            builder = builder.header(hyper::header::CONTENT_TYPE, content_type);
+        }
+    }
+    if let Some(token) = auth_token {
+        builder = builder.header(hyper::header::AUTHORIZATION, format!("Bearer {}", token));
+    }
+    let request = builder
+        .body(HyperBytesBody::new(body_bytes))
         .map_err(|_| FetchError::BadUrl)?;
     let response = tokio::time::timeout(
         core::time::Duration::from_millis(timeout_ms as u64),
@@ -1754,509 +1560,6 @@ async fn fetch_on_device_hyper(
 
 static VHTTPS_SEQ: AtomicU32 = AtomicU32::new(1);
 
-// Keep vhttps logging minimal by default; verbose prints are useful for debugging
-// but can flood globalog during downloads.
-async fn fetch_on_device(
-    parsed: &ParsedHttpsUrl,
-    dev_idx: usize,
-    timeout_ms: u32,
-    max_bytes: usize,
-    body_json: Option<&str>,
-    auth_token: Option<&str>,
-    mut progress: Option<&mut dyn FetchProgress>,
-) -> Result<Vec<u8>, FetchError> {
-    // If the caller asked for progress updates, this is likely a large transfer.
-    // Avoid per-chunk logging (which floods globalog); emit a single completion line instead.
-    let want_done_log = progress.is_some();
-
-    let ip = match dns::resolve_ipv4_for_device(
-        dev_idx,
-        parsed.host.as_str(),
-        DnsConfig::for_device(dev_idx),
-    )
-    .await
-    {
-        Ok(ip) => ip,
-        Err(dns::DnsError::Timeout) => return Err(FetchError::DnsTimeout),
-        Err(_) => return Err(FetchError::DnsFailed),
-    };
-
-    let seq = VHTTPS_SEQ.fetch_add(1, Ordering::Relaxed);
-    // Suffix with a stable selector so tls-socket can pin the underlying TCP socket to the chosen NIC.
-    // Prefer PCI BDF (unique), otherwise fall back to VID:PID.
-    let selector = if let Some((bus, slot, func)) = crate::net::bdf_at(dev_idx) {
-        format!("{:02x}:{:02x}.{}", bus, slot, func)
-    } else if let Some((vid, pid)) = crate::net::pci_id_at(dev_idx) {
-        format!("{:04x}:{:04x}", vid, pid)
-    } else {
-        format!("{}", dev_idx)
-    };
-    let owner = leak_str(format!("vhttps-{}@{}", seq, selector));
-    let cmds_name = leak_str(format!("{}-tls-cmd", owner));
-    let evts_name = leak_str(format!("{}-tls-evt", owner));
-
-    // These queues can see a burst of TCP segments (small `TlsEvent::Data` packets).
-    // If the consumer drains too slowly, events may be dropped and large downloads can stall.
-    let cmds = Queue::new_leaked(cmds_name, 256);
-    let events = Queue::new_leaked(evts_name, 4096);
-    register_tls_app_queues(owner, cmds, events);
-
-    let roots = TlsRoots::mozilla();
-    let cfg = TlsClientConfig::new().with_alpn_protocols(&[b"http/1.1"]);
-    let server_name = leak_str(parsed.host.clone());
-
-    let start = Instant::now();
-    let total_deadline = start + EmbassyDuration::from_millis(timeout_ms as u64);
-    let connect_ms: u64 = (timeout_ms as u64 / 4).max(5_000);
-    let tls_ms: u64 = (timeout_ms as u64 / 4).max(5_000);
-    let connect_deadline = start + EmbassyDuration::from_millis(connect_ms);
-    // TLS can only start after TCP open; this is a best-effort wall clock deadline.
-    let tls_deadline = start + EmbassyDuration::from_millis(connect_ms.saturating_add(tls_ms));
-
-    let mut tls_handle: Option<vnet::NetHandle> = None;
-    let mut sent_connect = false;
-    let mut http_sent = false;
-    let mut logged_request_sent = false;
-    let mut logged_first_data = false;
-    let mut saw_any_data = false;
-    let mut saw_header_end = false;
-
-    // Capture plaintext up to (headers + body cap). We parse after close.
-    // Keep this bounded even if a server misbehaves.
-    let capture_cap = max_bytes.saturating_add(64 * 1024);
-    let mut plaintext: Vec<u8> = Vec::new();
-
-    // Once we've seen complete headers, try to finish early (without waiting for TCP/TLS close)
-    // when the response body is complete (Content-Length or chunked terminator).
-    let mut hdr_end_cached: Option<usize> = None;
-    let mut content_len_cached: Option<Option<usize>> = None;
-
-    // Rate-limit progress callbacks.
-    let mut last_progress: Instant = Instant::now();
-
-    let mut last_activity = Instant::now();
-
-    loop {
-        for ev in events.drain(1024) {
-            match ev {
-                TlsEvent::Opened { handle } => {
-                    last_activity = Instant::now();
-                    tls_handle = Some(handle);
-                }
-                TlsEvent::Connected { handle } => {
-                    last_activity = Instant::now();
-                    if tls_handle != Some(handle) {
-                        continue;
-                    }
-                    if !http_sent {
-                        let req = build_http_request(HttpRequestSpec {
-                            method: if body_json.is_some() {
-                                HttpRequestMethod::Post
-                            } else {
-                                HttpRequestMethod::Get
-                            },
-                            host: parsed.host.as_str(),
-                            path: parsed.path.as_str(),
-                            connection: HttpConnectionMode::Close,
-                            accept: "*/*",
-                            accept_encoding_identity: false,
-                            content_type: body_json.map(|_| "application/json"),
-                            body: body_json,
-                            auth_bearer: auth_token,
-                        });
-                        let _ = cmds.push(TlsCommand::Send {
-                            handle,
-                            data: req.into_bytes(),
-                        });
-                        http_sent = true;
-                        if !logged_request_sent {
-                            crate::log!(
-                                "vhttps: request-sent host={} dev={} handle={} bytes={} path={}\n",
-                                parsed.host,
-                                dev_idx,
-                                handle.0,
-                                if let Some(body) = body_json {
-                                    body.len()
-                                } else {
-                                    0
-                                },
-                                parsed.path
-                            );
-                            logged_request_sent = true;
-                        }
-                    }
-                }
-                TlsEvent::Data { handle, data } => {
-                    last_activity = Instant::now();
-                    if tls_handle != Some(handle) {
-                        continue;
-                    }
-                    if !data.is_empty() {
-                        saw_any_data = true;
-                        if !logged_first_data {
-                            crate::log!(
-                                "vhttps: first-data host={} dev={} handle={} bytes={}\n",
-                                parsed.host,
-                                dev_idx,
-                                handle.0,
-                                data.len()
-                            );
-                            logged_first_data = true;
-                        }
-                        let room = capture_cap.saturating_sub(plaintext.len());
-                        if room == 0 {
-                            if let Some(h) = tls_handle {
-                                let _ = cmds.push(TlsCommand::Close { handle: h });
-                            }
-                            return Err(FetchError::ResponseTooLarge);
-                        }
-                        let take = data.len().min(room);
-                        plaintext.extend_from_slice(&data[..take]);
-                        if take < data.len() {
-                            if let Some(h) = tls_handle {
-                                let _ = cmds.push(TlsCommand::Close { handle: h });
-                            }
-                            return Err(FetchError::ResponseTooLarge);
-                        }
-
-                        // If we have enough data to fully satisfy the response, finish now.
-                        let hdr_end = match hdr_end_cached {
-                            Some(v) => v,
-                            None => {
-                                let v = find_http_header_end(&plaintext);
-                                if let Some(v) = v {
-                                    hdr_end_cached = Some(v);
-                                }
-                                v.unwrap_or(0)
-                            }
-                        };
-
-                        // Progress reporting: once headers are known, report body byte count.
-                        if let Some(hdr_end) = hdr_end_cached
-                            && hdr_end != 0
-                        {
-                            saw_header_end = true;
-                            if content_len_cached.is_none() {
-                                let headers = &plaintext[..hdr_end];
-                                content_len_cached = Some(header_parse_content_length(headers));
-                            }
-
-                            if let Some(ref mut p) = progress {
-                                // Avoid spamming UI: update at most ~10Hz.
-                                let now = Instant::now();
-                                if now.saturating_duration_since(last_progress)
-                                    >= EmbassyDuration::from_millis(100)
-                                {
-                                    let body_len = plaintext.len().saturating_sub(hdr_end);
-                                    p.on_progress(body_len, content_len_cached.unwrap_or(None));
-                                    last_progress = now;
-                                }
-                            }
-                        }
-                        if hdr_end != 0 {
-                            let headers = &plaintext[..hdr_end];
-                            let body = &plaintext[hdr_end..];
-
-                            let status = parse_http_status(&plaintext).unwrap_or(0);
-                            if status != 200 {
-                                if is_redirect_status(status)
-                                    && let Some(next) = redirect_url_from_location(parsed, headers)
-                                {
-                                    if let Some(h) = tls_handle {
-                                        let _ = cmds.push(TlsCommand::Close { handle: h });
-                                    }
-                                    return Err(FetchError::Redirect { status, url: next });
-                                }
-
-                                // Log error bodies (often JSON) to aid debugging.
-                                log_http_error_response(status, headers, body);
-
-                                if let Some(h) = tls_handle {
-                                    let _ = cmds.push(TlsCommand::Close { handle: h });
-                                }
-                                return Err(FetchError::Http(status));
-                            }
-                            // 204 No Content
-                            if status == 204 {
-                                if let Some(h) = tls_handle {
-                                    let _ = cmds.push(TlsCommand::Close { handle: h });
-                                }
-                                return Ok(Vec::new());
-                            }
-
-                            let is_chunked =
-                                header_contains_token(headers, b"transfer-encoding", b"chunked");
-                            if is_chunked {
-                                if let Some(decoded) = decode_http_chunked(body) {
-                                    if decoded.len() > max_bytes {
-                                        if let Some(h) = tls_handle {
-                                            let _ = cmds.push(TlsCommand::Close { handle: h });
-                                        }
-                                        return Err(FetchError::ResponseTooLarge);
-                                    }
-                                    if let Some(h) = tls_handle {
-                                        let _ = cmds.push(TlsCommand::Close { handle: h });
-                                    }
-                                    if let Some(ref mut p) = progress {
-                                        p.on_progress(decoded.len(), Some(decoded.len()));
-                                    }
-                                    if want_done_log {
-                                        crate::log!(
-                                            "vhttps: done host={} dev={} status={} bytes={}\n",
-                                            parsed.host,
-                                            dev_idx,
-                                            status,
-                                            decoded.len(),
-                                        );
-                                    }
-                                    return Ok(decoded);
-                                }
-                            } else if let Some(len) = header_parse_content_length(headers) {
-                                if body.len() >= len {
-                                    let out = body[..len].to_vec();
-                                    if out.len() > max_bytes {
-                                        if let Some(h) = tls_handle {
-                                            let _ = cmds.push(TlsCommand::Close { handle: h });
-                                        }
-                                        return Err(FetchError::ResponseTooLarge);
-                                    }
-                                    if let Some(h) = tls_handle {
-                                        let _ = cmds.push(TlsCommand::Close { handle: h });
-                                    }
-                                    if let Some(ref mut p) = progress {
-                                        p.on_progress(out.len(), Some(out.len()));
-                                    }
-                                    if want_done_log {
-                                        crate::log!(
-                                            "vhttps: done host={} dev={} status={} bytes={}\n",
-                                            parsed.host,
-                                            dev_idx,
-                                            status,
-                                            out.len(),
-                                        );
-                                    }
-                                    return Ok(out);
-                                }
-                            } else {
-                                // No chunked, no content-length. If Connection: close, we wait for close.
-                                // If status implies no body (HEAD request, 1xx, 204, 304), handled above or implicitly.
-                            }
-                        }
-                    }
-                }
-                TlsEvent::Closed { handle } => {
-                    if tls_handle != Some(handle) {
-                        continue;
-                    }
-
-                    if !saw_any_data {
-                        crate::log!(
-                            "vhttps: closed-no-data host={} dev={} handle={}\n",
-                            parsed.host,
-                            dev_idx,
-                            handle.0
-                        );
-                    } else if !saw_header_end {
-                        crate::log!(
-                            "vhttps: closed-before-header-end host={} dev={} handle={} raw_bytes={}\n",
-                            parsed.host,
-                            dev_idx,
-                            handle.0,
-                            plaintext.len()
-                        );
-                    }
-
-                    let Some(hdr_end) = find_http_header_end(&plaintext) else {
-                        return Err(FetchError::Http(0));
-                    };
-                    let headers = &plaintext[..hdr_end];
-                    let body = &plaintext[hdr_end..];
-
-                    let status = parse_http_status(&plaintext).unwrap_or(0);
-                    if status != 200 {
-                        if is_redirect_status(status)
-                            && let Some(next) = redirect_url_from_location(parsed, headers)
-                        {
-                            return Err(FetchError::Redirect { status, url: next });
-                        }
-
-                        // Log error bodies (often JSON) to aid debugging.
-                        let is_chunked =
-                            header_contains_token(headers, b"transfer-encoding", b"chunked");
-                        let decoded_body = if is_chunked {
-                            decode_http_chunked(body).unwrap_or_else(|| body.to_vec())
-                        } else if let Some(len) = header_parse_content_length(headers) {
-                            body.get(..len).unwrap_or(body).to_vec()
-                        } else {
-                            body.to_vec()
-                        };
-                        crate::log!(
-                            "vhttps: http_error status={} body_len={}\n",
-                            status,
-                            decoded_body.len()
-                        );
-                        if let Ok(s) = core::str::from_utf8(decoded_body.as_slice()) {
-                            log_utf8_chunks("vhttps: http_error_body: ", s);
-                        } else {
-                            crate::log!("vhttps: http_error_body: [non-utf8]\n");
-                        }
-
-                        return Err(FetchError::Http(status));
-                    }
-
-                    let is_chunked =
-                        header_contains_token(headers, b"transfer-encoding", b"chunked");
-                    let decoded_body = if is_chunked {
-                        decode_http_chunked(body).unwrap_or_else(|| body.to_vec())
-                    } else if let Some(len) = header_parse_content_length(headers) {
-                        body.get(..len).unwrap_or(body).to_vec()
-                    } else {
-                        body.to_vec()
-                    };
-
-                    if decoded_body.len() > max_bytes {
-                        return Err(FetchError::ResponseTooLarge);
-                    }
-
-                    if let Some(ref mut p) = progress {
-                        p.on_progress(decoded_body.len(), Some(decoded_body.len()));
-                    }
-
-                    if want_done_log {
-                        crate::log!(
-                            "vhttps: done host={} dev={} status={} bytes={}\n",
-                            parsed.host,
-                            dev_idx,
-                            status,
-                            decoded_body.len(),
-                        );
-                    }
-
-                    // Trim any accidental leading/trailing whitespace? No: callers want exact bytes.
-                    return Ok(decoded_body);
-                }
-                TlsEvent::Error { .. } => {
-                    // Keep waiting; underlying net can emit transient errors.
-                }
-                TlsEvent::TlsError { .. } => {
-                    if let Some(h) = tls_handle {
-                        let _ = cmds.push(TlsCommand::Close { handle: h });
-                    }
-                    return Err(FetchError::Tls);
-                }
-            }
-        }
-
-        if !sent_connect {
-            let t = crate::net::tls_socket::TlsTimeouts {
-                connect_ms: (timeout_ms / 4).max(5_000),
-                tls_ms: (timeout_ms / 4).max(5_000),
-                idle_ms: timeout_ms,
-            };
-            let _ = cmds.push(TlsCommand::OpenTcpConnect {
-                remote: vnet::EndpointV4 {
-                    addr: ip,
-                    port: parsed.port,
-                },
-                server_name,
-                cfg: cfg.clone(),
-                roots: roots.clone(),
-                timeouts: t,
-            });
-            crate::log!(
-                "vhttps: connect host={} dev={} timeout_ms={}\n",
-                parsed.host,
-                dev_idx,
-                timeout_ms
-            );
-            sent_connect = true;
-        }
-
-        let now = Instant::now();
-        if tls_handle.is_none() && now >= connect_deadline {
-            if let Some(h) = tls_handle {
-                let _ = cmds.push(TlsCommand::Close { handle: h });
-            }
-            crate::log!(
-                "vhttps: connect-timeout host={} dev={} saw_data={} hdr={} raw_bytes={}\n",
-                parsed.host,
-                dev_idx,
-                if saw_any_data { 1 } else { 0 },
-                if saw_header_end { 1 } else { 0 },
-                plaintext.len()
-            );
-            return Err(FetchError::ConnectTimeout);
-        }
-        if tls_handle.is_some() && !http_sent && now >= tls_deadline {
-            if let Some(h) = tls_handle {
-                let _ = cmds.push(TlsCommand::Close { handle: h });
-            }
-            crate::log!(
-                "vhttps: tls-timeout host={} dev={} opened=1 request_sent=0 saw_data={} raw_bytes={}\n",
-                parsed.host,
-                dev_idx,
-                if saw_any_data { 1 } else { 0 },
-                plaintext.len()
-            );
-            return Err(FetchError::TlsTimeout);
-        }
-        if http_sent {
-            let idle_deadline = last_activity + EmbassyDuration::from_millis(timeout_ms as u64);
-            if now >= idle_deadline {
-                if let Some(h) = tls_handle {
-                    let _ = cmds.push(TlsCommand::Close { handle: h });
-                }
-                crate::log!(
-                    "vhttps: body-timeout host={} dev={} request_sent=1 saw_data={} hdr={} raw_bytes={}\n",
-                    parsed.host,
-                    dev_idx,
-                    if saw_any_data { 1 } else { 0 },
-                    if saw_header_end { 1 } else { 0 },
-                    plaintext.len()
-                );
-                return Err(FetchError::BodyTimeout);
-            }
-        }
-        if now >= total_deadline {
-            if let Some(h) = tls_handle {
-                let _ = cmds.push(TlsCommand::Close { handle: h });
-            }
-            crate::log!(
-                "vhttps: total-timeout host={} dev={} opened={} request_sent={} saw_data={} hdr={} raw_bytes={}\n",
-                parsed.host,
-                dev_idx,
-                if tls_handle.is_some() { 1 } else { 0 },
-                if http_sent { 1 } else { 0 },
-                if saw_any_data { 1 } else { 0 },
-                if saw_header_end { 1 } else { 0 },
-                plaintext.len()
-            );
-            // Fallback classification: we hit the total wall clock deadline.
-            return Err(if tls_handle.is_none() {
-                FetchError::ConnectTimeout
-            } else if !http_sent {
-                FetchError::TlsTimeout
-            } else {
-                FetchError::BodyTimeout
-            });
-        }
-
-        Timer::after(EmbassyDuration::from_millis(2)).await;
-    }
-}
-
-/// Fetch an HTTPS URL and return the response body.
-///
-/// Notes:
-/// - This is a minimal HTTP/1.1-over-TLS client intended for boot-time fetching.
-/// - Binds the request to one resolved NIC for its full lifetime.
-pub async fn fetch_https_body_async(
-    url: &str,
-    timeout_ms: u32,
-    max_bytes: usize,
-) -> Result<Vec<u8>, FetchError> {
-    fetch_https_body_with_profile_async(url, NetProfile::default(), timeout_ms, max_bytes).await
-}
 
 pub async fn fetch_https_body_hyper_async(
     url: &str,
@@ -2296,48 +1599,15 @@ pub async fn fetch_https_body_hyper_with_profile_async(
     Err(FetchError::Http(0))
 }
 
-pub async fn fetch_https_body_with_profile_async(
-    url: &str,
-    profile: NetProfile,
-    timeout_ms: u32,
-    max_bytes: usize,
-) -> Result<Vec<u8>, FetchError> {
-    let dev_idx = fetch_device_index(profile)?;
 
-    const MAX_REDIRECTS: usize = 3;
-    let mut current_url = String::from(url);
-
-    for hop in 0..=MAX_REDIRECTS {
-        let parsed = parse_https_url(current_url.as_str()).ok_or(FetchError::BadUrl)?;
-
-        // Keep generic GET helpers on connection-close semantics. Older
-        // consumers such as html/surf expect isolated one-shot fetches, while
-        // keepalive remains available for the explicit high-churn paths.
-        let res = fetch_on_device(&parsed, dev_idx, timeout_ms, max_bytes, None, None, None).await;
-        match res {
-            Ok(v) => return Ok(v),
-            Err(FetchError::Redirect { status, url }) => {
-                if hop >= MAX_REDIRECTS {
-                    return Err(FetchError::Http(status));
-                }
-                current_url = url;
-                continue;
-            }
-            Err(e) => return Err(e),
-        }
-    }
-
-    Err(FetchError::Http(0))
-}
-
-pub async fn post_https_json_async(
+pub async fn post_https_json_hyper_async(
     url: &str,
     body_json: String,
     auth_token: Option<&str>,
     timeout_ms: u32,
     max_bytes: usize,
 ) -> Result<Vec<u8>, FetchError> {
-    post_https_json_with_profile_async(
+    post_https_json_hyper_with_profile_async(
         url,
         NetProfile::default(),
         body_json,
@@ -2348,7 +1618,7 @@ pub async fn post_https_json_async(
     .await
 }
 
-pub async fn post_https_json_with_profile_async(
+pub async fn post_https_json_hyper_with_profile_async(
     url: &str,
     profile: NetProfile,
     body_json: String,
@@ -2364,17 +1634,16 @@ pub async fn post_https_json_with_profile_async(
     for hop in 0..=MAX_REDIRECTS {
         let parsed = parse_https_url(current_url.as_str()).ok_or(FetchError::BadUrl)?;
 
-        // Keepalive POSTs have proven fragile against some API responses. Route JSON POSTs
-        // through the close-after-response path so completion never depends on keepalive body
-        // framing or pooled-connection state.
-        let res = fetch_on_device(
+        let res = request_on_device_hyper(
             &parsed,
             dev_idx,
+            hyper::Method::POST,
+            "application/json",
+            Some("application/json"),
+            body_json.as_bytes(),
+            auth_token,
             timeout_ms,
             max_bytes,
-            Some(body_json.as_str()),
-            auth_token,
-            None,
         )
         .await;
 

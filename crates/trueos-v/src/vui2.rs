@@ -44,6 +44,40 @@ impl WindowId {
         unsafe { vcabi::trueos_cabi_ui2_window_set_decorations(self.0, mode as u32) == 0 }
     }
 
+    pub fn set_decoration_options(self, options: WindowDecorationOptions) -> bool {
+        let mut ok = true;
+        ok &= self.set_decorations(options.mode);
+        ok &= self.set_titlebar_visible(options.titlebar_visible);
+        ok &= self.set_bottom_bar_visible(options.bottom_bar_visible);
+        ok &= self.set_title_icon_visible(options.title_icon_visible);
+        ok &= self.set_vertical_scrollbar_visible(options.vertical_scrollbar_visible);
+        ok &= self.set_horizontal_scrollbar_visible(options.horizontal_scrollbar_visible);
+        ok &= self.set_vertical_scrollbar_side(options.vertical_scrollbar_side);
+        ok &= self.set_horizontal_scrollbar_side(options.horizontal_scrollbar_side);
+        ok &= self.set_resize_mode(options.resize_mode);
+        ok &= self.set_resize_maintain_aspect(options.resize_maintain_aspect);
+        ok &= self.set_content_preserve_scale(options.content_preserve_scale);
+        ok &= self.set_rotate_buttons_visible(options.rotate_buttons_visible);
+        ok &= self.set_resize_button_visible(options.resize_button_visible);
+        ok &= self.set_decoration_button_visible(
+            WindowDecorationButton::ToggleComposition,
+            options.buttons.toggle_composition,
+        );
+        ok &= self.set_decoration_button_visible(WindowDecorationButton::Fork, options.buttons.fork);
+        ok &= self
+            .set_decoration_button_visible(WindowDecorationButton::Minimize, options.buttons.minimize);
+        ok &= self
+            .set_decoration_button_visible(WindowDecorationButton::Restore, options.buttons.restore);
+        ok &= self.set_decoration_button_visible(
+            WindowDecorationButton::ToggleMaximize,
+            options.buttons.toggle_maximize,
+        );
+        ok &= self
+            .set_decoration_button_visible(WindowDecorationButton::PreserveVm, options.buttons.preserve_vm);
+        ok &= self.set_decoration_button_visible(WindowDecorationButton::Close, options.buttons.close);
+        ok
+    }
+
     pub fn set_titlebar_visible(self, visible: bool) -> bool {
         unsafe {
             vcabi::trueos_cabi_ui2_window_set_titlebar_visible(self.0, u32::from(visible)) == 0
@@ -205,9 +239,12 @@ impl OwnedWindow {
                 options.alpha as u32,
             )
         };
-        WindowId::new(raw).map(|id| Self {
-            id,
-            close_on_drop: true,
+        WindowId::new(raw).map(|id| {
+            let _ = id.set_decoration_options(options.decorations);
+            Self {
+                id,
+                close_on_drop: true,
+            }
         })
     }
 
@@ -245,11 +282,16 @@ impl Drop for OwnedWindow {
 pub struct CreateOptions {
     pub z: i32,
     pub alpha: u8,
+    pub decorations: WindowDecorationOptions,
 }
 
 impl Default for CreateOptions {
     fn default() -> Self {
-        Self { z: 0, alpha: 255 }
+        Self {
+            z: 0,
+            alpha: 255,
+            decorations: WindowDecorationOptions::default(),
+        }
     }
 }
 
@@ -279,6 +321,120 @@ pub enum WindowDecorationMode {
     System = 0,
     Client = 1,
     None = 2,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct WindowDecorationOptions {
+    pub mode: WindowDecorationMode,
+    pub titlebar_visible: bool,
+    pub bottom_bar_visible: bool,
+    pub title_icon_visible: bool,
+    pub buttons: WindowDecorationButtons,
+    pub resize_button_visible: bool,
+    pub rotate_buttons_visible: bool,
+    pub vertical_scrollbar_visible: bool,
+    pub horizontal_scrollbar_visible: bool,
+    pub vertical_scrollbar_side: VerticalScrollbarSide,
+    pub horizontal_scrollbar_side: HorizontalScrollbarSide,
+    pub resize_mode: WindowResizeMode,
+    pub resize_maintain_aspect: bool,
+    pub content_preserve_scale: bool,
+}
+
+impl WindowDecorationOptions {
+    pub const fn system() -> Self {
+        Self {
+            mode: WindowDecorationMode::System,
+            titlebar_visible: true,
+            bottom_bar_visible: true,
+            title_icon_visible: true,
+            buttons: WindowDecorationButtons::all(),
+            resize_button_visible: true,
+            rotate_buttons_visible: false,
+            vertical_scrollbar_visible: true,
+            horizontal_scrollbar_visible: true,
+            vertical_scrollbar_side: VerticalScrollbarSide::Left,
+            horizontal_scrollbar_side: HorizontalScrollbarSide::Bottom,
+            resize_mode: WindowResizeMode::Auto,
+            resize_maintain_aspect: false,
+            content_preserve_scale: false,
+        }
+    }
+
+    pub const fn undecorated() -> Self {
+        Self {
+            mode: WindowDecorationMode::None,
+            titlebar_visible: false,
+            bottom_bar_visible: false,
+            title_icon_visible: false,
+            buttons: WindowDecorationButtons::none(),
+            resize_button_visible: false,
+            rotate_buttons_visible: false,
+            vertical_scrollbar_visible: false,
+            horizontal_scrollbar_visible: false,
+            vertical_scrollbar_side: VerticalScrollbarSide::Left,
+            horizontal_scrollbar_side: HorizontalScrollbarSide::Bottom,
+            resize_mode: WindowResizeMode::Auto,
+            resize_maintain_aspect: false,
+            content_preserve_scale: false,
+        }
+    }
+}
+
+impl Default for WindowDecorationOptions {
+    fn default() -> Self {
+        Self::system()
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct WindowDecorationButtons {
+    pub toggle_composition: bool,
+    pub fork: bool,
+    pub minimize: bool,
+    pub restore: bool,
+    pub toggle_maximize: bool,
+    pub preserve_vm: bool,
+    pub close: bool,
+}
+
+impl WindowDecorationButtons {
+    pub const fn all() -> Self {
+        Self {
+            toggle_composition: true,
+            fork: true,
+            minimize: true,
+            restore: true,
+            toggle_maximize: true,
+            preserve_vm: true,
+            close: true,
+        }
+    }
+
+    pub const fn none() -> Self {
+        Self {
+            toggle_composition: false,
+            fork: false,
+            minimize: false,
+            restore: false,
+            toggle_maximize: false,
+            preserve_vm: false,
+            close: false,
+        }
+    }
+
+    pub const fn close_only() -> Self {
+        Self {
+            close: true,
+            ..Self::none()
+        }
+    }
+}
+
+impl Default for WindowDecorationButtons {
+    fn default() -> Self {
+        Self::all()
+    }
 }
 
 #[repr(u32)]

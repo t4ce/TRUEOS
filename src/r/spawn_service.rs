@@ -1027,7 +1027,7 @@ async fn boot_asset_fetch_task() {
             asset.path,
             asset.max_bytes
         );
-        match crate::t::net::http_stream::fetch_http_to_file_async(
+        match crate::t::net::http_stream::fetch_http_to_file_hyper_async(
             asset.url,
             disk,
             asset.path,
