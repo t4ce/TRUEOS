@@ -19,6 +19,7 @@ pub mod services {
     use super::well_known;
     pub const CHAT_HTTP_TCP_PORT: u16 = 3;
     pub const MAIL_HTTP_TCP_PORT: u16 = 4;
+    pub const AXUM_BOOT_TCP_PORT: u16 = 5;
     pub const LOGTOTCP_TCP_PORT: u16 = 1;
     pub const WS_TIME_TCP_PORT: u16 = 2;
     pub const NET_SHELL_TCP_PORT: u16 = 4245;

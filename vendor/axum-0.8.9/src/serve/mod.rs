@@ -480,17 +480,17 @@ mod tests {
     use axum_core::{body::Body, extract::Request};
     use http::StatusCode;
     use hyper_util::rt::TokioIo;
-    #[cfg(unix)]
+    #[cfg(all(unix, not(target_os = "trueos")))]
     use tokio::net::UnixListener;
     use tokio::{
         io::{self, AsyncRead, AsyncWrite},
         net::TcpListener,
     };
 
-    #[cfg(unix)]
+    #[cfg(all(unix, not(target_os = "trueos")))]
     use super::IncomingStream;
     use super::{serve, Listener};
-    #[cfg(unix)]
+    #[cfg(all(unix, not(target_os = "trueos")))]
     use crate::extract::connect_info::Connected;
     use crate::{
         body::to_bytes,
@@ -505,7 +505,7 @@ mod tests {
         #[derive(Clone, Debug)]
         struct UdsConnectInfo;
 
-        #[cfg(unix)]
+        #[cfg(all(unix, not(target_os = "trueos")))]
         impl Connected<IncomingStream<'_, UnixListener>> for UdsConnectInfo {
             fn connect_info(_stream: IncomingStream<'_, UnixListener>) -> Self {
                 Self
@@ -529,7 +529,7 @@ mod tests {
         serve(tcp_nodelay_listener().await, router.clone())
             .await
             .unwrap();
-        #[cfg(unix)]
+        #[cfg(all(unix, not(target_os = "trueos")))]
         serve(UnixListener::bind("").unwrap(), router.clone());
 
         serve(
@@ -540,7 +540,7 @@ mod tests {
             tcp_nodelay_listener().await,
             router.clone().into_make_service(),
         );
-        #[cfg(unix)]
+        #[cfg(all(unix, not(target_os = "trueos")))]
         serve(
             UnixListener::bind("").unwrap(),
             router.clone().into_make_service(),
@@ -558,7 +558,7 @@ mod tests {
                 .clone()
                 .into_make_service_with_connect_info::<std::net::SocketAddr>(),
         );
-        #[cfg(unix)]
+        #[cfg(all(unix, not(target_os = "trueos")))]
         serve(
             UnixListener::bind("").unwrap(),
             router.into_make_service_with_connect_info::<UdsConnectInfo>(),
@@ -567,7 +567,7 @@ mod tests {
         // method router
         serve(TcpListener::bind(addr).await.unwrap(), get(handler));
         serve(tcp_nodelay_listener().await, get(handler));
-        #[cfg(unix)]
+        #[cfg(all(unix, not(target_os = "trueos")))]
         serve(UnixListener::bind("").unwrap(), get(handler));
 
         serve(
@@ -578,7 +578,7 @@ mod tests {
             tcp_nodelay_listener().await,
             get(handler).into_make_service(),
         );
-        #[cfg(unix)]
+        #[cfg(all(unix, not(target_os = "trueos")))]
         serve(
             UnixListener::bind("").unwrap(),
             get(handler).into_make_service(),
@@ -592,7 +592,7 @@ mod tests {
             tcp_nodelay_listener().await,
             get(handler).into_make_service_with_connect_info::<std::net::SocketAddr>(),
         );
-        #[cfg(unix)]
+        #[cfg(all(unix, not(target_os = "trueos")))]
         serve(
             UnixListener::bind("").unwrap(),
             get(handler).into_make_service_with_connect_info::<UdsConnectInfo>(),
@@ -604,7 +604,7 @@ mod tests {
             handler.into_service(),
         );
         serve(tcp_nodelay_listener().await, handler.into_service());
-        #[cfg(unix)]
+        #[cfg(all(unix, not(target_os = "trueos")))]
         serve(UnixListener::bind("").unwrap(), handler.into_service());
 
         serve(
@@ -612,7 +612,7 @@ mod tests {
             handler.with_state(()),
         );
         serve(tcp_nodelay_listener().await, handler.with_state(()));
-        #[cfg(unix)]
+        #[cfg(all(unix, not(target_os = "trueos")))]
         serve(UnixListener::bind("").unwrap(), handler.with_state(()));
 
         serve(
@@ -620,7 +620,7 @@ mod tests {
             handler.into_make_service(),
         );
         serve(tcp_nodelay_listener().await, handler.into_make_service());
-        #[cfg(unix)]
+        #[cfg(all(unix, not(target_os = "trueos")))]
         serve(UnixListener::bind("").unwrap(), handler.into_make_service());
 
         serve(
@@ -631,7 +631,7 @@ mod tests {
             tcp_nodelay_listener().await,
             handler.into_make_service_with_connect_info::<std::net::SocketAddr>(),
         );
-        #[cfg(unix)]
+        #[cfg(all(unix, not(target_os = "trueos")))]
         serve(
             UnixListener::bind("").unwrap(),
             handler.into_make_service_with_connect_info::<UdsConnectInfo>(),

@@ -42,7 +42,7 @@ impl Listener for TcpListener {
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "trueos")))]
 impl Listener for tokio::net::UnixListener {
     type Io = tokio::net::UnixStream;
     type Addr = tokio::net::unix::SocketAddr;

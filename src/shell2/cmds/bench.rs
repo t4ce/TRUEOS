@@ -34,11 +34,11 @@ const UAS_RAMP_READ_CANDIDATES: [(usize, usize); 4] = [
     (512 * 1024, 2),
 ];
 const UAS_RAMP_WRITE_CANDIDATES: [(usize, usize); 5] = [
-    (64 * 1024, 1),
-    (128 * 1024, 1),
-    (256 * 1024, 1),
-    (512 * 1024, 1),
     (1024 * 1024, 1),
+    (2 * 1024 * 1024, 1),
+    (4 * 1024 * 1024, 1),
+    (8 * 1024 * 1024, 1),
+    (8 * 1024 * 1024, 2),
 ];
 const BENCH_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
 const BENCH_MENU_ROWS: [[&str; 2]; 4] = [
