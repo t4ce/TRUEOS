@@ -81,7 +81,6 @@ define_started_flags!(
     UI2_SHELL_DEMO_STARTED,
     UI2_SWARM_DEMO_STARTED,
     UI2_TRUEOSFS_EXPLORER_DEMO_STARTED,
-    UI2_CURRENCY_DEMO_STARTED,
     USB_CONTROLLER_TASKS_STARTED,
     C4_BOOT_PROBE_STARTED,
     TRUEOSFS_READY_HOOK_STARTED,
@@ -121,7 +120,6 @@ define_stop_flags!(
     STOP_UI2_SMILEY_FOUNTAIN_DEMO,
     STOP_UI2_SHELL_DEMO,
     STOP_UI2_SWARM_DEMO,
-    STOP_UI2_CURRENCY_DEMO,
     STOP_UI2_TRUEOSFS_EXPLORER_DEMO,
 );
 
@@ -139,7 +137,6 @@ fn stop_flag_by_task_name(name: &str) -> Option<&'static AtomicBool> {
         "ui2-smiley-fountain-demo" => Some(&STOP_UI2_SMILEY_FOUNTAIN_DEMO),
         "ui2-shell-demo" => Some(&STOP_UI2_SHELL_DEMO),
         "ui2-swarm-demo" => Some(&STOP_UI2_SWARM_DEMO),
-        "ui2-currency-demo" => Some(&STOP_UI2_CURRENCY_DEMO),
         "ui2-trueosfs-explorer-demo" => Some(&STOP_UI2_TRUEOSFS_EXPLORER_DEMO),
         _ => None,
     }
@@ -832,13 +829,6 @@ fn spawn_ui2_swarm_demo(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
-fn spawn_ui2_currency_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        let _ = worker_spawner;
-        crate::tst_ui2_currency_demo::ui2_currency_demo_task()
-    })
-}
-
 fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
     let count = crate::usb2::pci_usb_controllers()
         .len()
@@ -1247,7 +1237,7 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::APP_VM_READY
 const WS_BOOT_READY: u32 = crate::r::readiness::NET_GATEWAY_REACHABLE
     | crate::r::readiness::TLS_SOCKET_SERVICE_READY
     | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
-static TASKS: [TaskSpec; 71] = [
+static TASKS: [TaskSpec; 70] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
         "globalog-persist-once",
@@ -1548,12 +1538,6 @@ static TASKS: [TaskSpec; 71] = [
         UI2_DEMO_READY | crate::r::readiness::NET_ANY_CONFIGURED,
         &UI2_SWARM_DEMO_STARTED,
         spawn_ui2_swarm_demo,
-    ),
-    TaskSpec::disabled(
-        "ui2-currency-demo",
-        UI2_DEMO_READY | crate::r::readiness::NET_ANY_CONFIGURED,
-        &UI2_CURRENCY_DEMO_STARTED,
-        spawn_ui2_currency_demo,
     ),
     TaskSpec::disabled(
         "ui2-trueosfs-explorer-demo",

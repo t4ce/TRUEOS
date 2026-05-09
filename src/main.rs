@@ -102,8 +102,6 @@ mod tst_ui2_analog_clock_demo;
 mod tst_ui2_bgrt;
 #[path = "tst/ui2_coreticks_demo.rs"]
 mod tst_ui2_coreticks_demo;
-#[path = "tst/ui2_currency_demo.rs"]
-mod tst_ui2_currency_demo;
 #[path = "tst/ui2_cursorpicker_demo.rs"]
 mod tst_ui2_cursorpicker_demo;
 #[path = "tst/ui2_ids.rs"]
