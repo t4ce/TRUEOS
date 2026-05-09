@@ -16,6 +16,7 @@ use crate::t::net::https::{
 pub enum JsonError {
     EmptyUrl,
     InvalidUtf8,
+    RuntimeUnavailable,
     Fetch(FetchError),
 }
 
@@ -112,7 +113,14 @@ impl JsonClient {
             return Err(JsonError::EmptyUrl);
         }
 
-        let body = fetch_https_body_hyper_async(url, self.timeout_ms, self.max_bytes).await?;
+        let url = String::from(url);
+        let timeout_ms = self.timeout_ms;
+        let max_bytes = self.max_bytes;
+        let body = crate::t::run_on_shared_tokio(move || async move {
+            fetch_https_body_hyper_async(url.as_str(), timeout_ms, max_bytes).await
+        })
+        .await
+        .map_err(|_| JsonError::RuntimeUnavailable)??;
         String::from_utf8(body).map_err(|_| JsonError::InvalidUtf8)
     }
 
@@ -130,14 +138,23 @@ impl JsonClient {
             return Err(JsonError::EmptyUrl);
         }
 
-        let body = post_https_json_hyper_async(
-            url,
-            String::from(body_json),
-            self.auth_token.as_deref(),
-            self.timeout_ms,
-            self.max_bytes,
-        )
-        .await?;
+        let url = String::from(url);
+        let body_json = String::from(body_json);
+        let auth_token = self.auth_token.clone();
+        let timeout_ms = self.timeout_ms;
+        let max_bytes = self.max_bytes;
+        let body = crate::t::run_on_shared_tokio(move || async move {
+            post_https_json_hyper_async(
+                url.as_str(),
+                body_json,
+                auth_token.as_deref(),
+                timeout_ms,
+                max_bytes,
+            )
+            .await
+        })
+        .await
+        .map_err(|_| JsonError::RuntimeUnavailable)??;
 
         String::from_utf8(body).map_err(|_| JsonError::InvalidUtf8)
     }
@@ -147,14 +164,23 @@ impl JsonClient {
             return Err(JsonError::EmptyUrl);
         }
 
-        post_https_json_hyper_async(
-            url,
-            String::from(body_json),
-            self.auth_token.as_deref(),
-            self.timeout_ms,
-            self.max_bytes,
-        )
+        let url = String::from(url);
+        let body_json = String::from(body_json);
+        let auth_token = self.auth_token.clone();
+        let timeout_ms = self.timeout_ms;
+        let max_bytes = self.max_bytes;
+        crate::t::run_on_shared_tokio(move || async move {
+            post_https_json_hyper_async(
+                url.as_str(),
+                body_json,
+                auth_token.as_deref(),
+                timeout_ms,
+                max_bytes,
+            )
+            .await
+        })
         .await
+        .map_err(|_| JsonError::RuntimeUnavailable)?
         .map_err(JsonError::from)
     }
 }

@@ -31,10 +31,10 @@ const UAS_READ_WINDOW_MAX_INFLIGHT: usize =
     crate::allcaps::storage::USB_MASS_UAS_READ_WINDOW_MAX_INFLIGHT;
 const UAS_READ_WINDOW_MAX_TRANSFER_BYTES: usize =
     crate::allcaps::storage::USB_MASS_UAS_READ_WINDOW_MAX_TRANSFER_BYTES;
-const UAS_SKHYNIX_SEQUENCE_WAIT_LIMIT: u16 =
-    crate::allcaps::storage::USB_MASS_UAS_SKHYNIX_SEQUENCE_WAIT_LIMIT;
 const UAS_SKHYNIX_SEQUENCE_WAIT_DELAY_MS: u64 =
     crate::allcaps::storage::USB_MASS_UAS_SKHYNIX_SEQUENCE_WAIT_DELAY_MS;
+const UAS_SKHYNIX_SEQUENCE_WAIT_LOG_MS: u64 =
+    crate::allcaps::storage::USB_MASS_UAS_SKHYNIX_SEQUENCE_WAIT_LOG_MS;
 const UAS_SKHYNIX_SEQUENCE_SWITCH_GRACE_MS: u64 =
     crate::allcaps::storage::USB_MASS_UAS_SKHYNIX_SEQUENCE_SWITCH_GRACE_MS;
 const MASS_IO_GROW_SUCCESS_TARGET: u16 = crate::allcaps::storage::USB_MASS_IO_GROW_SUCCESS_TARGET;
@@ -194,24 +194,40 @@ async fn acquire_mass_io_arbiter(
     runtime_key: u64,
     kind: MassIoArbiterLane,
 ) -> block::Result<MassIoArbiterGuard> {
-    for _ in 0..=UAS_SKHYNIX_SEQUENCE_WAIT_LIMIT {
+    let start_ms = uas_bench_now_ms();
+    let mut next_log_ms = start_ms.saturating_add(UAS_SKHYNIX_SEQUENCE_WAIT_LOG_MS);
+
+    loop {
         if try_acquire_mass_io_arbiter(runtime_key, kind) {
+            let waited_ms = uas_bench_now_ms().saturating_sub(start_ms);
+            if waited_ms >= UAS_SKHYNIX_SEQUENCE_WAIT_LOG_MS {
+                crate::log!(
+                    "crabusb: mass-io arbiter acquired key=0x{:016X} kind={} waited_ms={}\n",
+                    runtime_key,
+                    mass_io_arbiter_lane_label(kind),
+                    waited_ms
+                );
+            }
             return Ok(MassIoArbiterGuard {
                 runtime_key,
                 kind,
                 active: true,
             });
         }
+
+        let now_ms = uas_bench_now_ms();
+        if now_ms >= next_log_ms {
+            crate::log!(
+                "crabusb: mass-io arbiter queued key=0x{:016X} kind={} waited_ms={} status=healthy-wait\n",
+                runtime_key,
+                mass_io_arbiter_lane_label(kind),
+                now_ms.saturating_sub(start_ms)
+            );
+            next_log_ms = now_ms.saturating_add(UAS_SKHYNIX_SEQUENCE_WAIT_LOG_MS);
+        }
+
         Timer::after(EmbassyDuration::from_millis(UAS_SKHYNIX_SEQUENCE_WAIT_DELAY_MS)).await;
     }
-
-    crate::log!(
-        "crabusb: mass-io arbiter wait timeout key=0x{:016X} kind={} waited_ms={}\n",
-        runtime_key,
-        mass_io_arbiter_lane_label(kind),
-        (UAS_SKHYNIX_SEQUENCE_WAIT_LIMIT as u64 + 1) * UAS_SKHYNIX_SEQUENCE_WAIT_DELAY_MS
-    );
-    Err(block::Error::Timeout)
 }
 
 fn release_mass_io_arbiter(runtime_key: u64, kind: MassIoArbiterLane) {
@@ -2601,12 +2617,47 @@ impl UsbMassBlockDevice {
             Box<dyn core::future::Future<Output = block::Result<R>> + 'a>,
         >,
     ) -> block::Result<R> {
-        let mut rt = take_runtime_wait(self.runtime_key)
-            .await
-            .ok_or(block::Error::NotReady)?;
+        let mut rt = self.take_runtime_for_io().await?;
         let result = f(&mut rt).await;
         register_runtime(rt);
         result
+    }
+
+    async fn take_runtime_for_io(&self) -> block::Result<UsbMassRuntime> {
+        if self.io_profile != MassIoProfile::UasSkhynix {
+            return take_runtime_wait(self.runtime_key)
+                .await
+                .ok_or(block::Error::NotReady);
+        }
+
+        let start_ms = uas_bench_now_ms();
+        let mut next_log_ms = start_ms.saturating_add(UAS_SKHYNIX_SEQUENCE_WAIT_LOG_MS);
+
+        loop {
+            if let Some(rt) = take_runtime(self.runtime_key) {
+                let waited_ms = uas_bench_now_ms().saturating_sub(start_ms);
+                if waited_ms >= UAS_SKHYNIX_SEQUENCE_WAIT_LOG_MS {
+                    crate::log!(
+                        "crabusb: mass runtime acquired key=0x{:016X} waited_ms={} status=healthy-wait\n",
+                        self.runtime_key,
+                        waited_ms
+                    );
+                }
+                return Ok(rt);
+            }
+
+            let now_ms = uas_bench_now_ms();
+            if now_ms >= next_log_ms {
+                crate::log!(
+                    "crabusb: mass runtime queued key=0x{:016X} waited_ms={} status=healthy-wait\n",
+                    self.runtime_key,
+                    now_ms.saturating_sub(start_ms)
+                );
+                next_log_ms = now_ms.saturating_add(UAS_SKHYNIX_SEQUENCE_WAIT_LOG_MS);
+            }
+
+            Timer::after(EmbassyDuration::from_millis(MASS_RUNTIME_WAIT_DELAY_MS)).await;
+        }
     }
 }
 
@@ -2854,14 +2905,9 @@ impl block::BlockDevice for UsbMassBlockDevice {
             }
 
             let _lane = self.acquire_io_arbiter(MassIoArbiterLane::Write).await?;
-            let mut rt = take_runtime_wait(self.runtime_key)
-                .await
-                .ok_or(block::Error::NotReady)?;
+            let mut rt = self.take_runtime_for_io().await?;
             let result = async {
-                if matches!(rt.endpoints, UsbMassEndpoints::UasSkhynix { .. })
-                    && rt.skhynix_write_probe_fail_fast
-                    && buf.len() > current_mass_write_io_bytes(&rt, block_size)
-                {
+                if matches!(rt.endpoints, UsbMassEndpoints::UasSkhynix { .. }) {
                     return write_blocks_uas_skhynix_windowed(&mut rt, lba, buf, block_size).await;
                 }
 

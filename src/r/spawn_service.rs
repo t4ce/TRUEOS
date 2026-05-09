@@ -1014,6 +1014,14 @@ async fn boot_asset_fetch_task() {
     )
     .await;
 
+    if !crate::t::shared_tokio_runtime_ready() {
+        crate::log!("spawn-svc: boot-asset-fetch waiting for shared tokio runtime\n");
+        while !crate::t::shared_tokio_runtime_ready() {
+            Timer::after(EmbassyDuration::from_millis(100)).await;
+        }
+        crate::log!("spawn-svc: boot-asset-fetch shared tokio runtime ready\n");
+    }
+
     for asset in BOOT_ASSETS {
         match crate::r::fs::trueosfs::file_info_async(disk, asset.path).await {
             Ok(Some(info)) if info.data_len != 0 => {
@@ -1043,16 +1051,23 @@ async fn boot_asset_fetch_task() {
             asset.path,
             asset.max_bytes
         );
-        match crate::t::net::http_stream::fetch_http_to_file_hyper_async(
-            asset.url,
-            disk,
-            asset.path,
-            BOOT_ASSET_TIMEOUT_MS,
-            asset.max_bytes,
-        )
+        let label = asset.label;
+        let url = asset.url;
+        let path = asset.path;
+        let max_bytes = asset.max_bytes;
+        match crate::t::run_on_shared_tokio(move || async move {
+            crate::t::net::http_stream::fetch_http_to_file_hyper_async(
+                url,
+                disk,
+                path,
+                BOOT_ASSET_TIMEOUT_MS,
+                max_bytes,
+            )
+            .await
+        })
         .await
         {
-            Ok(()) => match crate::r::fs::trueosfs::file_info_async(disk, asset.path).await {
+            Ok(Ok(())) => match crate::r::fs::trueosfs::file_info_async(disk, asset.path).await {
                 Ok(Some(info)) => {
                     crate::log!(
                         "spawn-svc: boot-asset-fetch success {} path={} bytes={}\n",
@@ -1077,11 +1092,19 @@ async fn boot_asset_fetch_task() {
                     );
                 }
             },
-            Err(err) => {
+            Ok(Err(err)) => {
                 crate::log!(
                     "spawn-svc: boot-asset-fetch failed {} url={} err={:?}\n",
                     asset.label,
                     asset.url,
+                    err
+                );
+            }
+            Err(err) => {
+                crate::log!(
+                    "spawn-svc: boot-asset-fetch shared-tokio failed {} url={} err={:?}\n",
+                    label,
+                    url,
                     err
                 );
             }

@@ -134,17 +134,23 @@ async fn fetch_demo_wav_body() -> Option<(&'static str, Vec<u8>)> {
             AUDIO_HTTP_DEMO_MAX_BYTES
         );
         if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
-            match crate::t::net::http_stream::fetch_http_to_file_hyper_async(
-                url,
-                disk,
-                AUDIO_DEMO_CACHE_PATH,
-                AUDIO_HTTP_DEMO_TIMEOUT_MS,
-                AUDIO_HTTP_DEMO_MAX_BYTES,
-            )
+            match crate::t::run_on_shared_tokio(move || async move {
+                crate::t::net::http_stream::fetch_http_to_file_hyper_async(
+                    url,
+                    disk,
+                    AUDIO_DEMO_CACHE_PATH,
+                    AUDIO_HTTP_DEMO_TIMEOUT_MS,
+                    AUDIO_HTTP_DEMO_MAX_BYTES,
+                )
+                .await
+            })
             .await
             {
-                Ok(()) => match crate::r::fs::trueosfs::file_out_async(disk, AUDIO_DEMO_CACHE_PATH)
-                    .await
+                Ok(Ok(())) => match crate::r::fs::trueosfs::file_out_async(
+                    disk,
+                    AUDIO_DEMO_CACHE_PATH,
+                )
+                .await
                 {
                     Ok(Some(cached)) if !cached.is_empty() => {
                         crate::log!(
@@ -171,20 +177,35 @@ async fn fetch_demo_wav_body() -> Option<(&'static str, Vec<u8>)> {
                         );
                     }
                 },
-                Err(err) => {
+                Ok(Err(err)) => {
                     crate::log!("crabusb: audio stream fetch failed url={} err={:?}\n", url, err);
+                }
+                Err(err) => {
+                    crate::log!(
+                        "crabusb: audio stream fetch shared-tokio failed url={} err={:?}\n",
+                        url,
+                        err
+                    );
                 }
             }
         }
-        match crate::t::net::http::fetch_http_body_hyper(
-            url,
-            AUDIO_HTTP_DEMO_TIMEOUT_MS,
-            AUDIO_HTTP_DEMO_MAX_BYTES,
-        )
+        match crate::t::run_on_shared_tokio(move || async move {
+            crate::t::net::http::fetch_http_body_hyper(
+                url,
+                AUDIO_HTTP_DEMO_TIMEOUT_MS,
+                AUDIO_HTTP_DEMO_MAX_BYTES,
+            )
+            .await
+        })
         .await
         {
-            Ok(body) => return Some((url, body)),
-            Err(err) => crate::log!("crabusb: audio fetch failed url={} err={:?}\n", url, err),
+            Ok(Ok(body)) => return Some((url, body)),
+            Ok(Err(err)) => crate::log!("crabusb: audio fetch failed url={} err={:?}\n", url, err),
+            Err(err) => crate::log!(
+                "crabusb: audio fetch shared-tokio failed url={} err={:?}\n",
+                url,
+                err
+            ),
         }
     }
 
