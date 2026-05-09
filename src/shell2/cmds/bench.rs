@@ -746,6 +746,9 @@ struct UasRampWriteStats {
     tx_cap_bytes: usize,
     max_inflight: usize,
     elapsed_ms: u64,
+    fill_ms: u64,
+    data_ms: u64,
+    finish_ms: u64,
 }
 
 fn fill_uasbench_write_pattern(buf: &mut [u8], chunk_bytes: usize, absolute_offset: u64) {
@@ -797,6 +800,8 @@ async fn run_uasbench_write_probe(
     let mut last_report_ms = 0u64;
     let mut last_report_bytes = 0u64;
     let mut written = 0u64;
+    let mut fill_ms_total = 0u64;
+    let mut data_ms_total = 0u64;
 
     while written < total_bytes {
         if bench_cancel_requested(session_id) {
@@ -806,7 +811,10 @@ async fn run_uasbench_write_probe(
         }
 
         let take = core::cmp::min(total_bytes.saturating_sub(written), chunk_bytes as u64) as usize;
+        let fill_start = Instant::now();
         fill_uasbench_write_pattern(&mut chunk[..take], chunk_bytes, written);
+        fill_ms_total = fill_ms_total.saturating_add(fill_start.elapsed().as_millis() as u64);
+        let write_start = Instant::now();
         if let Err(err) =
             crate::r::fs::trueosfs::file_write_chunk_async(stream, &chunk[..take]).await
         {
@@ -825,6 +833,7 @@ async fn run_uasbench_write_probe(
             }
             return Err(err);
         }
+        data_ms_total = data_ms_total.saturating_add(write_start.elapsed().as_millis() as u64);
         written = written.saturating_add(take as u64);
 
         let elapsed_ms = start.elapsed().as_millis() as u64;
@@ -850,7 +859,9 @@ async fn run_uasbench_write_probe(
         }
     }
 
+    let finish_start = Instant::now();
     crate::r::fs::trueosfs::file_write_finish_async(stream).await?;
+    let finish_ms = finish_start.elapsed().as_millis() as u64;
     let elapsed_ms = start.elapsed().as_millis() as u64;
     Ok(Some(UasRampWriteStats {
         bytes: total_bytes,
@@ -858,6 +869,9 @@ async fn run_uasbench_write_probe(
         tx_cap_bytes: tx_cap,
         max_inflight: write_inflight,
         elapsed_ms,
+        fill_ms: fill_ms_total,
+        data_ms: data_ms_total,
+        finish_ms,
     }))
 }
 
@@ -989,7 +1003,7 @@ async fn uasbench_task(target: MatrixTarget, session_id: u64) {
         }
 
         let Some(best_read) = best_read else {
-            log("bench uas: no stable read point found; root remains deferred");
+            log("bench uas: no stable read point found");
             return;
         };
 
@@ -1103,11 +1117,14 @@ async fn uasbench_task(target: MatrixTarget, session_id: u64) {
             let avg = bps_from_progress(stats.bytes, stats.elapsed_ms);
             log(
                 format!(
-                    "bench uas: write result tx_cap={} write_inflight={} avg={} elapsed={}ms",
+                    "bench uas: write result tx_cap={} write_inflight={} avg={} elapsed={}ms fill={}ms data={}ms finish={}ms",
                     format_bytes(stats.tx_cap_bytes as u64),
                     stats.max_inflight,
                     format_speed(avg),
-                    stats.elapsed_ms
+                    stats.elapsed_ms,
+                    stats.fill_ms,
+                    stats.data_ms,
+                    stats.finish_ms
                 )
                 .as_str(),
             );
@@ -1119,7 +1136,7 @@ async fn uasbench_task(target: MatrixTarget, session_id: u64) {
         }
 
         let Some(best_write) = best_write else {
-            log("bench uas: no stable write point found; root remains deferred");
+            log("bench uas: no stable write point found");
             return;
         };
         log(
@@ -1168,10 +1185,20 @@ async fn uasbench_task(target: MatrixTarget, session_id: u64) {
                         )
                         .as_str(),
                     );
+                    log(
+                        format!(
+                            "bench uas: write final timing fill={}ms data={}ms finish={}ms",
+                            stats.fill_ms, stats.data_ms, stats.finish_ms
+                        )
+                        .as_str(),
+                    );
                 }
                 Ok(None) => {}
                 Err(err) => {
                     log(format!("bench uas: write final failed err={:?}", err).as_str());
+                    let _ =
+                        crate::usb2::pen::reset_uas_skhynix_transport_for_bench(disk, "bench-write-final-fail")
+                            .await;
                     return;
                 }
             }
@@ -1179,7 +1206,7 @@ async fn uasbench_task(target: MatrixTarget, session_id: u64) {
 
         log(
             format!(
-                "bench uas: done read_chunk={} read_inflight={} write_tx_cap={} write_inflight={} public_root=deferred",
+                "bench uas: done read_chunk={} read_inflight={} write_tx_cap={} write_inflight={} public_root=normal",
                 format_bytes(best_read.chunk_bytes as u64),
                 best_read.max_inflight,
                 format_bytes(best_write.tx_cap_bytes as u64),
