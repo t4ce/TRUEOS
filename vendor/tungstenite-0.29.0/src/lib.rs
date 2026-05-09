@@ -15,6 +15,8 @@
 // `handshake::server::ErrorResponse` are boxed.
 #![allow(clippy::result_large_err)]
 
+extern crate alloc;
+
 #[cfg(feature = "handshake")]
 pub use http;
 

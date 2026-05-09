@@ -5,9 +5,8 @@ pub mod headers;
 pub mod machine;
 pub mod server;
 
+use core::{error::Error as ErrorTrait, fmt};
 use std::{
-    error::Error as ErrorTrait,
-    fmt,
     io::{Read, Write},
 };
 

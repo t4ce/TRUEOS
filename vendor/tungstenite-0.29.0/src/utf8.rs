@@ -1,4 +1,4 @@
-use std::{cmp, error::Error, fmt, str};
+use core::{cmp, error::Error, fmt, str};
 
 #[derive(Debug, Copy, Clone)]
 pub(crate) enum DecodeError<'a> {

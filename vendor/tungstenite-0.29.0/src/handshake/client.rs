@@ -1,8 +1,8 @@
 //! Client handshake machine.
 
+use core::marker::PhantomData;
 use std::{
     io::{Read, Write},
-    marker::PhantomData,
 };
 
 use http::{

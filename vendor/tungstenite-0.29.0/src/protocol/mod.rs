@@ -18,9 +18,9 @@ use crate::{
     protocol::frame::Utf8Bytes,
 };
 use log::*;
+use core::mem::replace;
 use std::{
     io::{self, Read, Write},
-    mem::replace,
 };
 
 /// Indicates a Client or Server role of the websocket

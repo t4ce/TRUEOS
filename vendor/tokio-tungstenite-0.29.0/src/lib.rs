@@ -24,15 +24,15 @@ mod tls;
 use std::io::{Read, Write};
 
 use compat::{cvt, AllowStd, ContextWaker};
+use core::{
+    pin::Pin,
+    task::{Context, Poll},
+};
 use futures_util::{
     sink::{Sink, SinkExt},
     stream::{FusedStream, Stream},
 };
 use log::*;
-use std::{
-    pin::Pin,
-    task::{Context, Poll},
-};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 #[cfg(feature = "handshake")]

@@ -3,7 +3,7 @@
 //!  There is no dependency on actual TLS implementations. Everything like
 //! `native_tls` or `openssl` will work as long as there is a TLS stream supporting standard
 //! `Read + Write` traits.
-use std::{
+use core::{
     pin::Pin,
     task::{Context, Poll},
 };

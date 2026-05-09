@@ -1,6 +1,6 @@
 //! Various codes defined in RFC 6455.
 
-use std::{
+use core::{
     convert::{From, Into},
     fmt,
 };
