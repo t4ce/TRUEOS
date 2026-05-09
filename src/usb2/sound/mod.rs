@@ -13,7 +13,7 @@ const AUDIO_DEMO_ENABLED: bool = false;
 const AUDIO_HTTP_LOCAL_DEMO_URLS: [&str; 1] = [crate::allports::local_assets::AUDIO_DEMO_URL];
 const AUDIO_HTTP_DEMO_TIMEOUT_MS: u32 = 30_000;
 const AUDIO_HTTP_DEMO_MAX_BYTES: usize = 32 * 1024 * 1024;
-const AUDIO_DEMO_CACHE_PATH: &str = "audio/demo.wav";
+const AUDIO_DEMO_CACHE_PATH: &str = crate::allports::local_assets::AUDIO_DEMO_CACHE_PATH;
 const AUDIO_FRAME_BYTES: usize = 4;
 const AUDIO_RATE_HZ: u32 = 48_000;
 

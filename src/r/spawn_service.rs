@@ -953,7 +953,7 @@ struct BootAsset {
 pub(crate) const BOOT_LUMEN_WEIGHTS_PATH: &str = "model.safetensors";
 pub(crate) const BOOT_LUMEN_TOKENIZER_PATH: &str = "tokenizer.json";
 
-const BOOT_ASSETS: [BootAsset; 3] = [
+const BOOT_ASSETS: [BootAsset; 4] = [
     BootAsset {
         label: "weights",
         url: crate::allports::local_assets::TINYLLAMA_MODEL_URL,
@@ -971,6 +971,12 @@ const BOOT_ASSETS: [BootAsset; 3] = [
         url: crate::allports::local_assets::DEMO_YELLY_MP4_URL,
         path: crate::intel::xelp_media_source::MEDIA_DECODE_CACHE_PATH,
         max_bytes: 256 * 1024 * 1024,
+    },
+    BootAsset {
+        label: "audio-demo-wav",
+        url: crate::allports::local_assets::AUDIO_DEMO_URL,
+        path: crate::allports::local_assets::AUDIO_DEMO_CACHE_PATH,
+        max_bytes: 32 * 1024 * 1024,
     },
 ];
 const BOOT_ASSET_MOUNT_RETRY_SECS: u64 = 10;
@@ -1078,10 +1084,11 @@ async fn boot_asset_fetch_task() {
     }
 
     crate::log!(
-        "spawn-svc: boot-asset-fetch done weights={} tokenizer={} media={}\n",
+        "spawn-svc: boot-asset-fetch done weights={} tokenizer={} media={} audio={}\n",
         BOOT_LUMEN_WEIGHTS_PATH,
         BOOT_LUMEN_TOKENIZER_PATH,
-        crate::intel::xelp_media_source::MEDIA_DECODE_CACHE_PATH
+        crate::intel::xelp_media_source::MEDIA_DECODE_CACHE_PATH,
+        crate::allports::local_assets::AUDIO_DEMO_CACHE_PATH
     );
 }
 

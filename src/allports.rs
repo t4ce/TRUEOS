@@ -47,6 +47,7 @@ pub mod local_assets {
         "http://192.168.178.111:8080/tools/tinyllama/tokenizer.json";
     pub const DEMO_YELLY_MP4_URL: &str = "http://192.168.178.111:8080/tools/vid/demo_yelly.mp4";
     pub const AUDIO_DEMO_URL: &str = "http://192.168.178.111:8080/tools/aud/demo.wav";
+    pub const AUDIO_DEMO_CACHE_PATH: &str = "audio/demo.wav";
 }
 
 pub mod probes {
