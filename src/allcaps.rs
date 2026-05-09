@@ -18,8 +18,8 @@ pub mod probes {
 }
 
 pub mod lumen {
-    pub const BOOT_MODEL_SERVICE: bool = true;
-    pub const BOOT_ASSET_FETCH: bool = true;
+    pub const BOOT_MODEL_SERVICE: bool = false;
+    pub const BOOT_ASSET_FETCH: bool = false;
     pub const RUNTIME_DIAGNOSTIC_PROBES: bool = false;
     pub const SHADOW_BF16_MATVEC_TO_NET_BACKEND: bool = true;
     pub const NET_BF16_MATVEC_SHADOW_MAX_JOBS_PER_BOOT: u64 = 8;
@@ -112,6 +112,9 @@ pub mod storage {
     pub const USB_MASS_MAX_IO_BYTES: usize = 1024 * 1024;
     pub const USB_MASS_UAS_READ_WINDOW_MAX_INFLIGHT: usize = 8;
     pub const USB_MASS_UAS_READ_WINDOW_MAX_TRANSFER_BYTES: usize = 8 * 1024 * 1024;
+    pub const USB_MASS_UAS_SKHYNIX_SEQUENCE_WAIT_LIMIT: u16 = 5_000;
+    pub const USB_MASS_UAS_SKHYNIX_SEQUENCE_WAIT_DELAY_MS: u64 = 1;
+    pub const USB_MASS_UAS_SKHYNIX_SEQUENCE_SWITCH_GRACE_MS: u64 = 3;
     pub const USB_MASS_IO_GROW_SUCCESS_TARGET: u16 = 16;
     pub const USB_MASS_IO_GROW_SUCCESS_TARGET_FAST_BOT: u16 = 4;
     pub const USB_MASS_FAST_BOT_INITIAL_IO_BYTES: usize = 1024 * 1024;

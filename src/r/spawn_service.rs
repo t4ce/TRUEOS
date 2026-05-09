@@ -958,18 +958,24 @@ struct BootAsset {
 pub(crate) const BOOT_LUMEN_WEIGHTS_PATH: &str = "model.safetensors";
 pub(crate) const BOOT_LUMEN_TOKENIZER_PATH: &str = "tokenizer.json";
 
-const BOOT_ASSETS: [BootAsset; 2] = [
+const BOOT_ASSETS: [BootAsset; 3] = [
     BootAsset {
         label: "weights",
-        url: "http://192.168.178.112:8080/tools/tinyllama/model.safetensors",
+        url: crate::allports::local_assets::TINYLLAMA_MODEL_URL,
         path: BOOT_LUMEN_WEIGHTS_PATH,
         max_bytes: 4 * 1024 * 1024 * 1024,
     },
     BootAsset {
         label: "tokenizer",
-        url: "http://192.168.178.112:8080/tools/tinyllama/tokenizer.json",
+        url: crate::allports::local_assets::TINYLLAMA_TOKENIZER_URL,
         path: BOOT_LUMEN_TOKENIZER_PATH,
         max_bytes: 64 * 1024 * 1024,
+    },
+    BootAsset {
+        label: "media-demo-yelly",
+        url: crate::allports::local_assets::DEMO_YELLY_MP4_URL,
+        path: crate::intel::xelp_media_source::MEDIA_DECODE_CACHE_PATH,
+        max_bytes: 256 * 1024 * 1024,
     },
 ];
 const BOOT_ASSET_MOUNT_RETRY_SECS: u64 = 10;
@@ -1077,9 +1083,10 @@ async fn boot_asset_fetch_task() {
     }
 
     crate::log!(
-        "spawn-svc: boot-asset-fetch done weights={} tokenizer={}\n",
+        "spawn-svc: boot-asset-fetch done weights={} tokenizer={} media={}\n",
         BOOT_LUMEN_WEIGHTS_PATH,
-        BOOT_LUMEN_TOKENIZER_PATH
+        BOOT_LUMEN_TOKENIZER_PATH,
+        crate::intel::xelp_media_source::MEDIA_DECODE_CACHE_PATH
     );
 }
 

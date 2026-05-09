@@ -1,7 +1,7 @@
 //! Central registry for network port numbers used by the kernel.
 //!
 //! Keep protocol field offsets and MMIO "port" register names local to their
-//! modules. This file is only for TCP/UDP service and probe ports.
+//! modules. This file is for TCP/UDP service ports and local network endpoints.
 
 pub mod well_known {
     pub const DNS: u16 = 53;
@@ -33,6 +33,19 @@ pub mod esp {
     pub const UDP_BROADCAST_PORT: u16 = 32_343;
     pub const HTTP_UPLOAD_PORT: u16 = 8080;
     pub const TRUEOS_PEER_TCP_PORT: u16 = 32_344;
+}
+
+pub mod local_assets {
+    pub const HTTP_HOST: &str = "192.168.178.111";
+    pub const HTTP_PORT: u16 = super::esp::HTTP_UPLOAD_PORT;
+    pub const HTTP_BASE_URL: &str = "http://192.168.178.111:8080";
+
+    pub const TINYLLAMA_MODEL_URL: &str =
+        "http://192.168.178.111:8080/tools/tinyllama/model.safetensors";
+    pub const TINYLLAMA_TOKENIZER_URL: &str =
+        "http://192.168.178.111:8080/tools/tinyllama/tokenizer.json";
+    pub const DEMO_YELLY_MP4_URL: &str = "http://192.168.178.111:8080/tools/vid/demo_yelly.mp4";
+    pub const AUDIO_DEMO_URL: &str = "http://192.168.178.111:8080/tools/aud/demo.wav";
 }
 
 pub mod probes {
