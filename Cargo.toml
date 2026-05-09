@@ -73,6 +73,7 @@ tokio = { version = "1.52.1", default-features = false, features = ["rt", "rt-mu
 socket2 = { version = "0.6.3", default-features = false }
 mio = { version = "1.2.0", default-features = false, features = ["os-poll", "net"] }
 hyper = { version = "1.9.0", default-features = false, features = ["client", "server", "http1"] }
+axum = { version = "0.8.9", default-features = false, features = ["http1", "json"] }
 lumen = { path = "vendor/lumen", default-features = false, features = ["cpu-trueos"] }
 tower = { version = "0.5.3", default-features = false, features = ["util"] }
 reqwest = { version = "0.13.3", default-features = false }
@@ -105,6 +106,11 @@ usvg = { path = "vendor/usvg-0.45.1" }
 imagesize = { path = "vendor/imagesize-0.13.0" }
 hyper = { path = "vendor/hyper-1.9.0" }
 hyper-util = { path = "vendor/hyper-util-0.1.20" }
+axum = { path = "vendor/axum-0.8.9" }
+axum-core = { path = "vendor/axum-core-0.5.6" }
+matchit = { path = "vendor/matchit-0.8.4" }
+mime = { path = "vendor/mime-0.3.17" }
+serde_path_to_error = { path = "vendor/serde_path_to_error-0.1.20" }
 reqwest = { path = "vendor/reqwest-0.13.3" }
 kurbo = { path = "vendor/kurbo-0.11.3" }
 svgtypes = { path = "vendor/svgtypes-0.15.3" }

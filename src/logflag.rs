@@ -23,7 +23,6 @@ pub(crate) const R8125_VERBOSE_LOGS: bool = false;
 pub(crate) const BOOT_INFO_LOGS: bool = false;
 pub(crate) const HV_LOGS: bool = true;
 pub(crate) const PORTAL_LOGS: bool = true;
-pub(crate) const HV_GUEST_ALLOC_TRACE_LOGS: bool = true;
 
 pub(crate) const UI2_ENABLE_VERBOSE_COMPOSE_LOGS: bool = false;
 pub(crate) const VHTTPS_VERBOSE: bool = true;
@@ -39,18 +38,12 @@ pub(crate) static VIRGL_BLEND_UNSUPPORTED_LOGS: AtomicU32 = AtomicU32::new(0);
 pub(crate) static VIRGL_STATE_TRANSITION_LOGS: AtomicU32 = AtomicU32::new(0);
 pub(crate) static VIRGL_PRESENT_DIAG_LOGS: AtomicU32 = AtomicU32::new(0);
 
-pub(crate) static INTEL_RING_INIT_LOGS: AtomicU32 = AtomicU32::new(1);
-pub(crate) static INTEL_SUBMIT_LOGS: AtomicU32 = AtomicU32::new(1);
-pub(crate) static INTEL_PRESENT_LOGS: AtomicU32 = AtomicU32::new(1);
 pub(crate) const INTEL_CURSOR_PROBE_LOGS: bool = false;
 
-pub(crate) const INTEL_RENDER_NGIN_LOGS: bool = true;
-pub(crate) const INTEL_RENDER_NGIN_BATCH_LOGS: bool = !INTEL_STAGE1_LOGS;
 pub(crate) const INTEL_DISPLAY_NGIN_LOGS: bool = true;
 pub(crate) const INTEL_MEDIA_NGIN_LOGS: bool = true;
 pub(crate) const INTEL_MEDIA_FS_CACHE_ENABLED: bool = true;
 pub(crate) const INTEL_MEDIA_PRESENT_LUMA_ONLY: bool = true;
-pub(crate) const INTEL_COPY_NGIN_LOGS: bool = true;
 
 pub(crate) const GFX_CABI_FRAME_DEBUG_LOGS: bool = false;
 pub(crate) static GFX_CABI_SUBMIT_BUDGET_LOGS: AtomicU32 = AtomicU32::new(0);
