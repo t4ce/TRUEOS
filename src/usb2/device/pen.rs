@@ -59,7 +59,7 @@ pub(crate) const UAS_BENCH_DEFAULT_MAX_INFLIGHT: usize = 8;
 const UAS_BENCH_STATUS_BYTES: usize = 96;
 const UAS_BENCH_TICK_MS: u64 = 1;
 const UAS_BENCH_FLIGHT_TIMEOUT_MS: u64 = 5_000;
-const UAS_WRITE_WINDOW_DEFAULT_MAX_INFLIGHT: usize = 2;
+const UAS_WRITE_WINDOW_DEFAULT_MAX_INFLIGHT: usize = 1;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct ActiveMassStream {

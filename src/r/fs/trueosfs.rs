@@ -349,14 +349,6 @@ pub async fn mount_root_async(
         }
     }
 
-    if crate::usb2::pen::is_uas_skhynix_disk(disk) {
-        crate::log!(
-            "trueosfs: root mount deferred disk_id={} transport=uas-skhynix reason=bench-required\n",
-            disk_id.raw()
-        );
-        return Ok(None);
-    }
-
     register_root_mount(disk, false);
     Ok(Some(disk_id))
 }
@@ -379,18 +371,8 @@ pub async fn remount_root_async(
         return Ok(None);
     };
 
-    let disk_id = disk.id();
-    if crate::usb2::pen::is_uas_skhynix_disk(disk) {
-        unregister_root_mount(disk_id);
-        crate::log!(
-            "trueosfs: root remount deferred disk_id={} transport=uas-skhynix reason=bench-required\n",
-            disk_id.raw()
-        );
-        return Ok(None);
-    }
-
     register_root_mount(disk, true);
-    Ok(Some(disk_id))
+    Ok(Some(disk.id()))
 }
 
 fn register_root_mount(disk: block::DeviceHandle, replace_existing: bool) {

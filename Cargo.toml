@@ -73,7 +73,7 @@ tokio = { version = "1.52.1", default-features = false, features = ["rt", "rt-mu
 socket2 = { version = "0.6.3", default-features = false }
 mio = { version = "1.2.0", default-features = false, features = ["os-poll", "net"] }
 hyper = { version = "1.9.0", default-features = false, features = ["client", "server", "http1"] }
-axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio", "tower-log", "ws"] }
+axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio", "tower-log", "ws", "original-uri"] }
 lumen = { path = "vendor/lumen", default-features = false, features = ["cpu-trueos"] }
 tower = { version = "0.5.3", default-features = false, features = ["util"] }
 reqwest = { version = "0.13.3", default-features = false }

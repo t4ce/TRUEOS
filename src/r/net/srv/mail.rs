@@ -3,32 +3,30 @@ extern crate std;
 
 use alloc::{boxed::Box, format, string::String, string::ToString, vec::Vec};
 use core::{
-    convert::Infallible,
-    pin::Pin,
     sync::atomic::{AtomicU16, AtomicU32, Ordering},
-    task::{Context, Poll},
 };
-use std::io;
+use std::{io, net::SocketAddr};
 
-use embassy_time::{Duration as EmbassyDuration, Timer};
-use hyper::{
-    body::{Body, Bytes, Frame, Incoming, SizeHint},
-    header,
+use axum::{
+    body::{Body, Bytes},
+    extract::{DefaultBodyLimit, OriginalUri},
+    http::{
+        header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE},
+        StatusCode,
+    },
+    response::Response,
+    routing::{get, post},
+    Router,
 };
+use embassy_time::{Duration as EmbassyDuration, Timer};
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream, ReadHalf, WriteHalf};
-use v::vnet as api;
 
 use crate::{
     allports::services::MAIL_HTTP_TCP_PORT,
-    r::net::{smtp::SmtpClient, VNet},
-    t::net::hyper_io::HyperTokioIo,
+    r::net::smtp::SmtpClient,
 };
 
 const MAIL_HTTP_BODY_MAX: usize = 64 * 1024;
-const MAIL_HTTP_IDLE_POLL_MS: u64 = 10;
-const MAIL_HTTP_VNET_OPEN_RETRY_MS: u64 = 100;
-const MAIL_HTTP_LISTEN_POLL_MS: u64 = 25;
 const MAIL_HTTP_BLOCKING_LANE_RETRY_MS: u64 = 1000;
 const MAIL_STORE_PATH: &str = "mail/box.json";
 const MAIL_CONFIG_PATH: &str = "mail/config.json";
@@ -44,41 +42,6 @@ pub fn current_port() -> Option<u16> {
     match MAIL_HTTP_PORT.load(Ordering::Acquire) {
         0 => None,
         port => Some(port),
-    }
-}
-
-struct HyperBytesBody {
-    bytes: Option<Bytes>,
-}
-
-impl HyperBytesBody {
-    fn new(bytes: Vec<u8>) -> Self {
-        Self {
-            bytes: Some(Bytes::from(bytes)),
-        }
-    }
-}
-
-impl Body for HyperBytesBody {
-    type Data = Bytes;
-    type Error = Infallible;
-
-    fn poll_frame(
-        mut self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
-        Poll::Ready(self.bytes.take().map(|bytes| Ok(Frame::data(bytes))))
-    }
-
-    fn is_end_stream(&self) -> bool {
-        self.bytes.is_none()
-    }
-
-    fn size_hint(&self) -> SizeHint {
-        match self.bytes.as_ref() {
-            Some(bytes) => SizeHint::with_exact(bytes.len() as u64),
-            None => SizeHint::with_exact(0),
-        }
     }
 }
 
@@ -129,28 +92,16 @@ struct MailConfig {
     from: Option<String>,
 }
 
-struct MailSession {
-    handle: api::NetHandle,
-    inbound: WriteHalf<DuplexStream>,
+fn status_code(status: u16) -> StatusCode {
+    StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
 }
 
-struct MailEndpoint {
-    vnet: &'static VNet,
-    listener: Option<(api::NetHandle, u16)>,
-    sessions: Vec<MailSession>,
-    dev_idx: usize,
-}
-
-fn status_code(status: u16) -> hyper::StatusCode {
-    hyper::StatusCode::from_u16(status).unwrap_or(hyper::StatusCode::INTERNAL_SERVER_ERROR)
-}
-
-fn json_response<T: Serialize>(status: u16, value: &T) -> hyper::Response<HyperBytesBody> {
+fn json_response<T: Serialize>(status: u16, value: &T) -> Response {
     let body = serde_json::to_vec(value).unwrap_or_else(|_| b"{\"ok\":false}".to_vec());
     response(status, "application/json; charset=utf-8", body, true)
 }
 
-fn text_response(status: u16, content_type: &'static str, body: &'static str) -> hyper::Response<HyperBytesBody> {
+fn text_response(status: u16, content_type: &'static str, body: &'static str) -> Response {
     response(status, content_type, body.as_bytes().to_vec(), false)
 }
 
@@ -159,35 +110,17 @@ fn response(
     content_type: &'static str,
     body: Vec<u8>,
     no_store: bool,
-) -> hyper::Response<HyperBytesBody> {
-    let mut builder = hyper::Response::builder()
+) -> Response {
+    let mut builder = Response::builder()
         .status(status_code(status))
-        .header(header::CONTENT_TYPE, content_type)
-        .header(header::CONTENT_LENGTH, body.len().to_string());
+        .header(CONTENT_TYPE, content_type)
+        .header(CONTENT_LENGTH, body.len().to_string());
     if no_store {
-        builder = builder.header(header::CACHE_CONTROL, "no-store");
+        builder = builder.header(CACHE_CONTROL, "no-store");
     }
     builder
-        .body(HyperBytesBody::new(body))
-        .unwrap_or_else(|_| hyper::Response::new(HyperBytesBody::new(Vec::new())))
-}
-
-async fn incoming_to_vec(mut body: Incoming, limit: usize) -> Result<Vec<u8>, ()> {
-    let mut out = Vec::new();
-    loop {
-        let next = core::future::poll_fn(|cx| Pin::new(&mut body).poll_frame(cx)).await;
-        let Some(frame) = next else {
-            break;
-        };
-        let frame = frame.map_err(|_| ())?;
-        if let Ok(data) = frame.into_data() {
-            if out.len().saturating_add(data.len()) > limit {
-                return Err(());
-            }
-            out.extend_from_slice(&data);
-        }
-    }
-    Ok(out)
+        .body(Body::from(body))
+        .unwrap_or_else(|_| Response::new(Body::empty()))
 }
 
 fn primary_root() -> Result<crate::disc::block::DeviceHandle, &'static str> {
@@ -347,7 +280,15 @@ async fn send_mail_job(id: String) {
     }
 }
 
-async fn handle_list() -> hyper::Response<HyperBytesBody> {
+async fn handle_index() -> Response {
+    text_response(200, "text/html; charset=utf-8", MAIL_INDEX_HTML)
+}
+
+async fn handle_app_js() -> Response {
+    text_response(200, "application/javascript; charset=utf-8", MAIL_APP_JS)
+}
+
+async fn handle_list_local() -> Response {
     let mut messages: Vec<MailSummary> = load_store()
         .await
         .messages
@@ -366,6 +307,19 @@ async fn handle_list() -> hyper::Response<HyperBytesBody> {
     json_response(200, &MailListResponse { messages })
 }
 
+async fn handle_list() -> Response {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    tokio::task::spawn_local(async move {
+        let _ = tx.send(handle_list_local().await);
+    });
+    rx.await.unwrap_or_else(|_| {
+        json_response(
+            500,
+            &serde_json::json!({"ok": false, "error": "mail worker stopped"}),
+        )
+    })
+}
+
 fn query_param<'a>(query: Option<&'a str>, name: &str) -> Option<&'a str> {
     for part in query.unwrap_or("").split('&') {
         let (key, value) = part.split_once('=').unwrap_or((part, ""));
@@ -376,8 +330,8 @@ fn query_param<'a>(query: Option<&'a str>, name: &str) -> Option<&'a str> {
     None
 }
 
-async fn handle_read(query: Option<&str>) -> hyper::Response<HyperBytesBody> {
-    let Some(id) = query_param(query, "id") else {
+async fn handle_read_local(query: Option<String>) -> Response {
+    let Some(id) = query_param(query.as_deref(), "id") else {
         return json_response(400, &serde_json::json!({"ok": false, "error": "missing id"}));
     };
     let store = load_store().await;
@@ -387,8 +341,28 @@ async fn handle_read(query: Option<&str>) -> hyper::Response<HyperBytesBody> {
     }
 }
 
-async fn handle_send(body: Vec<u8>) -> hyper::Response<HyperBytesBody> {
-    let req = match serde_json::from_slice::<MailSendRequest>(body.as_slice()) {
+async fn handle_read(OriginalUri(uri): OriginalUri) -> Response {
+    let query = uri.query().map(String::from);
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    tokio::task::spawn_local(async move {
+        let _ = tx.send(handle_read_local(query).await);
+    });
+    rx.await.unwrap_or_else(|_| {
+        json_response(
+            500,
+            &serde_json::json!({"ok": false, "error": "mail worker stopped"}),
+        )
+    })
+}
+
+async fn handle_send_local(body: Bytes) -> Response {
+    if body.len() > MAIL_HTTP_BODY_MAX {
+        return json_response(
+            413,
+            &serde_json::json!({"ok": false, "error": "request too large"}),
+        );
+    }
+    let req = match serde_json::from_slice::<MailSendRequest>(body.as_ref()) {
         Ok(req) => req,
         Err(_) => return json_response(400, &serde_json::json!({"ok": false, "error": "bad json"})),
     };
@@ -430,284 +404,70 @@ async fn handle_send(body: Vec<u8>) -> hyper::Response<HyperBytesBody> {
     json_response(200, &serde_json::json!({"ok": true, "id": id}))
 }
 
-async fn handle_hyper_request(
-    request: hyper::Request<Incoming>,
-) -> Result<hyper::Response<HyperBytesBody>, Infallible> {
-    let method = request.method().clone();
-    let path = request.uri().path().to_string();
-    let query = request.uri().query().map(|query| query.to_string());
-    let body = match incoming_to_vec(request.into_body(), MAIL_HTTP_BODY_MAX).await {
-        Ok(body) => body,
-        Err(()) => {
-            return Ok(json_response(
-                413,
-                &serde_json::json!({"ok": false, "error": "request too large"}),
-            ));
-        }
-    };
-
-    let response = match (method, path.as_str()) {
-        (hyper::Method::GET, "/") | (hyper::Method::GET, "/index.html") => {
-            text_response(200, "text/html; charset=utf-8", MAIL_INDEX_HTML)
-        }
-        (hyper::Method::GET, "/app.js") => {
-            text_response(200, "application/javascript; charset=utf-8", MAIL_APP_JS)
-        }
-        (hyper::Method::GET, "/api/mail/list") => handle_list().await,
-        (hyper::Method::GET, "/api/mail/read") => handle_read(query.as_deref()).await,
-        (hyper::Method::POST, "/api/mail/send") => handle_send(body).await,
-        _ => json_response(404, &serde_json::json!({"ok": false, "error": "not found"})),
-    };
-    Ok(response)
-}
-
-async fn send_tcp_all(vnet: &VNet, handle: api::NetHandle, data: &[u8]) -> Result<(), ()> {
-    for chunk in data.chunks(api::MAX_MSG) {
-        let mut sent = false;
-        for _ in 0..64 {
-            if vnet
-                .submit(api::Command::SendTcp {
-                    handle,
-                    data: api::ByteBuf::from_slice_trunc(chunk),
-                })
-                .is_ok()
-            {
-                sent = true;
-                break;
-            }
-            tokio::time::sleep(core::time::Duration::from_millis(1)).await;
-        }
-        if !sent {
-            return Err(());
-        }
-    }
-    Ok(())
-}
-
-async fn outbound_bridge(
-    vnet: &'static VNet,
-    handle: api::NetHandle,
-    mut stream: ReadHalf<DuplexStream>,
-) {
-    let mut buf = [0u8; 2048];
-    loop {
-        match stream.read(&mut buf).await {
-            Ok(0) => break,
-            Ok(n) => {
-                if send_tcp_all(vnet, handle, &buf[..n]).await.is_err() {
-                    break;
-                }
-            }
-            Err(_) => break,
-        }
-    }
-    let _ = vnet.submit(api::Command::Close { handle });
-}
-
-fn spawn_hyper_session(vnet: &'static VNet, handle: api::NetHandle) -> MailSession {
-    let (hyper_io, bridge_io) = tokio::io::duplex(32 * 1024);
-    let (bridge_read, bridge_write) = tokio::io::split(bridge_io);
-    tokio::task::spawn_local(outbound_bridge(vnet, handle, bridge_read));
+async fn handle_send(body: Bytes) -> Response {
+    let (tx, rx) = tokio::sync::oneshot::channel();
     tokio::task::spawn_local(async move {
-        let service = hyper::service::service_fn(handle_hyper_request);
-        if hyper::server::conn::http1::Builder::new()
-            .serve_connection(HyperTokioIo::new(hyper_io), service)
-            .await
-            .is_err()
-        {
-            crate::log!("mail-http: hyper connection failed handle={}\n", handle.0);
-        }
+        let _ = tx.send(handle_send_local(body).await);
     });
-    MailSession {
-        handle,
-        inbound: bridge_write,
-    }
+    rx.await.unwrap_or_else(|_| {
+        json_response(
+            500,
+            &serde_json::json!({"ok": false, "error": "mail worker stopped"}),
+        )
+    })
 }
 
-async fn open_mail_listener(vnet: &VNet) -> Option<(api::NetHandle, u16)> {
-    let port = MAIL_HTTP_TCP_PORT;
-    if vnet.submit(api::Command::OpenTcpListen { port }).is_err() {
-        return None;
-    }
-    let deadline = tokio::time::Instant::now() + core::time::Duration::from_millis(250);
-    loop {
-        while let Some(ev) = vnet.pop_event() {
-            match ev {
-                api::Event::Opened {
-                    handle,
-                    kind: api::SocketKind::Tcp,
-                } => return Some((handle, port)),
-                api::Event::Error { msg } => {
-                    crate::log!("mail-http: tcp {} unavailable: {}\n", port, msg);
-                    return None;
-                }
-                _ => {}
-            }
-        }
-        if tokio::time::Instant::now() >= deadline {
-            crate::log!("mail-http: tcp {} listen timeout\n", port);
-            return None;
-        }
-        tokio::time::sleep(core::time::Duration::from_millis(MAIL_HTTP_LISTEN_POLL_MS)).await;
-    }
+fn mail_router() -> Router {
+    Router::new()
+        .route("/", get(handle_index))
+        .route("/index.html", get(handle_index))
+        .route("/app.js", get(handle_app_js))
+        .route("/api/mail/list", get(handle_list))
+        .route("/api/mail/read", get(handle_read))
+        .route("/api/mail/send", post(handle_send))
+        .layer(DefaultBodyLimit::max(MAIL_HTTP_BODY_MAX))
 }
 
-fn mail_dev_usable(dev_idx: usize) -> bool {
-    crate::net::adapter::ipv4_at(dev_idx).is_some()
-        || crate::net::link_state_at(dev_idx)
-            .map(|state| state.up)
-            .unwrap_or(false)
+fn primary_ipv4_addr(port: u16) -> Option<SocketAddr> {
+    let dev_idx = crate::net::primary_device_index();
+    let ip = crate::net::adapter::ipv4_at(dev_idx)?;
+    Some(SocketAddr::from((ip, port)))
 }
 
-fn log_mail_endpoint(dev_idx: usize, vnet: &VNet, port: u16) {
-    let name = crate::net::device_name_at(dev_idx).unwrap_or("?");
-    match crate::net::adapter::ipv4_at(dev_idx) {
-        Some([a, b, c, d]) => crate::log!(
-            "mail-http: listening on tcp {} owner={} dev={} {} ip={}.{}.{}.{}\n",
-            port,
-            vnet.owner(),
-            dev_idx,
-            name,
-            a,
-            b,
-            c,
-            d
-        ),
-        None => crate::log!(
-            "mail-http: listening on tcp {} owner={} dev={} {} ip=none\n",
-            port,
-            vnet.owner(),
-            dev_idx,
-            name
-        ),
-    }
-}
-
-async fn mail_add_endpoints(endpoints: &mut Vec<MailEndpoint>) -> usize {
-    let mut added = 0;
-    for dev_idx in 0..crate::net::device_count() {
-        if endpoints.iter().any(|endpoint| endpoint.dev_idx == dev_idx) {
-            continue;
-        }
-        if !mail_dev_usable(dev_idx) {
-            continue;
-        }
-        let Some(vnet) = VNet::open(dev_idx) else {
-            continue;
-        };
-        let listener = open_mail_listener(&vnet).await;
-        let Some((_, port)) = listener else {
-            continue;
-        };
-        let vnet_ref: &'static VNet = Box::leak(Box::new(vnet));
-        if MAIL_HTTP_PORT.load(Ordering::Acquire) == 0 {
-            MAIL_HTTP_PORT.store(port, Ordering::Release);
-        }
-        log_mail_endpoint(dev_idx, vnet_ref, port);
-        endpoints.push(MailEndpoint {
-            vnet: vnet_ref,
-            listener,
-            sessions: Vec::new(),
-            dev_idx,
-        });
-        added += 1;
-    }
-    added
-}
-
-async fn mail_http_runtime() {
+async fn mail_http_runtime() -> Result<(), io::Error> {
     tokio::task::spawn_local(crate::t::shared_tokio_job_pump());
 
-    let mut endpoints: Vec<MailEndpoint> = Vec::new();
+    let app = mail_router();
     loop {
-        mail_add_endpoints(&mut endpoints).await;
-        if !endpoints.is_empty() {
-            break;
-        }
-        MAIL_HTTP_PORT.store(0, Ordering::Release);
-        crate::log!("mail-http: waiting for a usable NIC\n");
-        tokio::time::sleep(core::time::Duration::from_millis(MAIL_HTTP_VNET_OPEN_RETRY_MS)).await;
-    }
+        let Some(addr) = primary_ipv4_addr(MAIL_HTTP_TCP_PORT) else {
+            MAIL_HTTP_PORT.store(0, Ordering::Release);
+            crate::log!("mail-http: waiting for primary ipv4\n");
+            tokio::time::sleep(core::time::Duration::from_millis(100)).await;
+            continue;
+        };
 
-    let mut endpoint_discovery_ticks = 0u32;
-    loop {
-        if endpoint_discovery_ticks == 0 {
-            mail_add_endpoints(&mut endpoints).await;
-        }
-        endpoint_discovery_ticks = (endpoint_discovery_ticks + 1) % 100;
-
-        for endpoint in endpoints.iter_mut() {
-            while let Some(ev) = endpoint.vnet.pop_event() {
-                match ev {
-                    api::Event::TcpEstablished { handle } => {
-                        if endpoint
-                            .sessions
-                            .iter()
-                            .all(|session| session.handle != handle)
-                        {
-                            endpoint
-                                .sessions
-                                .push(spawn_hyper_session(endpoint.vnet, handle));
-                        }
-                    }
-                    api::Event::TcpData { handle, data } => {
-                        let idx = match endpoint
-                            .sessions
-                            .iter()
-                            .position(|session| session.handle == handle)
-                        {
-                            Some(idx) => idx,
-                            None => {
-                                endpoint
-                                    .sessions
-                                    .push(spawn_hyper_session(endpoint.vnet, handle));
-                                endpoint.sessions.len().saturating_sub(1)
-                            }
-                        };
-                        if endpoint.sessions[idx]
-                            .inbound
-                            .write_all(data.as_slice())
-                            .await
-                            .is_err()
-                        {
-                            let _ = endpoint.vnet.submit(api::Command::Close { handle });
-                            endpoint.sessions.swap_remove(idx);
-                        }
-                    }
-                    api::Event::Closed { handle } => {
-                        if endpoint
-                            .listener
-                            .map(|(listener_handle, _)| listener_handle)
-                            == Some(handle)
-                        {
-                            endpoint.listener = open_mail_listener(endpoint.vnet).await;
-                            if let Some((_, port)) = endpoint.listener {
-                                log_mail_endpoint(endpoint.dev_idx, endpoint.vnet, port);
-                            }
-                        }
-                        if let Some(idx) = endpoint
-                            .sessions
-                            .iter()
-                            .position(|session| session.handle == handle)
-                        {
-                            let mut session = endpoint.sessions.swap_remove(idx);
-                            let _ = session.inbound.shutdown().await;
-                        }
-                    }
-                    api::Event::Error { msg } => {
-                        crate::log!("mail-http: vnet error dev={} {}\n", endpoint.dev_idx, msg);
-                    }
-                    api::Event::Opened { .. }
-                    | api::Event::TcpSent { .. }
-                    | api::Event::UdpPacket { .. }
-                    | api::Event::UdpPacketV6 { .. }
-                    | api::Event::IcmpReply { .. }
-                    | api::Event::IcmpReplyV6 { .. } => {}
-                }
+        let listener = match tokio::net::TcpListener::bind(addr).await {
+            Ok(listener) => listener,
+            Err(err) => {
+                MAIL_HTTP_PORT.store(0, Ordering::Release);
+                crate::log!(
+                    "mail-http: bind {} failed kind={:?} err={}\n",
+                    addr,
+                    err.kind(),
+                    err
+                );
+                tokio::time::sleep(core::time::Duration::from_millis(1000)).await;
+                continue;
             }
-        }
+        };
 
-        tokio::time::sleep(core::time::Duration::from_millis(MAIL_HTTP_IDLE_POLL_MS)).await;
+        MAIL_HTTP_PORT.store(addr.port(), Ordering::Release);
+        crate::log!("mail-http: axum listening on http://{}/\n", addr);
+        let result = axum::serve(listener, app).await;
+        if result.is_err() {
+            MAIL_HTTP_PORT.store(0, Ordering::Release);
+        }
+        return result;
     }
 }
 
@@ -717,8 +477,7 @@ fn run_mail_http_runtime() -> Result<(), io::Error> {
     builder.enable_time();
     let runtime = builder.build()?;
     let local = tokio::task::LocalSet::new();
-    local.block_on(&runtime, mail_http_runtime());
-    Ok(())
+    local.block_on(&runtime, mail_http_runtime())
 }
 
 #[embassy_executor::task]
