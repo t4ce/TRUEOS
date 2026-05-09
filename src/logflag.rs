@@ -62,8 +62,8 @@ pub(crate) const USB_VENDOR_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const BLUEPRINT_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const USB_AUDIO_DEBUG_LOGS: bool = true;
 pub(crate) const HID_DEBUG_REPORT_LOGS: bool = false;
-pub(crate) const USB_MASS_UAS_ADVANCED_PROBE_LOGS: bool = false;
-pub(crate) const USB_MASS_UAS_TRACE_LOGS: bool = false;
+pub(crate) const USB_MASS_UAS_ADVANCED_PROBE_LOGS: bool = true;
+pub(crate) const USB_MASS_UAS_TRACE_LOGS: bool = true;
 
 pub(crate) const NVME_VERBOSE: bool = false;
 

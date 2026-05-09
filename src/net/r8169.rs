@@ -516,12 +516,6 @@ impl Driver for Rtl8169Driver {
         // Check link
         self.check_link();
 
-        // If PHY doesn't report link immediately, assume it's up (QEMU quirk)
-        if !self.link_up.load(Ordering::Relaxed) {
-            crate::log!("[RTL8169] Link not detected — assuming up (QEMU mode)");
-            self.link_up.store(true, Ordering::SeqCst);
-        }
-
         self.initialized.store(true, Ordering::SeqCst);
         self.status = DriverStatus::Running;
 
@@ -614,6 +608,9 @@ impl NetworkDriver for Rtl8169Driver {
     fn send(&mut self, data: &[u8]) -> Result<(), &'static str> {
         if !self.initialized.load(Ordering::Relaxed) {
             return Err("Driver not initialized");
+        }
+        if !<Self as NetworkDriver>::link_up(self) {
+            return Err("Link down");
         }
         if data.len() > RX_BUFFER_SIZE {
             return Err("Packet too large");

@@ -3,6 +3,7 @@ use alloc::vec::Vec;
 use core::sync::atomic::{Ordering, fence};
 
 use crate::net::core::VendorAdapter;
+use crate::net::device::LinkState;
 use crate::net::ring::{DmaRegion, NetRing};
 use crate::pci;
 
@@ -235,6 +236,15 @@ impl VendorAdapter for VirtioNetAdapter {
 
     fn transmit(&mut self, frame: &[u8]) -> Result<(), ()> {
         self.tx_submit_hw(frame)
+    }
+
+    #[inline]
+    fn link_state(&self) -> LinkState {
+        LinkState {
+            up: true,
+            speed_mbps: 0,
+            full_duplex: true,
+        }
     }
 
     #[inline]
