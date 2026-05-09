@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use alloc::{boxed::Box, collections::BTreeMap, format, string::String, vec::Vec};
+use alloc::{boxed::Box, collections::BTreeMap, string::String, vec::Vec};
 
 use crate::disc::block;
 use crate::r::disc::partition;
@@ -336,7 +336,7 @@ pub async fn mount_root_async(
         return Err(block::Error::InvalidParam);
     }
 
-    let Some(placement) = locate_async(disk).await? else {
+    let Some(_placement) = locate_async(disk).await? else {
         return Ok(None);
     };
 

@@ -6,7 +6,7 @@ use core::str::SplitWhitespace;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use embassy_executor::Spawner;
-use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+use embassy_time::{Duration as EmbassyDuration, Instant, Timer, with_timeout};
 use v::vnet as api;
 
 use super::super::{
@@ -22,15 +22,18 @@ const INTERNAL_NETBENCH_MAX_FLOWS: usize = 4;
 const CPUBENCH_PHASE_MS: u64 = 10_000;
 const CPUBENCH_STOP_GRACE_MS: u64 = 2_000;
 const PROGRESS_LOG_MS: u64 = 3000;
-const UAS_RAMP_READ_PROBE_BYTES: u64 = 256 * 1024 * 1024;
-const UAS_RAMP_READ_FINAL_BYTES: u64 = 1024 * 1024 * 1024;
-const UAS_RAMP_WRITE_PROBE_BYTES: u64 = 128 * 1024 * 1024;
-const UAS_RAMP_WRITE_FINAL_BYTES: u64 = 1024 * 1024 * 1024;
+const UAS_RAMP_READ_PROBE_BYTES: u64 = 128 * 1024 * 1024;
+const UAS_RAMP_READ_FINAL_BYTES: u64 = 512 * 1024 * 1024;
+const UAS_RAMP_WRITE_PROBE_BYTES: u64 = 16 * 1024 * 1024;
+const UAS_RAMP_WRITE_FINAL_BYTES: u64 = 64 * 1024 * 1024;
 const UAS_RAMP_WRITE_PROGRESS_MS: u64 = 1000;
-const UAS_RAMP_READ_CHUNKS: [usize; 5] =
-    [64 * 1024, 128 * 1024, 256 * 1024, 512 * 1024, 1024 * 1024];
-const UAS_RAMP_READ_INFLIGHT: [usize; 4] = [1, 2, 4, 8];
-const UAS_RAMP_WRITE_CHUNKS: [usize; 3] = [64 * 1024, 256 * 1024, 1024 * 1024];
+const UAS_RAMP_READ_CANDIDATES: [(usize, usize); 4] = [
+    (1024 * 1024, 2),
+    (1024 * 1024, 4),
+    (1024 * 1024, 1),
+    (512 * 1024, 2),
+];
+const UAS_RAMP_WRITE_TX_CAPS: [usize; 3] = [64 * 1024, 128 * 1024, 256 * 1024];
 const BENCH_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
 const BENCH_MENU_ROWS: [[&str; 2]; 4] = [
     ["cpu", "Run CPU-only compute benchmark"],
@@ -734,6 +737,7 @@ struct UasRampReadBest {
 struct UasRampWriteStats {
     bytes: u64,
     chunk_bytes: usize,
+    tx_cap_bytes: usize,
     elapsed_ms: u64,
 }
 
@@ -757,11 +761,14 @@ async fn run_uasbench_write_probe(
     label: &str,
     total_bytes: u64,
     chunk_bytes: usize,
+    tx_cap_bytes: usize,
 ) -> Result<Option<UasRampWriteStats>, crate::disc::block::Error> {
-    let path = format!(".trueosfs-bench/uas-{}-{}.bin", label, chunk_bytes);
-    let Some(stream) =
-        crate::r::fs::trueosfs::file_write_begin_async(disk, path.as_str(), total_bytes).await?
-    else {
+    let tx_cap =
+        crate::usb2::pen::set_uas_skhynix_write_tx_cap_for_bench(disk, tx_cap_bytes).await?;
+    let path = format!(".trueosfs-bench/uas-{}-tx-{}.bin", label, tx_cap);
+    let begin =
+        crate::r::fs::trueosfs::file_write_begin_async(disk, path.as_str(), total_bytes).await?;
+    let Some(stream) = begin else {
         print_matrix_target_line(
             target,
             format!(
@@ -779,6 +786,7 @@ async fn run_uasbench_write_probe(
     chunk.resize(chunk_bytes, 0);
     let start = Instant::now();
     let mut last_report_ms = 0u64;
+    let mut last_report_bytes = 0u64;
     let mut written = 0u64;
 
     while written < total_bytes {
@@ -790,22 +798,41 @@ async fn run_uasbench_write_probe(
 
         let take = core::cmp::min(total_bytes.saturating_sub(written), chunk_bytes as u64) as usize;
         fill_uasbench_write_pattern(&mut chunk[..take], chunk_bytes, written);
-        crate::r::fs::trueosfs::file_write_chunk_async(stream, &chunk[..take]).await?;
+        if let Err(err) =
+            crate::r::fs::trueosfs::file_write_chunk_async(stream, &chunk[..take]).await
+        {
+            if matches!(err, crate::disc::block::Error::Timeout) {
+                print_matrix_target_line(
+                    target,
+                    format!(
+                        "bench uas: write {} timeout offset={} tx_cap={}",
+                        label,
+                        format_bytes(written),
+                        format_bytes(tx_cap as u64)
+                    )
+                    .as_str(),
+                );
+            }
+            return Err(err);
+        }
         written = written.saturating_add(take as u64);
 
         let elapsed_ms = start.elapsed().as_millis() as u64;
         if elapsed_ms.saturating_sub(last_report_ms) >= UAS_RAMP_WRITE_PROGRESS_MS {
+            let interval_ms = elapsed_ms.saturating_sub(last_report_ms);
+            let interval_bytes = written.saturating_sub(last_report_bytes);
             last_report_ms = elapsed_ms;
+            last_report_bytes = written;
             print_matrix_target_line(
                 target,
                 format!(
-                    "bench uas: write {} progress={}/{} rate={} avg={} chunk={}",
+                    "bench uas: write {} progress={}/{} rate={} avg={} tx_cap={}",
                     label,
                     format_bytes(written),
                     format_bytes(total_bytes),
-                    format_speed(bps_from_progress(take as u64, UAS_RAMP_WRITE_PROGRESS_MS)),
+                    format_speed(bps_from_progress(interval_bytes, interval_ms)),
                     format_speed(bps_from_progress(written, elapsed_ms)),
-                    format_bytes(chunk_bytes as u64)
+                    format_bytes(tx_cap as u64)
                 )
                 .as_str(),
             );
@@ -817,6 +844,7 @@ async fn run_uasbench_write_probe(
     Ok(Some(UasRampWriteStats {
         bytes: total_bytes,
         chunk_bytes,
+        tx_cap_bytes: tx_cap,
         elapsed_ms,
     }))
 }
@@ -841,112 +869,110 @@ async fn uasbench_task(target: MatrixTarget, session_id: u64) {
 
         let mut best_read: Option<UasRampReadBest> = None;
 
-        'read_ramp: for chunk_bytes in UAS_RAMP_READ_CHUNKS {
-            for max_inflight in UAS_RAMP_READ_INFLIGHT {
-                if bench_cancel_requested(session_id) {
-                    log("bench uas: cancelled before read probe");
-                    break 'read_ramp;
-                }
+        for (chunk_bytes, max_inflight) in UAS_RAMP_READ_CANDIDATES {
+            if bench_cancel_requested(session_id) {
+                log("bench uas: cancelled before read probe");
+                break;
+            }
 
-                log(
-                    format!(
-                        "bench uas: read probe chunk={} max_inflight={} total={}",
-                        format_bytes(chunk_bytes as u64),
-                        max_inflight,
-                        format_bytes(UAS_RAMP_READ_PROBE_BYTES)
-                    )
-                    .as_str(),
-                );
-
-                let config = crate::usb2::pen::UasBenchConfig {
-                    total_bytes: UAS_RAMP_READ_PROBE_BYTES,
-                    chunk_bytes,
+            log(
+                format!(
+                    "bench uas: read probe chunk={} max_inflight={} total={}",
+                    format_bytes(chunk_bytes as u64),
                     max_inflight,
-                };
-                let progress_target = task_target.clone();
-                let result = crate::usb2::pen::run_uas_skhynix_stream_bench(
-                    disk,
-                    config,
-                    || bench_cancel_requested(session_id),
-                    |progress| {
-                        if progress.phase == "start" {
-                            return;
-                        }
-                        let interval_rate =
-                            bps_from_progress(progress.interval_bytes, progress.interval_ms);
-                        let avg_rate =
-                            bps_from_progress(progress.completed_bytes, progress.elapsed_ms);
-                        print_matrix_target_line(
-                            &progress_target,
-                            format!(
-                                "bench uas: read {} {}/{} rate={} avg={} cwnd={} in_flight={} chunk={} timeouts={} dead={}",
-                                progress.phase,
-                                format_bytes(progress.completed_bytes),
-                                format_bytes(progress.target_bytes),
-                                format_speed(interval_rate),
-                                format_speed(avg_rate),
-                                progress.cwnd,
-                                progress.in_flight,
-                                format_bytes(progress.chunk_bytes as u64),
-                                progress.timeouts,
-                                progress.dead_streams
-                            )
-                            .as_str(),
-                        );
-                    },
+                    format_bytes(UAS_RAMP_READ_PROBE_BYTES)
                 )
-                .await;
+                .as_str(),
+            );
 
-                let stats = match result {
-                    Ok(stats) => stats,
-                    Err(err) => {
-                        log(
-                            format!(
-                                "bench uas: read fail chunk={} max_inflight={} err={:?}",
-                                format_bytes(chunk_bytes as u64),
-                                max_inflight,
-                                err
-                            )
-                            .as_str(),
-                        );
-                        break;
+            let config = crate::usb2::pen::UasBenchConfig {
+                total_bytes: UAS_RAMP_READ_PROBE_BYTES,
+                chunk_bytes,
+                max_inflight,
+            };
+            let progress_target = task_target.clone();
+            let result = crate::usb2::pen::run_uas_skhynix_stream_bench(
+                disk,
+                config,
+                || bench_cancel_requested(session_id),
+                |progress| {
+                    if progress.phase == "start" {
+                        return;
                     }
-                };
-
-                let avg = bps_from_progress(stats.completed_bytes, stats.elapsed_ms);
-                log(
-                    format!(
-                        "bench uas: read result chunk={} max_inflight={} avg={} elapsed={}ms reads={} timeouts={} dead={}",
-                        format_bytes(stats.chunk_bytes as u64),
-                        stats.max_inflight,
-                        format_speed(avg),
-                        stats.elapsed_ms,
-                        stats.reads_completed,
-                        stats.timeouts,
-                        stats.dead_streams
-                    )
-                    .as_str(),
-                );
-
-                if stats.timeouts != 0 || stats.dead_streams != 0 {
-                    log(
+                    let interval_rate =
+                        bps_from_progress(progress.interval_bytes, progress.interval_ms);
+                    let avg_rate =
+                        bps_from_progress(progress.completed_bytes, progress.elapsed_ms);
+                    print_matrix_target_line(
+                        &progress_target,
                         format!(
-                            "bench uas: read unstable chunk={} max_inflight={} stop-escalating-this-chunk",
-                            format_bytes(chunk_bytes as u64),
-                            max_inflight
+                            "bench uas: read {} {}/{} rate={} avg={} cwnd={} in_flight={} chunk={} timeouts={} dead={}",
+                            progress.phase,
+                            format_bytes(progress.completed_bytes),
+                            format_bytes(progress.target_bytes),
+                            format_speed(interval_rate),
+                            format_speed(avg_rate),
+                            progress.cwnd,
+                            progress.in_flight,
+                            format_bytes(progress.chunk_bytes as u64),
+                            progress.timeouts,
+                            progress.dead_streams
                         )
                         .as_str(),
                     );
-                    break;
-                }
+                },
+            )
+            .await;
 
-                if best_read.is_none_or(|best| avg > best.avg_bps) {
-                    best_read = Some(UasRampReadBest {
-                        chunk_bytes: stats.chunk_bytes,
-                        max_inflight: stats.max_inflight,
-                        avg_bps: avg,
-                    });
+            let stats = match result {
+                Ok(stats) => stats,
+                Err(err) => {
+                    log(
+                        format!(
+                            "bench uas: read fail chunk={} max_inflight={} err={:?}",
+                            format_bytes(chunk_bytes as u64),
+                            max_inflight,
+                            err
+                        )
+                        .as_str(),
+                    );
+                    continue;
                 }
+            };
+
+            let avg = bps_from_progress(stats.completed_bytes, stats.elapsed_ms);
+            log(
+                format!(
+                    "bench uas: read result chunk={} max_inflight={} avg={} elapsed={}ms reads={} timeouts={} dead={}",
+                    format_bytes(stats.chunk_bytes as u64),
+                    stats.max_inflight,
+                    format_speed(avg),
+                    stats.elapsed_ms,
+                    stats.reads_completed,
+                    stats.timeouts,
+                    stats.dead_streams
+                )
+                .as_str(),
+            );
+
+            if stats.timeouts != 0 || stats.dead_streams != 0 {
+                log(
+                    format!(
+                        "bench uas: read unstable chunk={} max_inflight={} keeping-ramp-short",
+                        format_bytes(chunk_bytes as u64),
+                        max_inflight
+                    )
+                    .as_str(),
+                );
+                continue;
+            }
+
+            if best_read.is_none_or(|best| avg > best.avg_bps) {
+                best_read = Some(UasRampReadBest {
+                    chunk_bytes: stats.chunk_bytes,
+                    max_inflight: stats.max_inflight,
+                    avg_bps: avg,
+                });
             }
         }
 
@@ -1014,30 +1040,38 @@ async fn uasbench_task(target: MatrixTarget, session_id: u64) {
         }
 
         let mut best_write: Option<UasRampWriteStats> = None;
-        for chunk_bytes in UAS_RAMP_WRITE_CHUNKS {
+        for tx_cap_bytes in UAS_RAMP_WRITE_TX_CAPS {
             if bench_cancel_requested(session_id) {
                 log("bench uas: cancelled before write probe");
                 break;
             }
+            let chunk_bytes = tx_cap_bytes;
 
             log(
                 format!(
-                    "bench uas: write probe chunk={} total={}",
+                    "bench uas: write probe tx_cap={} total={}",
                     format_bytes(chunk_bytes as u64),
                     format_bytes(UAS_RAMP_WRITE_PROBE_BYTES)
                 )
                 .as_str(),
             );
-            let probe =
-                run_uasbench_write_probe(&task_target, session_id, disk, "probe", UAS_RAMP_WRITE_PROBE_BYTES, chunk_bytes)
-                    .await;
+            let probe = run_uasbench_write_probe(
+                &task_target,
+                session_id,
+                disk,
+                "probe",
+                UAS_RAMP_WRITE_PROBE_BYTES,
+                chunk_bytes,
+                tx_cap_bytes,
+            )
+            .await;
             let Some(stats) = (match probe {
                 Ok(stats) => stats,
                 Err(err) => {
                     log(
                         format!(
-                            "bench uas: write fail chunk={} err={:?}",
-                            format_bytes(chunk_bytes as u64),
+                            "bench uas: write fail tx_cap={} err={:?}",
+                            format_bytes(tx_cap_bytes as u64),
                             err
                         )
                         .as_str(),
@@ -1050,8 +1084,8 @@ async fn uasbench_task(target: MatrixTarget, session_id: u64) {
             let avg = bps_from_progress(stats.bytes, stats.elapsed_ms);
             log(
                 format!(
-                    "bench uas: write result chunk={} avg={} elapsed={}ms",
-                    format_bytes(stats.chunk_bytes as u64),
+                    "bench uas: write result tx_cap={} avg={} elapsed={}ms",
+                    format_bytes(stats.tx_cap_bytes as u64),
                     format_speed(avg),
                     stats.elapsed_ms
                 )
@@ -1070,8 +1104,8 @@ async fn uasbench_task(target: MatrixTarget, session_id: u64) {
         };
         log(
             format!(
-                "bench uas: write best chunk={} avg={}",
-                format_bytes(best_write.chunk_bytes as u64),
+                "bench uas: write best tx_cap={} avg={}",
+                format_bytes(best_write.tx_cap_bytes as u64),
                 format_speed(bps_from_progress(best_write.bytes, best_write.elapsed_ms))
             )
             .as_str(),
@@ -1085,17 +1119,18 @@ async fn uasbench_task(target: MatrixTarget, session_id: u64) {
                 "final",
                 UAS_RAMP_WRITE_FINAL_BYTES,
                 best_write.chunk_bytes,
+                best_write.tx_cap_bytes,
             )
             .await
             {
                 Ok(Some(stats)) => {
                     log(
                         format!(
-                            "bench uas: write final done wrote={} avg={} elapsed={}ms chunk={}",
+                            "bench uas: write final done wrote={} avg={} elapsed={}ms tx_cap={}",
                             format_bytes(stats.bytes),
                             format_speed(bps_from_progress(stats.bytes, stats.elapsed_ms)),
                             stats.elapsed_ms,
-                            format_bytes(stats.chunk_bytes as u64)
+                            format_bytes(stats.tx_cap_bytes as u64)
                         )
                         .as_str(),
                     );
@@ -1110,10 +1145,10 @@ async fn uasbench_task(target: MatrixTarget, session_id: u64) {
 
         log(
             format!(
-                "bench uas: done read_chunk={} read_inflight={} write_chunk={} public_root=deferred",
+                "bench uas: done read_chunk={} read_inflight={} write_tx_cap={} public_root=deferred",
                 format_bytes(best_read.chunk_bytes as u64),
                 best_read.max_inflight,
-                format_bytes(best_write.chunk_bytes as u64)
+                format_bytes(best_write.tx_cap_bytes as u64)
             )
             .as_str(),
         );

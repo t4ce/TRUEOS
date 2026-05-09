@@ -44,6 +44,45 @@ impl WindowId {
         unsafe { vcabi::trueos_cabi_ui2_window_set_decorations(self.0, mode as u32) == 0 }
     }
 
+    pub fn set_titlebar_visible(self, visible: bool) -> bool {
+        unsafe {
+            vcabi::trueos_cabi_ui2_window_set_titlebar_visible(self.0, u32::from(visible)) == 0
+        }
+    }
+
+    pub fn set_bottom_bar_visible(self, visible: bool) -> bool {
+        unsafe {
+            vcabi::trueos_cabi_ui2_window_set_bottom_bar_visible(self.0, u32::from(visible)) == 0
+        }
+    }
+
+    pub fn set_title_icon_visible(self, visible: bool) -> bool {
+        unsafe {
+            vcabi::trueos_cabi_ui2_window_set_title_icon_visible(self.0, u32::from(visible)) == 0
+        }
+    }
+
+    pub fn set_decoration_button_visible(
+        self,
+        button: WindowDecorationButton,
+        visible: bool,
+    ) -> bool {
+        unsafe {
+            vcabi::trueos_cabi_ui2_window_set_decoration_button_visible(
+                self.0,
+                button as u32,
+                u32::from(visible),
+            ) == 0
+        }
+    }
+
+    pub fn set_resize_button_visible(self, visible: bool) -> bool {
+        unsafe {
+            vcabi::trueos_cabi_ui2_window_set_resize_button_visible(self.0, u32::from(visible))
+                == 0
+        }
+    }
+
     pub fn set_hit_test_visible(self, visible: bool) -> bool {
         unsafe {
             vcabi::trueos_cabi_ui2_window_set_hit_test_visible(self.0, u32::from(visible)) == 0
@@ -97,6 +136,19 @@ impl WindowId {
     pub fn set_horizontal_scrollbar_side(self, side: HorizontalScrollbarSide) -> bool {
         unsafe {
             vcabi::trueos_cabi_ui2_window_set_horizontal_scrollbar_side(self.0, side as u32) == 0
+        }
+    }
+
+    pub fn set_rotate_buttons_visible(self, visible: bool) -> bool {
+        unsafe {
+            vcabi::trueos_cabi_ui2_window_set_rotate_buttons_visible(self.0, u32::from(visible))
+                == 0
+        }
+    }
+
+    pub fn set_content_rotation_quadrants(self, quadrants: u32) -> bool {
+        unsafe {
+            vcabi::trueos_cabi_ui2_window_set_content_rotation_quadrants(self.0, quadrants) == 0
         }
     }
 
@@ -227,6 +279,18 @@ pub enum WindowDecorationMode {
     System = 0,
     Client = 1,
     None = 2,
+}
+
+#[repr(u32)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum WindowDecorationButton {
+    ToggleComposition = 0,
+    Fork = 1,
+    Minimize = 2,
+    Restore = 3,
+    ToggleMaximize = 4,
+    PreserveVm = 5,
+    Close = 6,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

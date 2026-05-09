@@ -107,6 +107,8 @@ struct UsbMassRuntime {
     uas_stream_faults: u32,
     sync_cache_unsupported: bool,
     current_max_io_bytes: usize,
+    skhynix_write_max_io_bytes: usize,
+    skhynix_write_probe_fail_fast: bool,
     io_success_streak: u16,
 }
 
@@ -406,6 +408,42 @@ pub(crate) fn is_uas_skhynix_disk(handle: block::DeviceHandle) -> bool {
         .find(|rt| rt.runtime_key == runtime_key)
         .map(|rt| matches!(rt.endpoints, UsbMassEndpoints::UasSkhynix { .. }))
         .unwrap_or(false)
+}
+
+pub(crate) async fn set_uas_skhynix_write_tx_cap_for_bench(
+    handle: block::DeviceHandle,
+    bytes: usize,
+) -> block::Result<usize> {
+    let Some(runtime_key) = mass_runtime_key_for_disk(handle) else {
+        return Err(block::Error::NotSupported);
+    };
+    let mut rt = take_runtime_wait(runtime_key)
+        .await
+        .ok_or(block::Error::NotReady)?;
+    let result = async {
+        if !matches!(rt.endpoints, UsbMassEndpoints::UasSkhynix { .. }) {
+            return Err(block::Error::NotSupported);
+        }
+        let block_size = handle.info().block_size as usize;
+        if block_size == 0 {
+            return Err(block::Error::InvalidParam);
+        }
+        let cap = clamp_mass_io_bytes(block_size, bytes);
+        rt.skhynix_write_max_io_bytes = cap;
+        rt.current_max_io_bytes = cap;
+        rt.skhynix_write_probe_fail_fast = true;
+        rt.io_success_streak = 0;
+        crate::log!(
+            "crabusb: mass {:04X}:{:04X} uas-skhynix bench tx-cap={} bytes\n",
+            rt.vendor_id,
+            rt.product_id,
+            cap
+        );
+        Ok(cap)
+    }
+    .await;
+    register_runtime(rt);
+    result
 }
 
 fn uas_bench_now_ms() -> u64 {
@@ -1581,7 +1619,7 @@ fn current_mass_write_io_bytes(rt: &UsbMassRuntime, block_size: usize) -> usize 
     match rt.io_profile {
         MassIoProfile::ConservativeBot => cur,
         MassIoProfile::UasSkhynix => {
-            core::cmp::min(cur, clamp_mass_io_bytes(block_size, UAS_SKHYNIX_WRITE_MAX_IO_BYTES))
+            core::cmp::min(cur, clamp_mass_io_bytes(block_size, rt.skhynix_write_max_io_bytes))
         }
         MassIoProfile::FastBot => {
             core::cmp::min(cur, clamp_mass_io_bytes(block_size, FAST_BOT_WRITE_MAX_IO_BYTES))
@@ -2380,6 +2418,11 @@ impl block::BlockDevice for UsbMassBlockDevice {
                                     uas_runtime_note_error(
                                         &mut rt, "write-10", uas_tag, err, block_size,
                                     );
+                                    if rt.skhynix_write_probe_fail_fast
+                                        && uas_error_retires_stream(err)
+                                    {
+                                        return Err(block::Error::Timeout);
+                                    }
                                     false
                                 } else if matches!(rt.endpoints, UsbMassEndpoints::Bot { .. }) {
                                     mass_io_backoff(&mut rt, block_size);
@@ -2856,6 +2899,8 @@ pub async fn mass_storage_task(
         uas_stream_faults: 0,
         sync_cache_unsupported: false,
         current_max_io_bytes: initial_io_bytes,
+        skhynix_write_max_io_bytes: UAS_SKHYNIX_WRITE_MAX_IO_BYTES,
+        skhynix_write_probe_fail_fast: false,
         io_success_streak: 0,
     });
     if handle.parent().is_none() && handle.info().user_visible {
@@ -3172,6 +3217,8 @@ pub async fn mass_storage_uas_skhynix_task(
         uas_stream_faults: 0,
         sync_cache_unsupported: false,
         current_max_io_bytes: initial_io_bytes,
+        skhynix_write_max_io_bytes: UAS_SKHYNIX_WRITE_MAX_IO_BYTES,
+        skhynix_write_probe_fail_fast: false,
         io_success_streak: 0,
     });
     if handle.parent().is_none() && handle.info().user_visible {

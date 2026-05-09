@@ -16,7 +16,7 @@ const UI2_SYSTEM_BUTTON_VM_PLAY_TWEMOJI: char = '\u{23F5}';
 const UI2_SYSTEM_BUTTON_VM_PAUSE_TWEMOJI: char = '\u{23F8}';
 const UI2_SYSTEM_BUTTON_TASK_OFFLINE_TWEMOJI: char = '\u{23EF}';
 const UI2_SYSTEM_BUTTON_CLOSE_HULL_TWEMOJI: char = '\u{2716}';
-const UI2_RESIZE_HANDLE_TWEMOJI: char = '\u{1F518}';
+const UI2_RESIZE_HANDLE_TWEMOJI: char = '\u{25E2}';
 const UI2_ROTATE_LEFT_LABEL: &str = "90L";
 const UI2_ROTATE_RIGHT_LABEL: &str = "90R";
 
@@ -79,7 +79,36 @@ fn draw_window_title_texture_icon(
     );
 }
 
+fn draw_window_title_lyon_icon(state: &Ui2State, window: &Ui2Window, rect: Ui2Rect) -> bool {
+    if window.icon_id == 0 {
+        return false;
+    }
+    let side = 16.0f32.min(rect.w).min(rect.h).max(1.0);
+    let x = rect.x + ((rect.w - side) * 0.5).max(0.0);
+    let y = rect.y + ((rect.h - side) * 0.5).max(0.0);
+    crate::gfx::lyon::draw_lyon_icon_alpha_no_present(
+        window.icon_id,
+        0,
+        1,
+        x,
+        y,
+        state.view_w,
+        state.view_h,
+        window.alpha,
+    ) == 0
+}
+
+#[inline]
+fn window_titlebar_button_visible(window: &Ui2Window, action: Ui2SystemButtonAction) -> bool {
+    Ui2WindowDecorationButton::from_action(action)
+        .map(|button| (window.titlebar_button_visible_mask & button.bit()) != 0)
+        .unwrap_or(true)
+}
+
 fn draw_window_system_button(state: &Ui2State, window: &Ui2Window, action: Ui2SystemButtonAction) {
+    if !window_titlebar_button_visible(window, action) {
+        return;
+    }
     if window.state == Ui2WindowStateKind::Minimized
         && action != Ui2SystemButtonAction::ToggleMaximize
         && action != Ui2SystemButtonAction::Restore
@@ -433,11 +462,17 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
     }
 
     if window.decoration_mode == Ui2WindowDecorationMode::System && window.titlebar_visible {
-        let has_title_texture_icon = texture_is_drawable(window.title_icon_tex_id);
-        let has_title_twemoji = !has_title_texture_icon && window.title_twemoji != '\0';
+        let has_title_texture_icon =
+            window.title_icon_visible && texture_is_drawable(window.title_icon_tex_id);
+        let has_title_twemoji =
+            window.title_icon_visible && !has_title_texture_icon && window.title_twemoji != '\0';
+        let has_title_lyon_icon = window.title_icon_visible
+            && !has_title_texture_icon
+            && !has_title_twemoji
+            && window.icon_id != 0;
         let title_icon_rect =
             Ui2Rect::new(rect.x, rect.y, titleband_h.max(1.0), titleband_h.max(1.0));
-        if has_title_texture_icon || has_title_twemoji {
+        if has_title_texture_icon || has_title_twemoji || has_title_lyon_icon {
             if has_title_texture_icon {
                 draw_window_title_texture_icon(
                     state,
@@ -448,9 +483,11 @@ pub(super) fn draw_window_chrome(state: &Ui2State, window: &Ui2Window, rect: Ui2
                 );
             } else if has_title_twemoji {
                 draw_window_twemoji_button(state, window, title_icon_rect, window.title_twemoji);
+            } else {
+                let _ = draw_window_title_lyon_icon(state, window, title_icon_rect);
             }
         }
-        let title_left = if has_title_texture_icon || has_title_twemoji {
+        let title_left = if has_title_texture_icon || has_title_twemoji || has_title_lyon_icon {
             title_icon_rect.x + title_icon_rect.w + 2.0
         } else {
             rect.x + 8.0
@@ -652,6 +689,56 @@ pub fn set_window_bottom_bar_visible(id: u32, visible: bool) -> bool {
     let noted = note_window_dirty(&mut state, id, "decor-bottombar-window");
     if noted {
         let _ = note_window_viewport_sync_needed(&mut state, id);
+        refresh_window_hit_entries(&mut state, id);
+        if !visible {
+            clear_window_drag_claims(&mut state, id);
+        }
+    }
+    noted
+}
+
+pub fn set_window_titlebar_button_visible(
+    id: u32,
+    button: Ui2WindowDecorationButton,
+    visible: bool,
+) -> bool {
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    let Some(window) = window_mut(&mut state, id) else {
+        return false;
+    };
+    let bit = button.bit();
+    let next_mask = if visible {
+        window.titlebar_button_visible_mask | bit
+    } else {
+        window.titlebar_button_visible_mask & !bit
+    };
+    if window.titlebar_button_visible_mask == next_mask {
+        return true;
+    }
+    window.titlebar_button_visible_mask = next_mask;
+    state.compose_reason = "decor-titlebar-button-window";
+    let noted = note_window_dirty(&mut state, id, "decor-titlebar-button-window");
+    if noted {
+        refresh_window_hit_entries(&mut state, id);
+        clear_window_drag_claims(&mut state, id);
+    }
+    noted
+}
+
+pub fn set_window_resize_button_visible(id: u32, visible: bool) -> bool {
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    let Some(window) = window_mut(&mut state, id) else {
+        return false;
+    };
+    if window.resize_button_visible == visible {
+        return true;
+    }
+    window.resize_button_visible = visible;
+    state.compose_reason = "decor-resize-button-window";
+    let noted = note_window_dirty(&mut state, id, "decor-resize-button-window");
+    if noted {
         refresh_window_hit_entries(&mut state, id);
         if !visible {
             clear_window_drag_claims(&mut state, id);
@@ -1040,6 +1127,9 @@ fn window_bottom_resize_button_anchor_rect(
     state: &Ui2State,
     window: &Ui2Window,
 ) -> Option<Ui2Rect> {
+    if !window.resize_button_visible {
+        return None;
+    }
     if window.decoration_mode != Ui2WindowDecorationMode::System || !window.bottom_bar_visible {
         return None;
     }
@@ -1067,6 +1157,9 @@ fn window_system_button_anchor_rect(
     action: Ui2SystemButtonAction,
 ) -> Option<Ui2Rect> {
     if window.decoration_mode != Ui2WindowDecorationMode::System || !window.titlebar_visible {
+        return None;
+    }
+    if !window_titlebar_button_visible(window, action) {
         return None;
     }
     let titlebar = window_decoration_rect(state, window)?;

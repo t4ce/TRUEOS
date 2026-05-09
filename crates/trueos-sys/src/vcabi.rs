@@ -405,6 +405,15 @@ unsafe extern "C" {
     pub fn trueos_cabi_ui2_window_set_position(window_id: u32, x: i32, y: i32) -> i32;
     pub fn trueos_cabi_ui2_window_set_size(window_id: u32, width: u32, height: u32) -> i32;
     pub fn trueos_cabi_ui2_window_set_decorations(window_id: u32, mode: u32) -> i32;
+    pub fn trueos_cabi_ui2_window_set_titlebar_visible(window_id: u32, visible: u32) -> i32;
+    pub fn trueos_cabi_ui2_window_set_bottom_bar_visible(window_id: u32, visible: u32) -> i32;
+    pub fn trueos_cabi_ui2_window_set_title_icon_visible(window_id: u32, visible: u32) -> i32;
+    pub fn trueos_cabi_ui2_window_set_decoration_button_visible(
+        window_id: u32,
+        button: u32,
+        visible: u32,
+    ) -> i32;
+    pub fn trueos_cabi_ui2_window_set_resize_button_visible(window_id: u32, visible: u32) -> i32;
     pub fn trueos_cabi_ui2_window_set_hit_test_visible(window_id: u32, visible: u32) -> i32;
     pub fn trueos_cabi_ui2_window_set_vertical_scrollbar_visible(
         window_id: u32,
@@ -425,6 +434,14 @@ unsafe extern "C" {
     pub fn trueos_cabi_ui2_window_set_resize_mode(window_id: u32, mode: u32) -> i32;
     pub fn trueos_cabi_ui2_window_set_vertical_scrollbar_side(window_id: u32, side: u32) -> i32;
     pub fn trueos_cabi_ui2_window_set_horizontal_scrollbar_side(window_id: u32, side: u32) -> i32;
+    pub fn trueos_cabi_ui2_window_set_rotate_buttons_visible(
+        window_id: u32,
+        visible: u32,
+    ) -> i32;
+    pub fn trueos_cabi_ui2_window_set_content_rotation_quadrants(
+        window_id: u32,
+        quadrants: u32,
+    ) -> i32;
     pub fn trueos_cabi_ui2_window_minimize(window_id: u32) -> i32;
     pub fn trueos_cabi_ui2_window_maximize(window_id: u32) -> i32;
     pub fn trueos_cabi_ui2_window_restore(window_id: u32) -> i32;
