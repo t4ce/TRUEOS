@@ -683,8 +683,10 @@ fn blocks_in_buffer(len: usize, block_size: u32) -> Result<u64> {
 fn register_boxed_device(
     descriptor: DeviceDescriptor,
     driver: Box<dyn BlockDevice>,
+    request_trueosfs_mount: bool,
 ) -> DeviceHandle {
-    let should_request_trueosfs_mount = descriptor.parent.is_none() && descriptor.user_visible;
+    let should_request_trueosfs_mount =
+        request_trueosfs_mount && descriptor.parent.is_none() && descriptor.user_visible;
     let block_size = driver.block_size_bytes();
     let block_count = driver.block_count();
     let dma_alignment = driver.dma_alignment_bytes().max(1);
@@ -725,7 +727,14 @@ pub fn register_device<D>(descriptor: DeviceDescriptor, device: D) -> DeviceHand
 where
     D: BlockDevice + 'static,
 {
-    register_boxed_device(descriptor, Box::new(device))
+    register_boxed_device(descriptor, Box::new(device), true)
+}
+
+pub fn register_device_deferred_mount<D>(descriptor: DeviceDescriptor, device: D) -> DeviceHandle
+where
+    D: BlockDevice + 'static,
+{
+    register_boxed_device(descriptor, Box::new(device), false)
 }
 
 pub fn register_device_with_worker<D>(descriptor: DeviceDescriptor, device: D) -> DeviceHandle
@@ -750,7 +759,7 @@ where
         next_seq: 1,
     };
 
-    register_boxed_device(descriptor, Box::new(proxy))
+    register_boxed_device(descriptor, Box::new(proxy), true)
 }
 
 pub fn device_handles() -> Vec<DeviceHandle> {
