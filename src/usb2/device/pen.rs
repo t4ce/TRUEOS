@@ -450,7 +450,11 @@ pub(crate) async fn set_uas_skhynix_write_window_for_bench(
         if block_size == 0 {
             return Err(block::Error::InvalidParam);
         }
-        let cap = clamp_mass_io_bytes(block_size, bytes);
+        let cap = clamp_mass_io_bytes_with_ceil(
+            block_size,
+            bytes,
+            UAS_READ_WINDOW_MAX_TRANSFER_BYTES,
+        );
         rt.skhynix_write_max_io_bytes = cap;
         rt.current_max_io_bytes = cap;
         rt.skhynix_write_window_max_inflight = max_inflight.max(1);
@@ -1752,9 +1756,13 @@ fn map_io_error(err: mass::MassProbeError) -> block::Error {
 }
 
 fn clamp_mass_io_bytes(block_size: usize, bytes: usize) -> usize {
+    clamp_mass_io_bytes_with_ceil(block_size, bytes, MAX_IO_BYTES)
+}
+
+fn clamp_mass_io_bytes_with_ceil(block_size: usize, bytes: usize, max_bytes: usize) -> usize {
     let bs = block_size.max(1);
     let floor = core::cmp::max(bs, MIN_IO_BYTES.div_ceil(bs) * bs);
-    let ceil = core::cmp::max(floor, (MAX_IO_BYTES / bs).max(1) * bs);
+    let ceil = core::cmp::max(floor, (max_bytes / bs).max(1) * bs);
     let rounded = core::cmp::max(bs, (bytes / bs).max(1) * bs);
     rounded.clamp(floor, ceil)
 }
@@ -1845,13 +1853,23 @@ fn current_mass_io_bytes(rt: &UsbMassRuntime, block_size: usize) -> usize {
 }
 
 fn current_mass_write_io_bytes(rt: &UsbMassRuntime, block_size: usize) -> usize {
-    let cur = current_mass_io_bytes(rt, block_size);
     match rt.io_profile {
-        MassIoProfile::ConservativeBot => cur,
+        MassIoProfile::ConservativeBot => current_mass_io_bytes(rt, block_size),
         MassIoProfile::UasSkhynix => {
-            core::cmp::min(cur, clamp_mass_io_bytes(block_size, rt.skhynix_write_max_io_bytes))
+            let cur = clamp_mass_io_bytes_with_ceil(
+                block_size,
+                rt.current_max_io_bytes,
+                UAS_READ_WINDOW_MAX_TRANSFER_BYTES,
+            );
+            let write_cap = clamp_mass_io_bytes_with_ceil(
+                block_size,
+                rt.skhynix_write_max_io_bytes,
+                UAS_READ_WINDOW_MAX_TRANSFER_BYTES,
+            );
+            core::cmp::min(cur, write_cap)
         }
         MassIoProfile::FastBot => {
+            let cur = current_mass_io_bytes(rt, block_size);
             core::cmp::min(cur, clamp_mass_io_bytes(block_size, FAST_BOT_WRITE_MAX_IO_BYTES))
         }
     }

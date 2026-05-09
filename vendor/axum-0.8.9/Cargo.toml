@@ -256,7 +256,7 @@ optional = true
 version = "1.0.0"
 
 [dependencies.tokio]
-version = "1.44"
+version = "1.52.1"
 features = ["time"]
 optional = true
 package = "tokio"
@@ -349,7 +349,7 @@ version = "0.3"
 features = ["serde-human-readable"]
 
 [dev-dependencies.tokio]
-version = "1.44.2"
+version = "1.52.1"
 features = [
     "macros",
     "rt",
