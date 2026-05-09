@@ -30,6 +30,7 @@ const C4_BOOT_PROBE_SOURCE: &str = r#"
 const C4_BOOT_PROBE_SOURCE_PATH: &str = "impossible.c4";
 const C4_BOOT_PROBE_RUST_PATH: &str = "impossible.rs";
 const C4_BOOT_PROBE_VM_PATH: &str = "impossible.vm";
+const C4_BOOT_PROBE_STEP_LIMIT: usize = 100_000;
 
 #[embassy_executor::task]
 pub async fn task() {
@@ -44,6 +45,13 @@ pub async fn task() {
     // proof artifact.
     Timer::after(EmbassyDuration::from_millis(250)).await;
 
+    let _ = run_disk_proof(disk, "post-root").await;
+}
+
+pub(crate) async fn run_disk_proof(
+    disk: crate::disc::block::DeviceHandle,
+    lane: &'static str,
+) -> bool {
     let (rust, vm) = match trueos_c4::parse_program(C4_BOOT_PROBE_SOURCE) {
         Ok(program) => {
             let rust = trueos_c4::emit_rust(&program);
@@ -58,11 +66,12 @@ pub async fn task() {
                     )
                     .await;
                     crate::log!(
-                        "c4-boot-probe: vm failed path={} err={:?}\n",
+                        "c4-boot-probe: lane={} vm failed path={} err={:?}\n",
+                        lane,
                         C4_BOOT_PROBE_VM_PATH,
                         err
                     );
-                    return;
+                    return false;
                 }
             };
             (rust, vm)
@@ -77,13 +86,27 @@ pub async fn task() {
                 C4_BOOT_PROBE_RUST_PATH,
                 report.as_bytes(),
             )
-            .await;
+                .await;
             crate::log!(
-                "c4-boot-probe: parse failed path={} err={}\n",
+                "c4-boot-probe: lane={} parse failed path={} err={}\n",
+                lane,
                 C4_BOOT_PROBE_RUST_PATH,
                 err.message
             );
-            return;
+            return false;
+        }
+    };
+
+    let (vm_run_ok, vm_steps) = match trueos_c4::run_vm_object(vm.bytes.as_slice(), C4_BOOT_PROBE_STEP_LIMIT) {
+        Ok(report) => (true, report.steps),
+        Err(err) => {
+            crate::log!(
+                "c4-boot-probe: lane={} run failed vm_path={} err={:?}\n",
+                lane,
+                C4_BOOT_PROBE_VM_PATH,
+                err
+            );
+            (false, 0)
         }
     };
 
@@ -97,7 +120,8 @@ pub async fn task() {
         Ok(ok) => ok,
         Err(err) => {
             crate::log!(
-                "c4-boot-probe: write failed path={} err={:?}\n",
+                "c4-boot-probe: lane={} write failed path={} err={:?}\n",
+                lane,
                 C4_BOOT_PROBE_SOURCE_PATH,
                 err
             );
@@ -115,7 +139,8 @@ pub async fn task() {
         Ok(ok) => ok,
         Err(err) => {
             crate::log!(
-                "c4-boot-probe: write failed path={} err={:?}\n",
+                "c4-boot-probe: lane={} write failed path={} err={:?}\n",
+                lane,
                 C4_BOOT_PROBE_VM_PATH,
                 err
             );
@@ -128,7 +153,8 @@ pub async fn task() {
     {
         Ok(true) => {
             crate::log!(
-                "c4-boot-probe: accepted=1 source_path={} source_ok={} rust_path={} rust_bytes={} vm_path={} vm_ok={} vm_bytes={} vm_code={} vm_symbols={} vm_stack={}\n",
+                "c4-boot-probe: lane={} accepted=1 source_path={} source_ok={} rust_path={} rust_bytes={} vm_path={} vm_ok={} vm_bytes={} vm_code={} vm_symbols={} vm_stack={} vm_run_ok={} vm_steps={}\n",
+                lane,
                 C4_BOOT_PROBE_SOURCE_PATH,
                 if source_ok { 1 } else { 0 },
                 C4_BOOT_PROBE_RUST_PATH,
@@ -138,21 +164,28 @@ pub async fn task() {
                 vm.bytes.len(),
                 vm.code_len,
                 vm.symbol_count,
-                vm.stack_bytes
+                vm.stack_bytes,
+                if vm_run_ok { 1 } else { 0 },
+                vm_steps
             );
+            source_ok && vm_ok && vm_run_ok
         }
         Ok(false) => {
             crate::log!(
-                "c4-boot-probe: accepted=0 path={} reason=write-returned-false\n",
+                "c4-boot-probe: lane={} accepted=0 path={} reason=write-returned-false\n",
+                lane,
                 C4_BOOT_PROBE_RUST_PATH
             );
+            false
         }
         Err(err) => {
             crate::log!(
-                "c4-boot-probe: accepted=0 path={} err={:?}\n",
+                "c4-boot-probe: lane={} accepted=0 path={} err={:?}\n",
+                lane,
                 C4_BOOT_PROBE_RUST_PATH,
                 err
             );
+            false
         }
     }
 }

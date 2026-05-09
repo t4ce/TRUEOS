@@ -44,6 +44,7 @@ const FAST_BOT_INITIAL_IO_BYTES: usize =
     crate::allcaps::storage::USB_MASS_FAST_BOT_INITIAL_IO_BYTES;
 const FAST_BOT_WRITE_MAX_IO_BYTES: usize =
     crate::allcaps::storage::USB_MASS_FAST_BOT_WRITE_MAX_IO_BYTES;
+const UAS_SKHYNIX_WRITE_MAX_IO_BYTES: usize = 64 * 1024;
 const SKHYNIX_USE_UAS: bool = crate::allcaps::storage::USB_MASS_SKHYNIX_USE_UAS;
 const USB_DT_INTERFACE: u8 = 0x04;
 const USB_DT_ENDPOINT: u8 = 0x05;
@@ -113,29 +114,29 @@ struct UsbMassRuntime {
 unsafe impl Send for UsbMassRuntime {}
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-enum UasSkhynixSequenceKind {
+enum MassIoArbiterLane {
     Read,
     Write,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-struct UasSkhynixSequenceLane {
+struct MassIoArbiterState {
     runtime_key: u64,
     active: bool,
-    preferred_kind: UasSkhynixSequenceKind,
+    preferred_kind: MassIoArbiterLane,
     preferred_until_ms: u64,
 }
 
-struct UasSkhynixSequenceGuard {
+struct MassIoArbiterGuard {
     runtime_key: u64,
-    kind: UasSkhynixSequenceKind,
+    kind: MassIoArbiterLane,
     active: bool,
 }
 
 static ACTIVE_MASS_STREAMS: Mutex<Vec<ActiveMassStream, MAX_ACTIVE_STREAMS>> =
     Mutex::new(Vec::new());
 static MASS_RUNTIMES: Mutex<Vec<UsbMassRuntime, MAX_MASS_RUNTIMES>> = Mutex::new(Vec::new());
-static UAS_SKHYNIX_SEQUENCE_LANES: Mutex<Vec<UasSkhynixSequenceLane, MAX_MASS_RUNTIMES>> =
+static MASS_IO_ARBITERS: Mutex<Vec<MassIoArbiterState, MAX_MASS_RUNTIMES>> =
     Mutex::new(Vec::new());
 
 #[derive(Copy, Clone)]
@@ -147,27 +148,24 @@ struct RegisteredMassDisk {
 static REGISTERED_MASS_DISKS: Mutex<Vec<RegisteredMassDisk, MAX_MASS_RUNTIMES>> =
     Mutex::new(Vec::new());
 
-impl Drop for UasSkhynixSequenceGuard {
+impl Drop for MassIoArbiterGuard {
     fn drop(&mut self) {
         if self.active {
-            release_uas_skhynix_sequence_lane(self.runtime_key, self.kind);
+            release_mass_io_arbiter(self.runtime_key, self.kind);
         }
     }
 }
 
-fn uas_skhynix_sequence_kind_label(kind: UasSkhynixSequenceKind) -> &'static str {
+fn mass_io_arbiter_lane_label(kind: MassIoArbiterLane) -> &'static str {
     match kind {
-        UasSkhynixSequenceKind::Read => "read",
-        UasSkhynixSequenceKind::Write => "write",
+        MassIoArbiterLane::Read => "read",
+        MassIoArbiterLane::Write => "write",
     }
 }
 
-fn try_acquire_uas_skhynix_sequence_lane(
-    runtime_key: u64,
-    kind: UasSkhynixSequenceKind,
-) -> bool {
+fn try_acquire_mass_io_arbiter(runtime_key: u64, kind: MassIoArbiterLane) -> bool {
     let now_ms = uas_bench_now_ms();
-    let mut lanes = UAS_SKHYNIX_SEQUENCE_LANES.lock();
+    let mut lanes = MASS_IO_ARBITERS.lock();
     if let Some(lane) = lanes
         .iter_mut()
         .find(|lane| lane.runtime_key == runtime_key)
@@ -181,7 +179,7 @@ fn try_acquire_uas_skhynix_sequence_lane(
     }
 
     lanes
-        .push(UasSkhynixSequenceLane {
+        .push(MassIoArbiterState {
             runtime_key,
             active: true,
             preferred_kind: kind,
@@ -190,13 +188,13 @@ fn try_acquire_uas_skhynix_sequence_lane(
         .is_ok()
 }
 
-async fn acquire_uas_skhynix_sequence_lane(
+async fn acquire_mass_io_arbiter(
     runtime_key: u64,
-    kind: UasSkhynixSequenceKind,
-) -> block::Result<UasSkhynixSequenceGuard> {
+    kind: MassIoArbiterLane,
+) -> block::Result<MassIoArbiterGuard> {
     for _ in 0..=UAS_SKHYNIX_SEQUENCE_WAIT_LIMIT {
-        if try_acquire_uas_skhynix_sequence_lane(runtime_key, kind) {
-            return Ok(UasSkhynixSequenceGuard {
+        if try_acquire_mass_io_arbiter(runtime_key, kind) {
+            return Ok(MassIoArbiterGuard {
                 runtime_key,
                 kind,
                 active: true,
@@ -209,17 +207,17 @@ async fn acquire_uas_skhynix_sequence_lane(
     }
 
     crate::log!(
-        "crabusb: mass uas-skhynix sequence wait timeout key=0x{:016X} kind={} waited_ms={}\n",
+        "crabusb: mass-io arbiter wait timeout key=0x{:016X} kind={} waited_ms={}\n",
         runtime_key,
-        uas_skhynix_sequence_kind_label(kind),
+        mass_io_arbiter_lane_label(kind),
         (UAS_SKHYNIX_SEQUENCE_WAIT_LIMIT as u64 + 1) * UAS_SKHYNIX_SEQUENCE_WAIT_DELAY_MS
     );
     Err(block::Error::Timeout)
 }
 
-fn release_uas_skhynix_sequence_lane(runtime_key: u64, kind: UasSkhynixSequenceKind) {
+fn release_mass_io_arbiter(runtime_key: u64, kind: MassIoArbiterLane) {
     let now_ms = uas_bench_now_ms();
-    let mut lanes = UAS_SKHYNIX_SEQUENCE_LANES.lock();
+    let mut lanes = MASS_IO_ARBITERS.lock();
     if let Some(lane) = lanes
         .iter_mut()
         .find(|lane| lane.runtime_key == runtime_key)
@@ -1587,7 +1585,9 @@ fn current_mass_write_io_bytes(rt: &UsbMassRuntime, block_size: usize) -> usize 
     let cur = current_mass_io_bytes(rt, block_size);
     match rt.io_profile {
         MassIoProfile::ConservativeBot => cur,
-        MassIoProfile::UasSkhynix => cur,
+        MassIoProfile::UasSkhynix => {
+            core::cmp::min(cur, clamp_mass_io_bytes(block_size, UAS_SKHYNIX_WRITE_MAX_IO_BYTES))
+        }
         MassIoProfile::FastBot => {
             core::cmp::min(cur, clamp_mass_io_bytes(block_size, FAST_BOT_WRITE_MAX_IO_BYTES))
         }
@@ -2029,14 +2029,14 @@ struct UsbMassBlockDevice {
 }
 
 impl UsbMassBlockDevice {
-    async fn acquire_sequence_lane(
+    async fn acquire_io_arbiter(
         &self,
-        kind: UasSkhynixSequenceKind,
-    ) -> block::Result<UasSkhynixSequenceGuard> {
+        kind: MassIoArbiterLane,
+    ) -> block::Result<MassIoArbiterGuard> {
         if self.io_profile == MassIoProfile::UasSkhynix {
-            acquire_uas_skhynix_sequence_lane(self.runtime_key, kind).await
+            acquire_mass_io_arbiter(self.runtime_key, kind).await
         } else {
-            Ok(UasSkhynixSequenceGuard {
+            Ok(MassIoArbiterGuard {
                 runtime_key: self.runtime_key,
                 kind,
                 active: false,
@@ -2097,7 +2097,7 @@ impl block::BlockDevice for UsbMassBlockDevice {
             let mut out = alloc::vec![0u8; total_bytes];
 
             let _lane = self
-                .acquire_sequence_lane(UasSkhynixSequenceKind::Read)
+                .acquire_io_arbiter(MassIoArbiterLane::Read)
                 .await?;
             self.with_runtime(|rt| {
                 Box::pin(async move {
@@ -2307,7 +2307,7 @@ impl block::BlockDevice for UsbMassBlockDevice {
             }
 
             let _lane = self
-                .acquire_sequence_lane(UasSkhynixSequenceKind::Write)
+                .acquire_io_arbiter(MassIoArbiterLane::Write)
                 .await?;
             let mut rt = take_runtime_wait(self.runtime_key)
                 .await
@@ -2316,13 +2316,16 @@ impl block::BlockDevice for UsbMassBlockDevice {
                 let mut cur_lba = lba;
                 let mut remaining = buf;
                 while !remaining.is_empty() {
-                    let max_blocks =
-                        (current_mass_write_io_bytes(&rt, block_size) / block_size).max(1);
-                    let blocks_here = core::cmp::min(max_blocks, remaining.len() / block_size);
-                    let bytes_here = blocks_here * block_size;
-
                     let mut attempts = 0u8;
-                    loop {
+                    let (completed_blocks_here, completed_bytes_here) = loop {
+                        let max_blocks =
+                            (current_mass_write_io_bytes(&rt, block_size) / block_size).max(1);
+                        let blocks_here = core::cmp::min(max_blocks, remaining.len() / block_size);
+                        let bytes_here = blocks_here * block_size;
+                        if blocks_here == 0 || bytes_here == 0 {
+                            return Err(block::Error::InvalidParam);
+                        }
+
                         let bulk_out_ep = rt.bulk_out_ep;
                         let bulk_in_ep = rt.bulk_in_ep;
                         let uas_tag =
@@ -2379,7 +2382,7 @@ impl block::BlockDevice for UsbMassBlockDevice {
                         match result {
                             Ok(()) => {
                                 mass_io_note_success(&mut rt, block_size);
-                                break;
+                                break (blocks_here, bytes_here);
                             }
                             Err(err) => {
                                 let recovered = if uas_tag != 0 {
@@ -2476,10 +2479,10 @@ impl block::BlockDevice for UsbMassBlockDevice {
                                 return Err(map_io_error(err));
                             }
                         }
-                    }
+                    };
 
-                    remaining = &remaining[bytes_here..];
-                    cur_lba = cur_lba.saturating_add(blocks_here as u64);
+                    remaining = &remaining[completed_bytes_here..];
+                    cur_lba = cur_lba.saturating_add(completed_blocks_here as u64);
                 }
                 Ok(())
             }
@@ -2505,7 +2508,7 @@ impl block::BlockDevice for UsbMassBlockDevice {
         Box::pin(async move {
             let block_size = (self.block_size as usize).max(1);
             let _lane = self
-                .acquire_sequence_lane(UasSkhynixSequenceKind::Write)
+                .acquire_io_arbiter(MassIoArbiterLane::Write)
                 .await?;
             self.with_runtime(|rt| {
                 Box::pin(async move {
@@ -2677,7 +2680,7 @@ fn register_block_device(
         desc = desc.with_serial(serial);
     }
 
-    let handle = block::register_device(
+    let handle = block::register_device_deferred_mount(
         desc,
         UsbMassBlockDevice {
             runtime_key: identity.runtime_key,
@@ -2866,6 +2869,9 @@ pub async fn mass_storage_task(
         current_max_io_bytes: initial_io_bytes,
         io_success_streak: 0,
     });
+    if handle.parent().is_none() && handle.info().user_visible {
+        crate::r::fs::trueosfs::request_mount_root(handle);
+    }
 
     loop {
         Timer::after(EmbassyDuration::from_millis(MASS_KEEPALIVE_MS)).await;
@@ -3179,6 +3185,9 @@ pub async fn mass_storage_uas_skhynix_task(
         current_max_io_bytes: initial_io_bytes,
         io_success_streak: 0,
     });
+    if handle.parent().is_none() && handle.info().user_visible {
+        crate::r::fs::trueosfs::request_mount_root(handle);
+    }
 
     loop {
         Timer::after(EmbassyDuration::from_millis(MASS_KEEPALIVE_MS)).await;

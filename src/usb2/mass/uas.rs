@@ -247,6 +247,21 @@ fn uas_trace_logs_enabled() -> bool {
     crate::logflag::USB_MASS_UAS_TRACE_LOGS
 }
 
+fn uas_trace_is_steady_keepalive(cmd: &'static str, stage: &'static str) -> bool {
+    cmd == "test-unit-ready" && matches!(stage, "command-iu" | "status-submit" | "status-iu")
+}
+
+fn uas_trace_is_good_write_ready_substitute(
+    cmd: &'static str,
+    stage: &'static str,
+    tag: u16,
+    iu: &[u8],
+) -> bool {
+    cmd == "write-10"
+        && stage == "ready-iu"
+        && validate_uas_status(cmd, iu, tag).is_ok()
+}
+
 fn uas_trace_rate_limit_allows(last_marker: &AtomicU64) -> bool {
     let interval = embassy_time_driver::TICK_HZ.max(1);
     let now = embassy_time_driver::now();
@@ -288,6 +303,9 @@ fn uas_trace_iu_stage_always_log(stage: &'static str) -> bool {
 
 fn log_uas_debug(stage: &'static str, cmd: &'static str, tag: u16) {
     if !uas_trace_logs_enabled() {
+        return;
+    }
+    if uas_trace_is_steady_keepalive(cmd, stage) {
         return;
     }
     if !uas_trace_stage_always_log(stage)
@@ -333,6 +351,12 @@ fn log_uas_debug(stage: &'static str, cmd: &'static str, tag: u16) {
 
 fn log_uas_iu(stage: &'static str, cmd: &'static str, tag: u16, iu: &[u8]) {
     if !uas_trace_logs_enabled() {
+        return;
+    }
+    if uas_trace_is_steady_keepalive(cmd, stage) {
+        return;
+    }
+    if uas_trace_is_good_write_ready_substitute(cmd, stage, tag, iu) {
         return;
     }
     if !uas_trace_iu_stage_always_log(stage)
