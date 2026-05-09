@@ -112,16 +112,23 @@ async fn update_command_task(target: MatrixTarget, disk: crate::disc::block::Dev
 
         log(alloc::format!("update: download {}", ISO_URL).as_str());
 
-        let payload = match crate::t::net::https::fetch_https_body_hyper_async(
-            ISO_URL,
-            120_000,
-            128 * 1024 * 1024,
-        )
+        let payload = match crate::t::run_on_shared_tokio(move || async move {
+            crate::t::net::https::fetch_https_body_hyper_async(
+                ISO_URL,
+                120_000,
+                128 * 1024 * 1024,
+            )
+            .await
+        })
         .await
         {
-            Ok(b) => b,
-            Err(e) => {
+            Ok(Ok(b)) => b,
+            Ok(Err(e)) => {
                 log(alloc::format!("update: download failed ({:?})", e).as_str());
+                return;
+            }
+            Err(e) => {
+                log(alloc::format!("update: shared tokio unavailable ({:?})", e).as_str());
                 return;
             }
         };

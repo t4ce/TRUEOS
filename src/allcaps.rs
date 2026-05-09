@@ -114,13 +114,14 @@ pub mod storage {
     pub const USB_MASS_UAS_READ_WINDOW_MAX_TRANSFER_BYTES: usize = 8 * 1024 * 1024;
     pub const USB_MASS_UAS_SKHYNIX_SEQUENCE_WAIT_LIMIT: u16 = 5_000;
     pub const USB_MASS_UAS_SKHYNIX_SEQUENCE_WAIT_DELAY_MS: u64 = 1;
+    pub const USB_MASS_UAS_SKHYNIX_SEQUENCE_WAIT_LOG_MS: u64 = 5_000;
     pub const USB_MASS_UAS_SKHYNIX_SEQUENCE_SWITCH_GRACE_MS: u64 = 3;
     pub const USB_MASS_IO_GROW_SUCCESS_TARGET: u16 = 16;
     pub const USB_MASS_IO_GROW_SUCCESS_TARGET_FAST_BOT: u16 = 4;
     pub const USB_MASS_FAST_BOT_INITIAL_IO_BYTES: usize = 1024 * 1024;
     pub const USB_MASS_FAST_BOT_WRITE_MAX_IO_BYTES: usize = 128 * 1024;
     pub const USB_MASS_UAS_SKHYNIX_WRITE_MAX_IO_BYTES: usize = 1024 * 1024;
-    pub const USB_MASS_SKHYNIX_USE_UAS: bool = true;
+    pub const USB_MASS_SKHYNIX_USE_UAS: bool = false;
 }
 
 pub mod input {

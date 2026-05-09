@@ -1215,14 +1215,18 @@ async fn poll_device_status(snapshot: &trueos_esp::gate::DeviceSnapshot) {
         return;
     };
 
-    match crate::t::net::http::fetch_http_body_hyper(
-        url.as_str(),
-        ESP_STATUS_FETCH_TIMEOUT_MS,
-        ESP_STATUS_FETCH_MAX_RX,
-    )
+    let url_string = String::from(url.as_str());
+    match crate::t::run_on_shared_tokio(move || async move {
+        crate::t::net::http::fetch_http_body_hyper(
+            url_string.as_str(),
+            ESP_STATUS_FETCH_TIMEOUT_MS,
+            ESP_STATUS_FETCH_MAX_RX,
+        )
+        .await
+    })
     .await
     {
-        Ok(body) => {
+        Ok(Ok(body)) => {
             if let Some(status) = trueos_esp::swarm::parse_status_snapshot(body.as_slice()) {
                 let now_ms = monotonic_ms();
                 let event =
@@ -1249,12 +1253,20 @@ async fn poll_device_status(snapshot: &trueos_esp::gate::DeviceSnapshot) {
                 );
             }
         }
-        Err(err) => {
+        Ok(Err(err)) => {
             crate::log!(
                 "esp-gate: status fetch failed handle={} url={} timeout_ms={} err={:?}\n",
                 snapshot.handle.0,
                 url.as_str(),
                 ESP_STATUS_FETCH_TIMEOUT_MS,
+                err
+            );
+        }
+        Err(err) => {
+            crate::log!(
+                "esp-gate: status fetch shared-tokio failed handle={} url={} err={:?}\n",
+                snapshot.handle.0,
+                url.as_str(),
                 err
             );
         }
