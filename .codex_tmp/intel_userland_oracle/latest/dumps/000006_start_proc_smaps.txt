@@ -1,4 +1,4 @@
-56c54d78d000-56c54d78f000 r--p 00000000 103:03 8785139                   /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/latest/build/vk_compute_sentinel
+55bcd0e70000-55bcd0e72000 r--p 00000000 103:03 8784018                   /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/latest/build/vk_compute_sentinel
 Size:                  8 kB
 KernelPageSize:        4 kB
 MMUPageSize:           4 kB
@@ -24,7 +24,7 @@ Locked:                0 kB
 THPeligible:           0
 ProtectionKey:         0
 VmFlags: rd mr mw me sd 
-56c54d78f000-56c54d791000 r-xp 00002000 103:03 8785139                   /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/latest/build/vk_compute_sentinel
+55bcd0e72000-55bcd0e74000 r-xp 00002000 103:03 8784018                   /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/latest/build/vk_compute_sentinel
 Size:                  8 kB
 KernelPageSize:        4 kB
 MMUPageSize:           4 kB
@@ -50,7 +50,7 @@ Locked:                0 kB
 THPeligible:           0
 ProtectionKey:         0
 VmFlags: rd ex mr mw me sd 
-56c54d791000-56c54d792000 r--p 00004000 103:03 8785139                   /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/latest/build/vk_compute_sentinel
+55bcd0e74000-55bcd0e75000 r--p 00004000 103:03 8784018                   /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/latest/build/vk_compute_sentinel
 Size:                  4 kB
 KernelPageSize:        4 kB
 MMUPageSize:           4 kB
@@ -76,7 +76,7 @@ Locked:                0 kB
 THPeligible:           0
 ProtectionKey:         0
 VmFlags: rd mr mw me sd 
-56c54d792000-56c54d793000 r--p 00005000 103:03 8785139                   /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/latest/build/vk_compute_sentinel
+55bcd0e75000-55bcd0e76000 r--p 00005000 103:03 8784018                   /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/latest/build/vk_compute_sentinel
 Size:                  4 kB
 KernelPageSize:        4 kB
 MMUPageSize:           4 kB
@@ -102,7 +102,7 @@ Locked:                0 kB
 THPeligible:           0
 ProtectionKey:         0
 VmFlags: rd mr mw me ac sd 
-56c54d793000-56c54d794000 rw-p 00006000 103:03 8785139                   /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/latest/build/vk_compute_sentinel
+55bcd0e76000-55bcd0e77000 rw-p 00006000 103:03 8784018                   /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/latest/build/vk_compute_sentinel
 Size:                  4 kB
 KernelPageSize:        4 kB
 MMUPageSize:           4 kB
@@ -128,7 +128,7 @@ Locked:                0 kB
 THPeligible:           0
 ProtectionKey:         0
 VmFlags: rd wr mr mw me ac sd 
-56c553dc4000-56c553de5000 rw-p 00000000 00:00 0                          [heap]
+55bcd190e000-55bcd192f000 rw-p 00000000 00:00 0                          [heap]
 Size:                132 kB
 KernelPageSize:        4 kB
 MMUPageSize:           4 kB
@@ -154,7 +154,7 @@ Locked:                0 kB
 THPeligible:           0
 ProtectionKey:         0
 VmFlags: rd wr mr mw me ac sd 
-716be1800000-716be1828000 r--p 00000000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
+71e726a00000-71e726a28000 r--p 00000000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
 Size:                160 kB
 KernelPageSize:        4 kB
 MMUPageSize:           4 kB
@@ -180,7 +180,7 @@ Locked:                0 kB
 THPeligible:           0
 ProtectionKey:         0
 VmFlags: rd mr mw me sd 
-716be1828000-716be19c1000 r-xp 00028000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
+71e726a28000-71e726bc1000 r-xp 00028000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
 Size:               1636 kB
 KernelPageSize:        4 kB
 MMUPageSize:           4 kB
@@ -206,7 +206,7 @@ Locked:                0 kB
 THPeligible:           0
 ProtectionKey:         0
 VmFlags: rd ex mr mw me sd 
-716be19c1000-716be1a30000 r--p 001c1000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
+71e726bc1000-71e726c30000 r--p 001c1000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
 Size:                444 kB
 KernelPageSize:        4 kB
 MMUPageSize:           4 kB
@@ -232,7 +232,7 @@ Locked:                0 kB
 THPeligible:           0
 ProtectionKey:         0
 VmFlags: rd mr mw me sd 
-716be1a30000-716be1a34000 r--p 0022f000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
+71e726c30000-71e726c34000 r--p 0022f000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
 Size:                 16 kB
 KernelPageSize:        4 kB
 MMUPageSize:           4 kB
@@ -258,7 +258,7 @@ Locked:                0 kB
 THPeligible:           0
 ProtectionKey:         0
 VmFlags: rd mr mw me ac sd 
-716be1a34000-716be1a36000 rw-p 00233000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
+71e726c34000-71e726c36000 rw-p 00233000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
 Size:                  8 kB
 KernelPageSize:        4 kB
 MMUPageSize:           4 kB
@@ -284,7 +284,7 @@ Locked:                0 kB
 THPeligible:           0
 ProtectionKey:         0
 VmFlags: rd wr mr mw me ac sd 
-716be1a36000-716be1a43000 rw-p 00000000 00:00 0 
+71e726c36000-71e726c43000 rw-p 00000000 00:00 0 
 Size:                 52 kB
 KernelPageSize:        4 kB
 MMUPageSize:           4 kB
@@ -310,189 +310,7 @@ Locked:                0 kB
 THPeligible:           0
 ProtectionKey:         0
 VmFlags: rd wr mr mw me ac sd 
-716be1c00000-716be1c01000 r--p 00000000 103:03 8784007                   /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/latest/build/libtrueos_ioctl_trace.so
-Size:                  4 kB
-KernelPageSize:        4 kB
-MMUPageSize:           4 kB
-Rss:                   4 kB
-Pss:                   4 kB
-Pss_Dirty:             4 kB
-Shared_Clean:          0 kB
-Shared_Dirty:          0 kB
-Private_Clean:         0 kB
-Private_Dirty:         4 kB
-Referenced:            4 kB
-Anonymous:             0 kB
-KSM:                   0 kB
-LazyFree:              0 kB
-AnonHugePages:         0 kB
-ShmemPmdMapped:        0 kB
-FilePmdMapped:         0 kB
-Shared_Hugetlb:        0 kB
-Private_Hugetlb:       0 kB
-Swap:                  0 kB
-SwapPss:               0 kB
-Locked:                0 kB
-THPeligible:           0
-ProtectionKey:         0
-VmFlags: rd mr mw me sd 
-716be1c01000-716be1c04000 r-xp 00001000 103:03 8784007                   /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/latest/build/libtrueos_ioctl_trace.so
-Size:                 12 kB
-KernelPageSize:        4 kB
-MMUPageSize:           4 kB
-Rss:                  12 kB
-Pss:                  12 kB
-Pss_Dirty:            12 kB
-Shared_Clean:          0 kB
-Shared_Dirty:          0 kB
-Private_Clean:         0 kB
-Private_Dirty:        12 kB
-Referenced:           12 kB
-Anonymous:             0 kB
-KSM:                   0 kB
-LazyFree:              0 kB
-AnonHugePages:         0 kB
-ShmemPmdMapped:        0 kB
-FilePmdMapped:         0 kB
-Shared_Hugetlb:        0 kB
-Private_Hugetlb:       0 kB
-Swap:                  0 kB
-SwapPss:               0 kB
-Locked:                0 kB
-THPeligible:           0
-ProtectionKey:         0
-VmFlags: rd ex mr mw me sd 
-716be1c04000-716be1c06000 r--p 00004000 103:03 8784007                   /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/latest/build/libtrueos_ioctl_trace.so
-Size:                  8 kB
-KernelPageSize:        4 kB
-MMUPageSize:           4 kB
-Rss:                   8 kB
-Pss:                   8 kB
-Pss_Dirty:             8 kB
-Shared_Clean:          0 kB
-Shared_Dirty:          0 kB
-Private_Clean:         0 kB
-Private_Dirty:         8 kB
-Referenced:            8 kB
-Anonymous:             0 kB
-KSM:                   0 kB
-LazyFree:              0 kB
-AnonHugePages:         0 kB
-ShmemPmdMapped:        0 kB
-FilePmdMapped:         0 kB
-Shared_Hugetlb:        0 kB
-Private_Hugetlb:       0 kB
-Swap:                  0 kB
-SwapPss:               0 kB
-Locked:                0 kB
-THPeligible:           0
-ProtectionKey:         0
-VmFlags: rd mr mw me sd 
-716be1c06000-716be1c07000 r--p 00005000 103:03 8784007                   /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/latest/build/libtrueos_ioctl_trace.so
-Size:                  4 kB
-KernelPageSize:        4 kB
-MMUPageSize:           4 kB
-Rss:                   4 kB
-Pss:                   4 kB
-Pss_Dirty:             4 kB
-Shared_Clean:          0 kB
-Shared_Dirty:          0 kB
-Private_Clean:         0 kB
-Private_Dirty:         4 kB
-Referenced:            4 kB
-Anonymous:             4 kB
-KSM:                   0 kB
-LazyFree:              0 kB
-AnonHugePages:         0 kB
-ShmemPmdMapped:        0 kB
-FilePmdMapped:         0 kB
-Shared_Hugetlb:        0 kB
-Private_Hugetlb:       0 kB
-Swap:                  0 kB
-SwapPss:               0 kB
-Locked:                0 kB
-THPeligible:           0
-ProtectionKey:         0
-VmFlags: rd mr mw me ac sd 
-716be1c07000-716be1c08000 rw-p 00006000 103:03 8784007                   /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/latest/build/libtrueos_ioctl_trace.so
-Size:                  4 kB
-KernelPageSize:        4 kB
-MMUPageSize:           4 kB
-Rss:                   4 kB
-Pss:                   4 kB
-Pss_Dirty:             4 kB
-Shared_Clean:          0 kB
-Shared_Dirty:          0 kB
-Private_Clean:         0 kB
-Private_Dirty:         4 kB
-Referenced:            4 kB
-Anonymous:             4 kB
-KSM:                   0 kB
-LazyFree:              0 kB
-AnonHugePages:         0 kB
-ShmemPmdMapped:        0 kB
-FilePmdMapped:         0 kB
-Shared_Hugetlb:        0 kB
-Private_Hugetlb:       0 kB
-Swap:                  0 kB
-SwapPss:               0 kB
-Locked:                0 kB
-THPeligible:           0
-ProtectionKey:         0
-VmFlags: rd wr mr mw me ac sd 
-716be1c08000-716be1e90000 rw-p 00000000 00:00 0 
-Size:               2592 kB
-KernelPageSize:        4 kB
-MMUPageSize:           4 kB
-Rss:                   4 kB
-Pss:                   4 kB
-Pss_Dirty:             4 kB
-Shared_Clean:          0 kB
-Shared_Dirty:          0 kB
-Private_Clean:         0 kB
-Private_Dirty:         4 kB
-Referenced:            4 kB
-Anonymous:             4 kB
-KSM:                   0 kB
-LazyFree:              0 kB
-AnonHugePages:         0 kB
-ShmemPmdMapped:        0 kB
-FilePmdMapped:         0 kB
-Shared_Hugetlb:        0 kB
-Private_Hugetlb:       0 kB
-Swap:                  0 kB
-SwapPss:               0 kB
-Locked:                0 kB
-THPeligible:           0
-ProtectionKey:         0
-VmFlags: rd wr mr mw me ac sd 
-716be1f80000-716be1f83000 rw-p 00000000 00:00 0 
-Size:                 12 kB
-KernelPageSize:        4 kB
-MMUPageSize:           4 kB
-Rss:                   8 kB
-Pss:                   8 kB
-Pss_Dirty:             8 kB
-Shared_Clean:          0 kB
-Shared_Dirty:          0 kB
-Private_Clean:         0 kB
-Private_Dirty:         8 kB
-Referenced:            8 kB
-Anonymous:             8 kB
-KSM:                   0 kB
-LazyFree:              0 kB
-AnonHugePages:         0 kB
-ShmemPmdMapped:        0 kB
-FilePmdMapped:         0 kB
-Shared_Hugetlb:        0 kB
-Private_Hugetlb:       0 kB
-Swap:                  0 kB
-SwapPss:               0 kB
-Locked:                0 kB
-THPeligible:           0
-ProtectionKey:         0
-VmFlags: rd wr mr mw me ac sd 
-716be1f83000-716be1f89000 r--p 00000000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
+71e726d6f000-71e726d75000 r--p 00000000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
 Size:                 24 kB
 KernelPageSize:        4 kB
 MMUPageSize:           4 kB
@@ -518,16 +336,16 @@ Locked:                0 kB
 THPeligible:           0
 ProtectionKey:         0
 VmFlags: rd mr mw me sd 
-716be1f89000-716be1fdb000 r-xp 00006000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
+71e726d75000-71e726dc7000 r-xp 00006000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
 Size:                328 kB
 KernelPageSize:        4 kB
 MMUPageSize:           4 kB
 Rss:                 192 kB
-Pss:                  16 kB
+Pss:                  20 kB
 Pss_Dirty:             0 kB
-Shared_Clean:        192 kB
+Shared_Clean:        188 kB
 Shared_Dirty:          0 kB
-Private_Clean:         0 kB
+Private_Clean:         4 kB
 Private_Dirty:         0 kB
 Referenced:          192 kB
 Anonymous:             0 kB
@@ -544,18 +362,18 @@ Locked:                0 kB
 THPeligible:           0
 ProtectionKey:         0
 VmFlags: rd ex mr mw me sd 
-716be1fdb000-716be2012000 r--p 00058000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
+71e726dc7000-71e726dfe000 r--p 00058000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
 Size:                220 kB
 KernelPageSize:        4 kB
 MMUPageSize:           4 kB
-Rss:                 120 kB
-Pss:                  11 kB
+Rss:                  96 kB
+Pss:                   7 kB
 Pss_Dirty:             0 kB
-Shared_Clean:        120 kB
+Shared_Clean:         96 kB
 Shared_Dirty:          0 kB
 Private_Clean:         0 kB
 Private_Dirty:         0 kB
-Referenced:          120 kB
+Referenced:           96 kB
 Anonymous:             0 kB
 KSM:                   0 kB
 LazyFree:              0 kB
@@ -570,7 +388,7 @@ Locked:                0 kB
 THPeligible:           0
 ProtectionKey:         0
 VmFlags: rd mr mw me sd 
-716be2012000-716be2013000 r--p 0008f000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
+71e726dfe000-71e726dff000 r--p 0008f000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
 Size:                  4 kB
 KernelPageSize:        4 kB
 MMUPageSize:           4 kB
@@ -596,7 +414,7 @@ Locked:                0 kB
 THPeligible:           0
 ProtectionKey:         0
 VmFlags: rd mr mw me ac sd 
-716be2013000-716be2014000 rw-p 00090000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
+71e726dff000-71e726e00000 rw-p 00090000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
 Size:                  4 kB
 KernelPageSize:        4 kB
 MMUPageSize:           4 kB
@@ -622,7 +440,189 @@ Locked:                0 kB
 THPeligible:           0
 ProtectionKey:         0
 VmFlags: rd wr mr mw me ac sd 
-716be2031000-716be2033000 rw-p 00000000 00:00 0 
+71e726e00000-71e726e01000 r--p 00000000 103:03 8784007                   /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/latest/build/libtrueos_ioctl_trace.so
+Size:                  4 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                   4 kB
+Pss:                   4 kB
+Pss_Dirty:             4 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         4 kB
+Referenced:            4 kB
+Anonymous:             0 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd mr mw me sd 
+71e726e01000-71e726e04000 r-xp 00001000 103:03 8784007                   /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/latest/build/libtrueos_ioctl_trace.so
+Size:                 12 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                  12 kB
+Pss:                  12 kB
+Pss_Dirty:            12 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:        12 kB
+Referenced:           12 kB
+Anonymous:             0 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd ex mr mw me sd 
+71e726e04000-71e726e06000 r--p 00004000 103:03 8784007                   /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/latest/build/libtrueos_ioctl_trace.so
+Size:                  8 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                   8 kB
+Pss:                   8 kB
+Pss_Dirty:             8 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         8 kB
+Referenced:            8 kB
+Anonymous:             0 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd mr mw me sd 
+71e726e06000-71e726e07000 r--p 00005000 103:03 8784007                   /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/latest/build/libtrueos_ioctl_trace.so
+Size:                  4 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                   4 kB
+Pss:                   4 kB
+Pss_Dirty:             4 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         4 kB
+Referenced:            4 kB
+Anonymous:             4 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd mr mw me ac sd 
+71e726e07000-71e726e08000 rw-p 00006000 103:03 8784007                   /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/latest/build/libtrueos_ioctl_trace.so
+Size:                  4 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                   4 kB
+Pss:                   4 kB
+Pss_Dirty:             4 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         4 kB
+Referenced:            4 kB
+Anonymous:             4 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd wr mr mw me ac sd 
+71e726e08000-71e727090000 rw-p 00000000 00:00 0 
+Size:               2592 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                   4 kB
+Pss:                   4 kB
+Pss_Dirty:             4 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         4 kB
+Referenced:            4 kB
+Anonymous:             4 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd wr mr mw me ac sd 
+71e72710f000-71e727112000 rw-p 00000000 00:00 0 
+Size:                 12 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                   8 kB
+Pss:                   8 kB
+Pss_Dirty:             8 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         8 kB
+Referenced:            8 kB
+Anonymous:             8 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd wr mr mw me ac sd 
+71e72712f000-71e727131000 rw-p 00000000 00:00 0 
 Size:                  8 kB
 KernelPageSize:        4 kB
 MMUPageSize:           4 kB
@@ -648,7 +648,7 @@ Locked:                0 kB
 THPeligible:           0
 ProtectionKey:         0
 VmFlags: rd wr mr mw me ac sd 
-716be2033000-716be2037000 r--p 00000000 00:00 0                          [vvar]
+71e727131000-71e727135000 r--p 00000000 00:00 0                          [vvar]
 Size:                 16 kB
 KernelPageSize:        4 kB
 MMUPageSize:           4 kB
@@ -674,7 +674,7 @@ Locked:                0 kB
 THPeligible:           0
 ProtectionKey:         0
 VmFlags: rd mr pf io de dd sd 
-716be2037000-716be2039000 r--p 00000000 00:00 0                          [vvar_vclock]
+71e727135000-71e727137000 r--p 00000000 00:00 0                          [vvar_vclock]
 Size:                  8 kB
 KernelPageSize:        4 kB
 MMUPageSize:           4 kB
@@ -700,7 +700,7 @@ Locked:                0 kB
 THPeligible:           0
 ProtectionKey:         0
 VmFlags: rd mr pf io de dd sd 
-716be2039000-716be203b000 r-xp 00000000 00:00 0                          [vdso]
+71e727137000-71e727139000 r-xp 00000000 00:00 0                          [vdso]
 Size:                  8 kB
 KernelPageSize:        4 kB
 MMUPageSize:           4 kB
@@ -726,7 +726,7 @@ Locked:                0 kB
 THPeligible:           0
 ProtectionKey:         0
 VmFlags: rd ex mr mw me de sd 
-716be203b000-716be203c000 r--p 00000000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+71e727139000-71e72713a000 r--p 00000000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
 Size:                  4 kB
 KernelPageSize:        4 kB
 MMUPageSize:           4 kB
@@ -752,7 +752,7 @@ Locked:                0 kB
 THPeligible:           0
 ProtectionKey:         0
 VmFlags: rd mr mw me sd 
-716be203c000-716be206a000 r-xp 00001000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+71e72713a000-71e727168000 r-xp 00001000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
 Size:                184 kB
 KernelPageSize:        4 kB
 MMUPageSize:           4 kB
@@ -778,7 +778,7 @@ Locked:                0 kB
 THPeligible:           0
 ProtectionKey:         0
 VmFlags: rd ex mr mw me sd 
-716be206a000-716be2078000 r--p 0002f000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+71e727168000-71e727176000 r--p 0002f000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
 Size:                 56 kB
 KernelPageSize:        4 kB
 MMUPageSize:           4 kB
@@ -804,7 +804,7 @@ Locked:                0 kB
 THPeligible:           0
 ProtectionKey:         0
 VmFlags: rd mr mw me sd 
-716be2078000-716be207a000 r--p 0003d000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+71e727176000-71e727178000 r--p 0003d000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
 Size:                  8 kB
 KernelPageSize:        4 kB
 MMUPageSize:           4 kB
@@ -830,7 +830,7 @@ Locked:                0 kB
 THPeligible:           0
 ProtectionKey:         0
 VmFlags: rd mr mw me ac sd 
-716be207a000-716be207b000 rw-p 0003f000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+71e727178000-71e727179000 rw-p 0003f000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
 Size:                  4 kB
 KernelPageSize:        4 kB
 MMUPageSize:           4 kB
@@ -856,7 +856,7 @@ Locked:                0 kB
 THPeligible:           0
 ProtectionKey:         0
 VmFlags: rd wr mr mw me ac sd 
-716be207b000-716be207c000 rw-p 00000000 00:00 0 
+71e727179000-71e72717a000 rw-p 00000000 00:00 0 
 Size:                  4 kB
 KernelPageSize:        4 kB
 MMUPageSize:           4 kB
@@ -882,7 +882,7 @@ Locked:                0 kB
 THPeligible:           0
 ProtectionKey:         0
 VmFlags: rd wr mr mw me ac sd 
-7ffd308dd000-7ffd308ff000 rw-p 00000000 00:00 0                          [stack]
+7ffc9c24c000-7ffc9c26e000 rw-p 00000000 00:00 0                          [stack]
 Size:                136 kB
 KernelPageSize:        4 kB
 MMUPageSize:           4 kB

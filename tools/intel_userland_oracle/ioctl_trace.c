@@ -185,7 +185,7 @@ static void copy_proc_file_snapshot(const char *tag, const char *proc_name, cons
     char src_path[128];
     char safe_tag[128];
     char name[320];
-    char dst_path[768];
+    char dst_path[1024];
 
     sanitize_token(tag, safe_tag, sizeof(safe_tag));
     snprintf(src_path, sizeof(src_path), "/proc/self/%s", proc_name);
@@ -220,7 +220,7 @@ static void copy_proc_file_snapshot(const char *tag, const char *proc_name, cons
 static void write_environ_snapshot(const char *tag) {
     char safe_tag[128];
     char name[320];
-    char path[768];
+    char path[1024];
 
     sanitize_token(tag, safe_tag, sizeof(safe_tag));
     snprintf(name,
@@ -244,7 +244,7 @@ static void write_environ_snapshot(const char *tag) {
 static void write_fd_snapshot(const char *tag) {
     char safe_tag[128];
     char name[320];
-    char path[768];
+    char path[1024];
 
     sanitize_token(tag, safe_tag, sizeof(safe_tag));
     snprintf(name,
@@ -269,7 +269,7 @@ static void write_fd_snapshot(const char *tag) {
         if (de->d_name[0] == '.') {
             continue;
         }
-        char link_path[128];
+        char link_path[512];
         char target[512];
         snprintf(link_path, sizeof(link_path), "/proc/self/fd/%s", de->d_name);
         ssize_t len = readlink(link_path, target, sizeof(target) - 1);
