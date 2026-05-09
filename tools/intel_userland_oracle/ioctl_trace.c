@@ -1,7 +1,9 @@
 #define _GNU_SOURCE
 
+#include <dirent.h>
 #include <dlfcn.h>
 #include <errno.h>
+#include <execinfo.h>
 #include <fcntl.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -11,6 +13,7 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <sys/sysmacros.h>
 #include <time.h>
 #include <unistd.h>
@@ -21,7 +24,9 @@
 #define MAX_FDS 4096
 #define MAX_BOS 16384
 #define MAX_MAPS 16384
-#define MAX_DUMP_BYTES_DEFAULT (1024u * 1024u)
+#define STACK_DEPTH_MAX 128
+
+extern char **environ;
 
 typedef struct FdInfo {
     int seen;
@@ -63,7 +68,10 @@ static FdInfo fds[MAX_FDS];
 static BoInfo bos[MAX_BOS];
 static MapInfo maps[MAX_MAPS];
 static uint64_t seq_no = 0;
-static size_t max_dump_bytes = MAX_DUMP_BYTES_DEFAULT;
+static size_t max_dump_bytes = 0;
+static int trace_stacks = 1;
+static int trace_stack_depth = 64;
+static int trace_snapshots = 1;
 static __thread int in_hook = 0;
 
 static void mkdir_one(const char *path) {
@@ -104,6 +112,193 @@ static void trace_log(const char *fmt, ...) {
     va_end(ap);
     fputc('\n', log_file);
     fflush(log_file);
+    in_hook = 0;
+}
+
+static void sanitize_token(const char *src, char *dst, size_t dst_len) {
+    if (!dst_len) {
+        return;
+    }
+    size_t j = 0;
+    for (size_t i = 0; src && src[i] && j + 1 < dst_len; ++i) {
+        char c = src[i];
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.') {
+            dst[j++] = c;
+        } else {
+            dst[j++] = '_';
+        }
+    }
+    dst[j] = '\0';
+}
+
+static void trace_stack(const char *tag) {
+    if (!log_file || !trace_stacks || in_hook) {
+        return;
+    }
+
+    in_hook = 1;
+    void *frames[STACK_DEPTH_MAX];
+    int depth = trace_stack_depth;
+    if (depth <= 0 || depth > STACK_DEPTH_MAX) {
+        depth = STACK_DEPTH_MAX;
+    }
+    int count = backtrace(frames, depth);
+    char **symbols = backtrace_symbols(frames, count);
+    uint64_t seq = ++seq_no;
+    fprintf(log_file,
+            "trace seq=%llu t_ns=%llu stack tag=%s pid=%d tid=%ld depth=%d\n",
+            (unsigned long long)seq,
+            (unsigned long long)now_ns(),
+            tag,
+            getpid(),
+            (long)syscall(SYS_gettid),
+            count);
+    for (int i = 0; i < count; ++i) {
+        fprintf(log_file,
+                "trace-stack seq=%llu tag=%s frame=%d pc=%p symbol=\"%s\"\n",
+                (unsigned long long)seq,
+                tag,
+                i,
+                frames[i],
+                symbols ? symbols[i] : "?");
+    }
+    free(symbols);
+    fflush(log_file);
+    in_hook = 0;
+}
+
+static void log_artifact_direct(const char *tag, const char *file) {
+    if (!log_file) {
+        return;
+    }
+    fprintf(log_file,
+            "trace seq=%llu t_ns=%llu artifact tag=%s file=\"dumps/%s\"\n",
+            (unsigned long long)++seq_no,
+            (unsigned long long)now_ns(),
+            tag,
+            file);
+    fflush(log_file);
+}
+
+static void copy_proc_file_snapshot(const char *tag, const char *proc_name, const char *suffix) {
+    char src_path[128];
+    char safe_tag[128];
+    char name[320];
+    char dst_path[768];
+
+    sanitize_token(tag, safe_tag, sizeof(safe_tag));
+    snprintf(src_path, sizeof(src_path), "/proc/self/%s", proc_name);
+    snprintf(name,
+             sizeof(name),
+             "%06llu_%s_%s.txt",
+             (unsigned long long)seq_no,
+             safe_tag,
+             suffix);
+    snprintf(dst_path, sizeof(dst_path), "%s/%s", dump_dir, name);
+
+    FILE *src = fopen(src_path, "rb");
+    if (!src) {
+        return;
+    }
+    FILE *dst = fopen(dst_path, "wb");
+    if (!dst) {
+        fclose(src);
+        return;
+    }
+
+    char buf[16384];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), src)) > 0) {
+        fwrite(buf, 1, n, dst);
+    }
+    fclose(dst);
+    fclose(src);
+    log_artifact_direct(tag, name);
+}
+
+static void write_environ_snapshot(const char *tag) {
+    char safe_tag[128];
+    char name[320];
+    char path[768];
+
+    sanitize_token(tag, safe_tag, sizeof(safe_tag));
+    snprintf(name,
+             sizeof(name),
+             "%06llu_%s_environ.txt",
+             (unsigned long long)seq_no,
+             safe_tag);
+    snprintf(path, sizeof(path), "%s/%s", dump_dir, name);
+
+    FILE *f = fopen(path, "wb");
+    if (!f) {
+        return;
+    }
+    for (char **e = environ; e && *e; ++e) {
+        fprintf(f, "%s\n", *e);
+    }
+    fclose(f);
+    log_artifact_direct(tag, name);
+}
+
+static void write_fd_snapshot(const char *tag) {
+    char safe_tag[128];
+    char name[320];
+    char path[768];
+
+    sanitize_token(tag, safe_tag, sizeof(safe_tag));
+    snprintf(name,
+             sizeof(name),
+             "%06llu_%s_fd.txt",
+             (unsigned long long)seq_no,
+             safe_tag);
+    snprintf(path, sizeof(path), "%s/%s", dump_dir, name);
+
+    DIR *dir = opendir("/proc/self/fd");
+    if (!dir) {
+        return;
+    }
+    FILE *f = fopen(path, "wb");
+    if (!f) {
+        closedir(dir);
+        return;
+    }
+
+    struct dirent *de;
+    while ((de = readdir(dir)) != NULL) {
+        if (de->d_name[0] == '.') {
+            continue;
+        }
+        char link_path[128];
+        char target[512];
+        snprintf(link_path, sizeof(link_path), "/proc/self/fd/%s", de->d_name);
+        ssize_t len = readlink(link_path, target, sizeof(target) - 1);
+        if (len < 0) {
+            snprintf(target, sizeof(target), "? errno=%d", errno);
+        } else {
+            target[len] = '\0';
+        }
+        fprintf(f, "fd=%s target=\"%s\"\n", de->d_name, target);
+    }
+    fclose(f);
+    closedir(dir);
+    log_artifact_direct(tag, name);
+}
+
+static void snapshot_process_state(const char *tag, int include_heavy) {
+    if (!trace_snapshots || in_hook) {
+        return;
+    }
+    in_hook = 1;
+    copy_proc_file_snapshot(tag, "status", "proc_status");
+    copy_proc_file_snapshot(tag, "maps", "proc_maps");
+    copy_proc_file_snapshot(tag, "limits", "proc_limits");
+    copy_proc_file_snapshot(tag, "mountinfo", "proc_mountinfo");
+    write_fd_snapshot(tag);
+    if (include_heavy) {
+        copy_proc_file_snapshot(tag, "smaps", "proc_smaps");
+        write_environ_snapshot(tag);
+    }
     in_hook = 0;
 }
 
@@ -266,7 +461,7 @@ static void dump_bo_bytes(const char *phase, uint32_t handle, uint64_t offset, v
     if (!addr || len == 0) {
         return;
     }
-    size_t dump_len = len < max_dump_bytes ? len : max_dump_bytes;
+    size_t dump_len = (max_dump_bytes == 0 || len < max_dump_bytes) ? len : max_dump_bytes;
     char name[256];
     snprintf(
         name,
@@ -367,6 +562,12 @@ static void log_execbuffer(const struct drm_i915_gem_execbuffer2 *exec, const ch
     if (!exec) {
         return;
     }
+    char tag[64];
+    snprintf(tag, sizeof(tag), "execbuffer-%s", phase);
+    trace_stack(tag);
+    if (strcmp(phase, "pre") == 0) {
+        snapshot_process_state("execbuffer-pre", 0);
+    }
     trace_log(
         "execbuffer-%s buffers_ptr=0x%llX buffer_count=%u batch_start=0x%X batch_len=0x%X flags=0x%llX rsvd1=0x%llX rsvd2=0x%llX",
         phase,
@@ -436,9 +637,23 @@ static void trace_ctor(void) {
     const char *max_dump = getenv("TRUEOS_ORACLE_MAX_DUMP_BYTES");
     if (max_dump && max_dump[0]) {
         max_dump_bytes = strtoull(max_dump, NULL, 0);
-        if (max_dump_bytes == 0) {
-            max_dump_bytes = MAX_DUMP_BYTES_DEFAULT;
+    }
+    const char *stacks = getenv("TRUEOS_ORACLE_TRACE_STACKS");
+    if (stacks && stacks[0]) {
+        trace_stacks = atoi(stacks) != 0;
+    }
+    const char *stack_depth = getenv("TRUEOS_ORACLE_STACK_DEPTH");
+    if (stack_depth && stack_depth[0]) {
+        trace_stack_depth = atoi(stack_depth);
+        if (trace_stack_depth <= 0) {
+            trace_stack_depth = 1;
+        } else if (trace_stack_depth > STACK_DEPTH_MAX) {
+            trace_stack_depth = STACK_DEPTH_MAX;
         }
+    }
+    const char *snapshots = getenv("TRUEOS_ORACLE_TRACE_SNAPSHOTS");
+    if (snapshots && snapshots[0]) {
+        trace_snapshots = atoi(snapshots) != 0;
     }
     mkdir_p(out_dir);
     mkdir_p(dump_dir);
@@ -446,11 +661,20 @@ static void trace_ctor(void) {
     snprintf(log_path, sizeof(log_path), "%s/log.txt", out_dir);
     log_file = fopen(log_path, "a");
     in_hook = 0;
-    trace_log("trace-start pid=%d out_dir=\"%s\" max_dump_bytes=0x%zX", getpid(), out_dir, max_dump_bytes);
+    trace_log("trace-start pid=%d out_dir=\"%s\" max_dump_mode=%s max_dump_cap=0x%zX trace_stacks=%d stack_depth=%d trace_snapshots=%d",
+              getpid(),
+              out_dir,
+              max_dump_bytes ? "capped" : "full",
+              max_dump_bytes,
+              trace_stacks,
+              trace_stack_depth,
+              trace_snapshots);
+    snapshot_process_state("start", 1);
 }
 
 __attribute__((destructor))
 static void trace_dtor(void) {
+    snapshot_process_state("end", 1);
     trace_log("trace-end pid=%d", getpid());
     if (log_file) {
         fclose(log_file);
@@ -471,6 +695,7 @@ int open(const char *path, int flags, ...) {
     if (!in_hook && fd >= 0) {
         track_fd(fd, path);
         trace_log("open fd=%d flags=0x%X path=\"%s\"", fd, flags, path);
+        trace_stack("open");
     }
     return fd;
 }
@@ -488,6 +713,7 @@ int open64(const char *path, int flags, ...) {
     if (!in_hook && fd >= 0) {
         track_fd(fd, path);
         trace_log("open64 fd=%d flags=0x%X path=\"%s\"", fd, flags, path);
+        trace_stack("open64");
     }
     return fd;
 }
@@ -509,6 +735,7 @@ int openat(int dirfd, const char *path, int flags, ...) {
         }
         trace_log("openat dirfd=%d fd=%d flags=0x%X path=\"%s\" resolved=\"%s\"",
                   dirfd, fd, flags, path, (fd < MAX_FDS && fds[fd].seen) ? fds[fd].path : "?");
+        trace_stack("openat");
     }
     return fd;
 }
@@ -517,6 +744,7 @@ int close(int fd) {
     init_real();
     if (!in_hook) {
         trace_log("close fd=%d path=\"%s\"", fd, (fd >= 0 && fd < MAX_FDS && fds[fd].seen) ? fds[fd].path : "?");
+        trace_stack("close");
     }
     int ret = real_close_fn(fd);
     if (fd >= 0 && fd < MAX_FDS) {
@@ -550,6 +778,7 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t offset) {
             (unsigned long long)(uint64_t)offset,
             handle
         );
+        trace_stack("mmap");
     }
     return result;
 }
@@ -579,6 +808,7 @@ void *mmap64(void *addr, size_t len, int prot, int flags, int fd, off64_t offset
             (unsigned long long)(uint64_t)offset,
             handle
         );
+        trace_stack("mmap64");
     }
     return result;
 }
@@ -591,6 +821,7 @@ int munmap(void *addr, size_t len) {
             dump_bo_bytes("munmap", map->handle, 0, addr, map->len < len ? map->len : len);
         }
         trace_log("munmap addr=%p len=0x%zX handle=%u", addr, len, map ? map->handle : 0);
+        trace_stack("munmap");
         update_bo_for_munmap(addr, len);
         forget_map(addr);
     }
@@ -616,6 +847,7 @@ int ioctl(int fd, unsigned long request, ...) {
             name,
             arg
         );
+        trace_stack("ioctl-enter");
         if (request == DRM_IOCTL_I915_GEM_EXECBUFFER2 || request == DRM_IOCTL_I915_GEM_EXECBUFFER2_WR) {
             log_execbuffer((const struct drm_i915_gem_execbuffer2 *)arg, "pre");
         }
@@ -626,6 +858,7 @@ int ioctl(int fd, unsigned long request, ...) {
 
     if (!in_hook) {
         trace_log("ioctl-exit fd=%d request=0x%lX name=%s ret=%d errno=%d", fd, request, name, ret, saved_errno);
+        trace_stack("ioctl-exit");
 
         if (ret == 0 && request == DRM_IOCTL_I915_GEM_CREATE) {
             struct drm_i915_gem_create *create = (struct drm_i915_gem_create *)arg;
