@@ -2,7 +2,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-const MEDIA_DECODE_CACHE_PATH: &str = "media/demo_yelly.mp4";
+pub(crate) const MEDIA_DECODE_CACHE_PATH: &str = "media/demo_yelly.mp4";
 
 pub(crate) enum MediaSource {
     Memory {

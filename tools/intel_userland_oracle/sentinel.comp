@@ -1,0 +1,23 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) buffer Out {
+    uint words[];
+} out_buf;
+
+void main() {
+    uint lane = gl_LocalInvocationIndex;
+    if (lane == 0u) {
+        out_buf.words[0] = 0xC0DE7733u;
+        out_buf.words[1] = 8u;
+        out_buf.words[2] = gl_WorkGroupID.x;
+        out_buf.words[3] = 0xA7808086u;
+    }
+
+    uint base = 8u + lane * 4u;
+    out_buf.words[base + 0u] = 0xC0DE7800u + lane;
+    out_buf.words[base + 1u] = gl_GlobalInvocationID.x;
+    out_buf.words[base + 2u] = gl_LocalInvocationID.x;
+    out_buf.words[base + 3u] = 0xE0F00000u + lane;
+}

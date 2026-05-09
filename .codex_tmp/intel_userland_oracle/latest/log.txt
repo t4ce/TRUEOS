@@ -1,0 +1,516 @@
+oracle-run: started_at=2026-05-09T02:08:16+02:00
+oracle-run: root=/home/t4ce/REPOS/TRUEOS
+oracle-run: out_dir=/home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/latest
+oracle-run: render_nodes=total 0;lrwxrwxrwx 1 root root  8 May  7 23:32 pci-0000:00:02.0-card -> ../card1;lrwxrwxrwx 1 root root 13 May  7 23:32 pci-0000:00:02.0-render -> ../renderD128;lrwxrwxrwx 1 root root  8 May  7 23:32 pci-0000:01:00.0-card -> ../card2;lrwxrwxrwx 1 root root  8 May  7 23:31 pci-0000:01:00.0-platform-simple-framebuffer.0-card -> ../card0;lrwxrwxrwx 1 root root 13 May  7 23:32 pci-0000:01:00.0-render -> ../renderD129;
+oracle-run: lspci=00:02.0 Display controller [0380]: Intel Corporation Raptor Lake-S GT1 [UHD Graphics 770] [8086:a780] (rev 04)
+/home/t4ce/REPOS/TRUEOS/tools/intel_userland_oracle/sentinel.comp
+oracle-run: build_ok=1
+oracle-run: env MESA_VK_DEVICE_SELECT=8086:a780
+oracle-run: env VK_LOADER_DRIVERS_SELECT=*intel*
+oracle-run: env TRUEOS_ORACLE_VK_DEVICE_ID=0xA780
+oracle-run: env TRUEOS_ORACLE_MAX_DUMP_BYTES=1048576
+trace seq=1 t_ns=95778971351597 trace-start pid=687803 out_dir="/home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/latest" max_dump_bytes=0x100000
+oracle-app: wanted vendor=0x8086 device=0xA780
+oracle-app: lens macro=begin workload=one-workgroup-empty-circle lanes=8
+trace seq=2 t_ns=95778974493171 open64 fd=4 flags=0x0 path="/usr/share/drirc.d/00-mesa-defaults.conf"
+trace seq=3 t_ns=95778975223885 close fd=4 path="/usr/share/drirc.d/00-mesa-defaults.conf"
+trace seq=4 t_ns=95778975241119 open64 fd=4 flags=0x0 path="/usr/share/drirc.d/00-radv-defaults.conf"
+trace seq=5 t_ns=95778975365367 close fd=4 path="/usr/share/drirc.d/00-radv-defaults.conf"
+trace seq=6 t_ns=95778975493766 open64 fd=4 flags=0x0 path="/usr/share/drirc.d/00-mesa-defaults.conf"
+trace seq=7 t_ns=95778976231262 close fd=4 path="/usr/share/drirc.d/00-mesa-defaults.conf"
+trace seq=8 t_ns=95778976248792 open64 fd=4 flags=0x0 path="/usr/share/drirc.d/00-radv-defaults.conf"
+trace seq=9 t_ns=95778976390556 close fd=4 path="/usr/share/drirc.d/00-radv-defaults.conf"
+trace seq=10 t_ns=95778977169789 open64 fd=4 flags=0x80002 path="/dev/dri/renderD128"
+trace seq=11 t_ns=95778977564798 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC0406400 name=DRM_IOCTL_VERSION arg=0x5f795e01e9b0
+trace seq=12 t_ns=95778977574597 ioctl-exit fd=4 request=0xC0406400 name=DRM_IOCTL_VERSION ret=0 errno=22
+trace seq=13 t_ns=95778977578203 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC0406400 name=DRM_IOCTL_VERSION arg=0x5f795e01e9b0
+trace seq=14 t_ns=95778977581600 ioctl-exit fd=4 request=0xC0406400 name=DRM_IOCTL_VERSION ret=0 errno=22
+trace seq=15 t_ns=95778977586737 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC0106446 name=DRM_IOCTL_I915_GETPARAM arg=0x7fff574f9860
+trace seq=16 t_ns=95778977590512 ioctl-exit fd=4 request=0xC0106446 name=DRM_IOCTL_I915_GETPARAM ret=0 errno=22
+trace seq=17 t_ns=95778977592875 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC0106446 name=DRM_IOCTL_I915_GETPARAM arg=0x7fff574f9860
+trace seq=18 t_ns=95778977595282 ioctl-exit fd=4 request=0xC0106446 name=DRM_IOCTL_I915_GETPARAM ret=0 errno=22
+trace seq=19 t_ns=95778977597231 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC0106479 name=DRM_IOCTL_I915_QUERY arg=0x7fff574f9840
+trace seq=20 t_ns=95778977600038 ioctl-exit fd=4 request=0xC0106479 name=DRM_IOCTL_I915_QUERY ret=0 errno=22
+trace seq=21 t_ns=95778977602266 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC0106479 name=DRM_IOCTL_I915_QUERY arg=0x7fff574f9840
+trace seq=22 t_ns=95778977606052 ioctl-exit fd=4 request=0xC0106479 name=DRM_IOCTL_I915_QUERY ret=0 errno=22
+trace seq=23 t_ns=95778977609112 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC0106479 name=DRM_IOCTL_I915_QUERY arg=0x7fff574f9840
+trace seq=24 t_ns=95778977611839 ioctl-exit fd=4 request=0xC0106479 name=DRM_IOCTL_I915_QUERY ret=0 errno=22
+trace seq=25 t_ns=95778977613850 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC0106479 name=DRM_IOCTL_I915_QUERY arg=0x7fff574f9820
+trace seq=26 t_ns=95778977616925 ioctl-exit fd=4 request=0xC0106479 name=DRM_IOCTL_I915_QUERY ret=0 errno=22
+trace seq=27 t_ns=95778977628661 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC0106479 name=DRM_IOCTL_I915_QUERY arg=0x7fff574f9820
+trace seq=28 t_ns=95778977632779 ioctl-exit fd=4 request=0xC0106479 name=DRM_IOCTL_I915_QUERY ret=0 errno=22
+trace seq=29 t_ns=95778977636186 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0x80106463 name=UNKNOWN arg=0x7fff574f9910
+trace seq=30 t_ns=95778977642447 ioctl-exit fd=4 request=0x80106463 name=UNKNOWN ret=0 errno=22
+trace seq=31 t_ns=95778977645720 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC0186474 name=DRM_IOCTL_I915_GEM_CONTEXT_GETPARAM arg=0x7fff574f9910
+trace seq=32 t_ns=95778977649667 ioctl-exit fd=4 request=0xC0186474 name=DRM_IOCTL_I915_GEM_CONTEXT_GETPARAM ret=0 errno=22
+trace seq=33 t_ns=95778977653453 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC010645B name=DRM_IOCTL_I915_GEM_CREATE arg=0x7fff574f9900
+trace seq=34 t_ns=95778977664437 ioctl-exit fd=4 request=0xC010645B name=DRM_IOCTL_I915_GEM_CREATE ret=0 errno=22
+trace seq=35 t_ns=95778977883270 gem-create handle=1 size=0x1000
+trace seq=36 t_ns=95778977890487 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC0106462 name=UNKNOWN arg=0x7fff574f9910
+trace seq=37 t_ns=95778977894408 ioctl-exit fd=4 request=0xC0106462 name=UNKNOWN ret=0 errno=22
+trace seq=38 t_ns=95778977897368 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0x40086409 name=DRM_IOCTL_GEM_CLOSE arg=0x7fff574f98f0
+trace seq=39 t_ns=95778977905547 ioctl-exit fd=4 request=0x40086409 name=DRM_IOCTL_GEM_CLOSE ret=0 errno=22
+trace seq=40 t_ns=95778977908418 gem-close handle=1
+trace seq=41 t_ns=95778977910635 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC0106446 name=DRM_IOCTL_I915_GETPARAM arg=0x7fff574f9860
+trace seq=42 t_ns=95778977915672 ioctl-exit fd=4 request=0xC0106446 name=DRM_IOCTL_I915_GETPARAM ret=0 errno=22
+trace seq=43 t_ns=95778977918364 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC0106446 name=DRM_IOCTL_I915_GETPARAM arg=0x7fff574f9860
+trace seq=44 t_ns=95778977921445 ioctl-exit fd=4 request=0xC0106446 name=DRM_IOCTL_I915_GETPARAM ret=0 errno=22
+trace seq=45 t_ns=95778977923909 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC0106446 name=DRM_IOCTL_I915_GETPARAM arg=0x7fff574f9860
+trace seq=46 t_ns=95778977927384 ioctl-exit fd=4 request=0xC0106446 name=DRM_IOCTL_I915_GETPARAM ret=0 errno=22
+trace seq=47 t_ns=95778977936514 open64 fd=5 flags=0x0 path="/proc/meminfo"
+trace seq=48 t_ns=95778977969796 close fd=5 path="/proc/meminfo"
+trace seq=49 t_ns=95778977989844 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC0106446 name=DRM_IOCTL_I915_GETPARAM arg=0x7fff574f9950
+trace seq=50 t_ns=95778977995326 ioctl-exit fd=4 request=0xC0106446 name=DRM_IOCTL_I915_GETPARAM ret=0 errno=22
+trace seq=51 t_ns=95778977998276 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC0106446 name=DRM_IOCTL_I915_GETPARAM arg=0x7fff574f9950
+trace seq=52 t_ns=95778978008661 ioctl-exit fd=4 request=0xC0106446 name=DRM_IOCTL_I915_GETPARAM ret=0 errno=22
+trace seq=53 t_ns=95778978015315 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC0106446 name=DRM_IOCTL_I915_GETPARAM arg=0x7fff574f9950
+trace seq=54 t_ns=95778978019239 ioctl-exit fd=4 request=0xC0106446 name=DRM_IOCTL_I915_GETPARAM ret=0 errno=22
+trace seq=55 t_ns=95778978022297 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC0106446 name=DRM_IOCTL_I915_GETPARAM arg=0x7fff574f9950
+trace seq=56 t_ns=95778978025763 ioctl-exit fd=4 request=0xC0106446 name=DRM_IOCTL_I915_GETPARAM ret=0 errno=22
+trace seq=57 t_ns=95778978028764 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC0106446 name=DRM_IOCTL_I915_GETPARAM arg=0x7fff574f9950
+trace seq=58 t_ns=95778978031726 ioctl-exit fd=4 request=0xC0106446 name=DRM_IOCTL_I915_GETPARAM ret=0 errno=22
+trace seq=59 t_ns=95778978035854 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC0106446 name=DRM_IOCTL_I915_GETPARAM arg=0x7fff574f9950
+trace seq=60 t_ns=95778978038901 ioctl-exit fd=4 request=0xC0106446 name=DRM_IOCTL_I915_GETPARAM ret=0 errno=22
+trace seq=61 t_ns=95778978047715 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC0186475 name=DRM_IOCTL_I915_GEM_CONTEXT_SETPARAM arg=0x7fff574f9940
+trace seq=62 t_ns=95778978052090 ioctl-exit fd=4 request=0xC0186475 name=DRM_IOCTL_I915_GEM_CONTEXT_SETPARAM ret=0 errno=22
+trace seq=63 t_ns=95778978055401 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC0186475 name=DRM_IOCTL_I915_GEM_CONTEXT_SETPARAM arg=0x7fff574f9940
+trace seq=64 t_ns=95778978059280 ioctl-exit fd=4 request=0xC0186475 name=DRM_IOCTL_I915_GEM_CONTEXT_SETPARAM ret=0 errno=22
+trace seq=65 t_ns=95778978061807 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC0186475 name=DRM_IOCTL_I915_GEM_CONTEXT_SETPARAM arg=0x7fff574f9940
+trace seq=66 t_ns=95778978065004 ioctl-exit fd=4 request=0xC0186475 name=DRM_IOCTL_I915_GEM_CONTEXT_SETPARAM ret=-1 errno=1
+trace seq=67 t_ns=95778978068068 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC0106446 name=DRM_IOCTL_I915_GETPARAM arg=0x7fff574f9950
+trace seq=68 t_ns=95778978072590 ioctl-exit fd=4 request=0xC0106446 name=DRM_IOCTL_I915_GETPARAM ret=0 errno=1
+trace seq=69 t_ns=95778978075394 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC0186474 name=DRM_IOCTL_I915_GEM_CONTEXT_GETPARAM arg=0x7fff574f9940
+trace seq=70 t_ns=95778978079656 ioctl-exit fd=4 request=0xC0186474 name=DRM_IOCTL_I915_GEM_CONTEXT_GETPARAM ret=0 errno=1
+trace seq=71 t_ns=95778978082579 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC0106446 name=DRM_IOCTL_I915_GETPARAM arg=0x7fff574f99b0
+trace seq=72 t_ns=95778978086454 ioctl-exit fd=4 request=0xC0106446 name=DRM_IOCTL_I915_GETPARAM ret=0 errno=0
+trace seq=73 t_ns=95778978096608 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC010640C name=DRM_IOCTL_GET_CAP arg=0x7fff574f98d0
+trace seq=74 t_ns=95778978101934 ioctl-exit fd=4 request=0xC010640C name=DRM_IOCTL_GET_CAP ret=0 errno=0
+trace seq=75 t_ns=95778978106410 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC00864BF name=DRM_IOCTL_SYNCOBJ_CREATE arg=0x7fff574f98d0
+trace seq=76 t_ns=95778978114507 ioctl-exit fd=4 request=0xC00864BF name=DRM_IOCTL_SYNCOBJ_CREATE ret=0 errno=0
+trace seq=77 t_ns=95778978120286 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC02864C3 name=DRM_IOCTL_SYNCOBJ_WAIT arg=0x7fff574f98b0
+trace seq=78 t_ns=95778978126441 ioctl-exit fd=4 request=0xC02864C3 name=DRM_IOCTL_SYNCOBJ_WAIT ret=0 errno=0
+trace seq=79 t_ns=95778978130569 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC00864C0 name=DRM_IOCTL_SYNCOBJ_DESTROY arg=0x7fff574f98e0
+trace seq=80 t_ns=95778978134084 ioctl-exit fd=4 request=0xC00864C0 name=DRM_IOCTL_SYNCOBJ_DESTROY ret=0 errno=0
+trace seq=81 t_ns=95778978136780 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC0106471 name=UNKNOWN arg=0x7fff574f99b0
+trace seq=82 t_ns=95778998895904 ioctl-exit fd=4 request=0xC0106471 name=UNKNOWN ret=0 errno=0
+trace seq=83 t_ns=95778999181326 open64 fd=5 flags=0x80042 path="/home/t4ce/.cache/mesa_shader_cache/index"
+trace seq=84 t_ns=95778999214695 mmap64 fd=5 path="/home/t4ce/.cache/mesa_shader_cache/index" addr=0x7a2b680bf000 len=0x140008 prot=0x3 flags=0x1 offset=0x0 handle=0
+trace seq=85 t_ns=95778999218606 close fd=5 path="/home/t4ce/.cache/mesa_shader_cache/index"
+trace seq=86 t_ns=95778999286777 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC0106479 name=DRM_IOCTL_I915_QUERY arg=0x7fff574f9950
+trace seq=87 t_ns=95778999293927 ioctl-exit fd=4 request=0xC0106479 name=DRM_IOCTL_I915_QUERY ret=0 errno=0
+trace seq=88 t_ns=95778999296512 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC0106479 name=DRM_IOCTL_I915_QUERY arg=0x7fff574f9950
+trace seq=89 t_ns=95778999299740 ioctl-exit fd=4 request=0xC0106479 name=DRM_IOCTL_I915_QUERY ret=0 errno=0
+trace seq=90 t_ns=95778999301744 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC0106479 name=DRM_IOCTL_I915_QUERY arg=0x7fff574f9920
+trace seq=91 t_ns=95778999303707 ioctl-exit fd=4 request=0xC0106479 name=DRM_IOCTL_I915_QUERY ret=0 errno=0
+trace seq=92 t_ns=95778999305196 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC0106479 name=DRM_IOCTL_I915_QUERY arg=0x7fff574f9920
+trace seq=93 t_ns=95778999314005 ioctl-exit fd=4 request=0xC0106479 name=DRM_IOCTL_I915_QUERY ret=0 errno=0
+trace seq=94 t_ns=95778999315952 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC0106479 name=DRM_IOCTL_I915_QUERY arg=0x7fff574f9920
+trace seq=95 t_ns=95778999318217 ioctl-exit fd=4 request=0xC0106479 name=DRM_IOCTL_I915_QUERY ret=0 errno=0
+trace seq=96 t_ns=95778999326859 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC0106446 name=DRM_IOCTL_I915_GETPARAM arg=0x7fff574f96d0
+trace seq=97 t_ns=95778999329865 ioctl-exit fd=4 request=0xC0106446 name=DRM_IOCTL_I915_GETPARAM ret=0 errno=0
+trace seq=98 t_ns=95778999331984 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC0106479 name=DRM_IOCTL_I915_QUERY arg=0x7fff574f9710
+trace seq=99 t_ns=95778999335173 ioctl-exit fd=4 request=0xC0106479 name=DRM_IOCTL_I915_QUERY ret=0 errno=0
+trace seq=100 t_ns=95778999336937 ioctl-enter fd=4 path="/dev/dri/renderD128" request=0xC0186474 name=DRM_IOCTL_I915_GEM_CONTEXT_GETPARAM arg=0x7fff574f9720
+trace seq=101 t_ns=95778999341327 ioctl-exit fd=4 request=0xC0186474 name=DRM_IOCTL_I915_GEM_CONTEXT_GETPARAM ret=0 errno=0
+trace seq=102 t_ns=95778999354957 open64 fd=5 flags=0x0 path="/proc/sys/dev/i915/perf_stream_paranoid"
+trace seq=103 t_ns=95778999360110 close fd=5 path="/proc/sys/dev/i915/perf_stream_paranoid"
+trace seq=104 t_ns=95778999432854 open64 fd=6 flags=0x0 path="/sys/devices/system/cpu/cpu0/cpu_capacity"
+trace seq=105 t_ns=95778999456538 close fd=6 path="/sys/devices/system/cpu/cpu0/cpu_capacity"
+trace seq=106 t_ns=95778999471593 open64 fd=6 flags=0x0 path="/sys/devices/system/cpu/cpu1/cpu_capacity"
+trace seq=107 t_ns=95778999479532 close fd=6 path="/sys/devices/system/cpu/cpu1/cpu_capacity"
+trace seq=108 t_ns=95778999492154 open64 fd=6 flags=0x0 path="/sys/devices/system/cpu/cpu2/cpu_capacity"
+trace seq=109 t_ns=95778999503780 close fd=6 path="/sys/devices/system/cpu/cpu2/cpu_capacity"
+trace seq=110 t_ns=95778999517309 open64 fd=7 flags=0x0 path="/sys/devices/system/cpu/cpu3/cpu_capacity"
+trace seq=111 t_ns=95778999525480 close fd=7 path="/sys/devices/system/cpu/cpu3/cpu_capacity"
+trace seq=112 t_ns=95778999538268 open64 fd=6 flags=0x0 path="/sys/devices/system/cpu/cpu4/cpu_capacity"
+trace seq=113 t_ns=95778999546299 close fd=6 path="/sys/devices/system/cpu/cpu4/cpu_capacity"
+trace seq=114 t_ns=95778999557567 open64 fd=6 flags=0x0 path="/sys/devices/system/cpu/cpu5/cpu_capacity"
+trace seq=115 t_ns=95778999566082 close fd=6 path="/sys/devices/system/cpu/cpu5/cpu_capacity"
+trace seq=116 t_ns=95778999578235 open64 fd=6 flags=0x0 path="/sys/devices/system/cpu/cpu6/cpu_capacity"
+trace seq=117 t_ns=95778999589443 close fd=6 path="/sys/devices/system/cpu/cpu6/cpu_capacity"
+trace seq=118 t_ns=95778999602604 open64 fd=6 flags=0x0 path="/sys/devices/system/cpu/cpu7/cpu_capacity"
+trace seq=119 t_ns=95778999611329 close fd=6 path="/sys/devices/system/cpu/cpu7/cpu_capacity"
+trace seq=120 t_ns=95778999624586 open64 fd=7 flags=0x0 path="/sys/devices/system/cpu/cpu8/cpu_capacity"
+trace seq=121 t_ns=95778999633867 close fd=7 path="/sys/devices/system/cpu/cpu8/cpu_capacity"
+trace seq=122 t_ns=95778999647843 open64 fd=6 flags=0x0 path="/sys/devices/system/cpu/cpu9/cpu_capacity"
+trace seq=123 t_ns=95778999657355 close fd=6 path="/sys/devices/system/cpu/cpu9/cpu_capacity"
+trace seq=124 t_ns=95778999670593 open64 fd=6 flags=0x0 path="/sys/devices/system/cpu/cpu10/cpu_capacity"
+trace seq=125 t_ns=95778999679511 close fd=6 path="/sys/devices/system/cpu/cpu10/cpu_capacity"
+trace seq=126 t_ns=95778999692556 open64 fd=6 flags=0x0 path="/sys/devices/system/cpu/cpu11/cpu_capacity"
+trace seq=127 t_ns=95778999702522 close fd=6 path="/sys/devices/system/cpu/cpu11/cpu_capacity"
+trace seq=128 t_ns=95778999715937 open64 fd=6 flags=0x0 path="/sys/devices/system/cpu/cpu12/cpu_capacity"
+trace seq=129 t_ns=95778999725833 close fd=6 path="/sys/devices/system/cpu/cpu12/cpu_capacity"
+trace seq=130 t_ns=95778999739260 open64 fd=6 flags=0x0 path="/sys/devices/system/cpu/cpu13/cpu_capacity"
+trace seq=131 t_ns=95778999748392 close fd=6 path="/sys/devices/system/cpu/cpu13/cpu_capacity"
+trace seq=132 t_ns=95778999773621 open64 fd=6 flags=0x0 path="/sys/devices/system/cpu/cpu14/cpu_capacity"
+trace seq=133 t_ns=95778999783627 close fd=6 path="/sys/devices/system/cpu/cpu14/cpu_capacity"
+trace seq=134 t_ns=95778999796047 open64 fd=6 flags=0x0 path="/sys/devices/system/cpu/cpu15/cpu_capacity"
+trace seq=135 t_ns=95778999807615 close fd=6 path="/sys/devices/system/cpu/cpu15/cpu_capacity"
+trace seq=136 t_ns=95778999820721 open64 fd=6 flags=0x0 path="/sys/devices/system/cpu/cpu16/cpu_capacity"
+trace seq=137 t_ns=95778999829530 close fd=6 path="/sys/devices/system/cpu/cpu16/cpu_capacity"
+trace seq=138 t_ns=95778999841417 open64 fd=6 flags=0x0 path="/sys/devices/system/cpu/cpu17/cpu_capacity"
+trace seq=139 t_ns=95778999849728 close fd=6 path="/sys/devices/system/cpu/cpu17/cpu_capacity"
+trace seq=140 t_ns=95778999862588 open64 fd=6 flags=0x0 path="/sys/devices/system/cpu/cpu18/cpu_capacity"
+trace seq=141 t_ns=95778999872094 close fd=6 path="/sys/devices/system/cpu/cpu18/cpu_capacity"
+trace seq=142 t_ns=95778999884049 open64 fd=6 flags=0x0 path="/sys/devices/system/cpu/cpu19/cpu_capacity"
+trace seq=143 t_ns=95778999892658 close fd=6 path="/sys/devices/system/cpu/cpu19/cpu_capacity"
+trace seq=144 t_ns=95778999904135 open64 fd=6 flags=0x0 path="/sys/devices/system/cpu/cpu20/cpu_capacity"
+trace seq=145 t_ns=95778999913198 close fd=6 path="/sys/devices/system/cpu/cpu20/cpu_capacity"
+trace seq=146 t_ns=95778999925071 open64 fd=6 flags=0x0 path="/sys/devices/system/cpu/cpu21/cpu_capacity"
+trace seq=147 t_ns=95778999936394 close fd=6 path="/sys/devices/system/cpu/cpu21/cpu_capacity"
+trace seq=148 t_ns=95778999949020 open64 fd=6 flags=0x0 path="/sys/devices/system/cpu/cpu22/cpu_capacity"
+trace seq=149 t_ns=95778999957682 close fd=6 path="/sys/devices/system/cpu/cpu22/cpu_capacity"
+trace seq=150 t_ns=95778999969249 open64 fd=6 flags=0x0 path="/sys/devices/system/cpu/cpu23/cpu_capacity"
+trace seq=151 t_ns=95778999979905 close fd=6 path="/sys/devices/system/cpu/cpu23/cpu_capacity"
+trace seq=152 t_ns=95778999994139 open64 fd=6 flags=0x0 path="/sys/devices/system/cpu/cpu24/cpu_capacity"
+trace seq=153 t_ns=95779000018084 close fd=6 path="/sys/devices/system/cpu/cpu24/cpu_capacity"
+trace seq=154 t_ns=95779000037313 open64 fd=6 flags=0x0 path="/sys/devices/system/cpu/cpu25/cpu_capacity"
+trace seq=155 t_ns=95779000045701 close fd=6 path="/sys/devices/system/cpu/cpu25/cpu_capacity"
+trace seq=156 t_ns=95779000058319 open64 fd=6 flags=0x0 path="/sys/devices/system/cpu/cpu26/cpu_capacity"
+trace seq=157 t_ns=95779000067075 close fd=6 path="/sys/devices/system/cpu/cpu26/cpu_capacity"
+trace seq=158 t_ns=95779000079301 open64 fd=6 flags=0x0 path="/sys/devices/system/cpu/cpu27/cpu_capacity"
+trace seq=159 t_ns=95779000087888 close fd=6 path="/sys/devices/system/cpu/cpu27/cpu_capacity"
+trace seq=160 t_ns=95779000100437 open64 fd=6 flags=0x0 path="/sys/devices/system/cpu/cpu28/cpu_capacity"
+trace seq=161 t_ns=95779000110115 close fd=6 path="/sys/devices/system/cpu/cpu28/cpu_capacity"
+trace seq=162 t_ns=95779000126437 open64 fd=6 flags=0x0 path="/sys/devices/system/cpu/cpu29/cpu_capacity"
+trace seq=163 t_ns=95779000130470 open64 fd=5 flags=0x80002 path="/dev/dri/renderD128"
+trace seq=164 t_ns=95779000137612 close fd=6 path="/sys/devices/system/cpu/cpu29/cpu_capacity"
+trace seq=165 t_ns=95779000177304 open64 fd=6 flags=0x0 path="/sys/devices/system/cpu/cpu30/cpu_capacity"
+trace seq=166 t_ns=95779000189369 close fd=6 path="/sys/devices/system/cpu/cpu30/cpu_capacity"
+trace seq=167 t_ns=95779000202766 open64 fd=6 flags=0x0 path="/sys/devices/system/cpu/cpu31/cpu_capacity"
+trace seq=168 t_ns=95779000210770 close fd=6 path="/sys/devices/system/cpu/cpu31/cpu_capacity"
+trace seq=169 t_ns=95779000790913 close fd=5 path="/dev/dri/renderD128"
+oracle-app: physical[0] vendor=0x8086 device=0xA780 type=integrated api=0x0040413E driver=0x06402008 name="Intel(R) Graphics (RPL-S)"
+oracle-app: selected vendor=0x8086 device=0xA780 queue_family=0 name="Intel(R) Graphics (RPL-S)"
+oracle-app: lens macro=selected-device
+trace seq=170 t_ns=95779001608117 open64 fd=5 flags=0x80002 path="/dev/dri/renderD128"
+trace seq=171 t_ns=95779001614068 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC010640C name=DRM_IOCTL_GET_CAP arg=0x7fff574f9420
+trace seq=172 t_ns=95779001617105 ioctl-exit fd=5 request=0xC010640C name=DRM_IOCTL_GET_CAP ret=0 errno=22
+trace seq=173 t_ns=95779001618881 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC010647A name=UNKNOWN arg=0x7fff574f9450
+trace seq=174 t_ns=95779001640949 ioctl-exit fd=5 request=0xC010647A name=UNKNOWN ret=0 errno=22
+trace seq=175 t_ns=95779001655129 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC018647C name=DRM_IOCTL_I915_GEM_CREATE_EXT arg=0x7fff574f91e0
+trace seq=176 t_ns=95779001663643 ioctl-exit fd=5 request=0xC018647C name=DRM_IOCTL_I915_GEM_CREATE_EXT ret=0 errno=22
+trace seq=177 t_ns=95779001671154 gem-create-ext handle=1 size=0x200000 flags=0x0 extensions=0x7FFF574F9260
+trace seq=178 t_ns=95779001674939 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC0206464 name=DRM_IOCTL_I915_GEM_MMAP_OFFSET arg=0x7fff574f91f0
+trace seq=179 t_ns=95779001678396 ioctl-exit fd=5 request=0xC0206464 name=DRM_IOCTL_I915_GEM_MMAP_OFFSET ret=0 errno=22
+trace seq=180 t_ns=95779001679969 gem-mmap-offset handle=1 fake_offset=0x100000000 flags=0x2
+trace seq=181 t_ns=95779001688203 mmap64 fd=5 path="/dev/dri/renderD128" addr=0x7a2b690f3000 len=0x200000 prot=0x3 flags=0x1 offset=0x100000000 handle=1
+trace seq=182 t_ns=95779001764917 mmap64 fd=6 path="/memfd:state table (deleted)" addr=0x7a2b69c32000 len=0x800 prot=0x3 flags=0x8001 offset=0x0 handle=0
+trace seq=183 t_ns=95779001767980 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC018647C name=DRM_IOCTL_I915_GEM_CREATE_EXT arg=0x7fff574f91e0
+trace seq=184 t_ns=95779001771318 ioctl-exit fd=5 request=0xC018647C name=DRM_IOCTL_I915_GEM_CREATE_EXT ret=0 errno=22
+trace seq=185 t_ns=95779001778071 gem-create-ext handle=2 size=0x200000 flags=0x0 extensions=0x7FFF574F9260
+trace seq=186 t_ns=95779001779692 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC0206464 name=DRM_IOCTL_I915_GEM_MMAP_OFFSET arg=0x7fff574f91f0
+trace seq=187 t_ns=95779001781677 ioctl-exit fd=5 request=0xC0206464 name=DRM_IOCTL_I915_GEM_MMAP_OFFSET ret=0 errno=22
+trace seq=188 t_ns=95779001782907 gem-mmap-offset handle=2 fake_offset=0x100200000 flags=0x2
+trace seq=189 t_ns=95779001785608 mmap64 fd=5 path="/dev/dri/renderD128" addr=0x7a2b68ef3000 len=0x200000 prot=0x3 flags=0x1 offset=0x100200000 handle=2
+trace seq=190 t_ns=95779001799457 mmap64 fd=7 path="/memfd:state table (deleted)" addr=0x7a2b69c31000 len=0x800 prot=0x3 flags=0x8001 offset=0x0 handle=0
+trace seq=191 t_ns=95779001809600 mmap64 fd=7 path="/memfd:state table (deleted)" addr=0x7a2b69c30000 len=0x1000 prot=0x3 flags=0x8001 offset=0x0 handle=0
+trace seq=192 t_ns=95779001813943 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC018647C name=DRM_IOCTL_I915_GEM_CREATE_EXT arg=0x7fff574f91e0
+trace seq=193 t_ns=95779001816827 ioctl-exit fd=5 request=0xC018647C name=DRM_IOCTL_I915_GEM_CREATE_EXT ret=0 errno=22
+trace seq=194 t_ns=95779001823471 gem-create-ext handle=3 size=0x200000 flags=0x0 extensions=0x7FFF574F9260
+trace seq=195 t_ns=95779001824991 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC0206464 name=DRM_IOCTL_I915_GEM_MMAP_OFFSET arg=0x7fff574f91f0
+trace seq=196 t_ns=95779001826954 ioctl-exit fd=5 request=0xC0206464 name=DRM_IOCTL_I915_GEM_MMAP_OFFSET ret=0 errno=22
+trace seq=197 t_ns=95779001828339 gem-mmap-offset handle=3 fake_offset=0x100400000 flags=0x2
+trace seq=198 t_ns=95779001831055 mmap64 fd=5 path="/dev/dri/renderD128" addr=0x7a2b68cf3000 len=0x200000 prot=0x3 flags=0x1 offset=0x100400000 handle=3
+trace seq=199 t_ns=95779001843830 mmap64 fd=8 path="/memfd:state table (deleted)" addr=0x7a2b69c2f000 len=0x800 prot=0x3 flags=0x8001 offset=0x0 handle=0
+trace seq=200 t_ns=95779001847154 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC018647C name=DRM_IOCTL_I915_GEM_CREATE_EXT arg=0x7fff574f91e0
+trace seq=201 t_ns=95779001849915 ioctl-exit fd=5 request=0xC018647C name=DRM_IOCTL_I915_GEM_CREATE_EXT ret=0 errno=22
+trace seq=202 t_ns=95779001859425 gem-create-ext handle=4 size=0x200000 flags=0x0 extensions=0x7FFF574F9260
+trace seq=203 t_ns=95779001860986 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC0206464 name=DRM_IOCTL_I915_GEM_MMAP_OFFSET arg=0x7fff574f91f0
+trace seq=204 t_ns=95779001862715 ioctl-exit fd=5 request=0xC0206464 name=DRM_IOCTL_I915_GEM_MMAP_OFFSET ret=0 errno=22
+trace seq=205 t_ns=95779001864156 gem-mmap-offset handle=4 fake_offset=0x100600000 flags=0x2
+trace seq=206 t_ns=95779001866860 mmap64 fd=5 path="/dev/dri/renderD128" addr=0x7a2b68af3000 len=0x200000 prot=0x3 flags=0x1 offset=0x100600000 handle=4
+trace seq=207 t_ns=95779001884613 mmap64 fd=9 path="/memfd:state table (deleted)" addr=0x7a2b69c2e000 len=0x800 prot=0x3 flags=0x8001 offset=0x0 handle=0
+trace seq=208 t_ns=95779001887423 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC018647C name=DRM_IOCTL_I915_GEM_CREATE_EXT arg=0x7fff574f91e0
+trace seq=209 t_ns=95779001890942 ioctl-exit fd=5 request=0xC018647C name=DRM_IOCTL_I915_GEM_CREATE_EXT ret=0 errno=22
+trace seq=210 t_ns=95779001897817 gem-create-ext handle=5 size=0x200000 flags=0x0 extensions=0x7FFF574F9260
+trace seq=211 t_ns=95779001899079 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC0206464 name=DRM_IOCTL_I915_GEM_MMAP_OFFSET arg=0x7fff574f91f0
+trace seq=212 t_ns=95779001900769 ioctl-exit fd=5 request=0xC0206464 name=DRM_IOCTL_I915_GEM_MMAP_OFFSET ret=0 errno=22
+trace seq=213 t_ns=95779001902080 gem-mmap-offset handle=5 fake_offset=0x100800000 flags=0x2
+trace seq=214 t_ns=95779001904458 mmap64 fd=5 path="/dev/dri/renderD128" addr=0x7a2b688f3000 len=0x200000 prot=0x3 flags=0x1 offset=0x100800000 handle=5
+trace seq=215 t_ns=95779001916764 mmap64 fd=10 path="/memfd:state table (deleted)" addr=0x7a2b69c2d000 len=0x800 prot=0x3 flags=0x8001 offset=0x0 handle=0
+trace seq=216 t_ns=95779001919798 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC018647C name=DRM_IOCTL_I915_GEM_CREATE_EXT arg=0x7fff574f91e0
+trace seq=217 t_ns=95779001922506 ioctl-exit fd=5 request=0xC018647C name=DRM_IOCTL_I915_GEM_CREATE_EXT ret=0 errno=22
+trace seq=218 t_ns=95779001951586 gem-create-ext handle=6 size=0x200000 flags=0x0 extensions=0x7FFF574F9260
+trace seq=219 t_ns=95779001954201 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC0206464 name=DRM_IOCTL_I915_GEM_MMAP_OFFSET arg=0x7fff574f91f0
+trace seq=220 t_ns=95779001955895 ioctl-exit fd=5 request=0xC0206464 name=DRM_IOCTL_I915_GEM_MMAP_OFFSET ret=0 errno=22
+trace seq=221 t_ns=95779001957148 gem-mmap-offset handle=6 fake_offset=0x100A00000 flags=0x2
+trace seq=222 t_ns=95779001959648 mmap64 fd=5 path="/dev/dri/renderD128" addr=0x7a2b686f3000 len=0x200000 prot=0x3 flags=0x1 offset=0x100A00000 handle=6
+trace seq=223 t_ns=95779001976000 mmap64 fd=11 path="/memfd:state table (deleted)" addr=0x7a2b69c2c000 len=0x800 prot=0x3 flags=0x8001 offset=0x0 handle=0
+trace seq=224 t_ns=95779001978399 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC018647C name=DRM_IOCTL_I915_GEM_CREATE_EXT arg=0x7fff574f91e0
+trace seq=225 t_ns=95779001981270 ioctl-exit fd=5 request=0xC018647C name=DRM_IOCTL_I915_GEM_CREATE_EXT ret=0 errno=22
+trace seq=226 t_ns=95779001987549 gem-create-ext handle=7 size=0x200000 flags=0x0 extensions=0x7FFF574F9260
+trace seq=227 t_ns=95779001989100 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC0206464 name=DRM_IOCTL_I915_GEM_MMAP_OFFSET arg=0x7fff574f91f0
+trace seq=228 t_ns=95779001990951 ioctl-exit fd=5 request=0xC0206464 name=DRM_IOCTL_I915_GEM_MMAP_OFFSET ret=0 errno=22
+trace seq=229 t_ns=95779001992611 gem-mmap-offset handle=7 fake_offset=0x100C00000 flags=0x2
+trace seq=230 t_ns=95779001995267 mmap64 fd=5 path="/dev/dri/renderD128" addr=0x7a2b684f3000 len=0x200000 prot=0x3 flags=0x1 offset=0x100C00000 handle=7
+trace seq=231 t_ns=95779002017715 mmap64 fd=12 path="/memfd:state table (deleted)" addr=0x7a2b69c2b000 len=0x800 prot=0x3 flags=0x8001 offset=0x0 handle=0
+trace seq=232 t_ns=95779002022781 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC018647C name=DRM_IOCTL_I915_GEM_CREATE_EXT arg=0x7fff574f91e0
+trace seq=233 t_ns=95779002027250 ioctl-exit fd=5 request=0xC018647C name=DRM_IOCTL_I915_GEM_CREATE_EXT ret=0 errno=22
+trace seq=234 t_ns=95779002034510 gem-create-ext handle=8 size=0x200000 flags=0x0 extensions=0x7FFF574F9260
+trace seq=235 t_ns=95779002035845 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC0206464 name=DRM_IOCTL_I915_GEM_MMAP_OFFSET arg=0x7fff574f91f0
+trace seq=236 t_ns=95779002037589 ioctl-exit fd=5 request=0xC0206464 name=DRM_IOCTL_I915_GEM_MMAP_OFFSET ret=0 errno=22
+trace seq=237 t_ns=95779002038777 gem-mmap-offset handle=8 fake_offset=0x100E00000 flags=0x2
+trace seq=238 t_ns=95779002044346 mmap64 fd=5 path="/dev/dri/renderD128" addr=0x7a2b682f3000 len=0x200000 prot=0x3 flags=0x1 offset=0x100E00000 handle=8
+trace seq=239 t_ns=95779002058562 mmap64 fd=13 path="/memfd:state table (deleted)" addr=0x7a2b69c2a000 len=0x800 prot=0x3 flags=0x8001 offset=0x0 handle=0
+trace seq=240 t_ns=95779002068803 mmap64 fd=13 path="/memfd:state table (deleted)" addr=0x7a2b69c29000 len=0x1000 prot=0x3 flags=0x8001 offset=0x0 handle=0
+trace seq=241 t_ns=95779002305012 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC018647C name=DRM_IOCTL_I915_GEM_CREATE_EXT arg=0x7fff574f9080
+trace seq=242 t_ns=95779002312297 ioctl-exit fd=5 request=0xC018647C name=DRM_IOCTL_I915_GEM_CREATE_EXT ret=0 errno=22
+trace seq=243 t_ns=95779002319350 gem-create-ext handle=9 size=0x200000 flags=0x0 extensions=0x7FFF574F9100
+trace seq=244 t_ns=95779002332048 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC0206464 name=DRM_IOCTL_I915_GEM_MMAP_OFFSET arg=0x7fff574f9250
+trace seq=245 t_ns=95779002334925 ioctl-exit fd=5 request=0xC0206464 name=DRM_IOCTL_I915_GEM_MMAP_OFFSET ret=0 errno=22
+trace seq=246 t_ns=95779002336434 gem-mmap-offset handle=9 fake_offset=0x101000000 flags=0x2
+trace seq=247 t_ns=95779002340353 mmap64 fd=5 path="/dev/dri/renderD128" addr=0x7a2b69c27000 len=0x2000 prot=0x3 flags=0x1 offset=0x101000000 handle=9
+trace seq=248 t_ns=95779002540991 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC018647C name=DRM_IOCTL_I915_GEM_CREATE_EXT arg=0x7fff574f9080
+trace seq=249 t_ns=95779002548059 ioctl-exit fd=5 request=0xC018647C name=DRM_IOCTL_I915_GEM_CREATE_EXT ret=0 errno=22
+trace seq=250 t_ns=95779002554824 gem-create-ext handle=10 size=0x200000 flags=0x0 extensions=0x7FFF574F9100
+trace seq=251 t_ns=95779002579286 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC0206464 name=DRM_IOCTL_I915_GEM_MMAP_OFFSET arg=0x7fff574f9250
+trace seq=252 t_ns=95779002583131 ioctl-exit fd=5 request=0xC0206464 name=DRM_IOCTL_I915_GEM_MMAP_OFFSET ret=0 errno=22
+trace seq=253 t_ns=95779002584493 gem-mmap-offset handle=10 fake_offset=0x101200000 flags=0x2
+trace seq=254 t_ns=95779002587937 mmap64 fd=5 path="/dev/dri/renderD128" addr=0x7a2b69c26000 len=0x1000 prot=0x3 flags=0x1 offset=0x101200000 handle=10
+trace seq=255 t_ns=95779002999393 mmap64 fd=10 path="/memfd:state table (deleted)" addr=0x7a2b69c25000 len=0x1000 prot=0x3 flags=0x8001 offset=0x0 handle=0
+trace seq=256 t_ns=95779003221745 open64 fd=14 flags=0x80000 path="/home/t4ce/.cache/mesa_shader_cache/39/d193ad7e4b423e5907eb5c85b2a46439efb8b8"
+trace seq=257 t_ns=95779004452630 close fd=14 path="/home/t4ce/.cache/mesa_shader_cache/39/d193ad7e4b423e5907eb5c85b2a46439efb8b8"
+trace seq=258 t_ns=95779011340980 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC010646D name=DRM_IOCTL_I915_GEM_CONTEXT_CREATE_EXT arg=0x7fff574f9100
+trace seq=259 t_ns=95779011357618 ioctl-exit fd=5 request=0xC010646D name=DRM_IOCTL_I915_GEM_CONTEXT_CREATE_EXT ret=0 errno=22
+trace seq=260 t_ns=95779011360107 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC0186475 name=DRM_IOCTL_I915_GEM_CONTEXT_SETPARAM arg=0x7fff574f9370
+trace seq=261 t_ns=95779011362091 ioctl-exit fd=5 request=0xC0186475 name=DRM_IOCTL_I915_GEM_CONTEXT_SETPARAM ret=0 errno=22
+trace seq=262 t_ns=95779011363357 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC0186475 name=DRM_IOCTL_I915_GEM_CONTEXT_SETPARAM arg=0x7fff574f9360
+trace seq=263 t_ns=95779011364522 ioctl-exit fd=5 request=0xC0186475 name=DRM_IOCTL_I915_GEM_CONTEXT_SETPARAM ret=0 errno=22
+trace seq=264 t_ns=95779011417068 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC00864BF name=DRM_IOCTL_SYNCOBJ_CREATE arg=0x7fff574f89b0
+trace seq=265 t_ns=95779011419938 ioctl-exit fd=5 request=0xC00864BF name=DRM_IOCTL_SYNCOBJ_CREATE ret=0 errno=22
+trace seq=266 t_ns=95779011424592 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC0206464 name=DRM_IOCTL_I915_GEM_MMAP_OFFSET arg=0x7fff574f8670
+trace seq=267 t_ns=95779011427620 ioctl-exit fd=5 request=0xC0206464 name=DRM_IOCTL_I915_GEM_MMAP_OFFSET ret=0 errno=22
+trace seq=268 t_ns=95779011429260 gem-mmap-offset handle=9 fake_offset=0x101000000 flags=0x2
+trace seq=269 t_ns=95779011437548 mmap64 fd=5 path="/dev/dri/renderD128" addr=0x7a2b69c21000 len=0x4000 prot=0x3 flags=0x1 offset=0x101000000 handle=9
+trace seq=270 t_ns=95779011491840 bo-dump phase=munmap handle=9 offset=0x0 map_len=0x2000 dump_len=0x2000 first_words=0xBBAA9988,0xFFEEDDCC,0x33221100,0x77665544 file="dumps/000269_munmap_handle_9_off_0x0_len_0x2000.bin"
+trace seq=271 t_ns=95779011494057 munmap addr=0x7a2b69c21000 len=0x2000 handle=9
+trace seq=272 t_ns=95779011495178 bo-map-trim-front handle=9 new_addr=0x7a2b69c23000 new_map_len=0x2000 new_bo_offset=0x2000
+trace seq=273 t_ns=95779011509856 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0x40406469 name=DRM_IOCTL_I915_GEM_EXECBUFFER2 arg=0x7fff574f89d0
+trace seq=274 t_ns=95779011511712 execbuffer-pre buffers_ptr=0x5F795E090400 buffer_count=1 batch_start=0x2000 batch_len=0x0 flags=0x81800 rsvd1=0x1 rsvd2=0x0
+trace seq=275 t_ns=95779011513139 execbuffer-pre object[0] handle=9 size=0x200000 offset=0xFFFFEFFEFFE00000 alignment=0x0 flags=0xD8 reloc_count=0 relocs_ptr=0x0 mapped=1 map_len=0x2000
+trace seq=276 t_ns=95779011528680 bo-dump phase=pre_exec handle=9 offset=0x2000 map_len=0x2000 dump_len=0x2000 first_words=0x69041310,0x790A0001,0x00000000,0x00000000 file="dumps/000275_pre_exec_handle_9_off_0x2000_len_0x2000.bin"
+trace seq=277 t_ns=95779011610083 ioctl-exit fd=5 request=0x40406469 name=DRM_IOCTL_I915_GEM_EXECBUFFER2 ret=0 errno=22
+trace seq=278 t_ns=95779011612123 execbuffer-post buffers_ptr=0x5F795E090400 buffer_count=1 batch_start=0x2000 batch_len=0x0 flags=0x81800 rsvd1=0x1 rsvd2=0x0
+trace seq=279 t_ns=95779011613365 execbuffer-post object[0] handle=9 size=0x200000 offset=0xFFFFEFFEFFE00000 alignment=0x0 flags=0xD8 reloc_count=0 relocs_ptr=0x0 mapped=1 map_len=0x2000
+trace seq=280 t_ns=95779011686058 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC018647C name=DRM_IOCTL_I915_GEM_CREATE_EXT arg=0x7fff574faac0
+trace seq=281 t_ns=95779011690996 ioctl-exit fd=5 request=0xC018647C name=DRM_IOCTL_I915_GEM_CREATE_EXT ret=0 errno=22
+trace seq=282 t_ns=95779011696546 gem-create-ext handle=11 size=0x200000 flags=0x0 extensions=0x7FFF574FAB40
+trace seq=283 t_ns=95779011699106 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC0206464 name=DRM_IOCTL_I915_GEM_MMAP_OFFSET arg=0x7fff574fadf0
+trace seq=284 t_ns=95779011701096 ioctl-exit fd=5 request=0xC0206464 name=DRM_IOCTL_I915_GEM_MMAP_OFFSET ret=0 errno=22
+trace seq=285 t_ns=95779011702074 gem-mmap-offset handle=11 fake_offset=0x101400000 flags=0x2
+trace seq=286 t_ns=95779011705652 mmap64 fd=5 path="/dev/dri/renderD128" addr=0x7a2b69c22000 len=0x1000 prot=0x3 flags=0x1 offset=0x101400000 handle=11
+trace seq=287 t_ns=95779011954034 open64 fd=14 flags=0x80000 path="/home/t4ce/.cache/mesa_shader_cache/a1/6c57e54852a80b15e02fd9539fa52a921ca815"
+trace seq=288 t_ns=95779012024567 close fd=14 path="/home/t4ce/.cache/mesa_shader_cache/a1/6c57e54852a80b15e02fd9539fa52a921ca815"
+trace seq=289 t_ns=95779012038888 mmap64 fd=8 path="/memfd:state table (deleted)" addr=0x7a2b69c21000 len=0x1000 prot=0x3 flags=0x8001 offset=0x0 handle=0
+oracle-app: lens macro=pipeline-created
+trace seq=290 t_ns=95779012235924 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC018647C name=DRM_IOCTL_I915_GEM_CREATE_EXT arg=0x7fff574faa80
+trace seq=291 t_ns=95779012240807 ioctl-exit fd=5 request=0xC018647C name=DRM_IOCTL_I915_GEM_CREATE_EXT ret=0 errno=22
+trace seq=292 t_ns=95779012248505 gem-create-ext handle=12 size=0x200000 flags=0x0 extensions=0x7FFF574FAB00
+trace seq=293 t_ns=95779012254753 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC0206464 name=DRM_IOCTL_I915_GEM_MMAP_OFFSET arg=0x7fff574fac50
+trace seq=294 t_ns=95779012257791 ioctl-exit fd=5 request=0xC0206464 name=DRM_IOCTL_I915_GEM_MMAP_OFFSET ret=0 errno=22
+trace seq=295 t_ns=95779012258994 gem-mmap-offset handle=12 fake_offset=0x101600000 flags=0x2
+trace seq=296 t_ns=95779012266012 mmap64 fd=5 path="/dev/dri/renderD128" addr=0x7a2b69c20000 len=0x1000 prot=0x3 flags=0x1 offset=0x101600000 handle=12
+trace seq=297 t_ns=95779012276806 mmap64 fd=9 path="/memfd:state table (deleted)" addr=0x7a2b69c1f000 len=0x1000 prot=0x3 flags=0x8001 offset=0x0 handle=0
+trace seq=298 t_ns=95779012802718 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC0206464 name=DRM_IOCTL_I915_GEM_MMAP_OFFSET arg=0x7fff574faaf0
+trace seq=299 t_ns=95779012807093 ioctl-exit fd=5 request=0xC0206464 name=DRM_IOCTL_I915_GEM_MMAP_OFFSET ret=0 errno=22
+trace seq=300 t_ns=95779012808281 gem-mmap-offset handle=9 fake_offset=0x101000000 flags=0x2
+trace seq=301 t_ns=95779012811342 mmap64 fd=5 path="/dev/dri/renderD128" addr=0x7a2b69c19000 len=0x6000 prot=0x3 flags=0x1 offset=0x101000000 handle=9
+trace seq=302 t_ns=95779012843535 bo-dump phase=munmap handle=9 offset=0x0 map_len=0x4000 dump_len=0x4000 first_words=0xBBAA9988,0xFFEEDDCC,0x33221100,0x77665544 file="dumps/000301_munmap_handle_9_off_0x0_len_0x4000.bin"
+trace seq=303 t_ns=95779012845255 munmap addr=0x7a2b69c19000 len=0x4000 handle=9
+trace seq=304 t_ns=95779012846188 bo-map-trim-front handle=9 new_addr=0x7a2b69c1d000 new_map_len=0x2000 new_bo_offset=0x4000
+trace seq=305 t_ns=95779012864566 mmap64 fd=11 path="/memfd:state table (deleted)" addr=0x7a2b69c1c000 len=0x1000 prot=0x3 flags=0x8001 offset=0x0 handle=0
+oracle-app: lens macro=record-begin
+oracle-app: lens macro=record-end pre-submit
+oracle-app: lens macro=submit-enter
+trace seq=306 t_ns=95779013231001 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC02864C3 name=DRM_IOCTL_SYNCOBJ_WAIT arg=0x7fff574fa3d0
+trace seq=307 t_ns=95779013235040 ioctl-exit fd=5 request=0xC02864C3 name=DRM_IOCTL_SYNCOBJ_WAIT ret=0 errno=22
+trace seq=308 t_ns=95779013236110 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC00864C0 name=DRM_IOCTL_SYNCOBJ_DESTROY arg=0x7fff574fa4a0
+trace seq=309 t_ns=95779013237392 ioctl-exit fd=5 request=0xC00864C0 name=DRM_IOCTL_SYNCOBJ_DESTROY ret=0 errno=22
+trace seq=310 t_ns=95779013295836 munmap addr=0x7a2b69c23000 len=0x2000 handle=0
+trace seq=311 t_ns=95779013308475 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0x40406469 name=DRM_IOCTL_I915_GEM_EXECBUFFER2 arg=0x7fff574fa320
+trace seq=312 t_ns=95779013310088 execbuffer-pre buffers_ptr=0x5F795E048430 buffer_count=11 batch_start=0x4000 batch_len=0x0 flags=0x1800 rsvd1=0x1 rsvd2=0x0
+trace seq=313 t_ns=95779013310987 execbuffer-pre object[0] handle=11 size=0x200000 offset=0xFFFFEFFEFFA00000 alignment=0x0 flags=0x58 reloc_count=0 relocs_ptr=0x0 mapped=1 map_len=0x1000
+trace seq=314 t_ns=95779013331657 bo-dump phase=pre_exec handle=11 offset=0x0 map_len=0x1000 dump_len=0x1000 first_words=0x00000000,0x00000000,0x00000000,0x00000000 file="dumps/000313_pre_exec_handle_11_off_0x0_len_0x1000.bin"
+trace seq=315 t_ns=95779013333118 execbuffer-pre object[1] handle=12 size=0x200000 offset=0x2BFE00000 alignment=0x0 flags=0xD8 reloc_count=0 relocs_ptr=0x0 mapped=1 map_len=0x1000
+trace seq=316 t_ns=95779013342827 bo-dump phase=pre_exec handle=12 offset=0x0 map_len=0x1000 dump_len=0x1000 first_words=0x00000000,0x00000000,0x00000000,0x00000000 file="dumps/000315_pre_exec_handle_12_off_0x0_len_0x1000.bin"
+trace seq=317 t_ns=95779013344322 execbuffer-pre object[2] handle=3 size=0x200000 offset=0x300000000 alignment=0x0 flags=0xD8 reloc_count=0 relocs_ptr=0x0 mapped=1 map_len=0x200000
+trace seq=318 t_ns=95779013626198 bo-dump phase=pre_exec handle=3 offset=0x0 map_len=0x200000 dump_len=0x100000 first_words=0x80030061,0x07050220,0x00000024,0x00000000 file="dumps/000317_pre_exec_handle_3_off_0x0_len_0x100000.bin"
+trace seq=319 t_ns=95779013632235 execbuffer-pre object[3] handle=6 size=0x200000 offset=0xC0000000 alignment=0x0 flags=0xD8 reloc_count=0 relocs_ptr=0x0 mapped=1 map_len=0x200000
+trace seq=320 t_ns=95779013862410 bo-dump phase=pre_exec handle=6 offset=0x0 map_len=0x200000 dump_len=0x100000 first_words=0x40000000,0x40000040,0x00000000,0x00000000 file="dumps/000319_pre_exec_handle_6_off_0x0_len_0x100000.bin"
+trace seq=321 t_ns=95779013865323 execbuffer-pre object[4] handle=5 size=0x200000 offset=0x140000000 alignment=0x0 flags=0xD8 reloc_count=0 relocs_ptr=0x0 mapped=1 map_len=0x200000
+trace seq=322 t_ns=95779014095519 bo-dump phase=pre_exec handle=5 offset=0x0 map_len=0x200000 dump_len=0x100000 first_words=0xE35C3000,0x04000000,0x00000000,0x00000000 file="dumps/000321_pre_exec_handle_5_off_0x0_len_0x100000.bin"
+trace seq=323 t_ns=95779014104143 execbuffer-pre object[5] handle=7 size=0x200000 offset=0x2C0000000 alignment=0x0 flags=0xD8 reloc_count=0 relocs_ptr=0x0 mapped=1 map_len=0x200000
+trace seq=324 t_ns=95779014748073 bo-dump phase=pre_exec handle=7 offset=0x0 map_len=0x200000 dump_len=0x100000 first_words=0x00000000,0x00000000,0x00000000,0x00000000 file="dumps/000323_pre_exec_handle_7_off_0x0_len_0x100000.bin"
+trace seq=325 t_ns=95779014754086 execbuffer-pre object[6] handle=4 size=0x200000 offset=0x100000000 alignment=0x0 flags=0xD8 reloc_count=0 relocs_ptr=0x0 mapped=1 map_len=0x200000
+trace seq=326 t_ns=95779015139514 bo-dump phase=pre_exec handle=4 offset=0x0 map_len=0x200000 dump_len=0x100000 first_words=0x87FD4000,0x60000000,0x0000003F,0x00000000 file="dumps/000325_pre_exec_handle_4_off_0x0_len_0x100000.bin"
+trace seq=327 t_ns=95779015147393 execbuffer-pre object[7] handle=2 size=0x200000 offset=0x3C0000000 alignment=0x0 flags=0xD8 reloc_count=0 relocs_ptr=0x0 mapped=1 map_len=0x200000
+trace seq=328 t_ns=95779015488369 bo-dump phase=pre_exec handle=2 offset=0x0 map_len=0x200000 dump_len=0x100000 first_words=0x00000000,0x00000000,0x00000000,0x00000000 file="dumps/000327_pre_exec_handle_2_off_0x0_len_0x100000.bin"
+trace seq=329 t_ns=95779015491185 execbuffer-pre object[8] handle=1 size=0x200000 offset=0x200000 alignment=0x0 flags=0xD8 reloc_count=0 relocs_ptr=0x0 mapped=1 map_len=0x200000
+trace seq=330 t_ns=95779016118241 bo-dump phase=pre_exec handle=1 offset=0x0 map_len=0x200000 dump_len=0x100000 first_words=0x00000000,0x00000000,0x00000000,0x00000000 file="dumps/000329_pre_exec_handle_1_off_0x0_len_0x100000.bin"
+trace seq=331 t_ns=95779016121214 execbuffer-pre object[9] handle=8 size=0x200000 offset=0x4BFFFF000 alignment=0x0 flags=0xD8 reloc_count=0 relocs_ptr=0x0 mapped=1 map_len=0x200000
+trace seq=332 t_ns=95779016427411 bo-dump phase=pre_exec handle=8 offset=0x0 map_len=0x200000 dump_len=0x100000 first_words=0x00000000,0x00000000,0x00000000,0x00000000 file="dumps/000331_pre_exec_handle_8_off_0x0_len_0x100000.bin"
+trace seq=333 t_ns=95779016430624 execbuffer-pre object[10] handle=9 size=0x200000 offset=0xFFFFEFFEFFE00000 alignment=0x0 flags=0xD8 reloc_count=0 relocs_ptr=0x0 mapped=1 map_len=0x2000
+trace seq=334 t_ns=95779016589098 ioctl-exit fd=5 request=0x40406469 name=DRM_IOCTL_I915_GEM_EXECBUFFER2 ret=0 errno=22
+trace seq=335 t_ns=95779016591074 execbuffer-post buffers_ptr=0x5F795E048430 buffer_count=11 batch_start=0x4000 batch_len=0x0 flags=0x1800 rsvd1=0x1 rsvd2=0x0
+trace seq=336 t_ns=95779016592034 execbuffer-post object[0] handle=11 size=0x200000 offset=0xFFFFEFFEFFA00000 alignment=0x0 flags=0x58 reloc_count=0 relocs_ptr=0x0 mapped=1 map_len=0x1000
+trace seq=337 t_ns=95779016592963 execbuffer-post object[1] handle=12 size=0x200000 offset=0x2BFE00000 alignment=0x0 flags=0xD8 reloc_count=0 relocs_ptr=0x0 mapped=1 map_len=0x1000
+trace seq=338 t_ns=95779016593833 execbuffer-post object[2] handle=3 size=0x200000 offset=0x300000000 alignment=0x0 flags=0xD8 reloc_count=0 relocs_ptr=0x0 mapped=1 map_len=0x200000
+trace seq=339 t_ns=95779016594872 execbuffer-post object[3] handle=6 size=0x200000 offset=0xC0000000 alignment=0x0 flags=0xD8 reloc_count=0 relocs_ptr=0x0 mapped=1 map_len=0x200000
+trace seq=340 t_ns=95779016598107 execbuffer-post object[4] handle=5 size=0x200000 offset=0x140000000 alignment=0x0 flags=0xD8 reloc_count=0 relocs_ptr=0x0 mapped=1 map_len=0x200000
+trace seq=341 t_ns=95779016598971 execbuffer-post object[5] handle=7 size=0x200000 offset=0x2C0000000 alignment=0x0 flags=0xD8 reloc_count=0 relocs_ptr=0x0 mapped=1 map_len=0x200000
+trace seq=342 t_ns=95779016599750 execbuffer-post object[6] handle=4 size=0x200000 offset=0x100000000 alignment=0x0 flags=0xD8 reloc_count=0 relocs_ptr=0x0 mapped=1 map_len=0x200000
+trace seq=343 t_ns=95779016600520 execbuffer-post object[7] handle=2 size=0x200000 offset=0x3C0000000 alignment=0x0 flags=0xD8 reloc_count=0 relocs_ptr=0x0 mapped=1 map_len=0x200000
+trace seq=344 t_ns=95779016601485 execbuffer-post object[8] handle=1 size=0x200000 offset=0x200000 alignment=0x0 flags=0xD8 reloc_count=0 relocs_ptr=0x0 mapped=1 map_len=0x200000
+trace seq=345 t_ns=95779016602380 execbuffer-post object[9] handle=8 size=0x200000 offset=0x4BFFFF000 alignment=0x0 flags=0xD8 reloc_count=0 relocs_ptr=0x0 mapped=1 map_len=0x200000
+trace seq=346 t_ns=95779016603165 execbuffer-post object[10] handle=9 size=0x200000 offset=0xFFFFEFFEFFE00000 alignment=0x0 flags=0xD8 reloc_count=0 relocs_ptr=0x0 mapped=1 map_len=0x2000
+trace seq=347 t_ns=95779016614140 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC00864BF name=DRM_IOCTL_SYNCOBJ_CREATE arg=0x7fff574fae90
+trace seq=348 t_ns=95779016617116 ioctl-exit fd=5 request=0xC00864BF name=DRM_IOCTL_SYNCOBJ_CREATE ret=0 errno=22
+trace seq=349 t_ns=95779016621192 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0x40406469 name=DRM_IOCTL_I915_GEM_EXECBUFFER2 arg=0x7fff574faba0
+trace seq=350 t_ns=95779016622096 execbuffer-pre buffers_ptr=0x5F795E0484F0 buffer_count=2 batch_start=0x0 batch_len=0x8 flags=0x81800 rsvd1=0x1 rsvd2=0x0
+trace seq=351 t_ns=95779016623039 execbuffer-pre object[0] handle=9 size=0x200000 offset=0xFFFFEFFEFFE00000 alignment=0x0 flags=0xD8 reloc_count=0 relocs_ptr=0x0 mapped=1 map_len=0x2000
+trace seq=352 t_ns=95779016623896 execbuffer-pre object[1] handle=10 size=0x200000 offset=0xFFFFEFFEFFC00000 alignment=0x0 flags=0xD8 reloc_count=0 relocs_ptr=0x0 mapped=1 map_len=0x1000
+trace seq=353 t_ns=95779016646070 bo-dump phase=pre_exec handle=10 offset=0x0 map_len=0x1000 dump_len=0x1000 first_words=0x05000000,0x00000000,0x00000000,0x00000000 file="dumps/000352_pre_exec_handle_10_off_0x0_len_0x1000.bin"
+trace seq=354 t_ns=95779016678037 ioctl-exit fd=5 request=0x40406469 name=DRM_IOCTL_I915_GEM_EXECBUFFER2 ret=0 errno=22
+trace seq=355 t_ns=95779016680516 execbuffer-post buffers_ptr=0x5F795E0484F0 buffer_count=2 batch_start=0x0 batch_len=0x8 flags=0x81800 rsvd1=0x1 rsvd2=0x0
+trace seq=356 t_ns=95779016681352 execbuffer-post object[0] handle=9 size=0x200000 offset=0xFFFFEFFEFFE00000 alignment=0x0 flags=0xD8 reloc_count=0 relocs_ptr=0x0 mapped=1 map_len=0x2000
+trace seq=357 t_ns=95779016682161 execbuffer-post object[1] handle=10 size=0x200000 offset=0xFFFFEFFEFFC00000 alignment=0x0 flags=0xD8 reloc_count=0 relocs_ptr=0x0 mapped=1 map_len=0x1000
+trace seq=358 t_ns=95779016683512 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC02864C3 name=DRM_IOCTL_SYNCOBJ_WAIT arg=0x7fff574fae00
+trace seq=359 t_ns=95779016825372 ioctl-exit fd=5 request=0xC02864C3 name=DRM_IOCTL_SYNCOBJ_WAIT ret=0 errno=22
+trace seq=360 t_ns=95779016834157 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC00864C0 name=DRM_IOCTL_SYNCOBJ_DESTROY arg=0x7fff574faf00
+trace seq=361 t_ns=95779016838330 ioctl-exit fd=5 request=0xC00864C0 name=DRM_IOCTL_SYNCOBJ_DESTROY ret=0 errno=22
+trace seq=362 t_ns=95779016840379 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC0186472 name=UNKNOWN arg=0x7fff574faed0
+trace seq=363 t_ns=95779016842991 ioctl-exit fd=5 request=0xC0186472 name=UNKNOWN ret=0 errno=22
+trace seq=364 t_ns=95779016846705 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC00864BF name=DRM_IOCTL_SYNCOBJ_CREATE arg=0x7fff574fae60
+trace seq=365 t_ns=95779016849766 ioctl-exit fd=5 request=0xC00864BF name=DRM_IOCTL_SYNCOBJ_CREATE ret=0 errno=22
+trace seq=366 t_ns=95779016857696 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0x40406469 name=DRM_IOCTL_I915_GEM_EXECBUFFER2 arg=0x7fff574fab70
+trace seq=367 t_ns=95779016859694 execbuffer-pre buffers_ptr=0x5F795E0484F0 buffer_count=2 batch_start=0x0 batch_len=0x8 flags=0x81800 rsvd1=0x1 rsvd2=0x0
+trace seq=368 t_ns=95779016861538 execbuffer-pre object[0] handle=9 size=0x200000 offset=0xFFFFEFFEFFE00000 alignment=0x0 flags=0xD8 reloc_count=0 relocs_ptr=0x0 mapped=1 map_len=0x2000
+trace seq=369 t_ns=95779016863220 execbuffer-pre object[1] handle=10 size=0x200000 offset=0xFFFFEFFEFFC00000 alignment=0x0 flags=0xD8 reloc_count=0 relocs_ptr=0x0 mapped=1 map_len=0x1000
+trace seq=370 t_ns=95779016878185 ioctl-exit fd=5 request=0x40406469 name=DRM_IOCTL_I915_GEM_EXECBUFFER2 ret=0 errno=22
+trace seq=371 t_ns=95779016881279 execbuffer-post buffers_ptr=0x5F795E0484F0 buffer_count=2 batch_start=0x0 batch_len=0x8 flags=0x81800 rsvd1=0x1 rsvd2=0x0
+trace seq=372 t_ns=95779016882907 execbuffer-post object[0] handle=9 size=0x200000 offset=0xFFFFEFFEFFE00000 alignment=0x0 flags=0xD8 reloc_count=0 relocs_ptr=0x0 mapped=1 map_len=0x2000
+trace seq=373 t_ns=95779016884619 execbuffer-post object[1] handle=10 size=0x200000 offset=0xFFFFEFFEFFC00000 alignment=0x0 flags=0xD8 reloc_count=0 relocs_ptr=0x0 mapped=1 map_len=0x1000
+trace seq=374 t_ns=95779016887108 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC02864C3 name=DRM_IOCTL_SYNCOBJ_WAIT arg=0x7fff574fadd0
+trace seq=375 t_ns=95779017071963 ioctl-exit fd=5 request=0xC02864C3 name=DRM_IOCTL_SYNCOBJ_WAIT ret=0 errno=22
+trace seq=376 t_ns=95779017076217 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC00864C0 name=DRM_IOCTL_SYNCOBJ_DESTROY arg=0x7fff574faed0
+trace seq=377 t_ns=95779017078447 ioctl-exit fd=5 request=0xC00864C0 name=DRM_IOCTL_SYNCOBJ_DESTROY ret=0 errno=22
+trace seq=378 t_ns=95779017079851 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0xC0186472 name=UNKNOWN arg=0x7fff574faea0
+trace seq=379 t_ns=95779017081702 ioctl-exit fd=5 request=0xC0186472 name=UNKNOWN ret=0 errno=22
+oracle-app: lens macro=submit-complete wait-idle-done
+oracle-app: header words[0..7]=0xC0DE7733 0x00000008 0x00000000 0xA7808086 0x00000000 0x00000000 0x00000000 0x00000000
+oracle-app: lane[0] ok=1 words=0xC0DE7800 0x00000000 0x00000000 0xE0F00000
+oracle-app: lane[1] ok=1 words=0xC0DE7801 0x00000001 0x00000001 0xE0F00001
+oracle-app: lane[2] ok=1 words=0xC0DE7802 0x00000002 0x00000002 0xE0F00002
+oracle-app: lane[3] ok=1 words=0xC0DE7803 0x00000003 0x00000003 0xE0F00003
+oracle-app: lane[4] ok=1 words=0xC0DE7804 0x00000004 0x00000004 0xE0F00004
+oracle-app: lane[5] ok=1 words=0xC0DE7805 0x00000005 0x00000005 0xE0F00005
+oracle-app: lane[6] ok=1 words=0xC0DE7806 0x00000006 0x00000006 0xE0F00006
+oracle-app: lane[7] ok=1 words=0xC0DE7807 0x00000007 0x00000007 0xE0F00007
+oracle-app: verified=1 expected_header=0xC0DE7733 observed_header=0xC0DE7733 lanes=8
+trace seq=380 t_ns=95779017128787 bo-dump phase=munmap handle=11 offset=0x0 map_len=0x1000 dump_len=0x1000 first_words=0xC0DE7733,0x00000008,0x00000000,0xA7808086 file="dumps/000379_munmap_handle_11_off_0x0_len_0x1000.bin"
+trace seq=381 t_ns=95779017132339 munmap addr=0x7a2b69c22000 len=0x1000 handle=11
+trace seq=382 t_ns=95779017134325 bo-map-clear handle=11 reason=munmap-overlap
+trace seq=383 t_ns=95779017163543 munmap addr=0x7a2b69c1d000 len=0x2000 handle=0
+trace seq=384 t_ns=95779017166536 bo-map-clear handle=9 reason=munmap-overlap
+trace seq=385 t_ns=95779017213378 bo-dump phase=munmap handle=12 offset=0x0 map_len=0x1000 dump_len=0x1000 first_words=0x00000000,0x00000000,0x00000000,0x00000000 file="dumps/000384_munmap_handle_12_off_0x0_len_0x1000.bin"
+trace seq=386 t_ns=95779017216738 munmap addr=0x7a2b69c20000 len=0x1000 handle=12
+trace seq=387 t_ns=95779017218463 bo-map-clear handle=12 reason=munmap-overlap
+trace seq=388 t_ns=95779017300895 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0x4008646E name=DRM_IOCTL_I915_GEM_CONTEXT_DESTROY arg=0x7fff574fae40
+trace seq=389 t_ns=95779017312662 ioctl-exit fd=5 request=0x4008646E name=DRM_IOCTL_I915_GEM_CONTEXT_DESTROY ret=0 errno=22
+trace seq=390 t_ns=95779017390613 bo-dump phase=munmap handle=9 offset=0x0 map_len=0x2000 dump_len=0x2000 first_words=0xBBAA9988,0xFFEEDDCC,0x33221100,0x77665544 file="dumps/000389_munmap_handle_9_off_0x0_len_0x2000.bin"
+trace seq=391 t_ns=95779017393898 munmap addr=0x7a2b69c27000 len=0x2000 handle=9
+trace seq=392 t_ns=95779017425835 bo-dump phase=munmap handle=10 offset=0x0 map_len=0x1000 dump_len=0x1000 first_words=0x05000000,0x00000000,0x00000000,0x00000000 file="dumps/000391_munmap_handle_10_off_0x0_len_0x1000.bin"
+trace seq=393 t_ns=95779017428847 munmap addr=0x7a2b69c26000 len=0x1000 handle=10
+trace seq=394 t_ns=95779017430475 bo-map-clear handle=10 reason=munmap-overlap
+trace seq=395 t_ns=95779017444880 munmap addr=0x7a2b69c2a000 len=0x800 handle=0
+trace seq=396 t_ns=95779017458465 munmap addr=0x7a2b69c29000 len=0x1000 handle=0
+trace seq=397 t_ns=95779017472132 close fd=13 path="/memfd:state table (deleted)"
+trace seq=398 t_ns=95779017885997 bo-dump phase=munmap handle=8 offset=0x0 map_len=0x200000 dump_len=0x100000 first_words=0x00000000,0x00000000,0x00000000,0x00000000 file="dumps/000397_munmap_handle_8_off_0x0_len_0x100000.bin"
+trace seq=399 t_ns=95779017889707 munmap addr=0x7a2b682f3000 len=0x200000 handle=8
+trace seq=400 t_ns=95779017891434 bo-map-clear handle=8 reason=munmap-overlap
+trace seq=401 t_ns=95779017917189 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0x40086409 name=DRM_IOCTL_GEM_CLOSE arg=0x7fff574fad50
+trace seq=402 t_ns=95779017924140 ioctl-exit fd=5 request=0x40086409 name=DRM_IOCTL_GEM_CLOSE ret=0 errno=22
+trace seq=403 t_ns=95779017926202 gem-close handle=8
+trace seq=404 t_ns=95779017927911 munmap addr=0x7a2b69c2b000 len=0x800 handle=0
+trace seq=405 t_ns=95779017940489 close fd=12 path="/memfd:state table (deleted)"
+trace seq=406 t_ns=95779018256901 bo-dump phase=munmap handle=7 offset=0x0 map_len=0x200000 dump_len=0x100000 first_words=0x00000000,0x00000000,0x00000000,0x00000000 file="dumps/000405_munmap_handle_7_off_0x0_len_0x100000.bin"
+trace seq=407 t_ns=95779018260672 munmap addr=0x7a2b684f3000 len=0x200000 handle=7
+trace seq=408 t_ns=95779018262277 bo-map-clear handle=7 reason=munmap-overlap
+trace seq=409 t_ns=95779018285365 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0x40086409 name=DRM_IOCTL_GEM_CLOSE arg=0x7fff574fad50
+trace seq=410 t_ns=95779018290994 ioctl-exit fd=5 request=0x40086409 name=DRM_IOCTL_GEM_CLOSE ret=0 errno=22
+trace seq=411 t_ns=95779018293015 gem-close handle=7
+trace seq=412 t_ns=95779018294621 munmap addr=0x7a2b69c2c000 len=0x800 handle=0
+trace seq=413 t_ns=95779018306482 munmap addr=0x7a2b69c1c000 len=0x1000 handle=0
+trace seq=414 t_ns=95779018319561 close fd=11 path="/memfd:state table (deleted)"
+trace seq=415 t_ns=95779018654752 bo-dump phase=munmap handle=6 offset=0x0 map_len=0x200000 dump_len=0x100000 first_words=0x40000000,0x40000040,0x00000000,0x00000000 file="dumps/000414_munmap_handle_6_off_0x0_len_0x100000.bin"
+trace seq=416 t_ns=95779018658531 munmap addr=0x7a2b686f3000 len=0x200000 handle=6
+trace seq=417 t_ns=95779018660205 bo-map-clear handle=6 reason=munmap-overlap
+trace seq=418 t_ns=95779018679564 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0x40086409 name=DRM_IOCTL_GEM_CLOSE arg=0x7fff574fad50
+trace seq=419 t_ns=95779018684906 ioctl-exit fd=5 request=0x40086409 name=DRM_IOCTL_GEM_CLOSE ret=0 errno=22
+trace seq=420 t_ns=95779018779492 gem-close handle=6
+trace seq=421 t_ns=95779018781419 munmap addr=0x7a2b69c2e000 len=0x800 handle=0
+trace seq=422 t_ns=95779018793564 munmap addr=0x7a2b69c1f000 len=0x1000 handle=0
+trace seq=423 t_ns=95779018806640 close fd=9 path="/memfd:state table (deleted)"
+trace seq=424 t_ns=95779019036807 bo-dump phase=munmap handle=4 offset=0x0 map_len=0x200000 dump_len=0x100000 first_words=0x00000000,0x00000000,0x00000000,0x00000000 file="dumps/000423_munmap_handle_4_off_0x0_len_0x100000.bin"
+trace seq=425 t_ns=95779019040314 munmap addr=0x7a2b68af3000 len=0x200000 handle=4
+trace seq=426 t_ns=95779019041896 bo-map-clear handle=4 reason=munmap-overlap
+trace seq=427 t_ns=95779019080986 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0x40086409 name=DRM_IOCTL_GEM_CLOSE arg=0x7fff574fad50
+trace seq=428 t_ns=95779019087362 ioctl-exit fd=5 request=0x40086409 name=DRM_IOCTL_GEM_CLOSE ret=0 errno=22
+trace seq=429 t_ns=95779019088949 gem-close handle=4
+trace seq=430 t_ns=95779019104386 munmap addr=0x7a2b69c2d000 len=0x800 handle=0
+trace seq=431 t_ns=95779019110843 munmap addr=0x7a2b69c25000 len=0x1000 handle=0
+trace seq=432 t_ns=95779019120150 close fd=10 path="/memfd:state table (deleted)"
+trace seq=433 t_ns=95779019301622 bo-dump phase=munmap handle=5 offset=0x0 map_len=0x200000 dump_len=0x100000 first_words=0xE35C3000,0x04000000,0x00000000,0x00000000 file="dumps/000432_munmap_handle_5_off_0x0_len_0x100000.bin"
+trace seq=434 t_ns=95779019304906 munmap addr=0x7a2b688f3000 len=0x200000 handle=5
+trace seq=435 t_ns=95779019305936 bo-map-clear handle=5 reason=munmap-overlap
+trace seq=436 t_ns=95779019318397 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0x40086409 name=DRM_IOCTL_GEM_CLOSE arg=0x7fff574fad50
+trace seq=437 t_ns=95779019320708 ioctl-exit fd=5 request=0x40086409 name=DRM_IOCTL_GEM_CLOSE ret=0 errno=22
+trace seq=438 t_ns=95779019321574 gem-close handle=5
+trace seq=439 t_ns=95779019322411 munmap addr=0x7a2b69c2f000 len=0x800 handle=0
+trace seq=440 t_ns=95779019327368 munmap addr=0x7a2b69c21000 len=0x1000 handle=0
+trace seq=441 t_ns=95779019335138 close fd=8 path="/memfd:state table (deleted)"
+trace seq=442 t_ns=95779019479324 bo-dump phase=munmap handle=3 offset=0x0 map_len=0x200000 dump_len=0x100000 first_words=0x80030061,0x07050220,0x00000024,0x00000000 file="dumps/000441_munmap_handle_3_off_0x0_len_0x100000.bin"
+trace seq=443 t_ns=95779019481592 munmap addr=0x7a2b68cf3000 len=0x200000 handle=3
+trace seq=444 t_ns=95779019482616 bo-map-clear handle=3 reason=munmap-overlap
+trace seq=445 t_ns=95779019493942 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0x40086409 name=DRM_IOCTL_GEM_CLOSE arg=0x7fff574fad50
+trace seq=446 t_ns=95779019495998 ioctl-exit fd=5 request=0x40086409 name=DRM_IOCTL_GEM_CLOSE ret=0 errno=22
+trace seq=447 t_ns=95779019496870 gem-close handle=3
+trace seq=448 t_ns=95779019497621 munmap addr=0x7a2b69c31000 len=0x800 handle=0
+trace seq=449 t_ns=95779019502411 munmap addr=0x7a2b69c30000 len=0x1000 handle=0
+trace seq=450 t_ns=95779019507024 close fd=7 path="/memfd:state table (deleted)"
+trace seq=451 t_ns=95779019678796 bo-dump phase=munmap handle=2 offset=0x0 map_len=0x200000 dump_len=0x100000 first_words=0x00000000,0x00000000,0x00000000,0x00000000 file="dumps/000450_munmap_handle_2_off_0x0_len_0x100000.bin"
+trace seq=452 t_ns=95779019681320 munmap addr=0x7a2b68ef3000 len=0x200000 handle=2
+trace seq=453 t_ns=95779019682288 bo-map-clear handle=2 reason=munmap-overlap
+trace seq=454 t_ns=95779019695200 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0x40086409 name=DRM_IOCTL_GEM_CLOSE arg=0x7fff574fad50
+trace seq=455 t_ns=95779019697594 ioctl-exit fd=5 request=0x40086409 name=DRM_IOCTL_GEM_CLOSE ret=0 errno=22
+trace seq=456 t_ns=95779019698552 gem-close handle=2
+trace seq=457 t_ns=95779019699332 munmap addr=0x7a2b69c32000 len=0x800 handle=0
+trace seq=458 t_ns=95779019704175 close fd=6 path="/memfd:state table (deleted)"
+trace seq=459 t_ns=95779019866621 bo-dump phase=munmap handle=1 offset=0x0 map_len=0x200000 dump_len=0x100000 first_words=0x00000000,0x00000000,0x00000000,0x00000000 file="dumps/000458_munmap_handle_1_off_0x0_len_0x100000.bin"
+trace seq=460 t_ns=95779019868563 munmap addr=0x7a2b690f3000 len=0x200000 handle=1
+trace seq=461 t_ns=95779019869349 bo-map-clear handle=1 reason=munmap-overlap
+trace seq=462 t_ns=95779019882690 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0x40086409 name=DRM_IOCTL_GEM_CLOSE arg=0x7fff574fad50
+trace seq=463 t_ns=95779019885287 ioctl-exit fd=5 request=0x40086409 name=DRM_IOCTL_GEM_CLOSE ret=0 errno=22
+trace seq=464 t_ns=95779019885972 gem-close handle=1
+trace seq=465 t_ns=95779019887325 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0x40086409 name=DRM_IOCTL_GEM_CLOSE arg=0x7fff574fad60
+trace seq=466 t_ns=95779019890423 ioctl-exit fd=5 request=0x40086409 name=DRM_IOCTL_GEM_CLOSE ret=0 errno=22
+trace seq=467 t_ns=95779019891110 gem-close handle=12
+trace seq=468 t_ns=95779019892137 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0x40086409 name=DRM_IOCTL_GEM_CLOSE arg=0x7fff574fad60
+trace seq=469 t_ns=95779019893537 ioctl-exit fd=5 request=0x40086409 name=DRM_IOCTL_GEM_CLOSE ret=0 errno=22
+trace seq=470 t_ns=95779019894346 gem-close handle=11
+trace seq=471 t_ns=95779019895152 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0x40086409 name=DRM_IOCTL_GEM_CLOSE arg=0x7fff574fad60
+trace seq=472 t_ns=95779019896254 ioctl-exit fd=5 request=0x40086409 name=DRM_IOCTL_GEM_CLOSE ret=0 errno=22
+trace seq=473 t_ns=95779019896935 gem-close handle=10
+trace seq=474 t_ns=95779019897797 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0x40086409 name=DRM_IOCTL_GEM_CLOSE arg=0x7fff574fad60
+trace seq=475 t_ns=95779019898804 ioctl-exit fd=5 request=0x40086409 name=DRM_IOCTL_GEM_CLOSE ret=0 errno=22
+trace seq=476 t_ns=95779019899499 gem-close handle=9
+trace seq=477 t_ns=95779020351690 ioctl-enter fd=5 path="/dev/dri/renderD128" request=0x4010647B name=UNKNOWN arg=0x7fff574fae70
+trace seq=478 t_ns=95779020355487 ioctl-exit fd=5 request=0x4010647B name=UNKNOWN ret=0 errno=22
+trace seq=479 t_ns=95779020356334 close fd=5 path="/dev/dri/renderD128"
+trace seq=480 t_ns=95779020401368 munmap addr=0x7a2b680bf000 len=0x140008 handle=0
+trace seq=481 t_ns=95779020414056 close fd=4 path="/dev/dri/renderD128"
+trace seq=482 t_ns=95779020638187 trace-end pid=687803
+oracle-run: finished_at=2026-05-09T02:08:17+02:00
+oracle-run: dump_count=26
+oracle-run: log=/home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/latest/log.txt

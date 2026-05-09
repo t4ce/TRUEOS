@@ -31,6 +31,12 @@ const UAS_READ_WINDOW_MAX_INFLIGHT: usize =
     crate::allcaps::storage::USB_MASS_UAS_READ_WINDOW_MAX_INFLIGHT;
 const UAS_READ_WINDOW_MAX_TRANSFER_BYTES: usize =
     crate::allcaps::storage::USB_MASS_UAS_READ_WINDOW_MAX_TRANSFER_BYTES;
+const UAS_SKHYNIX_SEQUENCE_WAIT_LIMIT: u16 =
+    crate::allcaps::storage::USB_MASS_UAS_SKHYNIX_SEQUENCE_WAIT_LIMIT;
+const UAS_SKHYNIX_SEQUENCE_WAIT_DELAY_MS: u64 =
+    crate::allcaps::storage::USB_MASS_UAS_SKHYNIX_SEQUENCE_WAIT_DELAY_MS;
+const UAS_SKHYNIX_SEQUENCE_SWITCH_GRACE_MS: u64 =
+    crate::allcaps::storage::USB_MASS_UAS_SKHYNIX_SEQUENCE_SWITCH_GRACE_MS;
 const MASS_IO_GROW_SUCCESS_TARGET: u16 = crate::allcaps::storage::USB_MASS_IO_GROW_SUCCESS_TARGET;
 const MASS_IO_GROW_SUCCESS_TARGET_FAST_BOT: u16 =
     crate::allcaps::storage::USB_MASS_IO_GROW_SUCCESS_TARGET_FAST_BOT;
@@ -106,9 +112,31 @@ struct UsbMassRuntime {
 
 unsafe impl Send for UsbMassRuntime {}
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum UasSkhynixSequenceKind {
+    Read,
+    Write,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct UasSkhynixSequenceLane {
+    runtime_key: u64,
+    active: bool,
+    preferred_kind: UasSkhynixSequenceKind,
+    preferred_until_ms: u64,
+}
+
+struct UasSkhynixSequenceGuard {
+    runtime_key: u64,
+    kind: UasSkhynixSequenceKind,
+    active: bool,
+}
+
 static ACTIVE_MASS_STREAMS: Mutex<Vec<ActiveMassStream, MAX_ACTIVE_STREAMS>> =
     Mutex::new(Vec::new());
 static MASS_RUNTIMES: Mutex<Vec<UsbMassRuntime, MAX_MASS_RUNTIMES>> = Mutex::new(Vec::new());
+static UAS_SKHYNIX_SEQUENCE_LANES: Mutex<Vec<UasSkhynixSequenceLane, MAX_MASS_RUNTIMES>> =
+    Mutex::new(Vec::new());
 
 #[derive(Copy, Clone)]
 struct RegisteredMassDisk {
@@ -118,6 +146,89 @@ struct RegisteredMassDisk {
 
 static REGISTERED_MASS_DISKS: Mutex<Vec<RegisteredMassDisk, MAX_MASS_RUNTIMES>> =
     Mutex::new(Vec::new());
+
+impl Drop for UasSkhynixSequenceGuard {
+    fn drop(&mut self) {
+        if self.active {
+            release_uas_skhynix_sequence_lane(self.runtime_key, self.kind);
+        }
+    }
+}
+
+fn uas_skhynix_sequence_kind_label(kind: UasSkhynixSequenceKind) -> &'static str {
+    match kind {
+        UasSkhynixSequenceKind::Read => "read",
+        UasSkhynixSequenceKind::Write => "write",
+    }
+}
+
+fn try_acquire_uas_skhynix_sequence_lane(
+    runtime_key: u64,
+    kind: UasSkhynixSequenceKind,
+) -> bool {
+    let now_ms = uas_bench_now_ms();
+    let mut lanes = UAS_SKHYNIX_SEQUENCE_LANES.lock();
+    if let Some(lane) = lanes
+        .iter_mut()
+        .find(|lane| lane.runtime_key == runtime_key)
+    {
+        let can_switch = now_ms >= lane.preferred_until_ms;
+        if !lane.active && (lane.preferred_kind == kind || can_switch) {
+            lane.active = true;
+            return true;
+        }
+        return false;
+    }
+
+    lanes
+        .push(UasSkhynixSequenceLane {
+            runtime_key,
+            active: true,
+            preferred_kind: kind,
+            preferred_until_ms: now_ms,
+        })
+        .is_ok()
+}
+
+async fn acquire_uas_skhynix_sequence_lane(
+    runtime_key: u64,
+    kind: UasSkhynixSequenceKind,
+) -> block::Result<UasSkhynixSequenceGuard> {
+    for _ in 0..=UAS_SKHYNIX_SEQUENCE_WAIT_LIMIT {
+        if try_acquire_uas_skhynix_sequence_lane(runtime_key, kind) {
+            return Ok(UasSkhynixSequenceGuard {
+                runtime_key,
+                kind,
+                active: true,
+            });
+        }
+        Timer::after(EmbassyDuration::from_millis(
+            UAS_SKHYNIX_SEQUENCE_WAIT_DELAY_MS,
+        ))
+        .await;
+    }
+
+    crate::log!(
+        "crabusb: mass uas-skhynix sequence wait timeout key=0x{:016X} kind={} waited_ms={}\n",
+        runtime_key,
+        uas_skhynix_sequence_kind_label(kind),
+        (UAS_SKHYNIX_SEQUENCE_WAIT_LIMIT as u64 + 1) * UAS_SKHYNIX_SEQUENCE_WAIT_DELAY_MS
+    );
+    Err(block::Error::Timeout)
+}
+
+fn release_uas_skhynix_sequence_lane(runtime_key: u64, kind: UasSkhynixSequenceKind) {
+    let now_ms = uas_bench_now_ms();
+    let mut lanes = UAS_SKHYNIX_SEQUENCE_LANES.lock();
+    if let Some(lane) = lanes
+        .iter_mut()
+        .find(|lane| lane.runtime_key == runtime_key)
+    {
+        lane.active = false;
+        lane.preferred_kind = kind;
+        lane.preferred_until_ms = now_ms.saturating_add(UAS_SKHYNIX_SEQUENCE_SWITCH_GRACE_MS);
+    }
+}
 
 fn register_active_mass_stream(stream: ActiveMassStream) -> bool {
     let mut streams = ACTIVE_MASS_STREAMS.lock();
@@ -1911,12 +2022,28 @@ async fn recover_runtime_transport(
 
 struct UsbMassBlockDevice {
     runtime_key: u64,
+    io_profile: MassIoProfile,
     block_size: u32,
     block_count: u64,
     max_transfer_bytes: u64,
 }
 
 impl UsbMassBlockDevice {
+    async fn acquire_sequence_lane(
+        &self,
+        kind: UasSkhynixSequenceKind,
+    ) -> block::Result<UasSkhynixSequenceGuard> {
+        if self.io_profile == MassIoProfile::UasSkhynix {
+            acquire_uas_skhynix_sequence_lane(self.runtime_key, kind).await
+        } else {
+            Ok(UasSkhynixSequenceGuard {
+                runtime_key: self.runtime_key,
+                kind,
+                active: false,
+            })
+        }
+    }
+
     async fn with_runtime<R>(
         &self,
         f: impl for<'a> FnOnce(
@@ -1969,6 +2096,9 @@ impl block::BlockDevice for UsbMassBlockDevice {
                 .ok_or(block::Error::InvalidParam)?;
             let mut out = alloc::vec![0u8; total_bytes];
 
+            let _lane = self
+                .acquire_sequence_lane(UasSkhynixSequenceKind::Read)
+                .await?;
             self.with_runtime(|rt| {
                 Box::pin(async move {
                     if matches!(rt.endpoints, UsbMassEndpoints::UasSkhynix { .. }) {
@@ -2176,6 +2306,9 @@ impl block::BlockDevice for UsbMassBlockDevice {
                 return Err(block::Error::OutOfBounds);
             }
 
+            let _lane = self
+                .acquire_sequence_lane(UasSkhynixSequenceKind::Write)
+                .await?;
             let mut rt = take_runtime_wait(self.runtime_key)
                 .await
                 .ok_or(block::Error::NotReady)?;
@@ -2371,6 +2504,9 @@ impl block::BlockDevice for UsbMassBlockDevice {
     fn flush<'a>(&'a mut self) -> block::BoxFuture<'a, block::Result<()>> {
         Box::pin(async move {
             let block_size = (self.block_size as usize).max(1);
+            let _lane = self
+                .acquire_sequence_lane(UasSkhynixSequenceKind::Write)
+                .await?;
             self.with_runtime(|rt| {
                 Box::pin(async move {
                     if rt.sync_cache_unsupported {
@@ -2528,6 +2664,7 @@ fn register_block_device(
     vendor_id: u16,
     product_id: u16,
     probe: &MassProbeInfo,
+    io_profile: MassIoProfile,
     max_transfer_bytes: u64,
 ) -> block::DeviceHandle {
     if let Some(handle) = registered_disk(identity.runtime_key) {
@@ -2544,6 +2681,7 @@ fn register_block_device(
         desc,
         UsbMassBlockDevice {
             runtime_key: identity.runtime_key,
+            io_profile,
             block_size: probe.block_size.max(1),
             block_count: probe.block_count.max(1),
             max_transfer_bytes: max_transfer_bytes.max(u64::from(probe.block_size.max(1))),
@@ -2661,8 +2799,14 @@ pub async fn mass_storage_task(
 
     let identity = build_mass_identity(&mut device, controller_id, u32::from(slot)).await;
     let existing_handle = registered_disk(identity.runtime_key);
-    let handle =
-        register_block_device(&identity, vendor_id, product_id, &probe, MAX_IO_BYTES as u64);
+    let handle = register_block_device(
+        &identity,
+        vendor_id,
+        product_id,
+        &probe,
+        io_profile,
+        MAX_IO_BYTES as u64,
+    );
     let attach_mode = if existing_handle.is_some() {
         "reattached"
     } else {
@@ -2965,6 +3109,7 @@ pub async fn mass_storage_uas_skhynix_task(
         vendor_id,
         product_id,
         &probe,
+        MassIoProfile::UasSkhynix,
         UAS_READ_WINDOW_MAX_TRANSFER_BYTES as u64,
     );
     let attach_mode = if existing_handle.is_some() {
