@@ -28,9 +28,9 @@ glslangValidator -V -S comp \
 cc -O2 -g -Wall -Wextra -fPIC -shared \
   "$TOOL_DIR/ioctl_trace.c" \
   -o "$BUILD_DIR/libtrueos_ioctl_trace.so" \
-  -ldl >> "$LOG" 2>&1
+  -ldl -rdynamic >> "$LOG" 2>&1
 
-cc -O2 -g -Wall -Wextra \
+cc -O2 -g -Wall -Wextra -rdynamic \
   "$TOOL_DIR/vk_compute_sentinel.c" \
   -o "$BUILD_DIR/vk_compute_sentinel" \
   -lvulkan >> "$LOG" 2>&1
@@ -44,7 +44,11 @@ cc -O2 -g -Wall -Wextra \
   echo "oracle-run: env MESA_VK_DEVICE_SELECT=8086:a780"
   echo "oracle-run: env VK_LOADER_DRIVERS_SELECT=${VK_LOADER_DRIVERS_SELECT:-*intel*}"
   echo "oracle-run: env TRUEOS_ORACLE_VK_DEVICE_ID=${TRUEOS_ORACLE_VK_DEVICE_ID:-0xA780}"
-  echo "oracle-run: env TRUEOS_ORACLE_MAX_DUMP_BYTES=${TRUEOS_ORACLE_MAX_DUMP_BYTES:-1048576}"
+  echo "oracle-run: env TRUEOS_ORACLE_MAX_DUMP_BYTES=${TRUEOS_ORACLE_MAX_DUMP_BYTES:-0}"
+  echo "oracle-run: env TRUEOS_ORACLE_TRACE_STACKS=${TRUEOS_ORACLE_TRACE_STACKS:-1}"
+  echo "oracle-run: env TRUEOS_ORACLE_STACK_DEPTH=${TRUEOS_ORACLE_STACK_DEPTH:-64}"
+  echo "oracle-run: env TRUEOS_ORACLE_TRACE_SNAPSHOTS=${TRUEOS_ORACLE_TRACE_SNAPSHOTS:-1}"
+  echo "oracle-run: env TRUEOS_ORACLE_REQUIRE_HW=${TRUEOS_ORACLE_REQUIRE_HW:-1}"
   echo "oracle-run: hw_mmio=attempt-sudo-noninteractive"
 } >> "$LOG"
 
@@ -58,12 +62,21 @@ if sudo -n true >> "$LOG" 2>&1; then
   sleep 0.05
 else
   echo "oracle-run: hw_mmio_sampler_unavailable reason=sudo-noninteractive-failed log=$HW_LOG" >> "$LOG"
+  echo "hw t_ns=0 unavailable reason=sudo-noninteractive-failed need=\"run sudo -v first or run this script as root\"" >> "$HW_LOG"
+  if [[ "${TRUEOS_ORACLE_REQUIRE_HW:-1}" != "0" ]]; then
+    echo "oracle-run: aborted reason=hw-mmio-required-but-unavailable" >> "$LOG"
+    echo "$LOG"
+    exit 3
+  fi
 fi
 
 set +e
 TRUEOS_ORACLE_LOG_DIR="$OUT_DIR" \
 TRUEOS_ORACLE_VK_DEVICE_ID="${TRUEOS_ORACLE_VK_DEVICE_ID:-0xA780}" \
-TRUEOS_ORACLE_MAX_DUMP_BYTES="${TRUEOS_ORACLE_MAX_DUMP_BYTES:-1048576}" \
+TRUEOS_ORACLE_MAX_DUMP_BYTES="${TRUEOS_ORACLE_MAX_DUMP_BYTES:-0}" \
+TRUEOS_ORACLE_TRACE_STACKS="${TRUEOS_ORACLE_TRACE_STACKS:-1}" \
+TRUEOS_ORACLE_STACK_DEPTH="${TRUEOS_ORACLE_STACK_DEPTH:-64}" \
+TRUEOS_ORACLE_TRACE_SNAPSHOTS="${TRUEOS_ORACLE_TRACE_SNAPSHOTS:-1}" \
 MESA_VK_DEVICE_SELECT="${MESA_VK_DEVICE_SELECT:-8086:a780}" \
 VK_LOADER_DRIVERS_SELECT="${VK_LOADER_DRIVERS_SELECT:-*intel*}" \
 LD_PRELOAD="$BUILD_DIR/libtrueos_ioctl_trace.so${LD_PRELOAD:+:$LD_PRELOAD}" \
