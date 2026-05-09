@@ -39,7 +39,7 @@ BP_EXAMPLE_PAIRS ?= $(strip $(shell awk 'BEGIN { in_example = 0; name = ""; path
 # Set BP_SKIP_EMBED to 1 to omit blueprints from the ISO.
 # Set both to 1 to stop both blueprint build and embedding.
 BP_SKIP_BUILD := 1
-BP_SKIP_EMBED := 0
+BP_SKIP_EMBED := 1
 QEMU_RUNNER := tools/qemu/run.sh
 QEMU_BIN ?= qemu-system-x86_64
 QEMU_UEFI_FIRMWARE = $(OVMF_BUNDLE_PATH)

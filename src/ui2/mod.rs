@@ -349,6 +349,56 @@ enum Ui2SystemButtonAction {
     Close,
 }
 
+#[repr(u32)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum Ui2WindowDecorationButton {
+    ToggleComposition = 0,
+    Fork = 1,
+    Minimize = 2,
+    Restore = 3,
+    ToggleMaximize = 4,
+    PreserveVm = 5,
+    Close = 6,
+}
+
+impl Ui2WindowDecorationButton {
+    pub const COUNT: usize = 7;
+    pub const ALL_MASK: u32 = (1 << Self::COUNT) - 1;
+
+    #[inline]
+    pub const fn from_u32(value: u32) -> Option<Self> {
+        match value {
+            0 => Some(Self::ToggleComposition),
+            1 => Some(Self::Fork),
+            2 => Some(Self::Minimize),
+            3 => Some(Self::Restore),
+            4 => Some(Self::ToggleMaximize),
+            5 => Some(Self::PreserveVm),
+            6 => Some(Self::Close),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub(super) const fn from_action(action: Ui2SystemButtonAction) -> Option<Self> {
+        match action {
+            Ui2SystemButtonAction::ToggleComposition => Some(Self::ToggleComposition),
+            Ui2SystemButtonAction::Fork => Some(Self::Fork),
+            Ui2SystemButtonAction::Minimize => Some(Self::Minimize),
+            Ui2SystemButtonAction::Restore => Some(Self::Restore),
+            Ui2SystemButtonAction::ToggleMaximize => Some(Self::ToggleMaximize),
+            Ui2SystemButtonAction::PreserveVm => Some(Self::PreserveVm),
+            Ui2SystemButtonAction::Close => Some(Self::Close),
+            Ui2SystemButtonAction::RotateLeft | Ui2SystemButtonAction::RotateRight => None,
+        }
+    }
+
+    #[inline]
+    pub(super) const fn bit(self) -> u32 {
+        1 << (self as u32)
+    }
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum Ui2WindowKind {
     HostedBrowser,
@@ -464,6 +514,7 @@ struct Ui2Window {
     hosted_browser_snapshot: UiHostedBrowserSnapshot,
     title: Ui2WindowTitle,
     icon_id: u32,
+    title_icon_visible: bool,
     title_twemoji: char,
     title_icon_tex_id: u32,
     title_icon_load_seq: u32,
@@ -478,6 +529,8 @@ struct Ui2Window {
     decoration_mode: Ui2WindowDecorationMode,
     titlebar_visible: bool,
     bottom_bar_visible: bool,
+    titlebar_button_visible_mask: u32,
+    resize_button_visible: bool,
     rotate_buttons_visible: bool,
     content_rotation_quadrants: u8,
     left_scrollbar_visible: bool,
@@ -512,11 +565,37 @@ fn ui2_system_button_count(window: &Ui2Window) -> usize {
     if window.decoration_mode != Ui2WindowDecorationMode::System || !window.titlebar_visible {
         return 0;
     }
-    if window.state == Ui2WindowStateKind::Minimized {
-        2
-    } else {
-        5
-    }
+    let actions: &[Ui2SystemButtonAction] = match window.state {
+        Ui2WindowStateKind::Minimized => &[
+            Ui2SystemButtonAction::Close,
+            Ui2SystemButtonAction::Restore,
+            Ui2SystemButtonAction::ToggleMaximize,
+        ],
+        Ui2WindowStateKind::Maximized => &[
+            Ui2SystemButtonAction::Close,
+            Ui2SystemButtonAction::PreserveVm,
+            Ui2SystemButtonAction::Minimize,
+            Ui2SystemButtonAction::Fork,
+            Ui2SystemButtonAction::ToggleComposition,
+        ],
+        Ui2WindowStateKind::Normal => &[
+            Ui2SystemButtonAction::Close,
+            Ui2SystemButtonAction::PreserveVm,
+            Ui2SystemButtonAction::ToggleMaximize,
+            Ui2SystemButtonAction::Minimize,
+            Ui2SystemButtonAction::Fork,
+            Ui2SystemButtonAction::ToggleComposition,
+        ],
+    };
+    actions
+        .iter()
+        .filter(|action| {
+            (**action != Ui2SystemButtonAction::PreserveVm || window.vm_origin_hint)
+                && Ui2WindowDecorationButton::from_action(**action)
+                    .map(|button| (window.titlebar_button_visible_mask & button.bit()) != 0)
+                    .unwrap_or(true)
+        })
+        .count()
 }
 
 #[inline]
@@ -545,9 +624,16 @@ fn ui2_window_min_size(window: &Ui2Window) -> (f32, f32) {
     }
 
     if window.bottom_bar_visible && window.state == Ui2WindowStateKind::Normal {
-        min_w = min_w.max(UI2_BOTTOM_BAR_H + 1.0);
+        if window.resize_button_visible {
+            min_w = min_w.max(UI2_BOTTOM_BAR_H + 1.0);
+        }
         if window.rotate_buttons_visible {
-            min_w = min_w.max(UI2_BOTTOM_BAR_H * 3.0 + 2.0);
+            let resize_slots = if window.resize_button_visible {
+                1.0
+            } else {
+                0.0
+            };
+            min_w = min_w.max(UI2_BOTTOM_BAR_H * (2.0 + resize_slots) + 2.0);
         }
     }
 
@@ -1574,6 +1660,115 @@ pub unsafe extern "C" fn trueos_cabi_ui2_window_set_decorations(window_id: u32, 
         return rc;
     }
     if set_window_decorations(window_id, mode) {
+        0
+    } else {
+        -1
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_ui2_window_set_titlebar_visible(
+    window_id: u32,
+    visible: u32,
+) -> i32 {
+    let window_id = ui2_cabi_target_window_id(window_id);
+    if let Some(rc) = vm_deferred_window_ok(window_id, "set-titlebar-visible") {
+        let _ = crate::hv::note_deferred_blueprint_app_window_bool(
+            window_id,
+            "set-titlebar-visible",
+            visible != 0,
+        );
+        return rc;
+    }
+    if set_window_titlebar_visible(window_id, visible != 0) {
+        0
+    } else {
+        -1
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_ui2_window_set_bottom_bar_visible(
+    window_id: u32,
+    visible: u32,
+) -> i32 {
+    let window_id = ui2_cabi_target_window_id(window_id);
+    if let Some(rc) = vm_deferred_window_ok(window_id, "set-bottom-bar-visible") {
+        let _ = crate::hv::note_deferred_blueprint_app_window_bool(
+            window_id,
+            "set-bottom-bar-visible",
+            visible != 0,
+        );
+        return rc;
+    }
+    if set_window_bottom_bar_visible(window_id, visible != 0) {
+        0
+    } else {
+        -1
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_ui2_window_set_title_icon_visible(
+    window_id: u32,
+    visible: u32,
+) -> i32 {
+    let window_id = ui2_cabi_target_window_id(window_id);
+    if let Some(rc) = vm_deferred_window_ok(window_id, "set-title-icon-visible") {
+        let _ = crate::hv::note_deferred_blueprint_app_window_bool(
+            window_id,
+            "set-title-icon-visible",
+            visible != 0,
+        );
+        return rc;
+    }
+    if set_window_title_icon_visible(window_id, visible != 0) {
+        0
+    } else {
+        -1
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_ui2_window_set_decoration_button_visible(
+    window_id: u32,
+    button: u32,
+    visible: u32,
+) -> i32 {
+    let Some(button) = Ui2WindowDecorationButton::from_u32(button) else {
+        return -1;
+    };
+    let window_id = ui2_cabi_target_window_id(window_id);
+    if let Some(rc) = vm_deferred_window_ok(window_id, "set-decoration-button-visible") {
+        let _ = crate::hv::note_deferred_blueprint_app_window_button_visible(
+            window_id,
+            button as u32,
+            visible != 0,
+        );
+        return rc;
+    }
+    if set_window_titlebar_button_visible(window_id, button, visible != 0) {
+        0
+    } else {
+        -1
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_ui2_window_set_resize_button_visible(
+    window_id: u32,
+    visible: u32,
+) -> i32 {
+    let window_id = ui2_cabi_target_window_id(window_id);
+    if let Some(rc) = vm_deferred_window_ok(window_id, "set-resize-button-visible") {
+        let _ = crate::hv::note_deferred_blueprint_app_window_bool(
+            window_id,
+            "set-resize-button-visible",
+            visible != 0,
+        );
+        return rc;
+    }
+    if set_window_resize_button_visible(window_id, visible != 0) {
         0
     } else {
         -1

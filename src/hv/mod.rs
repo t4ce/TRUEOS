@@ -307,6 +307,11 @@ struct DeferredAppWindowRecord {
     blend_enabled: bool,
     icon_id: Option<u32>,
     decoration_mode: Option<u32>,
+    titlebar_visible: Option<bool>,
+    bottom_bar_visible: Option<bool>,
+    title_icon_visible: Option<bool>,
+    decoration_button_visible: [Option<bool>; crate::r::ui2::Ui2WindowDecorationButton::COUNT],
+    resize_button_visible: Option<bool>,
     hit_test_visible: Option<bool>,
     vertical_scrollbar_visible: Option<bool>,
     horizontal_scrollbar_visible: Option<bool>,
@@ -343,6 +348,11 @@ impl DeferredAppWindowRecord {
             blend_enabled: false,
             icon_id: None,
             decoration_mode: None,
+            titlebar_visible: None,
+            bottom_bar_visible: None,
+            title_icon_visible: None,
+            decoration_button_visible: [None; crate::r::ui2::Ui2WindowDecorationButton::COUNT],
+            resize_button_visible: None,
             hit_test_visible: None,
             vertical_scrollbar_visible: None,
             horizontal_scrollbar_visible: None,
@@ -1151,6 +1161,11 @@ pub fn defer_blueprint_app_window_create(
         blend_enabled,
         icon_id: None,
         decoration_mode: None,
+        titlebar_visible: None,
+        bottom_bar_visible: None,
+        title_icon_visible: None,
+        decoration_button_visible: [None; crate::r::ui2::Ui2WindowDecorationButton::COUNT],
+        resize_button_visible: None,
         hit_test_visible: None,
         vertical_scrollbar_visible: None,
         horizontal_scrollbar_visible: None,
@@ -1247,6 +1262,10 @@ pub fn note_deferred_blueprint_app_window_bool(
 ) -> bool {
     with_deferred_blueprint_app_window_record(window_id, |record| {
         match op {
+            "set-titlebar-visible" => record.titlebar_visible = Some(value),
+            "set-bottom-bar-visible" => record.bottom_bar_visible = Some(value),
+            "set-title-icon-visible" => record.title_icon_visible = Some(value),
+            "set-resize-button-visible" => record.resize_button_visible = Some(value),
             "set-hit-test-visible" => record.hit_test_visible = Some(value),
             "set-vertical-scrollbar-visible" => record.vertical_scrollbar_visible = Some(value),
             "set-horizontal-scrollbar-visible" => record.horizontal_scrollbar_visible = Some(value),
@@ -1254,6 +1273,20 @@ pub fn note_deferred_blueprint_app_window_bool(
             "set-resize-maintain-aspect" => record.resize_maintain_aspect = Some(value),
             "set-content-preserve-scale" => record.content_preserve_scale = Some(value),
             _ => {}
+        }
+        true
+    })
+    .unwrap_or(false)
+}
+
+pub fn note_deferred_blueprint_app_window_button_visible(
+    window_id: u32,
+    button: u32,
+    value: bool,
+) -> bool {
+    with_deferred_blueprint_app_window_record(window_id, |record| {
+        if let Some(slot) = record.decoration_button_visible.get_mut(button as usize) {
+            *slot = Some(value);
         }
         true
     })
@@ -1567,6 +1600,26 @@ fn apply_deferred_app_window_properties(window_id: u32, record: &DeferredAppWind
     }
     if let Some(mode) = record.decoration_mode.and_then(deferred_decoration_mode) {
         let _ = crate::r::ui2::set_window_decorations(window_id, mode);
+    }
+    if let Some(visible) = record.titlebar_visible {
+        let _ = crate::r::ui2::set_window_titlebar_visible(window_id, visible);
+    }
+    if let Some(visible) = record.bottom_bar_visible {
+        let _ = crate::r::ui2::set_window_bottom_bar_visible(window_id, visible);
+    }
+    if let Some(visible) = record.title_icon_visible {
+        let _ = crate::r::ui2::set_window_title_icon_visible(window_id, visible);
+    }
+    for (idx, visible) in record.decoration_button_visible.iter().enumerate() {
+        let Some(visible) = visible else {
+            continue;
+        };
+        if let Some(button) = crate::r::ui2::Ui2WindowDecorationButton::from_u32(idx as u32) {
+            let _ = crate::r::ui2::set_window_titlebar_button_visible(window_id, button, *visible);
+        }
+    }
+    if let Some(visible) = record.resize_button_visible {
+        let _ = crate::r::ui2::set_window_resize_button_visible(window_id, visible);
     }
     if let Some(visible) = record.hit_test_visible {
         let _ = crate::r::ui2::set_window_hit_test_visible(window_id, visible);

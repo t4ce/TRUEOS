@@ -97,6 +97,7 @@ pub(super) fn alloc_window(
         hosted_browser_snapshot: UiHostedBrowserSnapshot::default(),
         title: ui2_window_title_inline(title),
         icon_id: 0,
+        title_icon_visible: true,
         title_twemoji: '\0',
         title_icon_tex_id: 0,
         title_icon_load_seq: 0,
@@ -111,6 +112,8 @@ pub(super) fn alloc_window(
         decoration_mode: Ui2WindowDecorationMode::System,
         titlebar_visible: true,
         bottom_bar_visible: true,
+        titlebar_button_visible_mask: Ui2WindowDecorationButton::ALL_MASK,
+        resize_button_visible: true,
         rotate_buttons_visible: false,
         content_rotation_quadrants: 0,
         left_scrollbar_visible: true,
@@ -596,6 +599,7 @@ pub(super) fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) 
         .saturating_add(1);
     let next_title = source_window.title.clone();
     let next_icon_id = source_window.icon_id;
+    let next_title_icon_visible = source_window.title_icon_visible;
     let next_title_twemoji = source_window.title_twemoji;
     let next_title_icon_tex_id = source_window.title_icon_tex_id;
     let next_title_icon_load_seq = source_window.title_icon_load_seq;
@@ -606,6 +610,8 @@ pub(super) fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) 
     let next_decoration_mode = source_window.decoration_mode;
     let next_titlebar_visible = source_window.titlebar_visible;
     let next_bottom_bar_visible = source_window.bottom_bar_visible;
+    let next_titlebar_button_visible_mask = source_window.titlebar_button_visible_mask;
+    let next_resize_button_visible = source_window.resize_button_visible;
     let next_rotate_buttons_visible = source_window.rotate_buttons_visible;
     let next_content_rotation_quadrants = source_window.content_rotation_quadrants;
     let next_left_scrollbar_visible = source_window.left_scrollbar_visible;
@@ -662,6 +668,7 @@ pub(super) fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) 
         window.vm_origin_hint = false;
         window.vm_origin_vm_id = u8::MAX;
         window.icon_id = next_icon_id;
+        window.title_icon_visible = next_title_icon_visible;
         window.title_twemoji = next_title_twemoji;
         window.title_icon_tex_id = next_title_icon_tex_id;
         window.title_icon_load_seq = next_title_icon_load_seq;
@@ -677,6 +684,8 @@ pub(super) fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) 
         window.decoration_mode = next_decoration_mode;
         window.titlebar_visible = next_titlebar_visible;
         window.bottom_bar_visible = next_bottom_bar_visible;
+        window.titlebar_button_visible_mask = next_titlebar_button_visible_mask;
+        window.resize_button_visible = next_resize_button_visible;
         window.rotate_buttons_visible = next_rotate_buttons_visible;
         window.content_rotation_quadrants = next_content_rotation_quadrants;
         window.left_scrollbar_visible = next_left_scrollbar_visible;
@@ -1887,6 +1896,20 @@ pub fn set_window_icon(id: u32, icon_id: u32) -> bool {
     window.icon_id = icon_id;
     state.compose_reason = "icon-window";
     note_window_dirty(&mut state, id, "icon-window")
+}
+
+pub fn set_window_title_icon_visible(id: u32, visible: bool) -> bool {
+    let state_lock = init_state();
+    let mut state = state_lock.lock();
+    let Some(window) = window_mut(&mut state, id) else {
+        return false;
+    };
+    if window.title_icon_visible == visible {
+        return true;
+    }
+    window.title_icon_visible = visible;
+    state.compose_reason = "title-icon-window";
+    note_window_dirty(&mut state, id, "title-icon-window")
 }
 
 pub fn set_window_title_twemoji(id: u32, ch: char) -> bool {
