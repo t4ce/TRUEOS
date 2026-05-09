@@ -193,26 +193,40 @@ fn ui2_font_blit_glyph_rgba(
     };
     let is_color = glyph.source == Ui2FontGlyphSource::Twemoji;
     let draw_rect = ui2_font_place_glyph_top_center(glyph, cell_rect);
-    let glyph_w = glyph.region.src_w as usize;
-    let glyph_h = glyph.region.src_h as usize;
+    let source_w = glyph.region.src_w.max(1) as usize;
+    let source_h = glyph.region.src_h.max(1) as usize;
+    let draw_w = (draw_rect.w.max(1.0) as usize).max(1);
+    let draw_h = (draw_rect.h.max(1.0) as usize).max(1);
     let src_x = glyph.region.src_x as usize;
     let src_y = glyph.region.src_y as usize;
     let atlas_width = atlas.width as usize;
+    let atlas_height = atlas.height as usize;
     let dst_x = draw_rect.x.max(0.0) as usize;
     let dst_y = draw_rect.y.max(0.0) as usize;
 
-    for row in 0..glyph_h {
+    for row in 0..draw_h {
         let target_y = dst_y + row;
         if target_y >= dst_height {
             break;
         }
-        for col in 0..glyph_w {
+        let source_row = (row * source_h) / draw_h;
+        let atlas_y = src_y + source_row;
+        if atlas_y >= atlas_height {
+            continue;
+        }
+        for col in 0..draw_w {
             let target_x = dst_x + col;
             if target_x >= dst_width {
                 break;
             }
 
-            let atlas_idx = ((src_y + row) * atlas_width + (src_x + col)) * 4;
+            let source_col = (col * source_w) / draw_w;
+            let atlas_x = src_x + source_col;
+            if atlas_x >= atlas_width {
+                continue;
+            }
+
+            let atlas_idx = (atlas_y * atlas_width + atlas_x) * 4;
             if is_color {
                 let sr = atlas.rgba.get(atlas_idx).copied().unwrap_or(0);
                 let sg = atlas.rgba.get(atlas_idx + 1).copied().unwrap_or(0);
