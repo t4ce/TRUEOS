@@ -34,20 +34,6 @@ pub fn fetch_https_to_file_hyper(
     }
 }
 
-pub fn fetch_html_best_effort(
-    job: &'static str,
-    url: HString<256>,
-) -> Result<String, &'static str> {
-    crate::log!("t/net: {} tokio html begin url={}\n", job, url.as_str());
-    match crate::t::block_on_io(crate::r::net::html::fetch_html_best_effort(url)) {
-        Ok(result) => result,
-        Err(_) => {
-            crate::log!("t/net: {} tokio runtime build failed\n", job);
-            Err("tokio runtime build failed")
-        }
-    }
-}
-
 pub async fn fetch_html_best_effort_shared(
     job: &'static str,
     url: HString<256>,

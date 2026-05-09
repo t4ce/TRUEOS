@@ -18,7 +18,6 @@ pub struct FactoryRamProbeSnapshot {
     pub sample_count: usize,
     pub sample_phys: [u64; FACTORY_RAM_PROBE_SAMPLE_BYTES],
     pub sample_values: [u8; FACTORY_RAM_PROBE_SAMPLE_BYTES],
-    pub binary_logged: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -41,7 +40,6 @@ pub fn factory_ram_probe_snapshot() -> Option<FactoryRamProbeSnapshot> {
         sample_count: state.sample_count,
         sample_phys: state.sample_phys,
         sample_values: state.sample_values,
-        binary_logged: state.binary_logged,
     })
 }
 
@@ -160,7 +158,6 @@ pub async fn boot_factory_ram_probe_task() {
             sample_count: min(state.sample_count, FACTORY_RAM_PROBE_SAMPLE_BYTES),
             sample_phys: state.sample_phys,
             sample_values: state.sample_values,
-            binary_logged: state.binary_logged,
         }
     };
 

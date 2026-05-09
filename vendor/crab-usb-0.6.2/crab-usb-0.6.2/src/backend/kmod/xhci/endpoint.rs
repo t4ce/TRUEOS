@@ -257,6 +257,17 @@ impl Endpoint {
         len: usize,
     ) -> TransferId {
         const MAX_NORMAL_TRB_BYTES: usize = 64 * 1024;
+        const BULK_PACKET_BYTES: usize = 1024;
+
+        fn td_size_for_remaining(remaining_after_trb: usize) -> u8 {
+            if remaining_after_trb == 0 {
+                0
+            } else {
+                remaining_after_trb
+                    .div_ceil(BULK_PACKET_BYTES)
+                    .min(0x1f) as u8
+            }
+        }
 
         if len <= MAX_NORMAL_TRB_BYTES {
             let trb = transfer::Allowed::Normal(
@@ -275,9 +286,11 @@ impl Endpoint {
         while offset < len {
             let chunk = core::cmp::min(MAX_NORMAL_TRB_BYTES, len - offset);
             let last = offset + chunk >= len;
+            let remaining = len.saturating_sub(offset + chunk);
             let mut trb = *Normal::new()
                 .set_data_buffer_pointer(bus_addr + offset as u64)
                 .set_trb_transfer_length(chunk as _)
+                .set_td_size(td_size_for_remaining(remaining))
                 .set_interrupter_target(0);
 
             if last {

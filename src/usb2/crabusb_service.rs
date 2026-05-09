@@ -267,6 +267,7 @@ struct BounceMapping {
 }
 
 static BOUNCE_MAPPINGS: Mutex<alloc::vec::Vec<BounceMapping>> = Mutex::new(alloc::vec::Vec::new());
+const XHCI_NORMAL_TRB_BYTES: usize = 64 * 1024;
 
 #[inline]
 fn crabusb_dma_cache_flush(addr: NonNull<u8>, size: usize) {
@@ -325,8 +326,13 @@ impl DmaOp for TrueosCrabUsbKernel {
             .checked_add(size.get().saturating_sub(1) as u64)
             .map(|end| end <= dma_mask)
             .unwrap_or(false);
+        let needs_contiguous_bounce = size.get() > XHCI_NORMAL_TRB_BYTES
+            && matches!(
+                direction,
+                DmaDirection::ToDevice | DmaDirection::Bidirectional
+            );
 
-        if aligned && in_mask {
+        if aligned && in_mask && !needs_contiguous_bounce {
             return Ok(unsafe { DmaMapHandle::new(addr, DmaAddr::from(phys), layout, None) });
         }
 

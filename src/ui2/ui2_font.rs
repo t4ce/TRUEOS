@@ -100,14 +100,12 @@ struct Ui2FontCellMetrics {
 pub(crate) enum Ui2FontTextAlign {
     Left,
     Center,
-    Right,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Ui2FontVerticalAlign {
     Top,
     Center,
-    Bottom,
 }
 
 pub(crate) struct Ui2FontCpuAtlases {
@@ -649,7 +647,6 @@ pub(crate) fn ui2_font_draw_text_line_in_rect_rgba_no_present(
     let draw_x = match align {
         Ui2FontTextAlign::Left => rect.x,
         Ui2FontTextAlign::Center => rect.x + ((rect.w - draw_w) * 0.5).max(0.0),
-        Ui2FontTextAlign::Right => rect.x + (rect.w - draw_w).max(0.0),
     };
     // We do not have baseline-aware top/bottom placement yet, so keep rect
     // text vertically centered for all requested modes.
@@ -686,7 +683,6 @@ pub(crate) fn ui2_font_draw_text_line_in_rect_with_tier_rgba_no_present(
     let draw_x = match align {
         Ui2FontTextAlign::Left => rect.x,
         Ui2FontTextAlign::Center => rect.x + ((rect.w - draw_w) * 0.5).max(0.0),
-        Ui2FontTextAlign::Right => rect.x + (rect.w - draw_w).max(0.0),
     };
     let _ = vertical_align;
     let draw_y = libm::roundf(rect.y + ((rect.h - line_height_px) * 0.5).max(0.0));
