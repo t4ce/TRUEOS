@@ -200,6 +200,12 @@ pub(crate) enum UasReadStatusKind {
     StatusGood,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum UasWriteStatusKind {
+    WriteReady,
+    StatusGood,
+}
+
 fn validate_uas_status(
     _cmd: &'static str,
     iu: &[u8],
@@ -237,6 +243,31 @@ pub(crate) fn classify_uas_read_status_iu(
         UAS_IU_STATUS => {
             validate_uas_status(cmd, iu, expected_tag)?;
             Ok(UasReadStatusKind::StatusGood)
+        }
+        _ => Err(MassProbeError::Csw),
+    }
+}
+
+pub(crate) fn classify_uas_write_status_iu(
+    cmd: &'static str,
+    iu: &[u8],
+    expected_tag: u16,
+) -> Result<UasWriteStatusKind, MassProbeError> {
+    if iu.len() < 4 {
+        return Err(MassProbeError::ShortData);
+    }
+
+    let iu_id = iu[0];
+    let tag = parse_uas_tag(iu).unwrap_or(0);
+    if tag != expected_tag {
+        return Err(MassProbeError::Csw);
+    }
+
+    match iu_id {
+        UAS_IU_WRITE_READY => Ok(UasWriteStatusKind::WriteReady),
+        UAS_IU_STATUS => {
+            validate_uas_status(cmd, iu, expected_tag)?;
+            Ok(UasWriteStatusKind::StatusGood)
         }
         _ => Err(MassProbeError::Csw),
     }
@@ -424,6 +455,18 @@ pub(crate) async fn send_read10_uas_skhynix(
     let tag = uas_tag(tag);
     let cdb = scsi::cdb_read_10(lba, blocks);
     uas_send_command(command_out, "read-10", &cdb, tag).await?;
+    Ok(tag)
+}
+
+pub(crate) async fn send_write10_uas_skhynix(
+    command_out: &mut EndpointBulkOut,
+    lba: u32,
+    blocks: u16,
+    tag: u32,
+) -> Result<u16, MassProbeError> {
+    let tag = uas_tag(tag);
+    let cdb = scsi::cdb_write_10(lba, blocks);
+    uas_send_command(command_out, "write-10", &cdb, tag).await?;
     Ok(tag)
 }
 

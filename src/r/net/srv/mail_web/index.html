@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TRUEOS Mail</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+  </head>
+  <body class="min-h-screen bg-zinc-950 text-zinc-100">
+    <main class="mx-auto grid min-h-screen max-w-7xl grid-rows-[auto_1fr]">
+      <header class="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800 px-4 py-3 sm:px-6">
+        <div>
+          <h1 class="text-xl font-semibold tracking-normal">TRUEOS Mail</h1>
+          <p id="mail-status" class="text-sm text-zinc-400">Loading mailbox...</p>
+        </div>
+        <div class="flex items-center gap-2">
+          <button
+            id="refresh-button"
+            class="inline-flex items-center rounded border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm font-medium text-zinc-100 hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-cyan-500"
+            type="button"
+          >
+            Refresh
+          </button>
+          <button
+            id="compose-toggle"
+            class="inline-flex items-center rounded bg-cyan-500 px-3 py-2 text-sm font-semibold text-zinc-950 hover:bg-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-300"
+            type="button"
+          >
+            Compose
+          </button>
+        </div>
+      </header>
+
+      <section class="grid min-h-0 grid-cols-1 lg:grid-cols-[22rem_1fr]">
+        <aside class="min-h-0 border-b border-zinc-800 lg:border-b-0 lg:border-r">
+          <div class="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
+            <h2 class="text-sm font-semibold uppercase tracking-wide text-zinc-400">Inbox</h2>
+            <span id="message-count" class="text-sm text-zinc-500">0</span>
+          </div>
+          <div id="message-list" class="max-h-[42vh] overflow-y-auto lg:max-h-[calc(100vh-7.5rem)]"></div>
+        </aside>
+
+        <div class="grid min-h-0 grid-rows-[1fr_auto]">
+          <article id="message-detail" class="min-h-[22rem] overflow-y-auto p-4 sm:p-6">
+            <div class="flex h-full items-center justify-center text-center text-zinc-500">
+              Select a message to read.
+            </div>
+          </article>
+
+          <section id="compose-panel" class="hidden border-t border-zinc-800 bg-zinc-900/80 p-4 sm:p-6">
+            <form id="compose-form" class="grid gap-3">
+              <div class="grid gap-3 sm:grid-cols-2">
+                <label class="grid gap-1 text-sm">
+                  <span class="font-medium text-zinc-300">To</span>
+                  <input
+                    id="compose-to"
+                    class="rounded border border-zinc-700 bg-zinc-950 px-3 py-2 text-zinc-100 outline-none focus:border-cyan-500"
+                    name="to"
+                    placeholder="user@example.test"
+                    required
+                    type="email"
+                  />
+                </label>
+                <label class="grid gap-1 text-sm">
+                  <span class="font-medium text-zinc-300">Subject</span>
+                  <input
+                    id="compose-subject"
+                    class="rounded border border-zinc-700 bg-zinc-950 px-3 py-2 text-zinc-100 outline-none focus:border-cyan-500"
+                    name="subject"
+                    placeholder="Subject"
+                    required
+                    type="text"
+                  />
+                </label>
+              </div>
+              <label class="grid gap-1 text-sm">
+                <span class="font-medium text-zinc-300">Message</span>
+                <textarea
+                  id="compose-body"
+                  class="min-h-36 rounded border border-zinc-700 bg-zinc-950 px-3 py-2 text-zinc-100 outline-none focus:border-cyan-500"
+                  name="body"
+                  placeholder="Write a message..."
+                  required
+                ></textarea>
+              </label>
+              <div class="flex flex-wrap items-center justify-between gap-3">
+                <p id="compose-status" class="text-sm text-zinc-400"></p>
+                <div class="flex items-center gap-2">
+                  <button
+                    id="discard-button"
+                    class="rounded border border-zinc-700 px-3 py-2 text-sm font-medium text-zinc-100 hover:bg-zinc-800"
+                    type="button"
+                  >
+                    Discard
+                  </button>
+                  <button
+                    class="rounded bg-cyan-500 px-4 py-2 text-sm font-semibold text-zinc-950 hover:bg-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-300"
+                    type="submit"
+                  >
+                    Send
+                  </button>
+                </div>
+              </div>
+            </form>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

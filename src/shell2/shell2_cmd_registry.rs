@@ -20,7 +20,6 @@ struct BuiltinShell2CmdEntry {
 
 const TOOL_JSON_ACPI: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["reboot","S1","S2","S3","S4","S5"],"description":"ACPI action to run."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_C4: &str = r#"{"type":"object","properties":{"mode":{"type":"string","enum":["file","inline"],"description":"Compile from a TRUEOSFS file or inline C4 source."},"path":{"type":"string","description":"TRUEOSFS source path when mode=file."},"source":{"type":"string","description":"Inline C4 source when mode=inline."}},"required":["mode"],"additionalProperties":false}"#;
-const TOOL_JSON_EMAIL: &str = r#"{"type":"object","properties":{"mode":{"type":"string","enum":["send","set_from"],"description":"Choose whether to send a mail log entry or set the default from address."},"to":{"type":"string","description":"Recipient address when mode=send."},"mail_text":{"type":"string","description":"Mail body text when mode=send."},"from":{"type":"string","description":"Sender address when mode=set_from."}},"required":["mode"],"additionalProperties":false}"#;
 const TOOL_JSON_ETC: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["ample","go","go2","insane"],"description":"etc subcommand to run."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_FILE: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","format","ramdisc"],"description":"file action to run."},"disk_id":{"type":"string","description":"Disk id string for action=format."},"size":{"type":"string","description":"Optional ramdisc size like 512MB or 1GiB for action=ramdisc."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_HV: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["status","run","pause","stop","preserve"],"description":"HV subcommand to run."},"id":{"type":"integer","minimum":1,"description":"Blueprint archive id for run, or VM id for pause/stop/preserve."},"args":{"type":"array","items":{"type":"string"},"description":"CLI arguments passed to the selected blueprint when subcommand=run."}},"required":["subcommand"],"additionalProperties":false}"#;
@@ -38,11 +37,6 @@ fn dispatch_acpi(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Par
 fn dispatch_etc(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
     super::cmds::etc::try_parse(io, &mut args)
-}
-
-fn dispatch_email(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    let mut args = rest.split_whitespace();
-    super::cmds::email::try_parse(io, &mut args)
 }
 
 fn dispatch_hv(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -147,14 +141,6 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         handler: dispatch_etc,
         tool_description: Some("Run small shell demo and utility subcommands."),
         tool_parameters_json: Some(TOOL_JSON_ETC),
-    },
-    BuiltinShell2CmdEntry {
-        name: "email",
-        mode: "cmd",
-        color: None,
-        handler: dispatch_email,
-        tool_description: Some("Send a shell email log entry or set the default from address."),
-        tool_parameters_json: Some(TOOL_JSON_EMAIL),
     },
     BuiltinShell2CmdEntry {
         name: "file",

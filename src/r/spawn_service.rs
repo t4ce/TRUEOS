@@ -46,6 +46,7 @@ define_started_flags!(
     HTTP_TRUEOSFS_STARTED,
     HYPER_HTTP1_PROBE_STARTED,
     CHAT_HTTP_STARTED,
+    MAIL_HTTP_STARTED,
     WS_TIME_STARTED,
     ESP_GATE_STARTED,
     ESP_GATE_REGISTRY_STARTED,
@@ -442,6 +443,10 @@ fn hyper_http1_probe_enabled() -> bool {
 
 fn spawn_chat_http(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::net::srv::chat::chat_http_service_task())
+}
+
+fn spawn_mail_http(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::r::net::srv::mail::mail_http_service_task())
 }
 
 fn spawn_ws_time(spawner: Spawner) -> SpawnAttempt {
@@ -1237,7 +1242,7 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::APP_VM_READY
 const WS_BOOT_READY: u32 = crate::r::readiness::NET_GATEWAY_REACHABLE
     | crate::r::readiness::TLS_SOCKET_SERVICE_READY
     | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
-static TASKS: [TaskSpec; 70] = [
+static TASKS: [TaskSpec; 71] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
         "globalog-persist-once",
@@ -1319,6 +1324,12 @@ static TASKS: [TaskSpec; 70] = [
         crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
         &CHAT_HTTP_STARTED,
         spawn_chat_http,
+    ),
+    TaskSpec::enabled(
+        "mail-http",
+        crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
+        &MAIL_HTTP_STARTED,
+        spawn_mail_http,
     ),
     TaskSpec::enabled("app-vm-run-queue", 0, &APP_VM_RUN_QUEUE_STARTED, spawn_app_vm_run_queue),
     TaskSpec::disabled(
