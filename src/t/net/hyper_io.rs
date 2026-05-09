@@ -14,25 +14,38 @@ use hyper::{
 use std::io;
 use tokio::io::{AsyncRead, AsyncWrite};
 
-pub struct HyperEmptyBody;
+pub struct HyperBytesBody {
+    bytes: Option<Bytes>,
+}
 
-impl Body for HyperEmptyBody {
+impl HyperBytesBody {
+    pub fn new(bytes: &[u8]) -> Self {
+        Self {
+            bytes: Some(Bytes::copy_from_slice(bytes)),
+        }
+    }
+}
+
+impl Body for HyperBytesBody {
     type Data = Bytes;
     type Error = Infallible;
 
     fn poll_frame(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         _cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
-        Poll::Ready(None)
+        Poll::Ready(self.bytes.take().map(|bytes| Ok(Frame::data(bytes))))
     }
 
     fn is_end_stream(&self) -> bool {
-        true
+        self.bytes.is_none()
     }
 
     fn size_hint(&self) -> SizeHint {
-        SizeHint::with_exact(0)
+        match self.bytes.as_ref() {
+            Some(bytes) => SizeHint::with_exact(bytes.len() as u64),
+            None => SizeHint::with_exact(0),
+        }
     }
 }
 

@@ -380,7 +380,7 @@ impl Ui2WindowDecorationButton {
     }
 
     #[inline]
-    pub(super) const fn from_action(action: Ui2SystemButtonAction) -> Option<Self> {
+    const fn from_action(action: Ui2SystemButtonAction) -> Option<Self> {
         match action {
             Ui2SystemButtonAction::ToggleComposition => Some(Self::ToggleComposition),
             Ui2SystemButtonAction::Fork => Some(Self::Fork),
@@ -394,7 +394,7 @@ impl Ui2WindowDecorationButton {
     }
 
     #[inline]
-    pub(super) const fn bit(self) -> u32 {
+    const fn bit(self) -> u32 {
         1 << (self as u32)
     }
 }
