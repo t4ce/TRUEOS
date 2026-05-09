@@ -504,7 +504,6 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
         // transfers leaf ownership on open_device(); doing that here just to
         // decorate the table with strings forces the later class bind path to
         // re-address an already-addressed physical device.
-        let strings = super::descriptor::UsbDeviceStrings::default();
         let topo = dev.topology();
         let location = dev.location();
         current_devices.push(ObservedUsbDevice {
@@ -522,9 +521,9 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
             protocol: desc.protocol,
             num_configurations: desc.num_configurations,
             max_packet_size_0: desc.max_packet_size_0,
-            manufacturer: strings.manufacturer,
-            product: strings.product,
-            serial: strings.serial,
+            manufacturer: None,
+            product: None,
+            serial: None,
             configurations: collect_tlb_usb_configurations(dev.configurations()),
         });
     }

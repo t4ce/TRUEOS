@@ -9,8 +9,7 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 use super::super::scsi;
 use super::{
     MassProbeError, MassProbeInfo, UAS_IO_TIMEOUT_MS, UAS_STATUS_GRACE_MS, USB_CLASS_MASS_STORAGE,
-    USB_PROTO_UAS, USB_SUBCLASS_SCSI, decode_ascii_field, log_transport_debug,
-    with_timeout_or_none,
+    USB_PROTO_UAS, USB_SUBCLASS_SCSI, decode_ascii_field, with_timeout_or_none,
 };
 
 const UAS_IU_COMMAND: u8 = 0x01;
@@ -257,9 +256,7 @@ fn uas_trace_is_good_write_ready_substitute(
     tag: u16,
     iu: &[u8],
 ) -> bool {
-    cmd == "write-10"
-        && stage == "ready-iu"
-        && validate_uas_status(cmd, iu, tag).is_ok()
+    cmd == "write-10" && stage == "ready-iu" && validate_uas_status(cmd, iu, tag).is_ok()
 }
 
 fn uas_trace_rate_limit_allows(last_marker: &AtomicU64) -> bool {
@@ -428,39 +425,6 @@ pub(crate) async fn send_read10_uas_skhynix(
     let cdb = scsi::cdb_read_10(lba, blocks);
     uas_send_command(command_out, "read-10", &cdb, tag).await?;
     Ok(tag)
-}
-
-async fn uas_read_iu(
-    status_in: &mut EndpointBulkIn,
-    _cmd: &'static str,
-    stream_id: u16,
-    buf: &mut [u8],
-) -> Result<usize, MassProbeError> {
-    let got = with_timeout_or_none(
-        status_in.submit_on_stream_and_wait(stream_id, buf),
-        UAS_IO_TIMEOUT_MS,
-    )
-    .await
-    .ok_or_else(|| {
-        log_transport_debug("uas-status-timeout");
-        MassProbeError::Transport("uas-status-timeout")
-    })?
-    .map_err(|_| MassProbeError::Transport("uas-status-in"))?;
-    if got < 4 {
-        return Err(MassProbeError::ShortData);
-    }
-    Ok(got)
-}
-
-async fn uas_read_status(
-    status_in: &mut EndpointBulkIn,
-    cmd: &'static str,
-    expected_tag: u16,
-) -> Result<(), MassProbeError> {
-    let mut status = [0u8; 96];
-    let got = uas_read_iu(status_in, cmd, expected_tag, &mut status).await?;
-    log_uas_iu("status-iu", cmd, expected_tag, &status[..got.min(status.len())]);
-    validate_uas_status(cmd, &status[..got.min(status.len())], expected_tag)
 }
 
 async fn uas_drain_status_grace(
