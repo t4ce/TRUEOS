@@ -27,19 +27,6 @@ unsafe impl RawMutex for EmbassySpinRawMutex {
     }
 }
 
-/// Update a stored waker if it differs from the current one.
-#[inline]
-pub fn register_waker_slot(slot: &mut Option<Waker>, waker: &Waker) -> bool {
-    let should_replace = match slot.as_ref() {
-        Some(existing) => !existing.will_wake(waker),
-        None => true,
-    };
-    if should_replace {
-        *slot = Some(waker.clone());
-    }
-    should_replace
-}
-
 /// Register a waker into a list if it is not already present.
 #[inline]
 pub fn register_waker_list(list: &mut Vec<Waker>, waker: &Waker) -> bool {
@@ -125,16 +112,6 @@ pub fn spin_until_timeout_no_exec<F: FnMut() -> bool>(timeout_ms: u64, mut condi
         }
         spin_step_no_exec();
     }
-}
-
-/// Take a waker from a slot and wake it.
-#[inline]
-pub fn take_and_wake(slot: &mut Option<Waker>) -> bool {
-    if let Some(waker) = slot.take() {
-        waker.wake();
-        return true;
-    }
-    false
 }
 
 /// A minimal wait-queue for task-context wakeups.
@@ -403,32 +380,4 @@ where
         }
         state.wait.wait_for_event_blocking(0);
     }
-}
-
-pub enum Either<A, B> {
-    First(A),
-    Second(B),
-}
-
-/// Race two futures and resolve with whichever completes first.
-///
-/// If both are ready in the same poll, `a` wins.
-pub async fn select2<A, B>(a: A, b: B) -> Either<A::Output, B::Output>
-where
-    A: Future,
-    B: Future,
-{
-    let mut a = core::pin::pin!(a);
-    let mut b = core::pin::pin!(b);
-
-    core::future::poll_fn(|cx: &mut Context<'_>| {
-        if let Poll::Ready(out) = a.as_mut().poll(cx) {
-            return Poll::Ready(Either::First(out));
-        }
-        if let Poll::Ready(out) = b.as_mut().poll(cx) {
-            return Poll::Ready(Either::Second(out));
-        }
-        Poll::Pending
-    })
-    .await
 }

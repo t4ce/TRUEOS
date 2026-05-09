@@ -86,7 +86,7 @@ pub(crate) async fn run_disk_proof(
                 C4_BOOT_PROBE_RUST_PATH,
                 report.as_bytes(),
             )
-                .await;
+            .await;
             crate::log!(
                 "c4-boot-probe: lane={} parse failed path={} err={}\n",
                 lane,
@@ -97,18 +97,19 @@ pub(crate) async fn run_disk_proof(
         }
     };
 
-    let (vm_run_ok, vm_steps) = match trueos_c4::run_vm_object(vm.bytes.as_slice(), C4_BOOT_PROBE_STEP_LIMIT) {
-        Ok(report) => (true, report.steps),
-        Err(err) => {
-            crate::log!(
-                "c4-boot-probe: lane={} run failed vm_path={} err={:?}\n",
-                lane,
-                C4_BOOT_PROBE_VM_PATH,
-                err
-            );
-            (false, 0)
-        }
-    };
+    let (vm_run_ok, vm_steps) =
+        match trueos_c4::run_vm_object(vm.bytes.as_slice(), C4_BOOT_PROBE_STEP_LIMIT) {
+            Ok(report) => (true, report.steps),
+            Err(err) => {
+                crate::log!(
+                    "c4-boot-probe: lane={} run failed vm_path={} err={:?}\n",
+                    lane,
+                    C4_BOOT_PROBE_VM_PATH,
+                    err
+                );
+                (false, 0)
+            }
+        };
 
     let source_ok = match crate::r::fs::trueosfs::file_in_async(
         disk,

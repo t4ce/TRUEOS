@@ -1,0 +1,271 @@
+AMV PIPE DUMP MEMO
+==================
+
+Purpose
+-------
+This file is a working memo for the Intel simple-triangle bring-up and the
+host-side capture path we added to validate it. The goal is to preserve what
+was actually proven, which commands/tool runs were used, what code was changed,
+and what still remains uncertain.
+
+
+Current high-confidence facts
+-----------------------------
+1. The render engine is not obviously dead.
+   - The batch submits.
+   - The batch retires.
+   - The draw-path completion markers fire.
+   - We see post-VF / post-VS / post-PS-state / post-clip / post-raster / final
+     marker values.
+
+2. The scanout / primary plane path is not the main mystery anymore.
+   - The primary plane gets armed.
+   - The surface is live.
+   - The display path can present the boot surface.
+
+3. The current failure is narrower than "GPU broken".
+   - The GPU accepts the 3D draw job.
+   - The draw completes.
+   - But the visible render target content stays unchanged.
+   - In plain language: the specific 3D triangle draw is still producing no
+     visible color writes.
+
+4. The shader blobs are not the missing piece.
+   - We added a lower-level host extraction path that steals the uploaded
+     shader bytes from the live Mesa/ANV pipeline artifacts instead of only
+     relying on nice high-level metadata.
+   - That extraction proved the host Mesa/ANV vertex shader blob exactly matches
+     our runtime vertex shader artifact.
+   - It also proved the host Mesa/ANV fragment shader blob exactly matches our
+     runtime fragment shader artifact.
+
+
+What was added on the host-validation side
+------------------------------------------
+The main tooling lives under:
+
+- `tools/xe_lp_shader_bake/simple_triangle_dump.c`
+- `tools/xe_lp_shader_bake/run_host_validation.py`
+- `tools/xe_lp_shader_bake/extract_from_pipeline_cache.py`
+- `tools/xe_lp_shader_bake/verify_artifact.py`
+
+Summary of what each piece does:
+
+1. `simple_triangle_dump.c`
+   - Builds a tiny Vulkan pipeline on the host.
+   - Uses the same trivial triangle shaders.
+   - Dumps pipeline executable info when available.
+   - Dumps the raw Vulkan pipeline cache blob.
+   - Now also emits a `host_state_reference.txt` memo with the key Mesa simple
+     shader state choices we want to mirror.
+
+2. `run_host_validation.py`
+   - Compiles GLSL to SPIR-V with `glslangValidator`.
+   - Builds the host dumper.
+   - Runs the dumper.
+   - Validates our current Rust-generated shader artifact against the host run.
+   - Invokes the pipeline-cache extractor.
+
+3. `extract_from_pipeline_cache.py`
+   - Carves the live uploaded VS/PS machine-code bytes out of the pipeline cache.
+   - Produces the extracted binary blobs for comparison.
+
+4. `verify_artifact.py`
+   - Checks the generated Rust shader artifact structure and hashes against the
+     host dump log.
+
+
+Important validation runs and what they proved
+----------------------------------------------
+Primary validation command:
+
+`python3 tools/xe_lp_shader_bake/run_host_validation.py`
+
+This performs the full host-side validation pipeline:
+
+1. Builds SPIR-V for the simple triangle shaders.
+2. Builds and runs the host Vulkan dumper.
+3. Validates `.codex_tmp/generated_simple.rs`.
+4. Extracts live shader bytes from the dumped pipeline cache blob.
+
+Important output artifacts:
+
+- `.codex_tmp/generated_simple.rs`
+- `.codex_tmp/host_shader_validation/simple_triangle_dump.log`
+- `.codex_tmp/host_shader_validation/pipeline_exec/`
+- `.codex_tmp/host_shader_validation/pipeline_exec/pipeline_cache.bin`
+- `.codex_tmp/host_shader_validation/pipeline_exec/host_state_reference.txt`
+- `.codex_tmp/host_shader_validation/cache_extract/triangle_vs.bin`
+- `.codex_tmp/host_shader_validation/cache_extract/triangle_ps.bin`
+- `.codex_tmp/host_shader_validation/cache_extract/triangle_ps_simd16.bin`
+- `.codex_tmp/host_shader_validation/cache_extract/triangle_ps_combined.bin`
+
+Key proven hashes:
+
+- VS SHA1: `d648c75e7e36bc926b927c3700bd514f81d286db`
+- PS SHA1: `81edb0a9ed24ccfdfb1a2c3202f1008b202868df`
+
+Meaning:
+
+- The Mesa/ANV live uploaded VS bytes match our generated VS bytes.
+- The Mesa/ANV live uploaded PS bytes match our generated PS bytes.
+- Therefore the current bug is not "wrong shader blob".
+
+
+Exact command/tool history worth remembering
+--------------------------------------------
+These are the main terminal/tool actions that mattered:
+
+1. Full host validation run:
+   - `python3 tools/xe_lp_shader_bake/run_host_validation.py`
+
+2. Inspect host state reference:
+   - `sed -n '1,220p' .codex_tmp/host_shader_validation/pipeline_exec/host_state_reference.txt`
+
+3. Inspect our render-state construction:
+   - `rg -n "probe-3d|3DSTATE_SBE|3DSTATE_PS|3DSTATE_PS_EXTRA|3DSTATE_CLIP|3DSTATE_RASTER|3DSTATE_PS_BLEND|SAMPLE_MASK|sample mask|sbe_" src/intel/render.rs`
+   - `sed -n '1410,1775p' src/intel/render.rs`
+   - `sed -n '1775,1835p' src/intel/render.rs`
+
+4. Inspect Mesa simple-shader reference code:
+   - `sed -n '150,260p' src/intel/reference/mesa/src/intel/vulkan/genX_simple_shader.c`
+   - `sed -n '260,380p' src/intel/reference/mesa/src/intel/vulkan/genX_simple_shader.c`
+   - `sed -n '1,160p' src/intel/reference/mesa/src/intel/vulkan/genX_simple_shader.c`
+
+5. Inspect packet layout details for SBE:
+   - `python3 - <<'PY' ... gen90.xml lookup for 3DSTATE_SBE ... PY`
+   - This confirmed:
+     - `Vertex URB Entry Read Offset` lives in dword 1 bits `10:5`
+     - `Vertex URB Entry Read Length` lives in dword 1 bits `15:11`
+     - `Attribute Swizzle Enable` is bit `21`
+     - `Number of SF Output Attributes` is bits `27:22`
+     - `Force Vertex URB Entry Read Offset` is bit `28`
+     - `Force Vertex URB Entry Read Length` is bit `29`
+
+6. Build sanity check after render-state edits:
+   - `cargo check -q`
+   - Result: success, with many unrelated existing warnings across the tree.
+
+
+What code changed during this investigation
+-------------------------------------------
+1. `tools/xe_lp_shader_bake/simple_triangle_dump.c`
+   - Added lower-level capture support around pipeline executable dumping and
+     cache extraction.
+   - Added `dump_host_state_reference(...)`.
+   - The host dumper now writes a plain-text state memo to:
+     - `.codex_tmp/host_shader_validation/pipeline_exec/host_state_reference.txt`
+
+2. `src/intel/render.rs`
+   - We changed the dedicated triangle probe path to better match Mesa's simple
+     shader setup.
+
+   Specific changes made:
+
+   a. SBE read length minimum
+      - We now force `VertexURBEntryReadLength >= 1` even when the fragment
+        shader consumes zero varyings.
+      - This follows Mesa's behavior for the trivial path.
+
+   b. Removed `PS_SINGLE_PROGRAM_FLOW`
+      - This bit was being set in our `3DSTATE_PS` packet and did not match the
+        very boring Mesa simple path we were trying to imitate.
+
+   c. Added `sbe=` to the probe log
+      - The render probe log now prints the encoded SBE dword so boot logs tell
+        us exactly what packet value we emitted.
+
+   d. Fixed the missing `VertexURBEntryReadOffset = 1`
+      - This was the biggest concrete packet bug found in the later pass.
+      - We were forcing the SBE read length, but we were not actually encoding
+        Mesa's required read offset of `1`.
+      - The fix was to set bit `5` in the encoded `sbe_dw1`, which is the field
+        for `VertexURBEntryReadOffset = 1`.
+
+3. `src/intel/display.rs`
+   - We briefly changed the full-screen baseline / bottom-color values to black
+     for a quick display sanity check.
+   - This did not materially change the result.
+   - This was diagnostic only, not a core fix.
+
+
+Host reference state we are trying to mirror
+--------------------------------------------
+From `host_state_reference.txt`:
+
+- `host-state cc_viewport min_depth=0.0 max_depth=1.0`
+- `host-state clip perspective_divide_disable=1`
+- `host-state raster cull_mode=none sample_mask=0x1`
+- `host-state sbe read_offset=1 read_length=1 num_sf_attrs=0 force_read_offset=1 force_read_length=1 flat_inputs=0 active_components=xyzw`
+- `host-state ps vector_mask=0 binding_table_entry_count=0 push_constants=0 dispatch=simd8 max_threads_per_psd=63`
+- `host-state ps_extra valid=1 attribute_enable=0 per_sample=0 computed_depth=0 computes_stencil=0`
+- `host-state ps_blend has_writeable_rt=1`
+
+Why this matters:
+
+- This gives us one compact target state description from Mesa's trivial path.
+- It is much easier to diff against our own emitted packets than re-reading
+  a full Vulkan driver implementation every time.
+
+
+What was proven false
+---------------------
+These explanations are no longer the best fit for the evidence:
+
+1. "The shader blobs are wrong."
+   - False based on the pipeline-cache extraction and hash match.
+
+2. "The whole render engine is dead."
+   - False based on successful batch submission, completion markers, and render
+     command retirement.
+
+3. "The scanout path is the only issue."
+   - Not supported by the evidence we have.
+   - The more specific failure is that this particular 3D draw still writes no
+     visible changed pixels.
+
+
+What is still not proven
+------------------------
+1. We have not yet proven which exact remaining packet/state mismatch suppresses
+   color writes.
+
+2. We have not yet shown a single boot log after the latest `sbe_dw1` fix that
+   confirms the new SBE value and a visible triangle.
+
+3. We have not yet finished a full direct host-vs-our-state diff for every
+   packet field in the dedicated draw path.
+
+
+How to read the current situation in one sentence
+-------------------------------------------------
+The live Mesa shader machine code is correct and already matches our artifact,
+so the remaining problem is in our dedicated 3D draw-state programming, not in
+shader generation or basic engine bring-up.
+
+
+Recommended next boot-log checks
+--------------------------------
+On the next boot, the most useful lines to inspect are:
+
+1. `intel/render: probe-3d sbe=...`
+   - After the read-offset fix, this should reflect the new encoded SBE dword.
+
+2. `intel/render: draw-path complete=1 ...`
+   - Confirms the batch still retires cleanly.
+
+3. `intel/display: primary-samples label=post-render ...`
+   - If the triangle finally writes color, these samples should change from the
+     unchanged background values.
+
+
+If we need to continue later
+----------------------------
+The next sensible approach is:
+
+1. Reboot with the latest `src/intel/render.rs`.
+2. Confirm the new SBE dword in the boot log.
+3. If still blank, continue comparing our dedicated packet values against the
+   host-state reference and Mesa's simple-shader code, packet by packet.
+
+That is the current state of the investigation.

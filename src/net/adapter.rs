@@ -238,7 +238,10 @@ enum Dhcp6Stage {
 }
 
 pub fn ipv4_at(index: usize) -> Option<[u8; 4]> {
-    if !crate::net::link_state_at(index).map(|ls| ls.up).unwrap_or(false) {
+    if !crate::net::link_state_at(index)
+        .map(|ls| ls.up)
+        .unwrap_or(false)
+    {
         return None;
     }
 

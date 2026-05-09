@@ -44,7 +44,8 @@ const FAST_BOT_INITIAL_IO_BYTES: usize =
     crate::allcaps::storage::USB_MASS_FAST_BOT_INITIAL_IO_BYTES;
 const FAST_BOT_WRITE_MAX_IO_BYTES: usize =
     crate::allcaps::storage::USB_MASS_FAST_BOT_WRITE_MAX_IO_BYTES;
-const UAS_SKHYNIX_WRITE_MAX_IO_BYTES: usize = 64 * 1024;
+const UAS_SKHYNIX_WRITE_MAX_IO_BYTES: usize =
+    crate::allcaps::storage::USB_MASS_UAS_SKHYNIX_WRITE_MAX_IO_BYTES;
 const SKHYNIX_USE_UAS: bool = crate::allcaps::storage::USB_MASS_SKHYNIX_USE_UAS;
 const USB_DT_INTERFACE: u8 = 0x04;
 const USB_DT_ENDPOINT: u8 = 0x05;
@@ -54,8 +55,6 @@ const UAS_PIPE_ID_COMMAND: u8 = 1;
 const UAS_PIPE_ID_STATUS: u8 = 2;
 const UAS_PIPE_ID_DATA_IN: u8 = 3;
 const UAS_PIPE_ID_DATA_OUT: u8 = 4;
-pub(crate) const UAS_BENCH_DEFAULT_TOTAL_BYTES: u64 = 128 * 1024 * 1024;
-pub(crate) const UAS_BENCH_DEFAULT_CHUNK_BYTES: usize = 256 * 1024;
 pub(crate) const UAS_BENCH_DEFAULT_MAX_INFLIGHT: usize = 8;
 const UAS_BENCH_STATUS_BYTES: usize = 96;
 const UAS_BENCH_TICK_MS: u64 = 1;
@@ -136,8 +135,7 @@ struct MassIoArbiterGuard {
 static ACTIVE_MASS_STREAMS: Mutex<Vec<ActiveMassStream, MAX_ACTIVE_STREAMS>> =
     Mutex::new(Vec::new());
 static MASS_RUNTIMES: Mutex<Vec<UsbMassRuntime, MAX_MASS_RUNTIMES>> = Mutex::new(Vec::new());
-static MASS_IO_ARBITERS: Mutex<Vec<MassIoArbiterState, MAX_MASS_RUNTIMES>> =
-    Mutex::new(Vec::new());
+static MASS_IO_ARBITERS: Mutex<Vec<MassIoArbiterState, MAX_MASS_RUNTIMES>> = Mutex::new(Vec::new());
 
 #[derive(Copy, Clone)]
 struct RegisteredMassDisk {
@@ -200,10 +198,7 @@ async fn acquire_mass_io_arbiter(
                 active: true,
             });
         }
-        Timer::after(EmbassyDuration::from_millis(
-            UAS_SKHYNIX_SEQUENCE_WAIT_DELAY_MS,
-        ))
-        .await;
+        Timer::after(EmbassyDuration::from_millis(UAS_SKHYNIX_SEQUENCE_WAIT_DELAY_MS)).await;
     }
 
     crate::log!(
@@ -2096,9 +2091,7 @@ impl block::BlockDevice for UsbMassBlockDevice {
                 .ok_or(block::Error::InvalidParam)?;
             let mut out = alloc::vec![0u8; total_bytes];
 
-            let _lane = self
-                .acquire_io_arbiter(MassIoArbiterLane::Read)
-                .await?;
+            let _lane = self.acquire_io_arbiter(MassIoArbiterLane::Read).await?;
             self.with_runtime(|rt| {
                 Box::pin(async move {
                     if matches!(rt.endpoints, UsbMassEndpoints::UasSkhynix { .. }) {
@@ -2306,9 +2299,7 @@ impl block::BlockDevice for UsbMassBlockDevice {
                 return Err(block::Error::OutOfBounds);
             }
 
-            let _lane = self
-                .acquire_io_arbiter(MassIoArbiterLane::Write)
-                .await?;
+            let _lane = self.acquire_io_arbiter(MassIoArbiterLane::Write).await?;
             let mut rt = take_runtime_wait(self.runtime_key)
                 .await
                 .ok_or(block::Error::NotReady)?;
@@ -2507,9 +2498,7 @@ impl block::BlockDevice for UsbMassBlockDevice {
     fn flush<'a>(&'a mut self) -> block::BoxFuture<'a, block::Result<()>> {
         Box::pin(async move {
             let block_size = (self.block_size as usize).max(1);
-            let _lane = self
-                .acquire_io_arbiter(MassIoArbiterLane::Write)
-                .await?;
+            let _lane = self.acquire_io_arbiter(MassIoArbiterLane::Write).await?;
             self.with_runtime(|rt| {
                 Box::pin(async move {
                     if rt.sync_cache_unsupported {

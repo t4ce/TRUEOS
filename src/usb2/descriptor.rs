@@ -102,13 +102,6 @@ pub(crate) const fn descriptor_scope_index(scope: UsbDescriptorScope) -> u16 {
     }
 }
 
-#[derive(Clone, Debug, Default)]
-pub(crate) struct UsbDeviceStrings {
-    pub manufacturer: Option<String>,
-    pub product: Option<String>,
-    pub serial: Option<String>,
-}
-
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum UsbDescriptorSkipReason {
     QemuBootHidOptionalRead,
@@ -183,18 +176,6 @@ pub(crate) async fn read_optional_string_descriptor(
     let idx = index?;
     let text = device.string_descriptor(idx.get()).await.ok()?;
     sanitize_usb_identity_string(text.as_str())
-}
-
-pub(crate) async fn read_device_strings(device: &mut Device) -> UsbDeviceStrings {
-    let (manufacturer_index, product_index, serial_index) = {
-        let desc = device.descriptor();
-        (desc.manufacturer_string_index, desc.product_string_index, desc.serial_number_string_index)
-    };
-    UsbDeviceStrings {
-        manufacturer: read_optional_string_descriptor(device, manufacturer_index).await,
-        product: read_optional_string_descriptor(device, product_index).await,
-        serial: read_optional_string_descriptor(device, serial_index).await,
-    }
 }
 
 const HID_DESC_FALLBACK_REPORT_LEN: u16 = 128;

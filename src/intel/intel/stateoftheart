@@ -1,0 +1,209 @@
+State of the art, current Intel GPU bring-up frontier
+======================================================
+
+This file is a raw proof transcript.  Read it like the HDA log: every line
+claims one hardware boundary and does not claim the next boundary.
+
+Current proven claims in this capture:
+
+- `pci-claim`: TrueOS claimed Intel GPU `00:02.0`, device `0x4680`,
+  revision `0x0C`, with `0x1000000` bytes of MMIO.
+- `guc-proof`: GuC firmware was found and bootstrap reached
+  `bootrom=JUMP_PASSED`, `ukernel=READY`, `auth=0x2`.
+- `display-proof`: primary boot surface is on `pipe-a`, live surface register
+  matches `0x02000000`, and the logo path reports `ok=1`.
+- `vertex-upload-proof`: CPU writes the canonical three-vertex triangle,
+  reads back the exact bytes, and flushes the upload range before submit.
+- `mi-scanout-store-proof`: RCS wrote one DWORD into the exact live scanout
+  surface and CPU readback saw the commanded value.
+- `post-draw-light-sync-proof`: `vf-streamout-proof`, `vf-draw-path`, and
+  `ps-launch-big-primitive` all report `post3d_light_marker=1` while
+  `final_after_light_marker=0`, `post3d_marker=0`, and `final_marker=0`.
+- `pc-retire-triad-proof`: `postdraw-light-only-retire` reports
+  `light_cs_stall=1 before_light=1 post3d_light=1 final_after_light=0`, while
+  `postdraw-pc-cs-no-postsync` reports `light_postsync=0 light_cs_stall=1
+  before_light=1 post3d_light=0 final_after_light=0`, and
+  `postdraw-pc-postsync-no-cs` reports `accepted=1 light_cs_stall=0
+  before_light=1 post3d_light=0 final_after_light=1 final=1`.
+- `vf-proof`: `vf-streamout-proof`, `vf-draw-path`,
+  `vs-draw-frontier`, and `vs-streamout-proof` report
+  `vf-proof accepted=1` with IA counters moving.
+- `clip-raster-proof`: `vf-draw-path` reports
+  `clip-raster-proof accepted=1` with `cl_delta=1`, `cl_prim_delta=1`.
+- `ps-launch-frontier-proof`: on `vf-draw-path` and
+  `ps-launch-big-primitive`, the PS launch input frontier reports
+  `input_ready=1` while PS/CPS/depth counters all remain zero; both paths now
+  also show `post_draw_light=1 post_draw_final_after_light=0`.
+- `ps-bt0-scratch-rt`: the Mesa-style PS binding-table count `0` variant
+  runs before the old fragment gate, retires the no-CS tail, and reads back the
+  CPU-visible scratch RT sentinel unchanged:
+  `before=0xDEADBEEF after=0xDEADBEEF changed=0 ps_delta=0 cps_delta=0`.
+- `vs-proof`: `vs-draw-frontier` and `vs-streamout-proof` report
+  `vs-proof accepted=1` with `vs_delta=3`, and shader upload matches the baked
+  blob.
+- Current negative frontier: the draw reaches a light post-3D `PIPE_CONTROL`
+  post-sync write only when `CS_STALL` is set, but `CS_STALL` alone is now
+  also proven to block the following plain MI store.  Removing `CS_STALL` lets
+  the command tail retire but loses the PC post-sync write.  The oversized VF
+  primitive proves a full-surface coverage candidate; the new scratch-RT,
+  BT-count-zero probe preserves that frontier and still reports
+  `fragment_observed=0`.  A direct no-CS OAR/MI_REPORT_PERF_COUNT raster-WM
+  probe is now wired for the next capture.
+
+High-level checklist:
+
+| Step | Status | Certainty | Evidence in this capture | What it proves | What it does not prove |
+
+Rows are ordered by proof/execution flow: claim the device, make registers and
+firmware sane, own memory, submit work, then walk the 3D pipeline until pixels
+or display handoff.
+
+| 01. Claim hardware / PCI | Proven | High | `intel: claimed 00:02.0 device=0x4680 rev=0x0C mmio_len=0x1000000` | TrueOS found and owns the expected Intel GPU function and BAR size. | MMIO access quality, forcewake, memory mappings, or engines. |
+
+| 02. MMIO / forcewake | Mostly proven | Medium-high | Recovery logs end with `forcewake_ok=1`; many MMIO counter/register reads are coherent. | The register path is alive enough for RCS/display diagnostics and recovery. | A dedicated stable-read/write forcewake contract for every needed register island. |
+
+| 03. GuC bootstrap | Proven | High | `bootstrap ready=1 ... bootrom=JUMP_PASSED ukernel=READY auth=0x2` | Firmware placement/auth/bootstrap reached ready state. | That render submission depends on GuC, or that GuC scheduling is being used correctly. |
+
+| 04. GPU memory / GGTT for warm buffers | Proven for mapping/readback | High | `memory-proof accepted=1 map=1 ggtt_invalidated=1 flush=all readback=cpu-first-dword ring[phys=0x9E3000 ggtt=0x800000 bytes=0x1000 rb=0x00000000] context[phys=0x9E4000 ggtt=0x810000 bytes=0x16000 rb=0x00000000] batch[phys=0x9FA000 ggtt=0x1800000 bytes=0x200000 rb=0x00000000] state[phys=0xBFA000 ggtt=0x860000 bytes=0x10000 rb=0x00000000] vertex[phys=0xC0A000 ggtt=0x870000 bytes=0x1000 rb=0x00000000] result[phys=0xC0B000 ggtt=0x840000 bytes=0x1000 rb=0x00000000] streamout[phys=0xC0C000 ggtt=0x880000 bytes=0x1000 rb=0x00000000]`; plus `probe-binding-table-pool base=0x861000 base_dw=0x00861001 size_dw=0x0000F000 ... bt_entry0=0x00001040 surf_gpu=0x861040 contract=pool-relative`. | Every warm render buffer is allocated, mapped at its fixed GGTT slot, cache-flushed, GGTT-invalidated, and CPU-readable in one named proof line; the gfx12.5 binding-table pool contract is also visible/coherent. | Actual GPU read/write use by every stage; actual fragment/PS/RT progress. |
+
+| 05. Vertex upload | Proven | High | `vertex-upload-proof accepted=1 stage=cpu-write-readback bytes=36 stride=12 count=3 gpu=0x870000 readback_ok=1 flush=1` | CPU wrote the canonical triangle, read back the exact bytes, and flushed the upload range before submit. | VF fetch, shader execution, clipper progress, PS dispatch, or pixels. |
+
+| 06. Shader upload | Proven | High | `shader-upload-verify ... vs_match=1 ps_match=1`; baked/uploaded signatures match for both VS and PS blobs. | The shader bytes used by the batch match the baked Mesa-derived blobs in memory. | That the VS output contract is correct, or that the PS ever dispatches. |
+
+| 07. Batch submit / RCS markers | Partly proven | Medium-high | Baseline paths report `batch-submit-proof completed=0 start_marker=1 pre_light_pc_marker=1 post3d_light_marker=1 final_after_light_marker=0`; the no-CS diagnostic reports `postdraw-pc-postsync-no-cs ... completed=1 ... final_after_light_marker=1 final_marker=1`. | RCS accepts enough command stream to run markers, issue 3D work, and either execute a CS-stalled light post-sync write or retire the tail when `CS_STALL` is removed. | A single packet sequence that both produces a reliable post-sync write and retires the MI tail; pixels. |
+
+| 07a. RCS MI scanout store | Proven | High | `mi-scanout-store-proof accepted=1 completed=1 marker=0xC0DE7713 xy=1280x720 gpu=0x2709400 pitch=0x2800 before=0x00D9D9D9 after=0x00262626 color=0x00262626`. | RCS command streamer can write one DWORD into the exact live scanout surface through GGTT. | VF, VS, clip/raster, PS dispatch, color backend, or render-target export. |
+
+| 07b. Post-draw light `PIPE_CONTROL` retire | CS-stall negative | High | `stage-frontier ... post_draw_before_light=1 post_draw_light=1 post_draw_final_after_light=0 ... note=draw_light_sync_wrote_but_tail_mi_store_did_not_retire`; `soft-accept ... pre_light_pc=0xC0DE7729 post3d_light=0xC0DE7722 final_after_light=0xC0DE7700`. | The command streamer reaches the MI marker before the light `PIPE_CONTROL`, then the CS-stalled post-sync write lands and blocks the following MI store. | Why the CS-stalled `PIPE_CONTROL` never retires; PS launch or RT export. |
+
+| 07c. Post-draw flush spectrum | Negative proof | High | `postdraw-light-only-retire postdraw-flush-spectrum-proof accepted=0 variant=light-only-retire heavy_flags=0x00000000 post3d_light=1 final_after_light=0 post3d_heavy=0 final=0`; bit5/bit7/bit12/bit20/bit26 variants all also report `final_after_light=0`. | The failure is not an individual heavy flush bit or cache domain: even the light-only variant fails before the optional heavy `PIPE_CONTROL`. | Which part of the light `PIPE_CONTROL` contract blocks retire; PS launch, RT export, or visible pixels. |
+
+| 07d. `PIPE_CONTROL` retire triad | Split proven | High | `postdraw-light-only-retire pc-retire-triad-proof accepted=0 variant=light-only-retire light_flags=0x01104000 light_postsync=1 light_cs_stall=1 before_light=1 post3d_light=1 final_after_light=0`; `postdraw-pc-cs-no-postsync ... accepted=0 light_flags=0x00100000 light_postsync=0 light_cs_stall=1 before_light=1 post3d_light=0 final_after_light=0`; `postdraw-pc-postsync-no-cs ... accepted=1 light_flags=0x01004000 light_postsync=1 light_cs_stall=0 before_light=1 post3d_light=0 final_after_light=1 final=1`. | `CS_STALL` itself is the tail-retire blocker in the current post-draw PC position. The post-sync write only lands when paired with `CS_STALL`, but that stalls the tail; removing `CS_STALL` retires the tail but makes the PC post-sync marker non-observable. | Which 3D/render dependency `CS_STALL` is waiting on; whether a spec-valid retiring post-sync fence exists; PS launch, RT export, or visible pixels. |
+
+| 07e. Clean PC-retire ordering | Proven instrumentation | High | Log order is `postdraw-light-only-retire`, then `postdraw-pc-cs-no-postsync`, then `postdraw-pc-postsync-no-cs`; the CS-only row now has `before_light=1 ... final_after_light=0`, and the completed no-CS diagnostic logs `postdraw-pc-retire-spectrum cleanup ... reason=completed-diagnostic-not-a-fence`. | The reorder/recovery patch worked: CS-only is measured before the no-CS path can perturb the engine, and completed no-CS diagnostics are treated as evidence plus cleanup, not as a real draw fence. | A real retiring post-sync fence or a fragment/WM-input observable. |
+
+| 08. VF / input assembler | Proven | High | `vf-proof accepted=1 ia_vtx_delta=3`; streamout path also shows `delta_so0=3 delta_so_write0=96` with `delta_vs=0`, accepted by `post3d-light-eop+vf-streamout-counters`. | VF can consume the declared vertex layout; one proof streams out without VS and reaches the light post-draw sync. | VS, clipper, PS, render target writes, or light `PIPE_CONTROL` retire. |
+
+| 09. VS execution | Proven | High | `vs-proof accepted=1 vs_delta=3` on `vs-draw-frontier` and `vs-streamout-proof`. | VS counters move for the three submitted vertices. | Correct VS output layout into clipper/SBE; VS paths still do not produce clipper counters. |
+
+| 10a. Clipper counter | Proven on VF path | High | `vf-draw-path clip-counter-proof accepted=1 cl_delta=1 cl_prim_delta=1`. | The clipper accepts/generates primitive work when fed by the VF-only path. | Raster sample generation, PS launch, or VS-to-clipper handoff. |
+
+| 10b. Raster packet frontier | Proven on VF path | Medium-high | `vf-draw-path raster-packet-proof accepted=1 post_clip=0xC0DE7726 post_raster=0xC0DE7727 clip_counter=1 sc_instdone=0xFFFFFFFF`. | The batch reaches raster/post-raster marker points after a clipper counter moved on the VF draw path. | That raster emitted samples/fragments; no standalone raster memory write exists here. |
+
+| 10c. Shape-to-fragment boundary | Candidate proven; still not observed | High | `fragment-candidate-shape accepted=1 geometry=oversized ...`; baseline full-surface candidate reports `fragment_observed=0`; the new `ps-bt0-scratch-rt` repeats the oversized candidate on an 8x8 scratch RT and also reports `fragment_observed=0`. | The oversized VF primitive covers the target and reaches the clip/raster/PS-state candidate frontier, so small-triangle coverage and scanout sampling are not the explanation. | Actual fragment/sample emission, WM input, PS launch, or RT write; the dedicated raster/WM observable is now instrumented but not yet assessed in a fresh capture. |
+
+| 10d. Raster/WM input OA observable | Instrumented; pending capture | Medium until reports validate | Next expected line: `raster-wm-oa-probe raster-wm-input-proof accepted=... completed=... reports_valid=... raster_samples_delta=... ps_threads_delta=... pixel_write_delta=...`; this uses the no-CS tail-retiring path and OAR/MI_REPORT_PERF_COUNT snapshots around `3DPRIMITIVE`. | Gives row 10c a direct counter-side observable for raster samples / WM or backend-adjacent activity without relying on the post-draw `CS_STALL` retire path. | Until `reports_valid=1`, it only proves instrumentation was attempted. Even `accepted=1` would prove raster/WM/backend counter motion, not visible RT pixels. |
+
+| 11. Pixel shader dispatch | Not proven; stronger negative | High negative counters, medium PS blame | Baseline `vf-draw-path`/`ps-launch-big-primitive` report `ps-launch-frontier-proof accepted=0 input_ready=1 ... ps_delta=0 cps_delta=0 ps_depth_delta=0`; `postdraw-pc-postsync-no-cs` and `ps-bt0-scratch-rt` both complete the no-CS tail with `ps_delta=0 cps_delta=0 ps_depth_delta=0`. | No PS/CPS/depth counter movement is observed after the current candidate frontier, even when the command tail retires and Mesa-style PS BT count is used. | That PS state is the blocker; row 10c still lacks a real fragment/WM-input observable, and no-CS retire is not a post-sync fence. |
+
+| 11a. PS launch with oversized VF primitive | Negative at current observable | High | `ps-launch-big-primitive-proof accepted=0 input_ready=1 oversized=1 ps_state_marker=1 raster_packet=1 clip_counter=1 ps_delta=0 cps_delta=0 ps_depth_delta=0`; the same submit has `post3d_light_marker=1 final_after_light_marker=0 post3d_marker=0 final_marker=0`. | The row-11 failure is not explained by small-triangle coverage; the oversized VF primitive reaches the current PS launch candidate frontier with no PS/CPS/depth counter motion. | Render target write, visible pixels, or a clean PS-side negative independent of the row-07 light-`PIPE_CONTROL` retire gate. |
+
+| 11b. PS binding-table / BT-count contract | Mesa-style BT0 negative | High | Baseline logs still show `mesa-compare host_ps[binding_table_entry_count=0] trueos_ps[binding_table_entry_count=1]`; the new `ps-bt0-scratch-rt` line shows `trueos_ps[binding_table_entry_count=0]`, `ps-ksp-proof accepted=1`, `completed=1`, and `ps_delta=0 cps_delta=0 ps_depth_delta=0`. | The Mesa/TrueOS BT-count mismatch is now directly tested and does not by itself produce PS dispatch or a scratch RT write. | Raster sample/WM-input generation, PS launch, or RT export; BT0 only removes one prefetch/state mismatch from the suspect list. |
+
+| 11c. WM normal dispatch variant | Archived negative; gated now | Medium-high | Earlier: `ps-wm-normal-big-primitive-proof accepted=0 input_ready=1 oversized=1 wm_force=normal dispatch_qualifier=writeable_rt ... ps_delta=0 cps_delta=0 ps_depth_delta=0`; current backend gate still shows `dispatch_armed=1 reason=force-thread-dispatch-on` on the baseline path. | The old force-thread-dispatch debug knob is unlikely to be the sole blocker. | A clean current WM-normal proof independent of the 07b light-`PIPE_CONTROL` retire miss and 10c fragment gate. |
+
+| 11d. PS dispatch-width / KSP-slot encoding | Negative proof | High | Corrected-layout lines: slot0 `ksp0=0xC0 ... ps_dispatch_bits=100`, slot1 `ksp1=0xC0 ... ps_dispatch_bits=010`, slot2 `ksp2=0xC0 ... ps_dispatch_bits=001`; each has `ps-dispatch-slot-proof accepted=0 input_ready=1 ... ps_delta=0 cps_delta=0 ps_depth_delta=0`. | Dispatch width and actual Gen12.5 KSP-slot placement are not the blocker; all single-slot variants preserve the launch frontier but do not launch PS threads. | RT export or visible pixels; accepts only on PS/CPS/depth counter movement. |
+
+| 11e. PS KSP / program-offset contract | Proven | High | `ps-ksp-proof accepted=1 ... first_dw=0xA07E0061 baked_first=0xA07E0061`; corrected slot probes show `ksp0=0xC0`, `ksp1=0xC0`, and `ksp2=0xC0` in their respective variants. | The uploaded baked PS code word is present and each corrected KSP slot points at it when selected. | PS thread launch, shader semantics, or RT export; this is a CPU readback contract, not a PS counter acceptance. |
+
+| 11f. PS GRF / registers-per-thread contract | Negative proof | High | `probe-ps-grf-decoded` confirms the programmed variants: `grf-start-r1` has `ps_dw7=0x00010101`, `grf-start-r2` has `ps_dw7=0x00020202`, `grf-start-r4` has `ps_dw7=0x00040404`, `maxthreads-31` has `ps_dw6=0x0F800001`, and `maxthreads-15` has `ps_dw6=0x07800001`; each `ps-grf-proof` has `accepted=0 input_ready=1 ps_delta=0 cps_delta=0 ps_depth_delta=0`. | The exposed gfx12.5 PS register contract knobs are not the blocker: dispatch GRF start registers and max threads per PSD preserve the launch frontier but do not launch PS threads. There is no separate Gen12.5 `3DSTATE_PS` registers-per-thread field in this packet layout. | RT export or shader output correctness; accepts only on PS/CPS/depth counter movement. |
+
+| 11g. PS scratch / thread-payload contract | Negative proof | High | `probe-ps-payload-decoded` logs prove each variant was programmed; `ps-payload-proof accepted=0 input_ready=1` for `push-constant-enable`, `attribute-enable`, `simple-ps-hint`, `source-depth-w`, and `bary-plane-coeffs`, all with `ps_delta=0 cps_delta=0 ps_depth_delta=0`. | The PS launch gap is not fixed by push-constant enable, attribute payload enable, simple-PS hint, source Z/W payload phases, or barycentric plane payload phases. | RT export or correct color; accepts only on PS/CPS/depth counter movement. |
+
+| 11h. PS_EXTRA dependency/source bits | Blocked by 07b/10c | Medium-high only after fragment boundary | Expected line, once unblocked: `ps-extra-dep-proof accepted=... input_ready=1 ps_extra=... dep_on_cp=... source_depth_w=... bary=... ps_delta=...`. | Tests Gen12/XeLP `3DSTATE_PS_EXTRA` dependency/source/barycentric bits only after light `PIPE_CONTROL` retire and shape-to-fragment are no longer the active misses. | RT export or visible pixels; accepts only on PS/CPS/depth counter movement. |
+
+| 11i. Gen12/XeLP `PIPE_CONTROL` ordering / retire | CS-stall isolated | High for post-draw retire, medium for PS order | Row 07d/07e: CS-stalled light PC writes `post3d_light=1` but misses `final_after_light=0`; CS-only/no-postsync also misses `final_after_light=0`; no-CS/postsync misses `post3d_light=0` but reaches `final_after_light=1 final=1`. | The useful ordering/flush axis is no longer "which heavy bit" or "post-sync write data path": `CS_STALL` itself is what turns this post-draw PC position into a non-retiring tail blocker. | A spec-valid retiring post-sync fence, shader correctness, or RT export. |
+
+| 12. Render target write | Not proven | High confidence negative | `vf-draw-path ps-rt-proof accepted=0 ps_delta=0 rt_any_change=0 rt_triangle_change=0`; `postdraw-pc-postsync-no-cs` also completes with no sampled scanout change; `ps-bt0-scratch-rt scratch-rt-fragment-proof accepted=0 completed=1 before=0xDEADBEEF after=0xDEADBEEF changed=0 ps_delta=0 cps_delta=0`. | Neither the live scanout samples nor the CPU-readable scratch RT changed in this capture. The scratch probe removes display scanout ambiguity from the negative. | Whether the blocker is missing raster/WM input, PS dispatch, backend/color export, RT state, or cache visibility after actual PS execution. |
+
+| 13. Display handoff | Proven | High | `primary-boot-surface ... surf=0x02000000 surf_live=0x02000000 ok=1 logo=1` | The display pipe/plane can scan out the memory we think it can. | That 3D rendered the scanned-out pixels. |
+
+| 14. CPU scanout payload | Proven | High | `cpu-scanout-proof accepted=1 ... xy=2536x1416 size=8x8 before=0x00CACACA after=0x00FF00FF flush=1 surf=0x02000000 surf_live=0x02000000`; visually observed as a pink marker. | CPU can place a simple marker into the exact live scanout surface, and display memory/pitch/format are coherent. | Render backend write, PS dispatch, or that render produced the marker. |
+
+| 15. Displayed rendered pixel | Not proven | High confidence negative | Display proof is independent; `ps-rt-proof accepted=0`. | We can display known memory, and step 14 proves CPU payload placement is correct. | That render produced the displayed memory. |
+
+Current frontier:
+
+- `mi-scanout-store-proof` is now answered: RCS can write one DWORD into the
+  same live scanout surface that CPU/display already proved.  This narrows the
+  problem below command-streamer/scanout memory access, without claiming any 3D
+  pipeline stage.
+- The row-07d triad split the light `PIPE_CONTROL` failure: baseline submits
+  reach `pre_light_pc_marker=1` and `post3d_light_marker=1`, then miss
+  `final_after_light_marker=0`; the reordered `pc-cs-no-postsync` diagnostic
+  reaches `pre_light_pc_marker=1` and also misses `final_after_light_marker=0`;
+  the `pc-postsync-no-cs` diagnostic reaches `pre_light_pc_marker=1`, misses
+  the PC post-sync marker, but retires `final_after_light_marker=1` and
+  `final_marker=1`.  The blocker is therefore `CS_STALL` at this post-draw PC
+  position, not command submission in general, not the post-sync data write by
+  itself, and not a heavy-flush-bit problem.
+- The binding-table-pool path is now explicit and coherent:
+  `base=0x861000`, `ps_bt_ptr=0x0`, `bt_entry0=0x00001040`,
+  `surf_gpu=0x861040`, `contract=pool-relative`.  The Mesa comparison note is
+  now partly answered: host PS reports `binding_table_entry_count=0`, baseline
+  TrueOS still programs `1`, and `ps-bt0-scratch-rt` successfully programs `0`
+  without moving PS/CPS/depth counters or changing its scratch RT sentinel.
+- We have not yet proven `ps-rt-proof`.  The VF draw path and oversized VF
+  primitive still reach `ps-launch-frontier-proof input_ready=1`, but the
+  captures show `ps-dispatch-proof accepted=0`, `ps-rt-proof accepted=0`,
+  `ps_delta=0`, `cps_delta=0`, `ps_depth_delta=0`, and `rt_any_change=0`.
+  The no-CS retired diagnostic and `ps-bt0-scratch-rt` make this less
+  entangled with command-tail hang and scanout sampling, but no-CS still is not
+  a real post-sync draw-completion fence.
+- `vf-draw-path` proves clipper primitives, but `vs-draw-frontier` only proves
+  VS counters plus packet markers; it does not yet prove real VS-to-clipper
+  handoff.
+- Row 10/11 is now split into named logs: `clip-counter-proof`,
+  `raster-packet-proof`, `ps-launch-frontier-proof`, and
+  `ps-launch-big-primitive-proof`.  The crisp current row-10c frontier is
+  `candidate_ready=1` with `fragment_observed=0`, even for oversized coverage
+  and the 8x8 scratch RT variant.
+- `raster-wm-oa-probe` is the next row-10d transport: it uses the no-CS
+  retiring tail and captures begin/end OAR reports with `MI_REPORT_PERF_COUNT`
+  around `3DPRIMITIVE`.  The first fresh boot should be judged first on
+  `reports_valid`, then on `raster_samples_delta`, `ps_threads_delta`,
+  `pixel_write_delta`, and `pixel_blend_delta`.
+- `ps-bt0-scratch-rt` is the new most useful row-11 negative: it uses
+  Mesa-style PS BT count `0`, zeroed blend state, a CPU-readable scratch RT at
+  `rt_gpu=0x880000`, and no-CS tail retire.  It reports
+  `scratch-rt-fragment-proof accepted=0 completed=1 before=0xDEADBEEF
+  after=0xDEADBEEF changed=0 ps_delta=0 cps_delta=0 ps_depth_delta=0`.
+- `ps-bt1-big-primitive-proof` and `ps-wm-normal-big-primitive-proof` remain
+  useful archived negatives.  The current boot now has one safe pre-gate
+  scratch/BT0 probe; broader PS-spectrum fanout should still wait for a real
+  fragment/WM-input observable or a better fence.
+- `ps-ksp-proof` is answered: CPU readback shows the programmed KSP offset
+  points at the baked/uploaded PS code word.  Stop blaming a simple PS code
+  upload or KSP offset mistake.
+- Corrected `ps-dispatch-slot-proof` is answered: slot0, slot1, and slot2 each
+  use the actual Gen12.5 KSP packet location, preserve `input_ready=1`, and
+  still report `ps_delta=0 cps_delta=0 ps_depth_delta=0`.
+- `ps-dispatch-width-proof` remains useful only as a control.  If corrected
+  all-slot dispatch still loses the normal `input_ready=1` frontier, keep
+  treating dispatch-all as intentionally aggressive rather than as the main
+  evidence path.
+- Row 11f is answered as a negative spectrum: GRF start `r1/r2/r4` and
+  max-threads-per-PSD `31/15` all preserve `input_ready=1` and still do not
+  move PS/CPS/depth counters.
+- Row 11g is answered as a negative spectrum: push-constant enable, attribute
+  enable, simple-PS hint, source Z/W payload phases, and barycentric plane
+  phases all preserve `input_ready=1` and still do not move PS/CPS/depth
+  counters.
+- The deeper row-11 backlog is now split into named contracts: dispatch-width
+  encoding, KSP/program offset, GRF/registers-per-thread, scratch/thread
+  payload, PS_EXTRA dependency/source bits, and Gen12/XeLP packet ordering or
+  flush sequencing.  Row 11e accepts on CPU readback of the programmed KSP code
+  word; the launch rows accept only on PS/CPS/depth counter movement.
+- We have not proven "triangle visible because render produced pixels."  The
+  display proof is real, but it is independent of the failing PS/render-target
+  boundary until `ps-rt-proof` changes a sampled pixel.
+- Row 07d/07e and row 10c are now the active gates.  Row 07c is answered negative:
+  `light-only-retire` fails before any optional heavy flush, and bit5/bit7/
+  bit12/bit20/bit26 do not get a chance to distinguish themselves because
+  `final_after_light=0` every time.  Row 07d/07e is answered with a clean
+  split: `CS_STALL` blocks retire even without the light post-sync write, while
+  no-CS retires the tail but does not produce the PC post-sync marker.  The
+  boot now runs one safe scratch/BT0 probe before the old gate; the next patch
+  has added a row-10d OAR raster/WM observable, so broader PS-side negative
+  probes stay lower priority until that line is either accepted or falsified.
+

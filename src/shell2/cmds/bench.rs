@@ -22,6 +22,15 @@ const INTERNAL_NETBENCH_MAX_FLOWS: usize = 4;
 const CPUBENCH_PHASE_MS: u64 = 10_000;
 const CPUBENCH_STOP_GRACE_MS: u64 = 2_000;
 const PROGRESS_LOG_MS: u64 = 3000;
+const UAS_RAMP_READ_PROBE_BYTES: u64 = 256 * 1024 * 1024;
+const UAS_RAMP_READ_FINAL_BYTES: u64 = 1024 * 1024 * 1024;
+const UAS_RAMP_WRITE_PROBE_BYTES: u64 = 128 * 1024 * 1024;
+const UAS_RAMP_WRITE_FINAL_BYTES: u64 = 1024 * 1024 * 1024;
+const UAS_RAMP_WRITE_PROGRESS_MS: u64 = 1000;
+const UAS_RAMP_READ_CHUNKS: [usize; 5] =
+    [64 * 1024, 128 * 1024, 256 * 1024, 512 * 1024, 1024 * 1024];
+const UAS_RAMP_READ_INFLIGHT: [usize; 4] = [1, 2, 4, 8];
+const UAS_RAMP_WRITE_CHUNKS: [usize; 3] = [64 * 1024, 256 * 1024, 1024 * 1024];
 const BENCH_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
 const BENCH_MENU_ROWS: [[&str; 2]; 4] = [
     ["cpu", "Run CPU-only compute benchmark"],
@@ -30,10 +39,7 @@ const BENCH_MENU_ROWS: [[&str; 2]; 4] = [
         "netk",
         "Run internal netbench (literal URL, default 2 flows)",
     ],
-    [
-        "uas [disc] [MiB] [KiB] [inflight]",
-        "Run UAS stream-window read benchmark",
-    ],
+    ["uas", "Auto-ramp SK hynix UAS read/write benchmark"],
 ];
 
 #[derive(Clone)]
@@ -452,20 +458,11 @@ pub(crate) fn try_parse(
             }
         }
         "uas" => {
-            let disk_arg = args.next();
-            let total_arg = args.next();
-            let chunk_arg = args.next();
-            let inflight_arg = args.next();
             if args.next().is_some() {
-                print_shell_line(
-                    io,
-                    "bench uas: usage `bench uas [disc-id] [MiB] [chunk-KiB] [inflight]`",
-                );
+                print_shell_line(io, "bench uas: usage `bench uas`");
                 return ParseOutcome::Handled;
             }
-            if let Some(session_id) =
-                submit_uasbench(spawner, io, disk_arg, total_arg, chunk_arg, inflight_arg)
-            {
+            if let Some(session_id) = submit_uasbench(spawner, io) {
                 ParseOutcome::StartSession(
                     crate::shell2::shell2_cmd::CommandSessionKind::BenchRunning(session_id),
                 )
@@ -499,78 +496,9 @@ fn submit_cpubench(spawner: &Spawner, io: &'static dyn ShellBackend2) -> Option<
     Some(session_id)
 }
 
-fn parse_uasbench_total_bytes(
-    io: &'static dyn ShellBackend2,
-    total_arg: Option<&str>,
-) -> Option<u64> {
-    match total_arg {
-        Some(raw) => match raw.parse::<u64>() {
-            Ok(mib) if (1..=4096).contains(&mib) => Some(mib.saturating_mul(1024 * 1024)),
-            _ => {
-                print_shell_line(io, "bench uas: MiB must be 1..=4096");
-                None
-            }
-        },
-        None => Some(crate::usb2::pen::UAS_BENCH_DEFAULT_TOTAL_BYTES),
-    }
-}
-
-fn parse_uasbench_chunk_bytes(
-    io: &'static dyn ShellBackend2,
-    chunk_arg: Option<&str>,
-) -> Option<usize> {
-    match chunk_arg {
-        Some(raw) => match raw.parse::<usize>() {
-            Ok(kib) if (1..=1024).contains(&kib) => Some(kib.saturating_mul(1024)),
-            _ => {
-                print_shell_line(io, "bench uas: chunk KiB must be 1..=1024");
-                None
-            }
-        },
-        None => Some(crate::usb2::pen::UAS_BENCH_DEFAULT_CHUNK_BYTES),
-    }
-}
-
-fn parse_uasbench_max_inflight(
-    io: &'static dyn ShellBackend2,
-    inflight_arg: Option<&str>,
-) -> Option<usize> {
-    match inflight_arg {
-        Some(raw) => match raw.parse::<usize>() {
-            Ok(inflight)
-                if (1..=crate::usb2::pen::UAS_BENCH_DEFAULT_MAX_INFLIGHT).contains(&inflight) =>
-            {
-                Some(inflight)
-            }
-            _ => {
-                print_shell_line(io, "bench uas: inflight must be 1..=8");
-                None
-            }
-        },
-        None => Some(crate::usb2::pen::UAS_BENCH_DEFAULT_MAX_INFLIGHT),
-    }
-}
-
 fn select_uasbench_disk(
     io: &'static dyn ShellBackend2,
-    disk_arg: Option<&str>,
 ) -> Option<crate::disc::block::DeviceHandle> {
-    if let Some(raw) = disk_arg {
-        let Some(raw_id) = super::tlb_helper::parse_disc_id_raw(raw) else {
-            print_shell_line(io, "bench uas: bad disc id");
-            return None;
-        };
-        let Some(disk) = super::tlb_helper::select_top_level_disk(raw_id) else {
-            print_shell_line(io, "bench uas: disc not found");
-            return None;
-        };
-        if !crate::usb2::pen::is_uas_skhynix_disk(disk) {
-            print_shell_line(io, "bench uas: selected disc is not on the UAS SK hynix path");
-            return None;
-        }
-        return Some(disk);
-    }
-
     let disk = super::tlb_helper::collect_top_level_disk_choices()
         .into_iter()
         .map(|choice| choice.handle)
@@ -581,18 +509,8 @@ fn select_uasbench_disk(
     disk
 }
 
-fn submit_uasbench(
-    spawner: &Spawner,
-    io: &'static dyn ShellBackend2,
-    disk_arg: Option<&str>,
-    total_arg: Option<&str>,
-    chunk_arg: Option<&str>,
-    inflight_arg: Option<&str>,
-) -> Option<u64> {
-    let disk = select_uasbench_disk(io, disk_arg)?;
-    let total_bytes = parse_uasbench_total_bytes(io, total_arg)?;
-    let chunk_bytes = parse_uasbench_chunk_bytes(io, chunk_arg)?;
-    let max_inflight = parse_uasbench_max_inflight(io, inflight_arg)?;
+fn submit_uasbench(spawner: &Spawner, io: &'static dyn ShellBackend2) -> Option<u64> {
+    let disk = select_uasbench_disk(io)?;
     let target = matrix_target_for_backend(io);
     let session_id = bench_session_start();
     let info = disk.info();
@@ -600,25 +518,18 @@ fn submit_uasbench(
     print_matrix_target_line(
         &target,
         format!(
-            "bench uas: starting on {} label={} total={} chunk={} max_inflight={}",
-            disk.id(),
+            "bench uas: starting auto ramp label={} read_probe={} read_final={} write_probe={} write_final={}",
             info.label.as_deref().unwrap_or("-"),
-            format_bytes(total_bytes),
-            format_bytes(chunk_bytes as u64),
-            max_inflight
+            format_bytes(UAS_RAMP_READ_PROBE_BYTES),
+            format_bytes(UAS_RAMP_READ_FINAL_BYTES),
+            format_bytes(UAS_RAMP_WRITE_PROBE_BYTES),
+            format_bytes(UAS_RAMP_WRITE_FINAL_BYTES)
         )
         .as_str(),
     );
 
     set_matrix_target_active(&target, true);
-    match uasbench_task(
-        target.clone(),
-        session_id,
-        disk.id().raw(),
-        total_bytes,
-        chunk_bytes,
-        max_inflight,
-    ) {
+    match uasbench_task(target.clone(), session_id) {
         Ok(token) => spawner.spawn(token),
         Err(_) => {
             bench_session_finish(session_id);
@@ -812,15 +723,106 @@ fn submit_internal_netbench(
     }
 }
 
-#[embassy_executor::task(pool_size = 1)]
-async fn uasbench_task(
-    target: MatrixTarget,
-    session_id: u64,
-    disk_raw: u32,
-    total_bytes: u64,
+#[derive(Clone, Copy)]
+struct UasRampReadBest {
     chunk_bytes: usize,
     max_inflight: usize,
-) {
+    avg_bps: u64,
+}
+
+#[derive(Clone, Copy)]
+struct UasRampWriteStats {
+    bytes: u64,
+    chunk_bytes: usize,
+    elapsed_ms: u64,
+}
+
+fn fill_uasbench_write_pattern(buf: &mut [u8], chunk_bytes: usize, absolute_offset: u64) {
+    let mut seed = absolute_offset
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        .wrapping_add(chunk_bytes as u64)
+        .wrapping_add(0x5355_4153_4245_4E43);
+    for byte in buf.iter_mut() {
+        seed ^= seed << 7;
+        seed ^= seed >> 9;
+        seed = seed.wrapping_mul(0xD6E8_FD93_35A5_6B19);
+        *byte = (seed >> 24) as u8;
+    }
+}
+
+async fn run_uasbench_write_probe(
+    target: &MatrixTarget,
+    session_id: u64,
+    disk: crate::disc::block::DeviceHandle,
+    label: &str,
+    total_bytes: u64,
+    chunk_bytes: usize,
+) -> Result<Option<UasRampWriteStats>, crate::disc::block::Error> {
+    let path = format!(".trueosfs-bench/uas-{}-{}.bin", label, chunk_bytes);
+    let Some(stream) =
+        crate::r::fs::trueosfs::file_write_begin_async(disk, path.as_str(), total_bytes).await?
+    else {
+        print_matrix_target_line(
+            target,
+            format!(
+                "bench uas: write {} no-space path={} bytes={}",
+                label,
+                path,
+                format_bytes(total_bytes)
+            )
+            .as_str(),
+        );
+        return Err(crate::disc::block::Error::OutOfBounds);
+    };
+
+    let mut chunk = Vec::new();
+    chunk.resize(chunk_bytes, 0);
+    let start = Instant::now();
+    let mut last_report_ms = 0u64;
+    let mut written = 0u64;
+
+    while written < total_bytes {
+        if bench_cancel_requested(session_id) {
+            let _ = crate::r::fs::trueosfs::file_write_abort_async(stream).await;
+            print_matrix_target_line(target, "bench uas: write cancelled");
+            return Ok(None);
+        }
+
+        let take = core::cmp::min(total_bytes.saturating_sub(written), chunk_bytes as u64) as usize;
+        fill_uasbench_write_pattern(&mut chunk[..take], chunk_bytes, written);
+        crate::r::fs::trueosfs::file_write_chunk_async(stream, &chunk[..take]).await?;
+        written = written.saturating_add(take as u64);
+
+        let elapsed_ms = start.elapsed().as_millis() as u64;
+        if elapsed_ms.saturating_sub(last_report_ms) >= UAS_RAMP_WRITE_PROGRESS_MS {
+            last_report_ms = elapsed_ms;
+            print_matrix_target_line(
+                target,
+                format!(
+                    "bench uas: write {} progress={}/{} rate={} avg={} chunk={}",
+                    label,
+                    format_bytes(written),
+                    format_bytes(total_bytes),
+                    format_speed(bps_from_progress(take as u64, UAS_RAMP_WRITE_PROGRESS_MS)),
+                    format_speed(bps_from_progress(written, elapsed_ms)),
+                    format_bytes(chunk_bytes as u64)
+                )
+                .as_str(),
+            );
+        }
+    }
+
+    crate::r::fs::trueosfs::file_write_finish_async(stream).await?;
+    let elapsed_ms = start.elapsed().as_millis() as u64;
+    Ok(Some(UasRampWriteStats {
+        bytes: total_bytes,
+        chunk_bytes,
+        elapsed_ms,
+    }))
+}
+
+#[embassy_executor::task(pool_size = 1)]
+async fn uasbench_task(target: MatrixTarget, session_id: u64) {
     let task_target = target.clone();
     async move {
         Timer::after(EmbassyDuration::from_millis(1)).await;
@@ -828,74 +830,293 @@ async fn uasbench_task(
         let log = |line: &str| {
             print_matrix_target_line(&task_target, line);
         };
-        let Some(disk) =
-            crate::disc::block::device_handle(crate::disc::block::DiscId::from_raw(disk_raw))
+        let Some(disk) = super::tlb_helper::collect_top_level_disk_choices()
+            .into_iter()
+            .map(|choice| choice.handle)
+            .find(|handle| crate::usb2::pen::is_uas_skhynix_disk(*handle))
         else {
-            log("bench uas: disc vanished");
+            log("bench uas: no UAS SK hynix top-level disc found");
             return;
         };
 
-        let config = crate::usb2::pen::UasBenchConfig {
-            total_bytes,
-            chunk_bytes,
-            max_inflight,
-        };
+        let mut best_read: Option<UasRampReadBest> = None;
 
-        let progress_target = task_target.clone();
-        let result = crate::usb2::pen::run_uas_skhynix_stream_bench(
-            disk,
-            config,
-            || bench_cancel_requested(session_id),
-            |progress| {
-                let interval_rate =
-                    bps_from_progress(progress.interval_bytes, progress.interval_ms);
-                let avg_rate = bps_from_progress(progress.completed_bytes, progress.elapsed_ms);
-                print_matrix_target_line(
-                    &progress_target,
+        'read_ramp: for chunk_bytes in UAS_RAMP_READ_CHUNKS {
+            for max_inflight in UAS_RAMP_READ_INFLIGHT {
+                if bench_cancel_requested(session_id) {
+                    log("bench uas: cancelled before read probe");
+                    break 'read_ramp;
+                }
+
+                log(
                     format!(
-                        "bench uas: {} read={}/{} rate={} avg={} cwnd={} ssthresh={} in_flight={} reads={} chunk={} timeouts={} dead={}",
-                        progress.phase,
-                        format_bytes(progress.completed_bytes),
-                        format_bytes(progress.target_bytes),
-                        format_speed(interval_rate),
-                        format_speed(avg_rate),
-                        progress.cwnd,
-                        progress.ssthresh,
-                        progress.in_flight,
-                        progress.reads_completed,
-                        format_bytes(progress.chunk_bytes as u64),
-                        progress.timeouts,
-                        progress.dead_streams
+                        "bench uas: read probe chunk={} max_inflight={} total={}",
+                        format_bytes(chunk_bytes as u64),
+                        max_inflight,
+                        format_bytes(UAS_RAMP_READ_PROBE_BYTES)
                     )
                     .as_str(),
                 );
-            },
-        )
-        .await;
 
-        match result {
-            Ok(stats) => {
+                let config = crate::usb2::pen::UasBenchConfig {
+                    total_bytes: UAS_RAMP_READ_PROBE_BYTES,
+                    chunk_bytes,
+                    max_inflight,
+                };
+                let progress_target = task_target.clone();
+                let result = crate::usb2::pen::run_uas_skhynix_stream_bench(
+                    disk,
+                    config,
+                    || bench_cancel_requested(session_id),
+                    |progress| {
+                        if progress.phase == "start" {
+                            return;
+                        }
+                        let interval_rate =
+                            bps_from_progress(progress.interval_bytes, progress.interval_ms);
+                        let avg_rate =
+                            bps_from_progress(progress.completed_bytes, progress.elapsed_ms);
+                        print_matrix_target_line(
+                            &progress_target,
+                            format!(
+                                "bench uas: read {} {}/{} rate={} avg={} cwnd={} in_flight={} chunk={} timeouts={} dead={}",
+                                progress.phase,
+                                format_bytes(progress.completed_bytes),
+                                format_bytes(progress.target_bytes),
+                                format_speed(interval_rate),
+                                format_speed(avg_rate),
+                                progress.cwnd,
+                                progress.in_flight,
+                                format_bytes(progress.chunk_bytes as u64),
+                                progress.timeouts,
+                                progress.dead_streams
+                            )
+                            .as_str(),
+                        );
+                    },
+                )
+                .await;
+
+                let stats = match result {
+                    Ok(stats) => stats,
+                    Err(err) => {
+                        log(
+                            format!(
+                                "bench uas: read fail chunk={} max_inflight={} err={:?}",
+                                format_bytes(chunk_bytes as u64),
+                                max_inflight,
+                                err
+                            )
+                            .as_str(),
+                        );
+                        break;
+                    }
+                };
+
                 let avg = bps_from_progress(stats.completed_bytes, stats.elapsed_ms);
                 log(
                     format!(
-                        "bench uas: done read={} reads={} avg={} elapsed={}ms final_cwnd={} max_inflight={} chunk={} timeouts={} dead={}",
-                        format_bytes(stats.completed_bytes),
-                        stats.reads_completed,
+                        "bench uas: read result chunk={} max_inflight={} avg={} elapsed={}ms reads={} timeouts={} dead={}",
+                        format_bytes(stats.chunk_bytes as u64),
+                        stats.max_inflight,
                         format_speed(avg),
                         stats.elapsed_ms,
-                        stats.final_cwnd,
-                        stats.max_inflight,
-                        format_bytes(stats.chunk_bytes as u64),
+                        stats.reads_completed,
                         stats.timeouts,
                         stats.dead_streams
                     )
                     .as_str(),
                 );
-            }
-            Err(err) => {
-                log(format!("bench uas: failed err={:?}", err).as_str());
+
+                if stats.timeouts != 0 || stats.dead_streams != 0 {
+                    log(
+                        format!(
+                            "bench uas: read unstable chunk={} max_inflight={} stop-escalating-this-chunk",
+                            format_bytes(chunk_bytes as u64),
+                            max_inflight
+                        )
+                        .as_str(),
+                    );
+                    break;
+                }
+
+                if best_read.is_none_or(|best| avg > best.avg_bps) {
+                    best_read = Some(UasRampReadBest {
+                        chunk_bytes: stats.chunk_bytes,
+                        max_inflight: stats.max_inflight,
+                        avg_bps: avg,
+                    });
+                }
             }
         }
+
+        let Some(best_read) = best_read else {
+            log("bench uas: no stable read point found; root remains deferred");
+            return;
+        };
+
+        log(
+            format!(
+                "bench uas: read best chunk={} max_inflight={} avg={}",
+                format_bytes(best_read.chunk_bytes as u64),
+                best_read.max_inflight,
+                format_speed(best_read.avg_bps)
+            )
+            .as_str(),
+        );
+
+        if !bench_cancel_requested(session_id) {
+            log(
+                format!(
+                    "bench uas: read final chunk={} max_inflight={} total={}",
+                    format_bytes(best_read.chunk_bytes as u64),
+                    best_read.max_inflight,
+                    format_bytes(UAS_RAMP_READ_FINAL_BYTES)
+                )
+                .as_str(),
+            );
+            let final_config = crate::usb2::pen::UasBenchConfig {
+                total_bytes: UAS_RAMP_READ_FINAL_BYTES,
+                chunk_bytes: best_read.chunk_bytes,
+                max_inflight: best_read.max_inflight,
+            };
+            match crate::usb2::pen::run_uas_skhynix_stream_bench(
+                disk,
+                final_config,
+                || bench_cancel_requested(session_id),
+                |_| {},
+            )
+            .await
+            {
+                Ok(stats) => {
+                    let avg = bps_from_progress(stats.completed_bytes, stats.elapsed_ms);
+                    log(
+                        format!(
+                            "bench uas: read final done read={} avg={} elapsed={}ms timeouts={} dead={}",
+                            format_bytes(stats.completed_bytes),
+                            format_speed(avg),
+                            stats.elapsed_ms,
+                            stats.timeouts,
+                            stats.dead_streams
+                        )
+                        .as_str(),
+                    );
+                    if stats.timeouts != 0 || stats.dead_streams != 0 {
+                        log("bench uas: read final unstable; skipping write ramp");
+                        return;
+                    }
+                }
+                Err(err) => {
+                    log(format!("bench uas: read final failed err={:?}", err).as_str());
+                    return;
+                }
+            }
+        }
+
+        let mut best_write: Option<UasRampWriteStats> = None;
+        for chunk_bytes in UAS_RAMP_WRITE_CHUNKS {
+            if bench_cancel_requested(session_id) {
+                log("bench uas: cancelled before write probe");
+                break;
+            }
+
+            log(
+                format!(
+                    "bench uas: write probe chunk={} total={}",
+                    format_bytes(chunk_bytes as u64),
+                    format_bytes(UAS_RAMP_WRITE_PROBE_BYTES)
+                )
+                .as_str(),
+            );
+            let probe =
+                run_uasbench_write_probe(&task_target, session_id, disk, "probe", UAS_RAMP_WRITE_PROBE_BYTES, chunk_bytes)
+                    .await;
+            let Some(stats) = (match probe {
+                Ok(stats) => stats,
+                Err(err) => {
+                    log(
+                        format!(
+                            "bench uas: write fail chunk={} err={:?}",
+                            format_bytes(chunk_bytes as u64),
+                            err
+                        )
+                        .as_str(),
+                    );
+                    break;
+                }
+            }) else {
+                break;
+            };
+            let avg = bps_from_progress(stats.bytes, stats.elapsed_ms);
+            log(
+                format!(
+                    "bench uas: write result chunk={} avg={} elapsed={}ms",
+                    format_bytes(stats.chunk_bytes as u64),
+                    format_speed(avg),
+                    stats.elapsed_ms
+                )
+                .as_str(),
+            );
+            if best_write.is_none_or(|best| {
+                avg > bps_from_progress(best.bytes, best.elapsed_ms)
+            }) {
+                best_write = Some(stats);
+            }
+        }
+
+        let Some(best_write) = best_write else {
+            log("bench uas: no stable write point found; root remains deferred");
+            return;
+        };
+        log(
+            format!(
+                "bench uas: write best chunk={} avg={}",
+                format_bytes(best_write.chunk_bytes as u64),
+                format_speed(bps_from_progress(best_write.bytes, best_write.elapsed_ms))
+            )
+            .as_str(),
+        );
+
+        if !bench_cancel_requested(session_id) {
+            match run_uasbench_write_probe(
+                &task_target,
+                session_id,
+                disk,
+                "final",
+                UAS_RAMP_WRITE_FINAL_BYTES,
+                best_write.chunk_bytes,
+            )
+            .await
+            {
+                Ok(Some(stats)) => {
+                    log(
+                        format!(
+                            "bench uas: write final done wrote={} avg={} elapsed={}ms chunk={}",
+                            format_bytes(stats.bytes),
+                            format_speed(bps_from_progress(stats.bytes, stats.elapsed_ms)),
+                            stats.elapsed_ms,
+                            format_bytes(stats.chunk_bytes as u64)
+                        )
+                        .as_str(),
+                    );
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    log(format!("bench uas: write final failed err={:?}", err).as_str());
+                    return;
+                }
+            }
+        }
+
+        log(
+            format!(
+                "bench uas: done read_chunk={} read_inflight={} write_chunk={} public_root=deferred",
+                format_bytes(best_read.chunk_bytes as u64),
+                best_read.max_inflight,
+                format_bytes(best_write.chunk_bytes as u64)
+            )
+            .as_str(),
+        );
     }
     .await;
     bench_session_finish(session_id);

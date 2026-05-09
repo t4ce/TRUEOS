@@ -36,15 +36,6 @@ const GPT_TYPE_EFI_SYSTEM_PARTITION_BYTES: [u8; 16] = [
     0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11, 0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B,
 ];
 const TRUEOSFS_MIN_TOTAL_BLOCKS: u64 = 8;
-const UAS_PREFLIGHT_SCRATCH_BYTES: u64 = 1280 * 1024 * 1024;
-const UAS_PREFLIGHT_SCRATCH_BLOCK_BYTES: u32 = 512;
-const UAS_PREFLIGHT_CHUNK_BYTES: usize = 64 * 1024;
-const UAS_PREFLIGHT_VERIFY_BYTES: usize = 4096;
-const UAS_PREFLIGHT_TIERS: [(&str, u64); 3] = [
-    ("small", 100 * 1024),
-    ("mid", 10 * 1024 * 1024),
-    ("high", 1024 * 1024 * 1024),
-];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TrueosFsPlacement {
@@ -75,8 +66,6 @@ static MOUNT_REQUESTED: AtomicBool = AtomicBool::new(false);
 static MOUNT_QUEUE: Mutex<heapless::Vec<block::DeviceHandle, 8>> = Mutex::new(heapless::Vec::new());
 static INDEX_REQUESTED: AtomicBool = AtomicBool::new(false);
 static INDEX_QUEUE: Mutex<heapless::Vec<block::DeviceHandle, 8>> = Mutex::new(heapless::Vec::new());
-static UAS_PREFLIGHT_PASSED_DISKS: Mutex<heapless::Vec<u32, 8>> =
-    Mutex::new(heapless::Vec::new());
 
 struct FileWriteStream {
     disk: block::DeviceHandle,
@@ -361,7 +350,11 @@ pub async fn mount_root_async(
     }
 
     if crate::usb2::pen::is_uas_skhynix_disk(disk) {
-        run_uas_skhynix_mount_preflight(disk, &placement).await?;
+        crate::log!(
+            "trueosfs: root mount deferred disk_id={} transport=uas-skhynix reason=bench-required\n",
+            disk_id.raw()
+        );
+        return Ok(None);
     }
 
     register_root_mount(disk, false);
@@ -387,276 +380,17 @@ pub async fn remount_root_async(
     };
 
     let disk_id = disk.id();
+    if crate::usb2::pen::is_uas_skhynix_disk(disk) {
+        unregister_root_mount(disk_id);
+        crate::log!(
+            "trueosfs: root remount deferred disk_id={} transport=uas-skhynix reason=bench-required\n",
+            disk_id.raw()
+        );
+        return Ok(None);
+    }
+
     register_root_mount(disk, true);
     Ok(Some(disk_id))
-}
-
-async fn run_uas_skhynix_mount_preflight(
-    disk: block::DeviceHandle,
-    placement: &TrueosFsPlacement,
-) -> Result<(), block::Error> {
-    let disk_id = disk.id();
-    if uas_skhynix_preflight_passed(disk_id) {
-        return Ok(());
-    }
-
-    let params = trueos_fs::FsParams {
-        super_lba: placement.super_lba,
-        data_lba: placement.data_lba,
-        data_end_lba_exclusive: placement.data_end_lba_exclusive,
-    };
-    let info = disk.info();
-
-    crate::log!(
-        "trueosfs-preflight: begin disk={} label={} block={} max_transfer={} transport=uas-skhynix tiers=100kb,10mb,1gb\n",
-        disk_id.raw(),
-        info.label.as_deref().unwrap_or("-"),
-        info.block_size,
-        info.max_transfer_bytes
-    );
-
-    run_uas_skhynix_context_probe().await;
-    let scratch = create_uas_skhynix_preflight_scratch().await?;
-    run_uas_skhynix_scratch_io_preflight(scratch).await?;
-
-    for (tier_index, (tier_name, bytes)) in UAS_PREFLIGHT_TIERS.iter().enumerate() {
-        run_uas_skhynix_preflight_tier(
-            "uas-skhynix",
-            disk,
-            &params,
-            tier_index as u8,
-            tier_name,
-            *bytes,
-        )
-        .await?;
-        Timer::after(EmbassyDuration::from_millis(10)).await;
-    }
-
-    mark_uas_skhynix_preflight_passed(disk_id);
-    crate::log!(
-        "trueosfs-preflight: pass disk={} transport=uas-skhynix readiness=trueosfs-root-mounted-unblocked\n",
-        disk_id.raw()
-    );
-    Ok(())
-}
-
-async fn run_uas_skhynix_scratch_io_preflight(
-    scratch: block::DeviceHandle,
-) -> Result<(), block::Error> {
-    let Some(placement) = locate_async(scratch).await? else {
-        return Err(block::Error::Corrupted);
-    };
-    let params = trueos_fs::FsParams {
-        super_lba: placement.super_lba,
-        data_lba: placement.data_lba,
-        data_end_lba_exclusive: placement.data_end_lba_exclusive,
-    };
-    crate::log!(
-        "trueosfs-preflight: scratch io begin disk={} tiers=100kb,10mb,1gb\n",
-        scratch.id().raw()
-    );
-    for (tier_index, (tier_name, bytes)) in UAS_PREFLIGHT_TIERS.iter().enumerate() {
-        run_uas_skhynix_preflight_tier(
-            "ramdisc",
-            scratch,
-            &params,
-            tier_index as u8,
-            tier_name,
-            *bytes,
-        )
-        .await?;
-        Timer::after(EmbassyDuration::from_millis(1)).await;
-    }
-    crate::log!(
-        "trueosfs-preflight: scratch io pass disk={}\n",
-        scratch.id().raw()
-    );
-    Ok(())
-}
-
-fn uas_skhynix_preflight_passed(disk_id: block::DiscId) -> bool {
-    UAS_PREFLIGHT_PASSED_DISKS
-        .lock()
-        .iter()
-        .any(|raw| *raw == disk_id.raw())
-}
-
-fn mark_uas_skhynix_preflight_passed(disk_id: block::DiscId) {
-    let mut passed = UAS_PREFLIGHT_PASSED_DISKS.lock();
-    if passed.iter().any(|raw| *raw == disk_id.raw()) {
-        return;
-    }
-    let _ = passed.push(disk_id.raw());
-}
-
-async fn create_uas_skhynix_preflight_scratch() -> Result<block::DeviceHandle, block::Error> {
-    let t0 = embassy_time::Instant::now();
-    crate::log!(
-        "trueosfs-preflight: scratch ramdisc create begin bytes={} block={}\n",
-        UAS_PREFLIGHT_SCRATCH_BYTES,
-        UAS_PREFLIGHT_SCRATCH_BLOCK_BYTES
-    );
-    let scratch = crate::r::disc::ramdisk::create_trueos_private(
-        UAS_PREFLIGHT_SCRATCH_BYTES,
-        UAS_PREFLIGHT_SCRATCH_BLOCK_BYTES,
-        "trueosfs-preflight-scratch",
-    )
-    .await
-    .map_err(|err| match err {
-        crate::r::disc::ramdisk::TrueosPrivateError::Create(e)
-        | crate::r::disc::ramdisk::TrueosPrivateError::Format(e)
-        | crate::r::disc::ramdisk::TrueosPrivateError::Validate(e) => e,
-    })?;
-    crate::log!(
-        "trueosfs-preflight: scratch ramdisc ready disk={} bytes={} elapsed_ms={}\n",
-        scratch.id().raw(),
-        UAS_PREFLIGHT_SCRATCH_BYTES,
-        t0.elapsed().as_millis()
-    );
-    Ok(scratch)
-}
-
-async fn run_uas_skhynix_context_probe() {
-    crate::log!("trueosfs-preflight: context embassy status=online\n");
-
-    let tokio_status = if crate::t::shared_tokio_runtime_ready() {
-        match crate::t::run_on_shared_tokio(|| async { 0x54525545u32 }).await {
-            Ok(0x54525545) => "ok",
-            Ok(_) => "bad-result",
-            Err(_) => "error",
-        }
-    } else {
-        "not-ready"
-    };
-    crate::log!("trueosfs-preflight: context tokio status={}\n", tokio_status);
-
-    let hv = crate::hv::status();
-    crate::log!(
-        "trueosfs-preflight: context vmx status=observed has_vmx={} outside_smx={} running={} starting={}\n",
-        hv.has_vmx as u8,
-        hv.feature_control_vmx_outside_smx as u8,
-        hv.running_count,
-        hv.starting_count
-    );
-}
-
-async fn run_uas_skhynix_preflight_tier(
-    lane: &'static str,
-    disk: block::DeviceHandle,
-    params: &trueos_fs::FsParams,
-    tier_index: u8,
-    tier_name: &str,
-    total_bytes: u64,
-) -> Result<(), block::Error> {
-    let io = KernelBlockIo::new(disk);
-    let path = format!(".trueosfs-preflight/{}-{}.bin", lane, tier_name);
-    let Some(mut stream) =
-        trueos_fs::begin_write_file_stream(&io, params, path.as_str(), total_bytes)
-            .await
-            .map_err(map_engine_err)?
-    else {
-        crate::log!(
-            "trueosfs-preflight: lane={} tier={} bytes={} status=no-space\n",
-            lane,
-            tier_name,
-            total_bytes
-        );
-        return Err(block::Error::OutOfBounds);
-    };
-
-    let mut chunk = Vec::new();
-    chunk.resize(UAS_PREFLIGHT_CHUNK_BYTES, 0);
-
-    let write_start = embassy_time::Instant::now();
-    let mut written = 0u64;
-    while written < total_bytes {
-        let remaining = total_bytes.saturating_sub(written);
-        let take = core::cmp::min(remaining, UAS_PREFLIGHT_CHUNK_BYTES as u64) as usize;
-        fill_uas_preflight_pattern(&mut chunk[..take], tier_index, written);
-        trueos_fs::write_file_stream_chunk(&io, &mut stream, &chunk[..take])
-            .await
-            .map_err(map_engine_err)?;
-        written = written.saturating_add(take as u64);
-    }
-    trueos_fs::finish_write_file_stream(&io, params, stream)
-        .await
-        .map_err(map_engine_err)?;
-    let write_ms = write_start.elapsed().as_millis() as u64;
-
-    let verify_start = embassy_time::Instant::now();
-    verify_uas_preflight_ranges(&io, params, path.as_str(), tier_index, total_bytes).await?;
-    let verify_ms = verify_start.elapsed().as_millis() as u64;
-
-    crate::log!(
-        "trueosfs-preflight: lane={} tier={} bytes={} write_ms={} write_mib_s_x10={} verify_ms={} status=ok\n",
-        lane,
-        tier_name,
-        total_bytes,
-        write_ms,
-        mib_per_s_x10(total_bytes, write_ms),
-        verify_ms
-    );
-    Ok(())
-}
-
-async fn verify_uas_preflight_ranges(
-    io: &KernelBlockIo,
-    params: &trueos_fs::FsParams,
-    path: &str,
-    tier_index: u8,
-    total_bytes: u64,
-) -> Result<(), block::Error> {
-    let verify_len = core::cmp::min(UAS_PREFLIGHT_VERIFY_BYTES as u64, total_bytes) as usize;
-    let offsets = [
-        0,
-        total_bytes.saturating_sub(verify_len as u64) / 2,
-        total_bytes.saturating_sub(verify_len as u64),
-    ];
-    let mut got = Vec::new();
-    got.resize(verify_len, 0);
-    let mut expect = Vec::new();
-    expect.resize(verify_len, 0);
-
-    for offset in offsets {
-        let Some(n) = trueos_fs::read_file_range(io, params, path, offset, &mut got)
-            .await
-            .map_err(map_engine_err)?
-        else {
-            return Err(block::Error::Corrupted);
-        };
-        if n != verify_len {
-            return Err(block::Error::Corrupted);
-        }
-        fill_uas_preflight_pattern(&mut expect, tier_index, offset);
-        if got != expect {
-            crate::log!(
-                "trueosfs-preflight: verify mismatch path={} offset={} len={}\n",
-                path,
-                offset,
-                verify_len
-            );
-            return Err(block::Error::Corrupted);
-        }
-    }
-    Ok(())
-}
-
-fn fill_uas_preflight_pattern(buf: &mut [u8], tier_index: u8, file_offset: u64) {
-    for (i, b) in buf.iter_mut().enumerate() {
-        let pos = file_offset.wrapping_add(i as u64);
-        let mixed = pos
-            .wrapping_mul(0x9E37_79B1)
-            .rotate_left(u32::from(tier_index & 31))
-            ^ u64::from(tier_index).wrapping_mul(0xA5A5_5A5A);
-        *b = (mixed ^ (mixed >> 17) ^ (mixed >> 41)) as u8;
-    }
-}
-
-fn mib_per_s_x10(bytes: u64, ms: u64) -> u64 {
-    if ms == 0 {
-        return 0;
-    }
-    bytes.saturating_mul(10_000) / ms / (1024 * 1024)
 }
 
 fn register_root_mount(disk: block::DeviceHandle, replace_existing: bool) {
