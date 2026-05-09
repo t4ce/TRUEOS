@@ -238,6 +238,10 @@ enum Dhcp6Stage {
 }
 
 pub fn ipv4_at(index: usize) -> Option<[u8; 4]> {
+    if !crate::net::link_state_at(index).map(|ls| ls.up).unwrap_or(false) {
+        return None;
+    }
+
     let guard = NET_SERVICES.lock();
     let services = guard.as_ref()?;
     services
@@ -2112,7 +2116,22 @@ impl NetService {
         }
     }
 
+    fn link_up(&self) -> bool {
+        crate::net::link_state_at(self.device_index)
+            .map(|state| state.up)
+            .unwrap_or(false)
+    }
+
+    fn require_link_up(&self) -> Result<(), &'static str> {
+        if self.link_up() {
+            Ok(())
+        } else {
+            Err("link down")
+        }
+    }
+
     fn open_udp(&mut self, owner: &'static str, port: u16) -> Result<NetHandle, &'static str> {
+        self.require_link_up()?;
         if self.records.len() >= MAX_SOCKETS {
             return Err("no sockets available");
         }
@@ -2146,6 +2165,7 @@ impl NetService {
     }
 
     fn open_tcp(&mut self, owner: &'static str, port: u16) -> Result<NetHandle, &'static str> {
+        self.require_link_up()?;
         if self.records.len() >= MAX_SOCKETS {
             return Err("no sockets available");
         }
@@ -2267,6 +2287,7 @@ impl NetService {
         owner: &'static str,
         remote: NetEndpoint,
     ) -> Result<NetHandle, &'static str> {
+        self.require_link_up()?;
         if self.records.len() >= MAX_SOCKETS {
             return Err("no sockets available");
         }
@@ -2354,6 +2375,7 @@ impl NetService {
         owner: &'static str,
         remote: NetEndpointV6,
     ) -> Result<NetHandle, &'static str> {
+        self.require_link_up()?;
         if self.records.len() >= MAX_SOCKETS {
             return Err("no sockets available");
         }
@@ -3552,6 +3574,10 @@ impl NetService {
                 remote,
                 data,
             } => {
+                if !self.link_up() {
+                    let _ = push_event(owner, NetEvent::Error { msg: "link down" });
+                    return;
+                }
                 if let Some(rec) = self.find_record(handle) {
                     if rec.kind != SocketKind::Udp {
                         let _ = push_event(owner, NetEvent::Error { msg: "not udp" });
@@ -3580,6 +3606,10 @@ impl NetService {
                 remote,
                 data,
             } => {
+                if !self.link_up() {
+                    let _ = push_event(owner, NetEvent::Error { msg: "link down" });
+                    return;
+                }
                 if let Some(rec) = self.find_record(handle) {
                     if rec.kind != SocketKind::Udp {
                         let _ = push_event(owner, NetEvent::Error { msg: "not udp" });
@@ -3608,6 +3638,11 @@ impl NetService {
                     if result.is_err() {
                         let _ = push_event(owner, NetEvent::Error { msg: "not tcp" });
                     }
+                    return;
+                }
+
+                if !self.link_up() {
+                    let _ = push_event(owner, NetEvent::Error { msg: "link down" });
                     return;
                 }
 

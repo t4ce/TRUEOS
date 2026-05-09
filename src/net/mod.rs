@@ -417,6 +417,13 @@ pub fn link_state_at(index: usize) -> Option<crate::net::device::LinkState> {
 pub fn transmit_batch_at(index: usize, packets: impl Iterator<Item = alloc::vec::Vec<u8>>) {
     with_device_at(index, |dev| {
         let link_up = dev.link_state().up;
+        if !link_up {
+            for pkt in packets {
+                crate::net::ring::recycle_packet_buf(pkt);
+            }
+            return;
+        }
+
         let mut ok_count: u32 = 0;
         let mut err_count: u32 = 0;
         for pkt in packets {
@@ -433,10 +440,9 @@ pub fn transmit_batch_at(index: usize, packets: impl Iterator<Item = alloc::vec:
             crate::net::ring::recycle_packet_buf(pkt);
         }
 
-        // If this ever triggers (while link is up), the stack is producing frames but
-        // the NIC backend is rejecting them (most commonly: TX ring full / wedged DMA).
-        // When link is down, dropping TX is expected and should not spam logs.
-        if err_count != 0 && link_up {
+        // If this ever triggers, the stack is producing frames but the NIC backend
+        // is rejecting them (most commonly: TX ring full / wedged DMA).
+        if err_count != 0 {
             crate::log!("net: tx-batch dev={} ok={} err={}\n", index, ok_count, err_count);
         }
     });
