@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
-const HDA_PROBE_WAV_LOOP_ENABLED: bool = true;
+const HDA_PROBE_WAV_LOOP_ENABLED: bool = false;
 const PROBE_PATTERN_NAME: &str = "arp";
 const PIANO_PROBE_PATTERN_NAME: &str = "piano-probe";
 const PROBE_PATTERN_LOOPS: u32 = 1;
@@ -159,6 +159,8 @@ async fn load_hda_wav_loop_samples() -> Result<Vec<i16>, &'static str> {
 async fn hda_wav_loop_probe_task() {
     let path = crate::allports::local_assets::AUDIO_DEMO_CACHE_PATH;
     crate::log!("intel/hda-probe: wav loop mode path={}\n", path);
+    crate::r::readiness::wait_for(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED).await;
+    crate::log!("intel/hda-probe: wav loop fs ready path={}\n", path);
 
     loop {
         if !crate::hda::is_initialized() {
