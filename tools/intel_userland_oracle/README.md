@@ -30,6 +30,17 @@ TRUEOS_ORACLE_LOG_DIR=.codex_tmp/intel_userland_oracle/t5-small-live4 \
 bash tools/intel_userland_oracle/run_oracle.sh
 ```
 
+The TRUEOS-layout T5 variant keeps the compact shader preserved and uses the
+actual arena offsets used by the kernel path:
+
+```bash
+TRUEOS_ORACLE_SHADER_SOURCE=.codex_tmp/t5_small_live4_trueos_arena.comp \
+TRUEOS_ORACLE_SHADER_NAME=t5_small_live4_trueos_arena \
+TRUEOS_ORACLE_WORKLOAD=t5-small-live4-trueos-arena \
+TRUEOS_ORACLE_LOG_DIR=.codex_tmp/intel_userland_oracle/t5-small-live4-trueos-arena \
+bash tools/intel_userland_oracle/run_oracle.sh
+```
+
 The main artifact is:
 
 ```text

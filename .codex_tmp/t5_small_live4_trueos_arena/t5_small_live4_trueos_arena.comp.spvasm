@@ -1,0 +1,176 @@
+; SPIR-V
+; Version: 1.0
+; Generator: Khronos Glslang Reference Front End; 11
+; Bound: 117
+; Schema: 0
+               OpCapability Shader
+          %1 = OpExtInstImport "GLSL.std.450"
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint GLCompute %main "main" %gl_WorkGroupID
+               OpExecutionMode %main LocalSize 1 1 1
+               OpSource GLSL 450
+               OpName %main "main"
+               OpName %bf16_word_to_f32_u1_ "bf16_word_to_f32(u1;"
+               OpName %packed_bf16 "packed_bf16"
+               OpName %acc "acc"
+               OpName %x0 "x0"
+               OpName %T5SmallLive4TrueosArena "T5SmallLive4TrueosArena"
+               OpMemberName %T5SmallLive4TrueosArena 0 "words"
+               OpName %io "io"
+               OpName %x1 "x1"
+               OpName %x2 "x2"
+               OpName %x3 "x3"
+               OpName %w0 "w0"
+               OpName %param "param"
+               OpName %w1 "w1"
+               OpName %param_0 "param"
+               OpName %w2 "w2"
+               OpName %param_1 "param"
+               OpName %w3 "w3"
+               OpName %param_2 "param"
+               OpName %gl_WorkGroupID "gl_WorkGroupID"
+               OpDecorate %_runtimearr_uint ArrayStride 4
+               OpDecorate %T5SmallLive4TrueosArena BufferBlock
+               OpMemberDecorate %T5SmallLive4TrueosArena 0 Offset 0
+               OpDecorate %io Binding 0
+               OpDecorate %io DescriptorSet 0
+               OpDecorate %gl_WorkGroupID BuiltIn WorkgroupId
+               OpDecorate %gl_WorkGroupSize BuiltIn WorkgroupSize
+       %void = OpTypeVoid
+          %3 = OpTypeFunction %void
+       %uint = OpTypeInt 32 0
+%_ptr_Function_uint = OpTypePointer Function %uint
+      %float = OpTypeFloat 32
+          %9 = OpTypeFunction %float %_ptr_Function_uint
+ %uint_65535 = OpConstant %uint 65535
+    %uint_16 = OpConstant %uint 16
+%_ptr_Function_float = OpTypePointer Function %float
+    %float_0 = OpConstant %float 0
+%_runtimearr_uint = OpTypeRuntimeArray %uint
+%T5SmallLive4TrueosArena = OpTypeStruct %_runtimearr_uint
+%_ptr_Uniform_T5SmallLive4TrueosArena = OpTypePointer Uniform %T5SmallLive4TrueosArena
+         %io = OpVariable %_ptr_Uniform_T5SmallLive4TrueosArena Uniform
+        %int = OpTypeInt 32 1
+      %int_0 = OpConstant %int 0
+%_ptr_Uniform_uint = OpTypePointer Uniform %uint
+      %int_1 = OpConstant %int 1
+      %int_2 = OpConstant %int 2
+      %int_3 = OpConstant %int 3
+   %int_2048 = OpConstant %int 2048
+   %int_2049 = OpConstant %int 2049
+   %int_2050 = OpConstant %int 2050
+   %int_2051 = OpConstant %int 2051
+ %int_264192 = OpConstant %int 264192
+ %int_264193 = OpConstant %int 264193
+     %uint_4 = OpConstant %uint 4
+ %int_264194 = OpConstant %int 264194
+%uint_3235804421 = OpConstant %uint 3235804421
+ %int_264195 = OpConstant %int 264195
+     %v3uint = OpTypeVector %uint 3
+%_ptr_Input_v3uint = OpTypePointer Input %v3uint
+%gl_WorkGroupID = OpVariable %_ptr_Input_v3uint Input
+     %uint_0 = OpConstant %uint 0
+%_ptr_Input_uint = OpTypePointer Input %uint
+     %uint_1 = OpConstant %uint 1
+%gl_WorkGroupSize = OpConstantComposite %v3uint %uint_1 %uint_1 %uint_1
+  %uint_2048 = OpConstant %uint 2048
+%uint_264192 = OpConstant %uint 264192
+       %main = OpFunction %void None %3
+          %5 = OpLabel
+        %acc = OpVariable %_ptr_Function_float Function
+         %x0 = OpVariable %_ptr_Function_float Function
+         %x1 = OpVariable %_ptr_Function_float Function
+         %x2 = OpVariable %_ptr_Function_float Function
+         %x3 = OpVariable %_ptr_Function_float Function
+         %w0 = OpVariable %_ptr_Function_float Function
+      %param = OpVariable %_ptr_Function_uint Function
+         %w1 = OpVariable %_ptr_Function_float Function
+    %param_0 = OpVariable %_ptr_Function_uint Function
+         %w2 = OpVariable %_ptr_Function_float Function
+    %param_1 = OpVariable %_ptr_Function_uint Function
+         %w3 = OpVariable %_ptr_Function_float Function
+    %param_2 = OpVariable %_ptr_Function_uint Function
+               OpStore %acc %float_0
+         %32 = OpAccessChain %_ptr_Uniform_uint %io %int_0 %int_0
+         %33 = OpLoad %uint %32
+         %34 = OpBitcast %float %33
+               OpStore %x0 %34
+         %37 = OpAccessChain %_ptr_Uniform_uint %io %int_0 %int_1
+         %38 = OpLoad %uint %37
+         %39 = OpBitcast %float %38
+               OpStore %x1 %39
+         %42 = OpAccessChain %_ptr_Uniform_uint %io %int_0 %int_2
+         %43 = OpLoad %uint %42
+         %44 = OpBitcast %float %43
+               OpStore %x2 %44
+         %47 = OpAccessChain %_ptr_Uniform_uint %io %int_0 %int_3
+         %48 = OpLoad %uint %47
+         %49 = OpBitcast %float %48
+               OpStore %x3 %49
+         %53 = OpAccessChain %_ptr_Uniform_uint %io %int_0 %int_2048
+         %54 = OpLoad %uint %53
+               OpStore %param %54
+         %55 = OpFunctionCall %float %bf16_word_to_f32_u1_ %param
+               OpStore %w0 %55
+         %59 = OpAccessChain %_ptr_Uniform_uint %io %int_0 %int_2049
+         %60 = OpLoad %uint %59
+               OpStore %param_0 %60
+         %61 = OpFunctionCall %float %bf16_word_to_f32_u1_ %param_0
+               OpStore %w1 %61
+         %65 = OpAccessChain %_ptr_Uniform_uint %io %int_0 %int_2050
+         %66 = OpLoad %uint %65
+               OpStore %param_1 %66
+         %67 = OpFunctionCall %float %bf16_word_to_f32_u1_ %param_1
+               OpStore %w2 %67
+         %71 = OpAccessChain %_ptr_Uniform_uint %io %int_0 %int_2051
+         %72 = OpLoad %uint %71
+               OpStore %param_2 %72
+         %73 = OpFunctionCall %float %bf16_word_to_f32_u1_ %param_2
+               OpStore %w3 %73
+         %74 = OpLoad %float %x0
+         %75 = OpLoad %float %w0
+         %76 = OpFMul %float %74 %75
+         %77 = OpLoad %float %acc
+         %78 = OpFAdd %float %77 %76
+               OpStore %acc %78
+         %79 = OpLoad %float %x1
+         %80 = OpLoad %float %w1
+         %81 = OpFMul %float %79 %80
+         %82 = OpLoad %float %acc
+         %83 = OpFAdd %float %82 %81
+               OpStore %acc %83
+         %84 = OpLoad %float %x2
+         %85 = OpLoad %float %w2
+         %86 = OpFMul %float %84 %85
+         %87 = OpLoad %float %acc
+         %88 = OpFAdd %float %87 %86
+               OpStore %acc %88
+         %89 = OpLoad %float %x3
+         %90 = OpLoad %float %w3
+         %91 = OpFMul %float %89 %90
+         %92 = OpLoad %float %acc
+         %93 = OpFAdd %float %92 %91
+               OpStore %acc %93
+         %95 = OpLoad %float %acc
+         %96 = OpBitcast %uint %95
+         %97 = OpAccessChain %_ptr_Uniform_uint %io %int_0 %int_264192
+               OpStore %97 %96
+        %100 = OpAccessChain %_ptr_Uniform_uint %io %int_0 %int_264193
+               OpStore %100 %uint_4
+        %103 = OpAccessChain %_ptr_Uniform_uint %io %int_0 %int_264194
+               OpStore %103 %uint_3235804421
+        %110 = OpAccessChain %_ptr_Input_uint %gl_WorkGroupID %uint_0
+        %111 = OpLoad %uint %110
+        %112 = OpAccessChain %_ptr_Uniform_uint %io %int_0 %int_264195
+               OpStore %112 %111
+               OpReturn
+               OpFunctionEnd
+%bf16_word_to_f32_u1_ = OpFunction %float None %9
+%packed_bf16 = OpFunctionParameter %_ptr_Function_uint
+         %12 = OpLabel
+         %13 = OpLoad %uint %packed_bf16
+         %15 = OpBitwiseAnd %uint %13 %uint_65535
+         %17 = OpShiftLeftLogical %uint %15 %uint_16
+         %18 = OpBitcast %float %17
+               OpReturnValue %18
+               OpFunctionEnd

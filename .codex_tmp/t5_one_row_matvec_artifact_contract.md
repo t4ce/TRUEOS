@@ -13,6 +13,10 @@ Preserved generated artifacts:
 - `.codex_tmp/t5_small_live4.comp`
 - `.codex_tmp/t5_small_live4/t5_small_live4.comp.spv`
 - `.codex_tmp/t5_small_live4/t5_small_live4.comp.spvasm`
+- `.codex_tmp/t5_small_live4_trueos_arena.comp`
+- `.codex_tmp/t5_small_live4_trueos_arena/t5_small_live4_trueos_arena.comp.spv`
+- `.codex_tmp/t5_small_live4_trueos_arena/t5_small_live4_trueos_arena.comp.spvasm`
+- `.codex_tmp/t5_small_live4_trueos_arena/oracle_native/mesa_cache_cc_native.bin`
 
 T5 is the first GPGPU ladder rung that must prove a real model calculation.
 T47/T48 are preserved controls and cannot satisfy T5:
@@ -25,13 +29,17 @@ T47/T48 are preserved controls and cannot satisfy T5:
 
 Current boot-visible T5 state:
 
-- `submitted=0`
-- `reason=eu-live-load-matvec-artifact-missing`
+- T5-small is now wired as the hot artifact.
+- It binds the SSBO-style HDC surface to the TRUEOS GPGPU tile arena base.
+- It expects `x` at arena `+0x0`, BF16 row at arena `+0x2000`, and output at
+  arena `+0x102000`.
+- Success should show `submitted=1`, `finished=1`, `readback_ok=1`,
+  `compare_ok=1`, and `reason=t5-live4-written` or
+  `reason=t5-live4-written-no-ts-delta`.
 - `live_k_dim=4`
 - `requires_live_gpu_load=1`
-- `does_not_prove=model_matvec_or_gpu_live_load`
+- `does_not_prove=full_model_matvec`
 
-The next artifact should replace the empty T5 EU word slot with a reviewed live
-load plus BF16 decode/multiply/reduce/store program. The first executable form
-is intentionally `live_k_dim=4`; the full 2048-wide row comes later after the
-tiny slice proves real GPU-side input reads.
+The first executable form is intentionally `live_k_dim=4`; the full 2048-wide
+row comes later after the tiny slice proves real GPU-side input reads in
+TRUEOS, not only in the Vulkan oracle.
