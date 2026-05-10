@@ -154,7 +154,7 @@ const RESULT_SLOT_GPGPU_PREFLIGHT_SUM_B_DWORD: usize = 19;
 const RESULT_SLOT_GPGPU_PREFLIGHT_LANES_DWORD: usize = 20;
 const RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD: usize = 21;
 const RESULT_SLOT_GPGPU_EU_C_STORE_DWORD: usize = 22;
-const GPGPU_WALKER_IPEHR_LEN9: u32 = (3 << 29) | (2 << 27) | (1 << 24) | (5 << 16) | 9;
+const GPGPU_WALKER_IPEHR_LEN13: u32 = (3 << 29) | (2 << 27) | (1 << 24) | (5 << 16) | 13;
 
 #[derive(Copy, Clone, Debug)]
 struct RenderWarmState {
@@ -531,7 +531,7 @@ fn log_gpgpu_stall_detail(dev: crate::intel::Dev, submit_name: &'static str) {
     let row_eu00_ss0_done = (row_instdone >> 16) & 1;
     let row_eu00_ss1_done = (row_instdone >> 7) & 1;
     let walker_header_seen =
-        ipehr == GPGPU_WALKER_IPEHR_LEN9 || (ipehr & 0xFFFF_0000) == 0x7105_0000;
+        ipehr == GPGPU_WALKER_IPEHR_LEN13 || (ipehr & 0xFFFF_0000) == 0x7105_0000;
     let eu_row_waiting = row_eu00_ss0_done == 0 || row_eu00_ss1_done == 0;
     let cs_fault_seen = ipeir != 0 || eir != 0 || fault_valid != 0;
 
@@ -588,7 +588,7 @@ fn log_gpgpu_stall_detail(dev: crate::intel::Dev, submit_name: &'static str) {
         tdl_thr_pf_status1,
     );
     crate::log!(
-        "intel/gpgpu: {} gpgpu-middle-state walker_header_seen={} cs_parked_at_walker={} eu_row_waiting={} cs_fault_seen={} row_eu00_ss0_done={} row_eu00_ss1_done={} plain=\"threads were dispatched and the command streamer is waiting at GPGPU_WALKER; public regs show EU row not done, but not per-thread GRFs\"\n",
+        "intel/gpgpu: {} gpgpu-middle-state walker_header_seen={} cs_parked_at_walker={} eu_row_waiting={} cs_fault_seen={} row_eu00_ss0_done={} row_eu00_ss1_done={} plain=\"command streamer is parked in the compute launch sequence; walker_header_seen plus TS/TDL deltas decide whether it reached walker and launched EU threads\"\n",
         submit_name,
         walker_header_seen as u8,
         walker_header_seen as u8,
@@ -1052,9 +1052,9 @@ const GPGPU_PREFLIGHT_LANES: usize = 4;
 const GPGPU_BURN_MIN_ROWS: usize = 512;
 const GPGPU_BURN_MIN_K_DIM: usize = 512;
 const GPU_PROGRAM_SHARED_RAM_WRITE_EXPECTED: u32 = trueos_eu::gfx12::STORE_SENTINEL_U32;
-const GPGPU_LOAD_DUMMY_CURBE: bool = false;
+const GPGPU_LOAD_DUMMY_CURBE: bool = true;
 const GPGPU_DUMMY_CURBE_BYTES: usize = 64;
-const GPGPU_CONTIGUOUS_VFE_IDD_WALKER: bool = true;
+const GPGPU_CONTIGUOUS_VFE_IDD_WALKER: bool = false;
 const GPGPU_MESA_POST_VFE_PIPE_CONTROL: bool = false;
 // ADL-S 8086:4680 is Gfx12.0/Xe-LP.  The TS_EOT descriptor explicitly says
 // SFID_TS ends GPGPU/Media threads.  Gateway EOT was also tested because the
@@ -2416,7 +2416,7 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     const MEDIA_VFE_STATE_CMD: u32 = (3 << 29) | (2 << 27) | 7;
     const MEDIA_CURBE_LOAD_CMD: u32 = (3 << 29) | (2 << 27) | (1 << 16) | 2;
     const MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD: u32 = (3 << 29) | (2 << 27) | (2 << 16) | 2;
-    const GPGPU_WALKER_CMD: u32 = (3 << 29) | (2 << 27) | (1 << 24) | (5 << 16) | 9;
+    const GPGPU_WALKER_CMD: u32 = (3 << 29) | (2 << 27) | (1 << 24) | (5 << 16) | 13;
     const MEDIA_STATE_FLUSH_CMD: u32 = (3 << 29) | (2 << 27) | (4 << 16);
     const PIPELINE_SELECT_BASE: u32 = (3 << 29) | (1 << 27) | (1 << 24) | (4 << 16);
     const PIPELINE_SELECT_GFX12_MASK: u32 = 0x13 << 8;
@@ -2433,7 +2433,11 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     const CURBE_STATE_OFFSET_BYTES: usize = GPGPU_WALKER_SCRATCH_OFFSET_BYTES + 0x100;
     const IDD_PAYLOAD_DWORDS: usize = 8;
     const IDD_LOAD_DWORDS: usize = IDD_PAYLOAD_DWORDS;
-    const CURBE_READ_LENGTH_8DW: u32 = 0;
+    const CURBE_READ_LENGTH_8DW: u32 = if GPGPU_LOAD_DUMMY_CURBE {
+        (GPGPU_DUMMY_CURBE_BYTES / 32) as u32
+    } else {
+        0
+    };
     const GPGPU_THREADS_IN_GROUP: u32 = 1;
     const CURBE_TOTAL_BYTES: usize = if GPGPU_LOAD_DUMMY_CURBE {
         GPGPU_DUMMY_CURBE_BYTES
@@ -2462,10 +2466,10 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     const GPGPU_INSTRUCTION_BASE: u64 = 0;
     const GPGPU_KSP_NEGATIVE_CONTROL: bool = false;
     const GPGPU_BAD_KERNEL_START_POINTER: u64 = 0x00F0_0000;
-    // Gen12 legacy GPGPU_WALKER is an 11-dword packet. Keep the right mask to
-    // the live SIMD8 lanes so the one-thread EOT probe does not depend on
-    // undefined high mask bits.
-    const GPGPU_WALKER_SIMD8_RIGHT_MASK: u32 = 0x0000_00FF;
+    // Gen12 legacy GPGPU_WALKER is a 15-dword packet.  The PRM default length
+    // is 0x0D with a length bias of 2; keep the mask shape aligned with Mesa's
+    // minimal legacy walker while the low SIMD8 lanes remain the consumed bits.
+    const GPGPU_WALKER_SIMD8_RIGHT_MASK: u32 = 0xFFFF_FFFF;
     const GPGPU_WALKER_BOTTOM_MASK: u32 = 0xFFFF_FFFF;
     const STATE_SIP_CMD: u32 = 0x6102_0001;
     const GPGPU_ENABLE_SIP_EXCEPTIONS: bool = false;
@@ -2779,8 +2783,9 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     if !GPGPU_CONTIGUOUS_VFE_IDD_WALKER {
         push_store_marker(batch_dwords, &mut cursor, 28, 0xC0DE_7806)?;
     }
-    // This exact-Mesa-shell pass keeps CURBE disabled and loads only the 32B
-    // IDD structure; earlier CURBE/64B-IDL probes did not move the frontier.
+    // Keep the IDD load separated from VFE by a CS-stalled state flush and a
+    // tiny CURBE load.  The current failure is before EU fetch, so this probes
+    // the thread-launch contract before changing EU bytes again.
     if !GPGPU_CONTIGUOUS_VFE_IDD_WALKER {
         push_store_marker(batch_dwords, &mut cursor, 27, 0xC0DE_7805)?;
     }
@@ -2792,12 +2797,16 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     let walker_start = cursor;
     push(batch_dwords, &mut cursor, GPGPU_WALKER_CMD)?;
     push(batch_dwords, &mut cursor, 0)?; // Interface Descriptor Offset
-    push(batch_dwords, &mut cursor, 0)?; // thread counters max = 0, SIMD8
+    push(batch_dwords, &mut cursor, 0)?; // Indirect Data Length
+    push(batch_dwords, &mut cursor, 0)?; // Indirect Data Start Address
+    push(batch_dwords, &mut cursor, GPGPU_THREADS_IN_GROUP - 1)?; // SIMD8 counters
     push(batch_dwords, &mut cursor, 0)?; // Thread Group ID Starting X
+    push(batch_dwords, &mut cursor, 0)?; // Reserved
     push(batch_dwords, &mut cursor, 1)?; // Thread Group ID X Dimension
     push(batch_dwords, &mut cursor, 0)?; // Thread Group ID Starting Y
+    push(batch_dwords, &mut cursor, 0)?; // Reserved
     push(batch_dwords, &mut cursor, 1)?; // Thread Group ID Y Dimension
-    push(batch_dwords, &mut cursor, 0)?; // Thread Group ID Starting Z
+    push(batch_dwords, &mut cursor, 0)?; // Thread Group ID Starting/Resume Z
     push(batch_dwords, &mut cursor, 1)?; // Thread Group ID Z Dimension
     push(batch_dwords, &mut cursor, GPGPU_WALKER_SIMD8_RIGHT_MASK)?;
     push(batch_dwords, &mut cursor, GPGPU_WALKER_BOTTOM_MASK)?;
@@ -2815,19 +2824,19 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     push(batch_dwords, &mut cursor, MI_NOOP)?;
     let command_bytes = cursor * core::mem::size_of::<u32>();
     let batch_bytes = command_bytes;
-    let walker_dw2 = batch_dwords[walker_start + 2];
-    let walker_x_dim = batch_dwords[walker_start + 4];
-    let walker_y_dim = batch_dwords[walker_start + 6];
-    let walker_z_dim = batch_dwords[walker_start + 8];
-    let thread_width = (walker_dw2 & 0x3F) + 1;
-    let thread_height = ((walker_dw2 >> 8) & 0x3F) + 1;
-    let thread_depth = ((walker_dw2 >> 16) & 0x3F) + 1;
+    let walker_dw4 = batch_dwords[walker_start + 4];
+    let walker_x_dim = batch_dwords[walker_start + 7];
+    let walker_y_dim = batch_dwords[walker_start + 10];
+    let walker_z_dim = batch_dwords[walker_start + 12];
+    let thread_width = (walker_dw4 & 0x3F) + 1;
+    let thread_height = ((walker_dw4 >> 8) & 0x3F) + 1;
+    let thread_depth = ((walker_dw4 >> 16) & 0x3F) + 1;
     let walker_group_threads = thread_width * thread_height * thread_depth;
     let idd_dw6 = idd_words[6];
     let idd_barrier_enable = (idd_dw6 >> 21) & 1;
     let idd_slm_size = (idd_dw6 >> 16) & 0x1F;
     let idd_threads_in_group = idd_dw6 & 0x3FF;
-    let simd_mask_bits = match (walker_dw2 >> 30) & 0x3 {
+    let simd_mask_bits = match (walker_dw4 >> 30) & 0x3 {
         0 => 8,
         1 => 16,
         2 => 32,
@@ -2838,11 +2847,11 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     } else {
         (1u32 << simd_mask_bits) - 1
     };
-    let right_lanes_consumed = (batch_dwords[walker_start + 9] & simd_mask).count_ones();
-    let bottom_lanes_consumed = (batch_dwords[walker_start + 10] & simd_mask).count_ones();
+    let right_lanes_consumed = (batch_dwords[walker_start + 13] & simd_mask).count_ones();
+    let bottom_lanes_consumed = (batch_dwords[walker_start + 14] & simd_mask).count_ones();
 
     crate::log!(
-        "intel/gpgpu: compute-walker-layout program_source={} expects_store={} vfe_off=0x{:X} vfe_dw3=0x{:08X} vfe_dw5=0x{:08X} fused_eu_dispatch_legacy={} urb_entry_alloc_32b={} curbe_present={} curbe_bytes=0x{:X} curbe_read_len_8dw={} id_load_off=0x{:X} id_load_bytes=0x{:X} idd_payload_bytes=0x{:X} walker_off=0x{:X} walker_cmd=0x{:08X} exec_mask=0x{:08X} idd_gpu=0x{:X} idd_dynamic_offset=0x{:X} idd_ksp=0x{:08X} instruction_base=0x{:X} ksp_resolves_to=0x{:X} idd_dw2=0x{:08X} idd_dw4=0x{:08X} idd_dw6=0x{:08X} surface_base=0x{:X} dynamic_state_base=0x{:X} contiguous_vfe_idd_walker={} tail_off=0x{:X} cs_marker=0x{:08X} note=legacy-vfe-dispatch-with-len9-walker\n",
+        "intel/gpgpu: compute-walker-layout program_source={} expects_store={} launch_profile=split-vfe-msf-curbe-pc-midl vfe_off=0x{:X} vfe_dw3=0x{:08X} vfe_dw5=0x{:08X} fused_eu_dispatch_legacy={} urb_entry_alloc_32b={} curbe_present={} curbe_bytes=0x{:X} curbe_read_len_8dw={} id_load_off=0x{:X} id_load_bytes=0x{:X} idd_payload_bytes=0x{:X} walker_off=0x{:X} walker_cmd=0x{:08X} exec_mask=0x{:08X} idd_gpu=0x{:X} idd_dynamic_offset=0x{:X} idd_ksp=0x{:08X} instruction_base=0x{:X} ksp_resolves_to=0x{:X} idd_dw2=0x{:08X} idd_dw4=0x{:08X} idd_dw6=0x{:08X} surface_base=0x{:X} dynamic_state_base=0x{:X} contiguous_vfe_idd_walker={} mesa_post_vfe_pipe_control={} tail_off=0x{:X} cs_marker=0x{:08X} note=legacy-vfe-dispatch-with-prm-len13-walker\n",
         program.name,
         program.expects_store as u8,
         vfe_start * core::mem::size_of::<u32>(),
@@ -2858,7 +2867,7 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
         IDD_PAYLOAD_DWORDS * core::mem::size_of::<u32>(),
         walker_start * core::mem::size_of::<u32>(),
         batch_dwords[walker_start],
-        batch_dwords[walker_start + 9],
+        batch_dwords[walker_start + 13],
         GPGPU_DYNAMIC_STATE_BASE + IDD_DYNAMIC_OFFSET_BYTES as u64,
         IDD_DYNAMIC_OFFSET_BYTES,
         idd_words[0],
@@ -2870,14 +2879,15 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
         GPU_VA_DRAW_STATE_BASE,
         GPGPU_DYNAMIC_STATE_BASE,
         GPGPU_CONTIGUOUS_VFE_IDD_WALKER as u8,
+        GPGPU_MESA_POST_VFE_PIPE_CONTROL as u8,
         command_bytes,
         RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
     );
     crate::log!(
-        "intel/gpgpu: compute-walker-resource-contract program_source={} walker_dw2=0x{:08X} simd_size={} simd_mask_bits={} thread_width={} thread_height={} thread_depth={} walker_group_threads={} idd_threads_in_group={} group_count_matches_idd={} idd_barrier_enable={} idd_slm_size={} x_dim={} y_dim={} z_dim={} right_mask=0x{:08X} bottom_mask=0x{:08X} right_lanes_consumed={} bottom_lanes_consumed={} raw_right_mask_bits={} raw_bottom_mask_bits={} expected_hw_threads=1 probe=len9-one-group-legacy-vfe expected_good=post-walker-marker-or-eot-retired failure_disproves=legacy-walker-dword-layout note=one-group-simd8-mask\n",
+        "intel/gpgpu: compute-walker-resource-contract program_source={} walker_dw4=0x{:08X} simd_size={} simd_mask_bits={} thread_width={} thread_height={} thread_depth={} walker_group_threads={} idd_threads_in_group={} group_count_matches_idd={} idd_barrier_enable={} idd_slm_size={} x_dim={} y_dim={} z_dim={} right_mask=0x{:08X} bottom_mask=0x{:08X} right_lanes_consumed={} bottom_lanes_consumed={} raw_right_mask_bits={} raw_bottom_mask_bits={} expected_hw_threads=1 probe=prm-len13-one-group-legacy-vfe expected_good=post-walker-marker-or-eot-retired failure_disproves=legacy-walker-dword-layout note=one-group-simd8-mask\n",
         program.name,
-        walker_dw2,
-        (walker_dw2 >> 30) & 0x3,
+        walker_dw4,
+        (walker_dw4 >> 30) & 0x3,
         simd_mask_bits,
         thread_width,
         thread_height,
@@ -2890,12 +2900,12 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
         walker_x_dim,
         walker_y_dim,
         walker_z_dim,
-        batch_dwords[walker_start + 9],
-        batch_dwords[walker_start + 10],
+        batch_dwords[walker_start + 13],
+        batch_dwords[walker_start + 14],
         right_lanes_consumed,
         bottom_lanes_consumed,
-        batch_dwords[walker_start + 9].count_ones(),
-        batch_dwords[walker_start + 10].count_ones(),
+        batch_dwords[walker_start + 13].count_ones(),
+        batch_dwords[walker_start + 14].count_ones(),
     );
     crate::log!(
         "intel/gpgpu: mesa-shaped-shell program_source={} pure_eot={} eu_bytes=0x{:X} idd_dw2=0x{:08X} idd_dw3=0x{:08X} idd_dw4=0x{:08X} idd_dw5=0x{:08X} idd_dw6=0x{:08X} idd_dw7=0x{:08X} vfe_dw1=0x{:08X} vfe_dw3=0x{:08X} vfe_dw5=0x{:08X} curbe_present={} curbe_bytes=0x{:X} sampler_state_pointer=0x{:X} sampler_count=0 binding_table_pointer=0x{:X} binding_table_count={} scratch_disabled=1 slm_size={} barrier_enable={} walker_simd_size={} walker_threads={} right_mask=0x{:08X} bottom_mask=0x{:08X} contiguous_vfe_idd_walker={} expected_good=\"post_walker_marker-or-eot_retired\" failure_disproves=\"post-vfe-command-gap-before-midl\"\n",
@@ -2918,10 +2928,10 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
         idd_words[4] & 0x1F,
         idd_slm_size,
         idd_barrier_enable,
-        (walker_dw2 >> 30) & 0x3,
+        (walker_dw4 >> 30) & 0x3,
         walker_group_threads,
-        batch_dwords[walker_start + 9],
-        batch_dwords[walker_start + 10],
+        batch_dwords[walker_start + 13],
+        batch_dwords[walker_start + 14],
         GPGPU_CONTIGUOUS_VFE_IDD_WALKER as u8,
     );
     crate::log!(
@@ -2940,7 +2950,7 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
         store_surface.surface_dword0,
     );
     crate::log!(
-        "intel/gpgpu: compute-walker-dwords w0=0x{:08X} w1=0x{:08X} w2=0x{:08X} w3=0x{:08X} w4=0x{:08X} w5=0x{:08X} w6=0x{:08X} w7=0x{:08X} w8=0x{:08X} w9=0x{:08X} w10=0x{:08X} idd0=0x{:08X} idd1=0x{:08X} idd2=0x{:08X} idd3=0x{:08X} idd4=0x{:08X} idd5=0x{:08X} idd6=0x{:08X} idd7=0x{:08X} midl0=0x{:08X} midl2=0x{:08X} midl3=0x{:08X}\n",
+        "intel/gpgpu: compute-walker-dwords w0=0x{:08X} w1=0x{:08X} w2=0x{:08X} w3=0x{:08X} w4=0x{:08X} w5=0x{:08X} w6=0x{:08X} w7=0x{:08X} w8=0x{:08X} w9=0x{:08X} w10=0x{:08X} w11=0x{:08X} w12=0x{:08X} w13=0x{:08X} w14=0x{:08X} idd0=0x{:08X} idd1=0x{:08X} idd2=0x{:08X} idd3=0x{:08X} idd4=0x{:08X} idd5=0x{:08X} idd6=0x{:08X} idd7=0x{:08X} midl0=0x{:08X} midl2=0x{:08X} midl3=0x{:08X}\n",
         batch_dwords[walker_start],
         batch_dwords[walker_start + 1],
         batch_dwords[walker_start + 2],
@@ -2952,6 +2962,10 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
         batch_dwords[walker_start + 8],
         batch_dwords[walker_start + 9],
         batch_dwords[walker_start + 10],
+        batch_dwords[walker_start + 11],
+        batch_dwords[walker_start + 12],
+        batch_dwords[walker_start + 13],
+        batch_dwords[walker_start + 14],
         idd_words[0],
         idd_words[1],
         idd_words[2],

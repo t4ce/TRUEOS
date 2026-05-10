@@ -87,6 +87,7 @@ define_started_flags!(
     BP_AUTOSTART_STARTED,
     BOOT_WS_SMOKE_STARTED,
     BOOT_NETBENCH_STARTED,
+    UAS_SKHYNIX_ROUTE_PROBE_STARTED,
     BOOT_ASSET_FETCH_STARTED,
     APP_VM_RUN_QUEUE_STARTED,
     FACTORY_RAM_PROBE_STARTED,
@@ -929,6 +930,16 @@ fn spawn_boot_netbench(spawner: Spawner) -> SpawnAttempt {
     SpawnAttempt::Skipped
 }
 
+fn spawn_uas_skhynix_route_probe(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_worker(spawner, |_worker_spawner| {
+        crate::tst_uas_skhynix_route_probe::boot_uas_skhynix_route_probe_task()
+    })
+}
+
+fn uas_skhynix_route_probe_enabled() -> bool {
+    crate::tst_uas_skhynix_route_probe::enabled()
+}
+
 struct BootAsset {
     label: &'static str,
     url: &'static str,
@@ -1254,7 +1265,7 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::APP_VM_READY
 const WS_BOOT_READY: u32 = crate::r::readiness::NET_GATEWAY_REACHABLE
     | crate::r::readiness::TLS_SOCKET_SERVICE_READY
     | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
-static TASKS: [TaskSpec; 69] = [
+static TASKS: [TaskSpec; 70] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
         "globalog-persist-once",
@@ -1570,6 +1581,13 @@ static TASKS: [TaskSpec; 69] = [
     ),
     TaskSpec::disabled("boot-ws-smoke", WS_BOOT_READY, &BOOT_WS_SMOKE_STARTED, spawn_boot_ws_smoke),
     TaskSpec::disabled("boot-netbench", 0, &BOOT_NETBENCH_STARTED, spawn_boot_netbench),
+    TaskSpec::enabled_gated(
+        "uas-skhynix-route-probe",
+        0,
+        uas_skhynix_route_probe_enabled,
+        &UAS_SKHYNIX_ROUTE_PROBE_STARTED,
+        spawn_uas_skhynix_route_probe,
+    ),
     TaskSpec::enabled_gated(
         "boot-asset-fetch",
         crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
