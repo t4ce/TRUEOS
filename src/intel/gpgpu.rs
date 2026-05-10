@@ -1056,12 +1056,11 @@ const GPGPU_LOAD_DUMMY_CURBE: bool = true;
 const GPGPU_DUMMY_CURBE_BYTES: usize = 64;
 const GPGPU_CONTIGUOUS_VFE_IDD_WALKER: bool = false;
 const GPGPU_MESA_POST_VFE_PIPE_CONTROL: bool = false;
-// ADL-S 8086:4680 is Gfx12.0/Xe-LP.  The TS_EOT descriptor explicitly says
-// SFID_TS ends GPGPU/Media threads.  Gateway EOT was also tested because the
-// Gateway section owns barrier/event/SLM cleanup, but it reached the same
-// "threads started, no retire" frontier on this walker path.
+// ADL-S 8086:4680 is Gfx12.0/Xe-LP.  With the PRM-length GPGPU_WALKER, the
+// one-GRF TS EOT launches EU threads but does not retire.  Probe whether this
+// legacy walker path wants both dispatch header GRFs in the EOT payload.
 const ACTIVE_GFX12_EOT_VARIANT: trueos_eu::gfx12::Gfx12EotVariant =
-    trueos_eu::gfx12::Gfx12EotVariant::TsR0ToG127;
+    trueos_eu::gfx12::Gfx12EotVariant::TsR0R1ToG126G127Mlen2;
 
 #[derive(Copy, Clone)]
 struct GpgpuEuProgram {

@@ -3,6 +3,10 @@ name = "TRUEOS"
 version = "0.0.2"
 edition = "2024"
 
+[features]
+default = []
+hda-boot-probe = []
+
 [dependencies]
 x86_64 = { version = "0.15.4", default-features = false, features = ["instructions", "nightly"] }
 core3 = { version = "0.1.2", default-features = false, features = ["alloc"] }

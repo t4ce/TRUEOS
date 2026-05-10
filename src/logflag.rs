@@ -2,7 +2,7 @@ use core::sync::atomic::{AtomicBool, AtomicU32};
 use log::{Level, LevelFilter};
 use spin::Once;
 
-pub(crate) const GLOBAL_LOG_LEVEL: LevelFilter = LevelFilter::Info;
+pub(crate) const GLOBAL_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 
 #[allow(non_upper_case_globals)]
 pub(crate) const dont_persist_globalog: bool = true;

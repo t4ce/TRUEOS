@@ -1,6 +1,5 @@
-use alloc::vec::Vec;
-
-use crate::disc::block::{self, DeviceHandle};
+use crate::disc::block::DeviceHandle;
+use crate::usb2::pen::{UasRouteProbeConfig, UasRouteProbeKind, UasRouteProbeResult};
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 
@@ -40,9 +39,7 @@ fn now_ms_since(start: Instant) -> u64 {
 }
 
 fn find_uas_skhynix_route_disk() -> Option<DeviceHandle> {
-    block::device_handles()
-        .into_iter()
-        .find(|handle| crate::usb2::pen::is_uas_skhynix_disk(*handle))
+    crate::usb2::pen::find_uas_skhynix_route_disk()
 }
 
 fn blocks_for_bytes(block_size: usize, bytes: usize) -> usize {
@@ -79,23 +76,8 @@ fn write_lba_is_safe(disk: DeviceHandle, lba: u64, bytes: usize) -> bool {
         .unwrap_or(false)
 }
 
-fn fill_probe_pattern(buf: &mut [u8], op_name: &str, lba: u64) {
-    let mut seed = lba
-        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-        .wrapping_add(buf.len() as u64)
-        .wrapping_add(0x5541_5352_4F55_5445);
-    for byte in buf.iter_mut() {
-        seed ^= seed << 7;
-        seed ^= seed >> 9;
-        seed = seed
-            .wrapping_mul(0xD6E8_FD93_35A5_6B19)
-            .wrapping_add(op_name.len() as u64);
-        *byte = (seed >> 32) as u8;
-    }
-}
-
 async fn reset_after_failure(disk: DeviceHandle, stage: &'static str) {
-    match crate::usb2::pen::reset_uas_skhynix_transport_for_bench(disk, stage).await {
+    match crate::usb2::pen::reset_uas_skhynix_route_transport(disk, stage).await {
         Ok(()) => crate::log!("uas-skhynix-route-probe: reset stage={} result=ok\n", stage),
         Err(err) => {
             crate::log!("uas-skhynix-route-probe: reset stage={} result=err err={:?}\n", stage, err)
@@ -103,93 +85,89 @@ async fn reset_after_failure(disk: DeviceHandle, stage: &'static str) {
     }
 }
 
-async fn run_read_op(disk: DeviceHandle, op: ProbeOp, chunk_bytes: usize, inflight: usize) {
-    let block_size = disk.block_size() as usize;
-    let blocks = blocks_for_bytes(block_size, op.bytes);
-    let start = Instant::now();
-    let result = disk.read_blocks(op.lba, blocks).await;
-    let data_ms = now_ms_since(start);
-    match result {
-        Ok(data) => crate::log!(
-            "uas-skhynix-route-probe: op={} fill_ms=0 data_ms={} finish_ms=0 status_ms=0 reclaim_ms=0 chunk_bytes={} inflight={} lba={} bytes={} result=ok got={}\n",
+fn route_kind_for_op(op: ProbeOp) -> Option<UasRouteProbeKind> {
+    match op.kind {
+        ProbeOpKind::Read => Some(UasRouteProbeKind::Read),
+        ProbeOpKind::Write => Some(UasRouteProbeKind::Write),
+        ProbeOpKind::Skip => None,
+    }
+}
+
+fn route_pattern_seed(op: ProbeOp) -> u64 {
+    op.lba
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        .wrapping_add(op.bytes as u64)
+        .wrapping_add(op.name.len() as u64)
+        .wrapping_add(0x5541_5352_4F55_5445)
+}
+
+fn log_route_result(op: ProbeOp, result: UasRouteProbeResult) {
+    let status = if result.error.is_some() { "err" } else { "ok" };
+    crate::log!(
+        "uas-skhynix-route-probe: op={} phase={:?} fill_ms={} command_ms={} ready_ms={} data_ms={} status_ms={} reclaim_ms={} finish_ms={} chunk_bytes={} inflight={} lba={} bytes={} result={} err={:?} submitted={} reclaimed={} stalled={} resets={} quarantined={} bytes_submitted={} bytes_reclaimed={} max_observed_inflight={} live_streams={} dead_streams={}\n",
+        op.name,
+        result.phase,
+        result.timing.fill_ms,
+        result.timing.command_ms,
+        result.timing.ready_ms,
+        result.timing.data_ms,
+        result.timing.status_ms,
+        result.timing.reclaim_ms,
+        result.timing.finish_ms,
+        result.chunk_bytes,
+        result.max_inflight,
+        result.lba,
+        result.total_bytes,
+        status,
+        result.error,
+        result.counters.submitted,
+        result.counters.reclaimed,
+        result.counters.stalled,
+        result.counters.resets,
+        result.counters.quarantined,
+        result.counters.bytes_submitted,
+        result.counters.bytes_reclaimed,
+        result.counters.max_inflight,
+        result.counters.live_streams,
+        result.counters.dead_streams
+    );
+}
+
+async fn run_route_op(disk: DeviceHandle, op: ProbeOp, chunk_bytes: usize, inflight: usize) {
+    let Some(kind) = route_kind_for_op(op) else {
+        crate::log!(
+            "uas-skhynix-route-probe: op={} fill_ms=0 command_ms=0 ready_ms=0 data_ms=0 status_ms=0 reclaim_ms=0 finish_ms=0 chunk_bytes={} inflight={} lba={} bytes={} result={}\n",
             op.name,
-            data_ms,
             chunk_bytes,
             inflight,
             op.lba,
             op.bytes,
-            data.len()
-        ),
+            op.result
+        );
+        return;
+    };
+
+    let config = UasRouteProbeConfig {
+        kind,
+        lba: op.lba,
+        total_bytes: op.bytes as u64,
+        chunk_bytes,
+        max_inflight: inflight,
+        pattern_seed: route_pattern_seed(op),
+    };
+
+    match crate::usb2::pen::run_uas_skhynix_route_probe(disk, config).await {
+        Ok(result) => {
+            let failed = result.error.is_some();
+            log_route_result(op, result);
+            if failed {
+                reset_after_failure(disk, op.name).await;
+            }
+        }
         Err(err) => {
             crate::log!(
-                "uas-skhynix-route-probe: op={} fill_ms=0 data_ms={} finish_ms=0 status_ms=0 reclaim_ms=0 chunk_bytes={} inflight={} lba={} bytes={} result=err err={:?}\n",
+                "uas-skhynix-route-probe: op={} fill_ms=0 command_ms=0 ready_ms=0 data_ms=0 status_ms=0 reclaim_ms=0 finish_ms=0 chunk_bytes={} inflight={} lba={} bytes={} result=err err={:?}\n",
                 op.name,
-                data_ms,
-                chunk_bytes,
-                inflight,
-                op.lba,
-                op.bytes,
-                err
-            );
-            reset_after_failure(disk, op.name).await;
-        }
-    }
-}
-
-async fn run_write_op(disk: DeviceHandle, op: ProbeOp, chunk_bytes: usize, inflight: usize) {
-    let mut buf = Vec::new();
-    buf.resize(op.bytes, 0);
-
-    let fill_start = Instant::now();
-    fill_probe_pattern(buf.as_mut_slice(), op.name, op.lba);
-    let fill_ms = now_ms_since(fill_start);
-
-    let data_start = Instant::now();
-    let write_result = disk.write_blocks(op.lba, buf.as_slice()).await;
-    let data_ms = now_ms_since(data_start);
-
-    let finish_start = Instant::now();
-    let finish_result = if write_result.is_ok() {
-        disk.flush().await
-    } else {
-        Ok(())
-    };
-    let finish_ms = now_ms_since(finish_start);
-
-    match (write_result, finish_result) {
-        (Ok(()), Ok(())) => crate::log!(
-            "uas-skhynix-route-probe: op={} fill_ms={} data_ms={} finish_ms={} status_ms=0 reclaim_ms=0 chunk_bytes={} inflight={} lba={} bytes={} result=ok\n",
-            op.name,
-            fill_ms,
-            data_ms,
-            finish_ms,
-            chunk_bytes,
-            inflight,
-            op.lba,
-            op.bytes
-        ),
-        (Err(err), _) => {
-            crate::log!(
-                "uas-skhynix-route-probe: op={} fill_ms={} data_ms={} finish_ms={} status_ms=0 reclaim_ms=0 chunk_bytes={} inflight={} lba={} bytes={} result=err err={:?}\n",
-                op.name,
-                fill_ms,
-                data_ms,
-                finish_ms,
-                chunk_bytes,
-                inflight,
-                op.lba,
-                op.bytes,
-                err
-            );
-            reset_after_failure(disk, op.name).await;
-        }
-        (Ok(()), Err(err)) => {
-            crate::log!(
-                "uas-skhynix-route-probe: op={} fill_ms={} data_ms={} finish_ms={} status_ms=0 reclaim_ms=0 chunk_bytes={} inflight={} lba={} bytes={} result=finish-err err={:?}\n",
-                op.name,
-                fill_ms,
-                data_ms,
-                finish_ms,
                 chunk_bytes,
                 inflight,
                 op.lba,
@@ -203,19 +181,7 @@ async fn run_write_op(disk: DeviceHandle, op: ProbeOp, chunk_bytes: usize, infli
 
 #[embassy_executor::task(pool_size = 4)]
 async fn route_probe_op_task(disk: DeviceHandle, op: ProbeOp, chunk_bytes: usize, inflight: usize) {
-    match op.kind {
-        ProbeOpKind::Read => run_read_op(disk, op, chunk_bytes, inflight).await,
-        ProbeOpKind::Write => run_write_op(disk, op, chunk_bytes, inflight).await,
-        ProbeOpKind::Skip => crate::log!(
-            "uas-skhynix-route-probe: op={} fill_ms=0 data_ms=0 finish_ms=0 status_ms=0 reclaim_ms=0 chunk_bytes={} inflight={} lba={} bytes={} result={}\n",
-            op.name,
-            chunk_bytes,
-            inflight,
-            op.lba,
-            op.bytes,
-            op.result
-        ),
-    }
+    run_route_op(disk, op, chunk_bytes, inflight).await;
 }
 
 async fn wait_for_uas_skhynix_route_disk() -> Option<DeviceHandle> {
@@ -287,13 +253,7 @@ pub(crate) async fn boot_uas_skhynix_route_probe_task() {
     }
 
     if WRITE_ENABLED {
-        match crate::usb2::pen::set_uas_skhynix_write_window_for_bench(
-            disk,
-            chunk_bytes,
-            inflight,
-        )
-        .await
-        {
+        match crate::usb2::pen::set_uas_skhynix_route_window(disk, chunk_bytes, inflight).await {
             Ok((actual_chunk, actual_inflight)) => crate::log!(
                 "uas-skhynix-route-probe: configure-write result=ok chunk_bytes={} inflight={}\n",
                 actual_chunk,

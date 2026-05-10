@@ -324,6 +324,7 @@ pub(crate) struct UasBenchConfig {
     pub max_inflight: usize,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum UasRoutePhase {
     Idle,
@@ -345,12 +346,14 @@ impl Default for UasRoutePhase {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum UasRouteProbeKind {
     Read,
     Write,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct UasRouteCounters {
     pub submitted: u64,
@@ -365,17 +368,26 @@ pub(crate) struct UasRouteCounters {
     pub dead_streams: u32,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct UasRouteTiming {
+    /// Time spent preparing the caller-visible probe buffer before ownership is handed to UAS.
     pub fill_ms: u64,
+    /// Best-effort time spent submitting command IUs.
     pub command_ms: u64,
+    /// Best-effort wait from command submit to READ/WRITE READY status IU.
     pub ready_ms: u64,
+    /// Best-effort data endpoint time; read data is pre-posted, so this includes device latency.
     pub data_ms: u64,
+    /// Best-effort wait from data completion to final status IU.
     pub status_ms: u64,
+    /// Host-side time spent reclaiming a completed stream slot and accounting bytes.
     pub reclaim_ms: u64,
+    /// Whole probe I/O wall time after buffer fill, including command/data/status/reclaim.
     pub finish_ms: u64,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct UasRouteProbeConfig {
     pub kind: UasRouteProbeKind,
@@ -386,6 +398,7 @@ pub(crate) struct UasRouteProbeConfig {
     pub pattern_seed: u64,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct UasRouteProbeResult {
     pub kind: UasRouteProbeKind,
@@ -399,6 +412,7 @@ pub(crate) struct UasRouteProbeResult {
     pub timing: UasRouteTiming,
 }
 
+#[allow(dead_code)]
 impl UasRouteProbeResult {
     fn new(config: UasRouteProbeConfig, chunk_bytes: usize, max_inflight: usize) -> Self {
         Self {
@@ -486,7 +500,10 @@ enum UasBenchStep {
 }
 
 enum UasWriteStep {
-    Completed { bytes: usize, timing: UasRouteTiming },
+    Completed {
+        bytes: usize,
+        timing: UasRouteTiming,
+    },
     TimedOut {
         tag: u16,
         lba: u32,
@@ -550,6 +567,7 @@ pub(crate) fn is_uas_skhynix_disk(handle: block::DeviceHandle) -> bool {
         .unwrap_or(false)
 }
 
+#[allow(dead_code)]
 pub(crate) fn find_uas_skhynix_route_disk() -> Option<block::DeviceHandle> {
     let mut handles: Vec<block::DeviceHandle, MAX_MASS_RUNTIMES> = Vec::new();
     {
@@ -583,11 +601,8 @@ pub(crate) async fn set_uas_skhynix_write_window_for_bench(
         if block_size == 0 {
             return Err(block::Error::InvalidParam);
         }
-        let cap = clamp_mass_io_bytes_with_ceil(
-            block_size,
-            bytes,
-            UAS_READ_WINDOW_MAX_TRANSFER_BYTES,
-        );
+        let cap =
+            clamp_mass_io_bytes_with_ceil(block_size, bytes, UAS_READ_WINDOW_MAX_TRANSFER_BYTES);
         rt.skhynix_write_max_io_bytes = cap;
         rt.current_max_io_bytes = cap;
         rt.skhynix_write_window_max_inflight = max_inflight.max(1);
@@ -607,6 +622,7 @@ pub(crate) async fn set_uas_skhynix_write_window_for_bench(
     result
 }
 
+#[allow(dead_code)]
 pub(crate) async fn set_uas_skhynix_route_window(
     handle: block::DeviceHandle,
     bytes: usize,
@@ -639,11 +655,137 @@ pub(crate) async fn reset_uas_skhynix_transport_for_bench(
     result
 }
 
+#[allow(dead_code)]
 pub(crate) async fn reset_uas_skhynix_route_transport(
     handle: block::DeviceHandle,
     stage: &'static str,
 ) -> block::Result<()> {
     reset_uas_skhynix_transport_for_bench(handle, stage).await
+}
+
+#[allow(dead_code)]
+pub(crate) async fn run_uas_skhynix_route_probe(
+    handle: block::DeviceHandle,
+    config: UasRouteProbeConfig,
+) -> block::Result<UasRouteProbeResult> {
+    let Some(runtime_key) = mass_runtime_key_for_disk(handle) else {
+        return Err(block::Error::NotSupported);
+    };
+
+    let info = handle.info();
+    let block_size = info.block_size as usize;
+    if block_size == 0 || config.total_bytes == 0 {
+        return Err(block::Error::InvalidParam);
+    }
+    let total_bytes =
+        usize::try_from(config.total_bytes).map_err(|_| block::Error::InvalidParam)?;
+    if total_bytes == 0 || !total_bytes.is_multiple_of(block_size) {
+        return Err(block::Error::InvalidParam);
+    }
+    let blocks = total_bytes / block_size;
+    let end_lba = config
+        .lba
+        .checked_add(blocks as u64)
+        .ok_or(block::Error::OutOfBounds)?;
+    if end_lba > info.block_count {
+        return Err(block::Error::OutOfBounds);
+    }
+
+    let wanted_chunk = config.chunk_bytes.max(block_size);
+    let chunk_bytes =
+        clamp_mass_io_bytes_with_ceil(block_size, wanted_chunk, UAS_READ_WINDOW_MAX_TRANSFER_BYTES);
+    let max_inflight = config.max_inflight.max(1);
+    let mut result = UasRouteProbeResult::new(config, chunk_bytes, max_inflight);
+
+    let _lane = acquire_mass_io_arbiter(
+        runtime_key,
+        match config.kind {
+            UasRouteProbeKind::Read => MassIoArbiterLane::Read,
+            UasRouteProbeKind::Write => MassIoArbiterLane::Write,
+        },
+    )
+    .await?;
+
+    let mut rt = take_runtime_wait(runtime_key)
+        .await
+        .ok_or(block::Error::NotReady)?;
+
+    let probe_result = async {
+        if !matches!(rt.endpoints, UsbMassEndpoints::UasSkhynix { .. }) {
+            return Err(block::Error::NotSupported);
+        }
+
+        let old_current_max = rt.current_max_io_bytes;
+        let old_write_max = rt.skhynix_write_max_io_bytes;
+        let old_write_inflight = rt.skhynix_write_window_max_inflight;
+        let old_probe_fail_fast = rt.skhynix_write_probe_fail_fast;
+
+        rt.current_max_io_bytes = chunk_bytes;
+        if config.kind == UasRouteProbeKind::Write {
+            rt.skhynix_write_max_io_bytes = chunk_bytes;
+            rt.skhynix_write_window_max_inflight = max_inflight;
+            rt.skhynix_write_probe_fail_fast = true;
+        }
+        rt.io_success_streak = 0;
+
+        let io_start_ms;
+        let io_result = match config.kind {
+            UasRouteProbeKind::Read => {
+                let mut out = alloc::vec![0u8; total_bytes];
+                io_start_ms = uas_bench_now_ms();
+                read_blocks_uas_skhynix_windowed(
+                    &mut rt,
+                    config.lba,
+                    blocks,
+                    out.as_mut_slice(),
+                    block_size,
+                    Some(&mut result),
+                )
+                .await
+            }
+            UasRouteProbeKind::Write => {
+                result.phase = UasRoutePhase::Fill;
+                let mut data = alloc::vec![0u8; total_bytes];
+                let fill_start_ms = uas_bench_now_ms();
+                let mut filled = 0usize;
+                while filled < data.len() {
+                    let end = filled.saturating_add(chunk_bytes).min(data.len());
+                    fill_uas_route_probe_pattern(
+                        &mut data[filled..end],
+                        filled as u64,
+                        config.pattern_seed,
+                    );
+                    filled = end;
+                }
+                result.timing.fill_ms = uas_bench_now_ms().saturating_sub(fill_start_ms);
+                io_start_ms = uas_bench_now_ms();
+                write_blocks_uas_skhynix_windowed(
+                    &mut rt,
+                    config.lba,
+                    data.as_slice(),
+                    block_size,
+                    Some(&mut result),
+                )
+                .await
+            }
+        };
+
+        result.timing.finish_ms = uas_bench_now_ms().saturating_sub(io_start_ms);
+        if let Err(err) = io_result {
+            result.error = Some(err);
+        }
+
+        rt.current_max_io_bytes = old_current_max;
+        rt.skhynix_write_max_io_bytes = old_write_max;
+        rt.skhynix_write_window_max_inflight = old_write_inflight;
+        rt.skhynix_write_probe_fail_fast = old_probe_fail_fast;
+
+        Ok(result)
+    }
+    .await;
+
+    register_runtime(rt);
+    probe_result
 }
 
 fn uas_bench_now_ms() -> u64 {
@@ -653,6 +795,18 @@ fn uas_bench_now_ms() -> u64 {
         0
     } else {
         ticks.saturating_mul(1000) / hz
+    }
+}
+
+#[allow(dead_code)]
+fn fill_uas_route_probe_pattern(buf: &mut [u8], absolute_offset: u64, seed: u64) {
+    let mut state = seed ^ absolute_offset.rotate_left(17) ^ 0xA5A5_5A5A_D3C1_B2E0;
+    for (idx, byte) in buf.iter_mut().enumerate() {
+        state ^= (absolute_offset.wrapping_add(idx as u64)).rotate_left(9);
+        state ^= state << 7;
+        state ^= state >> 11;
+        state = state.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        *byte = (state >> 32) as u8;
     }
 }
 
@@ -2525,8 +2679,7 @@ async fn read_blocks_uas_skhynix_windowed(
                 }
                 if let Some(route) = route.as_mut() {
                     route.phase = UasRoutePhase::Quarantined;
-                    route.counters.quarantined =
-                        u64::from(rt.uas_dead_stream_mask.count_ones());
+                    route.counters.quarantined = u64::from(rt.uas_dead_stream_mask.count_ones());
                     route.counters.dead_streams = rt.uas_dead_stream_mask.count_ones();
                 }
 
@@ -2783,8 +2936,7 @@ async fn write_blocks_uas_skhynix_windowed(
                 uas_write_forget_pending(&mut flights);
                 if let Some(route) = route.as_mut() {
                     route.phase = UasRoutePhase::Quarantined;
-                    route.counters.quarantined =
-                        u64::from(rt.uas_dead_stream_mask.count_ones());
+                    route.counters.quarantined = u64::from(rt.uas_dead_stream_mask.count_ones());
                     route.counters.dead_streams = rt.uas_dead_stream_mask.count_ones();
                 }
                 crate::log!(
