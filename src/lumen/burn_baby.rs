@@ -273,6 +273,16 @@ pub fn matvec_rowmajor_bf16(
 
     let chunks = n_rows.div_ceil(chunk_rows);
     log_bf16_dispatch_plan(n_rows, k_dim, chunk_rows, chunks);
+    let gpu_shadow =
+        crate::lumen::gpu_shadow::observe_bf16_matvec_call(n_rows, k_dim, chunk_rows, chunks);
+    let _ = (
+        gpu_shadow.candidate,
+        gpu_shadow.static_tile_proven,
+        gpu_shadow.lane_dispatch_count,
+        gpu_shadow.expected_store_value,
+        gpu_shadow.observed_store_value,
+        gpu_shadow.program_name,
+    );
     if chunks <= 1 || !crate::workers::has_background_worker_slot() {
         matvec_rows_bf16(x, w_rowmajor_bf16, k_dim, out, 0, n_rows);
         return Ok(());

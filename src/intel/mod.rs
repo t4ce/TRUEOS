@@ -107,6 +107,8 @@ pub(crate) struct GpgpuPreflightStatus {
     pub(crate) eu_walker_retired: bool,
     pub(crate) eu_dispatch_delta: u32,
     pub(crate) eu_c_store_value: u32,
+    pub(crate) eu_expected_store_value: u32,
+    pub(crate) eu_program_name: &'static str,
     pub(crate) result_c_changed_by_eu: bool,
 }
 
@@ -356,6 +358,8 @@ pub(crate) fn gpgpu_preflight_status() -> GpgpuPreflightStatus {
         eu_walker_retired: status.eu_walker_retired,
         eu_dispatch_delta: status.eu_dispatch_delta,
         eu_c_store_value: status.eu_c_store_value,
+        eu_expected_store_value: status.eu_expected_store_value,
+        eu_program_name: status.eu_program_name,
         result_c_changed_by_eu: status.result_c_changed_by_eu,
     }
 }
