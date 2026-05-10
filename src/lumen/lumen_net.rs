@@ -112,11 +112,24 @@ pub(crate) struct RemoteBf16MatvecResultUpdate {
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct Bf16MatrixProbe {
+    pub(crate) epoch: u64,
     pub(crate) matrix_id: u64,
     pub(crate) name_hash: u64,
     pub(crate) name_len: u32,
     pub(crate) rows: u32,
     pub(crate) k_dim: u32,
+    pub(crate) data_ptr: usize,
+    pub(crate) byte_len: usize,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct ResidentBf16MatrixReadView {
+    pub(crate) epoch: u64,
+    pub(crate) matrix_id: u64,
+    pub(crate) name_hash: u64,
+    pub(crate) name_len: u32,
+    pub(crate) rows: usize,
+    pub(crate) k_dim: usize,
     pub(crate) data_ptr: usize,
     pub(crate) byte_len: usize,
 }
@@ -155,6 +168,24 @@ pub(crate) fn begin_matrix_manifest_load() {
         .fetch_add(1, Ordering::AcqRel)
         .saturating_add(1);
     crate::log!("lumen-net: matrix manifest reset epoch={} source=model-load\n", epoch);
+}
+
+pub(crate) fn clear_matrix_manifest(reason: &'static str) {
+    let cleared = {
+        let mut manifest = MATRIX_MANIFEST.lock();
+        let cleared = manifest.len();
+        manifest.clear();
+        cleared
+    };
+    let epoch = MATRIX_EPOCH
+        .fetch_add(1, Ordering::AcqRel)
+        .saturating_add(1);
+    crate::log!(
+        "lumen-net: matrix manifest clear epoch={} reason={} cleared={} resident=0\n",
+        epoch,
+        reason,
+        cleared
+    );
 }
 
 pub(crate) fn register_loaded_matrix(
@@ -214,6 +245,14 @@ pub(crate) fn register_loaded_matrix(
     }
 }
 
+pub(crate) fn matrix_manifest_epoch() -> u64 {
+    MATRIX_EPOCH.load(Ordering::Acquire)
+}
+
+pub(crate) fn resident_bf16_matrix_count() -> usize {
+    MATRIX_MANIFEST.lock().len()
+}
+
 pub(crate) fn enqueue_remote_bf16_matvec_suffix(
     x: &[f32],
     w_rowmajor_bf16: &[u8],
@@ -246,9 +285,12 @@ pub(crate) fn enqueue_remote_bf16_matvec_suffix(
         return None;
     }
 
-    let Some(matrix) =
-        resolve_bf16_matrix(w_rowmajor_bf16.as_ptr() as usize, expected_w_len, n_rows, k_dim)
-    else {
+    let Some(matrix) = resolve_resident_bf16_matrix_read_view(
+        w_rowmajor_bf16.as_ptr() as usize,
+        expected_w_len,
+        n_rows,
+        k_dim,
+    ) else {
         if !LOGGED_MISSING_MATRIX.swap(true, Ordering::AcqRel) {
             crate::log!(
                 "lumen-net: remote bf16 matvec skipped reason=no-stable-matrix-id rows={} k_dim={} bytes={} action=local-burn-baby-only\n",
@@ -312,13 +354,14 @@ pub(crate) fn enqueue_remote_bf16_matvec_suffix(
     PENDING_BF16_MATVECS.lock().push_back(job);
     if !LOGGED_ENQUEUE.swap(true, Ordering::AcqRel) {
         crate::log!(
-            "lumen-net: bf16 matvec remote enqueue job={} rows={}..{} n_rows={} k_dim={} matrix=0x{:016X} host=0x{:016X} frame_magic=0x{:08X} opcode={} x_bytes={} frames={} completion=tcp-result\n",
+            "lumen-net: bf16 matvec remote enqueue job={} rows={}..{} n_rows={} k_dim={} matrix=0x{:016X} epoch={} host=0x{:016X} frame_magic=0x{:08X} opcode={} x_bytes={} frames={} completion=tcp-result\n",
             job.job_id,
             job.row_start,
             job.row_end,
             job.n_rows,
             job.k_dim,
             job.matrix_id,
+            matrix.epoch,
             host_cookie,
             header.magic,
             header.opcode,
@@ -361,9 +404,12 @@ fn enqueue_shadow_bf16_matvec_suffix(
     if w_rowmajor_bf16.len() < expected_w_len {
         return;
     }
-    let Some(matrix) =
-        resolve_bf16_matrix(w_rowmajor_bf16.as_ptr() as usize, expected_w_len, n_rows, k_dim)
-    else {
+    let Some(matrix) = resolve_resident_bf16_matrix_read_view(
+        w_rowmajor_bf16.as_ptr() as usize,
+        expected_w_len,
+        n_rows,
+        k_dim,
+    ) else {
         if !LOGGED_MISSING_MATRIX.swap(true, Ordering::AcqRel) {
             crate::log!(
                 "lumen-net: shadow bf16 matvec skipped reason=no-stable-matrix-id rows={} k_dim={} bytes={}\n",
@@ -429,9 +475,10 @@ fn enqueue_shadow_bf16_matvec_suffix(
 
     if !LOGGED_SHADOW_ENQUEUE.swap(true, Ordering::AcqRel) {
         crate::log!(
-            "lumen-net: shadow bf16 matvec enqueue job={} matrix=0x{:016X} rows={}..{} n_rows={} k_dim={} x_bytes={} x_chunks={} frames={} note=descriptor-and-x-chunks-local-compute-full-width\n",
+            "lumen-net: shadow bf16 matvec enqueue job={} matrix=0x{:016X} epoch={} rows={}..{} n_rows={} k_dim={} x_bytes={} x_chunks={} frames={} note=descriptor-and-x-chunks-local-compute-full-width\n",
             job.job_id,
             job.matrix_id,
+            matrix.epoch,
             job.row_start,
             job.row_end,
             job.n_rows,
@@ -645,7 +692,7 @@ pub(crate) fn compute_shadow_bf16_matvec_result_bytes(
         return None;
     }
 
-    let matrix = resolve_bf16_matrix_by_id(matrix_id, n_rows, k_dim)?;
+    let matrix = resolve_resident_bf16_matrix_read_view_by_id(matrix_id, n_rows, k_dim)?;
     let all_rows = row_end.saturating_sub(row_start);
     let proof_rows = all_rows.min(max_proof_rows);
     let mut x = Vec::with_capacity(k_dim);
@@ -770,14 +817,17 @@ pub(crate) fn resolve_bf16_matrix_probe(
     rows: usize,
     k_dim: usize,
 ) -> Option<Bf16MatrixProbe> {
-    resolve_bf16_matrix(data_ptr, byte_len, rows, k_dim).map(|entry| Bf16MatrixProbe {
-        matrix_id: entry.matrix_id,
-        name_hash: entry.name_hash,
-        name_len: entry.name_len,
-        rows: entry.rows,
-        k_dim: entry.k_dim,
-        data_ptr: entry.data_ptr,
-        byte_len: entry.byte_len,
+    resolve_resident_bf16_matrix_read_view(data_ptr, byte_len, rows, k_dim).map(|view| {
+        Bf16MatrixProbe {
+            epoch: view.epoch,
+            matrix_id: view.matrix_id,
+            name_hash: view.name_hash,
+            name_len: view.name_len,
+            rows: view.rows.min(u32::MAX as usize) as u32,
+            k_dim: view.k_dim.min(u32::MAX as usize) as u32,
+            data_ptr: view.data_ptr,
+            byte_len: view.byte_len,
+        }
     })
 }
 
@@ -825,34 +875,59 @@ fn append_hex(out: &mut Vec<u8>, bytes: &[u8]) {
     }
 }
 
-fn resolve_bf16_matrix(
+pub(crate) fn resolve_resident_bf16_matrix_read_view(
     data_ptr: usize,
     byte_len: usize,
     rows: usize,
     k_dim: usize,
-) -> Option<LumenMatrixManifestEntry> {
+) -> Option<ResidentBf16MatrixReadView> {
+    let epoch = matrix_manifest_epoch();
     let manifest = MATRIX_MANIFEST.lock();
-    manifest.iter().copied().find(|entry| {
-        entry.data_ptr == data_ptr
-            && entry.byte_len == byte_len
-            && entry.rows as usize == rows
-            && entry.k_dim as usize == k_dim
-    })
+    manifest
+        .iter()
+        .copied()
+        .find(|entry| {
+            entry.data_ptr == data_ptr
+                && entry.byte_len == byte_len
+                && entry.rows as usize == rows
+                && entry.k_dim as usize == k_dim
+        })
+        .map(|entry| entry.read_view(epoch))
 }
 
-fn resolve_bf16_matrix_by_id(
+pub(crate) fn resolve_resident_bf16_matrix_read_view_by_id(
     matrix_id: u64,
     rows: usize,
     k_dim: usize,
-) -> Option<LumenMatrixManifestEntry> {
+) -> Option<ResidentBf16MatrixReadView> {
     let byte_len = rows.checked_mul(k_dim)?.checked_mul(2)?;
+    let epoch = matrix_manifest_epoch();
     let manifest = MATRIX_MANIFEST.lock();
-    manifest.iter().copied().find(|entry| {
-        entry.matrix_id == matrix_id
-            && entry.byte_len == byte_len
-            && entry.rows as usize == rows
-            && entry.k_dim as usize == k_dim
-    })
+    manifest
+        .iter()
+        .copied()
+        .find(|entry| {
+            entry.matrix_id == matrix_id
+                && entry.byte_len == byte_len
+                && entry.rows as usize == rows
+                && entry.k_dim as usize == k_dim
+        })
+        .map(|entry| entry.read_view(epoch))
+}
+
+impl LumenMatrixManifestEntry {
+    fn read_view(self, epoch: u64) -> ResidentBf16MatrixReadView {
+        ResidentBf16MatrixReadView {
+            epoch,
+            matrix_id: self.matrix_id,
+            name_hash: self.name_hash,
+            name_len: self.name_len,
+            rows: self.rows as usize,
+            k_dim: self.k_dim as usize,
+            data_ptr: self.data_ptr,
+            byte_len: self.byte_len,
+        }
+    }
 }
 
 fn bf16_to_f32(bits: u16) -> f32 {
