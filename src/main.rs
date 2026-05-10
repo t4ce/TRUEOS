@@ -82,14 +82,14 @@ mod tokio_probe;
 mod trueos_tokio_worker;
 #[path = "tst/boot_factory_ram_probe.rs"]
 mod tst_boot_factory_ram_probe;
-#[path = "tst/fps.rs"]
-mod tst_fps;
 #[path = "tst/html_demo.rs"]
 mod tst_html_demo;
 #[path = "tst/html_shack.rs"]
 mod tst_html_shack;
 #[path = "tst/http_trueosfs.rs"]
 mod tst_http_trueosfs;
+#[path = "tst/fileexplorer/axum_server.rs"]
+mod tst_fileexplorer_axum;
 #[path = "tst/net_tcp_shell.rs"]
 mod tst_net_tcp_shell;
 #[path = "tst/ui2_analog_clock_demo.rs"]

@@ -40,8 +40,8 @@ const MAIL_POP3_MAX_MESSAGE_BYTES: usize = 64 * 1024;
 static MAIL_HTTP_PORT: AtomicU16 = AtomicU16::new(0);
 static MAIL_ID_SEQ: AtomicU32 = AtomicU32::new(1);
 
-const MAIL_INDEX_HTML: &str = include_str!("mail_web/index.html");
-const MAIL_APP_JS: &str = include_str!("mail_web/app.js");
+const WEBMAIL_INDEX_HTML: &str = include_str!("../../../tst/webmail/index.html");
+const WEBMAIL_APP_JS: &str = include_str!("../../../tst/webmail/app.js");
 
 pub fn current_port() -> Option<u16> {
     match MAIL_HTTP_PORT.load(Ordering::Acquire) {
@@ -81,6 +81,8 @@ struct MailSummary {
     preview: String,
     date: String,
     unread: bool,
+    status: String,
+    error: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -107,9 +109,7 @@ impl MailConfig {
     }
 
     fn password_is_placeholder(&self) -> bool {
-        self.smtp_pass == mail_config::ACCOUNT_PASSWORD
-            || self.smtp_pass.trim().is_empty()
-            || self.smtp_pass.contains("ENTER_")
+        self.smtp_pass.trim().is_empty() || self.smtp_pass.contains("ENTER_")
     }
 }
 
@@ -437,13 +437,13 @@ async fn send_mail_job(id: String) {
 }
 
 async fn handle_index() -> Response {
-    crate::log!("mail-http: GET /\n");
-    text_response(200, "text/html; charset=utf-8", MAIL_INDEX_HTML)
+    crate::log!("webmail-http: GET /\n");
+    text_response(200, "text/html; charset=utf-8", WEBMAIL_INDEX_HTML)
 }
 
 async fn handle_app_js() -> Response {
-    crate::log!("mail-http: GET /app.js\n");
-    text_response(200, "application/javascript; charset=utf-8", MAIL_APP_JS)
+    crate::log!("webmail-http: GET /app.js\n");
+    text_response(200, "application/javascript; charset=utf-8", WEBMAIL_APP_JS)
 }
 
 async fn handle_list_local() -> Response {
@@ -452,7 +452,7 @@ async fn handle_list_local() -> Response {
             let _ = refresh_inbox_from_pop3(&config).await;
         }
         Err(err) => {
-            crate::log!("mail-http: config unavailable for POP3 refresh: {}\n", err);
+            crate::log!("webmail-http: config unavailable for POP3 refresh: {}\n", err);
         }
     }
 
@@ -468,10 +468,39 @@ async fn handle_list_local() -> Response {
             preview: preview(message.body.as_str()),
             date: message.date,
             unread: message.unread,
+            status: message.status,
+            error: message.error,
         })
         .collect();
     messages.truncate(MAIL_LIST_LIMIT);
     json_response(200, &MailListResponse { messages })
+}
+
+async fn handle_status_local() -> Response {
+    let store = load_store().await;
+    let config = load_config().await.ok();
+    let account = config
+        .as_ref()
+        .map(|config| config.from.as_deref().unwrap_or(config.smtp_user.as_str()))
+        .unwrap_or(mail_config::ACCOUNT_EMAIL);
+    let unread_count = store.messages.iter().filter(|message| message.unread).count();
+    json_response(
+        200,
+        &serde_json::json!({
+            "ok": true,
+            "service": "webmail-http",
+            "account": account,
+            "storePath": MAIL_STORE_PATH,
+            "configPath": MAIL_CONFIG_PATH,
+            "smtp": format!("{}:{}", mail_config::SMTP_HOST, mail_config::SMTP_PORT),
+            "pop3": format!("{}:{}", mail_config::POP3_HOST, mail_config::POP3_PORT),
+            "messageCount": store.messages.len(),
+            "unreadCount": unread_count,
+            "listLimit": MAIL_LIST_LIMIT,
+            "readiness": crate::r::readiness::mask(),
+            "port": current_port(),
+        }),
+    )
 }
 
 fn mail_worker_unavailable_response() -> Response {
@@ -500,6 +529,10 @@ where
 
 async fn handle_list() -> Response {
     run_mail_local(handle_list_local).await
+}
+
+async fn handle_status() -> Response {
+    run_mail_local(handle_status_local).await
 }
 
 async fn handle_read(OriginalUri(uri): OriginalUri) -> Response {
@@ -590,9 +623,12 @@ fn mail_router() -> Router {
         .route("/", get(handle_index))
         .route("/index.html", get(handle_index))
         .route("/app.js", get(handle_app_js))
-        .route("/api/mail/list", get(handle_list))
-        .route("/api/mail/read", get(handle_read))
-        .route("/api/mail/send", post(handle_send))
+        .route("/healthz", get(handle_status))
+        .route("/api/healthz", get(handle_status))
+        .route("/api/webmail/status", get(handle_status))
+        .route("/api/webmail/list", get(handle_list))
+        .route("/api/webmail/read", get(handle_read))
+        .route("/api/webmail/send", post(handle_send))
         .layer(DefaultBodyLimit::max(MAIL_HTTP_BODY_MAX))
 }
 
@@ -609,7 +645,7 @@ async fn mail_http_runtime() -> Result<(), io::Error> {
     loop {
         let Some(addr) = primary_ipv4_addr(MAIL_HTTP_TCP_PORT) else {
             MAIL_HTTP_PORT.store(0, Ordering::Release);
-            crate::log!("mail-http: waiting for primary ipv4\n");
+            crate::log!("webmail-http: waiting for primary ipv4\n");
             tokio::time::sleep(core::time::Duration::from_millis(100)).await;
             continue;
         };
@@ -619,7 +655,7 @@ async fn mail_http_runtime() -> Result<(), io::Error> {
             Err(err) => {
                 MAIL_HTTP_PORT.store(0, Ordering::Release);
                 crate::log!(
-                    "mail-http: bind {} failed kind={:?} err={}\n",
+                    "webmail-http: bind {} failed kind={:?} err={}\n",
                     addr,
                     err.kind(),
                     err
@@ -630,8 +666,8 @@ async fn mail_http_runtime() -> Result<(), io::Error> {
         };
 
         MAIL_HTTP_PORT.store(addr.port(), Ordering::Release);
-        crate::log!("mail-http: axum listening on http://{}/\n", addr);
-        let listener = listener.tap_io(|_| crate::log!("mail-http: tcp accepted\n"));
+        crate::log!("webmail-http: axum listening on http://{}/\n", addr);
+        let listener = listener.tap_io(|_| crate::log!("webmail-http: tcp accepted\n"));
         let result = axum::serve(listener, app).await;
         if result.is_err() {
             MAIL_HTTP_PORT.store(0, Ordering::Release);
@@ -656,24 +692,24 @@ pub async fn mail_http_service_task() {
     )
     .await;
     crate::log!(
-        "mail-http: launching Tokio runtime after NET_V4_CONFIGURED+TRUEOSFS_ROOT_MOUNTED\n"
+        "webmail-http: launching Tokio runtime after NET_V4_CONFIGURED+TRUEOSFS_ROOT_MOUNTED\n"
     );
 
     loop {
         let rc = crate::trueos_tokio_worker::spawn_blocking_job_with_purpose(
             Box::new(|| {
                 if let Err(err) = run_mail_http_runtime() {
-                    crate::log!("mail-http: runtime failed {:?}\n", err);
+                    crate::log!("webmail-http: runtime failed {:?}\n", err);
                 }
             }),
-            "mail-http-runtime",
+            "webmail-http-runtime",
         );
         if rc == 0 {
-            crate::log!("mail-http: submitted Tokio runtime to blocking lane\n");
+            crate::log!("webmail-http: submitted Tokio runtime to blocking lane\n");
             core::future::pending::<()>().await;
         }
         crate::log!(
-            "mail-http: blocking lane unavailable rc={} retry={}ms\n",
+            "webmail-http: blocking lane unavailable rc={} retry={}ms\n",
             rc,
             MAIL_HTTP_BLOCKING_LANE_RETRY_MS
         );

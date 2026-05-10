@@ -510,10 +510,6 @@ pub fn active_guest_stack_bytes_for_vm(vm_id: u8) -> usize {
     GUEST_STACK_BACKINGS[idx].lock().active_bytes
 }
 
-pub fn active_guest_stack_mb() -> usize {
-    active_guest_stack_bytes() / (1024 * 1024)
-}
-
 pub fn active_guest_stack_mb_for_vm(vm_id: u8) -> usize {
     active_guest_stack_bytes_for_vm(vm_id) / (1024 * 1024)
 }
@@ -540,10 +536,6 @@ fn active_guest_stack_arena_for_vm(vm_id: u8) -> Option<HeapArena> {
     GUEST_STACK_BACKINGS[idx].lock().arena
 }
 
-pub fn guest_stack_slice() -> Option<&'static [u8]> {
-    guest_stack_slice_for_vm(crate::hv::current_vm_id().unwrap_or(0))
-}
-
 pub fn guest_stack_slice_for_vm(vm_id: u8) -> Option<&'static [u8]> {
     let backing = *GUEST_STACK_BACKINGS[vm_index(vm_id).ok()?].lock();
     let arena = backing.arena?;
@@ -552,25 +544,13 @@ pub fn guest_stack_slice_for_vm(vm_id: u8) -> Option<&'static [u8]> {
     })
 }
 
-pub fn guest_stack_mut_ptr() -> Option<*mut u8> {
-    guest_stack_mut_ptr_for_vm(crate::hv::current_vm_id().unwrap_or(0))
-}
-
 pub fn guest_stack_mut_ptr_for_vm(vm_id: u8) -> Option<*mut u8> {
     let backing = *GUEST_STACK_BACKINGS[vm_index(vm_id).ok()?].lock();
     backing.arena.map(|arena| arena.virt_start as *mut u8)
 }
 
-pub fn prepare_guest_stack_mb(stack_mb: usize) -> Result<usize, &'static str> {
-    prepare_guest_stack_mb_for_vm(crate::hv::current_vm_id().unwrap_or(0), stack_mb)
-}
-
 pub fn prepare_guest_stack_mb_for_vm(vm_id: u8, stack_mb: usize) -> Result<usize, &'static str> {
     prepare_guest_stack_bytes_for_vm(vm_id, mib_to_bytes(clamp_guest_stack_mb(stack_mb)))
-}
-
-pub fn prepare_guest_stack_bytes(requested_bytes: usize) -> Result<usize, &'static str> {
-    prepare_guest_stack_bytes_for_vm(crate::hv::current_vm_id().unwrap_or(0), requested_bytes)
 }
 
 pub fn prepare_guest_stack_bytes_for_vm(
@@ -604,10 +584,6 @@ pub fn prepare_guest_stack_bytes_for_vm(
 
 pub fn guest_stack_top() -> u64 {
     (GUEST_STACK_VA_BASE + active_guest_stack_bytes() as u64) & !0xF
-}
-
-pub fn guest_stack_top_for_vm(vm_id: u8) -> u64 {
-    (GUEST_STACK_VA_BASE + active_guest_stack_bytes_for_vm(vm_id) as u64) & !0xF
 }
 
 pub fn guest_kernel_elf_entry(bytes: &[u8]) -> Option<u64> {
@@ -1365,7 +1341,6 @@ fn map_guest_image_span(
     }
 
     let mut va = start_chunk_base;
-    let mut mapped_chunks = 0usize;
     while va < end_aligned {
         if va != code_pt_base {
             if *pt_slot >= GUEST_HIGH_IMAGE_PT_COUNT {
@@ -1388,7 +1363,6 @@ fn map_guest_image_span(
                     PT_ENTRY_PRESENT | PT_ENTRY_WRITABLE,
                 )?;
                 *pt_slot += 1;
-                mapped_chunks += 1;
             }
         }
         va = va
@@ -1610,10 +1584,6 @@ pub unsafe fn push_guest_page(out: &mut alloc::vec::Vec<u8>, page: *const [u64; 
     out.extend_from_slice(core::slice::from_raw_parts(page.cast::<u8>(), PAGE_SIZE_4K));
 }
 
-pub unsafe fn push_current_guest_pages(out: &mut alloc::vec::Vec<u8>) -> Result<(), &'static str> {
-    push_guest_pages_for_vm(crate::hv::current_vm_id().unwrap_or(0), out)
-}
-
 pub unsafe fn push_guest_pages_for_vm(
     vm_id: u8,
     out: &mut alloc::vec::Vec<u8>,
@@ -1634,13 +1604,6 @@ pub unsafe fn push_guest_pages_for_vm(
         push_guest_page(out, core::ptr::addr_of!((*tables).code_pt.0));
     }
     Ok(())
-}
-
-pub unsafe fn restore_current_guest_pages(
-    bytes: &[u8],
-    off: &mut usize,
-) -> Result<(), &'static str> {
-    restore_guest_pages_for_vm(crate::hv::current_vm_id().unwrap_or(0), bytes, off)
 }
 
 pub unsafe fn restore_guest_pages_for_vm(
