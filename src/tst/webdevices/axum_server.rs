@@ -28,6 +28,7 @@ use crate::allports::services::WEBDEVICES_HTTP_TCP_PORT;
 
 const WEBDEVICES_HTTP_BLOCKING_LANE_RETRY_MS: u64 = 1000;
 const WEBDEVICES_INDEX_HTML: &str = include_str!("index.html");
+const TRUEOS_TAILWIND_CSS: &str = include_str!("../common/tailwind.css");
 
 static WEBDEVICES_HTTP_PORT: AtomicU16 = AtomicU16::new(0);
 
@@ -211,6 +212,11 @@ fn json_response<T: Serialize>(status: u16, value: &T) -> Response {
 async fn handle_index() -> Response {
     crate::log!("webdevices-http: GET /\n");
     text_response(200, "text/html; charset=utf-8", WEBDEVICES_INDEX_HTML)
+}
+
+async fn handle_tailwind_css() -> Response {
+    crate::log!("webdevices-http: GET /tailwind.css\n");
+    text_response(200, "text/css; charset=utf-8", TRUEOS_TAILWIND_CSS)
 }
 
 async fn handle_healthz() -> Response {
@@ -598,6 +604,7 @@ pub fn router() -> Router {
     Router::new()
         .route("/", get(handle_index))
         .route("/index.html", get(handle_index))
+        .route("/tailwind.css", get(handle_tailwind_css))
         .route("/healthz", get(handle_healthz))
         .route("/api/healthz", get(handle_healthz))
         .route("/api/webdevices/snapshot", get(handle_snapshot))

@@ -37,6 +37,7 @@ const FILEEXPLORER_TEXT_OPEN_MAX: u64 = 5 * 1024 * 1024;
 const FILEEXPLORER_BLOCKING_LANE_RETRY_MS: u64 = 1000;
 const FILEEXPLORER_CHAT_GRACE_MS: u64 = 1500;
 const FILEEXPLORER_INDEX_HTML: &str = include_str!("index.html");
+const TRUEOS_TAILWIND_CSS: &str = include_str!("../common/tailwind.css");
 const TRUEOSFS_KEEP_FILE: &str = ".keep";
 const MAX_TREE_DEPTH: usize = 8;
 const MAX_TREE_NODES: usize = 512;
@@ -824,6 +825,10 @@ async fn handle_index() -> Response {
     text_response(200, "text/html; charset=utf-8", &index_html())
 }
 
+async fn handle_tailwind_css() -> Response {
+    text_response(200, "text/css; charset=utf-8", TRUEOS_TAILWIND_CSS)
+}
+
 async fn handle_healthz() -> Response {
     json_response(
         200,
@@ -1025,6 +1030,7 @@ pub fn router() -> Router {
     Router::new()
         .route("/", get(handle_index))
         .route("/index.html", get(handle_index))
+        .route("/tailwind.css", get(handle_tailwind_css))
         .route("/healthz", get(handle_healthz))
         .route("/api/healthz", get(handle_healthz))
         .route("/api/tree", get(handle_tree_route).put(handle_replace_tree))

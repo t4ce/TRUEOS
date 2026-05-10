@@ -532,40 +532,41 @@ fn index_html() -> Vec<u8> {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{title}</title>
-<style>
-body{{font:16px system-ui,sans-serif;margin:0;background:#101820;color:#eef3f7}}
-main{{max-width:760px;margin:0 auto;padding:24px}}
-label{{display:block;margin:12px 0 4px;color:#b7c6d1}}
-input,button{{font:inherit;border:1px solid #41515e;background:#17242e;color:#eef3f7;padding:10px;border-radius:6px}}
-input{{box-sizing:border-box;width:100%}}
-input:disabled{{color:#b7c6d1;background:#13202a;cursor:not-allowed;opacity:1}}
-button{{cursor:pointer;background:#2d6cdf;border-color:#2d6cdf}}
-button:disabled{{cursor:wait;opacity:.72}}
-.settings{{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:end}}
-#messages{{list-style:none;padding:0;margin:20px 0;display:grid;gap:10px}}
-#messages li{{background:#17242e;border:1px solid #2c3c48;border-radius:6px;padding:10px}}
-#messages li.waiting{{border-color:#3f5f75}}
-.body{{min-height:20px;white-space:pre-wrap}}
-.waiting .body::after{{content:"";display:inline-block;width:36px;height:10px;border-radius:999px;background:#91a7b8;opacity:.42}}
-.animate-pulse{{animation:pulse 1.35s cubic-bezier(.4,0,.6,1) infinite}}
-@keyframes pulse{{0%,100%{{opacity:.45}}50%{{opacity:.18}}}}
-.meta{{color:#91a7b8;font-size:13px;margin-bottom:4px}}
-.status{{margin:14px 0 0;color:#b7c6d1;font-size:13px;min-height:18px}}
-form{{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end}}
-@media (max-width:560px){{.settings{{grid-template-columns:1fr}}}}
-</style>
+<link rel="stylesheet" href="/tailwind.css">
 </head>
-<body>
-<main>
-<h1>TRUEOS Chat</h1>
-<div class="settings">
-<div><label for="room">Room</label><input id="room" value="lobby" maxlength="32" disabled></div>
-<div><label for="user">Display name</label><input id="user" value="guest" maxlength="32"></div>
+<body data-app="chat">
+<div class="chat-shell">
+<header class="chat-topbar">
+<div class="brand">
+<div class="brand-mark">CH</div>
+<div><h1>TRUEOS Chat <span class="tag ok">HTTP</span></h1><p>Lobby room, kernel-backed message hub</p></div>
 </div>
+<div class="chat-settings">
+<div class="chat-field"><label for="room">Room</label><input id="room" value="lobby" maxlength="32" disabled></div>
+<div class="chat-field"><label for="user">Display name</label><input id="user" value="guest" maxlength="32"></div>
+</div>
+<span class="tag">polling</span>
+</header>
+<main class="chat-main">
+<div class="chat-board">
+<section class="chat-panel">
+<div class="chat-panel-head"><h2>Messages</h2><span class="tag">lobby</span></div>
 <ul id="messages"></ul>
+</section>
+<aside class="chat-side">
+<section class="chat-panel">
+<div class="chat-panel-head"><h2>Connection</h2><span class="tag ok">live</span></div>
+<div class="kv"><div>Endpoint</div><div>/api/rooms/lobby/messages</div><div>Mode</div><div>HTTP post + poll</div><div>Store</div><div>chat/rooms.json</div></div>
+</section>
+<section class="chat-panel">
+<div class="chat-panel-head"><h2>Status</h2></div>
 <div id="status" class="status" aria-live="polite"></div>
-<form id="post"><input id="text" autocomplete="off" maxlength="1024"><button>Send</button></form>
+</section>
+</aside>
+</div>
 </main>
+<form id="post" class="chat-composer"><input id="text" autocomplete="off" maxlength="1024" placeholder="Message lobby"><button>Send</button></form>
+</div>
 <script>
 let since=0;
 const room='lobby';
