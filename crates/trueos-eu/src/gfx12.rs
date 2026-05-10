@@ -402,6 +402,12 @@ pub const T5_LOAD_ECHO_TRUEOS_ARENA_PROGRAM_NAME: &str =
     "gfx12-t5-load-echo-live4-raw-operands-hdc1-store-then-ts-eot";
 pub const T5_LOAD_ECHO_TRUEOS_ARENA_FIRST_STORE_SEND_DWORD: usize = 51;
 pub const T5_LOAD_ECHO_TRUEOS_ARENA_SECOND_STORE_SEND_DWORD: usize = 79;
+pub const T6_ONE_ROW_MATVEC_PROGRAM_NAME: &str =
+    "gfx12-t6-small-live8-packed-bf16-dot-hdc1-stateless-store-then-ts-eot";
+pub const T6_ONE_ROW_MATVEC_LIVE_K: usize = 8;
+pub const T6_SMALL_LIVE8_TRUEOS_ARENA_EXPECTED_SENTINEL_U32: u32 = 0xC0DE_7606;
+pub const T6_SMALL_LIVE8_TRUEOS_ARENA_STORE_SEND_DWORD: usize = 97;
+pub const T6_SMALL_LIVE8_TRUEOS_ARENA_SENTINEL_DWORD: usize = 19;
 
 // T5 diagnostic control: preserve the T5 arena payload shape and final HDC1
 // send, but remove live loads and math.  It should write:
@@ -588,6 +594,39 @@ pub static T5_SMALL_LIVE4_TRUEOS_ARENA_BF16_DOT_HDC1_STATELESS_STORE_THEN_TS_EOT
         isa: EuIsa::Gfx12,
         kind: EuArtifactKind::T5SmallLive4Bf16DotThenHdc1StoreThenThreadSpawnerEot,
         words: &T5_SMALL_LIVE4_TRUEOS_ARENA_BF16_DOT_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS,
+        expects_store: true,
+    };
+
+// T6 preserved native artifact from `.codex_tmp/t6_small_live8_trueos_arena_bf16_unpack.comp`.
+//
+// Contract is identical to the proven T5 TRUEOS arena binding, but the partial
+// dot expands from live4 to live8.  This is intentionally not the hot Lumen
+// artifact yet; keep T5 as the boot-green baseline until the T6 runtime logs are
+// wired with their own proof labels.
+pub static T6_SMALL_LIVE8_TRUEOS_ARENA_BF16_DOT_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS:
+    [u32; 108] = [
+    0x80030061, 0x12050220, 0x00000024, 0x00000000, 0x80030061, 0x13054220, 0x00000000, 0x00000000,
+    0x80030061, 0x14054220, 0x00000000, 0x00000000, 0x80030061, 0x17054220, 0x00000000, 0x00000008,
+    0x80030061, 0x18054220, 0x00000000, 0xC0DE7606, 0x00030061, 0x15054660, 0x00000000, 0x00102000,
+    0xA4190640, 0x0111120A, 0x80000661, 0x13454620, 0x00000000, 0x00000000, 0x80000661, 0x14454620,
+    0x00000000, 0x00002000, 0x8003A031, 0x010C0000, 0xA402130C, 0x02100000, 0x80039131, 0x030C0000,
+    0xA402140C, 0x02100000, 0x80032169, 0x02058660, 0x02000304, 0x00000010, 0x80030065, 0x07058220,
+    0x02000304, 0xFFFF0000, 0x80030069, 0x04058660, 0x02000324, 0x00000010, 0x80030065, 0x08058220,
+    0x02000324, 0xFFFF0000, 0x80030069, 0x06058660, 0x02000344, 0x00000010, 0x80030065, 0x0C058220,
+    0x02000344, 0xFFFF0000, 0x80030069, 0x0A058660, 0x02000364, 0x00000010, 0x80030065, 0x10058220,
+    0x02000364, 0xFFFF0000, 0x2405F041, 0x07110120, 0xA30B015B, 0x02010504, 0xA309015B, 0x04010B34,
+    0xA30F015B, 0x0801092C, 0xA30D015B, 0x06010F54, 0xA30E015B, 0x0C010D1C, 0xA311015B, 0x0A010E4C,
+    0xA316015B, 0x1001115C, 0x80000101, 0x00000000, 0x00000000, 0x00000000, 0x00034231, 0x00000000,
+    0xC002150C, 0x00981624, 0x80030061, 0x7F050220, 0x00460005, 0x00000000, 0x80030131, 0x00000004,
+    0x70007F0C, 0x00000000, 0x20000060, 0x00000000,
+];
+
+pub static T6_SMALL_LIVE8_TRUEOS_ARENA_BF16_DOT_HDC1_STATELESS_STORE_THEN_TS_EOT: EuArtifact =
+    EuArtifact {
+        name: T6_ONE_ROW_MATVEC_PROGRAM_NAME,
+        isa: EuIsa::Gfx12,
+        kind: EuArtifactKind::T6SmallLive8Bf16DotThenHdc1StoreThenThreadSpawnerEot,
+        words: &T6_SMALL_LIVE8_TRUEOS_ARENA_BF16_DOT_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS,
         expects_store: true,
     };
 

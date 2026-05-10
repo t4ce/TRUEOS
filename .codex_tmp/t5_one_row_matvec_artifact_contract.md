@@ -66,6 +66,13 @@ Current boot-visible T5 state, as of the `make iso` loop ending in
   for `gfx12-t5-small-live4-packed-bf16-dot-hdc1-stateless-store-then-ts-eot`.
 - Next validation question is scaling live K or row count.
 
+Superseded rerun note:
+
+- One early readback caught a storage/transport timeout before the T5 shader
+  rung. A later restart reached T5 and repeated the packed-half proof cleanly,
+  including load echo, packed-half input summary, scale to 186 groups, and
+  `readback_ok=1 compare_ok=1`. Treat the later clean proof as current.
+
 The first executable form is intentionally `live_k_dim=4`; the full 2048-wide
 row comes later after the tiny slice proves real GPU-side input reads in
 TRUEOS, not only in the Vulkan oracle.
