@@ -7,7 +7,7 @@ static LOGGED_T4_WAITING: AtomicBool = AtomicBool::new(false);
 static LOGGED_T4_LIVE_ROW_PROBE: AtomicBool = AtomicBool::new(false);
 
 #[derive(Copy, Clone, Debug)]
-pub(crate) struct LocalGpuShadowPlan {
+pub(crate) struct LocalGpuProofPlan {
     pub(crate) call_index: u64,
     pub(crate) candidate: bool,
     pub(crate) static_tile_proven: bool,
@@ -22,7 +22,7 @@ pub(crate) fn observe_bf16_matvec_call(
     k_dim: usize,
     chunk_rows: usize,
     chunks: usize,
-) -> LocalGpuShadowPlan {
+) -> LocalGpuProofPlan {
     let call_index = SEEN_BF16_MATVECS.fetch_add(1, Ordering::AcqRel) + 1;
     let gpu = crate::intel::gpgpu_preflight_status();
     let shape_candidate =
@@ -30,7 +30,7 @@ pub(crate) fn observe_bf16_matvec_call(
     let static_tile_proven =
         gpu.eu_walker_retired && gpu.result_c_changed_by_eu && gpu.eu_dispatch_delta != 0;
     let candidate = shape_candidate && static_tile_proven && gpu.enough_for_shape;
-    let plan = LocalGpuShadowPlan {
+    let plan = LocalGpuProofPlan {
         call_index,
         candidate,
         static_tile_proven,
@@ -42,7 +42,7 @@ pub(crate) fn observe_bf16_matvec_call(
 
     if !LOGGED_SHADOW_PLAN.swap(true, Ordering::AcqRel) {
         crate::log!(
-            "lumen-gpu-shadow: director-step step=2 backend=local-gpu mode=shadow-only call={} rows={} k_dim={} chunk_rows={} chunks={} min_rows={} min_k_dim={} arena_ready={} shape_candidate={} candidate={} static_tile_proven={} program={} lane_dispatch={} expected=0x{:08X} observed=0x{:08X} output_owner=cpu-ap action=no-output-ownership next=one-live-row-shadow-compare\n",
+            "lumen-gpu-proof: director-step step=2 backend=local-gpu mode=proof-only call={} rows={} k_dim={} chunk_rows={} chunks={} min_rows={} min_k_dim={} arena_ready={} shape_candidate={} candidate={} static_tile_proven={} program={} lane_dispatch={} expected=0x{:08X} observed=0x{:08X} output_owner=cpu-ap action=no-output-ownership next=one-live-row-proof-compare\n",
             call_index,
             n_rows,
             k_dim,
@@ -63,7 +63,7 @@ pub(crate) fn observe_bf16_matvec_call(
 
     if static_tile_proven && !LOGGED_STATIC_TILE_PROOF.swap(true, Ordering::AcqRel) {
         crate::log!(
-            "lumen-gpu-shadow: director-step step=3 backend=local-gpu proof=static-dp4a-hdc-store-eot program={} lane_dispatch={} store_expected=0x{:08X} store_observed=0x{:08X} eot_retired=1 action=promote-to-live-row-shadow next=bind-manifest-row-and-x-buffer does_not_prove=model_matvec\n",
+            "lumen-gpu-proof: director-step step=3 backend=local-gpu proof=static-dp4a-hdc-store-eot program={} lane_dispatch={} store_expected=0x{:08X} store_observed=0x{:08X} eot_retired=1 action=promote-to-live-row-proof next=bind-manifest-row-and-x-buffer does_not_prove=model_matvec\n",
             gpu.eu_program_name,
             gpu.eu_dispatch_delta,
             gpu.eu_expected_store_value,
@@ -81,12 +81,12 @@ pub(crate) fn observe_live_bf16_matvec_probe(
     k_dim: usize,
     chunk_rows: usize,
     chunks: usize,
-    plan: LocalGpuShadowPlan,
+    plan: LocalGpuProofPlan,
 ) {
     if !plan.static_tile_proven {
         if !LOGGED_T4_WAITING.swap(true, Ordering::AcqRel) {
             crate::log!(
-                "lumen-gpu-shadow: director-step step=4 backend=local-gpu mode=t4-live-row-probe ready=0 reason=static-gpu-artifact-not-proven-yet call={} program={} next=wait-for-static-dp4a-hdc-store-eot\n",
+                "lumen-gpu-proof: director-step step=4 backend=local-gpu mode=t4-live-row-probe ready=0 reason=static-gpu-artifact-not-proven-yet call={} program={} next=wait-for-static-dp4a-hdc-store-eot\n",
                 plan.call_index,
                 plan.program_name
             );
@@ -103,7 +103,7 @@ pub(crate) fn observe_live_bf16_matvec_probe(
         .and_then(|values| values.checked_mul(2))
     else {
         crate::log!(
-            "lumen-gpu-shadow: director-step step=4 backend=local-gpu mode=t4-live-row-probe ready=0 reason=shape-overflow rows={} k_dim={}\n",
+            "lumen-gpu-proof: director-step step=4 backend=local-gpu mode=t4-live-row-probe ready=0 reason=shape-overflow rows={} k_dim={}\n",
             n_rows,
             k_dim
         );
@@ -111,7 +111,7 @@ pub(crate) fn observe_live_bf16_matvec_probe(
     };
     if n_rows == 0 || k_dim == 0 || x.len() < k_dim || w_rowmajor_bf16.len() < expected_w_len {
         crate::log!(
-            "lumen-gpu-shadow: director-step step=4 backend=local-gpu mode=t4-live-row-probe ready=0 reason=bad-shape rows={} k_dim={} x_len={} w_len={} expected_w_len={}\n",
+            "lumen-gpu-proof: director-step step=4 backend=local-gpu mode=t4-live-row-probe ready=0 reason=bad-shape rows={} k_dim={} x_len={} w_len={} expected_w_len={}\n",
             n_rows,
             k_dim,
             x.len(),
@@ -141,7 +141,7 @@ pub(crate) fn observe_live_bf16_matvec_probe(
     let matrix_bytes = manifest.map(|entry| entry.byte_len).unwrap_or(0);
 
     crate::log!(
-        "lumen-gpu-shadow: director-step step=4 backend=local-gpu mode=t4-live-row-probe ready=1 call={} rows={} k_dim={} chunk_rows={} chunks={} manifest={} matrix=0x{:016X} matrix_epoch={} matrix_name_hash=0x{:016X} matrix_name_len={} matrix_rows={} matrix_k_dim={} matrix_ptr=0x{:X} matrix_bytes={} matrix_access=resident-read-only row=0 row_ptr=0x{:X} x_ptr=0x{:X} x_bytes={} x_checksum=0x{:016X} row_checksum=0x{:016X} static4_weights=01020304 static4_expected_bits=0x{:08X} row0_cpu_expected_bits=0x{:08X} gpu_submission=0 output_owner=cpu-ap next=stage-manifest-row-to-gpgpu-arena does_not_prove=gpu_live_load_or_model_matvec\n",
+        "lumen-gpu-proof: director-step step=4 backend=local-gpu mode=t4-live-row-probe ready=1 call={} rows={} k_dim={} chunk_rows={} chunks={} manifest={} matrix=0x{:016X} matrix_epoch={} matrix_name_hash=0x{:016X} matrix_name_len={} matrix_rows={} matrix_k_dim={} matrix_ptr=0x{:X} matrix_bytes={} matrix_access=resident-read-only row=0 row_ptr=0x{:X} x_ptr=0x{:X} x_bytes={} x_checksum=0x{:016X} row_checksum=0x{:016X} static4_weights=01020304 static4_expected_bits=0x{:08X} row0_cpu_expected_bits=0x{:08X} gpu_submission=0 output_owner=cpu-ap next=stage-manifest-row-to-gpgpu-arena does_not_prove=gpu_live_load_or_model_matvec\n",
         plan.call_index,
         n_rows,
         k_dim,
@@ -175,7 +175,7 @@ pub(crate) fn observe_live_bf16_matvec_probe(
         row0.to_bits(),
     );
     crate::log!(
-        "lumen-gpu-shadow: director-step step=5 backend=local-gpu mode=one-tile-arena-stage staged={} reason={} call={} manifest={} row=0 tile_rows={} k_dim={} x_gpu=0x{:X} row_gpu=0x{:X} output_gpu=0x{:X} x_bytes={} row_bytes={} output_bytes={} cpu_expected_bits=0x{:08X} gpu_submission=0 output_owner=cpu-ap next=one-tile-gpu-shadow-compare-artifact does_not_prove=gpu_live_load_or_model_matvec\n",
+        "lumen-gpu-proof: director-step step=5 backend=local-gpu mode=one-tile-arena-stage staged={} reason={} call={} manifest={} row=0 tile_rows={} k_dim={} x_gpu=0x{:X} row_gpu=0x{:X} output_gpu=0x{:X} x_bytes={} row_bytes={} output_bytes={} cpu_expected_bits=0x{:08X} gpu_submission=0 output_owner=cpu-ap next=one-tile-gpu-proof-compare-artifact does_not_prove=gpu_live_load_or_model_matvec\n",
         stage.staged as u8,
         stage.reason,
         plan.call_index,
@@ -191,7 +191,7 @@ pub(crate) fn observe_live_bf16_matvec_probe(
         row0.to_bits(),
     );
     crate::log!(
-        "lumen-gpu-shadow: director-step step=6 backend=local-gpu mode=one-worker-tile-readback readback_ok={} staged={} output_zeroed={} output_first_bits=0x{:08X} output_nonzero_dwords={} output_expected_hits_lo64=0x{:016X} output_checksum=0x{:016X} cpu_expected_bits=0x{:08X} gpu_submission=0 output_owner=cpu-ap action=hold-scale next=submit-one-worker-read-alu-write-kernel does_not_prove=gpu_output_or_model_matvec\n",
+        "lumen-gpu-proof: director-step step=6 backend=local-gpu mode=one-worker-tile-readback readback_ok={} staged={} output_zeroed={} output_first_bits=0x{:08X} output_nonzero_dwords={} output_expected_hits_lo64=0x{:016X} output_checksum=0x{:016X} cpu_expected_bits=0x{:08X} gpu_submission=0 output_owner=cpu-ap action=hold-scale next=submit-one-worker-read-alu-write-kernel does_not_prove=gpu_output_or_model_matvec\n",
         stage.readback_ok as u8,
         stage.staged as u8,
         stage.output_zeroed as u8,
@@ -208,7 +208,7 @@ pub(crate) fn observe_live_bf16_matvec_probe(
             row0.to_bits(),
         );
         crate::log!(
-            "lumen-gpu-shadow: director-step step=7 backend=local-gpu mode=one-worker-output-sentinel submitted={} finished={} readback_ok={} reason={} program={} output_gpu=0x{:X} sentinel=0x{:08X} output_first_before=0x{:08X} output_first_after=0x{:08X} output_nonzero_before={} output_nonzero_after={} output_hits_lo64=0x{:016X} lane_dispatch={} finish_marker=0x{:08X} finish_expected=0x{:08X} batch_bytes=0x{:X} cpu_expected_bits=0x{:08X} output_owner=cpu-ap action=hold-scale next=replace-sentinel-with-one-row-dot does_not_prove=model_matvec\n",
+            "lumen-gpu-proof: director-step step=7 backend=local-gpu mode=one-worker-output-sentinel submitted={} finished={} readback_ok={} reason={} program={} output_gpu=0x{:X} sentinel=0x{:08X} output_first_before=0x{:08X} output_first_after=0x{:08X} output_nonzero_before={} output_nonzero_after={} output_hits_lo64=0x{:016X} lane_dispatch={} finish_marker=0x{:08X} finish_expected=0x{:08X} batch_bytes=0x{:X} cpu_expected_bits=0x{:08X} output_owner=cpu-ap action=hold-scale next=replace-sentinel-with-one-row-dot does_not_prove=model_matvec\n",
             sentinel.submitted as u8,
             sentinel.finished as u8,
             sentinel.readback_ok as u8,
@@ -227,6 +227,32 @@ pub(crate) fn observe_live_bf16_matvec_probe(
             sentinel.batch_bytes,
             row0.to_bits(),
         );
+        if sentinel.readback_ok {
+            let compare = crate::intel::submit_gpgpu_one_tile_output_compare_probe(
+                stage.output_gpu,
+                stage.output_bytes,
+                row0.to_bits(),
+            );
+            crate::log!(
+                "lumen-gpu-proof: director-step step=8 backend=local-gpu mode=one-worker-output-compare submitted={} finished={} readback_ok={} compare_ok={} reason={} program={} output_gpu=0x{:X} gpu_value=0x{:08X} cpu_expected_bits=0x{:08X} output_first_before=0x{:08X} output_first_after=0x{:08X} output_hits_lo64=0x{:016X} lane_dispatch={} finish_marker=0x{:08X} finish_expected=0x{:08X} batch_bytes=0x{:X} output_owner=cpu-ap action=hold-scale next=replace-dp4a-echo-with-live-read does_not_prove=model_matvec_or_gpu_live_load\n",
+                compare.submitted as u8,
+                compare.finished as u8,
+                compare.readback_ok as u8,
+                compare.compare_ok as u8,
+                compare.reason,
+                compare.program_name,
+                compare.output_gpu,
+                compare.gpu_value,
+                compare.cpu_expected_bits,
+                compare.output_first_before,
+                compare.output_first_after,
+                compare.output_hits_lo64,
+                compare.dispatch_delta,
+                compare.finish_marker,
+                compare.expected_finish_marker,
+                compare.batch_bytes,
+            );
+        }
     }
 }
 

@@ -204,7 +204,7 @@ kind so the next live-load kernel can be switched in without losing the known
 good static DP4A/HDC/EOT baseline.
 
 At the Lumen callsite, `burn_baby::matvec_rowmajor_bf16` now emits a one-shot
-`lumen-gpu-shadow: director-step step=4 mode=t4-live-row-probe` record once the
+`lumen-gpu-proof: director-step step=4 mode=t4-live-row-probe` record once the
 static GPU artifact is proven.  That record includes:
 
 - live `x` pointer, byte size, and checksum
@@ -257,7 +257,7 @@ calls and worker chunks, then logs occasional later samples:
 
 This gives a lightweight answer to "is it calculating right now?" while keeping
 the log useful during long prefill runs.  The real result owner is still CPU/AP;
-the local GPU path remains shadow-only until a later rung explicitly transfers
+the local GPU path remains proof-only until a later rung explicitly transfers
 or compares output ownership.
 
 ## T4.5 One-Tile Arena Stage
@@ -270,7 +270,7 @@ After the T4 live-row record, Lumen now calls
 `intel::stage_gpgpu_one_tile_shadow_probe` and emits:
 
 - `intel/gpgpu: one-tile-stage`
-- `lumen-gpu-shadow: director-step step=5 mode=one-tile-arena-stage`
+- `lumen-gpu-proof: director-step step=5 mode=one-tile-arena-stage`
 
 The staging layout is deliberately minimal:
 
@@ -290,7 +290,7 @@ Runtime checkpoint:
 - 2026-05-10 `make iso` produced `bld/trueos.iso` from
   `bld/artifacts/debug-859619db83ff/TRUEOS.elf`.
 - The subsequent Lumen inference trace reached step 5:
-  `lumen-gpu-shadow: director-step step=5 mode=one-tile-arena-stage`.
+  `lumen-gpu-proof: director-step step=5 mode=one-tile-arena-stage`.
 - The Intel staging proof reported:
   `intel/gpgpu: one-tile-stage staged=1 reason=staged`.
 - Staged layout:
@@ -332,7 +332,7 @@ before we begin adding more SIMD8 worker payloads.  It still submits no GPU
 matmul work.  Instead, it reads the just-staged arena state back and emits:
 
 - `intel/gpgpu: one-tile-readback`
-- `lumen-gpu-shadow: director-step step=6 mode=one-worker-tile-readback`
+- `lumen-gpu-proof: director-step step=6 mode=one-worker-tile-readback`
 
 Expected clean proof:
 
@@ -374,7 +374,7 @@ to the staged output tile:
 Expected clean proof:
 
 - `intel/gpgpu: one-tile-output-sentinel`
-- `lumen-gpu-shadow: director-step step=7 mode=one-worker-output-sentinel`
+- `lumen-gpu-proof: director-step step=7 mode=one-worker-output-sentinel`
 - `submitted=1`
 - `readback_ok=1`
 - `reason=sentinel-written` or `reason=sentinel-written-no-ts-delta`
@@ -481,7 +481,7 @@ For each one-tile iteration:
 
 1. Make one small artifact or staging change.
 2. Build with `!make iso`.
-3. Extract only the relevant `intel/gpgpu`, `lumen-gpu-shadow`, and `burn-baba`
+3. Extract only the relevant `intel/gpgpu`, `lumen-gpu-proof`, and `burn-baba`
    proof lines from the new drain.
 4. Update this ladder with the exact proof or blocker.
 5. Only then advance the next rung.
