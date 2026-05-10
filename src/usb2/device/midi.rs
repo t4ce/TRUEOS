@@ -15,6 +15,8 @@ const PIANO_QUEUE_PKTS: usize = 512;
 const MIDI_IDLE_SLEEP_MS: u64 = 25;
 const MIDI_READ_TIMEOUT_MS: u64 = 1000;
 const MAX_ACTIVE_MIDI_STREAMS: usize = 8;
+const PIANO_HELD_MAX_NOTES: usize = 8;
+const PIANO_DRAIN_DIRECT_AUDIO_ENABLED: bool = false;
 const PIANO_AUDIBLE_MIN_MS: u32 = 45;
 const PIANO_AUDIBLE_VEL_MS: u32 = 180;
 
@@ -52,6 +54,42 @@ pub(crate) struct PianoNoteSnapshot {
     pub velocity: u8,
 }
 
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct PianoHeldSnapshot {
+    pub seq: u16,
+    pub len: usize,
+    pub notes: [u8; PIANO_HELD_MAX_NOTES],
+    pub velocities: [u8; PIANO_HELD_MAX_NOTES],
+}
+
+#[derive(Copy, Clone, Debug)]
+struct PianoHeldState {
+    seq: u16,
+    len: usize,
+    notes: [u8; PIANO_HELD_MAX_NOTES],
+    velocities: [u8; PIANO_HELD_MAX_NOTES],
+}
+
+impl PianoHeldState {
+    const fn empty() -> Self {
+        Self {
+            seq: 0,
+            len: 0,
+            notes: [0; PIANO_HELD_MAX_NOTES],
+            velocities: [0; PIANO_HELD_MAX_NOTES],
+        }
+    }
+
+    fn snapshot(&self) -> PianoHeldSnapshot {
+        PianoHeldSnapshot {
+            seq: self.seq,
+            len: self.len,
+            notes: self.notes,
+            velocities: self.velocities,
+        }
+    }
+}
+
 static ACTIVE_MIDI_STREAMS: Mutex<Vec<ActiveMidiStream, MAX_ACTIVE_MIDI_STREAMS>> =
     Mutex::new(Vec::new());
 
@@ -60,6 +98,7 @@ static PIANO_CONTROLLER: AtomicU32 = AtomicU32::new(0);
 static PIANO_LAST_HEARTBEAT_SECS: AtomicU64 = AtomicU64::new(u64::MAX);
 static PIANO_NOTE_SEQ: AtomicU32 = AtomicU32::new(0);
 static PIANO_LAST_NOTE: AtomicU32 = AtomicU32::new(0);
+static PIANO_HELD: Mutex<PianoHeldState> = Mutex::new(PianoHeldState::empty());
 static PIANO_AUDIO_ERRS: AtomicU32 = AtomicU32::new(0);
 static PIANO_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
 static PIANO_QUEUE: Mutex<Deque<[u8; 4], PIANO_QUEUE_PKTS>> = Mutex::new(Deque::new());
@@ -98,6 +137,7 @@ fn piano_set_disconnected(controller_id: u32, slot_id: u32) {
         PIANO_CONTROLLER.store(0, Ordering::Release);
         PIANO_LAST_HEARTBEAT_SECS.store(u64::MAX, Ordering::Release);
         PIANO_LAST_NOTE.store(0, Ordering::Release);
+        *PIANO_HELD.lock() = PianoHeldState::empty();
         let mut q = PIANO_QUEUE.lock();
         while q.pop_front().is_some() {}
     }
@@ -127,11 +167,51 @@ fn piano_record_note_on(note: u8, velocity: u8) {
     PIANO_LAST_NOTE.store(pack_note_snapshot(seq, note, velocity), Ordering::Release);
 }
 
+fn piano_record_held_note_on(note: u8, velocity: u8) {
+    let mut held = PIANO_HELD.lock();
+    if let Some(idx) = held.notes[..held.len].iter().position(|&n| n == note) {
+        held.velocities[idx] = velocity;
+    } else if held.len < PIANO_HELD_MAX_NOTES {
+        let idx = held.len;
+        held.notes[idx] = note;
+        held.velocities[idx] = velocity;
+        held.len += 1;
+    } else {
+        held.notes[0] = note;
+        held.velocities[0] = velocity;
+    }
+    held.seq = held.seq.wrapping_add(1).max(1);
+}
+
+fn piano_record_held_note_off(note: u8) {
+    let mut held = PIANO_HELD.lock();
+    let Some(idx) = held.notes[..held.len].iter().position(|&n| n == note) else {
+        return;
+    };
+
+    let last = held.len - 1;
+    for i in idx..last {
+        held.notes[i] = held.notes[i + 1];
+        held.velocities[i] = held.velocities[i + 1];
+    }
+    held.notes[last] = 0;
+    held.velocities[last] = 0;
+    held.len = last;
+    held.seq = held.seq.wrapping_add(1).max(1);
+}
+
 pub(crate) fn piano_note_snapshot() -> Option<PianoNoteSnapshot> {
     if PIANO_SLOT.load(Ordering::Acquire) == 0 {
         return None;
     }
     unpack_note_snapshot(PIANO_LAST_NOTE.load(Ordering::Acquire))
+}
+
+pub(crate) fn piano_held_snapshot() -> Option<PianoHeldSnapshot> {
+    if PIANO_SLOT.load(Ordering::Acquire) == 0 {
+        return None;
+    }
+    Some(PIANO_HELD.lock().snapshot())
 }
 
 pub(crate) fn piano_connected() -> bool {
@@ -172,6 +252,17 @@ fn midi_note_on_from_packet(pkt: &[u8; 4]) -> Option<(u8, u8)> {
     let status = pkt[1] & 0xF0;
     if cin == 0x09 && status == 0x90 && pkt[3] != 0 {
         Some((pkt[2].min(127), pkt[3].min(127)))
+    } else {
+        None
+    }
+}
+
+#[inline]
+fn midi_note_off_from_packet(pkt: &[u8; 4]) -> Option<u8> {
+    let cin = pkt[0] & 0x0F;
+    let status = pkt[1] & 0xF0;
+    if (cin == 0x08 && status == 0x80) || (cin == 0x09 && status == 0x90 && pkt[3] == 0) {
+        Some(pkt[2].min(127))
     } else {
         None
     }
@@ -226,7 +317,9 @@ pub async fn piano_drain_loop() {
                 );
             }
 
-            piano_play_packet(pkt);
+            if PIANO_DRAIN_DIRECT_AUDIO_ENABLED {
+                piano_play_packet(pkt);
+            }
         }
     }
     .await;
@@ -320,6 +413,9 @@ fn handle_midi_packets(adapter: MidiAdapterKind, sample: &[u8]) {
             }
             if let Some((note, velocity)) = midi_note_on_from_packet(&pkt) {
                 piano_record_note_on(note, velocity);
+                piano_record_held_note_on(note, velocity);
+            } else if let Some(note) = midi_note_off_from_packet(&pkt) {
+                piano_record_held_note_off(note);
             }
             piano_push_packet(pkt);
         }

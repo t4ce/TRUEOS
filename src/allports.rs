@@ -58,10 +58,6 @@ pub mod local_assets {
     pub const HTTP_PORT: u16 = super::esp::HTTP_UPLOAD_PORT;
     pub const HTTP_BASE_URL: &str = "http://192.168.178.111:8080";
 
-    pub const TINYLLAMA_MODEL_URL: &str =
-        "http://192.168.178.111:8080/tools/tinyllama/model.safetensors";
-    pub const TINYLLAMA_TOKENIZER_URL: &str =
-        "http://192.168.178.111:8080/tools/tinyllama/tokenizer.json";
     pub const DEMO_YELLY_MP4_URL: &str =
         "http://192.168.178.111:8080/tools/vid/trueos_h264_diag_mbgrid_2560x1440.mp4";
     pub const AUDIO_DEMO_URL: &str = "http://192.168.178.111:8080/tools/aud/demo.wav";

@@ -20,7 +20,6 @@ pub mod probes {
 
 pub mod lumen {
     pub const BOOT_MODEL_SERVICE: bool = false;
-    pub const BOOT_ASSET_FETCH: bool = true;
     pub const RUNTIME_DIAGNOSTIC_PROBES: bool = false;
     pub const SHADOW_BF16_MATVEC_TO_NET_BACKEND: bool = true;
     pub const NET_BF16_MATVEC_SHADOW_MAX_JOBS_PER_BOOT: u64 = 8;

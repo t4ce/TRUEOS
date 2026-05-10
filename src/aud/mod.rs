@@ -30,6 +30,25 @@ static PATTERNS: Mutex<Option<PatternBank>> = Mutex::new(None);
 static PLAYER: Mutex<Option<PatternPlayer>> = Mutex::new(None);
 static BASSLINE_TOGGLE_SEQ: AtomicU32 = AtomicU32::new(0);
 
+const PIANO_PROBE_MAX_NOTES: usize = 8;
+
+#[derive(Copy, Clone)]
+struct PianoProbeHeldState {
+    len: usize,
+    notes: [u8; PIANO_PROBE_MAX_NOTES],
+}
+
+impl PianoProbeHeldState {
+    const fn empty() -> Self {
+        Self {
+            len: 0,
+            notes: [0; PIANO_PROBE_MAX_NOTES],
+        }
+    }
+}
+
+static PIANO_PROBE_HELD: Mutex<PianoProbeHeldState> = Mutex::new(PianoProbeHeldState::empty());
+
 /// Initialize the audio subsystem (HDA driver + synth engine + pattern bank)
 pub fn init() -> Result<(), &'static str> {
     // Ensure HDA driver is initialized
@@ -230,6 +249,65 @@ pub fn render_retro_bassline() -> Result<(alloc::vec::Vec<i16>, u16, u32), &'sta
     let mut synth_lock = SYNTH.lock();
     let engine = synth_lock.as_mut().ok_or("Synth not initialized")?;
     Ok((pattern.render(engine), bpm, pattern.step_duration_ms()))
+}
+
+fn note_in_slice(notes: &[u8], len: usize, note: u8) -> bool {
+    notes[..len.min(notes.len())].iter().any(|&n| n == note)
+}
+
+/// Render and play the currently held piano notes as one mixed HDA buffer.
+pub fn play_piano_held_probe(
+    notes: &[u8],
+    velocities: &[u8],
+    len: usize,
+    duration_ms: u32,
+) -> Result<(), &'static str> {
+    ensure_init()?;
+
+    let held_len = len
+        .min(notes.len())
+        .min(velocities.len())
+        .min(PIANO_PROBE_MAX_NOTES);
+
+    let samples = {
+        let mut held = PIANO_PROBE_HELD.lock();
+        let mut synth_lock = SYNTH.lock();
+        let engine = synth_lock.as_mut().ok_or("Synth not initialized")?;
+        let saved_wf = engine.waveform;
+        let saved_env = engine.envelope;
+
+        engine.waveform = Waveform::Triangle;
+        engine.envelope = Envelope::new(2, 70, 70, 80);
+
+        for idx in 0..held.len {
+            let old_note = held.notes[idx];
+            if !note_in_slice(notes, held_len, old_note) {
+                engine.note_off(old_note);
+            }
+        }
+
+        for idx in 0..held_len {
+            let note = notes[idx].min(127);
+            if !note_in_slice(&held.notes, held.len, note) {
+                engine.note_on(note, velocities[idx].clamp(32, 127));
+            }
+        }
+
+        held.len = held_len;
+        for idx in 0..PIANO_PROBE_MAX_NOTES {
+            held.notes[idx] = if idx < held_len { notes[idx].min(127) } else { 0 };
+        }
+
+        let frames = synth::ms_to_samples(duration_ms).max(1) as usize;
+        let mut buffer = alloc::vec![0i16; frames * synth::CHANNELS as usize];
+        engine.render(buffer.as_mut_slice(), frames);
+
+        engine.waveform = saved_wf;
+        engine.envelope = saved_env;
+        buffer
+    };
+
+    play_samples(&samples, duration_ms)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

@@ -122,7 +122,10 @@ const MI_BATCH_BUFFER_END: u32 = 0x0500_0000;
 const MI_NOOP: u32 = 0;
 const INTEL_LEGACY_64B_CONTEXT: u32 = 3;
 const GEN8_PAGE_RW: u64 = 1 << 1;
+const GEN8_PAGE_PWT: u64 = 1 << 3;
+const GEN8_PAGE_PCD: u64 = 1 << 4;
 const GEN8_CTX_VALID: u32 = 1 << 0;
+const GEN8_CTX_PPGTT_ENABLE: u32 = 1 << 5;
 const GEN8_CTX_PRIVILEGE: u32 = 1 << 8;
 const GEN12_CTX_PRIORITY_NORMAL: u32 = 1 << 9;
 const GEN8_CTX_ADDRESSING_MODE_SHIFT: u32 = 3;
@@ -324,18 +327,19 @@ fn init_minimal_ppgtt(warm: RenderWarmState) -> bool {
     let pdp_off = 4096usize;
     let pd_off = 8192usize;
     let pt_off = 12288usize;
-    let entry_present_rw = crate::intel::GEN8_PAGE_PRESENT | GEN8_PAGE_RW;
+    let pte_present_rw = crate::intel::GEN8_PAGE_PRESENT | GEN8_PAGE_RW;
+    let pde_present_rw_uc = pte_present_rw | GEN8_PAGE_PWT | GEN8_PAGE_PCD;
 
     unsafe {
         core::ptr::write_bytes(warm.ppgtt_virt, 0, warm.ppgtt_len);
         let pml4 = warm.ppgtt_virt.add(pml4_off) as *mut u64;
         let pdp = warm.ppgtt_virt.add(pdp_off) as *mut u64;
         let pd = warm.ppgtt_virt.add(pd_off) as *mut u64;
-        core::ptr::write_volatile(pml4, (warm.ppgtt_phys + pdp_off as u64) | entry_present_rw);
-        core::ptr::write_volatile(pdp, (warm.ppgtt_phys + pd_off as u64) | entry_present_rw);
+        core::ptr::write_volatile(pml4, (warm.ppgtt_phys + pdp_off as u64) | pde_present_rw_uc);
+        core::ptr::write_volatile(pdp, (warm.ppgtt_phys + pd_off as u64) | pde_present_rw_uc);
         for index in 0..PPGTT_PT_COUNT {
             let pt_phys = warm.ppgtt_phys + pt_off as u64 + (index as u64) * 4096;
-            core::ptr::write_volatile(pd.add(index), pt_phys | entry_present_rw);
+            core::ptr::write_volatile(pd.add(index), pt_phys | pde_present_rw_uc);
         }
     }
 
@@ -357,30 +361,30 @@ fn init_minimal_ppgtt(warm: RenderWarmState) -> bool {
         true
     }
 
-    let ok = map_region(warm, GPU_VA_RING_BASE, warm.ring_phys, warm.ring_len, entry_present_rw)
+    let ok = map_region(warm, GPU_VA_RING_BASE, warm.ring_phys, warm.ring_len, pte_present_rw)
         && map_region(
             warm,
             GPU_VA_CONTEXT_BASE,
             warm.context_phys,
             warm.context_len,
-            entry_present_rw,
+            pte_present_rw,
         )
-        && map_region(warm, GPU_VA_BATCH_BASE, warm.batch_phys, warm.batch_len, entry_present_rw)
+        && map_region(warm, GPU_VA_BATCH_BASE, warm.batch_phys, warm.batch_len, pte_present_rw)
         && map_region(
             warm,
             GPU_VA_DRAW_STATE_BASE,
             warm.draw_state_phys,
             warm.draw_state_len,
-            entry_present_rw,
+            pte_present_rw,
         )
-        && map_region(warm, GPU_VA_VERTEX_BASE, warm.vertex_phys, warm.vertex_len, entry_present_rw)
-        && map_region(warm, GPU_VA_RESULT_BASE, warm.result_phys, warm.result_len, entry_present_rw)
+        && map_region(warm, GPU_VA_VERTEX_BASE, warm.vertex_phys, warm.vertex_len, pte_present_rw)
+        && map_region(warm, GPU_VA_RESULT_BASE, warm.result_phys, warm.result_len, pte_present_rw)
         && map_region(
             warm,
             GPU_VA_STREAMOUT_BASE,
             warm.streamout_phys,
             warm.streamout_len,
-            entry_present_rw,
+            pte_present_rw,
         )
         && (warm.gpgpu_arena_virt.is_null()
             || map_region(
@@ -388,7 +392,7 @@ fn init_minimal_ppgtt(warm: RenderWarmState) -> bool {
                 GPU_VA_GPGPU_TILE_ARENA_BASE,
                 warm.gpgpu_arena_phys,
                 warm.gpgpu_arena_len,
-                entry_present_rw,
+                pte_present_rw,
             ));
 
     crate::intel::dma_flush(warm.ppgtt_virt, warm.ppgtt_len);
@@ -487,6 +491,19 @@ fn submit_warm_render_batch(
     if is_gpgpu_submit_name(submit_name) {
         recover_render_engine_after_nonretired_submit(dev, warm, "gpgpu-pre-submit");
         crate::intel::mmio_write(dev, GEN12_RCU_MODE, masked_bit_enable(GEN12_RCU_MODE_CCS_ENABLE));
+    }
+
+    let ppgtt_ok = !GPGPU_USE_MINIMAL_PPGTT || init_minimal_ppgtt(warm);
+    crate::log!(
+        "intel/gpgpu: ppgtt-map enabled={} ok={} pml4_phys=0x{:X} bytes=0x{:X} batch_start_space={}\n",
+        GPGPU_USE_MINIMAL_PPGTT as u8,
+        ppgtt_ok as u8,
+        warm.ppgtt_phys,
+        warm.ppgtt_len,
+        if GPGPU_BATCH_START_IN_PPGTT { "ppgtt" } else { "ggtt" },
+    );
+    if !ppgtt_ok {
+        return false;
     }
 
     let ring_tail_bytes = build_ring_batch_start(warm, GPU_VA_BATCH_BASE);
@@ -829,7 +846,12 @@ fn recover_render_engine_after_nonretired_submit(
 fn build_ring_batch_start(warm: RenderWarmState, batch_gpu_addr: u64) -> usize {
     let dwords =
         unsafe { core::slice::from_raw_parts_mut(warm.ring_virt as *mut u32, BLT_RING_DWORDS) };
-    dwords[0] = MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_GTT;
+    dwords[0] = MI_BATCH_BUFFER_START_GEN8
+        | if GPGPU_BATCH_START_IN_PPGTT {
+            MI_BATCH_PPGTT
+        } else {
+            MI_BATCH_GTT
+        };
     dwords[1] = batch_gpu_addr as u32;
     dwords[2] = (batch_gpu_addr >> 32) as u32;
     dwords[3] = MI_NOOP;
@@ -861,6 +883,11 @@ fn build_execlist_context_descriptor(context_gpu_addr: u64) -> (u32, u32) {
     let base = (context_gpu_addr as u32) & 0xFFFF_F000;
     let desc = base
         | GEN8_CTX_VALID
+        | if GPGPU_USE_MINIMAL_PPGTT {
+            GEN8_CTX_PPGTT_ENABLE
+        } else {
+            0
+        }
         | CTX_DESC_FORCE_RESTORE
         | GEN8_CTX_PRIVILEGE
         | GEN12_CTX_PRIORITY_NORMAL
@@ -1002,9 +1029,17 @@ fn init_gen12_lrc_context_image(
     state[idx + 12] = 0x2278;
     state[idx + 13] = 0;
     state[idx + 14] = 0x2274;
-    state[idx + 15] = 0;
+    state[idx + 15] = if GPGPU_USE_MINIMAL_PPGTT {
+        (warm.ppgtt_phys >> 32) as u32
+    } else {
+        0
+    };
     state[idx + 16] = 0x2270;
-    state[idx + 17] = 0;
+    state[idx + 17] = if GPGPU_USE_MINIMAL_PPGTT {
+        warm.ppgtt_phys as u32
+    } else {
+        0
+    };
     idx += 18;
 
     state[idx] = mi_lri_cmd(3, MI_LRI_FORCE_POSTED);
@@ -1149,6 +1184,8 @@ const GPGPU_LOAD_DUMMY_CURBE: bool = true;
 const GPGPU_DUMMY_CURBE_BYTES: usize = 64;
 const GPGPU_CONTIGUOUS_VFE_IDD_WALKER: bool = false;
 const GPGPU_MESA_POST_VFE_PIPE_CONTROL: bool = false;
+const GPGPU_USE_MINIMAL_PPGTT: bool = true;
+const GPGPU_BATCH_START_IN_PPGTT: bool = false;
 // ADL-S 8086:4680 is Gfx12.0/Xe-LP.  Keep the active milestone probe as the
 // smallest Mesa-shaped root thread: no CURBE payload, one SIMD8 group, TS EOT.
 const ACTIVE_GFX12_EOT_VARIANT: trueos_eu::gfx12::Gfx12EotVariant =
@@ -2591,6 +2628,9 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     const IDD_LOAD_DWORDS: usize = IDD_PAYLOAD_DWORDS;
     const CURBE_READ_LENGTH_8DW: u32 = if GPGPU_LOAD_DUMMY_CURBE { 1 } else { 0 };
     const GPGPU_THREADS_IN_GROUP: u32 = 1;
+    const GPGPU_WALKER_GROUP_X_DIM: u32 = 256;
+    const GPGPU_WALKER_GROUP_Y_DIM: u32 = 1;
+    const GPGPU_WALKER_GROUP_Z_DIM: u32 = 1;
     const CURBE_TOTAL_BYTES: usize = if GPGPU_LOAD_DUMMY_CURBE {
         GPGPU_DUMMY_CURBE_BYTES
     } else {
@@ -2633,7 +2673,7 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     // Gen12 legacy GPGPU_WALKER is a 15-dword packet.  The PRM default length
     // is 0x0D with a length bias of 2; keep the mask shape aligned with Mesa's
     // minimal legacy walker while the low SIMD8 lanes remain the consumed bits.
-    const GPGPU_WALKER_SIMD8_RIGHT_MASK: u32 = 0x0000_0001;
+    const GPGPU_WALKER_SIMD8_RIGHT_MASK: u32 = 0x0000_00FF;
     const GPGPU_WALKER_BOTTOM_MASK: u32 = 0xFFFF_FFFF;
     const STATE_SIP_CMD: u32 = 0x6102_0001;
     // The repeatable stall sits at GPGPU_WALKER with no visible TDL dispatch.
@@ -2973,12 +3013,12 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     push(batch_dwords, &mut cursor, GPGPU_THREADS_IN_GROUP - 1)?; // SIMD8 counters
     push(batch_dwords, &mut cursor, 0)?; // Thread Group ID Starting X
     push(batch_dwords, &mut cursor, 0)?; // Reserved
-    push(batch_dwords, &mut cursor, 1)?; // Thread Group ID X Dimension
+    push(batch_dwords, &mut cursor, GPGPU_WALKER_GROUP_X_DIM)?; // Thread Group ID X Dimension
     push(batch_dwords, &mut cursor, 0)?; // Thread Group ID Starting Y
     push(batch_dwords, &mut cursor, 0)?; // Reserved
-    push(batch_dwords, &mut cursor, 1)?; // Thread Group ID Y Dimension
+    push(batch_dwords, &mut cursor, GPGPU_WALKER_GROUP_Y_DIM)?; // Thread Group ID Y Dimension
     push(batch_dwords, &mut cursor, 0)?; // Thread Group ID Starting/Resume Z
-    push(batch_dwords, &mut cursor, 1)?; // Thread Group ID Z Dimension
+    push(batch_dwords, &mut cursor, GPGPU_WALKER_GROUP_Z_DIM)?; // Thread Group ID Z Dimension
     push(batch_dwords, &mut cursor, GPGPU_WALKER_SIMD8_RIGHT_MASK)?;
     push(batch_dwords, &mut cursor, GPGPU_WALKER_BOTTOM_MASK)?;
     push(batch_dwords, &mut cursor, MEDIA_STATE_FLUSH_CMD)?;
@@ -3003,6 +3043,8 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     let thread_height = ((walker_dw4 >> 8) & 0x3F) + 1;
     let thread_depth = ((walker_dw4 >> 16) & 0x3F) + 1;
     let walker_group_threads = thread_width * thread_height * thread_depth;
+    let walker_group_count = walker_x_dim * walker_y_dim * walker_z_dim;
+    let expected_hw_threads = walker_group_count * walker_group_threads;
     let idd_dw6 = idd_words[6];
     let idd_barrier_enable = (idd_dw6 >> 21) & 1;
     let idd_slm_size = (idd_dw6 >> 16) & 0x1F;
@@ -3059,7 +3101,7 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
         RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
     );
     crate::log!(
-        "intel/gpgpu: compute-walker-resource-contract program_source={} walker_dw4=0x{:08X} simd_size={} simd_mask_bits={} thread_width={} thread_height={} thread_depth={} walker_group_threads={} idd_threads_in_group={} group_count_matches_idd={} idd_barrier_enable={} idd_slm_size={} x_dim={} y_dim={} z_dim={} right_mask=0x{:08X} bottom_mask=0x{:08X} right_lanes_consumed={} bottom_lanes_consumed={} raw_right_mask_bits={} raw_bottom_mask_bits={} expected_hw_threads=1 probe=prm-len13-one-group-legacy-vfe expected_good=post-walker-marker-or-eot-retired failure_disproves=legacy-walker-dword-layout note=one-group-simd8-mask\n",
+        "intel/gpgpu: compute-walker-resource-contract program_source={} walker_dw4=0x{:08X} simd_size={} simd_mask_bits={} thread_width={} thread_height={} thread_depth={} walker_group_threads={} idd_threads_in_group={} group_count_matches_idd={} idd_barrier_enable={} idd_slm_size={} x_dim={} y_dim={} z_dim={} group_count={} right_mask=0x{:08X} bottom_mask=0x{:08X} right_lanes_consumed={} bottom_lanes_consumed={} raw_right_mask_bits={} raw_bottom_mask_bits={} expected_hw_threads={} expected_lane_dispatch={} probe=prm-len13-scaled-groups-legacy-vfe expected_good=post-walker-marker-or-eot-retired failure_disproves=legacy-walker-dword-layout note=scaled-groups-simd8-mask\n",
         program.name,
         walker_dw4,
         (walker_dw4 >> 30) & 0x3,
@@ -3075,12 +3117,15 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
         walker_x_dim,
         walker_y_dim,
         walker_z_dim,
+        walker_group_count,
         batch_dwords[walker_start + 13],
         batch_dwords[walker_start + 14],
         right_lanes_consumed,
         bottom_lanes_consumed,
         batch_dwords[walker_start + 13].count_ones(),
         batch_dwords[walker_start + 14].count_ones(),
+        expected_hw_threads,
+        expected_hw_threads * right_lanes_consumed,
     );
     crate::log!(
         "intel/gpgpu: mesa-shaped-shell program_source={} pure_eot={} eu_bytes=0x{:X} idd_dw2=0x{:08X} idd_dw3=0x{:08X} idd_dw4=0x{:08X} idd_dw5=0x{:08X} idd_dw6=0x{:08X} idd_dw7=0x{:08X} vfe_dw1=0x{:08X} vfe_dw3=0x{:08X} vfe_dw5=0x{:08X} curbe_present={} curbe_bytes=0x{:X} sampler_state_pointer=0x{:X} sampler_count=0 binding_table_pointer=0x{:X} binding_table_count={} scratch_disabled=1 slm_size={} barrier_enable={} walker_simd_size={} walker_threads={} right_mask=0x{:08X} bottom_mask=0x{:08X} contiguous_vfe_idd_walker={} expected_good=\"post_walker_marker-or-eot_retired\" failure_disproves=\"post-vfe-command-gap-before-midl\"\n",
