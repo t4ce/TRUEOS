@@ -7,9 +7,7 @@ use ::lumen::autograd::{Tensor, TensorRawData, no_grad};
 use ::lumen::init::{ParameterInitMode, with_parameter_init_mode};
 use ::lumen::layers::KVCache;
 use ::lumen::models::{LlamaConfig, LlamaModel};
-use ::lumen::precision::{
-    DType, PrecisionConfig, with_precision_config, with_runtime_component_dtypes,
-};
+use ::lumen::precision::DType;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
@@ -1032,14 +1030,6 @@ fn safetensor_dtype_nbytes(dtype: &str) -> Option<usize> {
     }
 }
 
-fn bytes_to_u16_vec(bytes: &[u8]) -> Vec<u16> {
-    let mut out = Vec::with_capacity(bytes.len() / 2);
-    for chunk in bytes.chunks_exact(2) {
-        out.push(u16::from_le_bytes([chunk[0], chunk[1]]));
-    }
-    out
-}
-
 fn lumen_probe_hidden(k_dim: usize) -> Vec<f32> {
     let mut hidden: Vec<f32> = Vec::with_capacity(k_dim);
     for idx in 0..k_dim {
@@ -1461,8 +1451,8 @@ async fn load_lumen_model_from_trueosfs(
 
         let decode_start = embassy_time_driver::now();
         let raw = match dtype {
-            "BF16" => (DType::BF16, TensorRawData::BF16(bytes_to_u16_vec(&bytes))),
-            "F16" => (DType::F16, TensorRawData::F16(bytes_to_u16_vec(&bytes))),
+            "BF16" => (DType::BF16, TensorRawData::BF16LeBytes(bytes)),
+            "F16" => (DType::F16, TensorRawData::F16LeBytes(bytes)),
             "F32" => {
                 let mut values = Vec::with_capacity(bytes.len() / 4);
                 for chunk in bytes.chunks_exact(4) {
@@ -1475,7 +1465,6 @@ async fn load_lumen_model_from_trueosfs(
         phase_ms.decode = phase_ms
             .decode
             .saturating_add(elapsed_ms_since(decode_start));
-        drop(bytes);
 
         let import_start = embassy_time_driver::now();
         if let Err(err) = tensor.import_raw(shape.clone(), raw.0, raw.1) {
@@ -2407,11 +2396,6 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
             .as_str(),
         );
         let runtime_start = embassy_time_driver::now();
-        let precision = PrecisionConfig {
-            parameter_dtype: DType::BF16,
-            runtime_dtype: DType::BF16,
-            allow_parameter_dtype_copies: true,
-        };
         let config = lumen_model_config(LUMEN_RUNTIME_MAX_SEQ_LEN);
         log(
             format!(
@@ -2424,12 +2408,13 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
             .as_str(),
         );
         let model_construct_start = embassy_time_driver::now();
-        let model = with_precision_config(precision, || {
-            with_runtime_component_dtypes(Some(DType::BF16), Some(DType::BF16), || {
-                with_parameter_init_mode(ParameterInitMode::Placeholder, || {
-                    LlamaModel::new(config.clone())
-                })
-            })
+        let model = with_parameter_init_mode(ParameterInitMode::Placeholder, || {
+            LlamaModel::new_with_runtime_dtypes(
+                config.clone(),
+                DType::BF16,
+                DType::BF16,
+                DType::BF16,
+            )
         });
         let model_construct_ms = elapsed_ms_since(model_construct_start);
         log(

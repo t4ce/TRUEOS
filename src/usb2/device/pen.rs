@@ -35,7 +35,6 @@ const FAST_BOT_INITIAL_IO_BYTES: usize =
     crate::allcaps::storage::USB_MASS_FAST_BOT_INITIAL_IO_BYTES;
 const FAST_BOT_WRITE_MAX_IO_BYTES: usize =
     crate::allcaps::storage::USB_MASS_FAST_BOT_WRITE_MAX_IO_BYTES;
-const SKHYNIX_USE_UAS: bool = crate::allcaps::storage::USB_MASS_SKHYNIX_USE_UAS;
 const USB_DT_INTERFACE: u8 = 0x04;
 const USB_DT_ENDPOINT: u8 = 0x05;
 const USB_DT_PIPE_USAGE: u8 = 0x24;
@@ -3089,78 +3088,12 @@ pub(crate) async fn maybe_start_mass_storage(
         }
     }
 
-    if SKHYNIX_USE_UAS && is_skhynix_pssd_x31(vendor_id, product_id) {
-        let Some(uas_target) =
-            mass::pick_skhynix_uas_target(vendor_id, product_id, &transport_plan.uas)
-        else {
-            crate::log!(
-                "crabusb: mass {:04X}:{:04X} uas-skhynix selected but fixed endpoint target is missing; no bot fallback\n",
-                vendor_id,
-                product_id
-            );
-            return true;
-        };
-
-        let device = match host.open_device(dev_info).await {
-            Ok(device) => device,
-            Err(err) => {
-                crate::log!(
-                    "crabusb: mass {:04X}:{:04X} uas-skhynix open failed: {:?}\n",
-                    vendor_id,
-                    product_id,
-                    err
-                );
-                return true;
-            }
-        };
-
-        let active_stream = ActiveMassStream {
-            controller_id,
-            slot_id: u32::from(device.slot_id()),
-        };
-        if !register_active_mass_stream(active_stream) {
-            return true;
-        }
-
-        match mass_storage_uas_skhynix_task(
-            device,
-            controller_id,
-            uas_target,
-            topology.port_speed,
-            uas_candidate_count,
-        ) {
-            Ok(token) => {
-                spawner.spawn(token);
-                crate::log!(
-                    "crabusb: mass {:04X}:{:04X} uas-skhynix handoff if#{} alt={} cfg={} cmd_out=0x{:02X} status_in=0x{:02X} data_in=0x{:02X} data_out=0x{:02X} transport={} profile={} speed={:?} uas_candidates={}\n",
-                    vendor_id,
-                    product_id,
-                    uas_target.interface_number,
-                    uas_target.alternate_setting,
-                    uas_target.configuration_value,
-                    uas_target.command_out,
-                    uas_target.status_in,
-                    uas_target.data_in,
-                    uas_target.data_out,
-                    mass_transport_label(mass::MassTransportKind::Uas),
-                    mass_io_profile_label(MassIoProfile::UasSkhynix),
-                    topology.port_speed,
-                    uas_candidate_count,
-                );
-            }
-            Err(err) => {
-                unregister_active_mass_stream(active_stream);
-                crate::log!(
-                    "crabusb: mass {:04X}:{:04X} uas-skhynix spawn failed if#{} alt={}: {:?}\n",
-                    vendor_id,
-                    product_id,
-                    uas_target.interface_number,
-                    uas_target.alternate_setting,
-                    err
-                );
-            }
-        }
-
+    if is_skhynix_pssd_x31(vendor_id, product_id) {
+        crate::log!(
+            "crabusb: mass {:04X}:{:04X} skhynix legacy mass-storage path deprecated; ignoring device for old disk/TRUEOSFS handoff\n",
+            vendor_id,
+            product_id
+        );
         return true;
     }
 
