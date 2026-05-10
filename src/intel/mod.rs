@@ -112,6 +112,48 @@ pub(crate) struct GpgpuPreflightStatus {
     pub(crate) result_c_changed_by_eu: bool,
 }
 
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct GpgpuOneTileStageProof {
+    pub(crate) staged: bool,
+    pub(crate) reason: &'static str,
+    pub(crate) readback_ok: bool,
+    pub(crate) output_zeroed: bool,
+    pub(crate) arena_mapped: bool,
+    pub(crate) arena_gpu_base: u64,
+    pub(crate) x_gpu: u64,
+    pub(crate) row_gpu: u64,
+    pub(crate) output_gpu: u64,
+    pub(crate) x_bytes: usize,
+    pub(crate) row_bytes: usize,
+    pub(crate) output_bytes: usize,
+    pub(crate) tile_rows: usize,
+    pub(crate) k_dim: usize,
+    pub(crate) output_first_bits: u32,
+    pub(crate) output_nonzero_dwords: usize,
+    pub(crate) output_expected_hits_lo64: u64,
+    pub(crate) output_checksum: u64,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct GpgpuOneTileSentinelProof {
+    pub(crate) submitted: bool,
+    pub(crate) finished: bool,
+    pub(crate) readback_ok: bool,
+    pub(crate) reason: &'static str,
+    pub(crate) program_name: &'static str,
+    pub(crate) output_gpu: u64,
+    pub(crate) sentinel: u32,
+    pub(crate) output_first_before: u32,
+    pub(crate) output_first_after: u32,
+    pub(crate) output_nonzero_before: usize,
+    pub(crate) output_nonzero_after: usize,
+    pub(crate) output_hits_lo64: u64,
+    pub(crate) dispatch_delta: u64,
+    pub(crate) finish_marker: u32,
+    pub(crate) expected_finish_marker: u32,
+    pub(crate) batch_bytes: usize,
+}
+
 fn pick_media_boot_demo_spawner() -> Option<(u32, SendSpawner)> {
     let background_slots = crate::workers::background_worker_slots();
 
@@ -362,6 +404,38 @@ pub(crate) fn gpgpu_preflight_status() -> GpgpuPreflightStatus {
         eu_program_name: status.eu_program_name,
         result_c_changed_by_eu: status.result_c_changed_by_eu,
     }
+}
+
+pub(crate) fn stage_gpgpu_one_tile_shadow_probe(
+    x: &[f32],
+    row_bf16: &[u8],
+    k_dim: usize,
+    row_index: usize,
+    x_checksum: u64,
+    row_checksum: u64,
+    cpu_expected_bits: u32,
+) -> GpgpuOneTileStageProof {
+    self::gpgpu::stage_gpgpu_one_tile_shadow_probe(
+        x,
+        row_bf16,
+        k_dim,
+        row_index,
+        x_checksum,
+        row_checksum,
+        cpu_expected_bits,
+    )
+}
+
+pub(crate) fn submit_gpgpu_one_tile_output_sentinel_probe(
+    output_gpu: u64,
+    output_bytes: usize,
+    cpu_expected_bits: u32,
+) -> GpgpuOneTileSentinelProof {
+    self::gpgpu::submit_gpgpu_one_tile_output_sentinel_probe(
+        output_gpu,
+        output_bytes,
+        cpu_expected_bits,
+    )
 }
 
 pub fn guc_status(warm: RenderWarmState) -> u32 {

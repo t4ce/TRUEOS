@@ -177,7 +177,9 @@ The current correct label for the local GPU side is still "shadow/probe", not
 
 ## T4 Live-Input Sidepath
 
-Status: implemented as a CPU-authoritative probe scaffold.
+Status: runtime-observed as a CPU-authoritative live-row probe.  This is ready
+to feed the next artifact, but it is not yet a live GPU-load or model-matvec
+proof.
 
 The old T3 artifact is preserved as the active GPU proof:
 `gfx12-static-dp4a-hdc1-stateless-store-then-ts-eot`.
@@ -198,10 +200,196 @@ static GPU artifact is proven.  That record includes:
 - CPU-authoritative row-0 dot bits
 - CPU-authoritative `live x[0..4] * static [1,2,3,4]` bits
 
+The 2026-05-10 Lumen runtime trace observed the sidepath during a real
+`model.layers.9.input_layernorm.weight` inference call:
+
+- `rows=1792`
+- `k_dim=2048`
+- `chunk_rows=27`
+- `chunks=67`
+- `x_bytes=8192`
+- `x_checksum=0x744A3F6EB4387271`
+- `row_checksum=0x04E06A8D7736AB16`
+- `static4_weights=01020304`
+- `static4_expected_bits=0x3E181500`
+- `row0_cpu_expected_bits=0xBD25C5EA`
+- `gpu_submission=0`
+- `next=stage-manifest-row-to-gpgpu-arena`
+- `does_not_prove=gpu_live_load_or_model_matvec`
+
 This proves the exact tuple the first real T4 GPU load kernel must reproduce:
 manifest row + live activation vector + expected output.  It still logs
 `gpu_submission=0`, so it does not overclaim live GPU memory loads yet.
 
-The 2026-05-10 08:55 pasted drain contains the GPGPU preflight and scale ladder
-only.  A T4 sidepath record is expected later in the same boot once the Lumen
-BF16 matvec path is exercised.
+Readiness call: the T4 live-input capture/CPU-reference sidepath is complete
+enough to proceed to the next rung.  The next rung should be a guarded one-tile
+GPU shadow compare that keeps CPU/AP ownership of the real output, stages one
+manifest row plus `x` into the GPGPU arena, submits one tile only, and compares
+the GPU-written result against the already logged CPU reference.
+
+## T4.5 One-Tile Arena Stage
+
+Status: runtime-observed as a staging-only bridge from T4 to the first one-tile
+GPU shadow compare.  This proves CPU-side staging into the mapped GPGPU arena,
+not a live GPU-load or model-matvec result.
+
+After the T4 live-row record, Lumen now calls
+`intel::stage_gpgpu_one_tile_shadow_probe` and emits:
+
+- `intel/gpgpu: one-tile-stage`
+- `lumen-gpu-shadow: director-step step=5 mode=one-tile-arena-stage`
+
+The staging layout is deliberately minimal:
+
+- `x` vector at `arena_gpu_base + 0`
+- row-0 BF16 weights at `arena_gpu_base + x_bytes`
+- output tile at `arena_gpu_base + x_bytes + weight_tile_bytes`
+
+The stage copies the live `x` bytes and one BF16 row into the mapped GPGPU
+arena, zeros the rest of the weight tile/output tile, flushes those ranges, and
+checksums the staged bytes back from CPU memory.  It still logs
+`gpu_submission=0`, so this is not a live GPU-load proof.  Its job is to make
+the next artifact precise: the GPU kernel should read those staged addresses,
+write one shadow result, and compare that result to `row0_cpu_expected_bits`.
+
+Runtime checkpoint:
+
+- 2026-05-10 `make iso` produced `bld/trueos.iso` from
+  `bld/artifacts/debug-859619db83ff/TRUEOS.elf`.
+- The subsequent Lumen inference trace reached step 5:
+  `lumen-gpu-shadow: director-step step=5 mode=one-tile-arena-stage`.
+- The Intel staging proof reported:
+  `intel/gpgpu: one-tile-stage staged=1 reason=staged`.
+- Staged layout:
+  `arena_gpu_base=0x4000000`, `x_gpu=0x4000000`,
+  `row_gpu=0x4002000`, `output_gpu=0x4102000`.
+- Staged byte counts:
+  `x_bytes=8192`, `row_bytes=4096`, `output_bytes=1024`.
+- Staged checksums matched the T4 live-row tuple:
+  `x_checksum=0x744A3F6EB4387271`,
+  `staged_x_checksum=0x744A3F6EB4387271`,
+  `row_checksum=0x04E06A8D7736AB16`,
+  `staged_row_checksum=0x04E06A8D7736AB16`.
+- CPU reference remains:
+  `cpu_expected_bits=0xBD25C5EA`.
+- The proof still logs `gpu_submission=0` and
+  `does_not_prove=gpu_live_load_or_model_matvec`.
+
+Upfront GPGPU trace checkpoint:
+
+- The next captured upfront GPGPU trace still preserves the T3 baseline:
+  `186` groups retire cleanly with `observed_lane_dispatch=1488`,
+  `post_walker_marker=1`, `store_seen=1`, and `store_value=0xC0DE7733`.
+- The known scale cliff is unchanged: the `224` group probe reaches only
+  `observed_lane_dispatch=304`, keeps `store_seen=1`, but does not retire the
+  walker or post-walker marker.
+- The same trace reaches Lumen and observes the T4.5 stage cleanly after the
+  static T3 proof is latched.
+
+Readiness call: T4.5 staging is complete, but it is not enough to widen the
+worker-count ladder yet.  The next rung is a readback/understanding checkpoint
+for the one-worker tile before any new GPU output is claimed.
+
+## T4.6 One-Worker Tile Readback
+
+Status: implemented, awaiting runtime observation.
+
+This rung exists because the one-tile scenario needs its own before-state proof
+before we begin adding more SIMD8 worker payloads.  It still submits no GPU
+matmul work.  Instead, it reads the just-staged arena state back and emits:
+
+- `intel/gpgpu: one-tile-readback`
+- `lumen-gpu-shadow: director-step step=6 mode=one-worker-tile-readback`
+
+Expected clean proof:
+
+- `readback_ok=1`
+- `staged=1`
+- `x_match=1`
+- `row_match=1`
+- `output_zeroed=1`
+- `output_first_bits=0x00000000`
+- `output_nonzero_dwords=0`
+- `output_expected_hits_lo64=0x0000000000000000`
+- `gpu_submission=0`
+
+The important interpretation is narrow: the arena contains the live `x` vector
+and row-0 BF16 bytes, the shadow output tile is still untouched zero state, and
+CPU/AP still owns the real inference result.  This proves the starting line for
+the first actual one-worker read/ALU/write kernel, not GPU output or model
+matvec correctness.
+
+Only after this readback is runtime-clean should the next artifact submit a
+single one-worker tile kernel.  Scale probing from roughly `12` up to `256`
+SIMD8 payloads belongs after the first one-worker output readback is understood.
+
+## T4.7 One-Worker Output Sentinel
+
+Status: implemented, awaiting runtime observation.
+
+This rung opts in the first GPU write to the staged one-tile output arena.  It
+does not attempt model math.  It patches a tiny copy of the proven
+HDC-store-then-EOT payload so that one SIMD8 worker writes a distinct sentinel
+to the staged output tile:
+
+- program: `gfx12-t47-one-tile-output-sentinel-hdc1-stateless-store-then-ts-eot`
+- sentinel: `0xC0DE7747`
+- target: the T4.5/T4.6 `output_gpu` address, currently `0x4102000`
+- groups: `1`
+- expected lane dispatch: `8`
+
+Expected clean proof:
+
+- `intel/gpgpu: one-tile-output-sentinel`
+- `lumen-gpu-shadow: director-step step=7 mode=one-worker-output-sentinel`
+- `submitted=1`
+- `readback_ok=1`
+- `reason=sentinel-written`
+- `output_first_before=0x00000000`
+- `output_first_after=0xC0DE7747`
+- `output_hits_lo64=0x0000000000000001`
+- `observed_lane_dispatch` is nonzero, ideally `8`
+- `output_owner=cpu-ap`
+
+The important interpretation is again narrow: the GPU can write to the staged
+one-tile output buffer and the CPU can read that write back.  This proves arena
+output addressability for one worker.  It still does not prove BF16 loads,
+one-row dot math, model matvec, or result ownership transfer.
+
+## Backend Selection Boundary
+
+The network backend is intentionally out of scope for the local one-tile GPU
+phase.  `burn_net` already proved the architectural separation by carrying BF16
+matvec descriptors to another host over TCP, but this rung stays local:
+
+- `ROUTE_BF16_MATVEC_TO_NET_BACKEND=false`
+- `SHADOW_BF16_MATVEC_TO_NET_BACKEND=false`
+- Runtime confirms `net_cpu_route=0` and `net_cpu_shadow=0`.
+- Runtime confirms `lumen-net: shadow bf16 matvec route_enabled=0
+  action=no-shadow-frames`.
+- Runtime confirms `lumen-net: remote bf16 matvec adapter present
+  route_enabled=0 action=local-burn-baby-only`.
+
+The local GPU role is therefore only one shadow tile.  It must not receive half
+the row range or become a result owner.  The CPU/AP path continues to compute
+the full local result, while the GPU path acts like one extra tile worker whose
+first job is proving a single shadow output.
+
+## Iteration Loop
+
+Use the ISO build as the tight proof loop.  A simple `!make iso` builds the
+image and starts the baremetal log drain.  After about 40 seconds the ISO should
+contain the upfront GPGPU traces needed to extract the current rung state.
+
+For each one-tile iteration:
+
+1. Make one small artifact or staging change.
+2. Build with `!make iso`.
+3. Extract only the relevant `intel/gpgpu`, `lumen-gpu-shadow`, and `burn-baba`
+   proof lines from the new drain.
+4. Update this ladder with the exact proof or blocker.
+5. Only then advance the next rung.
+
+The rule for this phase is still CPU-reference-first: the GPU may write shadow
+results, but CPU/AP keeps ownership of real inference output until the one-tile
+compare is proven clean.
