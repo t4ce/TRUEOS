@@ -1,4 +1,5 @@
 use alloc::{collections::VecDeque, vec::Vec};
+use core::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 use spin::Mutex;
 use v::vnet as api;
@@ -149,8 +150,20 @@ fn should_log_selector_probe(readiness: u8) -> bool {
 
     static PURE_WRITABLE_PROBE_COUNT: core::sync::atomic::AtomicU32 =
         core::sync::atomic::AtomicU32::new(0);
+    static PURE_WRITABLE_PROBE_LAST_LOG_NS: AtomicU64 = AtomicU64::new(0);
     let count = PURE_WRITABLE_PROBE_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed) + 1;
-    count <= 4 || count.is_power_of_two()
+    count <= 4 || once_per_second(&PURE_WRITABLE_PROBE_LAST_LOG_NS)
+}
+
+fn once_per_second(last: &AtomicU64) -> bool {
+    const ONE_SECOND_NS: u64 = 1_000_000_000;
+    let now = crate::chronos::monotonic_nanos();
+    let prev = last.load(AtomicOrdering::Relaxed);
+    if prev != 0 && now.saturating_sub(prev) < ONE_SECOND_NS {
+        return false;
+    }
+    last.compare_exchange(prev, now, AtomicOrdering::Relaxed, AtomicOrdering::Relaxed)
+        .is_ok()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -665,25 +678,31 @@ impl MioCompat {
                     && socket.kind == MioSocketKind::Udp
                     && (readiness & READY_WRITABLE) != 0
                 {
-                    crate::log_trace!(
-                        "mio_compat: udp selector-ready selector={} socket={} token={} readiness=0x{:02x}\n",
-                        selector_id,
-                        socket.id,
-                        reg.token,
-                        readiness
-                    );
+                    static UDP_WRITABLE_FLOW_LAST_LOG_NS: AtomicU64 = AtomicU64::new(0);
+                    if once_per_second(&UDP_WRITABLE_FLOW_LAST_LOG_NS) {
+                        crate::log_trace!(
+                            "mio_compat: udp selector-ready selector={} socket={} token={} readiness=0x{:02x}\n",
+                            selector_id,
+                            socket.id,
+                            reg.token,
+                            readiness
+                        );
+                    }
                 }
                 if crate::logflag::NET_LOG_TCP_FLOW
                     && socket.kind == MioSocketKind::TcpStream
                     && (readiness & READY_WRITABLE) != 0
                 {
-                    crate::log_trace!(
-                        "mio_compat: tcp selector-ready selector={} socket={} token={} readiness=0x{:02x}\n",
-                        selector_id,
-                        socket.id,
-                        reg.token,
-                        readiness
-                    );
+                    static TCP_WRITABLE_FLOW_LAST_LOG_NS: AtomicU64 = AtomicU64::new(0);
+                    if once_per_second(&TCP_WRITABLE_FLOW_LAST_LOG_NS) {
+                        crate::log_trace!(
+                            "mio_compat: tcp selector-ready selector={} socket={} token={} readiness=0x{:02x}\n",
+                            selector_id,
+                            socket.id,
+                            reg.token,
+                            readiness
+                        );
+                    }
                 }
 
                 unsafe {

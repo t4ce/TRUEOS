@@ -422,6 +422,7 @@ fn spawn_lumen_service(spawner: Spawner) -> SpawnAttempt {
 
 fn boot_lumen_service_enabled() -> bool {
     crate::allcaps::lumen::BOOT_MODEL_SERVICE
+        || crate::r::fs::trueosfs::skhynix_lumen_monopoly_enabled()
 }
 
 fn spawn_ai_qjs_oneshot(spawner: Spawner) -> SpawnAttempt {
@@ -1439,7 +1440,7 @@ static TASKS: [TaskSpec; 70] = [
     ),
     TaskSpec::enabled_gated(
         "lumen-service",
-        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
+        0,
         boot_lumen_service_enabled,
         &LUMEN_SERVICE_STARTED,
         spawn_lumen_service,

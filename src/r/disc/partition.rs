@@ -184,6 +184,19 @@ impl BlockDevice for PartitionBlockDevice {
         })
     }
 
+    fn read_blocks_into<'a>(
+        &'a mut self,
+        lba: u64,
+        blocks: usize,
+        dst: &'a mut [u8],
+    ) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            let blocks_u64 = blocks as u64;
+            let translated = self.range.translate(lba, blocks_u64)?;
+            self.parent.read_blocks_into(translated, blocks, dst).await
+        })
+    }
+
     fn write_blocks<'a>(&'a mut self, lba: u64, buf: &'a [u8]) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             if !self.writable {

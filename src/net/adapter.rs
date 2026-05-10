@@ -48,6 +48,21 @@ const INTERNAL_NETBENCH_MAX_CONCURRENT_PER_NIC: usize = 4;
 static INTERNAL_NETBENCH_NEXT_ID: AtomicU32 = AtomicU32::new(1);
 static INTERNAL_NETBENCH_REQS: spin::Mutex<Vec<InternalNetbenchRequest>> =
     spin::Mutex::new(Vec::new());
+static NET_TX_TAP_TCP_LAST_LOG_NS: AtomicU64 = AtomicU64::new(0);
+static LOGTOTCP_SEND_FLUSH_LAST_LOG_NS: AtomicU64 = AtomicU64::new(0);
+static LOGTOTCP_SEND_FLUSH_SUPPRESSED: AtomicU64 = AtomicU64::new(0);
+static LOGTOTCP_SEND_FLUSH_BYTES: AtomicU64 = AtomicU64::new(0);
+
+fn net_log_once_per_second(last: &AtomicU64) -> bool {
+    const ONE_SECOND_NS: u64 = 1_000_000_000;
+    let now = crate::chronos::monotonic_nanos();
+    let prev = last.load(Ordering::Relaxed);
+    if prev != 0 && now.saturating_sub(prev) < ONE_SECOND_NS {
+        return false;
+    }
+    last.compare_exchange(prev, now, Ordering::Relaxed, Ordering::Relaxed)
+        .is_ok()
+}
 
 fn internal_netbench_format_speed(bps: u64) -> alloc::string::String {
     use alloc::format;
@@ -1207,7 +1222,12 @@ impl<'a> TxToken for AdapterTxTokenAt<'a> {
                                         u16::from_be_bytes([buf[tcp_off + 2], buf[tcp_off + 3]]);
                                     let flags = buf[tcp_off + 13];
                                     let control = (flags & 0x07) != 0;
-                                    if crate::logflag::NET_LOG_TX_TAP || control {
+                                    let sampled_data =
+                                        crate::logflag::NET_LOG_TX_TAP
+                                            && net_log_once_per_second(
+                                                &NET_TX_TAP_TCP_LAST_LOG_NS,
+                                            );
+                                    if control || sampled_data {
                                         crate::log_info!(target: "net";
                                             "net: tx-tap dev={} tcp {}.{}.{}.{}:{} -> {}.{}.{}.{}:{} flags=0x{:02x}\n",
                                             self.index,
@@ -2566,13 +2586,31 @@ impl NetService {
 
         if total_sent != 0 {
             if crate::logflag::NET_LOG_TCP_SEND_FLUSH {
-                crate::log_info!(target: "net";
-                    "net: sendtcp flush owner={} handle={} sent={} queued_left={}\n",
-                    owner,
-                    handle.0,
-                    total_sent,
-                    self.records[idx].tcp_tx.len()
-                );
+                if owner == "logtotcp" {
+                    LOGTOTCP_SEND_FLUSH_SUPPRESSED.fetch_add(1, Ordering::Relaxed);
+                    LOGTOTCP_SEND_FLUSH_BYTES.fetch_add(total_sent as u64, Ordering::Relaxed);
+                    if net_log_once_per_second(&LOGTOTCP_SEND_FLUSH_LAST_LOG_NS) {
+                        let flushes = LOGTOTCP_SEND_FLUSH_SUPPRESSED.swap(0, Ordering::Relaxed);
+                        let bytes = LOGTOTCP_SEND_FLUSH_BYTES.swap(0, Ordering::Relaxed);
+                        crate::log_info!(target: "net";
+                            "net: sendtcp flush owner={} handle={} flushes={} bytes={} last_sent={} queued_left={}\n",
+                            owner,
+                            handle.0,
+                            flushes,
+                            bytes,
+                            total_sent,
+                            self.records[idx].tcp_tx.len()
+                        );
+                    }
+                } else {
+                    crate::log_info!(target: "net";
+                        "net: sendtcp flush owner={} handle={} sent={} queued_left={}\n",
+                        owner,
+                        handle.0,
+                        total_sent,
+                        self.records[idx].tcp_tx.len()
+                    );
+                }
             }
             let _ = push_event(
                 owner,

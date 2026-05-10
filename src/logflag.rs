@@ -2,34 +2,34 @@ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use log::{Level, LevelFilter};
 use spin::Once;
 
-pub(crate) const GLOBAL_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
-pub(crate) const BOOT_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
+pub(crate) const GLOBAL_LOG_LEVEL: LevelFilter = LevelFilter::Info;
+pub(crate) const BOOT_LOG_LEVEL: LevelFilter = LevelFilter::Error;
 pub(crate) const SERVICE_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
 pub(crate) const NET_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
-pub(crate) const USB_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
+pub(crate) const USB_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const STORAGE_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
-pub(crate) const GFX_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
-pub(crate) const HV_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
+pub(crate) const GFX_LOG_LEVEL: LevelFilter = LevelFilter::Error;
+pub(crate) const HV_LOG_LEVEL: LevelFilter = LevelFilter::Error;
 
 #[allow(non_upper_case_globals)]
 pub(crate) const dont_persist_globalog: bool = true;
 
-pub(crate) const NET_LOG_RX_TAP: bool = true;
-pub(crate) const NET_LOG_TX_TAP: bool = true;
-pub(crate) const NET_LOG_TCP_FLOW: bool = true;
-pub(crate) const NET_LOG_TCP_CONNECT_STATES: bool = true;
-pub(crate) const NET_LOG_TCP_CONNECT_WIRE: bool = true;
-pub(crate) const NET_LOG_TCP_SEND_FLUSH: bool = true;
-pub(crate) const NET_LOG_ARP_RX: bool = true;
-pub(crate) const NET_LOG_DHCP_VERBOSE: bool = true;
-pub(crate) const NET_LOG_IPV6_RA: bool = true;
+pub(crate) const NET_LOG_RX_TAP: bool = false;
+pub(crate) const NET_LOG_TX_TAP: bool = false;
+pub(crate) const NET_LOG_TCP_FLOW: bool = false;
+pub(crate) const NET_LOG_TCP_CONNECT_STATES: bool = false;
+pub(crate) const NET_LOG_TCP_CONNECT_WIRE: bool = false;
+pub(crate) const NET_LOG_TCP_SEND_FLUSH: bool = false;
+pub(crate) const NET_LOG_ARP_RX: bool = false;
+pub(crate) const NET_LOG_DHCP_VERBOSE: bool = false;
+pub(crate) const NET_LOG_IPV6_RA: bool = false;
 pub(crate) const NET_LOG_DHCP6_SAMPLES: usize = usize::MAX;
-pub(crate) const VNET_EXERCISE_LOGS: bool = true;
+pub(crate) const VNET_EXERCISE_LOGS: bool = false;
 
 pub(crate) const R8125_VERBOSE_LOGS: bool = true;
 pub(crate) const BOOT_INFO_LOGS: bool = true;
-pub(crate) const HV_LOGS: bool = true;
-pub(crate) const PORTAL_LOGS: bool = true;
+pub(crate) const HV_LOGS: bool = false;
+pub(crate) const PORTAL_LOGS: bool = false;
 
 pub(crate) const UI2_ENABLE_VERBOSE_COMPOSE_LOGS: bool = true;
 pub(crate) const VHTTPS_VERBOSE: bool = true;
@@ -89,13 +89,7 @@ pub(crate) fn concept_log_enabled(concept: &str, level: Level) -> bool {
         "boot" | "cpu" | "tokio" | "rapl" | "tga" => BOOT_LOG_LEVEL,
         "service" | "spawn-svc" | "http" => SERVICE_LOG_LEVEL,
         "net" | "dns" | "dhcp" | "tls" | "icmp" => NET_LOG_LEVEL,
-        "usb" | "crabusb" => {
-            if USB_LOG_ALL.load(Ordering::Relaxed) {
-                LevelFilter::Trace
-            } else {
-                USB_LOG_LEVEL
-            }
-        }
+        "usb" | "crabusb" => USB_LOG_LEVEL,
         "fs" | "storage" | "trueosfs" | "nvme" => STORAGE_LOG_LEVEL,
         "gfx" | "intel" | "display" => GFX_LOG_LEVEL,
         "hv" => HV_LOG_LEVEL,
