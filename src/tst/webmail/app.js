@@ -2,6 +2,7 @@ const API_BASE = window.WEBMAIL_API_BASE || "/api/webmail";
 
 const API = {
   status: `${API_BASE}/status`,
+  refresh: `${API_BASE}/refresh`,
   list: `${API_BASE}/list`,
   read: (id) => `${API_BASE}/read?id=${encodeURIComponent(id)}`,
   send: `${API_BASE}/send`,
@@ -370,7 +371,7 @@ function queueMarkup() {
 }
 
 function bindEvents() {
-  document.querySelector("#refresh-button")?.addEventListener("click", () => loadAll());
+  document.querySelector("#refresh-button")?.addEventListener("click", () => refreshInbox());
   document.querySelector("#compose-button")?.addEventListener("click", () => {
     state.composeOpen = !state.composeOpen;
     render();
@@ -434,6 +435,15 @@ async function loadAll() {
     toast(`Webmail refresh failed: ${error.message || error}`);
   }
   render();
+}
+
+async function refreshInbox() {
+  try {
+    await fetchJson(API.refresh, { method: "POST" });
+  } catch (error) {
+    toast(`Inbox refresh failed: ${error.message || error}`);
+  }
+  await loadAll();
 }
 
 async function readMessage(id) {
@@ -500,3 +510,6 @@ async function sendMessage(event) {
 
 render();
 loadAll();
+setInterval(() => {
+  if (document.visibilityState !== "hidden") loadAll();
+}, 30_000);

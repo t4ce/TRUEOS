@@ -3,7 +3,7 @@ extern crate std;
 
 use alloc::{boxed::Box, format, string::String, string::ToString, vec::Vec};
 use core::{
-    sync::atomic::{AtomicU16, AtomicU32, Ordering},
+    sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, Ordering},
 };
 use std::{io, net::SocketAddr};
 
@@ -35,10 +35,19 @@ const MAIL_SMTP_TIMEOUT_MS: u32 = 20_000;
 const MAIL_POP3_TIMEOUT_MS: u32 = 20_000;
 const MAIL_LIST_LIMIT: usize = 10;
 const MAIL_POP3_MAX_MESSAGES: usize = MAIL_LIST_LIMIT;
-const MAIL_POP3_MAX_MESSAGE_BYTES: usize = 64 * 1024;
+const MAIL_POP3_TOP_BODY_LINES: u32 = 80;
+const MAIL_POP3_TOP_MAX_BYTES: usize = 128 * 1024;
+const MAIL_POP3_MAX_MESSAGE_BYTES: usize = 512 * 1024;
+const MAIL_INBOX_REFRESH_INTERVAL_SECS: u64 = 30;
 
 static MAIL_HTTP_PORT: AtomicU16 = AtomicU16::new(0);
 static MAIL_ID_SEQ: AtomicU32 = AtomicU32::new(1);
+static MAIL_INBOX_REFRESH_RUNNING: AtomicBool = AtomicBool::new(false);
+static MAIL_INBOX_LAST_REFRESH_SECS: AtomicU64 = AtomicU64::new(0);
+static MAIL_INBOX_LAST_REFRESH_ADDED: AtomicU32 = AtomicU32::new(0);
+static MAIL_INBOX_LAST_LIST_COUNT: AtomicU32 = AtomicU32::new(0);
+static MAIL_INBOX_LAST_RETRIEVED: AtomicU32 = AtomicU32::new(0);
+static MAIL_INBOX_LAST_PARSED: AtomicU32 = AtomicU32::new(0);
 
 const WEBMAIL_INDEX_HTML: &str = include_str!("../../../tst/webmail/index.html");
 const WEBMAIL_APP_JS: &str = include_str!("../../../tst/webmail/app.js");
@@ -61,6 +70,8 @@ struct MailMessage {
     unread: bool,
     status: String,
     error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pop3_msg_id: Option<u32>,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -189,10 +200,13 @@ async fn load_config() -> Result<MailConfig, &'static str> {
 }
 
 fn now_date_string() -> String {
-    let secs = crate::r::net::ntp::current_unix_seconds()
+    rfc2822_date_string(now_mail_seconds())
+}
+
+fn now_mail_seconds() -> u64 {
+    crate::r::net::ntp::current_unix_seconds()
         .or_else(crate::time::unix_time_seconds)
-        .unwrap_or_else(crate::time::uptime_seconds);
-    format!("{}", secs)
+        .unwrap_or_else(crate::time::uptime_seconds)
 }
 
 fn next_mail_id() -> String {
@@ -201,6 +215,41 @@ fn next_mail_id() -> String {
         .or_else(crate::time::unix_time_seconds)
         .unwrap_or_else(crate::time::uptime_seconds);
     format!("mail-{}-{}", secs, seq)
+}
+
+fn rfc2822_date_string(ts: u64) -> String {
+    const WEEKDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let days = ts / 86_400;
+    let rem = ts % 86_400;
+    let hour = rem / 3_600;
+    let minute = (rem % 3_600) / 60;
+    let second = rem % 60;
+    let weekday = WEEKDAYS[((days + 4) % 7) as usize];
+    let (year, month, day) = civil_from_days(days as i64);
+    let month_name = MONTHS[(month.saturating_sub(1) as usize).min(MONTHS.len() - 1)];
+    format!(
+        "{}, {:02} {} {:04} {:02}:{:02}:{:02} +0000",
+        weekday, day, month_name, year, hour, minute, second
+    )
+}
+
+fn civil_from_days(days_since_epoch: i64) -> (i32, u32, u32) {
+    let z = days_since_epoch + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let mut year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = mp + if mp < 10 { 3 } else { -9 };
+    if month <= 2 {
+        year += 1;
+    }
+    (year as i32, month as u32, day as u32)
 }
 
 fn preview(body: &str) -> String {
@@ -241,15 +290,25 @@ fn recipients(to: &str) -> Vec<String> {
 fn build_message(from: &str, to: &str, subject: &str, body: &str, id: &str) -> String {
     let from_domain = from.split('@').nth(1).unwrap_or("trueos.local");
     format!(
-        "From: <{}>\r\nTo: <{}>\r\nSubject: {}\r\nDate: {}\r\nMessage-ID: <{}@{}>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n{}",
+        "From: <{}>\r\nTo: <{}>\r\nSubject: {}\r\nDate: {}\r\nMessage-ID: <{}@{}>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=US-ASCII\r\nContent-Transfer-Encoding: 7bit\r\nX-Mailer: TRUEOS Webmail\r\n\r\n{}",
         header_value(from),
         header_value(to),
         header_value(subject),
         now_date_string(),
         header_value(id),
         header_value(from_domain),
-        body
+        sanitize_7bit_body(body)
     )
+}
+
+fn sanitize_7bit_body(body: &str) -> String {
+    body.chars()
+        .map(|ch| match ch {
+            '\r' | '\n' | '\t' => ch,
+            ch if ch.is_ascii() && !ch.is_control() => ch,
+            _ => '?',
+        })
+        .collect()
 }
 
 fn header_lookup<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
@@ -277,7 +336,7 @@ fn parse_mail_headers(raw: &str) -> Vec<(String, String)> {
     headers
 }
 
-fn parse_pop3_message(raw: &[u8], fallback_id: String) -> Option<MailMessage> {
+fn parse_pop3_message(raw: &[u8], fallback_id: String, pop3_msg_id: u32) -> Option<MailMessage> {
     let text = core::str::from_utf8(raw).ok()?;
     let (header_text, body) = text
         .split_once("\r\n\r\n")
@@ -311,6 +370,7 @@ fn parse_pop3_message(raw: &[u8], fallback_id: String) -> Option<MailMessage> {
         unread: true,
         status: String::from("received"),
         error: None,
+        pop3_msg_id: Some(pop3_msg_id),
     })
 }
 
@@ -319,9 +379,14 @@ async fn refresh_inbox_from_pop3(config: &MailConfig) -> Result<usize, &'static 
         return Err("mail password placeholder");
     }
 
+    crate::log!("webmail-http: pop3 refresh connect host={}\n", mail_config::POP3_HOST);
     let mut client = Pop3Client::connect(MAIL_POP3_TIMEOUT_MS)
         .await
-        .map_err(|_| "pop3 connect failed")?;
+        .map_err(|err| {
+            crate::log!("webmail-http: pop3 connect failed err={:?}\n", err);
+            "pop3 connect failed"
+        })?;
+    crate::log!("webmail-http: pop3 refresh login user={}\n", config.smtp_user.as_str());
     client
         .login(
             config.smtp_user.as_str(),
@@ -329,31 +394,81 @@ async fn refresh_inbox_from_pop3(config: &MailConfig) -> Result<usize, &'static 
             MAIL_POP3_TIMEOUT_MS,
         )
         .await
-        .map_err(|_| "pop3 login failed")?;
+        .map_err(|err| {
+            crate::log!("webmail-http: pop3 login failed err={:?}\n", err);
+            "pop3 login failed"
+        })?;
 
     let list = client
         .list(MAIL_POP3_TIMEOUT_MS)
         .await
-        .map_err(|_| "pop3 list failed")?;
+        .map_err(|err| {
+            crate::log!("webmail-http: pop3 list failed err={:?}\n", err);
+            "pop3 list failed"
+        })?;
     let mut store = load_store().await;
     let mut added = 0usize;
+    let mut retrieved = 0usize;
+    let mut parsed = 0usize;
+    MAIL_INBOX_LAST_LIST_COUNT.store(list.len() as u32, Ordering::Release);
+    let latest: Vec<(u32, u64)> = list.into_iter().rev().take(MAIL_POP3_MAX_MESSAGES).collect();
+    let latest_ids: Vec<u32> = latest.iter().map(|(msg_id, _)| *msg_id).collect();
+    crate::log!(
+        "webmail-http: pop3 list count={} taking={}\n",
+        MAIL_INBOX_LAST_LIST_COUNT.load(Ordering::Acquire),
+        latest.len()
+    );
 
-    for (msg_id, size) in list.into_iter().rev().take(MAIL_POP3_MAX_MESSAGES) {
+    for (msg_id, size) in latest.into_iter() {
         let fallback_id = format!("pop3-{}-{}", msg_id, size);
-        if store.messages.iter().any(|message| message.id == fallback_id) {
+        if let Some(existing) = store.messages.iter_mut().find(|message| message.id == fallback_id)
+        {
+            existing.pop3_msg_id = Some(msg_id);
             continue;
         }
         let raw = match client
-            .retr(msg_id, MAIL_POP3_TIMEOUT_MS, MAIL_POP3_MAX_MESSAGE_BYTES)
+            .top(
+                msg_id,
+                MAIL_POP3_TOP_BODY_LINES,
+                MAIL_POP3_TIMEOUT_MS,
+                MAIL_POP3_TOP_MAX_BYTES,
+            )
             .await
         {
             Ok(raw) => raw,
-            Err(_) => continue,
+            Err(top_err) => {
+                crate::log!(
+                    "webmail-http: pop3 TOP failed msg={} size={} err={:?}; trying RETR\n",
+                    msg_id,
+                    size,
+                    top_err
+                );
+                match client
+                    .retr(msg_id, MAIL_POP3_TIMEOUT_MS, MAIL_POP3_MAX_MESSAGE_BYTES)
+                    .await
+                {
+                    Ok(raw) => raw,
+                    Err(retr_err) => {
+                        crate::log!(
+                            "webmail-http: pop3 RETR failed msg={} size={} err={:?}\n",
+                            msg_id,
+                            size,
+                            retr_err
+                        );
+                        continue;
+                    }
+                }
+            }
         };
-        let Some(message) = parse_pop3_message(raw.as_slice(), fallback_id) else {
+        retrieved = retrieved.saturating_add(1);
+        let Some(message) = parse_pop3_message(raw.as_slice(), fallback_id, msg_id) else {
+            crate::log!("webmail-http: pop3 parse failed msg={} bytes={}\n", msg_id, raw.len());
             continue;
         };
-        if store.messages.iter().any(|existing| existing.id == message.id) {
+        parsed = parsed.saturating_add(1);
+        if let Some(existing) = store.messages.iter_mut().find(|existing| existing.id == message.id)
+        {
+            existing.pop3_msg_id = Some(msg_id);
             continue;
         }
         store.messages.push(message);
@@ -361,10 +476,81 @@ async fn refresh_inbox_from_pop3(config: &MailConfig) -> Result<usize, &'static 
     }
 
     let _ = client.quit(5_000).await;
-    if added > 0 {
+    MAIL_INBOX_LAST_RETRIEVED.store(retrieved as u32, Ordering::Release);
+    MAIL_INBOX_LAST_PARSED.store(parsed as u32, Ordering::Release);
+    let before_retain = store.messages.len();
+    store.messages.retain(|message| {
+        message.status != "received"
+            || message
+                .pop3_msg_id
+                .map(|msg_id| latest_ids.contains(&msg_id))
+                .unwrap_or(true)
+    });
+    if added > 0 || store.messages.len() != before_retain {
         save_store(&store).await?;
     }
+    crate::log!(
+        "webmail-http: pop3 refresh done retrieved={} parsed={} added={} retained={}\n",
+        retrieved,
+        parsed,
+        added,
+        store.messages.len()
+    );
     Ok(added)
+}
+
+async fn refresh_inbox_once(reason: &'static str) -> Result<usize, &'static str> {
+    if MAIL_INBOX_REFRESH_RUNNING
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        crate::log!("webmail-http: inbox refresh skip reason={} busy=1\n", reason);
+        return Err("mail refresh already running");
+    }
+
+    let result = async {
+        let config = load_config().await?;
+        refresh_inbox_from_pop3(&config).await
+    }
+    .await;
+
+    match result {
+        Ok(added) => {
+            MAIL_INBOX_LAST_REFRESH_SECS.store(now_mail_seconds(), Ordering::Release);
+            MAIL_INBOX_LAST_REFRESH_ADDED.store(added as u32, Ordering::Release);
+            crate::log!(
+                "webmail-http: inbox refresh ok reason={} added={} limit={}\n",
+                reason,
+                added,
+                MAIL_POP3_MAX_MESSAGES
+            );
+        }
+        Err(err) => {
+            crate::log!(
+                "webmail-http: inbox refresh failed reason={} err={}\n",
+                reason,
+                err
+            );
+        }
+    }
+
+    MAIL_INBOX_REFRESH_RUNNING.store(false, Ordering::Release);
+    result
+}
+
+async fn inbox_refresh_loop() {
+    crate::log!(
+        "webmail-http: inbox refresh loop interval={}s\n",
+        MAIL_INBOX_REFRESH_INTERVAL_SECS
+    );
+    let _ = refresh_inbox_once("startup").await;
+    loop {
+        tokio::time::sleep(core::time::Duration::from_secs(
+            MAIL_INBOX_REFRESH_INTERVAL_SECS,
+        ))
+        .await;
+        let _ = refresh_inbox_once("interval").await;
+    }
 }
 
 async fn update_message_status(id: &str, status: &str, error: Option<String>) {
@@ -413,6 +599,13 @@ async fn send_mail_job(id: String) {
     );
 
     update_message_status(id.as_str(), "sending", None).await;
+    crate::log!(
+        "webmail-http: smtp send begin id={} from={} rcpts={} bytes={}\n",
+        id.as_str(),
+        from,
+        rcpt_refs.len(),
+        wire.len()
+    );
     let result = async {
         let mut client = SmtpClient::connect(MAIL_SMTP_TIMEOUT_MS).await?;
         client
@@ -431,8 +624,14 @@ async fn send_mail_job(id: String) {
     .await;
 
     match result {
-        Ok(()) => update_message_status(id.as_str(), "sent", None).await,
-        Err(err) => update_message_status(id.as_str(), "send-failed", Some(format!("{:?}", err))).await,
+        Ok(()) => {
+            crate::log!("webmail-http: smtp send ok id={}\n", id.as_str());
+            update_message_status(id.as_str(), "sent", None).await
+        }
+        Err(err) => {
+            crate::log!("webmail-http: smtp send failed id={} err={:?}\n", id.as_str(), err);
+            update_message_status(id.as_str(), "send-failed", Some(format!("{:?}", err))).await
+        }
     }
 }
 
@@ -447,20 +646,20 @@ async fn handle_app_js() -> Response {
 }
 
 async fn handle_list_local() -> Response {
-    match load_config().await {
-        Ok(config) => {
-            let _ = refresh_inbox_from_pop3(&config).await;
-        }
-        Err(err) => {
-            crate::log!("webmail-http: config unavailable for POP3 refresh: {}\n", err);
-        }
-    }
-
-    let mut messages: Vec<MailSummary> = load_store()
+    crate::log!("webmail-http: api list\n");
+    let mut inbox: Vec<MailMessage> = load_store()
         .await
         .messages
         .into_iter()
-        .rev()
+        .filter(|message| message.status == "received")
+        .collect();
+    inbox.sort_by(|a, b| {
+        b.pop3_msg_id
+            .unwrap_or(0)
+            .cmp(&a.pop3_msg_id.unwrap_or(0))
+    });
+    let mut messages: Vec<MailSummary> = inbox
+        .into_iter()
         .map(|message| MailSummary {
             id: message.id,
             from: message.from,
@@ -477,13 +676,23 @@ async fn handle_list_local() -> Response {
 }
 
 async fn handle_status_local() -> Response {
+    crate::log!("webmail-http: api status\n");
     let store = load_store().await;
     let config = load_config().await.ok();
     let account = config
         .as_ref()
         .map(|config| config.from.as_deref().unwrap_or(config.smtp_user.as_str()))
         .unwrap_or(mail_config::ACCOUNT_EMAIL);
-    let unread_count = store.messages.iter().filter(|message| message.unread).count();
+    let inbox_count = store
+        .messages
+        .iter()
+        .filter(|message| message.status == "received")
+        .count();
+    let unread_count = store
+        .messages
+        .iter()
+        .filter(|message| message.status == "received" && message.unread)
+        .count();
     json_response(
         200,
         &serde_json::json!({
@@ -495,8 +704,16 @@ async fn handle_status_local() -> Response {
             "smtp": format!("{}:{}", mail_config::SMTP_HOST, mail_config::SMTP_PORT),
             "pop3": format!("{}:{}", mail_config::POP3_HOST, mail_config::POP3_PORT),
             "messageCount": store.messages.len(),
+            "inboxCount": inbox_count,
             "unreadCount": unread_count,
             "listLimit": MAIL_LIST_LIMIT,
+            "refreshIntervalSeconds": MAIL_INBOX_REFRESH_INTERVAL_SECS,
+            "lastRefreshUnix": MAIL_INBOX_LAST_REFRESH_SECS.load(Ordering::Acquire),
+            "lastRefreshAdded": MAIL_INBOX_LAST_REFRESH_ADDED.load(Ordering::Acquire),
+            "lastPop3ListCount": MAIL_INBOX_LAST_LIST_COUNT.load(Ordering::Acquire),
+            "lastPop3Retrieved": MAIL_INBOX_LAST_RETRIEVED.load(Ordering::Acquire),
+            "lastPop3Parsed": MAIL_INBOX_LAST_PARSED.load(Ordering::Acquire),
+            "refreshRunning": MAIL_INBOX_REFRESH_RUNNING.load(Ordering::Acquire),
             "readiness": crate::r::readiness::mask(),
             "port": current_port(),
         }),
@@ -531,6 +748,21 @@ async fn handle_list() -> Response {
     run_mail_local(handle_list_local).await
 }
 
+async fn handle_refresh_local() -> Response {
+    crate::log!("webmail-http: api refresh\n");
+    match refresh_inbox_once("manual").await {
+        Ok(added) => json_response(200, &serde_json::json!({"ok": true, "added": added})),
+        Err(err) if err == "mail refresh already running" => {
+            json_response(202, &serde_json::json!({"ok": true, "busy": true}))
+        }
+        Err(err) => json_response(500, &serde_json::json!({"ok": false, "error": err})),
+    }
+}
+
+async fn handle_refresh() -> Response {
+    run_mail_local(handle_refresh_local).await
+}
+
 async fn handle_status() -> Response {
     run_mail_local(handle_status_local).await
 }
@@ -555,6 +787,7 @@ fn query_param<'a>(query: Option<&'a str>, name: &str) -> Option<&'a str> {
 }
 
 async fn handle_read_local(query: Option<String>) -> Response {
+    crate::log!("webmail-http: api read\n");
     let Some(id) = query_param(query.as_deref(), "id") else {
         return json_response(400, &serde_json::json!({"ok": false, "error": "missing id"}));
     };
@@ -566,6 +799,7 @@ async fn handle_read_local(query: Option<String>) -> Response {
 }
 
 async fn handle_send_local(body: Bytes) -> Response {
+    crate::log!("webmail-http: api send bytes={}\n", body.len());
     if body.len() > MAIL_HTTP_BODY_MAX {
         return json_response(
             413,
@@ -603,6 +837,7 @@ async fn handle_send_local(body: Bytes) -> Response {
         unread: false,
         status: String::from("queued"),
         error: None,
+        pop3_msg_id: None,
     };
 
     let mut store = load_store().await;
@@ -626,6 +861,7 @@ fn mail_router() -> Router {
         .route("/healthz", get(handle_status))
         .route("/api/healthz", get(handle_status))
         .route("/api/webmail/status", get(handle_status))
+        .route("/api/webmail/refresh", get(handle_refresh).post(handle_refresh))
         .route("/api/webmail/list", get(handle_list))
         .route("/api/webmail/read", get(handle_read))
         .route("/api/webmail/send", post(handle_send))
@@ -640,6 +876,7 @@ fn primary_ipv4_addr(port: u16) -> Option<SocketAddr> {
 
 async fn mail_http_runtime() -> Result<(), io::Error> {
     tokio::task::spawn_local(crate::t::shared_tokio_job_pump());
+    tokio::task::spawn_local(inbox_refresh_loop());
 
     let app = mail_router();
     loop {

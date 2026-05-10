@@ -25,7 +25,7 @@ pub enum SmtpError {
     Protocol,
     TlsFailed,
     AuthFailed,
-    ReplyError(u16),
+    ReplyError(u16, String),
 }
 
 #[derive(Clone, Debug)]
@@ -128,7 +128,7 @@ impl SmtpClient {
         if reply.code == 250 {
             Ok(reply)
         } else {
-            Err(SmtpError::ReplyError(reply.code))
+            Err(reply_error(&reply))
         }
     }
 
@@ -178,7 +178,7 @@ impl SmtpClient {
                     .map(|s| s.as_str())
                     .unwrap_or("")
             );
-            return Err(SmtpError::ReplyError(mail_from_reply.code));
+            return Err(reply_error(&mail_from_reply));
         }
 
         for recipient in rcpt_to.iter().copied() {
@@ -190,7 +190,7 @@ impl SmtpClient {
                     rcpt_reply.code,
                     rcpt_reply.lines.first().map(|s| s.as_str()).unwrap_or("")
                 );
-                return Err(SmtpError::ReplyError(rcpt_reply.code));
+                return Err(reply_error(&rcpt_reply));
             }
         }
 
@@ -202,7 +202,7 @@ impl SmtpClient {
                 data_reply.code,
                 data_reply.lines.first().map(|s| s.as_str()).unwrap_or("")
             );
-            return Err(SmtpError::ReplyError(data_reply.code));
+            return Err(reply_error(&data_reply));
         }
 
         self.send_data(message)?;
@@ -213,7 +213,7 @@ impl SmtpClient {
                 done_reply.code,
                 done_reply.lines.first().map(|s| s.as_str()).unwrap_or("")
             );
-            return Err(SmtpError::ReplyError(done_reply.code));
+            return Err(reply_error(&done_reply));
         }
 
         Ok(())
@@ -239,7 +239,7 @@ impl SmtpClient {
         self.send_line("STARTTLS")?;
         let reply = self.read_reply(timeout_ms).await?;
         if reply.code != 220 {
-            return Err(SmtpError::ReplyError(reply.code));
+            return Err(reply_error(&reply));
         }
 
         let cfg = TlsClientConfig::new();
@@ -387,6 +387,13 @@ impl SmtpClient {
 
         Ok(())
     }
+}
+
+fn reply_error(reply: &SmtpReply) -> SmtpError {
+    SmtpError::ReplyError(
+        reply.code,
+        reply.lines.first().cloned().unwrap_or_else(String::new),
+    )
 }
 
 fn parse_smtp_reply(buf: &[u8]) -> Option<(usize, SmtpReply)> {
