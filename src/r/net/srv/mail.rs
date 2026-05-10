@@ -31,6 +31,7 @@ const MAIL_HTTP_BODY_MAX: usize = 64 * 1024;
 const MAIL_HTTP_BLOCKING_LANE_RETRY_MS: u64 = 1000;
 const MAIL_STORE_PATH: &str = "mail/box.json";
 const MAIL_CONFIG_PATH: &str = "mail/config.json";
+const MAIL_CONFIG_PASSWORD_PLACEHOLDER: &str = "ENTER_MAIL_PASSWORD_HERE";
 const MAIL_SMTP_TIMEOUT_MS: u32 = 20_000;
 const MAIL_POP3_TIMEOUT_MS: u32 = 20_000;
 const MAIL_LIST_LIMIT: usize = 10;
@@ -103,11 +104,16 @@ struct MailSendRequest {
     body: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct MailConfig {
     smtp_user: String,
     smtp_pass: String,
     from: Option<String>,
+}
+
+struct LoadedMailConfig {
+    config: MailConfig,
+    source: &'static str,
 }
 
 impl MailConfig {
@@ -121,6 +127,25 @@ impl MailConfig {
 
     fn password_is_placeholder(&self) -> bool {
         self.smtp_pass.trim().is_empty() || self.smtp_pass.contains("ENTER_")
+    }
+
+    fn merge_with_static(mut self) -> Self {
+        let static_config = Self::static_account();
+        if self.smtp_user.trim().is_empty() {
+            self.smtp_user = static_config.smtp_user.clone();
+        }
+        if self.password_is_placeholder() {
+            self.smtp_pass = static_config.smtp_pass.clone();
+        }
+        if self
+            .from
+            .as_deref()
+            .map(|from| from.trim().is_empty())
+            .unwrap_or(true)
+        {
+            self.from = static_config.from.clone();
+        }
+        self
     }
 }
 
@@ -188,13 +213,65 @@ async fn save_store(store: &MailStore) -> Result<(), &'static str> {
     }
 }
 
-async fn load_config() -> Result<MailConfig, &'static str> {
+async fn write_config_template(disk: crate::disc::block::DeviceHandle) -> Result<(), &'static str> {
+    ensure_mail_dir(disk).await?;
+    let template = serde_json::json!({
+        "smtp_user": mail_config::ACCOUNT_EMAIL,
+        "smtp_pass": MAIL_CONFIG_PASSWORD_PLACEHOLDER,
+        "from": mail_config::ACCOUNT_EMAIL,
+        "smtp_host": mail_config::SMTP_HOST,
+        "smtp_port": mail_config::SMTP_PORT,
+        "pop3_host": mail_config::POP3_HOST,
+        "pop3_port": mail_config::POP3_PORT,
+        "note": "Fill smtp_pass with the mailbox password. The kernel falls back to allports.rs while this placeholder remains."
+    });
+    let bytes = serde_json::to_vec_pretty(&template).map_err(|_| "config template serialize failed")?;
+    match crate::r::fs::trueosfs::file_in_async(disk, MAIL_CONFIG_PATH, bytes.as_slice()).await {
+        Ok(true) => Ok(()),
+        Ok(false) => Err("config template write refused"),
+        Err(_) => Err("config template write failed"),
+    }
+}
+
+async fn load_config() -> Result<LoadedMailConfig, &'static str> {
     let disk = primary_root()?;
     match crate::r::fs::trueosfs::file_out_async(disk, MAIL_CONFIG_PATH).await {
-        Ok(Some(bytes)) => {
-            serde_json::from_slice::<MailConfig>(bytes.as_slice()).map_err(|_| "bad mail/config.json")
+        Ok(Some(bytes)) => match serde_json::from_slice::<MailConfig>(bytes.as_slice()) {
+            Ok(config) => {
+                crate::log!("webmail-http: config source={}\n", MAIL_CONFIG_PATH);
+                Ok(LoadedMailConfig {
+                    config: config.merge_with_static(),
+                    source: MAIL_CONFIG_PATH,
+                })
+            }
+            Err(_) => {
+                crate::log!(
+                    "webmail-http: bad {}; falling back to static account\n",
+                    MAIL_CONFIG_PATH
+                );
+                Ok(LoadedMailConfig {
+                    config: MailConfig::static_account(),
+                    source: "static-bad-config",
+                })
+            }
+        },
+        Ok(None) => {
+            match write_config_template(disk).await {
+                Ok(()) => crate::log!(
+                    "webmail-http: wrote config template path={} source=allports\n",
+                    MAIL_CONFIG_PATH
+                ),
+                Err(err) => crate::log!(
+                    "webmail-http: config template unavailable path={} err={} source=allports\n",
+                    MAIL_CONFIG_PATH,
+                    err
+                ),
+            }
+            Ok(LoadedMailConfig {
+                config: MailConfig::static_account(),
+                source: "allports-template",
+            })
         }
-        Ok(None) => Ok(MailConfig::static_account()),
         Err(_) => Err("config read failed"),
     }
 }
@@ -399,22 +476,42 @@ async fn refresh_inbox_from_pop3(config: &MailConfig) -> Result<usize, &'static 
             "pop3 login failed"
         })?;
 
-    let list = client
-        .list(MAIL_POP3_TIMEOUT_MS)
+    let (count, total_bytes) = client
+        .stat(MAIL_POP3_TIMEOUT_MS)
         .await
         .map_err(|err| {
-            crate::log!("webmail-http: pop3 list failed err={:?}\n", err);
-            "pop3 list failed"
+            crate::log!("webmail-http: pop3 stat failed err={:?}\n", err);
+            "pop3 stat failed"
         })?;
+    MAIL_INBOX_LAST_LIST_COUNT.store(count, Ordering::Release);
+    crate::log!(
+        "webmail-http: pop3 stat count={} bytes={} taking={}\n",
+        count,
+        total_bytes,
+        MAIL_POP3_MAX_MESSAGES
+    );
+
+    let mut latest: Vec<(u32, u64)> = Vec::new();
+    let first_id = count
+        .saturating_sub(MAIL_POP3_MAX_MESSAGES as u32)
+        .saturating_add(1);
+    for msg_id in (first_id..=count).rev() {
+        match client.list_one(msg_id, MAIL_POP3_TIMEOUT_MS).await {
+            Ok(entry) => latest.push(entry),
+            Err(err) => crate::log!(
+                "webmail-http: pop3 LIST {} failed err={:?}; skipping\n",
+                msg_id,
+                err
+            ),
+        }
+    }
     let mut store = load_store().await;
     let mut added = 0usize;
     let mut retrieved = 0usize;
     let mut parsed = 0usize;
-    MAIL_INBOX_LAST_LIST_COUNT.store(list.len() as u32, Ordering::Release);
-    let latest: Vec<(u32, u64)> = list.into_iter().rev().take(MAIL_POP3_MAX_MESSAGES).collect();
     let latest_ids: Vec<u32> = latest.iter().map(|(msg_id, _)| *msg_id).collect();
     crate::log!(
-        "webmail-http: pop3 list count={} taking={}\n",
+        "webmail-http: pop3 latest listed count={} taking={}\n",
         MAIL_INBOX_LAST_LIST_COUNT.load(Ordering::Acquire),
         latest.len()
     );
@@ -509,8 +606,18 @@ async fn refresh_inbox_once(reason: &'static str) -> Result<usize, &'static str>
     }
 
     let result = async {
-        let config = load_config().await?;
-        refresh_inbox_from_pop3(&config).await
+        let loaded = load_config().await?;
+        let result = refresh_inbox_from_pop3(&loaded.config).await;
+        if result == Err("pop3 login failed") && loaded.source == MAIL_CONFIG_PATH {
+            crate::log!(
+                "webmail-http: pop3 login failed with {}; retrying allports account\n",
+                MAIL_CONFIG_PATH
+            );
+            let static_config = MailConfig::static_account();
+            refresh_inbox_from_pop3(&static_config).await
+        } else {
+            result
+        }
     }
     .await;
 
@@ -567,13 +674,14 @@ async fn send_mail_job(id: String) {
     let Some(message) = store.messages.iter().find(|message| message.id == id).cloned() else {
         return;
     };
-    let config = match load_config().await {
-        Ok(config) => config,
+    let loaded = match load_config().await {
+        Ok(loaded) => loaded,
         Err(err) => {
             update_message_status(id.as_str(), "config-missing", Some(String::from(err))).await;
             return;
         }
     };
+    let config = loaded.config;
     if config.password_is_placeholder() {
         update_message_status(
             id.as_str(),
@@ -678,11 +786,21 @@ async fn handle_list_local() -> Response {
 async fn handle_status_local() -> Response {
     crate::log!("webmail-http: api status\n");
     let store = load_store().await;
-    let config = load_config().await.ok();
-    let account = config
+    let loaded_config = load_config().await.ok();
+    let account = loaded_config
         .as_ref()
-        .map(|config| config.from.as_deref().unwrap_or(config.smtp_user.as_str()))
+        .map(|loaded| {
+            loaded
+                .config
+                .from
+                .as_deref()
+                .unwrap_or(loaded.config.smtp_user.as_str())
+        })
         .unwrap_or(mail_config::ACCOUNT_EMAIL);
+    let config_source = loaded_config
+        .as_ref()
+        .map(|loaded| loaded.source)
+        .unwrap_or("unavailable");
     let inbox_count = store
         .messages
         .iter()
@@ -699,6 +817,7 @@ async fn handle_status_local() -> Response {
             "ok": true,
             "service": "webmail-http",
             "account": account,
+            "configSource": config_source,
             "storePath": MAIL_STORE_PATH,
             "configPath": MAIL_CONFIG_PATH,
             "smtp": format!("{}:{}", mail_config::SMTP_HOST, mail_config::SMTP_PORT),
@@ -755,7 +874,7 @@ async fn handle_refresh_local() -> Response {
         Err(err) if err == "mail refresh already running" => {
             json_response(202, &serde_json::json!({"ok": true, "busy": true}))
         }
-        Err(err) => json_response(500, &serde_json::json!({"ok": false, "error": err})),
+        Err(err) => json_response(200, &serde_json::json!({"ok": false, "error": err})),
     }
 }
 
@@ -820,7 +939,7 @@ async fn handle_send_local(body: Bytes) -> Response {
 
     let id = next_mail_id();
     let config = match load_config().await {
-        Ok(config) => config,
+        Ok(loaded) => loaded.config,
         Err(_) => MailConfig::static_account(),
     };
     let from = match config.from {

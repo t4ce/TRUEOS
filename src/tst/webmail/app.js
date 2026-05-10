@@ -439,7 +439,8 @@ async function loadAll() {
 
 async function refreshInbox() {
   try {
-    await fetchJson(API.refresh, { method: "POST" });
+    const result = await fetchJson(API.refresh, { method: "POST" });
+    if (result.ok === false) toast(`Inbox refresh failed: ${text(result.error, "unknown error")}`);
   } catch (error) {
     toast(`Inbox refresh failed: ${error.message || error}`);
   }

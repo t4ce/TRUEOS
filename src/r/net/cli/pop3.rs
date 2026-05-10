@@ -194,6 +194,30 @@ impl Pop3Client {
         Ok(out)
     }
 
+    pub async fn list_one(
+        &mut self,
+        msg_id: u32,
+        timeout_ms: u32,
+    ) -> Result<(u32, u64), Pop3Error> {
+        self.send_line(format!("LIST {}", msg_id).as_str())?;
+        let line = self.read_line(timeout_ms).await?;
+        if !line.starts_with("+OK") {
+            return Err(Pop3Error::Protocol);
+        }
+
+        let mut it = line.split_whitespace();
+        let _ok = it.next();
+        let id = it
+            .next()
+            .and_then(|v| v.parse::<u32>().ok())
+            .ok_or(Pop3Error::Protocol)?;
+        let size = it
+            .next()
+            .and_then(|v| v.parse::<u64>().ok())
+            .ok_or(Pop3Error::Protocol)?;
+        Ok((id, size))
+    }
+
     pub async fn retr(
         &mut self,
         msg_id: u32,
