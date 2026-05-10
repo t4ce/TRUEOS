@@ -2628,7 +2628,7 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     const IDD_LOAD_DWORDS: usize = IDD_PAYLOAD_DWORDS;
     const CURBE_READ_LENGTH_8DW: u32 = if GPGPU_LOAD_DUMMY_CURBE { 1 } else { 0 };
     const GPGPU_THREADS_IN_GROUP: u32 = 1;
-    const GPGPU_WALKER_GROUP_X_DIM: u32 = 256;
+    const GPGPU_WALKER_GROUP_X_DIM: u32 = 8192;
     const GPGPU_WALKER_GROUP_Y_DIM: u32 = 1;
     const GPGPU_WALKER_GROUP_Z_DIM: u32 = 1;
     const CURBE_TOTAL_BYTES: usize = if GPGPU_LOAD_DUMMY_CURBE {
@@ -3244,7 +3244,7 @@ fn log_gpgpu_compute_walker_status(proof: GpgpuComputeWalkerProof) {
         "fix-walker-thread-start"
     };
     crate::log!(
-        "intel/gpgpu: eu-frontier program_source={} command_breadcrumbs_ok={} post_walker_marker={} thread_dispatch_delta={} store_expected=0x{:08X} store_target_slot={} store_target_value=0x{:08X} store_hits_mask_lo64=0x{:016X} eot_retired={} frontier={} next={}\n",
+        "intel/gpgpu: eu-frontier program_source={} command_breadcrumbs_ok={} post_walker_marker={} thread_dispatch_delta={} dispatch_units=simd8-lanes store_expected=0x{:08X} store_target_slot={} store_target_value=0x{:08X} store_hits_mask_lo64=0x{:016X} eot_retired={} frontier={} next={}\n",
         proof.program_name,
         breadcrumbs_ok as u8,
         post_walker_marker_retired as u8,
@@ -3258,12 +3258,12 @@ fn log_gpgpu_compute_walker_status(proof: GpgpuComputeWalkerProof) {
         next,
     );
     let started_plain = if gpu_program_started {
-        "gpu accepted the walker and TS counted launched EU threads; command stream is waiting for those workers to say done before the post-walker marker can execute"
+        "gpu accepted the walker and TS counted launched SIMD8 lanes; command stream continued after the workers EOT-retired"
     } else {
         "gpu accepted the walker and command stream is parked there; TS/TDL counters did not show launched EU threads"
     };
     crate::log!(
-        "intel/gpgpu: started-thread-snapshot started={} command_stream_reached_walker={} threads_started={} worker_done_signal_seen={} command_after_worker_ran={} store_seen={} plain=\"{}\"\n",
+        "intel/gpgpu: started-thread-snapshot started={} command_stream_reached_walker={} lane_dispatch_count={} dispatch_units=simd8-lanes worker_done_signal_seen={} command_after_worker_ran={} store_seen={} plain=\"{}\"\n",
         gpu_program_started as u8,
         breadcrumbs_ok as u8,
         proof.dispatch_delta,
@@ -3273,7 +3273,7 @@ fn log_gpgpu_compute_walker_status(proof: GpgpuComputeWalkerProof) {
         started_plain,
     );
     crate::log!(
-        "intel/gpgpu: gpu-program-proof program_source={} expects_store={} start_submitted={} finished={} finish_marker=0x{:08X} finish_expected=0x{:08X} starts_before={} starts_after={} starts_delta={} start_command_bytes=0x{:X} gpu_program_started={} shared_ram_slot={} shared_ram_value=0x{:08X} shared_ram_expected=0x{:08X} wrote_shared_ram={} store_landed_anywhere={} eot_retired={} command_breadcrumbs_ok={} post_walker_marker={} failure_class={} cpu_reads_c_back=1 backend=gfx12-gpgpu-start-command next={} does_not_prove=matmul\n",
+        "intel/gpgpu: gpu-program-proof program_source={} expects_store={} start_submitted={} finished={} finish_marker=0x{:08X} finish_expected=0x{:08X} starts_before={} starts_after={} starts_delta={} starts_delta_units=simd8-lanes start_command_bytes=0x{:X} gpu_program_started={} shared_ram_slot={} shared_ram_value=0x{:08X} shared_ram_expected=0x{:08X} wrote_shared_ram={} store_landed_anywhere={} eot_retired={} command_breadcrumbs_ok={} post_walker_marker={} failure_class={} cpu_reads_c_back=1 backend=gfx12-gpgpu-start-command next={} does_not_prove=matmul\n",
         proof.program_name,
         proof.expects_store as u8,
         proof.submitted as u8,
