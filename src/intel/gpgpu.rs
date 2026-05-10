@@ -133,6 +133,7 @@ const GEN12_CTX_RCS_INDIRECT_CTX_OFFSET_DEFAULT: u32 = 0xD;
 const RCS_EXEC_RESULT_GPGPU_PREFLIGHT_DONE: u32 = 0xC0DE_7731;
 const RCS_EXEC_RESULT_COMPUTE_WALKER_DONE: u32 = 0xC0DE_7732;
 const GPGPU_ONE_TILE_OUTPUT_SENTINEL: u32 = 0xC0DE_7747;
+const GPGPU_ONE_TILE_COMPARE_DP4A_ADDEND: u32 = trueos_eu::gfx12::STATIC_DP4A_DOT_ADDEND_U32;
 const PRIMARY_DISABLE_RENDER_BRINGUP: bool = false;
 const GPGPU_SUBMIT_WHEN_PRIMARY_RENDER_DISABLED: bool = false;
 const MI_STORE_DATA_IMM_GGTT_DW1: u32 = 0x1040_0002;
@@ -786,7 +787,11 @@ fn read_result_dword(warm: RenderWarmState, index: usize) -> u32 {
 fn is_gpgpu_submit_name(name: &str) -> bool {
     matches!(
         name,
-        "gpgpu-preflight" | "gpgpu-compute-walker" | "gpgpu-one-tile-sentinel" | "gpgpu-pre-submit"
+        "gpgpu-preflight"
+            | "gpgpu-compute-walker"
+            | "gpgpu-one-tile-sentinel"
+            | "gpgpu-one-tile-compare"
+            | "gpgpu-pre-submit"
     )
 }
 
@@ -1311,6 +1316,19 @@ fn gpgpu_one_tile_output_sentinel_program() -> GpgpuEuProgram {
         expected_store_value: GPGPU_ONE_TILE_OUTPUT_SENTINEL,
         store_send_dword: Some(trueos_eu::gfx12::HDC1_BTI34_STORE_SEND_DWORD),
         visible_seed_dword: Some(trueos_eu::gfx12::HDC1_BTI34_STORE_IMM_DWORD),
+    }
+}
+
+fn gpgpu_one_tile_output_compare_program() -> GpgpuEuProgram {
+    let artifact = trueos_eu::gfx12::STATIC_DP4A_HDC1_STATELESS_STORE_THEN_TS_EOT;
+    GpgpuEuProgram {
+        name: "gfx12-t48-one-tile-output-compare-dp4a-echo-hdc1-stateless-store-then-ts-eot",
+        kind: artifact.kind,
+        words: artifact.words,
+        expects_store: artifact.expects_store,
+        expected_store_value: 0,
+        store_send_dword: Some(trueos_eu::gfx12::HDC1_STATELESS_STATIC_DP4A_STORE_SEND_DWORD),
+        visible_seed_dword: Some(trueos_eu::gfx12::HDC1_STATELESS_STATIC_DP4A_BASE_DWORD),
     }
 }
 
@@ -1901,6 +1919,231 @@ pub(crate) fn submit_gpgpu_one_tile_output_sentinel_probe(
         finish_marker,
         expected_finish_marker: RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
         batch_bytes,
+    }
+}
+
+pub(crate) fn submit_gpgpu_one_tile_output_compare_probe(
+    output_gpu: u64,
+    output_bytes: usize,
+    cpu_expected_bits: u32,
+) -> crate::intel::GpgpuOneTileCompareProof {
+    let program = gpgpu_one_tile_output_compare_program();
+    let Some(dev) = crate::intel::claimed_device() else {
+        return gpgpu_one_tile_compare_failure("no-device", program, output_gpu, cpu_expected_bits);
+    };
+    let Some(warm) = warm_state() else {
+        return gpgpu_one_tile_compare_failure(
+            "no-warm-state",
+            program,
+            output_gpu,
+            cpu_expected_bits,
+        );
+    };
+    if warm.gpgpu_arena_virt.is_null() || warm.gpgpu_arena_len == 0 {
+        return gpgpu_one_tile_compare_failure("no-arena", program, output_gpu, cpu_expected_bits);
+    }
+    if output_bytes < core::mem::size_of::<u32>() {
+        return gpgpu_one_tile_compare_failure(
+            "bad-output-bytes",
+            program,
+            output_gpu,
+            cpu_expected_bits,
+        );
+    }
+    if output_gpu < GPU_VA_GPGPU_TILE_ARENA_BASE {
+        return gpgpu_one_tile_compare_failure(
+            "output-gpu-before-arena",
+            program,
+            output_gpu,
+            cpu_expected_bits,
+        );
+    }
+    let output_offset = (output_gpu - GPU_VA_GPGPU_TILE_ARENA_BASE) as usize;
+    let Some(output_end) = output_offset.checked_add(output_bytes) else {
+        return gpgpu_one_tile_compare_failure(
+            "output-range-overflow",
+            program,
+            output_gpu,
+            cpu_expected_bits,
+        );
+    };
+    if output_end > warm.gpgpu_arena_len {
+        return gpgpu_one_tile_compare_failure(
+            "output-range-outside-arena",
+            program,
+            output_gpu,
+            cpu_expected_bits,
+        );
+    }
+    if output_gpu >> 32 != 0 {
+        return gpgpu_one_tile_compare_failure(
+            "output-gpu-high32-unsupported",
+            program,
+            output_gpu,
+            cpu_expected_bits,
+        );
+    }
+    if !forcewake_render_acquire(warm) {
+        return gpgpu_one_tile_compare_failure("forcewake", program, output_gpu, cpu_expected_bits);
+    }
+    if !ensure_gpgpu_warm_buffers_mapped(dev, warm) || !ensure_gpgpu_tile_arena_mapped(dev, warm) {
+        return gpgpu_one_tile_compare_failure("ppgtt-map", program, output_gpu, cpu_expected_bits);
+    }
+
+    let output_virt = unsafe { warm.gpgpu_arena_virt.add(output_offset) };
+    let output_count = output_bytes / core::mem::size_of::<u32>();
+    let output_first_before = unsafe { core::ptr::read_volatile(output_virt as *const u32) };
+
+    let mut compare_words = trueos_eu::gfx12::STATIC_DP4A_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS;
+    compare_words[trueos_eu::gfx12::HDC1_STATELESS_STATIC_DP4A_BASE_DWORD] =
+        cpu_expected_bits.wrapping_sub(GPGPU_ONE_TILE_COMPARE_DP4A_ADDEND);
+    compare_words[19] = output_gpu as u32;
+    let program_uploaded =
+        upload_and_verify_gpu_program_at(warm, GPGPU_EU_KERNEL_OFFSET_BYTES, &compare_words);
+    if !program_uploaded {
+        return gpgpu_one_tile_compare_failure(
+            "program-upload",
+            program,
+            output_gpu,
+            cpu_expected_bits,
+        );
+    }
+
+    unsafe {
+        core::ptr::write_volatile(
+            warm.result_virt
+                .add(RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD * core::mem::size_of::<u32>())
+                as *mut u32,
+            0,
+        );
+        core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
+        core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
+    }
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+
+    let batch_dwords = warm.batch_len / core::mem::size_of::<u32>();
+    let batch =
+        unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, batch_dwords) };
+    let store_surface = prepare_gpgpu_store_surface_state_for_target(
+        warm,
+        output_gpu,
+        "bind-send-bti-to-one-tile-output-compare-shadow",
+    );
+    let batch_result =
+        encode_gfx12_gpgpu_walker_probe_batch(warm, batch, store_surface, program, 1);
+    let batch_bytes = match batch_result {
+        Ok(bytes) => bytes,
+        Err(reason) => {
+            return gpgpu_one_tile_compare_failure(reason, program, output_gpu, cpu_expected_bits);
+        }
+    };
+    crate::intel::dma_flush(warm.batch_virt, batch_bytes);
+
+    let dispatch_before = read_gpgpu_threads_dispatched(dev);
+    let finished = submit_warm_render_batch(
+        dev,
+        warm,
+        RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD,
+        "gpgpu-one-tile-compare",
+    );
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+    crate::intel::dma_flush(output_virt, output_bytes);
+    let dispatch_after = read_gpgpu_threads_dispatched(dev);
+    let dispatch_delta = dispatch_after.saturating_sub(dispatch_before);
+    let finish_marker = read_result_dword(warm, RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD);
+    let output_first_after = unsafe { core::ptr::read_volatile(output_virt as *const u32) };
+    let output_hits_lo64 = unsafe {
+        gpgpu_stage_dword_hits_mask_lo64(output_virt as *const u32, output_count, cpu_expected_bits)
+    };
+    let compare_ok = output_first_after == cpu_expected_bits && (output_hits_lo64 & 1) != 0;
+    let readback_ok =
+        compare_ok && finished && finish_marker == RCS_EXEC_RESULT_COMPUTE_WALKER_DONE;
+    let submitted = batch_bytes != 0;
+    let reason = if readback_ok && dispatch_delta == 0 {
+        "compare-written-no-ts-delta"
+    } else if readback_ok {
+        "compare-written"
+    } else if !finished {
+        "submit-not-finished"
+    } else if output_first_after != cpu_expected_bits {
+        "compare-mismatch"
+    } else {
+        "compare-not-at-slot0"
+    };
+    crate::log!(
+        "intel/gpgpu: one-tile-output-compare submitted={} finished={} readback_ok={} compare_ok={} reason={} program_source={} groups=1 expected_lane_dispatch=8 observed_lane_dispatch={} output_gpu=0x{:X} output_first_before=0x{:08X} output_first_after=0x{:08X} gpu_value=0x{:08X} cpu_expected_bits=0x{:08X} output_hits_lo64=0x{:016X} finish_marker=0x{:08X} finish_expected=0x{:08X} batch_bytes=0x{:X} output_owner=cpu-ap next=replace-dp4a-echo-with-live-read does_not_prove=model_matvec_or_gpu_live_load\n",
+        submitted as u8,
+        finished as u8,
+        readback_ok as u8,
+        compare_ok as u8,
+        reason,
+        program.name,
+        dispatch_delta,
+        output_gpu,
+        output_first_before,
+        output_first_after,
+        output_first_after,
+        cpu_expected_bits,
+        output_hits_lo64,
+        finish_marker,
+        RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        batch_bytes,
+    );
+    if !finished {
+        recover_render_engine_after_nonretired_submit(dev, warm, "gpgpu-one-tile-compare");
+    }
+    crate::intel::GpgpuOneTileCompareProof {
+        submitted,
+        finished,
+        readback_ok,
+        compare_ok,
+        reason,
+        program_name: program.name,
+        output_gpu,
+        gpu_value: output_first_after,
+        cpu_expected_bits,
+        output_first_before,
+        output_first_after,
+        output_hits_lo64,
+        dispatch_delta,
+        finish_marker,
+        expected_finish_marker: RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        batch_bytes,
+    }
+}
+
+fn gpgpu_one_tile_compare_failure(
+    reason: &'static str,
+    program: GpgpuEuProgram,
+    output_gpu: u64,
+    cpu_expected_bits: u32,
+) -> crate::intel::GpgpuOneTileCompareProof {
+    crate::log!(
+        "intel/gpgpu: one-tile-output-compare submitted=0 finished=0 readback_ok=0 compare_ok=0 reason={} program_source={} groups=1 expected_lane_dispatch=8 observed_lane_dispatch=0 output_gpu=0x{:X} output_first_before=0x00000000 output_first_after=0x00000000 gpu_value=0x00000000 cpu_expected_bits=0x{:08X} output_hits_lo64=0x0000000000000000 finish_marker=0x00000000 finish_expected=0x{:08X} batch_bytes=0x0 output_owner=cpu-ap next=fix-one-tile-output-compare does_not_prove=model_matvec_or_gpu_live_load\n",
+        reason,
+        program.name,
+        output_gpu,
+        cpu_expected_bits,
+        RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+    );
+    crate::intel::GpgpuOneTileCompareProof {
+        submitted: false,
+        finished: false,
+        readback_ok: false,
+        compare_ok: false,
+        reason,
+        program_name: program.name,
+        output_gpu,
+        gpu_value: 0,
+        cpu_expected_bits,
+        output_first_before: 0,
+        output_first_after: 0,
+        output_hits_lo64: 0,
+        dispatch_delta: 0,
+        finish_marker: 0,
+        expected_finish_marker: RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        batch_bytes: 0,
     }
 }
 

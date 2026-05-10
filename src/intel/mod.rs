@@ -154,6 +154,26 @@ pub(crate) struct GpgpuOneTileSentinelProof {
     pub(crate) batch_bytes: usize,
 }
 
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct GpgpuOneTileCompareProof {
+    pub(crate) submitted: bool,
+    pub(crate) finished: bool,
+    pub(crate) readback_ok: bool,
+    pub(crate) compare_ok: bool,
+    pub(crate) reason: &'static str,
+    pub(crate) program_name: &'static str,
+    pub(crate) output_gpu: u64,
+    pub(crate) gpu_value: u32,
+    pub(crate) cpu_expected_bits: u32,
+    pub(crate) output_first_before: u32,
+    pub(crate) output_first_after: u32,
+    pub(crate) output_hits_lo64: u64,
+    pub(crate) dispatch_delta: u64,
+    pub(crate) finish_marker: u32,
+    pub(crate) expected_finish_marker: u32,
+    pub(crate) batch_bytes: usize,
+}
+
 fn pick_media_boot_demo_spawner() -> Option<(u32, SendSpawner)> {
     let background_slots = crate::workers::background_worker_slots();
 
@@ -432,6 +452,18 @@ pub(crate) fn submit_gpgpu_one_tile_output_sentinel_probe(
     cpu_expected_bits: u32,
 ) -> GpgpuOneTileSentinelProof {
     self::gpgpu::submit_gpgpu_one_tile_output_sentinel_probe(
+        output_gpu,
+        output_bytes,
+        cpu_expected_bits,
+    )
+}
+
+pub(crate) fn submit_gpgpu_one_tile_output_compare_probe(
+    output_gpu: u64,
+    output_bytes: usize,
+    cpu_expected_bits: u32,
+) -> GpgpuOneTileCompareProof {
+    self::gpgpu::submit_gpgpu_one_tile_output_compare_probe(
         output_gpu,
         output_bytes,
         cpu_expected_bits,
