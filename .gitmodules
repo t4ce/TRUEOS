@@ -1,3 +1,6 @@
 [submodule "vendor/lumen"]
 	path = vendor/lumen
 	url = https://github.com/t4ce/Lumen
+[submodule "crates/truekey"]
+	path = crates/truekey
+	url = https://github.com/t4ce/TRUEKEY.git
