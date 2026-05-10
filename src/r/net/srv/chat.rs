@@ -669,7 +669,7 @@ async fn chat_http_runtime() {
         for endpoint in endpoints.iter_mut() {
             while let Some(ev) = endpoint.vnet.pop_event() {
                 match ev {
-                    api::Event::TcpEstablished { handle } => {
+                    api::Event::TcpEstablished { handle, .. } => {
                         crate::log!(
                             "chat-http: tcp established dev={} handle={}\n",
                             endpoint.dev_idx,

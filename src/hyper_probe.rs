@@ -342,7 +342,7 @@ async fn connect_example_de_vnet() -> Result<DuplexStream, &'static str> {
                     crate::log!("hyper_probe: net.http1.example_de opened handle={}\n", handle.0);
                     tcp_handle = Some(handle);
                 }
-                api::Event::TcpEstablished { handle } => {
+                api::Event::TcpEstablished { handle, .. } => {
                     if tcp_handle.is_none() {
                         tcp_handle = Some(handle);
                     }

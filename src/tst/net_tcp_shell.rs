@@ -94,7 +94,7 @@ pub async fn net_shell_task() {
                             crate::log!("net-shell: opened tcp handle={}\n", handle.0);
                         }
                     }
-                    NetEvent::TcpEstablished { handle } => {
+                    NetEvent::TcpEstablished { handle, .. } => {
                         let mut repaint_screen = false;
                         {
                             let mut st = NET_SHELL_STATE.lock();

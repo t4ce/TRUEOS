@@ -192,6 +192,8 @@ pub enum Event {
     },
     TcpEstablished {
         handle: NetHandle,
+        peer: Option<EndpointV4>,
+        peer6: Option<EndpointV6>,
     },
     TcpData {
         handle: NetHandle,

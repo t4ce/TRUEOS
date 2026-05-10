@@ -4,8 +4,6 @@ pub enum Ui2DemoTexId {
     Mandelbrot = 4_702,
     Bgrt = 4_704,
     Shell = 4_705,
-    Particle = 4_709,
-    ParticleSprite = 4_711,
     SmileyFountain = 4_713,
     Coreticks = 4_716,
     Swarm = 4_720,

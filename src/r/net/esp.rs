@@ -1338,7 +1338,7 @@ pub async fn esp_gate_task() {
                             trueos_esp::gate::TRUEOS_PEER_TCP_PORT
                         );
                     }
-                    v::vnet::Event::TcpEstablished { handle } => {
+                    v::vnet::Event::TcpEstablished { handle, .. } => {
                         if !ensure_trueos_peer_link(peer_links.as_mut_slice(), handle) {
                             crate::log!(
                                 "esp-gate: trueos peer tcp rejected handle={} reason=peer-slot-cap cap={}\n",

@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+QEMU_BIN="${QEMU_BIN:-qemu-system-x86_64}"
+ISO_PATH="${ISO_PATH:-bld/trueos.iso}"
+
+QEMU_HOST_TCP_PORT_3="${QEMU_HOST_TCP_PORT_3:-10003}"
+QEMU_HOST_TCP_PORT_4="${QEMU_HOST_TCP_PORT_4:-10004}"
+QEMU_HOST_TCP_PORT_80="${QEMU_HOST_TCP_PORT_80:-8080}"
+QEMU_NETDEV_USER="user,id=net1"
+QEMU_NETDEV_USER+=",hostfwd=tcp:127.0.0.1:${QEMU_HOST_TCP_PORT_3}-:3"
+QEMU_NETDEV_USER+=",hostfwd=tcp:127.0.0.1:${QEMU_HOST_TCP_PORT_4}-:4"
+QEMU_NETDEV_USER+=",hostfwd=tcp:127.0.0.1:${QEMU_HOST_TCP_PORT_80}-:80"
+
 exec env -i \
     "HOME=${HOME:-}" \
     "PATH=/usr/bin:/bin" \
@@ -10,14 +21,14 @@ exec env -i \
     "WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-}" \
     "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-}" \
     "XAUTHORITY=${XAUTHORITY:-}" \
-    qemu-system-x86_64 -no-shutdown \
+    "${QEMU_BIN}" -no-shutdown \
     -display sdl,gl=on \
     -vga none \
     -device virtio-gpu-gl-pci,xres=1600,yres=900 \
     -machine q35,accel=kvm:tcg \
     -bios "${QEMU_UEFI_FIRMWARE:?QEMU_UEFI_FIRMWARE is not set}" \
     -boot order=d \
-    -cdrom bld/trueos.iso \
+    -cdrom "${ISO_PATH}" \
     -debugcon stdio \
     -D bld/qemu.log \
     -d int,guest_errors,cpu_reset,unimp \
@@ -25,7 +36,7 @@ exec env -i \
     -smp cores=14 \
     -cpu host,host-phys-bits=true \
     -serial tcp:127.0.0.1:5555,server,nowait \
-    -netdev user,id=net1 \
+    -netdev "${QEMU_NETDEV_USER}" \
     -device virtio-net-pci,netdev=net1,disable-modern=off,bus=pcie.0,addr=0x3 \
     -object rng-random,filename=/dev/urandom,id=rng0 \
     -device virtio-rng-pci,rng=rng0,disable-modern=off,bus=pcie.0,addr=0x4 \

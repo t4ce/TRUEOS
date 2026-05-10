@@ -3,7 +3,6 @@ pub mod backends;
 pub mod jpeg_codec;
 pub mod lyon;
 pub mod mandelbrot;
-pub mod particle;
 pub mod png_codec;
 pub mod screenshot;
 pub mod svg;

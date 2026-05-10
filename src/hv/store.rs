@@ -487,7 +487,7 @@ pub async fn vm_store_replication_task() {
                         tcp_handle = Some(handle);
                     }
                 }
-                NetEvent::TcpEstablished { handle } => {
+                NetEvent::TcpEstablished { handle, .. } => {
                     tcp_handle = Some(handle);
                     inflight = false;
                     rx_buf.clear();

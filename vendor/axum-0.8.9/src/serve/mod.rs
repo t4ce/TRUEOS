@@ -23,6 +23,20 @@ mod listener;
 
 pub use self::listener::{Listener, ListenerExt, TapIo};
 
+// TRUEOS probe route: axum -> log facade -> globalog/logtotcp.
+// Keep this safe because axum's vendored manifest still forbids unsafe code.
+#[cfg(target_os = "trueos")]
+macro_rules! axum_trueos_probe {
+    ($($arg:tt)*) => {
+        log::info!("[axum-probe] {}", format_args!($($arg)*));
+    };
+}
+
+#[cfg(not(target_os = "trueos"))]
+macro_rules! axum_trueos_probe {
+    ($($arg:tt)*) => {};
+}
+
 /// Serve the service with the supplied listener.
 ///
 /// This method of running a service is intentionally simple and doesn't support any configuration.
@@ -101,6 +115,7 @@ where
     S: Service<Request, Response = Response, Error = Infallible> + Clone + Send + 'static,
     S::Future: Send,
 {
+    axum_trueos_probe!("serve construct");
     Serve {
         listener,
         make_service,
@@ -177,6 +192,7 @@ where
     S::Future: Send,
 {
     async fn run(self) -> ! {
+        axum_trueos_probe!("serve run enter");
         let Self {
             mut listener,
             mut make_service,
@@ -185,10 +201,14 @@ where
 
         let (signal_tx, _signal_rx) = watch::channel(());
         let (_close_tx, close_rx) = watch::channel(());
+        axum_trueos_probe!("serve channels ready");
 
         loop {
+            axum_trueos_probe!("serve accept wait");
             let (io, remote_addr) = listener.accept().await;
+            axum_trueos_probe!("serve accepted remote={remote_addr:?}");
             handle_connection(&mut make_service, &signal_tx, &close_rx, io, remote_addr).await;
+            axum_trueos_probe!("serve accept loop returned from handle_connection");
         }
     }
 }
@@ -228,6 +248,7 @@ where
     type IntoFuture = private::ServeFuture;
 
     fn into_future(self) -> Self::IntoFuture {
+        axum_trueos_probe!("serve into_future");
         private::ServeFuture(Box::pin(async move { self.run().await }))
     }
 }
@@ -364,15 +385,20 @@ async fn handle_connection<L, M, S>(
     S: Service<Request, Response = Response, Error = Infallible> + Clone + Send + 'static,
     S::Future: Send,
 {
+    axum_trueos_probe!("connection enter remote={remote_addr:?}");
     let io = TokioIo::new(io);
+    axum_trueos_probe!("connection io wrapped remote={remote_addr:?}");
 
     trace!("connection {remote_addr:?} accepted");
 
+    axum_trueos_probe!("make_service ready begin remote={remote_addr:?}");
     make_service
         .ready()
         .await
         .unwrap_or_else(|err| match err {});
+    axum_trueos_probe!("make_service ready ok remote={remote_addr:?}");
 
+    axum_trueos_probe!("make_service call begin remote={remote_addr:?}");
     let tower_service = make_service
         .call(IncomingStream {
             io: &io,
@@ -381,38 +407,55 @@ async fn handle_connection<L, M, S>(
         .await
         .unwrap_or_else(|err| match err {})
         .map_request(|req: Request<Incoming>| req.map(Body::new));
+    axum_trueos_probe!("make_service call ok; tower service built");
 
     let hyper_service = TowerToHyperService::new(tower_service);
     let signal_tx = signal_tx.clone();
     let close_rx = close_rx.clone();
+    axum_trueos_probe!("hyper service wrapped; spawning connection task");
 
     tokio::spawn(async move {
+        axum_trueos_probe!("connection task enter");
         #[allow(unused_mut)]
         let mut builder = Builder::new(TokioExecutor::new());
+        axum_trueos_probe!("hyper builder created");
         // CONNECT protocol needed for HTTP/2 websockets
         #[cfg(feature = "http2")]
-        builder.http2().enable_connect_protocol();
+        {
+            axum_trueos_probe!("http2 connect protocol enabled");
+            builder.http2().enable_connect_protocol();
+        }
 
         let mut conn = pin!(builder.serve_connection_with_upgrades(io, hyper_service));
         let mut signal_closed = pin!(signal_tx.closed().fuse());
+        axum_trueos_probe!("serve_connection future ready");
 
         loop {
             tokio::select! {
                 result = conn.as_mut() => {
-                    if let Err(_err) = result {
-                        trace!("failed to serve connection: {_err:#}");
+                    match result {
+                        Ok(()) => {
+                            axum_trueos_probe!("connection completed ok");
+                        }
+                        Err(_err) => {
+                            trace!("failed to serve connection: {_err:#}");
+                            axum_trueos_probe!("connection completed err={_err:#}");
+                        }
                     }
                     break;
                 }
                 _ = &mut signal_closed => {
                     trace!("signal received in task, starting graceful shutdown");
+                    axum_trueos_probe!("connection graceful shutdown signal");
                     conn.as_mut().graceful_shutdown();
                 }
             }
         }
 
         drop(close_rx);
+        axum_trueos_probe!("connection task exit");
     });
+    axum_trueos_probe!("connection task spawned");
 }
 
 /// An incoming stream.

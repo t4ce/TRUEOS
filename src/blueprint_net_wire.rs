@@ -132,6 +132,10 @@ impl<'a> Reader<'a> {
         let len = self.u16()? as usize;
         Ok(api::ByteBuf::from_slice_trunc(self.bytes(len)?))
     }
+
+    fn remaining(&self) -> usize {
+        self.input.len().saturating_sub(self.pos)
+    }
 }
 
 fn kind_to_wire(kind: api::SocketKind) -> u8 {
@@ -300,9 +304,29 @@ pub(crate) fn encode_event(event: api::Event, out: &mut [u8]) -> Result<usize, W
             w.u16(from.port)?;
             w.byte_buf(&data)?;
         }
-        api::Event::TcpEstablished { handle } => {
+        api::Event::TcpEstablished {
+            handle,
+            peer,
+            peer6,
+        } => {
             w.byte(TAG_TCP_ESTABLISHED)?;
             w.u32(handle.0)?;
+            let mut flags = 0u8;
+            if peer.is_some() {
+                flags |= 1;
+            }
+            if peer6.is_some() {
+                flags |= 2;
+            }
+            w.byte(flags)?;
+            if let Some(peer) = peer {
+                w.bytes(&peer.addr)?;
+                w.u16(peer.port)?;
+            }
+            if let Some(peer) = peer6 {
+                w.bytes(&peer.addr)?;
+                w.u16(peer.port)?;
+            }
         }
         api::Event::TcpData { handle, data } => {
             w.byte(TAG_TCP_DATA)?;
@@ -369,9 +393,31 @@ pub(crate) fn decode_event(input: &[u8]) -> Result<api::Event, WireError> {
             },
             data: r.byte_buf()?,
         },
-        TAG_TCP_ESTABLISHED => api::Event::TcpEstablished {
-            handle: api::NetHandle(r.u32()?),
-        },
+        TAG_TCP_ESTABLISHED => {
+            let handle = api::NetHandle(r.u32()?);
+            let flags = if r.remaining() != 0 { r.byte()? } else { 0 };
+            let peer = if (flags & 1) != 0 {
+                Some(api::EndpointV4 {
+                    addr: r.array()?,
+                    port: r.u16()?,
+                })
+            } else {
+                None
+            };
+            let peer6 = if (flags & 2) != 0 {
+                Some(api::EndpointV6 {
+                    addr: r.array()?,
+                    port: r.u16()?,
+                })
+            } else {
+                None
+            };
+            api::Event::TcpEstablished {
+                handle,
+                peer,
+                peer6,
+            }
+        }
         TAG_TCP_DATA => api::Event::TcpData {
             handle: api::NetHandle(r.u32()?),
             data: r.byte_buf()?,

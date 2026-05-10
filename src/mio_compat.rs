@@ -74,6 +74,32 @@ impl CompatAddr {
             },
         }
     }
+
+    fn from_vnet(peer: Option<api::EndpointV4>, peer6: Option<api::EndpointV6>) -> Option<Self> {
+        if let Some(peer) = peer {
+            return Some(Self::V4 {
+                addr: peer.addr,
+                port: peer.port,
+            });
+        }
+        peer6.map(|peer| Self::V6 {
+            addr: peer.addr,
+            port: peer.port,
+        })
+    }
+
+    fn unspecified_same_family(self) -> Self {
+        match self {
+            Self::V4 { .. } => Self::V4 {
+                addr: [0; 4],
+                port: 0,
+            },
+            Self::V6 { .. } => Self::V6 {
+                addr: [0; 16],
+                port: 0,
+            },
+        }
+    }
 }
 
 fn log_tcp_endpoint(prefix: &str, socket_id: u32, handle_id: u32, peer: CompatAddr) {
@@ -101,6 +127,31 @@ fn log_tcp_endpoint(prefix: &str, socket_id: u32, handle_id: u32, peer: CompatAd
             port
         ),
     }
+}
+
+fn compat_addr_port(addr: Option<CompatAddr>) -> Option<u16> {
+    match addr {
+        Some(CompatAddr::V4 { port, .. }) | Some(CompatAddr::V6 { port, .. }) => Some(port),
+        None => None,
+    }
+}
+
+fn probe_tcp_socket(socket: &MioSocketState) -> bool {
+    socket.kind == MioSocketKind::TcpStream
+        && matches!(compat_addr_port(socket.local), Some(4 | 5))
+}
+
+fn should_log_selector_probe(readiness: u8) -> bool {
+    let interesting =
+        readiness & (READY_READABLE | READY_ERROR | READY_READ_CLOSED | READY_WRITE_CLOSED);
+    if interesting != 0 {
+        return true;
+    }
+
+    static PURE_WRITABLE_PROBE_COUNT: core::sync::atomic::AtomicU32 =
+        core::sync::atomic::AtomicU32::new(0);
+    let count = PURE_WRITABLE_PROBE_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed) + 1;
+    count <= 4 || count.is_power_of_two()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -374,27 +425,49 @@ impl MioCompat {
                     }
                 }
             }
-            api::Event::TcpEstablished { handle } => {
+            api::Event::TcpEstablished {
+                handle,
+                peer,
+                peer6,
+            } => {
                 if let Some(listener_id) =
                     self.socket_by_handle_id(handle, MioSocketKind::TcpListener)
                 {
                     let child_id = self.alloc_socket_id();
-                    let (local, port) = {
-                        let listener = self.socket(listener_id).unwrap();
-                        (listener.local, listener.listen_port)
+                    let event_peer = CompatAddr::from_vnet(peer, peer6);
+                    let (local, fallback_peer, port, inherited_rx) = {
+                        let listener = self.socket_mut(listener_id).unwrap();
+                        let mut inherited_rx = VecDeque::new();
+                        core::mem::swap(&mut inherited_rx, &mut listener.rx_stream);
+                        if !inherited_rx.is_empty() {
+                            crate::log!(
+                                "mio_compat: tcp established inherited listener bytes listener={} child={} handle={} bytes={}\n",
+                                listener_id,
+                                child_id,
+                                handle.0,
+                                inherited_rx.len()
+                            );
+                        }
+                        (
+                            listener.local,
+                            listener.local.map(CompatAddr::unspecified_same_family),
+                            listener.listen_port,
+                            inherited_rx,
+                        )
                     };
+                    let peer = event_peer.or(fallback_peer);
 
                     self.sockets.push(MioSocketState {
                         id: child_id,
                         kind: MioSocketKind::TcpStream,
                         handle: Some(handle),
                         local,
-                        peer: None,
+                        peer,
                         listen_port: None,
                         connected: true,
                         closed: false,
                         error: STATUS_OK,
-                        rx_stream: VecDeque::new(),
+                        rx_stream: inherited_rx,
                         rx_dgrams: VecDeque::new(),
                         accept_queue: VecDeque::new(),
                     });
@@ -424,7 +497,38 @@ impl MioCompat {
             }
             api::Event::TcpData { handle, data } => {
                 if let Some(socket) = self.socket_by_handle_mut(handle) {
+                    if socket.kind == MioSocketKind::TcpListener {
+                        crate::log!(
+                            "mio_compat: tcp data queued on listener socket={} handle={} bytes={} queued_before={}\n",
+                            socket.id,
+                            handle.0,
+                            data.as_slice().len(),
+                            socket.rx_stream.len()
+                        );
+                    } else if probe_tcp_socket(socket) {
+                        crate::log!(
+                            "mio_compat: tcp data socket={} handle={} bytes={} queued_before={}\n",
+                            socket.id,
+                            handle.0,
+                            data.as_slice().len(),
+                            socket.rx_stream.len()
+                        );
+                    }
                     socket.rx_stream.extend(data.as_slice().iter().copied());
+                    if probe_tcp_socket(socket) {
+                        crate::log!(
+                            "mio_compat: tcp data queued socket={} handle={} queued_after={}\n",
+                            socket.id,
+                            handle.0,
+                            socket.rx_stream.len()
+                        );
+                    }
+                } else {
+                    crate::log!(
+                        "mio_compat: tcp data orphan handle={} bytes={}\n",
+                        handle.0,
+                        data.as_slice().len()
+                    );
                 }
             }
             api::Event::TcpSent { handle, .. } => {
@@ -546,6 +650,18 @@ impl MioCompat {
                     continue;
                 }
 
+                if probe_tcp_socket(socket) && should_log_selector_probe(readiness) {
+                    crate::log!(
+                        "mio_compat: tcp selector-ready selector={} socket={} token={} interests=0x{:02x} readiness=0x{:02x} rx={} closed={}\n",
+                        selector_id,
+                        socket.id,
+                        reg.token,
+                        reg.interests,
+                        readiness,
+                        socket.rx_stream.len(),
+                        socket.closed as u8
+                    );
+                }
                 if crate::logflag::NET_LOG_TCP_FLOW
                     && socket.kind == MioSocketKind::Udp
                     && (readiness & READY_WRITABLE) != 0
@@ -988,6 +1104,14 @@ pub(crate) unsafe fn mio_tcp_stream_read_host(
             return STATUS_INVALID_INPUT as isize;
         }
         if socket.rx_stream.is_empty() {
+            if probe_tcp_socket(socket) {
+                crate::log!(
+                    "mio_compat: tcp read would-block socket={} cap={} closed={}\n",
+                    socket.id,
+                    out_cap,
+                    socket.closed as u8
+                );
+            }
             return if socket.closed {
                 0
             } else {
@@ -1002,6 +1126,14 @@ pub(crate) unsafe fn mio_tcp_stream_read_host(
                     .add(index)
                     .write(socket.rx_stream.pop_front().unwrap());
             }
+        }
+        if probe_tcp_socket(socket) {
+            crate::log!(
+                "mio_compat: tcp read socket={} bytes={} remaining={}\n",
+                socket.id,
+                len,
+                socket.rx_stream.len()
+            );
         }
         len as isize
     })
@@ -1068,6 +1200,15 @@ pub(crate) unsafe fn mio_tcp_stream_write_host(
         };
 
         let len = data_len.min(api::MAX_MSG);
+        if probe_tcp_socket(socket) {
+            crate::log!(
+                "mio_compat: tcp write socket={} handle={} bytes={} requested={}\n",
+                socket.id,
+                handle.0,
+                len,
+                data_len
+            );
+        }
         let data = unsafe { core::slice::from_raw_parts(data_ptr, len) };
         match compat.submit(api::Command::SendTcp {
             handle,
@@ -1304,18 +1445,33 @@ pub(crate) unsafe fn mio_tcp_listener_accept_host(
     }
     with_compat(|compat| {
         compat.pump();
-        let Some(listener) = compat.socket_mut(socket_id) else {
+        let Some(listener_index) = compat
+            .sockets
+            .iter()
+            .position(|socket| socket.id == socket_id)
+        else {
             return STATUS_NOT_FOUND;
         };
-        if listener.kind != MioSocketKind::TcpListener {
+        if compat.sockets[listener_index].kind != MioSocketKind::TcpListener {
             return STATUS_INVALID_INPUT;
         }
-        let Some(child_id) = listener.accept_queue.pop_front() else {
+        let fallback_addr = compat.sockets[listener_index]
+            .local
+            .map(CompatAddr::unspecified_same_family)
+            .unwrap_or(CompatAddr::V4 {
+                addr: [0; 4],
+                port: 0,
+            });
+        let Some(child_id) = compat.sockets[listener_index].accept_queue.pop_front() else {
             return STATUS_WOULD_BLOCK;
         };
+        let peer_addr = compat
+            .socket(child_id)
+            .and_then(|socket| socket.peer)
+            .unwrap_or(fallback_addr);
         unsafe {
             *out_socket_id = child_id;
-            *out_addr = TrueosMioSocketAddr::default();
+            *out_addr = peer_addr.to_raw();
         }
         STATUS_OK
     })

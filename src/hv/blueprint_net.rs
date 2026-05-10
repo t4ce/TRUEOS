@@ -81,7 +81,7 @@ pub(crate) fn poll_event(session_id: u32, out: &mut [u8]) -> Result<Option<usize
                 handle.0
             ));
         }
-        api::Event::TcpEstablished { handle } => {
+        api::Event::TcpEstablished { handle, .. } => {
             crate::hv::hvlogf(format_args!(
                 "hv: blueprint-net event tcp-established handle={}",
                 handle.0

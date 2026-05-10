@@ -123,7 +123,7 @@ fn pump_socket(socket: &mut SocketState) {
                 socket.closed = false;
                 socket.last_error = 0;
             }
-            api::Event::TcpEstablished { handle } => {
+            api::Event::TcpEstablished { handle, .. } => {
                 socket.handle = Some(handle);
                 socket.connected = true;
                 socket.connect_submitted = false;
