@@ -1234,6 +1234,8 @@ const GPGPU_WALKER_GROUP_X_DIM_LADDER: &[u32] = &[186];
 // 6144 groups still writes the right value, but does not retire cleanly; leave
 // this cap alone until the kernel, queueing model, or retire logic grows.
 const GPGPU_T5_LIVE4_GROUP_X_DIM_LADDER: &[u32] = &[4096];
+// T6 starts from the same clean retire cap as T5 until live8 has its own logs.
+const GPGPU_T6_LIVE8_GROUP_X_DIM_LADDER: &[u32] = &[4096];
 const GPGPU_WALKER_GROUP_THREADS: u32 = 1;
 const GPGPU_WALKER_SIMD8_LANES: u32 = 8;
 
@@ -1246,6 +1248,23 @@ struct GpgpuEuProgram {
     expected_store_value: u32,
     store_send_dword: Option<usize>,
     visible_seed_dword: Option<usize>,
+}
+
+#[derive(Copy, Clone)]
+struct GpgpuOneRowMatvecProfile {
+    program: GpgpuEuProgram,
+    live_k_dim: usize,
+    expected_sentinel: u32,
+    requires_live_gpu_load: bool,
+    scale_ladder: &'static [u32],
+    log_prefix: &'static str,
+    scale_prefix: &'static str,
+    summary_label: &'static str,
+    submit_label: &'static str,
+    success_class: &'static str,
+    success_reason: &'static str,
+    success_reason_no_ts: &'static str,
+    surface_note: &'static str,
 }
 
 // Legacy diagnostic dataport probe.  This hand-written EU blob is not the final
@@ -1361,6 +1380,56 @@ fn gpgpu_t5_one_row_matvec_program() -> GpgpuEuProgram {
         expected_store_value: 0,
         store_send_dword: Some(trueos_eu::gfx12::T5_SMALL_LIVE4_TRUEOS_ARENA_STORE_SEND_DWORD),
         visible_seed_dword: Some(trueos_eu::gfx12::T5_SMALL_LIVE4_TRUEOS_ARENA_SENTINEL_DWORD),
+    }
+}
+
+fn gpgpu_t6_one_row_matvec_program() -> GpgpuEuProgram {
+    let artifact =
+        trueos_eu::gfx12::T6_SMALL_LIVE8_TRUEOS_ARENA_BF16_DOT_HDC1_STATELESS_STORE_THEN_TS_EOT;
+    GpgpuEuProgram {
+        name: artifact.name,
+        kind: artifact.kind,
+        words: artifact.words,
+        expects_store: artifact.expects_store,
+        expected_store_value: 0,
+        store_send_dword: Some(trueos_eu::gfx12::T6_SMALL_LIVE8_TRUEOS_ARENA_STORE_SEND_DWORD),
+        visible_seed_dword: Some(trueos_eu::gfx12::T6_SMALL_LIVE8_TRUEOS_ARENA_SENTINEL_DWORD),
+    }
+}
+
+fn gpgpu_t5_one_row_matvec_profile() -> GpgpuOneRowMatvecProfile {
+    GpgpuOneRowMatvecProfile {
+        program: gpgpu_t5_one_row_matvec_program(),
+        live_k_dim: trueos_eu::gfx12::T5_ONE_ROW_MATVEC_LIVE_K,
+        expected_sentinel: trueos_eu::gfx12::T5_SMALL_LIVE4_TRUEOS_ARENA_EXPECTED_SENTINEL_U32,
+        requires_live_gpu_load: trueos_eu::gfx12::T5_ONE_ROW_MATVEC_REQUIRES_LIVE_GPU_LOAD,
+        scale_ladder: GPGPU_T5_LIVE4_GROUP_X_DIM_LADDER,
+        log_prefix: "t5",
+        scale_prefix: "t5-live4",
+        summary_label: "t5-small-live4-bf16-dot",
+        submit_label: "gpgpu-t5-small-live4-scale",
+        success_class: "t5-live4-packed-bf16-proven",
+        success_reason: "t5-live4-written",
+        success_reason_no_ts: "t5-live4-written-no-ts-delta",
+        surface_note: "bind-send-bti-to-t5-trueos-arena-base",
+    }
+}
+
+fn gpgpu_t6_one_row_matvec_profile() -> GpgpuOneRowMatvecProfile {
+    GpgpuOneRowMatvecProfile {
+        program: gpgpu_t6_one_row_matvec_program(),
+        live_k_dim: trueos_eu::gfx12::T6_ONE_ROW_MATVEC_LIVE_K,
+        expected_sentinel: trueos_eu::gfx12::T6_SMALL_LIVE8_TRUEOS_ARENA_EXPECTED_SENTINEL_U32,
+        requires_live_gpu_load: true,
+        scale_ladder: GPGPU_T6_LIVE8_GROUP_X_DIM_LADDER,
+        log_prefix: "t6",
+        scale_prefix: "t6-live8",
+        summary_label: "t6-small-live8-bf16-dot",
+        submit_label: "gpgpu-t6-small-live8-scale",
+        success_class: "t6-live8-packed-bf16-proven",
+        success_reason: "t6-live8-written",
+        success_reason_no_ts: "t6-live8-written-no-ts-delta",
+        surface_note: "bind-send-bti-to-t6-trueos-arena-base",
     }
 }
 
@@ -2595,10 +2664,42 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
     cpu_expected_bits: u32,
     live_k_dim: usize,
 ) -> crate::intel::GpgpuT5OneRowMatvecProof {
-    let program = gpgpu_t5_one_row_matvec_program();
+    submit_gpgpu_one_row_matvec_probe_for(
+        gpgpu_t5_one_row_matvec_profile(),
+        output_gpu,
+        output_bytes,
+        cpu_expected_bits,
+        live_k_dim,
+    )
+}
+
+pub(crate) fn submit_gpgpu_t6_one_row_matvec_probe(
+    output_gpu: u64,
+    output_bytes: usize,
+    cpu_expected_bits: u32,
+    live_k_dim: usize,
+) -> crate::intel::GpgpuT5OneRowMatvecProof {
+    submit_gpgpu_one_row_matvec_probe_for(
+        gpgpu_t6_one_row_matvec_profile(),
+        output_gpu,
+        output_bytes,
+        cpu_expected_bits,
+        live_k_dim,
+    )
+}
+
+fn submit_gpgpu_one_row_matvec_probe_for(
+    profile: GpgpuOneRowMatvecProfile,
+    output_gpu: u64,
+    output_bytes: usize,
+    cpu_expected_bits: u32,
+    live_k_dim: usize,
+) -> crate::intel::GpgpuT5OneRowMatvecProof {
+    let program = profile.program;
     let Some(dev) = crate::intel::claimed_device() else {
         return gpgpu_t5_one_row_matvec_failure(
             "no-device",
+            profile,
             program,
             output_gpu,
             cpu_expected_bits,
@@ -2608,6 +2709,7 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
     let Some(warm) = warm_state() else {
         return gpgpu_t5_one_row_matvec_failure(
             "no-warm-state",
+            profile,
             program,
             output_gpu,
             cpu_expected_bits,
@@ -2617,6 +2719,7 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
     if warm.gpgpu_arena_virt.is_null() || warm.gpgpu_arena_len == 0 {
         return gpgpu_t5_one_row_matvec_failure(
             "no-arena",
+            profile,
             program,
             output_gpu,
             cpu_expected_bits,
@@ -2626,6 +2729,7 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
     if output_bytes < core::mem::size_of::<u32>() {
         return gpgpu_t5_one_row_matvec_failure(
             "bad-output-bytes",
+            profile,
             program,
             output_gpu,
             cpu_expected_bits,
@@ -2635,6 +2739,7 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
     if output_gpu < GPU_VA_GPGPU_TILE_ARENA_BASE {
         return gpgpu_t5_one_row_matvec_failure(
             "output-gpu-before-arena",
+            profile,
             program,
             output_gpu,
             cpu_expected_bits,
@@ -2645,6 +2750,7 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
     let Some(output_end) = output_offset.checked_add(output_bytes) else {
         return gpgpu_t5_one_row_matvec_failure(
             "output-range-overflow",
+            profile,
             program,
             output_gpu,
             cpu_expected_bits,
@@ -2654,6 +2760,7 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
     if output_end > warm.gpgpu_arena_len {
         return gpgpu_t5_one_row_matvec_failure(
             "output-range-outside-arena",
+            profile,
             program,
             output_gpu,
             cpu_expected_bits,
@@ -2663,6 +2770,7 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
     let Some(t5_surface_bytes) = output_end.checked_add(4095).map(|bytes| bytes & !4095) else {
         return gpgpu_t5_one_row_matvec_failure(
             "surface-span-overflow",
+            profile,
             program,
             output_gpu,
             cpu_expected_bits,
@@ -2672,6 +2780,7 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
     if t5_surface_bytes > warm.gpgpu_arena_len {
         return gpgpu_t5_one_row_matvec_failure(
             "surface-span-outside-arena",
+            profile,
             program,
             output_gpu,
             cpu_expected_bits,
@@ -2681,15 +2790,17 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
     if output_gpu >> 32 != 0 {
         return gpgpu_t5_one_row_matvec_failure(
             "output-gpu-high32-unsupported",
+            profile,
             program,
             output_gpu,
             cpu_expected_bits,
             live_k_dim,
         );
     }
-    if live_k_dim != trueos_eu::gfx12::T5_ONE_ROW_MATVEC_LIVE_K {
+    if live_k_dim != profile.live_k_dim {
         return gpgpu_t5_one_row_matvec_failure(
             "unexpected-live-k-dim",
+            profile,
             program,
             output_gpu,
             cpu_expected_bits,
@@ -2701,6 +2812,7 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
     if output_gpu != expected_t5_output_gpu {
         return gpgpu_t5_one_row_matvec_failure(
             "output-gpu-not-t5-arena-slot",
+            profile,
             program,
             output_gpu,
             cpu_expected_bits,
@@ -2710,6 +2822,7 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
     if !forcewake_render_acquire(warm) {
         return gpgpu_t5_one_row_matvec_failure(
             "forcewake",
+            profile,
             program,
             output_gpu,
             cpu_expected_bits,
@@ -2719,6 +2832,7 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
     if !ensure_gpgpu_warm_buffers_mapped(dev, warm) || !ensure_gpgpu_tile_arena_mapped(dev, warm) {
         return gpgpu_t5_one_row_matvec_failure(
             "ppgtt-map",
+            profile,
             program,
             output_gpu,
             cpu_expected_bits,
@@ -2754,7 +2868,8 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
         ]
     };
     crate::log!(
-        "intel/gpgpu: t5-output-window stage=before-submit output_gpu=0x{:X} old=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] cleared=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] surface_bytes=0x{:X} cpu_expected_bits=0x{:08X}\n",
+        "intel/gpgpu: {}-output-window stage=before-submit output_gpu=0x{:X} old=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] cleared=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] surface_bytes=0x{:X} cpu_expected_bits=0x{:08X}\n",
+        profile.log_prefix,
         output_gpu,
         output_words_before_clear[0],
         output_words_before_clear[1],
@@ -2773,6 +2888,7 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
         output_offset,
         output_bytes,
         cpu_expected_bits,
+        profile,
     );
     log_gpgpu_t5_arena_store_probe(
         "before-submit",
@@ -2780,6 +2896,7 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
         None,
         output_gpu,
         cpu_expected_bits,
+        profile,
     );
 
     submit_gpgpu_t5_store_only_control_probe(
@@ -2797,6 +2914,7 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
         output_offset,
         output_bytes,
         cpu_expected_bits,
+        profile,
     );
     log_gpgpu_t5_arena_store_probe(
         "after-store-only-control",
@@ -2804,6 +2922,7 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
         Some(t5_arena_before),
         output_gpu,
         cpu_expected_bits,
+        profile,
     );
     submit_gpgpu_t5_load_echo_probe(dev, warm, output_gpu, output_offset, t5_surface_bytes);
     crate::intel::dma_flush(warm.gpgpu_arena_virt, t5_surface_bytes);
@@ -2813,6 +2932,7 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
         output_offset,
         output_bytes,
         cpu_expected_bits,
+        profile,
     );
     log_gpgpu_t5_arena_store_probe(
         "after-load-echo",
@@ -2820,6 +2940,7 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
         Some(t5_arena_after_store_only),
         output_gpu,
         cpu_expected_bits,
+        profile,
     );
     unsafe {
         clear_gpgpu_output_words(output_virt, 8);
@@ -2835,7 +2956,8 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
         ]
     };
     crate::log!(
-        "intel/gpgpu: t5-output-window stage=before-live-submit output_gpu=0x{:X} cleared=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] surface_bytes=0x{:X} cpu_expected_bits=0x{:08X}\n",
+        "intel/gpgpu: {}-output-window stage=before-live-submit output_gpu=0x{:X} cleared=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] surface_bytes=0x{:X} cpu_expected_bits=0x{:08X}\n",
+        profile.log_prefix,
         output_gpu,
         output_words_before_live[0],
         output_words_before_live[1],
@@ -2850,6 +2972,7 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
         output_offset,
         output_bytes,
         cpu_expected_bits,
+        profile,
     );
     log_gpgpu_t5_arena_store_probe(
         "before-live-submit",
@@ -2857,6 +2980,7 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
         Some(t5_arena_after_load_echo),
         output_gpu,
         cpu_expected_bits,
+        profile,
     );
 
     let program_uploaded =
@@ -2864,6 +2988,7 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
     if !program_uploaded {
         return gpgpu_t5_one_row_matvec_failure(
             "program-upload",
+            profile,
             program,
             output_gpu,
             cpu_expected_bits,
@@ -2875,9 +3000,9 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
         warm,
         GPU_VA_GPGPU_TILE_ARENA_BASE,
         t5_surface_bytes,
-        "bind-send-bti-to-t5-trueos-arena-base",
+        profile.surface_note,
     );
-    let t5_input_summary = read_gpgpu_t5_input_summary(warm);
+    let t5_input_summary = read_gpgpu_t5_input_summary(warm, profile.live_k_dim);
     let mut submitted = false;
     let mut finished = false;
     let mut batch_bytes = 0usize;
@@ -2889,7 +3014,7 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
     let mut last_expected_lane_dispatch = 0u32;
     let mut last_scale_clean = false;
 
-    for (scale_index, &group_x_dim) in GPGPU_T5_LIVE4_GROUP_X_DIM_LADDER.iter().enumerate() {
+    for (scale_index, &group_x_dim) in profile.scale_ladder.iter().enumerate() {
         let expected_hw_threads = group_x_dim.saturating_mul(GPGPU_WALKER_GROUP_THREADS);
         let expected_lane_dispatch = expected_hw_threads.saturating_mul(GPGPU_WALKER_SIMD8_LANES);
         last_group_x_dim = group_x_dim;
@@ -2919,7 +3044,8 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
             Ok(bytes) => bytes,
             Err(reason) => {
                 crate::log!(
-                    "intel/gpgpu: t5-live4-scale-proof scale_index={} program_source={} requested_groups={} requested_group_count={} threads_per_group={} expected_hw_threads={} simd_lanes_per_thread={} expected_lane_dispatch={} observed_lane_dispatch=0 lane_count_matches=0 submitted=0 retired=0 finish_marker=0x00000000 finish_expected=0x{:08X} output_first_before=0x{:08X} output_first_after=0x00000000 gpu_matches_packed_bf16=0 gpu_matches_word_view=0 word_view_bits=0x{:08X} packed_bf16_bits=0x{:08X} failure_class={} batch_bytes=0x0 output_owner=cpu-ap does_not_prove=full_model_matvec\n",
+                    "intel/gpgpu: {}-scale-proof scale_index={} program_source={} requested_groups={} requested_group_count={} threads_per_group={} expected_hw_threads={} simd_lanes_per_thread={} expected_lane_dispatch={} observed_lane_dispatch=0 lane_count_matches=0 submitted=0 retired=0 finish_marker=0x00000000 finish_expected=0x{:08X} output_first_before=0x{:08X} output_first_after=0x00000000 gpu_matches_packed_bf16=0 gpu_matches_word_view=0 word_view_bits=0x{:08X} packed_bf16_bits=0x{:08X} failure_class={} batch_bytes=0x0 output_owner=cpu-ap does_not_prove=full_model_matvec\n",
+                    profile.scale_prefix,
                     scale_index,
                     program.name,
                     group_x_dim,
@@ -2935,7 +3061,8 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
                     reason,
                 );
                 crate::log!(
-                    "intel/gpgpu: t5-live4-scale-ladder stop_at_scale={} reason=batch-encode requested_groups={} expected_lane_dispatch={} observed_lane_dispatch=0\n",
+                    "intel/gpgpu: {}-scale-ladder stop_at_scale={} reason=batch-encode requested_groups={} expected_lane_dispatch={} observed_lane_dispatch=0\n",
+                    profile.scale_prefix,
                     scale_index,
                     group_x_dim,
                     expected_lane_dispatch,
@@ -2951,7 +3078,7 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
             warm,
             RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
             RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD,
-            "gpgpu-t5-small-live4-scale",
+            profile.submit_label,
         );
         submitted = batch_bytes != 0;
         crate::intel::dma_flush(warm.result_virt, warm.result_len);
@@ -2971,6 +3098,7 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
         if scale_index == 0 {
             log_gpgpu_t5_input_summary(
                 "after-live-submit",
+                profile,
                 t5_input_summary,
                 output_words_after[0],
                 cpu_expected_bits,
@@ -2984,7 +3112,7 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
         last_scale_clean =
             submitted && finished && marker_ok && lane_count_matches && packed_bf16_ok;
         let failure_class = if last_scale_clean {
-            "t5-live4-packed-bf16-proven"
+            profile.success_class
         } else if !finished {
             "submit-not-finished"
         } else if !marker_ok {
@@ -2997,7 +3125,8 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
             "unknown"
         };
         crate::log!(
-            "intel/gpgpu: t5-live4-scale-proof scale_index={} program_source={} requested_groups={} requested_group_count={} threads_per_group={} expected_hw_threads={} simd_lanes_per_thread={} expected_lane_dispatch={} observed_lane_dispatch={} lane_count_matches={} submitted={} retired={} finish_marker=0x{:08X} finish_expected=0x{:08X} output_first_before=0x{:08X} output_first_after=0x{:08X} gpu_matches_packed_bf16={} gpu_matches_word_view={} word_view_bits=0x{:08X} packed_bf16_bits=0x{:08X} failure_class={} batch_bytes=0x{:X} output_owner=cpu-ap does_not_prove=full_model_matvec\n",
+            "intel/gpgpu: {}-scale-proof scale_index={} program_source={} requested_groups={} requested_group_count={} threads_per_group={} expected_hw_threads={} simd_lanes_per_thread={} expected_lane_dispatch={} observed_lane_dispatch={} lane_count_matches={} submitted={} retired={} finish_marker=0x{:08X} finish_expected=0x{:08X} output_first_before=0x{:08X} output_first_after=0x{:08X} gpu_matches_packed_bf16={} gpu_matches_word_view={} word_view_bits=0x{:08X} packed_bf16_bits=0x{:08X} failure_class={} batch_bytes=0x{:X} output_owner=cpu-ap does_not_prove=full_model_matvec\n",
+            profile.scale_prefix,
             scale_index,
             program.name,
             group_x_dim,
@@ -3022,11 +3151,12 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
             batch_bytes,
         );
         if !finished {
-            recover_render_engine_after_nonretired_submit(dev, warm, "gpgpu-t5-small-live4-scale");
+            recover_render_engine_after_nonretired_submit(dev, warm, profile.submit_label);
         }
         if !last_scale_clean {
             crate::log!(
-                "intel/gpgpu: t5-live4-scale-ladder stop_at_scale={} reason=first-nonclean-proof requested_groups={} expected_lane_dispatch={} observed_lane_dispatch={}\n",
+                "intel/gpgpu: {}-scale-ladder stop_at_scale={} reason=first-nonclean-proof requested_groups={} expected_lane_dispatch={} observed_lane_dispatch={}\n",
+                profile.scale_prefix,
                 scale_index,
                 group_x_dim,
                 expected_lane_dispatch,
@@ -3041,14 +3171,16 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
         gpgpu_stage_dword_hits_mask_lo64(output_virt as *const u32, output_count, cpu_expected_bits)
     };
     crate::log!(
-        "intel/gpgpu: t5-output-window stage=after-submit output_gpu=0x{:X} words=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] expected_bits=0x{:08X} expected_meta=[0x00000004,0x{:08X},0x00000000] finish_marker=0x{:08X} last_groups={}\n",
+        "intel/gpgpu: {}-output-window stage=after-submit output_gpu=0x{:X} words=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] expected_bits=0x{:08X} expected_meta=[0x{:08X},0x{:08X},0x00000000] finish_marker=0x{:08X} last_groups={}\n",
+        profile.log_prefix,
         output_gpu,
         output_words_after[0],
         output_words_after[1],
         output_words_after[2],
         output_words_after[3],
         cpu_expected_bits,
-        trueos_eu::gfx12::T5_SMALL_LIVE4_TRUEOS_ARENA_EXPECTED_SENTINEL_U32,
+        profile.live_k_dim as u32,
+        profile.expected_sentinel,
         finish_marker,
         last_group_x_dim,
     );
@@ -3058,6 +3190,7 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
         output_offset,
         output_bytes,
         cpu_expected_bits,
+        profile,
     );
     log_gpgpu_t5_arena_store_probe(
         "after-submit",
@@ -3065,18 +3198,19 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
         Some(t5_arena_before),
         output_gpu,
         cpu_expected_bits,
+        profile,
     );
     let compare_ok = output_first_after == cpu_expected_bits && (output_hits_lo64 & 1) != 0;
     let readback_ok =
         compare_ok && finished && finish_marker == RCS_EXEC_RESULT_COMPUTE_WALKER_DONE;
     let reason = if readback_ok && dispatch_delta == 0 {
-        "t5-live4-written-no-ts-delta"
+        profile.success_reason_no_ts
     } else if readback_ok {
-        "t5-live4-written"
+        profile.success_reason
     } else if !finished {
         "submit-not-finished"
     } else if last_scale_clean {
-        "t5-live4-packed-bf16-scale-clean-final-compare-mismatch"
+        "packed-bf16-scale-clean-final-compare-mismatch"
     } else if output_first_after == t5_input_summary.shader_word_low_bits {
         "legacy-word-view-output"
     } else if output_first_after != cpu_expected_bits {
@@ -3085,7 +3219,8 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
         "compare-not-at-slot0"
     };
     crate::log!(
-        "intel/gpgpu: t5-small-live4-bf16-dot submitted={} finished={} readback_ok={} compare_ok={} reason={} program_source={} groups={} expected_lane_dispatch={} observed_lane_dispatch={} output_gpu=0x{:X} output_first_before=0x{:08X} output_first_after=0x{:08X} gpu_value=0x{:08X} cpu_expected_bits=0x{:08X} output_hits_lo64=0x{:016X} live_k_dim={} requires_live_gpu_load={} finish_marker=0x{:08X} finish_expected=0x{:08X} batch_bytes=0x{:X} output_owner=cpu-ap next=scale-live-k-or-row-count does_not_prove=full_model_matvec\n",
+        "intel/gpgpu: {} submitted={} finished={} readback_ok={} compare_ok={} reason={} program_source={} groups={} expected_lane_dispatch={} observed_lane_dispatch={} output_gpu=0x{:X} output_first_before=0x{:08X} output_first_after=0x{:08X} gpu_value=0x{:08X} cpu_expected_bits=0x{:08X} output_hits_lo64=0x{:016X} live_k_dim={} requires_live_gpu_load={} finish_marker=0x{:08X} finish_expected=0x{:08X} batch_bytes=0x{:X} output_owner=cpu-ap next=scale-live-k-or-row-count does_not_prove=full_model_matvec\n",
+        profile.summary_label,
         submitted as u8,
         finished as u8,
         readback_ok as u8,
@@ -3102,13 +3237,13 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
         cpu_expected_bits,
         output_hits_lo64,
         live_k_dim,
-        trueos_eu::gfx12::T5_ONE_ROW_MATVEC_REQUIRES_LIVE_GPU_LOAD as u8,
+        profile.requires_live_gpu_load as u8,
         finish_marker,
         RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
         batch_bytes,
     );
     if !finished {
-        recover_render_engine_after_nonretired_submit(dev, warm, "gpgpu-t5-small-live4");
+        recover_render_engine_after_nonretired_submit(dev, warm, profile.summary_label);
     }
     crate::intel::GpgpuT5OneRowMatvecProof {
         submitted,
@@ -3128,7 +3263,7 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
         expected_finish_marker: RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
         batch_bytes,
         live_k_dim,
-        requires_live_gpu_load: trueos_eu::gfx12::T5_ONE_ROW_MATVEC_REQUIRES_LIVE_GPU_LOAD,
+        requires_live_gpu_load: profile.requires_live_gpu_load,
     }
 }
 
@@ -3168,19 +3303,21 @@ fn gpgpu_one_tile_compare_failure(
 
 fn gpgpu_t5_one_row_matvec_failure(
     reason: &'static str,
+    profile: GpgpuOneRowMatvecProfile,
     program: GpgpuEuProgram,
     output_gpu: u64,
     cpu_expected_bits: u32,
     live_k_dim: usize,
 ) -> crate::intel::GpgpuT5OneRowMatvecProof {
     crate::log!(
-        "intel/gpgpu: t5-small-live4-bf16-dot submitted=0 finished=0 readback_ok=0 compare_ok=0 reason={} program_source={} groups=1 expected_lane_dispatch=8 observed_lane_dispatch=0 output_gpu=0x{:X} output_first_before=0x00000000 output_first_after=0x00000000 gpu_value=0x00000000 cpu_expected_bits=0x{:08X} output_hits_lo64=0x0000000000000000 live_k_dim={} requires_live_gpu_load={} finish_marker=0x00000000 finish_expected=0x{:08X} batch_bytes=0x0 output_owner=cpu-ap next=fix-t5-stage-or-generate-small-live4-artifact does_not_prove=model_matvec_or_gpu_live_load\n",
+        "intel/gpgpu: {} submitted=0 finished=0 readback_ok=0 compare_ok=0 reason={} program_source={} groups=1 expected_lane_dispatch=8 observed_lane_dispatch=0 output_gpu=0x{:X} output_first_before=0x00000000 output_first_after=0x00000000 gpu_value=0x00000000 cpu_expected_bits=0x{:08X} output_hits_lo64=0x0000000000000000 live_k_dim={} requires_live_gpu_load={} finish_marker=0x00000000 finish_expected=0x{:08X} batch_bytes=0x0 output_owner=cpu-ap next=fix-one-row-matvec-artifact does_not_prove=model_matvec_or_gpu_live_load\n",
+        profile.summary_label,
         reason,
         program.name,
         output_gpu,
         cpu_expected_bits,
         live_k_dim,
-        trueos_eu::gfx12::T5_ONE_ROW_MATVEC_REQUIRES_LIVE_GPU_LOAD as u8,
+        profile.requires_live_gpu_load as u8,
         RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
     );
     crate::intel::GpgpuT5OneRowMatvecProof {
@@ -3201,7 +3338,7 @@ fn gpgpu_t5_one_row_matvec_failure(
         expected_finish_marker: RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
         batch_bytes: 0,
         live_k_dim,
-        requires_live_gpu_load: trueos_eu::gfx12::T5_ONE_ROW_MATVEC_REQUIRES_LIVE_GPU_LOAD,
+        requires_live_gpu_load: profile.requires_live_gpu_load,
     }
 }
 
@@ -3317,6 +3454,7 @@ struct GpgpuT5InputSummary {
     row_le: [u16; 16],
     direct_bits: u32,
     shader_word_low_bits: u32,
+    live_k_dim: usize,
 }
 
 fn empty_gpgpu_t5_arena_range_probe() -> GpgpuT5ArenaRangeProbe {
@@ -3341,9 +3479,9 @@ fn gpgpu_t5_bf16_to_f32(bits: u16) -> f32 {
     f32::from_bits((bits as u32) << 16)
 }
 
-fn gpgpu_t5_live4_dot_bits(x_bits: &[u32; 8], row_le: &[u16; 16]) -> u32 {
+fn gpgpu_packed_bf16_dot_bits(x_bits: &[u32; 8], row_le: &[u16; 16], live_k_dim: usize) -> u32 {
     let mut acc = 0.0f32;
-    for lane in 0..trueos_eu::gfx12::T5_ONE_ROW_MATVEC_LIVE_K {
+    for lane in 0..live_k_dim.min(x_bits.len()).min(row_le.len()) {
         acc += f32::from_bits(x_bits[lane]) * gpgpu_t5_bf16_to_f32(row_le[lane]);
     }
     acc.to_bits()
@@ -3357,7 +3495,7 @@ fn gpgpu_t5_word_low_dot_bits(x_bits: &[u32; 8], row_le: &[u16; 16]) -> u32 {
     acc.to_bits()
 }
 
-fn read_gpgpu_t5_input_summary(warm: RenderWarmState) -> GpgpuT5InputSummary {
+fn read_gpgpu_t5_input_summary(warm: RenderWarmState, live_k_dim: usize) -> GpgpuT5InputSummary {
     let mut x_bits = [0u32; 8];
     let mut row_le = [0u16; 16];
     unsafe {
@@ -3374,24 +3512,28 @@ fn read_gpgpu_t5_input_summary(warm: RenderWarmState) -> GpgpuT5InputSummary {
     GpgpuT5InputSummary {
         x_bits,
         row_le,
-        direct_bits: gpgpu_t5_live4_dot_bits(&x_bits, &row_le),
+        direct_bits: gpgpu_packed_bf16_dot_bits(&x_bits, &row_le, live_k_dim),
         shader_word_low_bits: gpgpu_t5_word_low_dot_bits(&x_bits, &row_le),
+        live_k_dim,
     }
 }
 
 fn log_gpgpu_t5_input_summary(
     stage: &'static str,
+    profile: GpgpuOneRowMatvecProfile,
     summary: GpgpuT5InputSummary,
     gpu_bits: u32,
     cpu_expected_bits: u32,
 ) {
     crate::log!(
-        "intel/gpgpu: t5-input-summary stage={} gpu=0x{:08X} cpu_expected=0x{:08X} cpu_direct=0x{:08X} legacy_word_view=0x{:08X} direct_matches_cpu={} gpu_matches_direct={} gpu_matches_legacy_word_view={} shader_row_lanes=[0,1,2,3] legacy_word_view_lanes=[0,2,4,6] x_bits=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] row_le=[0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X}] proof=cpu-arena-operands-and-packed-bf16-unpack\n",
+        "intel/gpgpu: {}-input-summary stage={} gpu=0x{:08X} cpu_expected=0x{:08X} cpu_direct=0x{:08X} legacy_word_view=0x{:08X} live_k_dim={} direct_matches_cpu={} gpu_matches_direct={} gpu_matches_legacy_word_view={} shader_row_lanes=packed-prefix legacy_word_view_lanes=[0,2,4,6] x_bits=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] row_le=[0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X}] proof=cpu-arena-operands-and-packed-bf16-unpack\n",
+        profile.log_prefix,
         stage,
         gpu_bits,
         cpu_expected_bits,
         summary.direct_bits,
         summary.shader_word_low_bits,
+        summary.live_k_dim,
         (summary.direct_bits == cpu_expected_bits) as u8,
         (summary.direct_bits == gpu_bits) as u8,
         (summary.shader_word_low_bits == gpu_bits) as u8,
@@ -3455,6 +3597,7 @@ fn probe_gpgpu_t5_arena_store_window(
     output_offset: usize,
     output_bytes: usize,
     cpu_expected_bits: u32,
+    profile: GpgpuOneRowMatvecProfile,
 ) -> GpgpuT5ArenaStoreProbe {
     let scan_bytes = scan_bytes.min(warm.gpgpu_arena_len) & !3usize;
     let output_record_bytes = output_bytes.min(4 * core::mem::size_of::<u32>());
@@ -3494,10 +3637,10 @@ fn probe_gpgpu_t5_arena_store_window(
         if value == cpu_expected_bits {
             gpgpu_t5_arena_marker_step(&mut probe.expected, offset, outside_output_record);
         }
-        if value == trueos_eu::gfx12::T5_ONE_ROW_MATVEC_LIVE_K as u32 {
+        if value == profile.live_k_dim as u32 {
             gpgpu_t5_arena_marker_step(&mut probe.meta_k, offset, outside_output_record);
         }
-        if value == trueos_eu::gfx12::T5_SMALL_LIVE4_TRUEOS_ARENA_EXPECTED_SENTINEL_U32 {
+        if value == profile.expected_sentinel {
             gpgpu_t5_arena_marker_step(&mut probe.sentinel, offset, outside_output_record);
         }
     }
@@ -3518,6 +3661,7 @@ fn log_gpgpu_t5_arena_store_probe(
     before: Option<GpgpuT5ArenaStoreProbe>,
     output_gpu: u64,
     cpu_expected_bits: u32,
+    profile: GpgpuOneRowMatvecProfile,
 ) {
     let scan_digest_changed = before
         .map(|before| before.scan.digest != probe.scan.digest)
@@ -3535,7 +3679,8 @@ fn log_gpgpu_t5_arena_store_probe(
         .map(|before| before.output.digest != probe.output.digest)
         .unwrap_or(false);
     crate::log!(
-        "intel/gpgpu: t5-arena-misplaced-store-probe stage={} scan_gpu=0x{:X} scan_bytes=0x{:X} output_off=0x{:X} output_gpu=0x{:X} output_record_bytes=0x{:X} scan_nonzero={} scan_digest=0x{:016X} scan_nonzero_changed={} scan_digest_changed={} x_nonzero={} x_digest=0x{:016X} x_digest_changed={} row0_nonzero={} row0_digest=0x{:016X} row0_digest_changed={} output_nonzero={} output_digest=0x{:016X} output_digest_changed={} cpu_expected_bits=0x{:08X} expected_hits={} expected_misplaced_hits={} expected_hit0_valid={} expected_hit0_off=0x{:X} expected_hit0_gpu=0x{:X} expected_misplaced0_valid={} expected_misplaced0_off=0x{:X} expected_misplaced0_gpu=0x{:X} meta_k=0x{:08X} meta_k_hits={} meta_k_misplaced_hits={} meta_k_hit0_valid={} meta_k_hit0_off=0x{:X} meta_k_hit0_gpu=0x{:X} meta_k_misplaced0_valid={} meta_k_misplaced0_off=0x{:X} meta_k_misplaced0_gpu=0x{:X} sentinel=0x{:08X} sentinel_hits={} sentinel_misplaced_hits={} sentinel_hit0_valid={} sentinel_hit0_off=0x{:X} sentinel_hit0_gpu=0x{:X} sentinel_misplaced0_valid={} sentinel_misplaced0_off=0x{:X} sentinel_misplaced0_gpu=0x{:X} note=scans-t5-arena-prefix-not-full-dump\n",
+        "intel/gpgpu: {}-arena-misplaced-store-probe stage={} scan_gpu=0x{:X} scan_bytes=0x{:X} output_off=0x{:X} output_gpu=0x{:X} output_record_bytes=0x{:X} scan_nonzero={} scan_digest=0x{:016X} scan_nonzero_changed={} scan_digest_changed={} x_nonzero={} x_digest=0x{:016X} x_digest_changed={} row0_nonzero={} row0_digest=0x{:016X} row0_digest_changed={} output_nonzero={} output_digest=0x{:016X} output_digest_changed={} cpu_expected_bits=0x{:08X} expected_hits={} expected_misplaced_hits={} expected_hit0_valid={} expected_hit0_off=0x{:X} expected_hit0_gpu=0x{:X} expected_misplaced0_valid={} expected_misplaced0_off=0x{:X} expected_misplaced0_gpu=0x{:X} meta_k=0x{:08X} meta_k_hits={} meta_k_misplaced_hits={} meta_k_hit0_valid={} meta_k_hit0_off=0x{:X} meta_k_hit0_gpu=0x{:X} meta_k_misplaced0_valid={} meta_k_misplaced0_off=0x{:X} meta_k_misplaced0_gpu=0x{:X} sentinel=0x{:08X} sentinel_hits={} sentinel_misplaced_hits={} sentinel_hit0_valid={} sentinel_hit0_off=0x{:X} sentinel_hit0_gpu=0x{:X} sentinel_misplaced0_valid={} sentinel_misplaced0_off=0x{:X} sentinel_misplaced0_gpu=0x{:X} note=scans-one-row-arena-prefix-not-full-dump\n",
+        profile.log_prefix,
         stage,
         GPU_VA_GPGPU_TILE_ARENA_BASE,
         probe.scan_bytes,
@@ -3567,7 +3712,7 @@ fn log_gpgpu_t5_arena_store_probe(
             probe.expected.first_misplaced_valid,
             probe.expected.first_misplaced_off,
         ),
-        trueos_eu::gfx12::T5_ONE_ROW_MATVEC_LIVE_K as u32,
+        profile.live_k_dim as u32,
         probe.meta_k.hits,
         probe.meta_k.misplaced_hits,
         probe.meta_k.first_valid as u8,
@@ -3579,7 +3724,7 @@ fn log_gpgpu_t5_arena_store_probe(
             probe.meta_k.first_misplaced_valid,
             probe.meta_k.first_misplaced_off,
         ),
-        trueos_eu::gfx12::T5_SMALL_LIVE4_TRUEOS_ARENA_EXPECTED_SENTINEL_U32,
+        profile.expected_sentinel,
         probe.sentinel.hits,
         probe.sentinel.misplaced_hits,
         probe.sentinel.first_valid as u8,
