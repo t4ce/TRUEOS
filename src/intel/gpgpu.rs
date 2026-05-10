@@ -1336,6 +1336,9 @@ static GPGPU_EU_WALKER_SUBMITTED: AtomicBool = AtomicBool::new(false);
 static GPGPU_EU_WALKER_RETIRED: AtomicBool = AtomicBool::new(false);
 static GPGPU_EU_DISPATCH_DELTA: AtomicU32 = AtomicU32::new(0);
 static GPGPU_EU_C_STORE_VALUE: AtomicU32 = AtomicU32::new(0);
+static GPGPU_EU_PROVEN_WALKER_RETIRED: AtomicBool = AtomicBool::new(false);
+static GPGPU_EU_PROVEN_DISPATCH_DELTA: AtomicU32 = AtomicU32::new(0);
+static GPGPU_EU_PROVEN_C_STORE_VALUE: AtomicU32 = AtomicU32::new(0);
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct GpgpuPreflightStatus {
@@ -1369,8 +1372,19 @@ pub(crate) struct GpgpuPreflightStatus {
 pub(crate) fn gpgpu_preflight_status() -> GpgpuPreflightStatus {
     let warm = warm_state();
     let arena_bytes = warm.map_or(0, |warm| warm.gpgpu_arena_len);
-    let eu_dispatch_delta = GPGPU_EU_DISPATCH_DELTA.load(Ordering::Acquire);
-    let eu_c_store_value = GPGPU_EU_C_STORE_VALUE.load(Ordering::Acquire);
+    let proven_retired = GPGPU_EU_PROVEN_WALKER_RETIRED.load(Ordering::Acquire);
+    let proven_dispatch_delta = GPGPU_EU_PROVEN_DISPATCH_DELTA.load(Ordering::Acquire);
+    let use_proven_static = proven_retired && proven_dispatch_delta != 0;
+    let eu_dispatch_delta = if use_proven_static {
+        proven_dispatch_delta
+    } else {
+        GPGPU_EU_DISPATCH_DELTA.load(Ordering::Acquire)
+    };
+    let eu_c_store_value = if use_proven_static {
+        GPGPU_EU_PROVEN_C_STORE_VALUE.load(Ordering::Acquire)
+    } else {
+        GPGPU_EU_C_STORE_VALUE.load(Ordering::Acquire)
+    };
     let active_program = selected_gpgpu_eu_program();
     GpgpuPreflightStatus {
         submitted: GPGPU_PREFLIGHT_SUBMITTED.load(Ordering::Acquire),
@@ -1392,7 +1406,11 @@ pub(crate) fn gpgpu_preflight_status() -> GpgpuPreflightStatus {
         eu_kernel_uploaded: GPGPU_EU_KERNEL_UPLOADED.load(Ordering::Acquire),
         eu_walker_encoded: GPGPU_EU_WALKER_ENCODED.load(Ordering::Acquire),
         eu_walker_submitted: GPGPU_EU_WALKER_SUBMITTED.load(Ordering::Acquire),
-        eu_walker_retired: GPGPU_EU_WALKER_RETIRED.load(Ordering::Acquire),
+        eu_walker_retired: if use_proven_static {
+            true
+        } else {
+            GPGPU_EU_WALKER_RETIRED.load(Ordering::Acquire)
+        },
         eu_dispatch_delta,
         eu_c_store_value,
         eu_expected_store_value: active_program.expected_store_value,
@@ -1465,6 +1483,9 @@ pub(crate) fn submit_gpgpu_preflight_once() {
             let walker = submit_gpgpu_compute_walker_probe(dev, warm, scale_index, group_x_dim);
             let scale_passed = gpgpu_walker_scale_passed(walker);
             log_gpgpu_compute_walker_status(walker);
+            if scale_passed {
+                record_gpgpu_proven_walker(walker);
+            }
             if !walker.retired {
                 recover_render_engine_after_nonretired_submit(dev, warm, "gpgpu-compute-walker");
             }
@@ -1480,6 +1501,15 @@ pub(crate) fn submit_gpgpu_preflight_once() {
             }
         }
     }
+}
+
+fn record_gpgpu_proven_walker(proof: GpgpuComputeWalkerProof) {
+    GPGPU_EU_PROVEN_WALKER_RETIRED.store(true, Ordering::Release);
+    GPGPU_EU_PROVEN_DISPATCH_DELTA.store(
+        proof.dispatch_delta.min(u32::MAX as u64) as u32,
+        Ordering::Release,
+    );
+    GPGPU_EU_PROVEN_C_STORE_VALUE.store(proof.c_value, Ordering::Release);
 }
 
 fn gpgpu_walker_scale_passed(proof: GpgpuComputeWalkerProof) -> bool {

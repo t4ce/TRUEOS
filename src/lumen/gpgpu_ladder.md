@@ -95,7 +95,7 @@ This is the first wide, side-effecting GPGPU milestone suitable to feed into
 
 ### 4. Walker scale ladder
 
-Status: measured on 2026-05-10 08:47 boot log.
+Status: measured on the 2026-05-10 08:55 baremetal log drain.
 
 The harness now repeats the same proven artifact with a fine walker X ladder
 around the observed cliff:
@@ -127,11 +127,18 @@ Observed result:
   `store_seen=1`.
 - The first failing run still writes `0xC0DE7733`, so it reaches enough EU code
   to perform the HDC store, but it does not retire the full walker.
+- The `304` count is a partial dispatch delta from the second scale attempt,
+  not a clean 224-group proof.  It means the cliff is being hit during/after
+  launch, before all `224 * SIMD8` lanes retire.
 - The current proven upper rung for this artifact remains 186 SIMD8 payloads,
   or 1488 SIMD8 lane dispatches.
 
 This narrows the cliff to the range `(186, 224]` for the current static
 DP4A/HDC-store/EOT artifact shape.
+
+The runtime status exported to Lumen latches the last clean walker proof, not
+the final failed ladder attempt.  That keeps later sidepaths eligible after the
+ladder intentionally probes past the cliff.
 
 ## What This Still Does Not Prove
 
@@ -194,3 +201,7 @@ static GPU artifact is proven.  That record includes:
 This proves the exact tuple the first real T4 GPU load kernel must reproduce:
 manifest row + live activation vector + expected output.  It still logs
 `gpu_submission=0`, so it does not overclaim live GPU memory loads yet.
+
+The 2026-05-10 08:55 pasted drain contains the GPGPU preflight and scale ladder
+only.  A T4 sidepath record is expected later in the same boot once the Lumen
+BF16 matvec path is exercised.

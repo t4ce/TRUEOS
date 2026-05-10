@@ -18,6 +18,7 @@ static SERVICE_SESSION_ID: AtomicU64 = AtomicU64::new(0);
 static SERVICE_LOADING: AtomicBool = AtomicBool::new(false);
 static SERVICE_ONLINE: AtomicBool = AtomicBool::new(false);
 static SERVICE_OWNED_SESSION: AtomicU64 = AtomicU64::new(0);
+static SERVICE_WORKER_DONE: AtomicBool = AtomicBool::new(false);
 static CHAT_HELLO_SESSION_ID: AtomicU64 = AtomicU64::new(0);
 static CHAT_STATEMENT_ID: AtomicU64 = AtomicU64::new(1);
 static SERVICE_PROMPT_RUNNING: AtomicBool = AtomicBool::new(false);
@@ -339,6 +340,21 @@ async fn lumen_chat_ready_hello_task(session_id: u64) {
     post_ready_hello_loop(session_id).await;
 }
 
+#[embassy_executor::task(pool_size = 1)]
+async fn lumen_service_worker_task(target: crate::shell2::MatrixTarget, session_id: u64) {
+    let cpu_slot = crate::percpu::current_slot();
+    let lapic_id = crate::percpu::current_lapic_id_via_cpuid();
+    crate::log!(
+        "lumen-service: worker start session={} cpu_slot={} lapic={}\n",
+        session_id,
+        cpu_slot,
+        lapic_id
+    );
+    crate::lumen::run_lumen_session(target, session_id).await;
+    SERVICE_WORKER_DONE.store(true, Ordering::Release);
+    crate::log!("lumen-service: worker done session={}\n", session_id);
+}
+
 #[embassy_executor::task]
 pub async fn lumen_service_task() {
     let cpu_slot = crate::percpu::current_slot();
@@ -352,9 +368,54 @@ pub async fn lumen_service_task() {
     SERVICE_SESSION_ID.store(session_id, Ordering::Release);
     SERVICE_LOADING.store(true, Ordering::Release);
     SERVICE_ONLINE.store(false, Ordering::Release);
+    SERVICE_WORKER_DONE.store(false, Ordering::Release);
 
     print_matrix_target_line(&target, "lumen-service: warming model from TRUEOSFS");
-    crate::lumen::run_lumen_session(target.clone(), session_id).await;
+    let spawned_worker = match crate::workers::pick_background_spawner_with_slot() {
+        Some((slot, kind, spawner)) => {
+            match lumen_service_worker_task(target.clone(), session_id) {
+                Ok(token) => {
+                    crate::log!(
+                        "lumen-service: coordinator handoff session={} target_slot={} core_kind={} work=run-lumen-session\n",
+                        session_id,
+                        slot,
+                        kind
+                    );
+                    spawner.spawn(token);
+                    true
+                }
+                Err(err) => {
+                    crate::log_warn!(
+                        target: "lumen";
+                        "lumen-service: worker spawn failed session={} err={:?}\n",
+                        session_id,
+                        err
+                    );
+                    false
+                }
+            }
+        }
+        None => {
+            crate::log_warn!(
+                target: "lumen";
+                "lumen-service: worker spawn skipped session={} reason=no-background-worker\n",
+                session_id
+            );
+            false
+        }
+    };
+
+    if spawned_worker {
+        loop {
+            if SERVICE_WORKER_DONE.load(Ordering::Acquire) {
+                break;
+            }
+            if SERVICE_OWNED_SESSION.load(Ordering::Acquire) != session_id {
+                break;
+            }
+            Timer::after(EmbassyDuration::from_millis(500)).await;
+        }
+    }
 
     SERVICE_LOADING.store(false, Ordering::Release);
     SERVICE_ONLINE.store(false, Ordering::Release);
