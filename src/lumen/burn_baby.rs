@@ -16,6 +16,8 @@ static LOGGED_QUEUE_LANE: AtomicBool = AtomicBool::new(false);
 static LOGGED_POLL_LANE: AtomicBool = AtomicBool::new(false);
 static LOGGED_SERVICE_PROTECTED_LANE: AtomicBool = AtomicBool::new(false);
 static LOGGED_BF16_SLOT_SPREAD: AtomicBool = AtomicBool::new(false);
+static LOGGED_BF16_ARGMAX_BRIDGE: AtomicBool = AtomicBool::new(false);
+static LOGGED_BF16_DUAL_SILU_BRIDGE: AtomicBool = AtomicBool::new(false);
 static SERVICE_PROTECTED_SLOTS: AtomicU64 = AtomicU64::new(0);
 #[cfg(target_arch = "x86_64")]
 static LOGGED_BF16_SIMD_PROBE: AtomicBool = AtomicBool::new(false);
@@ -31,8 +33,6 @@ static SUBMITTED_JOBS: AtomicU64 = AtomicU64::new(0);
 static COMPLETED_JOBS: AtomicU64 = AtomicU64::new(0);
 static POLLED_JOBS: AtomicU64 = AtomicU64::new(0);
 static POLLED_JOBS_BY_SLOT: [AtomicU64; MAX_COMPUTE_POLL_SLOTS] =
-    [const { AtomicU64::new(0) }; MAX_COMPUTE_POLL_SLOTS];
-static POLL_PROGRESS_LAST_TICK_BY_SLOT: [AtomicU64; MAX_COMPUTE_POLL_SLOTS] =
     [const { AtomicU64::new(0) }; MAX_COMPUTE_POLL_SLOTS];
 
 #[cfg(target_arch = "x86_64")]
@@ -78,50 +78,6 @@ enum ComputeJob {
     MatvecRowsBf16(MatvecRowsBf16),
 }
 
-impl ComputeJob {
-    fn dtype(self) -> &'static str {
-        match self {
-            Self::MatvecRowsF32(_) => "f32",
-            Self::MatvecRowsBf16(_) => "bf16",
-        }
-    }
-
-    fn row_start(self) -> usize {
-        match self {
-            Self::MatvecRowsF32(job) => job.row_start,
-            Self::MatvecRowsBf16(job) => job.row_start,
-        }
-    }
-
-    fn row_end(self) -> usize {
-        match self {
-            Self::MatvecRowsF32(job) => job.row_end,
-            Self::MatvecRowsBf16(job) => job.row_end,
-        }
-    }
-
-    fn n_rows(self) -> usize {
-        match self {
-            Self::MatvecRowsF32(job) => job.n_rows,
-            Self::MatvecRowsBf16(job) => job.n_rows,
-        }
-    }
-
-    fn k_dim(self) -> usize {
-        match self {
-            Self::MatvecRowsF32(job) => job.k_dim,
-            Self::MatvecRowsBf16(job) => job.k_dim,
-        }
-    }
-
-    fn done_ptr(self) -> usize {
-        match self {
-            Self::MatvecRowsF32(job) => job.done,
-            Self::MatvecRowsBf16(job) => job.done,
-        }
-    }
-}
-
 #[derive(Copy, Clone, Debug, Default)]
 pub struct ComputeStats {
     pub submitted_jobs: u64,
@@ -155,13 +111,6 @@ pub fn poll_counts_for_slots(slots: &[u32]) -> Vec<(u32, u64)> {
                 .map(|counter| (slot, counter.load(Ordering::Acquire)))
         })
         .collect()
-}
-
-fn poll_count_for_slot(slot: u32) -> u64 {
-    POLLED_JOBS_BY_SLOT
-        .get(slot as usize)
-        .map(|counter| counter.load(Ordering::Acquire))
-        .unwrap_or(0)
 }
 
 pub fn online_worker_count() -> usize {
@@ -204,9 +153,7 @@ pub fn poll_compute_lane() -> bool {
         counter.fetch_add(1, Ordering::AcqRel);
     }
     POLLED_JOBS.fetch_add(1, Ordering::AcqRel);
-    let polled_by_slot = poll_count_for_slot(slot);
     execute_job(job);
-    log_ap_poll_progress(slot, job, polled_by_slot);
     true
 }
 
@@ -475,6 +422,194 @@ pub unsafe extern "C" fn lumen_trueos_matvec_rowmajor_f32_bf16(
     }
 }
 
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_trueos_matvec_argmax_rowmajor_f32_bf16(
+    x: *const f32,
+    x_len: usize,
+    w_rowmajor_bf16: *const u8,
+    w_len: usize,
+    n_rows: usize,
+    k_dim: usize,
+) -> isize {
+    if x.is_null() || w_rowmajor_bf16.is_null() || n_rows == 0 {
+        return -1;
+    }
+
+    let Some(expected_w_len) = expected_bf16_bytes(n_rows, k_dim) else {
+        return -1;
+    };
+    if x_len < k_dim || w_len < expected_w_len {
+        return -1;
+    }
+
+    let x = unsafe { core::slice::from_raw_parts(x, x_len) };
+    let w = unsafe { core::slice::from_raw_parts(w_rowmajor_bf16, w_len) };
+    let mut scores = Vec::new();
+    scores.resize(n_rows, 0.0f32);
+
+    if matvec_rowmajor_bf16_local_ap(x, w, n_rows, k_dim, &mut scores, 0).is_err() {
+        return -1;
+    }
+    if !LOGGED_BF16_ARGMAX_BRIDGE.swap(true, Ordering::AcqRel) {
+        crate::log!(
+            "burn-baby: bf16 bridge argmax local-ap rows={} k_dim={} chunk_rows={} proof=lumen-trueos-extern\n",
+            n_rows,
+            k_dim,
+            recommended_chunk_rows(n_rows)
+        );
+    }
+
+    let mut best_index = 0usize;
+    let mut best_score = f32::NEG_INFINITY;
+    for (index, score) in scores.iter().copied().enumerate() {
+        if score > best_score {
+            best_index = index;
+            best_score = score;
+        }
+    }
+    best_index as isize
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_trueos_dual_matvec_silu_mul_rowmajor_f32_bf16(
+    x: *const f32,
+    x_len: usize,
+    gate_w_rowmajor_bf16: *const u8,
+    gate_w_len: usize,
+    up_w_rowmajor_bf16: *const u8,
+    up_w_len: usize,
+    n_rows: usize,
+    k_dim: usize,
+    out: *mut f32,
+    out_len: usize,
+) -> i32 {
+    if x.is_null()
+        || gate_w_rowmajor_bf16.is_null()
+        || up_w_rowmajor_bf16.is_null()
+        || out.is_null()
+    {
+        return -1;
+    }
+
+    let Some(expected_w_len) = expected_bf16_bytes(n_rows, k_dim) else {
+        return -1;
+    };
+    if x_len < k_dim || gate_w_len < expected_w_len || up_w_len < expected_w_len || out_len < n_rows
+    {
+        return -1;
+    }
+
+    if n_rows == 0 || k_dim == 0 {
+        return 0;
+    }
+
+    let x = unsafe { core::slice::from_raw_parts(x, x_len) };
+    let gate_w = unsafe { core::slice::from_raw_parts(gate_w_rowmajor_bf16, gate_w_len) };
+    let up_w = unsafe { core::slice::from_raw_parts(up_w_rowmajor_bf16, up_w_len) };
+    let out = unsafe { core::slice::from_raw_parts_mut(out, out_len) };
+    let mut gate = Vec::new();
+    let mut up = Vec::new();
+    gate.resize(n_rows, 0.0f32);
+    up.resize(n_rows, 0.0f32);
+
+    if matvec_rowmajor_bf16_local_ap(x, gate_w, n_rows, k_dim, &mut gate, 0).is_err() {
+        return -1;
+    }
+    if matvec_rowmajor_bf16_local_ap(x, up_w, n_rows, k_dim, &mut up, 0).is_err() {
+        return -1;
+    }
+    if !LOGGED_BF16_DUAL_SILU_BRIDGE.swap(true, Ordering::AcqRel) {
+        crate::log!(
+            "burn-baby: bf16 bridge dual-silu local-ap rows={} k_dim={} chunk_rows={} proof=lumen-trueos-extern\n",
+            n_rows,
+            k_dim,
+            recommended_chunk_rows(n_rows)
+        );
+    }
+
+    for row in 0..n_rows {
+        let g = gate[row];
+        let sig = 1.0 / (1.0 + (-g).exp());
+        out[row] = (g * sig) * up[row];
+    }
+
+    0
+}
+
+fn expected_bf16_bytes(n_rows: usize, k_dim: usize) -> Option<usize> {
+    n_rows
+        .checked_mul(k_dim)
+        .and_then(|values| values.checked_mul(2))
+}
+
+fn matvec_rowmajor_bf16_local_ap(
+    x: &[f32],
+    w_rowmajor_bf16: &[u8],
+    n_rows: usize,
+    k_dim: usize,
+    out: &mut [f32],
+    chunk_rows: usize,
+) -> Result<(), ComputeError> {
+    if n_rows == 0 || k_dim == 0 {
+        return Ok(());
+    }
+    let Some(w_len) = expected_bf16_bytes(n_rows, k_dim) else {
+        return Err(ComputeError::BadShape);
+    };
+    if x.len() < k_dim || w_rowmajor_bf16.len() < w_len || out.len() < n_rows {
+        return Err(ComputeError::BadShape);
+    }
+
+    let chunk_rows = if chunk_rows == 0 {
+        recommended_chunk_rows(n_rows)
+    } else {
+        chunk_rows
+    };
+    if chunk_rows == 0 {
+        return Err(ComputeError::EmptyChunk);
+    }
+
+    let chunks = n_rows.div_ceil(chunk_rows);
+    if chunks <= 1 || !crate::workers::has_background_worker_slot() {
+        matvec_rows_bf16(x, w_rowmajor_bf16, k_dim, out, 0, n_rows);
+        return Ok(());
+    }
+
+    let done = AtomicUsize::new(0);
+    let done_ptr = &done as *const AtomicUsize as usize;
+    let x_ptr = x.as_ptr() as usize;
+    let w_ptr = w_rowmajor_bf16.as_ptr() as usize;
+    let out_ptr = out.as_mut_ptr() as usize;
+
+    let mut submitted = 0usize;
+    let mut row_start = 0usize;
+    while row_start < n_rows {
+        let row_end = row_start.saturating_add(chunk_rows).min(n_rows);
+        submit_job(ComputeJob::MatvecRowsBf16(MatvecRowsBf16 {
+            x: x_ptr,
+            w_rowmajor_bf16: w_ptr,
+            out: out_ptr,
+            n_rows,
+            k_dim,
+            row_start,
+            row_end,
+            done: done_ptr,
+        }));
+        submitted += 1;
+        row_start = row_end;
+    }
+
+    while done.load(Ordering::Acquire) != submitted {
+        crate::time::poll();
+        crate::smp::poll();
+        if !poll_compute_lane() {
+            core::hint::spin_loop();
+        }
+    }
+
+    Ok(())
+}
+
 fn log_compute_wait_progress(
     done: &AtomicUsize,
     submitted: usize,
@@ -493,44 +628,6 @@ fn log_compute_wait_progress(
         dtype,
         done.load(Ordering::Acquire),
         submitted,
-        stats.submitted_jobs,
-        stats.completed_jobs,
-        stats.polled_jobs,
-        stats.queued_jobs
-    );
-}
-
-fn log_ap_poll_progress(slot: u32, job: ComputeJob, polled_by_slot: u64) {
-    let Some(last_tick) = POLL_PROGRESS_LAST_TICK_BY_SLOT.get(slot as usize) else {
-        return;
-    };
-    let now = embassy_time_driver::now();
-    let hz = embassy_time_driver::TICK_HZ.max(1);
-    let previous = last_tick.load(Ordering::Acquire);
-    if now.saturating_sub(previous) < hz {
-        return;
-    }
-    if last_tick
-        .compare_exchange(previous, now, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        return;
-    }
-
-    let stats = stats();
-    let local_done = done_count(job.done_ptr());
-    crate::log!(
-        "burn-baby: AP poll progress slot={} lapic={} dtype={} chunk_rows={} row_range={}..{} n_rows={} k_dim={} slot_polled={} local_done={} submitted={} completed={} polled={} queued={} rate=1hz-per-ap proof=ap-executed-compute-chunk\n",
-        slot,
-        crate::percpu::current_lapic_id_via_cpuid(),
-        job.dtype(),
-        job.row_end().saturating_sub(job.row_start()),
-        job.row_start(),
-        job.row_end(),
-        job.n_rows(),
-        job.k_dim(),
-        polled_by_slot,
-        local_done,
         stats.submitted_jobs,
         stats.completed_jobs,
         stats.polled_jobs,
@@ -925,14 +1022,6 @@ unsafe fn matvec_rows_bf16_sse2(
 
 fn bf16_to_f32(bits: u16) -> f32 {
     f32::from_bits((bits as u32) << 16)
-}
-
-fn done_count(done: usize) -> usize {
-    if done == 0 {
-        return 0;
-    }
-    let done = unsafe { &*(done as *const AtomicUsize) };
-    done.load(Ordering::Acquire)
 }
 
 fn mark_done(done: usize) {

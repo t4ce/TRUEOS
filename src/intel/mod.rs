@@ -174,6 +174,28 @@ pub(crate) struct GpgpuOneTileCompareProof {
     pub(crate) batch_bytes: usize,
 }
 
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct GpgpuT5OneRowMatvecProof {
+    pub(crate) submitted: bool,
+    pub(crate) finished: bool,
+    pub(crate) readback_ok: bool,
+    pub(crate) compare_ok: bool,
+    pub(crate) reason: &'static str,
+    pub(crate) program_name: &'static str,
+    pub(crate) output_gpu: u64,
+    pub(crate) gpu_value: u32,
+    pub(crate) cpu_expected_bits: u32,
+    pub(crate) output_first_before: u32,
+    pub(crate) output_first_after: u32,
+    pub(crate) output_hits_lo64: u64,
+    pub(crate) dispatch_delta: u64,
+    pub(crate) finish_marker: u32,
+    pub(crate) expected_finish_marker: u32,
+    pub(crate) batch_bytes: usize,
+    pub(crate) live_k_dim: usize,
+    pub(crate) requires_live_gpu_load: bool,
+}
+
 fn pick_media_boot_demo_spawner() -> Option<(u32, SendSpawner)> {
     let background_slots = crate::workers::background_worker_slots();
 
@@ -467,6 +489,20 @@ pub(crate) fn submit_gpgpu_one_tile_output_compare_probe(
         output_gpu,
         output_bytes,
         cpu_expected_bits,
+    )
+}
+
+pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
+    output_gpu: u64,
+    output_bytes: usize,
+    cpu_expected_bits: u32,
+    live_k_dim: usize,
+) -> GpgpuT5OneRowMatvecProof {
+    self::gpgpu::submit_gpgpu_t5_one_row_matvec_probe(
+        output_gpu,
+        output_bytes,
+        cpu_expected_bits,
+        live_k_dim,
     )
 }
 
