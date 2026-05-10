@@ -1228,6 +1228,7 @@ const GPGPU_USE_STATIC_DP4A_STORE_THEN_EOT: bool = true;
 const GPGPU_USE_HDC_STORE_THEN_EOT: bool = true;
 const GPGPU_USE_GFX125_COMPUTE_WALKER: bool = false;
 const GPGPU_WALKER_GROUP_X_DIM_LADDER: &[u32] = &[186];
+const GPGPU_T5_LIVE4_GROUP_X_DIM_LADDER: &[u32] = &[1, 2, 4, 8, 16, 32, 64, 128, 186];
 const GPGPU_WALKER_GROUP_THREADS: u32 = 1;
 const GPGPU_WALKER_SIMD8_LANES: u32 = 8;
 
@@ -1356,6 +1357,19 @@ fn gpgpu_t5_store_only_control_program() -> GpgpuEuProgram {
         expected_store_value: trueos_eu::gfx12::T5_STORE_ONLY_ARENA_EXPECTED_RESULT_U32,
         store_send_dword: Some(trueos_eu::gfx12::T5_STORE_ONLY_ARENA_STORE_SEND_DWORD),
         visible_seed_dword: Some(trueos_eu::gfx12::T5_STORE_ONLY_ARENA_SENTINEL_DWORD),
+    }
+}
+
+fn gpgpu_t5_load_echo_program() -> GpgpuEuProgram {
+    let artifact = trueos_eu::gfx12::T5_LOAD_ECHO_TRUEOS_ARENA_RAW_OPERANDS_HDC1_STORE_THEN_TS_EOT;
+    GpgpuEuProgram {
+        name: artifact.name,
+        kind: artifact.kind,
+        words: artifact.words,
+        expects_store: artifact.expects_store,
+        expected_store_value: 0,
+        store_send_dword: Some(trueos_eu::gfx12::T5_LOAD_ECHO_TRUEOS_ARENA_FIRST_STORE_SEND_DWORD),
+        visible_seed_dword: None,
     }
 }
 
@@ -2140,6 +2154,48 @@ pub(crate) fn submit_gpgpu_one_tile_output_compare_probe(
     }
 }
 
+unsafe fn read_gpgpu_output_words8(output_virt: *mut u8) -> [u32; 8] {
+    let words = output_virt as *const u32;
+    [
+        core::ptr::read_volatile(words.add(0)),
+        core::ptr::read_volatile(words.add(1)),
+        core::ptr::read_volatile(words.add(2)),
+        core::ptr::read_volatile(words.add(3)),
+        core::ptr::read_volatile(words.add(4)),
+        core::ptr::read_volatile(words.add(5)),
+        core::ptr::read_volatile(words.add(6)),
+        core::ptr::read_volatile(words.add(7)),
+    ]
+}
+
+unsafe fn clear_gpgpu_output_words(output_virt: *mut u8, dwords: usize) {
+    let words = output_virt as *mut u32;
+    for index in 0..dwords {
+        core::ptr::write_volatile(words.add(index), 0);
+    }
+}
+
+fn read_gpgpu_t5_load_echo_expected(warm: RenderWarmState) -> ([u32; 4], [u32; 4]) {
+    unsafe {
+        let x_words = warm.gpgpu_arena_virt as *const u32;
+        let row_words = warm.gpgpu_arena_virt.add(GPGPU_X_VECTOR_BYTES) as *const u32;
+        (
+            [
+                core::ptr::read_volatile(x_words.add(0)),
+                core::ptr::read_volatile(x_words.add(1)),
+                core::ptr::read_volatile(x_words.add(2)),
+                core::ptr::read_volatile(x_words.add(3)),
+            ],
+            [
+                core::ptr::read_volatile(row_words.add(0)),
+                core::ptr::read_volatile(row_words.add(1)),
+                core::ptr::read_volatile(row_words.add(2)),
+                core::ptr::read_volatile(row_words.add(3)),
+            ],
+        )
+    }
+}
+
 fn submit_gpgpu_t5_store_only_control_probe(
     dev: crate::intel::Dev,
     warm: RenderWarmState,
@@ -2313,6 +2369,231 @@ fn submit_gpgpu_t5_store_only_control_probe(
     }
 }
 
+fn submit_gpgpu_t5_load_echo_probe(
+    dev: crate::intel::Dev,
+    warm: RenderWarmState,
+    output_gpu: u64,
+    output_offset: usize,
+    t5_surface_bytes: usize,
+) {
+    let program = gpgpu_t5_load_echo_program();
+    let output_virt = unsafe { warm.gpgpu_arena_virt.add(output_offset) };
+    let (expected_x, expected_row_words) = read_gpgpu_t5_load_echo_expected(warm);
+    let output_words_before = unsafe { read_gpgpu_output_words8(output_virt) };
+    unsafe {
+        clear_gpgpu_output_words(output_virt, 8);
+    }
+    crate::intel::dma_flush(output_virt, 8 * core::mem::size_of::<u32>());
+    let output_words_after_clear = unsafe { read_gpgpu_output_words8(output_virt) };
+
+    let program_uploaded =
+        upload_and_verify_gpu_program_at(warm, GPGPU_EU_KERNEL_OFFSET_BYTES, program.words);
+    if !program_uploaded {
+        crate::log!(
+            "intel/gpgpu: t5-load-echo submitted=0 finished=0 readback_ok=0 load_echo_ok=0 reason=program-upload program_source={} groups=1 expected_lane_dispatch=8 observed_lane_dispatch=0 output_gpu=0x{:X} output_off=0x{:X} output_words_before=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] output_words_after_clear=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] output_words_after=[0x00000000,0x00000000,0x00000000,0x00000000,0x00000000,0x00000000,0x00000000,0x00000000] expected_x=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] expected_row_words=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] row0_bf16_first4=[0x{:04X},0x{:04X},0x{:04X},0x{:04X}] finish_marker=0x00000000 finish_expected=0x{:08X} batch_bytes=0x0 surface_bytes=0x{:X} next=fix-t5-load-echo-upload does_not_prove=model_matvec_or_bf16_reduce\n",
+            program.name,
+            output_gpu,
+            output_offset,
+            output_words_before[0],
+            output_words_before[1],
+            output_words_before[2],
+            output_words_before[3],
+            output_words_before[4],
+            output_words_before[5],
+            output_words_before[6],
+            output_words_before[7],
+            output_words_after_clear[0],
+            output_words_after_clear[1],
+            output_words_after_clear[2],
+            output_words_after_clear[3],
+            output_words_after_clear[4],
+            output_words_after_clear[5],
+            output_words_after_clear[6],
+            output_words_after_clear[7],
+            expected_x[0],
+            expected_x[1],
+            expected_x[2],
+            expected_x[3],
+            expected_row_words[0],
+            expected_row_words[1],
+            expected_row_words[2],
+            expected_row_words[3],
+            (expected_row_words[0] & 0xFFFF) as u16,
+            (expected_row_words[0] >> 16) as u16,
+            (expected_row_words[1] & 0xFFFF) as u16,
+            (expected_row_words[1] >> 16) as u16,
+            RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+            t5_surface_bytes,
+        );
+        return;
+    }
+
+    unsafe {
+        core::ptr::write_volatile(
+            warm.result_virt
+                .add(RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD * core::mem::size_of::<u32>())
+                as *mut u32,
+            0,
+        );
+        core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
+        core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
+    }
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+
+    let batch_dwords = warm.batch_len / core::mem::size_of::<u32>();
+    let batch =
+        unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, batch_dwords) };
+    let store_surface = prepare_gpgpu_store_surface_state_for_target_span(
+        warm,
+        GPU_VA_GPGPU_TILE_ARENA_BASE,
+        t5_surface_bytes,
+        "bind-send-bti-to-t5-load-echo-arena-base",
+    );
+    let batch_result =
+        encode_gfx12_gpgpu_walker_probe_batch(warm, batch, store_surface, program, 1);
+    let batch_bytes = match batch_result {
+        Ok(bytes) => bytes,
+        Err(reason) => {
+            crate::log!(
+                "intel/gpgpu: t5-load-echo submitted=0 finished=0 readback_ok=0 load_echo_ok=0 reason={} program_source={} groups=1 expected_lane_dispatch=8 observed_lane_dispatch=0 output_gpu=0x{:X} output_off=0x{:X} output_words_before=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] output_words_after_clear=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] output_words_after=[0x00000000,0x00000000,0x00000000,0x00000000,0x00000000,0x00000000,0x00000000,0x00000000] expected_x=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] expected_row_words=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] row0_bf16_first4=[0x{:04X},0x{:04X},0x{:04X},0x{:04X}] finish_marker=0x00000000 finish_expected=0x{:08X} batch_bytes=0x0 surface_bytes=0x{:X} next=fix-t5-load-echo-batch does_not_prove=model_matvec_or_bf16_reduce\n",
+                reason,
+                program.name,
+                output_gpu,
+                output_offset,
+                output_words_before[0],
+                output_words_before[1],
+                output_words_before[2],
+                output_words_before[3],
+                output_words_before[4],
+                output_words_before[5],
+                output_words_before[6],
+                output_words_before[7],
+                output_words_after_clear[0],
+                output_words_after_clear[1],
+                output_words_after_clear[2],
+                output_words_after_clear[3],
+                output_words_after_clear[4],
+                output_words_after_clear[5],
+                output_words_after_clear[6],
+                output_words_after_clear[7],
+                expected_x[0],
+                expected_x[1],
+                expected_x[2],
+                expected_x[3],
+                expected_row_words[0],
+                expected_row_words[1],
+                expected_row_words[2],
+                expected_row_words[3],
+                (expected_row_words[0] & 0xFFFF) as u16,
+                (expected_row_words[0] >> 16) as u16,
+                (expected_row_words[1] & 0xFFFF) as u16,
+                (expected_row_words[1] >> 16) as u16,
+                RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+                t5_surface_bytes,
+            );
+            return;
+        }
+    };
+    crate::intel::dma_flush(warm.batch_virt, batch_bytes);
+
+    let dispatch_before = read_gpgpu_threads_dispatched(dev);
+    let finished = submit_warm_render_batch(
+        dev,
+        warm,
+        RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD,
+        "gpgpu-t5-load-echo",
+    );
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+    crate::intel::dma_flush(warm.gpgpu_arena_virt, t5_surface_bytes);
+    let dispatch_after = read_gpgpu_threads_dispatched(dev);
+    let dispatch_delta = dispatch_after.saturating_sub(dispatch_before);
+    let finish_marker = read_result_dword(warm, RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD);
+    let output_words_after = unsafe { read_gpgpu_output_words8(output_virt) };
+    let x_echo_ok = output_words_after[0] == expected_x[0]
+        && output_words_after[1] == expected_x[1]
+        && output_words_after[2] == expected_x[2]
+        && output_words_after[3] == expected_x[3];
+    let row_echo_ok = output_words_after[4] == expected_row_words[0]
+        && output_words_after[5] == expected_row_words[1]
+        && output_words_after[6] == expected_row_words[2]
+        && output_words_after[7] == expected_row_words[3];
+    let load_echo_ok = x_echo_ok && row_echo_ok;
+    let readback_ok =
+        load_echo_ok && finished && finish_marker == RCS_EXEC_RESULT_COMPUTE_WALKER_DONE;
+    let submitted = batch_bytes != 0;
+    let reason = if readback_ok && dispatch_delta == 0 {
+        "raw-load-echo-written-no-ts-delta"
+    } else if readback_ok {
+        "raw-load-echo-written"
+    } else if !finished {
+        "submit-not-finished"
+    } else if !x_echo_ok {
+        "x-echo-mismatch"
+    } else if !row_echo_ok {
+        "row-echo-mismatch"
+    } else {
+        "finish-marker-mismatch"
+    };
+    crate::log!(
+        "intel/gpgpu: t5-load-echo submitted={} finished={} readback_ok={} load_echo_ok={} x_echo_ok={} row_echo_ok={} reason={} program_source={} groups=1 expected_lane_dispatch=8 observed_lane_dispatch={} output_gpu=0x{:X} output_off=0x{:X} output_words_before=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] output_words_after_clear=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] output_words_after=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] expected_x=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] expected_row_words=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] row0_bf16_first4=[0x{:04X},0x{:04X},0x{:04X},0x{:04X}] finish_marker=0x{:08X} finish_expected=0x{:08X} batch_bytes=0x{:X} surface_bytes=0x{:X} next=run-real-t5-live4-with-confirmed-loads does_not_prove=model_matvec_or_bf16_reduce\n",
+        submitted as u8,
+        finished as u8,
+        readback_ok as u8,
+        load_echo_ok as u8,
+        x_echo_ok as u8,
+        row_echo_ok as u8,
+        reason,
+        program.name,
+        dispatch_delta,
+        output_gpu,
+        output_offset,
+        output_words_before[0],
+        output_words_before[1],
+        output_words_before[2],
+        output_words_before[3],
+        output_words_before[4],
+        output_words_before[5],
+        output_words_before[6],
+        output_words_before[7],
+        output_words_after_clear[0],
+        output_words_after_clear[1],
+        output_words_after_clear[2],
+        output_words_after_clear[3],
+        output_words_after_clear[4],
+        output_words_after_clear[5],
+        output_words_after_clear[6],
+        output_words_after_clear[7],
+        output_words_after[0],
+        output_words_after[1],
+        output_words_after[2],
+        output_words_after[3],
+        output_words_after[4],
+        output_words_after[5],
+        output_words_after[6],
+        output_words_after[7],
+        expected_x[0],
+        expected_x[1],
+        expected_x[2],
+        expected_x[3],
+        expected_row_words[0],
+        expected_row_words[1],
+        expected_row_words[2],
+        expected_row_words[3],
+        (expected_row_words[0] & 0xFFFF) as u16,
+        (expected_row_words[0] >> 16) as u16,
+        (expected_row_words[1] & 0xFFFF) as u16,
+        (expected_row_words[1] >> 16) as u16,
+        finish_marker,
+        RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        batch_bytes,
+        t5_surface_bytes,
+    );
+    if !finished {
+        recover_render_engine_after_nonretired_submit(dev, warm, "gpgpu-t5-load-echo");
+    }
+}
+
 pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
     output_gpu: u64,
     output_bytes: usize,
@@ -2477,7 +2758,6 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
             core::ptr::read_volatile(words.add(3)),
         ]
     };
-    let output_first_before = output_words_after_clear[0];
     crate::log!(
         "intel/gpgpu: t5-output-window stage=before-submit output_gpu=0x{:X} old=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] cleared=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] surface_bytes=0x{:X} cpu_expected_bits=0x{:08X}\n",
         output_gpu,
@@ -2530,13 +2810,26 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
         output_gpu,
         cpu_expected_bits,
     );
+    submit_gpgpu_t5_load_echo_probe(dev, warm, output_gpu, output_offset, t5_surface_bytes);
+    crate::intel::dma_flush(warm.gpgpu_arena_virt, t5_surface_bytes);
+    let t5_arena_after_load_echo = probe_gpgpu_t5_arena_store_window(
+        warm,
+        t5_surface_bytes,
+        output_offset,
+        output_bytes,
+        cpu_expected_bits,
+    );
+    log_gpgpu_t5_arena_store_probe(
+        "after-load-echo",
+        t5_arena_after_load_echo,
+        Some(t5_arena_after_store_only),
+        output_gpu,
+        cpu_expected_bits,
+    );
     unsafe {
-        let words = output_virt as *mut u32;
-        for index in 0..4 {
-            core::ptr::write_volatile(words.add(index), 0);
-        }
+        clear_gpgpu_output_words(output_virt, 8);
     }
-    crate::intel::dma_flush(output_virt, 4 * core::mem::size_of::<u32>());
+    crate::intel::dma_flush(output_virt, 8 * core::mem::size_of::<u32>());
     let output_words_before_live = unsafe {
         let words = output_virt as *const u32;
         [
@@ -2566,7 +2859,7 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
     log_gpgpu_t5_arena_store_probe(
         "before-live-submit",
         t5_arena_before,
-        Some(t5_arena_after_store_only),
+        Some(t5_arena_after_load_echo),
         output_gpu,
         cpu_expected_bits,
     );
@@ -2583,71 +2876,177 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
         );
     }
 
-    unsafe {
-        core::ptr::write_volatile(
-            warm.result_virt
-                .add(RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD * core::mem::size_of::<u32>())
-                as *mut u32,
-            0,
-        );
-        core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
-        core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
-    }
-    crate::intel::dma_flush(warm.result_virt, warm.result_len);
-
-    let batch_dwords = warm.batch_len / core::mem::size_of::<u32>();
-    let batch =
-        unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, batch_dwords) };
     let store_surface = prepare_gpgpu_store_surface_state_for_target_span(
         warm,
         GPU_VA_GPGPU_TILE_ARENA_BASE,
         t5_surface_bytes,
         "bind-send-bti-to-t5-trueos-arena-base",
     );
-    let batch_result =
-        encode_gfx12_gpgpu_walker_probe_batch(warm, batch, store_surface, program, 1);
-    let batch_bytes = match batch_result {
-        Ok(bytes) => bytes,
-        Err(reason) => {
-            return gpgpu_t5_one_row_matvec_failure(
-                reason,
-                program,
-                output_gpu,
+    let t5_input_summary = read_gpgpu_t5_input_summary(warm);
+    let mut submitted = false;
+    let mut finished = false;
+    let mut batch_bytes = 0usize;
+    let mut dispatch_delta = 0u64;
+    let mut finish_marker = 0u32;
+    let mut output_words_after = [0u32; 4];
+    let mut output_first_before = 0u32;
+    let mut last_group_x_dim = 0u32;
+    let mut last_expected_lane_dispatch = 0u32;
+    let mut last_scale_clean = false;
+
+    for (scale_index, &group_x_dim) in GPGPU_T5_LIVE4_GROUP_X_DIM_LADDER.iter().enumerate() {
+        let expected_hw_threads = group_x_dim.saturating_mul(GPGPU_WALKER_GROUP_THREADS);
+        let expected_lane_dispatch = expected_hw_threads.saturating_mul(GPGPU_WALKER_SIMD8_LANES);
+        last_group_x_dim = group_x_dim;
+        last_expected_lane_dispatch = expected_lane_dispatch;
+
+        unsafe {
+            clear_gpgpu_output_words(output_virt, 8);
+            core::ptr::write_volatile(
+                warm.result_virt
+                    .add(RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD * core::mem::size_of::<u32>())
+                    as *mut u32,
+                0,
+            );
+            core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
+            core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
+        }
+        crate::intel::dma_flush(output_virt, 8 * core::mem::size_of::<u32>());
+        crate::intel::dma_flush(warm.result_virt, warm.result_len);
+        output_first_before = unsafe { core::ptr::read_volatile(output_virt as *const u32) };
+
+        let batch_dwords = warm.batch_len / core::mem::size_of::<u32>();
+        let batch =
+            unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, batch_dwords) };
+        let batch_result =
+            encode_gfx12_gpgpu_walker_probe_batch(warm, batch, store_surface, program, group_x_dim);
+        batch_bytes = match batch_result {
+            Ok(bytes) => bytes,
+            Err(reason) => {
+                crate::log!(
+                    "intel/gpgpu: t5-live4-scale-proof scale_index={} program_source={} requested_groups={} requested_group_count={} threads_per_group={} expected_hw_threads={} simd_lanes_per_thread={} expected_lane_dispatch={} observed_lane_dispatch=0 lane_count_matches=0 submitted=0 retired=0 finish_marker=0x00000000 finish_expected=0x{:08X} output_first_before=0x{:08X} output_first_after=0x00000000 gpu_matches_shader_word_low=0 gpu_matches_cpu_direct=0 shader_word_low=0x{:08X} cpu_direct=0x{:08X} failure_class={} batch_bytes=0x0 output_owner=cpu-ap does_not_prove=full_model_matvec\n",
+                    scale_index,
+                    program.name,
+                    group_x_dim,
+                    group_x_dim,
+                    GPGPU_WALKER_GROUP_THREADS,
+                    expected_hw_threads,
+                    GPGPU_WALKER_SIMD8_LANES,
+                    expected_lane_dispatch,
+                    RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+                    output_first_before,
+                    t5_input_summary.shader_word_low_bits,
+                    t5_input_summary.direct_bits,
+                    reason,
+                );
+                crate::log!(
+                    "intel/gpgpu: t5-live4-scale-ladder stop_at_scale={} reason=batch-encode requested_groups={} expected_lane_dispatch={} observed_lane_dispatch=0\n",
+                    scale_index,
+                    group_x_dim,
+                    expected_lane_dispatch,
+                );
+                break;
+            }
+        };
+        crate::intel::dma_flush(warm.batch_virt, batch_bytes);
+
+        let dispatch_before = read_gpgpu_threads_dispatched(dev);
+        finished = submit_warm_render_batch(
+            dev,
+            warm,
+            RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+            RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD,
+            "gpgpu-t5-small-live4-scale",
+        );
+        submitted = batch_bytes != 0;
+        crate::intel::dma_flush(warm.result_virt, warm.result_len);
+        crate::intel::dma_flush(warm.gpgpu_arena_virt, t5_arena_before.scan_bytes);
+        let dispatch_after = read_gpgpu_threads_dispatched(dev);
+        dispatch_delta = dispatch_after.saturating_sub(dispatch_before);
+        finish_marker = read_result_dword(warm, RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD);
+        output_words_after = unsafe {
+            let words = output_virt as *const u32;
+            [
+                core::ptr::read_volatile(words.add(0)),
+                core::ptr::read_volatile(words.add(1)),
+                core::ptr::read_volatile(words.add(2)),
+                core::ptr::read_volatile(words.add(3)),
+            ]
+        };
+        if scale_index == 0 {
+            log_gpgpu_t5_input_summary(
+                "after-live-submit",
+                t5_input_summary,
+                output_words_after[0],
                 cpu_expected_bits,
-                live_k_dim,
             );
         }
-    };
-    crate::intel::dma_flush(warm.batch_virt, batch_bytes);
 
-    let dispatch_before = read_gpgpu_threads_dispatched(dev);
-    let finished = submit_warm_render_batch(
-        dev,
-        warm,
-        RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
-        RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD,
-        "gpgpu-t5-small-live4",
-    );
-    crate::intel::dma_flush(warm.result_virt, warm.result_len);
-    crate::intel::dma_flush(warm.gpgpu_arena_virt, t5_arena_before.scan_bytes);
-    let dispatch_after = read_gpgpu_threads_dispatched(dev);
-    let dispatch_delta = dispatch_after.saturating_sub(dispatch_before);
-    let finish_marker = read_result_dword(warm, RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD);
-    let output_words_after = unsafe {
-        let words = output_virt as *const u32;
-        [
-            core::ptr::read_volatile(words.add(0)),
-            core::ptr::read_volatile(words.add(1)),
-            core::ptr::read_volatile(words.add(2)),
-            core::ptr::read_volatile(words.add(3)),
-        ]
-    };
+        let lane_count_matches = dispatch_delta == expected_lane_dispatch as u64;
+        let marker_ok = finish_marker == RCS_EXEC_RESULT_COMPUTE_WALKER_DONE;
+        let shader_word_ok = output_words_after[0] == t5_input_summary.shader_word_low_bits;
+        let cpu_direct_ok = output_words_after[0] == t5_input_summary.direct_bits;
+        last_scale_clean =
+            submitted && finished && marker_ok && lane_count_matches && shader_word_ok;
+        let failure_class = if last_scale_clean {
+            "t5-live4-word-view-proven"
+        } else if !finished {
+            "submit-not-finished"
+        } else if !marker_ok {
+            "finish-marker-mismatch"
+        } else if !lane_count_matches {
+            "lane-count-mismatch"
+        } else if !shader_word_ok {
+            "shader-word-output-mismatch"
+        } else {
+            "unknown"
+        };
+        crate::log!(
+            "intel/gpgpu: t5-live4-scale-proof scale_index={} program_source={} requested_groups={} requested_group_count={} threads_per_group={} expected_hw_threads={} simd_lanes_per_thread={} expected_lane_dispatch={} observed_lane_dispatch={} lane_count_matches={} submitted={} retired={} finish_marker=0x{:08X} finish_expected=0x{:08X} output_first_before=0x{:08X} output_first_after=0x{:08X} gpu_matches_shader_word_low={} gpu_matches_cpu_direct={} shader_word_low=0x{:08X} cpu_direct=0x{:08X} failure_class={} batch_bytes=0x{:X} output_owner=cpu-ap does_not_prove=full_model_matvec\n",
+            scale_index,
+            program.name,
+            group_x_dim,
+            group_x_dim,
+            GPGPU_WALKER_GROUP_THREADS,
+            expected_hw_threads,
+            GPGPU_WALKER_SIMD8_LANES,
+            expected_lane_dispatch,
+            dispatch_delta,
+            lane_count_matches as u8,
+            submitted as u8,
+            finished as u8,
+            finish_marker,
+            RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+            output_first_before,
+            output_words_after[0],
+            shader_word_ok as u8,
+            cpu_direct_ok as u8,
+            t5_input_summary.shader_word_low_bits,
+            t5_input_summary.direct_bits,
+            failure_class,
+            batch_bytes,
+        );
+        if !finished {
+            recover_render_engine_after_nonretired_submit(dev, warm, "gpgpu-t5-small-live4-scale");
+        }
+        if !last_scale_clean {
+            crate::log!(
+                "intel/gpgpu: t5-live4-scale-ladder stop_at_scale={} reason=first-nonclean-proof requested_groups={} expected_lane_dispatch={} observed_lane_dispatch={}\n",
+                scale_index,
+                group_x_dim,
+                expected_lane_dispatch,
+                dispatch_delta,
+            );
+            break;
+        }
+    }
+
     let output_first_after = output_words_after[0];
     let output_hits_lo64 = unsafe {
         gpgpu_stage_dword_hits_mask_lo64(output_virt as *const u32, output_count, cpu_expected_bits)
     };
     crate::log!(
-        "intel/gpgpu: t5-output-window stage=after-submit output_gpu=0x{:X} words=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] expected_bits=0x{:08X} expected_meta=[0x00000004,0x{:08X},0x00000000] finish_marker=0x{:08X}\n",
+        "intel/gpgpu: t5-output-window stage=after-submit output_gpu=0x{:X} words=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] expected_bits=0x{:08X} expected_meta=[0x00000004,0x{:08X},0x00000000] finish_marker=0x{:08X} last_groups={}\n",
         output_gpu,
         output_words_after[0],
         output_words_after[1],
@@ -2656,6 +3055,7 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
         cpu_expected_bits,
         trueos_eu::gfx12::T5_SMALL_LIVE4_TRUEOS_ARENA_EXPECTED_SENTINEL_U32,
         finish_marker,
+        last_group_x_dim,
     );
     let t5_arena_after = probe_gpgpu_t5_arena_store_window(
         warm,
@@ -2674,26 +3074,29 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
     let compare_ok = output_first_after == cpu_expected_bits && (output_hits_lo64 & 1) != 0;
     let readback_ok =
         compare_ok && finished && finish_marker == RCS_EXEC_RESULT_COMPUTE_WALKER_DONE;
-    let submitted = batch_bytes != 0;
     let reason = if readback_ok && dispatch_delta == 0 {
         "t5-live4-written-no-ts-delta"
     } else if readback_ok {
         "t5-live4-written"
     } else if !finished {
         "submit-not-finished"
+    } else if last_scale_clean && output_first_after == t5_input_summary.shader_word_low_bits {
+        "shader-word-view-matches-cpu-contiguous-mismatch"
     } else if output_first_after != cpu_expected_bits {
         "compare-mismatch"
     } else {
         "compare-not-at-slot0"
     };
     crate::log!(
-        "intel/gpgpu: t5-small-live4-bf16-dot submitted={} finished={} readback_ok={} compare_ok={} reason={} program_source={} groups=1 expected_lane_dispatch=8 observed_lane_dispatch={} output_gpu=0x{:X} output_first_before=0x{:08X} output_first_after=0x{:08X} gpu_value=0x{:08X} cpu_expected_bits=0x{:08X} output_hits_lo64=0x{:016X} live_k_dim={} requires_live_gpu_load={} finish_marker=0x{:08X} finish_expected=0x{:08X} batch_bytes=0x{:X} output_owner=cpu-ap next=scale-live-k-or-diagnose-t5-eu does_not_prove=full_model_matvec\n",
+        "intel/gpgpu: t5-small-live4-bf16-dot submitted={} finished={} readback_ok={} compare_ok={} reason={} program_source={} groups={} expected_lane_dispatch={} observed_lane_dispatch={} output_gpu=0x{:X} output_first_before=0x{:08X} output_first_after=0x{:08X} gpu_value=0x{:08X} cpu_expected_bits=0x{:08X} output_hits_lo64=0x{:016X} live_k_dim={} requires_live_gpu_load={} finish_marker=0x{:08X} finish_expected=0x{:08X} batch_bytes=0x{:X} output_owner=cpu-ap next=bf16-packed-half-unpack does_not_prove=full_model_matvec\n",
         submitted as u8,
         finished as u8,
         readback_ok as u8,
         compare_ok as u8,
         reason,
         program.name,
+        last_group_x_dim,
+        last_expected_lane_dispatch,
         dispatch_delta,
         output_gpu,
         output_first_before,
@@ -2911,6 +3314,14 @@ struct GpgpuT5ArenaStoreProbe {
     sentinel: GpgpuT5ArenaMarkerProbe,
 }
 
+#[derive(Copy, Clone)]
+struct GpgpuT5InputSummary {
+    x_bits: [u32; 8],
+    row_le: [u16; 16],
+    direct_bits: u32,
+    shader_word_low_bits: u32,
+}
+
 fn empty_gpgpu_t5_arena_range_probe() -> GpgpuT5ArenaRangeProbe {
     GpgpuT5ArenaRangeProbe {
         nonzero_dwords: 0,
@@ -2927,6 +3338,91 @@ fn empty_gpgpu_t5_arena_marker_probe() -> GpgpuT5ArenaMarkerProbe {
         first_misplaced_valid: false,
         first_misplaced_off: 0,
     }
+}
+
+fn gpgpu_t5_bf16_to_f32(bits: u16) -> f32 {
+    f32::from_bits((bits as u32) << 16)
+}
+
+fn gpgpu_t5_live4_dot_bits(x_bits: &[u32; 8], row_le: &[u16; 16]) -> u32 {
+    let mut acc = 0.0f32;
+    for lane in 0..trueos_eu::gfx12::T5_ONE_ROW_MATVEC_LIVE_K {
+        acc += f32::from_bits(x_bits[lane]) * gpgpu_t5_bf16_to_f32(row_le[lane]);
+    }
+    acc.to_bits()
+}
+
+fn gpgpu_t5_word_low_dot_bits(x_bits: &[u32; 8], row_le: &[u16; 16]) -> u32 {
+    let mut acc = 0.0f32;
+    for lane in 0..trueos_eu::gfx12::T5_ONE_ROW_MATVEC_LIVE_K {
+        acc += f32::from_bits(x_bits[lane]) * gpgpu_t5_bf16_to_f32(row_le[lane * 2]);
+    }
+    acc.to_bits()
+}
+
+fn read_gpgpu_t5_input_summary(warm: RenderWarmState) -> GpgpuT5InputSummary {
+    let mut x_bits = [0u32; 8];
+    let mut row_le = [0u16; 16];
+    unsafe {
+        let x_ptr = warm.gpgpu_arena_virt as *const u32;
+        for (index, slot) in x_bits.iter_mut().enumerate() {
+            *slot = core::ptr::read_volatile(x_ptr.add(index));
+        }
+        let row_ptr = warm.gpgpu_arena_virt.add(GPGPU_X_VECTOR_BYTES) as *const u16;
+        for (index, slot) in row_le.iter_mut().enumerate() {
+            *slot = core::ptr::read_volatile(row_ptr.add(index));
+        }
+    }
+
+    GpgpuT5InputSummary {
+        x_bits,
+        row_le,
+        direct_bits: gpgpu_t5_live4_dot_bits(&x_bits, &row_le),
+        shader_word_low_bits: gpgpu_t5_word_low_dot_bits(&x_bits, &row_le),
+    }
+}
+
+fn log_gpgpu_t5_input_summary(
+    stage: &'static str,
+    summary: GpgpuT5InputSummary,
+    gpu_bits: u32,
+    cpu_expected_bits: u32,
+) {
+    crate::log!(
+        "intel/gpgpu: t5-input-summary stage={} gpu=0x{:08X} cpu_expected=0x{:08X} cpu_direct=0x{:08X} shader_word_low=0x{:08X} direct_matches_cpu={} gpu_matches_direct={} gpu_matches_shader_word_low={} shader_row_lanes=[0,2,4,6] x_bits=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] row_le=[0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X}] proof=cpu-arena-operands-and-current-shader-word-view\n",
+        stage,
+        gpu_bits,
+        cpu_expected_bits,
+        summary.direct_bits,
+        summary.shader_word_low_bits,
+        (summary.direct_bits == cpu_expected_bits) as u8,
+        (summary.direct_bits == gpu_bits) as u8,
+        (summary.shader_word_low_bits == gpu_bits) as u8,
+        summary.x_bits[0],
+        summary.x_bits[1],
+        summary.x_bits[2],
+        summary.x_bits[3],
+        summary.x_bits[4],
+        summary.x_bits[5],
+        summary.x_bits[6],
+        summary.x_bits[7],
+        summary.row_le[0],
+        summary.row_le[1],
+        summary.row_le[2],
+        summary.row_le[3],
+        summary.row_le[4],
+        summary.row_le[5],
+        summary.row_le[6],
+        summary.row_le[7],
+        summary.row_le[8],
+        summary.row_le[9],
+        summary.row_le[10],
+        summary.row_le[11],
+        summary.row_le[12],
+        summary.row_le[13],
+        summary.row_le[14],
+        summary.row_le[15],
+    );
 }
 
 fn gpgpu_t5_arena_range_step(range: &mut GpgpuT5ArenaRangeProbe, value: u32) {

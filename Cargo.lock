@@ -67,7 +67,6 @@ dependencies = [
  "trueos-eu",
  "trueos-fs",
  "trueos-gfx-core",
- "trueos-limloader",
  "trueos-math",
  "trueos-qjs",
  "trueos-vm",
@@ -3388,10 +3387,6 @@ version = "0.1.0"
 dependencies = [
  "libm",
 ]
-
-[[package]]
-name = "trueos-limloader"
-version = "0.1.0"
 
 [[package]]
 name = "trueos-locale"
