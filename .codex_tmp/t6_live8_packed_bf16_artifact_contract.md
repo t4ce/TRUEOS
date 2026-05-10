@@ -13,10 +13,10 @@ Preserved generated artifacts:
 
 T6 starts from the green T5 contract:
 
-- one SSBO/HDC surface bound to the TRUEOS GPGPU tile arena base
-- `x` f32 words at arena `+0x0`
-- packed BF16 row words at arena `+0x2000`
-- output words at arena `+0x102000`
+- one SSBO/HDC surface bound to the active TRUEOS GPGPU tile record
+- `x` f32 words at record-local `+0x0`
+- packed BF16 row words at record-local `+0x2000`
+- output words at record-local `+0x102000`
 
 What changes from T5:
 
@@ -50,5 +50,7 @@ Runtime policy:
   - `t6-actual-work-tiles`
 - `GPGPU_T6_LIVE8_GROUP_X_DIM_LADDER` starts at `[4096]`, matching the clean T5
   retire cap until T6 has its own boot-log ladder history.
-- Output remains CPU/AP-owned and fixed-slot proof-only; this still does not
-  claim full matrix-vector ownership.
+- Output remains CPU/AP-owned and proof-only; runtime now gives each armed tile
+  a distinct arena record and binds the T6 surface to that record base.
+- `T6.1` is reserved for the next generated live-k widening artifact.  The
+  current distinct-output-row step reuses the preserved T6 bytes.

@@ -98,9 +98,11 @@ const GPGPU_WEIGHT_TILE_BYTES: usize =
     GPGPU_TILE_ROWS * GPGPU_TILE_K_DIM * GPGPU_TILE_WEIGHT_BYTES_PER_ELEM;
 const GPGPU_X_VECTOR_BYTES: usize = GPGPU_TILE_K_DIM * GPGPU_TILE_X_BYTES_PER_ELEM;
 const GPGPU_OUTPUT_TILE_BYTES: usize = GPGPU_TILE_ROWS * GPGPU_TILE_OUTPUT_BYTES_PER_ELEM;
-const GPGPU_TILE_ARENA_REQUIRED_BYTES: usize = GPGPU_TILE_TARGET_TILES * GPGPU_WEIGHT_TILE_BYTES
-    + GPGPU_X_VECTOR_BYTES
-    + GPGPU_TILE_TARGET_TILES * GPGPU_OUTPUT_TILE_BYTES;
+const GPGPU_TILE_OUTPUT_OFFSET_BYTES: usize = GPGPU_X_VECTOR_BYTES + GPGPU_WEIGHT_TILE_BYTES;
+const GPGPU_TILE_RECORD_USED_BYTES: usize =
+    GPGPU_TILE_OUTPUT_OFFSET_BYTES + GPGPU_OUTPUT_TILE_BYTES;
+const GPGPU_TILE_RECORD_BYTES: usize = (GPGPU_TILE_RECORD_USED_BYTES + 4095) & !4095;
+const GPGPU_TILE_ARENA_REQUIRED_BYTES: usize = GPGPU_TILE_TARGET_TILES * GPGPU_TILE_RECORD_BYTES;
 const GPGPU_TILE_ARENA_BYTES: usize = (GPGPU_TILE_ARENA_REQUIRED_BYTES + 4095) & !4095;
 const RING_VALID: u32 = 1;
 const EL_CTRL_LOAD: u32 = 1 << 0;
@@ -1723,10 +1725,21 @@ pub(crate) fn stage_gpgpu_one_tile_shadow_probe(
         );
     }
 
-    let x_offset = 0usize;
-    let row_offset = GPGPU_X_VECTOR_BYTES;
-    let output_offset = GPGPU_X_VECTOR_BYTES + GPGPU_WEIGHT_TILE_BYTES;
-    let Some(required_bytes) = output_offset.checked_add(output_bytes) else {
+    let tile_slot = row_index / GPGPU_TILE_ROWS;
+    let Some(tile_base_offset) = tile_slot.checked_mul(GPGPU_TILE_RECORD_BYTES) else {
+        return log_gpgpu_one_tile_stage_failure(
+            "tile-base-overflow",
+            k_dim,
+            row_index,
+            x_checksum,
+            row_checksum,
+            cpu_expected_bits,
+        );
+    };
+    let x_offset = tile_base_offset;
+    let row_offset = tile_base_offset + GPGPU_X_VECTOR_BYTES;
+    let output_offset = tile_base_offset + GPGPU_TILE_OUTPUT_OFFSET_BYTES;
+    let Some(required_bytes) = tile_base_offset.checked_add(GPGPU_TILE_RECORD_USED_BYTES) else {
         return log_gpgpu_one_tile_stage_failure(
             "layout-overflow",
             k_dim,
@@ -1812,12 +1825,14 @@ pub(crate) fn stage_gpgpu_one_tile_shadow_probe(
         output_checksum,
     };
     crate::log!(
-        "intel/gpgpu: one-tile-stage staged={} reason={} arena_mapped={} arena_gpu_base=0x{:X} row={} tile_rows={} k_dim={} layout=x-row0-output x_gpu=0x{:X} row_gpu=0x{:X} output_gpu=0x{:X} x_bytes={} row_bytes={} output_bytes={} x_checksum=0x{:016X} staged_x_checksum=0x{:016X} row_checksum=0x{:016X} staged_row_checksum=0x{:016X} cpu_expected_bits=0x{:08X} gpu_submission=0 output_owner=cpu-ap next=one-tile-gpu-shadow-compare-artifact does_not_prove=gpu_live_load_or_model_matvec\n",
+        "intel/gpgpu: one-tile-stage staged={} reason={} arena_mapped={} arena_gpu_base=0x{:X} row={} tile_slot={} tile_record_bytes=0x{:X} tile_rows={} k_dim={} layout=tile-record-x-row-output x_gpu=0x{:X} row_gpu=0x{:X} output_gpu=0x{:X} x_bytes={} row_bytes={} output_bytes={} x_checksum=0x{:016X} staged_x_checksum=0x{:016X} row_checksum=0x{:016X} staged_row_checksum=0x{:016X} cpu_expected_bits=0x{:08X} gpu_submission=0 output_owner=cpu-ap next=one-tile-gpu-shadow-compare-artifact does_not_prove=gpu_live_load_or_model_matvec\n",
         proof.staged as u8,
         proof.reason,
         proof.arena_mapped as u8,
         proof.arena_gpu_base,
         row_index,
+        tile_slot,
+        GPGPU_TILE_RECORD_BYTES,
         proof.tile_rows,
         proof.k_dim,
         proof.x_gpu,
@@ -2239,10 +2254,14 @@ unsafe fn clear_gpgpu_output_words(output_virt: *mut u8, dwords: usize) {
     }
 }
 
-fn read_gpgpu_t5_load_echo_expected(warm: RenderWarmState) -> ([u32; 4], [u32; 4]) {
+fn read_gpgpu_t5_load_echo_expected_at(
+    warm: RenderWarmState,
+    tile_base_offset: usize,
+) -> ([u32; 4], [u32; 4]) {
     unsafe {
-        let x_words = warm.gpgpu_arena_virt as *const u32;
-        let row_words = warm.gpgpu_arena_virt.add(GPGPU_X_VECTOR_BYTES) as *const u32;
+        let tile_base = warm.gpgpu_arena_virt.add(tile_base_offset);
+        let x_words = tile_base as *const u32;
+        let row_words = tile_base.add(GPGPU_X_VECTOR_BYTES) as *const u32;
         (
             [
                 core::ptr::read_volatile(x_words.add(0)),
@@ -2264,6 +2283,7 @@ fn submit_gpgpu_t5_store_only_control_probe(
     dev: crate::intel::Dev,
     warm: RenderWarmState,
     output_gpu: u64,
+    surface_gpu_base: u64,
     output_offset: usize,
     output_bytes: usize,
     t5_surface_bytes: usize,
@@ -2318,7 +2338,7 @@ fn submit_gpgpu_t5_store_only_control_probe(
         unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, batch_dwords) };
     let store_surface = prepare_gpgpu_store_surface_state_for_target_span(
         warm,
-        GPU_VA_GPGPU_TILE_ARENA_BASE,
+        surface_gpu_base,
         t5_surface_bytes,
         "bind-send-bti-to-t5-store-only-arena-base",
     );
@@ -2357,7 +2377,13 @@ fn submit_gpgpu_t5_store_only_control_probe(
         "gpgpu-t5-store-only-control",
     );
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
-    crate::intel::dma_flush(warm.gpgpu_arena_virt, t5_surface_bytes);
+    crate::intel::dma_flush(
+        unsafe {
+            warm.gpgpu_arena_virt
+                .add(output_offset - GPGPU_TILE_OUTPUT_OFFSET_BYTES)
+        },
+        t5_surface_bytes,
+    );
     let dispatch_after = read_gpgpu_threads_dispatched(dev);
     let dispatch_delta = dispatch_after.saturating_sub(dispatch_before);
     let finish_marker = read_result_dword(warm, RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD);
@@ -2437,12 +2463,15 @@ fn submit_gpgpu_t5_load_echo_probe(
     dev: crate::intel::Dev,
     warm: RenderWarmState,
     output_gpu: u64,
+    surface_gpu_base: u64,
+    tile_base_offset: usize,
     output_offset: usize,
     t5_surface_bytes: usize,
 ) {
     let program = gpgpu_t5_load_echo_program();
     let output_virt = unsafe { warm.gpgpu_arena_virt.add(output_offset) };
-    let (expected_x, expected_row_words) = read_gpgpu_t5_load_echo_expected(warm);
+    let (expected_x, expected_row_words) =
+        read_gpgpu_t5_load_echo_expected_at(warm, tile_base_offset);
     let output_words_before = unsafe { read_gpgpu_output_words8(output_virt) };
     unsafe {
         clear_gpgpu_output_words(output_virt, 8);
@@ -2509,7 +2538,7 @@ fn submit_gpgpu_t5_load_echo_probe(
         unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, batch_dwords) };
     let store_surface = prepare_gpgpu_store_surface_state_for_target_span(
         warm,
-        GPU_VA_GPGPU_TILE_ARENA_BASE,
+        surface_gpu_base,
         t5_surface_bytes,
         "bind-send-bti-to-t5-load-echo-arena-base",
     );
@@ -2569,7 +2598,10 @@ fn submit_gpgpu_t5_load_echo_probe(
         "gpgpu-t5-load-echo",
     );
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
-    crate::intel::dma_flush(warm.gpgpu_arena_virt, t5_surface_bytes);
+    crate::intel::dma_flush(
+        unsafe { warm.gpgpu_arena_virt.add(tile_base_offset) },
+        t5_surface_bytes,
+    );
     let dispatch_after = read_gpgpu_threads_dispatched(dev);
     let dispatch_delta = dispatch_after.saturating_sub(dispatch_before);
     let finish_marker = read_result_dword(warm, RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD);
@@ -2767,9 +2799,9 @@ fn submit_gpgpu_one_row_matvec_probe_for(
             live_k_dim,
         );
     }
-    let Some(t5_surface_bytes) = output_end.checked_add(4095).map(|bytes| bytes & !4095) else {
+    let Some(tile_base_offset) = output_offset.checked_sub(GPGPU_TILE_OUTPUT_OFFSET_BYTES) else {
         return gpgpu_t5_one_row_matvec_failure(
-            "surface-span-overflow",
+            "output-before-tile-output-slot",
             profile,
             program,
             output_gpu,
@@ -2777,9 +2809,9 @@ fn submit_gpgpu_one_row_matvec_probe_for(
             live_k_dim,
         );
     };
-    if t5_surface_bytes > warm.gpgpu_arena_len {
+    if tile_base_offset % GPGPU_TILE_RECORD_BYTES != 0 {
         return gpgpu_t5_one_row_matvec_failure(
-            "surface-span-outside-arena",
+            "output-gpu-not-tile-record-slot",
             profile,
             program,
             output_gpu,
@@ -2787,9 +2819,45 @@ fn submit_gpgpu_one_row_matvec_probe_for(
             live_k_dim,
         );
     }
-    if output_gpu >> 32 != 0 {
+    let Some(tile_record_end) = tile_base_offset.checked_add(GPGPU_TILE_RECORD_USED_BYTES) else {
         return gpgpu_t5_one_row_matvec_failure(
-            "output-gpu-high32-unsupported",
+            "tile-record-overflow",
+            profile,
+            program,
+            output_gpu,
+            cpu_expected_bits,
+            live_k_dim,
+        );
+    };
+    if tile_record_end > warm.gpgpu_arena_len {
+        return gpgpu_t5_one_row_matvec_failure(
+            "tile-record-outside-arena",
+            profile,
+            program,
+            output_gpu,
+            cpu_expected_bits,
+            live_k_dim,
+        );
+    }
+    let surface_gpu_base = GPU_VA_GPGPU_TILE_ARENA_BASE + tile_base_offset as u64;
+    let surface_bytes = GPGPU_TILE_RECORD_BYTES;
+    let Some(scan_bytes) = tile_base_offset.checked_add(surface_bytes).map(|bytes| {
+        bytes
+            .min(warm.gpgpu_arena_len)
+            .saturating_sub(tile_base_offset)
+    }) else {
+        return gpgpu_t5_one_row_matvec_failure(
+            "tile-scan-overflow",
+            profile,
+            program,
+            output_gpu,
+            cpu_expected_bits,
+            live_k_dim,
+        );
+    };
+    if output_gpu >> 32 != 0 || surface_gpu_base >> 32 != 0 {
+        return gpgpu_t5_one_row_matvec_failure(
+            "tile-gpu-high32-unsupported",
             profile,
             program,
             output_gpu,
@@ -2800,18 +2868,6 @@ fn submit_gpgpu_one_row_matvec_probe_for(
     if live_k_dim != profile.live_k_dim {
         return gpgpu_t5_one_row_matvec_failure(
             "unexpected-live-k-dim",
-            profile,
-            program,
-            output_gpu,
-            cpu_expected_bits,
-            live_k_dim,
-        );
-    }
-    let expected_t5_output_gpu =
-        GPU_VA_GPGPU_TILE_ARENA_BASE + (GPGPU_X_VECTOR_BYTES + GPGPU_WEIGHT_TILE_BYTES) as u64;
-    if output_gpu != expected_t5_output_gpu {
-        return gpgpu_t5_one_row_matvec_failure(
-            "output-gpu-not-t5-arena-slot",
             profile,
             program,
             output_gpu,
@@ -2879,12 +2935,13 @@ fn submit_gpgpu_one_row_matvec_probe_for(
         output_words_after_clear[1],
         output_words_after_clear[2],
         output_words_after_clear[3],
-        t5_surface_bytes,
+        surface_bytes,
         cpu_expected_bits,
     );
     let t5_arena_before = probe_gpgpu_t5_arena_store_window(
         warm,
-        t5_surface_bytes,
+        tile_base_offset,
+        scan_bytes,
         output_offset,
         output_bytes,
         cpu_expected_bits,
@@ -2903,14 +2960,16 @@ fn submit_gpgpu_one_row_matvec_probe_for(
         dev,
         warm,
         output_gpu,
+        surface_gpu_base,
         output_offset,
         output_bytes,
-        t5_surface_bytes,
+        surface_bytes,
     );
-    crate::intel::dma_flush(warm.gpgpu_arena_virt, t5_surface_bytes);
+    crate::intel::dma_flush(unsafe { warm.gpgpu_arena_virt.add(tile_base_offset) }, scan_bytes);
     let t5_arena_after_store_only = probe_gpgpu_t5_arena_store_window(
         warm,
-        t5_surface_bytes,
+        tile_base_offset,
+        scan_bytes,
         output_offset,
         output_bytes,
         cpu_expected_bits,
@@ -2924,11 +2983,20 @@ fn submit_gpgpu_one_row_matvec_probe_for(
         cpu_expected_bits,
         profile,
     );
-    submit_gpgpu_t5_load_echo_probe(dev, warm, output_gpu, output_offset, t5_surface_bytes);
-    crate::intel::dma_flush(warm.gpgpu_arena_virt, t5_surface_bytes);
+    submit_gpgpu_t5_load_echo_probe(
+        dev,
+        warm,
+        output_gpu,
+        surface_gpu_base,
+        tile_base_offset,
+        output_offset,
+        surface_bytes,
+    );
+    crate::intel::dma_flush(unsafe { warm.gpgpu_arena_virt.add(tile_base_offset) }, scan_bytes);
     let t5_arena_after_load_echo = probe_gpgpu_t5_arena_store_window(
         warm,
-        t5_surface_bytes,
+        tile_base_offset,
+        scan_bytes,
         output_offset,
         output_bytes,
         cpu_expected_bits,
@@ -2963,12 +3031,13 @@ fn submit_gpgpu_one_row_matvec_probe_for(
         output_words_before_live[1],
         output_words_before_live[2],
         output_words_before_live[3],
-        t5_surface_bytes,
+        surface_bytes,
         cpu_expected_bits,
     );
     let t5_arena_before = probe_gpgpu_t5_arena_store_window(
         warm,
-        t5_surface_bytes,
+        tile_base_offset,
+        scan_bytes,
         output_offset,
         output_bytes,
         cpu_expected_bits,
@@ -2998,11 +3067,12 @@ fn submit_gpgpu_one_row_matvec_probe_for(
 
     let store_surface = prepare_gpgpu_store_surface_state_for_target_span(
         warm,
-        GPU_VA_GPGPU_TILE_ARENA_BASE,
-        t5_surface_bytes,
+        surface_gpu_base,
+        surface_bytes,
         profile.surface_note,
     );
-    let t5_input_summary = read_gpgpu_t5_input_summary(warm, profile.live_k_dim);
+    let t5_input_summary =
+        read_gpgpu_t5_input_summary_at(warm, tile_base_offset, profile.live_k_dim);
     let mut submitted = false;
     let mut finished = false;
     let mut batch_bytes = 0usize;
@@ -3082,7 +3152,7 @@ fn submit_gpgpu_one_row_matvec_probe_for(
         );
         submitted = batch_bytes != 0;
         crate::intel::dma_flush(warm.result_virt, warm.result_len);
-        crate::intel::dma_flush(warm.gpgpu_arena_virt, t5_arena_before.scan_bytes);
+        crate::intel::dma_flush(unsafe { warm.gpgpu_arena_virt.add(tile_base_offset) }, scan_bytes);
         let dispatch_after = read_gpgpu_threads_dispatched(dev);
         dispatch_delta = dispatch_after.saturating_sub(dispatch_before);
         finish_marker = read_result_dword(warm, RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD);
@@ -3186,7 +3256,8 @@ fn submit_gpgpu_one_row_matvec_probe_for(
     );
     let t5_arena_after = probe_gpgpu_t5_arena_store_window(
         warm,
-        t5_surface_bytes,
+        tile_base_offset,
+        scan_bytes,
         output_offset,
         output_bytes,
         cpu_expected_bits,
@@ -3436,6 +3507,7 @@ struct GpgpuT5ArenaMarkerProbe {
 
 #[derive(Copy, Clone)]
 struct GpgpuT5ArenaStoreProbe {
+    scan_base_offset: usize,
     scan_bytes: usize,
     output_offset: usize,
     output_record_bytes: usize,
@@ -3495,15 +3567,20 @@ fn gpgpu_t5_word_low_dot_bits(x_bits: &[u32; 8], row_le: &[u16; 16]) -> u32 {
     acc.to_bits()
 }
 
-fn read_gpgpu_t5_input_summary(warm: RenderWarmState, live_k_dim: usize) -> GpgpuT5InputSummary {
+fn read_gpgpu_t5_input_summary_at(
+    warm: RenderWarmState,
+    tile_base_offset: usize,
+    live_k_dim: usize,
+) -> GpgpuT5InputSummary {
     let mut x_bits = [0u32; 8];
     let mut row_le = [0u16; 16];
     unsafe {
-        let x_ptr = warm.gpgpu_arena_virt as *const u32;
+        let tile_base = warm.gpgpu_arena_virt.add(tile_base_offset);
+        let x_ptr = tile_base as *const u32;
         for (index, slot) in x_bits.iter_mut().enumerate() {
             *slot = core::ptr::read_volatile(x_ptr.add(index));
         }
-        let row_ptr = warm.gpgpu_arena_virt.add(GPGPU_X_VECTOR_BYTES) as *const u16;
+        let row_ptr = tile_base.add(GPGPU_X_VECTOR_BYTES) as *const u16;
         for (index, slot) in row_le.iter_mut().enumerate() {
             *slot = core::ptr::read_volatile(row_ptr.add(index));
         }
@@ -3593,21 +3670,33 @@ fn gpgpu_t5_arena_marker_step(
 
 fn probe_gpgpu_t5_arena_store_window(
     warm: RenderWarmState,
+    scan_base_offset: usize,
     scan_bytes: usize,
     output_offset: usize,
     output_bytes: usize,
     cpu_expected_bits: u32,
     profile: GpgpuOneRowMatvecProfile,
 ) -> GpgpuT5ArenaStoreProbe {
-    let scan_bytes = scan_bytes.min(warm.gpgpu_arena_len) & !3usize;
+    let scan_bytes = scan_base_offset
+        .checked_add(scan_bytes)
+        .map(|end| {
+            end.min(warm.gpgpu_arena_len)
+                .saturating_sub(scan_base_offset)
+        })
+        .unwrap_or(0)
+        & !3usize;
     let output_record_bytes = output_bytes.min(4 * core::mem::size_of::<u32>());
     let output_record_end = output_offset.saturating_add(output_record_bytes);
-    let output_end = output_offset.saturating_add(output_bytes).min(scan_bytes);
-    let x_end = GPGPU_X_VECTOR_BYTES.min(scan_bytes);
+    let output_end = output_offset.saturating_add(output_bytes);
+    let x_end = scan_base_offset
+        .saturating_add(GPGPU_X_VECTOR_BYTES)
+        .min(scan_base_offset.saturating_add(scan_bytes));
     let row0_end = GPGPU_X_VECTOR_BYTES
         .saturating_add(GPGPU_WEIGHT_TILE_BYTES)
-        .min(scan_bytes);
+        .saturating_add(scan_base_offset)
+        .min(scan_base_offset.saturating_add(scan_bytes));
     let mut probe = GpgpuT5ArenaStoreProbe {
+        scan_base_offset,
         scan_bytes,
         output_offset,
         output_record_bytes,
@@ -3619,14 +3708,14 @@ fn probe_gpgpu_t5_arena_store_window(
         meta_k: empty_gpgpu_t5_arena_marker_probe(),
         sentinel: empty_gpgpu_t5_arena_marker_probe(),
     };
-    let words = warm.gpgpu_arena_virt as *const u32;
+    let words = unsafe { warm.gpgpu_arena_virt.add(scan_base_offset) } as *const u32;
     let scan_dwords = scan_bytes / core::mem::size_of::<u32>();
     for index in 0..scan_dwords {
-        let offset = index * core::mem::size_of::<u32>();
+        let offset = scan_base_offset + index * core::mem::size_of::<u32>();
         let value = unsafe { core::ptr::read_volatile(words.add(index)) };
         let outside_output_record = offset < output_offset || offset >= output_record_end;
         gpgpu_t5_arena_range_step(&mut probe.scan, value);
-        if offset < x_end {
+        if offset >= scan_base_offset && offset < x_end {
             gpgpu_t5_arena_range_step(&mut probe.x, value);
         } else if offset < row0_end {
             gpgpu_t5_arena_range_step(&mut probe.row0, value);
@@ -3682,7 +3771,7 @@ fn log_gpgpu_t5_arena_store_probe(
         "intel/gpgpu: {}-arena-misplaced-store-probe stage={} scan_gpu=0x{:X} scan_bytes=0x{:X} output_off=0x{:X} output_gpu=0x{:X} output_record_bytes=0x{:X} scan_nonzero={} scan_digest=0x{:016X} scan_nonzero_changed={} scan_digest_changed={} x_nonzero={} x_digest=0x{:016X} x_digest_changed={} row0_nonzero={} row0_digest=0x{:016X} row0_digest_changed={} output_nonzero={} output_digest=0x{:016X} output_digest_changed={} cpu_expected_bits=0x{:08X} expected_hits={} expected_misplaced_hits={} expected_hit0_valid={} expected_hit0_off=0x{:X} expected_hit0_gpu=0x{:X} expected_misplaced0_valid={} expected_misplaced0_off=0x{:X} expected_misplaced0_gpu=0x{:X} meta_k=0x{:08X} meta_k_hits={} meta_k_misplaced_hits={} meta_k_hit0_valid={} meta_k_hit0_off=0x{:X} meta_k_hit0_gpu=0x{:X} meta_k_misplaced0_valid={} meta_k_misplaced0_off=0x{:X} meta_k_misplaced0_gpu=0x{:X} sentinel=0x{:08X} sentinel_hits={} sentinel_misplaced_hits={} sentinel_hit0_valid={} sentinel_hit0_off=0x{:X} sentinel_hit0_gpu=0x{:X} sentinel_misplaced0_valid={} sentinel_misplaced0_off=0x{:X} sentinel_misplaced0_gpu=0x{:X} note=scans-one-row-arena-prefix-not-full-dump\n",
         profile.log_prefix,
         stage,
-        GPU_VA_GPGPU_TILE_ARENA_BASE,
+        GPU_VA_GPGPU_TILE_ARENA_BASE + probe.scan_base_offset as u64,
         probe.scan_bytes,
         probe.output_offset,
         output_gpu,
@@ -3777,10 +3866,10 @@ fn gpgpu_arena_gpu_base(arena_bytes: usize) -> u64 {
 }
 
 fn gpgpu_arena_max_tiles(arena_bytes: usize) -> usize {
-    if arena_bytes <= GPGPU_X_VECTOR_BYTES {
+    if arena_bytes < GPGPU_TILE_RECORD_BYTES {
         return 0;
     }
-    (arena_bytes - GPGPU_X_VECTOR_BYTES) / (GPGPU_WEIGHT_TILE_BYTES + GPGPU_OUTPUT_TILE_BYTES)
+    arena_bytes / GPGPU_TILE_RECORD_BYTES
 }
 
 fn gpgpu_arena_enough_for_shape(arena_bytes: usize) -> bool {

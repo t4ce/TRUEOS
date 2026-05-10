@@ -234,7 +234,7 @@ pub(crate) fn observe_live_bf16_matvec_probe(
         );
         staged_tiles += stage.readback_ok as usize;
         crate::log!(
-            "lumen-gpu-proof: director-step step=5 backend=local-gpu mode=t5-actual-work-tile-stage staged={} reason={} call={} manifest={} tile_index={} armed_tiles={} row={} tile_rows={} k_dim={} artifact_addressing=fixed-arena-slot x_gpu=0x{:X} row_gpu=0x{:X} output_gpu=0x{:X} x_bytes={} row_bytes={} output_bytes={} cpu_expected_bits=0x{:08X} gpu_submission=0 output_owner=cpu-ap next=t5-current-artifact-live4 does_not_prove=full_model_matvec\n",
+            "lumen-gpu-proof: director-step step=5 backend=local-gpu mode=t5-actual-work-tile-stage staged={} reason={} call={} manifest={} tile_index={} armed_tiles={} row={} tile_rows={} k_dim={} artifact_addressing=tile-record-output-slots x_gpu=0x{:X} row_gpu=0x{:X} output_gpu=0x{:X} x_bytes={} row_bytes={} output_bytes={} cpu_expected_bits=0x{:08X} gpu_submission=0 output_owner=cpu-ap next=t5-current-artifact-live4 does_not_prove=full_model_matvec\n",
             stage.staged as u8,
             stage.reason,
             plan.call_index,
@@ -415,7 +415,7 @@ pub(crate) fn observe_live_bf16_matvec_probe(
     }
 
     crate::log!(
-        "lumen-gpu-proof: director-step step=11 backend=local-gpu mode=t6-actual-work-tiles armed_tiles={} staged_tiles={} t5_submitted_tiles={} t5_finished_tiles={} t5_compare_ok_tiles={} t6_submitted_tiles={} t6_finished_tiles={} t6_compare_ok_tiles={} first_row=0 last_row={} tile_rows={} k_dim={} t5_artifact=gfx12-t5-small-live4-packed-bf16-dot t6_artifact=gfx12-t6-small-live8-packed-bf16-dot artifact_addressing=fixed-slot-reused proof_role=actual-work-tile-frontiers last_gpu_value=0x{:08X} last_cpu_expected_bits=0x{:08X} last_lane_dispatch={} output_owner=cpu-ap action=hold-scale next=scale-row-count-or-live-k does_not_prove=full_model_matvec\n",
+        "lumen-gpu-proof: director-step step=11 backend=local-gpu mode=t6-actual-work-tiles armed_tiles={} staged_tiles={} t5_submitted_tiles={} t5_finished_tiles={} t5_compare_ok_tiles={} t6_submitted_tiles={} t6_finished_tiles={} t6_compare_ok_tiles={} first_row=0 last_row={} tile_rows={} k_dim={} t5_artifact=gfx12-t5-small-live4-packed-bf16-dot t6_artifact=gfx12-t6-small-live8-packed-bf16-dot artifact_addressing=tile-record-output-slots proof_role=actual-work-tile-frontiers last_gpu_value=0x{:08X} last_cpu_expected_bits=0x{:08X} last_lane_dispatch={} output_owner=cpu-ap action=hold-scale next=t6.1-live-k-tier-or-row-output-ownership does_not_prove=full_model_matvec\n",
         armed_tiles,
         staged_tiles,
         t5_submitted_tiles,
