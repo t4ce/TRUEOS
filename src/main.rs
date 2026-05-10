@@ -254,6 +254,7 @@ pub extern "C" fn kmain() -> ! {
     dma::init_from_limine();
     pci::enumerate_impl();
     intel::init_once();
+    #[cfg(feature = "hda-boot-probe")]
     let _ = hda::boot_probe_once();
 
     //vga::cube::tick();
