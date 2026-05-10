@@ -53,16 +53,6 @@ const STATUS_NORMAL_RGB: (u8, u8, u8) = (255, 255, 255);
 
 static REGISTERED_OUTPUTS: AtomicU8 = AtomicU8::new(0);
 
-pub(crate) fn build_tlb_dump_text() -> AllocString {
-    cmds::tlb::build_dump_text()
-}
-
-pub(crate) async fn write_tlb_dump_to_default_path(
-    bytes: &[u8],
-) -> Result<(), crate::disc::block::Error> {
-    cmds::tlb::write_dump_bytes_to_default_path(bytes).await
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LineSource {
     User,

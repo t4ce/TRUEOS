@@ -556,12 +556,6 @@ async fn handle_send_local(body: Bytes) -> Response {
         Ok(config) => config,
         Err(_) => MailConfig::static_account(),
     };
-    if config.password_is_placeholder() {
-        return json_response(
-            500,
-            &serde_json::json!({"ok": false, "error": "mail password placeholder"}),
-        );
-    }
     let from = match config.from {
         Some(from) => from,
         None => config.smtp_user,
@@ -588,7 +582,7 @@ async fn handle_send_local(body: Bytes) -> Response {
     tokio::task::spawn_local(async move {
         send_mail_job(job_id).await;
     });
-    json_response(200, &serde_json::json!({"ok": true, "id": id}))
+    json_response(200, &serde_json::json!({"ok": true, "id": id, "status": "queued"}))
 }
 
 fn mail_router() -> Router {

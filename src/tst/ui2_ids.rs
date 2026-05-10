@@ -12,7 +12,6 @@ pub enum Ui2DemoTexId {
     CursorPicker = 4_725,
     TextInput = 4_726,
     AnalogClock = 4_727,
-    TrueosfsExplorer = 4_901,
 }
 
 impl Ui2DemoTexId {
@@ -26,7 +25,6 @@ impl Ui2DemoTexId {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Ui2DemoContentId {
     Shell = 43,
-    TrueosfsExplorer = 44,
     Swarm = 46,
     Raple = 49,
     Player = 51,

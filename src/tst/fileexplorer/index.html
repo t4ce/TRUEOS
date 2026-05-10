@@ -1,0 +1,1714 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Async File Explorer</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ["Inter", "ui-sans-serif", "system-ui", "Segoe UI", "sans-serif"],
+            mono: ["JetBrains Mono", "ui-monospace", "SFMono-Regular", "Consolas", "monospace"]
+          },
+          boxShadow: {
+            lift: "0 18px 55px rgba(15, 23, 42, 0.14)",
+            soft: "0 10px 35px rgba(15, 23, 42, 0.09)"
+          }
+        }
+      }
+    };
+  </script>
+  <script defer src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  <style>
+    :root {
+      --surface: #f7f7f4;
+      --ink: #171717;
+      --muted: #68645f;
+      --line: #dedbd3;
+      --accent: #047857;
+      --accent-2: #0e7490;
+      --warn: #b45309;
+      --danger: #b91c1c;
+      --jobs-height: 340px;
+    }
+
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: #b9b5aa transparent;
+    }
+
+    body {
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(247, 247, 244, 0.94)),
+        var(--surface);
+      color: var(--ink);
+    }
+
+    button, input, select {
+      font: inherit;
+    }
+
+    .app-shell {
+      display: grid;
+      grid-template-columns: minmax(260px, 320px) minmax(0, 1fr) minmax(290px, 340px);
+      grid-template-rows: 58px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    .resize-x-panel {
+      resize: horizontal;
+      overflow: auto;
+      min-width: 250px;
+      max-width: 480px;
+    }
+
+    .tree-row,
+    .tile,
+    .list-row,
+    .crumb,
+    .icon-btn,
+    .menu-item {
+      transition: border-color 120ms ease, background 120ms ease, color 120ms ease, transform 120ms ease, box-shadow 120ms ease;
+    }
+
+    .tree-row[aria-selected="true"],
+    .tile[aria-selected="true"],
+    .list-row[aria-selected="true"] {
+      border-color: rgba(4, 120, 87, 0.42);
+      background: rgba(4, 120, 87, 0.09);
+      box-shadow: inset 0 0 0 1px rgba(4, 120, 87, 0.15);
+    }
+
+    .tree-row[data-current="true"] {
+      background: #fff7ed;
+      border-color: rgba(180, 83, 9, 0.26);
+    }
+
+    .drop-target {
+      outline: 2px solid rgba(14, 116, 144, 0.62);
+      outline-offset: -2px;
+      background: rgba(14, 116, 144, 0.08) !important;
+    }
+
+    .tile:hover,
+    .list-row:hover,
+    .tree-row:hover,
+    .crumb:hover,
+    .icon-btn:hover,
+    .menu-item:hover {
+      background: rgba(255, 255, 255, 0.82);
+    }
+
+    .tile:active,
+    .icon-btn:active {
+      transform: translateY(1px);
+    }
+
+    .job-drawer {
+      height: var(--jobs-height);
+      transform: translateY(calc(100% - 44px));
+    }
+
+    .job-drawer[data-open="true"] {
+      transform: translateY(0);
+    }
+
+    .progress-bar {
+      background:
+        linear-gradient(90deg, rgba(4, 120, 87, 0.9), rgba(14, 116, 144, 0.9));
+    }
+
+    .tile-grid[data-density="compact"] {
+      grid-template-columns: repeat(auto-fill, minmax(138px, 1fr));
+    }
+
+    .tile-grid[data-density="comfortable"] {
+      grid-template-columns: repeat(auto-fill, minmax(176px, 1fr));
+    }
+
+    .tile-grid[data-density="wide"] {
+      grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+    }
+
+    .tile-name,
+    .list-name,
+    .tree-name {
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+
+    .glass {
+      background: rgba(255, 255, 255, 0.78);
+      backdrop-filter: blur(18px);
+    }
+
+    .kbd {
+      border: 1px solid var(--line);
+      background: #fff;
+      border-bottom-width: 2px;
+      border-radius: 6px;
+      padding: 0 5px;
+      font-size: 11px;
+      line-height: 18px;
+      color: #57534e;
+    }
+
+    @media (max-width: 1120px) {
+      .app-shell {
+        grid-template-columns: minmax(230px, 300px) minmax(0, 1fr);
+      }
+
+      .inspector-panel {
+        display: none;
+      }
+    }
+
+    @media (max-width: 760px) {
+      .app-shell {
+        display: block;
+      }
+
+      .resize-x-panel {
+        resize: none;
+        max-width: none;
+        width: 100%;
+        height: 250px;
+      }
+
+      .mobile-stack {
+        min-height: calc(100vh - 308px);
+      }
+
+      .job-drawer {
+        left: 8px !important;
+        right: 8px !important;
+      }
+    }
+  </style>
+</head>
+<body class="overflow-hidden font-sans antialiased">
+  <div id="app"></div>
+  <div id="modal-root"></div>
+  <div id="context-root"></div>
+  <div id="toast-root" class="fixed right-4 top-4 z-[80] flex w-[min(380px,calc(100vw-2rem))] flex-col gap-2"></div>
+
+  <script>
+    const NODE_SCHEMA_VERSION = "filetree.v1";
+    const currentYear = new Date().getFullYear();
+
+    const sampleTree = {
+      schema: NODE_SCHEMA_VERSION,
+      id: "root",
+      name: "Workspace",
+      kind: "folder",
+      size: 19593274,
+      modified: `${currentYear}-05-09T21:30:00.000Z`,
+      meta: { owner: "hosted-demo", locked: false },
+      children: [
+        {
+          id: "src",
+          name: "src",
+          kind: "folder",
+          size: 8314490,
+          modified: `${currentYear}-05-09T19:41:00.000Z`,
+          children: [
+            {
+              id: "src-components",
+              name: "components",
+              kind: "folder",
+              size: 4102110,
+              modified: `${currentYear}-05-09T19:41:00.000Z`,
+              children: [
+                { id: "cmp-tree", name: "TreeViewport.tsx", kind: "file", size: 94328, mime: "text/typescript", modified: `${currentYear}-05-09T19:41:00.000Z`, actions: ["open", "rename", "move", "delete"] },
+                { id: "cmp-tile", name: "TileGrid.tsx", kind: "file", size: 81190, mime: "text/typescript", modified: `${currentYear}-05-09T19:30:00.000Z`, actions: ["open", "rename", "move", "delete"] },
+                { id: "cmp-menu", name: "ContextMenu.tsx", kind: "file", size: 40228, mime: "text/typescript", modified: `${currentYear}-05-09T18:12:00.000Z`, actions: ["open", "rename", "move", "delete"] }
+              ]
+            },
+            {
+              id: "src-adapters",
+              name: "adapters",
+              kind: "folder",
+              size: 1821180,
+              modified: `${currentYear}-05-08T12:16:00.000Z`,
+              children: [
+                { id: "adapter-axum", name: "axum_job_adapter.rs", kind: "file", size: 64281, mime: "text/rust", modified: `${currentYear}-05-08T12:16:00.000Z`, actions: ["open", "rename", "move", "delete"] },
+                { id: "adapter-local", name: "local_mock_adapter.js", kind: "file", size: 26621, mime: "text/javascript", modified: `${currentYear}-05-08T10:01:00.000Z`, actions: ["open", "rename", "move", "delete"] }
+              ]
+            },
+            { id: "src-index", name: "main.ts", kind: "file", size: 21140, mime: "text/typescript", modified: `${currentYear}-05-09T15:32:00.000Z`, actions: ["open", "rename", "move", "delete"] },
+            { id: "src-style", name: "explorer.css", kind: "file", size: 38528, mime: "text/css", modified: `${currentYear}-05-09T14:27:00.000Z`, actions: ["open", "rename", "move", "delete"] }
+          ]
+        },
+        {
+          id: "assets",
+          name: "assets",
+          kind: "folder",
+          size: 9473300,
+          modified: `${currentYear}-05-07T11:11:00.000Z`,
+          children: [
+            { id: "asset-shot", name: "window-preview.png", kind: "file", size: 2148320, mime: "image/png", modified: `${currentYear}-05-07T11:11:00.000Z`, preview: "image", actions: ["open", "rename", "move", "delete"] },
+            { id: "asset-icons", name: "icons.sprite.svg", kind: "file", size: 199420, mime: "image/svg+xml", modified: `${currentYear}-05-06T21:11:00.000Z`, actions: ["open", "rename", "move", "delete"] },
+            { id: "asset-bg", name: "empty-state.webp", kind: "file", size: 1094820, mime: "image/webp", modified: `${currentYear}-05-06T18:02:00.000Z`, preview: "image", actions: ["open", "rename", "move", "delete"] }
+          ]
+        },
+        {
+          id: "docs",
+          name: "docs",
+          kind: "folder",
+          size: 1117800,
+          modified: `${currentYear}-05-08T08:19:00.000Z`,
+          children: [
+            { id: "doc-api", name: "api-contract.md", kind: "file", size: 18860, mime: "text/markdown", modified: `${currentYear}-05-08T08:19:00.000Z`, actions: ["open", "rename", "move", "delete"] },
+            { id: "doc-flow", name: "job-lifecycle.md", kind: "file", size: 22640, mime: "text/markdown", modified: `${currentYear}-05-08T08:12:00.000Z`, actions: ["open", "rename", "move", "delete"] }
+          ]
+        },
+        { id: "pkg", name: "package.json", kind: "file", size: 3420, mime: "application/json", modified: `${currentYear}-05-09T20:03:00.000Z`, actions: ["open", "rename", "move", "delete"] },
+        { id: "readme", name: "README.md", kind: "file", size: 8322, mime: "text/markdown", modified: `${currentYear}-05-09T19:10:00.000Z`, actions: ["open", "rename", "move", "delete"] },
+        { id: "lock", name: "pnpm-lock.yaml", kind: "file", size: 483922, mime: "text/yaml", modified: `${currentYear}-05-06T07:22:00.000Z`, actions: ["open", "rename", "move", "delete"] }
+      ]
+    };
+
+    const state = {
+      tree: normalizeTree(clone(sampleTree)),
+      currentId: "root",
+      activeId: "root",
+      selected: new Set(),
+      expanded: new Set(["root", "src", "src-components", "src-adapters", "docs", "assets"]),
+      jobs: [],
+      jobsOpen: true,
+      jobsHeight: 340,
+      context: null,
+      modal: null,
+      dragIds: [],
+      view: "tiles",
+      density: "comfortable",
+      sortKey: "name",
+      sortDir: "asc",
+      foldersFirst: true,
+      query: "",
+      clipboardPath: "",
+      adapterName: window.FILE_EXPLORER_API_BASE ? "http" : "mock"
+    };
+
+    const app = document.getElementById("app");
+    const modalRoot = document.getElementById("modal-root");
+    const contextRoot = document.getElementById("context-root");
+    const toastRoot = document.getElementById("toast-root");
+
+    function clone(value) {
+      return JSON.parse(JSON.stringify(value));
+    }
+
+    function normalizeTree(node) {
+      if (!node.id) node.id = crypto.randomUUID();
+      if (!node.kind) node.kind = node.children ? "folder" : "file";
+      if (!node.modified) node.modified = new Date().toISOString();
+      if (node.kind === "folder") {
+        node.children = Array.isArray(node.children) ? node.children.map(normalizeTree) : [];
+      }
+      if (!Array.isArray(node.actions)) {
+        node.actions = node.kind === "folder"
+          ? ["open", "new-file", "new-folder", "rename", "move", "delete"]
+          : ["open", "rename", "move", "delete"];
+      }
+      if (node.id === "root") {
+        node.actions = ["open", "new-file", "new-folder"];
+      }
+      return node;
+    }
+
+    function render() {
+      const current = getNode(state.currentId) || state.tree;
+      const active = getNode(state.activeId) || current;
+      const children = visibleChildren(current);
+      document.documentElement.style.setProperty("--jobs-height", `${state.jobsHeight}px`);
+
+      app.innerHTML = `
+        <div class="app-shell">
+          ${renderTopBar(current)}
+          ${renderTreePanel()}
+          <main class="mobile-stack col-start-2 row-start-2 flex min-w-0 flex-col border-l border-r border-stone-200/80 bg-white/45">
+            ${renderBreadcrumb(current)}
+            ${renderToolbar(current)}
+            ${renderFolderSurface(current, children)}
+            ${renderSelectionBar()}
+          </main>
+          ${renderInspector(active, current)}
+        </div>
+        ${renderJobDrawer()}
+      `;
+
+      renderModal();
+      renderContextMenu();
+      wireDropTargets();
+      if (window.lucide) lucide.createIcons();
+      focusRenameInput();
+    }
+
+    function renderTopBar(current) {
+      const inflight = state.jobs.filter(job => ["queued", "running"].includes(job.status)).length;
+      return `
+        <header class="col-span-3 row-start-1 flex min-w-0 items-center gap-3 border-b border-stone-200/80 bg-white/78 px-3 shadow-sm backdrop-blur">
+          <button class="icon-btn flex h-10 w-10 items-center justify-center rounded-lg border border-stone-200 bg-white" title="Root" onclick="openFolder('root')">
+            <i data-lucide="folder-tree" class="h-5 w-5 text-emerald-700"></i>
+          </button>
+          <div class="min-w-0 flex-1">
+            <div class="flex min-w-0 items-center gap-2">
+              <div class="truncate text-sm font-semibold text-stone-950">Async File Explorer</div>
+              <span class="rounded-md border border-cyan-200 bg-cyan-50 px-1.5 py-0.5 text-[11px] font-medium text-cyan-800">${state.adapterName.toUpperCase()}</span>
+            </div>
+            <div class="truncate font-mono text-[11px] text-stone-500">${escapeHtml(pathString(current.id))}</div>
+          </div>
+          <label class="relative hidden min-w-[260px] max-w-md flex-1 md:block">
+            <i data-lucide="search" class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400"></i>
+            <input value="${escapeAttr(state.query)}" oninput="setQuery(this.value)" class="h-10 w-full rounded-lg border border-stone-200 bg-white pl-9 pr-3 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" placeholder="Search current folder" />
+          </label>
+          <button class="icon-btn relative flex h-10 items-center gap-2 rounded-lg border border-stone-200 bg-white px-3 text-sm font-medium" title="Jobs" onclick="toggleJobs()">
+            <i data-lucide="list-checks" class="h-4 w-4 text-stone-700"></i>
+            <span>Jobs</span>
+            ${inflight ? `<span class="rounded-full bg-emerald-700 px-1.5 py-0.5 text-[10px] font-semibold text-white">${inflight}</span>` : ""}
+          </button>
+        </header>
+      `;
+    }
+
+    function renderTreePanel() {
+      return `
+        <aside class="resize-x-panel row-start-2 flex min-h-0 flex-col bg-stone-50/80">
+          <div class="flex items-center justify-between border-b border-stone-200/80 px-3 py-2">
+            <div class="text-xs font-semibold uppercase tracking-wide text-stone-500">Tree</div>
+            <div class="flex items-center gap-1">
+              <button class="icon-btn flex h-8 w-8 items-center justify-center rounded-md border border-stone-200 bg-white" title="Expand all" onclick="expandAll()"><i data-lucide="chevrons-down-up" class="h-4 w-4"></i></button>
+              <button class="icon-btn flex h-8 w-8 items-center justify-center rounded-md border border-stone-200 bg-white" title="Collapse all" onclick="collapseAll()"><i data-lucide="chevrons-up-down" class="h-4 w-4"></i></button>
+            </div>
+          </div>
+          <div class="min-h-0 flex-1 overflow-auto p-2">
+            ${renderTreeNode(state.tree, 0)}
+          </div>
+        </aside>
+      `;
+    }
+
+    function renderTreeNode(node, depth) {
+      const isFolder = node.kind === "folder";
+      const isExpanded = state.expanded.has(node.id);
+      const isSelected = state.selected.has(node.id);
+      const pending = pendingForNode(node.id);
+      const current = state.currentId === node.id;
+      const renamed = state.renamingId === node.id;
+      const icon = isFolder ? (isExpanded ? "folder-open" : "folder") : fileIcon(node);
+      return `
+        <div>
+          <div
+            class="tree-row group mb-0.5 flex min-h-8 items-center gap-1 rounded-md border border-transparent px-1 text-sm"
+            style="padding-left: ${4 + depth * 14}px"
+            draggable="true"
+            data-node-id="${escapeAttr(node.id)}"
+            data-folder="${isFolder}"
+            data-current="${current}"
+            aria-selected="${isSelected}"
+            ondragstart="onDragStart(event, '${escapeJs(node.id)}')"
+            ondragover="onDragOverNode(event, '${escapeJs(node.id)}')"
+            ondragleave="onDragLeave(event)"
+            ondrop="onDropOnNode(event, '${escapeJs(node.id)}')"
+            onclick="selectNode(event, '${escapeJs(node.id)}')"
+            ondblclick="openNode('${escapeJs(node.id)}')"
+            oncontextmenu="openContext(event, '${escapeJs(node.id)}')"
+          >
+            ${isFolder ? `
+              <button class="icon-btn flex h-6 w-6 shrink-0 items-center justify-center rounded" title="${isExpanded ? "Collapse" : "Expand"}" onclick="toggleExpand(event, '${escapeJs(node.id)}')">
+                <i data-lucide="${isExpanded ? "chevron-down" : "chevron-right"}" class="h-4 w-4 text-stone-500"></i>
+              </button>
+            ` : `<span class="h-6 w-6 shrink-0"></span>`}
+            <i data-lucide="${icon}" class="h-4 w-4 shrink-0 ${isFolder ? "text-cyan-700" : "text-stone-500"}"></i>
+            ${renamed ? renameInputMarkup(node, "tree") : `<span class="tree-name min-w-0 flex-1 truncate">${escapeHtml(node.name)}</span>`}
+            ${pending ? `<span class="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800">${pending}</span>` : ""}
+          </div>
+          ${isFolder && isExpanded ? `<div>${node.children.map(child => renderTreeNode(child, depth + 1)).join("")}</div>` : ""}
+        </div>
+      `;
+    }
+
+    function renderBreadcrumb(current) {
+      const path = getPath(current.id);
+      return `
+        <div class="flex min-h-12 min-w-0 items-center gap-2 border-b border-stone-200/80 bg-white/60 px-3">
+          <div class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+            ${path.map((node, index) => `
+              <button class="crumb flex shrink-0 items-center gap-1 rounded-md border border-transparent px-2 py-1 text-sm font-medium ${index === path.length - 1 ? "bg-amber-50 text-amber-900" : "text-stone-600"}" onclick="openFolder('${escapeJs(node.id)}')">
+                <i data-lucide="${node.id === "root" ? "hard-drive" : "folder"}" class="h-4 w-4"></i>
+                <span>${escapeHtml(node.name)}</span>
+              </button>
+              ${index < path.length - 1 ? `<i data-lucide="chevron-right" class="h-4 w-4 shrink-0 text-stone-300"></i>` : ""}
+            `).join("")}
+          </div>
+          <button class="icon-btn flex h-8 w-8 items-center justify-center rounded-md border border-stone-200 bg-white" title="Copy path" onclick="copyPath('${escapeJs(current.id)}')">
+            <i data-lucide="copy" class="h-4 w-4"></i>
+          </button>
+        </div>
+      `;
+    }
+
+    function renderToolbar(current) {
+      const selectionCount = state.selected.size;
+      return `
+        <div class="flex min-h-14 flex-wrap items-center gap-2 border-b border-stone-200/80 bg-stone-50/70 px-3 py-2">
+          <div class="flex items-center gap-1">
+            <button class="icon-btn flex h-9 items-center gap-2 rounded-lg border border-stone-200 bg-white px-3 text-sm font-medium" title="New folder" onclick="openCreateModal('folder', '${escapeJs(current.id)}')">
+              <i data-lucide="folder-plus" class="h-4 w-4 text-cyan-700"></i><span>Folder</span>
+            </button>
+            <button class="icon-btn flex h-9 items-center gap-2 rounded-lg border border-stone-200 bg-white px-3 text-sm font-medium" title="New file" onclick="openCreateModal('file', '${escapeJs(current.id)}')">
+              <i data-lucide="file-plus-2" class="h-4 w-4 text-emerald-700"></i><span>File</span>
+            </button>
+          </div>
+          <div class="h-7 w-px bg-stone-200"></div>
+          <button class="icon-btn flex h-9 w-9 items-center justify-center rounded-lg border border-stone-200 bg-white disabled:opacity-40" title="Rename" onclick="renameSelected()" ${selectionCount === 1 ? "" : "disabled"}>
+            <i data-lucide="pencil" class="h-4 w-4"></i>
+          </button>
+          <button class="icon-btn flex h-9 w-9 items-center justify-center rounded-lg border border-stone-200 bg-white disabled:opacity-40" title="Delete" onclick="deleteSelected()" ${selectionCount ? "" : "disabled"}>
+            <i data-lucide="trash-2" class="h-4 w-4 text-red-700"></i>
+          </button>
+          <button class="icon-btn flex h-9 w-9 items-center justify-center rounded-lg border border-stone-200 bg-white disabled:opacity-40" title="Move to current folder" onclick="moveSelectionToCurrent()" ${selectionCount ? "" : "disabled"}>
+            <i data-lucide="move-right" class="h-4 w-4 text-cyan-700"></i>
+          </button>
+          <div class="h-7 w-px bg-stone-200"></div>
+          <div class="flex rounded-lg border border-stone-200 bg-white p-0.5">
+            <button class="icon-btn flex h-8 w-8 items-center justify-center rounded-md ${state.view === "tiles" ? "bg-emerald-50 text-emerald-800" : ""}" title="Tiles" onclick="setView('tiles')"><i data-lucide="layout-grid" class="h-4 w-4"></i></button>
+            <button class="icon-btn flex h-8 w-8 items-center justify-center rounded-md ${state.view === "list" ? "bg-emerald-50 text-emerald-800" : ""}" title="List" onclick="setView('list')"><i data-lucide="list" class="h-4 w-4"></i></button>
+          </div>
+          <select class="h-9 rounded-lg border border-stone-200 bg-white px-2 text-sm outline-none focus:border-emerald-500" onchange="setSort(this.value)">
+            <option value="name" ${state.sortKey === "name" ? "selected" : ""}>Name</option>
+            <option value="kind" ${state.sortKey === "kind" ? "selected" : ""}>Kind</option>
+            <option value="size" ${state.sortKey === "size" ? "selected" : ""}>Size</option>
+            <option value="modified" ${state.sortKey === "modified" ? "selected" : ""}>Modified</option>
+          </select>
+          <button class="icon-btn flex h-9 w-9 items-center justify-center rounded-lg border border-stone-200 bg-white" title="Reverse sort" onclick="toggleSortDir()">
+            <i data-lucide="${state.sortDir === "asc" ? "arrow-up-a-z" : "arrow-down-z-a"}" class="h-4 w-4"></i>
+          </button>
+          <label class="flex h-9 items-center gap-2 rounded-lg border border-stone-200 bg-white px-2 text-sm text-stone-700">
+            <input type="checkbox" ${state.foldersFirst ? "checked" : ""} onchange="setFoldersFirst(this.checked)" class="rounded border-stone-300 text-emerald-700 focus:ring-emerald-500" />
+            <span>Folders</span>
+          </label>
+          <div class="ml-auto flex rounded-lg border border-stone-200 bg-white p-0.5">
+            ${["compact", "comfortable", "wide"].map(density => `
+              <button class="icon-btn h-8 rounded-md px-2 text-xs font-medium ${state.density === density ? "bg-cyan-50 text-cyan-800" : "text-stone-600"}" onclick="setDensity('${density}')">${density[0].toUpperCase()}</button>
+            `).join("")}
+          </div>
+        </div>
+      `;
+    }
+
+    function renderFolderSurface(current, children) {
+      const isEmpty = children.length === 0;
+      return `
+        <section
+          class="min-h-0 flex-1 overflow-auto p-3"
+          data-folder-id="${escapeAttr(current.id)}"
+          ondragover="onDragOverCurrent(event)"
+          ondragleave="onDragLeave(event)"
+          ondrop="onDropOnCurrent(event)"
+        >
+          ${state.view === "tiles" ? renderTiles(children) : renderList(children)}
+          ${isEmpty ? `
+            <div class="flex h-full min-h-[300px] items-center justify-center">
+              <div class="text-center">
+                <div class="mx-auto mb-3 flex h-16 w-16 items-center justify-center rounded-xl border border-stone-200 bg-white shadow-sm">
+                  <i data-lucide="folder-open" class="h-8 w-8 text-cyan-700"></i>
+                </div>
+                <div class="text-sm font-semibold text-stone-800">Empty folder</div>
+                <div class="mt-2 flex justify-center gap-2">
+                  <button class="icon-btn flex h-9 items-center gap-2 rounded-lg border border-stone-200 bg-white px-3 text-sm font-medium" onclick="openCreateModal('folder', '${escapeJs(current.id)}')"><i data-lucide="folder-plus" class="h-4 w-4"></i><span>Folder</span></button>
+                  <button class="icon-btn flex h-9 items-center gap-2 rounded-lg border border-stone-200 bg-white px-3 text-sm font-medium" onclick="openCreateModal('file', '${escapeJs(current.id)}')"><i data-lucide="file-plus-2" class="h-4 w-4"></i><span>File</span></button>
+                </div>
+              </div>
+            </div>
+          ` : ""}
+        </section>
+      `;
+    }
+
+    function renderTiles(children) {
+      return `
+        <div class="tile-grid grid gap-3" data-density="${escapeAttr(state.density)}">
+          ${children.map(node => {
+            const isFolder = node.kind === "folder";
+            const isSelected = state.selected.has(node.id);
+            const pending = pendingForNode(node.id);
+            const renamed = state.renamingId === node.id;
+            return `
+              <article
+                class="tile relative flex min-h-[138px] flex-col rounded-lg border border-stone-200 bg-white p-3 shadow-sm"
+                draggable="true"
+                data-node-id="${escapeAttr(node.id)}"
+                data-folder="${isFolder}"
+                aria-selected="${isSelected}"
+                onclick="selectNode(event, '${escapeJs(node.id)}')"
+                ondblclick="openNode('${escapeJs(node.id)}')"
+                oncontextmenu="openContext(event, '${escapeJs(node.id)}')"
+                ondragstart="onDragStart(event, '${escapeJs(node.id)}')"
+                ondragover="onDragOverNode(event, '${escapeJs(node.id)}')"
+                ondragleave="onDragLeave(event)"
+                ondrop="onDropOnNode(event, '${escapeJs(node.id)}')"
+              >
+                <div class="flex items-start justify-between gap-2">
+                  <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border ${isFolder ? "border-cyan-200 bg-cyan-50" : "border-stone-200 bg-stone-50"}">
+                    <i data-lucide="${isFolder ? "folder" : fileIcon(node)}" class="h-6 w-6 ${isFolder ? "text-cyan-700" : fileColor(node)}"></i>
+                  </div>
+                  <button class="icon-btn flex h-8 w-8 items-center justify-center rounded-md border border-transparent" title="More" onclick="openContext(event, '${escapeJs(node.id)}')">
+                    <i data-lucide="more-horizontal" class="h-4 w-4 text-stone-500"></i>
+                  </button>
+                </div>
+                <div class="mt-3 min-w-0 flex-1">
+                  ${renamed ? renameInputMarkup(node, "tile") : `<div class="tile-name line-clamp-2 text-sm font-semibold text-stone-950">${escapeHtml(node.name)}</div>`}
+                  <div class="mt-1 flex flex-wrap items-center gap-1 text-xs text-stone-500">
+                    <span>${isFolder ? `${node.children.length} items` : escapeHtml(node.mime || "file")}</span>
+                    <span class="text-stone-300">/</span>
+                    <span>${formatSize(node.size)}</span>
+                  </div>
+                </div>
+                <div class="mt-3 flex items-center justify-between gap-2">
+                  <span class="truncate text-[11px] text-stone-500">${formatDate(node.modified)}</span>
+                  ${pending ? `<span class="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800">${pending}</span>` : `<span class="rounded bg-stone-100 px-1.5 py-0.5 text-[10px] font-medium text-stone-600">${node.kind}</span>`}
+                </div>
+              </article>
+            `;
+          }).join("")}
+        </div>
+      `;
+    }
+
+    function renderList(children) {
+      return `
+        <div class="overflow-hidden rounded-lg border border-stone-200 bg-white shadow-sm">
+          <div class="grid grid-cols-[minmax(180px,1fr)_110px_120px_150px_42px] border-b border-stone-200 bg-stone-50 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-stone-500">
+            <div>Name</div><div>Type</div><div>Size</div><div>Modified</div><div></div>
+          </div>
+          ${children.map(node => {
+            const isFolder = node.kind === "folder";
+            const isSelected = state.selected.has(node.id);
+            const pending = pendingForNode(node.id);
+            const renamed = state.renamingId === node.id;
+            return `
+              <div
+                class="list-row grid min-h-12 grid-cols-[minmax(180px,1fr)_110px_120px_150px_42px] items-center border-b border-stone-100 px-3 text-sm last:border-b-0"
+                draggable="true"
+                data-node-id="${escapeAttr(node.id)}"
+                data-folder="${isFolder}"
+                aria-selected="${isSelected}"
+                onclick="selectNode(event, '${escapeJs(node.id)}')"
+                ondblclick="openNode('${escapeJs(node.id)}')"
+                oncontextmenu="openContext(event, '${escapeJs(node.id)}')"
+                ondragstart="onDragStart(event, '${escapeJs(node.id)}')"
+                ondragover="onDragOverNode(event, '${escapeJs(node.id)}')"
+                ondragleave="onDragLeave(event)"
+                ondrop="onDropOnNode(event, '${escapeJs(node.id)}')"
+              >
+                <div class="flex min-w-0 items-center gap-2">
+                  <i data-lucide="${isFolder ? "folder" : fileIcon(node)}" class="h-4 w-4 shrink-0 ${isFolder ? "text-cyan-700" : fileColor(node)}"></i>
+                  ${renamed ? renameInputMarkup(node, "list") : `<span class="list-name min-w-0 truncate font-medium">${escapeHtml(node.name)}</span>`}
+                  ${pending ? `<span class="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800">${pending}</span>` : ""}
+                </div>
+                <div class="truncate text-stone-500">${isFolder ? "folder" : escapeHtml(node.mime || "file")}</div>
+                <div class="text-stone-500">${formatSize(node.size)}</div>
+                <div class="text-stone-500">${formatDate(node.modified)}</div>
+                <button class="icon-btn flex h-8 w-8 items-center justify-center rounded-md" title="More" onclick="openContext(event, '${escapeJs(node.id)}')"><i data-lucide="more-horizontal" class="h-4 w-4"></i></button>
+              </div>
+            `;
+          }).join("")}
+        </div>
+      `;
+    }
+
+    function renderSelectionBar() {
+      const selected = [...state.selected].map(getNode).filter(Boolean);
+      if (!selected.length) return "";
+      const size = selected.reduce((total, node) => total + (node.size || 0), 0);
+      return `
+        <div class="flex min-h-12 flex-wrap items-center gap-2 border-t border-stone-200 bg-white/90 px-3 text-sm shadow-sm">
+          <span class="font-semibold">${selected.length} selected</span>
+          <span class="text-stone-400">/</span>
+          <span class="text-stone-600">${formatSize(size)}</span>
+          <div class="ml-auto flex items-center gap-1">
+            <button class="icon-btn flex h-8 items-center gap-1 rounded-md border border-stone-200 bg-white px-2 text-xs font-medium" onclick="renameSelected()" ${selected.length === 1 ? "" : "disabled"}><i data-lucide="pencil" class="h-3.5 w-3.5"></i><span>Rename</span></button>
+            <button class="icon-btn flex h-8 items-center gap-1 rounded-md border border-stone-200 bg-white px-2 text-xs font-medium" onclick="deleteSelected()"><i data-lucide="trash-2" class="h-3.5 w-3.5 text-red-700"></i><span>Delete</span></button>
+            <button class="icon-btn flex h-8 w-8 items-center justify-center rounded-md border border-stone-200 bg-white" title="Clear" onclick="clearSelection()"><i data-lucide="x" class="h-4 w-4"></i></button>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderInspector(active, current) {
+      const selected = [...state.selected].map(getNode).filter(Boolean);
+      const subject = selected.length === 1 ? selected[0] : active;
+      const multi = selected.length > 1;
+      const subjectPath = multi ? `${selected.length} items` : pathString(subject.id);
+      const pendingJobs = multi
+        ? state.jobs.filter(job => ["queued", "running"].includes(job.status) && job.nodeIds.some(id => state.selected.has(id)))
+        : state.jobs.filter(job => ["queued", "running"].includes(job.status) && job.nodeIds.includes(subject.id));
+      const folderCount = countByKind(current.children || [], "folder");
+      const fileCount = countByKind(current.children || [], "file");
+      return `
+        <aside class="inspector-panel row-start-2 flex min-h-0 flex-col bg-stone-50/80">
+          <div class="border-b border-stone-200/80 p-4">
+            <div class="flex items-center gap-3">
+              <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border ${subject.kind === "folder" ? "border-cyan-200 bg-cyan-50" : "border-stone-200 bg-white"}">
+                <i data-lucide="${multi ? "panel-top-open" : subject.kind === "folder" ? "folder" : fileIcon(subject)}" class="h-6 w-6 ${subject.kind === "folder" ? "text-cyan-700" : fileColor(subject)}"></i>
+              </div>
+              <div class="min-w-0">
+                <div class="truncate text-sm font-semibold">${multi ? "Selection" : escapeHtml(subject.name)}</div>
+                <div class="truncate font-mono text-[11px] text-stone-500">${escapeHtml(subjectPath)}</div>
+              </div>
+            </div>
+            <div class="mt-3 grid grid-cols-2 gap-2">
+              <button class="icon-btn flex h-9 items-center justify-center gap-2 rounded-lg border border-stone-200 bg-white text-sm font-medium" onclick="openNode('${escapeJs(subject.id)}')" ${multi ? "disabled" : ""}><i data-lucide="external-link" class="h-4 w-4"></i><span>Open</span></button>
+              <button class="icon-btn flex h-9 items-center justify-center gap-2 rounded-lg border border-stone-200 bg-white text-sm font-medium" onclick="copyPath('${escapeJs(subject.id)}')" ${multi ? "disabled" : ""}><i data-lucide="copy" class="h-4 w-4"></i><span>Path</span></button>
+              <button class="icon-btn flex h-9 items-center justify-center gap-2 rounded-lg border border-stone-200 bg-white text-sm font-medium" onclick="renameSelected()" ${selected.length === 1 ? "" : "disabled"}><i data-lucide="pencil" class="h-4 w-4"></i><span>Rename</span></button>
+              <button class="icon-btn flex h-9 items-center justify-center gap-2 rounded-lg border border-stone-200 bg-white text-sm font-medium" onclick="deleteSelected()" ${selected.length ? "" : "disabled"}><i data-lucide="trash-2" class="h-4 w-4 text-red-700"></i><span>Delete</span></button>
+            </div>
+          </div>
+          <div class="min-h-0 flex-1 overflow-auto p-4">
+            <section class="mb-4">
+              <div class="mb-2 text-xs font-semibold uppercase tracking-wide text-stone-500">Current Folder</div>
+              <div class="grid grid-cols-3 gap-2">
+                <div class="rounded-lg border border-stone-200 bg-white p-3">
+                  <div class="text-lg font-semibold">${current.children?.length || 0}</div>
+                  <div class="text-xs text-stone-500">Items</div>
+                </div>
+                <div class="rounded-lg border border-stone-200 bg-white p-3">
+                  <div class="text-lg font-semibold">${folderCount}</div>
+                  <div class="text-xs text-stone-500">Folders</div>
+                </div>
+                <div class="rounded-lg border border-stone-200 bg-white p-3">
+                  <div class="text-lg font-semibold">${fileCount}</div>
+                  <div class="text-xs text-stone-500">Files</div>
+                </div>
+              </div>
+            </section>
+            <section class="mb-4">
+              <div class="mb-2 text-xs font-semibold uppercase tracking-wide text-stone-500">Details</div>
+              <dl class="divide-y divide-stone-200 rounded-lg border border-stone-200 bg-white text-sm">
+                ${detailRow("Kind", multi ? "mixed" : subject.kind)}
+                ${detailRow("Size", multi ? formatSize(selected.reduce((total, node) => total + (node.size || 0), 0)) : formatSize(subject.size))}
+                ${detailRow("Modified", multi ? "multiple" : formatDate(subject.modified))}
+                ${detailRow("MIME", multi ? "multiple" : subject.mime || "folder")}
+                ${detailRow("Actions", multi ? "batch" : (subject.actions || []).join(", "))}
+              </dl>
+            </section>
+            <section>
+              <div class="mb-2 flex items-center justify-between">
+                <div class="text-xs font-semibold uppercase tracking-wide text-stone-500">Pending</div>
+                <span class="rounded bg-stone-100 px-1.5 py-0.5 text-[10px] font-medium text-stone-600">${pendingJobs.length}</span>
+              </div>
+              <div class="space-y-2">
+                ${pendingJobs.length ? pendingJobs.map(job => `
+                  <div class="rounded-lg border border-amber-200 bg-amber-50 p-3">
+                    <div class="flex items-center justify-between gap-2">
+                      <div class="truncate text-sm font-semibold text-amber-950">${escapeHtml(job.label)}</div>
+                      <span class="text-xs font-medium text-amber-800">${job.progress}%</span>
+                    </div>
+                    <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-amber-100"><div class="h-full rounded-full bg-amber-600" style="width:${job.progress}%"></div></div>
+                    <div class="mt-1 truncate text-xs text-amber-900">${escapeHtml(job.description)}</div>
+                  </div>
+                `).join("") : `<div class="rounded-lg border border-stone-200 bg-white p-3 text-sm text-stone-500">No pending jobs</div>`}
+              </div>
+            </section>
+          </div>
+        </aside>
+      `;
+    }
+
+    function detailRow(label, value) {
+      return `
+        <div class="grid grid-cols-[92px_minmax(0,1fr)] gap-2 px-3 py-2">
+          <dt class="text-stone-500">${escapeHtml(label)}</dt>
+          <dd class="min-w-0 truncate font-medium text-stone-800">${escapeHtml(String(value))}</dd>
+        </div>
+      `;
+    }
+
+    function renderJobDrawer() {
+      const jobs = state.jobs.slice(0, 12);
+      const active = jobs.filter(job => ["queued", "running"].includes(job.status));
+      return `
+        <aside class="job-drawer glass fixed bottom-0 left-[320px] right-4 z-40 overflow-hidden rounded-t-xl border border-stone-200 shadow-lift transition-transform duration-200" data-open="${state.jobsOpen}">
+          <div class="flex h-11 items-center gap-3 border-b border-stone-200 bg-white/80 px-3">
+            <button class="icon-btn flex h-8 w-8 items-center justify-center rounded-md border border-stone-200 bg-white" title="${state.jobsOpen ? "Hide" : "Show"} jobs" onclick="toggleJobs()">
+              <i data-lucide="${state.jobsOpen ? "chevron-down" : "chevron-up"}" class="h-4 w-4"></i>
+            </button>
+            <div class="min-w-0 flex-1">
+              <div class="truncate text-sm font-semibold">Async Job Queue</div>
+              <div class="truncate text-[11px] text-stone-500">${active.length} in flight</div>
+            </div>
+            <input type="range" min="240" max="560" value="${state.jobsHeight}" oninput="setJobsHeight(this.value)" class="hidden w-36 accent-emerald-700 md:block" title="Panel height" />
+            <button class="icon-btn flex h-8 w-8 items-center justify-center rounded-md border border-stone-200 bg-white" title="Clear finished" onclick="clearFinishedJobs()">
+              <i data-lucide="archive-x" class="h-4 w-4"></i>
+            </button>
+          </div>
+          <div class="grid h-[calc(100%-44px)] grid-cols-[minmax(0,1fr)_280px] gap-0 overflow-hidden max-md:grid-cols-1">
+            <div class="min-h-0 overflow-auto p-3">
+              ${jobs.length ? `<div class="grid gap-2">${jobs.map(renderJob).join("")}</div>` : `<div class="flex h-full items-center justify-center text-sm text-stone-500">No jobs yet</div>`}
+            </div>
+            <div class="border-l border-stone-200 bg-stone-50/80 p-3 max-md:hidden">
+              <div class="mb-2 text-xs font-semibold uppercase tracking-wide text-stone-500">Contract</div>
+              <div class="space-y-2 text-sm text-stone-600">
+                <p>Mutations return a job id first.</p>
+                <p>Tree changes are applied after success events.</p>
+                <p>Queued work can update progress and descriptions.</p>
+              </div>
+              <div class="mt-4 rounded-lg border border-stone-200 bg-white p-3 font-mono text-[11px] text-stone-600">
+                POST /api/nodes/move<br />
+                GET /api/jobs/:id<br />
+                GET /api/jobs/events
+              </div>
+            </div>
+          </div>
+        </aside>
+      `;
+    }
+
+    function renderJob(job) {
+      const colors = {
+        queued: "border-stone-200 bg-white text-stone-600",
+        running: "border-cyan-200 bg-cyan-50 text-cyan-900",
+        succeeded: "border-emerald-200 bg-emerald-50 text-emerald-900",
+        failed: "border-red-200 bg-red-50 text-red-900",
+        cancelled: "border-stone-200 bg-stone-50 text-stone-500"
+      };
+      const icon = {
+        queued: "clock-3",
+        running: "loader-circle",
+        succeeded: "check-circle-2",
+        failed: "circle-alert",
+        cancelled: "circle-slash"
+      }[job.status] || "clock-3";
+      return `
+        <article class="rounded-lg border p-3 ${colors[job.status] || colors.queued}">
+          <div class="flex items-start gap-3">
+            <div class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-white/80">
+              <i data-lucide="${icon}" class="h-4 w-4 ${job.status === "running" ? "animate-spin" : ""}"></i>
+            </div>
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center justify-between gap-2">
+                <div class="truncate text-sm font-semibold">${escapeHtml(job.label)}</div>
+                <span class="rounded bg-white/70 px-1.5 py-0.5 text-[10px] font-semibold uppercase">${escapeHtml(job.status)}</span>
+              </div>
+              <div class="mt-1 truncate text-xs">${escapeHtml(job.description || "")}</div>
+              <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-white/75">
+                <div class="progress-bar h-full rounded-full" style="width:${job.progress}%"></div>
+              </div>
+              <div class="mt-2 flex flex-wrap items-center gap-1 text-[11px]">
+                ${job.nodeIds.slice(0, 4).map(id => `<span class="rounded bg-white/70 px-1.5 py-0.5">${escapeHtml((getNode(id) || { name: id }).name)}</span>`).join("")}
+                ${job.nodeIds.length > 4 ? `<span class="rounded bg-white/70 px-1.5 py-0.5">+${job.nodeIds.length - 4}</span>` : ""}
+              </div>
+            </div>
+            ${["queued", "running"].includes(job.status) ? `
+              <button class="icon-btn flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-white/70 bg-white/70" title="Cancel" onclick="cancelJob('${escapeJs(job.id)}')">
+                <i data-lucide="x" class="h-4 w-4"></i>
+              </button>
+            ` : ""}
+          </div>
+        </article>
+      `;
+    }
+
+    function renderModal() {
+      if (!state.modal) {
+        modalRoot.innerHTML = "";
+        return;
+      }
+
+      const modal = state.modal;
+      const isDelete = modal.type === "delete";
+      const title = modal.title || (isDelete ? "Delete" : `New ${modal.kind}`);
+      modalRoot.innerHTML = `
+        <div class="fixed inset-0 z-[70] flex items-center justify-center bg-stone-950/28 p-4" onclick="closeModal(event)">
+          <section class="w-[min(440px,100%)] rounded-xl border border-stone-200 bg-white shadow-lift" onclick="event.stopPropagation()">
+            <div class="flex items-center justify-between border-b border-stone-200 px-4 py-3">
+              <div class="text-sm font-semibold">${escapeHtml(title)}</div>
+              <button class="icon-btn flex h-8 w-8 items-center justify-center rounded-md" title="Close" onclick="setModal(null)"><i data-lucide="x" class="h-4 w-4"></i></button>
+            </div>
+            <form class="p-4" onsubmit="submitModal(event)">
+              ${isDelete ? `
+                <div class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-900">${escapeHtml(modal.message)}</div>
+              ` : `
+                <label class="block text-xs font-semibold uppercase tracking-wide text-stone-500">Name</label>
+                <input id="modal-input" name="name" value="${escapeAttr(modal.value || "")}" class="mt-2 h-10 w-full rounded-lg border border-stone-200 bg-white px-3 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" autocomplete="off" />
+                <div class="mt-3 grid grid-cols-2 gap-2">
+                  <label class="flex items-center gap-2 rounded-lg border border-stone-200 bg-stone-50 p-2 text-sm">
+                    <input type="radio" name="kind" value="folder" ${modal.kind === "folder" ? "checked" : ""} class="text-cyan-700 focus:ring-cyan-600" />
+                    <i data-lucide="folder" class="h-4 w-4 text-cyan-700"></i><span>Folder</span>
+                  </label>
+                  <label class="flex items-center gap-2 rounded-lg border border-stone-200 bg-stone-50 p-2 text-sm">
+                    <input type="radio" name="kind" value="file" ${modal.kind === "file" ? "checked" : ""} class="text-emerald-700 focus:ring-emerald-600" />
+                    <i data-lucide="file" class="h-4 w-4 text-stone-600"></i><span>File</span>
+                  </label>
+                </div>
+              `}
+              <div class="mt-4 flex justify-end gap-2">
+                <button type="button" class="icon-btn flex h-9 items-center gap-2 rounded-lg border border-stone-200 bg-white px-3 text-sm font-medium" onclick="setModal(null)"><i data-lucide="x" class="h-4 w-4"></i><span>Cancel</span></button>
+                <button type="submit" class="icon-btn flex h-9 items-center gap-2 rounded-lg border border-emerald-700 bg-emerald-700 px-3 text-sm font-medium text-white hover:bg-emerald-800">
+                  <i data-lucide="${isDelete ? "trash-2" : "check"}" class="h-4 w-4"></i><span>${isDelete ? "Delete" : "Create"}</span>
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      `;
+      if (window.lucide) lucide.createIcons();
+      setTimeout(() => {
+        const input = document.getElementById("modal-input");
+        if (input) {
+          input.focus();
+          input.select();
+        }
+      }, 0);
+    }
+
+    function renderContextMenu() {
+      if (!state.context) {
+        contextRoot.innerHTML = "";
+        return;
+      }
+      const node = getNode(state.context.nodeId);
+      if (!node) return;
+      const isFolder = node.kind === "folder";
+      const actions = nodeActions(node);
+      contextRoot.innerHTML = `
+        <div class="fixed inset-0 z-[60]" onclick="closeContext()"></div>
+        <nav class="fixed z-[61] w-56 rounded-lg border border-stone-200 bg-white p-1 shadow-lift" style="left:${state.context.x}px; top:${state.context.y}px" onclick="event.stopPropagation()">
+          ${actions.has("open") ? menuItem("external-link", "Open", `openNode('${escapeJs(node.id)}'); closeContext();`) : ""}
+          ${isFolder && actions.has("new-folder") ? menuItem("folder-plus", "New folder", `openCreateModal('folder', '${escapeJs(node.id)}'); closeContext();`) : ""}
+          ${isFolder && actions.has("new-file") ? menuItem("file-plus-2", "New file", `openCreateModal('file', '${escapeJs(node.id)}'); closeContext();`) : ""}
+          <div class="my-1 h-px bg-stone-100"></div>
+          ${actions.has("rename") ? menuItem("pencil", "Rename", `beginRename('${escapeJs(node.id)}'); closeContext();`) : ""}
+          ${menuItem("copy", "Copy path", `copyPath('${escapeJs(node.id)}'); closeContext();`)}
+          ${menuItem("crosshair", "Reveal", `revealNode('${escapeJs(node.id)}'); closeContext();`)}
+          <div class="my-1 h-px bg-stone-100"></div>
+          ${actions.has("delete") && node.id !== "root" ? menuItem("trash-2", "Delete", `confirmDelete(['${escapeJs(node.id)}']); closeContext();`, "text-red-700") : ""}
+        </nav>
+      `;
+      if (window.lucide) lucide.createIcons();
+    }
+
+    function menuItem(icon, label, action, extraClass = "") {
+      return `
+        <button class="menu-item flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm ${extraClass}" onclick="${action}">
+          <i data-lucide="${icon}" class="h-4 w-4"></i><span>${escapeHtml(label)}</span>
+        </button>
+      `;
+    }
+
+    function renameInputMarkup(node, scope) {
+      return `
+        <input
+          id="rename-input-${scope}-${escapeAttr(node.id)}"
+          class="min-w-0 flex-1 rounded-md border border-emerald-400 bg-white px-2 py-1 text-sm font-medium outline-none ring-2 ring-emerald-100"
+          value="${escapeAttr(node.name)}"
+          onclick="event.stopPropagation()"
+          onkeydown="onRenameKey(event, '${escapeJs(node.id)}')"
+          onblur="finishRename('${escapeJs(node.id)}', this.value, false)"
+        />
+      `;
+    }
+
+    function visibleChildren(folder) {
+      let children = [...(folder.children || [])];
+      const query = state.query.trim().toLowerCase();
+      if (query) {
+        children = children.filter(node => {
+          const haystack = [node.name, node.kind, node.mime, pathString(node.id)].filter(Boolean).join(" ").toLowerCase();
+          return haystack.includes(query);
+        });
+      }
+      return sortNodes(children);
+    }
+
+    function sortNodes(nodes) {
+      return [...nodes].sort((a, b) => {
+        if (state.foldersFirst && a.kind !== b.kind) return a.kind === "folder" ? -1 : 1;
+        let left = a[state.sortKey] || "";
+        let right = b[state.sortKey] || "";
+        if (state.sortKey === "size") {
+          left = Number(left || 0);
+          right = Number(right || 0);
+        }
+        if (state.sortKey === "modified") {
+          left = new Date(left || 0).getTime();
+          right = new Date(right || 0).getTime();
+        }
+        const result = typeof left === "number"
+          ? left - right
+          : String(left).localeCompare(String(right), undefined, { numeric: true, sensitivity: "base" });
+        return state.sortDir === "asc" ? result : -result;
+      });
+    }
+
+    function getNode(id, root = state.tree) {
+      return findNode(id, root)?.node || null;
+    }
+
+    function findNode(id, node = state.tree, parent = null, path = []) {
+      const nextPath = [...path, node];
+      if (node.id === id) return { node, parent, path: nextPath };
+      if (node.kind === "folder") {
+        for (const child of node.children || []) {
+          const found = findNode(id, child, node, nextPath);
+          if (found) return found;
+        }
+      }
+      return null;
+    }
+
+    function getPath(id) {
+      return findNode(id)?.path || [state.tree];
+    }
+
+    function pathString(id) {
+      return "/" + getPath(id).map(node => node.name).join("/");
+    }
+
+    function countByKind(nodes, kind) {
+      return nodes.filter(node => node.kind === kind).length;
+    }
+
+    function nodeActions(node) {
+      if (!node) return new Set();
+      const actions = new Set(node.actions || []);
+      if (node.id === "root") actions.delete("delete");
+      return actions;
+    }
+
+    function hasNameConflict(parentId, name, excludeIds = []) {
+      const parent = getNode(parentId);
+      const excluded = new Set(excludeIds);
+      return Boolean(parent?.children?.some(child => !excluded.has(child.id) && child.name.toLowerCase() === name.toLowerCase()));
+    }
+
+    function setQuery(value) {
+      state.query = value;
+      render();
+    }
+
+    function setView(view) {
+      state.view = view;
+      render();
+    }
+
+    function setDensity(density) {
+      state.density = density;
+      render();
+    }
+
+    function setSort(key) {
+      state.sortKey = key;
+      render();
+    }
+
+    function toggleSortDir() {
+      state.sortDir = state.sortDir === "asc" ? "desc" : "asc";
+      render();
+    }
+
+    function setFoldersFirst(value) {
+      state.foldersFirst = value;
+      render();
+    }
+
+    function setJobsHeight(value) {
+      state.jobsHeight = Number(value);
+      render();
+    }
+
+    function toggleJobs() {
+      state.jobsOpen = !state.jobsOpen;
+      render();
+    }
+
+    function openFolder(id) {
+      const node = getNode(id);
+      if (!node || node.kind !== "folder") return;
+      state.currentId = id;
+      state.activeId = id;
+      state.expanded.add(id);
+      render();
+    }
+
+    function openNode(id) {
+      const node = getNode(id);
+      if (!node) return;
+      state.activeId = id;
+      if (node.kind === "folder") {
+        openFolder(id);
+      } else {
+        toast(`Opened ${node.name}`);
+        render();
+      }
+    }
+
+    function revealNode(id) {
+      const found = findNode(id);
+      if (!found) return;
+      found.path.forEach(node => node.kind === "folder" && state.expanded.add(node.id));
+      state.currentId = found.parent?.id || found.node.id;
+      state.activeId = id;
+      state.selected = new Set([id]);
+      render();
+    }
+
+    function selectNode(event, id) {
+      event.stopPropagation();
+      const node = getNode(id);
+      if (!node) return;
+      state.activeId = id;
+      if (event.metaKey || event.ctrlKey) {
+        state.selected.has(id) ? state.selected.delete(id) : state.selected.add(id);
+      } else if (event.shiftKey) {
+        selectRange(id);
+      } else {
+        state.selected = new Set([id]);
+      }
+      render();
+    }
+
+    function selectRange(id) {
+      const current = getNode(state.currentId);
+      const children = visibleChildren(current);
+      const ids = children.map(node => node.id);
+      const anchor = [...state.selected].at(-1) || ids[0];
+      const start = ids.indexOf(anchor);
+      const end = ids.indexOf(id);
+      if (start === -1 || end === -1) {
+        state.selected.add(id);
+        return;
+      }
+      const [from, to] = start < end ? [start, end] : [end, start];
+      ids.slice(from, to + 1).forEach(itemId => state.selected.add(itemId));
+    }
+
+    function clearSelection() {
+      state.selected.clear();
+      state.activeId = state.currentId;
+      render();
+    }
+
+    function toggleExpand(event, id) {
+      event.stopPropagation();
+      state.expanded.has(id) ? state.expanded.delete(id) : state.expanded.add(id);
+      render();
+    }
+
+    function expandAll() {
+      walk(state.tree, node => {
+        if (node.kind === "folder") state.expanded.add(node.id);
+      });
+      render();
+    }
+
+    function collapseAll() {
+      state.expanded = new Set(["root", state.currentId]);
+      render();
+    }
+
+    function onDragStart(event, id) {
+      const ids = state.selected.has(id) ? [...state.selected] : [id];
+      state.dragIds = ids;
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("application/x-filetree-nodes", JSON.stringify(ids));
+      event.dataTransfer.setData("text/plain", ids.map(pathString).join("\n"));
+    }
+
+    function onDragOverNode(event, id) {
+      const node = getNode(id);
+      if (!node || node.kind !== "folder") return;
+      event.preventDefault();
+      event.currentTarget.classList.add("drop-target");
+    }
+
+    function onDragOverCurrent(event) {
+      event.preventDefault();
+      event.currentTarget.classList.add("drop-target");
+    }
+
+    function onDragLeave(event) {
+      event.currentTarget.classList.remove("drop-target");
+    }
+
+    function onDropOnNode(event, targetId) {
+      event.preventDefault();
+      event.stopPropagation();
+      event.currentTarget.classList.remove("drop-target");
+      const target = getNode(targetId);
+      if (!target || target.kind !== "folder") return;
+      moveNodesTo(getDragIds(event), targetId);
+    }
+
+    function onDropOnCurrent(event) {
+      event.preventDefault();
+      event.currentTarget.classList.remove("drop-target");
+      moveNodesTo(getDragIds(event), state.currentId);
+    }
+
+    function getDragIds(event) {
+      try {
+        const data = event.dataTransfer.getData("application/x-filetree-nodes");
+        return data ? JSON.parse(data) : state.dragIds;
+      } catch {
+        return state.dragIds;
+      }
+    }
+
+    function moveSelectionToCurrent() {
+      moveNodesTo([...state.selected], state.currentId);
+    }
+
+    function moveNodesTo(ids, targetParentId) {
+      const uniqueIds = [...new Set(ids)].filter(Boolean);
+      const target = getNode(targetParentId);
+      if (!uniqueIds.length || !target || target.kind !== "folder") return;
+      const invalid = uniqueIds.some(id => id === targetParentId || isDescendant(id, targetParentId));
+      if (invalid) {
+        toast("Cannot move a folder into itself.");
+        return;
+      }
+      const sameParentOnly = uniqueIds.every(id => findNode(id)?.parent?.id === targetParentId);
+      if (sameParentOnly) {
+        toast("Already in that folder.");
+        return;
+      }
+      const nameConflict = uniqueIds.some(id => {
+        const node = getNode(id);
+        return node && hasNameConflict(targetParentId, node.name, uniqueIds);
+      });
+      if (nameConflict) {
+        toast("The destination already has one of those names.");
+        return;
+      }
+      enqueueJob({
+        kind: "move",
+        label: `Move ${uniqueIds.length} item${uniqueIds.length === 1 ? "" : "s"}`,
+        description: "Checking destination",
+        nodeIds: uniqueIds,
+        targetId: targetParentId,
+        stages: ["Checking destination", "Reserving names", "Moving nodes", "Refreshing folder sizes"],
+        apply: () => {
+          uniqueIds.forEach(id => moveNode(id, targetParentId));
+          recomputeFolderSizes(state.tree);
+          state.currentId = targetParentId;
+          state.selected = new Set(uniqueIds);
+        }
+      });
+    }
+
+    function beginRename(id) {
+      const node = getNode(id);
+      if (!nodeActions(node).has("rename")) return;
+      state.renamingId = id;
+      state.selected = new Set([id]);
+      state.activeId = id;
+      render();
+    }
+
+    function renameSelected() {
+      if (state.selected.size !== 1) return;
+      beginRename([...state.selected][0]);
+    }
+
+    function onRenameKey(event, id) {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        finishRename(id, event.currentTarget.value, true);
+      }
+      if (event.key === "Escape") {
+        state.renamingId = null;
+        render();
+      }
+    }
+
+    function finishRename(id, rawName, explicit) {
+      if (state.renamingId !== id) return;
+      const node = getNode(id);
+      const found = findNode(id);
+      const name = rawName.trim();
+      state.renamingId = null;
+      if (!node || !name || name === node.name) {
+        render();
+        return;
+      }
+      if (found?.parent && hasNameConflict(found.parent.id, name, [id])) {
+        toast("That folder already has an item with that name.");
+        render();
+        return;
+      }
+      enqueueJob({
+        kind: "rename",
+        label: `Rename ${node.name}`,
+        description: "Validating name",
+        nodeIds: [id],
+        stages: ["Validating name", "Updating metadata", "Refreshing node"],
+        apply: () => {
+          node.name = name;
+          node.modified = new Date().toISOString();
+        }
+      });
+      if (explicit) render();
+    }
+
+    function openCreateModal(kind, parentId) {
+      const parent = getNode(parentId);
+      if (!parent || parent.kind !== "folder") return;
+      state.modal = { type: "create", kind, parentId, value: kind === "folder" ? "New Folder" : "untitled.txt" };
+      render();
+    }
+
+    function submitModal(event) {
+      event.preventDefault();
+      const modal = state.modal;
+      const form = new FormData(event.currentTarget);
+      if (!modal) return;
+      if (modal.type === "delete") {
+        const ids = modal.ids || [];
+        setModal(null);
+        enqueueDelete(ids);
+        return;
+      }
+      const kind = form.get("kind") || modal.kind;
+      const name = String(form.get("name") || "").trim();
+      if (!name) return;
+      const parentId = modal.parentId;
+      setModal(null);
+      enqueueCreate(parentId, kind, name);
+    }
+
+    function setModal(value) {
+      state.modal = value;
+      render();
+    }
+
+    function closeModal(event) {
+      if (event.target === event.currentTarget) setModal(null);
+    }
+
+    function enqueueCreate(parentId, kind, name) {
+      const parent = getNode(parentId);
+      if (!parent || parent.kind !== "folder") return;
+      if (hasNameConflict(parentId, name)) {
+        toast("That folder already has an item with that name.");
+        return;
+      }
+      const node = normalizeTree({
+        id: `node-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        name,
+        kind,
+        size: 0,
+        mime: kind === "file" ? mimeFromName(name) : undefined,
+        modified: new Date().toISOString(),
+        children: kind === "folder" ? [] : undefined
+      });
+      enqueueJob({
+        kind: "create",
+        label: `Create ${name}`,
+        description: "Allocating node",
+        nodeIds: [parentId],
+        targetId: parentId,
+        stages: ["Allocating node", "Writing metadata", "Refreshing parent"],
+        apply: () => {
+          parent.children.push(node);
+          parent.modified = new Date().toISOString();
+          recomputeFolderSizes(state.tree);
+          state.currentId = parentId;
+          state.selected = new Set([node.id]);
+          state.activeId = node.id;
+        }
+      });
+    }
+
+    function deleteSelected() {
+      confirmDelete([...state.selected]);
+    }
+
+    function confirmDelete(ids) {
+      const deletable = ids.filter(id => id !== "root" && getNode(id));
+      if (!deletable.length) return;
+      state.modal = {
+        type: "delete",
+        ids: deletable,
+        title: "Delete",
+        message: `Queue delete for ${deletable.length} item${deletable.length === 1 ? "" : "s"}?`
+      };
+      render();
+    }
+
+    function enqueueDelete(ids) {
+      const names = ids.map(id => getNode(id)?.name).filter(Boolean);
+      enqueueJob({
+        kind: "delete",
+        label: `Delete ${ids.length} item${ids.length === 1 ? "" : "s"}`,
+        description: "Checking references",
+        nodeIds: ids,
+        stages: ["Checking references", "Removing entries", "Refreshing tree"],
+        apply: () => {
+          ids.forEach(removeNode);
+          recomputeFolderSizes(state.tree);
+          state.selected.clear();
+          state.activeId = state.currentId;
+          toast(`Deleted ${names.slice(0, 2).join(", ")}${names.length > 2 ? "..." : ""}`);
+        }
+      });
+    }
+
+    function enqueueJob(config) {
+      const job = {
+        id: `job-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        kind: config.kind,
+        label: config.label,
+        description: config.description,
+        nodeIds: config.nodeIds || [],
+        targetId: config.targetId,
+        stages: config.stages || [config.description || "Queued"],
+        status: "queued",
+        progress: 0,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        apply: config.apply,
+        timer: null
+      };
+      state.jobs.unshift(job);
+      state.jobsOpen = true;
+      render();
+
+      setTimeout(() => runJob(job.id), 280);
+      return job;
+    }
+
+    function runJob(jobId) {
+      const job = state.jobs.find(item => item.id === jobId);
+      if (!job || job.status !== "queued") return;
+      job.status = "running";
+      job.progress = 8;
+      job.description = job.stages[0] || "Running";
+      job.updatedAt = new Date().toISOString();
+      render();
+
+      job.timer = setInterval(() => {
+        const current = state.jobs.find(item => item.id === jobId);
+        if (!current || current.status !== "running") {
+          clearInterval(job.timer);
+          return;
+        }
+        current.progress = Math.min(100, current.progress + 13 + Math.floor(Math.random() * 9));
+        const stageIndex = Math.min(current.stages.length - 1, Math.floor((current.progress / 100) * current.stages.length));
+        current.description = current.stages[stageIndex] || current.description;
+        current.updatedAt = new Date().toISOString();
+        if (current.progress >= 100) {
+          clearInterval(current.timer);
+          completeJob(current);
+        } else {
+          render();
+        }
+      }, 360);
+    }
+
+    function completeJob(job) {
+      try {
+        job.apply?.();
+        job.status = "succeeded";
+        job.progress = 100;
+        job.description = "Committed";
+        job.updatedAt = new Date().toISOString();
+      } catch (error) {
+        job.status = "failed";
+        job.description = error.message || "Failed";
+        job.updatedAt = new Date().toISOString();
+      }
+      render();
+    }
+
+    function cancelJob(id) {
+      const job = state.jobs.find(item => item.id === id);
+      if (!job || !["queued", "running"].includes(job.status)) return;
+      clearInterval(job.timer);
+      job.status = "cancelled";
+      job.description = "Cancelled before commit";
+      job.progress = 0;
+      job.updatedAt = new Date().toISOString();
+      render();
+    }
+
+    function clearFinishedJobs() {
+      state.jobs = state.jobs.filter(job => ["queued", "running"].includes(job.status));
+      render();
+    }
+
+    function pendingForNode(id) {
+      const job = state.jobs.find(item => ["queued", "running"].includes(item.status) && item.nodeIds.includes(id));
+      return job ? job.kind : "";
+    }
+
+    function moveNode(id, targetParentId) {
+      const found = findNode(id);
+      const target = getNode(targetParentId);
+      if (!found || !found.parent || !target || target.kind !== "folder") return;
+      found.parent.children = found.parent.children.filter(child => child.id !== id);
+      target.children.push(found.node);
+      found.parent.modified = new Date().toISOString();
+      target.modified = new Date().toISOString();
+    }
+
+    function removeNode(id) {
+      const found = findNode(id);
+      if (!found || !found.parent) return;
+      found.parent.children = found.parent.children.filter(child => child.id !== id);
+      found.parent.modified = new Date().toISOString();
+    }
+
+    function isDescendant(parentId, possibleChildId) {
+      const parent = getNode(parentId);
+      let found = false;
+      walk(parent, node => {
+        if (node.id === possibleChildId) found = true;
+      });
+      return found;
+    }
+
+    function walk(node, visitor) {
+      if (!node) return;
+      visitor(node);
+      if (node.kind === "folder") (node.children || []).forEach(child => walk(child, visitor));
+    }
+
+    function recomputeFolderSizes(node) {
+      if (node.kind !== "folder") return node.size || 0;
+      node.size = (node.children || []).reduce((total, child) => total + recomputeFolderSizes(child), 0);
+      return node.size;
+    }
+
+    function openContext(event, id) {
+      event.preventDefault();
+      event.stopPropagation();
+      state.activeId = id;
+      if (!state.selected.has(id)) state.selected = new Set([id]);
+      const x = Math.min(event.clientX, window.innerWidth - 240);
+      const y = Math.min(event.clientY, window.innerHeight - 300);
+      state.context = { nodeId: id, x, y };
+      render();
+    }
+
+    function closeContext() {
+      state.context = null;
+      render();
+    }
+
+    async function copyPath(id) {
+      const value = pathString(id);
+      state.clipboardPath = value;
+      try {
+        await navigator.clipboard.writeText(value);
+        toast("Path copied");
+      } catch {
+        toast(value);
+      }
+      render();
+    }
+
+    function wireDropTargets() {
+      document.querySelectorAll("[data-folder='true']").forEach(element => {
+        element.addEventListener("dragend", () => {
+          document.querySelectorAll(".drop-target").forEach(item => item.classList.remove("drop-target"));
+        });
+      });
+    }
+
+    function focusRenameInput() {
+      if (!state.renamingId) return;
+      setTimeout(() => {
+        const input = document.querySelector(`[id^="rename-input-"][id$="${CSS.escape(state.renamingId)}"]`);
+        if (input) {
+          input.focus();
+          input.select();
+        }
+      }, 0);
+    }
+
+    function toast(message) {
+      const id = `toast-${Date.now()}`;
+      const element = document.createElement("div");
+      element.id = id;
+      element.className = "rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm font-medium text-stone-800 shadow-soft";
+      element.textContent = message;
+      toastRoot.appendChild(element);
+      setTimeout(() => element.remove(), 2400);
+    }
+
+    function fileIcon(node) {
+      const mime = node.mime || "";
+      const name = node.name || "";
+      if (mime.includes("image")) return "image";
+      if (mime.includes("json") || name.endsWith(".json")) return "braces";
+      if (mime.includes("javascript") || mime.includes("typescript") || name.match(/\.(js|ts|tsx|jsx)$/)) return "file-code-2";
+      if (mime.includes("rust") || name.endsWith(".rs")) return "file-code-2";
+      if (mime.includes("markdown") || name.endsWith(".md")) return "file-text";
+      if (mime.includes("css") || name.endsWith(".css")) return "palette";
+      if (mime.includes("yaml") || name.endsWith(".yaml") || name.endsWith(".yml")) return "file-cog";
+      return "file";
+    }
+
+    function fileColor(node) {
+      const mime = node.mime || "";
+      const name = node.name || "";
+      if (mime.includes("image")) return "text-fuchsia-700";
+      if (name.endsWith(".rs")) return "text-orange-700";
+      if (name.match(/\.(js|ts|tsx|jsx)$/)) return "text-amber-700";
+      if (mime.includes("markdown")) return "text-cyan-700";
+      if (mime.includes("css")) return "text-emerald-700";
+      return "text-stone-500";
+    }
+
+    function mimeFromName(name) {
+      if (name.endsWith(".json")) return "application/json";
+      if (name.endsWith(".md")) return "text/markdown";
+      if (name.endsWith(".rs")) return "text/rust";
+      if (name.match(/\.(ts|tsx)$/)) return "text/typescript";
+      if (name.endsWith(".js")) return "text/javascript";
+      if (name.endsWith(".css")) return "text/css";
+      if (name.endsWith(".yaml") || name.endsWith(".yml")) return "text/yaml";
+      if (name.match(/\.(png|jpg|jpeg|webp|gif)$/)) return "image";
+      return "application/octet-stream";
+    }
+
+    function formatSize(bytes = 0) {
+      const units = ["B", "KB", "MB", "GB", "TB"];
+      let value = Number(bytes || 0);
+      let index = 0;
+      while (value >= 1024 && index < units.length - 1) {
+        value /= 1024;
+        index += 1;
+      }
+      return `${value.toFixed(value >= 10 || index === 0 ? 0 : 1)} ${units[index]}`;
+    }
+
+    function formatDate(value) {
+      if (!value) return "";
+      return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function escapeAttr(value) {
+      return escapeHtml(value);
+    }
+
+    function escapeJs(value) {
+      return String(value ?? "").replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+    }
+
+    function createHttpAdapter(base = "/api") {
+      async function json(path, options = {}) {
+        const response = await fetch(`${base}${path}`, {
+          headers: { "content-type": "application/json", ...(options.headers || {}) },
+          ...options
+        });
+        if (!response.ok) throw new Error(await response.text());
+        return response.json();
+      }
+      return {
+        loadTree: () => json("/tree"),
+        replaceTree: root => json("/tree", { method: "PUT", body: JSON.stringify({ root }) }),
+        createNode: (parentId, node) => json("/nodes", { method: "POST", body: JSON.stringify({ parentId, ...node }) }),
+        updateNode: (nodeId, patch) => json(`/nodes/${encodeURIComponent(nodeId)}`, { method: "PATCH", body: JSON.stringify(patch) }),
+        deleteNodes: ids => json("/nodes/delete", { method: "POST", body: JSON.stringify({ ids }) }),
+        moveNodes: (ids, targetParentId, position = null) => json("/nodes/move", { method: "POST", body: JSON.stringify({ ids, targetParentId, position }) }),
+        job: id => json(`/jobs/${encodeURIComponent(id)}`),
+        events: () => new EventSource(`${base}/jobs/events`)
+      };
+    }
+
+    window.FileExplorer = {
+      schema: NODE_SCHEMA_VERSION,
+      getTree: () => clone(state.tree),
+      setTree: tree => {
+        state.tree = normalizeTree(clone(tree));
+        state.currentId = state.tree.id;
+        state.activeId = state.tree.id;
+        state.selected.clear();
+        state.expanded = new Set([state.tree.id]);
+        render();
+      },
+      replaceTreeAsync: tree => enqueueJob({
+        kind: "replace",
+        label: "Replace tree",
+        description: "Loading snapshot",
+        nodeIds: [state.tree.id],
+        stages: ["Loading snapshot", "Validating schema", "Swapping tree"],
+        apply: () => {
+          state.tree = normalizeTree(clone(tree));
+          state.currentId = state.tree.id;
+          state.activeId = state.tree.id;
+          state.selected.clear();
+        }
+      }),
+      enqueuePatch: ({ label, nodeIds, apply }) => enqueueJob({
+        kind: "patch",
+        label,
+        description: "Applying server patch",
+        nodeIds,
+        stages: ["Receiving patch", "Applying patch", "Refreshing view"],
+        apply
+      }),
+      createHttpAdapter,
+      attachBackend: async (base = "/api") => {
+        const adapter = createHttpAdapter(base);
+        const snapshot = await adapter.loadTree();
+        window.FileExplorer.setTree(snapshot.root || snapshot);
+        state.adapterName = "http";
+        render();
+        return adapter;
+      }
+    };
+
+    document.addEventListener("click", event => {
+      if (!event.target.closest(".tile, .list-row, .tree-row, button, input, select, nav")) {
+        state.selected.clear();
+        state.activeId = state.currentId;
+        render();
+      }
+    });
+
+    document.addEventListener("keydown", event => {
+      const tag = document.activeElement?.tagName?.toLowerCase();
+      if (["input", "textarea", "select"].includes(tag)) return;
+      if (event.key === "Delete" || event.key === "Backspace") {
+        event.preventDefault();
+        deleteSelected();
+      }
+      if (event.key === "F2") {
+        event.preventDefault();
+        renameSelected();
+      }
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a") {
+        event.preventDefault();
+        const current = getNode(state.currentId);
+        state.selected = new Set((current.children || []).map(node => node.id));
+        render();
+      }
+      if (event.key === "Escape") {
+        state.context = null;
+        state.modal = null;
+        state.renamingId = null;
+        render();
+      }
+    });
+
+    window.addEventListener("load", render);
+  </script>
+</body>
+</html>
