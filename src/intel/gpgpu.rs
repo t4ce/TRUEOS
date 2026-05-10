@@ -1505,10 +1505,8 @@ pub(crate) fn submit_gpgpu_preflight_once() {
 
 fn record_gpgpu_proven_walker(proof: GpgpuComputeWalkerProof) {
     GPGPU_EU_PROVEN_WALKER_RETIRED.store(true, Ordering::Release);
-    GPGPU_EU_PROVEN_DISPATCH_DELTA.store(
-        proof.dispatch_delta.min(u32::MAX as u64) as u32,
-        Ordering::Release,
-    );
+    GPGPU_EU_PROVEN_DISPATCH_DELTA
+        .store(proof.dispatch_delta.min(u32::MAX as u64) as u32, Ordering::Release);
     GPGPU_EU_PROVEN_C_STORE_VALUE.store(proof.c_value, Ordering::Release);
 }
 

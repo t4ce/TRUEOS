@@ -1071,7 +1071,8 @@ impl NvmeWorkerBackend {
 
         let total_bytes = blocks.checked_mul(bs).ok_or(block::Error::InvalidParam)?;
         let mut out = vec![0u8; total_bytes];
-        self.do_read_blocks_into(lba, blocks, out.as_mut_slice()).await?;
+        self.do_read_blocks_into(lba, blocks, out.as_mut_slice())
+            .await?;
         Ok(out)
     }
 
