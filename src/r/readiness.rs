@@ -24,11 +24,9 @@ pub const NET_V6_GATEWAY_REACHABLE: u32 = 1 << 11;
 // router. Some networks drop ICMP echo; TCP/DNS can still work.
 //
 // `NET_ANY_CONFIGURED`: at least one IP stack has usable config.
-// `NET_CONFIGURED`: both IPv4 and IPv6 have usable config.
 pub const NET_ANY_CONFIGURED: u32 = 1 << 12;
 pub const NET_V4_CONFIGURED: u32 = 1 << 13;
 pub const NET_V6_CONFIGURED: u32 = 1 << 14;
-pub const NET_CONFIGURED: u32 = NET_V4_CONFIGURED | NET_V6_CONFIGURED;
 
 // Socket readiness.
 //

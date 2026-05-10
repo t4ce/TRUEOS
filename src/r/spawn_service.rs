@@ -5,7 +5,7 @@ use embassy_executor::{SendSpawner, SpawnError, SpawnToken, Spawner};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
-use crate::r::spawn_spec::{SpawnAttempt, SpawnPlacement, TaskSpec};
+use crate::r::spawn_spec::{SpawnAttempt, TaskSpec};
 // NOTE: This file is intended to become the single source of truth for Embassy task startup.
 
 const SPAWN_SERVICE_AFTER_START_MS: u64 = 25;
@@ -1401,8 +1401,7 @@ static TASKS: [TaskSpec; 69] = [
         &GFX_VIRGL_READY_TASK_STARTED,
         spawn_gfx_virgl_ready_task,
     ),
-    TaskSpec::enabled_on(
-        SpawnPlacement::Ap1,
+    TaskSpec::enabled(
         "gfx-virgl-cursor-overlay",
         crate::r::readiness::GFX_BACKEND_READY,
         &GFX_VIRGL_CURSOR_OVERLAY_STARTED,
@@ -1416,45 +1415,39 @@ static TASKS: [TaskSpec; 69] = [
         spawn_intel_cursor_service_task,
     ),
     TaskSpec::disabled(
-        //  SpawnPlacement::Worker,
         "intel-hda-probe",
         crate::r::readiness::INTEL_HDA_READY,
         &INTEL_HDA_PROBE_STARTED,
         spawn_intel_hda_probe_task,
     ),
     TaskSpec::enabled("raple-service", 0, &RAPLE_SERVICE_STARTED, spawn_raple_service),
-    TaskSpec::enabled_on(
-        SpawnPlacement::Local,
+    TaskSpec::enabled(
         "html_fetch_service",
         crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
         &HTML_SHACK_SERVICE_STARTED,
         html_fetch_service,
     ),
-    TaskSpec::enabled_on(
-        SpawnPlacement::Ap1,
+    TaskSpec::enabled(
         "gfx-texture-upload-service",
         crate::r::readiness::GFX_BACKEND_READY,
         &GFX_TEXTURE_UPLOAD_SERVICE_STARTED,
         spawn_gfx_texture_upload_service,
     ),
-    TaskSpec::enabled_gated_on(
-        SpawnPlacement::Ap1,
+    TaskSpec::enabled_gated(
         "ui2",
         crate::r::readiness::GFX_BACKEND_READY,
         ui2_core_task_gate,
         &UI2_STARTED,
         spawn_ui2,
     ),
-    TaskSpec::enabled_gated_on(
-        SpawnPlacement::Ap1,
+    TaskSpec::enabled_gated(
         "ui2-hosted",
         crate::r::readiness::GFX_BACKEND_READY,
         ui2_core_task_gate,
         &UI2_HOSTED_SYNC_TASK_STARTED,
         spawn_ui2_hosted,
     ),
-    TaskSpec::enabled_gated_on(
-        SpawnPlacement::Ap1,
+    TaskSpec::enabled_gated(
         "ui2-hit",
         crate::r::readiness::GFX_BACKEND_READY,
         ui2_core_task_gate,
@@ -1462,43 +1455,37 @@ static TASKS: [TaskSpec; 69] = [
         spawn_ui2_hit,
     ),
     TaskSpec::enabled("truesurfer-factory", 0, &SURFER_FACTORY_STARTED, spawn_truesurfer_factory),
-    TaskSpec::enabled_on(
-        SpawnPlacement::Ap1,
+    TaskSpec::enabled(
         "ui2-athlas-third-demo",
         UI2_DEMO_READY,
         &UI2_ATHLAS_THIRD_DEMO_STARTED,
         spawn_ui2_athlas_third_demo,
     ),
-    TaskSpec::enabled_on(
-        SpawnPlacement::Ap1,
+    TaskSpec::enabled(
         "ui2-athlas-half-demo",
         UI2_DEMO_READY,
         &UI2_ATHLAS_HALF_DEMO_STARTED,
         spawn_ui2_athlas_half_demo,
     ),
-    TaskSpec::enabled_on(
-        SpawnPlacement::Ap1,
+    TaskSpec::enabled(
         "ui2-athlas-1x-demo",
         UI2_DEMO_READY,
         &UI2_ATHLAS_1X_DEMO_STARTED,
         spawn_ui2_athlas_1x_demo,
     ),
-    TaskSpec::enabled_on(
-        SpawnPlacement::Ap1,
+    TaskSpec::enabled(
         "ui2-athlas-2x-demo",
         UI2_DEMO_READY,
         &UI2_ATHLAS_2X_DEMO_STARTED,
         spawn_ui2_athlas_2x_demo,
     ),
-    TaskSpec::enabled_on(
-        SpawnPlacement::Ap1,
+    TaskSpec::enabled(
         "ui2-palatino-1x-demo",
         UI2_DEMO_READY,
         &UI2_PALATINO_1X_DEMO_STARTED,
         spawn_ui2_palatino_1x_demo,
     ),
-    TaskSpec::enabled_on(
-        SpawnPlacement::Ap1,
+    TaskSpec::enabled(
         "ui2-twemoji-1x",
         crate::r::readiness::GFX_TEXTURE_UPLOAD_SERVICE_READY,
         &UI2_TWEMOJI_1X_STARTED,
