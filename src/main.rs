@@ -39,7 +39,6 @@ mod hv;
 #[cfg(not(target_arch = "x86_64"))]
 #[path = "hv_disabled.rs"]
 mod hv;
-pub mod hvv;
 mod hyper_probe;
 mod intel;
 mod intel_hda_probe;

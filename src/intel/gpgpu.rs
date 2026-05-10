@@ -2648,7 +2648,7 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     const IDD_LOAD_DWORDS: usize = IDD_PAYLOAD_DWORDS;
     const CURBE_READ_LENGTH_8DW: u32 = if GPGPU_LOAD_DUMMY_CURBE { 1 } else { 0 };
     const GPGPU_THREADS_IN_GROUP: u32 = 1;
-    const GPGPU_WALKER_GROUP_X_DIM: u32 = 2048;
+    const GPGPU_WALKER_GROUP_X_DIM: u32 = 192;
     const GPGPU_WALKER_GROUP_Y_DIM: u32 = 1;
     const GPGPU_WALKER_GROUP_Z_DIM: u32 = 1;
     const CURBE_TOTAL_BYTES: usize = if GPGPU_LOAD_DUMMY_CURBE {
@@ -3277,8 +3277,10 @@ fn log_gpgpu_compute_walker_status(proof: GpgpuComputeWalkerProof) {
         failure_class,
         next,
     );
-    let started_plain = if gpu_program_started {
-        "gpu accepted the walker and TS counted launched SIMD8 lanes; command stream continued after the workers EOT-retired"
+    let started_plain = if gpu_program_started && eot_retired {
+        "gpu accepted the walker, TS counted launched SIMD8 lanes, and the command stream continued after worker EOT retire"
+    } else if gpu_program_started {
+        "gpu accepted the walker and TS counted launched SIMD8 lanes; command stream is still waiting for worker completion"
     } else {
         "gpu accepted the walker and command stream is parked there; TS/TDL counters did not show launched EU threads"
     };
