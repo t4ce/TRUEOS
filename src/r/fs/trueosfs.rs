@@ -67,6 +67,16 @@ static MOUNT_QUEUE: Mutex<heapless::Vec<block::DeviceHandle, 8>> = Mutex::new(he
 static INDEX_REQUESTED: AtomicBool = AtomicBool::new(false);
 static INDEX_QUEUE: Mutex<heapless::Vec<block::DeviceHandle, 8>> = Mutex::new(heapless::Vec::new());
 
+const TRUEOSFS_BLOCK_READ_TRACE_INTERVAL_MS: u64 = 1_000;
+static TRUEOSFS_BLOCK_READ_TRACE_LAST_MS: AtomicU64 = AtomicU64::new(0);
+static TRUEOSFS_BLOCK_READ_TRACE_COUNT: AtomicU64 = AtomicU64::new(0);
+static TRUEOSFS_BLOCK_READ_TRACE_BYTES: AtomicU64 = AtomicU64::new(0);
+static TRUEOSFS_BLOCK_READ_TRACE_ELAPSED_MS: AtomicU64 = AtomicU64::new(0);
+static TRUEOSFS_BLOCK_READ_TRACE_MAX_MS: AtomicU64 = AtomicU64::new(0);
+static TRUEOSFS_BLOCK_READ_TRACE_LAST_LBA: AtomicU64 = AtomicU64::new(0);
+static TRUEOSFS_BLOCK_READ_TRACE_LAST_BLOCKS: AtomicU64 = AtomicU64::new(0);
+static TRUEOSFS_BLOCK_READ_TRACE_LAST_BYTES: AtomicU64 = AtomicU64::new(0);
+
 struct FileWriteStream {
     disk: block::DeviceHandle,
     path: String,
@@ -230,6 +240,92 @@ fn trueosfs_trace_now_ms() -> u64 {
     }
 }
 
+fn trueosfs_block_read_trace_note(
+    now_ms: u64,
+    lba: u64,
+    blocks: usize,
+    bytes: usize,
+    elapsed_ms: u64,
+) -> Option<(u64, u64, u64, u64, u64, u64, u64)> {
+    TRUEOSFS_BLOCK_READ_TRACE_COUNT.fetch_add(1, Ordering::Relaxed);
+    TRUEOSFS_BLOCK_READ_TRACE_BYTES.fetch_add(bytes as u64, Ordering::Relaxed);
+    TRUEOSFS_BLOCK_READ_TRACE_ELAPSED_MS.fetch_add(elapsed_ms, Ordering::Relaxed);
+    TRUEOSFS_BLOCK_READ_TRACE_MAX_MS.fetch_max(elapsed_ms, Ordering::Relaxed);
+    TRUEOSFS_BLOCK_READ_TRACE_LAST_LBA.store(lba, Ordering::Relaxed);
+    TRUEOSFS_BLOCK_READ_TRACE_LAST_BLOCKS.store(blocks as u64, Ordering::Relaxed);
+    TRUEOSFS_BLOCK_READ_TRACE_LAST_BYTES.store(bytes as u64, Ordering::Relaxed);
+
+    let mut last_ms = TRUEOSFS_BLOCK_READ_TRACE_LAST_MS.load(Ordering::Relaxed);
+    loop {
+        if last_ms != 0 && now_ms.saturating_sub(last_ms) < TRUEOSFS_BLOCK_READ_TRACE_INTERVAL_MS {
+            return None;
+        }
+        match TRUEOSFS_BLOCK_READ_TRACE_LAST_MS.compare_exchange_weak(
+            last_ms,
+            now_ms,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(actual) => last_ms = actual,
+        }
+    }
+
+    let count = TRUEOSFS_BLOCK_READ_TRACE_COUNT.swap(0, Ordering::Relaxed);
+    let bytes = TRUEOSFS_BLOCK_READ_TRACE_BYTES.swap(0, Ordering::Relaxed);
+    let elapsed_sum = TRUEOSFS_BLOCK_READ_TRACE_ELAPSED_MS.swap(0, Ordering::Relaxed);
+    let max_elapsed = TRUEOSFS_BLOCK_READ_TRACE_MAX_MS.swap(0, Ordering::Relaxed);
+    let last_lba = TRUEOSFS_BLOCK_READ_TRACE_LAST_LBA.load(Ordering::Relaxed);
+    let last_blocks = TRUEOSFS_BLOCK_READ_TRACE_LAST_BLOCKS.load(Ordering::Relaxed);
+    let last_bytes = TRUEOSFS_BLOCK_READ_TRACE_LAST_BYTES.load(Ordering::Relaxed);
+    Some((
+        count,
+        bytes,
+        elapsed_sum,
+        max_elapsed,
+        last_lba,
+        last_blocks,
+        last_bytes,
+    ))
+}
+
+fn trueosfs_block_read_trace_sample(
+    disk: u32,
+    lba: u64,
+    blocks: usize,
+    total_bytes: usize,
+    bs: usize,
+    max_blocks: usize,
+    max_xfer: u64,
+    start_ms: u64,
+) {
+    let now_ms = trueosfs_trace_now_ms();
+    let elapsed_ms = now_ms.saturating_sub(start_ms);
+    if let Some((sample_count, sample_bytes, sample_elapsed_ms, sample_max_ms, last_lba, last_blocks, last_bytes)) =
+        trueosfs_block_read_trace_note(now_ms, lba, blocks, total_bytes, elapsed_ms)
+    {
+        let sample_avg_ms = if sample_count == 0 {
+            0
+        } else {
+            sample_elapsed_ms / sample_count
+        };
+        crate::log!(
+            "trueosfs: block-read sample disk={} count={} bytes={} avg_ms={} max_ms={} last_lba={} last_blocks={} last_bytes={} bs={} max_blocks={} max_xfer={}\n",
+            disk,
+            sample_count,
+            sample_bytes,
+            sample_avg_ms,
+            sample_max_ms,
+            last_lba,
+            last_blocks,
+            last_bytes,
+            bs,
+            max_blocks,
+            max_xfer
+        );
+    }
+}
+
 impl trueos_fs::BlockIo for KernelBlockIo {
     type Error = block::Error;
 
@@ -268,65 +364,45 @@ impl trueos_fs::BlockIo for KernelBlockIo {
         let total_bytes = bs.saturating_mul(blocks);
         let trace = crate::logflag::LUMEN_STORAGE_TRACE_LOGS && total_bytes >= 128 * 1024;
         let start_ms = trueosfs_trace_now_ms();
-        let mut last_log_ms = start_ms;
-        let mut last_log_bytes = 0usize;
 
-        if trace {
-            crate::log!(
-                "trueosfs: block-read start disk={} lba={} blocks={} bytes={} bs={} max_blocks={} max_xfer={}\n",
-                self.handle.id().raw(),
-                lba,
-                blocks,
-                total_bytes,
-                bs,
-                max_blocks,
-                info.max_transfer_bytes
-            );
+        if blocks <= max_blocks {
+            let out = self.handle.read_blocks(lba, blocks).await?;
+            if trace {
+                trueosfs_block_read_trace_sample(
+                    self.handle.id().raw(),
+                    lba,
+                    blocks,
+                    total_bytes,
+                    bs,
+                    max_blocks,
+                    info.max_transfer_bytes,
+                    start_ms,
+                );
+            }
+            return Ok(out);
         }
 
         let mut out = Vec::with_capacity(bs.saturating_mul(blocks));
         let mut cur_lba = lba;
         let mut remaining = blocks;
-        let mut done_blocks = 0usize;
         while remaining > 0 {
             let blocks_here = core::cmp::min(remaining, max_blocks);
             let tmp = self.handle.read_blocks(cur_lba, blocks_here).await?;
             out.extend_from_slice(&tmp);
             cur_lba = cur_lba.saturating_add(blocks_here as u64);
             remaining = remaining.saturating_sub(blocks_here);
-            done_blocks = done_blocks.saturating_add(blocks_here);
-
-            if trace {
-                let done_bytes = done_blocks.saturating_mul(bs);
-                let now_ms = trueosfs_trace_now_ms();
-                if remaining == 0
-                    || done_bytes.saturating_sub(last_log_bytes) >= 512 * 1024
-                    || now_ms.saturating_sub(last_log_ms) >= 1000
-                {
-                    crate::log!(
-                        "trueosfs: block-read progress disk={} lba={} done_blocks={} total_blocks={} done={} total={} elapsed_ms={}\n",
-                        self.handle.id().raw(),
-                        lba,
-                        done_blocks,
-                        blocks,
-                        done_bytes,
-                        total_bytes,
-                        now_ms.saturating_sub(start_ms)
-                    );
-                    last_log_ms = now_ms;
-                    last_log_bytes = done_bytes;
-                }
-            }
         }
 
         if trace {
-            crate::log!(
-                "trueosfs: block-read done disk={} lba={} blocks={} bytes={} elapsed_ms={}\n",
+            trueosfs_block_read_trace_sample(
                 self.handle.id().raw(),
                 lba,
                 blocks,
                 total_bytes,
-                trueosfs_trace_now_ms().saturating_sub(start_ms)
+                bs,
+                max_blocks,
+                info.max_transfer_bytes,
+                start_ms,
             );
         }
 

@@ -7,6 +7,7 @@ use log::{Metadata, Record};
 extern crate alloc;
 
 static USB_XHCI_COMPLETION_LAST_LOG_TICK: AtomicU64 = AtomicU64::new(0);
+static USB_XHCI_TRANSFER_LAST_LOG_TICK: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LogRange {
@@ -223,6 +224,9 @@ fn one_second_rate_limit_allows(last_marker: &AtomicU64) -> bool {
 fn usb_vendor_rendered_log_allowed(rendered: &str) -> bool {
     if rendered.starts_with("crabusb/xhci/ep: completion") {
         return one_second_rate_limit_allows(&USB_XHCI_COMPLETION_LAST_LOG_TICK);
+    }
+    if rendered.starts_with("[Transfer] sample=") {
+        return one_second_rate_limit_allows(&USB_XHCI_TRANSFER_LAST_LOG_TICK);
     }
     true
 }
