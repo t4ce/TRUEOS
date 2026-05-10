@@ -449,7 +449,7 @@ fn hyper_http1_probe_enabled() -> bool {
 }
 
 fn spawn_chat_http(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::r::net::srv::chat::chat_http_service_task())
+    spawn_local(spawner, |_spawner| crate::tst_chatserver::chat_http_service_task())
 }
 
 fn spawn_mail_http(spawner: Spawner) -> SpawnAttempt {
@@ -982,7 +982,7 @@ struct BootAsset {
 pub(crate) const BOOT_LUMEN_WEIGHTS_PATH: &str = "model.safetensors";
 pub(crate) const BOOT_LUMEN_TOKENIZER_PATH: &str = "tokenizer.json";
 
-const BOOT_ASSETS: [BootAsset; 4] = [
+const BOOT_ASSETS: [BootAsset; 3] = [
     BootAsset {
         label: "media-firstframe-1440p",
         url: crate::allports::local_assets::DEMO_YELLY_MP4_URL,
@@ -1000,12 +1000,6 @@ const BOOT_ASSETS: [BootAsset; 4] = [
         url: crate::allports::local_assets::TINYLLAMA_TOKENIZER_URL,
         path: BOOT_LUMEN_TOKENIZER_PATH,
         max_bytes: 64 * 1024 * 1024,
-    },
-    BootAsset {
-        label: "audio-demo-wav",
-        url: crate::allports::local_assets::AUDIO_DEMO_URL,
-        path: crate::allports::local_assets::AUDIO_DEMO_CACHE_PATH,
-        max_bytes: 32 * 1024 * 1024,
     },
 ];
 const BOOT_ASSET_MOUNT_RETRY_SECS: u64 = 10;
@@ -1189,11 +1183,10 @@ async fn boot_asset_fetch_task() {
 
     crate::log_info!(
         target: "service";
-        "spawn-svc: boot-asset-fetch done weights={} tokenizer={} media={} audio={}\n",
+        "spawn-svc: boot-asset-fetch done weights={} tokenizer={} media={}\n",
         BOOT_LUMEN_WEIGHTS_PATH,
         BOOT_LUMEN_TOKENIZER_PATH,
-        crate::intel::xelp_media_source::MEDIA_DECODE_CACHE_PATH,
-        crate::allports::local_assets::AUDIO_DEMO_CACHE_PATH
+        crate::intel::xelp_media_source::MEDIA_DECODE_CACHE_PATH
     );
 }
 
@@ -1512,7 +1505,7 @@ static TASKS: [TaskSpec; 70] = [
     ),
     TaskSpec::enabled(
         "intel-hda-probe",
-        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
+        0,
         &INTEL_HDA_PROBE_STARTED,
         spawn_intel_hda_probe_task,
     ),

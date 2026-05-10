@@ -73,6 +73,8 @@ const WARM_DRAW_STATE_BYTES: usize = 16 * 4096;
 const WARM_VERTEX_BYTES: usize = 4096;
 const WARM_RESULT_BYTES: usize = 4096;
 const WARM_STREAMOUT_BYTES: usize = 4096;
+const PPGTT_PT_COUNT: usize = 64;
+const WARM_PPGTT_BYTES: usize = (3 + PPGTT_PT_COUNT) * 4096;
 const BLT_RING_DWORDS: usize = 4;
 const BLT_RING_TAIL_BYTES: usize = BLT_RING_DWORDS * core::mem::size_of::<u32>();
 const LRC_STATE_OFFSET_DWORDS: usize = 4096 / core::mem::size_of::<u32>();
@@ -112,12 +114,14 @@ const RING_MI_MODE_STOP_RING: u32 = 1 << 8;
 const GRDOM_RENDER: u32 = 1 << 1;
 const MI_BATCH_BUFFER_START_GEN8: u32 = (0x31 << 23) | 1;
 const MI_BATCH_GTT: u32 = 2 << 6;
+const MI_BATCH_PPGTT: u32 = 1 << 8;
 const MI_LOAD_REGISTER_IMM: u32 = 0x1100_0000;
 const MI_LRI_CS_MMIO: u32 = 1 << 19;
 const MI_LRI_FORCE_POSTED: u32 = 1 << 12;
 const MI_BATCH_BUFFER_END: u32 = 0x0500_0000;
 const MI_NOOP: u32 = 0;
 const INTEL_LEGACY_64B_CONTEXT: u32 = 3;
+const GEN8_PAGE_RW: u64 = 1 << 1;
 const GEN8_CTX_VALID: u32 = 1 << 0;
 const GEN8_CTX_PRIVILEGE: u32 = 1 << 8;
 const GEN12_CTX_PRIORITY_NORMAL: u32 = 1 << 9;
@@ -130,7 +134,7 @@ const GPGPU_SUBMIT_WHEN_PRIMARY_RENDER_DISABLED: bool = false;
 const MI_STORE_DATA_IMM_GGTT_DW1: u32 = 0x1040_0002;
 const TS_GPGPU_THREADS_DISPATCHED_LO: usize = 0x2290;
 const TS_GPGPU_THREADS_DISPATCHED_HI: usize = 0x2294;
-const RENDER_MOCS: u32 = 1;
+const RENDER_MOCS: u32 = 4;
 const PIPE_CONTROL_CMD: u32 = 4 | (2 << 24) | (3 << 27) | (3 << 29);
 const STATE_BASE_ADDRESS_CMD: u32 = 20 | (1 << 16) | (1 << 24) | (3 << 29);
 const PIPE_CONTROL_DC_FLUSH_ENABLE: u32 = 1 << 5;
@@ -183,6 +187,9 @@ struct RenderWarmState {
     streamout_phys: u64,
     streamout_virt: *mut u8,
     streamout_len: usize,
+    ppgtt_phys: u64,
+    ppgtt_virt: *mut u8,
+    ppgtt_len: usize,
     gpgpu_arena_phys: u64,
     gpgpu_arena_virt: *mut u8,
     gpgpu_arena_len: usize,
@@ -220,6 +227,9 @@ fn empty_warm(dev: crate::intel::Dev) -> RenderWarmState {
         streamout_phys: 0,
         streamout_virt: core::ptr::null_mut(),
         streamout_len: 0,
+        ppgtt_phys: 0,
+        ppgtt_virt: core::ptr::null_mut(),
+        ppgtt_len: 0,
         gpgpu_arena_phys: 0,
         gpgpu_arena_virt: core::ptr::null_mut(),
         gpgpu_arena_len: 0,
@@ -266,6 +276,7 @@ fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
     alloc_part!(vertex_phys, vertex_virt, vertex_len, WARM_VERTEX_BYTES, "vertex");
     alloc_part!(result_phys, result_virt, result_len, WARM_RESULT_BYTES, "result");
     alloc_part!(streamout_phys, streamout_virt, streamout_len, WARM_STREAMOUT_BYTES, "streamout");
+    alloc_part!(ppgtt_phys, ppgtt_virt, ppgtt_len, WARM_PPGTT_BYTES, "ppgtt");
 
     match crate::dma::alloc(GPGPU_TILE_ARENA_BYTES, crate::intel::WARM_ALIGN) {
         Some((phys, virt)) => {
@@ -290,6 +301,7 @@ fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
         core::ptr::write_bytes(warm.vertex_virt, 0, warm.vertex_len);
         core::ptr::write_bytes(warm.result_virt, 0, warm.result_len);
         core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
+        core::ptr::write_bytes(warm.ppgtt_virt, 0, warm.ppgtt_len);
         if !warm.gpgpu_arena_virt.is_null() {
             core::ptr::write_bytes(warm.gpgpu_arena_virt, 0, warm.gpgpu_arena_len);
         }
@@ -301,6 +313,86 @@ fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
 
 fn warm_state() -> Option<RenderWarmState> {
     *WARM_STATE.lock()
+}
+
+fn init_minimal_ppgtt(warm: RenderWarmState) -> bool {
+    if warm.ppgtt_virt.is_null() || warm.ppgtt_len < WARM_PPGTT_BYTES {
+        return false;
+    }
+
+    let pml4_off = 0usize;
+    let pdp_off = 4096usize;
+    let pd_off = 8192usize;
+    let pt_off = 12288usize;
+    let entry_present_rw = crate::intel::GEN8_PAGE_PRESENT | GEN8_PAGE_RW;
+
+    unsafe {
+        core::ptr::write_bytes(warm.ppgtt_virt, 0, warm.ppgtt_len);
+        let pml4 = warm.ppgtt_virt.add(pml4_off) as *mut u64;
+        let pdp = warm.ppgtt_virt.add(pdp_off) as *mut u64;
+        let pd = warm.ppgtt_virt.add(pd_off) as *mut u64;
+        core::ptr::write_volatile(pml4, (warm.ppgtt_phys + pdp_off as u64) | entry_present_rw);
+        core::ptr::write_volatile(pdp, (warm.ppgtt_phys + pd_off as u64) | entry_present_rw);
+        for index in 0..PPGTT_PT_COUNT {
+            let pt_phys = warm.ppgtt_phys + pt_off as u64 + (index as u64) * 4096;
+            core::ptr::write_volatile(pd.add(index), pt_phys | entry_present_rw);
+        }
+    }
+
+    fn map_region(warm: RenderWarmState, gpu: u64, phys: u64, len: usize, entry_flags: u64) -> bool {
+        let pt_off = 12288usize;
+        for page in 0..len.div_ceil(4096) {
+            let va_page = (gpu >> 12) + page as u64;
+            let pd_index = ((va_page >> 9) & 0x1FF) as usize;
+            let pt_index = (va_page & 0x1FF) as usize;
+            if pd_index >= PPGTT_PT_COUNT {
+                return false;
+            }
+            let pte_off = pt_off + pd_index * 4096 + pt_index * core::mem::size_of::<u64>();
+            let pte = (phys + (page as u64) * 4096) & !0xFFF;
+            unsafe {
+                core::ptr::write_volatile(warm.ppgtt_virt.add(pte_off) as *mut u64, pte | entry_flags);
+            }
+        }
+        true
+    }
+
+    let ok = map_region(warm, GPU_VA_RING_BASE, warm.ring_phys, warm.ring_len, entry_present_rw)
+        && map_region(
+            warm,
+            GPU_VA_CONTEXT_BASE,
+            warm.context_phys,
+            warm.context_len,
+            entry_present_rw,
+        )
+        && map_region(warm, GPU_VA_BATCH_BASE, warm.batch_phys, warm.batch_len, entry_present_rw)
+        && map_region(
+            warm,
+            GPU_VA_DRAW_STATE_BASE,
+            warm.draw_state_phys,
+            warm.draw_state_len,
+            entry_present_rw,
+        )
+        && map_region(warm, GPU_VA_VERTEX_BASE, warm.vertex_phys, warm.vertex_len, entry_present_rw)
+        && map_region(warm, GPU_VA_RESULT_BASE, warm.result_phys, warm.result_len, entry_present_rw)
+        && map_region(
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            warm.streamout_phys,
+            warm.streamout_len,
+            entry_present_rw,
+        )
+        && (warm.gpgpu_arena_virt.is_null()
+            || map_region(
+                warm,
+                GPU_VA_GPGPU_TILE_ARENA_BASE,
+                warm.gpgpu_arena_phys,
+                warm.gpgpu_arena_len,
+                entry_present_rw,
+            ));
+
+    crate::intel::dma_flush(warm.ppgtt_virt, warm.ppgtt_len);
+    ok
 }
 
 fn forcewake_render_acquire(warm: RenderWarmState) -> bool {
@@ -885,7 +977,8 @@ fn init_gen12_lrc_context_image(
     state[idx + 24] = 0x21C4;
     state[idx + 25] = 0;
     state[idx + 26] = 0x21C8;
-    state[idx + 27] = GEN12_CTX_RCS_INDIRECT_CTX_OFFSET_DEFAULT;
+    // Mesa's tiny executor context leaves RCS_INDIRECT_CTX_OFFSET at zero.
+    state[idx + 27] = 0;
     state[idx + 28] = 0x2180;
     state[idx + 29] = 0;
     idx += 30;
@@ -2530,15 +2623,10 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
         GPU_VA_DRAW_STATE_BASE as usize + CURBE_STATE_OFFSET_BYTES
     };
     const GPGPU_KERNEL_GPU: u64 = GPU_VA_DRAW_STATE_BASE + GPGPU_EU_KERNEL_OFFSET_BYTES as u64;
-    // Mesa's tiny Gfx12 executor programs Instruction Base to 0 and uses the
-    // IDD Kernel Start Pointer as the kernel's GPU offset.  Keep this probe in
-    // that shape so the EU fetch address no longer depends on a non-zero
-    // instruction-base latch.
-    const GPGPU_INSTRUCTION_BASE: u64 = if GPGPU_RELATIVE_STATE_BASES {
-        GPU_VA_DRAW_STATE_BASE
-    } else {
-        0
-    };
+    // Mesa's runtime dump for an empty compute shader resolves the kernel via
+    // InstructionBase + KSP=0.  Keep dynamic state relative, but make the EU
+    // fetch address land exactly at the uploaded program base.
+    const GPGPU_INSTRUCTION_BASE: u64 = GPGPU_KERNEL_GPU;
     const GPGPU_KSP_NEGATIVE_CONTROL: bool = false;
     const GPGPU_BAD_KERNEL_START_POINTER: u64 = 0x00F0_0000;
     const GPGPU_MIDL_NEGATIVE_CONTROL: bool = false;
@@ -2837,21 +2925,16 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
     if !GPGPU_CONTIGUOUS_VFE_IDD_WALKER {
+        // Match the host Mesa/Vulkan empty-compute command stream here:
+        // VFE, CS-stalled PIPE_CONTROL, MIDL, CURBE_LOAD, WALKER, MSF.
+        // Earlier probes inserted MEDIA_STATE_FLUSH and MI breadcrumbs before
+        // MIDL; useful for mapping, but not for this retirement microscope.
         push_pipe_control_full(
             batch_dwords,
             &mut cursor,
             PIPE_CONTROL_HDC_PIPELINE_FLUSH_HEADER,
             PIPE_CONTROL_CS_STALL,
         )?;
-        push_store_marker(batch_dwords, &mut cursor, 26, 0xC0DE_7804)?;
-        push(batch_dwords, &mut cursor, MEDIA_STATE_FLUSH_CMD)?;
-        push(batch_dwords, &mut cursor, 0)?;
-    }
-    if GPGPU_LOAD_DUMMY_CURBE {
-        push(batch_dwords, &mut cursor, MEDIA_CURBE_LOAD_CMD)?;
-        push(batch_dwords, &mut cursor, 0)?;
-        push(batch_dwords, &mut cursor, CURBE_TOTAL_BYTES as u32)?;
-        push(batch_dwords, &mut cursor, CURBE_DYNAMIC_OFFSET_BYTES as u32)?;
     }
     if GPGPU_MESA_POST_VFE_PIPE_CONTROL {
         push_pipe_control_full(
@@ -2860,15 +2943,6 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
             PIPE_CONTROL_HDC_PIPELINE_FLUSH_HEADER,
             PIPE_CONTROL_FLUSH_ENABLE | PIPE_CONTROL_CS_STALL,
         )?;
-    }
-    if !GPGPU_CONTIGUOUS_VFE_IDD_WALKER {
-        push_store_marker(batch_dwords, &mut cursor, 28, 0xC0DE_7806)?;
-    }
-    // Keep the IDD load separated from VFE by a CS-stalled state flush and a
-    // tiny CURBE load.  The current failure is before EU fetch, so this probes
-    // the thread-launch contract before changing EU bytes again.
-    if !GPGPU_CONTIGUOUS_VFE_IDD_WALKER {
-        push_store_marker(batch_dwords, &mut cursor, 27, 0xC0DE_7805)?;
     }
     let id_load_start = cursor;
     let midl_total_bytes = if GPGPU_MIDL_NEGATIVE_CONTROL {
@@ -2885,6 +2959,12 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     push(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, midl_total_bytes as u32)?;
     push(batch_dwords, &mut cursor, midl_start_address)?;
+    if GPGPU_LOAD_DUMMY_CURBE {
+        push(batch_dwords, &mut cursor, MEDIA_CURBE_LOAD_CMD)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, CURBE_TOTAL_BYTES as u32)?;
+        push(batch_dwords, &mut cursor, CURBE_DYNAMIC_OFFSET_BYTES as u32)?;
+    }
     let walker_start = cursor;
     push(batch_dwords, &mut cursor, GPGPU_WALKER_CMD)?;
     push(batch_dwords, &mut cursor, 0)?; // Interface Descriptor Offset
