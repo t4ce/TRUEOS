@@ -5,7 +5,7 @@ const GPU_PROGRAM_SHARED_RAM_WRITE_EXPECTED: u32 = trueos_eu::gfx12::STORE_SENTI
 const GPGPU_LOAD_DUMMY_CURBE: bool = true;
 const GPGPU_DUMMY_CURBE_BYTES: usize = 64;
 const GPGPU_CONTIGUOUS_VFE_IDD_WALKER: bool = false;
-const GPGPU_MESA_POST_VFE_PIPE_CONTROL: bool = true;
+const GPGPU_MESA_POST_VFE_PIPE_CONTROL: bool = false;
 // ADL-S 8086:4680 is Gfx12.0/Xe-LP.  The TS_EOT descriptor explicitly says
 // SFID_TS ends GPGPU/Media threads.  Gateway EOT was also tested because the
 // Gateway section owns barrier/event/SLM cleanup, but it reached the same

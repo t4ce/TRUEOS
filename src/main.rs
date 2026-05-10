@@ -116,6 +116,8 @@ mod tst_ui2_smiley_fountain_demo;
 mod tst_ui2_swarm;
 #[path = "tst/ui2_text_input_demo.rs"]
 mod tst_ui2_text_input_demo;
+#[path = "tst/uas_skhynix_route_probe.rs"]
+mod tst_uas_skhynix_route_probe;
 #[path = "tst/ws_time.rs"]
 mod tst_ws_time;
 #[cfg(target_arch = "x86_64")]

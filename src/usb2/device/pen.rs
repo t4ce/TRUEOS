@@ -324,6 +324,97 @@ pub(crate) struct UasBenchConfig {
     pub max_inflight: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum UasRoutePhase {
+    Idle,
+    Fill,
+    Submit,
+    Ready,
+    Data,
+    Status,
+    Reclaim,
+    Stalled,
+    Reset,
+    Quarantined,
+    Done,
+}
+
+impl Default for UasRoutePhase {
+    fn default() -> Self {
+        Self::Idle
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum UasRouteProbeKind {
+    Read,
+    Write,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct UasRouteCounters {
+    pub submitted: u64,
+    pub reclaimed: u64,
+    pub stalled: u64,
+    pub resets: u64,
+    pub quarantined: u64,
+    pub bytes_submitted: u64,
+    pub bytes_reclaimed: u64,
+    pub max_inflight: usize,
+    pub live_streams: u32,
+    pub dead_streams: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct UasRouteTiming {
+    pub fill_ms: u64,
+    pub command_ms: u64,
+    pub ready_ms: u64,
+    pub data_ms: u64,
+    pub status_ms: u64,
+    pub reclaim_ms: u64,
+    pub finish_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct UasRouteProbeConfig {
+    pub kind: UasRouteProbeKind,
+    pub lba: u64,
+    pub total_bytes: u64,
+    pub chunk_bytes: usize,
+    pub max_inflight: usize,
+    pub pattern_seed: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct UasRouteProbeResult {
+    pub kind: UasRouteProbeKind,
+    pub phase: UasRoutePhase,
+    pub lba: u64,
+    pub total_bytes: u64,
+    pub chunk_bytes: usize,
+    pub max_inflight: usize,
+    pub error: Option<block::Error>,
+    pub counters: UasRouteCounters,
+    pub timing: UasRouteTiming,
+}
+
+impl UasRouteProbeResult {
+    fn new(config: UasRouteProbeConfig, chunk_bytes: usize, max_inflight: usize) -> Self {
+        Self {
+            kind: config.kind,
+            phase: UasRoutePhase::Idle,
+            lba: config.lba,
+            total_bytes: config.total_bytes,
+            chunk_bytes,
+            max_inflight,
+            error: None,
+            counters: UasRouteCounters::default(),
+            timing: UasRouteTiming::default(),
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct UasBenchProgress {
     pub phase: &'static str,
@@ -361,6 +452,10 @@ struct UasBenchFlight {
     data_ticket: Option<DetachedTransfer>,
     status_ticket: Option<DetachedTransfer>,
     data_len: Option<usize>,
+    command_done_ms: u64,
+    ready_ms: Option<u64>,
+    data_done_ms: Option<u64>,
+    status_good_ms: Option<u64>,
     read_ready_seen: bool,
     status_good_seen: bool,
 }
@@ -375,6 +470,11 @@ struct UasWriteFlight {
     status: AllocVec<u8>,
     data_ticket: Option<DetachedTransfer>,
     status_ticket: Option<DetachedTransfer>,
+    command_done_ms: u64,
+    ready_ms: Option<u64>,
+    data_submit_ms: Option<u64>,
+    data_done_ms: Option<u64>,
+    status_good_ms: Option<u64>,
     data_done: bool,
     write_ready_seen: bool,
     status_good_seen: bool,
@@ -386,8 +486,13 @@ enum UasBenchStep {
 }
 
 enum UasWriteStep {
-    Completed { bytes: usize },
-    TimedOut { tag: u16, lba: u32, bytes: usize },
+    Completed { bytes: usize, timing: UasRouteTiming },
+    TimedOut {
+        tag: u16,
+        lba: u32,
+        bytes: usize,
+        timing: UasRouteTiming,
+    },
 }
 
 fn uas_bench_stream_in_use(flights: &AllocVec<UasBenchFlight>, tag: u16) -> bool {
@@ -445,6 +550,20 @@ pub(crate) fn is_uas_skhynix_disk(handle: block::DeviceHandle) -> bool {
         .unwrap_or(false)
 }
 
+pub(crate) fn find_uas_skhynix_route_disk() -> Option<block::DeviceHandle> {
+    let mut handles: Vec<block::DeviceHandle, MAX_MASS_RUNTIMES> = Vec::new();
+    {
+        let disks = REGISTERED_MASS_DISKS.lock();
+        for disk in disks.iter() {
+            let _ = handles.push(disk.handle);
+        }
+    }
+
+    handles
+        .into_iter()
+        .find(|handle| is_uas_skhynix_disk(*handle))
+}
+
 pub(crate) async fn set_uas_skhynix_write_window_for_bench(
     handle: block::DeviceHandle,
     bytes: usize,
@@ -488,6 +607,14 @@ pub(crate) async fn set_uas_skhynix_write_window_for_bench(
     result
 }
 
+pub(crate) async fn set_uas_skhynix_route_window(
+    handle: block::DeviceHandle,
+    bytes: usize,
+    max_inflight: usize,
+) -> block::Result<(usize, usize)> {
+    set_uas_skhynix_write_window_for_bench(handle, bytes, max_inflight).await
+}
+
 pub(crate) async fn reset_uas_skhynix_transport_for_bench(
     handle: block::DeviceHandle,
     stage: &'static str,
@@ -512,6 +639,13 @@ pub(crate) async fn reset_uas_skhynix_transport_for_bench(
     result
 }
 
+pub(crate) async fn reset_uas_skhynix_route_transport(
+    handle: block::DeviceHandle,
+    stage: &'static str,
+) -> block::Result<()> {
+    reset_uas_skhynix_transport_for_bench(handle, stage).await
+}
+
 fn uas_bench_now_ms() -> u64 {
     let ticks = embassy_time_driver::now();
     let hz = embassy_time_driver::TICK_HZ;
@@ -520,6 +654,45 @@ fn uas_bench_now_ms() -> u64 {
     } else {
         ticks.saturating_mul(1000) / hz
     }
+}
+
+fn uas_route_timing_for_read(flight: &UasBenchFlight) -> UasRouteTiming {
+    let ready_ms = flight.ready_ms.unwrap_or(flight.command_done_ms);
+    let data_done_ms = flight.data_done_ms.unwrap_or(ready_ms);
+    let status_good_ms = flight.status_good_ms.unwrap_or(data_done_ms);
+
+    UasRouteTiming {
+        command_ms: flight.command_done_ms.saturating_sub(flight.submitted_ms),
+        ready_ms: ready_ms.saturating_sub(flight.command_done_ms),
+        data_ms: data_done_ms.saturating_sub(flight.submitted_ms),
+        status_ms: status_good_ms.saturating_sub(data_done_ms),
+        finish_ms: status_good_ms.saturating_sub(flight.submitted_ms),
+        ..UasRouteTiming::default()
+    }
+}
+
+fn uas_route_timing_for_write(flight: &UasWriteFlight) -> UasRouteTiming {
+    let ready_ms = flight.ready_ms.unwrap_or(flight.command_done_ms);
+    let data_submit_ms = flight.data_submit_ms.unwrap_or(ready_ms);
+    let data_done_ms = flight.data_done_ms.unwrap_or(data_submit_ms);
+    let status_good_ms = flight.status_good_ms.unwrap_or(data_done_ms);
+
+    UasRouteTiming {
+        command_ms: flight.command_done_ms.saturating_sub(flight.submitted_ms),
+        ready_ms: ready_ms.saturating_sub(flight.command_done_ms),
+        data_ms: data_done_ms.saturating_sub(data_submit_ms),
+        status_ms: status_good_ms.saturating_sub(data_done_ms),
+        finish_ms: status_good_ms.saturating_sub(flight.submitted_ms),
+        ..UasRouteTiming::default()
+    }
+}
+
+fn uas_route_add_timing(total: &mut UasRouteTiming, timing: UasRouteTiming) {
+    total.command_ms = total.command_ms.saturating_add(timing.command_ms);
+    total.ready_ms = total.ready_ms.saturating_add(timing.ready_ms);
+    total.data_ms = total.data_ms.saturating_add(timing.data_ms);
+    total.status_ms = total.status_ms.saturating_add(timing.status_ms);
+    total.reclaim_ms = total.reclaim_ms.saturating_add(timing.reclaim_ms);
 }
 
 fn uas_bench_transfer_error(stage: &'static str) -> block::Error {
@@ -686,18 +859,23 @@ async fn uas_bench_submit_read(
     let mut data = alloc::vec![0u8; bytes];
     let status_ticket = uas_bench_submit_status(status_in, tag, &mut status)?;
     let data_ticket = uas_bench_submit_data(data_in, tag, &mut data)?;
+    let submitted_ms = uas_bench_now_ms();
 
-    let flight = UasBenchFlight {
+    let mut flight = UasBenchFlight {
         tag,
         lba,
         blocks,
         bytes,
-        submitted_ms: uas_bench_now_ms(),
+        submitted_ms,
         data,
         status,
         data_ticket: Some(data_ticket),
         status_ticket: Some(status_ticket),
         data_len: None,
+        command_done_ms: submitted_ms,
+        ready_ms: None,
+        data_done_ms: None,
+        status_good_ms: None,
         read_ready_seen: false,
         status_good_seen: false,
     };
@@ -707,6 +885,7 @@ async fn uas_bench_submit_read(
         core::mem::forget(flight);
         return Err(map_io_error(err));
     }
+    flight.command_done_ms = uas_bench_now_ms();
 
     Ok(flight)
 }
@@ -722,17 +901,23 @@ async fn uas_bench_submit_write(
 ) -> block::Result<UasWriteFlight> {
     let mut status = alloc::vec![0u8; UAS_BENCH_STATUS_BYTES];
     let status_ticket = uas_bench_submit_status(status_in, tag, &mut status)?;
+    let submitted_ms = uas_bench_now_ms();
 
-    let flight = UasWriteFlight {
+    let mut flight = UasWriteFlight {
         tag,
         lba,
         blocks,
         data_offset,
         bytes,
-        submitted_ms: uas_bench_now_ms(),
+        submitted_ms,
         status,
         data_ticket: None,
         status_ticket: Some(status_ticket),
+        command_done_ms: submitted_ms,
+        ready_ms: None,
+        data_submit_ms: None,
+        data_done_ms: None,
+        status_good_ms: None,
         data_done: false,
         write_ready_seen: false,
         status_good_seen: false,
@@ -743,6 +928,7 @@ async fn uas_bench_submit_write(
         core::mem::forget(flight);
         return Err(map_io_error(err));
     }
+    flight.command_done_ms = uas_bench_now_ms();
 
     Ok(flight)
 }
@@ -804,6 +990,7 @@ fn uas_bench_poll_flights(
                                 step_err = Some(block::Error::Io);
                             } else {
                                 flight.data_len = Some(got);
+                                flight.data_done_ms = Some(now_ms);
                             }
                         }
                         Poll::Ready(Err(_)) => {
@@ -823,9 +1010,11 @@ fn uas_bench_poll_flights(
                             match mass::classify_uas_read_status_iu("read-10", status, flight.tag) {
                                 Ok(mass::UasReadStatusKind::ReadReady) => {
                                     flight.read_ready_seen = true;
+                                    flight.ready_ms.get_or_insert(now_ms);
                                 }
                                 Ok(mass::UasReadStatusKind::StatusGood) => {
                                     flight.status_good_seen = true;
+                                    flight.status_good_ms.get_or_insert(now_ms);
                                 }
                                 Err(err) => {
                                     step_err = Some(map_io_error(err));
@@ -949,10 +1138,12 @@ fn uas_write_poll_flights(
                             {
                                 Ok(mass::UasWriteStatusKind::WriteReady) => {
                                     flight.write_ready_seen = true;
+                                    flight.ready_ms.get_or_insert(now_ms);
                                 }
                                 Ok(mass::UasWriteStatusKind::StatusGood) => {
                                     if flight.write_ready_seen || flight.data_done {
                                         flight.status_good_seen = true;
+                                        flight.status_good_ms.get_or_insert(now_ms);
                                     } else {
                                         crate::log!(
                                             "crabusb: mass uas-write-window status-before-write-ready tag=0x{:04X} lba={} bytes={}\n",
@@ -982,7 +1173,10 @@ fn uas_write_poll_flights(
                         step_err = Some(block::Error::OutOfBounds);
                     } else {
                         match uas_bench_submit_data_out(data_out, flight.tag, &source[start..end]) {
-                            Ok(ticket) => flight.data_ticket = Some(ticket),
+                            Ok(ticket) => {
+                                flight.data_submit_ms = Some(uas_bench_now_ms());
+                                flight.data_ticket = Some(ticket);
+                            }
                             Err(err) => step_err = Some(err),
                         }
                     }
@@ -1005,6 +1199,7 @@ fn uas_write_poll_flights(
                                 step_err = Some(block::Error::Io);
                             } else {
                                 flight.data_done = true;
+                                flight.data_done_ms = Some(now_ms);
                             }
                         }
                         Poll::Ready(Err(_)) => {
@@ -1035,10 +1230,12 @@ fn uas_write_poll_flights(
 
         if timed_out {
             let flight = flights.swap_remove(idx);
+            let timing = uas_route_timing_for_write(&flight);
             return Ok(Some(UasWriteStep::TimedOut {
                 tag: flight.tag,
                 lba: flight.lba,
                 bytes: flight.bytes,
+                timing,
             }));
         }
 
@@ -1048,8 +1245,10 @@ fn uas_write_poll_flights(
 
         if completed {
             let flight = flights.swap_remove(idx);
+            let timing = uas_route_timing_for_write(&flight);
             return Ok(Some(UasWriteStep::Completed {
                 bytes: flight.bytes,
+                timing,
             }));
         }
 
@@ -2038,6 +2237,7 @@ async fn read_blocks_uas_skhynix_windowed(
     blocks: usize,
     out: &mut [u8],
     block_size: usize,
+    mut route: Option<&mut UasRouteProbeResult>,
 ) -> block::Result<()> {
     if blocks == 0 {
         return Ok(());
@@ -2067,6 +2267,12 @@ async fn read_blocks_uas_skhynix_windowed(
         .max(1)
         .min(live_streams)
         .min(mass::UAS_XHCI_MAX_STREAM_ID as usize);
+    if let Some(route) = route.as_mut() {
+        route.phase = UasRoutePhase::Submit;
+        route.max_inflight = max_inflight;
+        route.counters.live_streams = live_streams as u32;
+        route.counters.dead_streams = rt.uas_dead_stream_mask.count_ones();
+    }
     let max_read_bytes =
         core::cmp::min(current_mass_io_bytes(rt, block_size), u16::MAX as usize * block_size);
     let blocks_per_read = (max_read_bytes / block_size).max(1).min(u16::MAX as usize);
@@ -2170,6 +2376,14 @@ async fn read_blocks_uas_skhynix_windowed(
             };
 
             flights.push(flight);
+            if let Some(route) = route.as_mut() {
+                route.phase = UasRoutePhase::Submit;
+                route.counters.submitted = route.counters.submitted.saturating_add(1);
+                route.counters.bytes_submitted =
+                    route.counters.bytes_submitted.saturating_add(bytes as u64);
+                route.counters.max_inflight = route.counters.max_inflight.max(flights.len());
+                route.counters.dead_streams = rt.uas_dead_stream_mask.count_ones();
+            }
             submitted_bytes = submitted_bytes.saturating_add(bytes as u64);
             next_lba = next_lba.saturating_add(wanted_blocks as u64);
         }
@@ -2218,6 +2432,11 @@ async fn read_blocks_uas_skhynix_windowed(
 
         match step {
             UasBenchStep::Completed(flight) => {
+                if let Some(route) = route.as_mut() {
+                    route.phase = UasRoutePhase::Reclaim;
+                    uas_route_add_timing(&mut route.timing, uas_route_timing_for_read(&flight));
+                }
+                let reclaim_start_ms = uas_bench_now_ms();
                 let offset_blocks = u64::from(flight.lba)
                     .checked_sub(lba)
                     .ok_or(block::Error::Corrupted)?;
@@ -2234,6 +2453,18 @@ async fn read_blocks_uas_skhynix_windowed(
                 out[out_off..out_end].copy_from_slice(&flight.data[..flight.bytes]);
                 completed_bytes = completed_bytes.saturating_add(flight.bytes as u64);
                 mass_io_note_success(rt, block_size);
+                if let Some(route) = route.as_mut() {
+                    route.counters.reclaimed = route.counters.reclaimed.saturating_add(1);
+                    route.counters.bytes_reclaimed = route
+                        .counters
+                        .bytes_reclaimed
+                        .saturating_add(flight.bytes as u64);
+                    route.counters.dead_streams = rt.uas_dead_stream_mask.count_ones();
+                    route.timing.reclaim_ms = route
+                        .timing
+                        .reclaim_ms
+                        .saturating_add(uas_bench_now_ms().saturating_sub(reclaim_start_ms));
+                }
 
                 if cwnd < ssthresh {
                     cwnd = core::cmp::min(max_inflight, cwnd.saturating_mul(2).max(1));
@@ -2248,6 +2479,11 @@ async fn read_blocks_uas_skhynix_windowed(
             UasBenchStep::TimedOut(flight) => {
                 let retry_lba = flight.lba;
                 let lost_tag = flight.tag;
+                if let Some(route) = route.as_mut() {
+                    route.phase = UasRoutePhase::Stalled;
+                    route.counters.stalled = route.counters.stalled.saturating_add(1);
+                    uas_route_add_timing(&mut route.timing, uas_route_timing_for_read(&flight));
+                }
                 core::mem::forget(flight);
 
                 timeouts = timeouts.saturating_add(1);
@@ -2269,6 +2505,10 @@ async fn read_blocks_uas_skhynix_windowed(
                     return Err(block::Error::Timeout);
                 }
                 let had_pending = !flights.is_empty();
+                if let Some(route) = route.as_mut() {
+                    route.phase = UasRoutePhase::Reset;
+                    route.counters.resets = route.counters.resets.saturating_add(1);
+                }
                 uas_skhynix_abort_pending_window(
                     rt,
                     &mut flights,
@@ -2277,7 +2517,17 @@ async fn read_blocks_uas_skhynix_windowed(
                 )
                 .await;
                 if !had_pending {
+                    if let Some(route) = route.as_mut() {
+                        route.phase = UasRoutePhase::Reset;
+                        route.counters.resets = route.counters.resets.saturating_add(1);
+                    }
                     let _ = uas_skhynix_reset_transport(rt, "read-window-timeout").await;
+                }
+                if let Some(route) = route.as_mut() {
+                    route.phase = UasRoutePhase::Quarantined;
+                    route.counters.quarantined =
+                        u64::from(rt.uas_dead_stream_mask.count_ones());
+                    route.counters.dead_streams = rt.uas_dead_stream_mask.count_ones();
                 }
 
                 ssthresh = core::cmp::max(1, cwnd / 2);
@@ -2300,6 +2550,10 @@ async fn read_blocks_uas_skhynix_windowed(
         }
     }
 
+    if let Some(route) = route.as_mut() {
+        route.phase = UasRoutePhase::Done;
+        route.counters.dead_streams = rt.uas_dead_stream_mask.count_ones();
+    }
     Ok(())
 }
 
@@ -2308,6 +2562,7 @@ async fn write_blocks_uas_skhynix_windowed(
     lba: u64,
     buf: &[u8],
     block_size: usize,
+    mut route: Option<&mut UasRouteProbeResult>,
 ) -> block::Result<()> {
     if buf.is_empty() {
         return Ok(());
@@ -2332,6 +2587,12 @@ async fn write_blocks_uas_skhynix_windowed(
         .max(1)
         .min(live_streams)
         .min(mass::UAS_XHCI_MAX_STREAM_ID as usize);
+    if let Some(route) = route.as_mut() {
+        route.phase = UasRoutePhase::Submit;
+        route.max_inflight = max_inflight;
+        route.counters.live_streams = live_streams as u32;
+        route.counters.dead_streams = rt.uas_dead_stream_mask.count_ones();
+    }
     let max_write_bytes =
         core::cmp::min(current_mass_write_io_bytes(rt, block_size), u16::MAX as usize * block_size);
     let blocks_per_write = (max_write_bytes / block_size).max(1).min(u16::MAX as usize);
@@ -2426,6 +2687,14 @@ async fn write_blocks_uas_skhynix_windowed(
 
             flights.push(flight);
             max_observed_inflight = max_observed_inflight.max(flights.len());
+            if let Some(route) = route.as_mut() {
+                route.phase = UasRoutePhase::Submit;
+                route.counters.submitted = route.counters.submitted.saturating_add(1);
+                route.counters.bytes_submitted =
+                    route.counters.bytes_submitted.saturating_add(bytes as u64);
+                route.counters.max_inflight = route.counters.max_inflight.max(flights.len());
+                route.counters.dead_streams = rt.uas_dead_stream_mask.count_ones();
+            }
             submitted_bytes = submitted_bytes.saturating_add(bytes as u64);
             next_lba = next_lba.saturating_add(wanted_blocks as u64);
         }
@@ -2463,10 +2732,25 @@ async fn write_blocks_uas_skhynix_windowed(
         };
 
         match step {
-            UasWriteStep::Completed { bytes, .. } => {
+            UasWriteStep::Completed { bytes, timing } => {
+                if let Some(route) = route.as_mut() {
+                    route.phase = UasRoutePhase::Reclaim;
+                    uas_route_add_timing(&mut route.timing, timing);
+                }
+                let reclaim_start_ms = uas_bench_now_ms();
                 completed_bytes = completed_bytes.saturating_add(bytes as u64);
                 writes_completed = writes_completed.saturating_add(1);
                 mass_io_note_success(rt, block_size);
+                if let Some(route) = route.as_mut() {
+                    route.counters.reclaimed = route.counters.reclaimed.saturating_add(1);
+                    route.counters.bytes_reclaimed =
+                        route.counters.bytes_reclaimed.saturating_add(bytes as u64);
+                    route.counters.dead_streams = rt.uas_dead_stream_mask.count_ones();
+                    route.timing.reclaim_ms = route
+                        .timing
+                        .reclaim_ms
+                        .saturating_add(uas_bench_now_ms().saturating_sub(reclaim_start_ms));
+                }
                 if cwnd < ssthresh {
                     cwnd = core::cmp::min(max_inflight, cwnd.saturating_mul(2).max(1));
                 } else if cwnd < max_inflight {
@@ -2477,7 +2761,18 @@ async fn write_blocks_uas_skhynix_windowed(
                     }
                 }
             }
-            UasWriteStep::TimedOut { tag, lba, bytes } => {
+            UasWriteStep::TimedOut {
+                tag,
+                lba,
+                bytes,
+                timing,
+            } => {
+                if let Some(route) = route.as_mut() {
+                    route.phase = UasRoutePhase::Stalled;
+                    route.counters.stalled = route.counters.stalled.saturating_add(1);
+                    uas_route_add_timing(&mut route.timing, timing);
+                    route.counters.dead_streams = rt.uas_dead_stream_mask.count_ones();
+                }
                 uas_runtime_note_error(
                     rt,
                     "write-window",
@@ -2486,6 +2781,12 @@ async fn write_blocks_uas_skhynix_windowed(
                     block_size,
                 );
                 uas_write_forget_pending(&mut flights);
+                if let Some(route) = route.as_mut() {
+                    route.phase = UasRoutePhase::Quarantined;
+                    route.counters.quarantined =
+                        u64::from(rt.uas_dead_stream_mask.count_ones());
+                    route.counters.dead_streams = rt.uas_dead_stream_mask.count_ones();
+                }
                 crate::log!(
                     "crabusb: mass {:04X}:{:04X} uas-write-window timeout tag=0x{:04X} lba={} bytes={} completed={} submitted={}\n",
                     rt.vendor_id,
@@ -2516,6 +2817,10 @@ async fn write_blocks_uas_skhynix_windowed(
         max_observed_inflight,
         max_write_bytes
     );
+    if let Some(route) = route.as_mut() {
+        route.phase = UasRoutePhase::Done;
+        route.counters.dead_streams = rt.uas_dead_stream_mask.count_ones();
+    }
     Ok(())
 }
 
@@ -2691,6 +2996,7 @@ impl block::BlockDevice for UsbMassBlockDevice {
                             blocks,
                             out.as_mut_slice(),
                             block_size,
+                            None,
                         )
                         .await?;
                         return Ok(core::mem::take(&mut out));
@@ -2893,7 +3199,8 @@ impl block::BlockDevice for UsbMassBlockDevice {
             let mut rt = self.take_runtime_for_io().await?;
             let result = async {
                 if matches!(rt.endpoints, UsbMassEndpoints::UasSkhynix { .. }) {
-                    return write_blocks_uas_skhynix_windowed(&mut rt, lba, buf, block_size).await;
+                    return write_blocks_uas_skhynix_windowed(&mut rt, lba, buf, block_size, None)
+                        .await;
                 }
 
                 let mut cur_lba = lba;

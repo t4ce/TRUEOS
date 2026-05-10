@@ -35,6 +35,51 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+function safeLinkHref(value) {
+  const href = text(value).trim();
+  const lower = href.toLowerCase();
+  if (lower.startsWith("http://") || lower.startsWith("https://") || lower.startsWith("mailto:")) {
+    return href;
+  }
+  return "";
+}
+
+function splitTrailingLinkPunctuation(value) {
+  let url = text(value);
+  let suffix = "";
+  while (url.length && ".,;:!?)]}>".includes(url.at(-1))) {
+    suffix = url.at(-1) + suffix;
+    url = url.slice(0, -1);
+  }
+  return [url, suffix];
+}
+
+function linkMarkup(label, href) {
+  const safeHref = safeLinkHref(href);
+  if (!safeHref) return escapeHtml(label);
+  return `<a href="${escapeHtml(safeHref)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`;
+}
+
+function linkifyText(value) {
+  const source = text(value);
+  const linkPattern = /\[([^\]\n]{1,180})\]\(((?:https?:\/\/|mailto:)[^\s)]+)\)|((?:https?:\/\/|mailto:)[^\s<>"']+)/g;
+  let out = "";
+  let cursor = 0;
+  for (const match of source.matchAll(linkPattern)) {
+    out += escapeHtml(source.slice(cursor, match.index));
+    if (match[1] && match[2]) {
+      out += linkMarkup(match[1], match[2]);
+    } else {
+      const [url, suffix] = splitTrailingLinkPunctuation(match[3]);
+      out += linkMarkup(url, url);
+      out += escapeHtml(suffix);
+    }
+    cursor = match.index + match[0].length;
+  }
+  out += escapeHtml(source.slice(cursor));
+  return out;
+}
+
 function icon(name, size = 18) {
   return `<i data-lucide="${name}" style="width:${size}px;height:${size}px"></i>`;
 }
@@ -251,7 +296,7 @@ function detailMarkup(message) {
           ${metaRow("Date", formatDate(message.date))}
         </div>
       </header>
-      <pre class="mail-body font-sans text-base leading-7 text-stone-800">${escapeHtml(message.body || message.preview || "")}</pre>
+      <pre class="mail-body font-sans text-base leading-7 text-stone-800">${linkifyText(message.body || message.preview || "")}</pre>
     </article>
   `;
 }

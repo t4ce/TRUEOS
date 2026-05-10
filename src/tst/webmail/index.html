@@ -121,6 +121,18 @@
       max-width: 100%;
     }
 
+    .mail-body a {
+      color: var(--accent-2);
+      font-weight: 500;
+      text-decoration: underline;
+      text-decoration-thickness: 1px;
+      text-underline-offset: 2px;
+    }
+
+    .mail-body a:hover {
+      color: var(--accent);
+    }
+
     @media (max-width: 1120px) {
       .app-shell {
         grid-template-columns: minmax(280px, 350px) minmax(0, 1fr);

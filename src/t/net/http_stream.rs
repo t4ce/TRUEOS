@@ -289,7 +289,8 @@ async fn request_http_to_file_hyper(
 
     let status = response.status().as_u16();
     if is_redirect_status(status) {
-        if let Some(url) = super::http::hyper_redirect_url_from_location(&parsed, response.headers())
+        if let Some(url) =
+            super::http::hyper_redirect_url_from_location(&parsed, response.headers())
         {
             return Err(HttpFetchError::Redirect(url));
         }

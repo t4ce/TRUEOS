@@ -21,23 +21,22 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    allcaps::mail as mail_caps,
     allports::{mail as mail_config, services::MAIL_HTTP_TCP_PORT},
     r::net::{cli::pop3::Pop3Client, smtp::SmtpClient},
 };
 
-const MAIL_HTTP_BODY_MAX: usize = 64 * 1024;
+const MAIL_HTTP_BODY_MAX: usize = mail_caps::WEBMAIL_HTTP_BODY_MAX;
 const MAIL_HTTP_BLOCKING_LANE_RETRY_MS: u64 = 1000;
 const MAIL_STORE_PATH: &str = "mail/box.json";
 const MAIL_CONFIG_PATH: &str = "mail/config.json";
 const MAIL_CONFIG_PASSWORD_PLACEHOLDER: &str = "ENTER_MAIL_PASSWORD_HERE";
 const MAIL_SMTP_TIMEOUT_MS: u32 = 20_000;
 const MAIL_POP3_TIMEOUT_MS: u32 = 20_000;
-const MAIL_LIST_LIMIT: usize = 10;
+const MAIL_LIST_LIMIT: usize = mail_caps::WEBMAIL_LIST_LIMIT;
 const MAIL_POP3_MAX_MESSAGES: usize = MAIL_LIST_LIMIT;
-const MAIL_POP3_TOP_BODY_LINES: u32 = 80;
-const MAIL_POP3_TOP_MAX_BYTES: usize = 128 * 1024;
-const MAIL_POP3_MAX_MESSAGE_BYTES: usize = 512 * 1024;
-const MAIL_INBOX_REFRESH_INTERVAL_SECS: u64 = 30;
+const MAIL_POP3_MAX_MESSAGE_BYTES: usize = mail_caps::WEBMAIL_POP3_MAX_MESSAGE_BYTES;
+const MAIL_INBOX_REFRESH_INTERVAL_SECS: u64 = mail_caps::WEBMAIL_INBOX_REFRESH_INTERVAL_SECS;
 
 static MAIL_HTTP_PORT: AtomicU16 = AtomicU16::new(0);
 static MAIL_ID_SEQ: AtomicU32 = AtomicU32::new(1);
@@ -465,6 +464,7 @@ fn extract_mail_body(headers: &[(String, String)], body: &str) -> String {
 
 fn extract_multipart_text(body: &str, boundary: &str) -> Option<String> {
     let marker = format!("--{}", boundary);
+    let mut plain_fallback: Option<String> = None;
     let mut html_fallback: Option<String> = None;
     for part in body.split(marker.as_str()).skip(1) {
         let part = part.trim_start_matches("\r\n").trim_start_matches('\n');
@@ -479,7 +479,7 @@ fn extract_multipart_text(body: &str, boundary: &str) -> Option<String> {
         if header_contains(&part_headers, "Content-Type", "multipart/") {
             if let Some(boundary) = content_type_boundary(&part_headers) {
                 if let Some(text) = extract_multipart_text(part_body, boundary.as_str()) {
-                    return Some(text);
+                    remember_longer_text(&mut plain_fallback, text);
                 }
             }
         }
@@ -491,7 +491,7 @@ fn extract_multipart_text(body: &str, boundary: &str) -> Option<String> {
                 header_lookup(&part_headers, "Content-Transfer-Encoding"),
             );
             if !text.trim().is_empty() {
-                return Some(text);
+                remember_longer_text(&mut plain_fallback, text);
             }
         }
         if header_contains(&part_headers, "Content-Type", "text/html") {
@@ -501,11 +501,42 @@ fn extract_multipart_text(body: &str, boundary: &str) -> Option<String> {
             );
             let stripped = strip_html(text.as_str());
             if !stripped.trim().is_empty() {
-                html_fallback = Some(stripped);
+                remember_longer_text(&mut html_fallback, stripped);
             }
         }
     }
-    html_fallback
+    choose_multipart_text(plain_fallback, html_fallback)
+}
+
+fn remember_longer_text(slot: &mut Option<String>, text: String) {
+    let text_len = text.trim().len();
+    if text_len == 0 {
+        return;
+    }
+    if slot
+        .as_ref()
+        .map(|current| text_len > current.trim().len())
+        .unwrap_or(true)
+    {
+        *slot = Some(text);
+    }
+}
+
+fn choose_multipart_text(plain: Option<String>, html: Option<String>) -> Option<String> {
+    match (plain, html) {
+        (Some(plain), Some(html)) => {
+            let plain_len = plain.trim().len();
+            let html_len = html.trim().len();
+            if plain_len < 256 && html_len > plain_len.saturating_mul(2) {
+                Some(html)
+            } else {
+                Some(plain)
+            }
+        }
+        (Some(plain), None) => Some(plain),
+        (None, Some(html)) => Some(html),
+        (None, None) => None,
+    }
 }
 
 fn decode_transfer_body(body: &str, encoding: Option<&str>) -> String {
@@ -765,32 +796,19 @@ async fn refresh_inbox_from_pop3(config: &MailConfig) -> Result<usize, &'static 
     for (msg_id, size) in latest.into_iter() {
         let fallback_id = format!("pop3-{}-{}", msg_id, size);
         let raw = match client
-            .top(msg_id, MAIL_POP3_TOP_BODY_LINES, MAIL_POP3_TIMEOUT_MS, MAIL_POP3_TOP_MAX_BYTES)
+            .retr(msg_id, MAIL_POP3_TIMEOUT_MS, MAIL_POP3_MAX_MESSAGE_BYTES)
             .await
         {
             Ok(raw) => raw,
-            Err(top_err) => {
+            Err(retr_err) => {
                 crate::log!(
-                    "webmail-http: pop3 TOP failed msg={} size={} err={:?}; trying RETR\n",
+                    "webmail-http: pop3 RETR failed msg={} size={} cap={} err={:?}\n",
                     msg_id,
                     size,
-                    top_err
+                    MAIL_POP3_MAX_MESSAGE_BYTES,
+                    retr_err
                 );
-                match client
-                    .retr(msg_id, MAIL_POP3_TIMEOUT_MS, MAIL_POP3_MAX_MESSAGE_BYTES)
-                    .await
-                {
-                    Ok(raw) => raw,
-                    Err(retr_err) => {
-                        crate::log!(
-                            "webmail-http: pop3 RETR failed msg={} size={} err={:?}\n",
-                            msg_id,
-                            size,
-                            retr_err
-                        );
-                        continue;
-                    }
-                }
+                continue;
             }
         };
         retrieved = retrieved.saturating_add(1);
@@ -802,8 +820,9 @@ async fn refresh_inbox_from_pop3(config: &MailConfig) -> Result<usize, &'static 
         if let Some(existing) = store
             .messages
             .iter_mut()
-            .find(|existing| existing.id == message.id)
+            .find(|existing| existing.id == message.id || existing.pop3_msg_id == Some(msg_id))
         {
+            existing.id = message.id;
             existing.from = message.from;
             existing.to = message.to;
             existing.subject = message.subject;
@@ -1139,13 +1158,45 @@ fn query_param<'a>(query: Option<&'a str>, name: &str) -> Option<&'a str> {
     None
 }
 
+fn query_param_decoded(query: Option<&str>, name: &str, max_len: usize) -> Option<String> {
+    let raw = query_param(query, name)?;
+    percent_decode(raw, max_len).ok()
+}
+
+fn percent_decode(value: &str, max_len: usize) -> Result<String, &'static str> {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len().min(max_len));
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if out.len() >= max_len {
+            return Err("decoded value too large");
+        }
+        if bytes[i] == b'%' {
+            if i + 2 >= bytes.len() {
+                return Err("bad percent encoding");
+            }
+            let hi = hex_value(bytes[i + 1]).ok_or("bad percent encoding")?;
+            let lo = hex_value(bytes[i + 2]).ok_or("bad percent encoding")?;
+            out.push((hi << 4) | lo);
+            i += 3;
+        } else if bytes[i] == b'+' {
+            out.push(b' ');
+            i += 1;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).map_err(|_| "bad utf8")
+}
+
 async fn handle_read_local(query: Option<String>) -> Response {
     crate::log!("webmail-http: api read\n");
-    let Some(id) = query_param(query.as_deref(), "id") else {
+    let Some(id) = query_param_decoded(query.as_deref(), "id", 512) else {
         return json_response(400, &serde_json::json!({"ok": false, "error": "missing id"}));
     };
     let store = load_store().await;
-    match store.messages.into_iter().find(|message| message.id == id) {
+    match store.messages.into_iter().find(|message| message.id == id.as_str()) {
         Some(message) => json_response(200, &message),
         None => json_response(404, &serde_json::json!({"ok": false, "error": "not found"})),
     }

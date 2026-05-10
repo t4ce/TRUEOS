@@ -14,6 +14,7 @@ pub mod probes {
     pub const TOKIO_SECURE_DNS_BOOT_PROBE: bool = false;
     pub const HYPER_BOOT_PROBE: bool = false;
     pub const HYPER_HTTP1_NET_PROBE: bool = false;
+    pub const UAS_SKHYNIX_ROUTE_BOOT_PROBE: bool = false;
     pub const TOKIO_NET_WRITABLE_TIMEOUT_MS: u64 = 1000;
 }
 
@@ -86,6 +87,13 @@ pub mod net {
     pub const TRUEOS_SWARM_PEER_RX_BUF_BYTES: usize = 1024;
 }
 
+pub mod mail {
+    pub const WEBMAIL_HTTP_BODY_MAX: usize = 64 * 1024;
+    pub const WEBMAIL_LIST_LIMIT: usize = 10;
+    pub const WEBMAIL_POP3_MAX_MESSAGE_BYTES: usize = 5 * 1024 * 1024;
+    pub const WEBMAIL_INBOX_REFRESH_INTERVAL_SECS: u64 = 30;
+}
+
 pub mod storage {
     pub const NVME_ADMIN_TIMEOUT_MS: u64 = 1_500;
     pub const NVME_IO_TIMEOUT_MS: u64 = 5_000;
@@ -121,7 +129,12 @@ pub mod storage {
     pub const USB_MASS_FAST_BOT_INITIAL_IO_BYTES: usize = 1024 * 1024;
     pub const USB_MASS_FAST_BOT_WRITE_MAX_IO_BYTES: usize = 128 * 1024;
     pub const USB_MASS_UAS_SKHYNIX_WRITE_MAX_IO_BYTES: usize = 1024 * 1024;
-    pub const USB_MASS_SKHYNIX_USE_UAS: bool = false;
+    pub const USB_MASS_SKHYNIX_USE_UAS: bool = true;
+    pub const USB_MASS_UAS_SKHYNIX_ROUTE_PROBE_WRITE_ENABLED: bool = false;
+    pub const USB_MASS_UAS_SKHYNIX_ROUTE_PROBE_WRITE_X2: bool = false;
+    pub const USB_MASS_UAS_SKHYNIX_ROUTE_PROBE_CHUNK_BYTES: usize = 1024 * 1024;
+    pub const USB_MASS_UAS_SKHYNIX_ROUTE_PROBE_MAX_INFLIGHT: usize = 1;
+    pub const USB_MASS_UAS_SKHYNIX_ROUTE_PROBE_WRITE_LBA: u64 = 0;
 }
 
 pub mod input {
