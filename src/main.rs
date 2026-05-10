@@ -84,16 +84,18 @@ mod trueos_tokio_worker;
 mod tst_boot_factory_ram_probe;
 #[path = "tst/chatserver/server.rs"]
 mod tst_chatserver;
+#[path = "tst/fileexplorer/axum_server.rs"]
+mod tst_fileexplorer_axum;
 #[path = "tst/html_demo.rs"]
 mod tst_html_demo;
 #[path = "tst/html_shack.rs"]
 mod tst_html_shack;
 #[path = "tst/http_trueosfs.rs"]
 mod tst_http_trueosfs;
-#[path = "tst/fileexplorer/axum_server.rs"]
-mod tst_fileexplorer_axum;
 #[path = "tst/net_tcp_shell.rs"]
 mod tst_net_tcp_shell;
+#[path = "tst/uas_skhynix_route_probe.rs"]
+mod tst_uas_skhynix_route_probe;
 #[path = "tst/ui2_analog_clock_demo.rs"]
 mod tst_ui2_analog_clock_demo;
 #[path = "tst/ui2_bgrt.rs"]
@@ -118,8 +120,8 @@ mod tst_ui2_smiley_fountain_demo;
 mod tst_ui2_swarm;
 #[path = "tst/ui2_text_input_demo.rs"]
 mod tst_ui2_text_input_demo;
-#[path = "tst/uas_skhynix_route_probe.rs"]
-mod tst_uas_skhynix_route_probe;
+#[path = "tst/webdevices/axum_server.rs"]
+mod tst_webdevices_axum;
 #[path = "tst/ws_time.rs"]
 mod tst_ws_time;
 #[cfg(target_arch = "x86_64")]

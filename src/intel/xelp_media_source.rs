@@ -158,11 +158,7 @@ async fn fetch_media_source_from_http_async() -> Option<MediaSource> {
             None
         }
         Err(err) => {
-            crate::log!(
-                "intel/media: source fetch failed url={} err={:?}\n",
-                url,
-                err
-            );
+            crate::log!("intel/media: source fetch failed url={} err={:?}\n", url, err);
             None
         }
     }

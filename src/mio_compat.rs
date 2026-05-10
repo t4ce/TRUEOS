@@ -137,8 +137,7 @@ fn compat_addr_port(addr: Option<CompatAddr>) -> Option<u16> {
 }
 
 fn probe_tcp_socket(socket: &MioSocketState) -> bool {
-    socket.kind == MioSocketKind::TcpStream
-        && matches!(compat_addr_port(socket.local), Some(4 | 5))
+    socket.kind == MioSocketKind::TcpStream && matches!(compat_addr_port(socket.local), Some(4 | 5))
 }
 
 fn should_log_selector_probe(readiness: u8) -> bool {

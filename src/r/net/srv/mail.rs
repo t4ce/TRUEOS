@@ -1196,7 +1196,11 @@ async fn handle_read_local(query: Option<String>) -> Response {
         return json_response(400, &serde_json::json!({"ok": false, "error": "missing id"}));
     };
     let store = load_store().await;
-    match store.messages.into_iter().find(|message| message.id == id.as_str()) {
+    match store
+        .messages
+        .into_iter()
+        .find(|message| message.id == id.as_str())
+    {
         Some(message) => json_response(200, &message),
         None => json_response(404, &serde_json::json!({"ok": false, "error": "not found"})),
     }

@@ -171,11 +171,7 @@ async fn load_hda_wav_loop_samples() -> Result<Vec<i16>, &'static str> {
     .await
     .map_err(|_| "shared tokio unavailable")?
     .map_err(|_| "http fetch failed")?;
-    crate::log!(
-        "intel/hda-probe: wav fetch body url={} bytes={}\n",
-        url,
-        body.len()
-    );
+    crate::log!("intel/hda-probe: wav fetch body url={} bytes={}\n", url, body.len());
     let samples = decode_wav_pcm_s16_stereo_48k(body.as_slice())?;
     crate::log!(
         "intel/hda-probe: wav decode ok samples={} frames={}\n",
@@ -212,11 +208,7 @@ async fn hda_wav_loop_probe_task() {
         let samples = match load_hda_wav_loop_samples().await {
             Ok(samples) => samples,
             Err(err) => {
-                crate::log!(
-                    "intel/hda-probe: wav fetch/decode err url={} err={}\n",
-                    url,
-                    err
-                );
+                crate::log!("intel/hda-probe: wav fetch/decode err url={} err={}\n", url, err);
                 Timer::after(EmbassyDuration::from_millis(HDA_WAV_LOOP_RETRY_DELAY_MS)).await;
                 continue;
             }
@@ -409,9 +401,7 @@ pub async fn task() {
 
         if piano_claimed() {
             match crate::usb2::midi::piano_held_snapshot() {
-                Some(snapshot)
-                    if snapshot.len > 0 || last_piano_seq != Some(snapshot.seq) =>
-                {
+                Some(snapshot) if snapshot.len > 0 || last_piano_seq != Some(snapshot.seq) => {
                     let log_event = last_piano_seq != Some(snapshot.seq);
                     last_piano_seq = Some(snapshot.seq);
                     match play_piano_probe_held(&snapshot, log_event) {

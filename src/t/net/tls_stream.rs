@@ -170,7 +170,7 @@ pub async fn connect_tls_v4_stream(
                         opened = Some(handle);
                     }
                     if opened == Some(handle) {
-                        crate::log_info!(target: "net"; 
+                        crate::log_info!(target: "net";
                             "{}: tls-connected dev={} handle={}\n",
                             log_tag,
                             dev_idx,

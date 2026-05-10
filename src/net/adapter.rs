@@ -1099,7 +1099,7 @@ impl<'a> TxToken for AdapterTxTokenAt<'a> {
                         buf[l2_off + 26],
                         buf[l2_off + 27],
                     ];
-                    crate::log_info!(target: "net"; 
+                    crate::log_info!(target: "net";
                         "net: tx-tap dev={} arp op={} spa={}.{}.{}.{} tpa={}.{}.{}.{}\n",
                         self.index,
                         opcode,
@@ -1136,7 +1136,7 @@ impl<'a> TxToken for AdapterTxTokenAt<'a> {
                                     buf[l2_off + 18],
                                     buf[l2_off + 19],
                                 ];
-                                crate::log_info!(target: "net"; 
+                                crate::log_info!(target: "net";
                                     "net: tx4 dev={} {}.{}.{}.{} -> {}.{}.{}.{} proto={} len={}\n",
                                     self.index,
                                     src_ip[0],
@@ -1170,7 +1170,7 @@ impl<'a> TxToken for AdapterTxTokenAt<'a> {
                                     let icmp_off = l2_off + ihl;
                                     let icmp_type = buf.get(icmp_off).copied().unwrap_or(0);
                                     let icmp_code = buf.get(icmp_off + 1).copied().unwrap_or(0);
-                                    crate::log_info!(target: "net"; 
+                                    crate::log_info!(target: "net";
                                         "net: tx-tap dev={} icmp4 {}.{}.{}.{} -> {}.{}.{}.{} type={} code={}\n",
                                         self.index,
                                         src_ip[0],
@@ -1208,7 +1208,7 @@ impl<'a> TxToken for AdapterTxTokenAt<'a> {
                                     let flags = buf[tcp_off + 13];
                                     let control = (flags & 0x07) != 0;
                                     if crate::logflag::NET_LOG_TX_TAP || control {
-                                        crate::log_info!(target: "net"; 
+                                        crate::log_info!(target: "net";
                                             "net: tx-tap dev={} tcp {}.{}.{}.{}:{} -> {}.{}.{}.{}:{} flags=0x{:02x}\n",
                                             self.index,
                                             src_ip[0],
@@ -1240,7 +1240,7 @@ impl<'a> TxToken for AdapterTxTokenAt<'a> {
                             let sport = u16::from_be_bytes([buf[udp_off], buf[udp_off + 1]]);
                             let dport = u16::from_be_bytes([buf[udp_off + 2], buf[udp_off + 3]]);
                             if crate::logflag::NET_LOG_DHCP_VERBOSE && sport == 68 && dport == 67 {
-                                crate::log_info!(target: "net"; 
+                                crate::log_info!(target: "net";
                                     "net: tx-tap dev={} saw dhcp client (udp 68->67)\n",
                                     self.index
                                 );
@@ -1288,7 +1288,7 @@ impl<'a> TxToken for AdapterTxTokenAt<'a> {
                                 }
                                 let ip_hdr_csum_calc = !(sum as u16);
 
-                                crate::log_info!(target: "net"; 
+                                crate::log_info!(target: "net";
                                     "net: dhcp-tx dev={} ip_src={}.{}.{}.{} ip_dst={}.{}.{}.{} ip_len={} ip_csum=0x{:04x} calc=0x{:04x} udp_len={} udp_csum=0x{:04x}\n",
                                     self.index,
                                     ip_src[0],
@@ -1353,7 +1353,7 @@ impl<'a> TxToken for AdapterTxTokenAt<'a> {
                                         opt_i += olen;
                                     }
 
-                                    crate::log_info!(target: "net"; 
+                                    crate::log_info!(target: "net";
                                         "net: dhcp-tx dev={} op={} htype={} hlen={} flags=0x{:04x} xid=0x{:08x} chaddr={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} cookie_ok={} msg_type={}\n",
                                         self.index,
                                         op,
@@ -1371,7 +1371,7 @@ impl<'a> TxToken for AdapterTxTokenAt<'a> {
                                         msg_type
                                     );
                                 } else {
-                                    crate::log_info!(target: "net"; 
+                                    crate::log_info!(target: "net";
                                         "net: dhcp-tx dev={} dhcp payload too short (len={})\n",
                                         self.index,
                                         buf.len().saturating_sub(dhcp_off)
@@ -1417,7 +1417,7 @@ struct SocketRecord {
 fn log_tcp_connect_record_state(prefix: &str, rec: &SocketRecord, state: tcp::State) {
     if let Some(remote) = rec.tcp_remote_v4 {
         let local_port = rec.tcp_local_port.unwrap_or(0);
-        crate::log_info!(target: "net"; 
+        crate::log_info!(target: "net";
             "{} owner={} handle={} local_port={} remote={}.{}.{}.{}:{} state={:?}\n",
             prefix,
             rec.owner,
@@ -1432,7 +1432,7 @@ fn log_tcp_connect_record_state(prefix: &str, rec: &SocketRecord, state: tcp::St
         );
     } else if let Some(remote) = rec.tcp_remote_v6 {
         let local_port = rec.tcp_local_port.unwrap_or(0);
-        crate::log_info!(target: "net"; 
+        crate::log_info!(target: "net";
             "{} owner={} handle={} local_port={} remote6={:02x}{:02x}:{:02x}{:02x}:...:{} state={:?}\n",
             prefix,
             rec.owner,
@@ -1533,7 +1533,7 @@ struct NetService {
 impl NetService {
     fn new(device_index: usize) -> Self {
         let mac = crate::net::mac_address_at(device_index).unwrap_or([0, 0, 0, 0, 0, 1]);
-        crate::log_info!(target: "net"; 
+        crate::log_info!(target: "net";
             "net: dev={} mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
             device_index,
             mac[0],
@@ -1578,7 +1578,7 @@ impl NetService {
         // currently rely on routers replying unicast to our RS.
         let ip_o = fallback_ip.octets();
         let gw_o = fallback_gw.octets();
-        crate::log_info!(target: "net"; 
+        crate::log_info!(target: "net";
             "net: static fallback dev={} ipv4={}.{}.{}.{} mask=255.255.255.0 gw={}.{}.{}.{}\n",
             device_index,
             ip_o[0],
@@ -1794,7 +1794,7 @@ impl NetService {
                 }
                 InternalNetbenchRemote::V6(ip) => {
                     let Some(local_ip) = self.local_ipv6_global else {
-                        crate::log_info!(target: "net"; 
+                        crate::log_info!(target: "net";
                             "netbench-internal: no global ipv6 yet (dev={})\n",
                             self.device_index
                         );
@@ -1819,7 +1819,7 @@ impl NetService {
 
             let sh = self.sockets.add(sock);
             if let Some(ip) = remote_log_v4 {
-                crate::log_info!(target: "net"; 
+                crate::log_info!(target: "net";
                     "netbench-internal: started id={} dev={} remote={}.{}.{}.{}:{}\n",
                     req.id,
                     self.device_index,
@@ -1830,7 +1830,7 @@ impl NetService {
                     req.remote_port
                 );
             } else if let Some(ip) = remote_log_v6 {
-                crate::log_info!(target: "net"; 
+                crate::log_info!(target: "net";
                     "netbench-internal: started id={} dev={} remote6={:02x}{:02x}:{:02x}{:02x}:...:{}\n",
                     req.id,
                     self.device_index,
@@ -1888,7 +1888,7 @@ impl NetService {
                 let cur_state = sock.state();
                 if st.last_tcp_state != Some(cur_state) {
                     st.last_tcp_state = Some(cur_state);
-                    crate::log_info!(target: "net"; 
+                    crate::log_info!(target: "net";
                         "netbench-internal: tcp id={} state={:?} open={} active={} can_send={} may_send={} can_recv={} may_recv={}\n",
                         st.id,
                         cur_state,
@@ -1943,7 +1943,7 @@ impl NetService {
                                     &st.header[..hend],
                                 );
                                 if let Some(cl) = st.expected_len {
-                                    crate::log_info!(target: "net"; 
+                                    crate::log_info!(target: "net";
                                         "netbench-internal: content-length id={} len={}\n",
                                         st.id,
                                         cl
@@ -1994,7 +1994,7 @@ impl NetService {
                             delta.saturating_mul(1000) / window_ms
                         };
 
-                        crate::log_info!(target: "net"; 
+                        crate::log_info!(target: "net";
                             "netbench-internal: rx id={} bytes={} inst={} avg={} state={:?}\n",
                             st.id,
                             st.received,
@@ -2028,7 +2028,7 @@ impl NetService {
                 } else {
                     received.saturating_mul(1000) / elapsed_ms
                 };
-                crate::log_info!(target: "net"; 
+                crate::log_info!(target: "net";
                     "netbench-internal: done id={} dev={} bytes={} elapsed_ms={} avg={} header_done={} state={:?}\n",
                     id,
                     self.device_index,
@@ -2087,7 +2087,7 @@ impl NetService {
                             delta.saturating_mul(1000) / window_ms
                         };
 
-                        crate::log_info!(target: "net"; 
+                        crate::log_info!(target: "net";
                             "netbench-internal: combined dev={} active={} bytes={} inst={} avg={}\n",
                             self.device_index,
                             self.internal_netbench.len(),
@@ -2276,7 +2276,7 @@ impl NetService {
         });
 
         if crate::logflag::NET_LOG_TCP_FLOW {
-            crate::log_info!(target: "net"; 
+            crate::log_info!(target: "net";
                 "net: loopback tcp connect port={} client={} server={}\n",
                 remote.port,
                 client_handle.0,
@@ -2316,7 +2316,7 @@ impl NetService {
 
         let local_octets = local_ip.octets();
         if crate::logflag::NET_LOG_TCP_FLOW {
-            crate::log_info!(target: "net"; 
+            crate::log_info!(target: "net";
                 "net: tcp connect owner={} local={}.{}.{}.{}:{} remote={}.{}.{}.{}:{}\n",
                 owner,
                 local_octets[0],
@@ -2341,7 +2341,7 @@ impl NetService {
         let handle = self.alloc_handle();
         let sh = self.sockets.add(socket);
         if crate::logflag::NET_LOG_TCP_CONNECT_STATES {
-            crate::log_info!(target: "net"; 
+            crate::log_info!(target: "net";
                 "net: tcp connect-open owner={} handle={} local={}.{}.{}.{}:{} remote={}.{}.{}.{}:{} state={:?}\n",
                 owner,
                 handle.0,
@@ -2400,7 +2400,7 @@ impl NetService {
         let record_remote = remote;
         let remote = IpEndpoint::new(IpAddress::Ipv6(remote_ip), remote.port);
 
-        crate::log_info!(target: "net"; 
+        crate::log_info!(target: "net";
             "net: tcp6 connect owner={} local=[{}]:{} remote=[{}]:{}\n",
             owner,
             local_ip,
@@ -2418,7 +2418,7 @@ impl NetService {
         let handle = self.alloc_handle();
         let sh = self.sockets.add(socket);
         if crate::logflag::NET_LOG_TCP_CONNECT_STATES {
-            crate::log_info!(target: "net"; 
+            crate::log_info!(target: "net";
                 "net: tcp6 connect-open owner={} handle={} local_port={} remote6={:02x}{:02x}:{:02x}{:02x}:...:{} state={:?}\n",
                 owner,
                 handle.0,
@@ -2566,7 +2566,7 @@ impl NetService {
 
         if total_sent != 0 {
             if crate::logflag::NET_LOG_TCP_SEND_FLUSH {
-                crate::log_info!(target: "net"; 
+                crate::log_info!(target: "net";
                     "net: sendtcp flush owner={} handle={} sent={} queued_left={}\n",
                     owner,
                     handle.0,
@@ -2728,7 +2728,7 @@ impl NetService {
         }
 
         if crate::logflag::NET_LOG_IPV6_RA {
-            crate::log_info!(target: "net"; 
+            crate::log_info!(target: "net";
                 "net: ipv6 rs dev={} src_ll={:02x}{:02x}:{:02x}{:02x}:... -> ff02::2\n",
                 self.device_index,
                 self.local_ipv6_ll.octets()[0],
@@ -2811,7 +2811,7 @@ impl NetService {
             let raw_slaac_prefix = Self::pick_slaac_prefix_from_ra_icmpv6(ipv6.payload());
 
             if crate::logflag::NET_LOG_IPV6_RA {
-                crate::log_info!(target: "net"; 
+                crate::log_info!(target: "net";
                     "net: ipv6 ra dev={} from={:02x}{:02x}:{:02x}{:02x}:... lifetime_ms={} prefix_present={}\n",
                     self.device_index,
                     ip_repr.src_addr.octets()[0],
@@ -2985,7 +2985,7 @@ impl NetService {
 
         if !self.ra_logged_flags {
             self.ra_logged_flags = true;
-            crate::log_info!(target: "net"; 
+            crate::log_info!(target: "net";
                 "net: ipv6 ra-flags dev={} M={} O={}\n",
                 self.device_index,
                 self.ra_managed as u8,
@@ -3073,14 +3073,14 @@ impl NetService {
             self.ra_dns6 = out;
             self.ra_dns6_count = count;
             if crate::logflag::NET_LOG_IPV6_RA {
-                crate::log_info!(target: "net"; 
+                crate::log_info!(target: "net";
                     "net: ipv6 rdnss dev={} count={}\n",
                     self.device_index,
                     self.ra_dns6_count
                 );
                 for i in 0..(self.ra_dns6_count as usize) {
                     let a = self.ra_dns6[i];
-                    crate::log_info!(target: "net"; 
+                    crate::log_info!(target: "net";
                         "net: ipv6 rdnss dev={} idx={} server={:02x}{:02x}:{:02x}{:02x}:...\n",
                         self.device_index,
                         i,
@@ -3127,7 +3127,7 @@ impl NetService {
                 crate::log_info!(target: "net"; "net: dhcp6 start dev={} reason=ra-managed (M=1)\n", self.device_index);
                 self.dhcp6_start_solicit(timestamp);
             } else if want_dns {
-                crate::log_info!(target: "net"; 
+                crate::log_info!(target: "net";
                     "net: dhcp6 start dev={} reason=dns-needed ra_other={} ra_dns6={} dhcp6_dns6={}\n",
                     self.device_index,
                     self.ra_other as u8,
@@ -3155,7 +3155,7 @@ impl NetService {
         if self.dhcp6_retries >= 6 {
             // If the network sets O/M but doesn't actually provide DHCPv6,
             // don't spam forever.
-            crate::log_info!(target: "net"; 
+            crate::log_info!(target: "net";
                 "net: dhcp6 cooldown dev={} stage={:?} ra_managed={} ra_other={}\n",
                 self.device_index,
                 self.dhcp6_stage,
@@ -3211,7 +3211,7 @@ impl NetService {
         let msg = crate::net::dhcpv6::build_solicit(self.dhcp6_xid, duid, self.dhcp6_iaid, true);
         if self.dhcp6_send_udp(&msg) {
             if self.dhcp6_retries == 0 {
-                crate::log_info!(target: "net"; 
+                crate::log_info!(target: "net";
                     "net: dhcp6 solicit dev={} xid={:02x}{:02x}{:02x}\n",
                     self.device_index,
                     self.dhcp6_xid[0],
@@ -3236,7 +3236,7 @@ impl NetService {
         let msg = crate::net::dhcpv6::build_info_request(self.dhcp6_xid, duid);
         if self.dhcp6_send_udp(&msg) {
             if self.dhcp6_retries == 0 {
-                crate::log_info!(target: "net"; 
+                crate::log_info!(target: "net";
                     "net: dhcp6 info-request dev={} xid={:02x}{:02x}{:02x}\n",
                     self.device_index,
                     self.dhcp6_xid[0],
@@ -3270,7 +3270,7 @@ impl NetService {
         );
         if self.dhcp6_send_udp(&msg) {
             if self.dhcp6_retries == 0 {
-                crate::log_info!(target: "net"; 
+                crate::log_info!(target: "net";
                     "net: dhcp6 request dev={} xid={:02x}{:02x}{:02x} unicast={}\n",
                     self.device_index,
                     self.dhcp6_xid[0],
@@ -3334,7 +3334,7 @@ impl NetService {
 
             if self.dhcp6_rx_samples_left != 0 {
                 self.dhcp6_rx_samples_left = self.dhcp6_rx_samples_left.saturating_sub(1);
-                crate::log_info!(target: "net"; 
+                crate::log_info!(target: "net";
                     "net: dhcp6 rx dev={} stage={:?} src=[{}]:{} kind={:?} xid={:02x}{:02x}{:02x} sid_len={} cid_len={} ia={} dns={}\n",
                     self.device_index,
                     self.dhcp6_stage,
@@ -3354,7 +3354,7 @@ impl NetService {
             // When we have an active exchange, only accept matching XID.
             if self.dhcp6_stage != Dhcp6Stage::Idle && p.xid != self.dhcp6_xid {
                 if self.dhcp6_rx_samples_left != 0 {
-                    crate::log_info!(target: "net"; 
+                    crate::log_info!(target: "net";
                         "net: dhcp6 rx dev={} ignored reason=xid-mismatch expected={:02x}{:02x}{:02x}\n",
                         self.device_index,
                         self.dhcp6_xid[0],
@@ -3369,7 +3369,7 @@ impl NetService {
                 && cid != &self.dhcp6_duid[..]
             {
                 if self.dhcp6_rx_samples_left != 0 {
-                    crate::log_info!(target: "net"; 
+                    crate::log_info!(target: "net";
                         "net: dhcp6 rx dev={} ignored reason=clientid-mismatch\n",
                         self.device_index
                     );
@@ -3384,7 +3384,7 @@ impl NetService {
                     *PRIMARY_DHCP6_DNS6.lock() = (self.dhcp6_dns6, self.dhcp6_dns6_count);
                 }
 
-                crate::log_info!(target: "net"; 
+                crate::log_info!(target: "net";
                     "net: dhcp6 dns6 dev={} count={}\n",
                     self.device_index,
                     self.dhcp6_dns6_count
@@ -3406,7 +3406,7 @@ impl NetService {
                         let ts = now();
                         self.dhcp6_send_request(ts);
                     } else {
-                        crate::log_info!(target: "net"; 
+                        crate::log_info!(target: "net";
                             "net: dhcp6 advertise dev={} missing server-id (ignoring)\n",
                             self.device_index
                         );
@@ -3540,7 +3540,7 @@ impl NetService {
                     match self.open_tcp_connect(owner, remote) {
                         Ok(handle) => {
                             if crate::logflag::NET_LOG_TCP_FLOW {
-                                crate::log_info!(target: "net"; 
+                                crate::log_info!(target: "net";
                                     "net: open-tcp cmd owner={} remote={}.{}.{}.{}:{} handle={}\n",
                                     owner,
                                     remote.addr[0],
@@ -3664,7 +3664,7 @@ impl NetService {
                         return;
                     }
                     if crate::logflag::NET_LOG_TCP_FLOW && data.starts_with(b"GET ") {
-                        crate::log_info!(target: "net"; 
+                        crate::log_info!(target: "net";
                             "net: sendtcp cmd owner={} handle={} bytes={}\n",
                             owner,
                             handle.0,
@@ -3771,7 +3771,10 @@ impl NetService {
                 }
                 match socket.remote_endpoint().map(|endpoint| endpoint.addr) {
                     Some(IpAddress::Ipv4(addr)) => {
-                        let port = socket.remote_endpoint().map(|endpoint| endpoint.port).unwrap_or(0);
+                        let port = socket
+                            .remote_endpoint()
+                            .map(|endpoint| endpoint.port)
+                            .unwrap_or(0);
                         self.records[idx].tcp_remote_v4 = Some(NetEndpoint {
                             addr: addr.octets(),
                             port,
@@ -3779,7 +3782,10 @@ impl NetService {
                         self.records[idx].tcp_remote_v6 = None;
                     }
                     Some(IpAddress::Ipv6(addr)) => {
-                        let port = socket.remote_endpoint().map(|endpoint| endpoint.port).unwrap_or(0);
+                        let port = socket
+                            .remote_endpoint()
+                            .map(|endpoint| endpoint.port)
+                            .unwrap_or(0);
                         self.records[idx].tcp_remote_v4 = None;
                         self.records[idx].tcp_remote_v6 = Some(NetEndpointV6 {
                             addr: addr.octets(),
@@ -3843,7 +3849,7 @@ impl NetService {
             // `NetEvent::Closed`.
             if socket.state() == tcp::State::CloseWait && !rx_backpressured && !socket.can_recv() {
                 if crate::logflag::NET_LOG_TCP_FLOW {
-                    crate::log_info!(target: "net"; 
+                    crate::log_info!(target: "net";
                         "net: tcp closewait owner={} handle={} rx_bytes_this_poll={} rx_events={} rx_drops={}\n",
                         owner,
                         handle.0,
@@ -3885,7 +3891,7 @@ impl NetService {
                     &self.records[idx],
                     state,
                 );
-                crate::log_info!(target: "net"; 
+                crate::log_info!(target: "net";
                     "net: tcp established queued owner={} handle={} queued={}\n",
                     owner,
                     handle.0,
@@ -4006,7 +4012,7 @@ impl NetService {
 
                 if let Some(router) = config.router {
                     let r = router.octets();
-                    crate::log_info!(target: "net"; 
+                    crate::log_info!(target: "net";
                         "net: dhcp {} dev={} ipv4={}.{}.{}.{} gw={}.{}.{}.{} ipv6={}\n",
                         if had_lease { "renewed" } else { "acquired" },
                         self.device_index,
@@ -4021,7 +4027,7 @@ impl NetService {
                         ipv6_tag
                     );
                 } else {
-                    crate::log_info!(target: "net"; 
+                    crate::log_info!(target: "net";
                         "net: dhcp {} dev={} ipv4={}.{}.{}.{} gw=none ipv6={}\n",
                         if had_lease { "renewed" } else { "acquired" },
                         self.device_index,
@@ -4049,7 +4055,7 @@ impl NetService {
                 });
 
                 if crate::logflag::NET_LOG_DHCP_VERBOSE {
-                    crate::log_info!(target: "net"; 
+                    crate::log_info!(target: "net";
                         "net: dhcp apply dev={} ipv4_cidr={}.{}.{}.{} /{} iface_addrs={}\n",
                         self.device_index,
                         ip_o[0],
@@ -4063,7 +4069,7 @@ impl NetService {
                         match cidr.address() {
                             IpAddress::Ipv4(v4) => {
                                 let o = v4.octets();
-                                crate::log_info!(target: "net"; 
+                                crate::log_info!(target: "net";
                                     "net: dhcp iface_addr dev={} idx={} v4={}.{}.{}.{} /{}\n",
                                     self.device_index,
                                     i,
@@ -4076,7 +4082,7 @@ impl NetService {
                             }
                             IpAddress::Ipv6(v6) => {
                                 let o = v6.octets();
-                                crate::log_info!(target: "net"; 
+                                crate::log_info!(target: "net";
                                     "net: dhcp iface_addr dev={} idx={} v6={:02x}{:02x}:{:02x}{:02x}:... /{}\n",
                                     self.device_index,
                                     i,
@@ -4097,7 +4103,7 @@ impl NetService {
                     match routes.add_default_ipv4_route(router) {
                         Ok(_route) => {
                             let r = router.octets();
-                            crate::log_info!(target: "net"; 
+                            crate::log_info!(target: "net";
                                 "net: route v4 default dev={} gw={}.{}.{}.{} ok\n",
                                 self.device_index,
                                 r[0],
@@ -4108,7 +4114,7 @@ impl NetService {
                         }
                         Err(e) => {
                             let r = router.octets();
-                            crate::log_info!(target: "net"; 
+                            crate::log_info!(target: "net";
                                 "net: route v4 default dev={} gw={}.{}.{}.{} err={:?}\n",
                                 self.device_index,
                                 r[0],
@@ -4127,14 +4133,14 @@ impl NetService {
                     self.dhcp_dns[i] = s.octets();
                     self.dhcp_dns_count = (i as u8) + 1;
                 }
-                crate::log_info!(target: "net"; 
+                crate::log_info!(target: "net";
                     "net: dhcp dns-count dev={} count={}\n",
                     self.device_index,
                     self.dhcp_dns_count
                 );
                 for i in 0..(self.dhcp_dns_count as usize) {
                     let d = self.dhcp_dns[i];
-                    crate::log_info!(target: "net"; 
+                    crate::log_info!(target: "net";
                         "net: dhcp dns dev={} idx={} server={}.{}.{}.{}\n",
                         self.device_index,
                         i,
@@ -4170,7 +4176,7 @@ impl NetService {
                     self.dhcp_dns_count = 0;
                     let ip_o = fallback_ip.octets();
                     let gw_o = fallback_gw.octets();
-                    crate::log_info!(target: "net"; 
+                    crate::log_info!(target: "net";
                         "net: dhcp lost dev={} fallback ipv4={}.{}.{}.{} gw={}.{}.{}.{} ipv6={}\n",
                         self.device_index,
                         ip_o[0],
@@ -4259,7 +4265,7 @@ impl NetService {
             let [a, b, c, d] = target.octets();
             if let Some(src) = self.local_ipv4 {
                 let [sa, sb, sc, sd] = src.octets();
-                crate::log_info!(target: "net"; 
+                crate::log_info!(target: "net";
                     "net: icmp ping dev={} src={}.{}.{}.{} seq={} -> {}.{}.{}.{}\n",
                     self.device_index,
                     sa,
@@ -4273,7 +4279,7 @@ impl NetService {
                     d
                 );
             } else {
-                crate::log_info!(target: "net"; 
+                crate::log_info!(target: "net";
                     "net: icmp ping dev={} seq={} -> {}.{}.{}.{}\n",
                     self.device_index,
                     seq_no,
@@ -4345,7 +4351,7 @@ impl NetService {
 
         if socket.send_slice(&out, IpAddress::Ipv6(dst)).is_ok() {
             let o = dst.octets();
-            crate::log_info!(target: "net"; 
+            crate::log_info!(target: "net";
                 "net: icmp6 ping dev={} seq={} -> {:02x}{:02x}:{:02x}{:02x}:...\n",
                 self.device_index,
                 seq_no,
@@ -4426,7 +4432,7 @@ impl NetService {
                                 let rtt = now() - sent_at;
                                 if let Some(local) = self.local_ipv4 {
                                     let [la, lb, lc, ld] = local.octets();
-                                    crate::log_info!(target: "net"; 
+                                    crate::log_info!(target: "net";
                                         "net: icmp pong dev={} local={}.{}.{}.{} seq={} rtt={}ms\n",
                                         self.device_index,
                                         la,
@@ -4437,7 +4443,7 @@ impl NetService {
                                         rtt.total_millis()
                                     );
                                 } else {
-                                    crate::log_info!(target: "net"; 
+                                    crate::log_info!(target: "net";
                                         "net: icmp pong dev={} seq={} rtt={}ms\n",
                                         self.device_index,
                                         seq_no,
@@ -4449,7 +4455,7 @@ impl NetService {
                                 // Consider the network reachable on the first successful pong.
                                 if self.icmp_ping_pongs == 0 {
                                     self.icmp_ping_pongs = 1;
-                                    crate::log_info!(target: "net"; 
+                                    crate::log_info!(target: "net";
                                         "net: icmp ok dev={} (gateway reachable)\n",
                                         self.device_index
                                     );
@@ -4485,7 +4491,7 @@ impl NetService {
                         if inflight_seq == seq_no && payload.starts_with(b"TRUEOS-ping6") {
                             let rtt = now() - sent_at;
                             let o = src_v6.octets();
-                            crate::log_info!(target: "net"; 
+                            crate::log_info!(target: "net";
                                 "net: icmp6 pong dev={} seq={} rtt={}ms from={:02x}{:02x}:{:02x}{:02x}:...\n",
                                 self.device_index,
                                 seq_no,
@@ -4499,7 +4505,7 @@ impl NetService {
 
                             if self.icmp6_ping_pongs == 0 {
                                 self.icmp6_ping_pongs = 1;
-                                crate::log_info!(target: "net"; 
+                                crate::log_info!(target: "net";
                                     "net: icmp6 ok dev={} (v6 gateway reachable)\n",
                                     self.device_index
                                 );

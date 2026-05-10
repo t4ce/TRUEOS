@@ -233,9 +233,9 @@ fn post_chat_message(user: &str, text: &str) -> bool {
 
 fn post_chat_statement(user: &str, statement: Option<&str>, text: &str) -> bool {
     let local_ok = match statement {
-        Some(statement) => crate::tst_chatserver::post_local_statement_volatile(
-            CHAT_ROOM, user, statement, text,
-        ),
+        Some(statement) => {
+            crate::tst_chatserver::post_local_statement_volatile(CHAT_ROOM, user, statement, text)
+        }
         None => crate::tst_chatserver::post_local_message_volatile(CHAT_ROOM, user, text),
     };
     if local_ok {

@@ -20,6 +20,7 @@ pub mod services {
     pub const CHAT_HTTP_TCP_PORT: u16 = 3;
     pub const MAIL_HTTP_TCP_PORT: u16 = 4;
     pub const AXUM_BOOT_TCP_PORT: u16 = 5;
+    pub const WEBDEVICES_HTTP_TCP_PORT: u16 = 7;
     pub const FILEEXPLORER_HTTP_TCP_PORT: u16 = 9;
     pub const FILEEXPLORER_HTTP_TCP_PORTS: [u16; 3] = [FILEEXPLORER_HTTP_TCP_PORT, 8, 6];
     pub const LOGTOTCP_TCP_PORT: u16 = 1;

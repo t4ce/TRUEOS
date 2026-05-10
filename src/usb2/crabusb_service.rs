@@ -329,10 +329,7 @@ impl DmaOp for TrueosCrabUsbKernel {
             .map(|end| end <= dma_mask)
             .unwrap_or(false);
         let needs_contiguous_bounce = size.get() > XHCI_NORMAL_TRB_BYTES
-            && matches!(
-                direction,
-                DmaDirection::ToDevice | DmaDirection::Bidirectional
-            );
+            && matches!(direction, DmaDirection::ToDevice | DmaDirection::Bidirectional);
 
         if aligned && in_mask && !needs_contiguous_bounce {
             return Ok(unsafe { DmaMapHandle::new(addr, DmaAddr::from(phys), layout, None) });

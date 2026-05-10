@@ -295,7 +295,7 @@ fn tls_socket_tick_once() {
                         continue;
                     };
 
-                    crate::log_info!(target: "net"; 
+                    crate::log_info!(target: "net";
                         "tls-socket: net via vnet owner={} conn={} device={}\n",
                         owner,
                         seq,
@@ -303,15 +303,20 @@ fn tls_socket_tick_once() {
                     );
 
                     let mut rng = KernelTlsRng::new();
-                    let tls =
-                        match TlsClient::new(&cfg, &roots, server_name, &mut rng, &KERNEL_TIME) {
-                            Ok(c) => c,
-                            Err(e) => {
-                                crate::log_info!(target: "net"; "tls-socket: TlsClient::new failed: {:?}\n", e);
-                                let _ = push_tls_event(owner, TlsEvent::TlsError { err: e });
-                                continue;
-                            }
-                        };
+                    let tls = match TlsClient::new(
+                        &cfg,
+                        &roots,
+                        server_name,
+                        &mut rng,
+                        &KERNEL_TIME,
+                    ) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            crate::log_info!(target: "net"; "tls-socket: TlsClient::new failed: {:?}\n", e);
+                            let _ = push_tls_event(owner, TlsEvent::TlsError { err: e });
+                            continue;
+                        }
+                    };
 
                     let conn = TlsConn {
                         user_owner: owner,
@@ -451,7 +456,7 @@ fn tls_socket_tick_once() {
                 vnet::Event::TcpEstablished { handle, .. } => {
                     if conns[idx].handle == Some(handle) {
                         conns[idx].last_activity = Instant::now();
-                        crate::log_info!(target: "net"; 
+                        crate::log_info!(target: "net";
                             "tls-socket: tcp established owner={} handle={}\n",
                             conns[idx].user_owner,
                             handle.0
@@ -501,7 +506,7 @@ fn tls_socket_tick_once() {
                     }
                 }
                 vnet::Event::Error { msg } => {
-                    crate::log_info!(target: "net"; 
+                    crate::log_info!(target: "net";
                         "tls-socket: net error owner={} handle={:?} msg={}\n",
                         conns[idx].user_owner,
                         conns[idx].handle.map(|h| h.0),
