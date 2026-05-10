@@ -167,3 +167,30 @@ The next `burn_baba` ladder should stay local first:
 
 The current correct label for the local GPU side is still "shadow/probe", not
 "matvec backend".
+
+## T4 Live-Input Sidepath
+
+Status: implemented as a CPU-authoritative probe scaffold.
+
+The old T3 artifact is preserved as the active GPU proof:
+`gfx12-static-dp4a-hdc1-stateless-store-then-ts-eot`.
+
+A T4 catalog rung now exists in `trueos-eu`:
+`gfx12-t4-live-x-static-dp4a-requirement-hdc1-store-then-ts-eot`.
+It deliberately reuses the proven T3 EU shell for now, but has its own artifact
+kind so the next live-load kernel can be switched in without losing the known
+good static DP4A/HDC/EOT baseline.
+
+At the Lumen callsite, `burn_baby::matvec_rowmajor_bf16` now emits a one-shot
+`lumen-gpu-shadow: director-step step=4 mode=t4-live-row-probe` record once the
+static GPU artifact is proven.  That record includes:
+
+- live `x` pointer, byte size, and checksum
+- resolved matrix manifest id/name hash when available
+- row-0 BF16 pointer and checksum
+- CPU-authoritative row-0 dot bits
+- CPU-authoritative `live x[0..4] * static [1,2,3,4]` bits
+
+This proves the exact tuple the first real T4 GPU load kernel must reproduce:
+manifest row + live activation vector + expected output.  It still logs
+`gpu_submission=0`, so it does not overclaim live GPU memory loads yet.
