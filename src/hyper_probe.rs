@@ -242,86 +242,11 @@ fn hyper_http_probe_endpoint() -> api::EndpointV4 {
     }
 }
 
-async fn vnet_send_tcp_all(
-    vnet: &crate::r::net::VNet,
-    handle: api::NetHandle,
-    data: &[u8],
-) -> Result<(), &'static str> {
-    for chunk in data.chunks(api::MAX_MSG) {
-        let mut sent = false;
-        for _ in 0..64 {
-            if vnet
-                .submit(api::Command::SendTcp {
-                    handle,
-                    data: api::ByteBuf::from_slice_trunc(chunk),
-                })
-                .is_ok()
-            {
-                sent = true;
-                break;
-            }
-            tokio::time::sleep(core::time::Duration::from_millis(1)).await;
-        }
-        if !sent {
-            return Err("vnet.send_tcp");
-        }
-    }
-    Ok(())
-}
-
-async fn vnet_tcp_bridge(
-    vnet: crate::r::net::VNet,
-    handle: api::NetHandle,
-    mut io: DuplexStream,
-) -> Result<(), &'static str> {
-    let mut outbound = [0u8; 2048];
-    loop {
-        tokio::select! {
-            read = io.read(&mut outbound) => {
-                let n = read.map_err(|_| "vnet.bridge_read")?;
-                if n == 0 {
-                    break;
-                }
-                vnet_send_tcp_all(&vnet, handle, &outbound[..n]).await?;
-            }
-            _ = tokio::time::sleep(core::time::Duration::from_millis(1)) => {
-                for _ in 0..64 {
-                    let Some(ev) = vnet.pop_event() else {
-                        break;
-                    };
-                    match ev {
-                        api::Event::TcpData { handle: h, data } if h == handle => {
-                            io.write_all(data.as_slice())
-                                .await
-                                .map_err(|_| "vnet.bridge_write")?;
-                        }
-                        api::Event::Closed { handle: h } if h == handle => {
-                            let _ = io.shutdown().await;
-                            return Ok(());
-                        }
-                        api::Event::Error { .. } => return Err("vnet.bridge_error"),
-                        _ => {}
-                    }
-                }
-            }
-        }
-    }
-
-    let _ = vnet.submit(api::Command::Close { handle });
-    let _ = io.shutdown().await;
-    Ok(())
-}
-
 async fn connect_example_de_vnet() -> Result<DuplexStream, &'static str> {
     let remote = hyper_http_probe_endpoint();
 
-    let Some(vnet) = crate::r::net::VNet::open_primary() else {
-        return Err("net.http1.example_de.vnet_open");
-    };
-
     crate::log!(
-        "hyper_probe: net.http1.example_de connect owner={} host={} remote={}.{}.{}.{}:{}\n",
-        vnet.owner(),
+        "hyper_probe: net.http1.example_de connect host={} remote={}.{}.{}.{}:{}\n",
         HYPER_HTTP_PROBE_HOST,
         remote.addr[0],
         remote.addr[1],
@@ -330,58 +255,21 @@ async fn connect_example_de_vnet() -> Result<DuplexStream, &'static str> {
         remote.port
     );
 
-    vnet.submit(api::Command::OpenTcpConnect { remote })
-        .map_err(|_| "net.http1.example_de.vnet_connect_submit")?;
-
-    let connect_deadline = tokio::time::Instant::now() + core::time::Duration::from_millis(10_000);
-    let mut tcp_handle = None;
-    let handle = 'connect: loop {
-        while let Some(ev) = vnet.pop_event() {
-            match ev {
-                api::Event::Opened { handle, kind } if kind == api::SocketKind::Tcp => {
-                    crate::log!("hyper_probe: net.http1.example_de opened handle={}\n", handle.0);
-                    tcp_handle = Some(handle);
-                }
-                api::Event::TcpEstablished { handle, .. } => {
-                    if tcp_handle.is_none() {
-                        tcp_handle = Some(handle);
-                    }
-                    if tcp_handle == Some(handle) {
-                        break 'connect handle;
-                    }
-                }
-                api::Event::Error { msg } => {
-                    crate::log!("hyper_probe: net.http1.example_de vnet error {}\n", msg);
-                    return Err("net.http1.example_de.vnet_connect");
-                }
-                _ => {}
-            }
-        }
-
-        if tokio::time::Instant::now() >= connect_deadline {
-            match tcp_handle {
-                Some(handle) => crate::log!(
-                    "hyper_probe: net.http1.example_de connect timeout after opened handle={}\n",
-                    handle.0
-                ),
-                None => crate::log!(
-                    "hyper_probe: net.http1.example_de connect timeout before opened event\n"
-                ),
-            }
-            return Err("net.http1.example_de.vnet_connect_timeout");
-        }
-
-        tokio::time::sleep(core::time::Duration::from_millis(1)).await;
-    };
-
-    let (client_io, bridge_io) = tokio::io::duplex(16 * 1024);
-    tokio::spawn(async move {
-        if let Err(stage) = vnet_tcp_bridge(vnet, handle, bridge_io).await {
-            crate::log!("hyper_probe: note net.http1.example_de bridge ended at {}\n", stage);
-        }
-    });
-
-    Ok(client_io)
+    crate::t::net::vnet_stream::connect_tcp_v4_stream(
+        crate::r::net::NetProfile::default(),
+        remote,
+        10_000,
+        16 * 1024,
+        "hyper_probe",
+    )
+    .await
+    .map_err(|err| {
+        crate::log!(
+            "hyper_probe: net.http1.example_de vnet connect failed stage={}\n",
+            err.as_stage()
+        );
+        err.as_stage()
+    })
 }
 
 async fn probe_hyper_http1_example_de() -> Result<(), &'static str> {

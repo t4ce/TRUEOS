@@ -6,7 +6,7 @@ use alloc::{format, string::String, vec::Vec};
 use core::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 
 use embassy_time::{Duration, Instant, Timer};
-use v::vnet::{self, ByteBuf, Command, EndpointV4, Event, NetHandle, SocketKind};
+use v::vnet::{Command, EndpointV4, Event, NetHandle, SocketKind};
 
 use crate::r::net::{NetProfile, VNet, ports};
 use crate::t::net::dns::{self, DnsConfig};
@@ -255,14 +255,9 @@ impl FtpSocket {
             return Err(FtpError::Protocol);
         }
 
-        for chunk in data.chunks(vnet::MAX_MSG) {
-            self.net
-                .submit(Command::SendTcp {
-                    handle: data_handle,
-                    data: ByteBuf::from_slice_trunc(chunk),
-                })
-                .map_err(|_| FtpError::Io)?;
-        }
+        self.net
+            .send_tcp_all(data_handle, data)
+            .map_err(|_| FtpError::Io)?;
 
         self.net
             .submit(Command::Close {
@@ -289,14 +284,9 @@ impl FtpSocket {
         let mut line = String::from(command);
         line.push_str("\r\n");
 
-        for chunk in line.as_bytes().chunks(vnet::MAX_MSG) {
-            self.net
-                .submit(Command::SendTcp {
-                    handle: self.ctrl_handle,
-                    data: ByteBuf::from_slice_trunc(chunk),
-                })
-                .map_err(|_| FtpError::Io)?;
-        }
+        self.net
+            .send_tcp_all(self.ctrl_handle, line.as_bytes())
+            .map_err(|_| FtpError::Io)?;
 
         Ok(())
     }
@@ -955,13 +945,7 @@ fn ftp_send_reply(
 }
 
 fn ftp_send_raw(vnet: &VNet, handle: NetHandle, bytes: &[u8]) -> Result<(), ()> {
-    for chunk in bytes.chunks(vnet::MAX_MSG) {
-        vnet.submit(Command::SendTcp {
-            handle,
-            data: ByteBuf::from_slice_trunc(chunk),
-        })?;
-    }
-    Ok(())
+    vnet.send_tcp_all(handle, bytes)
 }
 
 fn ftp_take_line(rx: &mut Vec<u8>) -> Option<String> {

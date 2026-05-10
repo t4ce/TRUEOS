@@ -2,22 +2,20 @@ extern crate alloc;
 extern crate std;
 
 use alloc::{boxed::Box, format, string::String, string::ToString, vec::Vec};
-use core::{
-    sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, Ordering},
-};
+use core::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, Ordering};
 use std::{io, net::SocketAddr};
 
 use axum::{
+    Router,
     body::{Body, Bytes},
     extract::{DefaultBodyLimit, OriginalUri},
     http::{
-        header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE},
         StatusCode,
+        header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE},
     },
     response::Response,
     routing::{get, post},
     serve::ListenerExt,
-    Router,
 };
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use serde::{Deserialize, Serialize};
@@ -162,12 +160,7 @@ fn text_response(status: u16, content_type: &'static str, body: &'static str) ->
     response(status, content_type, body.as_bytes().to_vec(), false)
 }
 
-fn response(
-    status: u16,
-    content_type: &'static str,
-    body: Vec<u8>,
-    no_store: bool,
-) -> Response {
+fn response(status: u16, content_type: &'static str, body: Vec<u8>, no_store: bool) -> Response {
     let mut builder = Response::builder()
         .status(status_code(status))
         .header(CONTENT_TYPE, content_type)
@@ -189,7 +182,9 @@ async fn load_store() -> MailStore {
         return MailStore::default();
     };
     match crate::r::fs::trueosfs::file_out_async(disk, MAIL_STORE_PATH).await {
-        Ok(Some(bytes)) => serde_json::from_slice::<MailStore>(bytes.as_slice()).unwrap_or_default(),
+        Ok(Some(bytes)) => {
+            serde_json::from_slice::<MailStore>(bytes.as_slice()).unwrap_or_default()
+        }
         _ => MailStore::default(),
     }
 }
@@ -225,7 +220,8 @@ async fn write_config_template(disk: crate::disc::block::DeviceHandle) -> Result
         "pop3_port": mail_config::POP3_PORT,
         "note": "Fill smtp_pass with the mailbox password. The kernel falls back to allports.rs while this placeholder remains."
     });
-    let bytes = serde_json::to_vec_pretty(&template).map_err(|_| "config template serialize failed")?;
+    let bytes =
+        serde_json::to_vec_pretty(&template).map_err(|_| "config template serialize failed")?;
     match crate::r::fs::trueosfs::file_in_async(disk, MAIL_CONFIG_PATH, bytes.as_slice()).await {
         Ok(true) => Ok(()),
         Ok(false) => Err("config template write refused"),
@@ -348,12 +344,23 @@ fn header_value(raw: &str) -> String {
         .collect()
 }
 
+fn decoded_header_value(raw: &str) -> String {
+    decode_rfc2047_words(raw)
+        .unwrap_or_else(|| header_value(raw))
+        .chars()
+        .filter(|ch| *ch != '\r' && *ch != '\n')
+        .take(240)
+        .collect()
+}
+
 fn valid_addr(raw: &str) -> bool {
     let text = raw.trim();
     !text.is_empty()
         && text.len() <= 254
         && text.contains('@')
-        && !text.chars().any(|ch| ch <= '\u{1f}' || ch == '<' || ch == '>')
+        && !text
+            .chars()
+            .any(|ch| ch <= '\u{1f}' || ch == '<' || ch == '>')
 }
 
 fn recipients(to: &str) -> Vec<String> {
@@ -395,6 +402,12 @@ fn header_lookup<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a 
         .map(|(_, value)| value.as_str())
 }
 
+fn header_contains(headers: &[(String, String)], name: &str, needle: &str) -> bool {
+    header_lookup(headers, name)
+        .map(|value| value.to_ascii_lowercase().contains(needle))
+        .unwrap_or(false)
+}
+
 fn parse_mail_headers(raw: &str) -> Vec<(String, String)> {
     let mut headers: Vec<(String, String)> = Vec::new();
     for line in raw.lines() {
@@ -413,29 +426,270 @@ fn parse_mail_headers(raw: &str) -> Vec<(String, String)> {
     headers
 }
 
+fn split_headers_body(text: &str) -> (&str, &str) {
+    text.split_once("\r\n\r\n")
+        .or_else(|| text.split_once("\n\n"))
+        .unwrap_or((text, ""))
+}
+
+fn content_type_boundary(headers: &[(String, String)]) -> Option<String> {
+    let value = header_lookup(headers, "Content-Type")?;
+    for part in value.split(';').skip(1) {
+        let (key, raw_value) = part.split_once('=')?;
+        if key.trim().eq_ignore_ascii_case("boundary") {
+            let trimmed = raw_value.trim().trim_matches('"');
+            if !trimmed.is_empty() {
+                return Some(String::from(trimmed));
+            }
+        }
+    }
+    None
+}
+
+fn extract_mail_body(headers: &[(String, String)], body: &str) -> String {
+    if header_contains(headers, "Content-Type", "multipart/") {
+        if let Some(boundary) = content_type_boundary(headers) {
+            if let Some(text) = extract_multipart_text(body, boundary.as_str()) {
+                return text;
+            }
+        }
+    }
+
+    let decoded = decode_transfer_body(body, header_lookup(headers, "Content-Transfer-Encoding"));
+    if header_contains(headers, "Content-Type", "text/html") {
+        strip_html(decoded.as_str())
+    } else {
+        decoded
+    }
+}
+
+fn extract_multipart_text(body: &str, boundary: &str) -> Option<String> {
+    let marker = format!("--{}", boundary);
+    let mut html_fallback: Option<String> = None;
+    for part in body.split(marker.as_str()).skip(1) {
+        let part = part.trim_start_matches("\r\n").trim_start_matches('\n');
+        if part.starts_with("--") {
+            break;
+        }
+        let (part_headers_raw, part_body) = split_headers_body(part);
+        let part_headers = parse_mail_headers(part_headers_raw);
+        if header_contains(&part_headers, "Content-Disposition", "attachment") {
+            continue;
+        }
+        if header_contains(&part_headers, "Content-Type", "multipart/") {
+            if let Some(boundary) = content_type_boundary(&part_headers) {
+                if let Some(text) = extract_multipart_text(part_body, boundary.as_str()) {
+                    return Some(text);
+                }
+            }
+        }
+        if header_contains(&part_headers, "Content-Type", "text/plain")
+            || header_lookup(&part_headers, "Content-Type").is_none()
+        {
+            let text = decode_transfer_body(
+                part_body,
+                header_lookup(&part_headers, "Content-Transfer-Encoding"),
+            );
+            if !text.trim().is_empty() {
+                return Some(text);
+            }
+        }
+        if header_contains(&part_headers, "Content-Type", "text/html") {
+            let text = decode_transfer_body(
+                part_body,
+                header_lookup(&part_headers, "Content-Transfer-Encoding"),
+            );
+            let stripped = strip_html(text.as_str());
+            if !stripped.trim().is_empty() {
+                html_fallback = Some(stripped);
+            }
+        }
+    }
+    html_fallback
+}
+
+fn decode_transfer_body(body: &str, encoding: Option<&str>) -> String {
+    let decoded = match encoding.map(|value| value.trim().to_ascii_lowercase()) {
+        Some(value) if value.contains("quoted-printable") => {
+            decode_quoted_printable(body.as_bytes())
+        }
+        Some(value) if value.contains("base64") => {
+            let compact: String = body.chars().filter(|ch| !ch.is_whitespace()).collect();
+            base64_decode(compact.as_str()).unwrap_or_else(|| body.as_bytes().to_vec())
+        }
+        _ => body.as_bytes().to_vec(),
+    };
+    String::from_utf8_lossy(decoded.as_slice())
+        .replace("\r\n", "\n")
+        .trim()
+        .to_string()
+}
+
+fn decode_quoted_printable(input: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i < input.len() {
+        if input[i] == b'=' {
+            if input.get(i + 1) == Some(&b'\r') && input.get(i + 2) == Some(&b'\n') {
+                i += 3;
+                continue;
+            }
+            if input.get(i + 1) == Some(&b'\n') {
+                i += 2;
+                continue;
+            }
+            if i + 2 < input.len() {
+                if let (Some(hi), Some(lo)) = (hex_value(input[i + 1]), hex_value(input[i + 2])) {
+                    out.push((hi << 4) | lo);
+                    i += 3;
+                    continue;
+                }
+            }
+        }
+        out.push(input[i]);
+        i += 1;
+    }
+    out
+}
+
+fn decode_rfc2047_words(raw: &str) -> Option<String> {
+    let mut out = String::new();
+    let mut rest = raw;
+    let mut changed = false;
+    while let Some(start) = rest.find("=?") {
+        out.push_str(&rest[..start]);
+        let after_start = &rest[start + 2..];
+        let Some(charset_end) = after_start.find('?') else {
+            out.push_str(&rest[start..]);
+            return changed.then_some(out);
+        };
+        let after_charset = &after_start[charset_end + 1..];
+        let Some(encoding_end) = after_charset.find('?') else {
+            out.push_str(&rest[start..]);
+            return changed.then_some(out);
+        };
+        let encoding = &after_charset[..encoding_end];
+        let after_encoding = &after_charset[encoding_end + 1..];
+        let Some(encoded_end) = after_encoding.find("?=") else {
+            out.push_str(&rest[start..]);
+            return changed.then_some(out);
+        };
+        let encoded = &after_encoding[..encoded_end];
+        let bytes = if encoding.eq_ignore_ascii_case("Q") {
+            decode_rfc2047_q(encoded)
+        } else if encoding.eq_ignore_ascii_case("B") {
+            base64_decode(encoded)?
+        } else {
+            return None;
+        };
+        out.push_str(String::from_utf8_lossy(bytes.as_slice()).as_ref());
+        rest = &after_encoding[encoded_end + 2..];
+        changed = true;
+    }
+    out.push_str(rest);
+    changed.then_some(out)
+}
+
+fn decode_rfc2047_q(input: &str) -> Vec<u8> {
+    let bytes = input.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'_' => out.push(b' '),
+            b'=' if i + 2 < bytes.len() => {
+                if let (Some(hi), Some(lo)) = (hex_value(bytes[i + 1]), hex_value(bytes[i + 2])) {
+                    out.push((hi << 4) | lo);
+                    i += 3;
+                    continue;
+                }
+                out.push(bytes[i]);
+            }
+            byte => out.push(byte),
+        }
+        i += 1;
+    }
+    out
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn base64_decode(input: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut buf = 0u32;
+    let mut bits = 0u8;
+    for byte in input.bytes().filter(|byte| !byte.is_ascii_whitespace()) {
+        if byte == b'=' {
+            break;
+        }
+        let value = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        } as u32;
+        buf = (buf << 6) | value;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(((buf >> bits) & 0xff) as u8);
+        }
+    }
+    Some(out)
+}
+
+fn strip_html(input: &str) -> String {
+    let mut out = String::new();
+    let mut in_tag = false;
+    for ch in input.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => {
+                in_tag = false;
+                out.push(' ');
+            }
+            _ if !in_tag => out.push(ch),
+            _ => {}
+        }
+    }
+    out.replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .trim()
+        .to_string()
+}
+
 fn parse_pop3_message(raw: &[u8], fallback_id: String, pop3_msg_id: u32) -> Option<MailMessage> {
     let text = core::str::from_utf8(raw).ok()?;
-    let (header_text, body) = text
-        .split_once("\r\n\r\n")
-        .or_else(|| text.split_once("\n\n"))
-        .unwrap_or((text, ""));
+    let (header_text, body) = split_headers_body(text);
     let headers = parse_mail_headers(header_text);
     let id = header_lookup(&headers, "Message-ID")
         .map(header_value)
         .filter(|value| !value.is_empty())
         .unwrap_or(fallback_id);
     let from = header_lookup(&headers, "From")
-        .map(header_value)
+        .map(decoded_header_value)
         .unwrap_or_else(|| String::from("unknown"));
     let to = header_lookup(&headers, "To")
-        .map(header_value)
+        .map(decoded_header_value)
         .unwrap_or_default();
     let subject = header_lookup(&headers, "Subject")
-        .map(header_value)
+        .map(decoded_header_value)
         .unwrap_or_else(|| String::from("(no subject)"));
     let date = header_lookup(&headers, "Date")
         .map(header_value)
         .unwrap_or_else(now_date_string);
+    let body = extract_mail_body(&headers, body);
 
     Some(MailMessage {
         id,
@@ -443,7 +697,7 @@ fn parse_pop3_message(raw: &[u8], fallback_id: String, pop3_msg_id: u32) -> Opti
         to,
         subject,
         date,
-        body: String::from(body.trim()),
+        body,
         unread: true,
         status: String::from("received"),
         error: None,
@@ -465,24 +719,17 @@ async fn refresh_inbox_from_pop3(config: &MailConfig) -> Result<usize, &'static 
         })?;
     crate::log!("webmail-http: pop3 refresh login user={}\n", config.smtp_user.as_str());
     client
-        .login(
-            config.smtp_user.as_str(),
-            config.smtp_pass.as_str(),
-            MAIL_POP3_TIMEOUT_MS,
-        )
+        .login(config.smtp_user.as_str(), config.smtp_pass.as_str(), MAIL_POP3_TIMEOUT_MS)
         .await
         .map_err(|err| {
             crate::log!("webmail-http: pop3 login failed err={:?}\n", err);
             "pop3 login failed"
         })?;
 
-    let (count, total_bytes) = client
-        .stat(MAIL_POP3_TIMEOUT_MS)
-        .await
-        .map_err(|err| {
-            crate::log!("webmail-http: pop3 stat failed err={:?}\n", err);
-            "pop3 stat failed"
-        })?;
+    let (count, total_bytes) = client.stat(MAIL_POP3_TIMEOUT_MS).await.map_err(|err| {
+        crate::log!("webmail-http: pop3 stat failed err={:?}\n", err);
+        "pop3 stat failed"
+    })?;
     MAIL_INBOX_LAST_LIST_COUNT.store(count, Ordering::Release);
     crate::log!(
         "webmail-http: pop3 stat count={} bytes={} taking={}\n",
@@ -498,17 +745,16 @@ async fn refresh_inbox_from_pop3(config: &MailConfig) -> Result<usize, &'static 
     for msg_id in (first_id..=count).rev() {
         match client.list_one(msg_id, MAIL_POP3_TIMEOUT_MS).await {
             Ok(entry) => latest.push(entry),
-            Err(err) => crate::log!(
-                "webmail-http: pop3 LIST {} failed err={:?}; skipping\n",
-                msg_id,
-                err
-            ),
+            Err(err) => {
+                crate::log!("webmail-http: pop3 LIST {} failed err={:?}; skipping\n", msg_id, err)
+            }
         }
     }
     let mut store = load_store().await;
     let mut added = 0usize;
     let mut retrieved = 0usize;
     let mut parsed = 0usize;
+    let mut updated = false;
     let latest_ids: Vec<u32> = latest.iter().map(|(msg_id, _)| *msg_id).collect();
     crate::log!(
         "webmail-http: pop3 latest listed count={} taking={}\n",
@@ -518,18 +764,8 @@ async fn refresh_inbox_from_pop3(config: &MailConfig) -> Result<usize, &'static 
 
     for (msg_id, size) in latest.into_iter() {
         let fallback_id = format!("pop3-{}-{}", msg_id, size);
-        if let Some(existing) = store.messages.iter_mut().find(|message| message.id == fallback_id)
-        {
-            existing.pop3_msg_id = Some(msg_id);
-            continue;
-        }
         let raw = match client
-            .top(
-                msg_id,
-                MAIL_POP3_TOP_BODY_LINES,
-                MAIL_POP3_TIMEOUT_MS,
-                MAIL_POP3_TOP_MAX_BYTES,
-            )
+            .top(msg_id, MAIL_POP3_TOP_BODY_LINES, MAIL_POP3_TIMEOUT_MS, MAIL_POP3_TOP_MAX_BYTES)
             .await
         {
             Ok(raw) => raw,
@@ -563,9 +799,20 @@ async fn refresh_inbox_from_pop3(config: &MailConfig) -> Result<usize, &'static 
             continue;
         };
         parsed = parsed.saturating_add(1);
-        if let Some(existing) = store.messages.iter_mut().find(|existing| existing.id == message.id)
+        if let Some(existing) = store
+            .messages
+            .iter_mut()
+            .find(|existing| existing.id == message.id)
         {
+            existing.from = message.from;
+            existing.to = message.to;
+            existing.subject = message.subject;
+            existing.date = message.date;
+            existing.body = message.body;
+            existing.status = message.status;
+            existing.error = message.error;
             existing.pop3_msg_id = Some(msg_id);
+            updated = true;
             continue;
         }
         store.messages.push(message);
@@ -583,7 +830,7 @@ async fn refresh_inbox_from_pop3(config: &MailConfig) -> Result<usize, &'static 
                 .map(|msg_id| latest_ids.contains(&msg_id))
                 .unwrap_or(true)
     });
-    if added > 0 || store.messages.len() != before_retain {
+    if added > 0 || updated || store.messages.len() != before_retain {
         save_store(&store).await?;
     }
     crate::log!(
@@ -633,11 +880,7 @@ async fn refresh_inbox_once(reason: &'static str) -> Result<usize, &'static str>
             );
         }
         Err(err) => {
-            crate::log!(
-                "webmail-http: inbox refresh failed reason={} err={}\n",
-                reason,
-                err
-            );
+            crate::log!("webmail-http: inbox refresh failed reason={} err={}\n", reason, err);
         }
     }
 
@@ -652,10 +895,7 @@ async fn inbox_refresh_loop() {
     );
     let _ = refresh_inbox_once("startup").await;
     loop {
-        tokio::time::sleep(core::time::Duration::from_secs(
-            MAIL_INBOX_REFRESH_INTERVAL_SECS,
-        ))
-        .await;
+        tokio::time::sleep(core::time::Duration::from_secs(MAIL_INBOX_REFRESH_INTERVAL_SECS)).await;
         let _ = refresh_inbox_once("interval").await;
     }
 }
@@ -671,7 +911,12 @@ async fn update_message_status(id: &str, status: &str, error: Option<String>) {
 
 async fn send_mail_job(id: String) {
     let store = load_store().await;
-    let Some(message) = store.messages.iter().find(|message| message.id == id).cloned() else {
+    let Some(message) = store
+        .messages
+        .iter()
+        .find(|message| message.id == id)
+        .cloned()
+    else {
         return;
     };
     let loaded = match load_config().await {
@@ -717,11 +962,7 @@ async fn send_mail_job(id: String) {
     let result = async {
         let mut client = SmtpClient::connect(MAIL_SMTP_TIMEOUT_MS).await?;
         client
-            .auth_login(
-                config.smtp_user.as_str(),
-                config.smtp_pass.as_str(),
-                MAIL_SMTP_TIMEOUT_MS,
-            )
+            .auth_login(config.smtp_user.as_str(), config.smtp_pass.as_str(), MAIL_SMTP_TIMEOUT_MS)
             .await?;
         client
             .send_mail(from, rcpt_refs.as_slice(), wire.as_str(), MAIL_SMTP_TIMEOUT_MS)
@@ -761,11 +1002,7 @@ async fn handle_list_local() -> Response {
         .into_iter()
         .filter(|message| message.status == "received")
         .collect();
-    inbox.sort_by(|a, b| {
-        b.pop3_msg_id
-            .unwrap_or(0)
-            .cmp(&a.pop3_msg_id.unwrap_or(0))
-    });
+    inbox.sort_by(|a, b| b.pop3_msg_id.unwrap_or(0).cmp(&a.pop3_msg_id.unwrap_or(0)));
     let mut messages: Vec<MailSummary> = inbox
         .into_iter()
         .map(|message| MailSummary {
@@ -840,10 +1077,7 @@ async fn handle_status_local() -> Response {
 }
 
 fn mail_worker_unavailable_response() -> Response {
-    json_response(
-        500,
-        &serde_json::json!({"ok": false, "error": "mail worker unavailable"}),
-    )
+    json_response(500, &serde_json::json!({"ok": false, "error": "mail worker unavailable"}))
 }
 
 async fn run_mail_local<F, MakeFuture>(make_future: MakeFuture) -> Response
@@ -920,14 +1154,13 @@ async fn handle_read_local(query: Option<String>) -> Response {
 async fn handle_send_local(body: Bytes) -> Response {
     crate::log!("webmail-http: api send bytes={}\n", body.len());
     if body.len() > MAIL_HTTP_BODY_MAX {
-        return json_response(
-            413,
-            &serde_json::json!({"ok": false, "error": "request too large"}),
-        );
+        return json_response(413, &serde_json::json!({"ok": false, "error": "request too large"}));
     }
     let req = match serde_json::from_slice::<MailSendRequest>(body.as_ref()) {
         Ok(req) => req,
-        Err(_) => return json_response(400, &serde_json::json!({"ok": false, "error": "bad json"})),
+        Err(_) => {
+            return json_response(400, &serde_json::json!({"ok": false, "error": "bad json"}));
+        }
     };
     let rcpts = recipients(req.to.as_str());
     if rcpts.is_empty() || req.body.trim().is_empty() {

@@ -11,7 +11,7 @@ use embedded_websocket::{
 };
 use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng;
-use v::vnet::{ByteBuf, Command, EndpointV4, Event, NetHandle, SocketKind};
+use v::vnet::{Command, EndpointV4, Event, NetHandle, SocketKind};
 
 use crate::r::net::{NetProfile, VNet};
 use crate::time::unix_time_seconds;
@@ -106,11 +106,8 @@ impl WsConnection {
                     }
                     Event::TcpEstablished { handle: h, .. } => {
                         if Some(h) == handle {
-                            net.submit(Command::SendTcp {
-                                handle: h,
-                                data: ByteBuf::from_slice_trunc(&handshake_data),
-                            })
-                            .map_err(|_| WsError::Io)?;
+                            net.send_tcp_all(h, &handshake_data)
+                                .map_err(|_| WsError::Io)?;
                             break;
                         }
                     }
@@ -215,10 +212,7 @@ impl WsConnection {
 
         if let Some(h) = self.handle {
             self.net
-                .submit(Command::SendTcp {
-                    handle: h,
-                    data: ByteBuf::from_slice_trunc(&buf[..len]),
-                })
+                .send_tcp_all(h, &buf[..len])
                 .map_err(|_| WsError::Io)?;
         }
         Ok(())
@@ -268,10 +262,7 @@ impl WsConnection {
                             &mut payload,
                         ) && let Some(h) = self.handle
                         {
-                            let _ = self.net.submit(Command::SendTcp {
-                                handle: h,
-                                data: ByteBuf::from_slice_trunc(&buf[..len]),
-                            });
+                            let _ = self.net.send_tcp_all(h, &buf[..len]);
                         }
                         None
                     }
@@ -287,10 +278,7 @@ impl WsConnection {
                             &mut payload,
                         ) && let Some(h) = self.handle
                         {
-                            let _ = self.net.submit(Command::SendTcp {
-                                handle: h,
-                                data: ByteBuf::from_slice_trunc(&buf[..len]),
-                            });
+                            let _ = self.net.send_tcp_all(h, &buf[..len]);
                         }
                         None
                     }

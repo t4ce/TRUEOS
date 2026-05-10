@@ -7,7 +7,10 @@ use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
 use v::vnet;
 
-use crate::r::net::{NetProfile, VNet};
+use crate::r::net::{
+    NetProfile, VNet,
+    udp::{VNetUdpEndpoint, VNetUdpEvent, VNetUdpPacket},
+};
 use crate::t::net::dns::{self, DnsConfig};
 
 const NTP_SERVER_HOSTS: [&str; 4] = [
@@ -96,30 +99,6 @@ fn unix_from_ntp_frame(words: &[u32; 12]) -> Option<u64> {
     Some(ntp_secs - NTP_UNIX_EPOCH_OFFSET)
 }
 
-async fn open_udp(net: &VNet, local_port: u16) -> Option<vnet::NetHandle> {
-    let _ = net.submit(vnet::Command::OpenUdp { port: local_port });
-
-    let deadline = Instant::now() + EmbassyDuration::from_millis(NTP_TIMEOUT_MS);
-    loop {
-        for _ in 0..64 {
-            let Some(ev) = net.pop_event() else {
-                break;
-            };
-            if let vnet::Event::Opened { handle, kind } = ev
-                && kind == vnet::SocketKind::Udp
-            {
-                return Some(handle);
-            }
-        }
-
-        if Instant::now() >= deadline {
-            return None;
-        }
-
-        Timer::after(EmbassyDuration::from_millis(5)).await;
-    }
-}
-
 #[inline]
 fn next_ntp_host() -> &'static str {
     let idx = (NTP_HOST_SEQ.fetch_add(1, Ordering::Relaxed) as usize) % NTP_SERVER_HOSTS.len();
@@ -133,36 +112,44 @@ async fn query_ntp_words_for_device(dev_idx: usize, host: &str) -> Option<[u32; 
         .ok()?;
 
     let net = VNet::open(dev_idx)?;
-    let udp = open_udp(&net, alloc_local_port()).await?;
+    let mut udp = VNetUdpEndpoint::bind(
+        &net,
+        alloc_local_port(),
+        EmbassyDuration::from_millis(NTP_TIMEOUT_MS),
+    )
+    .await?;
 
     let req = build_ntp_request();
-    let _ = net.submit(vnet::Command::SendUdp {
-        handle: udp,
-        remote: vnet::EndpointV4 {
+    let _ = udp.send_v4(
+        vnet::EndpointV4 {
             addr: remote_ip,
             port: NTP_PORT,
         },
-        data: vnet::ByteBuf::from_slice_trunc(&req),
-    });
+        &req,
+    );
 
     let deadline = Instant::now() + EmbassyDuration::from_millis(NTP_TIMEOUT_MS);
     loop {
         for _ in 0..64 {
-            let Some(ev) = net.pop_event() else {
+            let Some(ev) = udp.poll_event() else {
                 break;
             };
-            if let vnet::Event::UdpPacket { handle, from, data } = ev {
-                if handle != udp || from.port != NTP_PORT || from.addr != remote_ip {
+            match ev {
+                VNetUdpEvent::Packet(VNetUdpPacket::V4 { from, data }) => {
+                    if from.port != NTP_PORT || from.addr != remote_ip {
+                        continue;
+                    }
+
+                    return parse_ntp_words(data.as_slice());
+                }
+                VNetUdpEvent::Packet(VNetUdpPacket::V6 { .. }) => {
                     continue;
                 }
-
-                let _ = net.submit(vnet::Command::Close { handle: udp });
-                return parse_ntp_words(data.as_slice());
+                VNetUdpEvent::Closed => return None,
             }
         }
 
         if Instant::now() >= deadline {
-            let _ = net.submit(vnet::Command::Close { handle: udp });
             return None;
         }
 

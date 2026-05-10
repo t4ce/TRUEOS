@@ -228,7 +228,7 @@ function messageListMarkup(messages) {
           <span class="shrink-0 text-xs text-stone-500">${escapeHtml(formatDate(message.date))}</span>
         </div>
         <div class="truncate text-sm font-medium text-stone-900">${escapeHtml(message.subject || "(no subject)")}</div>
-        <div class="line-clamp-2 text-sm text-stone-500">${escapeHtml(message.preview || "")}</div>
+        <div class="message-preview text-sm text-stone-500">${escapeHtml(message.preview || "")}</div>
       </button>
     `)
     .join("");
@@ -239,10 +239,10 @@ function detailMarkup(message) {
     return `<div class="grid h-full place-items-center text-sm text-stone-500">Select a message to read.</div>`;
   }
   return `
-    <article class="mx-auto grid max-w-4xl gap-5">
+    <article class="mail-detail mx-auto grid max-w-4xl gap-5">
       <header class="border-b border-stone-200 pb-5">
         <div class="mb-3 flex items-center justify-between gap-3">
-          <h2 class="min-w-0 text-2xl font-semibold text-stone-950">${escapeHtml(message.subject || "(no subject)")}</h2>
+          <h2 class="min-w-0 break-words text-2xl font-semibold text-stone-950">${escapeHtml(message.subject || "(no subject)")}</h2>
           <span class="rounded-md border border-stone-200 bg-white px-2 py-1 text-xs text-stone-600">${escapeHtml(messageStatus(message))}</span>
         </div>
         <div class="grid gap-1 text-sm text-stone-600">
@@ -251,13 +251,13 @@ function detailMarkup(message) {
           ${metaRow("Date", formatDate(message.date))}
         </div>
       </header>
-      <pre class="whitespace-pre-wrap break-words font-sans text-base leading-7 text-stone-800">${escapeHtml(message.body || message.preview || "")}</pre>
+      <pre class="mail-body font-sans text-base leading-7 text-stone-800">${escapeHtml(message.body || message.preview || "")}</pre>
     </article>
   `;
 }
 
 function metaRow(label, value) {
-  return `<div><span class="mr-2 font-medium text-stone-900">${label}:</span><span>${escapeHtml(text(value, "-"))}</span></div>`;
+  return `<div class="grid grid-cols-[44px_minmax(0,1fr)] gap-2"><span class="font-medium text-stone-900">${label}:</span><span class="break-words">${escapeHtml(text(value, "-"))}</span></div>`;
 }
 
 function composeMarkup() {

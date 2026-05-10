@@ -2,29 +2,28 @@ extern crate alloc;
 extern crate std;
 
 use alloc::{boxed::Box, string::String as AllocString, string::ToString, vec::Vec};
-use core::{
-    convert::Infallible,
-    pin::Pin,
-    sync::atomic::{AtomicBool, AtomicU16, Ordering},
-    task::{Context, Poll},
-};
-use std::{future::poll_fn, io};
+use core::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+use std::{io, net::SocketAddr};
 
+use axum::{
+    body::{to_bytes, Body},
+    extract::Request,
+    http::{
+        header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE},
+        Method, StatusCode,
+    },
+    response::Response,
+    routing::any,
+    serve::ListenerExt,
+    Router,
+};
 use embassy_time::{Duration as EmbassyDuration, Timer};
-use hyper::{
-    body::{Body, Bytes, Frame, Incoming, SizeHint},
-    header,
-};
-use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream, ReadHalf, WriteHalf};
-use trueos_chat::{ChatConfig, ChatHub, ChatMethod, ChatRequest};
-use v::vnet as api;
+use trueos_chat::{ChatConfig, ChatHub, ChatMethod, ChatRequest, ChatResponse};
 
-use crate::{allports::services::CHAT_HTTP_TCP_PORT, r::net::VNet, t::net::hyper_io::HyperTokioIo};
+use crate::allports::services::CHAT_HTTP_TCP_PORT;
 
 const CHAT_HTTP_BODY_MAX: usize = 64 * 1024;
-const CHAT_HTTP_IDLE_POLL_MS: u64 = 10;
-const CHAT_HTTP_VNET_OPEN_RETRY_MS: u64 = 100;
-const CHAT_HTTP_LISTEN_POLL_MS: u64 = 25;
+const CHAT_HTTP_BIND_RETRY_MS: u64 = 100;
 const CHAT_HTTP_BLOCKING_LANE_RETRY_MS: u64 = 1000;
 const CHAT_SAVE_BATCH_MS: u64 = 10_000;
 const CHAT_SAVE_IDLE_MS: u64 = 1000;
@@ -48,55 +47,8 @@ pub fn current_port() -> Option<u16> {
     }
 }
 
-pub struct HyperBytesBody {
-    bytes: Option<Bytes>,
-}
-
-impl HyperBytesBody {
-    fn new(bytes: Vec<u8>) -> Self {
-        Self {
-            bytes: Some(Bytes::from(bytes)),
-        }
-    }
-}
-
-impl Body for HyperBytesBody {
-    type Data = Bytes;
-    type Error = Infallible;
-
-    fn poll_frame(
-        mut self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
-        Poll::Ready(self.bytes.take().map(|bytes| Ok(Frame::data(bytes))))
-    }
-
-    fn is_end_stream(&self) -> bool {
-        self.bytes.is_none()
-    }
-
-    fn size_hint(&self) -> SizeHint {
-        match self.bytes.as_ref() {
-            Some(bytes) => SizeHint::with_exact(bytes.len() as u64),
-            None => SizeHint::with_exact(0),
-        }
-    }
-}
-
-struct ChatSession {
-    handle: api::NetHandle,
-    inbound: WriteHalf<DuplexStream>,
-}
-
-struct ChatEndpoint {
-    vnet: &'static VNet,
-    listener: Option<(api::NetHandle, u16)>,
-    sessions: Vec<ChatSession>,
-    dev_idx: usize,
-}
-
-fn status_code(status: u16) -> hyper::StatusCode {
-    hyper::StatusCode::from_u16(status).unwrap_or(hyper::StatusCode::INTERNAL_SERVER_ERROR)
+fn status_code(status: u16) -> StatusCode {
+    StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 fn now_ms() -> u64 {
@@ -414,46 +366,44 @@ fn maybe_submit_lumen_chat_post(method: ChatMethod, path: &str, body: &[u8], sta
     }
 }
 
-async fn incoming_to_vec(mut body: Incoming, limit: usize) -> Result<Vec<u8>, ()> {
-    let mut out = Vec::new();
-    loop {
-        let next = poll_fn(|cx| Pin::new(&mut body).poll_frame(cx)).await;
-        let Some(frame) = next else {
-            return Ok(out);
-        };
-        let frame = frame.map_err(|_| ())?;
-        if let Ok(data) = frame.into_data() {
-            if out.len().saturating_add(data.len()) > limit {
-                return Err(());
-            }
-            out.extend_from_slice(&data);
-        }
+fn chat_response(response: ChatResponse) -> Response {
+    let no_cache = response.content_type.starts_with("application/json");
+    let mut builder = Response::builder()
+        .status(status_code(response.status))
+        .header(CONTENT_TYPE, response.content_type)
+        .header(CONTENT_LENGTH, response.body.len().to_string());
+    if no_cache {
+        builder = builder.header(CACHE_CONTROL, "no-store");
     }
+    builder
+        .body(Body::from(response.body))
+        .unwrap_or_else(|_| Response::new(Body::empty()))
 }
 
-async fn handle_hyper_request(
-    request: hyper::Request<Incoming>,
-) -> Result<hyper::Response<HyperBytesBody>, Infallible> {
+fn request_too_large_response() -> Response {
+    let body = b"{\"ok\":false,\"error\":\"request too large\"}".to_vec();
+    Response::builder()
+        .status(StatusCode::PAYLOAD_TOO_LARGE)
+        .header(CONTENT_TYPE, "application/json; charset=utf-8")
+        .header(CONTENT_LENGTH, body.len().to_string())
+        .header(CACHE_CONTROL, "no-store")
+        .body(Body::from(body))
+        .unwrap_or_else(|_| Response::new(Body::empty()))
+}
+
+async fn handle_chat_request(request: Request) -> Response {
     load_chat_hub_once_sync();
-    let method = match *request.method() {
-        hyper::Method::GET => ChatMethod::Get,
-        hyper::Method::POST => ChatMethod::Post,
+    let (parts, body) = request.into_parts();
+    let method = match parts.method {
+        Method::GET => ChatMethod::Get,
+        Method::POST => ChatMethod::Post,
         _ => ChatMethod::Other,
     };
-    let path = request.uri().path().to_string();
-    let query = request.uri().query().map(|query| query.to_string());
-    let body = match incoming_to_vec(request.into_body(), CHAT_HTTP_BODY_MAX).await {
-        Ok(body) => body,
-        Err(()) => {
-            let body = b"{\"ok\":false,\"error\":\"request too large\"}".to_vec();
-            return Ok(hyper::Response::builder()
-                .status(hyper::StatusCode::PAYLOAD_TOO_LARGE)
-                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
-                .header(header::CONTENT_LENGTH, body.len().to_string())
-                .header(header::CACHE_CONTROL, "no-store")
-                .body(HyperBytesBody::new(body))
-                .unwrap_or_else(|_| hyper::Response::new(HyperBytesBody::new(Vec::new()))));
-        }
+    let path = parts.uri.path().to_string();
+    let query = parts.uri.query().map(|query| query.to_string());
+    let body = match to_bytes(body, CHAT_HTTP_BODY_MAX).await {
+        Ok(body) => body.to_vec(),
+        Err(_) => return request_too_large_response(),
     };
 
     let response = {
@@ -471,129 +421,31 @@ async fn handle_hyper_request(
     if method == ChatMethod::Post && response.status == 200 {
         request_chat_hub_save("http-post");
     }
-    let no_cache = response.content_type.starts_with("application/json");
-    let mut builder = hyper::Response::builder()
-        .status(status_code(response.status))
-        .header(header::CONTENT_TYPE, response.content_type)
-        .header(header::CONTENT_LENGTH, response.body.len().to_string());
-    if no_cache {
-        builder = builder.header(header::CACHE_CONTROL, "no-store");
-    }
-    Ok(builder
-        .body(HyperBytesBody::new(response.body))
-        .unwrap_or_else(|_| hyper::Response::new(HyperBytesBody::new(Vec::new()))))
+    chat_response(response)
 }
 
-async fn send_tcp_all(vnet: &VNet, handle: api::NetHandle, data: &[u8]) -> Result<(), ()> {
-    for chunk in data.chunks(api::MAX_MSG) {
-        let mut sent = false;
-        for _ in 0..64 {
-            if vnet
-                .submit(api::Command::SendTcp {
-                    handle,
-                    data: api::ByteBuf::from_slice_trunc(chunk),
-                })
-                .is_ok()
-            {
-                sent = true;
-                break;
-            }
-            tokio::time::sleep(core::time::Duration::from_millis(1)).await;
-        }
-        if !sent {
-            return Err(());
-        }
-    }
-    Ok(())
+fn chat_router() -> Router {
+    Router::new()
+        .route("/", any(handle_chat_request))
+        .route("/api", any(handle_chat_request))
+        .route("/api/rooms", any(handle_chat_request))
+        .route("/api/rooms/{room}/messages", any(handle_chat_request))
+        .fallback(handle_chat_request)
 }
 
-async fn outbound_bridge(
-    vnet: &'static VNet,
-    handle: api::NetHandle,
-    mut stream: ReadHalf<DuplexStream>,
-) {
-    let mut buf = [0u8; 2048];
-    loop {
-        match stream.read(&mut buf).await {
-            Ok(0) => break,
-            Ok(n) => {
-                if send_tcp_all(vnet, handle, &buf[..n]).await.is_err() {
-                    break;
-                }
-            }
-            Err(_) => break,
-        }
-    }
-    let _ = vnet.submit(api::Command::Close { handle });
+fn primary_ipv4_addr(port: u16) -> Option<SocketAddr> {
+    let dev_idx = crate::net::primary_device_index();
+    let ip = crate::net::adapter::ipv4_at(dev_idx)?;
+    Some(SocketAddr::from((ip, port)))
 }
 
-fn spawn_hyper_session(vnet: &'static VNet, handle: api::NetHandle) -> ChatSession {
-    let (hyper_io, bridge_io) = tokio::io::duplex(32 * 1024);
-    let (bridge_read, bridge_write) = tokio::io::split(bridge_io);
-    tokio::spawn(outbound_bridge(vnet, handle, bridge_read));
-    tokio::spawn(async move {
-        let service = hyper::service::service_fn(handle_hyper_request);
-        if hyper::server::conn::http1::Builder::new()
-            .serve_connection(HyperTokioIo::new(hyper_io), service)
-            .await
-            .is_err()
-        {
-            crate::log!("chat-http: hyper connection failed handle={}\n", handle.0);
-        }
-    });
-    ChatSession {
-        handle,
-        inbound: bridge_write,
-    }
-}
-
-async fn open_lowest_available_listener(vnet: &VNet) -> Option<(api::NetHandle, u16)> {
-    for range in CHAT_HTTP_PORT_RANGES {
-        for port in range.clone() {
-            if vnet.submit(api::Command::OpenTcpListen { port }).is_err() {
-                continue;
-            }
-            let deadline = tokio::time::Instant::now() + core::time::Duration::from_millis(250);
-            loop {
-                while let Some(ev) = vnet.pop_event() {
-                    match ev {
-                        api::Event::Opened {
-                            handle,
-                            kind: api::SocketKind::Tcp,
-                        } => return Some((handle, port)),
-                        api::Event::Error { msg } => {
-                            crate::log!("chat-http: tcp {} unavailable: {}\n", port, msg);
-                            break;
-                        }
-                        _ => {}
-                    }
-                }
-                if tokio::time::Instant::now() >= deadline {
-                    crate::log!("chat-http: tcp {} listen timeout\n", port);
-                    break;
-                }
-                tokio::time::sleep(core::time::Duration::from_millis(CHAT_HTTP_LISTEN_POLL_MS))
-                    .await;
-            }
-        }
-    }
-    None
-}
-
-fn chat_dev_usable(dev_idx: usize) -> bool {
-    crate::net::adapter::ipv4_at(dev_idx).is_some()
-        || crate::net::link_state_at(dev_idx)
-            .map(|state| state.up)
-            .unwrap_or(false)
-}
-
-fn log_chat_endpoint(dev_idx: usize, vnet: &VNet, port: u16) {
+fn log_chat_endpoint(addr: SocketAddr) {
+    let dev_idx = crate::net::primary_device_index();
     let name = crate::net::device_name_at(dev_idx).unwrap_or("?");
     match crate::net::adapter::ipv4_at(dev_idx) {
         Some([a, b, c, d]) => crate::log!(
-            "chat-http: listening on tcp {} owner={} dev={} {} ip={}.{}.{}.{}\n",
-            port,
-            vnet.owner(),
+            "chat-http: axum listening on http://{}/ dev={} {} ip={}.{}.{}.{}\n",
+            addr,
             dev_idx,
             name,
             a,
@@ -602,151 +454,61 @@ fn log_chat_endpoint(dev_idx: usize, vnet: &VNet, port: u16) {
             d
         ),
         None => crate::log!(
-            "chat-http: listening on tcp {} owner={} dev={} {} ip=none\n",
-            port,
-            vnet.owner(),
+            "chat-http: axum listening on http://{}/ dev={} {} ip=none\n",
+            addr,
             dev_idx,
             name
         ),
     }
 }
 
-async fn chat_add_endpoints(endpoints: &mut Vec<ChatEndpoint>) -> usize {
-    let mut added = 0;
-    for dev_idx in 0..crate::net::device_count() {
-        if endpoints.iter().any(|endpoint| endpoint.dev_idx == dev_idx) {
-            continue;
+async fn bind_lowest_available_listener() -> Option<(tokio::net::TcpListener, SocketAddr)> {
+    for range in CHAT_HTTP_PORT_RANGES {
+        for port in range.clone() {
+            let Some(addr) = primary_ipv4_addr(port) else {
+                return None;
+            };
+            match tokio::net::TcpListener::bind(addr).await {
+                Ok(listener) => return Some((listener, addr)),
+                Err(err) => crate::log!(
+                    "chat-http: bind {} failed port={} kind={:?} err={}\n",
+                    addr,
+                    port,
+                    err.kind(),
+                    err
+                ),
+            }
         }
-        if !chat_dev_usable(dev_idx) {
-            continue;
-        }
-        let Some(vnet) = VNet::open(dev_idx) else {
-            continue;
-        };
-        let listener = open_lowest_available_listener(&vnet).await;
-        let Some((_, port)) = listener else {
-            crate::log!("chat-http: no free tcp port dev={}\n", dev_idx);
-            continue;
-        };
-        let vnet_ref: &'static VNet = Box::leak(Box::new(vnet));
-        if CHAT_HTTP_PORT.load(Ordering::Acquire) == 0 {
-            CHAT_HTTP_PORT.store(port, Ordering::Release);
-        }
-        log_chat_endpoint(dev_idx, vnet_ref, port);
-        endpoints.push(ChatEndpoint {
-            vnet: vnet_ref,
-            listener,
-            sessions: Vec::new(),
-            dev_idx,
-        });
-        added += 1;
     }
-    added
+    None
 }
 
-async fn chat_http_runtime() {
+async fn chat_http_runtime() -> Result<(), io::Error> {
     tokio::task::spawn_local(crate::t::shared_tokio_job_pump());
     load_chat_hub_once_sync();
 
-    let mut endpoints: Vec<ChatEndpoint> = Vec::new();
+    let app = chat_router();
     loop {
-        chat_add_endpoints(&mut endpoints).await;
-        if !endpoints.is_empty() {
-            break;
-        }
-        CHAT_HTTP_PORT.store(0, Ordering::Release);
-        crate::log!("chat-http: waiting for a usable NIC\n");
-        tokio::time::sleep(core::time::Duration::from_millis(CHAT_HTTP_VNET_OPEN_RETRY_MS)).await;
-    }
+        let Some((listener, addr)) = bind_lowest_available_listener().await else {
+            CHAT_HTTP_PORT.store(0, Ordering::Release);
+            crate::log!("chat-http: waiting for primary ipv4\n");
+            tokio::time::sleep(core::time::Duration::from_millis(CHAT_HTTP_BIND_RETRY_MS)).await;
+            continue;
+        };
 
-    let mut endpoint_discovery_ticks = 0u32;
-    loop {
-        if endpoint_discovery_ticks == 0 {
-            chat_add_endpoints(&mut endpoints).await;
+        CHAT_HTTP_PORT.store(addr.port(), Ordering::Release);
+        log_chat_endpoint(addr);
+        let listener = listener.tap_io(|_| crate::log!("chat-http: tcp accepted\n"));
+        if let Err(err) = axum::serve(listener, app.clone()).await {
+            CHAT_HTTP_PORT.store(0, Ordering::Release);
+            crate::log!(
+                "chat-http: serve failed port={} kind={:?} err={}\n",
+                addr.port(),
+                err.kind(),
+                err
+            );
+            tokio::time::sleep(core::time::Duration::from_millis(1000)).await;
         }
-        endpoint_discovery_ticks = (endpoint_discovery_ticks + 1) % 100;
-
-        for endpoint in endpoints.iter_mut() {
-            while let Some(ev) = endpoint.vnet.pop_event() {
-                match ev {
-                    api::Event::TcpEstablished { handle, .. } => {
-                        crate::log!(
-                            "chat-http: tcp established dev={} handle={}\n",
-                            endpoint.dev_idx,
-                            handle.0
-                        );
-                        if endpoint
-                            .sessions
-                            .iter()
-                            .all(|session| session.handle != handle)
-                        {
-                            endpoint
-                                .sessions
-                                .push(spawn_hyper_session(endpoint.vnet, handle));
-                        }
-                    }
-                    api::Event::TcpData { handle, data } => {
-                        let idx = match endpoint
-                            .sessions
-                            .iter()
-                            .position(|session| session.handle == handle)
-                        {
-                            Some(idx) => idx,
-                            None => {
-                                endpoint
-                                    .sessions
-                                    .push(spawn_hyper_session(endpoint.vnet, handle));
-                                endpoint.sessions.len().saturating_sub(1)
-                            }
-                        };
-                        if endpoint.sessions[idx]
-                            .inbound
-                            .write_all(data.as_slice())
-                            .await
-                            .is_err()
-                        {
-                            let _ = endpoint.vnet.submit(api::Command::Close { handle });
-                            endpoint.sessions.swap_remove(idx);
-                        }
-                    }
-                    api::Event::Closed { handle } => {
-                        if endpoint
-                            .listener
-                            .map(|(listener_handle, _)| listener_handle)
-                            == Some(handle)
-                        {
-                            crate::log!(
-                                "chat-http: listener closed dev={}, reopening\n",
-                                endpoint.dev_idx
-                            );
-                            endpoint.listener = open_lowest_available_listener(endpoint.vnet).await;
-                            if let Some((_, port)) = endpoint.listener {
-                                log_chat_endpoint(endpoint.dev_idx, endpoint.vnet, port);
-                            }
-                        }
-                        if let Some(idx) = endpoint
-                            .sessions
-                            .iter()
-                            .position(|session| session.handle == handle)
-                        {
-                            let mut session = endpoint.sessions.swap_remove(idx);
-                            let _ = session.inbound.shutdown().await;
-                        }
-                    }
-                    api::Event::Error { msg } => {
-                        crate::log!("chat-http: vnet error dev={} {}\n", endpoint.dev_idx, msg);
-                    }
-                    api::Event::Opened { .. }
-                    | api::Event::TcpSent { .. }
-                    | api::Event::UdpPacket { .. }
-                    | api::Event::UdpPacketV6 { .. }
-                    | api::Event::IcmpReply { .. }
-                    | api::Event::IcmpReplyV6 { .. } => {}
-                }
-            }
-        }
-
-        tokio::time::sleep(core::time::Duration::from_millis(CHAT_HTTP_IDLE_POLL_MS)).await;
     }
 }
 
@@ -756,8 +518,7 @@ fn run_chat_http_runtime() -> Result<(), io::Error> {
     builder.enable_time();
     let runtime = builder.build()?;
     let local = tokio::task::LocalSet::new();
-    local.block_on(&runtime, chat_http_runtime());
-    Ok(())
+    local.block_on(&runtime, chat_http_runtime())
 }
 
 #[embassy_executor::task]

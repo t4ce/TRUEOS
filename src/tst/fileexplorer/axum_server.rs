@@ -13,16 +13,16 @@ use core::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 use std::{io, net::SocketAddr, sync::Arc};
 
 use axum::{
+    Router,
     body::{Body, Bytes},
     extract::{DefaultBodyLimit, OriginalUri, Path, State},
     http::{
-        header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE},
-        StatusCode,
+        HeaderMap, StatusCode,
+        header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE},
     },
     response::Response,
     routing::{get, patch, post},
     serve::ListenerExt,
-    Router,
 };
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use serde::{Deserialize, Serialize};
@@ -32,6 +32,8 @@ use tokio::sync::RwLock;
 use crate::allports::services::{FILEEXPLORER_HTTP_TCP_PORT, FILEEXPLORER_HTTP_TCP_PORTS};
 
 const FILEEXPLORER_HTTP_BODY_MAX: usize = 64 * 1024;
+const FILEEXPLORER_UPLOAD_BODY_MAX: usize = 16 * 1024 * 1024;
+const FILEEXPLORER_TEXT_OPEN_MAX: u64 = 5 * 1024 * 1024;
 const FILEEXPLORER_BLOCKING_LANE_RETRY_MS: u64 = 1000;
 const FILEEXPLORER_INDEX_HTML: &str = include_str!("index.html");
 const TRUEOSFS_KEEP_FILE: &str = ".keep";
@@ -178,6 +180,18 @@ fn response(status: u16, content_type: &'static str, body: Vec<u8>) -> Response 
         builder = builder.header(CACHE_CONTROL, "no-cache");
     }
     builder
+        .body(Body::from(body))
+        .unwrap_or_else(|_| Response::new(Body::empty()))
+}
+
+fn file_response(content_type: String, filename: &str, body: Vec<u8>) -> Response {
+    let safe_name = filename.replace(['"', '\r', '\n'], "_");
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, content_type)
+        .header(CONTENT_LENGTH, body.len().to_string())
+        .header(CACHE_CONTROL, "no-store")
+        .header(CONTENT_DISPOSITION, format!("attachment; filename=\"{safe_name}\""))
         .body(Body::from(body))
         .unwrap_or_else(|_| Response::new(Body::empty()))
 }
@@ -332,6 +346,27 @@ fn hex_nibble(byte: u8) -> Option<u8> {
     }
 }
 
+fn percent_decode(value: &str) -> Result<String, String> {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            if i + 2 >= bytes.len() {
+                return Err("bad percent encoding".to_string());
+            }
+            let hi = hex_nibble(bytes[i + 1]).ok_or_else(|| "bad percent encoding".to_string())?;
+            let lo = hex_nibble(bytes[i + 2]).ok_or_else(|| "bad percent encoding".to_string())?;
+            out.push((hi << 4) | lo);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).map_err(|_| "bad utf8 in encoded value".to_string())
+}
+
 fn validate_name(name: &str) -> Result<(), String> {
     let trimmed = name.trim();
     if trimmed.is_empty()
@@ -403,11 +438,19 @@ fn mime_from_name(name: &str) -> &'static str {
 
 fn default_actions(kind: NodeKind, root: bool) -> Vec<&'static str> {
     if root {
-        return vec!["open", "new-file", "new-folder"];
+        return vec!["open", "new-file", "new-folder", "upload"];
     }
     match kind {
-        NodeKind::Folder => vec!["open", "new-file", "new-folder", "rename", "move", "delete"],
-        NodeKind::File => vec!["open", "rename", "move", "delete"],
+        NodeKind::Folder => vec![
+            "open",
+            "new-file",
+            "new-folder",
+            "upload",
+            "rename",
+            "move",
+            "delete",
+        ],
+        NodeKind::File => vec!["open", "download", "rename", "move", "delete"],
     }
 }
 
@@ -463,7 +506,8 @@ async fn build_node(
         }
     }
     children.sort_by(|a, b| {
-        (a.kind != NodeKind::Folder, a.name.as_str()).cmp(&(b.kind != NodeKind::Folder, b.name.as_str()))
+        (a.kind != NodeKind::Folder, a.name.as_str())
+            .cmp(&(b.kind != NodeKind::Folder, b.name.as_str()))
     });
     let size = children.iter().map(|child| child.size).sum();
     Ok(Some(FileNode {
@@ -612,6 +656,72 @@ async fn create_node_job(request: CreateNodeRequest) -> Result<Value, String> {
     }))
 }
 
+async fn upload_file_job(parent_id: String, name: String, body: Vec<u8>) -> Result<Value, String> {
+    validate_name(&name)?;
+    let parent = decode_node_id(&parent_id)?;
+    let path = join_path(&parent, name.trim());
+    let disk = primary_root().map_err(ToString::to_string)?;
+    if crate::r::fs::trueosfs::file_exists_async(disk, &path)
+        .await
+        .map_err(|err| format!("exists failed: {err:?}"))?
+    {
+        return Err(format!("'{path}' already exists"));
+    }
+    let ok = crate::r::fs::trueosfs::file_in_async(disk, &path, body.as_slice())
+        .await
+        .map_err(|err| format!("upload failed: {err:?}"))?;
+    if !ok {
+        return Err(format!("write refused for '{path}'"));
+    }
+    Ok(serde_json::json!({
+        "nodeId": encode_node_id(&path),
+        "path": path,
+    }))
+}
+
+async fn download_file(id: String) -> Result<(String, String, Vec<u8>), String> {
+    let path = decode_node_id(&id)?;
+    if path.is_empty() {
+        return Err("root cannot be downloaded".to_string());
+    }
+    let disk = primary_root().map_err(ToString::to_string)?;
+    let info = crate::r::fs::trueosfs::file_info_async(disk, &path)
+        .await
+        .map_err(|err| format!("file info failed: {err:?}"))?
+        .ok_or_else(|| format!("'{path}' was not found or is not a file"))?;
+    let bytes = crate::r::fs::trueosfs::file_out_async(disk, &path)
+        .await
+        .map_err(|err| format!("read failed: {err:?}"))?
+        .ok_or_else(|| format!("'{path}' was not found"))?;
+    if bytes.len() as u64 != info.data_len {
+        return Err(format!("read length mismatch for '{path}'"));
+    }
+    let name = base_name(&path);
+    Ok((name.clone(), mime_from_name(&name).to_string(), bytes))
+}
+
+async fn read_text_file(id: String) -> Result<Vec<u8>, String> {
+    let path = decode_node_id(&id)?;
+    if path.is_empty() {
+        return Err("root cannot be opened as text".to_string());
+    }
+    let disk = primary_root().map_err(ToString::to_string)?;
+    let info = crate::r::fs::trueosfs::file_info_async(disk, &path)
+        .await
+        .map_err(|err| format!("file info failed: {err:?}"))?
+        .ok_or_else(|| format!("'{path}' was not found or is not a file"))?;
+    if info.data_len > FILEEXPLORER_TEXT_OPEN_MAX {
+        return Err(format!(
+            "file is too large to open as text ({} > {})",
+            info.data_len, FILEEXPLORER_TEXT_OPEN_MAX
+        ));
+    }
+    crate::r::fs::trueosfs::file_out_async(disk, &path)
+        .await
+        .map_err(|err| format!("read failed: {err:?}"))?
+        .ok_or_else(|| format!("'{path}' was not found"))
+}
+
 async fn update_node_job(id: String, patch: UpdateNodeRequest) -> Result<Value, String> {
     let old_path = decode_node_id(&id)?;
     let Some(name) = patch.name else {
@@ -752,14 +862,8 @@ async fn handle_tree_route(uri: OriginalUri) -> Response {
 
 async fn handle_replace_tree(State(state): State<AppState>) -> Response {
     let result = Err("replace-tree is not wired to TRUEOSFS yet".to_string());
-    record_job(
-        state,
-        "tree_replace",
-        "Replace tree".to_string(),
-        vec!["root".to_string()],
-        result,
-    )
-    .await
+    record_job(state, "tree_replace", "Replace tree".to_string(), vec!["root".to_string()], result)
+        .await
 }
 
 async fn handle_create_node(State(state): State<AppState>, body: Bytes) -> Response {
@@ -852,6 +956,56 @@ async fn handle_move_nodes(State(state): State<AppState>, body: Bytes) -> Respon
     .await
 }
 
+async fn handle_upload_file(
+    State(state): State<AppState>,
+    Path(parent_id): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if body.len() > FILEEXPLORER_UPLOAD_BODY_MAX {
+        return error_response(413, "upload too large");
+    }
+    let name = match headers
+        .get("x-file-name")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(name) => match percent_decode(name) {
+            Ok(name) => name,
+            Err(err) => return error_response(400, err),
+        },
+        None => return error_response(400, "missing x-file-name"),
+    };
+    let affected = vec![parent_id.clone()];
+    let label = format!("Upload {name}");
+    run_local(move || async move {
+        let result = upload_file_job(parent_id, name, body.to_vec()).await;
+        record_job(state, "node_upload", label, affected, result).await
+    })
+    .await
+}
+
+async fn handle_download_file(Path(id): Path<String>) -> Response {
+    run_local(move || async move {
+        match download_file(id).await {
+            Ok((name, content_type, bytes)) => file_response(content_type, &name, bytes),
+            Err(err) => error_response(404, err),
+        }
+    })
+    .await
+}
+
+async fn handle_node_content(Path(id): Path<String>) -> Response {
+    run_local(move || async move {
+        match read_text_file(id).await {
+            Ok(bytes) => response(200, "text/plain; charset=utf-8", bytes),
+            Err(err) => error_response(400, err),
+        }
+    })
+    .await
+}
+
 async fn handle_job(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     match state.jobs.read().await.get(&id).cloned() {
         Some(record) => json_response(200, &record),
@@ -860,11 +1014,7 @@ async fn handle_job(State(state): State<AppState>, Path(id): Path<String>) -> Re
 }
 
 async fn handle_job_events() -> Response {
-    text_response(
-        200,
-        "text/event-stream; charset=utf-8",
-        "event: ready\ndata: {\"ok\":true}\n\n",
-    )
+    text_response(200, "text/event-stream; charset=utf-8", "event: ready\ndata: {\"ok\":true}\n\n")
 }
 
 pub fn router() -> Router {
@@ -879,11 +1029,14 @@ pub fn router() -> Router {
         .route("/api/tree", get(handle_tree_route).put(handle_replace_tree))
         .route("/api/nodes", post(handle_create_node))
         .route("/api/nodes/{id}", patch(handle_update_node).delete(handle_delete_node))
+        .route("/api/nodes/{id}/content", get(handle_node_content))
+        .route("/api/nodes/{id}/download", get(handle_download_file))
+        .route("/api/nodes/{id}/upload", post(handle_upload_file))
         .route("/api/nodes/delete", post(handle_delete_nodes))
         .route("/api/nodes/move", post(handle_move_nodes))
         .route("/api/jobs/{id}", get(handle_job))
         .route("/api/jobs/events", get(handle_job_events))
-        .layer(DefaultBodyLimit::max(FILEEXPLORER_HTTP_BODY_MAX))
+        .layer(DefaultBodyLimit::max(FILEEXPLORER_UPLOAD_BODY_MAX))
         .with_state(state)
 }
 
@@ -920,9 +1073,8 @@ async fn serve_fileexplorer_port(app: Router, port: u16) {
             FILEEXPLORER_HTTP_PORT.store(addr.port(), Ordering::Release);
         }
         crate::log!("fileexplorer-http: axum listening on http://{}/\n", addr);
-        let listener = listener.tap_io(move |_| {
-            crate::log!("fileexplorer-http: tcp accepted port={}\n", port)
-        });
+        let listener = listener
+            .tap_io(move |_| crate::log!("fileexplorer-http: tcp accepted port={}\n", port));
         if let Err(err) = axum::serve(listener, app.clone()).await {
             if port == FILEEXPLORER_HTTP_TCP_PORT {
                 FILEEXPLORER_HTTP_PORT.store(0, Ordering::Release);

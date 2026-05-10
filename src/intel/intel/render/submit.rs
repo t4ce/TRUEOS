@@ -450,7 +450,7 @@ fn submit_warm_render_batch(
             tdl_thr_pf_status1,
         );
         crate::log!(
-            "intel/render: {} gpgpu-middle-state walker_header_seen={} cs_parked_at_walker={} eu_row_waiting={} cs_fault_seen={} row_eu00_ss0_done={} row_eu00_ss1_done={} plain=\"threads were dispatched and the command streamer is waiting at GPGPU_WALKER; public regs show EU row not done, but not per-thread GRFs\"\n",
+            "intel/render: {} gpgpu-middle-state walker_header_seen={} cs_parked_at_walker={} eu_row_waiting={} cs_fault_seen={} row_eu00_ss0_done={} row_eu00_ss1_done={} plain=\"command streamer is parked at GPGPU_WALKER; TS/TDL deltas decide whether EU threads actually launched\"\n",
             submit_name,
             walker_header_seen as u8,
             walker_header_seen as u8,

@@ -224,23 +224,6 @@ impl TlsConn {
 
 static TLS_CONNS: Mutex<Vec<TlsConn>> = Mutex::new(Vec::new());
 
-fn send_tcp_all(net: &VNet, handle: vnet::NetHandle, data: &[u8]) {
-    if data.is_empty() {
-        return;
-    }
-
-    let mut offset: usize = 0;
-    while offset < data.len() {
-        let end = (offset + vnet::MAX_MSG).min(data.len());
-        let chunk = &data[offset..end];
-        let _ = net.submit(vnet::Command::SendTcp {
-            handle,
-            data: vnet::ByteBuf::from_slice_trunc(chunk),
-        });
-        offset = end;
-    }
-}
-
 fn flush_outgoing_tls(conn: &mut TlsConn) {
     if conn.closed {
         return;
@@ -251,7 +234,7 @@ fn flush_outgoing_tls(conn: &mut TlsConn) {
             if !data.is_empty()
                 && let Some(handle) = conn.handle
             {
-                send_tcp_all(&conn.net, handle, &data);
+                let _ = conn.net.send_tcp_all(handle, &data);
             }
         }
         Err(e) => {

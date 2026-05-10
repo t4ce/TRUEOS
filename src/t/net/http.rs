@@ -2,16 +2,16 @@ extern crate alloc;
 extern crate std;
 
 use crate::r::net::NetProfile;
-use crate::r::net::VNet;
 use crate::t::net::dns::{self, DnsConfig};
 use crate::t::net::hyper_io::{HyperBytesBody, HyperTokioIo};
+use crate::t::net::vnet_stream;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::pin::Pin;
-use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+use embassy_time::Duration as EmbassyDuration;
 use heapless::String as HString;
 use hyper::body::Body;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
+use tokio::io::DuplexStream;
 use v::vnet as api;
 
 pub(super) fn parse_ipv4_literal(host: &str) -> Option<[u8; 4]> {
@@ -192,77 +192,6 @@ pub(super) fn is_redirect_status(status: u16) -> bool {
     matches!(status, 301 | 302 | 303 | 307 | 308)
 }
 
-async fn send_tcp_all_hyper_bridge(
-    net: &VNet,
-    handle: api::NetHandle,
-    data: &[u8],
-) -> Result<(), HttpFetchError> {
-    for chunk in data.chunks(api::MAX_MSG) {
-        let mut sent = false;
-        for _ in 0..64 {
-            if net
-                .submit(api::Command::SendTcp {
-                    handle,
-                    data: api::ByteBuf::from_slice_trunc(chunk),
-                })
-                .is_ok()
-            {
-                sent = true;
-                break;
-            }
-            tokio::time::sleep(core::time::Duration::from_millis(1)).await;
-        }
-        if !sent {
-            return Err(HttpFetchError::TimedOut);
-        }
-    }
-    Ok(())
-}
-
-async fn tcp_duplex_bridge(
-    net: VNet,
-    handle: api::NetHandle,
-    mut io: DuplexStream,
-) -> Result<(), HttpFetchError> {
-    let mut outbound = [0u8; 4096];
-    loop {
-        tokio::select! {
-            read = io.read(&mut outbound) => {
-                let n = read.map_err(|_| HttpFetchError::TimedOut)?;
-                if n == 0 {
-                    break;
-                }
-                send_tcp_all_hyper_bridge(&net, handle, &outbound[..n]).await?;
-            }
-            _ = tokio::time::sleep(core::time::Duration::from_millis(1)) => {
-                for _ in 0..256 {
-                    let Some(ev) = net.pop_event() else { break };
-                    match ev {
-                        api::Event::TcpData { handle: h, data } if h == handle => {
-                            io.write_all(data.as_slice())
-                                .await
-                                .map_err(|_| HttpFetchError::TimedOut)?;
-                        }
-                        api::Event::Closed { handle: h } if h == handle => {
-                            let _ = io.shutdown().await;
-                            return Ok(());
-                        }
-                        api::Event::Error { .. } => {
-                            let _ = io.shutdown().await;
-                            return Err(HttpFetchError::TimedOut);
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-    }
-
-    let _ = net.submit(api::Command::Close { handle });
-    let _ = io.shutdown().await;
-    Ok(())
-}
-
 pub(super) async fn connect_hyper_tcp_stream(
     parsed: &ParsedHttpUrl,
     timeout_ms: u32,
@@ -286,92 +215,25 @@ pub(super) async fn connect_hyper_tcp_stream(
         .map_err(|_| HttpFetchError::DnsFailed)?
     };
 
-    let net = loop {
-        if let Some(v) = VNet::open_with_profile(profile) {
-            break v;
-        }
-        Timer::after(EmbassyDuration::from_millis(50)).await;
+    let remote = api::EndpointV4 {
+        addr: ip,
+        port: parsed.port,
     };
-
-    let mut open_sent = false;
-    for _ in 0..64 {
-        if net
-            .submit(api::Command::OpenTcpConnect {
-                remote: api::EndpointV4 {
-                    addr: ip,
-                    port: parsed.port,
-                },
-            })
-            .is_ok()
-        {
-            open_sent = true;
-            break;
-        }
-        Timer::after(EmbassyDuration::from_millis(1)).await;
-    }
-    if !open_sent {
-        crate::log!("http-hyper: open failed host={} port={}\n", parsed.host, parsed.port);
-        return Err(HttpFetchError::TimedOut);
-    }
-
-    let deadline = Instant::now() + EmbassyDuration::from_millis(timeout_ms as u64);
-    let mut opened = None;
-    let handle = 'connect_wait: loop {
-        for _ in 0..256 {
-            let Some(ev) = net.pop_event() else { break };
-            match ev {
-                api::Event::Opened { handle, kind } if matches!(kind, api::SocketKind::Tcp) => {
-                    opened = Some(handle);
-                    if crate::logflag::VHTTPS_VERBOSE {
-                        crate::log!(
-                            "http-hyper: opened host={} ip={}.{}.{}.{} port={} handle={}\n",
-                            parsed.host,
-                            ip[0],
-                            ip[1],
-                            ip[2],
-                            ip[3],
-                            parsed.port,
-                            handle.0
-                        );
-                    }
-                }
-                api::Event::TcpEstablished { handle, .. } => {
-                    if opened.is_none() {
-                        opened = Some(handle);
-                    }
-                    if opened == Some(handle) {
-                        if crate::logflag::VHTTPS_VERBOSE {
-                            crate::log!(
-                                "http-hyper: established host={} port={} handle={}\n",
-                                parsed.host,
-                                parsed.port,
-                                handle.0
-                            );
-                        }
-                        break 'connect_wait handle;
-                    }
-                }
-                api::Event::Closed { handle } if opened == Some(handle) => {
-                    return Err(HttpFetchError::TimedOut);
-                }
-                api::Event::Error { .. } => return Err(HttpFetchError::TimedOut),
-                _ => {}
-            }
-        }
-        if Instant::now() >= deadline {
-            return Err(HttpFetchError::TimedOut);
-        }
-        Timer::after(EmbassyDuration::from_millis(2)).await;
-    };
-
-    let (client_io, bridge_io) = tokio::io::duplex(64 * 1024);
-    tokio::spawn(async move {
-        if let Err(err) = tcp_duplex_bridge(net, handle, bridge_io).await {
-            crate::log!("http-hyper: bridge ended err={:?}\n", err);
-        }
-    });
-
-    Ok(client_io)
+    vnet_stream::connect_tcp_v4_stream(profile, remote, timeout_ms, 64 * 1024, "http-hyper")
+        .await
+        .map_err(|err| {
+            crate::log!(
+                "http-hyper: connect failed host={} ip={}.{}.{}.{} port={} stage={}\n",
+                parsed.host,
+                ip[0],
+                ip[1],
+                ip[2],
+                ip[3],
+                parsed.port,
+                err.as_stage()
+            );
+            HttpFetchError::TimedOut
+        })
 }
 
 pub(super) fn hyper_redirect_url_from_location(
