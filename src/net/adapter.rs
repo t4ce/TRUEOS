@@ -544,6 +544,8 @@ pub enum NetEvent {
     },
     TcpEstablished {
         handle: NetHandle,
+        peer: Option<NetEndpoint>,
+        peer6: Option<NetEndpointV6>,
     },
     TcpData {
         handle: NetHandle,
@@ -3514,12 +3516,19 @@ impl NetService {
                                 owner,
                                 NetEvent::TcpEstablished {
                                     handle: client_handle,
+                                    peer: Some(remote),
+                                    peer6: None,
                                 },
                             );
                             let _ = push_event(
                                 server_owner,
                                 NetEvent::TcpEstablished {
                                     handle: server_handle,
+                                    peer: Some(NetEndpoint {
+                                        addr: [127, 0, 0, 1],
+                                        port: self.tcp_next_ephemeral.wrapping_sub(1),
+                                    }),
+                                    peer6: None,
                                 },
                             );
                         }
@@ -3756,6 +3765,31 @@ impl NetService {
             let socket = self.sockets.get_mut::<tcp::Socket>(socket_handle);
             state = socket.state();
 
+            if state == tcp::State::Established {
+                if let Some(endpoint) = socket.local_endpoint() {
+                    self.records[idx].tcp_local_port = Some(endpoint.port);
+                }
+                match socket.remote_endpoint().map(|endpoint| endpoint.addr) {
+                    Some(IpAddress::Ipv4(addr)) => {
+                        let port = socket.remote_endpoint().map(|endpoint| endpoint.port).unwrap_or(0);
+                        self.records[idx].tcp_remote_v4 = Some(NetEndpoint {
+                            addr: addr.octets(),
+                            port,
+                        });
+                        self.records[idx].tcp_remote_v6 = None;
+                    }
+                    Some(IpAddress::Ipv6(addr)) => {
+                        let port = socket.remote_endpoint().map(|endpoint| endpoint.port).unwrap_or(0);
+                        self.records[idx].tcp_remote_v4 = None;
+                        self.records[idx].tcp_remote_v6 = Some(NetEndpointV6 {
+                            addr: addr.octets(),
+                            port,
+                        });
+                    }
+                    None => {}
+                }
+            }
+
             let last = self.records[idx].last_tcp_state;
             if last != Some(state) {
                 self.records[idx].last_tcp_state = Some(state);
@@ -3835,7 +3869,14 @@ impl NetService {
                 crate::log!("net: tcp established branch owner={} handle={}\n", owner, handle.0);
             }
             self.records[idx].established = true;
-            let ok = push_event(owner, NetEvent::TcpEstablished { handle });
+            let ok = push_event(
+                owner,
+                NetEvent::TcpEstablished {
+                    handle,
+                    peer: self.records[idx].tcp_remote_v4,
+                    peer6: self.records[idx].tcp_remote_v6,
+                },
+            );
             if crate::logflag::NET_LOG_TCP_FLOW
                 || (crate::logflag::NET_LOG_TCP_CONNECT_STATES && self.records[idx].tcp_connect)
             {

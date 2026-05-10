@@ -5,6 +5,20 @@ use tokio::{
     net::{TcpListener, TcpStream},
 };
 
+// TRUEOS probe route: axum -> log facade -> globalog/logtotcp.
+// Keep this safe because axum's vendored manifest still forbids unsafe code.
+#[cfg(target_os = "trueos")]
+macro_rules! axum_trueos_probe {
+    ($($arg:tt)*) => {
+        log::info!("[axum-probe] {}", format_args!($($arg)*));
+    };
+}
+
+#[cfg(not(target_os = "trueos"))]
+macro_rules! axum_trueos_probe {
+    ($($arg:tt)*) => {};
+}
+
 /// Types that can listen for connections.
 pub trait Listener: Send + 'static {
     /// The listener's IO type.
@@ -29,9 +43,16 @@ impl Listener for TcpListener {
 
     async fn accept(&mut self) -> (Self::Io, Self::Addr) {
         loop {
+            axum_trueos_probe!("tcp-listener accept begin");
             match Self::accept(self).await {
-                Ok(tup) => return tup,
-                Err(e) => handle_accept_error(e).await,
+                Ok((io, addr)) => {
+                    axum_trueos_probe!("tcp-listener accept ok remote={addr:?}");
+                    return (io, addr);
+                }
+                Err(e) => {
+                    axum_trueos_probe!("tcp-listener accept err kind={:?} err={}", e.kind(), e);
+                    handle_accept_error(e).await;
+                }
             }
         }
     }
@@ -128,7 +149,9 @@ where
 
     async fn accept(&mut self) -> (Self::Io, Self::Addr) {
         let (mut io, addr) = self.listener.accept().await;
+        axum_trueos_probe!("tap-io accepted before callback");
         (self.tap_fn)(&mut io);
+        axum_trueos_probe!("tap-io callback done");
         (io, addr)
     }
 

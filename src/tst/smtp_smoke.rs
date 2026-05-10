@@ -7,12 +7,10 @@ extern crate alloc;
 use alloc::string::String;
 use embassy_time::{Duration, Timer};
 
-// ── temporary credentials ────────────────────────────────────────────────────
-const SMOKE_USER: &str = "jonasb@post.com";
-const SMOKE_PASS: &str = "Ttest1001";
-const SMOKE_FROM: &str = "jonasb@post.com";
-const SMOKE_TO: &str = "jonasbae@outlook.de";
-// ─────────────────────────────────────────────────────────────────────────────
+const SMOKE_USER: &str = crate::allports::mail::ACCOUNT_EMAIL;
+const SMOKE_PASS: &str = crate::allports::mail::ACCOUNT_PASSWORD;
+const SMOKE_FROM: &str = crate::allports::mail::ACCOUNT_EMAIL;
+const SMOKE_TO: &str = crate::allports::mail::ACCOUNT_EMAIL;
 
 const SMOKE_TIMEOUT_MS: u32 = 20_000;
 
@@ -23,6 +21,10 @@ pub async fn smtp_smoke_task() {
     crate::log!("smtp-smoke: waiting for NET_ANY_CONFIGURED\n");
     crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
     crate::log!("smtp-smoke: starting\n");
+    if SMOKE_PASS == "ENTER_MAIL_PASSWORD_HERE" {
+        crate::log!("smtp-smoke: skipped; mail password placeholder still configured\n");
+        return;
+    }
 
     match crate::r::net::smtp::SmtpClient::connect(SMOKE_TIMEOUT_MS).await {
         Ok(mut client) => {

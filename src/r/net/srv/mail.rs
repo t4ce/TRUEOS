@@ -16,14 +16,15 @@ use axum::{
     },
     response::Response,
     routing::{get, post},
+    serve::ListenerExt,
     Router,
 };
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    allports::services::MAIL_HTTP_TCP_PORT,
-    r::net::smtp::SmtpClient,
+    allports::{mail as mail_config, services::MAIL_HTTP_TCP_PORT},
+    r::net::{cli::pop3::Pop3Client, smtp::SmtpClient},
 };
 
 const MAIL_HTTP_BODY_MAX: usize = 64 * 1024;
@@ -31,6 +32,10 @@ const MAIL_HTTP_BLOCKING_LANE_RETRY_MS: u64 = 1000;
 const MAIL_STORE_PATH: &str = "mail/box.json";
 const MAIL_CONFIG_PATH: &str = "mail/config.json";
 const MAIL_SMTP_TIMEOUT_MS: u32 = 20_000;
+const MAIL_POP3_TIMEOUT_MS: u32 = 20_000;
+const MAIL_LIST_LIMIT: usize = 10;
+const MAIL_POP3_MAX_MESSAGES: usize = MAIL_LIST_LIMIT;
+const MAIL_POP3_MAX_MESSAGE_BYTES: usize = 64 * 1024;
 
 static MAIL_HTTP_PORT: AtomicU16 = AtomicU16::new(0);
 static MAIL_ID_SEQ: AtomicU32 = AtomicU32::new(1);
@@ -92,6 +97,22 @@ struct MailConfig {
     from: Option<String>,
 }
 
+impl MailConfig {
+    fn static_account() -> Self {
+        Self {
+            smtp_user: String::from(mail_config::ACCOUNT_EMAIL),
+            smtp_pass: String::from(mail_config::ACCOUNT_PASSWORD),
+            from: Some(String::from(mail_config::ACCOUNT_EMAIL)),
+        }
+    }
+
+    fn password_is_placeholder(&self) -> bool {
+        self.smtp_pass == mail_config::ACCOUNT_PASSWORD
+            || self.smtp_pass.trim().is_empty()
+            || self.smtp_pass.contains("ENTER_")
+    }
+}
+
 fn status_code(status: u16) -> StatusCode {
     StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
 }
@@ -137,8 +158,17 @@ async fn load_store() -> MailStore {
     }
 }
 
+async fn ensure_mail_dir(disk: crate::disc::block::DeviceHandle) -> Result<(), &'static str> {
+    match crate::r::fs::trueosfs::file_in_async(disk, "mail/.keep", &[]).await {
+        Ok(true) => Ok(()),
+        Ok(false) => Err("mail dir create refused"),
+        Err(_) => Err("mail dir create failed"),
+    }
+}
+
 async fn save_store(store: &MailStore) -> Result<(), &'static str> {
     let disk = primary_root()?;
+    ensure_mail_dir(disk).await?;
     let bytes = serde_json::to_vec(store).map_err(|_| "serialize failed")?;
     match crate::r::fs::trueosfs::file_in_async(disk, MAIL_STORE_PATH, bytes.as_slice()).await {
         Ok(true) => Ok(()),
@@ -149,11 +179,13 @@ async fn save_store(store: &MailStore) -> Result<(), &'static str> {
 
 async fn load_config() -> Result<MailConfig, &'static str> {
     let disk = primary_root()?;
-    let bytes = crate::r::fs::trueosfs::file_out_async(disk, MAIL_CONFIG_PATH)
-        .await
-        .map_err(|_| "config read failed")?
-        .ok_or("missing mail/config.json")?;
-    serde_json::from_slice::<MailConfig>(bytes.as_slice()).map_err(|_| "bad mail/config.json")
+    match crate::r::fs::trueosfs::file_out_async(disk, MAIL_CONFIG_PATH).await {
+        Ok(Some(bytes)) => {
+            serde_json::from_slice::<MailConfig>(bytes.as_slice()).map_err(|_| "bad mail/config.json")
+        }
+        Ok(None) => Ok(MailConfig::static_account()),
+        Err(_) => Err("config read failed"),
+    }
 }
 
 fn now_date_string() -> String {
@@ -220,6 +252,121 @@ fn build_message(from: &str, to: &str, subject: &str, body: &str, id: &str) -> S
     )
 }
 
+fn header_lookup<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    headers
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.as_str())
+}
+
+fn parse_mail_headers(raw: &str) -> Vec<(String, String)> {
+    let mut headers: Vec<(String, String)> = Vec::new();
+    for line in raw.lines() {
+        if line.starts_with(' ') || line.starts_with('\t') {
+            if let Some((_, value)) = headers.last_mut() {
+                value.push(' ');
+                value.push_str(line.trim());
+            }
+            continue;
+        }
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        headers.push((String::from(key.trim()), String::from(value.trim())));
+    }
+    headers
+}
+
+fn parse_pop3_message(raw: &[u8], fallback_id: String) -> Option<MailMessage> {
+    let text = core::str::from_utf8(raw).ok()?;
+    let (header_text, body) = text
+        .split_once("\r\n\r\n")
+        .or_else(|| text.split_once("\n\n"))
+        .unwrap_or((text, ""));
+    let headers = parse_mail_headers(header_text);
+    let id = header_lookup(&headers, "Message-ID")
+        .map(header_value)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(fallback_id);
+    let from = header_lookup(&headers, "From")
+        .map(header_value)
+        .unwrap_or_else(|| String::from("unknown"));
+    let to = header_lookup(&headers, "To")
+        .map(header_value)
+        .unwrap_or_default();
+    let subject = header_lookup(&headers, "Subject")
+        .map(header_value)
+        .unwrap_or_else(|| String::from("(no subject)"));
+    let date = header_lookup(&headers, "Date")
+        .map(header_value)
+        .unwrap_or_else(now_date_string);
+
+    Some(MailMessage {
+        id,
+        from,
+        to,
+        subject,
+        date,
+        body: String::from(body.trim()),
+        unread: true,
+        status: String::from("received"),
+        error: None,
+    })
+}
+
+async fn refresh_inbox_from_pop3(config: &MailConfig) -> Result<usize, &'static str> {
+    if config.password_is_placeholder() {
+        return Err("mail password placeholder");
+    }
+
+    let mut client = Pop3Client::connect(MAIL_POP3_TIMEOUT_MS)
+        .await
+        .map_err(|_| "pop3 connect failed")?;
+    client
+        .login(
+            config.smtp_user.as_str(),
+            config.smtp_pass.as_str(),
+            MAIL_POP3_TIMEOUT_MS,
+        )
+        .await
+        .map_err(|_| "pop3 login failed")?;
+
+    let list = client
+        .list(MAIL_POP3_TIMEOUT_MS)
+        .await
+        .map_err(|_| "pop3 list failed")?;
+    let mut store = load_store().await;
+    let mut added = 0usize;
+
+    for (msg_id, size) in list.into_iter().rev().take(MAIL_POP3_MAX_MESSAGES) {
+        let fallback_id = format!("pop3-{}-{}", msg_id, size);
+        if store.messages.iter().any(|message| message.id == fallback_id) {
+            continue;
+        }
+        let raw = match client
+            .retr(msg_id, MAIL_POP3_TIMEOUT_MS, MAIL_POP3_MAX_MESSAGE_BYTES)
+            .await
+        {
+            Ok(raw) => raw,
+            Err(_) => continue,
+        };
+        let Some(message) = parse_pop3_message(raw.as_slice(), fallback_id) else {
+            continue;
+        };
+        if store.messages.iter().any(|existing| existing.id == message.id) {
+            continue;
+        }
+        store.messages.push(message);
+        added = added.saturating_add(1);
+    }
+
+    let _ = client.quit(5_000).await;
+    if added > 0 {
+        save_store(&store).await?;
+    }
+    Ok(added)
+}
+
 async fn update_message_status(id: &str, status: &str, error: Option<String>) {
     let mut store = load_store().await;
     if let Some(message) = store.messages.iter_mut().find(|message| message.id == id) {
@@ -241,6 +388,15 @@ async fn send_mail_job(id: String) {
             return;
         }
     };
+    if config.password_is_placeholder() {
+        update_message_status(
+            id.as_str(),
+            "config-missing",
+            Some(String::from("mail password placeholder")),
+        )
+        .await;
+        return;
+    }
     let from = config.from.as_deref().unwrap_or(config.smtp_user.as_str());
     let rcpts = recipients(message.to.as_str());
     if rcpts.is_empty() {
@@ -281,14 +437,25 @@ async fn send_mail_job(id: String) {
 }
 
 async fn handle_index() -> Response {
+    crate::log!("mail-http: GET /\n");
     text_response(200, "text/html; charset=utf-8", MAIL_INDEX_HTML)
 }
 
 async fn handle_app_js() -> Response {
+    crate::log!("mail-http: GET /app.js\n");
     text_response(200, "application/javascript; charset=utf-8", MAIL_APP_JS)
 }
 
 async fn handle_list_local() -> Response {
+    match load_config().await {
+        Ok(config) => {
+            let _ = refresh_inbox_from_pop3(&config).await;
+        }
+        Err(err) => {
+            crate::log!("mail-http: config unavailable for POP3 refresh: {}\n", err);
+        }
+    }
+
     let mut messages: Vec<MailSummary> = load_store()
         .await
         .messages
@@ -303,21 +470,45 @@ async fn handle_list_local() -> Response {
             unread: message.unread,
         })
         .collect();
-    messages.truncate(100);
+    messages.truncate(MAIL_LIST_LIMIT);
     json_response(200, &MailListResponse { messages })
 }
 
-async fn handle_list() -> Response {
+fn mail_worker_unavailable_response() -> Response {
+    json_response(
+        500,
+        &serde_json::json!({"ok": false, "error": "mail worker unavailable"}),
+    )
+}
+
+async fn run_mail_local<F, MakeFuture>(make_future: MakeFuture) -> Response
+where
+    F: core::future::Future<Output = Response> + 'static,
+    MakeFuture: FnOnce() -> F + Send + 'static,
+{
     let (tx, rx) = tokio::sync::oneshot::channel();
-    tokio::task::spawn_local(async move {
-        let _ = tx.send(handle_list_local().await);
-    });
-    rx.await.unwrap_or_else(|_| {
-        json_response(
-            500,
-            &serde_json::json!({"ok": false, "error": "mail worker stopped"}),
-        )
+    if crate::t::spawn_on_shared_tokio(move || async move {
+        let _ = tx.send(make_future().await);
     })
+    .is_err()
+    {
+        return mail_worker_unavailable_response();
+    }
+    rx.await
+        .unwrap_or_else(|_| mail_worker_unavailable_response())
+}
+
+async fn handle_list() -> Response {
+    run_mail_local(handle_list_local).await
+}
+
+async fn handle_read(OriginalUri(uri): OriginalUri) -> Response {
+    let query = uri.query().map(String::from);
+    run_mail_local(move || handle_read_local(query)).await
+}
+
+async fn handle_send(body: Bytes) -> Response {
+    run_mail_local(move || handle_send_local(body)).await
 }
 
 fn query_param<'a>(query: Option<&'a str>, name: &str) -> Option<&'a str> {
@@ -341,20 +532,6 @@ async fn handle_read_local(query: Option<String>) -> Response {
     }
 }
 
-async fn handle_read(OriginalUri(uri): OriginalUri) -> Response {
-    let query = uri.query().map(String::from);
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    tokio::task::spawn_local(async move {
-        let _ = tx.send(handle_read_local(query).await);
-    });
-    rx.await.unwrap_or_else(|_| {
-        json_response(
-            500,
-            &serde_json::json!({"ok": false, "error": "mail worker stopped"}),
-        )
-    })
-}
-
 async fn handle_send_local(body: Bytes) -> Response {
     if body.len() > MAIL_HTTP_BODY_MAX {
         return json_response(
@@ -375,9 +552,19 @@ async fn handle_send_local(body: Bytes) -> Response {
     }
 
     let id = next_mail_id();
-    let from = match load_config().await {
-        Ok(config) => config.from.unwrap_or(config.smtp_user),
-        Err(_) => String::from("trueos@local"),
+    let config = match load_config().await {
+        Ok(config) => config,
+        Err(_) => MailConfig::static_account(),
+    };
+    if config.password_is_placeholder() {
+        return json_response(
+            500,
+            &serde_json::json!({"ok": false, "error": "mail password placeholder"}),
+        );
+    }
+    let from = match config.from {
+        Some(from) => from,
+        None => config.smtp_user,
     };
     let message = MailMessage {
         id: id.clone(),
@@ -402,19 +589,6 @@ async fn handle_send_local(body: Bytes) -> Response {
         send_mail_job(job_id).await;
     });
     json_response(200, &serde_json::json!({"ok": true, "id": id}))
-}
-
-async fn handle_send(body: Bytes) -> Response {
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    tokio::task::spawn_local(async move {
-        let _ = tx.send(handle_send_local(body).await);
-    });
-    rx.await.unwrap_or_else(|_| {
-        json_response(
-            500,
-            &serde_json::json!({"ok": false, "error": "mail worker stopped"}),
-        )
-    })
 }
 
 fn mail_router() -> Router {
@@ -463,6 +637,7 @@ async fn mail_http_runtime() -> Result<(), io::Error> {
 
         MAIL_HTTP_PORT.store(addr.port(), Ordering::Release);
         crate::log!("mail-http: axum listening on http://{}/\n", addr);
+        let listener = listener.tap_io(|_| crate::log!("mail-http: tcp accepted\n"));
         let result = axum::serve(listener, app).await;
         if result.is_err() {
             MAIL_HTTP_PORT.store(0, Ordering::Release);

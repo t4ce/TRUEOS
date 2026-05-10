@@ -140,7 +140,7 @@ impl IrcSession {
                 Some(Event::Opened { handle: h, kind }) if kind == SocketKind::Tcp => {
                     handle = Some(h);
                 }
-                Some(Event::TcpEstablished { handle: h }) if Some(h) == handle => break,
+                Some(Event::TcpEstablished { handle: h, .. }) if Some(h) == handle => break,
                 Some(Event::Closed { .. }) | Some(Event::Error { .. }) => {
                     return Err(IrcError::ConnectFailed);
                 }

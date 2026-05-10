@@ -465,7 +465,7 @@ fn tls_socket_tick_once() {
                         let _ = push_tls_event(conns[idx].user_owner, TlsEvent::Opened { handle });
                     }
                 }
-                vnet::Event::TcpEstablished { handle } => {
+                vnet::Event::TcpEstablished { handle, .. } => {
                     if conns[idx].handle == Some(handle) {
                         conns[idx].last_activity = Instant::now();
                         crate::log!(

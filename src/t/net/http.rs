@@ -335,7 +335,7 @@ pub(super) async fn connect_hyper_tcp_stream(
                         );
                     }
                 }
-                api::Event::TcpEstablished { handle } => {
+                api::Event::TcpEstablished { handle, .. } => {
                     if opened.is_none() {
                         opened = Some(handle);
                     }

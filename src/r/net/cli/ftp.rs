@@ -89,7 +89,7 @@ impl FtpSocket {
                         ctrl_handle = Some(handle);
                     }
                 }
-                Some(Event::TcpEstablished { handle }) => {
+                Some(Event::TcpEstablished { handle, .. }) => {
                     if Some(handle) == ctrl_handle {
                         break;
                     }
@@ -372,7 +372,7 @@ impl FtpSocket {
                         data_handle = Some(handle);
                     }
                 }
-                Some(Event::TcpEstablished { handle }) if Some(handle) == data_handle => {
+                Some(Event::TcpEstablished { handle, .. }) if Some(handle) == data_handle => {
                     return Ok(handle);
                 }
                 Some(Event::TcpData { handle, data }) if handle == self.ctrl_handle => {
@@ -601,7 +601,7 @@ pub async fn ftp_server_task() {
                             sess.pasv_listener = Some(handle);
                         }
                     }
-                    Event::TcpEstablished { handle } => {
+                    Event::TcpEstablished { handle, .. } => {
                         if Some(handle) == listener {
                             if let Some(old) = session.as_mut() {
                                 ftp_close_passive(&vnet, old);
@@ -1022,7 +1022,7 @@ async fn ftp_wait_passive_data(
                         sess.pasv_listener = Some(handle);
                     }
                 }
-                Event::TcpEstablished { handle } => {
+                Event::TcpEstablished { handle, .. } => {
                     if Some(handle) == sess.pasv_listener {
                         sess.pasv_data = Some(handle);
                         return Ok(handle);

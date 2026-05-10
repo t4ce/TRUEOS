@@ -255,6 +255,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "itoa",
+ "log",
  "matchit",
  "memchr",
  "mime",

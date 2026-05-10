@@ -419,7 +419,7 @@ pub mod logtotcp {
                     NetEvent::Opened { handle, kind } if kind == SocketKind::Tcp => {
                         tcp_handle = Some(handle);
                     }
-                    NetEvent::TcpEstablished { handle } => {
+                    NetEvent::TcpEstablished { handle, .. } => {
                         conn_handle = Some(handle);
                         pending = false;
                         crate::log!("logtotcp: client connected handle={}\n", handle.0);

@@ -11,9 +11,9 @@ use crate::net::tls::{KernelTlsRng, TlsClient, TlsClientConfig, TlsRoots, TlsTim
 use crate::r::net::{NetProfile, VNet};
 use crate::t::net::dns::{self, DnsConfig};
 
-pub const SMTP_HOST: &str = "smtp.mail.com";
-pub const SMTP_PORT: u16 = crate::allports::well_known::SMTP_SUBMISSION;
-pub const SMTP_EHLO_DOMAIN: &str = "trueos.local";
+pub const SMTP_HOST: &str = crate::allports::mail::SMTP_HOST;
+pub const SMTP_PORT: u16 = crate::allports::mail::SMTP_PORT;
+pub const SMTP_EHLO_DOMAIN: &str = crate::allports::mail::SMTP_EHLO_DOMAIN;
 
 #[derive(Debug)]
 pub enum SmtpError {
@@ -83,7 +83,7 @@ impl SmtpClient {
                 Some(Event::Opened { handle: h, kind }) if kind == SocketKind::Tcp => {
                     handle = Some(h);
                 }
-                Some(Event::TcpEstablished { handle: h }) if Some(h) == handle => {
+                Some(Event::TcpEstablished { handle: h, .. }) if Some(h) == handle => {
                     break;
                 }
                 Some(Event::TcpData { handle: h, data }) if Some(h) == handle => {

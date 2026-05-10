@@ -103,7 +103,7 @@ impl HttpServer {
                 }
                 HttpServerEvent::None
             }
-            api::Event::TcpEstablished { handle } => {
+            api::Event::TcpEstablished { handle, .. } => {
                 self.sessions.entry(handle.0).or_default();
                 HttpServerEvent::None
             }

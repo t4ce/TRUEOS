@@ -104,7 +104,7 @@ impl WsConnection {
                             handle = Some(h);
                         }
                     }
-                    Event::TcpEstablished { handle: h } => {
+                    Event::TcpEstablished { handle: h, .. } => {
                         if Some(h) == handle {
                             net.submit(Command::SendTcp {
                                 handle: h,

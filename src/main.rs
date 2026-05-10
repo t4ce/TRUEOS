@@ -108,8 +108,6 @@ mod tst_ui2_cursorpicker_demo;
 mod tst_ui2_ids;
 #[path = "tst/ui2_mandelbrot_demo.rs"]
 mod tst_ui2_mandelbrot_demo;
-#[path = "tst/ui2_particle_demo.rs"]
-mod tst_ui2_particle_demo;
 #[path = "tst/ui2_player_demo.rs"]
 mod tst_ui2_player_demo;
 #[path = "tst/ui2_raple_demo.rs"]

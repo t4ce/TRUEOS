@@ -330,8 +330,20 @@ fn from_kernel_event(ev: NetEvent) -> Option<api::Event> {
             },
             data: api::ByteBuf::from_slice_trunc(&data[..]),
         },
-        NetEvent::TcpEstablished { handle } => api::Event::TcpEstablished {
+        NetEvent::TcpEstablished {
+            handle,
+            peer,
+            peer6,
+        } => api::Event::TcpEstablished {
             handle: api::NetHandle(handle.0),
+            peer: peer.map(|peer| api::EndpointV4 {
+                addr: peer.addr,
+                port: peer.port,
+            }),
+            peer6: peer6.map(|peer| api::EndpointV6 {
+                addr: peer.addr,
+                port: peer.port,
+            }),
         },
         NetEvent::TcpData { handle, data } => api::Event::TcpData {
             handle: api::NetHandle(handle.0),

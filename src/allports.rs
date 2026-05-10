@@ -31,6 +31,20 @@ pub mod services {
     pub const LOCALCODER_WEB_TCP_PORT: u16 = 81;
 }
 
+pub mod mail {
+    use super::well_known;
+
+    pub const ACCOUNT_EMAIL: &str = "jonasb@post.com";
+    pub const ACCOUNT_PASSWORD: &str = "ENTER_MAIL_PASSWORD_HERE";
+
+    pub const SMTP_HOST: &str = "smtp.mail.com";
+    pub const SMTP_PORT: u16 = well_known::SMTP_SUBMISSION;
+    pub const SMTP_EHLO_DOMAIN: &str = "trueos.local";
+
+    pub const POP3_HOST: &str = "pop.mail.com";
+    pub const POP3_PORT: u16 = well_known::POP3_TLS;
+}
+
 pub mod esp {
     pub const UDP_BROADCAST_PORT: u16 = 32_343;
     pub const HTTP_UPLOAD_PORT: u16 = 8080;
