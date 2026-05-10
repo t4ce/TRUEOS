@@ -295,7 +295,11 @@ pub fn play_piano_held_probe(
 
         held.len = held_len;
         for idx in 0..PIANO_PROBE_MAX_NOTES {
-            held.notes[idx] = if idx < held_len { notes[idx].min(127) } else { 0 };
+            held.notes[idx] = if idx < held_len {
+                notes[idx].min(127)
+            } else {
+                0
+            };
         }
 
         let frames = synth::ms_to_samples(duration_ms).max(1) as usize;

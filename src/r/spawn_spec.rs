@@ -70,7 +70,6 @@ impl TaskSpec {
             spawn,
         }
     }
-
 }
 
 pub(super) enum SpawnAttempt {

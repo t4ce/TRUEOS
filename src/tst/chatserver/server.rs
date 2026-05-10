@@ -6,16 +6,16 @@ use core::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::{io, net::SocketAddr};
 
 use axum::{
-    body::{to_bytes, Body},
+    Router,
+    body::{Body, to_bytes},
     extract::Request,
     http::{
-        header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE},
         Method, StatusCode,
+        header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE},
     },
     response::Response,
     routing::any,
     serve::ListenerExt,
-    Router,
 };
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use trueos_chat::{ChatConfig, ChatHub, ChatMethod, ChatRequest, ChatResponse};

@@ -343,7 +343,13 @@ fn init_minimal_ppgtt(warm: RenderWarmState) -> bool {
         }
     }
 
-    fn map_region(warm: RenderWarmState, gpu: u64, phys: u64, len: usize, entry_flags: u64) -> bool {
+    fn map_region(
+        warm: RenderWarmState,
+        gpu: u64,
+        phys: u64,
+        len: usize,
+        entry_flags: u64,
+    ) -> bool {
         let pt_off = 12288usize;
         for page in 0..len.div_ceil(4096) {
             let va_page = (gpu >> 12) + page as u64;
@@ -355,7 +361,10 @@ fn init_minimal_ppgtt(warm: RenderWarmState) -> bool {
             let pte_off = pt_off + pd_index * 4096 + pt_index * core::mem::size_of::<u64>();
             let pte = (phys + (page as u64) * 4096) & !0xFFF;
             unsafe {
-                core::ptr::write_volatile(warm.ppgtt_virt.add(pte_off) as *mut u64, pte | entry_flags);
+                core::ptr::write_volatile(
+                    warm.ppgtt_virt.add(pte_off) as *mut u64,
+                    pte | entry_flags,
+                );
             }
         }
         true
@@ -500,7 +509,11 @@ fn submit_warm_render_batch(
         ppgtt_ok as u8,
         warm.ppgtt_phys,
         warm.ppgtt_len,
-        if GPGPU_BATCH_START_IN_PPGTT { "ppgtt" } else { "ggtt" },
+        if GPGPU_BATCH_START_IN_PPGTT {
+            "ppgtt"
+        } else {
+            "ggtt"
+        },
     );
     if !ppgtt_ok {
         return false;
@@ -554,15 +567,23 @@ fn submit_warm_render_batch(
         crate::intel::mmio_read(dev, RCS_RING_TAIL),
     );
 
+    let gpgpu_submit = is_gpgpu_submit_name(submit_name);
+    let poll_limit = if gpgpu_submit { 4 * 1024 * 1024 } else { 4096 };
     let mut completed = false;
     let mut iter = 0usize;
-    while iter < 4096 {
+    while iter < poll_limit {
         let observed = read_result_dword(warm, expected_result_slot_dword);
         if observed == expected_result {
             completed = true;
             break;
         }
-        if iter == 0 || iter == 256 || iter == 1024 || iter == 4095 {
+        if iter == 0
+            || iter == 256
+            || iter == 1024
+            || iter == 4095
+            || (gpgpu_submit
+                && (iter == 16384 || iter == 65535 || iter == 262143 || iter == poll_limit - 1))
+        {
             crate::log!(
                 "intel/gpgpu: {} poll iter={} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} execlist_lo=0x{:08X} execlist_hi=0x{:08X} observed_slot={} observed=0x{:08X} expected=0x{:08X}\n",
                 submit_name,
@@ -596,7 +617,7 @@ fn submit_warm_render_batch(
         crate::intel::mmio_read(dev, RCS_RING_ACTHD),
         crate::intel::mmio_read(dev, RCS_RING_IPEHR),
     );
-    if !completed && is_gpgpu_submit_name(submit_name) {
+    if !completed && gpgpu_submit {
         log_gpgpu_stall_detail(dev, submit_name);
     }
 
@@ -1194,7 +1215,7 @@ const GPGPU_ENABLE_SIP_EXCEPTIONS: bool = false;
 const GPGPU_SIP_HANDLER_OFFSET_BYTES: usize = GPGPU_EU_KERNEL_OFFSET_BYTES + 0x200;
 const GPGPU_SIP_HANDLER_VARIANT: trueos_eu::gfx12::Gfx12EotVariant =
     trueos_eu::gfx12::Gfx12EotVariant::TsR0ToG127Send1;
-const GPGPU_USE_HDC_STORE_THEN_EOT: bool = false;
+const GPGPU_USE_HDC_STORE_THEN_EOT: bool = true;
 const GPGPU_USE_GFX125_COMPUTE_WALKER: bool = false;
 
 #[derive(Copy, Clone)]
@@ -2141,33 +2162,32 @@ fn submit_gpgpu_compute_walker_probe(
     } else {
         encode_gfx12_gpgpu_walker_probe_batch(warm, batch, store_surface, program)
     };
-    let batch_bytes =
-        match batch_result {
-            Ok(bytes) => bytes,
-            Err(reason) => {
-                crate::log!("intel/gpgpu: compute-walker accepted=0 reason={}\n", reason);
-                return GpgpuComputeWalkerProof {
-                    program_name: program.name,
-                    expects_store: program.expects_store,
-                    submitted: false,
-                    retired: false,
-                    marker: 0,
-                    dispatch_before,
-                    dispatch_after: dispatch_before,
-                    dispatch_delta: 0,
-                    c_value: 0,
-                    result_c_changed_by_eu: false,
-                    expected_hits_mask: 0,
-                    post_pipeline: 0,
-                    post_sba: 0,
-                    post_scm: 0,
-                    post_cfe: 0,
-                    post_pre_midl_msf: 0,
-                    post_curbe_load: 0,
-                    batch_bytes: 0,
-                };
-            }
-        };
+    let batch_bytes = match batch_result {
+        Ok(bytes) => bytes,
+        Err(reason) => {
+            crate::log!("intel/gpgpu: compute-walker accepted=0 reason={}\n", reason);
+            return GpgpuComputeWalkerProof {
+                program_name: program.name,
+                expects_store: program.expects_store,
+                submitted: false,
+                retired: false,
+                marker: 0,
+                dispatch_before,
+                dispatch_after: dispatch_before,
+                dispatch_delta: 0,
+                c_value: 0,
+                result_c_changed_by_eu: false,
+                expected_hits_mask: 0,
+                post_pipeline: 0,
+                post_sba: 0,
+                post_scm: 0,
+                post_cfe: 0,
+                post_pre_midl_msf: 0,
+                post_curbe_load: 0,
+                batch_bytes: 0,
+            };
+        }
+    };
     crate::intel::dma_flush(warm.batch_virt, batch_bytes);
     let debug_before = GpgpuThreadDebugSnapshot::read(dev);
 
@@ -2628,7 +2648,7 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     const IDD_LOAD_DWORDS: usize = IDD_PAYLOAD_DWORDS;
     const CURBE_READ_LENGTH_8DW: u32 = if GPGPU_LOAD_DUMMY_CURBE { 1 } else { 0 };
     const GPGPU_THREADS_IN_GROUP: u32 = 1;
-    const GPGPU_WALKER_GROUP_X_DIM: u32 = 8192;
+    const GPGPU_WALKER_GROUP_X_DIM: u32 = 2048;
     const GPGPU_WALKER_GROUP_Y_DIM: u32 = 1;
     const GPGPU_WALKER_GROUP_Z_DIM: u32 = 1;
     const CURBE_TOTAL_BYTES: usize = if GPGPU_LOAD_DUMMY_CURBE {
@@ -3204,7 +3224,6 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
 
 fn log_gpgpu_compute_walker_status(proof: GpgpuComputeWalkerProof) {
     let gpu_program_started = proof.dispatch_delta != 0;
-    let eot_only_retired = !proof.expects_store && gpu_program_started && proof.retired;
     let store_landed_anywhere = proof.expected_hits_mask != 0;
     let breadcrumbs_ok = if GPGPU_CONTIGUOUS_VFE_IDD_WALKER {
         proof.post_pipeline == 0xC0DE_7801
@@ -3219,7 +3238,8 @@ fn log_gpgpu_compute_walker_status(proof: GpgpuComputeWalkerProof) {
             && proof.post_curbe_load == 0xC0DE_7806
     };
     let post_walker_marker_retired = proof.marker == RCS_EXEC_RESULT_COMPUTE_WALKER_DONE;
-    let failure_class = if eot_only_retired {
+    let eot_retired = gpu_program_started && proof.retired && post_walker_marker_retired;
+    let failure_class = if eot_retired && !proof.expects_store {
         "thread-eot-retired-proven"
     } else if proof.result_c_changed_by_eu {
         "shared-ram-write-proven"
@@ -3236,7 +3256,7 @@ fn log_gpgpu_compute_walker_status(proof: GpgpuComputeWalkerProof) {
     };
     let next = if proof.result_c_changed_by_eu {
         "add-read-alu-write-kernel"
-    } else if eot_only_retired {
+    } else if eot_retired {
         "add-dataport-store-after-clean-eot"
     } else if gpu_program_started && !proof.retired {
         "fix-ts-eot-or-enable-sip-exception-capture-before-dataport-store"
@@ -3253,7 +3273,7 @@ fn log_gpgpu_compute_walker_status(proof: GpgpuComputeWalkerProof) {
         RESULT_SLOT_GPGPU_EU_C_STORE_DWORD,
         proof.c_value,
         proof.expected_hits_mask,
-        eot_only_retired as u8,
+        eot_retired as u8,
         failure_class,
         next,
     );
@@ -3267,7 +3287,7 @@ fn log_gpgpu_compute_walker_status(proof: GpgpuComputeWalkerProof) {
         gpu_program_started as u8,
         breadcrumbs_ok as u8,
         proof.dispatch_delta,
-        eot_only_retired as u8,
+        eot_retired as u8,
         post_walker_marker_retired as u8,
         store_landed_anywhere as u8,
         started_plain,
@@ -3290,7 +3310,7 @@ fn log_gpgpu_compute_walker_status(proof: GpgpuComputeWalkerProof) {
         GPU_PROGRAM_SHARED_RAM_WRITE_EXPECTED,
         proof.result_c_changed_by_eu as u8,
         store_landed_anywhere as u8,
-        eot_only_retired as u8,
+        eot_retired as u8,
         breadcrumbs_ok as u8,
         post_walker_marker_retired as u8,
         failure_class,

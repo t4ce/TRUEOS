@@ -378,10 +378,7 @@ impl SmtpClient {
 }
 
 fn reply_error(reply: &SmtpReply) -> SmtpError {
-    SmtpError::ReplyError(
-        reply.code,
-        reply.lines.first().cloned().unwrap_or_else(String::new),
-    )
+    SmtpError::ReplyError(reply.code, reply.lines.first().cloned().unwrap_or_else(String::new))
 }
 
 fn parse_smtp_reply(buf: &[u8]) -> Option<(usize, SmtpReply)> {

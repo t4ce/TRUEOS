@@ -296,7 +296,7 @@ fn log_hid_report_decode(slot_id: u32, interface_number: u8, report_desc: &[u8])
                 if let (Some(min), Some(max)) = (state.usage_min, state.usage_max) {
                     let _ = write!(&mut detail, " usage_range=0x{:X}-0x{:X}", min, max);
                 }
-                crate::log_info!(target: "usb"; 
+                crate::log_info!(target: "usb";
                     "crabusb: hid report decode slot={} if#{} report_id={} kind={} {}\n",
                     slot_id,
                     interface_number,
@@ -336,7 +336,7 @@ pub(crate) async fn log_hid_report_descriptors(
     let mut device = match host.open_device(dev_info).await {
         Ok(device) => device,
         Err(err) => {
-            crate::log_info!(target: "usb"; 
+            crate::log_info!(target: "usb";
                 "crabusb: hid {:04X}:{:04X} descriptor-open failed: {:?}\n",
                 dev_info.vendor_id(),
                 dev_info.product_id(),
@@ -382,7 +382,7 @@ pub(crate) async fn log_hid_report_descriptors_on_device(
             Ok(read_len) => {
                 let read_len = read_len.min(hid_desc.len());
                 let scope = UsbDescriptorScope::Interface(interface_number);
-                crate::log_info!(target: "usb"; 
+                crate::log_info!(target: "usb";
                     "crabusb: hid desc slot={} scope={} if#{} bytes={:02X?}\n",
                     slot_id,
                     descriptor_scope_label(scope),
@@ -400,7 +400,7 @@ pub(crate) async fn log_hid_report_descriptors_on_device(
                 } else {
                     HID_DESC_FALLBACK_REPORT_LEN
                 };
-                crate::log_info!(target: "usb"; 
+                crate::log_info!(target: "usb";
                     "crabusb: hid desc slot={} if#{} report_type={} report_len={}\n",
                     slot_id,
                     interface_number,
@@ -424,7 +424,7 @@ pub(crate) async fn log_hid_report_descriptors_on_device(
                 {
                     Ok(report_read_len) => {
                         let report_read_len = report_read_len.min(report_desc.len());
-                        crate::log_info!(target: "usb"; 
+                        crate::log_info!(target: "usb";
                             "crabusb: hid report desc slot={} if#{} len={} bytes={:02X?}\n",
                             slot_id,
                             interface_number,
@@ -438,7 +438,7 @@ pub(crate) async fn log_hid_report_descriptors_on_device(
                         );
                     }
                     Err(err) => {
-                        crate::log_info!(target: "usb"; 
+                        crate::log_info!(target: "usb";
                             "crabusb: hid report desc slot={} if#{} read failed len={} err={:?}\n",
                             slot_id,
                             interface_number,
@@ -449,7 +449,7 @@ pub(crate) async fn log_hid_report_descriptors_on_device(
                 }
             }
             Err(err) => {
-                crate::log_info!(target: "usb"; 
+                crate::log_info!(target: "usb";
                     "crabusb: hid desc slot={} if#{} read failed err={:?}\n",
                     slot_id,
                     interface_number,

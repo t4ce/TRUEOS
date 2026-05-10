@@ -49,6 +49,7 @@ define_started_flags!(
     MAIL_HTTP_STARTED,
     AXUM_BOOT_STARTED,
     FILEEXPLORER_HTTP_STARTED,
+    WEBDEVICES_HTTP_STARTED,
     WS_TIME_STARTED,
     ESP_GATE_STARTED,
     ESP_GATE_REGISTRY_STARTED,
@@ -456,9 +457,11 @@ fn spawn_axum_boot(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_fileexplorer_http(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| {
-        crate::tst_fileexplorer_axum::fileexplorer_http_service_task()
-    })
+    spawn_local(spawner, |_spawner| crate::tst_fileexplorer_axum::fileexplorer_http_service_task())
+}
+
+fn spawn_webdevices_http(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::tst_webdevices_axum::webdevices_http_service_task())
 }
 
 fn spawn_ws_time(spawner: Spawner) -> SpawnAttempt {
@@ -1116,7 +1119,7 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::APP_VM_READY
 const WS_BOOT_READY: u32 = crate::r::readiness::NET_GATEWAY_REACHABLE
     | crate::r::readiness::TLS_SOCKET_SERVICE_READY
     | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
-static TASKS: [TaskSpec; 69] = [
+static TASKS: [TaskSpec; 70] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
         "globalog-persist-once",
@@ -1217,6 +1220,12 @@ static TASKS: [TaskSpec; 69] = [
         &FILEEXPLORER_HTTP_STARTED,
         spawn_fileexplorer_http,
     ),
+    TaskSpec::enabled(
+        "webdevices-http",
+        crate::r::readiness::NET_V4_CONFIGURED,
+        &WEBDEVICES_HTTP_STARTED,
+        spawn_webdevices_http,
+    ),
     TaskSpec::enabled("app-vm-run-queue", 0, &APP_VM_RUN_QUEUE_STARTED, spawn_app_vm_run_queue),
     TaskSpec::disabled(
         "bp-autostart",
@@ -1276,12 +1285,7 @@ static TASKS: [TaskSpec; 69] = [
         &INTEL_CURSOR_SERVICE_STARTED,
         spawn_intel_cursor_service_task,
     ),
-    TaskSpec::enabled(
-        "intel-hda-probe",
-        0,
-        &INTEL_HDA_PROBE_STARTED,
-        spawn_intel_hda_probe_task,
-    ),
+    TaskSpec::enabled("intel-hda-probe", 0, &INTEL_HDA_PROBE_STARTED, spawn_intel_hda_probe_task),
     TaskSpec::enabled("raple-service", 0, &RAPLE_SERVICE_STARTED, spawn_raple_service),
     TaskSpec::enabled(
         "html_fetch_service",

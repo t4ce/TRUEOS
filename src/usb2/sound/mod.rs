@@ -146,37 +146,35 @@ async fn fetch_demo_wav_body() -> Option<(&'static str, Vec<u8>)> {
             })
             .await
             {
-                Ok(Ok(())) => match crate::r::fs::trueosfs::file_out_async(
-                    disk,
-                    AUDIO_DEMO_CACHE_PATH,
-                )
-                .await
-                {
-                    Ok(Some(cached)) if !cached.is_empty() => {
-                        crate::log!(
-                            "crabusb: audio cached path={} url={} bytes={}\n",
-                            AUDIO_DEMO_CACHE_PATH,
-                            url,
-                            cached.len()
-                        );
-                        return Some((AUDIO_DEMO_CACHE_PATH, cached));
+                Ok(Ok(())) => {
+                    match crate::r::fs::trueosfs::file_out_async(disk, AUDIO_DEMO_CACHE_PATH).await
+                    {
+                        Ok(Some(cached)) if !cached.is_empty() => {
+                            crate::log!(
+                                "crabusb: audio cached path={} url={} bytes={}\n",
+                                AUDIO_DEMO_CACHE_PATH,
+                                url,
+                                cached.len()
+                            );
+                            return Some((AUDIO_DEMO_CACHE_PATH, cached));
+                        }
+                        Ok(_) => {
+                            crate::log!(
+                                "crabusb: audio stream fetch finished but cache empty path={} url={}\n",
+                                AUDIO_DEMO_CACHE_PATH,
+                                url
+                            );
+                        }
+                        Err(err) => {
+                            crate::log!(
+                                "crabusb: audio cache read failed path={} url={} err={:?}\n",
+                                AUDIO_DEMO_CACHE_PATH,
+                                url,
+                                err
+                            );
+                        }
                     }
-                    Ok(_) => {
-                        crate::log!(
-                            "crabusb: audio stream fetch finished but cache empty path={} url={}\n",
-                            AUDIO_DEMO_CACHE_PATH,
-                            url
-                        );
-                    }
-                    Err(err) => {
-                        crate::log!(
-                            "crabusb: audio cache read failed path={} url={} err={:?}\n",
-                            AUDIO_DEMO_CACHE_PATH,
-                            url,
-                            err
-                        );
-                    }
-                },
+                }
                 Ok(Err(err)) => {
                     crate::log!("crabusb: audio stream fetch failed url={} err={:?}\n", url, err);
                 }
@@ -201,11 +199,9 @@ async fn fetch_demo_wav_body() -> Option<(&'static str, Vec<u8>)> {
         {
             Ok(Ok(body)) => return Some((url, body)),
             Ok(Err(err)) => crate::log!("crabusb: audio fetch failed url={} err={:?}\n", url, err),
-            Err(err) => crate::log!(
-                "crabusb: audio fetch shared-tokio failed url={} err={:?}\n",
-                url,
-                err
-            ),
+            Err(err) => {
+                crate::log!("crabusb: audio fetch shared-tokio failed url={} err={:?}\n", url, err)
+            }
         }
     }
 
