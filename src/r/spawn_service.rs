@@ -421,8 +421,11 @@ fn spawn_lumen_service(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn boot_lumen_service_enabled() -> bool {
-    crate::allcaps::lumen::BOOT_MODEL_SERVICE
-        || crate::r::fs::trueosfs::skhynix_lumen_monopoly_enabled()
+    if crate::allcaps::lumen::BOOT_MODEL_SERVICE {
+        return true;
+    }
+    crate::r::fs::trueosfs::skhynix_lumen_monopoly_enabled()
+        && crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_SKHYNIX_LUMEN_MOUNTED)
 }
 
 fn spawn_ai_qjs_oneshot(spawner: Spawner) -> SpawnAttempt {

@@ -159,11 +159,7 @@ fn hda_duration_ms_for_samples(sample_count: usize) -> u32 {
 
 async fn load_hda_wav_loop_samples() -> Result<Vec<i16>, &'static str> {
     let url = crate::allports::local_assets::AUDIO_DEMO_URL;
-    crate::log!(
-        "intel/hda-probe: wav fetch submit trace={} url={}\n",
-        HDA_WAV_TRACE_MARKER,
-        url
-    );
+    crate::log!("intel/hda-probe: wav fetch submit trace={} url={}\n", HDA_WAV_TRACE_MARKER, url);
     let body = crate::t::run_on_shared_tokio(move || async move {
         crate::log!(
             "intel/hda-probe: wav fetch job enter trace={} url={}\n",
@@ -198,11 +194,7 @@ async fn load_hda_wav_loop_samples() -> Result<Vec<i16>, &'static str> {
 
 async fn hda_wav_loop_probe_task() {
     let url = crate::allports::local_assets::AUDIO_DEMO_URL;
-    crate::log!(
-        "intel/hda-probe: wav loop mode trace={} url={}\n",
-        HDA_WAV_TRACE_MARKER,
-        url
-    );
+    crate::log!("intel/hda-probe: wav loop mode trace={} url={}\n", HDA_WAV_TRACE_MARKER, url);
 
     loop {
         if !crate::hda::is_initialized() {
@@ -217,10 +209,7 @@ async fn hda_wav_loop_probe_task() {
         }
 
         crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
-        crate::log!(
-            "intel/hda-probe: wav loop net ready trace={}\n",
-            HDA_WAV_TRACE_MARKER
-        );
+        crate::log!("intel/hda-probe: wav loop net ready trace={}\n", HDA_WAV_TRACE_MARKER);
         while !crate::t::shared_tokio_runtime_ready() {
             crate::log!(
                 "intel/hda-probe: wav loop waiting for shared tokio runtime trace={}\n",

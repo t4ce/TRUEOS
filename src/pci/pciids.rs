@@ -89,8 +89,8 @@ pub async fn pciids_git_task() {
     }
 }
 
-pub fn load_raw_from_root_blocking(
-) -> Result<Option<alloc::vec::Vec<u8>>, crate::disc::block::Error> {
+pub fn load_raw_from_root_blocking()
+-> Result<Option<alloc::vec::Vec<u8>>, crate::disc::block::Error> {
     let mut last_err: Option<crate::disc::block::Error> = None;
 
     // Try every mounted TRUEOSFS root (newest first) so a valid pci.ids on an
@@ -114,8 +114,8 @@ pub fn load_raw_from_root_blocking(
     Ok(None)
 }
 
-pub fn load_sanitized_from_root_blocking(
-) -> Result<Option<alloc::vec::Vec<u8>>, crate::disc::block::Error> {
+pub fn load_sanitized_from_root_blocking()
+-> Result<Option<alloc::vec::Vec<u8>>, crate::disc::block::Error> {
     let Some(raw) = load_raw_from_root_blocking()? else {
         return Ok(None);
     };

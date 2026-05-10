@@ -1222,11 +1222,8 @@ impl<'a> TxToken for AdapterTxTokenAt<'a> {
                                         u16::from_be_bytes([buf[tcp_off + 2], buf[tcp_off + 3]]);
                                     let flags = buf[tcp_off + 13];
                                     let control = (flags & 0x07) != 0;
-                                    let sampled_data =
-                                        crate::logflag::NET_LOG_TX_TAP
-                                            && net_log_once_per_second(
-                                                &NET_TX_TAP_TCP_LAST_LOG_NS,
-                                            );
+                                    let sampled_data = crate::logflag::NET_LOG_TX_TAP
+                                        && net_log_once_per_second(&NET_TX_TAP_TCP_LAST_LOG_NS);
                                     if control || sampled_data {
                                         crate::log_info!(target: "net";
                                             "net: tx-tap dev={} tcp {}.{}.{}.{}:{} -> {}.{}.{}.{}:{} flags=0x{:02x}\n",

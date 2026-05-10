@@ -648,11 +648,12 @@ fn register_root_mount(disk: block::DeviceHandle, replace_existing: bool) {
     file_record_cache_invalidate_disk(disk_id);
 
     if skhynix_lumen_monopoly_root(&info) {
-        crate::log_trace!(
-            "trueosfs: root mounted disk_id={} label={} readiness_handoff=suppressed reason=skhynix-uas-lumen-monopoly\n",
+        crate::log!(
+            "trueosfs: root mounted disk_id={} label={} readiness_handoff=lumen-monopoly reason=skhynix-uas-lumen-monopoly\n",
             disk_id.raw(),
             info.label.as_deref().unwrap_or("-")
         );
+        crate::r::readiness::set(crate::r::readiness::TRUEOSFS_SKHYNIX_LUMEN_MOUNTED);
     } else {
         crate::r::readiness::set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED);
     }

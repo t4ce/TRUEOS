@@ -1,4 +1,4 @@
-use alloc::{vec, vec::Vec};
+use alloc::vec::Vec;
 use core::{
     sync::atomic::{AtomicU64, Ordering},
     task::Poll,
@@ -855,34 +855,6 @@ pub(crate) async fn exercise_mass_uas_skhynix(
     _data_out: &mut EndpointBulkOut,
 ) -> Result<MassProbeInfo, MassProbeError> {
     let info = probe_mass_uas_skhynix(command_out, status_in, data_in).await?;
-
-    let block_size = info.block_size as usize;
-    if block_size == 0 || block_size > 1024 * 1024 {
-        return Err(MassProbeError::ShortData);
-    }
-
-    let mut first_block = vec![0u8; block_size];
-    read_blocks_uas_skhynix(
-        command_out,
-        status_in,
-        data_in,
-        0,
-        1,
-        first_block.as_mut_slice(),
-        0x5541_EC10,
-    )
-    .await?;
-    let checksum = first_block
-        .iter()
-        .fold(0u32, |acc, &byte| acc.wrapping_mul(33).wrapping_add(u32::from(byte)));
-    crate::log_info!(target: "usb";
-        "crabusb: mass uas-skhynix exercise read-lba0 bytes={} checksum=0x{:08X}\n",
-        first_block.len(),
-        checksum
-    );
-
-    crate::log_info!(target: "usb"; "crabusb: mass uas-skhynix exercise echo-buffer skipped reason=read-bringup\n");
-
     Ok(info)
 }
 
@@ -970,7 +942,6 @@ pub(crate) async fn probe_mass_uas_skhynix(
         removable,
         inquiry[0] & 0x1F
     );
-    let _ = keepalive_mass_uas_skhynix(command_out, status_in, 0x5541_5200).await;
 
     let mut read_capacity = [0u8; 8];
     let read_capacity_cdb = scsi::cdb_read_capacity_10();
