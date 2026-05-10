@@ -554,8 +554,8 @@ Runtime shape:
   live16.
 - `t6-2-partial-tile-stage` is step 12 and restages a small tile prefix with
   multiple real matrix rows.
-- `t6-2-row-indexed-live16-partial` is step 13 and writes one output slot per
-  workgroup/row for the staged prefix.
+- `t6-2-lane-indexed-live16-partial` is step 13 and writes one output slot per
+  SIMD8 lane/row for the staged prefix.
 - `t6-2-actual-work-partial-tiles` is step 14 and reports separate T5, T6,
   T6.1, and T6.2 submitted, finished, and compare-ok tile counts.
 - The aggregate next marker is now `next=raise-row-count-or-live-k`.
@@ -581,18 +581,23 @@ packed-BF16 reduction from 8 lanes to 16 lanes.  The oracle contract is recorded
 next to the generated sources in
 `.codex_tmp/t6_1_live16_packed_bf16_artifact_contract.md`.
 
-## T6.2 Row-Indexed Partial Tile
+## T6.2 Lane-Indexed Partial Tile
 
-`T6.2` is the row-indexed live16 artifact:
-`gfx12-t6-2-row-indexed-live16-packed-bf16-dot-hdc1-stateless-store-then-ts-eot`.
+`T6.2` is the lane-indexed live16 artifact:
+`gfx12-t6-2-lane-indexed-live16-packed-bf16-dot-hdc1-stateless-store-then-ts-eot`.
 
 It changes the shader contract in the smallest useful way:
 
-- `gl_WorkGroupID.x` selects the row inside the staged tile record.
+- `gl_LocalInvocationID.x` selects the row inside the staged tile record.
 - The same value selects the output dword inside the tile output region.
-- Each workgroup computes one live16 packed-BF16 partial dot.
+- One SIMD8 workgroup computes eight live16 packed-BF16 partial dots.
 - The first runtime target is 8 rows, so the proof compares output slots
   `[0..7]` against CPU live16 references.
+
+The first `gl_WorkGroupID.x` row-indexed artifact is preserved in `.codex_tmp`,
+but hardware logs showed the legacy walker path retired it with zero visible
+outputs.  That matches the older metadata clue that workgroup-id payloads were
+not trustworthy in this shell, so T6.2 moves row selection onto SIMD lanes.
 
 This is not full GEMM yet.  It proves that a tile can carry multiple staged
 rows and that multiple workers can produce distinct row partials inside the

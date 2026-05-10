@@ -439,7 +439,7 @@ pub(crate) fn observe_live_bf16_matvec_probe(
         last_cpu_expected_bits = t61.cpu_expected_bits;
         last_dispatch = t61.dispatch_delta;
         crate::log!(
-            "lumen-gpu-proof: director-step step=11 backend=local-gpu mode=t6-1-live16-bf16-dot submitted={} finished={} readback_ok={} compare_ok={} reason={} program={} tile_index={} armed_tiles={} row={} output_gpu=0x{:X} gpu_value=0x{:08X} cpu_expected_bits=0x{:08X} full_row_cpu_bits=0x{:08X} t6_gpu_value=0x{:08X} t6_cpu_expected_bits=0x{:08X} output_first_before=0x{:08X} output_first_after=0x{:08X} output_hits_lo64=0x{:016X} lane_dispatch={} live_k_dim={} requires_live_gpu_load={} finish_marker=0x{:08X} finish_expected=0x{:08X} batch_bytes=0x{:X} output_owner=cpu-ap action=hold-scale next=t6-2-row-indexed-live16-partial does_not_prove=full_model_matvec\n",
+            "lumen-gpu-proof: director-step step=11 backend=local-gpu mode=t6-1-live16-bf16-dot submitted={} finished={} readback_ok={} compare_ok={} reason={} program={} tile_index={} armed_tiles={} row={} output_gpu=0x{:X} gpu_value=0x{:08X} cpu_expected_bits=0x{:08X} full_row_cpu_bits=0x{:08X} t6_gpu_value=0x{:08X} t6_cpu_expected_bits=0x{:08X} output_first_before=0x{:08X} output_first_after=0x{:08X} output_hits_lo64=0x{:016X} lane_dispatch={} live_k_dim={} requires_live_gpu_load={} finish_marker=0x{:08X} finish_expected=0x{:08X} batch_bytes=0x{:X} output_owner=cpu-ap action=hold-scale next=t6-2-lane-indexed-live16-partial does_not_prove=full_model_matvec\n",
             t61.submitted as u8,
             t61.finished as u8,
             t61.readback_ok as u8,
@@ -490,7 +490,7 @@ pub(crate) fn observe_live_bf16_matvec_probe(
         );
         t62_staged_tiles += t62_stage.readback_ok as usize;
         crate::log!(
-            "lumen-gpu-proof: director-step step=12 backend=local-gpu mode=t6-2-partial-tile-stage staged={} reason={} tile_index={} armed_tiles={} row={} row_count={} live_k_dim={} output_gpu=0x{:X} rows_checksum=0x{:016X} staged_rows_checksum=0x{:016X} row_bytes={} output_zeroed={} output_nonzero_dwords={} gpu_submission=0 output_owner=cpu-ap next=t6-2-row-indexed-live16-partial does_not_prove=full_model_matvec\n",
+            "lumen-gpu-proof: director-step step=12 backend=local-gpu mode=t6-2-partial-tile-stage staged={} reason={} tile_index={} armed_tiles={} row={} row_count={} live_k_dim={} output_gpu=0x{:X} rows_checksum=0x{:016X} staged_rows_checksum=0x{:016X} row_bytes={} output_zeroed={} output_nonzero_dwords={} gpu_submission=0 output_owner=cpu-ap next=t6-2-lane-indexed-live16-partial does_not_prove=full_model_matvec\n",
             t62_stage.staged as u8,
             t62_stage.reason,
             tile_index,
@@ -531,7 +531,7 @@ pub(crate) fn observe_live_bf16_matvec_probe(
         last_dispatch = t62.dispatch_delta;
         last_partial_rows = t62.row_count;
         crate::log!(
-            "lumen-gpu-proof: director-step step=13 backend=local-gpu mode=t6-2-row-indexed-live16-partial submitted={} finished={} readback_ok={} compare_ok={} reason={} program={} tile_index={} armed_tiles={} row={} row_count={} output_gpu=0x{:X} compare_mask=0x{:08X} expected_mask=0x{:08X} first_gpu=0x{:08X} first_cpu_expected=0x{:08X} last_gpu=0x{:08X} last_cpu_expected=0x{:08X} lane_dispatch={} live_k_dim={} finish_marker=0x{:08X} finish_expected=0x{:08X} batch_bytes=0x{:X} output_owner=cpu-ap action=hold-scale next=raise-row-count-or-live-k does_not_prove=full_model_matvec\n",
+            "lumen-gpu-proof: director-step step=13 backend=local-gpu mode=t6-2-lane-indexed-live16-partial submitted={} finished={} readback_ok={} compare_ok={} reason={} program={} tile_index={} armed_tiles={} row={} row_count={} output_gpu=0x{:X} compare_mask=0x{:08X} expected_mask=0x{:08X} first_gpu=0x{:08X} first_cpu_expected=0x{:08X} last_gpu=0x{:08X} last_cpu_expected=0x{:08X} lane_dispatch={} live_k_dim={} finish_marker=0x{:08X} finish_expected=0x{:08X} batch_bytes=0x{:X} output_owner=cpu-ap action=hold-scale next=raise-row-count-or-live-k does_not_prove=full_model_matvec\n",
             t62.submitted as u8,
             t62.finished as u8,
             t62.readback_ok as u8,
@@ -558,7 +558,7 @@ pub(crate) fn observe_live_bf16_matvec_probe(
     }
 
     crate::log!(
-        "lumen-gpu-proof: director-step step=14 backend=local-gpu mode=t6-2-actual-work-partial-tiles armed_tiles={} staged_tiles={} t5_submitted_tiles={} t5_finished_tiles={} t5_compare_ok_tiles={} t6_submitted_tiles={} t6_finished_tiles={} t6_compare_ok_tiles={} t61_submitted_tiles={} t61_finished_tiles={} t61_compare_ok_tiles={} t62_staged_tiles={} t62_submitted_tiles={} t62_finished_tiles={} t62_compare_ok_tiles={} first_row=0 last_row={} partial_rows={} tile_rows={} k_dim={} t5_artifact=gfx12-t5-small-live4-packed-bf16-dot t6_artifact=gfx12-t6-small-live8-packed-bf16-dot t61_artifact=gfx12-t6-1-live16-packed-bf16-dot t62_artifact=gfx12-t6-2-row-indexed-live16-packed-bf16-dot artifact_addressing=tile-record-output-slots proof_role=actual-work-tile-frontiers last_gpu_value=0x{:08X} last_cpu_expected_bits=0x{:08X} last_lane_dispatch={} output_owner=cpu-ap action=hold-scale next=raise-row-count-or-live-k does_not_prove=full_model_matvec\n",
+        "lumen-gpu-proof: director-step step=14 backend=local-gpu mode=t6-2-actual-work-partial-tiles armed_tiles={} staged_tiles={} t5_submitted_tiles={} t5_finished_tiles={} t5_compare_ok_tiles={} t6_submitted_tiles={} t6_finished_tiles={} t6_compare_ok_tiles={} t61_submitted_tiles={} t61_finished_tiles={} t61_compare_ok_tiles={} t62_staged_tiles={} t62_submitted_tiles={} t62_finished_tiles={} t62_compare_ok_tiles={} first_row=0 last_row={} partial_rows={} tile_rows={} k_dim={} t5_artifact=gfx12-t5-small-live4-packed-bf16-dot t6_artifact=gfx12-t6-small-live8-packed-bf16-dot t61_artifact=gfx12-t6-1-live16-packed-bf16-dot t62_artifact=gfx12-t6-2-lane-indexed-live16-packed-bf16-dot artifact_addressing=tile-record-output-slots proof_role=actual-work-tile-frontiers last_gpu_value=0x{:08X} last_cpu_expected_bits=0x{:08X} last_lane_dispatch={} output_owner=cpu-ap action=hold-scale next=raise-row-count-or-live-k does_not_prove=full_model_matvec\n",
         armed_tiles,
         staged_tiles,
         t5_submitted_tiles,

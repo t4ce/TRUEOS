@@ -2030,7 +2030,7 @@ pub(crate) fn stage_gpgpu_tile_record_rows_probe(
         "output-not-zero"
     };
     crate::log!(
-        "intel/gpgpu: tile-rows-stage staged={} reason={} output_gpu=0x{:X} row_count={} k_dim={} row_bytes={} rows_checksum=0x{:016X} staged_rows_checksum=0x{:016X} output_zeroed={} output_nonzero_dwords={} next=t6-2-row-indexed-live16 does_not_prove=full_model_matvec\n",
+        "intel/gpgpu: tile-rows-stage staged={} reason={} output_gpu=0x{:X} row_count={} k_dim={} row_bytes={} rows_checksum=0x{:016X} staged_rows_checksum=0x{:016X} output_zeroed={} output_nonzero_dwords={} next=t6-2-lane-indexed-live16 does_not_prove=full_model_matvec\n",
         staged as u8,
         reason,
         output_gpu,
@@ -3104,17 +3104,18 @@ pub(crate) fn submit_gpgpu_t62_partial_matvec_probe(
         warm,
         surface_gpu_base,
         surface_bytes,
-        "bind-send-bti-to-t6-2-row-indexed-arena-base",
+        "bind-send-bti-to-t6-2-lane-indexed-arena-base",
     );
     let batch_dwords = warm.batch_len / core::mem::size_of::<u32>();
     let batch =
         unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, batch_dwords) };
+    let dispatch_groups = 1u32;
     let batch_bytes = match encode_gfx12_gpgpu_walker_probe_batch(
         warm,
         batch,
         store_surface,
         program,
-        row_count as u32,
+        dispatch_groups,
     ) {
         Ok(bytes) => bytes,
         Err(reason) => {
@@ -3136,7 +3137,7 @@ pub(crate) fn submit_gpgpu_t62_partial_matvec_probe(
         warm,
         RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
         RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD,
-        "gpgpu-t6-2-row-indexed-live16",
+        "gpgpu-t6-2-lane-indexed-live16",
     );
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
     crate::intel::dma_flush(unsafe { warm.gpgpu_arena_virt.add(tile_base_offset) }, surface_bytes);
@@ -3155,13 +3156,13 @@ pub(crate) fn submit_gpgpu_t62_partial_matvec_probe(
     } else {
         (1u32 << row_count) - 1
     };
-    let expected_lane_dispatch = (row_count as u32).saturating_mul(GPGPU_WALKER_SIMD8_LANES);
+    let expected_lane_dispatch = dispatch_groups.saturating_mul(GPGPU_WALKER_SIMD8_LANES);
     let marker_ok = finish_marker == RCS_EXEC_RESULT_COMPUTE_WALKER_DONE;
     let lane_count_matches = dispatch_delta == expected_lane_dispatch as u64;
     let compare_ok = compare_mask == expected_mask;
     let readback_ok = finished && marker_ok && lane_count_matches && compare_ok;
     let reason = if readback_ok {
-        "t6-2-row-indexed-live16-written"
+        "t6-2-lane-indexed-live16-written"
     } else if !finished {
         "submit-not-finished"
     } else if !marker_ok {
@@ -3172,13 +3173,13 @@ pub(crate) fn submit_gpgpu_t62_partial_matvec_probe(
         "partial-output-mismatch"
     };
     crate::log!(
-        "intel/gpgpu: t6-2-row-indexed-live16-partial submitted=1 finished={} readback_ok={} compare_ok={} reason={} program_source={} groups={} expected_lane_dispatch={} observed_lane_dispatch={} output_gpu=0x{:X} row_count={} live_k_dim={} compare_mask=0x{:08X} expected_mask=0x{:08X} output_words=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] expected_words=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] finish_marker=0x{:08X} finish_expected=0x{:08X} batch_bytes=0x{:X} output_owner=cpu-ap next=raise-row-count-or-live-k does_not_prove=full_model_matvec\n",
+        "intel/gpgpu: t6-2-lane-indexed-live16-partial submitted=1 finished={} readback_ok={} compare_ok={} reason={} program_source={} groups={} expected_lane_dispatch={} observed_lane_dispatch={} output_gpu=0x{:X} row_count={} live_k_dim={} compare_mask=0x{:08X} expected_mask=0x{:08X} output_words=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] expected_words=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] finish_marker=0x{:08X} finish_expected=0x{:08X} batch_bytes=0x{:X} output_owner=cpu-ap next=raise-row-count-or-live-k does_not_prove=full_model_matvec\n",
         finished as u8,
         readback_ok as u8,
         compare_ok as u8,
         reason,
         program.name,
-        row_count,
+        dispatch_groups,
         expected_lane_dispatch,
         dispatch_delta,
         output_gpu,
@@ -3207,7 +3208,7 @@ pub(crate) fn submit_gpgpu_t62_partial_matvec_probe(
         batch_bytes,
     );
     if !finished {
-        recover_render_engine_after_nonretired_submit(dev, warm, "gpgpu-t6-2-row-indexed-live16");
+        recover_render_engine_after_nonretired_submit(dev, warm, "gpgpu-t6-2-lane-indexed-live16");
     }
     crate::intel::GpgpuT62PartialMatvecProof {
         submitted: true,
@@ -3932,7 +3933,7 @@ fn gpgpu_t62_partial_matvec_failure(
     live_k_dim: usize,
 ) -> crate::intel::GpgpuT62PartialMatvecProof {
     crate::log!(
-        "intel/gpgpu: t6-2-row-indexed-live16-partial submitted=0 finished=0 readback_ok=0 compare_ok=0 reason={} program_source={} groups={} expected_lane_dispatch=0 observed_lane_dispatch=0 output_gpu=0x{:X} row_count={} live_k_dim={} compare_mask=0x00000000 expected_mask=0x00000000 output_words=[0x00000000,0x00000000,0x00000000,0x00000000,0x00000000,0x00000000,0x00000000,0x00000000] expected_words=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] finish_marker=0x00000000 finish_expected=0x{:08X} batch_bytes=0x0 output_owner=cpu-ap next=fix-t6-2-row-indexed-live16 does_not_prove=full_model_matvec\n",
+        "intel/gpgpu: t6-2-lane-indexed-live16-partial submitted=0 finished=0 readback_ok=0 compare_ok=0 reason={} program_source={} groups={} expected_lane_dispatch=0 observed_lane_dispatch=0 output_gpu=0x{:X} row_count={} live_k_dim={} compare_mask=0x00000000 expected_mask=0x00000000 output_words=[0x00000000,0x00000000,0x00000000,0x00000000,0x00000000,0x00000000,0x00000000,0x00000000] expected_words=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] finish_marker=0x00000000 finish_expected=0x{:08X} batch_bytes=0x0 output_owner=cpu-ap next=fix-t6-2-lane-indexed-live16 does_not_prove=full_model_matvec\n",
         reason,
         program.name,
         row_count,
