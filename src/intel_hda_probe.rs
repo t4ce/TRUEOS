@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
-const HDA_PROBE_WAV_LOOP_ENABLED: bool = false;
+const HDA_PROBE_WAV_LOOP_ENABLED: bool = true;
 const PROBE_PATTERN_NAME: &str = "arp";
 const PIANO_PROBE_PATTERN_NAME: &str = "piano-held";
 const PROBE_PATTERN_LOOPS: u32 = 1;
@@ -158,7 +158,9 @@ fn hda_duration_ms_for_samples(sample_count: usize) -> u32 {
 
 async fn load_hda_wav_loop_samples() -> Result<Vec<i16>, &'static str> {
     let url = crate::allports::local_assets::AUDIO_DEMO_URL;
+    crate::log!("intel/hda-probe: wav fetch submit url={}\n", url);
     let body = crate::t::run_on_shared_tokio(move || async move {
+        crate::log!("intel/hda-probe: wav fetch job enter url={}\n", url);
         crate::t::net::http::fetch_http_body_hyper(
             url,
             HDA_WAV_FETCH_TIMEOUT_MS,
@@ -169,7 +171,18 @@ async fn load_hda_wav_loop_samples() -> Result<Vec<i16>, &'static str> {
     .await
     .map_err(|_| "shared tokio unavailable")?
     .map_err(|_| "http fetch failed")?;
-    decode_wav_pcm_s16_stereo_48k(body.as_slice())
+    crate::log!(
+        "intel/hda-probe: wav fetch body url={} bytes={}\n",
+        url,
+        body.len()
+    );
+    let samples = decode_wav_pcm_s16_stereo_48k(body.as_slice())?;
+    crate::log!(
+        "intel/hda-probe: wav decode ok samples={} frames={}\n",
+        samples.len(),
+        samples.len() / HDA_WAV_CHANNELS
+    );
+    Ok(samples)
 }
 
 async fn hda_wav_loop_probe_task() {
@@ -189,10 +202,12 @@ async fn hda_wav_loop_probe_task() {
         }
 
         crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
+        crate::log!("intel/hda-probe: wav loop net ready\n");
         while !crate::t::shared_tokio_runtime_ready() {
             crate::log!("intel/hda-probe: wav loop waiting for shared tokio runtime\n");
             Timer::after(EmbassyDuration::from_millis(HDA_WAV_LOOP_RETRY_DELAY_MS)).await;
         }
+        crate::log!("intel/hda-probe: wav loop shared tokio ready\n");
 
         let samples = match load_hda_wav_loop_samples().await {
             Ok(samples) => samples,
@@ -254,6 +269,13 @@ async fn hda_wav_loop_probe_task() {
                 }
                 let chunk = &samples[off..end];
                 let duration_ms = hda_duration_ms_for_samples(chunk.len());
+                if off == 0 {
+                    crate::log!(
+                        "intel/hda-probe: wav chunk play begin len={} duration_ms={}\n",
+                        chunk.len(),
+                        duration_ms
+                    );
+                }
                 match crate::hda::write_samples_and_play(chunk, duration_ms) {
                     Ok(()) => {}
                     Err(err) => {
@@ -276,6 +298,14 @@ async fn hda_wav_loop_probe_task() {
 
 #[embassy_executor::task]
 pub async fn task() {
+    crate::log!(
+        "intel/hda-probe: task start wav_loop={} pattern={} piano={} loops={}\n",
+        HDA_PROBE_WAV_LOOP_ENABLED,
+        PROBE_PATTERN_NAME,
+        PIANO_PROBE_PATTERN_NAME,
+        PROBE_PATTERN_LOOPS,
+    );
+
     if HDA_PROBE_WAV_LOOP_ENABLED {
         hda_wav_loop_probe_task().await;
         return;
