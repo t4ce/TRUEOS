@@ -24,8 +24,8 @@ use crate::shell2::cmds::bench::{
 };
 use crate::shell2::{MatrixTarget, print_matrix_target_line, set_matrix_target_active};
 
-const LUMEN_WEIGHTS_PATH: &str = crate::r::spawn_service::BOOT_LUMEN_WEIGHTS_PATH;
-const LUMEN_TOKENIZER_PATH: &str = crate::r::spawn_service::BOOT_LUMEN_TOKENIZER_PATH;
+const LUMEN_WEIGHTS_PATH: &str = "model.safetensors";
+const LUMEN_TOKENIZER_PATH: &str = "tokenizer.json";
 const LUMEN_SAFETENSORS_MAX_HEADER_BYTES: usize = 64 * 1024 * 1024;
 const LUMEN_KERNEL_PROBE_ROWS: usize = 16;
 const LUMEN_KERNEL_PROBE_ITERS: usize = 256;

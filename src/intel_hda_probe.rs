@@ -3,11 +3,12 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 
 const HDA_PROBE_WAV_LOOP_ENABLED: bool = false;
 const PROBE_PATTERN_NAME: &str = "arp";
-const PIANO_PROBE_PATTERN_NAME: &str = "piano-probe";
+const PIANO_PROBE_PATTERN_NAME: &str = "piano-held";
 const PROBE_PATTERN_LOOPS: u32 = 1;
 const PROBE_RETRY_DELAY_MS: u64 = 1_000;
 const PROBE_LOOP_DELAY_MS: u64 = 250;
 const PIANO_NOTE_POLL_DELAY_MS: u64 = 25;
+const PIANO_CHORD_RENDER_MS: u32 = 50;
 const BASSLINE_IDLE_POLL_DELAY_MS: u64 = 25;
 const HDA_WAV_LOOP_RETRY_DELAY_MS: u64 = 1_000;
 const HDA_WAV_LOOP_IDLE_MS: u64 = 500;
@@ -25,18 +26,25 @@ fn play_default_probe_pattern() -> Result<&'static str, &'static str> {
     Ok(PROBE_PATTERN_NAME)
 }
 
-fn play_piano_probe_pattern(
-    note: u8,
-    velocity: u8,
-    seq: u16,
+fn play_piano_probe_held(
+    snapshot: &crate::usb2::midi::PianoHeldSnapshot,
+    log_event: bool,
 ) -> Result<&'static str, &'static str> {
-    crate::log!(
-        "intel/hda-probe: piano note-down note={} velocity={} seq={}\n",
-        note,
-        velocity,
-        seq
-    );
-    crate::aud::pattern_play_piano_probe(note, velocity, PROBE_PATTERN_LOOPS)?;
+    if log_event {
+        crate::log!(
+            "intel/hda-probe: piano held seq={} notes={} first={} vel={}\n",
+            snapshot.seq,
+            snapshot.len,
+            snapshot.notes.first().copied().unwrap_or(0),
+            snapshot.velocities.first().copied().unwrap_or(0),
+        );
+    }
+    crate::aud::play_piano_held_probe(
+        &snapshot.notes,
+        &snapshot.velocities,
+        snapshot.len,
+        PIANO_CHORD_RENDER_MS,
+    )?;
     Ok(PIANO_PROBE_PATTERN_NAME)
 }
 
@@ -370,16 +378,21 @@ pub async fn task() {
         }
 
         if piano_claimed() {
-            match crate::usb2::midi::piano_note_snapshot() {
-                Some(snapshot) if last_piano_seq != Some(snapshot.seq) => {
+            match crate::usb2::midi::piano_held_snapshot() {
+                Some(snapshot)
+                    if snapshot.len > 0 || last_piano_seq != Some(snapshot.seq) =>
+                {
+                    let log_event = last_piano_seq != Some(snapshot.seq);
                     last_piano_seq = Some(snapshot.seq);
-                    match play_piano_probe_pattern(snapshot.note, snapshot.velocity, snapshot.seq) {
+                    match play_piano_probe_held(&snapshot, log_event) {
                         Ok(pattern_name) => {
-                            crate::log!(
-                                "intel/hda-probe: pattern ok name={} loops={}\n",
-                                pattern_name,
-                                PROBE_PATTERN_LOOPS,
-                            );
+                            if log_event {
+                                crate::log!(
+                                    "intel/hda-probe: pattern ok name={} notes={}\n",
+                                    pattern_name,
+                                    snapshot.len,
+                                );
+                            }
                             Timer::after(EmbassyDuration::from_millis(PIANO_NOTE_POLL_DELAY_MS))
                                 .await;
                         }

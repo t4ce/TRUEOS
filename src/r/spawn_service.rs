@@ -88,7 +88,6 @@ define_started_flags!(
     BOOT_WS_SMOKE_STARTED,
     BOOT_NETBENCH_STARTED,
     UAS_SKHYNIX_ROUTE_PROBE_STARTED,
-    BOOT_ASSET_FETCH_STARTED,
     APP_VM_RUN_QUEUE_STARTED,
     FACTORY_RAM_PROBE_STARTED,
     UART_SHELL_STARTED,
@@ -421,10 +420,6 @@ fn spawn_lumen_service(spawner: Spawner) -> SpawnAttempt {
 
 fn boot_lumen_service_enabled() -> bool {
     crate::allcaps::lumen::BOOT_MODEL_SERVICE
-}
-
-fn boot_asset_fetch_enabled() -> bool {
-    crate::allcaps::lumen::BOOT_ASSET_FETCH
 }
 
 fn spawn_ai_qjs_oneshot(spawner: Spawner) -> SpawnAttempt {
@@ -972,228 +967,6 @@ fn uas_skhynix_route_probe_enabled() -> bool {
     crate::tst_uas_skhynix_route_probe::enabled()
 }
 
-struct BootAsset {
-    label: &'static str,
-    url: &'static str,
-    path: &'static str,
-    max_bytes: usize,
-}
-
-pub(crate) const BOOT_LUMEN_WEIGHTS_PATH: &str = "model.safetensors";
-pub(crate) const BOOT_LUMEN_TOKENIZER_PATH: &str = "tokenizer.json";
-
-const BOOT_ASSETS: [BootAsset; 3] = [
-    BootAsset {
-        label: "media-firstframe-1440p",
-        url: crate::allports::local_assets::DEMO_YELLY_MP4_URL,
-        path: crate::intel::xelp_media_source::MEDIA_DECODE_CACHE_PATH,
-        max_bytes: 16 * 1024 * 1024,
-    },
-    BootAsset {
-        label: "weights",
-        url: crate::allports::local_assets::TINYLLAMA_MODEL_URL,
-        path: BOOT_LUMEN_WEIGHTS_PATH,
-        max_bytes: 4 * 1024 * 1024 * 1024,
-    },
-    BootAsset {
-        label: "tokenizer",
-        url: crate::allports::local_assets::TINYLLAMA_TOKENIZER_URL,
-        path: BOOT_LUMEN_TOKENIZER_PATH,
-        max_bytes: 64 * 1024 * 1024,
-    },
-];
-const BOOT_ASSET_MOUNT_RETRY_SECS: u64 = 10;
-const BOOT_ASSET_TIMEOUT_MS: u32 = 180_000;
-
-async fn handoff_media_asset_to_intel_playback(reason: &'static str, bytes: u64) {
-    crate::log!(
-        "intel/media: asset handoff reason={} path={} bytes={} target=media2-first-frame\n",
-        reason,
-        crate::intel::xelp_media_source::MEDIA_DECODE_CACHE_PATH,
-        bytes,
-    );
-    let first_frame = crate::intel::run_media2_first_frame_async().await;
-    match first_frame {
-        Some(frame) => crate::log!(
-            "intel/media: asset playback returned=1 ready={} submit_completed={} present_ready={} frame={}x{} bitstream_bytes={} output_bytes={}\n",
-            frame.ready as u8,
-            frame.submit_completed as u8,
-            frame.present_ready as u8,
-            frame.frame_width,
-            frame.frame_height,
-            frame.bitstream_bytes,
-            frame.output_surface_bytes,
-        ),
-        None => crate::log!("intel/media: asset playback returned=0\n"),
-    }
-}
-
-async fn maybe_handoff_boot_asset_to_playback(
-    asset: &BootAsset,
-    reason: &'static str,
-    bytes: u64,
-) {
-    if asset.path == crate::intel::xelp_media_source::MEDIA_DECODE_CACHE_PATH {
-        handoff_media_asset_to_intel_playback(reason, bytes).await;
-    }
-}
-
-#[embassy_executor::task]
-async fn boot_asset_fetch_task() {
-    let disk = loop {
-        if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
-            let info = disk.info();
-            crate::log_info!(
-                target: "service";
-                "spawn-svc: boot-asset-fetch root mounted disk_id={} readonly={} label={}\n",
-                info.id.raw(),
-                info.is_read_only() as u8,
-                info.label.as_deref().unwrap_or("-")
-            );
-            break disk;
-        }
-
-        crate::log_info!(
-            target: "service";
-            "spawn-svc: boot-asset-fetch no TRUEOSFS root mounted; retry in {}s\n",
-            BOOT_ASSET_MOUNT_RETRY_SECS
-        );
-        Timer::after(EmbassyDuration::from_secs(BOOT_ASSET_MOUNT_RETRY_SECS)).await;
-    };
-
-    let _ = crate::r::readiness::wait_for_timeout(
-        crate::r::readiness::NET_ANY_CONFIGURED,
-        EmbassyDuration::from_secs(30),
-    )
-    .await;
-
-    if !crate::t::shared_tokio_runtime_ready() {
-        crate::log_info!(
-            target: "service";
-            "spawn-svc: boot-asset-fetch waiting for shared tokio runtime\n"
-        );
-        while !crate::t::shared_tokio_runtime_ready() {
-            Timer::after(EmbassyDuration::from_millis(100)).await;
-        }
-        crate::log_info!(
-            target: "service";
-            "spawn-svc: boot-asset-fetch shared tokio runtime ready\n"
-        );
-    }
-
-    for asset in BOOT_ASSETS {
-        match crate::r::fs::trueosfs::file_info_async(disk, asset.path).await {
-            Ok(Some(info)) if info.data_len != 0 => {
-                crate::log_info!(
-                    target: "service";
-                    "spawn-svc: boot-asset-fetch skip existing {} path={} bytes={}\n",
-                    asset.label,
-                    asset.path,
-                    info.data_len
-                );
-                maybe_handoff_boot_asset_to_playback(&asset, "cache-existing", info.data_len).await;
-                continue;
-            }
-            Ok(_) => {}
-            Err(err) => {
-                crate::log_info!(
-                    target: "service";
-                    "spawn-svc: boot-asset-fetch existing-file probe failed {} path={} err={:?}\n",
-                    asset.label,
-                    asset.path,
-                    err
-                );
-            }
-        }
-
-        crate::log_info!(
-            target: "service";
-            "spawn-svc: boot-asset-fetch start {} url={} path={} max_bytes={}\n",
-            asset.label,
-            asset.url,
-            asset.path,
-            asset.max_bytes
-        );
-        let label = asset.label;
-        let url = asset.url;
-        let path = asset.path;
-        let max_bytes = asset.max_bytes;
-        match crate::t::run_on_shared_tokio(move || async move {
-            crate::t::net::http_stream::fetch_http_to_file_hyper_async(
-                url,
-                disk,
-                path,
-                BOOT_ASSET_TIMEOUT_MS,
-                max_bytes,
-            )
-            .await
-        })
-        .await
-        {
-            Ok(Ok(())) => match crate::r::fs::trueosfs::file_info_async(disk, asset.path).await {
-                Ok(Some(info)) => {
-                    crate::log_info!(
-                        target: "service";
-                        "spawn-svc: boot-asset-fetch success {} path={} bytes={}\n",
-                        asset.label,
-                        asset.path,
-                        info.data_len
-                    );
-                    maybe_handoff_boot_asset_to_playback(&asset, "cache-fetched", info.data_len)
-                        .await;
-                }
-                Ok(None) => {
-                    crate::log_info!(
-                        target: "service";
-                        "spawn-svc: boot-asset-fetch post-fetch stat missing {} path={}\n",
-                        asset.label,
-                        asset.path
-                    );
-                }
-                Err(err) => {
-                    crate::log_warn!(
-                        target: "service";
-                        "spawn-svc: boot-asset-fetch post-fetch stat failed {} path={} err={:?}\n",
-                        asset.label,
-                        asset.path,
-                        err
-                    );
-                }
-            },
-            Ok(Err(err)) => {
-                crate::log_warn!(
-                    target: "service";
-                    "spawn-svc: boot-asset-fetch failed {} url={} err={:?}\n",
-                    asset.label,
-                    asset.url,
-                    err
-                );
-            }
-            Err(err) => {
-                crate::log_warn!(
-                    target: "service";
-                    "spawn-svc: boot-asset-fetch shared-tokio failed {} url={} err={:?}\n",
-                    label,
-                    url,
-                    err
-                );
-            }
-        }
-    }
-
-    crate::log_info!(
-        target: "service";
-        "spawn-svc: boot-asset-fetch done weights={} tokenizer={} media={}\n",
-        BOOT_LUMEN_WEIGHTS_PATH,
-        BOOT_LUMEN_TOKENIZER_PATH,
-        crate::intel::xelp_media_source::MEDIA_DECODE_CACHE_PATH
-    );
-}
-
-fn spawn_boot_asset_fetch(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| boot_asset_fetch_task())
-}
-
 fn spawn_app_vm_run_queue(spawner: Spawner) -> SpawnAttempt {
     match crate::shell2::spawn_app_vm_run_queue(spawner) {
         Ok(()) => SpawnAttempt::Spawned,
@@ -1343,7 +1116,7 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::APP_VM_READY
 const WS_BOOT_READY: u32 = crate::r::readiness::NET_GATEWAY_REACHABLE
     | crate::r::readiness::TLS_SOCKET_SERVICE_READY
     | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
-static TASKS: [TaskSpec; 70] = [
+static TASKS: [TaskSpec; 69] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
         "globalog-persist-once",
@@ -1665,13 +1438,6 @@ static TASKS: [TaskSpec; 70] = [
         uas_skhynix_route_probe_enabled,
         &UAS_SKHYNIX_ROUTE_PROBE_STARTED,
         spawn_uas_skhynix_route_probe,
-    ),
-    TaskSpec::enabled_gated(
-        "boot-asset-fetch",
-        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
-        boot_asset_fetch_enabled,
-        &BOOT_ASSET_FETCH_STARTED,
-        spawn_boot_asset_fetch,
     ),
     TaskSpec::enabled("uart-shell", 0, &UART_SHELL_STARTED, spawn_uart_shell),
     TaskSpec::enabled("net-tcp-shell", 0, &NET_TCP_SHELL_STARTED, spawn_net_tcp_shell),
