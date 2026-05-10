@@ -29,7 +29,6 @@ const CHAT_SAVE_BATCH_MS: u64 = 10_000;
 const CHAT_SAVE_IDLE_MS: u64 = 1000;
 const CHAT_STORE_DIR: &str = "chat";
 const CHAT_STORE_PATH: &str = "chat/rooms.json";
-const CHAT_PERSISTENCE_ENABLED: bool = false;
 const TRUEOS_TAILWIND_CSS: &str = include_str!("../common/tailwind.css");
 static CHAT_HUB: spin::Mutex<Option<ChatHub>> = spin::Mutex::new(None);
 static CHAT_HUB_LOADED: AtomicBool = AtomicBool::new(false);
@@ -57,10 +56,6 @@ fn now_ms() -> u64 {
 
 fn load_chat_hub_once_sync() {
     if CHAT_HUB_LOADED.load(Ordering::Acquire) {
-        return;
-    }
-    if !CHAT_PERSISTENCE_ENABLED {
-        CHAT_HUB_LOADED.store(true, Ordering::Release);
         return;
     }
     {
@@ -163,10 +158,6 @@ async fn save_chat_hub_snapshot_async() {
 }
 
 fn request_chat_hub_save(reason: &'static str) {
-    if !CHAT_PERSISTENCE_ENABLED {
-        let _ = reason;
-        return;
-    }
     let was_pending = CHAT_SAVE_REQUESTED.swap(true, Ordering::AcqRel);
     if !was_pending {
         crate::log!("chat: save requested reason={} mode=deferred\n", reason);
@@ -541,8 +532,13 @@ fn run_chat_http_runtime() -> Result<(), io::Error> {
 
 #[embassy_executor::task]
 pub async fn chat_http_service_task() {
-    crate::r::readiness::wait_for(crate::r::readiness::NET_V4_CONFIGURED).await;
-    crate::log!("chat-http: launching Tokio runtime after NET_V4_CONFIGURED\n");
+    crate::r::readiness::wait_for(
+        crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
+    )
+    .await;
+    crate::log!(
+        "chat-http: launching Tokio runtime after NET_V4_CONFIGURED+TRUEOSFS_ROOT_MOUNTED\n"
+    );
 
     loop {
         let rc = crate::trueos_tokio_worker::spawn_blocking_job_with_purpose(
