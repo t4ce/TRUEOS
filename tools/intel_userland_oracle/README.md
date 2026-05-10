@@ -16,7 +16,18 @@ ROW, SAMPLER, SC, and RCS CS GPRs during the same single run.
 Run:
 
 ```bash
-tools/intel_userland_oracle/run_oracle.sh
+bash tools/intel_userland_oracle/run_oracle.sh
+```
+
+The default workload is the original sentinel shader. To run the T5-small
+live-input dot probe instead:
+
+```bash
+TRUEOS_ORACLE_SHADER_SOURCE=.codex_tmp/t5_small_live4.comp \
+TRUEOS_ORACLE_SHADER_NAME=t5_small_live4 \
+TRUEOS_ORACLE_WORKLOAD=t5-small-live4 \
+TRUEOS_ORACLE_LOG_DIR=.codex_tmp/intel_userland_oracle/t5-small-live4 \
+bash tools/intel_userland_oracle/run_oracle.sh
 ```
 
 The main artifact is:
@@ -42,6 +53,9 @@ TRUEOS_ORACLE_TRACE_STACKS=1
 TRUEOS_ORACLE_STACK_DEPTH=64
 TRUEOS_ORACLE_TRACE_SNAPSHOTS=1
 TRUEOS_ORACLE_LOG_DIR=.codex_tmp/intel_userland_oracle/run-001
+TRUEOS_ORACLE_SHADER_SOURCE=tools/intel_userland_oracle/sentinel.comp
+TRUEOS_ORACLE_SHADER_NAME=sentinel
+TRUEOS_ORACLE_WORKLOAD=sentinel
 TRUEOS_ORACLE_HW_INTERVAL_US=200
 TRUEOS_ORACLE_REQUIRE_HW=1
 ```

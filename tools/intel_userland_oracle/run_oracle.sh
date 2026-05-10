@@ -7,6 +7,10 @@ OUT_DIR="${TRUEOS_ORACLE_LOG_DIR:-$ROOT/.codex_tmp/intel_userland_oracle/latest}
 BUILD_DIR="$OUT_DIR/build"
 LOG="$OUT_DIR/log.txt"
 HW_LOG="$OUT_DIR/hw_mmio_log.txt"
+SHADER_SOURCE="${TRUEOS_ORACLE_SHADER_SOURCE:-$TOOL_DIR/sentinel.comp}"
+SHADER_NAME="${TRUEOS_ORACLE_SHADER_NAME:-$(basename "$SHADER_SOURCE" .comp)}"
+WORKLOAD="${TRUEOS_ORACLE_WORKLOAD:-sentinel}"
+SPV_PATH="$BUILD_DIR/$SHADER_NAME.comp.spv"
 
 mkdir -p "$BUILD_DIR" "$OUT_DIR/dumps"
 : > "$LOG"
@@ -17,13 +21,16 @@ find "$OUT_DIR/dumps" -type f -delete
   echo "oracle-run: started_at=$(date --iso-8601=seconds)"
   echo "oracle-run: root=$ROOT"
   echo "oracle-run: out_dir=$OUT_DIR"
+  echo "oracle-run: shader_source=$SHADER_SOURCE"
+  echo "oracle-run: shader_name=$SHADER_NAME"
+  echo "oracle-run: workload=$WORKLOAD"
   echo "oracle-run: render_nodes=$(ls -l /dev/dri/by-path 2>/dev/null | tr '\n' ';')"
   echo "oracle-run: lspci=$(lspci -nn -s 00:02.0 2>/dev/null || true)"
 } >> "$LOG"
 
 glslangValidator -V -S comp \
-  -o "$BUILD_DIR/sentinel.comp.spv" \
-  "$TOOL_DIR/sentinel.comp" >> "$LOG" 2>&1
+  -o "$SPV_PATH" \
+  "$SHADER_SOURCE" >> "$LOG" 2>&1
 
 cc -O2 -g -Wall -Wextra -fPIC -shared \
   "$TOOL_DIR/ioctl_trace.c" \
@@ -80,7 +87,7 @@ TRUEOS_ORACLE_TRACE_SNAPSHOTS="${TRUEOS_ORACLE_TRACE_SNAPSHOTS:-1}" \
 MESA_VK_DEVICE_SELECT="${MESA_VK_DEVICE_SELECT:-8086:a780}" \
 VK_LOADER_DRIVERS_SELECT="${VK_LOADER_DRIVERS_SELECT:-*intel*}" \
 LD_PRELOAD="$BUILD_DIR/libtrueos_ioctl_trace.so${LD_PRELOAD:+:$LD_PRELOAD}" \
-"$BUILD_DIR/vk_compute_sentinel" "$BUILD_DIR/sentinel.comp.spv" >> "$LOG" 2>&1
+"$BUILD_DIR/vk_compute_sentinel" "$SPV_PATH" "$WORKLOAD" >> "$LOG" 2>&1
 APP_STATUS="$?"
 set -e
 

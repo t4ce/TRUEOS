@@ -93,19 +93,94 @@ static uint32_t find_memory_type(
     exit(1);
 }
 
+static void init_t5_small_live4(uint32_t *words) {
+    words[0] = 0x3F800000u;  // x0 = 1.0
+    words[1] = 0x40000000u;  // x1 = 2.0
+    words[2] = 0x40400000u;  // x2 = 3.0
+    words[3] = 0x40800000u;  // x3 = 4.0
+    words[8] = 0x00003F80u;  // w0 = bf16(1.0)
+    words[9] = 0x00004000u;  // w1 = bf16(2.0)
+    words[10] = 0x00004040u; // w2 = bf16(3.0)
+    words[11] = 0x00004080u; // w3 = bf16(4.0)
+}
+
+static int verify_sentinel(const uint32_t *words) {
+    const uint32_t expected_lanes = 8;
+    printf(
+        "oracle-app: header words[0..7]=0x%08X 0x%08X 0x%08X 0x%08X 0x%08X 0x%08X 0x%08X 0x%08X\n",
+        words[0], words[1], words[2], words[3], words[4], words[5], words[6], words[7]
+    );
+    int ok = words[0] == 0xC0DE7733u && words[1] == expected_lanes;
+    for (uint32_t lane = 0; lane < expected_lanes; ++lane) {
+        const uint32_t base = 8u + lane * 4u;
+        const int lane_ok =
+            words[base + 0] == 0xC0DE7800u + lane &&
+            words[base + 1] == lane &&
+            words[base + 2] == lane &&
+            words[base + 3] == 0xE0F00000u + lane;
+        ok = ok && lane_ok;
+        printf(
+            "oracle-app: lane[%u] ok=%d words=0x%08X 0x%08X 0x%08X 0x%08X\n",
+            lane,
+            lane_ok,
+            words[base + 0],
+            words[base + 1],
+            words[base + 2],
+            words[base + 3]
+        );
+    }
+    printf(
+        "oracle-app: verified=%d expected_header=0xC0DE7733 observed_header=0x%08X lanes=%u\n",
+        ok,
+        words[0],
+        expected_lanes
+    );
+    return ok;
+}
+
+static int verify_t5_small_live4(const uint32_t *words) {
+    const uint32_t expected_bits = 0x41F00000u; // 1*1 + 2*2 + 3*3 + 4*4 = 30.0
+    const int ok =
+        words[16] == expected_bits &&
+        words[17] == 4u &&
+        words[18] == 0xC0DE7504u &&
+        words[19] == 0u;
+    printf(
+        "oracle-app: t5-small-live4 input_x_bits=0x%08X 0x%08X 0x%08X 0x%08X input_w_bf16=0x%04X 0x%04X 0x%04X 0x%04X\n",
+        words[0], words[1], words[2], words[3],
+        words[8] & 0xFFFFu, words[9] & 0xFFFFu, words[10] & 0xFFFFu, words[11] & 0xFFFFu
+    );
+    printf(
+        "oracle-app: t5-small-live4 verified=%d expected_bits=0x%08X observed_bits=0x%08X live_k=%u sentinel=0x%08X workgroup=%u\n",
+        ok,
+        expected_bits,
+        words[16],
+        words[17],
+        words[18],
+        words[19]
+    );
+    return ok;
+}
+
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
 
-    if (argc != 2) {
-        fprintf(stderr, "usage: %s sentinel.comp.spv\n", argv[0]);
+    if (argc < 2 || argc > 3) {
+        fprintf(stderr, "usage: %s shader.comp.spv [sentinel|t5-small-live4]\n", argv[0]);
+        return 1;
+    }
+    const char *workload = argc == 3 ? argv[2] : "sentinel";
+    const int is_sentinel = strcmp(workload, "sentinel") == 0;
+    const int is_t5_small_live4 = strcmp(workload, "t5-small-live4") == 0;
+    if (!is_sentinel && !is_t5_small_live4) {
+        fprintf(stderr, "unsupported workload: %s\n", workload);
         return 1;
     }
 
     const uint32_t wanted_vendor = env_u32_or("TRUEOS_ORACLE_VK_VENDOR_ID", 0x8086);
     const uint32_t wanted_device = env_u32_or("TRUEOS_ORACLE_VK_DEVICE_ID", 0xA780);
-    const uint32_t expected_lanes = 8;
     printf("oracle-app: wanted vendor=0x%04X device=0x%04X\n", wanted_vendor, wanted_device);
-    printf("oracle-app: lens macro=begin workload=one-workgroup-empty-circle lanes=%u\n", expected_lanes);
+    printf("oracle-app: lens macro=begin workload=%s\n", workload);
 
     const VkApplicationInfo app_info = {
         .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
@@ -224,6 +299,9 @@ int main(int argc, char **argv) {
     void *mapped = NULL;
     CHECK_VK(vkMapMemory(device, memory, 0, buffer_size, 0, &mapped));
     memset(mapped, 0, (size_t)buffer_size);
+    if (is_t5_small_live4) {
+        init_t5_small_live4((uint32_t *)mapped);
+    }
 
     Spirv spv = read_spirv(argv[1]);
     const VkShaderModuleCreateInfo shader_info = {
@@ -372,35 +450,7 @@ int main(int argc, char **argv) {
     printf("oracle-app: lens macro=submit-complete wait-idle-done\n");
 
     const uint32_t *words = (const uint32_t *)mapped;
-    printf(
-        "oracle-app: header words[0..7]=0x%08X 0x%08X 0x%08X 0x%08X 0x%08X 0x%08X 0x%08X 0x%08X\n",
-        words[0], words[1], words[2], words[3], words[4], words[5], words[6], words[7]
-    );
-    int ok = words[0] == 0xC0DE7733u && words[1] == expected_lanes;
-    for (uint32_t lane = 0; lane < expected_lanes; ++lane) {
-        const uint32_t base = 8u + lane * 4u;
-        const int lane_ok =
-            words[base + 0] == 0xC0DE7800u + lane &&
-            words[base + 1] == lane &&
-            words[base + 2] == lane &&
-            words[base + 3] == 0xE0F00000u + lane;
-        ok = ok && lane_ok;
-        printf(
-            "oracle-app: lane[%u] ok=%d words=0x%08X 0x%08X 0x%08X 0x%08X\n",
-            lane,
-            lane_ok,
-            words[base + 0],
-            words[base + 1],
-            words[base + 2],
-            words[base + 3]
-        );
-    }
-    printf(
-        "oracle-app: verified=%d expected_header=0xC0DE7733 observed_header=0x%08X lanes=%u\n",
-        ok,
-        words[0],
-        expected_lanes
-    );
+    const int ok = is_t5_small_live4 ? verify_t5_small_live4(words) : verify_sentinel(words);
 
     vkUnmapMemory(device, memory);
     vkDestroyCommandPool(device, command_pool, NULL);

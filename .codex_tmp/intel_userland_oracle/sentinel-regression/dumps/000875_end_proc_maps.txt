@@ -1,0 +1,57 @@
+59693e8ab000-59693e8ad000 r--p 00000000 103:03 11018406                  /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/sentinel-regression/build/vk_compute_sentinel
+59693e8ad000-59693e8af000 r-xp 00002000 103:03 11018406                  /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/sentinel-regression/build/vk_compute_sentinel
+59693e8af000-59693e8b0000 r--p 00004000 103:03 11018406                  /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/sentinel-regression/build/vk_compute_sentinel
+59693e8b0000-59693e8b1000 r--p 00005000 103:03 11018406                  /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/sentinel-regression/build/vk_compute_sentinel
+59693e8b1000-59693e8b2000 rw-p 00006000 103:03 11018406                  /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/sentinel-regression/build/vk_compute_sentinel
+596946eb1000-596947a2c000 rw-p 00000000 00:00 0                          [heap]
+7ba844000000-7ba844021000 rw-p 00000000 00:00 0 
+7ba844021000-7ba848000000 ---p 00000000 00:00 0 
+7ba84b3fe000-7ba84c400000 rw-p 00000000 00:00 0 
+7ba84da00000-7ba84daa2000 r--p 00000000 103:03 93226225                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.34
+7ba84daa2000-7ba84dbef000 r-xp 000a2000 103:03 93226225                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.34
+7ba84dbef000-7ba84dc77000 r--p 001ef000 103:03 93226225                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.34
+7ba84dc77000-7ba84dc86000 r--p 00276000 103:03 93226225                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.34
+7ba84dc86000-7ba84dc89000 rw-p 00285000 103:03 93226225                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.34
+7ba84dc89000-7ba84dc8d000 rw-p 00000000 00:00 0 
+7ba84eef3000-7ba84ef04000 r--p 00000000 103:03 93194293                  /usr/lib/x86_64-linux-gnu/libm.so.6
+7ba84ef04000-7ba84ef8f000 r-xp 00011000 103:03 93194293                  /usr/lib/x86_64-linux-gnu/libm.so.6
+7ba84ef8f000-7ba84effe000 r--p 0009c000 103:03 93194293                  /usr/lib/x86_64-linux-gnu/libm.so.6
+7ba84effe000-7ba84efff000 r--p 0010a000 103:03 93194293                  /usr/lib/x86_64-linux-gnu/libm.so.6
+7ba84efff000-7ba84f000000 rw-p 0010b000 103:03 93194293                  /usr/lib/x86_64-linux-gnu/libm.so.6
+7ba84f000000-7ba84f028000 r--p 00000000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
+7ba84f028000-7ba84f1c1000 r-xp 00028000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
+7ba84f1c1000-7ba84f230000 r--p 001c1000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
+7ba84f230000-7ba84f234000 r--p 0022f000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
+7ba84f234000-7ba84f236000 rw-p 00233000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
+7ba84f236000-7ba84f243000 rw-p 00000000 00:00 0 
+7ba84f270000-7ba84f274000 r--p 00000000 103:03 93225759                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+7ba84f274000-7ba84f297000 r-xp 00004000 103:03 93225759                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+7ba84f297000-7ba84f29b000 r--p 00027000 103:03 93225759                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+7ba84f29b000-7ba84f29c000 r--p 0002a000 103:03 93225759                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+7ba84f29c000-7ba84f29d000 rw-p 0002b000 103:03 93225759                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+7ba84f400000-7ba84f401000 r--p 00000000 103:03 11018405                  /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/sentinel-regression/build/libtrueos_ioctl_trace.so
+7ba84f401000-7ba84f404000 r-xp 00001000 103:03 11018405                  /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/sentinel-regression/build/libtrueos_ioctl_trace.so
+7ba84f404000-7ba84f406000 r--p 00004000 103:03 11018405                  /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/sentinel-regression/build/libtrueos_ioctl_trace.so
+7ba84f406000-7ba84f407000 r--p 00005000 103:03 11018405                  /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/sentinel-regression/build/libtrueos_ioctl_trace.so
+7ba84f407000-7ba84f408000 rw-p 00006000 103:03 11018405                  /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/sentinel-regression/build/libtrueos_ioctl_trace.so
+7ba84f408000-7ba84f690000 rw-p 00000000 00:00 0 
+7ba84f6e3000-7ba84f6e6000 rw-p 00000000 00:00 0 
+7ba84f6e6000-7ba84f6ec000 r--p 00000000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
+7ba84f6ec000-7ba84f73e000 r-xp 00006000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
+7ba84f73e000-7ba84f775000 r--p 00058000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
+7ba84f775000-7ba84f776000 r--p 0008f000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
+7ba84f776000-7ba84f777000 rw-p 00090000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
+7ba84f792000-7ba84f793000 rw-p 00000000 00:00 0 
+7ba84f793000-7ba84f794000 rw-p 00000000 00:00 0 
+7ba84f794000-7ba84f796000 rw-p 00000000 00:00 0 
+7ba84f796000-7ba84f79a000 r--p 00000000 00:00 0                          [vvar]
+7ba84f79a000-7ba84f79c000 r--p 00000000 00:00 0                          [vvar_vclock]
+7ba84f79c000-7ba84f79e000 r-xp 00000000 00:00 0                          [vdso]
+7ba84f79e000-7ba84f79f000 r--p 00000000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+7ba84f79f000-7ba84f7cd000 r-xp 00001000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+7ba84f7cd000-7ba84f7db000 r--p 0002f000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+7ba84f7db000-7ba84f7dd000 r--p 0003d000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+7ba84f7dd000-7ba84f7de000 rw-p 0003f000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+7ba84f7de000-7ba84f7df000 rw-p 00000000 00:00 0 
+7fff9a0b7000-7fff9a0d9000 rw-p 00000000 00:00 0                          [stack]
+ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsyscall]
