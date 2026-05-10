@@ -39,6 +39,7 @@ const LUMEN_RUNTIME_SOFT_STOP_TOKENS: usize = 24;
 const LUMEN_RUNTIME_MIN_SENTENCE_TOKENS: usize = 12;
 const LUMEN_RUNTIME_STREAM_TOKENS: usize = 5;
 const LUMEN_RUNTIME_MAX_ANSWER_CHARS: usize = 512;
+const LUMEN_RUNTIME_SELFTEST_PROMPT: &str = "Hello Lumen, how are you doing today";
 const LUMEN_RUNTIME_PROGRESS_TENSORS: usize = 16;
 const LUMEN_RUNTIME_EARLY_PROGRESS_TENSORS: usize = 2;
 const LUMEN_RUNTIME_HEAP_EXTRA_BYTES: usize = 512 * 1024 * 1024;
@@ -723,9 +724,7 @@ fn generate_lumen_answer(
     let mut answer = AllocString::new();
     let mut generated = 0usize;
     let mut first_token_ms = 0u64;
-    let stream_statement = statement
-        .map(AllocString::from)
-        .unwrap_or_else(crate::lumen::lumen_service::next_chat_statement_tag);
+    let stream_statement = statement.map(AllocString::from);
     let mut streamed_answer_len = 0usize;
     let mut streamed = false;
     let generate_start = embassy_time_driver::now();
@@ -804,12 +803,14 @@ fn generate_lumen_answer(
                 && generated.is_multiple_of(LUMEN_RUNTIME_STREAM_TOKENS)
                 && answer.len() > streamed_answer_len
             {
-                crate::lumen::lumen_service::submit_chat_statement_delta(
-                    stream_statement.as_str(),
-                    &answer[streamed_answer_len..],
-                );
-                streamed_answer_len = answer.len();
-                streamed = true;
+                if let Some(stream_statement) = stream_statement.as_deref() {
+                    crate::lumen::lumen_service::submit_chat_statement_delta(
+                        stream_statement,
+                        &answer[streamed_answer_len..],
+                    );
+                    streamed_answer_len = answer.len();
+                    streamed = true;
+                }
             }
             if stop_after_emit || cache_nearly_full {
                 if !cache_nearly_full {
@@ -841,18 +842,22 @@ fn generate_lumen_answer(
     let final_answer = trim_lumen_turn_markers(answer.as_str());
     if streamed_answer_len == 0 {
         if !final_answer.is_empty() {
+            if let Some(stream_statement) = stream_statement.as_deref() {
+                crate::lumen::lumen_service::submit_chat_statement_delta(
+                    stream_statement,
+                    final_answer.as_str(),
+                );
+                streamed = true;
+            }
+        }
+    } else if visible_answer_end > streamed_answer_len {
+        if let Some(stream_statement) = stream_statement.as_deref() {
             crate::lumen::lumen_service::submit_chat_statement_delta(
-                stream_statement.as_str(),
-                final_answer.as_str(),
+                stream_statement,
+                &answer[streamed_answer_len..visible_answer_end],
             );
             streamed = true;
         }
-    } else if visible_answer_end > streamed_answer_len {
-        crate::lumen::lumen_service::submit_chat_statement_delta(
-            stream_statement.as_str(),
-            &answer[streamed_answer_len..visible_answer_end],
-        );
-        streamed = true;
     }
 
     Ok(LumenGenerateReport {
@@ -2501,6 +2506,7 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
                 );
                 // Ownership boundary: this consumes model; Worker keeps no BSP handle.
                 let exclusive_model = ExclusiveAp2LumenModel::new(model);
+                crate::lumen::burn_baby::protect_service_compute_slot(slot, "lumen-inference-worker");
                 match lumen_inference_worker_task(
                     session_id,
                     exclusive_model,
@@ -2536,11 +2542,71 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
                 LumenInferEngine::Local { model, chat_state }
             }
         };
+        let selftest_start = embassy_time_driver::now();
+        let compute_before = crate::lumen::burn_baby::stats();
+        crate::log!(
+            "lumen: selftest prompt begin session={} prompt={:?} proof=end-to-end-after-tensor-load\n",
+            session_id,
+            LUMEN_RUNTIME_SELFTEST_PROMPT
+        );
+        let selftest_result = match &mut infer_engine {
+            LumenInferEngine::Local { model, chat_state } => generate_lumen_answer(
+                model,
+                chat_state,
+                &tokenizer_json,
+                vocab_entries.as_slice(),
+                stop_ids.as_slice(),
+                LUMEN_RUNTIME_SELFTEST_PROMPT,
+                None,
+            ),
+            LumenInferEngine::Worker => {
+                match submit_lumen_inference(session_id, LUMEN_RUNTIME_SELFTEST_PROMPT, None) {
+                    Ok(request_id) => wait_lumen_inference_result(session_id, request_id).await,
+                    Err(err) => Err(err),
+                }
+            }
+        };
+        match selftest_result {
+            Ok(report) => {
+                let infer_ms = elapsed_ms_since(selftest_start);
+                let compute_after = crate::lumen::burn_baby::stats();
+                let submitted_jobs = compute_after
+                    .submitted_jobs
+                    .saturating_sub(compute_before.submitted_jobs);
+                let completed_jobs = compute_after
+                    .completed_jobs
+                    .saturating_sub(compute_before.completed_jobs);
+                let polled_jobs = compute_after
+                    .polled_jobs
+                    .saturating_sub(compute_before.polled_jobs);
+                crate::log!(
+                    "lumen: selftest answer prompt={:?} answer={:?} prompt_tokens={} generated_tokens={} first_token={}ms infer={}ms speed={} jobs={}/{} polled={} queued={} proof=end-to-end-ok\n",
+                    LUMEN_RUNTIME_SELFTEST_PROMPT,
+                    report.answer.as_str(),
+                    report.prompt_tokens,
+                    report.generated_tokens,
+                    report.first_token_ms,
+                    infer_ms,
+                    format_tokens_per_second(report.generated_tokens, infer_ms),
+                    completed_jobs,
+                    submitted_jobs,
+                    polled_jobs,
+                    compute_after.queued_jobs
+                );
+            }
+            Err(err) => {
+                crate::log!(
+                    "lumen: selftest failed prompt={:?} err={} proof=end-to-end-failed\n",
+                    LUMEN_RUNTIME_SELFTEST_PROMPT,
+                    err
+                );
+            }
+        }
         register_lumen_interactive_session(session_id);
         crate::lumen::lumen_service::mark_online(session_id);
         print_matrix_target_line(
             &task_target,
-            "lumen: ready in lobby chat",
+            "lumen: selftest complete; prompt loop ready",
         );
         let mut idle_waits = 0u64;
         let mut last_wait_log_tick = embassy_time_driver::now();

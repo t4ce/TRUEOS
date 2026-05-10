@@ -1204,9 +1204,9 @@ static TASKS: [TaskSpec; 70] = [
         &HYPER_HTTP1_PROBE_STARTED,
         spawn_hyper_http1_probe,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "chat-http",
-        crate::r::readiness::NET_V4_CONFIGURED,
+        crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
         &CHAT_HTTP_STARTED,
         spawn_chat_http,
     ),
