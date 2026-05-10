@@ -49,6 +49,7 @@ static MAIL_INBOX_LAST_PARSED: AtomicU32 = AtomicU32::new(0);
 
 const WEBMAIL_INDEX_HTML: &str = include_str!("../../../tst/webmail/index.html");
 const WEBMAIL_APP_JS: &str = include_str!("../../../tst/webmail/app.js");
+const TRUEOS_TAILWIND_CSS: &str = include_str!("../../../tst/common/tailwind.css");
 
 pub fn current_port() -> Option<u16> {
     match MAIL_HTTP_PORT.load(Ordering::Acquire) {
@@ -1013,6 +1014,11 @@ async fn handle_app_js() -> Response {
     text_response(200, "application/javascript; charset=utf-8", WEBMAIL_APP_JS)
 }
 
+async fn handle_tailwind_css() -> Response {
+    crate::log!("webmail-http: GET /tailwind.css\n");
+    text_response(200, "text/css; charset=utf-8", TRUEOS_TAILWIND_CSS)
+}
+
 async fn handle_list_local() -> Response {
     crate::log!("webmail-http: api list\n");
     let mut inbox: Vec<MailMessage> = load_store()
@@ -1265,6 +1271,7 @@ fn mail_router() -> Router {
         .route("/", get(handle_index))
         .route("/index.html", get(handle_index))
         .route("/app.js", get(handle_app_js))
+        .route("/tailwind.css", get(handle_tailwind_css))
         .route("/healthz", get(handle_status))
         .route("/api/healthz", get(handle_status))
         .route("/api/webmail/status", get(handle_status))

@@ -6,16 +6,16 @@ use core::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::{io, net::SocketAddr};
 
 use axum::{
-    body::{to_bytes, Body},
+    Router,
+    body::{Body, to_bytes},
     extract::Request,
     http::{
-        header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE},
         Method, StatusCode,
+        header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE},
     },
     response::Response,
-    routing::any,
+    routing::{any, get},
     serve::ListenerExt,
-    Router,
 };
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use trueos_chat::{ChatConfig, ChatHub, ChatMethod, ChatRequest, ChatResponse};
@@ -29,6 +29,7 @@ const CHAT_SAVE_BATCH_MS: u64 = 10_000;
 const CHAT_SAVE_IDLE_MS: u64 = 1000;
 const CHAT_STORE_DIR: &str = "chat";
 const CHAT_STORE_PATH: &str = "chat/rooms.json";
+const TRUEOS_TAILWIND_CSS: &str = include_str!("../common/tailwind.css");
 static CHAT_HUB: spin::Mutex<Option<ChatHub>> = spin::Mutex::new(None);
 static CHAT_HUB_LOADED: AtomicBool = AtomicBool::new(false);
 static CHAT_SAVE_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -386,6 +387,17 @@ fn request_too_large_response() -> Response {
         .unwrap_or_else(|_| Response::new(Body::empty()))
 }
 
+async fn handle_tailwind_css() -> Response {
+    let body = TRUEOS_TAILWIND_CSS.as_bytes().to_vec();
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "text/css; charset=utf-8")
+        .header(CONTENT_LENGTH, body.len().to_string())
+        .header(CACHE_CONTROL, "no-cache")
+        .body(Body::from(body))
+        .unwrap_or_else(|_| Response::new(Body::empty()))
+}
+
 async fn handle_chat_request(request: Request) -> Response {
     load_chat_hub_once_sync();
     let (parts, body) = request.into_parts();
@@ -422,6 +434,7 @@ async fn handle_chat_request(request: Request) -> Response {
 fn chat_router() -> Router {
     Router::new()
         .route("/", any(handle_chat_request))
+        .route("/tailwind.css", get(handle_tailwind_css))
         .route("/api", any(handle_chat_request))
         .route("/api/rooms", any(handle_chat_request))
         .route("/api/rooms/{room}/messages", any(handle_chat_request))
