@@ -3,6 +3,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+const DEFAULT_LIMINE_REPO: &str = "https://github.com/limine-bootloader/limine.git";
+const DEFAULT_LIMINE_REF: &str = "v10.x";
+const LIMINE_SUBMODULE_PATH: &str = "vendor/limine";
+
 fn run(cmd: &mut Command) {
     let status = cmd
         .stdin(Stdio::inherit())
@@ -30,6 +34,41 @@ fn remove_dir_if_exists(path: &Path) {
     if path.exists() {
         fs::remove_dir_all(path)
             .unwrap_or_else(|e| panic!("remove {} failed: {e}", path.display()));
+    }
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) {
+    fs::create_dir_all(dst).unwrap_or_else(|e| panic!("create {} failed: {e}", dst.display()));
+
+    for entry in fs::read_dir(src).unwrap_or_else(|e| panic!("read {} failed: {e}", src.display()))
+    {
+        let entry = entry.unwrap_or_else(|e| panic!("read entry in {} failed: {e}", src.display()));
+        let name = entry.file_name();
+        if name == ".git" {
+            continue;
+        }
+
+        let src_path = entry.path();
+        let dst_path = dst.join(&name);
+        let ty = entry
+            .file_type()
+            .unwrap_or_else(|e| panic!("stat {} failed: {e}", src_path.display()));
+
+        if ty.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path);
+        } else if ty.is_file() {
+            fs::copy(&src_path, &dst_path).unwrap_or_else(|e| {
+                panic!("copy {} to {} failed: {e}", src_path.display(), dst_path.display())
+            });
+        } else if ty.is_symlink() {
+            #[cfg(unix)]
+            {
+                let target = fs::read_link(&src_path)
+                    .unwrap_or_else(|e| panic!("readlink {} failed: {e}", src_path.display()));
+                std::os::unix::fs::symlink(&target, &dst_path)
+                    .unwrap_or_else(|e| panic!("symlink {} failed: {e}", dst_path.display()));
+            }
+        }
     }
 }
 
@@ -139,7 +178,64 @@ fn clone_limine_repo(paths: &LiminePaths, repo: &str, reference: &str) {
     run(&mut cmd);
 }
 
+fn git_output(args: &[&str], cwd: &Path) -> Option<String> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn source_stamp(paths: &LiminePaths) -> Option<String> {
+    let head = git_output(&["rev-parse", "HEAD"], &paths.submodule_dir)?;
+    Some(format!("submodule:{head}"))
+}
+
+fn ensure_limine_submodule(repo_root: &Path, paths: &LiminePaths) {
+    if paths.submodule_dir.join(".git").exists() || paths.submodule_dir.join("bootstrap").is_file()
+    {
+        return;
+    }
+
+    let mut cmd = Command::new("git");
+    cmd.current_dir(repo_root)
+        .arg("submodule")
+        .arg("update")
+        .arg("--init")
+        .arg(LIMINE_SUBMODULE_PATH);
+    run(&mut cmd);
+}
+
+fn prepare_limine_source(repo_root: &Path, paths: &LiminePaths, repo: &str, reference: &str) {
+    let using_default_source = repo == DEFAULT_LIMINE_REPO && reference == DEFAULT_LIMINE_REF;
+    if !using_default_source {
+        if !paths.src_dir.join(".git").exists() {
+            clone_limine_repo(paths, repo, reference);
+        }
+        return;
+    }
+
+    ensure_limine_submodule(repo_root, paths);
+    let stamp = source_stamp(paths).unwrap_or_else(|| {
+        panic!("Limine submodule at {} is not initialized", paths.submodule_dir.display())
+    });
+    let stamp_path = paths.src_dir.join(".trueos_source_stamp");
+    let prior = read_to_string_if_exists(&stamp_path);
+    if prior.as_deref() == Some(stamp.as_str()) && paths.src_dir.join("bootstrap").is_file() {
+        return;
+    }
+
+    remove_dir_if_exists(&paths.src_dir);
+    copy_dir_recursive(&paths.submodule_dir, &paths.src_dir);
+    write_string(&stamp_path, &stamp);
+}
+
 pub struct LiminePaths {
+    pub submodule_dir: PathBuf,
     pub src_dir: PathBuf,
     pub build_dir: PathBuf,
     pub prefix_dir: PathBuf,
@@ -161,6 +257,7 @@ impl LiminePaths {
 
 pub fn default_paths(repo_root: &Path) -> LiminePaths {
     LiminePaths {
+        submodule_dir: repo_root.join(LIMINE_SUBMODULE_PATH),
         src_dir: repo_root.join("bld").join("limine-src"),
         build_dir: repo_root.join("bld").join("limine-build"),
         prefix_dir: repo_root.join("bld").join("limine-prefix"),
@@ -171,13 +268,25 @@ fn default_config_args(prefix: &Path) -> String {
     format!("--prefix={} --enable-uefi-x86-64 --enable-uefi-cd", prefix.display())
 }
 
+fn source_stamp_changed(paths: &LiminePaths) -> bool {
+    if !paths.submodule_dir.join("bootstrap").is_file() {
+        return false;
+    }
+
+    let Some(stamp) = source_stamp(paths) else {
+        return false;
+    };
+    read_to_string_if_exists(&paths.src_dir.join(".trueos_source_stamp")).as_deref()
+        != Some(stamp.as_str())
+}
+
 fn should_build(paths: &LiminePaths) -> bool {
     let share = paths.share_dir();
     // ISO build needs these.
     let need_uefi =
         is_file(&share.join("BOOTX64.EFI")) && is_file(&share.join("limine-uefi-cd.bin"));
 
-    !need_uefi || !is_file(&paths.stamp())
+    !need_uefi || !is_file(&paths.stamp()) || source_stamp_changed(paths)
 }
 
 pub fn ensure_limine(repo_root: &Path) {
@@ -195,25 +304,25 @@ pub fn ensure_limine(repo_root: &Path) {
     // Limine generates configure via ./bootstrap (autoreconf).
     // Match the existing Makefile behavior: only require autoreconf when configure is missing.
 
-    let repo = std::env::var("TRUEOS_LIMINE_REPO")
-        .unwrap_or_else(|_| "https://github.com/limine-bootloader/limine.git".to_string());
-    let reference = std::env::var("TRUEOS_LIMINE_REF").unwrap_or_else(|_| "v10.x".to_string());
+    let repo =
+        std::env::var("TRUEOS_LIMINE_REPO").unwrap_or_else(|_| DEFAULT_LIMINE_REPO.to_string());
+    let reference =
+        std::env::var("TRUEOS_LIMINE_REF").unwrap_or_else(|_| DEFAULT_LIMINE_REF.to_string());
 
     // If Cargo is in offline mode, don't try to hit the network.
     if std::env::var_os("CARGO_NET_OFFLINE").is_some() {
-        if !paths.src_dir.exists() {
+        if !paths.src_dir.exists() && !paths.submodule_dir.exists() {
             panic!(
-                "Limine sources not found at {} and CARGO_NET_OFFLINE is set. \
-Set TRUEOS_LIMINE_REF/TRUEOS_LIMINE_REPO and build with network access once.",
-                paths.src_dir.display()
+                "Limine sources not found at {} or {} and CARGO_NET_OFFLINE is set. \
+Run git submodule update --init {} with network access once.",
+                paths.src_dir.display(),
+                paths.submodule_dir.display(),
+                LIMINE_SUBMODULE_PATH
             );
         }
     }
 
-    if !paths.src_dir.join(".git").exists() {
-        // Fresh clone into bld/ so it stays out of version control.
-        clone_limine_repo(&paths, &repo, &reference);
-    }
+    prepare_limine_source(repo_root, &paths, &repo, &reference);
 
     // Reconfigure/rebuild if config args changed.
     let config_args = std::env::var("TRUEOS_LIMINE_CONFIG_ARGS")
@@ -240,7 +349,7 @@ Set TRUEOS_LIMINE_REF/TRUEOS_LIMINE_REPO and build with network access once.",
     if !paths.src_dir.join("configure").is_file() {
         if !paths.src_dir.join("bootstrap").is_file() {
             // Self-heal broken/incomplete source trees instead of panicking on ./bootstrap.
-            clone_limine_repo(&paths, &repo, &reference);
+            prepare_limine_source(repo_root, &paths, &repo, &reference);
         }
         require_tool("autoreconf", "Install autoconf + automake (and likely libtool)");
         let mut cmd = Command::new("sh");
@@ -288,12 +397,6 @@ Set TRUEOS_LIMINE_REF/TRUEOS_LIMINE_REPO and build with network access once.",
     println!("cargo:rerun-if-env-changed=CARGO_NET_OFFLINE");
 }
 
-// Keep public surface small; this is only used from build scripts.
 pub fn ensure_limine_from_manifest_dir(manifest_dir: &Path) {
     ensure_limine(manifest_dir);
-}
-
-fn _assert_send_sync() {
-    fn assert_send_sync<T: Send + Sync>() {}
-    assert_send_sync::<LiminePaths>();
 }

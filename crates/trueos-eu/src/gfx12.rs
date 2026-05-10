@@ -387,11 +387,20 @@ pub const T5_ONE_ROW_MATVEC_REQUIRES_LIVE_GPU_LOAD: bool = true;
 pub const T5_SMALL_LIVE4_TRUEOS_ARENA_EXPECTED_SENTINEL_U32: u32 = 0xC0DE_7505;
 pub const T5_SMALL_LIVE4_TRUEOS_ARENA_STORE_SEND_DWORD: usize = 73;
 pub const T5_SMALL_LIVE4_TRUEOS_ARENA_SENTINEL_DWORD: usize = 19;
+pub const T5_SMALL_LIVE4_PROVEN_HDC_PROGRAM_NAME: &str =
+    "gfx12-t5-small-live4-bf16-dot-proven-hdc-store-then-ts-eot";
+pub const T5_SMALL_LIVE4_PROVEN_HDC_STORE_SEND_DWORD: usize = 77;
+pub const T5_SMALL_LIVE4_PROVEN_HDC_SENTINEL_DWORD: usize = 19;
+pub const T5_TRUEOS_ARENA_OUTPUT_GPU_U32: u32 = 0x0410_2000;
 pub const T5_STORE_ONLY_ARENA_PROGRAM_NAME: &str =
     "gfx12-t5-store-only-arena-offset-hdc1-store-then-ts-eot";
 pub const T5_STORE_ONLY_ARENA_EXPECTED_RESULT_U32: u32 = 0xC0DE_7506;
 pub const T5_STORE_ONLY_ARENA_STORE_SEND_DWORD: usize = 31;
 pub const T5_STORE_ONLY_ARENA_SENTINEL_DWORD: usize = 19;
+pub const T5_STORE_ONLY_PROVEN_HDC_PROGRAM_NAME: &str =
+    "gfx12-t5-store-only-proven-hdc-output-then-ts-eot";
+pub const T5_STORE_ONLY_PROVEN_HDC_STORE_SEND_DWORD: usize = 11;
+pub const T5_STORE_ONLY_PROVEN_HDC_IMM_DWORD: usize = 3;
 
 // T5 diagnostic control: preserve the T5 arena payload shape and final HDC1
 // send, but remove live loads and math.  It should write:
@@ -451,6 +460,41 @@ pub static T5_STORE_ONLY_ARENA_OFFSET_HDC1_STORE_THEN_TS_EOT: EuArtifact = EuArt
     expects_store: true,
 };
 
+// T5 store bridge control: same target output slot as the T5 arena rung, but
+// using the exact stateless HDC send contract already proven by T47/T48.
+// This intentionally leaves the surface-indexed T5 control above preserved as
+// the negative-control artifact.
+pub static T5_STORE_ONLY_PROVEN_HDC_OUTPUT_THEN_TS_EOT_WORDS: [u32; 20] = [
+    0x80030061,
+    0x04054660,
+    0x00000000,
+    T5_STORE_ONLY_ARENA_EXPECTED_RESULT_U32,
+    0x80030061,
+    0x7F054220,
+    0x00000000,
+    T5_TRUEOS_ARENA_OUTPUT_GPU_U32,
+    0x00030131,
+    0x00000000,
+    0xCDFA7F0C,
+    0x009A040C,
+    0x80030061,
+    0x7F050220,
+    0x00460005,
+    0x00000000,
+    0x80030131,
+    0x00000004,
+    0x70007F0C,
+    0x00000000,
+];
+
+pub static T5_STORE_ONLY_PROVEN_HDC_OUTPUT_THEN_TS_EOT: EuArtifact = EuArtifact {
+    name: T5_STORE_ONLY_PROVEN_HDC_PROGRAM_NAME,
+    isa: EuIsa::Gfx12,
+    kind: EuArtifactKind::T5StoreOnlyArenaOffsetThenHdc1StoreThenThreadSpawnerEot,
+    words: &T5_STORE_ONLY_PROVEN_HDC_OUTPUT_THEN_TS_EOT_WORDS,
+    expects_store: true,
+};
+
 // Mesa ANV oracle artifact from `.codex_tmp/t5_small_live4_trueos_arena.comp`.
 //
 // Contract:
@@ -485,6 +529,37 @@ pub static T5_SMALL_LIVE4_TRUEOS_ARENA_BF16_DOT_HDC1_STATELESS_STORE_THEN_TS_EOT
         isa: EuIsa::Gfx12,
         kind: EuArtifactKind::T5SmallLive4Bf16DotThenHdc1StoreThenThreadSpawnerEot,
         words: &T5_SMALL_LIVE4_TRUEOS_ARENA_BF16_DOT_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS,
+        expects_store: true,
+    };
+
+// T5 live4 bridge: preserve the Mesa live-load/math prefix, but replace only
+// the final surface-indexed store with the proven stateless HDC store suffix.
+// If this writes, the next blocker is live load/math; if it still does not,
+// the prefix is preventing the value from reaching the proven store.
+pub static T5_SMALL_LIVE4_TRUEOS_ARENA_BF16_DOT_PROVEN_HDC_STORE_THEN_TS_EOT_WORDS:
+    [u32; 86] =
+    [
+        0x80030061, 0x0A050220, 0x00000024, 0x00000000, 0x80030061, 0x0B054220, 0x00000000,
+        0x00000000, 0x80030061, 0x0C054220, 0x00000000, 0x00000000, 0x80030061, 0x0F054220,
+        0x00000000, 0x00000004, 0x80030061, 0x10054220, 0x00000000, 0xC0DE7505, 0x00030061,
+        0x0D054660, 0x00000000, 0x00102000, 0xA4110640, 0x01110A0A, 0x80000661, 0x0B454620,
+        0x00000000, 0x00000000, 0x80000661, 0x0C454620, 0x00000000, 0x00002000, 0x8003A031,
+        0x010C0000, 0xA4020B0C, 0x02100000, 0x80039131, 0x030C0000, 0xA4020C0C, 0x02100000,
+        0x80032169, 0x02058660, 0x02000304, 0x00000010, 0x80030069, 0x05058660, 0x02000324,
+        0x00000010, 0x80030069, 0x04058660, 0x02000344, 0x00000010, 0x80030069, 0x06058660,
+        0x02000364, 0x00000010, 0x2407B041, 0x05110120, 0xA308015B, 0x02010704, 0xA309015B,
+        0x04010834, 0xA30E015B, 0x0601092C, 0x80030061, 0x04050660, 0x00460E05,
+        0x00000000, 0x80030061, 0x7F054220, 0x00000000, T5_TRUEOS_ARENA_OUTPUT_GPU_U32,
+        0x00030131, 0x00000000, 0xCDFA7F0C, 0x009A040C, 0x80030061, 0x7F050220,
+        0x00460005, 0x00000000, 0x80030131, 0x00000004, 0x70007F0C, 0x00000000,
+    ];
+
+pub static T5_SMALL_LIVE4_TRUEOS_ARENA_BF16_DOT_PROVEN_HDC_STORE_THEN_TS_EOT: EuArtifact =
+    EuArtifact {
+        name: T5_SMALL_LIVE4_PROVEN_HDC_PROGRAM_NAME,
+        isa: EuIsa::Gfx12,
+        kind: EuArtifactKind::T5SmallLive4Bf16DotThenHdc1StoreThenThreadSpawnerEot,
+        words: &T5_SMALL_LIVE4_TRUEOS_ARENA_BF16_DOT_PROVEN_HDC_STORE_THEN_TS_EOT_WORDS,
         expects_store: true,
     };
 

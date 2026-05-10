@@ -97,9 +97,6 @@ strip = true
 debug = false
 opt-level = 2
 
-[build-dependencies]
-trueos-limloader = { path = "crates/trueos-limloader" }
-
 [patch.crates-io]
 libc = { path = "vendor/libc-0.2.185" }
 png = { path = "vendor/png-0.18.1" }
