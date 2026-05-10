@@ -82,8 +82,6 @@ mod tokio_probe;
 mod trueos_tokio_worker;
 #[path = "tst/boot_factory_ram_probe.rs"]
 mod tst_boot_factory_ram_probe;
-#[path = "tst/c4_boot_probe.rs"]
-mod tst_c4_boot_probe;
 #[path = "tst/fps.rs"]
 mod tst_fps;
 #[path = "tst/html_demo.rs"]
@@ -94,8 +92,6 @@ mod tst_html_shack;
 mod tst_http_trueosfs;
 #[path = "tst/net_tcp_shell.rs"]
 mod tst_net_tcp_shell;
-#[path = "tst/smtp_smoke.rs"]
-mod tst_smtp_smoke;
 #[path = "tst/ui2_analog_clock_demo.rs"]
 mod tst_ui2_analog_clock_demo;
 #[path = "tst/ui2_bgrt.rs"]
@@ -120,8 +116,6 @@ mod tst_ui2_smiley_fountain_demo;
 mod tst_ui2_swarm;
 #[path = "tst/ui2_text_input_demo.rs"]
 mod tst_ui2_text_input_demo;
-#[path = "tst/ui2_trueosfs_explorer_demo.rs"]
-mod tst_ui2_trueosfs_explorer_demo;
 #[path = "tst/ws_time.rs"]
 mod tst_ws_time;
 #[cfg(target_arch = "x86_64")]
@@ -133,8 +127,6 @@ mod usb2;
 mod wait;
 mod workers;
 mod x2apic;
-#[path = "tst/yaml_probe.rs"]
-mod yaml_probe;
 mod z7;
 
 pub(crate) use crate::intel::hda;
@@ -298,8 +290,6 @@ pub extern "C" fn kmain() -> ! {
     if crate::allcaps::probes::HYPER_BOOT_PROBE {
         hyper_probe::log_boot_probe();
     }
-    yaml_probe::log_boot_probe();
-
     match pci::nic_fpga_dma::init_default_once() {
         Ok(region) => {
             crate::log!(

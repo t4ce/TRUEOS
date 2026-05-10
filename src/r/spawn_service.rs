@@ -81,16 +81,13 @@ define_started_flags!(
     UI2_SMILEY_FOUNTAIN_DEMO_STARTED,
     UI2_SHELL_DEMO_STARTED,
     UI2_SWARM_DEMO_STARTED,
-    UI2_TRUEOSFS_EXPLORER_DEMO_STARTED,
     USB_CONTROLLER_TASKS_STARTED,
-    C4_BOOT_PROBE_STARTED,
     TRUEOSFS_READY_HOOK_STARTED,
     BP_AUTOSTART_STARTED,
     BOOT_WS_SMOKE_STARTED,
     BOOT_NETBENCH_STARTED,
     BOOT_ASSET_FETCH_STARTED,
     APP_VM_RUN_QUEUE_STARTED,
-    SMTP_SMOKE_STARTED,
     FACTORY_RAM_PROBE_STARTED,
     UART_SHELL_STARTED,
     NET_TCP_SHELL_STARTED,
@@ -120,7 +117,6 @@ define_stop_flags!(
     STOP_UI2_SMILEY_FOUNTAIN_DEMO,
     STOP_UI2_SHELL_DEMO,
     STOP_UI2_SWARM_DEMO,
-    STOP_UI2_TRUEOSFS_EXPLORER_DEMO,
 );
 
 fn stop_flag_by_task_name(name: &str) -> Option<&'static AtomicBool> {
@@ -136,7 +132,6 @@ fn stop_flag_by_task_name(name: &str) -> Option<&'static AtomicBool> {
         "ui2-smiley-fountain-demo" => Some(&STOP_UI2_SMILEY_FOUNTAIN_DEMO),
         "ui2-shell-demo" => Some(&STOP_UI2_SHELL_DEMO),
         "ui2-swarm-demo" => Some(&STOP_UI2_SWARM_DEMO),
-        "ui2-trueosfs-explorer-demo" => Some(&STOP_UI2_TRUEOSFS_EXPLORER_DEMO),
         _ => None,
     }
 }
@@ -856,13 +851,6 @@ fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
     }
 }
 
-fn spawn_ui2_trueosfs_explorer_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
-        let _ = worker_spawner;
-        crate::tst_ui2_trueosfs_explorer_demo::ui2_trueosfs_explorer_demo_task()
-    })
-}
-
 const USER_INPUT_RECORD_FLUSH_INTERVAL_SECS: u64 = 120;
 const USER_INPUT_RECORD_PATH: &str = "user_input_record.txt";
 
@@ -922,10 +910,6 @@ async fn trueosfs_ready_hook_task() {
 
 fn spawn_trueosfs_ready_hook(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| trueosfs_ready_hook_task())
-}
-
-fn spawn_c4_boot_probe(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::tst_c4_boot_probe::task())
 }
 
 fn spawn_boot_ws_smoke(spawner: Spawner) -> SpawnAttempt {
@@ -1205,10 +1189,6 @@ fn spawn_bp_autostart(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| bp_autostart_task())
 }
 
-fn spawn_smtp_smoke(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::tst_smtp_smoke::smtp_smoke_task())
-}
-
 fn spawn_uart_shell(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| crate::shell2::task(spawner, &crate::shell2::UART1_COM1_BACKEND))
 }
@@ -1267,7 +1247,7 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::APP_VM_READY
 const WS_BOOT_READY: u32 = crate::r::readiness::NET_GATEWAY_REACHABLE
     | crate::r::readiness::TLS_SOCKET_SERVICE_READY
     | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
-static TASKS: [TaskSpec; 71] = [
+static TASKS: [TaskSpec; 68] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
         "globalog-persist-once",
@@ -1575,18 +1555,6 @@ static TASKS: [TaskSpec; 71] = [
         &UI2_SWARM_DEMO_STARTED,
         spawn_ui2_swarm_demo,
     ),
-    TaskSpec::disabled(
-        "ui2-trueosfs-explorer-demo",
-        UI2_DEMO_READY | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
-        &UI2_TRUEOSFS_EXPLORER_DEMO_STARTED,
-        spawn_ui2_trueosfs_explorer_demo,
-    ),
-    TaskSpec::disabled(
-        "c4-boot-probe",
-        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
-        &C4_BOOT_PROBE_STARTED,
-        spawn_c4_boot_probe,
-    ),
     TaskSpec::enabled(
         "trueosfs-ready-hook",
         crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
@@ -1601,7 +1569,6 @@ static TASKS: [TaskSpec; 71] = [
         spawn_lumen_service,
     ),
     TaskSpec::disabled("boot-ws-smoke", WS_BOOT_READY, &BOOT_WS_SMOKE_STARTED, spawn_boot_ws_smoke),
-    TaskSpec::disabled("smtp-smoke", 0, &SMTP_SMOKE_STARTED, spawn_smtp_smoke),
     TaskSpec::disabled("boot-netbench", 0, &BOOT_NETBENCH_STARTED, spawn_boot_netbench),
     TaskSpec::enabled_gated(
         "boot-asset-fetch",

@@ -208,7 +208,7 @@ async function sendMessage(event) {
     const result = await response.json();
     if (result.ok === false) throw new Error(text(result.error, "Send failed"));
     els.composeForm.reset();
-    els.composeStatus.textContent = "Message sent.";
+    els.composeStatus.textContent = text(result.status, "queued") === "queued" ? "Message queued." : "Message sent.";
     await loadMessages();
   } catch (error) {
     els.composeStatus.textContent = error.message;
