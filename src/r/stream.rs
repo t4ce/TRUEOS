@@ -502,10 +502,64 @@ pub async fn read_trueosfs_file_range_into_logged_async(
     }
 
     crate::log!("{} read start path={} offset={} bytes={}\n", log_label, key, offset, dst.len());
-    let Some(read) = crate::r::fs::trueosfs::file_read_range_async(disk, key, offset, dst).await?
-    else {
-        return Ok(false);
-    };
+    let start_ms = logged_read_now_ms();
+    let mut read = 0usize;
+    let mut last_log_ms = start_ms;
+    let mut last_log_bytes = 0usize;
+    while read < dst.len() {
+        let chunk_len = core::cmp::min(256 * 1024, dst.len().saturating_sub(read));
+        let chunk_offset = offset
+            .checked_add(read as u64)
+            .ok_or(crate::disc::block::Error::OutOfBounds)?;
+        let Some(got) = crate::r::fs::trueosfs::file_read_range_async(
+            disk,
+            key,
+            chunk_offset,
+            &mut dst[read..read + chunk_len],
+        )
+        .await?
+        else {
+            return Ok(false);
+        };
+        if got != chunk_len {
+            crate::log!(
+                "{} read short path={} offset={} got={} need={} total_done={} total_need={}\n",
+                log_label,
+                key,
+                chunk_offset,
+                got,
+                chunk_len,
+                read.saturating_add(got),
+                dst.len()
+            );
+            return Err(crate::disc::block::Error::OutOfBounds);
+        }
+        read = read.saturating_add(got);
+
+        if crate::logflag::LUMEN_STORAGE_TRACE_LOGS {
+            let now_ms = logged_read_now_ms();
+            let advanced = read.saturating_sub(last_log_bytes);
+            if read == dst.len()
+                || advanced >= 512 * 1024
+                || now_ms.saturating_sub(last_log_ms) >= 1000
+            {
+                let pct_x10 = read.saturating_mul(1000) / dst.len();
+                crate::log!(
+                    "{} read progress path={} offset={} done={} total={} pct={}.{} elapsed_ms={}\n",
+                    log_label,
+                    key,
+                    offset,
+                    read,
+                    dst.len(),
+                    pct_x10 / 10,
+                    pct_x10 % 10,
+                    now_ms.saturating_sub(start_ms)
+                );
+                last_log_ms = now_ms;
+                last_log_bytes = read;
+            }
+        }
+    }
     crate::log!(
         "{} read done path={} offset={} got={} need={}\n",
         log_label,
@@ -518,6 +572,16 @@ pub async fn read_trueosfs_file_range_into_logged_async(
         return Err(crate::disc::block::Error::OutOfBounds);
     }
     Ok(true)
+}
+
+fn logged_read_now_ms() -> u64 {
+    let ticks = embassy_time_driver::now();
+    let hz = embassy_time_driver::TICK_HZ;
+    if hz == 0 {
+        0
+    } else {
+        ticks.saturating_mul(1000) / hz
+    }
 }
 
 pub async fn read_trueosfs_file_range_via_pipe_async(

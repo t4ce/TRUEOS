@@ -41,8 +41,9 @@ const UAS_RAMP_WRITE_CANDIDATES: [(usize, usize); 5] = [
     (512 * 1024, 4),
 ];
 const BENCH_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
-const BENCH_MENU_ROWS: [[&str; 2]; 4] = [
+const BENCH_MENU_ROWS: [[&str; 2]; 5] = [
     ["cpu", "Run CPU-only compute benchmark"],
+    ["lumen", "Run Lumen model/compute benchmark"],
     ["net", "Run network throughput benchmark"],
     [
         "netk",
@@ -466,6 +467,19 @@ pub(crate) fn try_parse(
                 ParseOutcome::Handled
             }
         }
+        "lumen" => {
+            if args.next().is_some() {
+                print_usage(io);
+                return ParseOutcome::Handled;
+            }
+            if let Some(session_id) = submit_lumenbench(spawner, io) {
+                ParseOutcome::StartSession(
+                    crate::shell2::shell2_cmd::CommandSessionKind::BenchRunning(session_id),
+                )
+            } else {
+                ParseOutcome::Handled
+            }
+        }
         "uas" => {
             if args.next().is_some() {
                 print_shell_line(io, "bench uas: usage `bench uas`");
@@ -502,6 +516,25 @@ fn submit_cpubench(spawner: &Spawner, io: &'static dyn ShellBackend2) -> Option<
         }
     }
     print_matrix_target_line(&target, "bench cpu: send `q` in this slot to stop");
+    Some(session_id)
+}
+
+fn submit_lumenbench(spawner: &Spawner, io: &'static dyn ShellBackend2) -> Option<u64> {
+    let target = matrix_target_for_backend(io);
+    let session_id = bench_session_start();
+
+    print_matrix_target_line(&target, "bench lumen: starting model compute probe");
+    set_matrix_target_active(&target, true);
+    match crate::lumen::lumenbench_task(target.clone(), session_id) {
+        Ok(token) => spawner.spawn(token),
+        Err(_) => {
+            bench_session_finish(session_id);
+            set_matrix_target_active(&target, false);
+            print_shell_line(io, "bench lumen: spawn failed");
+            return None;
+        }
+    }
+    print_matrix_target_line(&target, "bench lumen: send `q` in this slot to stop");
     Some(session_id)
 }
 

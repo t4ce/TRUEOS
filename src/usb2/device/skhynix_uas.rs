@@ -241,15 +241,7 @@ fn mass_runtime_key_for_disk(handle: block::DeviceHandle) -> Option<u64> {
 }
 
 pub(crate) fn is_uas_skhynix_disk(handle: block::DeviceHandle) -> bool {
-    let Some(runtime_key) = mass_runtime_key_for_disk(handle) else {
-        return false;
-    };
-    let runtimes = MASS_RUNTIMES.lock();
-    runtimes
-        .iter()
-        .find(|rt| rt.runtime_key == runtime_key)
-        .map(|rt| matches!(rt.endpoints, UsbMassEndpoints::UasSkhynix { .. }))
-        .unwrap_or(false)
+    matches!(registered_disk_io_profile(handle), Some(MassIoProfile::UasSkhynix))
 }
 
 #[allow(dead_code)]
@@ -1989,6 +1981,10 @@ pub(super) async fn read_blocks_uas_skhynix_windowed(
     let request_end_lba = lba
         .checked_add(blocks as u64)
         .ok_or(block::Error::OutOfBounds)?;
+    let trace = crate::logflag::LUMEN_STORAGE_TRACE_LOGS && total_bytes >= 128 * 1024;
+    let start_ms = uas_bench_now_ms();
+    let mut last_trace_ms = start_ms;
+    let mut last_trace_completed = 0u64;
 
     let mut completed_bytes = 0u64;
     let mut submitted_bytes = 0u64;
@@ -1998,6 +1994,23 @@ pub(super) async fn read_blocks_uas_skhynix_windowed(
     let mut ssthresh = max_inflight;
     let mut additive_acks = 0usize;
     let mut timeouts = 0u32;
+
+    if trace {
+        crate::log!(
+            "crabusb: mass {:04X}:{:04X} uas-read-window start lba={} blocks={} bytes={} rx_bytes={} blocks_per_read={} max_inflight={} live_streams={} dead_streams={} io_limit={}\n",
+            rt.vendor_id,
+            rt.product_id,
+            lba,
+            blocks,
+            total_bytes,
+            max_read_bytes,
+            blocks_per_read,
+            max_inflight,
+            live_streams,
+            rt.uas_dead_stream_mask.count_ones(),
+            current_mass_io_bytes(rt, block_size)
+        );
+    }
 
     while completed_bytes < total_bytes as u64 || !flights.is_empty() {
         while flights.len() < cwnd && submitted_bytes < total_bytes as u64 {
@@ -2185,6 +2198,32 @@ pub(super) async fn read_blocks_uas_skhynix_windowed(
                         additive_acks = 0;
                     }
                 }
+
+                if trace {
+                    let now_ms = uas_bench_now_ms();
+                    if completed_bytes >= total_bytes as u64
+                        || completed_bytes.saturating_sub(last_trace_completed) >= 512 * 1024
+                        || now_ms.saturating_sub(last_trace_ms) >= 1000
+                    {
+                        crate::log!(
+                            "crabusb: mass {:04X}:{:04X} uas-read-window progress lba={} completed={} total={} submitted={} inflight={} cwnd={} ssthresh={} timeouts={} dead_streams={} elapsed_ms={}\n",
+                            rt.vendor_id,
+                            rt.product_id,
+                            lba,
+                            completed_bytes,
+                            total_bytes,
+                            submitted_bytes,
+                            flights.len(),
+                            cwnd,
+                            ssthresh,
+                            timeouts,
+                            rt.uas_dead_stream_mask.count_ones(),
+                            now_ms.saturating_sub(start_ms)
+                        );
+                        last_trace_ms = now_ms;
+                        last_trace_completed = completed_bytes;
+                    }
+                }
             }
             UasBenchStep::TimedOut(flight) => {
                 let retry_lba = flight.lba;
@@ -2267,6 +2306,21 @@ pub(super) async fn read_blocks_uas_skhynix_windowed(
     if let Some(route) = route.as_mut() {
         route.phase = UasRoutePhase::Done;
         route.counters.dead_streams = rt.uas_dead_stream_mask.count_ones();
+    }
+    if trace {
+        crate::log!(
+            "crabusb: mass {:04X}:{:04X} uas-read-window done lba={} blocks={} bytes={} completed={} submitted={} elapsed_ms={} dead_streams={} io_limit={}\n",
+            rt.vendor_id,
+            rt.product_id,
+            lba,
+            blocks,
+            total_bytes,
+            completed_bytes,
+            submitted_bytes,
+            uas_bench_now_ms().saturating_sub(start_ms),
+            rt.uas_dead_stream_mask.count_ones(),
+            current_mass_io_bytes(rt, block_size)
+        );
     }
     Ok(())
 }
