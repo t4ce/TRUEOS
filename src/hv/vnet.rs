@@ -217,8 +217,3 @@ pub fn tcp_read(vm_id: u8, out: &mut [u8]) -> Result<usize, VmNetStatus> {
     maybe_log(&ctx, &cpl);
     Ok(got)
 }
-
-pub fn last_completion(vm_id: u8) -> Option<VmNetCompletion> {
-    let ctx = context(vm_id)?.lock();
-    ctx.last_cpl
-}

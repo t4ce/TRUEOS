@@ -8,8 +8,6 @@ fn task_gate_always() -> bool {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum SpawnPlacement {
-    Local,
-    Ap1,
     Worker,
     ReservedVmLane,
 }

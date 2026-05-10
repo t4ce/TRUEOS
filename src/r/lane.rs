@@ -7,14 +7,12 @@ use embassy_executor::SendSpawner;
 
 use crate::r::spawn_spec::SpawnPlacement;
 
-const AP1_SERVICE_SLOT: u32 = 1;
 const AP2_FIRST_CARRIER_SLOT: u32 = 2;
 
 const LANE_FREE: u8 = 0;
 const LANE_VM_HULL: u8 = 1;
 const LANE_TOKIO_BLOCKING: u8 = 2;
 const LANE_WORKER: u8 = 3;
-const LANE_SERVICE: u8 = 4;
 
 static LANE_OWNER: [AtomicU8; crate::allcaps::hv::VM_CPU_SLOT_LIMIT] =
     [const { AtomicU8::new(LANE_FREE) }; crate::allcaps::hv::VM_CPU_SLOT_LIMIT];
@@ -25,7 +23,6 @@ pub enum LaneRole {
     VmHull,
     TokioBlocking,
     Worker,
-    Service,
 }
 
 impl LaneRole {
@@ -34,7 +31,6 @@ impl LaneRole {
             Self::VmHull => LANE_VM_HULL,
             Self::TokioBlocking => LANE_TOKIO_BLOCKING,
             Self::Worker => LANE_WORKER,
-            Self::Service => LANE_SERVICE,
         }
     }
 }
@@ -68,8 +64,6 @@ pub struct LaneLease {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum LanePickError {
-    LocalPlacementUnsupported,
-    MissingAp1Lane,
     MissingWorkerLane,
     MissingReservedVmLane,
     Busy,
@@ -78,8 +72,6 @@ pub enum LanePickError {
 impl LanePickError {
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::LocalPlacementUnsupported => "local placement is not a runtime carrier lane",
-            Self::MissingAp1Lane => "ap1 service lane is not registered",
             Self::MissingWorkerLane => "no AP2+ worker lanes are registered",
             Self::MissingReservedVmLane => "no AP2+ reserved VM lanes are registered",
             Self::Busy => "matching runtime carrier lanes are currently leased",
@@ -109,8 +101,6 @@ impl Drop for LaneLease {
 
 pub fn pick_carrier_lane(profile: LaneProfile) -> Result<LaneTarget, LanePickError> {
     let missing_error = match profile.placement {
-        SpawnPlacement::Local => return Err(LanePickError::LocalPlacementUnsupported),
-        SpawnPlacement::Ap1 => LanePickError::MissingAp1Lane,
         SpawnPlacement::Worker => LanePickError::MissingWorkerLane,
         SpawnPlacement::ReservedVmLane => LanePickError::MissingReservedVmLane,
     };
@@ -145,24 +135,8 @@ pub fn pick_tokio_blocking_lane() -> Result<LaneTarget, LanePickError> {
 
 fn collect_candidates(profile: LaneProfile) -> Vec<LaneCandidate> {
     match profile.placement {
-        SpawnPlacement::Local => Vec::new(),
-        SpawnPlacement::Ap1 => collect_ap1_candidate(),
         SpawnPlacement::Worker | SpawnPlacement::ReservedVmLane => collect_ap2_candidates(),
     }
-}
-
-fn collect_ap1_candidate() -> Vec<LaneCandidate> {
-    let Some(spawner) = crate::workers::spawner_for_slot(AP1_SERVICE_SLOT) else {
-        return Vec::new();
-    };
-    let core_kind = crate::cpu::CpuProfile::for_slot(AP1_SERVICE_SLOT)
-        .map(|profile| profile.core_kind())
-        .unwrap_or(crate::workers::CORE_KIND_UNKNOWN);
-    alloc::vec![LaneCandidate {
-        slot: AP1_SERVICE_SLOT,
-        core_kind,
-        spawner,
-    }]
 }
 
 fn collect_ap2_candidates() -> Vec<LaneCandidate> {
