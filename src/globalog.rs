@@ -40,6 +40,96 @@ macro_rules! log {
     }};
 }
 
+#[macro_export]
+macro_rules! log_trace {
+    (target: $target:expr; $($tt:tt)*) => {{
+        $crate::globalog::log_with_concept_level(
+            $target,
+            $crate::globalog::level::TRACE,
+            format_args!($($tt)*),
+        );
+    }};
+    ($($tt:tt)*) => {{
+        $crate::globalog::log_with_concept_level(
+            "boot",
+            $crate::globalog::level::TRACE,
+            format_args!($($tt)*),
+        );
+    }};
+}
+
+#[macro_export]
+macro_rules! log_debug {
+    (target: $target:expr; $($tt:tt)*) => {{
+        $crate::globalog::log_with_concept_level(
+            $target,
+            $crate::globalog::level::DEBUG,
+            format_args!($($tt)*),
+        );
+    }};
+    ($($tt:tt)*) => {{
+        $crate::globalog::log_with_concept_level(
+            "boot",
+            $crate::globalog::level::DEBUG,
+            format_args!($($tt)*),
+        );
+    }};
+}
+
+#[macro_export]
+macro_rules! log_info {
+    (target: $target:expr; $($tt:tt)*) => {{
+        $crate::globalog::log_with_concept_level(
+            $target,
+            $crate::globalog::level::INFO,
+            format_args!($($tt)*),
+        );
+    }};
+    ($($tt:tt)*) => {{
+        $crate::globalog::log_with_concept_level(
+            "boot",
+            $crate::globalog::level::INFO,
+            format_args!($($tt)*),
+        );
+    }};
+}
+
+#[macro_export]
+macro_rules! log_warn {
+    (target: $target:expr; $($tt:tt)*) => {{
+        $crate::globalog::log_with_concept_level(
+            $target,
+            $crate::globalog::level::WARN,
+            format_args!($($tt)*),
+        );
+    }};
+    ($($tt:tt)*) => {{
+        $crate::globalog::log_with_concept_level(
+            "boot",
+            $crate::globalog::level::WARN,
+            format_args!($($tt)*),
+        );
+    }};
+}
+
+#[macro_export]
+macro_rules! log_error {
+    (target: $target:expr; $($tt:tt)*) => {{
+        $crate::globalog::log_with_concept_level(
+            $target,
+            $crate::globalog::level::ERROR,
+            format_args!($($tt)*),
+        );
+    }};
+    ($($tt:tt)*) => {{
+        $crate::globalog::log_with_concept_level(
+            "boot",
+            $crate::globalog::level::ERROR,
+            format_args!($($tt)*),
+        );
+    }};
+}
+
 pub fn log(args: fmt::Arguments<'_>) {
     log_with_purpose(None, args);
 }
@@ -85,8 +175,23 @@ pub fn purpose_for_level(level: log::Level) -> &'static str {
     }
 }
 
+pub mod level {
+    pub const TRACE: log::Level = log::Level::Trace;
+    pub const DEBUG: log::Level = log::Level::Debug;
+    pub const INFO: log::Level = log::Level::Info;
+    pub const WARN: log::Level = log::Level::Warn;
+    pub const ERROR: log::Level = log::Level::Error;
+}
+
 pub fn log_with_level(level: log::Level, args: fmt::Arguments<'_>) {
     log_with_purpose(Some(purpose_for_level(level)), args);
+}
+
+pub fn log_with_concept_level(concept: &str, level: log::Level, args: fmt::Arguments<'_>) {
+    if !crate::logflag::concept_log_enabled(concept, level) {
+        return;
+    }
+    log_with_level(level, args);
 }
 
 fn one_second_rate_limit_allows(last_marker: &AtomicU64) -> bool {

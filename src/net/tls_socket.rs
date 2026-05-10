@@ -254,7 +254,7 @@ fn maybe_notify_connected(conn: &mut TlsConn) {
     if conn.tls.is_connected()
         && let Some(handle) = conn.handle
     {
-        crate::log!("tls-socket: tls connected owner={} handle={}\n", conn.user_owner, handle.0);
+        crate::log_info!(target: "net"; "tls-socket: tls connected owner={} handle={}\n", conn.user_owner, handle.0);
         // Only mark as notified once the event is successfully queued.
         // Otherwise the app may never observe `Connected` and will stall.
         if push_tls_event(conn.user_owner, TlsEvent::Connected { handle }) {
@@ -295,7 +295,7 @@ fn tls_socket_tick_once() {
                         continue;
                     };
 
-                    crate::log!(
+                    crate::log_info!(target: "net"; 
                         "tls-socket: net via vnet owner={} conn={} device={}\n",
                         owner,
                         seq,
@@ -307,7 +307,7 @@ fn tls_socket_tick_once() {
                         match TlsClient::new(&cfg, &roots, server_name, &mut rng, &KERNEL_TIME) {
                             Ok(c) => c,
                             Err(e) => {
-                                crate::log!("tls-socket: TlsClient::new failed: {:?}\n", e);
+                                crate::log_info!(target: "net"; "tls-socket: TlsClient::new failed: {:?}\n", e);
                                 let _ = push_tls_event(owner, TlsEvent::TlsError { err: e });
                                 continue;
                             }
@@ -451,7 +451,7 @@ fn tls_socket_tick_once() {
                 vnet::Event::TcpEstablished { handle, .. } => {
                     if conns[idx].handle == Some(handle) {
                         conns[idx].last_activity = Instant::now();
-                        crate::log!(
+                        crate::log_info!(target: "net"; 
                             "tls-socket: tcp established owner={} handle={}\n",
                             conns[idx].user_owner,
                             handle.0
@@ -501,7 +501,7 @@ fn tls_socket_tick_once() {
                     }
                 }
                 vnet::Event::Error { msg } => {
-                    crate::log!(
+                    crate::log_info!(target: "net"; 
                         "tls-socket: net error owner={} handle={:?} msg={}\n",
                         conns[idx].user_owner,
                         conns[idx].handle.map(|h| h.0),
@@ -528,7 +528,7 @@ fn tls_socket_tick_once() {
 #[task]
 pub async fn tls_socket_service_task() {
     async move {
-        crate::log!("tls-socket: service running\n");
+        crate::log_info!(target: "net"; "tls-socket: service running\n");
         crate::r::readiness::set(crate::r::readiness::TLS_SOCKET_SERVICE_READY);
 
         loop {

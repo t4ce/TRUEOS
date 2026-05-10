@@ -3,6 +3,8 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 pub(crate) const MEDIA_DECODE_CACHE_PATH: &str = "media/demo_yelly.mp4";
+const MEDIA_HTTP_DEMO_TIMEOUT_MS: u32 = 60_000;
+const MEDIA_HTTP_DEMO_MAX_BYTES: usize = 16 * 1024 * 1024;
 
 pub(crate) enum MediaSource {
     Memory {
@@ -76,54 +78,92 @@ impl MediaSource {
 }
 
 pub(crate) async fn fetch_media_source_async() -> Option<MediaSource> {
-    if !crate::logflag::INTEL_MEDIA_FS_CACHE_ENABLED {
+    if crate::logflag::INTEL_MEDIA_FS_CACHE_ENABLED {
+        let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
+            crate::log!(
+                "intel/media: source cache unavailable path={} reason=no-trueosfs-root\n",
+                MEDIA_DECODE_CACHE_PATH,
+            );
+            return fetch_media_source_from_http_async().await;
+        };
+        let info = disk.info();
         crate::log!(
-            "intel/media: source unavailable path={} reason=fs-cache-disabled\n",
+            "intel/media: cache probe path={} disk_id={} readonly={} block={} max_transfer={}\n",
+            MEDIA_DECODE_CACHE_PATH,
+            info.id.raw(),
+            info.is_read_only() as u8,
+            info.block_size,
+            info.max_transfer_bytes,
+        );
+        match crate::r::fs::trueosfs::file_info_async(disk, MEDIA_DECODE_CACHE_PATH).await {
+            Ok(Some(info)) if info.data_len != 0 => {
+                crate::log!(
+                    "intel/media: cache hit path={} bytes={} source=file\n",
+                    MEDIA_DECODE_CACHE_PATH,
+                    info.data_len
+                );
+                return Some(MediaSource::CacheFile {
+                    source: "cache",
+                    disk,
+                    path: MEDIA_DECODE_CACHE_PATH,
+                    len: info.data_len,
+                });
+            }
+            Ok(_) => {
+                crate::log!("intel/media: cache miss path={}\n", MEDIA_DECODE_CACHE_PATH,);
+            }
+            Err(err) => {
+                crate::log!(
+                    "intel/media: cache probe failed path={} err={:?}\n",
+                    MEDIA_DECODE_CACHE_PATH,
+                    err
+                );
+            }
+        }
+    } else {
+        crate::log!(
+            "intel/media: source cache unavailable path={} reason=fs-cache-disabled\n",
             MEDIA_DECODE_CACHE_PATH,
         );
-        return None;
     }
 
-    let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
-        crate::log!(
-            "intel/media: source unavailable path={} reason=no-trueosfs-root\n",
-            MEDIA_DECODE_CACHE_PATH,
-        );
-        return None;
-    };
-    let info = disk.info();
+    fetch_media_source_from_http_async().await
+}
+
+async fn fetch_media_source_from_http_async() -> Option<MediaSource> {
+    let url = crate::allports::local_assets::DEMO_YELLY_MP4_URL;
     crate::log!(
-        "intel/media: cache probe path={} disk_id={} readonly={} block={} max_transfer={}\n",
-        MEDIA_DECODE_CACHE_PATH,
-        info.id.raw(),
-        info.is_read_only() as u8,
-        info.block_size,
-        info.max_transfer_bytes,
+        "intel/media: source fetch start url={} max_bytes={} timeout_ms={}\n",
+        url,
+        MEDIA_HTTP_DEMO_MAX_BYTES,
+        MEDIA_HTTP_DEMO_TIMEOUT_MS,
     );
-    match crate::r::fs::trueosfs::file_info_async(disk, MEDIA_DECODE_CACHE_PATH).await {
-        Ok(Some(info)) if info.data_len != 0 => {
+    match crate::t::net::http::fetch_http_body_hyper(
+        url,
+        MEDIA_HTTP_DEMO_TIMEOUT_MS,
+        MEDIA_HTTP_DEMO_MAX_BYTES,
+    )
+    .await
+    {
+        Ok(body) if !body.is_empty() => {
             crate::log!(
-                "intel/media: cache hit path={} bytes={} source=file\n",
-                MEDIA_DECODE_CACHE_PATH,
-                info.data_len
+                "intel/media: source fetch ready url={} bytes={} source=memory\n",
+                url,
+                body.len(),
             );
-            return Some(MediaSource::CacheFile {
-                source: "cache",
-                disk,
-                path: MEDIA_DECODE_CACHE_PATH,
-                len: info.data_len,
-            });
+            Some(MediaSource::Memory { source: url, body })
         }
         Ok(_) => {
-            crate::log!("intel/media: cache miss path={}\n", MEDIA_DECODE_CACHE_PATH,);
+            crate::log!("intel/media: source fetch empty url={}\n", url);
+            None
         }
         Err(err) => {
             crate::log!(
-                "intel/media: cache probe failed path={} err={:?}\n",
-                MEDIA_DECODE_CACHE_PATH,
+                "intel/media: source fetch failed url={} err={:?}\n",
+                url,
                 err
             );
+            None
         }
     }
-    None
 }

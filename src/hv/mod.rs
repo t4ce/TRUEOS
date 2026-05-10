@@ -583,16 +583,35 @@ pub fn hvlogf(args: core::fmt::Arguments<'_>) {
         });
     }
 
-    if hvlog_console_enabled(line.as_str()) {
-        crate::log!("{}\n", line.as_str());
+    let level = hvlog_console_level(line.as_str());
+    if hvlog_console_enabled(line.as_str(), level) {
+        crate::globalog::log_with_concept_level(
+            "hv",
+            level,
+            format_args!("{}\n", line.as_str()),
+        );
     }
 }
 
-fn hvlog_console_enabled(line: &str) -> bool {
+fn hvlog_console_level(line: &str) -> log::Level {
+    if line.contains("failed")
+        || line.contains("error")
+        || line.contains("fault")
+        || line.contains("panic")
+        || line.contains("unsupported")
+        || line.contains("bad ")
+    {
+        log::Level::Warn
+    } else {
+        log::Level::Info
+    }
+}
+
+fn hvlog_console_enabled(line: &str, level: log::Level) -> bool {
     if line.starts_with("portal:") {
         return crate::logflag::PORTAL_LOGS;
     }
-    crate::logflag::HV_LOGS
+    crate::logflag::HV_LOGS && crate::logflag::concept_log_enabled("hv", level)
 }
 
 pub fn status() -> HvStatus {

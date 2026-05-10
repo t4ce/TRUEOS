@@ -1056,11 +1056,11 @@ const GPGPU_LOAD_DUMMY_CURBE: bool = true;
 const GPGPU_DUMMY_CURBE_BYTES: usize = 64;
 const GPGPU_CONTIGUOUS_VFE_IDD_WALKER: bool = false;
 const GPGPU_MESA_POST_VFE_PIPE_CONTROL: bool = false;
-// ADL-S 8086:4680 is Gfx12.0/Xe-LP.  With the PRM-length GPGPU_WALKER, the
-// one-GRF TS EOT launches EU threads but does not retire.  Probe whether this
-// legacy walker path wants both dispatch header GRFs in the EOT payload.
+// ADL-S 8086:4680 is Gfx12.0/Xe-LP.  The PRM-length GPGPU_WALKER now launches
+// EU threads, while one-GRF and two-GRF TS EOT variants both leave the walker
+// waiting.  Probe the Media chapter's Gateway EOT path next.
 const ACTIVE_GFX12_EOT_VARIANT: trueos_eu::gfx12::Gfx12EotVariant =
-    trueos_eu::gfx12::Gfx12EotVariant::TsR0R1ToG126G127Mlen2;
+    trueos_eu::gfx12::Gfx12EotVariant::GatewayR0ToG127;
 
 #[derive(Copy, Clone)]
 struct GpgpuEuProgram {

@@ -201,7 +201,7 @@ async fn acquire_mass_io_arbiter(
         if try_acquire_mass_io_arbiter(runtime_key, kind) {
             let waited_ms = uas_bench_now_ms().saturating_sub(start_ms);
             if waited_ms >= UAS_SKHYNIX_SEQUENCE_WAIT_LOG_MS {
-                crate::log!(
+                crate::log_info!(target: "usb"; 
                     "crabusb: mass-io arbiter acquired key=0x{:016X} kind={} waited_ms={}\n",
                     runtime_key,
                     mass_io_arbiter_lane_label(kind),
@@ -217,7 +217,7 @@ async fn acquire_mass_io_arbiter(
 
         let now_ms = uas_bench_now_ms();
         if now_ms >= next_log_ms {
-            crate::log!(
+            crate::log_info!(target: "usb"; 
                 "crabusb: mass-io arbiter queued key=0x{:016X} kind={} waited_ms={} status=healthy-wait\n",
                 runtime_key,
                 mass_io_arbiter_lane_label(kind),
@@ -286,7 +286,7 @@ async fn take_runtime_wait(runtime_key: u64) -> Option<UsbMassRuntime> {
         Timer::after(EmbassyDuration::from_millis(MASS_RUNTIME_WAIT_DELAY_MS)).await;
     }
 
-    crate::log!(
+    crate::log_info!(target: "usb"; 
         "crabusb: mass runtime wait timeout key=0x{:016X} waited_ms={}\n",
         runtime_key,
         (MASS_RUNTIME_WAIT_LIMIT as u64 + 1) * MASS_RUNTIME_WAIT_DELAY_MS
@@ -608,7 +608,7 @@ pub(crate) async fn set_uas_skhynix_write_window_for_bench(
         rt.skhynix_write_window_max_inflight = max_inflight.max(1);
         rt.skhynix_write_probe_fail_fast = true;
         rt.io_success_streak = 0;
-        crate::log!(
+        crate::log_info!(target: "usb"; 
             "crabusb: mass {:04X}:{:04X} uas-skhynix bench tx-cap={} max_inflight={}\n",
             rt.vendor_id,
             rt.product_id,
@@ -852,7 +852,7 @@ fn uas_route_add_timing(total: &mut UasRouteTiming, timing: UasRouteTiming) {
 fn uas_bench_transfer_error(stage: &'static str) -> block::Error {
     let submit = crab_usb::debug_last_submit();
     let event = crab_usb::debug_last_event();
-    crate::log!(
+    crate::log_info!(target: "usb"; 
         "crabusb: mass uas-stream transfer-error stage={} last_submit[slot={} dci={} dir={} stream={} len={} ptr=0x{:X} ring=0x{:X}] last_event[slot={} ep={} cc={} residual={} ptr=0x{:X}]\n",
         stage,
         submit.slot_id,
@@ -926,7 +926,7 @@ async fn uas_skhynix_reset_endpoint(
     match rt.device.debug_reset_endpoint(endpoint, false).await {
         Ok(()) => Ok(()),
         Err(err) => {
-            crate::log!(
+            crate::log_info!(target: "usb"; 
                 "crabusb: mass {:04X}:{:04X} uas-window reset-endpoint failed stage={} ep=0x{:02X} err={:?}\n",
                 rt.vendor_id,
                 rt.product_id,
@@ -952,7 +952,7 @@ async fn uas_skhynix_reset_transport(
     uas_skhynix_reset_endpoint(rt, stage, status_in).await?;
     uas_skhynix_reset_endpoint(rt, stage, data_in).await?;
     uas_skhynix_reset_endpoint(rt, stage, data_out).await?;
-    crate::log!(
+    crate::log_info!(target: "usb"; 
         "crabusb: mass {:04X}:{:04X} uas-window reset transport stage={} cmd=0x{:02X} status=0x{:02X} data_in=0x{:02X} data_out=0x{:02X}\n",
         rt.vendor_id,
         rt.product_id,
@@ -989,7 +989,7 @@ async fn uas_skhynix_abort_pending_window(
         return;
     }
 
-    crate::log!(
+    crate::log_info!(target: "usb"; 
         "crabusb: mass {:04X}:{:04X} uas-window abort pending={} stage={} dead_streams={}\n",
         rt.vendor_id,
         rt.product_id,
@@ -1104,7 +1104,7 @@ fn uas_bench_poll_flights(
             if now_ms.saturating_sub(flight.submitted_ms) > UAS_BENCH_FLIGHT_TIMEOUT_MS {
                 let submit = crab_usb::debug_last_submit();
                 let event = crab_usb::debug_last_event();
-                crate::log!(
+                crate::log_info!(target: "usb"; 
                     "crabusb: mass uas-stream timeout tag=0x{:04X} lba={} blocks={} bytes={} age_ms={} data_pending={} status_pending={} data_len={} ready={} good={} last_submit[dci={} stream={} len={} ptr=0x{:X}] last_event[ep={} cc={} residual={} ptr=0x{:X}]\n",
                     flight.tag,
                     flight.lba,
@@ -1134,7 +1134,7 @@ fn uas_bench_poll_flights(
                         Poll::Ready(Ok(got)) => {
                             flight.data_ticket = None;
                             if got < flight.bytes {
-                                crate::log!(
+                                crate::log_info!(target: "usb"; 
                                     "crabusb: mass uas-stream short-data tag=0x{:04X} lba={} got={} need={}\n",
                                     flight.tag,
                                     flight.lba,
@@ -1259,7 +1259,7 @@ fn uas_write_poll_flights(
             if now_ms.saturating_sub(flight.submitted_ms) > UAS_BENCH_FLIGHT_TIMEOUT_MS {
                 let submit = crab_usb::debug_last_submit();
                 let event = crab_usb::debug_last_event();
-                crate::log!(
+                crate::log_info!(target: "usb"; 
                     "crabusb: mass uas-write-window timeout tag=0x{:04X} lba={} blocks={} bytes={} age_ms={} data_pending={} status_pending={} ready={} good={} last_submit[dci={} stream={} len={} ptr=0x{:X}] last_event[ep={} cc={} residual={} ptr=0x{:X}]\n",
                     flight.tag,
                     flight.lba,
@@ -1299,7 +1299,7 @@ fn uas_write_poll_flights(
                                         flight.status_good_seen = true;
                                         flight.status_good_ms.get_or_insert(now_ms);
                                     } else {
-                                        crate::log!(
+                                        crate::log_info!(target: "usb"; 
                                             "crabusb: mass uas-write-window status-before-write-ready tag=0x{:04X} lba={} bytes={}\n",
                                             flight.tag,
                                             flight.lba,
@@ -1343,7 +1343,7 @@ fn uas_write_poll_flights(
                         Poll::Ready(Ok(got)) => {
                             flight.data_ticket = None;
                             if got < flight.bytes {
-                                crate::log!(
+                                crate::log_info!(target: "usb"; 
                                     "crabusb: mass uas-write-window short-data tag=0x{:04X} lba={} got={} need={}\n",
                                     flight.tag,
                                     flight.lba,
@@ -1489,7 +1489,7 @@ where
 
     let result = async {
         if !matches!(rt.endpoints, UsbMassEndpoints::UasSkhynix { .. }) {
-            crate::log!(
+            crate::log_info!(target: "usb"; 
                 "crabusb: mass {:04X}:{:04X} uas-bench rejected transport={}\n",
                 rt.vendor_id,
                 rt.product_id,
@@ -1676,7 +1676,7 @@ where
                         next_lba = u64::from(retry_lba);
                         submitted_bytes =
                             completed_bytes.saturating_add(uas_bench_inflight_bytes(&flights));
-                        crate::log!(
+                        crate::log_info!(target: "usb"; 
                             "crabusb: mass uas-bench backoff lost_tag=0x{:04X} retry_lba={} cwnd={} ssthresh={} dead_streams={} timeouts={}\n",
                             lost_tag,
                             retry_lba,
@@ -1845,7 +1845,7 @@ async fn read_raw_config_descriptor(
 
     let mut header = alloc::vec![0u8; 9];
     let Ok(got) = device.control_in(setup.clone(), &mut header).await else {
-        crate::log!(
+        crate::log_info!(target: "usb"; 
             "crabusb: mass {:04X}:{:04X} uas-desc raw-config header failed cfg={}\n",
             vendor_id,
             product_id,
@@ -1854,7 +1854,7 @@ async fn read_raw_config_descriptor(
         return None;
     };
     if got < header.len() {
-        crate::log!(
+        crate::log_info!(target: "usb"; 
             "crabusb: mass {:04X}:{:04X} uas-desc raw-config header short got={} need={}\n",
             vendor_id,
             product_id,
@@ -1866,7 +1866,7 @@ async fn read_raw_config_descriptor(
 
     let total_len = u16::from_le_bytes([header[2], header[3]]) as usize;
     if !(header.len()..=4096).contains(&total_len) {
-        crate::log!(
+        crate::log_info!(target: "usb"; 
             "crabusb: mass {:04X}:{:04X} uas-desc raw-config invalid total_len={}\n",
             vendor_id,
             product_id,
@@ -1877,7 +1877,7 @@ async fn read_raw_config_descriptor(
 
     let mut raw = alloc::vec![0u8; total_len];
     let Ok(got) = device.control_in(setup, raw.as_mut_slice()).await else {
-        crate::log!(
+        crate::log_info!(target: "usb"; 
             "crabusb: mass {:04X}:{:04X} uas-desc raw-config read failed cfg={} total_len={}\n",
             vendor_id,
             product_id,
@@ -1888,7 +1888,7 @@ async fn read_raw_config_descriptor(
     };
     raw.truncate(got.min(total_len));
     if raw.len() < header.len() {
-        crate::log!(
+        crate::log_info!(target: "usb"; 
             "crabusb: mass {:04X}:{:04X} uas-desc raw-config short got={} need={}\n",
             vendor_id,
             product_id,
@@ -1918,7 +1918,7 @@ fn parse_and_log_uas_descriptors(
         let desc_type = raw[offset + 1];
         if len < 2 || offset + len > raw.len() {
             if verbose {
-                crate::log!(
+                crate::log_info!(target: "usb"; 
                     "crabusb: mass {:04X}:{:04X} uas-desc malformed off={} len={} remaining={}\n",
                     vendor_id,
                     product_id,
@@ -1939,7 +1939,7 @@ fn parse_and_log_uas_descriptors(
                     && alternate_setting == target.alternate_setting;
                 current_ep = None;
                 if active && verbose {
-                    crate::log!(
+                    crate::log_info!(target: "usb"; 
                         "crabusb: mass {:04X}:{:04X} uas-desc interface off={} if#{} alt={} eps={} class={:02X}/{:02X}/{:02X} bytes=[{}]\n",
                         vendor_id,
                         product_id,
@@ -1963,7 +1963,7 @@ fn parse_and_log_uas_descriptors(
                     max_packet_size,
                 });
                 if verbose {
-                    crate::log!(
+                    crate::log_info!(target: "usb"; 
                         "crabusb: mass {:04X}:{:04X} uas-desc endpoint off={} ep=0x{:02X} attr=0x{:02X} mps={} intv={} bytes=[{}]\n",
                         vendor_id,
                         product_id,
@@ -1985,7 +1985,7 @@ fn parse_and_log_uas_descriptors(
                     } else {
                         0
                     };
-                    crate::log!(
+                    crate::log_info!(target: "usb"; 
                         "crabusb: mass {:04X}:{:04X} uas-desc ss-companion off={} ep={} max_burst={} attr=0x{:02X} bytes_per_interval={} bytes=[{}]\n",
                         vendor_id,
                         product_id,
@@ -2004,7 +2004,7 @@ fn parse_and_log_uas_descriptors(
                     assign_uas_pipe_role(&mut roles, pipe_id, ep);
                 }
                 if verbose {
-                    crate::log!(
+                    crate::log_info!(target: "usb"; 
                         "crabusb: mass {:04X}:{:04X} uas-desc pipe-usage off={} ep={} pipe_id={} role={} bytes=[{}]\n",
                         vendor_id,
                         product_id,
@@ -2017,7 +2017,7 @@ fn parse_and_log_uas_descriptors(
                 }
             }
             _ if active && verbose => {
-                crate::log!(
+                crate::log_info!(target: "usb"; 
                     "crabusb: mass {:04X}:{:04X} uas-desc extra off={} type=0x{:02X} len={} ep={} bytes=[{}]\n",
                     vendor_id,
                     product_id,
@@ -2035,7 +2035,7 @@ fn parse_and_log_uas_descriptors(
     }
 
     if verbose {
-        crate::log!(
+        crate::log_info!(target: "usb"; 
             "crabusb: mass {:04X}:{:04X} uas-desc roles command={} status={} data_in={} data_out={}\n",
             vendor_id,
             product_id,
@@ -2062,7 +2062,7 @@ async fn refine_uas_target_from_raw_descriptors(
     };
 
     let Some(refined) = parse_and_log_uas_descriptors(&raw, target, vendor_id, product_id) else {
-        crate::log!(
+        crate::log_info!(target: "usb"; 
             "crabusb: mass {:04X}:{:04X} uas-desc pipe roles incomplete; keeping descriptor-order target cmd=0x{:02X} status=0x{:02X} data_in=0x{:02X} data_out=0x{:02X}\n",
             vendor_id,
             product_id,
@@ -2079,7 +2079,7 @@ async fn refine_uas_target_from_raw_descriptors(
         || refined.data_in != target.data_in
         || refined.data_out != target.data_out
     {
-        crate::log!(
+        crate::log_info!(target: "usb"; 
             "crabusb: mass {:04X}:{:04X} uas-desc pipe roles refine cmd 0x{:02X}->0x{:02X} status 0x{:02X}->0x{:02X} data_in 0x{:02X}->0x{:02X} data_out 0x{:02X}->0x{:02X}\n",
             vendor_id,
             product_id,
@@ -2688,7 +2688,7 @@ async fn read_blocks_uas_skhynix_windowed(
                 additive_acks = 0;
                 next_lba = u64::from(retry_lba);
                 submitted_bytes = completed_bytes;
-                crate::log!(
+                crate::log_info!(target: "usb"; 
                     "crabusb: mass {:04X}:{:04X} uas-window backoff lost_tag=0x{:04X} retry_lba={} cwnd={} ssthresh={} dead_streams={} timeouts={}\n",
                     rt.vendor_id,
                     rt.product_id,
@@ -2765,7 +2765,7 @@ async fn write_blocks_uas_skhynix_windowed(
     let mut max_observed_inflight = 0usize;
     let start_ms = uas_bench_now_ms();
 
-    crate::log!(
+    crate::log_info!(target: "usb"; 
         "crabusb: mass {:04X}:{:04X} uas-write-window start lba={} bytes={} tx_bytes={} max_inflight={} live_streams={}\n",
         rt.vendor_id,
         rt.product_id,
@@ -2939,7 +2939,7 @@ async fn write_blocks_uas_skhynix_windowed(
                     route.counters.quarantined = u64::from(rt.uas_dead_stream_mask.count_ones());
                     route.counters.dead_streams = rt.uas_dead_stream_mask.count_ones();
                 }
-                crate::log!(
+                crate::log_info!(target: "usb"; 
                     "crabusb: mass {:04X}:{:04X} uas-write-window timeout tag=0x{:04X} lba={} bytes={} completed={} submitted={}\n",
                     rt.vendor_id,
                     rt.product_id,
@@ -2958,7 +2958,7 @@ async fn write_blocks_uas_skhynix_windowed(
         return Err(block::Error::Corrupted);
     }
     let elapsed_ms = uas_bench_now_ms().saturating_sub(start_ms);
-    crate::log!(
+    crate::log_info!(target: "usb"; 
         "crabusb: mass {:04X}:{:04X} uas-write-window done bytes={} writes={} elapsed_ms={} max_inflight={} observed_inflight={} tx_bytes={}\n",
         rt.vendor_id,
         rt.product_id,
@@ -2979,7 +2979,7 @@ async fn write_blocks_uas_skhynix_windowed(
 fn log_transport_mismatch(rt: &UsbMassRuntime, stage: &'static str) {
     let submit = crab_usb::debug_last_submit();
     let event = crab_usb::debug_last_event();
-    crate::log!(
+    crate::log_info!(target: "usb"; 
         "crabusb: mass {:04X}:{:04X} transport stage={} key=0x{:X} expect[ctrl={} slot={} out_ep=0x{:02X} in_ep=0x{:02X}] last_submit[slot={} dci={} dir={} stream={} len={} ptr=0x{:X} ring=0x{:X}] last_event[slot={} ep={} cc={} residual={} ptr=0x{:X}]\n",
         rt.vendor_id,
         rt.product_id,
@@ -3011,7 +3011,7 @@ async fn recover_runtime_transport(
 ) -> Result<(), mass::MassProbeError> {
     if let Some(reason) = err.transport_reason() {
         log_transport_mismatch(rt, stage);
-        crate::log!(
+        crate::log_info!(target: "usb"; 
             "crabusb: mass {:04X}:{:04X} recovery stage={} reason={} if#{} out_ep=0x{:02X} in_ep=0x{:02X}\n",
             rt.vendor_id,
             rt.product_id,
@@ -3079,7 +3079,7 @@ impl UsbMassBlockDevice {
             if let Some(rt) = take_runtime(self.runtime_key) {
                 let waited_ms = uas_bench_now_ms().saturating_sub(start_ms);
                 if waited_ms >= UAS_SKHYNIX_SEQUENCE_WAIT_LOG_MS {
-                    crate::log!(
+                    crate::log_info!(target: "usb"; 
                         "crabusb: mass runtime acquired key=0x{:016X} waited_ms={} status=healthy-wait\n",
                         self.runtime_key,
                         waited_ms
@@ -3090,7 +3090,7 @@ impl UsbMassBlockDevice {
 
             let now_ms = uas_bench_now_ms();
             if now_ms >= next_log_ms {
-                crate::log!(
+                crate::log_info!(target: "usb"; 
                     "crabusb: mass runtime queued key=0x{:016X} waited_ms={} status=healthy-wait\n",
                     self.runtime_key,
                     now_ms.saturating_sub(start_ms)
@@ -3301,7 +3301,7 @@ impl block::BlockDevice for UsbMassBlockDevice {
                                         Timer::after(EmbassyDuration::from_millis(MASS_IO_RETRY_DELAY_MS)).await;
                                         continue;
                                     }
-                                    crate::log!(
+                                    crate::log_info!(target: "usb"; 
                                         "crabusb: mass {:04X}:{:04X} read lba={} blocks={} err={:?} sense={:?}\n",
                                         rt.vendor_id,
                                         rt.product_id,
@@ -3514,7 +3514,7 @@ impl block::BlockDevice for UsbMassBlockDevice {
                                     Timer::after(EmbassyDuration::from_millis(MASS_IO_RETRY_DELAY_MS)).await;
                                     continue;
                                 }
-                                crate::log!(
+                                crate::log_info!(target: "usb"; 
                                     "crabusb: mass {:04X}:{:04X} write lba={} blocks={} err={:?} sense={:?}\n",
                                     rt.vendor_id,
                                     rt.product_id,
@@ -3680,7 +3680,7 @@ impl block::BlockDevice for UsbMassBlockDevice {
                             if let Some(sense) = sense
                                 && sense.sense_key == scsi::SenseKey::IllegalRequest
                             {
-                                crate::log!(
+                                crate::log_info!(target: "usb"; 
                                     "crabusb: mass {:04X}:{:04X} sync-cache unsupported asc={:#x} ascq={:#x}\n",
                                     rt.vendor_id,
                                     rt.product_id,
@@ -3690,7 +3690,7 @@ impl block::BlockDevice for UsbMassBlockDevice {
                                 rt.sync_cache_unsupported = true;
                                 return Ok(());
                             }
-                            crate::log!(
+                            crate::log_info!(target: "usb"; 
                                 "crabusb: mass {:04X}:{:04X} flush err={:?} sense={:?}\n",
                                 rt.vendor_id,
                                 rt.product_id,
@@ -3763,7 +3763,7 @@ pub async fn mass_storage_task(
         .set_configuration(target.configuration_value)
         .await
     {
-        crate::log!(
+        crate::log_info!(target: "usb"; 
             "crabusb: mass {:04X}:{:04X} set cfg={} failed: {:?}\n",
             vendor_id,
             product_id,
@@ -3777,7 +3777,7 @@ pub async fn mass_storage_task(
         {
             Ok(interface) => interface,
             Err(err) => {
-                crate::log!(
+                crate::log_info!(target: "usb"; 
                     "crabusb: mass {:04X}:{:04X} claim failed if#{} alt={}: {:?}\n",
                     vendor_id,
                     product_id,
@@ -3793,7 +3793,7 @@ pub async fn mass_storage_task(
     let bulk_out = match interface.endpoint_bulk_out(target.bulk_out).await {
         Ok(ep) => ep,
         Err(err) => {
-            crate::log!(
+            crate::log_info!(target: "usb"; 
                 "crabusb: mass {:04X}:{:04X} bulk_out open failed ep=0x{:02X}: {:?}\n",
                 vendor_id,
                 product_id,
@@ -3807,7 +3807,7 @@ pub async fn mass_storage_task(
     let bulk_in = match interface.endpoint_bulk_in(target.bulk_in).await {
         Ok(ep) => ep,
         Err(err) => {
-            crate::log!(
+            crate::log_info!(target: "usb"; 
                 "crabusb: mass {:04X}:{:04X} bulk_in open failed ep=0x{:02X}: {:?}\n",
                 vendor_id,
                 product_id,
@@ -3834,7 +3834,7 @@ pub async fn mass_storage_task(
     {
         Ok(info) => info,
         Err(err) => {
-            crate::log!(
+            crate::log_info!(target: "usb"; 
                 "crabusb: mass {:04X}:{:04X} probe failed: {:?}\n",
                 vendor_id,
                 product_id,
@@ -3862,7 +3862,7 @@ pub async fn mass_storage_task(
     };
     let initial_io_bytes =
         initial_mass_io_bytes(io_profile, port_speed, &target, probe.block_size as usize);
-    crate::log!(
+    crate::log_info!(target: "usb"; 
         "crabusb: mass {:04X}:{:04X} ready slot={} if#{} alt={} cfg={} bulk_in=0x{:02X} bulk_out=0x{:02X} in_mps={} out_mps={} disk={} mode={} label={:?} serial={:?} key={} transport={} profile={} init_io={} max_xfer={} speed={:?} uas_candidates={} bs={} blocks={} vendor='{}' product='{}'\n",
         vendor_id,
         product_id,
@@ -3957,7 +3957,7 @@ pub async fn mass_storage_task(
             {
                 recovered = true;
             } else {
-                crate::log!(
+                crate::log_info!(target: "usb"; 
                     "crabusb: mass {:04X}:{:04X} lifecycle stop slot={} err={:?}\n",
                     vendor_id,
                     product_id,
@@ -3970,7 +3970,7 @@ pub async fn mass_storage_task(
 
         register_runtime(rt);
         if recovered {
-            crate::log!(
+            crate::log_info!(target: "usb"; 
                 "crabusb: mass {:04X}:{:04X} keepalive recovered slot={}\n",
                 vendor_id,
                 product_id,
@@ -4004,7 +4004,7 @@ pub async fn mass_storage_uas_skhynix_task(
         .set_configuration(target.configuration_value)
         .await
     {
-        crate::log!(
+        crate::log_info!(target: "usb"; 
             "crabusb: mass {:04X}:{:04X} uas-skhynix set cfg={} failed: {:?}\n",
             vendor_id,
             product_id,
@@ -4021,7 +4021,7 @@ pub async fn mass_storage_uas_skhynix_task(
         {
             Ok(interface) => interface,
             Err(err) => {
-                crate::log!(
+                crate::log_info!(target: "usb"; 
                     "crabusb: mass {:04X}:{:04X} uas-skhynix claim failed if#{} alt={}: {:?}\n",
                     vendor_id,
                     product_id,
@@ -4034,7 +4034,7 @@ pub async fn mass_storage_uas_skhynix_task(
             }
         };
     if crate::logflag::USB_MASS_UAS_ADVANCED_PROBE_LOGS {
-        crate::log!(
+        crate::log_info!(target: "usb"; 
             "crabusb: mass {:04X}:{:04X} uas-adv claimed if#{} alt={} cfg={} cmd_out=0x{:02X} status_in=0x{:02X} data_in=0x{:02X} data_out=0x{:02X}\n",
             vendor_id,
             product_id,
@@ -4051,7 +4051,7 @@ pub async fn mass_storage_uas_skhynix_task(
     let command_out = match interface.endpoint_bulk_out(target.command_out).await {
         Ok(ep) => ep,
         Err(err) => {
-            crate::log!(
+            crate::log_info!(target: "usb"; 
                 "crabusb: mass {:04X}:{:04X} uas-skhynix command_out open failed ep=0x{:02X}: {:?}\n",
                 vendor_id,
                 product_id,
@@ -4065,7 +4065,7 @@ pub async fn mass_storage_uas_skhynix_task(
     let data_out = match interface.endpoint_bulk_out(target.data_out).await {
         Ok(ep) => ep,
         Err(err) => {
-            crate::log!(
+            crate::log_info!(target: "usb"; 
                 "crabusb: mass {:04X}:{:04X} uas-skhynix data_out open failed ep=0x{:02X}: {:?}\n",
                 vendor_id,
                 product_id,
@@ -4079,7 +4079,7 @@ pub async fn mass_storage_uas_skhynix_task(
     let status_in = match interface.endpoint_bulk_in(target.status_in).await {
         Ok(ep) => ep,
         Err(err) => {
-            crate::log!(
+            crate::log_info!(target: "usb"; 
                 "crabusb: mass {:04X}:{:04X} uas-skhynix status_in open failed ep=0x{:02X}: {:?}\n",
                 vendor_id,
                 product_id,
@@ -4093,7 +4093,7 @@ pub async fn mass_storage_uas_skhynix_task(
     let data_in = match interface.endpoint_bulk_in(target.data_in).await {
         Ok(ep) => ep,
         Err(err) => {
-            crate::log!(
+            crate::log_info!(target: "usb"; 
                 "crabusb: mass {:04X}:{:04X} uas-skhynix data_in open failed ep=0x{:02X}: {:?}\n",
                 vendor_id,
                 product_id,
@@ -4106,7 +4106,7 @@ pub async fn mass_storage_uas_skhynix_task(
     };
     if crate::logflag::USB_MASS_UAS_ADVANCED_PROBE_LOGS {
         let stream_cfg = crab_usb::debug_last_stream_config();
-        crate::log!(
+        crate::log_info!(target: "usb"; 
             "crabusb: mass {:04X}:{:04X} uas-adv endpoints-open cmd_out=0x{:02X}/{} status_in=0x{:02X}/{} data_in=0x{:02X}/{} data_out=0x{:02X}/{} last_stream_cfg[slot={} dci={} ep=0x{:02X} count={} maxp={} burst={} mps={} ctx=0x{:X} ring1=0x{:X}]\n",
             vendor_id,
             product_id,
@@ -4145,7 +4145,7 @@ pub async fn mass_storage_uas_skhynix_task(
     {
         Ok(info) => info,
         Err(err) => {
-            crate::log!(
+            crate::log_info!(target: "usb"; 
                 "crabusb: mass {:04X}:{:04X} uas-skhynix exercise failed: {:?}\n",
                 vendor_id,
                 product_id,
@@ -4172,7 +4172,7 @@ pub async fn mass_storage_uas_skhynix_task(
         "registered"
     };
     let initial_io_bytes = clamp_mass_io_bytes(probe.block_size as usize, MAX_IO_BYTES);
-    crate::log!(
+    crate::log_info!(target: "usb"; 
         "crabusb: mass {:04X}:{:04X} uas-skhynix ready slot={} if#{} alt={} cfg={} cmd_out=0x{:02X} status_in=0x{:02X} data_in=0x{:02X} data_out=0x{:02X} mps={}/{}/{}/{} disk={} mode={} label={:?} serial={:?} key={} transport={} profile={} init_io={} max_xfer={} speed={:?} uas_candidates={} bs={} blocks={} vendor='{}' product='{}'\n",
         vendor_id,
         product_id,
@@ -4289,7 +4289,7 @@ pub async fn mass_storage_uas_skhynix_task(
                     continue;
                 }
             }
-            crate::log!(
+            crate::log_info!(target: "usb"; 
                 "crabusb: mass {:04X}:{:04X} uas-skhynix lifecycle stop slot={} err={:?}\n",
                 vendor_id,
                 product_id,
@@ -4338,7 +4338,7 @@ pub(crate) async fn maybe_start_mass_storage(
         }
 
         if let Some(target) = transport_plan.bot {
-            crate::log!(
+            crate::log_info!(target: "usb"; 
                 "crabusb: mass {:04X}:{:04X} uas candidate if#{} alt={} cfg={} in=[{}] out=[{}] bot_target if#{} alt={} proto={:02X}\n",
                 vendor_id,
                 product_id,
@@ -4352,7 +4352,7 @@ pub(crate) async fn maybe_start_mass_storage(
                 target.protocol,
             );
         } else {
-            crate::log!(
+            crate::log_info!(target: "usb"; 
                 "crabusb: mass {:04X}:{:04X} uas candidate if#{} alt={} cfg={} in=[{}] out=[{}] bot_target=none\n",
                 vendor_id,
                 product_id,
@@ -4369,7 +4369,7 @@ pub(crate) async fn maybe_start_mass_storage(
         let Some(uas_target) =
             mass::pick_skhynix_uas_target(vendor_id, product_id, &transport_plan.uas)
         else {
-            crate::log!(
+            crate::log_info!(target: "usb"; 
                 "crabusb: mass {:04X}:{:04X} uas-skhynix selected but fixed endpoint target is missing; no bot fallback\n",
                 vendor_id,
                 product_id
@@ -4380,7 +4380,7 @@ pub(crate) async fn maybe_start_mass_storage(
         let device = match host.open_device(dev_info).await {
             Ok(device) => device,
             Err(err) => {
-                crate::log!(
+                crate::log_info!(target: "usb"; 
                     "crabusb: mass {:04X}:{:04X} uas-skhynix open failed: {:?}\n",
                     vendor_id,
                     product_id,
@@ -4407,7 +4407,7 @@ pub(crate) async fn maybe_start_mass_storage(
         ) {
             Ok(token) => {
                 spawner.spawn(token);
-                crate::log!(
+                crate::log_info!(target: "usb"; 
                     "crabusb: mass {:04X}:{:04X} uas-skhynix handoff if#{} alt={} cfg={} cmd_out=0x{:02X} status_in=0x{:02X} data_in=0x{:02X} data_out=0x{:02X} transport={} profile={} speed={:?} uas_candidates={}\n",
                     vendor_id,
                     product_id,
@@ -4426,7 +4426,7 @@ pub(crate) async fn maybe_start_mass_storage(
             }
             Err(err) => {
                 unregister_active_mass_stream(active_stream);
-                crate::log!(
+                crate::log_info!(target: "usb"; 
                     "crabusb: mass {:04X}:{:04X} uas-skhynix spawn failed if#{} alt={}: {:?}\n",
                     vendor_id,
                     product_id,
@@ -4450,7 +4450,7 @@ pub(crate) async fn maybe_start_mass_storage(
     let device = match host.open_device(dev_info).await {
         Ok(device) => device,
         Err(err) => {
-            crate::log!(
+            crate::log_info!(target: "usb"; 
                 "crabusb: mass {:04X}:{:04X} open failed: {:?}\n",
                 vendor_id,
                 product_id,
@@ -4479,7 +4479,7 @@ pub(crate) async fn maybe_start_mass_storage(
     ) {
         Ok(token) => {
             spawner.spawn(token);
-            crate::log!(
+            crate::log_info!(target: "usb"; 
                 "crabusb: mass {:04X}:{:04X} handoff if#{} alt={} cfg={} bulk_in=0x{:02X} bulk_out=0x{:02X} in_mps={} out_mps={} transport={} profile={} speed={:?} uas_candidates={}\n",
                 vendor_id,
                 product_id,
@@ -4498,7 +4498,7 @@ pub(crate) async fn maybe_start_mass_storage(
         }
         Err(err) => {
             unregister_active_mass_stream(active_stream);
-            crate::log!(
+            crate::log_info!(target: "usb"; 
                 "crabusb: mass {:04X}:{:04X} spawn failed if#{} alt={}: {:?}\n",
                 vendor_id,
                 product_id,

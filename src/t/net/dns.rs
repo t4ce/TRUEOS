@@ -276,7 +276,7 @@ const PUBLIC_DOT_ENDPOINTS: [DotEndpoint; 3] = [
 ];
 
 fn log_dns_ip(prefix: &str, host: &str, dev_idx: usize, ip: [u8; 4]) {
-    crate::log!(
+    crate::log_info!(target: "net"; 
         "{} host={} dev={} ip={}.{}.{}.{}\n",
         prefix,
         host,
@@ -295,7 +295,7 @@ fn log_dns_transport_ip(
     dev_idx: usize,
     ip: [u8; 4],
 ) {
-    crate::log!(
+    crate::log_info!(target: "net"; 
         "{} transport={} host={} dev={} ip={}.{}.{}.{}\n",
         prefix,
         transport.label(),
@@ -315,7 +315,7 @@ fn log_dns_transport_ip6(
     dev_idx: usize,
     ip: [u8; 16],
 ) {
-    crate::log!(
+    crate::log_info!(target: "net"; 
         "{} transport={} host={} dev={} ip6={:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}\n",
         prefix,
         transport.label(),
@@ -392,9 +392,9 @@ fn parse_dns_fs_cache_line(line: &str) -> Option<(usize, &str, [u8; 4])> {
 }
 
 async fn dns_fs_cache_lookup(dev_idx: usize, host_trimmed: &str) -> Option<[u8; 4]> {
-    crate::log!("dns: fs-cache lookup begin host={} dev={}\n", host_trimmed, dev_idx);
+    crate::log_info!(target: "net"; "dns: fs-cache lookup begin host={} dev={}\n", host_trimmed, dev_idx);
     let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
-        crate::log!(
+        crate::log_info!(target: "net"; 
             "dns: fs-cache lookup done host={} dev={} status=no-root\n",
             host_trimmed,
             dev_idx
@@ -409,7 +409,7 @@ async fn dns_fs_cache_lookup(dev_idx: usize, host_trimmed: &str) -> Option<[u8; 
     let bytes = match lookup {
         Ok(Ok(Some(bytes))) => bytes,
         Ok(Ok(None)) => {
-            crate::log!(
+            crate::log_info!(target: "net"; 
                 "dns: fs-cache lookup done host={} dev={} status=miss-or-index-not-ready\n",
                 host_trimmed,
                 dev_idx
@@ -417,7 +417,7 @@ async fn dns_fs_cache_lookup(dev_idx: usize, host_trimmed: &str) -> Option<[u8; 
             return None;
         }
         Ok(Err(err)) => {
-            crate::log!(
+            crate::log_info!(target: "net"; 
                 "dns: fs-cache lookup done host={} dev={} status=error err={:?}\n",
                 host_trimmed,
                 dev_idx,
@@ -426,7 +426,7 @@ async fn dns_fs_cache_lookup(dev_idx: usize, host_trimmed: &str) -> Option<[u8; 
             return None;
         }
         Err(_timeout) => {
-            crate::log!(
+            crate::log_info!(target: "net"; 
                 "dns: fs-cache lookup done host={} dev={} status=timeout timeout_ms={}\n",
                 host_trimmed,
                 dev_idx,
@@ -436,7 +436,7 @@ async fn dns_fs_cache_lookup(dev_idx: usize, host_trimmed: &str) -> Option<[u8; 
         }
     };
     let Ok(text) = core::str::from_utf8(bytes.as_slice()) else {
-        crate::log!(
+        crate::log_info!(target: "net"; 
             "dns: fs-cache lookup done host={} dev={} status=bad-utf8 bytes={}\n",
             host_trimmed,
             dev_idx,
@@ -453,7 +453,7 @@ async fn dns_fs_cache_lookup(dev_idx: usize, host_trimmed: &str) -> Option<[u8; 
             found = Some(line_ip);
         }
     }
-    crate::log!(
+    crate::log_info!(target: "net"; 
         "dns: fs-cache lookup done host={} dev={} hit={}\n",
         host_trimmed,
         dev_idx,
@@ -514,7 +514,7 @@ async fn dns_fs_cache_update_bounded(dev_idx: usize, host_trimmed: &str, ip: [u8
     .await
     {
         Ok(()) => {}
-        Err(_timeout) => crate::log!(
+        Err(_timeout) => crate::log_info!(target: "net"; 
             "dns: fs-cache update done host={} dev={} status=timeout timeout_ms={}\n",
             host_trimmed,
             dev_idx,
@@ -820,7 +820,7 @@ async fn dns_tls_exchange_v4(
                 TlsEvent::Connected { handle: h } => {
                     if handle.is_none() || Some(h) == handle {
                         if handle.is_none() {
-                            crate::log!(
+                            crate::log_info!(target: "net"; 
                                 "dns: secure tls recovered-open owner={} handle={}\n",
                                 owner,
                                 h.0
@@ -852,11 +852,11 @@ async fn dns_tls_exchange_v4(
                     return Err(DnsError::NoAnswer);
                 }
                 TlsEvent::Error { msg } => {
-                    crate::log!("dns: secure tls-socket error owner={} msg={}\n", owner, msg);
+                    crate::log_info!(target: "net"; "dns: secure tls-socket error owner={} msg={}\n", owner, msg);
                     return Err(DnsError::NoAnswer);
                 }
                 TlsEvent::TlsError { err } => {
-                    crate::log!("dns: secure tls error owner={} err={:?}\n", owner, err);
+                    crate::log_info!(target: "net"; "dns: secure tls error owner={} err={:?}\n", owner, err);
                     return Err(DnsError::NoAnswer);
                 }
                 _ => {}
@@ -879,7 +879,7 @@ async fn resolve_doh_addr<const N: usize>(
     qtype_label: &'static str,
 ) -> Result<[u8; N], DnsError> {
     let timeout_ms = cfg.timeout_ms.max(cfg.resend_ms).max(100);
-    crate::log!(
+    crate::log_info!(target: "net"; 
         "dns: doh enter host={} dev={} qtype={} timeout_ms={} tls=trueos\n",
         host_trimmed,
         dev_idx,
@@ -912,7 +912,7 @@ async fn resolve_doh_addr<const N: usize>(
             Ok(body) => match parse_dns_response_addr::<N>(&body, query_id, qtype) {
                 Ok(ip) => return Ok(ip),
                 Err(err) => {
-                    crate::log!(
+                    crate::log_info!(target: "net"; 
                         "dns: doh response parse failed host={} dev={} server={} qtype={} err={:?}\n",
                         host_trimmed,
                         dev_idx,
@@ -923,7 +923,7 @@ async fn resolve_doh_addr<const N: usize>(
                 }
             },
             Err(err) => {
-                crate::log!(
+                crate::log_info!(target: "net"; 
                     "dns: doh endpoint failed host={} dev={} server={} qtype={} err={:?}\n",
                     host_trimmed,
                     dev_idx,
@@ -945,7 +945,7 @@ async fn resolve_dot_addr<const N: usize>(
     qtype_label: &'static str,
 ) -> Result<[u8; N], DnsError> {
     let timeout_ms = cfg.timeout_ms.max(cfg.resend_ms).max(100);
-    crate::log!(
+    crate::log_info!(target: "net"; 
         "dns: dot enter host={} dev={} qtype={} timeout_ms={} tls=trueos\n",
         host_trimmed,
         dev_idx,
@@ -973,7 +973,7 @@ async fn resolve_dot_addr<const N: usize>(
             Ok(body) => match parse_dns_response_addr::<N>(&body, query_id, qtype) {
                 Ok(ip) => return Ok(ip),
                 Err(err) => {
-                    crate::log!(
+                    crate::log_info!(target: "net"; 
                         "dns: dot response parse failed host={} dev={} server={} qtype={} err={:?}\n",
                         host_trimmed,
                         dev_idx,
@@ -984,7 +984,7 @@ async fn resolve_dot_addr<const N: usize>(
                 }
             },
             Err(err) => {
-                crate::log!(
+                crate::log_info!(target: "net"; 
                     "dns: dot endpoint failed host={} dev={} server={} qtype={} err={:?}\n",
                     host_trimmed,
                     dev_idx,
@@ -1040,7 +1040,7 @@ fn warn_secure_dns_disagreement(
         return;
     }
 
-    crate::log!(
+    crate::log_info!(target: "net"; 
         "dns: warning secure disagreement host={} dev={} first={} {}.{}.{}.{} other={} {}.{}.{}.{}\n",
         host_trimmed,
         dev_idx,
@@ -1079,7 +1079,7 @@ fn record_secure_dns_result(
             }
         }
         Err(DnsError::NoAnswer) => {
-            crate::log!(
+            crate::log_info!(target: "net"; 
                 "dns: secure transport no-answer transport={} host={} dev={} qtype=A\n",
                 transport.label(),
                 host_trimmed,
@@ -1087,7 +1087,7 @@ fn record_secure_dns_result(
             );
         }
         Err(err) => {
-            crate::log!(
+            crate::log_info!(target: "net"; 
                 "dns: secure transport failed transport={} host={} dev={} qtype=A err={:?}\n",
                 transport.label(),
                 host_trimmed,
@@ -1112,7 +1112,7 @@ async fn resolve_ipv4_secure_policy(
         .compare_exchange(0, 1, Ordering::Relaxed, Ordering::Relaxed)
         .is_ok()
     {
-        crate::log!("dns: secure transport policy wired; classic udp dns disabled\n");
+        crate::log_info!(target: "net"; "dns: secure transport policy wired; classic udp dns disabled\n");
     }
 
     let doh_enabled = policy
@@ -1182,7 +1182,7 @@ fn warn_secure_dns6_disagreement(
         return;
     }
 
-    crate::log!(
+    crate::log_info!(target: "net"; 
         "dns: warning secure ipv6 disagreement host={} dev={} first={} other={}\n",
         host_trimmed,
         dev_idx,
@@ -1213,7 +1213,7 @@ fn record_secure_dns6_result(
             }
         }
         Err(DnsError::NoAnswer) => {
-            crate::log!(
+            crate::log_info!(target: "net"; 
                 "dns: secure transport no-answer transport={} host={} dev={} qtype=AAAA\n",
                 transport.label(),
                 host_trimmed,
@@ -1221,7 +1221,7 @@ fn record_secure_dns6_result(
             );
         }
         Err(err) => {
-            crate::log!(
+            crate::log_info!(target: "net"; 
                 "dns: secure transport failed transport={} host={} dev={} qtype=AAAA err={:?}\n",
                 transport.label(),
                 host_trimmed,
@@ -1320,7 +1320,7 @@ pub async fn resolve_ipv4_for_device(
     if host_trimmed.is_empty() {
         return Err(DnsError::BadName);
     }
-    crate::log!("dns: resolve begin host={} dev={} qtype=A\n", host_trimmed, dev_idx);
+    crate::log_info!(target: "net"; "dns: resolve begin host={} dev={} qtype=A\n", host_trimmed, dev_idx);
 
     {
         let now = embassy_time_driver::now();
@@ -1341,7 +1341,7 @@ pub async fn resolve_ipv4_for_device(
         return Ok(ip);
     }
 
-    crate::log!(
+    crate::log_info!(target: "net"; 
         "dns: secure lookup begin host={} dev={} qtype=A servers={} timeout_ms={} resend_ms={}\n",
         host_trimmed,
         dev_idx,
@@ -1356,13 +1356,13 @@ pub async fn resolve_ipv4_for_device(
         dns_fs_cache_update_bounded(dev_idx, host_trimmed, ip).await;
         return Ok(ip);
     }
-    crate::log!("dns: secure lookup failed host={} dev={} qtype=A\n", host_trimmed, dev_idx);
+    crate::log_info!(target: "net"; "dns: secure lookup failed host={} dev={} qtype=A\n", host_trimmed, dev_idx);
 
     if CLASSIC_DNS_DISABLED_LOGGED
         .compare_exchange(0, 1, Ordering::Relaxed, Ordering::Relaxed)
         .is_ok()
     {
-        crate::log!(
+        crate::log_info!(target: "net"; 
             "dns: no secure dns possible host={} dev={} qtype=A; network lookup discarded\n",
             host_trimmed,
             dev_idx
@@ -1391,7 +1391,7 @@ pub async fn resolve_ipv6_for_device(
         .compare_exchange(0, 1, Ordering::Relaxed, Ordering::Relaxed)
         .is_ok()
     {
-        crate::log!(
+        crate::log_info!(target: "net"; 
             "dns: no secure dns possible host={} dev={} qtype=AAAA; network lookup discarded\n",
             host_trimmed,
             dev_idx

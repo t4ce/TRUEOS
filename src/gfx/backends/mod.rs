@@ -104,12 +104,12 @@ fn ensure_pci_enumerated_if_empty() {
 impl Backend {
     pub fn init_auto(framebuffers: Option<&'static crate::limine::FramebufferResponse>) -> Self {
         if let Some(v) = Self::init_virgl(framebuffers) {
-            crate::log!("gfx: using virgl backend (auto)\n");
+            crate::log_info!(target: "gfx"; "gfx: using virgl backend (auto)\n");
             return v;
         }
-        crate::log!("gfx: virgl auto init failed\n");
+        crate::log_info!(target: "gfx"; "gfx: virgl auto init failed\n");
 
-        crate::log!("gfx: no accelerated backend available; gfx backend inactive\n");
+        crate::log_info!(target: "gfx"; "gfx: no accelerated backend available; gfx backend inactive\n");
         Backend::None(NullBackend)
     }
 

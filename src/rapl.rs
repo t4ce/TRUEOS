@@ -244,7 +244,11 @@ pub unsafe fn log_local_probe() -> bool {
 pub async fn raple_service() {
     let sender = RAPL_WATCH.sender();
 
-    crate::log!("rapl: service online period_s={}\n", RAPL_SERVICE_PERIOD_SECS);
+    crate::log_info!(
+        target: "boot";
+        "rapl: service online period_s={}\n",
+        RAPL_SERVICE_PERIOD_SECS
+    );
 
     loop {
         let cpuid_supported = supported_cpuid_only();

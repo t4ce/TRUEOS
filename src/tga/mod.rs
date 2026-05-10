@@ -626,7 +626,10 @@ pub fn try_init() -> bool {
 }
 
 pub fn init_once() {
-    crate::log!("tga: init_once deferred; task owns hotplug/probe after network readiness\n");
+    crate::log_info!(
+        target: "boot";
+        "tga: init_once deferred; task owns hotplug/probe after network readiness\n"
+    );
 }
 
 fn is_present(tga: &Tga) -> bool {
@@ -833,7 +836,7 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
 #[embassy_executor::task]
 pub(crate) async fn tga_task() {
     crate::logflag::TGA_TASK_STARTED_LOG_ONCE.call_once(|| {
-        crate::log!("tga: task started\n");
+        crate::log_info!(target: "boot"; "tga: task started\n");
     });
     let mut presence_miss_streak: u8 = 0;
     let period = EmbassyDuration::from_millis(TGA_HEARTBEAT_PERIOD_MS);

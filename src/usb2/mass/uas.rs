@@ -875,13 +875,13 @@ pub(crate) async fn exercise_mass_uas_skhynix(
     let checksum = first_block
         .iter()
         .fold(0u32, |acc, &byte| acc.wrapping_mul(33).wrapping_add(u32::from(byte)));
-    crate::log!(
+    crate::log_info!(target: "usb"; 
         "crabusb: mass uas-skhynix exercise read-lba0 bytes={} checksum=0x{:08X}\n",
         first_block.len(),
         checksum
     );
 
-    crate::log!("crabusb: mass uas-skhynix exercise echo-buffer skipped reason=read-bringup\n");
+    crate::log_info!(target: "usb"; "crabusb: mass uas-skhynix exercise echo-buffer skipped reason=read-bringup\n");
 
     Ok(info)
 }
@@ -965,7 +965,7 @@ pub(crate) async fn probe_mass_uas_skhynix(
     }
 
     let removable = (inquiry[1] & 0x80) != 0;
-    crate::log!(
+    crate::log_info!(target: "usb"; 
         "crabusb: mass uas-skhynix inquiry removable={} pdt=0x{:02X}\n",
         removable,
         inquiry[0] & 0x1F
@@ -1004,7 +1004,7 @@ pub(crate) async fn probe_mass_uas_skhynix(
             (u64::from(last_lba) + 1, block_size)
         }
         Err(err) => {
-            crate::log!(
+            crate::log_info!(target: "usb"; 
                 "crabusb: mass uas-skhynix read-capacity10 failed: {:?}; trying capacity16\n",
                 err
             );
