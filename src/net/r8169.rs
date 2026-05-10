@@ -201,7 +201,8 @@ impl Rtl8169Driver {
             match driver.probe(&dev) {
                 Ok(()) => out.push(driver),
                 Err(err) => {
-                    crate::log!(
+                    crate::log_warn!(
+                        target: "net";
                         "net/r8169: init failed for {:02x}:{:02x}.{} vid={:04x} did={:04x}: {}\n",
                         dev.bus,
                         dev.slot,
@@ -279,14 +280,14 @@ impl Rtl8169Driver {
 
     /// Software reset — set CMD.Reset, wait for it to clear
     fn reset(&self) {
-        crate::log!("[RTL8169] Resetting controller...");
+        crate::log_trace!(target: "net"; "[RTL8169] Resetting controller...\n");
 
         self.write8(REG_CMD, CMD_RESET);
 
         // Wait up to 100ms for reset to complete
         for _ in 0..10_000 {
             if self.read8(REG_CMD) & CMD_RESET == 0 {
-                crate::log!("[RTL8169] Reset complete");
+                crate::log_trace!(target: "net"; "[RTL8169] Reset complete\n");
                 return;
             }
             for _ in 0..1000 {
@@ -294,7 +295,7 @@ impl Rtl8169Driver {
             }
         }
 
-        crate::log!("[RTL8169] Reset timeout — continuing anyway");
+        crate::log_info!(target: "net"; "[RTL8169] Reset timeout - continuing anyway\n");
     }
 
     /// Read MAC address from registers 0x00-0x05
@@ -327,7 +328,11 @@ impl Rtl8169Driver {
 
     /// Initialize RX descriptor ring and buffers
     fn init_rx(&mut self) {
-        crate::log!("[RTL8169] Initializing RX ring ({} descriptors)", NUM_RX_DESC);
+        crate::log_trace!(
+            target: "net";
+            "[RTL8169] Initializing RX ring ({} descriptors)\n",
+            NUM_RX_DESC
+        );
 
         self.rx_descs = vec![Descriptor::default(); NUM_RX_DESC];
         self.rx_buffers = Vec::with_capacity(NUM_RX_DESC);
@@ -359,7 +364,11 @@ impl Rtl8169Driver {
 
     /// Initialize TX descriptor ring and buffers
     fn init_tx(&mut self) {
-        crate::log!("[RTL8169] Initializing TX ring ({} descriptors)", NUM_TX_DESC);
+        crate::log_trace!(
+            target: "net";
+            "[RTL8169] Initializing TX ring ({} descriptors)\n",
+            NUM_TX_DESC
+        );
 
         self.tx_descs = vec![Descriptor::default(); NUM_TX_DESC];
         self.tx_buffers = Vec::with_capacity(NUM_TX_DESC);
@@ -421,7 +430,7 @@ impl Rtl8169Driver {
         // Enable interrupts (all relevant)
         self.write16(REG_IMR, INT_ALL);
 
-        crate::log!("[RTL8169] Controller enabled (RX+TX)");
+        crate::log_info!(target: "net"; "[RTL8169] Controller enabled (RX+TX)\n");
     }
 
     /// Check and update link status
@@ -438,7 +447,7 @@ impl Rtl8169Driver {
             } else {
                 10
             };
-            crate::log!("[RTL8169] Link up at {} Mbps", speed);
+            crate::log_info!(target: "net"; "[RTL8169] Link up at {} Mbps\n", speed);
         }
     }
 
@@ -480,7 +489,12 @@ impl Driver for Rtl8169Driver {
         self.status = DriverStatus::Loading;
         self.pci = Some(*pci_device);
 
-        crate::log!("[RTL8169] Probing {:04X}:{:04X}", pci_device.vendor_id, pci_device.device_id);
+        crate::log_info!(
+            target: "net";
+            "[RTL8169] Probing {:04X}:{:04X}\n",
+            pci_device.vendor_id,
+            pci_device.device_id
+        );
 
         // Enable PCI bus mastering (DMA) and memory space access
         crate::pci::enable_mem_and_bus_master(pci_device.bus, pci_device.slot, pci_device.function);
@@ -494,11 +508,16 @@ impl Driver for Rtl8169Driver {
         // Map MMIO (256 bytes is the standard register space)
         const RTL8169_MMIO_SIZE: usize = 4096;
         self.mmio_base = map_mmio(bar0, RTL8169_MMIO_SIZE).map_err(|e| {
-            crate::log!("[RTL8169] map_mmio failed: {}", e);
+            crate::log_warn!(target: "net"; "[RTL8169] map_mmio failed: {}\n", e);
             e
         })?;
 
-        crate::log!("[RTL8169] MMIO: phys={:#x} virt={:#x}", bar0, self.mmio_base);
+        crate::log_info!(
+            target: "net";
+            "[RTL8169] MMIO: phys={:#x} virt={:#x}\n",
+            bar0,
+            self.mmio_base
+        );
 
         // Reset
         self.reset();
@@ -519,8 +538,9 @@ impl Driver for Rtl8169Driver {
         self.initialized.store(true, Ordering::SeqCst);
         self.status = DriverStatus::Running;
 
-        crate::log!(
-            "[RTL8169] MAC: {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+        crate::log_info!(
+            target: "net";
+            "[RTL8169] MAC: {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}\n",
             self.mac[0],
             self.mac[1],
             self.mac[2],

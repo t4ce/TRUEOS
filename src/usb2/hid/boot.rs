@@ -383,7 +383,7 @@ async fn hid_boot_stream_task(
         .set_configuration(target.configuration_value)
         .await
     {
-        crate::log!(
+        crate::log_info!(target: "usb"; 
             "crabusb: hid {} {:04X}:{:04X} set cfg={} failed: {:?}\n",
             target.kind.as_str(),
             vendor_id,
@@ -400,7 +400,7 @@ async fn hid_boot_stream_task(
         {
             Ok(interface) => interface,
             Err(err) => {
-                crate::log!(
+                crate::log_info!(target: "usb"; 
                     "crabusb: hid {} {:04X}:{:04X} claim failed if#{} alt={}: {:?}\n",
                     target.kind.as_str(),
                     vendor_id,
@@ -434,7 +434,7 @@ async fn hid_boot_stream_task(
                 boot_protocol_ok = true;
             }
             Err(err) => {
-                crate::log!(
+                crate::log_info!(target: "usb"; 
                     "crabusb: hid {} {:04X}:{:04X} boot protocol if#{} failed (continuing): {:?}\n",
                     target.kind.as_str(),
                     vendor_id,
@@ -463,7 +463,7 @@ async fn hid_boot_stream_task(
                 set_idle_ok = true;
             }
             Err(err) => {
-                crate::log!(
+                crate::log_info!(target: "usb"; 
                     "crabusb: hid {} {:04X}:{:04X} set idle if#{} duration=1 failed (continuing): {:?}\n",
                     target.kind.as_str(),
                     vendor_id,
@@ -499,7 +499,7 @@ async fn hid_boot_stream_task(
                 set_idle_ok = true;
             }
             Err(err) => {
-                crate::log!(
+                crate::log_info!(target: "usb"; 
                     "crabusb: hid {} {:04X}:{:04X} set idle if#{} duration=1 failed (continuing): {:?}\n",
                     target.kind.as_str(),
                     vendor_id,
@@ -514,7 +514,7 @@ async fn hid_boot_stream_task(
     let mut interrupt_in = match interface.endpoint_interrupt_in(target.in_endpoint).await {
         Ok(endpoint) => endpoint,
         Err(InterfaceEndpointError::WrongKind { address, expected }) => {
-            crate::log!(
+            crate::log_info!(target: "usb"; 
                 "crabusb: hid {} {:04X}:{:04X} interrupt endpoint kind mismatch ep=0x{:02X} got=0x{:02X} expected={}\n",
                 target.kind.as_str(),
                 vendor_id,
@@ -527,7 +527,7 @@ async fn hid_boot_stream_task(
             return;
         }
         Err(InterfaceEndpointError::Usb(err)) => {
-            crate::log!(
+            crate::log_info!(target: "usb"; 
                 "crabusb: hid {} {:04X}:{:04X} interrupt open failed ep=0x{:02X}: {:?}\n",
                 target.kind.as_str(),
                 vendor_id,
@@ -540,7 +540,7 @@ async fn hid_boot_stream_task(
         }
     };
 
-    crate::log!(
+    crate::log_info!(target: "usb"; 
         "crabusb: hid {} {:04X}:{:04X} ready slot={} if#{} alt={} cfg={} int_in=0x{:02X} mps={} ep_target={} proto={:02X} boot={} idle={}\n",
         target.kind.as_str(),
         vendor_id,
@@ -575,7 +575,7 @@ async fn hid_boot_stream_task(
                 if crate::logflag::USB_LOG_ALL.load(core::sync::atomic::Ordering::Relaxed)
                     && (timeout_logs <= 8 || timeout_logs.is_multiple_of(32))
                 {
-                    crate::log!(
+                    crate::log_info!(target: "usb"; 
                         "crabusb: hid {} {:04X}:{:04X} interrupt timeout ep=0x{:02X} count={}\n",
                         target.kind.as_str(),
                         vendor_id,
@@ -634,7 +634,7 @@ async fn hid_boot_stream_task(
                     }
                 }
                 Err(err) => {
-                    crate::log!(
+                    crate::log_info!(target: "usb"; 
                         "crabusb: hid {} {:04X}:{:04X} stream stop ep=0x{:02X} err={:?}\n",
                         target.kind.as_str(),
                         vendor_id,
@@ -671,7 +671,7 @@ pub(crate) async fn maybe_start_hid_boot_streams(
             .filter(|iface| iface.class == 0x03)
             .count();
         if hid_iface_count != 0 {
-            crate::log!(
+            crate::log_info!(target: "usb"; 
                 "crabusb: hid {:04X}:{:04X} found {} HID interface(s) but no stream targets\n",
                 vendor_id,
                 product_id,
@@ -681,7 +681,7 @@ pub(crate) async fn maybe_start_hid_boot_streams(
         return false;
     }
 
-    crate::log!(
+    crate::log_info!(target: "usb"; 
         "crabusb: hid {:04X}:{:04X} candidate targets={}\n",
         vendor_id,
         product_id,
@@ -693,7 +693,7 @@ pub(crate) async fn maybe_start_hid_boot_streams(
 
     for mut target in targets {
         if should_skip_qemu_generic_tablet_probe(vendor_id, product_id, target.kind) {
-            crate::log!(
+            crate::log_info!(target: "usb"; 
                 "crabusb: hid {:04X}:{:04X} skipping generic-tablet target on qemu if#{} ep=0x{:02X}\n",
                 vendor_id,
                 product_id,
@@ -703,7 +703,7 @@ pub(crate) async fn maybe_start_hid_boot_streams(
             continue;
         }
         if should_skip_known_led_tablet_probe(vendor_id, product_id, target.kind) {
-            crate::log!(
+            crate::log_info!(target: "usb"; 
                 "crabusb: hid {:04X}:{:04X} skipping generic-tablet target on known LED controller if#{} ep=0x{:02X}\n",
                 vendor_id,
                 product_id,
@@ -713,7 +713,7 @@ pub(crate) async fn maybe_start_hid_boot_streams(
             continue;
         }
         if should_skip_known_mouse_generic_hid_probe(vendor_id, product_id, target.kind) {
-            crate::log!(
+            crate::log_info!(target: "usb"; 
                 "crabusb: hid {:04X}:{:04X} skipping generic-tablet target on known mouse supplemental HID if#{} ep=0x{:02X}\n",
                 vendor_id,
                 product_id,
@@ -736,7 +736,7 @@ pub(crate) async fn maybe_start_hid_boot_streams(
                         } else {
                             4
                         }));
-                    crate::log!(
+                    crate::log_info!(target: "usb"; 
                         "crabusb: hid {:04X}:{:04X} generic pointer if#{} classified=mouse report_id={}\n",
                         vendor_id,
                         product_id,
@@ -745,7 +745,7 @@ pub(crate) async fn maybe_start_hid_boot_streams(
                     );
                 }
                 Some(GenericPointerKind::Tablet) => {
-                    crate::log!(
+                    crate::log_info!(target: "usb"; 
                         "crabusb: hid {:04X}:{:04X} generic pointer if#{} classified=tablet\n",
                         vendor_id,
                         product_id,
@@ -755,7 +755,7 @@ pub(crate) async fn maybe_start_hid_boot_streams(
                 None => {
                     target.kind = HidBootKind::Mouse;
                     target.report_len = usize::from(target.in_max_packet_size.max(4));
-                    crate::log!(
+                    crate::log_info!(target: "usb"; 
                         "crabusb: hid {:04X}:{:04X} generic pointer if#{} classified=mouse fallback=descriptor-unavailable\n",
                         vendor_id,
                         product_id,
@@ -776,7 +776,7 @@ pub(crate) async fn maybe_start_hid_boot_streams(
             continue;
         }
 
-        crate::log!(
+        crate::log_info!(target: "usb"; 
             "crabusb: hid {:04X}:{:04X} target kind={} if#{} alt={} cfg={} int_in=0x{:02X} mps={} proto={:02X}\n",
             vendor_id,
             product_id,
@@ -792,7 +792,7 @@ pub(crate) async fn maybe_start_hid_boot_streams(
             Ok(device) => device,
             Err(err) => {
                 let _ = unregister_active_hid_stream(active_stream);
-                crate::log!(
+                crate::log_info!(target: "usb"; 
                     "crabusb: hid {} {:04X}:{:04X} open failed: {:?}\n",
                     target.kind.as_str(),
                     vendor_id,
@@ -806,7 +806,7 @@ pub(crate) async fn maybe_start_hid_boot_streams(
 
         if descriptors_pending {
             if should_skip_descriptor_logging(vendor_id, product_id, target.kind) {
-                crate::log!(
+                crate::log_info!(target: "usb"; 
                     "crabusb: hid {} {:04X}:{:04X} skipping descriptor log for qemu boot hid\n",
                     target.kind.as_str(),
                     vendor_id,
@@ -826,7 +826,7 @@ pub(crate) async fn maybe_start_hid_boot_streams(
             Ok(token) => {
                 spawner.spawn(token);
                 started_any = true;
-                crate::log!(
+                crate::log_info!(target: "usb"; 
                     "crabusb: hid {} {:04X}:{:04X} handoff if#{} alt={} cfg={} int_in=0x{:02X} mps={} proto={:02X}\n",
                     target.kind.as_str(),
                     vendor_id,
@@ -841,7 +841,7 @@ pub(crate) async fn maybe_start_hid_boot_streams(
             }
             Err(err) => {
                 let _ = unregister_active_hid_stream(active_stream);
-                crate::log!(
+                crate::log_info!(target: "usb"; 
                     "crabusb: hid {} {:04X}:{:04X} spawn failed if#{} alt={} ep=0x{:02X}: {:?}\n",
                     target.kind.as_str(),
                     vendor_id,

@@ -218,7 +218,7 @@ pub fn init(framebuffers: Option<&'static crate::limine::FramebufferResponse>) {
             backends::Backend::Virgl(_) => "virgl",
             backends::Backend::None(_) => "none",
         };
-        crate::log!("gfx: backend={}\n", backend_name);
+        crate::log_info!(target: "gfx"; "gfx: backend={}\n", backend_name);
         publish_backend_kind(&backend);
         if !matches!(backend, backends::Backend::None(_)) {
             BACKEND_READY_PUBLISHED.store(true, Ordering::Release);

@@ -393,20 +393,21 @@ fn parse_vm_store_cmd(line: &[u8]) -> Option<VmStoreNetCmd> {
 
 #[task(pool_size = 1)]
 pub async fn vm_store_task() {
-    crate::log!("hv-store: task start ms={}\n", boot_probe_ms());
+    crate::log_info!(target: "hv"; "hv-store: task start ms={}\n", boot_probe_ms());
     if let Some(profile) = crate::cpu::CpuProfile::current() {
-        crate::log!(
+        crate::log_info!(
+            target: "hv";
             "hv-store: start slot={} lapic={} kind={}\n",
             profile.slot(),
             profile.lapic_id(),
             profile.core_kind_name()
         );
     } else {
-        crate::log!("hv-store: start slot=unknown\n");
+        crate::log_info!(target: "hv"; "hv-store: start slot=unknown\n");
     }
 
     VM_STORE_ONLINE.store(true, Ordering::Release);
-    crate::log!("hv-store: online mode=lazy-ramdisk\n");
+    crate::log_info!(target: "hv"; "hv-store: online mode=lazy-ramdisk\n");
 
     loop {
         let req = {
@@ -429,7 +430,7 @@ pub async fn vm_store_task() {
 #[task(pool_size = 1)]
 pub async fn vm_store_replication_task() {
     if !wait_until_online(5000) {
-        crate::log!("hv-store-net: store offline; replication unavailable\n");
+        crate::log_info!(target: "hv"; "hv-store-net: store offline; replication unavailable\n");
         return;
     }
 
@@ -449,7 +450,7 @@ pub async fn vm_store_replication_task() {
         }
     }
     if crate::net::device_count() == 0 {
-        crate::log!("hv-store-net: no network device; replication unavailable\n");
+        crate::log_info!(target: "hv"; "hv-store-net: no network device; replication unavailable\n");
         return;
     }
 
@@ -470,7 +471,12 @@ pub async fn vm_store_replication_task() {
     let _ = cmds.push(NetCommand::OpenTcpListen {
         port: ports::VM_STORE_REPL_PORT,
     });
-    crate::log!("hv-store-net: listening on tcp {} owner={}\n", ports::VM_STORE_REPL_PORT, owner);
+    crate::log_info!(
+        target: "hv";
+        "hv-store-net: listening on tcp {} owner={}\n",
+        ports::VM_STORE_REPL_PORT,
+        owner
+    );
 
     let mut tcp_handle: Option<NetHandle> = None;
     let mut rx_buf = Vec::new();

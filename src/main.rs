@@ -295,17 +295,19 @@ pub extern "C" fn kmain() -> ! {
     }
     match pci::nic_fpga_dma::init_default_once() {
         Ok(region) => {
-            crate::log!(
+            crate::log_info!(
+                target: "boot";
                 "dma_nic_fpga: region phys=0x{:X} virt=0x{:X} size=0x{:X}\n",
                 region.phys_base,
                 region.virt_base,
                 region.size
             );
         }
-        Err(e) => crate::log!("dma_nic_fpga: init failed: {:?}\n", e),
+        Err(e) => crate::log_warn!(target: "boot"; "dma_nic_fpga: init failed: {:?}\n", e),
     }
     let simd = cpu::simd_status();
-    crate::log!(
+    crate::log_info!(
+        target: "boot";
         "cpu-simd: avx-state={} reason={} avx2-fma={} reason={}\n",
         if simd.avx_state_enabled { "yes" } else { "no" },
         simd.avx_state_reason.as_str(),

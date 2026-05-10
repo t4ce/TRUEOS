@@ -229,7 +229,8 @@ fn clear_observed_devices(controller_id: usize) {
 }
 
 fn note_disconnected_device(controller_id: usize, dev: ObservedUsbDevice) {
-    crate::log!(
+    crate::log_info!(
+        target: "usb";
         "crabusb: hotplug disconnect ctrl={} root_port={} dev={} stable_id={} vid={:04X} pid={:04X} class={:02X}/{:02X}/{:02X}\n",
         controller_id,
         dev.root_port_id,
@@ -244,7 +245,8 @@ fn note_disconnected_device(controller_id: usize, dev: ObservedUsbDevice) {
 }
 
 fn note_connected_device(controller_id: usize, dev: ObservedUsbDevice) {
-    crate::log!(
+    crate::log_info!(
+        target: "usb";
         "crabusb: hotplug connect ctrl={} root_port={} dev={} stable_id={} vid={:04X} pid={:04X} class={:02X}/{:02X}/{:02X}\n",
         controller_id,
         dev.root_port_id,
@@ -825,7 +827,8 @@ pub async fn bsp_service(controller_index: usize) {
         if !USB_BRINGUP_ENABLED {
             clear_observed_devices(controller_index);
             if !BOOT_DEFER_DONE[controller_index].swap(true, Ordering::AcqRel) {
-                crate::log!(
+                crate::log_info!(
+                    target: "usb";
                     "crabusb: controller {} USB bring-up disabled; skipping host init\n",
                     controller_index
                 );
@@ -835,7 +838,8 @@ pub async fn bsp_service(controller_index: usize) {
         }
 
         if !BOOT_DEFER_DONE[controller_index].swap(true, Ordering::AcqRel) {
-            crate::log!(
+            crate::log_info!(
+                target: "usb";
                 "crabusb: controller {} boot defer before USB bring-up; waiting {}ms\n",
                 controller_index,
                 BOOT_USB_DEFER_MS
@@ -868,7 +872,8 @@ pub async fn bsp_service(controller_index: usize) {
             let intel_settle_probe = info.vendor_id == 0x8086;
             let mut hotplug_poll_deadline =
                 Instant::now() + EmbassyDuration::from_millis(HOTPLUG_POLL_MS);
-            crate::log!(
+            crate::log_info!(
+                target: "usb";
                 "crabusb: init successful ctrl={} bdf={:02X}:{:02X}.{} vid={:04X} pid={:04X} mmio={:p} ports={}\n",
                 info.index,
                 info.bus,

@@ -131,12 +131,13 @@ pub async fn boot_factory_ram_probe_task() {
         0x0010_0000,
         None,
     ) else {
-        crate::log!("factory-ram-probe: no PMM page available\n");
+        crate::log_warn!(target: "boot"; "factory-ram-probe: no PMM page available\n");
         return;
     };
 
     let state = build_random_sample(page_phys);
-    crate::log!(
+    crate::log_info!(
+        target: "boot";
         "factory-ram-probe: reserved phys=0x{:X} sampled={} hold={}s\n",
         state.page_phys,
         state.sample_count,
@@ -166,7 +167,8 @@ pub async fn boot_factory_ram_probe_task() {
     crate::globalog::append_raw(blob.as_slice());
 
     if !crate::phys::free_phys_range(snapshot.page_phys, FACTORY_RAM_PROBE_PAGE_BYTES) {
-        crate::log!(
+        crate::log_warn!(
+            target: "boot";
             "factory-ram-probe: failed to free phys=0x{:X} size=0x{:X}\n",
             snapshot.page_phys,
             FACTORY_RAM_PROBE_PAGE_BYTES
@@ -174,7 +176,8 @@ pub async fn boot_factory_ram_probe_task() {
     }
 
     *FACTORY_RAM_PROBE_STATE.lock() = None;
-    crate::log!(
+    crate::log_info!(
+        target: "boot";
         "factory-ram-probe: binary blob appended bytes={} phys=0x{:X} sha256={}\n",
         blob.len(),
         snapshot.page_phys,

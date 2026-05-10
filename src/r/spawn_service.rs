@@ -908,7 +908,7 @@ async fn flush_user_input_record_once() {
 
 #[embassy_executor::task]
 async fn trueosfs_ready_hook_task() {
-    crate::log!("spawn-svc: trueosfs-ready-hook task online\n");
+    crate::log_info!(target: "service"; "spawn-svc: trueosfs-ready-hook task online\n");
     crate::intel::run_media_source_warmup_async().await;
     loop {
         flush_user_input_record_once().await;
@@ -984,7 +984,8 @@ async fn boot_asset_fetch_task() {
     let disk = loop {
         if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
             let info = disk.info();
-            crate::log!(
+            crate::log_info!(
+                target: "service";
                 "spawn-svc: boot-asset-fetch root mounted disk_id={} readonly={} label={}\n",
                 info.id.raw(),
                 info.is_read_only() as u8,
@@ -993,7 +994,8 @@ async fn boot_asset_fetch_task() {
             break disk;
         }
 
-        crate::log!(
+        crate::log_info!(
+            target: "service";
             "spawn-svc: boot-asset-fetch no TRUEOSFS root mounted; retry in {}s\n",
             BOOT_ASSET_MOUNT_RETRY_SECS
         );
@@ -1007,17 +1009,24 @@ async fn boot_asset_fetch_task() {
     .await;
 
     if !crate::t::shared_tokio_runtime_ready() {
-        crate::log!("spawn-svc: boot-asset-fetch waiting for shared tokio runtime\n");
+        crate::log_info!(
+            target: "service";
+            "spawn-svc: boot-asset-fetch waiting for shared tokio runtime\n"
+        );
         while !crate::t::shared_tokio_runtime_ready() {
             Timer::after(EmbassyDuration::from_millis(100)).await;
         }
-        crate::log!("spawn-svc: boot-asset-fetch shared tokio runtime ready\n");
+        crate::log_info!(
+            target: "service";
+            "spawn-svc: boot-asset-fetch shared tokio runtime ready\n"
+        );
     }
 
     for asset in BOOT_ASSETS {
         match crate::r::fs::trueosfs::file_info_async(disk, asset.path).await {
             Ok(Some(info)) if info.data_len != 0 => {
-                crate::log!(
+                crate::log_info!(
+                    target: "service";
                     "spawn-svc: boot-asset-fetch skip existing {} path={} bytes={}\n",
                     asset.label,
                     asset.path,
@@ -1027,7 +1036,8 @@ async fn boot_asset_fetch_task() {
             }
             Ok(_) => {}
             Err(err) => {
-                crate::log!(
+                crate::log_info!(
+                    target: "service";
                     "spawn-svc: boot-asset-fetch existing-file probe failed {} path={} err={:?}\n",
                     asset.label,
                     asset.path,
@@ -1036,7 +1046,8 @@ async fn boot_asset_fetch_task() {
             }
         }
 
-        crate::log!(
+        crate::log_info!(
+            target: "service";
             "spawn-svc: boot-asset-fetch start {} url={} path={} max_bytes={}\n",
             asset.label,
             asset.url,
@@ -1061,7 +1072,8 @@ async fn boot_asset_fetch_task() {
         {
             Ok(Ok(())) => match crate::r::fs::trueosfs::file_info_async(disk, asset.path).await {
                 Ok(Some(info)) => {
-                    crate::log!(
+                    crate::log_info!(
+                        target: "service";
                         "spawn-svc: boot-asset-fetch success {} path={} bytes={}\n",
                         asset.label,
                         asset.path,
@@ -1069,14 +1081,16 @@ async fn boot_asset_fetch_task() {
                     );
                 }
                 Ok(None) => {
-                    crate::log!(
+                    crate::log_info!(
+                        target: "service";
                         "spawn-svc: boot-asset-fetch post-fetch stat missing {} path={}\n",
                         asset.label,
                         asset.path
                     );
                 }
                 Err(err) => {
-                    crate::log!(
+                    crate::log_warn!(
+                        target: "service";
                         "spawn-svc: boot-asset-fetch post-fetch stat failed {} path={} err={:?}\n",
                         asset.label,
                         asset.path,
@@ -1085,7 +1099,8 @@ async fn boot_asset_fetch_task() {
                 }
             },
             Ok(Err(err)) => {
-                crate::log!(
+                crate::log_warn!(
+                    target: "service";
                     "spawn-svc: boot-asset-fetch failed {} url={} err={:?}\n",
                     asset.label,
                     asset.url,
@@ -1093,7 +1108,8 @@ async fn boot_asset_fetch_task() {
                 );
             }
             Err(err) => {
-                crate::log!(
+                crate::log_warn!(
+                    target: "service";
                     "spawn-svc: boot-asset-fetch shared-tokio failed {} url={} err={:?}\n",
                     label,
                     url,
@@ -1103,7 +1119,8 @@ async fn boot_asset_fetch_task() {
         }
     }
 
-    crate::log!(
+    crate::log_info!(
+        target: "service";
         "spawn-svc: boot-asset-fetch done weights={} tokenizer={} media={} audio={}\n",
         BOOT_LUMEN_WEIGHTS_PATH,
         BOOT_LUMEN_TOKENIZER_PATH,
@@ -1696,7 +1713,8 @@ pub async fn spawn_service_task(spawner: Spawner) {
                 match (spec.spawn)(spawner) {
                     SpawnAttempt::Spawned => {
                         started_any = true;
-                        crate::log!(
+                        crate::log_info!(
+                            target: "service";
                             "spawn-svc: started {} (mask=0x{:08X})\n",
                             spec.name,
                             spec.required

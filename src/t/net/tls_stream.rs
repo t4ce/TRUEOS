@@ -163,14 +163,14 @@ pub async fn connect_tls_v4_stream(
             match ev {
                 TlsEvent::Opened { handle } => {
                     opened = Some(handle);
-                    crate::log!("{}: opened dev={} handle={}\n", log_tag, dev_idx, handle.0);
+                    crate::log_info!(target: "net"; "{}: opened dev={} handle={}\n", log_tag, dev_idx, handle.0);
                 }
                 TlsEvent::Connected { handle } => {
                     if opened.is_none() {
                         opened = Some(handle);
                     }
                     if opened == Some(handle) {
-                        crate::log!(
+                        crate::log_info!(target: "net"; 
                             "{}: tls-connected dev={} handle={}\n",
                             log_tag,
                             dev_idx,
@@ -201,7 +201,7 @@ pub async fn connect_tls_v4_stream(
     let (client_io, bridge_io) = tokio::io::duplex(duplex_size);
     tokio::spawn(async move {
         if let Err(err) = tls_duplex_bridge(cmds, events, handle, bridge_io).await {
-            crate::log!("{}: tls stream bridge ended err={:?}\n", log_tag, err);
+            crate::log_info!(target: "net"; "{}: tls stream bridge ended err={:?}\n", log_tag, err);
         }
     });
 

@@ -1380,7 +1380,11 @@ fn ensure_kernel_cursor_surface(
     let pitch_bytes = aligned_pitch_bytes(KERNEL_CURSOR_DIM, KERNEL_CURSOR_BYTES_PER_PIXEL)?;
     let byte_len = usize::try_from(u64::from(pitch_bytes) * u64::from(KERNEL_CURSOR_DIM)).ok()?;
     let Some((phys, virt)) = crate::dma::alloc(byte_len, crate::intel::WARM_ALIGN) else {
-        crate::log!("intel/display: kernel-hw-cursor alloc failed bytes=0x{:X}\n", byte_len);
+        crate::log_warn!(
+            target: "gfx";
+            "intel/display: kernel-hw-cursor alloc failed bytes=0x{:X}\n",
+            byte_len
+        );
         state.init_failed = true;
         return None;
     };
@@ -1389,7 +1393,8 @@ fn ensure_kernel_cursor_surface(
     crate::intel::dma_flush(virt, byte_len);
 
     if !crate::intel::map_ggtt(dev, phys, byte_len, KERNEL_CURSOR_GPU_ADDR) {
-        crate::log!(
+        crate::log_warn!(
+            target: "gfx";
             "intel/display: kernel-hw-cursor ggtt map failed phys=0x{:X} bytes=0x{:X} gpu=0x{:X}\n",
             phys,
             byte_len,
@@ -1408,7 +1413,8 @@ fn ensure_kernel_cursor_surface(
         virt,
     };
     state.surface = Some(surface);
-    crate::log!(
+    crate::log_info!(
+        target: "gfx";
         "intel/display: kernel-hw-cursor surface phys=0x{:X} gpu=0x{:X} size={}x{} pitch=0x{:X}\n",
         phys,
         KERNEL_CURSOR_GPU_ADDR,

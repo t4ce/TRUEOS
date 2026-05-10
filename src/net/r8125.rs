@@ -409,7 +409,8 @@ impl R8125Adapter {
             match Self::init_from_device(dev) {
                 Ok(adapter) => out.push(adapter),
                 Err(()) => {
-                    crate::log!(
+                    crate::log_warn!(
+                        target: "net";
                         "net/r8125: init failed for {:02x}:{:02x}.{}\n",
                         dev.bus,
                         dev.slot,
@@ -445,7 +446,12 @@ impl R8125Adapter {
         let mapped = match pci::mmio::map_mmio_region_exact(bar_phys, map_size) {
             Ok(mapped) => mapped,
             Err(err) => {
-                crate::log!("net/r8125: bar{} mmio map failed: {:?}\n", bar_index, err);
+                crate::log_warn!(
+                    target: "net";
+                    "net/r8125: bar{} mmio map failed: {:?}\n",
+                    bar_index,
+                    err
+                );
                 return Err(());
             }
         };
@@ -482,7 +488,7 @@ impl R8125Adapter {
             mmio.write_u32(REG_INTR_STATUS_8125, 0xFFFF_FFFF);
         }
         if !reset_done {
-            crate::log!("net/r8125: reset timeout cmd=0x{:02x}\n", last_cmd);
+            crate::log_warn!(target: "net"; "net/r8125: reset timeout cmd=0x{:02x}\n", last_cmd);
             return Err(());
         }
 
@@ -751,7 +757,8 @@ impl R8125Adapter {
 
             self.dbg_kick_readbacks = self.dbg_kick_readbacks.saturating_add(1);
             if self.dbg_kick_readbacks <= 8 || (self.dbg_kick_readbacks & 0x3FF) == 0 {
-                crate::log!(
+                crate::log_trace!(
+                    target: "net";
                     "net/r8125: tx kick rb count={} cmd=0x{:02x} isr=0x{:08x} tnpds=0x{:08x}{:08x}\n",
                     self.dbg_kick_readbacks,
                     rb_cmd,
@@ -781,7 +788,8 @@ impl R8125Adapter {
             )
         };
 
-        crate::log!(
+        crate::log_warn!(
+            target: "net";
             "net/r8125: tx reset reason={} resets={} head={} tail={} checks={} cmd=0x{:02x} tcr=0x{:08x} tnpds=0x{:08x}{:08x} isr=0x{:08x} phystat=0x{:02x}\n",
             reason,
             self.dbg_tx_resets,
@@ -833,7 +841,8 @@ impl R8125Adapter {
 
         self.ring_tx_doorbell("tx-reset-reinit");
 
-        crate::log!(
+        crate::log_info!(
+            target: "net";
             "net/r8125: tx reset reinit head={} tail={} skip_desc0={}\n",
             self.tx_head,
             self.tx_tail,
@@ -842,7 +851,8 @@ impl R8125Adapter {
 
         if self.dbg_tx_reclaimed == 0 && self.dbg_tx_resets >= TX_WEDGE_QUARANTINE_RESETS {
             self.dbg_tx_quarantined = true;
-            crate::log!(
+            crate::log_warn!(
+                target: "net";
                 "net/r8125: tx quarantined after resets={} (no reclaims); rx remains active\n",
                 self.dbg_tx_resets
             );
@@ -879,7 +889,8 @@ impl R8125Adapter {
                         .dbg_tx_stall_checks
                         .is_multiple_of(TX_STALL_KICK_THRESHOLD)
                 {
-                    crate::log!(
+                    crate::log_warn!(
+                        target: "net";
                         "net/r8125: tx stall checks={} head={} tail={} desc_opts1=0x{:08x} kicks={} resets={}\n",
                         self.dbg_tx_stall_checks,
                         self.tx_head,
@@ -906,7 +917,7 @@ impl R8125Adapter {
 
             self.dbg_tx_reclaimed = self.dbg_tx_reclaimed.saturating_add(1);
             if self.dbg_tx_reclaimed == 1 {
-                crate::log!("net/r8125: first tx reclaim\n");
+                crate::log_trace!(target: "net"; "net/r8125: first tx reclaim\n");
             }
         }
     }
@@ -1017,7 +1028,8 @@ impl R8125Adapter {
                 if self.dbg_rx_bad_flags == 1
                     || self.dbg_rx_bad_flags.is_multiple_of(RX_BAD_FLAGS_LOG_EVERY)
                 {
-                    crate::log!(
+                    crate::log_trace!(
+                        target: "net";
                         "net/r8125: rx flags missing fs/ls count={} opts1=0x{:08x} (continuing)\n",
                         self.dbg_rx_bad_flags,
                         opts1
@@ -1050,7 +1062,8 @@ impl R8125Adapter {
             if raw_len == 0 || raw_len > RX_BUF_SIZE {
                 self.dbg_rx_len_bad = self.dbg_rx_len_bad.saturating_add(1);
                 if self.dbg_rx_len_bad == 1 {
-                    crate::log!(
+                    crate::log_trace!(
+                        target: "net";
                         "net/r8125: rx bad len raw_len={} opts1=0x{:08x}\n",
                         raw_len,
                         opts1
@@ -1085,13 +1098,14 @@ impl R8125Adapter {
                 if ring.push_rx_packet(data).is_err() {
                     self.dbg_rx_ring_full = self.dbg_rx_ring_full.saturating_add(1);
                     if self.dbg_rx_ring_full == 1 {
-                        crate::log!("net/r8125: rx ring full (dropping)\n");
+                        crate::log_trace!(target: "net"; "net/r8125: rx ring full (dropping)\n");
                     }
                 } else {
                     self.dbg_rx_ok = self.dbg_rx_ok.saturating_add(1);
                     if !self.dbg_logged_first_rx {
                         self.dbg_logged_first_rx = true;
-                        crate::log!(
+                        crate::log_trace!(
+                            target: "net";
                             "net/r8125: first rx len={} raw_len={} opts1=0x{:08x}\n",
                             len,
                             raw_len,
@@ -1136,7 +1150,8 @@ impl R8125Adapter {
         if !Self::phy_link_up(phy) {
             self.dbg_tx_link_down_drops = self.dbg_tx_link_down_drops.saturating_add(1);
             if self.dbg_tx_link_down_drops <= 8 || (self.dbg_tx_link_down_drops & 0x3FF) == 0 {
-                crate::log!(
+                crate::log_trace!(
+                    target: "net";
                     "net/r8125: drop tx (link down) count={} phystat=0x{:02x}\n",
                     self.dbg_tx_link_down_drops,
                     phy
@@ -1168,7 +1183,8 @@ impl R8125Adapter {
                             self.mmio.read_u8(REG_PHYSTAT),
                         )
                     };
-                    crate::log!(
+                    crate::log_warn!(
+                        target: "net";
                         "net/r8125: tx ring full count={} head={} tail={} cmd=0x{:02x} tcr=0x{:08x} tnpds=0x{:08x}{:08x} isr=0x{:08x} phystat=0x{:02x} kicks={}\n",
                         self.dbg_tx_ring_full,
                         self.tx_head,
@@ -1202,7 +1218,8 @@ impl R8125Adapter {
                 if self.dbg_tx_ring_full == 1
                     || self.dbg_tx_ring_full.is_multiple_of(TX_RING_FULL_LOG_EVERY)
                 {
-                    crate::log!(
+                    crate::log_warn!(
+                        target: "net";
                         "net/r8125: tx desc busy count={} idx={} head={} tail={} opts1=0x{:08x} kicks={}\n",
                         self.dbg_tx_ring_full,
                         idx,
@@ -1255,7 +1272,8 @@ impl R8125Adapter {
                 EXP_R8125_CLFLUSH_TX_DESC,
             );
             if self.dbg_tx_submitted < TX_SUBMIT_DEBUG_FIRST {
-                crate::log!(
+                crate::log_trace!(
+                    target: "net";
                     "net/r8125: tx clflush idx={} len={} buf={} desc={} reclaim_inv={}\n",
                     idx,
                     len,
@@ -1282,7 +1300,8 @@ impl R8125Adapter {
                 )
             };
 
-            crate::log!(
+            crate::log_trace!(
+                target: "net";
                 "net/r8125: tx submit dbg idx={} len={} opts1=0x{:08x} rd[o1=0x{:08x} o2=0x{:08x} a=0x{:016x}] cmd=0x{:02x} isr=0x{:08x} tnpds=0x{:08x}{:08x}\n",
                 idx,
                 len,
@@ -1301,7 +1320,8 @@ impl R8125Adapter {
         self.dbg_tx_submitted = self.dbg_tx_submitted.saturating_add(1);
         if !self.dbg_logged_first_tx {
             self.dbg_logged_first_tx = true;
-            crate::log!(
+            crate::log_trace!(
+                target: "net";
                 "net/r8125: first tx len={} head={} tail={}\n",
                 len,
                 self.tx_head,
