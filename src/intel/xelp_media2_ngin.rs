@@ -60,7 +60,7 @@ const MEDIA_DEFAULT_RING_BYTES: usize = 16 * 1024;
 const MEDIA_DEFAULT_CONTEXT_BYTES: usize = 22 * 4096;
 const MEDIA_DEFAULT_BATCH_BYTES: usize = 32 * 1024;
 const MEDIA_DEFAULT_RESULT_BYTES: usize = 4 * 4096;
-const MEDIA_DEFAULT_BITSTREAM_BYTES: usize = 512 * 1024;
+const MEDIA_DEFAULT_BITSTREAM_BYTES: usize = 4 * 1024 * 1024;
 const MEDIA_DEFAULT_OUTPUT_SURFACE_BYTES: usize = 8 * 1024 * 1024;
 const MEDIA_DEFAULT_SCRATCH_BYTES: usize = 256 * 1024;
 const MEDIA_SCRATCH_OFFSET_BYTES: usize = MEDIA_DEFAULT_SCRATCH_BYTES;
@@ -1053,6 +1053,13 @@ fn log_output_surface_probe(
     );
 }
 
+fn output_surface_has_decoded_luma(probe: &MediaSurfaceProbe) -> bool {
+    probe.valid
+        && (probe.luma_visible_last_row.active_samples != 0
+            || probe.luma_prev_mb_row.active_samples != 0
+            || probe.luma_bottom_mb_row.active_samples != 0)
+}
+
 fn present_nv12_frame(
     output_surface: &[u8],
     coded_width: u16,
@@ -1150,18 +1157,32 @@ pub(super) fn decode_and_present_frame(
         output_surface_pitch,
     );
     log_output_surface_probe(engine.name, sample_idx, submit_completed, output_surface_probe);
+    let decoded_luma = output_surface_has_decoded_luma(&output_surface_probe);
     let (present_ready, output_surface_signature, output_surface_nonzero_samples) =
-        present_nv12_frame(
-            output_surface,
-            u16::try_from(coded_width).unwrap_or(u16::MAX),
-            u16::try_from(coded_height).unwrap_or(u16::MAX),
-            u16::try_from(visible_x).unwrap_or(0),
-            u16::try_from(visible_y).unwrap_or(0),
-            frame_width,
-            frame_height,
-            output_surface_pitch,
-            submit_completed,
-        );
+        if decoded_luma {
+            present_nv12_frame(
+                output_surface,
+                u16::try_from(coded_width).unwrap_or(u16::MAX),
+                u16::try_from(coded_height).unwrap_or(u16::MAX),
+                u16::try_from(visible_x).unwrap_or(0),
+                u16::try_from(visible_y).unwrap_or(0),
+                frame_width,
+                frame_height,
+                output_surface_pitch,
+                submit_completed,
+            )
+        } else {
+            let (signature, nonzero_samples) = surface_signature(output_surface);
+            crate::log!(
+                "intel/media2: first-frame blank-surface engine={} sample={} submit_completed={} luma_active=0 present_skipped=1 sig=0x{:08X} nonzero_samples={}\n",
+                engine.name,
+                sample_idx,
+                submit_completed as u8,
+                signature,
+                nonzero_samples,
+            );
+            (false, signature, nonzero_samples)
+        };
 
     Some(MediaDecodeFrameState {
         ready: present_ready,
@@ -1900,12 +1921,11 @@ fn build_h264_decode_batch_skeleton(
     )?;
     batch[surface + 2] =
         ((coded_width.saturating_sub(1)) << 4) | ((coded_height.saturating_sub(1)) << 18);
-    // DW3: TileWalk(0)=Y-major, TiledSurface(1)=1, SurfacePitch-1(19:3),
-    //       InterleaveChroma(27)=1, SurfaceFormat(31:28)=PLANAR_420_8/NV12.
-    // Keep this layout in sync with the MFX_SURFACE_STATE genxml; these bit
-    // positions differ from render surface state packing.
+    // DW3: SurfaceFormat(31:28)=4(PLANAR_420_8/NV12), TiledSurface(27)=1,
+    //       TileWalk(26)=1(Y-major), SurfacePitch-1(17:3),
+    //       InterleaveChroma(1)=1: NV12 uses interleaved CbCr pairs.
     batch[surface + 3] =
-        1 | (1 << 1) | ((output_pitch.saturating_sub(1)) << 3) | (1 << 27) | (4 << 28);
+        (1 << 1) | ((output_pitch.saturating_sub(1)) << 3) | (1 << 26) | (1 << 27) | (4 << 28);
     batch[surface + 4] = chroma_y_offset;
     batch[surface + 5] = chroma_y_offset; // Y Offset for V(Cr) = same as U(Cb)
     let surface_dw2 = batch[surface + 2];
@@ -1923,14 +1943,10 @@ fn build_h264_decode_batch_skeleton(
             MFX_CMD_LEN_PIPE_BUF_ADDR_STATE,
         ),
     )?;
-    // Mesa only programs the currently selected decode destination. With
-    // post-deblock output enabled, aliasing both pre- and post-deblock
-    // destinations to the same surface can let two stages stamp the same
-    // buffer differently. Keep pre-deblock unset and use only the active
-    // post-deblock destination.
-    batch[pipe_buf + 1] = 0;
-    batch[pipe_buf + 2] = 0;
-    batch[pipe_buf + 3] = 0;
+    // DW1-2: Pre Deblocking Destination = output surface.
+    // This matches the older first-frame probe that produced the tile-debug image.
+    packet_write_addr64(batch, pipe_buf, 1, output_surface_gpu_addr);
+    batch[pipe_buf + 3] = MFX_MOCS_UC;
     // DW4-5: Post Deblocking Destination = output surface
     packet_write_addr64(batch, pipe_buf, 4, output_surface_gpu_addr);
     batch[pipe_buf + 6] = MFX_MOCS_UC; // Post Deblocking Attributes
@@ -2044,12 +2060,7 @@ fn build_h264_decode_batch_skeleton(
             MFX_CMD_LEN_AVC_DPB_STATE,
         ),
     )?;
-    if has_idr {
-        // With no references on the first IDR, every DPB slot must be invalid.
-        // Leaving this packet zeroed means 16 VALID non-reference entries,
-        // which still gives the concealment path something stale to point at.
-        batch[dpb + 1] = 0x0000_FFFF;
-    } else {
+    if !has_idr {
         // DW1: FrameStore_ID[0]=0, NonExisting[0]=0 (valid), InUse(LongTerm)[0]=0 (short-term)
         // All other frame stores: NonExisting=1
         batch[dpb + 1] = 0x0000_FFFE; // bits[15:1]=1 → frame stores 1..15 non-existing
@@ -2927,7 +2938,8 @@ pub(crate) async fn run_media_decode_async() {
 pub(crate) async fn run_media2_first_frame_async() -> Option<Media2FirstFrameState> {
     kickoff_once();
 
-    if MEDIA_DECODE_RAN.swap(true, Ordering::AcqRel) {
+    if MEDIA_DECODE_RAN.load(Ordering::Acquire) {
+        crate::log!("intel/media2: first-frame cached state=already-ran\n");
         return MEDIA_KICKOFF_STATE
             .lock()
             .as_ref()
@@ -2959,23 +2971,50 @@ pub(crate) async fn run_media2_first_frame_async() -> Option<Media2FirstFrameSta
     let source = match xelp_media_source::fetch_media_source_async().await {
         Some(source) => source,
         None => {
+            crate::log!("intel/media2: first-frame abort stage=source reason=unavailable\n");
             store_kickoff_state(MediaKickoffStage::SubmissionWiring, None);
             return None;
         }
     };
+    crate::log!(
+        "intel/media2: first-frame source ready source={} bytes={}\n",
+        source.source_name(),
+        source.total_len(),
+    );
     let summary = match parse_h264_source_summary(&source).await {
         Ok(summary) => summary,
-        Err(_) => {
+        Err(err) => {
+            crate::log!(
+                "intel/media2: first-frame abort stage=parse reason={} source={} bytes={}\n",
+                err,
+                source.source_name(),
+                source.total_len(),
+            );
             store_kickoff_state(MediaKickoffStage::ResourcePlanning, None);
             return None;
         }
     };
+    crate::log!(
+        "intel/media2: first-frame summary container={} coded={}x{} samples={} first_sample_bytes={} avcc_profile={} avcc_level={} nal_len={} sps_bytes={} pps_bytes={}\n",
+        summary.container_name(),
+        summary.width(),
+        summary.height(),
+        summary.sample_count(),
+        summary.first_sample().len(),
+        summary.avcc().profile_idc,
+        summary.avcc().level_idc,
+        summary.avcc().nal_length_size,
+        summary.avcc().sps.len(),
+        summary.avcc().pps.len(),
+    );
 
     let Some(sps) = parse_sps(&summary.avcc().sps) else {
+        crate::log!("intel/media2: first-frame abort stage=sps reason=parse-failed\n");
         store_kickoff_state(MediaKickoffStage::ResourcePlanning, None);
         return None;
     };
     let Some(pps) = parse_pps(&summary.avcc().pps, &sps) else {
+        crate::log!("intel/media2: first-frame abort stage=pps reason=parse-failed\n");
         store_kickoff_state(MediaKickoffStage::ResourcePlanning, None);
         return None;
     };
@@ -3004,6 +3043,7 @@ pub(crate) async fn run_media2_first_frame_async() -> Option<Media2FirstFrameSta
         };
 
     let Some(backing) = ensure_decode_backing(dev, windows) else {
+        crate::log!("intel/media2: first-frame abort stage=backing reason=alloc-or-map-failed\n");
         store_kickoff_state(MediaKickoffStage::ResourcePlanning, None);
         return None;
     };
@@ -3014,7 +3054,13 @@ pub(crate) async fn run_media2_first_frame_async() -> Option<Media2FirstFrameSta
         };
         match write_annex_b_for_sample(summary.first_sample(), summary.avcc(), bitstream) {
             Ok(annex_b) => annex_b,
-            Err(_) => {
+            Err(err) => {
+                crate::log!(
+                    "intel/media2: first-frame abort stage=annex-b err={:?} sample_bytes={} bitstream_capacity={}\n",
+                    err,
+                    summary.first_sample().len(),
+                    backing.bitstream_bytes,
+                );
                 store_kickoff_state(MediaKickoffStage::ResourcePlanning, None);
                 return None;
             }
@@ -3022,7 +3068,7 @@ pub(crate) async fn run_media2_first_frame_async() -> Option<Media2FirstFrameSta
     };
     let vcl_info =
         parse_sample_vcl_info(summary.first_sample(), summary.avcc().nal_length_size, &sps, &pps);
-    let demo = decode_and_present_frame(
+    let demo = match decode_and_present_frame(
         dev,
         engine,
         windows,
@@ -3035,7 +3081,18 @@ pub(crate) async fn run_media2_first_frame_async() -> Option<Media2FirstFrameSta
         &pps,
         0,
         0,
-    )?;
+    ) {
+        Some(demo) => demo,
+        None => {
+            crate::log!(
+                "intel/media2: first-frame abort stage=submit engine={} bitstream_bytes={}\n",
+                engine.name,
+                first_annex_b.bytes_written,
+            );
+            return None;
+        }
+    };
+    MEDIA_DECODE_RAN.store(true, Ordering::Release);
     store_kickoff_state(MediaKickoffStage::Smoke, Some(demo));
     Some(media2_first_frame_state(demo))
 }

@@ -139,7 +139,7 @@ pub fn try_acquire_tokio_lane(
         TOKIO_LANE_OWNER_ROLE[lane_id].store(LANE_ROLE_TOKIO_BLOCKING as u32, Ordering::Release);
 
         if !LOGGED_TOKIO_LANE[lane_id].swap(true, Ordering::AcqRel) {
-            crate::log!(
+            crate::log_info!(target: "service";
                 "stackkeeper: reserved tagged Tokio lane{} for {} vm={} domain={} role={} cpu_slot={} scratch={:#x}+{}\n",
                 lane_id,
                 purpose,
@@ -169,7 +169,7 @@ pub fn try_acquire_tokio_lane(
     }
 
     if !LOGGED_TOKIO_LANE_BUSY.swap(true, Ordering::AcqRel) {
-        crate::log!(
+        crate::log_warn!(target: "service";
             "stackkeeper: all {} Tokio lanes busy; deferred {}\n",
             TOKIO_LANE_COUNT,
             purpose

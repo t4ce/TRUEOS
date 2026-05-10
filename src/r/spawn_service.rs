@@ -348,7 +348,14 @@ fn spawn_net_poll_tasks(spawner: Spawner) -> SpawnAttempt {
     for idx in 0..count {
         match crate::net::adapter::net_poll_task(idx) {
             Ok(token) => spawner.spawn(token),
-            Err(e) => crate::log!("net: spawn net_poll_task({}) failed: {:?}\n", idx, e),
+            Err(e) => {
+                crate::log_warn!(
+                    target: "net";
+                    "net: spawn net_poll_task({}) failed: {:?}\n",
+                    idx,
+                    e
+                )
+            }
         }
     }
     SpawnAttempt::Spawned
@@ -368,7 +375,12 @@ fn spawn_net_service(spawner: Spawner) -> SpawnAttempt {
                 spawned_any = true;
             }
             Err(e) => {
-                crate::log!("net: spawn net_service_task({}) failed: {:?}\n", idx, e);
+                crate::log_warn!(
+                    target: "net";
+                    "net: spawn net_service_task({}) failed: {:?}\n",
+                    idx,
+                    e
+                );
                 if !spawned_any {
                     return SpawnAttempt::Failed(e);
                 }
@@ -483,7 +495,11 @@ async fn gfx_virgl_ready_task() {
     crate::gfx::init(None);
 
     if crate::r::readiness::is_set(crate::r::readiness::GFX_BACKEND_READY) {
-        crate::log!("boot-probe: gfx-virgl-backend-ready ms={}\n", boot_probe_ms());
+        crate::log_info!(
+            target: "gfx";
+            "boot-probe: gfx-virgl-backend-ready ms={}\n",
+            boot_probe_ms()
+        );
         return;
     }
 
@@ -493,18 +509,26 @@ async fn gfx_virgl_ready_task() {
         }
         if crate::r::readiness::is_set(crate::r::readiness::GFX_VIRGL_READY) {
             crate::r::readiness::set(crate::r::readiness::GFX_BACKEND_READY);
-            crate::log!("boot-probe: gfx-virgl-backend-ready ms={}\n", boot_probe_ms());
+            crate::log_info!(
+                target: "gfx";
+                "boot-probe: gfx-virgl-backend-ready ms={}\n",
+                boot_probe_ms()
+            );
             return;
         }
         if gfx_switched() {
             crate::r::readiness::set(crate::r::readiness::GFX_BACKEND_READY);
-            crate::log!("boot-probe: gfx-virgl-backend-ready(switched) ms={}\n", boot_probe_ms());
+            crate::log_info!(
+                target: "gfx";
+                "boot-probe: gfx-virgl-backend-ready(switched) ms={}\n",
+                boot_probe_ms()
+            );
             return;
         }
         Timer::after(EmbassyDuration::from_millis(25)).await;
     }
 
-    crate::log!(
+    crate::log_info!(target: "gfx";
         "gfx-virgl-backend-ready: timeout virgl_active={} virgl_present_cached={} ready_mask=0x{:08X}\n",
         crate::gfx::is_virgl_active() as u8,
         crate::gfx::is_virgl_present_cached() as u8,
@@ -518,7 +542,11 @@ fn spawn_gfx_virgl_ready_task(spawner: Spawner) -> SpawnAttempt {
 
 #[embassy_executor::task]
 async fn gfx_virgl_cursor_overlay_task() {
-    crate::log!("boot-probe: gfx-cursor-overlay task start ms={}\n", boot_probe_ms());
+    crate::log_info!(
+        target: "gfx";
+        "boot-probe: gfx-cursor-overlay task start ms={}\n",
+        boot_probe_ms()
+    );
     loop {
         let _ = crate::r::io::cabi::kernel_cursor_overlay_tick();
         Timer::after(EmbassyDuration::from_millis(16)).await;
@@ -531,7 +559,11 @@ fn spawn_gfx_virgl_cursor_overlay_task(spawner: Spawner) -> SpawnAttempt {
 
 #[embassy_executor::task]
 async fn intel_cursor_service_task() {
-    crate::log!("boot-probe: intel-cursor-service task start ms={}\n", boot_probe_ms());
+    crate::log_info!(
+        target: "gfx";
+        "boot-probe: intel-cursor-service task start ms={}\n",
+        boot_probe_ms()
+    );
     loop {
         let _ = crate::intel::update_kernel_hw_cursor();
         Timer::after(EmbassyDuration::from_millis(16)).await;
@@ -952,6 +984,12 @@ pub(crate) const BOOT_LUMEN_TOKENIZER_PATH: &str = "tokenizer.json";
 
 const BOOT_ASSETS: [BootAsset; 4] = [
     BootAsset {
+        label: "media-demo-yelly",
+        url: crate::allports::local_assets::DEMO_YELLY_MP4_URL,
+        path: crate::intel::xelp_media_source::MEDIA_DECODE_CACHE_PATH,
+        max_bytes: 16 * 1024 * 1024,
+    },
+    BootAsset {
         label: "weights",
         url: crate::allports::local_assets::TINYLLAMA_MODEL_URL,
         path: BOOT_LUMEN_WEIGHTS_PATH,
@@ -964,12 +1002,6 @@ const BOOT_ASSETS: [BootAsset; 4] = [
         max_bytes: 64 * 1024 * 1024,
     },
     BootAsset {
-        label: "media-demo-yelly",
-        url: crate::allports::local_assets::DEMO_YELLY_MP4_URL,
-        path: crate::intel::xelp_media_source::MEDIA_DECODE_CACHE_PATH,
-        max_bytes: 256 * 1024 * 1024,
-    },
-    BootAsset {
         label: "audio-demo-wav",
         url: crate::allports::local_assets::AUDIO_DEMO_URL,
         path: crate::allports::local_assets::AUDIO_DEMO_CACHE_PATH,
@@ -978,6 +1010,39 @@ const BOOT_ASSETS: [BootAsset; 4] = [
 ];
 const BOOT_ASSET_MOUNT_RETRY_SECS: u64 = 10;
 const BOOT_ASSET_TIMEOUT_MS: u32 = 180_000;
+
+async fn handoff_media_asset_to_intel_playback(reason: &'static str, bytes: u64) {
+    crate::log!(
+        "intel/media: asset handoff reason={} path={} bytes={} target=media2-first-frame\n",
+        reason,
+        crate::intel::xelp_media_source::MEDIA_DECODE_CACHE_PATH,
+        bytes,
+    );
+    let first_frame = crate::intel::run_media2_first_frame_async().await;
+    match first_frame {
+        Some(frame) => crate::log!(
+            "intel/media: asset playback returned=1 ready={} submit_completed={} present_ready={} frame={}x{} bitstream_bytes={} output_bytes={}\n",
+            frame.ready as u8,
+            frame.submit_completed as u8,
+            frame.present_ready as u8,
+            frame.frame_width,
+            frame.frame_height,
+            frame.bitstream_bytes,
+            frame.output_surface_bytes,
+        ),
+        None => crate::log!("intel/media: asset playback returned=0\n"),
+    }
+}
+
+async fn maybe_handoff_boot_asset_to_playback(
+    asset: &BootAsset,
+    reason: &'static str,
+    bytes: u64,
+) {
+    if asset.path == crate::intel::xelp_media_source::MEDIA_DECODE_CACHE_PATH {
+        handoff_media_asset_to_intel_playback(reason, bytes).await;
+    }
+}
 
 #[embassy_executor::task]
 async fn boot_asset_fetch_task() {
@@ -1032,6 +1097,7 @@ async fn boot_asset_fetch_task() {
                     asset.path,
                     info.data_len
                 );
+                maybe_handoff_boot_asset_to_playback(&asset, "cache-existing", info.data_len).await;
                 continue;
             }
             Ok(_) => {}
@@ -1079,6 +1145,8 @@ async fn boot_asset_fetch_task() {
                         asset.path,
                         info.data_len
                     );
+                    maybe_handoff_boot_asset_to_playback(&asset, "cache-fetched", info.data_len)
+                        .await;
                 }
                 Ok(None) => {
                     crate::log_info!(
@@ -1713,8 +1781,7 @@ pub async fn spawn_service_task(spawner: Spawner) {
                 match (spec.spawn)(spawner) {
                     SpawnAttempt::Spawned => {
                         started_any = true;
-                        crate::log_info!(
-                            target: "service";
+                        crate::log!(
                             "spawn-svc: started {} (mask=0x{:08X})\n",
                             spec.name,
                             spec.required
@@ -1727,7 +1794,12 @@ pub async fn spawn_service_task(spawner: Spawner) {
                                 | "ui2-mandelbrot-demo"
                                 | "ui2-shell-demo"
                         ) {
-                            crate::log!("boot-probe: spawn {} ms={}\n", spec.name, boot_probe_ms());
+                            crate::log_info!(
+                                target: "service";
+                                "boot-probe: spawn {} ms={}\n",
+                                spec.name,
+                                boot_probe_ms()
+                            );
                         }
                     }
                     SpawnAttempt::Skipped => {
@@ -1737,7 +1809,7 @@ pub async fn spawn_service_task(spawner: Spawner) {
                     SpawnAttempt::Failed(e) => {
                         spec.started.store(false, Ordering::Release);
                         pending += 1;
-                        crate::log!(
+                        crate::log_warn!(target: "service";
                             "spawn-svc: failed to start {} (mask=0x{:08X}) err={:?}\n",
                             spec.name,
                             spec.required,
