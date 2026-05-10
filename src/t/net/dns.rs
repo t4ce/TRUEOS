@@ -238,6 +238,7 @@ const DNS_FS_CACHE_PATH: &str = "net_dns_v4.cache";
 const DNS_FS_CACHE_MAX_ENTRIES: usize = 32;
 const DNS_FS_CACHE_LOOKUP_TIMEOUT_MS: u64 = 150;
 const DNS_FS_CACHE_UPDATE_TIMEOUT_MS: u64 = 250;
+const DNS_FS_CACHE_PERSIST_UPDATES: bool = false;
 
 #[derive(Clone, Debug)]
 struct DnsCacheEntry {
@@ -507,6 +508,15 @@ async fn dns_fs_cache_update(dev_idx: usize, host_trimmed: &str, ip: [u8; 4]) {
 }
 
 async fn dns_fs_cache_update_bounded(dev_idx: usize, host_trimmed: &str, ip: [u8; 4]) {
+    if !DNS_FS_CACHE_PERSIST_UPDATES {
+        crate::log_info!(target: "net";
+            "dns: fs-cache update skipped host={} dev={} reason=persistent-updates-disabled\n",
+            host_trimmed,
+            dev_idx
+        );
+        return;
+    }
+
     match with_timeout(
         EmbassyDuration::from_millis(DNS_FS_CACHE_UPDATE_TIMEOUT_MS),
         dns_fs_cache_update(dev_idx, host_trimmed, ip),
