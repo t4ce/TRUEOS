@@ -376,6 +376,15 @@ pub static T4_LIVE_X_STATIC_DP4A_REQUIREMENT_HDC1_STORE_THEN_TS_EOT: EuArtifact 
     expects_store: true,
 };
 
+// T5 is the first rung whose success condition is a real one-row matvec:
+// load the staged live f32 activation vector, load one staged BF16 model row,
+// multiply/reduce, and store the computed row output.  Older T47/T48 artifacts
+// remain preserved as sentinel/echo controls and must not satisfy this rung.
+pub const T5_ONE_ROW_MATVEC_PROGRAM_NAME: &str =
+    "gfx12-t5-one-row-live-bf16-matvec-hdc1-stateless-store-then-ts-eot";
+pub const T5_ONE_ROW_MATVEC_LIVE_K: usize = 2048;
+pub const T5_ONE_ROW_MATVEC_REQUIRES_LIVE_GPU_LOAD: bool = true;
+
 #[cfg(feature = "alloc")]
 pub mod builder {
     use alloc::vec::Vec;

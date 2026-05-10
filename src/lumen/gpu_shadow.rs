@@ -252,6 +252,36 @@ pub(crate) fn observe_live_bf16_matvec_probe(
                 compare.expected_finish_marker,
                 compare.batch_bytes,
             );
+            if compare.readback_ok {
+                let live_k_dim = k_dim.min(trueos_eu::gfx12::T5_ONE_ROW_MATVEC_LIVE_K);
+                let t5 = crate::intel::submit_gpgpu_t5_one_row_matvec_probe(
+                    stage.output_gpu,
+                    stage.output_bytes,
+                    row0.to_bits(),
+                    live_k_dim,
+                );
+                crate::log!(
+                    "lumen-gpu-proof: director-step step=9 backend=local-gpu mode=t5-one-row-live-matvec submitted={} finished={} readback_ok={} compare_ok={} reason={} program={} output_gpu=0x{:X} gpu_value=0x{:08X} cpu_expected_bits=0x{:08X} output_first_before=0x{:08X} output_first_after=0x{:08X} output_hits_lo64=0x{:016X} lane_dispatch={} live_k_dim={} requires_live_gpu_load={} finish_marker=0x{:08X} finish_expected=0x{:08X} batch_bytes=0x{:X} output_owner=cpu-ap action=hold-scale next=generate-t5-live-load-bf16-dot-eu-artifact does_not_prove=model_matvec_or_gpu_live_load\n",
+                    t5.submitted as u8,
+                    t5.finished as u8,
+                    t5.readback_ok as u8,
+                    t5.compare_ok as u8,
+                    t5.reason,
+                    t5.program_name,
+                    t5.output_gpu,
+                    t5.gpu_value,
+                    t5.cpu_expected_bits,
+                    t5.output_first_before,
+                    t5.output_first_after,
+                    t5.output_hits_lo64,
+                    t5.dispatch_delta,
+                    t5.live_k_dim,
+                    t5.requires_live_gpu_load as u8,
+                    t5.finish_marker,
+                    t5.expected_finish_marker,
+                    t5.batch_bytes,
+                );
+            }
         }
     }
 }

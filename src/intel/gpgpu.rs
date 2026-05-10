@@ -1332,6 +1332,19 @@ fn gpgpu_one_tile_output_compare_program() -> GpgpuEuProgram {
     }
 }
 
+fn gpgpu_t5_one_row_matvec_program() -> GpgpuEuProgram {
+    GpgpuEuProgram {
+        name: trueos_eu::gfx12::T5_ONE_ROW_MATVEC_PROGRAM_NAME,
+        kind:
+            trueos_eu::EuArtifactKind::LiveXStaticDp4aRequirementThenHdc1StoreThenThreadSpawnerEot,
+        words: &[],
+        expects_store: true,
+        expected_store_value: 0,
+        store_send_dword: None,
+        visible_seed_dword: None,
+    }
+}
+
 fn gpgpu_store_send_desc_words(program: GpgpuEuProgram) -> (u32, u32) {
     let Some(send_exdesc_dword) = program.store_send_dword else {
         return (0, 0);
@@ -2113,6 +2126,116 @@ pub(crate) fn submit_gpgpu_one_tile_output_compare_probe(
     }
 }
 
+pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
+    output_gpu: u64,
+    output_bytes: usize,
+    cpu_expected_bits: u32,
+    live_k_dim: usize,
+) -> crate::intel::GpgpuT5OneRowMatvecProof {
+    let program = gpgpu_t5_one_row_matvec_program();
+    let Some(warm) = warm_state() else {
+        return gpgpu_t5_one_row_matvec_failure(
+            "no-warm-state",
+            program,
+            output_gpu,
+            cpu_expected_bits,
+            live_k_dim,
+        );
+    };
+    if warm.gpgpu_arena_virt.is_null() || warm.gpgpu_arena_len == 0 {
+        return gpgpu_t5_one_row_matvec_failure(
+            "no-arena",
+            program,
+            output_gpu,
+            cpu_expected_bits,
+            live_k_dim,
+        );
+    }
+    if output_bytes < core::mem::size_of::<u32>() {
+        return gpgpu_t5_one_row_matvec_failure(
+            "bad-output-bytes",
+            program,
+            output_gpu,
+            cpu_expected_bits,
+            live_k_dim,
+        );
+    }
+    if output_gpu < GPU_VA_GPGPU_TILE_ARENA_BASE {
+        return gpgpu_t5_one_row_matvec_failure(
+            "output-gpu-before-arena",
+            program,
+            output_gpu,
+            cpu_expected_bits,
+            live_k_dim,
+        );
+    }
+    let output_offset = (output_gpu - GPU_VA_GPGPU_TILE_ARENA_BASE) as usize;
+    let Some(output_end) = output_offset.checked_add(output_bytes) else {
+        return gpgpu_t5_one_row_matvec_failure(
+            "output-range-overflow",
+            program,
+            output_gpu,
+            cpu_expected_bits,
+            live_k_dim,
+        );
+    };
+    if output_end > warm.gpgpu_arena_len {
+        return gpgpu_t5_one_row_matvec_failure(
+            "output-range-outside-arena",
+            program,
+            output_gpu,
+            cpu_expected_bits,
+            live_k_dim,
+        );
+    }
+
+    let output_virt = unsafe { warm.gpgpu_arena_virt.add(output_offset) };
+    let output_count = output_bytes / core::mem::size_of::<u32>();
+    crate::intel::dma_flush(output_virt, output_bytes);
+    let output_first_before = unsafe { core::ptr::read_volatile(output_virt as *const u32) };
+    let output_hits_lo64 = unsafe {
+        gpgpu_stage_dword_hits_mask_lo64(output_virt as *const u32, output_count, cpu_expected_bits)
+    };
+    let reason = if program.words.is_empty() {
+        "eu-live-load-matvec-artifact-missing"
+    } else {
+        "disabled-until-live-load-artifact-review"
+    };
+    crate::log!(
+        "intel/gpgpu: t5-one-row-matvec submitted=0 finished=0 readback_ok=0 compare_ok=0 reason={} program_source={} groups=1 expected_lane_dispatch=8 observed_lane_dispatch=0 output_gpu=0x{:X} output_first_before=0x{:08X} output_first_after=0x{:08X} gpu_value=0x00000000 cpu_expected_bits=0x{:08X} output_hits_lo64=0x{:016X} live_k_dim={} requires_live_gpu_load={} finish_marker=0x00000000 finish_expected=0x{:08X} batch_bytes=0x0 output_owner=cpu-ap next=generate-t5-live-load-bf16-dot-eu-artifact does_not_prove=model_matvec_or_gpu_live_load\n",
+        reason,
+        program.name,
+        output_gpu,
+        output_first_before,
+        output_first_before,
+        cpu_expected_bits,
+        output_hits_lo64,
+        live_k_dim,
+        trueos_eu::gfx12::T5_ONE_ROW_MATVEC_REQUIRES_LIVE_GPU_LOAD as u8,
+        RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+    );
+    crate::intel::GpgpuT5OneRowMatvecProof {
+        submitted: false,
+        finished: false,
+        readback_ok: false,
+        compare_ok: false,
+        reason,
+        program_name: program.name,
+        output_gpu,
+        gpu_value: 0,
+        cpu_expected_bits,
+        output_first_before,
+        output_first_after: output_first_before,
+        output_hits_lo64,
+        dispatch_delta: 0,
+        finish_marker: 0,
+        expected_finish_marker: RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        batch_bytes: 0,
+        live_k_dim,
+        requires_live_gpu_load: trueos_eu::gfx12::T5_ONE_ROW_MATVEC_REQUIRES_LIVE_GPU_LOAD,
+    }
+}
+
 fn gpgpu_one_tile_compare_failure(
     reason: &'static str,
     program: GpgpuEuProgram,
@@ -2144,6 +2267,45 @@ fn gpgpu_one_tile_compare_failure(
         finish_marker: 0,
         expected_finish_marker: RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
         batch_bytes: 0,
+    }
+}
+
+fn gpgpu_t5_one_row_matvec_failure(
+    reason: &'static str,
+    program: GpgpuEuProgram,
+    output_gpu: u64,
+    cpu_expected_bits: u32,
+    live_k_dim: usize,
+) -> crate::intel::GpgpuT5OneRowMatvecProof {
+    crate::log!(
+        "intel/gpgpu: t5-one-row-matvec submitted=0 finished=0 readback_ok=0 compare_ok=0 reason={} program_source={} groups=1 expected_lane_dispatch=8 observed_lane_dispatch=0 output_gpu=0x{:X} output_first_before=0x00000000 output_first_after=0x00000000 gpu_value=0x00000000 cpu_expected_bits=0x{:08X} output_hits_lo64=0x0000000000000000 live_k_dim={} requires_live_gpu_load={} finish_marker=0x00000000 finish_expected=0x{:08X} batch_bytes=0x0 output_owner=cpu-ap next=fix-t5-stage-or-generate-live-load-artifact does_not_prove=model_matvec_or_gpu_live_load\n",
+        reason,
+        program.name,
+        output_gpu,
+        cpu_expected_bits,
+        live_k_dim,
+        trueos_eu::gfx12::T5_ONE_ROW_MATVEC_REQUIRES_LIVE_GPU_LOAD as u8,
+        RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+    );
+    crate::intel::GpgpuT5OneRowMatvecProof {
+        submitted: false,
+        finished: false,
+        readback_ok: false,
+        compare_ok: false,
+        reason,
+        program_name: program.name,
+        output_gpu,
+        gpu_value: 0,
+        cpu_expected_bits,
+        output_first_before: 0,
+        output_first_after: 0,
+        output_hits_lo64: 0,
+        dispatch_delta: 0,
+        finish_marker: 0,
+        expected_finish_marker: RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        batch_bytes: 0,
+        live_k_dim,
+        requires_live_gpu_load: trueos_eu::gfx12::T5_ONE_ROW_MATVEC_REQUIRES_LIVE_GPU_LOAD,
     }
 }
 
