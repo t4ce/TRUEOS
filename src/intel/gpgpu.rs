@@ -1218,6 +1218,10 @@ const GPGPU_SIP_HANDLER_VARIANT: trueos_eu::gfx12::Gfx12EotVariant =
 const GPGPU_USE_STATIC_DP4A_STORE_THEN_EOT: bool = true;
 const GPGPU_USE_HDC_STORE_THEN_EOT: bool = true;
 const GPGPU_USE_GFX125_COMPUTE_WALKER: bool = false;
+const GPGPU_WALKER_GROUP_X_DIM_LADDER: &[u32] =
+    &[186, 224, 256, 288, 320, 352, 384, 416, 448, 480, 512];
+const GPGPU_WALKER_GROUP_THREADS: u32 = 1;
+const GPGPU_WALKER_SIMD8_LANES: u32 = 8;
 
 #[derive(Copy, Clone)]
 struct GpgpuEuProgram {
@@ -1457,12 +1461,35 @@ pub(crate) fn submit_gpgpu_preflight_once() {
     let eu_artifact = prepare_gpgpu_program_artifact(warm, accepted);
     log_gpgpu_program_artifact_status(eu_artifact);
     if eu_artifact.walker_encoded {
-        let walker = submit_gpgpu_compute_walker_probe(dev, warm);
-        if !walker.retired {
-            recover_render_engine_after_nonretired_submit(dev, warm, "gpgpu-compute-walker");
+        for (scale_index, &group_x_dim) in GPGPU_WALKER_GROUP_X_DIM_LADDER.iter().enumerate() {
+            let walker = submit_gpgpu_compute_walker_probe(dev, warm, scale_index, group_x_dim);
+            let scale_passed = gpgpu_walker_scale_passed(walker);
+            log_gpgpu_compute_walker_status(walker);
+            if !walker.retired {
+                recover_render_engine_after_nonretired_submit(dev, warm, "gpgpu-compute-walker");
+            }
+            if !scale_passed {
+                crate::log!(
+                    "intel/gpgpu: walker-scale-ladder stop_at_scale={} reason=first-nonclean-proof requested_groups={} expected_lane_dispatch={} observed_lane_dispatch={}\n",
+                    walker.scale_index,
+                    walker.requested_group_x_dim,
+                    walker.expected_lane_dispatch,
+                    walker.dispatch_delta,
+                );
+                break;
+            }
         }
-        log_gpgpu_compute_walker_status(walker);
     }
+}
+
+fn gpgpu_walker_scale_passed(proof: GpgpuComputeWalkerProof) -> bool {
+    let post_walker_marker_retired = proof.marker == RCS_EXEC_RESULT_COMPUTE_WALKER_DONE;
+    let store_ok = !proof.expects_store || proof.result_c_changed_by_eu;
+    proof.submitted
+        && proof.retired
+        && post_walker_marker_retired
+        && store_ok
+        && proof.dispatch_delta == proof.expected_lane_dispatch as u64
 }
 
 fn gpgpu_arena_gpu_base(arena_bytes: usize) -> u64 {
@@ -2137,6 +2164,11 @@ fn disabled_gpgpu_store_surface_state() -> GpgpuStoreSurfaceState {
 struct GpgpuComputeWalkerProof {
     program_name: &'static str,
     expects_store: bool,
+    scale_index: usize,
+    requested_group_x_dim: u32,
+    requested_group_count: u32,
+    expected_hw_threads: u32,
+    expected_lane_dispatch: u32,
     submitted: bool,
     retired: bool,
     marker: u32,
@@ -2198,8 +2230,12 @@ impl GpgpuThreadDebugSnapshot {
 fn submit_gpgpu_compute_walker_probe(
     dev: crate::intel::Dev,
     warm: RenderWarmState,
+    scale_index: usize,
+    group_x_dim: u32,
 ) -> GpgpuComputeWalkerProof {
     let program = selected_gpgpu_eu_program();
+    let expected_hw_threads = group_x_dim.saturating_mul(GPGPU_WALKER_GROUP_THREADS);
+    let expected_lane_dispatch = expected_hw_threads.saturating_mul(GPGPU_WALKER_SIMD8_LANES);
     let dispatch_before = read_gpgpu_threads_dispatched(dev);
     let marker_slot = RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD;
     unsafe {
@@ -2234,7 +2270,7 @@ fn submit_gpgpu_compute_walker_probe(
     let batch_result = if GPGPU_USE_GFX125_COMPUTE_WALKER {
         encode_gfx125_compute_walker_probe_batch(batch, store_surface, program)
     } else {
-        encode_gfx12_gpgpu_walker_probe_batch(warm, batch, store_surface, program)
+        encode_gfx12_gpgpu_walker_probe_batch(warm, batch, store_surface, program, group_x_dim)
     };
     let batch_bytes = match batch_result {
         Ok(bytes) => bytes,
@@ -2243,6 +2279,11 @@ fn submit_gpgpu_compute_walker_probe(
             return GpgpuComputeWalkerProof {
                 program_name: program.name,
                 expects_store: program.expects_store,
+                scale_index,
+                requested_group_x_dim: group_x_dim,
+                requested_group_count: group_x_dim,
+                expected_hw_threads,
+                expected_lane_dispatch,
                 submitted: false,
                 retired: false,
                 marker: 0,
@@ -2384,6 +2425,11 @@ fn submit_gpgpu_compute_walker_probe(
     GpgpuComputeWalkerProof {
         program_name: program.name,
         expects_store: program.expects_store,
+        scale_index,
+        requested_group_x_dim: group_x_dim,
+        requested_group_count: group_x_dim,
+        expected_hw_threads,
+        expected_lane_dispatch,
         submitted: true,
         retired,
         marker,
@@ -2701,6 +2747,7 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     batch_dwords: &mut [u32],
     store_surface: GpgpuStoreSurfaceState,
     program: GpgpuEuProgram,
+    walker_group_x_dim: u32,
 ) -> Result<usize, &'static str> {
     const MEDIA_VFE_STATE_CMD: u32 = (3 << 29) | (2 << 27) | 7;
     const MEDIA_CURBE_LOAD_CMD: u32 = (3 << 29) | (2 << 27) | (1 << 16) | 2;
@@ -2723,8 +2770,7 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     const IDD_PAYLOAD_DWORDS: usize = 8;
     const IDD_LOAD_DWORDS: usize = IDD_PAYLOAD_DWORDS;
     const CURBE_READ_LENGTH_8DW: u32 = if GPGPU_LOAD_DUMMY_CURBE { 1 } else { 0 };
-    const GPGPU_THREADS_IN_GROUP: u32 = 1;
-    const GPGPU_WALKER_GROUP_X_DIM: u32 = 186;
+    const GPGPU_THREADS_IN_GROUP: u32 = GPGPU_WALKER_GROUP_THREADS;
     const GPGPU_WALKER_GROUP_Y_DIM: u32 = 1;
     const GPGPU_WALKER_GROUP_Z_DIM: u32 = 1;
     const CURBE_TOTAL_BYTES: usize = if GPGPU_LOAD_DUMMY_CURBE {
@@ -3109,7 +3155,7 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     push(batch_dwords, &mut cursor, GPGPU_THREADS_IN_GROUP - 1)?; // SIMD8 counters
     push(batch_dwords, &mut cursor, 0)?; // Thread Group ID Starting X
     push(batch_dwords, &mut cursor, 0)?; // Reserved
-    push(batch_dwords, &mut cursor, GPGPU_WALKER_GROUP_X_DIM)?; // Thread Group ID X Dimension
+    push(batch_dwords, &mut cursor, walker_group_x_dim)?; // Thread Group ID X Dimension
     push(batch_dwords, &mut cursor, 0)?; // Thread Group ID Starting Y
     push(batch_dwords, &mut cursor, 0)?; // Reserved
     push(batch_dwords, &mut cursor, GPGPU_WALKER_GROUP_Y_DIM)?; // Thread Group ID Y Dimension
@@ -3340,6 +3386,26 @@ fn log_gpgpu_compute_walker_status(proof: GpgpuComputeWalkerProof) {
     } else {
         "fix-walker-thread-start"
     };
+    let lane_count_matches = proof.dispatch_delta == proof.expected_lane_dispatch as u64;
+    crate::log!(
+        "intel/gpgpu: walker-scale-proof scale_index={} program_source={} requested_groups={} requested_group_count={} threads_per_group={} expected_hw_threads={} simd_lanes_per_thread={} expected_lane_dispatch={} observed_lane_dispatch={} lane_count_matches={} retired={} post_walker_marker={} store_seen={} store_value=0x{:08X} expected_store=0x{:08X} failure_class={}\n",
+        proof.scale_index,
+        proof.program_name,
+        proof.requested_group_x_dim,
+        proof.requested_group_count,
+        GPGPU_WALKER_GROUP_THREADS,
+        proof.expected_hw_threads,
+        GPGPU_WALKER_SIMD8_LANES,
+        proof.expected_lane_dispatch,
+        proof.dispatch_delta,
+        lane_count_matches as u8,
+        proof.retired as u8,
+        post_walker_marker_retired as u8,
+        proof.result_c_changed_by_eu as u8,
+        proof.c_value,
+        proof.expected_store_value,
+        failure_class,
+    );
     crate::log!(
         "intel/gpgpu: eu-frontier program_source={} command_breadcrumbs_ok={} post_walker_marker={} thread_dispatch_delta={} dispatch_units=simd8-lanes store_expected=0x{:08X} store_target_slot={} store_target_value=0x{:08X} store_hits_mask_lo64=0x{:016X} eot_retired={} frontier={} next={}\n",
         proof.program_name,
