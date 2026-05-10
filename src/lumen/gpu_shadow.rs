@@ -132,6 +132,7 @@ pub(crate) fn observe_live_bf16_matvec_probe(
     let x_checksum = checksum_f32_prefix(x, k_dim);
     let row_checksum = checksum_bytes(&w_rowmajor_bf16[..k_dim.saturating_mul(2)]);
     let matrix_id = manifest.map(|entry| entry.matrix_id).unwrap_or(0);
+    let matrix_epoch = manifest.map(|entry| entry.epoch).unwrap_or(0);
     let matrix_name_hash = manifest.map(|entry| entry.name_hash).unwrap_or(0);
     let matrix_name_len = manifest.map(|entry| entry.name_len).unwrap_or(0);
     let matrix_rows = manifest.map(|entry| entry.rows).unwrap_or(0);
@@ -140,7 +141,7 @@ pub(crate) fn observe_live_bf16_matvec_probe(
     let matrix_bytes = manifest.map(|entry| entry.byte_len).unwrap_or(0);
 
     crate::log!(
-        "lumen-gpu-shadow: director-step step=4 backend=local-gpu mode=t4-live-row-probe ready=1 call={} rows={} k_dim={} chunk_rows={} chunks={} manifest={} matrix=0x{:016X} matrix_name_hash=0x{:016X} matrix_name_len={} matrix_rows={} matrix_k_dim={} matrix_ptr=0x{:X} matrix_bytes={} row=0 row_ptr=0x{:X} x_ptr=0x{:X} x_bytes={} x_checksum=0x{:016X} row_checksum=0x{:016X} static4_weights=01020304 static4_expected_bits=0x{:08X} row0_cpu_expected_bits=0x{:08X} gpu_submission=0 output_owner=cpu-ap next=upload-live-x-and-bind-manifest-row does_not_prove=gpu_live_load_or_model_matvec\n",
+        "lumen-gpu-shadow: director-step step=4 backend=local-gpu mode=t4-live-row-probe ready=1 call={} rows={} k_dim={} chunk_rows={} chunks={} manifest={} matrix=0x{:016X} matrix_epoch={} matrix_name_hash=0x{:016X} matrix_name_len={} matrix_rows={} matrix_k_dim={} matrix_ptr=0x{:X} matrix_bytes={} matrix_access=resident-read-only row=0 row_ptr=0x{:X} x_ptr=0x{:X} x_bytes={} x_checksum=0x{:016X} row_checksum=0x{:016X} static4_weights=01020304 static4_expected_bits=0x{:08X} row0_cpu_expected_bits=0x{:08X} gpu_submission=0 output_owner=cpu-ap next=stage-manifest-row-to-gpgpu-arena does_not_prove=gpu_live_load_or_model_matvec\n",
         plan.call_index,
         n_rows,
         k_dim,
@@ -148,6 +149,7 @@ pub(crate) fn observe_live_bf16_matvec_probe(
         chunks,
         manifest.is_some() as u8,
         matrix_id,
+        matrix_epoch,
         matrix_name_hash,
         matrix_name_len,
         matrix_rows,
