@@ -135,6 +135,20 @@ pub(crate) struct GpgpuOneTileStageProof {
 }
 
 #[derive(Copy, Clone, Debug)]
+pub(crate) struct GpgpuTileRowsStageProof {
+    pub(crate) staged: bool,
+    pub(crate) reason: &'static str,
+    pub(crate) readback_ok: bool,
+    pub(crate) output_zeroed: bool,
+    pub(crate) output_gpu: u64,
+    pub(crate) row_count: usize,
+    pub(crate) row_bytes: usize,
+    pub(crate) rows_checksum: u64,
+    pub(crate) staged_rows_checksum: u64,
+    pub(crate) output_nonzero_dwords: usize,
+}
+
+#[derive(Copy, Clone, Debug)]
 pub(crate) struct GpgpuOneTileSentinelProof {
     pub(crate) submitted: bool,
     pub(crate) finished: bool,
@@ -194,6 +208,27 @@ pub(crate) struct GpgpuT5OneRowMatvecProof {
     pub(crate) batch_bytes: usize,
     pub(crate) live_k_dim: usize,
     pub(crate) requires_live_gpu_load: bool,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct GpgpuT62PartialMatvecProof {
+    pub(crate) submitted: bool,
+    pub(crate) finished: bool,
+    pub(crate) readback_ok: bool,
+    pub(crate) compare_ok: bool,
+    pub(crate) reason: &'static str,
+    pub(crate) program_name: &'static str,
+    pub(crate) output_gpu: u64,
+    pub(crate) output_words: [u32; 8],
+    pub(crate) expected_words: [u32; 8],
+    pub(crate) compare_mask: u32,
+    pub(crate) expected_mask: u32,
+    pub(crate) dispatch_delta: u64,
+    pub(crate) finish_marker: u32,
+    pub(crate) expected_finish_marker: u32,
+    pub(crate) batch_bytes: usize,
+    pub(crate) row_count: usize,
+    pub(crate) live_k_dim: usize,
 }
 
 fn pick_media_boot_demo_spawner() -> Option<(u32, SendSpawner)> {
@@ -448,7 +483,7 @@ pub(crate) fn gpgpu_preflight_status() -> GpgpuPreflightStatus {
     }
 }
 
-pub(crate) fn stage_gpgpu_one_tile_shadow_probe(
+pub(crate) fn stage_gpgpu_one_tile_record_probe(
     x: &[f32],
     row_bf16: &[u8],
     k_dim: usize,
@@ -457,7 +492,7 @@ pub(crate) fn stage_gpgpu_one_tile_shadow_probe(
     row_checksum: u64,
     cpu_expected_bits: u32,
 ) -> GpgpuOneTileStageProof {
-    self::gpgpu::stage_gpgpu_one_tile_shadow_probe(
+    self::gpgpu::stage_gpgpu_one_tile_record_probe(
         x,
         row_bf16,
         k_dim,
@@ -465,6 +500,22 @@ pub(crate) fn stage_gpgpu_one_tile_shadow_probe(
         x_checksum,
         row_checksum,
         cpu_expected_bits,
+    )
+}
+
+pub(crate) fn stage_gpgpu_tile_record_rows_probe(
+    output_gpu: u64,
+    rows_bf16: &[u8],
+    row_count: usize,
+    k_dim: usize,
+    rows_checksum: u64,
+) -> GpgpuTileRowsStageProof {
+    self::gpgpu::stage_gpgpu_tile_record_rows_probe(
+        output_gpu,
+        rows_bf16,
+        row_count,
+        k_dim,
+        rows_checksum,
     )
 }
 
@@ -516,6 +567,36 @@ pub(crate) fn submit_gpgpu_t6_one_row_matvec_probe(
         output_gpu,
         output_bytes,
         cpu_expected_bits,
+        live_k_dim,
+    )
+}
+
+pub(crate) fn submit_gpgpu_t61_one_row_matvec_probe(
+    output_gpu: u64,
+    output_bytes: usize,
+    cpu_expected_bits: u32,
+    live_k_dim: usize,
+) -> GpgpuT5OneRowMatvecProof {
+    self::gpgpu::submit_gpgpu_t61_one_row_matvec_probe(
+        output_gpu,
+        output_bytes,
+        cpu_expected_bits,
+        live_k_dim,
+    )
+}
+
+pub(crate) fn submit_gpgpu_t62_partial_matvec_probe(
+    output_gpu: u64,
+    output_bytes: usize,
+    expected_words: [u32; 8],
+    row_count: usize,
+    live_k_dim: usize,
+) -> GpgpuT62PartialMatvecProof {
+    self::gpgpu::submit_gpgpu_t62_partial_matvec_probe(
+        output_gpu,
+        output_bytes,
+        expected_words,
+        row_count,
         live_k_dim,
     )
 }

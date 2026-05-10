@@ -22,6 +22,8 @@ pub enum EuArtifactKind {
     T5StoreOnlyArenaOffsetThenHdc1StoreThenThreadSpawnerEot,
     T5SmallLive4Bf16DotThenHdc1StoreThenThreadSpawnerEot,
     T6SmallLive8Bf16DotThenHdc1StoreThenThreadSpawnerEot,
+    T61Live16Bf16DotThenHdc1StoreThenThreadSpawnerEot,
+    T62RowIndexedLive16Bf16DotThenHdc1StoreThenThreadSpawnerEot,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

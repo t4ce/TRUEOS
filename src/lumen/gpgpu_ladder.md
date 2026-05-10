@@ -146,7 +146,7 @@ Current hold setting:
 
 The Lumen backend planner now budgets only 20% of that validated local GPU
 capacity for the GPU side.  For the current `1792` row decode matvec, that
-means roughly `37` GPU-budget hardware threads and `358` target shadow rows,
+means roughly `37` GPU-budget hardware threads and `358` target proof rows,
 while CPU/AP remains responsible for the real result and the remaining rows.
 
 The runtime status exported to Lumen latches the clean `186` proof.  Later
@@ -176,7 +176,7 @@ The next `burn_baba` ladder should stay local first:
 
 1. Keep `burn_baby` CPU/AP as the correctness backend.
 2. Keep net CPU disabled as a route and only use it later as a separate shadow.
-3. Add a local GPU shadow result type that can report:
+3. Add a local GPU proof/pilot result type that can report:
    `candidate`, `program_name`, `group_count`, `lane_dispatch_count`,
    `expected_store_value`, `observed_store_value`, and `frontier`.
 4. Advance the artifact from one global magic store to indexed magic stores:
@@ -185,8 +185,9 @@ The next `burn_baba` ladder should stay local first:
 6. Then bind the Lumen tile arena for `x`, BF16 weights, and F32 output.
 7. Only after that, route selected BF16 matvec chunks through local GPU.
 
-The current correct label for the local GPU side is still "shadow/probe", not
-"matvec backend".
+The current correct label for the local GPU side is "proof/pilot", not "matvec
+backend".  It now runs against actual Lumen work and writes distinct tile-record
+outputs, but CPU/AP still owns the real inference result.
 
 ## T4 Live-Input Sidepath
 
@@ -236,7 +237,7 @@ manifest row + live activation vector + expected output.  It still logs
 
 Readiness call: the T4 live-input capture/CPU-reference sidepath is complete
 enough to proceed to the next rung.  The next rung should be a guarded one-tile
-GPU shadow compare that keeps CPU/AP ownership of the real output, stages one
+GPU proof compare that keeps CPU/AP ownership of the real output, stages one
 manifest row plus `x` into the GPGPU arena, submits one tile only, and compares
 the GPU-written result against the already logged CPU reference.
 
@@ -263,34 +264,35 @@ or compares output ownership.
 ## T4.5 One-Tile Arena Stage
 
 Status: runtime-observed as a staging-only bridge from T4 to the first one-tile
-GPU shadow compare.  This proves CPU-side staging into the mapped GPGPU arena,
-not a live GPU-load or model-matvec result.
+GPU proof compare.  This proves CPU-side staging into the mapped GPGPU tile
+record, not a live GPU-load or model-matvec result.
 
 After the T4 live-row record, Lumen now calls
-`intel::stage_gpgpu_one_tile_shadow_probe` and emits:
+`intel::stage_gpgpu_one_tile_record_probe` and emits:
 
 - `intel/gpgpu: one-tile-stage`
-- `lumen-gpu-proof: director-step step=5 mode=one-tile-arena-stage`
+- `lumen-gpu-proof: director-step step=5 mode=gpgpu-actual-work-tile-stage`
 
-The staging layout is deliberately minimal:
+The staging layout is record-local:
 
-- `x` vector at `arena_gpu_base + 0`
-- row-0 BF16 weights at `arena_gpu_base + x_bytes`
-- output tile at `arena_gpu_base + x_bytes + weight_tile_bytes`
+- `x` vector at record-local `+0x0`
+- packed BF16 weights at record-local `+0x2000`
+- output tile at record-local `+0x102000`
+- record size `0x103000`
 
 The stage copies the live `x` bytes and one BF16 row into the mapped GPGPU
 arena, zeros the rest of the weight tile/output tile, flushes those ranges, and
 checksums the staged bytes back from CPU memory.  It still logs
 `gpu_submission=0`, so this is not a live GPU-load proof.  Its job is to make
 the next artifact precise: the GPU kernel should read those staged addresses,
-write one shadow result, and compare that result to `row0_cpu_expected_bits`.
+write one proof result, and compare that result to `row0_cpu_expected_bits`.
 
 Runtime checkpoint:
 
 - 2026-05-10 `make iso` produced `bld/trueos.iso` from
   `bld/artifacts/debug-859619db83ff/TRUEOS.elf`.
 - The subsequent Lumen inference trace reached step 5:
-  `lumen-gpu-proof: director-step step=5 mode=one-tile-arena-stage`.
+  `lumen-gpu-proof: director-step step=5 mode=gpgpu-actual-work-tile-stage`.
 - The Intel staging proof reported:
   `intel/gpgpu: one-tile-stage staged=1 reason=staged`.
 - Staged layout:
@@ -347,7 +349,7 @@ Expected clean proof:
 - `gpu_submission=0`
 
 The important interpretation is narrow: the arena contains the live `x` vector
-and row-0 BF16 bytes, the shadow output tile is still untouched zero state, and
+and row BF16 bytes, the proof output tile is still untouched zero state, and
 CPU/AP still owns the real inference result.  This proves the starting line for
 the first actual one-worker read/ALU/write kernel, not GPU output or model
 matvec correctness.
@@ -420,7 +422,7 @@ This rung is the first local GPU result that is surfaced upward as comparison
 information rather than a magic addressability sentinel.  It still does not
 claim a live model load.  The kernel is a one-worker copy of the proven static
 DP4A/HDC-store/EOT shell, patched at runtime so the GPU writes the CPU reference
-bits into the staged one-tile output shadow:
+bits into the staged one-tile output slot:
 
 - program:
   `gfx12-t48-one-tile-output-compare-dp4a-echo-hdc1-stateless-store-then-ts-eot`
@@ -489,8 +491,9 @@ matvec:
 - `tile_index=2`, row `512`
 
 All three staged tiles compare correctly for the T5 live4 slice.  The aggregate
-proof reports `armed_tiles=3`, `staged_tiles=3`, `submitted_tiles=3`, and
-`compare_ok_tiles=3`.  Each tile now owns a separate arena record:
+proof reports `armed_tiles=3`, `staged_tiles=3`,
+`t5_submitted_tiles=3`, `t5_finished_tiles=3`, and
+`t5_compare_ok_tiles=3`.  Each tile now owns a separate arena record:
 
 - record-local `x` starts at `+0x0`
 - record-local packed BF16 row starts at `+0x2000`
@@ -500,6 +503,14 @@ The T5/T6 artifacts still see the same local offsets, but the runtime binds the
 surface base to the selected tile record.  That lets the current proof address
 distinct output rows without regenerating the shader.  CPU/AP keeps the real
 inference result.
+
+The cleaned-up runtime labels for this stage are:
+
+- `gpgpu-actual-work-tile-stage`
+- `gpgpu-actual-work-tile-readback`
+- `tile-store-only-control`
+- `tile-load-echo`
+- `t5-small-live4-bf16-dot`
 
 Current T5 scale cap:
 
@@ -539,8 +550,15 @@ Runtime shape:
 
 - `t5-small-live4-bf16-dot` remains step 9.
 - `t6-small-live8-bf16-dot` is step 10.
-- `t6-actual-work-tiles` is step 11 and reports separate T5/T6 submitted,
-  finished, and compare-ok tile counts.
+- `t6-1-live16-bf16-dot` is step 11 and widens the same one-row proof to
+  live16.
+- `t6-2-partial-tile-stage` is step 12 and restages a small tile prefix with
+  multiple real matrix rows.
+- `t6-2-row-indexed-live16-partial` is step 13 and writes one output slot per
+  workgroup/row for the staged prefix.
+- `t6-2-actual-work-partial-tiles` is step 14 and reports separate T5, T6,
+  T6.1, and T6.2 submitted, finished, and compare-ok tile counts.
+- The aggregate next marker is now `next=raise-row-count-or-live-k`.
 
 Current T6 scale cap:
 
@@ -549,16 +567,36 @@ Current T6 scale cap:
 - Do not tune this cap as a throughput knob.  Revisit only when the kernel,
   CGP queueing model, row-count semantics, or retire logic changes.
 
-Next meaningful direction: widen the actual math toward the full row while
-keeping the distinct tile-record output ownership.  Raising group count alone
-does not turn the proof into full matrix-vector work.
+Next meaningful direction: raise either the row prefix count beyond 8 or the
+live-k reduction beyond 16.  Raising group count alone still does not turn the
+proof into full matrix-vector work.
 
 ## T6.1 Live-K Tier Naming
 
-Reserve `T6.1` for the next artifact that widens the packed-BF16 live reduction
-beyond T6 live8.  The current distinct-output patch is not a new shader
-artifact: it is a runtime addressing change that gives each armed tile its own
-record while preserving the existing T5/T6 native bytes.
+`T6.1` is now the generated live16 artifact:
+`gfx12-t6-1-live16-packed-bf16-dot-hdc1-stateless-store-then-ts-eot`.
+
+It keeps the T5/T6 tile-record layout and one-row output slot, but widens the
+packed-BF16 reduction from 8 lanes to 16 lanes.  The oracle contract is recorded
+next to the generated sources in
+`.codex_tmp/t6_1_live16_packed_bf16_artifact_contract.md`.
+
+## T6.2 Row-Indexed Partial Tile
+
+`T6.2` is the row-indexed live16 artifact:
+`gfx12-t6-2-row-indexed-live16-packed-bf16-dot-hdc1-stateless-store-then-ts-eot`.
+
+It changes the shader contract in the smallest useful way:
+
+- `gl_WorkGroupID.x` selects the row inside the staged tile record.
+- The same value selects the output dword inside the tile output region.
+- Each workgroup computes one live16 packed-BF16 partial dot.
+- The first runtime target is 8 rows, so the proof compares output slots
+  `[0..7]` against CPU live16 references.
+
+This is not full GEMM yet.  It proves that a tile can carry multiple staged
+rows and that multiple workers can produce distinct row partials inside the
+same output tile.
 
 ## Backend Selection Boundary
 
@@ -574,10 +612,11 @@ matvec descriptors to another host over TCP, but this rung stays local:
 - Runtime confirms `lumen-net: remote bf16 matvec adapter present
   route_enabled=0 action=local-burn-baby-only`.
 
-The local GPU role is therefore only one shadow tile.  It must not receive half
-the row range or become a result owner.  The CPU/AP path continues to compute
-the full local result, while the GPU path acts like one extra tile worker whose
-first job is proving a single shadow output.
+The local GPU role is therefore proof/pilot only.  It may run a small set of
+actual-work tile records, but it must not receive half the row range or become a
+result owner.  The CPU/AP path continues to compute the full local result, while
+the GPU path acts like a guarded tile worker whose current job is proving staged
+loads, packed-BF16 math, and record-local output writes.
 
 ## Iteration Loop
 
@@ -594,6 +633,6 @@ For each one-tile iteration:
 4. Update this ladder with the exact proof or blocker.
 5. Only then advance the next rung.
 
-The rule for this phase is still CPU-reference-first: the GPU may write shadow
-results, but CPU/AP keeps ownership of real inference output until the one-tile
-compare is proven clean.
+The rule for this phase is still CPU-reference-first: the GPU may write proof
+results into tile-record output slots, but CPU/AP keeps ownership of real
+inference output until a later rung explicitly changes that contract.
