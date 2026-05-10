@@ -116,6 +116,18 @@ static void init_t5_small_live4_trueos_arena(uint32_t *words) {
     words[2051] = 0x00004080u; // w3 = bf16(4.0)
 }
 
+static void init_t5_small_live4_trueos_arena_packed_bf16(uint32_t *words) {
+    init_t5_small_live4(words);
+    words[8] = 0;
+    words[9] = 0;
+    words[10] = 0;
+    words[11] = 0;
+    words[2048] = 0x40003F80u; // w0,w1 = bf16(1.0), bf16(2.0)
+    words[2049] = 0x40804040u; // w2,w3 = bf16(3.0), bf16(4.0)
+    words[2050] = 0;
+    words[2051] = 0;
+}
+
 static int verify_sentinel(const uint32_t *words) {
     const uint32_t expected_lanes = 8;
     printf(
@@ -200,6 +212,32 @@ static int verify_t5_small_live4_trueos_arena(const uint32_t *words) {
     return ok;
 }
 
+static int verify_t5_small_live4_trueos_arena_packed_bf16(const uint32_t *words) {
+    const uint32_t out = 264192u;
+    const uint32_t expected_bits = 0x41F00000u; // 1*1 + 2*2 + 3*3 + 4*4 = 30.0
+    const int ok =
+        words[out + 0] == expected_bits &&
+        words[out + 1] == 4u &&
+        words[out + 2] == 0xC0DE7505u &&
+        words[out + 3] == 0u;
+    printf(
+        "oracle-app: t5-small-live4-trueos-arena-packed-bf16 input_x_bits=0x%08X 0x%08X 0x%08X 0x%08X packed_row_words=0x%08X 0x%08X out_dword=%u\n",
+        words[0], words[1], words[2], words[3],
+        words[2048], words[2049],
+        out
+    );
+    printf(
+        "oracle-app: t5-small-live4-trueos-arena-packed-bf16 verified=%d expected_bits=0x%08X observed_bits=0x%08X live_k=%u sentinel=0x%08X workgroup=%u\n",
+        ok,
+        expected_bits,
+        words[out + 0],
+        words[out + 1],
+        words[out + 2],
+        words[out + 3]
+    );
+    return ok;
+}
+
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
 
@@ -212,7 +250,14 @@ int main(int argc, char **argv) {
     const int is_t5_small_live4 = strcmp(workload, "t5-small-live4") == 0;
     const int is_t5_small_live4_trueos_arena =
         strcmp(workload, "t5-small-live4-trueos-arena") == 0;
-    if (!is_sentinel && !is_t5_small_live4 && !is_t5_small_live4_trueos_arena) {
+    const int is_t5_small_live4_trueos_arena_packed_bf16 =
+        strcmp(workload, "t5-small-live4-trueos-arena-packed-bf16") == 0;
+    if (
+        !is_sentinel &&
+        !is_t5_small_live4 &&
+        !is_t5_small_live4_trueos_arena &&
+        !is_t5_small_live4_trueos_arena_packed_bf16
+    ) {
         fprintf(stderr, "unsupported workload: %s\n", workload);
         return 1;
     }
@@ -313,7 +358,10 @@ int main(int argc, char **argv) {
     VkQueue queue;
     vkGetDeviceQueue(device, queue_family, 0, &queue);
 
-    const VkDeviceSize buffer_size = is_t5_small_live4_trueos_arena ? 0x103000u : 4096u;
+    const VkDeviceSize buffer_size =
+        (is_t5_small_live4_trueos_arena || is_t5_small_live4_trueos_arena_packed_bf16)
+            ? 0x103000u
+            : 4096u;
     const VkBufferCreateInfo buffer_info = {
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
         .size = buffer_size,
@@ -343,6 +391,8 @@ int main(int argc, char **argv) {
         init_t5_small_live4((uint32_t *)mapped);
     } else if (is_t5_small_live4_trueos_arena) {
         init_t5_small_live4_trueos_arena((uint32_t *)mapped);
+    } else if (is_t5_small_live4_trueos_arena_packed_bf16) {
+        init_t5_small_live4_trueos_arena_packed_bf16((uint32_t *)mapped);
     }
 
     Spirv spv = read_spirv(argv[1]);
@@ -492,9 +542,11 @@ int main(int argc, char **argv) {
     printf("oracle-app: lens macro=submit-complete wait-idle-done\n");
 
     const uint32_t *words = (const uint32_t *)mapped;
-    const int ok = is_t5_small_live4_trueos_arena
-        ? verify_t5_small_live4_trueos_arena(words)
-        : is_t5_small_live4 ? verify_t5_small_live4(words) : verify_sentinel(words);
+    const int ok = is_t5_small_live4_trueos_arena_packed_bf16
+        ? verify_t5_small_live4_trueos_arena_packed_bf16(words)
+        : is_t5_small_live4_trueos_arena
+            ? verify_t5_small_live4_trueos_arena(words)
+            : is_t5_small_live4 ? verify_t5_small_live4(words) : verify_sentinel(words);
 
     vkUnmapMemory(device, memory);
     vkDestroyCommandPool(device, command_pool, NULL);

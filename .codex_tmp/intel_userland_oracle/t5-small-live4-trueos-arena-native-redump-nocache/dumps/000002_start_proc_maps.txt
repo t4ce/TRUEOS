@@ -1,0 +1,36 @@
+64f4def2c000-64f4def2e000 r--p 00000000 103:03 11020106                  /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/t5-small-live4-trueos-arena-native-redump-nocache/build/vk_compute_sentinel
+64f4def2e000-64f4def30000 r-xp 00002000 103:03 11020106                  /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/t5-small-live4-trueos-arena-native-redump-nocache/build/vk_compute_sentinel
+64f4def30000-64f4def32000 r--p 00004000 103:03 11020106                  /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/t5-small-live4-trueos-arena-native-redump-nocache/build/vk_compute_sentinel
+64f4def32000-64f4def33000 r--p 00005000 103:03 11020106                  /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/t5-small-live4-trueos-arena-native-redump-nocache/build/vk_compute_sentinel
+64f4def33000-64f4def34000 rw-p 00006000 103:03 11020106                  /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/t5-small-live4-trueos-arena-native-redump-nocache/build/vk_compute_sentinel
+64f5152b6000-64f5152d7000 rw-p 00000000 00:00 0                          [heap]
+7942fca00000-7942fca28000 r--p 00000000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
+7942fca28000-7942fcbc1000 r-xp 00028000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
+7942fcbc1000-7942fcc30000 r--p 001c1000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
+7942fcc30000-7942fcc34000 r--p 0022f000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
+7942fcc34000-7942fcc36000 rw-p 00233000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
+7942fcc36000-7942fcc43000 rw-p 00000000 00:00 0 
+7942fce00000-7942fce01000 r--p 00000000 103:03 11020105                  /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/t5-small-live4-trueos-arena-native-redump-nocache/build/libtrueos_ioctl_trace.so
+7942fce01000-7942fce04000 r-xp 00001000 103:03 11020105                  /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/t5-small-live4-trueos-arena-native-redump-nocache/build/libtrueos_ioctl_trace.so
+7942fce04000-7942fce06000 r--p 00004000 103:03 11020105                  /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/t5-small-live4-trueos-arena-native-redump-nocache/build/libtrueos_ioctl_trace.so
+7942fce06000-7942fce07000 r--p 00005000 103:03 11020105                  /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/t5-small-live4-trueos-arena-native-redump-nocache/build/libtrueos_ioctl_trace.so
+7942fce07000-7942fce08000 rw-p 00006000 103:03 11020105                  /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/t5-small-live4-trueos-arena-native-redump-nocache/build/libtrueos_ioctl_trace.so
+7942fce08000-7942fd090000 rw-p 00000000 00:00 0 
+7942fd0af000-7942fd0b1000 rw-p 00000000 00:00 0 
+7942fd0b1000-7942fd0b7000 r--p 00000000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
+7942fd0b7000-7942fd109000 r-xp 00006000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
+7942fd109000-7942fd140000 r--p 00058000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
+7942fd140000-7942fd141000 r--p 0008f000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
+7942fd141000-7942fd142000 rw-p 00090000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
+7942fd15f000-7942fd161000 rw-p 00000000 00:00 0 
+7942fd161000-7942fd165000 r--p 00000000 00:00 0                          [vvar]
+7942fd165000-7942fd167000 r--p 00000000 00:00 0                          [vvar_vclock]
+7942fd167000-7942fd169000 r-xp 00000000 00:00 0                          [vdso]
+7942fd169000-7942fd16a000 r--p 00000000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+7942fd16a000-7942fd198000 r-xp 00001000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+7942fd198000-7942fd1a6000 r--p 0002f000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+7942fd1a6000-7942fd1a8000 r--p 0003d000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+7942fd1a8000-7942fd1a9000 rw-p 0003f000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+7942fd1a9000-7942fd1aa000 rw-p 00000000 00:00 0 
+7ffc2e940000-7ffc2e962000 rw-p 00000000 00:00 0                          [stack]
+ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsyscall]
