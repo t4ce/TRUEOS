@@ -6,7 +6,7 @@ static GPU_SHAPE_CANDIDATES: AtomicU64 = AtomicU64::new(0);
 static GPU_READY_CANDIDATES: AtomicU64 = AtomicU64::new(0);
 
 const GPGPU_PILOT_MAX_TILES: usize = 1;
-const LOCAL_GPGPU_SHADOW_BACKEND_ENABLED: bool = false;
+const LOCAL_GPGPU_PROOF_BACKEND_ENABLED: bool = true;
 const LOCAL_GPU_BACKEND_BUDGET_PERCENT: usize = 20;
 const GPGPU_VALIDATED_SIMD_LANES_PER_THREAD: usize = 8;
 const MATVEC_PROTOCOL_SHAPE: &str = "matrix-id-row-range";
@@ -101,7 +101,7 @@ impl MemoryLayoutPlan {
 pub(crate) enum MatvecBackendRole {
     CpuAp,
     LocalNetCpu,
-    LocalGpuShadow,
+    LocalGpuProof,
     FutureNetGpu,
 }
 
@@ -110,7 +110,7 @@ impl MatvecBackendRole {
         match self {
             Self::CpuAp => "cpu-ap",
             Self::LocalNetCpu => "local-net-cpu",
-            Self::LocalGpuShadow => "local-gpu-shadow",
+            Self::LocalGpuProof => "local-gpu-proof",
             Self::FutureNetGpu => "future-net-gpu",
         }
     }
@@ -156,7 +156,7 @@ impl MatvecDirectorPlan {
             protocol: MATVEC_PROTOCOL_SHAPE,
             execute_role: MatvecBackendRole::CpuAp,
             net_cpu_role: MatvecBackendRole::LocalNetCpu,
-            local_gpu_role: MatvecBackendRole::LocalGpuShadow,
+            local_gpu_role: MatvecBackendRole::LocalGpuProof,
             future_gpu_role: MatvecBackendRole::FutureNetGpu,
             net_cpu_shadow_enabled: crate::lumen::lumen_net::shadow_bf16_matvec_to_net_backend(),
             net_cpu_route_enabled: crate::lumen::lumen_net::route_bf16_matvec_to_net_backend(),
@@ -165,7 +165,7 @@ impl MatvecDirectorPlan {
             net_caps: telemetry.caps,
             net_min_remote_rows: telemetry.min_remote_rows,
             local_workers: telemetry.local_workers,
-            local_gpu_first: LOCAL_GPGPU_SHADOW_BACKEND_ENABLED,
+            local_gpu_first: LOCAL_GPGPU_PROOF_BACKEND_ENABLED,
             future_net_gpu_deferred: true,
         }
     }
@@ -205,7 +205,7 @@ pub(crate) fn share_matvec_rowmajor_bf16(n_rows: usize, k_dim: usize, chunk_rows
     }
 
     let gpu_ready =
-        LOCAL_GPGPU_SHADOW_BACKEND_ENABLED && shape_candidate && gpu.accepted && gpu.guc_ready;
+        LOCAL_GPGPU_PROOF_BACKEND_ENABLED && shape_candidate && gpu.accepted && gpu.guc_ready;
     if gpu_ready {
         GPU_READY_CANDIDATES.fetch_add(1, Ordering::AcqRel);
     }
@@ -254,10 +254,10 @@ pub(crate) fn share_matvec_rowmajor_bf16(n_rows: usize, k_dim: usize, chunk_rows
         director.net_min_remote_rows,
         director.local_workers,
         director.local_gpu_role.as_str(),
-        LOCAL_GPGPU_SHADOW_BACKEND_ENABLED as u8,
+        LOCAL_GPGPU_PROOF_BACKEND_ENABLED as u8,
         director.local_gpu_first as u8,
-        if LOCAL_GPGPU_SHADOW_BACKEND_ENABLED {
-            "one-tile-shadow-budgeted-dispatch-disabled"
+        if LOCAL_GPGPU_PROOF_BACKEND_ENABLED {
+            "one-tile-proof-budgeted-dispatch-disabled"
         } else {
             "disabled-by-selector"
         },
@@ -275,8 +275,8 @@ pub(crate) fn share_matvec_rowmajor_bf16(n_rows: usize, k_dim: usize, chunk_rows
         plan.next_precision.as_str(),
         plan.next_memory_layout.as_str(),
     );
-    let pilot_reason = if !LOCAL_GPGPU_SHADOW_BACKEND_ENABLED {
-        "local-gpu-disabled-by-selector"
+    let pilot_reason = if !LOCAL_GPGPU_PROOF_BACKEND_ENABLED {
+        "local-gpu-proof-disabled-by-selector"
     } else if gpu.result_c_changed_by_eu {
         "eu-c-store-proven-pilot-still-guarded"
     } else if gpu.eu_walker_retired {
@@ -293,8 +293,8 @@ pub(crate) fn share_matvec_rowmajor_bf16(n_rows: usize, k_dim: usize, chunk_rows
         director.director,
         director.local_gpu_role.as_str(),
         director.protocol,
-        LOCAL_GPGPU_SHADOW_BACKEND_ENABLED as u8,
-        (LOCAL_GPGPU_SHADOW_BACKEND_ENABLED && pilot.eligible) as u8,
+        LOCAL_GPGPU_PROOF_BACKEND_ENABLED as u8,
+        (LOCAL_GPGPU_PROOF_BACKEND_ENABLED && pilot.eligible) as u8,
         plan.gpu_ready as u8,
         gpu.enough_for_shape as u8,
         gpu.arena_gpu_base,
@@ -317,8 +317,8 @@ pub(crate) fn share_matvec_rowmajor_bf16(n_rows: usize, k_dim: usize, chunk_rows
         director.future_gpu_role.as_str(),
     );
     let eu_execution_runs = gpu.eu_dispatch_delta != 0;
-    let gate_blocker = if !LOCAL_GPGPU_SHADOW_BACKEND_ENABLED {
-        "local-gpu-disabled-by-selector"
+    let gate_blocker = if !LOCAL_GPGPU_PROOF_BACKEND_ENABLED {
+        "local-gpu-proof-disabled-by-selector"
     } else if gpu.result_c_changed_by_eu {
         "pilot-scale-disabled-until-cpu-reference-compare"
     } else if gpu.eu_walker_retired {
@@ -330,10 +330,10 @@ pub(crate) fn share_matvec_rowmajor_bf16(n_rows: usize, k_dim: usize, chunk_rows
     } else {
         "eu-c-store-kernel"
     };
-    let gate_next = if !LOCAL_GPGPU_SHADOW_BACKEND_ENABLED {
-        "enable-local-gpu-shadow-selector"
+    let gate_next = if !LOCAL_GPGPU_PROOF_BACKEND_ENABLED {
+        "enable-local-gpu-proof-selector"
     } else if gpu.result_c_changed_by_eu {
-        "enable-one-tile-gpu-shadow-compare"
+        "enable-one-tile-gpu-proof-compare"
     } else if gpu.eu_walker_retired {
         "fix-eu-c-store-message"
     } else if gpu.eu_walker_submitted {
@@ -347,7 +347,7 @@ pub(crate) fn share_matvec_rowmajor_bf16(n_rows: usize, k_dim: usize, chunk_rows
         "burn-baba: gpgpu-dispatch-gate director={} role={} enabled={} h2g_mmio={} input_buffers_ab_in_ggtt={} ctb_enabled=0 guc_context_registered=0 guc_sched_enabled=0 eu_kernel_uploaded={} eu_walker_encoded={} eu_walker_submitted={} eu_walker_retired={} eu_execution_runs={} eu_dispatch_delta={} result_c_slot={} result_c_value=0x{:08X} result_c_changed_by_eu={} cpu_reads_c_back={} arena_ready={} cpu_reference_compare=1 dispatch=disabled blocker={} next={} net_gpu_role={} net_gpu_action=deferred does_not_prove=gpu_matmul\n",
         director.director,
         director.local_gpu_role.as_str(),
-        LOCAL_GPGPU_SHADOW_BACKEND_ENABLED as u8,
+        LOCAL_GPGPU_PROOF_BACKEND_ENABLED as u8,
         crate::intel::guc_h2g_mmio_accepted() as u8,
         gpu.accepted as u8,
         gpu.eu_kernel_uploaded as u8,

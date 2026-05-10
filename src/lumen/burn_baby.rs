@@ -32,6 +32,8 @@ static COMPLETED_JOBS: AtomicU64 = AtomicU64::new(0);
 static POLLED_JOBS: AtomicU64 = AtomicU64::new(0);
 static POLLED_JOBS_BY_SLOT: [AtomicU64; MAX_COMPUTE_POLL_SLOTS] =
     [const { AtomicU64::new(0) }; MAX_COMPUTE_POLL_SLOTS];
+static POLL_PROGRESS_LAST_TICK_BY_SLOT: [AtomicU64; MAX_COMPUTE_POLL_SLOTS] =
+    [const { AtomicU64::new(0) }; MAX_COMPUTE_POLL_SLOTS];
 
 #[cfg(target_arch = "x86_64")]
 const BF16_SIMD_LANE_UNKNOWN: u8 = 0;
@@ -76,6 +78,50 @@ enum ComputeJob {
     MatvecRowsBf16(MatvecRowsBf16),
 }
 
+impl ComputeJob {
+    fn dtype(self) -> &'static str {
+        match self {
+            Self::MatvecRowsF32(_) => "f32",
+            Self::MatvecRowsBf16(_) => "bf16",
+        }
+    }
+
+    fn row_start(self) -> usize {
+        match self {
+            Self::MatvecRowsF32(job) => job.row_start,
+            Self::MatvecRowsBf16(job) => job.row_start,
+        }
+    }
+
+    fn row_end(self) -> usize {
+        match self {
+            Self::MatvecRowsF32(job) => job.row_end,
+            Self::MatvecRowsBf16(job) => job.row_end,
+        }
+    }
+
+    fn n_rows(self) -> usize {
+        match self {
+            Self::MatvecRowsF32(job) => job.n_rows,
+            Self::MatvecRowsBf16(job) => job.n_rows,
+        }
+    }
+
+    fn k_dim(self) -> usize {
+        match self {
+            Self::MatvecRowsF32(job) => job.k_dim,
+            Self::MatvecRowsBf16(job) => job.k_dim,
+        }
+    }
+
+    fn done_ptr(self) -> usize {
+        match self {
+            Self::MatvecRowsF32(job) => job.done,
+            Self::MatvecRowsBf16(job) => job.done,
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug, Default)]
 pub struct ComputeStats {
     pub submitted_jobs: u64,
@@ -109,6 +155,13 @@ pub fn poll_counts_for_slots(slots: &[u32]) -> Vec<(u32, u64)> {
                 .map(|counter| (slot, counter.load(Ordering::Acquire)))
         })
         .collect()
+}
+
+fn poll_count_for_slot(slot: u32) -> u64 {
+    POLLED_JOBS_BY_SLOT
+        .get(slot as usize)
+        .map(|counter| counter.load(Ordering::Acquire))
+        .unwrap_or(0)
 }
 
 pub fn online_worker_count() -> usize {
@@ -151,7 +204,9 @@ pub fn poll_compute_lane() -> bool {
         counter.fetch_add(1, Ordering::AcqRel);
     }
     POLLED_JOBS.fetch_add(1, Ordering::AcqRel);
+    let polled_by_slot = poll_count_for_slot(slot);
     execute_job(job);
+    log_ap_poll_progress(slot, job, polled_by_slot);
     true
 }
 
@@ -278,7 +333,18 @@ pub fn matvec_rowmajor_bf16(
         matvec_rows_bf16(x, w_rowmajor_bf16, k_dim, out, 0, n_rows);
         return Ok(());
     }
+    let local_gpu_proof =
+        crate::lumen::gpu_shadow::observe_bf16_matvec_call(n_rows, k_dim, chunk_rows, chunks);
     crate::lumen::burn_baba::share_matvec_rowmajor_bf16(n_rows, k_dim, chunk_rows);
+    crate::lumen::gpu_shadow::observe_live_bf16_matvec_probe(
+        x,
+        w_rowmajor_bf16,
+        n_rows,
+        k_dim,
+        chunk_rows,
+        chunks,
+        local_gpu_proof,
+    );
     let remote = crate::lumen::lumen_net::enqueue_remote_bf16_matvec_suffix(
         x,
         w_rowmajor_bf16,
@@ -427,6 +493,44 @@ fn log_compute_wait_progress(
         dtype,
         done.load(Ordering::Acquire),
         submitted,
+        stats.submitted_jobs,
+        stats.completed_jobs,
+        stats.polled_jobs,
+        stats.queued_jobs
+    );
+}
+
+fn log_ap_poll_progress(slot: u32, job: ComputeJob, polled_by_slot: u64) {
+    let Some(last_tick) = POLL_PROGRESS_LAST_TICK_BY_SLOT.get(slot as usize) else {
+        return;
+    };
+    let now = embassy_time_driver::now();
+    let hz = embassy_time_driver::TICK_HZ.max(1);
+    let previous = last_tick.load(Ordering::Acquire);
+    if now.saturating_sub(previous) < hz {
+        return;
+    }
+    if last_tick
+        .compare_exchange(previous, now, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+
+    let stats = stats();
+    let local_done = done_count(job.done_ptr());
+    crate::log!(
+        "burn-baby: AP poll progress slot={} lapic={} dtype={} chunk_rows={} row_range={}..{} n_rows={} k_dim={} slot_polled={} local_done={} submitted={} completed={} polled={} queued={} rate=1hz-per-ap proof=ap-executed-compute-chunk\n",
+        slot,
+        crate::percpu::current_lapic_id_via_cpuid(),
+        job.dtype(),
+        job.row_end().saturating_sub(job.row_start()),
+        job.row_start(),
+        job.row_end(),
+        job.n_rows(),
+        job.k_dim(),
+        polled_by_slot,
+        local_done,
         stats.submitted_jobs,
         stats.completed_jobs,
         stats.polled_jobs,
@@ -821,6 +925,14 @@ unsafe fn matvec_rows_bf16_sse2(
 
 fn bf16_to_f32(bits: u16) -> f32 {
     f32::from_bits((bits as u32) << 16)
+}
+
+fn done_count(done: usize) -> usize {
+    if done == 0 {
+        return 0;
+    }
+    let done = unsafe { &*(done as *const AtomicUsize) };
+    done.load(Ordering::Acquire)
 }
 
 fn mark_done(done: usize) {
