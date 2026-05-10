@@ -3,7 +3,6 @@ use embassy_executor::SendSpawner;
 use crate::r::spawn_spec::SpawnPlacement;
 
 const VM_RESERVED_FIRST_SLOT: u32 = 2;
-const AP1_SERVICE_SLOT: u32 = 1;
 
 /// TRUEOS carrier-lane roles.
 ///
@@ -15,7 +14,6 @@ pub enum VmLaneRole {
     VmHull,
     TokioBlocking,
     Worker,
-    Service,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -57,17 +55,6 @@ impl VmLaneProfile {
         }
     }
 
-    pub const fn service_default() -> Self {
-        Self {
-            role: VmLaneRole::Service,
-            placement: SpawnPlacement::Ap1,
-        }
-    }
-
-    pub const fn requires_ap1_lane(self) -> bool {
-        matches!(self.placement, SpawnPlacement::Ap1)
-    }
-
     pub const fn requires_reserved_vm_lane(self) -> bool {
         matches!(self.placement, SpawnPlacement::ReservedVmLane)
     }
@@ -81,14 +68,11 @@ impl VmLaneProfile {
             VmLaneRole::VmHull => "vm-hull",
             VmLaneRole::TokioBlocking => "tokio-blocking",
             VmLaneRole::Worker => "worker",
-            VmLaneRole::Service => "service",
         }
     }
 
     pub const fn placement_name(self) -> &'static str {
         match self.placement {
-            SpawnPlacement::Local => "local",
-            SpawnPlacement::Ap1 => "ap1",
             SpawnPlacement::Worker => "worker",
             SpawnPlacement::ReservedVmLane => "reserved-vm-lane",
         }
@@ -111,18 +95,12 @@ impl VmLaneTarget {
         }
     }
 
-    pub const fn is_ap1_service_lane(&self) -> bool {
-        self.slot == AP1_SERVICE_SLOT
-    }
-
     pub const fn is_reserved_vm_lane(&self) -> bool {
         self.slot >= VM_RESERVED_FIRST_SLOT
     }
 
     pub fn supports(&self, profile: VmLaneProfile) -> bool {
         match profile.placement {
-            SpawnPlacement::Local => false,
-            SpawnPlacement::Ap1 => self.is_ap1_service_lane(),
             SpawnPlacement::Worker => self.is_reserved_vm_lane(),
             SpawnPlacement::ReservedVmLane => self.is_reserved_vm_lane(),
         }
@@ -131,8 +109,6 @@ impl VmLaneTarget {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum VmLanePickError {
-    LocalPlacementUnsupported,
-    MissingAp1Lane,
     MissingWorkerLane,
     MissingReservedVmLane,
     Busy,
@@ -141,8 +117,6 @@ pub enum VmLanePickError {
 impl VmLanePickError {
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::LocalPlacementUnsupported => "local placement is not a VM lane",
-            Self::MissingAp1Lane => "ap1 service lane is not registered",
             Self::MissingWorkerLane => "no disposable worker lanes are registered",
             Self::MissingReservedVmLane => "no reserved VM lanes are registered at AP2+",
             Self::Busy => "matching runtime carrier lanes are currently leased",
@@ -159,7 +133,6 @@ pub fn select_vm_lane_target(profile: VmLaneProfile) -> Result<VmLaneTarget, VmL
             VmLaneRole::VmHull => crate::r::lane::LaneRole::VmHull,
             VmLaneRole::TokioBlocking => crate::r::lane::LaneRole::TokioBlocking,
             VmLaneRole::Worker => crate::r::lane::LaneRole::Worker,
-            VmLaneRole::Service => crate::r::lane::LaneRole::Service,
         },
         placement: profile.placement,
     })
@@ -189,20 +162,12 @@ pub fn pick_worker_lane() -> Result<VmLaneTarget, VmLanePickError> {
     select_vm_lane_target(VmLaneProfile::worker_default())
 }
 
-pub fn pick_service_lane() -> Result<VmLaneTarget, VmLanePickError> {
-    select_vm_lane_target(VmLaneProfile::service_default())
-}
-
 pub fn pick_guest_work_target(profile: GuestWorkProfile) -> Option<GuestWorkTarget> {
     pick_vm_lane_target(profile)
 }
 
 fn map_lane_pick_error(error: crate::r::lane::LanePickError) -> VmLanePickError {
     match error {
-        crate::r::lane::LanePickError::LocalPlacementUnsupported => {
-            VmLanePickError::LocalPlacementUnsupported
-        }
-        crate::r::lane::LanePickError::MissingAp1Lane => VmLanePickError::MissingAp1Lane,
         crate::r::lane::LanePickError::MissingWorkerLane => VmLanePickError::MissingWorkerLane,
         crate::r::lane::LanePickError::MissingReservedVmLane => {
             VmLanePickError::MissingReservedVmLane

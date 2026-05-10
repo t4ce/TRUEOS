@@ -1356,7 +1356,6 @@ where
         }
 
         if stop_requested {
-            ssthresh = core::cmp::max(1, cwnd / 2);
             cwnd = 1;
             uas_bench_report(
                 &mut report,

@@ -496,18 +496,6 @@ pub fn current_rip() -> u64 {
     rip
 }
 
-pub fn read_rsp() -> u64 {
-    let rsp: u64;
-    unsafe {
-        core::arch::asm!(
-            "mov {}, rsp",
-            out(reg) rsp,
-            options(nostack, preserves_flags),
-        );
-    }
-    rsp
-}
-
 pub fn read_tr_selector() -> u16 {
     let mut tr: u16 = 0;
     unsafe {
@@ -856,14 +844,4 @@ pub fn vmresume_once_wrapper(out: &mut LaunchResult) {
         );
         *out = result_ptr.read();
     }
-}
-
-pub fn handle_hlt_exit_resume_once() -> Result<(LaunchResult, u64, u64, u64), &'static str> {
-    let rip_before = vmread(VMCS_VMEXIT_GUEST_RIP).ok_or("vmread guest_rip")?;
-    let exit_len = vmread(VMCS_VMEXIT_INSTRUCTION_LEN).ok_or("vmread exit_len")?;
-    let rip_after = rip_before.wrapping_add(exit_len);
-    vmwrite(VMCS_GUEST_RIP, rip_after)?;
-    let mut lr = LaunchResult::default();
-    vmresume_once_wrapper(&mut lr);
-    Ok((lr, rip_before, exit_len, rip_after))
 }

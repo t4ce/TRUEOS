@@ -38,7 +38,6 @@ use crate::shell2::{MatrixTarget, ShellBackend2};
 use guest_work::{VmLaneProfile, pick_vm_hull_lane};
 use memory::*;
 use snapshot::*;
-use vmm::VmManager;
 
 const MAIN_LOOP_MARKER: &[u8] = b"main: entering executor loop";
 const VMX_PAGE_SIZE: usize = 4096;
@@ -72,7 +71,6 @@ impl TrueosVmId {
     }
 }
 
-static VMM: VmManager = VmManager::new();
 #[allow(non_upper_case_globals)]
 static trueos_vm_ids: [TrueosVmId; TRUEOS_VM_ID_LIMIT] =
     [const { TrueosVmId::new() }; TRUEOS_VM_ID_LIMIT];
