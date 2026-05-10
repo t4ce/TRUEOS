@@ -5,7 +5,7 @@ static SEEN_BF16_MATVECS: AtomicU64 = AtomicU64::new(0);
 static GPU_SHAPE_CANDIDATES: AtomicU64 = AtomicU64::new(0);
 static GPU_READY_CANDIDATES: AtomicU64 = AtomicU64::new(0);
 
-const GPGPU_PILOT_MAX_TILES: usize = 1;
+const GPGPU_PILOT_MAX_TILES: usize = 3;
 const LOCAL_GPGPU_PROOF_BACKEND_ENABLED: bool = true;
 const LOCAL_GPU_BACKEND_BUDGET_PERCENT: usize = 20;
 const GPGPU_VALIDATED_SIMD_LANES_PER_THREAD: usize = 8;

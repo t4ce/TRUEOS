@@ -452,6 +452,68 @@ load, one activation-vector load, one tiny arithmetic reduction or checksum/dot
 surrogate, then one output write, still with a single worker and CPU/AP output
 ownership.
 
+## T5 Small Live4 Packed-BF16 Dot
+
+Status: runtime-proven as a live GPU load/math/store proof for a tiny real
+Lumen slice, still proof-only and still CPU/AP-owned.
+
+Active artifact:
+
+- `gfx12-t5-small-live4-packed-bf16-dot-hdc1-stateless-store-then-ts-eot`
+
+What it proves:
+
+- the Lumen BF16 matvec path can stage the live activation vector and a real
+  model row into the GPGPU arena
+- the GPU kernel can load live `x` values and packed BF16 row halves from that
+  arena
+- the shader unpacks contiguous row lanes `[0,1,2,3]`, not the older dword view
+  `[0,2,4,6]`
+- the shader computes the four-element partial dot and stores the expected F32
+  bits into the output record
+- CPU readback sees the GPU value at the intended output offset
+
+Current runtime shape:
+
+- `live_k_dim=4`
+- `requires_live_gpu_load=1`
+- `output_owner=cpu-ap`
+- `artifact_addressing=fixed-slot-reused`
+- `does_not_prove=full_model_matvec`
+
+The latest actual-work run arms three tile-frontier rows from the live Lumen
+matvec:
+
+- `tile_index=0`, row `0`
+- `tile_index=1`, row `256`
+- `tile_index=2`, row `512`
+
+All three staged tiles compare correctly for the T5 live4 slice.  The aggregate
+proof reports `armed_tiles=3`, `staged_tiles=3`, `submitted_tiles=3`, and
+`compare_ok_tiles=3`.  This is deliberately not a full tile matvec yet: the
+same fixed arena slot and same T5 live4 artifact are reused for each tile-frontier
+probe, while CPU/AP keeps the real inference result.
+
+Current T5 scale cap:
+
+- `4096` groups is clean: `expected_lane_dispatch=32768`,
+  `observed_lane_dispatch=32768`, `retired=1`, and the packed-BF16 result
+  matches the CPU reference.
+- `6144` groups is the first non-clean proof: it still writes the correct value
+  and reports `observed_lane_dispatch=49152`, but it does not retire cleanly
+  (`reason=submit-not-finished`, `retired=0`).
+
+Hold setting:
+
+- Keep `GPGPU_T5_LIVE4_GROUP_X_DIM_LADDER` capped at `[4096]`.
+- Do not tune this cap as a throughput knob.  Revisit it only when the T5
+  kernel grows beyond `live_k_dim=4`, the CGP queueing model changes, or the
+  retire/completion logic becomes more expressive.
+
+Next meaningful T5/T6 direction: widen the actual math (`live_k_dim`) or row
+count semantics, not the group-count cap.  The 4096-group setting is a known
+clean proof frontier for the current small artifact.
+
 ## Backend Selection Boundary
 
 The network backend is intentionally out of scope for the local one-tile GPU
