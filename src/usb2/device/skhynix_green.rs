@@ -145,7 +145,8 @@ impl block::BlockDevice for GreenSkhynixBlockDevice {
             let bs = self.block_size as usize;
             let bytes = blocks.checked_mul(bs).ok_or(block::Error::InvalidParam)?;
             let mut out = alloc::vec![0u8; bytes];
-            self.read_blocks_into_green(lba, blocks, out.as_mut_slice()).await?;
+            self.read_blocks_into_green(lba, blocks, out.as_mut_slice())
+                .await?;
             Ok(out)
         })
     }
@@ -304,23 +305,27 @@ pub(crate) async fn maybe_start_skhynix_green(
         target.configuration_value
     );
 
-    let mut interface =
-        match claim_interface(&mut device, target.interface_number, target.alternate_setting).await
-        {
-            Ok(interface) => interface,
-            Err(err) => {
-                crate::log!(
-                    "crabusb: skhynix-green {:04X}:{:04X} proof=claim if#{} alt={} status=failed err={:?} no_block_register=true\n",
-                    vendor_id,
-                    product_id,
-                    target.interface_number,
-                    target.alternate_setting,
-                    err
-                );
-                unregister_active_green_probe(active_probe);
-                return true;
-            }
-        };
+    let mut interface = match claim_interface(
+        &mut device,
+        target.interface_number,
+        target.alternate_setting,
+    )
+    .await
+    {
+        Ok(interface) => interface,
+        Err(err) => {
+            crate::log!(
+                "crabusb: skhynix-green {:04X}:{:04X} proof=claim if#{} alt={} status=failed err={:?} no_block_register=true\n",
+                vendor_id,
+                product_id,
+                target.interface_number,
+                target.alternate_setting,
+                err
+            );
+            unregister_active_green_probe(active_probe);
+            return true;
+        }
+    };
 
     crate::log!(
         "crabusb: skhynix-green {:04X}:{:04X} proof=claim if#{} alt={} status=ok\n",

@@ -5,7 +5,7 @@ static SEEN_BF16_MATVECS: AtomicU64 = AtomicU64::new(0);
 static GPU_SHAPE_CANDIDATES: AtomicU64 = AtomicU64::new(0);
 static GPU_READY_CANDIDATES: AtomicU64 = AtomicU64::new(0);
 
-const GPGPU_PILOT_MAX_TILES: usize = 3;
+const GPGPU_PILOT_MAX_TILES: usize = 1;
 const MATVEC_PROTOCOL_SHAPE: &str = "matrix-id-row-range";
 const MATVEC_DIRECTOR: &str = "single";
 
@@ -215,7 +215,7 @@ pub(crate) fn share_matvec_rowmajor_bf16(n_rows: usize, k_dim: usize, chunk_rows
     let director = MatvecDirectorPlan::bf16_decode(gpu.lanes);
 
     crate::log!(
-        "burn-baba: shared-inference-plan director={} protocol={} workload={} kernel={} precision={} layout={} batch_rows={} preflight_submitted={} accepted={} completed={} guc_ready={} lanes={} marker=0x{:08X} dot={} sum_a={} sum_b={} rows={} k_dim={} chunk_rows={} min_rows={} min_k_dim={} shape_candidate={} gpu_ready={} execute_role={} net_cpu_role={} net_cpu_route={} net_cpu_shadow={} net_cpu_pending={} net_protocol_v={} net_caps=0x{:X} net_min_rows={} local_workers={} local_gpu_role={} local_gpu_first={} local_gpu_action=shadow-pilot-dispatch-disabled future_gpu_role={} future_net_gpu_deferred={} future_gpu_action=defer-until-net-gpu-protocol action=cpu-ap-director-keeps-local-results row_range=0..{} matrix_id_source=lumen-net-manifest cpu_ap_continues=1 next_kernel={} next_precision={} next_layout={} next=batched-gemm-attention-kv-fusion-mixed-precision does_not_prove=gpu_matmul\n",
+        "burn-baba: shared-inference-plan director={} protocol={} workload={} kernel={} precision={} layout={} batch_rows={} preflight_submitted={} accepted={} completed={} guc_ready={} lanes={} marker=0x{:08X} dot={} sum_a={} sum_b={} rows={} k_dim={} chunk_rows={} min_rows={} min_k_dim={} shape_candidate={} gpu_ready={} execute_role={} net_cpu_role={} net_cpu_route={} net_cpu_shadow={} net_cpu_pending={} net_protocol_v={} net_caps=0x{:X} net_min_rows={} local_workers={} local_gpu_role={} local_gpu_first={} local_gpu_action=one-tile-shadow-dispatch-disabled future_gpu_role={} future_net_gpu_deferred={} future_gpu_action=defer-until-net-gpu-protocol action=cpu-ap-director-keeps-local-results row_range=0..{} matrix_id_source=lumen-net-manifest cpu_ap_continues=1 next_kernel={} next_precision={} next_layout={} next=batched-gemm-attention-kv-fusion-mixed-precision does_not_prove=gpu_matmul\n",
         director.director,
         director.protocol,
         plan.workload.as_str(),
@@ -269,7 +269,7 @@ pub(crate) fn share_matvec_rowmajor_bf16(n_rows: usize, k_dim: usize, chunk_rows
         "eu-c-store-kernel-not-proven"
     };
     crate::log!(
-        "burn-baba: gpgpu-pilot-plan director={} role={} protocol={} eligible={} gpu_ready={} arena_ready={} arena_gpu_base=0x{:X} arena_bytes=0x{:X} arena_max_tiles={} pilot_tiles={} candidate_tiles={} tile_rows={} tile_k={} x_bytes={} weight_tile_bytes={} output_tile_bytes={} compare=cpu-reference-first dispatch=disabled reason={} cpu_ap_continues=1 net_gpu_role={} net_gpu_action=deferred does_not_prove=gpu_matmul\n",
+        "burn-baba: gpgpu-pilot-plan director={} role={} protocol={} eligible={} gpu_ready={} arena_ready={} arena_gpu_base=0x{:X} arena_bytes=0x{:X} arena_max_tiles={} pilot_tiles={} pilot_tile_cap={} candidate_tiles={} tile_rows={} tile_k={} x_bytes={} weight_tile_bytes={} output_tile_bytes={} compare=cpu-reference-first dispatch=disabled reason={} cpu_ap_continues=1 net_gpu_role={} net_gpu_action=deferred does_not_prove=gpu_matmul\n",
         director.director,
         director.local_gpu_role.as_str(),
         director.protocol,
@@ -280,6 +280,7 @@ pub(crate) fn share_matvec_rowmajor_bf16(n_rows: usize, k_dim: usize, chunk_rows
         gpu.arena_bytes,
         gpu.max_tiles,
         pilot.pilot_tiles,
+        GPGPU_PILOT_MAX_TILES,
         pilot.candidate_tiles,
         pilot.tile_rows,
         pilot.tile_k,

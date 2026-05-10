@@ -132,6 +132,7 @@ const GEN8_CTX_ADDRESSING_MODE_SHIFT: u32 = 3;
 const GEN12_CTX_RCS_INDIRECT_CTX_OFFSET_DEFAULT: u32 = 0xD;
 const RCS_EXEC_RESULT_GPGPU_PREFLIGHT_DONE: u32 = 0xC0DE_7731;
 const RCS_EXEC_RESULT_COMPUTE_WALKER_DONE: u32 = 0xC0DE_7732;
+const GPGPU_ONE_TILE_OUTPUT_SENTINEL: u32 = 0xC0DE_7747;
 const PRIMARY_DISABLE_RENDER_BRINGUP: bool = false;
 const GPGPU_SUBMIT_WHEN_PRIMARY_RENDER_DISABLED: bool = false;
 const MI_STORE_DATA_IMM_GGTT_DW1: u32 = 0x1040_0002;
@@ -1298,6 +1299,19 @@ fn gpgpu_static_dp4a_store_eot_program() -> GpgpuEuProgram {
     }
 }
 
+fn gpgpu_one_tile_output_sentinel_program() -> GpgpuEuProgram {
+    let artifact = trueos_eu::gfx12::HDC1_STATELESS_STORE_THEN_TS_EOT;
+    GpgpuEuProgram {
+        name: "gfx12-t47-one-tile-output-sentinel-hdc1-stateless-store-then-ts-eot",
+        kind: artifact.kind,
+        words: artifact.words,
+        expects_store: artifact.expects_store,
+        expected_store_value: GPGPU_ONE_TILE_OUTPUT_SENTINEL,
+        store_send_dword: Some(trueos_eu::gfx12::HDC1_BTI34_STORE_SEND_DWORD),
+        visible_seed_dword: Some(trueos_eu::gfx12::HDC1_BTI34_STORE_IMM_DWORD),
+    }
+}
+
 fn gpgpu_store_send_desc_words(program: GpgpuEuProgram) -> (u32, u32) {
     let Some(send_exdesc_dword) = program.store_send_dword else {
         return (0, 0);
@@ -1518,6 +1532,473 @@ fn gpgpu_walker_scale_passed(proof: GpgpuComputeWalkerProof) -> bool {
         && post_walker_marker_retired
         && store_ok
         && proof.dispatch_delta == proof.expected_lane_dispatch as u64
+}
+
+pub(crate) fn stage_gpgpu_one_tile_shadow_probe(
+    x: &[f32],
+    row_bf16: &[u8],
+    k_dim: usize,
+    row_index: usize,
+    x_checksum: u64,
+    row_checksum: u64,
+    cpu_expected_bits: u32,
+) -> crate::intel::GpgpuOneTileStageProof {
+    let Some(dev) = crate::intel::claimed_device() else {
+        return log_gpgpu_one_tile_stage_failure(
+            "no-device",
+            k_dim,
+            row_index,
+            x_checksum,
+            row_checksum,
+            cpu_expected_bits,
+        );
+    };
+    let Some(warm) = warm_state() else {
+        return log_gpgpu_one_tile_stage_failure(
+            "no-warm-state",
+            k_dim,
+            row_index,
+            x_checksum,
+            row_checksum,
+            cpu_expected_bits,
+        );
+    };
+    if warm.gpgpu_arena_virt.is_null() || warm.gpgpu_arena_len == 0 {
+        return log_gpgpu_one_tile_stage_failure(
+            "no-arena",
+            k_dim,
+            row_index,
+            x_checksum,
+            row_checksum,
+            cpu_expected_bits,
+        );
+    }
+    if k_dim != GPGPU_TILE_K_DIM {
+        return log_gpgpu_one_tile_stage_failure(
+            "k-dim-not-tile-k",
+            k_dim,
+            row_index,
+            x_checksum,
+            row_checksum,
+            cpu_expected_bits,
+        );
+    }
+
+    let x_bytes = k_dim.saturating_mul(GPGPU_TILE_X_BYTES_PER_ELEM);
+    let row_bytes = k_dim.saturating_mul(GPGPU_TILE_WEIGHT_BYTES_PER_ELEM);
+    let output_bytes = GPGPU_OUTPUT_TILE_BYTES;
+    if x.len() < k_dim || row_bf16.len() < row_bytes {
+        return log_gpgpu_one_tile_stage_failure(
+            "bad-shape",
+            k_dim,
+            row_index,
+            x_checksum,
+            row_checksum,
+            cpu_expected_bits,
+        );
+    }
+
+    let x_offset = 0usize;
+    let row_offset = GPGPU_X_VECTOR_BYTES;
+    let output_offset = GPGPU_X_VECTOR_BYTES + GPGPU_WEIGHT_TILE_BYTES;
+    let Some(required_bytes) = output_offset.checked_add(output_bytes) else {
+        return log_gpgpu_one_tile_stage_failure(
+            "layout-overflow",
+            k_dim,
+            row_index,
+            x_checksum,
+            row_checksum,
+            cpu_expected_bits,
+        );
+    };
+    if warm.gpgpu_arena_len < required_bytes {
+        return log_gpgpu_one_tile_stage_failure(
+            "arena-too-small",
+            k_dim,
+            row_index,
+            x_checksum,
+            row_checksum,
+            cpu_expected_bits,
+        );
+    }
+
+    let arena_mapped = ensure_gpgpu_tile_arena_mapped(dev, warm);
+    let x_virt = unsafe { warm.gpgpu_arena_virt.add(x_offset) };
+    let row_virt = unsafe { warm.gpgpu_arena_virt.add(row_offset) };
+    let output_virt = unsafe { warm.gpgpu_arena_virt.add(output_offset) };
+
+    unsafe {
+        core::ptr::copy_nonoverlapping(x.as_ptr() as *const u8, x_virt, x_bytes);
+        core::ptr::write_bytes(row_virt, 0, GPGPU_WEIGHT_TILE_BYTES);
+        core::ptr::copy_nonoverlapping(row_bf16.as_ptr(), row_virt, row_bytes);
+        core::ptr::write_bytes(output_virt, 0, output_bytes);
+    }
+    crate::intel::dma_flush(x_virt, x_bytes);
+    crate::intel::dma_flush(row_virt, GPGPU_WEIGHT_TILE_BYTES);
+    crate::intel::dma_flush(output_virt, output_bytes);
+
+    let staged_x_checksum = unsafe { gpgpu_stage_checksum_bytes(x_virt as *const u8, x_bytes) };
+    let staged_row_checksum =
+        unsafe { gpgpu_stage_checksum_bytes(row_virt as *const u8, row_bytes) };
+    let output_checksum =
+        unsafe { gpgpu_stage_checksum_bytes(output_virt as *const u8, output_bytes) };
+    let output_first_bits = unsafe { core::ptr::read_volatile(output_virt as *const u32) };
+    let output_nonzero_dwords =
+        unsafe { gpgpu_stage_nonzero_dwords(output_virt as *const u32, GPGPU_TILE_ROWS) };
+    let output_expected_hits_lo64 = unsafe {
+        gpgpu_stage_dword_hits_mask_lo64(
+            output_virt as *const u32,
+            GPGPU_TILE_ROWS,
+            cpu_expected_bits,
+        )
+    };
+    let staged =
+        arena_mapped && staged_x_checksum == x_checksum && staged_row_checksum == row_checksum;
+    let output_zeroed = output_nonzero_dwords == 0;
+    let readback_ok = staged && output_zeroed && output_expected_hits_lo64 == 0;
+    let reason = if staged {
+        "staged"
+    } else if !arena_mapped {
+        "arena-not-mapped"
+    } else if staged_x_checksum != x_checksum {
+        "x-checksum-mismatch"
+    } else {
+        "row-checksum-mismatch"
+    };
+
+    let proof = crate::intel::GpgpuOneTileStageProof {
+        staged,
+        reason,
+        readback_ok,
+        output_zeroed,
+        arena_mapped,
+        arena_gpu_base: GPU_VA_GPGPU_TILE_ARENA_BASE,
+        x_gpu: GPU_VA_GPGPU_TILE_ARENA_BASE + x_offset as u64,
+        row_gpu: GPU_VA_GPGPU_TILE_ARENA_BASE + row_offset as u64,
+        output_gpu: GPU_VA_GPGPU_TILE_ARENA_BASE + output_offset as u64,
+        x_bytes,
+        row_bytes,
+        output_bytes,
+        tile_rows: GPGPU_TILE_ROWS,
+        k_dim,
+        output_first_bits,
+        output_nonzero_dwords,
+        output_expected_hits_lo64,
+        output_checksum,
+    };
+    crate::log!(
+        "intel/gpgpu: one-tile-stage staged={} reason={} arena_mapped={} arena_gpu_base=0x{:X} row={} tile_rows={} k_dim={} layout=x-row0-output x_gpu=0x{:X} row_gpu=0x{:X} output_gpu=0x{:X} x_bytes={} row_bytes={} output_bytes={} x_checksum=0x{:016X} staged_x_checksum=0x{:016X} row_checksum=0x{:016X} staged_row_checksum=0x{:016X} cpu_expected_bits=0x{:08X} gpu_submission=0 output_owner=cpu-ap next=one-tile-gpu-shadow-compare-artifact does_not_prove=gpu_live_load_or_model_matvec\n",
+        proof.staged as u8,
+        proof.reason,
+        proof.arena_mapped as u8,
+        proof.arena_gpu_base,
+        row_index,
+        proof.tile_rows,
+        proof.k_dim,
+        proof.x_gpu,
+        proof.row_gpu,
+        proof.output_gpu,
+        proof.x_bytes,
+        proof.row_bytes,
+        proof.output_bytes,
+        x_checksum,
+        staged_x_checksum,
+        row_checksum,
+        staged_row_checksum,
+        cpu_expected_bits,
+    );
+    crate::log!(
+        "intel/gpgpu: one-tile-readback readback_ok={} staged={} x_match={} row_match={} output_zeroed={} output_first_bits=0x{:08X} output_nonzero_dwords={} output_expected_hits_lo64=0x{:016X} output_checksum=0x{:016X} cpu_expected_bits=0x{:08X} gpu_submission=0 scenario=one-worker-tile-before-submit plain=\"arena holds live x and row0, shadow output is untouched zero state\" next=submit-one-worker-read-alu-write-kernel does_not_prove=gpu_output_or_matvec\n",
+        proof.readback_ok as u8,
+        proof.staged as u8,
+        (staged_x_checksum == x_checksum) as u8,
+        (staged_row_checksum == row_checksum) as u8,
+        proof.output_zeroed as u8,
+        proof.output_first_bits,
+        proof.output_nonzero_dwords,
+        proof.output_expected_hits_lo64,
+        proof.output_checksum,
+        cpu_expected_bits,
+    );
+    proof
+}
+
+pub(crate) fn submit_gpgpu_one_tile_output_sentinel_probe(
+    output_gpu: u64,
+    output_bytes: usize,
+    cpu_expected_bits: u32,
+) -> crate::intel::GpgpuOneTileSentinelProof {
+    let program = gpgpu_one_tile_output_sentinel_program();
+    let Some(dev) = crate::intel::claimed_device() else {
+        return gpgpu_one_tile_sentinel_failure("no-device", program, output_gpu);
+    };
+    let Some(warm) = warm_state() else {
+        return gpgpu_one_tile_sentinel_failure("no-warm-state", program, output_gpu);
+    };
+    if warm.gpgpu_arena_virt.is_null() || warm.gpgpu_arena_len == 0 {
+        return gpgpu_one_tile_sentinel_failure("no-arena", program, output_gpu);
+    }
+    if output_bytes < core::mem::size_of::<u32>() {
+        return gpgpu_one_tile_sentinel_failure("bad-output-bytes", program, output_gpu);
+    }
+    if output_gpu < GPU_VA_GPGPU_TILE_ARENA_BASE {
+        return gpgpu_one_tile_sentinel_failure("output-gpu-before-arena", program, output_gpu);
+    }
+    let output_offset = (output_gpu - GPU_VA_GPGPU_TILE_ARENA_BASE) as usize;
+    let Some(output_end) = output_offset.checked_add(output_bytes) else {
+        return gpgpu_one_tile_sentinel_failure("output-range-overflow", program, output_gpu);
+    };
+    if output_end > warm.gpgpu_arena_len {
+        return gpgpu_one_tile_sentinel_failure("output-range-outside-arena", program, output_gpu);
+    }
+    if output_gpu >> 32 != 0 {
+        return gpgpu_one_tile_sentinel_failure(
+            "output-gpu-high32-unsupported",
+            program,
+            output_gpu,
+        );
+    }
+    if !forcewake_render_acquire(warm) {
+        return gpgpu_one_tile_sentinel_failure("forcewake", program, output_gpu);
+    }
+    if !ensure_gpgpu_warm_buffers_mapped(dev, warm) || !ensure_gpgpu_tile_arena_mapped(dev, warm) {
+        return gpgpu_one_tile_sentinel_failure("ppgtt-map", program, output_gpu);
+    }
+
+    let output_virt = unsafe { warm.gpgpu_arena_virt.add(output_offset) };
+    let output_count = output_bytes / core::mem::size_of::<u32>();
+    let output_first_before = unsafe { core::ptr::read_volatile(output_virt as *const u32) };
+    let output_nonzero_before =
+        unsafe { gpgpu_stage_nonzero_dwords(output_virt as *const u32, output_count) };
+
+    let mut sentinel_words = trueos_eu::gfx12::HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS;
+    sentinel_words[trueos_eu::gfx12::HDC1_BTI34_STORE_IMM_DWORD] = GPGPU_ONE_TILE_OUTPUT_SENTINEL;
+    sentinel_words[7] = output_gpu as u32;
+    let program_uploaded =
+        upload_and_verify_gpu_program_at(warm, GPGPU_EU_KERNEL_OFFSET_BYTES, &sentinel_words);
+    if !program_uploaded {
+        return gpgpu_one_tile_sentinel_failure("program-upload", program, output_gpu);
+    }
+
+    unsafe {
+        core::ptr::write_volatile(
+            warm.result_virt
+                .add(RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD * core::mem::size_of::<u32>())
+                as *mut u32,
+            0,
+        );
+        for breadcrumb_slot in 23..=28 {
+            core::ptr::write_volatile(
+                warm.result_virt
+                    .add(breadcrumb_slot * core::mem::size_of::<u32>()) as *mut u32,
+                0,
+            );
+        }
+        core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
+        core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
+    }
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+
+    let batch_dwords = warm.batch_len / core::mem::size_of::<u32>();
+    let batch =
+        unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, batch_dwords) };
+    let store_surface = prepare_gpgpu_store_surface_state_for_target(
+        warm,
+        output_gpu,
+        "bind-send-bti-to-one-tile-output-shadow",
+    );
+    let batch_result =
+        encode_gfx12_gpgpu_walker_probe_batch(warm, batch, store_surface, program, 1);
+    let batch_bytes = match batch_result {
+        Ok(bytes) => bytes,
+        Err(reason) => return gpgpu_one_tile_sentinel_failure(reason, program, output_gpu),
+    };
+    crate::intel::dma_flush(warm.batch_virt, batch_bytes);
+
+    let dispatch_before = read_gpgpu_threads_dispatched(dev);
+    let finished = submit_warm_render_batch(
+        dev,
+        warm,
+        RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD,
+        "gpgpu-one-tile-sentinel",
+    );
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+    crate::intel::dma_flush(output_virt, output_bytes);
+    let dispatch_after = read_gpgpu_threads_dispatched(dev);
+    let dispatch_delta = dispatch_after.saturating_sub(dispatch_before);
+    let finish_marker = read_result_dword(warm, RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD);
+    let output_first_after = unsafe { core::ptr::read_volatile(output_virt as *const u32) };
+    let output_nonzero_after =
+        unsafe { gpgpu_stage_nonzero_dwords(output_virt as *const u32, output_count) };
+    let output_hits_lo64 = unsafe {
+        gpgpu_stage_dword_hits_mask_lo64(
+            output_virt as *const u32,
+            output_count,
+            GPGPU_ONE_TILE_OUTPUT_SENTINEL,
+        )
+    };
+    let readback_ok = output_first_after == GPGPU_ONE_TILE_OUTPUT_SENTINEL
+        && (output_hits_lo64 & 1) != 0
+        && dispatch_delta != 0;
+    let submitted = batch_bytes != 0;
+    let reason = if readback_ok {
+        "sentinel-written"
+    } else if output_first_before != 0 {
+        "output-not-zero-before-submit"
+    } else if dispatch_delta == 0 {
+        "no-dispatch-delta"
+    } else if output_first_after != GPGPU_ONE_TILE_OUTPUT_SENTINEL {
+        "sentinel-missing"
+    } else {
+        "sentinel-not-at-slot0"
+    };
+    crate::log!(
+        "intel/gpgpu: one-tile-output-sentinel submitted={} finished={} readback_ok={} reason={} program_source={} groups=1 expected_lane_dispatch=8 observed_lane_dispatch={} output_gpu=0x{:X} output_first_before=0x{:08X} output_first_after=0x{:08X} sentinel=0x{:08X} output_nonzero_before={} output_nonzero_after={} output_hits_lo64=0x{:016X} finish_marker=0x{:08X} finish_expected=0x{:08X} batch_bytes=0x{:X} cpu_expected_bits=0x{:08X} output_owner=cpu-ap next=replace-sentinel-with-one-row-dot does_not_prove=model_matvec\n",
+        submitted as u8,
+        finished as u8,
+        readback_ok as u8,
+        reason,
+        program.name,
+        dispatch_delta,
+        output_gpu,
+        output_first_before,
+        output_first_after,
+        GPGPU_ONE_TILE_OUTPUT_SENTINEL,
+        output_nonzero_before,
+        output_nonzero_after,
+        output_hits_lo64,
+        finish_marker,
+        RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        batch_bytes,
+        cpu_expected_bits,
+    );
+    if !finished {
+        recover_render_engine_after_nonretired_submit(dev, warm, "gpgpu-one-tile-sentinel");
+    }
+    crate::intel::GpgpuOneTileSentinelProof {
+        submitted,
+        finished,
+        readback_ok,
+        reason,
+        program_name: program.name,
+        output_gpu,
+        sentinel: GPGPU_ONE_TILE_OUTPUT_SENTINEL,
+        output_first_before,
+        output_first_after,
+        output_nonzero_before,
+        output_nonzero_after,
+        output_hits_lo64,
+        dispatch_delta,
+        finish_marker,
+        expected_finish_marker: RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        batch_bytes,
+    }
+}
+
+fn gpgpu_one_tile_sentinel_failure(
+    reason: &'static str,
+    program: GpgpuEuProgram,
+    output_gpu: u64,
+) -> crate::intel::GpgpuOneTileSentinelProof {
+    crate::log!(
+        "intel/gpgpu: one-tile-output-sentinel submitted=0 finished=0 readback_ok=0 reason={} program_source={} groups=1 expected_lane_dispatch=8 observed_lane_dispatch=0 output_gpu=0x{:X} output_first_before=0x00000000 output_first_after=0x00000000 sentinel=0x{:08X} output_nonzero_before=0 output_nonzero_after=0 output_hits_lo64=0x0000000000000000 finish_marker=0x00000000 finish_expected=0x{:08X} batch_bytes=0x0 output_owner=cpu-ap next=fix-one-tile-output-sentinel does_not_prove=model_matvec\n",
+        reason,
+        program.name,
+        output_gpu,
+        GPGPU_ONE_TILE_OUTPUT_SENTINEL,
+        RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+    );
+    crate::intel::GpgpuOneTileSentinelProof {
+        submitted: false,
+        finished: false,
+        readback_ok: false,
+        reason,
+        program_name: program.name,
+        output_gpu,
+        sentinel: GPGPU_ONE_TILE_OUTPUT_SENTINEL,
+        output_first_before: 0,
+        output_first_after: 0,
+        output_nonzero_before: 0,
+        output_nonzero_after: 0,
+        output_hits_lo64: 0,
+        dispatch_delta: 0,
+        finish_marker: 0,
+        expected_finish_marker: RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        batch_bytes: 0,
+    }
+}
+
+fn log_gpgpu_one_tile_stage_failure(
+    reason: &'static str,
+    k_dim: usize,
+    row_index: usize,
+    x_checksum: u64,
+    row_checksum: u64,
+    cpu_expected_bits: u32,
+) -> crate::intel::GpgpuOneTileStageProof {
+    let proof = crate::intel::GpgpuOneTileStageProof {
+        staged: false,
+        reason,
+        readback_ok: false,
+        output_zeroed: false,
+        arena_mapped: false,
+        arena_gpu_base: 0,
+        x_gpu: 0,
+        row_gpu: 0,
+        output_gpu: 0,
+        x_bytes: k_dim.saturating_mul(GPGPU_TILE_X_BYTES_PER_ELEM),
+        row_bytes: k_dim.saturating_mul(GPGPU_TILE_WEIGHT_BYTES_PER_ELEM),
+        output_bytes: 0,
+        tile_rows: GPGPU_TILE_ROWS,
+        k_dim,
+        output_first_bits: 0,
+        output_nonzero_dwords: 0,
+        output_expected_hits_lo64: 0,
+        output_checksum: 0,
+    };
+    crate::log!(
+        "intel/gpgpu: one-tile-stage staged=0 reason={} arena_mapped=0 arena_gpu_base=0x0 row={} tile_rows={} k_dim={} x_bytes={} row_bytes={} output_bytes=0 x_checksum=0x{:016X} row_checksum=0x{:016X} cpu_expected_bits=0x{:08X} gpu_submission=0 output_owner=cpu-ap next=fix-one-tile-stage does_not_prove=gpu_live_load_or_model_matvec\n",
+        reason,
+        row_index,
+        proof.tile_rows,
+        proof.k_dim,
+        proof.x_bytes,
+        proof.row_bytes,
+        x_checksum,
+        row_checksum,
+        cpu_expected_bits,
+    );
+    proof
+}
+
+unsafe fn gpgpu_stage_checksum_bytes(ptr: *const u8, len: usize) -> u64 {
+    let mut hash = 0xCBF2_9CE4_8422_2325u64;
+    for i in 0..len {
+        hash ^= unsafe { core::ptr::read_volatile(ptr.add(i)) } as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01B3);
+    }
+    hash
+}
+
+unsafe fn gpgpu_stage_nonzero_dwords(ptr: *const u32, count: usize) -> usize {
+    let mut nonzero = 0usize;
+    for i in 0..count {
+        if unsafe { core::ptr::read_volatile(ptr.add(i)) } != 0 {
+            nonzero += 1;
+        }
+    }
+    nonzero
+}
+
+unsafe fn gpgpu_stage_dword_hits_mask_lo64(ptr: *const u32, count: usize, expected: u32) -> u64 {
+    let mut hits = 0u64;
+    for i in 0..count.min(64) {
+        if unsafe { core::ptr::read_volatile(ptr.add(i)) } == expected {
+            hits |= 1u64 << i;
+        }
+    }
+    hits
 }
 
 fn gpgpu_arena_gpu_base(arena_bytes: usize) -> u64 {
@@ -1814,7 +2295,7 @@ fn prepare_gpgpu_program_artifact(
 fn upload_and_verify_gpu_program_at(
     warm: RenderWarmState,
     offset_bytes: usize,
-    program: &'static [u32],
+    program: &[u32],
 ) -> bool {
     unsafe {
         core::ptr::copy_nonoverlapping(
@@ -2079,6 +2560,18 @@ fn log_gpgpu_eot_send_contract(
 fn prepare_gpgpu_store_surface_state(warm: RenderWarmState) -> GpgpuStoreSurfaceState {
     let target_gpu = GPU_VA_RESULT_BASE
         + (RESULT_SLOT_GPGPU_EU_C_STORE_DWORD as u64) * core::mem::size_of::<u32>() as u64;
+    prepare_gpgpu_store_surface_state_for_target(
+        warm,
+        target_gpu,
+        "bind-send-bti-to-result-raw-buffer",
+    )
+}
+
+fn prepare_gpgpu_store_surface_state_for_target(
+    warm: RenderWarmState,
+    target_gpu: u64,
+    note: &'static str,
+) -> GpgpuStoreSurfaceState {
     let binding_table_bytes = GPGPU_STORE_BINDING_TABLE_ENTRIES * core::mem::size_of::<u32>();
     let surface_bytes = GPGPU_STORE_SURFACE_DWORDS * core::mem::size_of::<u32>();
     let binding_end = GPGPU_STORE_BINDING_TABLE_OFFSET_BYTES.saturating_add(binding_table_bytes);
@@ -2148,7 +2641,7 @@ fn prepare_gpgpu_store_surface_state(warm: RenderWarmState) -> GpgpuStoreSurface
         surface_bytes,
     );
     crate::log!(
-        "intel/gpgpu: gpu-program-surface-state ready=1 bti=0x{:02X} bt_off=0x{:X} bt_entries={} bt_entry=0x{:08X} surf_off=0x{:X} surf_gpu=0x{:X} target_gpu=0x{:X} surf0=0x{:08X} surf1=0x{:08X} surf2=0x{:08X} surf3=0x{:08X} note=bind-send-bti-to-result-raw-buffer\n",
+        "intel/gpgpu: gpu-program-surface-state ready=1 bti=0x{:02X} bt_off=0x{:X} bt_entries={} bt_entry=0x{:08X} surf_off=0x{:X} surf_gpu=0x{:X} target_gpu=0x{:X} surf0=0x{:08X} surf1=0x{:08X} surf2=0x{:08X} surf3=0x{:08X} note={}\n",
         GPGPU_STORE_BINDING_TABLE_INDEX,
         GPGPU_STORE_BINDING_TABLE_OFFSET_BYTES,
         GPGPU_STORE_BINDING_TABLE_ENTRIES,
@@ -2160,6 +2653,7 @@ fn prepare_gpgpu_store_surface_state(warm: RenderWarmState) -> GpgpuStoreSurface
         RENDER_MOCS << 24,
         3,
         0,
+        note,
     );
 
     GpgpuStoreSurfaceState {

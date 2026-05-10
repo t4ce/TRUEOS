@@ -164,6 +164,70 @@ pub(crate) fn observe_live_bf16_matvec_probe(
         static4.to_bits(),
         row0.to_bits()
     );
+
+    let stage = crate::intel::stage_gpgpu_one_tile_shadow_probe(
+        x,
+        w_rowmajor_bf16,
+        k_dim,
+        0,
+        x_checksum,
+        row_checksum,
+        row0.to_bits(),
+    );
+    crate::log!(
+        "lumen-gpu-shadow: director-step step=5 backend=local-gpu mode=one-tile-arena-stage staged={} reason={} call={} manifest={} row=0 tile_rows={} k_dim={} x_gpu=0x{:X} row_gpu=0x{:X} output_gpu=0x{:X} x_bytes={} row_bytes={} output_bytes={} cpu_expected_bits=0x{:08X} gpu_submission=0 output_owner=cpu-ap next=one-tile-gpu-shadow-compare-artifact does_not_prove=gpu_live_load_or_model_matvec\n",
+        stage.staged as u8,
+        stage.reason,
+        plan.call_index,
+        manifest.is_some() as u8,
+        stage.tile_rows,
+        stage.k_dim,
+        stage.x_gpu,
+        stage.row_gpu,
+        stage.output_gpu,
+        stage.x_bytes,
+        stage.row_bytes,
+        stage.output_bytes,
+        row0.to_bits(),
+    );
+    crate::log!(
+        "lumen-gpu-shadow: director-step step=6 backend=local-gpu mode=one-worker-tile-readback readback_ok={} staged={} output_zeroed={} output_first_bits=0x{:08X} output_nonzero_dwords={} output_expected_hits_lo64=0x{:016X} output_checksum=0x{:016X} cpu_expected_bits=0x{:08X} gpu_submission=0 output_owner=cpu-ap action=hold-scale next=submit-one-worker-read-alu-write-kernel does_not_prove=gpu_output_or_model_matvec\n",
+        stage.readback_ok as u8,
+        stage.staged as u8,
+        stage.output_zeroed as u8,
+        stage.output_first_bits,
+        stage.output_nonzero_dwords,
+        stage.output_expected_hits_lo64,
+        stage.output_checksum,
+        row0.to_bits(),
+    );
+    if stage.readback_ok {
+        let sentinel = crate::intel::submit_gpgpu_one_tile_output_sentinel_probe(
+            stage.output_gpu,
+            stage.output_bytes,
+            row0.to_bits(),
+        );
+        crate::log!(
+            "lumen-gpu-shadow: director-step step=7 backend=local-gpu mode=one-worker-output-sentinel submitted={} finished={} readback_ok={} reason={} program={} output_gpu=0x{:X} sentinel=0x{:08X} output_first_before=0x{:08X} output_first_after=0x{:08X} output_nonzero_before={} output_nonzero_after={} output_hits_lo64=0x{:016X} lane_dispatch={} finish_marker=0x{:08X} finish_expected=0x{:08X} batch_bytes=0x{:X} cpu_expected_bits=0x{:08X} output_owner=cpu-ap action=hold-scale next=replace-sentinel-with-one-row-dot does_not_prove=model_matvec\n",
+            sentinel.submitted as u8,
+            sentinel.finished as u8,
+            sentinel.readback_ok as u8,
+            sentinel.reason,
+            sentinel.program_name,
+            sentinel.output_gpu,
+            sentinel.sentinel,
+            sentinel.output_first_before,
+            sentinel.output_first_after,
+            sentinel.output_nonzero_before,
+            sentinel.output_nonzero_after,
+            sentinel.output_hits_lo64,
+            sentinel.dispatch_delta,
+            sentinel.finish_marker,
+            sentinel.expected_finish_marker,
+            sentinel.batch_bytes,
+            row0.to_bits(),
+        );
+    }
 }
 
 fn bf16_row_dot(x: &[f32], row_bf16: &[u8], k_dim: usize) -> f32 {
