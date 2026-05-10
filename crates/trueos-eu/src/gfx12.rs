@@ -384,6 +384,46 @@ pub const T5_ONE_ROW_MATVEC_PROGRAM_NAME: &str =
     "gfx12-t5-small-live4-bf16-dot-hdc1-stateless-store-then-ts-eot";
 pub const T5_ONE_ROW_MATVEC_LIVE_K: usize = 4;
 pub const T5_ONE_ROW_MATVEC_REQUIRES_LIVE_GPU_LOAD: bool = true;
+pub const T5_SMALL_LIVE4_TRUEOS_ARENA_EXPECTED_SENTINEL_U32: u32 = 0xC0DE_7505;
+pub const T5_SMALL_LIVE4_TRUEOS_ARENA_STORE_SEND_DWORD: usize = 73;
+pub const T5_SMALL_LIVE4_TRUEOS_ARENA_SENTINEL_DWORD: usize = 19;
+
+// Mesa ANV oracle artifact from `.codex_tmp/t5_small_live4_trueos_arena.comp`.
+//
+// Contract:
+// - one SSBO bound at the TRUEOS GPGPU tile arena base
+// - x f32 words at arena + 0x0
+// - BF16 row words at arena + 0x2000
+// - output words at arena + 0x102000
+// - output[0] = dot(x[0..4], bf16(row[0..4]))
+// - output[1] = 4
+// - output[2] = 0xC0DE7505
+// - output[3] = workgroup id x
+pub static T5_SMALL_LIVE4_TRUEOS_ARENA_BF16_DOT_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS:
+    [u32; 84] =
+    [
+        0x80030061, 0x0A050220, 0x00000024, 0x00000000, 0x80030061, 0x0B054220, 0x00000000,
+        0x00000000, 0x80030061, 0x0C054220, 0x00000000, 0x00000000, 0x80030061, 0x0F054220,
+        0x00000000, 0x00000004, 0x80030061, 0x10054220, 0x00000000, 0xC0DE7505, 0x00030061,
+        0x0D054660, 0x00000000, 0x00102000, 0xA4110640, 0x01110A0A, 0x80000661, 0x0B454620,
+        0x00000000, 0x00000000, 0x80000661, 0x0C454620, 0x00000000, 0x00002000, 0x8003A031,
+        0x010C0000, 0xA4020B0C, 0x02100000, 0x80039131, 0x030C0000, 0xA4020C0C, 0x02100000,
+        0x80032169, 0x02058660, 0x02000304, 0x00000010, 0x80030069, 0x05058660, 0x02000324,
+        0x00000010, 0x80030069, 0x04058660, 0x02000344, 0x00000010, 0x80030069, 0x06058660,
+        0x02000364, 0x00000010, 0x2407B041, 0x05110120, 0xA308015B, 0x02010704, 0xA309015B,
+        0x04010834, 0xA30E015B, 0x0601092C, 0x80000101, 0x00000000, 0x00000000, 0x00000000,
+        0x00034231, 0x00000000, 0xC0020D0C, 0x00980E24, 0x80030061, 0x7F050220, 0x00460005,
+        0x00000000, 0x80030131, 0x00000004, 0x70007F0C, 0x00000000, 0x20000060, 0x00000000,
+    ];
+
+pub static T5_SMALL_LIVE4_TRUEOS_ARENA_BF16_DOT_HDC1_STATELESS_STORE_THEN_TS_EOT: EuArtifact =
+    EuArtifact {
+        name: T5_ONE_ROW_MATVEC_PROGRAM_NAME,
+        isa: EuIsa::Gfx12,
+        kind: EuArtifactKind::T5SmallLive4Bf16DotThenHdc1StoreThenThreadSpawnerEot,
+        words: &T5_SMALL_LIVE4_TRUEOS_ARENA_BF16_DOT_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS,
+        expects_store: true,
+    };
 
 #[cfg(feature = "alloc")]
 pub mod builder {
