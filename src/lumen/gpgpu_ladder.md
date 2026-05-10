@@ -478,7 +478,7 @@ Current runtime shape:
 - `live_k_dim=4`
 - `requires_live_gpu_load=1`
 - `output_owner=cpu-ap`
-- `artifact_addressing=fixed-slot-reused`
+- `artifact_addressing=tile-record-output-slots`
 - `does_not_prove=full_model_matvec`
 
 The latest actual-work run arms three tile-frontier rows from the live Lumen
@@ -490,9 +490,16 @@ matvec:
 
 All three staged tiles compare correctly for the T5 live4 slice.  The aggregate
 proof reports `armed_tiles=3`, `staged_tiles=3`, `submitted_tiles=3`, and
-`compare_ok_tiles=3`.  This is deliberately not a full tile matvec yet: the
-same fixed arena slot and same T5 live4 artifact are reused for each tile-frontier
-probe, while CPU/AP keeps the real inference result.
+`compare_ok_tiles=3`.  Each tile now owns a separate arena record:
+
+- record-local `x` starts at `+0x0`
+- record-local packed BF16 row starts at `+0x2000`
+- record-local output starts at `+0x102000`
+
+The T5/T6 artifacts still see the same local offsets, but the runtime binds the
+surface base to the selected tile record.  That lets the current proof address
+distinct output rows without regenerating the shader.  CPU/AP keeps the real
+inference result.
 
 Current T5 scale cap:
 
@@ -523,8 +530,8 @@ What changes from T5:
 
 - `live_k_dim` grows from `4` to `8`.
 - The shader unpacks packed BF16 row lanes `[0,1,2,3,4,5,6,7]`.
-- The same staged activation vector, staged row, arena surface, fixed output
-  slot, and CPU/AP readback ownership are preserved.
+- The same staged activation vector, staged row, record-local arena surface,
+  record-local output slot, and CPU/AP readback ownership are preserved.
 - T6 only runs after the T5 compare for that staged tile succeeds, so T5 remains
   the boot-green guardrail.
 
@@ -542,9 +549,16 @@ Current T6 scale cap:
 - Do not tune this cap as a throughput knob.  Revisit only when the kernel,
   CGP queueing model, row-count semantics, or retire logic changes.
 
-Next meaningful direction: widen the actual math toward the full row or give
-each GPU worker a distinct output-row responsibility.  Raising group count alone
-does not turn the single fixed-slot proof into full matrix-vector work.
+Next meaningful direction: widen the actual math toward the full row while
+keeping the distinct tile-record output ownership.  Raising group count alone
+does not turn the proof into full matrix-vector work.
+
+## T6.1 Live-K Tier Naming
+
+Reserve `T6.1` for the next artifact that widens the packed-BF16 live reduction
+beyond T6 live8.  The current distinct-output patch is not a new shader
+artifact: it is a runtime addressing change that gives each armed tile its own
+record while preserving the existing T5/T6 native bytes.
 
 ## Backend Selection Boundary
 
