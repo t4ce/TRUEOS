@@ -48,7 +48,7 @@ fn atlas_set() -> Option<&'static TwemojiAtlasSet> {
         .call_once(|| match serde_json::from_str(TWEMOJI_ATLAS_SET_JSON) {
             Ok(set) => Some(set),
             Err(err) => {
-                crate::log_trace!("twemoji: atlas-set parse failed err={}\n", err);
+                crate::log!("twemoji: atlas-set parse failed err={}\n", err);
                 None
             }
         })

@@ -105,7 +105,7 @@ impl CompatAddr {
 
 fn log_tcp_endpoint(prefix: &str, socket_id: u32, handle_id: u32, peer: CompatAddr) {
     match peer {
-        CompatAddr::V4 { addr, port } => crate::log_trace!(
+        CompatAddr::V4 { addr, port } => crate::log!(
             "{} socket={} handle={} peer={}.{}.{}.{}:{}\n",
             prefix,
             socket_id,
@@ -116,7 +116,7 @@ fn log_tcp_endpoint(prefix: &str, socket_id: u32, handle_id: u32, peer: CompatAd
             addr[3],
             port
         ),
-        CompatAddr::V6 { addr, port } => crate::log_trace!(
+        CompatAddr::V6 { addr, port } => crate::log!(
             "{} socket={} handle={} peer={:02x}{:02x}:{:02x}{:02x}:...:{}\n",
             prefix,
             socket_id,
@@ -417,7 +417,7 @@ impl MioCompat {
                     match socket.kind {
                         MioSocketKind::Udp => {
                             socket.connected = true;
-                            crate::log_trace!(
+                            crate::log!(
                                 "mio_compat: udp opened socket={} handle={}\n",
                                 socket.id,
                                 handle.0
@@ -452,7 +452,7 @@ impl MioCompat {
                         let mut inherited_rx = VecDeque::new();
                         core::mem::swap(&mut inherited_rx, &mut listener.rx_stream);
                         if !inherited_rx.is_empty() {
-                            crate::log_trace!(
+                            crate::log!(
                                 "mio_compat: tcp established inherited listener bytes listener={} child={} handle={} bytes={}\n",
                                 listener_id,
                                 child_id,
@@ -510,7 +510,7 @@ impl MioCompat {
             api::Event::TcpData { handle, data } => {
                 if let Some(socket) = self.socket_by_handle_mut(handle) {
                     if socket.kind == MioSocketKind::TcpListener {
-                        crate::log_trace!(
+                        crate::log!(
                             "mio_compat: tcp data queued on listener socket={} handle={} bytes={} queued_before={}\n",
                             socket.id,
                             handle.0,
@@ -518,7 +518,7 @@ impl MioCompat {
                             socket.rx_stream.len()
                         );
                     } else if probe_tcp_socket(socket) {
-                        crate::log_trace!(
+                        crate::log!(
                             "mio_compat: tcp data socket={} handle={} bytes={} queued_before={}\n",
                             socket.id,
                             handle.0,
@@ -528,7 +528,7 @@ impl MioCompat {
                     }
                     socket.rx_stream.extend(data.as_slice().iter().copied());
                     if probe_tcp_socket(socket) {
-                        crate::log_trace!(
+                        crate::log!(
                             "mio_compat: tcp data queued socket={} handle={} queued_after={}\n",
                             socket.id,
                             handle.0,
@@ -536,7 +536,7 @@ impl MioCompat {
                         );
                     }
                 } else {
-                    crate::log_trace!(
+                    crate::log!(
                         "mio_compat: tcp data orphan handle={} bytes={}\n",
                         handle.0,
                         data.as_slice().len()
@@ -663,7 +663,7 @@ impl MioCompat {
                 }
 
                 if probe_tcp_socket(socket) && should_log_selector_probe(readiness) {
-                    crate::log_trace!(
+                    crate::log!(
                         "mio_compat: tcp selector-ready selector={} socket={} token={} interests=0x{:02x} readiness=0x{:02x} rx={} closed={}\n",
                         selector_id,
                         socket.id,
@@ -680,7 +680,7 @@ impl MioCompat {
                 {
                     static UDP_WRITABLE_FLOW_LAST_LOG_NS: AtomicU64 = AtomicU64::new(0);
                     if once_per_second(&UDP_WRITABLE_FLOW_LAST_LOG_NS) {
-                        crate::log_trace!(
+                        crate::log!(
                             "mio_compat: udp selector-ready selector={} socket={} token={} readiness=0x{:02x}\n",
                             selector_id,
                             socket.id,
@@ -695,7 +695,7 @@ impl MioCompat {
                 {
                     static TCP_WRITABLE_FLOW_LAST_LOG_NS: AtomicU64 = AtomicU64::new(0);
                     if once_per_second(&TCP_WRITABLE_FLOW_LAST_LOG_NS) {
-                        crate::log_trace!(
+                        crate::log!(
                             "mio_compat: tcp selector-ready selector={} socket={} token={} readiness=0x{:02x}\n",
                             selector_id,
                             socket.id,
@@ -1123,7 +1123,7 @@ pub(crate) unsafe fn mio_tcp_stream_read_host(
         }
         if socket.rx_stream.is_empty() {
             if probe_tcp_socket(socket) {
-                crate::log_trace!(
+                crate::log!(
                     "mio_compat: tcp read would-block socket={} cap={} closed={}\n",
                     socket.id,
                     out_cap,
@@ -1146,7 +1146,7 @@ pub(crate) unsafe fn mio_tcp_stream_read_host(
             }
         }
         if probe_tcp_socket(socket) {
-            crate::log_trace!(
+            crate::log!(
                 "mio_compat: tcp read socket={} bytes={} remaining={}\n",
                 socket.id,
                 len,
@@ -1219,7 +1219,7 @@ pub(crate) unsafe fn mio_tcp_stream_write_host(
 
         let len = data_len.min(api::MAX_MSG);
         if probe_tcp_socket(socket) {
-            crate::log_trace!(
+            crate::log!(
                 "mio_compat: tcp write socket={} handle={} bytes={} requested={}\n",
                 socket.id,
                 handle.0,

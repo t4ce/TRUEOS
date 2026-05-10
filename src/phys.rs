@@ -76,13 +76,13 @@ pub fn register_memory_metadata() {
 
 pub fn init_pmm_from_limine() {
     let Some(entries) = crate::limine::memmap_entries() else {
-        crate::log_trace!("pmm: no Limine memmap; PMM disabled\n");
+        crate::log!("pmm: no Limine memmap; PMM disabled\n");
         return;
     };
 
     let hhdm = HHDM_BASE.load(Ordering::Relaxed);
     if hhdm == 0 {
-        crate::log_trace!("pmm: no HHDM registered; cannot hand out virtual heap arena\n");
+        crate::log!("pmm: no HHDM registered; cannot hand out virtual heap arena\n");
         return;
     }
 
@@ -101,7 +101,7 @@ pub fn init_pmm_from_limine() {
         }
 
         if state.add_region(start, end).is_err() {
-            crate::log_trace!("pmm: region table full dropping 0x{:X}..0x{:X}\n", start, end);
+            crate::log!("pmm: region table full dropping 0x{:X}..0x{:X}\n", start, end);
         }
     }
 
@@ -111,13 +111,13 @@ pub fn init_pmm_from_limine() {
     let mut guard = PMM.lock();
     if region_count == 0 {
         *guard = None;
-        crate::log_trace!("pmm: no usable regions available\n");
+        crate::log!("pmm: no usable regions available\n");
     } else {
         let first = state.regions.first().copied().unwrap();
         let last = state.regions.last().copied().unwrap();
         *guard = Some(state);
         if crate::logflag::BOOT_INFO_LOGS {
-            crate::log_trace!(
+            crate::log!(
                 "pmm: regions={} span=0x{:X}..0x{:X} total={} MiB\n",
                 region_count,
                 first.start,
@@ -134,7 +134,7 @@ pub fn reserve_heap_arena(size: usize, align: usize) -> Option<HeapArena> {
     }
 
     if HHDM_BASE.load(Ordering::Relaxed) == 0 {
-        crate::log_trace!("pmm: cannot reserve heap arena without HHDM mapping\n");
+        crate::log!("pmm: cannot reserve heap arena without HHDM mapping\n");
         return None;
     }
 
@@ -189,7 +189,7 @@ where
         // If the consumer rejects the arena, release it back to the PMM to
         // avoid leaking physical memory during boot.
         if !free_phys_range(arena.phys_start, arena.length) {
-            crate::log_trace!(
+            crate::log!(
                 "pmm: failed to free rejected heap arena phys=0x{:X} size=0x{:X}\n",
                 arena.phys_start,
                 arena.length
@@ -234,7 +234,7 @@ pub fn phys_to_virt(phys: usize) -> usize {
     let hhdm = HHDM_BASE.load(Ordering::Relaxed);
     if hhdm != 0 {
         phys.checked_add(hhdm as usize).unwrap_or_else(|| {
-            crate::log_trace!(
+            crate::log!(
                 "phys_to_virt: overflow translating phys=0x{:X} with hhdm=0x{:X}\n",
                 phys,
                 hhdm

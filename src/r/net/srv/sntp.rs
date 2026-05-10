@@ -112,9 +112,9 @@ pub fn build_sntp_response(packet: &[u8]) -> Option<[u8; SNTP_PACKET_LEN]> {
 
 #[embassy_executor::task]
 pub async fn sntp_service_task() {
-    crate::log_trace!("sntp: waiting for NET_V4_CONFIGURED\n");
+    crate::log!("sntp: waiting for NET_V4_CONFIGURED\n");
     crate::r::readiness::wait_for(crate::r::readiness::NET_V4_CONFIGURED).await;
-    crate::log_trace!("sntp: readiness reached, starting service loop\n");
+    crate::log!("sntp: readiness reached, starting service loop\n");
 
     let mut no_dev_count: u32 = 0;
     let mut vnet_open_fail_count: u32 = 0;
@@ -125,7 +125,7 @@ pub async fn sntp_service_task() {
         let Some(dev_idx) = profile.resolve_device_index() else {
             no_dev_count = no_dev_count.saturating_add(1);
             if no_dev_count == 1 || no_dev_count % 20 == 0 {
-                crate::log_trace!(
+                crate::log!(
                     "sntp: no network device for default profile (retry_count={})\n",
                     no_dev_count
                 );
@@ -134,7 +134,7 @@ pub async fn sntp_service_task() {
             continue;
         };
         if no_dev_count != 0 {
-            crate::log_trace!(
+            crate::log!(
                 "sntp: network device resolved after {} retries (dev_idx={})\n",
                 no_dev_count,
                 dev_idx
@@ -145,7 +145,7 @@ pub async fn sntp_service_task() {
         let Some(net) = VNet::open(dev_idx) else {
             vnet_open_fail_count = vnet_open_fail_count.saturating_add(1);
             if vnet_open_fail_count == 1 || vnet_open_fail_count % 20 == 0 {
-                crate::log_trace!(
+                crate::log!(
                     "sntp: VNet::open failed (dev_idx={}, retry_count={})\n",
                     dev_idx,
                     vnet_open_fail_count
@@ -155,7 +155,7 @@ pub async fn sntp_service_task() {
             continue;
         };
         if vnet_open_fail_count != 0 {
-            crate::log_trace!(
+            crate::log!(
                 "sntp: VNet::open recovered after {} retries (dev_idx={})\n",
                 vnet_open_fail_count,
                 dev_idx
@@ -170,10 +170,10 @@ pub async fn sntp_service_task() {
         )
         .await
         else {
-            crate::log_trace!("sntp: udp open timed out on port={}\n", SNTP_PORT);
+            crate::log!("sntp: udp open timed out on port={}\n", SNTP_PORT);
             udp_open_fail_count = udp_open_fail_count.saturating_add(1);
             if udp_open_fail_count == 1 || udp_open_fail_count % 20 == 0 {
-                crate::log_trace!(
+                crate::log!(
                     "sntp: failed to open UDP socket on port {} (retry_count={})\n",
                     SNTP_PORT,
                     udp_open_fail_count
@@ -182,12 +182,9 @@ pub async fn sntp_service_task() {
             Timer::after(EmbassyDuration::from_millis(250)).await;
             continue;
         };
-        crate::log_trace!("sntp: udp opened on port={} handle={:?}\n", SNTP_PORT, udp.handle());
+        crate::log!("sntp: udp opened on port={} handle={:?}\n", SNTP_PORT, udp.handle());
         if udp_open_fail_count != 0 {
-            crate::log_trace!(
-                "sntp: UDP socket open recovered after {} retries\n",
-                udp_open_fail_count
-            );
+            crate::log!("sntp: UDP socket open recovered after {} retries\n", udp_open_fail_count);
             udp_open_fail_count = 0;
         }
 
@@ -209,7 +206,7 @@ pub async fn sntp_service_task() {
                         if let Some(reply) = build_sntp_response(data.as_slice()) {
                             served_packets = served_packets.saturating_add(1);
                             if served_packets == 1 || served_packets % 64 == 0 {
-                                crate::log_trace!(
+                                crate::log!(
                                     "sntp: replied to {} requests (last_from={:?})\n",
                                     served_packets,
                                     from
@@ -219,7 +216,7 @@ pub async fn sntp_service_task() {
                         } else {
                             rejected_packets = rejected_packets.saturating_add(1);
                             if rejected_packets == 1 || rejected_packets % 64 == 0 {
-                                crate::log_trace!(
+                                crate::log!(
                                     "sntp: ignored non-client/invalid packet count={} (from={:?})\n",
                                     rejected_packets,
                                     from
@@ -229,7 +226,7 @@ pub async fn sntp_service_task() {
                     }
                     VNetUdpEvent::Packet(VNetUdpPacket::V6 { .. }) => {}
                     VNetUdpEvent::Closed => {
-                        crate::log_trace!(
+                        crate::log!(
                             "sntp: UDP socket closed (handle={:?}), reopening\n",
                             udp.handle()
                         );

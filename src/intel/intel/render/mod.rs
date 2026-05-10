@@ -36,7 +36,7 @@ use spin::Mutex;
 macro_rules! intel_render_focus_log {
     ($($arg:tt)*) => {
         if crate::logflag::INTEL_STAGE1_LOGS || crate::logflag::INTEL_RENDER_NGIN_LOGS {
-            crate::log_trace!($($arg)*);
+            crate::log!($($arg)*);
         }
     };
 }
@@ -44,7 +44,7 @@ macro_rules! intel_render_focus_log {
 macro_rules! intel_render_verbose_log {
     ($($arg:tt)*) => {
         if crate::logflag::INTEL_RENDER_NGIN_LOGS && !crate::logflag::INTEL_STAGE1_LOGS {
-            crate::log_trace!($($arg)*);
+            crate::log!($($arg)*);
         }
     };
 }
@@ -52,7 +52,7 @@ macro_rules! intel_render_verbose_log {
 macro_rules! intel_render_batch_log {
     ($($arg:tt)*) => {
         if crate::logflag::INTEL_RENDER_NGIN_BATCH_LOGS && !crate::logflag::INTEL_STAGE1_LOGS {
-            crate::log_trace!($($arg)*);
+            crate::log!($($arg)*);
         }
     };
 }

@@ -642,7 +642,7 @@ pub(super) fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) 
                         })
                 });
             let Some(target_browser_instance_id) = target_browser_instance_id else {
-                crate::log_trace!(
+                crate::log!(
                     "ui2: browser-fork no-target window={} source_browser={}\n",
                     source_window_id,
                     source_browser_instance_id
@@ -723,7 +723,7 @@ pub(super) fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) 
     refresh_window_hit_entries(state, id);
     match next_kind {
         Ui2WindowKind::HostedBrowser => {
-            crate::log_trace!(
+            crate::log!(
                 "ui2: browser-fork window={} browser={} from_window={}\n",
                 id,
                 next_browser_instance_id,
@@ -731,7 +731,7 @@ pub(super) fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) 
             );
         }
         Ui2WindowKind::HostedSurface => {
-            crate::log_trace!(
+            crate::log!(
                 "ui2: surface-fork window={} tex={} from_window={}\n",
                 id,
                 next_tex_id,
@@ -739,7 +739,7 @@ pub(super) fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) 
             );
         }
         Ui2WindowKind::Hosted3d => {
-            crate::log_trace!(
+            crate::log!(
                 "ui2: 3d-fork window={} tex={} from_window={}\n",
                 id,
                 next_tex_id,
@@ -1405,7 +1405,7 @@ impl Ui2SurfaceWindow {
         let width = (content_rect.w.max(1.0) + 0.5) as u32;
         let height = (content_rect.h.max(1.0) + 0.5) as u32;
         let Some(pixel_count) = (width as usize).checked_mul(height as usize) else {
-            crate::log_trace!(
+            crate::log!(
                 "ui2-surface-window: init size overflow tex={} size={}x{}\n",
                 tex_id,
                 width,
@@ -1414,7 +1414,7 @@ impl Ui2SurfaceWindow {
             return None;
         };
         let Some(byte_len) = pixel_count.checked_mul(4) else {
-            crate::log_trace!(
+            crate::log!(
                 "ui2-surface-window: init byte-size overflow tex={} size={}x{}\n",
                 tex_id,
                 width,
@@ -1434,7 +1434,7 @@ impl Ui2SurfaceWindow {
             0,
             "ui2-surface-init",
         ) {
-            crate::log_trace!(
+            crate::log!(
                 "ui2-surface-window: init upload queue failed tex={} size={}x{}\n",
                 tex_id,
                 width,
@@ -1528,7 +1528,7 @@ impl Ui2SurfaceWindow {
                 0,
                 "ui2-surface-rgb-render-target-repair",
             ) {
-                crate::log_trace!(
+                crate::log!(
                     "ui2-surface-window: rgb render target repair failed window={} tex={} size={}x{} have={}x{}\n",
                     self.window_id,
                     self.tex_id,
@@ -1552,7 +1552,7 @@ impl Ui2SurfaceWindow {
             repaint_window_id,
             repaint_reason,
         ) {
-            crate::log_trace!(
+            crate::log!(
                 "ui2-surface-window: rgb render queue failed window={} tex={}\n",
                 self.window_id,
                 self.tex_id
@@ -1580,7 +1580,7 @@ impl Ui2SurfaceWindow {
             repaint_window_id,
             repaint_reason,
         ) {
-            crate::log_trace!(
+            crate::log!(
                 "ui2-surface-window: mandelbrot render queue failed window={} tex={}\n",
                 self.window_id,
                 self.tex_id
@@ -1594,7 +1594,7 @@ impl Ui2SurfaceWindow {
     pub fn upload_rgba(&self, pixels: &[u8], repaint_reason: &'static str) -> bool {
         let expected = self.width as usize * self.height as usize * 4;
         if pixels.len() != expected {
-            crate::log_trace!(
+            crate::log!(
                 "ui2-surface-window: upload size mismatch tex={} got={} expected={}\n",
                 self.tex_id,
                 pixels.len(),
@@ -1615,7 +1615,7 @@ impl Ui2SurfaceWindow {
             repaint_window_id,
             repaint_reason,
         ) {
-            crate::log_trace!(
+            crate::log!(
                 "ui2-surface-window: rgba upload queue failed window={} tex={}\n",
                 self.window_id,
                 self.tex_id
@@ -1629,7 +1629,7 @@ impl Ui2SurfaceWindow {
     pub fn upload_rgba_owned(&self, pixels: Vec<u8>, repaint_reason: &'static str) -> bool {
         let expected = self.width as usize * self.height as usize * 4;
         if pixels.len() != expected {
-            crate::log_trace!(
+            crate::log!(
                 "ui2-surface-window: upload size mismatch tex={} got={} expected={}\n",
                 self.tex_id,
                 pixels.len(),
@@ -1650,7 +1650,7 @@ impl Ui2SurfaceWindow {
             repaint_window_id,
             repaint_reason,
         ) {
-            crate::log_trace!(
+            crate::log!(
                 "ui2-surface-window: rgba upload queue failed window={} tex={}\n",
                 self.window_id,
                 self.tex_id
@@ -1664,7 +1664,7 @@ impl Ui2SurfaceWindow {
     pub fn upload_rgba_now(&self, pixels: &[u8], repaint_reason: &'static str) -> bool {
         let expected = self.width as usize * self.height as usize * 4;
         if pixels.len() != expected {
-            crate::log_trace!(
+            crate::log!(
                 "ui2-surface-window: upload size mismatch tex={} got={} expected={}\n",
                 self.tex_id,
                 pixels.len(),
@@ -1682,7 +1682,7 @@ impl Ui2SurfaceWindow {
             )
         };
         if rc != 0 {
-            crate::log_trace!(
+            crate::log!(
                 "ui2-surface-window: direct rgba upload failed window={} tex={} rc={}\n",
                 self.window_id,
                 self.tex_id,
@@ -1708,7 +1708,7 @@ impl Ui2SurfaceWindow {
     ) -> bool {
         let expected = width as usize * height as usize * 4;
         if pixels.len() != expected {
-            crate::log_trace!(
+            crate::log!(
                 "ui2-surface-window: region upload size mismatch tex={} got={} expected={} rect={}x{}@{},{}\n",
                 self.tex_id,
                 pixels.len(),
@@ -1737,7 +1737,7 @@ impl Ui2SurfaceWindow {
             repaint_window_id,
             repaint_reason,
         ) {
-            crate::log_trace!(
+            crate::log!(
                 "ui2-surface-window: rgba region upload queue failed window={} tex={} rect={}x{}@{},{}\n",
                 self.window_id,
                 self.tex_id,

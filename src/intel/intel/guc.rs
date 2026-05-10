@@ -302,7 +302,7 @@ pub(crate) fn prove_h2g_mmio_once(dev: crate::intel::Dev, label: &'static str) -
         return H2G_MMIO_ACCEPTED.load(Ordering::Acquire);
     }
     if !ready() {
-        crate::log_trace!("intel/guc: h2g-mmio-proof label={} accepted=0 reason=not-ready\n", label);
+        crate::log!("intel/guc: h2g-mmio-proof label={} accepted=0 reason=not-ready\n", label);
         return false;
     }
 
@@ -315,7 +315,7 @@ pub(crate) fn prove_h2g_mmio_once(dev: crate::intel::Dev, label: &'static str) -
     H2G_MMIO_ERROR.store(result.error, Ordering::Release);
     H2G_MMIO_ACCEPTED.store(result.accepted, Ordering::Release);
 
-    crate::log_trace!(
+    crate::log!(
         "intel/guc: h2g-mmio-proof label={} accepted={} action=HOST2GUC_CONTROL_CTB control=disable transport=gen11-soft-scratch notify=0x{:X} response=0x{:08X} response_type={} error={} poll_iters={} does_not_prove=ctb_enabled_or_guc_owned_render_submission_or_eu_execution\n",
         label,
         result.accepted as u8,
@@ -340,7 +340,7 @@ pub(crate) fn log_submission_contract(dev: crate::intel::Dev, label: &'static st
     let scratch_ads = crate::intel::mmio_read(dev, SOFT_SCRATCH_BASE + 5 * 4);
     let scratch_devid = crate::intel::mmio_read(dev, SOFT_SCRATCH_BASE + 6 * 4);
 
-    crate::log_trace!(
+    crate::log!(
         "intel/guc: submission-contract label={} ready={} status=0x{:08X} bootrom={} ukernel={} auth=0x{:X} doorbells={} dist_dbs=0x{:08X} scratch0=0x{:08X} scratch_ads=0x{:08X} scratch_devid=0x{:08X} h2g_mmio_probed={} h2g_mmio_accepted={} h2g_mmio_response=0x{:08X} submission=rcs-execlist guc_sched=not-enabled-yet next=ctb-h2g-context-register does_not_prove=guc_owns_batch_submission\n",
         label,
         ready as u8,

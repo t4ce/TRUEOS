@@ -37,7 +37,7 @@ pub fn log_once() {
         let bmp = match bgrt.image_type() {
             acpi::sdt::bgrt::ImageType::Bitmap => {
                 if let Some(info) = parse_bmp_header(addr) {
-                    crate::log_trace!(
+                    crate::log!(
                         "BGRT: addr=0x{:016X} off=({}, {}) size=0x{:X} fmt=bmp {}x{} {}bpp\n",
                         addr,
                         off_x,
@@ -49,7 +49,7 @@ pub fn log_once() {
                     );
                     Some(info)
                 } else {
-                    crate::log_trace!(
+                    crate::log!(
                         "BGRT: addr=0x{:016X} off=({}, {}) size=? fmt=bmp\n",
                         addr,
                         off_x,
@@ -59,7 +59,7 @@ pub fn log_once() {
                 }
             }
             acpi::sdt::bgrt::ImageType::Reserved => {
-                crate::log_trace!(
+                crate::log!(
                     "BGRT: addr=0x{:016X} off=({}, {}) size=? fmt=reserved\n",
                     addr,
                     off_x,

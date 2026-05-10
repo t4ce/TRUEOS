@@ -17,7 +17,7 @@ pub(crate) fn handle_packet(vendor_id: u16, product_id: u16, endpoint: u8, sampl
     }
 
     let prefix_len = min(sample.len(), 16);
-    crate::log_trace!(
+    crate::log!(
         "crabusb: hid eyetracker {:04X}:{:04X} packet ep=0x{:02X} len={} nonzero={} bytes={:02X?}\n",
         vendor_id,
         product_id,

@@ -298,7 +298,7 @@ fn register_intel(info: IntelGfxInfo) {
     let mut list = DEVICES.lock();
     let id = list.len();
     if id >= MAX_INTEL_DEVICES {
-        crate::log_trace!(
+        crate::log!(
             "gfx-intel: device list full; dropping {:02X}:{:02X}.{}\n",
             info.bus,
             info.slot,
@@ -328,7 +328,7 @@ fn log_intel_bar_inventory(bus: u8, slot: u8, function: u8) {
     while idx < 6 {
         let (raw_lo, raw_hi) = crate::pci::read_bar_raw(bus, slot, function, idx);
         if raw_lo == 0 || raw_lo == 0xFFFF_FFFF {
-            crate::log_trace!(
+            crate::log!(
                 "gfx-intel: BAR{} bdf={:02X}:{:02X}.{} raw=0x{:08X} unassigned\n",
                 idx,
                 bus,
@@ -342,7 +342,7 @@ fn log_intel_bar_inventory(bus: u8, slot: u8, function: u8) {
 
         if (raw_lo & 0x1) != 0 {
             let io_base = (raw_lo & !0x3) as u64;
-            crate::log_trace!(
+            crate::log!(
                 "gfx-intel: BAR{} bdf={:02X}:{:02X}.{} kind=io raw=0x{:08X} base=0x{:X}\n",
                 idx,
                 bus,
@@ -362,7 +362,7 @@ fn log_intel_bar_inventory(bus: u8, slot: u8, function: u8) {
             base |= (raw_hi.unwrap_or(0) as u64) << 32;
         }
         let size = crate::pci::bar_size_bytes(bus, slot, function, idx).unwrap_or(0);
-        crate::log_trace!(
+        crate::log!(
             "gfx-intel: BAR{} bdf={:02X}:{:02X}.{} kind=mmio{} prefetch={} raw=0x{:08X} raw_hi=0x{:08X} base=0x{:X} size=0x{:X}\n",
             idx,
             bus,
@@ -388,7 +388,7 @@ fn log_intel_config_windows(bus: u8, slot: u8, function: u8) {
     let bdsm = crate::pci::config_read_u32(bus, slot, function, INTEL_PCI_BDSM);
     let bgsm = crate::pci::config_read_u32(bus, slot, function, INTEL_PCI_BGSM);
     let asls = crate::pci::config_read_u32(bus, slot, function, INTEL_PCI_ASLS);
-    crate::log_trace!(
+    crate::log!(
         "gfx-intel: config {:02X}:{:02X}.{} bdsm=0x{:08X} bgsm=0x{:08X} asls=0x{:08X}\n",
         bus,
         slot,
@@ -402,7 +402,7 @@ fn log_intel_config_windows(bus: u8, slot: u8, function: u8) {
 fn log_intel_opregion_probe(bus: u8, slot: u8, function: u8) {
     let asls = crate::pci::config_read_u32(bus, slot, function, INTEL_PCI_ASLS);
     if asls == 0 || asls == 0xFFFF_FFFF {
-        crate::log_trace!(
+        crate::log!(
             "gfx-intel: opregion probe {:02X}:{:02X}.{} skipped asls=0x{:08X}\n",
             bus,
             slot,
@@ -417,7 +417,7 @@ fn log_intel_opregion_probe(bus: u8, slot: u8, function: u8) {
     let map_len =
         INTEL_OPREGION_SCAN_BYTES.max(page_off.saturating_add(INTEL_OPREGION_PROBE_BYTES));
     let Ok(mapped) = crate::pci::mmio::map_mmio_region_exact(phys, map_len) else {
-        crate::log_trace!(
+        crate::log!(
             "gfx-intel: opregion probe {:02X}:{:02X}.{} map failed asls=0x{:08X} phys=0x{:X} len=0x{:X}\n",
             bus,
             slot,
@@ -484,7 +484,7 @@ fn log_intel_opregion_probe(bus: u8, slot: u8, function: u8) {
     let opregion_hdr = find_needle(page_bytes, b"IntelGraphicsMem");
     let vbt_hdr = find_needle(page_bytes, b"$VBT");
 
-    crate::log_trace!(
+    crate::log!(
         "gfx-intel: opregion probe {:02X}:{:02X}.{} asls=0x{:08X} phys=0x{:X} off=0x{:03X} base_d0=0x{:08X} base_d1=0x{:08X} base_d2=0x{:08X} base_d3=0x{:08X} base_sig='{}' off_d0=0x{:08X} off_d1=0x{:08X} off_d2=0x{:08X} off_d3=0x{:08X} off_sig='{}' hdr={} vbt={}\n",
         bus,
         slot,
@@ -564,7 +564,7 @@ fn maybe_reassign_intel_mmio_bar(
 
     let (bar_lo, bar_hi) = crate::pci::read_bar_raw(bus, slot, function, index);
     if (bar_lo & 0x1) != 0 {
-        crate::log_trace!(
+        crate::log!(
             "gfx-intel: {} reassign skipped {:02X}:{:02X}.{} raw=0x{:08X} (io BAR)\n",
             label,
             bus,
@@ -578,7 +578,7 @@ fn maybe_reassign_intel_mmio_bar(
     let size = size.max(0x1000);
     let align = size.max(0x1000);
     let Some(new_base) = crate::pci::alloc_hotplug_mmio_base(bus, size, align) else {
-        crate::log_trace!(
+        crate::log!(
             "gfx-intel: {} reassign alloc failed {:02X}:{:02X}.{} old=0x{:X} size=0x{:X} align=0x{:X}\n",
             label,
             bus,
@@ -590,7 +590,7 @@ fn maybe_reassign_intel_mmio_bar(
         );
         return None;
     };
-    crate::log_trace!(
+    crate::log!(
         "gfx-intel: {} reassign {:02X}:{:02X}.{} old=0x{:X} new=0x{:X} size=0x{:X} align=0x{:X}\n",
         label,
         bus,
@@ -609,7 +609,7 @@ fn maybe_reassign_intel_mmio_bar(
 
     let (new_bar_lo, new_bar_hi) = crate::pci::read_bar_raw(bus, slot, function, index);
     if new_bar_lo == 0 || new_bar_lo == 0xFFFF_FFFF {
-        crate::log_trace!(
+        crate::log!(
             "gfx-intel: {} reassign failed {:02X}:{:02X}.{} reread_lo=0x{:08X}\n",
             label,
             bus,
@@ -623,7 +623,7 @@ fn maybe_reassign_intel_mmio_bar(
     let new_hi = new_bar_hi.or(bar_hi).unwrap_or(0) as u64;
     let decoded = ((new_bar_lo as u64) & !0xFu64) | (new_hi << 32);
     if decoded == 0 {
-        crate::log_trace!(
+        crate::log!(
             "gfx-intel: {} reassign produced zero base {:02X}:{:02X}.{}\n",
             label,
             bus,
@@ -658,7 +658,7 @@ fn is_intel_display(dev: &crate::pci::PciDevice) -> bool {
 
 pub fn init_once() {
     if crate::limine::hhdm_offset().is_none() {
-        crate::log_trace!("gfx-intel: no HHDM\n");
+        crate::log!("gfx-intel: no HHDM\n");
         return;
     }
 
@@ -685,7 +685,7 @@ pub fn init_once() {
 
         let Some((bar0_base, bar_size)) = decode_mmio_bar(dev.bus, dev.slot, dev.function, 0)
         else {
-            crate::log_trace!(
+            crate::log!(
                 "gfx-intel: BAR0 not assigned at {:02X}:{:02X}.{}\n",
                 dev.bus,
                 dev.slot,
@@ -697,7 +697,7 @@ pub fn init_once() {
         let Some((base, bar_size)) =
             maybe_reassign_intel_bar0(dev.bus, dev.slot, dev.function, bar0_base, bar_size)
         else {
-            crate::log_trace!(
+            crate::log!(
                 "gfx-intel: BAR0 unusable at {:02X}:{:02X}.{} base=0x{:X} size=0x{:X}\n",
                 dev.bus,
                 dev.slot,
@@ -740,7 +740,7 @@ pub fn init_once() {
         let mmio_base = match crate::pci::mmio::map_mmio_region(base, mmio_len) {
             Ok(ptr) => ptr,
             Err(e) => {
-                crate::log_trace!(
+                crate::log!(
                     "gfx-intel: MMIO map failed {:02X}:{:02X}.{} err={:?}\n",
                     dev.bus,
                     dev.slot,
@@ -761,7 +761,7 @@ pub fn init_once() {
         let platform = classify_intel_platform(dev.device);
         let submission = classify_submission_model(platform);
 
-        crate::log_trace!(
+        crate::log!(
             "gfx-intel: claimed {:02X}:{:02X}.{} device=0x{:04X} platform={} submit={} bar0=0x{:X} size=0x{:X} bar2=0x{:X} bar2_size=0x{:X} mmio=0x{:X} scratch=0x{:X}\n",
             dev.bus,
             dev.slot,
@@ -777,7 +777,7 @@ pub fn init_once() {
             cmd_scratch_phys
         );
         if matches!(submission, IntelSubmissionModel::Modern) {
-            crate::log_trace!(
+            crate::log!(
                 "gfx-intel: {:02X}:{:02X}.{} device=0x{:04X} requires a modern Intel submission path; legacy RCS ring MMIO is disabled for this platform\n",
                 dev.bus,
                 dev.slot,
@@ -816,7 +816,7 @@ pub fn init_once() {
 
     if DEVICES.lock().is_empty() {
         if !did_match {
-            crate::log_trace!("gfx-intel: no Intel display-class PCI device found\n");
+            crate::log!("gfx-intel: no Intel display-class PCI device found\n");
         }
         return;
     }
@@ -1035,7 +1035,7 @@ fn narrow_display_writeability_sweep(info: IntelGfxInfo) {
                     first_hit_off = Some(off);
                 }
                 if logged_hits < INTEL_WRITE_SWEEP_HIT_LOG_LIMIT {
-                    crate::log_trace!(
+                    crate::log!(
                         "gfx-intel-scanout: write-sweep hit label={} off=0x{:05X}\n",
                         label,
                         off
@@ -1045,7 +1045,7 @@ fn narrow_display_writeability_sweep(info: IntelGfxInfo) {
                 window_successes += 1;
                 successes += 1;
                 if successes >= INTEL_WRITE_SWEEP_MAX_SUCCESSES {
-                    crate::log_trace!(
+                    crate::log!(
                         "gfx-intel-scanout: write-sweep stopping after {} total hits\n",
                         successes
                     );
@@ -1057,7 +1057,7 @@ fn narrow_display_writeability_sweep(info: IntelGfxInfo) {
             off += 4;
         }
 
-        crate::log_trace!(
+        crate::log!(
             "gfx-intel-scanout: write-sweep label={} attempts={} hits={} first_hit={} start=0x{:05X} end=0x{:05X}\n",
             label,
             attempts,
@@ -1089,7 +1089,7 @@ fn log_pattern_window(info: IntelGfxInfo, center_off: usize, label: &str) {
     let prev = intel_mmio_read32(info, center_off.saturating_sub(4));
     let cur = intel_mmio_read32(info, center_off);
     let next = intel_mmio_read32(info, center_off.saturating_add(4));
-    crate::log_trace!(
+    crate::log!(
         "gfx-intel-scanout: walker-near label={} center=0x{:05X} prev=0x{:08X} cur=0x{:08X} next=0x{:08X}\n",
         label,
         center_off,
@@ -1129,7 +1129,7 @@ fn walk_predicted_ranges(info: IntelGfxInfo) {
             if latched {
                 toggled += 1;
                 if logged < INTEL_PATTERN_WALK_LOG_LIMIT {
-                    crate::log_trace!(
+                    crate::log!(
                         "gfx-intel-scanout: walker-hit label={} off=0x{:05X} orig=0x{:08X} test=0x{:08X} rb=0x{:08X} restored=0x{:08X}\n",
                         label,
                         off,
@@ -1145,7 +1145,7 @@ fn walk_predicted_ranges(info: IntelGfxInfo) {
             off += 4;
         }
 
-        crate::log_trace!(
+        crate::log!(
             "gfx-intel-scanout: walker-summary label={} start=0x{:05X} end=0x{:05X} zero={} nonzero={} ffff={} toggled={}\n",
             label,
             start,
@@ -1196,7 +1196,7 @@ fn log_tuple_neighbor_changes(
         }
         idx += 1;
     }
-    crate::log_trace!(
+    crate::log!(
         "gfx-intel-scanout: tuple-probe summary label={} target=0x{:05X} changed={} hit0=0x{:05X}:0x{:08X}->0x{:08X} hit1=0x{:05X}:0x{:08X}->0x{:08X} hit2=0x{:05X}:0x{:08X}->0x{:08X}\n",
         label,
         target_off,
@@ -1222,7 +1222,7 @@ fn log_tuple_focus(info: IntelGfxInfo, label: &str) {
     let v_6c110 = intel_mmio_read32(info, 0x6C110);
     let v_6c118 = intel_mmio_read32(info, 0x6C118);
     let v_6c120 = intel_mmio_read32(info, 0x6C120);
-    crate::log_trace!(
+    crate::log!(
         "gfx-intel-scanout: tuple-focus label={} 080=0x{:08X} 084=0x{:08X} 100=0x{:08X} 104=0x{:08X} 108=0x{:08X} 110=0x{:08X} 118=0x{:08X} 120=0x{:08X}\n",
         label,
         v_6c080,
@@ -1269,7 +1269,7 @@ fn log_tuple_downstream_state(info: IntelGfxInfo, label: &str) {
     let pb_surf = intel_mmio_read32(info, plane_b.surf_off);
     let pc_surf = intel_mmio_read32(info, plane_c.surf_off);
     let pd_surf = intel_mmio_read32(info, plane_d.surf_off);
-    crate::log_trace!(
+    crate::log!(
         "gfx-intel-scanout: tuple-downstream label={} k100=0x{:08X} k104=0x{:08X} k108=0x{:08X} k118=0x{:08X} k120=0x{:08X} hp=0x{:08X} trans=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pipe=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] surf=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] ctl=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}]\n",
         label,
         k100,
@@ -1302,7 +1302,7 @@ fn probe_tx_bmu_held_surface(info: IntelGfxInfo, surf: u32) {
     let held_orig = intel_mmio_read32(info, held_off);
     let _ = intel_mmio_write32(info, held_off, surf);
     let held_rb = intel_mmio_read32(info, held_off);
-    crate::log_trace!(
+    crate::log!(
         "gfx-intel-scanout: tuple-held-surface orig=0x{:08X} hold=0x{:08X} rb=0x{:08X}\n",
         held_orig,
         surf,
@@ -1313,7 +1313,7 @@ fn probe_tx_bmu_held_surface(info: IntelGfxInfo, surf: u32) {
     for &off in &[0x6C104usize, 0x6C10C, 0x6C114, 0x6C11C, 0x6C120] {
         let orig = intel_mmio_read32(info, off);
         let Some(test) = walker_test_value(orig) else {
-            crate::log_trace!(
+            crate::log!(
                 "gfx-intel-scanout: tuple-held-probe off=0x{:05X} orig=0x{:08X} skipped\n",
                 off,
                 orig
@@ -1322,7 +1322,7 @@ fn probe_tx_bmu_held_surface(info: IntelGfxInfo, surf: u32) {
         };
         let _ = intel_mmio_write32(info, off, test);
         let rb = intel_mmio_read32(info, off);
-        crate::log_trace!(
+        crate::log!(
             "gfx-intel-scanout: tuple-held-probe off=0x{:05X} orig=0x{:08X} test=0x{:08X} rb=0x{:08X}\n",
             off,
             orig,
@@ -1375,7 +1375,7 @@ fn probe_tx_bmu_tuple(info: IntelGfxInfo) {
             idx += 1;
         }
 
-        crate::log_trace!(
+        crate::log!(
             "gfx-intel-scanout: tuple-probe write label={} off=0x{:05X} orig=0x{:08X} test=0x{:08X} rb=0x{:08X}\n",
             label,
             off,
@@ -1409,7 +1409,7 @@ fn probe_tx_bmu_tuple(info: IntelGfxInfo) {
         let _ = intel_mmio_write32(info, off, test);
         let rb = intel_mmio_read32(info, off);
         let (v100, v104, v108, v118, v120) = tuple_key_values(info);
-        crate::log_trace!(
+        crate::log!(
             "gfx-intel-scanout: tuple-matrix label={} off=0x{:05X} orig=0x{:08X} test=0x{:08X} rb=0x{:08X} k100=0x{:08X} k104=0x{:08X} k108=0x{:08X} k118=0x{:08X} k120=0x{:08X}\n",
             label,
             off,
@@ -1440,7 +1440,7 @@ fn probe_tx_bmu_tuple(info: IntelGfxInfo) {
         let _ = intel_mmio_write32(info, off, test);
         let rb = intel_mmio_read32(info, off);
         let (v100, v104, v108, v118, v120) = tuple_key_values(info);
-        crate::log_trace!(
+        crate::log!(
             "gfx-intel-scanout: tuple-matrix label={} off=0x{:05X} orig=0x{:08X} test=0x{:08X} rb=0x{:08X} k100=0x{:08X} k104=0x{:08X} k108=0x{:08X} k118=0x{:08X} k120=0x{:08X}\n",
             label,
             off,
@@ -1463,7 +1463,7 @@ fn probe_tx_bmu_tuple(info: IntelGfxInfo) {
     for &(label, off) in &derived_tests {
         let orig = intel_mmio_read32(info, off);
         let Some(test) = walker_test_value(orig) else {
-            crate::log_trace!(
+            crate::log!(
                 "gfx-intel-scanout: tuple-matrix label={} off=0x{:05X} orig=0x{:08X} skipped\n",
                 label,
                 off,
@@ -1474,7 +1474,7 @@ fn probe_tx_bmu_tuple(info: IntelGfxInfo) {
         let _ = intel_mmio_write32(info, off, test);
         let rb = intel_mmio_read32(info, off);
         let (v100, v104, v108, v118, v120) = tuple_key_values(info);
-        crate::log_trace!(
+        crate::log!(
             "gfx-intel-scanout: tuple-matrix label={} off=0x{:05X} orig=0x{:08X} test=0x{:08X} rb=0x{:08X} k100=0x{:08X} k104=0x{:08X} k108=0x{:08X} k118=0x{:08X} k120=0x{:08X}\n",
             label,
             off,
@@ -1499,7 +1499,7 @@ fn try_scanout_surface_demo(info: IntelGfxInfo) -> bool {
     };
 
     if info.aperture_bar_phys == 0 || info.aperture_bar_size == 0 {
-        crate::log_trace!(
+        crate::log!(
             "gfx-intel-scanout: aperture unavailable bar2=0x{:X} size=0x{:X}\n",
             info.aperture_bar_phys,
             info.aperture_bar_size
@@ -1517,7 +1517,7 @@ fn try_scanout_surface_demo(info: IntelGfxInfo) -> bool {
     let bytes = surf_page_off.saturating_add(draw_h.saturating_mul(stride));
 
     if draw_w == 0 || draw_h == 0 {
-        crate::log_trace!(
+        crate::log!(
             "gfx-intel-scanout: plane={}{} unusable draw size={}x{} stride=0x{:X}\n",
             surface.plane.pipe_name,
             surface.plane.plane_slot,
@@ -1529,7 +1529,7 @@ fn try_scanout_surface_demo(info: IntelGfxInfo) -> bool {
     }
 
     if surf_offset.saturating_add(bytes) > info.aperture_bar_size as usize {
-        crate::log_trace!(
+        crate::log!(
             "gfx-intel-scanout: plane={}{} surf=0x{:08X} exceeds aperture size=0x{:X} bytes=0x{:X}\n",
             surface.plane.pipe_name,
             surface.plane.plane_slot,
@@ -1542,7 +1542,7 @@ fn try_scanout_surface_demo(info: IntelGfxInfo) -> bool {
 
     let phys = info.aperture_bar_phys.saturating_add(surf_offset as u64);
     let Ok(mapped) = crate::pci::mmio::map_mmio_region_exact(phys, bytes) else {
-        crate::log_trace!(
+        crate::log!(
             "gfx-intel-scanout: plane={}{} aperture map failed phys=0x{:X} bytes=0x{:X}\n",
             surface.plane.pipe_name,
             surface.plane.plane_slot,
@@ -1554,7 +1554,7 @@ fn try_scanout_surface_demo(info: IntelGfxInfo) -> bool {
 
     let ptr = unsafe { mapped.as_ptr().add(surf_page_off) };
     write_scanout_test_pattern(ptr, stride, draw_w, draw_h);
-    crate::log_trace!(
+    crate::log!(
         "gfx-intel-scanout: wrote test card plane={}{} surf=0x{:08X} surf_live=0x{:08X} ctl=0x{:08X} stride=0x{:X} visible={}x{} draw={}x{} aperture=0x{:X}/0x{:X}\n",
         surface.plane.pipe_name,
         surface.plane.plane_slot,
@@ -1606,7 +1606,7 @@ fn plane_write_smoke_test(info: IntelGfxInfo) {
                 writable += 1;
             }
 
-            crate::log_trace!(
+            crate::log!(
                 "gfx-intel-scanout: plane-write-smoke {}{} ctl=0x{:08X} stride orig=0x{:08X} test=0x{:08X} rb=0x{:08X} restore=0x{:08X} surf orig=0x{:08X} test=0x{:08X} rb=0x{:08X} restore=0x{:08X} stuck_stride={} stuck_surf={}\n",
                 plane.pipe_name,
                 plane.plane_slot,
@@ -1625,7 +1625,7 @@ fn plane_write_smoke_test(info: IntelGfxInfo) {
         }
     }
 
-    crate::log_trace!(
+    crate::log!(
         "gfx-intel-scanout: plane-write-smoke writable_planes={}\n",
         writable
     );
@@ -1762,7 +1762,7 @@ fn draw_centered_triangle_limine_fallback() -> bool {
 #[embassy_executor::task]
 pub async fn centered_triangle_demo_task() {
     if !has_claimed_device() {
-        crate::log_trace!("gfx-intel-demo: skipped (no claimed Intel gfx device)\n");
+        crate::log!("gfx-intel-demo: skipped (no claimed Intel gfx device)\n");
         return;
     }
 
@@ -1778,32 +1778,32 @@ pub async fn centered_triangle_demo_task() {
             crate::surface::io::cabi::trueos_cabi_gfx_draw_rgb_triangles(0x101018, ptr, len)
         };
         if rc == 0 {
-            crate::log_trace!("gfx-intel-demo: centered triangle submitted\n");
+            crate::log!("gfx-intel-demo: centered triangle submitted\n");
             return;
         }
 
         tries = tries.saturating_add(1);
         if tries == 1 || tries.is_multiple_of(20) {
-            crate::log_trace!("gfx-intel-demo: draw retry rc={} tries={}\n", rc, tries);
+            crate::log!("gfx-intel-demo: draw retry rc={} tries={}\n", rc, tries);
         }
 
         if rc == -3 && tries >= 8 {
             if draw_centered_triangle_limine_fallback() {
-                crate::log_trace!("gfx-intel-demo: fallback triangle rasterized via Limine fb\n");
+                crate::log!("gfx-intel-demo: fallback triangle rasterized via Limine fb\n");
             } else {
-                crate::log_trace!("gfx-intel-demo: fallback rasterizer unavailable\n");
+                crate::log!("gfx-intel-demo: fallback rasterizer unavailable\n");
             }
             return;
         }
 
         if tries >= 200 {
             if draw_centered_triangle_limine_fallback() {
-                crate::log_trace!(
+                crate::log!(
                     "gfx-intel-demo: fallback triangle rasterized after {} retries\n",
                     tries
                 );
             } else {
-                crate::log_trace!("gfx-intel-demo: giving up after {} retries\n", tries);
+                crate::log!("gfx-intel-demo: giving up after {} retries\n", tries);
             }
             return;
         }
@@ -1827,7 +1827,7 @@ fn power_first_gate_hunt(info: IntelGfxInfo) {
     let gt_disp_pwron = intel_mmio_read32(info, INTEL_GT_DISP_PWRON);
     let hotplug_en = intel_mmio_read32(info, INTEL_PORT_HOTPLUG_EN);
     let hotplug_stat = intel_mmio_read32(info, INTEL_PORT_HOTPLUG_STAT);
-    crate::log_trace!(
+    crate::log!(
         "gfx-intel-scanout: power-first hold rb=[0x{:08X},0x{:08X},0x{:08X}] de=0x{:08X} dbg=0x{:08X} gt_pw=0x{:08X} hp=[0x{:08X},0x{:08X}]\n",
         hold_rb[0],
         hold_rb[1],
@@ -1874,7 +1874,7 @@ fn power_first_gate_hunt(info: IntelGfxInfo) {
             let pc_b = intel_mmio_read32(info, INTEL_PIPECONF_B);
             let pc_c = intel_mmio_read32(info, INTEL_PIPECONF_C);
             let pc_d = intel_mmio_read32(info, INTEL_PIPECONF_D);
-            crate::log_trace!(
+            crate::log!(
                 "gfx-intel-scanout: power-first hit off=0x{:05X} orig=0x{:08X} rb=0x{:08X} dc=[0x{:08X},0x{:08X}] gt_pw=0x{:08X} hp=0x{:08X} ddi=[0x{:08X},0x{:08X},0x{:08X}] pipeconf=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}]\n",
                 off,
                 orig,
@@ -1894,7 +1894,7 @@ fn power_first_gate_hunt(info: IntelGfxInfo) {
         }
     }
 
-    crate::log_trace!(
+    crate::log!(
         "gfx-intel-scanout: power-first summary start=0x{:05X} end=0x{:05X} attempts={} hits={} first_hit=0x{:05X}\n",
         INTEL_POWER_FIRST_START,
         INTEL_POWER_FIRST_END,
@@ -1929,7 +1929,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
     };
     let route_changed = |before: &[u32; 12], after: &[u32; 12]| before != after;
     let log_route_hit = |label: &str, before: &[u32; 12], after: &[u32; 12]| {
-        crate::log_trace!(
+        crate::log!(
             "gfx-intel-scanout: compact-hit label={} hp=0x{:08X}->0x{:08X} ddi=[0x{:08X},0x{:08X},0x{:08X}]->[0x{:08X},0x{:08X},0x{:08X}] pipeconf=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}]->[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] trans=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}]->[0x{:08X},0x{:08X},0x{:08X},0x{:08X}]\n",
             label,
             before[0],
@@ -2154,7 +2154,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
                 before = dp_route_before[1];
                 after = dp_route_after[1];
             }
-            crate::log_trace!(
+            crate::log!(
                 "gfx-intel-scanout: compact-hit tc3-ladder first={} 0x{:08X}->0x{:08X}\n",
                 first,
                 before,
@@ -2187,7 +2187,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
                 owner_candidate_before = before;
                 owner_candidate_after = after;
                 owner_candidate_tcss = tcss_after_cand;
-                crate::log_trace!(
+                crate::log!(
                     "gfx-intel-scanout: compact-hit tc-own-cand idx={} ddi=0x{:08X}->0x{:08X} aux=0x{:08X}->0x{:08X} tcss=0x{:08X}->0x{:08X}\n",
                     owner_candidate_idx,
                     before,
@@ -2256,7 +2256,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
             }
 
             if core_hit_idx != 0xFFFF_FFFF {
-                crate::log_trace!(
+                crate::log!(
                     "gfx-intel-scanout: compact-hit display-core idx={} ctl5=0x{:08X}->0x{:08X} state=0x{:08X} tcss=0x{:08X} pa1=0x{:08X}\n",
                     core_hit_idx,
                     core_before,
@@ -2359,7 +2359,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
                 dpsp_after = intel_mmio_read32(info, INTEL_FIA2_DFLEXDPSP);
                 dpmle1_after = intel_mmio_read32(info, INTEL_FIA2_DFLEXDPMLE1);
 
-                crate::log_trace!(
+                crate::log!(
                     "gfx-intel-scanout: compact-hit tc3-connect pcode=0x{:08X} low=0x{:08X} gtpwr=0x{:08X}->0x{:08X} dkl=0x{:08X}->0x{:08X} fiaown=0x{:08X}->0x{:08X} owner=0x{:08X}->0x{:08X} tcss=0x{:08X} pa1=0x{:08X} dppms=0x{:08X} dpcsss=0x{:08X} dpsp=0x{:08X} dpmle1=0x{:08X}\n",
                     tc_cold_status,
                     tc_cold_low,
@@ -2453,7 +2453,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
                 } else {
                     "none"
                 };
-                crate::log_trace!(
+                crate::log!(
                     "gfx-intel-scanout: compact-branch sideband={} shift={} bank={} dkl=0x{:08X} fia=0x{:08X} topo={} kind={} tcss=[0x{:08X},0x{:08X}] fia1=[0x{:08X},0x{:08X}] fia2=[0x{:08X},0x{:08X}]\n",
                     if sideband_hit { "hit" } else { "nope" },
                     sideband_first_shift,
@@ -2473,7 +2473,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
                     && sde_preaux_after == 0
                     && tcss_after == 0xFFFF_FFFF
                     && dpsp_after == 0xFFFF_FFFF;
-                crate::log_trace!(
+                crate::log!(
                     "gfx-intel-scanout: compact-nope tc3-dkl sealed modehint={} pcode={} status=0x{:08X} low=0x{:08X} high=0x{:08X} preown=0x{:08X}->0x{:08X} pretcss=0x{:08X}->0x{:08X} owncand={} cand=0x{:08X}->0x{:08X} candtcss=0x{:08X} prehpd=0x{:08X}->0x{:08X} presde=0x{:08X}->0x{:08X} gtpwr=0x{:08X}->0x{:08X} main=0x{:03X} aux=0x{:08X} ddi=0x{:08X} dkl=0x{:08X} tcss=0x{:08X} tcsswin=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] dklshift=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pa1=0x{:08X} dppms=0x{:08X} dpcsss=0x{:08X} dpsp=0x{:08X} dpmle1=0x{:08X}\n",
                     if sinkless_tc_hint {
                         "sinkless-tbt-default"
@@ -2525,7 +2525,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
 
             let _ = intel_mmio_write32(info, INTEL_GT_DISP_PWRON, gt_disp_pwron_before);
         } else {
-            crate::log_trace!(
+            crate::log!(
                 "gfx-intel-scanout: compact-nope tc3 ladder stayed sealed main=0x{:03X} pwctl=0x{:08X} dc=0x{:08X} aux=0x{:08X} ddi=0x{:08X} tcss=0x{:08X} auxctl=0x{:08X} buf=0x{:08X}\n",
                 main_pw_stage_mask,
                 tc3_poll[0],
@@ -2604,7 +2604,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
                 hits += 1;
             }
         }
-        crate::log_trace!(
+        crate::log!(
             "gfx-intel-scanout: minimal-pattern ownership-delta label={} hits={} first={} hit0={} 0x{:08X}->0x{:08X} hit1={} 0x{:08X}->0x{:08X} hit2={} 0x{:08X}->0x{:08X} hit3={} 0x{:08X}->0x{:08X}\n",
             label,
             hits,
@@ -2636,7 +2636,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
             }
             core::hint::spin_loop();
         }
-        crate::log_trace!(
+        crate::log!(
             "gfx-intel-scanout: minimal-pattern ownership-poll label={} changed={} spin_hit={}\n",
             label,
             changed as u32,
@@ -2676,7 +2676,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
         intel_mmio_read32(info, preflight_offsets[2]),
         intel_mmio_read32(info, preflight_offsets[3]),
     ];
-    crate::log_trace!(
+    crate::log!(
         "gfx-intel-scanout: minimal-pattern ownership-preflight low rb=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}]\n",
         preflight_low[0],
         preflight_low[1],
@@ -2698,7 +2698,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
         let pc_b = intel_mmio_read32(info, INTEL_PIPECONF_B);
         let pc_c = intel_mmio_read32(info, INTEL_PIPECONF_C);
         let pc_d = intel_mmio_read32(info, INTEL_PIPECONF_D);
-        crate::log_trace!(
+        crate::log!(
             "gfx-intel-scanout: minimal-pattern ownership-preflight step={} rb=0x{:08X} hp=0x{:08X} ddi=[0x{:08X},0x{:08X},0x{:08X}] pipeconf=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}]\n",
             preflight_names[idx],
             rb,
@@ -2715,7 +2715,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
         log_watch_delta(preflight_names[idx], &ownership_before, &ownership_after);
         ownership_before = ownership_after;
     }
-    crate::log_trace!("gfx-intel-scanout: minimal-pattern ownership-preflight complete\n");
+    crate::log!("gfx-intel-scanout: minimal-pattern ownership-preflight complete\n");
     let ownership_polled = poll_watch_change("preflight-post", &ownership_before, 2048);
     ownership_before = ownership_polled;
     for idx in (0..preflight_offsets.len()).rev() {
@@ -2727,7 +2727,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
         return;
     };
 
-    crate::log_trace!(
+    crate::log!(
         "gfx-intel-scanout: minimal-pattern dc-pll probe starting stride=0x{:X} {}x{}\n",
         stride,
         width,
@@ -2760,7 +2760,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
             let surf_b = intel_mmio_read32(info, plane_b.surf_off);
             let surf_c = intel_mmio_read32(info, plane_c.surf_off);
             let surf_d = intel_mmio_read32(info, plane_d.surf_off);
-            crate::log_trace!(
+            crate::log!(
                 "gfx-intel-scanout: minimal-pattern {} de_pll_enable=0x{:08X} phy_misc_a=0x{:08X} hotplug=0x{:08X} hotplug_stat=0x{:08X} trans=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pipe=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] ctl=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] surf=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}]\n",
                 $label,
                 de_pll_enable,
@@ -2797,7 +2797,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
             let pc_b = intel_mmio_read32(info, INTEL_PIPECONF_B);
             let pc_c = intel_mmio_read32(info, INTEL_PIPECONF_C);
             let pc_d = intel_mmio_read32(info, INTEL_PIPECONF_D);
-            crate::log_trace!(
+            crate::log!(
                 "gfx-intel-scanout: minimal-pattern route {} hp_stat=0x{:08X} ddi=[0x{:08X},0x{:08X},0x{:08X}] pipeconf=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}]\n",
                 $label,
                 hotplug_stat,
@@ -2819,7 +2819,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
             let gt_disp_pwron = intel_mmio_read32(info, INTEL_GT_DISP_PWRON);
             let hotplug = intel_mmio_read32(info, INTEL_PORT_HOTPLUG_EN);
             let hotplug_stat = intel_mmio_read32(info, INTEL_PORT_HOTPLUG_STAT);
-            crate::log_trace!(
+            crate::log!(
                 "gfx-intel-scanout: minimal-pattern gate {} dc_state_en=0x{:08X} dc_state_debug=0x{:08X} gt_disp_pwron=0x{:08X} hotplug=0x{:08X} hotplug_stat=0x{:08X}\n",
                 $label,
                 dc_state_en,
@@ -2849,7 +2849,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
         let _ = intel_mmio_write32(info, off, test);
         let rb = intel_mmio_read32(info, off);
         let _ = intel_mmio_write32(info, off, orig);
-        crate::log_trace!(
+        crate::log!(
             "gfx-intel-scanout: minimal-pattern dc-pll off=0x{:05X} orig=0x{:08X} test=0x{:08X} rb=0x{:08X}\n",
             off,
             orig,
@@ -2858,14 +2858,14 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
         );
     }
 
-    crate::log_trace!("gfx-intel-scanout: minimal-pattern dc-pll probe complete\n");
+    crate::log!("gfx-intel-scanout: minimal-pattern dc-pll probe complete\n");
 
     let held_off = INTEL_BXT_DE_PLL_ENABLE;
     let held_orig = intel_mmio_read32(info, held_off);
     let held_test = held_orig | 0x00000001;
     let _ = intel_mmio_write32(info, held_off, held_test);
     let held_rb = intel_mmio_read32(info, held_off);
-    crate::log_trace!(
+    crate::log!(
         "gfx-intel-scanout: minimal-pattern dc-pll held orig=0x{:08X} test=0x{:08X} rb=0x{:08X}\n",
         held_orig,
         held_test,
@@ -2890,7 +2890,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
     ] {
         let orig = intel_mmio_read32(info, off);
         let Some(test) = walker_test_value(orig) else {
-            crate::log_trace!(
+            crate::log!(
                 "gfx-intel-scanout: minimal-pattern held-probe off=0x{:05X} orig=0x{:08X} skipped\n",
                 off,
                 orig
@@ -2899,7 +2899,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
         };
         let _ = intel_mmio_write32(info, off, test);
         let rb = intel_mmio_read32(info, off);
-        crate::log_trace!(
+        crate::log!(
             "gfx-intel-scanout: minimal-pattern held-probe off=0x{:05X} orig=0x{:08X} test=0x{:08X} rb=0x{:08X}\n",
             off,
             orig,
@@ -2939,7 +2939,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
             let _ = intel_mmio_write32(info, off, test);
             bundle_rb[idx] = intel_mmio_read32(info, off);
         }
-        crate::log_trace!(
+        crate::log!(
             "gfx-intel-scanout: minimal-pattern bundle label={} rb=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}]\n",
             label,
             bundle_rb[0],
@@ -2961,7 +2961,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
         let test = bundle_orig[idx] | 0x00000001;
         let _ = intel_mmio_write32(info, off, test);
     }
-    crate::log_trace!("gfx-intel-scanout: minimal-pattern bridge bundle asserted\n");
+    crate::log!("gfx-intel-scanout: minimal-pattern bridge bundle asserted\n");
     log_control_state!("bridge-base");
     log_route_state!("bridge-base");
 
@@ -2980,7 +2980,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
         } else if let Some(test) = walker_test_value(orig) {
             test
         } else {
-            crate::log_trace!(
+            crate::log!(
                 "gfx-intel-scanout: minimal-pattern bridge-probe label={} off=0x{:05X} orig=0x{:08X} skipped\n",
                 label,
                 off,
@@ -2990,7 +2990,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
         };
         let _ = intel_mmio_write32(info, off, test);
         let rb = intel_mmio_read32(info, off);
-        crate::log_trace!(
+        crate::log!(
             "gfx-intel-scanout: minimal-pattern bridge-probe label={} off=0x{:05X} orig=0x{:08X} test=0x{:08X} rb=0x{:08X}\n",
             label,
             off,
@@ -3000,7 +3000,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
         );
         let _ = intel_mmio_write32(info, off, orig);
     }
-    crate::log_trace!("gfx-intel-scanout: minimal-pattern bridge probe complete\n");
+    crate::log!("gfx-intel-scanout: minimal-pattern bridge probe complete\n");
 
     for &(label, off) in &[
         ("ddi0", INTEL_DDI_BUF_CTL_0),
@@ -3013,7 +3013,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
     ] {
         let orig = intel_mmio_read32(info, off);
         let Some(test) = walker_test_value(orig) else {
-            crate::log_trace!(
+            crate::log!(
                 "gfx-intel-scanout: minimal-pattern route-probe label={} off=0x{:05X} orig=0x{:08X} skipped\n",
                 label,
                 off,
@@ -3023,7 +3023,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
         };
         let _ = intel_mmio_write32(info, off, test);
         let rb = intel_mmio_read32(info, off);
-        crate::log_trace!(
+        crate::log!(
             "gfx-intel-scanout: minimal-pattern route-probe label={} off=0x{:05X} orig=0x{:08X} test=0x{:08X} rb=0x{:08X}\n",
             label,
             off,
@@ -3033,7 +3033,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
         );
         let _ = intel_mmio_write32(info, off, orig);
     }
-    crate::log_trace!("gfx-intel-scanout: minimal-pattern route probe complete\n");
+    crate::log!("gfx-intel-scanout: minimal-pattern route probe complete\n");
 
     let power_hold_offsets = [
         0x45500usize,
@@ -3058,7 +3058,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
         let _ = intel_mmio_write32(info, power_hold_offsets[idx], power_hold_tests[idx]);
         power_hold_rb[idx] = intel_mmio_read32(info, power_hold_offsets[idx]);
     }
-    crate::log_trace!(
+    crate::log!(
         "gfx-intel-scanout: minimal-pattern power-hold rb=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}]\n",
         power_hold_rb[0],
         power_hold_rb[1],
@@ -3096,7 +3096,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
         } else if let Some(test) = walker_test_value(orig) {
             test
         } else {
-            crate::log_trace!(
+            crate::log!(
                 "gfx-intel-scanout: minimal-pattern power-probe label={} off=0x{:05X} orig=0x{:08X} skipped\n",
                 label,
                 off,
@@ -3106,7 +3106,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
         };
         let _ = intel_mmio_write32(info, off, test);
         let rb = intel_mmio_read32(info, off);
-        crate::log_trace!(
+        crate::log!(
             "gfx-intel-scanout: minimal-pattern power-probe label={} off=0x{:05X} orig=0x{:08X} test=0x{:08X} rb=0x{:08X}\n",
             label,
             off,
@@ -3116,7 +3116,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
         );
         let _ = intel_mmio_write32(info, off, orig);
     }
-    crate::log_trace!("gfx-intel-scanout: minimal-pattern power probe complete\n");
+    crate::log!("gfx-intel-scanout: minimal-pattern power probe complete\n");
 
     let dc_tuple_offsets = [
         0x45500usize,
@@ -3153,7 +3153,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
             let _ = intel_mmio_write32(info, dc_tuple_offsets[idx], dc_tuple_test[idx]);
             hold_rb[idx] = intel_mmio_read32(info, dc_tuple_offsets[idx]);
         }
-        crate::log_trace!(
+        crate::log!(
             "gfx-intel-scanout: minimal-pattern dc-tuple hold order={}>{}>{}>{} rb=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}]\n",
             label[0],
             label[1],
@@ -3178,7 +3178,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
             dc_tuple_test[commit_idx],
         );
         let pulse_high = intel_mmio_read32(info, dc_tuple_offsets[commit_idx]);
-        crate::log_trace!(
+        crate::log!(
             "gfx-intel-scanout: minimal-pattern dc-tuple pulse order={}>{}>{}>{} commit={} low=0x{:08X} high=0x{:08X}\n",
             label[0],
             label[1],
@@ -3193,7 +3193,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
             let _ = intel_mmio_write32(info, dc_tuple_offsets[idx], dc_tuple_orig[idx]);
         }
     }
-    crate::log_trace!("gfx-intel-scanout: minimal-pattern dc tuple permutations complete\n");
+    crate::log!("gfx-intel-scanout: minimal-pattern dc tuple permutations complete\n");
 
     let dc_rearm_offsets = [
         0x45500usize,
@@ -3222,7 +3222,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
         intel_mmio_read32(info, dc_rearm_offsets[2]),
         intel_mmio_read32(info, dc_rearm_offsets[3]),
     ];
-    crate::log_trace!(
+    crate::log!(
         "gfx-intel-scanout: minimal-pattern dc-rearm low rb=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}]\n",
         dc_rearm_low[0],
         dc_rearm_low[1],
@@ -3249,7 +3249,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
         let pipe_b = intel_mmio_read32(info, INTEL_PIPE_B_SRC);
         let pipe_c = intel_mmio_read32(info, INTEL_PIPE_C_SRC);
         let pipe_d = intel_mmio_read32(info, INTEL_PIPE_D_SRC);
-        crate::log_trace!(
+        crate::log!(
             "gfx-intel-scanout: minimal-pattern dc-rearm step={} rb=0x{:08X} hp=0x{:08X} ddi=[0x{:08X},0x{:08X},0x{:08X}] pipeconf=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] trans=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pipe=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}]\n",
             dc_rearm_names[idx],
             rb,
@@ -3271,7 +3271,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
             pipe_d
         );
     }
-    crate::log_trace!("gfx-intel-scanout: minimal-pattern dc rearm complete\n");
+    crate::log!("gfx-intel-scanout: minimal-pattern dc rearm complete\n");
 
     let mut dc_adj_attempts = 0usize;
     let mut dc_adj_hits = 0usize;
@@ -3307,7 +3307,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
             let pc_b = intel_mmio_read32(info, INTEL_PIPECONF_B);
             let pc_c = intel_mmio_read32(info, INTEL_PIPECONF_C);
             let pc_d = intel_mmio_read32(info, INTEL_PIPECONF_D);
-            crate::log_trace!(
+            crate::log!(
                 "gfx-intel-scanout: minimal-pattern dc-adj hit off=0x{:05X} orig=0x{:08X} rb=0x{:08X} hp=0x{:08X} ddi=[0x{:08X},0x{:08X},0x{:08X}] pipeconf=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}]\n",
                 off,
                 orig,
@@ -3324,7 +3324,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
         }
         let _ = intel_mmio_write32(info, off, orig);
     }
-    crate::log_trace!(
+    crate::log!(
         "gfx-intel-scanout: minimal-pattern dc-adj summary attempts={} hits={} first_hit=0x{:05X}\n",
         dc_adj_attempts,
         dc_adj_hits,
@@ -3402,7 +3402,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
             let pipe_c = intel_mmio_read32(info, INTEL_PIPE_C_SRC);
             let pipe_d = intel_mmio_read32(info, INTEL_PIPE_D_SRC);
 
-            crate::log_trace!(
+            crate::log!(
                 "gfx-intel-scanout: minimal-pattern dc-trigger mode={} pair={} gate_rb=0x{:08X} trig_low=0x{:08X} trig_high=0x{:08X} hp=0x{:08X} ddi=[0x{:08X},0x{:08X},0x{:08X}] pipeconf=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] trans=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pipe=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}]\n",
                 trigger_mode,
                 label,
@@ -3462,7 +3462,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
         let gt_pipe_b = intel_mmio_read32(info, INTEL_PIPE_B_SRC);
         let gt_pipe_c = intel_mmio_read32(info, INTEL_PIPE_C_SRC);
         let gt_pipe_d = intel_mmio_read32(info, INTEL_PIPE_D_SRC);
-        crate::log_trace!(
+        crate::log!(
             "gfx-intel-scanout: minimal-pattern dc-trigger mode={} gt-triplet rb=[0x{:08X},0x{:08X},0x{:08X}] trig_low=0x{:08X} trig_high=0x{:08X} hp=0x{:08X} ddi=[0x{:08X},0x{:08X},0x{:08X}] pipeconf=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] trans=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pipe=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}]\n",
             trigger_mode,
             gt_triplet_rb[0],
@@ -3496,7 +3496,7 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
             let _ = intel_mmio_write32(info, dc_trigger_hold[idx], dc_trigger_orig[idx]);
         }
     }
-    crate::log_trace!("gfx-intel-scanout: minimal-pattern dc trigger bridge complete\n");
+    crate::log!("gfx-intel-scanout: minimal-pattern dc trigger bridge complete\n");
 
     for idx in (0..power_hold_offsets.len()).rev() {
         let _ = intel_mmio_write32(info, power_hold_offsets[idx], power_hold_orig[idx]);
@@ -3507,13 +3507,13 @@ fn minimal_pattern_register_poke(info: IntelGfxInfo) {
     }
 
     let _ = intel_mmio_write32(info, held_off, held_orig);
-    crate::log_trace!("gfx-intel-scanout: minimal-pattern dc-pll held probe complete\n");
+    crate::log!("gfx-intel-scanout: minimal-pattern dc-pll held probe complete\n");
 }
 
 #[embassy_executor::task]
 pub async fn scanout_smoke_task() {
     let Some(info) = first_claimed_device() else {
-        crate::log_trace!("gfx-intel-scanout: skipped (no claimed Intel gfx device)\n");
+        crate::log!("gfx-intel-scanout: skipped (no claimed Intel gfx device)\n");
         return;
     };
 
@@ -3531,7 +3531,7 @@ pub async fn scanout_smoke_task() {
         let hotplug_latched = hotplug_write_smoke(info);
         if disp_pwron_latched {
             Timer::after(EmbassyDuration::from_millis(25)).await;
-            crate::log_trace!("gfx-intel-scanout: re-probing after GT_DISP_PWRON latch\n");
+            crate::log!("gfx-intel-scanout: re-probing after GT_DISP_PWRON latch\n");
             log_display_power_probe(info);
         }
         plane_write_smoke_test(info);
@@ -3554,13 +3554,13 @@ pub async fn scanout_smoke_task() {
 
         tries = tries.saturating_add(1);
         if tries == 1 || tries.is_multiple_of(8) {
-            crate::log_trace!(
+            crate::log!(
                 "gfx-intel-scanout: retrying plane/aperture probe tries={}\n",
                 tries
             );
         }
         if tries >= INTEL_SCANOUT_RETRIES {
-            crate::log_trace!("gfx-intel-scanout: giving up after {} retries\n", tries);
+            crate::log!("gfx-intel-scanout: giving up after {} retries\n", tries);
             return;
         }
         Timer::after(EmbassyDuration::from_millis(INTEL_SCANOUT_RETRY_MS)).await;

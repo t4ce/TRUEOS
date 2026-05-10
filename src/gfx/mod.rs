@@ -288,7 +288,7 @@ pub fn with_system_tag<R>(owner: SystemLockOwner, f: impl FnOnce(&mut System) ->
             let holder_since = SYSTEM_LOCK_OWNER_SINCE.load(Ordering::Acquire);
             let held_ticks = now().saturating_sub(holder_since);
             let holder_name = SystemLockOwner::from_raw(holder).as_str();
-            crate::log_trace!(
+            crate::log!(
                 "gfx: waiting for SYSTEM lock requester={} cpu={} holder={} holder_cpu={} held_ticks={}\n",
                 owner.as_str(),
                 waiter_cpu,
@@ -316,7 +316,7 @@ pub fn with_system_tag<R>(owner: SystemLockOwner, f: impl FnOnce(&mut System) ->
                     let holder_since = SYSTEM_LOCK_OWNER_SINCE.load(Ordering::Acquire);
                     let held_ticks = now().saturating_sub(holder_since);
                     let holder_name = SystemLockOwner::from_raw(holder).as_str();
-                    crate::log_trace!(
+                    crate::log!(
                         "gfx: SYSTEM lock timeout requester={} cpu={} holder={} holder_cpu={} held_ticks={} (possible re-entrancy/deadlock)\n",
                         owner.as_str(),
                         waiter_cpu,
@@ -375,12 +375,12 @@ pub fn is_virgl_present_cached() -> bool {
 
 #[allow(dead_code)]
 pub fn switch_to_virgl() -> bool {
-    crate::log_trace!("gfx: switch_to_virgl: begin\n");
+    crate::log!("gfx: switch_to_virgl: begin\n");
 
     // Perform backend init outside SYSTEM lock.
     let fbs = with_framebuffers(|f| f).flatten();
     let Some(b) = backends::Backend::init_virgl(fbs) else {
-        crate::log_trace!("gfx: switch_to_virgl: init_virgl failed\n");
+        crate::log!("gfx: switch_to_virgl: init_virgl failed\n");
         return false;
     };
 
@@ -388,7 +388,7 @@ pub fn switch_to_virgl() -> bool {
         sys.backend = b;
         publish_backend_kind(&sys.backend);
         bump_backend_epoch();
-        crate::log_trace!("gfx: switch_to_virgl: ok epoch={}\n", backend_epoch());
+        crate::log!("gfx: switch_to_virgl: ok epoch={}\n", backend_epoch());
         true
     })
     .unwrap_or(false);

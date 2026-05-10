@@ -68,7 +68,7 @@ fn wait_on_net_fetch_queue_blocking(timeout_ms: u64) -> bool {
             .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
         {
-            crate::log_trace!("net-fetch-wait: mode=parked\n");
+            crate::log!("net-fetch-wait: mode=parked\n");
         }
         return CABI_NET_FETCH_WAIT.wait_for_event_blocking_parked(timeout_ms);
     }
@@ -78,7 +78,7 @@ fn wait_on_net_fetch_queue_blocking(timeout_ms: u64) -> bool {
         .compare_exchange(0, 2, Ordering::AcqRel, Ordering::Acquire)
         .is_ok()
     {
-        crate::log_trace!("net-fetch-wait: mode=spin\n");
+        crate::log!("net-fetch-wait: mode=spin\n");
     }
     CABI_NET_FETCH_WAIT.wait_for_event_blocking(timeout_ms)
 }
@@ -103,7 +103,7 @@ fn should_log_net_fetch_cap(count: u32) -> bool {
 fn log_net_fetch_concurrency_cap(op_kind: &'static str, op_id: u32, active: usize) {
     let count = NET_FETCH_CONCURRENCY_CAP_LOG_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
     if should_log_net_fetch_cap(count) {
-        crate::log_trace!(
+        crate::log!(
             "WARNING net-fetch: concurrency cap reached kind={} op_id={} active={} cap={} count={}\n",
             op_kind,
             op_id,
@@ -117,7 +117,7 @@ fn log_net_fetch_concurrency_cap(op_kind: &'static str, op_id: u32, active: usiz
 fn log_net_fetch_task_pool_cap(op_kind: &'static str, op_id: u32, caller_slot: u32) {
     let count = CABI_NET_FETCH_TASK_POOL_CAP_LOG_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
     if should_log_net_fetch_cap(count) {
-        crate::log_trace!(
+        crate::log!(
             "WARNING net-fetch: task pool cap reached kind={} op_id={} caller_slot={} pool_cap={} count={}\n",
             op_kind,
             op_id,
@@ -218,13 +218,13 @@ async fn cabi_net_fetch_task_inner(
     })
     .await
     {
-        crate::log_trace!("net-fetch: skipped key={} reason=no_interest_before_slot\n", key);
+        crate::log!("net-fetch: skipped key={} reason=no_interest_before_slot\n", key);
         return;
     }
     let t_fetch_start = Instant::now();
     if !net_fetch_file_task_has_interest(op_id, key.as_str()) {
         net_fetch_release_slot();
-        crate::log_trace!("net-fetch: skipped key={} reason=no_interest_after_slot\n", key);
+        crate::log!("net-fetch: skipped key={} reason=no_interest_after_slot\n", key);
         return;
     }
     let rc =
@@ -257,7 +257,7 @@ async fn cabi_net_fetch_task_inner(
         }
     }
 
-    crate::log_trace!(
+    crate::log!(
         "net-fetch: done key={} rc={} ms={} wait_ms={} fetch_ms={} followers={}\n",
         key,
         rc,
@@ -314,7 +314,7 @@ fn spawn_cabi_net_fetch(
     }
 
     if vmx_guest_cabi_context() {
-        crate::log_trace!(
+        crate::log!(
             "net-fetch: spawn op_id={} refused local fallback caller_slot={} reason=vmx_guest_context\n",
             op_id,
             caller_slot
@@ -350,7 +350,7 @@ async fn cabi_net_fetch_bytes_task_inner(
     let cpu_slot = crate::percpu::current_slot();
     let lapic_id = crate::percpu::current_lapic_id_via_cpuid();
     let t0 = Instant::now();
-    crate::log_trace!(
+    crate::log!(
         "net-fetch-bytes: enter op_id={} cpu_slot={} lapic={} timeout_ms={} max_bytes={}\n",
         op_id,
         cpu_slot,
@@ -359,14 +359,11 @@ async fn cabi_net_fetch_bytes_task_inner(
         max_bytes
     );
     if !net_fetch_acquire_slot_while("bytes", op_id, || net_fetch_bytes_op_is_live(op_id)).await {
-        crate::log_trace!(
-            "net-fetch-bytes: skipped op_id={} reason=no_interest_before_slot\n",
-            op_id
-        );
+        crate::log!("net-fetch-bytes: skipped op_id={} reason=no_interest_before_slot\n", op_id);
         return;
     }
     let t_fetch_start = Instant::now();
-    crate::log_trace!(
+    crate::log!(
         "net-fetch-bytes: acquired op_id={} wait_ms={} cpu_slot={} lapic={}\n",
         op_id,
         t_fetch_start.saturating_duration_since(t0).as_millis(),
@@ -375,10 +372,7 @@ async fn cabi_net_fetch_bytes_task_inner(
     );
     if !net_fetch_bytes_op_is_live(op_id) {
         net_fetch_release_slot();
-        crate::log_trace!(
-            "net-fetch-bytes: skipped op_id={} reason=no_interest_after_slot\n",
-            op_id
-        );
+        crate::log!("net-fetch-bytes: skipped op_id={} reason=no_interest_after_slot\n", op_id);
         return;
     }
     let (rc, body) = match crate::t::block_on_io(fetch_https_body_hyper_async(
@@ -389,7 +383,7 @@ async fn cabi_net_fetch_bytes_task_inner(
         Ok(Ok(body)) => (0, body),
         Ok(Err(code)) => (fetch_error_to_code(code), Vec::new()),
         Err(_) => {
-            crate::log_trace!(
+            crate::log!(
                 "net-fetch-bytes: hyper runtime build failed op_id={} url={}\n",
                 op_id,
                 url
@@ -407,7 +401,7 @@ async fn cabi_net_fetch_bytes_task_inner(
         slot.body = body;
     }
 
-    crate::log_trace!(
+    crate::log!(
         "net-fetch-bytes: done transport=hyper op_id={} rc={} ms={} wait_ms={} fetch_ms={} len={}\n",
         op_id,
         rc,
@@ -440,7 +434,7 @@ fn spawn_cabi_net_fetch_bytes(op_id: u32, url: String, timeout_ms: u32, max_byte
 
     if let Some((cpu_slot, core_kind, spawner)) = picked_spawner {
         if let Ok(token) = cabi_net_fetch_bytes_task(op_id, url.clone(), timeout_ms, max_bytes) {
-            crate::log_trace!(
+            crate::log!(
                 "net-fetch-bytes: spawn op_id={} lane=background caller_slot={} cpu_slot={} core_kind={} timeout_ms={} max_bytes={} url_len={}\n",
                 op_id,
                 caller_slot,
@@ -457,7 +451,7 @@ fn spawn_cabi_net_fetch_bytes(op_id: u32, url: String, timeout_ms: u32, max_byte
     }
 
     if vmx_guest_cabi_context() {
-        crate::log_trace!(
+        crate::log!(
             "net-fetch-bytes: spawn op_id={} refused local fallback caller_slot={} reason=vmx_guest_context\n",
             op_id,
             caller_slot
@@ -469,7 +463,7 @@ fn spawn_cabi_net_fetch_bytes(op_id: u32, url: String, timeout_ms: u32, max_byte
         CABI_NET_FETCH_WAIT.notify_all();
         return;
     }
-    crate::log_trace!(
+    crate::log!(
         "net-fetch-bytes: spawn op_id={} lane=local caller_slot={} timeout_ms={} max_bytes={} url_len={}\n",
         op_id,
         caller_slot,
@@ -707,7 +701,7 @@ pub(crate) fn cabi_net_fetch_bytes_start_host(
     CABI_NET_FETCH_BYTES_RESULTS
         .lock()
         .insert(op_id, CabiNetFetchBytesResult::default());
-    crate::log_trace!(
+    crate::log!(
         "net-fetch-bytes: start op_id={} timeout_ms={} max_bytes={} url={}\n",
         op_id,
         timeout_ms,
@@ -789,14 +783,14 @@ async fn cabi_net_fetch_post_json_task_inner(
     .await
     {
         Ok(bytes) => {
-            crate::log_trace!("net-fetch-post: response_body_len={}\n", bytes.len());
+            crate::log!("net-fetch-post: response_body_len={}\n", bytes.len());
             if let Ok(s) = core::str::from_utf8(bytes.as_slice()) {
                 if let Some(summary) = crate::r::net::json::summarize_openai_response_json(s) {
-                    crate::log_trace!("net-fetch-post: summary {}\n", summary);
+                    crate::log!("net-fetch-post: summary {}\n", summary);
                 }
                 log_utf8_chunks("net-fetch-post: response_json: ", s);
             } else {
-                crate::log_trace!("net-fetch-post: response_json: [non-utf8]\n");
+                crate::log!("net-fetch-post: response_json: [non-utf8]\n");
             }
             if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
                 match crate::r::fs::trueosfs::file_in_async(disk, key.as_str(), bytes.as_slice())
@@ -820,7 +814,7 @@ async fn cabi_net_fetch_post_json_task_inner(
         *slot = Some(rc);
     }
 
-    crate::log_trace!("net-fetch-post: done key={} rc={} ms={}\n", key, rc, elapsed_ms);
+    crate::log!("net-fetch-post: done key={} rc={} ms={}\n", key, rc, elapsed_ms);
 
     CABI_NET_FETCH_WAIT.notify_all();
 }
@@ -892,14 +886,14 @@ async fn cabi_net_fetch_post_json_bytes_task_inner(
     .await
     {
         Ok(bytes) => {
-            crate::log_trace!("net-fetch-post: response_body_len={}\n", bytes.len());
+            crate::log!("net-fetch-post: response_body_len={}\n", bytes.len());
             if let Ok(s) = core::str::from_utf8(bytes.as_slice()) {
                 if let Some(summary) = crate::r::net::json::summarize_openai_response_json(s) {
-                    crate::log_trace!("net-fetch-post: summary {}\n", summary);
+                    crate::log!("net-fetch-post: summary {}\n", summary);
                 }
                 log_utf8_chunks("net-fetch-post: response_json: ", s);
             } else {
-                crate::log_trace!("net-fetch-post: response_json: [non-utf8]\n");
+                crate::log!("net-fetch-post: response_json: [non-utf8]\n");
             }
             (0, bytes)
         }
@@ -914,7 +908,7 @@ async fn cabi_net_fetch_post_json_bytes_task_inner(
     }
 
     let elapsed_ms = t0.elapsed().as_millis();
-    crate::log_trace!(
+    crate::log!(
         "net-fetch-post: done request_id={} rc={} ms={} len={}\n",
         request_id,
         rc,
@@ -1212,7 +1206,7 @@ fn log_utf8_chunks(prefix: &str, s: &str) {
                 end += 1;
             }
         }
-        crate::log_trace!("{}{}\n", prefix, &s[i..end]);
+        crate::log!("{}{}\n", prefix, &s[i..end]);
         i = end;
     }
 }
@@ -1221,7 +1215,7 @@ async fn connect_hyper_tls_stream(
     dev_idx: usize,
     timeout_ms: u32,
 ) -> Result<DuplexStream, FetchError> {
-    crate::log_trace!("vhttps-hyper: dns begin host={} dev={}\n", parsed.host, dev_idx);
+    crate::log!("vhttps-hyper: dns begin host={} dev={}\n", parsed.host, dev_idx);
     let ip = match dns::resolve_ipv4_for_device(
         dev_idx,
         parsed.host.as_str(),
@@ -1231,7 +1225,7 @@ async fn connect_hyper_tls_stream(
     {
         Ok(ip) => ip,
         Err(dns::DnsError::Timeout) => {
-            crate::log_trace!(
+            crate::log!(
                 "vhttps-hyper: dns failed host={} dev={} err=timeout\n",
                 parsed.host,
                 dev_idx
@@ -1239,7 +1233,7 @@ async fn connect_hyper_tls_stream(
             return Err(FetchError::DnsTimeout);
         }
         Err(err) => {
-            crate::log_trace!(
+            crate::log!(
                 "vhttps-hyper: dns failed host={} dev={} err={:?}\n",
                 parsed.host,
                 dev_idx,
@@ -1248,7 +1242,7 @@ async fn connect_hyper_tls_stream(
             return Err(FetchError::DnsFailed);
         }
     };
-    crate::log_trace!(
+    crate::log!(
         "vhttps-hyper: dns ok host={} dev={} ip={}.{}.{}.{}\n",
         parsed.host,
         dev_idx,
@@ -1260,7 +1254,7 @@ async fn connect_hyper_tls_stream(
 
     let roots = TlsRoots::mozilla();
     let cfg = TlsClientConfig::new().with_alpn_protocols(&[b"http/1.1"]);
-    crate::log_trace!(
+    crate::log!(
         "vhttps-hyper: connect host={} dev={} port={}\n",
         parsed.host,
         dev_idx,
@@ -1286,7 +1280,7 @@ async fn connect_hyper_tls_stream(
     )
     .await
     .map_err(|err| {
-        crate::log_trace!(
+        crate::log!(
             "vhttps-hyper: connect failed host={} dev={} stage={}\n",
             parsed.host,
             dev_idx,
@@ -1360,17 +1354,17 @@ async fn request_on_device_hyper(
     max_bytes: usize,
 ) -> Result<Vec<u8>, FetchError> {
     let stream = connect_hyper_tls_stream(parsed, dev_idx, timeout_ms).await?;
-    crate::log_trace!("vhttps-hyper: handshake begin host={}\n", parsed.host);
+    crate::log!("vhttps-hyper: handshake begin host={}\n", parsed.host);
     let (mut sender, connection) =
         hyper::client::conn::http1::handshake::<_, HyperBytesBody>(HyperTokioIo::new(stream))
             .await
             .map_err(|_| FetchError::Tls)?;
-    crate::log_trace!("vhttps-hyper: handshake ok host={}\n", parsed.host);
+    crate::log!("vhttps-hyper: handshake ok host={}\n", parsed.host);
     let connection = tokio::spawn(async move { connection.await });
 
-    crate::log_trace!("vhttps-hyper: sender ready begin host={}\n", parsed.host);
+    crate::log!("vhttps-hyper: sender ready begin host={}\n", parsed.host);
     sender.ready().await.map_err(|_| FetchError::BodyTimeout)?;
-    crate::log_trace!(
+    crate::log!(
         "vhttps-hyper: request method={} host={} path={}\n",
         method.as_str(),
         parsed.host,
@@ -1437,7 +1431,7 @@ async fn request_on_device_hyper(
 
     drop(sender);
     let _ = tokio::time::timeout(core::time::Duration::from_millis(250), connection).await;
-    crate::log_trace!("vhttps-hyper: body-complete host={} bytes={}\n", parsed.host, out.len());
+    crate::log!("vhttps-hyper: body-complete host={} bytes={}\n", parsed.host, out.len());
     Ok(out)
 }
 
@@ -1569,7 +1563,7 @@ pub async fn fetch_https_to_file_hyper_with_profile_async(
     let key = normalize_rel(path, false)?;
     let dev_idx = fetch_device_index(profile).map_err(fetch_error_to_code)?;
 
-    crate::log_trace!("vhttps-hyper-file: start key={} url={}\n", key, url);
+    crate::log!("vhttps-hyper-file: start key={} url={}\n", key, url);
 
     const MAX_REDIRECTS: usize = 3;
     let tmp_key = hyper_file_tmp_key_for(key.as_str());
@@ -1584,7 +1578,7 @@ pub async fn fetch_https_to_file_hyper_with_profile_async(
                     return Err(fetch_error_to_code(FetchError::ResponseTooLarge));
                 }
                 if let Err(err) = tokio::fs::write(tmp_key.as_str(), body.as_slice()).await {
-                    crate::log_trace!(
+                    crate::log!(
                         "vhttps-hyper-file: tokio-fs-temp-write failed key={} tmp={} err={}\n",
                         key,
                         tmp_key,
@@ -1594,7 +1588,7 @@ pub async fn fetch_https_to_file_hyper_with_profile_async(
                     return Err(FS_ERR_IO);
                 }
                 if let Err(err) = tokio::fs::write(key.as_str(), body.as_slice()).await {
-                    crate::log_trace!(
+                    crate::log!(
                         "vhttps-hyper-file: tokio-fs-publish failed key={} tmp={} err={}\n",
                         key,
                         tmp_key,
@@ -1605,7 +1599,7 @@ pub async fn fetch_https_to_file_hyper_with_profile_async(
                 }
                 let _ = tokio::fs::remove_file(tmp_key.as_str()).await;
                 let total_ms = Instant::now().saturating_duration_since(t0).as_millis();
-                crate::log_trace!(
+                crate::log!(
                     "vhttps-hyper-file: done key={} bytes={} ms_total={}\n",
                     key,
                     body.len(),

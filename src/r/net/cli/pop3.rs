@@ -107,11 +107,11 @@ impl Pop3Client {
                     }
                     TlsEvent::Closed { .. } => return Err(Pop3Error::Closed),
                     TlsEvent::Error { msg } => {
-                        crate::log_trace!("pop3: tls-socket error msg={}\n", msg);
+                        crate::log!("pop3: tls-socket error msg={}\n", msg);
                         return Err(Pop3Error::TlsFailed);
                     }
                     TlsEvent::TlsError { err } => {
-                        crate::log_trace!("pop3: tls error {:?}\n", err);
+                        crate::log!("pop3: tls error {:?}\n", err);
                         return Err(Pop3Error::TlsFailed);
                     }
                     _ => {}

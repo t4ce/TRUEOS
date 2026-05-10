@@ -56,7 +56,7 @@ async fn axum_boot_runtime() -> Result<(), io::Error> {
 
     loop {
         let Some(addr) = primary_ipv4_addr(AXUM_BOOT_TCP_PORT) else {
-            crate::log_trace!("axum-boot: waiting for primary ipv4\n");
+            crate::log!("axum-boot: waiting for primary ipv4\n");
             tokio::time::sleep(core::time::Duration::from_millis(100)).await;
             continue;
         };
@@ -64,19 +64,14 @@ async fn axum_boot_runtime() -> Result<(), io::Error> {
         let listener = match tokio::net::TcpListener::bind(addr).await {
             Ok(listener) => listener,
             Err(err) => {
-                crate::log_trace!(
-                    "axum-boot: bind {} failed kind={:?} err={}\n",
-                    addr,
-                    err.kind(),
-                    err
-                );
+                crate::log!("axum-boot: bind {} failed kind={:?} err={}\n", addr, err.kind(), err);
                 tokio::time::sleep(core::time::Duration::from_millis(1000)).await;
                 continue;
             }
         };
 
         AXUM_BOOT_PORT.store(addr.port(), Ordering::Release);
-        crate::log_trace!("axum-boot: listening on http://{}/\n", addr);
+        crate::log!("axum-boot: listening on http://{}/\n", addr);
         return axum::serve(listener, app).await;
     }
 }
@@ -92,23 +87,23 @@ fn run_axum_boot_runtime() -> Result<(), io::Error> {
 #[embassy_executor::task]
 pub async fn axum_boot_service_task() {
     crate::r::readiness::wait_for(crate::r::readiness::NET_V4_CONFIGURED).await;
-    crate::log_trace!("axum-boot: launching after NET_V4_CONFIGURED\n");
+    crate::log!("axum-boot: launching after NET_V4_CONFIGURED\n");
 
     loop {
         let rc = crate::trueos_tokio_worker::spawn_blocking_job_with_purpose(
             Box::new(|| {
                 if let Err(err) = run_axum_boot_runtime() {
                     AXUM_BOOT_PORT.store(0, Ordering::Release);
-                    crate::log_trace!("axum-boot: runtime failed {:?}\n", err);
+                    crate::log!("axum-boot: runtime failed {:?}\n", err);
                 }
             }),
             "axum-boot-runtime",
         );
         if rc == 0 {
-            crate::log_trace!("axum-boot: submitted Tokio runtime to blocking lane\n");
+            crate::log!("axum-boot: submitted Tokio runtime to blocking lane\n");
             core::future::pending::<()>().await;
         }
-        crate::log_trace!(
+        crate::log!(
             "axum-boot: blocking lane unavailable rc={} retry={}ms\n",
             rc,
             AXUM_BOOT_BLOCKING_LANE_RETRY_MS

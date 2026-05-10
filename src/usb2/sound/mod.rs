@@ -97,7 +97,7 @@ async fn fetch_demo_wav_body() -> Option<(&'static str, Vec<u8>)> {
             .await
         {
             Ok(Some(cached)) if !cached.is_empty() => {
-                crate::log_trace!(
+                crate::log!(
                     "crabusb: audio cache hit path={} bytes={}\n",
                     AUDIO_DEMO_CACHE_PATH,
                     cached.len()
@@ -105,19 +105,19 @@ async fn fetch_demo_wav_body() -> Option<(&'static str, Vec<u8>)> {
                 return Some((AUDIO_DEMO_CACHE_PATH, cached));
             }
             Ok(None) => {
-                crate::log_trace!(
+                crate::log!(
                     "crabusb: audio cache unavailable path={} reason=index-not-ready-or-miss\n",
                     AUDIO_DEMO_CACHE_PATH
                 );
             }
             Ok(Some(_)) => {
-                crate::log_trace!(
+                crate::log!(
                     "crabusb: audio cache unavailable path={} reason=empty\n",
                     AUDIO_DEMO_CACHE_PATH
                 );
             }
             Err(err) => {
-                crate::log_trace!(
+                crate::log!(
                     "crabusb: audio cache probe failed path={} err={:?}\n",
                     AUDIO_DEMO_CACHE_PATH,
                     err
@@ -127,7 +127,7 @@ async fn fetch_demo_wav_body() -> Option<(&'static str, Vec<u8>)> {
     }
 
     for url in AUDIO_HTTP_LOCAL_DEMO_URLS {
-        crate::log_trace!(
+        crate::log!(
             "crabusb: audio fetch try url={} timeout_ms={} max_bytes={}\n",
             url,
             AUDIO_HTTP_DEMO_TIMEOUT_MS,
@@ -150,7 +150,7 @@ async fn fetch_demo_wav_body() -> Option<(&'static str, Vec<u8>)> {
                     match crate::r::fs::trueosfs::file_out_async(disk, AUDIO_DEMO_CACHE_PATH).await
                     {
                         Ok(Some(cached)) if !cached.is_empty() => {
-                            crate::log_trace!(
+                            crate::log!(
                                 "crabusb: audio cached path={} url={} bytes={}\n",
                                 AUDIO_DEMO_CACHE_PATH,
                                 url,
@@ -159,14 +159,14 @@ async fn fetch_demo_wav_body() -> Option<(&'static str, Vec<u8>)> {
                             return Some((AUDIO_DEMO_CACHE_PATH, cached));
                         }
                         Ok(_) => {
-                            crate::log_trace!(
+                            crate::log!(
                                 "crabusb: audio stream fetch finished but cache empty path={} url={}\n",
                                 AUDIO_DEMO_CACHE_PATH,
                                 url
                             );
                         }
                         Err(err) => {
-                            crate::log_trace!(
+                            crate::log!(
                                 "crabusb: audio cache read failed path={} url={} err={:?}\n",
                                 AUDIO_DEMO_CACHE_PATH,
                                 url,
@@ -176,14 +176,10 @@ async fn fetch_demo_wav_body() -> Option<(&'static str, Vec<u8>)> {
                     }
                 }
                 Ok(Err(err)) => {
-                    crate::log_trace!(
-                        "crabusb: audio stream fetch failed url={} err={:?}\n",
-                        url,
-                        err
-                    );
+                    crate::log!("crabusb: audio stream fetch failed url={} err={:?}\n", url, err);
                 }
                 Err(err) => {
-                    crate::log_trace!(
+                    crate::log!(
                         "crabusb: audio stream fetch shared-tokio failed url={} err={:?}\n",
                         url,
                         err
@@ -202,15 +198,9 @@ async fn fetch_demo_wav_body() -> Option<(&'static str, Vec<u8>)> {
         .await
         {
             Ok(Ok(body)) => return Some((url, body)),
-            Ok(Err(err)) => {
-                crate::log_trace!("crabusb: audio fetch failed url={} err={:?}\n", url, err)
-            }
+            Ok(Err(err)) => crate::log!("crabusb: audio fetch failed url={} err={:?}\n", url, err),
             Err(err) => {
-                crate::log_trace!(
-                    "crabusb: audio fetch shared-tokio failed url={} err={:?}\n",
-                    url,
-                    err
-                )
+                crate::log!("crabusb: audio fetch shared-tokio failed url={} err={:?}\n", url, err)
             }
         }
     }
@@ -326,7 +316,7 @@ async fn stream_target_audio(
     let (source_url, body) = match fetch_demo_wav_body().await {
         Some(payload) => payload,
         None => {
-            crate::log_trace!(
+            crate::log!(
                 "crabusb: target {:04X}:{:04X} audio fetch exhausted sources={:?}\n",
                 vendor_id,
                 product_id,
@@ -337,7 +327,7 @@ async fn stream_target_audio(
     };
 
     let Some((wav_data_off, wav_data_len)) = parse_wav_pcm_s16_stereo_48k(body.as_slice()) else {
-        crate::log_trace!(
+        crate::log!(
             "crabusb: target {:04X}:{:04X} audio wav unsupported url={} bytes={} need=pcm_s16le_stereo_48k\n",
             vendor_id,
             product_id,
@@ -351,7 +341,7 @@ async fn stream_target_audio(
     let endpoint_kind = match device.get_endpoint(target.endpoint_address).await {
         Ok(kind) => kind,
         Err(err) => {
-            crate::log_trace!(
+            crate::log!(
                 "crabusb: target {:04X}:{:04X} ep=0x{:02X} open failed: {:?}\n",
                 vendor_id,
                 product_id,
@@ -363,7 +353,7 @@ async fn stream_target_audio(
     };
 
     let EndpointKind::IsochronousOut(mut iso_out) = endpoint_kind else {
-        crate::log_trace!(
+        crate::log!(
             "crabusb: target {:04X}:{:04X} if#{} alt={} ep=0x{:02X} is not iso-out\n",
             vendor_id,
             product_id,
@@ -386,7 +376,7 @@ async fn stream_target_audio(
     let mut zero_submit_count = 0u64;
     let mut short_submit_count = 0u64;
 
-    crate::log_trace!(
+    crate::log!(
         "crabusb: audio streaming start {:04X}:{:04X} if#{} alt={} ep=0x{:02X} packet={} batch={} feedback={} source_url={} wav_bytes={} payload_limit={}\n",
         vendor_id,
         product_id,
@@ -410,7 +400,7 @@ async fn stream_target_audio(
             let probe_len = min(packet_bytes, 16);
             let probe = &packet_batch[..probe_len];
             let non_zero = probe.iter().filter(|b| **b != 0).count();
-            crate::log_trace!(
+            crate::log!(
                 "crabusb: audio probe first_packet bytes={} non_zero={} head={:02X?}\n",
                 probe_len,
                 non_zero,
@@ -440,7 +430,7 @@ async fn stream_target_audio(
                 {
                     let first_packet = &packet_batch[..packet_bytes];
                     let (peak, mean_abs) = audio_packet_level_probe(first_packet);
-                    crate::log_trace!(
+                    crate::log!(
                         "crabusb: audio heartbeat {:04X}:{:04X} submits={} bytes={} last_sent={} zero_submits={} short_submits={} first_peak={} first_mean_abs={}\n",
                         vendor_id,
                         product_id,
@@ -455,7 +445,7 @@ async fn stream_target_audio(
                 }
             }
             Err(err) => {
-                crate::log_trace!(
+                crate::log!(
                     "crabusb: audio streaming stopped {:04X}:{:04X} ep=0x{:02X} err={:?}\n",
                     vendor_id,
                     product_id,
@@ -509,7 +499,7 @@ pub(crate) async fn maybe_start_target_audio(
     let mut device = match host.open_device(dev_info).await {
         Ok(device) => device,
         Err(err) => {
-            crate::log_trace!(
+            crate::log!(
                 "crabusb: target {:04X}:{:04X} audio open failed: {:?}\n",
                 vendor_id,
                 product_id,
@@ -524,7 +514,7 @@ pub(crate) async fn maybe_start_target_audio(
         .set_configuration(target.configuration_value)
         .await
     {
-        crate::log_trace!(
+        crate::log!(
             "crabusb: target {:04X}:{:04X} set cfg={} failed before audio claim: {:?}\n",
             vendor_id,
             product_id,
@@ -539,7 +529,7 @@ pub(crate) async fn maybe_start_target_audio(
         .await
     {
         Ok(()) => {
-            crate::log_trace!(
+            crate::log!(
                 "crabusb: target {:04X}:{:04X} audio ownership cfg={} if#{} alt={} ep=0x{:02X}\n",
                 vendor_id,
                 product_id,
@@ -567,14 +557,14 @@ pub(crate) async fn maybe_start_target_audio(
                 )
                 .await
             {
-                Ok(_) => crate::log_trace!(
+                Ok(_) => crate::log!(
                     "crabusb: target {:04X}:{:04X} audio set-rate ok ep=0x{:02X} hz={}\n",
                     vendor_id,
                     product_id,
                     target.endpoint_address,
                     AUDIO_RATE_HZ
                 ),
-                Err(err) => crate::log_trace!(
+                Err(err) => crate::log!(
                     "crabusb: target {:04X}:{:04X} audio set-rate failed ep=0x{:02X} hz={} err={:?}\n",
                     vendor_id,
                     product_id,
@@ -603,7 +593,7 @@ pub(crate) async fn maybe_start_target_audio(
                         let hz = u32::from(rate_readback[0])
                             | (u32::from(rate_readback[1]) << 8)
                             | (u32::from(rate_readback[2]) << 16);
-                        crate::log_trace!(
+                        crate::log!(
                             "crabusb: target {:04X}:{:04X} audio set-rate readback ep=0x{:02X} hz={}\n",
                             vendor_id,
                             product_id,
@@ -611,14 +601,14 @@ pub(crate) async fn maybe_start_target_audio(
                             hz
                         );
                     }
-                    Ok(read) => crate::log_trace!(
+                    Ok(read) => crate::log!(
                         "crabusb: target {:04X}:{:04X} audio set-rate readback short ep=0x{:02X} bytes={}\n",
                         vendor_id,
                         product_id,
                         target.endpoint_address,
                         read
                     ),
-                    Err(err) => crate::log_trace!(
+                    Err(err) => crate::log!(
                         "crabusb: target {:04X}:{:04X} audio set-rate readback failed ep=0x{:02X} err={:?}\n",
                         vendor_id,
                         product_id,
@@ -640,7 +630,7 @@ pub(crate) async fn maybe_start_target_audio(
             match audio_stream_task(device, active_stream, vendor_id, product_id, target) {
                 Ok(token) => {
                     spawner.spawn(token);
-                    crate::log_trace!(
+                    crate::log!(
                         "crabusb: audio handoff {:04X}:{:04X} if#{} alt={} ep=0x{:02X} stable_id={}\n",
                         vendor_id,
                         product_id,
@@ -653,7 +643,7 @@ pub(crate) async fn maybe_start_target_audio(
                 Err(err) => {
                     *ACTIVE_AUDIO_STREAM.lock() = None;
                     AUDIO_STREAM_ACTIVE.store(false, Ordering::Release);
-                    crate::log_trace!(
+                    crate::log!(
                         "crabusb: target {:04X}:{:04X} audio spawn failed if#{} alt={}: {:?}\n",
                         vendor_id,
                         product_id,
@@ -664,7 +654,7 @@ pub(crate) async fn maybe_start_target_audio(
                 }
             }
         }
-        Err(err) => crate::log_trace!(
+        Err(err) => crate::log!(
             "crabusb: target {:04X}:{:04X} audio claim failed if#{} alt={}: {:?}\n",
             vendor_id,
             product_id,

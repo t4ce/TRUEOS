@@ -139,7 +139,7 @@ async fn read_led_feature_report_early(device: &mut Device, target: LedProbeTarg
     let product_id = desc.product_id;
 
     if !LED_ENABLE_EARLY_FEATURE_GET_REPORT {
-        crate::log_trace!(
+        crate::log!(
             "crabusb: leds {:04X}:{:04X} early feature get-report disabled for safety; request would be if#{} report_id={} len={} bmRequestType=0xA1 bRequest=0x01 wValue=0x{:04X} wIndex={} wLength={} backing_len={}\n",
             vendor_id,
             product_id,
@@ -160,7 +160,7 @@ async fn read_led_feature_report_early(device: &mut Device, target: LedProbeTarg
     let buff_capacity = buff.capacity();
     let request = &mut buff[..LED_FEATURE_REPORT_LEN];
 
-    crate::log_trace!(
+    crate::log!(
         "crabusb: leds {:04X}:{:04X} early feature get-report if#{} report_id={} len={} bmRequestType=0xA1 bRequest=0x01 wValue=0x{:04X} wIndex={} wLength={}\n",
         vendor_id,
         product_id,
@@ -171,7 +171,7 @@ async fn read_led_feature_report_early(device: &mut Device, target: LedProbeTarg
         target.interface_number,
         LED_FEATURE_REPORT_LEN
     );
-    crate::log_trace!(
+    crate::log!(
         "crabusb: leds {:04X}:{:04X} early feature buffer addr={:p} request_len={} backing_len={} backing_capacity={}B\n",
         vendor_id,
         product_id,
@@ -192,7 +192,7 @@ async fn read_led_feature_report_early(device: &mut Device, target: LedProbeTarg
         Ok(read_len) => {
             let read_len = read_len.min(LED_FEATURE_REPORT_LEN);
             let nonzero = buff[..read_len].iter().filter(|byte| **byte != 0).count();
-            crate::log_trace!(
+            crate::log!(
                 "crabusb: leds {:04X}:{:04X} early feature report id={} len={} nonzero={} bytes={:02X?}\n",
                 vendor_id,
                 product_id,
@@ -211,7 +211,7 @@ async fn read_led_feature_report_early(device: &mut Device, target: LedProbeTarg
             .await
             {
                 Ok(()) => {
-                    crate::log_trace!(
+                    crate::log!(
                         "crabusb: leds {:04X}:{:04X} early feature roundtrip set-report id={} len={} submitted\n",
                         vendor_id,
                         product_id,
@@ -220,7 +220,7 @@ async fn read_led_feature_report_early(device: &mut Device, target: LedProbeTarg
                     );
                 }
                 Err(err) => {
-                    crate::log_trace!(
+                    crate::log!(
                         "crabusb: leds {:04X}:{:04X} early feature roundtrip set-report id={} len={} failed: {:?}\n",
                         vendor_id,
                         product_id,
@@ -232,7 +232,7 @@ async fn read_led_feature_report_early(device: &mut Device, target: LedProbeTarg
             }
         }
         Err(err) => {
-            crate::log_trace!(
+            crate::log!(
                 "crabusb: leds {:04X}:{:04X} early feature report id={} read failed: {:?}\n",
                 vendor_id,
                 product_id,
@@ -248,7 +248,7 @@ async fn log_led_live_state(device: &mut Device, target: LedProbeTarget) -> bool
     let vendor_id = desc.vendor_id;
     let product_id = desc.product_id;
 
-    crate::log_trace!(
+    crate::log!(
         "crabusb: leds {:04X}:{:04X} live-state if#{} target_cfg={} feature request will execute early before matrix: bmRequestType=0xA1 bRequest=0x01 wValue=0x{:04X} wIndex={} wLength={}\n",
         vendor_id,
         product_id,
@@ -261,7 +261,7 @@ async fn log_led_live_state(device: &mut Device, target: LedProbeTarget) -> bool
 
     match device.current_configuration_descriptor().await {
         Ok(config) => {
-            crate::log_trace!(
+            crate::log!(
                 "crabusb: leds {:04X}:{:04X} live current cfg={} target_cfg={} if#{}\n",
                 vendor_id,
                 product_id,
@@ -270,7 +270,7 @@ async fn log_led_live_state(device: &mut Device, target: LedProbeTarget) -> bool
                 target.interface_number
             );
             if config.configuration_value != target.configuration_value {
-                crate::log_trace!(
+                crate::log!(
                     "crabusb: leds {:04X}:{:04X} cfg mismatch on live device; aborting probe rather than reconfigure hardware\n",
                     vendor_id,
                     product_id
@@ -280,7 +280,7 @@ async fn log_led_live_state(device: &mut Device, target: LedProbeTarget) -> bool
             true
         }
         Err(err) => {
-            crate::log_trace!(
+            crate::log!(
                 "crabusb: leds {:04X}:{:04X} live current cfg read failed; aborting probe rather than reconfigure hardware: {:?}\n",
                 vendor_id,
                 product_id,
@@ -315,7 +315,7 @@ async fn submit_led_phase(device: &mut Device, target: LedProbeTarget, phase: u8
     let product_id = desc.product_id;
     let payload = led_binary_payload(phase);
 
-    crate::log_trace!(
+    crate::log!(
         "crabusb: leds {:04X}:{:04X} phase={} binary-sweep if#{} id5={:02X?} id6={:02X?} id1={:02X?}\n",
         vendor_id,
         product_id,
@@ -327,14 +327,14 @@ async fn submit_led_phase(device: &mut Device, target: LedProbeTarget, phase: u8
     );
 
     match send_hid_set_report(device, target.interface_number, 5, &payload).await {
-        Ok(()) => crate::log_trace!(
+        Ok(()) => crate::log!(
             "crabusb: leds {:04X}:{:04X} phase={} id=5 submitted\n",
             vendor_id,
             product_id,
             phase
         ),
         Err(err) => {
-            crate::log_trace!(
+            crate::log!(
                 "crabusb: leds {:04X}:{:04X} phase={} id=5 failed: {:?}\n",
                 vendor_id,
                 product_id,
@@ -346,14 +346,14 @@ async fn submit_led_phase(device: &mut Device, target: LedProbeTarget, phase: u8
     }
 
     match send_hid_set_report(device, target.interface_number, 6, &payload).await {
-        Ok(()) => crate::log_trace!(
+        Ok(()) => crate::log!(
             "crabusb: leds {:04X}:{:04X} phase={} id=6 submitted\n",
             vendor_id,
             product_id,
             phase
         ),
         Err(err) => {
-            crate::log_trace!(
+            crate::log!(
                 "crabusb: leds {:04X}:{:04X} phase={} id=6 failed: {:?}\n",
                 vendor_id,
                 product_id,
@@ -365,14 +365,14 @@ async fn submit_led_phase(device: &mut Device, target: LedProbeTarget, phase: u8
     }
 
     match send_hid_set_report(device, target.interface_number, 1, &LED_COMMIT_REPORT).await {
-        Ok(()) => crate::log_trace!(
+        Ok(()) => crate::log!(
             "crabusb: leds {:04X}:{:04X} phase={} id=1 commit submitted\n",
             vendor_id,
             product_id,
             phase
         ),
         Err(err) => {
-            crate::log_trace!(
+            crate::log!(
                 "crabusb: leds {:04X}:{:04X} phase={} id=1 commit failed: {:?}\n",
                 vendor_id,
                 product_id,
@@ -383,7 +383,7 @@ async fn submit_led_phase(device: &mut Device, target: LedProbeTarget, phase: u8
         }
     }
 
-    crate::log_trace!(
+    crate::log!(
         "crabusb: leds {:04X}:{:04X} phase={} observe now pause_ms={}\n",
         vendor_id,
         product_id,
@@ -410,7 +410,7 @@ async fn led_probe_task(mut device: Device, controller_id: u32, target: LedProbe
         return;
     }
 
-    crate::log_trace!(
+    crate::log!(
         "crabusb: leds {:04X}:{:04X} shared probe slot={} if#{} cfg={} ctrl={} binary_sweep=0..255 period_ms={} commit={:02X?}\n",
         vendor_id,
         product_id,
@@ -449,7 +449,7 @@ pub(crate) async fn maybe_start_led_controller_with_device(
     }
 
     let Some(target) = pick_led_probe_target(dev_info.configurations()) else {
-        crate::log_trace!(
+        crate::log!(
             "crabusb: leds {:04X}:{:04X} supported controller found but no HID out target\n",
             vendor_id,
             product_id
@@ -469,7 +469,7 @@ pub(crate) async fn maybe_start_led_controller_with_device(
     match led_probe_task(device, controller_id, target) {
         Ok(token) => {
             spawner.spawn(token);
-            crate::log_trace!(
+            crate::log!(
                 "crabusb: leds {:04X}:{:04X} handoff shared if#{} cfg={} ctrl={}\n",
                 vendor_id,
                 product_id,
@@ -481,7 +481,7 @@ pub(crate) async fn maybe_start_led_controller_with_device(
         }
         Err(err) => {
             unregister_active_probe(active_probe);
-            crate::log_trace!(
+            crate::log!(
                 "crabusb: leds {:04X}:{:04X} spawn failed shared if#{} cfg={} ctrl={}: {:?}\n",
                 vendor_id,
                 product_id,
@@ -509,7 +509,7 @@ pub(crate) async fn maybe_start_led_controller(
     }
 
     let Some(target) = pick_led_probe_target(dev_info.configurations()) else {
-        crate::log_trace!(
+        crate::log!(
             "crabusb: leds {:04X}:{:04X} supported controller found but no HID out target\n",
             vendor_id,
             product_id
@@ -520,7 +520,7 @@ pub(crate) async fn maybe_start_led_controller(
     let device = match host.open_device(dev_info).await {
         Ok(device) => device,
         Err(err) => {
-            crate::log_trace!(
+            crate::log!(
                 "crabusb: leds {:04X}:{:04X} open failed: {:?}\n",
                 vendor_id,
                 product_id,
@@ -542,7 +542,7 @@ pub(crate) async fn maybe_start_led_controller(
     match led_probe_task(device, controller_id, target) {
         Ok(token) => {
             spawner.spawn(token);
-            crate::log_trace!(
+            crate::log!(
                 "crabusb: leds {:04X}:{:04X} handoff if#{} cfg={} ctrl={}\n",
                 vendor_id,
                 product_id,
@@ -554,7 +554,7 @@ pub(crate) async fn maybe_start_led_controller(
         }
         Err(err) => {
             unregister_active_probe(active_probe);
-            crate::log_trace!(
+            crate::log!(
                 "crabusb: leds {:04X}:{:04X} spawn failed if#{} cfg={} ctrl={}: {:?}\n",
                 vendor_id,
                 product_id,

@@ -243,7 +243,7 @@ fn ring_tail_addr(value: u32) -> u32 {
 }
 
 fn log_rcs_regs(warm: Igpu770WarmState, label: &str) {
-    crate::log_trace!(
+    crate::log!(
         "intel/igpu770: rcs-regs label={} ctl=0x{:08X} head=0x{:08X} tail=0x{:08X} start=0x{:08X} mi_mode=0x{:08X} mode=0x{:08X} ctx_ctl=0x{:08X} execlist_ctl=0x{:08X} execlist_lo=0x{:08X} execlist_hi=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} emr=0x{:08X} instdone=0x{:08X} instps=0x{:08X} bbaddr=0x{:08X} bbaddr_udw=0x{:08X}\n",
         label,
         mmio_read32(warm, RCS_RING_CTL),
@@ -270,7 +270,7 @@ fn log_rcs_regs(warm: Igpu770WarmState, label: &str) {
 }
 
 fn log_bcs_regs(warm: Igpu770WarmState, label: &str) {
-    crate::log_trace!(
+    crate::log!(
         "intel/igpu770: bcs-regs label={} ctl=0x{:08X} head=0x{:08X} tail=0x{:08X} start=0x{:08X} mi_mode=0x{:08X} mode=0x{:08X} ctx_ctl=0x{:08X} execlist_ctl=0x{:08X} execlist_lo=0x{:08X} execlist_hi=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} emr=0x{:08X} instdone=0x{:08X} instps=0x{:08X} bbaddr=0x{:08X} bbaddr_udw=0x{:08X}\n",
         label,
         mmio_read32(warm, BCS_RING_CTL),
@@ -305,7 +305,7 @@ fn log_rcs_mode_summary(warm: Igpu770WarmState, label: &str) {
     let mode = mmio_read32(warm, RCS_RING_MODE_GEN7);
     let ctx_ctl = mmio_read32(warm, RCS_RING_CONTEXT_CONTROL);
     let execlist_ctl = mmio_read32(warm, RCS_RING_EXECLIST_CONTROL);
-    crate::log_trace!(
+    crate::log!(
         "intel/igpu770: rcs-mode label={} mi_mode=0x{:08X} mode=0x{:08X} ctx_ctl=0x{:08X} execlist_ctl=0x{:08X} mode_idle={} stop_ring={} tlb_invalidate_explicit={} ppgtt_enable={} legacy_disable={}\n",
         label,
         mi_mode,
@@ -325,7 +325,7 @@ fn log_bcs_mode_summary(warm: Igpu770WarmState, label: &str) {
     let mode = mmio_read32(warm, BCS_RING_MODE_GEN7);
     let ctx_ctl = mmio_read32(warm, BCS_RING_CONTEXT_CONTROL);
     let execlist_ctl = mmio_read32(warm, BCS_RING_EXECLIST_CONTROL);
-    crate::log_trace!(
+    crate::log!(
         "intel/igpu770: bcs-mode label={} mi_mode=0x{:08X} mode=0x{:08X} ctx_ctl=0x{:08X} execlist_ctl=0x{:08X} mode_idle={} stop_ring={} tlb_invalidate_explicit={} ppgtt_enable={} legacy_disable={}\n",
         label,
         mi_mode,
@@ -448,7 +448,7 @@ fn log_media_forcewake_coverage(warm: Igpu770WarmState, label: &str) -> usize {
         idx += 1;
     }
 
-    crate::log_trace!(
+    crate::log!(
         "intel/igpu770: forcewake-media-coverage label={} awake={}/{} vdbox4=0x{:08X} vdbox5=0x{:08X} vdbox6=0x{:08X} vdbox7=0x{:08X} vebox0=0x{:08X} vebox1=0x{:08X} vebox2=0x{:08X} vebox3=0x{:08X}\n",
         label,
         awake,
@@ -493,7 +493,7 @@ pub(super) fn forcewake_media_refresh(
         wait_forcewake_domain_ack(warm, FORCEWAKE_ACK_MEDIA, FORCEWAKE_KERNEL, FORCEWAKE_KERNEL);
     let awake_count = log_media_forcewake_coverage(warm, label);
 
-    crate::log_trace!(
+    crate::log!(
         "intel/igpu770: forcewake-media-refresh label={} req_before=0x{:08X} req_after=0x{:08X} ack_before=0x{:08X} ack_after=0x{:08X} req_latched={} acked={} req_iters={} ack_iters={} awake={}/{}\n",
         label,
         req_before,
@@ -527,7 +527,7 @@ pub(super) fn forcewake_all_acquire(warm: Igpu770WarmState) -> u32 {
     let media_ack_before = mmio_read32(warm, FORCEWAKE_ACK_MEDIA);
     let gt_req_before = mmio_read32(warm, FORCEWAKE_GT_GEN11);
     let gt_ack_before = mmio_read32(warm, FORCEWAKE_ACK_GT);
-    crate::log_trace!(
+    crate::log!(
         "intel/igpu770: forcewake-all pre ack=0x{:08X} media_req=0x{:08X} media_ack=0x{:08X} gt_req=0x{:08X} gt_ack=0x{:08X}\n",
         ack_before,
         media_req_before,
@@ -537,7 +537,7 @@ pub(super) fn forcewake_all_acquire(warm: Igpu770WarmState) -> u32 {
     );
     let _ = log_media_forcewake_coverage(warm, "pre");
     if FORCEWAKE_GT_HELD.load(Ordering::Acquire) {
-        crate::log_trace!(
+        crate::log!(
             "intel/igpu770: forcewake-all already-held ack=0x{:08X} media_req=0x{:08X} media_ack=0x{:08X} gt_req=0x{:08X} gt_ack=0x{:08X}\n",
             ack_before,
             media_req_before,
@@ -600,7 +600,7 @@ pub(super) fn forcewake_all_acquire(warm: Igpu770WarmState) -> u32 {
     let (gt_ok, gt_ack, gt_ack_iters) =
         wait_forcewake_domain_ack(warm, FORCEWAKE_ACK_GT, FORCEWAKE_KERNEL, FORCEWAKE_KERNEL);
 
-    crate::log_trace!(
+    crate::log!(
         "intel/igpu770: forcewake-all acquire req=0x{:08X} ack=0x{:08X} cleared=0x{:08X} clear_iters={} iters={} fallback={} media_req=0x{:08X} media_req_iters={} media_ack=0x{:08X} media_ack_iters={} media_ok={} gt_req=0x{:08X} gt_req_iters={} gt_ack=0x{:08X} gt_ack_iters={} gt_ok={}\n",
         FORCEWAKE_KERNEL,
         ack,
@@ -620,7 +620,7 @@ pub(super) fn forcewake_all_acquire(warm: Igpu770WarmState) -> u32 {
         gt_ok as u8
     );
     let media_coverage_awake = log_media_forcewake_coverage(warm, "post-acquire");
-    crate::log_trace!(
+    crate::log!(
         "intel/igpu770: forcewake-all coverage render_ack={} media_ack={} gt_ack={} media_domains_awake={}\n",
         ((ack & FORCEWAKE_KERNEL) != 0) as u8,
         ((media_ack & FORCEWAKE_KERNEL) != 0) as u8,
@@ -630,7 +630,7 @@ pub(super) fn forcewake_all_acquire(warm: Igpu770WarmState) -> u32 {
     intel_770_registers::log_engine_wakeup_table("post-forcewake", |off| mmio_read32(warm, off));
     if set_ok && gt_ok {
         if !media_ok {
-            crate::log_trace!(
+            crate::log!(
                 "intel/igpu770: forcewake-all partial-hold render_gt=1 media=0; caching render/gt wake to avoid repeated media timeout retries\n"
             );
         }
@@ -655,7 +655,7 @@ fn forcewake_gt_release(warm: Igpu770WarmState) -> u32 {
     let _ = mmio_write32(warm, FORCEWAKE_GT_GEN11, masked_bit_disable(FORCEWAKE_KERNEL));
     let _ = wait_forcewake_domain_ack(warm, FORCEWAKE_ACK_GT, FORCEWAKE_KERNEL, 0);
     FORCEWAKE_GT_HELD.store(false, Ordering::Release);
-    crate::log_trace!(
+    crate::log!(
         "intel/igpu770: forcewake-all release ack=0x{:08X} media_ack=0x{:08X} gt_ack=0x{:08X}\n",
         ack,
         mmio_read32(warm, FORCEWAKE_ACK_MEDIA),
@@ -667,7 +667,7 @@ fn forcewake_gt_release(warm: Igpu770WarmState) -> u32 {
 
 fn forcewake_gt_mmio_sanity(warm: Igpu770WarmState) {
     if let Some(reg) = intel_770_registers::describe_register(RCS_RING_IMR) {
-        crate::log_trace!(
+        crate::log!(
             "intel/igpu770: forcewake-render sanity-target block={} reg={} off=0x{:05X} desc={}\n",
             reg.block,
             reg.name,
@@ -681,7 +681,7 @@ fn forcewake_gt_mmio_sanity(warm: Igpu770WarmState) {
     let after = mmio_read32(warm, RCS_RING_IMR);
     let _ = mmio_write32(warm, RCS_RING_IMR, before);
     let restored = mmio_read32(warm, RCS_RING_IMR);
-    crate::log_trace!(
+    crate::log!(
         "intel/igpu770: forcewake-render sanity reg=RCS_IMR before=0x{:08X} wrote=0x{:08X} after=0x{:08X} restored=0x{:08X}\n",
         before,
         toggled,
@@ -716,7 +716,7 @@ pub(super) fn request_display_power_with_forcewake(warm: Igpu770WarmState) -> bo
         poll_iters += 1;
     }
     let latched = wrote && (rb & GT_DISP_PWRON_REQ_MASK) != 0;
-    crate::log_trace!(
+    crate::log!(
         "intel/igpu770: display-power-request register=GT_DISP_PWRON orig=0x{:08X} req=0x{:08X} rb=0x{:08X} clk5_rb=0x{:08X} dcpr1_rb=0x{:08X} poll_iters={} latched={}\n",
         orig,
         req,
@@ -812,7 +812,7 @@ fn build_rcs_store_pixels_batch(warm: Igpu770WarmState, fill: BltFillRectPlan) {
     }
 
     if i + 4 > dwords.len().saturating_sub(RESERVED_END_DWORDS) {
-        crate::log_trace!(
+        crate::log!(
             "intel/igpu770: rcs-batch exhausted before result marker (used={} total={})\n",
             i,
             dwords.len()
@@ -1395,7 +1395,7 @@ fn ggtt_map_plan_aperture_backed(
 }
 
 fn log_ggtt_map_plan(label: &str, plan: GgttMapPlan) {
-    crate::log_trace!(
+    crate::log!(
         "intel/igpu770: ggtt-plan label={} gpu=0x{:X} phys=0x{:X} size=0x{:X} pages={} aperture_backed={}\n",
         label,
         plan.gpu_addr,
@@ -1449,7 +1449,7 @@ fn ggtt_program_plan(label: &str, warm: Igpu770WarmState, plan: GgttMapPlan) -> 
             .phys
             .saturating_add((page as u64).saturating_mul(GGTT_PAGE_BYTES));
         let Some(readback) = ggtt_write_pte(warm, gpu_addr, phys) else {
-            crate::log_trace!(
+            crate::log!(
                 "intel/igpu770: ggtt-map label={} page={} gpu=0x{:X} phys=0x{:X} status=write-failed\n",
                 label,
                 page,
@@ -1462,7 +1462,7 @@ fn ggtt_program_plan(label: &str, warm: Igpu770WarmState, plan: GgttMapPlan) -> 
             || page < GGTT_MAP_LOG_EDGE_PAGES
             || page >= plan.pages.saturating_sub(GGTT_MAP_LOG_EDGE_PAGES)
         {
-            crate::log_trace!(
+            crate::log!(
                 "intel/igpu770: ggtt-map label={} page={} gpu=0x{:X} phys=0x{:X} pte=0x{:016X}\n",
                 label,
                 page,
@@ -1474,7 +1474,7 @@ fn ggtt_program_plan(label: &str, warm: Igpu770WarmState, plan: GgttMapPlan) -> 
             let omitted = plan
                 .pages
                 .saturating_sub(GGTT_MAP_LOG_EDGE_PAGES.saturating_mul(2));
-            crate::log_trace!(
+            crate::log!(
                 "intel/igpu770: ggtt-map label={} omitted_pages={} total_pages={} log_policy=head-tail edge_pages={}\n",
                 label,
                 omitted,
@@ -1546,7 +1546,7 @@ pub fn ggtt_recon_once() {
     }
 
     let Some(warm) = warm_state() else {
-        crate::log_trace!("intel/igpu770: ggtt-recon skipped reason=not-warmed\n");
+        crate::log!("intel/igpu770: ggtt-recon skipped reason=not-warmed\n");
         return;
     };
 
@@ -1564,7 +1564,7 @@ pub fn ggtt_recon_once() {
     let guc_ads =
         ggtt_map_plan_system_ram(warm.guc_ads_phys, warm.guc_ads_len, warm.guc_ads_gpu_addr);
 
-    crate::log_trace!(
+    crate::log!(
         "intel/igpu770: ggtt-recon aperture=0x{:X}/0x{:X} limine_fb_phys=0x{:X} limine_fb_size=0x{:X}\n",
         warm.aperture_bar_phys,
         warm.aperture_bar_size,
@@ -1575,7 +1575,7 @@ pub fn ggtt_recon_once() {
     if let Some(plan) = fb {
         log_ggtt_map_plan("framebuffer", plan);
     } else {
-        crate::log_trace!("intel/igpu770: ggtt-recon framebuffer plan unavailable\n");
+        crate::log!("intel/igpu770: ggtt-recon framebuffer plan unavailable\n");
     }
     if let Some(plan) = ring {
         log_ggtt_map_plan("ring", plan);
@@ -1595,10 +1595,10 @@ pub fn ggtt_recon_once() {
     if let Some(plan) = guc_ads {
         log_ggtt_map_plan("guc-ads", plan);
     }
-    crate::log_trace!(
+    crate::log!(
         "intel/igpu770: ggtt-recon note system-ram objects need explicit GGTT PTEs; framebuffer is aperture-backed\n"
     );
-    crate::log_trace!(
+    crate::log!(
         "intel/igpu770: ggtt-recon gtt_alias_off=0x{:X} gtt_alias_bytes=0x{:X}\n",
         GGTT_ALIAS_BASE_OFF,
         GGTT_ALIAS_BYTES
@@ -1611,30 +1611,30 @@ pub fn ggtt_map_smoke_objects_once() {
     }
 
     let Some(warm) = warm_state() else {
-        crate::log_trace!("intel/igpu770: ggtt-map skipped reason=not-warmed\n");
+        crate::log!("intel/igpu770: ggtt-map skipped reason=not-warmed\n");
         return;
     };
 
     let Some(ring) = ggtt_map_plan_system_ram(warm.ring_phys, warm.ring_len, GPU_VA_RING_BASE)
     else {
-        crate::log_trace!("intel/igpu770: ggtt-map skipped reason=ring-plan\n");
+        crate::log!("intel/igpu770: ggtt-map skipped reason=ring-plan\n");
         return;
     };
     let Some(context) =
         ggtt_map_plan_system_ram(warm.context_phys, warm.context_len, GPU_VA_CONTEXT_BASE)
     else {
-        crate::log_trace!("intel/igpu770: ggtt-map skipped reason=context-plan\n");
+        crate::log!("intel/igpu770: ggtt-map skipped reason=context-plan\n");
         return;
     };
     let Some(batch) = ggtt_map_plan_system_ram(warm.batch_phys, warm.batch_len, GPU_VA_BATCH_BASE)
     else {
-        crate::log_trace!("intel/igpu770: ggtt-map skipped reason=batch-plan\n");
+        crate::log!("intel/igpu770: ggtt-map skipped reason=batch-plan\n");
         return;
     };
     let Some(result) =
         ggtt_map_plan_system_ram(warm.result_phys, warm.result_len, GPU_VA_RESULT_BASE)
     else {
-        crate::log_trace!("intel/igpu770: ggtt-map skipped reason=result-plan\n");
+        crate::log!("intel/igpu770: ggtt-map skipped reason=result-plan\n");
         return;
     };
     let guc_fw = ggtt_map_plan_system_ram(warm.guc_fw_phys, warm.guc_fw_len, warm.guc_fw_gpu_addr);
@@ -1642,7 +1642,7 @@ pub fn ggtt_map_smoke_objects_once() {
         ggtt_map_plan_system_ram(warm.guc_ads_phys, warm.guc_ads_len, warm.guc_ads_gpu_addr);
 
     let _ = forcewake_all_acquire(warm);
-    crate::log_trace!("intel/igpu770: ggtt-map begin\n");
+    crate::log!("intel/igpu770: ggtt-map begin\n");
     let ok_ring = ggtt_program_plan("ring", warm, ring);
     let ok_context = ggtt_program_plan("context", warm, context);
     let ok_batch = ggtt_program_plan("batch", warm, batch);
@@ -1654,7 +1654,7 @@ pub fn ggtt_map_smoke_objects_once() {
         .map(|plan| ggtt_program_plan("guc-ads", warm, plan))
         .unwrap_or(false);
     let flsh = ggtt_invalidate(warm);
-    crate::log_trace!(
+    crate::log!(
         "intel/igpu770: ggtt-map summary ring={} context={} batch={} result={} guc_fw={} guc_ads={} gfx_flsh_cntl=0x{:08X}\n",
         ok_ring as u8,
         ok_context as u8,
@@ -1674,11 +1674,11 @@ pub fn ggtt_blt_smoke_test_once() {
     }
 
     let Some(warm) = warm_state() else {
-        crate::log_trace!("intel/igpu770: ggtt-blt-smoke skipped reason=not-warmed\n");
+        crate::log!("intel/igpu770: ggtt-blt-smoke skipped reason=not-warmed\n");
         return;
     };
     if !intel_guc::ready() {
-        crate::log_trace!(
+        crate::log!(
             "intel/igpu770: ggtt-blt-smoke skipped reason=guc-not-ready guc_status=0x{:08X}\n",
             intel_guc::status(warm)
         );
@@ -1687,28 +1687,28 @@ pub fn ggtt_blt_smoke_test_once() {
 
     let Some(ring) = ggtt_map_plan_system_ram(warm.ring_phys, warm.ring_len, GPU_VA_RING_BASE)
     else {
-        crate::log_trace!("intel/igpu770: ggtt-blt-smoke skipped reason=ring-plan\n");
+        crate::log!("intel/igpu770: ggtt-blt-smoke skipped reason=ring-plan\n");
         return;
     };
     let Some(context) =
         ggtt_map_plan_system_ram(warm.context_phys, warm.context_len, GPU_VA_CONTEXT_BASE)
     else {
-        crate::log_trace!("intel/igpu770: ggtt-blt-smoke skipped reason=context-plan\n");
+        crate::log!("intel/igpu770: ggtt-blt-smoke skipped reason=context-plan\n");
         return;
     };
     let Some(batch) = ggtt_map_plan_system_ram(warm.batch_phys, warm.batch_len, GPU_VA_BATCH_BASE)
     else {
-        crate::log_trace!("intel/igpu770: ggtt-blt-smoke skipped reason=batch-plan\n");
+        crate::log!("intel/igpu770: ggtt-blt-smoke skipped reason=batch-plan\n");
         return;
     };
     let Some(result) =
         ggtt_map_plan_system_ram(warm.result_phys, warm.result_len, GPU_VA_RESULT_BASE)
     else {
-        crate::log_trace!("intel/igpu770: ggtt-blt-smoke skipped reason=result-plan\n");
+        crate::log!("intel/igpu770: ggtt-blt-smoke skipped reason=result-plan\n");
         return;
     };
     let Some(fill) = blt_fill_rect_plan(warm) else {
-        crate::log_trace!("intel/igpu770: ggtt-blt-smoke skipped reason=fb-plan\n");
+        crate::log!("intel/igpu770: ggtt-blt-smoke skipped reason=fb-plan\n");
         return;
     };
 
@@ -1719,12 +1719,12 @@ pub fn ggtt_blt_smoke_test_once() {
     }
     dma_cache_flush(warm.result_virt as *const u8, warm.result_len);
 
-    crate::log_trace!("intel/igpu770: ggtt-rcs-smoke begin\n");
+    crate::log!("intel/igpu770: ggtt-rcs-smoke begin\n");
     log_ggtt_map_plan("ring", ring);
     log_ggtt_map_plan("context", context);
     log_ggtt_map_plan("batch", batch);
     log_ggtt_map_plan("result", result);
-    crate::log_trace!(
+    crate::log!(
         "intel/igpu770: rcs-store-plan dst_gpu=0x{:X} dst_phys=0x{:X} dst_xy={}x{} rect={}x{} pitch=0x{:X} color=0x{:08X}\n",
         fill.dst_gpu_addr,
         fill.dst_phys,
@@ -1739,7 +1739,7 @@ pub fn ggtt_blt_smoke_test_once() {
     build_rcs_store_pixels_batch(warm, fill);
     let ring_tail_bytes = build_ring_batch_start(warm, batch.gpu_addr);
     let Some(ring_ctl) = ring_ctl_value(warm.ring_len) else {
-        crate::log_trace!(
+        crate::log!(
             "intel/igpu770: ggtt-blt-smoke skipped reason=ring-ctl ring_len=0x{:X}\n",
             warm.ring_len
         );
@@ -1748,12 +1748,12 @@ pub fn ggtt_blt_smoke_test_once() {
     let ring_start = ring.gpu_addr as u32;
     let context_desc = context.gpu_addr;
     if !init_gen12_lrc_context_image(warm, ring_start, ring_tail_bytes as u32, ring_ctl) {
-        crate::log_trace!("intel/igpu770: ggtt-blt-smoke skipped reason=lrc-context-init\n");
+        crate::log!("intel/igpu770: ggtt-blt-smoke skipped reason=lrc-context-init\n");
         return;
     }
     let (context_desc_lo, context_desc_hi) = build_execlist_context_descriptor(context_desc);
 
-    crate::log_trace!(
+    crate::log!(
         "intel/igpu770: rcs-submit prep ring_start=0x{:08X} ring_ctl=0x{:08X} tail=0x{:X} batch_gpu=0x{:X} context_gpu=0x{:X} ctx_desc_lo=0x{:08X} ctx_desc_hi=0x{:08X} result_phys=0x{:X}\n",
         ring_start,
         ring_ctl,
@@ -1793,7 +1793,7 @@ pub fn ggtt_blt_smoke_test_once() {
     let el_ctl_rb = mmio_read32(warm, RCS_RING_EXECLIST_CONTROL);
     let el_status_lo_rb = mmio_read32(warm, RCS_RING_EXECLIST_STATUS_LO);
     let el_status_hi_rb = mmio_read32(warm, RCS_RING_EXECLIST_STATUS_HI);
-    crate::log_trace!(
+    crate::log!(
         "intel/igpu770: execlist-submit context sq_lo_req=0x{:08X} sq_hi_req=0x{:08X} sq_lo_rb=0x{:08X} sq_hi_rb=0x{:08X} mode_rb=0x{:08X} ctx_ctl_rb=0x{:08X} ctx_ctl_ref_rb=0x{:08X} el_ctl_rb=0x{:08X} el_status_lo_rb=0x{:08X} el_status_hi_rb=0x{:08X}\n",
         context_desc_lo,
         context_desc_hi,
@@ -1833,7 +1833,7 @@ pub fn ggtt_blt_smoke_test_once() {
         final_head = head;
         final_tail = tail;
         if iter == 0 || (iter % BLT_POLL_LOG_STEP) == 0 {
-            crate::log_trace!(
+            crate::log!(
                 "intel/igpu770: rcs-poll iter={} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} mode=0x{:08X} instdone=0x{:08X} execlist_lo=0x{:08X} execlist_hi=0x{:08X} result0=0x{:08X}\n",
                 iter,
                 head,
@@ -1880,7 +1880,7 @@ pub fn ggtt_blt_smoke_test_once() {
             "post-timeout"
         },
     );
-    crate::log_trace!(
+    crate::log!(
         "intel/igpu770: rcs-submit result completed={} iters={} head0=0x{:08X} tail0=0x{:08X} headf=0x{:08X} tailf=0x{:08X} result0=0x{:08X} expect=0x{:08X} fb0=0x{:08X} execlist_lo0=0x{:08X} execlist_hi0=0x{:08X} execlist_lof=0x{:08X} execlist_hif=0x{:08X} forcewake_held={}\n",
         completed as u8,
         iter,
@@ -1905,11 +1905,11 @@ pub fn ggtt_bcs_smoke_test_once() {
     }
 
     let Some(warm) = warm_state() else {
-        crate::log_trace!("intel/igpu770: ggtt-bcs-smoke skipped reason=not-warmed\n");
+        crate::log!("intel/igpu770: ggtt-bcs-smoke skipped reason=not-warmed\n");
         return;
     };
     if !intel_guc::ready() {
-        crate::log_trace!(
+        crate::log!(
             "intel/igpu770: ggtt-bcs-smoke skipped reason=guc-not-ready guc_status=0x{:08X}\n",
             intel_guc::status(warm)
         );
@@ -1918,28 +1918,28 @@ pub fn ggtt_bcs_smoke_test_once() {
 
     let Some(ring) = ggtt_map_plan_system_ram(warm.ring_phys, warm.ring_len, GPU_VA_RING_BASE)
     else {
-        crate::log_trace!("intel/igpu770: ggtt-bcs-smoke skipped reason=ring-plan\n");
+        crate::log!("intel/igpu770: ggtt-bcs-smoke skipped reason=ring-plan\n");
         return;
     };
     let Some(context) =
         ggtt_map_plan_system_ram(warm.context_phys, warm.context_len, GPU_VA_CONTEXT_BASE)
     else {
-        crate::log_trace!("intel/igpu770: ggtt-bcs-smoke skipped reason=context-plan\n");
+        crate::log!("intel/igpu770: ggtt-bcs-smoke skipped reason=context-plan\n");
         return;
     };
     let Some(batch) = ggtt_map_plan_system_ram(warm.batch_phys, warm.batch_len, GPU_VA_BATCH_BASE)
     else {
-        crate::log_trace!("intel/igpu770: ggtt-bcs-smoke skipped reason=batch-plan\n");
+        crate::log!("intel/igpu770: ggtt-bcs-smoke skipped reason=batch-plan\n");
         return;
     };
     let Some(result) =
         ggtt_map_plan_system_ram(warm.result_phys, warm.result_len, GPU_VA_RESULT_BASE)
     else {
-        crate::log_trace!("intel/igpu770: ggtt-bcs-smoke skipped reason=result-plan\n");
+        crate::log!("intel/igpu770: ggtt-bcs-smoke skipped reason=result-plan\n");
         return;
     };
     let Some(fill) = bcs_fill_rect_plan(warm) else {
-        crate::log_trace!("intel/igpu770: ggtt-bcs-smoke skipped reason=fb-plan\n");
+        crate::log!("intel/igpu770: ggtt-bcs-smoke skipped reason=fb-plan\n");
         return;
     };
 
@@ -1949,12 +1949,12 @@ pub fn ggtt_bcs_smoke_test_once() {
     }
     dma_cache_flush(warm.result_virt as *const u8, warm.result_len);
 
-    crate::log_trace!("intel/igpu770: ggtt-bcs-smoke begin\n");
+    crate::log!("intel/igpu770: ggtt-bcs-smoke begin\n");
     log_ggtt_map_plan("ring", ring);
     log_ggtt_map_plan("context", context);
     log_ggtt_map_plan("batch", batch);
     log_ggtt_map_plan("result", result);
-    crate::log_trace!(
+    crate::log!(
         "intel/igpu770: bcs-fill-plan dst_gpu=0x{:X} dst_phys=0x{:X} dst_xy={}x{} rect={}x{} pitch=0x{:X} color=0x{:08X} result_gpu=0x{:X} start=0x{:08X} pre=0x{:08X} post=0x{:08X} done=0x{:08X}\n",
         fill.dst_gpu_addr,
         fill.dst_phys,
@@ -1982,11 +1982,11 @@ pub fn ggtt_bcs_smoke_test_once() {
         .checked_mul(fill.pitch)
         .and_then(|off| off.checked_add(fill.dst_x.saturating_mul(4)))
     else {
-        crate::log_trace!("intel/igpu770: ggtt-bcs-smoke skipped reason=surface-base-overflow\n");
+        crate::log!("intel/igpu770: ggtt-bcs-smoke skipped reason=surface-base-overflow\n");
         return;
     };
     let Some(surface_gpu_addr) = fill.dst_gpu_addr.checked_sub(surface_byte_off as u64) else {
-        crate::log_trace!("intel/igpu770: ggtt-bcs-smoke skipped reason=surface-base-underflow\n");
+        crate::log!("intel/igpu770: ggtt-bcs-smoke skipped reason=surface-base-underflow\n");
         return;
     };
     let batch_tail_bytes = match xelp_copy_ngin::build_color_fill_smoke_batch_bytes(
@@ -2009,14 +2009,14 @@ pub fn ggtt_bcs_smoke_test_once() {
     ) {
         Ok(bytes) => bytes,
         Err(err) => {
-            crate::log_trace!("intel/igpu770: ggtt-bcs-smoke skipped reason=batch-build err={:?}\n", err);
+            crate::log!("intel/igpu770: ggtt-bcs-smoke skipped reason=batch-build err={:?}\n", err);
             return;
         }
     };
     dma_cache_flush(warm.batch_virt as *const u8, batch_tail_bytes);
     let ring_tail_bytes = build_bcs_ring_batch_start(warm, batch.gpu_addr);
     let Some(ring_ctl) = ring_ctl_value(warm.ring_len) else {
-        crate::log_trace!(
+        crate::log!(
             "intel/igpu770: ggtt-bcs-smoke skipped reason=ring-ctl ring_len=0x{:X}\n",
             warm.ring_len
         );
@@ -2025,12 +2025,12 @@ pub fn ggtt_bcs_smoke_test_once() {
     let ring_start = ring.gpu_addr as u32;
     let context_desc = context.gpu_addr;
     if !init_gen12_bcs_context_image(warm, ring_start, ring_tail_bytes as u32, ring_ctl) {
-        crate::log_trace!("intel/igpu770: ggtt-bcs-smoke skipped reason=lrc-context-init\n");
+        crate::log!("intel/igpu770: ggtt-bcs-smoke skipped reason=lrc-context-init\n");
         return;
     }
     let (context_desc_lo, context_desc_hi) = build_execlist_context_descriptor(context_desc);
 
-    crate::log_trace!(
+    crate::log!(
         "intel/igpu770: bcs-submit prep ring_start=0x{:08X} ring_ctl=0x{:08X} ring_tail=0x{:X} batch_tail=0x{:X} batch_gpu=0x{:X} context_gpu=0x{:X} ctx_desc_lo=0x{:08X} ctx_desc_hi=0x{:08X} result_phys=0x{:X}\n",
         ring_start,
         ring_ctl,
@@ -2042,7 +2042,7 @@ pub fn ggtt_bcs_smoke_test_once() {
         context_desc_hi,
         warm.result_phys
     );
-    crate::log_trace!(
+    crate::log!(
         "intel/igpu770: bcs-batch-dwords d0=0x{:08X} d1=0x{:08X} d2=0x{:08X} d3=0x{:08X} d4=0x{:08X} d5=0x{:08X} d6=0x{:08X} d7=0x{:08X}\n",
         batch_dwords.get(0).copied().unwrap_or(0),
         batch_dwords.get(1).copied().unwrap_or(0),
@@ -2083,7 +2083,7 @@ pub fn ggtt_bcs_smoke_test_once() {
     let el_ctl_rb = mmio_read32(warm, BCS_RING_EXECLIST_CONTROL);
     let el_status_lo_rb = mmio_read32(warm, BCS_RING_EXECLIST_STATUS_LO);
     let el_status_hi_rb = mmio_read32(warm, BCS_RING_EXECLIST_STATUS_HI);
-    crate::log_trace!(
+    crate::log!(
         "intel/igpu770: bcs-execlist-submit context sq_lo_req=0x{:08X} sq_hi_req=0x{:08X} sq_lo_rb=0x{:08X} sq_hi_rb=0x{:08X} mode_rb=0x{:08X} ctx_ctl_rb=0x{:08X} ctx_ctl_ref_rb=0x{:08X} el_ctl_rb=0x{:08X} el_status_lo_rb=0x{:08X} el_status_hi_rb=0x{:08X}\n",
         context_desc_lo,
         context_desc_hi,
@@ -2098,7 +2098,7 @@ pub fn ggtt_bcs_smoke_test_once() {
     );
 
     if let Some(reg) = intel_770_registers::describe_register(BCS_RING_IMR) {
-        crate::log_trace!(
+        crate::log!(
             "intel/igpu770: forcewake-bcs sanity-target block={} reg={} off=0x{:05X} desc={}\n",
             reg.block,
             reg.name,
@@ -2112,7 +2112,7 @@ pub fn ggtt_bcs_smoke_test_once() {
     let bcs_imr_after = mmio_read32(warm, BCS_RING_IMR);
     let _ = mmio_write32(warm, BCS_RING_IMR, bcs_imr_before);
     let bcs_imr_restored = mmio_read32(warm, BCS_RING_IMR);
-    crate::log_trace!(
+    crate::log!(
         "intel/igpu770: forcewake-bcs sanity reg=BCS_IMR before=0x{:08X} wrote=0x{:08X} after=0x{:08X} restored=0x{:08X}\n",
         bcs_imr_before,
         bcs_imr_toggled,
@@ -2144,7 +2144,7 @@ pub fn ggtt_bcs_smoke_test_once() {
         final_head = head;
         final_tail = tail;
         if iter == 0 || (iter % BLT_POLL_LOG_STEP) == 0 {
-            crate::log_trace!(
+            crate::log!(
                 "intel/igpu770: bcs-poll iter={} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} mode=0x{:08X} instdone=0x{:08X} execlist_lo=0x{:08X} execlist_hi=0x{:08X} result0=0x{:08X}\n",
                 iter,
                 head,
@@ -2159,7 +2159,7 @@ pub fn ggtt_bcs_smoke_test_once() {
                 execlist_hi,
                 result[0]
             );
-            crate::log_trace!(
+            crate::log!(
                 "intel/igpu770: bcs-markers iter={} start=0x{:08X} pre=0x{:08X} post=0x{:08X} done=0x{:08X}\n",
                 iter,
                 result[0],
@@ -2198,7 +2198,7 @@ pub fn ggtt_bcs_smoke_test_once() {
             "post-timeout"
         },
     );
-    crate::log_trace!(
+    crate::log!(
         "intel/igpu770: bcs-submit result completed={} iters={} head0=0x{:08X} tail0=0x{:08X} headf=0x{:08X} tailf=0x{:08X} start=0x{:08X} pre=0x{:08X} post=0x{:08X} done=0x{:08X} expect_done=0x{:08X} fb0=0x{:08X} execlist_lo0=0x{:08X} execlist_hi0=0x{:08X} execlist_lof=0x{:08X} execlist_hif=0x{:08X} forcewake_held={}\n",
         completed as u8,
         iter,
@@ -2231,23 +2231,23 @@ pub fn warm_once(info: IntelDeviceInfo) {
     }
 
     let Some((ring_phys, ring_virt)) = crate::dma::alloc(WARM_RING_BYTES, WARM_ALIGN) else {
-        crate::log_trace!("intel/igpu770: warm alloc failed part=ring size=0x{:X}\n", WARM_RING_BYTES);
+        crate::log!("intel/igpu770: warm alloc failed part=ring size=0x{:X}\n", WARM_RING_BYTES);
         return;
     };
     let Some((context_phys, context_virt)) = crate::dma::alloc(WARM_CONTEXT_BYTES, WARM_ALIGN)
     else {
-        crate::log_trace!(
+        crate::log!(
             "intel/igpu770: warm alloc failed part=context size=0x{:X}\n",
             WARM_CONTEXT_BYTES
         );
         return;
     };
     let Some((batch_phys, batch_virt)) = crate::dma::alloc(WARM_BATCH_BYTES, WARM_ALIGN) else {
-        crate::log_trace!("intel/igpu770: warm alloc failed part=batch size=0x{:X}\n", WARM_BATCH_BYTES);
+        crate::log!("intel/igpu770: warm alloc failed part=batch size=0x{:X}\n", WARM_BATCH_BYTES);
         return;
     };
     let Some((result_phys, result_virt)) = crate::dma::alloc(WARM_RESULT_BYTES, WARM_ALIGN) else {
-        crate::log_trace!(
+        crate::log!(
             "intel/igpu770: warm alloc failed part=result size=0x{:X}\n",
             WARM_RESULT_BYTES
         );
@@ -2276,7 +2276,7 @@ pub fn warm_once(info: IntelDeviceInfo) {
                 (phys, virt)
             }
             None => {
-                crate::log_trace!(
+                crate::log!(
                     "intel/igpu770: warm alloc failed part=guc-ads size=0x{:X}\n",
                     guc_ads_len
                 );
@@ -2330,7 +2330,7 @@ pub fn warm_once(info: IntelDeviceInfo) {
         limine_fb_bpp: fb.map(|v| v.bpp).unwrap_or(0),
     };
 
-    crate::log_trace!(
+    crate::log!(
         "intel/igpu770: warm device=0x{:04X} rev=0x{:02X} ring_phys=0x{:X} ring_len=0x{:X} context_phys=0x{:X} context_len=0x{:X} batch_phys=0x{:X} batch_len=0x{:X} result_phys=0x{:X} result_len=0x{:X} guc_fw_phys=0x{:X} guc_fw_len=0x{:X} guc_fw_xfer=0x{:X} guc_fw_gpu=0x{:X} guc_ads_phys=0x{:X} guc_ads_len=0x{:X} guc_ads_gpu=0x{:X} mmio_len=0x{:X} aperture=0x{:X}/0x{:X} limine_fb=0x{:X}/0x{:X} {}x{} pitch=0x{:X} bpp={}\n",
         warm.device_id,
         warm.revision_id,

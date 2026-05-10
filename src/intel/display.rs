@@ -15,7 +15,7 @@ use spin::Mutex;
 macro_rules! intel_display_verbose_log {
     ($($arg:tt)*) => {
         if crate::logflag::INTEL_DISPLAY_NGIN_LOGS && !crate::logflag::INTEL_STAGE1_LOGS {
-            crate::log_trace!($($arg)*);
+            crate::log!($($arg)*);
         }
     };
 }
@@ -220,9 +220,7 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
     log_transcoder_a_state(dev, "before-primary-init");
 
     let Some(pipe) = active_pipe(dev) else {
-        crate::log_trace!(
-            "intel/display: primary-boot-surface skipped no active pipe discovered\n"
-        );
+        crate::log!("intel/display: primary-boot-surface skipped no active pipe discovered\n");
         return;
     };
     let pipe_src_raw = crate::intel::mmio_read(dev, pipe.pipe_src_off);
@@ -232,7 +230,7 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
         .map(|(width, height)| (width, height, "pipe-src"))
         .or_else(|| fb_dims.map(|(width, height)| (width, height, "fb-hint")));
     let Some((width, height, chosen_from)) = chosen else {
-        crate::log_trace!(
+        crate::log!(
             "intel/display: primary-boot-surface skipped no dimensions pipe={}\n",
             pipe.name
         );
@@ -242,21 +240,15 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
     program_pipe_bottom_color(dev, pipe, PIPE_BOTTOM_COLOR_RGB);
 
     let Some(pitch_bytes) = aligned_pitch_bytes(width, PRIMARY_BYTES_PER_PIXEL) else {
-        crate::log_trace!(
-            "intel/display: primary-boot-surface skipped bad pitch width={}\n",
-            width
-        );
+        crate::log!("intel/display: primary-boot-surface skipped bad pitch width={}\n", width);
         return;
     };
     let Some(byte_len) = usize::try_from(u64::from(pitch_bytes) * u64::from(height)).ok() else {
-        crate::log_trace!("intel/display: primary-boot-surface skipped surface too large\n");
+        crate::log!("intel/display: primary-boot-surface skipped surface too large\n");
         return;
     };
     let Some((phys, virt)) = crate::dma::alloc(byte_len, crate::intel::WARM_ALIGN) else {
-        crate::log_trace!(
-            "intel/display: primary-boot-surface alloc failed bytes=0x{:X}\n",
-            byte_len
-        );
+        crate::log!("intel/display: primary-boot-surface alloc failed bytes=0x{:X}\n", byte_len);
         return;
     };
 
@@ -269,7 +261,7 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
         byte_len,
         crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE,
     ) {
-        crate::log_trace!(
+        crate::log!(
             "intel/display: primary-boot-surface ggtt map failed bytes=0x{:X} gpu=0x{:X}\n",
             byte_len,
             crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE
@@ -279,14 +271,14 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
     crate::intel::ggtt_invalidate(dev);
 
     let Some(_stride_reg) = plane_stride_reg_value(pitch_bytes) else {
-        crate::log_trace!(
+        crate::log!(
             "intel/display: primary-boot-surface stride encode failed pitch=0x{:X}\n",
             pitch_bytes
         );
         return;
     };
     let Some(surface_reg) = u32::try_from(crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE).ok() else {
-        crate::log_trace!("intel/display: primary-boot-surface gpu addr out of range\n");
+        crate::log!("intel/display: primary-boot-surface gpu addr out of range\n");
         return;
     };
 
@@ -329,7 +321,7 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
                 (decoded.width as usize).saturating_mul(4),
             ),
             Err(err) => {
-                crate::log_trace!(
+                crate::log!(
                     "intel/display: primary-logo decode failed code={} bytes=0x{:X}\n",
                     err.code(),
                     PRIMARY_BOOT_LOGO_JPEG.len()
@@ -345,7 +337,7 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
         log_cpu_scanout_proof(dev, primary_surface);
     }
 
-    crate::log_trace!(
+    crate::log!(
         "intel/display: primary-boot-surface pipe={} size={}x{} pitch=0x{:X} gpu=0x{:X} phys=0x{:X} plane_enabled={} ctl_before=0x{:08X} ctl_after=0x{:08X} surf_before=0x{:08X} surf=0x{:08X} surf_live=0x{:08X} ok={} logo={}\n",
         pipe.name,
         width,
@@ -370,7 +362,7 @@ fn log_cpu_scanout_proof(dev: crate::intel::Dev, surface: PrimarySurface) {
         || surface.pitch_bytes < PRIMARY_BYTES_PER_PIXEL
         || surface.virt.is_null()
     {
-        crate::log_trace!("intel/display: cpu-scanout-proof accepted=0 reason=bad-surface\n");
+        crate::log!("intel/display: cpu-scanout-proof accepted=0 reason=bad-surface\n");
         return;
     }
 
@@ -410,7 +402,7 @@ fn log_cpu_scanout_proof(dev: crate::intel::Dev, surface: PrimarySurface) {
     let accepted =
         after == CPU_SCANOUT_PROOF_COLOR && (surf == want_surf || surf_live == want_surf);
 
-    crate::log_trace!(
+    crate::log!(
         "intel/display: cpu-scanout-proof accepted={} pipe={} gpu=0x{:X} phys=0x{:X} xy={}x{} size={}x{} pitch=0x{:X} stride_reg=0x{:08X} before=0x{:08X} after=0x{:08X} color=0x{:08X} flush=1 surf=0x{:08X} surf_live=0x{:08X} does_not_prove=render_backend_write\n",
         accepted as u8,
         surface.pipe.name,
@@ -630,7 +622,7 @@ pub(crate) fn present_rgba_overlay_top_right(
     let seq = OVERLAY_PRESENT_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
     if seq <= 8 || seq.is_multiple_of(60) {
         let plane_base = overlay_plane_base(surface.pipe, surface.plane_slot);
-        crate::log_trace!(
+        crate::log!(
             "intel/display: overlay-present seq={} pipe={} slot={} size={}x{} pitch=0x{:X} gpu=0x{:X} phys=0x{:X} surf=0x{:08X} surf_live=0x{:08X}\n",
             seq,
             surface.pipe.name,
@@ -1167,7 +1159,7 @@ fn ensure_overlay_surface(
         byte_len,
         crate::intel::GPU_VA_DISPLAY_OVERLAY_BASE,
     ) {
-        crate::log_trace!(
+        crate::log!(
             "intel/display: overlay-surface ggtt map failed pipe={} slot={} size={}x{} bytes=0x{:X} gpu=0x{:X}\n",
             active_pipe.name,
             OVERLAY_PLANE_SLOT,
@@ -1190,7 +1182,7 @@ fn ensure_overlay_surface(
         plane_slot: OVERLAY_PLANE_SLOT,
     };
     *OVERLAY_SURFACE.lock() = Some(surface);
-    crate::log_trace!(
+    crate::log!(
         "intel/display: overlay-surface pipe={} slot={} size={}x{} pitch=0x{:X} gpu=0x{:X} phys=0x{:X}\n",
         active_pipe.name,
         OVERLAY_PLANE_SLOT,
@@ -1294,7 +1286,7 @@ fn arm_overlay_plane(dev: crate::intel::Dev, surface: OverlaySurface, reason: &s
     crate::intel::mmio_write(dev, plane_base + UNI_PLANE_SURF_OFF, surface_reg);
 
     let (live_after, live_iters) = wait_for_plane_live(dev, plane_base, surface_reg, 20_000);
-    crate::log_trace!(
+    crate::log!(
         "intel/display: overlay-arm reason={} pipe={} slot={} ctl_before=0x{:08X} ctl_enabled=0x{:08X} color_ctl=0x{:08X} pos={}x{} size={}x{} stride=0x{:08X} surf_before=0x{:08X} surf_after=0x{:08X} surf_live_before=0x{:08X} surf_live_after=0x{:08X} live_iters={}\n",
         reason,
         surface.pipe.name,

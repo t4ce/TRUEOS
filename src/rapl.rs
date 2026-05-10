@@ -216,7 +216,7 @@ pub unsafe fn log_local_probe() -> bool {
         return false;
     };
 
-    crate::log_trace!(
+    crate::log!(
         "rapl: units power=2^-{}W ({:.9}) energy=2^-{}J ({:.9}) time=2^-{}s ({:.9})\n",
         probe.units.power_raw_shift,
         probe.units.power_watts,
@@ -227,7 +227,7 @@ pub unsafe fn log_local_probe() -> bool {
     );
 
     for sample in probe.samples() {
-        crate::log_trace!(
+        crate::log!(
             "rapl: domain={} desc={} msr=0x{:03X} raw=0x{:08X} joules={:.6}\n",
             sample.domain.short_name(),
             sample.domain.description(),

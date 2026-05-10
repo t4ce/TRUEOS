@@ -170,7 +170,7 @@ impl VNet {
         if crate::logflag::VNET_EXERCISE_LOGS {
             match mac {
                 Some(api::MacAddr(bytes)) => {
-                    crate::log_trace!(
+                    crate::log!(
                         "vnet: exercise owner={} mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
                         owner,
                         bytes[0],
@@ -182,7 +182,7 @@ impl VNet {
                     );
                 }
                 None => {
-                    crate::log_trace!("vnet: exercise owner={} mac=none\n", owner);
+                    crate::log!("vnet: exercise owner={} mac=none\n", owner);
                 }
             }
         }
@@ -201,7 +201,7 @@ impl VNet {
             core::hint::spin_loop();
         }
 
-        crate::log_trace!("vnet: submit drop owner={}\n", self.owner);
+        crate::log!("vnet: submit drop owner={}\n", self.owner);
         Err(())
     }
 

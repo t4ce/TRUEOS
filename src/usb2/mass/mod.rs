@@ -103,7 +103,7 @@ async fn control_out_with_timeout(
 fn log_transport_debug(stage: &'static str) {
     let submit = crab_usb::debug_last_submit();
     let event = crab_usb::debug_last_event();
-    crate::log_trace!(
+    crate::log!(
         "crabusb: mass debug stage={} last_submit[slot={} dci={} dir={} stream={} len={} ptr=0x{:X} ring=0x{:X}] last_event[slot={} ep={} cc={} residual={} ptr=0x{:X}]\n",
         stage,
         submit.slot_id,

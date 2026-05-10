@@ -111,7 +111,7 @@ impl HtmlShack {
     ) -> usize {
         let request = HtmlRequest::new(url, road, auto_handoff_callback);
         if crate::logflag::HTML_SHACK_VERBOSE {
-            crate::log_trace!(
+            crate::log!(
                 "html_shack: enqueue url={} road={:?} pending_before={}\n",
                 request.url,
                 request.road,
@@ -127,7 +127,7 @@ impl HtmlShack {
         let latest = self.html_request_queue.pop_back()?;
         self.html_request_queue.clear();
         if crate::logflag::HTML_SHACK_VERBOSE {
-            crate::log_trace!(
+            crate::log!(
                 "html_shack: pop_latest url={} dropped={} pending_after=0\n",
                 latest.url,
                 dropped
@@ -184,7 +184,7 @@ async fn store_ready_html(html: Html) -> usize {
     if HTML_SHACK_BROWSER_HANDOFF_ENABLE {
         let _ = handoff_html_to_truesurfer(html).await;
     } else {
-        crate::log_trace!("html_shack: browser_handoff disabled url={}\n", html.url);
+        crate::log!("html_shack: browser_handoff disabled url={}\n", html.url);
     }
     ready_len
 }
@@ -192,10 +192,7 @@ async fn store_ready_html(html: Html) -> usize {
 pub async fn handoff_html_to_truesurfer(html: Html) -> bool {
     let Some(browser_instance_id) = crate::r::spawn_service::spawn_truesurfer_tab_with_html()
     else {
-        crate::log_trace!(
-            "html_shack: browser_handoff skipped url={} reason=spawn_failed\n",
-            html.url
-        );
+        crate::log!("html_shack: browser_handoff skipped url={} reason=spawn_failed\n", html.url);
         return false;
     };
 
@@ -205,7 +202,7 @@ pub async fn handoff_html_to_truesurfer(html: Html) -> bool {
         Some(html.url.clone()),
     )
     .await;
-    crate::log_trace!(
+    crate::log!(
         "html_shack: browser_handoff url={} browser={} ok={}\n",
         html.url,
         browser_instance_id,
@@ -252,7 +249,7 @@ fn preview_line(line: &str) -> &str {
 
 fn log_html_preview(url: &str, html: &str) {
     let line_count = html.lines().count();
-    crate::log_trace!(
+    crate::log!(
         "html_shack: preserved url={} bytes={} lines={} front={}\n",
         url,
         html.len(),
@@ -263,16 +260,16 @@ fn log_html_preview(url: &str, html: &str) {
     for (idx, line) in html.lines().take(HTML_PREVIEW_FRONT_LINES).enumerate() {
         let front = preview_line(line);
         if front.len() == line.len() {
-            crate::log_trace!("html_shack: [{}] {}\n", idx + 1, front);
+            crate::log!("html_shack: [{}] {}\n", idx + 1, front);
         } else {
-            crate::log_trace!("html_shack: [{}] {}...\n", idx + 1, front);
+            crate::log!("html_shack: [{}] {}...\n", idx + 1, front);
         }
     }
 }
 
 #[embassy_executor::task]
 pub async fn html_fetch_service() {
-    crate::log_trace!(
+    crate::log!(
         "html_shack: fetch service started executor=local transport=shared-tokio latest_wins=1\n"
     );
     loop {
@@ -280,15 +277,12 @@ pub async fn html_fetch_service() {
             if crate::logflag::HTML_SHACK_VERBOSE
                 && !HTML_FETCH_WAITING_FOR_TOKIO_LOGGED.swap(true, Ordering::AcqRel)
             {
-                crate::log_trace!("html_shack: waiting for shared tokio runtime\n");
+                crate::log!("html_shack: waiting for shared tokio runtime\n");
             }
             if crate::logflag::HTML_SHACK_IDLE_LOGS {
                 let n = HTML_FETCH_IDLE_LOGS.fetch_add(1, Ordering::Relaxed);
                 if n.is_multiple_of(256) {
-                    crate::log_trace!(
-                        "html_shack: waiting for shared tokio runtime polls={}\n",
-                        n + 1
-                    );
+                    crate::log!("html_shack: waiting for shared tokio runtime polls={}\n", n + 1);
                 }
             }
             Timer::after(EmbassyDuration::from_millis(HTML_FETCH_IDLE_MS)).await;
@@ -297,14 +291,14 @@ pub async fn html_fetch_service() {
         if crate::logflag::HTML_SHACK_VERBOSE
             && !HTML_FETCH_TOKIO_READY_LOGGED.swap(true, Ordering::AcqRel)
         {
-            crate::log_trace!("html_shack: shared tokio runtime ready\n");
+            crate::log!("html_shack: shared tokio runtime ready\n");
         }
 
         let Some((mut request, dropped_requests)) = pop_latest_request() else {
             if crate::logflag::HTML_SHACK_IDLE_LOGS {
                 let n = HTML_FETCH_IDLE_LOGS.fetch_add(1, Ordering::Relaxed);
                 if n.is_multiple_of(256) {
-                    crate::log_trace!("html_shack: fetch service idle polls={}\n", n + 1);
+                    crate::log!("html_shack: fetch service idle polls={}\n", n + 1);
                 }
             }
             Timer::after(EmbassyDuration::from_millis(HTML_FETCH_IDLE_MS)).await;
@@ -313,7 +307,7 @@ pub async fn html_fetch_service() {
 
         let fetch_url = resolve_request_url(&request);
         if dropped_requests > 0 {
-            crate::log_trace!(
+            crate::log!(
                 "html_shack: dropped stale navigation requests count={} newest={}\n",
                 dropped_requests,
                 fetch_url
@@ -322,12 +316,12 @@ pub async fn html_fetch_service() {
 
         let mut fetch_url_buf: HString<256> = HString::new();
         if fetch_url_buf.push_str(fetch_url.as_str()).is_err() {
-            crate::log_trace!("html_shack: drop url={} reason=url too long max=256\n", fetch_url);
+            crate::log!("html_shack: drop url={} reason=url too long max=256\n", fetch_url);
             continue;
         }
 
         if crate::logflag::HTML_SHACK_VERBOSE {
-            crate::log_trace!("html_shack: fetch begin url={}\n", fetch_url);
+            crate::log!("html_shack: fetch begin url={}\n", fetch_url);
         }
         match crate::t::net::fetch_html_best_effort_shared("html_shack", fetch_url_buf).await {
             Ok(html) => {
@@ -336,16 +330,12 @@ pub async fn html_fetch_service() {
                 }
                 let ready = Html::new(fetch_url.as_str(), html);
                 let ready_len = store_ready_html(ready.clone()).await;
-                crate::log_trace!(
-                    "html_shack: ready url={} ready_queue={}\n",
-                    ready.url,
-                    ready_len
-                );
+                crate::log!("html_shack: ready url={} ready_queue={}\n", ready.url, ready_len);
 
                 let _ = request.auto_handoff_callback.take();
             }
             Err(err) => {
-                crate::log_trace!("html_shack: fetch failed url={} err={}\n", fetch_url, err);
+                crate::log!("html_shack: fetch failed url={} err={}\n", fetch_url, err);
             }
         }
     }

@@ -466,7 +466,7 @@ pub(super) fn sync_hosted_browser_factory_windows(active_mask: u64) -> usize {
             browser_instance_id,
             tex_id,
         );
-        crate::log_trace!(
+        crate::log!(
             "ui2: hosted-browser-factory window={} browser={} tex={} slot={} total={}\n",
             window_id,
             browser_instance_id,
@@ -894,7 +894,7 @@ pub async fn ui2_hosted_task() {
     }
 
     let spawner: Spawner = unsafe { Spawner::for_current_executor().await };
-    crate::log_trace!("boot-probe: ui2-hosted task start ms={}\n", boot_probe_ms());
+    crate::log!("boot-probe: ui2-hosted task start ms={}\n", boot_probe_ms());
     queue_hosted_container_sync();
 
     loop {

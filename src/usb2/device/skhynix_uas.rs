@@ -1996,7 +1996,7 @@ pub(super) async fn read_blocks_uas_skhynix_windowed(
     let mut timeouts = 0u32;
 
     if trace {
-        crate::log_trace!(
+        crate::log!(
             "crabusb: mass {:04X}:{:04X} uas-read-window start lba={} blocks={} bytes={} rx_bytes={} blocks_per_read={} max_inflight={} live_streams={} dead_streams={} io_limit={}\n",
             rt.vendor_id,
             rt.product_id,
@@ -2205,7 +2205,7 @@ pub(super) async fn read_blocks_uas_skhynix_windowed(
                         || completed_bytes.saturating_sub(last_trace_completed) >= 512 * 1024
                         || now_ms.saturating_sub(last_trace_ms) >= 1000
                     {
-                        crate::log_trace!(
+                        crate::log!(
                             "crabusb: mass {:04X}:{:04X} uas-read-window progress lba={} completed={} total={} submitted={} inflight={} cwnd={} ssthresh={} timeouts={} dead_streams={} elapsed_ms={}\n",
                             rt.vendor_id,
                             rt.product_id,
@@ -2308,7 +2308,7 @@ pub(super) async fn read_blocks_uas_skhynix_windowed(
         route.counters.dead_streams = rt.uas_dead_stream_mask.count_ones();
     }
     if trace {
-        crate::log_trace!(
+        crate::log!(
             "crabusb: mass {:04X}:{:04X} uas-read-window done lba={} blocks={} bytes={} completed={} submitted={} elapsed_ms={} dead_streams={} io_limit={}\n",
             rt.vendor_id,
             rt.product_id,

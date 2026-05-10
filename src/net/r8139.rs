@@ -32,7 +32,7 @@ impl Driver for Rtl8139Driver {
 
     fn probe(&mut self, _pci_device: &PciDevice) -> Result<(), &'static str> {
         self.status = DriverStatus::Loading;
-        crate::log_trace!("[rtl8139] Driver probe - not yet implemented");
+        crate::log!("[rtl8139] Driver probe - not yet implemented");
         Err("RTL8139 driver not implemented yet")
     }
 

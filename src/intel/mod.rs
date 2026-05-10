@@ -144,7 +144,7 @@ fn log_media_demo_task_profile(origin: &str, requested_slot: u32, queued_at_ms: 
     let cpu = crate::percpu::this_cpu();
     let executor_ptr = cpu.executor_ptr() as usize;
     if let Some(profile) = crate::cpu::CpuProfile::current() {
-        crate::log_trace!(
+        crate::log!(
             "intel/media: task profile origin={} slot={} lapic={} core={} requested_slot={} queued_ms={} executor=0x{:016X}\n",
             origin,
             profile.slot(),
@@ -155,7 +155,7 @@ fn log_media_demo_task_profile(origin: &str, requested_slot: u32, queued_at_ms: 
             executor_ptr,
         );
     } else {
-        crate::log_trace!(
+        crate::log!(
             "intel/media: task profile origin={} slot=? lapic=? core=? requested_slot={} queued_ms={} executor=0x{:016X}\n",
             origin,
             requested_slot,
@@ -168,9 +168,9 @@ fn log_media_demo_task_profile(origin: &str, requested_slot: u32, queued_at_ms: 
 #[embassy_executor::task]
 async fn media_boot_demo_task(requested_slot: u32, queued_at_ms: u64) {
     log_media_demo_task_profile("worker", requested_slot, queued_at_ms);
-    crate::log_trace!("intel/media: boot demo begin\n");
+    crate::log!("intel/media: boot demo begin\n");
     let first_frame = run_media2_first_frame_async().await;
-    crate::log_trace!(
+    crate::log!(
         "intel/media: boot demo first-frame origin=worker returned={}\n",
         first_frame.is_some() as u8,
     );
@@ -206,10 +206,10 @@ pub fn init_once() {
         return;
     }
     let Some(dev) = find_dev() else {
-        crate::log_trace!("intel: no Intel display-class PCI device claimed\n");
+        crate::log!("intel: no Intel display-class PCI device claimed\n");
         return;
     };
-    crate::log_trace!(
+    crate::log!(
         "intel: claimed {:02X}:{:02X}.{} device=0x{:04X} rev=0x{:02X} mmio_len=0x{:X}\n",
         dev.bus,
         dev.slot,
@@ -221,10 +221,10 @@ pub fn init_once() {
     *CLAIMED_DEVICE.lock() = Some(dev);
     let fw = self::guc::load_fw();
     if fw.len == 0 {
-        crate::log_trace!("intel/guc: firmware module missing or invalid\n");
+        crate::log!("intel/guc: firmware module missing or invalid\n");
         return;
     }
-    crate::log_trace!(
+    crate::log!(
         "intel/guc: firmware found phys=0x{:X} gpu=0x{:X} len=0x{:X} xfer=0x{:X}\n",
         fw.phys,
         fw.gpu,
@@ -233,18 +233,11 @@ pub fn init_once() {
     );
     let ads = self::guc::alloc_ads(fw.private_data_size);
     if ads.len == 0 {
-        crate::log_trace!(
-            "intel/guc: ads alloc failed private_data=0x{:X}\n",
-            fw.private_data_size
-        );
+        crate::log!("intel/guc: ads alloc failed private_data=0x{:X}\n", fw.private_data_size);
         return;
     }
     if !map_ggtt(dev, fw.phys, fw.len, fw.gpu) || !map_ggtt(dev, ads.phys, ads.len, ads.gpu) {
-        crate::log_trace!(
-            "intel/guc: ggtt map failed fw_len=0x{:X} ads_len=0x{:X}\n",
-            fw.len,
-            ads.len
-        );
+        crate::log!("intel/guc: ggtt map failed fw_len=0x{:X} ads_len=0x{:X}\n", fw.len, ads.len);
         return;
     }
     ggtt_invalidate(dev);
@@ -252,7 +245,7 @@ pub fn init_once() {
     let ready = self::guc::bootstrap(dev, fw, ads);
     let status = self::guc::status(dev);
     let (bootrom, ukernel, auth) = self::guc::describe_status(status);
-    crate::log_trace!(
+    crate::log!(
         "intel/guc: bootstrap ready={} status=0x{:08X} bootrom={} ukernel={} auth=0x{:X}\n",
         ready as u8,
         status,
@@ -266,25 +259,22 @@ pub fn init_once() {
     if DISPLAY_PLANE1_BOOT_DEMO_ENABLED {
         self::display::init_primary_boot_surface(dev);
     } else {
-        crate::log_trace!("intel/display: plane1 boot demo disabled\n");
+        crate::log!("intel/display: plane1 boot demo disabled\n");
     }
-    crate::log_trace!(
+    crate::log!(
         "intel/render: disabled reason=primary-render-module-removed gpgpu_probe=enabled\n"
     );
     self::gpgpu::submit_gpgpu_preflight_once();
-    crate::log_trace!("intel/media: source warmup disabled trigger=trueosfs-root-mounted\n",);
+    crate::log!("intel/media: source warmup disabled trigger=trueosfs-root-mounted\n",);
     if MEDIA_BOOT_DEMO_ENABLED {
-        crate::log_trace!(
-            "intel/media: scheduled boot demo delay_ms={}\n",
-            MEDIA_BOOT_DEMO_DELAY_MS
-        );
+        crate::log!("intel/media: scheduled boot demo delay_ms={}\n", MEDIA_BOOT_DEMO_DELAY_MS);
         crate::wait::spawn_local_detached(async move {
             Timer::after(EmbassyDuration::from_millis(MEDIA_BOOT_DEMO_DELAY_MS)).await;
             let queued_at_ms = embassy_time::Instant::now().as_millis() as u64;
             if let Some((slot, worker_spawner)) = pick_media_boot_demo_spawner() {
                 match media_boot_demo_task(slot, queued_at_ms) {
                     Ok(token) => {
-                        crate::log_trace!(
+                        crate::log!(
                             "intel/media: boot demo handoff target_slot={} mode=worker\n",
                             slot,
                         );
@@ -292,7 +282,7 @@ pub fn init_once() {
                         return;
                     }
                     Err(err) => {
-                        crate::log_trace!(
+                        crate::log!(
                             "intel/media: boot demo handoff failed target_slot={} err={:?} fallback=local\n",
                             slot,
                             err,
@@ -300,21 +290,21 @@ pub fn init_once() {
                     }
                 }
             } else {
-                crate::log_trace!(
+                crate::log!(
                     "intel/media: boot demo handoff skipped reason=no-worker-ap fallback=local\n"
                 );
             }
 
             log_media_demo_task_profile("local", 0, queued_at_ms);
-            crate::log_trace!("intel/media: boot demo begin\n");
+            crate::log!("intel/media: boot demo begin\n");
             let first_frame = self::run_media2_first_frame_async().await;
-            crate::log_trace!(
+            crate::log!(
                 "intel/media: boot demo first-frame origin=local returned={}\n",
                 first_frame.is_some() as u8,
             );
         });
     } else {
-        crate::log_trace!("intel/media: boot demo disabled\n");
+        crate::log!("intel/media: boot demo disabled\n");
     }
 }
 
@@ -435,7 +425,7 @@ pub async fn run_media2_first_frame_async() -> Option<self::xelp_media2_ngin::Me
 }
 
 pub async fn run_media_source_warmup_async() {
-    crate::log_trace!("intel/media: source warmup skipped reason=media-decode-disabled\n");
+    crate::log!("intel/media: source warmup skipped reason=media-decode-disabled\n");
 }
 
 fn find_dev() -> Option<Dev> {

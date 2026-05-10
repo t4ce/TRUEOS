@@ -67,7 +67,7 @@ fn resolve_sleep_types() -> Option<SleepTypeCache> {
             continue;
         }
         if parse_definition_block(&mut ctx, phys, "SSDT").is_err() {
-            crate::log_trace!("ACPI SSDT: parse failed phys=0x{:X}\n", phys);
+            crate::log!("ACPI SSDT: parse failed phys=0x{:X}\n", phys);
         }
     }
 
@@ -82,18 +82,18 @@ fn resolve_sleep_types() -> Option<SleepTypeCache> {
 
 fn parse_definition_block(ctx: &mut AmlContext, phys: usize, label: &str) -> Result<(), ()> {
     let Some(bytes) = map_table_bytes(phys) else {
-        crate::log_trace!("ACPI {}: map failed phys=0x{:X}\n", label, phys);
+        crate::log!("ACPI {}: map failed phys=0x{:X}\n", label, phys);
         return Err(());
     };
 
     if bytes.len() < 36 {
-        crate::log_trace!("ACPI {}: short table len={}\n", label, bytes.len());
+        crate::log!("ACPI {}: short table len={}\n", label, bytes.len());
         return Err(());
     }
 
     let aml = &bytes[36..];
     if let Err(err) = ctx.parse_table(aml) {
-        crate::log_trace!("ACPI {}: AML parse error {:?}\n", label, err);
+        crate::log!("ACPI {}: AML parse error {:?}\n", label, err);
         return Err(());
     }
     Ok(())

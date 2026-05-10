@@ -61,7 +61,7 @@ fn submit_warm_render_batch(
     crate::intel::mmio_write(dev, RCS_RING_EXECLIST_CONTROL, EL_CTRL_LOAD);
 
     if should_log_primary_probe_detail() {
-        crate::log_trace!(
+        crate::log!(
             "intel/render: {} execlist-start desc=0x{:08X}:0x{:08X} hws=0x{:08X} sq0=0x{:08X}:0x{:08X} sq1=0x{:08X}:0x{:08X} ctx_ctl=0x{:08X} mi_mode=0x{:08X} tail_req=0x{:08X} tail_rb=0x{:08X} gen12_sq_load=1\n",
             submit_name,
             context_desc_hi,
@@ -129,7 +129,7 @@ fn submit_warm_render_batch(
             && (iter == 0 || iter == 256 || iter == 1024 || iter == 4095)
         {
             let poll_stats = capture_triangle_stage_stats(dev);
-            crate::log_trace!(
+            crate::log!(
                 "intel/render: {} poll iter={} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} execlist_lo=0x{:08X} execlist_hi=0x{:08X} result0=0x{:08X} result1=0x{:08X} result2=0x{:08X}\n",
                 submit_name,
                 iter,
@@ -203,7 +203,7 @@ fn submit_warm_render_batch(
     let result_final_after_light = read_result_dword(warm, RESULT_SLOT_FINAL_AFTER_LIGHT_DWORD);
     let result_pre_light_pc = read_result_dword(warm, RESULT_SLOT_PRE_LIGHT_PC_DWORD);
     if should_log_primary_probe_detail() {
-        crate::log_trace!(
+        crate::log!(
             "intel/render: {} complete={} result0=0x{:08X} result1=0x{:08X} result2=0x{:08X} post_vf=0x{:08X} post_vs=0x{:08X} post_ps_state=0x{:08X} post_clip=0x{:08X} post_raster=0x{:08X} pre_light_pc=0x{:08X} post3d_light=0x{:08X} post3d_light_hi=0x{:08X} final_after_light=0x{:08X} post3d_eop=0x{:08X} post3d_hi=0x{:08X} ctl=0x{:08X} instdone=0x{:08X}\n",
             submit_name,
             completed as u8,
@@ -394,7 +394,7 @@ fn submit_warm_render_batch(
         let walker_header_seen = (ipehr & 0xFFFF_FFFF) == 0x7105_000D;
         let eu_row_waiting = row_eu00_ss0_done == 0 || row_eu00_ss1_done == 0;
         let cs_fault_seen = ipeir != 0 || eir != 0 || fault_valid != 0;
-        crate::log_trace!(
+        crate::log!(
             "intel/render: {} gpgpu-stall-detail acthd_batch_off=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} instdone=0x{:08X} instpm=0x{:08X} fault_gen8=0x{:08X} fault_gen12=0x{:08X} fault_valid={} fault_type={} fault_srcid={} fault_engine={} fault8_data0=0x{:08X} fault8_data1=0x{:08X} fault12_data0=0x{:08X} fault12_data1=0x{:08X} error=0x{:08X} gfx_mode=0x{:08X} rcu_mode=0x{:08X} cs_debug1=0x{:08X} cs_debug2=0x{:08X} sc_instdone=0x{:08X} sc_extra=0x{:08X} sc_extra2=0x{:08X} sampler_instdone=0x{:08X} row_instdone=0x{:08X}\n",
             submit_name,
             acthd_batch_off,
@@ -424,7 +424,7 @@ fn submit_warm_render_batch(
             sampler_instdone,
             row_instdone,
         );
-        crate::log_trace!(
+        crate::log!(
             "intel/render: {} gpgpu-engine-snapshot acthd64=0x{:016X} bbaddr64=0x{:016X} dma_fadd64=0x{:016X} bbstate=0x{:08X} esr=0x{:08X} instps=0x{:08X} psmi_ctl=0x{:08X} nopid=0x{:08X}\n",
             submit_name,
             acthd64,
@@ -436,7 +436,7 @@ fn submit_warm_render_batch(
             psmi_ctl,
             nopid,
         );
-        crate::log_trace!(
+        crate::log!(
             "intel/render: {} gpgpu-tdl-status thr_status0=0x{:08X} thr_status1=0x{:08X} disp_count=0x{:08X} disp_threads={} pf_count=0x{:08X} pf_threads={} pf_canonical={} pf_status0=0x{:08X} pf_status1=0x{:08X}\n",
             submit_name,
             tdl_thr_status0,
@@ -449,7 +449,7 @@ fn submit_warm_render_batch(
             tdl_thr_pf_status0,
             tdl_thr_pf_status1,
         );
-        crate::log_trace!(
+        crate::log!(
             "intel/render: {} gpgpu-middle-state walker_header_seen={} cs_parked_at_walker={} eu_row_waiting={} cs_fault_seen={} row_eu00_ss0_done={} row_eu00_ss1_done={} plain=\"command streamer is parked in the compute launch sequence; walker_header_seen plus TS/TDL deltas decide whether it reached walker and launched EU threads\"\n",
             submit_name,
             walker_header_seen as u8,
@@ -459,7 +459,7 @@ fn submit_warm_render_batch(
             row_eu00_ss0_done,
             row_eu00_ss1_done,
         );
-        crate::log_trace!(
+        crate::log!(
             "intel/render: {} gpgpu-debug-units sc_dc0_done={} sc_dc1_done={} sc_dc2_done={} sc_gw0_done={} sc_gw1_done={} sc_gw2_done={} sampler_st_done={} sampler_vafe_done={} row_tdl_done={} row_eu00_ss0_done={} row_eu00_ss1_done={} note=public-instdone-debug-not-eu-grf-dump\n",
             submit_name,
             ((sc_instdone >> 16) & 1),
@@ -492,7 +492,7 @@ fn submit_warm_render_batch(
             read_rcs_cs_gpr(dev, 14),
             read_rcs_cs_gpr(dev, 15),
         ];
-        crate::log_trace!(
+        crate::log!(
             "intel/render: {} rcs-cs-gpr base=0x{:05X} count={} gpr0=0x{:016X} gpr1=0x{:016X} gpr2=0x{:016X} gpr3=0x{:016X}\n",
             submit_name,
             RCS_CS_GPR_BASE,
@@ -502,7 +502,7 @@ fn submit_warm_render_batch(
             gpr[2],
             gpr[3],
         );
-        crate::log_trace!(
+        crate::log!(
             "intel/render: {} rcs-cs-gpr gpr4=0x{:016X} gpr5=0x{:016X} gpr6=0x{:016X} gpr7=0x{:016X}\n",
             submit_name,
             gpr[4],
@@ -510,7 +510,7 @@ fn submit_warm_render_batch(
             gpr[6],
             gpr[7],
         );
-        crate::log_trace!(
+        crate::log!(
             "intel/render: {} rcs-cs-gpr gpr8=0x{:016X} gpr9=0x{:016X} gpr10=0x{:016X} gpr11=0x{:016X}\n",
             submit_name,
             gpr[8],
@@ -518,7 +518,7 @@ fn submit_warm_render_batch(
             gpr[10],
             gpr[11],
         );
-        crate::log_trace!(
+        crate::log!(
             "intel/render: {} rcs-cs-gpr gpr12=0x{:016X} gpr13=0x{:016X} gpr14=0x{:016X} gpr15=0x{:016X}\n",
             submit_name,
             gpr[12],
@@ -1949,7 +1949,7 @@ fn log_lrc_ring_image(warm: RenderWarmState, submit_name: &str) {
     let dwords =
         unsafe { core::slice::from_raw_parts(warm.context_virt as *const u32, total_dwords) };
     let state = &dwords[LRC_STATE_OFFSET_DWORDS..];
-    crate::log_trace!(
+    crate::log!(
         "intel/render: {} lrc-ring-image ctx_ctl=0x{:08X} head=0x{:08X} tail=0x{:08X} start=0x{:08X} ctl=0x{:08X}\n",
         submit_name,
         state[LRC_CONTEXT_CONTROL_VALUE_DW],

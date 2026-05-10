@@ -156,7 +156,7 @@ async fn media_control_task(
         .set_configuration(target.configuration_value)
         .await
     {
-        crate::log_trace!(
+        crate::log!(
             "crabusb: hid mediacontrol {:04X}:{:04X} set cfg={} failed: {:?}\n",
             vendor_id,
             product_id,
@@ -172,7 +172,7 @@ async fn media_control_task(
         {
             Ok(interface) => interface,
             Err(err) => {
-                crate::log_trace!(
+                crate::log!(
                     "crabusb: hid mediacontrol {:04X}:{:04X} claim failed if#{} alt={}: {:?}\n",
                     vendor_id,
                     product_id,
@@ -188,7 +188,7 @@ async fn media_control_task(
     let mut interrupt_in = match interface.endpoint_interrupt_in(target.in_endpoint).await {
         Ok(endpoint) => endpoint,
         Err(InterfaceEndpointError::WrongKind { address, expected }) => {
-            crate::log_trace!(
+            crate::log!(
                 "crabusb: hid mediacontrol {:04X}:{:04X} interrupt endpoint kind mismatch ep=0x{:02X} got=0x{:02X} expected={}\n",
                 vendor_id,
                 product_id,
@@ -200,7 +200,7 @@ async fn media_control_task(
             return;
         }
         Err(InterfaceEndpointError::Usb(err)) => {
-            crate::log_trace!(
+            crate::log!(
                 "crabusb: hid mediacontrol {:04X}:{:04X} interrupt open failed ep=0x{:02X}: {:?}\n",
                 vendor_id,
                 product_id,
@@ -212,7 +212,7 @@ async fn media_control_task(
         }
     };
 
-    crate::log_trace!(
+    crate::log!(
         "crabusb: hid mediacontrol {:04X}:{:04X} ready slot={} if#{} alt={} cfg={} int_in=0x{:02X} mps={} ep_target={}\n",
         vendor_id,
         product_id,
@@ -241,7 +241,7 @@ async fn media_control_task(
                 if crate::logflag::USB_LOG_ALL.load(core::sync::atomic::Ordering::Relaxed)
                     && (timeout_logs <= 8 || timeout_logs.is_multiple_of(32))
                 {
-                    crate::log_trace!(
+                    crate::log!(
                         "crabusb: hid mediacontrol {:04X}:{:04X} interrupt timeout ep=0x{:02X} count={}\n",
                         vendor_id,
                         product_id,
@@ -257,7 +257,7 @@ async fn media_control_task(
                 }
                 let sample = &report[..read.min(report.len())];
                 if report_changed(&last_report, sample) {
-                    crate::log_trace!(
+                    crate::log!(
                         "crabusb: hid mediacontrol {:04X}:{:04X} slot={} if#{} ep=0x{:02X} report={:02X?}\n",
                         vendor_id,
                         product_id,
@@ -271,7 +271,7 @@ async fn media_control_task(
                 }
             }
             Some(Err(err)) => {
-                crate::log_trace!(
+                crate::log!(
                     "crabusb: hid mediacontrol {:04X}:{:04X} stream stop ep=0x{:02X} err={:?}\n",
                     vendor_id,
                     product_id,
@@ -312,7 +312,7 @@ pub(crate) async fn maybe_start_media_control(
         let device = match host.open_device(dev_info).await {
             Ok(device) => device,
             Err(err) => {
-                crate::log_trace!(
+                crate::log!(
                     "crabusb: hid mediacontrol {:04X}:{:04X} open failed: {:?}\n",
                     vendor_id,
                     product_id,
@@ -340,7 +340,7 @@ pub(crate) async fn maybe_start_media_control(
             Ok(token) => {
                 spawner.spawn(token);
                 started_any = true;
-                crate::log_trace!(
+                crate::log!(
                     "crabusb: hid mediacontrol {:04X}:{:04X} handoff if#{} alt={} cfg={} int_in=0x{:02X} mps={}\n",
                     vendor_id,
                     product_id,
@@ -353,7 +353,7 @@ pub(crate) async fn maybe_start_media_control(
             }
             Err(err) => {
                 unregister_active_stream(active_stream);
-                crate::log_trace!(
+                crate::log!(
                     "crabusb: hid mediacontrol {:04X}:{:04X} spawn failed if#{} alt={} ep=0x{:02X}: {:?}\n",
                     vendor_id,
                     product_id,

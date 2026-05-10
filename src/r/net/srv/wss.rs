@@ -219,14 +219,14 @@ impl WssConnection {
                                     {
                                         if let Some(line_end) = s.find("\r\n") {
                                             let line = &s[..line_end];
-                                            crate::log_trace!(
+                                            crate::log!(
                                                 "wss: handshake failed url={} status-line='{}' err={:?}\n",
                                                 url,
                                                 line,
                                                 e
                                             );
                                         } else {
-                                            crate::log_trace!(
+                                            crate::log!(
                                                 "wss: handshake failed url={} bytes={} err={:?}\n",
                                                 url,
                                                 handshake_response.len(),
@@ -234,7 +234,7 @@ impl WssConnection {
                                             );
                                         }
                                     } else {
-                                        crate::log_trace!(
+                                        crate::log!(
                                             "wss: handshake failed url={} bytes={} err={:?}\n",
                                             url,
                                             handshake_response.len(),

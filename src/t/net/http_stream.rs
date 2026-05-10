@@ -58,7 +58,7 @@ async fn begin_http_file_stream(
 ) -> Result<HttpFileStream, crate::r::stream::HvStreamError> {
     let info = disk.info();
     let chunk_bytes = http_file_write_chunk_bytes(&info);
-    crate::log_trace!(
+    crate::log!(
         "http-stream: file write start path={} bytes={} disk_id={} kind={:?} block={} max_transfer={} chunk={} label={}\n",
         path,
         total_len,
@@ -102,7 +102,7 @@ async fn write_http_file_stream_chunk(
     stream.written = stream.written.saturating_add(bytes.len() as u64);
 
     if stream.written >= stream.next_progress || stream.written == stream.total_len {
-        crate::log_trace!(
+        crate::log!(
             "http-stream: file write progress path={} written={} total={} bps={} elapsed_ms={}\n",
             path,
             stream.written,
@@ -129,7 +129,7 @@ async fn finish_http_file_stream(
     mut stream: HttpFileStream,
     path: &str,
 ) -> Result<(), crate::r::stream::HvStreamError> {
-    crate::log_trace!(
+    crate::log!(
         "http-stream: file write flush start path={} written={} total={} elapsed_ms={}\n",
         path,
         stream.written,
@@ -138,7 +138,7 @@ async fn finish_http_file_stream(
     );
 
     if let Err(err) = stream.writer.flush().await {
-        crate::log_trace!(
+        crate::log!(
             "http-stream: file write flush failed path={} written={} total={} err={:?} elapsed_ms={}\n",
             path,
             stream.written,
@@ -149,14 +149,14 @@ async fn finish_http_file_stream(
         return Err(err);
     }
 
-    crate::log_trace!(
+    crate::log!(
         "http-stream: file write flush ok path={} written={} total={} elapsed_ms={}\n",
         path,
         stream.written,
         stream.total_len,
         stream.started.elapsed().as_millis(),
     );
-    crate::log_trace!(
+    crate::log!(
         "http-stream: file write commit start path={} written={} total={} elapsed_ms={}\n",
         path,
         stream.written,
@@ -165,7 +165,7 @@ async fn finish_http_file_stream(
     );
 
     if let Err(err) = stream.sink.commit().await {
-        crate::log_trace!(
+        crate::log!(
             "http-stream: file write commit failed path={} written={} total={} err={:?} elapsed_ms={}\n",
             path,
             stream.written,
@@ -176,7 +176,7 @@ async fn finish_http_file_stream(
         return Err(err);
     }
 
-    crate::log_trace!(
+    crate::log!(
         "http-stream: file write committed path={} bytes={} bps={} elapsed_ms={}\n",
         path,
         stream.written,
@@ -194,14 +194,10 @@ async fn abort_http_file_stream(stream: &mut Option<HttpFileStream>, path: &str)
     let written = stream.written;
     match stream.sink.abort().await {
         Ok(()) => {
-            crate::log_trace!(
-                "http-stream: file write aborted path={} written={}\n",
-                path,
-                written,
-            );
+            crate::log!("http-stream: file write aborted path={} written={}\n", path, written,);
         }
         Err(err) => {
-            crate::log_trace!(
+            crate::log!(
                 "http-stream: file write abort failed path={} written={} err={:?}\n",
                 path,
                 written,

@@ -6,16 +6,16 @@ use core::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::{io, net::SocketAddr};
 
 use axum::{
-    Router,
-    body::{Body, to_bytes},
+    body::{to_bytes, Body},
     extract::Request,
     http::{
-        Method, StatusCode,
         header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE},
+        Method, StatusCode,
     },
     response::Response,
     routing::any,
     serve::ListenerExt,
+    Router,
 };
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use trueos_chat::{ChatConfig, ChatHub, ChatMethod, ChatRequest, ChatResponse};
@@ -73,7 +73,7 @@ fn load_chat_hub_once_sync() {
             return;
         }
         Err(err) => {
-            crate::log_trace!("chat: load {} failed {:?}\n", CHAT_STORE_PATH, err);
+            crate::log!("chat: load {} failed {:?}\n", CHAT_STORE_PATH, err);
             return;
         }
     };
@@ -84,12 +84,12 @@ fn load_chat_hub_once_sync() {
             let mut guard = CHAT_HUB.lock();
             if guard.is_none() {
                 *guard = Some(hub);
-                crate::log_trace!("chat: loaded {} room(s) from {}\n", room_count, CHAT_STORE_PATH);
+                crate::log!("chat: loaded {} room(s) from {}\n", room_count, CHAT_STORE_PATH);
             }
             CHAT_HUB_LOADED.store(true, Ordering::Release);
         }
         Err(()) => {
-            crate::log_trace!("chat: ignored invalid {}\n", CHAT_STORE_PATH);
+            crate::log!("chat: ignored invalid {}\n", CHAT_STORE_PATH);
             CHAT_HUB_LOADED.store(true, Ordering::Release);
         }
     }
@@ -112,7 +112,7 @@ async fn ensure_chat_store_dir_async(disk: crate::disc::block::DeviceHandle) -> 
         }
         Ok(false) => false,
         Err(err) => {
-            crate::log_trace!("chat: save {} marker failed {:?}\n", CHAT_STORE_DIR, err);
+            crate::log!("chat: save {} marker failed {:?}\n", CHAT_STORE_DIR, err);
             false
         }
     }
@@ -137,29 +137,29 @@ async fn save_chat_hub_snapshot_async() {
     {
         Ok(Some(handle)) => handle,
         Ok(None) => {
-            crate::log_trace!("chat: save {} begin failed NoSpace\n", CHAT_STORE_PATH);
+            crate::log!("chat: save {} begin failed NoSpace\n", CHAT_STORE_PATH);
             return;
         }
         Err(err) => {
-            crate::log_trace!("chat: save {} begin failed {:?}\n", CHAT_STORE_PATH, err);
+            crate::log!("chat: save {} begin failed {:?}\n", CHAT_STORE_PATH, err);
             return;
         }
     };
     if let Err(err) = crate::r::fs::trueosfs::file_write_chunk_async(handle, bytes.as_slice()).await
     {
         let _ = crate::r::fs::trueosfs::file_write_abort_async(handle).await;
-        crate::log_trace!("chat: save {} chunk failed {:?}\n", CHAT_STORE_PATH, err);
+        crate::log!("chat: save {} chunk failed {:?}\n", CHAT_STORE_PATH, err);
         return;
     }
     if let Err(err) = crate::r::fs::trueosfs::file_write_finish_async(handle).await {
-        crate::log_trace!("chat: save {} finish failed {:?}\n", CHAT_STORE_PATH, err);
+        crate::log!("chat: save {} finish failed {:?}\n", CHAT_STORE_PATH, err);
     }
 }
 
 fn request_chat_hub_save(reason: &'static str) {
     let was_pending = CHAT_SAVE_REQUESTED.swap(true, Ordering::AcqRel);
     if !was_pending {
-        crate::log_trace!("chat: save requested reason={} mode=deferred\n", reason);
+        crate::log!("chat: save requested reason={} mode=deferred\n", reason);
     }
 }
 
@@ -172,9 +172,9 @@ async fn chat_hub_save_loop() -> ! {
 
         Timer::after(EmbassyDuration::from_millis(CHAT_SAVE_BATCH_MS)).await;
         let coalesced = CHAT_SAVE_REQUESTED.swap(false, Ordering::AcqRel);
-        crate::log_trace!("chat: save begin mode=batched\n");
+        crate::log!("chat: save begin mode=batched\n");
         save_chat_hub_snapshot_async().await;
-        crate::log_trace!("chat: save done mode=batched coalesced_requests={}\n", coalesced);
+        crate::log!("chat: save done mode=batched coalesced_requests={}\n", coalesced);
     }
 }
 
@@ -355,9 +355,9 @@ fn maybe_submit_lumen_chat_post(method: ChatMethod, path: &str, body: &[u8], sta
 
     let prompt = alloc::format!("{}: {}", user.trim(), text.trim());
     if crate::lumen::lumen_service::submit_chatroom_mention(prompt.as_str()) {
-        crate::log_trace!("chat: accepted lumen prompt via POST path={}\n", path);
+        crate::log!("chat: accepted lumen prompt via POST path={}\n", path);
     } else {
-        crate::log_trace!("chat: lumen prompt not accepted via POST path={}\n", path);
+        crate::log!("chat: lumen prompt not accepted via POST path={}\n", path);
     }
 }
 
@@ -438,7 +438,7 @@ fn log_chat_endpoint(addr: SocketAddr) {
     let dev_idx = crate::net::primary_device_index();
     let name = crate::net::device_name_at(dev_idx).unwrap_or("?");
     match crate::net::adapter::ipv4_at(dev_idx) {
-        Some([a, b, c, d]) => crate::log_trace!(
+        Some([a, b, c, d]) => crate::log!(
             "chat-http: axum listening on http://{}/ dev={} {} ip={}.{}.{}.{}\n",
             addr,
             dev_idx,
@@ -448,7 +448,7 @@ fn log_chat_endpoint(addr: SocketAddr) {
             c,
             d
         ),
-        None => crate::log_trace!(
+        None => crate::log!(
             "chat-http: axum listening on http://{}/ dev={} {} ip=none\n",
             addr,
             dev_idx,
@@ -458,18 +458,18 @@ fn log_chat_endpoint(addr: SocketAddr) {
 }
 
 async fn chat_http_runtime() -> Result<(), io::Error> {
-    crate::log_trace!("chat-http: runtime async enter\n");
+    crate::log!("chat-http: runtime async enter\n");
     tokio::task::spawn_local(crate::t::shared_tokio_job_pump());
-    crate::log_trace!("chat-http: loading hub\n");
+    crate::log!("chat-http: loading hub\n");
     load_chat_hub_once_sync();
-    crate::log_trace!("chat-http: hub ready\n");
+    crate::log!("chat-http: hub ready\n");
 
     let app = chat_router();
     loop {
-        crate::log_trace!("chat-http: bind begin port={}\n", CHAT_HTTP_TCP_PORT);
+        crate::log!("chat-http: bind begin port={}\n", CHAT_HTTP_TCP_PORT);
         let Some(addr) = primary_ipv4_addr(CHAT_HTTP_TCP_PORT) else {
             CHAT_HTTP_PORT.store(0, Ordering::Release);
-            crate::log_trace!("chat-http: waiting for primary ipv4\n");
+            crate::log!("chat-http: waiting for primary ipv4\n");
             tokio::time::sleep(core::time::Duration::from_millis(CHAT_HTTP_BIND_RETRY_MS)).await;
             continue;
         };
@@ -477,7 +477,7 @@ async fn chat_http_runtime() -> Result<(), io::Error> {
             Ok(listener) => listener,
             Err(err) => {
                 CHAT_HTTP_PORT.store(0, Ordering::Release);
-                crate::log_trace!(
+                crate::log!(
                     "chat-http: bind {} failed port={} kind={:?} err={}\n",
                     addr,
                     CHAT_HTTP_TCP_PORT,
@@ -492,10 +492,10 @@ async fn chat_http_runtime() -> Result<(), io::Error> {
 
         CHAT_HTTP_PORT.store(addr.port(), Ordering::Release);
         log_chat_endpoint(addr);
-        let listener = listener.tap_io(|_| crate::log_trace!("chat-http: tcp accepted\n"));
+        let listener = listener.tap_io(|_| crate::log!("chat-http: tcp accepted\n"));
         if let Err(err) = axum::serve(listener, app.clone()).await {
             CHAT_HTTP_PORT.store(0, Ordering::Release);
-            crate::log_trace!(
+            crate::log!(
                 "chat-http: serve failed port={} kind={:?} err={}\n",
                 addr.port(),
                 err.kind(),
@@ -507,12 +507,12 @@ async fn chat_http_runtime() -> Result<(), io::Error> {
 }
 
 fn run_chat_http_runtime() -> Result<(), io::Error> {
-    crate::log_trace!("chat-http: runtime build begin\n");
+    crate::log!("chat-http: runtime build begin\n");
     let mut builder = tokio::runtime::Builder::new_current_thread();
     builder.enable_io();
     builder.enable_time();
     let runtime = builder.build()?;
-    crate::log_trace!("chat-http: runtime build ok\n");
+    crate::log!("chat-http: runtime build ok\n");
     let local = tokio::task::LocalSet::new();
     local.block_on(&runtime, chat_http_runtime())
 }
@@ -523,26 +523,26 @@ pub async fn chat_http_service_task() {
         crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
     )
     .await;
-    crate::log_trace!(
+    crate::log!(
         "chat-http: launching Tokio runtime after NET_V4_CONFIGURED+TRUEOSFS_ROOT_MOUNTED\n"
     );
 
     loop {
         let rc = crate::trueos_tokio_worker::spawn_blocking_job_with_purpose(
             Box::new(|| {
-                crate::log_trace!("chat-http: blocking closure enter\n");
+                crate::log!("chat-http: blocking closure enter\n");
                 if let Err(err) = run_chat_http_runtime() {
-                    crate::log_trace!("chat-http: runtime failed {:?}\n", err);
+                    crate::log!("chat-http: runtime failed {:?}\n", err);
                 }
-                crate::log_trace!("chat-http: blocking closure exit\n");
+                crate::log!("chat-http: blocking closure exit\n");
             }),
             "chat-http-runtime",
         );
         if rc == 0 {
-            crate::log_trace!("chat-http: submitted Tokio runtime to blocking lane\n");
+            crate::log!("chat-http: submitted Tokio runtime to blocking lane\n");
             chat_hub_save_loop().await;
         }
-        crate::log_trace!(
+        crate::log!(
             "chat-http: blocking lane unavailable rc={} retry={}ms\n",
             rc,
             CHAT_HTTP_BLOCKING_LANE_RETRY_MS

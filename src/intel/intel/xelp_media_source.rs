@@ -95,7 +95,7 @@ pub(crate) async fn fetch_media_source_async() -> Option<MediaSource> {
     if crate::logflag::INTEL_MEDIA_FS_CACHE_ENABLED {
         if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
             let info = disk.info();
-            crate::log_trace!(
+            crate::log!(
                 "intel/media: cache probe path={} disk_id={} readonly={} block={} max_transfer={}\n",
                 MEDIA_DECODE_CACHE_PATH,
                 info.id.raw(),
@@ -105,7 +105,7 @@ pub(crate) async fn fetch_media_source_async() -> Option<MediaSource> {
             );
             match crate::r::fs::trueosfs::file_info_async(disk, MEDIA_DECODE_CACHE_PATH).await {
                 Ok(Some(info)) if info.data_len != 0 => {
-                    crate::log_trace!(
+                    crate::log!(
                         "intel/media: cache hit path={} bytes={} source=file\n",
                         MEDIA_DECODE_CACHE_PATH,
                         info.data_len
@@ -118,10 +118,10 @@ pub(crate) async fn fetch_media_source_async() -> Option<MediaSource> {
                     });
                 }
                 Ok(_) => {
-                    crate::log_trace!("intel/media: cache miss path={}\n", MEDIA_DECODE_CACHE_PATH,);
+                    crate::log!("intel/media: cache miss path={}\n", MEDIA_DECODE_CACHE_PATH,);
                 }
                 Err(err) => {
-                    crate::log_trace!(
+                    crate::log!(
                         "intel/media: cache probe failed path={} err={:?}\n",
                         MEDIA_DECODE_CACHE_PATH,
                         err
@@ -133,7 +133,7 @@ pub(crate) async fn fetch_media_source_async() -> Option<MediaSource> {
 
     // 2) Fetch over HTTP.
     for url in MEDIA_HTTP_LOCAL_DEMO_URLS {
-        crate::log_trace!(
+        crate::log!(
             "intel/media: try local url={} timeout_ms={} max_bytes={}\n",
             url,
             MEDIA_HTTP_LOCAL_DEMO_TIMEOUT_MS,
@@ -158,20 +158,20 @@ pub(crate) async fn fetch_media_source_async() -> Option<MediaSource> {
                         .await
                         {
                             Ok(true) => {
-                                crate::log_trace!(
+                                crate::log!(
                                     "intel/media: cached path={} bytes={}\n",
                                     MEDIA_DECODE_CACHE_PATH,
                                     body.len()
                                 );
                             }
                             Ok(false) => {
-                                crate::log_trace!(
+                                crate::log!(
                                     "intel/media: cache write skipped path={}\n",
                                     MEDIA_DECODE_CACHE_PATH
                                 );
                             }
                             Err(err) => {
-                                crate::log_trace!(
+                                crate::log!(
                                     "intel/media: cache write failed path={} err={:?}\n",
                                     MEDIA_DECODE_CACHE_PATH,
                                     err
@@ -183,7 +183,7 @@ pub(crate) async fn fetch_media_source_async() -> Option<MediaSource> {
                 return Some(MediaSource::Memory { source: url, body });
             }
             Err(err) => {
-                crate::log_trace!("intel/media: local fetch failed url={} err={:?}\n", url, err);
+                crate::log!("intel/media: local fetch failed url={} err={:?}\n", url, err);
             }
         }
     }
@@ -218,7 +218,7 @@ async fn persist_media_cache_async(
 ) -> Result<bool, crate::disc::block::Error> {
     let info = disk.info();
     let chunk_bytes = media_cache_chunk_bytes(&info);
-    crate::log_trace!(
+    crate::log!(
         "intel/media: cache write start path={} bytes={} disk_id={} kind={:?} block={} max_transfer={} chunk={} label={}\n",
         path,
         bytes.len(),
@@ -244,7 +244,7 @@ async fn persist_media_cache_async(
     for chunk in bytes.chunks(chunk_bytes) {
         if let Err(err) = crate::r::fs::trueosfs::file_write_chunk_async(handle, chunk).await {
             let _ = crate::r::fs::trueosfs::file_write_abort_async(handle).await;
-            crate::log_trace!(
+            crate::log!(
                 "intel/media: cache write chunk failed path={} offset={} chunk={} err={:?}\n",
                 path,
                 written,
@@ -255,7 +255,7 @@ async fn persist_media_cache_async(
         }
         written = written.saturating_add(chunk.len() as u64);
         if written >= next_progress || written == bytes.len() as u64 {
-            crate::log_trace!(
+            crate::log!(
                 "intel/media: cache write progress path={} written={} total={} bps={} elapsed_ms={}\n",
                 path,
                 written,
@@ -272,14 +272,14 @@ async fn persist_media_cache_async(
         }
     }
 
-    crate::log_trace!(
+    crate::log!(
         "intel/media: cache write flush path={} written={} elapsed_ms={}\n",
         path,
         written,
         started.elapsed().as_millis(),
     );
     if let Err(err) = crate::r::fs::trueosfs::file_write_finish_async(handle).await {
-        crate::log_trace!(
+        crate::log!(
             "intel/media: cache write finish failed path={} written={} err={:?}\n",
             path,
             written,
@@ -288,7 +288,7 @@ async fn persist_media_cache_async(
         return Err(err);
     }
 
-    crate::log_trace!(
+    crate::log!(
         "intel/media: cache write committed path={} bytes={} bps={} elapsed_ms={}\n",
         path,
         written,

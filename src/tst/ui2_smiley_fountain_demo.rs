@@ -394,7 +394,7 @@ pub async fn ui2_smiley_fountain_demo_task() {
     let window_id = surface.window_id();
     let (surface_w, surface_h) = surface.size();
     let _ = crate::r::ui2::set_window_title(window_id, "Smiley Fountain");
-    crate::log_trace!(
+    crate::log!(
         "ui2-smiley-fountain: window={} tex={} size={}x{} start\n",
         window_id,
         surface.tex_id(),
