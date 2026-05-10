@@ -87,6 +87,20 @@ struct FileWriteStream {
 static FILE_WRITE_STREAM_SEQ: AtomicU32 = AtomicU32::new(1);
 static FILE_WRITE_STREAMS: Mutex<BTreeMap<u32, FileWriteStream>> = Mutex::new(BTreeMap::new());
 
+fn skhynix_lumen_monopoly_root(info: &block::DeviceInfo) -> bool {
+    crate::allcaps::lumen::SKHYNIX_UAS_LUMEN_MONOPOLY
+        && info.parent.is_none()
+        && info
+            .label
+            .as_deref()
+            .map(|label| label == "usbms-152E:7001")
+            .unwrap_or(false)
+}
+
+pub fn skhynix_lumen_monopoly_enabled() -> bool {
+    crate::allcaps::lumen::SKHYNIX_UAS_LUMEN_MONOPOLY
+}
+
 /// Request that TRUEOSFS probing/mounting be performed asynchronously.
 ///
 /// This is intended for driver hotplug contexts (e.g. USB mass-storage attach) where
@@ -408,6 +422,86 @@ impl trueos_fs::BlockIo for KernelBlockIo {
         Ok(out)
     }
 
+    async fn read_blocks_into(
+        &self,
+        lba: u64,
+        blocks: usize,
+        dst: &mut [u8],
+    ) -> Result<(), block::Error> {
+        if blocks == 0 {
+            return if dst.is_empty() {
+                Ok(())
+            } else {
+                Err(block::Error::InvalidParam)
+            };
+        }
+
+        let info = self.handle.info();
+        let bs = info.block_size as usize;
+        if bs == 0 {
+            return Err(block::Error::InvalidParam);
+        }
+
+        let total_bytes = bs.checked_mul(blocks).ok_or(block::Error::InvalidParam)?;
+        if dst.len() != total_bytes {
+            return Err(block::Error::InvalidParam);
+        }
+
+        let max_blocks = if info.max_transfer_bytes > 0 {
+            (info.max_transfer_bytes as usize / bs).max(1)
+        } else {
+            1
+        };
+        let trace = crate::logflag::LUMEN_STORAGE_TRACE_LOGS && total_bytes >= 128 * 1024;
+        let start_ms = trueosfs_trace_now_ms();
+
+        if blocks <= max_blocks {
+            self.handle.read_blocks_into(lba, blocks, dst).await?;
+            if trace {
+                trueosfs_block_read_trace_sample(
+                    self.handle.id().raw(),
+                    lba,
+                    blocks,
+                    total_bytes,
+                    bs,
+                    max_blocks,
+                    info.max_transfer_bytes,
+                    start_ms,
+                );
+            }
+            return Ok(());
+        }
+
+        let mut cur_lba = lba;
+        let mut remaining_blocks = blocks;
+        let mut off = 0usize;
+        while remaining_blocks > 0 {
+            let blocks_here = core::cmp::min(remaining_blocks, max_blocks);
+            let bytes_here = blocks_here * bs;
+            self.handle
+                .read_blocks_into(cur_lba, blocks_here, &mut dst[off..off + bytes_here])
+                .await?;
+            cur_lba = cur_lba.saturating_add(blocks_here as u64);
+            remaining_blocks = remaining_blocks.saturating_sub(blocks_here);
+            off = off.saturating_add(bytes_here);
+        }
+
+        if trace {
+            trueosfs_block_read_trace_sample(
+                self.handle.id().raw(),
+                lba,
+                blocks,
+                total_bytes,
+                bs,
+                max_blocks,
+                info.max_transfer_bytes,
+                start_ms,
+            );
+        }
+
+        Ok(())
+    }
+
     async fn write_blocks(&self, lba: u64, buf: &[u8]) -> Result<(), block::Error> {
         if buf.is_empty() {
             return Ok(());
@@ -515,6 +609,7 @@ pub async fn remount_root_async(
 
 fn register_root_mount(disk: block::DeviceHandle, replace_existing: bool) {
     let disk_id = disk.id();
+    let info = disk.info();
     let seq = ROOT_SEQ.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
     let cache_gen = if replace_existing {
         let roots = ROOTS.lock();
@@ -555,7 +650,15 @@ fn register_root_mount(disk: block::DeviceHandle, replace_existing: bool) {
 
     file_record_cache_invalidate_disk(disk_id);
 
-    crate::r::readiness::set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED);
+    if skhynix_lumen_monopoly_root(&info) {
+        crate::log_trace!(
+            "trueosfs: root mounted disk_id={} label={} readiness_handoff=suppressed reason=skhynix-uas-lumen-monopoly\n",
+            disk_id.raw(),
+            info.label.as_deref().unwrap_or("-")
+        );
+    } else {
+        crate::r::readiness::set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED);
+    }
 }
 
 fn unregister_root_mount(disk_id: block::DiscId) {

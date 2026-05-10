@@ -404,3 +404,19 @@ echo vfio-pci | sudo tee /sys/bus/pci/devices/0000:08:00.0/driver_override
 echo 0000:08:00.0 | sudo tee /sys/bus/pci/drivers_probe
 lspci -nnk -s 08:00.0
 ls -l /dev/vfio
+
+
+# rust-analyzer kernel-source smoke check
+
+Use this from the repo root when you want rust-analyzer to load the TRUEOS custom
+target and inspect only the kernel source tree. The `CARGO_UNSTABLE_JSON_TARGET_SPEC`
+env var is needed because the repo target is `.cargo/x86_64-unknown-trueos.json`.
+The skip flags keep the CLI pass lightweight and avoid the full-workspace/vendor
+diagnostic noise.
+
+```bash
+CARGO_UNSTABLE_JSON_TARGET_SPEC=true \
+SMOLTCP_IFACE_MAX_ADDR_COUNT=4 \
+rust-analyzer analysis-stats . --only src \
+  --skip-inference --skip-mir-stats --skip-data-layout --skip-const-eval
+```

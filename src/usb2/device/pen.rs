@@ -971,6 +971,95 @@ impl block::BlockDevice for UsbMassBlockDevice {
         })
     }
 
+    fn read_blocks_into<'a>(
+        &'a mut self,
+        lba: u64,
+        blocks: usize,
+        dst: &'a mut [u8],
+    ) -> block::BoxFuture<'a, block::Result<()>> {
+        Box::pin(async move {
+            if self.io_profile != MassIoProfile::UasSkhynix {
+                let data = self.read_blocks(lba, blocks).await?;
+                if data.len() != dst.len() {
+                    return Err(block::Error::Corrupted);
+                }
+                dst.copy_from_slice(&data);
+                return Ok(());
+            }
+
+            let block_size = self.block_size as usize;
+            if block_size == 0 {
+                return Err(block::Error::InvalidParam);
+            }
+            if blocks == 0 {
+                return if dst.is_empty() {
+                    Ok(())
+                } else {
+                    Err(block::Error::InvalidParam)
+                };
+            }
+            let blocks_u64 = blocks as u64;
+            let end = lba
+                .checked_add(blocks_u64)
+                .ok_or(block::Error::OutOfBounds)?;
+            if end > self.block_count {
+                return Err(block::Error::OutOfBounds);
+            }
+
+            let total_bytes = blocks
+                .checked_mul(block_size)
+                .ok_or(block::Error::InvalidParam)?;
+            if dst.len() != total_bytes {
+                return Err(block::Error::InvalidParam);
+            }
+
+            let _lane = self.acquire_io_arbiter(MassIoArbiterLane::Read).await?;
+            let mut rt = self.take_runtime_for_io().await?;
+            let result = async {
+                let trace = crate::logflag::LUMEN_STORAGE_TRACE_LOGS && total_bytes >= 128 * 1024;
+                let start_ms = uas_bench_now_ms();
+                if trace {
+                    crate::log_trace!(
+                        "crabusb: mass {:04X}:{:04X} read-into start profile={:?} lba={} blocks={} bytes={} bs={} max_xfer={}\n",
+                        rt.vendor_id,
+                        rt.product_id,
+                        rt.io_profile,
+                        lba,
+                        blocks,
+                        total_bytes,
+                        block_size,
+                        current_mass_io_bytes(&rt, block_size)
+                    );
+                }
+
+                if !matches!(rt.endpoints, UsbMassEndpoints::UasSkhynix { .. }) {
+                    return Err(block::Error::InvalidParam);
+                }
+
+                skhynix_uas::read_blocks_uas_skhynix_windowed(
+                    &mut rt, lba, blocks, dst, block_size, None,
+                )
+                .await?;
+                if trace {
+                    crate::log_trace!(
+                        "crabusb: mass {:04X}:{:04X} read-into done profile={:?} lba={} blocks={} bytes={} elapsed_ms={}\n",
+                        rt.vendor_id,
+                        rt.product_id,
+                        rt.io_profile,
+                        lba,
+                        blocks,
+                        total_bytes,
+                        uas_bench_now_ms().saturating_sub(start_ms)
+                    );
+                }
+                Ok(())
+            }
+            .await;
+            register_runtime(rt);
+            result
+        })
+    }
+
     fn write_blocks<'a>(
         &'a mut self,
         lba: u64,

@@ -1076,6 +1076,32 @@ impl NvmeWorkerBackend {
 
         let total_bytes = blocks.checked_mul(bs).ok_or(block::Error::InvalidParam)?;
         let mut out = vec![0u8; total_bytes];
+        self.do_read_blocks_into(lba, blocks, out.as_mut_slice()).await?;
+        Ok(out)
+    }
+
+    async fn do_read_blocks_into(
+        &mut self,
+        lba: u64,
+        blocks: usize,
+        out: &mut [u8],
+    ) -> block::Result<()> {
+        let bs = self.block_size as usize;
+        if bs == 0 {
+            return Err(block::Error::InvalidParam);
+        }
+        if blocks == 0 {
+            return if out.is_empty() {
+                Ok(())
+            } else {
+                Err(block::Error::InvalidParam)
+            };
+        }
+
+        let total_bytes = blocks.checked_mul(bs).ok_or(block::Error::InvalidParam)?;
+        if out.len() != total_bytes {
+            return Err(block::Error::InvalidParam);
+        }
         let max_io_bytes = self.max_transfer_bytes.max(bs as u64) as usize;
         let max_blocks = core::cmp::max(1, core::cmp::min(max_io_bytes / bs, u16::MAX as usize));
 
@@ -1119,7 +1145,7 @@ impl NvmeWorkerBackend {
             }
         }
 
-        Ok(out)
+        Ok(())
     }
 
     async fn do_write_blocks(&mut self, lba: u64, buf: &[u8]) -> block::Result<()> {
@@ -1209,6 +1235,37 @@ impl block::BlockDevice for NvmeWorkerBackend {
             }
 
             self.do_read_blocks(lba, blocks).await
+        })
+    }
+
+    fn read_blocks_into<'a>(
+        &'a mut self,
+        lba: u64,
+        blocks: usize,
+        dst: &'a mut [u8],
+    ) -> block::BoxFuture<'a, block::Result<()>> {
+        Box::pin(async move {
+            let bs = self.block_size as usize;
+            if bs == 0 {
+                return Err(block::Error::InvalidParam);
+            }
+            if blocks == 0 {
+                return if dst.is_empty() {
+                    Ok(())
+                } else {
+                    Err(block::Error::InvalidParam)
+                };
+            }
+
+            let blocks_total = blocks as u64;
+            let end = lba
+                .checked_add(blocks_total)
+                .ok_or(block::Error::OutOfBounds)?;
+            if end > self.block_count {
+                return Err(block::Error::OutOfBounds);
+            }
+
+            self.do_read_blocks_into(lba, blocks, dst).await
         })
     }
 

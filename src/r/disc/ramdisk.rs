@@ -139,6 +139,42 @@ impl block::BlockDevice for RamdiskDevice {
         })
     }
 
+    fn read_blocks_into<'a>(
+        &'a mut self,
+        lba: u64,
+        blocks: usize,
+        dst: &'a mut [u8],
+    ) -> block::BoxFuture<'a, block::Result<()>> {
+        Box::pin(async move {
+            if blocks == 0 {
+                return if dst.is_empty() {
+                    Ok(())
+                } else {
+                    Err(block::Error::InvalidParam)
+                };
+            }
+            let bs = self.block_size as usize;
+            let blocks_u64 = blocks as u64;
+            let end = lba
+                .checked_add(blocks_u64)
+                .ok_or(block::Error::OutOfBounds)?;
+            if end > self.block_count {
+                return Err(block::Error::OutOfBounds);
+            }
+
+            let start = usize::try_from(lba)
+                .ok()
+                .and_then(|v| v.checked_mul(bs))
+                .ok_or(block::Error::InvalidParam)?;
+            let len = blocks.checked_mul(bs).ok_or(block::Error::InvalidParam)?;
+            if dst.len() != len {
+                return Err(block::Error::InvalidParam);
+            }
+            self.read_range(start, dst)?;
+            Ok(())
+        })
+    }
+
     fn write_blocks<'a>(
         &'a mut self,
         lba: u64,

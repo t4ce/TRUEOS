@@ -128,6 +128,27 @@ pub trait BlockDevice: Send {
     /// Asynchronous block read.
     fn read_blocks<'a>(&'a mut self, lba: u64, blocks: usize) -> BoxFuture<'a, Result<Vec<u8>>>;
 
+    /// Asynchronous block read into a caller-owned buffer.
+    ///
+    /// `dst.len()` must be exactly `blocks * block_size_bytes()`.
+    /// Drivers that can DMA/copy directly into the caller's buffer should
+    /// override this; the default keeps existing devices working.
+    fn read_blocks_into<'a>(
+        &'a mut self,
+        lba: u64,
+        blocks: usize,
+        dst: &'a mut [u8],
+    ) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            let data = self.read_blocks(lba, blocks).await?;
+            if data.len() != dst.len() {
+                return Err(Error::Corrupted);
+            }
+            dst.copy_from_slice(&data);
+            Ok(())
+        })
+    }
+
     /// Optional block write. Default is `Error::NotSupported`.
     fn write_blocks<'a>(&'a mut self, _lba: u64, _buf: &'a [u8]) -> BoxFuture<'a, Result<()>> {
         Box::pin(async { Err(Error::NotSupported) })
@@ -583,6 +604,27 @@ impl DeviceHandle {
         self.validate_lba_range(lba, blocks_u64)?;
         let mut guard = self.node.driver.lock().await;
         (**guard).read_blocks(lba, blocks).await
+    }
+
+    pub async fn read_blocks_into(&self, lba: u64, blocks: usize, dst: &mut [u8]) -> Result<()> {
+        let bs = self.block_size() as u64;
+        let blocks_u64 = blocks as u64;
+        if bs == 0 {
+            return Err(Error::InvalidParam);
+        }
+        let bytes = blocks_u64.checked_mul(bs).ok_or(Error::InvalidParam)?;
+
+        if dst.len() as u64 != bytes {
+            return Err(Error::InvalidParam);
+        }
+
+        if self.node.info.max_transfer_bytes > 0 && bytes > self.node.info.max_transfer_bytes {
+            return Err(Error::InvalidParam);
+        }
+
+        self.validate_lba_range(lba, blocks_u64)?;
+        let mut guard = self.node.driver.lock().await;
+        (**guard).read_blocks_into(lba, blocks, dst).await
     }
 
     pub async fn write_blocks(&self, lba: u64, buf: &[u8]) -> Result<()> {

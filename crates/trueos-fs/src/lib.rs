@@ -134,6 +134,27 @@ pub trait BlockIo {
     /// The returned Vec is `blocks * block_size()` bytes.
     async fn read_blocks(&self, lba: u64, blocks: usize) -> Result<Vec<u8>, Self::Error>;
 
+    /// Read `blocks` blocks directly into `dst`.
+    ///
+    /// `dst.len()` must be exactly `blocks * block_size()` bytes. The default
+    /// keeps older devices working; fast paths should override it to avoid an
+    /// intermediate allocation and copy.
+    async fn read_blocks_into(
+        &self,
+        lba: u64,
+        blocks: usize,
+        dst: &mut [u8],
+    ) -> Result<(), Self::Error> {
+        let data = self.read_blocks(lba, blocks).await?;
+        if data.len() == dst.len() {
+            dst.copy_from_slice(&data);
+        } else {
+            let take = core::cmp::min(data.len(), dst.len());
+            dst[..take].copy_from_slice(&data[..take]);
+        }
+        Ok(())
+    }
+
     /// Write blocks starting at `lba`.
     ///
     /// `buf.len()` must be a multiple of `block_size()`.
@@ -375,18 +396,24 @@ async fn read_exact_bytes<D: BlockIo>(
             blocks = MAX_BLOCKS_PER_READ;
         }
 
-        let scratch = dev
-            .read_blocks(lba, blocks)
-            .await
-            .map_err(FsError::Device)?;
         let need_bytes = blocks.saturating_mul(bs);
-        if scratch.len() < need_bytes {
-            return Err(FsError::Corrupted);
-        }
-
-        let avail = scratch.len().saturating_sub(off);
+        let avail = need_bytes.saturating_sub(off);
         let take = core::cmp::min(remaining.len(), avail);
-        remaining[..take].copy_from_slice(&scratch[off..off + take]);
+
+        let mut aligned = false;
+        if off == 0 && take == need_bytes && take <= remaining.len() {
+            dev.read_blocks_into(lba, blocks, &mut remaining[..take])
+                .await
+                .map_err(FsError::Device)?;
+            aligned = true;
+        }
+        if !aligned {
+            let mut scratch = alloc::vec![0u8; need_bytes];
+            dev.read_blocks_into(lba, blocks, &mut scratch)
+                .await
+                .map_err(FsError::Device)?;
+            remaining[..take].copy_from_slice(&scratch[off..off + take]);
+        }
         remaining = &mut remaining[take..];
         abs_byte = abs_byte.saturating_add(take);
     }

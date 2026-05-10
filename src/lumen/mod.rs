@@ -1530,6 +1530,8 @@ async fn load_lumen_model_from_trueosfs(
             last_progress_bytes = loaded_bytes;
             last_progress_phase_ms = phase_ms;
             Timer::after(EmbassyDuration::from_millis(1)).await;
+        } else if loaded_tensors % 3 == 0 {
+            Timer::after(EmbassyDuration::from_millis(1)).await;
         }
     }
 
