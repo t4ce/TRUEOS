@@ -484,11 +484,15 @@ async fn bind_lowest_available_listener() -> Option<(tokio::net::TcpListener, So
 }
 
 async fn chat_http_runtime() -> Result<(), io::Error> {
+    crate::log!("chat-http: runtime async enter\n");
     tokio::task::spawn_local(crate::t::shared_tokio_job_pump());
+    crate::log!("chat-http: loading hub\n");
     load_chat_hub_once_sync();
+    crate::log!("chat-http: hub ready\n");
 
     let app = chat_router();
     loop {
+        crate::log!("chat-http: bind begin port={}\n", CHAT_HTTP_TCP_PORT);
         let Some((listener, addr)) = bind_lowest_available_listener().await else {
             CHAT_HTTP_PORT.store(0, Ordering::Release);
             crate::log!("chat-http: waiting for primary ipv4\n");
@@ -513,10 +517,12 @@ async fn chat_http_runtime() -> Result<(), io::Error> {
 }
 
 fn run_chat_http_runtime() -> Result<(), io::Error> {
+    crate::log!("chat-http: runtime build begin\n");
     let mut builder = tokio::runtime::Builder::new_current_thread();
     builder.enable_io();
     builder.enable_time();
     let runtime = builder.build()?;
+    crate::log!("chat-http: runtime build ok\n");
     let local = tokio::task::LocalSet::new();
     local.block_on(&runtime, chat_http_runtime())
 }
@@ -534,9 +540,11 @@ pub async fn chat_http_service_task() {
     loop {
         let rc = crate::trueos_tokio_worker::spawn_blocking_job_with_purpose(
             Box::new(|| {
+                crate::log!("chat-http: blocking closure enter\n");
                 if let Err(err) = run_chat_http_runtime() {
                     crate::log!("chat-http: runtime failed {:?}\n", err);
                 }
+                crate::log!("chat-http: blocking closure exit\n");
             }),
             "chat-http-runtime",
         );

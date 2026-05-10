@@ -1,5 +1,4 @@
 pub mod axum_boot;
-pub mod chat;
 pub mod mail;
 pub mod sntp;
 pub mod spop3;

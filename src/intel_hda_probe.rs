@@ -11,6 +11,8 @@ const PIANO_NOTE_POLL_DELAY_MS: u64 = 25;
 const BASSLINE_IDLE_POLL_DELAY_MS: u64 = 25;
 const HDA_WAV_LOOP_RETRY_DELAY_MS: u64 = 1_000;
 const HDA_WAV_LOOP_IDLE_MS: u64 = 500;
+const HDA_WAV_FETCH_TIMEOUT_MS: u32 = 60_000;
+const HDA_WAV_FETCH_MAX_BYTES: usize = 32 * 1024 * 1024;
 const HDA_WAV_SAMPLE_RATE_HZ: u64 = 48_000;
 const HDA_WAV_CHANNELS: usize = 2;
 
@@ -147,20 +149,24 @@ fn hda_duration_ms_for_samples(sample_count: usize) -> u32 {
 }
 
 async fn load_hda_wav_loop_samples() -> Result<Vec<i16>, &'static str> {
-    let path = crate::allports::local_assets::AUDIO_DEMO_CACHE_PATH;
-    let disk = crate::r::fs::trueosfs::primary_root_handle().ok_or("TRUEOSFS root unavailable")?;
-    let body = crate::r::fs::trueosfs::file_out_async(disk, path)
+    let url = crate::allports::local_assets::AUDIO_DEMO_URL;
+    let body = crate::t::run_on_shared_tokio(move || async move {
+        crate::t::net::http::fetch_http_body_hyper(
+            url,
+            HDA_WAV_FETCH_TIMEOUT_MS,
+            HDA_WAV_FETCH_MAX_BYTES,
+        )
         .await
-        .map_err(|_| "TRUEOSFS read failed")?
-        .ok_or("wav file missing")?;
+    })
+    .await
+    .map_err(|_| "shared tokio unavailable")?
+    .map_err(|_| "http fetch failed")?;
     decode_wav_pcm_s16_stereo_48k(body.as_slice())
 }
 
 async fn hda_wav_loop_probe_task() {
-    let path = crate::allports::local_assets::AUDIO_DEMO_CACHE_PATH;
-    crate::log!("intel/hda-probe: wav loop mode path={}\n", path);
-    crate::r::readiness::wait_for(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED).await;
-    crate::log!("intel/hda-probe: wav loop fs ready path={}\n", path);
+    let url = crate::allports::local_assets::AUDIO_DEMO_URL;
+    crate::log!("intel/hda-probe: wav loop mode url={}\n", url);
 
     loop {
         if !crate::hda::is_initialized() {
@@ -174,12 +180,18 @@ async fn hda_wav_loop_probe_task() {
             }
         }
 
+        crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
+        while !crate::t::shared_tokio_runtime_ready() {
+            crate::log!("intel/hda-probe: wav loop waiting for shared tokio runtime\n");
+            Timer::after(EmbassyDuration::from_millis(HDA_WAV_LOOP_RETRY_DELAY_MS)).await;
+        }
+
         let samples = match load_hda_wav_loop_samples().await {
             Ok(samples) => samples,
             Err(err) => {
                 crate::log!(
-                    "intel/hda-probe: wav load err path={} err={}\n",
-                    path,
+                    "intel/hda-probe: wav fetch/decode err url={} err={}\n",
+                    url,
                     err
                 );
                 Timer::after(EmbassyDuration::from_millis(HDA_WAV_LOOP_RETRY_DELAY_MS)).await;
@@ -203,8 +215,8 @@ async fn hda_wav_loop_probe_task() {
         }
 
         crate::log!(
-            "intel/hda-probe: wav loop loaded path={} samples={} frames={} dma_samples={}\n",
-            path,
+            "intel/hda-probe: wav loop loaded url={} samples={} frames={} dma_samples={}\n",
+            url,
             samples.len(),
             samples.len() / HDA_WAV_CHANNELS,
             chunk_samples

@@ -233,17 +233,17 @@ fn post_chat_message(user: &str, text: &str) -> bool {
 
 fn post_chat_statement(user: &str, statement: Option<&str>, text: &str) -> bool {
     let local_ok = match statement {
-        Some(statement) => crate::r::net::srv::chat::post_local_statement_volatile(
+        Some(statement) => crate::tst_chatserver::post_local_statement_volatile(
             CHAT_ROOM, user, statement, text,
         ),
-        None => crate::r::net::srv::chat::post_local_message_volatile(CHAT_ROOM, user, text),
+        None => crate::tst_chatserver::post_local_message_volatile(CHAT_ROOM, user, text),
     };
     if local_ok {
         crate::log!("lumen-service: inserted chat message user={} bytes={}\n", user, text.len());
         return true;
     }
 
-    let Some(port) = crate::r::net::srv::chat::current_port() else {
+    let Some(port) = crate::tst_chatserver::current_port() else {
         crate::log!("lumen-service: chat post failed; no chat port\n");
         return false;
     };

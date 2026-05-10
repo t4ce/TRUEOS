@@ -82,6 +82,8 @@ mod tokio_probe;
 mod trueos_tokio_worker;
 #[path = "tst/boot_factory_ram_probe.rs"]
 mod tst_boot_factory_ram_probe;
+#[path = "tst/chatserver/server.rs"]
+mod tst_chatserver;
 #[path = "tst/html_demo.rs"]
 mod tst_html_demo;
 #[path = "tst/html_shack.rs"]

@@ -35,6 +35,7 @@ const FILEEXPLORER_HTTP_BODY_MAX: usize = 64 * 1024;
 const FILEEXPLORER_UPLOAD_BODY_MAX: usize = 16 * 1024 * 1024;
 const FILEEXPLORER_TEXT_OPEN_MAX: u64 = 5 * 1024 * 1024;
 const FILEEXPLORER_BLOCKING_LANE_RETRY_MS: u64 = 1000;
+const FILEEXPLORER_CHAT_GRACE_MS: u64 = 1500;
 const FILEEXPLORER_INDEX_HTML: &str = include_str!("index.html");
 const TRUEOSFS_KEEP_FILE: &str = ".keep";
 const MAX_TREE_DEPTH: usize = 8;
@@ -1118,6 +1119,13 @@ pub async fn fileexplorer_http_service_task() {
     crate::log!(
         "fileexplorer-http: launching Tokio runtime after NET_V4_CONFIGURED+TRUEOSFS_ROOT_MOUNTED\n"
     );
+    if crate::tst_chatserver::current_port().is_none() {
+        crate::log!(
+            "fileexplorer-http: waiting {}ms for chat-http listener priority\n",
+            FILEEXPLORER_CHAT_GRACE_MS
+        );
+        Timer::after(EmbassyDuration::from_millis(FILEEXPLORER_CHAT_GRACE_MS)).await;
+    }
 
     loop {
         let rc = crate::trueos_tokio_worker::spawn_blocking_job_with_purpose(

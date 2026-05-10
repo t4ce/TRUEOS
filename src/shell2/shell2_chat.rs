@@ -105,7 +105,7 @@ fn chat_url(port: u16, room: &str) -> AllocString {
 
 #[embassy_executor::task(pool_size = 4)]
 async fn shell_chat_post_task(target: MatrixTarget, text: AllocString) {
-    let Some(port) = crate::r::net::srv::chat::current_port() else {
+    let Some(port) = crate::tst_chatserver::current_port() else {
         print_matrix_target_line(&target, "chat: service offline");
         return;
     };
