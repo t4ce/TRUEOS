@@ -89,7 +89,7 @@ pub async fn detect_physical_disk_detail(
         Ok(v) => v,
         Err(e) => {
             if handle.info().kind == block::DeviceKind::Nvme {
-                crate::log_trace!(
+                crate::log!(
                     "disc-detect: dev={} stage=read_lba0 kind={:?} err={:?}\n",
                     handle.id(),
                     handle.info().kind,
@@ -134,7 +134,7 @@ pub async fn detect_physical_disk_detail(
         Ok(None) => {}
         Err(e) => {
             if handle.info().kind == block::DeviceKind::Nvme {
-                crate::log_trace!(
+                crate::log!(
                     "disc-detect: dev={} stage=trueosfs_locate kind={:?} err={:?}\n",
                     handle.id(),
                     handle.info().kind,
@@ -172,7 +172,7 @@ pub async fn detect_physical_disk_detail(
         Err(e) => {
             // If everything else failed and even this probe errors, surface it.
             if handle.info().kind == block::DeviceKind::Nvme {
-                crate::log_trace!(
+                crate::log!(
                     "disc-detect: dev={} stage=read_ext_probe kind={:?} err={:?}\n",
                     handle.id(),
                     handle.info().kind,

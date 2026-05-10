@@ -68,7 +68,7 @@ pub fn init() {
 
     if let Some(caps) = caps() {
         if crate::logflag::BOOT_INFO_LOGS {
-            crate::log_trace!(
+            crate::log!(
                 "POWER: intel={} msr={} eist={} hwp={} msr_armed={} idle={}\n",
                 caps.vendor_intel,
                 caps.has_msr,
@@ -82,7 +82,7 @@ pub fn init() {
         if crate::logflag::BOOT_INFO_LOGS
             && let Some(d) = msr_details()
         {
-            crate::log_trace!(
+            crate::log!(
                 "POWER: msr_details min={} max={} hwp_lowest={} hwp_highest={}\n",
                 opt_u8(d.min_ratio),
                 opt_u8(d.max_ratio),
@@ -91,7 +91,7 @@ pub fn init() {
             );
         }
     } else {
-        crate::log_trace!("POWER: caps unavailable\n");
+        crate::log!("POWER: caps unavailable\n");
     }
 }
 

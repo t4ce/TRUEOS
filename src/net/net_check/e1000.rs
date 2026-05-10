@@ -481,7 +481,7 @@ impl E1000Driver {
                 let speed = match (status & STATUS_SPEED_MASK) >> 6 {
                     0 => 10, 1 => 100, _ => 1000,
                 };
-                crate::log_trace!("[E1000] Link up at {} Mbps (after {} iterations)", speed, i + 1);
+                crate::log!("[E1000] Link up at {} Mbps (after {} iterations)", speed, i + 1);
                 return;
             }
             // ~1ms per iteration via port 0x80
@@ -532,7 +532,7 @@ impl Driver for E1000Driver {
         );
         
         let variant = if self.is_spt { "e1000e (SPT)" } else if self.is_ich { "e1000e (ICH)" } else { "e1000" };
-        crate::log_trace!("[E1000] Probing {:04X}:{:04X} ({})", pci_device.vendor_id, pci_device.device_id, variant);
+        crate::log!("[E1000] Probing {:04X}:{:04X} ({})", pci_device.vendor_id, pci_device.device_id, variant);
         
         let bar0 = pci_device.bar_address(0).ok_or("No BAR0")?;
         if bar0 == 0 { return Err("BAR0 is zero"); }
@@ -573,7 +573,7 @@ impl Driver for E1000Driver {
         self.initialized.store(true, Ordering::SeqCst);
         self.status = DriverStatus::Running;
         
-        crate::log_trace!("[E1000] MAC: {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+        crate::log!("[E1000] MAC: {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
             self.mac[0], self.mac[1], self.mac[2], self.mac[3], self.mac[4], self.mac[5]);
         
         // Dump key registers to serial for hardware debug

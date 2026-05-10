@@ -371,7 +371,7 @@ impl NvmeIoRuntime {
             }
         });
         if !completed {
-            crate::log_trace!(
+            crate::log!(
                 "nvme: {} io timeout qid={} opcode=0x{:02X} nsid={} cid={} slba={} blocks={}\n",
                 self.pci,
                 queue.qid,
@@ -387,7 +387,7 @@ impl NvmeIoRuntime {
         let cqe = found.ok_or(block::Error::Timeout)?;
         self.ring_cq_doorbell(queue.qid, queue.cq_head);
         if cqe.command_id() != cid {
-            crate::log_trace!(
+            crate::log!(
                 "nvme: {} io bad-cid qid={} opcode=0x{:02X} nsid={} want={} got={} slba={} blocks={}\n",
                 self.pci,
                 queue.qid,
@@ -401,7 +401,7 @@ impl NvmeIoRuntime {
             return Err(block::Error::Io);
         }
         if !cqe.is_success() {
-            crate::log_trace!(
+            crate::log!(
                 "nvme: {} io failed qid={} opcode=0x{:02X} nsid={} cid={} slba={} blocks={} sct={} sc={} dnr={} raw=0x{:04X} {}\n",
                 self.pci,
                 queue.qid,
@@ -439,7 +439,7 @@ impl NvmeIoRuntime {
             if let Some(cqe) = queue.poll_completion() {
                 self.ring_cq_doorbell(queue.qid, queue.cq_head);
                 if cqe.command_id() != cid {
-                    crate::log_trace!(
+                    crate::log!(
                         "nvme: {} io bad-cid qid={} opcode=0x{:02X} nsid={} want={} got={} slba={} blocks={}\n",
                         self.pci,
                         queue.qid,
@@ -453,7 +453,7 @@ impl NvmeIoRuntime {
                     return Err(block::Error::Io);
                 }
                 if !cqe.is_success() {
-                    crate::log_trace!(
+                    crate::log!(
                         "nvme: {} io failed qid={} opcode=0x{:02X} nsid={} cid={} slba={} blocks={} sct={} sc={} dnr={} raw=0x{:04X} {}\n",
                         self.pci,
                         queue.qid,
@@ -474,7 +474,7 @@ impl NvmeIoRuntime {
             }
 
             if Instant::now() >= deadline {
-                crate::log_trace!(
+                crate::log!(
                     "nvme: {} io timeout qid={} opcode=0x{:02X} nsid={} cid={} slba={} blocks={}\n",
                     self.pci,
                     queue.qid,
@@ -615,7 +615,7 @@ impl NvmeIoRuntime {
         dma_buf.zero_all();
         self.io_rw_blocking(queue, NVME_NVM_READ, nsid, 0, 1, &dma_buf, read_len)?;
         dma_buf.invalidate_range(0, read_len);
-        crate::log_trace!(
+        crate::log!(
             "nvme: {} smoke-read ok qid={} nsid={} lba=0 bytes={}\n",
             self.pci,
             queue.qid,
@@ -676,7 +676,7 @@ impl NvmeController {
         });
 
         if fatal {
-            crate::log_trace!(
+            crate::log!(
                 "nvme: {} controller fatal while waiting for RDY={} timeout={}ms csts=0x{:08X}\n",
                 self.pci,
                 expect_ready,
@@ -686,7 +686,7 @@ impl NvmeController {
             return Err(block::Error::Io);
         }
         if !ready {
-            crate::log_trace!(
+            crate::log!(
                 "nvme: {} ready timeout waiting for RDY={} timeout={}ms csts=0x{:08X}\n",
                 self.pci,
                 expect_ready,
@@ -714,12 +714,7 @@ impl NvmeController {
             }
         });
         if !completed {
-            crate::log_trace!(
-                "nvme: {} admin timeout opcode=0x{:02X} cid={}\n",
-                self.pci,
-                opcode,
-                cid
-            );
+            crate::log!("nvme: {} admin timeout opcode=0x{:02X} cid={}\n", self.pci, opcode, cid);
             return Err(block::Error::Timeout);
         }
 
@@ -727,7 +722,7 @@ impl NvmeController {
         self.runtime()
             .ring_cq_doorbell(self.admin.qid, self.admin.cq_head);
         if cqe.command_id() != cid {
-            crate::log_trace!(
+            crate::log!(
                 "nvme: {} admin bad-cid opcode=0x{:02X} want={} got={}\n",
                 self.pci,
                 opcode,
@@ -737,7 +732,7 @@ impl NvmeController {
             return Err(block::Error::Io);
         }
         if !cqe.is_success() {
-            crate::log_trace!(
+            crate::log!(
                 "nvme: {} admin failed opcode=0x{:02X} cid={} sct={} sc={} dnr={} raw=0x{:04X} {}\n",
                 self.pci,
                 opcode,
@@ -933,7 +928,7 @@ impl NvmeController {
                 Ok(info) if info.block_count > 0 && info.block_size != 0 => out.push(info),
                 Ok(_) => {}
                 Err(err) => {
-                    crate::log_trace!(
+                    crate::log!(
                         "nvme: {} namespace identify failed nsid={} err={:?}\n",
                         self.pci,
                         nsid,
@@ -968,7 +963,7 @@ impl NvmeController {
         } else {
             READY_TIMEOUT_MS.max(reported_ready_timeout_ms)
         };
-        crate::log_trace!(
+        crate::log!(
             "nvme: {} caps ver={}.{}.{} mqes={} dstrd={} mpsmin={} cap.to={}ms ready_timeout={}ms\n",
             pci,
             version_major,
@@ -981,7 +976,7 @@ impl NvmeController {
             ready_timeout_ms
         );
         if mpsmin > 0 {
-            crate::log_trace!(
+            crate::log!(
                 "nvme: {} unsupported CAP.MPSMIN={} (requires page size > 4KiB)\n",
                 pci,
                 mpsmin
@@ -1317,7 +1312,7 @@ pub(crate) fn register_mapped_controller(mmio: NonNull<u8>, pci: block::PciAddre
     let (mut ctrl, namespaces, queue_depth) = match NvmeController::init(mmio, pci) {
         Ok(v) => v,
         Err(e) => {
-            crate::log_trace!("nvme: {} init failed: {:?}\n", pci, e);
+            crate::log!("nvme: {} init failed: {:?}\n", pci, e);
             return false;
         }
     };
@@ -1327,7 +1322,7 @@ pub(crate) fn register_mapped_controller(mmio: NonNull<u8>, pci: block::PciAddre
     let available_queues = match ctrl.set_number_of_queues(requested_queues.max(1)) {
         Ok(supported) => supported.min(requested_queues.max(1)),
         Err(err) => {
-            crate::log_trace!(
+            crate::log!(
                 "nvme: {} set-number-of-queues failed err={:?}; falling back to one I/O queue\n",
                 pci,
                 err
@@ -1336,7 +1331,7 @@ pub(crate) fn register_mapped_controller(mmio: NonNull<u8>, pci: block::PciAddre
         }
     };
     if total_namespaces > available_queues as usize {
-        crate::log_trace!(
+        crate::log!(
             "nvme: {} limiting namespace registration to {} queue-backed namespace(s) out of {}\n",
             pci,
             available_queues,
@@ -1358,7 +1353,7 @@ pub(crate) fn register_mapped_controller(mmio: NonNull<u8>, pci: block::PciAddre
         let mut io_queue = match QueuePair::new(qid, queue_depth) {
             Ok(queue) => queue,
             Err(err) => {
-                crate::log_trace!(
+                crate::log!(
                     "nvme: {} queue alloc failed qid={} nsid={} err={:?}\n",
                     pci,
                     qid,
@@ -1370,7 +1365,7 @@ pub(crate) fn register_mapped_controller(mmio: NonNull<u8>, pci: block::PciAddre
         };
 
         if let Err(err) = ctrl.create_io_cq(qid, io_queue.cq_phys, queue_depth) {
-            crate::log_trace!(
+            crate::log!(
                 "nvme: {} create-io-cq failed qid={} nsid={} err={:?}\n",
                 pci,
                 qid,
@@ -1380,7 +1375,7 @@ pub(crate) fn register_mapped_controller(mmio: NonNull<u8>, pci: block::PciAddre
             continue;
         }
         if let Err(err) = ctrl.create_io_sq(qid, io_queue.sq_phys, qid, queue_depth) {
-            crate::log_trace!(
+            crate::log!(
                 "nvme: {} create-io-sq failed qid={} nsid={} err={:?}\n",
                 pci,
                 qid,
@@ -1390,7 +1385,7 @@ pub(crate) fn register_mapped_controller(mmio: NonNull<u8>, pci: block::PciAddre
             continue;
         }
         if let Err(err) = runtime.smoke_test_read_blocking(&mut io_queue, ns.nsid, ns.block_size) {
-            crate::log_trace!(
+            crate::log!(
                 "nvme: {} smoke-read failed qid={} nsid={} err={:?}\n",
                 pci,
                 qid,
@@ -1427,7 +1422,7 @@ pub(crate) fn register_mapped_controller(mmio: NonNull<u8>, pci: block::PciAddre
             max_transfer_bytes,
         };
         let handle = block::register_device_with_worker(desc, dev);
-        crate::log_trace!(
+        crate::log!(
             "nvme: registered {} nsid={} qid={} id={} blocks={} bs={} max_io={}\n",
             pci,
             ns.nsid,

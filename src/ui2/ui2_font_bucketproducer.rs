@@ -169,7 +169,7 @@ pub(crate) fn ui2_font_bucketproducer_decode_variant(size_case: usize) -> Option
     let mut decoded = Vec::with_capacity(ATHLAS_BUCKET_COUNT);
     for bucket in 0..ATHLAS_BUCKET_COUNT {
         let Some(bytes) = athlas_bucket_png_bytes(size_case, bucket) else {
-            crate::log_trace!(
+            crate::log!(
                 "ui2-font-bucketproducer: missing variant png size_case={} variant={} bucket={}\n",
                 size_case,
                 variant.name,
@@ -180,7 +180,7 @@ pub(crate) fn ui2_font_bucketproducer_decode_variant(size_case: usize) -> Option
         let image = match crate::gfx::png_codec::decode_png_rgba(bytes) {
             Ok(image) => image,
             Err(err) => {
-                crate::log_trace!(
+                crate::log!(
                     "ui2-font-bucketproducer: png decode failed size_case={} variant={} bucket={} code={}\n",
                     size_case,
                     variant.name,
@@ -327,7 +327,7 @@ async fn run_bucket_demo(
         bucket_demo_window_alpha(&spec),
         bg_rgba,
     ) else {
-        crate::log_trace!(
+        crate::log!(
             "ui2-font-bucketproducer: window creation failed family={} variant={}\n",
             spec.family_name,
             spec.variant_name
@@ -338,7 +338,7 @@ async fn run_bucket_demo(
     super::ui2_win::set_window_title_twemoji(surface.window_id(), '\u{1F524}');
 
     if !surface.bind_hosted_scroll_state(spec.content_id, content_w, content_h) {
-        crate::log_trace!(
+        crate::log!(
             "ui2-font-bucketproducer: hosted scroll bind failed window={} content_id={} family={} variant={}\n",
             surface.window_id(),
             spec.content_id,
@@ -361,7 +361,7 @@ async fn run_bucket_demo(
         });
     }
     if !surface.set_tiles(bg_rgba, fg_rgba, tiles.as_slice()) {
-        crate::log_trace!(
+        crate::log!(
             "ui2-font-bucketproducer: tile registration failed window={} family={} variant={}\n",
             surface.window_id(),
             spec.family_name,
@@ -388,7 +388,7 @@ async fn run_bucket_demo(
             repaint_window_id,
             spec.variant_dir,
         ) {
-            crate::log_trace!(
+            crate::log!(
                 "ui2-font-bucketproducer: upload failed window={} family={} variant={} bucket={} tex={} size={}x{}\n",
                 surface.window_id(),
                 spec.family_name,
@@ -427,7 +427,7 @@ async fn run_bucket_demo(
         let _ = request_window_content_present(surface.window_id(), "ui2-athlas-bucket-ready");
     }
 
-    crate::log_trace!(
+    crate::log!(
         "ui2-font-bucketproducer: window={} family={} variant={} viewport={}x{} content={}x{} buckets={} upem={} line_height={} ready_seq={} minimized={}\n",
         surface.window_id(),
         spec.family_name,
@@ -450,7 +450,7 @@ async fn run_bucket_demo(
 
 async fn run_athlas_bucket_demo(size_case: usize) {
     let Some(variant) = athlas_variant(size_case) else {
-        crate::log_trace!(
+        crate::log!(
             "ui2-font-bucketproducer: invalid size_case={} variant_count={}\n",
             size_case,
             UI2_ATHLAS_BUCKET_DEMO_VARIANT_COUNT
@@ -470,7 +470,7 @@ fn decode_palatino_bucket_variant() -> Option<Vec<DecodedPng>> {
     let mut decoded = Vec::with_capacity(ATHLAS_BUCKET_COUNT);
     for bucket in 0..ATHLAS_BUCKET_COUNT {
         let Some(bytes) = palatino_bucket_png_bytes(bucket) else {
-            crate::log_trace!(
+            crate::log!(
                 "ui2-font-bucketproducer: missing palatino variant png variant={} bucket={}\n",
                 spec.variant_name,
                 bucket
@@ -480,7 +480,7 @@ fn decode_palatino_bucket_variant() -> Option<Vec<DecodedPng>> {
         let image = match crate::gfx::png_codec::decode_png_rgba(bytes) {
             Ok(image) => image,
             Err(err) => {
-                crate::log_trace!(
+                crate::log!(
                     "ui2-font-bucketproducer: png decode failed family={} variant={} bucket={} code={}\n",
                     spec.family_name,
                     spec.variant_name,
@@ -526,10 +526,7 @@ pub async fn ui2_font_twemoji_loader_task() {
     let decoded = match crate::gfx::png_codec::decode_png_rgba(twemoji::TWEMOJI_ATLAS_PNG) {
         Ok(decoded) => decoded,
         Err(err) => {
-            crate::log_trace!(
-                "ui2-font-bucketproducer: twemoji decode failed code={}\n",
-                err.code()
-            );
+            crate::log!("ui2-font-bucketproducer: twemoji decode failed code={}\n", err.code());
             return;
         }
     };
@@ -542,7 +539,7 @@ pub async fn ui2_font_twemoji_loader_task() {
         0,
         "twemoji-1x",
     ) {
-        crate::log_trace!(
+        crate::log!(
             "ui2-font-bucketproducer: twemoji upload failed tex={} size={}x{}\n",
             twemoji::TWEMOJI_TEX_ID,
             decoded.width,
@@ -561,7 +558,7 @@ pub async fn ui2_font_twemoji_loader_task() {
     }
 
     let ready_seq = twemoji::twemoji_mark_ready().unwrap_or(0);
-    crate::log_trace!(
+    crate::log!(
         "ui2-font-bucketproducer: twemoji ready tex={} size={}x{} line_height={} ready_seq={}\n",
         twemoji::TWEMOJI_TEX_ID,
         decoded.width,

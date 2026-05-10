@@ -175,7 +175,7 @@ fn reject_hv_guest_host_heap_dealloc(ptr: *mut u8) -> bool {
         .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
         .is_ok()
     {
-        crate::log_trace!(
+        crate::log!(
             "hv-guest-alloc: ignored host-heap dealloc ptr=0x{:X} risk=HVSR-0002\n",
             ptr as usize
         );
@@ -644,7 +644,7 @@ pub fn ensure_hv_guest_heap_ready(vm_id: u8) -> bool {
         };
         guard.install_heap(arena.virt_start, arena.phys_start as usize, arena.length);
         HV_GUEST_HEAP_READY_MASK.fetch_or(ready_bit, Ordering::AcqRel);
-        crate::log_trace!(
+        crate::log!(
             "heap: hv guest vm{} arena virt=0x{:X} phys=0x{:X} size={} MiB\n",
             vm_id,
             arena.virt_start,
@@ -654,7 +654,7 @@ pub fn ensure_hv_guest_heap_ready(vm_id: u8) -> bool {
         return true;
     }
 
-    crate::log_trace!(
+    crate::log!(
         "heap: hv guest vm{} arena unavailable, falling back to private {} KiB heap\n",
         vm_id,
         guard.fallback_len / 1024
@@ -704,7 +704,7 @@ pub unsafe fn alloc_raw(layout: Layout) -> *mut u8 {
     } else if let Some(vm_id) = alloc_domain_vm_id(domain) {
         let stats = hv_guest_heap_stats(vm_id);
         let trace = last_alloc_trace();
-        crate::log_trace!(
+        crate::log!(
             "hv-guest-alloc: vm{} alloc_raw failed size={} align={} src={:?} usable_total={} free_bytes={} largest_free={} free_blocks={} init={}\n",
             vm_id,
             layout.size(),
@@ -716,7 +716,7 @@ pub unsafe fn alloc_raw(layout: Layout) -> *mut u8 {
             stats.free_blocks,
             stats.initialized,
         );
-        crate::log_trace!(
+        crate::log!(
             "hv-guest-alloc: trace seq={} caller=0x{:016X} caller1=0x{:016X} caller2=0x{:016X} size={} align={} stage={} head=0x{:016X} block=0x{:016X} block_size={} next=0x{:016X} payload=0x{:016X} aligned_used={}\n",
             trace.seq,
             trace.caller_rip,
@@ -915,7 +915,7 @@ pub fn hv_guest_heap_stats_total() -> HeapStats {
 pub fn install_heap_arena(arena: HeapArena) -> bool {
     init_fallback_regions();
     if arena.length < minimum_block_size() {
-        crate::log_trace!(
+        crate::log!(
             "heap: requested arena too small size={} bytes (need >= {})\n",
             arena.length,
             minimum_block_size()
@@ -925,7 +925,7 @@ pub fn install_heap_arena(arena: HeapArena) -> bool {
 
     let mut guard = ALLOCATOR.lock();
     if guard.initialized {
-        crate::log_trace!("heap: allocator already initialized; cannot swap backing\n");
+        crate::log!("heap: allocator already initialized; cannot swap backing\n");
         return false;
     }
 
@@ -933,7 +933,7 @@ pub fn install_heap_arena(arena: HeapArena) -> bool {
     publish_host_heap_range(arena.virt_start, arena.length);
     phys::register_heap(arena.virt_start, arena.phys_start as usize, arena.length);
     if crate::logflag::BOOT_INFO_LOGS {
-        crate::log_trace!(
+        crate::log!(
             "heap: arena virt=0x{:X} phys=0x{:X} size={} MiB\n",
             arena.virt_start,
             arena.phys_start,
@@ -964,8 +964,8 @@ fn aligned_payload(block_start: usize, layout: Layout) -> Option<usize> {
 
 fn alloc_error(layout: Layout) -> ! {
     let stats = heap_stats();
-    crate::log_trace!("OOM: alloc request size={} align={}\n", layout.size(), layout.align());
-    crate::log_trace!(
+    crate::log!("OOM: alloc request size={} align={}\n", layout.size(), layout.align());
+    crate::log!(
         "OOM: heap virt=0x{:X}..0x{:X} phys=0x{:X} src={:?} usable_start=0x{:X} usable_total={} free_bytes={} largest_free={} free_blocks={} init={}\n",
         stats.heap_start,
         stats.heap_end,

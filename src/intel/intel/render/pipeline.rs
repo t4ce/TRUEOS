@@ -1061,7 +1061,7 @@ fn encode_triangle_probe_batch(
             push(batch_dwords, &mut cursor, streamout_decl_dword4)?;
             push(batch_dwords, &mut cursor, streamout_decl_dword5)?;
         }
-        crate::log_trace!(
+        crate::log!(
             "intel/render: probe-streamout-decl experiment={} read_len={} so_pitch={} decl=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] vs_position_only={} ps_varyings={} generic_attrs=0 compatible={}\n",
             streamout_experiment.label(),
             streamout_experiment.vertex_read_length(),
@@ -1076,7 +1076,7 @@ fn encode_triangle_probe_batch(
             pipeline.ps.meta.num_varying_inputs,
             streamout_experiment.compatible() as u8,
         );
-        crate::log_trace!(
+        crate::log!(
             "intel/render: probe-streamout-config experiment={} so[function_enable={} statistics_enable={} rendering_disable={} render_stream={} reorder={} read_offset={} read_length_field={} buffer0_pitch={}] sobuf0[enable={} write_enable={} offset_addr_enable={} offset_mode={} mocs=0x{:X} surface=0x{:X} size_dwords=0x{:X} stream_offset=0x{:08X}] slot_contract={}\n",
             streamout_experiment.label(),
             (streamout_dw1 >> 31) & 0x1,
@@ -2193,7 +2193,7 @@ fn encode_minimal_streamout_proof_batch(
         push(batch_dwords, &mut cursor, streamout_decl_dword4)?;
         push(batch_dwords, &mut cursor, streamout_decl_dword5)?;
     }
-    crate::log_trace!(
+    crate::log!(
         "intel/render: {} decl experiment={} read_len={} so_pitch={} decl=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] slot_contract={}\n",
         submit_label,
         streamout_experiment.label(),
@@ -2207,7 +2207,7 @@ fn encode_minimal_streamout_proof_batch(
         streamout_decl_dword5,
         streamout_experiment.vf_slot_contract(),
     );
-    crate::log_trace!(
+    crate::log!(
         "intel/render: {} contract experiment={} stages_disabled={} sbe[read_offset=1 read_length=1 num_sf_attrs=1 force_offset=1 force_length=1] urb_vs[alloc_len={} start={} entries={}] vb[index=0 pitch={} size=0x{:X}] streamout[read_offset=0 read_length_field={} rendering_disable={} stats_enable={} pitch={} so_gpu=0x{:X} size_dwords=0x{:X}] topo={}\n",
         submit_label,
         streamout_experiment.label(),

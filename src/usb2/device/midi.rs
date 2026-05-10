@@ -229,11 +229,11 @@ fn maybe_start_piano_drain(spawner: &Spawner) {
     match piano_drain_loop() {
         Ok(token) => {
             spawner.spawn(token);
-            crate::log_trace!("piano: drain loop started\n");
+            crate::log!("piano: drain loop started\n");
         }
         Err(err) => {
             PIANO_DRAIN_STARTED.store(false, Ordering::Release);
-            crate::log_trace!("piano: drain loop token failed: {:?}\n", err);
+            crate::log!("piano: drain loop token failed: {:?}\n", err);
         }
     }
 }
@@ -279,7 +279,7 @@ fn piano_play_packet(pkt: [u8; 4]) {
             .fetch_add(1, Ordering::AcqRel)
             .wrapping_add(1);
         if n <= 4 {
-            crate::log_trace!("piano: audible note failed err={}\n", err);
+            crate::log!("piano: audible note failed err={}\n", err);
         }
     }
 }
@@ -302,16 +302,10 @@ pub async fn piano_drain_loop() {
 
             let hb = PIANO_LAST_HEARTBEAT_SECS.load(Ordering::Acquire);
             if hb == u64::MAX {
-                crate::log_trace!(
-                    "piano: --:--:-- ~ {}.{}.{}.{}\n",
-                    pkt[0],
-                    pkt[1],
-                    pkt[2],
-                    pkt[3]
-                );
+                crate::log!("piano: --:--:-- ~ {}.{}.{}.{}\n", pkt[0], pkt[1], pkt[2], pkt[3]);
             } else {
                 let (h, m, s) = secs_to_hms(hb);
-                crate::log_trace!(
+                crate::log!(
                     "piano: {:02}:{:02}:{:02} ~ {}.{}.{}.{}\n",
                     h,
                     m,
@@ -445,7 +439,7 @@ pub async fn midi_stream_task(mut device: Device, controller_id: u32, target: Mi
         .set_configuration(target.configuration_value)
         .await
     {
-        crate::log_trace!(
+        crate::log!(
             "crabusb: midi {:04X}:{:04X} set cfg={} failed: {:?}\n",
             vendor_id,
             product_id,
@@ -459,7 +453,7 @@ pub async fn midi_stream_task(mut device: Device, controller_id: u32, target: Mi
         {
             Ok(interface) => interface,
             Err(err) => {
-                crate::log_trace!(
+                crate::log!(
                     "crabusb: midi {:04X}:{:04X} claim failed if#{} alt={}: {:?}\n",
                     vendor_id,
                     product_id,
@@ -475,7 +469,7 @@ pub async fn midi_stream_task(mut device: Device, controller_id: u32, target: Mi
     let mut bulk_in = match interface.endpoint_bulk_in(target.ep_in.addr).await {
         Ok(ep) => ep,
         Err(InterfaceEndpointError::WrongKind { address, expected }) => {
-            crate::log_trace!(
+            crate::log!(
                 "crabusb: midi {:04X}:{:04X} bulk_in kind mismatch ep=0x{:02X} got=0x{:02X} expected={}\n",
                 vendor_id,
                 product_id,
@@ -487,7 +481,7 @@ pub async fn midi_stream_task(mut device: Device, controller_id: u32, target: Mi
             return;
         }
         Err(InterfaceEndpointError::Usb(err)) => {
-            crate::log_trace!(
+            crate::log!(
                 "crabusb: midi {:04X}:{:04X} bulk_in open failed ep=0x{:02X}: {:?}\n",
                 vendor_id,
                 product_id,
@@ -503,7 +497,7 @@ pub async fn midi_stream_task(mut device: Device, controller_id: u32, target: Mi
         Some(ep_out) => match interface.endpoint_bulk_out(ep_out.addr).await {
             Ok(_ep) => true,
             Err(InterfaceEndpointError::WrongKind { address, expected }) => {
-                crate::log_trace!(
+                crate::log!(
                     "crabusb: midi {:04X}:{:04X} bulk_out kind mismatch ep=0x{:02X} got=0x{:02X} expected={}\n",
                     vendor_id,
                     product_id,
@@ -514,7 +508,7 @@ pub async fn midi_stream_task(mut device: Device, controller_id: u32, target: Mi
                 false
             }
             Err(InterfaceEndpointError::Usb(err)) => {
-                crate::log_trace!(
+                crate::log!(
                     "crabusb: midi {:04X}:{:04X} bulk_out open failed ep=0x{:02X}: {:?}\n",
                     vendor_id,
                     product_id,
@@ -533,7 +527,7 @@ pub async fn midi_stream_task(mut device: Device, controller_id: u32, target: Mi
         crate::r::readiness::set(crate::r::readiness::PIANO_CLAIMED);
     }
 
-    crate::log_trace!(
+    crate::log!(
         "crabusb: midi {:04X}:{:04X} ready slot={} if#{} alt={} cfg={} bulk_in=0x{:02X} in_mps={} bulk_out={} out_ep={} adapter={:?}\n",
         vendor_id,
         product_id,
@@ -558,7 +552,7 @@ pub async fn midi_stream_task(mut device: Device, controller_id: u32, target: Mi
             None => {
                 timeout_logs = timeout_logs.wrapping_add(1);
                 if timeout_logs <= 8 || timeout_logs.is_multiple_of(32) {
-                    crate::log_trace!(
+                    crate::log!(
                         "crabusb: midi {:04X}:{:04X} read timeout ep=0x{:02X} count={}\n",
                         vendor_id,
                         product_id,
@@ -577,7 +571,7 @@ pub async fn midi_stream_task(mut device: Device, controller_id: u32, target: Mi
                 if sample.len() >= 4 {
                     handle_midi_packets(adapter, sample);
                 } else {
-                    crate::log_trace!(
+                    crate::log!(
                         "crabusb: midi {:04X}:{:04X} short packet len={} bytes={:02X?}\n",
                         vendor_id,
                         product_id,
@@ -587,7 +581,7 @@ pub async fn midi_stream_task(mut device: Device, controller_id: u32, target: Mi
                 }
             }
             Some(Err(err)) => {
-                crate::log_trace!(
+                crate::log!(
                     "crabusb: midi {:04X}:{:04X} stream stop ep=0x{:02X} err={:?}\n",
                     vendor_id,
                     product_id,
@@ -627,7 +621,7 @@ pub(crate) async fn maybe_start_midi(
     let device = match host.open_device(dev_info).await {
         Ok(device) => device,
         Err(err) => {
-            crate::log_trace!(
+            crate::log!(
                 "crabusb: midi {:04X}:{:04X} open failed: {:?}\n",
                 vendor_id,
                 product_id,
@@ -648,7 +642,7 @@ pub(crate) async fn maybe_start_midi(
     match midi_stream_task(device, controller_id, target) {
         Ok(token) => {
             spawner.spawn(token);
-            crate::log_trace!(
+            crate::log!(
                 "crabusb: midi {:04X}:{:04X} handoff if#{} alt={} cfg={} bulk_in=0x{:02X} in_mps={} bulk_out={} out_ep={}\n",
                 vendor_id,
                 product_id,
@@ -663,7 +657,7 @@ pub(crate) async fn maybe_start_midi(
         }
         Err(err) => {
             unregister_active_midi_stream(active_stream);
-            crate::log_trace!(
+            crate::log!(
                 "crabusb: midi {:04X}:{:04X} spawn failed if#{} alt={}: {:?}\n",
                 vendor_id,
                 product_id,

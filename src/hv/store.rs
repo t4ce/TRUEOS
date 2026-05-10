@@ -500,7 +500,7 @@ pub async fn vm_store_replication_task() {
                     tx_buf.clear();
                     tx_offset = 0;
                     pending_len = 0;
-                    crate::log_trace!("hv-store-net: tcp established handle={}\n", handle.0);
+                    crate::log!("hv-store-net: tcp established handle={}\n", handle.0);
                 }
                 NetEvent::TcpSent { handle, len } => {
                     if tcp_handle == Some(handle) && inflight {
@@ -538,7 +538,7 @@ pub async fn vm_store_replication_task() {
                                             format!("VM {} {} {}", id, seq, bytes.len()).as_str(),
                                         );
                                         tx_buf.extend_from_slice(bytes.as_slice());
-                                        crate::log_trace!(
+                                        crate::log!(
                                             "hv-store-net: queued vm id={} seq={} bytes={} handle={}\n",
                                             id,
                                             seq,
@@ -548,7 +548,7 @@ pub async fn vm_store_replication_task() {
                                     }
                                     Ok(None) => push_line(&mut tx_buf, "NO"),
                                     Err(e) => {
-                                        crate::log_trace!(
+                                        crate::log!(
                                             "hv-store-net: read current failed err={:?}\n",
                                             e
                                         );
@@ -557,7 +557,7 @@ pub async fn vm_store_replication_task() {
                                 }
                             }
                             Some(VmStoreNetCmd::Ack(id, ok)) => {
-                                crate::log_trace!(
+                                crate::log!(
                                     "hv-store-net: vm id={} ack={}\n",
                                     id,
                                     if ok { "OK" } else { "RIP" }
@@ -580,14 +580,11 @@ pub async fn vm_store_replication_task() {
                         let _ = cmds.push(NetCommand::OpenTcpListen {
                             port: ports::VM_STORE_REPL_PORT,
                         });
-                        crate::log_trace!(
-                            "hv-store-net: tcp closed handle={} (relisten)\n",
-                            handle.0
-                        );
+                        crate::log!("hv-store-net: tcp closed handle={} (relisten)\n", handle.0);
                     }
                 }
                 NetEvent::Error { msg } => {
-                    crate::log_trace!("hv-store-net: error {}\n", msg);
+                    crate::log!("hv-store-net: error {}\n", msg);
                 }
                 NetEvent::UdpPacket { .. }
                 | NetEvent::UdpPacketV6 { .. }
@@ -649,7 +646,7 @@ fn provisioned_disk_bytes(required_bytes: usize) -> u64 {
 
 async fn create_store_ready(size_bytes: u64) -> Result<block::DeviceHandle, VmStoreError> {
     let t0 = boot_probe_ms();
-    crate::log_trace!("hv-store: ramdisk create begin ms={} bytes={}\n", t0, size_bytes);
+    crate::log!("hv-store: ramdisk create begin ms={} bytes={}\n", t0, size_bytes);
     let disk = crate::r::disc::ramdisk::create_trueos_private(
         size_bytes,
         VM_STORE_BLOCK_SIZE,
@@ -661,16 +658,16 @@ async fn create_store_ready(size_bytes: u64) -> Result<block::DeviceHandle, VmSt
         crate::r::disc::ramdisk::TrueosPrivateError::Format(err)
         | crate::r::disc::ramdisk::TrueosPrivateError::Validate(err) => VmStoreError::Format(err),
     })?;
-    crate::log_trace!(
+    crate::log!(
         "hv-store: ramdisk create done ms={} dt={} disk={}\n",
         boot_probe_ms(),
         boot_probe_ms().saturating_sub(t0),
         disk.id().raw()
     );
     let t1 = boot_probe_ms();
-    crate::log_trace!("hv-store: format done ms={} dt={}\n", t1, t1.saturating_sub(t0));
+    crate::log!("hv-store: format done ms={} dt={}\n", t1, t1.saturating_sub(t0));
     let t2 = boot_probe_ms();
-    crate::log_trace!(
+    crate::log!(
         "hv-store: validate done ms={} dt={} step={}\n",
         t2,
         t2.saturating_sub(t0),
@@ -684,7 +681,7 @@ async fn create_store_ready(size_bytes: u64) -> Result<block::DeviceHandle, VmSt
         return Err(VmStoreError::Format(block::Error::Io));
     }
     let t3 = boot_probe_ms();
-    crate::log_trace!(
+    crate::log!(
         "hv-store: probe write done ms={} dt={} step={}\n",
         t3,
         t3.saturating_sub(t0),
@@ -700,14 +697,14 @@ async fn create_store_ready(size_bytes: u64) -> Result<block::DeviceHandle, VmSt
         return Err(VmStoreError::Format(block::Error::Corrupted));
     }
     let t4 = boot_probe_ms();
-    crate::log_trace!(
+    crate::log!(
         "hv-store: probe read done ms={} dt={} step={}\n",
         t4,
         t4.saturating_sub(t0),
         t4.saturating_sub(t3)
     );
     let t5 = boot_probe_ms();
-    crate::log_trace!(
+    crate::log!(
         "hv-store: ensure done ms={} dt={} tail={}\n",
         t5,
         t5.saturating_sub(t0),
@@ -720,7 +717,7 @@ async fn handle_request(id: u64, kind: RequestKind) -> Result<VmStoreResponse, V
     match kind {
         RequestKind::Save(vm_id, bytes) => {
             let disk_bytes = provisioned_disk_bytes(bytes.len());
-            crate::log_trace!(
+            crate::log!(
                 "hv-store: save allocate id={} vm_id={} snapshot_bytes={} disk_bytes={}\n",
                 id,
                 vm_id,
@@ -730,7 +727,7 @@ async fn handle_request(id: u64, kind: RequestKind) -> Result<VmStoreResponse, V
             let disk = create_store_ready(disk_bytes).await?;
             let seq = VM_STORE_OBJECT_SEQ.fetch_add(1, Ordering::Relaxed).max(1);
             let committed_path = object_path(VM_STORE_OBJECT_PREFIX, seq);
-            crate::log_trace!(
+            crate::log!(
                 "hv-store: save queued id={} vm_id={} bytes={} committed={}\n",
                 id,
                 vm_id,
@@ -766,7 +763,7 @@ async fn handle_request(id: u64, kind: RequestKind) -> Result<VmStoreResponse, V
             seqs.clear();
             seqs.insert(vm_id, seq);
             VM_STORE_COMMIT_WAIT.notify_all();
-            crate::log_trace!(
+            crate::log!(
                 "hv-store: save complete id={} vm_id={} seq={} bytes={} committed={} disk={}\n",
                 id,
                 vm_id,
@@ -782,7 +779,7 @@ async fn handle_request(id: u64, kind: RequestKind) -> Result<VmStoreResponse, V
                 return Err(VmStoreError::MissingSnapshot);
             };
             let manifest_path = vm_manifest_path(vm_id);
-            crate::log_trace!(
+            crate::log!(
                 "hv-store: load queued id={} vm_id={} manifest={}\n",
                 id,
                 vm_id,
@@ -794,7 +791,7 @@ async fn handle_request(id: u64, kind: RequestKind) -> Result<VmStoreResponse, V
             else {
                 return Err(VmStoreError::MissingSnapshot);
             };
-            crate::log_trace!(
+            crate::log!(
                 "hv-store: load complete id={} vm_id={} bytes={}\n",
                 id,
                 vm_id,

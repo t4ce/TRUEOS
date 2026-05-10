@@ -117,7 +117,7 @@ async fn bulk_xfer(
     };
 
     let Some(trb_phys) = ring.push_with_phys(trb) else {
-        crate::log_trace!("usb: {}: bulk ring full\n", what);
+        crate::log!("usb: {}: bulk ring full\n", what);
         return Err(());
     };
 
@@ -150,11 +150,11 @@ async fn bulk_xfer(
         xhci::debug_event_buffer_summary(ctx.controller_id);
         xhci::debug_peek_transfer_events(ctx.controller_id, slot_id, ep_target, 4);
         xhci::debug_peek_transfer_events_for_slot(ctx.controller_id, slot_id, 4);
-        crate::log_trace!("usb: {}: timeout waiting for bulk transfer\n", what);
+        crate::log!("usb: {}: timeout waiting for bulk transfer\n", what);
     })?;
 
     if !ring.release_completed(1) {
-        crate::log_trace!("usb: {}: bulk ring accounting underflow\n", what);
+        crate::log!("usb: {}: bulk ring accounting underflow\n", what);
         return Err(());
     }
 
@@ -185,7 +185,7 @@ fn bulk_xfer_sync(
     };
 
     let Some(trb_phys) = ring.push_with_phys(trb) else {
-        crate::log_trace!("usb: {}: bulk ring full\n", what);
+        crate::log!("usb: {}: bulk ring full\n", what);
         return Err(());
     };
 
@@ -216,11 +216,11 @@ fn bulk_xfer_sync(
         xhci::debug_event_buffer_summary(ctx.controller_id);
         xhci::debug_peek_transfer_events(ctx.controller_id, slot_id, ep_target, 4);
         xhci::debug_peek_transfer_events_for_slot(ctx.controller_id, slot_id, 4);
-        crate::log_trace!("usb: {}: timeout waiting for bulk transfer\n", what);
+        crate::log!("usb: {}: timeout waiting for bulk transfer\n", what);
     })?;
 
     if !ring.release_completed(1) {
-        crate::log_trace!("usb: {}: bulk ring accounting underflow\n", what);
+        crate::log!("usb: {}: bulk ring accounting underflow\n", what);
         return Err(());
     }
 
@@ -288,7 +288,7 @@ pub(crate) async fn command_in(
     )
     .await?;
     if cc_cbw != 1 {
-        crate::log_trace!("usb: bot: cbw cc={}\n", cc_cbw);
+        crate::log!("usb: bot: cbw cc={}\n", cc_cbw);
         goto_cleanup(cbw_virt, csw_virt, data_virt, data_len);
         return Err(());
     }
@@ -309,7 +309,7 @@ pub(crate) async fn command_in(
 
         // CC=13 (short packet) is common/acceptable for some reads.
         if cc_data != 1 && cc_data != 13 {
-            crate::log_trace!("usb: bot: data-in cc={}\n", cc_data);
+            crate::log!("usb: bot: data-in cc={}\n", cc_data);
             return Err(());
         }
 
@@ -333,7 +333,7 @@ pub(crate) async fn command_in(
     )
     .await?;
     if cc_csw != 1 && cc_csw != 13 {
-        crate::log_trace!("usb: bot: csw cc={}\n", cc_csw);
+        crate::log!("usb: bot: csw cc={}\n", cc_csw);
         return Err(());
     }
 
@@ -343,12 +343,12 @@ pub(crate) async fn command_in(
     };
 
     let Some((csw_tag, csw)) = parse_csw(csw_buf) else {
-        crate::log_trace!("usb: bot: invalid csw (len={})\n", xfer_csw);
+        crate::log!("usb: bot: invalid csw (len={})\n", xfer_csw);
         return Err(());
     };
 
     if csw_tag != tag {
-        crate::log_trace!("usb: bot: csw tag mismatch {} != {}\n", csw_tag, tag);
+        crate::log!("usb: bot: csw tag mismatch {} != {}\n", csw_tag, tag);
         return Err(());
     }
 
@@ -507,7 +507,7 @@ pub(crate) fn command_in_sync(
         500,
     )?;
     if cc_cbw != 1 {
-        crate::log_trace!("usb: bot: cbw cc={}\n", cc_cbw);
+        crate::log!("usb: bot: cbw cc={}\n", cc_cbw);
         return Err(());
     }
 
@@ -524,7 +524,7 @@ pub(crate) fn command_in_sync(
         )?;
 
         if cc_data != 1 && cc_data != 13 {
-            crate::log_trace!("usb: bot: data-in cc={}\n", cc_data);
+            crate::log!("usb: bot: data-in cc={}\n", cc_data);
             return Err(());
         }
 
@@ -546,7 +546,7 @@ pub(crate) fn command_in_sync(
         2000,
     )?;
     if cc_csw != 1 && cc_csw != 13 {
-        crate::log_trace!("usb: bot: csw cc={}\n", cc_csw);
+        crate::log!("usb: bot: csw cc={}\n", cc_csw);
         return Err(());
     }
 
@@ -556,12 +556,12 @@ pub(crate) fn command_in_sync(
     };
 
     let Some((csw_tag, csw)) = parse_csw(csw_buf) else {
-        crate::log_trace!("usb: bot: invalid csw (len={})\n", xfer_csw);
+        crate::log!("usb: bot: invalid csw (len={})\n", xfer_csw);
         return Err(());
     };
 
     if csw_tag != tag {
-        crate::log_trace!("usb: bot: csw tag mismatch {} != {}\n", csw_tag, tag);
+        crate::log!("usb: bot: csw tag mismatch {} != {}\n", csw_tag, tag);
         return Err(());
     }
 

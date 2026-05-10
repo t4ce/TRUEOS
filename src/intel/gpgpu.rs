@@ -255,7 +255,7 @@ fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
                 }
                 None => {
                     *WARM_STATE.lock() = Some(warm);
-                    crate::log_trace!(
+                    crate::log!(
                         "intel/gpgpu: warm alloc failed part={} size=0x{:X}\n",
                         $part,
                         $size,
@@ -288,7 +288,7 @@ fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
             warm.gpgpu_arena_len = GPGPU_TILE_ARENA_BYTES;
         }
         None => {
-            crate::log_trace!(
+            crate::log!(
                 "intel/gpgpu: arena alloc failed arena_bytes=0x{:X} tile_rows={} max_tiles=0 enough_for_shape=0\n",
                 GPGPU_TILE_ARENA_BYTES,
                 GPGPU_TILE_ROWS,
@@ -446,7 +446,7 @@ fn forcewake_render_acquire(warm: RenderWarmState) -> bool {
         crate::intel::mask_en(FF_DOP_CLOCK_GATE_DISABLE),
     );
     let cs_debug_mode1 = crate::intel::mmio_read(dev, RCS_CS_DEBUG_MODE1);
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: forcewake render_cleared={} render_ack=0x{:08X} gt_ack=0x{:08X} cs_debug_mode1=0x{:08X} ff_dop_cg_disable={} ok={}\n",
         render_cleared as u8,
         crate::intel::mmio_read(dev, FORCEWAKE_ACK_RENDER),
@@ -503,7 +503,7 @@ fn submit_warm_render_batch(
     }
 
     let ppgtt_ok = !GPGPU_USE_MINIMAL_PPGTT || init_minimal_ppgtt(warm);
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: ppgtt-map enabled={} ok={} pml4_phys=0x{:X} bytes=0x{:X} batch_start_space={}\n",
         GPGPU_USE_MINIMAL_PPGTT as u8,
         ppgtt_ok as u8,
@@ -551,7 +551,7 @@ fn submit_warm_render_batch(
     execlist_submit_port_push(dev, context_desc_lo, context_desc_hi, 0, 0);
     crate::intel::mmio_write(dev, RCS_RING_EXECLIST_CONTROL, EL_CTRL_LOAD);
 
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: {} execlist-start desc=0x{:08X}:0x{:08X} hws=0x{:08X} sq0=0x{:08X}:0x{:08X} sq1=0x{:08X}:0x{:08X} ctx_ctl=0x{:08X} mi_mode=0x{:08X} tail_req=0x{:08X} tail_rb=0x{:08X} gen12_sq_load=1\n",
         submit_name,
         context_desc_hi,
@@ -584,7 +584,7 @@ fn submit_warm_render_batch(
             || (gpgpu_submit
                 && (iter == 16384 || iter == 65535 || iter == 262143 || iter == poll_limit - 1))
         {
-            crate::log_trace!(
+            crate::log!(
                 "intel/gpgpu: {} poll iter={} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} execlist_lo=0x{:08X} execlist_hi=0x{:08X} observed_slot={} observed=0x{:08X} expected=0x{:08X}\n",
                 submit_name,
                 iter,
@@ -607,7 +607,7 @@ fn submit_warm_render_batch(
 
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
     let observed = read_result_dword(warm, expected_result_slot_dword);
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: {} batch-submit-proof completed={} expected_slot={} expected=0x{:08X} observed=0x{:08X} acthd=0x{:08X} ipehr=0x{:08X} does_not_prove=eu_thread_retire_or_matmul\n",
         submit_name,
         completed as u8,
@@ -665,7 +665,7 @@ fn log_gpgpu_stall_detail(dev: crate::intel::Dev, submit_name: &'static str) {
     let eu_row_waiting = row_eu00_ss0_done == 0 || row_eu00_ss1_done == 0;
     let cs_fault_seen = ipeir != 0 || eir != 0 || fault_valid != 0;
 
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: {} gpgpu-stall-detail acthd_batch_off=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} instdone=0x{:08X} instpm=0x{:08X} fault_gen8=0x{:08X} fault_gen12=0x{:08X} fault_valid={} fault_type={} fault_srcid={} fault_engine={} fault8_data0=0x{:08X} fault8_data1=0x{:08X} fault12_data0=0x{:08X} fault12_data1=0x{:08X} error=0x{:08X} gfx_mode=0x{:08X} rcu_mode=0x{:08X} cs_debug1=0x{:08X} cs_debug2=0x{:08X} sc_instdone=0x{:08X} sc_extra=0x{:08X} sc_extra2=0x{:08X} sampler_instdone=0x{:08X} row_instdone=0x{:08X}\n",
         submit_name,
         acthd_batch_off,
@@ -695,7 +695,7 @@ fn log_gpgpu_stall_detail(dev: crate::intel::Dev, submit_name: &'static str) {
         sampler_instdone,
         row_instdone,
     );
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: {} gpgpu-engine-snapshot acthd64=0x{:016X} bbaddr64=0x{:016X} dma_fadd64=0x{:016X} bbstate=0x{:08X} esr=0x{:08X} instps=0x{:08X} psmi_ctl=0x{:08X} nopid=0x{:08X}\n",
         submit_name,
         acthd64,
@@ -707,7 +707,7 @@ fn log_gpgpu_stall_detail(dev: crate::intel::Dev, submit_name: &'static str) {
         crate::intel::mmio_read(dev, RCS_RING_PSMI_CTL),
         crate::intel::mmio_read(dev, RCS_RING_NOPID),
     );
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: {} gpgpu-tdl-status thr_status0=0x{:08X} thr_status1=0x{:08X} disp_count=0x{:08X} pf_count=0x{:08X} pf_status0=0x{:08X} pf_status1=0x{:08X}\n",
         submit_name,
         tdl_thr_status0,
@@ -717,7 +717,7 @@ fn log_gpgpu_stall_detail(dev: crate::intel::Dev, submit_name: &'static str) {
         tdl_thr_pf_status0,
         tdl_thr_pf_status1,
     );
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: {} gpgpu-middle-state walker_header_seen={} cs_parked_at_walker={} eu_row_waiting={} cs_fault_seen={} row_eu00_ss0_done={} row_eu00_ss1_done={} plain=\"command streamer is parked in the compute launch sequence; walker_header_seen plus TS/TDL deltas decide whether it reached walker and launched EU threads\"\n",
         submit_name,
         walker_header_seen as u8,
@@ -735,7 +735,7 @@ fn log_rcs_cs_gprs(dev: crate::intel::Dev, submit_name: &'static str) {
     for (idx, value) in gpr.iter_mut().enumerate() {
         *value = read_rcs_cs_gpr(dev, idx);
     }
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: {} rcs-cs-gpr base=0x{:05X} count={} gpr0=0x{:016X} gpr1=0x{:016X} gpr2=0x{:016X} gpr3=0x{:016X}\n",
         submit_name,
         RCS_CS_GPR_BASE,
@@ -745,7 +745,7 @@ fn log_rcs_cs_gprs(dev: crate::intel::Dev, submit_name: &'static str) {
         gpr[2],
         gpr[3],
     );
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: {} rcs-cs-gpr gpr4=0x{:016X} gpr5=0x{:016X} gpr6=0x{:016X} gpr7=0x{:016X}\n",
         submit_name,
         gpr[4],
@@ -753,7 +753,7 @@ fn log_rcs_cs_gprs(dev: crate::intel::Dev, submit_name: &'static str) {
         gpr[6],
         gpr[7],
     );
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: {} rcs-cs-gpr gpr8=0x{:016X} gpr9=0x{:016X} gpr10=0x{:016X} gpr11=0x{:016X}\n",
         submit_name,
         gpr[8],
@@ -761,7 +761,7 @@ fn log_rcs_cs_gprs(dev: crate::intel::Dev, submit_name: &'static str) {
         gpr[10],
         gpr[11],
     );
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: {} rcs-cs-gpr gpr12=0x{:016X} gpr13=0x{:016X} gpr14=0x{:016X} gpr15=0x{:016X}\n",
         submit_name,
         gpr[12],
@@ -808,7 +808,7 @@ fn recover_render_engine_after_nonretired_submit(
     warm: RenderWarmState,
     submit_name: &'static str,
 ) {
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: {} recovery begin execlist_lo=0x{:08X} mi_mode=0x{:08X} acthd=0x{:08X}\n",
         submit_name,
         crate::intel::mmio_read(dev, RCS_RING_EXECLIST_STATUS_LO),
@@ -853,7 +853,7 @@ fn recover_render_engine_after_nonretired_submit(
     );
     let forcewake_ok = forcewake_render_acquire(warm);
 
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: {} recovery end gdrst=0x{:08X} execlist_lo=0x{:08X} mi_mode=0x{:08X} mode=0x{:08X} forcewake_ok={}\n",
         submit_name,
         crate::intel::mmio_read(dev, GDRST),
@@ -1426,7 +1426,7 @@ pub(crate) fn submit_gpgpu_preflight_once() {
     }
 
     let Some(dev) = crate::intel::claimed_device() else {
-        crate::log_trace!("intel/gpgpu: preflight skipped reason=no-device\n");
+        crate::log!("intel/gpgpu: preflight skipped reason=no-device\n");
         return;
     };
 
@@ -1438,7 +1438,7 @@ pub(crate) fn submit_gpgpu_preflight_once() {
         || warm.streamout_len < GPGPU_PREFLIGHT_LANES * core::mem::size_of::<u32>()
         || warm.result_len < (RESULT_SLOT_GPGPU_EU_C_STORE_DWORD + 1) * core::mem::size_of::<u32>()
     {
-        crate::log_trace!("intel/gpgpu: preflight skipped reason=warm-buffers\n");
+        crate::log!("intel/gpgpu: preflight skipped reason=warm-buffers\n");
         return;
     }
 
@@ -1447,7 +1447,7 @@ pub(crate) fn submit_gpgpu_preflight_once() {
         log_gpgpu_tile_arena_status(warm, arena_mapped);
         let eu_artifact = prepare_gpgpu_program_artifact(warm, false);
         log_gpgpu_program_artifact_status(eu_artifact);
-        crate::log_trace!(
+        crate::log!(
             "intel/gpgpu: preflight skipped reason=render-bringup-disabled artifact_only=1 gpu_program_uploaded={} start_command_encoded={}\n",
             eu_artifact.program_uploaded as u8,
             eu_artifact.walker_encoded as u8,
@@ -1455,18 +1455,18 @@ pub(crate) fn submit_gpgpu_preflight_once() {
         return;
     }
     if PRIMARY_DISABLE_RENDER_BRINGUP {
-        crate::log_trace!(
+        crate::log!(
             "intel/gpgpu: primary-render-disabled-but-gpgpu-submit-enabled artifact_only=0\n"
         );
     }
 
     if !forcewake_render_acquire(warm) {
-        crate::log_trace!("intel/gpgpu: preflight skipped reason=forcewake\n");
+        crate::log!("intel/gpgpu: preflight skipped reason=forcewake\n");
         return;
     }
 
     if !ensure_gpgpu_warm_buffers_mapped(dev, warm) {
-        crate::log_trace!("intel/gpgpu: preflight skipped reason=warm-buffer-ggtt-map\n");
+        crate::log!("intel/gpgpu: preflight skipped reason=warm-buffer-ggtt-map\n");
         return;
     }
     let arena_mapped = ensure_gpgpu_tile_arena_mapped(dev, warm);
@@ -1490,7 +1490,7 @@ pub(crate) fn submit_gpgpu_preflight_once() {
                 recover_render_engine_after_nonretired_submit(dev, warm, "gpgpu-compute-walker");
             }
             if !scale_passed {
-                crate::log_trace!(
+                crate::log!(
                     "intel/gpgpu: walker-scale-ladder stop_at_scale={} reason=first-nonclean-proof requested_groups={} expected_lane_dispatch={} observed_lane_dispatch={}\n",
                     walker.scale_index,
                     walker.requested_group_x_dim,
@@ -1505,8 +1505,10 @@ pub(crate) fn submit_gpgpu_preflight_once() {
 
 fn record_gpgpu_proven_walker(proof: GpgpuComputeWalkerProof) {
     GPGPU_EU_PROVEN_WALKER_RETIRED.store(true, Ordering::Release);
-    GPGPU_EU_PROVEN_DISPATCH_DELTA
-        .store(proof.dispatch_delta.min(u32::MAX as u64) as u32, Ordering::Release);
+    GPGPU_EU_PROVEN_DISPATCH_DELTA.store(
+        proof.dispatch_delta.min(u32::MAX as u64) as u32,
+        Ordering::Release,
+    );
     GPGPU_EU_PROVEN_C_STORE_VALUE.store(proof.c_value, Ordering::Release);
 }
 
@@ -1555,7 +1557,7 @@ fn ensure_gpgpu_warm_buffers_mapped(dev: crate::intel::Dev, warm: RenderWarmStat
         super::ggtt_invalidate(dev);
         GPGPU_WARM_BUFFERS_MAPPED.store(true, Ordering::Release);
     }
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: warm-buffers mapped={} ring=0x{:X} context=0x{:X} batch=0x{:X} result=0x{:X}\n",
         mapped as u8,
         GPU_VA_RING_BASE,
@@ -1593,7 +1595,7 @@ fn log_gpgpu_tile_arena_status(warm: RenderWarmState, mapped: bool) {
     }
 
     let arena_bytes = warm.gpgpu_arena_len;
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: arena mapped={} arena_gpu_base=0x{:X} arena_bytes=0x{:X} tile_rows={} max_tiles={} enough_for_shape={} tile_k={} weight_tile_bytes=0x{:X} x_bytes=0x{:X} output_tile_bytes=0x{:X} target_tiles={} does_not_prove=eu_thread_execution_or_matvec\n",
         mapped as u8,
         gpgpu_arena_gpu_base(arena_bytes),
@@ -1646,7 +1648,7 @@ fn submit_gpgpu_preflight(dev: crate::intel::Dev, warm: RenderWarmState) -> bool
     let batch_tail_bytes = match encode_gpgpu_preflight_batch(batch, dot, sum_a, sum_b) {
         Ok(bytes) => bytes,
         Err(reason) => {
-            crate::log_trace!("intel/gpgpu: preflight accepted=0 reason={}\n", reason);
+            crate::log!("intel/gpgpu: preflight accepted=0 reason={}\n", reason);
             return false;
         }
     };
@@ -1681,7 +1683,7 @@ fn submit_gpgpu_preflight(dev: crate::intel::Dev, warm: RenderWarmState) -> bool
     GPGPU_PREFLIGHT_SUM_B.store(gpu_sum_b, Ordering::Release);
     GPGPU_PREFLIGHT_LANES_OBSERVED.store(gpu_lanes, Ordering::Release);
 
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: preflight-readback accepted={} completed={} result_gpu=0x{:X} marker_slot={} marker_expected=0x{:08X} marker_observed=0x{:08X} dot_slot={} dot_expected={} dot_observed={} sum_a_slot={} sum_a_expected={} sum_a_observed={} sum_b_slot={} sum_b_expected={} sum_b_observed={} lanes_slot={} lanes_expected={} lanes_observed={} batch_bytes=0x{:X} does_not_prove=eu_thread_execution_or_matmul_or_guc_scheduling\n",
         accepted as u8,
         completed as u8,
@@ -1704,7 +1706,7 @@ fn submit_gpgpu_preflight(dev: crate::intel::Dev, warm: RenderWarmState) -> bool
         batch_tail_bytes,
     );
 
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: preflight accepted={} completed={} backend=rcs-mi-store-constants guc_ready={} guc_status=0x{:08X} lanes={} marker=0x{:08X} dot={} sum_a={} sum_b={} batch_bytes=0x{:X} input_a_gpu=0x{:X} input_b_gpu=0x{:X} result_gpu=0x{:X} next=eu-kernel-dispatch does_not_prove=eu_thread_execution_or_matmul_or_guc_scheduling\n",
         accepted as u8,
         completed as u8,
@@ -1778,7 +1780,7 @@ fn prepare_gpgpu_program_artifact(
             ));
     let program_uploaded = primary_uploaded && sip_uploaded;
     GPGPU_EU_KERNEL_UPLOADED.store(program_uploaded, Ordering::Release);
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: gpu-sip-artifact enabled={} uploaded={} handler_source={} handler_gpu=0x{:X} handler_bytes=0x{:X} handler_sig=0x{:016X} primary_uploaded={} note=illegal-opcode-exception-target\n",
         GPGPU_ENABLE_SIP_EXCEPTIONS as u8,
         sip_uploaded as u8,
@@ -1891,7 +1893,7 @@ fn encode_gpgpu_walker_candidate(
 }
 
 fn log_gpgpu_program_artifact_status(proof: GpgpuProgramArtifactProof) {
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: gpu-shared-ram-ladder input_buffer_a_in_ggtt=1 input_buffer_b_in_ggtt=1 input_a_gpu=0x{:X} input_b_gpu=0x{:X} gpu_program_uploaded={} gpu_start_command_encoded={} gpu_program_started=0 shared_ram_c_gpu=0x{:X} shared_ram_c_changed_by_current_backend={} shared_ram_c_changed_by_program=0 cpu_reads_c_back=1 current_backend=rcs-command-store-constants start_submitted=0 blocker=start-gpu-program next=start-program-and-compare-shared-ram does_not_prove=program_body_or_matmul\n",
         GPU_VA_VERTEX_BASE,
         GPU_VA_STREAMOUT_BASE,
@@ -1901,7 +1903,7 @@ fn log_gpgpu_program_artifact_status(proof: GpgpuProgramArtifactProof) {
         proof.result_changed_by_current_backend as u8,
     );
 
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: gpu-program-artifact gpu_program_uploaded={} gpu_start_command_encoded={} program_source={} expects_store={} program_gpu=0x{:X} program_bytes=0x{:X} program_sig=0x{:016X} start_command_gpu=0x{:X} start_command_bytes=0x{:X} shared_ram_slot={} shared_ram_expected=0x{:08X} submitted=0 started=0 wrote_shared_ram=0 next=start-program-and-compare-shared-ram does_not_prove=program_body_or_matmul\n",
         proof.program_uploaded as u8,
         proof.walker_encoded as u8,
@@ -1950,7 +1952,7 @@ fn log_gpgpu_program_contract(proof: GpgpuProgramArtifactProof) {
         .and_then(|dword| program.get(dword))
         .copied()
         .unwrap_or(0);
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: gpu-program-contract source={} uploaded={} expects_store={} program_gpu=0x{:X} words={} w0=0x{:08X} w1=0x{:08X} w2=0x{:08X} w3=0x{:08X} w4=0x{:08X} w5=0x{:08X} w6=0x{:08X} w7=0x{:08X} active_send_w8=0x{:08X} active_send_w9=0x{:08X} active_send_desc_w10=0x{:08X} active_send_exdesc_w11=0x{:08X} visible_seed=0x{:08X} shared_ram_expected=0x{:08X} store_send_word_off={} store_send_w0=0x{:08X} store_send_w1=0x{:08X} store_send_desc=0x{:08X} store_send_exdesc=0x{:08X} shared_ram_c_gpu=0x{:X} shared_ram_slot={} binding_table_present={} surface_state_present={} curbe_present={} curbe_bytes=0x{:X} expected_failure_if_send_needs_surface={} microscope=program-store-contract does_not_prove=shared_ram_store_or_matmul\n",
         proof.program_name,
         proof.program_uploaded as u8,
@@ -2004,7 +2006,7 @@ fn log_gpgpu_eot_send_contract(
     program: &'static [u32],
 ) {
     if program_kind == trueos_eu::EuArtifactKind::IllegalInstructionTrap {
-        crate::log_trace!(
+        crate::log!(
             "intel/gpgpu: eu-exception-contract source={} uploaded={} words={} w0=0x{:08X} w1=0x{:08X} w2=0x{:08X} w3=0x{:08X} sip_exceptions={} sip_handler_source={} expected_good=visible-illegal-opcode-or-sip-transition note=not-an-eot-payload\n",
             program_name,
             uploaded as u8,
@@ -2042,7 +2044,7 @@ fn log_gpgpu_eot_send_contract(
     let exdesc_immediate = exdesc_is_reg == 0;
     let src_in_eot_safe_window = (112..=127).contains(&src0_reg_num);
     let target_supports_eot = sfid_gateway || sfid_ts;
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: eot-send-contract source={} uploaded={} send_word_off={} send_w0=0x{:08X} send_w1=0x{:08X} send_w2=0x{:08X} send_w3=0x{:08X} eot_bit={} desc_is_reg={} exdesc_is_reg={} desc_immediate={} exdesc_immediate={} dst_reg_file={} dst_reg_num={} response_len={} dst_null_like={} src0_g={} src0_mlen={} src_in_eot_safe_window={} sfid={} sfid_gateway={} sfid_ts={} target_supports_eot={} prm_rules_ok={} probe=selected-pure-eot-artifact expected_good=post_walker_marker-or-eot_retired failure_disproves=selected-eot-payload-shape note=decoded-from-gfx12-send-format\n",
         program_name,
         uploaded as u8,
@@ -2090,7 +2092,7 @@ fn prepare_gpgpu_store_surface_state(warm: RenderWarmState) -> GpgpuStoreSurface
         && binding_end <= warm.draw_state_len
         && surface_end <= warm.draw_state_len;
     if !ready {
-        crate::log_trace!(
+        crate::log!(
             "intel/gpgpu: gpu-program-surface-state ready=0 reason=draw-state-bounds bt_off=0x{:X} bt_bytes=0x{:X} surf_off=0x{:X} surf_bytes=0x{:X} draw_state_len=0x{:X}\n",
             GPGPU_STORE_BINDING_TABLE_OFFSET_BYTES,
             binding_table_bytes,
@@ -2147,7 +2149,7 @@ fn prepare_gpgpu_store_surface_state(warm: RenderWarmState) -> GpgpuStoreSurface
         },
         surface_bytes,
     );
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: gpu-program-surface-state ready=1 bti=0x{:02X} bt_off=0x{:X} bt_entries={} bt_entry=0x{:08X} surf_off=0x{:X} surf_gpu=0x{:X} target_gpu=0x{:X} surf0=0x{:08X} surf1=0x{:08X} surf2=0x{:08X} surf3=0x{:08X} note=bind-send-bti-to-result-raw-buffer\n",
         GPGPU_STORE_BINDING_TABLE_INDEX,
         GPGPU_STORE_BINDING_TABLE_OFFSET_BYTES,
@@ -2303,7 +2305,7 @@ fn submit_gpgpu_compute_walker_probe(
     let batch_bytes = match batch_result {
         Ok(bytes) => bytes,
         Err(reason) => {
-            crate::log_trace!("intel/gpgpu: compute-walker accepted=0 reason={}\n", reason);
+            crate::log!("intel/gpgpu: compute-walker accepted=0 reason={}\n", reason);
             return GpgpuComputeWalkerProof {
                 program_name: program.name,
                 expects_store: program.expects_store,
@@ -2378,7 +2380,7 @@ fn submit_gpgpu_compute_walker_probe(
         || debug_before.ring_instps != debug_after.ring_instps
         || debug_before.ring_ipehr != debug_after.ring_ipehr
         || debug_before.ring_eir != debug_after.ring_eir;
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: eu-fetch-visible-counters program_source={} ts_before={} ts_after={} ts_delta={} tdl_disp_before=0x{:08X} tdl_disp_after=0x{:08X} tdl_disp_delta=0x{:08X} tdl_pf_before=0x{:08X} tdl_pf_after=0x{:08X} tdl_pf_delta=0x{:08X} tdl_status0_before=0x{:08X} tdl_status0_after=0x{:08X} tdl_status1_before=0x{:08X} tdl_status1_after=0x{:08X} pf_status0_before=0x{:08X} pf_status0_after=0x{:08X} pf_status1_before=0x{:08X} pf_status1_after=0x{:08X} row_before=0x{:08X} row_after=0x{:08X} row_changed={} sampler_before=0x{:08X} sampler_after=0x{:08X} sampler_changed={} sc_before=0x{:08X} sc_after=0x{:08X} sc_changed={} ring_instdone_before=0x{:08X} ring_instdone_after=0x{:08X} instps_before=0x{:08X} instps_after=0x{:08X} ipehr_before=0x{:08X} ipehr_after=0x{:08X} eir_before=0x{:08X} eir_after=0x{:08X} ring_changed={} meaning=\"TS is allocation/dispatch accounting; TDL/ROW/SAMPLER/SC deltas are the stronger public clues for thread load, fault, and EU-side progress\"\n",
         program.name,
         debug_before.ts_dispatched,
@@ -2432,7 +2434,7 @@ fn submit_gpgpu_compute_walker_probe(
             && post_pre_midl_msf == 0xC0DE_7805
             && post_curbe_load == 0xC0DE_7806
     };
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: result-store-scan expected=0x{:08X} hits_mask_lo64=0x{:016X} target_slot={} target_gpu=0x{:X} target_value=0x{:08X} breadcrumbs_ok={} contiguous_vfe_idd_walker={} post_pipeline=0x{:08X} post_sba=0x{:08X} post_scm=0x{:08X} post_cfe=0x{:08X} post_pre_midl_msf=0x{:08X} post_curbe_load=0x{:08X} note=scans-result-slots-0-63-for-misplaced-eu-store\n",
         program.expected_store_value,
         expected_hits_mask,
@@ -2696,7 +2698,7 @@ fn encode_gfx125_compute_walker_probe_batch(
     push(batch_dwords, &mut cursor, MI_NOOP)?;
 
     let command_bytes = cursor * core::mem::size_of::<u32>();
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: compute-walker-layout program_source={} expects_store={} cfe_off=0x{:X} cfe_cmd=0x{:08X} cfe_dw3=0x{:08X} walker_off=0x{:X} walker_cmd=0x{:08X} body0=0x{:08X} exec_mask=0x{:08X} tg_dims={}x{}x{} idd0=0x{:08X} idd4=0x{:08X} idd5=0x{:08X} post_sync0=0x{:08X} surface_base=0x{:X} tail_off=0x{:X} cs_marker=0x{:08X} note=gen125-cfe-compute-walker-embedded-idd-no-post-cfe-mi-store\n",
         program.name,
         program.expects_store as u8,
@@ -2719,7 +2721,7 @@ fn encode_gfx125_compute_walker_probe_batch(
         RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
     );
     let (store_send_desc, store_send_exdesc) = gpgpu_store_send_desc_words(program);
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: compute-walker-store-contract program_source={} expects_store={} compact_send_desc_word=0x{:08X} compact_send_exdesc_word=0x{:08X} expected_bti=0x{:02X} binding_ready={} bt_off=0x{:X} bt_entry=0x{:08X} surf_off=0x{:X} surf_gpu=0x{:X} target_gpu=0x{:X} surf0=0x{:08X} note=compact-send-raw-words-not-direct-bti-decode\n",
         program.name,
         program.expects_store as u8,
@@ -2734,7 +2736,7 @@ fn encode_gfx125_compute_walker_probe_batch(
         store_surface.target_gpu,
         store_surface.surface_dword0,
     );
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: compute-walker-dwords w0=0x{:08X} w1=0x{:08X} w2=0x{:08X} w3=0x{:08X} w4=0x{:08X} w5=0x{:08X} w6=0x{:08X} w7=0x{:08X} w8=0x{:08X} w9=0x{:08X} w10=0x{:08X} w11=0x{:08X} w12=0x{:08X} w13=0x{:08X} w14=0x{:08X} w15=0x{:08X} w16=0x{:08X} w17=0x{:08X} w18=0x{:08X} idd0=0x{:08X} idd1=0x{:08X} idd2=0x{:08X} idd3=0x{:08X} idd4=0x{:08X} idd5=0x{:08X} idd6=0x{:08X} idd7=0x{:08X}\n",
         batch_dwords[walker_start],
         batch_dwords[walker_start + 1],
@@ -3035,7 +3037,7 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
         unsafe { warm.draw_state_virt.add(IDD_STATE_OFFSET_BYTES) },
         IDD_LOAD_DWORDS * core::mem::size_of::<u32>(),
     );
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: idd-debug-policy program_source={} idd_dw2=0x{:08X} software_exception_enable={} illegal_opcode_exception_enable={} mask_stack_exception_enable={} sip_programmed={} sip_offset=0x00000000 ksp_negative_control={} note=prm-idd-dw2-loads-eu-cr0-exception-enable-bits\n",
         program.name,
         idd_words[2],
@@ -3045,7 +3047,7 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
         GPGPU_ENABLE_SIP_EXCEPTIONS as u8,
         GPGPU_KSP_NEGATIVE_CONTROL as u8,
     );
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: eu-ksp-placement-proof program_source={} instruction_base=0x{:X} ksp=0x{:X} ksp_resolves_to=0x{:X} uploaded_gpu=0x{:X} ksp_unit=byte-offset-low6-mbz ksp_64b_aligned={} instruction_base_4k_aligned={} artifact_bytes=0x{:X} crosses_64b_boundary={} placement_shape=mesa-base0-ksp-absolute-offset expected_delta=\"if fetch base was the bug, illegal/eot signature changes without EU byte changes\"\n",
         program.name,
         GPGPU_INSTRUCTION_BASE,
@@ -3080,7 +3082,7 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
         push(batch_dwords, &mut cursor, STATE_SIP_CMD)?;
         push(batch_dwords, &mut cursor, sip_offset as u32)?;
         push(batch_dwords, &mut cursor, (sip_offset >> 32) as u32)?;
-        crate::log_trace!(
+        crate::log!(
             "intel/gpgpu: state-sip-policy program_source={} cmd=0x{:08X} instruction_base=0x{:X} sip_offset=0x{:X} sip_resolves_to=0x{:X} exception_target={} note=illegal-opcode-diagnostic\n",
             program.name,
             STATE_SIP_CMD,
@@ -3090,7 +3092,7 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
             trueos_eu::gfx12::eot_artifact(GPGPU_SIP_HANDLER_VARIANT).name,
         );
     } else {
-        crate::log_trace!(
+        crate::log!(
             "intel/gpgpu: state-sip-policy program_source={} cmd=0x{:08X} instruction_base=0x{:X} sip_offset=0x00000000 sip_resolves_to=0x00000000 exception_target=disabled note=minimal-eot-probe\n",
             program.name,
             STATE_SIP_CMD,
@@ -3233,7 +3235,7 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     let right_lanes_consumed = (batch_dwords[walker_start + 13] & simd_mask).count_ones();
     let bottom_lanes_consumed = (batch_dwords[walker_start + 14] & simd_mask).count_ones();
 
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: compute-walker-layout program_source={} expects_store={} launch_profile=split-vfe-msf-curbe-pc-midl vfe_off=0x{:X} vfe_dw3=0x{:08X} vfe_dw5=0x{:08X} fused_eu_dispatch_legacy={} urb_entry_alloc_32b={} curbe_present={} curbe_bytes=0x{:X} curbe_read_len_8dw={} id_load_off=0x{:X} id_load_bytes=0x{:X} idd_payload_bytes=0x{:X} midl_negative_control={} state_bases_relative={} temporary_3d_for_sba={} midl_start=0x{:X} walker_off=0x{:X} walker_cmd=0x{:08X} exec_mask=0x{:08X} idd_gpu=0x{:X} idd_dynamic_offset=0x{:X} idd_ksp=0x{:08X} instruction_base=0x{:X} ksp_resolves_to=0x{:X} idd_dw2=0x{:08X} idd_dw4=0x{:08X} idd_dw6=0x{:08X} surface_base=0x{:X} dynamic_state_base=0x{:X} contiguous_vfe_idd_walker={} mesa_post_vfe_pipe_control={} tail_off=0x{:X} cs_marker=0x{:08X} note=legacy-vfe-dispatch-with-prm-len13-walker\n",
         program.name,
         program.expects_store as u8,
@@ -3270,7 +3272,7 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
         command_bytes,
         RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
     );
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: compute-walker-resource-contract program_source={} walker_dw4=0x{:08X} simd_size={} simd_mask_bits={} thread_width={} thread_height={} thread_depth={} walker_group_threads={} idd_threads_in_group={} group_count_matches_idd={} idd_barrier_enable={} idd_slm_size={} x_dim={} y_dim={} z_dim={} group_count={} right_mask=0x{:08X} bottom_mask=0x{:08X} right_lanes_consumed={} bottom_lanes_consumed={} raw_right_mask_bits={} raw_bottom_mask_bits={} expected_hw_threads={} expected_lane_dispatch={} probe=prm-len13-scaled-groups-legacy-vfe expected_good=post-walker-marker-or-eot-retired failure_disproves=legacy-walker-dword-layout note=scaled-groups-simd8-mask\n",
         program.name,
         walker_dw4,
@@ -3297,7 +3299,7 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
         expected_hw_threads,
         expected_hw_threads * right_lanes_consumed,
     );
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: mesa-shaped-shell program_source={} pure_eot={} eu_bytes=0x{:X} idd_dw2=0x{:08X} idd_dw3=0x{:08X} idd_dw4=0x{:08X} idd_dw5=0x{:08X} idd_dw6=0x{:08X} idd_dw7=0x{:08X} vfe_dw1=0x{:08X} vfe_dw3=0x{:08X} vfe_dw5=0x{:08X} curbe_present={} curbe_bytes=0x{:X} sampler_state_pointer=0x{:X} sampler_count=0 binding_table_pointer=0x{:X} binding_table_count={} scratch_disabled=1 slm_size={} barrier_enable={} walker_simd_size={} walker_threads={} right_mask=0x{:08X} bottom_mask=0x{:08X} contiguous_vfe_idd_walker={} expected_good=\"post_walker_marker-or-eot_retired\" failure_disproves=\"post-vfe-command-gap-before-midl\"\n",
         program.name,
         (!program.expects_store) as u8,
@@ -3325,7 +3327,7 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
         GPGPU_CONTIGUOUS_VFE_IDD_WALKER as u8,
     );
     let (store_send_desc, store_send_exdesc) = gpgpu_store_send_desc_words(program);
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: compute-walker-store-contract program_source={} expects_store={} compact_send_desc_word=0x{:08X} compact_send_exdesc_word=0x{:08X} expected_bti=0x{:02X} binding_ready={} bt_off=0x{:X} bt_entry=0x{:08X} surf_off=0x{:X} surf_gpu=0x{:X} target_gpu=0x{:X} surf0=0x{:08X} note=compact-send-raw-words-not-direct-bti-decode\n",
         program.name,
         program.expects_store as u8,
@@ -3340,7 +3342,7 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
         store_surface.target_gpu,
         store_surface.surface_dword0,
     );
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: compute-walker-dwords w0=0x{:08X} w1=0x{:08X} w2=0x{:08X} w3=0x{:08X} w4=0x{:08X} w5=0x{:08X} w6=0x{:08X} w7=0x{:08X} w8=0x{:08X} w9=0x{:08X} w10=0x{:08X} w11=0x{:08X} w12=0x{:08X} w13=0x{:08X} w14=0x{:08X} idd0=0x{:08X} idd1=0x{:08X} idd2=0x{:08X} idd3=0x{:08X} idd4=0x{:08X} idd5=0x{:08X} idd6=0x{:08X} idd7=0x{:08X} midl0=0x{:08X} midl2=0x{:08X} midl3=0x{:08X}\n",
         batch_dwords[walker_start],
         batch_dwords[walker_start + 1],
@@ -3415,7 +3417,7 @@ fn log_gpgpu_compute_walker_status(proof: GpgpuComputeWalkerProof) {
         "fix-walker-thread-start"
     };
     let lane_count_matches = proof.dispatch_delta == proof.expected_lane_dispatch as u64;
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: walker-scale-proof scale_index={} program_source={} requested_groups={} requested_group_count={} threads_per_group={} expected_hw_threads={} simd_lanes_per_thread={} expected_lane_dispatch={} observed_lane_dispatch={} lane_count_matches={} retired={} post_walker_marker={} store_seen={} store_value=0x{:08X} expected_store=0x{:08X} failure_class={}\n",
         proof.scale_index,
         proof.program_name,
@@ -3434,7 +3436,7 @@ fn log_gpgpu_compute_walker_status(proof: GpgpuComputeWalkerProof) {
         proof.expected_store_value,
         failure_class,
     );
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: eu-frontier program_source={} command_breadcrumbs_ok={} post_walker_marker={} thread_dispatch_delta={} dispatch_units=simd8-lanes store_expected=0x{:08X} store_target_slot={} store_target_value=0x{:08X} store_hits_mask_lo64=0x{:016X} eot_retired={} frontier={} next={}\n",
         proof.program_name,
         breadcrumbs_ok as u8,
@@ -3455,7 +3457,7 @@ fn log_gpgpu_compute_walker_status(proof: GpgpuComputeWalkerProof) {
     } else {
         "gpu accepted the walker and command stream is parked there; TS/TDL counters did not show launched EU threads"
     };
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: started-thread-snapshot started={} command_stream_reached_walker={} lane_dispatch_count={} dispatch_units=simd8-lanes worker_done_signal_seen={} command_after_worker_ran={} store_seen={} plain=\"{}\"\n",
         gpu_program_started as u8,
         breadcrumbs_ok as u8,
@@ -3465,7 +3467,7 @@ fn log_gpgpu_compute_walker_status(proof: GpgpuComputeWalkerProof) {
         store_landed_anywhere as u8,
         started_plain,
     );
-    crate::log_trace!(
+    crate::log!(
         "intel/gpgpu: gpu-program-proof program_source={} expects_store={} start_submitted={} finished={} finish_marker=0x{:08X} finish_expected=0x{:08X} starts_before={} starts_after={} starts_delta={} starts_delta_units=simd8-lanes start_command_bytes=0x{:X} gpu_program_started={} shared_ram_slot={} shared_ram_value=0x{:08X} shared_ram_expected=0x{:08X} wrote_shared_ram={} store_landed_anywhere={} eot_retired={} command_breadcrumbs_ok={} post_walker_marker={} failure_class={} cpu_reads_c_back=1 backend=gfx12-gpgpu-start-command next={} does_not_prove=matmul\n",
         proof.program_name,
         proof.expects_store as u8,

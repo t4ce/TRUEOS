@@ -2687,7 +2687,7 @@ fn ensure_ui2_warmup_render_target(view_w: u32, view_h: u32) -> bool {
         .checked_mul(height as usize)
         .and_then(|pixels| pixels.checked_mul(4))
     else {
-        crate::log_trace!("ui2: invalid warmup render-target size={}x{}\n", width, height);
+        crate::log!("ui2: invalid warmup render-target size={}x{}\n", width, height);
         return false;
     };
 
@@ -2712,7 +2712,7 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
     let mut frame_ok = false;
 
     if !present_to_screen && !ensure_ui2_warmup_render_target(state.view_w, state.view_h) {
-        crate::log_trace!("ui2: warmup render-target ensure failed\n");
+        crate::log!("ui2: warmup render-target ensure failed\n");
         return false;
     }
 
@@ -2725,7 +2725,7 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
             }
         };
         if begin_rc != 0 {
-            crate::log_trace!(
+            crate::log!(
                 "ui2: begin_frame{} failed rc={}\n",
                 if present_to_screen { "" } else { "-no-present" },
                 begin_rc
@@ -2740,7 +2740,7 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
                 )
             };
             if set_rt_rc != 0 {
-                crate::log_trace!("ui2: warmup render-target bind failed rc={}\n", set_rt_rc);
+                crate::log!("ui2: warmup render-target bind failed rc={}\n", set_rt_rc);
                 let _ = unsafe { crate::r::io::cabi::trueos_cabi_gfx_end_frame() };
                 return;
             }
@@ -2790,14 +2790,14 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
     if present_to_screen && !state.first_compose_signaled {
         state.first_compose_signaled = true;
         crate::r::readiness::set(crate::r::readiness::UI2_READY);
-        crate::log_trace!("boot-probe: ui2 first compose begin ms={}\n", compose_started_ms);
+        crate::log!("boot-probe: ui2 first compose begin ms={}\n", compose_started_ms);
     }
 
     if crate::logflag::UI2_ENABLE_VERBOSE_COMPOSE_LOGS
         && (compose_seq <= 2 || compose_seq.is_multiple_of(UI2_COMPOSE_LOG_EVERY))
     {
         let present_ms = elapsed_ms_since(compose_started_at);
-        crate::log_trace!(
+        crate::log!(
             "ui2: compose-heartbeat seq={} reason={} visible={} browser={} drawable={} pending={} surface={} present_ms={} present={}\n",
             compose_seq,
             compose_reason,
@@ -2810,7 +2810,7 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
             if present_to_screen { 1 } else { 0 }
         );
         for timing in &surface_timings {
-            crate::log_trace!(
+            crate::log!(
                 "ui2: compose-surface-ms seq={} window={} chrome_ms={} texture_ms={} placeholder_ms={} path={}\n",
                 compose_seq,
                 timing.id,
@@ -2831,7 +2831,7 @@ pub async fn ui2_task() {
         return;
     }
 
-    crate::log_trace!("boot-probe: ui2 task start ms={}\n", boot_probe_ms());
+    crate::log!("boot-probe: ui2 task start ms={}\n", boot_probe_ms());
     let state_lock = init_state();
 
     loop {

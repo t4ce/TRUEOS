@@ -96,7 +96,7 @@ fn ensure_pci_enumerated_if_empty() {
         count = list.len();
     });
     if count == 0 {
-        crate::log_trace!("gfx: pci device list empty; enumerating before backend init\n");
+        crate::log!("gfx: pci device list empty; enumerating before backend init\n");
         crate::pci::enumerate_impl();
     }
 }

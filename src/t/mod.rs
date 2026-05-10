@@ -48,7 +48,7 @@ where
 {
     if !shared_tokio_runtime_ready() {
         if !SHARED_TOKIO_UNREADY_LOGGED.swap(true, Ordering::AcqRel) {
-            crate::log_trace!("t/tokio: shared runtime unavailable; job rejected\n");
+            crate::log!("t/tokio: shared runtime unavailable; job rejected\n");
         }
         return Err(RunError::NoSharedRuntime);
     }
@@ -89,7 +89,7 @@ where
 pub async fn shared_tokio_job_pump() {
     SHARED_TOKIO_READY.store(true, Ordering::Release);
     if !SHARED_TOKIO_PUMP_LOGGED.swap(true, Ordering::AcqRel) {
-        crate::log_trace!("t/tokio: shared job pump online\n");
+        crate::log!("t/tokio: shared job pump online\n");
     }
 
     loop {

@@ -25,7 +25,7 @@ pub(super) fn log_browser_surface_updates(state: &mut Ui2State) {
 
     for (window_id, have_w, have_h, want_w, want_h) in mismatches {
         let _ = note_window_viewport_sync_needed(state, window_id);
-        crate::log_trace!(
+        crate::log!(
             "ui2: browser-viewport-mismatch window={} have={}x{} want={}x{}\n",
             window_id,
             have_w,

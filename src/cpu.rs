@@ -231,7 +231,7 @@ fn enter_ap_runtime(spawner: Spawner) -> ! {
 
     match ap_heartbeat_task() {
         Ok(token) => spawner.spawn(token),
-        Err(e) => crate::log_trace!("ap: heartbeat task spawn failed: {:?}\n", e),
+        Err(e) => crate::log!("ap: heartbeat task spawn failed: {:?}\n", e),
     }
     crate::smp::mark_online();
     exceptions::load_this_cpu();
@@ -243,14 +243,14 @@ async fn atomic_bomb_after_restart_task(restart_count: u32) {
     Timer::after(EmbassyDuration::from_secs(2)).await;
 
     if let Some(profile) = CpuProfile::current() {
-        crate::log_trace!(
+        crate::log!(
             "PANIC PANIC PANIC: atomic_bomb post-restart work slot={} lapic={} restart_count={}\n",
             profile.slot(),
             profile.lapic_id(),
             restart_count
         );
     } else {
-        crate::log_trace!(
+        crate::log!(
             "PANIC PANIC PANIC: atomic_bomb post-restart work on unknown cpu restart_count={}\n",
             restart_count
         );
@@ -261,7 +261,7 @@ async fn atomic_bomb_after_restart_task(restart_count: u32) {
         panic!("PANIC PANIC PANIC: atomic_bomb second strike after restart");
     }
 
-    crate::log_trace!(
+    crate::log!(
         "PANIC PANIC PANIC: atomic_bomb stabilized after restart_count={}\n",
         restart_count
     );
@@ -280,7 +280,7 @@ pub fn restart_current_worker_ap_from_panic() -> ! {
     let slot = cpu.cpu_index();
     let lapic_id = cpu.lapic_id();
 
-    crate::log_trace!("PANIC PANIC PANIC: restarting worker ap slot={} lapic={}\n", slot, lapic_id);
+    crate::log!("PANIC PANIC PANIC: restarting worker ap slot={} lapic={}\n", slot, lapic_id);
 
     percpu::init_ap(lapic_id, slot);
     if slot > 1 {
@@ -292,7 +292,7 @@ pub fn restart_current_worker_ap_from_panic() -> ! {
     let restart_count = ATOMIC_BOMB_RESTARTS.fetch_add(1, Ordering::AcqRel) + 1;
     match atomic_bomb_after_restart_task(restart_count) {
         Ok(token) => spawner.spawn(token),
-        Err(e) => crate::log_trace!(
+        Err(e) => crate::log!(
             "PANIC PANIC PANIC: failed to spawn atomic_bomb post-restart task: {:?}\n",
             e
         ),

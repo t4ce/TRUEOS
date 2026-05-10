@@ -77,7 +77,7 @@ impl PlayerRuntime {
         let audio_ready = crate::aud::init().is_ok();
         let tracks = build_preset_tracks();
         if !audio_ready {
-            crate::log_trace!("ui2-player-demo: audio init failed; controls will retry on play\n");
+            crate::log!("ui2-player-demo: audio init failed; controls will retry on play\n");
         }
         Self {
             tracks,
@@ -102,7 +102,7 @@ impl PlayerRuntime {
         let track = &self.tracks[self.current_track % self.tracks.len()];
         if crate::hda::start_looped_playback(track.samples.as_slice()).is_ok() {
             self.playback = PlayerPlaybackState::Playing;
-            crate::log_trace!(
+            crate::log!(
                 "ui2-player-demo: playing track={} bytes={}\n",
                 track.name.as_str(),
                 track.samples.len() * core::mem::size_of::<i16>()

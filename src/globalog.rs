@@ -365,11 +365,11 @@ pub async fn persist_once_task() {
         };
 
         if let Err(e) = persist_snapshot(disk, snapshot.as_slice()).await {
-            crate::log_trace!("globalog: persist failed: {:?}\n", e);
+            crate::log!("globalog: persist failed: {:?}\n", e);
             return;
         }
 
-        crate::log_trace!("[globalog] the log has been written\n");
+        crate::log!("[globalog] the log has been written\n");
         return;
     }
 }
@@ -516,7 +516,7 @@ pub mod logtotcp {
         let _ = cmds.push(NetCommand::OpenTcpListen {
             port: ports::LOGTOTCP_TCP_PORT,
         });
-        crate::log_trace!("logtotcp: listening on tcp {}\n", ports::LOGTOTCP_TCP_PORT);
+        crate::log!("logtotcp: listening on tcp {}\n", ports::LOGTOTCP_TCP_PORT);
 
         let mut tcp_handle: Option<NetHandle> = None;
         let mut conn_handle: Option<NetHandle> = None;
@@ -531,7 +531,7 @@ pub mod logtotcp {
                     NetEvent::TcpEstablished { handle, .. } => {
                         conn_handle = Some(handle);
                         pending = false;
-                        crate::log_trace!("logtotcp: client connected handle={}\n", handle.0);
+                        crate::log!("logtotcp: client connected handle={}\n", handle.0);
                     }
                     NetEvent::TcpSent { handle, .. } if conn_handle == Some(handle) => {
                         pending = false;
@@ -540,10 +540,7 @@ pub mod logtotcp {
                         if conn_handle == Some(handle) {
                             conn_handle = None;
                             pending = false;
-                            crate::log_trace!(
-                                "logtotcp: client disconnected handle={}\n",
-                                handle.0
-                            );
+                            crate::log!("logtotcp: client disconnected handle={}\n", handle.0);
                         }
                         if tcp_handle == Some(handle) {
                             tcp_handle = None;

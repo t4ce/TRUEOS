@@ -1891,7 +1891,7 @@ pub mod cabi {
             return false;
         }
         if tex_id > VM_TEXTURE_GUEST_ID_LIMIT {
-            crate::log_trace!(
+            crate::log!(
                 "gfx-cabi: reject vm texture id tex={} op={} max_guest={}\n",
                 tex_id,
                 op,
@@ -1923,7 +1923,7 @@ pub mod cabi {
         if tex_id == 0 || tex_id <= MAX_REASONABLE_TEX_ID {
             return false;
         }
-        crate::log_trace!(
+        crate::log!(
             "gfx-cabi: reject unreasonable tex_id={} op={} max={}\n",
             tex_id,
             op,
@@ -1940,7 +1940,7 @@ pub mod cabi {
     ) -> bool {
         let mut rejected = false;
         if target_tex_id > MAX_REASONABLE_TEX_ID {
-            crate::log_trace!(
+            crate::log!(
                 "gfx-cabi: reject unreasonable target_tex_id={} op={} max={}\n",
                 target_tex_id,
                 op,
@@ -1949,7 +1949,7 @@ pub mod cabi {
             rejected = true;
         }
         if source_tex_id > MAX_REASONABLE_TEX_ID {
-            crate::log_trace!(
+            crate::log!(
                 "gfx-cabi: reject unreasonable source_tex_id={} op={} max={}\n",
                 source_tex_id,
                 op,
@@ -2050,7 +2050,7 @@ pub mod cabi {
         if vm_texture_owned_by_ctx(ctx_key, tex_id) {
             return true;
         }
-        crate::log_trace!(
+        crate::log!(
             "gfx-cabi: reject unowned vm texture tex={} op={} ctx=0x{:08X}\n",
             tex_id,
             op,
@@ -2268,7 +2268,7 @@ pub mod cabi {
         repaint_window_id: u32,
         reason: &'static str,
     ) {
-        crate::log_trace!(
+        crate::log!(
             "gfx-cabi: texture work failed op={} rc={} target={} source={} repaint_window={} reason={}\n",
             op,
             rc,
@@ -2294,7 +2294,7 @@ pub mod cabi {
             TextureWorkReq::DrawMandelbrot(_) => "draw-mandelbrot",
             TextureWorkReq::DrawTex(_) => "draw-tex",
         };
-        crate::log_trace!(
+        crate::log!(
             "gfx-cabi: texture work queue full cap={} dropped={}\n",
             TEXTURE_UPLOAD_RING_CAP,
             kind
@@ -2327,7 +2327,7 @@ pub mod cabi {
             return false;
         }
         if checked_reasonable_rgba_len(width, height).is_none() {
-            crate::log_trace!(
+            crate::log!(
                 "gfx-cabi: reject texture-upload queue tex={} size={}x{} repaint={} window={}\n",
                 tex_id,
                 width,
@@ -2662,7 +2662,7 @@ pub mod cabi {
                     let rgba_len = req.rgba.len();
                     if crate::logflag::GFX_CABI_FRAME_DEBUG_LOGS {
                         match req.region {
-                            Some(region) => crate::log_trace!(
+                            Some(region) => crate::log!(
                                 "gfx-cabi: texture-upload tex={} size={}x{} region={}x{}@{},{} rgba_len={} kind={} repaint={} window={}\n",
                                 req.tex_id,
                                 req.width,
@@ -2679,7 +2679,7 @@ pub mod cabi {
                                 req.repaint_reason,
                                 req.repaint_window_id
                             ),
-                            None => crate::log_trace!(
+                            None => crate::log!(
                                 "gfx-cabi: texture-upload tex={} size={}x{} region=full rgba_len={} kind={} repaint={} window={}\n",
                                 req.tex_id,
                                 req.width,
@@ -2786,7 +2786,7 @@ pub mod cabi {
     pub async fn texture_upload_service_task() {
         let hz = embassy_time_driver::TICK_HZ.max(1);
         let ms = embassy_time_driver::now().saturating_mul(1000) / hz;
-        crate::log_trace!("boot-probe: texture-upload task start ms={}\n", ms);
+        crate::log!("boot-probe: texture-upload task start ms={}\n", ms);
         crate::r::readiness::set(crate::r::readiness::GFX_TEXTURE_UPLOAD_SERVICE_READY);
         texture_upload_service_inner().await;
     }
@@ -4870,7 +4870,7 @@ pub mod cabi {
                     .and_then(|entry| entry.as_mut())
                 {
                     let Some(need) = checked_reasonable_rgba_len(entry.width, entry.height) else {
-                        crate::log_trace!(
+                        crate::log!(
                             "gfx-cabi: invalid rgba len for rgb-to-texture tex={} size={}x{}\n",
                             tex_id,
                             entry.width,
@@ -5144,7 +5144,7 @@ pub mod cabi {
                     return ret;
                 }
                 if target_idx == source_idx {
-                    crate::log_trace!(
+                    crate::log!(
                         "gfx-cabi: tex-to-texture mirror skipped target==source tex={} src={}\n",
                         target_tex_id,
                         source_tex_id
@@ -5173,7 +5173,7 @@ pub mod cabi {
                     (source_tex, target)
                 };
                 let Some(need) = checked_reasonable_rgba_len(target.width, target.height) else {
-                    crate::log_trace!(
+                    crate::log!(
                         "gfx-cabi: invalid rgba len for tex-to-texture tex={} size={}x{} src={}\n",
                         target_tex_id,
                         target.width,
@@ -5380,7 +5380,7 @@ pub mod cabi {
                         format: ImageFormat::Rgba8888,
                     };
                     let Ok(img) = ctx.create_image(desc) else {
-                        crate::log_trace!(
+                        crate::log!(
                             "gfx-cabi: create_image failed for upload tex={} size={}x{} region={} kind={}\n",
                             tex_id,
                             width,
@@ -5397,7 +5397,7 @@ pub mod cabi {
                 }
                 let used_owned_full_rgba = region.is_none() && owned_rgba.is_some();
                 let Some(full_rgba_len) = checked_reasonable_rgba_len(width, height) else {
-                    crate::log_trace!(
+                    crate::log!(
                         "gfx-cabi: invalid rgba len for upload tex={} size={}x{} region={}\n",
                         tex_id,
                         width,

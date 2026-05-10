@@ -139,7 +139,7 @@ async fn warm_index_async(disk: block::DeviceHandle) {
         _ => return,
     };
     if let Err(e) = ensure_index_async(disk, &placement).await {
-        crate::log_trace!("trueosfs: warm_index error {:?}\n", e);
+        crate::log!("trueosfs: warm_index error {:?}\n", e);
     }
 }
 
@@ -161,12 +161,12 @@ pub async fn mount_service_task() {
                     // Best-effort: only log when we actually mount or error.
                     match mount_root_async(disk).await {
                         Ok(Some(disk_id)) => {
-                            crate::log_trace!("trueosfs: mounted root disk_id={}\n", disk_id.raw());
+                            crate::log!("trueosfs: mounted root disk_id={}\n", disk_id.raw());
                             request_warm_index(disk_id);
                         }
                         Ok(None) => {}
                         Err(e) => {
-                            crate::log_trace!("trueosfs: mount error {:?}\n", e);
+                            crate::log!("trueosfs: mount error {:?}\n", e);
                         }
                     }
                 }
@@ -292,7 +292,15 @@ fn trueosfs_block_read_trace_note(
     let last_lba = TRUEOSFS_BLOCK_READ_TRACE_LAST_LBA.load(Ordering::Relaxed);
     let last_blocks = TRUEOSFS_BLOCK_READ_TRACE_LAST_BLOCKS.load(Ordering::Relaxed);
     let last_bytes = TRUEOSFS_BLOCK_READ_TRACE_LAST_BYTES.load(Ordering::Relaxed);
-    Some((count, bytes, elapsed_sum, max_elapsed, last_lba, last_blocks, last_bytes))
+    Some((
+        count,
+        bytes,
+        elapsed_sum,
+        max_elapsed,
+        last_lba,
+        last_blocks,
+        last_bytes,
+    ))
 }
 
 fn trueosfs_block_read_trace_sample(
@@ -307,22 +315,15 @@ fn trueosfs_block_read_trace_sample(
 ) {
     let now_ms = trueosfs_trace_now_ms();
     let elapsed_ms = now_ms.saturating_sub(start_ms);
-    if let Some((
-        sample_count,
-        sample_bytes,
-        sample_elapsed_ms,
-        sample_max_ms,
-        last_lba,
-        last_blocks,
-        last_bytes,
-    )) = trueosfs_block_read_trace_note(now_ms, lba, blocks, total_bytes, elapsed_ms)
+    if let Some((sample_count, sample_bytes, sample_elapsed_ms, sample_max_ms, last_lba, last_blocks, last_bytes)) =
+        trueosfs_block_read_trace_note(now_ms, lba, blocks, total_bytes, elapsed_ms)
     {
         let sample_avg_ms = if sample_count == 0 {
             0
         } else {
             sample_elapsed_ms / sample_count
         };
-        crate::log_trace!(
+        crate::log!(
             "trueosfs: block-read sample disk={} count={} bytes={} avg_ms={} max_ms={} last_lba={} last_blocks={} last_bytes={} bs={} max_blocks={} max_xfer={}\n",
             disk,
             sample_count,
@@ -1855,7 +1856,7 @@ pub fn request_warm_index(disk_id: block::DiscId) {
             return;
         }
         if q.push(disk).is_err() {
-            crate::log_trace!("trueosfs: index queue full disk_id={}\n", disk_id.raw());
+            crate::log!("trueosfs: index queue full disk_id={}\n", disk_id.raw());
             return;
         }
     }
@@ -2004,7 +2005,7 @@ async fn read_blocks_aligned_retry_async(
     }
     let err = last.unwrap_or(block::Error::Io);
     if is_nvme_handle(handle) {
-        crate::log_trace!(
+        crate::log!(
             "trueosfs: read-retry failed dev={} lba={} blocks={} attempts={} err={:?}\n",
             handle.id(),
             lba,
@@ -2070,7 +2071,7 @@ pub async fn locate_async(
                 }
                 Err(e) => {
                     if is_nvme_handle(handle) {
-                        crate::log_trace!(
+                        crate::log!(
                             "trueosfs: locate stage=read_gpt_partitions dev={} err={:?}\n",
                             handle.id(),
                             e
@@ -2088,7 +2089,7 @@ pub async fn locate_async(
         Ok(v) => v,
         Err(e) => {
             if is_nvme_handle(handle) {
-                crate::log_trace!(
+                crate::log!(
                     "trueosfs: locate stage=read_lba0_super dev={} err={:?}\n",
                     handle.id(),
                     e

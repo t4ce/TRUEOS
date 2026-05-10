@@ -142,7 +142,7 @@ fn q15_from_norm(v: f64) -> u16 {
 pub(crate) fn handle_report(runtime: &mut HidRuntime, data: &[u8], now_ms: u32) {
     let Some(decoded) = decode_packet(data) else {
         if HID_DEBUG_REPORT_LOGS {
-            crate::log_trace!(
+            crate::log!(
                 "tablet-report: ctrl={} slot={} ep={} seq={} decode=unsupported len={}\n",
                 runtime.controller_id,
                 runtime.slot_id,
@@ -188,7 +188,7 @@ pub(crate) fn handle_report(runtime: &mut HidRuntime, data: &[u8], now_ms: u32) 
     });
 
     if HID_DEBUG_REPORT_LOGS && runtime.mouse_buttons_down != prev_buttons {
-        crate::log_trace!(
+        crate::log!(
             "tablet-report: ctrl={} slot={} ep={} seq={} flags=0x{:02X} buttons=0x{:02X} prev=0x{:02X} x={} y={} rid={}\n",
             runtime.controller_id,
             runtime.slot_id,

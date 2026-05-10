@@ -639,7 +639,7 @@ fn spawn_truesurfer_batch(spawner: Spawner, requested: u32) -> SpawnAttempt {
                 factory.mark_spawned(browser_instance_id);
                 crate::r::ui2::signal_hosted_browser_factory_mask(factory.spawned_mask());
                 spawned_any = true;
-                crate::log_trace!(
+                crate::log!(
                     "truesurfer-factory: spawned browser_instance_id={} mask={:#x} remaining={}\n",
                     browser_instance_id,
                     factory.spawned_mask(),
@@ -654,7 +654,7 @@ fn spawn_truesurfer_batch(spawner: Spawner, requested: u32) -> SpawnAttempt {
                 if !spawned_any {
                     return SpawnAttempt::Failed(e);
                 }
-                crate::log_trace!(
+                crate::log!(
                     "truesurfer-factory: spawn failed browser_instance_id={} err={:?}\n",
                     browser_instance_id,
                     e
@@ -682,7 +682,7 @@ pub fn spawn_truesurfer_tab_with_html() -> Option<u32> {
                     worker_spawner.spawn(token);
                     factory.mark_spawned(browser_instance_id);
                     crate::r::ui2::signal_hosted_browser_factory_mask(factory.spawned_mask());
-                    crate::log_trace!(
+                    crate::log!(
                         "truesurfer-factory: handoff-spawned browser_instance_id={} mask={:#x} remaining={}\n",
                         browser_instance_id,
                         factory.spawned_mask(),
@@ -692,7 +692,7 @@ pub fn spawn_truesurfer_tab_with_html() -> Option<u32> {
                     Some(browser_instance_id)
                 }
                 Err(_) => {
-                    crate::log_trace!(
+                    crate::log!(
                         "truesurfer-factory: handoff-spawn skipped browser_instance_id={}\n",
                         browser_instance_id
                     );
@@ -701,7 +701,7 @@ pub fn spawn_truesurfer_tab_with_html() -> Option<u32> {
             }
         }
         None => {
-            crate::log_trace!(
+            crate::log!(
                 "truesurfer-factory: handoff-spawn skipped browser_instance_id={}\n",
                 browser_instance_id
             );
@@ -879,7 +879,7 @@ fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
                 spawned_any = true;
             }
             SpawnAttempt::Failed(e) => {
-                crate::log_trace!("spawn-svc: usb-controller-task({}) spawn failed: {:?}\n", i, e);
+                crate::log!("spawn-svc: usb-controller-task({}) spawn failed: {:?}\n", i, e);
             }
             SpawnAttempt::Skipped => {}
         }
@@ -913,7 +913,7 @@ async fn flush_user_input_record_once() {
     let payload = user_input_record_payload(entries.as_slice());
     let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
         crate::shell2::restore_user_input_record(entries);
-        crate::log_trace!("spawn-svc: user-input-record err=no-root\n");
+        crate::log!("spawn-svc: user-input-record err=no-root\n");
         return;
     };
 
@@ -925,18 +925,15 @@ async fn flush_user_input_record_once() {
     .await
     {
         Ok(true) => {
-            crate::log_trace!(
-                "spawn-svc: user-input-record ok appended_lines={}\n",
-                appended_lines
-            );
+            crate::log!("spawn-svc: user-input-record ok appended_lines={}\n", appended_lines);
         }
         Ok(false) => {
             crate::shell2::restore_user_input_record(entries);
-            crate::log_trace!("spawn-svc: user-input-record err=append-false\n");
+            crate::log!("spawn-svc: user-input-record err=append-false\n");
         }
         Err(e) => {
             crate::shell2::restore_user_input_record(entries);
-            crate::log_trace!("spawn-svc: user-input-record err={:?}\n", e);
+            crate::log!("spawn-svc: user-input-record err={:?}\n", e);
         }
     }
 }
@@ -1030,7 +1027,7 @@ async fn bp_autostart_task() {
             config.slot(),
         );
 
-        crate::log_trace!(
+        crate::log!(
             "spawn-svc: bp-autostart begin label={} archive={} slot={}\n",
             config.label(),
             config.archive(),
@@ -1044,14 +1041,14 @@ async fn bp_autostart_task() {
         )
         .await
         {
-            Ok(source) => crate::log_trace!(
+            Ok(source) => crate::log!(
                 "spawn-svc: bp-autostart queued label={} archive={} slot={} source={}\n",
                 config.label(),
                 config.archive(),
                 config.slot(),
                 source
             ),
-            Err(err) => crate::log_trace!(
+            Err(err) => crate::log!(
                 "spawn-svc: bp-autostart skipped label={} archive={} slot={} err={}\n",
                 config.label(),
                 config.archive(),
@@ -1077,7 +1074,7 @@ fn spawn_net_tcp_shell(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_pciids_git(spawner: Spawner) -> SpawnAttempt {
-    crate::log_trace!(
+    crate::log!(
         "spawn-svc: pciids-git submit marker required={}\n",
         readiness_names(PCIIDS_GIT_READY).as_str()
     );
@@ -1089,14 +1086,14 @@ async fn atomic_bomb_task() {
     Timer::after(EmbassyDuration::from_secs(5)).await;
 
     if let Some(profile) = crate::cpu::CpuProfile::current() {
-        crate::log_trace!(
+        crate::log!(
             "PANIC PANIC PANIC: atomic_bomb firing slot={} lapic={} kind={}\n",
             profile.slot(),
             profile.lapic_id(),
             profile.core_kind_name()
         );
     } else {
-        crate::log_trace!("PANIC PANIC PANIC: atomic_bomb firing on unknown cpu\n");
+        crate::log!("PANIC PANIC PANIC: atomic_bomb firing on unknown cpu\n");
     }
 
     panic!("PANIC PANIC PANIC: delayed atomic_bomb");
@@ -1551,7 +1548,7 @@ fn log_pciids_git_pending_marker(ready: u32) {
         return;
     }
 
-    crate::log_trace!(
+    crate::log!(
         "spawn-svc: pciids-git pending missing={} ready=0x{:08X} required=0x{:08X}\n",
         readiness_names(missing).as_str(),
         ready,
@@ -1593,7 +1590,7 @@ pub async fn spawn_service_task(spawner: Spawner) {
                 match (spec.spawn)(spawner) {
                     SpawnAttempt::Spawned => {
                         started_any = true;
-                        crate::log_trace!(
+                        crate::log!(
                             "spawn-svc: started {} (mask=0x{:08X})\n",
                             spec.name,
                             spec.required

@@ -295,7 +295,7 @@ pub async fn ui2_text_input_demo_task() {
     let _ = crate::r::ui2::set_window_bottom_scrollbar_visible(window_id, false);
     let Some(atlases) = ui2::ui2_font_decode_cpu_atlases(UI2_TEXT_INPUT_FONT_TIER.size_case())
     else {
-        crate::log_trace!("ui2-text-input-demo: lucida 1x atlas decode failed\n");
+        crate::log!("ui2-text-input-demo: lucida 1x atlas decode failed\n");
         return;
     };
 
@@ -309,7 +309,7 @@ pub async fn ui2_text_input_demo_task() {
         height,
     }]);
 
-    crate::log_trace!(
+    crate::log!(
         "ui2-text-input-demo: window={} tex={} size={}x{} text={}\n",
         window_id,
         surface.tex_id(),
@@ -367,7 +367,7 @@ pub async fn ui2_text_input_demo_task() {
             cursor_idx = cursor_idx.min(char_count(text.as_str()));
             let pixels = render_text_input(&atlases, text.as_str(), cursor_idx, focused);
             if !surface.upload_rgba_owned(pixels, "ui2-text-input-demo") {
-                crate::log_trace!("ui2-text-input-demo: upload failed tex={}\n", surface.tex_id());
+                crate::log!("ui2-text-input-demo: upload failed tex={}\n", surface.tex_id());
                 break;
             }
             needs_render = false;

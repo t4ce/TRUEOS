@@ -138,7 +138,7 @@ impl VirtioNetAdapter {
             match Self::init_from_device(dev) {
                 Ok(adapter) => out.push(adapter),
                 Err(()) => {
-                    crate::log_trace!(
+                    crate::log!(
                         "net/vio: init failed for {:02x}:{:02x}.{}\n",
                         dev.bus,
                         dev.slot,
@@ -154,7 +154,7 @@ impl VirtioNetAdapter {
         let io_base = read_io_base(&dev)?;
         enable_io_and_bus_master(&dev);
 
-        crate::log_trace!(
+        crate::log!(
             "net/vio: found virtio-net {:02x}:{:02x}.{} vid={:04x} did={:04x} io_base=0x{:04x}\n",
             dev.bus,
             dev.slot,
@@ -187,7 +187,7 @@ impl VirtioNetAdapter {
             [0; 6]
         };
 
-        crate::log_trace!(
+        crate::log!(
             "net/vio: features=0x{:08x} guest=0x{:08x} mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
             features,
             guest,
@@ -421,7 +421,7 @@ impl VirtioNetAdapter {
             // Safety guard: if indices ever get out of sync, don't spin for 65k iterations.
             // Cap to one ring worth of work per poll.
             if guard >= self.rxq.size {
-                crate::log_trace!(
+                crate::log!(
                     "net/vio: rx guard tripped used_idx={} last_used_idx={} size={}\n",
                     used_idx,
                     self.rxq.last_used_idx,
@@ -437,7 +437,7 @@ impl VirtioNetAdapter {
 
             if desc_id >= self.rx_bufs.len() {
                 // If this ever happens, we'd otherwise panic on indexing and appear to “halt”.
-                crate::log_trace!(
+                crate::log!(
                     "net/vio: rx bad desc id={} (bufs={}) elem.len={} used_idx={} last_used_idx={}\n",
                     desc_id,
                     self.rx_bufs.len(),
@@ -489,7 +489,7 @@ impl VirtioNetAdapter {
             if desc_id < self.txq.size as usize {
                 self.tx_free.push(desc_id as u16);
             } else {
-                crate::log_trace!(
+                crate::log!(
                     "net/vio: tx bad desc id={} (size={}) used_idx={} last_used_idx={}\n",
                     desc_id,
                     self.txq.size,
@@ -507,7 +507,7 @@ impl VirtioNetAdapter {
             None => {
                 // If this happens, TX will silently stall without additional visibility.
                 // Provide a lightweight breadcrumb for bring-up.
-                crate::log_trace!(
+                crate::log!(
                     "net/vio: tx ring full (free=0) avail_idx={} used_idx={} last_used_idx={}\n",
                     self.txq.avail_idx,
                     self.txq.used_idx(),
@@ -520,11 +520,7 @@ impl VirtioNetAdapter {
         let buf = &self.tx_bufs[desc_id as usize];
         let copy_len = frame.len().min(TX_BUF_SIZE - VIRTIO_NET_HDR_SIZE);
         if copy_len != frame.len() {
-            crate::log_trace!(
-                "net/vio: tx trunc frame_len={} copy_len={}\n",
-                frame.len(),
-                copy_len
-            );
+            crate::log!("net/vio: tx trunc frame_len={} copy_len={}\n", frame.len(), copy_len);
         }
 
         unsafe {

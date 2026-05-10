@@ -143,7 +143,7 @@ pub fn poll_compute_lane() -> bool {
     };
 
     if !LOGGED_POLL_LANE.swap(true, Ordering::AcqRel) {
-        crate::log_trace!("burn-baby: AP poll compute lane active slot={}\n", slot);
+        crate::log!("burn-baby: AP poll compute lane active slot={}\n", slot);
     }
 
     if let Some(counter) = POLLED_JOBS_BY_SLOT.get(slot as usize) {
@@ -161,7 +161,7 @@ pub fn protect_service_compute_slot(cpu_slot: u32, purpose: &'static str) {
     let bit = 1u64 << cpu_slot;
     let previous = SERVICE_PROTECTED_SLOTS.fetch_or(bit, Ordering::AcqRel);
     if previous & bit == 0 {
-        crate::log_trace!(
+        crate::log!(
             "burn-baby: service-protected compute slot={} purpose={} action=skip-ap-poll-chunks\n",
             cpu_slot,
             purpose
@@ -308,7 +308,7 @@ pub fn matvec_rowmajor_bf16(
     );
     let local_row_end = remote.map(|ticket| ticket.row_start).unwrap_or(n_rows);
     if let Some(ticket) = remote {
-        crate::log_trace!(
+        crate::log!(
             "burn-baby: bf16 matvec split local_rows=0..{} remote_rows={}..{} remote_job={} remote_pending={} completion=tcp-result\n",
             local_row_end,
             ticket.row_start,
@@ -358,7 +358,7 @@ pub fn matvec_rowmajor_bf16(
         && !crate::lumen::lumen_net::wait_remote_bf16_matvec(ticket)
     {
         let _ = crate::lumen::lumen_net::cancel_remote_bf16_matvec(ticket.job_id);
-        crate::log_trace!(
+        crate::log!(
             "burn-baby: bf16 remote result timeout job={} rows={}..{} action=local-suffix-fallback\n",
             ticket.job_id,
             ticket.row_start,
@@ -418,7 +418,7 @@ fn log_compute_wait_progress(
     }
     *last_wait_log = now;
     let stats = stats();
-    crate::log_trace!(
+    crate::log!(
         "burn-baby: wait dtype={} done={}/{} submitted={} completed={} polled={} queued={}\n",
         dtype,
         done.load(Ordering::Acquire),
@@ -469,7 +469,7 @@ fn should_skip_compute_slot(cpu_slot: u32) -> bool {
         .into_iter()
         .any(|slot| slot != cpu_slot && !is_service_protected_slot(slot));
     if has_other_compute_slot && !LOGGED_SERVICE_PROTECTED_LANE.swap(true, Ordering::AcqRel) {
-        crate::log_trace!(
+        crate::log!(
             "burn-baby: AP poll compute lane protected slot={} action=leave-for-service\n",
             cpu_slot
         );
@@ -482,7 +482,7 @@ fn submit_job(job: ComputeJob) {
 
     if !LOGGED_QUEUE_LANE.swap(true, Ordering::AcqRel) {
         let slots = online_compute_worker_slots();
-        crate::log_trace!(
+        crate::log!(
             "burn-baby: queued compute jobs for AP poll lane workers={} slots={:?} protected_mask=0x{:016X}\n",
             slots.len(),
             slots,
@@ -561,7 +561,7 @@ fn matvec_rows_bf16(
     {
         if bf16_simd_lane() == BF16_SIMD_LANE_AVX2_FMA {
             if !LOGGED_BF16_AVX2_LANE.swap(true, Ordering::AcqRel) {
-                crate::log_trace!(
+                crate::log!(
                     "burn-baby: bf16 matvec AVX2/FMA lane active rows={} k_dim={}\n",
                     row_end.saturating_sub(row_start),
                     k_dim
@@ -574,7 +574,7 @@ fn matvec_rows_bf16(
         }
 
         if !LOGGED_BF16_SSE2_LANE.swap(true, Ordering::AcqRel) {
-            crate::log_trace!(
+            crate::log!(
                 "burn-baby: bf16 matvec SSE2 lane active rows={} k_dim={}\n",
                 row_end.saturating_sub(row_start),
                 k_dim
@@ -611,7 +611,7 @@ fn log_bf16_dispatch_plan(n_rows: usize, k_dim: usize, chunk_rows: usize, chunks
         BF16_SIMD_LANE_SSE2 => "sse2",
         _ => "unknown",
     };
-    crate::log_trace!(
+    crate::log!(
         "burn-baby: bf16 dispatch plan rows={} k_dim={} chunk_rows={} chunks={} workers={} lane={}\n",
         n_rows,
         k_dim,
@@ -653,7 +653,7 @@ fn bf16_simd_lane() -> u8 {
         } else {
             "sse2"
         };
-        crate::log_trace!(
+        crate::log!(
             "burn-baby: bf16 simd probe avx_state={} reason={} avx2_fma={} reason={} selected={}\n",
             status.avx_state_enabled,
             status.avx_state_reason.as_str(),

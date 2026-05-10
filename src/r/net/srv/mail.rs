@@ -233,14 +233,14 @@ async fn load_config() -> Result<LoadedMailConfig, &'static str> {
     match crate::r::fs::trueosfs::file_out_async(disk, MAIL_CONFIG_PATH).await {
         Ok(Some(bytes)) => match serde_json::from_slice::<MailConfig>(bytes.as_slice()) {
             Ok(config) => {
-                crate::log_trace!("webmail-http: config source={}\n", MAIL_CONFIG_PATH);
+                crate::log!("webmail-http: config source={}\n", MAIL_CONFIG_PATH);
                 Ok(LoadedMailConfig {
                     config: config.merge_with_static(),
                     source: MAIL_CONFIG_PATH,
                 })
             }
             Err(_) => {
-                crate::log_trace!(
+                crate::log!(
                     "webmail-http: bad {}; falling back to static account\n",
                     MAIL_CONFIG_PATH
                 );
@@ -252,11 +252,11 @@ async fn load_config() -> Result<LoadedMailConfig, &'static str> {
         },
         Ok(None) => {
             match write_config_template(disk).await {
-                Ok(()) => crate::log_trace!(
+                Ok(()) => crate::log!(
                     "webmail-http: wrote config template path={} source=allports\n",
                     MAIL_CONFIG_PATH
                 ),
-                Err(err) => crate::log_trace!(
+                Err(err) => crate::log!(
                     "webmail-http: config template unavailable path={} err={} source=allports\n",
                     MAIL_CONFIG_PATH,
                     err
@@ -741,28 +741,28 @@ async fn refresh_inbox_from_pop3(config: &MailConfig) -> Result<usize, &'static 
         return Err("mail password placeholder");
     }
 
-    crate::log_trace!("webmail-http: pop3 refresh connect host={}\n", mail_config::POP3_HOST);
+    crate::log!("webmail-http: pop3 refresh connect host={}\n", mail_config::POP3_HOST);
     let mut client = Pop3Client::connect(MAIL_POP3_TIMEOUT_MS)
         .await
         .map_err(|err| {
-            crate::log_trace!("webmail-http: pop3 connect failed err={:?}\n", err);
+            crate::log!("webmail-http: pop3 connect failed err={:?}\n", err);
             "pop3 connect failed"
         })?;
-    crate::log_trace!("webmail-http: pop3 refresh login user={}\n", config.smtp_user.as_str());
+    crate::log!("webmail-http: pop3 refresh login user={}\n", config.smtp_user.as_str());
     client
         .login(config.smtp_user.as_str(), config.smtp_pass.as_str(), MAIL_POP3_TIMEOUT_MS)
         .await
         .map_err(|err| {
-            crate::log_trace!("webmail-http: pop3 login failed err={:?}\n", err);
+            crate::log!("webmail-http: pop3 login failed err={:?}\n", err);
             "pop3 login failed"
         })?;
 
     let (count, total_bytes) = client.stat(MAIL_POP3_TIMEOUT_MS).await.map_err(|err| {
-        crate::log_trace!("webmail-http: pop3 stat failed err={:?}\n", err);
+        crate::log!("webmail-http: pop3 stat failed err={:?}\n", err);
         "pop3 stat failed"
     })?;
     MAIL_INBOX_LAST_LIST_COUNT.store(count, Ordering::Release);
-    crate::log_trace!(
+    crate::log!(
         "webmail-http: pop3 stat count={} bytes={} taking={}\n",
         count,
         total_bytes,
@@ -777,11 +777,7 @@ async fn refresh_inbox_from_pop3(config: &MailConfig) -> Result<usize, &'static 
         match client.list_one(msg_id, MAIL_POP3_TIMEOUT_MS).await {
             Ok(entry) => latest.push(entry),
             Err(err) => {
-                crate::log_trace!(
-                    "webmail-http: pop3 LIST {} failed err={:?}; skipping\n",
-                    msg_id,
-                    err
-                )
+                crate::log!("webmail-http: pop3 LIST {} failed err={:?}; skipping\n", msg_id, err)
             }
         }
     }
@@ -791,7 +787,7 @@ async fn refresh_inbox_from_pop3(config: &MailConfig) -> Result<usize, &'static 
     let mut parsed = 0usize;
     let mut updated = false;
     let latest_ids: Vec<u32> = latest.iter().map(|(msg_id, _)| *msg_id).collect();
-    crate::log_trace!(
+    crate::log!(
         "webmail-http: pop3 latest listed count={} taking={}\n",
         MAIL_INBOX_LAST_LIST_COUNT.load(Ordering::Acquire),
         latest.len()
@@ -805,7 +801,7 @@ async fn refresh_inbox_from_pop3(config: &MailConfig) -> Result<usize, &'static 
         {
             Ok(raw) => raw,
             Err(retr_err) => {
-                crate::log_trace!(
+                crate::log!(
                     "webmail-http: pop3 RETR failed msg={} size={} cap={} err={:?}\n",
                     msg_id,
                     size,
@@ -817,11 +813,7 @@ async fn refresh_inbox_from_pop3(config: &MailConfig) -> Result<usize, &'static 
         };
         retrieved = retrieved.saturating_add(1);
         let Some(message) = parse_pop3_message(raw.as_slice(), fallback_id, msg_id) else {
-            crate::log_trace!(
-                "webmail-http: pop3 parse failed msg={} bytes={}\n",
-                msg_id,
-                raw.len()
-            );
+            crate::log!("webmail-http: pop3 parse failed msg={} bytes={}\n", msg_id, raw.len());
             continue;
         };
         parsed = parsed.saturating_add(1);
@@ -860,7 +852,7 @@ async fn refresh_inbox_from_pop3(config: &MailConfig) -> Result<usize, &'static 
     if added > 0 || updated || store.messages.len() != before_retain {
         save_store(&store).await?;
     }
-    crate::log_trace!(
+    crate::log!(
         "webmail-http: pop3 refresh done retrieved={} parsed={} added={} retained={}\n",
         retrieved,
         parsed,
@@ -875,7 +867,7 @@ async fn refresh_inbox_once(reason: &'static str) -> Result<usize, &'static str>
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
     {
-        crate::log_trace!("webmail-http: inbox refresh skip reason={} busy=1\n", reason);
+        crate::log!("webmail-http: inbox refresh skip reason={} busy=1\n", reason);
         return Err("mail refresh already running");
     }
 
@@ -883,7 +875,7 @@ async fn refresh_inbox_once(reason: &'static str) -> Result<usize, &'static str>
         let loaded = load_config().await?;
         let result = refresh_inbox_from_pop3(&loaded.config).await;
         if result == Err("pop3 login failed") && loaded.source == MAIL_CONFIG_PATH {
-            crate::log_trace!(
+            crate::log!(
                 "webmail-http: pop3 login failed with {}; retrying allports account\n",
                 MAIL_CONFIG_PATH
             );
@@ -899,7 +891,7 @@ async fn refresh_inbox_once(reason: &'static str) -> Result<usize, &'static str>
         Ok(added) => {
             MAIL_INBOX_LAST_REFRESH_SECS.store(now_mail_seconds(), Ordering::Release);
             MAIL_INBOX_LAST_REFRESH_ADDED.store(added as u32, Ordering::Release);
-            crate::log_trace!(
+            crate::log!(
                 "webmail-http: inbox refresh ok reason={} added={} limit={}\n",
                 reason,
                 added,
@@ -907,7 +899,7 @@ async fn refresh_inbox_once(reason: &'static str) -> Result<usize, &'static str>
             );
         }
         Err(err) => {
-            crate::log_trace!("webmail-http: inbox refresh failed reason={} err={}\n", reason, err);
+            crate::log!("webmail-http: inbox refresh failed reason={} err={}\n", reason, err);
         }
     }
 
@@ -916,7 +908,7 @@ async fn refresh_inbox_once(reason: &'static str) -> Result<usize, &'static str>
 }
 
 async fn inbox_refresh_loop() {
-    crate::log_trace!(
+    crate::log!(
         "webmail-http: inbox refresh loop interval={}s\n",
         MAIL_INBOX_REFRESH_INTERVAL_SECS
     );
@@ -979,7 +971,7 @@ async fn send_mail_job(id: String) {
     );
 
     update_message_status(id.as_str(), "sending", None).await;
-    crate::log_trace!(
+    crate::log!(
         "webmail-http: smtp send begin id={} from={} rcpts={} bytes={}\n",
         id.as_str(),
         from,
@@ -1001,28 +993,28 @@ async fn send_mail_job(id: String) {
 
     match result {
         Ok(()) => {
-            crate::log_trace!("webmail-http: smtp send ok id={}\n", id.as_str());
+            crate::log!("webmail-http: smtp send ok id={}\n", id.as_str());
             update_message_status(id.as_str(), "sent", None).await
         }
         Err(err) => {
-            crate::log_trace!("webmail-http: smtp send failed id={} err={:?}\n", id.as_str(), err);
+            crate::log!("webmail-http: smtp send failed id={} err={:?}\n", id.as_str(), err);
             update_message_status(id.as_str(), "send-failed", Some(format!("{:?}", err))).await
         }
     }
 }
 
 async fn handle_index() -> Response {
-    crate::log_trace!("webmail-http: GET /\n");
+    crate::log!("webmail-http: GET /\n");
     text_response(200, "text/html; charset=utf-8", WEBMAIL_INDEX_HTML)
 }
 
 async fn handle_app_js() -> Response {
-    crate::log_trace!("webmail-http: GET /app.js\n");
+    crate::log!("webmail-http: GET /app.js\n");
     text_response(200, "application/javascript; charset=utf-8", WEBMAIL_APP_JS)
 }
 
 async fn handle_list_local() -> Response {
-    crate::log_trace!("webmail-http: api list\n");
+    crate::log!("webmail-http: api list\n");
     let mut inbox: Vec<MailMessage> = load_store()
         .await
         .messages
@@ -1048,7 +1040,7 @@ async fn handle_list_local() -> Response {
 }
 
 async fn handle_status_local() -> Response {
-    crate::log_trace!("webmail-http: api status\n");
+    crate::log!("webmail-http: api status\n");
     let store = load_store().await;
     let loaded_config = load_config().await.ok();
     let account = loaded_config
@@ -1129,7 +1121,7 @@ async fn handle_list() -> Response {
 }
 
 async fn handle_refresh_local() -> Response {
-    crate::log_trace!("webmail-http: api refresh\n");
+    crate::log!("webmail-http: api refresh\n");
     match refresh_inbox_once("manual").await {
         Ok(added) => json_response(200, &serde_json::json!({"ok": true, "added": added})),
         Err(err) if err == "mail refresh already running" => {
@@ -1199,7 +1191,7 @@ fn percent_decode(value: &str, max_len: usize) -> Result<String, &'static str> {
 }
 
 async fn handle_read_local(query: Option<String>) -> Response {
-    crate::log_trace!("webmail-http: api read\n");
+    crate::log!("webmail-http: api read\n");
     let Some(id) = query_param_decoded(query.as_deref(), "id", 512) else {
         return json_response(400, &serde_json::json!({"ok": false, "error": "missing id"}));
     };
@@ -1215,7 +1207,7 @@ async fn handle_read_local(query: Option<String>) -> Response {
 }
 
 async fn handle_send_local(body: Bytes) -> Response {
-    crate::log_trace!("webmail-http: api send bytes={}\n", body.len());
+    crate::log!("webmail-http: api send bytes={}\n", body.len());
     if body.len() > MAIL_HTTP_BODY_MAX {
         return json_response(413, &serde_json::json!({"ok": false, "error": "request too large"}));
     }
@@ -1297,7 +1289,7 @@ async fn mail_http_runtime() -> Result<(), io::Error> {
     loop {
         let Some(addr) = primary_ipv4_addr(MAIL_HTTP_TCP_PORT) else {
             MAIL_HTTP_PORT.store(0, Ordering::Release);
-            crate::log_trace!("webmail-http: waiting for primary ipv4\n");
+            crate::log!("webmail-http: waiting for primary ipv4\n");
             tokio::time::sleep(core::time::Duration::from_millis(100)).await;
             continue;
         };
@@ -1306,7 +1298,7 @@ async fn mail_http_runtime() -> Result<(), io::Error> {
             Ok(listener) => listener,
             Err(err) => {
                 MAIL_HTTP_PORT.store(0, Ordering::Release);
-                crate::log_trace!(
+                crate::log!(
                     "webmail-http: bind {} failed kind={:?} err={}\n",
                     addr,
                     err.kind(),
@@ -1318,8 +1310,8 @@ async fn mail_http_runtime() -> Result<(), io::Error> {
         };
 
         MAIL_HTTP_PORT.store(addr.port(), Ordering::Release);
-        crate::log_trace!("webmail-http: axum listening on http://{}/\n", addr);
-        let listener = listener.tap_io(|_| crate::log_trace!("webmail-http: tcp accepted\n"));
+        crate::log!("webmail-http: axum listening on http://{}/\n", addr);
+        let listener = listener.tap_io(|_| crate::log!("webmail-http: tcp accepted\n"));
         let result = axum::serve(listener, app).await;
         if result.is_err() {
             MAIL_HTTP_PORT.store(0, Ordering::Release);
@@ -1343,7 +1335,7 @@ pub async fn mail_http_service_task() {
         crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
     )
     .await;
-    crate::log_trace!(
+    crate::log!(
         "webmail-http: launching Tokio runtime after NET_V4_CONFIGURED+TRUEOSFS_ROOT_MOUNTED\n"
     );
 
@@ -1351,16 +1343,16 @@ pub async fn mail_http_service_task() {
         let rc = crate::trueos_tokio_worker::spawn_blocking_job_with_purpose(
             Box::new(|| {
                 if let Err(err) = run_mail_http_runtime() {
-                    crate::log_trace!("webmail-http: runtime failed {:?}\n", err);
+                    crate::log!("webmail-http: runtime failed {:?}\n", err);
                 }
             }),
             "webmail-http-runtime",
         );
         if rc == 0 {
-            crate::log_trace!("webmail-http: submitted Tokio runtime to blocking lane\n");
+            crate::log!("webmail-http: submitted Tokio runtime to blocking lane\n");
             core::future::pending::<()>().await;
         }
-        crate::log_trace!(
+        crate::log!(
             "webmail-http: blocking lane unavailable rc={} retry={}ms\n",
             rc,
             MAIL_HTTP_BLOCKING_LANE_RETRY_MS

@@ -209,7 +209,7 @@ fn json_response<T: Serialize>(status: u16, value: &T) -> Response {
 }
 
 async fn handle_index() -> Response {
-    crate::log_trace!("webdevices-http: GET /\n");
+    crate::log!("webdevices-http: GET /\n");
     text_response(200, "text/html; charset=utf-8", WEBDEVICES_INDEX_HTML)
 }
 
@@ -225,7 +225,7 @@ async fn handle_healthz() -> Response {
 }
 
 async fn handle_snapshot() -> Response {
-    crate::log_trace!("webdevices-http: api snapshot\n");
+    crate::log!("webdevices-http: api snapshot\n");
     json_response(200, &hardware_snapshot())
 }
 
@@ -611,7 +611,7 @@ async fn webdevices_http_runtime() -> Result<(), io::Error> {
     loop {
         let Some(addr) = primary_ipv4_addr(WEBDEVICES_HTTP_TCP_PORT) else {
             WEBDEVICES_HTTP_PORT.store(0, Ordering::Release);
-            crate::log_trace!("webdevices-http: waiting for primary ipv4\n");
+            crate::log!("webdevices-http: waiting for primary ipv4\n");
             tokio::time::sleep(core::time::Duration::from_millis(100)).await;
             continue;
         };
@@ -620,7 +620,7 @@ async fn webdevices_http_runtime() -> Result<(), io::Error> {
             Ok(listener) => listener,
             Err(err) => {
                 WEBDEVICES_HTTP_PORT.store(0, Ordering::Release);
-                crate::log_trace!(
+                crate::log!(
                     "webdevices-http: bind {} failed kind={:?} err={}\n",
                     addr,
                     err.kind(),
@@ -632,8 +632,8 @@ async fn webdevices_http_runtime() -> Result<(), io::Error> {
         };
 
         WEBDEVICES_HTTP_PORT.store(addr.port(), Ordering::Release);
-        crate::log_trace!("webdevices-http: axum listening on http://{}/\n", addr);
-        let listener = listener.tap_io(|_| crate::log_trace!("webdevices-http: tcp accepted\n"));
+        crate::log!("webdevices-http: axum listening on http://{}/\n", addr);
+        let listener = listener.tap_io(|_| crate::log!("webdevices-http: tcp accepted\n"));
         let result = axum::serve(listener, app).await;
         if result.is_err() {
             WEBDEVICES_HTTP_PORT.store(0, Ordering::Release);
@@ -654,22 +654,22 @@ fn run_webdevices_http_runtime() -> Result<(), io::Error> {
 #[embassy_executor::task]
 pub async fn webdevices_http_service_task() {
     crate::r::readiness::wait_for(crate::r::readiness::NET_V4_CONFIGURED).await;
-    crate::log_trace!("webdevices-http: launching Tokio runtime after NET_V4_CONFIGURED\n");
+    crate::log!("webdevices-http: launching Tokio runtime after NET_V4_CONFIGURED\n");
 
     loop {
         let rc = crate::trueos_tokio_worker::spawn_blocking_job_with_purpose(
             Box::new(|| {
                 if let Err(err) = run_webdevices_http_runtime() {
-                    crate::log_trace!("webdevices-http: runtime failed {:?}\n", err);
+                    crate::log!("webdevices-http: runtime failed {:?}\n", err);
                 }
             }),
             "webdevices-http-runtime",
         );
         if rc == 0 {
-            crate::log_trace!("webdevices-http: submitted Tokio runtime to blocking lane\n");
+            crate::log!("webdevices-http: submitted Tokio runtime to blocking lane\n");
             core::future::pending::<()>().await;
         }
-        crate::log_trace!(
+        crate::log!(
             "webdevices-http: blocking lane unavailable rc={} retry={}ms\n",
             rc,
             WEBDEVICES_HTTP_BLOCKING_LANE_RETRY_MS

@@ -191,7 +191,7 @@ fn init_with(lapic_id: u32, cpu_index: u32, _tag: &str) {
     PERCPU_READY.store(true, Ordering::Release);
 
     if crate::logflag::BOOT_INFO_LOGS {
-        crate::log_trace!("0x{:016X} lapic={} cpu={}\n", ptr as u64, lapic_id, cpu_index);
+        crate::log!("0x{:016X} lapic={} cpu={}\n", ptr as u64, lapic_id, cpu_index);
     }
 }
 

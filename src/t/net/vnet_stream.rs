@@ -154,7 +154,7 @@ pub async fn connect_tcp_v4_stream(
     let (client_io, bridge_io) = tokio::io::duplex(duplex_size);
     tokio::spawn(async move {
         if let Err(err) = tcp_duplex_bridge(net, handle, bridge_io).await {
-            crate::log_trace!("{}: vnet stream bridge ended err={:?}\n", log_tag, err);
+            crate::log!("{}: vnet stream bridge ended err={:?}\n", log_tag, err);
         }
     });
 

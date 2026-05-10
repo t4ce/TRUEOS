@@ -249,7 +249,7 @@ impl VirtioRng {
         let io_base = read_io_base(&dev).map_err(|_| Error::Unsupported)?;
         enable_io_and_bus_master(&dev);
 
-        crate::log_trace!(
+        crate::log!(
             "pci/vrng: found virtio-rng {:02x}:{:02x}.{} vid={:04x} did={:04x} io_base=0x{:04x}\n",
             dev.bus,
             dev.slot,
@@ -365,16 +365,16 @@ pub fn init_once() {
         Ok(dev) => {
             *guard = Some(dev);
             if crate::logflag::BOOT_INFO_LOGS {
-                crate::log_trace!("pci/vrng: attached\n");
+                crate::log!("pci/vrng: attached\n");
             }
         }
         Err(Error::NotFound) => {
             if crate::logflag::BOOT_INFO_LOGS {
-                crate::log_trace!("pci/vrng: not present\n");
+                crate::log!("pci/vrng: not present\n");
             }
         }
         Err(e) => {
-            crate::log_trace!("pci/vrng: init failed: {:?}\n", e);
+            crate::log!("pci/vrng: init failed: {:?}\n", e);
         }
     }
 }

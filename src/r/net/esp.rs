@@ -96,7 +96,7 @@ pub(crate) fn request_lumen_work_capacity_probe() -> u32 {
         .fetch_add(1, Ordering::AcqRel)
         .wrapping_add(1);
     crate::lumen::lumen_net::set_remote_bf16_route_available(false);
-    crate::log_trace!(
+    crate::log!(
         "esp-gate: lumen work capacity probe requested seq={} timeout_ms={}\n",
         seq,
         TRUEOS_LUMEN_WORK_PROBE_TIMEOUT_MS
@@ -118,7 +118,7 @@ pub(crate) fn prepare_lumen_offload_for_prompt() -> bool {
             let best = LUMEN_WORK_PROBE_RESULT_BEST.load(Ordering::Acquire);
             let enabled = sent != 0 && replies != 0 && best != 0;
             crate::lumen::lumen_net::set_remote_bf16_route_available(enabled);
-            crate::log_trace!(
+            crate::log!(
                 "esp-gate: lumen prompt offload gate seq={} sent={} replies={} best={} enabled={}\n",
                 seq,
                 sent,
@@ -133,7 +133,7 @@ pub(crate) fn prepare_lumen_offload_for_prompt() -> bool {
         crate::smp::poll();
         if timeout_ticks != 0 && embassy_time_driver::now().saturating_sub(start) > timeout_ticks {
             crate::lumen::lumen_net::set_remote_bf16_route_available(false);
-            crate::log_trace!(
+            crate::log!(
                 "esp-gate: lumen prompt offload gate seq={} result=timeout enabled=0\n",
                 seq
             );
@@ -664,7 +664,7 @@ fn process_lumen_app_text_payload(
     shadow_x_reassemblies: &mut Vec<ShadowXReassembly>,
 ) {
     if let Some(line) = trueos_lumen_matvec_shadow_received(payload) {
-        crate::log_trace!(
+        crate::log!(
             "esp-gate: lumen matvec shadow received handle={} bytes={} {}\n",
             handle.0,
             payload.len(),
@@ -690,7 +690,7 @@ fn process_lumen_app_text_payload(
                 bytes.as_slice(),
             )
         {
-            crate::log_trace!(
+            crate::log!(
                 "esp-gate: lumen matvec result chunk received handle={} job={} chunk={} offset={} bytes={} total={} got={} chunks={} complete={} copied_rows={} checksum=0x{:016X}\n",
                 handle.0,
                 chunk.job_id,
@@ -712,7 +712,7 @@ fn process_lumen_app_text_payload(
     }) {
         if let Some(chunk) = parse_lumen_matvec_xchunk(line) {
             if let Some(update) = record_shadow_x_chunk(shadow_x_reassemblies, chunk) {
-                crate::log_trace!(
+                crate::log!(
                     "esp-gate: lumen matvec xchunk received handle={} job={} chunk={} offset={} bytes={} total={} got={} chunks={} complete={}\n",
                     handle.0,
                     chunk.job_id,
@@ -746,7 +746,7 @@ fn process_lumen_app_text_payload(
                             chunk.job_id,
                             result_bytes.as_slice(),
                         );
-                        crate::log_trace!(
+                        crate::log!(
                             "esp-gate: lumen matvec x reassembled job={} bytes={} chunks={} checksum=0x{:016X} proof=remote-bf16-matvec rows={} matrix=0x{:016X} result_checksum=0x{:016X} first={:.6} last={:.6} result_bytes={} result_frames={}\n",
                             chunk.job_id,
                             update.total_bytes,
@@ -761,7 +761,7 @@ fn process_lumen_app_text_payload(
                             result_frames
                         );
                     } else {
-                        crate::log_trace!(
+                        crate::log!(
                             "esp-gate: lumen matvec x reassembled job={} bytes={} chunks={} checksum=0x{:016X} proof=unavailable\n",
                             chunk.job_id,
                             update.total_bytes,
@@ -771,7 +771,7 @@ fn process_lumen_app_text_payload(
                     }
                 }
             } else {
-                crate::log_trace!(
+                crate::log!(
                     "esp-gate: lumen matvec xchunk rejected handle={} payload_bytes={}\n",
                     handle.0,
                     payload.len()
@@ -800,7 +800,7 @@ fn submit_trueos_lumen_work_capacity(vnet: &VNet, handle: v::vnet::NetHandle) {
         handle,
         data: v::vnet::ByteBuf::from_slice_trunc(&bytes[..len]),
     });
-    crate::log_trace!(
+    crate::log!(
         "esp-gate: lumen work capacity reply handle={} n={} proto={} caps=0x{:08X} workers={} pending={} min_rows={} online={} running={}\n",
         handle.0,
         telemetry.capacity_lanes,
@@ -864,7 +864,7 @@ fn submit_trueos_lumen_shadow_frame_to_first_peer(
         handle,
         data: v::vnet::ByteBuf::from_slice_trunc(frame.as_slice()),
     });
-    crate::log_trace!(
+    crate::log!(
         "esp-gate: lumen app frame sent handle={} opcode={} payload_bytes={} wire_bytes={} pending={}\n",
         handle.0,
         TRUEOS_LUMEN_APP_OP_TEXT,
@@ -917,7 +917,7 @@ fn submit_trueos_lumen_result_frames(
             continue;
         };
         if frame.len() > v::vnet::MAX_MSG {
-            crate::log_trace!(
+            crate::log!(
                 "esp-gate: lumen matvec result send skipped job={} chunk={} reason=frame-too-large wire_bytes={}\n",
                 job_id,
                 chunk_index,
@@ -1060,7 +1060,7 @@ fn drain_lumen_app_data_for_handle<F>(
     };
     if link.lumen_rx.len().saturating_add(data.len()) > TRUEOS_LUMEN_APP_RX_BUF_BYTES {
         link.lumen_rx.clear();
-        crate::log_trace!(
+        crate::log!(
             "esp-gate: lumen app rx reset handle={} reason=overflow cap={}\n",
             handle.0,
             TRUEOS_LUMEN_APP_RX_BUF_BYTES
@@ -1138,7 +1138,7 @@ pub async fn upload_app_to_device(
     let Some(upload_url) = iface.upload_url() else {
         return Err(EspControlError::DeviceUnreachable);
     };
-    crate::log_trace!(
+    crate::log!(
         "esp-gate: manual upload handle={} source={} target={} bytes={}\n",
         handle.0,
         source_name,
@@ -1234,7 +1234,7 @@ async fn poll_device_status(snapshot: &trueos_esp::gate::DeviceSnapshot) {
                         .lock()
                         .update_status(snapshot.handle, status.clone(), now_ms);
                 if let Some(event) = event {
-                    crate::log_trace!(
+                    crate::log!(
                         "esp-gate: status changed handle={} running={} last_status={} last_error={}\n",
                         event.handle.0,
                         if event.current.running { 1 } else { 0 },
@@ -1245,7 +1245,7 @@ async fn poll_device_status(snapshot: &trueos_esp::gate::DeviceSnapshot) {
                     STATUS_EVENTS.lock().push_back(event);
                 }
             } else {
-                crate::log_trace!(
+                crate::log!(
                     "esp-gate: status parse failed handle={} url={} bytes={}\n",
                     snapshot.handle.0,
                     url.as_str(),
@@ -1254,7 +1254,7 @@ async fn poll_device_status(snapshot: &trueos_esp::gate::DeviceSnapshot) {
             }
         }
         Ok(Err(err)) => {
-            crate::log_trace!(
+            crate::log!(
                 "esp-gate: status fetch failed handle={} url={} timeout_ms={} err={:?}\n",
                 snapshot.handle.0,
                 url.as_str(),
@@ -1263,7 +1263,7 @@ async fn poll_device_status(snapshot: &trueos_esp::gate::DeviceSnapshot) {
             );
         }
         Err(err) => {
-            crate::log_trace!(
+            crate::log!(
                 "esp-gate: status fetch shared-tokio failed handle={} url={} err={:?}\n",
                 snapshot.handle.0,
                 url.as_str(),
@@ -1302,7 +1302,7 @@ pub async fn esp_gate_task() {
         let _ = vnet.submit(v::vnet::Command::OpenTcpListen {
             port: trueos_esp::gate::TRUEOS_PEER_TCP_PORT,
         });
-        crate::log_trace!(
+        crate::log!(
             "esp-gate: starting udp swarm listener on port {} payload=swarm trueos_magic={} peer_tcp={} node=0x{:016X} peer_slots={} rx_buf_bytes={}\n",
             trueos_esp::gate::ESP_UDP_BROADCAST_PORT,
             trueos_esp::gate::TRUEOS_SWARM_MAGIC_TEXT,
@@ -1315,11 +1315,11 @@ pub async fn esp_gate_task() {
         loop {
             if let Some(ev) = vnet.pop_event() {
                 if let v::vnet::Event::Error { msg } = ev {
-                    crate::log_trace!("esp-gate: error {}\n", msg);
+                    crate::log!("esp-gate: error {}\n", msg);
                     if msg == "bad handle" {
                         let cleared = clear_trueos_peer_links(peer_links.as_mut_slice());
                         crate::lumen::lumen_net::set_remote_bf16_route_available(false);
-                        crate::log_trace!(
+                        crate::log!(
                             "esp-gate: peer links cleared reason=bad-handle count={}\n",
                             cleared
                         );
@@ -1332,7 +1332,7 @@ pub async fn esp_gate_task() {
                         kind: v::vnet::SocketKind::Tcp,
                     } if peer_listener.is_none() => {
                         peer_listener = Some(handle);
-                        crate::log_trace!(
+                        crate::log!(
                             "esp-gate: trueos peer tcp listener bound handle={} port={}\n",
                             handle.0,
                             trueos_esp::gate::TRUEOS_PEER_TCP_PORT
@@ -1340,7 +1340,7 @@ pub async fn esp_gate_task() {
                     }
                     v::vnet::Event::TcpEstablished { handle, .. } => {
                         if !ensure_trueos_peer_link(peer_links.as_mut_slice(), handle) {
-                            crate::log_trace!(
+                            crate::log!(
                                 "esp-gate: trueos peer tcp rejected handle={} reason=peer-slot-cap cap={}\n",
                                 handle.0,
                                 TRUEOS_PEER_LINK_CAP
@@ -1349,7 +1349,7 @@ pub async fn esp_gate_task() {
                             continue;
                         }
 
-                        crate::log_trace!(
+                        crate::log!(
                             "esp-gate: trueos peer tcp established handle={} active_links={} sending hello\n",
                             handle.0,
                             trueos_peer_link_count(peer_links.as_slice())
@@ -1363,7 +1363,7 @@ pub async fn esp_gate_task() {
                             handle,
                             data.as_slice(),
                         ) {
-                            crate::log_trace!(
+                            crate::log!(
                                 "esp-gate: trueos peer hello received handle={} node=0x{:016X} bytes={}\n",
                                 handle.0,
                                 advertisement.node_id,
@@ -1374,7 +1374,7 @@ pub async fn esp_gate_task() {
                                 advertisement.node_id,
                                 handle,
                             ) {
-                                crate::log_trace!(
+                                crate::log!(
                                     "esp-gate: trueos peer duplicate handle={} retained_handle={} node=0x{:016X} action=close-duplicate\n",
                                     handle.0,
                                     retained.0,
@@ -1403,7 +1403,7 @@ pub async fn esp_gate_task() {
                                             &mut shadow_x_reassemblies,
                                         );
                                     } else {
-                                        crate::log_trace!(
+                                        crate::log!(
                                             "esp-gate: lumen app frame ignored handle={} opcode={} bytes={}\n",
                                             handle.0,
                                             frame.opcode,
@@ -1443,7 +1443,7 @@ pub async fn esp_gate_task() {
                                         );
                                     }
                                 }
-                                crate::log_trace!(
+                                crate::log!(
                                     "esp-gate: lumen work capacity received handle={} node=0x{:016X} n={} proto={} caps=0x{:08X} workers={} pending={} min_rows={} counted={}\n",
                                     handle.0,
                                     node_id,
@@ -1463,7 +1463,7 @@ pub async fn esp_gate_task() {
                         let retained_peer_node =
                             trueos_peer_link_node_id(peer_links.as_slice(), handle);
                         let _ = remove_trueos_peer_link(peer_links.as_mut_slice(), handle);
-                        crate::log_trace!(
+                        crate::log!(
                             "esp-gate: trueos peer tcp listener closed, reopening port={} retained_peer_node=0x{:016X} active_links={}\n",
                             trueos_esp::gate::TRUEOS_PEER_TCP_PORT,
                             retained_peer_node,
@@ -1478,7 +1478,7 @@ pub async fn esp_gate_task() {
                             if trueos_peer_link_count(peer_links.as_slice()) == 0 {
                                 crate::lumen::lumen_net::set_remote_bf16_route_available(false);
                             }
-                            crate::log_trace!(
+                            crate::log!(
                                 "esp-gate: trueos peer tcp closed handle={} active_links={}\n",
                                 handle.0,
                                 trueos_peer_link_count(peer_links.as_slice())
@@ -1494,14 +1494,14 @@ pub async fn esp_gate_task() {
                         trueos_esp::gate::GateSignal::UdpBound(handle) => {
                             udp_handle = Some(handle);
                             next_peer_advertise_ms = 0;
-                            crate::log_trace!(
+                            crate::log!(
                                 "esp-gate: udp listener bound handle={} port={}\n",
                                 handle.0,
                                 trueos_esp::gate::ESP_UDP_BROADCAST_PORT
                             );
                         }
                         trueos_esp::gate::GateSignal::EspDiscovered(from) => {
-                            crate::log_trace!(
+                            crate::log!(
                                 "esp-gate: heartbeat=swarm from {}.{}.{}.{} upload_port={}\n",
                                 from.addr[0],
                                 from.addr[1],
@@ -1529,7 +1529,7 @@ pub async fn esp_gate_task() {
                                 continue;
                             }
 
-                            crate::log_trace!(
+                            crate::log!(
                                 "esp-gate: heartbeat={} from {}.{}.{}.{} peer_tcp={} node=0x{:016X} caps=0x{:08X}\n",
                                 trueos_esp::gate::TRUEOS_SWARM_MAGIC_TEXT,
                                 advertisement.from.addr[0],
@@ -1565,7 +1565,7 @@ pub async fn esp_gate_task() {
                                         ),
                                     });
                                 } else {
-                                    crate::log_trace!(
+                                    crate::log!(
                                         "esp-gate: trueos peer dial skipped node=0x{:016X} reason=peer-slot-cap cap={}\n",
                                         advertisement.node_id,
                                         TRUEOS_PEER_LINK_CAP
@@ -1603,14 +1603,14 @@ pub async fn esp_gate_task() {
                     lumen_work_probe_deadline_ms = 0;
                     crate::lumen::lumen_net::set_remote_bf16_route_available(false);
                     publish_lumen_work_probe_result(lumen_work_probe_seq, 0, 0, 0);
-                    crate::log_trace!(
+                    crate::log!(
                         "esp-gate: lumen work capacity probe seq={} skipped reason=no-peers\n",
                         lumen_work_probe_seq
                     );
                 } else {
                     lumen_work_probe_deadline_ms =
                         now_ms.saturating_add(TRUEOS_LUMEN_WORK_PROBE_TIMEOUT_MS);
-                    crate::log_trace!(
+                    crate::log!(
                         "esp-gate: lumen work capacity probe seq={} sent={} timeout_ms={}\n",
                         lumen_work_probe_seq,
                         lumen_work_probe_sent,
@@ -1629,7 +1629,7 @@ pub async fn esp_gate_task() {
                     lumen_work_probe_replies,
                     lumen_work_probe_best,
                 );
-                crate::log_trace!(
+                crate::log!(
                     "esp-gate: lumen work capacity probe seq={} complete sent={} replies={} best={}\n",
                     lumen_work_probe_seq,
                     lumen_work_probe_sent,
@@ -1647,7 +1647,7 @@ pub async fn esp_gate_task() {
                         frame.as_slice(),
                     )
                 {
-                    crate::log_trace!(
+                    crate::log!(
                         "esp-gate: lumen matvec shadow send failed bytes={}\n",
                         frame.len()
                     );
@@ -1685,7 +1685,7 @@ pub async fn esp_gate_registry_task() {
             heartbeat_tick = 0;
             let count = DEVICE_REGISTRY.lock().len();
             if count != 0 {
-                crate::log_trace!("esp-gate: registry active_devices={}\n", count);
+                crate::log!("esp-gate: registry active_devices={}\n", count);
             }
         }
 
@@ -1705,7 +1705,7 @@ pub async fn esp_piano_udp_task() {
 
         let mut piano = trueos_esp::piano::PianoUdpReceiver::new();
         let _ = vnet.submit(piano.bootstrap_command());
-        crate::log_trace!(
+        crate::log!(
             "esp-piano: starting udp listener port={} keys={}\n",
             trueos_esp::piano::TRUEOS_PIANO_UDP_PORT,
             trueos_esp::piano::PIANO_KEY_COUNT
@@ -1716,20 +1716,20 @@ pub async fn esp_piano_udp_task() {
                 match ev {
                     v::vnet::Event::Opened { handle, kind } if kind == v::vnet::SocketKind::Udp => {
                         piano.bind(handle);
-                        crate::log_trace!(
+                        crate::log!(
                             "esp-piano: udp listener bound handle={} port={}\n",
                             handle.0,
                             trueos_esp::piano::TRUEOS_PIANO_UDP_PORT
                         );
                     }
                     v::vnet::Event::Closed { handle } if piano.unbind(handle) => {
-                        crate::log_trace!("esp-piano: udp listener closed, reopening\n");
+                        crate::log!("esp-piano: udp listener closed, reopening\n");
                         let _ = vnet.submit(piano.bootstrap_command());
                     }
                     v::vnet::Event::UdpPacket { handle, from, data } => {
                         let handled = piano.on_packet(handle, data.as_slice(), |event| {
                             let duration_ms = 45 + (u32::from(event.velocity) * 140 / 127);
-                            crate::log_trace!(
+                            crate::log!(
                                 "esp-piano: note key={} note={} velocity={} delta={} from={}.{}.{}.{}\n",
                                 event.key_index,
                                 event.note,
@@ -1743,11 +1743,11 @@ pub async fn esp_piano_udp_task() {
                             if let Err(err) =
                                 crate::aud::play_midi_note(event.note, event.velocity, duration_ms)
                             {
-                                crate::log_trace!("esp-piano: note play err={}\n", err);
+                                crate::log!("esp-piano: note play err={}\n", err);
                             }
                         });
                         if !handled {
-                            crate::log_trace!(
+                            crate::log!(
                                 "esp-piano: ignored udp bytes={} from={}.{}.{}.{}:{}\n",
                                 data.len(),
                                 from.addr[0],
@@ -1759,7 +1759,7 @@ pub async fn esp_piano_udp_task() {
                         }
                     }
                     v::vnet::Event::Error { msg } => {
-                        crate::log_trace!("esp-piano: error {}\n", msg);
+                        crate::log!("esp-piano: error {}\n", msg);
                     }
                     v::vnet::Event::UdpPacketV6 { .. }
                     | v::vnet::Event::TcpEstablished { .. }

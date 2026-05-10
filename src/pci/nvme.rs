@@ -6,7 +6,7 @@ use crate::{disc::block, pci::mmio};
 macro_rules! nvme_verbose_log {
     ($($arg:tt)*) => {
         if crate::logflag::NVME_VERBOSE {
-            crate::log_trace!($($arg)*);
+            crate::log!($($arg)*);
         }
     };
 }
@@ -39,7 +39,7 @@ fn map_controller_mmio(dev: &crate::pci::PciDevice) -> Option<(block::PciAddress
         bar_hi
     );
     if (bar_lo & 0x1) != 0 {
-        crate::log_trace!(
+        crate::log!(
             "nvme: {:02X}:{:02X}.{} BAR0 is IO space (unsupported)\n",
             dev.bus,
             dev.slot,
@@ -74,7 +74,7 @@ fn map_controller_mmio(dev: &crate::pci::PciDevice) -> Option<(block::PciAddress
             align
         );
         let Some(new_base) = crate::pci::alloc_hotplug_mmio_base(dev.bus, size, align) else {
-            crate::log_trace!(
+            crate::log!(
                 "nvme: {:02X}:{:02X}.{} BAR0 unassigned and allocator failed (size=0x{:X} align=0x{:X})\n",
                 dev.bus,
                 dev.slot,
@@ -161,7 +161,7 @@ fn map_controller_mmio(dev: &crate::pci::PciDevice) -> Option<(block::PciAddress
     let mmio_ptr = match mmio::map_mmio_region(base, map_len) {
         Ok(ptr) => ptr,
         Err(err) => {
-            crate::log_trace!("nvme: {} failed to map MMIO: {:?}\n", pci_addr, err);
+            crate::log!("nvme: {} failed to map MMIO: {:?}\n", pci_addr, err);
             return None;
         }
     };
@@ -171,7 +171,7 @@ fn map_controller_mmio(dev: &crate::pci::PciDevice) -> Option<(block::PciAddress
 
 pub fn probe_once() {
     if crate::limine::hhdm_offset().is_none() {
-        crate::log_trace!("nvme: no HHDM\n");
+        crate::log!("nvme: no HHDM\n");
         return;
     }
 
@@ -220,8 +220,8 @@ pub fn probe_once() {
     }
 
     if !did_any {
-        crate::log_trace!("nvme: none found\n");
+        crate::log!("nvme: none found\n");
     } else if !registered_any {
-        crate::log_trace!("nvme: found controller(s) but none registered\n");
+        crate::log!("nvme: found controller(s) but none registered\n");
     }
 }
