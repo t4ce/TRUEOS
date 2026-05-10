@@ -1190,13 +1190,13 @@ static TASKS: [TaskSpec; 70] = [
         spawn_ai_qjs_oneshot,
     ),
     TaskSpec::disabled("html-demo", 0, &HTML_DEMO_STARTED, spawn_html_demo),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "http-trueosfs",
         NET_ANY_CONFIGURED_AND_ROOT_READY,
         &HTTP_TRUEOSFS_STARTED,
         spawn_http_trueosfs,
     ),
-    TaskSpec::enabled("pciids-git", PCIIDS_GIT_READY, &PCIIDS_GIT_STARTED, spawn_pciids_git),
+    TaskSpec::disabled("pciids-git", PCIIDS_GIT_READY, &PCIIDS_GIT_STARTED, spawn_pciids_git),
     TaskSpec::enabled_gated(
         "hyper-http1-probe",
         HYPER_HTTP1_PROBE_READY,
@@ -1204,9 +1204,9 @@ static TASKS: [TaskSpec; 70] = [
         &HYPER_HTTP1_PROBE_STARTED,
         spawn_hyper_http1_probe,
     ),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "chat-http",
-        crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
+        crate::r::readiness::NET_V4_CONFIGURED,
         &CHAT_HTTP_STARTED,
         spawn_chat_http,
     ),
@@ -1429,7 +1429,7 @@ static TASKS: [TaskSpec; 70] = [
         &UI2_SWARM_DEMO_STARTED,
         spawn_ui2_swarm_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "trueosfs-ready-hook",
         crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
         &TRUEOSFS_READY_HOOK_STARTED,
