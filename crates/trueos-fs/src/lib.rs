@@ -376,7 +376,7 @@ async fn read_exact_bytes<D: BlockIo>(
     let safe_bytes = if max_bytes == 0 {
         256 * 1024
     } else {
-        max_bytes.saturating_mul(7) / 8
+        max_bytes
     };
     let max_blocks_by_bytes = core::cmp::max(1, safe_bytes / bs);
     let mut remaining = out;

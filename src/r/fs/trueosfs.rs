@@ -298,6 +298,32 @@ impl trueos_fs::BlockIo for KernelBlockIo {
             );
         }
 
+        if blocks <= max_blocks {
+            let out = self.handle.read_blocks(lba, blocks).await?;
+            if trace {
+                let now_ms = trueosfs_trace_now_ms();
+                crate::log!(
+                    "trueosfs: block-read progress disk={} lba={} done_blocks={} total_blocks={} done={} total={} elapsed_ms={}\n",
+                    self.handle.id().raw(),
+                    lba,
+                    blocks,
+                    blocks,
+                    total_bytes,
+                    total_bytes,
+                    now_ms.saturating_sub(start_ms)
+                );
+                crate::log!(
+                    "trueosfs: block-read done disk={} lba={} blocks={} bytes={} elapsed_ms={}\n",
+                    self.handle.id().raw(),
+                    lba,
+                    blocks,
+                    total_bytes,
+                    now_ms.saturating_sub(start_ms)
+                );
+            }
+            return Ok(out);
+        }
+
         let mut out = Vec::with_capacity(bs.saturating_mul(blocks));
         let mut cur_lba = lba;
         let mut remaining = blocks;
@@ -379,19 +405,43 @@ impl trueos_fs::BlockIo for KernelBlockIo {
         };
         let trace = crate::logflag::LUMEN_STORAGE_TRACE_LOGS && total_bytes >= 128 * 1024;
         let start_ms = trueosfs_trace_now_ms();
+        let mut last_log_ms = start_ms;
+        let mut last_log_bytes = 0usize;
+
+        if trace {
+            crate::log!(
+                "trueosfs: block-read start disk={} lba={} blocks={} bytes={} bs={} max_blocks={} max_xfer={}\n",
+                self.handle.id().raw(),
+                lba,
+                blocks,
+                total_bytes,
+                bs,
+                max_blocks,
+                info.max_transfer_bytes
+            );
+        }
 
         if blocks <= max_blocks {
             self.handle.read_blocks_into(lba, blocks, dst).await?;
             if trace {
-                trueosfs_block_read_trace_sample(
+                let now_ms = trueosfs_trace_now_ms();
+                crate::log!(
+                    "trueosfs: block-read progress disk={} lba={} done_blocks={} total_blocks={} done={} total={} elapsed_ms={}\n",
+                    self.handle.id().raw(),
+                    lba,
+                    blocks,
+                    blocks,
+                    total_bytes,
+                    total_bytes,
+                    now_ms.saturating_sub(start_ms)
+                );
+                crate::log!(
+                    "trueosfs: block-read done disk={} lba={} blocks={} bytes={} elapsed_ms={}\n",
                     self.handle.id().raw(),
                     lba,
                     blocks,
                     total_bytes,
-                    bs,
-                    max_blocks,
-                    info.max_transfer_bytes,
-                    start_ms,
+                    now_ms.saturating_sub(start_ms)
                 );
             }
             return Ok(());
@@ -400,6 +450,7 @@ impl trueos_fs::BlockIo for KernelBlockIo {
         let mut cur_lba = lba;
         let mut remaining_blocks = blocks;
         let mut off = 0usize;
+        let mut done_blocks = 0usize;
         while remaining_blocks > 0 {
             let blocks_here = core::cmp::min(remaining_blocks, max_blocks);
             let bytes_here = blocks_here * bs;
@@ -409,18 +460,39 @@ impl trueos_fs::BlockIo for KernelBlockIo {
             cur_lba = cur_lba.saturating_add(blocks_here as u64);
             remaining_blocks = remaining_blocks.saturating_sub(blocks_here);
             off = off.saturating_add(bytes_here);
+            done_blocks = done_blocks.saturating_add(blocks_here);
+
+            if trace {
+                let done_bytes = done_blocks.saturating_mul(bs);
+                let now_ms = trueosfs_trace_now_ms();
+                if remaining_blocks == 0
+                    || done_bytes.saturating_sub(last_log_bytes) >= 512 * 1024
+                    || now_ms.saturating_sub(last_log_ms) >= 1000
+                {
+                    crate::log!(
+                        "trueosfs: block-read progress disk={} lba={} done_blocks={} total_blocks={} done={} total={} elapsed_ms={}\n",
+                        self.handle.id().raw(),
+                        lba,
+                        done_blocks,
+                        blocks,
+                        done_bytes,
+                        total_bytes,
+                        now_ms.saturating_sub(start_ms)
+                    );
+                    last_log_ms = now_ms;
+                    last_log_bytes = done_bytes;
+                }
+            }
         }
 
         if trace {
-            trueosfs_block_read_trace_sample(
+            crate::log!(
+                "trueosfs: block-read done disk={} lba={} blocks={} bytes={} elapsed_ms={}\n",
                 self.handle.id().raw(),
                 lba,
                 blocks,
                 total_bytes,
-                bs,
-                max_blocks,
-                info.max_transfer_bytes,
-                start_ms,
+                trueosfs_trace_now_ms().saturating_sub(start_ms)
             );
         }
 
