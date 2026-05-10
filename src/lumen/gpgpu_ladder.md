@@ -136,9 +136,22 @@ Observed result:
 This narrows the cliff to the range `(186, 224]` for the current static
 DP4A/HDC-store/EOT artifact shape.
 
-The runtime status exported to Lumen latches the last clean walker proof, not
-the final failed ladder attempt.  That keeps later sidepaths eligible after the
-ladder intentionally probes past the cliff.
+Current hold setting:
+
+- Keep the static walker ladder at the validated `186` group rung.
+- Do not spend this phase tuning intermediate walker counts or other launch
+  parameters.
+- Treat `186` groups as the local GPU backend capacity estimate for planning:
+  `186` hardware threads and `1488` SIMD8 lane dispatches.
+
+The Lumen backend planner now budgets only 20% of that validated local GPU
+capacity for the GPU side.  For the current `1792` row decode matvec, that
+means roughly `37` GPU-budget hardware threads and `358` target shadow rows,
+while CPU/AP remains responsible for the real result and the remaining rows.
+
+The runtime status exported to Lumen latches the clean `186` proof.  Later
+sidepaths therefore plan from the validated frontier instead of from an
+experimental failed scale attempt.
 
 ## What This Still Does Not Prove
 
@@ -226,6 +239,26 @@ enough to proceed to the next rung.  The next rung should be a guarded one-tile
 GPU shadow compare that keeps CPU/AP ownership of the real output, stages one
 manifest row plus `x` into the GPGPU arena, submits one tile only, and compares
 the GPU-written result against the already logged CPU reference.
+
+## CPU Compute Lane Telemetry
+
+The CPU/AP side now has a sparse runtime heartbeat for BF16 matvec work.  This
+is intentionally not a full per-row trace.  It samples the first few matvec
+calls and worker chunks, then logs occasional later samples:
+
+- `burn-baby: bf16 compute begin` records the call index, rows, `k_dim`,
+  `chunk_rows`, local/remote row split, worker count, and queue counters.
+- `burn-baby: bf16 chunk-start` records the AP slot that actually picked up a
+  chunk, the row range, row count, `k_dim`, current done count, and queue depth.
+- `burn-baby: bf16 chunk-finish` records the same chunk range, elapsed time,
+  and done count after the worker completed the chunk.
+- `burn-baby: bf16 compute done` records local chunk completion, elapsed time,
+  submitted/completed/polled deltas, and final queue depth.
+
+This gives a lightweight answer to "is it calculating right now?" while keeping
+the log useful during long prefill runs.  The real result owner is still CPU/AP;
+the local GPU path remains shadow-only until a later rung explicitly transfers
+or compares output ownership.
 
 ## T4.5 One-Tile Arena Stage
 
@@ -325,7 +358,7 @@ SIMD8 payloads belongs after the first one-worker output readback is understood.
 
 ## T4.7 One-Worker Output Sentinel
 
-Status: implemented, awaiting runtime observation.
+Status: runtime-observed as a one-worker output-addressability proof.
 
 This rung opts in the first GPU write to the staged one-tile output arena.  It
 does not attempt model math.  It patches a tiny copy of the proven
@@ -344,17 +377,42 @@ Expected clean proof:
 - `lumen-gpu-shadow: director-step step=7 mode=one-worker-output-sentinel`
 - `submitted=1`
 - `readback_ok=1`
-- `reason=sentinel-written`
+- `reason=sentinel-written` or `reason=sentinel-written-no-ts-delta`
 - `output_first_before=0x00000000`
 - `output_first_after=0xC0DE7747`
 - `output_hits_lo64=0x0000000000000001`
-- `observed_lane_dispatch` is nonzero, ideally `8`
+- `observed_lane_dispatch=8` for a counted dispatch, or `0` when the one-group
+  command retires cleanly but the public TS counter does not move
 - `output_owner=cpu-ap`
 
 The important interpretation is again narrow: the GPU can write to the staged
 one-tile output buffer and the CPU can read that write back.  This proves arena
 output addressability for one worker.  It still does not prove BF16 loads,
 one-row dot math, model matvec, or result ownership transfer.
+
+Runtime checkpoint:
+
+- The latest Lumen trace reached `director-step step=7`.
+- `submitted=1`, `finished=1`, and the sentinel write read back correctly.
+- The current trace before the readback-label cleanup logged
+  `readback_ok=0 reason=no-dispatch-delta` because `observed_lane_dispatch=0`,
+  even though the output and finish marker were correct.  The runtime condition
+  is now classified as `readback_ok=1 reason=sentinel-written-no-ts-delta`.
+- `expected_lane_dispatch=8`; current tiny one-group run observed no TS counter
+  delta, so `observed_lane_dispatch=0` is preserved as telemetry rather than
+  treated as a failed readback.
+- `output_first_before=0x00000000`.
+- `output_first_after=0xC0DE7747`.
+- `output_hits_lo64=0x0000000000000001`.
+- `finish_marker=0xC0DE7732`.
+
+This rung deliberately did not require a fresh offline EU artifact because the
+semantic question was addressability, not arithmetic.  Reusing the proven
+HDC-store/EOT shell and patching only the immediate sentinel plus output GPU
+address kept the new variable small.  The next rung should be a real new
+artifact: one staged-row load, one activation-vector load, one tiny arithmetic
+reduction or checksum/dot surrogate, then one output write, still with a single
+worker and CPU/AP output ownership.
 
 ## Backend Selection Boundary
 

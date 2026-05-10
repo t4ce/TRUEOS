@@ -15,6 +15,7 @@ static FALLBACK_QUEUE: Mutex<VecDeque<ComputeJob>> = Mutex::new(VecDeque::new())
 static LOGGED_QUEUE_LANE: AtomicBool = AtomicBool::new(false);
 static LOGGED_POLL_LANE: AtomicBool = AtomicBool::new(false);
 static LOGGED_SERVICE_PROTECTED_LANE: AtomicBool = AtomicBool::new(false);
+static LOGGED_BF16_SLOT_SPREAD: AtomicBool = AtomicBool::new(false);
 static SERVICE_PROTECTED_SLOTS: AtomicU64 = AtomicU64::new(0);
 #[cfg(target_arch = "x86_64")]
 static LOGGED_BF16_SIMD_PROBE: AtomicBool = AtomicBool::new(false);
@@ -323,6 +324,16 @@ pub fn matvec_rowmajor_bf16(
     let x_ptr = x.as_ptr() as usize;
     let w_ptr = w_rowmajor_bf16.as_ptr() as usize;
     let out_ptr = out.as_mut_ptr() as usize;
+    let spread_slots = if !LOGGED_BF16_SLOT_SPREAD.load(Ordering::Acquire) {
+        online_compute_worker_slots()
+    } else {
+        Vec::new()
+    };
+    let spread_counts_before = if spread_slots.is_empty() {
+        Vec::new()
+    } else {
+        poll_counts_for_slots(&spread_slots)
+    };
 
     let mut submitted = 0usize;
     let mut row_start = 0usize;
@@ -352,6 +363,19 @@ pub fn matvec_rowmajor_bf16(
         if !poll_compute_lane() {
             core::hint::spin_loop();
         }
+    }
+    if !spread_counts_before.is_empty() && !LOGGED_BF16_SLOT_SPREAD.swap(true, Ordering::AcqRel) {
+        let spread_counts_after = poll_counts_for_slots(&spread_slots);
+        let spread = slot_poll_deltas(&spread_counts_before, &spread_counts_after);
+        crate::log!(
+            "burn-baby: bf16 slot-spread rows={} k_dim={} chunk_rows={} submitted={} slots={:?} deltas={:?} proof=ap-queue-distribution\n",
+            local_row_end,
+            k_dim,
+            chunk_rows,
+            submitted,
+            spread_slots,
+            spread
+        );
     }
 
     if let Some(ticket) = remote
@@ -428,6 +452,22 @@ fn log_compute_wait_progress(
         stats.polled_jobs,
         stats.queued_jobs
     );
+}
+
+fn slot_poll_deltas(before: &[(u32, u64)], after: &[(u32, u64)]) -> Vec<(u32, u64)> {
+    after
+        .iter()
+        .copied()
+        .filter_map(|(slot, count_after)| {
+            let count_before = before
+                .iter()
+                .find(|(before_slot, _)| *before_slot == slot)
+                .map(|(_, count)| *count)
+                .unwrap_or(0);
+            let delta = count_after.saturating_sub(count_before);
+            (delta != 0).then_some((slot, delta))
+        })
+        .collect()
 }
 
 fn online_background_worker_slots() -> Vec<u32> {
