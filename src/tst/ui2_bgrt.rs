@@ -20,7 +20,7 @@ fn bgrt_pixels_to_rgba(pixels: &[u32]) -> Vec<u8> {
 pub async fn ui2_bgrt_demo_task() {
     let _task_guard = crate::r::spawn_service::task_run_guard("ui2-bgrt-demo");
     let Some((width, height, pixels)) = crate::efi::acpi::bgrt::decoded_logo_rgba() else {
-        crate::log!("ui2-bgrt-demo: no BGRT logo available\n");
+        crate::log_trace!("ui2-bgrt-demo: no BGRT logo available\n");
         return;
     };
     let width_u32: u32 = width.try_into().expect("BGRT width exceeds u32");
@@ -46,7 +46,7 @@ pub async fn ui2_bgrt_demo_task() {
             )
         };
         if rc != 0 {
-            crate::log!(
+            crate::log_trace!(
                 "ui2-bgrt-demo: direct upload failed tex={} size={}x{} rc={}\n",
                 UI2_BGRT_TEX_ID,
                 width,
@@ -81,7 +81,7 @@ pub async fn ui2_bgrt_demo_task() {
     };
 
     let Some(surface) = surface else {
-        crate::log!("ui2-bgrt-demo: window creation failed tex={}\n", UI2_BGRT_TEX_ID);
+        crate::log_trace!("ui2-bgrt-demo: window creation failed tex={}\n", UI2_BGRT_TEX_ID);
         return;
     };
     let _ = surface.bind_spawn_task("ui2-bgrt-demo");
@@ -98,7 +98,7 @@ pub async fn ui2_bgrt_demo_task() {
     };
 
     if !upload_ok {
-        crate::log!(
+        crate::log_trace!(
             "ui2-bgrt-demo: upload failed window={} tex={} size={}x{}\n",
             surface.window_id(),
             surface.tex_id(),
@@ -108,7 +108,7 @@ pub async fn ui2_bgrt_demo_task() {
         return;
     }
 
-    crate::log!(
+    crate::log_trace!(
         "ui2-bgrt-demo: window={} tex={} size={}x{} mode={}\n",
         surface.window_id(),
         surface.tex_id(),

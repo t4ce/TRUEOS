@@ -16,12 +16,12 @@ fn submit_primary_probe_now(reason: &'static str) -> bool {
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
     {
-        crate::log!("intel/render: primary-probe skipped reason=in-flight trigger={}\n", reason);
+        crate::log_trace!("intel/render: primary-probe skipped reason=in-flight trigger={}\n", reason);
         return false;
     }
 
     if PRIMARY_DISABLE_RENDER_BRINGUP {
-        crate::log!(
+        crate::log_trace!(
             "intel/render: primary-probe skipped reason=disabled trigger={} seq={}\n",
             reason,
             probe_seq
@@ -31,17 +31,17 @@ fn submit_primary_probe_now(reason: &'static str) -> bool {
     }
 
     let Some(dev) = crate::intel::claimed_device() else {
-        crate::log!("intel/render: primary-triangle skipped reason=no-device\n");
+        crate::log_trace!("intel/render: primary-triangle skipped reason=no-device\n");
         PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
         return false;
     };
     let Some(surface_gpu) = crate::intel::display::primary_surface_gpu_addr() else {
-        crate::log!("intel/render: primary-triangle skipped reason=no-surface\n");
+        crate::log_trace!("intel/render: primary-triangle skipped reason=no-surface\n");
         PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
         return false;
     };
     let Some((width, height)) = crate::intel::display::active_scanout_dimensions() else {
-        crate::log!("intel/render: primary-triangle skipped reason=no-dimensions\n");
+        crate::log_trace!("intel/render: primary-triangle skipped reason=no-dimensions\n");
         PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
         return false;
     };
@@ -49,7 +49,7 @@ fn submit_primary_probe_now(reason: &'static str) -> bool {
         .checked_mul(4)
         .and_then(|v| crate::intel::align_up(v as usize, 64))
     else {
-        crate::log!("intel/render: primary-triangle skipped reason=bad-pitch width={}\n", width);
+        crate::log_trace!("intel/render: primary-triangle skipped reason=bad-pitch width={}\n", width);
         PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
         return false;
     };
@@ -63,17 +63,17 @@ fn submit_primary_probe_now(reason: &'static str) -> bool {
         || warm.result_len == 0
         || warm.streamout_len == 0
     {
-        crate::log!("intel/render: primary-triangle skipped reason=warm-buffers\n");
+        crate::log_trace!("intel/render: primary-triangle skipped reason=warm-buffers\n");
         PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
         return false;
     }
     if !forcewake_render_acquire(warm) {
-        crate::log!("intel/render: primary-triangle skipped reason=forcewake\n");
+        crate::log_trace!("intel/render: primary-triangle skipped reason=forcewake\n");
         PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
         return false;
     }
     if !ensure_smoke_buffers_mapped(dev, warm) {
-        crate::log!("intel/render: primary-triangle skipped reason=ggtt-map\n");
+        crate::log_trace!("intel/render: primary-triangle skipped reason=ggtt-map\n");
         PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
         return false;
     }
@@ -684,7 +684,7 @@ fn submit_triangle_vf_streamout_proof(
         experiment,
         VfPrimitiveGeometry::Canonical,
     ) else {
-        crate::log!(
+        crate::log_trace!(
             "intel/render: vf-streamout-proof skipped reason=resource-layout size={}x{} pitch=0x{:X}\n",
             rect_w,
             rect_h,
@@ -695,7 +695,7 @@ fn submit_triangle_vf_streamout_proof(
     let slice_hash_table_offset = match write_vf_streamout_probe_state(warm) {
         Ok(offset) => offset,
         Err(reason) => {
-            crate::log!(
+            crate::log_trace!(
                 "intel/render: vf-streamout-proof skipped reason=probe-state detail={}\n",
                 reason
             );
@@ -729,7 +729,7 @@ fn submit_triangle_vf_streamout_proof(
     ) {
         Ok(bytes) => bytes,
         Err(reason) => {
-            crate::log!("intel/render: vf-streamout-proof batch build failed detail={}\n", reason);
+            crate::log_trace!("intel/render: vf-streamout-proof batch build failed detail={}\n", reason);
             return false;
         }
     };
@@ -796,7 +796,7 @@ fn submit_triangle_vf_draw_to_surface(
         StreamoutProofExperiment::PositionSlot1,
         geometry,
     ) else {
-        crate::log!(
+        crate::log_trace!(
             "intel/render: {} staging skipped reason=resource-layout size={}x{} pitch=0x{:X} geometry={}\n",
             submit_name,
             rect_w,
@@ -811,7 +811,7 @@ fn submit_triangle_vf_draw_to_surface(
     log_render_buffer_layout(warm, Some(dst_gpu_addr));
     log_render_packet_encodings();
     if crate::intel::shader::triangle_pipeline_is_placeholder() {
-        crate::log!(
+        crate::log_trace!(
             "intel/render: {} staged rt=0x{:X} vb=0x{:X} state=0x{:X} size={}x{} pitch=0x{:X} vertices={} stride={} geometry={} status=awaiting-baked-shaders vs_src={} ps_src={} note={}\n",
             submit_name,
             draw.rt_gpu_addr,
@@ -858,7 +858,7 @@ fn submit_triangle_vf_draw_to_surface(
     let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline) {
         Ok(layout) => layout,
         Err(reason) => {
-            crate::log!(
+            crate::log_trace!(
                 "intel/render: {} staging skipped reason=shader-layout-error detail={} note={}\n",
                 submit_name,
                 reason,
@@ -958,7 +958,7 @@ fn submit_triangle_vf_draw_to_surface(
     let probe_state = match write_triangle_probe_state(warm, draw, shader_layout, blend_mode) {
         Ok(layout) => layout,
         Err(reason) => {
-            crate::log!(
+            crate::log_trace!(
                 "intel/render: {} staging skipped reason=probe-state-error detail={}\n",
                 submit_name,
                 reason
@@ -998,7 +998,7 @@ fn submit_triangle_vf_draw_to_surface(
     ) {
         Ok(bytes) => bytes,
         Err(reason) => {
-            crate::log!(
+            crate::log_trace!(
                 "intel/render: {} staging skipped reason=probe-batch-error detail={}\n",
                 submit_name,
                 reason
@@ -1240,7 +1240,7 @@ fn submit_triangle_vs_streamout_proof(
 ) -> bool {
     let Some(draw) = prepare_triangle_draw_resources(warm, dst_gpu_addr, pitch, rect_w, rect_h)
     else {
-        crate::log!(
+        crate::log_trace!(
             "intel/render: vs-streamout-proof skipped reason=resource-layout size={}x{} pitch=0x{:X}\n",
             rect_w,
             rect_h,
@@ -1250,13 +1250,13 @@ fn submit_triangle_vs_streamout_proof(
     };
     let pipeline = crate::intel::shader::triangle_pipeline();
     if crate::intel::shader::triangle_pipeline_is_placeholder() {
-        crate::log!("intel/render: vs-streamout-proof skipped reason=placeholder-pipeline\n");
+        crate::log_trace!("intel/render: vs-streamout-proof skipped reason=placeholder-pipeline\n");
         return false;
     }
     let slice_hash_table_offset = match write_vf_streamout_probe_state(warm) {
         Ok(offset) => offset,
         Err(reason) => {
-            crate::log!(
+            crate::log_trace!(
                 "intel/render: vs-streamout-proof skipped reason=probe-state detail={}\n",
                 reason
             );
@@ -1266,7 +1266,7 @@ fn submit_triangle_vs_streamout_proof(
     let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline) {
         Ok(layout) => layout,
         Err(reason) => {
-            crate::log!(
+            crate::log_trace!(
                 "intel/render: vs-streamout-proof skipped reason=shader-layout detail={}\n",
                 reason
             );
@@ -1279,7 +1279,7 @@ fn submit_triangle_vs_streamout_proof(
             .unwrap_or(usize::MAX)
             > slice_hash_table_offset as usize
     {
-        crate::log!(
+        crate::log_trace!(
             "intel/render: vs-streamout-proof skipped reason=slice-hash-overlap used_end=0x{:X} slice_hash_off=0x{:X}\n",
             shader_layout.used_bytes,
             slice_hash_table_offset
@@ -1317,7 +1317,7 @@ fn submit_triangle_vs_streamout_proof(
     ) {
         Ok(bytes) => bytes,
         Err(reason) => {
-            crate::log!("intel/render: vs-streamout-proof batch build failed detail={}\n", reason);
+            crate::log_trace!("intel/render: vs-streamout-proof batch build failed detail={}\n", reason);
             return false;
         }
     };
@@ -1373,7 +1373,7 @@ fn submit_triangle_streamout_proof(
 ) -> bool {
     let Some(draw) = prepare_triangle_draw_resources(warm, dst_gpu_addr, pitch, rect_w, rect_h)
     else {
-        crate::log!(
+        crate::log_trace!(
             "intel/render: streamout-proof skipped reason=resource-layout size={}x{} pitch=0x{:X}\n",
             rect_w,
             rect_h,
@@ -1383,13 +1383,13 @@ fn submit_triangle_streamout_proof(
     };
     let pipeline = crate::intel::shader::triangle_pipeline();
     if crate::intel::shader::triangle_pipeline_is_placeholder() {
-        crate::log!("intel/render: streamout-proof skipped reason=placeholder-pipeline\n");
+        crate::log_trace!("intel/render: streamout-proof skipped reason=placeholder-pipeline\n");
         return false;
     }
     let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline) {
         Ok(layout) => layout,
         Err(reason) => {
-            crate::log!(
+            crate::log_trace!(
                 "intel/render: streamout-proof skipped reason=shader-layout detail={}\n",
                 reason
             );
@@ -1404,7 +1404,7 @@ fn submit_triangle_streamout_proof(
     ) {
         Ok(layout) => layout,
         Err(reason) => {
-            crate::log!(
+            crate::log_trace!(
                 "intel/render: streamout-proof skipped reason=probe-state detail={}\n",
                 reason
             );
@@ -1445,7 +1445,7 @@ fn submit_triangle_streamout_proof(
     ) {
         Ok(bytes) => bytes,
         Err(reason) => {
-            crate::log!("intel/render: streamout-proof batch build failed detail={}\n", reason);
+            crate::log_trace!("intel/render: streamout-proof batch build failed detail={}\n", reason);
             return false;
         }
     };
@@ -1670,7 +1670,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface(
 ) -> bool {
     let Some(draw) = prepare_triangle_draw_resources(warm, dst_gpu_addr, pitch, rect_w, rect_h)
     else {
-        crate::log!(
+        crate::log_trace!(
             "intel/render: {} staging skipped reason=resource-layout size={}x{} pitch=0x{:X}\n",
             submit_name,
             rect_w,
@@ -1684,7 +1684,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface(
     log_render_buffer_layout(warm, Some(dst_gpu_addr));
     log_render_packet_encodings();
     if crate::intel::shader::triangle_pipeline_is_placeholder() {
-        crate::log!(
+        crate::log_trace!(
             "intel/render: {} staged rt=0x{:X} vb=0x{:X} state=0x{:X} size={}x{} pitch=0x{:X} vertices={} stride={} status=awaiting-baked-shaders vs_src={} ps_src={} note={}\n",
             submit_name,
             draw.rt_gpu_addr,
@@ -1749,7 +1749,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface(
     let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline) {
         Ok(layout) => layout,
         Err(reason) => {
-            crate::log!(
+            crate::log_trace!(
                 "intel/render: {} staging skipped reason=shader-layout-error detail={} note={}\n",
                 submit_name,
                 reason,
@@ -1793,7 +1793,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface(
     let probe_state = match write_triangle_probe_state(warm, draw, shader_layout, blend_mode) {
         Ok(layout) => layout,
         Err(reason) => {
-            crate::log!(
+            crate::log_trace!(
                 "intel/render: {} staging skipped reason=probe-state-error detail={}\n",
                 submit_name,
                 reason
@@ -1833,7 +1833,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface(
     ) {
         Ok(bytes) => bytes,
         Err(reason) => {
-            crate::log!(
+            crate::log_trace!(
                 "intel/render: {} staging skipped reason=probe-batch-error detail={}\n",
                 submit_name,
                 reason
@@ -1885,7 +1885,7 @@ fn submit_result_store_probe(dev: crate::intel::Dev, warm: RenderWarmState) -> b
     let Ok(batch_tail_bytes) =
         encode_result_store_probe_batch(batch, GPU_VA_RESULT_BASE, RCS_EXEC_RESULT_MI_PROBE_DONE)
     else {
-        crate::log!("intel/render: mi-store-probe batch build failed\n");
+        crate::log_trace!("intel/render: mi-store-probe batch build failed\n");
         return false;
     };
     crate::intel::dma_flush(warm.batch_virt, batch_tail_bytes);
@@ -1918,7 +1918,7 @@ fn submit_3d_no_draw_probe(dev: crate::intel::Dev, warm: RenderWarmState) -> boo
         GPU_VA_RESULT_BASE + (RESULT_SLOT_POST3D_DWORD as u64) * 4,
         RCS_EXEC_RESULT_3D_NO_DRAW_DONE,
     ) else {
-        crate::log!("intel/render: 3d-no-draw-probe batch build failed\n");
+        crate::log_trace!("intel/render: 3d-no-draw-probe batch build failed\n");
         return false;
     };
     crate::intel::dma_flush(warm.batch_virt, batch_tail_bytes);

@@ -51,7 +51,7 @@ pub fn init() {
     CURRENT_TASK.store(idle_task.id.0, Ordering::SeqCst);
     TASK_REGISTRY.lock().insert(idle_task.id.0, idle_task);
     INITIALIZED.store(true, Ordering::SeqCst);
-    crate::log!("Scheduler ready");
+    crate::log_trace!("Scheduler ready");
 }
 
 /// Generate new unique task ID
@@ -150,7 +150,7 @@ pub fn yield_now() {
 }
 
 pub fn spawn_task(entry: u64) -> u64 {
-    crate::log!("Spawn task {:#x}", entry);
+    crate::log_trace!("Spawn task {:#x}", entry);
     1
 }
 

@@ -214,7 +214,7 @@ pub(crate) fn share_matvec_rowmajor_bf16(n_rows: usize, k_dim: usize, chunk_rows
 
     let director = MatvecDirectorPlan::bf16_decode(gpu.lanes);
 
-    crate::log!(
+    crate::log_trace!(
         "burn-baba: shared-inference-plan director={} protocol={} workload={} kernel={} precision={} layout={} batch_rows={} preflight_submitted={} accepted={} completed={} guc_ready={} lanes={} marker=0x{:08X} dot={} sum_a={} sum_b={} rows={} k_dim={} chunk_rows={} min_rows={} min_k_dim={} shape_candidate={} gpu_ready={} execute_role={} net_cpu_role={} net_cpu_route={} net_cpu_shadow={} net_cpu_pending={} net_protocol_v={} net_caps=0x{:X} net_min_rows={} local_workers={} local_gpu_role={} local_gpu_first={} local_gpu_action=shadow-pilot-dispatch-disabled future_gpu_role={} future_net_gpu_deferred={} future_gpu_action=defer-until-net-gpu-protocol action=cpu-ap-director-keeps-local-results row_range=0..{} matrix_id_source=lumen-net-manifest cpu_ap_continues=1 next_kernel={} next_precision={} next_layout={} next=batched-gemm-attention-kv-fusion-mixed-precision does_not_prove=gpu_matmul\n",
         director.director,
         director.protocol,
@@ -268,7 +268,7 @@ pub(crate) fn share_matvec_rowmajor_bf16(n_rows: usize, k_dim: usize, chunk_rows
     } else {
         "eu-c-store-kernel-not-proven"
     };
-    crate::log!(
+    crate::log_trace!(
         "burn-baba: gpgpu-pilot-plan director={} role={} protocol={} eligible={} gpu_ready={} arena_ready={} arena_gpu_base=0x{:X} arena_bytes=0x{:X} arena_max_tiles={} pilot_tiles={} candidate_tiles={} tile_rows={} tile_k={} x_bytes={} weight_tile_bytes={} output_tile_bytes={} compare=cpu-reference-first dispatch=disabled reason={} cpu_ap_continues=1 net_gpu_role={} net_gpu_action=deferred does_not_prove=gpu_matmul\n",
         director.director,
         director.local_gpu_role.as_str(),
@@ -312,7 +312,7 @@ pub(crate) fn share_matvec_rowmajor_bf16(n_rows: usize, k_dim: usize, chunk_rows
     } else {
         "upload-gfx125-c-store-kernel"
     };
-    crate::log!(
+    crate::log_trace!(
         "burn-baba: gpgpu-dispatch-gate director={} role={} h2g_mmio={} input_buffers_ab_in_ggtt={} ctb_enabled=0 guc_context_registered=0 guc_sched_enabled=0 eu_kernel_uploaded={} eu_walker_encoded={} eu_walker_submitted={} eu_walker_retired={} eu_execution_runs={} eu_dispatch_delta={} result_c_slot={} result_c_value=0x{:08X} result_c_changed_by_eu={} cpu_reads_c_back={} arena_ready={} cpu_reference_compare=1 dispatch=disabled blocker={} next={} net_gpu_role={} net_gpu_action=deferred does_not_prove=gpu_matmul\n",
         director.director,
         director.local_gpu_role.as_str(),

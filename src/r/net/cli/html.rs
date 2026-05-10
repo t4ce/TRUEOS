@@ -57,7 +57,7 @@ fn preview_line(line: &str) -> &str {
 
 fn log_html_preview(url: &str, html: &str) {
     let line_count = html.lines().count();
-    crate::log!(
+    crate::log_trace!(
         "html: received url={} bytes={} lines={} front={}\n",
         url,
         html.len(),
@@ -68,9 +68,9 @@ fn log_html_preview(url: &str, html: &str) {
     for (idx, line) in html.lines().take(HTML_PREVIEW_FRONT_LINES).enumerate() {
         let front = preview_line(line);
         if front.len() == line.len() {
-            crate::log!("html: [{}] {}\n", idx + 1, front);
+            crate::log_trace!("html: [{}] {}\n", idx + 1, front);
         } else {
-            crate::log!("html: [{}] {}...\n", idx + 1, front);
+            crate::log_trace!("html: [{}] {}...\n", idx + 1, front);
         }
     }
 }
@@ -85,7 +85,7 @@ async fn fetch_html_attempt_with_redirects(url: &str) -> Result<Vec<u8>, &'stati
 
     for hop in 0..=MAX_REDIRECTS {
         if !seen.insert(current_url.clone()) {
-            crate::log!("html: redirect loop detected at hop={} url={}\n", hop, current_url);
+            crate::log_trace!("html: redirect loop detected at hop={} url={}\n", hop, current_url);
             return Err("redirect loop");
         }
 
@@ -100,7 +100,7 @@ async fn fetch_html_attempt_with_redirects(url: &str) -> Result<Vec<u8>, &'stati
                 Ok(body) => return Ok(body),
                 Err(https::FetchError::Redirect { url: next, status }) => {
                     if hop >= MAX_REDIRECTS {
-                        crate::log!(
+                        crate::log_trace!(
                             "html: too many redirects ({}), last={} next={}\n",
                             hop,
                             current_url,
@@ -108,7 +108,7 @@ async fn fetch_html_attempt_with_redirects(url: &str) -> Result<Vec<u8>, &'stati
                         );
                         return Err("too many redirects");
                     }
-                    crate::log!(
+                    crate::log_trace!(
                         "html: redirect hop={} status={} {} -> {}\n",
                         hop + 1,
                         status,
@@ -134,7 +134,7 @@ async fn fetch_html_attempt_with_redirects(url: &str) -> Result<Vec<u8>, &'stati
                 Ok(body) => return Ok(body),
                 Err(HttpFetchError::Redirect(next)) => {
                     if hop >= MAX_REDIRECTS {
-                        crate::log!(
+                        crate::log_trace!(
                             "html: too many redirects ({}), last={} next={}\n",
                             hop,
                             current_url,
@@ -142,7 +142,7 @@ async fn fetch_html_attempt_with_redirects(url: &str) -> Result<Vec<u8>, &'stati
                         );
                         return Err("too many redirects");
                     }
-                    crate::log!("html: redirect hop={} {} -> {}\n", hop + 1, current_url, next);
+                    crate::log_trace!("html: redirect hop={} {} -> {}\n", hop + 1, current_url, next);
                     current_url = next;
                     continue;
                 }

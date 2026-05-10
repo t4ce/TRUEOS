@@ -84,7 +84,7 @@ fn init_hpet() -> Option<Hpet> {
     let info = match HpetInfo::new(tables) {
         Ok(info) => info,
         Err(err) => {
-            crate::log!("HPET table error: {:?}\n", err);
+            crate::log_trace!("HPET table error: {:?}\n", err);
             return None;
         }
     };
@@ -92,7 +92,7 @@ fn init_hpet() -> Option<Hpet> {
     let regs = match map_hpet_regs(info.base_address) {
         Ok(regs) => regs,
         Err(err) => {
-            crate::log!("HPET map failed @0x{:X}: {:?}\n", info.base_address, err);
+            crate::log_trace!("HPET map failed @0x{:X}: {:?}\n", info.base_address, err);
             return None;
         }
     };
@@ -107,7 +107,7 @@ fn init_hpet() -> Option<Hpet> {
     let cap = unsafe { hpet.read_reg64(CAPABILITIES_OFFSET) };
     let clk_period_fs = ((cap >> 32) & 0xFFFF_FFFF) as u32;
     if clk_period_fs == 0 {
-        crate::log!("HPET invalid period (cap=0x{:X})\n", cap);
+        crate::log_trace!("HPET invalid period (cap=0x{:X})\n", cap);
         return None;
     }
 
@@ -123,7 +123,7 @@ fn init_hpet() -> Option<Hpet> {
     }
 
     if crate::logflag::BOOT_INFO_LOGS {
-        crate::log!(
+        crate::log_trace!(
             "HPET @0x{:X} freq={}Hz comps={} counter_{}bit legacy_capable={}\n",
             hpet.info.base_address,
             hpet.frequency_hz,

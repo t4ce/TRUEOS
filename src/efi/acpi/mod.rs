@@ -28,11 +28,11 @@ static ACPI_TABLES: Once<Option<AcpiTables<AcpiIdentityHandler>>> = Once::new();
 pub(crate) fn ensure_tables() -> Option<&'static AcpiTables<AcpiIdentityHandler>> {
     ACPI_TABLES.call_once(|| {
         let Some(rsdp_raw) = limine::rsdp_address() else {
-            crate::log!("ACPI RSDP MISSING\n");
+            crate::log_trace!("ACPI RSDP MISSING\n");
             return None;
         };
         let Some(rsdp) = limine::try_as_phys_addr(rsdp_raw) else {
-            crate::log!("ACPI RSDP 0x{:X} could not be normalized to physical\n", rsdp_raw);
+            crate::log_trace!("ACPI RSDP 0x{:X} could not be normalized to physical\n", rsdp_raw);
             return None;
         };
 
@@ -51,10 +51,10 @@ pub(crate) fn ensure_tables() -> Option<&'static AcpiTables<AcpiIdentityHandler>
                     }
                 }
                 if crate::logflag::BOOT_INFO_LOGS && ssdt_count != 0 {
-                    crate::log!("ACPI TABLE SSDT count={} (see ssdt::log_once)\n", ssdt_count);
+                    crate::log_trace!("ACPI TABLE SSDT count={} (see ssdt::log_once)\n", ssdt_count);
                 }
                 if crate::logflag::BOOT_INFO_LOGS {
-                    crate::log!(
+                    crate::log_trace!(
                         "ACPI RSDP raw=0x{:X} phys=0x{:X} tables={}\n",
                         rsdp_raw,
                         rsdp,
@@ -64,7 +64,7 @@ pub(crate) fn ensure_tables() -> Option<&'static AcpiTables<AcpiIdentityHandler>
                 Some(tables)
             }
             Err(err) => {
-                crate::log!("ACPI RSDP raw=0x{:X} phys=0x{:X} ERROR {:?}\n", rsdp_raw, rsdp, err);
+                crate::log_trace!("ACPI RSDP raw=0x{:X} phys=0x{:X} ERROR {:?}\n", rsdp_raw, rsdp, err);
                 None
             }
         }

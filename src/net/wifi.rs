@@ -107,7 +107,7 @@ static CONNECT_REQUEST: Mutex<Option<(String, String)>> = Mutex::new(None);
 
 pub fn set_deferred_pci(bus: u8, device: u8, function: u8) {
     *DEFERRED_PCI.lock() = Some((bus, device, function));
-    crate::log!("[WIFI] Deferred PCI probe stored: {}.{}.{}", bus, device, function);
+    crate::log_trace!("[WIFI] Deferred PCI probe stored: {}.{}.{}", bus, device, function);
 }
 
 pub fn has_wifi() -> bool {
@@ -127,8 +127,8 @@ pub fn lazy_probe() -> Result<(), &'static str> {
     let pci_loc = DEFERRED_PCI.lock().take();
     let (bus, dev, func) = pci_loc.ok_or("No WiFi hardware detected during boot")?;
 
-    crate::log!("wifi: lazy probe pci={}.{}.{}\n", bus, dev, func);
-    crate::log!("[WIFI] Lazy probe: {}.{}.{}", bus, dev, func);
+    crate::log_trace!("wifi: lazy probe pci={}.{}.{}\n", bus, dev, func);
+    crate::log_trace!("[WIFI] Lazy probe: {}.{}.{}", bus, dev, func);
 
     // Find the PCI device by bus/device/function
     let pci_dev = crate::pci::with_devices(|devices| {
@@ -141,7 +141,7 @@ pub fn lazy_probe() -> Result<(), &'static str> {
 
     // Now actually probe (map_bar0 + bus master)
     if probe_pci(&pci_dev) {
-        crate::log!("wifi: probe ok driver=iwl4965\n");
+        crate::log_trace!("wifi: probe ok driver=iwl4965\n");
         Ok(())
     } else {
         // Put the deferred info back so user can retry
@@ -180,17 +180,17 @@ pub fn ensure_started() -> Result<(), &'static str> {
     if driver.status() == DriverStatus::Running {
         return Ok(());
     }
-    crate::log!("[WIFI] Auto-starting driver (hw_init + firmware)...");
-    crate::log!("wifi: starting hardware\n");
+    crate::log_trace!("[WIFI] Auto-starting driver (hw_init + firmware)...");
+    crate::log_trace!("wifi: starting hardware\n");
     match driver.start() {
         Ok(()) => {
-            crate::log!("[WIFI] Driver started successfully");
-            crate::log!("wifi: hardware initialized\n");
+            crate::log_trace!("[WIFI] Driver started successfully");
+            crate::log_trace!("wifi: hardware initialized\n");
             Ok(())
         }
         Err(e) => {
-            crate::log!("[WIFI] Driver start failed: {}", e);
-            crate::log!("wifi: start failed: {}", e);
+            crate::log_trace!("[WIFI] Driver start failed: {}", e);
+            crate::log_trace!("wifi: start failed: {}", e);
             Err(e)
         }
     }
@@ -223,13 +223,13 @@ pub fn poll() {
 
         if new_state != old_state {
             *CONNECTION_STATE.lock() = new_state;
-            crate::log!("[WIFI] State: {:?} -> {:?}", old_state, new_state);
+            crate::log_trace!("[WIFI] State: {:?} -> {:?}", old_state, new_state);
         }
 
         // Update scan results when scan completes
         if old_state == WifiState::Scanning && new_state != WifiState::Scanning {
             let results = driver.scan_results();
-            crate::log!("[WIFI] Scan complete: {} networks found", results.len());
+            crate::log_trace!("[WIFI] Scan complete: {} networks found", results.len());
             *SCAN_RESULTS.lock() = results;
         }
 
@@ -239,13 +239,13 @@ pub fn poll() {
         // Process pending connect request
         let request = CONNECT_REQUEST.lock().take();
         if let Some((ssid, password)) = request {
-            crate::log!("[WIFI] Connecting to '{}'...", ssid);
+            crate::log_trace!("[WIFI] Connecting to '{}'...", ssid);
             match driver.connect(&ssid, &password) {
                 Ok(()) => {
                     *CONNECTION_STATE.lock() = WifiState::Connecting;
                 }
                 Err(e) => {
-                    crate::log!("[WIFI] Connect failed: {}", e);
+                    crate::log_trace!("[WIFI] Connect failed: {}", e);
                     *CONNECTION_STATE.lock() = WifiState::Failed;
                 }
             }
@@ -255,7 +255,7 @@ pub fn poll() {
 
 pub fn request_connect(ssid: &str, password: &str) {
     if let Err(e) = ensure_started() {
-        crate::log!("[WIFI] Cannot connect — start failed: {}", e);
+        crate::log_trace!("[WIFI] Cannot connect — start failed: {}", e);
         return;
     }
     *CONNECT_REQUEST.lock() = Some((String::from(ssid), String::from(password)));
@@ -271,7 +271,7 @@ pub fn disconnect() -> Result<(), &'static str> {
 }
 
 pub fn set_driver(driver: Box<dyn WifiDriver>) {
-    crate::log!("[WIFI] WiFi driver active: {}", driver.info().name);
+    crate::log_trace!("[WIFI] WiFi driver active: {}", driver.info().name);
     *WIFI_DRIVER.lock() = Some(driver);
     WIFI_ACTIVE.store(true, Ordering::SeqCst);
     *CONNECTION_STATE.lock() = WifiState::Disconnected;
@@ -279,7 +279,7 @@ pub fn set_driver(driver: Box<dyn WifiDriver>) {
 
 pub fn probe_pci(pci_dev: &PciDevice) -> bool {
     // Debug: log every device we check
-    crate::log!(
+    crate::log_trace!(
         "[WIFI-PROBE] Checking {:04X}:{:04X} class={:02X} sub={:02X} at {}.{}.{}",
         pci_dev.vendor_id,
         pci_dev.device_id,
@@ -299,7 +299,7 @@ pub fn probe_pci(pci_dev: &PciDevice) -> bool {
             && super::iwl4965::IWL4965_DEVICE_IDS.contains(&pci_dev.device_id));
 
     if !is_wireless {
-        crate::log!(
+        crate::log_trace!(
             "[WIFI-PROBE] -> Not wireless (class={:02X} sub={:02X} devid={:04X})",
             pci_dev.class,
             pci_dev.subclass,
@@ -308,7 +308,7 @@ pub fn probe_pci(pci_dev: &PciDevice) -> bool {
         return false;
     }
 
-    crate::log!(
+    crate::log_trace!(
         "[WIFI] Found wireless device: {:04X}:{:04X} at {}.{}.{}",
         pci_dev.vendor_id,
         pci_dev.device_id,

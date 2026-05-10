@@ -365,7 +365,7 @@ fn find_guc_css_layout(blob: &[u8]) -> Option<(usize, GucCssLayout)> {
         .saturating_sub(key_size_0)
         .saturating_sub(modulus_0)
         .saturating_sub(exp_0);
-    crate::log!(
+    crate::log_trace!(
         "intel/igpu770: guc-fw css-parse-fail off=0 module_type=0x{:X} header_size_dw=0x{:X} size_dw=0x{:X} key_dw=0x{:X} mod_dw=0x{:X} exp_dw=0x{:X} fixed_calc=0x{:X}\n",
         module_type_0,
         header_size_0,
@@ -382,7 +382,7 @@ fn find_guc_css_layout(blob: &[u8]) -> Option<(usize, GucCssLayout)> {
         .saturating_sub(core::mem::size_of::<UcCssHeader>());
     for off in (4..=end).step_by(4) {
         if let Some(layout) = parse_guc_css_layout_at(blob, off) {
-            crate::log!(
+            crate::log_trace!(
                 "intel/igpu770: guc-fw css-found off=0x{:X} dma_bytes=0x{:X} rsa_off=0x{:X} rsa_size=0x{:X}\n",
                 off,
                 layout.dma_bytes,
@@ -393,7 +393,7 @@ fn find_guc_css_layout(blob: &[u8]) -> Option<(usize, GucCssLayout)> {
         }
     }
 
-    crate::log!("intel/igpu770: guc-fw css-search-failed no valid header found in blob\n");
+    crate::log_trace!("intel/igpu770: guc-fw css-search-failed no valid header found in blob\n");
     None
 }
 
@@ -552,7 +552,7 @@ fn build_minimal_ads(warm: Igpu770WarmState) -> bool {
     let _ = write_u32_le(buf, ads_off + core::mem::offset_of!(GucAds, private_data), private_data);
 
     dma_cache_flush(warm.guc_ads_virt as *const u8, warm.guc_ads_len);
-    crate::log!(
+    crate::log_trace!(
         "intel/igpu770: guc-fw ads minimal gpu=0x{:X} phys=0x{:X} len=0x{:X} policies=0x{:X} sysinfo=0x{:X} private=0x{:X} doorbells={}\n",
         warm.guc_ads_gpu_addr,
         warm.guc_ads_phys,
@@ -584,7 +584,7 @@ fn guc_write_init_params(warm: Igpu770WarmState) -> [u32; GUC_CTL_MAX_DWORDS] {
         let _ = mmio_write32(warm, SOFT_SCRATCH_BASE + (index + 1) * 4, *value);
     }
 
-    crate::log!(
+    crate::log_trace!(
         "intel/igpu770: guc-fw params log=0x{:08X} wa=0x{:08X} feature=0x{:08X} debug=0x{:08X} ads=0x{:08X} devid=0x{:08X} scratch1=0x{:08X} scratch5=0x{:08X} scratch6=0x{:08X}\n",
         params[GUC_CTL_LOG_PARAMS],
         params[GUC_CTL_WA],
@@ -720,12 +720,12 @@ fn guc_status_terminal(status: u32) -> Option<bool> {
 
 pub fn load_firmware_from_module(warm_align: usize) -> GucFirmwareInfo {
     let Some(blob) = crate::limine::module_bytes_by_string(GUC_MODULE_STRING) else {
-        crate::log!("intel/igpu770: guc-fw module not found string=trueos.fw.guc\n");
+        crate::log_trace!("intel/igpu770: guc-fw module not found string=trueos.fw.guc\n");
         return GucFirmwareInfo::empty();
     };
 
     if blob.is_empty() {
-        crate::log!("intel/igpu770: guc-fw module present but empty\n");
+        crate::log_trace!("intel/igpu770: guc-fw module present but empty\n");
         return GucFirmwareInfo::empty();
     }
 
@@ -752,14 +752,14 @@ pub fn load_firmware_from_module(warm_align: usize) -> GucFirmwareInfo {
     let b13 = blob.get(13).copied().unwrap_or(0);
     let b14 = blob.get(14).copied().unwrap_or(0);
     let b15 = blob.get(15).copied().unwrap_or(0);
-    crate::log!(
+    crate::log_trace!(
         "intel/igpu770: guc-fw hdr-dwords d0=0x{:08X} d1=0x{:08X} d2=0x{:08X} d3=0x{:08X}\n",
         d0,
         d1,
         d2,
         d3
     );
-    crate::log!(
+    crate::log_trace!(
         "intel/igpu770: guc-fw hdr-bytes[0..16]={:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}\n",
         b0,
         b1,
@@ -780,7 +780,7 @@ pub fn load_firmware_from_module(warm_align: usize) -> GucFirmwareInfo {
     );
     // Check if firmware is zstd-compressed (should have been decompressed, but guard against it)
     if blob_magic == ZSTD_MAGIC {
-        crate::log!(
+        crate::log_trace!(
             "intel/igpu770: guc-fw ERROR module is zstd-compressed magic=0x{:08X}; decompression required before load\n",
             blob_magic
         );
@@ -789,7 +789,7 @@ pub fn load_firmware_from_module(warm_align: usize) -> GucFirmwareInfo {
 
     let alloc_len = blob.len().div_ceil(warm_align) * warm_align;
     let Some((phys, virt)) = crate::dma::alloc(alloc_len, warm_align) else {
-        crate::log!(
+        crate::log_trace!(
             "intel/igpu770: guc-fw module present but alloc failed size=0x{:X}\n",
             alloc_len
         );
@@ -823,7 +823,7 @@ pub fn load_firmware_from_module(warm_align: usize) -> GucFirmwareInfo {
     GUC_FW_RSA_OFFSET.store(rsa_off, Ordering::Release);
     GUC_FW_RSA_SIZE.store(rsa_size, Ordering::Release);
     GUC_FW_PRIVATE_DATA_SIZE.store(private_data_size, Ordering::Release);
-    crate::log!(
+    crate::log_trace!(
         "intel/igpu770: guc-fw module found size=0x{:X} alloc=0x{:X} phys=0x{:X} gpu=0x{:X} css_off=0x{:X} xfer=0x{:X} rsa_off=0x{:X} rsa_size=0x{:X} priv_data=0x{:X} zstd_magic={}\n",
         blob.len(),
         alloc_len,
@@ -860,12 +860,12 @@ pub fn bootstrap_once(warm: Igpu770WarmState) {
     }
 
     if warm.guc_fw_len == 0 || warm.guc_fw_phys == 0 || warm.guc_fw_gpu_addr == 0 {
-        crate::log!("intel/igpu770: guc-fw skipped reason=no-module\n");
+        crate::log_trace!("intel/igpu770: guc-fw skipped reason=no-module\n");
         GUC_FW_READY.store(false, Ordering::Release);
         return;
     }
     if warm.guc_ads_len == 0 || warm.guc_ads_phys == 0 || warm.guc_ads_gpu_addr == 0 {
-        crate::log!("intel/igpu770: guc-fw skipped reason=no-ads\n");
+        crate::log_trace!("intel/igpu770: guc-fw skipped reason=no-ads\n");
         GUC_FW_READY.store(false, Ordering::Release);
         return;
     }
@@ -885,7 +885,7 @@ pub fn bootstrap_once(warm: Igpu770WarmState) {
         gdrst_rb = mmio_read32(warm, GDRST);
     }
     let status_after_reset = mmio_read32(warm, GUC_STATUS);
-    crate::log!(
+    crate::log_trace!(
         "intel/igpu770: guc-fw reset gdrst_rb=0x{:08X} gdrst_iters={} mia_in_reset={}\n",
         gdrst_rb,
         gdrst_iters,
@@ -936,7 +936,7 @@ pub fn bootstrap_once(warm: Igpu770WarmState) {
         let sw_version = css.sw_version;
         let vf_version = css.vf_version;
         let private_data_size = css.private_data_size;
-        crate::log!(
+        crate::log_trace!(
             "intel/igpu770: guc-fw css-parsed rev=r10 module_type=0x{:X} header_size_dw=0x{:X} size_dw=0x{:X} key_size_dw=0x{:X} modulus_size_dw=0x{:X} exponent_size_dw=0x{:X} sw_version=0x{:X} vf_version=0x{:X} priv_data_sz=0x{:X}\n",
             module_type,
             header_size_dw,
@@ -1051,7 +1051,7 @@ pub fn bootstrap_once(warm: Igpu770WarmState) {
     let computed_wopcm_base = computed_wopcm.map(|(base, _)| base).unwrap_or(0);
     let computed_wopcm_size = computed_wopcm.map(|(_, size)| size).unwrap_or(0);
 
-    crate::log!(
+    crate::log_trace!(
         "intel/igpu770: guc-fw bootstrap rev={} src_gpu=0x{:X} fw_phys=0x{:X} fw_len=0x{:X} xfer=0x{:X} ads_gpu=0x{:X} ads_len=0x{:X} ads_ready={} ads_param=0x{:08X} wopcm_size=0x{:08X} wopcm_size_rb=0x{:08X} wopcm_cfg=0x{:08X} wopcm_locked={} wopcm_calc_base=0x{:08X} wopcm_calc_size=0x{:08X} status_before=0x{:08X} status_after=0x{:08X} status_final=0x{:08X} status_iters={} shim=0x{:08X} shim2=0x{:08X} pm=0x{:08X} pmintrmsk=0x{:08X} dma_done={} dma_iters={} dma_ctrl=0x{:08X} a0_lo=0x{:08X} a0_hi=0x{:08X} a1_lo=0x{:08X} a1_hi=0x{:08X} ready={}\n",
         GUC_BOOTSTRAP_REV,
         warm.guc_fw_gpu_addr,
@@ -1087,7 +1087,7 @@ pub fn bootstrap_once(warm: Igpu770WarmState) {
     );
     let uk_code = guc_ukernel(status_final);
     let br_code = guc_bootrom(status_final);
-    crate::log!(
+    crate::log_trace!(
         "intel/igpu770: guc-fw status-decode bootrom=0x{:02X}({}) ukernel=0x{:02X}({}) auth=0x{:X} dma_off=0x{:X} rsa_off=0x{:X} rsa_size=0x{:X}\n",
         br_code,
         error_name_bootrom(br_code),
@@ -1099,6 +1099,6 @@ pub fn bootstrap_once(warm: Igpu770WarmState) {
         fw_rsa_size
     );
     if !ready {
-        crate::log!("intel/igpu770: guc-fw readiness=not-ready; rcs smoke submit gated\n");
+        crate::log_trace!("intel/igpu770: guc-fw readiness=not-ready; rcs smoke submit gated\n");
     }
 }

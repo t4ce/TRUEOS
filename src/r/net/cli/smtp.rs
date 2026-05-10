@@ -169,7 +169,7 @@ impl SmtpClient {
         self.send_line(format!("MAIL FROM:<{}>", mail_from).as_str())?;
         let mail_from_reply = self.read_reply(timeout_ms).await?;
         if mail_from_reply.code != 250 {
-            crate::log!(
+            crate::log_trace!(
                 "smtp: MAIL FROM rejected code={} line={}\n",
                 mail_from_reply.code,
                 mail_from_reply
@@ -185,7 +185,7 @@ impl SmtpClient {
             self.send_line(format!("RCPT TO:<{}>", recipient).as_str())?;
             let rcpt_reply = self.read_reply(timeout_ms).await?;
             if rcpt_reply.code != 250 && rcpt_reply.code != 251 {
-                crate::log!(
+                crate::log_trace!(
                     "smtp: RCPT TO rejected code={} line={}\n",
                     rcpt_reply.code,
                     rcpt_reply.lines.first().map(|s| s.as_str()).unwrap_or("")
@@ -197,7 +197,7 @@ impl SmtpClient {
         self.send_line("DATA")?;
         let data_reply = self.read_reply(timeout_ms).await?;
         if data_reply.code != 354 {
-            crate::log!(
+            crate::log_trace!(
                 "smtp: DATA rejected code={} line={}\n",
                 data_reply.code,
                 data_reply.lines.first().map(|s| s.as_str()).unwrap_or("")
@@ -208,7 +208,7 @@ impl SmtpClient {
         self.send_data(message)?;
         let done_reply = self.read_reply(timeout_ms).await?;
         if done_reply.code != 250 {
-            crate::log!(
+            crate::log_trace!(
                 "smtp: message rejected code={} line={}\n",
                 done_reply.code,
                 done_reply.lines.first().map(|s| s.as_str()).unwrap_or("")

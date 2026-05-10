@@ -390,7 +390,7 @@ async fn negotiate_uvc_stream(
     )
     .await
     {
-        crate::log!(
+        crate::log_trace!(
             "crabusb: camera {:04X}:{:04X} uvc get-info if#{} bytes={} flags=0x{:02X}\n",
             vendor_id,
             product_id,
@@ -442,7 +442,7 @@ async fn negotiate_uvc_stream(
     }
     let _ = write_u32_le(&mut probe, 4, choice.frame_interval);
 
-    crate::log!(
+    crate::log_trace!(
         "crabusb: camera {:04X}:{:04X} uvc probe request if#{} fmt={} frame={} {}x{} enc={} interval={}\n",
         vendor_id,
         product_id,
@@ -559,7 +559,7 @@ fn present_stream_frame(
         FrameEncoding::Mjpeg => match crate::gfx::jpeg_codec::decode_jpeg_rgba(frame) {
             Ok(decoded) => (decoded.width, decoded.height, decoded.rgba),
             Err(err) => {
-                crate::log!(
+                crate::log_trace!(
                     "crabusb: camera {:04X}:{:04X} mjpeg decode failed code={} bytes={}\n",
                     vendor_id,
                     product_id,
@@ -573,7 +573,7 @@ fn present_stream_frame(
             let width = u32::from(sf.width);
             let height = u32::from(sf.height);
             let Some(rgba) = yuy2_to_rgba(frame, width as usize, height as usize) else {
-                crate::log!(
+                crate::log_trace!(
                     "crabusb: camera {:04X}:{:04X} yuy2 frame too small bytes={} need={}\n",
                     vendor_id,
                     product_id,
@@ -668,7 +668,7 @@ async fn stream_iso(
         {
             Ok(n) => n.min(rx.len()),
             Err(err) => {
-                crate::log!(
+                crate::log_trace!(
                     "crabusb: camera {:04X}:{:04X} iso read err={:?} frames={}\n",
                     vendor_id,
                     product_id,
@@ -692,7 +692,7 @@ async fn stream_iso(
                 if present_stream_frame(frame_buf.as_slice(), sf, vendor_id, product_id) {
                     frames = frames.saturating_add(1);
                     if frames == 1 || frames % 120 == 0 {
-                        crate::log!(
+                        crate::log_trace!(
                             "crabusb: camera {:04X}:{:04X} stream frames={} bytes={} enc={}\n",
                             vendor_id,
                             product_id,
@@ -741,7 +741,7 @@ async fn stream_bulk(
                 n.min(rx.len())
             }
             Err(err) => {
-                crate::log!(
+                crate::log_trace!(
                     "crabusb: camera {:04X}:{:04X} bulk read err={:?} frames={}\n",
                     vendor_id,
                     product_id,
@@ -764,7 +764,7 @@ async fn stream_bulk(
             if present_stream_frame(frame_buf.as_slice(), sf, vendor_id, product_id) {
                 frames = frames.saturating_add(1);
                 if frames == 1 || frames % 120 == 0 {
-                    crate::log!(
+                    crate::log_trace!(
                         "crabusb: camera {:04X}:{:04X} stream frames={} bytes={} enc={}\n",
                         vendor_id,
                         product_id,
@@ -798,7 +798,7 @@ async fn camera_stream_task(
         .map(|raw| parse_uvc_stream_choices(raw, target.interface_number))
         .unwrap_or_default();
     let Some(choice) = choose_stream(choices.as_slice()) else {
-        crate::log!(
+        crate::log_trace!(
             "crabusb: camera {:04X}:{:04X} no supported uvc stream if#{} choices={}\n",
             vendor_id,
             product_id,
@@ -808,7 +808,7 @@ async fn camera_stream_task(
         return;
     };
 
-    crate::log!(
+    crate::log_trace!(
         "crabusb: camera {:04X}:{:04X} stream begin ctrl={} if#{} alt={} ep=0x{:02X} transport={:?} choice fmt={} frame={} {}x{} {}\n",
         vendor_id,
         product_id,
@@ -829,7 +829,7 @@ async fn camera_stream_task(
         .set_configuration(target.configuration_value)
         .await
     {
-        crate::log!(
+        crate::log_trace!(
             "crabusb: camera {:04X}:{:04X} set cfg={} failed: {:?}\n",
             vendor_id,
             product_id,
@@ -841,7 +841,7 @@ async fn camera_stream_task(
 
     let Some(sf) = negotiate_uvc_stream(&mut device, target, choice, vendor_id, product_id).await
     else {
-        crate::log!(
+        crate::log_trace!(
             "crabusb: camera {:04X}:{:04X} uvc negotiation failed if#{}\n",
             vendor_id,
             product_id,
@@ -855,7 +855,7 @@ async fn camera_stream_task(
         {
             Ok(i) => i,
             Err(err) => {
-                crate::log!(
+                crate::log_trace!(
                     "crabusb: camera {:04X}:{:04X} claim failed if#{} alt={}: {:?}\n",
                     vendor_id,
                     product_id,
@@ -867,7 +867,7 @@ async fn camera_stream_task(
             }
         };
 
-    crate::log!(
+    crate::log_trace!(
         "crabusb: camera {:04X}:{:04X} stream ready fmt={} frame={} {}x{} enc={} interval={} payload={} frame_bytes={}\n",
         vendor_id,
         product_id,
@@ -887,7 +887,7 @@ async fn camera_stream_task(
             .await
         {
             Ok(mut iso_in) => stream_iso(&mut iso_in, target, sf, vendor_id, product_id).await,
-            Err(err) => crate::log!(
+            Err(err) => crate::log_trace!(
                 "crabusb: camera {:04X}:{:04X} iso open failed ep=0x{:02X}: {:?}\n",
                 vendor_id,
                 product_id,
@@ -900,7 +900,7 @@ async fn camera_stream_task(
                 Ok(mut bulk_in) => {
                     stream_bulk(&mut bulk_in, target, sf, vendor_id, product_id).await
                 }
-                Err(err) => crate::log!(
+                Err(err) => crate::log_trace!(
                     "crabusb: camera {:04X}:{:04X} bulk open failed ep=0x{:02X}: {:?}\n",
                     vendor_id,
                     product_id,
@@ -930,7 +930,7 @@ pub(crate) async fn maybe_start_camera(
     let device = match host.open_device(dev_info).await {
         Ok(device) => device,
         Err(err) => {
-            crate::log!(
+            crate::log_trace!(
                 "crabusb: camera {:04X}:{:04X} open failed: {:?}\n",
                 vendor_id,
                 product_id,
@@ -943,7 +943,7 @@ pub(crate) async fn maybe_start_camera(
     match camera_stream_task(device, controller_id, target) {
         Ok(token) => {
             spawner.spawn(token);
-            crate::log!(
+            crate::log_trace!(
                 "crabusb: camera {:04X}:{:04X} handoff stream if#{} alt={} cfg={} ep=0x{:02X} transport={:?} packet={} stable_id={}\n",
                 vendor_id,
                 product_id,
@@ -957,7 +957,7 @@ pub(crate) async fn maybe_start_camera(
             );
         }
         Err(err) => {
-            crate::log!(
+            crate::log_trace!(
                 "crabusb: camera {:04X}:{:04X} spawn failed: {:?}\n",
                 vendor_id,
                 product_id,

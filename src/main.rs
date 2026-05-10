@@ -221,20 +221,20 @@ pub extern "C" fn kmain() -> ! {
     globalog::init_log_facade();
     exceptions::init();
     if crate::logflag::BOOT_INFO_LOGS {
-        crate::log!("long_mode_active: {}\n", cpu::long_mode_active());
+        crate::log_trace!("long_mode_active: {}\n", cpu::long_mode_active());
     }
     phys::register_memory_metadata();
     phys::init_pmm_from_limine();
     limine::prime_bootloader_caches();
 
     if !phys::try_install_heap_arena_candidates(allocators::install_heap_arena) {
-        crate::log!("heap: failed to reserve/install any heap arena\n");
+        crate::log_trace!("heap: failed to reserve/install any heap arena\n");
     }
 
     if crate::logflag::BOOT_INFO_LOGS
         && let Some(perf) = limine::bootloader_performance()
     {
-        crate::log!(
+        crate::log_trace!(
             "Boot Performance: reset={}_usec init={}_usec exec={}_usec\n",
             perf.reset_usec,
             perf.init_usec,
@@ -334,7 +334,7 @@ fn _loop(
 
     match crate::r::spawn_service::spawn_service_task(_spawner) {
         Ok(token) => _spawner.spawn(token),
-        Err(e) => crate::log!("spawn-svc: spawn failed: {:?}\n", e),
+        Err(e) => crate::log_trace!("spawn-svc: spawn failed: {:?}\n", e),
     }
 
     let mut counter: u64 = 0;

@@ -205,9 +205,9 @@ pub fn collect_backtrace(max_frames: usize) -> Vec<Frame, MAX_FRAMES> {
 /// Print a stack trace to debugcon and VGA log.
 pub fn print_backtrace(max_frames: usize) {
     let frames = collect_backtrace(max_frames);
-    crate::log!("stack trace ({} frames)\n", frames.len());
+    crate::log_trace!("stack trace ({} frames)\n", frames.len());
     for (idx, frame) in frames.iter().enumerate() {
-        crate::log!("  #{:<2} rbp=0x{:016X} rip=0x{:016X}\n", idx, frame.rbp, frame.rip);
+        crate::log_trace!("  #{:<2} rbp=0x{:016X} rip=0x{:016X}\n", idx, frame.rbp, frame.rip);
     }
 }
 

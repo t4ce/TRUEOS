@@ -127,7 +127,7 @@ fn hid_boot_keycode_to_ascii(key: u8, shift: bool) -> Option<char> {
 pub(crate) fn handle_report(runtime: &mut HidRuntime, data: &[u8], now_ms: u32) {
     if data.len() < 8 {
         if HID_DEBUG_REPORT_LOGS {
-            crate::log!(
+            crate::log_trace!(
                 "kbd-report-short: ctrl={} slot={} ep={} seq={} len={} bytes={:02X?}\n",
                 runtime.controller_id as u32,
                 runtime.slot_id,
@@ -191,7 +191,7 @@ pub(crate) fn handle_report(runtime: &mut HidRuntime, data: &[u8], now_ms: u32) 
         flags,
     });
     if HID_DEBUG_REPORT_LOGS && (flags != 0 || runtime.seq <= 4) {
-        crate::log!(
+        crate::log_trace!(
             "kbd-report: ctrl={} slot={} ep={} seq={} flags=0x{:02X} mods=0x{:02X} keys=[{},{},{},{},{},{}] ascii=[{},{},{},{},{},{}]\n",
             runtime.controller_id as u32,
             runtime.slot_id,

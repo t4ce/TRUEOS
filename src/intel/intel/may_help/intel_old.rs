@@ -208,12 +208,12 @@ fn scanout_plane(pipe: usize, plane_slot: usize) -> IntelScanoutPlane {
 
 fn log_display_window(info: IntelDeviceInfo, center_off: usize, label: &str) {
     let aligned = center_off & !0x1Fusize;
-    crate::log!("intel: window label={} base=0x{:05X}\n", label, aligned);
+    crate::log_trace!("intel: window label={} base=0x{:05X}\n", label, aligned);
     let mut idx = 0usize;
     while idx < INTEL_DISPLAY_WINDOW_DWORDS {
         let off = aligned + idx.saturating_mul(4);
         let value = mmio_read32(info, off);
-        crate::log!(
+        crate::log_trace!(
             "intel: window-mmio label={} off=0x{:05X} value=0x{:08X}\n",
             label,
             off,
@@ -252,7 +252,7 @@ fn log_display_region_sweep(info: IntelDeviceInfo) {
             off += 4;
         }
         if let Some((first_off, value)) = found {
-            crate::log!(
+            crate::log_trace!(
                 "intel: display-page page=0x{:05X} first=0x{:03X} value=0x{:08X}\n",
                 page,
                 first_off,
@@ -266,7 +266,7 @@ fn log_display_region_sweep(info: IntelDeviceInfo) {
         page += INTEL_DISPLAY_PAGE_STRIDE;
     }
     if logged == 0 {
-        crate::log!(
+        crate::log_trace!(
             "intel: display-page sweep 0x{:05X}..0x{:05X} found no nonzero registers\n",
             INTEL_DISPLAY_SWEEP_START,
             INTEL_DISPLAY_SWEEP_END
@@ -309,7 +309,7 @@ fn log_signature_window(info: IntelDeviceInfo, page: usize) {
     while idx < INTEL_DISPLAY_SIGNATURE_WINDOW_DWORDS {
         let off = page + idx.saturating_mul(4);
         let value = mmio_read32(info, off);
-        crate::log!(
+        crate::log_trace!(
             "intel: signature-mmio off=0x{:05X} value=0x{:08X}\n",
             off,
             value
@@ -374,7 +374,7 @@ fn log_display_signature_sweep(info: IntelDeviceInfo) {
         page += INTEL_DISPLAY_PAGE_STRIDE;
     }
 
-    crate::log!(
+    crate::log_trace!(
         "intel: signature-sweep begin mmio_len=0x{:X} aperture=0x{:X}\n",
         info.mmio_len,
         info.aperture_bar_size
@@ -383,7 +383,7 @@ fn log_display_signature_sweep(info: IntelDeviceInfo) {
     while rank < top.len() && top[rank].score != 0 {
         let cand = top[rank];
         let (pipe_w, pipe_h) = plausible_pipe_src(cand.pipe_src_value).unwrap_or((0, 0));
-        crate::log!(
+        crate::log_trace!(
             "intel: signature-candidate rank={} page=0x{:05X} score={} nonzero={} pipe_src_off={} pipe_src=0x{:08X} size={}x{} stride_off={} stride=0x{:08X} surf_off={} surf=0x{:08X} ctl_off={} ctl=0x{:08X}\n",
             rank + 1,
             cand.page,
@@ -422,7 +422,7 @@ fn log_display_signature_sweep(info: IntelDeviceInfo) {
         rank += 1;
     }
     if rank == 0 {
-        crate::log!("intel: signature-sweep found no plausible scanout pages\n");
+        crate::log_trace!("intel: signature-sweep found no plausible scanout pages\n");
     }
 }
 
@@ -442,7 +442,7 @@ fn log_plane_inventory(info: IntelDeviceInfo) {
         if pipe_src != 0 || trans_ddi != 0 {
             nonzero_pipes += 1;
         }
-        crate::log!(
+        crate::log_trace!(
             "intel: pipe-live pipe={} pipe_src=0x{:08X} size={}x{} ddi=0x{:08X}\n",
             plane0.pipe_name,
             pipe_src,
@@ -463,7 +463,7 @@ fn log_plane_inventory(info: IntelDeviceInfo) {
             }
             if ctl != 0 || stride != 0 || surf != 0 || surf_live != 0 {
                 nonzero_planes += 1;
-                crate::log!(
+                crate::log_trace!(
                     "intel: plane-live {}{} ctl=0x{:08X} stride=0x{:08X} surf=0x{:08X} surf_live=0x{:08X} enabled={}\n",
                     plane.pipe_name,
                     plane.plane_slot,
@@ -477,7 +477,7 @@ fn log_plane_inventory(info: IntelDeviceInfo) {
         }
     }
 
-    crate::log!(
+    crate::log_trace!(
         "intel: plane-scan summary nonzero_pipes={} nonzero_planes={} enabled_planes={}\n",
         nonzero_pipes,
         nonzero_planes,
@@ -496,7 +496,7 @@ fn log_display_power_probe(info: IntelDeviceInfo) {
     let hotplug = mmio_read32(info, INTEL_PORT_HOTPLUG_EN);
     let gt_disp_pwron = mmio_read32(info, INTEL_GT_DISP_PWRON);
 
-    crate::log!(
+    crate::log_trace!(
         "intel: display-power probe phy_misc_a=0x{:08X} phy_misc_b=0x{:08X} tx_bmu=0x{:08X} de_pll_ctl=0x{:08X} de_pll_enable=0x{:08X} dc_state_en=0x{:08X} dc_state_debug=0x{:08X} hotplug=0x{:08X} gt_disp_pwron=0x{:08X}\n",
         phy_misc_a,
         phy_misc_b,
@@ -521,7 +521,7 @@ fn log_display_routing_probe(info: IntelDeviceInfo) {
     let pipe_c = mmio_read32(info, INTEL_PIPE_C_SRC);
     let pipe_d = mmio_read32(info, INTEL_PIPE_D_SRC);
 
-    crate::log!(
+    crate::log_trace!(
         "intel: display-routing probe hotplug_en=0x{:08X} trans_a=0x{:08X} trans_b=0x{:08X} trans_c=0x{:08X} trans_d=0x{:08X} pipe_a=0x{:08X} pipe_b=0x{:08X} pipe_c=0x{:08X} pipe_d=0x{:08X}\n",
         hotplug_en,
         trans_a,
@@ -542,7 +542,7 @@ fn arm_display_power_smoke(info: IntelDeviceInfo) -> bool {
     let rb = mmio_read32(info, plan.reg.offset);
     let latched = wrote && (rb & plan.request_mask) != 0;
 
-    crate::log!(
+    crate::log_trace!(
         "intel: display-power smoke register={} orig=0x{:08X} req=0x{:08X} rb=0x{:08X} latched={}\n",
         plan.reg.name,
         plan.before,
@@ -554,7 +554,7 @@ fn arm_display_power_smoke(info: IntelDeviceInfo) -> bool {
 }
 
 fn run_display_power_discovery(info: IntelDeviceInfo) {
-    crate::log!(
+    crate::log_trace!(
         "intel: display discovery begin bdf={:02X}:{:02X}.{} device=0x{:04X} bar0=0x{:X} mmio_len=0x{:X} aperture=0x{:X}\n",
         info.bus,
         info.slot,
@@ -565,20 +565,20 @@ fn run_display_power_discovery(info: IntelDeviceInfo) {
         info.aperture_bar_size
     );
     let early_stub = super::xelp_display_ngin::log_early_display_stub(info, "discovery");
-    crate::log!(
+    crate::log_trace!(
         "intel: display-ngin stub summary power_visible={} dc_state_mask=0x{:08X} next_gt_disp_pwron=0x{:08X}\n",
         early_stub.has_visible_display_power() as u8,
         early_stub.dc_state_blocking_mask(),
         early_stub.next_gt_disp_pwron_request()
     );
-    crate::log!("intel: display discovery step=probe scope=power+routing\n");
+    crate::log_trace!("intel: display discovery step=probe scope=power+routing\n");
     log_display_power_probe(info);
     log_display_routing_probe(info);
     log_display_focus_windows(info);
     log_display_region_sweep(info);
     log_display_signature_sweep(info);
     log_plane_inventory(info);
-    crate::log!("intel: display discovery step=smoke action=request-display-power\n");
+    crate::log_trace!("intel: display discovery step=smoke action=request-display-power\n");
     
     // Request display power using igpu770 helper if available (requires forcewake)
     let latched = if intel_igpu770_present() {
@@ -591,7 +591,7 @@ fn run_display_power_discovery(info: IntelDeviceInfo) {
         arm_display_power_smoke(info)
     };
     
-    crate::log!(
+    crate::log_trace!(
         "intel: display discovery result gt_disp_pwron_latched={}\n",
         latched as u8
     );
@@ -599,7 +599,7 @@ fn run_display_power_discovery(info: IntelDeviceInfo) {
 
 pub fn init_once() {
     if crate::limine::hhdm_offset().is_none() {
-        crate::log!("intel: init skipped (no HHDM)\n");
+        crate::log_trace!("intel: init skipped (no HHDM)\n");
         return;
     }
 
@@ -612,7 +612,7 @@ pub fn init_once() {
 
             let Some((bar0_phys, bar0_size)) = decode_mmio_bar(dev.bus, dev.slot, dev.function, 0)
             else {
-                crate::log!(
+                crate::log_trace!(
                     "intel: skip {:02X}:{:02X}.{} device=0x{:04X} (BAR0 MMIO unavailable)\n",
                     dev.bus,
                     dev.slot,
@@ -629,7 +629,7 @@ pub fn init_once() {
 
             let mmio_len = usize::try_from(bar0_size).unwrap_or(usize::MAX);
             let Ok(mmio_base) = crate::pci::mmio::map_mmio_region_exact(bar0_phys, mmio_len) else {
-                crate::log!(
+                crate::log_trace!(
                     "intel: skip {:02X}:{:02X}.{} device=0x{:04X} (MMIO map failed)\n",
                     dev.bus,
                     dev.slot,
@@ -666,7 +666,7 @@ pub fn init_once() {
     );
 
     if let Some(info) = *first {
-        crate::log!(
+        crate::log_trace!(
             "intel: claimed {:02X}:{:02X}.{} device=0x{:04X} rev=0x{:02X} bar0=0x{:X} size=0x{:X} bar2=0x{:X} bar2_size=0x{:X} mmio=0x{:X}\n",
             info.bus,
             info.slot,
@@ -680,8 +680,8 @@ pub fn init_once() {
             info.mmio_base.as_ptr() as usize
         );
         crate::r::readiness::set(crate::r::readiness::GFX_INTEL_CLAIMED);
-        crate::log!("intel: readiness=claimed\n");
-        crate::log!(
+        crate::log_trace!("intel: readiness=claimed\n");
+        crate::log_trace!(
             "intel: intel_igpu770_present={}\n",
             intel_igpu770_present() as u8
         );
@@ -689,7 +689,7 @@ pub fn init_once() {
             super::intel_igpu770::warm_once(info);
         }
     } else {
-        crate::log!("intel: no Intel display-class PCI device claimed\n");
+        crate::log_trace!("intel: no Intel display-class PCI device claimed\n");
     }
 }
 
@@ -711,11 +711,11 @@ pub fn first_claimed_device() -> Option<IntelDeviceInfo> {
 #[embassy_executor::task]
 pub async fn scanout_smoke_task() {
     let Some(info) = first_claimed_device() else {
-        crate::log!("intel: display discovery skipped (no claimed Intel device)\n");
+        crate::log_trace!("intel: display discovery skipped (no claimed Intel device)\n");
         return;
     };
 
-    crate::log!(
+    crate::log_trace!(
         "intel: async probe delayed by {}ms (non-blocking)\n",
         INTEL_ASYNC_PROBE_DELAY_MS
     );
@@ -743,6 +743,6 @@ pub async fn scanout_smoke_task() {
 
     run_display_power_discovery(info);
     Timer::after(EmbassyDuration::from_millis(25)).await;
-    crate::log!("intel: display discovery follow-up probe after smoke\n");
+    crate::log_trace!("intel: display discovery follow-up probe after smoke\n");
     log_display_power_probe(info);
 }

@@ -343,7 +343,7 @@ fn input_write_cursor_event(
     if let Some(vm_id) = crate::hv::current_hull_guest_context_vm_id() {
         let count = VM_CURSOR_WRITE_REJECT_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
         if count <= 8 || count.is_multiple_of(64) {
-            crate::log!(
+            crate::log_trace!(
                 "WARNING input-cursor: rejected vm cursor write vm={} slot={} x={} y={} buttons=0x{:X} wheel={} flags=0x{:X} count={}\n",
                 vm_id,
                 slot_id,

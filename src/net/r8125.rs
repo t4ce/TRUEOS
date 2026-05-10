@@ -283,7 +283,7 @@ impl R8125Adapter {
                 && (self.dbg_doorbells <= TX_DOORBELL_DEBUG_FIRST
                     || (self.dbg_doorbells & 0x3FF) == 0)
             {
-                crate::log!(
+                crate::log_trace!(
                     "net/r8125: tx doorbell count={} reason={} poll90_rb=0x{:04x} cmd=0x{:02x} isr=0x{:08x} imr=0x{:08x}\n",
                     self.dbg_doorbells,
                     reason,
@@ -314,7 +314,7 @@ impl R8125Adapter {
         let nd_addr = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(nd.addr)) };
         let td_addr = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(td.addr)) };
 
-        crate::log!(
+        crate::log_trace!(
             "net/r8125: tx-window reason={} head={} tail={} next={} head[o1=0x{:08x} o2=0x{:08x} a=0x{:016x}] next[o1=0x{:08x} a=0x{:016x}] tail[o1=0x{:08x} a=0x{:016x}]\n",
             reason,
             h,
@@ -364,7 +364,7 @@ impl R8125Adapter {
             unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(tx_tail_desc.opts1)) };
         let rx_opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(rx_desc.opts1)) };
 
-        crate::log!(
+        crate::log_trace!(
             "net/r8125: state reason={} dumps={} poll={} cmd=0x{:02x} isr=0x{:08x} imr=0x{:08x} phy=0x{:02x} rcr=0x{:08x} tcr=0x{:08x} cplus=0x{:04x} rxmax=0x{:04x} rdsar=0x{:08x}{:08x} tnpds=0x{:08x}{:08x} tx_desc_phys=0x{:016x} tx_head={} tx_tail={} tx_head_opts1=0x{:08x} tx_tail_opts1=0x{:08x} rx_idx={} rx_opts1=0x{:08x} tx_sub={} tx_rec={} tx_full={} tx_checks={} kicks={} resets={} rx_ok={} rx_drop={} rx_bad={} rx_errsum={} rx_len_bad={}\n",
             reason,
             self.dbg_state_dumps,
@@ -426,7 +426,7 @@ impl R8125Adapter {
         pci::enable_mem_and_bus_master(dev.bus, dev.slot, dev.function);
         let cmd = pci::config_read_u16(dev.bus, dev.slot, dev.function, 0x04);
         if crate::logflag::R8125_VERBOSE_LOGS {
-            crate::log!("net/r8125: pci cmd=0x{:04x}\n", cmd);
+            crate::log_trace!("net/r8125: pci cmd=0x{:04x}\n", cmd);
         }
 
         let (bar_index, bar_phys) = find_mmio_bar_phys(&dev)?;
@@ -435,13 +435,13 @@ impl R8125Adapter {
             Ok(size) if size != 0 => size,
             _ => {
                 if crate::logflag::R8125_VERBOSE_LOGS {
-                    crate::log!("net/r8125: bar{} size unknown; using 0x1000\n", bar_index);
+                    crate::log_trace!("net/r8125: bar{} size unknown; using 0x1000\n", bar_index);
                 }
                 0x1000
             }
         };
         if crate::logflag::R8125_VERBOSE_LOGS && bar_size != 0 {
-            crate::log!("net/r8125: bar{} size=0x{:x}\n", bar_index, bar_size);
+            crate::log_trace!("net/r8125: bar{} size=0x{:x}\n", bar_index, bar_size);
         }
         let mapped = match pci::mmio::map_mmio_region_exact(bar_phys, map_size) {
             Ok(mapped) => mapped,
@@ -458,7 +458,7 @@ impl R8125Adapter {
         let mmio = Mmio { base: mapped };
 
         if crate::logflag::R8125_VERBOSE_LOGS {
-            crate::log!(
+            crate::log_trace!(
                 "net/r8125: found {:02x}:{:02x}.{} vid={:04x} did={:04x} bar{}=0x{:x}\n",
                 dev.bus,
                 dev.slot,
@@ -504,18 +504,18 @@ impl R8125Adapter {
         let rx_desc_bytes = core::mem::size_of::<RxDesc>() * RX_DESC_COUNT;
         let tx_desc_bytes = core::mem::size_of::<TxDesc>() * TX_DESC_COUNT;
         if crate::logflag::R8125_VERBOSE_LOGS {
-            crate::log!("net/r8125: alloc rx_desc bytes=0x{:x}\n", rx_desc_bytes);
+            crate::log_trace!("net/r8125: alloc rx_desc bytes=0x{:x}\n", rx_desc_bytes);
         }
         let rx_desc_mem = DmaRegion::alloc(rx_desc_bytes, 256).ok_or(())?;
         if crate::logflag::R8125_VERBOSE_LOGS {
-            crate::log!("net/r8125: alloc tx_desc bytes=0x{:x}\n", tx_desc_bytes);
+            crate::log_trace!("net/r8125: alloc tx_desc bytes=0x{:x}\n", tx_desc_bytes);
         }
         let tx_desc_mem = DmaRegion::alloc(tx_desc_bytes, 256).ok_or(())?;
 
         let rx_desc_phys = rx_desc_mem.phys();
         let tx_desc_phys = tx_desc_mem.phys();
         if crate::logflag::R8125_VERBOSE_LOGS {
-            crate::log!(
+            crate::log_trace!(
                 "net/r8125: rx_desc phys=0x{:x} align256_ok={} tx_desc phys=0x{:x} align256_ok={}\n",
                 rx_desc_phys,
                 ((rx_desc_phys & 0xFF) == 0) as u8,
@@ -529,7 +529,7 @@ impl R8125Adapter {
 
         // Allocate buffers and initialize descriptors
         if crate::logflag::R8125_VERBOSE_LOGS {
-            crate::log!(
+            crate::log_trace!(
                 "net/r8125: alloc rx bufs count={} size=0x{:x}\n",
                 RX_DESC_COUNT,
                 RX_BUF_SIZE
@@ -553,7 +553,7 @@ impl R8125Adapter {
         }
 
         if crate::logflag::R8125_VERBOSE_LOGS {
-            crate::log!(
+            crate::log_trace!(
                 "net/r8125: alloc tx bufs count={} size=0x{:x}\n",
                 TX_DESC_COUNT,
                 TX_BUF_SIZE
@@ -597,7 +597,7 @@ impl R8125Adapter {
             }
             let mcu1 = mmio.read_u8(REG_MCU);
             if crate::logflag::R8125_VERBOSE_LOGS {
-                crate::log!(
+                crate::log_trace!(
                     "net/r8125: mcu oob mcu0=0x{:02x} mcu1=0x{:02x} llrdy={}\n",
                     mcu0,
                     mcu1,
@@ -647,14 +647,14 @@ impl R8125Adapter {
             (mmio.read_u32(REG_RCR), mmio.read_u32(REG_TCR), mmio.read_u16(REG_CPLUS_CMD))
         };
         if crate::logflag::R8125_VERBOSE_LOGS {
-            crate::log!(
+            crate::log_trace!(
                 "net/r8125: cfg rb rcr=0x{:08x} tcr=0x{:08x} cplus=0x{:04x}\n",
                 rcr_rb,
                 tcr_rb,
                 cplus_rb
             );
 
-            crate::log!(
+            crate::log_trace!(
                 "net/r8125: mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
                 mac[0],
                 mac[1],
@@ -664,7 +664,7 @@ impl R8125Adapter {
                 mac[5]
             );
 
-            crate::log!(
+            crate::log_trace!(
                 "net/r8125: caps speeds=10/100/1000/2500 duplex=full/half flow=tx/rx ring=rx{} tx{} mtu=1500\n",
                 RX_DESC_COUNT,
                 TX_DESC_COUNT
@@ -672,12 +672,12 @@ impl R8125Adapter {
         }
         let cplus_after = unsafe { mmio.read_u16(REG_CPLUS_CMD) };
         if crate::logflag::R8125_VERBOSE_LOGS {
-            crate::log!(
+            crate::log_trace!(
                 "net/r8125: cplus=0x{:04x} force_off={}\n",
                 cplus_after,
                 EXP_R8125_FORCE_CPLUS_OFF as u8
             );
-            crate::log!(
+            crate::log_trace!(
                 "net/r8125: tx start idx={} skip_desc0={}\n",
                 Self::tx_start_index(),
                 EXP_R8125_SKIP_DESC0 as u8
@@ -685,7 +685,7 @@ impl R8125Adapter {
         }
         let phy = unsafe { mmio.read_u8(REG_PHYSTAT) };
         if crate::logflag::R8125_VERBOSE_LOGS {
-            crate::log!("net/r8125: phystat=0x{:02x} (raw)\n", phy);
+            crate::log_trace!("net/r8125: phystat=0x{:02x} (raw)\n", phy);
         }
 
         Ok(Self {
@@ -952,7 +952,7 @@ impl R8125Adapter {
             self.dbg_last_tnpds_hi = tnp_hi_now;
 
             if crate::logflag::R8125_VERBOSE_LOGS {
-                crate::log!(
+                crate::log_trace!(
                     "net/r8125: reg change cmd 0x{:02x}->0x{:02x} imr 0x{:08x}->0x{:08x} tnpds 0x{:08x}{:08x}->0x{:08x}{:08x}\n",
                     old_cmd,
                     cmd_now,
@@ -972,7 +972,7 @@ impl R8125Adapter {
         if phy != self.dbg_last_phystat {
             self.dbg_last_phystat = phy;
             if crate::logflag::R8125_VERBOSE_LOGS {
-                crate::log!(
+                crate::log_trace!(
                     "net/r8125: phystat=0x{:02x} (changed) link_bit0={}\n",
                     phy,
                     Self::phy_link_up(phy) as u8
@@ -989,7 +989,7 @@ impl R8125Adapter {
             if crate::logflag::R8125_VERBOSE_LOGS
                 && (self.dbg_isr_nonzero <= 2 || (self.dbg_isr_nonzero & 0xFFF) == 0)
             {
-                crate::log!(
+                crate::log_trace!(
                     "net/r8125: isr nonzero count={} isr=0x{:08x}\n",
                     self.dbg_isr_nonzero,
                     isr
@@ -1397,7 +1397,7 @@ fn find_mmio_bar_phys(dev: &pci::PciDevice) -> Result<(u8, u64), ()> {
         }
         if (bar_lo & 0x1) != 0 {
             if crate::logflag::R8125_VERBOSE_LOGS {
-                crate::log!("net/r8125: bar{} is IO (raw=0x{:08x})\n", i, bar_lo);
+                crate::log_trace!("net/r8125: bar{} is IO (raw=0x{:08x})\n", i, bar_lo);
             }
             i += 1;
             continue;
@@ -1409,14 +1409,14 @@ fn find_mmio_bar_phys(dev: &pci::PciDevice) -> Result<(u8, u64), ()> {
         let phys = lo | (hi << 32);
         if phys == 0 {
             if crate::logflag::R8125_VERBOSE_LOGS {
-                crate::log!("net/r8125: bar{} is zero\n", i);
+                crate::log_trace!("net/r8125: bar{} is zero\n", i);
             }
             i += 1;
             continue;
         }
 
         if crate::logflag::R8125_VERBOSE_LOGS {
-            crate::log!(
+            crate::log_trace!(
                 "net/r8125: bar{} mmio raw=0x{:08x}{} => 0x{:x}\n",
                 i,
                 bar_lo,

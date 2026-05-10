@@ -117,11 +117,11 @@ impl IntelGfxBackend {
             },
         };
 
-        crate::log!("gfx: using intel backend (software-raster path)\n");
+        crate::log_trace!("gfx: using intel backend (software-raster path)\n");
 
         let cursor = Self::init_hw_cursor_state();
         if cursor.is_none() {
-            crate::log!("gfx-intel: hw cursor init unavailable\n");
+            crate::log_trace!("gfx-intel: hw cursor init unavailable\n");
         }
 
         Some(Self {

@@ -461,7 +461,7 @@ fn build_cached_icons() -> Vec<CachedIcon> {
         }
 
         if main_res.is_err() || aa_res.is_err() {
-            crate::log!("lyon-demo: tessellation failed at icon={}\n", i);
+            crate::log_trace!("lyon-demo: tessellation failed at icon={}\n", i);
             base_geometries.push(BaseGeom {
                 main_positions: Vec::new(),
                 main_indices: Vec::new(),

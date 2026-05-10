@@ -126,7 +126,7 @@ fn log_bot_transport_debug(
 ) {
     let submit = crab_usb::debug_last_submit();
     let event = crab_usb::debug_last_event();
-    crate::log!(
+    crate::log_trace!(
         "crabusb: mass bot-debug stage={} cmd={} tag=0x{:08X} expect[dci={} ep=0x{:02X} dir={} len={} ptr=0x{:X}] last_submit[slot={} dci={} dir={} stream={} len={} ptr=0x{:X} ring=0x{:X}] last_event[slot={} ep={} cc={} residual={} ptr=0x{:X}]\n",
         stage,
         cmd,
@@ -418,7 +418,7 @@ pub(crate) async fn bot_recovery(
     bulk_out_ep: u8,
     bulk_in_ep: u8,
 ) -> Result<(), MassProbeError> {
-    crate::log!(
+    crate::log_trace!(
         "crabusb: mass recovery if#{} bulk_out=0x{:02X} bulk_in=0x{:02X} step=reset\n",
         interface_number,
         bulk_out_ep,
@@ -438,7 +438,7 @@ pub(crate) async fn bot_recovery(
         .await
         .map_err(|_| MassProbeError::Transport("bot-reset"))?;
 
-    crate::log!(
+    crate::log_trace!(
         "crabusb: mass recovery if#{} step=clear-halt-out ep=0x{:02X}\n",
         interface_number,
         bulk_out_ep
@@ -459,7 +459,7 @@ pub(crate) async fn bot_recovery(
     {
         Some(Ok(_)) => {}
         Some(Err(err)) => {
-            crate::log!(
+            crate::log_trace!(
                 "crabusb: mass recovery if#{} clear-halt-out ep=0x{:02X} ignored err={:?}\n",
                 interface_number,
                 bulk_out_ep,
@@ -467,7 +467,7 @@ pub(crate) async fn bot_recovery(
             );
         }
         None => {
-            crate::log!(
+            crate::log_trace!(
                 "crabusb: mass recovery if#{} clear-halt-out ep=0x{:02X} ignored timeout\n",
                 interface_number,
                 bulk_out_ep
@@ -475,7 +475,7 @@ pub(crate) async fn bot_recovery(
         }
     }
 
-    crate::log!(
+    crate::log_trace!(
         "crabusb: mass recovery if#{} step=clear-halt-in ep=0x{:02X}\n",
         interface_number,
         bulk_in_ep
@@ -496,7 +496,7 @@ pub(crate) async fn bot_recovery(
     {
         Some(Ok(_)) => {}
         Some(Err(err)) => {
-            crate::log!(
+            crate::log_trace!(
                 "crabusb: mass recovery if#{} clear-halt-in ep=0x{:02X} ignored err={:?}\n",
                 interface_number,
                 bulk_in_ep,
@@ -504,7 +504,7 @@ pub(crate) async fn bot_recovery(
             );
         }
         None => {
-            crate::log!(
+            crate::log_trace!(
                 "crabusb: mass recovery if#{} clear-halt-in ep=0x{:02X} ignored timeout\n",
                 interface_number,
                 bulk_in_ep
@@ -512,7 +512,7 @@ pub(crate) async fn bot_recovery(
         }
     }
 
-    crate::log!("crabusb: mass recovery if#{} step=done\n", interface_number);
+    crate::log_trace!("crabusb: mass recovery if#{} step=done\n", interface_number);
     Timer::after(EmbassyDuration::from_millis(BOT_RECOVERY_SETTLE_MS)).await;
 
     Ok(())
@@ -520,7 +520,7 @@ pub(crate) async fn bot_recovery(
 
 fn log_request_sense(data: &[u8]) {
     if data.len() < 14 {
-        crate::log!("crabusb: mass request-sense short len={}\n", data.len());
+        crate::log_trace!("crabusb: mass request-sense short len={}\n", data.len());
         return;
     }
 
@@ -528,7 +528,7 @@ fn log_request_sense(data: &[u8]) {
     let sense_key = data[2] & 0x0F;
     let asc = data[12];
     let ascq = data[13];
-    crate::log!(
+    crate::log_trace!(
         "crabusb: mass request-sense rc=0x{:02X} key=0x{:02X} asc=0x{:02X} ascq=0x{:02X}\n",
         response_code,
         sense_key,
@@ -612,7 +612,7 @@ async fn test_unit_ready_with_sense(
         {
             Ok(()) => return Ok(()),
             Err(err) => {
-                crate::log!(
+                crate::log_trace!(
                     "crabusb: mass test-unit-ready attempt {} failed: {:?}\n",
                     attempt + 1,
                     err
@@ -790,7 +790,7 @@ async fn read_format_capacities(
     let descriptor_code = buf[8 + 4] & 0x03;
     let block_count = u32::from_be_bytes([buf[8], buf[9], buf[10], buf[11]]) as u64;
     let block_size = u32::from_be_bytes([0, buf[13], buf[14], buf[15]]);
-    crate::log!(
+    crate::log_trace!(
         "crabusb: mass read-format-capacities code={} bs={} blocks={}\n",
         descriptor_code,
         block_size,
@@ -825,7 +825,7 @@ pub(crate) async fn probe_mass_bot(
     {
         Ok(read) => read,
         Err(first_err) => {
-            crate::log!(
+            crate::log_trace!(
                 "crabusb: mass inquiry initial attempt failed: {:?}; applying BOT recovery\n",
                 first_err
             );
@@ -849,7 +849,7 @@ pub(crate) async fn probe_mass_bot(
     }
 
     let removable = (inquiry[1] & 0x80) != 0;
-    crate::log!("crabusb: mass inquiry removable={} pdt=0x{:02X}\n", removable, inquiry[0] & 0x1F);
+    crate::log_trace!("crabusb: mass inquiry removable={} pdt=0x{:02X}\n", removable, inquiry[0] & 0x1F);
     let _ = test_unit_ready_with_sense(bulk_out, bulk_in, bulk_out_ep, bulk_in_ep, lun).await;
 
     let mut read_capacity = [0u8; 8];
@@ -886,7 +886,7 @@ pub(crate) async fn probe_mass_bot(
             (u64::from(last_lba) + 1, block_size)
         }
         Err(err) => {
-            crate::log!(
+            crate::log_trace!(
                 "crabusb: mass read-capacity10 failed: {:?}; trying sense/capacity fallbacks\n",
                 err
             );
@@ -894,7 +894,7 @@ pub(crate) async fn probe_mass_bot(
                 request_sense(bulk_out, bulk_in, bulk_out_ep, bulk_in_ep, lun, 0x544F_4E55).await;
             match read_capacity_16(bulk_out, bulk_in, bulk_out_ep, bulk_in_ep, lun).await {
                 Ok((blocks, bs)) => {
-                    crate::log!(
+                    crate::log_trace!(
                         "crabusb: mass read-capacity16 fallback bs={} blocks={}\n",
                         bs,
                         blocks
@@ -902,7 +902,7 @@ pub(crate) async fn probe_mass_bot(
                     (blocks, bs)
                 }
                 Err(rc16_err) => {
-                    crate::log!(
+                    crate::log_trace!(
                         "crabusb: mass read-capacity16 failed: {:?}; trying read-format-capacities\n",
                         rc16_err
                     );

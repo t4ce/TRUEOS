@@ -290,7 +290,7 @@ fn write_heartbeat_led(value: u32, count: u32) {
         let bar_phys = tga.bar_phys;
         let led_reg = tga.led_reg;
         drop(guard);
-        crate::log!(
+        crate::log_trace!(
             "tga: heartbeat mmio write count={} led=0x{:02X} bdf={:02X}:{:02X}.{} bar0=0x{:016X} virt=0x{:016X}\n",
             count,
             value,
@@ -316,7 +316,7 @@ fn ensure_host_mailbox() -> Option<TgaHostMailbox> {
     }
 
     let Some((phys, virt)) = crate::dma::alloc(TGA_HOST_MB_BYTES, TGA_HOST_MB_ALIGN) else {
-        crate::log!(
+        crate::log_trace!(
             "tga: host-mailbox alloc failed bytes={} align={}\n",
             TGA_HOST_MB_BYTES,
             TGA_HOST_MB_ALIGN
@@ -334,7 +334,7 @@ fn ensure_host_mailbox() -> Option<TgaHostMailbox> {
     };
 
     *TGA_HOST_MAILBOX.lock() = Some(mb);
-    crate::log!(
+    crate::log_trace!(
         "tga: host-mailbox allocated phys=0x{:016X} virt=0x{:016X} bytes=0x{:X} layout magic+0 seq+4 value+8 status+12\n",
         mb.phys,
         mb.virt,
@@ -368,7 +368,7 @@ fn publish_host_mailbox() {
     Tga::write_reg(base + TGA_HOST_MB_DOORBELL_OFF, TGA_HOST_MB_DOORBELL_MAGIC);
     drop(guard);
 
-    crate::log!(
+    crate::log_trace!(
         "tga: host-mailbox published bdf={:02X}:{:02X}.{} bar0=0x{:016X} phys=0x{:016X} bytes=0x{:X} doorbell=0x{:08X}\n",
         bus,
         slot,
@@ -406,7 +406,7 @@ fn poll_host_mailbox() {
 
     TGA_HOST_MAILBOX_LAST_MAGIC.store(magic, Ordering::Relaxed);
     TGA_HOST_MAILBOX_LAST_SEQ.store(seq, Ordering::Relaxed);
-    crate::log!(
+    crate::log_trace!(
         "tga: host-mailbox rx magic=0x{:08X} expected=0x{:08X} ok={} seq={} value=0x{:08X} status=0x{:08X} phys=0x{:016X}\n",
         magic,
         TGA_MAGIC_EXPECTED,
@@ -440,7 +440,7 @@ fn try_readback_doorbell(count: u32) {
     tga.write_led(TGA_READBACK_DOORBELL_LED_VALUE);
     drop(guard);
 
-    crate::log!(
+    crate::log_trace!(
         "tga: readback-doorbell posted led=0x{:02X} future_magic_expected=0x{:08X} bdf={:02X}:{:02X}.{} bar0=0x{:016X} led_virt=0x{:016X} magic_virt=0x{:016X}\n",
         TGA_READBACK_DOORBELL_LED_VALUE,
         TGA_MAGIC_EXPECTED,
@@ -481,7 +481,7 @@ fn log_reconnect_delta(prev: TgaHotplugSnapshot, now: &Tga) {
         || assign_changed
         || map_changed)
     {
-        crate::log!(
+        crate::log_trace!(
             "tga: reconnect stable bdf={:02X}:{:02X}.{} bar0=0x{:016X} size=0x{:X} map=0x{:X}\n",
             now.bus,
             now.slot,
@@ -493,7 +493,7 @@ fn log_reconnect_delta(prev: TgaHotplugSnapshot, now: &Tga) {
         return;
     }
 
-    crate::log!(
+    crate::log_trace!(
         "tga: reconnect delta bdf {:02X}:{:02X}.{} -> {:02X}:{:02X}.{} bar0 0x{:016X} -> 0x{:016X} size 0x{:X} -> 0x{:X} mode {} -> {} assign {} -> {} map 0x{:X} -> 0x{:X}\n",
         prev.bus,
         prev.slot,
@@ -523,7 +523,7 @@ fn log_reconnect_delta(prev: TgaHotplugSnapshot, now: &Tga) {
 }
 
 fn log_tga_state(prefix: &str, tga: &Tga) {
-    crate::log!(
+    crate::log_trace!(
         "tga: {} bdf={:02X}:{:02X}.{} bar0=0x{:016X} size=0x{:X} {} {} map=0x{:X}\n",
         prefix,
         tga.bus,
@@ -552,7 +552,7 @@ pub fn tga_led_set(on: bool) {
 pub fn tga_add_u32(a: u32, b: u32) -> Option<TgaAddProof> {
     let guard = TGA.lock();
     let proof = guard.as_ref()?.add_u32(a, b);
-    crate::log!(
+    crate::log_trace!(
         "tga: add-proof a=0x{:08X} b=0x{:08X} result=0x{:08X} expected=0x{:08X} ok={} done={} polls={} status=0x{:08X} retire={} error=0x{:08X}\n",
         proof.a,
         proof.b,
@@ -589,7 +589,7 @@ pub fn try_init() -> bool {
     let Some(dev) = found else {
         if crate::logflag::BOOT_INFO_LOGS {
             crate::logflag::TGA_MISSING_LOG_ONCE.call_once(|| {
-                crate::log!(
+                crate::log_trace!(
                     "tga: device not found (vid=0x{:04X} did=0x{:04X}, scanned {} devices)\n",
                     TGA_VENDOR_ID,
                     TGA_DEVICE_ID,
@@ -674,7 +674,7 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
 
     let bar_is_64 = ((bar_lo >> 1) & 0x3) == 0x2;
     if !bar_is_64 {
-        crate::log!(
+        crate::log_trace!(
             "tga: unsupported BAR mode bdf={:02X}:{:02X}.{} (expected 64-bit BAR0/1)\n",
             dev.bus,
             dev.slot,
@@ -687,7 +687,7 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
     if bar_size == 0 {
         bar_size = TGA_EXPECTED_BAR0_SIZE;
     } else if bar_size != TGA_EXPECTED_BAR0_SIZE {
-        crate::log!(
+        crate::log_trace!(
             "tga: BAR0 size mismatch bdf={:02X}:{:02X}.{} probed=0x{:X} expected=0x{:X} (continuing)\n",
             dev.bus,
             dev.slot,
@@ -725,7 +725,7 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
         let align = TGA_EXPECTED_BAR0_SIZE.max(0x1000);
 
         let base = crate::pci::alloc_hotplug_mmio_base(dev.bus, size, align)?;
-        crate::log!(
+        crate::log_trace!(
             "tga: hotplug BAR assign bdf={:02X}:{:02X}.{} size=0x{:X} align=0x{:X} base=0x{:016X}\n",
             dev.bus,
             dev.slot,
@@ -795,7 +795,7 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
 
     let cmd_after = crate::pci::config_read_u16(dev.bus, dev.slot, dev.function, 0x04);
 
-    crate::log!(
+    crate::log_trace!(
         "tga: bring_online bdf={:02X}:{:02X}.{} cmd 0x{:04X}->0x{:04X} raw_bar0=0x{:08X} raw_bar1=0x{:08X} bar0=0x{:016X} size=0x{:X}\n",
         dev.bus,
         dev.slot,

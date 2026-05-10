@@ -433,7 +433,7 @@ pub async fn tls_demo_matrix_job_run(slot_id: u8, host_arg: HString<96>) {
         leak_str(host_arg.as_str().to_string())
     };
 
-    crate::log!(
+    crate::log_trace!(
         "tls_demo: starting host={} port={}\n",
         initial_host,
         DEMO_PORT
@@ -461,12 +461,12 @@ pub async fn tls_demo_matrix_job_run(slot_id: u8, host_arg: HString<96>) {
     }
 
     crate::matrix::push_line(slot_id, "https: timed out");
-    crate::log!("tls_demo: timed out (all devices)\n");
+    crate::log_trace!("tls_demo: timed out (all devices)\n");
     crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
 }
 
 async fn tls_demo_attempt_device(slot_id: u8, initial_host: &'static str, dev_idx: usize) -> bool {
-    crate::log!("tls_demo: attempting device={}\n", dev_idx);
+    crate::log_trace!("tls_demo: attempting device={}\n", dev_idx);
 
     let mut target = RedirectTarget {
         host: initial_host,
@@ -482,11 +482,11 @@ async fn tls_demo_attempt_device(slot_id: u8, initial_host: &'static str, dev_id
             dns::resolve_ipv4_for_device(dev_idx, target.host, DnsConfig::for_device(dev_idx))
                 .await
         else {
-            crate::log!("tls_demo: dns failed (device={})\n", dev_idx);
+            crate::log_trace!("tls_demo: dns failed (device={})\n", dev_idx);
             break 'redirects;
         };
 
-        crate::log!(
+        crate::log_trace!(
             "tls_demo: resolved host={} ip={}.{}.{}.{} (device={})\n",
             target.host,
             ip[0],
@@ -539,7 +539,7 @@ async fn tls_demo_attempt_device(slot_id: u8, initial_host: &'static str, dev_id
                             continue;
                         }
                         crate::matrix::push_line(slot_id, "https: tls connected");
-                        crate::log!("tls_demo: connected (device={})\n", dev_idx);
+                        crate::log_trace!("tls_demo: connected (device={})\n", dev_idx);
 
                         if !http_sent {
                             // Ask for gzip so we can decode it into readable HTML. (Some servers ignore
@@ -555,7 +555,7 @@ async fn tls_demo_attempt_device(slot_id: u8, initial_host: &'static str, dev_id
                             });
                             http_sent = true;
                             crate::matrix::push_line(slot_id, "https: sent https request");
-                            crate::log!("tls_demo: sent request\n");
+                            crate::log_trace!("tls_demo: sent request\n");
                         }
                     }
                     TlsEvent::Data { handle, data } => {
@@ -667,7 +667,7 @@ async fn tls_demo_attempt_device(slot_id: u8, initial_host: &'static str, dev_id
                                                 next.path
                                             );
                                             crate::matrix::push_line(slot_id, msg.as_str());
-                                            crate::log!(
+                                            crate::log_trace!(
                                                 "tls_demo: redirect {}/3 -> host={} port={} path={}\n",
                                                 redirects,
                                                 next.host,
@@ -697,7 +697,7 @@ async fn tls_demo_attempt_device(slot_id: u8, initial_host: &'static str, dev_id
                                 if truncated { " (truncated)" } else { "" }
                             );
                             crate::matrix::push_line(slot_id, line.as_str());
-                            crate::log!(
+                            crate::log_trace!(
                                 "tls_demo: closed device={} plaintext_bytes={}{}\n",
                                 dev_idx,
                                 final_blob.len(),
@@ -711,10 +711,10 @@ async fn tls_demo_attempt_device(slot_id: u8, initial_host: &'static str, dev_id
                         }
                     }
                     TlsEvent::Error { msg } => {
-                        crate::log!("tls_demo: net error (device={}): {}\n", dev_idx, msg);
+                        crate::log_trace!("tls_demo: net error (device={}): {}\n", dev_idx, msg);
                     }
                     TlsEvent::TlsError { err } => {
-                        crate::log!("tls_demo: tls error (device={}): {:?}\n", dev_idx, err);
+                        crate::log_trace!("tls_demo: tls error (device={}): {:?}\n", dev_idx, err);
                         if let Some(h) = tls_handle {
                             let _ = cmds.push(TlsCommand::Close { handle: h });
                         }
@@ -742,7 +742,7 @@ async fn tls_demo_attempt_device(slot_id: u8, initial_host: &'static str, dev_id
             }
 
             if Instant::now() >= deadline {
-                crate::log!("tls_demo: timed out (device={})\n", dev_idx);
+                crate::log_trace!("tls_demo: timed out (device={})\n", dev_idx);
                 if let Some(h) = tls_handle {
                     let _ = cmds.push(TlsCommand::Close { handle: h });
                 }

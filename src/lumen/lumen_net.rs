@@ -167,7 +167,7 @@ pub(crate) fn begin_matrix_manifest_load() {
     let epoch = MATRIX_EPOCH
         .fetch_add(1, Ordering::AcqRel)
         .saturating_add(1);
-    crate::log!("lumen-net: matrix manifest reset epoch={} source=model-load\n", epoch);
+    crate::log_trace!("lumen-net: matrix manifest reset epoch={} source=model-load\n", epoch);
 }
 
 pub(crate) fn clear_matrix_manifest(reason: &'static str) {
@@ -180,7 +180,7 @@ pub(crate) fn clear_matrix_manifest(reason: &'static str) {
     let epoch = MATRIX_EPOCH
         .fetch_add(1, Ordering::AcqRel)
         .saturating_add(1);
-    crate::log!(
+    crate::log_trace!(
         "lumen-net: matrix manifest clear epoch={} reason={} cleared={} resident=0\n",
         epoch,
         reason,
@@ -231,7 +231,7 @@ pub(crate) fn register_loaded_matrix(
     }
 
     if manifest.len() <= 4 || manifest.len() % 16 == 0 {
-        crate::log!(
+        crate::log_trace!(
             "lumen-net: matrix manifest register count={} matrix=0x{:016X} name_hash=0x{:016X} name_len={} dtype={} rows={} k_dim={} bytes={}\n",
             manifest.len(),
             matrix_id,
@@ -264,7 +264,7 @@ pub(crate) fn enqueue_remote_bf16_matvec_suffix(
     if !route_bf16_matvec_to_net_backend() {
         enqueue_shadow_bf16_matvec_suffix(x, w_rowmajor_bf16, n_rows, k_dim, out, chunk_rows);
         if !LOGGED_DISABLED.swap(true, Ordering::AcqRel) {
-            crate::log!(
+            crate::log_trace!(
                 "lumen-net: remote bf16 matvec adapter present route_enabled=0 action=local-burn-baby-only\n"
             );
         }
@@ -292,7 +292,7 @@ pub(crate) fn enqueue_remote_bf16_matvec_suffix(
         k_dim,
     ) else {
         if !LOGGED_MISSING_MATRIX.swap(true, Ordering::AcqRel) {
-            crate::log!(
+            crate::log_trace!(
                 "lumen-net: remote bf16 matvec skipped reason=no-stable-matrix-id rows={} k_dim={} bytes={} action=local-burn-baby-only\n",
                 n_rows,
                 k_dim,
@@ -339,7 +339,7 @@ pub(crate) fn enqueue_remote_bf16_matvec_suffix(
         let frame_cap = crate::allcaps::lumen::NET_BF16_MATVEC_SHADOW_FRAME_QUEUE_CAP;
         if queue.len().saturating_add(needed_frames) > frame_cap {
             if !LOGGED_SHADOW_DROPPED.swap(true, Ordering::AcqRel) {
-                crate::log!(
+                crate::log_trace!(
                     "lumen-net: bf16 matvec remote drop reason=frame-queue-full cap={} need={} pending_frames={}\n",
                     frame_cap,
                     needed_frames,
@@ -353,7 +353,7 @@ pub(crate) fn enqueue_remote_bf16_matvec_suffix(
 
     PENDING_BF16_MATVECS.lock().push_back(job);
     if !LOGGED_ENQUEUE.swap(true, Ordering::AcqRel) {
-        crate::log!(
+        crate::log_trace!(
             "lumen-net: bf16 matvec remote enqueue job={} rows={}..{} n_rows={} k_dim={} matrix=0x{:016X} epoch={} host=0x{:016X} frame_magic=0x{:08X} opcode={} x_bytes={} frames={} completion=tcp-result\n",
             job.job_id,
             job.row_start,
@@ -387,7 +387,7 @@ fn enqueue_shadow_bf16_matvec_suffix(
 ) {
     if !shadow_bf16_matvec_to_net_backend() {
         if !LOGGED_SHADOW_DISABLED.swap(true, Ordering::AcqRel) {
-            crate::log!("lumen-net: shadow bf16 matvec route_enabled=0 action=no-shadow-frames\n");
+            crate::log_trace!("lumen-net: shadow bf16 matvec route_enabled=0 action=no-shadow-frames\n");
         }
         return;
     }
@@ -411,7 +411,7 @@ fn enqueue_shadow_bf16_matvec_suffix(
         k_dim,
     ) else {
         if !LOGGED_MISSING_MATRIX.swap(true, Ordering::AcqRel) {
-            crate::log!(
+            crate::log_trace!(
                 "lumen-net: shadow bf16 matvec skipped reason=no-stable-matrix-id rows={} k_dim={} bytes={}\n",
                 n_rows,
                 k_dim,
@@ -460,7 +460,7 @@ fn enqueue_shadow_bf16_matvec_suffix(
     let frame_cap = crate::allcaps::lumen::NET_BF16_MATVEC_SHADOW_FRAME_QUEUE_CAP;
     if queue.len().saturating_add(needed_frames) > frame_cap {
         if !LOGGED_SHADOW_DROPPED.swap(true, Ordering::AcqRel) {
-            crate::log!(
+            crate::log_trace!(
                 "lumen-net: shadow bf16 matvec drop reason=frame-queue-full cap={} need={} pending_frames={} submitted={}\n",
                 frame_cap,
                 needed_frames,
@@ -474,7 +474,7 @@ fn enqueue_shadow_bf16_matvec_suffix(
     push_bf16_matvec_frames(&mut queue, &job, x_chunk_bytes);
 
     if !LOGGED_SHADOW_ENQUEUE.swap(true, Ordering::AcqRel) {
-        crate::log!(
+        crate::log_trace!(
             "lumen-net: shadow bf16 matvec enqueue job={} matrix=0x{:016X} epoch={} rows={}..{} n_rows={} k_dim={} x_bytes={} x_chunks={} frames={} note=descriptor-and-x-chunks-local-compute-full-width\n",
             job.job_id,
             job.matrix_id,

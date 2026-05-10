@@ -147,14 +147,14 @@ impl WsConnection {
                                     if let Ok(s) = core::str::from_utf8(rx_buf.as_slice()) {
                                         if let Some(line_end) = s.find("\r\n") {
                                             let line = &s[..line_end];
-                                            crate::log!(
+                                            crate::log_trace!(
                                                 "ws: handshake failed url={} status-line='{}' err={:?}\n",
                                                 url,
                                                 line,
                                                 e
                                             );
                                         } else {
-                                            crate::log!(
+                                            crate::log_trace!(
                                                 "ws: handshake failed url={} bytes={} err={:?}\n",
                                                 url,
                                                 rx_buf.len(),
@@ -162,7 +162,7 @@ impl WsConnection {
                                             );
                                         }
                                     } else {
-                                        crate::log!(
+                                        crate::log_trace!(
                                             "ws: handshake failed url={} bytes={} err={:?}\n",
                                             url,
                                             rx_buf.len(),

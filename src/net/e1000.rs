@@ -126,7 +126,7 @@ impl E1000Adapter {
             match Self::init_from_device(dev) {
                 Ok(adapter) => out.push(adapter),
                 Err(()) => {
-                    crate::log!(
+                    crate::log_trace!(
                         "net/e1000: init failed for {:02x}:{:02x}.{}\n",
                         dev.bus,
                         dev.slot,
@@ -144,7 +144,7 @@ impl E1000Adapter {
         let (bar_index, bar_phys) = match find_mmio_bar_phys(&dev) {
             Ok(v) => v,
             Err(()) => {
-                crate::log!(
+                crate::log_trace!(
                     "net/e1000: no MMIO BAR found at {:02x}:{:02x}.{}\n",
                     dev.bus,
                     dev.slot,
@@ -157,7 +157,7 @@ impl E1000Adapter {
         let mapped = match pci::mmio::map_mmio_region_exact(bar_phys, 0x20000) {
             Ok(v) => v,
             Err(_) => {
-                crate::log!(
+                crate::log_trace!(
                     "net/e1000: failed to map MMIO (bar{} @ 0x{:x})\n",
                     bar_index,
                     bar_phys
@@ -167,7 +167,7 @@ impl E1000Adapter {
         };
         let mmio = Mmio { base: mapped };
 
-        crate::log!(
+        crate::log_trace!(
             "net/e1000: found {:02x}:{:02x}.{} vid={:04x} did={:04x} mmio=bar{}@0x{:x}\n",
             dev.bus,
             dev.slot,
@@ -181,14 +181,14 @@ impl E1000Adapter {
         let rx_desc_mem = match DmaRegion::alloc(size_of::<RxDesc>() * RX_RING_SIZE, 16) {
             Some(r) => r,
             None => {
-                crate::log!("net/e1000: DMA alloc failed for RX desc ring\n");
+                crate::log_trace!("net/e1000: DMA alloc failed for RX desc ring\n");
                 return Err(());
             }
         };
         let tx_desc_mem = match DmaRegion::alloc(size_of::<TxDesc>() * TX_RING_SIZE, 16) {
             Some(r) => r,
             None => {
-                crate::log!("net/e1000: DMA alloc failed for TX desc ring\n");
+                crate::log_trace!("net/e1000: DMA alloc failed for TX desc ring\n");
                 return Err(());
             }
         };
@@ -217,16 +217,16 @@ impl E1000Adapter {
         }
 
         if adapter.setup_rx().is_err() {
-            crate::log!("net/e1000: setup_rx failed\n");
+            crate::log_trace!("net/e1000: setup_rx failed\n");
             return Err(());
         }
         if adapter.setup_tx().is_err() {
-            crate::log!("net/e1000: setup_tx failed\n");
+            crate::log_trace!("net/e1000: setup_tx failed\n");
             return Err(());
         }
 
         adapter.mac = adapter.read_mac();
-        crate::log!(
+        crate::log_trace!(
             "net/e1000: mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
             adapter.mac[0],
             adapter.mac[1],
@@ -515,7 +515,7 @@ fn find_mmio_bar_phys(dev: &pci::PciDevice) -> Result<(u8, u64), ()> {
 
         // IO BAR?
         if (bar_lo & 0x1) != 0 {
-            crate::log!("net/e1000: bar{} is IO (raw=0x{:08x})\n", i, bar_lo);
+            crate::log_trace!("net/e1000: bar{} is IO (raw=0x{:08x})\n", i, bar_lo);
             i += 1;
             continue;
         }
@@ -529,7 +529,7 @@ fn find_mmio_bar_phys(dev: &pci::PciDevice) -> Result<(u8, u64), ()> {
             0
         };
 
-        crate::log!(
+        crate::log_trace!(
             "net/e1000: bar{} mmio raw=0x{:08x}{} => 0x{:x}\n",
             i,
             bar_lo,

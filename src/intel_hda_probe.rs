@@ -32,7 +32,7 @@ fn play_piano_probe_held(
     log_event: bool,
 ) -> Result<&'static str, &'static str> {
     if log_event {
-        crate::log!(
+        crate::log_trace!(
             "intel/hda-probe: piano held seq={} notes={} first={} vel={}\n",
             snapshot.seq,
             snapshot.len,
@@ -159,13 +159,13 @@ fn hda_duration_ms_for_samples(sample_count: usize) -> u32 {
 
 async fn load_hda_wav_loop_samples() -> Result<Vec<i16>, &'static str> {
     let url = crate::allports::local_assets::AUDIO_DEMO_URL;
-    crate::log!(
+    crate::log_trace!(
         "intel/hda-probe: wav fetch submit trace={} url={}\n",
         HDA_WAV_TRACE_MARKER,
         url
     );
     let body = crate::t::run_on_shared_tokio(move || async move {
-        crate::log!(
+        crate::log_trace!(
             "intel/hda-probe: wav fetch job enter trace={} url={}\n",
             HDA_WAV_TRACE_MARKER,
             url
@@ -180,14 +180,14 @@ async fn load_hda_wav_loop_samples() -> Result<Vec<i16>, &'static str> {
     .await
     .map_err(|_| "shared tokio unavailable")?
     .map_err(|_| "http fetch failed")?;
-    crate::log!(
+    crate::log_trace!(
         "intel/hda-probe: wav fetch body trace={} url={} bytes={}\n",
         HDA_WAV_TRACE_MARKER,
         url,
         body.len()
     );
     let samples = decode_wav_pcm_s16_stereo_48k(body.as_slice())?;
-    crate::log!(
+    crate::log_trace!(
         "intel/hda-probe: wav decode ok trace={} samples={} frames={}\n",
         HDA_WAV_TRACE_MARKER,
         samples.len(),
@@ -198,7 +198,7 @@ async fn load_hda_wav_loop_samples() -> Result<Vec<i16>, &'static str> {
 
 async fn hda_wav_loop_probe_task() {
     let url = crate::allports::local_assets::AUDIO_DEMO_URL;
-    crate::log!(
+    crate::log_trace!(
         "intel/hda-probe: wav loop mode trace={} url={}\n",
         HDA_WAV_TRACE_MARKER,
         url
@@ -207,9 +207,9 @@ async fn hda_wav_loop_probe_task() {
     loop {
         if !crate::hda::is_initialized() {
             match crate::hda::init() {
-                Ok(()) => crate::log!("intel/hda-probe: hda initialized for wav loop\n"),
+                Ok(()) => crate::log_trace!("intel/hda-probe: hda initialized for wav loop\n"),
                 Err(err) => {
-                    crate::log!("intel/hda-probe: hda init err for wav loop err={}\n", err);
+                    crate::log_trace!("intel/hda-probe: hda init err for wav loop err={}\n", err);
                     Timer::after(EmbassyDuration::from_millis(HDA_WAV_LOOP_RETRY_DELAY_MS)).await;
                     continue;
                 }
@@ -217,18 +217,18 @@ async fn hda_wav_loop_probe_task() {
         }
 
         crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
-        crate::log!(
+        crate::log_trace!(
             "intel/hda-probe: wav loop net ready trace={}\n",
             HDA_WAV_TRACE_MARKER
         );
         while !crate::t::shared_tokio_runtime_ready() {
-            crate::log!(
+            crate::log_trace!(
                 "intel/hda-probe: wav loop waiting for shared tokio runtime trace={}\n",
                 HDA_WAV_TRACE_MARKER
             );
             Timer::after(EmbassyDuration::from_millis(HDA_WAV_LOOP_RETRY_DELAY_MS)).await;
         }
-        crate::log!(
+        crate::log_trace!(
             "intel/hda-probe: wav loop shared tokio ready trace={}\n",
             HDA_WAV_TRACE_MARKER
         );
@@ -236,20 +236,20 @@ async fn hda_wav_loop_probe_task() {
         let samples = match load_hda_wav_loop_samples().await {
             Ok(samples) => samples,
             Err(err) => {
-                crate::log!("intel/hda-probe: wav fetch/decode err url={} err={}\n", url, err);
+                crate::log_trace!("intel/hda-probe: wav fetch/decode err url={} err={}\n", url, err);
                 Timer::after(EmbassyDuration::from_millis(HDA_WAV_LOOP_RETRY_DELAY_MS)).await;
                 continue;
             }
         };
 
         let Some((_buf, dma_capacity_samples)) = crate::hda::get_dma_buffer_info() else {
-            crate::log!("intel/hda-probe: wav loop no hda dma buffer\n");
+            crate::log_trace!("intel/hda-probe: wav loop no hda dma buffer\n");
             Timer::after(EmbassyDuration::from_millis(HDA_WAV_LOOP_RETRY_DELAY_MS)).await;
             continue;
         };
         let chunk_samples = dma_capacity_samples & !(HDA_WAV_CHANNELS - 1);
         if chunk_samples == 0 {
-            crate::log!(
+            crate::log_trace!(
                 "intel/hda-probe: wav loop invalid dma capacity samples={}\n",
                 dma_capacity_samples
             );
@@ -257,7 +257,7 @@ async fn hda_wav_loop_probe_task() {
             continue;
         }
 
-        crate::log!(
+        crate::log_trace!(
             "intel/hda-probe: wav loop loaded trace={} url={} samples={} frames={} dma_samples={}\n",
             HDA_WAV_TRACE_MARKER,
             url,
@@ -274,7 +274,7 @@ async fn hda_wav_loop_probe_task() {
                     Timer::after(EmbassyDuration::from_millis(HDA_WAV_LOOP_IDLE_MS)).await;
                 },
                 Err(err) => {
-                    crate::log!("intel/hda-probe: wav loop start err={}\n", err);
+                    crate::log_trace!("intel/hda-probe: wav loop start err={}\n", err);
                     Timer::after(EmbassyDuration::from_millis(HDA_WAV_LOOP_RETRY_DELAY_MS)).await;
                     continue;
                 }
@@ -291,7 +291,7 @@ async fn hda_wav_loop_probe_task() {
                 let chunk = &samples[off..end];
                 let duration_ms = hda_duration_ms_for_samples(chunk.len());
                 if off == 0 {
-                    crate::log!(
+                    crate::log_trace!(
                         "intel/hda-probe: wav chunk play begin trace={} len={} duration_ms={}\n",
                         HDA_WAV_TRACE_MARKER,
                         chunk.len(),
@@ -301,7 +301,7 @@ async fn hda_wav_loop_probe_task() {
                 match crate::hda::write_samples_and_play(chunk, duration_ms) {
                     Ok(()) => {}
                     Err(err) => {
-                        crate::log!(
+                        crate::log_trace!(
                             "intel/hda-probe: wav chunk err off={} len={} err={}\n",
                             off,
                             chunk.len(),
@@ -320,7 +320,7 @@ async fn hda_wav_loop_probe_task() {
 
 #[embassy_executor::task]
 pub async fn task() {
-    crate::log!(
+    crate::log_trace!(
         "intel/hda-probe: task start wav_loop={} pattern={} piano={} loops={}\n",
         HDA_PROBE_WAV_LOOP_ENABLED,
         PROBE_PATTERN_NAME,
@@ -333,7 +333,7 @@ pub async fn task() {
         return;
     }
 
-    crate::log!(
+    crate::log_trace!(
         "intel/hda-probe: task start pattern={} loops={}\n",
         PROBE_PATTERN_NAME,
         PROBE_PATTERN_LOOPS,
@@ -359,7 +359,7 @@ pub async fn task() {
                     .unwrap_or(!bassline_active);
                 if target == bassline_active {
                     pending_bassline_target = None;
-                    crate::log!(
+                    crate::log_trace!(
                         "intel/hda-probe: bassline toggle canceled active={}\n",
                         bassline_active
                     );
@@ -370,7 +370,7 @@ pub async fn task() {
                         next_grid_ms(now, bassline_beat_ms)
                     };
                     pending_bassline_target = Some(target);
-                    crate::log!(
+                    crate::log_trace!(
                         "intel/hda-probe: bassline toggle armed target={} due_ms={} now_ms={}\n",
                         target,
                         pending_bassline_due_ms,
@@ -392,7 +392,7 @@ pub async fn task() {
                                 Ok(()) => {
                                     bassline_active = true;
                                     bassline_started_ms = now;
-                                    crate::log!(
+                                    crate::log_trace!(
                                         "intel/hda-probe: bassline on bpm={} beat_ms={} step_ms={} samples={}\n",
                                         bpm,
                                         bassline_beat_ms,
@@ -401,12 +401,12 @@ pub async fn task() {
                                     );
                                 }
                                 Err(err) => {
-                                    crate::log!("intel/hda-probe: bassline start err={}\n", err);
+                                    crate::log_trace!("intel/hda-probe: bassline start err={}\n", err);
                                 }
                             }
                         }
                         Err(err) => {
-                            crate::log!("intel/hda-probe: bassline render err={}\n", err);
+                            crate::log_trace!("intel/hda-probe: bassline render err={}\n", err);
                         }
                     }
                 } else {
@@ -414,10 +414,10 @@ pub async fn task() {
                         Ok(()) => {
                             bassline_active = false;
                             bassline_started_ms = 0;
-                            crate::log!("intel/hda-probe: bassline off\n");
+                            crate::log_trace!("intel/hda-probe: bassline off\n");
                         }
                         Err(err) => {
-                            crate::log!("intel/hda-probe: bassline stop err={}\n", err);
+                            crate::log_trace!("intel/hda-probe: bassline stop err={}\n", err);
                         }
                     }
                 }
@@ -437,7 +437,7 @@ pub async fn task() {
                     match play_piano_probe_held(&snapshot, log_event) {
                         Ok(pattern_name) => {
                             if log_event {
-                                crate::log!(
+                                crate::log_trace!(
                                     "intel/hda-probe: pattern ok name={} notes={}\n",
                                     pattern_name,
                                     snapshot.len,
@@ -447,7 +447,7 @@ pub async fn task() {
                                 .await;
                         }
                         Err(err) => {
-                            crate::log!(
+                            crate::log_trace!(
                                 "intel/hda-probe: pattern err piano_claimed={} err={}\n",
                                 true,
                                 err,
@@ -464,7 +464,7 @@ pub async fn task() {
             last_piano_seq = None;
             match play_default_probe_pattern() {
                 Ok(pattern_name) => {
-                    crate::log!(
+                    crate::log_trace!(
                         "intel/hda-probe: pattern ok name={} loops={}\n",
                         pattern_name,
                         PROBE_PATTERN_LOOPS,
@@ -472,7 +472,7 @@ pub async fn task() {
                     Timer::after(EmbassyDuration::from_millis(PROBE_LOOP_DELAY_MS)).await;
                 }
                 Err(err) => {
-                    crate::log!(
+                    crate::log_trace!(
                         "intel/hda-probe: pattern err piano_claimed={} err={}\n",
                         false,
                         err,

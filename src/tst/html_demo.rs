@@ -8,5 +8,5 @@ pub async fn html_demo_task() {
     );
 
     let handed_off = crate::tst_html_shack::handoff_html_to_truesurfer(html).await;
-    crate::log!("html-demo: handed_off={}\n", if handed_off { 1 } else { 0 });
+    crate::log_trace!("html-demo: handed_off={}\n", if handed_off { 1 } else { 0 });
 }

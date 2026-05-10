@@ -54,11 +54,11 @@ async fn probe_async_identity() -> u32 {
 fn probe_socket2_surface() -> Result<(), &'static str> {
     match Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP)) {
         Ok(_) => {
-            crate::log!("tokio_probe: success net.socket2.new\n");
+            crate::log_trace!("tokio_probe: success net.socket2.new\n");
             Ok(())
         }
         Err(_) => {
-            crate::log!(
+            crate::log_trace!(
                 "tokio_probe: success net.socket2.stub_error (TRUEOS backend not wired yet)\n"
             );
             Ok(())
@@ -67,11 +67,11 @@ fn probe_socket2_surface() -> Result<(), &'static str> {
 }
 
 fn log_io_failure(stage: &str, err: &io::Error) {
-    crate::log!("tokio_probe: failure {} kind={:?} err={}\n", stage, err.kind(), err);
+    crate::log_trace!("tokio_probe: failure {} kind={:?} err={}\n", stage, err.kind(), err);
 }
 
 fn log_fs_io_failure(stage: &str, err: &io::Error) {
-    crate::log!(
+    crate::log_trace!(
         "tokio_probe: failure fs.runtime_ops.{} kind={:?} err={}\n",
         stage,
         err.kind(),
@@ -91,11 +91,11 @@ async fn probe_secure_dns_surface() -> Result<(), &'static str> {
     let dev_idx = crate::net::primary_device_index();
     let dns = crate::t::net::dns::DnsConfig::for_device_v4_only(dev_idx);
     if dns.server_count == 0 {
-        crate::log!("tokio_probe: note net.secure_dns skipped (no ipv4 dns config)\n");
+        crate::log_trace!("tokio_probe: note net.secure_dns skipped (no ipv4 dns config)\n");
         return Ok(());
     }
 
-    crate::log!(
+    crate::log_trace!(
         "tokio_probe: enter net.secure_dns.ipv4_lookup host={} dev={} transports=doh,dot tls=trueos\n",
         SECURE_DNS_PROBE_HOST,
         dev_idx
@@ -103,7 +103,7 @@ async fn probe_secure_dns_surface() -> Result<(), &'static str> {
 
     match crate::t::net::dns::resolve_ipv4_for_device(dev_idx, SECURE_DNS_PROBE_HOST, dns).await {
         Ok(ip) => {
-            crate::log!(
+            crate::log_trace!(
                 "tokio_probe: success net.secure_dns.ipv4_lookup first={}.{}.{}.{}\n",
                 ip[0],
                 ip[1],
@@ -113,7 +113,7 @@ async fn probe_secure_dns_surface() -> Result<(), &'static str> {
             Ok(())
         }
         Err(err) => {
-            crate::log!("tokio_probe: failure net.secure_dns.ipv4_lookup err={:?}\n", err);
+            crate::log_trace!("tokio_probe: failure net.secure_dns.ipv4_lookup err={:?}\n", err);
             Err("net.secure_dns.ipv4_lookup")
         }
     }
@@ -121,13 +121,13 @@ async fn probe_secure_dns_surface() -> Result<(), &'static str> {
 
 async fn probe_tokio_blocking_canary() -> bool {
     if !tokio_background_worker_ready() {
-        crate::log!(
+        crate::log_trace!(
             "tokio_probe: note blocking.spawn_blocking_canary deferred until BACKGROUND_AP_WORKER_READY\n"
         );
         return false;
     }
 
-    crate::log!("tokio_probe: enter blocking.spawn_blocking_canary\n");
+    crate::log_trace!("tokio_probe: enter blocking.spawn_blocking_canary\n");
     let canary = tokio::time::timeout(
         core::time::Duration::from_millis(50),
         tokio::task::spawn_blocking(|| 0xB10C_0001u32),
@@ -136,18 +136,18 @@ async fn probe_tokio_blocking_canary() -> bool {
 
     match canary {
         Ok(Ok(0xB10C_0001)) => {
-            crate::log!("tokio_probe: success blocking.spawn_blocking_canary\n");
+            crate::log_trace!("tokio_probe: success blocking.spawn_blocking_canary\n");
             true
         }
         Ok(Ok(value)) => {
-            crate::log!(
+            crate::log_trace!(
                 "tokio_probe: failure blocking.spawn_blocking_canary value=0x{:08X}\n",
                 value
             );
             false
         }
         Ok(Err(err)) => {
-            crate::log!(
+            crate::log_trace!(
                 "tokio_probe: failure blocking.spawn_blocking_canary join_cancelled={} join_panic={}\n",
                 err.is_cancelled(),
                 err.is_panic()
@@ -155,7 +155,7 @@ async fn probe_tokio_blocking_canary() -> bool {
             false
         }
         Err(_) => {
-            crate::log!("tokio_probe: failure blocking.spawn_blocking_canary_timeout\n");
+            crate::log_trace!("tokio_probe: failure blocking.spawn_blocking_canary_timeout\n");
             false
         }
     }
@@ -168,7 +168,7 @@ fn run_tokio_blocking_canary_runtime() {
     let runtime = match runtime_builder.build() {
         Ok(runtime) => runtime,
         Err(_) => {
-            crate::log!("tokio_probe: failure blocking.rt.build current_thread\n");
+            crate::log_trace!("tokio_probe: failure blocking.rt.build current_thread\n");
             return;
         }
     };
@@ -181,25 +181,25 @@ fn run_tokio_blocking_canary_runtime() {
         touched_blocking_pool
     });
     if touched_blocking_pool {
-        crate::log!("tokio_probe: enter blocking.rt.shutdown_timeout\n");
+        crate::log_trace!("tokio_probe: enter blocking.rt.shutdown_timeout\n");
         runtime.shutdown_timeout(core::time::Duration::from_millis(10));
-        crate::log!("tokio_probe: success blocking.rt.shutdown_timeout\n");
+        crate::log_trace!("tokio_probe: success blocking.rt.shutdown_timeout\n");
     }
 }
 
 async fn probe_tokio_fs_runtime_surface() {
-    crate::log!("tokio_probe: enter fs.runtime_ops probe\n");
+    crate::log_trace!("tokio_probe: enter fs.runtime_ops probe\n");
 
-    crate::log!("tokio_probe: enter fs.runtime_ops.write\n");
+    crate::log_trace!("tokio_probe: enter fs.runtime_ops.write\n");
     match tokio::fs::write(TOKIO_FS_PROBE_PATH, TOKIO_FS_PROBE_BYTES).await {
-        Ok(()) => crate::log!("tokio_probe: success fs.runtime_ops.write\n"),
+        Ok(()) => crate::log_trace!("tokio_probe: success fs.runtime_ops.write\n"),
         Err(err) => {
             log_fs_io_failure("write", &err);
             return;
         }
     }
 
-    crate::log!("tokio_probe: enter fs.runtime_ops.read\n");
+    crate::log_trace!("tokio_probe: enter fs.runtime_ops.read\n");
     match tokio::time::timeout(
         core::time::Duration::from_millis(2_000),
         tokio::fs::read(TOKIO_FS_PROBE_PATH),
@@ -207,10 +207,10 @@ async fn probe_tokio_fs_runtime_surface() {
     .await
     {
         Ok(Ok(bytes)) if bytes.as_slice() == TOKIO_FS_PROBE_BYTES => {
-            crate::log!("tokio_probe: success fs.runtime_ops.read\n")
+            crate::log_trace!("tokio_probe: success fs.runtime_ops.read\n")
         }
         Ok(Ok(bytes)) => {
-            crate::log!("tokio_probe: failure fs.runtime_ops.read_value len={}\n", bytes.len());
+            crate::log_trace!("tokio_probe: failure fs.runtime_ops.read_value len={}\n", bytes.len());
             return;
         }
         Ok(Err(err)) => {
@@ -218,18 +218,18 @@ async fn probe_tokio_fs_runtime_surface() {
             return;
         }
         Err(_) => {
-            crate::log!("tokio_probe: failure fs.runtime_ops.read timeout_ms=2000\n");
+            crate::log_trace!("tokio_probe: failure fs.runtime_ops.read timeout_ms=2000\n");
             return;
         }
     }
 
-    crate::log!("tokio_probe: enter fs.runtime_ops.read_to_string\n");
+    crate::log_trace!("tokio_probe: enter fs.runtime_ops.read_to_string\n");
     match tokio::fs::read_to_string(TOKIO_FS_PROBE_PATH).await {
         Ok(text) if text.as_bytes() == TOKIO_FS_PROBE_BYTES => {
-            crate::log!("tokio_probe: success fs.runtime_ops.read_to_string\n")
+            crate::log_trace!("tokio_probe: success fs.runtime_ops.read_to_string\n")
         }
         Ok(text) => {
-            crate::log!(
+            crate::log_trace!(
                 "tokio_probe: failure fs.runtime_ops.read_to_string_value len={}\n",
                 text.len()
             );
@@ -241,16 +241,16 @@ async fn probe_tokio_fs_runtime_surface() {
         }
     }
 
-    crate::log!("tokio_probe: enter fs.runtime_ops.remove_file\n");
+    crate::log_trace!("tokio_probe: enter fs.runtime_ops.remove_file\n");
     match tokio::fs::remove_file(TOKIO_FS_PROBE_PATH).await {
-        Ok(()) => crate::log!("tokio_probe: success fs.runtime_ops.remove_file\n"),
+        Ok(()) => crate::log_trace!("tokio_probe: success fs.runtime_ops.remove_file\n"),
         Err(err) => {
             log_fs_io_failure("remove_file", &err);
             return;
         }
     }
 
-    crate::log!("tokio_probe: success fs.runtime_ops.cabi_helpers\n");
+    crate::log_trace!("tokio_probe: success fs.runtime_ops.cabi_helpers\n");
 
     if let Err(err) = tokio::fs::write(TOKIO_FS_PROBE_PATH, TOKIO_FS_PROBE_BYTES).await {
         log_fs_io_failure("file_ops.prepare_write", &err);
@@ -283,7 +283,7 @@ async fn probe_tokio_fs_runtime_surface() {
             return;
         }
         drop(file);
-        crate::log!("tokio_probe: success fs.runtime_ops.file_write_flush\n");
+        crate::log_trace!("tokio_probe: success fs.runtime_ops.file_write_flush\n");
 
         let mut file = match tokio::fs::File::open(TOKIO_FS_PROBE_PATH).await {
             Ok(file) => file,
@@ -295,10 +295,10 @@ async fn probe_tokio_fs_runtime_surface() {
         let mut bytes = alloc::vec::Vec::new();
         match file.read_to_end(&mut bytes).await {
             Ok(_) if bytes.as_slice() == TOKIO_FS_PROBE_BYTES => {
-                crate::log!("tokio_probe: success fs.runtime_ops.file_read_to_end\n")
+                crate::log_trace!("tokio_probe: success fs.runtime_ops.file_read_to_end\n")
             }
             Ok(_) => {
-                crate::log!(
+                crate::log_trace!(
                     "tokio_probe: failure fs.runtime_ops.file_read_to_end_value len={}\n",
                     bytes.len()
                 );
@@ -309,26 +309,26 @@ async fn probe_tokio_fs_runtime_surface() {
                 return;
             }
         }
-        crate::log!("tokio_probe: enter fs.runtime_ops.file_read_drop\n");
+        crate::log_trace!("tokio_probe: enter fs.runtime_ops.file_read_drop\n");
         drop(file);
-        crate::log!("tokio_probe: success fs.runtime_ops.file_read_drop\n");
+        crate::log_trace!("tokio_probe: success fs.runtime_ops.file_read_drop\n");
     }
 
-    crate::log!("tokio_probe: enter fs.runtime_ops.file_remove_after_read\n");
+    crate::log_trace!("tokio_probe: enter fs.runtime_ops.file_remove_after_read\n");
     match tokio::fs::remove_file(TOKIO_FS_PROBE_PATH).await {
-        Ok(()) => crate::log!("tokio_probe: success fs.runtime_ops.file_remove_after_read\n"),
+        Ok(()) => crate::log_trace!("tokio_probe: success fs.runtime_ops.file_remove_after_read\n"),
         Err(err) => {
             log_fs_io_failure("file_remove_after_read", &err);
             return;
         }
     }
 
-    crate::log!("tokio_probe: success fs.file_ops probe_suite\n");
+    crate::log_trace!("tokio_probe: success fs.file_ops probe_suite\n");
 
     if probe_tokio_blocking_canary().await {
         probe_std_thread_local_isolation_surface().await;
     } else {
-        crate::log!(
+        crate::log_trace!(
             "tokio_probe: note blocking.spawn_blocking still unsupported; fs.file_ops use TRUEOS CABI handle backend\n"
         );
     }
@@ -341,20 +341,20 @@ fn run_tokio_fs_probe_runtime() {
     let runtime = match runtime_builder.build() {
         Ok(runtime) => runtime,
         Err(_) => {
-            crate::log!("tokio_probe: failure fs.rt.build current_thread\n");
+            crate::log_trace!("tokio_probe: failure fs.rt.build current_thread\n");
             return;
         }
     };
 
     runtime.block_on(probe_tokio_fs_runtime_surface());
     drop(runtime);
-    crate::log!("tokio_probe: success fs.rt.shutdown\n");
+    crate::log_trace!("tokio_probe: success fs.rt.shutdown\n");
 }
 
 #[task]
 async fn tokio_fs_probe_task() {
     crate::r::readiness::wait_for(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED).await;
-    crate::log!("tokio_probe: resume fs.runtime_ops after TRUEOSFS_ROOT_MOUNTED\n");
+    crate::log_trace!("tokio_probe: resume fs.runtime_ops after TRUEOSFS_ROOT_MOUNTED\n");
     run_tokio_fs_probe_runtime();
 }
 
@@ -363,20 +363,20 @@ fn spawn_deferred_tokio_fs_probe() {
         return;
     }
 
-    crate::log!("tokio_probe: note fs.runtime_ops deferred until TRUEOSFS_ROOT_MOUNTED\n");
+    crate::log_trace!("tokio_probe: note fs.runtime_ops deferred until TRUEOSFS_ROOT_MOUNTED\n");
 
     if TOKIO_FS_PROBE_TASK_SPAWNED.swap(true, Ordering::AcqRel) {
         return;
     }
 
     let Some(spawner) = crate::workers::spawner_for_slot(0) else {
-        crate::log!("tokio_probe: note fs.runtime_ops task not spawned (no slot0 spawner)\n");
+        crate::log_trace!("tokio_probe: note fs.runtime_ops task not spawned (no slot0 spawner)\n");
         return;
     };
 
     match tokio_fs_probe_task() {
         Ok(token) => spawner.spawn(token),
-        Err(err) => crate::log!("tokio_probe: note fs.runtime_ops task spawn failed: {:?}\n", err),
+        Err(err) => crate::log_trace!("tokio_probe: note fs.runtime_ops task spawn failed: {:?}\n", err),
     }
 }
 
@@ -384,14 +384,14 @@ async fn probe_vnet_surface() -> Result<(), &'static str> {
     let deadline = embassy_time::Instant::now() + embassy_time::Duration::from_millis(500);
     while !crate::r::readiness::is_set(crate::r::readiness::NET_ANY_CONFIGURED) {
         if embassy_time::Instant::now() >= deadline {
-            crate::log!("tokio_probe: note vnet surface skipped (net not configured yet)\n");
+            crate::log_trace!("tokio_probe: note vnet surface skipped (net not configured yet)\n");
             return Ok(());
         }
         tokio::time::sleep(core::time::Duration::from_millis(10)).await;
     }
 
     let Some(vnet) = crate::r::net::VNet::open_primary() else {
-        crate::log!("tokio_probe: note vnet surface skipped (no primary vnet)\n");
+        crate::log_trace!("tokio_probe: note vnet surface skipped (no primary vnet)\n");
         return Ok(());
     };
 
@@ -409,7 +409,7 @@ async fn probe_vnet_surface() -> Result<(), &'static str> {
         if let Some(event) = vnet.pop_event() {
             match event {
                 v::vnet::Event::Opened { handle, kind } if kind == v::vnet::SocketKind::Tcp => {
-                    crate::log!("tokio_probe: success net.vnet.open_tcp_listen\n");
+                    crate::log_trace!("tokio_probe: success net.vnet.open_tcp_listen\n");
                     let _ = vnet.submit(v::vnet::Command::Close { handle });
                     return Ok(());
                 }
@@ -439,24 +439,24 @@ async fn wait_for_net_socket_ready() -> bool {
 
 async fn probe_tokio_net_surface() -> Result<(), &'static str> {
     if !wait_for_net_socket_ready().await {
-        crate::log!("tokio_probe: note net.tokio skipped (NET_SOCKET_READY not reached yet)\n");
+        crate::log_trace!("tokio_probe: note net.tokio skipped (NET_SOCKET_READY not reached yet)\n");
         return Ok(());
     }
 
     let Some(tcp_probe) = primary_ipv4_probe_addr(TOKIO_NET_PROBE_PORT) else {
-        crate::log!("tokio_probe: note net.tokio skipped (no primary ipv4 yet)\n");
+        crate::log_trace!("tokio_probe: note net.tokio skipped (no primary ipv4 yet)\n");
         return Ok(());
     };
 
     let Some(udp_probe) = primary_ipv4_probe_addr(0) else {
-        crate::log!("tokio_probe: note net.tokio skipped (no primary ipv4 yet)\n");
+        crate::log_trace!("tokio_probe: note net.tokio skipped (no primary ipv4 yet)\n");
         return Ok(());
     };
 
     match tokio::net::TcpListener::bind(tcp_probe).await {
         Ok(listener) => {
             let _ = listener.local_addr();
-            crate::log!("tokio_probe: success net.tokio.tcp_listener.bind\n");
+            crate::log_trace!("tokio_probe: success net.tokio.tcp_listener.bind\n");
         }
         Err(err) => {
             log_io_failure("net.tokio.tcp_listener.bind", &err);
@@ -466,7 +466,7 @@ async fn probe_tokio_net_surface() -> Result<(), &'static str> {
 
     let udp = match tokio::net::UdpSocket::bind(udp_probe).await {
         Ok(udp) => {
-            crate::log!("tokio_probe: success net.tokio.udp_socket.bind\n");
+            crate::log_trace!("tokio_probe: success net.tokio.udp_socket.bind\n");
             udp
         }
         Err(err) => {
@@ -481,13 +481,13 @@ async fn probe_tokio_net_surface() -> Result<(), &'static str> {
     )
     .await
     {
-        Ok(Ok(())) => crate::log!("tokio_probe: success net.tokio.udp_socket.writable\n"),
+        Ok(Ok(())) => crate::log_trace!("tokio_probe: success net.tokio.udp_socket.writable\n"),
         Ok(Err(err)) => {
             log_io_failure("net.tokio.udp_socket.writable", &err);
             return Err("net.tokio.udp_socket.writable");
         }
         Err(_) => {
-            crate::log!(
+            crate::log_trace!(
                 "tokio_probe: note net.tokio.udp_socket.writable_timeout; continuing lightweight net probe\n"
             );
         }
@@ -496,7 +496,7 @@ async fn probe_tokio_net_surface() -> Result<(), &'static str> {
     if crate::allcaps::probes::TOKIO_SECURE_DNS_BOOT_PROBE {
         probe_secure_dns_surface().await?;
     } else {
-        crate::log!(
+        crate::log_trace!(
             "tokio_probe: note net.secure_dns skipped (disabled for lightweight boot probe)\n"
         );
     }
@@ -512,14 +512,14 @@ fn run_tokio_net_probe_runtime() {
     let runtime = match runtime_builder.build() {
         Ok(runtime) => runtime,
         Err(_) => {
-            crate::log!("tokio_probe: failure net.tokio.rt.build current_thread\n");
+            crate::log_trace!("tokio_probe: failure net.tokio.rt.build current_thread\n");
             return;
         }
     };
 
     match runtime.block_on(probe_tokio_net_surface()) {
-        Ok(()) => crate::log!("tokio_probe: success net.tokio probe_suite\n"),
-        Err(stage) => crate::log!("tokio_probe: failure {}\n", stage),
+        Ok(()) => crate::log_trace!("tokio_probe: success net.tokio probe_suite\n"),
+        Err(stage) => crate::log_trace!("tokio_probe: failure {}\n", stage),
     }
 }
 
@@ -538,7 +538,7 @@ fn vthread_identity_probe_ready() -> bool {
 
 fn mark_std_tls_canary_on_boot_cpu() {
     TOKIO_STD_TLS_CANARY.with(|canary| canary.set(0xB5B5_0001));
-    crate::log!("tokio_probe: note std.thread_local boot canary armed\n");
+    crate::log_trace!("tokio_probe: note std.thread_local boot canary armed\n");
 }
 
 fn read_std_tls_canary() -> u32 {
@@ -548,21 +548,21 @@ fn read_std_tls_canary() -> u32 {
 fn probe_std_sync_surface() {
     let mutex = std::sync::Mutex::new(0u32);
     let Ok(_guard) = mutex.lock() else {
-        crate::log!("tokio_probe: failure std.sync.mutex.initial_lock\n");
+        crate::log_trace!("tokio_probe: failure std.sync.mutex.initial_lock\n");
         return;
     };
 
     match mutex.try_lock() {
         Ok(_) => {
-            crate::log!(
+            crate::log_trace!(
                 "tokio_probe: note std.sync.mutex recursive try_lock unexpectedly succeeded\n"
             );
         }
         Err(std::sync::TryLockError::WouldBlock) => {
-            crate::log!("tokio_probe: success std.sync.mutex recursive try_lock blocked\n");
+            crate::log_trace!("tokio_probe: success std.sync.mutex recursive try_lock blocked\n");
         }
         Err(std::sync::TryLockError::Poisoned(_)) => {
-            crate::log!("tokio_probe: failure std.sync.mutex.poisoned\n");
+            crate::log_trace!("tokio_probe: failure std.sync.mutex.poisoned\n");
         }
     }
 }
@@ -598,13 +598,13 @@ fn run_std_tls_isolation_worker(label: u32, release: Arc<AtomicU32>) -> StdTlsIs
 
 async fn probe_std_thread_local_isolation_surface() {
     if !tokio_background_worker_ready() {
-        crate::log!(
+        crate::log_trace!(
             "tokio_probe: note std.thread_local carrier_isolation deferred until BACKGROUND_AP_WORKER_READY\n"
         );
         return;
     }
 
-    crate::log!("tokio_probe: enter std.thread_local carrier_isolation\n");
+    crate::log_trace!("tokio_probe: enter std.thread_local carrier_isolation\n");
 
     let release = Arc::new(AtomicU32::new(0));
     let left_release = release.clone();
@@ -627,7 +627,7 @@ async fn probe_std_thread_local_isolation_surface() {
     .await;
 
     let Ok(Ok((left, right))) = joined else {
-        crate::log!("tokio_probe: failure std.thread_local carrier_isolation_timeout\n");
+        crate::log_trace!("tokio_probe: failure std.thread_local carrier_isolation_timeout\n");
         return;
     };
 
@@ -641,7 +641,7 @@ async fn probe_std_thread_local_isolation_surface() {
         && right.leaked == 0;
 
     if isolated {
-        crate::log!(
+        crate::log_trace!(
             "tokio_probe: success std.thread_local carrier_isolation left_cpu={} left_lane={} right_cpu={} right_lane={}\n",
             left.cpu_slot,
             left.tokio_lane,
@@ -649,7 +649,7 @@ async fn probe_std_thread_local_isolation_surface() {
             right.tokio_lane
         );
     } else if crate::th::vthread::tokio_blocking_backing_enabled() {
-        crate::log!(
+        crate::log_trace!(
             "tokio_probe: note std.thread_local carrier_isolation accepted under vthread backing left(label=0x{:08X} cpu={} lane={} before=0x{:08X} after=0x{:08X} leaked=0x{:08X}) right(label=0x{:08X} cpu={} lane={} before=0x{:08X} after=0x{:08X} leaked=0x{:08X}); use vthread TLS identity for Rayon-style schedulers\n",
             left.label,
             left.cpu_slot,
@@ -665,7 +665,7 @@ async fn probe_std_thread_local_isolation_surface() {
             right.leaked
         );
     } else {
-        crate::log!(
+        crate::log_trace!(
             "tokio_probe: failure std.thread_local carrier_isolation left(label=0x{:08X} cpu={} lane={} before=0x{:08X} after=0x{:08X} leaked=0x{:08X}) right(label=0x{:08X} cpu={} lane={} before=0x{:08X} after=0x{:08X} leaked=0x{:08X}); thread-local worker identity unsafe for Rayon-style schedulers\n",
             left.label,
             left.cpu_slot,
@@ -696,13 +696,13 @@ fn run_vthread_identity_worker(label: u32, release: Arc<AtomicU32>) -> VThreadId
 
 async fn probe_vthread_identity_surface() {
     if !vthread_identity_probe_ready() {
-        crate::log!(
+        crate::log_trace!(
             "vthread-probe: note deferred until VTHREAD_HW_TAG_READY|BACKGROUND_AP_WORKER_READY|TOKIO_RUNTIME_READY\n"
         );
         return;
     }
 
-    crate::log!("vthread-probe: enter fsbase_identity tls_address\n");
+    crate::log_trace!("vthread-probe: enter fsbase_identity tls_address\n");
 
     let release = Arc::new(AtomicU32::new(0));
     let left_release = release.clone();
@@ -724,21 +724,21 @@ async fn probe_vthread_identity_surface() {
     .await;
 
     let Ok(Ok((left, right))) = joined else {
-        crate::log!("vthread-probe: failure timeout\n");
+        crate::log_trace!("vthread-probe: failure timeout\n");
         return;
     };
 
     let Some(left_snapshot) = left.probe.snapshot else {
-        crate::log!("vthread-probe: failure bad_magic side=left\n");
+        crate::log_trace!("vthread-probe: failure bad_magic side=left\n");
         return;
     };
     let Some(right_snapshot) = right.probe.snapshot else {
-        crate::log!("vthread-probe: failure bad_magic side=right\n");
+        crate::log_trace!("vthread-probe: failure bad_magic side=right\n");
         return;
     };
 
     if left_snapshot.record_addr == right_snapshot.record_addr {
-        crate::log!(
+        crate::log_trace!(
             "vthread-probe: failure same_fs_record left_vtid={} right_vtid={} fs=0x{:016X}\n",
             left_snapshot.vtid,
             right_snapshot.vtid,
@@ -748,7 +748,7 @@ async fn probe_vthread_identity_surface() {
     }
 
     if left.probe.tls_addr == right.probe.tls_addr {
-        crate::log!(
+        crate::log_trace!(
             "vthread-probe: failure same_tls_addr left_slot={} right_slot={} tls=0x{:016X}\n",
             left_snapshot.tls_slot,
             right_snapshot.tls_slot,
@@ -758,7 +758,7 @@ async fn probe_vthread_identity_surface() {
     }
 
     if left.probe.after != left.label || right.probe.after != right.label {
-        crate::log!(
+        crate::log_trace!(
             "vthread-probe: failure value_leak left(label=0x{:08X} before=0x{:08X} after=0x{:08X}) right(label=0x{:08X} before=0x{:08X} after=0x{:08X})\n",
             left.label,
             left.probe.before,
@@ -770,7 +770,7 @@ async fn probe_vthread_identity_surface() {
         return;
     }
 
-    crate::log!(
+    crate::log_trace!(
         "vthread-probe: success left_vtid={} left_fs=0x{:016X} left_tls=0x{:016X} left_slot={} left_cpu={} right_vtid={} right_fs=0x{:016X} right_tls=0x{:016X} right_slot={} right_cpu={}\n",
         left_snapshot.vtid,
         left_snapshot.record_addr,
@@ -792,7 +792,7 @@ fn run_vthread_identity_probe_runtime() {
     let runtime = match runtime_builder.build() {
         Ok(runtime) => runtime,
         Err(_) => {
-            crate::log!("vthread-probe: failure rt.build current_thread\n");
+            crate::log_trace!("vthread-probe: failure rt.build current_thread\n");
             return;
         }
     };
@@ -808,7 +808,7 @@ async fn vthread_identity_probe_task() {
             | crate::r::readiness::TOKIO_RUNTIME_READY,
     )
     .await;
-    crate::log!("vthread-probe: resume after hardware tag and tokio readiness\n");
+    crate::log_trace!("vthread-probe: resume after hardware tag and tokio readiness\n");
     run_vthread_identity_probe_runtime();
 }
 
@@ -818,13 +818,13 @@ fn spawn_deferred_vthread_identity_probe() {
     }
 
     let Some(spawner) = crate::workers::spawner_for_slot(0) else {
-        crate::log!("vthread-probe: note task not spawned (no slot0 spawner)\n");
+        crate::log_trace!("vthread-probe: note task not spawned (no slot0 spawner)\n");
         return;
     };
 
     match vthread_identity_probe_task() {
         Ok(token) => spawner.spawn(token),
-        Err(err) => crate::log!("vthread-probe: note task spawn failed: {:?}\n", err),
+        Err(err) => crate::log_trace!("vthread-probe: note task spawn failed: {:?}\n", err),
     }
 }
 
@@ -837,13 +837,13 @@ async fn tokio_std_tls_canary_task() {
     let after = read_std_tls_canary();
 
     if before == 0 {
-        crate::log!(
+        crate::log_trace!(
             "tokio_probe: success std.thread_local per-AP canary before=0x{:08X} after=0x{:08X}\n",
             before,
             after
         );
     } else {
-        crate::log!(
+        crate::log_trace!(
             "tokio_probe: note std.thread_local per-AP canary shared before=0x{:08X} after=0x{:08X}; Tokio TLS uses TRUEOS lane slots\n",
             before,
             after
@@ -857,7 +857,7 @@ fn spawn_deferred_std_tls_canary() {
     }
 
     let Some(spawner) = crate::workers::spawner_for_slot(0) else {
-        crate::log!(
+        crate::log_trace!(
             "tokio_probe: note std.thread_local canary task not spawned (no slot0 spawner)\n"
         );
         return;
@@ -866,14 +866,14 @@ fn spawn_deferred_std_tls_canary() {
     match tokio_std_tls_canary_task() {
         Ok(token) => spawner.spawn(token),
         Err(err) => {
-            crate::log!("tokio_probe: note std.thread_local canary task spawn failed: {:?}\n", err)
+            crate::log_trace!("tokio_probe: note std.thread_local canary task spawn failed: {:?}\n", err)
         }
     }
 }
 
 fn run_rt_multi_thread_probe() {
     if !tokio_background_worker_ready() {
-        crate::log!(
+        crate::log_trace!(
             "tokio_probe: note rt-multi-thread.build deferred until BACKGROUND_AP_WORKER_READY\n"
         );
         return;
@@ -884,15 +884,15 @@ fn run_rt_multi_thread_probe() {
     runtime_builder.enable_io();
     runtime_builder.enable_time();
 
-    crate::log!("tokio_probe: success rt-multi-thread.builder_surface\n");
+    crate::log_trace!("tokio_probe: success rt-multi-thread.builder_surface\n");
 
     let runtime = match runtime_builder.build() {
         Ok(runtime) => {
-            crate::log!("tokio_probe: success rt-multi-thread.build\n");
+            crate::log_trace!("tokio_probe: success rt-multi-thread.build\n");
             runtime
         }
         Err(err) => {
-            crate::log!("tokio_probe: failure rt-multi-thread.build err={}\n", err);
+            crate::log_trace!("tokio_probe: failure rt-multi-thread.build err={}\n", err);
             return;
         }
     };
@@ -906,14 +906,14 @@ fn run_rt_multi_thread_probe() {
     });
 
     if ok {
-        crate::log!("tokio_probe: success rt-multi-thread.spawn_join\n");
-        crate::log!("tokio_probe: success rt-multi-thread.execution_surface lifecycle=shutdown\n");
+        crate::log_trace!("tokio_probe: success rt-multi-thread.spawn_join\n");
+        crate::log_trace!("tokio_probe: success rt-multi-thread.execution_surface lifecycle=shutdown\n");
     } else {
-        crate::log!("tokio_probe: failure rt-multi-thread.spawn_join\n");
+        crate::log_trace!("tokio_probe: failure rt-multi-thread.spawn_join\n");
     }
 
     drop(runtime);
-    crate::log!("tokio_probe: success rt-multi-thread.shutdown\n");
+    crate::log_trace!("tokio_probe: success rt-multi-thread.shutdown\n");
 }
 
 fn log_rt_multi_thread_probe() {
@@ -923,7 +923,7 @@ fn log_rt_multi_thread_probe() {
 #[task]
 async fn tokio_rt_multi_thread_probe_task() {
     crate::r::readiness::wait_for(crate::r::readiness::BACKGROUND_AP_WORKER_READY).await;
-    crate::log!("tokio_probe: resume rt-multi-thread.build after BACKGROUND_AP_WORKER_READY\n");
+    crate::log_trace!("tokio_probe: resume rt-multi-thread.build after BACKGROUND_AP_WORKER_READY\n");
     run_rt_multi_thread_probe();
 }
 
@@ -937,7 +937,7 @@ fn spawn_deferred_rt_multi_thread_probe() {
     }
 
     let Some(spawner) = crate::workers::spawner_for_slot(0) else {
-        crate::log!(
+        crate::log_trace!(
             "tokio_probe: note rt-multi-thread.build task not spawned (no slot0 spawner)\n"
         );
         return;
@@ -946,7 +946,7 @@ fn spawn_deferred_rt_multi_thread_probe() {
     match tokio_rt_multi_thread_probe_task() {
         Ok(token) => spawner.spawn(token),
         Err(err) => {
-            crate::log!("tokio_probe: note rt-multi-thread.build task spawn failed: {:?}\n", err)
+            crate::log_trace!("tokio_probe: note rt-multi-thread.build task spawn failed: {:?}\n", err)
         }
     }
 }
@@ -954,7 +954,7 @@ fn spawn_deferred_rt_multi_thread_probe() {
 #[task]
 async fn tokio_blocking_canary_task() {
     crate::r::readiness::wait_for(crate::r::readiness::BACKGROUND_AP_WORKER_READY).await;
-    crate::log!(
+    crate::log_trace!(
         "tokio_probe: resume blocking.spawn_blocking_canary after BACKGROUND_AP_WORKER_READY\n"
     );
     run_tokio_blocking_canary_runtime();
@@ -970,7 +970,7 @@ fn spawn_deferred_tokio_blocking_canary() {
     }
 
     let Some(spawner) = crate::workers::spawner_for_slot(0) else {
-        crate::log!(
+        crate::log_trace!(
             "tokio_probe: note blocking.spawn_blocking_canary task not spawned (no slot0 spawner)\n"
         );
         return;
@@ -978,7 +978,7 @@ fn spawn_deferred_tokio_blocking_canary() {
 
     match tokio_blocking_canary_task() {
         Ok(token) => spawner.spawn(token),
-        Err(err) => crate::log!(
+        Err(err) => crate::log_trace!(
             "tokio_probe: note blocking.spawn_blocking_canary task spawn failed: {:?}\n",
             err
         ),
@@ -988,7 +988,7 @@ fn spawn_deferred_tokio_blocking_canary() {
 #[task]
 async fn tokio_net_probe_task() {
     crate::r::readiness::wait_for(crate::r::readiness::NET_SOCKET_READY).await;
-    crate::log!("tokio_probe: resume net.tokio surface after NET_SOCKET_READY\n");
+    crate::log_trace!("tokio_probe: resume net.tokio surface after NET_SOCKET_READY\n");
     run_tokio_net_probe_runtime();
 }
 
@@ -997,7 +997,7 @@ fn spawn_deferred_tokio_net_probe() {
         return;
     }
 
-    crate::log!("tokio_probe: note net.tokio surface deferred until NET_SOCKET_READY\n");
+    crate::log_trace!("tokio_probe: note net.tokio surface deferred until NET_SOCKET_READY\n");
 
     if TOKIO_NET_PROBE_TASK_SPAWNED.swap(true, Ordering::AcqRel) {
         return;
@@ -1007,17 +1007,17 @@ fn spawn_deferred_tokio_net_probe() {
         spawner
     } else {
         let Some(spawner) = crate::workers::spawner_for_slot(0) else {
-            crate::log!("tokio_probe: note net.tokio task not spawned (no slot0 spawner)\n");
+            crate::log_trace!("tokio_probe: note net.tokio task not spawned (no slot0 spawner)\n");
             return;
         };
-        crate::log!("tokio_probe: note net.tokio using slot0 fallback; no background worker\n");
+        crate::log_trace!("tokio_probe: note net.tokio using slot0 fallback; no background worker\n");
         spawner
     };
 
     match tokio_net_probe_task() {
         Ok(token) => spawner.spawn(token),
         Err(err) => {
-            crate::log!("tokio_probe: note net.tokio task spawn failed: {:?}\n", err)
+            crate::log_trace!("tokio_probe: note net.tokio task spawn failed: {:?}\n", err)
         }
     }
 }
@@ -1027,17 +1027,17 @@ async fn run_probe_suite() -> Result<(), &'static str> {
     if async_marker != 0x544F_4B49 {
         return Err("async-body");
     }
-    crate::log!("tokio_probe: success rt.block_on async-body\n");
+    crate::log_trace!("tokio_probe: success rt.block_on async-body\n");
 
     tokio::task::yield_now().await;
-    crate::log!("tokio_probe: success rt.task.yield_now\n");
+    crate::log_trace!("tokio_probe: success rt.task.yield_now\n");
 
     let join = tokio::task::spawn(async { 0xA11C_Eu32 });
     let join_value = join.await.map_err(|_| "spawn-join")?;
     if join_value != 0xA11C_E {
         return Err("spawn-join");
     }
-    crate::log!("tokio_probe: success rt.task.spawn_join\n");
+    crate::log_trace!("tokio_probe: success rt.task.spawn_join\n");
 
     let local = tokio::task::LocalSet::new();
     let local_value = local
@@ -1049,7 +1049,7 @@ async fn run_probe_suite() -> Result<(), &'static str> {
     if local_value != 0x10CA_1E7 {
         return Err("rt-localset-spawn-local-value");
     }
-    crate::log!("tokio_probe: success rt.task.localset_spawn_local\n");
+    crate::log_trace!("tokio_probe: success rt.task.localset_spawn_local\n");
 
     let mut join_set = tokio::task::JoinSet::new();
     join_set.spawn(async { 0x11u32 });
@@ -1062,7 +1062,7 @@ async fn run_probe_suite() -> Result<(), &'static str> {
     if join_set_sum != 0x33 {
         return Err("rt-joinset-value");
     }
-    crate::log!("tokio_probe: success rt.task.join_set\n");
+    crate::log_trace!("tokio_probe: success rt.task.join_set\n");
 
     let (join_left, join_right) = tokio::join!(
         async {
@@ -1074,7 +1074,7 @@ async fn run_probe_suite() -> Result<(), &'static str> {
     if join_left != 0x4A4F_494E || join_right != 0x4D41_4352 {
         return Err("rt-join-macro-value");
     }
-    crate::log!("tokio_probe: success rt.task.join_macro\n");
+    crate::log_trace!("tokio_probe: success rt.task.join_macro\n");
 
     let (try_join_left, try_join_right) = tokio::try_join!(
         async {
@@ -1086,7 +1086,7 @@ async fn run_probe_suite() -> Result<(), &'static str> {
     if try_join_left != 0x5452_5931 || try_join_right != 0x5452_5932 {
         return Err("rt-try-join-macro-value");
     }
-    crate::log!("tokio_probe: success rt.task.try_join_macro\n");
+    crate::log_trace!("tokio_probe: success rt.task.try_join_macro\n");
 
     let (_abort_tx, abort_rx) = tokio::sync::oneshot::channel::<()>();
     let abort_task = tokio::task::spawn(async move {
@@ -1095,7 +1095,7 @@ async fn run_probe_suite() -> Result<(), &'static str> {
     });
     abort_task.abort();
     match abort_task.await {
-        Err(err) if err.is_cancelled() => crate::log!("tokio_probe: success rt.task.abort\n"),
+        Err(err) if err.is_cancelled() => crate::log_trace!("tokio_probe: success rt.task.abort\n"),
         Err(_) => return Err("rt-task-abort-state"),
         Ok(_) => return Err("rt-task-abort-value"),
     }
@@ -1110,7 +1110,7 @@ async fn run_probe_suite() -> Result<(), &'static str> {
     if select_value != 0x5345_4C45 {
         return Err("rt-select-value");
     }
-    crate::log!("tokio_probe: success rt.select\n");
+    crate::log_trace!("tokio_probe: success rt.select\n");
 
     let (oneshot_tx, oneshot_rx) = tokio::sync::oneshot::channel();
     let oneshot_task = tokio::task::spawn(async move {
@@ -1121,7 +1121,7 @@ async fn run_probe_suite() -> Result<(), &'static str> {
     if oneshot_value != 0x5155 {
         return Err("sync-oneshot-value");
     }
-    crate::log!("tokio_probe: success sync.oneshot\n");
+    crate::log_trace!("tokio_probe: success sync.oneshot\n");
 
     let (mpsc_tx, mut mpsc_rx) = tokio::sync::mpsc::channel(2);
     mpsc_tx
@@ -1132,7 +1132,7 @@ async fn run_probe_suite() -> Result<(), &'static str> {
     if mpsc_value != 0x4D50_5343 {
         return Err("sync-mpsc-value");
     }
-    crate::log!("tokio_probe: success sync.mpsc\n");
+    crate::log_trace!("tokio_probe: success sync.mpsc\n");
 
     let (watch_tx, mut watch_rx) = tokio::sync::watch::channel(0u32);
     let watch_task = tokio::task::spawn(async move {
@@ -1144,7 +1144,7 @@ async fn run_probe_suite() -> Result<(), &'static str> {
     if watch_value != 0x5743 {
         return Err("sync-watch-value");
     }
-    crate::log!("tokio_probe: success sync.watch\n");
+    crate::log_trace!("tokio_probe: success sync.watch\n");
 
     let (broadcast_tx, mut broadcast_rx) = tokio::sync::broadcast::channel(2);
     let broadcast_task =
@@ -1158,7 +1158,7 @@ async fn run_probe_suite() -> Result<(), &'static str> {
     if broadcast_value != 0xB04D_C457 {
         return Err("sync-broadcast-value");
     }
-    crate::log!("tokio_probe: success sync.broadcast\n");
+    crate::log_trace!("tokio_probe: success sync.broadcast\n");
 
     let notify = Arc::new(tokio::sync::Notify::new());
     let notify_wait = notify.clone();
@@ -1171,7 +1171,7 @@ async fn run_probe_suite() -> Result<(), &'static str> {
     if notify_value != 0x4E4F_5449 {
         return Err("sync-notify-value");
     }
-    crate::log!("tokio_probe: success sync.notify\n");
+    crate::log_trace!("tokio_probe: success sync.notify\n");
 
     let mutex = Arc::new(tokio::sync::Mutex::new(0u32));
     let mutex_task = tokio::task::spawn({
@@ -1186,7 +1186,7 @@ async fn run_probe_suite() -> Result<(), &'static str> {
     if mutex_value != 0x4D55_5445 {
         return Err("sync-mutex-value");
     }
-    crate::log!("tokio_probe: success sync.mutex\n");
+    crate::log_trace!("tokio_probe: success sync.mutex\n");
 
     let rwlock = Arc::new(tokio::sync::RwLock::new(0u32));
     {
@@ -1197,7 +1197,7 @@ async fn run_probe_suite() -> Result<(), &'static str> {
     if rwlock_value != 0x5257_4C4B {
         return Err("sync-rwlock-value");
     }
-    crate::log!("tokio_probe: success sync.rwlock\n");
+    crate::log_trace!("tokio_probe: success sync.rwlock\n");
 
     let semaphore = Arc::new(tokio::sync::Semaphore::new(0));
     let semaphore_task = tokio::task::spawn({
@@ -1217,7 +1217,7 @@ async fn run_probe_suite() -> Result<(), &'static str> {
     if semaphore_value != 0x53E4_A001 {
         return Err("sync-semaphore-value");
     }
-    crate::log!("tokio_probe: success sync.semaphore\n");
+    crate::log_trace!("tokio_probe: success sync.semaphore\n");
 
     let barrier = Arc::new(tokio::sync::Barrier::new(2));
     let barrier_task = tokio::task::spawn({
@@ -1233,7 +1233,7 @@ async fn run_probe_suite() -> Result<(), &'static str> {
         return Err("sync-barrier-value");
     }
     let _ = barrier_wait.is_leader();
-    crate::log!("tokio_probe: success sync.barrier\n");
+    crate::log_trace!("tokio_probe: success sync.barrier\n");
 
     probe_vnet_surface().await?;
     probe_socket2_surface()?;
@@ -1243,9 +1243,9 @@ async fn run_probe_suite() -> Result<(), &'static str> {
     probe_std_thread_local_isolation_surface().await;
 
     {
-        crate::log!("tokio_probe: enter time.sleep\n");
+        crate::log_trace!("tokio_probe: enter time.sleep\n");
         tokio::time::sleep(core::time::Duration::from_millis(1)).await;
-        crate::log!("tokio_probe: success time.sleep\n");
+        crate::log_trace!("tokio_probe: success time.sleep\n");
 
         let timeout_value = tokio::time::timeout(core::time::Duration::from_millis(5), async {
             tokio::task::yield_now().await;
@@ -1256,7 +1256,7 @@ async fn run_probe_suite() -> Result<(), &'static str> {
         if timeout_value != 0x5449_4D45 {
             return Err("time-timeout-value");
         }
-        crate::log!("tokio_probe: success time.timeout\n");
+        crate::log_trace!("tokio_probe: success time.timeout\n");
 
         match tokio::time::timeout(core::time::Duration::from_millis(1), async {
             tokio::time::sleep(core::time::Duration::from_millis(5)).await;
@@ -1264,17 +1264,17 @@ async fn run_probe_suite() -> Result<(), &'static str> {
         })
         .await
         {
-            Err(_) => crate::log!("tokio_probe: success time.timeout_elapsed\n"),
+            Err(_) => crate::log_trace!("tokio_probe: success time.timeout_elapsed\n"),
             Ok(_) => return Err("time-timeout-elapsed"),
         }
 
-        crate::log!("tokio_probe: enter time.interval\n");
+        crate::log_trace!("tokio_probe: enter time.interval\n");
         let mut interval = tokio::time::interval(core::time::Duration::from_millis(1));
-        crate::log!("tokio_probe: tick time.interval first\n");
+        crate::log_trace!("tokio_probe: tick time.interval first\n");
         interval.tick().await;
-        crate::log!("tokio_probe: tick time.interval second\n");
+        crate::log_trace!("tokio_probe: tick time.interval second\n");
         interval.tick().await;
-        crate::log!("tokio_probe: success time.interval\n");
+        crate::log_trace!("tokio_probe: success time.interval\n");
     }
 
     {
@@ -1293,20 +1293,20 @@ async fn run_probe_suite() -> Result<(), &'static str> {
         if io_buf != *b"ok" {
             return Err("io-util-duplex-value");
         }
-        crate::log!("tokio_probe: success io-util.duplex\n");
+        crate::log_trace!("tokio_probe: success io-util.duplex\n");
     }
 
     {
         let _stdin = tokio::io::stdin();
         let _stdout = tokio::io::stdout();
         let _stderr = tokio::io::stderr();
-        crate::log!("tokio_probe: success io-std.stdin_stdout_stderr\n");
+        crate::log_trace!("tokio_probe: success io-std.stdin_stdout_stderr\n");
     }
 
     {
         let _options = tokio::fs::OpenOptions::new();
-        crate::log!("tokio_probe: success fs.open_options_surface\n");
-        crate::log!("tokio_probe: note fs.runtime_ops pulled through TRUEOS CABI backend\n");
+        crate::log_trace!("tokio_probe: success fs.open_options_surface\n");
+        crate::log_trace!("tokio_probe: note fs.runtime_ops pulled through TRUEOS CABI backend\n");
         if crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED) {
             probe_tokio_fs_runtime_surface().await;
         } else {
@@ -1317,7 +1317,7 @@ async fn run_probe_suite() -> Result<(), &'static str> {
     {
         // parking_lot changes Tokio internals behind sync primitives; reuse
         // already-executed sync checks and mark this mode as active.
-        crate::log!("tokio_probe: success parking_lot.sync_surface\n");
+        crate::log_trace!("tokio_probe: success parking_lot.sync_surface\n");
     }
 
     {
@@ -1332,14 +1332,14 @@ async fn run_probe_suite() -> Result<(), &'static str> {
         if test_value != 0x7E57 {
             return Err("test-util-value");
         }
-        crate::log!("tokio_probe: success test-util.pause_advance\n");
+        crate::log_trace!("tokio_probe: success test-util.pause_advance\n");
     }
 
     Ok(())
 }
 
 pub(crate) fn log_boot_probe() {
-    crate::log!("tokio_probe: wired tokio 1.52.1 with feature full via TRUEOS std-ABI shim\n");
+    crate::log_trace!("tokio_probe: wired tokio 1.52.1 with feature full via TRUEOS std-ABI shim\n");
     mark_std_tls_canary_on_boot_cpu();
     probe_std_sync_surface();
 
@@ -1355,19 +1355,19 @@ pub(crate) fn log_boot_probe() {
     let runtime = match runtime_builder.build() {
         Ok(runtime) => runtime,
         Err(_) => {
-            crate::log!("tokio_probe: failure rt.build current_thread\n");
+            crate::log_trace!("tokio_probe: failure rt.build current_thread\n");
             return;
         }
     };
-    crate::log!("tokio_probe: success rt.build current_thread\n");
+    crate::log_trace!("tokio_probe: success rt.build current_thread\n");
 
     match runtime.block_on(run_probe_suite()) {
         Ok(()) => {
-            crate::log!("tokio_probe: success rt.block_on probe_suite\n");
+            crate::log_trace!("tokio_probe: success rt.block_on probe_suite\n");
             crate::r::readiness::set(crate::r::readiness::TOKIO_RUNTIME_READY);
             spawn_deferred_vthread_identity_probe();
         }
-        Err(stage) => crate::log!("tokio_probe: failure {}\n", stage),
+        Err(stage) => crate::log_trace!("tokio_probe: failure {}\n", stage),
     }
 
     spawn_deferred_tokio_net_probe();

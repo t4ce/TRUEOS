@@ -318,7 +318,7 @@ fn publish_ui2_hit_scene() {
         runtime.dropped_rectangles = runtime.dropped_rectangles.wrapping_add(1);
         let drop_count = runtime.dropped_rectangles;
         if drop_count <= 8 || drop_count.is_multiple_of(32) {
-            crate::log!(
+            crate::log_trace!(
                 "ui2-hit: rectangle-cap reached cap={} seq={} dropped={} count={}\n",
                 UI2_HIT_SCENE_RECT_CAP,
                 runtime.published_seq,
@@ -370,7 +370,7 @@ pub async fn ui2_hit_task() {
         return;
     }
 
-    crate::log!("boot-probe: ui2-hit task start ms={}\n", boot_probe_ms());
+    crate::log_trace!("boot-probe: ui2-hit task start ms={}\n", boot_probe_ms());
 
     loop {
         let browser_interactive_seq = {

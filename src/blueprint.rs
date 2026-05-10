@@ -262,7 +262,7 @@ fn unresolved_import_called(slot: usize) -> usize {
 
 fn portal_logf(args: core::fmt::Arguments<'_>) {
     if crate::logflag::PORTAL_LOGS {
-        crate::log!("{}\n", args);
+        crate::log_trace!("{}\n", args);
     }
 }
 

@@ -26,7 +26,7 @@ fn insert_signature_candidate(
 }
 
 fn log_signature_window(info: IntelGfxInfo, page: usize, label: &str) {
-    crate::log!(
+    crate::log_trace!(
         "gfx-intel-scanout: signature-window label={} base=0x{:05X} dwords={}\n",
         label,
         page,
@@ -36,7 +36,7 @@ fn log_signature_window(info: IntelGfxInfo, page: usize, label: &str) {
     while idx < INTEL_DISPLAY_SIGNATURE_WINDOW_DWORDS {
         let off = page + idx.saturating_mul(4);
         let value = intel_mmio_read32(info, off);
-        crate::log!(
+        crate::log_trace!(
             "gfx-intel-scanout: signature-mmio label={} off=0x{:05X} value=0x{:08X}\n",
             label,
             off,
@@ -99,7 +99,7 @@ fn log_display_signature_sweep(info: IntelGfxInfo) {
         page += INTEL_DISPLAY_PAGE_STRIDE;
     }
 
-    crate::log!(
+    crate::log_trace!(
         "gfx-intel-scanout: signature-sweep begin mmio_len=0x{:X} aperture=0x{:X}\n",
         info.mmio_len,
         info.aperture_bar_size
@@ -108,7 +108,7 @@ fn log_display_signature_sweep(info: IntelGfxInfo) {
     while rank < top.len() && top[rank].score != 0 {
         let cand = top[rank];
         let (pipe_w, pipe_h) = plausible_pipe_src(cand.pipe_src_value).unwrap_or((0, 0));
-        crate::log!(
+        crate::log_trace!(
             "gfx-intel-scanout: signature-candidate rank={} page=0x{:05X} score={} nonzero={} pipe_src_off={} pipe_src=0x{:08X} size={}x{} stride_off={} stride=0x{:08X} surf_off={} surf=0x{:08X} ctl_off={} ctl=0x{:08X}\n",
             rank + 1,
             cand.page,
@@ -147,7 +147,7 @@ fn log_display_signature_sweep(info: IntelGfxInfo) {
         rank += 1;
     }
     if rank == 0 {
-        crate::log!("gfx-intel-scanout: signature-sweep found no plausible scanout pages\n");
+        crate::log_trace!("gfx-intel-scanout: signature-sweep found no plausible scanout pages\n");
     }
 }
 
@@ -183,7 +183,7 @@ fn log_display_region_sweep(info: IntelGfxInfo) {
             off += 4;
         }
         if let Some((first_off, value)) = found {
-            crate::log!(
+            crate::log_trace!(
                 "gfx-intel-scanout: display-page page=0x{:05X} first=0x{:03X} value=0x{:08X}\n",
                 page,
                 first_off,
@@ -200,7 +200,7 @@ fn log_display_region_sweep(info: IntelGfxInfo) {
         page += INTEL_DISPLAY_PAGE_STRIDE;
     }
     if logged == 0 {
-        crate::log!(
+        crate::log_trace!(
             "gfx-intel-scanout: display-page sweep 0x{:05X}..0x{:05X} found no nonzero registers\n",
             INTEL_DISPLAY_SWEEP_START,
             INTEL_DISPLAY_SWEEP_END
@@ -219,7 +219,7 @@ fn log_display_range_census(info: IntelGfxInfo) {
         let mut run_class = "";
         let mut run_start = start;
         let mut run_pages = 0usize;
-        crate::log!(
+        crate::log_trace!(
             "gfx-intel-scanout: census begin name={} start=0x{:05X} end=0x{:05X}\n",
             name,
             start,
@@ -250,7 +250,7 @@ fn log_display_range_census(info: IntelGfxInfo) {
             } else if sample_and == u32::MAX {
                 ffff_pages += 1;
                 if logged < INTEL_DISPLAY_CENSUS_GROUP_LIMIT {
-                    crate::log!(
+                    crate::log_trace!(
                         "gfx-intel-scanout: census page=0x{:05X} class=ffff name={}\n",
                         page,
                         name
@@ -263,7 +263,7 @@ fn log_display_range_census(info: IntelGfxInfo) {
                 if logged < INTEL_DISPLAY_CENSUS_GROUP_LIMIT {
                     let (nz_off, nz_val) = first_nonzero.unwrap_or((0, 0));
                     let (nf_off, nf_val) = first_nonffff.unwrap_or((0, u32::MAX));
-                    crate::log!(
+                    crate::log_trace!(
                         "gfx-intel-scanout: census page=0x{:05X} class=mixed name={} or=0x{:08X} and=0x{:08X} first_nz=0x{:03X}/0x{:08X} first_nonffff=0x{:03X}/0x{:08X}\n",
                         page,
                         name,
@@ -287,7 +287,7 @@ fn log_display_range_census(info: IntelGfxInfo) {
                 run_pages += 1;
             } else {
                 if run_logged < INTEL_DISPLAY_CENSUS_RUN_LIMIT {
-                    crate::log!(
+                    crate::log_trace!(
                         "gfx-intel-scanout: census run name={} class={} start=0x{:05X} end=0x{:05X} pages={}\n",
                         name,
                         run_class,
@@ -305,7 +305,7 @@ fn log_display_range_census(info: IntelGfxInfo) {
             page += INTEL_DISPLAY_PAGE_STRIDE;
         }
         if run_pages != 0 && run_logged < INTEL_DISPLAY_CENSUS_RUN_LIMIT {
-            crate::log!(
+            crate::log_trace!(
                 "gfx-intel-scanout: census run name={} class={} start=0x{:05X} end=0x{:05X} pages={}\n",
                 name,
                 run_class,
@@ -314,7 +314,7 @@ fn log_display_range_census(info: IntelGfxInfo) {
                 run_pages
             );
         }
-        crate::log!(
+        crate::log_trace!(
             "gfx-intel-scanout: census end name={} mixed={} ffff={} zero={}\n",
             name,
             nonzero_pages,
@@ -330,7 +330,7 @@ fn log_display_window(info: IntelGfxInfo, center_off: usize) {
     while idx < INTEL_DISPLAY_WINDOW_DWORDS {
         let off = aligned + idx.saturating_mul(4);
         let value = intel_mmio_read32(info, off);
-        crate::log!(
+        crate::log_trace!(
             "gfx-intel-scanout: display-mmio off=0x{:05X} value=0x{:08X}\n",
             off,
             value
@@ -341,7 +341,7 @@ fn log_display_window(info: IntelGfxInfo, center_off: usize) {
 
 fn log_display_dense_window(info: IntelGfxInfo, center_off: usize, label: &str) {
     let aligned = center_off & !(INTEL_DISPLAY_PAGE_STRIDE - 1);
-    crate::log!(
+    crate::log_trace!(
         "gfx-intel-scanout: dense-window label={} base=0x{:05X} dwords={}\n",
         label,
         aligned,
@@ -351,7 +351,7 @@ fn log_display_dense_window(info: IntelGfxInfo, center_off: usize, label: &str) 
     while idx < INTEL_DISPLAY_DENSE_WINDOW_DWORDS {
         let off = aligned + idx.saturating_mul(4);
         let value = intel_mmio_read32(info, off);
-        crate::log!(
+        crate::log_trace!(
             "gfx-intel-scanout: dense-mmio label={} off=0x{:05X} value=0x{:08X}\n",
             label,
             off,
@@ -369,7 +369,7 @@ fn log_display_dense_windows(info: IntelGfxInfo) {
 
 fn log_display_extra_dense_window(info: IntelGfxInfo, start_off: usize, label: &str) {
     let aligned = start_off & !(INTEL_DISPLAY_PAGE_STRIDE - 1);
-    crate::log!(
+    crate::log_trace!(
         "gfx-intel-scanout: extra-dense-window label={} start=0x{:05X} dwords={}\n",
         label,
         start_off,
@@ -379,7 +379,7 @@ fn log_display_extra_dense_window(info: IntelGfxInfo, start_off: usize, label: &
     while idx < INTEL_DISPLAY_EXTRA_DENSE_WINDOW_DWORDS {
         let off = aligned + idx.saturating_mul(4);
         let value = intel_mmio_read32(info, off);
-        crate::log!(
+        crate::log_trace!(
             "gfx-intel-scanout: extra-dense-mmio label={} off=0x{:05X} value=0x{:08X}\n",
             label,
             off,
@@ -406,7 +406,7 @@ fn log_display_power_probe(info: IntelGfxInfo) {
     let hotplug = intel_mmio_read32(info, INTEL_PORT_HOTPLUG_EN);
     let gt_disp_pwron = intel_mmio_read32(info, INTEL_GT_DISP_PWRON);
 
-    crate::log!(
+    crate::log_trace!(
         "gfx-intel-scanout: power-probe phy_misc_a=0x{:08X} phy_misc_b=0x{:08X} tx_bmu=0x{:08X} de_pll_ctl=0x{:08X} de_pll_enable=0x{:08X} dc_state_en=0x{:08X} dc_state_debug=0x{:08X} hotplug=0x{:08X} gt_disp_pwron=0x{:08X}\n",
         phy_misc_a,
         phy_misc_b,
@@ -430,7 +430,7 @@ fn log_hdmi_port_probe(info: IntelGfxInfo) {
     let pipe_b = intel_mmio_read32(info, INTEL_PIPE_B_SRC);
     let pipe_c = intel_mmio_read32(info, INTEL_PIPE_C_SRC);
     let pipe_d = intel_mmio_read32(info, INTEL_PIPE_D_SRC);
-    crate::log!(
+    crate::log_trace!(
         "gfx-intel-scanout: hdmi-probe hotplug_en=0x{:08X} trans_a=0x{:08X} trans_b=0x{:08X} trans_c=0x{:08X} trans_d=0x{:08X} pipe_a=0x{:08X} pipe_b=0x{:08X} pipe_c=0x{:08X} pipe_d=0x{:08X}\n",
         hotplug_en,
         trans_a,
@@ -454,7 +454,7 @@ fn log_display_focus_windows(info: IntelGfxInfo) {
         INTEL_TRANS_D_DDI_FUNC_CTL,
         INTEL_GT_DISP_PWRON,
     ] {
-        crate::log!("gfx-intel-scanout: focus-window center=0x{:05X}\n", center);
+        crate::log_trace!("gfx-intel-scanout: focus-window center=0x{:05X}\n", center);
         log_display_window(info, center);
     }
 }
@@ -468,7 +468,7 @@ fn arm_display_power_smoke(info: IntelGfxInfo) -> bool {
     let de_pll_enable = intel_mmio_read32(info, INTEL_BXT_DE_PLL_ENABLE);
     let phy_misc_a = intel_mmio_read32(info, INTEL_ICL_PHY_MISC_A);
     let latched = wrote && (rb_pwron & INTEL_GT_DISP_PWRON_REQ) != 0;
-    crate::log!(
+    crate::log_trace!(
         "gfx-intel-scanout: disp-pwron-smoke orig=0x{:08X} req=0x{:08X} rb=0x{:08X} hotplug=0x{:08X} de_pll_enable=0x{:08X} phy_misc_a=0x{:08X} latched={}\n",
         orig_pwron,
         req_pwron,
@@ -478,7 +478,7 @@ fn arm_display_power_smoke(info: IntelGfxInfo) -> bool {
         phy_misc_a,
         latched as u8
     );
-    crate::log!(
+    crate::log_trace!(
         "gfx-intel-scanout: post-pwron-window center=0x{:05X}\n",
         INTEL_GT_DISP_PWRON
     );
@@ -494,7 +494,7 @@ fn hotplug_write_smoke(info: IntelGfxInfo) -> bool {
     let _ = intel_mmio_write32(info, INTEL_PORT_HOTPLUG_EN, orig);
     let restored = intel_mmio_read32(info, INTEL_PORT_HOTPLUG_EN);
     let latched = wrote && (rb & INTEL_PORT_HOTPLUG_TEST_BIT) != 0;
-    crate::log!(
+    crate::log_trace!(
         "gfx-intel-scanout: hotplug-smoke orig=0x{:08X} test=0x{:08X} rb=0x{:08X} restore=0x{:08X} latched={}\n",
         orig,
         test,
@@ -502,7 +502,7 @@ fn hotplug_write_smoke(info: IntelGfxInfo) -> bool {
         restored,
         latched as u8
     );
-    crate::log!(
+    crate::log_trace!(
         "gfx-intel-scanout: post-hotplug-window center=0x{:05X}\n",
         INTEL_PORT_HOTPLUG_EN
     );
@@ -520,7 +520,7 @@ fn signature_candidate_surface_smoke(info: IntelGfxInfo) {
     let stride_ok = plausible_scanout_stride(stride);
     let ctl_ok = ctl == INTEL_PLANE_ENABLE;
     if !ctl_ok || !surf_ok || !stride_ok || width == 0 || height == 0 {
-        crate::log!(
+        crate::log_trace!(
             "gfx-intel-scanout: signature-smoke skip ctl=0x{:08X} surf=0x{:08X} pipe_src=0x{:08X} size={}x{} stride=0x{:08X} ctl_ok={} surf_ok={} stride_ok={}\n",
             ctl,
             surf,
@@ -543,7 +543,7 @@ fn signature_candidate_surface_smoke(info: IntelGfxInfo) {
         surf
     };
     if test_surf == surf || !plausible_scanout_surface(test_surf, info.aperture_bar_size) {
-        crate::log!(
+        crate::log_trace!(
             "gfx-intel-scanout: signature-smoke skip surf=0x{:08X} no alternate in aperture=0x{:X}\n",
             surf,
             info.aperture_bar_size
@@ -556,7 +556,7 @@ fn signature_candidate_surface_smoke(info: IntelGfxInfo) {
     let _ = intel_mmio_write32(info, INTEL_SIGNATURE_SMOKE_SURF_OFF, surf);
     let restored = intel_mmio_read32(info, INTEL_SIGNATURE_SMOKE_SURF_OFF);
     let latched = wrote && rb == test_surf && restored == surf;
-    crate::log!(
+    crate::log_trace!(
         "gfx-intel-scanout: signature-smoke page=0x82000 ctl=0x{:08X} pipe_src=0x{:08X} size={}x{} stride=0x{:08X} surf orig=0x{:08X} test=0x{:08X} rb=0x{:08X} restore=0x{:08X} latched={}\n",
         ctl,
         pipe_src,
@@ -596,7 +596,7 @@ fn probe_scanout_surface(info: IntelGfxInfo) -> Option<IntelScanoutSurface> {
             }
             if ctl != 0 || stride != 0 || surf != 0 || surf_live != 0 {
                 nonzero_planes += 1;
-                crate::log!(
+                crate::log_trace!(
                     "gfx-intel-scanout: plane-live {}{} ctl=0x{:08X} stride=0x{:08X} surf=0x{:08X} surf_live=0x{:08X} enabled={}\n",
                     plane.pipe_name,
                     plane.plane_slot,
@@ -626,7 +626,7 @@ fn probe_scanout_surface(info: IntelGfxInfo) -> Option<IntelScanoutSurface> {
         }
     }
     if found.is_none() && (nonzero_pipes != 0 || nonzero_planes != 0 || enabled_planes != 0) {
-        crate::log!(
+        crate::log_trace!(
             "gfx-intel-scanout: plane-scan summary nonzero_pipes={} nonzero_planes={} enabled_planes={}\n",
             nonzero_pipes,
             nonzero_planes,
@@ -673,7 +673,7 @@ fn write_scanout_test_pattern(base: *mut u8, stride: usize, width: usize, height
 
 fn prepare_direct_demo_surface(info: IntelGfxInfo) -> Option<(u32, usize, usize, usize)> {
     if info.aperture_bar_phys == 0 || info.aperture_bar_size == 0 {
-        crate::log!(
+        crate::log_trace!(
             "gfx-intel-scanout: direct-demo aperture unavailable bar2=0x{:X} size=0x{:X}\n",
             info.aperture_bar_phys,
             info.aperture_bar_size
@@ -687,7 +687,7 @@ fn prepare_direct_demo_surface(info: IntelGfxInfo) -> Option<(u32, usize, usize,
     let height = INTEL_DIRECT_DEMO_HEIGHT;
     let bytes = height.saturating_mul(stride);
     if (surf as u64).saturating_add(bytes as u64) > info.aperture_bar_size {
-        crate::log!(
+        crate::log_trace!(
             "gfx-intel-scanout: direct-demo surf=0x{:08X} stride=0x{:X} bytes=0x{:X} exceeds aperture=0x{:X}\n",
             surf,
             stride,
@@ -699,7 +699,7 @@ fn prepare_direct_demo_surface(info: IntelGfxInfo) -> Option<(u32, usize, usize,
 
     let phys = info.aperture_bar_phys.saturating_add(surf as u64);
     let Ok(mapped) = crate::pci::mmio::map_mmio_region_exact(phys, bytes) else {
-        crate::log!(
+        crate::log_trace!(
             "gfx-intel-scanout: direct-demo aperture map failed phys=0x{:X} bytes=0x{:X}\n",
             phys,
             bytes
@@ -710,7 +710,7 @@ fn prepare_direct_demo_surface(info: IntelGfxInfo) -> Option<(u32, usize, usize,
     write_scanout_test_pattern(mapped.as_ptr(), stride, width, height);
     let sample0 = unsafe { core::ptr::read_volatile(mapped.as_ptr() as *const u32) };
     let sample1 = unsafe { core::ptr::read_volatile(mapped.as_ptr().add(4) as *const u32) };
-    crate::log!(
+    crate::log_trace!(
         "gfx-intel-scanout: direct-demo surface ready surf=0x{:08X} stride=0x{:X} size={}x{} phys=0x{:X} sample0=0x{:08X} sample1=0x{:08X}\n",
         surf,
         stride,
@@ -752,7 +752,7 @@ fn try_direct_plane_demo(info: IntelGfxInfo) -> bool {
         let surf_stuck = rb_surf == surf;
         let ctl_stuck = rb_ctl == INTEL_PLANE_ENABLE;
 
-        crate::log!(
+        crate::log_trace!(
             "gfx-intel-scanout: direct-demo attempt pipe={} plane={} pipe_src orig=0x{:08X} rb=0x{:08X} stride orig=0x{:08X} rb=0x{:08X} surf orig=0x{:08X} rb=0x{:08X} ctl orig=0x{:08X} rb=0x{:08X} ddi=0x{:08X} stuck pipe={} stride={} surf={} ctl={}\n",
             plane.pipe_name,
             plane.plane_slot,
@@ -772,7 +772,7 @@ fn try_direct_plane_demo(info: IntelGfxInfo) -> bool {
         );
 
         if pipe_stuck && stride_stuck && surf_stuck {
-            crate::log!(
+            crate::log_trace!(
                 "gfx-intel-scanout: direct-demo armed pipe={} plane={} surf=0x{:08X} stride=0x{:X} size={}x{}\n",
                 plane.pipe_name,
                 plane.plane_slot,
@@ -792,7 +792,7 @@ fn try_direct_plane_demo(info: IntelGfxInfo) -> bool {
     }
 
     if !armed {
-        crate::log!(
+        crate::log_trace!(
             "gfx-intel-scanout: direct-demo no candidate plane latched raw scanout state\n"
         );
     }

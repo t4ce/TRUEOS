@@ -49,7 +49,7 @@ pub(crate) fn mark_prompt_running(reason: &'static str) -> bool {
     match SERVICE_PROMPT_RUNNING.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
     {
         Ok(_) => {
-            crate::log!("lumen-service: prompt running reason={}\n", reason);
+            crate::log_trace!("lumen-service: prompt running reason={}\n", reason);
             true
         }
         Err(_) => false,
@@ -59,7 +59,7 @@ pub(crate) fn mark_prompt_running(reason: &'static str) -> bool {
 pub(crate) fn mark_prompt_complete(reason: &'static str) {
     let was_busy = SERVICE_PROMPT_RUNNING.swap(false, Ordering::AcqRel);
     if was_busy {
-        crate::log!("lumen-service: prompt complete reason={}\n", reason);
+        crate::log_trace!("lumen-service: prompt complete reason={}\n", reason);
     }
 }
 
@@ -91,7 +91,7 @@ pub(crate) fn mark_offline(session_id: u64) {
 fn queue_pending_prompt(prompt: &str, statement: &str, reason: &str) {
     let mut pending = PENDING_CHATROOM.lock();
     if !pending.is_empty() {
-        crate::log!(
+        crate::log_trace!(
             "lumen-service: rejected extra pending chatroom prompt reason={} pending={} bytes={}\n",
             reason,
             pending.len(),
@@ -103,7 +103,7 @@ fn queue_pending_prompt(prompt: &str, statement: &str, reason: &str) {
         prompt: AllocString::from(prompt),
         statement: AllocString::from(statement),
     });
-    crate::log!(
+    crate::log_trace!(
         "lumen-service: buffered chatroom prompt reason={} pending={} bytes={}\n",
         reason,
         pending.len(),
@@ -117,7 +117,7 @@ fn clear_pending_prompts(reason: &str) {
     pending.clear();
     SERVICE_PROMPT_RUNNING.store(false, Ordering::Release);
     if count != 0 {
-        crate::log!(
+        crate::log_trace!(
             "lumen-service: cleared pending chatroom prompts reason={} count={}\n",
             reason,
             count
@@ -130,7 +130,7 @@ fn flush_pending(session_id: u64) {
     let queued = core::mem::take(&mut *pending);
     drop(pending);
     if !queued.is_empty() {
-        crate::log!(
+        crate::log_trace!(
             "lumen-service: flushing pending chatroom prompts session={} count={}\n",
             session_id,
             queued.len()
@@ -159,7 +159,7 @@ pub(crate) fn submit_chatroom_mention(prompt: &str) -> bool {
     }
 
     if !mark_prompt_running("chatroom-submit") {
-        crate::log!("lumen-service: rejected chatroom prompt reason=busy bytes={}\n", prompt.len());
+        crate::log_trace!("lumen-service: rejected chatroom prompt reason=busy bytes={}\n", prompt.len());
         let _ = post_chat_message(CHAT_AI_NAME, CHAT_BUSY_TEXT);
         return false;
     }
@@ -169,7 +169,7 @@ pub(crate) fn submit_chatroom_mention(prompt: &str) -> bool {
     if session_id != 0 && is_online() {
         if crate::lumen::push_lumen_chat_prompt(session_id, prompt, Some(statement.as_str())) {
             submit_chat_statement_placeholder(statement.as_str());
-            crate::log!(
+            crate::log_trace!(
                 "lumen-service: accepted chatroom prompt session={} bytes={}\n",
                 session_id,
                 prompt.len()
@@ -184,7 +184,7 @@ pub(crate) fn submit_chatroom_mention(prompt: &str) -> bool {
         submit_chat_statement_placeholder(statement.as_str());
         queue_pending_prompt(prompt, statement.as_str(), "warming");
     } else {
-        crate::log!("lumen-service: dropped chatroom prompt; service offline\n");
+        crate::log_trace!("lumen-service: dropped chatroom prompt; service offline\n");
         mark_prompt_complete("offline-drop");
     }
     false
@@ -240,12 +240,12 @@ fn post_chat_statement(user: &str, statement: Option<&str>, text: &str) -> bool 
         None => crate::tst_chatserver::post_local_message_volatile(CHAT_ROOM, user, text),
     };
     if local_ok {
-        crate::log!("lumen-service: inserted chat message user={} bytes={}\n", user, text.len());
+        crate::log_trace!("lumen-service: inserted chat message user={} bytes={}\n", user, text.len());
         return true;
     }
 
     let Some(port) = crate::tst_chatserver::current_port() else {
-        crate::log!("lumen-service: chat post failed; no chat port\n");
+        crate::log_trace!("lumen-service: chat post failed; no chat port\n");
         return false;
     };
     let url = chat_message_url(port, None);
@@ -261,7 +261,7 @@ fn post_chat_statement(user: &str, statement: Option<&str>, text: &str) -> bool 
         Ok(Ok(_))
     );
     if !ok {
-        crate::log!(
+        crate::log_trace!(
             "lumen-service: chat post failed via http user={} bytes={}\n",
             user,
             text.len()
@@ -327,12 +327,12 @@ async fn post_ready_hello_loop(session_id: u64) {
             return;
         }
         if post_chat_message(CHAT_AI_NAME, CHAT_READY_HELLO) {
-            crate::log!("lumen-service: announced chat ready as {}\n", CHAT_AI_NAME);
+            crate::log_trace!("lumen-service: announced chat ready as {}\n", CHAT_AI_NAME);
             return;
         }
         Timer::after(EmbassyDuration::from_millis(500)).await;
     }
-    crate::log!("lumen-service: chat ready announce skipped; chat service unavailable\n");
+    crate::log_trace!("lumen-service: chat ready announce skipped; chat service unavailable\n");
 }
 
 #[embassy_executor::task(pool_size = 1)]
@@ -344,7 +344,7 @@ async fn lumen_chat_ready_hello_task(session_id: u64) {
 async fn lumen_service_worker_task(target: crate::shell2::MatrixTarget, session_id: u64) {
     let cpu_slot = crate::percpu::current_slot();
     let lapic_id = crate::percpu::current_lapic_id_via_cpuid();
-    crate::log!(
+    crate::log_trace!(
         "lumen-service: worker start session={} cpu_slot={} lapic={}\n",
         session_id,
         cpu_slot,
@@ -352,14 +352,14 @@ async fn lumen_service_worker_task(target: crate::shell2::MatrixTarget, session_
     );
     crate::lumen::run_lumen_session(target, session_id).await;
     SERVICE_WORKER_DONE.store(true, Ordering::Release);
-    crate::log!("lumen-service: worker done session={}\n", session_id);
+    crate::log_trace!("lumen-service: worker done session={}\n", session_id);
 }
 
 #[embassy_executor::task]
 pub async fn lumen_service_task() {
     let cpu_slot = crate::percpu::current_slot();
     let lapic_id = crate::percpu::current_lapic_id_via_cpuid();
-    crate::log!("lumen-service: task start cpu_slot={} lapic={}\n", cpu_slot, lapic_id);
+    crate::log_trace!("lumen-service: task start cpu_slot={} lapic={}\n", cpu_slot, lapic_id);
 
     let target =
         crate::shell2::matrix_target_for_slot_name(crate::shell2::OUTPUT_UART1_MASK, SERVICE_SLOT);
@@ -375,7 +375,7 @@ pub async fn lumen_service_task() {
         Some((slot, kind, spawner)) => {
             match lumen_service_worker_task(target.clone(), session_id) {
                 Ok(token) => {
-                    crate::log!(
+                    crate::log_trace!(
                         "lumen-service: coordinator handoff session={} target_slot={} core_kind={} work=run-lumen-session\n",
                         session_id,
                         slot,

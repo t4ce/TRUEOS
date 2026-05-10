@@ -322,7 +322,7 @@ pub(crate) fn try_parse(
             let mut shown = 0usize;
             let mut skipped = 0usize;
 
-            crate::log!("file: command begin roots={}\n", roots.len());
+            crate::log_trace!("file: command begin roots={}\n", roots.len());
 
             for root in roots.into_iter() {
                 if shown > 0 {
@@ -338,7 +338,7 @@ pub(crate) fn try_parse(
                         "  (index cold; warming in background, browse skipped for now)"
                     };
                     print_shell_line(io, note);
-                    crate::log!(
+                    crate::log_trace!(
                         "file: command root={} seq={} skipped reason=index-cold building={}\n",
                         root.disk_id,
                         root.seq,
@@ -366,7 +366,7 @@ pub(crate) fn try_parse(
 
                 let Ok(lines) = render.lines else {
                     print_shell_line(io, "  [browse failed]");
-                    crate::log!(
+                    crate::log_trace!(
                         "file: command root={} seq={} result=error\n",
                         render.root.disk_id,
                         render.root.seq,
@@ -377,7 +377,7 @@ pub(crate) fn try_parse(
                 for line in lines.iter() {
                     print_shell_line(io, line.as_str());
                 }
-                crate::log!(
+                crate::log_trace!(
                     "file: command root={} seq={} result=ok lines={}\n",
                     render.root.disk_id,
                     render.root.seq,
@@ -386,7 +386,7 @@ pub(crate) fn try_parse(
                 shown = shown.saturating_add(1);
             }
 
-            crate::log!("file: command done shown={} skipped={}\n", shown, skipped);
+            crate::log_trace!("file: command done shown={} skipped={}\n", shown, skipped);
 
             if shown == 0 {
                 print_shell_line(io, "file: no browsable TRUEOSFS roots");

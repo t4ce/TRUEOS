@@ -501,7 +501,7 @@ pub async fn read_trueosfs_file_range_into_logged_async(
         return Ok(true);
     }
 
-    crate::log!("{} read start path={} offset={} bytes={}\n", log_label, key, offset, dst.len());
+    crate::log_trace!("{} read start path={} offset={} bytes={}\n", log_label, key, offset, dst.len());
     let start_ms = logged_read_now_ms();
     let mut read = 0usize;
     let mut last_log_ms = start_ms;
@@ -522,7 +522,7 @@ pub async fn read_trueosfs_file_range_into_logged_async(
             return Ok(false);
         };
         if got != chunk_len {
-            crate::log!(
+            crate::log_trace!(
                 "{} read short path={} offset={} got={} need={} total_done={} total_need={}\n",
                 log_label,
                 key,
@@ -544,7 +544,7 @@ pub async fn read_trueosfs_file_range_into_logged_async(
                 || now_ms.saturating_sub(last_log_ms) >= 1000
             {
                 let pct_x10 = read.saturating_mul(1000) / dst.len();
-                crate::log!(
+                crate::log_trace!(
                     "{} read progress path={} offset={} done={} total={} pct={}.{} elapsed_ms={}\n",
                     log_label,
                     key,
@@ -560,7 +560,7 @@ pub async fn read_trueosfs_file_range_into_logged_async(
             }
         }
     }
-    crate::log!(
+    crate::log_trace!(
         "{} read done path={} offset={} got={} need={}\n",
         log_label,
         key,

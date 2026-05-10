@@ -1021,7 +1021,7 @@ fn log_output_surface_probe(
     probe: MediaSurfaceProbe,
 ) {
     if !probe.valid {
-        crate::log!(
+        crate::log_trace!(
             "intel/media2: output-probe phase=pre-present engine={} sample={} submit_completed={} valid=false\n",
             engine_name,
             sample_idx,
@@ -1030,7 +1030,7 @@ fn log_output_surface_probe(
         return;
     }
 
-    crate::log!(
+    crate::log_trace!(
         "intel/media2: output-probe phase=pre-present engine={} sample={} submit_completed={} y_last(sig=0x{:08X} active={}/{}) y_prev_mb(sig=0x{:08X} active={}/{}) y_bottom_mb(sig=0x{:08X} active={}/{}) uv_prev_mb(sig=0x{:08X} active={}/{}) uv_bottom_mb(sig=0x{:08X} active={}/{})\n",
         engine_name,
         sample_idx,
@@ -1669,7 +1669,7 @@ fn log_media2_batch_geometry(
         .saturating_add(bsd_cls)
         .saturating_add(mpr_cls);
 
-    crate::log!(
+    crate::log_trace!(
         "intel/media2: batch-geometry coded={}x{} visible={}x{} mbs={}x{} pitch={} tiles_per_row={} bytes=0x{:X} surface_dw2=0x{:08X} surface_dw3=0x{:08X} chroma_y={} post_attr=0x{:08X} ref_attr=0x{:08X} rowstore_cls(intra={} deblock={} bsd={} mpr={} total={}/640) rowstore_ext(intra=0x{:X}/0x{:08X} deblock=0x{:X}/0x{:08X} bsd=0x{:X}/0x{:08X} mpr=0x{:X}/0x{:08X}) luma_only={}\n",
         coded_width,
         coded_height,

@@ -28,7 +28,7 @@ pub async fn ui2_mandelbrot_demo_task() {
 
     let window_id = surface.window_id();
     let (surface_w, surface_h) = surface.size();
-    crate::log!(
+    crate::log_trace!(
         "ui2-mandelbrot-demo: window={} tex={} size={}x{} start\n",
         window_id,
         surface.tex_id(),
@@ -50,7 +50,7 @@ pub async fn ui2_mandelbrot_demo_task() {
         let elapsed_ticks = embassy_time_driver::now().saturating_sub(start_ticks);
         if !surface.render_mandelbrot(elapsed_ticks, tick_hz, "ui2-mandelbrot-demo") {
             let _ = crate::r::ui2::set_window_title(window_id, "Seahorse Valley (unavailable)");
-            crate::log!("ui2-mandelbrot-demo: window={} queue failed\n", window_id);
+            crate::log_trace!("ui2-mandelbrot-demo: window={} queue failed\n", window_id);
             break;
         }
 

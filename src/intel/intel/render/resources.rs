@@ -526,7 +526,7 @@ fn submit_triangle_to_surface(
         GPU_VA_RESULT_BASE,
         RCS_EXEC_RESULT_DONE,
     ) else {
-        crate::log!(
+        crate::log_trace!(
             "intel/render: primary-triangle batch build failed size={}x{} pitch=0x{:X}\n",
             rect_w,
             rect_h,
@@ -573,7 +573,7 @@ fn submit_vertical_stripes_to_surface(
         GPU_VA_RESULT_BASE,
         RCS_EXEC_RESULT_DONE,
     ) else {
-        crate::log!(
+        crate::log_trace!(
             "intel/render: primary-mi-stripes batch build failed size={}x{} pitch=0x{:X} batch=0x{:X} phase={}\n",
             rect_w,
             rect_h,
@@ -586,7 +586,7 @@ fn submit_vertical_stripes_to_surface(
     crate::intel::dma_flush(warm.batch_virt, batch_tail_bytes);
 
     if should_log_primary_probe("periodic", PRIMARY_PROBE_SEQ.load(Ordering::Acquire)) {
-        crate::log!(
+        crate::log_trace!(
             "intel/render: primary-mi-stripes phase={} step={} stripes={} width={}\n",
             stripe_x_phase,
             MI_STRIPE_X_STEP_PX,
@@ -607,7 +607,7 @@ fn submit_mi_scanout_store_proof(
     rect_h: usize,
 ) -> bool {
     if rect_w == 0 || rect_h == 0 {
-        crate::log!("intel/render: mi-scanout-store-proof accepted=0 reason=empty-target\n");
+        crate::log_trace!("intel/render: mi-scanout-store-proof accepted=0 reason=empty-target\n");
         return false;
     }
 
@@ -615,7 +615,7 @@ fn submit_mi_scanout_store_proof(
     let y = (rect_h / 2).min(rect_h.saturating_sub(1));
     let Some(before) = crate::intel::display::sample_primary_surface_pixel(x as u32, y as u32)
     else {
-        crate::log!("intel/render: mi-scanout-store-proof accepted=0 reason=no-before-sample\n");
+        crate::log_trace!("intel/render: mi-scanout-store-proof accepted=0 reason=no-before-sample\n");
         return false;
     };
     let color = before ^ 0x00FF_FFFF;
@@ -623,7 +623,7 @@ fn submit_mi_scanout_store_proof(
         .checked_mul(pitch)
         .and_then(|v| v.checked_add(x.saturating_mul(4)))
     else {
-        crate::log!("intel/render: mi-scanout-store-proof accepted=0 reason=offset-overflow\n");
+        crate::log_trace!("intel/render: mi-scanout-store-proof accepted=0 reason=offset-overflow\n");
         return false;
     };
     let pixel_gpu = dst_gpu_addr.saturating_add(pixel_offset as u64);
@@ -646,7 +646,7 @@ fn submit_mi_scanout_store_proof(
         GPU_VA_RESULT_BASE,
         RCS_EXEC_RESULT_MI_SCANOUT_DONE,
     ) else {
-        crate::log!("intel/render: mi-scanout-store-proof accepted=0 reason=batch-build\n");
+        crate::log_trace!("intel/render: mi-scanout-store-proof accepted=0 reason=batch-build\n");
         return false;
     };
     crate::intel::dma_flush(warm.batch_virt, batch_tail_bytes);

@@ -499,7 +499,7 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
     });
 
     if usb_log_all_enabled() && !devices.is_empty() {
-        crate::log!("crabusb: probe ctrl={} devices={}\n", info.index, devices.len());
+        crate::log_trace!("crabusb: probe ctrl={} devices={}\n", info.index, devices.len());
     }
 
     let mut current_devices: Vec<ObservedUsbDevice> = Vec::new();
@@ -557,7 +557,7 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
             .sum();
 
         if usb_log_all_enabled() {
-            crate::log!(
+            crate::log_trace!(
                 "crabusb: dev ctrl={} root_port={} vid={:04X} pid={:04X} class={:02X} subclass={:02X} proto={:02X} speed={} ifs={} eps={}\n",
                 info.index,
                 topo.root_port_id,
@@ -570,7 +570,7 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
                 if_count,
                 ep_count
             );
-            crate::log!(
+            crate::log_trace!(
                 "crabusb: descriptor check ctrl={} root_port={} ok cfgs={}\n",
                 info.index,
                 topo.root_port_id,
@@ -583,7 +583,7 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
                 for iface in cfg.interfaces.iter() {
                     for alt in iface.alt_settings.iter() {
                         if alt.class == 0x08 {
-                            crate::log!(
+                            crate::log_trace!(
                                 "crabusb:   if#{} alt={} class={:02X} sub={:02X} proto={:02X} eps={}\n",
                                 iface.interface_number,
                                 alt.alternate_setting,
@@ -618,7 +618,7 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
                     shared_led_device = Some(device);
                 }
                 Err(err) => {
-                    crate::log!(
+                    crate::log_trace!(
                         "crabusb: hid+led {:04X}:{:04X} shared open failed: {:?}\n",
                         desc.vendor_id,
                         desc.product_id,
@@ -679,7 +679,7 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
             bound_any = true;
         }
         if bound_any && usb_log_all_enabled() {
-            crate::log!(
+            crate::log_trace!(
                 "crabusb: bind ctrl={} root_port={} vid={:04X} pid={:04X} handoff=true\n",
                 info.index,
                 topo.root_port_id,
@@ -787,7 +787,7 @@ pub async fn event_pump_task(controller_id: usize) {
                     diag.root_hub_lifecycle = "changed";
                 });
                 if usb_log_all_enabled() && !already_pending {
-                    crate::log!(
+                    crate::log_trace!(
                         "crabusb: pump port change ctrl={} root_port={}\n",
                         controller_id,
                         port
@@ -802,7 +802,7 @@ pub async fn event_pump_task(controller_id: usize) {
                     diag.root_hub_lifecycle = "stopped";
                 });
                 if usb_log_all_enabled() {
-                    crate::log!("crabusb: pump stopped ctrl={}\n", controller_id);
+                    crate::log_trace!("crabusb: pump stopped ctrl={}\n", controller_id);
                 }
                 uninstall_event_handler(controller_id);
             }
@@ -887,7 +887,7 @@ pub async fn bsp_service(controller_index: usize) {
             let mut reprobe_until = None;
             if intel_settle_probe {
                 if usb_log_all_enabled() {
-                    crate::log!(
+                    crate::log_trace!(
                         "crabusb: controller {} intel deferred probe before event pump; waiting {}ms\n",
                         info.index,
                         INTEL_PROBE_SETTLE_MS
@@ -916,7 +916,7 @@ pub async fn bsp_service(controller_index: usize) {
                 if let Some(deadline) = quiet_probe_until {
                     if Instant::now() >= deadline {
                         if usb_log_all_enabled() {
-                            crate::log!(
+                            crate::log_trace!(
                                 "crabusb: servicing settled probe on controller {}\n",
                                 info.index
                             );
@@ -925,7 +925,7 @@ pub async fn bsp_service(controller_index: usize) {
                             && !EVENT_HANDLER_READY[info.index].load(Ordering::Acquire)
                         {
                             if usb_log_all_enabled() {
-                                crate::log!(
+                                crate::log_trace!(
                                     "crabusb: controller {} installing event pump before settled probe\n",
                                     info.index
                                 );
@@ -950,7 +950,7 @@ pub async fn bsp_service(controller_index: usize) {
                 if let Some(deadline) = reprobe_until {
                     if Instant::now() >= deadline {
                         if usb_log_all_enabled() {
-                            crate::log!(
+                            crate::log_trace!(
                                 "crabusb: controller {} intel periodic reprobe\n",
                                 info.index
                             );

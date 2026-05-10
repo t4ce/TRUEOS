@@ -245,7 +245,7 @@ fn hyper_http_probe_endpoint() -> api::EndpointV4 {
 async fn connect_example_de_vnet() -> Result<DuplexStream, &'static str> {
     let remote = hyper_http_probe_endpoint();
 
-    crate::log!(
+    crate::log_trace!(
         "hyper_probe: net.http1.example_de connect host={} remote={}.{}.{}.{}:{}\n",
         HYPER_HTTP_PROBE_HOST,
         remote.addr[0],
@@ -264,7 +264,7 @@ async fn connect_example_de_vnet() -> Result<DuplexStream, &'static str> {
     )
     .await
     .map_err(|err| {
-        crate::log!(
+        crate::log_trace!(
             "hyper_probe: net.http1.example_de vnet connect failed stage={}\n",
             err.as_stage()
         );
@@ -303,7 +303,7 @@ async fn probe_hyper_http1_example_de() -> Result<(), &'static str> {
         return Err("net.http1.example_de.response_status");
     }
 
-    crate::log!("hyper_probe: success net.http1.example_de GET / -> 200\n");
+    crate::log_trace!("hyper_probe: success net.http1.example_de GET / -> 200\n");
 
     drop(response);
     drop(sender);
@@ -312,7 +312,7 @@ async fn probe_hyper_http1_example_de() -> Result<(), &'static str> {
         Ok(Ok(Err(_))) => Err("net.http1.example_de.connection"),
         Ok(Err(_)) => Err("net.http1.example_de.connection_join"),
         Err(_) => {
-            crate::log!("hyper_probe: note net.http1.example_de connection still draining\n");
+            crate::log_trace!("hyper_probe: note net.http1.example_de connection still draining\n");
             Ok(())
         }
     }
@@ -326,14 +326,14 @@ fn run_hyper_net_probe_runtime() {
     let runtime = match runtime_builder.build() {
         Ok(runtime) => runtime,
         Err(_) => {
-            crate::log!("hyper_probe: failure net.http1.rt_build\n");
+            crate::log_trace!("hyper_probe: failure net.http1.rt_build\n");
             return;
         }
     };
 
     match runtime.block_on(probe_hyper_http1_example_de()) {
-        Ok(()) => crate::log!("hyper_probe: success net.http1 probe_suite\n"),
-        Err(stage) => crate::log!("hyper_probe: failure {}\n", stage),
+        Ok(()) => crate::log_trace!("hyper_probe: success net.http1 probe_suite\n"),
+        Err(stage) => crate::log_trace!("hyper_probe: failure {}\n", stage),
     }
 }
 
@@ -343,14 +343,14 @@ pub(crate) async fn hyper_net_probe_task() {
         crate::r::readiness::NET_SOCKET_READY | crate::r::readiness::NET_V4_GATEWAY_REACHABLE,
     )
     .await;
-    crate::log!(
+    crate::log_trace!(
         "hyper_probe: resume net.http1 example.de probe after NET_SOCKET_READY+NET_V4_GATEWAY_REACHABLE\n"
     );
     run_hyper_net_probe_runtime();
 }
 
 pub(crate) fn log_boot_probe() {
-    crate::log!("hyper_probe: wired hyper 1.9 client/http1 surface directly beside tokio\n");
+    crate::log_trace!("hyper_probe: wired hyper 1.9 client/http1 surface directly beside tokio\n");
 
     let _ = hyper::client::conn::http1::Builder::new;
     let _ = hyper::server::conn::http1::Builder::new;
@@ -363,20 +363,20 @@ pub(crate) fn log_boot_probe() {
     let runtime = match runtime_builder.build() {
         Ok(runtime) => runtime,
         Err(_) => {
-            crate::log!("hyper_probe: failure http1.loopback.rt_build\n");
+            crate::log_trace!("hyper_probe: failure http1.loopback.rt_build\n");
             return;
         }
     };
 
     match runtime.block_on(probe_hyper_http1_loopback()) {
-        Ok(()) => crate::log!("hyper_probe: success http1.loopback_request_response\n"),
-        Err(stage) => crate::log!("hyper_probe: failure {}\n", stage),
+        Ok(()) => crate::log_trace!("hyper_probe: success http1.loopback_request_response\n"),
+        Err(stage) => crate::log_trace!("hyper_probe: failure {}\n", stage),
     }
 
     match runtime.block_on(probe_hyper_http1_server_loopback()) {
-        Ok(()) => crate::log!("hyper_probe: success http1.server_loopback_request_response\n"),
-        Err(stage) => crate::log!("hyper_probe: failure {}\n", stage),
+        Ok(()) => crate::log_trace!("hyper_probe: success http1.server_loopback_request_response\n"),
+        Err(stage) => crate::log_trace!("hyper_probe: failure {}\n", stage),
     }
 
-    crate::log!("hyper_probe: net.http1 probe is managed by spawn-svc readiness gating\n");
+    crate::log_trace!("hyper_probe: net.http1 probe is managed by spawn-svc readiness gating\n");
 }

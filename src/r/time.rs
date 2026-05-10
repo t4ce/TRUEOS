@@ -66,7 +66,7 @@ fn init_once() {
         START_TSC.store(start, Ordering::Relaxed);
         let hz = detect_tsc_hz().max(1);
         if crate::logflag::BOOT_INFO_LOGS {
-            crate::log!("time: tsc_hz={}\n", hz);
+            crate::log_trace!("time: tsc_hz={}\n", hz);
         }
         TSC_HZ.store(hz, Ordering::Relaxed);
     });
@@ -83,7 +83,7 @@ fn detect_tsc_hz() -> u64 {
         && let Some(calibrated_hz) = calibrate_tsc_hz_with_hpet(hpet)
     {
         if crate::logflag::BOOT_INFO_LOGS {
-            crate::log!("time: tsc_hz calibrated via HPET: {}\n", calibrated_hz);
+            crate::log_trace!("time: tsc_hz calibrated via HPET: {}\n", calibrated_hz);
         }
         return calibrated_hz;
     }
@@ -101,7 +101,7 @@ fn detect_tsc_hz_from_cpuid() -> u64 {
     let numer = r15.ebx as u64;
     let crystal_hz = r15.ecx as u64;
     if crate::logflag::BOOT_INFO_LOGS {
-        crate::log!(
+        crate::log_trace!(
             "time: cpuid 0x15: denom={} numer={} crystal_hz={}\n",
             denom,
             numer,
@@ -127,7 +127,7 @@ fn detect_tsc_hz_from_cpuid() -> u64 {
     let r16 = __cpuid(0x16);
     let base_mhz = (r16.eax & 0xFFFF) as u64;
     if crate::logflag::BOOT_INFO_LOGS {
-        crate::log!("time: cpuid 0x16: base_mhz={}\n", base_mhz);
+        crate::log_trace!("time: cpuid 0x16: base_mhz={}\n", base_mhz);
     }
 
     if base_mhz != 0 {

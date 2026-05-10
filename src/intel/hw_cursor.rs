@@ -259,7 +259,7 @@ pub(crate) fn update_kernel_hw_cursor() -> Option<u32> {
                 pos,
             );
             if kernel_cursor_probe_logs_enabled() {
-                crate::log!(
+                crate::log_trace!(
                     "intel/display: kernel-hw-cursor probe-only pipe={} slot={} kind={} pos={}x{} ctl_target=0x{:08X} base_target=0x{:08X} buf_cfg_target=0x{:08X} reason=cursor-enable-wedges-display\n",
                     pipe.name,
                     slot_id,
@@ -400,7 +400,7 @@ pub(crate) fn update_kernel_hw_cursor() -> Option<u32> {
         && (surf_live == 0 || surf_live == base);
 
     if !state.visible && visible {
-        crate::log!(
+        crate::log_trace!(
             "intel/display: kernel-hw-cursor enabled pipe={} slot={} pos={}x{} ctl=0x{:08X} base=0x{:08X} live=0x{:08X}\n",
             pipe.name,
             slot_id,
@@ -411,7 +411,7 @@ pub(crate) fn update_kernel_hw_cursor() -> Option<u32> {
             surf_live
         );
     } else if pipe_changed {
-        crate::log!(
+        crate::log_trace!(
             "intel/display: kernel-hw-cursor rebind pipe={} slot={} pos={}x{} ctl=0x{:08X} base=0x{:08X} live=0x{:08X}\n",
             pipe.name,
             slot_id,
@@ -499,7 +499,7 @@ pub(crate) fn log_cursor_ddb_map_once(dev: crate::intel::Dev) {
     let (cc_start, cc_end) = decode_dbuf_cfg(pipe_c_cursor);
     let (cd_start, cd_end) = decode_dbuf_cfg(pipe_d_cursor);
 
-    crate::log!(
+    crate::log_trace!(
         "intel/display: cursor-ddb-map plane[a0]=0x{:08X} {}..{} plane[a1]=0x{:08X} {}..{} plane[a2]=0x{:08X} {}..{} plane[a3]=0x{:08X} {}..{} plane[b0]=0x{:08X} {}..{} plane[b1]=0x{:08X} {}..{} plane[b2]=0x{:08X} {}..{} plane[b3]=0x{:08X} {}..{} plane[c0]=0x{:08X} {}..{} plane[c1]=0x{:08X} {}..{} plane[c2]=0x{:08X} {}..{} plane[c3]=0x{:08X} {}..{} plane[d0]=0x{:08X} {}..{} plane[d1]=0x{:08X} {}..{} plane[d2]=0x{:08X} {}..{} plane[d3]=0x{:08X} {}..{} cursor[a]=0x{:08X} {}..{} cursor[b]=0x{:08X} {}..{} cursor[c]=0x{:08X} {}..{} cursor[d]=0x{:08X} {}..{}\n",
         pipe_a_plane0,
         pa0_start,
@@ -629,7 +629,7 @@ fn disable_kernel_hw_cursor(dev: crate::intel::Dev, preferred_pipe: Option<PipeI
         .or(state.armed_pipe_slot);
     disable_cursor_pipe(dev, pipe_slot);
     if state.visible {
-        crate::log!(
+        crate::log_trace!(
             "intel/display: kernel-hw-cursor disabled pipe_slot={}\n",
             pipe_slot.unwrap_or(usize::MAX)
         );
@@ -698,7 +698,7 @@ fn log_kernel_cursor_probe(
     let (pipe_w, pipe_h) = pipe_src_dims.unwrap_or((0, 0));
     let (fb_w, fb_h) = fb_dims.unwrap_or((0, 0));
 
-    crate::log!(
+    crate::log_trace!(
         "intel/display: kernel-hw-cursor probe pipe={} slot={} buttons=0x{:X} pipe_src=0x{:08X} pipe_dims={}x{} fb_dims={}x{} plane_ctl=0x{:08X} plane_enabled={} plane_stride=0x{:08X} plane_surf=0x{:08X} plane_live=0x{:08X} plane_buf_cfg=0x{:08X} cur_ctl=0x{:08X} cur_base=0x{:08X} cur_pos=0x{:08X} cur_live=0x{:08X} cur_wm0=0x{:08X} cur_wm_trans=0x{:08X} cur_wm_sagv=0x{:08X} cur_wm_sagv_trans=0x{:08X} cur_buf_cfg=0x{:08X} cur_sel_fetch=0x{:08X} target_pos={}x{} target_pos_reg=0x{:08X} target_ctl=0x{:08X} target_base=0x{:08X}\n",
         pipe.name,
         slot_id,
@@ -784,7 +784,7 @@ fn probe_cursor_pos_write(
     let live_after = crate::intel::mmio_read(dev, regs.surf_live_off);
 
     if kernel_cursor_probe_logs_enabled() {
-        crate::log!(
+        crate::log_trace!(
             "intel/display: kernel-hw-cursor probe-curpos pipe={} slot={} target={}x{} pos_before=0x{:08X} pos_after=0x{:08X} ctl_before=0x{:08X} ctl_after=0x{:08X} base_before=0x{:08X} base_after=0x{:08X} live_before=0x{:08X} live_after=0x{:08X}\n",
             pipe.name,
             slot_id,
@@ -823,7 +823,7 @@ fn probe_cursor_buf_cfg_write(
     let wm_trans_after = crate::intel::mmio_read(dev, aux.wm_trans_off);
 
     if kernel_cursor_probe_logs_enabled() {
-        crate::log!(
+        crate::log_trace!(
             "intel/display: kernel-hw-cursor probe-curbufcfg pipe={} slot={} buf_cfg_before=0x{:08X} buf_cfg_after=0x{:08X} wm0_before=0x{:08X} wm0_after=0x{:08X} wm_trans_before=0x{:08X} wm_trans_after=0x{:08X}\n",
             pipe.name,
             slot_id,
@@ -863,7 +863,7 @@ fn probe_cursor_buf_cfg_base_write(
     let live_after = crate::intel::mmio_read(dev, regs.surf_live_off);
 
     if kernel_cursor_probe_logs_enabled() {
-        crate::log!(
+        crate::log_trace!(
             "intel/display: kernel-hw-cursor probe-curbufcfg-base pipe={} slot={} buf_cfg_before=0x{:08X} buf_cfg_after=0x{:08X} base_before=0x{:08X} base_after=0x{:08X} ctl_before=0x{:08X} ctl_after=0x{:08X} live_before=0x{:08X} live_after=0x{:08X}\n",
             pipe.name,
             slot_id,
@@ -909,7 +909,7 @@ fn probe_cursor_buf_cfg_base_pos_write(
     let live_after = crate::intel::mmio_read(dev, regs.surf_live_off);
 
     if kernel_cursor_probe_logs_enabled() {
-        crate::log!(
+        crate::log_trace!(
             "intel/display: kernel-hw-cursor probe-curbufcfg-base-pos pipe={} slot={} buf_cfg_before=0x{:08X} buf_cfg_after=0x{:08X} base_before=0x{:08X} base_after=0x{:08X} pos_before=0x{:08X} pos_after=0x{:08X} ctl_before=0x{:08X} ctl_after=0x{:08X} live_before=0x{:08X} live_after=0x{:08X}\n",
             pipe.name,
             slot_id,
@@ -959,7 +959,7 @@ fn probe_cursor_buf_cfg_base_pos_ctl_mode_write(
     let live_after = crate::intel::mmio_read(dev, regs.surf_live_off);
 
     if kernel_cursor_probe_logs_enabled() {
-        crate::log!(
+        crate::log_trace!(
             "intel/display: kernel-hw-cursor probe-curbufcfg-base-pos-ctlmode pipe={} slot={} buf_cfg_before=0x{:08X} buf_cfg_after=0x{:08X} base_before=0x{:08X} base_after=0x{:08X} pos_before=0x{:08X} pos_after=0x{:08X} ctl_before=0x{:08X} ctl_after=0x{:08X} live_before=0x{:08X} live_after=0x{:08X}\n",
             pipe.name,
             slot_id,
@@ -1008,7 +1008,7 @@ fn probe_cursor_buf_cfg_base_pos_ctl_enable_write(
     let ctl_after = crate::intel::mmio_read(dev, regs.ctl_off);
     let live_after = crate::intel::mmio_read(dev, regs.surf_live_off);
 
-    crate::log!(
+    crate::log_trace!(
         "intel/display: kernel-hw-cursor probe-curbufcfg-base-pos-ctlenable pipe={} slot={} buf_cfg_before=0x{:08X} buf_cfg_after=0x{:08X} base_before=0x{:08X} base_after=0x{:08X} pos_before=0x{:08X} pos_after=0x{:08X} ctl_before=0x{:08X} ctl_after=0x{:08X} live_before=0x{:08X} live_after=0x{:08X}\n",
         pipe.name,
         slot_id,
@@ -1061,7 +1061,7 @@ fn probe_cursor_buf_cfg_base_pos_ctl_enable_base_write(
     let ctl_after = crate::intel::mmio_read(dev, regs.ctl_off);
     let live_after = crate::intel::mmio_read(dev, regs.surf_live_off);
 
-    crate::log!(
+    crate::log_trace!(
         "intel/display: kernel-hw-cursor probe-curbufcfg-base-pos-ctlenable-base pipe={} slot={} buf_cfg_before=0x{:08X} buf_cfg_after=0x{:08X} base_before=0x{:08X} base_after=0x{:08X} pos_before=0x{:08X} pos_after=0x{:08X} ctl_before=0x{:08X} ctl_after_ctl=0x{:08X} ctl_after=0x{:08X} live_before=0x{:08X} live_after_ctl=0x{:08X} live_after=0x{:08X}\n",
         pipe.name,
         slot_id,
@@ -1115,7 +1115,7 @@ fn probe_cursor_buf_cfg_ctl_enable_pos_base_write(
     let ctl_after = crate::intel::mmio_read(dev, regs.ctl_off);
     let live_after = crate::intel::mmio_read(dev, regs.surf_live_off);
 
-    crate::log!(
+    crate::log_trace!(
         "intel/display: kernel-hw-cursor probe-curbufcfg-ctlenable-pos-base pipe={} slot={} buf_cfg_before=0x{:08X} buf_cfg_after=0x{:08X} base_before=0x{:08X} base_after=0x{:08X} pos_before=0x{:08X} pos_after=0x{:08X} ctl_before=0x{:08X} ctl_after_ctl=0x{:08X} ctl_after=0x{:08X} live_before=0x{:08X} live_after_ctl=0x{:08X} live_after=0x{:08X}\n",
         pipe.name,
         slot_id,
@@ -1182,7 +1182,7 @@ fn probe_cursor_wm_enable_buf_cfg_ctl_enable_pos_base_write(
     let live_after = crate::intel::mmio_read(dev, regs.surf_live_off);
 
     if kernel_cursor_probe_logs_enabled() {
-        crate::log!(
+        crate::log_trace!(
             "intel/display: kernel-hw-cursor probe-curwm-bufcfg-ctlenable-pos-base pipe={} slot={} wm0_before=0x{:08X} wm0_after_wm=0x{:08X} wm_trans_before=0x{:08X} wm_trans_after_wm=0x{:08X} wm_sagv_before=0x{:08X} wm_sagv_after_wm=0x{:08X} wm_sagv_trans_before=0x{:08X} wm_sagv_trans_after_wm=0x{:08X} buf_cfg_before=0x{:08X} buf_cfg_after=0x{:08X} base_before=0x{:08X} base_after=0x{:08X} pos_before=0x{:08X} pos_after=0x{:08X} ctl_before=0x{:08X} ctl_after_ctl=0x{:08X} ctl_after=0x{:08X} live_before=0x{:08X} live_after_ctl=0x{:08X} live_after=0x{:08X}\n",
             pipe.name,
             slot_id,
@@ -1229,7 +1229,7 @@ fn probe_cursor_base_write(
     let base_after = crate::intel::mmio_read(dev, regs.base_off);
     let live_after = crate::intel::mmio_read(dev, regs.surf_live_off);
 
-    crate::log!(
+    crate::log_trace!(
         "intel/display: kernel-hw-cursor probe-curbase pipe={} slot={} base_before=0x{:08X} base_after=0x{:08X} ctl_before=0x{:08X} ctl_after=0x{:08X} pos_before=0x{:08X} pos_after=0x{:08X} live_before=0x{:08X} live_after=0x{:08X}\n",
         pipe.name,
         slot_id,
@@ -1265,7 +1265,7 @@ fn probe_cursor_ctl_mode_write(
     let base_after = crate::intel::mmio_read(dev, regs.base_off);
     let live_after = crate::intel::mmio_read(dev, regs.surf_live_off);
 
-    crate::log!(
+    crate::log_trace!(
         "intel/display: kernel-hw-cursor probe-curctl-mode pipe={} slot={} ctl_before=0x{:08X} ctl_after=0x{:08X} pos_before=0x{:08X} pos_after=0x{:08X} base_before=0x{:08X} base_after=0x{:08X} live_before=0x{:08X} live_after=0x{:08X}\n",
         pipe.name,
         slot_id,
@@ -1292,7 +1292,7 @@ fn probe_cursor_ctl_mode_observe(
     let base_before = crate::intel::mmio_read(dev, regs.base_off);
     let live_before = crate::intel::mmio_read(dev, regs.surf_live_off);
 
-    crate::log!(
+    crate::log_trace!(
         "intel/display: kernel-hw-cursor probe-curctl-observe pipe={} slot={} ctl_before=0x{:08X} ctl_target=0x{:08X} pos_before=0x{:08X} base_before=0x{:08X} live_before=0x{:08X}\n",
         pipe.name,
         slot_id,
