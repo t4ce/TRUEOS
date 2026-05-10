@@ -302,7 +302,10 @@ pub(crate) fn prove_h2g_mmio_once(dev: crate::intel::Dev, label: &'static str) -
         return H2G_MMIO_ACCEPTED.load(Ordering::Acquire);
     }
     if !ready() {
-        crate::log_trace!("intel/guc: h2g-mmio-proof label={} accepted=0 reason=not-ready\n", label);
+        crate::log_trace!(
+            "intel/guc: h2g-mmio-proof label={} accepted=0 reason=not-ready\n",
+            label
+        );
         return false;
     }
 

@@ -86,7 +86,11 @@ fn http_trueosfs_open_endpoint(dev_idx: usize) -> Option<HttpTrueosfsEndpoint> {
         })
         .is_err()
     {
-        crate::log_trace!("http-trueosfs: listen submit failed dev={} owner={}\n", dev_idx, vnet.owner());
+        crate::log_trace!(
+            "http-trueosfs: listen submit failed dev={} owner={}\n",
+            dev_idx,
+            vnet.owner()
+        );
         return None;
     }
     let ip = crate::net::adapter::ipv4_at(dev_idx);

@@ -714,7 +714,12 @@ impl NvmeController {
             }
         });
         if !completed {
-            crate::log_trace!("nvme: {} admin timeout opcode=0x{:02X} cid={}\n", self.pci, opcode, cid);
+            crate::log_trace!(
+                "nvme: {} admin timeout opcode=0x{:02X} cid={}\n",
+                self.pci,
+                opcode,
+                cid
+            );
             return Err(block::Error::Timeout);
         }
 

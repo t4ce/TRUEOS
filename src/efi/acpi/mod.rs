@@ -51,7 +51,10 @@ pub(crate) fn ensure_tables() -> Option<&'static AcpiTables<AcpiIdentityHandler>
                     }
                 }
                 if crate::logflag::BOOT_INFO_LOGS && ssdt_count != 0 {
-                    crate::log_trace!("ACPI TABLE SSDT count={} (see ssdt::log_once)\n", ssdt_count);
+                    crate::log_trace!(
+                        "ACPI TABLE SSDT count={} (see ssdt::log_once)\n",
+                        ssdt_count
+                    );
                 }
                 if crate::logflag::BOOT_INFO_LOGS {
                     crate::log_trace!(
@@ -64,7 +67,12 @@ pub(crate) fn ensure_tables() -> Option<&'static AcpiTables<AcpiIdentityHandler>
                 Some(tables)
             }
             Err(err) => {
-                crate::log_trace!("ACPI RSDP raw=0x{:X} phys=0x{:X} ERROR {:?}\n", rsdp_raw, rsdp, err);
+                crate::log_trace!(
+                    "ACPI RSDP raw=0x{:X} phys=0x{:X} ERROR {:?}\n",
+                    rsdp_raw,
+                    rsdp,
+                    err
+                );
                 None
             }
         }

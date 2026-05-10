@@ -387,7 +387,9 @@ fn enqueue_shadow_bf16_matvec_suffix(
 ) {
     if !shadow_bf16_matvec_to_net_backend() {
         if !LOGGED_SHADOW_DISABLED.swap(true, Ordering::AcqRel) {
-            crate::log_trace!("lumen-net: shadow bf16 matvec route_enabled=0 action=no-shadow-frames\n");
+            crate::log_trace!(
+                "lumen-net: shadow bf16 matvec route_enabled=0 action=no-shadow-frames\n"
+            );
         }
         return;
     }

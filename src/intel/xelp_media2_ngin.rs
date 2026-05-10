@@ -3069,7 +3069,9 @@ pub(crate) async fn run_media2_first_frame_async() -> Option<Media2FirstFrameSta
         };
 
     let Some(backing) = ensure_decode_backing(dev, windows) else {
-        crate::log_trace!("intel/media2: first-frame abort stage=backing reason=alloc-or-map-failed\n");
+        crate::log_trace!(
+            "intel/media2: first-frame abort stage=backing reason=alloc-or-map-failed\n"
+        );
         store_kickoff_state(MediaKickoffStage::ResourcePlanning, None);
         return None;
     };

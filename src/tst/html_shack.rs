@@ -192,7 +192,10 @@ async fn store_ready_html(html: Html) -> usize {
 pub async fn handoff_html_to_truesurfer(html: Html) -> bool {
     let Some(browser_instance_id) = crate::r::spawn_service::spawn_truesurfer_tab_with_html()
     else {
-        crate::log_trace!("html_shack: browser_handoff skipped url={} reason=spawn_failed\n", html.url);
+        crate::log_trace!(
+            "html_shack: browser_handoff skipped url={} reason=spawn_failed\n",
+            html.url
+        );
         return false;
     };
 
@@ -282,7 +285,10 @@ pub async fn html_fetch_service() {
             if crate::logflag::HTML_SHACK_IDLE_LOGS {
                 let n = HTML_FETCH_IDLE_LOGS.fetch_add(1, Ordering::Relaxed);
                 if n.is_multiple_of(256) {
-                    crate::log_trace!("html_shack: waiting for shared tokio runtime polls={}\n", n + 1);
+                    crate::log_trace!(
+                        "html_shack: waiting for shared tokio runtime polls={}\n",
+                        n + 1
+                    );
                 }
             }
             Timer::after(EmbassyDuration::from_millis(HTML_FETCH_IDLE_MS)).await;
@@ -330,7 +336,11 @@ pub async fn html_fetch_service() {
                 }
                 let ready = Html::new(fetch_url.as_str(), html);
                 let ready_len = store_ready_html(ready.clone()).await;
-                crate::log_trace!("html_shack: ready url={} ready_queue={}\n", ready.url, ready_len);
+                crate::log_trace!(
+                    "html_shack: ready url={} ready_queue={}\n",
+                    ready.url,
+                    ready_len
+                );
 
                 let _ = request.auto_handoff_callback.take();
             }

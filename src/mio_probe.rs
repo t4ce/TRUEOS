@@ -59,7 +59,9 @@ async fn log_net_surface_probe() {
                 .registry()
                 .register(&mut udp, Token(0x4D11), Interest::WRITABLE)
             {
-                Ok(()) => crate::log_trace!("mio_probe: success net.udp_socket.register_writable\n"),
+                Ok(()) => {
+                    crate::log_trace!("mio_probe: success net.udp_socket.register_writable\n")
+                }
                 Err(err) => {
                     log_io_failure("net.udp_socket.register_writable", &err);
                     return;
@@ -71,7 +73,10 @@ async fn log_net_surface_probe() {
             for spin in 0..max_spins {
                 match poll.poll(&mut events, Some(core::time::Duration::ZERO)) {
                     Ok(()) if events.iter().any(|event| event.is_writable()) => {
-                        crate::log_trace!("mio_probe: success net.udp_socket.writable spins={}\n", spin);
+                        crate::log_trace!(
+                            "mio_probe: success net.udp_socket.writable spins={}\n",
+                            spin
+                        );
                         crate::r::readiness::set(crate::r::readiness::NET_SOCKET_READY);
                         return;
                     }
@@ -131,7 +136,10 @@ pub(crate) fn log_boot_probe() {
 
     match poll.poll(&mut events, Some(core::time::Duration::ZERO)) {
         Ok(()) => {
-            crate::log_trace!("mio_probe: success poll.poll timeout0 events={}\n", events.iter().count())
+            crate::log_trace!(
+                "mio_probe: success poll.poll timeout0 events={}\n",
+                events.iter().count()
+            )
         }
         Err(err) => log_io_failure("poll.poll", &err),
     }

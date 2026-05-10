@@ -540,7 +540,10 @@ pub mod logtotcp {
                         if conn_handle == Some(handle) {
                             conn_handle = None;
                             pending = false;
-                            crate::log_trace!("logtotcp: client disconnected handle={}\n", handle.0);
+                            crate::log_trace!(
+                                "logtotcp: client disconnected handle={}\n",
+                                handle.0
+                            );
                         }
                         if tcp_handle == Some(handle) {
                             tcp_handle = None;

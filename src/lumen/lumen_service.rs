@@ -159,7 +159,10 @@ pub(crate) fn submit_chatroom_mention(prompt: &str) -> bool {
     }
 
     if !mark_prompt_running("chatroom-submit") {
-        crate::log_trace!("lumen-service: rejected chatroom prompt reason=busy bytes={}\n", prompt.len());
+        crate::log_trace!(
+            "lumen-service: rejected chatroom prompt reason=busy bytes={}\n",
+            prompt.len()
+        );
         let _ = post_chat_message(CHAT_AI_NAME, CHAT_BUSY_TEXT);
         return false;
     }
@@ -240,7 +243,11 @@ fn post_chat_statement(user: &str, statement: Option<&str>, text: &str) -> bool 
         None => crate::tst_chatserver::post_local_message_volatile(CHAT_ROOM, user, text),
     };
     if local_ok {
-        crate::log_trace!("lumen-service: inserted chat message user={} bytes={}\n", user, text.len());
+        crate::log_trace!(
+            "lumen-service: inserted chat message user={} bytes={}\n",
+            user,
+            text.len()
+        );
         return true;
     }
 

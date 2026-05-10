@@ -80,7 +80,11 @@ async fn reset_after_failure(disk: DeviceHandle, stage: &'static str) {
     match crate::usb2::pen::reset_uas_skhynix_route_transport(disk, stage).await {
         Ok(()) => crate::log_trace!("uas-skhynix-route-probe: reset stage={} result=ok\n", stage),
         Err(err) => {
-            crate::log_trace!("uas-skhynix-route-probe: reset stage={} result=err err={:?}\n", stage, err)
+            crate::log_trace!(
+                "uas-skhynix-route-probe: reset stage={} result=err err={:?}\n",
+                stage,
+                err
+            )
         }
     }
 }

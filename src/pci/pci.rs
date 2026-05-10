@@ -157,7 +157,11 @@ fn init_ecam_once() {
             }
         }
         if crate::logflag::BOOT_INFO_LOGS {
-            crate::log_trace!("pci: MCFG present (regions={}, seg0={})\n", regions.len(), seg0_count);
+            crate::log_trace!(
+                "pci: MCFG present (regions={}, seg0={})\n",
+                regions.len(),
+                seg0_count
+            );
             for r in regions.iter() {
                 if r.segment == 0 {
                     crate::log_trace!(

@@ -520,7 +520,11 @@ impl VirtioNetAdapter {
         let buf = &self.tx_bufs[desc_id as usize];
         let copy_len = frame.len().min(TX_BUF_SIZE - VIRTIO_NET_HDR_SIZE);
         if copy_len != frame.len() {
-            crate::log_trace!("net/vio: tx trunc frame_len={} copy_len={}\n", frame.len(), copy_len);
+            crate::log_trace!(
+                "net/vio: tx trunc frame_len={} copy_len={}\n",
+                frame.len(),
+                copy_len
+            );
         }
 
         unsafe {

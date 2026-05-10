@@ -849,7 +849,11 @@ pub(crate) async fn probe_mass_bot(
     }
 
     let removable = (inquiry[1] & 0x80) != 0;
-    crate::log_trace!("crabusb: mass inquiry removable={} pdt=0x{:02X}\n", removable, inquiry[0] & 0x1F);
+    crate::log_trace!(
+        "crabusb: mass inquiry removable={} pdt=0x{:02X}\n",
+        removable,
+        inquiry[0] & 0x1F
+    );
     let _ = test_unit_ready_with_sense(bulk_out, bulk_in, bulk_out_ep, bulk_in_ep, lun).await;
 
     let mut read_capacity = [0u8; 8];

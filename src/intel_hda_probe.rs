@@ -217,10 +217,7 @@ async fn hda_wav_loop_probe_task() {
         }
 
         crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
-        crate::log_trace!(
-            "intel/hda-probe: wav loop net ready trace={}\n",
-            HDA_WAV_TRACE_MARKER
-        );
+        crate::log_trace!("intel/hda-probe: wav loop net ready trace={}\n", HDA_WAV_TRACE_MARKER);
         while !crate::t::shared_tokio_runtime_ready() {
             crate::log_trace!(
                 "intel/hda-probe: wav loop waiting for shared tokio runtime trace={}\n",
@@ -236,7 +233,11 @@ async fn hda_wav_loop_probe_task() {
         let samples = match load_hda_wav_loop_samples().await {
             Ok(samples) => samples,
             Err(err) => {
-                crate::log_trace!("intel/hda-probe: wav fetch/decode err url={} err={}\n", url, err);
+                crate::log_trace!(
+                    "intel/hda-probe: wav fetch/decode err url={} err={}\n",
+                    url,
+                    err
+                );
                 Timer::after(EmbassyDuration::from_millis(HDA_WAV_LOOP_RETRY_DELAY_MS)).await;
                 continue;
             }
@@ -401,7 +402,10 @@ pub async fn task() {
                                     );
                                 }
                                 Err(err) => {
-                                    crate::log_trace!("intel/hda-probe: bassline start err={}\n", err);
+                                    crate::log_trace!(
+                                        "intel/hda-probe: bassline start err={}\n",
+                                        err
+                                    );
                                 }
                             }
                         }

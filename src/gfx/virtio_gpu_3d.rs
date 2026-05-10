@@ -2136,7 +2136,11 @@ impl VirglGfxBackend {
             crate::log_trace!("virgl-backend: bootstrap present failed\n");
             return None;
         }
-        crate::log_trace!("virgl-backend: bootstrap present ok display={}x{}\n", present_w, present_h);
+        crate::log_trace!(
+            "virgl-backend: bootstrap present ok display={}x{}\n",
+            present_w,
+            present_h
+        );
 
         Some(backend)
     }
