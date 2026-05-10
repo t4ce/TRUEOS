@@ -143,6 +143,37 @@ static void init_t6_small_live8_trueos_arena_packed_bf16(uint32_t *words) {
     words[2051] = 0x410040E0u; // w6,w7 = bf16(7.0), bf16(8.0)
 }
 
+static void init_t6_1_live16_trueos_arena_packed_bf16(uint32_t *words) {
+    init_t6_small_live8_trueos_arena_packed_bf16(words);
+    words[8] = 0x41100000u;  // x8 = 9.0
+    words[9] = 0x41200000u;  // x9 = 10.0
+    words[10] = 0x41300000u; // x10 = 11.0
+    words[11] = 0x41400000u; // x11 = 12.0
+    words[12] = 0x41500000u; // x12 = 13.0
+    words[13] = 0x41600000u; // x13 = 14.0
+    words[14] = 0x41700000u; // x14 = 15.0
+    words[15] = 0x41800000u; // x15 = 16.0
+    words[2052] = 0x41204110u; // w8,w9 = bf16(9.0), bf16(10.0)
+    words[2053] = 0x41404130u; // w10,w11 = bf16(11.0), bf16(12.0)
+    words[2054] = 0x41604150u; // w12,w13 = bf16(13.0), bf16(14.0)
+    words[2055] = 0x41804170u; // w14,w15 = bf16(15.0), bf16(16.0)
+}
+
+static void init_t6_2_row_indexed_live16_trueos_arena_packed_bf16(uint32_t *words) {
+    init_t6_1_live16_trueos_arena_packed_bf16(words);
+    const uint32_t bf16_rows[8] = {
+        0x3F80u, 0x4000u, 0x4040u, 0x4080u,
+        0x40A0u, 0x40C0u, 0x40E0u, 0x4100u,
+    };
+    for (uint32_t row = 0; row < 8; ++row) {
+        const uint32_t base = 2048u + row * 1024u;
+        const uint32_t packed = (bf16_rows[row] << 16) | bf16_rows[row];
+        for (uint32_t pair = 0; pair < 8; ++pair) {
+            words[base + pair] = packed;
+        }
+    }
+}
+
 static int verify_sentinel(const uint32_t *words) {
     const uint32_t expected_lanes = 8;
     printf(
@@ -279,6 +310,60 @@ static int verify_t6_small_live8_trueos_arena_packed_bf16(const uint32_t *words)
     return ok;
 }
 
+static int verify_t6_1_live16_trueos_arena_packed_bf16(const uint32_t *words) {
+    const uint32_t out = 264192u;
+    const uint32_t expected_bits = 0x44BB0000u; // sum(i*i), i=1..16 = 1496.0
+    const int ok =
+        words[out + 0] == expected_bits &&
+        words[out + 1] == 16u &&
+        words[out + 2] == 0xC0DE7616u &&
+        words[out + 3] == 0u;
+    printf(
+        "oracle-app: t6-1-live16-trueos-arena-packed-bf16 input_x_first_last=0x%08X 0x%08X packed_row_words=0x%08X 0x%08X 0x%08X 0x%08X 0x%08X 0x%08X 0x%08X 0x%08X out_dword=%u\n",
+        words[0], words[15],
+        words[2048], words[2049], words[2050], words[2051],
+        words[2052], words[2053], words[2054], words[2055],
+        out
+    );
+    printf(
+        "oracle-app: t6-1-live16-trueos-arena-packed-bf16 verified=%d expected_bits=0x%08X observed_bits=0x%08X live_k=%u sentinel=0x%08X workgroup=%u\n",
+        ok,
+        expected_bits,
+        words[out + 0],
+        words[out + 1],
+        words[out + 2],
+        words[out + 3]
+    );
+    return ok;
+}
+
+static int verify_t6_2_row_indexed_live16_trueos_arena_packed_bf16(const uint32_t *words) {
+    const uint32_t out = 264192u;
+    const uint32_t expected[8] = {
+        0x43080000u, 0x43880000u, 0x43CC0000u, 0x44080000u,
+        0x442A0000u, 0x444C0000u, 0x446E0000u, 0x44880000u,
+    };
+    int ok = 1;
+    for (uint32_t row = 0; row < 8; ++row) {
+        ok = ok && words[out + row] == expected[row];
+    }
+    printf(
+        "oracle-app: t6-2-row-indexed-live16-trueos-arena-packed-bf16 outputs=0x%08X 0x%08X 0x%08X 0x%08X 0x%08X 0x%08X 0x%08X 0x%08X expected=0x%08X 0x%08X 0x%08X 0x%08X 0x%08X 0x%08X 0x%08X 0x%08X rows=8 live_k=16 out_dword=%u\n",
+        words[out + 0], words[out + 1], words[out + 2], words[out + 3],
+        words[out + 4], words[out + 5], words[out + 6], words[out + 7],
+        expected[0], expected[1], expected[2], expected[3],
+        expected[4], expected[5], expected[6], expected[7],
+        out
+    );
+    printf(
+        "oracle-app: t6-2-row-indexed-live16-trueos-arena-packed-bf16 verified=%d rows=8 live_k=16 first_bits=0x%08X last_bits=0x%08X\n",
+        ok,
+        words[out + 0],
+        words[out + 7]
+    );
+    return ok;
+}
+
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
 
@@ -295,12 +380,18 @@ int main(int argc, char **argv) {
         strcmp(workload, "t5-small-live4-trueos-arena-packed-bf16") == 0;
     const int is_t6_small_live8_trueos_arena_packed_bf16 =
         strcmp(workload, "t6-small-live8-trueos-arena-packed-bf16") == 0;
+    const int is_t6_1_live16_trueos_arena_packed_bf16 =
+        strcmp(workload, "t6-1-live16-trueos-arena-packed-bf16") == 0;
+    const int is_t6_2_row_indexed_live16_trueos_arena_packed_bf16 =
+        strcmp(workload, "t6-2-row-indexed-live16-trueos-arena-packed-bf16") == 0;
     if (
         !is_sentinel &&
         !is_t5_small_live4 &&
         !is_t5_small_live4_trueos_arena &&
         !is_t5_small_live4_trueos_arena_packed_bf16 &&
-        !is_t6_small_live8_trueos_arena_packed_bf16
+        !is_t6_small_live8_trueos_arena_packed_bf16 &&
+        !is_t6_1_live16_trueos_arena_packed_bf16 &&
+        !is_t6_2_row_indexed_live16_trueos_arena_packed_bf16
     ) {
         fprintf(stderr, "unsupported workload: %s\n", workload);
         return 1;
@@ -405,7 +496,9 @@ int main(int argc, char **argv) {
     const VkDeviceSize buffer_size =
         (is_t5_small_live4_trueos_arena ||
          is_t5_small_live4_trueos_arena_packed_bf16 ||
-         is_t6_small_live8_trueos_arena_packed_bf16)
+         is_t6_small_live8_trueos_arena_packed_bf16 ||
+         is_t6_1_live16_trueos_arena_packed_bf16 ||
+         is_t6_2_row_indexed_live16_trueos_arena_packed_bf16)
             ? 0x103000u
             : 4096u;
     const VkBufferCreateInfo buffer_info = {
@@ -441,6 +534,10 @@ int main(int argc, char **argv) {
         init_t5_small_live4_trueos_arena_packed_bf16((uint32_t *)mapped);
     } else if (is_t6_small_live8_trueos_arena_packed_bf16) {
         init_t6_small_live8_trueos_arena_packed_bf16((uint32_t *)mapped);
+    } else if (is_t6_1_live16_trueos_arena_packed_bf16) {
+        init_t6_1_live16_trueos_arena_packed_bf16((uint32_t *)mapped);
+    } else if (is_t6_2_row_indexed_live16_trueos_arena_packed_bf16) {
+        init_t6_2_row_indexed_live16_trueos_arena_packed_bf16((uint32_t *)mapped);
     }
 
     Spirv spv = read_spirv(argv[1]);
@@ -555,7 +652,9 @@ int main(int argc, char **argv) {
         0,
         NULL
     );
-    vkCmdDispatch(command_buffer, 1, 1, 1);
+    const uint32_t dispatch_x =
+        is_t6_2_row_indexed_live16_trueos_arena_packed_bf16 ? 8u : 1u;
+    vkCmdDispatch(command_buffer, dispatch_x, 1, 1);
     const VkBufferMemoryBarrier barrier = {
         .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
         .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
@@ -590,7 +689,11 @@ int main(int argc, char **argv) {
     printf("oracle-app: lens macro=submit-complete wait-idle-done\n");
 
     const uint32_t *words = (const uint32_t *)mapped;
-    const int ok = is_t6_small_live8_trueos_arena_packed_bf16
+    const int ok = is_t6_2_row_indexed_live16_trueos_arena_packed_bf16
+        ? verify_t6_2_row_indexed_live16_trueos_arena_packed_bf16(words)
+        : is_t6_1_live16_trueos_arena_packed_bf16
+        ? verify_t6_1_live16_trueos_arena_packed_bf16(words)
+        : is_t6_small_live8_trueos_arena_packed_bf16
         ? verify_t6_small_live8_trueos_arena_packed_bf16(words)
         : is_t5_small_live4_trueos_arena_packed_bf16
         ? verify_t5_small_live4_trueos_arena_packed_bf16(words)

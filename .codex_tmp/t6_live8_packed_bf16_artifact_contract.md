@@ -44,6 +44,10 @@ Runtime policy:
 - T5 remains the guardrail: T6 runs only after the T5 live4 compare succeeds
   for the staged tile.
 - Runtime labels are distinct:
+  - `gpgpu-actual-work-tile-stage`
+  - `gpgpu-actual-work-tile-readback`
+  - `tile-store-only-control`
+  - `tile-load-echo`
   - `t5-small-live4-bf16-dot`
   - `t6-small-live8-bf16-dot`
   - `t6-live8-scale-proof`
@@ -52,5 +56,10 @@ Runtime policy:
   retire cap until T6 has its own boot-log ladder history.
 - Output remains CPU/AP-owned and proof-only; runtime now gives each armed tile
   a distinct arena record and binds the T6 surface to that record base.
-- `T6.1` is reserved for the next generated live-k widening artifact.  The
-  current distinct-output-row step reuses the preserved T6 bytes.
+- The latest actual-work proof has three armed tile records (`rows 0, 256,
+  512`), with all staged, T5, and T6 compares green.  The aggregate marker is
+  `next=t6.1-live-k-tier`.
+- `T6.1` now advances to a generated live16 artifact:
+  `gfx12-t6-1-live16-packed-bf16-dot-hdc1-stateless-store-then-ts-eot`.
+- `T6.2` advances from one-row live16 to row-indexed live16 partial matvec:
+  `gfx12-t6-2-row-indexed-live16-packed-bf16-dot-hdc1-stateless-store-then-ts-eot`.
