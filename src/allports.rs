@@ -41,7 +41,7 @@ pub mod mail {
 
     pub const SMTP_HOST: &str = "smtp.mail.com";
     pub const SMTP_PORT: u16 = well_known::SMTP_SUBMISSION;
-    pub const SMTP_EHLO_DOMAIN: &str = "trueos.local";
+    pub const SMTP_EHLO_DOMAIN: &str = "post.com";
 
     pub const POP3_HOST: &str = "pop.mail.com";
     pub const POP3_PORT: u16 = well_known::POP3_TLS;
