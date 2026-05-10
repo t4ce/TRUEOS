@@ -360,6 +360,22 @@ pub static STATIC_DP4A_HDC1_STATELESS_STORE_THEN_TS_EOT: EuArtifact = EuArtifact
     expects_store: true,
 };
 
+// T4 catalog rung: this intentionally reuses the proven T3 shell until the
+// live activation load/send encoding is filled in.  The artifact kind and name
+// let the boot harness and Lumen sidepath describe the next exact contract
+// without risking the known-good static DP4A proof.
+pub const T4_LIVE_X_STATIC_DP4A_LANES: usize = 4;
+pub const T4_LIVE_X_STATIC_DP4A_WEIGHTS_U8: [u8; T4_LIVE_X_STATIC_DP4A_LANES] = [1, 2, 3, 4];
+pub const T4_LIVE_X_STATIC_DP4A_EXPECTS_GPU_LOAD: bool = true;
+
+pub static T4_LIVE_X_STATIC_DP4A_REQUIREMENT_HDC1_STORE_THEN_TS_EOT: EuArtifact = EuArtifact {
+    name: "gfx12-t4-live-x-static-dp4a-requirement-hdc1-store-then-ts-eot",
+    isa: EuIsa::Gfx12,
+    kind: EuArtifactKind::LiveXStaticDp4aRequirementThenHdc1StoreThenThreadSpawnerEot,
+    words: &STATIC_DP4A_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS,
+    expects_store: true,
+};
+
 #[cfg(feature = "alloc")]
 pub mod builder {
     use alloc::vec::Vec;

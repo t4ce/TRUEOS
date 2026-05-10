@@ -275,7 +275,17 @@ pub fn matvec_rowmajor_bf16(
     log_bf16_dispatch_plan(n_rows, k_dim, chunk_rows, chunks);
     let gpu_shadow =
         crate::lumen::gpu_shadow::observe_bf16_matvec_call(n_rows, k_dim, chunk_rows, chunks);
+    crate::lumen::gpu_shadow::observe_live_bf16_matvec_probe(
+        x,
+        w_rowmajor_bf16,
+        n_rows,
+        k_dim,
+        chunk_rows,
+        chunks,
+        gpu_shadow,
+    );
     let _ = (
+        gpu_shadow.call_index,
         gpu_shadow.candidate,
         gpu_shadow.static_tile_proven,
         gpu_shadow.lane_dispatch_count,

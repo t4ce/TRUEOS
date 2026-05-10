@@ -111,6 +111,17 @@ pub(crate) struct RemoteBf16MatvecResultUpdate {
 }
 
 #[derive(Copy, Clone, Debug)]
+pub(crate) struct Bf16MatrixProbe {
+    pub(crate) matrix_id: u64,
+    pub(crate) name_hash: u64,
+    pub(crate) name_len: u32,
+    pub(crate) rows: u32,
+    pub(crate) k_dim: u32,
+    pub(crate) data_ptr: usize,
+    pub(crate) byte_len: usize,
+}
+
+#[derive(Copy, Clone, Debug)]
 struct LumenMatrixManifestEntry {
     matrix_id: u64,
     name_hash: u64,
@@ -751,6 +762,23 @@ pub(crate) fn set_remote_bf16_route_available(available: bool) {
         crate::allcaps::lumen::ROUTE_BF16_MATVEC_TO_NET_BACKEND && available,
         Ordering::Release,
     );
+}
+
+pub(crate) fn resolve_bf16_matrix_probe(
+    data_ptr: usize,
+    byte_len: usize,
+    rows: usize,
+    k_dim: usize,
+) -> Option<Bf16MatrixProbe> {
+    resolve_bf16_matrix(data_ptr, byte_len, rows, k_dim).map(|entry| Bf16MatrixProbe {
+        matrix_id: entry.matrix_id,
+        name_hash: entry.name_hash,
+        name_len: entry.name_len,
+        rows: entry.rows,
+        k_dim: entry.k_dim,
+        data_ptr: entry.data_ptr,
+        byte_len: entry.byte_len,
+    })
 }
 
 pub(crate) fn backend_telemetry(capacity_lanes: u32) -> LumenNetBackendTelemetry {
