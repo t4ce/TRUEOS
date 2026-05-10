@@ -13,7 +13,6 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 
 pub(crate) mod burn_baba;
 pub(crate) mod burn_baby;
-pub(crate) mod gpu_shadow;
 pub(crate) mod lumen_net;
 pub(crate) mod lumen_service;
 

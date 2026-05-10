@@ -409,10 +409,48 @@ Runtime checkpoint:
 This rung deliberately did not require a fresh offline EU artifact because the
 semantic question was addressability, not arithmetic.  Reusing the proven
 HDC-store/EOT shell and patching only the immediate sentinel plus output GPU
-address kept the new variable small.  The next rung should be a real new
-artifact: one staged-row load, one activation-vector load, one tiny arithmetic
-reduction or checksum/dot surrogate, then one output write, still with a single
-worker and CPU/AP output ownership.
+address kept the new variable small.
+
+## T4.8 One-Worker Output Compare Echo
+
+Status: low-level Intel artifact implemented, but deliberately de-wired from
+the Lumen BF16 runtime path while backend ownership is being cleaned up.
+
+This rung is the first local GPU result that is surfaced upward as comparison
+information rather than a magic addressability sentinel.  It still does not
+claim a live model load.  The kernel is a one-worker copy of the proven static
+DP4A/HDC-store/EOT shell, patched at runtime so the GPU writes the CPU reference
+bits into the staged one-tile output shadow:
+
+- program:
+  `gfx12-t48-one-tile-output-compare-dp4a-echo-hdc1-stateless-store-then-ts-eot`
+- groups: `1`
+- expected lane dispatch: `8`
+- output target: the T4.5/T4.6 `output_gpu`
+- compare source: CPU reference `row0_cpu_expected_bits`
+- output ownership: still `cpu-ap`
+
+Expected clean low-level proof once explicitly exercised:
+
+- `intel/gpgpu: one-tile-output-compare`
+- `submitted=1`
+- `finished=1`
+- `readback_ok=1`
+- `compare_ok=1`
+- `gpu_value=cpu_expected_bits`
+- `reason=compare-written` or `reason=compare-written-no-ts-delta`
+- `output_owner=cpu-ap`
+- `does_not_prove=model_matvec_or_gpu_live_load`
+
+The important interpretation is narrow but useful: the low-level local GPU path
+can emit a comparable output value into the one-tile arena.  It is not currently
+called from the Lumen BF16 path; `burn_baba` remains CPU/AP-director telemetry
+with local GPU dispatch disabled by selector, and network routing remains off.
+
+The next rung after T4.8 remains the real live-load artifact: one staged-row
+load, one activation-vector load, one tiny arithmetic reduction or checksum/dot
+surrogate, then one output write, still with a single worker and CPU/AP output
+ownership.
 
 ## Backend Selection Boundary
 
