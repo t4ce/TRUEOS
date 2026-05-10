@@ -1,0 +1,6 @@
+T1-empty/eot-send1: generated_words=8 embedded_words=8 generated_sha16=bc6a295a7eb2faae embedded_sha16=bc6a295a7eb2faae embedded_match=true preserved_hex_match=true
+T2-hdc-stateless-store: generated_words=20 embedded_words=20 generated_sha16=e9d6ac2b798d999a embedded_sha16=e9d6ac2b798d999a embedded_match=true preserved_hex_match=true
+T3-static-dp4a-store: generated_words=32 embedded_words=32 generated_sha16=becf69960e990477 embedded_sha16=becf69960e990477 embedded_match=true preserved_hex_match=n/a
+T4-live-x-requirement-alias: generated_words=32 embedded_words=32 generated_sha16=becf69960e990477 embedded_sha16=becf69960e990477 embedded_match=true preserved_hex_match=n/a
+T4 alias source check: words=&STATIC_DP4A_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS present=true
+RESULT all_repro_checks=true

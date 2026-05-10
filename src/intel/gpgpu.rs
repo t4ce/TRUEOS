@@ -1346,6 +1346,19 @@ fn gpgpu_t5_one_row_matvec_program() -> GpgpuEuProgram {
     }
 }
 
+fn gpgpu_t5_store_only_control_program() -> GpgpuEuProgram {
+    let artifact = trueos_eu::gfx12::T5_STORE_ONLY_ARENA_OFFSET_HDC1_STORE_THEN_TS_EOT;
+    GpgpuEuProgram {
+        name: artifact.name,
+        kind: artifact.kind,
+        words: artifact.words,
+        expects_store: artifact.expects_store,
+        expected_store_value: trueos_eu::gfx12::T5_STORE_ONLY_ARENA_EXPECTED_RESULT_U32,
+        store_send_dword: Some(trueos_eu::gfx12::T5_STORE_ONLY_ARENA_STORE_SEND_DWORD),
+        visible_seed_dword: Some(trueos_eu::gfx12::T5_STORE_ONLY_ARENA_SENTINEL_DWORD),
+    }
+}
+
 fn gpgpu_store_send_desc_words(program: GpgpuEuProgram) -> (u32, u32) {
     let Some(send_exdesc_dword) = program.store_send_dword else {
         return (0, 0);
@@ -2127,6 +2140,179 @@ pub(crate) fn submit_gpgpu_one_tile_output_compare_probe(
     }
 }
 
+fn submit_gpgpu_t5_store_only_control_probe(
+    dev: crate::intel::Dev,
+    warm: RenderWarmState,
+    output_gpu: u64,
+    output_offset: usize,
+    output_bytes: usize,
+    t5_surface_bytes: usize,
+) {
+    let program = gpgpu_t5_store_only_control_program();
+    let output_virt = unsafe { warm.gpgpu_arena_virt.add(output_offset) };
+    let output_count = output_bytes / core::mem::size_of::<u32>();
+    let output_words_before = unsafe {
+        let words = output_virt as *const u32;
+        [
+            core::ptr::read_volatile(words.add(0)),
+            core::ptr::read_volatile(words.add(1)),
+            core::ptr::read_volatile(words.add(2)),
+            core::ptr::read_volatile(words.add(3)),
+        ]
+    };
+    let program_uploaded =
+        upload_and_verify_gpu_program_at(warm, GPGPU_EU_KERNEL_OFFSET_BYTES, program.words);
+    if !program_uploaded {
+        crate::log!(
+            "intel/gpgpu: t5-store-only-control submitted=0 finished=0 readback_ok=0 store_first_ok=0 payload_ok=0 reason=program-upload program_source={} groups=1 expected_lane_dispatch=8 observed_lane_dispatch=0 output_gpu=0x{:X} output_off=0x{:X} output_words_before=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] output_words_after=[0x00000000,0x00000000,0x00000000,0x00000000] expected_words=[0x{:08X},0x{:08X},0x{:08X},0x00000000] finish_marker=0x00000000 finish_expected=0x{:08X} batch_bytes=0x0 surface_bytes=0x{:X} next=fix-t5-store-control-before-live-load does_not_prove=model_matvec_or_gpu_live_load\n",
+            program.name,
+            output_gpu,
+            output_offset,
+            output_words_before[0],
+            output_words_before[1],
+            output_words_before[2],
+            output_words_before[3],
+            trueos_eu::gfx12::T5_STORE_ONLY_ARENA_EXPECTED_RESULT_U32,
+            trueos_eu::gfx12::T5_ONE_ROW_MATVEC_LIVE_K as u32,
+            trueos_eu::gfx12::T5_SMALL_LIVE4_TRUEOS_ARENA_EXPECTED_SENTINEL_U32,
+            RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+            t5_surface_bytes,
+        );
+        return;
+    }
+
+    unsafe {
+        core::ptr::write_volatile(
+            warm.result_virt
+                .add(RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD * core::mem::size_of::<u32>())
+                as *mut u32,
+            0,
+        );
+        core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
+        core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
+    }
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+
+    let batch_dwords = warm.batch_len / core::mem::size_of::<u32>();
+    let batch =
+        unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, batch_dwords) };
+    let store_surface = prepare_gpgpu_store_surface_state_for_target_span(
+        warm,
+        GPU_VA_GPGPU_TILE_ARENA_BASE,
+        t5_surface_bytes,
+        "bind-send-bti-to-t5-store-only-arena-base",
+    );
+    let batch_result =
+        encode_gfx12_gpgpu_walker_probe_batch(warm, batch, store_surface, program, 1);
+    let batch_bytes = match batch_result {
+        Ok(bytes) => bytes,
+        Err(reason) => {
+            crate::log!(
+                "intel/gpgpu: t5-store-only-control submitted=0 finished=0 readback_ok=0 store_first_ok=0 payload_ok=0 reason={} program_source={} groups=1 expected_lane_dispatch=8 observed_lane_dispatch=0 output_gpu=0x{:X} output_off=0x{:X} output_words_before=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] output_words_after=[0x00000000,0x00000000,0x00000000,0x00000000] expected_words=[0x{:08X},0x{:08X},0x{:08X},0x00000000] finish_marker=0x00000000 finish_expected=0x{:08X} batch_bytes=0x0 surface_bytes=0x{:X} next=fix-t5-store-control-before-live-load does_not_prove=model_matvec_or_gpu_live_load\n",
+                reason,
+                program.name,
+                output_gpu,
+                output_offset,
+                output_words_before[0],
+                output_words_before[1],
+                output_words_before[2],
+                output_words_before[3],
+                trueos_eu::gfx12::T5_STORE_ONLY_ARENA_EXPECTED_RESULT_U32,
+                trueos_eu::gfx12::T5_ONE_ROW_MATVEC_LIVE_K as u32,
+                trueos_eu::gfx12::T5_SMALL_LIVE4_TRUEOS_ARENA_EXPECTED_SENTINEL_U32,
+                RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+                t5_surface_bytes,
+            );
+            return;
+        }
+    };
+    crate::intel::dma_flush(warm.batch_virt, batch_bytes);
+
+    let dispatch_before = read_gpgpu_threads_dispatched(dev);
+    let finished = submit_warm_render_batch(
+        dev,
+        warm,
+        RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD,
+        "gpgpu-t5-store-only-control",
+    );
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+    crate::intel::dma_flush(warm.gpgpu_arena_virt, t5_surface_bytes);
+    let dispatch_after = read_gpgpu_threads_dispatched(dev);
+    let dispatch_delta = dispatch_after.saturating_sub(dispatch_before);
+    let finish_marker = read_result_dword(warm, RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD);
+    let output_words_after = unsafe {
+        let words = output_virt as *const u32;
+        [
+            core::ptr::read_volatile(words.add(0)),
+            core::ptr::read_volatile(words.add(1)),
+            core::ptr::read_volatile(words.add(2)),
+            core::ptr::read_volatile(words.add(3)),
+        ]
+    };
+    let output_hits_lo64 = unsafe {
+        gpgpu_stage_dword_hits_mask_lo64(
+            output_virt as *const u32,
+            output_count,
+            trueos_eu::gfx12::T5_STORE_ONLY_ARENA_EXPECTED_RESULT_U32,
+        )
+    };
+    let store_first_ok = output_words_after[0]
+        == trueos_eu::gfx12::T5_STORE_ONLY_ARENA_EXPECTED_RESULT_U32
+        && (output_hits_lo64 & 1) != 0;
+    let payload_ok = store_first_ok
+        && output_words_after[1] == trueos_eu::gfx12::T5_ONE_ROW_MATVEC_LIVE_K as u32
+        && output_words_after[2]
+            == trueos_eu::gfx12::T5_SMALL_LIVE4_TRUEOS_ARENA_EXPECTED_SENTINEL_U32
+        && output_words_after[3] == 0;
+    let readback_ok =
+        store_first_ok && finished && finish_marker == RCS_EXEC_RESULT_COMPUTE_WALKER_DONE;
+    let submitted = batch_bytes != 0;
+    let reason = if payload_ok && dispatch_delta == 0 {
+        "store-payload-written-no-ts-delta"
+    } else if payload_ok {
+        "store-payload-written"
+    } else if store_first_ok {
+        "store-first-dword-written"
+    } else if !finished {
+        "submit-not-finished"
+    } else {
+        "store-missing"
+    };
+    crate::log!(
+        "intel/gpgpu: t5-store-only-control submitted={} finished={} readback_ok={} store_first_ok={} payload_ok={} reason={} program_source={} groups=1 expected_lane_dispatch=8 observed_lane_dispatch={} output_gpu=0x{:X} output_off=0x{:X} output_words_before=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] output_words_after=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] expected_words=[0x{:08X},0x{:08X},0x{:08X},0x00000000] output_hits_lo64=0x{:016X} finish_marker=0x{:08X} finish_expected=0x{:08X} batch_bytes=0x{:X} surface_bytes=0x{:X} next=run-real-t5-live4-or-fix-store-payload does_not_prove=model_matvec_or_gpu_live_load\n",
+        submitted as u8,
+        finished as u8,
+        readback_ok as u8,
+        store_first_ok as u8,
+        payload_ok as u8,
+        reason,
+        program.name,
+        dispatch_delta,
+        output_gpu,
+        output_offset,
+        output_words_before[0],
+        output_words_before[1],
+        output_words_before[2],
+        output_words_before[3],
+        output_words_after[0],
+        output_words_after[1],
+        output_words_after[2],
+        output_words_after[3],
+        trueos_eu::gfx12::T5_STORE_ONLY_ARENA_EXPECTED_RESULT_U32,
+        trueos_eu::gfx12::T5_ONE_ROW_MATVEC_LIVE_K as u32,
+        trueos_eu::gfx12::T5_SMALL_LIVE4_TRUEOS_ARENA_EXPECTED_SENTINEL_U32,
+        output_hits_lo64,
+        finish_marker,
+        RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        batch_bytes,
+        t5_surface_bytes,
+    );
+    if !finished {
+        recover_render_engine_after_nonretired_submit(dev, warm, "gpgpu-t5-store-only-control");
+    }
+}
+
 pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
     output_gpu: u64,
     output_bytes: usize,
@@ -2198,6 +2384,24 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
             live_k_dim,
         );
     }
+    let Some(t5_surface_bytes) = output_end.checked_add(4095).map(|bytes| bytes & !4095) else {
+        return gpgpu_t5_one_row_matvec_failure(
+            "surface-span-overflow",
+            program,
+            output_gpu,
+            cpu_expected_bits,
+            live_k_dim,
+        );
+    };
+    if t5_surface_bytes > warm.gpgpu_arena_len {
+        return gpgpu_t5_one_row_matvec_failure(
+            "surface-span-outside-arena",
+            program,
+            output_gpu,
+            cpu_expected_bits,
+            live_k_dim,
+        );
+    }
     if output_gpu >> 32 != 0 {
         return gpgpu_t5_one_row_matvec_failure(
             "output-gpu-high32-unsupported",
@@ -2248,7 +2452,124 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
 
     let output_virt = unsafe { warm.gpgpu_arena_virt.add(output_offset) };
     let output_count = output_bytes / core::mem::size_of::<u32>();
-    let output_first_before = unsafe { core::ptr::read_volatile(output_virt as *const u32) };
+    let output_words_before_clear = unsafe {
+        let words = output_virt as *const u32;
+        [
+            core::ptr::read_volatile(words.add(0)),
+            core::ptr::read_volatile(words.add(1)),
+            core::ptr::read_volatile(words.add(2)),
+            core::ptr::read_volatile(words.add(3)),
+        ]
+    };
+    unsafe {
+        let words = output_virt as *mut u32;
+        for index in 0..4 {
+            core::ptr::write_volatile(words.add(index), 0);
+        }
+    }
+    crate::intel::dma_flush(output_virt, 4 * core::mem::size_of::<u32>());
+    let output_words_after_clear = unsafe {
+        let words = output_virt as *const u32;
+        [
+            core::ptr::read_volatile(words.add(0)),
+            core::ptr::read_volatile(words.add(1)),
+            core::ptr::read_volatile(words.add(2)),
+            core::ptr::read_volatile(words.add(3)),
+        ]
+    };
+    let output_first_before = output_words_after_clear[0];
+    crate::log!(
+        "intel/gpgpu: t5-output-window stage=before-submit output_gpu=0x{:X} old=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] cleared=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] surface_bytes=0x{:X} cpu_expected_bits=0x{:08X}\n",
+        output_gpu,
+        output_words_before_clear[0],
+        output_words_before_clear[1],
+        output_words_before_clear[2],
+        output_words_before_clear[3],
+        output_words_after_clear[0],
+        output_words_after_clear[1],
+        output_words_after_clear[2],
+        output_words_after_clear[3],
+        t5_surface_bytes,
+        cpu_expected_bits,
+    );
+    let t5_arena_before = probe_gpgpu_t5_arena_store_window(
+        warm,
+        t5_surface_bytes,
+        output_offset,
+        output_bytes,
+        cpu_expected_bits,
+    );
+    log_gpgpu_t5_arena_store_probe(
+        "before-submit",
+        t5_arena_before,
+        None,
+        output_gpu,
+        cpu_expected_bits,
+    );
+
+    submit_gpgpu_t5_store_only_control_probe(
+        dev,
+        warm,
+        output_gpu,
+        output_offset,
+        output_bytes,
+        t5_surface_bytes,
+    );
+    crate::intel::dma_flush(warm.gpgpu_arena_virt, t5_surface_bytes);
+    let t5_arena_after_store_only = probe_gpgpu_t5_arena_store_window(
+        warm,
+        t5_surface_bytes,
+        output_offset,
+        output_bytes,
+        cpu_expected_bits,
+    );
+    log_gpgpu_t5_arena_store_probe(
+        "after-store-only-control",
+        t5_arena_after_store_only,
+        Some(t5_arena_before),
+        output_gpu,
+        cpu_expected_bits,
+    );
+    unsafe {
+        let words = output_virt as *mut u32;
+        for index in 0..4 {
+            core::ptr::write_volatile(words.add(index), 0);
+        }
+    }
+    crate::intel::dma_flush(output_virt, 4 * core::mem::size_of::<u32>());
+    let output_words_before_live = unsafe {
+        let words = output_virt as *const u32;
+        [
+            core::ptr::read_volatile(words.add(0)),
+            core::ptr::read_volatile(words.add(1)),
+            core::ptr::read_volatile(words.add(2)),
+            core::ptr::read_volatile(words.add(3)),
+        ]
+    };
+    crate::log!(
+        "intel/gpgpu: t5-output-window stage=before-live-submit output_gpu=0x{:X} cleared=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] surface_bytes=0x{:X} cpu_expected_bits=0x{:08X}\n",
+        output_gpu,
+        output_words_before_live[0],
+        output_words_before_live[1],
+        output_words_before_live[2],
+        output_words_before_live[3],
+        t5_surface_bytes,
+        cpu_expected_bits,
+    );
+    let t5_arena_before = probe_gpgpu_t5_arena_store_window(
+        warm,
+        t5_surface_bytes,
+        output_offset,
+        output_bytes,
+        cpu_expected_bits,
+    );
+    log_gpgpu_t5_arena_store_probe(
+        "before-live-submit",
+        t5_arena_before,
+        Some(t5_arena_after_store_only),
+        output_gpu,
+        cpu_expected_bits,
+    );
 
     let program_uploaded =
         upload_and_verify_gpu_program_at(warm, GPGPU_EU_KERNEL_OFFSET_BYTES, program.words);
@@ -2277,9 +2598,10 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
     let batch_dwords = warm.batch_len / core::mem::size_of::<u32>();
     let batch =
         unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, batch_dwords) };
-    let store_surface = prepare_gpgpu_store_surface_state_for_target(
+    let store_surface = prepare_gpgpu_store_surface_state_for_target_span(
         warm,
         GPU_VA_GPGPU_TILE_ARENA_BASE,
+        t5_surface_bytes,
         "bind-send-bti-to-t5-trueos-arena-base",
     );
     let batch_result =
@@ -2307,14 +2629,48 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
         "gpgpu-t5-small-live4",
     );
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
-    crate::intel::dma_flush(output_virt, output_bytes);
+    crate::intel::dma_flush(warm.gpgpu_arena_virt, t5_arena_before.scan_bytes);
     let dispatch_after = read_gpgpu_threads_dispatched(dev);
     let dispatch_delta = dispatch_after.saturating_sub(dispatch_before);
     let finish_marker = read_result_dword(warm, RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD);
-    let output_first_after = unsafe { core::ptr::read_volatile(output_virt as *const u32) };
+    let output_words_after = unsafe {
+        let words = output_virt as *const u32;
+        [
+            core::ptr::read_volatile(words.add(0)),
+            core::ptr::read_volatile(words.add(1)),
+            core::ptr::read_volatile(words.add(2)),
+            core::ptr::read_volatile(words.add(3)),
+        ]
+    };
+    let output_first_after = output_words_after[0];
     let output_hits_lo64 = unsafe {
         gpgpu_stage_dword_hits_mask_lo64(output_virt as *const u32, output_count, cpu_expected_bits)
     };
+    crate::log!(
+        "intel/gpgpu: t5-output-window stage=after-submit output_gpu=0x{:X} words=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] expected_bits=0x{:08X} expected_meta=[0x00000004,0x{:08X},0x00000000] finish_marker=0x{:08X}\n",
+        output_gpu,
+        output_words_after[0],
+        output_words_after[1],
+        output_words_after[2],
+        output_words_after[3],
+        cpu_expected_bits,
+        trueos_eu::gfx12::T5_SMALL_LIVE4_TRUEOS_ARENA_EXPECTED_SENTINEL_U32,
+        finish_marker,
+    );
+    let t5_arena_after = probe_gpgpu_t5_arena_store_window(
+        warm,
+        t5_surface_bytes,
+        output_offset,
+        output_bytes,
+        cpu_expected_bits,
+    );
+    log_gpgpu_t5_arena_store_probe(
+        "after-submit",
+        t5_arena_after,
+        Some(t5_arena_before),
+        output_gpu,
+        cpu_expected_bits,
+    );
     let compare_ok = output_first_after == cpu_expected_bits && (output_hits_lo64 & 1) != 0;
     let readback_ok =
         compare_ok && finished && finish_marker == RCS_EXEC_RESULT_COMPUTE_WALKER_DONE;
@@ -2523,6 +2879,226 @@ fn log_gpgpu_one_tile_stage_failure(
         cpu_expected_bits,
     );
     proof
+}
+
+#[derive(Copy, Clone)]
+struct GpgpuT5ArenaRangeProbe {
+    nonzero_dwords: usize,
+    digest: u64,
+}
+
+#[derive(Copy, Clone)]
+struct GpgpuT5ArenaMarkerProbe {
+    hits: usize,
+    misplaced_hits: usize,
+    first_valid: bool,
+    first_off: usize,
+    first_misplaced_valid: bool,
+    first_misplaced_off: usize,
+}
+
+#[derive(Copy, Clone)]
+struct GpgpuT5ArenaStoreProbe {
+    scan_bytes: usize,
+    output_offset: usize,
+    output_record_bytes: usize,
+    scan: GpgpuT5ArenaRangeProbe,
+    x: GpgpuT5ArenaRangeProbe,
+    row0: GpgpuT5ArenaRangeProbe,
+    output: GpgpuT5ArenaRangeProbe,
+    expected: GpgpuT5ArenaMarkerProbe,
+    meta_k: GpgpuT5ArenaMarkerProbe,
+    sentinel: GpgpuT5ArenaMarkerProbe,
+}
+
+fn empty_gpgpu_t5_arena_range_probe() -> GpgpuT5ArenaRangeProbe {
+    GpgpuT5ArenaRangeProbe {
+        nonzero_dwords: 0,
+        digest: 0xCBF2_9CE4_8422_2325,
+    }
+}
+
+fn empty_gpgpu_t5_arena_marker_probe() -> GpgpuT5ArenaMarkerProbe {
+    GpgpuT5ArenaMarkerProbe {
+        hits: 0,
+        misplaced_hits: 0,
+        first_valid: false,
+        first_off: 0,
+        first_misplaced_valid: false,
+        first_misplaced_off: 0,
+    }
+}
+
+fn gpgpu_t5_arena_range_step(range: &mut GpgpuT5ArenaRangeProbe, value: u32) {
+    if value != 0 {
+        range.nonzero_dwords += 1;
+    }
+    range.digest ^= value as u64;
+    range.digest = range.digest.wrapping_mul(0x0000_0100_0000_01B3);
+}
+
+fn gpgpu_t5_arena_marker_step(
+    marker: &mut GpgpuT5ArenaMarkerProbe,
+    offset: usize,
+    misplaced: bool,
+) {
+    marker.hits += 1;
+    if !marker.first_valid {
+        marker.first_valid = true;
+        marker.first_off = offset;
+    }
+    if misplaced {
+        marker.misplaced_hits += 1;
+        if !marker.first_misplaced_valid {
+            marker.first_misplaced_valid = true;
+            marker.first_misplaced_off = offset;
+        }
+    }
+}
+
+fn probe_gpgpu_t5_arena_store_window(
+    warm: RenderWarmState,
+    scan_bytes: usize,
+    output_offset: usize,
+    output_bytes: usize,
+    cpu_expected_bits: u32,
+) -> GpgpuT5ArenaStoreProbe {
+    let scan_bytes = scan_bytes.min(warm.gpgpu_arena_len) & !3usize;
+    let output_record_bytes = output_bytes.min(4 * core::mem::size_of::<u32>());
+    let output_record_end = output_offset.saturating_add(output_record_bytes);
+    let output_end = output_offset.saturating_add(output_bytes).min(scan_bytes);
+    let x_end = GPGPU_X_VECTOR_BYTES.min(scan_bytes);
+    let row0_end = GPGPU_X_VECTOR_BYTES
+        .saturating_add(GPGPU_WEIGHT_TILE_BYTES)
+        .min(scan_bytes);
+    let mut probe = GpgpuT5ArenaStoreProbe {
+        scan_bytes,
+        output_offset,
+        output_record_bytes,
+        scan: empty_gpgpu_t5_arena_range_probe(),
+        x: empty_gpgpu_t5_arena_range_probe(),
+        row0: empty_gpgpu_t5_arena_range_probe(),
+        output: empty_gpgpu_t5_arena_range_probe(),
+        expected: empty_gpgpu_t5_arena_marker_probe(),
+        meta_k: empty_gpgpu_t5_arena_marker_probe(),
+        sentinel: empty_gpgpu_t5_arena_marker_probe(),
+    };
+    let words = warm.gpgpu_arena_virt as *const u32;
+    let scan_dwords = scan_bytes / core::mem::size_of::<u32>();
+    for index in 0..scan_dwords {
+        let offset = index * core::mem::size_of::<u32>();
+        let value = unsafe { core::ptr::read_volatile(words.add(index)) };
+        let outside_output_record = offset < output_offset || offset >= output_record_end;
+        gpgpu_t5_arena_range_step(&mut probe.scan, value);
+        if offset < x_end {
+            gpgpu_t5_arena_range_step(&mut probe.x, value);
+        } else if offset < row0_end {
+            gpgpu_t5_arena_range_step(&mut probe.row0, value);
+        }
+        if offset >= output_offset && offset < output_end {
+            gpgpu_t5_arena_range_step(&mut probe.output, value);
+        }
+        if value == cpu_expected_bits {
+            gpgpu_t5_arena_marker_step(&mut probe.expected, offset, outside_output_record);
+        }
+        if value == trueos_eu::gfx12::T5_ONE_ROW_MATVEC_LIVE_K as u32 {
+            gpgpu_t5_arena_marker_step(&mut probe.meta_k, offset, outside_output_record);
+        }
+        if value == trueos_eu::gfx12::T5_SMALL_LIVE4_TRUEOS_ARENA_EXPECTED_SENTINEL_U32 {
+            gpgpu_t5_arena_marker_step(&mut probe.sentinel, offset, outside_output_record);
+        }
+    }
+    probe
+}
+
+fn gpgpu_t5_probe_gpu_addr(valid: bool, offset: usize) -> u64 {
+    if valid {
+        GPU_VA_GPGPU_TILE_ARENA_BASE + offset as u64
+    } else {
+        0
+    }
+}
+
+fn log_gpgpu_t5_arena_store_probe(
+    stage: &'static str,
+    probe: GpgpuT5ArenaStoreProbe,
+    before: Option<GpgpuT5ArenaStoreProbe>,
+    output_gpu: u64,
+    cpu_expected_bits: u32,
+) {
+    let scan_digest_changed = before
+        .map(|before| before.scan.digest != probe.scan.digest)
+        .unwrap_or(false);
+    let scan_nonzero_changed = before
+        .map(|before| before.scan.nonzero_dwords != probe.scan.nonzero_dwords)
+        .unwrap_or(false);
+    let x_digest_changed = before
+        .map(|before| before.x.digest != probe.x.digest)
+        .unwrap_or(false);
+    let row0_digest_changed = before
+        .map(|before| before.row0.digest != probe.row0.digest)
+        .unwrap_or(false);
+    let output_digest_changed = before
+        .map(|before| before.output.digest != probe.output.digest)
+        .unwrap_or(false);
+    crate::log!(
+        "intel/gpgpu: t5-arena-misplaced-store-probe stage={} scan_gpu=0x{:X} scan_bytes=0x{:X} output_off=0x{:X} output_gpu=0x{:X} output_record_bytes=0x{:X} scan_nonzero={} scan_digest=0x{:016X} scan_nonzero_changed={} scan_digest_changed={} x_nonzero={} x_digest=0x{:016X} x_digest_changed={} row0_nonzero={} row0_digest=0x{:016X} row0_digest_changed={} output_nonzero={} output_digest=0x{:016X} output_digest_changed={} cpu_expected_bits=0x{:08X} expected_hits={} expected_misplaced_hits={} expected_hit0_valid={} expected_hit0_off=0x{:X} expected_hit0_gpu=0x{:X} expected_misplaced0_valid={} expected_misplaced0_off=0x{:X} expected_misplaced0_gpu=0x{:X} meta_k=0x{:08X} meta_k_hits={} meta_k_misplaced_hits={} meta_k_hit0_valid={} meta_k_hit0_off=0x{:X} meta_k_hit0_gpu=0x{:X} meta_k_misplaced0_valid={} meta_k_misplaced0_off=0x{:X} meta_k_misplaced0_gpu=0x{:X} sentinel=0x{:08X} sentinel_hits={} sentinel_misplaced_hits={} sentinel_hit0_valid={} sentinel_hit0_off=0x{:X} sentinel_hit0_gpu=0x{:X} sentinel_misplaced0_valid={} sentinel_misplaced0_off=0x{:X} sentinel_misplaced0_gpu=0x{:X} note=scans-t5-arena-prefix-not-full-dump\n",
+        stage,
+        GPU_VA_GPGPU_TILE_ARENA_BASE,
+        probe.scan_bytes,
+        probe.output_offset,
+        output_gpu,
+        probe.output_record_bytes,
+        probe.scan.nonzero_dwords,
+        probe.scan.digest,
+        scan_nonzero_changed as u8,
+        scan_digest_changed as u8,
+        probe.x.nonzero_dwords,
+        probe.x.digest,
+        x_digest_changed as u8,
+        probe.row0.nonzero_dwords,
+        probe.row0.digest,
+        row0_digest_changed as u8,
+        probe.output.nonzero_dwords,
+        probe.output.digest,
+        output_digest_changed as u8,
+        cpu_expected_bits,
+        probe.expected.hits,
+        probe.expected.misplaced_hits,
+        probe.expected.first_valid as u8,
+        probe.expected.first_off,
+        gpgpu_t5_probe_gpu_addr(probe.expected.first_valid, probe.expected.first_off),
+        probe.expected.first_misplaced_valid as u8,
+        probe.expected.first_misplaced_off,
+        gpgpu_t5_probe_gpu_addr(
+            probe.expected.first_misplaced_valid,
+            probe.expected.first_misplaced_off,
+        ),
+        trueos_eu::gfx12::T5_ONE_ROW_MATVEC_LIVE_K as u32,
+        probe.meta_k.hits,
+        probe.meta_k.misplaced_hits,
+        probe.meta_k.first_valid as u8,
+        probe.meta_k.first_off,
+        gpgpu_t5_probe_gpu_addr(probe.meta_k.first_valid, probe.meta_k.first_off),
+        probe.meta_k.first_misplaced_valid as u8,
+        probe.meta_k.first_misplaced_off,
+        gpgpu_t5_probe_gpu_addr(
+            probe.meta_k.first_misplaced_valid,
+            probe.meta_k.first_misplaced_off,
+        ),
+        trueos_eu::gfx12::T5_SMALL_LIVE4_TRUEOS_ARENA_EXPECTED_SENTINEL_U32,
+        probe.sentinel.hits,
+        probe.sentinel.misplaced_hits,
+        probe.sentinel.first_valid as u8,
+        probe.sentinel.first_off,
+        gpgpu_t5_probe_gpu_addr(probe.sentinel.first_valid, probe.sentinel.first_off),
+        probe.sentinel.first_misplaced_valid as u8,
+        probe.sentinel.first_misplaced_off,
+        gpgpu_t5_probe_gpu_addr(
+            probe.sentinel.first_misplaced_valid,
+            probe.sentinel.first_misplaced_off,
+        ),
+    );
 }
 
 unsafe fn gpgpu_stage_checksum_bytes(ptr: *const u8, len: usize) -> u64 {
@@ -2781,6 +3357,8 @@ struct GpgpuStoreSurfaceState {
     surface_gpu: u64,
     target_gpu: u64,
     surface_dword0: u32,
+    surface_dword2: u32,
+    surface_dword3: u32,
     binding_entry: u32,
 }
 
@@ -3125,6 +3703,20 @@ fn prepare_gpgpu_store_surface_state_for_target(
     target_gpu: u64,
     note: &'static str,
 ) -> GpgpuStoreSurfaceState {
+    prepare_gpgpu_store_surface_state_for_target_span(
+        warm,
+        target_gpu,
+        core::mem::size_of::<u32>(),
+        note,
+    )
+}
+
+fn prepare_gpgpu_store_surface_state_for_target_span(
+    warm: RenderWarmState,
+    target_gpu: u64,
+    target_bytes: usize,
+    note: &'static str,
+) -> GpgpuStoreSurfaceState {
     let binding_table_bytes = GPGPU_STORE_BINDING_TABLE_ENTRIES * core::mem::size_of::<u32>();
     let surface_bytes = GPGPU_STORE_SURFACE_DWORDS * core::mem::size_of::<u32>();
     let binding_end = GPGPU_STORE_BINDING_TABLE_OFFSET_BYTES.saturating_add(binding_table_bytes);
@@ -3152,12 +3744,18 @@ fn prepare_gpgpu_store_surface_state_for_target(
             surface_gpu: GPU_VA_DRAW_STATE_BASE + GPGPU_STORE_SURFACE_STATE_OFFSET_BYTES as u64,
             target_gpu,
             surface_dword0: 0,
+            surface_dword2: 0,
+            surface_dword3: 0,
             binding_entry: 0,
         };
     }
 
     let binding_entry = GPGPU_STORE_SURFACE_STATE_OFFSET_BYTES as u32;
     let surface_dword0 = (SURFTYPE_BUFFER << 29) | (SURFACE_FORMAT_RAW << 18);
+    let surface_span_bytes = target_bytes.max(1);
+    let surface_extent = surface_span_bytes.saturating_sub(1);
+    let surface_dword2 = u32::try_from(surface_extent).unwrap_or(u32::MAX);
+    let surface_dword3 = 0;
     unsafe {
         let binding_table = warm
             .draw_state_virt
@@ -3174,8 +3772,8 @@ fn prepare_gpgpu_store_surface_state_for_target(
         }
         core::ptr::write_volatile(surface.add(0), surface_dword0);
         core::ptr::write_volatile(surface.add(1), RENDER_MOCS << 24);
-        core::ptr::write_volatile(surface.add(2), 3);
-        core::ptr::write_volatile(surface.add(3), 0);
+        core::ptr::write_volatile(surface.add(2), surface_dword2);
+        core::ptr::write_volatile(surface.add(3), surface_dword3);
         core::ptr::write_volatile(surface.add(8), target_gpu as u32);
         core::ptr::write_volatile(surface.add(9), (target_gpu >> 32) as u32);
     }
@@ -3194,7 +3792,7 @@ fn prepare_gpgpu_store_surface_state_for_target(
         surface_bytes,
     );
     crate::log!(
-        "intel/gpgpu: gpu-program-surface-state ready=1 bti=0x{:02X} bt_off=0x{:X} bt_entries={} bt_entry=0x{:08X} surf_off=0x{:X} surf_gpu=0x{:X} target_gpu=0x{:X} surf0=0x{:08X} surf1=0x{:08X} surf2=0x{:08X} surf3=0x{:08X} note={}\n",
+        "intel/gpgpu: gpu-program-surface-state ready=1 bti=0x{:02X} bt_off=0x{:X} bt_entries={} bt_entry=0x{:08X} surf_off=0x{:X} surf_gpu=0x{:X} target_gpu=0x{:X} target_bytes=0x{:X} surf0=0x{:08X} surf1=0x{:08X} surf2=0x{:08X} surf3=0x{:08X} note={}\n",
         GPGPU_STORE_BINDING_TABLE_INDEX,
         GPGPU_STORE_BINDING_TABLE_OFFSET_BYTES,
         GPGPU_STORE_BINDING_TABLE_ENTRIES,
@@ -3202,10 +3800,11 @@ fn prepare_gpgpu_store_surface_state_for_target(
         GPGPU_STORE_SURFACE_STATE_OFFSET_BYTES,
         GPU_VA_DRAW_STATE_BASE + GPGPU_STORE_SURFACE_STATE_OFFSET_BYTES as u64,
         target_gpu,
+        surface_span_bytes,
         surface_dword0,
         RENDER_MOCS << 24,
-        3,
-        0,
+        surface_dword2,
+        surface_dword3,
         note,
     );
 
@@ -3217,6 +3816,8 @@ fn prepare_gpgpu_store_surface_state_for_target(
         surface_gpu: GPU_VA_DRAW_STATE_BASE + GPGPU_STORE_SURFACE_STATE_OFFSET_BYTES as u64,
         target_gpu,
         surface_dword0,
+        surface_dword2,
+        surface_dword3,
         binding_entry,
     }
 }
@@ -3231,6 +3832,8 @@ fn disabled_gpgpu_store_surface_state() -> GpgpuStoreSurfaceState {
         target_gpu: GPU_VA_RESULT_BASE
             + (RESULT_SLOT_GPGPU_EU_C_STORE_DWORD as u64) * core::mem::size_of::<u32>() as u64,
         surface_dword0: 0,
+        surface_dword2: 0,
+        surface_dword3: 0,
         binding_entry: 0,
     }
 }

@@ -387,6 +387,69 @@ pub const T5_ONE_ROW_MATVEC_REQUIRES_LIVE_GPU_LOAD: bool = true;
 pub const T5_SMALL_LIVE4_TRUEOS_ARENA_EXPECTED_SENTINEL_U32: u32 = 0xC0DE_7505;
 pub const T5_SMALL_LIVE4_TRUEOS_ARENA_STORE_SEND_DWORD: usize = 73;
 pub const T5_SMALL_LIVE4_TRUEOS_ARENA_SENTINEL_DWORD: usize = 19;
+pub const T5_STORE_ONLY_ARENA_PROGRAM_NAME: &str =
+    "gfx12-t5-store-only-arena-offset-hdc1-store-then-ts-eot";
+pub const T5_STORE_ONLY_ARENA_EXPECTED_RESULT_U32: u32 = 0xC0DE_7506;
+pub const T5_STORE_ONLY_ARENA_STORE_SEND_DWORD: usize = 31;
+pub const T5_STORE_ONLY_ARENA_SENTINEL_DWORD: usize = 19;
+
+// T5 diagnostic control: preserve the T5 arena payload shape and final HDC1
+// send, but remove live loads and math.  It should write:
+// output[0] = 0xC0DE7506, output[1] = 4, output[2] = 0xC0DE7505,
+// output[3] = 0.  If this retires without changing output, the problem is in
+// the T5 store/payload/surface contract rather than BF16 load or reduction.
+pub static T5_STORE_ONLY_ARENA_OFFSET_HDC1_STORE_THEN_TS_EOT_WORDS: [u32; 42] = [
+    0x80030061,
+    0x0A050220,
+    0x00000024,
+    0x00000000,
+    0x80030061,
+    0x0B054220,
+    0x00000000,
+    0x00000000,
+    0x80030061,
+    0x0C054220,
+    0x00000000,
+    0x00000000,
+    0x80030061,
+    0x0F054220,
+    0x00000000,
+    T5_ONE_ROW_MATVEC_LIVE_K as u32,
+    0x80030061,
+    0x10054220,
+    0x00000000,
+    T5_SMALL_LIVE4_TRUEOS_ARENA_EXPECTED_SENTINEL_U32,
+    0x00030061,
+    0x0D054660,
+    0x00000000,
+    0x00102000,
+    0x80030061,
+    0x0E054220,
+    0x00000000,
+    T5_STORE_ONLY_ARENA_EXPECTED_RESULT_U32,
+    0x00034231,
+    0x00000000,
+    0xC0020D0C,
+    0x00980E24,
+    0x80030061,
+    0x7F050220,
+    0x00460005,
+    0x00000000,
+    0x80030131,
+    0x00000004,
+    0x70007F0C,
+    0x00000000,
+    0x20000060,
+    0x00000000,
+];
+
+pub static T5_STORE_ONLY_ARENA_OFFSET_HDC1_STORE_THEN_TS_EOT: EuArtifact = EuArtifact {
+    name: T5_STORE_ONLY_ARENA_PROGRAM_NAME,
+    isa: EuIsa::Gfx12,
+    kind: EuArtifactKind::T5StoreOnlyArenaOffsetThenHdc1StoreThenThreadSpawnerEot,
+    words: &T5_STORE_ONLY_ARENA_OFFSET_HDC1_STORE_THEN_TS_EOT_WORDS,
+    expects_store: true,
+};
 
 // Mesa ANV oracle artifact from `.codex_tmp/t5_small_live4_trueos_arena.comp`.
 //
