@@ -313,7 +313,7 @@ impl IntelGfxBackend {
                 mark_present_completed(self.present_seq);
                 self.rotate_screen_present_buffers();
                 if self.present_seq <= 8 || self.present_seq.is_multiple_of(120) {
-                    crate::log!(
+                    crate::log_trace!(
                         "intel/gfx-backend: present seq={} mode=plane-rebind-backbuffer size={}x{} gpu=0x{:X}\n",
                         self.present_seq,
                         copy_w,
@@ -333,7 +333,7 @@ impl IntelGfxBackend {
                 self.rcs_present_failures = 0;
                 mark_present_completed(self.present_seq);
                 if self.present_seq <= 8 || self.present_seq.is_multiple_of(120) {
-                    crate::log!(
+                    crate::log_trace!(
                         "intel/gfx-backend: present seq={} mode=rcs-execlist-store size={}x{}\n",
                         self.present_seq,
                         copy_w,
@@ -347,7 +347,7 @@ impl IntelGfxBackend {
             self.rcs_retry_after_present_seq = self
                 .present_seq
                 .saturating_add(RCS_PRESENT_RETRY_COOLDOWN_PRESENTS);
-            crate::log!(
+            crate::log_trace!(
                 "intel/gfx-backend: present seq={} rcs-present-failed failures={} cooldown_until_seq={} size={}x{}\n",
                 self.present_seq,
                 self.rcs_present_failures,
@@ -361,7 +361,7 @@ impl IntelGfxBackend {
             let guc_status = crate::intel::warm_state()
                 .map(crate::intel::guc_status)
                 .unwrap_or(0);
-            crate::log!(
+            crate::log_trace!(
                 "intel/gfx-backend: present seq={} waiting-for-guc status=0x{:08X} size={}x{}\n",
                 self.present_seq,
                 guc_status,
@@ -375,7 +375,7 @@ impl IntelGfxBackend {
             mark_present_completed(self.present_seq);
         }
         if fallback.is_ok() && (self.present_seq <= 8 || self.present_seq.is_multiple_of(120)) {
-            crate::log!(
+            crate::log_trace!(
                 "intel/gfx-backend: present seq={} fallback=cpu-scanout guc_ready={} rcs_retry_ready={} size={}x{}\n",
                 self.present_seq,
                 guc_ready as u8,
@@ -414,7 +414,7 @@ impl IntelGfxBackend {
             {
                 mark_present_completed(self.present_seq);
                 if self.present_seq <= 8 || self.present_seq.is_multiple_of(120) {
-                    crate::log!(
+                    crate::log_trace!(
                         "intel/gfx-backend: present seq={} complete_seq={} mode=plane-rebind-image-target-fixed-surface size={}x{} src_gpu=0x{:X} gpu=0x{:X}\n",
                         self.present_seq,
                         present_completed_seq(),
@@ -490,7 +490,7 @@ impl IntelGfxBackend {
                 }
             }
             if self.submit_seq <= 8 || self.submit_seq.is_multiple_of(120) {
-                crate::log!(
+                crate::log_trace!(
                     "intel/gfx-backend: draw-rgb mode=rcs-store triangles={} size={}x{} gpu=0x{:X}\n",
                     verts.len() / (3 * trueos_gfx_core::RGB_VERTEX_SIZE),
                     target_w,
@@ -581,7 +581,7 @@ impl IntelGfxBackend {
         {
             self.screen_rgba_gpu_dirty = true;
             if self.submit_seq <= 8 || self.submit_seq.is_multiple_of(120) {
-                crate::log!(
+                crate::log_trace!(
                     "intel/gfx-backend: draw-tex mode=rcs-store triangles={} size={}x{} gpu=0x{:X}\n",
                     verts.len() / (3 * trueos_gfx_core::TEX_VERTEX_SIZE),
                     self.swapchain_desc.extent.width,
@@ -701,7 +701,7 @@ impl GfxDevice for IntelGfxBackend {
             || desc.height > MAX_BACKEND_IMAGE_DIM
             || len > MAX_BACKEND_IMAGE_BYTES
         {
-            crate::log!(
+            crate::log_trace!(
                 "intel/gfx-backend: reject image create size={}x{} bytes={} format={:?}\n",
                 desc.width,
                 desc.height,
@@ -859,7 +859,7 @@ impl GfxDevice for IntelGfxBackend {
                             }
                         }
                         if self.submit_seq <= 8 || self.submit_seq.is_multiple_of(120) {
-                            crate::log!(
+                            crate::log_trace!(
                                 "intel/gfx-backend: clear mode=rcs-store size={}x{} rgb=0x{:06X} gpu=0x{:X}\n",
                                 target_w,
                                 target_h,
@@ -993,7 +993,7 @@ impl GfxDevice for IntelGfxBackend {
 
         self.submit_seq = self.submit_seq.wrapping_add(1);
         if self.submit_seq <= 8 || self.submit_seq.is_multiple_of(120) || unsupported != 0 {
-            crate::log!(
+            crate::log_trace!(
                 "intel/gfx-backend: submit seq={} cmds={} unsupported={} target={}\n",
                 self.submit_seq,
                 cmds.commands.len(),

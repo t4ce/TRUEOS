@@ -87,7 +87,7 @@ fn on_cdc_attach(evt: CdcAttachEvent) {
         TRUEKEY_SLOT.store(evt.slot_id, Ordering::Release);
         TRUEKEY_CONTROLLER.store(evt.controller_id as u32, Ordering::Release);
         SERIAL_SENT_FOR_SLOT.store(0, Ordering::Release);
-        crate::log!(
+        crate::log_trace!(
             "truekey: bound to cdc slot={} vid=0x{:04X} pid=0x{:04X}\n",
             evt.slot_id,
             evt.vid,
@@ -95,7 +95,7 @@ fn on_cdc_attach(evt: CdcAttachEvent) {
         );
 
         if let Some(bound_slot) = slot_id() {
-            crate::log!("truekey: slot{}\n", bound_slot);
+            crate::log_trace!("truekey: slot{}\n", bound_slot);
         }
     }
 }
@@ -107,7 +107,7 @@ fn on_cdc_detach(evt: CdcAttachEvent) {
         TRUEKEY_SLOT.store(0, Ordering::Release);
         TRUEKEY_CONTROLLER.store(0, Ordering::Release);
         SERIAL_SENT_FOR_SLOT.store(0, Ordering::Release);
-        crate::log!(
+        crate::log_trace!(
             "truekey: unbound (cdc disconnected) slot={} vid=0x{:04X} pid=0x{:04X}\n",
             evt.slot_id,
             evt.vid,

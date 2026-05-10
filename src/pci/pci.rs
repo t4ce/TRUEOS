@@ -132,7 +132,7 @@ fn init_ecam_once() {
         };
 
         let Some(mcfg) = tables.find_table::<acpi::sdt::mcfg::Mcfg>() else {
-            crate::log!("pci: MCFG missing; using legacy cfg\n");
+            crate::log_trace!("pci: MCFG missing; using legacy cfg\n");
             return None;
         };
 
@@ -145,7 +145,7 @@ fn init_ecam_once() {
                 phys_base: entry.base_address,
             };
             if regions.push(region).is_err() {
-                crate::log!("pci: MCFG has too many regions; truncating\n");
+                crate::log_trace!("pci: MCFG has too many regions; truncating\n");
                 break;
             }
         }
@@ -157,10 +157,10 @@ fn init_ecam_once() {
             }
         }
         if crate::logflag::BOOT_INFO_LOGS {
-            crate::log!("pci: MCFG present (regions={}, seg0={})\n", regions.len(), seg0_count);
+            crate::log_trace!("pci: MCFG present (regions={}, seg0={})\n", regions.len(), seg0_count);
             for r in regions.iter() {
                 if r.segment == 0 {
-                    crate::log!(
+                    crate::log_trace!(
                         "pci: ECAM seg0 base=0x{:X} bus={}-{}\n",
                         r.phys_base,
                         r.bus_start,
@@ -268,7 +268,7 @@ pub fn enumerate_impl() {
                 })
                 .is_err()
             {
-                crate::log!("pci device list full (>{})\n", MAX_PCI_DEVICES);
+                crate::log_trace!("pci device list full (>{})\n", MAX_PCI_DEVICES);
                 break;
             }
 
@@ -297,7 +297,7 @@ pub fn enumerate_impl() {
                     })
                     .is_err()
                 {
-                    crate::log!("pci device list full (>{})\n", MAX_PCI_DEVICES);
+                    crate::log_trace!("pci device list full (>{})\n", MAX_PCI_DEVICES);
                     break;
                 }
             }

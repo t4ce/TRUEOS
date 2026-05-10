@@ -727,7 +727,7 @@ impl block::BlockDevice for UsbMassBlockDevice {
                     let mut last_log_ms = start_ms;
                     let mut last_log_bytes = 0usize;
                     if trace {
-                        crate::log!(
+                        crate::log_trace!(
                             "crabusb: mass {:04X}:{:04X} read start profile={:?} lba={} blocks={} bytes={} bs={} max_xfer={}\n",
                             rt.vendor_id,
                             rt.product_id,
@@ -750,7 +750,7 @@ impl block::BlockDevice for UsbMassBlockDevice {
                         )
                         .await?;
                         if trace {
-                            crate::log!(
+                            crate::log_trace!(
                                 "crabusb: mass {:04X}:{:04X} read done profile={:?} lba={} blocks={} bytes={} elapsed_ms={}\n",
                                 rt.vendor_id,
                                 rt.product_id,
@@ -934,7 +934,7 @@ impl block::BlockDevice for UsbMassBlockDevice {
                                 || done_bytes.saturating_sub(last_log_bytes) >= 512 * 1024
                                 || now_ms.saturating_sub(last_log_ms) >= 1000
                             {
-                                crate::log!(
+                                crate::log_trace!(
                                     "crabusb: mass {:04X}:{:04X} read progress profile={:?} lba={} done={} total={} cur_lba={} elapsed_ms={}\n",
                                     rt.vendor_id,
                                     rt.product_id,
@@ -952,7 +952,7 @@ impl block::BlockDevice for UsbMassBlockDevice {
                     }
 
                     if trace {
-                        crate::log!(
+                        crate::log_trace!(
                             "crabusb: mass {:04X}:{:04X} read done profile={:?} lba={} blocks={} bytes={} elapsed_ms={}\n",
                             rt.vendor_id,
                             rt.product_id,

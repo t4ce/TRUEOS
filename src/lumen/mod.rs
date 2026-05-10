@@ -127,7 +127,7 @@ fn pop_lumen_prompt(session_id: u64) -> Option<LumenPromptRequest> {
         .iter_mut()
         .find(|session| session.id == session_id)?;
     let request = session.prompts.pop_front()?;
-    crate::log!(
+    crate::log_trace!(
         "lumen: prompt dequeue session={} remaining={} bytes={}\n",
         session_id,
         session.prompts.len(),
@@ -148,7 +148,7 @@ pub(crate) fn push_lumen_chat_prompt(
     let queued = {
         let mut sessions = LUMEN_INTERACTIVE_SESSIONS.lock();
         let Some(session) = sessions.iter_mut().find(|session| session.id == session_id) else {
-            crate::log!("lumen: chat prompt enqueue missed session={}\n", session_id);
+            crate::log_trace!("lumen: chat prompt enqueue missed session={}\n", session_id);
             return false;
         };
         session.prompts.push_back(LumenPromptRequest {
@@ -157,7 +157,7 @@ pub(crate) fn push_lumen_chat_prompt(
         });
         session.prompts.len()
     };
-    crate::log!(
+    crate::log_trace!(
         "lumen: prompt enqueue session={} queued={} bytes={}\n",
         session_id,
         queued,
@@ -689,7 +689,7 @@ fn generate_lumen_answer(
         .saturating_add(8);
     if state.cache_len() != 0 && projected_len >= LUMEN_RUNTIME_MAX_SEQ_LEN {
         let old_cache_len = state.cache_len();
-        crate::log!(
+        crate::log_trace!(
             "lumen: context full; resetting conversation cache_len={} remembered_tokens={} new_prompt_tokens={} max_new_tokens={} max_seq_len={} action=new-conversation\n",
             old_cache_len,
             state.all_tokens.len(),
@@ -733,7 +733,7 @@ fn generate_lumen_answer(
     let generate_start = embassy_time_driver::now();
     let prefill_start_len = state.cache_len();
     state.all_tokens.extend_from_slice(&prompt_tokens);
-    crate::log!(
+    crate::log_trace!(
         "lumen: generation start prompt_tokens={} context_tokens={} max_new_tokens={} max_seq_len={} prefill_mode=incremental-decode-ap note=first-token-is-prompt-ingest\n",
         prompt_tokens.len(),
         prefill_start_len,
@@ -752,7 +752,7 @@ fn generate_lumen_answer(
             lumen_cooperate();
             let consumed = idx + 1;
             if consumed == 1 || consumed == prompt_tokens.len() || consumed.is_multiple_of(4) {
-                crate::log!(
+                crate::log_trace!(
                     "lumen: prefill progress consumed={} total={} next_token={} elapsed={}ms\n",
                     consumed,
                     prompt_tokens.len(),
@@ -762,7 +762,7 @@ fn generate_lumen_answer(
             }
         }
         first_token_ms = elapsed_ms_since(first_token_start);
-        crate::log!(
+        crate::log_trace!(
             "lumen: first-token done token_id={} first_token={}ms total={}ms prefill_mode=incremental-decode-ap\n",
             next_token,
             first_token_ms,
@@ -785,7 +785,7 @@ fn generate_lumen_answer(
             state.all_tokens.push(next_token);
             generated = generated.saturating_add(1);
             if generated == 1 || generated.is_multiple_of(4) {
-                crate::log!(
+                crate::log_trace!(
                     "lumen: token progress generated={} last_token={} elapsed={}ms\n",
                     generated,
                     next_token,
@@ -829,7 +829,7 @@ fn generate_lumen_answer(
             lumen_cooperate();
         }
 
-        crate::log!(
+        crate::log_trace!(
             "lumen: generation done generated={} elapsed={}ms\n",
             generated,
             elapsed_ms_since(generate_start)
@@ -928,7 +928,7 @@ fn cleanup_lumen_inference_mailbox(session_id: u64, reason: &str) {
     };
     let request_waiters = LUMEN_INFER_REQUEST_WAIT.notify_all();
     let result_waiters = LUMEN_INFER_RESULT_WAIT.notify_all();
-    crate::log!(
+    crate::log_trace!(
         "lumen: inference mailbox cleanup session={} reason={} removed_requests={} removed_results={} cleared_busy={} woke_request_waiters={} woke_result_waiters={}\n",
         session_id,
         reason,
@@ -966,7 +966,7 @@ async fn lumen_inference_worker_task(
 ) {
     let cpu_slot = crate::percpu::current_slot();
     let lapic_id = crate::percpu::current_lapic_id_via_cpuid();
-    crate::log!(
+    crate::log_trace!(
         "lumen: AP2+ inference worker start cpu_slot={} lapic={} session={} ownership=exclusive-model-kv-scratch\n",
         cpu_slot,
         lapic_id,
@@ -990,7 +990,7 @@ async fn lumen_inference_worker_task(
         let Some(request) = request else {
             if bench_cancel_requested(session_id) {
                 cleanup_lumen_inference_mailbox(session_id, "worker-cancel");
-                crate::log!(
+                crate::log_trace!(
                     "lumen: AP2+ inference worker exit cpu_slot={} lapic={} session={} reason=cancel ownership=released\n",
                     cpu_slot,
                     lapic_id,
@@ -1307,7 +1307,7 @@ async fn wait_lumen_file_info(
 
         if waited_ms.saturating_sub(last_log_ms) >= LUMEN_PREFLIGHT_LOG_MS {
             last_log_ms = waited_ms;
-            crate::log!(
+            crate::log_trace!(
                 "bench lumen: waiting for TRUEOSFS file path={} waited={}ms status={}\n",
                 path,
                 waited_ms,
@@ -1341,7 +1341,7 @@ async fn wait_lumen_root_handle(
 
         if waited_ms.saturating_sub(last_log_ms) >= LUMEN_PREFLIGHT_LOG_MS {
             last_log_ms = waited_ms;
-            crate::log!("bench lumen: waiting for TRUEOSFS root waited={}ms\n", waited_ms);
+            crate::log_trace!("bench lumen: waiting for TRUEOSFS root waited={}ms\n", waited_ms);
         }
 
         Timer::after(EmbassyDuration::from_millis(LUMEN_PREFLIGHT_POLL_MS)).await;
@@ -1387,7 +1387,7 @@ async fn load_lumen_model_from_trueosfs(
             }
             Err(err) => return Err(format!("{} open failed err={:?}", LUMEN_WEIGHTS_PATH, err)),
         };
-    crate::log!(
+    crate::log_trace!(
         "bench lumen: runtime-hi vlayer-read open path={} bytes={}\n",
         LUMEN_WEIGHTS_PATH,
         weights_reader.total_len()
@@ -1504,7 +1504,7 @@ async fn load_lumen_model_from_trueosfs(
             let step_ms = elapsed_ms_since(last_progress_tick);
             let step_bytes = loaded_bytes.saturating_sub(last_progress_bytes);
             let step_phase_ms = phase_ms.saturating_sub(last_progress_phase_ms);
-            crate::log!(
+            crate::log_trace!(
                 "bench lumen: runtime-hi loading tensors={} tensor={} tensor_bytes={} bytes={} elapsed={}ms speed={} step_bytes={} step_ms={} step_speed={} phase_ms=alloc:{} read:{} decode:{} import:{} manifest:{} step_phase_ms=alloc:{} read:{} decode:{} import:{} manifest:{}\n",
                 loaded_tensors,
                 name,
@@ -1534,7 +1534,7 @@ async fn load_lumen_model_from_trueosfs(
     }
 
     let _ = weights_reader.close();
-    crate::log!(
+    crate::log_trace!(
         "bench lumen: runtime-hi vlayer-read close path={} loaded_bytes={}\n",
         LUMEN_WEIGHTS_PATH,
         loaded_bytes
@@ -1559,7 +1559,7 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
         Timer::after(EmbassyDuration::from_millis(1)).await;
 
         let log = |line: &str| {
-            crate::log!("{}\n", line);
+            crate::log_trace!("{}\n", line);
         };
 
         let disk = match wait_lumen_root_handle(session_id).await {
@@ -2474,7 +2474,7 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
             Some((slot, kind, spawner)) => {
                 let bsp_cpu_slot = crate::percpu::current_slot();
                 let bsp_lapic_id = crate::percpu::current_lapic_id_via_cpuid();
-                crate::log!(
+                crate::log_trace!(
                     "lumen: BSP transferring exclusive LlamaModel ownership to AP2+ worker target_slot={} kind={} session={} bsp_cpu_slot={} bsp_lapic={} invariant=bsp-model-dead-after-move\n",
                     slot,
                     kind,
@@ -2493,7 +2493,7 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
                 ) {
                     Ok(token) => {
                         spawner.spawn(token);
-                        crate::log!(
+                        crate::log_trace!(
                             "lumen: AP2+ inference worker spawned slot={} kind={} session={} ownership=transferred-exclusive\n",
                             slot,
                             kind,
@@ -2514,7 +2514,7 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
                 }
             }
             None => {
-                crate::log!("lumen: no AP2+ inference worker; using local fallback\n");
+                crate::log_trace!("lumen: no AP2+ inference worker; using local fallback\n");
                 let chat_state = LumenChatState::new(&model);
                 LumenInferEngine::Local { model, chat_state }
             }
@@ -2535,7 +2535,7 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
                 if now.saturating_sub(last_wait_log_tick)
                     >= embassy_time_driver::TICK_HZ.saturating_mul(5)
                 {
-                    crate::log!(
+                    crate::log_trace!(
                         "lumen: prompt wait idle session={} waits={} mode=signal-or-timeout\n",
                         session_id,
                         idle_waits
@@ -2548,7 +2548,7 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
                 )
                 .await;
                 if let Ok(wake_session_id) = wake {
-                    crate::log!(
+                    crate::log_trace!(
                         "lumen: prompt wake session={} signal_session={}\n",
                         session_id,
                         wake_session_id
@@ -2559,7 +2559,7 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
             idle_waits = 0;
             let _ = crate::lumen::lumen_service::mark_prompt_running("dequeue");
             let offload_enabled = crate::r::net::esp::prepare_lumen_offload_for_prompt();
-            crate::log!(
+            crate::log_trace!(
                 "lumen: prompt offload decision session={} enabled={}\n",
                 session_id,
                 if offload_enabled { 1 } else { 0 }
@@ -2601,7 +2601,7 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
                     let polled_jobs = compute_after
                         .polled_jobs
                         .saturating_sub(compute_before.polled_jobs);
-                    crate::log!(
+                    crate::log_trace!(
                         "lumen: answer stats prompt={:?} prompt_tokens={} generated_tokens={} first_token={}ms infer={}ms speed={} jobs={}/{} polled={} queued={}\n",
                         request.prompt.as_str(),
                         report.prompt_tokens,

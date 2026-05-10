@@ -473,7 +473,7 @@ pub async fn ui2_raple_demo_task() {
         UI2_RAPLE_VIEW_W,
         UI2_RAPLE_VIEW_H,
     ) else {
-        crate::log!("ui2-raple: window creation failed\n");
+        crate::log_trace!("ui2-raple: window creation failed\n");
         return;
     };
     let _ = surface.bind_spawn_task("ui2-raple-demo");

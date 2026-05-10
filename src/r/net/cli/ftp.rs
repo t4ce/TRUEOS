@@ -571,7 +571,7 @@ pub async fn ftp_server_task() {
             continue;
         }
 
-        crate::log!("ftp: listening on tcp {}\n", ports::FTP_SERVER_PORT);
+        crate::log_trace!("ftp: listening on tcp {}\n", ports::FTP_SERVER_PORT);
 
         loop {
             while let Some(ev) = vnet.pop_event() {
@@ -647,7 +647,7 @@ pub async fn ftp_server_task() {
                         }
                     }
                     Event::Error { msg } => {
-                        crate::log!("ftp: net event error {}\n", msg);
+                        crate::log_trace!("ftp: net event error {}\n", msg);
                     }
                     _ => {}
                 }

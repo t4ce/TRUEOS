@@ -1035,7 +1035,7 @@ fn log_output_surface_probe(
     probe: MediaSurfaceProbe,
 ) {
     if !probe.valid {
-        crate::log!(
+        crate::log_trace!(
             "intel/media2: output-probe phase=pre-present engine={} sample={} submit_completed={} valid=false\n",
             engine_name,
             sample_idx,
@@ -1044,7 +1044,7 @@ fn log_output_surface_probe(
         return;
     }
 
-    crate::log!(
+    crate::log_trace!(
         "intel/media2: output-probe phase=pre-present engine={} sample={} submit_completed={} y_last(sig=0x{:08X} active={}/{} range={}..{}) y_prev_mb(sig=0x{:08X} active={}/{} range={}..{}) y_bottom_mb(sig=0x{:08X} active={}/{} range={}..{}) uv_prev_mb(sig=0x{:08X} active={}/{} range={}..{}) uv_bottom_mb(sig=0x{:08X} active={}/{} range={}..{})\n",
         engine_name,
         sample_idx,
@@ -1199,7 +1199,7 @@ pub(super) fn decode_and_present_frame(
             )
         } else {
             let (signature, nonzero_samples) = surface_signature(output_surface);
-            crate::log!(
+            crate::log_trace!(
                 "intel/media2: first-frame blank-surface engine={} sample={} submit_completed={} detail_range=0 present_skipped=1 sig=0x{:08X} nonzero_samples={}\n",
                 engine.name,
                 sample_idx,
@@ -1716,7 +1716,7 @@ fn log_media2_batch_geometry(
         .saturating_add(bsd_cls)
         .saturating_add(mpr_cls);
 
-    crate::log!(
+    crate::log_trace!(
         "intel/media2: batch-geometry coded={}x{} visible={}x{} mbs={}x{} pitch={} tiles_per_row={} bytes=0x{:X} surface_dw2=0x{:08X} surface_dw3=0x{:08X} chroma_y={} post_attr=0x{:08X} ref_attr=0x{:08X} rowstore_cls(intra={} deblock={} bsd={} mpr={} total={}/640) rowstore_ext(intra=0x{:X}/0x{:08X} deblock=0x{:X}/0x{:08X} bsd=0x{:X}/0x{:08X} mpr=0x{:X}/0x{:08X}) luma_only={}\n",
         coded_width,
         coded_height,
@@ -2965,7 +2965,7 @@ pub(crate) async fn run_media2_first_frame_async() -> Option<Media2FirstFrameSta
     kickoff_once();
 
     if MEDIA_DECODE_RAN.load(Ordering::Acquire) {
-        crate::log!("intel/media2: first-frame cached state=already-ran\n");
+        crate::log_trace!("intel/media2: first-frame cached state=already-ran\n");
         return MEDIA_KICKOFF_STATE
             .lock()
             .as_ref()
@@ -2997,12 +2997,12 @@ pub(crate) async fn run_media2_first_frame_async() -> Option<Media2FirstFrameSta
     let source = match xelp_media_source::fetch_media_source_async().await {
         Some(source) => source,
         None => {
-            crate::log!("intel/media2: first-frame abort stage=source reason=unavailable\n");
+            crate::log_trace!("intel/media2: first-frame abort stage=source reason=unavailable\n");
             store_kickoff_state(MediaKickoffStage::SubmissionWiring, None);
             return None;
         }
     };
-    crate::log!(
+    crate::log_trace!(
         "intel/media2: first-frame source ready source={} bytes={}\n",
         source.source_name(),
         source.total_len(),
@@ -3010,7 +3010,7 @@ pub(crate) async fn run_media2_first_frame_async() -> Option<Media2FirstFrameSta
     let summary = match parse_h264_source_summary(&source).await {
         Ok(summary) => summary,
         Err(err) => {
-            crate::log!(
+            crate::log_trace!(
                 "intel/media2: first-frame abort stage=parse reason={} source={} bytes={}\n",
                 err,
                 source.source_name(),
@@ -3020,7 +3020,7 @@ pub(crate) async fn run_media2_first_frame_async() -> Option<Media2FirstFrameSta
             return None;
         }
     };
-    crate::log!(
+    crate::log_trace!(
         "intel/media2: first-frame summary container={} coded={}x{} samples={} first_sample_bytes={} avcc_profile={} avcc_level={} nal_len={} sps_bytes={} pps_bytes={}\n",
         summary.container_name(),
         summary.width(),
@@ -3035,12 +3035,12 @@ pub(crate) async fn run_media2_first_frame_async() -> Option<Media2FirstFrameSta
     );
 
     let Some(sps) = parse_sps(&summary.avcc().sps) else {
-        crate::log!("intel/media2: first-frame abort stage=sps reason=parse-failed\n");
+        crate::log_trace!("intel/media2: first-frame abort stage=sps reason=parse-failed\n");
         store_kickoff_state(MediaKickoffStage::ResourcePlanning, None);
         return None;
     };
     let Some(pps) = parse_pps(&summary.avcc().pps, &sps) else {
-        crate::log!("intel/media2: first-frame abort stage=pps reason=parse-failed\n");
+        crate::log_trace!("intel/media2: first-frame abort stage=pps reason=parse-failed\n");
         store_kickoff_state(MediaKickoffStage::ResourcePlanning, None);
         return None;
     };
@@ -3069,7 +3069,7 @@ pub(crate) async fn run_media2_first_frame_async() -> Option<Media2FirstFrameSta
         };
 
     let Some(backing) = ensure_decode_backing(dev, windows) else {
-        crate::log!("intel/media2: first-frame abort stage=backing reason=alloc-or-map-failed\n");
+        crate::log_trace!("intel/media2: first-frame abort stage=backing reason=alloc-or-map-failed\n");
         store_kickoff_state(MediaKickoffStage::ResourcePlanning, None);
         return None;
     };
@@ -3081,7 +3081,7 @@ pub(crate) async fn run_media2_first_frame_async() -> Option<Media2FirstFrameSta
         match write_annex_b_for_sample(summary.first_sample(), summary.avcc(), bitstream) {
             Ok(annex_b) => annex_b,
             Err(err) => {
-                crate::log!(
+                crate::log_trace!(
                     "intel/media2: first-frame abort stage=annex-b err={:?} sample_bytes={} bitstream_capacity={}\n",
                     err,
                     summary.first_sample().len(),
@@ -3110,7 +3110,7 @@ pub(crate) async fn run_media2_first_frame_async() -> Option<Media2FirstFrameSta
     ) {
         Some(demo) => demo,
         None => {
-            crate::log!(
+            crate::log_trace!(
                 "intel/media2: first-frame abort stage=submit engine={} bitstream_bytes={}\n",
                 engine.name,
                 first_annex_b.bytes_written,

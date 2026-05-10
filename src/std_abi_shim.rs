@@ -195,7 +195,7 @@ fn pthread_sync_probe_log() {
         .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
         .is_ok()
     {
-        crate::log!("std-abi: pthread mutex/cond shim using TRUEOS spin wait states\n");
+        crate::log_trace!("std-abi: pthread mutex/cond shim using TRUEOS spin wait states\n");
     }
 }
 

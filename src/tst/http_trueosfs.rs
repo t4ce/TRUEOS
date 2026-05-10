@@ -47,7 +47,7 @@ impl HttpPerf {
         }
         let total = self.tsc_read.saturating_add(self.tsc_submit);
         let cycles_per_byte = total / self.bytes;
-        crate::log!(
+        crate::log_trace!(
             "http-trueosfs: perf bytes={} tsc_read={} tsc_submit={} tsc_total={} cycles_per_byte={}\n",
             self.bytes,
             self.tsc_read,
@@ -86,13 +86,13 @@ fn http_trueosfs_open_endpoint(dev_idx: usize) -> Option<HttpTrueosfsEndpoint> {
         })
         .is_err()
     {
-        crate::log!("http-trueosfs: listen submit failed dev={} owner={}\n", dev_idx, vnet.owner());
+        crate::log_trace!("http-trueosfs: listen submit failed dev={} owner={}\n", dev_idx, vnet.owner());
         return None;
     }
     let ip = crate::net::adapter::ipv4_at(dev_idx);
     let name = crate::net::device_name_at(dev_idx).unwrap_or("?");
     match ip {
-        Some([a, b, c, d]) => crate::log!(
+        Some([a, b, c, d]) => crate::log_trace!(
             "http-trueosfs: listening on tcp {} owner={} dev={} {} ip={}.{}.{}.{}\n",
             ports::HTTP_TRUEOSFS_TCP_PORT,
             vnet.owner(),
@@ -103,7 +103,7 @@ fn http_trueosfs_open_endpoint(dev_idx: usize) -> Option<HttpTrueosfsEndpoint> {
             c,
             d
         ),
-        None => crate::log!(
+        None => crate::log_trace!(
             "http-trueosfs: listening on tcp {} owner={} dev={} {} ip=none\n",
             ports::HTTP_TRUEOSFS_TCP_PORT,
             vnet.owner(),
@@ -155,7 +155,7 @@ fn http_stream_chunk_bytes(disk: DeviceHandle) -> usize {
 
 fn http_log_target_preview(prefix: &str, target: &str) {
     let path = vhttp_srv::path_only(target);
-    crate::log!("http-trueosfs: {} target={}\n", prefix, path);
+    crate::log_trace!("http-trueosfs: {} target={}\n", prefix, path);
 }
 
 fn http_submit_commands(vnet: &VNet, cmds: Vec<api::Command>) {
@@ -525,7 +525,7 @@ pub async fn http_trueosfs_task() {
             if !endpoints.is_empty() {
                 break;
             }
-            crate::log!("http-trueosfs: waiting for a usable NIC\n");
+            crate::log_trace!("http-trueosfs: waiting for a usable NIC\n");
             Timer::after(EmbassyDuration::from_millis(250)).await;
         }
 
@@ -545,7 +545,7 @@ pub async fn http_trueosfs_task() {
                     {
                         endpoint.listener_ready = true;
                         crate::r::readiness::set(crate::r::readiness::HTTP_TRUEOSFS_LISTENING);
-                        crate::log!(
+                        crate::log_trace!(
                             "http-trueosfs: tcp listen opened and ready dev={}\n",
                             endpoint.dev_idx
                         );
@@ -557,7 +557,7 @@ pub async fn http_trueosfs_task() {
                         let _ = endpoint.vnet.submit(cmd);
                     }
                     vhttp_srv::HttpServerEvent::Error(msg) => {
-                        crate::log!("http-trueosfs: error {}\n", msg);
+                        crate::log_trace!("http-trueosfs: error {}\n", msg);
                     }
                     vhttp_srv::HttpServerEvent::RequestTooLarge { handle } => {
                         let body = b"request too large\n";
@@ -576,7 +576,7 @@ pub async fn http_trueosfs_task() {
                         http_submit_commands(&endpoint.vnet, cmds);
                     }
                     vhttp_srv::HttpServerEvent::BadRequest { handle } => {
-                        crate::log!("http-trueosfs: 400 bad request line/header parse\n");
+                        crate::log_trace!("http-trueosfs: 400 bad request line/header parse\n");
                         let body = b"bad request\n";
                         let mut cmds = Vec::new();
                         let pending = vhttp_srv::queue_response_head(

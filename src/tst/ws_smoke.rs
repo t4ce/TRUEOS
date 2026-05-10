@@ -5,7 +5,7 @@ use crate::r::net::wss::WssConnection;
 
 #[embassy_executor::task]
 pub async fn boot_ws_smoke_task() {
-    crate::log!("ws-smoke: starting\n");
+    crate::log_trace!("ws-smoke: starting\n");
 
     let mut plain_ok = false;
     let mut secure_ok = false;
@@ -13,14 +13,14 @@ pub async fn boot_ws_smoke_task() {
     // Insecure. Use a host that still supports a real ws:// upgrade on port 80.
     match WsConnection::connect("ws://websocket-echo.com/").await {
         Ok(mut ws) => {
-            crate::log!("ws-smoke: connected plain\n");
+            crate::log_trace!("ws-smoke: connected plain\n");
             if let Err(e) = ws.send("Hello TRUEOS") {
-                crate::log!("ws-smoke: send plain failed {:?}\n", e);
+                crate::log_trace!("ws-smoke: send plain failed {:?}\n", e);
             } else {
                 // Simple poll for response
                 for _ in 0..10 {
                     if let Some(msg) = ws.recv() {
-                        crate::log!("ws-smoke: recv plain: {}\n", msg);
+                        crate::log_trace!("ws-smoke: recv plain: {}\n", msg);
                         plain_ok = true;
                         break;
                     }
@@ -29,7 +29,7 @@ pub async fn boot_ws_smoke_task() {
             }
         }
         Err(e) => {
-            crate::log!("ws-smoke: plain connect failed {:?}\n", e);
+            crate::log_trace!("ws-smoke: plain connect failed {:?}\n", e);
         }
     }
 
@@ -44,14 +44,14 @@ pub async fn boot_ws_smoke_task() {
 
     match wss_res {
         Ok(mut wss) => {
-            crate::log!("ws-smoke: connected secure\n");
+            crate::log_trace!("ws-smoke: connected secure\n");
             if let Err(e) = wss.send("Hello Secure TRUEOS") {
-                crate::log!("ws-smoke: secure send failed {:?}\n", e);
+                crate::log_trace!("ws-smoke: secure send failed {:?}\n", e);
             } else {
                 // Simple poll for response
                 for _ in 0..10 {
                     if let Some(msg) = wss.recv() {
-                        crate::log!("ws-smoke: recv secure: {}\n", msg);
+                        crate::log_trace!("ws-smoke: recv secure: {}\n", msg);
                         secure_ok = true;
                         break;
                     }
@@ -60,14 +60,14 @@ pub async fn boot_ws_smoke_task() {
             }
         }
         Err(e) => {
-            crate::log!("ws-smoke: secure connect failed {:?}\n", e);
+            crate::log_trace!("ws-smoke: secure connect failed {:?}\n", e);
         }
     }
 
-    crate::log!(
+    crate::log_trace!(
         "ws-smoke: summary plain={} secure={}\n",
         if plain_ok { "ok" } else { "fail" },
         if secure_ok { "ok" } else { "fail" },
     );
-    crate::log!("ws-smoke: done\n");
+    crate::log_trace!("ws-smoke: done\n");
 }

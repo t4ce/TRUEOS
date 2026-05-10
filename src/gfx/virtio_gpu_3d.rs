@@ -864,7 +864,7 @@ impl VirtioGpu3d {
             }
         }
         if let Some((i, w, h, enabled, flags)) = first_mode {
-            crate::log!(
+            crate::log_trace!(
                 "virgl: get_display_info no enabled scanout (first mode id={} {}x{} enabled={} flags=0x{:08X})\n",
                 i,
                 w,
@@ -873,7 +873,7 @@ impl VirtioGpu3d {
                 flags
             );
         } else {
-            crate::log!("virgl: get_display_info no scanout modes reported\n");
+            crate::log_trace!("virgl: get_display_info no scanout modes reported\n");
         }
         None
     }
@@ -936,7 +936,7 @@ impl VirtioGpu3d {
         let ok = self.ctrl_submit_bytes(as_bytes(&req));
         if !ok {
             let resp_hdr = unsafe { &*(self.resp.virt() as *const CtrlHdr) };
-            crate::log!(
+            crate::log_trace!(
                 "virgl: set_scanout failed scanout={} res={} resp=0x{:04X}\n",
                 scanout_id,
                 resource_id,
@@ -1119,11 +1119,11 @@ impl VirtioGpu3d {
         let header_bytes = as_bytes(&header);
         let total = header_bytes.len().saturating_add(cmd_stream.len());
         if total == 0 {
-            crate::log!("virtio-gpu3d: submit_3d empty cmd stream\n");
+            crate::log_trace!("virtio-gpu3d: submit_3d empty cmd stream\n");
             return false;
         }
         if total > self.req.len() {
-            crate::log!(
+            crate::log_trace!(
                 "virtio-gpu3d: submit_3d overflow total={} req_cap={}\n",
                 total,
                 self.req.len()
@@ -1235,7 +1235,7 @@ impl VirtioGpu3d {
         // the shell/gfx stack and wedge on those locks (observed as `gfx: SYSTEM lock timeout`).
         let ok = wait::spin_until_timeout_no_exec(1000, || queue.used_idx() != queue.last_used_idx);
         if !ok {
-            crate::log!("virtio-gpu3d: {} timeout\n", queue_label);
+            crate::log_trace!("virtio-gpu3d: {} timeout\n", queue_label);
             return false;
         }
 
@@ -1246,7 +1246,7 @@ impl VirtioGpu3d {
         queue.last_used_idx = queue.last_used_idx.wrapping_add(1);
 
         if used.id != 0 {
-            crate::log!("virtio-gpu3d: {} used id={} (expected 0)\n", queue_label, used.id);
+            crate::log_trace!("virtio-gpu3d: {} used id={} (expected 0)\n", queue_label, used.id);
             return false;
         }
 
@@ -1261,7 +1261,7 @@ impl VirtioGpu3d {
         let ok = expected.contains(&resp_type);
         if !ok {
             let req_type = unsafe { *(req.virt() as *const u32) };
-            crate::log!(
+            crate::log_trace!(
                 "virtio-gpu3d: {} bad resp req=0x{:08X} type=0x{:08X} req_len={}\n",
                 queue_label,
                 req_type,
@@ -1733,7 +1733,7 @@ impl VirglGfxBackend {
                 break;
             }
             if attempt == 1 || attempt == 10 || (attempt % 3) == 0 {
-                crate::log!(
+                crate::log_trace!(
                     "virgl-backend: waiting for enabled scanout (attempt {}/{})\n",
                     attempt,
                     10
@@ -1752,7 +1752,7 @@ impl VirglGfxBackend {
 
         let ctx_id = alloc_ctx_id();
         if !gpu.ctx_create(ctx_id) {
-            crate::log!("virgl-backend: ctx_create failed\n");
+            crate::log_trace!("virgl-backend: ctx_create failed\n");
             return None;
         }
 
@@ -1768,7 +1768,7 @@ impl VirglGfxBackend {
             .saturating_mul(disp_h as usize)
             .saturating_mul(4)
             .max(4096);
-        crate::log!(
+        crate::log_trace!(
             "virgl-backend: scanout backing=dma display={}x{} bytes={}\n",
             disp_w,
             disp_h,
@@ -1779,12 +1779,12 @@ impl VirglGfxBackend {
             (disp_w, disp_h, bytes, disp_w, disp_h);
 
         if !gpu.resource_create_2d(scanout_res, VIRGL_FORMAT_B8G8R8A8_UNORM, res_w, res_h) {
-            crate::log!("virgl-backend: resource_create_2d scanout failed\n");
+            crate::log_trace!("virgl-backend: resource_create_2d scanout failed\n");
             return None;
         }
 
         if scanout_backing.len() < res_bytes {
-            crate::log!(
+            crate::log_trace!(
                 "virgl-backend: scanout backing too small len={} need={}\n",
                 scanout_backing.len(),
                 res_bytes
@@ -1794,23 +1794,23 @@ impl VirglGfxBackend {
 
         let clear_len = res_bytes.min(scanout_backing.len());
         unsafe { core::ptr::write_bytes(scanout_backing.virt(), 0, clear_len) };
-        crate::log!("virgl-backend: scanout backing cleared\n");
+        crate::log_trace!("virgl-backend: scanout backing cleared\n");
 
         if !gpu.resource_attach_backing(scanout_res, scanout_backing.phys(), res_bytes as u32) {
-            crate::log!("virgl-backend: attach_backing failed\n");
+            crate::log_trace!("virgl-backend: attach_backing failed\n");
             return None;
         }
         if !gpu.set_scanout(scanout_id, scanout_res, present_w, present_h) {
-            crate::log!("virgl-backend: set_scanout failed\n");
+            crate::log_trace!("virgl-backend: set_scanout failed\n");
             return None;
         }
         // Bringup guardrail: ensure the scanout upload path works immediately after scanout bind.
         if !gpu.transfer_to_host_2d(scanout_res, present_w, present_h) {
-            crate::log!("virgl-backend: initial transfer_to_host_2d failed\n");
+            crate::log_trace!("virgl-backend: initial transfer_to_host_2d failed\n");
             return None;
         }
         if !gpu.resource_flush(scanout_res, present_w, present_h) {
-            crate::log!("virgl-backend: initial resource_flush failed\n");
+            crate::log_trace!("virgl-backend: initial resource_flush failed\n");
             return None;
         }
 
@@ -1830,7 +1830,7 @@ impl VirglGfxBackend {
             0,
             0,
         ) {
-            crate::log!("virgl-backend: resource_create_3d rt failed\n");
+            crate::log_trace!("virgl-backend: resource_create_3d rt failed\n");
             return None;
         }
 
@@ -1850,7 +1850,7 @@ impl VirglGfxBackend {
             0,
             0,
         ) {
-            crate::log!("virgl-backend: resource_create_3d vbo failed\n");
+            crate::log_trace!("virgl-backend: resource_create_3d vbo failed\n");
             return None;
         }
         if !gpu.resource_create_3d(
@@ -1867,7 +1867,7 @@ impl VirglGfxBackend {
             0,
             0,
         ) {
-            crate::log!("virgl-backend: resource_create_3d debug tex failed\n");
+            crate::log_trace!("virgl-backend: resource_create_3d debug tex failed\n");
             return None;
         }
 
@@ -2033,11 +2033,11 @@ impl VirglGfxBackend {
         encode_set_scissor(&mut init, 0, 0, present_w, present_h);
 
         if !gpu.submit_3d(ctx_id, init.as_bytes(), 1) {
-            crate::log!("virgl-backend: submit_3d init failed\n");
+            crate::log_trace!("virgl-backend: submit_3d init failed\n");
             return None;
         }
 
-        crate::log!(
+        crate::log_trace!(
             "virgl-backend: init ok scanout={} display={}x{} refresh_millihz={:?} ctx={} scanout_res={} rt_res={}\n",
             scanout_id,
             present_w,
@@ -2133,10 +2133,10 @@ impl VirglGfxBackend {
             })
             .is_err()
         {
-            crate::log!("virgl-backend: bootstrap present failed\n");
+            crate::log_trace!("virgl-backend: bootstrap present failed\n");
             return None;
         }
-        crate::log!("virgl-backend: bootstrap present ok display={}x{}\n", present_w, present_h);
+        crate::log_trace!("virgl-backend: bootstrap present ok display={}x{}\n", present_w, present_h);
 
         Some(backend)
     }
@@ -2927,7 +2927,7 @@ impl GfxDevice for VirglGfxBackend {
                         let n = crate::logflag::VIRGL_STATE_TRANSITION_LOGS
                             .fetch_add(1, Ordering::Relaxed);
                         if n < 8 {
-                            crate::log!(
+                            crate::log_trace!(
                                 "virgl-backend: draw-kind transition {:?} -> {:?} frame={}\n",
                                 prev.kind,
                                 draw_key.kind,
@@ -2985,7 +2985,7 @@ impl GfxDevice for VirglGfxBackend {
                                 let n = crate::logflag::VIRGL_BLEND_UNSUPPORTED_LOGS
                                     .fetch_add(1, Ordering::Relaxed);
                                 if n < 8 {
-                                    crate::log!(
+                                    crate::log_trace!(
                                         "virgl-backend: unsupported blend {:?}; failing draw\n",
                                         other
                                     );
@@ -2998,7 +2998,7 @@ impl GfxDevice for VirglGfxBackend {
                         let n =
                             crate::logflag::VIRGL_BLEND_BIND_LOGS.fetch_add(1, Ordering::Relaxed);
                         if n < 8 {
-                            crate::log!(
+                            crate::log_trace!(
                                 "virgl-backend: bind blend {:?} -> handle={}\n",
                                 self.state.blend,
                                 blend_handle
@@ -3211,7 +3211,7 @@ impl GfxDevice for VirglGfxBackend {
                                 let n = crate::logflag::VIRGL_TEX_DEBUG_LOGS
                                     .fetch_add(1, Ordering::Relaxed);
                                 if n < 8 {
-                                    crate::log!(
+                                    crate::log_trace!(
                                         "virgl-backend: tex upload img={} {}x{} rev {}->{} res={} view={}\n",
                                         img_raw,
                                         img.desc.width,
@@ -3269,7 +3269,7 @@ impl GfxDevice for VirglGfxBackend {
                                 let n = crate::logflag::VIRGL_TEX_DEBUG_LOGS
                                     .fetch_add(1, Ordering::Relaxed);
                                 if n < 8 {
-                                    crate::log!(
+                                    crate::log_trace!(
                                         "virgl-backend: tex create_view img={} res={} view={} fmt={}\n",
                                         img_raw,
                                         img.virgl_res,
@@ -3299,7 +3299,7 @@ impl GfxDevice for VirglGfxBackend {
                         };
 
                         if crate::logflag::VIRGL_DRAW_DIAGNOSTICS_LOGS && frame_no % 100 == 0 {
-                            crate::log!(
+                            crate::log_trace!(
                                 "virgl-diag: frame={} img={} res={} view={} samp_state={} sampler=({:?},{:?},{:?},{:?})\n",
                                 frame_no,
                                 img_raw,
@@ -3382,7 +3382,7 @@ impl GfxDevice for VirglGfxBackend {
                             max_v,
                         )) = vertex_blob_bounds(self.converted_cache.bytes.as_slice())
                         {
-                            crate::log!(
+                            crate::log_trace!(
                                 "virgl-draw: frame={} verts={} img={} ndc_x=[{:.3},{:.3}] ndc_y=[{:.3},{:.3}] a=[{:.3},{:.3}] uv_u=[{:.3},{:.3}] uv_v=[{:.3},{:.3}] vp={}x{}\n",
                                 frame_no,
                                 self.converted_cache.vertex_count,
@@ -3443,7 +3443,7 @@ impl GfxDevice for VirglGfxBackend {
         self.next_fence = self.next_fence.wrapping_add(1);
 
         if !self.gpu.submit_3d(self.ctx_id, cmd.as_bytes(), fence) {
-            crate::log!(
+            crate::log_trace!(
                 "virgl-present: submit_3d failed frame={} clears={} draws={} presents={} bytes={} ctx={}\n",
                 frame_no,
                 clear_ops,
@@ -3465,7 +3465,7 @@ impl GfxDevice for VirglGfxBackend {
                     self.height,
                 );
                 if !reassert_ok {
-                    crate::log!(
+                    crate::log_trace!(
                         "virgl-present: set_scanout reassert failed frame={} scanout={} res={} size={}x{}\n",
                         frame_no,
                         self.scanout_id,
@@ -3483,7 +3483,7 @@ impl GfxDevice for VirglGfxBackend {
             // bringup and uploading it would overwrite the freshly copied frame with stale pixels.
             let n = crate::logflag::VIRGL_PRESENT_DIAG_LOGS.fetch_add(1, Ordering::Relaxed);
             if crate::logflag::GFX_FRAME_PROGRESS_LOGS && n < 12 {
-                crate::log!(
+                crate::log_trace!(
                     "virgl-present: frame={} clears={} draws={} presents={} reassert_ok={} flush_ok={} size={}x{} fence={}\n",
                     frame_no,
                     clear_ops,

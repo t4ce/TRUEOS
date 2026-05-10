@@ -371,7 +371,7 @@ unsafe extern "C" fn trueos_panic_test_js(
     };
 
     if !crate::cpu::can_restart_current_worker_ap_from_panic() {
-        crate::log!(
+        crate::log_trace!(
             "PANIC PANIC PANIC: qjs panic test refused on slot={} lapic={}\n",
             profile.slot(),
             profile.lapic_id()

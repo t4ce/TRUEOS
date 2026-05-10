@@ -41,7 +41,7 @@ pub(crate) fn observe_bf16_matvec_call(
     };
 
     if !LOGGED_SHADOW_PLAN.swap(true, Ordering::AcqRel) {
-        crate::log!(
+        crate::log_trace!(
             "lumen-gpu-shadow: director-step step=2 backend=local-gpu mode=shadow-only call={} rows={} k_dim={} chunk_rows={} chunks={} min_rows={} min_k_dim={} arena_ready={} shape_candidate={} candidate={} static_tile_proven={} program={} lane_dispatch={} expected=0x{:08X} observed=0x{:08X} output_owner=cpu-ap action=no-output-ownership next=one-live-row-shadow-compare\n",
             call_index,
             n_rows,
@@ -62,7 +62,7 @@ pub(crate) fn observe_bf16_matvec_call(
     }
 
     if static_tile_proven && !LOGGED_STATIC_TILE_PROOF.swap(true, Ordering::AcqRel) {
-        crate::log!(
+        crate::log_trace!(
             "lumen-gpu-shadow: director-step step=3 backend=local-gpu proof=static-dp4a-hdc-store-eot program={} lane_dispatch={} store_expected=0x{:08X} store_observed=0x{:08X} eot_retired=1 action=promote-to-live-row-shadow next=bind-manifest-row-and-x-buffer does_not_prove=model_matvec\n",
             gpu.eu_program_name,
             gpu.eu_dispatch_delta,
@@ -85,7 +85,7 @@ pub(crate) fn observe_live_bf16_matvec_probe(
 ) {
     if !plan.static_tile_proven {
         if !LOGGED_T4_WAITING.swap(true, Ordering::AcqRel) {
-            crate::log!(
+            crate::log_trace!(
                 "lumen-gpu-shadow: director-step step=4 backend=local-gpu mode=t4-live-row-probe ready=0 reason=static-gpu-artifact-not-proven-yet call={} program={} next=wait-for-static-dp4a-hdc-store-eot\n",
                 plan.call_index,
                 plan.program_name
@@ -102,7 +102,7 @@ pub(crate) fn observe_live_bf16_matvec_probe(
         .checked_mul(k_dim)
         .and_then(|values| values.checked_mul(2))
     else {
-        crate::log!(
+        crate::log_trace!(
             "lumen-gpu-shadow: director-step step=4 backend=local-gpu mode=t4-live-row-probe ready=0 reason=shape-overflow rows={} k_dim={}\n",
             n_rows,
             k_dim
@@ -110,7 +110,7 @@ pub(crate) fn observe_live_bf16_matvec_probe(
         return;
     };
     if n_rows == 0 || k_dim == 0 || x.len() < k_dim || w_rowmajor_bf16.len() < expected_w_len {
-        crate::log!(
+        crate::log_trace!(
             "lumen-gpu-shadow: director-step step=4 backend=local-gpu mode=t4-live-row-probe ready=0 reason=bad-shape rows={} k_dim={} x_len={} w_len={} expected_w_len={}\n",
             n_rows,
             k_dim,
@@ -140,7 +140,7 @@ pub(crate) fn observe_live_bf16_matvec_probe(
     let matrix_ptr = manifest.map(|entry| entry.data_ptr).unwrap_or(0);
     let matrix_bytes = manifest.map(|entry| entry.byte_len).unwrap_or(0);
 
-    crate::log!(
+    crate::log_trace!(
         "lumen-gpu-shadow: director-step step=4 backend=local-gpu mode=t4-live-row-probe ready=1 call={} rows={} k_dim={} chunk_rows={} chunks={} manifest={} matrix=0x{:016X} matrix_epoch={} matrix_name_hash=0x{:016X} matrix_name_len={} matrix_rows={} matrix_k_dim={} matrix_ptr=0x{:X} matrix_bytes={} matrix_access=resident-read-only row=0 row_ptr=0x{:X} x_ptr=0x{:X} x_bytes={} x_checksum=0x{:016X} row_checksum=0x{:016X} static4_weights=01020304 static4_expected_bits=0x{:08X} row0_cpu_expected_bits=0x{:08X} gpu_submission=0 output_owner=cpu-ap next=stage-manifest-row-to-gpgpu-arena does_not_prove=gpu_live_load_or_model_matvec\n",
         plan.call_index,
         n_rows,

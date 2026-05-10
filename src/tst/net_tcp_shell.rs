@@ -51,7 +51,7 @@ pub async fn net_shell_task() {
         let name = crate::net::device_name_at(dev_idx).unwrap_or("?");
         match ip {
             Some([a, b, c, d]) => {
-                crate::log!(
+                crate::log_trace!(
                     "net-shell: routing dev={} {} owner={} ip={}.{}.{}.{}\n",
                     dev_idx,
                     name,
@@ -63,7 +63,7 @@ pub async fn net_shell_task() {
                 )
             }
             None => {
-                crate::log!("net-shell: routing dev={} {} owner={} ip=none\n", dev_idx, name, owner)
+                crate::log_trace!("net-shell: routing dev={} {} owner={} ip=none\n", dev_idx, name, owner)
             }
         }
 
@@ -74,7 +74,7 @@ pub async fn net_shell_task() {
         let _ = cmds.push(NetCommand::OpenTcpListen {
             port: NET_SHELL_TCP_PORT,
         });
-        crate::log!("net-shell: listening on tcp {} owner={}\n", NET_SHELL_TCP_PORT, owner);
+        crate::log_trace!("net-shell: listening on tcp {} owner={}\n", NET_SHELL_TCP_PORT, owner);
 
         let mut ticks: u32 = 0;
         let mut logged_first_rx: bool = false;
@@ -91,7 +91,7 @@ pub async fn net_shell_task() {
                     NetEvent::Opened { handle, kind } => {
                         if kind == SocketKind::Tcp {
                             tcp_handle = Some(handle);
-                            crate::log!("net-shell: opened tcp handle={}\n", handle.0);
+                            crate::log_trace!("net-shell: opened tcp handle={}\n", handle.0);
                         }
                     }
                     NetEvent::TcpEstablished { handle, .. } => {
@@ -117,7 +117,7 @@ pub async fn net_shell_task() {
                         pending_len = 0;
                         logged_first_rx = false;
                         tx_log_budget = 16;
-                        crate::log!("net-shell: tcp established handle={}\n", handle.0);
+                        crate::log_trace!("net-shell: tcp established handle={}\n", handle.0);
                     }
                     NetEvent::TcpData { handle, data } => {
                         // Only accept bytes from the active connection.
@@ -134,7 +134,7 @@ pub async fn net_shell_task() {
 
                             if !logged_first_rx {
                                 logged_first_rx = true;
-                                crate::log!(
+                                crate::log_trace!(
                                     "net-shell: first rx {} bytes (including {:?})\n",
                                     data.len(),
                                     data.first().copied()
@@ -157,7 +157,7 @@ pub async fn net_shell_task() {
 
                         if tx_log_budget > 0 {
                             tx_log_budget -= 1;
-                            crate::log!(
+                            crate::log_trace!(
                                 "net-shell: tx accepted handle={} len={} (pending_len={})\n",
                                 handle.0,
                                 len,
@@ -188,7 +188,7 @@ pub async fn net_shell_task() {
 
                         if tcp_handle == Some(handle) {
                             tcp_handle = None;
-                            crate::log!("net-shell: tcp closed handle={} (relisten)\n", handle.0);
+                            crate::log_trace!("net-shell: tcp closed handle={} (relisten)\n", handle.0);
                             let _ = cmds.push(NetCommand::OpenTcpListen {
                                 port: NET_SHELL_TCP_PORT,
                             });
@@ -197,7 +197,7 @@ pub async fn net_shell_task() {
                     NetEvent::Error { msg } => {
                         // These are useful during bring-up; keep them visible but not too spammy.
                         if ticks.is_multiple_of(100) {
-                            crate::log!("net-shell: error {}\n", msg);
+                            crate::log_trace!("net-shell: error {}\n", msg);
                         }
                     }
                     NetEvent::UdpPacket { .. } => {}
@@ -238,7 +238,7 @@ pub async fn net_shell_task() {
 
                     if tx_log_budget > 0 {
                         tx_log_budget -= 1;
-                        crate::log!(
+                        crate::log_trace!(
                             "net-shell: tx queue handle={} len={}\n",
                             handle.0,
                             pending_len
@@ -256,7 +256,7 @@ pub async fn net_shell_task() {
                         pending = None;
                         pending_ticks = 0;
                         pending_len = 0;
-                        crate::log!("net-shell: tx queue full (dropping pending)\n");
+                        crate::log_trace!("net-shell: tx queue full (dropping pending)\n");
                     }
                 }
             }
@@ -266,7 +266,7 @@ pub async fn net_shell_task() {
             if pending.is_some() {
                 pending_ticks = pending_ticks.wrapping_add(1);
                 if pending_ticks == 250 {
-                    crate::log!("net-shell: tx stalled (pending_len={}), retrying\n", pending_len);
+                    crate::log_trace!("net-shell: tx stalled (pending_len={}), retrying\n", pending_len);
                     pending = None;
                     pending_ticks = 0;
                     pending_len = 0;

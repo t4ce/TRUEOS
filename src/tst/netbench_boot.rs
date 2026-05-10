@@ -123,7 +123,7 @@ fn parse_http_url(url: &str) -> Option<ParsedHttpUrl> {
 pub async fn boot_netbench_task() {
     async move {
         if crate::net::device_count() == 0 {
-            crate::log!("boot-netbench: skipped (no NIC)\n");
+            crate::log_trace!("boot-netbench: skipped (no NIC)\n");
             return;
         }
 
@@ -138,7 +138,7 @@ pub async fn boot_netbench_task() {
             if let Some(ip) = ip6
                 && (ip[0] & 0xE0) == 0x20
             {
-                crate::log!(
+                crate::log_trace!(
                     "boot-netbench: ipv6_ready=1 dev={} ip6={:02x}{:02x}:{:02x}{:02x}:...\n",
                     nic_index,
                     ip[0],
@@ -149,7 +149,7 @@ pub async fn boot_netbench_task() {
                 break;
             }
             if Instant::now() >= deadline {
-                crate::log!(
+                crate::log_trace!(
                     "boot-netbench: ipv6_ready=0 (timeout) dev={}\n",
                     nic_index
                 );
@@ -158,7 +158,7 @@ pub async fn boot_netbench_task() {
             Timer::after(EmbassyDuration::from_millis(50)).await;
         }
 
-        crate::log!(
+        crate::log_trace!(
             "boot-netbench: starting dev={} name={}\n",
             nic_index,
             crate::net::device_name_at(nic_index).unwrap_or("Unknown")
@@ -168,7 +168,7 @@ pub async fn boot_netbench_task() {
         // Combined throughput will be logged by the internal netbench runner.
         for (idx, url) in [(1u8, BOOT_NETBENCH_URL), (2u8, BOOT_NETBENCH_URL_2)] {
             let Some(parsed) = parse_http_url(url) else {
-                crate::log!("boot-netbench: bad url{}={}\n", idx, url);
+                crate::log_trace!("boot-netbench: bad url{}={}\n", idx, url);
                 continue;
             };
 
@@ -186,7 +186,7 @@ pub async fn boot_netbench_task() {
                 {
                     Ok(ip) => ip,
                     Err(e) => {
-                        crate::log!(
+                        crate::log_trace!(
                             "boot-netbench: dns6 failed url{} host={} err={:?}\n",
                             idx,
                             host,
@@ -211,9 +211,9 @@ pub async fn boot_netbench_task() {
             );
 
             if submitted {
-                crate::log!("boot-netbench: submit ok url{}={}\n", idx, url);
+                crate::log_trace!("boot-netbench: submit ok url{}={}\n", idx, url);
             } else {
-                crate::log!("boot-netbench: submit failed (queue full) url{}={}\n", idx, url);
+                crate::log_trace!("boot-netbench: submit failed (queue full) url{}={}\n", idx, url);
             }
         }
     }

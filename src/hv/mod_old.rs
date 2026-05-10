@@ -2343,5 +2343,5 @@ fn hvlogf(args: core::fmt::Arguments<'_>) {
         });
     }
 
-    crate::log!("{}\n", line.as_str());
+    crate::log_trace!("{}\n", line.as_str());
 }

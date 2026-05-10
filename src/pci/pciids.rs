@@ -23,7 +23,7 @@ fn set_pciids_git_state(state: u8) {
 }
 
 pub fn download_once() -> Result<(), i32> {
-    crate::log!(
+    crate::log_trace!(
         "pciids_git: fetch begin transport=hyper-https url={} key={} timeout_ms={} max_bytes={}\n",
         PCI_IDS_URL,
         PCI_IDS_KEY,
@@ -42,7 +42,7 @@ pub fn download_once() -> Result<(), i32> {
 #[embassy_executor::task]
 pub async fn pciids_git_task() {
     set_pciids_git_state(PCIIDS_GIT_STARTED);
-    crate::log!(
+    crate::log_trace!(
         "pciids_git: task start marker ready=0x{:08X} url={} key={}\n",
         crate::r::readiness::mask(),
         PCI_IDS_URL,
@@ -55,7 +55,7 @@ pub async fn pciids_git_task() {
             match load_raw_from_root_blocking() {
                 Ok(Some(raw)) => {
                     set_pciids_git_state(PCIIDS_GIT_STORED);
-                    crate::log!(
+                    crate::log_trace!(
                         "pciids_git: finished marker key={} bytes={} state=stored\n",
                         PCI_IDS_KEY,
                         raw.len()
@@ -63,14 +63,14 @@ pub async fn pciids_git_task() {
                 }
                 Ok(None) => {
                     set_pciids_git_state(PCIIDS_GIT_VERIFY_MISSING);
-                    crate::log!(
+                    crate::log_trace!(
                         "pciids_git: verify missing marker key={} after fetch\n",
                         PCI_IDS_KEY
                     );
                 }
                 Err(err) => {
                     set_pciids_git_state(PCIIDS_GIT_VERIFY_ERROR);
-                    crate::log!(
+                    crate::log_trace!(
                         "pciids_git: verify error marker key={} err={:?}\n",
                         PCI_IDS_KEY,
                         err
@@ -80,7 +80,7 @@ pub async fn pciids_git_task() {
         }
         Err(rc) => {
             set_pciids_git_state(PCIIDS_GIT_FAILED);
-            crate::log!(
+            crate::log_trace!(
                 "pciids_git: failed marker rc={} url={} state=fetch_failed\n",
                 rc,
                 PCI_IDS_URL

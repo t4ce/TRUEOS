@@ -437,7 +437,7 @@ pub async fn ui2_shell_demo_task() {
         content_w,
         content_h,
     ) else {
-        crate::log!("ui2-shell-demo: window creation failed tex={}\n", UI2_SHELL_TEX_ID);
+        crate::log_trace!("ui2-shell-demo: window creation failed tex={}\n", UI2_SHELL_TEX_ID);
         return;
     };
     let _ = surface.bind_spawn_task("ui2-shell-demo");
@@ -457,17 +457,17 @@ pub async fn ui2_shell_demo_task() {
         clear_rgba[idx + 3] = UI2_SHELL_BG_RGBA[3];
     }
     if !surface.upload_rgba_owned(clear_rgba, "ui2-shell-demo-clear") {
-        crate::log!("ui2-shell-demo: initial texture upload failed tex={}\n", UI2_SHELL_TEX_ID);
+        crate::log_trace!("ui2-shell-demo: initial texture upload failed tex={}\n", UI2_SHELL_TEX_ID);
         return;
     }
     if !crate::r::ui2::maximize_window(surface.window_id()) {
-        crate::log!("ui2-shell-demo: maximize failed window={}\n", surface.window_id());
+        crate::log_trace!("ui2-shell-demo: maximize failed window={}\n", surface.window_id());
     }
     if !crate::r::ui2::focus_window(surface.window_id()) {
-        crate::log!("ui2-shell-demo: front-push failed window={}\n", surface.window_id());
+        crate::log_trace!("ui2-shell-demo: front-push failed window={}\n", surface.window_id());
     }
 
-    crate::log!(
+    crate::log_trace!(
         "ui2-shell-demo: window={} tex={} viewport={}x{} content={}x{} cols={} rows={}\n",
         surface.window_id(),
         surface.tex_id(),

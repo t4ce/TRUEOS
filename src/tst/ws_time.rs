@@ -198,7 +198,7 @@ fn handle_ws_frames(vnet: &VNet, session: &mut TimeSession) -> bool {
             Ok(v) => v,
             Err(embedded_websocket::Error::ReadFrameIncomplete) => break,
             Err(e) => {
-                crate::log!("ws-time: frame decode failed {:?}\n", e);
+                crate::log_trace!("ws-time: frame decode failed {:?}\n", e);
                 close_session(vnet, session.handle);
                 return true;
             }
@@ -248,7 +248,7 @@ fn try_open_websocket(vnet: &VNet, session: &mut TimeSession) -> bool {
     };
 
     let Ok(req) = core::str::from_utf8(&session.rx[..header_end]) else {
-        crate::log!(
+        crate::log_trace!(
             "ws-time: handshake invalid utf8 handle={} header_bytes={}\n",
             session.handle.0,
             header_end
@@ -276,7 +276,7 @@ fn try_open_websocket(vnet: &VNet, session: &mut TimeSession) -> bool {
             .or_else(|| req.find('\n'))
             .unwrap_or(req.len());
         let req_line = &req[..line_end];
-        crate::log!(
+        crate::log_trace!(
             "ws-time: handshake reject handle={} line='{}' path={:?} expect='{}' upgrade_ok={} connection_ok={} ws_upgrade_ok={} key_present={}\n",
             session.handle.0,
             req_line,
@@ -292,7 +292,7 @@ fn try_open_websocket(vnet: &VNet, session: &mut TimeSession) -> bool {
     }
 
     let Ok(key) = WebSocketKey::try_from(key.unwrap_or("")) else {
-        crate::log!(
+        crate::log_trace!(
             "ws-time: handshake bad key handle={} key={:?}\n",
             session.handle.0,
             http_header_value(req, "Sec-WebSocket-Key")
@@ -303,7 +303,7 @@ fn try_open_websocket(vnet: &VNet, session: &mut TimeSession) -> bool {
 
     let mut response = [0u8; TX_BUF_MAX];
     let Ok(len) = session.ws.server_accept(&key, None, &mut response) else {
-        crate::log!("ws-time: server_accept failed handle={} path={:?}\n", session.handle.0, path);
+        crate::log_trace!("ws-time: server_accept failed handle={} path={:?}\n", session.handle.0, path);
         close_session(vnet, session.handle);
         return true;
     };
@@ -313,7 +313,7 @@ fn try_open_websocket(vnet: &VNet, session: &mut TimeSession) -> bool {
     session.rx = remaining;
     session.open = true;
     session.last_sent_minute = None;
-    crate::log!("ws-time: websocket opened handle={}\n", session.handle.0);
+    crate::log_trace!("ws-time: websocket opened handle={}\n", session.handle.0);
     false
 }
 
@@ -338,7 +338,7 @@ pub async fn ws_time_task() {
             continue;
         }
 
-        crate::log!(
+        crate::log_trace!(
             "ws-time: listening on tcp {} path={}\n",
             ports::WS_TIME_TCP_PORT,
             WS_TIME_PATH
@@ -355,13 +355,13 @@ pub async fn ws_time_task() {
                     api::Event::TcpEstablished { handle, .. } => {
                         if session.as_ref().map(|s| s.handle) != Some(handle) {
                             session = Some(TimeSession::new(handle));
-                            crate::log!("ws-time: tcp established handle={}\n", handle.0);
+                            crate::log_trace!("ws-time: tcp established handle={}\n", handle.0);
                         }
                     }
                     api::Event::TcpData { handle, data } => {
                         if session.is_none() {
                             session = Some(TimeSession::new(handle));
-                            crate::log!(
+                            crate::log_trace!(
                                 "ws-time: late session bind on first rx handle={} bytes={}\n",
                                 handle.0,
                                 data.len()
@@ -374,7 +374,7 @@ pub async fn ws_time_task() {
                             continue;
                         }
                         if active.rx.len().saturating_add(data.len()) > RX_BUF_MAX {
-                            crate::log!("ws-time: rx overflow handle={}\n", handle.0);
+                            crate::log_trace!("ws-time: rx overflow handle={}\n", handle.0);
                             close_session(&vnet, handle);
                             continue;
                         }
@@ -407,7 +407,7 @@ pub async fn ws_time_task() {
                     }
                     api::Event::Error { msg } => {
                         if msg != "bad handle" {
-                            crate::log!("ws-time: error {}\n", msg);
+                            crate::log_trace!("ws-time: error {}\n", msg);
                         }
                     }
                     api::Event::TcpSent { .. } => {}

@@ -155,7 +155,7 @@ fn note_cursor_event_source(state: &mut Ui2State, event: &crate::usb2::hid::True
     state.non_physical_cursor_event_count = state.non_physical_cursor_event_count.wrapping_add(1);
     let count = state.non_physical_cursor_event_count;
     if should_log_input_diag(count) {
-        crate::log!(
+        crate::log_trace!(
             "ui2: cursor-input-source non-physical count={} seq={} kind={} ctrl={} slot={} ep={} buttons=0x{:X} wheel={} flags=0x{:X}\n",
             count,
             event.seq,
@@ -180,7 +180,7 @@ fn note_keyboard_event_source(
     state.synthetic_keyboard_event_count = state.synthetic_keyboard_event_count.wrapping_add(1);
     let count = state.synthetic_keyboard_event_count;
     if should_log_input_diag(count) {
-        crate::log!(
+        crate::log_trace!(
             "ui2: keyboard-input-source synthetic count={} seq={} dev_seq={} ctrl={} slot={} ep={} kind={} key_code={} codepoint={} flags=0x{:X}\n",
             count,
             event.seq,
@@ -210,7 +210,7 @@ fn ensure_cursor_index(state: &mut Ui2State, slot_id: u32) -> Option<usize> {
     if state.cursors.len() >= UI2_CURSOR_CAP {
         let drop_count = UI2_CURSOR_CAP_DROP_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
         if drop_count <= 8 || drop_count.is_multiple_of(32) {
-            crate::log!(
+            crate::log_trace!(
                 "ui2: cursor-cap drop slot={} cap={} tracked={} count={}\n",
                 slot_id,
                 UI2_CURSOR_CAP,
@@ -288,7 +288,7 @@ fn set_cursor_selected_window(state: &mut Ui2State, slot_id: u32, next_window_id
             refresh_window_hit_entries(state, next_window_id);
         }
         UI2_DIRTY.store(true, Ordering::Release);
-        crate::log!("ui2: cursor-select slot={} window={}\n", slot_id, next_window_id);
+        crate::log_trace!("ui2: cursor-select slot={} window={}\n", slot_id, next_window_id);
     }
     changed
 }
@@ -665,7 +665,7 @@ pub(super) fn pump_cursor_selection(state: &mut Ui2State) {
         let (next_seq, dropped, wrote) =
             crate::usb2::hid::read_cursor_events_since(state.cursor_read_seq, &mut events);
         if dropped != 0 {
-            crate::log!(
+            crate::log_trace!(
                 "ui2: cursor-event-drop read_seq={} dropped={}\n",
                 state.cursor_read_seq,
                 dropped
@@ -817,7 +817,7 @@ pub(super) fn pump_keyboard_input(state: &mut Ui2State) {
         let (next_seq, dropped, wrote) =
             crate::r::keyboard::read_output_events_since(state.keyboard_read_seq, &mut raw_events);
         if dropped != 0 {
-            crate::log!(
+            crate::log_trace!(
                 "ui2: keyboard-event-drop read_seq={} dropped={}\n",
                 state.keyboard_read_seq,
                 dropped
@@ -852,7 +852,7 @@ pub(super) fn pump_keyboard_input(state: &mut Ui2State) {
                     if !events.is_empty()
                         && !hosted_queue_keyboard_events(content_id, events.as_slice())
                     {
-                        crate::log!(
+                        crate::log_trace!(
                             "ui2: keyboard-forward-drop window={} count={}\n",
                             window_id,
                             events.len()

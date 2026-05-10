@@ -1050,7 +1050,7 @@ fn primary_ipv4_addr(port: u16) -> Option<SocketAddr> {
 async fn serve_fileexplorer_port(app: Router, port: u16) {
     loop {
         let Some(addr) = primary_ipv4_addr(port) else {
-            crate::log!("fileexplorer-http: waiting for primary ipv4 port={}\n", port);
+            crate::log_trace!("fileexplorer-http: waiting for primary ipv4 port={}\n", port);
             tokio::time::sleep(core::time::Duration::from_millis(100)).await;
             continue;
         };
@@ -1058,7 +1058,7 @@ async fn serve_fileexplorer_port(app: Router, port: u16) {
         let listener = match tokio::net::TcpListener::bind(addr).await {
             Ok(listener) => listener,
             Err(err) => {
-                crate::log!(
+                crate::log_trace!(
                     "fileexplorer-http: bind {} failed port={} kind={:?} err={}\n",
                     addr,
                     port,
@@ -1073,14 +1073,14 @@ async fn serve_fileexplorer_port(app: Router, port: u16) {
         if port == FILEEXPLORER_HTTP_TCP_PORT {
             FILEEXPLORER_HTTP_PORT.store(addr.port(), Ordering::Release);
         }
-        crate::log!("fileexplorer-http: axum listening on http://{}/\n", addr);
+        crate::log_trace!("fileexplorer-http: axum listening on http://{}/\n", addr);
         let listener = listener
-            .tap_io(move |_| crate::log!("fileexplorer-http: tcp accepted port={}\n", port));
+            .tap_io(move |_| crate::log_trace!("fileexplorer-http: tcp accepted port={}\n", port));
         if let Err(err) = axum::serve(listener, app.clone()).await {
             if port == FILEEXPLORER_HTTP_TCP_PORT {
                 FILEEXPLORER_HTTP_PORT.store(0, Ordering::Release);
             }
-            crate::log!(
+            crate::log_trace!(
                 "fileexplorer-http: serve failed port={} kind={:?} err={}\n",
                 port,
                 err.kind(),
@@ -1116,11 +1116,11 @@ pub async fn fileexplorer_http_service_task() {
         crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
     )
     .await;
-    crate::log!(
+    crate::log_trace!(
         "fileexplorer-http: launching Tokio runtime after NET_V4_CONFIGURED+TRUEOSFS_ROOT_MOUNTED\n"
     );
     if crate::tst_chatserver::current_port().is_none() {
-        crate::log!(
+        crate::log_trace!(
             "fileexplorer-http: waiting {}ms for chat-http listener priority\n",
             FILEEXPLORER_CHAT_GRACE_MS
         );
@@ -1131,16 +1131,16 @@ pub async fn fileexplorer_http_service_task() {
         let rc = crate::trueos_tokio_worker::spawn_blocking_job_with_purpose(
             Box::new(|| {
                 if let Err(err) = run_fileexplorer_http_runtime() {
-                    crate::log!("fileexplorer-http: runtime failed {:?}\n", err);
+                    crate::log_trace!("fileexplorer-http: runtime failed {:?}\n", err);
                 }
             }),
             "fileexplorer-http-runtime",
         );
         if rc == 0 {
-            crate::log!("fileexplorer-http: submitted Tokio runtime to blocking lane\n");
+            crate::log_trace!("fileexplorer-http: submitted Tokio runtime to blocking lane\n");
             core::future::pending::<()>().await;
         }
-        crate::log!(
+        crate::log_trace!(
             "fileexplorer-http: blocking lane unavailable rc={} retry={}ms\n",
             rc,
             FILEEXPLORER_BLOCKING_LANE_RETRY_MS
