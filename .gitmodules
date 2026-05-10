@@ -4,3 +4,7 @@
 [submodule "crates/truekey"]
 	path = crates/truekey
 	url = https://github.com/t4ce/TRUEKEY.git
+[submodule "vendor/limine"]
+	path = vendor/limine
+	url = https://github.com/limine-bootloader/limine.git
+	branch = v10.x

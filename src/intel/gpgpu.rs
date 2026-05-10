@@ -3754,8 +3754,11 @@ fn prepare_gpgpu_store_surface_state_for_target_span(
     let surface_dword0 = (SURFTYPE_BUFFER << 29) | (SURFACE_FORMAT_RAW << 18);
     let surface_span_bytes = target_bytes.max(1);
     let surface_extent = surface_span_bytes.saturating_sub(1);
-    let surface_dword2 = u32::try_from(surface_extent).unwrap_or(u32::MAX);
-    let surface_dword3 = 0;
+    let surface_width_minus1 = (surface_extent & 0x7F) as u32;
+    let surface_height_minus1 = ((surface_extent >> 7) & 0x3FFF) as u32;
+    let surface_depth_minus1 = ((surface_extent >> 21) & 0x7FF) as u32;
+    let surface_dword2 = (surface_height_minus1 << 16) | surface_width_minus1;
+    let surface_dword3 = surface_depth_minus1 << 21;
     unsafe {
         let binding_table = warm
             .draw_state_virt
@@ -3792,7 +3795,7 @@ fn prepare_gpgpu_store_surface_state_for_target_span(
         surface_bytes,
     );
     crate::log!(
-        "intel/gpgpu: gpu-program-surface-state ready=1 bti=0x{:02X} bt_off=0x{:X} bt_entries={} bt_entry=0x{:08X} surf_off=0x{:X} surf_gpu=0x{:X} target_gpu=0x{:X} target_bytes=0x{:X} surf0=0x{:08X} surf1=0x{:08X} surf2=0x{:08X} surf3=0x{:08X} note={}\n",
+        "intel/gpgpu: gpu-program-surface-state ready=1 bti=0x{:02X} bt_off=0x{:X} bt_entries={} bt_entry=0x{:08X} surf_off=0x{:X} surf_gpu=0x{:X} target_gpu=0x{:X} target_bytes=0x{:X} surf_width_m1=0x{:X} surf_height_m1=0x{:X} surf_depth_m1=0x{:X} surf0=0x{:08X} surf1=0x{:08X} surf2=0x{:08X} surf3=0x{:08X} note={}\n",
         GPGPU_STORE_BINDING_TABLE_INDEX,
         GPGPU_STORE_BINDING_TABLE_OFFSET_BYTES,
         GPGPU_STORE_BINDING_TABLE_ENTRIES,
@@ -3801,6 +3804,9 @@ fn prepare_gpgpu_store_surface_state_for_target_span(
         GPU_VA_DRAW_STATE_BASE + GPGPU_STORE_SURFACE_STATE_OFFSET_BYTES as u64,
         target_gpu,
         surface_span_bytes,
+        surface_width_minus1,
+        surface_height_minus1,
+        surface_depth_minus1,
         surface_dword0,
         RENDER_MOCS << 24,
         surface_dword2,

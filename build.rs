@@ -6,7 +6,10 @@ use std::{
     ffi::OsStr,
 };
 
-use trueos_limloader::ensure_limine_from_manifest_dir;
+#[path = "build_support/limloader.rs"]
+mod limloader;
+
+use limloader::ensure_limine_from_manifest_dir;
 
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
@@ -20,6 +23,8 @@ fn main() {
     println!("cargo:rerun-if-changed=bld/limine-build/.config_args");
     println!("cargo:rerun-if-changed=bld/limine-prefix/share/limine/BOOTX64.EFI");
     println!("cargo:rerun-if-changed=bld/limine-prefix/share/limine/limine-uefi-cd.bin");
+    println!("cargo:rerun-if-changed=vendor/limine/bootstrap");
+    println!("cargo:rerun-if-changed=vendor/limine/configure.ac");
 
     ensure_limine_from_manifest_dir(&manifest_dir);
 }
