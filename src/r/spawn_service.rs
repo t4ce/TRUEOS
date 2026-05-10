@@ -984,7 +984,7 @@ pub(crate) const BOOT_LUMEN_TOKENIZER_PATH: &str = "tokenizer.json";
 
 const BOOT_ASSETS: [BootAsset; 4] = [
     BootAsset {
-        label: "media-demo-yelly",
+        label: "media-firstframe-1440p",
         url: crate::allports::local_assets::DEMO_YELLY_MP4_URL,
         path: crate::intel::xelp_media_source::MEDIA_DECODE_CACHE_PATH,
         max_bytes: 16 * 1024 * 1024,
@@ -1512,7 +1512,7 @@ static TASKS: [TaskSpec; 70] = [
     ),
     TaskSpec::enabled(
         "intel-hda-probe",
-        0,
+        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
         &INTEL_HDA_PROBE_STARTED,
         spawn_intel_hda_probe_task,
     ),

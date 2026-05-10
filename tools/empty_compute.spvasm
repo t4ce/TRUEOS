@@ -1,0 +1,11 @@
+; Minimal Vulkan compute shader: one empty invocation, local_size = 1.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpExecutionMode %main LocalSize 1 1 1
+%void = OpTypeVoid
+%func = OpTypeFunction %void
+%main = OpFunction %void None %func
+%entry = OpLabel
+OpReturn
+OpFunctionEnd

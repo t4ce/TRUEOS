@@ -60,8 +60,8 @@ const MEDIA_DEFAULT_RING_BYTES: usize = 16 * 1024;
 const MEDIA_DEFAULT_CONTEXT_BYTES: usize = 22 * 4096;
 const MEDIA_DEFAULT_BATCH_BYTES: usize = 32 * 1024;
 const MEDIA_DEFAULT_RESULT_BYTES: usize = 4 * 4096;
-const MEDIA_DEFAULT_BITSTREAM_BYTES: usize = 4 * 1024 * 1024;
-const MEDIA_DEFAULT_OUTPUT_SURFACE_BYTES: usize = 8 * 1024 * 1024;
+const MEDIA_DEFAULT_BITSTREAM_BYTES: usize = 8 * 1024 * 1024;
+const MEDIA_DEFAULT_OUTPUT_SURFACE_BYTES: usize = 16 * 1024 * 1024;
 const MEDIA_DEFAULT_SCRATCH_BYTES: usize = 256 * 1024;
 const MEDIA_SCRATCH_OFFSET_BYTES: usize = MEDIA_DEFAULT_SCRATCH_BYTES;
 const MEDIA_SUBMIT_POLL_ITERS: usize = 100_000;
@@ -411,6 +411,8 @@ pub(crate) struct MediaSurfaceProbeBand {
     pub signature: u32,
     pub active_samples: usize,
     pub sample_count: usize,
+    pub min_value: u8,
+    pub max_value: u8,
 }
 
 impl MediaSurfaceProbeBand {
@@ -419,7 +421,13 @@ impl MediaSurfaceProbeBand {
             signature: 0,
             active_samples: 0,
             sample_count: 0,
+            min_value: 0,
+            max_value: 0,
         }
+    }
+
+    fn has_range(self) -> bool {
+        self.sample_count != 0 && self.min_value != self.max_value
     }
 }
 
@@ -885,6 +893,8 @@ fn probe_tiled_rect(
     let mut signature = 0u32;
     let mut active_samples = 0usize;
     let mut sample_count = 0usize;
+    let mut min_value = u8::MAX;
+    let mut max_value = u8::MIN;
     for row in row_y..row_y.saturating_add(row_count) {
         for col in byte_x..byte_x.saturating_add(width) {
             let offset = media_ytile_offset(col, row, tiles_per_row);
@@ -892,6 +902,8 @@ fn probe_tiled_rect(
             signature = signature.rotate_left(5) ^ u32::from(value);
             active_samples += usize::from(value != baseline);
             sample_count += 1;
+            min_value = min_value.min(value);
+            max_value = max_value.max(value);
         }
     }
 
@@ -899,6 +911,8 @@ fn probe_tiled_rect(
         signature,
         active_samples,
         sample_count,
+        min_value,
+        max_value,
     })
 }
 
@@ -1031,33 +1045,45 @@ fn log_output_surface_probe(
     }
 
     crate::log!(
-        "intel/media2: output-probe phase=pre-present engine={} sample={} submit_completed={} y_last(sig=0x{:08X} active={}/{}) y_prev_mb(sig=0x{:08X} active={}/{}) y_bottom_mb(sig=0x{:08X} active={}/{}) uv_prev_mb(sig=0x{:08X} active={}/{}) uv_bottom_mb(sig=0x{:08X} active={}/{})\n",
+        "intel/media2: output-probe phase=pre-present engine={} sample={} submit_completed={} y_last(sig=0x{:08X} active={}/{} range={}..{}) y_prev_mb(sig=0x{:08X} active={}/{} range={}..{}) y_bottom_mb(sig=0x{:08X} active={}/{} range={}..{}) uv_prev_mb(sig=0x{:08X} active={}/{} range={}..{}) uv_bottom_mb(sig=0x{:08X} active={}/{} range={}..{})\n",
         engine_name,
         sample_idx,
         submit_completed,
         probe.luma_visible_last_row.signature,
         probe.luma_visible_last_row.active_samples,
         probe.luma_visible_last_row.sample_count,
+        probe.luma_visible_last_row.min_value,
+        probe.luma_visible_last_row.max_value,
         probe.luma_prev_mb_row.signature,
         probe.luma_prev_mb_row.active_samples,
         probe.luma_prev_mb_row.sample_count,
+        probe.luma_prev_mb_row.min_value,
+        probe.luma_prev_mb_row.max_value,
         probe.luma_bottom_mb_row.signature,
         probe.luma_bottom_mb_row.active_samples,
         probe.luma_bottom_mb_row.sample_count,
+        probe.luma_bottom_mb_row.min_value,
+        probe.luma_bottom_mb_row.max_value,
         probe.chroma_prev_mb_row.signature,
         probe.chroma_prev_mb_row.active_samples,
         probe.chroma_prev_mb_row.sample_count,
+        probe.chroma_prev_mb_row.min_value,
+        probe.chroma_prev_mb_row.max_value,
         probe.chroma_bottom_mb_row.signature,
         probe.chroma_bottom_mb_row.active_samples,
-        probe.chroma_bottom_mb_row.sample_count
+        probe.chroma_bottom_mb_row.sample_count,
+        probe.chroma_bottom_mb_row.min_value,
+        probe.chroma_bottom_mb_row.max_value
     );
 }
 
-fn output_surface_has_decoded_luma(probe: &MediaSurfaceProbe) -> bool {
+fn output_surface_has_decoded_detail(probe: &MediaSurfaceProbe) -> bool {
     probe.valid
-        && (probe.luma_visible_last_row.active_samples != 0
-            || probe.luma_prev_mb_row.active_samples != 0
-            || probe.luma_bottom_mb_row.active_samples != 0)
+        && (probe.luma_visible_last_row.has_range()
+            || probe.luma_prev_mb_row.has_range()
+            || probe.luma_bottom_mb_row.has_range()
+            || probe.chroma_prev_mb_row.has_range()
+            || probe.chroma_bottom_mb_row.has_range())
 }
 
 fn present_nv12_frame(
@@ -1157,9 +1183,9 @@ pub(super) fn decode_and_present_frame(
         output_surface_pitch,
     );
     log_output_surface_probe(engine.name, sample_idx, submit_completed, output_surface_probe);
-    let decoded_luma = output_surface_has_decoded_luma(&output_surface_probe);
+    let decoded_detail = output_surface_has_decoded_detail(&output_surface_probe);
     let (present_ready, output_surface_signature, output_surface_nonzero_samples) =
-        if decoded_luma {
+        if decoded_detail {
             present_nv12_frame(
                 output_surface,
                 u16::try_from(coded_width).unwrap_or(u16::MAX),
@@ -1174,7 +1200,7 @@ pub(super) fn decode_and_present_frame(
         } else {
             let (signature, nonzero_samples) = surface_signature(output_surface);
             crate::log!(
-                "intel/media2: first-frame blank-surface engine={} sample={} submit_completed={} luma_active=0 present_skipped=1 sig=0x{:08X} nonzero_samples={}\n",
+                "intel/media2: first-frame blank-surface engine={} sample={} submit_completed={} detail_range=0 present_skipped=1 sig=0x{:08X} nonzero_samples={}\n",
                 engine.name,
                 sample_idx,
                 submit_completed as u8,
@@ -1208,7 +1234,7 @@ pub(super) fn decode_and_present_frame(
         output_surface_nonzero_samples,
         output_surface_probe,
         submit_completed,
-        present_attempted: true,
+        present_attempted: decoded_detail,
         present_ready,
         synthetic_preview: false,
     })

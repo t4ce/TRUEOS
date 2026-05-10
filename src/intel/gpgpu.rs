@@ -1052,7 +1052,7 @@ const GPGPU_PREFLIGHT_LANES: usize = 4;
 const GPGPU_BURN_MIN_ROWS: usize = 512;
 const GPGPU_BURN_MIN_K_DIM: usize = 512;
 const GPU_PROGRAM_SHARED_RAM_WRITE_EXPECTED: u32 = trueos_eu::gfx12::STORE_SENTINEL_U32;
-const GPGPU_LOAD_DUMMY_CURBE: bool = false;
+const GPGPU_LOAD_DUMMY_CURBE: bool = true;
 const GPGPU_DUMMY_CURBE_BYTES: usize = 64;
 const GPGPU_CONTIGUOUS_VFE_IDD_WALKER: bool = false;
 const GPGPU_MESA_POST_VFE_PIPE_CONTROL: bool = false;
@@ -1064,6 +1064,8 @@ const GPGPU_ENABLE_SIP_EXCEPTIONS: bool = false;
 const GPGPU_SIP_HANDLER_OFFSET_BYTES: usize = GPGPU_EU_KERNEL_OFFSET_BYTES + 0x200;
 const GPGPU_SIP_HANDLER_VARIANT: trueos_eu::gfx12::Gfx12EotVariant =
     trueos_eu::gfx12::Gfx12EotVariant::TsR0ToG127Send1;
+const GPGPU_USE_HDC_STORE_THEN_EOT: bool = false;
+const GPGPU_USE_GFX125_COMPUTE_WALKER: bool = false;
 
 #[derive(Copy, Clone)]
 struct GpgpuEuProgram {
@@ -1093,6 +1095,9 @@ static GPU_PROGRAM_SHARED_RAM_WRITE_CODE: [u32; 12] = [
 ];
 
 fn selected_gpgpu_eu_program() -> GpgpuEuProgram {
+    if GPGPU_USE_HDC_STORE_THEN_EOT {
+        return gpgpu_store_eot_program();
+    }
     let artifact = trueos_eu::gfx12::eot_artifact(ACTIVE_GFX12_EOT_VARIANT);
     GpgpuEuProgram {
         name: artifact.name,
@@ -1103,7 +1108,7 @@ fn selected_gpgpu_eu_program() -> GpgpuEuProgram {
 }
 
 fn gpgpu_store_eot_program() -> GpgpuEuProgram {
-    let artifact = trueos_eu::gfx12::HDC1_BTI34_STORE_THEN_TS_EOT;
+    let artifact = trueos_eu::gfx12::HDC1_STATELESS_STORE_THEN_TS_EOT;
     GpgpuEuProgram {
         name: artifact.name,
         kind: artifact.kind,
@@ -2001,8 +2006,13 @@ fn submit_gpgpu_compute_walker_probe(
     } else {
         disabled_gpgpu_store_surface_state()
     };
+    let batch_result = if GPGPU_USE_GFX125_COMPUTE_WALKER {
+        encode_gfx125_compute_walker_probe_batch(batch, store_surface, program)
+    } else {
+        encode_gfx12_gpgpu_walker_probe_batch(warm, batch, store_surface, program)
+    };
     let batch_bytes =
-        match encode_gfx12_gpgpu_walker_probe_batch(warm, batch, store_surface, program) {
+        match batch_result {
             Ok(bytes) => bytes,
             Err(reason) => {
                 crate::log!("intel/gpgpu: compute-walker accepted=0 reason={}\n", reason);
@@ -2478,7 +2488,7 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
         | PIPELINE_SELECT_GFX12_MASK
         | PIPELINE_SELECT_MEDIA_SAMPLER_DOP_CG_ENABLE;
     const PIPELINE_SELECT_GPGPU: u32 = PIPELINE_SELECT_3D | 2;
-    const COMPUTE_SBA_SPAN_BYTES: usize = 0x1000_0000;
+    const COMPUTE_SBA_SPAN_BYTES: usize = 0xFFFF_F000;
     const CS_GPR_STAMP_HI: u32 = 0x0000_0001;
     const CS_GPR0_STAMP_LO: u32 = 0xC5A0_2600;
     const CS_GPR1_STAMP_LO: u32 = 0xC5A0_2608;
@@ -2486,11 +2496,7 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     const CURBE_STATE_OFFSET_BYTES: usize = GPGPU_WALKER_SCRATCH_OFFSET_BYTES + 0x100;
     const IDD_PAYLOAD_DWORDS: usize = 8;
     const IDD_LOAD_DWORDS: usize = IDD_PAYLOAD_DWORDS;
-    const CURBE_READ_LENGTH_8DW: u32 = if GPGPU_LOAD_DUMMY_CURBE {
-        (GPGPU_DUMMY_CURBE_BYTES / 32) as u32
-    } else {
-        0
-    };
+    const CURBE_READ_LENGTH_8DW: u32 = if GPGPU_LOAD_DUMMY_CURBE { 1 } else { 0 };
     const GPGPU_THREADS_IN_GROUP: u32 = 1;
     const CURBE_TOTAL_BYTES: usize = if GPGPU_LOAD_DUMMY_CURBE {
         GPGPU_DUMMY_CURBE_BYTES
@@ -2502,28 +2508,44 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     } else {
         0
     };
-    const GPGPU_VFE_MAX_THREADS: u32 = 64;
+    const GPGPU_VFE_MAX_THREADS: u32 = 223;
     const GPGPU_VFE_URB_ENTRIES: u32 = 2;
     const GPGPU_VFE_FUSED_EU_DISPATCH_LEGACY_MODE: u32 = 0;
     const GPGPU_VFE_URB_ENTRY_ALLOCATION_32B: u32 = 2;
-    const GPGPU_DYNAMIC_STATE_BASE: u64 = 0;
-    const IDD_DYNAMIC_OFFSET_BYTES: usize =
-        GPU_VA_DRAW_STATE_BASE as usize + IDD_STATE_OFFSET_BYTES;
-    const CURBE_DYNAMIC_OFFSET_BYTES: usize =
-        GPU_VA_DRAW_STATE_BASE as usize + CURBE_STATE_OFFSET_BYTES;
+    const GPGPU_RELATIVE_STATE_BASES: bool = true;
+    const GPGPU_TEMPORARY_3D_FOR_SBA: bool = true;
+    const GPGPU_DYNAMIC_STATE_BASE: u64 = if GPGPU_RELATIVE_STATE_BASES {
+        GPU_VA_DRAW_STATE_BASE
+    } else {
+        0
+    };
+    const IDD_DYNAMIC_OFFSET_BYTES: usize = if GPGPU_RELATIVE_STATE_BASES {
+        IDD_STATE_OFFSET_BYTES
+    } else {
+        GPU_VA_DRAW_STATE_BASE as usize + IDD_STATE_OFFSET_BYTES
+    };
+    const CURBE_DYNAMIC_OFFSET_BYTES: usize = if GPGPU_RELATIVE_STATE_BASES {
+        CURBE_STATE_OFFSET_BYTES
+    } else {
+        GPU_VA_DRAW_STATE_BASE as usize + CURBE_STATE_OFFSET_BYTES
+    };
     const GPGPU_KERNEL_GPU: u64 = GPU_VA_DRAW_STATE_BASE + GPGPU_EU_KERNEL_OFFSET_BYTES as u64;
     // Mesa's tiny Gfx12 executor programs Instruction Base to 0 and uses the
     // IDD Kernel Start Pointer as the kernel's GPU offset.  Keep this probe in
     // that shape so the EU fetch address no longer depends on a non-zero
     // instruction-base latch.
-    const GPGPU_INSTRUCTION_BASE: u64 = 0;
+    const GPGPU_INSTRUCTION_BASE: u64 = if GPGPU_RELATIVE_STATE_BASES {
+        GPU_VA_DRAW_STATE_BASE
+    } else {
+        0
+    };
     const GPGPU_KSP_NEGATIVE_CONTROL: bool = false;
     const GPGPU_BAD_KERNEL_START_POINTER: u64 = 0x00F0_0000;
     const GPGPU_MIDL_NEGATIVE_CONTROL: bool = false;
     // Gen12 legacy GPGPU_WALKER is a 15-dword packet.  The PRM default length
     // is 0x0D with a length bias of 2; keep the mask shape aligned with Mesa's
     // minimal legacy walker while the low SIMD8 lanes remain the consumed bits.
-    const GPGPU_WALKER_SIMD8_RIGHT_MASK: u32 = 0xFFFF_FFFF;
+    const GPGPU_WALKER_SIMD8_RIGHT_MASK: u32 = 0x0000_0001;
     const GPGPU_WALKER_BOTTOM_MASK: u32 = 0xFFFF_FFFF;
     const STATE_SIP_CMD: u32 = 0x6102_0001;
     // The repeatable stall sits at GPGPU_WALKER with no visible TDL dispatch.
@@ -2657,16 +2679,18 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
         PIPE_CONTROL_CS_STALL,
     )?;
 
-    // Wa_1607854226/TGL: non-pipelined state may not latch when emitted under
-    // GPGPU pipeline select.  Program SBA/SCM while temporarily in 3D, then
-    // switch back before MEDIA_VFE_STATE and GPGPU_WALKER.
-    push(batch_dwords, &mut cursor, PIPELINE_SELECT_3D)?;
-    push_pipe_control_full(
-        batch_dwords,
-        &mut cursor,
-        PIPE_CONTROL_HDC_PIPELINE_FLUSH_HEADER | PIPE_CONTROL_UNTYPED_DATAPORT_FLUSH_HEADER,
-        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL,
-    )?;
+    if GPGPU_TEMPORARY_3D_FOR_SBA {
+        // Wa_1607854226/TGL: non-pipelined state may not latch when emitted
+        // under GPGPU pipeline select.  Keep this as an explicit diagnostic
+        // toggle; Mesa's executor emits SBA directly under GPGPU.
+        push(batch_dwords, &mut cursor, PIPELINE_SELECT_3D)?;
+        push_pipe_control_full(
+            batch_dwords,
+            &mut cursor,
+            PIPE_CONTROL_HDC_PIPELINE_FLUSH_HEADER | PIPE_CONTROL_UNTYPED_DATAPORT_FLUSH_HEADER,
+            PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL,
+        )?;
+    }
     let idd_index = IDD_STATE_OFFSET_BYTES / core::mem::size_of::<u32>();
     if idd_index
         .checked_add(IDD_LOAD_DWORDS)
@@ -2680,7 +2704,7 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     let kernel_start_pointer = if GPGPU_KSP_NEGATIVE_CONTROL {
         GPGPU_BAD_KERNEL_START_POINTER
     } else {
-        GPGPU_KERNEL_GPU
+        GPGPU_KERNEL_GPU - GPGPU_INSTRUCTION_BASE
     };
     let mut idd_words = [0u32; IDD_PAYLOAD_DWORDS];
     idd_words[0] = kernel_start_pointer as u32;
@@ -2918,7 +2942,7 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     let bottom_lanes_consumed = (batch_dwords[walker_start + 14] & simd_mask).count_ones();
 
     crate::log!(
-        "intel/gpgpu: compute-walker-layout program_source={} expects_store={} launch_profile=split-vfe-msf-curbe-pc-midl vfe_off=0x{:X} vfe_dw3=0x{:08X} vfe_dw5=0x{:08X} fused_eu_dispatch_legacy={} urb_entry_alloc_32b={} curbe_present={} curbe_bytes=0x{:X} curbe_read_len_8dw={} id_load_off=0x{:X} id_load_bytes=0x{:X} idd_payload_bytes=0x{:X} midl_negative_control={} midl_start=0x{:X} walker_off=0x{:X} walker_cmd=0x{:08X} exec_mask=0x{:08X} idd_gpu=0x{:X} idd_dynamic_offset=0x{:X} idd_ksp=0x{:08X} instruction_base=0x{:X} ksp_resolves_to=0x{:X} idd_dw2=0x{:08X} idd_dw4=0x{:08X} idd_dw6=0x{:08X} surface_base=0x{:X} dynamic_state_base=0x{:X} contiguous_vfe_idd_walker={} mesa_post_vfe_pipe_control={} tail_off=0x{:X} cs_marker=0x{:08X} note=legacy-vfe-dispatch-with-prm-len13-walker\n",
+        "intel/gpgpu: compute-walker-layout program_source={} expects_store={} launch_profile=split-vfe-msf-curbe-pc-midl vfe_off=0x{:X} vfe_dw3=0x{:08X} vfe_dw5=0x{:08X} fused_eu_dispatch_legacy={} urb_entry_alloc_32b={} curbe_present={} curbe_bytes=0x{:X} curbe_read_len_8dw={} id_load_off=0x{:X} id_load_bytes=0x{:X} idd_payload_bytes=0x{:X} midl_negative_control={} state_bases_relative={} temporary_3d_for_sba={} midl_start=0x{:X} walker_off=0x{:X} walker_cmd=0x{:08X} exec_mask=0x{:08X} idd_gpu=0x{:X} idd_dynamic_offset=0x{:X} idd_ksp=0x{:08X} instruction_base=0x{:X} ksp_resolves_to=0x{:X} idd_dw2=0x{:08X} idd_dw4=0x{:08X} idd_dw6=0x{:08X} surface_base=0x{:X} dynamic_state_base=0x{:X} contiguous_vfe_idd_walker={} mesa_post_vfe_pipe_control={} tail_off=0x{:X} cs_marker=0x{:08X} note=legacy-vfe-dispatch-with-prm-len13-walker\n",
         program.name,
         program.expects_store as u8,
         vfe_start * core::mem::size_of::<u32>(),
@@ -2933,6 +2957,8 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
         midl_total_bytes,
         IDD_PAYLOAD_DWORDS * core::mem::size_of::<u32>(),
         GPGPU_MIDL_NEGATIVE_CONTROL as u8,
+        GPGPU_RELATIVE_STATE_BASES as u8,
+        GPGPU_TEMPORARY_3D_FOR_SBA as u8,
         midl_start_address,
         walker_start * core::mem::size_of::<u32>(),
         batch_dwords[walker_start],

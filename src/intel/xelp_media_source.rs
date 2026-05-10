@@ -2,7 +2,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-pub(crate) const MEDIA_DECODE_CACHE_PATH: &str = "media/demo_yelly.mp4";
+pub(crate) const MEDIA_DECODE_CACHE_PATH: &str = "media/trueos_h264_diag_mbgrid_2560x1440.mp4";
 const MEDIA_HTTP_DEMO_TIMEOUT_MS: u32 = 60_000;
 const MEDIA_HTTP_DEMO_MAX_BYTES: usize = 16 * 1024 * 1024;
 
