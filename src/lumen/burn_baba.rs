@@ -289,10 +289,11 @@ pub(crate) fn share_matvec_rowmajor_bf16(n_rows: usize, k_dim: usize, chunk_rows
         "eu-c-store-kernel-not-proven"
     };
     crate::log!(
-        "burn-baba: gpgpu-pilot-plan director={} role={} protocol={} enabled={} eligible={} gpu_ready={} arena_ready={} arena_gpu_base=0x{:X} arena_bytes=0x{:X} arena_max_tiles={} pilot_tiles={} pilot_tile_cap={} candidate_tiles={} tile_rows={} tile_k={} x_bytes={} weight_tile_bytes={} output_tile_bytes={} budget_pct={} validated_hw_threads={} budget_hw_threads={} target_rows={} cpu_rows={} compare=cpu-reference-first dispatch=disabled reason={} cpu_ap_continues=1 net_gpu_role={} net_gpu_action=deferred does_not_prove=gpu_matmul\n",
+        "burn-baba: gpgpu-pilot-plan director={} role={} protocol={} cgp_mode={} enabled={} eligible={} gpu_ready={} arena_ready={} arena_gpu_base=0x{:X} arena_bytes=0x{:X} arena_max_tiles={} pilot_tiles={} pilot_tile_cap={} candidate_tiles={} tile_rows={} tile_k={} x_bytes={} weight_tile_bytes={} output_tile_bytes={} budget_pct={} validated_hw_threads={} budget_hw_threads={} target_rows={} cpu_rows={} compare=cpu-reference-first dispatch=disabled reason={} cpu_ap_continues=1 net_gpu_role={} net_gpu_action=deferred does_not_prove=gpu_matmul\n",
         director.director,
         director.local_gpu_role.as_str(),
         director.protocol,
+        pilot.mode.as_str(),
         LOCAL_GPGPU_PROOF_BACKEND_ENABLED as u8,
         (LOCAL_GPGPU_PROOF_BACKEND_ENABLED && pilot.eligible) as u8,
         plan.gpu_ready as u8,
@@ -380,93 +381,32 @@ pub(crate) fn plan_bf16_decode_matvec(
     InferenceKernelPlan::baseline_bf16_decode_matvec(batch_rows, gpu_ready)
 }
 
-#[derive(Copy, Clone, Debug)]
-struct GpgpuPilotPlan {
-    eligible: bool,
-    pilot_tiles: usize,
-    candidate_tiles: usize,
-    tile_rows: usize,
-    tile_k: usize,
-    x_bytes: usize,
-    weight_tile_bytes: usize,
-    output_tile_bytes: usize,
-}
-
-#[derive(Copy, Clone, Debug)]
-struct LocalGpuBackendBudget {
-    percent: usize,
-    validated_lane_dispatch: usize,
-    validated_hw_threads: usize,
-    budget_hw_threads: usize,
-    cpu_reserved_hw_threads: usize,
-    target_rows: usize,
-    cpu_rows: usize,
-}
-
 fn plan_gpgpu_pilot(
     n_rows: usize,
     k_dim: usize,
     eligible: bool,
     arena_tile_rows: usize,
     arena_max_tiles: usize,
-) -> GpgpuPilotPlan {
-    let tile_rows = arena_tile_rows.max(1).min(n_rows).max(1);
-    let candidate_tiles = if eligible {
-        n_rows.div_ceil(tile_rows)
-    } else {
-        0
-    };
-    let pilot_tiles = candidate_tiles
-        .min(GPGPU_PILOT_MAX_TILES)
-        .min(arena_max_tiles);
-    let x_bytes = k_dim.saturating_mul(core::mem::size_of::<f32>());
-    let weight_tile_bytes = tile_rows.saturating_mul(k_dim).saturating_mul(2);
-    let output_tile_bytes = tile_rows.saturating_mul(core::mem::size_of::<f32>());
-
-    GpgpuPilotPlan {
+) -> crate::lumen::cgp::CgpTilePlan {
+    crate::lumen::cgp::plan_rowmajor_bf16_tile(
+        n_rows,
+        k_dim,
         eligible,
-        pilot_tiles,
-        candidate_tiles,
-        tile_rows,
-        tile_k: k_dim,
-        x_bytes,
-        weight_tile_bytes,
-        output_tile_bytes,
-    }
+        arena_tile_rows,
+        arena_max_tiles,
+        GPGPU_PILOT_MAX_TILES,
+        crate::lumen::cgp::CgpJobMode::ProofOnly,
+    )
 }
 
 fn plan_local_gpu_backend_budget(
     n_rows: usize,
     validated_lane_dispatch: u32,
-) -> LocalGpuBackendBudget {
-    let validated_lane_dispatch = validated_lane_dispatch as usize;
-    let validated_hw_threads =
-        validated_lane_dispatch / GPGPU_VALIDATED_SIMD_LANES_PER_THREAD.max(1);
-    let budget_hw_threads = if validated_hw_threads == 0 {
-        0
-    } else {
-        validated_hw_threads
-            .saturating_mul(LOCAL_GPU_BACKEND_BUDGET_PERCENT)
-            .saturating_div(100)
-            .max(1)
-    };
-    let target_rows = if n_rows == 0 || budget_hw_threads == 0 {
-        0
-    } else {
-        n_rows
-            .saturating_mul(LOCAL_GPU_BACKEND_BUDGET_PERCENT)
-            .saturating_div(100)
-            .max(1)
-            .min(n_rows)
-    };
-
-    LocalGpuBackendBudget {
-        percent: LOCAL_GPU_BACKEND_BUDGET_PERCENT,
+) -> crate::lumen::cgp::CgpBackendBudget {
+    crate::lumen::cgp::plan_backend_budget(
+        n_rows,
         validated_lane_dispatch,
-        validated_hw_threads,
-        budget_hw_threads,
-        cpu_reserved_hw_threads: validated_hw_threads.saturating_sub(budget_hw_threads),
-        target_rows,
-        cpu_rows: n_rows.saturating_sub(target_rows),
-    }
+        LOCAL_GPU_BACKEND_BUDGET_PERCENT,
+        GPGPU_VALIDATED_SIMD_LANES_PER_THREAD,
+    )
 }
