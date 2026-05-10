@@ -381,8 +381,8 @@ pub static T4_LIVE_X_STATIC_DP4A_REQUIREMENT_HDC1_STORE_THEN_TS_EOT: EuArtifact 
 // multiply/reduce, and store the computed row output.  Older T47/T48 artifacts
 // remain preserved as sentinel/echo controls and must not satisfy this rung.
 pub const T5_ONE_ROW_MATVEC_PROGRAM_NAME: &str =
-    "gfx12-t5-one-row-live-bf16-matvec-hdc1-stateless-store-then-ts-eot";
-pub const T5_ONE_ROW_MATVEC_LIVE_K: usize = 2048;
+    "gfx12-t5-small-live4-bf16-dot-hdc1-stateless-store-then-ts-eot";
+pub const T5_ONE_ROW_MATVEC_LIVE_K: usize = 4;
 pub const T5_ONE_ROW_MATVEC_REQUIRES_LIVE_GPU_LOAD: bool = true;
 
 #[cfg(feature = "alloc")]

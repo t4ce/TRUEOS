@@ -2202,7 +2202,7 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
         "disabled-until-live-load-artifact-review"
     };
     crate::log!(
-        "intel/gpgpu: t5-one-row-matvec submitted=0 finished=0 readback_ok=0 compare_ok=0 reason={} program_source={} groups=1 expected_lane_dispatch=8 observed_lane_dispatch=0 output_gpu=0x{:X} output_first_before=0x{:08X} output_first_after=0x{:08X} gpu_value=0x00000000 cpu_expected_bits=0x{:08X} output_hits_lo64=0x{:016X} live_k_dim={} requires_live_gpu_load={} finish_marker=0x00000000 finish_expected=0x{:08X} batch_bytes=0x0 output_owner=cpu-ap next=generate-t5-live-load-bf16-dot-eu-artifact does_not_prove=model_matvec_or_gpu_live_load\n",
+        "intel/gpgpu: t5-small-live4-bf16-dot submitted=0 finished=0 readback_ok=0 compare_ok=0 reason={} program_source={} groups=1 expected_lane_dispatch=8 observed_lane_dispatch=0 output_gpu=0x{:X} output_first_before=0x{:08X} output_first_after=0x{:08X} gpu_value=0x00000000 cpu_expected_bits=0x{:08X} output_hits_lo64=0x{:016X} live_k_dim={} requires_live_gpu_load={} finish_marker=0x00000000 finish_expected=0x{:08X} batch_bytes=0x0 output_owner=cpu-ap next=generate-t5-small-live4-load-bf16-dot-eu-artifact does_not_prove=model_matvec_or_gpu_live_load\n",
         reason,
         program.name,
         output_gpu,
@@ -2278,7 +2278,7 @@ fn gpgpu_t5_one_row_matvec_failure(
     live_k_dim: usize,
 ) -> crate::intel::GpgpuT5OneRowMatvecProof {
     crate::log!(
-        "intel/gpgpu: t5-one-row-matvec submitted=0 finished=0 readback_ok=0 compare_ok=0 reason={} program_source={} groups=1 expected_lane_dispatch=8 observed_lane_dispatch=0 output_gpu=0x{:X} output_first_before=0x00000000 output_first_after=0x00000000 gpu_value=0x00000000 cpu_expected_bits=0x{:08X} output_hits_lo64=0x0000000000000000 live_k_dim={} requires_live_gpu_load={} finish_marker=0x00000000 finish_expected=0x{:08X} batch_bytes=0x0 output_owner=cpu-ap next=fix-t5-stage-or-generate-live-load-artifact does_not_prove=model_matvec_or_gpu_live_load\n",
+        "intel/gpgpu: t5-small-live4-bf16-dot submitted=0 finished=0 readback_ok=0 compare_ok=0 reason={} program_source={} groups=1 expected_lane_dispatch=8 observed_lane_dispatch=0 output_gpu=0x{:X} output_first_before=0x00000000 output_first_after=0x00000000 gpu_value=0x00000000 cpu_expected_bits=0x{:08X} output_hits_lo64=0x0000000000000000 live_k_dim={} requires_live_gpu_load={} finish_marker=0x00000000 finish_expected=0x{:08X} batch_bytes=0x0 output_owner=cpu-ap next=fix-t5-stage-or-generate-small-live4-artifact does_not_prove=model_matvec_or_gpu_live_load\n",
         reason,
         program.name,
         output_gpu,

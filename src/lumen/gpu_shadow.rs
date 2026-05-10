@@ -254,14 +254,15 @@ pub(crate) fn observe_live_bf16_matvec_probe(
             );
             if compare.readback_ok {
                 let live_k_dim = k_dim.min(trueos_eu::gfx12::T5_ONE_ROW_MATVEC_LIVE_K);
+                let t5_expected = bf16_row_dot_prefix(x, w_rowmajor_bf16, live_k_dim);
                 let t5 = crate::intel::submit_gpgpu_t5_one_row_matvec_probe(
                     stage.output_gpu,
                     stage.output_bytes,
-                    row0.to_bits(),
+                    t5_expected.to_bits(),
                     live_k_dim,
                 );
                 crate::log!(
-                    "lumen-gpu-proof: director-step step=9 backend=local-gpu mode=t5-one-row-live-matvec submitted={} finished={} readback_ok={} compare_ok={} reason={} program={} output_gpu=0x{:X} gpu_value=0x{:08X} cpu_expected_bits=0x{:08X} output_first_before=0x{:08X} output_first_after=0x{:08X} output_hits_lo64=0x{:016X} lane_dispatch={} live_k_dim={} requires_live_gpu_load={} finish_marker=0x{:08X} finish_expected=0x{:08X} batch_bytes=0x{:X} output_owner=cpu-ap action=hold-scale next=generate-t5-live-load-bf16-dot-eu-artifact does_not_prove=model_matvec_or_gpu_live_load\n",
+                    "lumen-gpu-proof: director-step step=9 backend=local-gpu mode=t5-small-live4-bf16-dot submitted={} finished={} readback_ok={} compare_ok={} reason={} program={} output_gpu=0x{:X} gpu_value=0x{:08X} cpu_expected_bits=0x{:08X} full_row_cpu_bits=0x{:08X} output_first_before=0x{:08X} output_first_after=0x{:08X} output_hits_lo64=0x{:016X} lane_dispatch={} live_k_dim={} requires_live_gpu_load={} finish_marker=0x{:08X} finish_expected=0x{:08X} batch_bytes=0x{:X} output_owner=cpu-ap action=hold-scale next=generate-t5-small-live4-load-bf16-dot-eu-artifact does_not_prove=model_matvec_or_gpu_live_load\n",
                     t5.submitted as u8,
                     t5.finished as u8,
                     t5.readback_ok as u8,
@@ -271,6 +272,7 @@ pub(crate) fn observe_live_bf16_matvec_probe(
                     t5.output_gpu,
                     t5.gpu_value,
                     t5.cpu_expected_bits,
+                    row0.to_bits(),
                     t5.output_first_before,
                     t5.output_first_after,
                     t5.output_hits_lo64,
@@ -284,6 +286,16 @@ pub(crate) fn observe_live_bf16_matvec_probe(
             }
         }
     }
+}
+
+fn bf16_row_dot_prefix(x: &[f32], row_bf16: &[u8], count: usize) -> f32 {
+    let mut acc = 0.0f32;
+    for i in 0..count {
+        let off = i.saturating_mul(2);
+        let bits = u16::from_le_bytes([row_bf16[off], row_bf16[off + 1]]);
+        acc += x[i] * bf16_to_f32(bits);
+    }
+    acc
 }
 
 fn bf16_row_dot(x: &[f32], row_bf16: &[u8], k_dim: usize) -> f32 {
