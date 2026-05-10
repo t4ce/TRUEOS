@@ -21,6 +21,7 @@ pub enum EuArtifactKind {
     LiveXStaticDp4aRequirementThenHdc1StoreThenThreadSpawnerEot,
     T5StoreOnlyArenaOffsetThenHdc1StoreThenThreadSpawnerEot,
     T5SmallLive4Bf16DotThenHdc1StoreThenThreadSpawnerEot,
+    T6SmallLive8Bf16DotThenHdc1StoreThenThreadSpawnerEot,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

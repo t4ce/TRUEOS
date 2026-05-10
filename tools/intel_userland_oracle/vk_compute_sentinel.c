@@ -128,6 +128,21 @@ static void init_t5_small_live4_trueos_arena_packed_bf16(uint32_t *words) {
     words[2051] = 0;
 }
 
+static void init_t6_small_live8_trueos_arena_packed_bf16(uint32_t *words) {
+    words[0] = 0x3F800000u; // x0 = 1.0
+    words[1] = 0x40000000u; // x1 = 2.0
+    words[2] = 0x40400000u; // x2 = 3.0
+    words[3] = 0x40800000u; // x3 = 4.0
+    words[4] = 0x40A00000u; // x4 = 5.0
+    words[5] = 0x40C00000u; // x5 = 6.0
+    words[6] = 0x40E00000u; // x6 = 7.0
+    words[7] = 0x41000000u; // x7 = 8.0
+    words[2048] = 0x40003F80u; // w0,w1 = bf16(1.0), bf16(2.0)
+    words[2049] = 0x40804040u; // w2,w3 = bf16(3.0), bf16(4.0)
+    words[2050] = 0x40C040A0u; // w4,w5 = bf16(5.0), bf16(6.0)
+    words[2051] = 0x410040E0u; // w6,w7 = bf16(7.0), bf16(8.0)
+}
+
 static int verify_sentinel(const uint32_t *words) {
     const uint32_t expected_lanes = 8;
     printf(
@@ -238,6 +253,32 @@ static int verify_t5_small_live4_trueos_arena_packed_bf16(const uint32_t *words)
     return ok;
 }
 
+static int verify_t6_small_live8_trueos_arena_packed_bf16(const uint32_t *words) {
+    const uint32_t out = 264192u;
+    const uint32_t expected_bits = 0x434C0000u; // sum(i*i), i=1..8 = 204.0
+    const int ok =
+        words[out + 0] == expected_bits &&
+        words[out + 1] == 8u &&
+        words[out + 2] == 0xC0DE7606u &&
+        words[out + 3] == 0u;
+    printf(
+        "oracle-app: t6-small-live8-trueos-arena-packed-bf16 input_x_bits=0x%08X 0x%08X 0x%08X 0x%08X 0x%08X 0x%08X 0x%08X 0x%08X packed_row_words=0x%08X 0x%08X 0x%08X 0x%08X out_dword=%u\n",
+        words[0], words[1], words[2], words[3], words[4], words[5], words[6], words[7],
+        words[2048], words[2049], words[2050], words[2051],
+        out
+    );
+    printf(
+        "oracle-app: t6-small-live8-trueos-arena-packed-bf16 verified=%d expected_bits=0x%08X observed_bits=0x%08X live_k=%u sentinel=0x%08X workgroup=%u\n",
+        ok,
+        expected_bits,
+        words[out + 0],
+        words[out + 1],
+        words[out + 2],
+        words[out + 3]
+    );
+    return ok;
+}
+
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
 
@@ -252,11 +293,14 @@ int main(int argc, char **argv) {
         strcmp(workload, "t5-small-live4-trueos-arena") == 0;
     const int is_t5_small_live4_trueos_arena_packed_bf16 =
         strcmp(workload, "t5-small-live4-trueos-arena-packed-bf16") == 0;
+    const int is_t6_small_live8_trueos_arena_packed_bf16 =
+        strcmp(workload, "t6-small-live8-trueos-arena-packed-bf16") == 0;
     if (
         !is_sentinel &&
         !is_t5_small_live4 &&
         !is_t5_small_live4_trueos_arena &&
-        !is_t5_small_live4_trueos_arena_packed_bf16
+        !is_t5_small_live4_trueos_arena_packed_bf16 &&
+        !is_t6_small_live8_trueos_arena_packed_bf16
     ) {
         fprintf(stderr, "unsupported workload: %s\n", workload);
         return 1;
@@ -359,7 +403,9 @@ int main(int argc, char **argv) {
     vkGetDeviceQueue(device, queue_family, 0, &queue);
 
     const VkDeviceSize buffer_size =
-        (is_t5_small_live4_trueos_arena || is_t5_small_live4_trueos_arena_packed_bf16)
+        (is_t5_small_live4_trueos_arena ||
+         is_t5_small_live4_trueos_arena_packed_bf16 ||
+         is_t6_small_live8_trueos_arena_packed_bf16)
             ? 0x103000u
             : 4096u;
     const VkBufferCreateInfo buffer_info = {
@@ -393,6 +439,8 @@ int main(int argc, char **argv) {
         init_t5_small_live4_trueos_arena((uint32_t *)mapped);
     } else if (is_t5_small_live4_trueos_arena_packed_bf16) {
         init_t5_small_live4_trueos_arena_packed_bf16((uint32_t *)mapped);
+    } else if (is_t6_small_live8_trueos_arena_packed_bf16) {
+        init_t6_small_live8_trueos_arena_packed_bf16((uint32_t *)mapped);
     }
 
     Spirv spv = read_spirv(argv[1]);
@@ -542,7 +590,9 @@ int main(int argc, char **argv) {
     printf("oracle-app: lens macro=submit-complete wait-idle-done\n");
 
     const uint32_t *words = (const uint32_t *)mapped;
-    const int ok = is_t5_small_live4_trueos_arena_packed_bf16
+    const int ok = is_t6_small_live8_trueos_arena_packed_bf16
+        ? verify_t6_small_live8_trueos_arena_packed_bf16(words)
+        : is_t5_small_live4_trueos_arena_packed_bf16
         ? verify_t5_small_live4_trueos_arena_packed_bf16(words)
         : is_t5_small_live4_trueos_arena
             ? verify_t5_small_live4_trueos_arena(words)
