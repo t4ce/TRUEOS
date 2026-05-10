@@ -162,6 +162,7 @@ static MASS_IO_ARBITERS: Mutex<Vec<MassIoArbiterState, MAX_MASS_RUNTIMES>> = Mut
 struct RegisteredMassDisk {
     runtime_key: u64,
     handle: block::DeviceHandle,
+    io_profile: MassIoProfile,
 }
 
 static REGISTERED_MASS_DISKS: Mutex<Vec<RegisteredMassDisk, MAX_MASS_RUNTIMES>> =
@@ -319,18 +320,32 @@ fn registered_disk(runtime_key: u64) -> Option<block::DeviceHandle> {
         .map(|known| known.handle)
 }
 
-fn remember_registered_disk(runtime_key: u64, handle: block::DeviceHandle) {
+fn registered_disk_io_profile(handle: block::DeviceHandle) -> Option<MassIoProfile> {
+    let disks = REGISTERED_MASS_DISKS.lock();
+    disks
+        .iter()
+        .find(|known| known.handle == handle)
+        .map(|known| known.io_profile)
+}
+
+fn remember_registered_disk(
+    runtime_key: u64,
+    handle: block::DeviceHandle,
+    io_profile: MassIoProfile,
+) {
     let mut disks = REGISTERED_MASS_DISKS.lock();
     if let Some(existing) = disks
         .iter_mut()
         .find(|existing| existing.runtime_key == runtime_key)
     {
         existing.handle = handle;
+        existing.io_profile = io_profile;
         return;
     }
     let _ = disks.push(RegisteredMassDisk {
         runtime_key,
         handle,
+        io_profile,
     });
 }
 
@@ -705,6 +720,25 @@ impl block::BlockDevice for UsbMassBlockDevice {
             let _lane = self.acquire_io_arbiter(MassIoArbiterLane::Read).await?;
             self.with_runtime(|rt| {
                 Box::pin(async move {
+                    let trace =
+                        crate::logflag::LUMEN_STORAGE_TRACE_LOGS && total_bytes >= 128 * 1024;
+                    let start_ms = uas_bench_now_ms();
+                    let mut done_bytes = 0usize;
+                    let mut last_log_ms = start_ms;
+                    let mut last_log_bytes = 0usize;
+                    if trace {
+                        crate::log!(
+                            "crabusb: mass {:04X}:{:04X} read start profile={:?} lba={} blocks={} bytes={} bs={} max_xfer={}\n",
+                            rt.vendor_id,
+                            rt.product_id,
+                            rt.io_profile,
+                            lba,
+                            blocks,
+                            total_bytes,
+                            block_size,
+                            current_mass_io_bytes(rt, block_size)
+                        );
+                    }
                     if matches!(rt.endpoints, UsbMassEndpoints::UasSkhynix { .. }) {
                         skhynix_uas::read_blocks_uas_skhynix_windowed(
                             rt,
@@ -715,6 +749,18 @@ impl block::BlockDevice for UsbMassBlockDevice {
                             None,
                         )
                         .await?;
+                        if trace {
+                            crate::log!(
+                                "crabusb: mass {:04X}:{:04X} read done profile={:?} lba={} blocks={} bytes={} elapsed_ms={}\n",
+                                rt.vendor_id,
+                                rt.product_id,
+                                rt.io_profile,
+                                lba,
+                                blocks,
+                                total_bytes,
+                                uas_bench_now_ms().saturating_sub(start_ms)
+                            );
+                        }
                         return Ok(core::mem::take(&mut out));
                     }
 
@@ -881,6 +927,41 @@ impl block::BlockDevice for UsbMassBlockDevice {
 
                         remaining = &mut remaining[bytes_here..];
                         cur_lba = cur_lba.saturating_add(blocks_here as u64);
+                        done_bytes = done_bytes.saturating_add(bytes_here);
+                        if trace {
+                            let now_ms = uas_bench_now_ms();
+                            if remaining.is_empty()
+                                || done_bytes.saturating_sub(last_log_bytes) >= 512 * 1024
+                                || now_ms.saturating_sub(last_log_ms) >= 1000
+                            {
+                                crate::log!(
+                                    "crabusb: mass {:04X}:{:04X} read progress profile={:?} lba={} done={} total={} cur_lba={} elapsed_ms={}\n",
+                                    rt.vendor_id,
+                                    rt.product_id,
+                                    rt.io_profile,
+                                    lba,
+                                    done_bytes,
+                                    total_bytes,
+                                    cur_lba,
+                                    now_ms.saturating_sub(start_ms)
+                                );
+                                last_log_ms = now_ms;
+                                last_log_bytes = done_bytes;
+                            }
+                        }
+                    }
+
+                    if trace {
+                        crate::log!(
+                            "crabusb: mass {:04X}:{:04X} read done profile={:?} lba={} blocks={} bytes={} elapsed_ms={}\n",
+                            rt.vendor_id,
+                            rt.product_id,
+                            rt.io_profile,
+                            lba,
+                            blocks,
+                            total_bytes,
+                            uas_bench_now_ms().saturating_sub(start_ms)
+                        );
                     }
 
                     Ok(core::mem::take(&mut out))
@@ -1280,6 +1361,7 @@ fn register_block_device(
     max_transfer_bytes: u64,
 ) -> block::DeviceHandle {
     if let Some(handle) = registered_disk(identity.runtime_key) {
+        remember_registered_disk(identity.runtime_key, handle, io_profile);
         return handle;
     }
 
@@ -1299,7 +1381,7 @@ fn register_block_device(
             max_transfer_bytes: max_transfer_bytes.max(u64::from(probe.block_size.max(1))),
         },
     );
-    remember_registered_disk(identity.runtime_key, handle);
+    remember_registered_disk(identity.runtime_key, handle, io_profile);
     handle
 }
 

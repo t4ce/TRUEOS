@@ -738,7 +738,8 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 }
 
 pub(crate) fn route_bf16_matvec_to_net_backend() -> bool {
-    REMOTE_ROUTE_AVAILABLE.load(Ordering::Acquire)
+    crate::allcaps::lumen::ROUTE_BF16_MATVEC_TO_NET_BACKEND
+        && REMOTE_ROUTE_AVAILABLE.load(Ordering::Acquire)
 }
 
 pub(crate) fn shadow_bf16_matvec_to_net_backend() -> bool {
@@ -746,7 +747,10 @@ pub(crate) fn shadow_bf16_matvec_to_net_backend() -> bool {
 }
 
 pub(crate) fn set_remote_bf16_route_available(available: bool) {
-    REMOTE_ROUTE_AVAILABLE.store(available, Ordering::Release);
+    REMOTE_ROUTE_AVAILABLE.store(
+        crate::allcaps::lumen::ROUTE_BF16_MATVEC_TO_NET_BACKEND && available,
+        Ordering::Release,
+    );
 }
 
 pub(crate) fn backend_telemetry(capacity_lanes: u32) -> LumenNetBackendTelemetry {
