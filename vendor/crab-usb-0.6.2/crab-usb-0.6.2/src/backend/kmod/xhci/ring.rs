@@ -1,3 +1,5 @@
+use core::sync::atomic::{AtomicUsize, Ordering};
+
 use dma_api::{DArray, DmaDirection};
 use xhci::ring::trb::{Link, command, transfer};
 
@@ -10,6 +12,18 @@ use crate::{
 
 const TRB_LEN: usize = 4;
 const TRB_SIZE: usize = size_of::<TrbData>();
+const TRANSFER_TRACE_SAMPLE_MASK: usize = 0x7ff;
+
+static TRANSFER_TRACE_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+fn transfer_trace_sample() -> Option<usize> {
+    let count = TRANSFER_TRACE_COUNT.fetch_add(1, Ordering::Relaxed);
+    if count & TRANSFER_TRACE_SAMPLE_MASK == 0 {
+        Some(count)
+    } else {
+        None
+    }
+}
 
 #[derive(Clone)]
 #[repr(transparent)]
@@ -97,7 +111,9 @@ impl Ring {
             trb.clear_cycle_bit();
         }
         let addr = self.enque_trb(trb.into());
-        trace!("[Transfer] >> {trb:X?} @{addr:X?}");
+        if let Some(sample) = transfer_trace_sample() {
+            trace!("[Transfer] sample={} >> {trb:X?} @{addr:X?}", sample);
+        }
         addr
     }
 
