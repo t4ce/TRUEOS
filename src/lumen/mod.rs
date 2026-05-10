@@ -2413,6 +2413,17 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
             allow_parameter_dtype_copies: true,
         };
         let config = lumen_model_config(LUMEN_RUNTIME_MAX_SEQ_LEN);
+        log(
+            format!(
+                "bench lumen: runtime model construct start mode=placeholder safetensor_entries={} layers={} hidden={} vocab={}",
+                obj.len(),
+                config.num_hidden_layers,
+                config.hidden_size,
+                config.vocab_size
+            )
+            .as_str(),
+        );
+        let model_construct_start = embassy_time_driver::now();
         let model = with_precision_config(precision, || {
             with_runtime_component_dtypes(Some(DType::BF16), Some(DType::BF16), || {
                 with_parameter_init_mode(ParameterInitMode::Placeholder, || {
@@ -2420,8 +2431,27 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
                 })
             })
         });
+        let model_construct_ms = elapsed_ms_since(model_construct_start);
+        log(
+            format!(
+                "bench lumen: runtime model construct done elapsed={}ms parameters={} next=weight-load",
+                model_construct_ms,
+                model.named_parameters().len()
+            )
+            .as_str(),
+        );
 
         let load_start = embassy_time_driver::now();
+        log(
+            format!(
+                "bench lumen: runtime weight load begin path={} safetensor_entries={} header_len={} session={}",
+                LUMEN_WEIGHTS_PATH,
+                obj.len(),
+                header_len,
+                session_id
+            )
+            .as_str(),
+        );
         let load_report = match load_lumen_model_from_trueosfs(
             disk,
             header_len,

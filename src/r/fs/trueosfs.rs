@@ -77,16 +77,6 @@ struct FileWriteStream {
 static FILE_WRITE_STREAM_SEQ: AtomicU32 = AtomicU32::new(1);
 static FILE_WRITE_STREAMS: Mutex<BTreeMap<u32, FileWriteStream>> = Mutex::new(BTreeMap::new());
 
-fn skhynix_lumen_monopoly_root(info: &block::DeviceInfo) -> bool {
-    crate::allcaps::lumen::SKHYNIX_UAS_LUMEN_MONOPOLY
-        && info.parent.is_none()
-        && info
-            .label
-            .as_deref()
-            .map(|label| label == "usbms-152E:7001")
-            .unwrap_or(false)
-}
-
 pub fn skhynix_lumen_monopoly_enabled() -> bool {
     crate::allcaps::lumen::SKHYNIX_UAS_LUMEN_MONOPOLY
 }
@@ -606,7 +596,6 @@ pub async fn remount_root_async(
 
 fn register_root_mount(disk: block::DeviceHandle, replace_existing: bool) {
     let disk_id = disk.id();
-    let info = disk.info();
     let seq = ROOT_SEQ.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
     let cache_gen = if replace_existing {
         let roots = ROOTS.lock();
@@ -647,16 +636,7 @@ fn register_root_mount(disk: block::DeviceHandle, replace_existing: bool) {
 
     file_record_cache_invalidate_disk(disk_id);
 
-    if skhynix_lumen_monopoly_root(&info) {
-        crate::log!(
-            "trueosfs: root mounted disk_id={} label={} readiness_handoff=lumen-monopoly reason=skhynix-uas-lumen-monopoly\n",
-            disk_id.raw(),
-            info.label.as_deref().unwrap_or("-")
-        );
-        crate::r::readiness::set(crate::r::readiness::TRUEOSFS_SKHYNIX_LUMEN_MOUNTED);
-    } else {
-        crate::r::readiness::set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED);
-    }
+    crate::r::readiness::set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED);
 }
 
 fn unregister_root_mount(disk_id: block::DiscId) {

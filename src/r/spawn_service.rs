@@ -421,11 +421,8 @@ fn spawn_lumen_service(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn boot_lumen_service_enabled() -> bool {
-    if crate::allcaps::lumen::BOOT_MODEL_SERVICE {
-        return true;
-    }
-    crate::r::fs::trueosfs::skhynix_lumen_monopoly_enabled()
-        && crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_SKHYNIX_LUMEN_MOUNTED)
+    crate::allcaps::lumen::BOOT_MODEL_SERVICE
+        || crate::r::fs::trueosfs::skhynix_lumen_monopoly_enabled()
 }
 
 fn spawn_ai_qjs_oneshot(spawner: Spawner) -> SpawnAttempt {
@@ -1207,31 +1204,31 @@ static TASKS: [TaskSpec; 70] = [
         &HYPER_HTTP1_PROBE_STARTED,
         spawn_hyper_http1_probe,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "chat-http",
         crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
         &CHAT_HTTP_STARTED,
         spawn_chat_http,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "webmail-http",
         crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
         &MAIL_HTTP_STARTED,
         spawn_mail_http,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "axum-boot",
         crate::r::readiness::NET_V4_CONFIGURED,
         &AXUM_BOOT_STARTED,
         spawn_axum_boot,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "fileexplorer-http",
         crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
         &FILEEXPLORER_HTTP_STARTED,
         spawn_fileexplorer_http,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "webdevices-http",
         crate::r::readiness::NET_V4_CONFIGURED,
         &WEBDEVICES_HTTP_STARTED,
@@ -1296,9 +1293,9 @@ static TASKS: [TaskSpec; 70] = [
         &INTEL_CURSOR_SERVICE_STARTED,
         spawn_intel_cursor_service_task,
     ),
-    TaskSpec::enabled("intel-hda-probe", 0, &INTEL_HDA_PROBE_STARTED, spawn_intel_hda_probe_task),
+    TaskSpec::disabled("intel-hda-probe", 0, &INTEL_HDA_PROBE_STARTED, spawn_intel_hda_probe_task),
     TaskSpec::enabled("raple-service", 0, &RAPLE_SERVICE_STARTED, spawn_raple_service),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "html_fetch_service",
         crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
         &HTML_SHACK_SERVICE_STARTED,
@@ -1440,7 +1437,7 @@ static TASKS: [TaskSpec; 70] = [
     ),
     TaskSpec::enabled_gated(
         "lumen-service",
-        0,
+        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
         boot_lumen_service_enabled,
         &LUMEN_SERVICE_STARTED,
         spawn_lumen_service,
