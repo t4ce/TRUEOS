@@ -3,6 +3,10 @@ use crate::{EuArtifact, EuArtifactKind, EuIsa};
 pub const STORE_SENTINEL_U32: u32 = 0xC0DE_7733;
 pub const HDC1_BTI34_STORE_SEND_DWORD: usize = 11;
 pub const HDC1_BTI34_STORE_IMM_DWORD: usize = 3;
+pub const HDC1_STATELESS_STATIC_DP4A_STORE_SEND_DWORD: usize = 23;
+pub const HDC1_STATELESS_STATIC_DP4A_BASE_DWORD: usize = 3;
+pub const STATIC_DP4A_DOT_ADDEND_U32: u32 = 10;
+pub const STATIC_DP4A_BASE_U32: u32 = STORE_SENTINEL_U32 - STATIC_DP4A_DOT_ADDEND_U32;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Gfx12EotVariant {
@@ -297,6 +301,62 @@ pub static HDC1_STATELESS_STORE_THEN_TS_EOT: EuArtifact = EuArtifact {
     isa: EuIsa::Gfx12,
     kind: EuArtifactKind::Hdc1BtiStoreThenThreadSpawnerEot,
     words: &HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS,
+    expects_store: true,
+};
+
+// Mesa brw_asm source, dependency-shaped tiny ALU rung:
+//
+// mov(8)   g2<1>D      0xC0DE7729D
+// mov(8)   g6<1>D      0x01020304D
+// mov(8)   g7<1>D      0x01010101D
+// dp4a(8)  g4<1>D      g2<8,8,1>D  g6<8,8,1>D  g7<1,1,1>D
+// mov(8)   g127<1>UD   0x00840058UD
+// send     HDC1 untyped surface write, stateless/non-coherent BTI 253, SIMD8
+// mov(8)   g127<1>UD   g0<8,8,1>UD
+// send     Thread Spawner EOT from g127
+//
+// The dot is 1+2+3+4 = 10, so the value stored by the HDC send is not a
+// directly moved canary. It is STATIC_DP4A_BASE_U32 + 10 = STORE_SENTINEL_U32.
+pub static STATIC_DP4A_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS: [u32; 32] = [
+    0x80030061,
+    0x02054660,
+    0x00000000,
+    STATIC_DP4A_BASE_U32,
+    0x80030061,
+    0x06054660,
+    0x00000000,
+    0x01020304,
+    0x80030061,
+    0x07054660,
+    0x00000000,
+    0x01010101,
+    0x00030158,
+    0x04040E68,
+    0x0E0E0205,
+    0x07050605,
+    0x80030061,
+    0x7F054220,
+    0x00000000,
+    0x00840058,
+    0x00030131,
+    0x00000000,
+    0xCDFA7F0C,
+    0x009A040C,
+    0x80030061,
+    0x7F050220,
+    0x00460005,
+    0x00000000,
+    0x80030131,
+    0x00000004,
+    0x70007F0C,
+    0x00000000,
+];
+
+pub static STATIC_DP4A_HDC1_STATELESS_STORE_THEN_TS_EOT: EuArtifact = EuArtifact {
+    name: "gfx12-static-dp4a-hdc1-stateless-store-then-ts-eot",
+    isa: EuIsa::Gfx12,
+    kind: EuArtifactKind::StaticDp4aThenHdc1StoreThenThreadSpawnerEot,
+    words: &STATIC_DP4A_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS,
     expects_store: true,
 };
 

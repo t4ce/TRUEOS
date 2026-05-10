@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
-const HDA_PROBE_WAV_LOOP_ENABLED: bool = true;
+const HDA_PROBE_WAV_LOOP_ENABLED: bool = false;
 const PROBE_PATTERN_NAME: &str = "arp";
 const PIANO_PROBE_PATTERN_NAME: &str = "piano-held";
 const PROBE_PATTERN_LOOPS: u32 = 1;

@@ -1,11 +1,35 @@
 extern crate alloc;
 
+use core::sync::atomic::{AtomicU8, Ordering};
+
 pub const PCI_IDS_URL: &str = "https://raw.githubusercontent.com/pciutils/pciids/master/pci.ids";
 pub const PCI_IDS_KEY: &str = "trueos/pci/pci.ids";
 const PCI_IDS_TIMEOUT_MS: u32 = 120_000;
 const PCI_IDS_MAX_BYTES: usize = 4 * 1024 * 1024;
 
+const PCIIDS_GIT_IDLE: u8 = 0;
+const PCIIDS_GIT_STARTED: u8 = 1;
+const PCIIDS_GIT_FETCHING: u8 = 2;
+const PCIIDS_GIT_VERIFYING: u8 = 3;
+const PCIIDS_GIT_STORED: u8 = 4;
+const PCIIDS_GIT_FAILED: u8 = 5;
+const PCIIDS_GIT_VERIFY_MISSING: u8 = 6;
+const PCIIDS_GIT_VERIFY_ERROR: u8 = 7;
+
+static PCIIDS_GIT_STATE: AtomicU8 = AtomicU8::new(PCIIDS_GIT_IDLE);
+
+fn set_pciids_git_state(state: u8) {
+    PCIIDS_GIT_STATE.store(state, Ordering::Release);
+}
+
 pub fn download_once() -> Result<(), i32> {
+    crate::log!(
+        "pciids_git: fetch begin transport=hyper-https url={} key={} timeout_ms={} max_bytes={}\n",
+        PCI_IDS_URL,
+        PCI_IDS_KEY,
+        PCI_IDS_TIMEOUT_MS,
+        PCI_IDS_MAX_BYTES
+    );
     crate::t::net::fetch_https_to_file_hyper(
         "pciids_git",
         PCI_IDS_URL,
@@ -17,15 +41,56 @@ pub fn download_once() -> Result<(), i32> {
 
 #[embassy_executor::task]
 pub async fn pciids_git_task() {
-    crate::log!("pciids_git: task start url={} key={}\n", PCI_IDS_URL, PCI_IDS_KEY);
+    set_pciids_git_state(PCIIDS_GIT_STARTED);
+    crate::log!(
+        "pciids_git: task start marker ready=0x{:08X} url={} key={}\n",
+        crate::r::readiness::mask(),
+        PCI_IDS_URL,
+        PCI_IDS_KEY
+    );
+    set_pciids_git_state(PCIIDS_GIT_FETCHING);
     match download_once() {
-        Ok(()) => crate::log!("pciids_git: finished key={}\n", PCI_IDS_KEY),
-        Err(rc) => crate::log!("pciids_git: failed rc={} url={}\n", rc, PCI_IDS_URL),
+        Ok(()) => {
+            set_pciids_git_state(PCIIDS_GIT_VERIFYING);
+            match load_raw_from_root_blocking() {
+                Ok(Some(raw)) => {
+                    set_pciids_git_state(PCIIDS_GIT_STORED);
+                    crate::log!(
+                        "pciids_git: finished marker key={} bytes={} state=stored\n",
+                        PCI_IDS_KEY,
+                        raw.len()
+                    );
+                }
+                Ok(None) => {
+                    set_pciids_git_state(PCIIDS_GIT_VERIFY_MISSING);
+                    crate::log!(
+                        "pciids_git: verify missing marker key={} after fetch\n",
+                        PCI_IDS_KEY
+                    );
+                }
+                Err(err) => {
+                    set_pciids_git_state(PCIIDS_GIT_VERIFY_ERROR);
+                    crate::log!(
+                        "pciids_git: verify error marker key={} err={:?}\n",
+                        PCI_IDS_KEY,
+                        err
+                    );
+                }
+            }
+        }
+        Err(rc) => {
+            set_pciids_git_state(PCIIDS_GIT_FAILED);
+            crate::log!(
+                "pciids_git: failed marker rc={} url={} state=fetch_failed\n",
+                rc,
+                PCI_IDS_URL
+            );
+        }
     }
 }
 
-pub fn load_raw_from_root_blocking()
--> Result<Option<alloc::vec::Vec<u8>>, crate::disc::block::Error> {
+pub fn load_raw_from_root_blocking(
+) -> Result<Option<alloc::vec::Vec<u8>>, crate::disc::block::Error> {
     let mut last_err: Option<crate::disc::block::Error> = None;
 
     // Try every mounted TRUEOSFS root (newest first) so a valid pci.ids on an
@@ -49,8 +114,8 @@ pub fn load_raw_from_root_blocking()
     Ok(None)
 }
 
-pub fn load_sanitized_from_root_blocking()
--> Result<Option<alloc::vec::Vec<u8>>, crate::disc::block::Error> {
+pub fn load_sanitized_from_root_blocking(
+) -> Result<Option<alloc::vec::Vec<u8>>, crate::disc::block::Error> {
     let Some(raw) = load_raw_from_root_blocking()? else {
         return Ok(None);
     };
