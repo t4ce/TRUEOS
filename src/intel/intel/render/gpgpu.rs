@@ -2,10 +2,10 @@ const GPGPU_PREFLIGHT_LANES: usize = 4;
 const GPGPU_BURN_MIN_ROWS: usize = 512;
 const GPGPU_BURN_MIN_K_DIM: usize = 512;
 const GPU_PROGRAM_SHARED_RAM_WRITE_EXPECTED: u32 = trueos_eu::gfx12::STORE_SENTINEL_U32;
-const GPGPU_LOAD_DUMMY_CURBE: bool = false;
+const GPGPU_LOAD_DUMMY_CURBE: bool = true;
 const GPGPU_DUMMY_CURBE_BYTES: usize = 64;
-const GPGPU_CONTIGUOUS_VFE_IDD_WALKER: bool = true;
-const GPGPU_MESA_POST_VFE_PIPE_CONTROL: bool = false;
+const GPGPU_CONTIGUOUS_VFE_IDD_WALKER: bool = false;
+const GPGPU_MESA_POST_VFE_PIPE_CONTROL: bool = true;
 // ADL-S 8086:4680 is Gfx12.0/Xe-LP.  The TS_EOT descriptor explicitly says
 // SFID_TS ends GPGPU/Media threads.  Gateway EOT was also tested because the
 // Gateway section owns barrier/event/SLM cleanup, but it reached the same
@@ -1378,7 +1378,11 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     const CURBE_STATE_OFFSET_BYTES: usize = GPGPU_WALKER_SCRATCH_OFFSET_BYTES + 0x100;
     const IDD_PAYLOAD_DWORDS: usize = 8;
     const IDD_LOAD_DWORDS: usize = IDD_PAYLOAD_DWORDS;
-    const CURBE_READ_LENGTH_8DW: u32 = 0;
+    const CURBE_READ_LENGTH_8DW: u32 = if GPGPU_LOAD_DUMMY_CURBE {
+        (GPGPU_DUMMY_CURBE_BYTES / 32) as u32
+    } else {
+        0
+    };
     const GPGPU_THREADS_IN_GROUP: u32 = 1;
     const CURBE_TOTAL_BYTES: usize = if GPGPU_LOAD_DUMMY_CURBE {
         GPGPU_DUMMY_CURBE_BYTES
@@ -1730,8 +1734,9 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     if !GPGPU_CONTIGUOUS_VFE_IDD_WALKER {
         push_store_marker(batch_dwords, &mut cursor, 28, 0xC0DE_7806)?;
     }
-    // This exact-Mesa-shell pass keeps CURBE disabled and loads only the 32B
-    // IDD structure; earlier CURBE/64B-IDL probes did not move the frontier.
+    // Keep the IDD load separated from VFE by a CS-stalled state flush and a
+    // tiny CURBE load.  The current failure is before EU fetch, so this probes
+    // the thread-launch contract before changing EU bytes again.
     if !GPGPU_CONTIGUOUS_VFE_IDD_WALKER {
         push_store_marker(batch_dwords, &mut cursor, 27, 0xC0DE_7805)?;
     }
@@ -1796,7 +1801,7 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     let bottom_lanes_consumed = (batch_dwords[walker_start + 14] & simd_mask).count_ones();
 
     crate::log!(
-        "intel/gpgpu: compute-walker-layout program_source={} expects_store={} vfe_off=0x{:X} vfe_dw3=0x{:08X} vfe_dw5=0x{:08X} curbe_present={} curbe_bytes=0x{:X} curbe_read_len_8dw={} id_load_off=0x{:X} id_load_bytes=0x{:X} idd_payload_bytes=0x{:X} walker_off=0x{:X} walker_cmd=0x{:08X} exec_mask=0x{:08X} idd_gpu=0x{:X} idd_dynamic_offset=0x{:X} idd_ksp=0x{:08X} instruction_base=0x{:X} ksp_resolves_to=0x{:X} idd_dw2=0x{:08X} idd_dw4=0x{:08X} idd_dw6=0x{:08X} surface_base=0x{:X} dynamic_state_base=0x{:X} contiguous_vfe_idd_walker={} tail_off=0x{:X} cs_marker=0x{:08X} note=idd-in-draw-state-dynamic-relative-probe\n",
+        "intel/gpgpu: compute-walker-layout program_source={} expects_store={} launch_profile=split-vfe-msf-curbe-pc-midl vfe_off=0x{:X} vfe_dw3=0x{:08X} vfe_dw5=0x{:08X} curbe_present={} curbe_bytes=0x{:X} curbe_read_len_8dw={} id_load_off=0x{:X} id_load_bytes=0x{:X} idd_payload_bytes=0x{:X} walker_off=0x{:X} walker_cmd=0x{:08X} exec_mask=0x{:08X} idd_gpu=0x{:X} idd_dynamic_offset=0x{:X} idd_ksp=0x{:08X} instruction_base=0x{:X} ksp_resolves_to=0x{:X} idd_dw2=0x{:08X} idd_dw4=0x{:08X} idd_dw6=0x{:08X} surface_base=0x{:X} dynamic_state_base=0x{:X} contiguous_vfe_idd_walker={} mesa_post_vfe_pipe_control={} tail_off=0x{:X} cs_marker=0x{:08X} note=idd-in-draw-state-dynamic-relative-probe\n",
         program.name,
         program.expects_store as u8,
         vfe_start * core::mem::size_of::<u32>(),
@@ -1822,6 +1827,7 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
         GPU_VA_DRAW_STATE_BASE,
         GPGPU_DYNAMIC_STATE_BASE,
         GPGPU_CONTIGUOUS_VFE_IDD_WALKER as u8,
+        GPGPU_MESA_POST_VFE_PIPE_CONTROL as u8,
         command_bytes,
         RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
     );

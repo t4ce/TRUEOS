@@ -8,6 +8,7 @@ pub mod esp;
 pub mod ports;
 pub mod socket_cabi;
 pub mod srv;
+pub mod udp;
 
 pub use cli::{ftp, html, json, ntp, smtp};
 pub use srv::sntp;
@@ -202,6 +203,16 @@ impl VNet {
 
         crate::log!("vnet: submit drop owner={}\n", self.owner);
         Err(())
+    }
+
+    pub fn send_tcp_all(&self, handle: api::NetHandle, data: &[u8]) -> Result<(), ()> {
+        for chunk in data.chunks(api::MAX_MSG) {
+            self.submit(api::Command::SendTcp {
+                handle,
+                data: api::ByteBuf::from_slice_trunc(chunk),
+            })?;
+        }
+        Ok(())
     }
 
     pub fn pop_event(&self) -> Option<api::Event> {

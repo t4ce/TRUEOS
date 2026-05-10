@@ -5,7 +5,7 @@ extern crate alloc;
 use alloc::{format, string::String, vec::Vec};
 
 use embassy_time::{Duration, Instant, Timer};
-use v::vnet::{self, ByteBuf, Command, EndpointV4, Event, NetHandle, SocketKind};
+use v::vnet::{Command, EndpointV4, Event, NetHandle, SocketKind};
 
 use crate::net::tls::{KernelTlsRng, TlsClient, TlsClientConfig, TlsRoots, TlsTime};
 use crate::r::net::{NetProfile, VNet};
@@ -218,14 +218,9 @@ impl IrcSession {
 
     fn send_bytes(&mut self, bytes: &[u8]) -> Result<(), IrcError> {
         if self.tls.is_none() {
-            for chunk in bytes.chunks(vnet::MAX_MSG) {
-                self.net
-                    .submit(Command::SendTcp {
-                        handle: self.handle,
-                        data: ByteBuf::from_slice_trunc(chunk),
-                    })
-                    .map_err(|_| IrcError::Io)?;
-            }
+            self.net
+                .send_tcp_all(self.handle, bytes)
+                .map_err(|_| IrcError::Io)?;
             return Ok(());
         }
         if let Some(mut tls) = self.tls.take() {
@@ -244,15 +239,9 @@ impl IrcSession {
         if ciphertext.is_empty() {
             return Ok(());
         }
-        for chunk in ciphertext.chunks(vnet::MAX_MSG) {
-            self.net
-                .submit(Command::SendTcp {
-                    handle: self.handle,
-                    data: ByteBuf::from_slice_trunc(chunk),
-                })
-                .map_err(|_| IrcError::Io)?;
-        }
-        Ok(())
+        self.net
+            .send_tcp_all(self.handle, &ciphertext)
+            .map_err(|_| IrcError::Io)
     }
 
     fn drain_events(&mut self) -> bool {

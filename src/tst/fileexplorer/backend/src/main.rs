@@ -8,13 +8,17 @@ use std::{
 
 use async_stream::stream;
 use axum::{
-    extract::{Path, Query, State},
-    http::{Method, StatusCode},
+    body::Bytes,
+    extract::{DefaultBodyLimit, Path, Query, State},
+    http::{
+        header::{CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE},
+        HeaderMap, Method, StatusCode,
+    },
     response::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse, Response,
     },
-    routing::{get, patch, post, put},
+    routing::{get, patch, post},
     Json, Router,
 };
 use futures_core::Stream;
@@ -29,6 +33,8 @@ use tower_http::cors::{Any, CorsLayer};
 use uuid::Uuid;
 
 const SCHEMA: &str = "filetree.v1";
+const UPLOAD_BODY_MAX: usize = 16 * 1024 * 1024;
+const TEXT_OPEN_MAX: u64 = 5 * 1024 * 1024;
 
 type JobId = Uuid;
 type NodeId = String;
@@ -37,12 +43,14 @@ type NodeId = String;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tree = Arc::new(RwLock::new(TreeSnapshot::demo()));
     let jobs = Arc::new(RwLock::new(HashMap::new()));
+    let blobs = Arc::new(RwLock::new(HashMap::new()));
     let (queue, receiver) = mpsc::channel(128);
     let (events, _) = broadcast::channel(512);
 
     let app_state = AppState {
         tree: Arc::clone(&tree),
         jobs: Arc::clone(&jobs),
+        blobs: Arc::clone(&blobs),
         queue,
         events: events.clone(),
     };
@@ -52,6 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         WorkerState {
             tree,
             jobs,
+            blobs,
             events,
         },
     ));
@@ -62,6 +71,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/tree", get(get_tree).put(replace_tree))
         .route("/api/nodes", post(create_node))
         .route("/api/nodes/{id}", patch(update_node).delete(delete_node))
+        .route("/api/nodes/{id}/content", get(get_node_content))
+        .route("/api/nodes/{id}/download", get(download_node))
+        .route("/api/nodes/{id}/upload", post(upload_node))
         .route("/api/nodes/delete", post(delete_nodes))
         .route("/api/nodes/move", post(move_nodes))
         .route("/api/jobs/{id}", get(get_job))
@@ -79,6 +91,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ])
                 .allow_headers(Any),
         )
+        .layer(DefaultBodyLimit::max(UPLOAD_BODY_MAX))
         .with_state(app_state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 3001));
@@ -93,6 +106,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 struct AppState {
     tree: Arc<RwLock<TreeSnapshot>>,
     jobs: Arc<RwLock<HashMap<JobId, JobRecord>>>,
+    blobs: Arc<RwLock<HashMap<NodeId, Vec<u8>>>>,
     queue: mpsc::Sender<QueuedJob>,
     events: broadcast::Sender<JobEvent>,
 }
@@ -101,6 +115,7 @@ struct AppState {
 struct WorkerState {
     tree: Arc<RwLock<TreeSnapshot>>,
     jobs: Arc<RwLock<HashMap<JobId, JobRecord>>>,
+    blobs: Arc<RwLock<HashMap<NodeId, Vec<u8>>>>,
     events: broadcast::Sender<JobEvent>,
 }
 
@@ -247,7 +262,11 @@ enum JobStatus {
 enum JobOperation {
     TreeReplace(ReplaceTreeRequest),
     NodeCreate(CreateNodeRequest),
-    NodeUpdate { id: NodeId, patch: UpdateNodeRequest },
+    NodeUpload(UploadNodeRequest),
+    NodeUpdate {
+        id: NodeId,
+        patch: UpdateNodeRequest,
+    },
     NodeDelete(DeleteNodesRequest),
     MultiMove(MultiMoveRequest),
 }
@@ -257,6 +276,7 @@ impl JobOperation {
         match self {
             JobOperation::TreeReplace(_) => "tree_replace",
             JobOperation::NodeCreate(_) => "node_create",
+            JobOperation::NodeUpload(_) => "node_upload",
             JobOperation::NodeUpdate { .. } => "node_update",
             JobOperation::NodeDelete(_) => "node_delete",
             JobOperation::MultiMove(_) => "multi_move",
@@ -267,6 +287,7 @@ impl JobOperation {
         match self {
             JobOperation::TreeReplace(_) => "Replace tree".into(),
             JobOperation::NodeCreate(request) => format!("Create {}", request.name),
+            JobOperation::NodeUpload(request) => format!("Upload {}", request.name),
             JobOperation::NodeUpdate { id, .. } => format!("Update {id}"),
             JobOperation::NodeDelete(request) => {
                 format!("Delete {} item{}", request.ids.len(), plural(request.ids.len()))
@@ -282,6 +303,7 @@ impl JobOperation {
         match self {
             JobOperation::TreeReplace(_) => vec!["root".into()],
             JobOperation::NodeCreate(request) => vec![request.parent_id.clone()],
+            JobOperation::NodeUpload(request) => vec![request.parent_id.clone()],
             JobOperation::NodeUpdate { id, .. } => vec![id.clone()],
             JobOperation::NodeDelete(request) => request.ids.clone(),
             JobOperation::MultiMove(request) => request
@@ -297,6 +319,7 @@ impl JobOperation {
 struct QueuedJob {
     id: JobId,
     operation: JobOperation,
+    upload_body: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -355,6 +378,17 @@ struct CreateNodeRequest {
     meta: BTreeMap<String, Value>,
     #[serde(default)]
     actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UploadNodeRequest {
+    parent_id: NodeId,
+    id: NodeId,
+    name: String,
+    size: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mime: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -461,6 +495,37 @@ async fn create_node(
     enqueue_job(state, JobOperation::NodeCreate(request)).await
 }
 
+async fn upload_node(
+    State(state): State<AppState>,
+    Path(parent_id): Path<NodeId>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<impl IntoResponse, ApiError> {
+    if body.len() > UPLOAD_BODY_MAX {
+        return Err(ApiError::payload_too_large("upload too large"));
+    }
+    let name = headers
+        .get("x-file-name")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| ApiError::bad_request("missing x-file-name"))?
+        .to_string();
+    let name = percent_decode(&name).map_err(ApiError::bad_request)?;
+    validate_name(&name).map_err(ApiError::bad_request)?;
+    let request = UploadNodeRequest {
+        parent_id,
+        id: Uuid::new_v4().to_string(),
+        name,
+        size: body.len() as u64,
+        mime: headers
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(ToString::to_string),
+    };
+    enqueue_job_with_upload(state, JobOperation::NodeUpload(request), body.to_vec()).await
+}
+
 async fn update_node(
     State(state): State<AppState>,
     Path(id): Path<NodeId>,
@@ -488,6 +553,70 @@ async fn move_nodes(
     Json(request): Json<MultiMoveRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     enqueue_job(state, JobOperation::MultiMove(request)).await
+}
+
+async fn download_node(
+    State(state): State<AppState>,
+    Path(id): Path<NodeId>,
+) -> Result<Response, ApiError> {
+    let node = {
+        let tree = state.tree.read().await;
+        find_node(&tree.root, &id).ok_or_else(|| ApiError::not_found("node not found"))?
+    };
+    if node.kind != NodeKind::File {
+        return Err(ApiError::bad_request("only files can be downloaded"));
+    }
+    let body = state
+        .blobs
+        .read()
+        .await
+        .get(&id)
+        .cloned()
+        .unwrap_or_else(|| format!("Demo content for {}\n", node.name).into_bytes());
+    let safe_name = node.name.replace(['"', '\r', '\n'], "_");
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header(
+            CONTENT_TYPE,
+            node.mime
+                .unwrap_or_else(|| "application/octet-stream".into()),
+        )
+        .header(CONTENT_LENGTH, body.len().to_string())
+        .header(CONTENT_DISPOSITION, format!("attachment; filename=\"{safe_name}\""))
+        .body(body.into())
+        .unwrap_or_else(|_| Response::new(axum::body::Body::empty())))
+}
+
+async fn get_node_content(
+    State(state): State<AppState>,
+    Path(id): Path<NodeId>,
+) -> Result<Response, ApiError> {
+    let node = {
+        let tree = state.tree.read().await;
+        find_node(&tree.root, &id).ok_or_else(|| ApiError::not_found("node not found"))?
+    };
+    if node.kind != NodeKind::File {
+        return Err(ApiError::bad_request("only files can be opened as text"));
+    }
+    if node.size > TEXT_OPEN_MAX {
+        return Err(ApiError::bad_request(format!(
+            "file is too large to open as text ({} > {})",
+            node.size, TEXT_OPEN_MAX
+        )));
+    }
+    let body = state
+        .blobs
+        .read()
+        .await
+        .get(&id)
+        .cloned()
+        .unwrap_or_else(|| format!("Demo content for {}\n", node.name).into_bytes());
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "text/plain; charset=utf-8")
+        .header(CONTENT_LENGTH, body.len().to_string())
+        .body(body.into())
+        .unwrap_or_else(|_| Response::new(axum::body::Body::empty())))
 }
 
 async fn get_job(
@@ -531,6 +660,22 @@ async fn enqueue_job(
     state: AppState,
     operation: JobOperation,
 ) -> Result<(StatusCode, Json<AcceptedJob>), ApiError> {
+    enqueue_job_inner(state, operation, None).await
+}
+
+async fn enqueue_job_with_upload(
+    state: AppState,
+    operation: JobOperation,
+    body: Vec<u8>,
+) -> Result<(StatusCode, Json<AcceptedJob>), ApiError> {
+    enqueue_job_inner(state, operation, Some(body)).await
+}
+
+async fn enqueue_job_inner(
+    state: AppState,
+    operation: JobOperation,
+    upload_body: Option<Vec<u8>>,
+) -> Result<(StatusCode, Json<AcceptedJob>), ApiError> {
     let id = Uuid::new_v4();
     let now = now_ms();
     let record = JobRecord {
@@ -551,7 +696,11 @@ async fn enqueue_job(
 
     state
         .queue
-        .send(QueuedJob { id, operation: operation.clone() })
+        .send(QueuedJob {
+            id,
+            operation: operation.clone(),
+            upload_body,
+        })
         .await
         .map_err(|_| ApiError::service_unavailable("job queue is closed"))?;
 
@@ -573,7 +722,7 @@ async fn worker_loop(mut receiver: mpsc::Receiver<QueuedJob>, state: WorkerState
         update_job(&state, job.id, JobStatus::Running, 38, "Validating operation", None).await;
         sleep(Duration::from_millis(180)).await;
 
-        let result = run_job(&state.tree, job.operation).await;
+        let result = run_job(&state.tree, &state.blobs, job.operation, job.upload_body).await;
 
         match result {
             Ok(job_result) => {
@@ -591,15 +740,8 @@ async fn worker_loop(mut receiver: mpsc::Receiver<QueuedJob>, state: WorkerState
                 .await;
             }
             Err(error) => {
-                update_job(
-                    &state,
-                    job.id,
-                    JobStatus::Failed,
-                    100,
-                    "Failed",
-                    Some(Err(error)),
-                )
-                .await;
+                update_job(&state, job.id, JobStatus::Failed, 100, "Failed", Some(Err(error)))
+                    .await;
             }
         }
     }
@@ -641,11 +783,16 @@ async fn update_job(
 
 async fn run_job(
     tree: &Arc<RwLock<TreeSnapshot>>,
+    blobs: &Arc<RwLock<HashMap<NodeId, Vec<u8>>>>,
     operation: JobOperation,
+    upload_body: Option<Vec<u8>>,
 ) -> Result<JobResult, String> {
     match operation {
         JobOperation::TreeReplace(request) => replace_tree_job(tree, request).await,
         JobOperation::NodeCreate(request) => create_node_job(tree, request).await,
+        JobOperation::NodeUpload(request) => {
+            upload_node_job(tree, blobs, request, upload_body.unwrap_or_default()).await
+        }
         JobOperation::NodeUpdate { id, patch } => update_node_job(tree, id, patch).await,
         JobOperation::NodeDelete(request) => delete_nodes_job(tree, request).await,
         JobOperation::MultiMove(request) => multi_move_job(tree, request).await,
@@ -699,6 +846,44 @@ async fn create_node_job(
     insert_child(&mut tree.root, &request.parent_id, node.clone(), None)?;
     recompute_sizes(&mut tree.root);
     tree.version += 1;
+
+    Ok(JobResult::Node {
+        node,
+        version: tree.version,
+    })
+}
+
+async fn upload_node_job(
+    tree: &Arc<RwLock<TreeSnapshot>>,
+    blobs: &Arc<RwLock<HashMap<NodeId, Vec<u8>>>>,
+    request: UploadNodeRequest,
+    body: Vec<u8>,
+) -> Result<JobResult, String> {
+    validate_name(&request.name)?;
+
+    let mut tree = tree.write().await;
+    let mut node = FileNode {
+        id: request.id,
+        name: request.name,
+        kind: NodeKind::File,
+        size: request.size,
+        modified: now_iso(),
+        mime: request.mime,
+        meta: BTreeMap::new(),
+        actions: default_actions(NodeKind::File),
+        children: Vec::new(),
+    };
+
+    normalize_tree(&mut node)?;
+
+    if find_node(&tree.root, &node.id).is_some() {
+        return Err(format!("node id '{}' already exists", node.id));
+    }
+
+    insert_child(&mut tree.root, &request.parent_id, node.clone(), None)?;
+    recompute_sizes(&mut tree.root);
+    tree.version += 1;
+    blobs.write().await.insert(node.id.clone(), body);
 
     Ok(JobResult::Node {
         node,
@@ -905,14 +1090,22 @@ fn normalize_node_shape(node: &mut FileNode) {
 
 fn default_actions(kind: NodeKind) -> Vec<String> {
     match kind {
-        NodeKind::File => ["open", "rename", "move", "delete"]
+        NodeKind::File => ["open", "download", "rename", "move", "delete"]
             .into_iter()
             .map(String::from)
             .collect(),
-        NodeKind::Folder => ["open", "new-file", "new-folder", "rename", "move", "delete"]
-            .into_iter()
-            .map(String::from)
-            .collect(),
+        NodeKind::Folder => [
+            "open",
+            "new-file",
+            "new-folder",
+            "upload",
+            "rename",
+            "move",
+            "delete",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect(),
     }
 }
 
@@ -925,6 +1118,36 @@ fn validate_name(name: &str) -> Result<(), String> {
         return Err("node name cannot contain path separators".into());
     }
     Ok(())
+}
+
+fn percent_decode(value: &str) -> Result<String, String> {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            if i + 2 >= bytes.len() {
+                return Err("bad percent encoding".to_string());
+            }
+            let hi = hex_nibble(bytes[i + 1]).ok_or_else(|| "bad percent encoding".to_string())?;
+            let lo = hex_nibble(bytes[i + 2]).ok_or_else(|| "bad percent encoding".to_string())?;
+            out.push((hi << 4) | lo);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).map_err(|_| "bad utf8 in encoded value".to_string())
+}
+
+fn hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 fn validate_move(
@@ -1016,18 +1239,13 @@ fn insert_child(
     }
 
     if parent.children.iter().any(|child| child.name == node.name) {
-        return Err(format!(
-            "parent '{parent_id}' already contains an item named '{}'",
-            node.name
-        ));
+        return Err(format!("parent '{parent_id}' already contains an item named '{}'", node.name));
     }
 
     match index {
         Some(index) if index <= parent.children.len() => parent.children.insert(index, node),
         Some(index) => {
-            return Err(format!(
-                "index {index} is out of bounds for parent '{parent_id}'"
-            ))
+            return Err(format!("index {index} is out of bounds for parent '{parent_id}'"))
         }
         None => parent.children.push(node),
     }
@@ -1074,7 +1292,9 @@ fn recompute_sizes(node: &mut FileNode) -> u64 {
 
 fn unique_ids(ids: Vec<NodeId>) -> Vec<NodeId> {
     let mut seen = HashSet::new();
-    ids.into_iter().filter(|id| seen.insert(id.clone())).collect()
+    ids.into_iter()
+        .filter(|id| seen.insert(id.clone()))
+        .collect()
 }
 
 fn plural(count: usize) -> &'static str {
@@ -1112,6 +1332,13 @@ struct ApiError {
 }
 
 impl ApiError {
+    fn bad_request(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            message: message.into(),
+        }
+    }
+
     fn not_found(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::NOT_FOUND,
@@ -1122,6 +1349,13 @@ impl ApiError {
     fn service_unavailable(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::SERVICE_UNAVAILABLE,
+            message: message.into(),
+        }
+    }
+
+    fn payload_too_large(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::PAYLOAD_TOO_LARGE,
             message: message.into(),
         }
     }

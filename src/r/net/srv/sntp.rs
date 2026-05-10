@@ -1,9 +1,11 @@
 #![allow(dead_code)]
 
-use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
-use v::vnet;
+use embassy_time::{Duration as EmbassyDuration, Timer};
 
-use crate::r::net::{NetProfile, VNet};
+use crate::r::net::{
+    NetProfile, VNet,
+    udp::{VNetUdpEndpoint, VNetUdpEvent, VNetUdpPacket},
+};
 
 const SNTP_PORT: u16 = crate::allports::well_known::SNTP;
 const SNTP_PACKET_LEN: usize = 48;
@@ -108,32 +110,6 @@ pub fn build_sntp_response(packet: &[u8]) -> Option<[u8; SNTP_PACKET_LEN]> {
     Some(out)
 }
 
-async fn open_udp(net: &VNet, port: u16) -> Option<vnet::NetHandle> {
-    let _ = net.submit(vnet::Command::OpenUdp { port });
-
-    let deadline = Instant::now() + EmbassyDuration::from_millis(SNTP_OPEN_TIMEOUT_MS);
-    loop {
-        for _ in 0..64 {
-            let Some(ev) = net.pop_event() else {
-                break;
-            };
-            if let vnet::Event::Opened { handle, kind } = ev
-                && kind == vnet::SocketKind::Udp
-            {
-                crate::log!("sntp: udp opened on port={} handle={:?}\n", port, handle);
-                return Some(handle);
-            }
-        }
-
-        if Instant::now() >= deadline {
-            crate::log!("sntp: udp open timed out on port={}\n", port);
-            return None;
-        }
-
-        Timer::after(EmbassyDuration::from_millis(5)).await;
-    }
-}
-
 #[embassy_executor::task]
 pub async fn sntp_service_task() {
     crate::log!("sntp: waiting for NET_V4_CONFIGURED\n");
@@ -187,7 +163,14 @@ pub async fn sntp_service_task() {
             vnet_open_fail_count = 0;
         }
 
-        let Some(udp) = open_udp(&net, SNTP_PORT).await else {
+        let Some(mut udp) = VNetUdpEndpoint::bind(
+            &net,
+            SNTP_PORT,
+            EmbassyDuration::from_millis(SNTP_OPEN_TIMEOUT_MS),
+        )
+        .await
+        else {
+            crate::log!("sntp: udp open timed out on port={}\n", SNTP_PORT);
             udp_open_fail_count = udp_open_fail_count.saturating_add(1);
             if udp_open_fail_count == 1 || udp_open_fail_count % 20 == 0 {
                 crate::log!(
@@ -199,6 +182,7 @@ pub async fn sntp_service_task() {
             Timer::after(EmbassyDuration::from_millis(250)).await;
             continue;
         };
+        crate::log!("sntp: udp opened on port={} handle={:?}\n", SNTP_PORT, udp.handle());
         if udp_open_fail_count != 0 {
             crate::log!("sntp: UDP socket open recovered after {} retries\n", udp_open_fail_count);
             udp_open_fail_count = 0;
@@ -212,16 +196,13 @@ pub async fn sntp_service_task() {
             let mut socket_closed = false;
 
             for _ in 0..64 {
-                let Some(ev) = net.pop_event() else {
+                let Some(ev) = udp.poll_event() else {
                     break;
                 };
                 had_event = true;
 
                 match ev {
-                    vnet::Event::UdpPacket { handle, from, data } => {
-                        if handle != udp {
-                            continue;
-                        }
+                    VNetUdpEvent::Packet(VNetUdpPacket::V4 { from, data }) => {
                         if let Some(reply) = build_sntp_response(data.as_slice()) {
                             served_packets = served_packets.saturating_add(1);
                             if served_packets == 1 || served_packets % 64 == 0 {
@@ -231,11 +212,7 @@ pub async fn sntp_service_task() {
                                     from
                                 );
                             }
-                            let _ = net.submit(vnet::Command::SendUdp {
-                                handle: udp,
-                                remote: from,
-                                data: vnet::ByteBuf::from_slice_trunc(&reply),
-                            });
+                            let _ = udp.send_v4(from, &reply);
                         } else {
                             rejected_packets = rejected_packets.saturating_add(1);
                             if rejected_packets == 1 || rejected_packets % 64 == 0 {
@@ -247,12 +224,15 @@ pub async fn sntp_service_task() {
                             }
                         }
                     }
-                    vnet::Event::Closed { handle } if handle == udp => {
-                        crate::log!("sntp: UDP socket closed (handle={:?}), reopening\n", handle);
+                    VNetUdpEvent::Packet(VNetUdpPacket::V6 { .. }) => {}
+                    VNetUdpEvent::Closed => {
+                        crate::log!(
+                            "sntp: UDP socket closed (handle={:?}), reopening\n",
+                            udp.handle()
+                        );
                         socket_closed = true;
                         break;
                     }
-                    _ => {}
                 }
             }
 

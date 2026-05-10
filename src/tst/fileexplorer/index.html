@@ -197,6 +197,7 @@
 
   <script>
     const NODE_SCHEMA_VERSION = "filetree.v1";
+    const TEXT_OPEN_LIMIT = 5 * 1024 * 1024;
     const currentYear = new Date().getFullYear();
 
     const sampleTree = {
@@ -312,11 +313,11 @@
       }
       if (!Array.isArray(node.actions)) {
         node.actions = node.kind === "folder"
-          ? ["open", "new-file", "new-folder", "rename", "move", "delete"]
-          : ["open", "rename", "move", "delete"];
+          ? ["open", "new-file", "new-folder", "upload", "rename", "move", "delete"]
+          : ["open", "download", "rename", "move", "delete"];
       }
       if (node.id === "root") {
-        node.actions = ["open", "new-file", "new-folder"];
+        node.actions = ["open", "new-file", "new-folder", "upload"];
       }
       return node;
     }
@@ -463,6 +464,9 @@
             </button>
             <button class="icon-btn flex h-9 items-center gap-2 rounded-lg border border-stone-200 bg-white px-3 text-sm font-medium" title="New file" onclick="openCreateModal('file', '${escapeJs(current.id)}')">
               <i data-lucide="file-plus-2" class="h-4 w-4 text-emerald-700"></i><span>File</span>
+            </button>
+            <button class="icon-btn flex h-9 items-center gap-2 rounded-lg border border-stone-200 bg-white px-3 text-sm font-medium" title="Upload" onclick="chooseUpload('${escapeJs(current.id)}')">
+              <i data-lucide="upload" class="h-4 w-4 text-cyan-700"></i><span>Upload</span>
             </button>
           </div>
           <div class="h-7 w-px bg-stone-200"></div>
@@ -634,6 +638,7 @@
           <span class="text-stone-600">${formatSize(size)}</span>
           <div class="ml-auto flex items-center gap-1">
             <button class="icon-btn flex h-8 items-center gap-1 rounded-md border border-stone-200 bg-white px-2 text-xs font-medium" onclick="renameSelected()" ${selected.length === 1 ? "" : "disabled"}><i data-lucide="pencil" class="h-3.5 w-3.5"></i><span>Rename</span></button>
+            <button class="icon-btn flex h-8 items-center gap-1 rounded-md border border-stone-200 bg-white px-2 text-xs font-medium" onclick="downloadSelected()" ${selected.length === 1 && selected[0].kind === "file" ? "" : "disabled"}><i data-lucide="download" class="h-3.5 w-3.5"></i><span>Download</span></button>
             <button class="icon-btn flex h-8 items-center gap-1 rounded-md border border-stone-200 bg-white px-2 text-xs font-medium" onclick="deleteSelected()"><i data-lucide="trash-2" class="h-3.5 w-3.5 text-red-700"></i><span>Delete</span></button>
             <button class="icon-btn flex h-8 w-8 items-center justify-center rounded-md border border-stone-200 bg-white" title="Clear" onclick="clearSelection()"><i data-lucide="x" class="h-4 w-4"></i></button>
           </div>
@@ -665,6 +670,7 @@
             </div>
             <div class="mt-3 grid grid-cols-2 gap-2">
               <button class="icon-btn flex h-9 items-center justify-center gap-2 rounded-lg border border-stone-200 bg-white text-sm font-medium" onclick="openNode('${escapeJs(subject.id)}')" ${multi ? "disabled" : ""}><i data-lucide="external-link" class="h-4 w-4"></i><span>Open</span></button>
+              <button class="icon-btn flex h-9 items-center justify-center gap-2 rounded-lg border border-stone-200 bg-white text-sm font-medium" onclick="downloadNode('${escapeJs(subject.id)}')" ${multi || subject.kind !== "file" ? "disabled" : ""}><i data-lucide="download" class="h-4 w-4"></i><span>Download</span></button>
               <button class="icon-btn flex h-9 items-center justify-center gap-2 rounded-lg border border-stone-200 bg-white text-sm font-medium" onclick="copyPath('${escapeJs(subject.id)}')" ${multi ? "disabled" : ""}><i data-lucide="copy" class="h-4 w-4"></i><span>Path</span></button>
               <button class="icon-btn flex h-9 items-center justify-center gap-2 rounded-lg border border-stone-200 bg-white text-sm font-medium" onclick="renameSelected()" ${selected.length === 1 ? "" : "disabled"}><i data-lucide="pencil" class="h-4 w-4"></i><span>Rename</span></button>
               <button class="icon-btn flex h-9 items-center justify-center gap-2 rounded-lg border border-stone-200 bg-white text-sm font-medium" onclick="deleteSelected()" ${selected.length ? "" : "disabled"}><i data-lucide="trash-2" class="h-4 w-4 text-red-700"></i><span>Delete</span></button>
@@ -822,6 +828,11 @@
       }
 
       const modal = state.modal;
+      if (modal.type === "viewer") {
+        renderViewerModal(modal);
+        return;
+      }
+
       const isDelete = modal.type === "delete";
       const title = modal.title || (isDelete ? "Delete" : `New ${modal.kind}`);
       modalRoot.innerHTML = `
@@ -881,6 +892,8 @@
         <div class="fixed inset-0 z-[60]" onclick="closeContext()"></div>
         <nav class="fixed z-[61] w-56 rounded-lg border border-stone-200 bg-white p-1 shadow-lift" style="left:${state.context.x}px; top:${state.context.y}px" onclick="event.stopPropagation()">
           ${actions.has("open") ? menuItem("external-link", "Open", `openNode('${escapeJs(node.id)}'); closeContext();`) : ""}
+          ${!isFolder && actions.has("download") ? menuItem("download", "Download", `downloadNode('${escapeJs(node.id)}'); closeContext();`) : ""}
+          ${isFolder && actions.has("upload") ? menuItem("upload", "Upload", `chooseUpload('${escapeJs(node.id)}'); closeContext();`) : ""}
           ${isFolder && actions.has("new-folder") ? menuItem("folder-plus", "New folder", `openCreateModal('folder', '${escapeJs(node.id)}'); closeContext();`) : ""}
           ${isFolder && actions.has("new-file") ? menuItem("file-plus-2", "New file", `openCreateModal('file', '${escapeJs(node.id)}'); closeContext();`) : ""}
           <div class="my-1 h-px bg-stone-100"></div>
@@ -890,6 +903,37 @@
           <div class="my-1 h-px bg-stone-100"></div>
           ${actions.has("delete") && node.id !== "root" ? menuItem("trash-2", "Delete", `confirmDelete(['${escapeJs(node.id)}']); closeContext();`, "text-red-700") : ""}
         </nav>
+      `;
+      if (window.lucide) lucide.createIcons();
+    }
+
+    function renderViewerModal(modal) {
+      const busy = modal.status === "loading";
+      const failed = modal.status === "error";
+      modalRoot.innerHTML = `
+        <div class="fixed inset-0 z-[70] flex items-center justify-center bg-stone-950/28 p-4" onclick="closeModal(event)">
+          <section class="flex h-[min(82vh,820px)] w-[min(980px,100%)] flex-col overflow-hidden rounded-xl border border-stone-200 bg-white shadow-lift" onclick="event.stopPropagation()">
+            <div class="flex min-h-14 items-center justify-between gap-3 border-b border-stone-200 px-4">
+              <div class="min-w-0">
+                <div class="truncate text-sm font-semibold">${escapeHtml(modal.name || "Open")}</div>
+                <div class="truncate font-mono text-[11px] text-stone-500">${escapeHtml(modal.path || "")}</div>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="hidden rounded-md border border-stone-200 bg-stone-50 px-2 py-1 text-xs text-stone-600 sm:inline">${escapeHtml(formatSize(modal.size || 0))}</span>
+                <button class="icon-btn flex h-8 w-8 items-center justify-center rounded-md border border-stone-200 bg-white" title="Close" onclick="setModal(null)"><i data-lucide="x" class="h-4 w-4"></i></button>
+              </div>
+            </div>
+            <div class="min-h-0 flex-1 overflow-auto bg-stone-950 p-4">
+              ${busy ? `
+                <div class="flex h-full items-center justify-center text-sm text-stone-300">Loading...</div>
+              ` : failed ? `
+                <div class="rounded-lg border border-red-300/40 bg-red-950/45 p-3 text-sm text-red-100">${escapeHtml(modal.error || "Could not open file")}</div>
+              ` : `
+                <pre class="min-h-full whitespace-pre-wrap break-words font-mono text-[12px] leading-5 text-stone-100">${escapeHtml(modal.content || "")}</pre>
+              `}
+            </div>
+          </section>
+        </div>
       `;
       if (window.lucide) lucide.createIcons();
     }
@@ -978,6 +1022,8 @@
     function nodeActions(node) {
       if (!node) return new Set();
       const actions = new Set(node.actions || []);
+      if (node.kind === "folder") actions.add("upload");
+      if (node.kind === "file") actions.add("download");
       if (node.id === "root") actions.delete("delete");
       return actions;
     }
@@ -1037,15 +1083,57 @@
       render();
     }
 
-    function openNode(id) {
+    async function openNode(id) {
       const node = getNode(id);
       if (!node) return;
       state.activeId = id;
       if (node.kind === "folder") {
         openFolder(id);
       } else {
-        toast(`Opened ${node.name}`);
+        await openTextFile(node);
         render();
+      }
+    }
+
+    async function openTextFile(node) {
+      if ((node.size || 0) > TEXT_OPEN_LIMIT) {
+        toast(`Open is limited to ${formatSize(TEXT_OPEN_LIMIT)}.`);
+        return;
+      }
+
+      state.modal = {
+        type: "viewer",
+        status: "loading",
+        nodeId: node.id,
+        name: node.name,
+        path: pathString(node.id),
+        size: node.size || 0
+      };
+      render();
+
+      try {
+        const content = state.adapter?.openText
+          ? await state.adapter.openText(node.id)
+          : mockOpenText(node);
+        state.modal = {
+          type: "viewer",
+          status: "ready",
+          nodeId: node.id,
+          name: node.name,
+          path: pathString(node.id),
+          size: node.size || 0,
+          content
+        };
+      } catch (error) {
+        state.modal = {
+          type: "viewer",
+          status: "error",
+          nodeId: node.id,
+          name: node.name,
+          path: pathString(node.id),
+          size: node.size || 0,
+          error: error.message || String(error)
+        };
       }
     }
 
@@ -1123,13 +1211,22 @@
 
     function onDragOverNode(event, id) {
       const node = getNode(id);
-      if (!node || node.kind !== "folder") return;
+      if (!node) return;
+      if (node.kind !== "folder") {
+        if (hasDraggedFiles(event)) {
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "copy";
+        }
+        return;
+      }
       event.preventDefault();
+      event.dataTransfer.dropEffect = hasDraggedFiles(event) ? "copy" : "move";
       event.currentTarget.classList.add("drop-target");
     }
 
     function onDragOverCurrent(event) {
       event.preventDefault();
+      event.dataTransfer.dropEffect = hasDraggedFiles(event) ? "copy" : "move";
       event.currentTarget.classList.add("drop-target");
     }
 
@@ -1142,6 +1239,11 @@
       event.stopPropagation();
       event.currentTarget.classList.remove("drop-target");
       const target = getNode(targetId);
+      const files = droppedFiles(event);
+      if (files.length) {
+        uploadFilesTo(files, target?.kind === "folder" ? targetId : state.currentId);
+        return;
+      }
       if (!target || target.kind !== "folder") return;
       moveNodesTo(getDragIds(event), targetId);
     }
@@ -1149,7 +1251,20 @@
     function onDropOnCurrent(event) {
       event.preventDefault();
       event.currentTarget.classList.remove("drop-target");
+      const files = droppedFiles(event);
+      if (files.length) {
+        uploadFilesTo(files, state.currentId);
+        return;
+      }
       moveNodesTo(getDragIds(event), state.currentId);
+    }
+
+    function hasDraggedFiles(event) {
+      return Array.from(event.dataTransfer?.types || []).includes("Files");
+    }
+
+    function droppedFiles(event) {
+      return Array.from(event.dataTransfer?.files || []);
     }
 
     function getDragIds(event) {
@@ -1335,8 +1450,87 @@
       });
     }
 
+    function chooseUpload(parentId) {
+      const parent = getNode(parentId);
+      if (!parent || parent.kind !== "folder") return;
+      const input = document.createElement("input");
+      input.type = "file";
+      input.multiple = true;
+      input.onchange = () => uploadFilesTo(Array.from(input.files || []), parentId);
+      input.click();
+    }
+
+    function uploadFilesTo(files, parentId) {
+      const parent = getNode(parentId);
+      if (!parent || parent.kind !== "folder" || !files.length) return;
+      files.forEach(file => enqueueUpload(parentId, file));
+    }
+
+    function enqueueUpload(parentId, file) {
+      const parent = getNode(parentId);
+      if (!parent || hasNameConflict(parentId, file.name)) {
+        toast(`${file.name} already exists.`);
+        return;
+      }
+      const node = normalizeTree({
+        id: `node-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        name: file.name,
+        kind: "file",
+        size: file.size,
+        mime: file.type || mimeFromName(file.name),
+        modified: new Date(file.lastModified || Date.now()).toISOString()
+      });
+      enqueueJob({
+        kind: "upload",
+        label: `Upload ${file.name}`,
+        description: "Reading file",
+        nodeIds: [parentId],
+        targetId: parentId,
+        stages: ["Reading file", "Sending bytes", "Refreshing parent"],
+        backend: () => state.adapter.uploadFile(parentId, file),
+        apply: () => {
+          parent.children.push(node);
+          parent.modified = new Date().toISOString();
+          recomputeFolderSizes(state.tree);
+          state.currentId = parentId;
+          state.selected = new Set([node.id]);
+          state.activeId = node.id;
+        }
+      });
+    }
+
     function deleteSelected() {
       confirmDelete([...state.selected]);
+    }
+
+    function downloadSelected() {
+      if (state.selected.size !== 1) return;
+      downloadNode([...state.selected][0]);
+    }
+
+    function downloadNode(id) {
+      const node = getNode(id);
+      if (!node || node.kind !== "file") return;
+      if (state.adapter?.downloadUrl) {
+        const link = document.createElement("a");
+        link.href = state.adapter.downloadUrl(id);
+        link.download = node.name;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        toast(`Downloading ${node.name}`);
+        return;
+      }
+      const blob = new Blob([mockOpenText(node)], { type: node.mime || "application/octet-stream" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = node.name;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      toast(`Downloaded ${node.name}`);
     }
 
     function confirmDelete(ids) {
@@ -1644,6 +1838,25 @@
       return "application/octet-stream";
     }
 
+    function mockOpenText(node) {
+      const path = pathString(node.id);
+      if ((node.mime || "").startsWith("image/")) {
+        return `Binary preview opened as text, best effort.\n\n${path}\n${"\\u0000PNG\\r\\n\\u001a\\n".repeat(8)}`;
+      }
+      if (node.name.endsWith(".json") || node.mime === "application/json") {
+        return JSON.stringify({ name: node.name, path, size: node.size, modified: node.modified }, null, 2);
+      }
+      return [
+        `# ${node.name}`,
+        "",
+        `Path: ${path}`,
+        `MIME: ${node.mime || "application/octet-stream"}`,
+        `Size: ${formatSize(node.size || 0)}`,
+        "",
+        "Mock adapter text body. Attach the Axum backend to load TRUEOSFS file bytes."
+      ].join("\n");
+    }
+
     function formatSize(bytes = 0) {
       const units = ["B", "KB", "MB", "GB", "TB"];
       let value = Number(bytes || 0);
@@ -1693,6 +1906,20 @@
         updateNode: (nodeId, patch) => json(`/nodes/${encodeURIComponent(nodeId)}`, { method: "PATCH", body: JSON.stringify(patch) }),
         deleteNodes: ids => json("/nodes/delete", { method: "POST", body: JSON.stringify({ ids }) }),
         moveNodes: (ids, targetParentId, position = null) => json("/nodes/move", { method: "POST", body: JSON.stringify({ ids, targetParentId, position }) }),
+        uploadFile: (parentId, file) => fetch(`${base}/nodes/${encodeURIComponent(parentId)}/upload`, {
+          method: "POST",
+          headers: { "x-file-name": encodeURIComponent(file.name) },
+          body: file
+        }).then(async response => {
+          if (!response.ok) throw new Error(await response.text());
+          return response.json();
+        }),
+        downloadUrl: nodeId => `${base}/nodes/${encodeURIComponent(nodeId)}/download`,
+        openText: async nodeId => {
+          const response = await fetch(`${base}/nodes/${encodeURIComponent(nodeId)}/content`);
+          if (!response.ok) throw new Error(await response.text());
+          return response.text();
+        },
         job: id => json(`/jobs/${encodeURIComponent(id)}`),
         events: () => new EventSource(`${base}/jobs/events`)
       };

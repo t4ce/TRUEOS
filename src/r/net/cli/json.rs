@@ -8,9 +8,7 @@ use alloc::{
     vec::Vec,
 };
 
-use crate::t::net::https::{
-    FetchError, fetch_https_body_hyper_async, post_https_json_hyper_async,
-};
+use crate::t::net::https::{FetchError, fetch_https_body_hyper_async, post_https_json_hyper_async};
 
 #[derive(Clone, Debug)]
 pub enum JsonError {

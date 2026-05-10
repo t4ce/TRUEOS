@@ -11,6 +11,7 @@ pub mod http_stream;
 pub mod https;
 pub mod hyper_io;
 pub mod ping;
+pub mod vnet_stream;
 
 use alloc::string::String;
 use heapless::String as HString;
