@@ -784,7 +784,10 @@ fn read_result_dword(warm: RenderWarmState, index: usize) -> u32 {
 }
 
 fn is_gpgpu_submit_name(name: &str) -> bool {
-    matches!(name, "gpgpu-preflight" | "gpgpu-compute-walker" | "gpgpu-pre-submit")
+    matches!(
+        name,
+        "gpgpu-preflight" | "gpgpu-compute-walker" | "gpgpu-one-tile-sentinel" | "gpgpu-pre-submit"
+    )
 }
 
 fn seed_result_debug_slots(warm: RenderWarmState) {
@@ -1219,8 +1222,7 @@ const GPGPU_SIP_HANDLER_VARIANT: trueos_eu::gfx12::Gfx12EotVariant =
 const GPGPU_USE_STATIC_DP4A_STORE_THEN_EOT: bool = true;
 const GPGPU_USE_HDC_STORE_THEN_EOT: bool = true;
 const GPGPU_USE_GFX125_COMPUTE_WALKER: bool = false;
-const GPGPU_WALKER_GROUP_X_DIM_LADDER: &[u32] =
-    &[186, 224, 256, 288, 320, 352, 384, 416, 448, 480, 512];
+const GPGPU_WALKER_GROUP_X_DIM_LADDER: &[u32] = &[186];
 const GPGPU_WALKER_GROUP_THREADS: u32 = 1;
 const GPGPU_WALKER_SIMD8_LANES: u32 = 8;
 
@@ -1838,14 +1840,20 @@ pub(crate) fn submit_gpgpu_one_tile_output_sentinel_probe(
             GPGPU_ONE_TILE_OUTPUT_SENTINEL,
         )
     };
-    let readback_ok = output_first_after == GPGPU_ONE_TILE_OUTPUT_SENTINEL
+    let sentinel_written = output_first_after == GPGPU_ONE_TILE_OUTPUT_SENTINEL
         && (output_hits_lo64 & 1) != 0
-        && dispatch_delta != 0;
+        && output_first_before == 0;
+    let readback_ok =
+        sentinel_written && finished && finish_marker == RCS_EXEC_RESULT_COMPUTE_WALKER_DONE;
     let submitted = batch_bytes != 0;
-    let reason = if readback_ok {
-        "sentinel-written"
-    } else if output_first_before != 0 {
+    let reason = if output_first_before != 0 {
         "output-not-zero-before-submit"
+    } else if readback_ok && dispatch_delta == 0 {
+        "sentinel-written-no-ts-delta"
+    } else if readback_ok {
+        "sentinel-written"
+    } else if !finished {
+        "submit-not-finished"
     } else if dispatch_delta == 0 {
         "no-dispatch-delta"
     } else if output_first_after != GPGPU_ONE_TILE_OUTPUT_SENTINEL {

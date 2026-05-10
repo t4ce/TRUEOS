@@ -6,6 +6,8 @@ static GPU_SHAPE_CANDIDATES: AtomicU64 = AtomicU64::new(0);
 static GPU_READY_CANDIDATES: AtomicU64 = AtomicU64::new(0);
 
 const GPGPU_PILOT_MAX_TILES: usize = 1;
+const LOCAL_GPU_BACKEND_BUDGET_PERCENT: usize = 20;
+const GPGPU_VALIDATED_SIMD_LANES_PER_THREAD: usize = 8;
 const MATVEC_PROTOCOL_SHAPE: &str = "matrix-id-row-range";
 const MATVEC_DIRECTOR: &str = "single";
 
@@ -207,6 +209,7 @@ pub(crate) fn share_matvec_rowmajor_bf16(n_rows: usize, k_dim: usize, chunk_rows
     }
     let plan = plan_bf16_decode_matvec(n_rows, chunk_rows, gpu_ready);
     let pilot = plan_gpgpu_pilot(n_rows, k_dim, shape_candidate, gpu.tile_rows, gpu.max_tiles);
+    let gpu_budget = plan_local_gpu_backend_budget(n_rows, gpu.eu_dispatch_delta);
 
     if LOGGED_BF16_SHARE.swap(true, Ordering::AcqRel) {
         return;
@@ -215,7 +218,7 @@ pub(crate) fn share_matvec_rowmajor_bf16(n_rows: usize, k_dim: usize, chunk_rows
     let director = MatvecDirectorPlan::bf16_decode(gpu.lanes);
 
     crate::log!(
-        "burn-baba: shared-inference-plan director={} protocol={} workload={} kernel={} precision={} layout={} batch_rows={} preflight_submitted={} accepted={} completed={} guc_ready={} lanes={} marker=0x{:08X} dot={} sum_a={} sum_b={} rows={} k_dim={} chunk_rows={} min_rows={} min_k_dim={} shape_candidate={} gpu_ready={} execute_role={} net_cpu_role={} net_cpu_route={} net_cpu_shadow={} net_cpu_pending={} net_protocol_v={} net_caps=0x{:X} net_min_rows={} local_workers={} local_gpu_role={} local_gpu_first={} local_gpu_action=one-tile-shadow-dispatch-disabled future_gpu_role={} future_net_gpu_deferred={} future_gpu_action=defer-until-net-gpu-protocol action=cpu-ap-director-keeps-local-results row_range=0..{} matrix_id_source=lumen-net-manifest cpu_ap_continues=1 next_kernel={} next_precision={} next_layout={} next=batched-gemm-attention-kv-fusion-mixed-precision does_not_prove=gpu_matmul\n",
+        "burn-baba: shared-inference-plan director={} protocol={} workload={} kernel={} precision={} layout={} batch_rows={} preflight_submitted={} accepted={} completed={} guc_ready={} lanes={} marker=0x{:08X} dot={} sum_a={} sum_b={} rows={} k_dim={} chunk_rows={} min_rows={} min_k_dim={} shape_candidate={} gpu_ready={} execute_role={} net_cpu_role={} net_cpu_route={} net_cpu_shadow={} net_cpu_pending={} net_protocol_v={} net_caps=0x{:X} net_min_rows={} local_workers={} local_gpu_role={} local_gpu_first={} local_gpu_action=one-tile-shadow-budgeted-dispatch-disabled local_gpu_budget_pct={} local_gpu_validated_lanes={} local_gpu_validated_threads={} local_gpu_budget_threads={} cpu_reserved_threads={} local_gpu_target_rows=0..{} cpu_rows={}..{} future_gpu_role={} future_net_gpu_deferred={} future_gpu_action=defer-until-net-gpu-protocol action=cpu-ap-director-keeps-local-results matrix_id_source=lumen-net-manifest cpu_ap_continues=1 next_kernel={} next_precision={} next_layout={} next=batched-gemm-attention-kv-fusion-mixed-precision does_not_prove=gpu_matmul\n",
         director.director,
         director.protocol,
         plan.workload.as_str(),
@@ -250,9 +253,16 @@ pub(crate) fn share_matvec_rowmajor_bf16(n_rows: usize, k_dim: usize, chunk_rows
         director.local_workers,
         director.local_gpu_role.as_str(),
         director.local_gpu_first as u8,
+        gpu_budget.percent,
+        gpu_budget.validated_lane_dispatch,
+        gpu_budget.validated_hw_threads,
+        gpu_budget.budget_hw_threads,
+        gpu_budget.cpu_reserved_hw_threads,
+        gpu_budget.target_rows,
+        gpu_budget.target_rows,
+        n_rows,
         director.future_gpu_role.as_str(),
         director.future_net_gpu_deferred as u8,
-        n_rows,
         plan.next_kernel.as_str(),
         plan.next_precision.as_str(),
         plan.next_memory_layout.as_str(),
@@ -269,7 +279,7 @@ pub(crate) fn share_matvec_rowmajor_bf16(n_rows: usize, k_dim: usize, chunk_rows
         "eu-c-store-kernel-not-proven"
     };
     crate::log!(
-        "burn-baba: gpgpu-pilot-plan director={} role={} protocol={} eligible={} gpu_ready={} arena_ready={} arena_gpu_base=0x{:X} arena_bytes=0x{:X} arena_max_tiles={} pilot_tiles={} pilot_tile_cap={} candidate_tiles={} tile_rows={} tile_k={} x_bytes={} weight_tile_bytes={} output_tile_bytes={} compare=cpu-reference-first dispatch=disabled reason={} cpu_ap_continues=1 net_gpu_role={} net_gpu_action=deferred does_not_prove=gpu_matmul\n",
+        "burn-baba: gpgpu-pilot-plan director={} role={} protocol={} eligible={} gpu_ready={} arena_ready={} arena_gpu_base=0x{:X} arena_bytes=0x{:X} arena_max_tiles={} pilot_tiles={} pilot_tile_cap={} candidate_tiles={} tile_rows={} tile_k={} x_bytes={} weight_tile_bytes={} output_tile_bytes={} budget_pct={} validated_hw_threads={} budget_hw_threads={} target_rows={} cpu_rows={} compare=cpu-reference-first dispatch=disabled reason={} cpu_ap_continues=1 net_gpu_role={} net_gpu_action=deferred does_not_prove=gpu_matmul\n",
         director.director,
         director.local_gpu_role.as_str(),
         director.protocol,
@@ -287,6 +297,11 @@ pub(crate) fn share_matvec_rowmajor_bf16(n_rows: usize, k_dim: usize, chunk_rows
         pilot.x_bytes,
         pilot.weight_tile_bytes,
         pilot.output_tile_bytes,
+        gpu_budget.percent,
+        gpu_budget.validated_hw_threads,
+        gpu_budget.budget_hw_threads,
+        gpu_budget.target_rows,
+        gpu_budget.cpu_rows,
         pilot_reason,
         director.future_gpu_role.as_str(),
     );
@@ -361,6 +376,17 @@ struct GpgpuPilotPlan {
     output_tile_bytes: usize,
 }
 
+#[derive(Copy, Clone, Debug)]
+struct LocalGpuBackendBudget {
+    percent: usize,
+    validated_lane_dispatch: usize,
+    validated_hw_threads: usize,
+    budget_hw_threads: usize,
+    cpu_reserved_hw_threads: usize,
+    target_rows: usize,
+    cpu_rows: usize,
+}
+
 fn plan_gpgpu_pilot(
     n_rows: usize,
     k_dim: usize,
@@ -390,5 +416,41 @@ fn plan_gpgpu_pilot(
         x_bytes,
         weight_tile_bytes,
         output_tile_bytes,
+    }
+}
+
+fn plan_local_gpu_backend_budget(
+    n_rows: usize,
+    validated_lane_dispatch: u32,
+) -> LocalGpuBackendBudget {
+    let validated_lane_dispatch = validated_lane_dispatch as usize;
+    let validated_hw_threads =
+        validated_lane_dispatch / GPGPU_VALIDATED_SIMD_LANES_PER_THREAD.max(1);
+    let budget_hw_threads = if validated_hw_threads == 0 {
+        0
+    } else {
+        validated_hw_threads
+            .saturating_mul(LOCAL_GPU_BACKEND_BUDGET_PERCENT)
+            .saturating_div(100)
+            .max(1)
+    };
+    let target_rows = if n_rows == 0 || budget_hw_threads == 0 {
+        0
+    } else {
+        n_rows
+            .saturating_mul(LOCAL_GPU_BACKEND_BUDGET_PERCENT)
+            .saturating_div(100)
+            .max(1)
+            .min(n_rows)
+    };
+
+    LocalGpuBackendBudget {
+        percent: LOCAL_GPU_BACKEND_BUDGET_PERCENT,
+        validated_lane_dispatch,
+        validated_hw_threads,
+        budget_hw_threads,
+        cpu_reserved_hw_threads: validated_hw_threads.saturating_sub(budget_hw_threads),
+        target_rows,
+        cpu_rows: n_rows.saturating_sub(target_rows),
     }
 }
