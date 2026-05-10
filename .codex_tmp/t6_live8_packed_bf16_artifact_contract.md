@@ -40,6 +40,15 @@ Generation/verification note:
 
 Runtime policy:
 
-- T6 is preserved in code but is not the hot Lumen/GPGPU boot artifact yet.
-- Keep T5 as the current boot-green baseline until T6 receives separate runtime
-  proof labels and readback logs.
+- T6 is now wired as the hot Lumen/GPGPU proof rung immediately after T5.
+- T5 remains the guardrail: T6 runs only after the T5 live4 compare succeeds
+  for the staged tile.
+- Runtime labels are distinct:
+  - `t5-small-live4-bf16-dot`
+  - `t6-small-live8-bf16-dot`
+  - `t6-live8-scale-proof`
+  - `t6-actual-work-tiles`
+- `GPGPU_T6_LIVE8_GROUP_X_DIM_LADDER` starts at `[4096]`, matching the clean T5
+  retire cap until T6 has its own boot-log ladder history.
+- Output remains CPU/AP-owned and fixed-slot proof-only; this still does not
+  claim full matrix-vector ownership.

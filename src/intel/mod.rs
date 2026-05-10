@@ -506,6 +506,20 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
     )
 }
 
+pub(crate) fn submit_gpgpu_t6_one_row_matvec_probe(
+    output_gpu: u64,
+    output_bytes: usize,
+    cpu_expected_bits: u32,
+    live_k_dim: usize,
+) -> GpgpuT5OneRowMatvecProof {
+    self::gpgpu::submit_gpgpu_t6_one_row_matvec_probe(
+        output_gpu,
+        output_bytes,
+        cpu_expected_bits,
+        live_k_dim,
+    )
+}
+
 pub fn guc_status(warm: RenderWarmState) -> u32 {
     self::guc::status(Dev {
         bus: 0,

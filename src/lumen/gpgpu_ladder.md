@@ -510,9 +510,41 @@ Hold setting:
   kernel grows beyond `live_k_dim=4`, the CGP queueing model changes, or the
   retire/completion logic becomes more expressive.
 
-Next meaningful T5/T6 direction: widen the actual math (`live_k_dim`) or row
-count semantics, not the group-count cap.  The 4096-group setting is a known
-clean proof frontier for the current small artifact.
+## T6 Small Live8 Packed-BF16 Dot
+
+Status: wired hot after the T5 live4 rung, still proof-only and still
+CPU/AP-owned.
+
+Active artifact:
+
+- `gfx12-t6-small-live8-packed-bf16-dot-hdc1-stateless-store-then-ts-eot`
+
+What changes from T5:
+
+- `live_k_dim` grows from `4` to `8`.
+- The shader unpacks packed BF16 row lanes `[0,1,2,3,4,5,6,7]`.
+- The same staged activation vector, staged row, arena surface, fixed output
+  slot, and CPU/AP readback ownership are preserved.
+- T6 only runs after the T5 compare for that staged tile succeeds, so T5 remains
+  the boot-green guardrail.
+
+Runtime shape:
+
+- `t5-small-live4-bf16-dot` remains step 9.
+- `t6-small-live8-bf16-dot` is step 10.
+- `t6-actual-work-tiles` is step 11 and reports separate T5/T6 submitted,
+  finished, and compare-ok tile counts.
+
+Current T6 scale cap:
+
+- `GPGPU_T6_LIVE8_GROUP_X_DIM_LADDER` starts at `[4096]`, matching the clean T5
+  retire frontier until T6 has its own boot log history.
+- Do not tune this cap as a throughput knob.  Revisit only when the kernel,
+  CGP queueing model, row-count semantics, or retire logic changes.
+
+Next meaningful direction: widen the actual math toward the full row or give
+each GPU worker a distinct output-row responsibility.  Raising group count alone
+does not turn the single fixed-slot proof into full matrix-vector work.
 
 ## Backend Selection Boundary
 
