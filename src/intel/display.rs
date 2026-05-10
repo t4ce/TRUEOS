@@ -94,36 +94,6 @@ static PRIMARY_SURFACE: Mutex<Option<PrimarySurface>> = Mutex::new(None);
 static OVERLAY_PRESENT_SEQ: AtomicU32 = AtomicU32::new(0);
 static OVERLAY_SURFACE: Mutex<Option<OverlaySurface>> = Mutex::new(None);
 
-#[derive(Copy, Clone, Debug, Default)]
-pub(crate) struct PrimarySurfaceSampleSet {
-    pub(crate) tl: u32,
-    pub(crate) center: u32,
-    pub(crate) br: u32,
-    pub(crate) apex: u32,
-    pub(crate) centroid: u32,
-    pub(crate) left: u32,
-    pub(crate) right: u32,
-}
-
-impl PrimarySurfaceSampleSet {
-    pub(crate) fn any_changed_since(self, before: Self) -> bool {
-        self.tl != before.tl
-            || self.center != before.center
-            || self.br != before.br
-            || self.apex != before.apex
-            || self.centroid != before.centroid
-            || self.left != before.left
-            || self.right != before.right
-    }
-
-    pub(crate) fn triangle_points_changed_since(self, before: Self) -> bool {
-        self.apex != before.apex
-            || self.centroid != before.centroid
-            || self.left != before.left
-            || self.right != before.right
-    }
-}
-
 #[derive(Copy, Clone)]
 pub(super) struct PipeInfo {
     pub(super) name: &'static str,
@@ -841,93 +811,6 @@ pub(crate) fn present_nv12_surface_center(
     crate::intel::dma_flush(surface.virt, byte_len);
     notify_primary_surface_present(surface, "nv12-center", byte_len);
     true
-}
-
-pub(crate) fn log_primary_surface_samples(label: &str) {
-    let Some(surface) = *PRIMARY_SURFACE.lock() else {
-        return;
-    };
-    log_surface_samples(surface, label);
-}
-
-pub(crate) fn capture_primary_surface_samples() -> Option<PrimarySurfaceSampleSet> {
-    let surface = (*PRIMARY_SURFACE.lock())?;
-    capture_surface_samples(surface)
-}
-
-pub(crate) fn sample_primary_surface_pixel(x: u32, y: u32) -> Option<u32> {
-    let surface = (*PRIMARY_SURFACE.lock())?;
-    sample_surface_pixel(surface, x as usize, y as usize)
-}
-
-fn log_surface_samples(surface: PrimarySurface, label: &str) {
-    let Some(samples) = capture_surface_samples(surface) else {
-        return;
-    };
-
-    intel_display_focus_log!(
-        "intel/display: primary-samples label={} gpu=0x{:X} phys=0x{:X} pitch=0x{:X} tl=0x{:08X} center=0x{:08X} br=0x{:08X} apex=0x{:08X} centroid=0x{:08X} left=0x{:08X} right=0x{:08X}\n",
-        label,
-        crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE,
-        surface.phys,
-        surface.pitch_bytes,
-        samples.tl,
-        samples.center,
-        samples.br,
-        samples.apex,
-        samples.centroid,
-        samples.left,
-        samples.right
-    );
-}
-
-fn capture_surface_samples(surface: PrimarySurface) -> Option<PrimarySurfaceSampleSet> {
-    let width = surface.width as usize;
-    let height = surface.height as usize;
-    let pitch_bytes = surface.pitch_bytes as usize;
-    if width == 0 || height == 0 || pitch_bytes < 4 || surface.virt.is_null() {
-        return None;
-    }
-
-    let clip_to_screen = |clip_x: f32, clip_y: f32| -> (usize, usize) {
-        let sx = ((clip_x + 1.0) * 0.5 * width as f32).clamp(0.0, width.saturating_sub(1) as f32)
-            as usize;
-        let sy = ((1.0 - (clip_y + 1.0) * 0.5) * height as f32)
-            .clamp(0.0, height.saturating_sub(1) as f32) as usize;
-        (sx, sy)
-    };
-    let (apex_x, apex_y) = clip_to_screen(0.0, 0.72);
-    let (left_x, left_y) = clip_to_screen(-0.72, -0.58);
-    let (right_x, right_y) = clip_to_screen(0.72, -0.58);
-    let (centroid_x, centroid_y) = clip_to_screen(0.0, -0.15);
-
-    Some(PrimarySurfaceSampleSet {
-        tl: sample_surface_pixel(surface, 0, 0)?,
-        center: sample_surface_pixel(surface, width / 2, height / 2)?,
-        br: sample_surface_pixel(surface, width.saturating_sub(1), height.saturating_sub(1))?,
-        apex: sample_surface_pixel(surface, apex_x, apex_y)?,
-        centroid: sample_surface_pixel(surface, centroid_x, centroid_y)?,
-        left: sample_surface_pixel(surface, left_x, left_y)?,
-        right: sample_surface_pixel(surface, right_x, right_y)?,
-    })
-}
-
-fn sample_surface_pixel(surface: PrimarySurface, x: usize, y: usize) -> Option<u32> {
-    let width = surface.width as usize;
-    let height = surface.height as usize;
-    let pitch_bytes = surface.pitch_bytes as usize;
-    if width == 0 || height == 0 || pitch_bytes < 4 || surface.virt.is_null() {
-        return None;
-    }
-
-    let clamped_x = x.min(width.saturating_sub(1));
-    let clamped_y = y.min(height.saturating_sub(1));
-    let byte_offset = clamped_y
-        .checked_mul(pitch_bytes)?
-        .checked_add(clamped_x.checked_mul(4)?)?;
-    let sample_ptr = unsafe { surface.virt.add(byte_offset) };
-    crate::intel::dma_flush(sample_ptr, core::mem::size_of::<u32>());
-    Some(unsafe { core::ptr::read_volatile(sample_ptr as *const u32) })
 }
 
 fn notify_primary_surface_present(surface: PrimarySurface, reason: &str, byte_len: usize) -> bool {

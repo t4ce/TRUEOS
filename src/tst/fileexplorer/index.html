@@ -290,6 +290,7 @@
       foldersFirst: true,
       query: "",
       clipboardPath: "",
+      adapter: null,
       adapterName: window.FILE_EXPLORER_API_BASE ? "http" : "mock"
     };
 
@@ -1193,6 +1194,7 @@
         nodeIds: uniqueIds,
         targetId: targetParentId,
         stages: ["Checking destination", "Reserving names", "Moving nodes", "Refreshing folder sizes"],
+        backend: () => state.adapter.moveNodes(uniqueIds, targetParentId),
         apply: () => {
           uniqueIds.forEach(id => moveNode(id, targetParentId));
           recomputeFolderSizes(state.tree);
@@ -1248,6 +1250,7 @@
         description: "Validating name",
         nodeIds: [id],
         stages: ["Validating name", "Updating metadata", "Refreshing node"],
+        backend: () => state.adapter.updateNode(id, { name }),
         apply: () => {
           node.name = name;
           node.modified = new Date().toISOString();
@@ -1314,6 +1317,13 @@
         nodeIds: [parentId],
         targetId: parentId,
         stages: ["Allocating node", "Writing metadata", "Refreshing parent"],
+        backend: () => state.adapter.createNode(parentId, {
+          id: node.id,
+          name,
+          kind,
+          size: 0,
+          mime: kind === "file" ? mimeFromName(name) : undefined
+        }),
         apply: () => {
           parent.children.push(node);
           parent.modified = new Date().toISOString();
@@ -1349,6 +1359,7 @@
         description: "Checking references",
         nodeIds: ids,
         stages: ["Checking references", "Removing entries", "Refreshing tree"],
+        backend: () => state.adapter.deleteNodes(ids),
         apply: () => {
           ids.forEach(removeNode);
           recomputeFolderSizes(state.tree);
@@ -1379,8 +1390,63 @@
       state.jobsOpen = true;
       render();
 
-      setTimeout(() => runJob(job.id), 280);
+      if (state.adapter && config.backend) {
+        runBackendJob(job.id, config.backend);
+      } else {
+        setTimeout(() => runJob(job.id), 280);
+      }
       return job;
+    }
+
+    async function runBackendJob(jobId, submit) {
+      const job = state.jobs.find(item => item.id === jobId);
+      if (!job || job.status !== "queued") return;
+      job.status = "running";
+      job.progress = 8;
+      job.description = "Sending request";
+      job.updatedAt = new Date().toISOString();
+      render();
+
+      try {
+        const accepted = await submit();
+        job.remoteId = accepted.jobId || accepted.job_id;
+        job.description = accepted.label || "Accepted";
+        job.progress = 32;
+        job.updatedAt = new Date().toISOString();
+        render();
+
+        const terminal = await pollBackendJob(job.remoteId);
+        if (terminal.status !== "succeeded") {
+          throw new Error(terminal.error || terminal.description || "Backend job failed");
+        }
+        await reloadBackendTree();
+        job.status = "succeeded";
+        job.progress = 100;
+        job.description = terminal.description || "Committed";
+        job.updatedAt = new Date().toISOString();
+      } catch (error) {
+        job.status = "failed";
+        job.progress = 100;
+        job.description = error.message || "Backend request failed";
+        job.updatedAt = new Date().toISOString();
+      }
+      render();
+    }
+
+    async function pollBackendJob(id) {
+      if (!id) return { status: "succeeded", description: "Committed" };
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        const record = await state.adapter.job(id);
+        if (["succeeded", "failed", "cancelled"].includes(record.status)) return record;
+        await new Promise(resolve => setTimeout(resolve, 180 + attempt * 40));
+      }
+      throw new Error("Backend job timed out");
+    }
+
+    async function reloadBackendTree() {
+      const snapshot = await state.adapter.loadTree();
+      window.FileExplorer.setTree(snapshot.root || snapshot);
+      state.adapterName = "http";
     }
 
     function runJob(jobId) {
@@ -1668,6 +1734,7 @@
       attachBackend: async (base = "/api") => {
         const adapter = createHttpAdapter(base);
         const snapshot = await adapter.loadTree();
+        state.adapter = adapter;
         window.FileExplorer.setTree(snapshot.root || snapshot);
         state.adapterName = "http";
         render();
@@ -1708,7 +1775,16 @@
       }
     });
 
-    window.addEventListener("load", render);
+    window.addEventListener("load", () => {
+      render();
+      if (window.FILE_EXPLORER_API_BASE) {
+        window.FileExplorer.attachBackend(window.FILE_EXPLORER_API_BASE).catch(error => {
+          state.adapterName = "mock";
+          toast(`Backend unavailable: ${error.message || error}`);
+          render();
+        });
+      }
+    });
   </script>
 </body>
 </html>

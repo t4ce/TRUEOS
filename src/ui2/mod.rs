@@ -659,9 +659,6 @@ struct Ui2State {
     scroll_drags: Vec<Ui2WindowScrollDrag>,
     scroll_pan_drags: Vec<Ui2WindowScrollPanDrag>,
     windows: Vec<Ui2Window>,
-    compose_present_history_ms: Vec<u64>,
-    compose_fps_display: u16,
-    last_compose_heartbeat_seq: u32,
     last_athlas_small_ready_seq: u32,
     first_compose_signaled: bool,
 }
@@ -741,9 +738,6 @@ fn init_state() -> &'static Mutex<Ui2State> {
             scroll_drags: Vec::new(),
             scroll_pan_drags: Vec::new(),
             windows: Vec::new(),
-            compose_present_history_ms: Vec::new(),
-            compose_fps_display: 0,
-            last_compose_heartbeat_seq: 0,
             last_athlas_small_ready_seq: 0,
             first_compose_signaled: false,
         };
@@ -2803,11 +2797,6 @@ fn compose_ui2_frame(state: &mut Ui2State, present_to_screen: bool) -> bool {
         && (compose_seq <= 2 || compose_seq.is_multiple_of(UI2_COMPOSE_LOG_EVERY))
     {
         let present_ms = elapsed_ms_since(compose_started_at);
-        state.compose_present_history_ms.push(present_ms);
-        if state.compose_present_history_ms.len() > 64 {
-            let excess = state.compose_present_history_ms.len() - 64;
-            state.compose_present_history_ms.drain(..excess);
-        }
         crate::log!(
             "ui2: compose-heartbeat seq={} reason={} visible={} browser={} drawable={} pending={} surface={} present_ms={} present={}\n",
             compose_seq,

@@ -20,6 +20,8 @@ pub mod services {
     pub const CHAT_HTTP_TCP_PORT: u16 = 3;
     pub const MAIL_HTTP_TCP_PORT: u16 = 4;
     pub const AXUM_BOOT_TCP_PORT: u16 = 5;
+    pub const FILEEXPLORER_HTTP_TCP_PORT: u16 = 9;
+    pub const FILEEXPLORER_HTTP_TCP_PORTS: [u16; 3] = [FILEEXPLORER_HTTP_TCP_PORT, 8, 6];
     pub const LOGTOTCP_TCP_PORT: u16 = 1;
     pub const WS_TIME_TCP_PORT: u16 = 2;
     pub const NET_SHELL_TCP_PORT: u16 = 4245;
@@ -35,7 +37,7 @@ pub mod mail {
     use super::well_known;
 
     pub const ACCOUNT_EMAIL: &str = "jonasb@post.com";
-    pub const ACCOUNT_PASSWORD: &str = "ENTER_MAIL_PASSWORD_HERE";
+    pub const ACCOUNT_PASSWORD: &str = "Ttest1001";
 
     pub const SMTP_HOST: &str = "smtp.mail.com";
     pub const SMTP_PORT: u16 = well_known::SMTP_SUBMISSION;
