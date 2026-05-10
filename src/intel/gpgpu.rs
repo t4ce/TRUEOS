@@ -1303,11 +1303,7 @@ fn gpgpu_store_send_desc_words(program: GpgpuEuProgram) -> (u32, u32) {
         .and_then(|dword| program.words.get(dword))
         .copied()
         .unwrap_or(0);
-    let send_exdesc = program
-        .words
-        .get(send_exdesc_dword)
-        .copied()
-        .unwrap_or(0);
+    let send_exdesc = program.words.get(send_exdesc_dword).copied().unwrap_or(0);
     (send_desc, send_exdesc)
 }
 
@@ -1361,6 +1357,8 @@ pub(crate) struct GpgpuPreflightStatus {
     pub(crate) eu_walker_retired: bool,
     pub(crate) eu_dispatch_delta: u32,
     pub(crate) eu_c_store_value: u32,
+    pub(crate) eu_expected_store_value: u32,
+    pub(crate) eu_program_name: &'static str,
     pub(crate) result_c_changed_by_eu: bool,
 }
 
@@ -1369,6 +1367,7 @@ pub(crate) fn gpgpu_preflight_status() -> GpgpuPreflightStatus {
     let arena_bytes = warm.map_or(0, |warm| warm.gpgpu_arena_len);
     let eu_dispatch_delta = GPGPU_EU_DISPATCH_DELTA.load(Ordering::Acquire);
     let eu_c_store_value = GPGPU_EU_C_STORE_VALUE.load(Ordering::Acquire);
+    let active_program = selected_gpgpu_eu_program();
     GpgpuPreflightStatus {
         submitted: GPGPU_PREFLIGHT_SUBMITTED.load(Ordering::Acquire),
         accepted: GPGPU_PREFLIGHT_ACCEPTED.load(Ordering::Acquire),
@@ -1392,8 +1391,10 @@ pub(crate) fn gpgpu_preflight_status() -> GpgpuPreflightStatus {
         eu_walker_retired: GPGPU_EU_WALKER_RETIRED.load(Ordering::Acquire),
         eu_dispatch_delta,
         eu_c_store_value,
+        eu_expected_store_value: active_program.expected_store_value,
+        eu_program_name: active_program.name,
         result_c_changed_by_eu: eu_dispatch_delta != 0
-            && eu_c_store_value == selected_gpgpu_eu_program().expected_store_value,
+            && eu_c_store_value == active_program.expected_store_value,
     }
 }
 
