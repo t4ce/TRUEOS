@@ -22,7 +22,7 @@ async fn tokio_blocking_job_task(
 ) {
     if !LOGGED_TASK_ENTER.swap(true, Ordering::AcqRel) {
         let tag = lane.tag();
-        crate::log!(
+        crate::log_info!(target: "service";
             "tokio-worker: entered {} lane{} cpu_slot={} core_kind={}\n",
             purpose,
             tag.lane_id,
@@ -32,7 +32,10 @@ async fn tokio_blocking_job_task(
     }
     let _vthread_guard = if crate::th::vthread::tokio_blocking_backing_enabled() {
         if !LOGGED_VTHREAD_BACKING.swap(true, Ordering::AcqRel) {
-            crate::log!("tokio-worker: vthread backing enabled for blocking workers\n");
+            crate::log_info!(
+                target: "service";
+                "tokio-worker: vthread backing enabled for blocking workers\n"
+            );
         }
         Some(crate::th::vthread::enter(lane.vthread_record()))
     } else {
@@ -44,13 +47,16 @@ async fn tokio_blocking_job_task(
     drop(_vthread_guard);
     let _ = crate::stackkeeper::release_tokio_lane(lane);
     if !LOGGED_TASK_EXIT.swap(true, Ordering::AcqRel) {
-        crate::log!("tokio-worker: exited {}\n", purpose);
+        crate::log_info!(target: "service"; "tokio-worker: exited {}\n", purpose);
     }
 }
 
 fn reject_until_background_ap_ready() -> i32 {
     if !LOGGED_NO_WORKER.swap(true, Ordering::AcqRel) {
-        crate::log!("tokio-worker: no AP2+ background spawner yet; blocking job not launched\n");
+        crate::log_warn!(
+            target: "service";
+            "tokio-worker: no AP2+ background spawner yet; blocking job not launched\n"
+        );
     }
     -2
 }
@@ -65,7 +71,7 @@ fn spawn_on_background_ap(job: TokioBlockingJob, purpose: &'static str) -> i32 {
         Err(error) => {
             let _ = job;
             if !LOGGED_NO_LANE.swap(true, Ordering::AcqRel) {
-                crate::log!(
+                crate::log_warn!(target: "service";
                     "tokio-worker: no TRUEOS runtime carrier lane for {}; reason={}\n",
                     purpose,
                     error.as_str()
@@ -82,7 +88,7 @@ fn spawn_on_background_ap(job: TokioBlockingJob, purpose: &'static str) -> i32 {
     else {
         let _ = job;
         if !LOGGED_NO_LANE.swap(true, Ordering::AcqRel) {
-            crate::log!(
+            crate::log_warn!(target: "service";
                 "tokio-worker: no free TRUEOS Tokio lane for cpu_slot={}; {} not launched\n",
                 cpu_slot,
                 purpose
@@ -101,7 +107,7 @@ fn spawn_on_background_ap(job: TokioBlockingJob, purpose: &'static str) -> i32 {
 
     if !LOGGED_SPAWN.swap(true, Ordering::AcqRel) {
         let tag = lane.tag();
-        crate::log!(
+        crate::log_info!(target: "service";
             "tokio-worker: using TRUEOS AP2+ background spawners for {} tag=0x{:08X} vm={} domain={} role={} lane{} cpu_slot={} core_kind={} scratch={:#x}+{}\n",
             purpose,
             tag.magic,
@@ -121,7 +127,7 @@ fn spawn_on_background_ap(job: TokioBlockingJob, purpose: &'static str) -> i32 {
 
     spawner.spawn(token);
     if !LOGGED_SUBMITTED.swap(true, Ordering::AcqRel) {
-        crate::log!("tokio-worker: submitted {}\n", purpose);
+        crate::log_info!(target: "service"; "tokio-worker: submitted {}\n", purpose);
     }
     0
 }

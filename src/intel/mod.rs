@@ -421,7 +421,18 @@ pub async fn run_media2_first_frame_async() -> Option<self::xelp_media2_ngin::Me
 }
 
 pub async fn run_media_source_warmup_async() {
-    crate::log!("intel/media: source warmup skipped reason=simplified-single-fetch-path\n");
+    crate::log!("intel/media: source warmup handoff target=media2-first-frame\n");
+    let first_frame = self::run_media2_first_frame_async().await;
+    match first_frame {
+        Some(frame) => crate::log!(
+            "intel/media: source warmup first-frame returned=1 ready={} submit_completed={} present_ready={} output_nonzero_samples={}\n",
+            frame.ready as u8,
+            frame.submit_completed as u8,
+            frame.present_ready as u8,
+            frame.output_surface_nonzero_samples,
+        ),
+        None => crate::log!("intel/media: source warmup first-frame returned=0\n"),
+    }
 }
 
 fn find_dev() -> Option<Dev> {

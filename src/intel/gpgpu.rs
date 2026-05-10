@@ -1052,19 +1052,23 @@ const GPGPU_PREFLIGHT_LANES: usize = 4;
 const GPGPU_BURN_MIN_ROWS: usize = 512;
 const GPGPU_BURN_MIN_K_DIM: usize = 512;
 const GPU_PROGRAM_SHARED_RAM_WRITE_EXPECTED: u32 = trueos_eu::gfx12::STORE_SENTINEL_U32;
-const GPGPU_LOAD_DUMMY_CURBE: bool = true;
+const GPGPU_LOAD_DUMMY_CURBE: bool = false;
 const GPGPU_DUMMY_CURBE_BYTES: usize = 64;
 const GPGPU_CONTIGUOUS_VFE_IDD_WALKER: bool = false;
 const GPGPU_MESA_POST_VFE_PIPE_CONTROL: bool = false;
-// ADL-S 8086:4680 is Gfx12.0/Xe-LP.  The PRM-length GPGPU_WALKER now launches
-// EU threads, while one-GRF and two-GRF TS EOT variants both leave the walker
-// waiting.  Probe the Media chapter's Gateway EOT path next.
+// ADL-S 8086:4680 is Gfx12.0/Xe-LP.  Keep the active milestone probe as the
+// smallest Mesa-shaped root thread: no CURBE payload, one SIMD8 group, TS EOT.
 const ACTIVE_GFX12_EOT_VARIANT: trueos_eu::gfx12::Gfx12EotVariant =
-    trueos_eu::gfx12::Gfx12EotVariant::GatewayR0ToG127;
+    trueos_eu::gfx12::Gfx12EotVariant::TsR0ToG127Send1;
+const GPGPU_ENABLE_SIP_EXCEPTIONS: bool = false;
+const GPGPU_SIP_HANDLER_OFFSET_BYTES: usize = GPGPU_EU_KERNEL_OFFSET_BYTES + 0x200;
+const GPGPU_SIP_HANDLER_VARIANT: trueos_eu::gfx12::Gfx12EotVariant =
+    trueos_eu::gfx12::Gfx12EotVariant::TsR0ToG127Send1;
 
 #[derive(Copy, Clone)]
 struct GpgpuEuProgram {
     name: &'static str,
+    kind: trueos_eu::EuArtifactKind,
     words: &'static [u32],
     expects_store: bool,
 }
@@ -1092,6 +1096,7 @@ fn selected_gpgpu_eu_program() -> GpgpuEuProgram {
     let artifact = trueos_eu::gfx12::eot_artifact(ACTIVE_GFX12_EOT_VARIANT);
     GpgpuEuProgram {
         name: artifact.name,
+        kind: artifact.kind,
         words: artifact.words,
         expects_store: artifact.expects_store,
     }
@@ -1101,6 +1106,7 @@ fn gpgpu_store_eot_program() -> GpgpuEuProgram {
     let artifact = trueos_eu::gfx12::HDC1_BTI34_STORE_THEN_TS_EOT;
     GpgpuEuProgram {
         name: artifact.name,
+        kind: artifact.kind,
         words: artifact.words,
         expects_store: artifact.expects_store,
     }
@@ -1496,16 +1502,39 @@ fn prepare_gpgpu_program_artifact(
     result_changed_by_current_backend: bool,
 ) -> GpgpuProgramArtifactProof {
     let program = selected_gpgpu_eu_program();
+    let sip_handler = trueos_eu::gfx12::eot_artifact(GPGPU_SIP_HANDLER_VARIANT);
     let program_bytes = program.words.len() * core::mem::size_of::<u32>();
     let program_gpu = GPU_VA_DRAW_STATE_BASE + GPGPU_EU_KERNEL_OFFSET_BYTES as u64;
     let walker_gpu = GPU_VA_BATCH_BASE + GPGPU_WALKER_SCRATCH_OFFSET_BYTES as u64;
 
-    let program_uploaded = program_bytes != 0
+    let primary_uploaded = program_bytes != 0
         && GPGPU_EU_KERNEL_OFFSET_BYTES
             .checked_add(program_bytes)
             .is_some_and(|end| end <= warm.draw_state_len)
-        && upload_and_verify_gpu_program(warm, program.words);
+        && upload_and_verify_gpu_program_at(warm, GPGPU_EU_KERNEL_OFFSET_BYTES, program.words);
+    let sip_bytes = sip_handler.words.len() * core::mem::size_of::<u32>();
+    let sip_uploaded = !GPGPU_ENABLE_SIP_EXCEPTIONS
+        || (sip_bytes != 0
+            && GPGPU_SIP_HANDLER_OFFSET_BYTES
+                .checked_add(sip_bytes)
+                .is_some_and(|end| end <= warm.draw_state_len)
+            && upload_and_verify_gpu_program_at(
+                warm,
+                GPGPU_SIP_HANDLER_OFFSET_BYTES,
+                sip_handler.words,
+            ));
+    let program_uploaded = primary_uploaded && sip_uploaded;
     GPGPU_EU_KERNEL_UPLOADED.store(program_uploaded, Ordering::Release);
+    crate::log!(
+        "intel/gpgpu: gpu-sip-artifact enabled={} uploaded={} handler_source={} handler_gpu=0x{:X} handler_bytes=0x{:X} handler_sig=0x{:016X} primary_uploaded={} note=illegal-opcode-exception-target\n",
+        GPGPU_ENABLE_SIP_EXCEPTIONS as u8,
+        sip_uploaded as u8,
+        sip_handler.name,
+        GPU_VA_DRAW_STATE_BASE + GPGPU_SIP_HANDLER_OFFSET_BYTES as u64,
+        sip_bytes,
+        shader_word_signature(sip_handler.words),
+        primary_uploaded as u8,
+    );
 
     let walker_bytes = core::mem::size_of::<GpgpuWalkerCandidate>();
     let walker_encoded = program_uploaded
@@ -1529,21 +1558,25 @@ fn prepare_gpgpu_program_artifact(
     }
 }
 
-fn upload_and_verify_gpu_program(warm: RenderWarmState, program: &'static [u32]) -> bool {
+fn upload_and_verify_gpu_program_at(
+    warm: RenderWarmState,
+    offset_bytes: usize,
+    program: &'static [u32],
+) -> bool {
     unsafe {
         core::ptr::copy_nonoverlapping(
             program.as_ptr() as *const u8,
-            warm.draw_state_virt.add(GPGPU_EU_KERNEL_OFFSET_BYTES),
+            warm.draw_state_virt.add(offset_bytes),
             core::mem::size_of_val(program),
         );
     }
     crate::intel::dma_flush(
-        unsafe { warm.draw_state_virt.add(GPGPU_EU_KERNEL_OFFSET_BYTES) },
+        unsafe { warm.draw_state_virt.add(offset_bytes) },
         core::mem::size_of_val(program),
     );
     let uploaded = unsafe {
         core::slice::from_raw_parts(
-            warm.draw_state_virt.add(GPGPU_EU_KERNEL_OFFSET_BYTES) as *const u32,
+            warm.draw_state_virt.add(offset_bytes) as *const u32,
             program.len(),
         )
     };
@@ -1672,14 +1705,35 @@ fn log_gpgpu_program_contract(proof: GpgpuProgramArtifactProof) {
         },
         proof.expects_store as u8,
     );
-    log_gpgpu_eot_send_contract(proof.program_name, proof.program_uploaded, program);
+    log_gpgpu_eot_send_contract(
+        proof.program_name,
+        active_program.kind,
+        proof.program_uploaded,
+        program,
+    );
 }
 
 fn log_gpgpu_eot_send_contract(
     program_name: &'static str,
+    program_kind: trueos_eu::EuArtifactKind,
     uploaded: bool,
     program: &'static [u32],
 ) {
+    if program_kind == trueos_eu::EuArtifactKind::IllegalInstructionTrap {
+        crate::log!(
+            "intel/gpgpu: eu-exception-contract source={} uploaded={} words={} w0=0x{:08X} w1=0x{:08X} w2=0x{:08X} w3=0x{:08X} sip_exceptions={} sip_handler_source={} expected_good=visible-illegal-opcode-or-sip-transition note=not-an-eot-payload\n",
+            program_name,
+            uploaded as u8,
+            program.len(),
+            program.first().copied().unwrap_or(0),
+            program.get(1).copied().unwrap_or(0),
+            program.get(2).copied().unwrap_or(0),
+            program.get(3).copied().unwrap_or(0),
+            GPGPU_ENABLE_SIP_EXCEPTIONS as u8,
+            trueos_eu::gfx12::eot_artifact(GPGPU_SIP_HANDLER_VARIANT).name,
+        );
+        return;
+    }
     if program.len() < 4 {
         return;
     }
@@ -2450,7 +2504,7 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     };
     const GPGPU_VFE_MAX_THREADS: u32 = 64;
     const GPGPU_VFE_URB_ENTRIES: u32 = 2;
-    const GPGPU_VFE_FUSED_EU_DISPATCH_LEGACY_MODE: u32 = 1 << 6;
+    const GPGPU_VFE_FUSED_EU_DISPATCH_LEGACY_MODE: u32 = 0;
     const GPGPU_VFE_URB_ENTRY_ALLOCATION_32B: u32 = 2;
     const GPGPU_DYNAMIC_STATE_BASE: u64 = 0;
     const IDD_DYNAMIC_OFFSET_BYTES: usize =
@@ -2465,19 +2519,20 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     const GPGPU_INSTRUCTION_BASE: u64 = 0;
     const GPGPU_KSP_NEGATIVE_CONTROL: bool = false;
     const GPGPU_BAD_KERNEL_START_POINTER: u64 = 0x00F0_0000;
+    const GPGPU_MIDL_NEGATIVE_CONTROL: bool = false;
     // Gen12 legacy GPGPU_WALKER is a 15-dword packet.  The PRM default length
     // is 0x0D with a length bias of 2; keep the mask shape aligned with Mesa's
     // minimal legacy walker while the low SIMD8 lanes remain the consumed bits.
     const GPGPU_WALKER_SIMD8_RIGHT_MASK: u32 = 0xFFFF_FFFF;
     const GPGPU_WALKER_BOTTOM_MASK: u32 = 0xFFFF_FFFF;
     const STATE_SIP_CMD: u32 = 0x6102_0001;
-    const GPGPU_ENABLE_SIP_EXCEPTIONS: bool = false;
     // The repeatable stall sits at GPGPU_WALKER with no visible TDL dispatch.
     // Restore the older active path's non-preemptible root thread policy while
     // keeping exception/SIP routing as a separate diagnostic knob.
     const IDD_THREAD_PREEMPTION_DISABLE: u32 = 1 << 20;
     const IDD_ILLEGAL_OPCODE_EXCEPTION_ENABLE: u32 = 1 << 13;
     const IDD_SOFTWARE_EXCEPTION_ENABLE: u32 = 1 << 7;
+    const GPGPU_SIP_GPU: u64 = GPU_VA_DRAW_STATE_BASE + GPGPU_SIP_HANDLER_OFFSET_BYTES as u64;
 
     fn push(batch_dwords: &mut [u32], cursor: &mut usize, value: u32) -> Result<(), &'static str> {
         if *cursor >= batch_dwords.len() {
@@ -2699,15 +2754,18 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
     if GPGPU_ENABLE_SIP_EXCEPTIONS {
+        let sip_offset = GPGPU_SIP_GPU - GPGPU_INSTRUCTION_BASE;
         push(batch_dwords, &mut cursor, STATE_SIP_CMD)?;
-        push(batch_dwords, &mut cursor, 0)?;
-        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, sip_offset as u32)?;
+        push(batch_dwords, &mut cursor, (sip_offset >> 32) as u32)?;
         crate::log!(
-            "intel/gpgpu: state-sip-policy program_source={} cmd=0x{:08X} instruction_base=0x{:X} sip_offset=0x00000000 sip_resolves_to=0x{:X} exception_target=same-eot-artifact note=diagnostic-only\n",
+            "intel/gpgpu: state-sip-policy program_source={} cmd=0x{:08X} instruction_base=0x{:X} sip_offset=0x{:X} sip_resolves_to=0x{:X} exception_target={} note=illegal-opcode-diagnostic\n",
             program.name,
             STATE_SIP_CMD,
             GPGPU_INSTRUCTION_BASE,
-            GPGPU_INSTRUCTION_BASE,
+            sip_offset,
+            GPGPU_INSTRUCTION_BASE + sip_offset,
+            trueos_eu::gfx12::eot_artifact(GPGPU_SIP_HANDLER_VARIANT).name,
         );
     } else {
         crate::log!(
@@ -2789,10 +2847,20 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
         push_store_marker(batch_dwords, &mut cursor, 27, 0xC0DE_7805)?;
     }
     let id_load_start = cursor;
+    let midl_total_bytes = if GPGPU_MIDL_NEGATIVE_CONTROL {
+        0
+    } else {
+        IDD_LOAD_DWORDS * core::mem::size_of::<u32>()
+    };
+    let midl_start_address = if GPGPU_MIDL_NEGATIVE_CONTROL {
+        0
+    } else {
+        IDD_DYNAMIC_OFFSET_BYTES as u32
+    };
     push(batch_dwords, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD)?;
     push(batch_dwords, &mut cursor, 0)?;
-    push(batch_dwords, &mut cursor, (IDD_LOAD_DWORDS * core::mem::size_of::<u32>()) as u32)?;
-    push(batch_dwords, &mut cursor, IDD_DYNAMIC_OFFSET_BYTES as u32)?;
+    push(batch_dwords, &mut cursor, midl_total_bytes as u32)?;
+    push(batch_dwords, &mut cursor, midl_start_address)?;
     let walker_start = cursor;
     push(batch_dwords, &mut cursor, GPGPU_WALKER_CMD)?;
     push(batch_dwords, &mut cursor, 0)?; // Interface Descriptor Offset
@@ -2850,7 +2918,7 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     let bottom_lanes_consumed = (batch_dwords[walker_start + 14] & simd_mask).count_ones();
 
     crate::log!(
-        "intel/gpgpu: compute-walker-layout program_source={} expects_store={} launch_profile=split-vfe-msf-curbe-pc-midl vfe_off=0x{:X} vfe_dw3=0x{:08X} vfe_dw5=0x{:08X} fused_eu_dispatch_legacy={} urb_entry_alloc_32b={} curbe_present={} curbe_bytes=0x{:X} curbe_read_len_8dw={} id_load_off=0x{:X} id_load_bytes=0x{:X} idd_payload_bytes=0x{:X} walker_off=0x{:X} walker_cmd=0x{:08X} exec_mask=0x{:08X} idd_gpu=0x{:X} idd_dynamic_offset=0x{:X} idd_ksp=0x{:08X} instruction_base=0x{:X} ksp_resolves_to=0x{:X} idd_dw2=0x{:08X} idd_dw4=0x{:08X} idd_dw6=0x{:08X} surface_base=0x{:X} dynamic_state_base=0x{:X} contiguous_vfe_idd_walker={} mesa_post_vfe_pipe_control={} tail_off=0x{:X} cs_marker=0x{:08X} note=legacy-vfe-dispatch-with-prm-len13-walker\n",
+        "intel/gpgpu: compute-walker-layout program_source={} expects_store={} launch_profile=split-vfe-msf-curbe-pc-midl vfe_off=0x{:X} vfe_dw3=0x{:08X} vfe_dw5=0x{:08X} fused_eu_dispatch_legacy={} urb_entry_alloc_32b={} curbe_present={} curbe_bytes=0x{:X} curbe_read_len_8dw={} id_load_off=0x{:X} id_load_bytes=0x{:X} idd_payload_bytes=0x{:X} midl_negative_control={} midl_start=0x{:X} walker_off=0x{:X} walker_cmd=0x{:08X} exec_mask=0x{:08X} idd_gpu=0x{:X} idd_dynamic_offset=0x{:X} idd_ksp=0x{:08X} instruction_base=0x{:X} ksp_resolves_to=0x{:X} idd_dw2=0x{:08X} idd_dw4=0x{:08X} idd_dw6=0x{:08X} surface_base=0x{:X} dynamic_state_base=0x{:X} contiguous_vfe_idd_walker={} mesa_post_vfe_pipe_control={} tail_off=0x{:X} cs_marker=0x{:08X} note=legacy-vfe-dispatch-with-prm-len13-walker\n",
         program.name,
         program.expects_store as u8,
         vfe_start * core::mem::size_of::<u32>(),
@@ -2862,8 +2930,10 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
         CURBE_TOTAL_BYTES,
         CURBE_READ_LENGTH_8DW,
         id_load_start * core::mem::size_of::<u32>(),
-        IDD_LOAD_DWORDS * core::mem::size_of::<u32>(),
+        midl_total_bytes,
         IDD_PAYLOAD_DWORDS * core::mem::size_of::<u32>(),
+        GPGPU_MIDL_NEGATIVE_CONTROL as u8,
+        midl_start_address,
         walker_start * core::mem::size_of::<u32>(),
         batch_dwords[walker_start],
         batch_dwords[walker_start + 13],
