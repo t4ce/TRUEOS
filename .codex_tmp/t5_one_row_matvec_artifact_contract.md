@@ -61,6 +61,20 @@ Current boot-visible T5 state, as of the `make iso` loop ending in
   `1,2,4,8,16,32,64,128,186`; final rung:
   `observed_lane_dispatch=1488`, `gpu_matches_packed_bf16=1`,
   `failure_class=t5-live4-packed-bf16-proven`.
+- A later high-scale run on 2026-05-11 established the current clean cap for
+  this T5 live4 artifact:
+  `4096` groups = `32768` SIMD8 lane dispatches, clean retire and correct
+  packed-BF16 result.
+- The same run found the first non-clean rung at
+  `6144` groups = `49152` SIMD8 lane dispatches.  It still wrote the correct
+  result, but did not retire cleanly:
+  `reason=submit-not-finished`, `retired=0`.
+- Keep the runtime T5 live4 ladder capped at `[4096]`.  This is a proof-frontier
+  cap, not a throughput tuning knob; revisit it only when the kernel grows,
+  the CGP queueing model changes, or completion/retire logic changes.
+- The actual-work tile-frontier proof now stages rows `0`, `256`, and `512`
+  from the live Lumen matvec.  All three compare correctly for the T5 live4
+  slice with `compare_ok_tiles=3`, while `output_owner=cpu-ap`.
 - Lumen step 9 now reports
   `submitted=1 finished=1 readback_ok=1 compare_ok=1 reason=t5-live4-written`
   for `gfx12-t5-small-live4-packed-bf16-dot-hdc1-stateless-store-then-ts-eot`.
