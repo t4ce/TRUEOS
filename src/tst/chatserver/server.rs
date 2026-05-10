@@ -6,16 +6,16 @@ use core::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::{io, net::SocketAddr};
 
 use axum::{
-    Router,
-    body::{Body, to_bytes},
+    body::{to_bytes, Body},
     extract::Request,
     http::{
-        Method, StatusCode,
         header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE},
+        Method, StatusCode,
     },
     response::Response,
     routing::any,
     serve::ListenerExt,
+    Router,
 };
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use trueos_chat::{ChatConfig, ChatHub, ChatMethod, ChatRequest, ChatResponse};
@@ -29,11 +29,6 @@ const CHAT_SAVE_BATCH_MS: u64 = 10_000;
 const CHAT_SAVE_IDLE_MS: u64 = 1000;
 const CHAT_STORE_DIR: &str = "chat";
 const CHAT_STORE_PATH: &str = "chat/rooms.json";
-const CHAT_HTTP_PORT_RANGES: &[core::ops::RangeInclusive<u16>] = &[
-    CHAT_HTTP_TCP_PORT..=CHAT_HTTP_TCP_PORT,
-    82..=128,
-    8080..=8090,
-];
 static CHAT_HUB: spin::Mutex<Option<ChatHub>> = spin::Mutex::new(None);
 static CHAT_HUB_LOADED: AtomicBool = AtomicBool::new(false);
 static CHAT_SAVE_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -462,27 +457,6 @@ fn log_chat_endpoint(addr: SocketAddr) {
     }
 }
 
-async fn bind_lowest_available_listener() -> Option<(tokio::net::TcpListener, SocketAddr)> {
-    for range in CHAT_HTTP_PORT_RANGES {
-        for port in range.clone() {
-            let Some(addr) = primary_ipv4_addr(port) else {
-                return None;
-            };
-            match tokio::net::TcpListener::bind(addr).await {
-                Ok(listener) => return Some((listener, addr)),
-                Err(err) => crate::log!(
-                    "chat-http: bind {} failed port={} kind={:?} err={}\n",
-                    addr,
-                    port,
-                    err.kind(),
-                    err
-                ),
-            }
-        }
-    }
-    None
-}
-
 async fn chat_http_runtime() -> Result<(), io::Error> {
     crate::log!("chat-http: runtime async enter\n");
     tokio::task::spawn_local(crate::t::shared_tokio_job_pump());
@@ -493,11 +467,27 @@ async fn chat_http_runtime() -> Result<(), io::Error> {
     let app = chat_router();
     loop {
         crate::log!("chat-http: bind begin port={}\n", CHAT_HTTP_TCP_PORT);
-        let Some((listener, addr)) = bind_lowest_available_listener().await else {
+        let Some(addr) = primary_ipv4_addr(CHAT_HTTP_TCP_PORT) else {
             CHAT_HTTP_PORT.store(0, Ordering::Release);
             crate::log!("chat-http: waiting for primary ipv4\n");
             tokio::time::sleep(core::time::Duration::from_millis(CHAT_HTTP_BIND_RETRY_MS)).await;
             continue;
+        };
+        let listener = match tokio::net::TcpListener::bind(addr).await {
+            Ok(listener) => listener,
+            Err(err) => {
+                CHAT_HTTP_PORT.store(0, Ordering::Release);
+                crate::log!(
+                    "chat-http: bind {} failed port={} kind={:?} err={}\n",
+                    addr,
+                    CHAT_HTTP_TCP_PORT,
+                    err.kind(),
+                    err
+                );
+                tokio::time::sleep(core::time::Duration::from_millis(CHAT_HTTP_BIND_RETRY_MS))
+                    .await;
+                continue;
+            }
         };
 
         CHAT_HTTP_PORT.store(addr.port(), Ordering::Release);

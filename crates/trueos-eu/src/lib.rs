@@ -17,6 +17,7 @@ pub enum EuArtifactKind {
     GatewayEot,
     IllegalInstructionTrap,
     Hdc1BtiStoreThenThreadSpawnerEot,
+    StaticDp4aThenHdc1StoreThenThreadSpawnerEot,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

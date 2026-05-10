@@ -51,6 +51,30 @@ pub const VTHREAD_HW_TAG_READY: u32 = 1 << 27;
 
 const APP_VM_READY_REQUIRED: u32 = NET_ANY_CONFIGURED | TRUEOSFS_ROOT_MOUNTED;
 
+const READINESS_FLAGS: &[(u32, &str)] = &[
+    (PIANO_CLAIMED, "PIANO_CLAIMED"),
+    (NET_GATEWAY_REACHABLE, "NET_GATEWAY_REACHABLE"),
+    (TLS_SOCKET_SERVICE_READY, "TLS_SOCKET_SERVICE_READY"),
+    (NET_V4_GATEWAY_REACHABLE, "NET_V4_GATEWAY_REACHABLE"),
+    (NET_V6_GATEWAY_REACHABLE, "NET_V6_GATEWAY_REACHABLE"),
+    (NET_ANY_CONFIGURED, "NET_ANY_CONFIGURED"),
+    (NET_V4_CONFIGURED, "NET_V4_CONFIGURED"),
+    (NET_V6_CONFIGURED, "NET_V6_CONFIGURED"),
+    (NET_SOCKET_READY, "NET_SOCKET_READY"),
+    (TRUEOSFS_ROOT_MOUNTED, "TRUEOSFS_ROOT_MOUNTED"),
+    (QJS_ASYNC_FS_READY, "QJS_ASYNC_FS_READY"),
+    (INTEL_HDA_READY, "INTEL_HDA_READY"),
+    (GFX_VIRGL_READY, "GFX_VIRGL_READY"),
+    (HTTP_TRUEOSFS_LISTENING, "HTTP_TRUEOSFS_LISTENING"),
+    (TOKIO_RUNTIME_READY, "TOKIO_RUNTIME_READY"),
+    (GFX_BACKEND_READY, "GFX_BACKEND_READY"),
+    (UI2_READY, "UI2_READY"),
+    (APP_VM_READY, "APP_VM_READY"),
+    (GFX_TEXTURE_UPLOAD_SERVICE_READY, "GFX_TEXTURE_UPLOAD_SERVICE_READY"),
+    (BACKGROUND_AP_WORKER_READY, "BACKGROUND_AP_WORKER_READY"),
+    (VTHREAD_HW_TAG_READY, "VTHREAD_HW_TAG_READY"),
+];
+
 static READY: AtomicU32 = AtomicU32::new(0);
 
 #[inline]
@@ -61,6 +85,14 @@ pub fn mask() -> u32 {
 #[inline]
 pub fn is_set(required: u32) -> bool {
     mask() & required == required
+}
+
+pub fn for_each_flag(mask: u32, mut f: impl FnMut(u32, &'static str)) {
+    for &(flag, name) in READINESS_FLAGS {
+        if mask & flag != 0 {
+            f(flag, name);
+        }
+    }
 }
 
 /// Mark one or more readiness flags as set.

@@ -17,12 +17,21 @@ pub mod well_known {
 
 pub mod services {
     use super::well_known;
+    pub const CHROME_UNSAFE_HTTP_TCP_PORTS: [u16; 2] = [7, 9];
+
+    const fn chrome_safe_http_port(port: u16) -> u16 {
+        match port {
+            7 | 9 => panic!("Chrome blocks this HTTP TCP port"),
+            _ => port,
+        }
+    }
+
     pub const CHAT_HTTP_TCP_PORT: u16 = 3;
     pub const MAIL_HTTP_TCP_PORT: u16 = 4;
     pub const AXUM_BOOT_TCP_PORT: u16 = 5;
-    pub const WEBDEVICES_HTTP_TCP_PORT: u16 = 7;
-    pub const FILEEXPLORER_HTTP_TCP_PORT: u16 = 9;
-    pub const FILEEXPLORER_HTTP_TCP_PORTS: [u16; 3] = [FILEEXPLORER_HTTP_TCP_PORT, 8, 6];
+    pub const WEBDEVICES_HTTP_TCP_PORT: u16 = chrome_safe_http_port(10);
+    pub const FILEEXPLORER_HTTP_TCP_PORT: u16 = chrome_safe_http_port(8);
+    pub const FILEEXPLORER_HTTP_TCP_PORTS: [u16; 2] = [FILEEXPLORER_HTTP_TCP_PORT, 6];
     pub const LOGTOTCP_TCP_PORT: u16 = 1;
     pub const WS_TIME_TCP_PORT: u16 = 2;
     pub const NET_SHELL_TCP_PORT: u16 = 4245;

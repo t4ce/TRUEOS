@@ -1,5 +1,5 @@
 use alloc::{string::String, vec::Vec};
-use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use embassy_executor::{SendSpawner, SpawnError, SpawnToken, Spawner};
 use embassy_time::{Duration as EmbassyDuration, Timer};
@@ -11,6 +11,7 @@ use crate::r::spawn_spec::{SpawnAttempt, TaskSpec};
 const SPAWN_SERVICE_AFTER_START_MS: u64 = 25;
 const SPAWN_SERVICE_PENDING_MS: u64 = 100;
 const SPAWN_SERVICE_IDLE_MS: u64 = 500;
+static PCIIDS_GIT_PENDING_MISSING: AtomicU32 = AtomicU32::new(0);
 
 /// Central task orchestrator ("FSM spawn service").
 ///
@@ -165,10 +166,10 @@ fn task_exited(name: &str) {
     if let Some(flag) = stop_flag_by_task_name(name) {
         flag.store(false, Ordering::Release);
     }
-    if let Some(index) = task_index_by_name(name)
-        && let Some(spec) = TASKS.get(index)
-    {
-        spec.started.store(false, Ordering::Release);
+    if let Some(index) = task_index_by_name(name) {
+        if let Some(spec) = TASKS.get(index) {
+            spec.started.store(false, Ordering::Release);
+        }
     }
 }
 
@@ -1072,6 +1073,10 @@ fn spawn_net_tcp_shell(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_pciids_git(spawner: Spawner) -> SpawnAttempt {
+    crate::log!(
+        "spawn-svc: pciids-git submit marker required={}\n",
+        readiness_names(PCIIDS_GIT_READY).as_str()
+    );
     spawn_on_worker(spawner, |_worker_spawner| crate::pci::pciids::pciids_git_task())
 }
 
@@ -1103,6 +1108,8 @@ const NET_ANY_CONFIGURED_AND_ROOT_READY: u32 =
     crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
 const PCIIDS_GIT_READY: u32 = crate::r::readiness::TOKIO_RUNTIME_READY
     | crate::r::readiness::NET_ANY_CONFIGURED
+    | crate::r::readiness::NET_SOCKET_READY
+    | crate::r::readiness::TLS_SOCKET_SERVICE_READY
     | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
 const HYPER_HTTP1_PROBE_READY: u32 =
     crate::r::readiness::NET_SOCKET_READY | crate::r::readiness::NET_V4_GATEWAY_REACHABLE;
@@ -1513,6 +1520,41 @@ pub fn task_started_by_index(index: usize) -> bool {
         .unwrap_or(false)
 }
 
+fn readiness_names(mask: u32) -> String {
+    let mut out = String::new();
+    let mut first = true;
+    crate::r::readiness::for_each_flag(mask, |_flag, name| {
+        if !first {
+            out.push('|');
+        }
+        first = false;
+        out.push_str(name);
+    });
+    if first {
+        out.push_str("none");
+    }
+    out
+}
+
+fn log_pciids_git_pending_marker(ready: u32) {
+    let missing = PCIIDS_GIT_READY & !ready;
+    if missing == 0 {
+        PCIIDS_GIT_PENDING_MISSING.store(0, Ordering::Release);
+        return;
+    }
+
+    if PCIIDS_GIT_PENDING_MISSING.swap(missing, Ordering::AcqRel) == missing {
+        return;
+    }
+
+    crate::log!(
+        "spawn-svc: pciids-git pending missing={} ready=0x{:08X} required=0x{:08X}\n",
+        readiness_names(missing).as_str(),
+        ready,
+        PCIIDS_GIT_READY
+    );
+}
+
 #[embassy_executor::task]
 pub async fn spawn_service_task(spawner: Spawner) {
     async move {
@@ -1529,6 +1571,9 @@ pub async fn spawn_service_task(spawner: Spawner) {
                     continue;
                 }
                 if (ready & spec.required) != spec.required {
+                    if spec.name == "pciids-git" {
+                        log_pciids_git_pending_marker(ready);
+                    }
                     pending += 1;
                     continue;
                 }
