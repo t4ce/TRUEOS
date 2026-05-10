@@ -16,6 +16,7 @@ const HDA_WAV_FETCH_TIMEOUT_MS: u32 = 60_000;
 const HDA_WAV_FETCH_MAX_BYTES: usize = 32 * 1024 * 1024;
 const HDA_WAV_SAMPLE_RATE_HZ: u64 = 48_000;
 const HDA_WAV_CHANNELS: usize = 2;
+const HDA_WAV_TRACE_MARKER: &str = "hda-wav-trace-v3";
 
 fn piano_claimed() -> bool {
     crate::usb2::midi::piano_connected()
@@ -158,9 +159,17 @@ fn hda_duration_ms_for_samples(sample_count: usize) -> u32 {
 
 async fn load_hda_wav_loop_samples() -> Result<Vec<i16>, &'static str> {
     let url = crate::allports::local_assets::AUDIO_DEMO_URL;
-    crate::log!("intel/hda-probe: wav fetch submit url={}\n", url);
+    crate::log!(
+        "intel/hda-probe: wav fetch submit trace={} url={}\n",
+        HDA_WAV_TRACE_MARKER,
+        url
+    );
     let body = crate::t::run_on_shared_tokio(move || async move {
-        crate::log!("intel/hda-probe: wav fetch job enter url={}\n", url);
+        crate::log!(
+            "intel/hda-probe: wav fetch job enter trace={} url={}\n",
+            HDA_WAV_TRACE_MARKER,
+            url
+        );
         crate::t::net::http::fetch_http_body_hyper(
             url,
             HDA_WAV_FETCH_TIMEOUT_MS,
@@ -171,10 +180,16 @@ async fn load_hda_wav_loop_samples() -> Result<Vec<i16>, &'static str> {
     .await
     .map_err(|_| "shared tokio unavailable")?
     .map_err(|_| "http fetch failed")?;
-    crate::log!("intel/hda-probe: wav fetch body url={} bytes={}\n", url, body.len());
+    crate::log!(
+        "intel/hda-probe: wav fetch body trace={} url={} bytes={}\n",
+        HDA_WAV_TRACE_MARKER,
+        url,
+        body.len()
+    );
     let samples = decode_wav_pcm_s16_stereo_48k(body.as_slice())?;
     crate::log!(
-        "intel/hda-probe: wav decode ok samples={} frames={}\n",
+        "intel/hda-probe: wav decode ok trace={} samples={} frames={}\n",
+        HDA_WAV_TRACE_MARKER,
         samples.len(),
         samples.len() / HDA_WAV_CHANNELS
     );
@@ -183,7 +198,11 @@ async fn load_hda_wav_loop_samples() -> Result<Vec<i16>, &'static str> {
 
 async fn hda_wav_loop_probe_task() {
     let url = crate::allports::local_assets::AUDIO_DEMO_URL;
-    crate::log!("intel/hda-probe: wav loop mode url={}\n", url);
+    crate::log!(
+        "intel/hda-probe: wav loop mode trace={} url={}\n",
+        HDA_WAV_TRACE_MARKER,
+        url
+    );
 
     loop {
         if !crate::hda::is_initialized() {
@@ -198,12 +217,21 @@ async fn hda_wav_loop_probe_task() {
         }
 
         crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
-        crate::log!("intel/hda-probe: wav loop net ready\n");
+        crate::log!(
+            "intel/hda-probe: wav loop net ready trace={}\n",
+            HDA_WAV_TRACE_MARKER
+        );
         while !crate::t::shared_tokio_runtime_ready() {
-            crate::log!("intel/hda-probe: wav loop waiting for shared tokio runtime\n");
+            crate::log!(
+                "intel/hda-probe: wav loop waiting for shared tokio runtime trace={}\n",
+                HDA_WAV_TRACE_MARKER
+            );
             Timer::after(EmbassyDuration::from_millis(HDA_WAV_LOOP_RETRY_DELAY_MS)).await;
         }
-        crate::log!("intel/hda-probe: wav loop shared tokio ready\n");
+        crate::log!(
+            "intel/hda-probe: wav loop shared tokio ready trace={}\n",
+            HDA_WAV_TRACE_MARKER
+        );
 
         let samples = match load_hda_wav_loop_samples().await {
             Ok(samples) => samples,
@@ -230,7 +258,8 @@ async fn hda_wav_loop_probe_task() {
         }
 
         crate::log!(
-            "intel/hda-probe: wav loop loaded url={} samples={} frames={} dma_samples={}\n",
+            "intel/hda-probe: wav loop loaded trace={} url={} samples={} frames={} dma_samples={}\n",
+            HDA_WAV_TRACE_MARKER,
             url,
             samples.len(),
             samples.len() / HDA_WAV_CHANNELS,
@@ -263,7 +292,8 @@ async fn hda_wav_loop_probe_task() {
                 let duration_ms = hda_duration_ms_for_samples(chunk.len());
                 if off == 0 {
                     crate::log!(
-                        "intel/hda-probe: wav chunk play begin len={} duration_ms={}\n",
+                        "intel/hda-probe: wav chunk play begin trace={} len={} duration_ms={}\n",
+                        HDA_WAV_TRACE_MARKER,
                         chunk.len(),
                         duration_ms
                     );

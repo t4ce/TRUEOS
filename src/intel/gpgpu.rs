@@ -2648,7 +2648,7 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
     const IDD_LOAD_DWORDS: usize = IDD_PAYLOAD_DWORDS;
     const CURBE_READ_LENGTH_8DW: u32 = if GPGPU_LOAD_DUMMY_CURBE { 1 } else { 0 };
     const GPGPU_THREADS_IN_GROUP: u32 = 1;
-    const GPGPU_WALKER_GROUP_X_DIM: u32 = 192;
+    const GPGPU_WALKER_GROUP_X_DIM: u32 = 160;
     const GPGPU_WALKER_GROUP_Y_DIM: u32 = 1;
     const GPGPU_WALKER_GROUP_Z_DIM: u32 = 1;
     const CURBE_TOTAL_BYTES: usize = if GPGPU_LOAD_DUMMY_CURBE {
