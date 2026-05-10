@@ -359,7 +359,10 @@ async fn cabi_net_fetch_bytes_task_inner(
         max_bytes
     );
     if !net_fetch_acquire_slot_while("bytes", op_id, || net_fetch_bytes_op_is_live(op_id)).await {
-        crate::log_trace!("net-fetch-bytes: skipped op_id={} reason=no_interest_before_slot\n", op_id);
+        crate::log_trace!(
+            "net-fetch-bytes: skipped op_id={} reason=no_interest_before_slot\n",
+            op_id
+        );
         return;
     }
     let t_fetch_start = Instant::now();
@@ -372,7 +375,10 @@ async fn cabi_net_fetch_bytes_task_inner(
     );
     if !net_fetch_bytes_op_is_live(op_id) {
         net_fetch_release_slot();
-        crate::log_trace!("net-fetch-bytes: skipped op_id={} reason=no_interest_after_slot\n", op_id);
+        crate::log_trace!(
+            "net-fetch-bytes: skipped op_id={} reason=no_interest_after_slot\n",
+            op_id
+        );
         return;
     }
     let (rc, body) = match crate::t::block_on_io(fetch_https_body_hyper_async(

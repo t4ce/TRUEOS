@@ -501,7 +501,13 @@ pub async fn read_trueosfs_file_range_into_logged_async(
         return Ok(true);
     }
 
-    crate::log_trace!("{} read start path={} offset={} bytes={}\n", log_label, key, offset, dst.len());
+    crate::log_trace!(
+        "{} read start path={} offset={} bytes={}\n",
+        log_label,
+        key,
+        offset,
+        dst.len()
+    );
     let start_ms = logged_read_now_ms();
     let mut read = 0usize;
     let mut last_log_ms = start_ms;

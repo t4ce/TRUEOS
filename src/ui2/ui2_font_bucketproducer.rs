@@ -526,7 +526,10 @@ pub async fn ui2_font_twemoji_loader_task() {
     let decoded = match crate::gfx::png_codec::decode_png_rgba(twemoji::TWEMOJI_ATLAS_PNG) {
         Ok(decoded) => decoded,
         Err(err) => {
-            crate::log_trace!("ui2-font-bucketproducer: twemoji decode failed code={}\n", err.code());
+            crate::log_trace!(
+                "ui2-font-bucketproducer: twemoji decode failed code={}\n",
+                err.code()
+            );
             return;
         }
     };

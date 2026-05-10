@@ -233,11 +233,18 @@ pub fn init_once() {
     );
     let ads = self::guc::alloc_ads(fw.private_data_size);
     if ads.len == 0 {
-        crate::log_trace!("intel/guc: ads alloc failed private_data=0x{:X}\n", fw.private_data_size);
+        crate::log_trace!(
+            "intel/guc: ads alloc failed private_data=0x{:X}\n",
+            fw.private_data_size
+        );
         return;
     }
     if !map_ggtt(dev, fw.phys, fw.len, fw.gpu) || !map_ggtt(dev, ads.phys, ads.len, ads.gpu) {
-        crate::log_trace!("intel/guc: ggtt map failed fw_len=0x{:X} ads_len=0x{:X}\n", fw.len, ads.len);
+        crate::log_trace!(
+            "intel/guc: ggtt map failed fw_len=0x{:X} ads_len=0x{:X}\n",
+            fw.len,
+            ads.len
+        );
         return;
     }
     ggtt_invalidate(dev);
@@ -267,7 +274,10 @@ pub fn init_once() {
     self::gpgpu::submit_gpgpu_preflight_once();
     crate::log_trace!("intel/media: source warmup disabled trigger=trueosfs-root-mounted\n",);
     if MEDIA_BOOT_DEMO_ENABLED {
-        crate::log_trace!("intel/media: scheduled boot demo delay_ms={}\n", MEDIA_BOOT_DEMO_DELAY_MS);
+        crate::log_trace!(
+            "intel/media: scheduled boot demo delay_ms={}\n",
+            MEDIA_BOOT_DEMO_DELAY_MS
+        );
         crate::wait::spawn_local_detached(async move {
             Timer::after(EmbassyDuration::from_millis(MEDIA_BOOT_DEMO_DELAY_MS)).await;
             let queued_at_ms = embassy_time::Instant::now().as_millis() as u64;

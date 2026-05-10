@@ -63,7 +63,12 @@ pub async fn net_shell_task() {
                 )
             }
             None => {
-                crate::log_trace!("net-shell: routing dev={} {} owner={} ip=none\n", dev_idx, name, owner)
+                crate::log_trace!(
+                    "net-shell: routing dev={} {} owner={} ip=none\n",
+                    dev_idx,
+                    name,
+                    owner
+                )
             }
         }
 
@@ -188,7 +193,10 @@ pub async fn net_shell_task() {
 
                         if tcp_handle == Some(handle) {
                             tcp_handle = None;
-                            crate::log_trace!("net-shell: tcp closed handle={} (relisten)\n", handle.0);
+                            crate::log_trace!(
+                                "net-shell: tcp closed handle={} (relisten)\n",
+                                handle.0
+                            );
                             let _ = cmds.push(NetCommand::OpenTcpListen {
                                 port: NET_SHELL_TCP_PORT,
                             });
@@ -266,7 +274,10 @@ pub async fn net_shell_task() {
             if pending.is_some() {
                 pending_ticks = pending_ticks.wrapping_add(1);
                 if pending_ticks == 250 {
-                    crate::log_trace!("net-shell: tx stalled (pending_len={}), retrying\n", pending_len);
+                    crate::log_trace!(
+                        "net-shell: tx stalled (pending_len={}), retrying\n",
+                        pending_len
+                    );
                     pending = None;
                     pending_ticks = 0;
                     pending_len = 0;

@@ -777,7 +777,11 @@ async fn refresh_inbox_from_pop3(config: &MailConfig) -> Result<usize, &'static 
         match client.list_one(msg_id, MAIL_POP3_TIMEOUT_MS).await {
             Ok(entry) => latest.push(entry),
             Err(err) => {
-                crate::log_trace!("webmail-http: pop3 LIST {} failed err={:?}; skipping\n", msg_id, err)
+                crate::log_trace!(
+                    "webmail-http: pop3 LIST {} failed err={:?}; skipping\n",
+                    msg_id,
+                    err
+                )
             }
         }
     }
@@ -813,7 +817,11 @@ async fn refresh_inbox_from_pop3(config: &MailConfig) -> Result<usize, &'static 
         };
         retrieved = retrieved.saturating_add(1);
         let Some(message) = parse_pop3_message(raw.as_slice(), fallback_id, msg_id) else {
-            crate::log_trace!("webmail-http: pop3 parse failed msg={} bytes={}\n", msg_id, raw.len());
+            crate::log_trace!(
+                "webmail-http: pop3 parse failed msg={} bytes={}\n",
+                msg_id,
+                raw.len()
+            );
             continue;
         };
         parsed = parsed.saturating_add(1);

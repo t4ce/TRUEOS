@@ -176,7 +176,11 @@ async fn fetch_demo_wav_body() -> Option<(&'static str, Vec<u8>)> {
                     }
                 }
                 Ok(Err(err)) => {
-                    crate::log_trace!("crabusb: audio stream fetch failed url={} err={:?}\n", url, err);
+                    crate::log_trace!(
+                        "crabusb: audio stream fetch failed url={} err={:?}\n",
+                        url,
+                        err
+                    );
                 }
                 Err(err) => {
                     crate::log_trace!(
@@ -198,9 +202,15 @@ async fn fetch_demo_wav_body() -> Option<(&'static str, Vec<u8>)> {
         .await
         {
             Ok(Ok(body)) => return Some((url, body)),
-            Ok(Err(err)) => crate::log_trace!("crabusb: audio fetch failed url={} err={:?}\n", url, err),
+            Ok(Err(err)) => {
+                crate::log_trace!("crabusb: audio fetch failed url={} err={:?}\n", url, err)
+            }
             Err(err) => {
-                crate::log_trace!("crabusb: audio fetch shared-tokio failed url={} err={:?}\n", url, err)
+                crate::log_trace!(
+                    "crabusb: audio fetch shared-tokio failed url={} err={:?}\n",
+                    url,
+                    err
+                )
             }
         }
     }

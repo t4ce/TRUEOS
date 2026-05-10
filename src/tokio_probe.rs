@@ -210,7 +210,10 @@ async fn probe_tokio_fs_runtime_surface() {
             crate::log_trace!("tokio_probe: success fs.runtime_ops.read\n")
         }
         Ok(Ok(bytes)) => {
-            crate::log_trace!("tokio_probe: failure fs.runtime_ops.read_value len={}\n", bytes.len());
+            crate::log_trace!(
+                "tokio_probe: failure fs.runtime_ops.read_value len={}\n",
+                bytes.len()
+            );
             return;
         }
         Ok(Err(err)) => {
@@ -376,7 +379,9 @@ fn spawn_deferred_tokio_fs_probe() {
 
     match tokio_fs_probe_task() {
         Ok(token) => spawner.spawn(token),
-        Err(err) => crate::log_trace!("tokio_probe: note fs.runtime_ops task spawn failed: {:?}\n", err),
+        Err(err) => {
+            crate::log_trace!("tokio_probe: note fs.runtime_ops task spawn failed: {:?}\n", err)
+        }
     }
 }
 
@@ -439,7 +444,9 @@ async fn wait_for_net_socket_ready() -> bool {
 
 async fn probe_tokio_net_surface() -> Result<(), &'static str> {
     if !wait_for_net_socket_ready().await {
-        crate::log_trace!("tokio_probe: note net.tokio skipped (NET_SOCKET_READY not reached yet)\n");
+        crate::log_trace!(
+            "tokio_probe: note net.tokio skipped (NET_SOCKET_READY not reached yet)\n"
+        );
         return Ok(());
     }
 
@@ -866,7 +873,10 @@ fn spawn_deferred_std_tls_canary() {
     match tokio_std_tls_canary_task() {
         Ok(token) => spawner.spawn(token),
         Err(err) => {
-            crate::log_trace!("tokio_probe: note std.thread_local canary task spawn failed: {:?}\n", err)
+            crate::log_trace!(
+                "tokio_probe: note std.thread_local canary task spawn failed: {:?}\n",
+                err
+            )
         }
     }
 }
@@ -907,7 +917,9 @@ fn run_rt_multi_thread_probe() {
 
     if ok {
         crate::log_trace!("tokio_probe: success rt-multi-thread.spawn_join\n");
-        crate::log_trace!("tokio_probe: success rt-multi-thread.execution_surface lifecycle=shutdown\n");
+        crate::log_trace!(
+            "tokio_probe: success rt-multi-thread.execution_surface lifecycle=shutdown\n"
+        );
     } else {
         crate::log_trace!("tokio_probe: failure rt-multi-thread.spawn_join\n");
     }
@@ -923,7 +935,9 @@ fn log_rt_multi_thread_probe() {
 #[task]
 async fn tokio_rt_multi_thread_probe_task() {
     crate::r::readiness::wait_for(crate::r::readiness::BACKGROUND_AP_WORKER_READY).await;
-    crate::log_trace!("tokio_probe: resume rt-multi-thread.build after BACKGROUND_AP_WORKER_READY\n");
+    crate::log_trace!(
+        "tokio_probe: resume rt-multi-thread.build after BACKGROUND_AP_WORKER_READY\n"
+    );
     run_rt_multi_thread_probe();
 }
 
@@ -946,7 +960,10 @@ fn spawn_deferred_rt_multi_thread_probe() {
     match tokio_rt_multi_thread_probe_task() {
         Ok(token) => spawner.spawn(token),
         Err(err) => {
-            crate::log_trace!("tokio_probe: note rt-multi-thread.build task spawn failed: {:?}\n", err)
+            crate::log_trace!(
+                "tokio_probe: note rt-multi-thread.build task spawn failed: {:?}\n",
+                err
+            )
         }
     }
 }
@@ -1010,7 +1027,9 @@ fn spawn_deferred_tokio_net_probe() {
             crate::log_trace!("tokio_probe: note net.tokio task not spawned (no slot0 spawner)\n");
             return;
         };
-        crate::log_trace!("tokio_probe: note net.tokio using slot0 fallback; no background worker\n");
+        crate::log_trace!(
+            "tokio_probe: note net.tokio using slot0 fallback; no background worker\n"
+        );
         spawner
     };
 
@@ -1339,7 +1358,9 @@ async fn run_probe_suite() -> Result<(), &'static str> {
 }
 
 pub(crate) fn log_boot_probe() {
-    crate::log_trace!("tokio_probe: wired tokio 1.52.1 with feature full via TRUEOS std-ABI shim\n");
+    crate::log_trace!(
+        "tokio_probe: wired tokio 1.52.1 with feature full via TRUEOS std-ABI shim\n"
+    );
     mark_std_tls_canary_on_boot_cpu();
     probe_std_sync_surface();
 

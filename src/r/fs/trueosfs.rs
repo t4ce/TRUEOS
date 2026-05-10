@@ -278,15 +278,7 @@ fn trueosfs_block_read_trace_note(
     let last_lba = TRUEOSFS_BLOCK_READ_TRACE_LAST_LBA.load(Ordering::Relaxed);
     let last_blocks = TRUEOSFS_BLOCK_READ_TRACE_LAST_BLOCKS.load(Ordering::Relaxed);
     let last_bytes = TRUEOSFS_BLOCK_READ_TRACE_LAST_BYTES.load(Ordering::Relaxed);
-    Some((
-        count,
-        bytes,
-        elapsed_sum,
-        max_elapsed,
-        last_lba,
-        last_blocks,
-        last_bytes,
-    ))
+    Some((count, bytes, elapsed_sum, max_elapsed, last_lba, last_blocks, last_bytes))
 }
 
 fn trueosfs_block_read_trace_sample(
@@ -301,8 +293,15 @@ fn trueosfs_block_read_trace_sample(
 ) {
     let now_ms = trueosfs_trace_now_ms();
     let elapsed_ms = now_ms.saturating_sub(start_ms);
-    if let Some((sample_count, sample_bytes, sample_elapsed_ms, sample_max_ms, last_lba, last_blocks, last_bytes)) =
-        trueosfs_block_read_trace_note(now_ms, lba, blocks, total_bytes, elapsed_ms)
+    if let Some((
+        sample_count,
+        sample_bytes,
+        sample_elapsed_ms,
+        sample_max_ms,
+        last_lba,
+        last_blocks,
+        last_bytes,
+    )) = trueosfs_block_read_trace_note(now_ms, lba, blocks, total_bytes, elapsed_ms)
     {
         let sample_avg_ms = if sample_count == 0 {
             0

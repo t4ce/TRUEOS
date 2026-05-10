@@ -302,7 +302,13 @@ pub async fn piano_drain_loop() {
 
             let hb = PIANO_LAST_HEARTBEAT_SECS.load(Ordering::Acquire);
             if hb == u64::MAX {
-                crate::log_trace!("piano: --:--:-- ~ {}.{}.{}.{}\n", pkt[0], pkt[1], pkt[2], pkt[3]);
+                crate::log_trace!(
+                    "piano: --:--:-- ~ {}.{}.{}.{}\n",
+                    pkt[0],
+                    pkt[1],
+                    pkt[2],
+                    pkt[3]
+                );
             } else {
                 let (h, m, s) = secs_to_hms(hb);
                 crate::log_trace!(

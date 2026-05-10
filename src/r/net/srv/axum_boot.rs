@@ -64,7 +64,12 @@ async fn axum_boot_runtime() -> Result<(), io::Error> {
         let listener = match tokio::net::TcpListener::bind(addr).await {
             Ok(listener) => listener,
             Err(err) => {
-                crate::log_trace!("axum-boot: bind {} failed kind={:?} err={}\n", addr, err.kind(), err);
+                crate::log_trace!(
+                    "axum-boot: bind {} failed kind={:?} err={}\n",
+                    addr,
+                    err.kind(),
+                    err
+                );
                 tokio::time::sleep(core::time::Duration::from_millis(1000)).await;
                 continue;
             }

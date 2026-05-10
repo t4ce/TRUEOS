@@ -580,7 +580,10 @@ pub async fn vm_store_replication_task() {
                         let _ = cmds.push(NetCommand::OpenTcpListen {
                             port: ports::VM_STORE_REPL_PORT,
                         });
-                        crate::log_trace!("hv-store-net: tcp closed handle={} (relisten)\n", handle.0);
+                        crate::log_trace!(
+                            "hv-store-net: tcp closed handle={} (relisten)\n",
+                            handle.0
+                        );
                     }
                 }
                 NetEvent::Error { msg } => {

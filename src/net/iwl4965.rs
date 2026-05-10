@@ -819,7 +819,12 @@ impl Iwl4965 {
             0x07 => "6000",
             _ => "unknown",
         };
-        crate::log_trace!("[IWL4965] HW rev: {:#010X} (type: {} = {})", self.hw_rev, hw_type, hw_name);
+        crate::log_trace!(
+            "[IWL4965] HW rev: {:#010X} (type: {} = {})",
+            self.hw_rev,
+            hw_type,
+            hw_name
+        );
 
         // 3. APM init: NIC_READY → INIT_DONE → wait MAC clock → enable APMG clocks
         self.apm_init()?;
@@ -1060,7 +1065,10 @@ impl Iwl4965 {
                     crate::log_trace!("iwl4965: init calibration done\n");
                 }
                 Err(e) => {
-                    crate::log_trace!("iwl4965: init alive failed: {} -- trying runtime directly", e);
+                    crate::log_trace!(
+                        "iwl4965: init alive failed: {} -- trying runtime directly",
+                        e
+                    );
                 }
             }
         }
@@ -1450,7 +1458,11 @@ impl Iwl4965 {
             // Check GP_UCODE register (firmware sets this when alive)
             let gp_ucode = self.read_reg(CSR_GP_UCODE);
             if gp_ucode != 0 && gp_ucode != 0xFFFFFFFF {
-                crate::log_trace!("iwl4965: alive via gp_ucode={:#X} attempt={}\n", gp_ucode, attempt);
+                crate::log_trace!(
+                    "iwl4965: alive via gp_ucode={:#X} attempt={}\n",
+                    gp_ucode,
+                    attempt
+                );
                 crate::log_trace!("[IWL4965] FW alive via GP_UCODE: {:#X}", gp_ucode);
                 return Ok(());
             }
@@ -1742,7 +1754,11 @@ impl Iwl4965 {
                 }
             }
             _ => {
-                crate::log_trace!("[IWL4965] RX: Unknown cmd {:#04X} ({} bytes)", cmd_id, data.len());
+                crate::log_trace!(
+                    "[IWL4965] RX: Unknown cmd {:#04X} ({} bytes)",
+                    cmd_id,
+                    data.len()
+                );
             }
         }
     }
@@ -2658,7 +2674,9 @@ pub fn debug_dump_csrs() {
 
     for (name, offset) in regs {
         match debug_read_csr(*offset) {
-            Some(val) => crate::log_trace!("  CSR {:<16} [0x{:03X}] = 0x{:08X}\n", name, offset, val),
+            Some(val) => {
+                crate::log_trace!("  CSR {:<16} [0x{:03X}] = 0x{:08X}\n", name, offset, val)
+            }
             None => crate::log_trace!("  CSR {:<16} [0x{:03X}] = <unavailable>\n", name, offset),
         }
     }
@@ -2841,7 +2859,12 @@ pub fn debug_load_firmware() -> Result<(), &'static str> {
             let gp1 = debug_read_csr(CSR_UCODE_DRV_GP1).unwrap_or(0);
             let ucode = debug_read_csr(CSR_GP_UCODE).unwrap_or(0);
             crate::log_trace!("  Result: OK!\n");
-            crate::log_trace!("    GP_CNTRL={:#010X} GP1={:#010X} UCODE={:#010X}\n", gp, gp1, ucode);
+            crate::log_trace!(
+                "    GP_CNTRL={:#010X} GP1={:#010X} UCODE={:#010X}\n",
+                gp,
+                gp1,
+                ucode
+            );
             crate::log_trace!(
                 "    MAC_CLK={}\n",
                 if gp & CSR_GP_CNTRL_REG_FLAG_MAC_CLOCK_READY != 0 {

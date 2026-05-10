@@ -142,7 +142,12 @@ async fn fetch_html_attempt_with_redirects(url: &str) -> Result<Vec<u8>, &'stati
                         );
                         return Err("too many redirects");
                     }
-                    crate::log_trace!("html: redirect hop={} {} -> {}\n", hop + 1, current_url, next);
+                    crate::log_trace!(
+                        "html: redirect hop={} {} -> {}\n",
+                        hop + 1,
+                        current_url,
+                        next
+                    );
                     current_url = next;
                     continue;
                 }

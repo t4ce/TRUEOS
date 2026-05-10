@@ -924,7 +924,10 @@ async fn flush_user_input_record_once() {
     .await
     {
         Ok(true) => {
-            crate::log_trace!("spawn-svc: user-input-record ok appended_lines={}\n", appended_lines);
+            crate::log_trace!(
+                "spawn-svc: user-input-record ok appended_lines={}\n",
+                appended_lines
+            );
         }
         Ok(false) => {
             crate::shell2::restore_user_input_record(entries);

@@ -457,7 +457,10 @@ pub async fn ui2_shell_demo_task() {
         clear_rgba[idx + 3] = UI2_SHELL_BG_RGBA[3];
     }
     if !surface.upload_rgba_owned(clear_rgba, "ui2-shell-demo-clear") {
-        crate::log_trace!("ui2-shell-demo: initial texture upload failed tex={}\n", UI2_SHELL_TEX_ID);
+        crate::log_trace!(
+            "ui2-shell-demo: initial texture upload failed tex={}\n",
+            UI2_SHELL_TEX_ID
+        );
         return;
     }
     if !crate::r::ui2::maximize_window(surface.window_id()) {

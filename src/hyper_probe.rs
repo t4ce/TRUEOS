@@ -374,7 +374,9 @@ pub(crate) fn log_boot_probe() {
     }
 
     match runtime.block_on(probe_hyper_http1_server_loopback()) {
-        Ok(()) => crate::log_trace!("hyper_probe: success http1.server_loopback_request_response\n"),
+        Ok(()) => {
+            crate::log_trace!("hyper_probe: success http1.server_loopback_request_response\n")
+        }
         Err(stage) => crate::log_trace!("hyper_probe: failure {}\n", stage),
     }
 

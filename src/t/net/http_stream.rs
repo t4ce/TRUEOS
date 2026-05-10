@@ -194,7 +194,11 @@ async fn abort_http_file_stream(stream: &mut Option<HttpFileStream>, path: &str)
     let written = stream.written;
     match stream.sink.abort().await {
         Ok(()) => {
-            crate::log_trace!("http-stream: file write aborted path={} written={}\n", path, written,);
+            crate::log_trace!(
+                "http-stream: file write aborted path={} written={}\n",
+                path,
+                written,
+            );
         }
         Err(err) => {
             crate::log_trace!(

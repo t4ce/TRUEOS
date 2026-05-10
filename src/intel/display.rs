@@ -220,7 +220,9 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
     log_transcoder_a_state(dev, "before-primary-init");
 
     let Some(pipe) = active_pipe(dev) else {
-        crate::log_trace!("intel/display: primary-boot-surface skipped no active pipe discovered\n");
+        crate::log_trace!(
+            "intel/display: primary-boot-surface skipped no active pipe discovered\n"
+        );
         return;
     };
     let pipe_src_raw = crate::intel::mmio_read(dev, pipe.pipe_src_off);
@@ -240,7 +242,10 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
     program_pipe_bottom_color(dev, pipe, PIPE_BOTTOM_COLOR_RGB);
 
     let Some(pitch_bytes) = aligned_pitch_bytes(width, PRIMARY_BYTES_PER_PIXEL) else {
-        crate::log_trace!("intel/display: primary-boot-surface skipped bad pitch width={}\n", width);
+        crate::log_trace!(
+            "intel/display: primary-boot-surface skipped bad pitch width={}\n",
+            width
+        );
         return;
     };
     let Some(byte_len) = usize::try_from(u64::from(pitch_bytes) * u64::from(height)).ok() else {
@@ -248,7 +253,10 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
         return;
     };
     let Some((phys, virt)) = crate::dma::alloc(byte_len, crate::intel::WARM_ALIGN) else {
-        crate::log_trace!("intel/display: primary-boot-surface alloc failed bytes=0x{:X}\n", byte_len);
+        crate::log_trace!(
+            "intel/display: primary-boot-surface alloc failed bytes=0x{:X}\n",
+            byte_len
+        );
         return;
     };
 
