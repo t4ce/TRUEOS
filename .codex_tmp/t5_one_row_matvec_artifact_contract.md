@@ -6,7 +6,7 @@ Program name:
 
 Current small-step program name:
 
-`gfx12-t5-small-live4-bf16-dot-hdc1-stateless-store-then-ts-eot`
+`gfx12-t5-small-live4-packed-bf16-dot-hdc1-stateless-store-then-ts-eot`
 
 Preserved generated artifacts:
 
@@ -17,6 +17,10 @@ Preserved generated artifacts:
 - `.codex_tmp/t5_small_live4_trueos_arena/t5_small_live4_trueos_arena.comp.spv`
 - `.codex_tmp/t5_small_live4_trueos_arena/t5_small_live4_trueos_arena.comp.spvasm`
 - `.codex_tmp/t5_small_live4_trueos_arena/oracle_native/mesa_cache_cc_native.bin`
+- `.codex_tmp/t5_small_live4_trueos_arena_bf16_unpack.comp`
+- `.codex_tmp/t5_small_live4_trueos_arena_bf16_unpack/t5_small_live4_trueos_arena_bf16_unpack.comp.spv`
+- `.codex_tmp/t5_small_live4_trueos_arena_bf16_unpack/t5_small_live4_trueos_arena_bf16_unpack.comp.spvasm`
+- `.codex_tmp/intel_userland_oracle/t5-small-live4-trueos-arena-bf16-unpack/log.txt`
 
 T5 is the first GPGPU ladder rung that must prove a real model calculation.
 T47/T48 are preserved controls and cannot satisfy T5:
@@ -39,14 +43,28 @@ Current boot-visible T5 state, as of the `make iso` loop ending in
 - The scale ladder now cleanly retires through groups
   `1,2,4,8,16,32,64,128,186`, with the final rung showing
   `observed_lane_dispatch=1488`.
-- The current arithmetic result is intentionally held at proof status:
-  `gpu_value=0xB9BAA564` matches the shader's packed-word BF16 view, while
-  `cpu_expected_bits=0x3AAA10F6` is the contiguous BF16-lane CPU reference.
+- The previous word-view artifact is preserved in code as
+  `gfx12-t5-small-live4-word-view-bf16-dot-hdc1-stateless-store-then-ts-eot`.
+  It proved load/math/store, but read row BF16 lanes `[0,2,4,6]`.
+- The new hot artifact unpacks packed BF16 halves so the shader reads row lanes
+  `[0,1,2,3]` and compares against the contiguous CPU reference.
 - `live_k_dim=4`
 - `requires_live_gpu_load=1`
 - `does_not_prove=full_model_matvec`
-- Next shader work is `bf16-packed-half-unpack`, not another dispatch-scale
-  question.
+- Source-level Vulkan oracle for the packed-half shader passed with
+  `verified=1 expected_bits=0x41F00000 observed_bits=0x41F00000`.
+- TRUEOS boot readback for the packed-half native artifact passed:
+  `t5-input-summary` showed
+  `gpu=0x3AAA10F6 cpu_expected=0x3AAA10F6 cpu_direct=0x3AAA10F6`
+  with `gpu_matches_direct=1` and `gpu_matches_legacy_word_view=0`.
+- The packed-half scale ladder retired cleanly through groups
+  `1,2,4,8,16,32,64,128,186`; final rung:
+  `observed_lane_dispatch=1488`, `gpu_matches_packed_bf16=1`,
+  `failure_class=t5-live4-packed-bf16-proven`.
+- Lumen step 9 now reports
+  `submitted=1 finished=1 readback_ok=1 compare_ok=1 reason=t5-live4-written`
+  for `gfx12-t5-small-live4-packed-bf16-dot-hdc1-stateless-store-then-ts-eot`.
+- Next validation question is scaling live K or row count.
 
 The first executable form is intentionally `live_k_dim=4`; the full 2048-wide
 row comes later after the tiny slice proves real GPU-side input reads in

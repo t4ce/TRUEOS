@@ -2924,7 +2924,7 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
             Ok(bytes) => bytes,
             Err(reason) => {
                 crate::log!(
-                    "intel/gpgpu: t5-live4-scale-proof scale_index={} program_source={} requested_groups={} requested_group_count={} threads_per_group={} expected_hw_threads={} simd_lanes_per_thread={} expected_lane_dispatch={} observed_lane_dispatch=0 lane_count_matches=0 submitted=0 retired=0 finish_marker=0x00000000 finish_expected=0x{:08X} output_first_before=0x{:08X} output_first_after=0x00000000 gpu_matches_shader_word_low=0 gpu_matches_cpu_direct=0 shader_word_low=0x{:08X} cpu_direct=0x{:08X} failure_class={} batch_bytes=0x0 output_owner=cpu-ap does_not_prove=full_model_matvec\n",
+                    "intel/gpgpu: t5-live4-scale-proof scale_index={} program_source={} requested_groups={} requested_group_count={} threads_per_group={} expected_hw_threads={} simd_lanes_per_thread={} expected_lane_dispatch={} observed_lane_dispatch=0 lane_count_matches=0 submitted=0 retired=0 finish_marker=0x00000000 finish_expected=0x{:08X} output_first_before=0x{:08X} output_first_after=0x00000000 gpu_matches_packed_bf16=0 gpu_matches_word_view=0 word_view_bits=0x{:08X} packed_bf16_bits=0x{:08X} failure_class={} batch_bytes=0x0 output_owner=cpu-ap does_not_prove=full_model_matvec\n",
                     scale_index,
                     program.name,
                     group_x_dim,
@@ -2984,25 +2984,25 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
 
         let lane_count_matches = dispatch_delta == expected_lane_dispatch as u64;
         let marker_ok = finish_marker == RCS_EXEC_RESULT_COMPUTE_WALKER_DONE;
+        let packed_bf16_ok = output_words_after[0] == t5_input_summary.direct_bits;
         let shader_word_ok = output_words_after[0] == t5_input_summary.shader_word_low_bits;
-        let cpu_direct_ok = output_words_after[0] == t5_input_summary.direct_bits;
         last_scale_clean =
-            submitted && finished && marker_ok && lane_count_matches && shader_word_ok;
+            submitted && finished && marker_ok && lane_count_matches && packed_bf16_ok;
         let failure_class = if last_scale_clean {
-            "t5-live4-word-view-proven"
+            "t5-live4-packed-bf16-proven"
         } else if !finished {
             "submit-not-finished"
         } else if !marker_ok {
             "finish-marker-mismatch"
         } else if !lane_count_matches {
             "lane-count-mismatch"
-        } else if !shader_word_ok {
-            "shader-word-output-mismatch"
+        } else if !packed_bf16_ok {
+            "packed-bf16-output-mismatch"
         } else {
             "unknown"
         };
         crate::log!(
-            "intel/gpgpu: t5-live4-scale-proof scale_index={} program_source={} requested_groups={} requested_group_count={} threads_per_group={} expected_hw_threads={} simd_lanes_per_thread={} expected_lane_dispatch={} observed_lane_dispatch={} lane_count_matches={} submitted={} retired={} finish_marker=0x{:08X} finish_expected=0x{:08X} output_first_before=0x{:08X} output_first_after=0x{:08X} gpu_matches_shader_word_low={} gpu_matches_cpu_direct={} shader_word_low=0x{:08X} cpu_direct=0x{:08X} failure_class={} batch_bytes=0x{:X} output_owner=cpu-ap does_not_prove=full_model_matvec\n",
+            "intel/gpgpu: t5-live4-scale-proof scale_index={} program_source={} requested_groups={} requested_group_count={} threads_per_group={} expected_hw_threads={} simd_lanes_per_thread={} expected_lane_dispatch={} observed_lane_dispatch={} lane_count_matches={} submitted={} retired={} finish_marker=0x{:08X} finish_expected=0x{:08X} output_first_before=0x{:08X} output_first_after=0x{:08X} gpu_matches_packed_bf16={} gpu_matches_word_view={} word_view_bits=0x{:08X} packed_bf16_bits=0x{:08X} failure_class={} batch_bytes=0x{:X} output_owner=cpu-ap does_not_prove=full_model_matvec\n",
             scale_index,
             program.name,
             group_x_dim,
@@ -3019,8 +3019,8 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
             RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
             output_first_before,
             output_words_after[0],
+            packed_bf16_ok as u8,
             shader_word_ok as u8,
-            cpu_direct_ok as u8,
             t5_input_summary.shader_word_low_bits,
             t5_input_summary.direct_bits,
             failure_class,
@@ -3080,15 +3080,17 @@ pub(crate) fn submit_gpgpu_t5_one_row_matvec_probe(
         "t5-live4-written"
     } else if !finished {
         "submit-not-finished"
-    } else if last_scale_clean && output_first_after == t5_input_summary.shader_word_low_bits {
-        "shader-word-view-matches-cpu-contiguous-mismatch"
+    } else if last_scale_clean {
+        "t5-live4-packed-bf16-scale-clean-final-compare-mismatch"
+    } else if output_first_after == t5_input_summary.shader_word_low_bits {
+        "legacy-word-view-output"
     } else if output_first_after != cpu_expected_bits {
         "compare-mismatch"
     } else {
         "compare-not-at-slot0"
     };
     crate::log!(
-        "intel/gpgpu: t5-small-live4-bf16-dot submitted={} finished={} readback_ok={} compare_ok={} reason={} program_source={} groups={} expected_lane_dispatch={} observed_lane_dispatch={} output_gpu=0x{:X} output_first_before=0x{:08X} output_first_after=0x{:08X} gpu_value=0x{:08X} cpu_expected_bits=0x{:08X} output_hits_lo64=0x{:016X} live_k_dim={} requires_live_gpu_load={} finish_marker=0x{:08X} finish_expected=0x{:08X} batch_bytes=0x{:X} output_owner=cpu-ap next=bf16-packed-half-unpack does_not_prove=full_model_matvec\n",
+        "intel/gpgpu: t5-small-live4-bf16-dot submitted={} finished={} readback_ok={} compare_ok={} reason={} program_source={} groups={} expected_lane_dispatch={} observed_lane_dispatch={} output_gpu=0x{:X} output_first_before=0x{:08X} output_first_after=0x{:08X} gpu_value=0x{:08X} cpu_expected_bits=0x{:08X} output_hits_lo64=0x{:016X} live_k_dim={} requires_live_gpu_load={} finish_marker=0x{:08X} finish_expected=0x{:08X} batch_bytes=0x{:X} output_owner=cpu-ap next=scale-live-k-or-row-count does_not_prove=full_model_matvec\n",
         submitted as u8,
         finished as u8,
         readback_ok as u8,
@@ -3389,7 +3391,7 @@ fn log_gpgpu_t5_input_summary(
     cpu_expected_bits: u32,
 ) {
     crate::log!(
-        "intel/gpgpu: t5-input-summary stage={} gpu=0x{:08X} cpu_expected=0x{:08X} cpu_direct=0x{:08X} shader_word_low=0x{:08X} direct_matches_cpu={} gpu_matches_direct={} gpu_matches_shader_word_low={} shader_row_lanes=[0,2,4,6] x_bits=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] row_le=[0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X}] proof=cpu-arena-operands-and-current-shader-word-view\n",
+        "intel/gpgpu: t5-input-summary stage={} gpu=0x{:08X} cpu_expected=0x{:08X} cpu_direct=0x{:08X} legacy_word_view=0x{:08X} direct_matches_cpu={} gpu_matches_direct={} gpu_matches_legacy_word_view={} shader_row_lanes=[0,1,2,3] legacy_word_view_lanes=[0,2,4,6] x_bits=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] row_le=[0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X},0x{:04X}] proof=cpu-arena-operands-and-packed-bf16-unpack\n",
         stage,
         gpu_bits,
         cpu_expected_bits,
