@@ -15,7 +15,7 @@ pub(crate) const MANDELBROT_TARGET_WIDTH: u32 = 2560;
 pub(crate) const MANDELBROT_TARGET_HEIGHT: u32 = 1440;
 pub(crate) const MANDELBROT_PUSH_CONSTANT_BYTES: u16 = 24;
 pub(crate) const MANDELBROT_GPGPU_LOOP_MS: u64 = 100;
-pub(crate) const MANDELBROT_GPGPU_PREVIEW_PIXELS_PER_TICK: usize = 512;
+pub(crate) const MANDELBROT_GPGPU_PREVIEW_PIXELS_PER_TICK: usize = 8192;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum MandelbrotGpuArtifactStage {
