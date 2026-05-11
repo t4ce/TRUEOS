@@ -1,3 +1,7 @@
+extern crate alloc;
+
+use alloc::vec::Vec;
+
 // CGP is the Lumen-local compute graphics processor boundary.  It names the
 // queue/planning layer between burn_baba policy and the register-level Intel
 // GPGPU implementation without letting hardware details leak upward.
@@ -7,6 +11,7 @@
 pub(crate) enum CgpJobMode {
     ProofOnly,
     ShadowCompare,
+    AcceptedPrefix,
     AcceptedOutput,
 }
 
@@ -15,6 +20,7 @@ impl CgpJobMode {
         match self {
             Self::ProofOnly => "proof-only",
             Self::ShadowCompare => "shadow-compare",
+            Self::AcceptedPrefix => "accepted-prefix",
             Self::AcceptedOutput => "accepted-output",
         }
     }
@@ -38,6 +44,45 @@ pub(crate) const fn gpu_burn_baby_backend() -> CgpBackendDescriptor {
         output_owner: "cpu-ap",
         correctness_contract: "cpu-reference-first",
         dispatch_contract: "guarded-proof-before-ownership",
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct CgpBf16PrefixRow {
+    pub(crate) row: usize,
+    pub(crate) prefix_bits: u32,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct CgpBf16PrefixContribution {
+    pub(crate) mode: CgpJobMode,
+    pub(crate) live_k_dim: usize,
+    pub(crate) rows: Vec<CgpBf16PrefixRow>,
+}
+
+impl CgpBf16PrefixContribution {
+    pub(crate) fn none() -> Self {
+        Self {
+            mode: CgpJobMode::ProofOnly,
+            live_k_dim: 0,
+            rows: Vec::new(),
+        }
+    }
+
+    pub(crate) fn accepted_prefix(live_k_dim: usize) -> Self {
+        Self {
+            mode: CgpJobMode::AcceptedPrefix,
+            live_k_dim,
+            rows: Vec::new(),
+        }
+    }
+
+    pub(crate) fn push_row(&mut self, row: usize, prefix_bits: u32) {
+        self.rows.push(CgpBf16PrefixRow { row, prefix_bits });
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.rows.is_empty()
     }
 }
 
