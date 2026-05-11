@@ -3,6 +3,7 @@ set -euo pipefail
 
 QEMU_BIN="${QEMU_BIN:-qemu-system-x86_64}"
 ISO_PATH="${ISO_PATH:-bld/trueos.iso}"
+QEMU_NVME_IMG="${QEMU_NVME_IMG:-tools/nvme.img}"
 
 QEMU_HOST_TCP_PORT_3="${QEMU_HOST_TCP_PORT_3:-10003}"
 QEMU_HOST_TCP_PORT_4="${QEMU_HOST_TCP_PORT_4:-10004}"
@@ -43,7 +44,7 @@ exec env -i \
     -audiodev none,id=snd0 \
     -device ich9-intel-hda,id=hda0,bus=pcie.0,addr=0x7 \
     -device hda-duplex,audiodev=snd0,bus=hda0.0 \
-    -drive file=nvme.img,if=none,id=nvme \
+    -drive file="${QEMU_NVME_IMG}",if=none,id=nvme \
     -device nvme,serial=deadbeef,drive=nvme \
     -device qemu-xhci,id=xhci,p2=8,p3=8,bus=pcie.0,addr=0x5 \
     -device usb-mouse,bus=xhci.0,port=1,id=usbmouse \

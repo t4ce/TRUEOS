@@ -1,6 +1,0 @@
-fd=0 target="/dev/null"
-fd=1 target="/home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/latest/log.txt"
-fd=2 target="/home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/latest/log.txt"
-fd=3 target="/home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/latest/log.txt"
-fd=4 target="/proc/700457/fd"
-fd=5 target="/home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/latest/dumps/000879_end_fd.txt"
