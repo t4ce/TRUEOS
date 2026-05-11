@@ -24,8 +24,18 @@ EFI_IMG_OVERHEAD_KIB ?= 1024
 EFI_IMG_MIN_SIZE_KIB ?= 0
 LIMINE_CFG := limine.conf
 LIMINE_CFG_GENERATED := $(ISO_DIR)/limine.generated.conf
+LIMINE_SUBMODULE := vendor/limine
+LIMINE_SRC := bld/limine-src
+LIMINE_BUILD_DIR := bld/limine-build
 LIMINE_PREFIX := bld/limine-prefix
 LIMINE_SHARE := $(LIMINE_PREFIX)/share/limine
+LIMINE_BOOTX64 := $(LIMINE_SHARE)/BOOTX64.EFI
+LIMINE_UEFI_CD := $(LIMINE_SHARE)/limine-uefi-cd.bin
+LIMINE_CONFIG_ARGS ?= --prefix=$(abspath $(LIMINE_PREFIX)) --enable-uefi-x86-64 --enable-uefi-cd
+LIMINE_SOURCE_STAMP := $(LIMINE_SRC)/.trueos_source_stamp
+LIMINE_CONFIG_STAMP := $(LIMINE_BUILD_DIR)/.config_args
+LIMINE_TOOLCHAIN_STAMP := $(LIMINE_BUILD_DIR)/.toolchain_args
+LIMINE_INSTALL_STAMP := $(LIMINE_BUILD_DIR)/.installed
 GUC_FW_HOST_PATH ?= /lib/firmware/i915/adlp_guc_70.bin.zst
 GUC_FW_ISO_REL_PATH ?= EFI/BOOT/adlp_guc_70.bin
 BLUEPRINTS_ROOT ?= ../TRUEOS Blueprints
@@ -65,7 +75,7 @@ CARGO_GFX_FLAGS =
 
 IMG_SIZE ?= 25G
 
-.PHONY: kernel empty-libs blueprints artifacts kernel-stages baremetal-reboot-log iso iso-build iso-release iso-debug snipe dbg dbg-vscode run run-with-nvme run-installed lc
+.PHONY: kernel empty-libs blueprints artifacts kernel-stages limine baremetal-reboot-log iso iso-build iso-release iso-debug snipe dbg dbg-vscode run run-with-nvme run-installed lc FORCE
 
 images: $(DISK_IMG) $(NVME_IMG)
 
@@ -139,6 +149,61 @@ artifacts: blueprints kernel
 
 kernel-stages: artifacts
 
+limine: $(LIMINE_INSTALL_STAMP)
+
+$(LIMINE_INSTALL_STAMP): FORCE
+	@set -e; \
+	if [ ! -f "$(LIMINE_SUBMODULE)/bootstrap" ]; then \
+		git submodule update --init "$(LIMINE_SUBMODULE)"; \
+	fi; \
+	if [ ! -f "$(LIMINE_SUBMODULE)/bootstrap" ]; then \
+		echo "error: missing Limine submodule at $(LIMINE_SUBMODULE)"; \
+		exit 1; \
+	fi; \
+	cc=$$(command -v gcc || command -v clang || command -v cc || true); \
+	ld=$$(command -v ld.lld || command -v gld || command -v ld || true); \
+	objcopy=$$(command -v llvm-objcopy || command -v gobjcopy || command -v objcopy || true); \
+	objdump=$$(command -v llvm-objdump || command -v gobjdump || command -v objdump || true); \
+	readelf=$$(command -v llvm-readelf || command -v greadelf || command -v readelf || true); \
+	for tool in cc ld objcopy objdump readelf; do \
+		eval value=\$$$$tool; \
+		if [ -z "$$value" ]; then \
+			echo "error: missing required Limine build tool: $$tool"; \
+			exit 1; \
+		fi; \
+	done; \
+	source_stamp="submodule:$$(git -C "$(LIMINE_SUBMODULE)" rev-parse HEAD)"; \
+	if [ "$$(cat "$(LIMINE_SOURCE_STAMP)" 2>/dev/null || true)" != "$$source_stamp" ] || [ ! -f "$(LIMINE_SRC)/bootstrap" ]; then \
+		rm -rf "$(LIMINE_SRC)"; \
+		mkdir -p "$(LIMINE_SRC)"; \
+		(cd "$(LIMINE_SUBMODULE)" && tar --exclude .git -cf - .) | (cd "$(LIMINE_SRC)" && tar -xf -); \
+		printf '%s\n' "$$source_stamp" > "$(LIMINE_SOURCE_STAMP)"; \
+	fi; \
+	toolchain_stamp=$$(printf 'CC_FOR_TARGET=%s\nLD_FOR_TARGET=%s\nOBJCOPY_FOR_TARGET=%s\nOBJDUMP_FOR_TARGET=%s\nREADELF_FOR_TARGET=%s\n' "$$cc" "$$ld" "$$objcopy" "$$objdump" "$$readelf"); \
+	if [ -f "$(LIMINE_BOOTX64)" ] && [ -f "$(LIMINE_UEFI_CD)" ] && [ -f "$(LIMINE_INSTALL_STAMP)" ] && [ "$$(cat "$(LIMINE_CONFIG_STAMP)" 2>/dev/null || true)" = "$(LIMINE_CONFIG_ARGS)" ] && [ "$$(cat "$(LIMINE_TOOLCHAIN_STAMP)" 2>/dev/null || true)" = "$$toolchain_stamp" ]; then \
+		exit 0; \
+	fi; \
+	if [ "$$(cat "$(LIMINE_CONFIG_STAMP)" 2>/dev/null || true)" != "$(LIMINE_CONFIG_ARGS)" ] || [ "$$(cat "$(LIMINE_TOOLCHAIN_STAMP)" 2>/dev/null || true)" != "$$toolchain_stamp" ]; then \
+		rm -rf "$(LIMINE_BUILD_DIR)" "$(LIMINE_PREFIX)"; \
+	fi; \
+	mkdir -p "$(LIMINE_BUILD_DIR)" "$(LIMINE_PREFIX)"; \
+	printf '%s\n' "$(LIMINE_CONFIG_ARGS)" > "$(LIMINE_CONFIG_STAMP)"; \
+	printf '%s\n' "$$toolchain_stamp" > "$(LIMINE_TOOLCHAIN_STAMP)"; \
+	if [ ! -f "$(LIMINE_SRC)/configure" ]; then \
+		command -v autoreconf >/dev/null 2>&1 || { echo "error: missing autoreconf; install autoconf + automake"; exit 1; }; \
+		(cd "$(LIMINE_SRC)" && ./bootstrap); \
+	fi; \
+	(cd "$(LIMINE_BUILD_DIR)" && \
+		CC_FOR_TARGET="$$cc" \
+		LD_FOR_TARGET="$$ld" \
+		OBJCOPY_FOR_TARGET="$$objcopy" \
+		OBJDUMP_FOR_TARGET="$$objdump" \
+		READELF_FOR_TARGET="$$readelf" \
+		$(abspath $(LIMINE_SRC))/configure $(LIMINE_CONFIG_ARGS)); \
+	$(MAKE) -C "$(LIMINE_BUILD_DIR)"; \
+	$(MAKE) -C "$(LIMINE_BUILD_DIR)" install; \
+	printf 'ok\n' > "$(LIMINE_INSTALL_STAMP)"
+
 baremetal-reboot-log:
 	-fuser -k 7777/udp || true
 	python3 -c "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.bind(('',7777)); exec(\"while True:\n d,a=s.recvfrom(2048)\n if d==b'probe': s.sendto(b'ack',(a[0],7777)); break\")" &
@@ -147,7 +212,7 @@ baremetal-reboot-log:
 iso: baremetal-reboot-log
 	@$(MAKE) iso-build
 
-iso-build: artifacts images
+iso-build: artifacts images limine
 	rm -rf $(ISO_BOOT_DIR)
 	rm -f $(ISO_PATH)
 	mkdir -p $(ISO_BOOT_DIR)
@@ -202,11 +267,11 @@ iso-build: artifacts images
 		cp $(ISO_DIR)/EFI/BOOT/adlp_guc_70.bin $(ISO_BOOT_DIR)/EFI/BOOT/adlp_guc_70.bin; \
 	fi
 	cp $(LIMINE_CFG_GENERATED) $(ISO_BOOT_DIR)/limine.conf
-	cp $(LIMINE_SHARE)/BOOTX64.EFI $(ISO_DIR)/EFI/BOOT/BOOTX64.EFI
+	cp $(LIMINE_BOOTX64) $(ISO_DIR)/EFI/BOOT/BOOTX64.EFI
 	cp $(LIMINE_CFG_GENERATED) $(ISO_DIR)/EFI/BOOT/limine.conf
 	cp $(ISO_BOOT_DIR)/TRUEOS.elf $(ISO_DIR)/TRUEOS.elf
 	mkdir -p $(ISO_BOOT_DIR)/EFI/BOOT
-	cp $(LIMINE_SHARE)/BOOTX64.EFI $(ISO_BOOT_DIR)/EFI/BOOT/BOOTX64.EFI
+	cp $(LIMINE_BOOTX64) $(ISO_BOOT_DIR)/EFI/BOOT/BOOTX64.EFI
 	rm -f $(ISO_BOOT_DIR)/$(ISO_EFI_IMG)
 	@efi_payload_kib=$$(du -sk "$(ISO_BOOT_DIR)/EFI" | cut -f1); \
 		efi_img_size_kib=$$((efi_payload_kib + $(EFI_IMG_OVERHEAD_KIB))); \
@@ -220,7 +285,7 @@ iso-build: artifacts images
 	@if [ "$(BP_SKIP_EMBED)" != "1" ]; then \
 		mmd -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) ::/EFI/BOOT/apps; \
 	fi
-	mcopy -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) $(LIMINE_SHARE)/BOOTX64.EFI ::/EFI/BOOT/BOOTX64.EFI
+	mcopy -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) $(LIMINE_BOOTX64) ::/EFI/BOOT/BOOTX64.EFI
 	mcopy -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) $(ISO_DIR)/EFI/BOOT/adlp_guc_70.bin ::/EFI/BOOT/adlp_guc_70.bin
 	@if [ "$(BP_SKIP_EMBED)" != "1" ]; then \
 		for bp in $(BP_NAMES); do \

@@ -54,8 +54,9 @@ $(ARM_ARTIFACT_RUNTIME_ELF): $(ARM_ARTIFACT_FULL_ELF)
 	$(ARM_STRIP) -s $@ || true
 
 $(ARM_LIMINE_INSTALL_STAMP): $(ARM_KERNEL_BIN)
-	@if [ ! -d $(ARM_LIMINE_SRC)/.git ]; then \
-		echo "error: missing Limine sources at $(ARM_LIMINE_SRC); cargo build should have staged them"; \
+	$(MAKE) limine
+	@if [ ! -f $(ARM_LIMINE_SRC)/configure ]; then \
+		echo "error: missing staged Limine sources at $(ARM_LIMINE_SRC)"; \
 		exit 1; \
 	fi
 	@if [ "$$(cat $(ARM_LIMINE_CONFIG_STAMP) 2>/dev/null || true)" != "$(ARM_LIMINE_CONFIG_ARGS)" ]; then \
