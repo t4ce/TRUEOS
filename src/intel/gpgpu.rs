@@ -2769,16 +2769,14 @@ fn submit_gpgpu_primary_scanout_mandelbrot_strip(
     while color_lane < LANES {
         strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[color_lane]] =
             mandelbrot_preview_color(x_base + color_lane, y, width, height, phase);
+        strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_DWORDS[color_lane]] =
+            (row_gpu + (color_lane * core::mem::size_of::<u32>()) as u64) as u32;
         color_lane += 1;
     }
-    // The BTI-backed HDC store uses offsets relative to the surface state's
-    // base address.  The surface is already bound at `row_gpu`, so lane 0 must
-    // store at byte offset 0, not at the absolute GPU VA again.
-    strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_BASE_DWORD] = 0;
     if x_base == 0 && y == 0 {
         let send_dword = trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_STORE_SEND_DWORD;
         crate::log!(
-            "intel/gpgpu: primary-scanout-mandelbrot8-patch row_gpu=0x{:X} row_virt=0x{:X} row={} x_base={} width={} height={} phase={} addr_base_dword={} addr_base_payload=0x{:08X} color_dwords=[{},{},{},{},{},{},{},{}] colors=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] send_desc=0x{:08X} send_exdesc=0x{:08X} note=runtime-patched-eu-words-before-upload\n",
+            "intel/gpgpu: primary-scanout-mandelbrot8-patch row_gpu=0x{:X} row_virt=0x{:X} row={} x_base={} width={} height={} phase={} addressing=scalar-stateless-absolute color_dwords=[{},{},{},{},{},{},{},{}] address_dwords=[{},{},{},{},{},{},{},{}] colors=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] addrs=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] send_desc=0x{:08X} send_exdesc=0x{:08X} note=runtime-patched-eu-words-before-upload\n",
             row_gpu,
             row_virt as usize,
             y,
@@ -2786,8 +2784,6 @@ fn submit_gpgpu_primary_scanout_mandelbrot_strip(
             width,
             height,
             phase,
-            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_BASE_DWORD,
-            strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_BASE_DWORD],
             trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[0],
             trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[1],
             trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[2],
@@ -2796,6 +2792,14 @@ fn submit_gpgpu_primary_scanout_mandelbrot_strip(
             trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[5],
             trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[6],
             trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[7],
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_DWORDS[0],
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_DWORDS[1],
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_DWORDS[2],
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_DWORDS[3],
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_DWORDS[4],
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_DWORDS[5],
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_DWORDS[6],
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_DWORDS[7],
             strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[0]],
             strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[1]],
             strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[2]],
@@ -2804,8 +2808,16 @@ fn submit_gpgpu_primary_scanout_mandelbrot_strip(
             strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[5]],
             strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[6]],
             strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[7]],
+            strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_DWORDS[0]],
+            strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_DWORDS[1]],
+            strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_DWORDS[2]],
+            strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_DWORDS[3]],
+            strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_DWORDS[4]],
+            strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_DWORDS[5]],
+            strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_DWORDS[6]],
+            strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_DWORDS[7]],
+            strip_words[send_dword - 1],
             strip_words[send_dword],
-            strip_words[send_dword + 1],
         );
     }
     if !upload_and_verify_gpu_program_at(warm, GPGPU_EU_KERNEL_OFFSET_BYTES, &strip_words) {
@@ -2911,10 +2923,9 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot_preview(
     cursor: usize,
     pixel_budget: usize,
 ) -> (crate::intel::GpgpuOneTileSentinelProof, usize) {
-    const PREVIEW_X: u32 = 96;
-    const PREVIEW_Y: u32 = 96;
-    const PREVIEW_W: usize = 128;
-    const PREVIEW_H: usize = 64;
+    const PREVIEW_X: u32 = 0;
+    const PREVIEW_Y: u32 = 0;
+    const ROW_INTERLACE: usize = 16;
     const LANES: usize = trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_LANES;
 
     let program = gpgpu_primary_scanout_mandelbrot8_program();
@@ -2936,8 +2947,8 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot_preview(
 
     let block_x = core::cmp::min(PREVIEW_X, target.width.saturating_sub(1));
     let block_y = core::cmp::min(PREVIEW_Y, target.height.saturating_sub(1));
-    let block_w = core::cmp::min(PREVIEW_W, target.width.saturating_sub(block_x) as usize);
-    let block_h = core::cmp::min(PREVIEW_H, target.height.saturating_sub(block_y) as usize);
+    let block_w = target.width.saturating_sub(block_x) as usize;
+    let block_h = target.height.saturating_sub(block_y) as usize;
     let strips_per_row = block_w / LANES;
     let total_strips = strips_per_row.saturating_mul(block_h);
     if total_strips == 0 || pixel_budget < LANES {
@@ -2953,11 +2964,20 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot_preview(
         gpgpu_one_tile_sentinel_failure("no-preview-strips-submitted", program, target.gpu);
     let strip_budget = core::cmp::max(1, pixel_budget / LANES);
     let mut submitted_strips = 0usize;
-    let mut finished_strips = 0usize;
+    let mut accepted_strips = 0usize;
     let mut idx = start_cursor;
     while submitted_strips < strip_budget {
         let strip_x = idx % strips_per_row;
-        let py = idx / strips_per_row;
+        let logical_row = idx / strips_per_row;
+        let rows_per_band = (block_h + ROW_INTERLACE - 1) / ROW_INTERLACE;
+        let band = logical_row / rows_per_band;
+        let band_row = logical_row % rows_per_band;
+        let interlaced_row = band_row.saturating_mul(ROW_INTERLACE).saturating_add(band);
+        let py = if interlaced_row < block_h {
+            interlaced_row
+        } else {
+            logical_row
+        };
         let px = strip_x * LANES;
         let byte_offset = ((block_y as usize + py) * target.pitch_bytes as usize)
             + ((block_x as usize + px).saturating_mul(core::mem::size_of::<u32>()));
@@ -2975,11 +2995,14 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot_preview(
             dev, warm, program, row_gpu, row_virt, px, py, block_w, block_h, phase,
         );
         submitted_strips += proof.submitted as usize;
-        if proof.readback_ok {
-            finished_strips += 1;
+        let strip_accepted = proof.finished
+            && proof.finish_marker == RCS_EXEC_RESULT_COMPUTE_WALKER_DONE
+            && proof.output_hits_lo64 != 0;
+        if strip_accepted {
+            accepted_strips += 1;
         }
         last_proof = proof;
-        if !proof.readback_ok {
+        if !strip_accepted {
             break;
         }
         idx += 1;
@@ -2999,16 +3022,16 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot_preview(
         flush_offset,
         flush_bytes,
     );
-    let next_cursor = (start_cursor + finished_strips) % total_strips;
+    let next_cursor = (start_cursor + accepted_strips) % total_strips;
     let readback_ok =
-        submitted_strips != 0 && submitted_strips == finished_strips && last_proof.readback_ok;
+        submitted_strips != 0 && submitted_strips == accepted_strips && last_proof.readback_ok;
     crate::log!(
-        "intel/gpgpu: primary-scanout-mandelbrot8-preview submitted_strips={} finished_strips={} lanes_per_strip={} submitted_pixels={} finished_pixels={} readback_ok={} reason={} program_source={} primary_gpu=0x{:X} primary_phys=0x{:X} primary_bytes=0x{:X} block={}x{}@{}x{} cursor_in={} cursor_out={} strip_budget={} last_gpu=0x{:X} last_first_expected=0x{:08X} last_first_after=0x{:08X} last_hit_mask=0x{:016X} display_notified={} finish_marker=0x{:08X} finish_expected=0x{:08X} action={} next={} does_not_prove=full_screen_compute_shader_or_fragment_pipeline\n",
+        "intel/gpgpu: primary-scanout-mandelbrot8-preview submitted_strips={} accepted_strips={} lanes_per_strip={} submitted_pixels={} accepted_pixels={} strict_readback_ok={} reason={} program_source={} primary_gpu=0x{:X} primary_phys=0x{:X} primary_bytes=0x{:X} block={}x{}@{}x{} row_order=interlace{} cursor_in={} cursor_out={} strip_budget={} last_gpu=0x{:X} last_first_expected=0x{:08X} last_first_after=0x{:08X} last_hit_mask=0x{:016X} display_notified={} finish_marker=0x{:08X} finish_expected=0x{:08X} action={} next={} does_not_prove=full_screen_compute_shader_or_fragment_pipeline\n",
         submitted_strips,
-        finished_strips,
+        accepted_strips,
         LANES,
         submitted_strips.saturating_mul(LANES),
-        finished_strips.saturating_mul(LANES),
+        accepted_strips.saturating_mul(LANES),
         readback_ok as u8,
         last_proof.reason,
         program.name,
@@ -3019,6 +3042,7 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot_preview(
         block_h,
         block_x,
         block_y,
+        ROW_INTERLACE,
         start_cursor,
         next_cursor,
         strip_budget,
