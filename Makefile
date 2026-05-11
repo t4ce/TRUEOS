@@ -56,6 +56,11 @@ QEMU_HOST_TCP_PORT_3 ?= 10003
 QEMU_HOST_TCP_PORT_4 ?= 10004
 QEMU_HOST_TCP_PORT_80 ?= 8080
 QEMU_RUN_ENV = ISO_PATH="$(ISO_PATH)" QEMU_BIN="$(QEMU_BIN)" QEMU_UEFI_FIRMWARE="$(QEMU_UEFI_FIRMWARE)" QEMU_NVME_IMG="$(NVME_IMG)" QEMU_BRIDGE="$(QEMU_BRIDGE)" QEMU_BRIDGE_HELPER="$(QEMU_BRIDGE_HELPER)" QEMU_HDA_AUDIODEV="$(QEMU_HDA_AUDIODEV)" QEMU_HOST_TCP_PORT_3="$(QEMU_HOST_TCP_PORT_3)" QEMU_HOST_TCP_PORT_4="$(QEMU_HOST_TCP_PORT_4)" QEMU_HOST_TCP_PORT_80="$(QEMU_HOST_TCP_PORT_80)"
+BAREMETAL_LOG_DRAIN := tools/baremetal-log-drain.sh
+BAREMETAL_LOG_HOST ?= 192.168.178.94
+BAREMETAL_LOG_PORT ?= 1
+BAREMETAL_LOG_DELAY ?= 15
+BAREMETAL_LOG_DIR ?= bld/baremetal-logs
 
 CARGO_BUILD_FLAGS ?=
 
@@ -151,7 +156,12 @@ limine:
 	make -C "$(LIMINE_BUILD_DIR)" install; \
 	printf 'ok\n' > "$(LIMINE_INSTALL_STAMP)"
 
-iso: artifacts images limine
+baremetal-reboot-log:
+	-fuser -k 7777/udp || true
+	python3 -c "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.bind(('',7777)); exec(\"while True:\n d,a=s.recvfrom(2048)\n if d==b'probe': s.sendto(b'ack',(a[0],7777)); break\")" &
+	@TRUEOS_BAREMETAL_LOG_HOST="$(BAREMETAL_LOG_HOST)" TRUEOS_BAREMETAL_LOG_PORT="$(BAREMETAL_LOG_PORT)" TRUEOS_BAREMETAL_LOG_DELAY="$(BAREMETAL_LOG_DELAY)" TRUEOS_BAREMETAL_LOG_DIR="$(BAREMETAL_LOG_DIR)" "$(BAREMETAL_LOG_DRAIN)" start
+
+iso: baremetal-reboot-log artifacts images limine
 	rm -rf $(ISO_BOOT_DIR)
 	rm -f $(ISO_PATH)
 	mkdir -p $(ISO_BOOT_DIR)
