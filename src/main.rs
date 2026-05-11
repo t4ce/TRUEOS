@@ -91,6 +91,8 @@ mod tst_html_demo;
 mod tst_html_shack;
 #[path = "tst/http_trueosfs.rs"]
 mod tst_http_trueosfs;
+#[path = "tst/mandelbrot_gpu_sidequest.rs"]
+mod tst_mandelbrot_gpu_sidequest;
 #[path = "tst/net_tcp_shell.rs"]
 mod tst_net_tcp_shell;
 #[path = "tst/uas_skhynix_route_probe.rs"]

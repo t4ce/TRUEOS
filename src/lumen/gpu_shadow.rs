@@ -6,6 +6,10 @@ static LOGGED_STATIC_TILE_PROOF: AtomicBool = AtomicBool::new(false);
 static LOGGED_T4_WAITING: AtomicBool = AtomicBool::new(false);
 static LOGGED_T4_LIVE_ROW_PROBE: AtomicBool = AtomicBool::new(false);
 
+// T6.2 is an 8-lane artifact.  Until the walker provides a trusted row-block
+// payload, CGP drives row blocks by staging one 8-row view at a time.
+const T62_ROW_BLOCK_DISPATCH_BLOCK_CAP: usize = 4;
+
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct LocalGpuProofPlan {
     pub(crate) call_index: u64,
@@ -188,10 +192,15 @@ pub(crate) fn observe_live_bf16_matvec_probe(
     let mut t61_submitted_tiles = 0usize;
     let mut t61_finished_tiles = 0usize;
     let mut t61_compare_ok_tiles = 0usize;
-    let mut t62_staged_tiles = 0usize;
-    let mut t62_submitted_tiles = 0usize;
-    let mut t62_finished_tiles = 0usize;
-    let mut t62_compare_ok_tiles = 0usize;
+    let mut t62_staged_blocks = 0usize;
+    let mut t62_submitted_blocks = 0usize;
+    let mut t62_finished_blocks = 0usize;
+    let mut t62_compare_ok_blocks = 0usize;
+    let mut t62_compared_rows = 0usize;
+    let mut t63_submitted_blocks = 0usize;
+    let mut t63_finished_blocks = 0usize;
+    let mut t63_compare_ok_blocks = 0usize;
+    let mut t63_compared_rows = 0usize;
     let mut last_row = 0usize;
     let mut last_gpu_value = 0u32;
     let mut last_cpu_expected_bits = 0u32;
@@ -469,96 +478,187 @@ pub(crate) fn observe_live_bf16_matvec_probe(
             continue;
         }
 
-        let t62_row_count = trueos_eu::gfx12::T62_ROW_INDEXED_PARTIAL_ROWS
+        let t62_block_rows = trueos_eu::gfx12::T62_ROW_INDEXED_PARTIAL_ROWS
             .min(proof_tile_rows)
             .min(n_rows.saturating_sub(row));
         let t62_live_k_dim = k_dim.min(trueos_eu::gfx12::T62_ROW_INDEXED_LIVE_K);
-        let t62_rows_bytes = t62_row_count.saturating_mul(k_dim).saturating_mul(2);
-        let t62_rows_end = row_offset.saturating_add(t62_rows_bytes);
-        if t62_row_count == 0 || t62_rows_end > w_rowmajor_bf16.len() {
+        if t62_block_rows == 0 {
             continue;
         }
 
-        let t62_rows = &w_rowmajor_bf16[row_offset..t62_rows_end];
-        let t62_rows_checksum = checksum_bytes(t62_rows);
-        let t62_stage = crate::intel::stage_gpgpu_tile_record_rows_probe(
-            stage.output_gpu,
-            t62_rows,
-            t62_row_count,
-            k_dim,
-            t62_rows_checksum,
-        );
-        t62_staged_tiles += t62_stage.readback_ok as usize;
+        let tile_remaining_rows = proof_tile_rows.min(n_rows.saturating_sub(row));
+        let t62_target_rows = tile_remaining_rows
+            .min(t62_block_rows.saturating_mul(T62_ROW_BLOCK_DISPATCH_BLOCK_CAP));
+        let t62_block_count = t62_target_rows.div_ceil(t62_block_rows);
         crate::log!(
-            "lumen-gpu-proof: director-step step=12 backend=local-gpu mode=t6-2-partial-tile-stage staged={} reason={} tile_index={} armed_tiles={} row={} row_count={} live_k_dim={} output_gpu=0x{:X} rows_checksum=0x{:016X} staged_rows_checksum=0x{:016X} row_bytes={} output_zeroed={} output_nonzero_dwords={} gpu_submission=0 output_owner=cpu-ap next=t6-2-lane-indexed-live16-partial does_not_prove=full_model_matvec\n",
-            t62_stage.staged as u8,
-            t62_stage.reason,
+            "lumen-gpu-proof: director-step step=12 backend=local-gpu mode=t6-2-row-block-plan tile_index={} armed_tiles={} tile_row_start={} block_rows={} block_cap={} planned_blocks={} planned_rows={} live_k_dim={} scheme=restage-row-prefix-per-block artifact_uses=gl_LocalInvocationID.x avoids=gl_WorkGroupID.x output_owner=cpu-ap next=t6-2-row-block-dispatch does_not_prove=full_model_matvec\n",
             tile_index,
             armed_tiles,
             row,
-            t62_stage.row_count,
+            t62_block_rows,
+            T62_ROW_BLOCK_DISPATCH_BLOCK_CAP,
+            t62_block_count,
+            t62_target_rows,
             t62_live_k_dim,
-            t62_stage.output_gpu,
-            t62_stage.rows_checksum,
-            t62_stage.staged_rows_checksum,
-            t62_stage.row_bytes,
-            t62_stage.output_zeroed as u8,
-            t62_stage.output_nonzero_dwords,
         );
-        if !t62_stage.readback_ok {
-            continue;
-        }
 
-        let mut t62_expected_words = [0u32; 8];
-        for local_row in 0..t62_row_count {
-            let row_start = local_row.saturating_mul(k_dim).saturating_mul(2);
-            let row_end = row_start.saturating_add(k_dim.saturating_mul(2));
-            t62_expected_words[local_row] =
-                bf16_row_dot_prefix(x, &t62_rows[row_start..row_end], t62_live_k_dim).to_bits();
+        for row_block_index in 0..t62_block_count {
+            let block_tile_row = row_block_index.saturating_mul(t62_block_rows);
+            let global_row = row.saturating_add(block_tile_row);
+            let block_row_count =
+                t62_block_rows.min(t62_target_rows.saturating_sub(block_tile_row));
+            let block_row_offset =
+                row_offset.saturating_add(block_tile_row.saturating_mul(k_dim).saturating_mul(2));
+            let block_rows_bytes = block_row_count.saturating_mul(k_dim).saturating_mul(2);
+            let block_rows_end = block_row_offset.saturating_add(block_rows_bytes);
+            if block_row_count == 0 || block_rows_end > w_rowmajor_bf16.len() {
+                continue;
+            }
+
+            let t62_rows = &w_rowmajor_bf16[block_row_offset..block_rows_end];
+            let t62_rows_checksum = checksum_bytes(t62_rows);
+            let t62_stage = crate::intel::stage_gpgpu_tile_record_rows_probe(
+                stage.output_gpu,
+                t62_rows,
+                block_row_count,
+                k_dim,
+                t62_rows_checksum,
+            );
+            t62_staged_blocks += t62_stage.readback_ok as usize;
+            crate::log!(
+                "lumen-gpu-proof: director-step step=13 backend=local-gpu mode=t6-2-row-block-stage staged={} reason={} tile_index={} armed_tiles={} row_block={} global_row_start={} tile_row_start={} row_count={} live_k_dim={} output_gpu=0x{:X} rows_checksum=0x{:016X} staged_rows_checksum=0x{:016X} row_bytes={} output_zeroed={} output_nonzero_dwords={} gpu_submission=0 output_owner=cpu-ap next=t6-2-lane-indexed-live16-partial does_not_prove=full_model_matvec\n",
+                t62_stage.staged as u8,
+                t62_stage.reason,
+                tile_index,
+                armed_tiles,
+                row_block_index,
+                global_row,
+                block_tile_row,
+                t62_stage.row_count,
+                t62_live_k_dim,
+                t62_stage.output_gpu,
+                t62_stage.rows_checksum,
+                t62_stage.staged_rows_checksum,
+                t62_stage.row_bytes,
+                t62_stage.output_zeroed as u8,
+                t62_stage.output_nonzero_dwords,
+            );
+            if !t62_stage.readback_ok {
+                continue;
+            }
+
+            let mut t62_expected_words = [0u32; 8];
+            for local_row in 0..block_row_count {
+                let row_start = local_row.saturating_mul(k_dim).saturating_mul(2);
+                let row_end = row_start.saturating_add(k_dim.saturating_mul(2));
+                t62_expected_words[local_row] =
+                    bf16_row_dot_prefix(x, &t62_rows[row_start..row_end], t62_live_k_dim).to_bits();
+            }
+            let t62 = crate::intel::submit_gpgpu_t62_partial_matvec_probe(
+                stage.output_gpu,
+                stage.output_bytes,
+                t62_expected_words,
+                block_row_count,
+                t62_live_k_dim,
+            );
+            t62_submitted_blocks += t62.submitted as usize;
+            t62_finished_blocks += t62.finished as usize;
+            t62_compare_ok_blocks += t62.compare_ok as usize;
+            t62_compared_rows =
+                t62_compared_rows.saturating_add(if t62.compare_ok { block_row_count } else { 0 });
+            last_gpu_value = t62.output_words[0];
+            last_cpu_expected_bits = t62.expected_words[0];
+            last_dispatch = t62.dispatch_delta;
+            last_partial_rows = t62_compared_rows;
+            crate::log!(
+                "lumen-gpu-proof: director-step step=14 backend=local-gpu mode=t6-2-row-block-live16-partial submitted={} finished={} readback_ok={} compare_ok={} reason={} program={} tile_index={} armed_tiles={} row_block={} global_row_start={} tile_row_start={} row_count={} output_gpu=0x{:X} compare_mask=0x{:08X} expected_mask=0x{:08X} first_gpu=0x{:08X} first_cpu_expected=0x{:08X} last_gpu=0x{:08X} last_cpu_expected=0x{:08X} lane_dispatch={} live_k_dim={} finish_marker=0x{:08X} finish_expected=0x{:08X} batch_bytes=0x{:X} output_owner=cpu-ap action=hold-scale next=t6-3-lane-indexed-live32-partial does_not_prove=full_model_matvec\n",
+                t62.submitted as u8,
+                t62.finished as u8,
+                t62.readback_ok as u8,
+                t62.compare_ok as u8,
+                t62.reason,
+                t62.program_name,
+                tile_index,
+                armed_tiles,
+                row_block_index,
+                global_row,
+                block_tile_row,
+                t62.row_count,
+                t62.output_gpu,
+                t62.compare_mask,
+                t62.expected_mask,
+                t62.output_words[0],
+                t62.expected_words[0],
+                t62.output_words[t62.row_count.saturating_sub(1)],
+                t62.expected_words[t62.row_count.saturating_sub(1)],
+                t62.dispatch_delta,
+                t62.live_k_dim,
+                t62.finish_marker,
+                t62.expected_finish_marker,
+                t62.batch_bytes,
+            );
+            if !t62.compare_ok {
+                continue;
+            }
+
+            let t63_live_k_dim = k_dim.min(trueos_eu::gfx12::T63_LANE_INDEXED_LIVE_K);
+            let mut t63_expected_words = [0u32; 8];
+            for local_row in 0..block_row_count {
+                let row_start = local_row.saturating_mul(k_dim).saturating_mul(2);
+                let row_end = row_start.saturating_add(k_dim.saturating_mul(2));
+                t63_expected_words[local_row] =
+                    bf16_row_dot_prefix(x, &t62_rows[row_start..row_end], t63_live_k_dim).to_bits();
+            }
+            let t63 = crate::intel::submit_gpgpu_t63_partial_matvec_probe(
+                stage.output_gpu,
+                stage.output_bytes,
+                t63_expected_words,
+                block_row_count,
+                t63_live_k_dim,
+            );
+            t63_submitted_blocks += t63.submitted as usize;
+            t63_finished_blocks += t63.finished as usize;
+            t63_compare_ok_blocks += t63.compare_ok as usize;
+            t63_compared_rows =
+                t63_compared_rows.saturating_add(if t63.compare_ok { block_row_count } else { 0 });
+            last_gpu_value = t63.output_words[0];
+            last_cpu_expected_bits = t63.expected_words[0];
+            last_dispatch = t63.dispatch_delta;
+            last_partial_rows = t63_compared_rows;
+            crate::log!(
+                "lumen-gpu-proof: director-step step=15 backend=local-gpu mode=t6-3-row-block-live32-partial submitted={} finished={} readback_ok={} compare_ok={} reason={} program={} tile_index={} armed_tiles={} row_block={} global_row_start={} tile_row_start={} row_count={} output_gpu=0x{:X} compare_mask=0x{:08X} expected_mask=0x{:08X} first_gpu=0x{:08X} first_cpu_expected=0x{:08X} last_gpu=0x{:08X} last_cpu_expected=0x{:08X} lane_dispatch={} live_k_dim={} t62_first_gpu=0x{:08X} t62_first_cpu_expected=0x{:08X} finish_marker=0x{:08X} finish_expected=0x{:08X} batch_bytes=0x{:X} output_owner=cpu-ap action=hold-scale next=promote-row-block-owner-or-scale-live-k does_not_prove=full_model_matvec\n",
+                t63.submitted as u8,
+                t63.finished as u8,
+                t63.readback_ok as u8,
+                t63.compare_ok as u8,
+                t63.reason,
+                t63.program_name,
+                tile_index,
+                armed_tiles,
+                row_block_index,
+                global_row,
+                block_tile_row,
+                t63.row_count,
+                t63.output_gpu,
+                t63.compare_mask,
+                t63.expected_mask,
+                t63.output_words[0],
+                t63.expected_words[0],
+                t63.output_words[t63.row_count.saturating_sub(1)],
+                t63.expected_words[t63.row_count.saturating_sub(1)],
+                t63.dispatch_delta,
+                t63.live_k_dim,
+                t62.output_words[0],
+                t62.expected_words[0],
+                t63.finish_marker,
+                t63.expected_finish_marker,
+                t63.batch_bytes,
+            );
         }
-        let t62 = crate::intel::submit_gpgpu_t62_partial_matvec_probe(
-            stage.output_gpu,
-            stage.output_bytes,
-            t62_expected_words,
-            t62_row_count,
-            t62_live_k_dim,
-        );
-        t62_submitted_tiles += t62.submitted as usize;
-        t62_finished_tiles += t62.finished as usize;
-        t62_compare_ok_tiles += t62.compare_ok as usize;
-        last_gpu_value = t62.output_words[0];
-        last_cpu_expected_bits = t62.expected_words[0];
-        last_dispatch = t62.dispatch_delta;
-        last_partial_rows = t62.row_count;
-        crate::log!(
-            "lumen-gpu-proof: director-step step=13 backend=local-gpu mode=t6-2-lane-indexed-live16-partial submitted={} finished={} readback_ok={} compare_ok={} reason={} program={} tile_index={} armed_tiles={} row={} row_count={} output_gpu=0x{:X} compare_mask=0x{:08X} expected_mask=0x{:08X} first_gpu=0x{:08X} first_cpu_expected=0x{:08X} last_gpu=0x{:08X} last_cpu_expected=0x{:08X} lane_dispatch={} live_k_dim={} finish_marker=0x{:08X} finish_expected=0x{:08X} batch_bytes=0x{:X} output_owner=cpu-ap action=hold-scale next=raise-row-count-or-live-k does_not_prove=full_model_matvec\n",
-            t62.submitted as u8,
-            t62.finished as u8,
-            t62.readback_ok as u8,
-            t62.compare_ok as u8,
-            t62.reason,
-            t62.program_name,
-            tile_index,
-            armed_tiles,
-            row,
-            t62.row_count,
-            t62.output_gpu,
-            t62.compare_mask,
-            t62.expected_mask,
-            t62.output_words[0],
-            t62.expected_words[0],
-            t62.output_words[t62.row_count.saturating_sub(1)],
-            t62.expected_words[t62.row_count.saturating_sub(1)],
-            t62.dispatch_delta,
-            t62.live_k_dim,
-            t62.finish_marker,
-            t62.expected_finish_marker,
-            t62.batch_bytes,
-        );
     }
 
     crate::log!(
-        "lumen-gpu-proof: director-step step=14 backend=local-gpu mode=t6-2-actual-work-partial-tiles armed_tiles={} staged_tiles={} t5_submitted_tiles={} t5_finished_tiles={} t5_compare_ok_tiles={} t6_submitted_tiles={} t6_finished_tiles={} t6_compare_ok_tiles={} t61_submitted_tiles={} t61_finished_tiles={} t61_compare_ok_tiles={} t62_staged_tiles={} t62_submitted_tiles={} t62_finished_tiles={} t62_compare_ok_tiles={} first_row=0 last_row={} partial_rows={} tile_rows={} k_dim={} t5_artifact=gfx12-t5-small-live4-packed-bf16-dot t6_artifact=gfx12-t6-small-live8-packed-bf16-dot t61_artifact=gfx12-t6-1-live16-packed-bf16-dot t62_artifact=gfx12-t6-2-lane-indexed-live16-packed-bf16-dot artifact_addressing=tile-record-output-slots proof_role=actual-work-tile-frontiers last_gpu_value=0x{:08X} last_cpu_expected_bits=0x{:08X} last_lane_dispatch={} output_owner=cpu-ap action=hold-scale next=raise-row-count-or-live-k does_not_prove=full_model_matvec\n",
+        "lumen-gpu-proof: director-step step=16 backend=local-gpu mode=t6-3-actual-work-row-blocks armed_tiles={} staged_tiles={} t5_submitted_tiles={} t5_finished_tiles={} t5_compare_ok_tiles={} t6_submitted_tiles={} t6_finished_tiles={} t6_compare_ok_tiles={} t61_submitted_tiles={} t61_finished_tiles={} t61_compare_ok_tiles={} t62_staged_blocks={} t62_submitted_blocks={} t62_finished_blocks={} t62_compare_ok_blocks={} t62_compared_rows={} t63_submitted_blocks={} t63_finished_blocks={} t63_compare_ok_blocks={} t63_compared_rows={} first_row=0 last_row={} row_block_rows={} row_block_cap={} partial_rows={} tile_rows={} k_dim={} t5_artifact=gfx12-t5-small-live4-packed-bf16-dot t6_artifact=gfx12-t6-small-live8-packed-bf16-dot t61_artifact=gfx12-t6-1-live16-packed-bf16-dot t62_artifact=gfx12-t6-2-lane-indexed-live16-packed-bf16-dot t63_artifact=gfx12-t6-3-lane-indexed-live32-packed-bf16-dot artifact_addressing=row-block-restaged-tile-record-prefix proof_role=actual-work-row-block-frontier last_gpu_value=0x{:08X} last_cpu_expected_bits=0x{:08X} last_lane_dispatch={} output_owner=cpu-ap action=hold-scale next=promote-row-block-owner-or-scale-live-k does_not_prove=full_model_matvec\n",
         armed_tiles,
         staged_tiles,
         t5_submitted_tiles,
@@ -570,11 +670,18 @@ pub(crate) fn observe_live_bf16_matvec_probe(
         t61_submitted_tiles,
         t61_finished_tiles,
         t61_compare_ok_tiles,
-        t62_staged_tiles,
-        t62_submitted_tiles,
-        t62_finished_tiles,
-        t62_compare_ok_tiles,
+        t62_staged_blocks,
+        t62_submitted_blocks,
+        t62_finished_blocks,
+        t62_compare_ok_blocks,
+        t62_compared_rows,
+        t63_submitted_blocks,
+        t63_finished_blocks,
+        t63_compare_ok_blocks,
+        t63_compared_rows,
         last_row,
+        trueos_eu::gfx12::T62_ROW_INDEXED_PARTIAL_ROWS,
+        T62_ROW_BLOCK_DISPATCH_BLOCK_CAP,
         last_partial_rows,
         proof_tile_rows,
         k_dim,

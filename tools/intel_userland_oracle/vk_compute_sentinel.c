@@ -77,6 +77,12 @@ static uint32_t env_u32_or(const char *name, uint32_t fallback) {
     return (uint32_t)parsed;
 }
 
+static uint32_t f32_bits(float value) {
+    uint32_t bits = 0;
+    memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+
 static uint32_t find_memory_type(
     VkPhysicalDevice physical_device,
     uint32_t type_bits,
@@ -169,6 +175,23 @@ static void init_t6_2_row_indexed_live16_trueos_arena_packed_bf16(uint32_t *word
         const uint32_t base = 2048u + row * 1024u;
         const uint32_t packed = (bf16_rows[row] << 16) | bf16_rows[row];
         for (uint32_t pair = 0; pair < 8; ++pair) {
+            words[base + pair] = packed;
+        }
+    }
+}
+
+static void init_t6_3_lane_indexed_live32_trueos_arena_packed_bf16(uint32_t *words) {
+    const uint32_t bf16_rows[8] = {
+        0x3F80u, 0x4000u, 0x4040u, 0x4080u,
+        0x40A0u, 0x40C0u, 0x40E0u, 0x4100u,
+    };
+    for (uint32_t lane = 0; lane < 32; ++lane) {
+        words[lane] = f32_bits((float)(lane + 1u));
+    }
+    for (uint32_t row = 0; row < 8; ++row) {
+        const uint32_t base = 2048u + row * 1024u;
+        const uint32_t packed = (bf16_rows[row] << 16) | bf16_rows[row];
+        for (uint32_t pair = 0; pair < 16; ++pair) {
             words[base + pair] = packed;
         }
     }
@@ -364,6 +387,31 @@ static int verify_t6_2_row_indexed_live16_trueos_arena_packed_bf16(const uint32_
     return ok;
 }
 
+static int verify_t6_3_lane_indexed_live32_trueos_arena_packed_bf16(const uint32_t *words) {
+    const uint32_t out = 264192u;
+    uint32_t expected[8] = { 0 };
+    int ok = 1;
+    for (uint32_t row = 0; row < 8; ++row) {
+        expected[row] = f32_bits((float)((row + 1u) * 528u));
+        ok = ok && words[out + row] == expected[row];
+    }
+    printf(
+        "oracle-app: t6-3-lane-indexed-live32-trueos-arena-packed-bf16 outputs=0x%08X 0x%08X 0x%08X 0x%08X 0x%08X 0x%08X 0x%08X 0x%08X expected=0x%08X 0x%08X 0x%08X 0x%08X 0x%08X 0x%08X 0x%08X 0x%08X rows=8 live_k=32 out_dword=%u\n",
+        words[out + 0], words[out + 1], words[out + 2], words[out + 3],
+        words[out + 4], words[out + 5], words[out + 6], words[out + 7],
+        expected[0], expected[1], expected[2], expected[3],
+        expected[4], expected[5], expected[6], expected[7],
+        out
+    );
+    printf(
+        "oracle-app: t6-3-lane-indexed-live32-trueos-arena-packed-bf16 verified=%d rows=8 live_k=32 first_bits=0x%08X last_bits=0x%08X\n",
+        ok,
+        words[out + 0],
+        words[out + 7]
+    );
+    return ok;
+}
+
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
 
@@ -384,6 +432,8 @@ int main(int argc, char **argv) {
         strcmp(workload, "t6-1-live16-trueos-arena-packed-bf16") == 0;
     const int is_t6_2_row_indexed_live16_trueos_arena_packed_bf16 =
         strcmp(workload, "t6-2-row-indexed-live16-trueos-arena-packed-bf16") == 0;
+    const int is_t6_3_lane_indexed_live32_trueos_arena_packed_bf16 =
+        strcmp(workload, "t6-3-lane-indexed-live32-trueos-arena-packed-bf16") == 0;
     if (
         !is_sentinel &&
         !is_t5_small_live4 &&
@@ -391,7 +441,8 @@ int main(int argc, char **argv) {
         !is_t5_small_live4_trueos_arena_packed_bf16 &&
         !is_t6_small_live8_trueos_arena_packed_bf16 &&
         !is_t6_1_live16_trueos_arena_packed_bf16 &&
-        !is_t6_2_row_indexed_live16_trueos_arena_packed_bf16
+        !is_t6_2_row_indexed_live16_trueos_arena_packed_bf16 &&
+        !is_t6_3_lane_indexed_live32_trueos_arena_packed_bf16
     ) {
         fprintf(stderr, "unsupported workload: %s\n", workload);
         return 1;
@@ -498,7 +549,8 @@ int main(int argc, char **argv) {
          is_t5_small_live4_trueos_arena_packed_bf16 ||
          is_t6_small_live8_trueos_arena_packed_bf16 ||
          is_t6_1_live16_trueos_arena_packed_bf16 ||
-         is_t6_2_row_indexed_live16_trueos_arena_packed_bf16)
+         is_t6_2_row_indexed_live16_trueos_arena_packed_bf16 ||
+         is_t6_3_lane_indexed_live32_trueos_arena_packed_bf16)
             ? 0x103000u
             : 4096u;
     const VkBufferCreateInfo buffer_info = {
@@ -538,6 +590,8 @@ int main(int argc, char **argv) {
         init_t6_1_live16_trueos_arena_packed_bf16((uint32_t *)mapped);
     } else if (is_t6_2_row_indexed_live16_trueos_arena_packed_bf16) {
         init_t6_2_row_indexed_live16_trueos_arena_packed_bf16((uint32_t *)mapped);
+    } else if (is_t6_3_lane_indexed_live32_trueos_arena_packed_bf16) {
+        init_t6_3_lane_indexed_live32_trueos_arena_packed_bf16((uint32_t *)mapped);
     }
 
     Spirv spv = read_spirv(argv[1]);
@@ -689,7 +743,9 @@ int main(int argc, char **argv) {
     printf("oracle-app: lens macro=submit-complete wait-idle-done\n");
 
     const uint32_t *words = (const uint32_t *)mapped;
-    const int ok = is_t6_2_row_indexed_live16_trueos_arena_packed_bf16
+    const int ok = is_t6_3_lane_indexed_live32_trueos_arena_packed_bf16
+        ? verify_t6_3_lane_indexed_live32_trueos_arena_packed_bf16(words)
+        : is_t6_2_row_indexed_live16_trueos_arena_packed_bf16
         ? verify_t6_2_row_indexed_live16_trueos_arena_packed_bf16(words)
         : is_t6_1_live16_trueos_arena_packed_bf16
         ? verify_t6_1_live16_trueos_arena_packed_bf16(words)

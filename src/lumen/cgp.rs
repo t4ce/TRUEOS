@@ -21,6 +21,27 @@ impl CgpJobMode {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CgpBackendDescriptor {
+    pub(crate) name: &'static str,
+    pub(crate) label: &'static str,
+    pub(crate) role: CgpJobMode,
+    pub(crate) output_owner: &'static str,
+    pub(crate) correctness_contract: &'static str,
+    pub(crate) dispatch_contract: &'static str,
+}
+
+pub(crate) const fn gpu_burn_baby_backend() -> CgpBackendDescriptor {
+    CgpBackendDescriptor {
+        name: "gpu-burn-baby",
+        label: "local-gpgpu-burn-baby",
+        role: CgpJobMode::ProofOnly,
+        output_owner: "cpu-ap",
+        correctness_contract: "cpu-reference-first",
+        dispatch_contract: "guarded-proof-before-ownership",
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[allow(dead_code)]
 pub(crate) enum CgpJobState {
     Queued,

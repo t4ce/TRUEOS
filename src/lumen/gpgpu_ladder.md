@@ -552,13 +552,18 @@ Runtime shape:
 - `t6-small-live8-bf16-dot` is step 10.
 - `t6-1-live16-bf16-dot` is step 11 and widens the same one-row proof to
   live16.
-- `t6-2-partial-tile-stage` is step 12 and restages a small tile prefix with
-  multiple real matrix rows.
-- `t6-2-lane-indexed-live16-partial` is step 13 and writes one output slot per
-  SIMD8 lane/row for the staged prefix.
-- `t6-2-actual-work-partial-tiles` is step 14 and reports separate T5, T6,
-  T6.1, and T6.2 submitted, finished, and compare-ok tile counts.
-- The aggregate next marker is now `next=raise-row-count-or-live-k`.
+- `t6-2-row-block-plan` is step 12 and declares the software row-block
+  dispatch scheme for the tile.
+- `t6-2-row-block-stage` is step 13 and restages one chosen 8-row global block
+  into the artifact-visible row prefix.
+- `t6-2-row-block-live16-partial` is step 14 and writes one output slot per
+  SIMD8 lane/row for that staged block.
+- `t6-3-row-block-live32-partial` is step 15 and reuses the same row-block view
+  while widening the per-row prefix reduction to live32.
+- `t6-3-actual-work-row-blocks` is step 16 and reports separate T5, T6, T6.1,
+  T6.2, and T6.3 submitted, finished, compare-ok block counts.
+- The aggregate next marker is now
+  `next=promote-row-block-owner-or-scale-live-k`.
 
 Current T6 scale cap:
 
@@ -567,9 +572,10 @@ Current T6 scale cap:
 - Do not tune this cap as a throughput knob.  Revisit only when the kernel,
   CGP queueing model, row-count semantics, or retire logic changes.
 
-Next meaningful direction: raise either the row prefix count beyond 8 or the
-live-k reduction beyond 16.  Raising group count alone still does not turn the
-proof into full matrix-vector work.
+Next meaningful direction: promote the row-block owner so the block can become
+durable tile output, then continue scaling live-k toward the full 2048-row
+reduction.  Raising group count alone still does not turn the proof into full
+matrix-vector work.
 
 ## T6.1 Live-K Tier Naming
 
@@ -602,6 +608,39 @@ not trustworthy in this shell, so T6.2 moves row selection onto SIMD lanes.
 This is not full GEMM yet.  It proves that a tile can carry multiple staged
 rows and that multiple workers can produce distinct row partials inside the
 same output tile.
+
+## T6.2 Row-Block Dispatch
+
+The current row/block scheme deliberately does not depend on
+`gl_WorkGroupID.x`.  CGP treats the T6.2 shader as an 8-row lane block:
+
+- Software selects a global row block.
+- The selected rows are restaged into the tile-record row prefix.
+- The unchanged lane-indexed artifact computes rows `[0..7]` of that view.
+- Logs carry `row_block`, `global_row_start`, and `tile_row_start`, so the CPU
+  comparison knows which matrix rows the eight output words represent.
+
+The first cap is four row blocks per actual-work tile, so one tile can now
+prove up to 32 live16 row partials as four explicit 8-row dispatches.  This is
+the lowest-risk block owner while the legacy walker row payload is untrusted.
+
+## T6.3 Live32 Row-Block Tier
+
+`T6.3` is the lane-indexed live32 artifact:
+`gfx12-t6-3-lane-indexed-live32-packed-bf16-dot-hdc1-stateless-store-then-ts-eot`.
+
+It deliberately does not change the row-block dispatch scheme:
+
+- Software still restages one 8-row block into the tile-record row prefix.
+- `gl_LocalInvocationID.x` still selects row/output slot `[0..7]`.
+- The only shader math change is widening the packed-BF16 prefix from live16 to
+  live32.
+- T6.3 only runs after the T6.2 live16 compare for that row block succeeds.
+
+The oracle contract is recorded in
+`.codex_tmp/t6_3_lane_indexed_live32_packed_bf16_artifact_contract.md`.  This
+is still a partial matvec proof, not full GEMM: it proves 8 row outputs for a
+32-lane prefix, and the CPU/AP remains the output owner.
 
 ## Backend Selection Boundary
 
