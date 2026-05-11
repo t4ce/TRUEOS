@@ -730,9 +730,10 @@ fn generate_lumen_answer(
     let mut streamed = false;
     let generate_start = embassy_time_driver::now();
     let prefill_start_len = state.cache_len();
+    let _bf16_prompt_context = crate::lumen::burn_baby::enter_lumen_prompt_bf16_context();
     state.all_tokens.extend_from_slice(&prompt_tokens);
     crate::log!(
-        "lumen: generation start prompt_tokens={} context_tokens={} max_new_tokens={} max_seq_len={} prefill_mode=incremental-decode-ap note=first-token-is-prompt-ingest\n",
+        "lumen: generation start prompt_tokens={} context_tokens={} max_new_tokens={} max_seq_len={} prefill_mode=incremental-decode-ap cgp_backend=local-gpgpu-burn-baby cgp_role=proof-only note=first-token-is-prompt-ingest\n",
         prompt_tokens.len(),
         prefill_start_len,
         LUMEN_RUNTIME_MAX_NEW_TOKENS,
