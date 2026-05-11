@@ -1,0 +1,36 @@
+5f7c9fb34000-5f7c9fb36000 r--p 00000000 103:03 11020998                  /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/t6-3-lane-indexed-live32-trueos-arena-bf16-unpack/build/vk_compute_sentinel
+5f7c9fb36000-5f7c9fb39000 r-xp 00002000 103:03 11020998                  /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/t6-3-lane-indexed-live32-trueos-arena-bf16-unpack/build/vk_compute_sentinel
+5f7c9fb39000-5f7c9fb3b000 r--p 00005000 103:03 11020998                  /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/t6-3-lane-indexed-live32-trueos-arena-bf16-unpack/build/vk_compute_sentinel
+5f7c9fb3b000-5f7c9fb3c000 r--p 00006000 103:03 11020998                  /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/t6-3-lane-indexed-live32-trueos-arena-bf16-unpack/build/vk_compute_sentinel
+5f7c9fb3c000-5f7c9fb3d000 rw-p 00007000 103:03 11020998                  /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/t6-3-lane-indexed-live32-trueos-arena-bf16-unpack/build/vk_compute_sentinel
+5f7ca7084000-5f7ca70a5000 rw-p 00000000 00:00 0                          [heap]
+769f60400000-769f60428000 r--p 00000000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
+769f60428000-769f605c1000 r-xp 00028000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
+769f605c1000-769f60630000 r--p 001c1000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
+769f60630000-769f60634000 r--p 0022f000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
+769f60634000-769f60636000 rw-p 00233000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
+769f60636000-769f60643000 rw-p 00000000 00:00 0 
+769f60800000-769f60801000 r--p 00000000 103:03 11020997                  /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/t6-3-lane-indexed-live32-trueos-arena-bf16-unpack/build/libtrueos_ioctl_trace.so
+769f60801000-769f60804000 r-xp 00001000 103:03 11020997                  /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/t6-3-lane-indexed-live32-trueos-arena-bf16-unpack/build/libtrueos_ioctl_trace.so
+769f60804000-769f60806000 r--p 00004000 103:03 11020997                  /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/t6-3-lane-indexed-live32-trueos-arena-bf16-unpack/build/libtrueos_ioctl_trace.so
+769f60806000-769f60807000 r--p 00005000 103:03 11020997                  /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/t6-3-lane-indexed-live32-trueos-arena-bf16-unpack/build/libtrueos_ioctl_trace.so
+769f60807000-769f60808000 rw-p 00006000 103:03 11020997                  /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/t6-3-lane-indexed-live32-trueos-arena-bf16-unpack/build/libtrueos_ioctl_trace.so
+769f60808000-769f60a90000 rw-p 00000000 00:00 0 
+769f60a94000-769f60a96000 rw-p 00000000 00:00 0 
+769f60a96000-769f60a9c000 r--p 00000000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
+769f60a9c000-769f60aee000 r-xp 00006000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
+769f60aee000-769f60b25000 r--p 00058000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
+769f60b25000-769f60b26000 r--p 0008f000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
+769f60b26000-769f60b27000 rw-p 00090000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
+769f60b44000-769f60b46000 rw-p 00000000 00:00 0 
+769f60b46000-769f60b4a000 r--p 00000000 00:00 0                          [vvar]
+769f60b4a000-769f60b4c000 r--p 00000000 00:00 0                          [vvar_vclock]
+769f60b4c000-769f60b4e000 r-xp 00000000 00:00 0                          [vdso]
+769f60b4e000-769f60b4f000 r--p 00000000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+769f60b4f000-769f60b7d000 r-xp 00001000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+769f60b7d000-769f60b8b000 r--p 0002f000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+769f60b8b000-769f60b8d000 r--p 0003d000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+769f60b8d000-769f60b8e000 rw-p 0003f000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+769f60b8e000-769f60b8f000 rw-p 00000000 00:00 0 
+7fffa8b52000-7fffa8b74000 rw-p 00000000 00:00 0                          [stack]
+ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsyscall]

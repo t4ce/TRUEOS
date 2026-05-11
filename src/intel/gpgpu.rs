@@ -1271,6 +1271,19 @@ struct GpgpuOneRowMatvecProfile {
     surface_note: &'static str,
 }
 
+#[derive(Copy, Clone)]
+struct GpgpuPartialMatvecProfile {
+    program: GpgpuEuProgram,
+    live_k_dim: usize,
+    partial_rows: usize,
+    log_label: &'static str,
+    submit_label: &'static str,
+    surface_note: &'static str,
+    success_reason: &'static str,
+    success_next: &'static str,
+    failure_next: &'static str,
+}
+
 // Legacy diagnostic dataport probe.  This hand-written EU blob is not the final
 // Burn/matmul kernel path; it is only a bounded oscilloscope for the current
 // phase: if the dispatched EU thread can write shared RAM, then we know it
@@ -1429,6 +1442,20 @@ fn gpgpu_t62_partial_matvec_program() -> GpgpuEuProgram {
     }
 }
 
+fn gpgpu_t63_partial_matvec_program() -> GpgpuEuProgram {
+    let artifact =
+        trueos_eu::gfx12::T63_LANE_INDEXED_LIVE32_TRUEOS_ARENA_BF16_DOT_HDC1_STATELESS_STORE_THEN_TS_EOT;
+    GpgpuEuProgram {
+        name: artifact.name,
+        kind: artifact.kind,
+        words: artifact.words,
+        expects_store: artifact.expects_store,
+        expected_store_value: 0,
+        store_send_dword: Some(trueos_eu::gfx12::T63_LANE_INDEXED_LIVE32_STORE_SEND_DWORD),
+        visible_seed_dword: None,
+    }
+}
+
 fn gpgpu_t5_one_row_matvec_profile() -> GpgpuOneRowMatvecProfile {
     GpgpuOneRowMatvecProfile {
         program: gpgpu_t5_one_row_matvec_program(),
@@ -1480,6 +1507,34 @@ fn gpgpu_t61_one_row_matvec_profile() -> GpgpuOneRowMatvecProfile {
         success_reason: "t6-1-live16-written",
         success_reason_no_ts: "t6-1-live16-written-no-ts-delta",
         surface_note: "bind-send-bti-to-t6-1-trueos-arena-base",
+    }
+}
+
+fn gpgpu_t62_partial_matvec_profile() -> GpgpuPartialMatvecProfile {
+    GpgpuPartialMatvecProfile {
+        program: gpgpu_t62_partial_matvec_program(),
+        live_k_dim: trueos_eu::gfx12::T62_ROW_INDEXED_LIVE_K,
+        partial_rows: trueos_eu::gfx12::T62_ROW_INDEXED_PARTIAL_ROWS,
+        log_label: "t6-2-lane-indexed-live16-partial",
+        submit_label: "gpgpu-t6-2-lane-indexed-live16",
+        surface_note: "bind-send-bti-to-t6-2-lane-indexed-arena-base",
+        success_reason: "t6-2-lane-indexed-live16-written",
+        success_next: "raise-row-count-or-live-k",
+        failure_next: "fix-t6-2-lane-indexed-live16",
+    }
+}
+
+fn gpgpu_t63_partial_matvec_profile() -> GpgpuPartialMatvecProfile {
+    GpgpuPartialMatvecProfile {
+        program: gpgpu_t63_partial_matvec_program(),
+        live_k_dim: trueos_eu::gfx12::T63_LANE_INDEXED_LIVE_K,
+        partial_rows: trueos_eu::gfx12::T63_LANE_INDEXED_PARTIAL_ROWS,
+        log_label: "t6-3-lane-indexed-live32-partial",
+        submit_label: "gpgpu-t6-3-lane-indexed-live32",
+        surface_note: "bind-send-bti-to-t6-3-lane-indexed-arena-base",
+        success_reason: "t6-3-lane-indexed-live32-written",
+        success_next: "promote-row-block-owner-or-scale-live-k",
+        failure_next: "fix-t6-3-lane-indexed-live32",
     }
 }
 
@@ -2935,9 +2990,45 @@ pub(crate) fn submit_gpgpu_t62_partial_matvec_probe(
     row_count: usize,
     live_k_dim: usize,
 ) -> crate::intel::GpgpuT62PartialMatvecProof {
-    let program = gpgpu_t62_partial_matvec_program();
+    submit_gpgpu_partial_matvec_probe_for(
+        gpgpu_t62_partial_matvec_profile(),
+        output_gpu,
+        output_bytes,
+        expected_words,
+        row_count,
+        live_k_dim,
+    )
+}
+
+pub(crate) fn submit_gpgpu_t63_partial_matvec_probe(
+    output_gpu: u64,
+    output_bytes: usize,
+    expected_words: [u32; 8],
+    row_count: usize,
+    live_k_dim: usize,
+) -> crate::intel::GpgpuT62PartialMatvecProof {
+    submit_gpgpu_partial_matvec_probe_for(
+        gpgpu_t63_partial_matvec_profile(),
+        output_gpu,
+        output_bytes,
+        expected_words,
+        row_count,
+        live_k_dim,
+    )
+}
+
+fn submit_gpgpu_partial_matvec_probe_for(
+    profile: GpgpuPartialMatvecProfile,
+    output_gpu: u64,
+    output_bytes: usize,
+    expected_words: [u32; 8],
+    row_count: usize,
+    live_k_dim: usize,
+) -> crate::intel::GpgpuT62PartialMatvecProof {
+    let program = profile.program;
     let Some(dev) = crate::intel::claimed_device() else {
         return gpgpu_t62_partial_matvec_failure(
+            profile,
             "no-device",
             program,
             output_gpu,
@@ -2948,6 +3039,7 @@ pub(crate) fn submit_gpgpu_t62_partial_matvec_probe(
     };
     let Some(warm) = warm_state() else {
         return gpgpu_t62_partial_matvec_failure(
+            profile,
             "no-warm-state",
             program,
             output_gpu,
@@ -2958,6 +3050,7 @@ pub(crate) fn submit_gpgpu_t62_partial_matvec_probe(
     };
     if warm.gpgpu_arena_virt.is_null() || warm.gpgpu_arena_len == 0 {
         return gpgpu_t62_partial_matvec_failure(
+            profile,
             "no-arena",
             program,
             output_gpu,
@@ -2966,11 +3059,9 @@ pub(crate) fn submit_gpgpu_t62_partial_matvec_probe(
             live_k_dim,
         );
     }
-    if row_count == 0
-        || row_count > trueos_eu::gfx12::T62_ROW_INDEXED_PARTIAL_ROWS
-        || live_k_dim != trueos_eu::gfx12::T62_ROW_INDEXED_LIVE_K
-    {
+    if row_count == 0 || row_count > profile.partial_rows || live_k_dim != profile.live_k_dim {
         return gpgpu_t62_partial_matvec_failure(
+            profile,
             "bad-shape",
             program,
             output_gpu,
@@ -2981,6 +3072,7 @@ pub(crate) fn submit_gpgpu_t62_partial_matvec_probe(
     }
     if output_bytes < row_count.saturating_mul(core::mem::size_of::<u32>()) {
         return gpgpu_t62_partial_matvec_failure(
+            profile,
             "bad-output-bytes",
             program,
             output_gpu,
@@ -2991,6 +3083,7 @@ pub(crate) fn submit_gpgpu_t62_partial_matvec_probe(
     }
     if output_gpu < GPU_VA_GPGPU_TILE_ARENA_BASE {
         return gpgpu_t62_partial_matvec_failure(
+            profile,
             "output-gpu-before-arena",
             program,
             output_gpu,
@@ -3002,6 +3095,7 @@ pub(crate) fn submit_gpgpu_t62_partial_matvec_probe(
     let output_offset = (output_gpu - GPU_VA_GPGPU_TILE_ARENA_BASE) as usize;
     let Some(output_end) = output_offset.checked_add(output_bytes) else {
         return gpgpu_t62_partial_matvec_failure(
+            profile,
             "output-range-overflow",
             program,
             output_gpu,
@@ -3012,6 +3106,7 @@ pub(crate) fn submit_gpgpu_t62_partial_matvec_probe(
     };
     if output_end > warm.gpgpu_arena_len {
         return gpgpu_t62_partial_matvec_failure(
+            profile,
             "output-range-outside-arena",
             program,
             output_gpu,
@@ -3022,6 +3117,7 @@ pub(crate) fn submit_gpgpu_t62_partial_matvec_probe(
     }
     let Some(tile_base_offset) = output_offset.checked_sub(GPGPU_TILE_OUTPUT_OFFSET_BYTES) else {
         return gpgpu_t62_partial_matvec_failure(
+            profile,
             "output-before-tile-output-slot",
             program,
             output_gpu,
@@ -3032,6 +3128,7 @@ pub(crate) fn submit_gpgpu_t62_partial_matvec_probe(
     };
     if tile_base_offset % GPGPU_TILE_RECORD_BYTES != 0 {
         return gpgpu_t62_partial_matvec_failure(
+            profile,
             "output-gpu-not-tile-record-slot",
             program,
             output_gpu,
@@ -3044,6 +3141,7 @@ pub(crate) fn submit_gpgpu_t62_partial_matvec_probe(
     let surface_bytes = GPGPU_TILE_RECORD_BYTES;
     if output_gpu >> 32 != 0 || surface_gpu_base >> 32 != 0 {
         return gpgpu_t62_partial_matvec_failure(
+            profile,
             "tile-gpu-high32-unsupported",
             program,
             output_gpu,
@@ -3054,6 +3152,7 @@ pub(crate) fn submit_gpgpu_t62_partial_matvec_probe(
     }
     if !forcewake_render_acquire(warm) {
         return gpgpu_t62_partial_matvec_failure(
+            profile,
             "forcewake",
             program,
             output_gpu,
@@ -3064,6 +3163,7 @@ pub(crate) fn submit_gpgpu_t62_partial_matvec_probe(
     }
     if !ensure_gpgpu_warm_buffers_mapped(dev, warm) || !ensure_gpgpu_tile_arena_mapped(dev, warm) {
         return gpgpu_t62_partial_matvec_failure(
+            profile,
             "ppgtt-map",
             program,
             output_gpu,
@@ -3092,6 +3192,7 @@ pub(crate) fn submit_gpgpu_t62_partial_matvec_probe(
         upload_and_verify_gpu_program_at(warm, GPGPU_EU_KERNEL_OFFSET_BYTES, program.words);
     if !program_uploaded {
         return gpgpu_t62_partial_matvec_failure(
+            profile,
             "program-upload",
             program,
             output_gpu,
@@ -3104,7 +3205,7 @@ pub(crate) fn submit_gpgpu_t62_partial_matvec_probe(
         warm,
         surface_gpu_base,
         surface_bytes,
-        "bind-send-bti-to-t6-2-lane-indexed-arena-base",
+        profile.surface_note,
     );
     let batch_dwords = warm.batch_len / core::mem::size_of::<u32>();
     let batch =
@@ -3120,6 +3221,7 @@ pub(crate) fn submit_gpgpu_t62_partial_matvec_probe(
         Ok(bytes) => bytes,
         Err(reason) => {
             return gpgpu_t62_partial_matvec_failure(
+                profile,
                 reason,
                 program,
                 output_gpu,
@@ -3137,7 +3239,7 @@ pub(crate) fn submit_gpgpu_t62_partial_matvec_probe(
         warm,
         RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
         RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD,
-        "gpgpu-t6-2-lane-indexed-live16",
+        profile.submit_label,
     );
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
     crate::intel::dma_flush(unsafe { warm.gpgpu_arena_virt.add(tile_base_offset) }, surface_bytes);
@@ -3162,7 +3264,7 @@ pub(crate) fn submit_gpgpu_t62_partial_matvec_probe(
     let compare_ok = compare_mask == expected_mask;
     let readback_ok = finished && marker_ok && lane_count_matches && compare_ok;
     let reason = if readback_ok {
-        "t6-2-lane-indexed-live16-written"
+        profile.success_reason
     } else if !finished {
         "submit-not-finished"
     } else if !marker_ok {
@@ -3173,7 +3275,8 @@ pub(crate) fn submit_gpgpu_t62_partial_matvec_probe(
         "partial-output-mismatch"
     };
     crate::log!(
-        "intel/gpgpu: t6-2-lane-indexed-live16-partial submitted=1 finished={} readback_ok={} compare_ok={} reason={} program_source={} groups={} expected_lane_dispatch={} observed_lane_dispatch={} output_gpu=0x{:X} row_count={} live_k_dim={} compare_mask=0x{:08X} expected_mask=0x{:08X} output_words=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] expected_words=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] finish_marker=0x{:08X} finish_expected=0x{:08X} batch_bytes=0x{:X} output_owner=cpu-ap next=raise-row-count-or-live-k does_not_prove=full_model_matvec\n",
+        "intel/gpgpu: {} submitted=1 finished={} readback_ok={} compare_ok={} reason={} program_source={} groups={} expected_lane_dispatch={} observed_lane_dispatch={} output_gpu=0x{:X} row_count={} live_k_dim={} compare_mask=0x{:08X} expected_mask=0x{:08X} output_words=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] expected_words=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] finish_marker=0x{:08X} finish_expected=0x{:08X} batch_bytes=0x{:X} output_owner=cpu-ap next={} does_not_prove=full_model_matvec\n",
+        profile.log_label,
         finished as u8,
         readback_ok as u8,
         compare_ok as u8,
@@ -3206,9 +3309,10 @@ pub(crate) fn submit_gpgpu_t62_partial_matvec_probe(
         finish_marker,
         RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
         batch_bytes,
+        profile.success_next,
     );
     if !finished {
-        recover_render_engine_after_nonretired_submit(dev, warm, "gpgpu-t6-2-lane-indexed-live16");
+        recover_render_engine_after_nonretired_submit(dev, warm, profile.submit_label);
     }
     crate::intel::GpgpuT62PartialMatvecProof {
         submitted: true,
@@ -3925,6 +4029,7 @@ fn gpgpu_t5_one_row_matvec_failure(
 }
 
 fn gpgpu_t62_partial_matvec_failure(
+    profile: GpgpuPartialMatvecProfile,
     reason: &'static str,
     program: GpgpuEuProgram,
     output_gpu: u64,
@@ -3933,7 +4038,8 @@ fn gpgpu_t62_partial_matvec_failure(
     live_k_dim: usize,
 ) -> crate::intel::GpgpuT62PartialMatvecProof {
     crate::log!(
-        "intel/gpgpu: t6-2-lane-indexed-live16-partial submitted=0 finished=0 readback_ok=0 compare_ok=0 reason={} program_source={} groups={} expected_lane_dispatch=0 observed_lane_dispatch=0 output_gpu=0x{:X} row_count={} live_k_dim={} compare_mask=0x00000000 expected_mask=0x00000000 output_words=[0x00000000,0x00000000,0x00000000,0x00000000,0x00000000,0x00000000,0x00000000,0x00000000] expected_words=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] finish_marker=0x00000000 finish_expected=0x{:08X} batch_bytes=0x0 output_owner=cpu-ap next=fix-t6-2-lane-indexed-live16 does_not_prove=full_model_matvec\n",
+        "intel/gpgpu: {} submitted=0 finished=0 readback_ok=0 compare_ok=0 reason={} program_source={} groups={} expected_lane_dispatch=0 observed_lane_dispatch=0 output_gpu=0x{:X} row_count={} live_k_dim={} compare_mask=0x00000000 expected_mask=0x00000000 output_words=[0x00000000,0x00000000,0x00000000,0x00000000,0x00000000,0x00000000,0x00000000,0x00000000] expected_words=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] finish_marker=0x00000000 finish_expected=0x{:08X} batch_bytes=0x0 output_owner=cpu-ap next={} does_not_prove=full_model_matvec\n",
+        profile.log_label,
         reason,
         program.name,
         row_count,
@@ -3949,6 +4055,7 @@ fn gpgpu_t62_partial_matvec_failure(
         expected_words[6],
         expected_words[7],
         RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        profile.failure_next,
     );
     crate::intel::GpgpuT62PartialMatvecProof {
         submitted: false,
