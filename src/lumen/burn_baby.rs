@@ -18,6 +18,8 @@ static LOGGED_SERVICE_PROTECTED_LANE: AtomicBool = AtomicBool::new(false);
 static LOGGED_BF16_SLOT_SPREAD: AtomicBool = AtomicBool::new(false);
 static LOGGED_BF16_ARGMAX_BRIDGE: AtomicBool = AtomicBool::new(false);
 static LOGGED_BF16_DUAL_SILU_BRIDGE: AtomicBool = AtomicBool::new(false);
+static LOGGED_BF16_CGP_PROMPT_PATH: AtomicBool = AtomicBool::new(false);
+static LUMEN_PROMPT_BF16_DEPTH: AtomicUsize = AtomicUsize::new(0);
 static SERVICE_PROTECTED_SLOTS: AtomicU64 = AtomicU64::new(0);
 #[cfg(target_arch = "x86_64")]
 static LOGGED_BF16_SIMD_PROBE: AtomicBool = AtomicBool::new(false);
@@ -46,6 +48,32 @@ const BF16_SIMD_LANE_SSE2: u8 = 2;
 pub enum ComputeError {
     BadShape,
     EmptyChunk,
+}
+
+pub(crate) struct LumenPromptBf16Context {
+    active: bool,
+}
+
+pub(crate) fn enter_lumen_prompt_bf16_context() -> LumenPromptBf16Context {
+    LUMEN_PROMPT_BF16_DEPTH.fetch_add(1, Ordering::AcqRel);
+    LumenPromptBf16Context { active: true }
+}
+
+impl Drop for LumenPromptBf16Context {
+    fn drop(&mut self) {
+        if self.active {
+            LUMEN_PROMPT_BF16_DEPTH.fetch_sub(1, Ordering::AcqRel);
+            self.active = false;
+        }
+    }
+}
+
+fn bf16_matvec_source_label() -> &'static str {
+    if LUMEN_PROMPT_BF16_DEPTH.load(Ordering::Acquire) != 0 {
+        "lumen-prompt"
+    } else {
+        "runtime"
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -280,8 +308,27 @@ pub fn matvec_rowmajor_bf16(
         matvec_rows_bf16(x, w_rowmajor_bf16, k_dim, out, 0, n_rows);
         return Ok(());
     }
-    let local_gpu_proof =
-        crate::lumen::gpu_shadow::observe_bf16_matvec_call(n_rows, k_dim, chunk_rows, chunks);
+    let source_label = bf16_matvec_source_label();
+    if source_label == "lumen-prompt" && !LOGGED_BF16_CGP_PROMPT_PATH.swap(true, Ordering::AcqRel) {
+        let backend = crate::lumen::cgp::gpu_burn_baby_backend();
+        crate::log!(
+            "burn-baby: cgp prompt path source={} backend={} label={} role={} output_owner={} contract={} dispatch_contract={} action=guarded-proof-before-cpu-owner\n",
+            source_label,
+            backend.name,
+            backend.label,
+            backend.role.as_str(),
+            backend.output_owner,
+            backend.correctness_contract,
+            backend.dispatch_contract,
+        );
+    }
+    let local_gpu_proof = crate::lumen::gpu_shadow::observe_bf16_matvec_call(
+        source_label,
+        n_rows,
+        k_dim,
+        chunk_rows,
+        chunks,
+    );
     crate::lumen::burn_baba::share_matvec_rowmajor_bf16(n_rows, k_dim, chunk_rows);
     crate::lumen::gpu_shadow::observe_live_bf16_matvec_probe(
         x,

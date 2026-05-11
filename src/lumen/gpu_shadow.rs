@@ -2,9 +2,11 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 static SEEN_BF16_MATVECS: AtomicU64 = AtomicU64::new(0);
 static LOGGED_SHADOW_PLAN: AtomicBool = AtomicBool::new(false);
+static LOGGED_PROMPT_SHADOW_PLAN: AtomicBool = AtomicBool::new(false);
 static LOGGED_STATIC_TILE_PROOF: AtomicBool = AtomicBool::new(false);
 static LOGGED_T4_WAITING: AtomicBool = AtomicBool::new(false);
 static LOGGED_T4_LIVE_ROW_PROBE: AtomicBool = AtomicBool::new(false);
+static LOGGED_PROMPT_LIVE_ROW_PROBE: AtomicBool = AtomicBool::new(false);
 
 // T6.2 is an 8-lane artifact.  Until the walker provides a trusted row-block
 // payload, CGP drives row blocks by staging one 8-row view at a time.
@@ -12,6 +14,7 @@ const T62_ROW_BLOCK_DISPATCH_BLOCK_CAP: usize = 4;
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct LocalGpuProofPlan {
+    pub(crate) source_label: &'static str,
     pub(crate) call_index: u64,
     pub(crate) candidate: bool,
     pub(crate) static_tile_proven: bool,
@@ -22,6 +25,7 @@ pub(crate) struct LocalGpuProofPlan {
 }
 
 pub(crate) fn observe_bf16_matvec_call(
+    source_label: &'static str,
     n_rows: usize,
     k_dim: usize,
     chunk_rows: usize,
@@ -35,6 +39,7 @@ pub(crate) fn observe_bf16_matvec_call(
         gpu.eu_walker_retired && gpu.result_c_changed_by_eu && gpu.eu_dispatch_delta != 0;
     let candidate = shape_candidate && static_tile_proven && gpu.enough_for_shape;
     let plan = LocalGpuProofPlan {
+        source_label,
         call_index,
         candidate,
         static_tile_proven,
@@ -44,9 +49,13 @@ pub(crate) fn observe_bf16_matvec_call(
         program_name: gpu.eu_program_name,
     };
 
-    if !LOGGED_SHADOW_PLAN.swap(true, Ordering::AcqRel) {
+    let log_global = !LOGGED_SHADOW_PLAN.swap(true, Ordering::AcqRel);
+    let log_prompt =
+        source_label == "lumen-prompt" && !LOGGED_PROMPT_SHADOW_PLAN.swap(true, Ordering::AcqRel);
+    if log_global || log_prompt {
         crate::log!(
-            "lumen-gpu-proof: director-step step=2 backend=local-gpu mode=proof-only call={} rows={} k_dim={} chunk_rows={} chunks={} min_rows={} min_k_dim={} arena_ready={} shape_candidate={} candidate={} static_tile_proven={} program={} lane_dispatch={} expected=0x{:08X} observed=0x{:08X} output_owner=cpu-ap action=no-output-ownership next=one-live-row-proof-compare\n",
+            "lumen-gpu-proof: director-step step=2 backend=local-gpu source={} mode=proof-only call={} rows={} k_dim={} chunk_rows={} chunks={} min_rows={} min_k_dim={} arena_ready={} shape_candidate={} candidate={} static_tile_proven={} program={} lane_dispatch={} expected=0x{:08X} observed=0x{:08X} output_owner=cpu-ap action=no-output-ownership next=one-live-row-proof-compare\n",
+            source_label,
             call_index,
             n_rows,
             k_dim,
@@ -90,7 +99,8 @@ pub(crate) fn observe_live_bf16_matvec_probe(
     if !plan.static_tile_proven {
         if !LOGGED_T4_WAITING.swap(true, Ordering::AcqRel) {
             crate::log!(
-                "lumen-gpu-proof: director-step step=4 backend=local-gpu mode=t4-live-row-probe ready=0 reason=static-gpu-artifact-not-proven-yet call={} program={} next=wait-for-static-dp4a-hdc-store-eot\n",
+                "lumen-gpu-proof: director-step step=4 backend=local-gpu source={} mode=t4-live-row-probe ready=0 reason=static-gpu-artifact-not-proven-yet call={} program={} next=wait-for-static-dp4a-hdc-store-eot\n",
+                plan.source_label,
                 plan.call_index,
                 plan.program_name
             );
@@ -98,7 +108,10 @@ pub(crate) fn observe_live_bf16_matvec_probe(
         return;
     }
 
-    if LOGGED_T4_LIVE_ROW_PROBE.swap(true, Ordering::AcqRel) {
+    let log_global = !LOGGED_T4_LIVE_ROW_PROBE.swap(true, Ordering::AcqRel);
+    let log_prompt = plan.source_label == "lumen-prompt"
+        && !LOGGED_PROMPT_LIVE_ROW_PROBE.swap(true, Ordering::AcqRel);
+    if !log_global && !log_prompt {
         return;
     }
 
@@ -107,7 +120,8 @@ pub(crate) fn observe_live_bf16_matvec_probe(
         .and_then(|values| values.checked_mul(2))
     else {
         crate::log!(
-            "lumen-gpu-proof: director-step step=4 backend=local-gpu mode=t4-live-row-probe ready=0 reason=shape-overflow rows={} k_dim={}\n",
+            "lumen-gpu-proof: director-step step=4 backend=local-gpu source={} mode=t4-live-row-probe ready=0 reason=shape-overflow rows={} k_dim={}\n",
+            plan.source_label,
             n_rows,
             k_dim
         );
@@ -115,7 +129,8 @@ pub(crate) fn observe_live_bf16_matvec_probe(
     };
     if n_rows == 0 || k_dim == 0 || x.len() < k_dim || w_rowmajor_bf16.len() < expected_w_len {
         crate::log!(
-            "lumen-gpu-proof: director-step step=4 backend=local-gpu mode=t4-live-row-probe ready=0 reason=bad-shape rows={} k_dim={} x_len={} w_len={} expected_w_len={}\n",
+            "lumen-gpu-proof: director-step step=4 backend=local-gpu source={} mode=t4-live-row-probe ready=0 reason=bad-shape rows={} k_dim={} x_len={} w_len={} expected_w_len={}\n",
+            plan.source_label,
             n_rows,
             k_dim,
             x.len(),
@@ -145,7 +160,8 @@ pub(crate) fn observe_live_bf16_matvec_probe(
     let matrix_bytes = manifest.map(|entry| entry.byte_len).unwrap_or(0);
 
     crate::log!(
-        "lumen-gpu-proof: director-step step=4 backend=local-gpu mode=t4-live-row-probe ready=1 call={} rows={} k_dim={} chunk_rows={} chunks={} manifest={} matrix=0x{:016X} matrix_epoch={} matrix_name_hash=0x{:016X} matrix_name_len={} matrix_rows={} matrix_k_dim={} matrix_ptr=0x{:X} matrix_bytes={} matrix_access=resident-read-only row=0 row_ptr=0x{:X} x_ptr=0x{:X} x_bytes={} x_checksum=0x{:016X} row_checksum=0x{:016X} static4_weights=01020304 static4_expected_bits=0x{:08X} row0_cpu_expected_bits=0x{:08X} gpu_submission=0 output_owner=cpu-ap next=stage-manifest-row-to-gpgpu-arena does_not_prove=gpu_live_load_or_model_matvec\n",
+        "lumen-gpu-proof: director-step step=4 backend=local-gpu source={} mode=t4-live-row-probe ready=1 call={} rows={} k_dim={} chunk_rows={} chunks={} manifest={} matrix=0x{:016X} matrix_epoch={} matrix_name_hash=0x{:016X} matrix_name_len={} matrix_rows={} matrix_k_dim={} matrix_ptr=0x{:X} matrix_bytes={} matrix_access=resident-read-only row=0 row_ptr=0x{:X} x_ptr=0x{:X} x_bytes={} x_checksum=0x{:016X} row_checksum=0x{:016X} static4_weights=01020304 static4_expected_bits=0x{:08X} row0_cpu_expected_bits=0x{:08X} gpu_submission=0 output_owner=cpu-ap next=stage-manifest-row-to-gpgpu-arena does_not_prove=gpu_live_load_or_model_matvec\n",
+        plan.source_label,
         plan.call_index,
         n_rows,
         k_dim,
@@ -667,7 +683,8 @@ pub(crate) fn observe_live_bf16_matvec_probe(
     }
 
     crate::log!(
-        "lumen-gpu-proof: director-step step=16 backend=local-gpu mode=t6-3-actual-work-row-blocks armed_tiles={} staged_tiles={} t5_submitted_tiles={} t5_finished_tiles={} t5_compare_ok_tiles={} t6_submitted_tiles={} t6_finished_tiles={} t6_compare_ok_tiles={} t61_submitted_tiles={} t61_finished_tiles={} t61_compare_ok_tiles={} t62_staged_blocks={} t62_submitted_blocks={} t62_finished_blocks={} t62_compare_ok_blocks={} t62_compared_rows={} t63_submitted_blocks={} t63_finished_blocks={} t63_compare_ok_blocks={} t63_compared_rows={} first_row=0 last_row={} row_block_rows={} row_block_cap={} partial_rows={} tile_rows={} k_dim={} t5_artifact=gfx12-t5-small-live4-packed-bf16-dot t6_artifact=gfx12-t6-small-live8-packed-bf16-dot t61_artifact=gfx12-t6-1-live16-packed-bf16-dot t62_artifact=gfx12-t6-2-lane-indexed-live16-packed-bf16-dot t63_artifact=gfx12-t6-3-accum16-hi-live32-packed-bf16-dot artifact_addressing=row-block-restaged-tile-record-prefix proof_role=actual-work-row-block-frontier last_gpu_value=0x{:08X} last_cpu_expected_bits=0x{:08X} last_lane_dispatch={} output_owner=cpu-ap action=hold-scale next=promote-row-block-owner-or-scale-live-k does_not_prove=full_model_matvec\n",
+        "lumen-gpu-proof: director-step step=16 backend=local-gpu source={} mode=t6-3-actual-work-row-blocks armed_tiles={} staged_tiles={} t5_submitted_tiles={} t5_finished_tiles={} t5_compare_ok_tiles={} t6_submitted_tiles={} t6_finished_tiles={} t6_compare_ok_tiles={} t61_submitted_tiles={} t61_finished_tiles={} t61_compare_ok_tiles={} t62_staged_blocks={} t62_submitted_blocks={} t62_finished_blocks={} t62_compare_ok_blocks={} t62_compared_rows={} t63_submitted_blocks={} t63_finished_blocks={} t63_compare_ok_blocks={} t63_compared_rows={} first_row=0 last_row={} row_block_rows={} row_block_cap={} partial_rows={} tile_rows={} k_dim={} t5_artifact=gfx12-t5-small-live4-packed-bf16-dot t6_artifact=gfx12-t6-small-live8-packed-bf16-dot t61_artifact=gfx12-t6-1-live16-packed-bf16-dot t62_artifact=gfx12-t6-2-lane-indexed-live16-packed-bf16-dot t63_artifact=gfx12-t6-3-accum16-hi-live32-packed-bf16-dot artifact_addressing=row-block-restaged-tile-record-prefix proof_role=actual-work-row-block-frontier last_gpu_value=0x{:08X} last_cpu_expected_bits=0x{:08X} last_lane_dispatch={} output_owner=cpu-ap action=hold-scale next=promote-row-block-owner-or-scale-live-k does_not_prove=full_model_matvec\n",
+        plan.source_label,
         armed_tiles,
         staged_tiles,
         t5_submitted_tiles,
