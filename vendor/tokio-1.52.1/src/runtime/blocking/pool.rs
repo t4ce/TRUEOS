@@ -594,6 +594,9 @@ impl Inner {
             while !shared.shutdown {
                 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
                 {
+                    crate::platform::note_semantic_gap(
+                        crate::platform::SEMANTIC_GAP_BLOCKING_POOL_POLL,
+                    );
                     drop(shared);
                     crate::platform::sleep_ms(1);
                     shared = self.shared.lock();
@@ -617,35 +620,36 @@ impl Inner {
 
                 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
                 {
-                let lock_result = self.condvar.wait_timeout(shared, self.keep_alive).unwrap();
+                    let lock_result = self.condvar.wait_timeout(shared, self.keep_alive).unwrap();
 
-                shared = lock_result.0;
-                let timeout_result = lock_result.1;
+                    shared = lock_result.0;
+                    let timeout_result = lock_result.1;
 
-                if shared.num_notify != 0 {
-                    // We have received a legitimate wakeup,
-                    // acknowledge it by decrementing the counter
-                    // and transition to the BUSY state.
-                    shared.num_notify -= 1;
-                    // since this is a legitimate wakeup,
-                    // the `Spawner::spawn_task` has already decremented `num_idle_threads`.
-                    is_counted_idle = false;
-                    break;
-                }
+                    if shared.num_notify != 0 {
+                        // We have received a legitimate wakeup,
+                        // acknowledge it by decrementing the counter
+                        // and transition to the BUSY state.
+                        shared.num_notify -= 1;
+                        // since this is a legitimate wakeup,
+                        // the `Spawner::spawn_task` has already decremented `num_idle_threads`.
+                        is_counted_idle = false;
+                        break;
+                    }
 
-                // Even if the condvar "timed out", if the pool is entering the
-                // shutdown phase, we want to perform the cleanup logic.
-                if !shared.shutdown && timeout_result.timed_out() {
-                    // We'll join the prior timed-out thread's JoinHandle after dropping the lock.
-                    // This isn't done when shutting down, because the thread calling shutdown will
-                    // handle joining everything.
-                    let my_handle = shared.worker_threads.remove(&worker_thread_id);
-                    join_on_thread = std::mem::replace(&mut shared.last_exiting_thread, my_handle);
+                    // Even if the condvar "timed out", if the pool is entering the
+                    // shutdown phase, we want to perform the cleanup logic.
+                    if !shared.shutdown && timeout_result.timed_out() {
+                        // We'll join the prior timed-out thread's JoinHandle after dropping the lock.
+                        // This isn't done when shutting down, because the thread calling shutdown will
+                        // handle joining everything.
+                        let my_handle = shared.worker_threads.remove(&worker_thread_id);
+                        join_on_thread =
+                            std::mem::replace(&mut shared.last_exiting_thread, my_handle);
 
-                    break 'main;
-                }
+                        break 'main;
+                    }
 
-                // Spurious wakeup detected, go back to sleep.
+                    // Spurious wakeup detected, go back to sleep.
                 }
             }
 

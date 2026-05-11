@@ -1,4 +1,10 @@
 //! Rust ABI hooks shared by TRUEOS-aware vendored crates.
+//!
+//! This module is the common Platform/Core contract for vendored Rust crates.
+//! It intentionally names OS-shaped services in Rust terms instead of exposing
+//! POSIX symbols. `core` supplies atomics and memory rules; TRUEOS supplies the
+//! execution environment that `std` would normally assume: time, topology,
+//! sleep/yield, and eventually wait-aware synchronization.
 
 #[unsafe(no_mangle)]
 pub extern "Rust" fn trueos_platform_monotonic_nanos() -> u64 {
