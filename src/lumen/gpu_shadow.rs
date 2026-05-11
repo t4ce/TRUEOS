@@ -571,7 +571,7 @@ pub(crate) fn observe_live_bf16_matvec_probe(
             last_dispatch = t62.dispatch_delta;
             last_partial_rows = t62_compared_rows;
             crate::log!(
-                "lumen-gpu-proof: director-step step=14 backend=local-gpu mode=t6-2-row-block-live16-partial submitted={} finished={} readback_ok={} compare_ok={} reason={} program={} tile_index={} armed_tiles={} row_block={} global_row_start={} tile_row_start={} row_count={} output_gpu=0x{:X} compare_mask=0x{:08X} expected_mask=0x{:08X} first_gpu=0x{:08X} first_cpu_expected=0x{:08X} last_gpu=0x{:08X} last_cpu_expected=0x{:08X} lane_dispatch={} live_k_dim={} finish_marker=0x{:08X} finish_expected=0x{:08X} batch_bytes=0x{:X} output_owner=cpu-ap action=hold-scale next=t6-3-lane-indexed-live32-partial does_not_prove=full_model_matvec\n",
+                "lumen-gpu-proof: director-step step=14 backend=local-gpu mode=t6-2-row-block-live16-partial submitted={} finished={} readback_ok={} compare_ok={} reason={} program={} tile_index={} armed_tiles={} row_block={} global_row_start={} tile_row_start={} row_count={} output_gpu=0x{:X} compare_mask=0x{:08X} expected_mask=0x{:08X} first_gpu=0x{:08X} first_cpu_expected=0x{:08X} last_gpu=0x{:08X} last_cpu_expected=0x{:08X} lane_dispatch={} live_k_dim={} finish_marker=0x{:08X} finish_expected=0x{:08X} batch_bytes=0x{:X} output_owner=cpu-ap action=hold-scale next=t6-3-accum16-hi-live32-partial does_not_prove=full_model_matvec\n",
                 t62.submitted as u8,
                 t62.finished as u8,
                 t62.readback_ok as u8,
@@ -601,7 +601,7 @@ pub(crate) fn observe_live_bf16_matvec_probe(
                 continue;
             }
 
-            let t63_live_k_dim = k_dim.min(trueos_eu::gfx12::T63_LANE_INDEXED_LIVE_K);
+            let t63_live_k_dim = k_dim.min(trueos_eu::gfx12::T63_ACCUM16_HI_LIVE32_LIVE_K);
             let mut t63_expected_words = [0u32; 8];
             for local_row in 0..block_row_count {
                 let row_start = local_row.saturating_mul(k_dim).saturating_mul(2);
@@ -609,7 +609,7 @@ pub(crate) fn observe_live_bf16_matvec_probe(
                 t63_expected_words[local_row] =
                     bf16_row_dot_prefix(x, &t62_rows[row_start..row_end], t63_live_k_dim).to_bits();
             }
-            let t63 = crate::intel::submit_gpgpu_t63_partial_matvec_probe(
+            let t63 = crate::intel::submit_gpgpu_t63_accum16_hi_live32_partial_matvec_probe(
                 stage.output_gpu,
                 stage.output_bytes,
                 t63_expected_words,
@@ -626,7 +626,7 @@ pub(crate) fn observe_live_bf16_matvec_probe(
             last_dispatch = t63.dispatch_delta;
             last_partial_rows = t63_compared_rows;
             crate::log!(
-                "lumen-gpu-proof: director-step step=15 backend=local-gpu mode=t6-3-row-block-live32-partial submitted={} finished={} readback_ok={} compare_ok={} reason={} program={} tile_index={} armed_tiles={} row_block={} global_row_start={} tile_row_start={} row_count={} output_gpu=0x{:X} compare_mask=0x{:08X} expected_mask=0x{:08X} first_gpu=0x{:08X} first_cpu_expected=0x{:08X} last_gpu=0x{:08X} last_cpu_expected=0x{:08X} lane_dispatch={} live_k_dim={} t62_first_gpu=0x{:08X} t62_first_cpu_expected=0x{:08X} finish_marker=0x{:08X} finish_expected=0x{:08X} batch_bytes=0x{:X} output_owner=cpu-ap action=hold-scale next=promote-row-block-owner-or-scale-live-k does_not_prove=full_model_matvec\n",
+                "lumen-gpu-proof: director-step step=15 backend=local-gpu mode=t6-3-accum16-hi-row-block-live32-partial submitted={} finished={} readback_ok={} compare_ok={} reason={} program={} tile_index={} armed_tiles={} row_block={} global_row_start={} tile_row_start={} row_count={} output_gpu=0x{:X} compare_mask=0x{:08X} expected_mask=0x{:08X} first_gpu=0x{:08X} first_cpu_expected=0x{:08X} last_gpu=0x{:08X} last_cpu_expected=0x{:08X} lane_dispatch={} live_k_dim={} t62_first_gpu=0x{:08X} t62_first_cpu_expected=0x{:08X} finish_marker=0x{:08X} finish_expected=0x{:08X} batch_bytes=0x{:X} output_owner=cpu-ap action=hold-scale next=promote-row-block-owner-or-scale-live-k does_not_prove=full_model_matvec\n",
                 t63.submitted as u8,
                 t63.finished as u8,
                 t63.readback_ok as u8,
@@ -654,11 +654,20 @@ pub(crate) fn observe_live_bf16_matvec_probe(
                 t63.expected_finish_marker,
                 t63.batch_bytes,
             );
+            if tile_index == 0 && row_block_index == 0 {
+                crate::intel::log_gpgpu_t63_first_tile_output_detail_once(
+                    stage.output_gpu,
+                    stage.output_bytes,
+                    t63_expected_words,
+                    block_row_count,
+                    t63_live_k_dim,
+                );
+            }
         }
     }
 
     crate::log!(
-        "lumen-gpu-proof: director-step step=16 backend=local-gpu mode=t6-3-actual-work-row-blocks armed_tiles={} staged_tiles={} t5_submitted_tiles={} t5_finished_tiles={} t5_compare_ok_tiles={} t6_submitted_tiles={} t6_finished_tiles={} t6_compare_ok_tiles={} t61_submitted_tiles={} t61_finished_tiles={} t61_compare_ok_tiles={} t62_staged_blocks={} t62_submitted_blocks={} t62_finished_blocks={} t62_compare_ok_blocks={} t62_compared_rows={} t63_submitted_blocks={} t63_finished_blocks={} t63_compare_ok_blocks={} t63_compared_rows={} first_row=0 last_row={} row_block_rows={} row_block_cap={} partial_rows={} tile_rows={} k_dim={} t5_artifact=gfx12-t5-small-live4-packed-bf16-dot t6_artifact=gfx12-t6-small-live8-packed-bf16-dot t61_artifact=gfx12-t6-1-live16-packed-bf16-dot t62_artifact=gfx12-t6-2-lane-indexed-live16-packed-bf16-dot t63_artifact=gfx12-t6-3-lane-indexed-live32-packed-bf16-dot artifact_addressing=row-block-restaged-tile-record-prefix proof_role=actual-work-row-block-frontier last_gpu_value=0x{:08X} last_cpu_expected_bits=0x{:08X} last_lane_dispatch={} output_owner=cpu-ap action=hold-scale next=promote-row-block-owner-or-scale-live-k does_not_prove=full_model_matvec\n",
+        "lumen-gpu-proof: director-step step=16 backend=local-gpu mode=t6-3-actual-work-row-blocks armed_tiles={} staged_tiles={} t5_submitted_tiles={} t5_finished_tiles={} t5_compare_ok_tiles={} t6_submitted_tiles={} t6_finished_tiles={} t6_compare_ok_tiles={} t61_submitted_tiles={} t61_finished_tiles={} t61_compare_ok_tiles={} t62_staged_blocks={} t62_submitted_blocks={} t62_finished_blocks={} t62_compare_ok_blocks={} t62_compared_rows={} t63_submitted_blocks={} t63_finished_blocks={} t63_compare_ok_blocks={} t63_compared_rows={} first_row=0 last_row={} row_block_rows={} row_block_cap={} partial_rows={} tile_rows={} k_dim={} t5_artifact=gfx12-t5-small-live4-packed-bf16-dot t6_artifact=gfx12-t6-small-live8-packed-bf16-dot t61_artifact=gfx12-t6-1-live16-packed-bf16-dot t62_artifact=gfx12-t6-2-lane-indexed-live16-packed-bf16-dot t63_artifact=gfx12-t6-3-accum16-hi-live32-packed-bf16-dot artifact_addressing=row-block-restaged-tile-record-prefix proof_role=actual-work-row-block-frontier last_gpu_value=0x{:08X} last_cpu_expected_bits=0x{:08X} last_lane_dispatch={} output_owner=cpu-ap action=hold-scale next=promote-row-block-owner-or-scale-live-k does_not_prove=full_model_matvec\n",
         armed_tiles,
         staged_tiles,
         t5_submitted_tiles,

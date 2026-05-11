@@ -25,6 +25,7 @@ pub enum EuArtifactKind {
     T61Live16Bf16DotThenHdc1StoreThenThreadSpawnerEot,
     T62RowIndexedLive16Bf16DotThenHdc1StoreThenThreadSpawnerEot,
     T63LaneIndexedLive32Bf16DotThenHdc1StoreThenThreadSpawnerEot,
+    T63Accum16HiLive32Bf16DotThenHdc1StoreThenThreadSpawnerEot,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

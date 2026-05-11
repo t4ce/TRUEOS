@@ -617,6 +617,38 @@ pub(crate) fn submit_gpgpu_t63_partial_matvec_probe(
     )
 }
 
+pub(crate) fn submit_gpgpu_t63_accum16_hi_live32_partial_matvec_probe(
+    output_gpu: u64,
+    output_bytes: usize,
+    expected_words: [u32; 8],
+    row_count: usize,
+    live_k_dim: usize,
+) -> GpgpuT62PartialMatvecProof {
+    self::gpgpu::submit_gpgpu_t63_accum16_hi_live32_partial_matvec_probe(
+        output_gpu,
+        output_bytes,
+        expected_words,
+        row_count,
+        live_k_dim,
+    )
+}
+
+pub(crate) fn log_gpgpu_t63_first_tile_output_detail_once(
+    output_gpu: u64,
+    output_bytes: usize,
+    expected_words: [u32; 8],
+    row_count: usize,
+    live_k_dim: usize,
+) {
+    self::gpgpu::log_gpgpu_t63_first_tile_output_detail_once(
+        output_gpu,
+        output_bytes,
+        expected_words,
+        row_count,
+        live_k_dim,
+    )
+}
+
 pub fn guc_status(warm: RenderWarmState) -> u32 {
     self::guc::status(Dev {
         bus: 0,
