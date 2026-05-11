@@ -1,14 +1,12 @@
-use std::env;
-use std::fs;
-use std::path::{Path, PathBuf};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    ffi::OsStr,
+    env, fs,
+    path::Path,
 };
 
 fn main() {
-    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
-    generate_portal_imports(&manifest_dir).expect("generate portal imports");
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
+    generate_portal_imports(Path::new(&manifest_dir)).expect("generate portal imports");
 }
 
 fn generate_portal_imports(manifest_dir: &Path) -> Result<(), String> {
@@ -18,8 +16,8 @@ fn generate_portal_imports(manifest_dir: &Path) -> Result<(), String> {
     let import_names = parse_declared_cabi_imports(&vcabi_path)?;
     let defined_exports = collect_defined_cabi_exports(manifest_dir)?;
 
-    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
-    let generated_path = out_dir.join("generated_portal_imports.rs");
+    let out_dir = env::var("OUT_DIR").expect("OUT_DIR");
+    let generated_path = Path::new(&out_dir).join("generated_portal_imports.rs");
 
     let mut generated =
         String::from("fn resolve_cabi_import(name: &str) -> Option<usize> {\n    match name {\n");
@@ -89,7 +87,7 @@ fn collect_defined_cabi_exports_in_dir(
             collect_defined_cabi_exports_in_dir(manifest_dir, &path, exports)?;
             continue;
         }
-        if path.extension() != Some(OsStr::new("rs")) {
+        if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
             continue;
         }
         println!("cargo:rerun-if-changed={}", path.display());
