@@ -111,6 +111,25 @@ unsafe impl Send for PrimarySurface {}
 unsafe impl Sync for PrimarySurface {}
 
 #[derive(Copy, Clone)]
+pub(super) struct PrimarySurfaceGpgpuTarget {
+    pub(super) width: u32,
+    pub(super) height: u32,
+    pub(super) pitch_bytes: u32,
+    pub(super) gpu: u64,
+    pub(super) phys: u64,
+    pub(super) virt: *mut u8,
+    pub(super) byte_len: usize,
+    pub(super) marker_gpu: u64,
+    pub(super) marker_virt: *mut u8,
+    pub(super) marker_offset: usize,
+    pub(super) marker_x: u32,
+    pub(super) marker_y: u32,
+}
+
+unsafe impl Send for PrimarySurfaceGpgpuTarget {}
+unsafe impl Sync for PrimarySurfaceGpgpuTarget {}
+
+#[derive(Copy, Clone)]
 struct OverlaySurface {
     width: u32,
     height: u32,
@@ -519,6 +538,60 @@ pub(crate) fn primary_surface_gpu_addr() -> Option<u64> {
         .lock()
         .as_ref()
         .map(|_| crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE)
+}
+
+pub(super) fn primary_surface_gpgpu_marker_target() -> Option<PrimarySurfaceGpgpuTarget> {
+    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+        return None;
+    };
+    if surface.virt.is_null()
+        || surface.width == 0
+        || surface.height == 0
+        || surface.pitch_bytes < PRIMARY_BYTES_PER_PIXEL
+    {
+        return None;
+    }
+
+    let marker_x = core::cmp::min(32, surface.width.saturating_sub(1));
+    let marker_y = core::cmp::min(32, surface.height.saturating_sub(1));
+    let marker_offset = (marker_y as usize)
+        .saturating_mul(surface.pitch_bytes as usize)
+        .saturating_add((marker_x as usize).saturating_mul(PRIMARY_BYTES_PER_PIXEL as usize));
+    let byte_len = (surface.pitch_bytes as usize).saturating_mul(surface.height as usize);
+    if marker_offset.saturating_add(core::mem::size_of::<u32>()) > byte_len {
+        return None;
+    }
+
+    Some(PrimarySurfaceGpgpuTarget {
+        width: surface.width,
+        height: surface.height,
+        pitch_bytes: surface.pitch_bytes,
+        gpu: crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE,
+        phys: surface.phys,
+        virt: surface.virt,
+        byte_len,
+        marker_gpu: crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE + marker_offset as u64,
+        marker_virt: unsafe { surface.virt.add(marker_offset) },
+        marker_offset,
+        marker_x,
+        marker_y,
+    })
+}
+
+pub(super) fn notify_primary_surface_external_write(
+    reason: &str,
+    flush_offset: usize,
+    flush_bytes: usize,
+) -> bool {
+    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+        return false;
+    };
+    let byte_len = (surface.pitch_bytes as usize).saturating_mul(surface.height as usize);
+    if !surface.virt.is_null() && flush_offset < byte_len {
+        let flush_bytes = core::cmp::min(flush_bytes, byte_len.saturating_sub(flush_offset));
+        crate::intel::dma_flush(unsafe { surface.virt.add(flush_offset) }, flush_bytes);
+    }
+    notify_primary_surface_present(surface, reason, byte_len)
 }
 
 pub(crate) fn present_rgba_surface_center(

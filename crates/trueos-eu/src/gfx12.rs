@@ -429,6 +429,13 @@ pub const T63_ACCUM16_HI_LIVE32_PROGRAM_NAME: &str =
 pub const T63_ACCUM16_HI_LIVE32_LIVE_K: usize = 32;
 pub const T63_ACCUM16_HI_LIVE32_PARTIAL_ROWS: usize = 8;
 pub const T63_ACCUM16_HI_LIVE32_STORE_SEND_DWORD: usize = 201;
+pub const PRIMARY_SCANOUT_MANDELBROT8_PROGRAM_NAME: &str =
+    "gfx12-primary-scanout-mandelbrot8-lane-strip-hdc1-stateless-store-then-ts-eot";
+pub const PRIMARY_SCANOUT_MANDELBROT8_LANES: usize = 8;
+pub const PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS: [usize; 8] =
+    [11, 15, 19, 23, 27, 31, 35, 39];
+pub const PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_BASE_DWORD: usize = 47;
+pub const PRIMARY_SCANOUT_MANDELBROT8_STORE_SEND_DWORD: usize = 51;
 
 // T5 diagnostic control: preserve the T5 arena payload shape and final HDC1
 // send, but remove live loads and math.  It should write:
@@ -848,6 +855,31 @@ pub static T63_ACCUM16_HI_LIVE32_TRUEOS_ARENA_BF16_DOT_HDC1_STATELESS_STORE_THEN
     words: &T63_ACCUM16_HI_LIVE32_TRUEOS_ARENA_BF16_DOT_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS,
     expects_store: true,
 };
+
+// Mesa brw_asm artifact for the mandelbrot sidequest's custom Intel GPGPU
+// upload path. One SIMD8 workgroup uses lane IDs to write eight adjacent
+// scanout dwords through HDC1. The runtime patches per-lane colors and the
+// scanout row GPU address before upload.
+pub static PRIMARY_SCANOUT_MANDELBROT8_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS: [u32; 60] = [
+    0x80030061, 0x01054410, 0x00000000, 0x76543210, 0x80030261, 0x01050160, 0x00460105,
+    0x00000000, 0x80000061, 0x3A054660, 0x00000000, 0x00000000, 0x80000061, 0x3A254660,
+    0x00000000, 0x00000000, 0x80000061, 0x3A454660, 0x00000000, 0x00000000, 0x80000061,
+    0x3A654660, 0x00000000, 0x00000000, 0x80000061, 0x3A854660, 0x00000000, 0x00000000,
+    0x80000061, 0x3AA54660, 0x00000000, 0x00000000, 0x80000061, 0x3AC54660, 0x00000000,
+    0x00000000, 0x80000061, 0x3AE54660, 0x00000000, 0x00000000, 0x00030069, 0x38058660,
+    0x02460105, 0x00000002, 0x00030140, 0x38058660, 0x06463805, 0x00840058, 0x00039331,
+    0x00000000, 0xCC02380C, 0x009A3A0C, 0x80030061, 0x7F050220, 0x00460005, 0x00000000,
+    0x80030131, 0x00000004, 0x70007F0C, 0x00000000,
+];
+
+pub static PRIMARY_SCANOUT_MANDELBROT8_HDC1_STATELESS_STORE_THEN_TS_EOT: EuArtifact =
+    EuArtifact {
+        name: PRIMARY_SCANOUT_MANDELBROT8_PROGRAM_NAME,
+        isa: EuIsa::Gfx12,
+        kind: EuArtifactKind::PrimaryScanoutMandelbrot8ThenHdc1StoreThenThreadSpawnerEot,
+        words: &PRIMARY_SCANOUT_MANDELBROT8_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS,
+        expects_store: true,
+    };
 
 // T5 live4 bridge: preserve the Mesa live-load/math prefix, but replace only
 // the final surface-indexed store with the proven stateless HDC store suffix.
