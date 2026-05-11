@@ -1,6 +1,6 @@
 //! Thread pool for blocking operations
 
-use crate::loom::sync::{Arc, Condvar, Mutex};
+use crate::loom::sync::{Arc, Mutex};
 use crate::loom::thread;
 use crate::runtime::blocking::schedule::BlockingSchedule;
 use crate::runtime::blocking::{shutdown, BlockingTask};
@@ -15,6 +15,24 @@ use std::fmt;
 use std::io;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+use crate::loom::sync::Condvar;
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[derive(Debug)]
+struct Condvar;
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+impl Condvar {
+    fn new() -> Self {
+        Condvar
+    }
+
+    fn notify_one(&self) {}
+
+    fn notify_all(&self) {}
+}
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 type TrueosBlockingJob = Box<dyn FnOnce() + Send + 'static>;
@@ -569,7 +587,36 @@ impl Inner {
             // mark this thread as currently counted in `num_idle_threads`.
             is_counted_idle = true;
 
+            #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+            let idle_deadline = crate::platform::monotonic_nanos()
+                .saturating_add(duration_to_nanos(self.keep_alive));
+
             while !shared.shutdown {
+                #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+                {
+                    drop(shared);
+                    crate::platform::sleep_ms(1);
+                    shared = self.shared.lock();
+
+                    if shared.num_notify != 0 {
+                        shared.num_notify -= 1;
+                        is_counted_idle = false;
+                        break;
+                    }
+
+                    if !shared.shutdown && crate::platform::monotonic_nanos() >= idle_deadline {
+                        let my_handle = shared.worker_threads.remove(&worker_thread_id);
+                        join_on_thread =
+                            std::mem::replace(&mut shared.last_exiting_thread, my_handle);
+
+                        break 'main;
+                    }
+
+                    continue;
+                }
+
+                #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+                {
                 let lock_result = self.condvar.wait_timeout(shared, self.keep_alive).unwrap();
 
                 shared = lock_result.0;
@@ -599,6 +646,7 @@ impl Inner {
                 }
 
                 // Spurious wakeup detected, go back to sleep.
+                }
             }
 
             if shared.shutdown {
@@ -648,4 +696,12 @@ impl fmt::Debug for Spawner {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt.debug_struct("blocking::Spawner").finish()
     }
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+fn duration_to_nanos(duration: Duration) -> u64 {
+    duration
+        .as_secs()
+        .saturating_mul(1_000_000_000)
+        .saturating_add(u64::from(duration.subsec_nanos()))
 }

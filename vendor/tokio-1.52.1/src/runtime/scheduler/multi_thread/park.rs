@@ -3,12 +3,29 @@
 //! A combination of the various resource driver park handles.
 
 use crate::loom::sync::atomic::AtomicUsize;
-use crate::loom::sync::{Arc, Condvar, Mutex};
+use crate::loom::sync::{Arc, Mutex};
 use crate::runtime::driver::{self, Driver};
 use crate::util::TryLock;
 
 use std::sync::atomic::Ordering::SeqCst;
 use std::time::Duration;
+
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+use crate::loom::sync::Condvar;
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+struct Condvar;
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+impl Condvar {
+    fn new() -> Self {
+        Condvar
+    }
+
+    fn notify_one(&self) {}
+
+    fn notify_all(&self) {}
+}
 
 #[cfg(loom)]
 use crate::runtime::park::CURRENT_THREAD_PARK_COUNT;
@@ -179,6 +196,7 @@ impl Inner {
             Err(actual) => panic!("inconsistent park state; actual = {actual}"),
         }
 
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         let timeout_at = duration.map(|d| {
             crate::time::Instant::now()
                 .into_std()
@@ -187,6 +205,45 @@ impl Inner {
                 .unwrap_or(crate::time::Instant::now().into_std() + Duration::from_secs(1))
         });
 
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        {
+            drop(m);
+            let deadline = duration
+                .map(|d| crate::platform::monotonic_nanos().saturating_add(duration_to_nanos(d)));
+
+            loop {
+                match self.state.load(SeqCst) {
+                    NOTIFIED => {
+                        let old = self.state.swap(EMPTY, SeqCst);
+                        debug_assert_eq!(old, NOTIFIED, "park state changed unexpectedly");
+                        return;
+                    }
+                    PARKED_CONDVAR => {}
+                    actual @ (PARKED_DRIVER | EMPTY) => {
+                        panic!("inconsistent park_timeout state, actual = {actual}")
+                    }
+                    invalid => panic!("invalid park_timeout state, actual = {invalid}"),
+                }
+
+                if let Some(deadline) = deadline {
+                    let now = crate::platform::monotonic_nanos();
+                    if now >= deadline {
+                        match self.state.swap(EMPTY, SeqCst) {
+                            PARKED_CONDVAR | NOTIFIED => return,
+                            actual @ (PARKED_DRIVER | EMPTY) => {
+                                panic!("inconsistent park_timeout state, actual = {actual}")
+                            }
+                            invalid => panic!("invalid park_timeout state, actual = {invalid}"),
+                        }
+                    }
+                    crate::platform::sleep_ms(remaining_sleep_ms(deadline.saturating_sub(now)));
+                } else {
+                    crate::platform::sleep_ms(1);
+                }
+            }
+        }
+
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         loop {
             let is_timeout;
             (m, is_timeout) = match timeout_at {
@@ -315,4 +372,17 @@ impl Inner {
 
         self.condvar.notify_all();
     }
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+fn duration_to_nanos(duration: Duration) -> u64 {
+    duration
+        .as_secs()
+        .saturating_mul(1_000_000_000)
+        .saturating_add(u64::from(duration.subsec_nanos()))
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+fn remaining_sleep_ms(remaining_nanos: u64) -> u64 {
+    (remaining_nanos / 1_000_000).min(1)
 }

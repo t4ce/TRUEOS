@@ -67,12 +67,22 @@ pub(crate) mod sync {
         Condvar, Mutex, MutexGuard, RwLock, RwLockReadGuard, WaitTimeoutResult,
     };
 
-    #[cfg(not(all(feature = "parking_lot", not(miri))))]
+    #[cfg(all(
+        not(all(feature = "parking_lot", not(miri))),
+        not(any(target_os = "trueos", target_os = "zkvm"))
+    ))]
     #[allow(unused_imports)]
     pub(crate) use std::sync::{Condvar, MutexGuard, RwLockReadGuard, WaitTimeoutResult};
 
+    #[cfg(all(
+        not(all(feature = "parking_lot", not(miri))),
+        any(target_os = "trueos", target_os = "zkvm")
+    ))]
+    #[allow(unused_imports)]
+    pub(crate) use std::sync::{Condvar, RwLockReadGuard, WaitTimeoutResult};
+
     #[cfg(not(all(feature = "parking_lot", not(miri))))]
-    pub(crate) use crate::loom::std::mutex::Mutex;
+    pub(crate) use crate::loom::std::mutex::{Mutex, MutexGuard};
 
     #[cfg(not(all(feature = "parking_lot", not(miri))))]
     pub(crate) use crate::loom::std::rwlock::RwLock;
@@ -90,7 +100,18 @@ pub(crate) mod sync {
 }
 
 pub(crate) mod sys {
-    #[cfg(feature = "rt-multi-thread")]
+    #[cfg(all(
+        feature = "rt-multi-thread",
+        any(target_os = "trueos", target_os = "zkvm")
+    ))]
+    pub(crate) fn num_cpus() -> usize {
+        crate::platform::cpu_count()
+    }
+
+    #[cfg(all(
+        feature = "rt-multi-thread",
+        not(any(target_os = "trueos", target_os = "zkvm"))
+    ))]
     pub(crate) fn num_cpus() -> usize {
         use std::num::NonZeroUsize;
 

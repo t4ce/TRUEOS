@@ -1,10 +1,28 @@
 #![cfg_attr(not(feature = "full"), allow(dead_code))]
 
 use crate::loom::sync::atomic::AtomicUsize;
-use crate::loom::sync::{Arc, Condvar, Mutex};
+use crate::loom::sync::{Arc, Mutex};
 
 use std::sync::atomic::Ordering::SeqCst;
 use std::time::Duration;
+
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+use crate::loom::sync::Condvar;
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[derive(Debug)]
+struct Condvar;
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+impl Condvar {
+    fn new() -> Self {
+        Condvar
+    }
+
+    fn notify_one(&self) {}
+
+    fn notify_all(&self) {}
+}
 
 #[derive(Debug)]
 pub(crate) struct ParkThread {

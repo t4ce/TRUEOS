@@ -2,9 +2,14 @@
 //!
 //! This implementation mirrors that of the Rust standard library.
 
-use crate::loom::sync::{Condvar, Mutex};
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+use crate::loom::sync::Condvar;
+use crate::loom::sync::Mutex;
 use std::fmt;
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::time::{Duration, Instant};
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use std::time::Duration;
 
 /// A barrier enables multiple threads to synchronize the beginning
 /// of some computation.
@@ -37,6 +42,7 @@ use std::time::{Duration, Instant};
 /// ```
 pub(crate) struct Barrier {
     lock: Mutex<BarrierState>,
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     cvar: Condvar,
     num_threads: usize,
 }
@@ -88,6 +94,7 @@ impl Barrier {
                 count: 0,
                 generation_id: 0,
             }),
+            #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
             cvar: Condvar::new(),
             num_threads: n,
         }
@@ -134,6 +141,19 @@ impl Barrier {
         let local_gen = lock.generation_id;
         lock.count += 1;
         if lock.count < self.num_threads {
+            #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+            {
+                loop {
+                    drop(lock);
+                    crate::platform::sleep_ms(1);
+                    lock = self.lock.lock();
+                    if local_gen != lock.generation_id {
+                        break;
+                    }
+                }
+            }
+
+            #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
             // We need a while loop to guard against spurious wakeups.
             // https://en.wikipedia.org/wiki/Spurious_wakeup
             while local_gen == lock.generation_id {
@@ -143,6 +163,7 @@ impl Barrier {
         } else {
             lock.count = 0;
             lock.generation_id = lock.generation_id.wrapping_add(1);
+            #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
             self.cvar.notify_all();
             BarrierWaitResult(true)
         }
@@ -151,6 +172,48 @@ impl Barrier {
     /// Blocks the current thread until all threads have rendezvoused here for
     /// at most `timeout` duration.
     pub(crate) fn wait_timeout(&self, timeout: Duration) -> Option<BarrierWaitResult> {
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        {
+            let deadline = crate::platform::monotonic_nanos().saturating_add(duration_to_nanos(timeout));
+
+            let mut lock = loop {
+                if let Some(guard) = self.lock.try_lock() {
+                    break guard;
+                }
+
+                let now = crate::platform::monotonic_nanos();
+                if now >= deadline {
+                    return None;
+                }
+                crate::platform::sleep_ms(remaining_sleep_ms(deadline.saturating_sub(now)));
+            };
+
+            let local_gen = lock.generation_id;
+            lock.count += 1;
+            if lock.count < self.num_threads {
+                loop {
+                    drop(lock);
+
+                    let now = crate::platform::monotonic_nanos();
+                    if now >= deadline {
+                        return None;
+                    }
+                    crate::platform::sleep_ms(remaining_sleep_ms(deadline.saturating_sub(now)));
+
+                    lock = self.lock.lock();
+                    if local_gen != lock.generation_id {
+                        return Some(BarrierWaitResult(false));
+                    }
+                }
+            }
+
+            lock.count = 0;
+            lock.generation_id = lock.generation_id.wrapping_add(1);
+            return Some(BarrierWaitResult(true));
+        }
+
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+        {
         // This implementation mirrors `wait`, but with each blocking operation
         // replaced by a timeout-amenable alternative.
 
@@ -189,6 +252,7 @@ impl Barrier {
             self.cvar.notify_all();
             Some(BarrierWaitResult(true))
         }
+        }
     }
 }
 
@@ -220,4 +284,17 @@ impl BarrierWaitResult {
     pub(crate) fn is_leader(&self) -> bool {
         self.0
     }
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+fn duration_to_nanos(duration: Duration) -> u64 {
+    duration
+        .as_secs()
+        .saturating_mul(1_000_000_000)
+        .saturating_add(u64::from(duration.subsec_nanos()))
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+fn remaining_sleep_ms(remaining_nanos: u64) -> u64 {
+    (remaining_nanos / 1_000_000).min(1)
 }
