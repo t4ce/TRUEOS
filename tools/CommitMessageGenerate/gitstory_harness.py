@@ -47,6 +47,7 @@ def git(args: list[str], cwd: Path, *, text: bool = True) -> str | bytes:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=text,
+        errors="replace" if text else None,
     )
     return result.stdout
 
@@ -58,6 +59,7 @@ def git_optional(args: list[str], cwd: Path) -> str:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        errors="replace",
     )
     if result.returncode != 0:
         return ""
