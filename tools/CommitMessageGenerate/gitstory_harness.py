@@ -157,6 +157,165 @@ def write_jsonl(path: Path, records: list[dict[str, object]]) -> None:
             handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
 
 
+def read_jsonl(path: Path) -> list[dict[str, object]]:
+    records: list[dict[str, object]] = []
+    with path.open(encoding="utf-8") as handle:
+        for line_no, line in enumerate(handle, start=1):
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise SystemExit(f"{path}:{line_no}: invalid JSON: {exc}") from exc
+            if not isinstance(value, dict):
+                raise SystemExit(f"{path}:{line_no}: expected object")
+            records.append(value)
+    return records
+
+
+def message_template(record: dict[str, object]) -> str:
+    sha = str(record["sha"])
+    original = str(record.get("original_message", ""))
+    subject = str(record.get("original_subject", ""))
+    author_date = str(record.get("author_date", ""))
+    index = record.get("index", "?")
+    total = record.get("total", "?")
+    stat = str(record.get("stat", "")).strip()
+    files = record.get("files", [])
+    if not isinstance(files, list):
+        files = []
+    file_lines = []
+    for item in files[:80]:
+        if not isinstance(item, dict):
+            continue
+        path = item.get("path", "")
+        added = item.get("added", "?")
+        deleted = item.get("deleted", "?")
+        file_lines.append(f"- {path} (+{added}/-{deleted})")
+    if len(files) > 80:
+        file_lines.append(f"- ... {len(files) - 80} more files")
+
+    return "\n".join(
+        [
+            f"# Commit Message: {sha}",
+            "",
+            "## Metadata",
+            "",
+            f"- index: {index} / {total}",
+            f"- sha: `{sha}`",
+            f"- author_date: `{author_date}`",
+            f"- weak_original_message: `{str(record.get('weak_original_message', False)).lower()}`",
+            f"- original_subject: `{subject}`",
+            "",
+            "## Original Message",
+            "",
+            "```text",
+            original,
+            "```",
+            "",
+            "## Generated Message",
+            "",
+            "```text",
+            "",
+            "```",
+            "",
+            "## Story Notes",
+            "",
+            "",
+            "## Evidence",
+            "",
+            "### Files",
+            "",
+            "\n".join(file_lines) if file_lines else "- (no file changes recorded)",
+            "",
+            "### Stat",
+            "",
+            "```text",
+            stat,
+            "```",
+            "",
+        ]
+    )
+
+
+def write_message_templates(out: Path, records: list[dict[str, object]], *, overwrite: bool) -> int:
+    messages_dir = out / "messages"
+    messages_dir.mkdir(parents=True, exist_ok=True)
+    written = 0
+    for record in records:
+        sha = str(record["sha"])
+        path = messages_dir / f"{sha}.md"
+        if path.exists() and not overwrite:
+            continue
+        path.write_text(message_template(record), encoding="utf-8")
+        written += 1
+    return written
+
+
+def write_range_plan(
+    out: Path,
+    records: list[dict[str, object]],
+    *,
+    agent_count: int,
+    context: int,
+) -> list[dict[str, object]]:
+    ranges_dir = out / "ranges"
+    ranges_dir.mkdir(parents=True, exist_ok=True)
+    ranges: list[dict[str, object]] = []
+    total = len(records)
+    if total == 0:
+        return ranges
+    agent_count = max(1, min(agent_count, total))
+    chunk = (total + agent_count - 1) // agent_count
+    for agent_index, start in enumerate(range(0, total, chunk), start=1):
+        end = min(start + chunk, total)
+        owned = records[start:end]
+        context_start = max(0, start - context)
+        context_end = min(total, end + context)
+        context_records = records[context_start:context_end]
+        range_record = {
+            "agent": agent_index,
+            "owned_start_index": owned[0]["index"],
+            "owned_end_index": owned[-1]["index"],
+            "owned_start_sha": owned[0]["sha"],
+            "owned_end_sha": owned[-1]["sha"],
+            "owned_count": len(owned),
+            "context_start_index": context_records[0]["index"],
+            "context_end_index": context_records[-1]["index"],
+            "context_count": len(context_records),
+            "write_glob": f"messages/{{{owned[0]['sha']}..{owned[-1]['sha']}}}.md",
+        }
+        ranges.append(range_record)
+        write_jsonl(ranges_dir / f"agent_{agent_index:02d}_owned.jsonl", owned)
+        write_jsonl(ranges_dir / f"agent_{agent_index:02d}_context.jsonl", context_records)
+
+    lines = [
+        "# Agent Range Plan",
+        "",
+        "Each agent owns only its `owned` JSONL range, but should read the adjacent",
+        "`context` JSONL file before writing messages so nearby small commits tell a",
+        "coherent story.",
+        "",
+        "## Rules",
+        "",
+        "- Write only files under `messages/<sha>.md` for owned commits.",
+        "- Preserve `Original Message` exactly.",
+        "- Fill `Generated Message` with a real commit message grounded in the diff.",
+        "- Use `Story Notes` for continuity, uncertainty, and links to neighboring commits.",
+        "- Keep the first line concise and imperative when possible.",
+        "- Do not rewrite Git history from this catalog.",
+        "",
+        "## Assignments",
+        "",
+    ]
+    for item in ranges:
+        lines.append(
+            "- Agent {agent}: owned {owned_start_index}-{owned_end_index} "
+            "({owned_count} commits), context {context_start_index}-{context_end_index}".format(**item)
+        )
+    lines.append("")
+    (out / "AGENT_RANGES.md").write_text("\n".join(lines), encoding="utf-8")
+    return ranges
+
+
 def export(args: argparse.Namespace) -> int:
     cwd = Path(args.repo).resolve()
     out = Path(args.out).resolve()
@@ -218,6 +377,28 @@ def export(args: argparse.Namespace) -> int:
     return 0
 
 
+def scaffold(args: argparse.Namespace) -> int:
+    cwd = Path(args.repo).resolve()
+    out = Path(args.out).resolve()
+    export_args = argparse.Namespace(
+        repo=str(cwd),
+        out=str(out),
+        revs=args.revs,
+        batch_size=args.batch_size,
+        max_diff_bytes=args.max_diff_bytes,
+        exclude=args.exclude,
+        limit=args.limit,
+        progress=args.progress,
+    )
+    export(export_args)
+    records = read_jsonl(out / "commits.jsonl")
+    written = write_message_templates(out, records, overwrite=args.overwrite)
+    ranges = write_range_plan(out, records, agent_count=args.agents, context=args.context)
+    print(f"wrote {written} message templates into {out / 'messages'}")
+    print(f"wrote {len(ranges)} agent ranges into {out / 'ranges'}")
+    return 0
+
+
 def validate(args: argparse.Namespace) -> int:
     cwd = Path(args.repo).resolve()
     out = Path(args.out).resolve()
@@ -252,6 +433,10 @@ def validate(args: argparse.Namespace) -> int:
     batch_count = sum(1 for _ in (out / "batches").glob("batch_*.jsonl"))
     if batch_count == 0 and actual:
         problems.append("no batch files found")
+    missing_messages = [sha for sha in actual if not (out / "messages" / f"{sha}.md").exists()]
+    if missing_messages:
+        preview = ", ".join(missing_messages[:5])
+        problems.append(f"missing message files for {len(missing_messages)} commits: {preview}")
 
     if problems:
         for problem in problems:
@@ -261,6 +446,8 @@ def validate(args: argparse.Namespace) -> int:
     print(f"valid: {len(actual)} commits, {batch_count} batches")
     print(f"weak original messages: {weak}")
     print(f"truncated diffs: {truncated}")
+    if (out / "messages").exists():
+        print(f"message files: {len(list((out / 'messages').glob('*.md')))}")
     return 0
 
 
@@ -279,10 +466,24 @@ def main() -> int:
     export_parser.add_argument("--progress", type=int, default=50, help="stderr progress interval")
     export_parser.set_defaults(func=export)
 
+    scaffold_parser = subparsers.add_parser("scaffold", help="export commits and create per-sha message files")
+    scaffold_parser.add_argument("--repo", default=".", help="repository path")
+    scaffold_parser.add_argument("--out", default="tools/CommitMessageGenerate/work/catalog", help="output directory")
+    scaffold_parser.add_argument("--revs", default="origin/main", help="revision range for git rev-list")
+    scaffold_parser.add_argument("--batch-size", type=int, default=200)
+    scaffold_parser.add_argument("--max-diff-bytes", type=int, default=120_000)
+    scaffold_parser.add_argument("--exclude", action="append", default=[], help="pathspec to exclude")
+    scaffold_parser.add_argument("--limit", type=int, default=0, help="limit commits for a smoke test")
+    scaffold_parser.add_argument("--progress", type=int, default=50, help="stderr progress interval")
+    scaffold_parser.add_argument("--agents", type=int, default=5, help="number of agent ranges")
+    scaffold_parser.add_argument("--context", type=int, default=12, help="neighbor commits included as read-only context")
+    scaffold_parser.add_argument("--overwrite", action="store_true", help="overwrite existing message templates")
+    scaffold_parser.set_defaults(func=scaffold)
+
     validate_parser = subparsers.add_parser("validate", help="validate exported coverage")
     validate_parser.add_argument("--repo", default=".", help="repository path")
     validate_parser.add_argument("--out", default=".gitstory", help="output directory")
-    validate_parser.add_argument("--revs", default="HEAD", help="revision range for git rev-list")
+    validate_parser.add_argument("--revs", default="origin/main", help="revision range for git rev-list")
     validate_parser.add_argument("--limit", type=int, default=0, help="match an exported smoke-test limit")
     validate_parser.set_defaults(func=validate)
 
