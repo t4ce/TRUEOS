@@ -59,6 +59,7 @@ define_started_flags!(
     TGA_TASK_STARTED,
     GFX_VIRGL_READY_TASK_STARTED,
     GFX_VIRGL_CURSOR_OVERLAY_STARTED,
+    MANDELBROT_GPU_SIDEQUEST_STARTED,
     INTEL_CURSOR_SERVICE_STARTED,
     INTEL_HDA_PROBE_STARTED,
     RAPLE_SERVICE_STARTED,
@@ -418,6 +419,13 @@ fn spawn_logtotcp(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_lumen_service(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::lumen::lumen_service::lumen_service_task())
+}
+
+fn spawn_mandelbrot_gpu_sidequest(spawner: Spawner) -> SpawnAttempt {
+    match crate::tst_mandelbrot_gpu_sidequest::spawn_mandelbrot_gpu_sidequest(spawner) {
+        Ok(()) => SpawnAttempt::Spawned,
+        Err(e) => SpawnAttempt::Failed(e),
+    }
 }
 
 fn boot_lumen_service_enabled() -> bool {
@@ -1127,7 +1135,7 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::APP_VM_READY
 const WS_BOOT_READY: u32 = crate::r::readiness::NET_GATEWAY_REACHABLE
     | crate::r::readiness::TLS_SOCKET_SERVICE_READY
     | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
-static TASKS: [TaskSpec; 70] = [
+static TASKS: [TaskSpec; 71] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
         "globalog-persist-once",
@@ -1307,6 +1315,12 @@ static TASKS: [TaskSpec; 70] = [
         &GFX_TEXTURE_UPLOAD_SERVICE_STARTED,
         spawn_gfx_texture_upload_service,
     ),
+    TaskSpec::enabled(
+        "mandelbrot-gpu-sidequest",
+        0,
+        &MANDELBROT_GPU_SIDEQUEST_STARTED,
+        spawn_mandelbrot_gpu_sidequest,
+    ),
     TaskSpec::enabled_gated(
         "ui2",
         crate::r::readiness::GFX_BACKEND_READY,
@@ -1437,7 +1451,8 @@ static TASKS: [TaskSpec; 70] = [
     ),
     TaskSpec::enabled_gated(
         "lumen-service",
-        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
+        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
+            | crate::r::readiness::MANDELBROT_GPU_SIDEQUEST_READY,
         boot_lumen_service_enabled,
         &LUMEN_SERVICE_STARTED,
         spawn_lumen_service,

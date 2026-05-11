@@ -531,6 +531,21 @@ pub(crate) fn submit_gpgpu_one_tile_output_sentinel_probe(
     )
 }
 
+pub(crate) fn submit_gpgpu_sidequest_target_buffer_probe() -> GpgpuOneTileSentinelProof {
+    self::gpgpu::submit_gpgpu_sidequest_target_buffer_probe()
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_marker_probe() -> GpgpuOneTileSentinelProof {
+    self::gpgpu::submit_gpgpu_primary_scanout_marker_probe()
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot_preview(
+    cursor: usize,
+    pixel_budget: usize,
+) -> (GpgpuOneTileSentinelProof, usize) {
+    self::gpgpu::submit_gpgpu_primary_scanout_mandelbrot_preview(cursor, pixel_budget)
+}
+
 pub(crate) fn submit_gpgpu_one_tile_output_compare_probe(
     output_gpu: u64,
     output_bytes: usize,
@@ -667,6 +682,10 @@ pub(crate) fn log_guc_submission_contract(dev: Dev, label: &'static str) {
 
 pub fn active_scanout_dimensions() -> Option<(u32, u32)> {
     self::display::active_scanout_dimensions()
+}
+
+pub fn primary_surface_gpu_addr() -> Option<u64> {
+    self::display::primary_surface_gpu_addr()
 }
 
 pub fn present_rgba_overlay_top_right(

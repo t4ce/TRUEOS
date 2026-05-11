@@ -11,6 +11,7 @@ logs.
 ## Shader
 
 - Source: `.codex_tmp/mandelbrot_fragment_1440p_parametric.frag`
+- SPIR-V: `.codex_tmp/mandelbrot_fragment_1440p_parametric.spv`
 - Stage: Vulkan GLSL fragment shader, `#version 450`
 - Output: `layout(location = 0) out vec4 out_color`
 - Coordinate source: `gl_FragCoord.xy`
@@ -41,7 +42,14 @@ push constants:
 - `scale = 2.6`
 - `max_iterations = 192`
 
-The existing `tools/xe_lp_shader_bake` triangle templates and verifier document
-a zero-push-constant path for the current simple triangle artifact. This side
-shader therefore remains source-only until a fragment test harness explicitly
-declares and uploads the push-constant range.
+The SPIR-V was emitted with:
+
+```sh
+glslangValidator -V .codex_tmp/mandelbrot_fragment_1440p_parametric.frag \
+  -o .codex_tmp/mandelbrot_fragment_1440p_parametric.spv
+```
+
+The boot sidequest embeds the SPIR-V bytes and logs their size/signature. That
+proves the artifact is present and placeable as a `ShaderDesc`; it still does
+not prove Intel fragment submit or EU-side presentation until the sidequest is
+wired to an actual Intel render path.

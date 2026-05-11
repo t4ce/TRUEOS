@@ -348,69 +348,86 @@ fn init_minimal_ppgtt(warm: RenderWarmState) -> bool {
         }
     }
 
-    fn map_region(
-        warm: RenderWarmState,
-        gpu: u64,
-        phys: u64,
-        len: usize,
-        entry_flags: u64,
-    ) -> bool {
-        let pt_off = 12288usize;
-        for page in 0..len.div_ceil(4096) {
-            let va_page = (gpu >> 12) + page as u64;
-            let pd_index = ((va_page >> 9) & 0x1FF) as usize;
-            let pt_index = (va_page & 0x1FF) as usize;
-            if pd_index >= PPGTT_PT_COUNT {
-                return false;
-            }
-            let pte_off = pt_off + pd_index * 4096 + pt_index * core::mem::size_of::<u64>();
-            let pte = (phys + (page as u64) * 4096) & !0xFFF;
-            unsafe {
-                core::ptr::write_volatile(
-                    warm.ppgtt_virt.add(pte_off) as *mut u64,
-                    pte | entry_flags,
-                );
-            }
-        }
-        true
-    }
-
-    let ok = map_region(warm, GPU_VA_RING_BASE, warm.ring_phys, warm.ring_len, pte_present_rw)
-        && map_region(
+    let ok = map_minimal_ppgtt_region(
+        warm,
+        GPU_VA_RING_BASE,
+        warm.ring_phys,
+        warm.ring_len,
+        pte_present_rw,
+    ) && map_minimal_ppgtt_region(
+        warm,
+        GPU_VA_CONTEXT_BASE,
+        warm.context_phys,
+        warm.context_len,
+        pte_present_rw,
+    ) && map_minimal_ppgtt_region(
+        warm,
+        GPU_VA_BATCH_BASE,
+        warm.batch_phys,
+        warm.batch_len,
+        pte_present_rw,
+    ) && map_minimal_ppgtt_region(
+        warm,
+        GPU_VA_DRAW_STATE_BASE,
+        warm.draw_state_phys,
+        warm.draw_state_len,
+        pte_present_rw,
+    ) && map_minimal_ppgtt_region(
+        warm,
+        GPU_VA_VERTEX_BASE,
+        warm.vertex_phys,
+        warm.vertex_len,
+        pte_present_rw,
+    ) && map_minimal_ppgtt_region(
+        warm,
+        GPU_VA_RESULT_BASE,
+        warm.result_phys,
+        warm.result_len,
+        pte_present_rw,
+    ) && map_minimal_ppgtt_region(
+        warm,
+        GPU_VA_STREAMOUT_BASE,
+        warm.streamout_phys,
+        warm.streamout_len,
+        pte_present_rw,
+    ) && (warm.gpgpu_arena_virt.is_null()
+        || map_minimal_ppgtt_region(
             warm,
-            GPU_VA_CONTEXT_BASE,
-            warm.context_phys,
-            warm.context_len,
+            GPU_VA_GPGPU_TILE_ARENA_BASE,
+            warm.gpgpu_arena_phys,
+            warm.gpgpu_arena_len,
             pte_present_rw,
-        )
-        && map_region(warm, GPU_VA_BATCH_BASE, warm.batch_phys, warm.batch_len, pte_present_rw)
-        && map_region(
-            warm,
-            GPU_VA_DRAW_STATE_BASE,
-            warm.draw_state_phys,
-            warm.draw_state_len,
-            pte_present_rw,
-        )
-        && map_region(warm, GPU_VA_VERTEX_BASE, warm.vertex_phys, warm.vertex_len, pte_present_rw)
-        && map_region(warm, GPU_VA_RESULT_BASE, warm.result_phys, warm.result_len, pte_present_rw)
-        && map_region(
-            warm,
-            GPU_VA_STREAMOUT_BASE,
-            warm.streamout_phys,
-            warm.streamout_len,
-            pte_present_rw,
-        )
-        && (warm.gpgpu_arena_virt.is_null()
-            || map_region(
-                warm,
-                GPU_VA_GPGPU_TILE_ARENA_BASE,
-                warm.gpgpu_arena_phys,
-                warm.gpgpu_arena_len,
-                pte_present_rw,
-            ));
+        ))
+        && super::display::primary_surface_gpgpu_marker_target().is_none_or(|target| {
+            map_minimal_ppgtt_region(warm, target.gpu, target.phys, target.byte_len, pte_present_rw)
+        });
 
     crate::intel::dma_flush(warm.ppgtt_virt, warm.ppgtt_len);
     ok
+}
+
+fn map_minimal_ppgtt_region(
+    warm: RenderWarmState,
+    gpu: u64,
+    phys: u64,
+    len: usize,
+    entry_flags: u64,
+) -> bool {
+    let pt_off = 12288usize;
+    for page in 0..len.div_ceil(4096) {
+        let va_page = (gpu >> 12) + page as u64;
+        let pd_index = ((va_page >> 9) & 0x1FF) as usize;
+        let pt_index = (va_page & 0x1FF) as usize;
+        if pd_index >= PPGTT_PT_COUNT {
+            return false;
+        }
+        let pte_off = pt_off + pd_index * 4096 + pt_index * core::mem::size_of::<u64>();
+        let pte = (phys + (page as u64) * 4096) & !0xFFF;
+        unsafe {
+            core::ptr::write_volatile(warm.ppgtt_virt.add(pte_off) as *mut u64, pte | entry_flags);
+        }
+    }
+    true
 }
 
 fn forcewake_render_acquire(warm: RenderWarmState) -> bool {
@@ -792,7 +809,13 @@ fn is_gpgpu_submit_name(name: &str) -> bool {
 }
 
 fn should_log_gpgpu_submit_name(name: &str) -> bool {
-    !matches!(name, "gpgpu-preflight" | "gpgpu-compute-walker" | "gpgpu-pre-submit")
+    !matches!(
+        name,
+        "gpgpu-preflight"
+            | "gpgpu-compute-walker"
+            | "gpgpu-pre-submit"
+            | "gpgpu-primary-scanout-pixel-quiet"
+    )
 }
 
 fn seed_result_debug_slots(warm: RenderWarmState) {
@@ -1329,11 +1352,11 @@ fn is_raw_awake_program_name(name: &str) -> bool {
 }
 
 fn should_log_gpgpu_program_shape(name: &str) -> bool {
-    !is_raw_awake_program_name(name)
+    !is_raw_awake_program_name(name) && !name.contains("-quiet-")
 }
 
 fn should_log_gpgpu_surface_state(note: &str) -> bool {
-    note != "bind-send-bti-to-result-raw-buffer"
+    note != "bind-send-bti-to-result-raw-buffer" && !note.contains("-quiet")
 }
 
 fn gpgpu_store_eot_program() -> GpgpuEuProgram {
@@ -1372,6 +1395,32 @@ fn gpgpu_one_tile_output_sentinel_program() -> GpgpuEuProgram {
         expected_store_value: GPGPU_ONE_TILE_OUTPUT_SENTINEL,
         store_send_dword: Some(trueos_eu::gfx12::HDC1_BTI34_STORE_SEND_DWORD),
         visible_seed_dword: Some(trueos_eu::gfx12::HDC1_BTI34_STORE_IMM_DWORD),
+    }
+}
+
+fn gpgpu_primary_scanout_pixel_quiet_program() -> GpgpuEuProgram {
+    let artifact = trueos_eu::gfx12::HDC1_STATELESS_STORE_THEN_TS_EOT;
+    GpgpuEuProgram {
+        name: "gfx12-t47-primary-scanout-pixel-quiet-hdc1-stateless-store-then-ts-eot",
+        kind: artifact.kind,
+        words: artifact.words,
+        expects_store: artifact.expects_store,
+        expected_store_value: GPGPU_ONE_TILE_OUTPUT_SENTINEL,
+        store_send_dword: Some(trueos_eu::gfx12::HDC1_BTI34_STORE_SEND_DWORD),
+        visible_seed_dword: Some(trueos_eu::gfx12::HDC1_BTI34_STORE_IMM_DWORD),
+    }
+}
+
+fn gpgpu_primary_scanout_mandelbrot8_program() -> GpgpuEuProgram {
+    let artifact = trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_HDC1_STATELESS_STORE_THEN_TS_EOT;
+    GpgpuEuProgram {
+        name: artifact.name,
+        kind: artifact.kind,
+        words: artifact.words,
+        expects_store: artifact.expects_store,
+        expected_store_value: 0,
+        store_send_dword: Some(trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_STORE_SEND_DWORD),
+        visible_seed_dword: None,
     }
 }
 
@@ -2321,6 +2370,677 @@ pub(crate) fn submit_gpgpu_one_tile_output_sentinel_probe(
         expected_finish_marker: RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
         batch_bytes,
     }
+}
+
+pub(crate) fn submit_gpgpu_sidequest_target_buffer_probe() -> crate::intel::GpgpuOneTileSentinelProof
+{
+    const SIDEQUEST_TARGET_BYTES: usize = 64;
+    const SIDEQUEST_CPU_EXPECTED_BITS: u32 = 0;
+
+    let output_gpu = GPU_VA_GPGPU_TILE_ARENA_BASE + GPGPU_TILE_OUTPUT_OFFSET_BYTES as u64;
+    if let Some(warm) = warm_state() {
+        let output_offset = GPGPU_TILE_OUTPUT_OFFSET_BYTES;
+        if !warm.gpgpu_arena_virt.is_null()
+            && output_offset
+                .checked_add(SIDEQUEST_TARGET_BYTES)
+                .is_some_and(|end| end <= warm.gpgpu_arena_len)
+        {
+            let output_virt = unsafe { warm.gpgpu_arena_virt.add(output_offset) };
+            unsafe {
+                core::ptr::write_bytes(output_virt, 0, SIDEQUEST_TARGET_BYTES);
+            }
+            crate::intel::dma_flush(output_virt, SIDEQUEST_TARGET_BYTES);
+            crate::log!(
+                "intel/gpgpu: sidequest-target-buffer-clear target_gpu=0x{:X} target_off=0x{:X} target_bytes=0x{:X} action=prepare-proven-gpgpu-store\n",
+                output_gpu,
+                output_offset,
+                SIDEQUEST_TARGET_BYTES,
+            );
+        } else {
+            crate::log!(
+                "intel/gpgpu: sidequest-target-buffer-clear target_gpu=0x{:X} target_off=0x{:X} target_bytes=0x{:X} action=skip reason=arena-not-ready\n",
+                output_gpu,
+                output_offset,
+                SIDEQUEST_TARGET_BYTES,
+            );
+        }
+    }
+
+    let proof = submit_gpgpu_one_tile_output_sentinel_probe(
+        output_gpu,
+        SIDEQUEST_TARGET_BYTES,
+        SIDEQUEST_CPU_EXPECTED_BITS,
+    );
+    crate::log!(
+        "intel/gpgpu: sidequest-target-buffer-render submitted={} finished={} readback_ok={} reason={} program_source={} target_gpu=0x{:X} target_bytes=0x{:X} sentinel=0x{:08X} before=0x{:08X} after=0x{:08X} hits=0x{:016X} lane_dispatch={} finish_marker=0x{:08X} finish_expected=0x{:08X} batch_bytes=0x{:X} action={} next={} does_not_prove=fragment_shader_or_full_framebuffer\n",
+        proof.submitted as u8,
+        proof.finished as u8,
+        proof.readback_ok as u8,
+        proof.reason,
+        proof.program_name,
+        proof.output_gpu,
+        SIDEQUEST_TARGET_BYTES,
+        proof.sentinel,
+        proof.output_first_before,
+        proof.output_first_after,
+        proof.output_hits_lo64,
+        proof.dispatch_delta,
+        proof.finish_marker,
+        proof.expected_finish_marker,
+        proof.batch_bytes,
+        if proof.readback_ok {
+            "release-lumen-load"
+        } else {
+            "hold-lumen-load"
+        },
+        if proof.readback_ok {
+            "optional-visible-scanout-target"
+        } else {
+            "fix-gpgpu-target-buffer-render"
+        },
+    );
+    proof
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_marker_probe() -> crate::intel::GpgpuOneTileSentinelProof
+{
+    let program = gpgpu_one_tile_output_sentinel_program();
+    let Some(dev) = crate::intel::claimed_device() else {
+        return gpgpu_one_tile_sentinel_failure("no-device", program, 0);
+    };
+    let Some(warm) = warm_state() else {
+        return gpgpu_one_tile_sentinel_failure("no-warm-state", program, 0);
+    };
+    let Some(target) = super::display::primary_surface_gpgpu_marker_target() else {
+        return gpgpu_one_tile_sentinel_failure("no-primary-scanout", program, 0);
+    };
+    if target.marker_gpu >> 32 != 0 {
+        return gpgpu_one_tile_sentinel_failure(
+            "marker-gpu-high32-unsupported",
+            program,
+            target.marker_gpu,
+        );
+    }
+    if !forcewake_render_acquire(warm) {
+        return gpgpu_one_tile_sentinel_failure("forcewake", program, target.marker_gpu);
+    }
+    if !ensure_gpgpu_warm_buffers_mapped(dev, warm) {
+        return gpgpu_one_tile_sentinel_failure("ggtt-map", program, target.marker_gpu);
+    }
+
+    unsafe {
+        core::ptr::write_volatile(target.marker_virt as *mut u32, 0);
+    }
+    crate::intel::dma_flush(target.marker_virt, core::mem::size_of::<u32>());
+    let output_first_before = unsafe { core::ptr::read_volatile(target.marker_virt as *const u32) };
+
+    let mut sentinel_words = trueos_eu::gfx12::HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS;
+    sentinel_words[trueos_eu::gfx12::HDC1_BTI34_STORE_IMM_DWORD] = GPGPU_ONE_TILE_OUTPUT_SENTINEL;
+    sentinel_words[7] = target.marker_gpu as u32;
+    if !upload_and_verify_gpu_program_at(warm, GPGPU_EU_KERNEL_OFFSET_BYTES, &sentinel_words) {
+        return gpgpu_one_tile_sentinel_failure("program-upload", program, target.marker_gpu);
+    }
+
+    unsafe {
+        core::ptr::write_volatile(
+            warm.result_virt
+                .add(RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD * core::mem::size_of::<u32>())
+                as *mut u32,
+            0,
+        );
+        for breadcrumb_slot in 23..=28 {
+            core::ptr::write_volatile(
+                warm.result_virt
+                    .add(breadcrumb_slot * core::mem::size_of::<u32>()) as *mut u32,
+                0,
+            );
+        }
+        core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
+        core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
+    }
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+
+    let batch_dwords = warm.batch_len / core::mem::size_of::<u32>();
+    let batch =
+        unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, batch_dwords) };
+    let store_surface = prepare_gpgpu_store_surface_state_for_target(
+        warm,
+        target.marker_gpu,
+        "bind-send-bti-to-primary-scanout-marker",
+    );
+    let batch_bytes =
+        match encode_gfx12_gpgpu_walker_probe_batch(warm, batch, store_surface, program, 1) {
+            Ok(bytes) => bytes,
+            Err(reason) => {
+                return gpgpu_one_tile_sentinel_failure(reason, program, target.marker_gpu);
+            }
+        };
+    crate::intel::dma_flush(warm.batch_virt, batch_bytes);
+
+    let dispatch_before = read_gpgpu_threads_dispatched(dev);
+    let finished = submit_warm_render_batch(
+        dev,
+        warm,
+        RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD,
+        "gpgpu-primary-scanout-marker",
+    );
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+    let display_notified = super::display::notify_primary_surface_external_write(
+        "gpgpu-primary-scanout-marker",
+        target.marker_offset,
+        core::mem::size_of::<u32>(),
+    );
+    let output_first_after = unsafe { core::ptr::read_volatile(target.marker_virt as *const u32) };
+    let dispatch_after = read_gpgpu_threads_dispatched(dev);
+    let dispatch_delta = dispatch_after.saturating_sub(dispatch_before);
+    let finish_marker = read_result_dword(warm, RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD);
+    let output_hits_lo64 = if output_first_after == GPGPU_ONE_TILE_OUTPUT_SENTINEL {
+        1
+    } else {
+        0
+    };
+    let readback_ok = output_first_before == 0
+        && output_first_after == GPGPU_ONE_TILE_OUTPUT_SENTINEL
+        && finished
+        && finish_marker == RCS_EXEC_RESULT_COMPUTE_WALKER_DONE;
+    let reason = if readback_ok && dispatch_delta == 0 {
+        "scanout-sentinel-written-no-ts-delta"
+    } else if readback_ok {
+        "scanout-sentinel-written"
+    } else if !finished {
+        "submit-not-finished"
+    } else if output_first_after != GPGPU_ONE_TILE_OUTPUT_SENTINEL {
+        "scanout-sentinel-missing"
+    } else {
+        "scanout-sentinel-not-clean"
+    };
+    crate::log!(
+        "intel/gpgpu: primary-scanout-marker submitted=1 finished={} readback_ok={} reason={} program_source={} primary_gpu=0x{:X} primary_phys=0x{:X} primary_bytes=0x{:X} marker_gpu=0x{:X} marker_off=0x{:X} xy={}x{} before=0x{:08X} after=0x{:08X} sentinel=0x{:08X} output_hits_lo64=0x{:016X} display_notified={} lane_dispatch={} finish_marker=0x{:08X} finish_expected=0x{:08X} batch_bytes=0x{:X} action={} next=expand-marker-to-visible-block-or-mandelbrot-pixels does_not_prove=fragment_shader_mandelbrot_pixels\n",
+        finished as u8,
+        readback_ok as u8,
+        reason,
+        program.name,
+        target.gpu,
+        target.phys,
+        target.byte_len,
+        target.marker_gpu,
+        target.marker_offset,
+        target.marker_x,
+        target.marker_y,
+        output_first_before,
+        output_first_after,
+        GPGPU_ONE_TILE_OUTPUT_SENTINEL,
+        output_hits_lo64,
+        display_notified as u8,
+        dispatch_delta,
+        finish_marker,
+        RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        batch_bytes,
+        if readback_ok {
+            "continue-framebuffer-target"
+        } else {
+            "fix-primary-scanout-target"
+        },
+    );
+    if !finished {
+        recover_render_engine_after_nonretired_submit(dev, warm, "gpgpu-primary-scanout-marker");
+    }
+    crate::intel::GpgpuOneTileSentinelProof {
+        submitted: true,
+        finished,
+        readback_ok,
+        reason,
+        program_name: program.name,
+        output_gpu: target.marker_gpu,
+        sentinel: GPGPU_ONE_TILE_OUTPUT_SENTINEL,
+        output_first_before,
+        output_first_after,
+        output_nonzero_before: (output_first_before != 0) as usize,
+        output_nonzero_after: (output_first_after != 0) as usize,
+        output_hits_lo64,
+        dispatch_delta,
+        finish_marker,
+        expected_finish_marker: RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        batch_bytes,
+    }
+}
+
+fn mandelbrot_preview_color(x: usize, y: usize, width: usize, height: usize, phase: usize) -> u32 {
+    const FP_SHIFT: i64 = 16;
+    const ONE: i64 = 1 << FP_SHIFT;
+    const MAX_ITER: u32 = 40;
+
+    let width_den = core::cmp::max(width.saturating_sub(1), 1) as i64;
+    let height_den = core::cmp::max(height.saturating_sub(1), 1) as i64;
+    let drift = ((phase as i64 & 0x1F) - 16) * 512;
+    let cx = (-2 * ONE) + ((x as i64) * (3 * ONE) / width_den) + drift;
+    let cy = (-(ONE + ONE / 5)) + ((y as i64) * ((2 * ONE) + (ONE / 2)) / height_den);
+    let mut zx = 0i64;
+    let mut zy = 0i64;
+    let mut iter = 0u32;
+    while iter < MAX_ITER {
+        let zx2 = (zx * zx) >> FP_SHIFT;
+        let zy2 = (zy * zy) >> FP_SHIFT;
+        if zx2 + zy2 > 4 * ONE {
+            break;
+        }
+        let zxy = (zx * zy) >> (FP_SHIFT - 1);
+        zx = zx2 - zy2 + cx;
+        zy = zxy + cy;
+        iter += 1;
+    }
+
+    if iter == MAX_ITER {
+        return 0x00001018;
+    }
+    let t = iter.saturating_mul(255) / MAX_ITER;
+    let r = (t ^ 0x5A) & 0xFF;
+    let g = t.wrapping_mul(3).wrapping_add(48) & 0xFF;
+    let b = 255u32.saturating_sub(t / 2);
+    (r << 16) | (g << 8) | b
+}
+
+fn submit_gpgpu_primary_scanout_pixel_quiet(
+    dev: crate::intel::Dev,
+    warm: RenderWarmState,
+    program: GpgpuEuProgram,
+    pixel_gpu: u64,
+    pixel_virt: *mut u8,
+    color: u32,
+) -> crate::intel::GpgpuOneTileSentinelProof {
+    if pixel_gpu >> 32 != 0 {
+        return gpgpu_one_tile_sentinel_failure("pixel-gpu-high32-unsupported", program, pixel_gpu);
+    }
+
+    let output_first_before = unsafe { core::ptr::read_volatile(pixel_virt as *const u32) };
+    let mut pixel_words = trueos_eu::gfx12::HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS;
+    pixel_words[trueos_eu::gfx12::HDC1_BTI34_STORE_IMM_DWORD] = color;
+    pixel_words[7] = pixel_gpu as u32;
+    if !upload_and_verify_gpu_program_at(warm, GPGPU_EU_KERNEL_OFFSET_BYTES, &pixel_words) {
+        return gpgpu_one_tile_sentinel_failure("program-upload", program, pixel_gpu);
+    }
+
+    unsafe {
+        core::ptr::write_volatile(
+            warm.result_virt
+                .add(RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD * core::mem::size_of::<u32>())
+                as *mut u32,
+            0,
+        );
+        core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
+        core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
+    }
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+
+    let batch_dwords = warm.batch_len / core::mem::size_of::<u32>();
+    let batch =
+        unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, batch_dwords) };
+    let store_surface = prepare_gpgpu_store_surface_state_for_target(
+        warm,
+        pixel_gpu,
+        "bind-send-bti-to-primary-scanout-pixel-quiet",
+    );
+    let batch_bytes =
+        match encode_gfx12_gpgpu_walker_probe_batch(warm, batch, store_surface, program, 1) {
+            Ok(bytes) => bytes,
+            Err(reason) => return gpgpu_one_tile_sentinel_failure(reason, program, pixel_gpu),
+        };
+    crate::intel::dma_flush(warm.batch_virt, batch_bytes);
+
+    let dispatch_before = read_gpgpu_threads_dispatched(dev);
+    let finished = submit_warm_render_batch(
+        dev,
+        warm,
+        RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD,
+        "gpgpu-primary-scanout-pixel-quiet",
+    );
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+    crate::intel::dma_flush(pixel_virt, core::mem::size_of::<u32>());
+    let output_first_after = unsafe { core::ptr::read_volatile(pixel_virt as *const u32) };
+    let dispatch_after = read_gpgpu_threads_dispatched(dev);
+    let dispatch_delta = dispatch_after.saturating_sub(dispatch_before);
+    let finish_marker = read_result_dword(warm, RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD);
+    let output_hits_lo64 = if output_first_after == color { 1 } else { 0 };
+    let readback_ok = output_first_after == color
+        && finished
+        && finish_marker == RCS_EXEC_RESULT_COMPUTE_WALKER_DONE;
+    let reason = if readback_ok {
+        "scanout-pixel-written"
+    } else if !finished {
+        "submit-not-finished"
+    } else if output_first_after != color {
+        "scanout-pixel-mismatch"
+    } else {
+        "scanout-pixel-not-clean"
+    };
+    if !finished {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "gpgpu-primary-scanout-pixel-quiet",
+        );
+    }
+    crate::intel::GpgpuOneTileSentinelProof {
+        submitted: batch_bytes != 0,
+        finished,
+        readback_ok,
+        reason,
+        program_name: program.name,
+        output_gpu: pixel_gpu,
+        sentinel: color,
+        output_first_before,
+        output_first_after,
+        output_nonzero_before: (output_first_before != 0) as usize,
+        output_nonzero_after: (output_first_after != 0) as usize,
+        output_hits_lo64,
+        dispatch_delta,
+        finish_marker,
+        expected_finish_marker: RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        batch_bytes,
+    }
+}
+
+fn submit_gpgpu_primary_scanout_mandelbrot_strip(
+    dev: crate::intel::Dev,
+    warm: RenderWarmState,
+    program: GpgpuEuProgram,
+    row_gpu: u64,
+    row_virt: *mut u8,
+    x_base: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+    phase: usize,
+) -> crate::intel::GpgpuOneTileSentinelProof {
+    const LANES: usize = trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_LANES;
+
+    if row_gpu >> 32 != 0 {
+        return gpgpu_one_tile_sentinel_failure("strip-gpu-high32-unsupported", program, row_gpu);
+    }
+
+    let expected_first = mandelbrot_preview_color(x_base, y, width, height, phase);
+    let output_first_before = unsafe { core::ptr::read_volatile(row_virt as *const u32) };
+
+    let mut strip_words =
+        trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS;
+    let mut color_lane = 0usize;
+    while color_lane < LANES {
+        strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[color_lane]] =
+            mandelbrot_preview_color(x_base + color_lane, y, width, height, phase);
+        color_lane += 1;
+    }
+    // The BTI-backed HDC store uses offsets relative to the surface state's
+    // base address.  The surface is already bound at `row_gpu`, so lane 0 must
+    // store at byte offset 0, not at the absolute GPU VA again.
+    strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_BASE_DWORD] = 0;
+    if x_base == 0 && y == 0 {
+        let send_dword = trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_STORE_SEND_DWORD;
+        crate::log!(
+            "intel/gpgpu: primary-scanout-mandelbrot8-patch row_gpu=0x{:X} row_virt=0x{:X} row={} x_base={} width={} height={} phase={} addr_base_dword={} addr_base_payload=0x{:08X} color_dwords=[{},{},{},{},{},{},{},{}] colors=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] send_desc=0x{:08X} send_exdesc=0x{:08X} note=runtime-patched-eu-words-before-upload\n",
+            row_gpu,
+            row_virt as usize,
+            y,
+            x_base,
+            width,
+            height,
+            phase,
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_BASE_DWORD,
+            strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_BASE_DWORD],
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[0],
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[1],
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[2],
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[3],
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[4],
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[5],
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[6],
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[7],
+            strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[0]],
+            strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[1]],
+            strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[2]],
+            strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[3]],
+            strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[4]],
+            strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[5]],
+            strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[6]],
+            strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[7]],
+            strip_words[send_dword],
+            strip_words[send_dword + 1],
+        );
+    }
+    if !upload_and_verify_gpu_program_at(warm, GPGPU_EU_KERNEL_OFFSET_BYTES, &strip_words) {
+        return gpgpu_one_tile_sentinel_failure("program-upload", program, row_gpu);
+    }
+
+    unsafe {
+        core::ptr::write_volatile(
+            warm.result_virt
+                .add(RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD * core::mem::size_of::<u32>())
+                as *mut u32,
+            0,
+        );
+        core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
+        core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
+    }
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+
+    let batch_dwords = warm.batch_len / core::mem::size_of::<u32>();
+    let batch =
+        unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, batch_dwords) };
+    let store_surface = prepare_gpgpu_store_surface_state_for_target_span(
+        warm,
+        row_gpu,
+        LANES * core::mem::size_of::<u32>(),
+        "bind-send-bti-to-primary-scanout-mandelbrot8-strip",
+    );
+    let batch_bytes =
+        match encode_gfx12_gpgpu_walker_probe_batch(warm, batch, store_surface, program, 1) {
+            Ok(bytes) => bytes,
+            Err(reason) => return gpgpu_one_tile_sentinel_failure(reason, program, row_gpu),
+        };
+    crate::intel::dma_flush(warm.batch_virt, batch_bytes);
+
+    let dispatch_before = read_gpgpu_threads_dispatched(dev);
+    let finished = submit_warm_render_batch(
+        dev,
+        warm,
+        RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD,
+        "gpgpu-primary-scanout-mandelbrot8-strip",
+    );
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+    crate::intel::dma_flush(row_virt, LANES * core::mem::size_of::<u32>());
+
+    let mut hits = 0u64;
+    let mut lane = 0usize;
+    while lane < LANES {
+        let after = unsafe {
+            core::ptr::read_volatile(row_virt.add(lane * core::mem::size_of::<u32>()) as *const u32)
+        };
+        let expected = mandelbrot_preview_color(x_base + lane, y, width, height, phase);
+        if after == expected {
+            hits |= 1u64 << lane;
+        }
+        lane += 1;
+    }
+
+    let output_first_after = unsafe { core::ptr::read_volatile(row_virt as *const u32) };
+    let dispatch_after = read_gpgpu_threads_dispatched(dev);
+    let dispatch_delta = dispatch_after.saturating_sub(dispatch_before);
+    let finish_marker = read_result_dword(warm, RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD);
+    let readback_ok = finished
+        && finish_marker == RCS_EXEC_RESULT_COMPUTE_WALKER_DONE
+        && hits == ((1u64 << LANES) - 1);
+    let reason = if readback_ok {
+        "mandelbrot8-strip-written"
+    } else if !finished {
+        "submit-not-finished"
+    } else if hits == 0 {
+        "mandelbrot8-strip-missing"
+    } else {
+        "mandelbrot8-strip-partial"
+    };
+    if !finished {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "gpgpu-primary-scanout-mandelbrot8-strip",
+        );
+    }
+    crate::intel::GpgpuOneTileSentinelProof {
+        submitted: batch_bytes != 0,
+        finished,
+        readback_ok,
+        reason,
+        program_name: program.name,
+        output_gpu: row_gpu,
+        sentinel: expected_first,
+        output_first_before,
+        output_first_after,
+        output_nonzero_before: (output_first_before != 0) as usize,
+        output_nonzero_after: (output_first_after != 0) as usize,
+        output_hits_lo64: hits,
+        dispatch_delta,
+        finish_marker,
+        expected_finish_marker: RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        batch_bytes,
+    }
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot_preview(
+    cursor: usize,
+    pixel_budget: usize,
+) -> (crate::intel::GpgpuOneTileSentinelProof, usize) {
+    const PREVIEW_X: u32 = 96;
+    const PREVIEW_Y: u32 = 96;
+    const PREVIEW_W: usize = 128;
+    const PREVIEW_H: usize = 64;
+    const LANES: usize = trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_LANES;
+
+    let program = gpgpu_primary_scanout_mandelbrot8_program();
+    let Some(dev) = crate::intel::claimed_device() else {
+        return (gpgpu_one_tile_sentinel_failure("no-device", program, 0), cursor);
+    };
+    let Some(warm) = warm_state() else {
+        return (gpgpu_one_tile_sentinel_failure("no-warm-state", program, 0), cursor);
+    };
+    let Some(target) = super::display::primary_surface_gpgpu_marker_target() else {
+        return (gpgpu_one_tile_sentinel_failure("no-primary-scanout", program, 0), cursor);
+    };
+    if !forcewake_render_acquire(warm) {
+        return (gpgpu_one_tile_sentinel_failure("forcewake", program, target.gpu), cursor);
+    }
+    if !ensure_gpgpu_warm_buffers_mapped(dev, warm) {
+        return (gpgpu_one_tile_sentinel_failure("ggtt-map", program, target.gpu), cursor);
+    }
+
+    let block_x = core::cmp::min(PREVIEW_X, target.width.saturating_sub(1));
+    let block_y = core::cmp::min(PREVIEW_Y, target.height.saturating_sub(1));
+    let block_w = core::cmp::min(PREVIEW_W, target.width.saturating_sub(block_x) as usize);
+    let block_h = core::cmp::min(PREVIEW_H, target.height.saturating_sub(block_y) as usize);
+    let strips_per_row = block_w / LANES;
+    let total_strips = strips_per_row.saturating_mul(block_h);
+    if total_strips == 0 || pixel_budget < LANES {
+        return (
+            gpgpu_one_tile_sentinel_failure("empty-preview-strip-block", program, target.gpu),
+            cursor,
+        );
+    }
+
+    let start_cursor = cursor % total_strips;
+    let phase = cursor / total_strips;
+    let mut last_proof =
+        gpgpu_one_tile_sentinel_failure("no-preview-strips-submitted", program, target.gpu);
+    let strip_budget = core::cmp::max(1, pixel_budget / LANES);
+    let mut submitted_strips = 0usize;
+    let mut finished_strips = 0usize;
+    let mut idx = start_cursor;
+    while submitted_strips < strip_budget {
+        let strip_x = idx % strips_per_row;
+        let py = idx / strips_per_row;
+        let px = strip_x * LANES;
+        let byte_offset = ((block_y as usize + py) * target.pitch_bytes as usize)
+            + ((block_x as usize + px).saturating_mul(core::mem::size_of::<u32>()));
+        if byte_offset.saturating_add(LANES * core::mem::size_of::<u32>()) > target.byte_len {
+            last_proof = gpgpu_one_tile_sentinel_failure(
+                "preview-strip-outside-scanout",
+                program,
+                target.gpu,
+            );
+            break;
+        }
+        let row_gpu = target.gpu + byte_offset as u64;
+        let row_virt = unsafe { target.virt.add(byte_offset) };
+        let proof = submit_gpgpu_primary_scanout_mandelbrot_strip(
+            dev, warm, program, row_gpu, row_virt, px, py, block_w, block_h, phase,
+        );
+        submitted_strips += proof.submitted as usize;
+        if proof.readback_ok {
+            finished_strips += 1;
+        }
+        last_proof = proof;
+        if !proof.readback_ok {
+            break;
+        }
+        idx += 1;
+        if idx == total_strips {
+            idx = 0;
+        }
+    }
+
+    let flush_offset = (block_y as usize * target.pitch_bytes as usize)
+        + (block_x as usize * core::mem::size_of::<u32>());
+    let flush_bytes = block_h
+        .saturating_sub(1)
+        .saturating_mul(target.pitch_bytes as usize)
+        .saturating_add(block_w.saturating_mul(core::mem::size_of::<u32>()));
+    let display_notified = super::display::notify_primary_surface_external_write(
+        "gpgpu-primary-scanout-mandelbrot-preview",
+        flush_offset,
+        flush_bytes,
+    );
+    let next_cursor = (start_cursor + finished_strips) % total_strips;
+    let readback_ok =
+        submitted_strips != 0 && submitted_strips == finished_strips && last_proof.readback_ok;
+    crate::log!(
+        "intel/gpgpu: primary-scanout-mandelbrot8-preview submitted_strips={} finished_strips={} lanes_per_strip={} submitted_pixels={} finished_pixels={} readback_ok={} reason={} program_source={} primary_gpu=0x{:X} primary_phys=0x{:X} primary_bytes=0x{:X} block={}x{}@{}x{} cursor_in={} cursor_out={} strip_budget={} last_gpu=0x{:X} last_first_expected=0x{:08X} last_first_after=0x{:08X} last_hit_mask=0x{:016X} display_notified={} finish_marker=0x{:08X} finish_expected=0x{:08X} action={} next={} does_not_prove=full_screen_compute_shader_or_fragment_pipeline\n",
+        submitted_strips,
+        finished_strips,
+        LANES,
+        submitted_strips.saturating_mul(LANES),
+        finished_strips.saturating_mul(LANES),
+        readback_ok as u8,
+        last_proof.reason,
+        program.name,
+        target.gpu,
+        target.phys,
+        target.byte_len,
+        block_w,
+        block_h,
+        block_x,
+        block_y,
+        start_cursor,
+        next_cursor,
+        strip_budget,
+        last_proof.output_gpu,
+        last_proof.sentinel,
+        last_proof.output_first_after,
+        last_proof.output_hits_lo64,
+        display_notified as u8,
+        last_proof.finish_marker,
+        last_proof.expected_finish_marker,
+        if readback_ok {
+            "continue-gpgpu-strip-preview"
+        } else {
+            "fix-gpgpu-strip-store"
+        },
+        if next_cursor == 0 {
+            "advance-mandelbrot-phase"
+        } else {
+            "continue-preview-strips"
+        },
+    );
+    (last_proof, next_cursor)
 }
 
 pub(crate) fn submit_gpgpu_one_tile_output_compare_probe(
