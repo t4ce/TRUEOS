@@ -558,8 +558,14 @@ Runtime shape:
   into the artifact-visible row prefix.
 - `t6-2-row-block-live16-partial` is step 14 and writes one output slot per
   SIMD8 lane/row for that staged block.
-- `t6-3-row-block-live32-partial` is step 15 and reuses the same row-block view
-  while widening the per-row prefix reduction to live32.
+- `t6-3-accum16-hi-row-block-live32-partial` is step 15 and reuses the same
+  row-block view while widening the per-row prefix reduction to live32.  It is
+  intentionally a two-pass proof: T6.2 writes the low live16 partial, then the
+  T6.3 accumulator reads that value and adds lanes 16..31.
+- The first tile/first row-block T6.3 run also emits a one-shot
+  `t6-3-first-tile-output-detail` scan over the whole 256-dword output tile.
+  This is diagnostic only: it answers whether the live32 artifact wrote
+  anywhere else in the result tile before we change the artifact again.
 - `t6-3-actual-work-row-blocks` is step 16 and reports separate T5, T6, T6.1,
   T6.2, and T6.3 submitted, finished, compare-ok block counts.
 - The aggregate next marker is now
@@ -626,21 +632,39 @@ the lowest-risk block owner while the legacy walker row payload is untrusted.
 
 ## T6.3 Live32 Row-Block Tier
 
-`T6.3` is the lane-indexed live32 artifact:
-`gfx12-t6-3-lane-indexed-live32-packed-bf16-dot-hdc1-stateless-store-then-ts-eot`.
+`T6.3` is the lane-indexed live32 accumulator artifact:
+`gfx12-t6-3-accum16-hi-live32-packed-bf16-dot-hdc1-stateless-store-then-ts-eot`.
 
 It deliberately does not change the row-block dispatch scheme:
 
 - Software still restages one 8-row block into the tile-record row prefix.
 - `gl_LocalInvocationID.x` still selects row/output slot `[0..7]`.
-- The only shader math change is widening the packed-BF16 prefix from live16 to
-  live32.
-- T6.3 only runs after the T6.2 live16 compare for that row block succeeds.
+- T6.2 computes and stores the low live16 partial first.
+- T6.3 then reads that row output, adds packed-BF16 lanes `16..31`, and stores
+  the live32 result in the same row slot.
+- T6.3 only runs after the T6.2 live16 compare for that row block succeeds, so
+  the output it reads is known-good live data rather than a CPU-seeded fixture.
+- The monolithic live32 artifact remains preserved as
+  `gfx12-t6-3-lane-indexed-live32-packed-bf16-dot-hdc1-stateless-store-then-ts-eot`,
+  but hardware logs showed it retired with zero row outputs and a full first
+  output-tile scan found no misplaced stores.  Its native store payload uses
+  high GRFs around `g106/g109`; the accumulator stays close to the green T6.2
+  register shape.
 
 The oracle contract is recorded in
-`.codex_tmp/t6_3_lane_indexed_live32_packed_bf16_artifact_contract.md`.  This
-is still a partial matvec proof, not full GEMM: it proves 8 row outputs for a
-32-lane prefix, and the CPU/AP remains the output owner.
+`.codex_tmp/t6_3_accum16_hi_live32_artifact_contract.md`.  This is still a
+partial matvec proof, not full GEMM: it proves 8 row outputs for a 32-lane
+prefix, and the CPU/AP remains the output owner.
+
+Runtime proof, 2026-05-11:
+
+- `t6-3-accum16-hi-live32-partial` finished with `compare_ok=1` for all 12
+  dispatched row blocks.
+- The director aggregate reported `t63_compare_ok_blocks=12` and
+  `t63_compared_rows=96` across the three armed tiles.
+- The one-shot first-tile scan reported `nonzero=8`, `expected_hits=8`, and
+  `expected_misplaced_hits=0`, so the live32 row-block output landed only in
+  the intended first eight output slots.
 
 ## Backend Selection Boundary
 
