@@ -61,7 +61,10 @@ fn trueos_duration_nanos(duration: Duration) -> u64 {
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 fn trueos_park_step(remaining_nanos: Option<u64>) {
-    // zkvm std has no thread sleep backend; yield through TRUEOS CABI instead.
+    crate::platform::note_semantic_gap(crate::platform::SEMANTIC_GAP_RUNTIME_PARK_POLL);
+
+    // TRUEOS Platform has no kernel parker wait queue here yet; preserve the
+    // park/unpark state machine while yielding through the platform hooks.
     let sleep_ms = match remaining_nanos {
         Some(nanos) => (nanos / 1_000_000).min(1),
         None => 1,

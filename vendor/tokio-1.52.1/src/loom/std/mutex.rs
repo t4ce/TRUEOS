@@ -97,11 +97,16 @@ impl<T> Mutex<T> {
 impl<T: ?Sized> Mutex<T> {
     #[inline]
     pub(crate) fn lock(&self) -> MutexGuard<'_, T> {
+        let mut noted_contention = false;
         while self
             .locked
             .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
             .is_err()
         {
+            if !noted_contention {
+                crate::platform::note_semantic_gap(crate::platform::SEMANTIC_GAP_MUTEX_SPIN);
+                noted_contention = true;
+            }
             core::hint::spin_loop();
         }
 
@@ -110,10 +115,15 @@ impl<T: ?Sized> Mutex<T> {
 
     #[inline]
     pub(crate) fn try_lock(&self) -> Option<MutexGuard<'_, T>> {
-        self.locked
+        let guard = self
+            .locked
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
             .ok()
-            .map(|_| MutexGuard { mutex: self })
+            .map(|_| MutexGuard { mutex: self });
+        if guard.is_none() {
+            crate::platform::note_semantic_gap(crate::platform::SEMANTIC_GAP_MUTEX_SPIN);
+        }
+        guard
     }
 }
 

@@ -207,6 +207,9 @@ impl Inner {
 
         #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         {
+            crate::platform::note_semantic_gap(
+                crate::platform::SEMANTIC_GAP_MULTI_THREAD_PARK_POLL,
+            );
             drop(m);
             let deadline = duration
                 .map(|d| crate::platform::monotonic_nanos().saturating_add(duration_to_nanos(d)));

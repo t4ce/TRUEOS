@@ -6,10 +6,10 @@
 use crate::loom::sync::Condvar;
 use crate::loom::sync::Mutex;
 use std::fmt;
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-use std::time::{Duration, Instant};
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use std::time::Duration;
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+use std::time::{Duration, Instant};
 
 /// A barrier enables multiple threads to synchronize the beginning
 /// of some computation.
@@ -143,6 +143,7 @@ impl Barrier {
         if lock.count < self.num_threads {
             #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
             {
+                crate::platform::note_semantic_gap(crate::platform::SEMANTIC_GAP_BARRIER_POLL);
                 loop {
                     drop(lock);
                     crate::platform::sleep_ms(1);
@@ -174,7 +175,9 @@ impl Barrier {
     pub(crate) fn wait_timeout(&self, timeout: Duration) -> Option<BarrierWaitResult> {
         #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         {
-            let deadline = crate::platform::monotonic_nanos().saturating_add(duration_to_nanos(timeout));
+            crate::platform::note_semantic_gap(crate::platform::SEMANTIC_GAP_BARRIER_POLL);
+            let deadline =
+                crate::platform::monotonic_nanos().saturating_add(duration_to_nanos(timeout));
 
             let mut lock = loop {
                 if let Some(guard) = self.lock.try_lock() {
@@ -214,44 +217,44 @@ impl Barrier {
 
         #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         {
-        // This implementation mirrors `wait`, but with each blocking operation
-        // replaced by a timeout-amenable alternative.
+            // This implementation mirrors `wait`, but with each blocking operation
+            // replaced by a timeout-amenable alternative.
 
-        let deadline = Instant::now() + timeout;
+            let deadline = Instant::now() + timeout;
 
-        // Acquire `self.lock` with at most `timeout` duration.
-        let mut lock = loop {
-            if let Some(guard) = self.lock.try_lock() {
-                break guard;
-            } else if Instant::now() > deadline {
-                return None;
-            } else {
-                std::thread::yield_now();
-            }
-        };
-
-        // Shrink the `timeout` to account for the time taken to acquire `lock`.
-        let timeout = deadline.saturating_duration_since(Instant::now());
-
-        let local_gen = lock.generation_id;
-        lock.count += 1;
-        if lock.count < self.num_threads {
-            // We need a while loop to guard against spurious wakeups.
-            // https://en.wikipedia.org/wiki/Spurious_wakeup
-            while local_gen == lock.generation_id {
-                let (guard, timeout_result) = self.cvar.wait_timeout(lock, timeout).unwrap();
-                lock = guard;
-                if timeout_result.timed_out() {
+            // Acquire `self.lock` with at most `timeout` duration.
+            let mut lock = loop {
+                if let Some(guard) = self.lock.try_lock() {
+                    break guard;
+                } else if Instant::now() > deadline {
                     return None;
+                } else {
+                    std::thread::yield_now();
                 }
+            };
+
+            // Shrink the `timeout` to account for the time taken to acquire `lock`.
+            let timeout = deadline.saturating_duration_since(Instant::now());
+
+            let local_gen = lock.generation_id;
+            lock.count += 1;
+            if lock.count < self.num_threads {
+                // We need a while loop to guard against spurious wakeups.
+                // https://en.wikipedia.org/wiki/Spurious_wakeup
+                while local_gen == lock.generation_id {
+                    let (guard, timeout_result) = self.cvar.wait_timeout(lock, timeout).unwrap();
+                    lock = guard;
+                    if timeout_result.timed_out() {
+                        return None;
+                    }
+                }
+                Some(BarrierWaitResult(false))
+            } else {
+                lock.count = 0;
+                lock.generation_id = lock.generation_id.wrapping_add(1);
+                self.cvar.notify_all();
+                Some(BarrierWaitResult(true))
             }
-            Some(BarrierWaitResult(false))
-        } else {
-            lock.count = 0;
-            lock.generation_id = lock.generation_id.wrapping_add(1);
-            self.cvar.notify_all();
-            Some(BarrierWaitResult(true))
-        }
         }
     }
 }
