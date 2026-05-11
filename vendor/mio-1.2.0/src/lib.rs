@@ -54,6 +54,8 @@ mod token;
 #[cfg(not(target_os = "wasi"))]
 mod waker;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+mod platform;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod zkvm_compat;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod zkvm_net;

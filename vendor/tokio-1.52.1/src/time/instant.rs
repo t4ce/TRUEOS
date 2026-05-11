@@ -211,7 +211,7 @@ mod variant {
     pub(super) fn now() -> Instant {
         #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         {
-            return Instant::from_std(crate::time::zkvm::std_instant_now());
+            return Instant::from_std(crate::time::zkvm::platform_instant_now());
         }
 
         Instant::from_std(std::time::Instant::now())

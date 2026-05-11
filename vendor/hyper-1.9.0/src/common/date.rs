@@ -45,17 +45,12 @@ thread_local!(static CACHED: RefCell<CachedDate> = RefCell::new(CachedDate::new(
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 fn system_time_now() -> SystemTime {
-    UNIX_EPOCH + Duration::from_secs(unsafe { trueos_time_unix_seconds() })
+    crate::platform::system_time_now()
 }
 
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 fn system_time_now() -> SystemTime {
     SystemTime::now()
-}
-
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
-unsafe extern "C" {
-    fn trueos_time_unix_seconds() -> u64;
 }
 
 impl CachedDate {

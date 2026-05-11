@@ -68,21 +68,12 @@ use std::{
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 fn instant_now() -> Instant {
-    let duration = Duration::from_nanos(unsafe { trueos_time_monotonic_nanos() });
-
-    // Rust's unsupported std time backend stores Instant as a single Duration.
-    // TRUEOS supplies the missing clock value through the std ABI shim.
-    unsafe { core::mem::transmute::<Duration, Instant>(duration) }
+    crate::platform::instant_now()
 }
 
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 fn instant_now() -> Instant {
     Instant::now()
-}
-
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
-unsafe extern "C" {
-    fn trueos_time_monotonic_nanos() -> u64;
 }
 
 /// A timer which provides timer-like functions.

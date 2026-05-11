@@ -176,7 +176,7 @@ impl LogHistogramBuilder {
         assert!(max_error > 0.0, "max_error must be greater than 0");
         assert!(max_error < 1.0, "max_error must be less than 1");
         let mut p = 2;
-        while 2_f64.powf(-(p as f64)) > max_error && p <= MAX_PRECISION {
+        while inverse_power_of_two(p) > max_error && p <= MAX_PRECISION {
             p += 1;
         }
         self.precision = Some(p);
@@ -384,8 +384,7 @@ mod test {
 
                     // 4. Assert that the size of the buckets is always within the error bound of 2^-p
                     if bucket > 0 && bucket < histogram.num_buckets - 1 {
-                        let p = histogram.p as f64;
-                        let error_bound = 2.0_f64.powf(-p);
+                        let error_bound = inverse_power_of_two(histogram.p);
                         // the most it could be wrong is by the length of the range / 2
                         let relative_error = ((size as f64 - 1.0) / 2.0) / range.start as f64;
                         prop_assert!(
@@ -523,4 +522,8 @@ mod test {
         let conf = LogHistogram::builder().build();
         assert_eq!(conf.num_buckets, 119);
     }
+}
+
+fn inverse_power_of_two(p: u32) -> f64 {
+    1.0 / ((1_u64 << p) as f64)
 }

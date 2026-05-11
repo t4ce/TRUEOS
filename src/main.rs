@@ -69,8 +69,6 @@ mod shell2;
 mod smp;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod stackkeeper;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
-mod std_link_abi;
 mod t;
 mod tga;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]

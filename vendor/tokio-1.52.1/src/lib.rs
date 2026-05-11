@@ -515,6 +515,9 @@ pub mod net;
 
 mod loom;
 
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub(crate) mod platform;
+
 cfg_process! {
     pub mod process;
 }
