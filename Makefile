@@ -11,12 +11,7 @@ ISO_DIR := bld
 ISO_PATH := bld/trueos.iso
 ISO_BOOT_DIR := bld/iso-bootroot
 ISO_EFI_IMG := efi.img
-UPDATE_7Z_FLAGS ?= -mx=9 -m0=LZMA2 -ms=off
-RELEASE_BUNDLE_DIR := $(ISO_DIR)/trueos-release
-RELEASE_ARCHIVE := $(ISO_DIR)/TrueOS.7z
-BUNDLED_OVMF_NAME := ovmf-code-x86_64.fd
 OVMF_BUNDLE_PATH ?= $(firstword $(wildcard /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd /opt/homebrew/share/qemu/edk2-x86_64-code.fd /usr/local/share/qemu/edk2-x86_64-code.fd))
-OVMF_LICENSE_PATH ?= $(firstword $(wildcard /usr/share/doc/ovmf/copyright /opt/homebrew/share/doc/qemu/LICENSE /usr/local/share/doc/qemu/LICENSE))
 # Extra slack added on top of the staged EFI payload when sizing the embedded
 # EFI System Partition image. This keeps the image close to minimal while
 # leaving room for FAT metadata and small growth in embedded artifacts.
@@ -39,23 +34,15 @@ LIMINE_INSTALL_STAMP := $(LIMINE_BUILD_DIR)/.installed
 GUC_FW_HOST_PATH ?= /lib/firmware/i915/adlp_guc_70.bin.zst
 GUC_FW_ISO_REL_PATH ?= EFI/BOOT/adlp_guc_70.bin
 BLUEPRINTS_ROOT ?= ../TRUEOS Blueprints
-BP_MANIFEST ?= $(BLUEPRINTS_ROOT)/Cargo.toml
-BP_NAMES ?= $(strip $(shell awk 'BEGIN { in_example = 0 } /^\[\[example\]\]$$/ { in_example = 1; next } /^\[/ { in_example = 0 } in_example && /^[[:space:]]*name[[:space:]]*=/ { line = $$0; sub(/^[^=]*=[[:space:]]*"/, "", line); sub(/"[[:space:]]*$$/, "", line); print line }' "$(BP_MANIFEST)" 2>/dev/null))
 BP_DIST_DIR ?= $(BLUEPRINTS_ROOT)/dist
 BP_ISO_DIR_REL ?= EFI/BOOT/apps
-BP_EXAMPLE_PAIRS ?= $(strip $(shell awk 'BEGIN { in_example = 0; name = ""; path = "" } /^\[\[example\]\]$$/ { if (in_example && name != "" && path != "") print name ":" path; in_example = 1; name = ""; path = ""; next } /^\[/ { if (in_example && name != "" && path != "") print name ":" path; in_example = 0; next } in_example && /^[[:space:]]*name[[:space:]]*=/ { line = $$0; sub(/^[^=]*=[[:space:]]*"/, "", line); sub(/"[[:space:]]*$$/, "", line); name = line; next } in_example && /^[[:space:]]*path[[:space:]]*=/ { line = $$0; sub(/^[^=]*=[[:space:]]*"/, "", line); sub(/"[[:space:]]*$$/, "", line); path = line; next } END { if (in_example && name != "" && path != "") print name ":" path }' "$(BP_MANIFEST)" 2>/dev/null))
-# Blueprint build/embed switches.
-# Set BP_SKIP_BUILD to 1 to reuse existing dist/*.bp files even when stale.
-# Set BP_SKIP_EMBED to 1 to omit blueprints from the ISO.
-# Set both to 1 to stop both blueprint build and embedding.
-BP_SKIP_BUILD := 1
+BP_FILES_CMD ?= find "$(BP_DIST_DIR)" -maxdepth 1 -type f -name '*.bp' -print
 BP_SKIP_EMBED := 1
 QEMU_RUNNER := tools/qemu/run.sh
 QEMU_BIN ?= qemu-system-x86_64
 QEMU_UEFI_FIRMWARE = $(OVMF_BUNDLE_PATH)
 DISK_IMG := tools/disk.img
 NVME_IMG := tools/nvme.img
-CNT_FILE := tools/cnt
 QEMU_BRIDGE ?= br0
 QEMU_BRIDGE_HELPER ?= $(firstword $(wildcard /usr/lib/qemu/qemu-bridge-helper /usr/libexec/qemu-bridge-helper /usr/lib/qemu-bridge-helper))
 QEMU_HDA_AUDIODEV ?= none,id=snd0
@@ -63,19 +50,12 @@ QEMU_HOST_TCP_PORT_3 ?= 10003
 QEMU_HOST_TCP_PORT_4 ?= 10004
 QEMU_HOST_TCP_PORT_80 ?= 8080
 QEMU_RUN_ENV = ISO_PATH="$(ISO_PATH)" QEMU_BIN="$(QEMU_BIN)" QEMU_UEFI_FIRMWARE="$(QEMU_UEFI_FIRMWARE)" QEMU_NVME_IMG="$(NVME_IMG)" QEMU_BRIDGE="$(QEMU_BRIDGE)" QEMU_BRIDGE_HELPER="$(QEMU_BRIDGE_HELPER)" QEMU_HDA_AUDIODEV="$(QEMU_HDA_AUDIODEV)" QEMU_HOST_TCP_PORT_3="$(QEMU_HOST_TCP_PORT_3)" QEMU_HOST_TCP_PORT_4="$(QEMU_HOST_TCP_PORT_4)" QEMU_HOST_TCP_PORT_80="$(QEMU_HOST_TCP_PORT_80)"
-BAREMETAL_LOG_DRAIN := tools/baremetal-log-drain.sh
-BAREMETAL_LOG_HOST ?= 192.168.178.94
-BAREMETAL_LOG_PORT ?= 1
-BAREMETAL_LOG_DELAY ?= 15
-BAREMETAL_LOG_DIR ?= bld/baremetal-logs
 
 CARGO_BUILD_FLAGS ?=
 
 CARGO_GFX_FLAGS =
 
 IMG_SIZE ?= 25G
-
-.PHONY: kernel empty-libs blueprints artifacts kernel-stages limine baremetal-reboot-log iso iso-build iso-release iso-debug snipe dbg dbg-vscode run run-with-nvme run-installed lc FORCE
 
 images: $(DISK_IMG) $(NVME_IMG)
 
@@ -96,42 +76,7 @@ empty-libs:
 kernel: empty-libs
 	cargo +nightly build $(CARGO_GFX_FLAGS) $(CARGO_BUILD_FLAGS) -Z build-std=core,compiler_builtins,alloc,std,panic_abort -Z json-target-spec --target .cargo/x86_64-unknown-trueos.json
 
-blueprints:
-	@if [ "$(BP_SKIP_BUILD)" = "1" ]; then \
-		echo "blueprints: skipping build"; \
-	elif [ -z "$(strip $(BP_EXAMPLE_PAIRS))" ]; then \
-		echo "blueprints: no blueprint outputs configured"; \
-	else \
-		mkdir -p "$(BP_DIST_DIR)"; \
-		for bp_entry in $(BP_EXAMPLE_PAIRS); do \
-			bp=$${bp_entry%%:*}; \
-			src_rel=$${bp_entry#*:}; \
-			out="$(BP_DIST_DIR)/$$bp.bp"; \
-			needs_build=0; \
-			if [ ! -f "$$out" ]; then \
-				needs_build=1; \
-			elif [ "$(BP_MANIFEST)" -nt "$$out" ] || [ "$(BLUEPRINTS_ROOT)/$$src_rel" -nt "$$out" ]; then \
-				needs_build=1; \
-			elif [ -f "$(BLUEPRINTS_ROOT)/Cargo.lock" ] && [ "$(BLUEPRINTS_ROOT)/Cargo.lock" -nt "$$out" ]; then \
-				needs_build=1; \
-			elif [ -f "$(BLUEPRINTS_ROOT)/target.json" ] && [ "$(BLUEPRINTS_ROOT)/target.json" -nt "$$out" ]; then \
-				needs_build=1; \
-			elif [ -f "$(BLUEPRINTS_ROOT)/trueos/Cargo.toml" ] && [ "$(BLUEPRINTS_ROOT)/trueos/Cargo.toml" -nt "$$out" ]; then \
-				needs_build=1; \
-			elif [ -f "$(BLUEPRINTS_ROOT)/trueos-sys/Cargo.toml" ] && [ "$(BLUEPRINTS_ROOT)/trueos-sys/Cargo.toml" -nt "$$out" ]; then \
-				needs_build=1; \
-			elif find "$(BLUEPRINTS_ROOT)/src" "$(BLUEPRINTS_ROOT)/trueos/src" "$(BLUEPRINTS_ROOT)/trueos-sys/src" -type f -name '*.rs' -newer "$$out" -print -quit 2>/dev/null | grep -q .; then \
-				needs_build=1; \
-			fi; \
-			if [ "$$needs_build" = "1" ]; then \
-				cd "$(BLUEPRINTS_ROOT)" && cargo apps "$$bp"; \
-			else \
-				echo "blueprints: $$bp is up to date"; \
-			fi; \
-		done; \
-	fi
-
-artifacts: blueprints kernel
+artifacts: kernel
 	mkdir -p $(ARTIFACT_DIR)
 	cp $(KERNEL_BIN) $(ARTIFACT_FULL_ELF)
 	cp $(KERNEL_BIN) $(ARTIFACT_RUNTIME_ELF)
@@ -147,11 +92,7 @@ artifacts: blueprints kernel
 		printf "runtime_elf=%s\n" "$(ARTIFACT_RUNTIME_ELF)"; \
 	} > $(ARTIFACT_BUILD_INFO)
 
-kernel-stages: artifacts
-
-limine: $(LIMINE_INSTALL_STAMP)
-
-$(LIMINE_INSTALL_STAMP): FORCE
+limine:
 	@set -e; \
 	if [ ! -f "$(LIMINE_SUBMODULE)/bootstrap" ]; then \
 		git submodule update --init "$(LIMINE_SUBMODULE)"; \
@@ -204,27 +145,17 @@ $(LIMINE_INSTALL_STAMP): FORCE
 	$(MAKE) -C "$(LIMINE_BUILD_DIR)" install; \
 	printf 'ok\n' > "$(LIMINE_INSTALL_STAMP)"
 
-baremetal-reboot-log:
-	-fuser -k 7777/udp || true
-	python3 -c "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.bind(('',7777)); exec(\"while True:\n d,a=s.recvfrom(2048)\n if d==b'probe': s.sendto(b'ack',(a[0],7777)); break\")" &
-	@TRUEOS_BAREMETAL_LOG_HOST="$(BAREMETAL_LOG_HOST)" TRUEOS_BAREMETAL_LOG_PORT="$(BAREMETAL_LOG_PORT)" TRUEOS_BAREMETAL_LOG_DELAY="$(BAREMETAL_LOG_DELAY)" TRUEOS_BAREMETAL_LOG_DIR="$(BAREMETAL_LOG_DIR)" "$(BAREMETAL_LOG_DRAIN)" start
-
-iso: baremetal-reboot-log
-	@$(MAKE) iso-build
-
-iso-build: artifacts images limine
+iso: artifacts images limine
 	rm -rf $(ISO_BOOT_DIR)
 	rm -f $(ISO_PATH)
 	mkdir -p $(ISO_BOOT_DIR)
 	cp $(ARTIFACT_RUNTIME_ELF) $(ISO_BOOT_DIR)/TRUEOS.elf
 	mkdir -p $(ISO_DIR)/EFI/BOOT
 	@if [ "$(BP_SKIP_EMBED)" != "1" ]; then \
-		for bp in $(BP_NAMES); do \
-			if [ ! -f "$(BP_DIST_DIR)/$$bp.bp" ]; then \
-				echo "error: blueprint not found at $(BP_DIST_DIR)/$$bp.bp"; \
-				exit 1; \
-			fi; \
-		done; \
+		if ! $(BP_FILES_CMD) 2>/dev/null | grep -q .; then \
+			echo "error: BP_SKIP_EMBED=0 but no blueprint artifacts matched $(BP_DIST_DIR)/*.bp"; \
+			exit 1; \
+		fi; \
 	else \
 		echo "iso: skipping blueprint embed"; \
 	fi
@@ -245,20 +176,21 @@ iso-build: artifacts images limine
 	cp $(ISO_DIR)/EFI/BOOT/adlp_guc_70.bin $(ISO_BOOT_DIR)/$(GUC_FW_ISO_REL_PATH)
 	@if [ "$(BP_SKIP_EMBED)" != "1" ]; then \
 		mkdir -p $(ISO_BOOT_DIR)/$(BP_ISO_DIR_REL); \
-		for bp in $(BP_NAMES); do \
-			cp "$(BP_DIST_DIR)/$$bp.bp" "$(ISO_BOOT_DIR)/$(BP_ISO_DIR_REL)/$$bp.bp"; \
+		$(BP_FILES_CMD) | while IFS= read -r bp; do \
+			cp "$$bp" "$(ISO_BOOT_DIR)/$(BP_ISO_DIR_REL)/$$(basename "$$bp")"; \
 		done; \
 		mkdir -p $(ISO_DIR)/$(BP_ISO_DIR_REL); \
-		for bp in $(BP_NAMES); do \
-			cp "$(BP_DIST_DIR)/$$bp.bp" "$(ISO_DIR)/$(BP_ISO_DIR_REL)/$$bp.bp"; \
+		$(BP_FILES_CMD) | while IFS= read -r bp; do \
+			cp "$$bp" "$(ISO_DIR)/$(BP_ISO_DIR_REL)/$$(basename "$$bp")"; \
 		done; \
 	fi
 	@awk 'BEGIN { skip_app_string = 0 } skip_app_string && /^module_string: trueos\.app\./ { skip_app_string = 0; next } skip_app_string { skip_app_string = 0 } /^module_path: boot\(\):\/EFI\/BOOT\/apps\/.*\.bp$$/ { skip_app_string = 1; next } { print }' "$(LIMINE_CFG)" > "$(LIMINE_CFG_GENERATED)"
 	@if [ "$(BP_SKIP_EMBED)" != "1" ]; then \
-		for bp in $(BP_NAMES); do \
+		$(BP_FILES_CMD) | while IFS= read -r bp; do \
+			bp_name=$$(basename "$$bp" .bp); \
 			printf '%s\n%s\n' \
-				"module_path: boot():/$(BP_ISO_DIR_REL)/$$bp.bp" \
-				"module_string: trueos.app.$$bp" \
+				"module_path: boot():/$(BP_ISO_DIR_REL)/$$(basename "$$bp")" \
+				"module_string: trueos.app.$$bp_name" \
 				>> "$(LIMINE_CFG_GENERATED)"; \
 		done; \
 	fi
@@ -288,8 +220,8 @@ iso-build: artifacts images limine
 	mcopy -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) $(LIMINE_BOOTX64) ::/EFI/BOOT/BOOTX64.EFI
 	mcopy -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) $(ISO_DIR)/EFI/BOOT/adlp_guc_70.bin ::/EFI/BOOT/adlp_guc_70.bin
 	@if [ "$(BP_SKIP_EMBED)" != "1" ]; then \
-		for bp in $(BP_NAMES); do \
-			mcopy -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) "$(ISO_BOOT_DIR)/$(BP_ISO_DIR_REL)/$$bp.bp" ::/$(BP_ISO_DIR_REL)/$$bp.bp; \
+		$(BP_FILES_CMD) | while IFS= read -r bp; do \
+			mcopy -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) "$(ISO_BOOT_DIR)/$(BP_ISO_DIR_REL)/$$(basename "$$bp")" ::/$(BP_ISO_DIR_REL)/$$(basename "$$bp"); \
 		done; \
 	fi
 	xorriso -as mkisofs \
@@ -302,43 +234,10 @@ iso-build: artifacts images limine
 		-o $(ISO_PATH) $(ISO_BOOT_DIR)
 
 
-iso-release: BUILD_MODE := release
-iso-release: CARGO_BUILD_FLAGS += --release
-iso-release: iso-build
-	@if [ -z "$(OVMF_BUNDLE_PATH)" ] || [ ! -f "$(OVMF_BUNDLE_PATH)" ]; then \
-		echo "error: no OVMF firmware found to bundle"; \
-		echo "       install OVMF/edk2-ovmf or run: make iso-release OVMF_BUNDLE_PATH=/path/to/ovmf-code-x86_64.fd"; \
-		exit 1; \
-	fi
-	rm -rf $(RELEASE_BUNDLE_DIR)
-	rm -f $(RELEASE_ARCHIVE)
-	mkdir -p $(RELEASE_BUNDLE_DIR)
-	cp $(ISO_PATH) $(RELEASE_BUNDLE_DIR)/trueos.iso
-	cp "$(OVMF_BUNDLE_PATH)" $(RELEASE_BUNDLE_DIR)/$(BUNDLED_OVMF_NAME)
-	cp tools/release/run-linux.sh $(RELEASE_BUNDLE_DIR)/run-linux.sh
-	cp tools/release/run-macos.sh $(RELEASE_BUNDLE_DIR)/run-macos.sh
-	cp tools/release/README-RUN.txt $(RELEASE_BUNDLE_DIR)/README-RUN.txt
-	@if [ -n "$(OVMF_LICENSE_PATH)" ] && [ -f "$(OVMF_LICENSE_PATH)" ]; then \
-		cp "$(OVMF_LICENSE_PATH)" $(RELEASE_BUNDLE_DIR)/OVMF-LICENSE.txt; \
-	fi
-	chmod +x $(RELEASE_BUNDLE_DIR)/run-linux.sh $(RELEASE_BUNDLE_DIR)/run-macos.sh
-	cd $(RELEASE_BUNDLE_DIR) && 7z a -t7z $(UPDATE_7Z_FLAGS) ../$(notdir $(RELEASE_ARCHIVE)) trueos.iso $(BUNDLED_OVMF_NAME) run-linux.sh run-macos.sh README-RUN.txt $$(test -f OVMF-LICENSE.txt && printf '%s' OVMF-LICENSE.txt)
-	env -u GIO_MODULE_DIR gio mount smb://t4ce@pdjb/home-share || true
-	env -u GIO_MODULE_DIR gio copy $(RELEASE_ARCHIVE) smb://t4ce@pdjb/home-share/TRUEOS_SITE/
-	@mkdir -p "$$(dirname "$(CNT_FILE)")"; count=$$(cat "$(CNT_FILE)" 2>/dev/null || echo 0); count=$${count:-0}; printf '%s\n' $$((count + 1)) | tee "$(CNT_FILE)"
-
-iso-debug: BUILD_MODE := debug
-iso-debug: iso-build
-
 SERIAL_CONSOLE_CMD = konsole -e sh -c 'stty -echo -icanon cols 100 rows 100; nc 127.0.0.1 5555; stty sane; echo "Connection closed. Press ENTER to exit..."; read'
 
-snipe:
+dbg: iso
 	@killall -9 qemu-system-x86_64 || true
-
-dbg: snipe iso-debug
-	@($(QEMU_RUN_ENV) $(QEMU_RUNNER) iso & $(SERIAL_CONSOLE_CMD))
-
-dbg-vscode: snipe iso-debug
 	@$(SERIAL_CONSOLE_CMD) &
 	@set -e; \
 		$(QEMU_RUN_ENV) $(QEMU_RUNNER) iso-debug -S -s & qemu_pid=$$!; \
@@ -346,15 +245,6 @@ dbg-vscode: snipe iso-debug
 		echo "GDB stub ready on 127.0.0.1:1234"; \
 		wait $$qemu_pid
 
-# Default quick boot: rebuild the emulator ISO, then restart only QEMU.
-run: snipe iso-debug
+run: iso
+	@killall -9 qemu-system-x86_64 || true
 	@($(QEMU_RUN_ENV) $(QEMU_RUNNER) iso & $(SERIAL_CONSOLE_CMD))
-
-lc:
-	@./lc $(ARGS)
-
-run-with-nvme: snipe iso-debug
-	@($(QEMU_RUN_ENV) $(QEMU_RUNNER) iso & $(SERIAL_CONSOLE_CMD))
-
-run-installed: snipe iso-debug
-	@($(QEMU_RUN_ENV) $(QEMU_RUNNER) installed & $(SERIAL_CONSOLE_CMD))
