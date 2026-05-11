@@ -8,7 +8,7 @@
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 fn std_now() -> std::time::Instant {
-    crate::time::zkvm::std_instant_now()
+    crate::time::zkvm::platform_instant_now()
 }
 
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]

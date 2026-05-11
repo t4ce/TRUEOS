@@ -107,6 +107,9 @@ mod cfg;
 #[macro_use]
 mod trace;
 
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+mod platform;
+
 pub mod body;
 mod common;
 mod error;

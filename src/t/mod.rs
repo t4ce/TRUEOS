@@ -4,7 +4,11 @@
 //! services: time, blocking workers, filesystem shims, and VNet/Mio/socket2.
 
 pub mod net;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod platform;
 pub mod tokio_probe;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod tokio_platform;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod trueos_tokio_worker;
 
