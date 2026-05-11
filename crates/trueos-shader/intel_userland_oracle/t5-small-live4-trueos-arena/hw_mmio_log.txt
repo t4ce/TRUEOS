@@ -1,1 +1,0 @@
-hw t_ns=0 unavailable reason=sudo-noninteractive-failed need="run sudo -v first or run this script as root"

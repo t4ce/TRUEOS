@@ -1,6 +1,0 @@
-fd=0 target="/dev/null"
-fd=1 target="/home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/sentinel-regression/log.txt"
-fd=2 target="/home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/sentinel-regression/log.txt"
-fd=3 target="/home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/sentinel-regression/log.txt"
-fd=4 target="/proc/187620/fd"
-fd=5 target="/home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/sentinel-regression/dumps/000878_end_fd.txt"
