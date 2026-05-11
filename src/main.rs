@@ -76,9 +76,6 @@ mod t;
 mod tga;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod th;
-mod tokio_probe;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
-mod trueos_tokio_worker;
 #[path = "tst/boot_factory_ram_probe.rs"]
 mod tst_boot_factory_ram_probe;
 #[path = "tst/chatserver/server.rs"]
@@ -290,7 +287,7 @@ pub extern "C" fn kmain() -> ! {
     net::init();
 
     if crate::allcaps::probes::TOKIO_BOOT_PROBE {
-        tokio_probe::log_boot_probe();
+        t::tokio_probe::log_boot_probe();
     }
     if crate::allcaps::probes::MIO_BOOT_PROBE {
         mio_probe::log_boot_probe();

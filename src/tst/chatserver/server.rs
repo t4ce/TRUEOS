@@ -541,7 +541,7 @@ pub async fn chat_http_service_task() {
     );
 
     loop {
-        let rc = crate::trueos_tokio_worker::spawn_blocking_job_with_purpose(
+        let rc = crate::t::trueos_tokio_worker::spawn_blocking_job_with_purpose(
             Box::new(|| {
                 crate::log!("chat-http: blocking closure enter\n");
                 if let Err(err) = run_chat_http_runtime() {

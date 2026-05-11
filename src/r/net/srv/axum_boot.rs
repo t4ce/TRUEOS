@@ -90,7 +90,7 @@ pub async fn axum_boot_service_task() {
     crate::log!("axum-boot: launching after NET_V4_CONFIGURED\n");
 
     loop {
-        let rc = crate::trueos_tokio_worker::spawn_blocking_job_with_purpose(
+        let rc = crate::t::trueos_tokio_worker::spawn_blocking_job_with_purpose(
             Box::new(|| {
                 if let Err(err) = run_axum_boot_runtime() {
                     AXUM_BOOT_PORT.store(0, Ordering::Release);

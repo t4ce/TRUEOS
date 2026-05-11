@@ -4,6 +4,9 @@
 //! services: time, blocking workers, filesystem shims, and VNet/Mio/socket2.
 
 pub mod net;
+pub mod tokio_probe;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod trueos_tokio_worker;
 
 extern crate alloc;
 
