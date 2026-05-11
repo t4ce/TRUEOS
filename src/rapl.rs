@@ -1,7 +1,4 @@
-#![allow(dead_code)]
-
 use core::arch::x86_64::__cpuid;
-
 use embassy_sync::watch::{Receiver as WatchReceiver, Watch};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Once;
