@@ -18,7 +18,6 @@ use alloc::boxed::Box;
 use embassy_executor::raw::Executor as RawExecutor;
 use trueos_vm::vmcall;
 
-use crate::blueprint;
 use crate::shell2::{ShellBackend2, ShellIo2};
 
 // ── VmcallShellBackend ────────────────────────────────────────────────────────
@@ -121,94 +120,7 @@ pub extern "C" fn trueos_hv_guest_blueprint_launch_active() -> bool {
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
     let vm_id = crate::hv::current_vm_id().unwrap_or(0);
-    let Some(state) = crate::hv::take_blueprint_launch(vm_id) else {
-        return false;
-    };
-
-    let log = |line: &str| crate::hv::hvlogf(format_args!("{}", line));
-
-    log(alloc::format!("run: guest blueprint launch archive={}", state.archive.as_str()).as_str());
-
-    let module = match blueprint::parse_blueprint(state.module_bytes.as_slice()) {
-        Ok(module) => module,
-        Err(err) => {
-            log(alloc::format!("run: guest blueprint parse failed: {}", err).as_str());
-            return false;
-        }
-    };
-
-    let unpacked = match blueprint::unpack_blueprint(&module) {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            log(alloc::format!("run: guest blueprint unpack failed: {}", err).as_str());
-            return false;
-        }
-    };
-
-    if !unpacked.starts_with(b"\x7fELF")
-        || !matches!(blueprint::elf_type_name(unpacked.as_slice()), Some("REL"))
-    {
-        log("run: guest blueprint rejected non-REL payload");
-        return false;
-    }
-
-    match blueprint::elf_imports(unpacked.as_slice()) {
-        Ok(imports) => {
-            let unresolved = imports
-                .iter()
-                .filter(|import| import.resolved_addr.is_none())
-                .count();
-            log(alloc::format!(
-                "run: guest ELF imports={} unresolved={}",
-                imports.len(),
-                unresolved
-            )
-            .as_str());
-            for import in imports
-                .iter()
-                .filter(|import| import.resolved_addr.is_none())
-                .take(16)
-            {
-                log(alloc::format!("run: guest unresolved import {}", import.name).as_str());
-            }
-        }
-        Err(err) => {
-            log(alloc::format!("run: guest ELF import scan failed: {}", err).as_str());
-        }
-    }
-
-    let app_fs_root =
-        blueprint::app_fs_root_for_archive(state.archive.as_str(), state.module_bytes.as_slice());
-    let process_args =
-        blueprint::build_process_args(state.archive.as_str(), state.app_args.as_slice());
-    let process_env =
-        blueprint::build_process_env(state.archive.as_str(), Some(app_fs_root.as_str()));
-    log(alloc::format!(
-        "run: guest app fs root prepared logically path={} fs_create=deferred-vm-service",
-        app_fs_root.as_str()
-    )
-    .as_str());
-    crate::hv::begin_blueprint_app_window_session(vm_id, state.archive.as_str());
-    crate::blueprint_net_broker::set_vmx_guest_net_backend(true);
-    let invoke_result = blueprint::invoke_host_rel(
-        unpacked.as_slice(),
-        module.entry,
-        process_args,
-        process_env,
-        state.console_target.clone(),
-        Some(app_fs_root),
-    );
-    crate::blueprint_net_broker::set_vmx_guest_net_backend(false);
-    match invoke_result {
-        Ok(()) => {
-            crate::hv::finish_blueprint_app_window_session(vm_id, true);
-            log("run: guest blueprint returned");
-        }
-        Err(err) => {
-            crate::hv::finish_blueprint_app_window_session(vm_id, true);
-            log(alloc::format!("run: guest REL load failed: {}", err).as_str());
-        }
-    }
-
+    let _ = crate::hv::take_blueprint_launch(vm_id);
+    crate::hv::hvlogf(format_args!("run: guest blueprint disabled\n"));
     false
 }

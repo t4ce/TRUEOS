@@ -1,19 +1,16 @@
-extern crate std;
-
+use core::net::SocketAddr;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use embassy_executor::task;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use mio::{Events, Interest, Poll, Token, Waker};
-use std::io;
-use std::net::SocketAddr;
 
 const MIO_NET_PROBE_PORT: u16 = crate::allports::probes::MIO_NET_PROBE_PORT;
 
 static MIO_NET_PROBE_TASK_SPAWNED: AtomicBool = AtomicBool::new(false);
 
-fn log_io_failure(stage: &str, err: &io::Error) {
-    crate::log!("mio_probe: failure {} kind={:?} err={}\n", stage, err.kind(), err);
+fn log_io_failure<E: core::fmt::Display>(stage: &str, err: &E) {
+    crate::log!("mio_probe: failure {} err={}\n", stage, err);
 }
 
 fn primary_ipv4_probe_addr(port: u16) -> Option<SocketAddr> {

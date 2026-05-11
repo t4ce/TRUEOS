@@ -15,7 +15,6 @@ mod allcaps;
 mod allocators;
 pub mod allports;
 mod aud;
-mod blueprint;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod blueprint_net_broker;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
@@ -71,7 +70,7 @@ mod smp;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod stackkeeper;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
-mod std_abi_shim;
+mod std_link_abi;
 mod t;
 mod tga;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]

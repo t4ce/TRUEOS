@@ -14,7 +14,6 @@ use super::super::{
     set_matrix_target_active,
 };
 use super::tlb_helper::TlbTable;
-use crate::blueprint;
 use crate::shell2::shell2_cmd::ParseOutcome;
 
 const TABLE_HEADERS: &[&str; 3] = &["id", "module", "source"];
@@ -188,7 +187,7 @@ fn dequeue_request() -> Option<AppVmLaunchRequest> {
     APP_VM_RUN_QUEUE.lock().pop_front()
 }
 
-async fn execute_request(spawner: &Spawner, request: AppVmLaunchRequest) {
+async fn execute_request(_spawner: &Spawner, request: AppVmLaunchRequest) {
     let target = request.target.clone();
     let log = |line: &str| {
         print_matrix_target_line(&target, line);
@@ -202,128 +201,7 @@ async fn execute_request(spawner: &Spawner, request: AppVmLaunchRequest) {
         return;
     }
 
-    let module = match blueprint::parse_blueprint(request.module_bytes.as_slice()) {
-        Ok(module) => module,
-        Err(err) => {
-            log(alloc::format!("hv run: {}", err).as_str());
-            return;
-        }
-    };
-    let unpacked = match blueprint::unpack_blueprint(&module) {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            log(alloc::format!("hv run: {}", err).as_str());
-            return;
-        }
-    };
-
-    log(alloc::format!(
-        "hv run: module={} version={} flags={} entry_hint=sec:{}+0x{:x}",
-        request.archive,
-        module.version,
-        module.flags,
-        blueprint::entry_hint_section(module.entry),
-        blueprint::entry_hint_offset(module.entry)
-    )
-    .as_str());
-    log(alloc::format!(
-        "hv run: payload compressed={} unpacked={} header_raw={}",
-        module.payload.len(),
-        unpacked.len(),
-        module.raw_payload_len
-    )
-    .as_str());
-    if unpacked.len() != module.raw_payload_len {
-        log("hv run: warning: unpacked payload size does not match header_raw");
-    }
-    if unpacked.starts_with(b"\x7fELF") {
-        if let Some(kind) = blueprint::elf_type_name(unpacked.as_slice()) {
-            log(alloc::format!("hv run: unpacked payload looks like ELF type={}", kind).as_str());
-        } else {
-            log("hv run: unpacked payload looks like ELF");
-        }
-    } else {
-        log("hv run: unpacked payload does not look like ELF");
-    }
-    if unpacked.starts_with(b"\x7fELF") {
-        match blueprint::elf_imports(unpacked.as_slice()) {
-            Ok(imports) => {
-                if imports.is_empty() {
-                    log("hv run: ELF imports=0");
-                } else {
-                    let resolved = imports
-                        .iter()
-                        .filter(|import| import.resolved_addr.is_some())
-                        .count();
-                    log(alloc::format!(
-                        "hv run: ELF imports={} resolved={}",
-                        imports.len(),
-                        resolved
-                    )
-                    .as_str());
-                    for import in imports.iter() {
-                        match import.resolved_addr {
-                            Some(addr) => log(alloc::format!(
-                                "hv run: import {} -> 0x{:x}",
-                                import.name,
-                                addr
-                            )
-                            .as_str()),
-                            None => {
-                                log(alloc::format!("hv run: import {} -> unresolved", import.name)
-                                    .as_str())
-                            }
-                        }
-                    }
-                }
-            }
-            Err(err) => {
-                log(alloc::format!("hv run: ELF import scan failed: {}", err).as_str());
-            }
-        }
-    }
-
-    if !unpacked.starts_with(b"\x7fELF")
-        || !matches!(blueprint::elf_type_name(unpacked.as_slice()), Some("REL"))
-    {
-        log("hv run: only ELF REL blueprints are supported for app-vm launch");
-        return;
-    }
-
-    if !crate::r::readiness::is_set(crate::r::readiness::APP_VM_READY) {
-        log("hv run: waiting for app_vm_ready");
-        crate::r::readiness::wait_for(crate::r::readiness::APP_VM_READY).await;
-        log("hv run: app_vm_ready=1");
-    }
-
-    let Some(vm_id) = crate::hv::first_free_vm_id() else {
-        log("hv run: no free app-vm ids");
-        return;
-    };
-
-    if let Err(err) = crate::hv::stage_blueprint_launch(
-        vm_id,
-        crate::hv::BlueprintLaunchState {
-            archive: request.archive.clone(),
-            module_bytes: request.module_bytes.clone(),
-            app_args: request.app_args.clone(),
-            console_target: Some(target.clone()),
-        },
-    ) {
-        log(alloc::format!("hv run: app-vm stage failed: {:?}", err).as_str());
-        return;
-    }
-
-    match crate::hv::start(vm_id, spawner, &UART1_COM1_BACKEND, None) {
-        Ok(()) => {
-            log(alloc::format!("hv run: app-vm{} launch requested", vm_id).as_str());
-        }
-        Err(err) => {
-            log(alloc::format!("hv run: app-vm start failed: {:?}", err).as_str());
-            let _ = crate::hv::take_blueprint_launch(vm_id);
-            return;
-        }
-    }
+    log("hv run: blueprint payload support disabled");
 }
 
 fn execute_tc4o(module_bytes: &[u8], log: &dyn Fn(&str)) {
