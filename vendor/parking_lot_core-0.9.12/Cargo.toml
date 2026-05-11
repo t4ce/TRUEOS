@@ -65,7 +65,7 @@ version = "1.6.1"
 [target.'cfg(target_os = "redox")'.dependencies.redox_syscall]
 version = "0.5"
 
-[target."cfg(unix)".dependencies.libc]
+[target.'cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))'.dependencies.libc]
 version = "0.2.95"
 
 [target."cfg(windows)".dependencies.windows-link]

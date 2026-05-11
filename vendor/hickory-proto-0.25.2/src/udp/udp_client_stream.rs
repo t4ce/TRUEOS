@@ -28,7 +28,7 @@ use crate::xfer::{DnsRequest, DnsRequestSender, DnsResponse, DnsResponseStream, 
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 fn hickory_system_time_now() -> SystemTime {
-    UNIX_EPOCH + std::time::Duration::from_secs(unsafe { trueos_time_unix_seconds() })
+    UNIX_EPOCH + std::time::Duration::from_secs(unsafe { trueos_platform_unix_seconds() })
 }
 
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
@@ -37,8 +37,8 @@ fn hickory_system_time_now() -> SystemTime {
 }
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
-unsafe extern "C" {
-    fn trueos_time_unix_seconds() -> u64;
+unsafe extern "Rust" {
+    fn trueos_platform_unix_seconds() -> u64;
 }
 
 /// A builder to create a UDP client stream.

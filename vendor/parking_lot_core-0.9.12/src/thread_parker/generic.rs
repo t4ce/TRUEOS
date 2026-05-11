@@ -10,7 +10,10 @@
 
 use core::hint::spin_loop;
 use core::sync::atomic::{AtomicBool, Ordering};
+
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::thread;
+
 use std::time::Instant;
 
 // Helper type for putting a thread to sleep until some other thread wakes it up
@@ -75,5 +78,13 @@ impl super::UnparkHandleT for UnparkHandle {
 
 #[inline]
 pub fn thread_yield() {
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    {
+        spin_loop();
+    }
+
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+    {
     thread::yield_now();
+    }
 }
