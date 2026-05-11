@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -451,6 +452,59 @@ def validate(args: argparse.Namespace) -> int:
     return 0
 
 
+GENERATED_BLOCK_RE = re.compile(
+    r"## Generated Message\s*\n\s*```text\n(?P<body>.*?)\n```\s*\n",
+    re.DOTALL,
+)
+
+
+def validate_messages(args: argparse.Namespace) -> int:
+    out = Path(args.out).resolve()
+    commits_path = out / "commits.jsonl"
+    if not commits_path.exists():
+        print(f"missing {commits_path}", file=sys.stderr)
+        return 1
+
+    records = read_jsonl(commits_path)
+    missing: list[str] = []
+    malformed: list[str] = []
+    empty: list[str] = []
+    filled = 0
+
+    for record in records:
+        sha = str(record["sha"])
+        path = out / "messages" / f"{sha}.md"
+        if not path.exists():
+            missing.append(sha)
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        match = GENERATED_BLOCK_RE.search(text)
+        if not match:
+            malformed.append(sha)
+            continue
+        body = match.group("body").strip()
+        if not body:
+            empty.append(sha)
+            continue
+        filled += 1
+
+    print(f"message files expected: {len(records)}")
+    print(f"filled generated messages: {filled}")
+    print(f"empty generated messages: {len(empty)}")
+    print(f"missing files: {len(missing)}")
+    print(f"malformed files: {len(malformed)}")
+
+    if args.show and (empty or missing or malformed):
+        if missing:
+            print("missing preview: " + ", ".join(missing[: args.show]))
+        if malformed:
+            print("malformed preview: " + ", ".join(malformed[: args.show]))
+        if empty:
+            print("empty preview: " + ", ".join(empty[: args.show]))
+
+    return 1 if missing or malformed or empty else 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -486,6 +540,18 @@ def main() -> int:
     validate_parser.add_argument("--revs", default="origin/main", help="revision range for git rev-list")
     validate_parser.add_argument("--limit", type=int, default=0, help="match an exported smoke-test limit")
     validate_parser.set_defaults(func=validate)
+
+    validate_messages_parser = subparsers.add_parser(
+        "validate-messages",
+        help="validate that per-sha message files have generated messages",
+    )
+    validate_messages_parser.add_argument(
+        "--out",
+        default="tools/CommitMessageGenerate/work/catalog_origin_main",
+        help="catalog output directory",
+    )
+    validate_messages_parser.add_argument("--show", type=int, default=10, help="preview count for problems")
+    validate_messages_parser.set_defaults(func=validate_messages)
 
     args = parser.parse_args()
     return args.func(args)

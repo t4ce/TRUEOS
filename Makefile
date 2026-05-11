@@ -11,7 +11,12 @@ ISO_DIR := bld
 ISO_PATH := bld/trueos.iso
 ISO_BOOT_DIR := bld/iso-bootroot
 ISO_EFI_IMG := efi.img
+UPDATE_7Z_FLAGS ?= -mx=9 -m0=LZMA2 -ms=off
+RELEASE_BUNDLE_DIR := $(ISO_DIR)/trueos-release
+RELEASE_ARCHIVE := $(ISO_DIR)/TrueOS.7z
+BUNDLED_OVMF_NAME := ovmf-code-x86_64.fd
 OVMF_BUNDLE_PATH ?= $(firstword $(wildcard /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd /opt/homebrew/share/qemu/edk2-x86_64-code.fd /usr/local/share/qemu/edk2-x86_64-code.fd))
+OVMF_LICENSE_PATH ?= $(firstword $(wildcard /usr/share/doc/ovmf/copyright /opt/homebrew/share/doc/qemu/LICENSE /usr/local/share/doc/qemu/LICENSE))
 # Extra slack added on top of the staged EFI payload when sizing the embedded
 # EFI System Partition image. This keeps the image close to minimal while
 # leaving room for FAT metadata and small growth in embedded artifacts.
@@ -43,6 +48,7 @@ QEMU_BIN ?= qemu-system-x86_64
 QEMU_UEFI_FIRMWARE = $(OVMF_BUNDLE_PATH)
 DISK_IMG := tools/disk.img
 NVME_IMG := tools/nvme.img
+CNT_FILE := tools/cnt
 QEMU_BRIDGE ?= br0
 QEMU_BRIDGE_HELPER ?= $(firstword $(wildcard /usr/lib/qemu/qemu-bridge-helper /usr/libexec/qemu-bridge-helper /usr/lib/qemu-bridge-helper))
 QEMU_HDA_AUDIODEV ?= none,id=snd0
@@ -141,8 +147,8 @@ limine:
 		OBJDUMP_FOR_TARGET="$$objdump" \
 		READELF_FOR_TARGET="$$readelf" \
 		$(abspath $(LIMINE_SRC))/configure $(LIMINE_CONFIG_ARGS)); \
-	$(MAKE) -C "$(LIMINE_BUILD_DIR)"; \
-	$(MAKE) -C "$(LIMINE_BUILD_DIR)" install; \
+	make -C "$(LIMINE_BUILD_DIR)"; \
+	make -C "$(LIMINE_BUILD_DIR)" install; \
 	printf 'ok\n' > "$(LIMINE_INSTALL_STAMP)"
 
 iso: artifacts images limine
@@ -232,6 +238,32 @@ iso: artifacts images limine
 		-e $(ISO_EFI_IMG) -no-emul-boot \
 		-efi-boot-part --efi-boot-image --protective-msdos-label \
 		-o $(ISO_PATH) $(ISO_BOOT_DIR)
+
+
+release: BUILD_MODE := release
+release: CARGO_BUILD_FLAGS += --release
+release: iso
+	@if [ -z "$(OVMF_BUNDLE_PATH)" ] || [ ! -f "$(OVMF_BUNDLE_PATH)" ]; then \
+		echo "error: no OVMF firmware found to bundle"; \
+		echo "       install OVMF/edk2-ovmf or run: make release OVMF_BUNDLE_PATH=/path/to/ovmf-code-x86_64.fd"; \
+		exit 1; \
+	fi
+	rm -rf $(RELEASE_BUNDLE_DIR)
+	rm -f $(RELEASE_ARCHIVE)
+	mkdir -p $(RELEASE_BUNDLE_DIR)
+	cp $(ISO_PATH) $(RELEASE_BUNDLE_DIR)/trueos.iso
+	cp "$(OVMF_BUNDLE_PATH)" $(RELEASE_BUNDLE_DIR)/$(BUNDLED_OVMF_NAME)
+	cp tools/release/run-linux.sh $(RELEASE_BUNDLE_DIR)/run-linux.sh
+	cp tools/release/run-macos.sh $(RELEASE_BUNDLE_DIR)/run-macos.sh
+	cp tools/release/README-RUN.txt $(RELEASE_BUNDLE_DIR)/README-RUN.txt
+	@if [ -n "$(OVMF_LICENSE_PATH)" ] && [ -f "$(OVMF_LICENSE_PATH)" ]; then \
+		cp "$(OVMF_LICENSE_PATH)" $(RELEASE_BUNDLE_DIR)/OVMF-LICENSE.txt; \
+	fi
+	chmod +x $(RELEASE_BUNDLE_DIR)/run-linux.sh $(RELEASE_BUNDLE_DIR)/run-macos.sh
+	cd $(RELEASE_BUNDLE_DIR) && 7z a -t7z $(UPDATE_7Z_FLAGS) ../$(notdir $(RELEASE_ARCHIVE)) trueos.iso $(BUNDLED_OVMF_NAME) run-linux.sh run-macos.sh README-RUN.txt $$(test -f OVMF-LICENSE.txt && printf '%s' OVMF-LICENSE.txt)
+	env -u GIO_MODULE_DIR gio mount smb://t4ce@pdjb/home-share || true
+	env -u GIO_MODULE_DIR gio copy $(RELEASE_ARCHIVE) smb://t4ce@pdjb/home-share/TRUEOS_SITE/
+	@mkdir -p "$$(dirname "$(CNT_FILE)")"; count=$$(cat "$(CNT_FILE)" 2>/dev/null || echo 0); count=$${count:-0}; printf '%s\n' $$((count + 1)) | tee "$(CNT_FILE)"
 
 
 SERIAL_CONSOLE_CMD = konsole -e sh -c 'stty -echo -icanon cols 100 rows 100; nc 127.0.0.1 5555; stty sane; echo "Connection closed. Press ENTER to exit..."; read'
