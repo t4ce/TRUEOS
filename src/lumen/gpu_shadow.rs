@@ -8,9 +8,10 @@ static LOGGED_T4_WAITING: AtomicBool = AtomicBool::new(false);
 static LOGGED_T4_LIVE_ROW_PROBE: AtomicBool = AtomicBool::new(false);
 static LOGGED_PROMPT_LIVE_ROW_PROBE: AtomicBool = AtomicBool::new(false);
 
-// T6.2 is an 8-lane artifact.  Until the walker provides a trusted row-block
-// payload, CGP drives row blocks by staging one 8-row view at a time.
-const T62_ROW_BLOCK_DISPATCH_BLOCK_CAP: usize = 4;
+// T6.2/T6.3 are 8-lane row-block artifacts. The cap is coordination-only:
+// each block is restaged into the same tile-record prefix, so raising this
+// increases proved row coverage without changing artifact math.
+const T62_ROW_BLOCK_DISPATCH_BLOCK_CAP: usize = 8;
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct LocalGpuProofPlan {
@@ -95,7 +96,7 @@ pub(crate) fn observe_live_bf16_matvec_probe(
     chunk_rows: usize,
     chunks: usize,
     plan: LocalGpuProofPlan,
-) {
+) -> crate::lumen::cgp::CgpBf16PrefixContribution {
     if !plan.static_tile_proven {
         if !LOGGED_T4_WAITING.swap(true, Ordering::AcqRel) {
             crate::log!(
@@ -105,14 +106,14 @@ pub(crate) fn observe_live_bf16_matvec_probe(
                 plan.program_name
             );
         }
-        return;
+        return crate::lumen::cgp::CgpBf16PrefixContribution::none();
     }
 
     let log_global = !LOGGED_T4_LIVE_ROW_PROBE.swap(true, Ordering::AcqRel);
     let log_prompt = plan.source_label == "lumen-prompt"
         && !LOGGED_PROMPT_LIVE_ROW_PROBE.swap(true, Ordering::AcqRel);
     if !log_global && !log_prompt {
-        return;
+        return crate::lumen::cgp::CgpBf16PrefixContribution::none();
     }
 
     let Some(expected_w_len) = n_rows
@@ -125,7 +126,7 @@ pub(crate) fn observe_live_bf16_matvec_probe(
             n_rows,
             k_dim
         );
-        return;
+        return crate::lumen::cgp::CgpBf16PrefixContribution::none();
     };
     if n_rows == 0 || k_dim == 0 || x.len() < k_dim || w_rowmajor_bf16.len() < expected_w_len {
         crate::log!(
@@ -137,7 +138,7 @@ pub(crate) fn observe_live_bf16_matvec_probe(
             w_rowmajor_bf16.len(),
             expected_w_len
         );
-        return;
+        return crate::lumen::cgp::CgpBf16PrefixContribution::none();
     }
 
     let manifest = crate::lumen::lumen_net::resolve_bf16_matrix_probe(
@@ -195,7 +196,7 @@ pub(crate) fn observe_live_bf16_matvec_probe(
             proof_tile_rows,
             gpu.max_tiles,
         );
-        return;
+        return crate::lumen::cgp::CgpBf16PrefixContribution::none();
     }
 
     let mut staged_tiles = 0usize;
@@ -222,6 +223,9 @@ pub(crate) fn observe_live_bf16_matvec_probe(
     let mut last_cpu_expected_bits = 0u32;
     let mut last_dispatch = 0u64;
     let mut last_partial_rows = 0usize;
+    let mut cgp_prefix = crate::lumen::cgp::CgpBf16PrefixContribution::accepted_prefix(
+        k_dim.min(trueos_eu::gfx12::T63_ACCUM16_HI_LIVE32_LIVE_K),
+    );
 
     for tile_index in 0..armed_tiles {
         let row = tile_index.saturating_mul(proof_tile_rows);
@@ -679,11 +683,19 @@ pub(crate) fn observe_live_bf16_matvec_probe(
                     t63_live_k_dim,
                 );
             }
+            if t63.compare_ok && t63.live_k_dim == cgp_prefix.live_k_dim {
+                for local_row in 0..block_row_count.min(t63.output_words.len()) {
+                    cgp_prefix.push_row(
+                        global_row.saturating_add(local_row),
+                        t63.output_words[local_row],
+                    );
+                }
+            }
         }
     }
 
     crate::log!(
-        "lumen-gpu-proof: director-step step=16 backend=local-gpu source={} mode=t6-3-actual-work-row-blocks armed_tiles={} staged_tiles={} t5_submitted_tiles={} t5_finished_tiles={} t5_compare_ok_tiles={} t6_submitted_tiles={} t6_finished_tiles={} t6_compare_ok_tiles={} t61_submitted_tiles={} t61_finished_tiles={} t61_compare_ok_tiles={} t62_staged_blocks={} t62_submitted_blocks={} t62_finished_blocks={} t62_compare_ok_blocks={} t62_compared_rows={} t63_submitted_blocks={} t63_finished_blocks={} t63_compare_ok_blocks={} t63_compared_rows={} first_row=0 last_row={} row_block_rows={} row_block_cap={} partial_rows={} tile_rows={} k_dim={} t5_artifact=gfx12-t5-small-live4-packed-bf16-dot t6_artifact=gfx12-t6-small-live8-packed-bf16-dot t61_artifact=gfx12-t6-1-live16-packed-bf16-dot t62_artifact=gfx12-t6-2-lane-indexed-live16-packed-bf16-dot t63_artifact=gfx12-t6-3-accum16-hi-live32-packed-bf16-dot artifact_addressing=row-block-restaged-tile-record-prefix proof_role=actual-work-row-block-frontier last_gpu_value=0x{:08X} last_cpu_expected_bits=0x{:08X} last_lane_dispatch={} output_owner=cpu-ap action=hold-scale next=promote-row-block-owner-or-scale-live-k does_not_prove=full_model_matvec\n",
+        "lumen-gpu-proof: director-step step=16 backend=local-gpu source={} mode=t6-3-actual-work-row-blocks armed_tiles={} staged_tiles={} t5_submitted_tiles={} t5_finished_tiles={} t5_compare_ok_tiles={} t6_submitted_tiles={} t6_finished_tiles={} t6_compare_ok_tiles={} t61_submitted_tiles={} t61_finished_tiles={} t61_compare_ok_tiles={} t62_staged_blocks={} t62_submitted_blocks={} t62_finished_blocks={} t62_compare_ok_blocks={} t62_compared_rows={} t63_submitted_blocks={} t63_finished_blocks={} t63_compare_ok_blocks={} t63_compared_rows={} first_row=0 last_row={} row_block_rows={} row_block_cap={} partial_rows={} tile_rows={} k_dim={} t5_artifact=gfx12-t5-small-live4-packed-bf16-dot t6_artifact=gfx12-t6-small-live8-packed-bf16-dot t61_artifact=gfx12-t6-1-live16-packed-bf16-dot t62_artifact=gfx12-t6-2-lane-indexed-live16-packed-bf16-dot t63_artifact=gfx12-t6-3-accum16-hi-live32-packed-bf16-dot artifact_addressing=row-block-restaged-tile-record-prefix proof_role=actual-work-row-block-frontier cgp_mode={} cgp_prefix_rows={} cgp_prefix_live_k={} last_gpu_value=0x{:08X} last_cpu_expected_bits=0x{:08X} last_lane_dispatch={} output_owner=cpu-ap action=offer-accepted-prefix next=cpu-suffix-finish-or-scale-live-k does_not_prove=full_model_matvec\n",
         plan.source_label,
         armed_tiles,
         staged_tiles,
@@ -711,10 +723,14 @@ pub(crate) fn observe_live_bf16_matvec_probe(
         last_partial_rows,
         proof_tile_rows,
         k_dim,
+        cgp_prefix.mode.as_str(),
+        cgp_prefix.rows.len(),
+        cgp_prefix.live_k_dim,
         last_gpu_value,
         last_cpu_expected_bits,
         last_dispatch,
     );
+    cgp_prefix
 }
 
 fn bf16_row_dot_prefix(x: &[f32], row_bf16: &[u8], count: usize) -> f32 {
