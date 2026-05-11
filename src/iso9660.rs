@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 
 // Minimal ISO9660 reader for extracting a few known files from an in-memory ISO.
 //

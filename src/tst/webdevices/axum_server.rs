@@ -664,7 +664,7 @@ pub async fn webdevices_http_service_task() {
     crate::log!("webdevices-http: launching Tokio runtime after NET_V4_CONFIGURED\n");
 
     loop {
-        let rc = crate::trueos_tokio_worker::spawn_blocking_job_with_purpose(
+        let rc = crate::t::trueos_tokio_worker::spawn_blocking_job_with_purpose(
             Box::new(|| {
                 if let Err(err) = run_webdevices_http_runtime() {
                     crate::log!("webdevices-http: runtime failed {:?}\n", err);
