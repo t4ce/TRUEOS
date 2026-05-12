@@ -8,6 +8,7 @@
 #![allow(elided_lifetimes_in_paths, clippy::type_complexity)]
 #![cfg_attr(test, allow(clippy::float_cmp))]
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![cfg_attr(any(target_os = "trueos", target_os = "zkvm"), no_std)]
 // `rustdoc::broken_intra_doc_links` is checked on CI
 
 //! `async fn(Request) -> Result<Response, Error>`
@@ -159,6 +160,146 @@
 //! [`retry`]: crate::retry
 //! [open a PR]: https://github.com/tower-rs/tower/compare
 //! [guides]: https://github.com/tower-rs/tower/tree/master/guides
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+extern crate alloc;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+extern crate self as std;
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod any {
+    pub use core::any::*;
+}
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod boxed {
+    pub use alloc::boxed::*;
+}
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod clone {
+    pub use core::clone::*;
+}
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod collections {
+    pub use alloc::collections::*;
+
+    pub mod hash_map {
+        use core::hash::{BuildHasher, Hasher};
+
+        #[derive(Clone, Debug, Default)]
+        pub struct RandomState;
+
+        #[derive(Clone, Debug)]
+        pub struct DefaultHasher(u64);
+
+        impl Default for DefaultHasher {
+            fn default() -> Self {
+                Self(0xcbf2_9ce4_8422_2325)
+            }
+        }
+
+        impl Hasher for DefaultHasher {
+            fn finish(&self) -> u64 {
+                self.0
+            }
+
+            fn write(&mut self, bytes: &[u8]) {
+                for byte in bytes {
+                    self.0 ^= u64::from(*byte);
+                    self.0 = self.0.wrapping_mul(0x0000_0100_0000_01b3);
+                }
+            }
+        }
+
+        impl BuildHasher for RandomState {
+            type Hasher = DefaultHasher;
+
+            fn build_hasher(&self) -> Self::Hasher {
+                DefaultHasher::default()
+            }
+        }
+    }
+}
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod convert {
+    pub use core::convert::*;
+}
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod default {
+    pub use core::default::*;
+}
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod error {
+    pub use core::error::*;
+}
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod fmt {
+    pub use core::fmt::*;
+}
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod future {
+    pub use core::future::*;
+}
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod hash {
+    pub use core::hash::*;
+}
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod marker {
+    pub use core::marker::*;
+}
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod mem {
+    pub use core::mem::*;
+}
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod ops {
+    pub use core::ops::*;
+}
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod option {
+    pub use core::option::*;
+}
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod pin {
+    pub use core::pin::*;
+}
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod prelude {
+    pub mod rust_2018 {
+        pub use core::prelude::rust_2018::*;
+        pub use alloc::boxed::Box;
+        pub use alloc::string::{String, ToString};
+        pub use alloc::vec::Vec;
+    }
+}
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod result {
+    pub use core::result::*;
+}
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod string {
+    pub use alloc::string::*;
+}
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod sync {
+    pub use alloc::sync::Arc;
+    pub use core::sync::atomic;
+}
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod task {
+    pub use core::task::*;
+}
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod time {
+    pub use core::time::*;
+}
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod vec {
+    pub use alloc::vec::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub use crate::{boxed::Box, marker::{Send, Sync}};
 
 #[macro_use]
 pub(crate) mod macros;

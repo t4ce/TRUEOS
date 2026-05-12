@@ -192,7 +192,7 @@ optional = true
 
 [target.'cfg(any(target_os = "trueos", target_os = "zkvm"))'.dependencies.hashbrown]
 version = "0.17.0"
-features = ["alloc"]
+features = ["default-hasher"]
 default-features = false
 
 [target.'cfg(any(target_os = "trueos", target_os = "zkvm"))'.dependencies.trueos-io]

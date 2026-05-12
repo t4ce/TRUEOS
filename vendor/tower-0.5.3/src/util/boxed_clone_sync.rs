@@ -1,4 +1,5 @@
 use super::ServiceExt;
+use alloc::boxed::Box;
 use futures_util::future::BoxFuture;
 use std::{
     fmt,
