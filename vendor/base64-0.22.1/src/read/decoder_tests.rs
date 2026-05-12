@@ -365,7 +365,7 @@ fn internal_padding_error_with_short_read_concatenated_texts_invalid_byte_error(
             "read len: {}, bad byte pos: {}, b64: {}",
             read_len,
             bad_byte_pos,
-            std::str::from_utf8(b64_bytes).unwrap()
+            core::str::from_utf8(b64_bytes).unwrap()
         );
         assert_eq!(
             DecodeError::InvalidByte(

@@ -1,4 +1,4 @@
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 #[cfg(feature = "http2")]
 use std::{future::Future, pin::Pin};
 
@@ -384,9 +384,9 @@ mod tests {
     #[cfg(feature = "nightly")]
     extern crate test;
 
-    use std::future::Future;
-    use std::pin::Pin;
-    use std::task::{Context, Poll};
+    use core::future::Future;
+    use core::pin::Pin;
+    use core::task::{Context, Poll};
 
     use super::{channel, Callback, Receiver};
 

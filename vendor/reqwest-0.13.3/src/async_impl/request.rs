@@ -1,6 +1,6 @@
-use std::convert::TryFrom;
-use std::fmt;
-use std::future::Future;
+use core::convert::TryFrom;
+use core::fmt;
+use core::future::Future;
 use core::time::Duration;
 
 #[cfg(any(feature = "query", feature = "form", feature = "json"))]

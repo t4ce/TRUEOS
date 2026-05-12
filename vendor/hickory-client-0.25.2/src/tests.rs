@@ -13,7 +13,7 @@ async fn readme_example() {
     subscribe();
 
     use std::net::SocketAddr;
-    use std::str::FromStr;
+    use core::str::FromStr;
 
     use crate::client::{Client, ClientHandle};
     use crate::proto::rr::{DNSClass, Name, Record, RecordType};

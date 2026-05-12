@@ -1,7 +1,7 @@
 use super::{Latency, DEFAULT_MESSAGE_LEVEL};
 use crate::{classify::grpc_errors_as_failures::ParsedGrpcStatus, LatencyUnit};
 use http::header::HeaderMap;
-use std::time::Duration;
+use core::time::Duration;
 use tracing::{Level, Span};
 
 /// Trait used to tell [`Trace`] what to do when a stream closes.

@@ -5,7 +5,7 @@ use std::io::{BufReader, BufWriter};
 use std::path::Path;
 
 use png::DecodingError::LimitsExceeded;
-pub type BoxResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
+pub type BoxResult<T> = Result<T, Box<dyn core::error::Error + Send + Sync>>;
 
 fn main() -> BoxResult<()> {
     // # Decode

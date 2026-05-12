@@ -55,7 +55,7 @@
 //! task::coop::unconstrained(fut).await;
 //! # }
 //! ```
-//! [`poll`]: method@std::future::Future::poll
+//! [`poll`]: method@core::future::Future::poll
 //! [`task::unconstrained`]: crate::task::unconstrained()
 
 cfg_rt! {
@@ -181,9 +181,9 @@ fn with_budget<R>(budget: Budget, f: impl FnOnce() -> R) -> R {
 /// we can detect this scenario and ensure the timeout is always checked.
 ///
 /// ```
-/// # use std::future::Future;
-/// # use std::pin::{pin, Pin};
-/// # use std::task::{ready, Context, Poll};
+/// # use core::future::Future;
+/// # use core::pin::{pin, Pin};
+/// # use core::task::{ready, Context, Poll};
 /// # use tokio::task::coop;
 /// # use tokio::time::Sleep;
 /// pub struct Timeout<T> {
@@ -313,8 +313,8 @@ cfg_coop! {
     /// is consumed. If no budget is available, the task yields to the scheduler.
     ///
     /// ```
-    /// use std::pin::Pin;
-    /// use std::task::{ready, Context, Poll};
+    /// use core::pin::Pin;
+    /// use core::task::{ready, Context, Poll};
     /// use tokio::task::coop;
     /// use futures::stream::{Stream, StreamExt};
     /// use futures::channel::mpsc::UnboundedReceiver;
@@ -507,7 +507,7 @@ mod test {
 
     #[test]
     fn budgeting() {
-        use std::future::poll_fn;
+        use core::future::poll_fn;
         use tokio_test::*;
 
         assert!(get().0.is_none());
@@ -564,7 +564,7 @@ mod test {
             }
 
             let mut task = task::spawn(poll_fn(|cx| {
-                let coop = std::task::ready!(poll_proceed(cx));
+                let coop = core::task::ready!(poll_proceed(cx));
                 coop.made_progress();
                 Poll::Ready(())
             }));

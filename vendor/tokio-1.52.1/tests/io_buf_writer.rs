@@ -5,13 +5,13 @@
 
 use futures::task::{Context, Poll};
 use std::io::{self, Cursor};
-use std::pin::Pin;
+use core::pin::Pin;
 use tokio::io::{AsyncSeek, AsyncSeekExt, AsyncWrite, AsyncWriteExt, BufWriter, SeekFrom};
 
 use futures::future;
 use tokio_test::assert_ok;
 
-use std::cmp;
+use core::cmp;
 use std::io::IoSlice;
 
 mod support {

@@ -8,7 +8,7 @@ use core::option::Option::{Some, None};
 #[cfg(not(feature = "std"))]
 use core::error::Error;
 #[cfg(feature = "std")]
-use std::error::Error;
+use core::error::Error;
 #[cfg(not(feature = "std"))]
 use core::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 #[cfg(feature = "std")]
@@ -1177,7 +1177,7 @@ impl Ipv6Net {
     /// # Examples
     ///
     /// ```
-    /// # use std::str::FromStr;
+    /// # use core::str::FromStr;
     /// # use ipnet::Ipv6Net;
     /// #
     /// let n1: Ipv6Net = "fd00:ff00::/24".parse().unwrap();
@@ -1462,7 +1462,7 @@ impl<'a> Contains<&'a Ipv6Addr> for Ipv6Net {
 ///
 /// ```
 /// # use std::net::{Ipv4Addr, Ipv6Addr};
-/// # use std::str::FromStr;
+/// # use core::str::FromStr;
 /// # use ipnet::{IpNet, IpSubnets, Ipv4Subnets, Ipv6Subnets};
 /// let subnets = IpSubnets::from(Ipv4Subnets::new(
 ///     "10.0.0.0".parse().unwrap(),
@@ -1509,7 +1509,7 @@ pub enum IpSubnets {
 ///
 /// ```
 /// # use std::net::Ipv4Addr;
-/// # use std::str::FromStr;
+/// # use core::str::FromStr;
 /// # use ipnet::{Ipv4Net, Ipv4Subnets};
 /// let subnets = Ipv4Subnets::new(
 ///     "10.0.0.0".parse().unwrap(),
@@ -1543,7 +1543,7 @@ pub struct Ipv4Subnets {
 ///
 /// ```
 /// # use std::net::Ipv6Addr;
-/// # use std::str::FromStr;
+/// # use core::str::FromStr;
 /// # use ipnet::{Ipv6Net, Ipv6Subnets};
 /// let subnets = Ipv6Subnets::new(
 ///     "fd00::".parse().unwrap(),

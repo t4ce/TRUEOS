@@ -1,7 +1,7 @@
 use alloc::{boxed::Box, vec::Vec};
 
 use crate::runtime::prelude::*;
-use std::ptr::NonNull;
+use core::ptr::NonNull;
 use std::sync::atomic::Ordering;
 
 use crate::loom::sync::{Mutex, MutexGuard};

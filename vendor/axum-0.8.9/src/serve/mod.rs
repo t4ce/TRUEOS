@@ -219,7 +219,7 @@ where
     L: Debug + 'static,
     M: Debug,
 {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let Self {
             listener,
             make_service,
@@ -333,7 +333,7 @@ where
     S: Debug,
     F: Debug,
 {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let Self {
             listener,
             make_service,
@@ -506,8 +506,8 @@ mod private {
         }
     }
 
-    impl std::fmt::Debug for ServeFuture {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    impl core::fmt::Debug for ServeFuture {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             f.debug_struct("ServeFuture").finish_non_exhaustive()
         }
     }
@@ -738,7 +738,7 @@ mod tests {
             async fn accept(&mut self) -> (Self::Io, Self::Addr) {
                 match self.0.take() {
                     Some(server) => (server, ()),
-                    None => std::future::pending().await,
+                    None => core::future::pending().await,
                 }
             }
 

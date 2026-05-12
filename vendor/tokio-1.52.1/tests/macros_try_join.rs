@@ -94,7 +94,7 @@ async fn err_abort_early() {
 #[cfg(target_pointer_width = "64")]
 fn try_join_size() {
     use futures::future;
-    use std::mem;
+    use core::mem;
 
     let fut = async {
         let ready = future::ready(ok(0i32));
@@ -226,7 +226,7 @@ async fn futures_are_polled_in_order_in_biased_mode() {
 #[cfg(target_pointer_width = "64")]
 fn try_join_size_biased() {
     use futures::future;
-    use std::mem;
+    use core::mem;
 
     let fut = async {
         let ready = future::ready(ok(0i32));

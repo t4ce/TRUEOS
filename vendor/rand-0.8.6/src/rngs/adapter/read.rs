@@ -11,7 +11,7 @@
 
 #![allow(deprecated)]
 
-use std::fmt;
+use core::fmt;
 use std::io::Read;
 
 use rand_core::{impls, Error, RngCore};
@@ -87,8 +87,8 @@ impl fmt::Display for ReadError {
     }
 }
 
-impl std::error::Error for ReadError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+impl core::error::Error for ReadError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         Some(&self.0)
     }
 }

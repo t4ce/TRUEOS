@@ -10,8 +10,8 @@ use tokio::test as maybe_tokio_test;
 use tokio::sync::oneshot;
 use tokio_test::{assert_ok, assert_pending, assert_ready};
 
-use std::future::poll_fn;
-use std::task::Poll::Ready;
+use core::future::poll_fn;
+use core::task::Poll::Ready;
 
 #[maybe_tokio_test]
 async fn sync_one_lit_expr_comma() {
@@ -92,7 +92,7 @@ async fn sync_one_ident() {
 
 #[maybe_tokio_test]
 async fn sync_two() {
-    use std::cell::Cell;
+    use core::cell::Cell;
 
     let cnt = Cell::new(0);
 
@@ -229,7 +229,7 @@ async fn nested() {
 mod pointer_64_tests {
     use super::maybe_tokio_test;
     use futures::future;
-    use std::mem;
+    use core::mem;
 
     #[maybe_tokio_test]
     async fn struct_size_1() {
@@ -713,12 +713,12 @@ mod unstable {
 #[tokio::test]
 async fn select_into_future() {
     struct NotAFuture;
-    impl std::future::IntoFuture for NotAFuture {
+    impl core::future::IntoFuture for NotAFuture {
         type Output = ();
-        type IntoFuture = std::future::Ready<()>;
+        type IntoFuture = core::future::Ready<()>;
 
         fn into_future(self) -> Self::IntoFuture {
-            std::future::ready(())
+            core::future::ready(())
         }
     }
 
@@ -731,7 +731,7 @@ async fn select_into_future() {
 #[tokio::test]
 async fn temporary_lifetime_extension() {
     tokio::select! {
-        () = &mut std::future::ready(()) => {},
+        () = &mut core::future::ready(()) => {},
     }
 }
 
@@ -745,7 +745,7 @@ async fn select_is_budget_aware() {
                 biased;
 
                 () = tokio::task::coop::consume_budget() => {},
-                () = std::future::ready(()) => {}
+                () = core::future::ready(()) => {}
             }
         })
     };

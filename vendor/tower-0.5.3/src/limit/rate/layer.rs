@@ -1,5 +1,5 @@
 use super::{Rate, RateLimit};
-use std::time::Duration;
+use core::time::Duration;
 use tower_layer::Layer;
 
 /// Enforces a rate limit on the number of requests the underlying

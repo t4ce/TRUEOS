@@ -55,9 +55,9 @@ pub use self::{
 ///
 /// ```rust
 /// # use tower_service::Service;
-/// # use std::task::{Poll, Context};
+/// # use core::task::{Poll, Context};
 /// # use tower_layer::Layer;
-/// # use std::fmt;
+/// # use core::fmt;
 ///
 /// pub struct LogLayer {
 ///     target: &'static str,

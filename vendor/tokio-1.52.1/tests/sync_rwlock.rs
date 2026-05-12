@@ -9,7 +9,7 @@ use wasm_bindgen_test::wasm_bindgen_test as maybe_tokio_test;
 #[cfg(not(all(target_family = "wasm", not(target_os = "wasi"))))]
 use tokio::test as maybe_tokio_test;
 
-use std::task::Poll;
+use core::task::Poll;
 
 use futures::future::FutureExt;
 

@@ -49,7 +49,7 @@
 //! use bytes::Bytes;
 //! use http::{Request, Response};
 //! use http_body_util::{Full, BodyExt};
-//! use std::convert::Infallible;
+//! use core::convert::Infallible;
 //! use tower::{Service, ServiceExt, ServiceBuilder, service_fn};
 //! use tower_http::{compression::Compression, decompression::DecompressionLayer, BoxError};
 //! #
@@ -109,7 +109,7 @@ pub use self::request::service::RequestDecompression;
 
 #[cfg(test)]
 mod tests {
-    use std::convert::Infallible;
+    use core::convert::Infallible;
     use std::io::Write;
 
     use super::*;

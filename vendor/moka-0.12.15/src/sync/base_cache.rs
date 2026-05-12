@@ -74,7 +74,7 @@ impl<K, V, S> Clone for BaseCache<K, V, S> {
 impl<K, V, S> Drop for BaseCache<K, V, S> {
     fn drop(&mut self) {
         // The housekeeper needs to be dropped before the inner is dropped.
-        std::mem::drop(self.housekeeper.take());
+        core::mem::drop(self.housekeeper.take());
     }
 }
 
@@ -2792,7 +2792,7 @@ mod tests {
                 use ExpiryExpectation::*;
 
                 let lock = &mut *self.expectation.lock().unwrap();
-                let expected = std::mem::replace(lock, NoCall);
+                let expected = core::mem::replace(lock, NoCall);
                 match expected {
                     AfterCreate {
                         caller_line,
@@ -2831,7 +2831,7 @@ mod tests {
                 use ExpiryExpectation::*;
 
                 let lock = &mut *self.expectation.lock().unwrap();
-                let expected = std::mem::replace(lock, NoCall);
+                let expected = core::mem::replace(lock, NoCall);
                 match expected {
                     AfterRead {
                         caller_line,
@@ -2882,7 +2882,7 @@ mod tests {
                 use ExpiryExpectation::*;
 
                 let lock = &mut *self.expectation.lock().unwrap();
-                let expected = std::mem::replace(lock, NoCall);
+                let expected = core::mem::replace(lock, NoCall);
                 match expected {
                     AfterUpdate {
                         caller_line,

@@ -1,4 +1,4 @@
-use std::time::Duration;
+use core::time::Duration;
 
 pub(crate) const MAX_NANOS: u64 = u64::MAX - 1;
 
@@ -23,7 +23,7 @@ impl Instant {
         self.elapsed_ns
     }
 
-    /// Converts a `std::time::Duration` to nanoseconds, saturating to
+    /// Converts a `core::time::Duration` to nanoseconds, saturating to
     /// `MAX_NANOSECONDS` (`u64::MAX - 1`) if the duration is too large.
     /// (`Duration::as_nanos` returns `u128`)
     ///

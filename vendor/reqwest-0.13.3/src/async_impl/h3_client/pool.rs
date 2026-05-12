@@ -1,10 +1,10 @@
 use bytes::Bytes;
 use std::collections::HashMap;
-use std::future;
-use std::pin::Pin;
+use core::future;
+use core::pin::Pin;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 use core::time::Duration;
 use tokio::sync::{oneshot, watch};
 use tokio::time::Instant;
@@ -226,7 +226,7 @@ impl PoolClient {
         tokio::spawn(async move {
             let mut req_body = Pin::new(&mut req_body);
             loop {
-                match std::future::poll_fn(|cx| req_body.as_mut().poll_frame(cx)).await {
+                match core::future::poll_fn(|cx| req_body.as_mut().poll_frame(cx)).await {
                     Some(Ok(frame)) => {
                         if let Ok(b) = frame.into_data() {
                             if let Err(e) = send.send_data(Bytes::copy_from_slice(&b)).await {

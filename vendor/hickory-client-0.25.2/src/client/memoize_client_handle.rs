@@ -5,7 +5,7 @@
 // https://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 use std::collections::HashMap;
-use std::pin::Pin;
+use core::pin::Pin;
 use std::sync::Arc;
 
 use futures_util::future::FutureExt;
@@ -94,7 +94,7 @@ where
 mod test {
     #![allow(clippy::dbg_macro, clippy::print_stdout)]
 
-    use std::pin::Pin;
+    use core::pin::Pin;
     use std::sync::Arc;
 
     use futures::lock::Mutex;

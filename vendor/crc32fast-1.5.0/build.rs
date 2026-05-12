@@ -17,7 +17,7 @@ fn minor_rustc_version() -> Option<u32> {
         .output()
         .ok()
         .and_then(|output| {
-            std::str::from_utf8(&output.stdout).ok().and_then(|output| {
+            core::str::from_utf8(&output.stdout).ok().and_then(|output| {
                 output
                     .split('.')
                     .nth(1)

@@ -2,7 +2,7 @@
 #![cfg(all(feature = "full", not(target_os = "wasi"), target_has_atomic = "64"))]
 
 use std::sync::mpsc;
-use std::time::Duration;
+use core::time::Duration;
 use tokio::runtime::Runtime;
 use tokio::time;
 
@@ -42,7 +42,7 @@ fn num_alive_tasks() {
         if rt.metrics().num_alive_tasks() == 0 {
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        std::thread::sleep(core::time::Duration::from_millis(100));
     }
     assert_eq!(0, rt.metrics().num_alive_tasks());
 }
@@ -162,7 +162,7 @@ fn worker_park_unpark_count() {
         if 1 <= metrics.worker_park_unpark_count(0) && 1 <= metrics.worker_park_unpark_count(1) {
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        std::thread::sleep(core::time::Duration::from_millis(100));
     }
     assert_eq!(1, metrics.worker_park_unpark_count(0));
     assert_eq!(1, metrics.worker_park_unpark_count(1));
@@ -173,7 +173,7 @@ fn worker_park_unpark_count() {
         if 3 <= metrics.worker_park_unpark_count(0) || 3 <= metrics.worker_park_unpark_count(1) {
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        std::thread::sleep(core::time::Duration::from_millis(100));
     }
     assert!(3 <= metrics.worker_park_unpark_count(0) || 3 <= metrics.worker_park_unpark_count(1));
 

@@ -12,7 +12,7 @@
 /// iterated values is cooperative.
 ///
 /// ```
-/// async fn sum_iterator(input: &mut impl std::iter::Iterator<Item=i64>) -> i64 {
+/// async fn sum_iterator(input: &mut impl core::iter::Iterator<Item=i64>) -> i64 {
 ///     let mut sum: i64 = 0;
 ///     while let Some(i) = input.next() {
 ///         sum += i;

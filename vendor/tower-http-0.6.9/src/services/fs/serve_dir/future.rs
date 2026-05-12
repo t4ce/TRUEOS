@@ -82,7 +82,7 @@ where
     F: Service<Request<ReqBody>, Response = Response<ResBody>, Error = Infallible> + Clone,
     F::Future: Send + 'static,
     ResBody: http_body::Body<Data = Bytes> + Send + 'static,
-    ResBody::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    ResBody::Error: Into<Box<dyn core::error::Error + Send + Sync>>,
 {
     type Output = io::Result<Response<ResponseBody>>;
 

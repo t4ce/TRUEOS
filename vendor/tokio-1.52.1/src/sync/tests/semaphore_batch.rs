@@ -263,7 +263,7 @@ fn cancel_acquire_releases_permits() {
 fn release_permits_at_drop() {
     use crate::sync::semaphore::*;
     use futures::task::ArcWake;
-    use std::future::Future;
+    use core::future::Future;
     use std::sync::Arc;
 
     let sem = Arc::new(Semaphore::new(1));
@@ -283,7 +283,7 @@ fn release_permits_at_drop() {
         let waker = futures::task::waker(Arc::new(ReleaseOnDrop(
             sem.clone().try_acquire_owned().ok(),
         )));
-        let mut cx = std::task::Context::from_waker(&waker);
+        let mut cx = core::task::Context::from_waker(&waker);
         assert!(fut.as_mut().poll(&mut cx).is_pending());
     }
 }

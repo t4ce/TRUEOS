@@ -5,8 +5,8 @@
 // https://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
-use std::fmt::{self, Debug, Formatter};
-use std::pin::Pin;
+use core::fmt::{self, Debug, Formatter};
+use core::pin::Pin;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -188,8 +188,8 @@ where
 #[cfg(feature = "tokio")]
 mod tests {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-    use std::str::FromStr;
-    use std::time::Duration;
+    use core::str::FromStr;
+    use core::time::Duration;
 
     use hickory_proto::op::Message;
     use hickory_proto::rr::rdata::NULL;

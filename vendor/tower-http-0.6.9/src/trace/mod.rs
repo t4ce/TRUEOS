@@ -8,7 +8,7 @@
 //! use http::{Request, Response};
 //! use tower::{ServiceBuilder, ServiceExt, Service};
 //! use tower_http::trace::TraceLayer;
-//! use std::convert::Infallible;
+//! use core::convert::Infallible;
 //! use http_body_util::Full;
 //! use bytes::Bytes;
 //!
@@ -17,7 +17,7 @@
 //! }
 //!
 //! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # async fn main() -> Result<(), Box<dyn core::error::Error>> {
 //! // Setup tracing
 //! tracing_subscriber::fmt::init();
 //!
@@ -59,15 +59,15 @@
 //!     LatencyUnit,
 //!     trace::{TraceLayer, DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse},
 //! };
-//! use std::time::Duration;
+//! use core::time::Duration;
 //! # use tower::{ServiceExt, Service};
-//! # use std::convert::Infallible;
+//! # use core::convert::Infallible;
 //!
 //! # async fn handle(request: Request<Full<Bytes>>) -> Result<Response<Full<Bytes>>, Infallible> {
 //! #     Ok(Response::new(Full::from("foo")))
 //! # }
 //! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # async fn main() -> Result<(), Box<dyn core::error::Error>> {
 //! # tracing_subscriber::fmt::init();
 //! #
 //! let service = ServiceBuilder::new()
@@ -105,16 +105,16 @@
 //! use bytes::Bytes;
 //! use tower::ServiceBuilder;
 //! use tower_http::{classify::ServerErrorsFailureClass, trace::TraceLayer};
-//! use std::time::Duration;
+//! use core::time::Duration;
 //! use tracing::Span;
 //! # use tower::{ServiceExt, Service};
-//! # use std::convert::Infallible;
+//! # use core::convert::Infallible;
 //!
 //! # async fn handle(request: Request<Full<Bytes>>) -> Result<Response<Full<Bytes>>, Infallible> {
 //! #     Ok(Response::new(Full::from("foo")))
 //! # }
 //! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # async fn main() -> Result<(), Box<dyn core::error::Error>> {
 //! # tracing_subscriber::fmt::init();
 //! #
 //! let service = ServiceBuilder::new()
@@ -158,19 +158,19 @@
 //! use http::StatusCode;
 //! use tower::ServiceBuilder;
 //! use tower_http::{classify::ServerErrorsFailureClass, trace::TraceLayer};
-//! use std::time::Duration;
+//! use core::time::Duration;
 //! use tracing::Span;
 //! # use tower::{ServiceExt, Service};
 //! # use http_body_util::Full;
 //! # use bytes::Bytes;
 //! # use http::{Response, Request};
-//! # use std::convert::Infallible;
+//! # use core::convert::Infallible;
 //!
 //! # async fn handle(request: Request<Full<Bytes>>) -> Result<Response<Full<Bytes>>, Infallible> {
 //! #     Ok(Response::new(Full::from("foo")))
 //! # }
 //! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # async fn main() -> Result<(), Box<dyn core::error::Error>> {
 //! # tracing_subscriber::fmt::init();
 //! #
 //! let service = ServiceBuilder::new()
@@ -251,14 +251,14 @@
 //! use tower::ServiceBuilder;
 //! use tower_http::trace::TraceLayer;
 //! use tracing::Span;
-//! use std::time::Duration;
-//! # use std::convert::Infallible;
+//! use core::time::Duration;
+//! # use core::convert::Infallible;
 //!
 //! # async fn handle(request: Request<Full<Bytes>>) -> Result<Response<Full<Bytes>>, Infallible> {
 //! #     Ok(Response::new(Full::from("foo")))
 //! # }
 //! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # async fn main() -> Result<(), Box<dyn core::error::Error>> {
 //! # tracing_subscriber::fmt::init();
 //! #
 //! let service = ServiceBuilder::new()
@@ -301,13 +301,13 @@
 //!         SharedClassifier,
 //!     },
 //! };
-//! use std::convert::Infallible;
+//! use core::convert::Infallible;
 //!
 //! # async fn handle(request: Request<Full<Bytes>>) -> Result<Response<Full<Bytes>>, Infallible> {
 //! #     Ok(Response::new(Full::from("foo")))
 //! # }
 //! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # async fn main() -> Result<(), Box<dyn core::error::Error>> {
 //! # tracing_subscriber::fmt::init();
 //! #
 //! // Our `MakeClassifier` that always crates `MyClassifier` classifiers.
@@ -346,7 +346,7 @@
 //!
 //!     fn classify_error<E>(self, error: &E) -> Self::FailureClass
 //!     where
-//!         E: std::fmt::Display + 'static,
+//!         E: core::fmt::Display + 'static,
 //!     {
 //!         "something went wrong..."
 //!     }
@@ -785,7 +785,7 @@ mod tests {
 
         fn classify_error<E>(self, _error: &E) -> Self::FailureClass
         where
-            E: std::fmt::Display + 'static,
+            E: core::fmt::Display + 'static,
         {
             "error"
         }
@@ -809,7 +809,7 @@ mod tests {
 
         fn classify_error<E>(self, _error: &E) -> Self::FailureClass
         where
-            E: std::fmt::Display + 'static,
+            E: core::fmt::Display + 'static,
         {
             "error"
         }

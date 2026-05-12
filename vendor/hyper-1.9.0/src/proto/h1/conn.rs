@@ -1,10 +1,10 @@
-use std::fmt;
+use core::fmt;
 #[cfg(feature = "server")]
-use std::future::Future;
+use core::future::Future;
 use std::io;
-use std::marker::{PhantomData, Unpin};
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::marker::{PhantomData, Unpin};
+use core::pin::Pin;
+use core::task::{Context, Poll};
 #[cfg(feature = "server")]
 use core::time::Duration;
 
@@ -1010,7 +1010,7 @@ impl fmt::Debug for Writing {
     }
 }
 
-impl std::ops::BitAndAssign<bool> for KA {
+impl core::ops::BitAndAssign<bool> for KA {
     fn bitand_assign(&mut self, enabled: bool) {
         if !enabled {
             trace!("remote disabling keep-alive");
@@ -1208,7 +1208,7 @@ mod tests {
     use super::{Conn, Decoder, Reading, Writing};
     use ::uri::Uri;
 
-    use std::str::FromStr;
+    use core::str::FromStr;
 
     #[test]
     fn test_conn_init_read() {

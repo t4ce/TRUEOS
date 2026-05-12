@@ -6,10 +6,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::cmp::min;
+use core::cmp::min;
 use std::io::{self, IoSlice};
-use std::marker::PhantomData;
-use std::mem::{self, size_of, MaybeUninit};
+use core::marker::PhantomData;
+use core::mem::{self, size_of, MaybeUninit};
 use std::net::{self, Ipv4Addr, Ipv6Addr, Shutdown};
 use std::os::windows::io::{
     AsRawSocket, AsSocket, BorrowedSocket, FromRawSocket, IntoRawSocket, OwnedSocket,
@@ -43,7 +43,7 @@ use windows_sys::Win32::System::Threading::INFINITE;
 use crate::{MsgHdr, RecvFlags, SockAddr, SockAddrStorage, TcpKeepalive, Type};
 
 #[allow(non_camel_case_types)]
-pub(crate) type c_int = std::ffi::c_int;
+pub(crate) type c_int = core::ffi::c_int;
 
 /// Fake MSG_TRUNC flag for the [`RecvFlags`] struct.
 ///
@@ -163,8 +163,8 @@ impl_debug!(
     WinSock::IPPROTO_UDP,
 );
 
-impl std::fmt::Debug for RecvFlags {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for RecvFlags {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("RecvFlags")
             .field("is_truncated", &self.is_truncated())
             .finish()
@@ -606,7 +606,7 @@ pub(crate) fn send_vectored(
             min(bufs.len(), u32::MAX as usize) as u32,
             &mut nsent,
             flags as u32,
-            std::ptr::null_mut(),
+            core::ptr::null_mut(),
             None,
         ),
         PartialEq::eq,

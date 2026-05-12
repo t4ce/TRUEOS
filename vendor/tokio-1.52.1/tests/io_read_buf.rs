@@ -5,8 +5,8 @@ use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
 use tokio_test::assert_ok;
 
 use std::io;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 #[tokio::test]
 async fn read_buf() {
@@ -73,12 +73,12 @@ async fn issue_5588() {
     assert_eq!(read_buf.chunk_mut().len(), 0);
 
     // uninit
-    let mut buf = [std::mem::MaybeUninit::new(1); 8];
+    let mut buf = [core::mem::MaybeUninit::new(1); 8];
     let mut uninit = ReadBuf::uninit(&mut buf);
     assert_eq!(uninit.remaining_mut(), 8);
     assert_eq!(uninit.chunk_mut().len(), 8);
 
-    let mut buf = [std::mem::MaybeUninit::uninit(); 8];
+    let mut buf = [core::mem::MaybeUninit::uninit(); 8];
     let mut uninit = ReadBuf::uninit(&mut buf);
     unsafe {
         uninit.advance_mut(4);

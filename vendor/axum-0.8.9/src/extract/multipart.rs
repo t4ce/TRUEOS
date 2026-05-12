@@ -315,8 +315,8 @@ impl fmt::Display for MultipartError {
     }
 }
 
-impl std::error::Error for MultipartError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+impl core::error::Error for MultipartError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         Some(&self.source)
     }
 }

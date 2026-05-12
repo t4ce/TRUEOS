@@ -11,7 +11,7 @@ use std::{pin::Pin, task::ready};
 
 use super::completion::{CompleteOnResponse, TrackCompletion, TrackCompletionFuture};
 use super::Load;
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 use std::{
     sync::{Arc, Mutex},
     time::Duration,

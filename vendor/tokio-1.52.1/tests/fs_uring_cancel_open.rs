@@ -10,8 +10,8 @@
 
 use futures::future::FutureExt;
 use std::fs;
-use std::future::poll_fn;
-use std::task::Poll;
+use core::future::poll_fn;
+use core::task::Poll;
 use tempfile::NamedTempFile;
 
 // see: https://github.com/tokio-rs/tokio/issues/7979

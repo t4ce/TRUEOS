@@ -53,7 +53,7 @@ async fn signal_realtime() {
 
     // Ensure that all signals are received in time -- attempt to get whatever
     // we can.
-    let sleep = std::pin::pin!(sleep(Duration::from_secs(5)));
+    let sleep = core::pin::pin!(sleep(Duration::from_secs(5)));
     let done = futures.take_until(sleep).collect::<HashMap<_, _>>().await;
 
     let mut none = Vec::new();

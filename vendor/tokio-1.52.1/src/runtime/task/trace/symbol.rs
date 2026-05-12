@@ -3,7 +3,7 @@ use crate::runtime::prelude::*;
 
 use backtrace::BacktraceSymbol;
 use core::fmt;
-use std::hash::{Hash, Hasher};
+use core::hash::{Hash, Hasher};
 use core::ptr;
 
 /// A symbol in a backtrace.

@@ -1,7 +1,7 @@
 use tower_layer::{layer_fn, LayerFn};
 use tower_service::Service;
 
-use std::fmt;
+use core::fmt;
 use std::{
     future::Future,
     pin::Pin,

@@ -15,7 +15,7 @@ use core::{
 use lock_api::RawMutex as RawMutex_;
 use parking_lot_core::{self, ParkResult, RequeueOp, UnparkResult, DEFAULT_PARK_TOKEN};
 use core::time::Duration;
-use std::ops::DerefMut;
+use core::ops::DerefMut;
 use std::time::Instant;
 
 /// A type indicating whether a timed wait on a condition variable returned
@@ -1066,7 +1066,7 @@ mod webkit_queue_test {
                 }
                 let should_notify = queue.items.len() == max_queue_size;
                 let result = queue.items.pop_front();
-                std::mem::drop(queue);
+                core::mem::drop(queue);
                 (should_notify, result)
             };
             notify(notify_style, &full_condition, should_notify);
@@ -1098,7 +1098,7 @@ mod webkit_queue_test {
                     );
                     let should_notify = queue.items.is_empty();
                     queue.items.push_back(message);
-                    std::mem::drop(queue);
+                    core::mem::drop(queue);
                     should_notify
                 };
                 notify(notify_style, &empty_condition, should_notify);

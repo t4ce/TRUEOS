@@ -83,7 +83,7 @@ impl<K, V, S> Clone for BaseCache<K, V, S> {
 impl<K, V, S> Drop for BaseCache<K, V, S> {
     fn drop(&mut self) {
         // The housekeeper needs to be dropped before the inner is dropped.
-        std::mem::drop(self.housekeeper.take());
+        core::mem::drop(self.housekeeper.take());
     }
 }
 
@@ -675,7 +675,7 @@ where
                 // alternatives in other CPU architectures.
                 const SPIN_COUNT: usize = if cfg!(target_arch = "x86_64") { 8 } else { 32 };
                 for _ in 0..SPIN_COUNT {
-                    std::hint::spin_loop();
+                    core::hint::spin_loop();
                 }
             } else {
                 spin_loop_attempts = 0;
@@ -2585,7 +2585,7 @@ where
             }
             .boxed()
         } else {
-            std::future::ready(()).boxed()
+            core::future::ready(()).boxed()
         }
     }
 
@@ -2620,7 +2620,7 @@ where
             let value = entry.value.clone();
             async move { notifier.notify(key, value, cause).await }.boxed()
         } else {
-            std::future::ready(()).boxed()
+            core::future::ready(()).boxed()
         }
     }
 }
@@ -3025,7 +3025,7 @@ mod tests {
                 use ExpiryExpectation::*;
 
                 let lock = &mut *self.expectation.lock().unwrap();
-                let expected = std::mem::replace(lock, NoCall);
+                let expected = core::mem::replace(lock, NoCall);
                 match expected {
                     AfterCreate {
                         caller_line,
@@ -3064,7 +3064,7 @@ mod tests {
                 use ExpiryExpectation::*;
 
                 let lock = &mut *self.expectation.lock().unwrap();
-                let expected = std::mem::replace(lock, NoCall);
+                let expected = core::mem::replace(lock, NoCall);
                 match expected {
                     AfterRead {
                         caller_line,
@@ -3115,7 +3115,7 @@ mod tests {
                 use ExpiryExpectation::*;
 
                 let lock = &mut *self.expectation.lock().unwrap();
-                let expected = std::mem::replace(lock, NoCall);
+                let expected = core::mem::replace(lock, NoCall);
                 match expected {
                     AfterUpdate {
                         caller_line,

@@ -1,10 +1,10 @@
 #[cfg(any(feature = "__native-tls", feature = "__rustls",))]
-use std::any::Any;
-use std::future::Future;
+use core::any::Any;
+use core::future::Future;
 use std::net::IpAddr;
-use std::pin::Pin;
+use core::pin::Pin;
 use std::sync::Arc;
-use std::task::{ready, Context, Poll};
+use core::task::{ready, Context, Poll};
 use core::time::Duration;
 use std::{collections::HashMap, convert::TryInto, net::SocketAddr};
 use std::{fmt, str};
@@ -152,7 +152,7 @@ impl Service<hyper::Request<crate::async_impl::body::Body>> for HyperService {
 
     fn call(&mut self, req: hyper::Request<crate::async_impl::body::Body>) -> Self::Future {
         let clone = self.hyper.clone();
-        let mut inner = std::mem::replace(&mut self.hyper, clone);
+        let mut inner = core::mem::replace(&mut self.hyper, clone);
         Box::pin(async move { inner.call(req).await.map_err(crate::error::request) })
     }
 }
@@ -264,7 +264,7 @@ struct Config {
     #[cfg(unix)]
     unix_socket: Option<Arc<std::path::Path>>,
     #[cfg(target_os = "windows")]
-    windows_named_pipe: Option<Arc<std::ffi::OsStr>>,
+    windows_named_pipe: Option<Arc<core::ffi::OsStr>>,
 }
 
 impl Default for ClientBuilder {
@@ -3133,7 +3133,7 @@ mod tests {
 
     #[test]
     fn test_future_size() {
-        let s = std::mem::size_of::<super::Pending>();
+        let s = core::mem::size_of::<super::Pending>();
         assert!(s < 128, "size_of::<Pending>() == {s}, too big");
     }
 }

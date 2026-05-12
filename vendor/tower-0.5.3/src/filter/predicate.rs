@@ -1,5 +1,5 @@
 use crate::BoxError;
-use std::future::Future;
+use core::future::Future;
 
 /// Checks a request asynchronously.
 pub trait AsyncPredicate<Request> {

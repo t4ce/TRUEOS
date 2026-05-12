@@ -5,15 +5,15 @@
 // https://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
-use std::future::Future;
+use core::future::Future;
 use std::io;
-use std::marker::Unpin;
+use core::marker::Unpin;
 #[cfg(feature = "__quic")]
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::pin::Pin;
+use core::pin::Pin;
 #[cfg(feature = "__https")]
 use std::sync::Arc;
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 
 use crate::proto::runtime::Spawn;
 #[cfg(feature = "tokio")]

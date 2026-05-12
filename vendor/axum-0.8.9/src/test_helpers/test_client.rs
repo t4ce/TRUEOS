@@ -2,7 +2,7 @@ use super::{serve, Request, Response};
 use bytes::Bytes;
 use futures_util::future::BoxFuture;
 use http::header::{HeaderName, HeaderValue};
-use std::ops::Deref;
+use core::ops::Deref;
 use std::{convert::Infallible, future::IntoFuture, net::SocketAddr};
 use tokio::net::TcpListener;
 use tower::make::Shared;

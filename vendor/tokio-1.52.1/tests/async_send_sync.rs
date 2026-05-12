@@ -2,11 +2,11 @@
 #![cfg(feature = "full")]
 #![allow(clippy::type_complexity, clippy::diverging_sub_expression)]
 
-use std::cell::Cell;
-use std::future::Future;
+use core::cell::Cell;
+use core::future::Future;
 use std::io::SeekFrom;
 use std::net::SocketAddr;
-use std::pin::Pin;
+use core::pin::Pin;
 use std::rc::Rc;
 use tokio::net::TcpStream;
 use tokio::time::{Duration, Instant};
@@ -32,18 +32,18 @@ struct NN {
 }
 
 #[allow(dead_code)]
-type BoxFutureSync<T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + Sync>>;
+type BoxFutureSync<T> = core::pin::Pin<Box<dyn core::future::Future<Output = T> + Send + Sync>>;
 #[allow(dead_code)]
-type BoxFutureSend<T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send>>;
+type BoxFutureSend<T> = core::pin::Pin<Box<dyn core::future::Future<Output = T> + Send>>;
 #[allow(dead_code)]
-type BoxFuture<T> = std::pin::Pin<Box<dyn std::future::Future<Output = T>>>;
+type BoxFuture<T> = core::pin::Pin<Box<dyn core::future::Future<Output = T>>>;
 
 #[allow(dead_code)]
-type BoxAsyncRead = std::pin::Pin<Box<dyn tokio::io::AsyncBufRead + Send + Sync>>;
+type BoxAsyncRead = core::pin::Pin<Box<dyn tokio::io::AsyncBufRead + Send + Sync>>;
 #[allow(dead_code)]
-type BoxAsyncSeek = std::pin::Pin<Box<dyn tokio::io::AsyncSeek + Send + Sync>>;
+type BoxAsyncSeek = core::pin::Pin<Box<dyn tokio::io::AsyncSeek + Send + Sync>>;
 #[allow(dead_code)]
-type BoxAsyncWrite = std::pin::Pin<Box<dyn tokio::io::AsyncWrite + Send + Sync>>;
+type BoxAsyncWrite = core::pin::Pin<Box<dyn tokio::io::AsyncWrite + Send + Sync>>;
 
 #[allow(dead_code)]
 fn require_send<T: Send>(_t: &T) {}
@@ -146,11 +146,11 @@ macro_rules! cfg_not_wasi {
 // doesn't work for this particular case because constructing the closure
 // is too complicated.
 const _: fn() = || {
-    let pinned = std::marker::PhantomPinned;
+    let pinned = core::marker::PhantomPinned;
     let f = tokio::macros::support::poll_fn(move |_| {
         // Use `pinned` to take ownership of it.
         let _ = &pinned;
-        std::task::Poll::Pending::<()>
+        core::task::Poll::Pending::<()>
     });
     require_send(&f);
     require_sync(&f);

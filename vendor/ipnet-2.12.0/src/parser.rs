@@ -9,7 +9,7 @@ use core::fmt;
 #[cfg(not(feature = "std"))]
 use core::error::Error;
 #[cfg(feature = "std")]
-use std::error::Error;
+use core::error::Error;
 #[cfg(not(feature = "std"))]
 use core::net::{Ipv4Addr, Ipv6Addr};
 #[cfg(feature = "std")]

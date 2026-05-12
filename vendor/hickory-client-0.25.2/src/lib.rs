@@ -86,7 +86,7 @@
 //!
 //! ```rust
 //! use std::net::Ipv4Addr;
-//! use std::str::FromStr;
+//! use core::str::FromStr;
 //! use tokio::net::TcpStream as TokioTcpStream;
 //! use hickory_client::client::{Client, ClientHandle};
 //! use hickory_client::proto::runtime::TokioRuntimeProvider;

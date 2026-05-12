@@ -68,7 +68,7 @@ fn rfc_test_vectors_std_alphabet<E: EngineWrapper>(engine_wrapper: E) {
                 engine_no_padding.internal_encode(orig.as_bytes(), &mut encode_buf[..]);
             assert_eq!(
                 &encoded_without_padding,
-                &std::str::from_utf8(&encode_buf[0..encode_len]).unwrap()
+                &core::str::from_utf8(&encode_buf[0..encode_len]).unwrap()
             );
             let decode_len = engine_no_padding
                 .decode_slice_unchecked(encoded_without_padding.as_bytes(), &mut decode_buf[..])
@@ -77,7 +77,7 @@ fn rfc_test_vectors_std_alphabet<E: EngineWrapper>(engine_wrapper: E) {
 
             assert_eq!(
                 orig,
-                &std::str::from_utf8(&decode_buf[0..decode_len]).unwrap()
+                &core::str::from_utf8(&decode_buf[0..decode_len]).unwrap()
             );
 
             // if there was any padding originally, the no padding engine won't decode it
@@ -98,7 +98,7 @@ fn rfc_test_vectors_std_alphabet<E: EngineWrapper>(engine_wrapper: E) {
             assert_eq!(
                 // doesn't have padding added yet
                 &encoded_without_padding,
-                &std::str::from_utf8(&encode_buf[0..encode_len]).unwrap()
+                &core::str::from_utf8(&encode_buf[0..encode_len]).unwrap()
             );
             let pad_len = add_padding(encode_len, &mut encode_buf[encode_len..]);
             assert_eq!(encoded.as_bytes(), &encode_buf[..encode_len + pad_len]);
@@ -110,7 +110,7 @@ fn rfc_test_vectors_std_alphabet<E: EngineWrapper>(engine_wrapper: E) {
 
             assert_eq!(
                 orig,
-                &std::str::from_utf8(&decode_buf[0..decode_len]).unwrap()
+                &core::str::from_utf8(&decode_buf[0..decode_len]).unwrap()
             );
 
             // if there was (canonical) padding, and we remove it, the standard engine won't decode
@@ -201,7 +201,7 @@ fn encode_doesnt_write_extra_bytes<E: EngineWrapper>(engine_wrapper: E) {
 
         let encoded_data = &encode_buf[prefix_len..(prefix_len + encoded_len_no_pad)];
         assert_encode_sanity(
-            std::str::from_utf8(encoded_data).unwrap(),
+            core::str::from_utf8(encoded_data).unwrap(),
             // engines don't pad
             false,
             orig_len,
@@ -259,7 +259,7 @@ fn encode_engine_slice_fits_into_precisely_sized_slice<E: EngineWrapper>(engine_
         );
 
         assert_encode_sanity(
-            std::str::from_utf8(&encoded_data[0..encoded_size]).unwrap(),
+            core::str::from_utf8(&encoded_data[0..encoded_size]).unwrap(),
             engine.config().encode_padding(),
             input_len,
         );
@@ -768,7 +768,7 @@ fn decode_padding_starts_before_final_chunk_error_invalid_byte_at_first_pad<E: E
                 "suffix_len: {}, padding_len: {}, b64: {}",
                 suffix_len,
                 padding_len,
-                std::str::from_utf8(&encoded).unwrap()
+                core::str::from_utf8(&encoded).unwrap()
             );
         }
     }

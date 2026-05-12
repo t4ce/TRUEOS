@@ -90,7 +90,7 @@ impl UnescapedRoute {
     }
 }
 
-impl std::ops::Deref for UnescapedRoute {
+impl core::ops::Deref for UnescapedRoute {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
@@ -100,7 +100,7 @@ impl std::ops::Deref for UnescapedRoute {
 
 impl fmt::Debug for UnescapedRoute {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(std::str::from_utf8(&self.inner).unwrap(), f)
+        fmt::Debug::fmt(core::str::from_utf8(&self.inner).unwrap(), f)
     }
 }
 
@@ -165,7 +165,7 @@ impl<'a> UnescapedRef<'a> {
     }
 }
 
-impl<'a> std::ops::Deref for UnescapedRef<'a> {
+impl<'a> core::ops::Deref for UnescapedRef<'a> {
     type Target = &'a [u8];
 
     fn deref(&self) -> &Self::Target {
@@ -176,7 +176,7 @@ impl<'a> std::ops::Deref for UnescapedRef<'a> {
 impl<'a> fmt::Debug for UnescapedRef<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("UnescapedRef")
-            .field("inner", &std::str::from_utf8(self.inner))
+            .field("inner", &core::str::from_utf8(self.inner))
             .field("escaped", &self.escaped)
             .field("offset", &self.offset)
             .finish()

@@ -1,9 +1,9 @@
 #[allow(unused, deprecated)]
 use std::ascii::AsciiExt;
-use std::error::Error;
-use std::fmt;
-use std::iter::Enumerate;
-use std::str::Bytes;
+use core::error::Error;
+use core::fmt;
+use core::iter::Enumerate;
+use core::str::Bytes;
 
 use super::{Mime, MimeIter, Source, ParamSource, Indexed, CHARSET, UTF_8};
 

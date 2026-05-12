@@ -112,7 +112,7 @@ pub type MappedMutexGuard<'a, T> = lock_api::MappedMutexGuard<'a, RawMutex, T>;
 mod tests {
     use crate::{Condvar, MappedMutexGuard, Mutex, MutexGuard};
     use std::collections::HashMap;
-    use std::ops::Deref;
+    use core::ops::Deref;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc::channel;
     use std::sync::Arc;

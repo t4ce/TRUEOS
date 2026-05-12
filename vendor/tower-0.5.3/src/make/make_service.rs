@@ -1,10 +1,10 @@
 //! Contains [`MakeService`] which is a trait alias for a [`Service`] of [`Service`]s.
 
 use crate::sealed::Sealed;
-use std::fmt;
-use std::future::Future;
-use std::marker::PhantomData;
-use std::task::{Context, Poll};
+use core::fmt;
+use core::future::Future;
+use core::marker::PhantomData;
+use core::task::{Context, Poll};
 use tower_service::Service;
 
 pub(crate) mod shared;
@@ -40,8 +40,8 @@ pub trait MakeService<Target, Request>: Sealed<(Target, Request)> {
     /// is notified when the service becomes ready again. This function is
     /// expected to be called while on a task.
     ///
-    /// [`Poll::Ready`]: std::task::Poll::Ready
-    /// [`Poll::Pending`]: std::task::Poll::Pending
+    /// [`Poll::Ready`]: core::task::Poll::Ready
+    /// [`Poll::Pending`]: core::task::Poll::Pending
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::MakeError>>;
 
     /// Create and return a new service value asynchronously.
@@ -51,7 +51,7 @@ pub trait MakeService<Target, Request>: Sealed<(Target, Request)> {
     ///
     /// # Example
     /// ```
-    /// use std::convert::Infallible;
+    /// use core::convert::Infallible;
     /// use tower::Service;
     /// use tower::make::MakeService;
     /// use tower::service_fn;
@@ -90,7 +90,7 @@ pub trait MakeService<Target, Request>: Sealed<(Target, Request)> {
     ///
     /// # Example
     /// ```
-    /// use std::convert::Infallible;
+    /// use core::convert::Infallible;
     /// use tower::Service;
     /// use tower::make::MakeService;
     /// use tower::service_fn;

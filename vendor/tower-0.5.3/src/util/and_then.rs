@@ -1,9 +1,9 @@
 use futures_core::TryFuture;
 use futures_util::{future, TryFutureExt};
-use std::fmt;
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::fmt;
+use core::future::Future;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 use tower_layer::Layer;
 use tower_service::Service;
 
@@ -23,7 +23,7 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AndThen")
             .field("inner", &self.inner)
-            .field("f", &format_args!("{}", std::any::type_name::<F>()))
+            .field("f", &format_args!("{}", core::any::type_name::<F>()))
             .finish()
     }
 }
@@ -44,8 +44,8 @@ impl<F1, F2: TryFuture, N> AndThenFuture<F1, F2, N> {
     }
 }
 
-impl<F1, F2: TryFuture, N> std::fmt::Debug for AndThenFuture<F1, F2, N> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<F1, F2: TryFuture, N> core::fmt::Debug for AndThenFuture<F1, F2, N> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_tuple("AndThenFuture")
             .field(&format_args!("..."))
             .finish()

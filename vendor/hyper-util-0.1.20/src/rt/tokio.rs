@@ -331,7 +331,7 @@ mod tests {
     use tokio::sync::oneshot;
 
     #[tokio::test]
-    async fn simple_execute() -> Result<(), Box<dyn std::error::Error>> {
+    async fn simple_execute() -> Result<(), Box<dyn core::error::Error>> {
         let (tx, rx) = oneshot::channel();
         let executor = TokioExecutor::new();
         executor.execute(async move {

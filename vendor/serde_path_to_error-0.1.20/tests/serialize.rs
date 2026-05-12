@@ -1,8 +1,8 @@
 use serde::Serialize;
 use serde_derive::Serialize;
-use std::cell::RefCell;
+use core::cell::RefCell;
 use std::collections::BTreeMap;
-use std::fmt::Debug;
+use core::fmt::Debug;
 
 fn test<T>(value: &T, expected: &str)
 where

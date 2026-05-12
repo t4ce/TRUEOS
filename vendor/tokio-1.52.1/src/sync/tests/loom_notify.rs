@@ -108,8 +108,8 @@ fn notify_multi() {
 
 #[test]
 fn notify_drop() {
-    use std::future::{poll_fn, Future};
-    use std::task::Poll;
+    use core::future::{poll_fn, Future};
+    use core::task::Poll;
 
     loom::model(|| {
         let notify = Arc::new(Notify::new());

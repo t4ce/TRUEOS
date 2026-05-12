@@ -11,7 +11,7 @@
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::mpsc;
-use std::time::Duration;
+use core::time::Duration;
 use tempfile::NamedTempFile;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};

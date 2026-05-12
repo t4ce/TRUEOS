@@ -71,7 +71,7 @@
 //! use tokio::io::{AsyncReadExt, AsyncWriteExt};
 //!
 //! #[tokio::main]
-//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! async fn main() -> Result<(), Box<dyn core::error::Error>> {
 //!     let listener = TcpListener::bind("127.0.0.1:8080").await?;
 //!
 //!     loop {
@@ -117,7 +117,7 @@
 //! use tokio::io::{AsyncReadExt, AsyncWriteExt};
 //! use tokio::runtime::Runtime;
 //!
-//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! fn main() -> Result<(), Box<dyn core::error::Error>> {
 //!     // Create the runtime
 //!     let rt  = Runtime::new()?;
 //!
@@ -174,7 +174,7 @@
 //! # {
 //! use tokio::runtime;
 //!
-//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # fn main() -> Result<(), Box<dyn core::error::Error>> {
 //! let threaded_rt = runtime::Runtime::new()?;
 //! # Ok(()) }
 //! # }
@@ -191,7 +191,7 @@
 //! ```
 //! use tokio::runtime;
 //!
-//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # fn main() -> Result<(), Box<dyn core::error::Error>> {
 //! let rt = runtime::Builder::new_current_thread()
 //!     .build()?;
 //! # Ok(()) }

@@ -8,7 +8,7 @@
 //! System configuration loading for windows
 
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
-use std::str::FromStr;
+use core::str::FromStr;
 
 use ipconfig::computer::{get_domain, get_search_list, is_round_robin_enabled};
 use ipconfig::get_adapters;

@@ -2,7 +2,7 @@
 use alloc::string::String;
 use core::fmt;
 #[cfg(any(feature = "std", test))]
-use std::error;
+use core::error;
 
 #[cfg(any(feature = "alloc", test))]
 use crate::engine::general_purpose::STANDARD;
@@ -172,7 +172,7 @@ mod tests {
         distributions::{Distribution, Uniform},
         Rng, SeedableRng,
     };
-    use std::str;
+    use core::str;
 
     const URL_SAFE_NO_PAD_ENGINE: GeneralPurpose = GeneralPurpose::new(&alphabet::URL_SAFE, NO_PAD);
 

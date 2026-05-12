@@ -91,7 +91,7 @@ where
         Ok(Self::from_extensions(&req.extensions).ok_or_else(|| {
             MissingExtension::from_err(format!(
                 "Extension of type `{}` was not found. Perhaps you forgot to add it? See `axum::Extension`.",
-                std::any::type_name::<T>()
+                core::any::type_name::<T>()
             ))
         })?)
     }

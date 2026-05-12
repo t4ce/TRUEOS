@@ -3,9 +3,9 @@ use bytes::{Buf, Bytes};
 use http_body::{Body, Frame, SizeHint};
 use pin_project_lite::pin_project;
 use std::borrow::Cow;
-use std::convert::{Infallible, TryFrom};
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::convert::{Infallible, TryFrom};
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 pin_project! {
     /// A body that consists of a single chunk.

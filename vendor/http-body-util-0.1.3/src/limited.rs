@@ -2,10 +2,10 @@ use alloc::boxed::Box;
 use bytes::Buf;
 use http_body::{Body, Frame, SizeHint};
 use pin_project_lite::pin_project;
-use std::error::Error;
-use std::fmt;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::error::Error;
+use core::fmt;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 pin_project! {
     /// A length limited body.
@@ -70,7 +70,7 @@ where
     }
 
     fn size_hint(&self) -> SizeHint {
-        use std::convert::TryFrom;
+        use core::convert::TryFrom;
         match u64::try_from(self.remaining) {
             Ok(n) => {
                 let mut hint = self.inner.size_hint();
@@ -106,7 +106,7 @@ mod tests {
     use super::*;
     use crate::{BodyExt, Full, StreamBody};
     use bytes::Bytes;
-    use std::convert::Infallible;
+    use core::convert::Infallible;
 
     #[tokio::test]
     async fn read_for_body_under_limit_returns_data() {

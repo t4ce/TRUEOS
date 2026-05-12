@@ -2,7 +2,7 @@
 #[path = "../support.rs"]
 mod support;
 
-use std::time::Duration;
+use core::time::Duration;
 use tokio::time;
 use tokio_test::{assert_pending, assert_ready, assert_ready_ok, task};
 use tower::hedge::{Hedge, Policy};

@@ -8,7 +8,7 @@
 //! An LRU cache designed for work with DNS lookups
 
 use std::collections::HashMap;
-use std::ops::RangeInclusive;
+use core::ops::RangeInclusive;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -515,7 +515,7 @@ impl Expiry<Query, LruValue> for LruValueExpiry {
 // see also the lookup_tests.rs in integration-tests crate
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
+    use core::str::FromStr;
     use std::time::*;
 
     use hickory_proto::rr::rdata::TXT;

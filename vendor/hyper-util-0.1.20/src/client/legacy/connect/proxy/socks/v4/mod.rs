@@ -5,7 +5,7 @@ mod messages;
 use messages::*;
 
 use std::net::{IpAddr, SocketAddr, SocketAddrV4, ToSocketAddrs};
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 
 use http::Uri;
 use hyper::rt::{Read, Write};

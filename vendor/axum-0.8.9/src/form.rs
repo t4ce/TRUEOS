@@ -139,7 +139,7 @@ mod tests {
     use http::{Method, Request};
     use mime::APPLICATION_WWW_FORM_URLENCODED;
     use serde::{Deserialize, Serialize};
-    use std::fmt::Debug;
+    use core::fmt::Debug;
 
     #[derive(Debug, PartialEq, Serialize, Deserialize)]
     struct Pagination {

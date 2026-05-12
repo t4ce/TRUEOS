@@ -1,6 +1,6 @@
 use crate::sealed::Sealed;
-use std::future::Future;
-use std::task::{Context, Poll};
+use core::future::Future;
+use core::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tower_service::Service;
 

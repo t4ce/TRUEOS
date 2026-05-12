@@ -166,7 +166,7 @@ impl TSigner {
 
         // 4.  Check truncation policy
         //   see not above in regards to not supporting verification of truncated HMACs.
-        // if tsig.mac().len() < std::cmp::max(10, self.0.algorithm.output_len()? / 2) {
+        // if tsig.mac().len() < core::cmp::max(10, self.0.algorithm.output_len()? / 2) {
         //     return Err(ProtoError::from(
         //         "tsig validation error: truncated signature",
         //     ));

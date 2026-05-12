@@ -9,7 +9,7 @@ use libc::{EPOLLET, EPOLLIN, EPOLLOUT, EPOLLPRI, EPOLLRDHUP};
 use crate::{Interest, Token};
 
 cfg_io_source! {
-    use std::ptr;
+    use core::ptr;
 }
 
 /// Unique id for use as `SelectorId`.
@@ -145,7 +145,7 @@ pub type Event = libc::epoll_event;
 pub type Events = Vec<Event>;
 
 pub mod event {
-    use std::fmt;
+    use core::fmt;
 
     use crate::sys::Event;
     use crate::Token;

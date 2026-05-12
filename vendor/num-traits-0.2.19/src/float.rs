@@ -277,7 +277,7 @@ pub trait FloatCore: Num + NumCast + Neg<Output = Self> + PartialOrd + Copy {
     /// ```
     /// use num_traits::float::FloatCore;
     /// use std::{f32, f64};
-    /// use std::num::FpCategory;
+    /// use core::num::FpCategory;
     ///
     /// fn check<T: FloatCore>(x: T, c: FpCategory) {
     ///     assert!(x.classify() == c);
@@ -1144,7 +1144,7 @@ pub trait Float: Num + Copy + NumCast + PartialOrd + Neg<Output = Self> {
     ///
     /// ```
     /// use num_traits::Float;
-    /// use std::num::FpCategory;
+    /// use core::num::FpCategory;
     /// use std::f32;
     ///
     /// let num = 12.4f32;
@@ -2326,7 +2326,7 @@ pub trait TotalOrder {
     /// # Examples
     /// ```
     /// use num_traits::float::TotalOrder;
-    /// use std::cmp::Ordering;
+    /// use core::cmp::Ordering;
     /// use std::{f32, f64};
     ///
     /// fn check_eq<T: TotalOrder>(x: T, y: T) {

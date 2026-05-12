@@ -203,7 +203,7 @@ impl FromStr for RecordType {
     /// Convert `&str` to `RecordType`
     ///
     /// ```
-    /// use std::str::FromStr;
+    /// use core::str::FromStr;
     /// use hickory_proto::rr::record_type::RecordType;
     ///
     /// let var: RecordType = RecordType::from_str("A").unwrap();

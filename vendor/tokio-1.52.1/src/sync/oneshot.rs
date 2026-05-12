@@ -241,7 +241,7 @@ pub struct Sender<T> {
 /// succeed — it could fail with another spurious failure. (A spurious failure
 /// does not mean that the message is lost. It is just delayed.)
 ///
-/// [`Future`]: trait@std::future::Future
+/// [`Future`]: trait@core::future::Future
 ///
 /// # Cancellation safety
 ///
@@ -365,7 +365,7 @@ pub mod error {
         }
     }
 
-    impl std::error::Error for RecvError {}
+    impl core::error::Error for RecvError {}
 
     // ===== impl TryRecvError =====
 
@@ -378,7 +378,7 @@ pub mod error {
         }
     }
 
-    impl std::error::Error for TryRecvError {}
+    impl core::error::Error for TryRecvError {}
 }
 
 use self::error::*;

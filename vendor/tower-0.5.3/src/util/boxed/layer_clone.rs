@@ -22,7 +22,7 @@ use tower_service::Service;
 /// `BoxCloneService` to return a consistent type regardless of runtime configuration:
 ///
 /// ```
-/// use std::time::Duration;
+/// use core::time::Duration;
 /// use tower::{Service, ServiceBuilder, BoxError};
 /// use tower::util::{BoxCloneServiceLayer, BoxCloneService};
 ///

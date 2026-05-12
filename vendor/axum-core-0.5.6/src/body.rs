@@ -6,8 +6,8 @@ use futures_core::{Stream, TryStream};
 use http_body::{Body as _, Frame};
 use http_body_util::BodyExt;
 use pin_project_lite::pin_project;
-use std::pin::Pin;
-use std::task::{ready, Context, Poll};
+use core::pin::Pin;
+use core::task::{ready, Context, Poll};
 use sync_wrapper::SyncWrapper;
 
 type BoxBody = http_body_util::combinators::UnsyncBoxBody<Bytes, Error>;
@@ -26,7 +26,7 @@ where
     K: Send + 'static,
 {
     let mut k = Some(k);
-    if let Some(k) = <dyn std::any::Any>::downcast_mut::<Option<T>>(&mut k) {
+    if let Some(k) = <dyn core::any::Any>::downcast_mut::<Option<T>>(&mut k) {
         Ok(k.take().unwrap())
     } else {
         Err(k.unwrap())

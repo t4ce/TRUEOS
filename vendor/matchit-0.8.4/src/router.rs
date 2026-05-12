@@ -29,7 +29,7 @@ impl<T> Router<T> {
     ///
     /// ```rust
     /// # use matchit::Router;
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # fn main() -> Result<(), Box<dyn core::error::Error>> {
     /// let mut router = Router::new();
     /// router.insert("/home", "Welcome!")?;
     /// router.insert("/users/{id}", "A User")?;
@@ -46,7 +46,7 @@ impl<T> Router<T> {
     ///
     /// ```rust
     /// # use matchit::Router;
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # fn main() -> Result<(), Box<dyn core::error::Error>> {
     /// let mut router = Router::new();
     /// router.insert("/home", "Welcome!")?;
     ///
@@ -73,7 +73,7 @@ impl<T> Router<T> {
     ///
     /// ```rust
     /// # use matchit::Router;
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # fn main() -> Result<(), Box<dyn core::error::Error>> {
     /// let mut router = Router::new();
     /// router.insert("/", 1)?;
     ///

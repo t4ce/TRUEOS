@@ -222,7 +222,7 @@ type Req = http::Request<crate::async_impl::body::Body>;
 
 impl<B> tower::retry::Policy<Req, http::Response<B>, crate::Error> for Policy {
     // TODO? backoff futures...
-    type Future = std::future::Ready<()>;
+    type Future = core::future::Ready<()>;
 
     fn retry(
         &mut self,
@@ -241,7 +241,7 @@ impl<B> tower::retry::Policy<Req, http::Response<B>, crate::Error> for Policy {
                 log::trace!("could retry!");
                 if self.budget.as_ref().map(|b| b.withdraw()).unwrap_or(true) {
                     self.retry_cnt += 1;
-                    Some(std::future::ready(()))
+                    Some(core::future::ready(()))
                 } else {
                     log::debug!("retryable but could not withdraw from budget");
                     None
@@ -271,7 +271,7 @@ impl<B> tower::retry::Policy<Req, http::Response<B>, crate::Error> for Policy {
 }
 
 fn is_retryable_error(err: &crate::Error) -> bool {
-    use std::error::Error as _;
+    use core::error::Error as _;
 
     // pop the reqwest::Error
     let err = if let Some(err) = err.source() {
@@ -363,8 +363,8 @@ mod scope {
         }
     }
 
-    impl std::fmt::Debug for Scoped {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    impl core::fmt::Debug for Scoped {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             match self {
                 Self::Unscoped => f.write_str("Unscoped"),
                 Self::Dyn(_) => f.write_str("Scoped"),
@@ -419,7 +419,7 @@ mod classify {
         }
 
         /// Access the error, if a response was not received.
-        pub fn error(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        pub fn error(&self) -> Option<&(dyn core::error::Error + 'static)> {
             self.1.as_ref().err().map(|e| &**e as _)
         }
 
@@ -479,8 +479,8 @@ mod classify {
         }
     }
 
-    impl std::fmt::Debug for Classifier {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    impl core::fmt::Debug for Classifier {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             match self {
                 Self::Never => f.write_str("Never"),
                 Self::ProtocolNacks => f.write_str("ProtocolNacks"),

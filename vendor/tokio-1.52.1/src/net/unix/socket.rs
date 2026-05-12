@@ -24,7 +24,7 @@ cfg_net_unix! {
     ///
     /// ```no_run
     /// use tokio::net::UnixSocket;
-    /// use std::error::Error;
+    /// use core::error::Error;
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn Error>> {
@@ -42,7 +42,7 @@ cfg_net_unix! {
     ///
     /// ```no_run
     /// use tokio::net::UnixSocket;
-    /// use std::error::Error;
+    /// use core::error::Error;
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn Error>> {
@@ -61,7 +61,7 @@ cfg_net_unix! {
     ///
     /// ```no_run
     /// use tokio::net::UnixSocket;
-    /// use std::error::Error;
+    /// use core::error::Error;
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn Error>> {

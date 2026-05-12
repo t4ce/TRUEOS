@@ -317,7 +317,7 @@ where
                 return Poll::Ready(None);
             }
 
-            match std::task::ready!(this.body.poll_frame(cx)) {
+            match core::task::ready!(this.body.poll_frame(cx)) {
                 Some(Ok(frame)) => match frame.into_data() {
                     Ok(data) => return Poll::Ready(Some(Ok(data))),
                     Err(frame) => {
@@ -347,7 +347,7 @@ where
     ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
         // First drive the stream impl. This consumes all data frames and buffer at most one
         // trailers frame.
-        if let Some(frame) = std::task::ready!(self.as_mut().poll_next(cx)) {
+        if let Some(frame) = core::task::ready!(self.as_mut().poll_next(cx)) {
             return Poll::Ready(Some(frame.map(Frame::data)));
         }
 

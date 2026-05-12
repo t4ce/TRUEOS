@@ -2,12 +2,12 @@ use hyper_util::client::legacy::connect::dns::Name as HyperName;
 use tower_service::Service;
 
 use std::collections::HashMap;
-use std::future::Future;
+use core::future::Future;
 use std::net::SocketAddr;
-use std::pin::Pin;
-use std::str::FromStr;
+use core::pin::Pin;
+use core::str::FromStr;
 use std::sync::Arc;
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 
 use crate::error::BoxError;
 
@@ -144,7 +144,7 @@ impl Resolve for DnsResolverWithOverrides {
         match self.overrides.get(name.as_str()) {
             Some(dest) => {
                 let addrs: Addrs = Box::new(dest.clone().into_iter());
-                Box::pin(std::future::ready(Ok(addrs)))
+                Box::pin(core::future::ready(Ok(addrs)))
             }
             None => self.dns_resolver.resolve(name),
         }
@@ -176,7 +176,7 @@ where
 }
 
 mod sealed {
-    use std::fmt;
+    use core::fmt;
 
     #[derive(Debug)]
     pub struct InvalidNameError {
@@ -189,5 +189,5 @@ mod sealed {
         }
     }
 
-    impl std::error::Error for InvalidNameError {}
+    impl core::error::Error for InvalidNameError {}
 }

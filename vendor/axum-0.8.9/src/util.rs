@@ -102,7 +102,7 @@ where
     K: Send + 'static,
 {
     let mut k = Some(k);
-    if let Some(k) = <dyn std::any::Any>::downcast_mut::<Option<T>>(&mut k) {
+    if let Some(k) = <dyn core::any::Any>::downcast_mut::<Option<T>>(&mut k) {
         Ok(k.take().unwrap())
     } else {
         Err(k.unwrap())

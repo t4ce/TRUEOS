@@ -87,7 +87,7 @@
 //! use tokio::sync::watch;
 //! use tokio::time::{Duration, sleep};
 //!
-//! # async fn dox() -> Result<(), Box<dyn std::error::Error>> {
+//! # async fn dox() -> Result<(), Box<dyn core::error::Error>> {
 //! let (tx, mut rx) = watch::channel("hello");
 //!
 //! tokio::spawn(async move {
@@ -529,7 +529,7 @@ mod state {
 /// use tokio::sync::watch;
 /// use tokio::time::{Duration, sleep};
 ///
-/// # async fn dox() -> Result<(), Box<dyn std::error::Error>> {
+/// # async fn dox() -> Result<(), Box<dyn core::error::Error>> {
 /// let (tx, mut rx) = watch::channel("hello");
 ///
 /// tokio::spawn(async move {

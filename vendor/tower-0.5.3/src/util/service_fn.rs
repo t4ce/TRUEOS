@@ -1,6 +1,6 @@
-use std::fmt;
-use std::future::Future;
-use std::task::{Context, Poll};
+use core::fmt;
+use core::future::Future;
+use core::task::{Context, Poll};
 use tower_service::Service;
 
 /// Returns a new [`ServiceFn`] with the given closure.
@@ -58,7 +58,7 @@ pub struct ServiceFn<T> {
 impl<T> fmt::Debug for ServiceFn<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ServiceFn")
-            .field("f", &format_args!("{}", std::any::type_name::<T>()))
+            .field("f", &format_args!("{}", core::any::type_name::<T>()))
             .finish()
     }
 }

@@ -5,7 +5,7 @@ use std::fs::File;
 use std::io;
 use std::net::IpAddr;
 use std::path::Path;
-use std::str::FromStr;
+use core::str::FromStr;
 use std::sync::Arc;
 
 use crate::proto::op::Query;

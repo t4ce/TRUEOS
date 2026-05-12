@@ -6,7 +6,7 @@
 use alloc::boxed::Box;
 
 use crate::runtime::prelude::*;
-use std::any::Any;
+use core::any::Any;
 
 pub(crate) struct SyncWrapper<T> {
     value: T,

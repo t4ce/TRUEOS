@@ -25,7 +25,7 @@ use std::{
 ///
 /// ```rust
 /// use moka::sync::Cache;
-/// use std::time::Duration;
+/// use core::time::Duration;
 ///
 /// let cache = Cache::builder()
 ///     // Max 10,000 entries
@@ -523,7 +523,7 @@ impl<K, V, C> CacheBuilder<K, V, C> {
 mod tests {
     use super::CacheBuilder;
 
-    use std::time::Duration;
+    use core::time::Duration;
 
     #[test]
     fn build_cache() {

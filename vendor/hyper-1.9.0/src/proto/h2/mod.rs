@@ -1,8 +1,8 @@
-use std::error::Error as StdError;
-use std::future::Future;
+use core::error::Error as StdError;
+use core::future::Future;
 use std::io::{Cursor, IoSlice};
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 use bytes::Buf;
 use futures_core::ready;
@@ -197,14 +197,14 @@ where
 trait SendStreamExt {
     fn on_user_err<E>(&mut self, err: E) -> crate::Error
     where
-        E: Into<Box<dyn std::error::Error + Send + Sync>>;
+        E: Into<Box<dyn core::error::Error + Send + Sync>>;
     fn send_eos_frame(&mut self) -> crate::Result<()>;
 }
 
 impl<B: Buf> SendStreamExt for SendStream<SendBuf<B>> {
     fn on_user_err<E>(&mut self, err: E) -> crate::Error
     where
-        E: Into<Box<dyn std::error::Error + Send + Sync>>,
+        E: Into<Box<dyn core::error::Error + Send + Sync>>,
     {
         let err = crate::Error::new_user_body(err);
         debug!("send body user stream error: {}", err);

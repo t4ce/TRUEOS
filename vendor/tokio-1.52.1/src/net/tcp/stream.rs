@@ -4,7 +4,7 @@ cfg_not_wasi! {
 
 cfg_not_wasip1! {
     use crate::net::{to_socket_addrs, ToSocketAddrs};
-    use std::future::poll_fn;
+    use core::future::poll_fn;
 }
 
 use crate::io::{AsyncRead, AsyncWrite, Interest, PollEvented, ReadBuf, Ready};
@@ -12,11 +12,11 @@ use crate::net::tcp::split::{split, ReadHalf, WriteHalf};
 use crate::net::tcp::split_owned::{split_owned, OwnedReadHalf, OwnedWriteHalf};
 use crate::util::check_socket_for_blocking;
 
-use std::fmt;
+use core::fmt;
 use std::io;
 use std::net::{Shutdown, SocketAddr};
-use std::pin::Pin;
-use std::task::{ready, Context, Poll};
+use core::pin::Pin;
+use core::task::{ready, Context, Poll};
 
 cfg_io_util! {
     use bytes::BufMut;
@@ -45,7 +45,7 @@ cfg_net! {
     /// ```no_run
     /// use tokio::net::TcpStream;
     /// use tokio::io::AsyncWriteExt;
-    /// use std::error::Error;
+    /// use core::error::Error;
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn Error>> {
@@ -97,7 +97,7 @@ impl TcpStream {
         /// ```no_run
         /// use tokio::net::TcpStream;
         /// use tokio::io::AsyncWriteExt;
-        /// use std::error::Error;
+        /// use core::error::Error;
         ///
         /// #[tokio::main]
         /// async fn main() -> Result<(), Box<dyn Error>> {
@@ -186,7 +186,7 @@ impl TcpStream {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// use std::error::Error;
+    /// use core::error::Error;
     /// use tokio::net::TcpStream;
     ///
     /// #[tokio::main]
@@ -223,7 +223,7 @@ impl TcpStream {
     /// # Examples
     ///
     /// ```
-    /// use std::error::Error;
+    /// use core::error::Error;
     /// use std::io::Read;
     /// use tokio::net::TcpListener;
     /// # use tokio::net::TcpStream;
@@ -298,7 +298,7 @@ impl TcpStream {
     /// ```no_run
     /// use tokio::net::TcpStream;
     ///
-    /// # async fn dox() -> Result<(), Box<dyn std::error::Error>> {
+    /// # async fn dox() -> Result<(), Box<dyn core::error::Error>> {
     /// let stream = TcpStream::connect("127.0.0.1:8080").await?;
     ///
     /// println!("{:?}", stream.local_addr()?);
@@ -321,7 +321,7 @@ impl TcpStream {
     /// ```no_run
     /// use tokio::net::TcpStream;
     ///
-    /// # async fn dox() -> Result<(), Box<dyn std::error::Error>> {
+    /// # async fn dox() -> Result<(), Box<dyn core::error::Error>> {
     /// let stream = TcpStream::connect("127.0.0.1:8080").await?;
     ///
     /// println!("{:?}", stream.peer_addr()?);
@@ -359,7 +359,7 @@ impl TcpStream {
     /// use tokio::io::{self, ReadBuf};
     /// use tokio::net::TcpStream;
     ///
-    /// use std::future::poll_fn;
+    /// use core::future::poll_fn;
     ///
     /// #[tokio::main]
     /// async fn main() -> io::Result<()> {
@@ -383,7 +383,7 @@ impl TcpStream {
             let ev = ready!(self.io.registration().poll_read_ready(cx))?;
 
             let b = unsafe {
-                &mut *(buf.unfilled_mut() as *mut [std::mem::MaybeUninit<u8>] as *mut [u8])
+                &mut *(buf.unfilled_mut() as *mut [core::mem::MaybeUninit<u8>] as *mut [u8])
             };
 
             match self.io.peek(b) {
@@ -427,7 +427,7 @@ impl TcpStream {
     /// ```no_run
     /// use tokio::io::Interest;
     /// use tokio::net::TcpStream;
-    /// use std::error::Error;
+    /// use core::error::Error;
     /// use std::io;
     ///
     /// #[tokio::main]
@@ -494,7 +494,7 @@ impl TcpStream {
     ///
     /// ```no_run
     /// use tokio::net::TcpStream;
-    /// use std::error::Error;
+    /// use core::error::Error;
     /// use std::io;
     ///
     /// #[tokio::main]
@@ -594,7 +594,7 @@ impl TcpStream {
     ///
     /// ```no_run
     /// use tokio::net::TcpStream;
-    /// use std::error::Error;
+    /// use core::error::Error;
     /// use std::io;
     ///
     /// #[tokio::main]
@@ -667,7 +667,7 @@ impl TcpStream {
     ///
     /// ```no_run
     /// use tokio::net::TcpStream;
-    /// use std::error::Error;
+    /// use core::error::Error;
     /// use std::io::{self, IoSliceMut};
     ///
     /// #[tokio::main]
@@ -740,7 +740,7 @@ impl TcpStream {
         ///
         /// ```no_run
         /// use tokio::net::TcpStream;
-        /// use std::error::Error;
+        /// use core::error::Error;
         /// use std::io;
         ///
         /// #[tokio::main]
@@ -779,7 +779,7 @@ impl TcpStream {
 
                 let dst = buf.chunk_mut();
                 let dst =
-                    unsafe { &mut *(dst as *mut _ as *mut [std::mem::MaybeUninit<u8>] as *mut [u8]) };
+                    unsafe { &mut *(dst as *mut _ as *mut [core::mem::MaybeUninit<u8>] as *mut [u8]) };
 
                 // Safety: We trust `TcpStream::read` to have filled up `n` bytes in the
                 // buffer.
@@ -810,7 +810,7 @@ impl TcpStream {
     ///
     /// ```no_run
     /// use tokio::net::TcpStream;
-    /// use std::error::Error;
+    /// use core::error::Error;
     /// use std::io;
     ///
     /// #[tokio::main]
@@ -896,7 +896,7 @@ impl TcpStream {
     ///
     /// ```no_run
     /// use tokio::net::TcpStream;
-    /// use std::error::Error;
+    /// use core::error::Error;
     /// use std::io;
     ///
     /// #[tokio::main]
@@ -956,7 +956,7 @@ impl TcpStream {
     ///
     /// ```no_run
     /// use tokio::net::TcpStream;
-    /// use std::error::Error;
+    /// use core::error::Error;
     /// use std::io;
     ///
     /// #[tokio::main]
@@ -1093,7 +1093,7 @@ impl TcpStream {
     /// ```no_run
     /// use tokio::net::TcpStream;
     /// use tokio::io::AsyncReadExt;
-    /// use std::error::Error;
+    /// use core::error::Error;
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn Error>> {
@@ -1153,7 +1153,7 @@ impl TcpStream {
     /// ```no_run
     /// use tokio::net::TcpStream;
     ///
-    /// # async fn dox() -> Result<(), Box<dyn std::error::Error>> {
+    /// # async fn dox() -> Result<(), Box<dyn core::error::Error>> {
     /// let stream = TcpStream::connect("127.0.0.1:8080").await?;
     ///
     /// println!("{:?}", stream.nodelay()?);
@@ -1177,7 +1177,7 @@ impl TcpStream {
     /// ```no_run
     /// use tokio::net::TcpStream;
     ///
-    /// # async fn dox() -> Result<(), Box<dyn std::error::Error>> {
+    /// # async fn dox() -> Result<(), Box<dyn core::error::Error>> {
     /// let stream = TcpStream::connect("127.0.0.1:8080").await?;
     ///
     /// stream.set_nodelay(true)?;
@@ -1197,7 +1197,7 @@ impl TcpStream {
     /// ```no_run
     /// use tokio::net::TcpStream;
     ///
-    /// # async fn dox() -> Result<(), Box<dyn std::error::Error>> {
+    /// # async fn dox() -> Result<(), Box<dyn core::error::Error>> {
     /// let stream = TcpStream::connect("127.0.0.1:8080").await?;
     ///
     /// stream.quickack()?;
@@ -1237,7 +1237,7 @@ impl TcpStream {
     /// ```no_run
     /// use tokio::net::TcpStream;
     ///
-    /// # async fn dox() -> Result<(), Box<dyn std::error::Error>> {
+    /// # async fn dox() -> Result<(), Box<dyn core::error::Error>> {
     /// let stream = TcpStream::connect("127.0.0.1:8080").await?;
     ///
     /// stream.set_quickack(true)?;
@@ -1277,7 +1277,7 @@ impl TcpStream {
         /// ```no_run
         /// use tokio::net::TcpStream;
         ///
-        /// # async fn dox() -> Result<(), Box<dyn std::error::Error>> {
+        /// # async fn dox() -> Result<(), Box<dyn core::error::Error>> {
         /// let stream = TcpStream::connect("127.0.0.1:8080").await?;
         ///
         /// println!("{:?}", stream.linger()?);
@@ -1318,7 +1318,7 @@ impl TcpStream {
         /// # #![allow(deprecated)]
         /// use tokio::net::TcpStream;
         ///
-        /// # async fn dox() -> Result<(), Box<dyn std::error::Error>> {
+        /// # async fn dox() -> Result<(), Box<dyn core::error::Error>> {
         /// let stream = TcpStream::connect("127.0.0.1:8080").await?;
         ///
         /// stream.set_linger(None)?;
@@ -1351,7 +1351,7 @@ impl TcpStream {
         /// use core::time::Duration;
         /// use tokio::net::TcpStream;
         ///
-        /// # async fn dox() -> Result<(), Box<dyn std::error::Error>> {
+        /// # async fn dox() -> Result<(), Box<dyn core::error::Error>> {
         /// let stream = TcpStream::connect("127.0.0.1:8080").await?;
         ///
         /// stream.set_zero_linger()?;
@@ -1375,7 +1375,7 @@ impl TcpStream {
     /// ```no_run
     /// use tokio::net::TcpStream;
     ///
-    /// # async fn dox() -> Result<(), Box<dyn std::error::Error>> {
+    /// # async fn dox() -> Result<(), Box<dyn core::error::Error>> {
     /// let stream = TcpStream::connect("127.0.0.1:8080").await?;
     ///
     /// println!("{:?}", stream.ttl()?);
@@ -1396,7 +1396,7 @@ impl TcpStream {
     /// ```no_run
     /// use tokio::net::TcpStream;
     ///
-    /// # async fn dox() -> Result<(), Box<dyn std::error::Error>> {
+    /// # async fn dox() -> Result<(), Box<dyn core::error::Error>> {
     /// let stream = TcpStream::connect("127.0.0.1:8080").await?;
     ///
     /// stream.set_ttl(123)?;

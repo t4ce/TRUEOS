@@ -1,8 +1,8 @@
 #![warn(rust_2018_idioms)]
 #![cfg(feature = "full")]
 
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::pin::Pin;
+use core::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
 use tokio_test::assert_ok;
 use tokio_test::io::Builder;

@@ -89,7 +89,7 @@ ffi_fn! {
     /// The return value is number of bytes that were written to `dst`.
     fn hyper_error_print(err: *const hyper_error, dst: *mut u8, dst_len: size_t) -> size_t {
         let dst = unsafe {
-            std::slice::from_raw_parts_mut(dst, dst_len)
+            core::slice::from_raw_parts_mut(dst, dst_len)
         };
         non_null!(&*err ?= 0).print_to(dst)
     }

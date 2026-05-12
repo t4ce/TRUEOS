@@ -4,7 +4,7 @@ use crate::on_early_drop::body::OnEarlyDropBody;
 use crate::on_early_drop::future::OnEarlyDropFuture;
 use crate::on_early_drop::traits::{OnBodyDrop, OnFutureDrop};
 use http::{Request, Response};
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 use tower_service::Service;
 
 /// [`Service`] produced by [`OnEarlyDropLayer`].
@@ -18,11 +18,11 @@ pub struct OnEarlyDropService<S, OFD, OBD> {
     pub(crate) on_body_drop: OBD,
 }
 
-impl<S, OFD, OBD> std::fmt::Debug for OnEarlyDropService<S, OFD, OBD>
+impl<S, OFD, OBD> core::fmt::Debug for OnEarlyDropService<S, OFD, OBD>
 where
-    S: std::fmt::Debug,
+    S: core::fmt::Debug,
 {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("OnEarlyDropService")
             .field("inner", &self.inner)
             .field("on_future_drop", &format_args!(".."))
@@ -97,20 +97,20 @@ mod tests {
     use http_body_util::{BodyExt, Full};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
-    use std::time::Duration;
+    use core::time::Duration;
     use tokio::time::{sleep, timeout};
     use tower::{service_fn, Layer, ServiceExt};
 
     fn ok_service() -> impl Service<
         Request<()>,
         Response = Response<Full<Bytes>>,
-        Error = std::convert::Infallible,
-        Future = impl std::future::Future<
-            Output = Result<Response<Full<Bytes>>, std::convert::Infallible>,
+        Error = core::convert::Infallible,
+        Future = impl core::future::Future<
+            Output = Result<Response<Full<Bytes>>, core::convert::Infallible>,
         > + Send,
     > + Clone {
         service_fn(|_req: Request<()>| async move {
-            Ok::<_, std::convert::Infallible>(
+            Ok::<_, core::convert::Infallible>(
                 Response::builder()
                     .status(StatusCode::OK)
                     .body(Full::new(Bytes::from_static(b"hello")))
@@ -140,7 +140,7 @@ mod tests {
 
         let slow_service = service_fn(|_req: Request<()>| async move {
             sleep(Duration::from_secs(60)).await;
-            Ok::<_, std::convert::Infallible>(
+            Ok::<_, core::convert::Infallible>(
                 Response::builder()
                     .status(StatusCode::OK)
                     .body(Full::new(Bytes::new()))
@@ -187,13 +187,13 @@ mod tests {
         struct PendingBody;
         impl http_body::Body for PendingBody {
             type Data = Bytes;
-            type Error = std::convert::Infallible;
+            type Error = core::convert::Infallible;
             fn poll_frame(
-                self: std::pin::Pin<&mut Self>,
-                _cx: &mut std::task::Context<'_>,
-            ) -> std::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>>
+                self: core::pin::Pin<&mut Self>,
+                _cx: &mut core::task::Context<'_>,
+            ) -> core::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>>
             {
-                std::task::Poll::Pending
+                core::task::Poll::Pending
             }
             fn is_end_stream(&self) -> bool {
                 false
@@ -201,7 +201,7 @@ mod tests {
         }
 
         let pending_service = service_fn(|_req: Request<()>| async move {
-            Ok::<_, std::convert::Infallible>(
+            Ok::<_, core::convert::Infallible>(
                 Response::builder()
                     .status(StatusCode::CREATED)
                     .body(PendingBody)
@@ -289,15 +289,15 @@ mod tests {
             type Data = Bytes;
             type Error = std::io::Error;
             fn poll_frame(
-                mut self: std::pin::Pin<&mut Self>,
-                _cx: &mut std::task::Context<'_>,
-            ) -> std::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>>
+                mut self: core::pin::Pin<&mut Self>,
+                _cx: &mut core::task::Context<'_>,
+            ) -> core::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>>
             {
                 if self.yielded {
-                    std::task::Poll::Ready(None)
+                    core::task::Poll::Ready(None)
                 } else {
                     self.yielded = true;
-                    std::task::Poll::Ready(Some(Err(std::io::Error::other("frame err"))))
+                    core::task::Poll::Ready(Some(Err(std::io::Error::other("frame err"))))
                 }
             }
             fn is_end_stream(&self) -> bool {
@@ -306,7 +306,7 @@ mod tests {
         }
 
         let err_body_service = service_fn(|_req: Request<()>| async move {
-            Ok::<_, std::convert::Infallible>(
+            Ok::<_, core::convert::Infallible>(
                 Response::builder()
                     .status(StatusCode::OK)
                     .body(ErrBody { yielded: false })
@@ -330,7 +330,7 @@ mod tests {
         // Poll the body until it surfaces the Err frame, then drop.
         let mut body = response.into_body();
         use http_body::Body as _;
-        let frame = std::future::poll_fn(|cx| std::pin::Pin::new(&mut body).poll_frame(cx)).await;
+        let frame = core::future::poll_fn(|cx| core::pin::Pin::new(&mut body).poll_frame(cx)).await;
         assert!(matches!(frame, Some(Err(_))));
         drop(body);
 
@@ -377,7 +377,7 @@ mod tests {
         // Body already at end-of-stream at construction (HEAD response,
         // 204 No Content, etc).
         let empty_service = service_fn(|_req: Request<()>| async move {
-            Ok::<_, std::convert::Infallible>(
+            Ok::<_, core::convert::Infallible>(
                 Response::builder()
                     .status(StatusCode::NO_CONTENT)
                     .body(http_body_util::Empty::<Bytes>::new())

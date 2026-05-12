@@ -1,7 +1,7 @@
 use crate::sync::AtomicWaker;
 use tokio_test::task;
 
-use std::task::Waker;
+use core::task::Waker;
 
 #[allow(unused)]
 trait AssertSend: Send {}
@@ -76,8 +76,8 @@ fn failed_wake_synchronizes_inner() {
 #[cfg(not(target_family = "wasm"))] // wasm currently doesn't support unwinding
 fn atomic_waker_panic_safe() {
     use std::panic;
-    use std::ptr;
-    use std::task::{RawWaker, RawWakerVTable, Waker};
+    use core::ptr;
+    use core::task::{RawWaker, RawWakerVTable, Waker};
 
     static PANICKING_VTABLE: RawWakerVTable = RawWakerVTable::new(
         |_| panic!("clone"),

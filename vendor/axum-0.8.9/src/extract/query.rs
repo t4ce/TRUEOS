@@ -105,7 +105,7 @@ mod tests {
     use axum_core::{body::Body, extract::FromRequest};
     use http::{Request, StatusCode};
     use serde::Deserialize;
-    use std::fmt::Debug;
+    use core::fmt::Debug;
 
     async fn check<T>(uri: impl AsRef<str>, value: T)
     where

@@ -4,14 +4,14 @@
 //!
 //! ```rust
 //! use http::{Request, Response, header::HeaderName};
-//! use std::convert::Infallible;
+//! use core::convert::Infallible;
 //! use tower::{Service, ServiceExt, ServiceBuilder, service_fn};
 //! use tower_http::propagate_header::PropagateHeaderLayer;
 //! use bytes::Bytes;
 //! use http_body_util::Full;
 //!
 //! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # async fn main() -> Result<(), Box<dyn core::error::Error>> {
 //! async fn handle(req: Request<Full<Bytes>>) -> Result<Response<Full<Bytes>>, Infallible> {
 //!     // ...
 //!     # Ok(Response::new(Full::default()))
@@ -37,7 +37,7 @@
 
 use http::{header::HeaderName, HeaderValue, Request, Response};
 use pin_project_lite::pin_project;
-use std::future::Future;
+use core::future::Future;
 use std::{
     pin::Pin,
     task::{ready, Context, Poll},

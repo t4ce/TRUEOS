@@ -1,6 +1,6 @@
 use crate::extract::FromRequestParts;
 use http::request::Parts;
-use std::future::Future;
+use core::future::Future;
 
 mod sealed {
     pub trait Sealed {}
@@ -79,7 +79,7 @@ pub trait RequestPartsExt: sealed::Sealed + Sized {
     ///     String: FromRef<S>,
     ///     S: Send + Sync,
     /// {
-    ///     type Rejection = std::convert::Infallible;
+    ///     type Rejection = core::convert::Infallible;
     ///
     ///     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
     ///         let requires_state = parts
@@ -99,7 +99,7 @@ pub trait RequestPartsExt: sealed::Sealed + Sized {
     ///     S: Send + Sync,
     /// {
     ///     // ...
-    ///     # type Rejection = std::convert::Infallible;
+    ///     # type Rejection = core::convert::Infallible;
     ///     # async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
     ///     #     unimplemented!()
     ///     # }
@@ -136,7 +136,7 @@ impl RequestPartsExt for Parts {
 
 #[cfg(test)]
 mod tests {
-    use std::convert::Infallible;
+    use core::convert::Infallible;
 
     use super::*;
     use crate::{

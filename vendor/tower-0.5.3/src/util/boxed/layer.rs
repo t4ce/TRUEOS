@@ -19,7 +19,7 @@ use tower_service::Service;
 /// to return a consistent type regardless of runtime configuration:
 ///
 /// ```
-/// use std::time::Duration;
+/// use core::time::Duration;
 /// use tower::{Service, ServiceBuilder, BoxError, util::BoxLayer};
 ///
 /// fn common_layer<S, T>() -> BoxLayer<S, T, S::Response, BoxError>

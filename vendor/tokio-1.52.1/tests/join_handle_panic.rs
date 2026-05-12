@@ -16,6 +16,6 @@ async fn test_panics_do_not_propagate_when_dropping_join_handle() {
 
     // only drop the JoinHandle when the task has completed
     // (which is difficult to synchronize precisely)
-    tokio::time::sleep(std::time::Duration::from_millis(3)).await;
+    tokio::time::sleep(core::time::Duration::from_millis(3)).await;
     drop(join_handle);
 }

@@ -1,8 +1,8 @@
 use alloc::string::ToString;
 use alloc::vec::Vec;
-use std::convert::TryInto;
-use std::error;
-use std::fmt;
+use core::convert::TryInto;
+use core::error;
+use core::fmt;
 use std::io;
 use std::{borrow::Cow, cmp::min};
 
@@ -808,7 +808,7 @@ impl StreamingDecoder {
             }
             ImageData(type_str) => {
                 debug_assert!(type_str == IDAT || type_str == chunk::fdAT);
-                let len = std::cmp::min(buf.len(), self.current_chunk.remaining as usize);
+                let len = core::cmp::min(buf.len(), self.current_chunk.remaining as usize);
                 let buf = &buf[..len];
 
                 let consumed = if let Some(image_data) = image_data {
@@ -2020,7 +2020,7 @@ mod tests {
     use approx::assert_relative_eq;
     use byteorder::WriteBytesExt;
     use std::borrow::Cow;
-    use std::cell::RefCell;
+    use core::cell::RefCell;
 
     use std::fs::File;
     use std::io::BufRead;

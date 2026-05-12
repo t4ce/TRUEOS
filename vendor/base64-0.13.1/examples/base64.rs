@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::{self, Read};
 use std::path::PathBuf;
 use std::process;
-use std::str::FromStr;
+use core::str::FromStr;
 
 use base64::{read, write};
 use structopt::StructOpt;

@@ -1,5 +1,5 @@
 use std::io;
-use std::mem::{self, MaybeUninit};
+use core::mem::{self, MaybeUninit};
 use std::net::{self, SocketAddr};
 use std::os::windows::io::{AsRawSocket, FromRawSocket};
 use std::os::windows::raw::SOCKET as StdSocket; // windows-sys uses usize, stdlib uses u32/u64.

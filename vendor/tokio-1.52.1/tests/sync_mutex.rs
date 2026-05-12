@@ -69,19 +69,19 @@ fn lock() {
 
         let mut task = MockTask::new();
         let mut g = assert_ready!(task.poll(&mut l));
-        std::thread::sleep(std::time::Duration::from_millis(500));
+        std::thread::sleep(core::time::Duration::from_millis(500));
         *g = true;
         drop(g);
     });
 
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    std::thread::sleep(core::time::Duration::from_millis(50));
     let mut task = MockTask::new();
     let l = lock.lock();
     pin_mut!(l);
 
     assert_pending!(task.poll(&mut l));
 
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    std::thread::sleep(core::time::Duration::from_millis(500));
     assert!(task.is_woken());
     let result = assert_ready!(task.poll(&mut l));
     assert!(*result);
@@ -93,7 +93,7 @@ fn lock() {
 #[tokio::test]
 #[cfg(feature = "full")]
 async fn aborted_future_1() {
-    use std::time::Duration;
+    use core::time::Duration;
     use tokio::time::{interval, timeout};
 
     let m1: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
@@ -123,7 +123,7 @@ async fn aborted_future_1() {
 #[tokio::test]
 #[cfg(feature = "full")]
 async fn aborted_future_2() {
-    use std::time::Duration;
+    use core::time::Duration;
     use tokio::time::timeout;
 
     let m1: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));

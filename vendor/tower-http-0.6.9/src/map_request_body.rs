@@ -6,7 +6,7 @@
 //! use http_body_util::Full;
 //! use bytes::Bytes;
 //! use http::{Request, Response};
-//! use std::convert::Infallible;
+//! use core::convert::Infallible;
 //! use std::{pin::Pin, task::{ready, Context, Poll}};
 //! use tower::{ServiceBuilder, service_fn, ServiceExt, Service};
 //! use tower_http::map_request_body::MapRequestBodyLayer;
@@ -40,7 +40,7 @@
 //! }
 //!
 //! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # async fn main() -> Result<(), Box<dyn core::error::Error>> {
 //! let mut svc = ServiceBuilder::new()
 //!     // Wrap response bodies in `BodyWrapper`
 //!     .layer(MapRequestBodyLayer::new(BodyWrapper::new))
@@ -93,7 +93,7 @@ where
 impl<F> fmt::Debug for MapRequestBodyLayer<F> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MapRequestBodyLayer")
-            .field("f", &std::any::type_name::<F>())
+            .field("f", &core::any::type_name::<F>())
             .finish()
     }
 }
@@ -151,7 +151,7 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MapRequestBody")
             .field("inner", &self.inner)
-            .field("f", &std::any::type_name::<F>())
+            .field("f", &core::any::type_name::<F>())
             .finish()
     }
 }

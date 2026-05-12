@@ -12,7 +12,7 @@ use moka::future::Cache;
 const NUM_THREADS: u8 = 16;
 
 #[test]
-fn test_get_with() -> Result<(), Box<dyn std::error::Error>> {
+fn test_get_with() -> Result<(), Box<dyn core::error::Error>> {
     const TEN_MIB: usize = 10 * 1024 * 1024; // 10MiB
     let cache = Cache::new(100);
     let call_counter = Arc::new(AtomicUsize::default());

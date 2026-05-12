@@ -1,6 +1,6 @@
 //! Error types
 
-use std::fmt;
+use core::fmt;
 
 /// An error returned by [`LoadShed`] when the underlying service
 /// is not ready to handle any requests at the time of being
@@ -31,4 +31,4 @@ impl fmt::Display for Overloaded {
     }
 }
 
-impl std::error::Error for Overloaded {}
+impl core::error::Error for Overloaded {}

@@ -2,7 +2,7 @@ use super::{RequestBodyLimitLayer, ResponseBody, ResponseFuture};
 use crate::body::Limited;
 use http::{Request, Response};
 use http_body::Body;
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 use tower_service::Service;
 
 /// Middleware that intercepts requests with body lengths greater than the

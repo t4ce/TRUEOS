@@ -1,7 +1,7 @@
-use std::fmt;
-use std::marker::PhantomData;
-use std::mem::ManuallyDrop;
-use std::ops::Deref;
+use core::fmt;
+use core::marker::PhantomData;
+use core::mem::ManuallyDrop;
+use core::ops::Deref;
 #[cfg(any(
     all(unix, not(any(target_os = "trueos", target_os = "zkvm"))),
     all(target_os = "wasi", not(target_env = "p1"))
@@ -35,7 +35,7 @@ use crate::Socket;
 ///
 /// use socket2::SockRef;
 ///
-/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # fn main() -> Result<(), Box<dyn core::error::Error>> {
 /// // Create `TcpStream` from the standard library.
 /// let address: SocketAddr = "127.0.0.1:1234".parse()?;
 /// # let b1 = std::sync::Arc::new(std::sync::Barrier::new(2));

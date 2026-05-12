@@ -1,11 +1,11 @@
 use bytes::Bytes;
-use std::convert::Infallible;
-use std::pin::pin;
-use std::time::Duration;
+use core::convert::Infallible;
+use core::pin::pin;
+use core::time::Duration;
 use tokio::net::TcpListener;
 
 #[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<(), Box<dyn core::error::Error>> {
     let listener = TcpListener::bind("127.0.0.1:8080").await?;
 
     let server = hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new());

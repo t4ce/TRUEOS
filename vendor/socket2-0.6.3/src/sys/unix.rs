@@ -6,13 +6,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::cmp::min;
+use core::cmp::min;
 #[cfg(not(target_os = "wasi"))]
-use std::ffi::OsStr;
+use core::ffi::OsStr;
 #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
 use std::io::IoSlice;
-use std::marker::PhantomData;
-use std::mem::{self, size_of, MaybeUninit};
+use core::marker::PhantomData;
+use core::mem::{self, size_of, MaybeUninit};
 use std::net::Shutdown;
 use std::net::{Ipv4Addr, Ipv6Addr};
 #[cfg(all(
@@ -29,7 +29,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
         target_os = "android",
     )
 ))]
-use std::num::NonZeroU32;
+use core::num::NonZeroU32;
 #[cfg(all(
     feature = "all",
     any(
@@ -44,7 +44,7 @@ use std::num::NonZeroU32;
         target_os = "watchos",
     )
 ))]
-use std::num::NonZeroUsize;
+use core::num::NonZeroUsize;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
 #[cfg(not(target_os = "wasi"))]
 use std::os::unix::ffi::OsStrExt;
@@ -52,7 +52,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::{UnixDatagram, UnixListener, UnixStream};
 #[cfg(not(target_os = "wasi"))]
 use std::path::Path;
-use std::ptr;
+use core::ptr;
 use core::time::Duration;
 use std::time::Instant;
 use std::{io, slice};
@@ -74,7 +74,7 @@ use crate::{Domain, Protocol, SockAddr, TcpKeepalive, Type};
 #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
 use crate::{MsgHdr, MsgHdrMut, RecvFlags};
 
-pub(crate) use std::ffi::c_int;
+pub(crate) use core::ffi::c_int;
 
 // Used in `Domain`.
 #[cfg(not(target_os = "wasi"))]
@@ -624,8 +624,8 @@ impl RecvFlags {
 }
 
 #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
-impl std::fmt::Debug for RecvFlags {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for RecvFlags {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut s = f.debug_struct("RecvFlags");
         #[cfg(not(target_os = "espidf"))]
         s.field("is_end_of_record", &self.is_end_of_record());
@@ -2731,8 +2731,8 @@ impl SockFilter {
 }
 
 #[cfg(all(feature = "all", any(target_os = "linux", target_os = "android")))]
-impl std::fmt::Debug for SockFilter {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for SockFilter {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("SockFilter").finish_non_exhaustive()
     }
 }
@@ -2748,7 +2748,7 @@ pub struct CcidEndpoints<const N: usize> {
 }
 
 #[cfg(all(feature = "all", target_os = "linux"))]
-impl<const N: usize> std::ops::Deref for CcidEndpoints<N> {
+impl<const N: usize> core::ops::Deref for CcidEndpoints<N> {
     type Target = [u8];
 
     fn deref(&self) -> &[u8] {

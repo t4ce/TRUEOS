@@ -114,9 +114,9 @@ fn timer_with_current_thread_scheduler() {
 
 #[test]
 fn starving() {
-    use std::future::Future;
-    use std::pin::Pin;
-    use std::task::{Context, Poll};
+    use core::future::Future;
+    use core::pin::Pin;
+    use core::task::{Context, Poll};
 
     struct Starve<T: Future<Output = ()> + Unpin>(T, u64);
 

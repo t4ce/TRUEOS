@@ -18,19 +18,19 @@ impl<'k, 'v> Param<'k, 'v> {
 
     // Returns the parameter key as a string.
     fn key_str(&self) -> &'k str {
-        std::str::from_utf8(self.key).unwrap()
+        core::str::from_utf8(self.key).unwrap()
     }
 
     // Returns the parameter value as a string.
     fn value_str(&self) -> &'v str {
-        std::str::from_utf8(self.value).unwrap()
+        core::str::from_utf8(self.value).unwrap()
     }
 }
 
 /// A list of parameters returned by a route match.
 ///
 /// ```rust
-/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # fn main() -> Result<(), Box<dyn core::error::Error>> {
 /// # let mut router = matchit::Router::new();
 /// # router.insert("/users/{id}", true).unwrap();
 /// let matched = router.at("/users/1")?;

@@ -1,12 +1,12 @@
-use std::ffi::{c_int, c_void};
-use std::future::Future;
-use std::pin::Pin;
-use std::ptr;
+use core::ffi::{c_int, c_void};
+use core::future::Future;
+use core::pin::Pin;
+use core::ptr;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex, Weak,
 };
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 
 use futures_util::stream::{FuturesUnordered, Stream};
 
@@ -152,7 +152,7 @@ pub struct hyper_context<'a>(Context<'a>);
 ///
 /// Corresponding Rust type: <https://doc.rust-lang.org/std/task/struct.Waker.html>
 pub struct hyper_waker {
-    waker: std::task::Waker,
+    waker: core::task::Waker,
 }
 
 /// A descriptor for what type a `hyper_task` value is.
@@ -404,7 +404,7 @@ ffi_fn! {
         if let Some(val) = task.output.take() {
             let p = Box::into_raw(val) as *mut c_void;
             // protect from returning fake pointers to empty types
-            if p == std::ptr::NonNull::<c_void>::dangling().as_ptr() {
+            if p == core::ptr::NonNull::<c_void>::dangling().as_ptr() {
                 ptr::null_mut()
             } else {
                 p
@@ -500,7 +500,7 @@ where
 impl hyper_context<'_> {
     pub(crate) fn wrap<'a, 'b>(cx: &'a mut Context<'b>) -> &'a mut hyper_context<'b> {
         // A struct with only one field has the same layout as that field.
-        unsafe { std::mem::transmute::<&mut Context<'_>, &mut hyper_context<'_>>(cx) }
+        unsafe { core::mem::transmute::<&mut Context<'_>, &mut hyper_context<'_>>(cx) }
     }
 }
 

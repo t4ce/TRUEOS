@@ -30,7 +30,7 @@ impl<Request> BufferLayer<Request> {
     /// [`poll_ready`] but will not issue a [`call`], which prevents other senders from issuing new
     /// requests.
     ///
-    /// [`Poll::Ready`]: std::task::Poll::Ready
+    /// [`Poll::Ready`]: core::task::Poll::Ready
     /// [`call`]: crate::Service::call
     /// [`poll_ready`]: crate::Service::poll_ready
     pub const fn new(bound: usize) -> Self {

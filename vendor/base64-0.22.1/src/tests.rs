@@ -1,4 +1,4 @@
-use std::str;
+use core::str;
 
 use rand::{
     distributions,

@@ -4,8 +4,8 @@
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 use std::io;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 #[tokio::test]
 async fn write_int_should_err_if_write_count_0() {

@@ -9,7 +9,7 @@ use tower_test::{assert_request_eq, mock};
 
 fn let_worker_work() {
     // Allow the Buffer's executor to do work
-    thread::sleep(::std::time::Duration::from_millis(100));
+    thread::sleep(::core::time::Duration::from_millis(100));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -91,7 +91,7 @@ async fn when_inner_is_not_ready() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn when_inner_fails() {
-    use std::error::Error as StdError;
+    use core::error::Error as StdError;
     let _t = support::trace_init();
 
     let (mut service, mut handle) = new_service();

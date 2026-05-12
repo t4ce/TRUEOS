@@ -7,11 +7,11 @@ use tokio::runtime;
 use tokio_test::{assert_ok, assert_pending};
 
 use futures::task::{waker_ref, ArcWake};
-use std::future::Future;
+use core::future::Future;
 use std::net::TcpStream;
-use std::pin::Pin;
+use core::pin::Pin;
 use std::sync::{mpsc, Arc, Mutex};
-use std::task::Context;
+use core::task::Context;
 
 struct Task<T> {
     future: Mutex<Pin<Box<T>>>,

@@ -128,7 +128,7 @@ use core::{fmt, mem, ptr};
 /// [`MutexGuard`]: struct@MutexGuard
 /// [`Arc`]: struct@std::sync::Arc
 /// [`std::sync::Mutex`]: struct@std::sync::Mutex
-/// [`Send`]: trait@std::marker::Send
+/// [`Send`]: trait@core::marker::Send
 /// [`lock`]: method@Mutex::lock
 pub struct Mutex<T: ?Sized> {
     #[cfg(all(tokio_unstable, feature = "tracing"))]
@@ -807,11 +807,11 @@ where
     }
 }
 
-impl<T: ?Sized> std::fmt::Debug for Mutex<T>
+impl<T: ?Sized> core::fmt::Debug for Mutex<T>
 where
-    T: std::fmt::Debug,
+    T: core::fmt::Debug,
 {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut d = f.debug_struct("Mutex");
         match self.try_lock() {
             Ok(inner) => d.field("data", &&*inner),
@@ -830,7 +830,7 @@ impl<'a, T: ?Sized> MutexGuard<'a, T> {
         // original. In the end, we have not duplicated or forgotten any values.
         MutexGuardInner {
             #[cfg(all(tokio_unstable, feature = "tracing"))]
-            resource_span: unsafe { std::ptr::read(&me.resource_span) },
+            resource_span: unsafe { core::ptr::read(&me.resource_span) },
             lock: me.lock,
         }
     }
@@ -1191,7 +1191,7 @@ impl<'a, T: ?Sized> MappedMutexGuard<'a, T> {
             s: me.s,
             data: me.data,
             #[cfg(all(tokio_unstable, feature = "tracing"))]
-            resource_span: unsafe { std::ptr::read(&me.resource_span) },
+            resource_span: unsafe { core::ptr::read(&me.resource_span) },
         }
     }
 

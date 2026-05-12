@@ -1,8 +1,8 @@
 #![warn(rust_2018_idioms)]
 #![cfg(all(feature = "full", not(target_os = "wasi")))] // Wasi does not support panic recovery
 
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::pin::Pin;
+use core::task::{Context, Poll};
 use tokio::io::{self, AsyncRead, AsyncReadExt, ReadBuf};
 use tokio_test::assert_ok;
 
@@ -33,7 +33,7 @@ async fn issue_4435() {
     let mut read_buf = ReadBuf::new(&mut buf);
     read_buf.put_slice(b"AB");
 
-    std::future::poll_fn(|cx| rd.as_mut().poll_read(cx, &mut read_buf))
+    core::future::poll_fn(|cx| rd.as_mut().poll_read(cx, &mut read_buf))
         .await
         .unwrap();
     assert_eq!(&buf, &b"ABhell\0\0"[..]);

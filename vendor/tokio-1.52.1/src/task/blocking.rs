@@ -176,7 +176,7 @@ cfg_rt! {
     /// ```
     /// use tokio::task;
     ///
-    /// # async fn docs() -> Result<(), Box<dyn std::error::Error>>{
+    /// # async fn docs() -> Result<(), Box<dyn core::error::Error>>{
     /// // Initial input
     /// let mut v = "Hello, ".to_string();
     /// let res = task::spawn_blocking(move || {

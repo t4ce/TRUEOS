@@ -4,8 +4,8 @@ use crate::load::Load;
 use crate::ready_cache::{error::Failed, ReadyCache};
 use crate::util::rng::{sample_floyd2, HasherRng, Rng};
 use futures_util::future::{self, TryFutureExt};
-use std::hash::Hash;
-use std::marker::PhantomData;
+use core::hash::Hash;
+use core::marker::PhantomData;
 use std::{
     fmt,
     pin::Pin,
@@ -96,7 +96,7 @@ where
     D::Key: Hash + Clone,
     D::Error: Into<crate::BoxError>,
     D::Service: Service<Req> + Load,
-    <D::Service as Load>::Metric: std::fmt::Debug,
+    <D::Service as Load>::Metric: core::fmt::Debug,
     <D::Service as Service<Req>>::Error: Into<crate::BoxError>,
 {
     /// Polls `discover` for updates, adding new items to `not_ready`.
@@ -195,7 +195,7 @@ where
     D::Key: Hash + Clone,
     D::Error: Into<crate::BoxError>,
     D::Service: Service<Req> + Load,
-    <D::Service as Load>::Metric: std::fmt::Debug,
+    <D::Service as Load>::Metric: core::fmt::Debug,
     <D::Service as Service<Req>>::Error: Into<crate::BoxError>,
 {
     type Response = <D::Service as Service<Req>>::Response;

@@ -93,7 +93,7 @@ impl<T: Buf> Buf for BufList<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::ptr;
+    use core::ptr;
 
     use super::*;
 

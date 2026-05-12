@@ -16,8 +16,8 @@ use std::io;
 use std::io::Read;
 use std::net::SocketAddr;
 use std::path::Path;
-use std::str::FromStr;
-use std::time::Duration;
+use core::str::FromStr;
+use core::time::Duration;
 
 use resolv_conf;
 
@@ -129,7 +129,7 @@ mod tests {
     use crate::proto::rr::Name;
     use std::env;
     use std::net::*;
-    use std::str::FromStr;
+    use core::str::FromStr;
 
     fn empty_config(name_servers: Vec<NameServerConfig>) -> ResolverConfig {
         ResolverConfig::from_parts(None, vec![], name_servers)

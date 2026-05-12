@@ -12,14 +12,14 @@ use tokio::task::{self, LocalSet};
 use tokio::time;
 
 #[cfg(not(target_os = "wasi"))]
-use std::cell::Cell;
+use core::cell::Cell;
 use std::sync::atomic::AtomicBool;
 #[cfg(not(target_os = "wasi"))]
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 #[cfg(not(target_os = "wasi"))]
 use std::sync::atomic::Ordering::SeqCst;
-use std::time::Duration;
+use core::time::Duration;
 
 #[tokio::test(flavor = "current_thread")]
 async fn local_current_thread_scheduler() {
@@ -154,9 +154,9 @@ fn enter_guard_spawn() {
 #[cfg(not(target_os = "wasi"))]
 mod block_in_place_cases {
     use super::*;
-    use std::future::Future;
-    use std::pin::Pin;
-    use std::task::{Context, Poll};
+    use core::future::Future;
+    use core::pin::Pin;
+    use core::task::{Context, Poll};
 
     struct BlockInPlaceOnDrop;
     impl Future for BlockInPlaceOnDrop {

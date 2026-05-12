@@ -5,7 +5,7 @@
 // https://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
-use std::future::Future;
+use core::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
 

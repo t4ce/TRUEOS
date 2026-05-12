@@ -24,7 +24,7 @@
 //! }
 //!
 //! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # async fn main() -> Result<(), Box<dyn core::error::Error>> {
 //! // Create a `Layer` with an associated counter.
 //! let (in_flight_requests_layer, counter) = InFlightRequestsLayer::pair();
 //!
@@ -160,7 +160,7 @@ impl InFlightRequestsCounter {
     ///
     /// ```rust,no_run
     /// use tower_http::metrics::in_flight_requests::InFlightRequestsCounter;
-    /// use std::time::Duration;
+    /// use core::time::Duration;
     ///
     /// let counter = InFlightRequestsCounter::new();
     ///
@@ -303,7 +303,7 @@ mod tests {
         assert_eq!(counter.get(), 0);
 
         // driving service to ready shouldn't increment the counter
-        std::future::poll_fn(|cx| service.poll_ready(cx))
+        core::future::poll_fn(|cx| service.poll_ready(cx))
             .await
             .unwrap();
         assert_eq!(counter.get(), 0);

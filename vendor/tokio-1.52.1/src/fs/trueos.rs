@@ -107,7 +107,7 @@ impl TrueosDirEntry {
         PathBuf::new()
     }
 
-    pub(crate) fn file_name(&self) -> std::ffi::OsString {
+    pub(crate) fn file_name(&self) -> core::ffi::OsString {
         String::new()
     }
 

@@ -2,13 +2,13 @@ use crate::process::imp::orphan::{OrphanQueue, Wait};
 use crate::process::kill::Kill;
 use crate::signal::unix::InternalStream;
 
-use std::future::Future;
+use core::future::Future;
 use std::io;
-use std::ops::Deref;
-use std::pin::Pin;
+use core::ops::Deref;
+use core::pin::Pin;
 use std::process::ExitStatus;
-use std::task::Context;
-use std::task::Poll;
+use core::task::Context;
+use core::task::Poll;
 
 /// Orchestrates between registering interest for receiving signals when a
 /// child process has exited, and attempting to poll for process completion.
@@ -137,8 +137,8 @@ mod test {
     use futures::future::FutureExt;
     use std::os::unix::process::ExitStatusExt;
     use std::process::ExitStatus;
-    use std::task::Context;
-    use std::task::Poll;
+    use core::task::Context;
+    use core::task::Poll;
 
     #[derive(Debug)]
     struct MockWait {

@@ -3,7 +3,7 @@
 #![cfg(panic = "unwind")]
 
 use futures::future;
-use std::error::Error;
+use core::error::Error;
 use tokio::runtime::Builder;
 use tokio::task::{self, block_in_place};
 

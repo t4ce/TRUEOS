@@ -169,7 +169,7 @@ fn drain_forget() {
         let mut iter = headers.drain();
         assert_eq!(iter.size_hint(), (2, Some(2)));
         let _ = iter.next().unwrap();
-        std::mem::forget(iter);
+        core::mem::forget(iter);
     }
 
     assert_eq!(headers.len(), 0);

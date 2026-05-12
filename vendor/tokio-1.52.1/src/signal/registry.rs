@@ -1,7 +1,7 @@
 use crate::signal::unix::{OsExtraData, OsStorage};
 use crate::sync::watch;
 
-use std::ops;
+use core::ops;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 

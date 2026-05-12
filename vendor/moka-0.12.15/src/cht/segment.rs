@@ -1326,10 +1326,10 @@ mod tests {
     fn drop_many_values() {
         const NUM_VALUES: usize = 1 << 16;
 
-        let key_parents: Vec<_> = std::iter::repeat_with(|| Arc::new(DropNotifier::new()))
+        let key_parents: Vec<_> = core::iter::repeat_with(|| Arc::new(DropNotifier::new()))
             .take(NUM_VALUES)
             .collect();
-        let value_parents: Vec<_> = std::iter::repeat_with(|| Arc::new(DropNotifier::new()))
+        let value_parents: Vec<_> = core::iter::repeat_with(|| Arc::new(DropNotifier::new()))
             .take(NUM_VALUES)
             .collect();
 
@@ -1426,12 +1426,12 @@ mod tests {
         const NUM_VALUES: usize = NUM_THREADS * NUM_VALUES_PER_THREAD;
 
         let key_parents: Arc<Vec<_>> = Arc::new(
-            std::iter::repeat_with(|| Arc::new(DropNotifier::new()))
+            core::iter::repeat_with(|| Arc::new(DropNotifier::new()))
                 .take(NUM_VALUES)
                 .collect(),
         );
         let value_parents: Arc<Vec<_>> = Arc::new(
-            std::iter::repeat_with(|| Arc::new(DropNotifier::new()))
+            core::iter::repeat_with(|| Arc::new(DropNotifier::new()))
                 .take(NUM_VALUES)
                 .collect(),
         );
@@ -1590,12 +1590,12 @@ mod tests {
         const NUM_VALUES: usize = NUM_THREADS * NUM_VALUES_PER_THREAD;
 
         let key_parents: Arc<Vec<_>> = Arc::new(
-            std::iter::repeat_with(|| Arc::new(DropNotifier::new()))
+            core::iter::repeat_with(|| Arc::new(DropNotifier::new()))
                 .take(NUM_VALUES)
                 .collect(),
         );
         let value_parents: Arc<Vec<_>> = Arc::new(
-            std::iter::repeat_with(|| Arc::new(DropNotifier::new()))
+            core::iter::repeat_with(|| Arc::new(DropNotifier::new()))
                 .take(NUM_VALUES)
                 .collect(),
         );

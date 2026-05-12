@@ -4,7 +4,7 @@
 // https://github.com/tokio-rs/mio/pull/1602#issuecomment-1218441031
 
 use std::collections::HashMap;
-use std::fmt::{Debug, Formatter};
+use core::fmt::{Debug, Formatter};
 #[cfg(not(target_os = "hermit"))]
 use std::os::fd::RawFd;
 // TODO: once <https://github.com/rust-lang/rust/issues/126198> is fixed this
@@ -248,7 +248,7 @@ impl SelectorState {
             // We now check whether this poll was performed with descriptors which were pending
             // for removal and filter out any matching.
             let mut pending_removal_guard = self.pending_removal.lock().unwrap();
-            let mut pending_removal = std::mem::replace(pending_removal_guard.as_mut(), Vec::new());
+            let mut pending_removal = core::mem::replace(pending_removal_guard.as_mut(), Vec::new());
             drop(pending_removal_guard);
 
             // Store the events if there were any.
@@ -584,7 +584,7 @@ pub struct Event {
 pub type Events = Vec<Event>;
 
 pub mod event {
-    use std::fmt;
+    use core::fmt;
 
     use crate::sys::Event;
     use crate::Token;

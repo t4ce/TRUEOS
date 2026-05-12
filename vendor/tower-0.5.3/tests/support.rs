@@ -1,8 +1,8 @@
 #![allow(dead_code)]
 
-use std::fmt;
-use std::future;
-use std::task::{Context, Poll};
+use core::fmt;
+use core::future;
+use core::task::{Context, Poll};
 use tower::Service;
 
 pub(crate) fn trace_init() -> tracing::subscriber::DefaultGuard {
@@ -34,7 +34,7 @@ impl fmt::Display for AssertSpanError {
     }
 }
 
-impl std::error::Error for AssertSpanError {}
+impl core::error::Error for AssertSpanError {}
 
 impl AssertSpanSvc {
     pub fn new(span: tracing::Span) -> Self {

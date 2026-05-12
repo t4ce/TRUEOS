@@ -1,5 +1,5 @@
 use super::{Action, Attempt, Policy};
-use std::fmt;
+use core::fmt;
 
 /// A redirection [`Policy`] created from a closure.
 ///
@@ -12,7 +12,7 @@ pub struct RedirectFn<F> {
 impl<F> fmt::Debug for RedirectFn<F> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RedirectFn")
-            .field("f", &std::any::type_name::<F>())
+            .field("f", &core::any::type_name::<F>())
             .finish()
     }
 }

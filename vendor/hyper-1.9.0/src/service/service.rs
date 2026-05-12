@@ -1,4 +1,4 @@
-use std::future::Future;
+use core::future::Future;
 
 /// An asynchronous function from a `Request` to a `Response`.
 ///

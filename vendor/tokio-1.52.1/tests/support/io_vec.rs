@@ -1,6 +1,6 @@
 use std::io::IoSlice;
-use std::ops::Deref;
-use std::slice;
+use core::ops::Deref;
+use core::slice;
 
 pub struct IoBufs<'a, 'b>(&'b mut [IoSlice<'a>]);
 

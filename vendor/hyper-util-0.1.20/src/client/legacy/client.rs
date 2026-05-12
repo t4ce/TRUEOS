@@ -4,11 +4,11 @@
 //! For now, to enable people to use hyper 1.0 quicker, this `Client` exists
 //! in much the same way it did in hyper 0.14.
 
-use std::error::Error as StdError;
-use std::fmt;
-use std::future::{poll_fn, Future};
-use std::pin::Pin;
-use std::task::{self, Poll};
+use core::error::Error as StdError;
+use core::fmt;
+use core::future::{poll_fn, Future};
+use core::pin::Pin;
+use core::task::{self, Poll};
 use core::time::Duration;
 
 use futures_util::future::{self, Either, FutureExt, TryFutureExt};
@@ -968,7 +968,7 @@ fn set_scheme(uri: &mut Uri, scheme: Scheme) {
         uri.scheme().is_none(),
         "set_scheme expects no existing scheme"
     );
-    let old = std::mem::take(uri);
+    let old = core::mem::take(uri);
     let mut parts: ::http::uri::Parts = old.into();
     parts.scheme = Some(scheme);
     parts.path_and_query = Some("/".parse().expect("slash is a valid path"));

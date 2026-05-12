@@ -40,7 +40,7 @@ pub struct Task {
 /// This type exists to get the auto traits correct, the public API
 /// uses raw pointers to make life easier for users.
 #[derive(Copy, Clone, Debug)]
-struct Address(*mut std::ffi::c_void);
+struct Address(*mut core::ffi::c_void);
 
 // Safe since Address should not be dereferenced
 unsafe impl Send for Address {}
@@ -83,7 +83,7 @@ impl BacktraceSymbol {
     }
 
     /// Returns the starting address of this symbol.
-    pub fn addr(&self) -> Option<*mut std::ffi::c_void> {
+    pub fn addr(&self) -> Option<*mut core::ffi::c_void> {
         self.addr.map(|addr| addr.0)
     }
 
@@ -134,12 +134,12 @@ impl BacktraceFrame {
     /// Return the instruction pointer of this frame.
     ///
     /// See the ABI docs for your platform for the exact meaning.
-    pub fn ip(&self) -> *mut std::ffi::c_void {
+    pub fn ip(&self) -> *mut core::ffi::c_void {
         self.ip.0
     }
 
     /// Returns the starting symbol address of the frame of this function.
-    pub fn symbol_address(&self) -> *mut std::ffi::c_void {
+    pub fn symbol_address(&self) -> *mut core::ffi::c_void {
         self.symbol_address.0
     }
 

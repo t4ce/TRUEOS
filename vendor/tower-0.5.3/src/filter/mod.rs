@@ -21,7 +21,7 @@
 //! requests by checking if they are contained by a a [`HashSet`] or other
 //! collection.
 //!
-//! [`Future`]: std::future::Future
+//! [`Future`]: core::future::Future
 //! [`HashSet`]: std::collections::HashSet
 pub mod future;
 mod layer;
@@ -35,7 +35,7 @@ pub use self::{
 use self::future::{AsyncResponseFuture, ResponseFuture};
 use crate::BoxError;
 use futures_util::{future::Either, TryFutureExt};
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 use tower_service::Service;
 
 /// Conditionally dispatch requests to the inner service based on a [predicate].
@@ -114,7 +114,7 @@ where
     fn call(&mut self, request: Request) -> Self::Future {
         ResponseFuture::new(match self.predicate.check(request) {
             Ok(request) => Either::Right(self.inner.call(request).err_into()),
-            Err(e) => Either::Left(std::future::ready(Err(e))),
+            Err(e) => Either::Left(core::future::ready(Err(e))),
         })
     }
 }
@@ -174,7 +174,7 @@ where
     }
 
     fn call(&mut self, request: Request) -> Self::Future {
-        use std::mem;
+        use core::mem;
 
         let inner = self.inner.clone();
         // In case the inner service has state that's driven to readiness and

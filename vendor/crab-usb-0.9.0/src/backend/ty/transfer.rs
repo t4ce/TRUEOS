@@ -9,7 +9,7 @@ pub struct Transfer {
     #[cfg(kmod)]
     pub mapping: Option<dma_api::SArrayPtr<u8>>,
     #[cfg(umod)]
-    pub buffer: Option<(std::ptr::NonNull<u8>, usize)>,
+    pub buffer: Option<(core::ptr::NonNull<u8>, usize)>,
     pub transfer_len: usize,
     pub iso_packet_actual_lengths: Vec<usize>,
 }

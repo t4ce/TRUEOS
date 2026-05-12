@@ -21,7 +21,7 @@ where
 {
     type Response = Response;
     type Error = Infallible;
-    type Future = std::future::Ready<Result<Response, Self::Error>>;
+    type Future = core::future::Ready<Result<Response, Self::Error>>;
 
     #[inline]
     fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {

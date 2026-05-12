@@ -12,7 +12,7 @@
 //! An [`Intercept`] includes the destination for the proxy, and any parsed
 //! authentication to be used.
 
-use std::fmt;
+use core::fmt;
 use std::net::IpAddr;
 
 use http::header::HeaderValue;

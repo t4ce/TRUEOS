@@ -28,7 +28,7 @@ pub use self::timer::{Sleep, Timer};
 ///
 /// ```
 /// # use hyper::rt::Executor;
-/// # use std::future::Future;
+/// # use core::future::Future;
 /// #[derive(Clone)]
 /// struct TokioExecutor;
 ///

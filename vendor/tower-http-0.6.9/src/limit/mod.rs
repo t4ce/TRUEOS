@@ -22,7 +22,7 @@
 //!
 //! ```rust
 //! use bytes::Bytes;
-//! use std::convert::Infallible;
+//! use core::convert::Infallible;
 //! use http::{Request, Response, StatusCode, HeaderValue, header::CONTENT_LENGTH};
 //! use http_body_util::{LengthLimitError};
 //! use tower::{Service, ServiceExt, ServiceBuilder};
@@ -30,7 +30,7 @@
 //! use http_body_util::Full;
 //!
 //! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # async fn main() -> Result<(), Box<dyn core::error::Error>> {
 //! async fn handle(req: Request<Limited<Full<Bytes>>>) -> Result<Response<Full<Bytes>>, Infallible> {
 //!     panic!("This should not be hit")
 //! }
@@ -70,7 +70,7 @@
 //!
 //! ```rust
 //! # use bytes::Bytes;
-//! # use std::convert::Infallible;
+//! # use core::convert::Infallible;
 //! # use http::{Request, Response, StatusCode};
 //! # use http_body_util::LengthLimitError;
 //! # use tower::{Service, ServiceExt, ServiceBuilder, BoxError};

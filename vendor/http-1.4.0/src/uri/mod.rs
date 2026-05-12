@@ -26,14 +26,14 @@ use crate::byte_str::ByteStr;
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
-use std::convert::TryFrom;
+use core::convert::TryFrom;
 
 use bytes::Bytes;
 
 use core::error::Error;
-use std::fmt;
-use std::hash::{Hash, Hasher};
-use std::str::{self, FromStr};
+use core::fmt;
+use core::hash::{Hash, Hasher};
+use core::str::{self, FromStr};
 
 use self::scheme::Scheme2;
 

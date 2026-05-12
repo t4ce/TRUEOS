@@ -280,7 +280,7 @@ where
                 }
                 // this has a custom fallback, other has a default
                 (false, true) => {
-                    let fallback_router = std::mem::take(&mut this.fallback_router);
+                    let fallback_router = core::mem::take(&mut this.fallback_router);
                     other_fallback.merge(fallback_router).expect(PANIC_MSG);
                     this.fallback_router = other_fallback;
                 }
@@ -455,7 +455,7 @@ where
     /// };
     /// use tower::{Service, ServiceExt};
     ///
-    /// # async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # async fn async_main() -> Result<(), Box<dyn core::error::Error>> {
     /// let mut router = Router::new().route("/", get(|| async {}));
     /// let request = Request::new(Body::empty());
     /// let response = router.ready().await?.call(request).await?;
@@ -474,7 +474,7 @@ where
     /// };
     /// use tower::{Service, ServiceExt};
     ///
-    /// # async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # async fn async_main() -> Result<(), Box<dyn core::error::Error>> {
     /// let mut router = Router::new().route("/", get(|| async {}));
     /// let request = Request::new(Body::empty());
     /// let response = router.as_service().ready().await?.call(request).await?;
@@ -552,7 +552,7 @@ const _: () = {
     {
         type Response = Self;
         type Error = Infallible;
-        type Future = std::future::Ready<Result<Self::Response, Self::Error>>;
+        type Future = core::future::Ready<Result<Self::Response, Self::Error>>;
 
         fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
@@ -561,7 +561,7 @@ const _: () = {
         fn call(&mut self, _req: serve::IncomingStream<'_, L>) -> Self::Future {
             // call `Router::with_state` such that everything is turned into `Route` eagerly
             // rather than doing that per request
-            std::future::ready(Ok(self.clone().with_state(())))
+            core::future::ready(Ok(self.clone().with_state(())))
         }
     }
 };

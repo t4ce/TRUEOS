@@ -11,11 +11,11 @@
 use crate::io::{AsyncRead, AsyncWrite, Interest, ReadBuf, Ready};
 use crate::net::TcpStream;
 
-use std::future::poll_fn;
+use core::future::poll_fn;
 use std::io;
 use std::net::{Shutdown, SocketAddr};
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 cfg_io_util! {
     use bytes::BufMut;
@@ -69,7 +69,7 @@ impl ReadHalf<'_> {
     /// use tokio::io::{self, ReadBuf};
     /// use tokio::net::TcpStream;
     ///
-    /// use std::future::poll_fn;
+    /// use core::future::poll_fn;
     ///
     /// #[tokio::main]
     /// async fn main() -> io::Result<()> {
@@ -108,7 +108,7 @@ impl ReadHalf<'_> {
     /// ```no_run
     /// use tokio::net::TcpStream;
     /// use tokio::io::AsyncReadExt;
-    /// use std::error::Error;
+    /// use core::error::Error;
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn Error>> {

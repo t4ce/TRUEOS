@@ -3,7 +3,7 @@
 
 extern crate test;
 
-use std::cmp::Ordering;
+use core::cmp::Ordering;
 
 use test::Bencher;
 

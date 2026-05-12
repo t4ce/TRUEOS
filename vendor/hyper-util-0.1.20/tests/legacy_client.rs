@@ -2,12 +2,12 @@ mod test_utils;
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener};
-use std::pin::Pin;
+use core::pin::Pin;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::task::Poll;
+use core::task::Poll;
 use std::thread;
-use std::time::Duration;
+use core::time::Duration;
 
 use futures_channel::{mpsc, oneshot};
 use futures_util::future::{self, FutureExt, TryFutureExt};
@@ -34,7 +34,7 @@ pub fn runtime() -> tokio::runtime::Runtime {
 }
 
 fn s(buf: &[u8]) -> &str {
-    std::str::from_utf8(buf).expect("from_utf8")
+    core::str::from_utf8(buf).expect("from_utf8")
 }
 
 #[cfg(not(miri))]
@@ -132,7 +132,7 @@ async fn drop_client_closes_idle_connections() {
     res.unwrap();
 
     // not closed yet, just idle
-    std::future::poll_fn(|ctx| {
+    core::future::poll_fn(|ctx| {
         assert!(Pin::new(&mut closes).poll_next(ctx).is_pending());
         Poll::Ready(())
     })
@@ -561,7 +561,7 @@ async fn client_keep_alive_when_response_before_request_body_ends() {
     });
 
     future::join(res, rx2).await.0.unwrap();
-    std::future::poll_fn(|ctx| {
+    core::future::poll_fn(|ctx| {
         assert!(Pin::new(&mut closes).poll_next(ctx).is_pending());
         Poll::Ready(())
     })
@@ -1062,7 +1062,7 @@ fn connection_poisoning() {
 // $ cargo test --all-features --test legacy_client -- --nocapture
 // $ cargo test --all-features --test legacy_client
 
-use std::error::Error; // needed for .source() eg. error[E0599]: no method named `source` found for struct `hyper_util::client::legacy::Error` in the current scope
+use core::error::Error; // needed for .source() eg. error[E0599]: no method named `source` found for struct `hyper_util::client::legacy::Error` in the current scope
 
 // Helper function to debug byte slices by attempting to interpret them as UTF-8.
 // If the bytes are valid UTF-8, they are printed as a string; otherwise, they are
@@ -1070,7 +1070,7 @@ use std::error::Error; // needed for .source() eg. error[E0599]: no method named
 fn debug_bytes(bytes: &[u8], label: &str) {
     // Try to convert the byte slice to a UTF-8 string.
     // If successful, print it with the provided label for context.
-    if let Ok(s) = std::str::from_utf8(bytes) {
+    if let Ok(s) = core::str::from_utf8(bytes) {
         eprintln!("{}: {}", label, s);
     } else {
         // If the bytes are not valid UTF-8, print them as a raw byte array.
@@ -1119,10 +1119,10 @@ impl hyper::rt::Read for MockConnection {
     // Polls the connection for reading, filling the provided buffer.
     // If failed=true, returns the stored error; otherwise, delegates to the mock I/O.
     fn poll_read(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
+        mut self: core::pin::Pin<&mut Self>,
+        cx: &mut core::task::Context<'_>,
         buf: hyper::rt::ReadBufCursor<'_>,
-    ) -> std::task::Poll<std::result::Result<(), std::io::Error>> {
+    ) -> core::task::Poll<std::result::Result<(), std::io::Error>> {
         // Log the current state of the failed flag for debugging.
         eprintln!(
             "poll_read: failed={}",
@@ -1134,14 +1134,14 @@ impl hyper::rt::Read for MockConnection {
             // Log the error being returned for traceability.
             eprintln!("poll_read: returning error: {}", self.error);
             // Create a new io::Error with the same kind and message as the stored error.
-            return std::task::Poll::Ready(std::result::Result::Err(std::io::Error::new(
+            return core::task::Poll::Ready(std::result::Result::Err(std::io::Error::new(
                 self.error.kind(),
                 self.error.to_string(),
             )));
         }
         // If not failed, delegate to the mock I/O to simulate normal read behavior.
         // This may return EOF (Poll::Ready(Ok(0))) for empty IoBuilder.
-        let inner = std::pin::Pin::new(&mut self.inner);
+        let inner = core::pin::Pin::new(&mut self.inner);
         inner.poll_read(cx, buf)
     }
 }
@@ -1152,19 +1152,19 @@ impl hyper::rt::Write for MockConnection {
     // Polls the connection for writing, sending the provided buffer.
     // Logs the write operation and tracks total bytes written.
     fn poll_write(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
+        mut self: core::pin::Pin<&mut Self>,
+        cx: &mut core::task::Context<'_>,
         buf: &[u8],
-    ) -> std::task::Poll<std::result::Result<usize, std::io::Error>> {
+    ) -> core::task::Poll<std::result::Result<usize, std::io::Error>> {
         // Log the size of the buffer being written for debugging.
         eprintln!("poll_write: {} bytes", buf.len());
         // Debug the buffer contents as UTF-8 or raw bytes.
         debug_bytes(buf, "poll_write buffer");
         // Delegate the write to the mock I/O object.
-        let inner = std::pin::Pin::new(&mut self.inner);
+        let inner = core::pin::Pin::new(&mut self.inner);
         match inner.poll_write(cx, buf) {
             // If the write succeeds, update the bytes_written counter and log the result.
-            std::task::Poll::Ready(std::result::Result::Ok(bytes)) => {
+            core::task::Poll::Ready(std::result::Result::Ok(bytes)) => {
                 // Increment the total bytes written for tracking.
                 self.bytes_written += bytes;
                 // Log the number of bytes written and the running total.
@@ -1181,7 +1181,7 @@ impl hyper::rt::Write for MockConnection {
                     let _ = tx.try_send(());
                 }
                 // Return the successful write result.
-                std::task::Poll::Ready(std::result::Result::Ok(bytes))
+                core::task::Poll::Ready(std::result::Result::Ok(bytes))
             }
             // For pending or error results, propagate them directly.
             other => other,
@@ -1191,26 +1191,26 @@ impl hyper::rt::Write for MockConnection {
     // Polls the connection to flush any buffered data.
     // Delegates to the mock I/O object.
     fn poll_flush(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<std::result::Result<(), std::io::Error>> {
+        mut self: core::pin::Pin<&mut Self>,
+        cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<std::result::Result<(), std::io::Error>> {
         // Log the flush operation for debugging.
         eprintln!("poll_flush");
         // Delegate the flush to the mock I/O object.
-        let inner = std::pin::Pin::new(&mut self.inner);
+        let inner = core::pin::Pin::new(&mut self.inner);
         inner.poll_flush(cx)
     }
 
     // Polls the connection to shut down the write side.
     // Delegates to the mock I/O object.
     fn poll_shutdown(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<std::result::Result<(), std::io::Error>> {
+        mut self: core::pin::Pin<&mut Self>,
+        cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<std::result::Result<(), std::io::Error>> {
         // Log the shutdown operation for debugging.
         eprintln!("poll_shutdown");
         // Delegate the shutdown to the mock I/O object.
-        let inner = std::pin::Pin::new(&mut self.inner);
+        let inner = core::pin::Pin::new(&mut self.inner);
         inner.poll_shutdown(cx)
     }
 }
@@ -1253,9 +1253,9 @@ impl MockConnector {
 impl tower_service::Service<hyper::Uri> for MockConnector {
     type Response = crate::MockConnection;
     type Error = std::io::Error;
-    type Future = std::pin::Pin<
+    type Future = core::pin::Pin<
         Box<
-            dyn std::future::Future<Output = std::result::Result<Self::Response, Self::Error>>
+            dyn core::future::Future<Output = std::result::Result<Self::Response, Self::Error>>
                 + Send,
         >,
     >;
@@ -1264,9 +1264,9 @@ impl tower_service::Service<hyper::Uri> for MockConnector {
     // Always ready, as we don’t have resource constraints.
     fn poll_ready(
         &mut self,
-        _cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<std::result::Result<(), Self::Error>> {
-        std::task::Poll::Ready(std::result::Result::Ok(()))
+        _cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<std::result::Result<(), Self::Error>> {
+        core::task::Poll::Ready(std::result::Result::Ok(()))
     }
 
     // Creates a new MockConnection for the given URI.

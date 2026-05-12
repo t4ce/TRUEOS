@@ -7,7 +7,7 @@ use crate::filter::AsyncFilter;
 use futures_util::future::Either;
 use pin_project_lite::pin_project;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use core::time::Duration;
 use std::{
     future,
     pin::Pin,
@@ -41,7 +41,7 @@ pub struct Hedge<S, P>(Service<S, P>);
 pin_project! {
     /// The [`Future`] returned by the [`Hedge`] service.
     ///
-    /// [`Future`]: std::future::Future
+    /// [`Future`]: core::future::Future
     #[derive(Debug)]
     pub struct Future<S, Request>
     where
@@ -186,7 +186,7 @@ where
     }
 }
 
-impl<S, Request> std::future::Future for Future<S, Request>
+impl<S, Request> core::future::Future for Future<S, Request>
 where
     S: tower_service::Service<Request>,
     S::Error: Into<crate::BoxError>,

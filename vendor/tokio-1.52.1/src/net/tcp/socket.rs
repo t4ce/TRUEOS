@@ -1,6 +1,6 @@
 use crate::net::{TcpListener, TcpStream};
 
-use std::fmt;
+use core::fmt;
 use std::io;
 use std::net::SocketAddr;
 
@@ -482,7 +482,7 @@ impl TcpSocket {
     /// ```no_run
     /// use tokio::net::TcpSocket;
     ///
-    /// # async fn dox() -> Result<(), Box<dyn std::error::Error>> {
+    /// # async fn dox() -> Result<(), Box<dyn core::error::Error>> {
     /// let socket = TcpSocket::new_v4()?;
     ///
     /// socket.set_nodelay(true)?;
@@ -504,7 +504,7 @@ impl TcpSocket {
     /// ```no_run
     /// use tokio::net::TcpSocket;
     ///
-    /// # async fn dox() -> Result<(), Box<dyn std::error::Error>> {
+    /// # async fn dox() -> Result<(), Box<dyn core::error::Error>> {
     /// let socket = TcpSocket::new_v4()?;
     ///
     /// println!("{:?}", socket.nodelay()?);

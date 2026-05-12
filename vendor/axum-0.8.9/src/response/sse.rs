@@ -9,7 +9,7 @@
 //!     response::sse::{Event, KeepAlive, Sse},
 //! };
 //! use core::time::Duration;
-//! use std::convert::Infallible;
+//! use core::convert::Infallible;
 //! use tokio_stream::StreamExt as _ ;
 //! use futures_util::stream::{self, Stream};
 //!
@@ -82,7 +82,7 @@ impl<S> Sse<S> {
 impl<S> fmt::Debug for Sse<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Sse")
-            .field("stream", &format_args!("{}", std::any::type_name::<S>()))
+            .field("stream", &format_args!("{}", core::any::type_name::<S>()))
             .finish()
     }
 }
@@ -176,7 +176,7 @@ pub struct Event {
     flags: EventFlags,
 }
 
-/// Expose [`Event`] as a [`std::fmt::Write`]
+/// Expose [`Event`] as a [`core::fmt::Write`]
 /// such that any form of data can be written as data safely.
 ///
 /// This also ensures that newline characters `\r` and `\n`
@@ -446,7 +446,7 @@ impl EventDataWriter {
 
         let buffer = self.event.buffer.as_mut();
 
-        if !std::mem::replace(&mut self.data_written, true) {
+        if !core::mem::replace(&mut self.data_written, true) {
             if self.event.flags.contains(EventFlags::HAS_DATA) {
                 panic!("Called `Event::data*` multiple times");
             }
@@ -610,7 +610,7 @@ where
     type Item = Result<Event, E>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        use std::future::Future;
+        use core::future::Future;
 
         let mut this = self.as_mut().project();
 

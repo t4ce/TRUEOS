@@ -5,7 +5,7 @@
 // https://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
-use std::cmp::Ordering;
+use core::cmp::Ordering;
 use std::sync::Arc;
 use std::sync::atomic::{self, AtomicU8};
 use std::time::Instant;

@@ -1,8 +1,8 @@
 #![cfg(all(feature = "full", not(target_os = "wasi")))] // Wasi doesn't support threads
 
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::future::Future;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 use tokio::sync::oneshot;
 
 #[tokio::test(flavor = "multi_thread")]
@@ -23,7 +23,7 @@ async fn local() {
             assert_eq!(*v, 2);
         });
 
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        tokio::time::sleep(core::time::Duration::from_millis(10)).await;
 
         assert_eq!(REQ_ID.get(), 2);
     }));

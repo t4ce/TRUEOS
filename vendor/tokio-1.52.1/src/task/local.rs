@@ -218,7 +218,7 @@ cfg_rt! {
     /// # }
     /// ```
     ///
-    /// [`Send`]: trait@std::marker::Send
+    /// [`Send`]: trait@core::marker::Send
     /// [local task set]: struct@LocalSet
     /// [`Runtime::block_on`]: method@crate::runtime::Runtime::block_on
     /// [`task::spawn_local`]: fn@spawn_local
@@ -1132,7 +1132,7 @@ impl Shared {
     }
 
     fn ptr_eq(&self, other: &Shared) -> bool {
-        std::ptr::eq(self, other)
+        core::ptr::eq(self, other)
     }
 }
 

@@ -589,8 +589,8 @@ fn sender_len_random() {
 #[test]
 fn send_in_waker_drop() {
     use futures::task::ArcWake;
-    use std::future::Future;
-    use std::task::Context;
+    use core::future::Future;
+    use core::task::Context;
 
     struct SendOnDrop(broadcast::Sender<()>);
 

@@ -1,4 +1,4 @@
-use std::str;
+use core::str;
 use xmlwriter::{XmlWriter, Options};
 
 #[derive(Clone, Copy, PartialEq)]

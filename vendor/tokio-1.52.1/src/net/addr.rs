@@ -1,7 +1,7 @@
 use crate::runtime::prelude::*;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use alloc::{borrow::ToOwned, string::String, vec::Vec};
-use std::future;
+use core::future;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
@@ -281,7 +281,7 @@ pub(crate) mod sealed {
     //! part of the `ToSocketAddrs` public API. The details will change over
     //! time.
 
-    use std::future::Future;
+    use core::future::Future;
     use std::io;
     use std::net::SocketAddr;
 
@@ -300,8 +300,8 @@ pub(crate) mod sealed {
         use crate::blocking::JoinHandle;
 
         use std::option;
-        use std::pin::Pin;
-        use std::task::{ready,Context, Poll};
+        use core::pin::Pin;
+        use core::task::{ready,Context, Poll};
         use std::vec;
 
         #[doc(hidden)]

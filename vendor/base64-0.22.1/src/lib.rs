@@ -180,7 +180,7 @@
 //! # use std::io;
 //! use base64::{engine::general_purpose::STANDARD, read::DecoderReader};
 //!
-//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # fn main() -> Result<(), Box<dyn core::error::Error>> {
 //! let mut input = io::stdin();
 //! let mut decoder = DecoderReader::new(&mut input, &STANDARD);
 //! io::copy(&mut decoder, &mut io::stdout())?;
@@ -195,7 +195,7 @@
 //! # use std::io;
 //! use base64::{engine::general_purpose::STANDARD, write::EncoderWriter};
 //!
-//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # fn main() -> Result<(), Box<dyn core::error::Error>> {
 //! let mut output = io::stdout();
 //! let mut encoder = EncoderWriter::new(&mut output, &STANDARD);
 //! io::copy(&mut io::stdin(), &mut encoder)?;
@@ -206,7 +206,7 @@
 //! #### Display
 //!
 //! If you only need a base64 representation for implementing the
-//! [`Display`][std::fmt::Display] trait, use
+//! [`Display`][core::fmt::Display] trait, use
 //! [`Base64Display`][display::Base64Display]:
 //!
 //! ```

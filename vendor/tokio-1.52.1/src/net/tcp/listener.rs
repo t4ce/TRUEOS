@@ -6,10 +6,10 @@ cfg_not_wasip1! {
     use crate::net::{to_socket_addrs, ToSocketAddrs};
 }
 
-use std::fmt;
+use core::fmt;
 use std::io;
 use std::net::{self, SocketAddr};
-use std::task::{ready, Context, Poll};
+use core::task::{ready, Context, Poll};
 
 cfg_net! {
     /// A TCP socket server, listening for connections.
@@ -220,7 +220,7 @@ impl TcpListener {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// use std::error::Error;
+    /// use core::error::Error;
     /// use tokio::net::TcpListener;
     ///
     /// #[tokio::main]
@@ -257,7 +257,7 @@ impl TcpListener {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// use std::error::Error;
+    /// use core::error::Error;
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn Error>> {

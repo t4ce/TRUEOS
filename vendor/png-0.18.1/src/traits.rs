@@ -5,7 +5,7 @@ macro_rules! read_bytes_ext {
         impl<W: io::Read + ?Sized> ReadBytesExt<$output_type> for W {
             #[inline]
             fn read_be(&mut self) -> io::Result<$output_type> {
-                let mut bytes = [0u8; std::mem::size_of::<$output_type>()];
+                let mut bytes = [0u8; core::mem::size_of::<$output_type>()];
                 self.read_exact(&mut bytes)?;
                 Ok(<$output_type>::from_be_bytes(bytes))
             }

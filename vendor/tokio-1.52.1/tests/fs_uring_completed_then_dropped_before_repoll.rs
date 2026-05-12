@@ -7,11 +7,11 @@
 ))]
 
 use std::fs;
-use std::future::Future;
+use core::future::Future;
 use std::path::PathBuf;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-use std::time::Duration;
+use core::pin::Pin;
+use core::task::{Context, Poll};
+use core::time::Duration;
 
 use tempfile::NamedTempFile;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};

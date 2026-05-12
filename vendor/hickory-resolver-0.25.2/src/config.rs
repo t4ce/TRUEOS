@@ -9,12 +9,12 @@
 #![allow(clippy::use_self)]
 
 use std::collections::HashSet;
-use std::fmt;
+use core::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::ops::{Deref, DerefMut};
+use core::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use core::time::Duration;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Deserializer, Serialize, Serializer};

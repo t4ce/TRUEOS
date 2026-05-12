@@ -1,7 +1,7 @@
-use std::ffi::{c_int, c_void};
-use std::mem::ManuallyDrop;
-use std::ptr;
-use std::task::{Context, Poll};
+use core::ffi::{c_int, c_void};
+use core::mem::ManuallyDrop;
+use core::ptr;
+use core::task::{Context, Poll};
 
 use http_body_util::BodyExt as _;
 
@@ -204,7 +204,7 @@ impl UserBody {
     pub(crate) fn new() -> UserBody {
         UserBody {
             data_func: data_noop,
-            userdata: std::ptr::null_mut(),
+            userdata: core::ptr::null_mut(),
         }
     }
 
@@ -212,7 +212,7 @@ impl UserBody {
         &mut self,
         cx: &mut Context<'_>,
     ) -> Poll<Option<crate::Result<Frame<Bytes>>>> {
-        let mut out = std::ptr::null_mut();
+        let mut out = core::ptr::null_mut();
         match (self.data_func)(self.userdata, hyper_context::wrap(cx), &mut out) {
             super::task::HYPER_POLL_READY => {
                 if out.is_null() {
@@ -260,7 +260,7 @@ ffi_fn! {
     /// This returns `NULL` if allocating a new buffer fails.
     fn hyper_buf_copy(buf: *const u8, len: size_t) -> *mut hyper_buf {
         let slice = unsafe {
-            std::slice::from_raw_parts(buf, len)
+            core::slice::from_raw_parts(buf, len)
         };
         Box::into_raw(Box::new(hyper_buf(Bytes::copy_from_slice(slice))))
     } ?= ptr::null_mut()

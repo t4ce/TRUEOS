@@ -2,8 +2,8 @@
 
 use crate::header::{HeaderValue, SET_COOKIE};
 use bytes::Bytes;
-use std::convert::TryInto;
-use std::fmt;
+use core::convert::TryInto;
+use core::fmt;
 use std::sync::RwLock;
 use std::time::SystemTime;
 
@@ -34,7 +34,7 @@ pub struct Jar(RwLock<cookie_store::CookieStore>);
 
 impl<'a> Cookie<'a> {
     fn parse(value: &'a HeaderValue) -> Result<Cookie<'a>, CookieParseError> {
-        std::str::from_utf8(value.as_bytes())
+        core::str::from_utf8(value.as_bytes())
             .map_err(cookie_crate::ParseError::from)
             .and_then(cookie_crate::Cookie::parse)
             .map_err(CookieParseError)
@@ -134,7 +134,7 @@ impl<'a> fmt::Display for CookieParseError {
     }
 }
 
-impl std::error::Error for CookieParseError {}
+impl core::error::Error for CookieParseError {}
 
 // ===== impl Jar =====
 
@@ -194,12 +194,12 @@ pub(crate) mod service {
     use http::{Request, Response};
     use http_body::Body;
     use pin_project_lite::pin_project;
-    use std::future::Future;
-    use std::pin::Pin;
+    use core::future::Future;
+    use core::pin::Pin;
     use std::sync::Arc;
-    use std::task::ready;
-    use std::task::Context;
-    use std::task::Poll;
+    use core::task::ready;
+    use core::task::Context;
+    use core::task::Poll;
     use tower::Service;
     use url::Url;
 
@@ -236,7 +236,7 @@ pub(crate) mod service {
 
         fn call(&mut self, mut req: Request<ReqBody>) -> Self::Future {
             let clone = self.inner.clone();
-            let mut inner = std::mem::replace(&mut self.inner, clone);
+            let mut inner = core::mem::replace(&mut self.inner, clone);
             let url = Url::parse(req.uri().to_string().as_str()).expect("invalid URL");
             if let Some(cookie_store) = self.cookie_store.as_ref() {
                 if req.headers().get(crate::header::COOKIE).is_none() {

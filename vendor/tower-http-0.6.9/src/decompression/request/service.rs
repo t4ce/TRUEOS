@@ -9,7 +9,7 @@ use crate::{
 use bytes::Buf;
 use http::{header, Request, Response};
 use http_body::Body;
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 use tower_service::Service;
 
 #[cfg(any(

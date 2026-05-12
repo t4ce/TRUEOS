@@ -38,7 +38,7 @@ use crate::{event, Interest, Registry, Token};
     not(all(feature = "os-poll", feature = "net", feature = "os-ext")),
     doc = "```ignore"
 )]
-/// # use std::error::Error;
+/// # use core::error::Error;
 /// # fn main() -> Result<(), Box<dyn Error>> {
 /// use mio::{Interest, Poll, Token};
 /// #[cfg(unix)]

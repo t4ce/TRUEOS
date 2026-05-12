@@ -118,7 +118,7 @@ where
     ///                       Op::Put(1) // Insert
     ///                 };
     ///                 // Return a Future that is resolved to `op` immediately.
-    ///                 std::future::ready(op)
+    ///                 core::future::ready(op)
     ///             })
     ///             .await
     ///     }
@@ -304,7 +304,7 @@ where
     ///                 1 // Insert
     ///             };
     ///             // Return a Future that is resolved to `counter` immediately.
-    ///             std::future::ready(counter)
+    ///             core::future::ready(counter)
     ///         })
     ///         .await;
     ///     // It was not an update.
@@ -320,7 +320,7 @@ where
     ///             } else {
     ///                 1
     ///             };
-    ///             std::future::ready(counter)
+    ///             core::future::ready(counter)
     ///         })
     ///         .await;
     ///     // It was an update.
@@ -773,7 +773,7 @@ where
     ///                       Op::Put(1) // Insert
     ///                 };
     ///                 // Return a Future that is resolved to `op` immediately.
-    ///                 std::future::ready(op)
+    ///                 core::future::ready(op)
     ///             })
     ///             .await
     ///     }
@@ -959,7 +959,7 @@ where
     ///                 1 // Insert
     ///             };
     ///             // Return a Future that is resolved to `counter` immediately.
-    ///             std::future::ready(counter)
+    ///             core::future::ready(counter)
     ///         })
     ///         .await;
     ///     // It was not an update.
@@ -975,7 +975,7 @@ where
     ///             } else {
     ///                 1
     ///             };
-    ///             std::future::ready(counter)
+    ///             core::future::ready(counter)
     ///         })
     ///         .await;
     ///     // It was an update.

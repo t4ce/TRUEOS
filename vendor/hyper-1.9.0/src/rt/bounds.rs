@@ -96,7 +96,7 @@ mod h2_client {
 mod h2_server {
     use crate::{proto::h2::server::H2Stream, rt::Executor};
     use http_body::Body;
-    use std::future::Future;
+    use core::future::Future;
 
     /// An executor to spawn http2 connections.
     ///

@@ -1,7 +1,7 @@
 use http::header::USER_AGENT;
 use http::{HeaderMap, HeaderValue, Method};
 use js_sys::Promise;
-use std::convert::TryInto;
+use core::convert::TryInto;
 use std::{fmt, future::Future, sync::Arc};
 use url::Url;
 use wasm_bindgen::prelude::{wasm_bindgen, UnwrapThrowExt as _};
@@ -302,7 +302,7 @@ impl ClientBuilder {
             return Err(err);
         }
 
-        let config = std::mem::take(&mut self.config);
+        let config = core::mem::take(&mut self.config);
         Ok(Client {
             config: Arc::new(config),
         })

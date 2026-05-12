@@ -19,12 +19,12 @@ pub type BOOLEAN = u8;
 pub type NTSTATUS = i32;
 pub type FARPROC = Option<unsafe extern "system" fn() -> isize>;
 pub type WaitOnAddress = unsafe extern "system" fn(
-    Address: *const std::ffi::c_void,
-    CompareAddress: *const std::ffi::c_void,
+    Address: *const core::ffi::c_void,
+    CompareAddress: *const core::ffi::c_void,
     AddressSize: usize,
     dwMilliseconds: u32,
 ) -> BOOL;
-pub type WakeByAddressSingle = unsafe extern "system" fn(Address: *const std::ffi::c_void);
+pub type WakeByAddressSingle = unsafe extern "system" fn(Address: *const core::ffi::c_void);
 
 windows_link::link!("kernel32.dll" "system" fn GetLastError() -> u32);
 windows_link::link!("kernel32.dll" "system" fn CloseHandle(hObject: HANDLE) -> BOOL);

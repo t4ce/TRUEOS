@@ -52,6 +52,6 @@ cfg_trace! {
 cfg_not_trace! {
     cfg_rt! {
         #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-        pub(crate) use std::future::Future;
+        pub(crate) use core::future::Future;
     }
 }

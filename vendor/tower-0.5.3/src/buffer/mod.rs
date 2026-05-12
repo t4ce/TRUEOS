@@ -19,7 +19,7 @@
 //! async fn mass_produce<S: Service<usize>>(svc: S)
 //! where
 //!   S: 'static + Send,
-//!   S::Error: Send + Sync + std::error::Error,
+//!   S::Error: Send + Sync + core::error::Error,
 //!   S::Future: Send
 //! {
 //!     let svc = Buffer::new(svc, 10 /* buffer length */);

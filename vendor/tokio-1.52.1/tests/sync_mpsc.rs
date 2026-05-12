@@ -10,7 +10,7 @@ use wasm_bindgen_test::wasm_bindgen_test as maybe_tokio_test;
 #[cfg(not(all(target_family = "wasm", not(target_os = "wasi"))))]
 use tokio::test as maybe_tokio_test;
 
-use std::fmt;
+use core::fmt;
 use std::panic;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -172,7 +172,7 @@ async fn async_send_recv_many_with_buffer() {
 #[tokio::test]
 #[cfg(feature = "full")]
 async fn start_send_past_cap() {
-    use std::future::Future;
+    use core::future::Future;
 
     let mut t1 = tokio_test::task::spawn(());
 

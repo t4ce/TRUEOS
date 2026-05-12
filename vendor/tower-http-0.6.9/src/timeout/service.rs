@@ -310,7 +310,7 @@ mod tests {
     use super::*;
     use crate::test_helpers::Body;
     use http::{Request, Response, StatusCode};
-    use std::time::Duration;
+    use core::time::Duration;
     use tower::{BoxError, ServiceBuilder, ServiceExt};
 
     #[tokio::test]

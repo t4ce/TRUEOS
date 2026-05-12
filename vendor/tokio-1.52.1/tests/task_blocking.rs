@@ -5,7 +5,7 @@ use tokio::{runtime, task, time};
 use tokio_test::assert_ok;
 
 use std::thread;
-use std::time::Duration;
+use core::time::Duration;
 
 mod support {
     pub(crate) mod mpsc_stream;

@@ -278,7 +278,7 @@ macro_rules! impl_service {
                 let req = req.map(Body::new);
 
                 let not_ready_inner = self.inner.clone();
-                let mut ready_inner = std::mem::replace(&mut self.inner, not_ready_inner);
+                let mut ready_inner = core::mem::replace(&mut self.inner, not_ready_inner);
 
                 let mut f = self.f.clone();
                 let state = self.state.clone();

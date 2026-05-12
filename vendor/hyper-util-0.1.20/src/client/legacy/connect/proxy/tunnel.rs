@@ -1,8 +1,8 @@
-use std::error::Error as StdError;
-use std::future::Future;
-use std::marker::{PhantomData, Unpin};
-use std::pin::Pin;
-use std::task::{self, ready, Poll};
+use core::error::Error as StdError;
+use core::future::Future;
+use core::marker::{PhantomData, Unpin};
+use core::pin::Pin;
+use core::task::{self, ready, Poll};
 
 use http::{HeaderMap, HeaderValue, Uri};
 use hyper::rt::{Read, Write};
@@ -230,8 +230,8 @@ where
     }
 }
 
-impl std::fmt::Display for TunnelError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for TunnelError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("tunnel error: ")?;
 
         f.write_str(match self {
@@ -246,8 +246,8 @@ impl std::fmt::Display for TunnelError {
     }
 }
 
-impl std::error::Error for TunnelError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+impl core::error::Error for TunnelError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
             TunnelError::Io(ref e) => Some(e),
             TunnelError::ConnectFailed(ref e) => Some(&**e),

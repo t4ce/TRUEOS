@@ -2,7 +2,7 @@
 #[path = "../support.rs"]
 mod support;
 
-use std::pin::Pin;
+use core::pin::Pin;
 use tokio_test::{assert_pending, assert_ready, task};
 use tower::ready_cache::{error, ReadyCache};
 use tower_test::mock;
@@ -210,12 +210,12 @@ async fn cancelation_observed() {
 
     struct Ready(ReadyCache<&'static str, tower_test::mock::Mock<(), ()>, ()>);
     impl Unpin for Ready {}
-    impl std::future::Future for Ready {
+    impl core::future::Future for Ready {
         type Output = Result<(), error::Failed<&'static str>>;
         fn poll(
             self: Pin<&mut Self>,
-            cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<Self::Output> {
+            cx: &mut core::task::Context<'_>,
+        ) -> core::task::Poll<Self::Output> {
             self.get_mut().0.poll_pending(cx)
         }
     }

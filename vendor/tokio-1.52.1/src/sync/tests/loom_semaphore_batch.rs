@@ -3,12 +3,12 @@ use crate::sync::batch_semaphore::*;
 use loom::future::block_on;
 use loom::sync::atomic::AtomicUsize;
 use loom::thread;
-use std::future::{poll_fn, Future};
-use std::pin::Pin;
+use core::future::{poll_fn, Future};
+use core::pin::Pin;
 use std::sync::atomic::Ordering::SeqCst;
 use std::sync::Arc;
-use std::task::Poll::Ready;
-use std::task::{Context, Poll};
+use core::task::Poll::Ready;
+use core::task::{Context, Poll};
 
 #[test]
 fn basic_usage() {

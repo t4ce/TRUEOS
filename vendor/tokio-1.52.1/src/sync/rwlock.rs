@@ -48,8 +48,8 @@ const MAX_READS: u32 = 10;
 ///
 /// The type parameter `T` represents the data that this lock protects. It is
 /// required that `T` satisfies [`Send`] to be shared across threads. The RAII guards
-/// returned from the locking methods implement [`Deref`](trait@std::ops::Deref)
-/// (and [`DerefMut`](trait@std::ops::DerefMut)
+/// returned from the locking methods implement [`Deref`](trait@core::ops::Deref)
+/// (and [`DerefMut`](trait@core::ops::DerefMut)
 /// for the `write` methods) to allow access to the content of the lock.
 ///
 /// # Examples
@@ -82,7 +82,7 @@ const MAX_READS: u32 = 10;
 /// [`RwLock`]: struct@RwLock
 /// [`RwLockReadGuard`]: struct@RwLockReadGuard
 /// [`RwLockWriteGuard`]: struct@RwLockWriteGuard
-/// [`Send`]: trait@std::marker::Send
+/// [`Send`]: trait@core::marker::Send
 /// [_write-preferring_]: https://en.wikipedia.org/wiki/Readers%E2%80%93writer_lock#Priority_policies
 pub struct RwLock<T: ?Sized> {
     #[cfg(all(tokio_unstable, feature = "tracing"))]
@@ -1105,11 +1105,11 @@ where
     }
 }
 
-impl<T: ?Sized> std::fmt::Debug for RwLock<T>
+impl<T: ?Sized> core::fmt::Debug for RwLock<T>
 where
-    T: std::fmt::Debug,
+    T: core::fmt::Debug,
 {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut d = f.debug_struct("RwLock");
         match self.try_read() {
             Ok(inner) => d.field("data", &&*inner),

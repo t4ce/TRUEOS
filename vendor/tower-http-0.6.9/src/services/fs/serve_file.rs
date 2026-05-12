@@ -153,7 +153,7 @@ mod tests {
     use http_body_util::BodyExt;
     use mime::Mime;
     use std::io::Read;
-    use std::str::FromStr;
+    use core::str::FromStr;
     use tokio::io::AsyncReadExt;
     use tower::ServiceExt;
 

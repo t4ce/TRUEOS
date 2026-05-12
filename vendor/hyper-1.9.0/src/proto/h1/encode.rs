@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::fmt;
+use core::fmt;
 use std::io::IoSlice;
 
 use bytes::buf::{Chain, Take};
@@ -233,7 +233,7 @@ impl Encoder {
                 !self.is_last
             }
             Kind::Length(remaining) => {
-                use std::cmp::Ordering;
+                use core::cmp::Ordering;
 
                 trace!("sized write, len = {}", len);
                 match (len as u64).cmp(&remaining) {
@@ -346,7 +346,7 @@ struct ChunkSize {
 
 impl ChunkSize {
     fn new(len: usize) -> ChunkSize {
-        use std::fmt::Write;
+        use core::fmt::Write;
         let mut size = ChunkSize {
             bytes: [0; CHUNK_SIZE_MAX_BYTES + 2],
             pos: 0,
@@ -425,7 +425,7 @@ impl fmt::Display for NotEof {
     }
 }
 
-impl std::error::Error for NotEof {}
+impl core::error::Error for NotEof {}
 
 #[cfg(test)]
 mod tests {

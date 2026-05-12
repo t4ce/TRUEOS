@@ -57,14 +57,14 @@ pub struct Command;
 impl Command {
     pub fn new<S>(_program: S) -> Self
     where
-        S: AsRef<std::ffi::OsStr>,
+        S: AsRef<core::ffi::OsStr>,
     {
         Self
     }
 
     pub fn arg<S>(&mut self, _arg: S) -> &mut Self
     where
-        S: AsRef<std::ffi::OsStr>,
+        S: AsRef<core::ffi::OsStr>,
     {
         self
     }
@@ -72,15 +72,15 @@ impl Command {
     pub fn args<I, S>(&mut self, _args: I) -> &mut Self
     where
         I: IntoIterator<Item = S>,
-        S: AsRef<std::ffi::OsStr>,
+        S: AsRef<core::ffi::OsStr>,
     {
         self
     }
 
     pub fn env<K, V>(&mut self, _key: K, _val: V) -> &mut Self
     where
-        K: AsRef<std::ffi::OsStr>,
-        V: AsRef<std::ffi::OsStr>,
+        K: AsRef<core::ffi::OsStr>,
+        V: AsRef<core::ffi::OsStr>,
     {
         self
     }
@@ -88,15 +88,15 @@ impl Command {
     pub fn envs<I, K, V>(&mut self, _vars: I) -> &mut Self
     where
         I: IntoIterator<Item = (K, V)>,
-        K: AsRef<std::ffi::OsStr>,
-        V: AsRef<std::ffi::OsStr>,
+        K: AsRef<core::ffi::OsStr>,
+        V: AsRef<core::ffi::OsStr>,
     {
         self
     }
 
     pub fn env_remove<K>(&mut self, _key: K) -> &mut Self
     where
-        K: AsRef<std::ffi::OsStr>,
+        K: AsRef<core::ffi::OsStr>,
     {
         self
     }

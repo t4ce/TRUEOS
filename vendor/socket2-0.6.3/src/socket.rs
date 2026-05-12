@@ -6,11 +6,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::fmt;
+use core::fmt;
 use std::io::{self, Read, Write};
 #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
 use std::io::{IoSlice, IoSliceMut};
-use std::mem::MaybeUninit;
+use core::mem::MaybeUninit;
 #[cfg(not(target_os = "nto"))]
 use std::net::Ipv6Addr;
 use std::net::{self, Ipv4Addr, Shutdown};

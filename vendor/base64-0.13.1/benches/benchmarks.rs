@@ -166,8 +166,8 @@ const LARGE_BYTE_SIZES: [usize; 3] = [3 * 1024 * 1024, 10 * 1024 * 1024, 30 * 10
 
 fn encode_benchmarks(byte_sizes: &[usize]) -> ParameterizedBenchmark<usize> {
     ParameterizedBenchmark::new("encode", do_encode_bench, byte_sizes.iter().cloned())
-        .warm_up_time(std::time::Duration::from_millis(500))
-        .measurement_time(std::time::Duration::from_secs(3))
+        .warm_up_time(core::time::Duration::from_millis(500))
+        .measurement_time(core::time::Duration::from_secs(3))
         .throughput(|s| Throughput::Bytes(*s as u64))
         .with_function("encode_display", do_encode_bench_display)
         .with_function("encode_reuse_buf", do_encode_bench_reuse_buf)
@@ -182,8 +182,8 @@ fn encode_benchmarks(byte_sizes: &[usize]) -> ParameterizedBenchmark<usize> {
 
 fn decode_benchmarks(byte_sizes: &[usize]) -> ParameterizedBenchmark<usize> {
     ParameterizedBenchmark::new("decode", do_decode_bench, byte_sizes.iter().cloned())
-        .warm_up_time(std::time::Duration::from_millis(500))
-        .measurement_time(std::time::Duration::from_secs(3))
+        .warm_up_time(core::time::Duration::from_millis(500))
+        .measurement_time(core::time::Duration::from_secs(3))
         .throughput(|s| Throughput::Bytes(*s as u64))
         .with_function("decode_reuse_buf", do_decode_bench_reuse_buf)
         .with_function("decode_slice", do_decode_bench_slice)

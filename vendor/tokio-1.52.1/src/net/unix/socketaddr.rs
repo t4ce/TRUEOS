@@ -1,4 +1,4 @@
-use std::fmt;
+use core::fmt;
 use std::path::Path;
 
 /// An address associated with a Tokio Unix socket.

@@ -1,5 +1,5 @@
 use crate::header::{Entry, HeaderMap, HeaderValue, OccupiedEntry};
-use std::fmt;
+use core::fmt;
 
 pub fn basic_auth<U, P>(username: U, password: Option<P>) -> HeaderValue
 where
@@ -26,9 +26,9 @@ where
 
 #[cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))]
 pub(crate) fn fast_random() -> u64 {
-    use std::cell::Cell;
+    use core::cell::Cell;
     use std::collections::hash_map::RandomState;
-    use std::hash::{BuildHasher, Hasher};
+    use core::hash::{BuildHasher, Hasher};
 
     thread_local! {
         static KEY: RandomState = RandomState::new();

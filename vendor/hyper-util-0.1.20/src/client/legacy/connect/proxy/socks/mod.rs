@@ -5,9 +5,9 @@ mod v4;
 pub use v4::{SocksV4, SocksV4Error};
 
 use pin_project_lite::pin_project;
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::future::Future;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 use bytes::BytesMut;
 
@@ -72,8 +72,8 @@ where
     }
 }
 
-impl<C> std::fmt::Display for SocksError<C> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<C> core::fmt::Display for SocksError<C> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("SOCKS error: ")?;
 
         match self {
@@ -93,7 +93,7 @@ impl<C> std::fmt::Display for SocksError<C> {
     }
 }
 
-impl<C: std::fmt::Debug + std::fmt::Display> std::error::Error for SocksError<C> {}
+impl<C: core::fmt::Debug + core::fmt::Display> core::error::Error for SocksError<C> {}
 
 impl<C> From<std::io::Error> for SocksError<C> {
     fn from(err: std::io::Error) -> Self {
@@ -136,7 +136,7 @@ pin_project! {
     pub struct Handshaking<F, T, E> {
         #[pin]
         fut: BoxHandshaking<T, E>,
-        _marker: std::marker::PhantomData<F>
+        _marker: core::marker::PhantomData<F>
     }
 }
 

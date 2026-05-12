@@ -1,5 +1,5 @@
 /*
-use std::error::Error;
+use core::error::Error;
 
 pub(crate) fn find<'a, E: Error + 'static>(top: &'a (dyn Error + 'static)) -> Option<&'a E> {
     let mut err = Some(top);

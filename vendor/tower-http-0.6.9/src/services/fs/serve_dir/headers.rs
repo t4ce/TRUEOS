@@ -20,7 +20,7 @@ impl IfModifiedSince {
 
     /// convert a header value into a IfModifiedSince, invalid values are silentely ignored
     pub(super) fn from_header_value(value: &HeaderValue) -> Option<IfModifiedSince> {
-        std::str::from_utf8(value.as_bytes())
+        core::str::from_utf8(value.as_bytes())
             .ok()
             .and_then(|value| httpdate::parse_http_date(value).ok())
             .map(|time| IfModifiedSince(time.into()))
@@ -37,7 +37,7 @@ impl IfUnmodifiedSince {
 
     /// Convert a header value into a IfModifiedSince, invalid values are silentely ignored
     pub(super) fn from_header_value(value: &HeaderValue) -> Option<IfUnmodifiedSince> {
-        std::str::from_utf8(value.as_bytes())
+        core::str::from_utf8(value.as_bytes())
             .ok()
             .and_then(|value| httpdate::parse_http_date(value).ok())
             .map(|time| IfUnmodifiedSince(time.into()))

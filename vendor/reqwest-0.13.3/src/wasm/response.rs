@@ -1,4 +1,4 @@
-use std::fmt;
+use core::fmt;
 
 use bytes::Bytes;
 use http::{HeaderMap, StatusCode};
@@ -136,7 +136,7 @@ impl Response {
     #[cfg(feature = "stream")]
     pub fn bytes_stream(self) -> impl futures_core::Stream<Item = crate::Result<Bytes>> {
         use futures_core::Stream;
-        use std::pin::Pin;
+        use core::pin::Pin;
 
         let web_response = self.http.into_body();
         let abort = self._abort;

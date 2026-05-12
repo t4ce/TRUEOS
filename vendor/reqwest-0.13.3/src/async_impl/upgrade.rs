@@ -1,5 +1,5 @@
-use std::pin::Pin;
-use std::task::{self, Poll};
+use core::pin::Pin;
+use core::task::{self, Poll};
 use std::{fmt, io};
 
 use hyper_util::rt::TokioIo;

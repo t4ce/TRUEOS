@@ -271,7 +271,7 @@ impl TryFrom<&mut BytesMut> for Address {
                     return Err(ParsingError::Incomplete);
                 }
 
-                let domain = std::str::from_utf8(&buf[..len as usize])
+                let domain = core::str::from_utf8(&buf[..len as usize])
                     .map_err(|_| ParsingError::Other)?
                     .to_string();
 
@@ -331,8 +331,8 @@ impl TryFrom<u8> for AuthMethod {
     }
 }
 
-impl std::fmt::Display for Status {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for Status {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(match self {
             Self::Success => "success",
             Self::GeneralServerFailure => "general server failure",

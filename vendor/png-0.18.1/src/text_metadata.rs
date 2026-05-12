@@ -25,7 +25,7 @@
 //!  ```
 //!  use std::fs::File;
 //!  use std::io::BufReader;
-//!  use std::iter::FromIterator;
+//!  use core::iter::FromIterator;
 //!  use std::path::PathBuf;
 //!
 //!  // Opening a png file that has a zTXt chunk
@@ -52,7 +52,7 @@
 //!  # use std::env;
 //!  # use std::fs::File;
 //!  # use std::io::BufWriter;
-//!  # use std::iter::FromIterator;
+//!  # use core::iter::FromIterator;
 //!  # use std::path::PathBuf;
 //!  # let file = File::create(PathBuf::from_iter(["target", "text_chunk.png"])).unwrap();
 //!  # let ref mut w = BufWriter::new(file);
@@ -103,7 +103,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use crate::{chunk, DecodingError};
 use fdeflate::BoundedDecompressionError;
-use std::convert::TryFrom;
+use core::convert::TryFrom;
 #[cfg(feature = "png-encoding")]
 use crate::{encoder, EncodingError};
 #[cfg(feature = "png-encoding")]
@@ -192,7 +192,7 @@ fn decode_ascii(text: &[u8]) -> Result<&str, TextDecodingError> {
     if text.is_ascii() {
         // `from_utf8` cannot panic because we're already checked that `text` is ASCII-7.
         // And this is the only safe way to get ASCII-7 string from `&[u8]`.
-        Ok(std::str::from_utf8(text).expect("unreachable"))
+        Ok(core::str::from_utf8(text).expect("unreachable"))
     } else {
         Err(TextDecodingError::Unrepresentable)
     }
@@ -440,7 +440,7 @@ impl ITXtChunk {
 
         let language_tag = decode_ascii(language_tag_slice)?.to_owned();
 
-        let translated_keyword = std::str::from_utf8(translated_keyword_slice)
+        let translated_keyword = core::str::from_utf8(translated_keyword_slice)
             .map_err(|_| TextDecodingError::Unrepresentable)?
             .to_string();
         let text = if compressed {

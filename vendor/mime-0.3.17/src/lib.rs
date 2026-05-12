@@ -91,16 +91,16 @@ use core::{
     result::Result,
 };
 
-use std::cmp::Ordering;
-use std::error::Error;
+use core::cmp::Ordering;
+use core::error::Error;
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-use std::fmt;
-use std::hash::Hasher;
+use core::fmt;
+use core::hash::Hasher;
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-use std::hash::Hash;
-use std::str::FromStr;
+use core::hash::Hash;
+use core::str::FromStr;
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-use std::slice;
+use core::slice;
 
 mod parse;
 
@@ -858,7 +858,7 @@ pub const TEXT_JAVSCRIPT: Mime = TEXT_JAVASCRIPT;
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
+    use core::str::FromStr;
     use super::*;
 
     #[test]

@@ -1,5 +1,5 @@
 use pin_project_lite::pin_project;
-use std::time::Duration;
+use core::time::Duration;
 use std::{
     future::Future,
     pin::Pin,

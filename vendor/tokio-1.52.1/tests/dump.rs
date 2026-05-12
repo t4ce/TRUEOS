@@ -5,7 +5,7 @@
     any(target_arch = "aarch64", target_arch = "x86", target_arch = "x86_64")
 ))]
 
-use std::hint::black_box;
+use core::hint::black_box;
 use tokio::runtime::{self, Handle};
 
 #[inline(never)]
@@ -111,7 +111,7 @@ mod future_completes_during_trace {
 
     /// A future that completes only during a trace.
     fn complete_during_trace() -> impl Future<Output = ()> + Send {
-        use std::task::Poll;
+        use core::task::Poll;
         poll_fn(|cx| {
             if Handle::is_tracing() {
                 Poll::Ready(())

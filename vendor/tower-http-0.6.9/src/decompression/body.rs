@@ -17,7 +17,7 @@ use bytes::{Buf, Bytes};
 use http::HeaderMap;
 use http_body::{Body, SizeHint};
 use pin_project_lite::pin_project;
-use std::task::Context;
+use core::task::Context;
 use std::{
     io,
     marker::PhantomData,

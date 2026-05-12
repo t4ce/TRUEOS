@@ -1,6 +1,6 @@
 use http_body::{Body, Frame, SizeHint};
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 struct Mock {
     size_hint: SizeHint,

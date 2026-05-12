@@ -1,7 +1,7 @@
-use std::future::Future;
+use core::future::Future;
 use std::io::Cursor;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 use bytes::{Buf, Bytes};
 use futures_channel::{mpsc, oneshot};
@@ -184,7 +184,7 @@ impl Read for H2Upgraded {
                 }
             };
         }
-        let cnt = std::cmp::min(self.buf.len(), read_buf.remaining());
+        let cnt = core::cmp::min(self.buf.len(), read_buf.remaining());
         read_buf.put_slice(&self.buf[..cnt]);
         self.buf.advance(cnt);
         let _ = self.recv_stream.flow_control().release_capacity(cnt);

@@ -1195,7 +1195,7 @@ mod deadlock_impl {
     use backtrace::Backtrace;
     use petgraph;
     use petgraph::graphmap::DiGraphMap;
-    use std::cell::{Cell, UnsafeCell};
+    use core::cell::{Cell, UnsafeCell};
     use std::collections::HashSet;
     use std::sync::atomic::Ordering;
     use std::sync::mpsc;

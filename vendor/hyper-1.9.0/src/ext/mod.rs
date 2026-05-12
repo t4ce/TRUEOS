@@ -47,7 +47,7 @@ use http::header::{HeaderMap, IntoHeaderName, ValueIter};
 #[cfg(feature = "ffi")]
 use std::collections::HashMap;
 #[cfg(feature = "http2")]
-use std::fmt;
+use core::fmt;
 
 #[cfg(any(feature = "http1", feature = "ffi"))]
 mod h1_reason_phrase;

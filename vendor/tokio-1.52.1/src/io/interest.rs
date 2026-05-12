@@ -2,8 +2,8 @@
 
 use crate::io::ready::Ready;
 
-use std::fmt;
-use std::ops;
+use core::fmt;
+use core::ops;
 
 // These must be unique.
 // same as mio

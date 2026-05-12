@@ -459,7 +459,7 @@ impl Interval {
     ///
     /// When this method returns `Poll::Pending`, the current task is scheduled
     /// to receive a wakeup when the instant has elapsed. Note that on multiple
-    /// calls to `poll_tick`, only the [`Waker`](std::task::Waker) from the
+    /// calls to `poll_tick`, only the [`Waker`](core::task::Waker) from the
     /// [`Context`] passed to the most recent call is scheduled to receive a
     /// wakeup.
     pub fn poll_tick(&mut self, cx: &mut Context<'_>) -> Poll<Instant> {

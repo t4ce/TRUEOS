@@ -1,6 +1,6 @@
 #![cfg_attr(any(target_os = "trueos", target_os = "zkvm"), allow(dead_code))]
 
-use std::ops::{Deref, DerefMut};
+use core::ops::{Deref, DerefMut};
 #[cfg(any(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))), target_os = "wasi"))]
 use std::os::fd::AsRawFd;
 // TODO: once <https://github.com/rust-lang/rust/issues/126198> is fixed this

@@ -7,14 +7,14 @@
 //!
 //! ```rust
 //! use http::{Request, Response, header::HeaderName};
-//! use std::convert::Infallible;
+//! use core::convert::Infallible;
 //! use tower::{Service, ServiceExt, ServiceBuilder, service_fn};
 //! use tower_http::catch_panic::CatchPanicLayer;
 //! use http_body_util::Full;
 //! use bytes::Bytes;
 //!
 //! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # async fn main() -> Result<(), Box<dyn core::error::Error>> {
 //! async fn handle(req: Request<Full<Bytes>>) -> Result<Response<Full<Bytes>>, Infallible> {
 //!     panic!("something went wrong...")
 //! }
@@ -46,7 +46,7 @@
 //! use http_body_util::Full;
 //!
 //! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # async fn main() -> Result<(), Box<dyn core::error::Error>> {
 //! async fn handle(req: Request<Full<Bytes>>) -> Result<Response<Full<Bytes>>, Infallible> {
 //!     panic!("something went wrong...")
 //! }
@@ -368,7 +368,7 @@ mod tests {
     use super::*;
     use crate::test_helpers::Body;
     use http::Response;
-    use std::convert::Infallible;
+    use core::convert::Infallible;
     use tower::{ServiceBuilder, ServiceExt};
 
     #[tokio::test]

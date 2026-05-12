@@ -2,8 +2,8 @@
     all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")),
     allow(unused)
 )]
-use std::error::Error as StdError;
-use std::fmt;
+use core::error::Error as StdError;
+use core::fmt;
 use std::io;
 
 use crate::util::Escape;
@@ -435,7 +435,7 @@ mod tests {
 
     #[test]
     fn mem_size_of() {
-        use std::mem::size_of;
+        use core::mem::size_of;
         assert_eq!(size_of::<Error>(), size_of::<usize>());
     }
 

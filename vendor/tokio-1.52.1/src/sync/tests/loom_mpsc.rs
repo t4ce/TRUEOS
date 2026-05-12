@@ -3,7 +3,7 @@ use crate::sync::mpsc;
 use loom::future::block_on;
 use loom::sync::Arc;
 use loom::thread;
-use std::future::poll_fn;
+use core::future::poll_fn;
 use tokio_test::assert_ok;
 
 #[test]

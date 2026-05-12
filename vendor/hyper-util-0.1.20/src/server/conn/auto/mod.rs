@@ -4,11 +4,11 @@ pub mod upgrade;
 
 use hyper::service::HttpService;
 use core::time::Duration;
-use std::future::Future;
-use std::marker::PhantomPinned;
-use std::mem::MaybeUninit;
-use std::pin::Pin;
-use std::task::{ready, Context, Poll};
+use core::future::Future;
+use core::marker::PhantomPinned;
+use core::mem::MaybeUninit;
+use core::pin::Pin;
+use core::task::{ready, Context, Poll};
 use std::{error::Error as StdError, io};
 
 use bytes::Bytes;
@@ -27,13 +27,13 @@ use hyper::server::conn::http1;
 use hyper::{rt::bounds::Http2ServerConnExec, server::conn::http2};
 
 #[cfg(any(not(feature = "http2"), not(feature = "http1")))]
-use std::marker::PhantomData;
+use core::marker::PhantomData;
 
 use pin_project_lite::pin_project;
 
 use crate::common::rewind::Rewind;
 
-type Error = Box<dyn std::error::Error + Send + Sync>;
+type Error = Box<dyn core::error::Error + Send + Sync>;
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -394,7 +394,7 @@ enum Cow<'a, T> {
     Owned(T),
 }
 
-impl<T> std::ops::Deref for Cow<'_, T> {
+impl<T> core::ops::Deref for Cow<'_, T> {
     type Target = T;
     fn deref(&self) -> &T {
         match self {

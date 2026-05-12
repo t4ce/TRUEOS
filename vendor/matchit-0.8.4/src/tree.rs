@@ -1,9 +1,9 @@
 use crate::escape::{UnescapedRef, UnescapedRoute};
 use crate::{InsertError, MatchError, Params};
 
-use std::cell::UnsafeCell;
-use std::cmp::min;
-use std::ops::Range;
+use core::cell::UnsafeCell;
+use core::cmp::min;
+use core::ops::Range;
 use std::{fmt, mem};
 
 /// A radix tree used for URL path matching.
@@ -867,7 +867,7 @@ where
             let params = self
                 .remapping
                 .iter()
-                .map(|x| std::str::from_utf8(x).unwrap())
+                .map(|x| core::str::from_utf8(x).unwrap())
                 .collect::<Vec<_>>();
 
             f.field("indices", &indices).field("params", &params);

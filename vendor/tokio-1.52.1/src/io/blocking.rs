@@ -2,13 +2,13 @@ use crate::io::sys;
 use crate::io::{AsyncRead, AsyncWrite, ReadBuf};
 use crate::runtime::prelude::*;
 
-use std::cmp;
-use std::future::Future;
+use core::cmp;
+use core::future::Future;
 use std::io;
 use std::io::prelude::*;
-use std::mem::MaybeUninit;
-use std::pin::Pin;
-use std::task::{ready, Context, Poll};
+use core::mem::MaybeUninit;
+use core::pin::Pin;
+use core::task::{ready, Context, Poll};
 
 /// `T` should not implement _both_ Read and Write.
 #[derive(Debug)]
@@ -288,7 +288,7 @@ cfg_io_uring! {
             assert!(self.is_empty());
             self.buf.reserve(max_buf_size);
             let spare = self.buf.spare_capacity_mut();
-            let len = std::cmp::min(spare.len(), max_buf_size);
+            let len = core::cmp::min(spare.len(), max_buf_size);
             let ptr = spare.as_mut_ptr().cast::<u8>();
             (ptr, len as u32)
         }

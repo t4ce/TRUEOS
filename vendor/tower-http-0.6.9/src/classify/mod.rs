@@ -54,7 +54,7 @@ pub trait MakeClassifier {
 /// # Example
 ///
 /// ```
-/// use std::fmt;
+/// use core::fmt;
 /// use tower_http::classify::{
 ///     ClassifyResponse, ClassifiedResponse, NeverClassifyEos,
 ///     SharedClassifier, MakeClassifier,
@@ -375,7 +375,7 @@ impl fmt::Display for ServerErrorsFailureClass {
 mod usable_for_retries {
     #![allow(dead_code)]
 
-    use std::fmt;
+    use core::fmt;
 
     use http::{Request, Response};
     use tower::retry::Policy;
@@ -399,9 +399,9 @@ mod usable_for_retries {
         C::FailureClass: IsRetryable,
         ResB: http_body::Body,
         Request<ReqB>: Clone,
-        E: std::error::Error + 'static,
+        E: core::error::Error + 'static,
     {
-        type Future = std::future::Ready<()>;
+        type Future = core::future::Ready<()>;
 
         fn retry(
             &mut self,
@@ -414,7 +414,7 @@ mod usable_for_retries {
                         self.classifier.clone().classify_response(res)
                     {
                         if class.err()?.is_retryable() {
-                            return Some(std::future::ready(()));
+                            return Some(core::future::ready(()));
                         }
                     }
 
@@ -425,7 +425,7 @@ mod usable_for_retries {
                     .clone()
                     .classify_error(err)
                     .is_retryable()
-                    .then(|| std::future::ready(())),
+                    .then(|| core::future::ready(())),
             }
         }
 

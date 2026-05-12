@@ -9,7 +9,7 @@ use std::{
 use tower::steer::Steer;
 use tower_service::Service;
 
-type StdError = Box<dyn std::error::Error + Send + Sync + 'static>;
+type StdError = Box<dyn core::error::Error + Send + Sync + 'static>;
 
 struct MyService(u8, bool);
 
@@ -37,7 +37,7 @@ async fn pick_correctly() {
     let srvs = vec![MyService(42, true), MyService(57, true)];
     let mut st = Steer::new(srvs, |_: &_, _: &[_]| 1);
 
-    std::future::poll_fn(|cx| st.poll_ready(cx)).await.unwrap();
+    core::future::poll_fn(|cx| st.poll_ready(cx)).await.unwrap();
     let r = st.call(String::from("foo")).await.unwrap();
     assert_eq!(r, 57);
 }
@@ -49,7 +49,7 @@ async fn pending_all_ready() {
     let srvs = vec![MyService(42, true), MyService(57, false)];
     let mut st = Steer::new(srvs, |_: &_, _: &[_]| 0);
 
-    let p = futures_util::poll!(std::future::poll_fn(|cx| st.poll_ready(cx)));
+    let p = futures_util::poll!(core::future::poll_fn(|cx| st.poll_ready(cx)));
     match p {
         Poll::Pending => (),
         _ => panic!(

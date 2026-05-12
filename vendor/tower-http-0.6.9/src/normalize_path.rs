@@ -11,7 +11,7 @@
 //! use tower::{ServiceBuilder, Service, ServiceExt};
 //!
 //! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # async fn main() -> Result<(), Box<dyn core::error::Error>> {
 //! async fn handle(req: Request<Full<Bytes>>) -> Result<Response<Full<Bytes>>, Infallible> {
 //!     // `req.uri().path()` will not have trailing slashes
 //!     # Ok(Response::new(Full::default()))
@@ -209,7 +209,7 @@ fn append_trailing_slash(uri: &mut Uri) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::convert::Infallible;
+    use core::convert::Infallible;
     use tower::{ServiceBuilder, ServiceExt};
 
     #[tokio::test]

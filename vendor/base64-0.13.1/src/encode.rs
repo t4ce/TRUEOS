@@ -333,7 +333,7 @@ mod tests {
         FromEntropy, Rng,
     };
     use std;
-    use std::str;
+    use core::str;
 
     #[test]
     fn encoded_size_correct_standard() {
@@ -485,7 +485,7 @@ mod tests {
             );
 
             assert_encode_sanity(
-                std::str::from_utf8(&encoded_data[0..encoded_size]).unwrap(),
+                core::str::from_utf8(&encoded_data[0..encoded_size]).unwrap(),
                 config,
                 input_len,
             );
@@ -533,7 +533,7 @@ mod tests {
             );
 
             assert_encode_sanity(
-                std::str::from_utf8(&encoded_data[0..encoded_size]).unwrap(),
+                core::str::from_utf8(&encoded_data[0..encoded_size]).unwrap(),
                 config,
                 input_len,
             );

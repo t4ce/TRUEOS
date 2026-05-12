@@ -121,7 +121,7 @@ impl Name {
     /// # Examples
     ///
     /// ```
-    /// use std::str::FromStr;
+    /// use core::str::FromStr;
     /// use hickory_proto::rr::domain::Name;
     ///
     /// let name = Name::from_str("www").unwrap();
@@ -158,7 +158,7 @@ impl Name {
     /// # Example
     ///
     /// ```rust
-    /// use std::str::FromStr;
+    /// use core::str::FromStr;
     /// use hickory_proto::rr::domain::Name;
     ///
     /// let name = Name::from_str("www.example").unwrap();
@@ -175,7 +175,7 @@ impl Name {
     /// # Example
     ///
     /// ```rust
-    /// use std::str::FromStr;
+    /// use core::str::FromStr;
     /// use hickory_proto::rr::domain::Name;
     ///
     /// let name = Name::from_str("example.com").unwrap();
@@ -203,7 +203,7 @@ impl Name {
     /// # Examples
     ///
     /// ```rust
-    /// use std::str::FromStr;
+    /// use core::str::FromStr;
     /// use hickory_proto::rr::domain::Name;
     ///
     /// // From strings, uses utf8 conversion
@@ -254,7 +254,7 @@ impl Name {
     /// # Examples
     ///
     /// ```rust
-    /// use std::str::FromStr;
+    /// use core::str::FromStr;
     /// use hickory_proto::rr::domain::Name;
     ///
     /// let local = Name::from_str("www").unwrap();
@@ -289,7 +289,7 @@ impl Name {
     /// # Examples
     ///
     /// ```rust
-    /// use std::str::FromStr;
+    /// use core::str::FromStr;
     /// use hickory_proto::rr::domain::Name;
     ///
     /// let local = Name::from_str("www").unwrap();
@@ -309,8 +309,8 @@ impl Name {
     /// # Examples
     ///
     /// ```
-    /// use std::cmp::Ordering;
-    /// use std::str::FromStr;
+    /// use core::cmp::Ordering;
+    /// use core::str::FromStr;
     ///
     /// use hickory_proto::rr::domain::{Label, Name};
     ///
@@ -336,7 +336,7 @@ impl Name {
     /// # Examples
     ///
     /// ```
-    /// use std::str::FromStr;
+    /// use core::str::FromStr;
     /// use hickory_proto::rr::domain::Name;
     ///
     /// let example_com = Name::from_str("example.com.").unwrap();
@@ -357,7 +357,7 @@ impl Name {
     /// # Examples
     ///
     /// ```
-    /// use std::str::FromStr;
+    /// use core::str::FromStr;
     /// use hickory_proto::rr::domain::Name;
     ///
     /// let example_com = Name::from_str("example.com.").unwrap();
@@ -408,7 +408,7 @@ impl Name {
     /// # Example
     ///
     /// ```rust
-    /// use std::str::FromStr;
+    /// use core::str::FromStr;
     /// use hickory_proto::rr::domain::Name;
     ///
     /// let name = Name::from_str("www.example.com").unwrap();
@@ -430,7 +430,7 @@ impl Name {
     /// # Examples
     ///
     /// ```
-    /// use std::str::FromStr;
+    /// use core::str::FromStr;
     /// use hickory_proto::rr::domain::Name;
     ///
     /// let root = Name::root();
@@ -461,7 +461,7 @@ impl Name {
     /// # Examples
     ///
     /// ```
-    /// use std::str::FromStr;
+    /// use core::str::FromStr;
     /// use hickory_proto::rr::domain::Name;
     ///
     /// assert_eq!(Name::from_str("www.example.com.").unwrap().len(), 16);
@@ -496,7 +496,7 @@ impl Name {
     /// # Examples
     ///
     /// ```rust
-    /// use std::str::FromStr;
+    /// use core::str::FromStr;
     /// use hickory_proto::rr::domain::Name;
     ///
     /// let name = Name::from_str("example.com.").unwrap();
@@ -546,7 +546,7 @@ impl Name {
     /// # Examples
     ///
     /// ```
-    /// use std::str::FromStr;
+    /// use core::str::FromStr;
     /// use hickory_proto::rr::Name;
     ///
     /// let bytes_name = Name::from_labels(vec!["WWW".as_bytes(), "example".as_bytes(), "COM".as_bytes()]).unwrap();
@@ -568,7 +568,7 @@ impl Name {
     /// # Examples
     ///
     /// ```
-    /// use std::str::FromStr;
+    /// use core::str::FromStr;
     /// use hickory_proto::rr::Name;
     ///
     /// // Ok, underscore in the beginning of a name
@@ -798,7 +798,7 @@ impl Name {
     /// # Examples
     ///
     /// ```
-    /// use std::str::FromStr;
+    /// use core::str::FromStr;
     /// use hickory_proto::rr::domain::Name;
     ///
     /// let name1 = Name::from_str("a.com.").unwrap();
@@ -835,7 +835,7 @@ impl Name {
     /// # Examples
     ///
     /// ```
-    /// use std::str::FromStr;
+    /// use core::str::FromStr;
     /// use hickory_proto::rr::domain::Name;
     ///
     /// let name1 = Name::from_str("a.com.").unwrap();
@@ -955,7 +955,7 @@ impl Name {
     /// # Example
     ///
     /// ```
-    /// use std::str::FromStr;
+    /// use core::str::FromStr;
     /// use hickory_proto::rr::Name;
     ///
     /// let name = Name::from_str("localhost").unwrap();
@@ -976,7 +976,7 @@ impl Name {
     /// # Example
     ///
     /// ```
-    /// use std::str::FromStr;
+    /// use core::str::FromStr;
     /// use hickory_proto::rr::Name;
     ///
     /// let name = Name::from_str("www.example.com").unwrap();
@@ -997,7 +997,7 @@ impl Name {
     /// # Example
     ///
     /// ```
-    /// use std::str::FromStr;
+    /// use core::str::FromStr;
     /// use hickory_proto::rr::Name;
     ///
     /// let name = Name::from_str("www.example.com.").unwrap().into_wildcard();

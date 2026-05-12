@@ -1,4 +1,4 @@
-use std::ops::Range;
+use core::ops::Range;
 
 use crate::adam7::{Adam7Info, Adam7Iterator};
 

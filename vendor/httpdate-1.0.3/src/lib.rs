@@ -189,7 +189,7 @@ pub fn fmt_http_date(d: SystemTime) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::str;
+    use core::str;
     use std::time::{Duration, UNIX_EPOCH};
 
     use super::{fmt_http_date, parse_http_date, HttpDate};
@@ -263,7 +263,7 @@ mod tests {
 
     #[test]
     fn size_of() {
-        assert_eq!(::std::mem::size_of::<HttpDate>(), 8);
+        assert_eq!(::core::mem::size_of::<HttpDate>(), 8);
     }
 
     #[test]
@@ -274,7 +274,7 @@ mod tests {
         let a_date: HttpDate = a.into();
         let b_date: HttpDate = b.into();
         assert!(a_date < b_date);
-        assert_eq!(a_date.cmp(&b_date), ::std::cmp::Ordering::Less)
+        assert_eq!(a_date.cmp(&b_date), ::core::cmp::Ordering::Less)
     }
 
     #[test]

@@ -49,9 +49,9 @@ use core::task::{Context, Poll};
 /// As an example, here is how an HTTP request is processed by a server:
 ///
 /// ```rust
-/// # use std::pin::Pin;
-/// # use std::task::{Poll, Context};
-/// # use std::future::Future;
+/// # use core::pin::Pin;
+/// # use core::task::{Poll, Context};
+/// # use core::future::Future;
 /// # use tower_service::Service;
 /// use http::{Request, Response, StatusCode};
 ///
@@ -121,12 +121,12 @@ use core::task::{Context, Poll};
 /// use tower_service::Service;
 /// use tower_layer::Layer;
 /// use futures::FutureExt;
-/// use std::future::Future;
-/// use std::task::{Context, Poll};
-/// use std::time::Duration;
-/// use std::pin::Pin;
-/// use std::fmt;
-/// use std::error::Error;
+/// use core::future::Future;
+/// use core::task::{Context, Poll};
+/// use core::time::Duration;
+/// use core::pin::Pin;
+/// use core::fmt;
+/// use core::error::Error;
 ///
 /// // Our timeout service, which wraps another service and
 /// // adds a timeout to its response future.
@@ -247,9 +247,9 @@ use core::task::{Context, Poll};
 /// Therefore this kind of code is wrong and might panic:
 ///
 /// ```rust
-/// # use std::pin::Pin;
-/// # use std::task::{Poll, Context};
-/// # use std::future::Future;
+/// # use core::pin::Pin;
+/// # use core::task::{Poll, Context};
+/// # use core::future::Future;
 /// # use tower_service::Service;
 /// #
 /// struct Wrapper<S> {
@@ -279,12 +279,12 @@ use core::task::{Context, Poll};
 /// }
 /// ```
 ///
-/// You should instead use [`std::mem::replace`] to take the service that was ready:
+/// You should instead use [`core::mem::replace`] to take the service that was ready:
 ///
 /// ```rust
-/// # use std::pin::Pin;
-/// # use std::task::{Poll, Context};
-/// # use std::future::Future;
+/// # use core::pin::Pin;
+/// # use core::task::{Poll, Context};
+/// # use core::future::Future;
 /// # use tower_service::Service;
 /// #
 /// struct Wrapper<S> {
@@ -307,7 +307,7 @@ use core::task::{Context, Poll};
 ///     fn call(&mut self, req: R) -> Self::Future {
 ///         let clone = self.inner.clone();
 ///         // take the service that was ready
-///         let mut inner = std::mem::replace(&mut self.inner, clone);
+///         let mut inner = core::mem::replace(&mut self.inner, clone);
 ///         Box::pin(async move {
 ///             inner.call(req).await
 ///         })

@@ -6,8 +6,8 @@ use tokio_test::assert_ok;
 
 use bytes::BytesMut;
 use std::io;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 #[tokio::test]
 async fn write() {

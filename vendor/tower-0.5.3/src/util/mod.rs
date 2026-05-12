@@ -44,7 +44,7 @@ pub use self::{
 };
 
 pub use self::call_all::{CallAll, CallAllUnordered};
-use std::future::Future;
+use core::future::Future;
 
 use crate::layer::util::Identity;
 
@@ -121,7 +121,7 @@ pub trait ServiceExt<Request>: tower_service::Service<Request> {
     ///
     /// # Example
     /// ```
-    /// # use std::task::{Poll, Context};
+    /// # use core::task::{Poll, Context};
     /// # use tower::{Service, ServiceExt};
     /// #
     /// # struct DatabaseService;
@@ -139,14 +139,14 @@ pub trait ServiceExt<Request>: tower_service::Service<Request> {
     /// # impl Service<u32> for DatabaseService {
     /// #   type Response = Record;
     /// #   type Error = u8;
-    /// #   type Future = std::future::Ready<Result<Record, u8>>;
+    /// #   type Future = core::future::Ready<Result<Record, u8>>;
     /// #
     /// #   fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
     /// #       Poll::Ready(Ok(()))
     /// #   }
     /// #
     /// #   fn call(&mut self, request: u32) -> Self::Future {
-    /// #       std::future::ready(Ok(Record { name: "Jack".into(), age: 32 }))
+    /// #       core::future::ready(Ok(Record { name: "Jack".into(), age: 32 }))
     /// #   }
     /// # }
     /// #
@@ -190,7 +190,7 @@ pub trait ServiceExt<Request>: tower_service::Service<Request> {
     ///
     /// # Example
     /// ```
-    /// # use std::task::{Poll, Context};
+    /// # use core::task::{Poll, Context};
     /// # use tower::{Service, ServiceExt};
     /// #
     /// # struct DatabaseService;
@@ -208,14 +208,14 @@ pub trait ServiceExt<Request>: tower_service::Service<Request> {
     /// # impl Service<u32> for DatabaseService {
     /// #   type Response = Record;
     /// #   type Error = u8;
-    /// #   type Future = std::future::Ready<Result<Record, u8>>;
+    /// #   type Future = core::future::Ready<Result<Record, u8>>;
     /// #
     /// #   fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
     /// #       Poll::Ready(Ok(()))
     /// #   }
     /// #
     /// #   fn call(&mut self, request: u32) -> Self::Future {
-    /// #       std::future::ready(Ok(Record { name: "Jack".into(), age: 32 }))
+    /// #       core::future::ready(Ok(Record { name: "Jack".into(), age: 32 }))
     /// #   }
     /// # }
     /// #
@@ -257,7 +257,7 @@ pub trait ServiceExt<Request>: tower_service::Service<Request> {
     ///
     /// # Example
     /// ```
-    /// # use std::task::{Poll, Context};
+    /// # use core::task::{Poll, Context};
     /// # use tower::{Service, ServiceExt};
     /// #
     /// # struct DatabaseService;
@@ -275,14 +275,14 @@ pub trait ServiceExt<Request>: tower_service::Service<Request> {
     /// # impl Service<u32> for DatabaseService {
     /// #   type Response = String;
     /// #   type Error = Error;
-    /// #   type Future = std::future::Ready<Result<String, Error>>;
+    /// #   type Future = core::future::Ready<Result<String, Error>>;
     /// #
     /// #   fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
     /// #       Poll::Ready(Ok(()))
     /// #   }
     /// #
     /// #   fn call(&mut self, request: u32) -> Self::Future {
-    /// #       std::future::ready(Ok(String::new()))
+    /// #       core::future::ready(Ok(String::new()))
     /// #   }
     /// # }
     /// #
@@ -347,7 +347,7 @@ pub trait ServiceExt<Request>: tower_service::Service<Request> {
     /// Recovering from certain errors:
     ///
     /// ```
-    /// # use std::task::{Poll, Context};
+    /// # use core::task::{Poll, Context};
     /// # use tower::{Service, ServiceExt};
     /// #
     /// # struct DatabaseService;
@@ -363,21 +363,21 @@ pub trait ServiceExt<Request>: tower_service::Service<Request> {
     /// # }
     /// # #[derive(Debug)]
     /// # enum DbError {
-    /// #   Parse(std::num::ParseIntError),
+    /// #   Parse(core::num::ParseIntError),
     /// #   NoRecordsFound,
     /// # }
     /// #
     /// # impl Service<u32> for DatabaseService {
     /// #   type Response = Vec<Record>;
     /// #   type Error = DbError;
-    /// #   type Future = std::future::Ready<Result<Vec<Record>, DbError>>;
+    /// #   type Future = core::future::Ready<Result<Vec<Record>, DbError>>;
     /// #
     /// #   fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
     /// #       Poll::Ready(Ok(()))
     /// #   }
     /// #
     /// #   fn call(&mut self, request: u32) -> Self::Future {
-    /// #       std::future::ready(Ok(vec![Record { name: "Jack".into(), age: 32 }]))
+    /// #       core::future::ready(Ok(vec![Record { name: "Jack".into(), age: 32 }]))
     /// #   }
     /// # }
     /// #
@@ -410,7 +410,7 @@ pub trait ServiceExt<Request>: tower_service::Service<Request> {
     /// Rejecting some `Ok` responses:
     ///
     /// ```
-    /// # use std::task::{Poll, Context};
+    /// # use core::task::{Poll, Context};
     /// # use tower::{Service, ServiceExt};
     /// #
     /// # struct DatabaseService;
@@ -430,14 +430,14 @@ pub trait ServiceExt<Request>: tower_service::Service<Request> {
     /// # impl Service<u32> for DatabaseService {
     /// #   type Response = Record;
     /// #   type Error = DbError;
-    /// #   type Future = std::future::Ready<Result<Record, DbError>>;
+    /// #   type Future = core::future::Ready<Result<Record, DbError>>;
     /// #
     /// #   fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
     /// #       Poll::Ready(Ok(()))
     /// #   }
     /// #
     /// #   fn call(&mut self, request: u32) -> Self::Future {
-    /// #       std::future::ready(Ok(Record { name: "Jack".into(), age: 32 }))
+    /// #       core::future::ready(Ok(Record { name: "Jack".into(), age: 32 }))
     /// #   }
     /// # }
     /// #
@@ -480,8 +480,8 @@ pub trait ServiceExt<Request>: tower_service::Service<Request> {
     /// Performing an action that must be run for both successes and failures:
     ///
     /// ```
-    /// # use std::convert::TryFrom;
-    /// # use std::task::{Poll, Context};
+    /// # use core::convert::TryFrom;
+    /// # use core::task::{Poll, Context};
     /// # use tower::{Service, ServiceExt};
     /// #
     /// # struct DatabaseService;
@@ -494,14 +494,14 @@ pub trait ServiceExt<Request>: tower_service::Service<Request> {
     /// # impl Service<u32> for DatabaseService {
     /// #   type Response = String;
     /// #   type Error = u8;
-    /// #   type Future = std::future::Ready<Result<String, u8>>;
+    /// #   type Future = core::future::Ready<Result<String, u8>>;
     /// #
     /// #   fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
     /// #       Poll::Ready(Ok(()))
     /// #   }
     /// #
     /// #   fn call(&mut self, request: u32) -> Self::Future {
-    /// #       std::future::ready(Ok(String::new()))
+    /// #       core::future::ready(Ok(String::new()))
     /// #   }
     /// # }
     /// #
@@ -551,8 +551,8 @@ pub trait ServiceExt<Request>: tower_service::Service<Request> {
     ///
     /// # Example
     /// ```
-    /// # use std::convert::TryFrom;
-    /// # use std::task::{Poll, Context};
+    /// # use core::convert::TryFrom;
+    /// # use core::task::{Poll, Context};
     /// # use tower::{Service, ServiceExt};
     /// #
     /// # struct DatabaseService;
@@ -565,14 +565,14 @@ pub trait ServiceExt<Request>: tower_service::Service<Request> {
     /// # impl Service<String> for DatabaseService {
     /// #   type Response = String;
     /// #   type Error = u8;
-    /// #   type Future = std::future::Ready<Result<String, u8>>;
+    /// #   type Future = core::future::Ready<Result<String, u8>>;
     /// #
     /// #   fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
     /// #       Poll::Ready(Ok(()))
     /// #   }
     /// #
     /// #   fn call(&mut self, request: String) -> Self::Future {
-    /// #       std::future::ready(Ok(String::new()))
+    /// #       core::future::ready(Ok(String::new()))
     /// #   }
     /// # }
     /// #
@@ -611,8 +611,8 @@ pub trait ServiceExt<Request>: tower_service::Service<Request> {
     ///
     /// # Example
     /// ```
-    /// # use std::convert::TryFrom;
-    /// # use std::task::{Poll, Context};
+    /// # use core::convert::TryFrom;
+    /// # use core::task::{Poll, Context};
     /// # use tower::{Service, ServiceExt};
     /// #
     /// # struct DatabaseService;
@@ -623,24 +623,24 @@ pub trait ServiceExt<Request>: tower_service::Service<Request> {
     /// # }
     /// #
     /// # #[derive(Debug)] enum DbError {
-    /// #   Parse(std::num::ParseIntError)
+    /// #   Parse(core::num::ParseIntError)
     /// # }
     /// #
-    /// # impl std::fmt::Display for DbError {
-    /// #    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { std::fmt::Debug::fmt(self, f) }
+    /// # impl core::fmt::Display for DbError {
+    /// #    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result { core::fmt::Debug::fmt(self, f) }
     /// # }
-    /// # impl std::error::Error for DbError {}
+    /// # impl core::error::Error for DbError {}
     /// # impl Service<u32> for DatabaseService {
     /// #   type Response = String;
     /// #   type Error = DbError;
-    /// #   type Future = std::future::Ready<Result<String, DbError>>;
+    /// #   type Future = core::future::Ready<Result<String, DbError>>;
     /// #
     /// #   fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
     /// #       Poll::Ready(Ok(()))
     /// #   }
     /// #
     /// #   fn call(&mut self, request: u32) -> Self::Future {
-    /// #       std::future::ready(Ok(String::new()))
+    /// #       core::future::ready(Ok(String::new()))
     /// #   }
     /// # }
     /// #
@@ -684,8 +684,8 @@ pub trait ServiceExt<Request>: tower_service::Service<Request> {
     ///
     /// # Example
     /// ```
-    /// # use std::convert::TryFrom;
-    /// # use std::task::{Poll, Context};
+    /// # use core::convert::TryFrom;
+    /// # use core::task::{Poll, Context};
     /// # use tower::{Service, ServiceExt};
     /// #
     /// # #[derive(Clone)] struct DatabaseService;
@@ -698,22 +698,22 @@ pub trait ServiceExt<Request>: tower_service::Service<Request> {
     /// # enum DbError {
     /// #   Rejected
     /// # }
-    /// # impl std::fmt::Display for DbError {
-    /// #    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { std::fmt::Debug::fmt(self, f) }
+    /// # impl core::fmt::Display for DbError {
+    /// #    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result { core::fmt::Debug::fmt(self, f) }
     /// # }
-    /// # impl std::error::Error for DbError {}
+    /// # impl core::error::Error for DbError {}
     /// #
     /// # impl Service<u32> for DatabaseService {
     /// #   type Response = String;
     /// #   type Error = DbError;
-    /// #   type Future = std::future::Ready<Result<String, DbError>>;
+    /// #   type Future = core::future::Ready<Result<String, DbError>>;
     /// #
     /// #   fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
     /// #       Poll::Ready(Ok(()))
     /// #   }
     /// #
     /// #   fn call(&mut self, request: u32) -> Self::Future {
-    /// #       std::future::ready(Ok(String::new()))
+    /// #       core::future::ready(Ok(String::new()))
     /// #   }
     /// # }
     /// #
@@ -792,7 +792,7 @@ pub trait ServiceExt<Request>: tower_service::Service<Request> {
     /// # Examples
     ///
     /// ```
-    /// # use std::task::{Poll, Context};
+    /// # use core::task::{Poll, Context};
     /// # use tower::{Service, ServiceExt};
     /// #
     /// # struct DatabaseService;
@@ -808,14 +808,14 @@ pub trait ServiceExt<Request>: tower_service::Service<Request> {
     /// # impl Service<u32> for DatabaseService {
     /// #   type Response = Record;
     /// #   type Error = DbError;
-    /// #   type Future = std::future::Ready<Result<Record, DbError>>;
+    /// #   type Future = core::future::Ready<Result<Record, DbError>>;
     /// #
     /// #   fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
     /// #       Poll::Ready(Ok(()))
     /// #   }
     /// #
     /// #   fn call(&mut self, request: u32) -> Self::Future {
-    /// #       std::future::ready(Ok(()))
+    /// #       core::future::ready(Ok(()))
     /// #   }
     /// # }
     /// #
@@ -853,7 +853,7 @@ pub trait ServiceExt<Request>: tower_service::Service<Request> {
     /// ```
     ///
     /// [`Future`]: crate::Service::Future
-    /// [`Output`]: std::future::Future::Output
+    /// [`Output`]: core::future::Future::Output
     /// [`futures` crate]: https://docs.rs/futures
     /// [`FutureExt::then`]: https://docs.rs/futures/latest/futures/future/trait.FutureExt.html#method.then
     /// [`Error`]: crate::Service::Error
@@ -878,7 +878,7 @@ pub trait ServiceExt<Request>: tower_service::Service<Request> {
     /// # Examples
     ///
     /// ```
-    /// # use std::task::{Poll, Context};
+    /// # use core::task::{Poll, Context};
     /// # use tower::{Service, ServiceExt, BoxError};
     /// #
     /// # struct DatabaseService;
@@ -894,19 +894,19 @@ pub trait ServiceExt<Request>: tower_service::Service<Request> {
     /// # impl Service<u32> for DatabaseService {
     /// #   type Response = Record;
     /// #   type Error = DbError;
-    /// #   type Future = std::future::Ready<Result<Record, DbError>>;
+    /// #   type Future = core::future::Ready<Result<Record, DbError>>;
     /// #
     /// #   fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
     /// #       Poll::Ready(Ok(()))
     /// #   }
     /// #
     /// #   fn call(&mut self, request: u32) -> Self::Future {
-    /// #       std::future::ready(Ok(()))
+    /// #       core::future::ready(Ok(()))
     /// #   }
     /// # }
     /// #
     /// # fn main() {
-    /// use std::time::Duration;
+    /// use core::time::Duration;
     /// use tokio::time::timeout;
     ///
     /// // A service returning Result<Record, DbError>
@@ -1047,7 +1047,7 @@ impl<T: ?Sized, Request> ServiceExt<Request> for T where T: tower_service::Servi
 /// Convert an `Option<Layer>` into a [`Layer`].
 ///
 /// ```
-/// # use std::time::Duration;
+/// # use core::time::Duration;
 /// # use tower::Service;
 /// # use tower::builder::ServiceBuilder;
 /// use tower::util::option_layer;

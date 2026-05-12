@@ -2,13 +2,13 @@
 //!
 //! [Windows named pipes]: https://docs.microsoft.com/en-us/windows/win32/ipc/named-pipes
 
-use std::ffi::c_void;
-use std::ffi::OsStr;
+use core::ffi::c_void;
+use core::ffi::OsStr;
 use std::io::{self, Read, Write};
-use std::pin::Pin;
-use std::ptr;
-use std::ptr::null_mut;
-use std::task::{Context, Poll};
+use core::pin::Pin;
+use core::ptr;
+use core::ptr::null_mut;
+use core::task::{Context, Poll};
 
 use crate::io::{AsyncRead, AsyncWrite, Interest, PollEvented, ReadBuf, Ready};
 use crate::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, FromRawHandle, RawHandle};
@@ -254,7 +254,7 @@ impl NamedPipeServer {
     /// ```no_run
     /// use tokio::io::Interest;
     /// use tokio::net::windows::named_pipe;
-    /// use std::error::Error;
+    /// use core::error::Error;
     /// use std::io;
     ///
     /// const PIPE_NAME: &str = r"\\.\pipe\tokio-named-pipe-server-ready";
@@ -316,7 +316,7 @@ impl NamedPipeServer {
     ///
     /// ```no_run
     /// use tokio::net::windows::named_pipe;
-    /// use std::error::Error;
+    /// use core::error::Error;
     /// use std::io;
     ///
     /// const PIPE_NAME: &str = r"\\.\pipe\tokio-named-pipe-server-readable";
@@ -417,7 +417,7 @@ impl NamedPipeServer {
     ///
     /// ```no_run
     /// use tokio::net::windows::named_pipe;
-    /// use std::error::Error;
+    /// use core::error::Error;
     /// use std::io;
     ///
     /// const PIPE_NAME: &str = r"\\.\pipe\tokio-named-pipe-server-try-read";
@@ -490,7 +490,7 @@ impl NamedPipeServer {
     ///
     /// ```no_run
     /// use tokio::net::windows::named_pipe;
-    /// use std::error::Error;
+    /// use core::error::Error;
     /// use std::io::{self, IoSliceMut};
     ///
     /// const PIPE_NAME: &str = r"\\.\pipe\tokio-named-pipe-server-try-read-vectored";
@@ -563,7 +563,7 @@ impl NamedPipeServer {
         ///
         /// ```no_run
         /// use tokio::net::windows::named_pipe;
-        /// use std::error::Error;
+        /// use core::error::Error;
         /// use std::io;
         ///
         /// const PIPE_NAME: &str = r"\\.\pipe\tokio-named-pipe-client-readable";
@@ -603,7 +603,7 @@ impl NamedPipeServer {
 
                 let dst = buf.chunk_mut();
                 let dst =
-                    unsafe { &mut *(dst as *mut _ as *mut [std::mem::MaybeUninit<u8>] as *mut [u8]) };
+                    unsafe { &mut *(dst as *mut _ as *mut [core::mem::MaybeUninit<u8>] as *mut [u8]) };
 
                 // Safety: We trust `NamedPipeServer::read` to have filled up `n` bytes in the
                 // buffer.
@@ -627,7 +627,7 @@ impl NamedPipeServer {
     ///
     /// ```no_run
     /// use tokio::net::windows::named_pipe;
-    /// use std::error::Error;
+    /// use core::error::Error;
     /// use std::io;
     ///
     /// const PIPE_NAME: &str = r"\\.\pipe\tokio-named-pipe-server-writable";
@@ -714,7 +714,7 @@ impl NamedPipeServer {
     ///
     /// ```no_run
     /// use tokio::net::windows::named_pipe;
-    /// use std::error::Error;
+    /// use core::error::Error;
     /// use std::io;
     ///
     /// const PIPE_NAME: &str = r"\\.\pipe\tokio-named-pipe-server-try-write";
@@ -774,7 +774,7 @@ impl NamedPipeServer {
     ///
     /// ```no_run
     /// use tokio::net::windows::named_pipe;
-    /// use std::error::Error;
+    /// use core::error::Error;
     /// use std::io;
     ///
     /// const PIPE_NAME: &str = r"\\.\pipe\tokio-named-pipe-server-try-write-vectored";
@@ -1050,7 +1050,7 @@ impl NamedPipeClient {
     /// ```no_run
     /// use tokio::io::Interest;
     /// use tokio::net::windows::named_pipe;
-    /// use std::error::Error;
+    /// use core::error::Error;
     /// use std::io;
     ///
     /// const PIPE_NAME: &str = r"\\.\pipe\tokio-named-pipe-client-ready";
@@ -1111,7 +1111,7 @@ impl NamedPipeClient {
     ///
     /// ```no_run
     /// use tokio::net::windows::named_pipe;
-    /// use std::error::Error;
+    /// use core::error::Error;
     /// use std::io;
     ///
     /// const PIPE_NAME: &str = r"\\.\pipe\tokio-named-pipe-client-readable";
@@ -1211,7 +1211,7 @@ impl NamedPipeClient {
     ///
     /// ```no_run
     /// use tokio::net::windows::named_pipe;
-    /// use std::error::Error;
+    /// use core::error::Error;
     /// use std::io;
     ///
     /// const PIPE_NAME: &str = r"\\.\pipe\tokio-named-pipe-client-try-read";
@@ -1283,7 +1283,7 @@ impl NamedPipeClient {
     ///
     /// ```no_run
     /// use tokio::net::windows::named_pipe;
-    /// use std::error::Error;
+    /// use core::error::Error;
     /// use std::io::{self, IoSliceMut};
     ///
     /// const PIPE_NAME: &str = r"\\.\pipe\tokio-named-pipe-client-try-read-vectored";
@@ -1355,7 +1355,7 @@ impl NamedPipeClient {
         ///
         /// ```no_run
         /// use tokio::net::windows::named_pipe;
-        /// use std::error::Error;
+        /// use core::error::Error;
         /// use std::io;
         ///
         /// const PIPE_NAME: &str = r"\\.\pipe\tokio-named-pipe-client-readable";
@@ -1395,7 +1395,7 @@ impl NamedPipeClient {
 
                 let dst = buf.chunk_mut();
                 let dst =
-                    unsafe { &mut *(dst as *mut _ as *mut [std::mem::MaybeUninit<u8>] as *mut [u8]) };
+                    unsafe { &mut *(dst as *mut _ as *mut [core::mem::MaybeUninit<u8>] as *mut [u8]) };
 
                 // Safety: We trust `NamedPipeClient::read` to have filled up `n` bytes in the
                 // buffer.
@@ -1419,7 +1419,7 @@ impl NamedPipeClient {
     ///
     /// ```no_run
     /// use tokio::net::windows::named_pipe;
-    /// use std::error::Error;
+    /// use core::error::Error;
     /// use std::io;
     ///
     /// const PIPE_NAME: &str = r"\\.\pipe\tokio-named-pipe-client-writable";
@@ -1505,7 +1505,7 @@ impl NamedPipeClient {
     ///
     /// ```no_run
     /// use tokio::net::windows::named_pipe;
-    /// use std::error::Error;
+    /// use core::error::Error;
     /// use std::io;
     ///
     /// const PIPE_NAME: &str = r"\\.\pipe\tokio-named-pipe-client-try-write";
@@ -1564,7 +1564,7 @@ impl NamedPipeClient {
     ///
     /// ```no_run
     /// use tokio::net::windows::named_pipe;
-    /// use std::error::Error;
+    /// use core::error::Error;
     /// use std::io;
     ///
     /// const PIPE_NAME: &str = r"\\.\pipe\tokio-named-pipe-client-try-write-vectored";

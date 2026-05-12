@@ -135,7 +135,7 @@ where
 opaque_future! {
     /// Response future for [`IntoMakeServiceWithConnectInfo`].
     pub type ResponseFuture<S, C> =
-        std::future::Ready<Result<AddExtension<S, ConnectInfo<C>>, Infallible>>;
+        core::future::Ready<Result<AddExtension<S, ConnectInfo<C>>, Infallible>>;
 }
 
 /// Extractor for getting connection information produced by a [`Connected`].

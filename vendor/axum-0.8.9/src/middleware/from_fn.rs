@@ -282,7 +282,7 @@ macro_rules! impl_service {
 
             fn call(&mut self, req: Request) -> Self::Future {
                 let not_ready_inner = self.inner.clone();
-                let ready_inner = std::mem::replace(&mut self.inner, not_ready_inner);
+                let ready_inner = core::mem::replace(&mut self.inner, not_ready_inner);
 
                 let mut f = self.f.clone();
                 let state = self.state.clone();

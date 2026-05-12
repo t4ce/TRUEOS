@@ -1,8 +1,8 @@
-use std::ffi::c_void;
-use std::fmt;
+use core::ffi::c_void;
+use core::fmt;
 use std::fs::File;
 use std::io;
-use std::mem::size_of;
+use core::mem::size_of;
 use std::os::windows::io::AsRawHandle;
 
 use windows_sys::Wdk::Storage::FileSystem::NtCancelIoFileEx;
@@ -66,7 +66,7 @@ impl Afd {
         (*iosb).Anonymous.Status = STATUS_PENDING;
         let status = NtDeviceIoControlFile(
             self.fd.as_raw_handle() as HANDLE,
-            std::ptr::null_mut(),
+            core::ptr::null_mut(),
             None,
             overlapped,
             iosb,
@@ -114,9 +114,9 @@ impl Afd {
 }
 
 cfg_io_source! {
-    use std::mem::zeroed;
+    use core::mem::zeroed;
     use std::os::windows::io::{FromRawHandle, RawHandle};
-    use std::ptr::null_mut;
+    use core::ptr::null_mut;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use windows_sys::Wdk::Foundation::OBJECT_ATTRIBUTES;

@@ -39,7 +39,7 @@ impl<'a, T: ?Sized> RwLockMappedWriteGuard<'a, T> {
         // forgets the originals, so in the end no value is duplicated.
         Inner {
             #[cfg(all(tokio_unstable, feature = "tracing"))]
-            resource_span: unsafe { std::ptr::read(&me.resource_span) },
+            resource_span: unsafe { core::ptr::read(&me.resource_span) },
             permits_acquired: me.permits_acquired,
             s: me.s,
             data: me.data,

@@ -1,8 +1,8 @@
 use alloc::string::String;
 use alloc::vec::Vec;
-use std::convert::TryFrom;
-use std::hash::{Hash, Hasher};
-use std::str::FromStr;
+use core::convert::TryFrom;
+use core::hash::{Hash, Hasher};
+use core::str::FromStr;
 use std::{cmp, fmt, str};
 
 use bytes::Bytes;
@@ -342,7 +342,7 @@ impl PartialOrd<Authority> for String {
 ///
 /// ```
 /// # use http::uri::Authority;
-/// # use std::hash::{Hash, Hasher};
+/// # use core::hash::{Hash, Hasher};
 /// # use std::collections::hash_map::DefaultHasher;
 ///
 /// let a: Authority = "HELLO.com".parse().unwrap();

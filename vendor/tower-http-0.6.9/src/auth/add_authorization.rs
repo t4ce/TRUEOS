@@ -192,7 +192,7 @@ mod tests {
     use crate::test_helpers::Body;
     use crate::validate_request::ValidateRequestHeaderLayer;
     use http::{Response, StatusCode};
-    use std::convert::Infallible;
+    use core::convert::Infallible;
     use tower::{BoxError, Service, ServiceBuilder, ServiceExt};
 
     #[tokio::test]

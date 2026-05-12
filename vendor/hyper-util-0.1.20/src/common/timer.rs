@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
-use std::fmt;
-use std::pin::Pin;
+use core::fmt;
+use core::pin::Pin;
 use std::sync::Arc;
 use core::time::Duration;
 use std::time::Instant;

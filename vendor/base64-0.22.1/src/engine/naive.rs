@@ -6,7 +6,7 @@ use crate::{
     },
     DecodeError, DecodeSliceError,
 };
-use std::ops::{BitAnd, BitOr, Shl, Shr};
+use core::ops::{BitAnd, BitOr, Shl, Shr};
 
 /// Comparatively simple implementation that can be used as something to compare against in tests
 pub struct Naive {

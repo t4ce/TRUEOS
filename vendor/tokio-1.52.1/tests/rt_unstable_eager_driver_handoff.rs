@@ -6,7 +6,7 @@
 #![cfg(all(not(miri), unix, feature = "full"))]
 
 use std::sync::mpsc::RecvTimeoutError;
-use std::time::Duration;
+use core::time::Duration;
 
 /// Test that, without `enable_eager_driver_handoff`, we can reliably reproduce
 /// a deadlock when a task blocks indefinitely. If this test fails, it means

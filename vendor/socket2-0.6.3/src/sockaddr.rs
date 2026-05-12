@@ -1,5 +1,5 @@
-use std::hash::Hash;
-use std::mem::{self, size_of};
+use core::hash::Hash;
+use core::mem::{self, size_of};
 use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
 #[cfg(not(target_os = "wasi"))]
 use std::path::Path;
@@ -78,8 +78,8 @@ impl SockAddrStorage {
     }
 }
 
-impl std::fmt::Debug for SockAddrStorage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for SockAddrStorage {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("sockaddr_storage")
             .field("ss_family", &self.storage.ss_family)
             .finish_non_exhaustive()
@@ -337,7 +337,7 @@ impl SockAddr {
         // SAFETY: `self.storage` is a C struct which can always be treated a
         // slice of bytes. Furthermore, we ensure we don't read any uninitialised
         // bytes by using `self.len`.
-        unsafe { std::slice::from_raw_parts(self.as_ptr().cast(), self.len as usize) }
+        unsafe { core::slice::from_raw_parts(self.as_ptr().cast(), self.len as usize) }
     }
 }
 
@@ -469,7 +469,7 @@ impl PartialEq for SockAddr {
 impl Eq for SockAddr {}
 
 impl Hash for SockAddr {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         self.as_bytes().hash(state);
     }
 }
@@ -620,7 +620,7 @@ mod tests {
 
     fn calculate_hash(x: &SockAddr) -> u64 {
         use std::collections::hash_map::DefaultHasher;
-        use std::hash::Hasher;
+        use core::hash::Hasher;
 
         let mut hasher = DefaultHasher::new();
         x.hash(&mut hasher);

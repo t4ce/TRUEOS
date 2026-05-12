@@ -12,7 +12,7 @@ use core::option::Option::{self, None, Some};
 use core::result::Result::{self, Err, Ok};
 // MSRV: Once our MSRV is 1.81, we can switch to `core::error`
 #[cfg(feature = "std")]
-use std::error::Error;
+use core::error::Error;
 #[cfg(feature = "std")]
 use std::io::{self, Write};
 

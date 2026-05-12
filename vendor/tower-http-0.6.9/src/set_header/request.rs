@@ -16,9 +16,9 @@
 //! use bytes::Bytes;
 //!
 //! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # async fn main() -> Result<(), Box<dyn core::error::Error>> {
 //! # let http_client = tower::service_fn(|_: Request<Full<Bytes>>| async move {
-//! #     Ok::<_, std::convert::Infallible>(Response::new(Full::<Bytes>::default()))
+//! #     Ok::<_, core::convert::Infallible>(Response::new(Full::<Bytes>::default()))
 //! # });
 //! #
 //! let mut svc = ServiceBuilder::new()
@@ -52,9 +52,9 @@
 //! use http_body_util::Full;
 //!
 //! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # async fn main() -> Result<(), Box<dyn core::error::Error>> {
 //! # let http_client = tower::service_fn(|_: Request<Full<Bytes>>| async move {
-//! #     Ok::<_, std::convert::Infallible>(Response::new(Full::<Bytes>::default()))
+//! #     Ok::<_, core::convert::Infallible>(Response::new(Full::<Bytes>::default()))
 //! # });
 //! fn date_header_value() -> HeaderValue {
 //!     // ...
@@ -107,7 +107,7 @@ impl<M> fmt::Debug for SetRequestHeaderLayer<M> {
         f.debug_struct("SetRequestHeaderLayer")
             .field("header_name", &self.header_name)
             .field("mode", &self.mode)
-            .field("make", &std::any::type_name::<M>())
+            .field("make", &core::any::type_name::<M>())
             .finish()
     }
 }
@@ -228,7 +228,7 @@ where
             .field("inner", &self.inner)
             .field("header_name", &self.header_name)
             .field("mode", &self.mode)
-            .field("make", &std::any::type_name::<M>())
+            .field("make", &core::any::type_name::<M>())
             .finish()
     }
 }

@@ -76,7 +76,7 @@ async fn two_await() {
 #[cfg(target_pointer_width = "64")]
 fn join_size() {
     use futures::future;
-    use std::mem;
+    use core::mem;
 
     let fut = async {
         let ready = future::ready(0i32);
@@ -197,7 +197,7 @@ async fn futures_are_polled_in_order_in_biased_mode() {
 #[cfg(target_pointer_width = "64")]
 fn join_size_biased() {
     use futures::future;
-    use std::mem;
+    use core::mem;
 
     let fut = async {
         let ready = future::ready(0i32);
@@ -223,12 +223,12 @@ async fn empty_join() {
 #[tokio::test]
 async fn join_into_future() {
     struct NotAFuture;
-    impl std::future::IntoFuture for NotAFuture {
+    impl core::future::IntoFuture for NotAFuture {
         type Output = ();
-        type IntoFuture = std::future::Ready<()>;
+        type IntoFuture = core::future::Ready<()>;
 
         fn into_future(self) -> Self::IntoFuture {
-            std::future::ready(())
+            core::future::ready(())
         }
     }
 

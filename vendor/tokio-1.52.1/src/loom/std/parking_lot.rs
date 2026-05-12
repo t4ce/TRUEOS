@@ -3,9 +3,9 @@
 //!
 //! This can be extended to additional types/methods as required.
 
-use std::fmt;
-use std::marker::PhantomData;
-use std::ops::{Deref, DerefMut};
+use core::fmt;
+use core::marker::PhantomData;
+use core::ops::{Deref, DerefMut};
 use std::sync::{LockResult, TryLockError};
 use core::time::Duration;
 

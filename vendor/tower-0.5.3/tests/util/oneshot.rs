@@ -1,4 +1,4 @@
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 use std::{future::Future, pin::Pin};
 use tower::util::ServiceExt;
 use tower_service::Service;

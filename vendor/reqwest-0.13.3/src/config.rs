@@ -24,8 +24,8 @@
 //! specifying the associated value type. Then use [`RequestConfig<T>`] in [`Extensions`]
 //! to set or retrieve config values for each key type in a uniform way.
 
-use std::any::type_name;
-use std::fmt::Debug;
+use core::any::type_name;
+use core::fmt::Debug;
 use core::time::Duration;
 
 use http::Extensions;
@@ -57,7 +57,7 @@ where
     /// format request config value as struct field.
     ///
     /// We provide this API directly to avoid leak internal value to callers.
-    pub(crate) fn fmt_as_field(&self, f: &mut std::fmt::DebugStruct<'_, '_>) {
+    pub(crate) fn fmt_as_field(&self, f: &mut core::fmt::DebugStruct<'_, '_>) {
         if let Some(v) = &self.0 {
             f.field(type_name::<T>(), v);
         }

@@ -1,7 +1,7 @@
-use std::error::Error as StdError;
-use std::fmt;
+use core::error::Error as StdError;
+use core::fmt;
 use std::io;
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 
 use bytes::{BufMut, Bytes, BytesMut};
 use futures_core::ready;
@@ -655,7 +655,7 @@ fn decode_trailers(buf: &mut BytesMut, count: usize) -> Result<HeaderMap, io::Er
     match res {
         Ok(httparse::Status::Complete((_, headers))) => {
             for header in headers.iter() {
-                use std::convert::TryFrom;
+                use core::convert::TryFrom;
                 let name = match HeaderName::try_from(header.name) {
                     Ok(name) => name,
                     Err(_) => {
@@ -704,12 +704,12 @@ impl StdError for IncompleteBody {}
 mod tests {
     use super::*;
     use crate::rt::{Read, ReadBuf};
-    use std::pin::Pin;
+    use core::pin::Pin;
     use core::time::Duration;
 
     impl MemRead for &[u8] {
         fn read_mem(&mut self, _: &mut Context<'_>, len: usize) -> Poll<io::Result<Bytes>> {
-            let n = std::cmp::min(len, self.len());
+            let n = core::cmp::min(len, self.len());
             if n > 0 {
                 let (a, b) = self.split_at(n);
                 let buf = Bytes::copy_from_slice(a);
@@ -732,7 +732,7 @@ mod tests {
 
     impl MemRead for Bytes {
         fn read_mem(&mut self, _: &mut Context<'_>, len: usize) -> Poll<io::Result<Bytes>> {
-            let n = std::cmp::min(len, self.len());
+            let n = core::cmp::min(len, self.len());
             let ret = self.split_to(n);
             Poll::Ready(Ok(ret))
         }

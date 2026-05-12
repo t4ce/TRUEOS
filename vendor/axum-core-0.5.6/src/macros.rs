@@ -14,7 +14,7 @@ macro_rules! __log_rejection {
                 $crate::__private::tracing::Level::TRACE,
                 status = $status.as_u16(),
                 body = $body_text,
-                rejection_type = ::std::any::type_name::<$ty>(),
+                rejection_type = ::core::any::type_name::<$ty>(),
                 "rejecting request",
             );
         }
@@ -72,13 +72,13 @@ macro_rules! __define_rejection {
             }
         }
 
-        impl std::fmt::Display for $name {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        impl core::fmt::Display for $name {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 write!(f, "{}", $body)
             }
         }
 
-        impl std::error::Error for $name {}
+        impl core::error::Error for $name {}
 
         impl Default for $name {
             fn default() -> Self {
@@ -132,16 +132,16 @@ macro_rules! __define_rejection {
             }
         }
 
-        impl std::fmt::Display for $name {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        impl core::fmt::Display for $name {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 f.write_str($body)?;
                 f.write_str(": ")?;
                 self.0.fmt(f)
             }
         }
 
-        impl std::error::Error for $name {
-            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        impl core::error::Error for $name {
+            fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
                 Some(&self.0)
             }
         }
@@ -209,8 +209,8 @@ macro_rules! __composite_rejection {
             }
         )+
 
-        impl std::fmt::Display for $name {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        impl core::fmt::Display for $name {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 match self {
                     $(
                         Self::$variant(inner) => write!(f, "{inner}"),
@@ -219,8 +219,8 @@ macro_rules! __composite_rejection {
             }
         }
 
-        impl std::error::Error for $name {
-            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        impl core::error::Error for $name {
+            fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
                 match self {
                     $(
                         Self::$variant(inner) => inner.source(),
@@ -279,7 +279,7 @@ macro_rules! all_the_tuples_no_last_special_case {
 #[macro_export]
 macro_rules! __impl_deref {
     ($ident:ident) => {
-        impl<T> std::ops::Deref for $ident<T> {
+        impl<T> core::ops::Deref for $ident<T> {
             type Target = T;
 
             #[inline]
@@ -288,7 +288,7 @@ macro_rules! __impl_deref {
             }
         }
 
-        impl<T> std::ops::DerefMut for $ident<T> {
+        impl<T> core::ops::DerefMut for $ident<T> {
             #[inline]
             fn deref_mut(&mut self) -> &mut Self::Target {
                 &mut self.0
@@ -297,7 +297,7 @@ macro_rules! __impl_deref {
     };
 
     ($ident:ident: $ty:ty) => {
-        impl std::ops::Deref for $ident {
+        impl core::ops::Deref for $ident {
             type Target = $ty;
 
             #[inline]
@@ -306,7 +306,7 @@ macro_rules! __impl_deref {
             }
         }
 
-        impl std::ops::DerefMut for $ident {
+        impl core::ops::DerefMut for $ident {
             #[inline]
             fn deref_mut(&mut self) -> &mut Self::Target {
                 &mut self.0
@@ -319,7 +319,7 @@ macro_rules! __impl_deref {
 mod composite_rejection_tests {
     use self::defs::*;
     use crate::Error;
-    use std::error::Error as _;
+    use core::error::Error as _;
 
     #[allow(dead_code, unreachable_pub)]
     mod defs {

@@ -32,17 +32,17 @@ pin_project! {
     /// use http::{Request, Response};
     /// use bytes::Bytes;
     /// use http_body_util::Full;
-    /// use std::time::Duration;
+    /// use core::time::Duration;
     /// use tower::ServiceBuilder;
     /// use tower_http::timeout::RequestBodyTimeoutLayer;
     ///
-    /// async fn handle(_: Request<Full<Bytes>>) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
+    /// async fn handle(_: Request<Full<Bytes>>) -> Result<Response<Full<Bytes>>, core::convert::Infallible> {
     ///     // ...
     ///     # todo!()
     /// }
     ///
     /// # #[tokio::main]
-    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # async fn main() -> Result<(), Box<dyn core::error::Error>> {
     /// let svc = ServiceBuilder::new()
     ///     // Timeout bodies after 30 seconds of inactivity
     ///     .layer(RequestBodyTimeoutLayer::new(Duration::from_secs(30)))
@@ -76,7 +76,7 @@ where
     B::Error: Into<BoxError>,
 {
     type Data = B::Data;
-    type Error = Box<dyn std::error::Error + Send + Sync>;
+    type Error = Box<dyn core::error::Error + Send + Sync>;
 
     fn poll_frame(
         self: Pin<&mut Self>,
@@ -110,10 +110,10 @@ where
 #[derive(Debug)]
 pub struct TimeoutError(());
 
-impl std::error::Error for TimeoutError {}
+impl core::error::Error for TimeoutError {}
 
-impl std::fmt::Display for TimeoutError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for TimeoutError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "data was not received within the designated timeout")
     }
 }
@@ -133,7 +133,7 @@ mod tests {
     impl Error for MockError {}
 
     impl Display for MockError {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             write!(f, "mock error")
         }
     }

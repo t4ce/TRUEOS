@@ -2,7 +2,7 @@
 #![cfg(all(feature = "full", not(target_os = "wasi")))] // Wasi does not support panic recovery
 #![cfg(panic = "unwind")]
 
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 use std::{error::Error, pin::Pin};
 use tokio::io::{self, split, AsyncRead, AsyncWrite, ReadBuf};
 

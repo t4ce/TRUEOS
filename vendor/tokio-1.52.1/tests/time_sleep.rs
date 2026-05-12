@@ -2,8 +2,8 @@
 #![cfg(feature = "full")]
 #![cfg(not(miri))] // Too slow on Miri.
 
-use std::future::Future;
-use std::task::Context;
+use core::future::Future;
+use core::task::Context;
 
 use futures::task::noop_waker_ref;
 
@@ -191,7 +191,7 @@ async fn greater_than_max() {
 #[tokio::test]
 async fn short_sleeps() {
     for _ in 0..1000 {
-        tokio::time::sleep(std::time::Duration::from_millis(0)).await;
+        tokio::time::sleep(core::time::Duration::from_millis(0)).await;
     }
 }
 
@@ -236,7 +236,7 @@ async fn long_sleeps() {
 
 #[tokio::test]
 async fn reset_after_firing() {
-    let timer = tokio::time::sleep(std::time::Duration::from_millis(1));
+    let timer = tokio::time::sleep(core::time::Duration::from_millis(1));
     tokio::pin!(timer);
 
     let deadline = timer.deadline();
@@ -247,7 +247,7 @@ async fn reset_after_firing() {
         .poll(&mut Context::from_waker(noop_waker_ref())));
     timer
         .as_mut()
-        .reset(tokio::time::Instant::now() + std::time::Duration::from_secs(600));
+        .reset(tokio::time::Instant::now() + core::time::Duration::from_secs(600));
 
     assert_ne!(deadline, timer.deadline());
 
@@ -269,13 +269,13 @@ async fn exactly_max() {
 async fn issue_5183() {
     time::pause();
 
-    let big = std::time::Duration::from_secs(u64::MAX / 10);
+    let big = core::time::Duration::from_secs(u64::MAX / 10);
     // This is a workaround since awaiting sleep(big) will never finish.
     #[rustfmt::skip]
     tokio::select! {
 	biased;
         _ = tokio::time::sleep(big) => {}
-        _ = tokio::time::sleep(std::time::Duration::from_nanos(1)) => {}
+        _ = tokio::time::sleep(core::time::Duration::from_nanos(1)) => {}
     }
 }
 
@@ -313,11 +313,11 @@ async fn drop_after_reschedule_at_new_scheduled_time() {
 
 #[tokio::test]
 async fn drop_from_wake() {
-    use std::future::Future;
-    use std::pin::Pin;
+    use core::future::Future;
+    use core::pin::Pin;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
-    use std::task::Context;
+    use core::task::Context;
 
     let panicked = Arc::new(AtomicBool::new(false));
     let list: Arc<Mutex<Vec<Pin<Box<tokio::time::Sleep>>>>> = Arc::new(Mutex::new(Vec::new()));

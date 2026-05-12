@@ -38,9 +38,9 @@ pub mod iter {
 use smallvec::{Array, SmallVec};
 
 use alloc::vec::Vec;
-use std::convert::{From, Into};
+use core::convert::{From, Into};
 use core::fmt::{Debug, Formatter, Result as FmtResult};
-use std::iter::FromIterator;
+use core::iter::FromIterator;
 
 /// A `NibbleVec` backed by a `SmallVec` with 64 inline element slots.
 /// This will not allocate until more than 64 elements are added.

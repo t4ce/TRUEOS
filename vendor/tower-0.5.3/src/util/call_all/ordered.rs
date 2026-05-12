@@ -19,12 +19,12 @@ pin_project! {
     /// request received on the wrapped [`Stream`].
     ///
     /// ```rust
-    /// # use std::task::{Poll, Context};
-    /// # use std::cell::Cell;
-    /// # use std::error::Error;
+    /// # use core::task::{Poll, Context};
+    /// # use core::cell::Cell;
+    /// # use core::error::Error;
     /// # use std::rc::Rc;
     /// #
-    /// use std::future::{ready, Ready};
+    /// use core::future::{ready, Ready};
     /// use futures::StreamExt;
     /// use futures::channel::mpsc;
     /// use tower_service::Service;
@@ -144,7 +144,7 @@ where
     ///
     /// Panics if [`poll`] was called.
     ///
-    /// [`poll`]: std::future::Future::poll
+    /// [`poll`]: core::future::Future::poll
     pub fn unordered(self) -> super::CallAllUnordered<Svc, S> {
         self.inner.unordered()
     }

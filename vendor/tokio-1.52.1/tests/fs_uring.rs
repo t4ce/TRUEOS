@@ -10,8 +10,8 @@
 
 use futures::future::FutureExt;
 use std::sync::mpsc;
-use std::task::Poll;
-use std::time::Duration;
+use core::task::Poll;
+use core::time::Duration;
 use std::{future::poll_fn, path::PathBuf};
 use tempfile::NamedTempFile;
 use tokio::{

@@ -137,7 +137,7 @@ where
 mod tests {
     use std::os::unix::net::SocketAddr;
     use std::path::Path;
-    use std::str;
+    use core::str;
 
     use super::{path_offset, unix_addr};
 

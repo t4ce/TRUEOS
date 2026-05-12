@@ -3,11 +3,11 @@ use crate::runtime::io::{ReadyEvent, Registration};
 use crate::runtime::scheduler;
 
 use mio::unix::SourceFd;
-use std::error::Error;
-use std::fmt;
+use core::error::Error;
+use core::fmt;
 use std::io;
 use std::os::unix::io::{AsRawFd, RawFd};
-use std::task::{ready, Context, Poll};
+use core::task::{ready, Context, Poll};
 
 /// Associates an IO object backed by a Unix file descriptor with the tokio
 /// reactor, allowing for readiness to be polled. The file descriptor must be of
@@ -75,8 +75,8 @@ use std::task::{ready, Context, Poll};
 /// ```no_run
 /// use std::io::{self, Read, Write};
 /// use std::net::TcpStream;
-/// use std::pin::Pin;
-/// use std::task::{ready, Context, Poll};
+/// use core::pin::Pin;
+/// use core::task::{ready, Context, Poll};
 /// use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 /// use tokio::io::unix::AsyncFd;
 ///
@@ -369,9 +369,9 @@ impl<T: AsRawFd> AsyncFd<T> {
     /// [`poll_read_ready_mut`]: method@Self::poll_read_ready_mut
     /// [`poll_write_ready`]: method@Self::poll_write_ready
     /// [`readable`]: method@Self::readable
-    /// [`Context`]: struct@std::task::Context
-    /// [`Waker`]: struct@std::task::Waker
-    /// [`Waker::wake`]: method@std::task::Waker::wake
+    /// [`Context`]: struct@core::task::Context
+    /// [`Waker`]: struct@core::task::Waker
+    /// [`Waker::wake`]: method@core::task::Waker::wake
     pub fn poll_read_ready<'a>(
         &'a self,
         cx: &mut Context<'_>,
@@ -406,9 +406,9 @@ impl<T: AsRawFd> AsyncFd<T> {
     /// [`poll_read_ready_mut`]: method@Self::poll_read_ready_mut
     /// [`poll_write_ready`]: method@Self::poll_write_ready
     /// [`readable`]: method@Self::readable
-    /// [`Context`]: struct@std::task::Context
-    /// [`Waker`]: struct@std::task::Waker
-    /// [`Waker::wake`]: method@std::task::Waker::wake
+    /// [`Context`]: struct@core::task::Context
+    /// [`Waker`]: struct@core::task::Waker
+    /// [`Waker::wake`]: method@core::task::Waker::wake
     pub fn poll_read_ready_mut<'a>(
         &'a mut self,
         cx: &mut Context<'_>,
@@ -445,9 +445,9 @@ impl<T: AsRawFd> AsyncFd<T> {
     /// [`poll_write_ready`]: method@Self::poll_write_ready
     /// [`poll_write_ready_mut`]: method@Self::poll_write_ready_mut
     /// [`writable`]: method@Self::readable
-    /// [`Context`]: struct@std::task::Context
-    /// [`Waker`]: struct@std::task::Waker
-    /// [`Waker::wake`]: method@std::task::Waker::wake
+    /// [`Context`]: struct@core::task::Context
+    /// [`Waker`]: struct@core::task::Waker
+    /// [`Waker::wake`]: method@core::task::Waker::wake
     pub fn poll_write_ready<'a>(
         &'a self,
         cx: &mut Context<'_>,
@@ -482,9 +482,9 @@ impl<T: AsRawFd> AsyncFd<T> {
     /// [`poll_write_ready`]: method@Self::poll_write_ready
     /// [`poll_write_ready_mut`]: method@Self::poll_write_ready_mut
     /// [`writable`]: method@Self::readable
-    /// [`Context`]: struct@std::task::Context
-    /// [`Waker`]: struct@std::task::Waker
-    /// [`Waker::wake`]: method@std::task::Waker::wake
+    /// [`Context`]: struct@core::task::Context
+    /// [`Waker`]: struct@core::task::Waker
+    /// [`Waker::wake`]: method@core::task::Waker::wake
     pub fn poll_write_ready_mut<'a>(
         &'a mut self,
         cx: &mut Context<'_>,
@@ -527,7 +527,7 @@ impl<T: AsRawFd> AsyncFd<T> {
     /// splitting.
     ///
     /// ```no_run
-    /// use std::error::Error;
+    /// use core::error::Error;
     /// use std::io;
     /// use std::io::{Read, Write};
     /// use std::net::TcpStream;
@@ -623,7 +623,7 @@ impl<T: AsRawFd> AsyncFd<T> {
     /// splitting.
     ///
     /// ```no_run
-    /// use std::error::Error;
+    /// use core::error::Error;
     /// use std::io;
     /// use std::io::{Read, Write};
     /// use std::net::TcpStream;
@@ -936,8 +936,8 @@ impl<T: AsRawFd> std::os::unix::io::AsFd for AsyncFd<T> {
     }
 }
 
-impl<T: std::fmt::Debug + AsRawFd> std::fmt::Debug for AsyncFd<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<T: core::fmt::Debug + AsRawFd> core::fmt::Debug for AsyncFd<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("AsyncFd")
             .field("inner", &self.inner)
             .finish()
@@ -996,7 +996,7 @@ impl<'a, Inner: AsRawFd> AsyncFdReadyGuard<'a, Inner> {
     /// splitting.
     ///
     /// ```no_run
-    /// use std::error::Error;
+    /// use core::error::Error;
     /// use std::io;
     /// use std::io::{Read, Write};
     /// use std::net::TcpStream;
@@ -1220,7 +1220,7 @@ impl<'a, Inner: AsRawFd> AsyncFdReadyMutGuard<'a, Inner> {
     /// splitting.
     ///
     /// ```no_run
-    /// use std::error::Error;
+    /// use core::error::Error;
     /// use std::io;
     /// use std::io::{Read, Write};
     /// use std::net::TcpStream;
@@ -1369,16 +1369,16 @@ impl<'a, Inner: AsRawFd> AsyncFdReadyMutGuard<'a, Inner> {
     }
 }
 
-impl<'a, T: std::fmt::Debug + AsRawFd> std::fmt::Debug for AsyncFdReadyGuard<'a, T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<'a, T: core::fmt::Debug + AsRawFd> core::fmt::Debug for AsyncFdReadyGuard<'a, T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ReadyGuard")
             .field("async_fd", &self.async_fd)
             .finish()
     }
 }
 
-impl<'a, T: std::fmt::Debug + AsRawFd> std::fmt::Debug for AsyncFdReadyMutGuard<'a, T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<'a, T: core::fmt::Debug + AsRawFd> core::fmt::Debug for AsyncFdReadyMutGuard<'a, T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("MutReadyGuard")
             .field("async_fd", &self.async_fd)
             .finish()

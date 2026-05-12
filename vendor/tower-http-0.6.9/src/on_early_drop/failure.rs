@@ -3,7 +3,7 @@
 //! [`EarlyDropsAsFailures`]: super::EarlyDropsAsFailures
 
 use http::StatusCode;
-use std::fmt;
+use core::fmt;
 
 /// Classification for early-drop events reported through
 /// [`EarlyDropsAsFailures`].
@@ -11,7 +11,7 @@ use std::fmt;
 /// # Example
 ///
 /// ```
-/// use std::time::Duration;
+/// use core::time::Duration;
 /// use tower_http::on_early_drop::DroppedFailure;
 /// use tower_http::trace::OnFailure;
 /// use tracing::Span;

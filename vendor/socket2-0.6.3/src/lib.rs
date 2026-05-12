@@ -164,11 +164,11 @@ pub mod slice {
 #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
 use std::io::IoSlice;
 #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
-use std::marker::PhantomData;
+use core::marker::PhantomData;
 #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
-use std::mem::MaybeUninit;
+use core::mem::MaybeUninit;
 use std::net::SocketAddr;
-use std::ops::{Deref, DerefMut};
+use core::ops::{Deref, DerefMut};
 use core::time::Duration;
 
 /// Macro to implement `fmt::Debug` for a type, printing the constant names
@@ -188,8 +188,8 @@ macro_rules! impl_debug {
             $libc: ident :: $flag: ident
         ),+ $(,)*
     ) => {
-        impl std::fmt::Debug for $type {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        impl core::fmt::Debug for $type {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 let string = match self.0 {
                     $(
                         $(#[$target])*

@@ -120,7 +120,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::convert::Infallible;
+    use core::convert::Infallible;
 
     use bytes::Bytes;
     use http::{HeaderName, HeaderValue};
@@ -139,7 +139,7 @@ mod tests {
         );
 
         let body =
-            Full::<Bytes>::from("hello").with_trailers(std::future::ready(Some(
+            Full::<Bytes>::from("hello").with_trailers(core::future::ready(Some(
                 Ok::<_, Infallible>(trailers.clone()),
             )));
 
@@ -179,10 +179,10 @@ mod tests {
         );
 
         let body = Empty::<Bytes>::new()
-            .with_trailers(std::future::ready(Some(Ok::<_, Infallible>(
+            .with_trailers(core::future::ready(Some(Ok::<_, Infallible>(
                 trailers_1.clone(),
             ))))
-            .with_trailers(std::future::ready(Some(Ok::<_, Infallible>(
+            .with_trailers(core::future::ready(Some(Ok::<_, Infallible>(
                 trailers_2.clone(),
             ))));
 

@@ -12,11 +12,11 @@ use crate::io::{AsyncRead, AsyncWrite, Interest, ReadBuf, Ready};
 use crate::net::UnixStream;
 
 use crate::net::unix::SocketAddr;
-use std::error::Error;
+use core::error::Error;
 use std::net::Shutdown;
-use std::pin::Pin;
+use core::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 use std::{fmt, io};
 
 cfg_io_util! {

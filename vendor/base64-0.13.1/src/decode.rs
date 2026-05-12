@@ -6,7 +6,7 @@ use crate::STANDARD;
 use alloc::vec::Vec;
 use core::fmt;
 #[cfg(any(feature = "std", test))]
-use std::error;
+use core::error;
 
 // decode logic operates on chunks of 8 input bytes without padding
 const INPUT_CHUNK_LEN: usize = 8;

@@ -6,12 +6,12 @@
 
 use crate::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-use std::fmt;
+use core::fmt;
 use std::io;
-use std::pin::Pin;
+use core::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 
 cfg_io_util! {
     /// The readable half of a value returned from [`split`](split()).

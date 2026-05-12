@@ -1,7 +1,7 @@
 #![warn(rust_2018_idioms)]
 #![cfg(all(feature = "full", not(target_os = "wasi")))] // Wasi does not support bind()
 
-use std::time::Duration;
+use core::time::Duration;
 use tokio::io::{self, copy_bidirectional, AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::task::JoinHandle;
@@ -38,7 +38,7 @@ async fn block_write(s: &mut TcpStream) -> usize {
 async fn symmetric<F, Fut>(mut cb: F)
 where
     F: FnMut(JoinHandle<io::Result<(u64, u64)>>, TcpStream, TcpStream) -> Fut,
-    Fut: std::future::Future<Output = ()>,
+    Fut: core::future::Future<Output = ()>,
 {
     // We run the test twice, with streams passed to copy_bidirectional in
     // different orders, in order to ensure that the two arguments are
