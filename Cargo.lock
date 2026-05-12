@@ -52,7 +52,7 @@ dependencies = [
  "sha2",
  "smoltcp",
  "socket2",
- "spin 0.10.0",
+ "spin",
  "tiny-skia-path",
  "tokio",
  "tower",
@@ -472,7 +472,7 @@ dependencies = [
  "mbarrier",
  "nb",
  "num_enum",
- "spin 0.10.0",
+ "spin",
  "thiserror",
  "tock-registers",
  "trait-ffi",
@@ -726,7 +726,7 @@ dependencies = [
  "cfg-if",
  "log",
  "mbarrier",
- "spin 0.10.0",
+ "spin",
 ]
 
 [[package]]
@@ -1487,10 +1487,8 @@ dependencies = [
 [[package]]
 name = "lazy_static"
 version = "1.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 dependencies = [
- "spin 0.9.8",
+ "spin",
 ]
 
 [[package]]
@@ -1690,7 +1688,7 @@ version = "1.2.0"
 dependencies = [
  "core3",
  "libc",
- "spin 0.10.0",
+ "spin",
  "trueos-io",
  "wasi",
  "windows-sys 0.61.2",
@@ -2530,16 +2528,10 @@ version = "0.6.3"
 dependencies = [
  "core3",
  "libc",
- "spin 0.10.0",
+ "spin",
  "trueos-io",
  "windows-sys 0.61.2",
 ]
-
-[[package]]
-name = "spin"
-version = "0.9.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
 
 [[package]]
 name = "spin"
@@ -2720,7 +2712,7 @@ dependencies = [
  "pin-project-lite",
  "signal-hook-registry",
  "socket2",
- "spin 0.10.0",
+ "spin",
  "tokio-macros",
  "trueos-io",
  "windows-sys 0.61.2",
@@ -2925,7 +2917,7 @@ dependencies = [
  "embassy-time-driver",
  "libm",
  "parry2d",
- "spin 0.10.0",
+ "spin",
  "trueos-gfx-core",
  "trueos-locale",
  "trueos-math",
@@ -3048,7 +3040,7 @@ dependencies = [
  "futures",
  "log",
  "num_enum",
- "spin 0.10.0",
+ "spin",
  "thiserror",
 ]
 
@@ -3082,7 +3074,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
- "spin 0.10.0",
+ "spin",
  "trueos-sys",
 ]
 
