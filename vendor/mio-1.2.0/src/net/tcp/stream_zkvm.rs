@@ -2,7 +2,7 @@
 
 use core::fmt;
 use core::net::SocketAddr;
-use trueos_io::{self as io, Read, Write};
+use trueos_io::{self as io, IoSlice, IoSliceMut, Read, Write};
 
 use crate::zkvm_net::Socket;
 use crate::{event, Interest, Registry, Token};
@@ -23,9 +23,8 @@ impl TcpStream {
         TcpStream { inner }
     }
 
-    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-    pub fn from_std(_: std::net::TcpStream) -> TcpStream {
-        panic!("mio zkvm backend cannot wrap std::net::TcpStream yet")
+    pub fn from_std(stream: std::net::TcpStream) -> TcpStream {
+        stream
     }
 
     pub fn peer_addr(&self) -> io::Result<SocketAddr> {
@@ -78,6 +77,22 @@ impl TcpStream {
         F: FnOnce() -> io::Result<T>,
     {
         f()
+    }
+
+    pub fn read_vectored(&self, bufs: &mut [IoSliceMut<'_>]) -> io::Result<usize> {
+        if let Some(buf) = bufs.iter_mut().find(|buf| !buf.is_empty()) {
+            self.inner.read(buf)
+        } else {
+            Ok(0)
+        }
+    }
+
+    pub fn write_vectored(&self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
+        if let Some(buf) = bufs.iter().find(|buf| !buf.is_empty()) {
+            self.inner.write(buf)
+        } else {
+            Ok(0)
+        }
     }
 }
 

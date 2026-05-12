@@ -242,11 +242,19 @@ impl TcpListener {
     /// explicitly with [`Runtime::enter`](crate::runtime::Runtime::enter) function.
     #[track_caller]
     pub fn from_std(listener: net::TcpListener) -> io::Result<TcpListener> {
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        {
+            return Ok(listener);
+        }
+
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+        {
         check_socket_for_blocking(&listener)?;
 
         let io = mio::net::TcpListener::from_std(listener);
         let io = PollEvented::new(io)?;
         Ok(TcpListener { io })
+        }
     }
 
     /// Turns a [`tokio::net::TcpListener`] into a [`std::net::TcpListener`].
@@ -302,7 +310,7 @@ impl TcpListener {
         #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         {
             Err(io::Error::new(
-                io::ErrorKind::Unsupported,
+                io::ErrorKind::Other,
                 "tokio zkvm TcpListener::into_std is not backed by raw fds",
             ))
         }
