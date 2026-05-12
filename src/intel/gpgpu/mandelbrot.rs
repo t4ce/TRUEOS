@@ -494,6 +494,8 @@ fn submit_gpgpu_primary_scanout_mandelbrot_strip(
         "mandelbrot16-program-changed"
     } else if !finished {
         "submit-not-finished"
+    } else if dispatch_delta == 0 {
+        "mandelbrot16-no-eu-dispatch"
     } else if hits == 0 {
         "mandelbrot16-program-unchanged"
     } else {
