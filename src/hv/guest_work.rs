@@ -83,7 +83,7 @@ pub struct VmLaneTarget {
     pub slot: u32,
     pub core_kind: u8,
     pub spawner: SendSpawner,
-    pub lease: crate::r::lane::LaneLease,
+    pub lease: crate::hv::lane::LaneLease,
 }
 
 impl VmLaneTarget {
@@ -128,11 +128,11 @@ pub type GuestWorkProfile = VmLaneProfile;
 pub type GuestWorkTarget = VmLaneTarget;
 
 pub fn select_vm_lane_target(profile: VmLaneProfile) -> Result<VmLaneTarget, VmLanePickError> {
-    let target = crate::r::lane::pick_carrier_lane(crate::r::lane::LaneProfile {
+    let target = crate::hv::lane::pick_carrier_lane(crate::hv::lane::LaneProfile {
         role: match profile.role {
-            VmLaneRole::VmHull => crate::r::lane::LaneRole::VmHull,
-            VmLaneRole::TokioBlocking => crate::r::lane::LaneRole::TokioBlocking,
-            VmLaneRole::Worker => crate::r::lane::LaneRole::Worker,
+            VmLaneRole::VmHull => crate::hv::lane::LaneRole::VmHull,
+            VmLaneRole::TokioBlocking => crate::hv::lane::LaneRole::TokioBlocking,
+            VmLaneRole::Worker => crate::hv::lane::LaneRole::Worker,
         },
         placement: profile.placement,
     })
@@ -166,12 +166,12 @@ pub fn pick_guest_work_target(profile: GuestWorkProfile) -> Option<GuestWorkTarg
     pick_vm_lane_target(profile)
 }
 
-fn map_lane_pick_error(error: crate::r::lane::LanePickError) -> VmLanePickError {
+fn map_lane_pick_error(error: crate::hv::lane::LanePickError) -> VmLanePickError {
     match error {
-        crate::r::lane::LanePickError::MissingWorkerLane => VmLanePickError::MissingWorkerLane,
-        crate::r::lane::LanePickError::MissingReservedVmLane => {
+        crate::hv::lane::LanePickError::MissingWorkerLane => VmLanePickError::MissingWorkerLane,
+        crate::hv::lane::LanePickError::MissingReservedVmLane => {
             VmLanePickError::MissingReservedVmLane
         }
-        crate::r::lane::LanePickError::Busy => VmLanePickError::Busy,
+        crate::hv::lane::LanePickError::Busy => VmLanePickError::Busy,
     }
 }

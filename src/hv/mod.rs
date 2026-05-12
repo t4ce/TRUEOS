@@ -4,6 +4,7 @@ pub mod blueprint_net;
 pub mod guest_run;
 pub mod guest_work;
 pub mod hv_remote_restore_service;
+pub mod lane;
 pub mod memory;
 pub mod security;
 pub mod snapshot;
@@ -1761,7 +1762,7 @@ impl LineageRecord {
 }
 
 #[task(pool_size = 32)]
-async fn vm_task(vm_id: u8, _lane_lease: crate::r::lane::LaneLease) {
+async fn vm_task(vm_id: u8, _lane_lease: crate::hv::lane::LaneLease) {
     let Some(vm) = vm_slot(vm_id) else {
         return;
     };

@@ -284,6 +284,92 @@ impl WaitQueue {
     }
 }
 
+/// Completion cell for TRUEOS scheduled work.
+///
+/// This is the kernel-side join primitive: spawned work writes exactly one
+/// result, and joiners await or poll that result. Dropping a handle is detach;
+/// the scheduled work keeps running and any unobserved result is simply dropped.
+pub struct CompletionCell<T> {
+    value: Mutex<Option<T>>,
+    wait: WaitQueue,
+}
+
+impl<T> CompletionCell<T> {
+    pub const fn new() -> Self {
+        Self {
+            value: Mutex::new(None),
+            wait: WaitQueue::new(),
+        }
+    }
+
+    pub fn complete(&self, value: T) -> Result<(), T> {
+        let mut slot = self.value.lock();
+        if slot.is_some() {
+            return Err(value);
+        }
+        *slot = Some(value);
+        drop(slot);
+        self.wait.notify_all();
+        Ok(())
+    }
+
+    pub fn try_take(&self) -> Option<T> {
+        self.value.lock().take()
+    }
+
+    pub fn poll_take(&self, cx: &mut Context<'_>) -> Poll<T> {
+        if let Some(value) = self.try_take() {
+            return Poll::Ready(value);
+        }
+
+        {
+            let mut wakers = self.wait.wakers.lock();
+            register_waker_list(&mut wakers, cx.waker());
+        }
+
+        if let Some(value) = self.try_take() {
+            return Poll::Ready(value);
+        }
+
+        Poll::Pending
+    }
+
+    pub async fn join(&self) -> T {
+        core::future::poll_fn(|cx| self.poll_take(cx)).await
+    }
+
+    pub fn join_blocking(&self) -> T {
+        loop {
+            if let Some(value) = self.try_take() {
+                return value;
+            }
+            self.wait.wait_for_event_blocking(0);
+        }
+    }
+}
+
+pub struct LocalJoinHandle<T> {
+    completion: Arc<CompletionCell<T>>,
+}
+
+impl<T> Unpin for LocalJoinHandle<T> {}
+
+impl<T> LocalJoinHandle<T> {
+    pub fn detach(self) {}
+
+    pub fn join_blocking(self) -> T {
+        self.completion.join_blocking()
+    }
+}
+
+impl<T> Future for LocalJoinHandle<T> {
+    type Output = T;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.get_mut().completion.poll_take(cx)
+    }
+}
+
 type JobFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
 type LocalJobFuture = Pin<Box<dyn Future<Output = ()> + 'static>>;
 
@@ -341,7 +427,10 @@ fn enqueue_local_job(job: LocalJobFuture) {
     JOBS_WAIT.notify_one();
 }
 
-/// Enqueue a non-Send future to run on the local executor without waiting.
+/// Enqueue a non-Send future to run on the local executor without observation.
+///
+/// Detached here means no completion cell is created. It is unrelated to
+/// `pthread_detach`; the queued future still runs to completion.
 pub fn spawn_local_detached<F>(fut: F)
 where
     F: Future<Output = ()> + 'static,
@@ -349,9 +438,21 @@ where
     enqueue_local_job(Box::pin(fut));
 }
 
-struct WaitState<T> {
-    value: Mutex<Option<T>>,
-    wait: WaitQueue,
+/// Enqueue a non-Send future and return a handle that observes completion.
+pub fn spawn_local_join<F, T>(fut: F) -> LocalJoinHandle<T>
+where
+    F: Future<Output = T> + 'static,
+    T: 'static,
+{
+    let completion = Arc::new(CompletionCell::new());
+    let producer = completion.clone();
+
+    enqueue_local_job(Box::pin(async move {
+        let out = fut.await;
+        let _ = producer.complete(out);
+    }));
+
+    LocalJoinHandle { completion }
 }
 
 /// Run a future on the async executor and wait synchronously for its result.
@@ -362,22 +463,5 @@ where
     F: Future<Output = T> + 'static,
     T: 'static,
 {
-    let state = Arc::new(WaitState {
-        value: Mutex::new(None),
-        wait: WaitQueue::new(),
-    });
-    let state_task = state.clone();
-
-    enqueue_local_job(Box::pin(async move {
-        let out = fut.await;
-        *state_task.value.lock() = Some(out);
-        state_task.wait.notify_all();
-    }));
-
-    loop {
-        if let Some(out) = state.value.lock().take() {
-            return out;
-        }
-        state.wait.wait_for_event_blocking(0);
-    }
+    spawn_local_join(fut).join_blocking()
 }
