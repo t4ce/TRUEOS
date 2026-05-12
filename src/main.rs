@@ -75,6 +75,7 @@ mod stackkeeper;
 mod t;
 mod tga;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[path = "t/th/mod.rs"]
 mod th;
 #[path = "tst/boot_factory_ram_probe.rs"]
 mod tst_boot_factory_ram_probe;
@@ -100,7 +101,7 @@ mod tst_chatserver {
 mod tst_fileexplorer_axum;
 #[path = "tst/html_demo.rs"]
 mod tst_html_demo;
-#[path = "tst/html_shack.rs"]
+#[path = "surfer/html_shack.rs"]
 mod tst_html_shack;
 #[path = "tst/http_trueosfs.rs"]
 mod tst_http_trueosfs;
@@ -143,7 +144,7 @@ mod tst_ws_time;
 #[path = "power/turbo.rs"]
 mod turbo;
 #[cfg(not(target_arch = "x86_64"))]
-#[path = "power/turbo_disabled.rs"]
+#[path = "turbo_disabled.rs"]
 mod turbo;
 mod usb2;
 mod wait;

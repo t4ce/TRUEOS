@@ -346,8 +346,7 @@ fn submit_gpgpu_primary_scanout_mandelbrot_strip(
     let mut strip_words =
         trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_ESCAPE_HDC1_BTI1_STORE_THEN_TS_EOT_WORDS;
     let x_step_dwords = trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_X_STEP_DWORDS;
-    let c_re_base_dwords =
-        trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_C_RE_BASE_DWORDS;
+    let c_re_base_dwords = trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_C_RE_BASE_DWORDS;
     let address_offset_dwords =
         trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_ADDRESS_OFFSET_DWORDS;
     for strip in 0..trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_STRIPS_PER_PROGRAM {
