@@ -324,6 +324,8 @@ fn submit_gpgpu_primary_scanout_mandelbrot_strip(
     phase: usize,
 ) -> crate::intel::GpgpuOneTileSentinelProof {
     const LANES: usize = trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_LANES;
+    const PIXELS_PER_PROGRAM: usize =
+        trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_PIXELS_PER_PROGRAM;
 
     if row_gpu >> 32 != 0 {
         return gpgpu_one_tile_sentinel_failure("strip-gpu-high32-unsupported", program, row_gpu);
@@ -332,10 +334,10 @@ fn submit_gpgpu_primary_scanout_mandelbrot_strip(
     let x_step_q12 = mandelbrot_q12_x_step(width);
     let c_re_base_q12 = mandelbrot_q12_c_re_base(x_base, width);
     let c_im_q12 = mandelbrot_q12_c_im(y, height);
-    crate::intel::dma_flush(row_virt, LANES * core::mem::size_of::<u32>());
-    let mut before_words = [0u32; LANES];
+    crate::intel::dma_flush(row_virt, PIXELS_PER_PROGRAM * core::mem::size_of::<u32>());
+    let mut before_words = [0u32; PIXELS_PER_PROGRAM];
     let mut lane = 0usize;
-    while lane < LANES {
+    while lane < PIXELS_PER_PROGRAM {
         before_words[lane] = unsafe {
             core::ptr::read_volatile(row_virt.add(lane * core::mem::size_of::<u32>()) as *const u32)
         };
@@ -363,7 +365,7 @@ fn submit_gpgpu_primary_scanout_mandelbrot_strip(
         let c_re_base_dword = c_re_base_dwords[0];
         let address_offset_dword = address_offset_dwords[0];
         crate::log!(
-            "intel/gpgpu: primary-scanout-mandelbrot8-patch row_gpu=0x{:X} row_virt=0x{:X} row={} x_base={} width={} height={} phase={} addressing=simd8-lane-derived-stateless-absolute-g127 q12_frac_bits={} max_iter={} store_surface=0x{:02X} x_step_q12={} c_re_base_q12={} c_im_q12={} x_step_dword={} c_re_base_dword={} c_im_dword={} address_offset_dword={} address_offset=0x{:X} first_before=0x{:08X} send_desc=0x{:08X} send_exdesc=0x{:08X} kernel_off=0x{:X} artifact_bytes=0x{:X} artifact_end_off=0x{:X} dynamic_state_off=0x{:X} note=uniform-setup-patched-eu-words-before-upload\n",
+            "intel/gpgpu: primary-scanout-mandelbrot16-patch row_gpu=0x{:X} row_virt=0x{:X} row={} x_base={} width={} height={} phase={} addressing=simd8x2-lane-derived-stateless-absolute-g127 q12_frac_bits={} max_iter={} store_surface=0x{:02X} lanes_per_send={} sends_per_program={} pixels_per_program={} x_step_q12={} c_re_base_q12={} c_im_q12={} x_step_dword={} c_re_base_dword={} c_im_dword={} address_offset_dword={} address_offset=0x{:X} first_before=0x{:08X} send_desc=0x{:08X} send_exdesc=0x{:08X} kernel_off=0x{:X} artifact_bytes=0x{:X} artifact_end_off=0x{:X} dynamic_state_off=0x{:X} note=uniform-setup-patched-eu-words-before-upload\n",
             row_gpu,
             row_virt as usize,
             y,
@@ -374,6 +376,9 @@ fn submit_gpgpu_primary_scanout_mandelbrot_strip(
             trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_FRAC_BITS,
             trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_MAX_ITER,
             trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_STORE_SURFACE,
+            LANES,
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_STRIPS_PER_PROGRAM,
+            PIXELS_PER_PROGRAM,
             x_step_q12,
             c_re_base_q12,
             c_im_q12,
@@ -441,10 +446,10 @@ fn submit_gpgpu_primary_scanout_mandelbrot_strip(
     let mut readback_poll = 0usize;
     let mut output_first_after = output_first_before;
     while readback_poll < readback_poll_limit {
-        crate::intel::dma_flush(row_virt, LANES * core::mem::size_of::<u32>());
+        crate::intel::dma_flush(row_virt, PIXELS_PER_PROGRAM * core::mem::size_of::<u32>());
         hits = 0;
         let mut lane = 0usize;
-        while lane < LANES {
+        while lane < PIXELS_PER_PROGRAM {
             let after = unsafe {
                 core::ptr::read_volatile(
                     row_virt.add(lane * core::mem::size_of::<u32>()) as *const u32
@@ -470,13 +475,13 @@ fn submit_gpgpu_primary_scanout_mandelbrot_strip(
     let finish_marker = read_result_dword(warm, RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD);
     let readback_ok = finished && finish_marker == RCS_EXEC_RESULT_COMPUTE_WALKER_DONE && hits != 0;
     let reason = if readback_ok {
-        "mandelbrot8-strip-changed"
+        "mandelbrot16-program-changed"
     } else if !finished {
         "submit-not-finished"
     } else if hits == 0 {
-        "mandelbrot8-strip-unchanged"
+        "mandelbrot16-program-unchanged"
     } else {
-        "mandelbrot8-strip-partial"
+        "mandelbrot16-program-partial"
     };
     if !finished {
         recover_render_engine_after_nonretired_submit(
@@ -513,7 +518,8 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot_preview(
     const PREVIEW_Y: u32 = 0;
     const ROW_INTERLACE: usize = 16;
     const STRIP_BURST_MAX: usize = 64;
-    const LANES: usize = trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_LANES;
+    const PIXELS_PER_PROGRAM: usize =
+        trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_PIXELS_PER_PROGRAM;
 
     let program = gpgpu_primary_scanout_mandelbrot8_program();
     let Some(dev) = crate::intel::claimed_device() else {
@@ -536,9 +542,9 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot_preview(
     let block_y = core::cmp::min(PREVIEW_Y, target.height.saturating_sub(1));
     let block_w = target.width.saturating_sub(block_x) as usize;
     let block_h = target.height.saturating_sub(block_y) as usize;
-    let strips_per_row = block_w / LANES;
+    let strips_per_row = block_w / PIXELS_PER_PROGRAM;
     let total_strips = strips_per_row.saturating_mul(block_h);
-    if total_strips == 0 || pixel_budget < LANES {
+    if total_strips == 0 || pixel_budget < PIXELS_PER_PROGRAM {
         return (
             gpgpu_one_tile_sentinel_failure("empty-preview-strip-block", program, target.gpu),
             cursor,
@@ -549,7 +555,8 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot_preview(
     let phase = cursor / total_strips;
     let mut last_proof =
         gpgpu_one_tile_sentinel_failure_quiet("no-preview-strips-submitted", program, target.gpu);
-    let strip_budget = core::cmp::min(core::cmp::max(1, pixel_budget / LANES), STRIP_BURST_MAX);
+    let strip_budget =
+        core::cmp::min(core::cmp::max(1, pixel_budget / PIXELS_PER_PROGRAM), STRIP_BURST_MAX);
     let mut submitted_strips = 0usize;
     let mut finished_strips = 0usize;
     let mut accepted_strips = 0usize;
@@ -566,10 +573,12 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot_preview(
         } else {
             logical_row
         };
-        let px = strip_x * LANES;
+        let px = strip_x * PIXELS_PER_PROGRAM;
         let byte_offset = ((block_y as usize + py) * target.pitch_bytes as usize)
             + ((block_x as usize + px).saturating_mul(core::mem::size_of::<u32>()));
-        if byte_offset.saturating_add(LANES * core::mem::size_of::<u32>()) > target.byte_len {
+        if byte_offset.saturating_add(PIXELS_PER_PROGRAM * core::mem::size_of::<u32>())
+            > target.byte_len
+        {
             last_proof = gpgpu_one_tile_sentinel_failure(
                 "preview-strip-outside-scanout",
                 program,
@@ -634,13 +643,13 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot_preview(
         (accepted_strips != 0 && (start_cursor == 0 || next_cursor == 0)) || !last_proof.finished;
     if should_log_preview {
         crate::log!(
-            "intel/gpgpu: primary-scanout-mandelbrot8-preview submitted_strips={} finished_strips={} changed_strips={} lanes_per_strip={} submitted_pixels={} changed_pixels={} strict_readback_ok={} reason={} program_source={} primary_gpu=0x{:X} primary_bytes=0x{:X} cursor_in={} cursor_out={} strip_budget={} burst_cap={} last_gpu=0x{:X} last_first_before=0x{:08X} last_first_after=0x{:08X} last_change_mask=0x{:016X} display_notified={} finish_marker=0x{:08X} finish_expected=0x{:08X} action={} next={} deliverable=visible-mandelbrot-frame-progress\n",
+            "intel/gpgpu: primary-scanout-mandelbrot16-preview submitted_programs={} finished_programs={} changed_programs={} pixels_per_program={} submitted_pixels={} changed_pixels={} strict_readback_ok={} reason={} program_source={} primary_gpu=0x{:X} primary_bytes=0x{:X} cursor_in={} cursor_out={} strip_budget={} burst_cap={} last_gpu=0x{:X} last_first_before=0x{:08X} last_first_after=0x{:08X} last_change_mask=0x{:016X} display_notified={} finish_marker=0x{:08X} finish_expected=0x{:08X} action={} next={} deliverable=visible-mandelbrot-frame-progress\n",
             submitted_strips,
             finished_strips,
             accepted_strips,
-            LANES,
-            submitted_strips.saturating_mul(LANES),
-            accepted_strips.saturating_mul(LANES),
+            PIXELS_PER_PROGRAM,
+            submitted_strips.saturating_mul(PIXELS_PER_PROGRAM),
+            accepted_strips.saturating_mul(PIXELS_PER_PROGRAM),
             readback_ok as u8,
             last_proof.reason,
             program.name,

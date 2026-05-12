@@ -961,10 +961,10 @@ pub static PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_COLOR_HDC1_STATELESS_STORE_TH
     expects_store: true,
 };
 
-// Mandelbrot sidequest q12 escape-count artifact. This uses the same compact stateless
-// HDC surface-write suffix proven by the T2/T3 ladder: the CPU patches one
-// absolute primary-scanout GPU address per 8-pixel strip, while the EU computes
-// all eight escape-count colors and lane-derived byte offsets.
+// Mandelbrot sidequest q12 escape-count artifact. This uses the same compact
+// stateless HDC surface-write suffix proven by the T2/T3 ladder: the CPU patches
+// one absolute primary-scanout GPU address per 16-pixel program, while the EU
+// computes two contiguous SIMD8 escape-count strips and lane-derived byte offsets.
 pub const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_PROGRAM_NAME: &str =
     "gfx12-primary-scanout-mandelbrot16-simd8x2-q12i8-quiet-stateless-g127-store-then-ts-eot";
 pub const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_LANES: usize = 8;
