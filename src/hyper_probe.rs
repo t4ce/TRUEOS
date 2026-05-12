@@ -2,12 +2,10 @@
 //!
 //! This lets the kernel own a first-class Hyper dependency directly beside
 
-extern crate std;
-
 use core::convert::Infallible;
 use core::pin::Pin;
 use core::task::{Context, Poll};
-use std::io;
+use crate::r::std::io;
 
 use hyper::body::{Body, Bytes, Frame, SizeHint};
 use hyper::rt::{Read, ReadBufCursor, Write};

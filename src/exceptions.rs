@@ -1,4 +1,5 @@
 use core::fmt;
+use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use heapless::Vec;
@@ -81,6 +82,36 @@ fn enter_handler_or_halt() {
 
 fn halt_loop() -> ! {
     interrupts::disable();
+    loop {
+        hlt();
+    }
+}
+
+#[panic_handler]
+fn panic(info: &PanicInfo<'_>) -> ! {
+    enter_handler_or_halt();
+    interrupts::disable();
+
+    dprintln!("\n\x1b[31m=== KERNEL PANIC ===\x1b[0m");
+
+    if let Some(loc) = info.location() {
+        dprintln!("Location: {}:{}:{}", loc.file(), loc.line(), loc.column());
+        crate::log!("Location: {}:{}:{}\n", loc.file(), loc.line(), loc.column());
+    } else {
+        crate::log!("Location: unknown\n");
+    }
+
+    let args = info.message();
+    dprintln!("Reason: {}", args);
+    crate::log!("Reason: {}\n", args);
+
+    print_backtrace(64);
+
+    if crate::cpu::can_restart_current_worker_ap_from_panic() {
+        dprintln!("PANIC PANIC PANIC: restarting disposable worker AP");
+        crate::cpu::restart_current_worker_ap_from_panic();
+    }
+
     loop {
         hlt();
     }

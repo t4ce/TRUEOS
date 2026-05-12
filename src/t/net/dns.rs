@@ -1,5 +1,4 @@
 extern crate alloc;
-extern crate std;
 
 use alloc::{boxed::Box, format, string::String, vec::Vec};
 use core::sync::atomic::{AtomicU32, Ordering};

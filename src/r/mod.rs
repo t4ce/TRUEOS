@@ -11,6 +11,7 @@ pub mod fs;
 pub mod io;
 pub mod keyboard;
 pub mod net;
+pub mod panic;
 pub mod path;
 pub mod readiness;
 pub mod spawn_service;
