@@ -15,7 +15,7 @@ fn gpgpu_primary_scanout_pixel_quiet_program() -> GpgpuEuProgram {
 
 fn gpgpu_primary_scanout_mandelbrot8_program() -> GpgpuEuProgram {
     let artifact =
-        trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_ESCAPE_HDC1_BTI34_STORE_THEN_TS_EOT;
+        trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_ESCAPE_HDC1_BTI1_STORE_THEN_TS_EOT;
     GpgpuEuProgram {
         name: artifact.name,
         kind: artifact.kind,
@@ -357,7 +357,7 @@ fn submit_gpgpu_primary_scanout_mandelbrot_strip(
     let output_first_before = before_words[0];
 
     let mut strip_words =
-        trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_ESCAPE_HDC1_BTI34_STORE_THEN_TS_EOT_WORDS;
+        trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_ESCAPE_HDC1_BTI1_STORE_THEN_TS_EOT_WORDS;
     let x_step_dwords = trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_X_STEP_DWORDS;
     let c_re_base_dwords = trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_C_RE_BASE_DWORDS;
     let address_offset_dwords =
@@ -376,7 +376,7 @@ fn submit_gpgpu_primary_scanout_mandelbrot_strip(
         let c_re_base_dword = c_re_base_dwords[0];
         let address_offset_dword = address_offset_dwords[0];
         crate::log!(
-            "intel/gpgpu: primary-scanout-mandelbrot16-patch scanout_gpu=0x{:X} row_gpu=0x{:X} row_virt=0x{:X} row={} x_base={} width={} height={} phase={} addressing=simd8x2-lane-derived-bti34-surface-relative-g127 q12_frac_bits={} max_iter={} store_surface=0x{:02X} lanes_per_send={} sends_per_program={} pixels_per_program={} x_step_q12={} c_re_base_q12={} c_im_q12={} x_step_dword={} c_re_base_dword={} c_im_dword={} address_offset_dword={} address_offset=0x{:X} first_before=0x{:08X} send_desc=0x{:08X} send_exdesc=0x{:08X} kernel_off=0x{:X} artifact_bytes=0x{:X} artifact_end_off=0x{:X} dynamic_state_off=0x{:X} bt_off=0x{:X} surf_off=0x{:X} store_state_after_artifact={} note=uniform-setup-patched-eu-words-before-upload\n",
+            "intel/gpgpu: primary-scanout-mandelbrot16-patch scanout_gpu=0x{:X} row_gpu=0x{:X} row_virt=0x{:X} row={} x_base={} width={} height={} phase={} addressing=simd8x2-lane-derived-bti1-surface-relative-g127 q12_frac_bits={} max_iter={} store_surface=0x{:02X} lanes_per_send={} sends_per_program={} pixels_per_program={} x_step_q12={} c_re_base_q12={} c_im_q12={} x_step_dword={} c_re_base_dword={} c_im_dword={} address_offset_dword={} address_offset=0x{:X} first_before=0x{:08X} send_desc=0x{:08X} send_exdesc=0x{:08X} kernel_off=0x{:X} artifact_bytes=0x{:X} artifact_end_off=0x{:X} dynamic_state_off=0x{:X} bt_off=0x{:X} surf_off=0x{:X} store_state_after_artifact={} note=uniform-setup-patched-eu-words-before-upload\n",
             scanout_gpu,
             row_gpu,
             row_virt as usize,
@@ -528,12 +528,13 @@ fn submit_gpgpu_primary_scanout_mandelbrot_strip(
 
 pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot_preview(
     cursor: usize,
+    target_phase: usize,
     pixel_budget: usize,
 ) -> (crate::intel::GpgpuOneTileSentinelProof, usize) {
-    const PREVIEW_X: u32 = 0;
-    const PREVIEW_Y: u32 = 0;
     const ROW_INTERLACE: usize = 16;
     const STRIP_BURST_MAX: usize = 64;
+    const QUADRANT_PREVIEW_W: u32 = 640;
+    const QUADRANT_PREVIEW_H: u32 = 360;
     const PIXELS_PER_PROGRAM: usize =
         trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_PIXELS_PER_PROGRAM;
 
@@ -554,10 +555,14 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot_preview(
         return (gpgpu_one_tile_sentinel_failure("ggtt-map", program, target.gpu), cursor);
     }
 
-    let block_x = core::cmp::min(PREVIEW_X, target.width.saturating_sub(1));
-    let block_y = core::cmp::min(PREVIEW_Y, target.height.saturating_sub(1));
-    let block_w = target.width.saturating_sub(block_x) as usize;
-    let block_h = target.height.saturating_sub(block_y) as usize;
+    let quadrant = target_phase & 3;
+    let half_w = target.width / 2;
+    let half_h = target.height / 2;
+    let block_x = if quadrant & 1 == 0 { 0 } else { half_w };
+    let block_y = if quadrant & 2 == 0 { 0 } else { half_h };
+    let block_w = core::cmp::min(QUADRANT_PREVIEW_W, target.width.saturating_sub(block_x)) as usize;
+    let block_h =
+        core::cmp::min(QUADRANT_PREVIEW_H, target.height.saturating_sub(block_y)) as usize;
     let strips_per_row = block_w / PIXELS_PER_PROGRAM;
     let total_strips = strips_per_row.saturating_mul(block_h);
     if total_strips == 0 || pixel_budget < PIXELS_PER_PROGRAM {
@@ -657,11 +662,18 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot_preview(
     let next_cursor = (start_cursor + advanced_strips) % total_strips;
     let readback_ok =
         submitted_strips != 0 && submitted_strips == accepted_strips && last_proof.readback_ok;
-    let should_log_preview =
-        (accepted_strips != 0 && (start_cursor == 0 || next_cursor == 0)) || !last_proof.finished;
+    let first_failed_preview_log =
+        !last_proof.finished && !MANDELBROT_PREVIEW_FAILURE_LOGGED.swap(true, Ordering::AcqRel);
+    let should_log_preview = (accepted_strips != 0 && (start_cursor == 0 || next_cursor == 0))
+        || first_failed_preview_log;
     if should_log_preview {
         crate::log!(
-            "intel/gpgpu: primary-scanout-mandelbrot16-preview submitted_programs={} finished_programs={} changed_programs={} advanced_programs={} pixels_per_program={} submitted_pixels={} changed_pixels={} strict_readback_ok={} reason={} program_source={} primary_gpu=0x{:X} primary_bytes=0x{:X} cursor_in={} cursor_out={} strip_budget={} burst_cap={} last_gpu=0x{:X} last_first_before=0x{:08X} last_first_after=0x{:08X} last_change_mask=0x{:016X} display_notified={} finish_marker=0x{:08X} finish_expected=0x{:08X} lane_dispatch_delta={} action={} next={} deliverable=visible-mandelbrot-frame-progress\n",
+            "intel/gpgpu: primary-scanout-mandelbrot16-preview target_quadrant={} block={}x{}@{}x{} submitted_programs={} finished_programs={} changed_programs={} advanced_programs={} pixels_per_program={} submitted_pixels={} changed_pixels={} strict_readback_ok={} reason={} program_source={} primary_gpu=0x{:X} primary_bytes=0x{:X} cursor_in={} cursor_out={} strip_budget={} burst_cap={} last_gpu=0x{:X} last_first_before=0x{:08X} last_first_after=0x{:08X} last_change_mask=0x{:016X} display_notified={} finish_marker=0x{:08X} finish_expected=0x{:08X} lane_dispatch_delta={} action={} next={} deliverable=visible-mandelbrot-frame-progress\n",
+            quadrant,
+            block_w,
+            block_h,
+            block_x,
+            block_y,
             submitted_strips,
             finished_strips,
             accepted_strips,
