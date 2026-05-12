@@ -46,11 +46,7 @@ define_started_flags!(
     AI_QJS_ONESHOT_STARTED,
     HTTP_TRUEOSFS_STARTED,
     HYPER_HTTP1_PROBE_STARTED,
-    CHAT_HTTP_STARTED,
-    MAIL_HTTP_STARTED,
     AXUM_BOOT_STARTED,
-    FILEEXPLORER_HTTP_STARTED,
-    WEBDEVICES_HTTP_STARTED,
     WS_TIME_STARTED,
     ESP_GATE_STARTED,
     ESP_GATE_REGISTRY_STARTED,
@@ -452,63 +448,11 @@ fn hyper_http1_probe_enabled() -> bool {
     crate::allcaps::probes::HYPER_HTTP1_NET_PROBE
 }
 
-fn spawn_chat_http(spawner: Spawner) -> SpawnAttempt {
-    #[cfg(feature = "vmx-web")]
-    {
-        return spawn_local(spawner, |_spawner| crate::tst_chatserver::chat_http_service_task());
-    }
-    #[cfg(not(feature = "vmx-web"))]
-    {
-        let _ = spawner;
-        SpawnAttempt::Skipped
-    }
-}
-
-fn spawn_mail_http(spawner: Spawner) -> SpawnAttempt {
-    #[cfg(feature = "vmx-web")]
-    {
-        return spawn_local(spawner, |_spawner| crate::r::net::srv::mail::mail_http_service_task());
-    }
-    #[cfg(not(feature = "vmx-web"))]
-    {
-        let _ = spawner;
-        SpawnAttempt::Skipped
-    }
-}
-
 fn spawn_axum_boot(spawner: Spawner) -> SpawnAttempt {
     #[cfg(feature = "vmx-web")]
     {
         return spawn_local(spawner, |_spawner| {
             crate::r::net::srv::axum_boot::axum_boot_service_task()
-        });
-    }
-    #[cfg(not(feature = "vmx-web"))]
-    {
-        let _ = spawner;
-        SpawnAttempt::Skipped
-    }
-}
-
-fn spawn_fileexplorer_http(spawner: Spawner) -> SpawnAttempt {
-    #[cfg(feature = "vmx-web")]
-    {
-        return spawn_local(spawner, |_spawner| {
-            crate::tst_fileexplorer_axum::fileexplorer_http_service_task()
-        });
-    }
-    #[cfg(not(feature = "vmx-web"))]
-    {
-        let _ = spawner;
-        SpawnAttempt::Skipped
-    }
-}
-
-fn spawn_webdevices_http(spawner: Spawner) -> SpawnAttempt {
-    #[cfg(feature = "vmx-web")]
-    {
-        return spawn_local(spawner, |_spawner| {
-            crate::tst_webdevices_axum::webdevices_http_service_task()
         });
     }
     #[cfg(not(feature = "vmx-web"))]
@@ -1244,34 +1188,10 @@ static TASKS: [TaskSpec; 69] = [
         spawn_hyper_http1_probe,
     ),
     TaskSpec::disabled(
-        "chat-http",
-        crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
-        &CHAT_HTTP_STARTED,
-        spawn_chat_http,
-    ),
-    TaskSpec::disabled(
-        "webmail-http",
-        crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
-        &MAIL_HTTP_STARTED,
-        spawn_mail_http,
-    ),
-    TaskSpec::disabled(
         "axum-boot",
         crate::r::readiness::NET_V4_CONFIGURED,
         &AXUM_BOOT_STARTED,
         spawn_axum_boot,
-    ),
-    TaskSpec::disabled(
-        "fileexplorer-http",
-        crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
-        &FILEEXPLORER_HTTP_STARTED,
-        spawn_fileexplorer_http,
-    ),
-    TaskSpec::disabled(
-        "webdevices-http",
-        crate::r::readiness::NET_V4_CONFIGURED,
-        &WEBDEVICES_HTTP_STARTED,
-        spawn_webdevices_http,
     ),
     TaskSpec::enabled("app-vm-run-queue", 0, &APP_VM_RUN_QUEUE_STARTED, spawn_app_vm_run_queue),
     TaskSpec::disabled(

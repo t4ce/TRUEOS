@@ -79,26 +79,6 @@ mod tga;
 mod th;
 #[path = "tst/boot_factory_ram_probe.rs"]
 mod tst_boot_factory_ram_probe;
-#[path = "tst/chatserver/server.rs"]
-#[cfg(feature = "vmx-web")]
-mod tst_chatserver;
-#[cfg(not(feature = "vmx-web"))]
-mod tst_chatserver {
-    pub fn current_port() -> Option<u16> {
-        None
-    }
-
-    pub fn post_local_message_volatile(_: &str, _: &str, _: &str) -> bool {
-        false
-    }
-
-    pub fn post_local_statement_volatile(_: &str, _: &str, _: &str, _: &str) -> bool {
-        false
-    }
-}
-#[path = "tst/fileexplorer/axum_server.rs"]
-#[cfg(feature = "vmx-web")]
-mod tst_fileexplorer_axum;
 #[path = "tst/html_demo.rs"]
 mod tst_html_demo;
 #[path = "surfer/html_shack.rs"]
@@ -135,9 +115,6 @@ mod tst_ui2_smiley_fountain_demo;
 mod tst_ui2_swarm;
 #[path = "tst/ui2_text_input_demo.rs"]
 mod tst_ui2_text_input_demo;
-#[path = "tst/webdevices/axum_server.rs"]
-#[cfg(feature = "vmx-web")]
-mod tst_webdevices_axum;
 #[path = "tst/ws_time.rs"]
 mod tst_ws_time;
 #[cfg(target_arch = "x86_64")]
