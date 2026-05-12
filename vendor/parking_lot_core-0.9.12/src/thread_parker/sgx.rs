@@ -7,7 +7,7 @@
 
 use core::sync::atomic::{AtomicBool, Ordering};
 use std::io::ErrorKind;
-use std::time::Instant;
+use crate::time::Instant;
 use std::{
     io,
     os::fortanix_sgx::{

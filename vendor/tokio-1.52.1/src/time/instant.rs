@@ -75,7 +75,15 @@ impl Instant {
     /// Returns the amount of time elapsed from another instant to this one, or
     /// zero duration if that instant is later than this one.
     pub fn duration_since(&self, earlier: Instant) -> Duration {
-        self.std.saturating_duration_since(earlier.std)
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        {
+            return self.std.saturating_sub(earlier.std);
+        }
+
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+        {
+            self.std.saturating_duration_since(earlier.std)
+        }
     }
 
     /// Returns the amount of time elapsed from another instant to this one, or
@@ -96,7 +104,15 @@ impl Instant {
     /// # }
     /// ```
     pub fn checked_duration_since(&self, earlier: Instant) -> Option<Duration> {
-        self.std.checked_duration_since(earlier.std)
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        {
+            return self.std.checked_sub(earlier.std);
+        }
+
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+        {
+            self.std.checked_duration_since(earlier.std)
+        }
     }
 
     /// Returns the amount of time elapsed from another instant to this one, or
@@ -117,7 +133,15 @@ impl Instant {
     /// }
     /// ```
     pub fn saturating_duration_since(&self, earlier: Instant) -> Duration {
-        self.std.saturating_duration_since(earlier.std)
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        {
+            return self.std.saturating_sub(earlier.std);
+        }
+
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+        {
+            self.std.saturating_duration_since(earlier.std)
+        }
     }
 
     /// Returns the amount of time elapsed since this instant was created,
@@ -185,7 +209,15 @@ impl ops::Sub for Instant {
     type Output = Duration;
 
     fn sub(self, rhs: Instant) -> Duration {
-        self.std.saturating_duration_since(rhs.std)
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        {
+            return self.std.saturating_sub(rhs.std);
+        }
+
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+        {
+            self.std.saturating_duration_since(rhs.std)
+        }
     }
 }
 
@@ -219,7 +251,10 @@ mod variant {
             return Instant::from_std(crate::time::zkvm::platform_instant_now());
         }
 
-        Instant::from_std(std::time::Instant::now())
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+        {
+            Instant::from_std(std::time::Instant::now())
+        }
     }
 }
 

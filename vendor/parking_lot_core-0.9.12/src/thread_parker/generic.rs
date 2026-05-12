@@ -14,7 +14,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::thread;
 
-use std::time::Instant;
+use crate::time::Instant;
 
 // Helper type for putting a thread to sleep until some other thread wakes it up
 pub struct ThreadParker {

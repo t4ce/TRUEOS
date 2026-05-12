@@ -11,7 +11,7 @@ use core::{
 };
 use libc;
 use std::thread;
-use std::time::Instant;
+use crate::time::Instant;
 
 // x32 Linux uses a non-standard type for tv_nsec in timespec.
 // See https://sourceware.org/bugzilla/show_bug.cgi?id=16437

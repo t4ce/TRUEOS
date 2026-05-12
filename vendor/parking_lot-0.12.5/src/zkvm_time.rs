@@ -1,4 +1,4 @@
-use std::time::Instant;
+use crate::time::Instant;
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 unsafe extern "Rust" {

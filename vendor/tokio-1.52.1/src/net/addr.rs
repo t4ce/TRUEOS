@@ -135,7 +135,7 @@ impl sealed::ToSocketAddrsPriv for (Ipv6Addr, u16) {
 impl ToSocketAddrs for &[SocketAddr] {}
 
 impl sealed::ToSocketAddrsPriv for &[SocketAddr] {
-    type Iter = std::vec::IntoIter<SocketAddr>;
+    type Iter = alloc::vec::IntoIter<SocketAddr>;
     type Future = ReadyFuture<Self::Iter>;
 
     fn to_socket_addrs(&self, _: sealed::Internal) -> Self::Future {
@@ -302,7 +302,7 @@ pub(crate) mod sealed {
         use std::option;
         use core::pin::Pin;
         use core::task::{ready,Context, Poll};
-        use std::vec;
+        use alloc::vec;
 
         #[doc(hidden)]
         #[derive(Debug)]

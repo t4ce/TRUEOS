@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant as StdInstant};
+use crate::time::{Duration, Instant as StdInstant};
 
 #[cfg(test)]
 use std::sync::Arc;
