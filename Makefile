@@ -25,14 +25,15 @@ EFI_IMG_MIN_SIZE_KIB ?= 0
 LIMINE_CFG := limine.conf
 LIMINE_CFG_GENERATED := $(ISO_DIR)/limine.generated.conf
 LIMINE_SUBMODULE := vendor/limine
-LIMINE_SRC := bld/limine-src
-LIMINE_BUILD_DIR := bld/limine-build
-LIMINE_PREFIX := bld/limine-prefix
+LIMINE_DIST := $(LIMINE_SUBMODULE)/trueos_dist
+LIMINE_SRC := $(LIMINE_DIST)/src
+LIMINE_BUILD_DIR := $(LIMINE_DIST)/build-x86_64
+LIMINE_PREFIX := $(LIMINE_DIST)/prefix-x86_64
 LIMINE_SHARE := $(LIMINE_PREFIX)/share/limine
 LIMINE_BOOTX64 := $(LIMINE_SHARE)/BOOTX64.EFI
 LIMINE_UEFI_CD := $(LIMINE_SHARE)/limine-uefi-cd.bin
 LIMINE_CONFIG_ARGS ?= --prefix=$(abspath $(LIMINE_PREFIX)) --enable-uefi-x86-64 --enable-uefi-cd
-LIMINE_SOURCE_STAMP := $(LIMINE_SRC)/.trueos_source_stamp
+LIMINE_SOURCE_STAMP := $(LIMINE_DIST)/.source_stamp
 LIMINE_CONFIG_STAMP := $(LIMINE_BUILD_DIR)/.config_args
 LIMINE_TOOLCHAIN_STAMP := $(LIMINE_BUILD_DIR)/.toolchain_args
 LIMINE_INSTALL_STAMP := $(LIMINE_BUILD_DIR)/.installed
@@ -125,17 +126,20 @@ limine:
 		fi; \
 	done; \
 	source_stamp="submodule:$$(git -C "$(LIMINE_SUBMODULE)" rev-parse HEAD)"; \
+	source_changed=0; \
 	if [ "$$(cat "$(LIMINE_SOURCE_STAMP)" 2>/dev/null || true)" != "$$source_stamp" ] || [ ! -f "$(LIMINE_SRC)/bootstrap" ]; then \
 		rm -rf "$(LIMINE_SRC)"; \
 		mkdir -p "$(LIMINE_SRC)"; \
-		(cd "$(LIMINE_SUBMODULE)" && tar --exclude .git -cf - .) | (cd "$(LIMINE_SRC)" && tar -xf -); \
+		(cd "$(LIMINE_SUBMODULE)" && tar --exclude .git --exclude trueos_dist -cf - .) | (cd "$(LIMINE_SRC)" && tar -xf -); \
+		mkdir -p "$(LIMINE_DIST)"; \
 		printf '%s\n' "$$source_stamp" > "$(LIMINE_SOURCE_STAMP)"; \
+		source_changed=1; \
 	fi; \
 	toolchain_stamp=$$(printf 'CC_FOR_TARGET=%s\nLD_FOR_TARGET=%s\nOBJCOPY_FOR_TARGET=%s\nOBJDUMP_FOR_TARGET=%s\nREADELF_FOR_TARGET=%s\n' "$$cc" "$$ld" "$$objcopy" "$$objdump" "$$readelf"); \
-	if [ -f "$(LIMINE_BOOTX64)" ] && [ -f "$(LIMINE_UEFI_CD)" ] && [ -f "$(LIMINE_INSTALL_STAMP)" ] && [ "$$(cat "$(LIMINE_CONFIG_STAMP)" 2>/dev/null || true)" = "$(LIMINE_CONFIG_ARGS)" ] && [ "$$(cat "$(LIMINE_TOOLCHAIN_STAMP)" 2>/dev/null || true)" = "$$toolchain_stamp" ]; then \
+	if [ "$$source_changed" = "0" ] && [ -f "$(LIMINE_BOOTX64)" ] && [ -f "$(LIMINE_UEFI_CD)" ] && [ -f "$(LIMINE_INSTALL_STAMP)" ] && [ "$$(cat "$(LIMINE_CONFIG_STAMP)" 2>/dev/null || true)" = "$(LIMINE_CONFIG_ARGS)" ] && [ "$$(cat "$(LIMINE_TOOLCHAIN_STAMP)" 2>/dev/null || true)" = "$$toolchain_stamp" ]; then \
 		exit 0; \
 	fi; \
-	if [ "$$(cat "$(LIMINE_CONFIG_STAMP)" 2>/dev/null || true)" != "$(LIMINE_CONFIG_ARGS)" ] || [ "$$(cat "$(LIMINE_TOOLCHAIN_STAMP)" 2>/dev/null || true)" != "$$toolchain_stamp" ]; then \
+	if [ "$$source_changed" = "1" ] || [ "$$(cat "$(LIMINE_CONFIG_STAMP)" 2>/dev/null || true)" != "$(LIMINE_CONFIG_ARGS)" ] || [ "$$(cat "$(LIMINE_TOOLCHAIN_STAMP)" 2>/dev/null || true)" != "$$toolchain_stamp" ]; then \
 		rm -rf "$(LIMINE_BUILD_DIR)" "$(LIMINE_PREFIX)"; \
 	fi; \
 	mkdir -p "$(LIMINE_BUILD_DIR)" "$(LIMINE_PREFIX)"; \

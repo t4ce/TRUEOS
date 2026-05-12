@@ -15,9 +15,10 @@ ARM_ISO_PATH := bld/trueos-aarch64.iso
 ARM_ISO_EFI_IMG := efi-arm.img
 ARM_EFI_IMG_SIZE_KIB ?= 32768
 ARM_LIMINE_CFG := limine-arm.conf
-ARM_LIMINE_SRC := bld/limine-src
-ARM_LIMINE_BUILD_DIR := bld/limine-build-aarch64
-ARM_LIMINE_PREFIX := bld/limine-prefix-aarch64
+ARM_LIMINE_DIST := vendor/limine/trueos_dist
+ARM_LIMINE_SRC := $(ARM_LIMINE_DIST)/src
+ARM_LIMINE_BUILD_DIR := $(ARM_LIMINE_DIST)/build-aarch64
+ARM_LIMINE_PREFIX := $(ARM_LIMINE_DIST)/prefix-aarch64
 ARM_LIMINE_SHARE := $(ARM_LIMINE_PREFIX)/share/limine
 ARM_LIMINE_EFI := $(ARM_LIMINE_SHARE)/BOOTAA64.EFI
 ARM_LIMINE_CONFIG_ARGS := --prefix=$(abspath $(ARM_LIMINE_PREFIX)) --enable-uefi-aarch64 --enable-uefi-cd

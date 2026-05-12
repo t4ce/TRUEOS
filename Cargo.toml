@@ -137,6 +137,7 @@ xmlwriter = { path = "vendor/xmlwriter-0.1.0" }
 crc32fast = { path = "vendor/crc32fast-1.5.0" }
 embedded-websocket = { path = "vendor/embedded-websocket-0.9.4" }
 embassy-time = { path = "vendor/embassy-time-0.5.1" }
+aarch64-cpu = { path = "vendor/aarch64-cpu-10.0.0" }
 crab-usb = { path = "vendor/crab-usb-0.6.2/crab-usb-0.6.2" }
 parking_lot = { path = "vendor/parking_lot-0.12.5" }
 parking_lot_core = { path = "vendor/parking_lot_core-0.9.12" }

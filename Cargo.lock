@@ -81,10 +81,8 @@ dependencies = [
 [[package]]
 name = "aarch64-cpu"
 version = "10.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a21cd0131c25c438e19cd6a774adf7e3f64f7f4d723022882facc2dee0f8bc9"
 dependencies = [
- "tock-registers 0.9.0",
+ "tock-registers",
 ]
 
 [[package]]
@@ -94,7 +92,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52dad5cf7342926ce1c375ec680834e56dd3cdbe8b7adf8a6f99b2854cc52c17"
 dependencies = [
  "aarch64-cpu",
- "tock-registers 0.10.1",
+ "tock-registers",
 ]
 
 [[package]]
@@ -476,7 +474,7 @@ dependencies = [
  "num_enum",
  "spin 0.10.0",
  "thiserror",
- "tock-registers 0.10.1",
+ "tock-registers",
  "trait-ffi",
  "usb-if",
  "xhci",
@@ -2705,12 +2703,6 @@ name = "tinyvec_macros"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
-
-[[package]]
-name = "tock-registers"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b9e2fdb3a1e862c0661768b7ed25390811df1947a8acbfbefe09b47078d93c4"
 
 [[package]]
 name = "tock-registers"
