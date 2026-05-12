@@ -10,7 +10,7 @@ pub(crate) const MANDELBROT_FRAGMENT_SOURCE_PATH: &str =
 pub(crate) const MANDELBROT_FRAGMENT_SPIRV_PATH: &str =
     "crates/trueos-shader/mandelbrot_fragment_1440p_parametric.spv";
 pub(crate) const MANDELBROT_FRAGMENT_SPIRV_BYTES: &[u8] =
-    include_bytes!("../../crates/trueos-shader/mandelbrot_fragment_1440p_parametric.spv");
+    include_bytes!("../../../crates/trueos-shader/mandelbrot_fragment_1440p_parametric.spv");
 pub(crate) const MANDELBROT_TARGET_WIDTH: u32 = 2560;
 pub(crate) const MANDELBROT_TARGET_HEIGHT: u32 = 1440;
 pub(crate) const MANDELBROT_PUSH_CONSTANT_BYTES: u16 = 24;
