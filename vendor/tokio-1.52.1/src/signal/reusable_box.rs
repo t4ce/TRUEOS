@@ -1,4 +1,5 @@
-use std::alloc::Layout;
+use alloc::boxed::Box;
+use core::alloc::Layout;
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;

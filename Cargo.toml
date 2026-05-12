@@ -110,7 +110,6 @@ hyper-util = { path = "vendor/hyper-util-0.1.20" }
 axum = { path = "vendor/axum-0.8.9" }
 axum-core = { path = "vendor/axum-core-0.5.6" }
 base64 = { path = "vendor/base64-0.22.1" }
-base64_013 = { package = "base64", path = "vendor/base64-0.13.1" }
 bincode = { path = "vendor/bincode-1.3.3" }
 http = { path = "vendor/http-1.4.0" }
 http-body = { path = "vendor/http-body-1.0.1" }

@@ -35,8 +35,15 @@ cfg_io_std! {
     /// }
     /// ```
     #[derive(Debug)]
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     pub struct Stderr {
         std: SplitByUtf8BoundaryIfWindows<Blocking<std::io::Stderr>>,
+    }
+
+    #[derive(Debug)]
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    pub struct Stderr {
+        _priv: (),
     }
 
     /// Constructs a new handle to the standard error of the current process.
@@ -79,6 +86,7 @@ cfg_io_std! {
     ///     Ok(())
     /// }
     /// ```
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     pub fn stderr() -> Stderr {
         let std = io::stderr();
         // SAFETY: The `Read` implementation of `std` does not read from the
@@ -88,6 +96,11 @@ cfg_io_std! {
         Stderr {
             std: SplitByUtf8BoundaryIfWindows::new(blocking),
         }
+    }
+
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    pub fn stderr() -> Stderr {
+        Stderr { _priv: () }
     }
 }
 
@@ -132,10 +145,22 @@ impl AsyncWrite for Stderr {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        {
+            let _ = (self, cx);
+            return Poll::Ready(Ok(buf.len()));
+        }
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         Pin::new(&mut self.std).poll_write(cx, buf)
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        {
+            let _ = (self, cx);
+            return Poll::Ready(Ok(()));
+        }
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         Pin::new(&mut self.std).poll_flush(cx)
     }
 
@@ -143,6 +168,12 @@ impl AsyncWrite for Stderr {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Result<(), io::Error>> {
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        {
+            let _ = (self, cx);
+            return Poll::Ready(Ok(()));
+        }
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         Pin::new(&mut self.std).poll_shutdown(cx)
     }
 }

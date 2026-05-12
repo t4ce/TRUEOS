@@ -1,5 +1,6 @@
 use crate::fs::asyncify;
 
+use alloc::boxed::Box;
 use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::fs::{FileType, Metadata};
@@ -36,7 +37,7 @@ pub async fn read_dir(path: impl AsRef<Path>) -> io::Result<ReadDir> {
         let mut buf = VecDeque::with_capacity(CHUNK_SIZE);
         let remain = ReadDir::next_chunk(&mut buf, &mut std);
 
-        Ok(ReadDir(State::Idle(Some((buf, std, remain)))))
+        Ok(ReadDir(Box::new(State::Idle(Some((buf, Box::new(std), remain))))))
     })
     .await
 }
@@ -61,12 +62,12 @@ pub async fn read_dir(path: impl AsRef<Path>) -> io::Result<ReadDir> {
 /// [`Err`]: std::result::Result::Err
 #[derive(Debug)]
 #[must_use = "streams do nothing unless polled"]
-pub struct ReadDir(State);
+pub struct ReadDir(Box<State>);
 
 #[derive(Debug)]
 enum State {
-    Idle(Option<(VecDeque<io::Result<DirEntry>>, std::fs::ReadDir, bool)>),
-    Pending(JoinHandle<(VecDeque<io::Result<DirEntry>>, std::fs::ReadDir, bool)>),
+    Idle(Option<(VecDeque<io::Result<DirEntry>>, Box<std::fs::ReadDir>, bool)>),
+    Pending(JoinHandle<(VecDeque<io::Result<DirEntry>>, Box<std::fs::ReadDir>, bool)>),
 }
 
 impl ReadDir {
@@ -100,7 +101,7 @@ impl ReadDir {
     /// wakeup.
     pub fn poll_next_entry(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<Option<DirEntry>>> {
         loop {
-            match self.0 {
+            match *self.0 {
                 State::Idle(ref mut data) => {
                     let (buf, _, ref remain) = data.as_mut().unwrap();
 
@@ -112,13 +113,13 @@ impl ReadDir {
 
                     let (mut buf, mut std, _) = data.take().unwrap();
 
-                    self.0 = State::Pending(spawn_blocking(move || {
+                    self.0 = Box::new(State::Pending(spawn_blocking(move || {
                         let remain = ReadDir::next_chunk(&mut buf, &mut std);
                         (buf, std, remain)
-                    }));
+                    })));
                 }
                 State::Pending(ref mut rx) => {
-                    self.0 = State::Idle(Some(ready!(Pin::new(rx).poll(cx))?));
+                    self.0 = Box::new(State::Idle(Some(ready!(Pin::new(rx).poll(cx))?)));
                 }
             }
         }
