@@ -78,6 +78,7 @@ mod tga;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 #[path = "t/th/mod.rs"]
 mod th;
+mod tst;
 #[path = "tst/boot_factory_ram_probe.rs"]
 mod tst_boot_factory_ram_probe;
 #[path = "surfer/html_demo.rs"]
@@ -92,30 +93,6 @@ mod tst_mandelbrot_gpu_sidequest;
 mod tst_net_tcp_shell;
 #[path = "usb2/device/uas_skhynix_route_probe.rs"]
 mod tst_uas_skhynix_route_probe;
-#[path = "tst/ui2_analog_clock_demo.rs"]
-mod tst_ui2_analog_clock_demo;
-#[path = "tst/ui2_bgrt.rs"]
-mod tst_ui2_bgrt;
-#[path = "tst/ui2_coreticks_demo.rs"]
-mod tst_ui2_coreticks_demo;
-#[path = "tst/ui2_cursorpicker_demo.rs"]
-mod tst_ui2_cursorpicker_demo;
-#[path = "tst/ui2_ids.rs"]
-mod tst_ui2_ids;
-#[path = "tst/ui2_mandelbrot_demo.rs"]
-mod tst_ui2_mandelbrot_demo;
-#[path = "tst/ui2_player_demo.rs"]
-mod tst_ui2_player_demo;
-#[path = "tst/ui2_raple_demo.rs"]
-mod tst_ui2_raple_demo;
-#[path = "tst/ui2_shell_demo.rs"]
-mod tst_ui2_shell_demo;
-#[path = "tst/ui2_smiley_fountain_demo.rs"]
-mod tst_ui2_smiley_fountain_demo;
-#[path = "tst/ui2_swarm.rs"]
-mod tst_ui2_swarm;
-#[path = "tst/ui2_text_input_demo.rs"]
-mod tst_ui2_text_input_demo;
 #[path = "tst/ws_time.rs"]
 mod tst_ws_time;
 #[cfg(target_arch = "x86_64")]
@@ -338,7 +315,7 @@ fn _loop(
         time::poll();
         unsafe { executor.poll() };
         if counter.is_multiple_of(5_000) {
-            let _ = crate::tst_ui2_coreticks_demo::ui2_coreticks_tick_tile_index(0);
+            let _ = crate::tst::ui2::coreticks_demo::ui2_coreticks_tick_tile_index(0);
         }
         if counter.is_multiple_of(10_000_000) {
             globalog::debugcon_write_byte_raw(b'0');

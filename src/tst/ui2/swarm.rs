@@ -2,8 +2,8 @@ use alloc::{format, string::String, vec, vec::Vec};
 
 use crate::r::ui2::{self, Ui2FontTier, Ui2HostedInteractiveRect, Ui2Rect};
 
-const UI2_SWARM_TEX_ID: u32 = crate::tst_ui2_ids::Ui2DemoTexId::Swarm.get();
-const UI2_SWARM_CONTENT_ID: u32 = crate::tst_ui2_ids::Ui2DemoContentId::Swarm.get();
+const UI2_SWARM_TEX_ID: u32 = crate::tst::ui2::ids::Ui2DemoTexId::Swarm.get();
+const UI2_SWARM_CONTENT_ID: u32 = crate::tst::ui2::ids::Ui2DemoContentId::Swarm.get();
 const UI2_SWARM_VIEW_W: u32 = 820;
 const UI2_SWARM_VIEW_H: u32 = 560;
 const UI2_SWARM_WINDOW_X: f32 = 420.0;
@@ -49,23 +49,23 @@ struct SketchSpec {
 const SWARM_SKETCHES: &[SketchSpec] = &[
     SketchSpec {
         source_name: "led.py",
-        body: include_bytes!("../../crates/trueos-esp/iot/led.py"),
+        body: include_bytes!("../../../crates/trueos-esp/iot/led.py"),
     },
     SketchSpec {
         source_name: "led2.py",
-        body: include_bytes!("../../crates/trueos-esp/iot/led2.py"),
+        body: include_bytes!("../../../crates/trueos-esp/iot/led2.py"),
     },
     SketchSpec {
         source_name: "led4.py",
-        body: include_bytes!("../../crates/trueos-esp/iot/led4.py"),
+        body: include_bytes!("../../../crates/trueos-esp/iot/led4.py"),
     },
     SketchSpec {
         source_name: "led_pinkfade.py",
-        body: include_bytes!("../../crates/trueos-esp/iot/led_pinkfade.py"),
+        body: include_bytes!("../../../crates/trueos-esp/iot/led_pinkfade.py"),
     },
     SketchSpec {
         source_name: "1OktavePianoLed.py",
-        body: include_bytes!("../../crates/trueos-esp/iot/1OktavePianoLed.py"),
+        body: include_bytes!("../../../crates/trueos-esp/iot/1OktavePianoLed.py"),
     },
 ];
 

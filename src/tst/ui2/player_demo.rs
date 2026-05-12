@@ -14,8 +14,8 @@ use alloc::{string::String, vec, vec::Vec};
 use crate::aud::{pattern::PatternBank, synth::SynthEngine};
 use crate::r::ui2::{self, Ui2FontTier, Ui2HostedInteractiveRect, Ui2Rect};
 
-const UI2_PLAYER_TEX_ID: u32 = crate::tst_ui2_ids::Ui2DemoTexId::Player.get();
-const UI2_PLAYER_CONTENT_ID: u32 = crate::tst_ui2_ids::Ui2DemoContentId::Player.get();
+const UI2_PLAYER_TEX_ID: u32 = crate::tst::ui2::ids::Ui2DemoTexId::Player.get();
+const UI2_PLAYER_CONTENT_ID: u32 = crate::tst::ui2::ids::Ui2DemoContentId::Player.get();
 const UI2_PLAYER_WINDOW_TITLE: &str = "player";
 const UI2_PLAYER_VIEW_W: u32 = 328;
 const UI2_PLAYER_VIEW_H: u32 = 84;

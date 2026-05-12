@@ -782,63 +782,63 @@ fn spawn_ui2_twemoji_1x(spawner: Spawner) -> SpawnAttempt {
 fn spawn_ui2_text_input_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
         let _ = worker_spawner;
-        crate::tst_ui2_text_input_demo::ui2_text_input_demo_task()
+        crate::tst::ui2::text_input_demo::ui2_text_input_demo_task()
     })
 }
 
 fn spawn_ui2_analog_clock_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
         let _ = worker_spawner;
-        crate::tst_ui2_analog_clock_demo::ui2_analog_clock_demo_task()
+        crate::tst::ui2::analog_clock_demo::ui2_analog_clock_demo_task()
     })
 }
 
 fn spawn_ui2_bgrt_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
         let _ = worker_spawner;
-        crate::tst_ui2_bgrt::ui2_bgrt_demo_task()
+        crate::tst::ui2::bgrt::ui2_bgrt_demo_task()
     })
 }
 
 fn spawn_ui2_coreticks_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
         let _ = worker_spawner;
-        crate::tst_ui2_coreticks_demo::ui2_coreticks_demo_task()
+        crate::tst::ui2::coreticks_demo::ui2_coreticks_demo_task()
     })
 }
 
 fn spawn_ui2_cursorpicker_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
         let _ = worker_spawner;
-        crate::tst_ui2_cursorpicker_demo::ui2_cursorpicker_demo_task()
+        crate::tst::ui2::cursorpicker_demo::ui2_cursorpicker_demo_task()
     })
 }
 
 fn spawn_ui2_mandelbrot_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
         let _ = worker_spawner;
-        crate::tst_ui2_mandelbrot_demo::ui2_mandelbrot_demo_task()
+        crate::tst::ui2::mandelbrot_demo::ui2_mandelbrot_demo_task()
     })
 }
 
 fn spawn_ui2_player_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
         let _ = worker_spawner;
-        crate::tst_ui2_player_demo::ui2_player_demo_task()
+        crate::tst::ui2::player_demo::ui2_player_demo_task()
     })
 }
 
 fn spawn_ui2_raple_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
         let _ = worker_spawner;
-        crate::tst_ui2_raple_demo::ui2_raple_demo_task()
+        crate::tst::ui2::raple_demo::ui2_raple_demo_task()
     })
 }
 
 fn spawn_ui2_smiley_fountain_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
         let _ = worker_spawner;
-        crate::tst_ui2_smiley_fountain_demo::ui2_smiley_fountain_demo_task()
+        crate::tst::ui2::smiley_fountain_demo::ui2_smiley_fountain_demo_task()
     })
 }
 
@@ -849,14 +849,14 @@ fn spawn_ui2_shell_demo(spawner: Spawner) -> SpawnAttempt {
     }
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
         let _ = worker_spawner;
-        crate::tst_ui2_shell_demo::ui2_shell_demo_task()
+        crate::tst::ui2::shell_demo::ui2_shell_demo_task()
     })
 }
 
 fn spawn_ui2_swarm_demo(spawner: Spawner) -> SpawnAttempt {
     spawn_ui2_demo_on_worker(spawner, |worker_spawner| {
         let _ = worker_spawner;
-        crate::tst_ui2_swarm::ui2_swarm_demo_task()
+        crate::tst::ui2::swarm::ui2_swarm_demo_task()
     })
 }
 

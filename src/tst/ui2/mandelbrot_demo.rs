@@ -1,6 +1,6 @@
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
-const UI2_MANDELBROT_TEX_ID: u32 = crate::tst_ui2_ids::Ui2DemoTexId::Mandelbrot.get();
+const UI2_MANDELBROT_TEX_ID: u32 = crate::tst::ui2::ids::Ui2DemoTexId::Mandelbrot.get();
 const UI2_MANDELBROT_RT_W: u32 = 768;
 const UI2_MANDELBROT_RT_H: u32 = 512;
 const UI2_MANDELBROT_WINDOW_Z: i16 = 31;

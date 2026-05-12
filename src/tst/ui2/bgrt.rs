@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-const UI2_BGRT_TEX_ID: u32 = crate::tst_ui2_ids::Ui2DemoTexId::Bgrt.get();
+const UI2_BGRT_TEX_ID: u32 = crate::tst::ui2::ids::Ui2DemoTexId::Bgrt.get();
 const UI2_BGRT_WINDOW_X: f32 = 240.0;
 const UI2_BGRT_WINDOW_Y: f32 = 120.0;
 const UI2_BGRT_WINDOW_Z: i16 = 31;

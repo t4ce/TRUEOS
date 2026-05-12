@@ -4,8 +4,8 @@ use embassy_time::Instant;
 
 use crate::r::ui2::{self, Ui2FontTier, Ui2Rect};
 
-const UI2_SHELL_TEX_ID: u32 = crate::tst_ui2_ids::Ui2DemoTexId::Shell.get();
-const UI2_SHELL_CONTENT_ID: u32 = crate::tst_ui2_ids::Ui2DemoContentId::Shell.get();
+const UI2_SHELL_TEX_ID: u32 = crate::tst::ui2::ids::Ui2DemoTexId::Shell.get();
+const UI2_SHELL_CONTENT_ID: u32 = crate::tst::ui2::ids::Ui2DemoContentId::Shell.get();
 const UI2_SHELL_VIEW_W: u32 = 600;
 const UI2_SHELL_VIEW_H: u32 = 400;
 const UI2_SHELL_WINDOW_X: f32 = 300.0;

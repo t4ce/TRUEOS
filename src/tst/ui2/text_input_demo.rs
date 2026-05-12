@@ -4,8 +4,8 @@ use alloc::{string::String, vec, vec::Vec};
 
 use crate::r::ui2::{self, Ui2FontTier, Ui2HostedInteractiveRect, Ui2Rect};
 
-const UI2_TEXT_INPUT_TEX_ID: u32 = crate::tst_ui2_ids::Ui2DemoTexId::TextInput.get();
-const UI2_TEXT_INPUT_CONTENT_ID: u32 = crate::tst_ui2_ids::Ui2DemoContentId::TextInput.get();
+const UI2_TEXT_INPUT_TEX_ID: u32 = crate::tst::ui2::ids::Ui2DemoTexId::TextInput.get();
+const UI2_TEXT_INPUT_CONTENT_ID: u32 = crate::tst::ui2::ids::Ui2DemoContentId::TextInput.get();
 const UI2_TEXT_INPUT_RT_W: u32 = 260;
 const UI2_TEXT_INPUT_FONT_TIER: Ui2FontTier = Ui2FontTier::OneX;
 const UI2_TEXT_INPUT_PAD_X: usize = 5;
