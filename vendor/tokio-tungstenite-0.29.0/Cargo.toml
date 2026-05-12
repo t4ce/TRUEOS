@@ -140,14 +140,12 @@ required-features = ["handshake"]
 
 [dependencies.futures-util]
 version = "0.3.28"
-features = [
-    "sink",
-    "std",
-]
+features = ["sink"]
 default-features = false
 
 [dependencies.log]
 version = "0.4.17"
+default-features = false
 
 [dependencies.native-tls-crate]
 version = "0.2.11"
@@ -166,6 +164,7 @@ optional = true
 [dependencies.rustls-pki-types]
 version = "1.0"
 optional = true
+default-features = false
 
 [dependencies.tokio]
 version = "1.0.0"

@@ -151,7 +151,6 @@ rustls-platform-verifier = [
 ]
 serde = [
     "dep:serde",
-    "std",
     "url/serde",
 ]
 std = [
@@ -171,7 +170,7 @@ std = [
     "url/std",
 ]
 testing = ["std"]
-text-parsing = ["std"]
+text-parsing = []
 tls-aws-lc-rs = [
     "tokio-rustls/aws-lc-rs",
     "__tls",
@@ -182,11 +181,9 @@ tls-ring = [
 ]
 tokio = [
     "dep:tokio",
-    "std",
     "tokio/net",
     "tokio/rt",
     "tokio/time",
-    "tokio/rt-multi-thread",
 ]
 wasm-bindgen = [
     "dep:wasm-bindgen-crate",
@@ -319,10 +316,7 @@ default-features = false
 
 [dependencies.rand]
 version = "0.9"
-features = [
-    "alloc",
-    "std_rng",
-]
+features = ["alloc"]
 default-features = false
 
 [dependencies.ring]
@@ -343,6 +337,7 @@ default-features = false
 [dependencies.rustls-pki-types]
 version = "1.10"
 optional = true
+default-features = false
 
 [dependencies.rustls-platform-verifier]
 version = "0.5"
@@ -381,6 +376,7 @@ features = [
     "macros",
 ]
 optional = true
+default-features = false
 
 [dependencies.tokio-rustls]
 version = "0.26"

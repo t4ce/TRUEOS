@@ -108,8 +108,18 @@ hyper = { path = "vendor/hyper-1.9.0" }
 hyper-util = { path = "vendor/hyper-util-0.1.20" }
 axum = { path = "vendor/axum-0.8.9" }
 axum-core = { path = "vendor/axum-core-0.5.6" }
+bincode = { path = "vendor/bincode-1.3.3" }
+http = { path = "vendor/http-1.4.0" }
+http-body = { path = "vendor/http-body-1.0.1" }
+http-body-util = { path = "vendor/http-body-util-0.1.3" }
+tower = { path = "vendor/tower-0.5.3" }
+tower-http = { path = "vendor/tower-http-0.6.9" }
 matchit = { path = "vendor/matchit-0.8.4" }
 mime = { path = "vendor/mime-0.3.17" }
+moka = { path = "vendor/moka-0.12.15" }
+ndarray-rand = { path = "vendor/ndarray-rand-0.14.0" }
+rand = { path = "vendor/rand-0.8.6" }
+rand_distr = { path = "vendor/rand_distr-0.4.3" }
 serde_path_to_error = { path = "vendor/serde_path_to_error-0.1.20" }
 tokio-tungstenite = { path = "vendor/tokio-tungstenite-0.29.0" }
 tungstenite = { path = "vendor/tungstenite-0.29.0" }
@@ -119,6 +129,8 @@ svgtypes = { path = "vendor/svgtypes-0.15.3" }
 xmlwriter = { path = "vendor/xmlwriter-0.1.0" }
 crc32fast = { path = "vendor/crc32fast-1.5.0" }
 embedded-websocket = { path = "vendor/embedded-websocket-0.9.4" }
+hickory-client = { path = "vendor/hickory-client-0.25.2" }
+hickory-resolver = { path = "vendor/hickory-resolver-0.25.2" }
 hickory-proto = { path = "vendor/hickory-proto-0.25.2" }
 crab-usb = { path = "vendor/crab-usb-0.6.2/crab-usb-0.6.2" }
 parking_lot = { path = "vendor/parking_lot-0.12.5" }

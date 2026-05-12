@@ -218,7 +218,6 @@ optional = true
 
 [dependencies.tracing]
 version = "0.1"
-features = ["std"]
 optional = true
 default-features = false
 
