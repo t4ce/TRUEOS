@@ -9,7 +9,7 @@ use crate::util::trace::SpawnMeta;
 use std::future::Future;
 use std::io;
 use std::mem;
-use std::time::Duration;
+use core::time::Duration;
 
 cfg_rt_multi_thread! {
     use crate::runtime::Builder;
@@ -431,7 +431,7 @@ impl Runtime {
     /// use tokio::task;
     ///
     /// use std::thread;
-    /// use std::time::Duration;
+    /// use core::time::Duration;
     ///
     /// fn main() {
     ///    let runtime = Runtime::new().unwrap();

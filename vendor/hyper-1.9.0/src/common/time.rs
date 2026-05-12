@@ -2,7 +2,7 @@
     all(any(feature = "client", feature = "server"), feature = "http2"),
     all(feature = "server", feature = "http1"),
 ))]
-use std::time::Duration;
+use core::time::Duration;
 use std::{fmt, sync::Arc};
 use std::{pin::Pin, time::Instant};
 

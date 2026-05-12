@@ -37,7 +37,7 @@
 //! idempotent, or if the response status code indicates a transient error.
 
 use std::sync::Arc;
-use std::time::Duration;
+use core::time::Duration;
 
 use tower::retry::budget::{Budget as _, TpsBudget as Budget};
 

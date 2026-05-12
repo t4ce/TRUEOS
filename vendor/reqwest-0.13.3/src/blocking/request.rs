@@ -1,6 +1,6 @@
 use std::convert::TryFrom;
 use std::fmt;
-use std::time::Duration;
+use core::time::Duration;
 
 use http::{request::Parts, Request as HttpRequest, Version};
 #[cfg(any(feature = "query", feature = "form", feature = "json"))]

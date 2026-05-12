@@ -403,7 +403,7 @@ mod tests {
     use crate::{extract::State, test_helpers::*};
     use axum_core::body::Body;
     use http::StatusCode;
-    use std::time::Duration;
+    use core::time::Duration;
     use tower_http::{
         limit::RequestBodyLimitLayer, map_request_body::MapRequestBodyLayer,
         map_response_body::MapResponseBodyLayer, timeout::TimeoutLayer,

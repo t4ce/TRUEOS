@@ -82,10 +82,10 @@ impl<'a> Cookie<'a> {
     }
 
     /// Get the Max-Age information.
-    pub fn max_age(&self) -> Option<std::time::Duration> {
+    pub fn max_age(&self) -> Option<core::time::Duration> {
         self.0.max_age().map(|d| {
             d.try_into()
-                .expect("time::Duration into std::time::Duration")
+                .expect("time::Duration into core::time::Duration")
         })
     }
 

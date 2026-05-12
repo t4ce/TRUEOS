@@ -36,12 +36,12 @@ use super::ALPN_H3;
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 fn hickory_instant_now() -> std::time::Instant {
-    let duration = std::time::Duration::from_nanos(unsafe {
+    let duration = core::time::Duration::from_nanos(unsafe {
         trueos_platform_monotonic_nanos()
     });
     // TRUEOS currently uses Rust's unsupported std-time layout shim; Hyper uses
     // the same representation bridge for target-local Instant construction.
-    unsafe { core::mem::transmute::<std::time::Duration, std::time::Instant>(duration) }
+    unsafe { core::mem::transmute::<core::time::Duration, std::time::Instant>(duration) }
 }
 
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]

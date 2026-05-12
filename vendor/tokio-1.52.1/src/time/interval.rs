@@ -416,7 +416,7 @@ impl Interval {
     /// ```
     /// use tokio::time;
     ///
-    /// use std::time::Duration;
+    /// use core::time::Duration;
     ///
     /// # #[tokio::main(flavor = "current_thread")]
     /// # async fn main() {
@@ -504,7 +504,7 @@ impl Interval {
     /// ```
     /// use tokio::time;
     ///
-    /// use std::time::Duration;
+    /// use core::time::Duration;
     ///
     /// # #[tokio::main(flavor = "current_thread")]
     /// # async fn main() {
@@ -536,7 +536,7 @@ impl Interval {
     /// ```
     /// use tokio::time;
     ///
-    /// use std::time::Duration;
+    /// use core::time::Duration;
     ///
     /// # #[tokio::main(flavor = "current_thread")]
     /// # async fn main() {
@@ -557,7 +557,7 @@ impl Interval {
         self.delay.as_mut().reset(Instant::now());
     }
 
-    /// Resets the interval after the specified [`std::time::Duration`].
+    /// Resets the interval after the specified [`core::time::Duration`].
     ///
     /// This method ignores [`MissedTickBehavior`] strategy.
     ///
@@ -568,7 +568,7 @@ impl Interval {
     /// ```
     /// use tokio::time;
     ///
-    /// use std::time::Duration;
+    /// use core::time::Duration;
     ///
     /// # #[tokio::main(flavor = "current_thread")]
     /// # async fn main() {
@@ -604,7 +604,7 @@ impl Interval {
     /// ```
     /// use tokio::time::{self, Instant};
     ///
-    /// use std::time::Duration;
+    /// use core::time::Duration;
     ///
     /// # #[tokio::main(flavor = "current_thread")]
     /// # async fn main() {

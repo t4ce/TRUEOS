@@ -1,6 +1,6 @@
 use std::convert::TryFrom;
 use std::fmt;
-use std::time::Duration;
+use core::time::Duration;
 
 use bytes::Bytes;
 use http::{request::Parts, Method, Request as HttpRequest};

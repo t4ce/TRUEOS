@@ -44,7 +44,7 @@ use crate::{event, sys, Interest, Registry, Token};
 ///
 /// use mio::net::UdpSocket;
 /// use mio::{Events, Interest, Poll, Token};
-/// use std::time::Duration;
+/// use core::time::Duration;
 ///
 /// const SENDER: Token = Token(0);
 /// const ECHOER: Token = Token(1);

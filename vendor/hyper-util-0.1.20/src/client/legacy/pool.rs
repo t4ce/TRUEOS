@@ -11,7 +11,8 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, Weak};
 use std::task::{self, ready, Poll};
 
-use std::time::{Duration, Instant};
+use core::time::Duration;
+use std::time::Instant;
 
 use futures_channel::oneshot;
 use tracing::{debug, trace};
@@ -840,7 +841,7 @@ mod tests {
     use std::hash::Hash;
     use std::pin::Pin;
     use std::task::{self, Poll};
-    use std::time::Duration;
+    use core::time::Duration;
 
     use super::{Connecting, Key, Pool, Poolable, Reservation, WeakOpt};
     use crate::rt::{TokioExecutor, TokioTimer};

@@ -1,7 +1,8 @@
 use std::cell::RefCell;
 use std::fmt::{self, Write};
 use std::str;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use core::time::Duration;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(feature = "http2")]
 use http::header::HeaderValue;

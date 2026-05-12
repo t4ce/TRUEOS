@@ -1,5 +1,5 @@
 use crate::runtime::Handle;
-use std::time::Duration;
+use core::time::Duration;
 
 cfg_64bit_metrics! {
     use std::sync::atomic::Ordering::Relaxed;

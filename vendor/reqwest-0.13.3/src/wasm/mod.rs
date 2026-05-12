@@ -1,5 +1,5 @@
 use std::convert::TryInto;
-use std::time::Duration;
+use core::time::Duration;
 
 use js_sys::Function;
 use wasm_bindgen::prelude::{wasm_bindgen, Closure};

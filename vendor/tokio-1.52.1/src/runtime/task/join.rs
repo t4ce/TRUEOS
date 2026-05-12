@@ -133,7 +133,7 @@ cfg_rt! {
     /// ```no_run
     /// use tokio::task;
     /// use tokio::time;
-    /// use std::time::Duration;
+    /// use core::time::Duration;
     ///
     /// # #[tokio::main(flavor = "current_thread")]
     /// # async fn main() {

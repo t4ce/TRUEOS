@@ -1,7 +1,7 @@
 use std::convert::TryFrom;
 use std::fmt;
 use std::future::Future;
-use std::time::Duration;
+use core::time::Duration;
 
 #[cfg(any(feature = "query", feature = "form", feature = "json"))]
 use serde::Serialize;

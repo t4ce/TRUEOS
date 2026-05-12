@@ -21,7 +21,7 @@ use std::net::{self, Ipv4Addr, Shutdown};
 use std::os::fd::{FromRawFd, IntoRawFd};
 #[cfg(windows)]
 use std::os::windows::io::{FromRawSocket, IntoRawSocket};
-use std::time::Duration;
+use core::time::Duration;
 
 use crate::sys::{self, c_int, getsockopt, setsockopt, Bool};
 #[cfg(all(unix, not(target_os = "redox")))]
@@ -2125,7 +2125,7 @@ impl Socket {
     /// # Examples
     ///
     /// ```
-    /// use std::time::Duration;
+    /// use core::time::Duration;
     ///
     /// use socket2::{Socket, TcpKeepalive, Domain, Type};
     ///

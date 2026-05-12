@@ -8,7 +8,7 @@ use crate::runtime::driver::{self, Driver};
 use crate::util::TryLock;
 
 use std::sync::atomic::Ordering::SeqCst;
-use std::time::Duration;
+use core::time::Duration;
 
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use crate::loom::sync::Condvar;

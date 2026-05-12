@@ -7,7 +7,7 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::sync::{LockResult, TryLockError};
-use std::time::Duration;
+use core::time::Duration;
 
 // All types in this file are marked with PhantomData to ensure that
 // parking_lot's send_guard feature does not leak through and affect when Tokio

@@ -6,7 +6,7 @@ use crate::process::unix::GlobalOrphanQueue;
 use crate::runtime::driver;
 use crate::runtime::signal::{Driver as SignalDriver, Handle as SignalHandle};
 
-use std::time::Duration;
+use core::time::Duration;
 
 /// Responsible for cleaning up orphaned child processes on Unix platforms.
 #[derive(Debug)]

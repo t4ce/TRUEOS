@@ -1,7 +1,7 @@
 use crate::runtime::scheduler::driver;
 use crate::runtime::time_alt::cancellation_queue::{Receiver, Sender};
 use crate::runtime::time_alt::{EntryHandle, RegistrationQueue, WakeQueue, Wheel};
-use std::time::Duration;
+use core::time::Duration;
 
 pub(crate) fn min_duration(a: Option<Duration>, b: Option<Duration>) -> Option<Duration> {
     match (a, b) {

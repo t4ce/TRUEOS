@@ -35,7 +35,7 @@ use self::rrset::Rrset;
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 fn hickory_system_time_now() -> SystemTime {
-    UNIX_EPOCH + std::time::Duration::from_secs(unsafe { trueos_platform_unix_seconds() })
+    UNIX_EPOCH + core::time::Duration::from_secs(unsafe { trueos_platform_unix_seconds() })
 }
 
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]

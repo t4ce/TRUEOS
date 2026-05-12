@@ -132,7 +132,7 @@ mod tests {
     use std::sync::mpsc::channel;
     use std::sync::Arc;
     use std::thread;
-    use std::time::Duration;
+    use core::time::Duration;
 
     #[cfg(feature = "serde")]
     use bincode::{deserialize, serialize};

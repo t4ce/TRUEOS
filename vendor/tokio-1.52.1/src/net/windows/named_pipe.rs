@@ -950,7 +950,7 @@ impl AsHandle for NamedPipeServer {
 /// So a correctly implemented client looks like this:
 ///
 /// ```no_run
-/// use std::time::Duration;
+/// use core::time::Duration;
 /// use tokio::net::windows::named_pipe::ClientOptions;
 /// use tokio::time;
 /// use windows_sys::Win32::Foundation::ERROR_PIPE_BUSY;
@@ -2488,7 +2488,7 @@ impl ClientOptions {
     /// this:
     ///
     /// ```no_run
-    /// use std::time::Duration;
+    /// use core::time::Duration;
     /// use tokio::net::windows::named_pipe::ClientOptions;
     /// use tokio::time;
     /// use windows_sys::Win32::Foundation::ERROR_PIPE_BUSY;

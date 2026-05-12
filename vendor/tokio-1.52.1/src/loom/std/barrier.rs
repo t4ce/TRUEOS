@@ -7,9 +7,10 @@ use crate::loom::sync::Condvar;
 use crate::loom::sync::Mutex;
 use std::fmt;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
-use std::time::Duration;
+use core::time::Duration;
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-use std::time::{Duration, Instant};
+use core::time::Duration;
+use std::time::Instant;
 
 /// A barrier enables multiple threads to synchronize the beginning
 /// of some computation.

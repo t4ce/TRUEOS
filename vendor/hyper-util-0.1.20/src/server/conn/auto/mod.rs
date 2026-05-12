@@ -3,12 +3,13 @@
 pub mod upgrade;
 
 use hyper::service::HttpService;
+use core::time::Duration;
 use std::future::Future;
 use std::marker::PhantomPinned;
 use std::mem::MaybeUninit;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
-use std::{error::Error as StdError, io, time::Duration};
+use std::{error::Error as StdError, io};
 
 use bytes::Bytes;
 use http::{Request, Response};
@@ -1126,6 +1127,7 @@ impl<E> Http2Builder<'_, E> {
 
 #[cfg(test)]
 mod tests {
+    use core::time::Duration;
     use crate::{
         rt::{TokioExecutor, TokioIo},
         server::conn::auto,
@@ -1134,7 +1136,7 @@ mod tests {
     use http_body::Body;
     use http_body_util::{BodyExt, Empty, Full};
     use hyper::{body, body::Bytes, client, service::service_fn};
-    use std::{convert::Infallible, error::Error as StdError, net::SocketAddr, time::Duration};
+    use std::{convert::Infallible, error::Error as StdError, net::SocketAddr};
     use tokio::{
         net::{TcpListener, TcpStream},
         pin,

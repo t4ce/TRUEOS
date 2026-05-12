@@ -114,14 +114,17 @@ optional = true
 
 [dependencies.bytes]
 version = "1.2"
+default-features = false
 
 [dependencies.futures-channel]
 version = "0.3"
 optional = true
+default-features = false
 
 [dependencies.futures-core]
 version = "0.3.31"
 optional = true
+default-features = false
 
 [dependencies.futures-util]
 version = "0.3"
@@ -135,13 +138,16 @@ optional = true
 
 [dependencies.http]
 version = "1"
+default-features = false
 
 [dependencies.http-body]
 version = "1"
+default-features = false
 
 [dependencies.http-body-util]
 version = "0.1"
 optional = true
+default-features = false
 
 [dependencies.httparse]
 version = "1.9"
@@ -170,6 +176,7 @@ optional = true
 [dependencies.tokio]
 version = "1"
 features = ["sync"]
+default-features = false
 
 [dependencies.tracing]
 version = "0.1"

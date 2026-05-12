@@ -194,6 +194,7 @@ version = "0.22"
 
 [dependencies.bytes]
 version = "1.2"
+default-features = false
 
 [dependencies.futures-core]
 version = "0.3.28"
@@ -206,6 +207,7 @@ default-features = false
 
 [dependencies.http]
 version = "1.1"
+default-features = false
 
 [dependencies.mime_guess]
 version = "2.0"
@@ -215,10 +217,13 @@ default-features = false
 [dependencies.serde]
 version = "1.0"
 optional = true
+default-features = false
 
 [dependencies.serde_json]
 version = "1.0"
 optional = true
+features = ["alloc"]
+default-features = false
 
 [dependencies.serde_urlencoded]
 version = "0.7.1"
@@ -227,6 +232,7 @@ optional = true
 [dependencies.sync_wrapper]
 version = "1.0"
 features = ["futures"]
+default-features = false
 
 [dependencies.url]
 version = "2.4"
@@ -299,6 +305,7 @@ optional = true
 [target.'cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))'.dependencies.futures-channel]
 version = "0.3"
 optional = true
+default-features = false
 
 [target.'cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))'.dependencies.h2]
 version = "0.4"
@@ -316,12 +323,15 @@ optional = true
 version = "0.25"
 features = ["tokio"]
 optional = true
+default-features = false
 
 [target.'cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))'.dependencies.http-body]
 version = "1"
+default-features = false
 
 [target.'cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))'.dependencies.http-body-util]
 version = "0.1.2"
+default-features = false
 
 [target.'cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))'.dependencies.hyper]
 version = "1.1"
@@ -329,6 +339,7 @@ features = [
     "http1",
     "client",
 ]
+default-features = false
 
 [target.'cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))'.dependencies.hyper-rustls]
 version = "0.27.0"
@@ -352,6 +363,7 @@ features = [
     "client-proxy",
     "tokio",
 ]
+default-features = false
 
 [target.'cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))'.dependencies.log]
 version = "0.4.17"
@@ -368,9 +380,11 @@ package = "native-tls"
 [target.'cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))'.dependencies.once_cell]
 version = "1.18"
 optional = true
+default-features = false
 
 [target.'cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))'.dependencies.percent-encoding]
 version = "2.3"
+default-features = false
 
 [target.'cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))'.dependencies.pin-project-lite]
 version = "0.2.11"
@@ -392,8 +406,9 @@ default-features = false
 
 [target.'cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))'.dependencies.rustls-pki-types]
 version = "1.9.0"
-features = ["std"]
+features = ["alloc"]
 optional = true
+default-features = false
 
 [target.'cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))'.dependencies.rustls-platform-verifier]
 version = ">=0.6.0, <0.8.0"

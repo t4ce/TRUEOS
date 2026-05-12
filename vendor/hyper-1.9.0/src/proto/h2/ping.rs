@@ -24,7 +24,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{self, Poll};
-use std::time::{Duration, Instant};
+use core::time::Duration;
+use std::time::Instant;
 
 use h2::{Ping, PingPong};
 

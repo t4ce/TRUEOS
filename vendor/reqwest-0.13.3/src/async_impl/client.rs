@@ -5,7 +5,7 @@ use std::net::IpAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
-use std::time::Duration;
+use core::time::Duration;
 use std::{collections::HashMap, convert::TryInto, net::SocketAddr};
 use std::{fmt, str};
 
@@ -2419,7 +2419,7 @@ impl ClientBuilder {
     ///
     /// Example usage:
     /// ```
-    /// use std::time::Duration;
+    /// use core::time::Duration;
     ///
     /// # #[cfg(not(feature = "rustls-no-provider"))]
     /// let client = reqwest::Client::builder()

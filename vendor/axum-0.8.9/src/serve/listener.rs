@@ -1,4 +1,5 @@
-use std::{fmt, future::Future, time::Duration};
+use core::time::Duration;
+use std::{fmt, future::Future};
 
 use tokio::{
     io::{self, AsyncRead, AsyncWrite},

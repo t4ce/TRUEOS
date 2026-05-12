@@ -1347,7 +1347,7 @@ mod tests {
     use crate::{extract::State, handler::HandlerWithoutStateExt};
     use http::{header::ALLOW, HeaderMap};
     use http_body_util::BodyExt;
-    use std::time::Duration;
+    use core::time::Duration;
     use tower::ServiceExt;
     use tower_http::{
         services::fs::ServeDir, timeout::TimeoutLayer, validate_request::ValidateRequestHeaderLayer,

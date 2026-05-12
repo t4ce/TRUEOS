@@ -34,7 +34,7 @@ use crate::{event, Interest, Registry, Token};
 /// let listener = TcpListener::bind(address)?;
 /// use mio::{Events, Interest, Poll, Token};
 /// use mio::net::TcpStream;
-/// use std::time::Duration;
+/// use core::time::Duration;
 ///
 /// let mut stream = TcpStream::connect(listener.local_addr()?)?;
 ///

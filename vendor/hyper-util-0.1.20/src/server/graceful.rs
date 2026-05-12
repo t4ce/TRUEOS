@@ -351,7 +351,7 @@ mod test {
             let shutdown_counter = shutdown_counter.clone();
 
             let future = async move {
-                tokio::time::sleep(std::time::Duration::from_millis(i * 10)).await;
+                tokio::time::sleep(core::time::Duration::from_millis(i * 10)).await;
                 let _ = dummy_rx.recv().await;
             };
             let dummy_conn = DummyConnection {
@@ -368,7 +368,7 @@ mod test {
         let _ = dummy_tx.send(());
 
         tokio::select! {
-            _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
+            _ = tokio::time::sleep(core::time::Duration::from_millis(100)) => {
                 panic!("timeout")
             },
             _ = graceful.shutdown() => {
@@ -386,9 +386,9 @@ mod test {
         for i in 1..=3 {
             let shutdown_counter = shutdown_counter.clone();
 
-            //tokio::time::sleep(std::time::Duration::from_millis(i * 5)).await;
+            //tokio::time::sleep(core::time::Duration::from_millis(i * 5)).await;
             let future = async move {
-                tokio::time::sleep(std::time::Duration::from_millis(i * 50)).await;
+                tokio::time::sleep(core::time::Duration::from_millis(i * 50)).await;
             };
             let dummy_conn = DummyConnection {
                 future,
@@ -403,7 +403,7 @@ mod test {
         assert_eq!(shutdown_counter.load(Ordering::SeqCst), 0);
 
         tokio::select! {
-            _ = tokio::time::sleep(std::time::Duration::from_millis(200)) => {
+            _ = tokio::time::sleep(core::time::Duration::from_millis(200)) => {
                 panic!("timeout")
             },
             _ = graceful.shutdown() => {
@@ -423,7 +423,7 @@ mod test {
 
             let mut futures = Vec::new();
             for u in 1..=i {
-                let future = tokio::time::sleep(std::time::Duration::from_millis(u * 50));
+                let future = tokio::time::sleep(core::time::Duration::from_millis(u * 50));
                 let dummy_conn = DummyConnection {
                     future,
                     shutdown_counter: shutdown_counter.clone(),
@@ -439,7 +439,7 @@ mod test {
         assert_eq!(shutdown_counter.load(Ordering::SeqCst), 0);
 
         tokio::select! {
-            _ = tokio::time::sleep(std::time::Duration::from_millis(200)) => {
+            _ = tokio::time::sleep(core::time::Duration::from_millis(200)) => {
                 panic!("timeout")
             },
             _ = graceful.shutdown() => {
@@ -477,7 +477,7 @@ mod test {
         assert_eq!(shutdown_counter.load(Ordering::SeqCst), 0);
 
         tokio::select! {
-            _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
+            _ = tokio::time::sleep(core::time::Duration::from_millis(100)) => {
                 assert_eq!(shutdown_counter.load(Ordering::SeqCst), 3);
             },
             _ = graceful.shutdown() => {

@@ -1,7 +1,7 @@
 use crate::runtime::{self, Runtime};
 
 use std::sync::Arc;
-use std::time::Duration;
+use core::time::Duration;
 
 #[test]
 fn blocking_shutdown() {

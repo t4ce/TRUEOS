@@ -10,7 +10,7 @@
 use crate::runtime::park::{ParkThread, UnparkThread};
 
 use std::io;
-use std::time::Duration;
+use core::time::Duration;
 
 #[derive(Debug)]
 pub(crate) struct Driver {

@@ -8,7 +8,7 @@ use crate::signal::registry::globals;
 use mio::net::UnixStream;
 use std::io::{self as std_io, Read};
 use std::sync::{Arc, Weak};
-use std::time::Duration;
+use core::time::Duration;
 
 /// Responsible for registering wakeups when an OS signal is received, and
 /// subsequently dispatching notifications to any signal listeners as appropriate.

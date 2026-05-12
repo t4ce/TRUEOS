@@ -2,7 +2,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 use std::thread::{self, Thread};
-use std::time::Duration;
+use core::time::Duration;
 
 use tokio::time::Instant;
 

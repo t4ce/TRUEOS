@@ -398,7 +398,7 @@ impl<T: 'static> JoinSet<T> {
     ///
     /// ```
     /// use tokio::task::JoinSet;
-    /// use std::time::Duration;
+    /// use core::time::Duration;
     ///
     /// # #[tokio::main(flavor = "current_thread")]
     /// # async fn main() {

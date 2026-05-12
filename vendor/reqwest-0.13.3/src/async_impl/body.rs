@@ -2,7 +2,7 @@ use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
-use std::time::Duration;
+use core::time::Duration;
 
 use bytes::Bytes;
 use http_body::Body as HttpBody;
