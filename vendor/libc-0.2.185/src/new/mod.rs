@@ -87,7 +87,7 @@ cfg_if! {
     } else if #[cfg(target_os = "l4re")] {
         mod l4re;
         // pub(crate) use l4re::*;
-    } else if #[cfg(any(target_os = "linux", target_os = "trueos"))] {
+    } else if #[cfg(target_os = "linux")] {
         mod linux_uapi;
         pub(crate) use linux_uapi::*;
     } else if #[cfg(target_os = "netbsd")] {
@@ -168,8 +168,6 @@ cfg_if! {
     } else if #[cfg(target_env = "uclibc")] {
         mod uclibc;
         pub(crate) use uclibc::*;
-    } else if #[cfg(target_os = "trueos")] {
-        pub(crate) use common::posix::*;
     }
 }
 
@@ -177,7 +175,7 @@ cfg_if! {
 cfg_if! {
     if #[cfg(target_os = "android")] {
         pub use sys::socket::*;
-    } else if #[cfg(any(target_os = "linux", target_os = "trueos"))] {
+    } else if #[cfg(target_os = "linux")] {
         pub use linux::can::bcm::*;
         pub use linux::can::error::*;
         pub use linux::can::j1939::*;
@@ -233,7 +231,7 @@ cfg_if! {
             target_os = "android",
             target_os = "emscripten",
             target_os = "l4re",
-            any(target_os = "linux", target_os = "trueos")
+            target_os = "linux"
         ))]
         pub use pthread::*;
         pub use unistd::*;

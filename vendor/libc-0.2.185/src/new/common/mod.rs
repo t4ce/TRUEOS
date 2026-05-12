@@ -22,7 +22,7 @@ pub(crate) mod bsd;
     target_os = "android",
     target_os = "emscripten",
     target_os = "l4re",
-    any(target_os = "linux", target_os = "trueos"),
+    target_os = "linux",
 ))]
 pub(crate) mod linux_like;
 

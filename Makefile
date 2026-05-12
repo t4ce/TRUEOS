@@ -85,7 +85,7 @@ empty-libs:
 	ar crs $(KERNEL_EMPTY_LIB_DIR)/libgcc_s.a
 
 kernel: empty-libs
-	cargo +nightly build $(CARGO_GFX_FLAGS) $(CARGO_BUILD_FLAGS) -Z build-std=core,compiler_builtins,alloc,std,panic_abort -Z json-target-spec --target .cargo/x86_64-unknown-trueos.json
+	cargo +nightly build $(CARGO_GFX_FLAGS) $(CARGO_BUILD_FLAGS) -Z build-std=core,compiler_builtins,alloc,panic_abort -Z json-target-spec --target .cargo/x86_64-unknown-trueos.json
 
 artifacts: kernel
 	mkdir -p $(ARTIFACT_DIR)
