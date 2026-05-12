@@ -1412,14 +1412,17 @@ fn gpgpu_primary_scanout_pixel_quiet_program() -> GpgpuEuProgram {
 }
 
 fn gpgpu_primary_scanout_mandelbrot8_program() -> GpgpuEuProgram {
-    let artifact = trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_HDC1_STATELESS_STORE_THEN_TS_EOT;
+    let artifact =
+        trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_COLOR_HDC1_STATELESS_STORE_THEN_TS_EOT;
     GpgpuEuProgram {
         name: artifact.name,
         kind: artifact.kind,
         words: artifact.words,
         expects_store: artifact.expects_store,
         expected_store_value: 0,
-        store_send_dword: Some(trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_STORE_SEND_DWORD),
+        store_send_dword: Some(
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_STORE_SEND_DWORD,
+        ),
         visible_seed_dword: None,
     }
 }
@@ -2606,39 +2609,13 @@ pub(crate) fn submit_gpgpu_primary_scanout_marker_probe() -> crate::intel::Gpgpu
     }
 }
 
-fn mandelbrot_preview_color(x: usize, y: usize, width: usize, height: usize, phase: usize) -> u32 {
-    const FP_SHIFT: i64 = 16;
-    const ONE: i64 = 1 << FP_SHIFT;
-    const MAX_ITER: u32 = 40;
+fn mandelbrot_simd8_coord_seed(y: usize, phase: usize) -> u32 {
+    0x0000_3080 ^ (((y as u32) & 0xFF) << 16) ^ (((phase as u32) & 0x3F) << 24)
+}
 
-    let width_den = core::cmp::max(width.saturating_sub(1), 1) as i64;
-    let height_den = core::cmp::max(height.saturating_sub(1), 1) as i64;
-    let drift = ((phase as i64 & 0x1F) - 16) * 512;
-    let cx = (-2 * ONE) + ((x as i64) * (3 * ONE) / width_den) + drift;
-    let cy = (-(ONE + ONE / 5)) + ((y as i64) * ((2 * ONE) + (ONE / 2)) / height_den);
-    let mut zx = 0i64;
-    let mut zy = 0i64;
-    let mut iter = 0u32;
-    while iter < MAX_ITER {
-        let zx2 = (zx * zx) >> FP_SHIFT;
-        let zy2 = (zy * zy) >> FP_SHIFT;
-        if zx2 + zy2 > 4 * ONE {
-            break;
-        }
-        let zxy = (zx * zy) >> (FP_SHIFT - 1);
-        zx = zx2 - zy2 + cx;
-        zy = zxy + cy;
-        iter += 1;
-    }
-
-    if iter == MAX_ITER {
-        return 0x00001018;
-    }
-    let t = iter.saturating_mul(255) / MAX_ITER;
-    let r = (t ^ 0x5A) & 0xFF;
-    let g = t.wrapping_mul(3).wrapping_add(48) & 0xFF;
-    let b = 255u32.saturating_sub(t / 2);
-    (r << 16) | (g << 8) | b
+fn mandelbrot_simd8_coord_color(x: usize, y: usize, phase: usize) -> u32 {
+    let step = (x as u32).wrapping_mul(11);
+    step.wrapping_add(mandelbrot_simd8_coord_seed(y, phase)) | step.wrapping_shl(8)
 }
 
 fn submit_gpgpu_primary_scanout_pixel_quiet(
@@ -2754,29 +2731,27 @@ fn submit_gpgpu_primary_scanout_mandelbrot_strip(
     height: usize,
     phase: usize,
 ) -> crate::intel::GpgpuOneTileSentinelProof {
-    const LANES: usize = trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_LANES;
+    const LANES: usize = trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_LANES;
 
     if row_gpu >> 32 != 0 {
         return gpgpu_one_tile_sentinel_failure("strip-gpu-high32-unsupported", program, row_gpu);
     }
 
-    let expected_first = mandelbrot_preview_color(x_base, y, width, height, phase);
+    let expected_first = mandelbrot_simd8_coord_color(x_base, y, phase);
     let output_first_before = unsafe { core::ptr::read_volatile(row_virt as *const u32) };
 
     let mut strip_words =
-        trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS;
-    let mut color_lane = 0usize;
-    while color_lane < LANES {
-        strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[color_lane]] =
-            mandelbrot_preview_color(x_base + color_lane, y, width, height, phase);
-        strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_DWORDS[color_lane]] =
-            (row_gpu + (color_lane * core::mem::size_of::<u32>()) as u64) as u32;
-        color_lane += 1;
-    }
+        trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_COLOR_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS;
+    strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_X_BASE_DWORD] =
+        x_base as u32;
+    strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_COLOR_SEED_DWORD] =
+        mandelbrot_simd8_coord_seed(y, phase);
+    strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_ADDRESS_BASE_DWORD] =
+        row_gpu as u32;
     if x_base == 0 && y == 0 {
-        let send_dword = trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_STORE_SEND_DWORD;
+        let send_dword = trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_STORE_SEND_DWORD;
         crate::log!(
-            "intel/gpgpu: primary-scanout-mandelbrot8-patch row_gpu=0x{:X} row_virt=0x{:X} row={} x_base={} width={} height={} phase={} addressing=scalar-stateless-absolute color_dwords=[{},{},{},{},{},{},{},{}] address_dwords=[{},{},{},{},{},{},{},{}] colors=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] addrs=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] send_desc=0x{:08X} send_exdesc=0x{:08X} note=runtime-patched-eu-words-before-upload\n",
+            "intel/gpgpu: primary-scanout-mandelbrot8-patch row_gpu=0x{:X} row_virt=0x{:X} row={} x_base={} width={} height={} phase={} addressing=simd8-lane-derived-stateless x_base_dword={} color_seed_dword={} address_base_dword={} color_seed=0x{:08X} first_expected=0x{:08X} send_desc=0x{:08X} send_exdesc=0x{:08X} note=uniform-patched-eu-words-before-upload\n",
             row_gpu,
             row_virt as usize,
             y,
@@ -2784,38 +2759,11 @@ fn submit_gpgpu_primary_scanout_mandelbrot_strip(
             width,
             height,
             phase,
-            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[0],
-            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[1],
-            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[2],
-            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[3],
-            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[4],
-            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[5],
-            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[6],
-            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[7],
-            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_DWORDS[0],
-            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_DWORDS[1],
-            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_DWORDS[2],
-            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_DWORDS[3],
-            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_DWORDS[4],
-            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_DWORDS[5],
-            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_DWORDS[6],
-            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_DWORDS[7],
-            strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[0]],
-            strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[1]],
-            strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[2]],
-            strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[3]],
-            strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[4]],
-            strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[5]],
-            strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[6]],
-            strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS[7]],
-            strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_DWORDS[0]],
-            strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_DWORDS[1]],
-            strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_DWORDS[2]],
-            strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_DWORDS[3]],
-            strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_DWORDS[4]],
-            strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_DWORDS[5]],
-            strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_DWORDS[6]],
-            strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_DWORDS[7]],
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_X_BASE_DWORD,
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_COLOR_SEED_DWORD,
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_ADDRESS_BASE_DWORD,
+            strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_COLOR_SEED_DWORD],
+            expected_first,
             strip_words[send_dword - 1],
             strip_words[send_dword],
         );
@@ -2869,7 +2817,7 @@ fn submit_gpgpu_primary_scanout_mandelbrot_strip(
         let after = unsafe {
             core::ptr::read_volatile(row_virt.add(lane * core::mem::size_of::<u32>()) as *const u32)
         };
-        let expected = mandelbrot_preview_color(x_base + lane, y, width, height, phase);
+        let expected = mandelbrot_simd8_coord_color(x_base + lane, y, phase);
         if after == expected {
             hits |= 1u64 << lane;
         }
@@ -2926,7 +2874,7 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot_preview(
     const PREVIEW_X: u32 = 0;
     const PREVIEW_Y: u32 = 0;
     const ROW_INTERLACE: usize = 16;
-    const LANES: usize = trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_LANES;
+    const LANES: usize = trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_LANES;
 
     let program = gpgpu_primary_scanout_mandelbrot8_program();
     let Some(dev) = crate::intel::claimed_device() else {
