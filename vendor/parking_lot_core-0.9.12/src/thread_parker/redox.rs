@@ -10,7 +10,7 @@ use core::{
     sync::atomic::{AtomicI32, Ordering},
 };
 use std::thread;
-use std::time::Instant;
+use crate::time::Instant;
 use syscall::{
     call::futex,
     data::TimeSpec,

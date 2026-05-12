@@ -11,7 +11,7 @@ use core::{
     ptr,
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Instant;
+use crate::time::Instant;
 
 const STATE_UNPARKED: usize = 0;
 const STATE_PARKED: usize = 1;

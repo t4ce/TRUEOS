@@ -21,6 +21,19 @@ fn std_now() -> StdInstant {
     std::time::Instant::now()
 }
 
+#[cfg(feature = "test-util")]
+fn std_duration_since(now: StdInstant, earlier: StdInstant) -> core::time::Duration {
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    {
+        return now.saturating_sub(earlier);
+    }
+
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+    {
+        now.saturating_duration_since(earlier)
+    }
+}
+
 cfg_not_test_util! {
     use crate::time::{Instant};
 
@@ -349,7 +362,7 @@ cfg_test_util! {
             DID_PAUSE_CLOCK.store(true, Ordering::Release);
 
             let elapsed = match inner.unfrozen.as_ref() {
-                Some(v) => std_now().saturating_duration_since(*v),
+                Some(v) => std_duration_since(std_now(), *v),
                 None => return Err("time is already frozen"),
             };
             inner.base += elapsed;
@@ -391,7 +404,7 @@ cfg_test_util! {
             let mut ret = inner.base;
 
             if let Some(unfrozen) = inner.unfrozen {
-                ret += std_now().saturating_duration_since(unfrozen);
+                ret += std_duration_since(std_now(), unfrozen);
             }
 
             Instant::from_std(ret)

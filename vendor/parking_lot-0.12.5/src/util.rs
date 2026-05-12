@@ -6,7 +6,7 @@
 // copied, modified, or distributed except according to those terms.
 
 use core::time::Duration;
-use std::time::Instant;
+use crate::time::Instant;
 
 // Option::unchecked_unwrap
 pub trait UncheckedOptionExt<T> {

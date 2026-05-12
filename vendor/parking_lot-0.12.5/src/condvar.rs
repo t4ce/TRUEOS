@@ -16,7 +16,7 @@ use lock_api::RawMutex as RawMutex_;
 use parking_lot_core::{self, ParkResult, RequeueOp, UnparkResult, DEFAULT_PARK_TOKEN};
 use core::time::Duration;
 use core::ops::DerefMut;
-use std::time::Instant;
+use crate::time::Instant;
 
 /// A type indicating whether a timed wait on a condition variable returned
 /// due to a time out or not.
@@ -532,7 +532,7 @@ mod tests {
     use std::thread::sleep;
     use std::thread::JoinHandle;
     use core::time::Duration;
-    use std::time::Instant;
+    use crate::time::Instant;
 
     #[test]
     fn smoke() {

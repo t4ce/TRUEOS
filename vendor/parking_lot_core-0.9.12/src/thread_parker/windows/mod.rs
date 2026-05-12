@@ -9,7 +9,7 @@ use core::{
     ptr,
     sync::atomic::{AtomicPtr, AtomicUsize, Ordering},
 };
-use std::time::Instant;
+use crate::time::Instant;
 
 mod bindings;
 mod keyed_event;

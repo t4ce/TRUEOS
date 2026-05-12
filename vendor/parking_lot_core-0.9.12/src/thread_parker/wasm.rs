@@ -9,7 +9,7 @@
 //! So this ThreadParker just panics on any attempt to park.
 
 use std::thread;
-use std::time::Instant;
+use crate::time::Instant;
 
 pub struct ThreadParker(());
 
