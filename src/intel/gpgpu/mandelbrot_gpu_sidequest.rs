@@ -146,23 +146,28 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
     let mut frame: u64 = 0;
     let mut released_lumen = false;
     let mut preview_cursor = 0usize;
+    let mut target_phase = 0usize;
     loop {
         let cursor_before = preview_cursor;
+        let target_quadrant = target_phase & 3;
         let (proof, next_cursor) = crate::intel::submit_gpgpu_primary_scanout_mandelbrot_preview(
             preview_cursor,
+            target_phase,
             MANDELBROT_GPGPU_PREVIEW_PIXELS_PER_TICK,
         );
         preview_cursor = next_cursor;
+        target_phase = target_phase.wrapping_add(1);
         let cursor_moved = preview_cursor != cursor_before;
         if cursor_moved && !released_lumen {
             crate::r::readiness::set(crate::r::readiness::MANDELBROT_GPU_SIDEQUEST_READY);
             released_lumen = true;
         }
-        let should_log_frame = frame < 4 || frame % 64 == 0 || !proof.finished;
+        let should_log_frame = frame < 4 || frame % 64 == 0 || proof.readback_ok;
         if should_log_frame {
             crate::log!(
-                "mandelbrot-gpu-sidequest: gpgpu-primary-framebuffer-mandelbrot8-loop frame={} submitted={} finished={} readback_ok={} reason={} program_source={} target_gpu=0x{:X} first_before=0x{:08X} after=0x{:08X} lane_change_mask=0x{:016X} finish_marker=0x{:08X} preview_cursor={} pixels_per_tick={} lumen_released={} action={} next={} deliverable=visible-mandelbrot-pixels\n",
+                "mandelbrot-gpu-sidequest: gpgpu-primary-framebuffer-mandelbrot8-loop frame={} target_quadrant={} submitted={} finished={} readback_ok={} reason={} program_source={} target_gpu=0x{:X} first_before=0x{:08X} after=0x{:08X} lane_change_mask=0x{:016X} finish_marker=0x{:08X} preview_cursor={} pixels_per_tick={} lumen_released={} action={} next={} deliverable=visible-mandelbrot-pixels\n",
                 frame,
+                target_quadrant,
                 proof.submitted as u8,
                 proof.finished as u8,
                 proof.readback_ok as u8,

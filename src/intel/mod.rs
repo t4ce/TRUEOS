@@ -541,9 +541,10 @@ pub(crate) fn submit_gpgpu_primary_scanout_marker_probe() -> GpgpuOneTileSentine
 
 pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot_preview(
     cursor: usize,
+    target_phase: usize,
     pixel_budget: usize,
 ) -> (GpgpuOneTileSentinelProof, usize) {
-    self::gpgpu::submit_gpgpu_primary_scanout_mandelbrot_preview(cursor, pixel_budget)
+    self::gpgpu::submit_gpgpu_primary_scanout_mandelbrot_preview(cursor, target_phase, pixel_budget)
 }
 
 pub(crate) fn submit_gpgpu_one_tile_output_compare_probe(

@@ -1346,6 +1346,9 @@ fn is_raw_awake_program_name(name: &str) -> bool {
 }
 
 fn should_log_gpgpu_program_shape(name: &str) -> bool {
+    if name == trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_PROGRAM_NAME {
+        return !MANDELBROT_WALKER_SHAPE_LOGGED.swap(true, Ordering::AcqRel);
+    }
     !is_raw_awake_program_name(name) && !name.contains("-quiet-")
 }
 
@@ -1410,6 +1413,8 @@ const GPGPU_STORE_SURFACE_STATE_OFFSET_BYTES: usize = 0x3500;
 const GPGPU_MANDELBROT_STORE_BINDING_TABLE_OFFSET_BYTES: usize = 0x6000;
 const GPGPU_MANDELBROT_STORE_SURFACE_STATE_OFFSET_BYTES: usize = 0x6100;
 const GPGPU_STORE_BINDING_TABLE_INDEX: usize = 0x34;
+const GPGPU_MANDELBROT_STORE_BINDING_TABLE_INDEX: usize =
+    trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_STORE_SURFACE as usize;
 const GPGPU_STORE_BINDING_TABLE_ENTRIES: usize = GPGPU_STORE_BINDING_TABLE_INDEX + 1;
 const GPGPU_STORE_SURFACE_DWORDS: usize = 16;
 const SURFTYPE_BUFFER: u32 = 4;
@@ -1436,6 +1441,8 @@ static GPGPU_EU_PROVEN_WALKER_RETIRED: AtomicBool = AtomicBool::new(false);
 static GPGPU_EU_PROVEN_DISPATCH_DELTA: AtomicU32 = AtomicU32::new(0);
 static GPGPU_EU_PROVEN_C_STORE_VALUE: AtomicU32 = AtomicU32::new(0);
 static MANDELBROT_Q12_PATCH_LOGGED: AtomicBool = AtomicBool::new(false);
+static MANDELBROT_WALKER_SHAPE_LOGGED: AtomicBool = AtomicBool::new(false);
+static MANDELBROT_PREVIEW_FAILURE_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct GpgpuPreflightStatus {
@@ -2203,7 +2210,7 @@ fn prepare_gpgpu_mandelbrot_store_surface_state_for_target_span(
         warm,
         target_gpu,
         target_bytes,
-        GPGPU_STORE_BINDING_TABLE_INDEX,
+        GPGPU_MANDELBROT_STORE_BINDING_TABLE_INDEX,
         GPGPU_MANDELBROT_STORE_BINDING_TABLE_OFFSET_BYTES,
         GPGPU_MANDELBROT_STORE_SURFACE_STATE_OFFSET_BYTES,
         note,
