@@ -165,7 +165,7 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
         let should_log_frame = frame < 4 || frame % 64 == 0 || proof.readback_ok;
         if should_log_frame {
             crate::log!(
-                "mandelbrot-gpu-sidequest: gpgpu-primary-framebuffer-mandelbrot8-loop frame={} target_quadrant={} submitted={} finished={} readback_ok={} reason={} program_source={} target_gpu=0x{:X} first_before=0x{:08X} after=0x{:08X} lane_change_mask=0x{:016X} finish_marker=0x{:08X} preview_cursor={} pixels_per_tick={} lumen_released={} action={} next={} deliverable=visible-mandelbrot-pixels\n",
+                "mandelbrot-gpu-sidequest: gpgpu-primary-framebuffer-mandelbrot8-loop frame={} target_quadrant={} submitted={} finished={} readback_ok={} reason={} program_source={} target_gpu=0x{:X} first_before=0x{:08X} after=0x{:08X} lane_change_mask=0x{:016X} lane_dispatch_delta={} finish_marker=0x{:08X} preview_cursor={} pixels_per_tick={} lumen_released={} action={} next={} deliverable=visible-mandelbrot-pixels\n",
                 frame,
                 target_quadrant,
                 proof.submitted as u8,
@@ -177,6 +177,7 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
                 proof.output_first_before,
                 proof.output_first_after,
                 proof.output_hits_lo64,
+                proof.dispatch_delta,
                 proof.finish_marker,
                 preview_cursor,
                 MANDELBROT_GPGPU_PREVIEW_PIXELS_PER_TICK,

@@ -523,6 +523,8 @@ fn submit_warm_render_batch(
     let log_submit = should_log_gpgpu_submit_name(submit_name);
     if is_gpgpu_submit_name(submit_name) {
         recover_render_engine_after_nonretired_submit(dev, warm, "gpgpu-pre-submit");
+    }
+    if uses_gpgpu_pipeline_submit_name(submit_name) {
         crate::intel::mmio_write(dev, GEN12_RCU_MODE, masked_bit_enable(GEN12_RCU_MODE_CCS_ENABLE));
     }
 
@@ -828,6 +830,10 @@ fn is_gpgpu_submit_name(name: &str) -> bool {
     )
 }
 
+fn uses_gpgpu_pipeline_submit_name(name: &str) -> bool {
+    is_gpgpu_submit_name(name) || matches!(name, "gpgpu-primary-scanout-mandelbrot8-strip")
+}
+
 fn should_log_gpgpu_submit_name(name: &str) -> bool {
     !matches!(
         name,
@@ -840,7 +846,7 @@ fn should_log_gpgpu_submit_name(name: &str) -> bool {
 }
 
 fn uses_extended_submit_poll(name: &str) -> bool {
-    is_gpgpu_submit_name(name) || matches!(name, "gpgpu-primary-scanout-mandelbrot8-strip")
+    uses_gpgpu_pipeline_submit_name(name)
 }
 
 fn seed_result_debug_slots(warm: RenderWarmState) {
