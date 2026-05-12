@@ -42,6 +42,7 @@ mod hv;
 mod hv;
 mod hyper_probe;
 mod intel;
+#[path = "intel/intel_hda_probe.rs"]
 mod intel_hda_probe;
 mod iso9660;
 mod limine;
@@ -79,7 +80,7 @@ mod tga;
 mod th;
 #[path = "tst/boot_factory_ram_probe.rs"]
 mod tst_boot_factory_ram_probe;
-#[path = "tst/html_demo.rs"]
+#[path = "surfer/html_demo.rs"]
 mod tst_html_demo;
 #[path = "surfer/html_shack.rs"]
 mod tst_html_shack;
@@ -89,7 +90,7 @@ mod tst_http_trueosfs;
 mod tst_mandelbrot_gpu_sidequest;
 #[path = "tst/net_tcp_shell.rs"]
 mod tst_net_tcp_shell;
-#[path = "tst/uas_skhynix_route_probe.rs"]
+#[path = "usb2/device/uas_skhynix_route_probe.rs"]
 mod tst_uas_skhynix_route_probe;
 #[path = "tst/ui2_analog_clock_demo.rs"]
 mod tst_ui2_analog_clock_demo;
