@@ -2,7 +2,10 @@ use crate::runtime::BOX_FUTURE_THRESHOLD;
 use crate::task::JoinHandle;
 use crate::util::trace::SpawnMeta;
 
-use std::future::Future;
+use alloc::boxed::Box;
+use core::future::Future;
+use core::result::Result::{Err, Ok};
+use core::{mem, panic};
 
 cfg_rt! {
     /// Spawns a new asynchronous task, returning a
@@ -176,7 +179,7 @@ cfg_rt! {
         F: Future + Send + 'static,
         F::Output: Send + 'static,
     {
-        let fut_size = std::mem::size_of::<F>();
+        let fut_size = mem::size_of::<F>();
         if fut_size > BOX_FUTURE_THRESHOLD {
             spawn_inner(Box::pin(future), SpawnMeta::new_unnamed(fut_size))
         } else {

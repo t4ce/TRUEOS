@@ -1,13 +1,16 @@
 //! Run-queue structures to support a work-stealing scheduler
 
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 use crate::loom::cell::UnsafeCell;
-use crate::loom::sync::Arc;
+use alloc::sync::Arc;
 use crate::runtime::scheduler::multi_thread::{Overflow, Stats};
 use crate::runtime::task;
 
-use std::mem::{self, MaybeUninit};
-use std::ptr;
-use std::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release};
+use core::mem::{self, MaybeUninit};
+use core::ptr;
+use core::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release};
 
 // Use wider integers when possible to increase ABA resilience.
 //
@@ -15,14 +18,14 @@ use std::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release};
 cfg_has_atomic_u64! {
     type UnsignedShort = u32;
     type UnsignedLong = u64;
-    type AtomicUnsignedShort = crate::loom::sync::atomic::AtomicU32;
-    type AtomicUnsignedLong = crate::loom::sync::atomic::AtomicU64;
+    type AtomicUnsignedShort = core::sync::atomic::AtomicU32;
+    type AtomicUnsignedLong = core::sync::atomic::AtomicU64;
 }
 cfg_not_has_atomic_u64! {
     type UnsignedShort = u16;
     type UnsignedLong = u32;
-    type AtomicUnsignedShort = crate::loom::sync::atomic::AtomicU16;
-    type AtomicUnsignedLong = crate::loom::sync::atomic::AtomicU32;
+    type AtomicUnsignedShort = core::sync::atomic::AtomicU16;
+    type AtomicUnsignedLong = core::sync::atomic::AtomicU32;
 }
 
 /// Producer handle. May only be used from a single thread.

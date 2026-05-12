@@ -1,3 +1,6 @@
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 pub(super) struct TraceStatus {}
 
 impl TraceStatus {

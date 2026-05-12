@@ -1,10 +1,13 @@
 //! Coordinates idling workers
 
-use crate::loom::sync::atomic::AtomicUsize;
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
+use core::sync::atomic::AtomicUsize;
 use crate::runtime::scheduler::multi_thread::Shared;
 
-use std::fmt;
-use std::sync::atomic::Ordering::{self, SeqCst};
+use core::fmt;
+use core::sync::atomic::Ordering::{self, SeqCst};
 
 pub(super) struct Idle {
     /// Tracks both the number of searching workers and the number of unparked

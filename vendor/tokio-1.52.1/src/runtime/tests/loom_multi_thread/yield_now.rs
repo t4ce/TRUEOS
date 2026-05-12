@@ -1,3 +1,6 @@
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 use crate::runtime::park;
 use crate::runtime::tests::loom_oneshot as oneshot;
 use crate::runtime::{self, Runtime};

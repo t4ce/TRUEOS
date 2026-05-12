@@ -1,11 +1,14 @@
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 use crate::runtime::task::{AbortHandle, Header, RawTask};
 
-use std::fmt;
-use std::future::Future;
-use std::marker::PhantomData;
+use core::fmt;
+use core::future::Future;
+use core::marker::PhantomData;
 use std::panic::{RefUnwindSafe, UnwindSafe};
-use std::pin::Pin;
-use std::task::{ready, Context, Poll, Waker};
+use core::pin::Pin;
+use core::task::{ready, Context, Poll, Waker};
 
 cfg_rt! {
     /// An owned permission to join on a task (await its termination).

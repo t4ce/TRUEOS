@@ -1,8 +1,11 @@
-use std::fmt;
-use std::future::Future;
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
+use core::fmt;
+use core::future::Future;
 use std::panic;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 use crate::runtime::task::AbortHandle;
 use crate::runtime::Builder;

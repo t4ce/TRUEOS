@@ -1,3 +1,6 @@
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 use crate::runtime;
 use crate::runtime::{context, scheduler, RuntimeFlavor, RuntimeMetrics};
 
@@ -19,8 +22,8 @@ use crate::runtime::BOX_FUTURE_THRESHOLD;
 use crate::util::error::{CONTEXT_MISSING_ERROR, THREAD_LOCAL_DESTROYED_ERROR};
 use crate::util::trace::SpawnMeta;
 
-use std::future::Future;
-use std::marker::PhantomData;
+use core::future::Future;
+use core::marker::PhantomData;
 use std::{error, fmt, mem};
 
 /// Runtime context guard.

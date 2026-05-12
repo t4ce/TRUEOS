@@ -1,5 +1,8 @@
 #![cfg_attr(loom, allow(unused_imports))]
 
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 use crate::runtime::handle::Handle;
 use crate::runtime::{
     Callback, HistogramBuilder, Runtime, TaskCallback, TimerFlavor, blocking, driver,
@@ -12,7 +15,7 @@ use crate::util::rand::{RngSeed, RngSeedGenerator};
 
 use crate::runtime::blocking::BlockingPool;
 use crate::runtime::scheduler::CurrentThread;
-use std::fmt;
+use core::fmt;
 use std::io;
 use std::thread::ThreadId;
 use core::time::Duration;
@@ -232,7 +235,7 @@ cfg_unstable! {
     }
 }
 
-pub(crate) type ThreadNameFn = std::sync::Arc<dyn Fn() -> String + Send + Sync + 'static>;
+pub(crate) type ThreadNameFn = alloc::sync::Arc<dyn Fn() -> String + Send + Sync + 'static>;
 
 #[derive(Clone, Copy)]
 pub(crate) enum Kind {
@@ -277,7 +280,7 @@ impl Builder {
     ///
     /// Configuration methods can be chained on the return value.
     pub(crate) fn new(kind: Kind, event_interval: u32) -> Builder {
-        let thread_name = std::sync::Arc::new(|| "tokio-rt-worker".into());
+        let thread_name = alloc::sync::Arc::new(|| "tokio-rt-worker".into());
         let seed_generator = RngSeedGenerator::new(RngSeed::new());
 
         let builder = Builder {
@@ -587,7 +590,7 @@ impl Builder {
     /// ```
     pub fn thread_name(&mut self, val: impl Into<String>) -> &mut Self {
         let val = val.into();
-        self.thread_name = std::sync::Arc::new(move || val.clone());
+        self.thread_name = alloc::sync::Arc::new(move || val.clone());
         self
     }
 
@@ -629,7 +632,7 @@ impl Builder {
     /// # #[cfg(not(target_family = "wasm"))]
     /// # {
     /// # use tokio::runtime;
-    /// # use std::sync::atomic::{AtomicUsize, Ordering};
+    /// # use core::sync::atomic::{AtomicUsize, Ordering};
     /// # pub fn main() {
     /// let rt = runtime::Builder::new_multi_thread()
     ///     .thread_name_fn(|| {
@@ -645,7 +648,7 @@ impl Builder {
     where
         F: Fn() -> String + Send + Sync + 'static,
     {
-        self.thread_name = std::sync::Arc::new(f);
+        self.thread_name = alloc::sync::Arc::new(f);
         self
     }
 
@@ -701,7 +704,7 @@ impl Builder {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.after_start = Some(std::sync::Arc::new(f));
+        self.after_start = Some(alloc::sync::Arc::new(f));
         self
     }
 
@@ -729,7 +732,7 @@ impl Builder {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.before_stop = Some(std::sync::Arc::new(f));
+        self.before_stop = Some(alloc::sync::Arc::new(f));
         self
     }
 
@@ -749,8 +752,8 @@ impl Builder {
     /// ```
     /// # #[cfg(not(target_family = "wasm"))]
     /// # {
-    /// # use std::sync::Arc;
-    /// # use std::sync::atomic::{AtomicBool, Ordering};
+    /// # use alloc::sync::Arc;
+    /// # use core::sync::atomic::{AtomicBool, Ordering};
     /// # use tokio::runtime;
     /// # use tokio::sync::Barrier;
     /// # pub fn main() {
@@ -779,8 +782,8 @@ impl Builder {
     /// ```
     /// ## Current thread executor
     /// ```
-    /// # use std::sync::Arc;
-    /// # use std::sync::atomic::{AtomicBool, Ordering};
+    /// # use alloc::sync::Arc;
+    /// # use core::sync::atomic::{AtomicBool, Ordering};
     /// # use tokio::runtime;
     /// # use tokio::sync::Barrier;
     /// # pub fn main() {
@@ -810,7 +813,7 @@ impl Builder {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.before_park = Some(std::sync::Arc::new(f));
+        self.before_park = Some(alloc::sync::Arc::new(f));
         self
     }
 
@@ -848,7 +851,7 @@ impl Builder {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.after_unpark = Some(std::sync::Arc::new(f));
+        self.after_unpark = Some(alloc::sync::Arc::new(f));
         self
     }
 
@@ -884,7 +887,7 @@ impl Builder {
     ///     .unwrap();
     ///
     /// runtime.block_on(async {
-    ///     tokio::task::spawn(std::future::ready(()));
+    ///     tokio::task::spawn(core::future::ready(()));
     ///
     ///     for _ in 0..64 {
     ///         tokio::task::yield_now().await;
@@ -898,7 +901,7 @@ impl Builder {
     where
         F: Fn(&TaskMeta<'_>) + Send + Sync + 'static,
     {
-        self.before_spawn = Some(std::sync::Arc::new(f));
+        self.before_spawn = Some(alloc::sync::Arc::new(f));
         self
     }
 
@@ -945,7 +948,7 @@ impl Builder {
     where
         F: Fn(&TaskMeta<'_>) + Send + Sync + 'static,
     {
-        self.before_poll = Some(std::sync::Arc::new(f));
+        self.before_poll = Some(alloc::sync::Arc::new(f));
         self
     }
 
@@ -992,7 +995,7 @@ impl Builder {
     where
         F: Fn(&TaskMeta<'_>) + Send + Sync + 'static,
     {
-        self.after_poll = Some(std::sync::Arc::new(f));
+        self.after_poll = Some(alloc::sync::Arc::new(f));
         self
     }
 
@@ -1027,7 +1030,7 @@ impl Builder {
     ///     .unwrap();
     ///
     /// runtime.block_on(async {
-    ///     tokio::task::spawn(std::future::ready(()));
+    ///     tokio::task::spawn(core::future::ready(()));
     ///
     ///     for _ in 0..64 {
     ///         tokio::task::yield_now().await;
@@ -1041,7 +1044,7 @@ impl Builder {
     where
         F: Fn(&TaskMeta<'_>) + Send + Sync + 'static,
     {
-        self.after_termination = Some(std::sync::Arc::new(f));
+        self.after_termination = Some(alloc::sync::Arc::new(f));
         self
     }
 

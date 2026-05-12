@@ -1,6 +1,9 @@
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 use crate::runtime::{self, Runtime};
 
-use std::sync::Arc;
+use alloc::sync::Arc;
 use core::time::Duration;
 
 #[test]

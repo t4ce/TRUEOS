@@ -1,3 +1,6 @@
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 use crate::io::blocking::Buf;
 use crate::io::uring::open::Open;
 use crate::io::uring::read::Read;
@@ -8,12 +11,12 @@ use crate::runtime::Handle;
 
 use io_uring::cqueue;
 use io_uring::squeue::Entry;
-use std::future::Future;
+use core::future::Future;
 use std::io::{self, Error};
-use std::mem;
+use core::mem;
 use std::os::fd::OwnedFd;
-use std::pin::Pin;
-use std::task::{Context, Poll, Waker};
+use core::pin::Pin;
+use core::task::{Context, Poll, Waker};
 
 // This field isn't accessed directly, but it holds cancellation data,
 // so `#[allow(dead_code)]` is needed.

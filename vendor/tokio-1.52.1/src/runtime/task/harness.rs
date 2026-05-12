@@ -1,4 +1,7 @@
-use crate::future::Future;
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
+use core::future::Future;
 use crate::runtime::task::core::{Cell, Core, Header, Trailer};
 use crate::runtime::task::state::{Snapshot, State};
 use crate::runtime::task::waker::waker_ref;
@@ -7,11 +10,11 @@ use crate::runtime::task::{Id, JoinError, Notified, RawTask, Schedule, Task};
 #[cfg(tokio_unstable)]
 use crate::runtime::TaskMeta;
 use std::any::Any;
-use std::mem;
-use std::mem::ManuallyDrop;
+use core::mem;
+use core::mem::ManuallyDrop;
 use std::panic;
-use std::ptr::NonNull;
-use std::task::{Context, Poll, Waker};
+use core::ptr::NonNull;
+use core::task::{Context, Poll, Waker};
 
 /// Typed raw task handle.
 pub(super) struct Harness<T: Future, S: 'static> {

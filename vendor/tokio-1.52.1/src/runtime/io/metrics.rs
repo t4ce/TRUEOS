@@ -4,6 +4,9 @@
 //! these need to be available in the case when `net` is enabled but
 //! `rt` is not.
 
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 cfg_not_rt_and_metrics_and_net! {
     #[derive(Default)]
     pub(crate) struct IoDriverMetrics {}

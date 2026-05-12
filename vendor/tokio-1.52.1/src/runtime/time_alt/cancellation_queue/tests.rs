@@ -1,3 +1,6 @@
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 use super::*;
 
 use futures::task::noop_waker;
@@ -38,8 +41,8 @@ fn single_thread() {
 #[test]
 #[cfg(not(target_os = "wasi"))] // No thread on wasi.
 fn multi_thread() {
-    use crate::loom::sync::atomic::{AtomicUsize, Ordering::SeqCst};
-    use crate::loom::sync::Arc;
+    use core::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+    use alloc::sync::Arc;
     use crate::loom::thread;
 
     #[cfg(loom)]

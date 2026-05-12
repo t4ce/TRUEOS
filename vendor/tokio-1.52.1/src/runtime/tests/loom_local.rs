@@ -1,8 +1,11 @@
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 use crate::runtime::tests::loom_oneshot as oneshot;
 use crate::runtime::Builder;
 use crate::task::LocalSet;
 
-use std::task::Poll;
+use core::task::Poll;
 
 /// Waking a runtime will attempt to push a task into a queue of notifications
 /// in the runtime, however the tasks in such a queue usually have a reference
@@ -23,7 +26,7 @@ fn wake_during_shutdown() {
         ls.spawn_local(async move {
             let mut send = Some(send);
 
-            let () = std::future::poll_fn(|cx| {
+            let () = core::future::poll_fn(|cx| {
                 if let Some(send) = send.take() {
                     send.send(cx.waker().clone());
                 }

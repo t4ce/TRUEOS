@@ -1,3 +1,6 @@
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 use crate::runtime::context;
 
 use std::{fmt, num::NonZeroU64};
@@ -67,7 +70,7 @@ impl fmt::Display for Id {
 
 impl Id {
     pub(crate) fn next() -> Self {
-        use crate::loom::sync::atomic::{AtomicU64, Ordering::Relaxed};
+        use core::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
         #[cfg(all(test, loom))]
         crate::loom::lazy_static! {

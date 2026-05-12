@@ -1,5 +1,8 @@
 //! Multi-threaded runtime
 
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 mod counters;
 use counters::Counters;
 
@@ -37,7 +40,7 @@ cfg_not_taskdump! {
 
 pub(crate) use worker::block_in_place;
 
-use crate::loom::sync::Arc;
+use alloc::sync::Arc;
 use crate::runtime::{
     blocking,
     driver::{self, Driver},
@@ -45,8 +48,8 @@ use crate::runtime::{
 };
 use crate::util::RngSeedGenerator;
 
-use std::fmt;
-use std::future::Future;
+use core::fmt;
+use core::future::Future;
 
 /// Work-stealing based thread pool for executing futures.
 pub(crate) struct MultiThread;

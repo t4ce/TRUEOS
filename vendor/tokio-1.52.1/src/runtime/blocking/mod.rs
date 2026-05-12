@@ -3,6 +3,9 @@
 //! shells. This isolates the complexity of dealing with conditional
 //! compilation.
 
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 mod pool;
 pub(crate) use pool::{spawn_blocking, BlockingPool, Spawner};
 

@@ -8,6 +8,9 @@
 //! [unstable]: crate#unstable-features
 #![allow(clippy::module_inception)]
 
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 mod runtime;
 pub use runtime::RuntimeMetrics;
 

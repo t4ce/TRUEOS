@@ -380,8 +380,8 @@
 //! On Linux, file descriptor table growth can stall worker threads. See the
 //! [`prewarm-fd-table`] example.
 //!
-//! [`poll`]: std::future::Future::poll
-//! [`wake`]: std::task::Waker::wake
+//! [`poll`]: core::future::Future::poll
+//! [`wake`]: core::task::Waker::wake
 //! [`yield_now`]: crate::task::yield_now
 //! [blocking the thread]: https://ryhl.io/blog/async-what-is-blocking/
 //! [current thread runtime]: crate::runtime::Builder::new_current_thread
@@ -394,11 +394,33 @@
 //! [`worker_mean_poll_time`]: crate::runtime::RuntimeMetrics::worker_mean_poll_time
 //! [`prewarm-fd-table`]: https://github.com/tokio-rs/tokio/blob/master/examples/prewarm-fd-table.rs
 
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 // At the top due to macros
 #[cfg(test)]
 #[cfg(not(target_family = "wasm"))]
 #[macro_use]
 mod tests;
+
+pub(crate) mod prelude {
+    #[allow(unused_imports)]
+    pub(crate) use alloc::{
+        boxed::Box,
+        format,
+        string::{String, ToString},
+        sync::{Arc, Weak},
+        vec,
+        vec::Vec,
+    };
+    #[allow(unused_imports)]
+    pub(crate) use core::prelude::rust_2024::*;
+    #[allow(unused_imports)]
+    pub(crate) use core::{
+        assert, assert_eq, assert_ne, cfg, debug_assert, debug_assert_eq, debug_assert_ne, matches,
+        panic, unreachable, write,
+    };
+}
 
 pub(crate) mod context;
 
@@ -430,8 +452,8 @@ cfg_time! {
     #[cfg(all(tokio_unstable, feature = "rt-multi-thread"))]
     pub(crate) mod time_alt;
 
-    use std::task::{Context, Poll};
-    use std::pin::Pin;
+    use core::task::{Context, Poll};
+    use core::pin::Pin;
 
     #[derive(Debug)]
     pub(crate) enum Timer {
@@ -664,5 +686,5 @@ cfg_rt! {
     pub(crate) use metrics::{MetricsBatch, SchedulerMetrics, WorkerMetrics, HistogramBuilder};
 
     /// After thread starts / before thread stops
-    type Callback = std::sync::Arc<dyn Fn() + Send + Sync>;
+    type Callback = alloc::sync::Arc<dyn Fn() + Send + Sync>;
 }

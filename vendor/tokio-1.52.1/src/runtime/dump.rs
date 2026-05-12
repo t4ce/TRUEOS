@@ -2,6 +2,9 @@
 //!
 //! See [`Handle::dump`][crate::runtime::Handle::dump].
 
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 use crate::task::Id;
 use std::{fmt, future::Future, path::Path};
 
@@ -170,7 +173,7 @@ impl Backtrace {
 ///
 /// <div class="warning">
 ///
-/// Resolving a backtrace, either via the [`Display`][std::fmt::Display] impl or via
+/// Resolving a backtrace, either via the [`Display`][core::fmt::Display] impl or via
 /// [`resolve_backtraces`][Trace::resolve_backtraces], parses debuginfo, which is
 /// possibly a CPU-expensive operation that can take a platform-specific but
 /// long time to run - often over 100 milliseconds, especially if the current
@@ -197,7 +200,7 @@ impl Trace {
     /// [`poll`] to a bottom-level Tokio future - so if something like [`join!`] is
     /// used, there will be a backtrace for each future in the join.
     ///
-    /// [`poll`]: std::future::Future::poll
+    /// [`poll`]: core::future::Future::poll
     /// [`join!`]: macro@join
     pub fn resolve_backtraces(&self) -> Vec<Backtrace> {
         self.inner
@@ -235,16 +238,16 @@ impl Trace {
     ///
     /// Example usage:
     /// ```
-    /// use std::future::Future;
-    /// use std::task::Poll;
+    /// use core::future::Future;
+    /// use core::task::Poll;
     /// use tokio::runtime::dump::Trace;
     ///
     /// # async fn test_fn() {
     /// // some future
-    /// let mut test_future = std::pin::pin!(async move { tokio::task::yield_now().await; 0 });
+    /// let mut test_future = core::pin::pin!(async move { tokio::task::yield_now().await; 0 });
     ///
     /// // trace it once, see what it's doing
-    /// let (trace, res) = Trace::root(std::future::poll_fn(|cx| {
+    /// let (trace, res) = Trace::root(core::future::poll_fn(|cx| {
     ///     let (res, trace) = Trace::capture(|| test_future.as_mut().poll(cx));
     ///     Poll::Ready((trace, res))
     /// })).await;

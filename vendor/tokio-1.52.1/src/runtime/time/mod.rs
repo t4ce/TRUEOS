@@ -1,3 +1,6 @@
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 // Currently, rust warns when an unsafe fn contains an unsafe {} block. However,
 // in the future, this will change to the reverse. For now, suppress this
 // warning and generally stick with being explicit about unsafety.
@@ -21,14 +24,14 @@ mod wheel;
 #[cfg(all(tokio_unstable, feature = "rt-multi-thread"))]
 use super::time_alt;
 
-use crate::loom::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, Ordering};
 use crate::loom::sync::Mutex;
 use crate::runtime::driver::{self, IoHandle, IoStack};
 use crate::time::error::Error;
 use crate::time::{Clock, Duration};
 use crate::util::WakeList;
 
-use std::fmt;
+use core::fmt;
 use std::{num::NonZeroU64, ptr::NonNull};
 
 /// Time implementation that drives [`Sleep`][sleep], [`Interval`][interval], and [`Timeout`][timeout].
@@ -234,7 +237,7 @@ impl Driver {
 
                 if duration > Duration::from_millis(0) {
                     if let Some(limit) = limit {
-                        duration = std::cmp::min(limit, duration);
+                        duration = core::cmp::min(limit, duration);
                     }
 
                     self.park_thread_timeout(rt_handle, duration);

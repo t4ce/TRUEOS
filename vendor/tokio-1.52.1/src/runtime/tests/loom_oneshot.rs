@@ -1,4 +1,8 @@
-use crate::loom::sync::{Arc, Mutex};
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
+use alloc::sync::Arc;
+use crate::loom::sync::Mutex;
 use loom::sync::Notify;
 
 pub(crate) fn channel<T>() -> (Sender<T>, Receiver<T>) {

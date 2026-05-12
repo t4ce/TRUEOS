@@ -1,3 +1,6 @@
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 use crate::runtime::metrics::WorkerMetrics;
 
 cfg_unstable_metrics! {
@@ -5,7 +8,7 @@ cfg_unstable_metrics! {
 }
 
 use crate::time::Instant;
-use std::sync::atomic::Ordering::Relaxed;
+use core::sync::atomic::Ordering::Relaxed;
 use core::time::Duration;
 
 pub(crate) struct MetricsBatch {

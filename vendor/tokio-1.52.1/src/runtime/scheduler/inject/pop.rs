@@ -1,8 +1,11 @@
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 use super::Synced;
 
 use crate::runtime::task;
 
-use std::marker::PhantomData;
+use core::marker::PhantomData;
 
 pub(crate) struct Pop<'a, T: 'static> {
     len: usize,

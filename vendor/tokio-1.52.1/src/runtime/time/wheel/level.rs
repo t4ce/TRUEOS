@@ -1,3 +1,6 @@
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 use crate::runtime::time::{EntryList, TimerHandle, TimerShared};
 
 use std::{array, fmt, ptr::NonNull};
@@ -143,7 +146,7 @@ impl Level {
     pub(crate) fn take_slot(&mut self, slot: usize) -> EntryList {
         self.occupied &= !occupied_bit(slot);
 
-        std::mem::take(&mut self.slot[slot])
+        core::mem::take(&mut self.slot[slot])
     }
 }
 

@@ -1,14 +1,17 @@
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 use crate::runtime::task::{
     self, unowned, Id, JoinHandle, OwnedTasks, Schedule, SpawnLocation, Task,
     TaskHarnessScheduleHooks,
 };
 use crate::runtime::tests::NoopSchedule;
 
-use std::collections::VecDeque;
-use std::future::Future;
+use alloc::collections::VecDeque;
+use core::future::Future;
 #[cfg(tokio_unstable)]
 use std::panic::Location;
-use std::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 struct AssertDropHandle {
@@ -238,8 +241,8 @@ fn shutdown_immediately() {
 // Test for https://github.com/tokio-rs/tokio/issues/6729
 #[test]
 fn spawn_niche_in_task() {
-    use std::future::poll_fn;
-    use std::task::{Context, Poll, Waker};
+    use core::future::poll_fn;
+    use core::task::{Context, Poll, Waker};
 
     with(|rt| {
         let state = Arc::new(Mutex::new(State::new()));

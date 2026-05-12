@@ -1,6 +1,9 @@
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 use super::{Core, Handle, Shared};
 
-use crate::loom::sync::Arc;
+use alloc::sync::Arc;
 use crate::runtime::scheduler::multi_thread::Stats;
 use crate::runtime::task::trace::trace_multi_thread;
 use crate::runtime::{dump, WorkerMetrics};

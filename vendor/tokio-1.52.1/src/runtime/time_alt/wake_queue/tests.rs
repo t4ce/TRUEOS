@@ -1,3 +1,6 @@
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 use super::*;
 
 use futures_test::task::{new_count_waker, AwokenCount};

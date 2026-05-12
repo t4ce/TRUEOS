@@ -1,3 +1,6 @@
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 use io_uring::{squeue::Entry, IoUring, Probe};
 use mio::unix::SourceFd;
 use slab::Slab;
@@ -143,7 +146,7 @@ impl Drop for UringContext {
             self.submit().expect("Internal error when dropping driver");
         }
 
-        let mut ops = std::mem::take(&mut self.ops);
+        let mut ops = core::mem::take(&mut self.ops);
 
         // Remove all completed ops since we don't need to wait for them.
         ops.retain(|_, lifecycle| !matches!(lifecycle, Lifecycle::Completed(_)));

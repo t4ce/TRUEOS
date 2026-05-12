@@ -1,5 +1,8 @@
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 use super::{EntryHandle, EntryList};
-use std::ptr::NonNull;
+use core::ptr::NonNull;
 use std::{array, fmt};
 
 /// Wheel for a single level in the timer. This wheel contains 64 slots.
@@ -145,7 +148,7 @@ impl Level {
     pub(crate) fn take_slot(&mut self, slot: usize) -> EntryList {
         self.occupied &= !occupied_bit(slot);
 
-        std::mem::take(&mut self.slot[slot])
+        core::mem::take(&mut self.slot[slot])
     }
 }
 

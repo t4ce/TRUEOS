@@ -1,10 +1,13 @@
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 use super::{Pop, Synced};
 
-use crate::loom::sync::atomic::AtomicUsize;
+use core::sync::atomic::AtomicUsize;
 use crate::runtime::task;
 
-use std::marker::PhantomData;
-use std::sync::atomic::Ordering::{Acquire, Release};
+use core::marker::PhantomData;
+use core::sync::atomic::Ordering::{Acquire, Release};
 
 pub(crate) struct Shared<T: 'static> {
     /// Number of pending tasks in the queue. This helps prevent unnecessary
@@ -104,7 +107,7 @@ impl<T: 'static> Shared<T> {
     ///
     /// Must be called with the same `Synced` instance returned by `Inject::new`
     pub(crate) unsafe fn pop_n<'a>(&'a self, synced: &'a mut Synced, n: usize) -> Pop<'a, T> {
-        use std::cmp;
+        use core::cmp;
 
         debug_assert!(n > 0);
 
