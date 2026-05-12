@@ -233,41 +233,13 @@ fn post_chat_message(user: &str, text: &str) -> bool {
 }
 
 fn post_chat_statement(user: &str, statement: Option<&str>, text: &str) -> bool {
-    let local_ok = match statement {
-        Some(statement) => {
-            crate::tst_chatserver::post_local_statement_volatile(CHAT_ROOM, user, statement, text)
-        }
-        None => crate::tst_chatserver::post_local_message_volatile(CHAT_ROOM, user, text),
-    };
-    if local_ok {
-        crate::log!("lumen-service: inserted chat message user={} bytes={}\n", user, text.len());
-        return true;
-    }
-
-    let Some(port) = crate::tst_chatserver::current_port() else {
-        crate::log!("lumen-service: chat post failed; no chat port\n");
-        return false;
-    };
-    let url = chat_message_url(port, None);
-    let body = chat_post_body(user, text, statement);
-    let ok = matches!(
-        crate::t::block_on_io(crate::t::net::http::post_http_body_hyper(
-            url.as_str(),
-            "application/x-www-form-urlencoded",
-            body.as_bytes(),
-            CHAT_HTTP_TIMEOUT_MS,
-            CHAT_HTTP_MAX_RX,
-        )),
-        Ok(Ok(_))
+    let _ = statement;
+    crate::log!(
+        "lumen-service: chat post skipped reason=chat-server-removed user={} bytes={}\n",
+        user,
+        text.len()
     );
-    if !ok {
-        crate::log!(
-            "lumen-service: chat post failed via http user={} bytes={}\n",
-            user,
-            text.len()
-        );
-    }
-    ok
+    false
 }
 
 pub(crate) fn submit_chat_answer(answer: &str) {

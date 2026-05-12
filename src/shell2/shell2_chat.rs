@@ -105,28 +105,8 @@ fn chat_url(port: u16, room: &str) -> AllocString {
 
 #[embassy_executor::task(pool_size = 4)]
 async fn shell_chat_post_task(target: MatrixTarget, text: AllocString) {
-    let Some(port) = crate::tst_chatserver::current_port() else {
-        print_matrix_target_line(&target, "chat: service offline");
-        return;
-    };
-    let url = chat_url(port, DEFAULT_CHAT_ROOM);
-    let body = form_body(SHELL_CHAT_USER, text.as_str());
-    let result = crate::t::block_on_io(crate::t::net::http::post_http_body_hyper(
-        url.as_str(),
-        "application/x-www-form-urlencoded",
-        body.as_bytes(),
-        CHAT_HTTP_TIMEOUT_MS,
-        CHAT_HTTP_MAX_RX,
-    ));
-    match result {
-        Ok(Ok(_)) => {
-            print_matrix_target_line(&target, format!("{}: {}", SHELL_CHAT_USER, text).as_str())
-        }
-        Ok(Err(err)) => {
-            print_matrix_target_line(&target, format!("chat: post failed: {:?}", err).as_str())
-        }
-        Err(_) => print_matrix_target_line(&target, "chat: runtime build failed"),
-    }
+    let _ = text;
+    print_matrix_target_line(&target, "chat: service offline");
 }
 
 pub(crate) fn submit(
