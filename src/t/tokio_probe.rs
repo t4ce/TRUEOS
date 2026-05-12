@@ -5,10 +5,8 @@
 //! boot; the multi-thread scheduler is backed by TRUEOS worker APs.
 
 extern crate alloc;
-extern crate std;
 
 use alloc::sync::Arc;
-use core::cell::Cell;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use embassy_executor::task;
 use socket2::{Domain, Protocol, Socket, Type};
@@ -23,14 +21,9 @@ const TOKIO_FS_PROBE_BYTES: &[u8] = b"TRUEOS tokio::fs probe\n";
 static TOKIO_NET_PROBE_TASK_SPAWNED: AtomicBool = AtomicBool::new(false);
 static TOKIO_FS_PROBE_TASK_SPAWNED: AtomicBool = AtomicBool::new(false);
 static TOKIO_BLOCKING_CANARY_TASK_SPAWNED: AtomicBool = AtomicBool::new(false);
-static TOKIO_STD_TLS_CANARY_TASK_SPAWNED: AtomicBool = AtomicBool::new(false);
+static TOKIO_VTHREAD_TLS_CANARY_TASK_SPAWNED: AtomicBool = AtomicBool::new(false);
 static TOKIO_RT_MULTI_THREAD_TASK_SPAWNED: AtomicBool = AtomicBool::new(false);
 static VTHREAD_IDENTITY_PROBE_TASK_SPAWNED: AtomicBool = AtomicBool::new(false);
-
-std::thread_local! {
-    static TOKIO_STD_TLS_CANARY: Cell<u32> = const { Cell::new(0) };
-    static TOKIO_STD_TLS_ISOLATION: Cell<u32> = const { Cell::new(0) };
-}
 
 #[derive(Clone, Copy)]
 struct StdTlsIsolationSample {
@@ -176,7 +169,7 @@ fn run_tokio_blocking_canary_runtime() {
     let touched_blocking_pool = runtime.block_on(async {
         let touched_blocking_pool = probe_tokio_blocking_canary().await;
         if touched_blocking_pool {
-            probe_std_thread_local_isolation_surface().await;
+            probe_vthread_tls_isolation_surface().await;
         }
         touched_blocking_pool
     });
@@ -326,7 +319,7 @@ async fn probe_tokio_fs_runtime_surface() {
     crate::log!("tokio_probe: success fs.file_ops probe_suite\n");
 
     if probe_tokio_blocking_canary().await {
-        probe_std_thread_local_isolation_surface().await;
+        probe_vthread_tls_isolation_surface().await;
     } else {
         crate::log!(
             "tokio_probe: note blocking.spawn_blocking still unsupported; fs.file_ops use TRUEOS CABI handle backend\n"
@@ -536,13 +529,19 @@ fn vthread_identity_probe_ready() -> bool {
     ) && crate::workers::has_background_worker_slot()
 }
 
-fn mark_std_tls_canary_on_boot_cpu() {
-    TOKIO_STD_TLS_CANARY.with(|canary| canary.set(0xB5B5_0001));
-    crate::log!("tokio_probe: note std.thread_local boot canary armed\n");
-}
-
-fn read_std_tls_canary() -> u32 {
-    TOKIO_STD_TLS_CANARY.with(|canary| canary.get())
+fn mark_vthread_tls_canary_on_boot_cpu() {
+    let probe = crate::th::vthread::probe_tls_touch(0xB5B5_0001);
+    if let Some(snapshot) = probe.snapshot {
+        crate::log!(
+            "tokio_probe: note vthread.tls boot canary armed vtid={} slot={} before=0x{:08X} after=0x{:08X}\n",
+            snapshot.vtid,
+            snapshot.tls_slot,
+            probe.before,
+            probe.after
+        );
+    } else {
+        crate::log!("tokio_probe: note vthread.tls boot canary deferred (no vthread fsbase)\n");
+    }
 }
 
 fn probe_std_sync_surface() {
@@ -567,17 +566,16 @@ fn probe_std_sync_surface() {
     }
 }
 
-fn run_std_tls_isolation_worker(label: u32, release: Arc<AtomicU32>) -> StdTlsIsolationSample {
+fn run_vthread_tls_isolation_worker(label: u32, release: Arc<AtomicU32>) -> StdTlsIsolationSample {
     while release.load(Ordering::Acquire) == 0 {
         core::hint::spin_loop();
     }
 
-    let before = TOKIO_STD_TLS_ISOLATION.with(|slot| slot.get());
-    TOKIO_STD_TLS_ISOLATION.with(|slot| slot.set(label));
+    let probe = crate::th::vthread::probe_tls_touch(label);
 
     let mut leaked = 0;
     for _ in 0..4096 {
-        let seen = TOKIO_STD_TLS_ISOLATION.with(|slot| slot.get());
+        let seen = crate::th::vthread::probe_tls_touch(label).before;
         if seen != label {
             leaked = seen;
             break;
@@ -585,35 +583,34 @@ fn run_std_tls_isolation_worker(label: u32, release: Arc<AtomicU32>) -> StdTlsIs
         core::hint::spin_loop();
     }
 
-    let after = TOKIO_STD_TLS_ISOLATION.with(|slot| slot.get());
     StdTlsIsolationSample {
         label,
         cpu_slot: crate::stackkeeper::trueos_tokio_tls_current_cpu_slot(),
         tokio_lane: crate::stackkeeper::trueos_tokio_tls_current_slot(),
-        before,
-        after,
+        before: probe.before,
+        after: probe.after,
         leaked,
     }
 }
 
-async fn probe_std_thread_local_isolation_surface() {
+async fn probe_vthread_tls_isolation_surface() {
     if !tokio_background_worker_ready() {
         crate::log!(
-            "tokio_probe: note std.thread_local carrier_isolation deferred until BACKGROUND_AP_WORKER_READY\n"
+            "tokio_probe: note vthread.tls carrier_isolation deferred until BACKGROUND_AP_WORKER_READY\n"
         );
         return;
     }
 
-    crate::log!("tokio_probe: enter std.thread_local carrier_isolation\n");
+    crate::log!("tokio_probe: enter vthread.tls carrier_isolation\n");
 
     let release = Arc::new(AtomicU32::new(0));
     let left_release = release.clone();
     let right_release = release.clone();
     let left = tokio::task::spawn_blocking(move || {
-        run_std_tls_isolation_worker(0x7151_0001, left_release)
+        run_vthread_tls_isolation_worker(0x7151_0001, left_release)
     });
     let right = tokio::task::spawn_blocking(move || {
-        run_std_tls_isolation_worker(0x7151_0002, right_release)
+        run_vthread_tls_isolation_worker(0x7151_0002, right_release)
     });
 
     tokio::task::yield_now().await;
@@ -627,7 +624,7 @@ async fn probe_std_thread_local_isolation_surface() {
     .await;
 
     let Ok(Ok((left, right))) = joined else {
-        crate::log!("tokio_probe: failure std.thread_local carrier_isolation_timeout\n");
+        crate::log!("tokio_probe: failure vthread.tls carrier_isolation_timeout\n");
         return;
     };
 
@@ -642,7 +639,7 @@ async fn probe_std_thread_local_isolation_surface() {
 
     if isolated {
         crate::log!(
-            "tokio_probe: success std.thread_local carrier_isolation left_cpu={} left_lane={} right_cpu={} right_lane={}\n",
+            "tokio_probe: success vthread.tls carrier_isolation left_cpu={} left_lane={} right_cpu={} right_lane={}\n",
             left.cpu_slot,
             left.tokio_lane,
             right.cpu_slot,
@@ -650,7 +647,7 @@ async fn probe_std_thread_local_isolation_surface() {
         );
     } else if crate::th::vthread::tokio_blocking_backing_enabled() {
         crate::log!(
-            "tokio_probe: note std.thread_local carrier_isolation accepted under vthread backing left(label=0x{:08X} cpu={} lane={} before=0x{:08X} after=0x{:08X} leaked=0x{:08X}) right(label=0x{:08X} cpu={} lane={} before=0x{:08X} after=0x{:08X} leaked=0x{:08X}); use vthread TLS identity for Rayon-style schedulers\n",
+            "tokio_probe: note vthread.tls carrier_isolation accepted under vthread backing left(label=0x{:08X} cpu={} lane={} before=0x{:08X} after=0x{:08X} leaked=0x{:08X}) right(label=0x{:08X} cpu={} lane={} before=0x{:08X} after=0x{:08X} leaked=0x{:08X}); use vthread TLS identity for Rayon-style schedulers\n",
             left.label,
             left.cpu_slot,
             left.tokio_lane,
@@ -666,7 +663,7 @@ async fn probe_std_thread_local_isolation_surface() {
         );
     } else {
         crate::log!(
-            "tokio_probe: failure std.thread_local carrier_isolation left(label=0x{:08X} cpu={} lane={} before=0x{:08X} after=0x{:08X} leaked=0x{:08X}) right(label=0x{:08X} cpu={} lane={} before=0x{:08X} after=0x{:08X} leaked=0x{:08X}); thread-local worker identity unsafe for Rayon-style schedulers\n",
+            "tokio_probe: failure vthread.tls carrier_isolation left(label=0x{:08X} cpu={} lane={} before=0x{:08X} after=0x{:08X} leaked=0x{:08X}) right(label=0x{:08X} cpu={} lane={} before=0x{:08X} after=0x{:08X} leaked=0x{:08X}); thread-local worker identity unsafe for Rayon-style schedulers\n",
             left.label,
             left.cpu_slot,
             left.tokio_lane,
@@ -829,44 +826,41 @@ fn spawn_deferred_vthread_identity_probe() {
 }
 
 #[task]
-async fn tokio_std_tls_canary_task() {
+async fn tokio_vthread_tls_canary_task() {
     crate::r::readiness::wait_for(crate::r::readiness::BACKGROUND_AP_WORKER_READY).await;
 
-    let before = read_std_tls_canary();
-    TOKIO_STD_TLS_CANARY.with(|canary| canary.set(0xA9A9_0001));
-    let after = read_std_tls_canary();
+    let probe = crate::th::vthread::probe_tls_touch(0xA9A9_0001);
 
-    if before == 0 {
+    if let Some(snapshot) = probe.snapshot {
         crate::log!(
-            "tokio_probe: success std.thread_local per-AP canary before=0x{:08X} after=0x{:08X}\n",
-            before,
-            after
+            "tokio_probe: success vthread.tls per-AP canary vtid={} cpu={} slot={} before=0x{:08X} after=0x{:08X}\n",
+            snapshot.vtid,
+            snapshot.cpu_slot,
+            snapshot.tls_slot,
+            probe.before,
+            probe.after
         );
     } else {
-        crate::log!(
-            "tokio_probe: note std.thread_local per-AP canary shared before=0x{:08X} after=0x{:08X}; Tokio TLS uses TRUEOS lane slots\n",
-            before,
-            after
-        );
+        crate::log!("tokio_probe: note vthread.tls per-AP canary skipped (no vthread fsbase)\n");
     }
 }
 
-fn spawn_deferred_std_tls_canary() {
-    if TOKIO_STD_TLS_CANARY_TASK_SPAWNED.swap(true, Ordering::AcqRel) {
+fn spawn_deferred_vthread_tls_canary() {
+    if TOKIO_VTHREAD_TLS_CANARY_TASK_SPAWNED.swap(true, Ordering::AcqRel) {
         return;
     }
 
     let Some(spawner) = crate::workers::spawner_for_slot(0) else {
         crate::log!(
-            "tokio_probe: note std.thread_local canary task not spawned (no slot0 spawner)\n"
+            "tokio_probe: note vthread.tls canary task not spawned (no slot0 spawner)\n"
         );
         return;
     };
 
-    match tokio_std_tls_canary_task() {
+    match tokio_vthread_tls_canary_task() {
         Ok(token) => spawner.spawn(token),
         Err(err) => {
-            crate::log!("tokio_probe: note std.thread_local canary task spawn failed: {:?}\n", err)
+            crate::log!("tokio_probe: note vthread.tls canary task spawn failed: {:?}\n", err)
         }
     }
 }
@@ -1240,7 +1234,7 @@ async fn run_probe_suite() -> Result<(), &'static str> {
     probe_tokio_net_surface().await?;
 
     probe_tokio_blocking_canary().await;
-    probe_std_thread_local_isolation_surface().await;
+    probe_vthread_tls_isolation_surface().await;
 
     {
         crate::log!("tokio_probe: enter time.sleep\n");
@@ -1340,12 +1334,12 @@ async fn run_probe_suite() -> Result<(), &'static str> {
 
 pub(crate) fn log_boot_probe() {
     crate::log!("tokio_probe: wired tokio 1.52.1 with feature full via TRUEOS std-ABI shim\n");
-    mark_std_tls_canary_on_boot_cpu();
+    mark_vthread_tls_canary_on_boot_cpu();
     probe_std_sync_surface();
 
     log_rt_multi_thread_probe();
     spawn_deferred_rt_multi_thread_probe();
-    spawn_deferred_std_tls_canary();
+    spawn_deferred_vthread_tls_canary();
     spawn_deferred_tokio_blocking_canary();
 
     let mut runtime_builder = tokio::runtime::Builder::new_current_thread();
