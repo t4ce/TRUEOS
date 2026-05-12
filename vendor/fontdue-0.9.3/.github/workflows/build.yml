@@ -1,0 +1,51 @@
+name: Build
+on: [push, pull_request]
+jobs:
+  src:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: hecrj/setup-rust-action@v1
+      with:
+        rust-version: stable
+        targets: wasm32-unknown-unknown
+    - uses: actions/checkout@master
+
+    - name: Build src (native) (no default features, std)
+      run: cargo build --no-default-features --features std --verbose
+
+    - name: Build src (native) (no default features, hashbrown)
+      run: cargo build --no-default-features --features hashbrown --verbose
+
+    - name: Build src (native) (all features)
+      run: cargo build --all-features --verbose
+
+    - name: Build src (wasm)
+      run: cargo build --verbose --target wasm32-unknown-unknown
+
+    - name: Build src (wasm) (no default features, std)
+      run: cargo build --no-default-features --features std --verbose --target wasm32-unknown-unknown
+
+    - name: Build src (wasm) (no default features, hashbrown)
+      run: cargo build --no-default-features --features hashbrown --verbose --target wasm32-unknown-unknown
+
+    - name: Build src (wasm) (all features)
+      run: cargo build --all-features --verbose --target wasm32-unknown-unknown
+
+    - name: Test src (native)
+      run: cargo test --verbose --workspace
+
+  dev:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: hecrj/setup-rust-action@v1
+      with:
+        rust-version: stable
+    - uses: actions/checkout@master
+
+    - name: Build dev (native) (all features)
+      run: cargo build --all-features --verbose
+      working-directory: ./dev
+
+    - name: Test dev (native)
+      run: cargo test --verbose --workspace
+      working-directory: ./dev
