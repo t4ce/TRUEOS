@@ -25,7 +25,6 @@ limine = { version = "0.6", default-features = false }
 acpi = { version = "6.1.1", default-features = false, features = ["alloc", "aml"] }
 aml = { version = "0.16", default-features = false }
 fontdue = { version = "0.9.3", default-features = false, features = ["hashbrown"] }
-getrandom = { version = "0.4", default-features = false }
 getrandom_02 = { package = "getrandom", version = "0.2", default-features = false, features = ["custom"] }
 raw-cpuid = { version = "11", default-features = false }
 rand_core = { version = "0.6", default-features = false }

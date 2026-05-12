@@ -193,15 +193,6 @@ pub fn random_u64() -> Option<u64> {
 }
 
 #[cfg(any(target_os = "none", target_os = "trueos", target_os = "zkvm"))]
-fn trueos_getrandom(dest: &mut [u8]) -> Result<(), getrandom::Error> {
-    if fill_bytes(dest) {
-        Ok(())
-    } else {
-        Err(getrandom::Error::new_custom(1))
-    }
-}
-
-#[cfg(any(target_os = "none", target_os = "trueos", target_os = "zkvm"))]
 fn trueos_getrandom_02(dest: &mut [u8]) -> Result<(), getrandom_02::Error> {
     if fill_bytes(dest) {
         Ok(())
@@ -209,19 +200,6 @@ fn trueos_getrandom_02(dest: &mut [u8]) -> Result<(), getrandom_02::Error> {
         let code = core::num::NonZeroU32::new(getrandom_02::Error::CUSTOM_START + 1).unwrap();
         Err(getrandom_02::Error::from(code))
     }
-}
-
-#[cfg(any(target_os = "none", target_os = "trueos", target_os = "zkvm"))]
-#[unsafe(no_mangle)]
-unsafe extern "Rust" fn __getrandom_v03_custom(
-    dest: *mut u8,
-    len: usize,
-) -> Result<(), getrandom::Error> {
-    let buf = unsafe {
-        core::ptr::write_bytes(dest, 0, len);
-        core::slice::from_raw_parts_mut(dest, len)
-    };
-    trueos_getrandom(buf)
 }
 
 #[cfg(any(target_os = "none", target_os = "trueos", target_os = "zkvm"))]
