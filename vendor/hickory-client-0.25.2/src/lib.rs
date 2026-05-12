@@ -36,6 +36,7 @@
 )]
 #![recursion_limit = "1024"]
 #![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]
+#![cfg_attr(any(target_os = "trueos", target_os = "zkvm"), no_std)]
 
 //! Hickory DNS is intended to be a fully compliant domain name server and client library.
 //!
@@ -135,13 +136,97 @@
 //! has a variant with the deserialized data for the record stored.
 //!
 //! ## Dynamic update
-//!
+//! 
 //! Currently `hickory-client` supports SIG(0) signed records for authentication and authorization
 //! of dynamic DNS updates. Consult the [`client::DnssecClient`] API for more information.
 
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+extern crate alloc;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+extern crate self as std;
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod boxed {
+    pub use alloc::boxed::*;
+}
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod collections {
+    pub use alloc::collections::*;
+    pub use hashbrown::{HashMap, HashSet};
+}
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod error {
+    pub use core::error::*;
+}
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod fmt {
+    pub use core::fmt::*;
+}
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod borrow {
+    pub use alloc::borrow::*;
+    pub use core::borrow::*;
+}
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod future {
+    pub use core::future::*;
+}
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod marker {
+    pub use core::marker::*;
+}
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod net {
+    pub use core::net::*;
+}
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod io {
+    pub use hickory_proto::io::*;
+}
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod pin {
+    pub use core::pin::*;
+}
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod prelude {
+    pub mod rust_2021 {
+        pub use alloc::boxed::Box;
+        pub use alloc::string::{String, ToString};
+        pub use alloc::vec;
+        pub use alloc::vec::Vec;
+        pub use core::prelude::rust_2021::*;
+    }
+}
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod string {
+    pub use alloc::string::*;
+}
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod sync {
+    pub use alloc::sync::Arc;
+    pub use core::sync::atomic;
+}
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod task {
+    pub use core::task::*;
+}
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod time {
+    pub use core::time::*;
+    pub use tokio::time::Instant;
+}
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod vec {
+    pub use alloc::vec::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use core::env;
+
 pub mod client;
-mod error;
-pub use error::{Error as ClientError, ErrorKind as ClientErrorKind};
+#[path = "error.rs"]
+mod hickory_error;
+pub use hickory_error::{Error as ClientError, ErrorKind as ClientErrorKind};
 #[cfg(test)]
 mod tests;
 

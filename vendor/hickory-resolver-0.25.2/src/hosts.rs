@@ -150,6 +150,14 @@ impl Hosts {
 
     /// parse configuration from `src`
     pub fn read_hosts_conf(&mut self, src: impl io::Read) -> io::Result<()> {
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        {
+            let _ = src;
+            return Ok(());
+        }
+
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+        {
         use std::io::{BufRead, BufReader};
 
         // lines in the src should have the form `addr host1 host2 host3 ...`
@@ -222,6 +230,7 @@ impl Hosts {
         }
 
         Ok(())
+        }
     }
 }
 

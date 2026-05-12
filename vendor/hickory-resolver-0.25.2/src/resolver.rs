@@ -6,6 +6,7 @@
 // copied, modified, or distributed except according to those terms.
 
 //! Structs for creating and using a Resolver
+use alloc::{boxed::Box, vec, vec::Vec};
 use core::fmt;
 use core::future::Future;
 use std::net::IpAddr;
@@ -19,7 +20,7 @@ use tracing::debug;
 use crate::caching_client::CachingClient;
 use crate::config::{ResolveHosts, ResolverConfig, ResolverOpts};
 use crate::dns_lru::{self, DnsLru, TtlConfig};
-use crate::error::{ResolveError, ResolveErrorKind};
+use crate::hickory_error::{ResolveError, ResolveErrorKind};
 use crate::hosts::Hosts;
 use crate::lookup::{self, Lookup, LookupEither};
 use crate::lookup_ip::{LookupIp, LookupIpFuture};

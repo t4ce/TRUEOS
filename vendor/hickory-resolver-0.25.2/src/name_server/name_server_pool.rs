@@ -5,6 +5,7 @@
 // https://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
+use alloc::{boxed::Box, vec::Vec};
 use core::cmp::Ordering;
 use core::pin::Pin;
 use std::sync::{

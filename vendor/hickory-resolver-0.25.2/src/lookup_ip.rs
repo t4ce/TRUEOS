@@ -9,6 +9,7 @@
 //!
 //! At it's heart LookupIp uses Lookup for performing all lookups. It is unlike other standard lookups in that there are customizations around A and AAAA resolutions.
 
+use alloc::{boxed::Box, vec::Vec};
 use core::future::Future;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use core::pin::Pin;
@@ -26,7 +27,7 @@ use crate::proto::xfer::{DnsHandle, DnsRequestOptions};
 use crate::caching_client::CachingClient;
 use crate::config::LookupIpStrategy;
 use crate::dns_lru::MAX_TTL;
-use crate::error::*;
+use crate::hickory_error::*;
 use crate::hosts::Hosts;
 use crate::lookup::{Lookup, LookupIntoIter, LookupIter};
 

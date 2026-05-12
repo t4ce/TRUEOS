@@ -7,6 +7,7 @@
 
 //! An LRU cache designed for work with DNS lookups
 
+use alloc::vec::Vec;
 use std::collections::HashMap;
 use core::ops::RangeInclusive;
 use std::sync::Arc;

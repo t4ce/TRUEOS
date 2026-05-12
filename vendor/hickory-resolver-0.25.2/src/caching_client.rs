@@ -7,6 +7,7 @@
 
 //! Caching related functionality for the Resolver.
 
+use alloc::{boxed::Box, vec, vec::Vec};
 use std::{borrow::Cow, future::Future, pin::Pin, sync::Arc, time::Instant};
 
 use futures_util::future::TryFutureExt;
@@ -14,7 +15,7 @@ use once_cell::sync::Lazy;
 
 use crate::{
     dns_lru::{self, DnsLru, TtlConfig},
-    error::ResolveError,
+    hickory_error::ResolveError,
     lookup::Lookup,
     proto::{
         op::{Query, ResponseCode},

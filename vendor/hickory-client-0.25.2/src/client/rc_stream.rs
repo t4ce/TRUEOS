@@ -5,13 +5,14 @@
 // https://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
+use alloc::{vec, vec::Vec};
 use core::pin::Pin;
 use std::sync::Arc;
 use core::task::{Context, Poll};
 
-use futures_util::lock::Mutex;
 use futures_util::stream::{Fuse, Stream, StreamExt};
 use futures_util::{FutureExt, ready};
+use tokio::sync::Mutex;
 
 #[allow(clippy::type_complexity)]
 #[must_use = "stream do nothing unless polled"]

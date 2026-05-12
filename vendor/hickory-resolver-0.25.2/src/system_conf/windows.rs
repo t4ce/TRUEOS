@@ -16,7 +16,7 @@ use ipconfig::get_adapters;
 use crate::proto::rr::Name;
 
 use crate::config::{NameServerConfig, ResolverConfig, ResolverOpts};
-use crate::error::ResolveError;
+use crate::hickory_error::ResolveError;
 use crate::proto::xfer::Protocol;
 
 /// Returns the name servers of the computer (of all adapters)
