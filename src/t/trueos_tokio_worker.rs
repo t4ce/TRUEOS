@@ -30,14 +30,14 @@ async fn tokio_blocking_job_task(
             tag.core_kind
         );
     }
-    let _vthread_guard = if crate::th::vthread::tokio_blocking_backing_enabled() {
+    let _vthread_guard = if crate::t::th::vthread::tokio_blocking_backing_enabled() {
         if !LOGGED_VTHREAD_BACKING.swap(true, Ordering::AcqRel) {
             crate::log_info!(
                 target: "service";
                 "tokio-worker: vthread backing enabled for blocking workers\n"
             );
         }
-        Some(crate::th::vthread::enter(lane.vthread_record()))
+        Some(crate::t::th::vthread::enter(lane.vthread_record()))
     } else {
         None
     };

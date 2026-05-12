@@ -365,7 +365,7 @@ fn submit_gpgpu_primary_scanout_mandelbrot_strip(
         let c_re_base_dword = c_re_base_dwords[0];
         let address_offset_dword = address_offset_dwords[0];
         crate::log!(
-            "intel/gpgpu: primary-scanout-mandelbrot16-patch row_gpu=0x{:X} row_virt=0x{:X} row={} x_base={} width={} height={} phase={} addressing=simd8x2-lane-derived-stateless-absolute-g127 q12_frac_bits={} max_iter={} store_surface=0x{:02X} lanes_per_send={} sends_per_program={} pixels_per_program={} x_step_q12={} c_re_base_q12={} c_im_q12={} x_step_dword={} c_re_base_dword={} c_im_dword={} address_offset_dword={} address_offset=0x{:X} first_before=0x{:08X} send_desc=0x{:08X} send_exdesc=0x{:08X} kernel_off=0x{:X} artifact_bytes=0x{:X} artifact_end_off=0x{:X} dynamic_state_off=0x{:X} note=uniform-setup-patched-eu-words-before-upload\n",
+            "intel/gpgpu: primary-scanout-mandelbrot16-patch row_gpu=0x{:X} row_virt=0x{:X} row={} x_base={} width={} height={} phase={} addressing=simd8x2-lane-derived-stateless-absolute-g127 q12_frac_bits={} max_iter={} store_surface=0x{:02X} lanes_per_send={} sends_per_program={} pixels_per_program={} x_step_q12={} c_re_base_q12={} c_im_q12={} x_step_dword={} c_re_base_dword={} c_im_dword={} address_offset_dword={} address_offset=0x{:X} first_before=0x{:08X} send_desc=0x{:08X} send_exdesc=0x{:08X} kernel_off=0x{:X} artifact_bytes=0x{:X} artifact_end_off=0x{:X} dynamic_state_off=0x{:X} bt_off=0x{:X} surf_off=0x{:X} store_state_after_artifact={} note=uniform-setup-patched-eu-words-before-upload\n",
             row_gpu,
             row_virt as usize,
             y,
@@ -394,6 +394,10 @@ fn submit_gpgpu_primary_scanout_mandelbrot_strip(
             artifact_bytes,
             GPGPU_EU_KERNEL_OFFSET_BYTES.saturating_add(artifact_bytes),
             GPGPU_WALKER_SCRATCH_OFFSET_BYTES,
+            GPGPU_MANDELBROT_STORE_BINDING_TABLE_OFFSET_BYTES,
+            GPGPU_MANDELBROT_STORE_SURFACE_STATE_OFFSET_BYTES,
+            (GPGPU_MANDELBROT_STORE_BINDING_TABLE_OFFSET_BYTES
+                >= GPGPU_EU_KERNEL_OFFSET_BYTES.saturating_add(artifact_bytes)) as u8,
         );
     }
     if !upload_and_verify_gpu_program_at(warm, GPGPU_EU_KERNEL_OFFSET_BYTES, &strip_words) {
@@ -415,7 +419,7 @@ fn submit_gpgpu_primary_scanout_mandelbrot_strip(
     let batch_dwords = warm.batch_len / core::mem::size_of::<u32>();
     let batch =
         unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, batch_dwords) };
-    let store_surface = prepare_gpgpu_store_surface_state_for_target_span(
+    let store_surface = prepare_gpgpu_mandelbrot_store_surface_state_for_target_span(
         warm,
         scanout_gpu,
         scanout_bytes,
