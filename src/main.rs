@@ -56,13 +56,14 @@ mod portio;
 #[cfg(target_arch = "x86_64")]
 mod power;
 #[cfg(not(target_arch = "x86_64"))]
-#[path = "power_disabled.rs"]
+#[path = "power/power_disabled.rs"]
 mod power;
 mod r;
 #[cfg(target_arch = "x86_64")]
+#[path = "power/rapl.rs"]
 mod rapl;
 #[cfg(not(target_arch = "x86_64"))]
-#[path = "rapl_disabled.rs"]
+#[path = "power/rapl_disabled.rs"]
 mod rapl;
 mod runtime;
 mod shell2;
@@ -137,9 +138,10 @@ mod tst_webdevices_axum;
 #[path = "tst/ws_time.rs"]
 mod tst_ws_time;
 #[cfg(target_arch = "x86_64")]
+#[path = "power/turbo.rs"]
 mod turbo;
 #[cfg(not(target_arch = "x86_64"))]
-#[path = "turbo_disabled.rs"]
+#[path = "power/turbo_disabled.rs"]
 mod turbo;
 mod usb2;
 mod wait;
