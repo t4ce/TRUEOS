@@ -2254,7 +2254,7 @@ checksum = "ef86cd5876211988985292b91c96a8f2d298df24e75989a43a3c73f2d4d8168b"
 dependencies = [
  "once_cell",
  "rustls-pki-types",
- "rustls-webpki 0.103.13",
+ "rustls-webpki",
  "subtle",
  "zeroize",
 ]
@@ -2271,8 +2271,6 @@ dependencies = [
 [[package]]
 name = "rustls-rustcrypto"
 version = "0.0.2-alpha"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f12052947763ab8515f753315357599e9b0b4dab3b8ba15f30f725fe6d025557"
 dependencies = [
  "aead",
  "aes-gcm",
@@ -2291,22 +2289,11 @@ dependencies = [
  "rsa",
  "rustls",
  "rustls-pki-types",
- "rustls-webpki 0.102.8",
+ "rustls-webpki",
  "sec1",
  "sha2",
  "signature",
  "x25519-dalek",
-]
-
-[[package]]
-name = "rustls-webpki"
-version = "0.102.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64ca1bc8749bd4cf37b5ce386cc146580777b4e8572c7b97baf22c83f444bee9"
-dependencies = [
- "ring",
- "rustls-pki-types",
- "untrusted",
 ]
 
 [[package]]
@@ -3471,27 +3458,3 @@ checksum = "27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296"
 dependencies = [
  "zune-core",
 ]
-
-[[patch.unused]]
-name = "endian-type"
-version = "0.1.2"
-
-[[patch.unused]]
-name = "moka"
-version = "0.12.15"
-
-[[patch.unused]]
-name = "nibble_vec"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "parking_lot"
-version = "0.12.5"
-
-[[patch.unused]]
-name = "parking_lot_core"
-version = "0.9.12"
-
-[[patch.unused]]
-name = "radix_trie"
-version = "0.2.1"
