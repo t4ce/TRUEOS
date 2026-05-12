@@ -750,7 +750,7 @@ pub unsafe extern "C" fn lumen_trueos_dual_matvec_silu_mul_rowmajor_f32_bf16(
 
     for row in 0..n_rows {
         let g = gate[row];
-        let sig = 1.0 / (1.0 + (-g).exp());
+        let sig = 1.0 / (1.0 + libm::expf(-g));
         out[row] = (g * sig) * up[row];
     }
 
