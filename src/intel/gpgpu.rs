@@ -87,7 +87,10 @@ const GPU_VA_VERTEX_BASE: u64 = 0x0087_0000;
 const GPU_VA_STREAMOUT_BASE: u64 = 0x0088_0000;
 const GPU_VA_GPGPU_TILE_ARENA_BASE: u64 = 0x0400_0000;
 const GPGPU_EU_KERNEL_OFFSET_BYTES: usize = 0x3000;
-const GPGPU_WALKER_SCRATCH_OFFSET_BYTES: usize = 0x3800;
+// Keep dynamic walker state out of the EU program window.  The Q12 Mandelbrot
+// scanout artifact is deliberately larger than the tiny proof kernels; placing
+// IDD at 0x3800 clobbers its store/EOT tail after upload.
+const GPGPU_WALKER_SCRATCH_OFFSET_BYTES: usize = 0x5000;
 const GPGPU_TILE_ROWS: usize = 256;
 const GPGPU_TILE_K_DIM: usize = 2048;
 const GPGPU_TILE_WEIGHT_BYTES_PER_ELEM: usize = 2;
@@ -1697,6 +1700,7 @@ static GPGPU_EU_C_STORE_VALUE: AtomicU32 = AtomicU32::new(0);
 static GPGPU_EU_PROVEN_WALKER_RETIRED: AtomicBool = AtomicBool::new(false);
 static GPGPU_EU_PROVEN_DISPATCH_DELTA: AtomicU32 = AtomicU32::new(0);
 static GPGPU_EU_PROVEN_C_STORE_VALUE: AtomicU32 = AtomicU32::new(0);
+static MANDELBROT_Q12_PATCH_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct GpgpuPreflightStatus {
@@ -2776,10 +2780,11 @@ fn submit_gpgpu_primary_scanout_mandelbrot_strip(
         c_im_q12 as u32;
     strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_ADDRESS_OFFSET_DWORD] =
         row_gpu as u32;
-    if x_base == 0 && y == 0 {
+    if x_base == 0 && y == 0 && !MANDELBROT_Q12_PATCH_LOGGED.swap(true, Ordering::AcqRel) {
         let send_dword = trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_STORE_EXDESC_DWORD;
+        let artifact_bytes = strip_words.len() * core::mem::size_of::<u32>();
         crate::log!(
-            "intel/gpgpu: primary-scanout-mandelbrot8-patch row_gpu=0x{:X} row_virt=0x{:X} row={} x_base={} width={} height={} phase={} addressing=simd8-lane-derived-stateless-absolute-g127 q12_frac_bits={} max_iter={} store_surface=0x{:02X} x_step_q12={} c_re_base_q12={} c_im_q12={} x_step_dword={} c_re_base_dword={} c_im_dword={} address_offset_dword={} address_offset=0x{:X} first_before=0x{:08X} send_desc=0x{:08X} send_exdesc=0x{:08X} note=uniform-setup-patched-eu-words-before-upload\n",
+            "intel/gpgpu: primary-scanout-mandelbrot8-patch row_gpu=0x{:X} row_virt=0x{:X} row={} x_base={} width={} height={} phase={} addressing=simd8-lane-derived-stateless-absolute-g127 q12_frac_bits={} max_iter={} store_surface=0x{:02X} x_step_q12={} c_re_base_q12={} c_im_q12={} x_step_dword={} c_re_base_dword={} c_im_dword={} address_offset_dword={} address_offset=0x{:X} first_before=0x{:08X} send_desc=0x{:08X} send_exdesc=0x{:08X} kernel_off=0x{:X} artifact_bytes=0x{:X} artifact_end_off=0x{:X} dynamic_state_off=0x{:X} note=uniform-setup-patched-eu-words-before-upload\n",
             row_gpu,
             row_virt as usize,
             y,
@@ -2802,6 +2807,10 @@ fn submit_gpgpu_primary_scanout_mandelbrot_strip(
             output_first_before,
             strip_words[send_dword - 1],
             strip_words[send_dword],
+            GPGPU_EU_KERNEL_OFFSET_BYTES,
+            artifact_bytes,
+            GPGPU_EU_KERNEL_OFFSET_BYTES.saturating_add(artifact_bytes),
+            GPGPU_WALKER_SCRATCH_OFFSET_BYTES,
         );
     }
     if !upload_and_verify_gpu_program_at(warm, GPGPU_EU_KERNEL_OFFSET_BYTES, &strip_words) {
@@ -7071,6 +7080,13 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
         )?;
     }
     let idd_index = IDD_STATE_OFFSET_BYTES / core::mem::size_of::<u32>();
+    let program_bytes = program.words.len() * core::mem::size_of::<u32>();
+    let program_end_offset = GPGPU_EU_KERNEL_OFFSET_BYTES
+        .checked_add(program_bytes)
+        .ok_or("gpgpu-program-offset-overflow")?;
+    if program_end_offset > IDD_STATE_OFFSET_BYTES {
+        return Err("gpgpu-program-overlaps-idd-state");
+    }
     if idd_index
         .checked_add(IDD_LOAD_DWORDS)
         .is_none_or(|end| end * core::mem::size_of::<u32>() > warm.draw_state_len)
@@ -7129,7 +7145,7 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
             GPGPU_KSP_NEGATIVE_CONTROL as u8,
         );
         crate::log!(
-            "intel/gpgpu: eu-ksp-placement-proof program_source={} instruction_base=0x{:X} ksp=0x{:X} ksp_resolves_to=0x{:X} uploaded_gpu=0x{:X} ksp_unit=byte-offset-low6-mbz ksp_64b_aligned={} instruction_base_4k_aligned={} artifact_bytes=0x{:X} crosses_64b_boundary={} placement_shape=mesa-base0-ksp-absolute-offset expected_delta=\"if fetch base was the bug, illegal/eot signature changes without EU byte changes\"\n",
+            "intel/gpgpu: eu-ksp-placement-proof program_source={} instruction_base=0x{:X} ksp=0x{:X} ksp_resolves_to=0x{:X} uploaded_gpu=0x{:X} ksp_unit=byte-offset-low6-mbz ksp_64b_aligned={} instruction_base_4k_aligned={} artifact_bytes=0x{:X} dynamic_state_off=0x{:X} artifact_end_off=0x{:X} overlaps_dynamic_state={} crosses_64b_boundary={} placement_shape=mesa-base0-ksp-absolute-offset expected_delta=\"if fetch base was the bug, illegal/eot signature changes without EU byte changes\"\n",
             program.name,
             GPGPU_INSTRUCTION_BASE,
             kernel_start_pointer,
@@ -7137,10 +7153,11 @@ fn encode_gfx12_gpgpu_walker_probe_batch(
             GPGPU_KERNEL_GPU,
             (kernel_start_pointer & 0x3F == 0) as u8,
             (GPGPU_INSTRUCTION_BASE & 0xFFF == 0) as u8,
-            program.words.len() * core::mem::size_of::<u32>(),
-            (((kernel_start_pointer & 0x3F)
-                + (program.words.len() * core::mem::size_of::<u32>()) as u64)
-                > 0x40) as u8,
+            program_bytes,
+            IDD_STATE_OFFSET_BYTES,
+            program_end_offset,
+            (program_end_offset > IDD_STATE_OFFSET_BYTES) as u8,
+            (((kernel_start_pointer & 0x3F) + program_bytes as u64) > 0x40) as u8,
         );
     }
 
