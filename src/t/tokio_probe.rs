@@ -10,8 +10,8 @@ use alloc::sync::Arc;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use embassy_executor::task;
 use socket2::{Domain, Protocol, Socket, Type};
-use std::io;
-use std::net::SocketAddr;
+use crate::r::std::io;
+use core::net::SocketAddr;
 
 const VNET_PROBE_PORT: u16 = crate::allports::probes::VNET_PROBE_PORT;
 const TOKIO_NET_PROBE_PORT: u16 = crate::allports::probes::TOKIO_NET_PROBE_PORT;
@@ -545,24 +545,13 @@ fn mark_vthread_tls_canary_on_boot_cpu() {
 }
 
 fn probe_std_sync_surface() {
-    let mutex = std::sync::Mutex::new(0u32);
-    let Ok(_guard) = mutex.lock() else {
-        crate::log!("tokio_probe: failure std.sync.mutex.initial_lock\n");
-        return;
-    };
+    let mutex = spin::Mutex::new(0u32);
+    let _guard = mutex.lock();
 
-    match mutex.try_lock() {
-        Ok(_) => {
-            crate::log!(
-                "tokio_probe: note std.sync.mutex recursive try_lock unexpectedly succeeded\n"
-            );
-        }
-        Err(std::sync::TryLockError::WouldBlock) => {
-            crate::log!("tokio_probe: success std.sync.mutex recursive try_lock blocked\n");
-        }
-        Err(std::sync::TryLockError::Poisoned(_)) => {
-            crate::log!("tokio_probe: failure std.sync.mutex.poisoned\n");
-        }
+    if mutex.try_lock().is_none() {
+        crate::log!("tokio_probe: success kernel.sync.mutex recursive try_lock blocked\n");
+    } else {
+        crate::log!("tokio_probe: note kernel.sync.mutex recursive try_lock unexpectedly succeeded\n");
     }
 }
 

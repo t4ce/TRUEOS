@@ -27,6 +27,13 @@ pub(crate) fn init() {
     load_this_cpu();
 }
 
+#[panic_handler]
+fn panic(_info: &core::panic::PanicInfo<'_>) -> ! {
+    loop {
+        core::hint::spin_loop();
+    }
+}
+
 #[cfg(target_arch = "aarch64")]
 pub(crate) fn load_this_cpu() {
     unsafe {
