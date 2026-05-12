@@ -88,8 +88,6 @@ define_started_flags!(
     USB_CONTROLLER_TASKS_STARTED,
     TRUEOSFS_READY_HOOK_STARTED,
     BP_AUTOSTART_STARTED,
-    BOOT_WS_SMOKE_STARTED,
-    BOOT_NETBENCH_STARTED,
     UAS_SKHYNIX_ROUTE_PROBE_STARTED,
     APP_VM_RUN_QUEUE_STARTED,
     FACTORY_RAM_PROBE_STARTED,
@@ -1006,16 +1004,6 @@ fn spawn_trueosfs_ready_hook(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| trueosfs_ready_hook_task())
 }
 
-fn spawn_boot_ws_smoke(spawner: Spawner) -> SpawnAttempt {
-    let _ = spawner;
-    SpawnAttempt::Skipped
-}
-
-fn spawn_boot_netbench(spawner: Spawner) -> SpawnAttempt {
-    let _ = spawner;
-    SpawnAttempt::Skipped
-}
-
 fn spawn_uas_skhynix_route_probe(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |_worker_spawner| {
         crate::tst_uas_skhynix_route_probe::boot_uas_skhynix_route_probe_task()
@@ -1178,10 +1166,7 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::APP_VM_READY
     | crate::r::readiness::GFX_TEXTURE_UPLOAD_SERVICE_READY
     | crate::r::readiness::NET_SOCKET_READY
     | crate::r::readiness::TLS_SOCKET_SERVICE_READY;
-const WS_BOOT_READY: u32 = crate::r::readiness::NET_GATEWAY_REACHABLE
-    | crate::r::readiness::TLS_SOCKET_SERVICE_READY
-    | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
-static TASKS: [TaskSpec; 71] = [
+static TASKS: [TaskSpec; 69] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
         "globalog-persist-once",
@@ -1250,7 +1235,7 @@ static TASKS: [TaskSpec; 71] = [
         &HTTP_TRUEOSFS_STARTED,
         spawn_http_trueosfs,
     ),
-    TaskSpec::disabled("pciids-git", PCIIDS_GIT_READY, &PCIIDS_GIT_STARTED, spawn_pciids_git),
+    TaskSpec::enabled("pciids-git", PCIIDS_GIT_READY, &PCIIDS_GIT_STARTED, spawn_pciids_git),
     TaskSpec::enabled_gated(
         "hyper-http1-probe",
         HYPER_HTTP1_PROBE_READY,
@@ -1504,8 +1489,6 @@ static TASKS: [TaskSpec; 71] = [
         &LUMEN_SERVICE_STARTED,
         spawn_lumen_service,
     ),
-    TaskSpec::disabled("boot-ws-smoke", WS_BOOT_READY, &BOOT_WS_SMOKE_STARTED, spawn_boot_ws_smoke),
-    TaskSpec::disabled("boot-netbench", 0, &BOOT_NETBENCH_STARTED, spawn_boot_netbench),
     TaskSpec::enabled_gated(
         "uas-skhynix-route-probe",
         0,
