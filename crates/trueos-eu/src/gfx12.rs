@@ -432,9 +432,22 @@ pub const T63_ACCUM16_HI_LIVE32_STORE_SEND_DWORD: usize = 201;
 pub const PRIMARY_SCANOUT_MANDELBROT8_PROGRAM_NAME: &str =
     "gfx12-primary-scanout-mandelbrot32-scalar-strip-hdc1-stateless-store-then-ts-eot";
 pub const PRIMARY_SCANOUT_MANDELBROT8_LANES: usize = 32;
-pub const PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS: [usize; 32] = [3, 15, 27, 39, 51, 63, 75, 87, 99, 111, 123, 135, 147, 159, 171, 183, 195, 207, 219, 231, 243, 255, 267, 279, 291, 303, 315, 327, 339, 351, 363, 375];
-pub const PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_DWORDS: [usize; 32] = [7, 19, 31, 43, 55, 67, 79, 91, 103, 115, 127, 139, 151, 163, 175, 187, 199, 211, 223, 235, 247, 259, 271, 283, 295, 307, 319, 331, 343, 355, 367, 379];
+pub const PRIMARY_SCANOUT_MANDELBROT8_COLOR_DWORDS: [usize; 32] = [
+    3, 15, 27, 39, 51, 63, 75, 87, 99, 111, 123, 135, 147, 159, 171, 183, 195, 207, 219, 231, 243,
+    255, 267, 279, 291, 303, 315, 327, 339, 351, 363, 375,
+];
+pub const PRIMARY_SCANOUT_MANDELBROT8_ADDRESS_DWORDS: [usize; 32] = [
+    7, 19, 31, 43, 55, 67, 79, 91, 103, 115, 127, 139, 151, 163, 175, 187, 199, 211, 223, 235, 247,
+    259, 271, 283, 295, 307, 319, 331, 343, 355, 367, 379,
+];
 pub const PRIMARY_SCANOUT_MANDELBROT8_STORE_SEND_DWORD: usize = 11;
+pub const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_PROGRAM_NAME: &str =
+    "gfx12-primary-scanout-mandelbrot8-simd8-coord-color-hdc1-stateless-store-then-ts-eot";
+pub const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_LANES: usize = 8;
+pub const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_X_BASE_DWORD: usize = 11;
+pub const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_COLOR_SEED_DWORD: usize = 19;
+pub const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_ADDRESS_BASE_DWORD: usize = 35;
+pub const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_STORE_SEND_DWORD: usize = 38;
 
 // T5 diagnostic control: preserve the T5 arena payload shape and final HDC1
 // send, but remove live loads and math.  It should write:
@@ -912,14 +925,41 @@ pub static PRIMARY_SCANOUT_MANDELBROT8_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS: [
     0x80030061, 0x7F050220, 0x00460005, 0x00000000, 0x80030131, 0x00000004, 0x70007F0C, 0x00000000,
 ];
 
-pub static PRIMARY_SCANOUT_MANDELBROT8_HDC1_STATELESS_STORE_THEN_TS_EOT: EuArtifact =
-    EuArtifact {
-        name: PRIMARY_SCANOUT_MANDELBROT8_PROGRAM_NAME,
-        isa: EuIsa::Gfx12,
-        kind: EuArtifactKind::PrimaryScanoutMandelbrot8ThenHdc1StoreThenThreadSpawnerEot,
-        words: &PRIMARY_SCANOUT_MANDELBROT8_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS,
-        expects_store: true,
-    };
+pub static PRIMARY_SCANOUT_MANDELBROT8_HDC1_STATELESS_STORE_THEN_TS_EOT: EuArtifact = EuArtifact {
+    name: PRIMARY_SCANOUT_MANDELBROT8_PROGRAM_NAME,
+    isa: EuIsa::Gfx12,
+    kind: EuArtifactKind::PrimaryScanoutMandelbrot8ThenHdc1StoreThenThreadSpawnerEot,
+    words: &PRIMARY_SCANOUT_MANDELBROT8_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS,
+    expects_store: true,
+};
+
+// Mandelbrot sidequest coord-color pilot. This is the first artifact after the
+// scalar store proof that moves useful strip work into the EU program:
+// - runtime patches x_base, row/phase color seed, and row_gpu
+// - EU derives SIMD8 lane coordinates, per-lane store addresses, and colors
+// - one HDC send writes the 8-pixel strip
+//
+// It is deliberately not the final Mandelbrot iteration kernel yet; it proves
+// the uniform-patched, lane-derived shape that the real tilewalker artifact
+// should use next.
+pub static PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_COLOR_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS:
+    [u32; 48] = [
+    0x80030061, 0x01054410, 0x00000000, 0x76543210, 0x80030261, 0x01050160, 0x00460105, 0x00000000,
+    0x00030140, 0x02058660, 0x06460105, 0x00000000, 0x00030141, 0x03058660, 0x06460205, 0x0000000B,
+    0x00030140, 0x04058660, 0x06460305, 0x00003080, 0x00030069, 0x05058660, 0x02460305, 0x00000008,
+    0x00030166, 0x04050660, 0x06460405, 0x00460505, 0x00030069, 0x7F058660, 0x02460105, 0x00000002,
+    0x00030140, 0x7F058660, 0x06467F05, 0x00840058, 0x00030131, 0x00000000, 0xCDFA7F0C, 0x009A040C,
+    0x80030061, 0x7F050220, 0x00460005, 0x00000000, 0x80030131, 0x00000004, 0x70007F0C, 0x00000000,
+];
+
+pub static PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_COLOR_HDC1_STATELESS_STORE_THEN_TS_EOT:
+    EuArtifact = EuArtifact {
+    name: PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_PROGRAM_NAME,
+    isa: EuIsa::Gfx12,
+    kind: EuArtifactKind::PrimaryScanoutMandelbrot8Simd8CoordColorThenHdc1StoreThenThreadSpawnerEot,
+    words: &PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_COLOR_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS,
+    expects_store: true,
+};
 
 // T5 live4 bridge: preserve the Mesa live-load/math prefix, but replace only
 // the final surface-indexed store with the proven stateless HDC store suffix.
