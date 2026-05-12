@@ -2,7 +2,7 @@ use alloc::string::String;
 use embassy_executor::Spawner;
 
 use super::{ShellBackend2, print_shell_line};
-use crate::tst_html_shack::{self, HtmlRoad, HtmlShackFileError};
+use crate::surfer::html_shack::{self, HtmlRoad, HtmlShackFileError};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SurfPromptPrefix {
@@ -81,12 +81,12 @@ pub(crate) fn try_file_reference(line: &str) -> Option<String> {
 }
 
 pub(crate) fn load_inline_html(io: &'static dyn ShellBackend2, html: String) {
-    let _ = tst_html_shack::get_ready_inline_html(html);
+    let _ = html_shack::get_ready_inline_html(html);
     print_shell_line(io, "shack enque");
 }
 
 pub(crate) fn load_file_reference(io: &'static dyn ShellBackend2, file_ref: &str) {
-    match tst_html_shack::get_ready_file_html(file_ref) {
+    match html_shack::get_ready_file_html(file_ref) {
         Ok(_) => print_shell_line(io, "shack enque"),
         Err(HtmlShackFileError::NoRoot) => {
             print_shell_line(io, "surf: no TRUEOSFS root mounted");
@@ -121,7 +121,7 @@ pub(crate) fn prepare_call_with_url(_spawner: &Spawner, io: &'static dyn ShellBa
         HtmlRoad::Http
     };
 
-    let _ = tst_html_shack::with_html_shack(|shack| shack.get_ready(trimmed, road, None));
+    let _ = html_shack::with_html_shack(|shack| shack.get_ready(trimmed, road, None));
     print_shell_line(io, "shack enque");
 }
 

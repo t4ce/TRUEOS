@@ -190,13 +190,12 @@ async fn store_ready_html(html: Html) -> usize {
 }
 
 pub async fn handoff_html_to_truesurfer(html: Html) -> bool {
-    let Some(browser_instance_id) = crate::r::spawn_service::spawn_truesurfer_tab_with_html()
-    else {
+    let Some(browser_instance_id) = crate::surfer::spawn_truesurfer_tab_with_html() else {
         crate::log!("html_shack: browser_handoff skipped url={} reason=spawn_failed\n", html.url);
         return false;
     };
 
-    let handed_off = trueos_qjs::browser_task::queue_set_html_with_url_for_browser(
+    let handed_off = crate::surfer::queue_html_for_browser(
         browser_instance_id,
         html.html,
         Some(html.url.clone()),

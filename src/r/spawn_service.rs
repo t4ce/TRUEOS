@@ -3,7 +3,6 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use embassy_executor::{SendSpawner, SpawnError, SpawnToken, Spawner};
 use embassy_time::{Duration as EmbassyDuration, Timer};
-use spin::Mutex;
 
 use crate::r::spawn_spec::{SpawnAttempt, TaskSpec};
 // NOTE: This file is intended to become the single source of truth for Embassy task startup.
@@ -182,48 +181,6 @@ pub async fn wait_task_or_timeout_ms(name: &str, total_ms: u64) -> bool {
     task_stop_requested(name)
 }
 
-const TRUESURFER_FACTORY_BOOT_COUNT: u32 = 0;
-
-pub const fn truesurfer_factory_boot_count() -> u32 {
-    if TRUESURFER_FACTORY_BOOT_COUNT > trueos_qjs::browser_task::MAX_BROWSER_INSTANCE_ID {
-        trueos_qjs::browser_task::MAX_BROWSER_INSTANCE_ID
-    } else {
-        TRUESURFER_FACTORY_BOOT_COUNT
-    }
-}
-
-struct TruesurferFactory {
-    next_instance_id: u32,
-    spawned_mask: u64,
-}
-
-impl TruesurferFactory {
-    const fn new() -> Self {
-        Self {
-            next_instance_id: 1,
-            spawned_mask: 0,
-        }
-    }
-
-    fn next_instance_id(&self) -> Option<u32> {
-        if self.next_instance_id > trueos_qjs::browser_task::MAX_BROWSER_INSTANCE_ID {
-            None
-        } else {
-            Some(self.next_instance_id)
-        }
-    }
-
-    fn mark_spawned(&mut self, browser_instance_id: u32) {
-        self.next_instance_id = self.next_instance_id.saturating_add(1);
-        let bit = 1u64 << browser_instance_id.saturating_sub(1);
-        self.spawned_mask |= bit;
-    }
-    fn spawned_mask(&self) -> u64 {
-        self.spawned_mask
-    }
-}
-
-static TRUESURFER_FACTORY: Mutex<TruesurferFactory> = Mutex::new(TruesurferFactory::new());
 static GFX_VIRGL_RETRY_AFTER_MS: AtomicU64 = AtomicU64::new(0);
 
 #[inline]
@@ -282,6 +239,15 @@ fn spawn_on_worker<S: Send>(
             worker_spawner.spawn(token);
             SpawnAttempt::Spawned
         }
+        Err(e) => SpawnAttempt::Failed(e),
+    }
+}
+
+#[inline]
+fn spawn_bool_result_to_attempt(result: Result<bool, SpawnError>) -> SpawnAttempt {
+    match result {
+        Ok(true) => SpawnAttempt::Spawned,
+        Ok(false) => SpawnAttempt::Skipped,
         Err(e) => SpawnAttempt::Failed(e),
     }
 }
@@ -433,7 +399,7 @@ fn spawn_ai_qjs_oneshot(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_html_demo(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::tst_html_demo::html_demo_task())
+    spawn_bool_result_to_attempt(crate::surfer::spawn_html_demo(spawner))
 }
 
 fn spawn_http_trueosfs(spawner: Spawner) -> SpawnAttempt {
@@ -611,103 +577,11 @@ fn gfx_switched() -> bool {
 }
 
 fn html_fetch_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::tst_html_shack::html_fetch_service())
-}
-
-fn spawn_truesurfer_batch(spawner: Spawner, requested: u32) -> SpawnAttempt {
-    if requested == 0 {
-        return SpawnAttempt::Skipped;
-    }
-
-    let mut factory = TRUESURFER_FACTORY.lock();
-    let mut spawned_any = false;
-
-    for _ in 0..requested {
-        let Some(browser_instance_id) = factory.next_instance_id() else {
-            break;
-        };
-
-        match spawn_on_worker(spawner, |worker_spawner| {
-            let _ = worker_spawner;
-            trueos_qjs::browser_task::truesurfer_task(browser_instance_id)
-        }) {
-            SpawnAttempt::Spawned => {
-                factory.mark_spawned(browser_instance_id);
-                crate::r::ui2::signal_hosted_browser_factory_mask(factory.spawned_mask());
-                spawned_any = true;
-                crate::log!(
-                    "truesurfer-factory: spawned browser_instance_id={} mask={:#x} remaining={}\n",
-                    browser_instance_id,
-                    factory.spawned_mask(),
-                    trueos_qjs::browser_task::MAX_BROWSER_INSTANCE_ID
-                        .saturating_sub(browser_instance_id)
-                );
-            }
-            SpawnAttempt::Skipped => {
-                break;
-            }
-            SpawnAttempt::Failed(e) => {
-                if !spawned_any {
-                    return SpawnAttempt::Failed(e);
-                }
-                crate::log!(
-                    "truesurfer-factory: spawn failed browser_instance_id={} err={:?}\n",
-                    browser_instance_id,
-                    e
-                );
-                break;
-            }
-        }
-    }
-
-    if spawned_any {
-        SpawnAttempt::Spawned
-    } else {
-        SpawnAttempt::Skipped
-    }
-}
-
-pub fn spawn_truesurfer_tab_with_html() -> Option<u32> {
-    let mut factory = TRUESURFER_FACTORY.lock();
-    let browser_instance_id = factory.next_instance_id()?;
-
-    match crate::workers::pick_background_spawner() {
-        Some(worker_spawner) => {
-            match trueos_qjs::browser_task::truesurfer_task(browser_instance_id) {
-                Ok(token) => {
-                    worker_spawner.spawn(token);
-                    factory.mark_spawned(browser_instance_id);
-                    crate::r::ui2::signal_hosted_browser_factory_mask(factory.spawned_mask());
-                    crate::log!(
-                        "truesurfer-factory: handoff-spawned browser_instance_id={} mask={:#x} remaining={}\n",
-                        browser_instance_id,
-                        factory.spawned_mask(),
-                        trueos_qjs::browser_task::MAX_BROWSER_INSTANCE_ID
-                            .saturating_sub(browser_instance_id)
-                    );
-                    Some(browser_instance_id)
-                }
-                Err(_) => {
-                    crate::log!(
-                        "truesurfer-factory: handoff-spawn skipped browser_instance_id={}\n",
-                        browser_instance_id
-                    );
-                    None
-                }
-            }
-        }
-        None => {
-            crate::log!(
-                "truesurfer-factory: handoff-spawn skipped browser_instance_id={}\n",
-                browser_instance_id
-            );
-            None
-        }
-    }
+    spawn_bool_result_to_attempt(crate::surfer::spawn_html_fetch_service(spawner))
 }
 
 fn spawn_truesurfer_factory(spawner: Spawner) -> SpawnAttempt {
-    spawn_truesurfer_batch(spawner, truesurfer_factory_boot_count())
+    spawn_bool_result_to_attempt(crate::surfer::spawn_truesurfer_factory(spawner))
 }
 
 fn spawn_ui2(spawner: Spawner) -> SpawnAttempt {
