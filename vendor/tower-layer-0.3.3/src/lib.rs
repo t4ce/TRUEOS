@@ -8,7 +8,6 @@
 #![forbid(unsafe_code)]
 // `rustdoc::broken_intra_doc_links` is checked on CI
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 //! Layer traits and extensions.
 //!
 //! A layer decorates an service and provides additional functionality. It

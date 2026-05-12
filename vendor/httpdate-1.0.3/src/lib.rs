@@ -17,9 +17,19 @@
 //! The `HttpDate` (8 bytes) is smaller than `SystemTime` (16 bytes) and
 //! using the display impl avoids a temporary allocation.
 #![forbid(unsafe_code)]
+#![cfg_attr(any(target_os = "trueos", target_os = "zkvm"), no_std)]
 
-use std::error;
-use std::fmt::{self, Display, Formatter};
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+extern crate alloc;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+extern crate self as std;
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use alloc::{format, string::String};
+use core::fmt::{Display, Formatter};
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+use std::{format, string::String};
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::io;
 use std::time::SystemTime;
 
@@ -31,10 +41,10 @@ mod date;
 #[derive(Debug)]
 pub struct Error(());
 
-impl error::Error for Error {}
+impl core::error::Error for Error {}
 
 impl Display for Error {
-    fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), core::fmt::Error> {
         f.write_str("string contains no or an invalid date")
     }
 }
@@ -42,6 +52,122 @@ impl Display for Error {
 impl From<Error> for io::Error {
     fn from(e: Error) -> io::Error {
         io::Error::new(io::ErrorKind::Other, e)
+    }
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod cmp {
+    pub use core::cmp::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod error {
+    pub use core::error::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod fmt {
+    pub use core::fmt::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod io {
+    use core::fmt;
+
+    #[derive(Debug)]
+    pub struct Error {
+        kind: ErrorKind,
+    }
+
+    #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+    pub enum ErrorKind {
+        Other,
+    }
+
+    impl Error {
+        pub fn new<E>(kind: ErrorKind, _error: E) -> Self {
+            Self { kind }
+        }
+
+        pub fn kind(&self) -> ErrorKind {
+            self.kind
+        }
+    }
+
+    impl fmt::Display for Error {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("httpdate error")
+        }
+    }
+
+    impl core::error::Error for Error {}
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod str {
+    pub use core::str::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod time {
+    pub use core::time::Duration;
+
+    use core::ops::{Add, AddAssign, Sub};
+
+    #[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
+    pub struct SystemTime {
+        duration_since_epoch: Duration,
+    }
+
+    #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+    pub struct SystemTimeError {
+        duration: Duration,
+    }
+
+    pub const UNIX_EPOCH: SystemTime = SystemTime {
+        duration_since_epoch: Duration::ZERO,
+    };
+
+    impl SystemTime {
+        pub fn duration_since(&self, earlier: SystemTime) -> Result<Duration, SystemTimeError> {
+            self.duration_since_epoch
+                .checked_sub(earlier.duration_since_epoch)
+                .ok_or_else(|| SystemTimeError {
+                    duration: earlier.duration_since_epoch - self.duration_since_epoch,
+                })
+        }
+    }
+
+    impl SystemTimeError {
+        pub fn duration(&self) -> Duration {
+            self.duration
+        }
+    }
+
+    impl Add<Duration> for SystemTime {
+        type Output = SystemTime;
+
+        fn add(self, duration: Duration) -> SystemTime {
+            SystemTime {
+                duration_since_epoch: self.duration_since_epoch + duration,
+            }
+        }
+    }
+
+    impl AddAssign<Duration> for SystemTime {
+        fn add_assign(&mut self, duration: Duration) {
+            *self = *self + duration;
+        }
+    }
+
+    impl Sub<Duration> for SystemTime {
+        type Output = SystemTime;
+
+        fn sub(self, duration: Duration) -> SystemTime {
+            SystemTime {
+                duration_since_epoch: self.duration_since_epoch - duration,
+            }
+        }
     }
 }
 

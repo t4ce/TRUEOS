@@ -5,6 +5,7 @@
     clippy::missing_safety_doc,
     clippy::undocumented_unsafe_blocks
 )]
+#![cfg_attr(any(target_os = "trueos", target_os = "zkvm"), no_std)]
 #![cfg_attr(test, deny(warnings))]
 
 //! Asynchronous HTTP request or response body.
@@ -16,14 +17,19 @@
 mod frame;
 mod size_hint;
 
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+extern crate alloc;
+
 pub use self::frame::Frame;
 pub use self::size_hint::SizeHint;
 
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use alloc::{boxed::Box, string::String};
 use bytes::{Buf, Bytes};
-use std::convert::Infallible;
-use std::ops;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::convert::Infallible;
+use core::ops;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 /// Trait representing a streaming body of a Request or Response.
 ///
@@ -191,7 +197,7 @@ impl Body for String {
         _cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
         if !self.is_empty() {
-            let s = std::mem::take(&mut *self);
+            let s = core::mem::take(&mut *self);
             Poll::Ready(Some(Ok(Frame::data(s.into_bytes().into()))))
         } else {
             Poll::Ready(None)
