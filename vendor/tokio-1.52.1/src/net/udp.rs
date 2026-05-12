@@ -2299,6 +2299,7 @@ impl UdpSocket {
     }
 }
 
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 impl TryFrom<std::net::UdpSocket> for UdpSocket {
     type Error = io::Error;
 

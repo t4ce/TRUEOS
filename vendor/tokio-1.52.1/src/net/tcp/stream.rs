@@ -1468,6 +1468,7 @@ impl TcpStream {
     }
 }
 
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 impl TryFrom<std::net::TcpStream> for TcpStream {
     type Error = io::Error;
 

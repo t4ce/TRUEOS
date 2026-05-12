@@ -236,6 +236,12 @@ impl From<()> for Error {
     }
 }
 
+impl From<heapless::CapacityError> for Error {
+    fn from(_: heapless::CapacityError) -> Error {
+        Error::Unknown
+    }
+}
+
 impl core::fmt::Display for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {

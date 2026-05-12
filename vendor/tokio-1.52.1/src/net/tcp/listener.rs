@@ -395,6 +395,7 @@ impl TcpListener {
     }
 }
 
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 impl TryFrom<net::TcpListener> for TcpListener {
     type Error = io::Error;
 
