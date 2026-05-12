@@ -1,3 +1,4 @@
+use alloc::boxed::Box;
 use bytes::Buf;
 use http_body::{Body, Frame, SizeHint};
 use pin_project_lite::pin_project;

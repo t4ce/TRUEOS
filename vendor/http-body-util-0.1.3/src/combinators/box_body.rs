@@ -1,5 +1,6 @@
 use crate::BodyExt as _;
 
+use alloc::boxed::Box;
 use bytes::Buf;
 use http_body::{Body, Frame, SizeHint};
 use std::{

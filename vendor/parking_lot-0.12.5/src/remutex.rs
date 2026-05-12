@@ -16,6 +16,13 @@ unsafe impl GetThreadId for RawThreadId {
     const INIT: RawThreadId = RawThreadId;
 
     fn nonzero_thread_id(&self) -> NonZeroUsize {
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        {
+            return NonZeroUsize::new(1).expect("TRUEOS thread id is non-zero");
+        }
+
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+        {
         // The address of a thread-local variable is guaranteed to be unique to the
         // current thread, and is also guaranteed to be non-zero. The variable has to have a
         // non-zero size to guarantee it has a unique address for each thread.
@@ -24,6 +31,7 @@ unsafe impl GetThreadId for RawThreadId {
             NonZeroUsize::new(x as *const _ as usize)
                 .expect("thread-local variable address is null")
         })
+        }
     }
 }
 

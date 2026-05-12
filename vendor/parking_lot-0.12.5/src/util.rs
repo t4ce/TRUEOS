@@ -35,5 +35,12 @@ unsafe fn unreachable() -> ! {
 
 #[inline]
 pub fn to_deadline(timeout: Duration) -> Option<Instant> {
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    {
+        let nanos = u64::try_from(timeout.as_nanos()).unwrap_or(u64::MAX);
+        return crate::zkvm_time::instant_now().checked_add(embassy_time::Duration::from_nanos(nanos));
+    }
+
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     crate::zkvm_time::instant_now().checked_add(timeout)
 }

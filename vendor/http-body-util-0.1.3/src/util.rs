@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::io::IoSlice;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
@@ -56,6 +57,7 @@ impl<T: Buf> Buf for BufList<T> {
     }
 
     #[inline]
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     fn chunks_vectored<'t>(&'t self, dst: &mut [IoSlice<'t>]) -> usize {
         if dst.is_empty() {
             return 0;
