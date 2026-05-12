@@ -1,4 +1,3 @@
-
 // Minimal ISO9660 reader for extracting a few known files from an in-memory ISO.
 //
 // Intended use: `update` downloads the installer ISO and extracts

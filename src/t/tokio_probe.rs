@@ -6,12 +6,12 @@
 
 extern crate alloc;
 
+use crate::r::std::io;
 use alloc::sync::Arc;
+use core::net::SocketAddr;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use embassy_executor::task;
 use socket2::{Domain, Protocol, Socket, Type};
-use crate::r::std::io;
-use core::net::SocketAddr;
 
 const VNET_PROBE_PORT: u16 = crate::allports::probes::VNET_PROBE_PORT;
 const TOKIO_NET_PROBE_PORT: u16 = crate::allports::probes::TOKIO_NET_PROBE_PORT;
@@ -551,7 +551,9 @@ fn probe_std_sync_surface() {
     if mutex.try_lock().is_none() {
         crate::log!("tokio_probe: success kernel.sync.mutex recursive try_lock blocked\n");
     } else {
-        crate::log!("tokio_probe: note kernel.sync.mutex recursive try_lock unexpectedly succeeded\n");
+        crate::log!(
+            "tokio_probe: note kernel.sync.mutex recursive try_lock unexpectedly succeeded\n"
+        );
     }
 }
 
@@ -840,9 +842,7 @@ fn spawn_deferred_vthread_tls_canary() {
     }
 
     let Some(spawner) = crate::workers::spawner_for_slot(0) else {
-        crate::log!(
-            "tokio_probe: note vthread.tls canary task not spawned (no slot0 spawner)\n"
-        );
+        crate::log!("tokio_probe: note vthread.tls canary task not spawned (no slot0 spawner)\n");
         return;
     };
 

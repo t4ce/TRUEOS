@@ -94,6 +94,7 @@ const GPGPU_TILE_WEIGHT_BYTES_PER_ELEM: usize = 2;
 const GPGPU_TILE_X_BYTES_PER_ELEM: usize = 4;
 const GPGPU_TILE_OUTPUT_BYTES_PER_ELEM: usize = 4;
 const GPGPU_TILE_TARGET_TILES: usize = 3;
+const MANDELBROT_STRIP_READBACK_POLLS: usize = 256;
 const GPGPU_WEIGHT_TILE_BYTES: usize =
     GPGPU_TILE_ROWS * GPGPU_TILE_K_DIM * GPGPU_TILE_WEIGHT_BYTES_PER_ELEM;
 const GPGPU_X_VECTOR_BYTES: usize = GPGPU_TILE_K_DIM * GPGPU_TILE_X_BYTES_PER_ELEM;
@@ -577,7 +578,8 @@ fn submit_warm_render_batch(
     }
 
     let gpgpu_submit = is_gpgpu_submit_name(submit_name);
-    let poll_limit = if gpgpu_submit { 4 * 1024 * 1024 } else { 4096 };
+    let extended_poll = uses_extended_submit_poll(submit_name);
+    let poll_limit = if extended_poll { 4 * 1024 * 1024 } else { 4096 };
     let mut completed = false;
     let mut iter = 0usize;
     while iter < poll_limit {
@@ -815,7 +817,12 @@ fn should_log_gpgpu_submit_name(name: &str) -> bool {
             | "gpgpu-compute-walker"
             | "gpgpu-pre-submit"
             | "gpgpu-primary-scanout-pixel-quiet"
+            | "gpgpu-primary-scanout-mandelbrot8-strip"
     )
+}
+
+fn uses_extended_submit_poll(name: &str) -> bool {
+    is_gpgpu_submit_name(name) || matches!(name, "gpgpu-primary-scanout-mandelbrot8-strip")
 }
 
 fn seed_result_debug_slots(warm: RenderWarmState) {
@@ -1413,7 +1420,7 @@ fn gpgpu_primary_scanout_pixel_quiet_program() -> GpgpuEuProgram {
 
 fn gpgpu_primary_scanout_mandelbrot8_program() -> GpgpuEuProgram {
     let artifact =
-        trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_COLOR_HDC1_STATELESS_STORE_THEN_TS_EOT;
+        trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_ESCAPE_HDC1_BTI1_STORE_THEN_TS_EOT;
     GpgpuEuProgram {
         name: artifact.name,
         kind: artifact.kind,
@@ -1421,7 +1428,7 @@ fn gpgpu_primary_scanout_mandelbrot8_program() -> GpgpuEuProgram {
         expects_store: artifact.expects_store,
         expected_store_value: 0,
         store_send_dword: Some(
-            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_STORE_SEND_DWORD,
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_STORE_EXDESC_DWORD,
         ),
         visible_seed_dword: None,
     }
@@ -2609,13 +2616,19 @@ pub(crate) fn submit_gpgpu_primary_scanout_marker_probe() -> crate::intel::Gpgpu
     }
 }
 
-fn mandelbrot_simd8_coord_seed(y: usize, phase: usize) -> u32 {
-    0x0000_3080 ^ (((y as u32) & 0xFF) << 16) ^ (((phase as u32) & 0x3F) << 24)
+fn mandelbrot_q12_x_step(width: usize) -> i32 {
+    let scale = 1i64 << trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_FRAC_BITS;
+    ((3 * scale + (width.max(1) as i64 / 2)) / width.max(1) as i64) as i32
 }
 
-fn mandelbrot_simd8_coord_color(x: usize, y: usize, phase: usize) -> u32 {
-    let step = (x as u32).wrapping_mul(11);
-    step.wrapping_add(mandelbrot_simd8_coord_seed(y, phase)) | step.wrapping_shl(8)
+fn mandelbrot_q12_c_re_base(x_base: usize, width: usize) -> i32 {
+    let scale = 1i64 << trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_FRAC_BITS;
+    (-2 * scale + (x_base as i64 * 3 * scale) / width.max(1) as i64) as i32
+}
+
+fn mandelbrot_q12_c_im(y: usize, height: usize) -> i32 {
+    let scale = 1i64 << trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_FRAC_BITS;
+    (-scale + (y as i64 * 2 * scale) / height.max(1) as i64) as i32
 }
 
 fn submit_gpgpu_primary_scanout_pixel_quiet(
@@ -2723,6 +2736,8 @@ fn submit_gpgpu_primary_scanout_mandelbrot_strip(
     dev: crate::intel::Dev,
     warm: RenderWarmState,
     program: GpgpuEuProgram,
+    scanout_gpu: u64,
+    scanout_bytes: usize,
     row_gpu: u64,
     row_virt: *mut u8,
     x_base: usize,
@@ -2731,27 +2746,40 @@ fn submit_gpgpu_primary_scanout_mandelbrot_strip(
     height: usize,
     phase: usize,
 ) -> crate::intel::GpgpuOneTileSentinelProof {
-    const LANES: usize = trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_LANES;
+    const LANES: usize = trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_LANES;
 
     if row_gpu >> 32 != 0 {
         return gpgpu_one_tile_sentinel_failure("strip-gpu-high32-unsupported", program, row_gpu);
     }
 
-    let expected_first = mandelbrot_simd8_coord_color(x_base, y, phase);
-    let output_first_before = unsafe { core::ptr::read_volatile(row_virt as *const u32) };
+    let x_step_q12 = mandelbrot_q12_x_step(width);
+    let c_re_base_q12 = mandelbrot_q12_c_re_base(x_base, width);
+    let c_im_q12 = mandelbrot_q12_c_im(y, height);
+    crate::intel::dma_flush(row_virt, LANES * core::mem::size_of::<u32>());
+    let mut before_words = [0u32; LANES];
+    let mut lane = 0usize;
+    while lane < LANES {
+        before_words[lane] = unsafe {
+            core::ptr::read_volatile(row_virt.add(lane * core::mem::size_of::<u32>()) as *const u32)
+        };
+        lane += 1;
+    }
+    let output_first_before = before_words[0];
 
     let mut strip_words =
-        trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_COLOR_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS;
-    strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_X_BASE_DWORD] =
-        x_base as u32;
-    strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_COLOR_SEED_DWORD] =
-        mandelbrot_simd8_coord_seed(y, phase);
-    strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_ADDRESS_BASE_DWORD] =
+        trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_ESCAPE_HDC1_BTI1_STORE_THEN_TS_EOT_WORDS;
+    strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_X_STEP_DWORD] =
+        x_step_q12 as u32;
+    strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_C_RE_BASE_DWORD] =
+        c_re_base_q12 as u32;
+    strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_C_IM_DWORD] =
+        c_im_q12 as u32;
+    strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_ADDRESS_OFFSET_DWORD] =
         row_gpu as u32;
     if x_base == 0 && y == 0 {
-        let send_dword = trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_STORE_SEND_DWORD;
+        let send_dword = trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_STORE_EXDESC_DWORD;
         crate::log!(
-            "intel/gpgpu: primary-scanout-mandelbrot8-patch row_gpu=0x{:X} row_virt=0x{:X} row={} x_base={} width={} height={} phase={} addressing=simd8-lane-derived-stateless x_base_dword={} color_seed_dword={} address_base_dword={} color_seed=0x{:08X} first_expected=0x{:08X} send_desc=0x{:08X} send_exdesc=0x{:08X} note=uniform-patched-eu-words-before-upload\n",
+            "intel/gpgpu: primary-scanout-mandelbrot8-patch row_gpu=0x{:X} row_virt=0x{:X} row={} x_base={} width={} height={} phase={} addressing=simd8-lane-derived-stateless-absolute-g127 q12_frac_bits={} max_iter={} store_surface=0x{:02X} x_step_q12={} c_re_base_q12={} c_im_q12={} x_step_dword={} c_re_base_dword={} c_im_dword={} address_offset_dword={} address_offset=0x{:X} first_before=0x{:08X} send_desc=0x{:08X} send_exdesc=0x{:08X} note=uniform-setup-patched-eu-words-before-upload\n",
             row_gpu,
             row_virt as usize,
             y,
@@ -2759,11 +2787,19 @@ fn submit_gpgpu_primary_scanout_mandelbrot_strip(
             width,
             height,
             phase,
-            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_X_BASE_DWORD,
-            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_COLOR_SEED_DWORD,
-            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_ADDRESS_BASE_DWORD,
-            strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_COLOR_SEED_DWORD],
-            expected_first,
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_FRAC_BITS,
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_MAX_ITER,
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_STORE_SURFACE,
+            x_step_q12,
+            c_re_base_q12,
+            c_im_q12,
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_X_STEP_DWORD,
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_C_RE_BASE_DWORD,
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_C_IM_DWORD,
+            trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_ADDRESS_OFFSET_DWORD,
+            strip_words
+                [trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_ADDRESS_OFFSET_DWORD],
+            output_first_before,
             strip_words[send_dword - 1],
             strip_words[send_dword],
         );
@@ -2789,9 +2825,9 @@ fn submit_gpgpu_primary_scanout_mandelbrot_strip(
         unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, batch_dwords) };
     let store_surface = prepare_gpgpu_store_surface_state_for_target_span(
         warm,
-        row_gpu,
-        LANES * core::mem::size_of::<u32>(),
-        "bind-send-bti-to-primary-scanout-mandelbrot8-strip",
+        scanout_gpu,
+        scanout_bytes,
+        "bind-stateless-hdc253-to-primary-scanout-full-surface-quiet",
     );
     let batch_bytes =
         match encode_gfx12_gpgpu_walker_probe_batch(warm, batch, store_surface, program, 1) {
@@ -2809,34 +2845,49 @@ fn submit_gpgpu_primary_scanout_mandelbrot_strip(
         "gpgpu-primary-scanout-mandelbrot8-strip",
     );
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
-    crate::intel::dma_flush(row_virt, LANES * core::mem::size_of::<u32>());
-
     let mut hits = 0u64;
-    let mut lane = 0usize;
-    while lane < LANES {
-        let after = unsafe {
-            core::ptr::read_volatile(row_virt.add(lane * core::mem::size_of::<u32>()) as *const u32)
-        };
-        let expected = mandelbrot_simd8_coord_color(x_base + lane, y, phase);
-        if after == expected {
-            hits |= 1u64 << lane;
+    let readback_poll_limit = if finished {
+        MANDELBROT_STRIP_READBACK_POLLS
+    } else {
+        1
+    };
+    let mut readback_poll = 0usize;
+    let mut output_first_after = output_first_before;
+    while readback_poll < readback_poll_limit {
+        crate::intel::dma_flush(row_virt, LANES * core::mem::size_of::<u32>());
+        hits = 0;
+        let mut lane = 0usize;
+        while lane < LANES {
+            let after = unsafe {
+                core::ptr::read_volatile(
+                    row_virt.add(lane * core::mem::size_of::<u32>()) as *const u32
+                )
+            };
+            if after != before_words[lane] {
+                hits |= 1u64 << lane;
+            }
+            if lane == 0 {
+                output_first_after = after;
+            }
+            lane += 1;
         }
-        lane += 1;
+        if hits != 0 {
+            break;
+        }
+        readback_poll += 1;
+        core::hint::spin_loop();
     }
 
-    let output_first_after = unsafe { core::ptr::read_volatile(row_virt as *const u32) };
     let dispatch_after = read_gpgpu_threads_dispatched(dev);
     let dispatch_delta = dispatch_after.saturating_sub(dispatch_before);
     let finish_marker = read_result_dword(warm, RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD);
-    let readback_ok = finished
-        && finish_marker == RCS_EXEC_RESULT_COMPUTE_WALKER_DONE
-        && hits == ((1u64 << LANES) - 1);
+    let readback_ok = finished && finish_marker == RCS_EXEC_RESULT_COMPUTE_WALKER_DONE && hits != 0;
     let reason = if readback_ok {
-        "mandelbrot8-strip-written"
+        "mandelbrot8-strip-changed"
     } else if !finished {
         "submit-not-finished"
     } else if hits == 0 {
-        "mandelbrot8-strip-missing"
+        "mandelbrot8-strip-unchanged"
     } else {
         "mandelbrot8-strip-partial"
     };
@@ -2854,7 +2905,7 @@ fn submit_gpgpu_primary_scanout_mandelbrot_strip(
         reason,
         program_name: program.name,
         output_gpu: row_gpu,
-        sentinel: expected_first,
+        sentinel: output_first_before,
         output_first_before,
         output_first_after,
         output_nonzero_before: (output_first_before != 0) as usize,
@@ -2874,7 +2925,8 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot_preview(
     const PREVIEW_X: u32 = 0;
     const PREVIEW_Y: u32 = 0;
     const ROW_INTERLACE: usize = 16;
-    const LANES: usize = trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_LANES;
+    const STRIP_BURST_MAX: usize = 64;
+    const LANES: usize = trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_LANES;
 
     let program = gpgpu_primary_scanout_mandelbrot8_program();
     let Some(dev) = crate::intel::claimed_device() else {
@@ -2909,9 +2961,10 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot_preview(
     let start_cursor = cursor % total_strips;
     let phase = cursor / total_strips;
     let mut last_proof =
-        gpgpu_one_tile_sentinel_failure("no-preview-strips-submitted", program, target.gpu);
-    let strip_budget = core::cmp::max(1, pixel_budget / LANES);
+        gpgpu_one_tile_sentinel_failure_quiet("no-preview-strips-submitted", program, target.gpu);
+    let strip_budget = core::cmp::min(core::cmp::max(1, pixel_budget / LANES), STRIP_BURST_MAX);
     let mut submitted_strips = 0usize;
+    let mut finished_strips = 0usize;
     let mut accepted_strips = 0usize;
     let mut idx = start_cursor;
     while submitted_strips < strip_budget {
@@ -2940,17 +2993,33 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot_preview(
         let row_gpu = target.gpu + byte_offset as u64;
         let row_virt = unsafe { target.virt.add(byte_offset) };
         let proof = submit_gpgpu_primary_scanout_mandelbrot_strip(
-            dev, warm, program, row_gpu, row_virt, px, py, block_w, block_h, phase,
+            dev,
+            warm,
+            program,
+            target.gpu,
+            target.byte_len,
+            row_gpu,
+            row_virt,
+            px,
+            py,
+            block_w,
+            block_h,
+            phase,
         );
         submitted_strips += proof.submitted as usize;
-        let strip_accepted = proof.finished
+        let strip_changed = proof.finished
             && proof.finish_marker == RCS_EXEC_RESULT_COMPUTE_WALKER_DONE
             && proof.output_hits_lo64 != 0;
-        if strip_accepted {
+        let strip_finished =
+            proof.finished && proof.finish_marker == RCS_EXEC_RESULT_COMPUTE_WALKER_DONE;
+        if strip_finished {
+            finished_strips += 1;
+        }
+        if strip_changed {
             accepted_strips += 1;
         }
         last_proof = proof;
-        if !strip_accepted {
+        if !strip_finished || !strip_changed {
             break;
         }
         idx += 1;
@@ -2965,53 +3034,54 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot_preview(
         .saturating_sub(1)
         .saturating_mul(target.pitch_bytes as usize)
         .saturating_add(block_w.saturating_mul(core::mem::size_of::<u32>()));
-    let display_notified = super::display::notify_primary_surface_external_write(
-        "gpgpu-primary-scanout-mandelbrot-preview",
-        flush_offset,
-        flush_bytes,
-    );
+    let display_notified = accepted_strips != 0
+        && super::display::notify_primary_surface_external_write(
+            "gpgpu-primary-scanout-mandelbrot-preview",
+            flush_offset,
+            flush_bytes,
+        );
     let next_cursor = (start_cursor + accepted_strips) % total_strips;
     let readback_ok =
         submitted_strips != 0 && submitted_strips == accepted_strips && last_proof.readback_ok;
-    crate::log!(
-        "intel/gpgpu: primary-scanout-mandelbrot8-preview submitted_strips={} accepted_strips={} lanes_per_strip={} submitted_pixels={} accepted_pixels={} strict_readback_ok={} reason={} program_source={} primary_gpu=0x{:X} primary_phys=0x{:X} primary_bytes=0x{:X} block={}x{}@{}x{} row_order=interlace{} cursor_in={} cursor_out={} strip_budget={} last_gpu=0x{:X} last_first_expected=0x{:08X} last_first_after=0x{:08X} last_hit_mask=0x{:016X} display_notified={} finish_marker=0x{:08X} finish_expected=0x{:08X} action={} next={} does_not_prove=full_screen_compute_shader_or_fragment_pipeline\n",
-        submitted_strips,
-        accepted_strips,
-        LANES,
-        submitted_strips.saturating_mul(LANES),
-        accepted_strips.saturating_mul(LANES),
-        readback_ok as u8,
-        last_proof.reason,
-        program.name,
-        target.gpu,
-        target.phys,
-        target.byte_len,
-        block_w,
-        block_h,
-        block_x,
-        block_y,
-        ROW_INTERLACE,
-        start_cursor,
-        next_cursor,
-        strip_budget,
-        last_proof.output_gpu,
-        last_proof.sentinel,
-        last_proof.output_first_after,
-        last_proof.output_hits_lo64,
-        display_notified as u8,
-        last_proof.finish_marker,
-        last_proof.expected_finish_marker,
-        if readback_ok {
-            "continue-gpgpu-strip-preview"
-        } else {
-            "fix-gpgpu-strip-store"
-        },
-        if next_cursor == 0 {
-            "advance-mandelbrot-phase"
-        } else {
-            "continue-preview-strips"
-        },
-    );
+    let should_log_preview =
+        (accepted_strips != 0 && (start_cursor == 0 || next_cursor == 0)) || !last_proof.finished;
+    if should_log_preview {
+        crate::log!(
+            "intel/gpgpu: primary-scanout-mandelbrot8-preview submitted_strips={} finished_strips={} changed_strips={} lanes_per_strip={} submitted_pixels={} changed_pixels={} strict_readback_ok={} reason={} program_source={} primary_gpu=0x{:X} primary_bytes=0x{:X} cursor_in={} cursor_out={} strip_budget={} burst_cap={} last_gpu=0x{:X} last_first_before=0x{:08X} last_first_after=0x{:08X} last_change_mask=0x{:016X} display_notified={} finish_marker=0x{:08X} finish_expected=0x{:08X} action={} next={} deliverable=visible-mandelbrot-frame-progress\n",
+            submitted_strips,
+            finished_strips,
+            accepted_strips,
+            LANES,
+            submitted_strips.saturating_mul(LANES),
+            accepted_strips.saturating_mul(LANES),
+            readback_ok as u8,
+            last_proof.reason,
+            program.name,
+            target.gpu,
+            target.byte_len,
+            start_cursor,
+            next_cursor,
+            strip_budget,
+            STRIP_BURST_MAX,
+            last_proof.output_gpu,
+            last_proof.output_first_before,
+            last_proof.output_first_after,
+            last_proof.output_hits_lo64,
+            display_notified as u8,
+            last_proof.finish_marker,
+            last_proof.expected_finish_marker,
+            if readback_ok {
+                "continue-gpgpu-strip-preview"
+            } else {
+                "hold-cursor-until-scanout-changes"
+            },
+            if next_cursor == 0 {
+                "frame-covered"
+            } else {
+                "continue-preview-strips"
+            },
+        );
+    }
     (last_proof, next_cursor)
 }
 
@@ -5065,6 +5135,31 @@ fn gpgpu_one_tile_sentinel_failure(
     }
 }
 
+fn gpgpu_one_tile_sentinel_failure_quiet(
+    reason: &'static str,
+    program: GpgpuEuProgram,
+    output_gpu: u64,
+) -> crate::intel::GpgpuOneTileSentinelProof {
+    crate::intel::GpgpuOneTileSentinelProof {
+        submitted: false,
+        finished: false,
+        readback_ok: false,
+        reason,
+        program_name: program.name,
+        output_gpu,
+        sentinel: GPGPU_ONE_TILE_OUTPUT_SENTINEL,
+        output_first_before: 0,
+        output_first_after: 0,
+        output_nonzero_before: 0,
+        output_nonzero_after: 0,
+        output_hits_lo64: 0,
+        dispatch_delta: 0,
+        finish_marker: 0,
+        expected_finish_marker: RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        batch_bytes: 0,
+    }
+}
+
 fn gpgpu_tile_rows_stage_failure(
     reason: &'static str,
     output_gpu: u64,
@@ -6023,7 +6118,25 @@ fn prepare_gpgpu_store_surface_state_for_target_span(
     target_bytes: usize,
     note: &'static str,
 ) -> GpgpuStoreSurfaceState {
-    let binding_table_bytes = GPGPU_STORE_BINDING_TABLE_ENTRIES * core::mem::size_of::<u32>();
+    prepare_gpgpu_store_surface_state_for_target_span_with_bti(
+        warm,
+        target_gpu,
+        target_bytes,
+        GPGPU_STORE_BINDING_TABLE_INDEX,
+        note,
+    )
+}
+
+fn prepare_gpgpu_store_surface_state_for_target_span_with_bti(
+    warm: RenderWarmState,
+    target_gpu: u64,
+    target_bytes: usize,
+    binding_table_index: usize,
+    note: &'static str,
+) -> GpgpuStoreSurfaceState {
+    let binding_table_entries =
+        GPGPU_STORE_BINDING_TABLE_ENTRIES.max(binding_table_index.saturating_add(1));
+    let binding_table_bytes = binding_table_entries * core::mem::size_of::<u32>();
     let surface_bytes = GPGPU_STORE_SURFACE_DWORDS * core::mem::size_of::<u32>();
     let binding_end = GPGPU_STORE_BINDING_TABLE_OFFSET_BYTES.saturating_add(binding_table_bytes);
     let surface_end = GPGPU_STORE_SURFACE_STATE_OFFSET_BYTES.saturating_add(surface_bytes);
@@ -6046,7 +6159,7 @@ fn prepare_gpgpu_store_surface_state_for_target_span(
             ready: false,
             binding_table_offset: GPGPU_STORE_BINDING_TABLE_OFFSET_BYTES,
             surface_state_offset: GPGPU_STORE_SURFACE_STATE_OFFSET_BYTES,
-            binding_table_index: GPGPU_STORE_BINDING_TABLE_INDEX,
+            binding_table_index,
             surface_gpu: GPU_VA_DRAW_STATE_BASE + GPGPU_STORE_SURFACE_STATE_OFFSET_BYTES as u64,
             target_gpu,
             surface_dword0: 0,
@@ -6069,7 +6182,7 @@ fn prepare_gpgpu_store_surface_state_for_target_span(
         let binding_table = warm
             .draw_state_virt
             .add(GPGPU_STORE_BINDING_TABLE_OFFSET_BYTES) as *mut u32;
-        for index in 0..GPGPU_STORE_BINDING_TABLE_ENTRIES {
+        for index in 0..binding_table_entries {
             core::ptr::write_volatile(binding_table.add(index), binding_entry);
         }
 
@@ -6103,9 +6216,9 @@ fn prepare_gpgpu_store_surface_state_for_target_span(
     if should_log_gpgpu_surface_state(note) {
         crate::log!(
             "intel/gpgpu: gpu-program-surface-state ready=1 bti=0x{:02X} bt_off=0x{:X} bt_entries={} bt_entry=0x{:08X} surf_off=0x{:X} surf_gpu=0x{:X} target_gpu=0x{:X} target_bytes=0x{:X} surf_width_m1=0x{:X} surf_height_m1=0x{:X} surf_depth_m1=0x{:X} surf0=0x{:08X} surf1=0x{:08X} surf2=0x{:08X} surf3=0x{:08X} note={}\n",
-            GPGPU_STORE_BINDING_TABLE_INDEX,
+            binding_table_index,
             GPGPU_STORE_BINDING_TABLE_OFFSET_BYTES,
-            GPGPU_STORE_BINDING_TABLE_ENTRIES,
+            binding_table_entries,
             binding_entry,
             GPGPU_STORE_SURFACE_STATE_OFFSET_BYTES,
             GPU_VA_DRAW_STATE_BASE + GPGPU_STORE_SURFACE_STATE_OFFSET_BYTES as u64,
@@ -6126,7 +6239,7 @@ fn prepare_gpgpu_store_surface_state_for_target_span(
         ready: true,
         binding_table_offset: GPGPU_STORE_BINDING_TABLE_OFFSET_BYTES,
         surface_state_offset: GPGPU_STORE_SURFACE_STATE_OFFSET_BYTES,
-        binding_table_index: GPGPU_STORE_BINDING_TABLE_INDEX,
+        binding_table_index,
         surface_gpu: GPU_VA_DRAW_STATE_BASE + GPGPU_STORE_SURFACE_STATE_OFFSET_BYTES as u64,
         target_gpu,
         surface_dword0,

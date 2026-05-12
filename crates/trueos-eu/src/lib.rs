@@ -28,6 +28,7 @@ pub enum EuArtifactKind {
     T63Accum16HiLive32Bf16DotThenHdc1StoreThenThreadSpawnerEot,
     PrimaryScanoutMandelbrot8ThenHdc1StoreThenThreadSpawnerEot,
     PrimaryScanoutMandelbrot8Simd8CoordColorThenHdc1StoreThenThreadSpawnerEot,
+    PrimaryScanoutMandelbrot8Simd8Q12EscapeThenHdc1StoreThenThreadSpawnerEot,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
