@@ -1,9 +1,14 @@
 use crate::escape::{UnescapedRef, UnescapedRoute};
 use crate::{InsertError, MatchError, Params};
 
+use alloc::{string::String, vec, vec::Vec};
 use core::cell::UnsafeCell;
+use core::clone::Clone;
 use core::cmp::min;
+use core::default::Default;
+use core::option::Option::{self, None, Some};
 use core::ops::Range;
+use core::result::Result::{self, Err, Ok};
 use std::{fmt, mem};
 
 /// A radix tree used for URL path matching.

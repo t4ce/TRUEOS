@@ -28,7 +28,7 @@
 #![doc(html_root_url = "https://docs.rs/bincode/1.3.3")]
 #![crate_name = "bincode"]
 #![crate_type = "rlib"]
-#![crate_type = "dylib"]
+#![cfg_attr(not(target_os = "trueos"), crate_type = "dylib")]
 
 #[macro_use]
 extern crate serde;
@@ -54,8 +54,14 @@ mod prelude {
 }
 
 #[cfg(target_os = "trueos")]
+use crate::prelude::*;
+
+#[cfg(target_os = "trueos")]
+#[allow(missing_docs)]
 pub mod io {
     use alloc::boxed::Box;
+    use core::prelude::rust_2021::*;
+    use core::{derive, write};
     use core::fmt;
 
     pub type Result<T> = core::result::Result<T, Error>;

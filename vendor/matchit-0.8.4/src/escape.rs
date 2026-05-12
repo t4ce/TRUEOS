@@ -1,3 +1,6 @@
+use alloc::borrow::ToOwned;
+use alloc::vec::Vec;
+use core::option::Option::Some;
 use std::{fmt, ops::Range};
 
 /// An unescaped route that keeps track of the position of escaped characters ('{{' or '}}').

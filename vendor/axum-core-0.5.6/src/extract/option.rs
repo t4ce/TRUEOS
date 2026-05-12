@@ -5,6 +5,9 @@ use http::request::Parts;
 use crate::response::IntoResponse;
 
 use super::{private, FromRequest, FromRequestParts, Request};
+use core::marker::{Send, Sized, Sync};
+use core::option::Option;
+use core::result::Result;
 
 /// Customize the behavior of `Option<Self>` as a [`FromRequestParts`]
 /// extractor.

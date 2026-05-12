@@ -6,6 +6,9 @@ use http::{
     Extensions, StatusCode,
 };
 use http_body::{Frame, SizeHint};
+use alloc::{boxed::Box, string::String, vec::Vec};
+use core::option::Option::{self, None, Some};
+use core::result::Result::{self, Err, Ok};
 use std::{
     borrow::Cow,
     convert::Infallible,
