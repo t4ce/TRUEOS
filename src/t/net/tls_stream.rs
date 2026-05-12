@@ -1,7 +1,6 @@
 //! Tokio stream adapters for TRUEOS TLS-over-VNet sessions.
 
 extern crate alloc;
-extern crate std;
 
 use crate::net::tls::{TlsClientConfig, TlsRoots};
 use crate::net::tls_socket::{TlsCommand, TlsEvent, TlsTimeouts, register_tls_app_queues};

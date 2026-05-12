@@ -1,7 +1,5 @@
 //! Tokio stream adapters for TRUEOS VNet TCP.
 
-extern crate std;
-
 use crate::r::net::{NetProfile, VNet};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
 use v::vnet as api;
