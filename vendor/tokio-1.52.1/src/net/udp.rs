@@ -222,10 +222,18 @@ impl UdpSocket {
     /// ```
     #[track_caller]
     pub fn from_std(socket: net::UdpSocket) -> io::Result<UdpSocket> {
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        {
+            return Ok(socket);
+        }
+
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+        {
         check_socket_for_blocking(&socket)?;
 
         let io = mio::net::UdpSocket::from_std(socket);
         UdpSocket::new(io)
+        }
     }
 
     /// Turns a [`tokio::net::UdpSocket`] into a [`std::net::UdpSocket`].
@@ -272,7 +280,7 @@ impl UdpSocket {
         #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         {
             Err(io::Error::new(
-                io::ErrorKind::Unsupported,
+                io::ErrorKind::Other,
                 "tokio zkvm UdpSocket::into_std is not backed by raw fds",
             ))
         }

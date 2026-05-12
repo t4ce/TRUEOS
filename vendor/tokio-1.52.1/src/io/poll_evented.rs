@@ -285,8 +285,24 @@ feature! {
         where
             &'a E: io::Write + 'a,
         {
+            #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+            {
+                return self.registration.poll_write_io(cx, || {
+                    let buf = bufs
+                        .iter()
+                        .find(|buf| !buf.is_empty())
+                        .map(|buf| &buf[..])
+                        .unwrap_or(&[]);
+                    let mut io = self.io.as_ref().unwrap();
+                    trueos_io::Write::write(&mut io, buf)
+                });
+            }
+
+            #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+            {
             use std::io::Write;
             self.registration.poll_write_io(cx, || self.io.as_ref().unwrap().write_vectored(bufs))
+            }
         }
     }
 }

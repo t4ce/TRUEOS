@@ -19,9 +19,8 @@ impl UdpSocket {
         })
     }
 
-    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-    pub fn from_std(_: std::net::UdpSocket) -> UdpSocket {
-        panic!("mio zkvm backend cannot wrap std::net::UdpSocket yet")
+    pub fn from_std(socket: std::net::UdpSocket) -> UdpSocket {
+        socket
     }
 
     pub fn local_addr(&self) -> io::Result<SocketAddr> {

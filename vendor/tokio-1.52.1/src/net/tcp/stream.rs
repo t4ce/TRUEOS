@@ -14,6 +14,9 @@ use crate::util::check_socket_for_blocking;
 
 use core::fmt;
 use std::io;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use core::net::SocketAddr;
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::net::{Shutdown, SocketAddr};
 use core::pin::Pin;
 use core::task::{ready, Context, Poll};
@@ -208,11 +211,19 @@ impl TcpStream {
     /// explicitly with [`Runtime::enter`](crate::runtime::Runtime::enter) function.
     #[track_caller]
     pub fn from_std(stream: std::net::TcpStream) -> io::Result<TcpStream> {
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        {
+            return Ok(stream);
+        }
+
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+        {
         check_socket_for_blocking(&stream)?;
 
         let io = mio::net::TcpStream::from_std(stream);
         let io = PollEvented::new(io)?;
         Ok(TcpStream { io })
+        }
     }
 
     /// Turns a [`tokio::net::TcpStream`] into a [`std::net::TcpStream`].
@@ -285,7 +296,7 @@ impl TcpStream {
         #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         {
             Err(io::Error::new(
-                io::ErrorKind::Unsupported,
+                io::ErrorKind::Other,
                 "tokio zkvm TcpStream::into_std is not backed by raw fds",
             ))
         }
@@ -1135,7 +1146,14 @@ impl TcpStream {
     /// It does this to abstract away OS specific logic and to prevent a race condition between
     /// this function call and the OS closing this socket because of external events (e.g. TCP reset).
     /// See <https://github.com/tokio-rs/tokio/issues/4665> for more information.
-    pub(super) fn shutdown_std(&self, how: Shutdown) -> io::Result<()> {
+    pub(super) fn shutdown_std(&self, how: std::net::Shutdown) -> io::Result<()> {
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        let how = match how {
+            std::net::Shutdown::Read => mio::net::Shutdown::Read,
+            std::net::Shutdown::Write => mio::net::Shutdown::Write,
+            std::net::Shutdown::Both => mio::net::Shutdown::Both,
+        };
+
         match self.io.shutdown(how) {
             Err(err) if err.kind() == std::io::ErrorKind::NotConnected => Ok(()),
             result => result,

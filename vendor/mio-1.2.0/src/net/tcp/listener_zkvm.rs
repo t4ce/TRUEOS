@@ -19,9 +19,8 @@ impl TcpListener {
         })
     }
 
-    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-    pub fn from_std(_: std::net::TcpListener) -> TcpListener {
-        panic!("mio zkvm backend cannot wrap std::net::TcpListener yet")
+    pub fn from_std(listener: std::net::TcpListener) -> TcpListener {
+        listener
     }
 
     pub fn accept(&self) -> io::Result<(crate::net::TcpStream, SocketAddr)> {
