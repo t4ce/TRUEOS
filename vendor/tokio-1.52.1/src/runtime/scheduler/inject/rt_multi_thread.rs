@@ -1,9 +1,12 @@
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 use super::{Shared, Synced};
 
 use crate::runtime::scheduler::Lock;
 use crate::runtime::task;
 
-use std::sync::atomic::Ordering::Release;
+use core::sync::atomic::Ordering::Release;
 
 impl<'a> Lock<Synced> for &'a mut Synced {
     type Handle = &'a mut Synced;

@@ -1,7 +1,10 @@
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 use backtrace::BacktraceSymbol;
-use std::fmt;
+use core::fmt;
 use std::hash::{Hash, Hasher};
-use std::ptr;
+use core::ptr;
 
 /// A symbol in a backtrace.
 ///

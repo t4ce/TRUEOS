@@ -1,5 +1,8 @@
-use std::cell::Cell;
-use std::ptr;
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
+use core::cell::Cell;
+use core::ptr;
 
 /// Scoped thread-local storage
 pub(super) struct Scoped<T> {

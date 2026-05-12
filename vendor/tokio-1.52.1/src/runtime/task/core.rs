@@ -9,6 +9,9 @@
 //! Make sure to consult the relevant safety section of each function before
 //! use.
 
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 // It doesn't make sense to enforce `unsafe_op_in_unsafe_fn` for this module because
 //
 // * This module is doing the low-level task management that requires tons of unsafe
@@ -18,7 +21,7 @@
 // the MSRV to 1.81.0.
 #![allow(unsafe_op_in_unsafe_fn)]
 
-use crate::future::Future;
+use core::future::Future;
 use crate::loom::cell::UnsafeCell;
 use crate::runtime::context;
 use crate::runtime::task::raw::{self, Vtable};
@@ -26,12 +29,12 @@ use crate::runtime::task::state::State;
 use crate::runtime::task::{Id, Schedule, TaskHarnessScheduleHooks};
 use crate::util::linked_list;
 
-use std::num::NonZeroU64;
+use core::num::NonZeroU64;
 #[cfg(tokio_unstable)]
 use std::panic::Location;
-use std::pin::Pin;
-use std::ptr::NonNull;
-use std::task::{Context, Poll, Waker};
+use core::pin::Pin;
+use core::ptr::NonNull;
+use core::task::{Context, Poll, Waker};
 
 /// The task cell. Contains the components of the task.
 ///
@@ -413,7 +416,7 @@ impl<T: Future, S: Schedule> Core<T, S> {
     ///
     /// The caller must ensure it is safe to mutate the `stage` field.
     pub(super) fn take_output(&self) -> super::Result<T::Output> {
-        use std::mem;
+        use core::mem;
 
         self.stage.stage.with_mut(|ptr| {
             // Safety:: the caller ensures mutual exclusion to the field.
@@ -567,5 +570,5 @@ impl Trailer {
 #[test]
 #[cfg(not(loom))]
 fn header_lte_cache_line() {
-    assert!(std::mem::size_of::<Header>() <= 8 * std::mem::size_of::<*const ()>());
+    assert!(core::mem::size_of::<Header>() <= 8 * core::mem::size_of::<*const ()>());
 }

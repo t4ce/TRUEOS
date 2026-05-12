@@ -833,6 +833,12 @@ version = "0.2.11"
 version = "~2.7.0"
 optional = true
 
+[target.'cfg(any(target_os = "trueos", target_os = "zkvm"))'.dependencies.trueos-io]
+path = "../../crates/trueos-io"
+
+[target.'cfg(any(target_os = "trueos", target_os = "zkvm"))'.dependencies.spin]
+version = "0.10"
+
 [dev-dependencies.async-stream]
 version = "0.3"
 

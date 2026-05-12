@@ -1,12 +1,15 @@
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 use crate::runtime::Handle;
 use core::time::Duration;
 
 cfg_64bit_metrics! {
-    use std::sync::atomic::Ordering::Relaxed;
+    use core::sync::atomic::Ordering::Relaxed;
 }
 
 cfg_unstable_metrics! {
-    use std::ops::Range;
+    use core::ops::Range;
     use std::thread::ThreadId;
 }
 
@@ -530,7 +533,7 @@ impl RuntimeMetrics {
                 .as_ref()
                 .map(|histogram| {
                     let range = histogram.bucket_range(bucket);
-                    std::ops::Range {
+                    core::ops::Range {
                         start: Duration::from_nanos(range.start),
                         end: Duration::from_nanos(range.end),
                     }

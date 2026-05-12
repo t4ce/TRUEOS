@@ -1,6 +1,9 @@
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 use crate::runtime::scheduler::multi_thread::{queue, Stats};
 
-use std::cell::RefCell;
+use core::cell::RefCell;
 use std::thread;
 use core::time::Duration;
 
@@ -10,7 +13,7 @@ macro_rules! assert_metrics {
         #[cfg(target_has_atomic = "64")]
         {
             use crate::runtime::WorkerMetrics;
-            use std::sync::atomic::Ordering::Relaxed;
+            use core::sync::atomic::Ordering::Relaxed;
 
             let worker = WorkerMetrics::new();
             $stats.submit(&worker);

@@ -1,3 +1,6 @@
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 // Enable dead_code / unreachable_pub here. It has been disabled in lib.rs for
 // other code when running loom tests.
 #![cfg_attr(loom, warn(dead_code, unreachable_pub))]
@@ -36,7 +39,7 @@ mod unowned_wrapper {
     #[track_caller]
     pub(crate) fn unowned<T>(task: T) -> (Notified<NoopSchedule>, JoinHandle<T::Output>)
     where
-        T: std::future::Future + Send + 'static,
+        T: core::future::Future + Send + 'static,
         T::Output: Send + 'static,
     {
         use tracing::Instrument;
@@ -51,7 +54,7 @@ mod unowned_wrapper {
     #[track_caller]
     pub(crate) fn unowned<T>(task: T) -> (Notified<NoopSchedule>, JoinHandle<T::Output>)
     where
-        T: std::future::Future + Send + 'static,
+        T: core::future::Future + Send + 'static,
         T::Output: Send + 'static,
     {
         let (task, handle) =

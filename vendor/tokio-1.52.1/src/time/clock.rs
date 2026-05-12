@@ -6,13 +6,18 @@
 //! `test-util` feature flag is enabled, the values returned for `now()` are
 //! configurable.
 
+use crate::time::instant::StdInstant;
+use core::option::Option::{self, None, Some};
+use core::result::Result::{self, Err, Ok};
+use core::{derive, panic};
+
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
-fn std_now() -> std::time::Instant {
+fn std_now() -> StdInstant {
     crate::time::zkvm::platform_instant_now()
 }
 
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-fn std_now() -> std::time::Instant {
+fn std_now() -> StdInstant {
     std::time::Instant::now()
 }
 
@@ -92,10 +97,10 @@ cfg_test_util! {
         enable_pausing: bool,
 
         /// Instant to use as the clock's base instant.
-        base: std::time::Instant,
+        base: StdInstant,
 
         /// Instant at which the clock was last unfrozen.
-        unfrozen: Option<std::time::Instant>,
+        unfrozen: Option<StdInstant>,
 
         /// Number of `inhibit_auto_advance` calls still in effect.
         auto_advance_inhibit_count: usize,

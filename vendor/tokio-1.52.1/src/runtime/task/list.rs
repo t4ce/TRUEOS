@@ -6,15 +6,18 @@
 //! The collections can be closed to prevent adding new tasks during shutdown of
 //! the scheduler with the collection.
 
-use crate::future::Future;
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
+use core::future::Future;
 use crate::loom::cell::UnsafeCell;
 use crate::runtime::task::{JoinHandle, LocalNotified, Notified, Schedule, SpawnLocation, Task};
 use crate::util::linked_list::{Link, LinkedList};
 use crate::util::sharded_list;
 
-use crate::loom::sync::atomic::{AtomicBool, Ordering};
-use std::marker::PhantomData;
-use std::num::NonZeroU64;
+use core::sync::atomic::{AtomicBool, Ordering};
+use core::marker::PhantomData;
+use core::num::NonZeroU64;
 
 // The id from the module below is used to verify whether a given task is stored
 // in this OwnedTasks, or some other task. The counter starts at one so we can
@@ -26,7 +29,7 @@ use std::num::NonZeroU64;
 // mixed up runtimes happen to have the same id.
 
 cfg_has_atomic_u64! {
-    use std::sync::atomic::AtomicU64;
+    use core::sync::atomic::AtomicU64;
 
     static NEXT_OWNED_TASKS_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -41,7 +44,7 @@ cfg_has_atomic_u64! {
 }
 
 cfg_not_has_atomic_u64! {
-    use std::sync::atomic::AtomicU32;
+    use core::sync::atomic::AtomicU32;
 
     static NEXT_OWNED_TASKS_ID: AtomicU32 = AtomicU32::new(1);
 

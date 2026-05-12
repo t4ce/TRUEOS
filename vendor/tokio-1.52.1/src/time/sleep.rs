@@ -2,11 +2,14 @@ use crate::runtime::Timer;
 use crate::time::{error::Error, Duration, Instant};
 use crate::util::trace;
 
+use core::future::Future;
+use core::option::Option::{self, None, Some};
+use core::panic::Location;
+use core::pin::Pin;
+use core::result::Result::{self, Err, Ok};
+use core::task::{self, ready, Poll};
+use core::{derive, panic};
 use pin_project_lite::pin_project;
-use std::future::Future;
-use std::panic::Location;
-use std::pin::Pin;
-use std::task::{self, ready, Poll};
 
 /// Waits until `deadline` is reached.
 ///

@@ -1,18 +1,21 @@
 #![cfg(not(target_os = "wasi"))]
 
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 use core::time::Duration;
-use std::task::Context;
+use core::task::Context;
 
 #[cfg(not(loom))]
 use futures::task::noop_waker_ref;
 
-use crate::loom::sync::atomic::{AtomicBool, Ordering};
-use crate::loom::sync::Arc;
+use core::sync::atomic::{AtomicBool, Ordering};
+use alloc::sync::Arc;
 use crate::loom::thread;
 
 use super::TimerEntry;
 
-fn block_on<T>(f: impl std::future::Future<Output = T>) -> T {
+fn block_on<T>(f: impl core::future::Future<Output = T>) -> T {
     #[cfg(loom)]
     return loom::future::block_on(f);
 
@@ -55,7 +58,7 @@ fn single_timer() {
             );
             pin!(entry);
 
-            block_on(std::future::poll_fn(|cx| entry.as_mut().poll_elapsed(cx))).unwrap();
+            block_on(core::future::poll_fn(|cx| entry.as_mut().poll_elapsed(cx))).unwrap();
         });
 
         thread::yield_now();
@@ -122,7 +125,7 @@ fn change_waker() {
                 .as_mut()
                 .poll_elapsed(&mut Context::from_waker(futures::task::noop_waker_ref()));
 
-            block_on(std::future::poll_fn(|cx| entry.as_mut().poll_elapsed(cx))).unwrap();
+            block_on(core::future::poll_fn(|cx| entry.as_mut().poll_elapsed(cx))).unwrap();
         });
 
         thread::yield_now();
@@ -160,7 +163,7 @@ fn reset_future() {
             entry.as_mut().reset(start + Duration::from_secs(2), true);
 
             // shouldn't complete before 2s
-            block_on(std::future::poll_fn(|cx| entry.as_mut().poll_elapsed(cx))).unwrap();
+            block_on(core::future::poll_fn(|cx| entry.as_mut().poll_elapsed(cx))).unwrap();
 
             finished_early_.store(true, Ordering::Relaxed);
         });

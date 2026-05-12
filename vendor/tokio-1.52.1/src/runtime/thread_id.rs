@@ -1,11 +1,14 @@
-use std::num::NonZeroU64;
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
+use core::num::NonZeroU64;
 
 #[derive(Eq, PartialEq, Clone, Copy, Hash, Debug)]
 pub(crate) struct ThreadId(NonZeroU64);
 
 impl ThreadId {
     pub(crate) fn next() -> Self {
-        use crate::loom::sync::atomic::{AtomicU64, Ordering::Relaxed};
+        use core::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
         #[cfg(all(test, loom))]
         crate::loom::lazy_static! {

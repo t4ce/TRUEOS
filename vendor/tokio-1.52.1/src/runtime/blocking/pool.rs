@@ -1,6 +1,10 @@
 //! Thread pool for blocking operations
 
-use crate::loom::sync::{Arc, Mutex};
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
+use alloc::sync::Arc;
+use crate::loom::sync::Mutex;
 use crate::loom::thread;
 use crate::runtime::blocking::schedule::BlockingSchedule;
 use crate::runtime::blocking::{shutdown, BlockingTask};
@@ -12,10 +16,10 @@ use crate::util::trace::{blocking_task, SpawnMeta};
 
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::collections::HashMap;
-use std::collections::VecDeque;
-use std::fmt;
+use alloc::collections::VecDeque;
+use core::fmt;
 use std::io;
-use std::sync::atomic::Ordering;
+use core::sync::atomic::Ordering;
 use core::time::Duration;
 
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
@@ -288,9 +292,9 @@ impl BlockingPool {
         self.spawner.inner.condvar.notify_all();
 
         #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-        let last_exited_thread = std::mem::take(&mut shared.last_exiting_thread);
+        let last_exited_thread = core::mem::take(&mut shared.last_exiting_thread);
         #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-        let workers = std::mem::take(&mut shared.worker_threads);
+        let workers = core::mem::take(&mut shared.worker_threads);
 
         drop(shared);
 
@@ -336,7 +340,7 @@ impl Spawner {
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        let fn_size = std::mem::size_of::<F>();
+        let fn_size = core::mem::size_of::<F>();
         let (join_handle, spawn_result) = if fn_size > BOX_FUTURE_THRESHOLD {
             self.spawn_blocking_inner(
                 Box::new(func),
@@ -374,7 +378,7 @@ impl Spawner {
             F: FnOnce() -> R + Send + 'static,
             R: Send + 'static,
         {
-            let fn_size = std::mem::size_of::<F>();
+            let fn_size = core::mem::size_of::<F>();
             let (join_handle, spawn_result) = if fn_size > BOX_FUTURE_THRESHOLD {
                 self.spawn_blocking_inner(
                     Box::new(func),
@@ -654,7 +658,7 @@ impl Inner {
                         // handle joining everything.
                         let my_handle = shared.worker_threads.remove(&worker_thread_id);
                         join_on_thread =
-                            std::mem::replace(&mut shared.last_exiting_thread, my_handle);
+                            core::mem::replace(&mut shared.last_exiting_thread, my_handle);
 
                         break 'main;
                     }

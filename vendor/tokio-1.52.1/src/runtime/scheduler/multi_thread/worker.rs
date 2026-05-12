@@ -56,7 +56,11 @@
 //! the inject queue indefinitely. This would be a ref-count cycle and a memory
 //! leak.
 
-use crate::loom::sync::{Arc, Mutex};
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
+use alloc::sync::Arc;
+use crate::loom::sync::Mutex;
 use crate::runtime;
 use crate::runtime::scheduler::multi_thread::{
     idle, park, queue, Counters, Handle, Idle, Overflow, Parker, Stats, TraceStatus, Unparker,
@@ -71,8 +75,8 @@ use crate::task::coop;
 use crate::util::atomic_cell::AtomicCell;
 use crate::util::rand::{FastRand, RngSeedGenerator};
 
-use std::cell::RefCell;
-use std::task::Waker;
+use core::cell::RefCell;
+use core::task::Waker;
 use std::thread;
 use core::time::Duration;
 
@@ -87,7 +91,7 @@ cfg_not_taskdump! {
 }
 
 #[cfg(all(tokio_unstable, feature = "time"))]
-use crate::loom::sync::atomic::AtomicBool;
+use core::sync::atomic::AtomicBool;
 
 #[cfg(all(tokio_unstable, feature = "time"))]
 use crate::runtime::time_alt;
@@ -1406,7 +1410,7 @@ impl Handle {
         // It's ok to lost the race, as another worker is
         // draining the inject_timers.
         match self.shared.synced.try_lock() {
-            Some(mut synced) => std::mem::take(&mut synced.inject_timers),
+            Some(mut synced) => core::mem::take(&mut synced.inject_timers),
             None => Vec::new(),
         }
     }
@@ -1499,7 +1503,7 @@ impl Handle {
     }
 
     fn ptr_eq(&self, other: &Handle) -> bool {
-        std::ptr::eq(self, other)
+        core::ptr::eq(self, other)
     }
 }
 

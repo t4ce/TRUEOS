@@ -2,6 +2,9 @@
 
 //! Signal driver
 
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 use crate::runtime::{driver, io};
 use crate::signal::registry::globals;
 
@@ -41,7 +44,7 @@ pub(crate) struct Handle {
 impl Driver {
     /// Creates a new signal `Driver` instance that delegates wakeups to `park`.
     pub(crate) fn new(io: io::Driver, io_handle: &io::Handle) -> std_io::Result<Self> {
-        use std::mem::ManuallyDrop;
+        use core::mem::ManuallyDrop;
         use std::os::unix::io::{AsRawFd, FromRawFd};
 
         // NB: We give each driver a "fresh" receiver file descriptor to avoid

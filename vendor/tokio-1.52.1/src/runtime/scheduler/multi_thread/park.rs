@@ -2,12 +2,16 @@
 //!
 //! A combination of the various resource driver park handles.
 
-use crate::loom::sync::atomic::AtomicUsize;
-use crate::loom::sync::{Arc, Mutex};
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
+use core::sync::atomic::AtomicUsize;
+use alloc::sync::Arc;
+use crate::loom::sync::Mutex;
 use crate::runtime::driver::{self, Driver};
 use crate::util::TryLock;
 
-use std::sync::atomic::Ordering::SeqCst;
+use core::sync::atomic::Ordering::SeqCst;
 use core::time::Duration;
 
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]

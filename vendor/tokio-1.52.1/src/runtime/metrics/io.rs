@@ -1,7 +1,10 @@
 #![cfg_attr(not(feature = "net"), allow(dead_code))]
 
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 use crate::util::metric_atomics::MetricAtomicU64;
-use std::sync::atomic::Ordering::Relaxed;
+use core::sync::atomic::Ordering::Relaxed;
 
 #[derive(Default)]
 pub(crate) struct IoDriverMetrics {

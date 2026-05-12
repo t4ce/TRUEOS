@@ -1,11 +1,14 @@
+use core::cell::RefCell;
+use core::error::Error;
+use core::future::Future;
+use core::marker::PhantomPinned;
+use core::option::Option::{self, None, Some};
+use core::pin::Pin;
+use core::result::Result::{self, Err, Ok};
+use core::task::{Context, Poll};
+use core::{derive, fmt, mem, panic};
 use pin_project_lite::pin_project;
-use std::cell::RefCell;
-use std::error::Error;
-use std::future::Future;
-use std::marker::PhantomPinned;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-use std::{fmt, mem, thread};
+use std::thread;
 
 /// Declares a new task-local key of type [`tokio::task::LocalKey`].
 ///
@@ -54,7 +57,7 @@ macro_rules! __task_local_inner {
         $(#[$attr])*
         $vis static $name: $crate::task::LocalKey<$t> = {
             std::thread_local! {
-                static __KEY: std::cell::RefCell<Option<$t>> = const { std::cell::RefCell::new(None) };
+                static __KEY: core::cell::RefCell<Option<$t>> = const { core::cell::RefCell::new(None) };
             }
 
             $crate::task::LocalKey { inner: __KEY }
@@ -475,8 +478,8 @@ impl ScopeInnerErr {
     }
 }
 
-impl From<std::cell::BorrowMutError> for ScopeInnerErr {
-    fn from(_: std::cell::BorrowMutError) -> Self {
+impl From<core::cell::BorrowMutError> for ScopeInnerErr {
+    fn from(_: core::cell::BorrowMutError) -> Self {
         Self::BorrowError
     }
 }

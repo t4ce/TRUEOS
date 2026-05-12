@@ -1,3 +1,6 @@
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 mod queue;
 mod shutdown;
 mod yield_now;
@@ -17,15 +20,15 @@ use loom::sync::atomic::{AtomicBool, AtomicUsize};
 use loom::sync::Arc;
 
 use pin_project_lite::pin_project;
-use std::future::{poll_fn, Future};
-use std::pin::Pin;
-use std::sync::atomic::Ordering::{Relaxed, SeqCst};
-use std::task::{ready, Context, Poll};
+use core::future::{poll_fn, Future};
+use core::pin::Pin;
+use core::sync::atomic::Ordering::{Relaxed, SeqCst};
+use core::task::{ready, Context, Poll};
 
 mod atomic_take {
     use loom::sync::atomic::AtomicBool;
-    use std::mem::MaybeUninit;
-    use std::sync::atomic::Ordering::SeqCst;
+    use core::mem::MaybeUninit;
+    use core::sync::atomic::Ordering::SeqCst;
 
     pub(super) struct AtomicTake<T> {
         inner: MaybeUninit<T>,
@@ -44,7 +47,7 @@ mod atomic_take {
             // safety: Only one thread will see the boolean change from false
             // to true, so that thread is able to take the value.
             match self.taken.fetch_or(true, SeqCst) {
-                false => unsafe { Some(std::ptr::read(self.inner.as_ptr())) },
+                false => unsafe { Some(core::ptr::read(self.inner.as_ptr())) },
                 true => None,
             }
         }
@@ -59,12 +62,12 @@ mod atomic_take {
 
 #[derive(Clone)]
 struct AtomicOneshot<T> {
-    value: std::sync::Arc<atomic_take::AtomicTake<oneshot::Sender<T>>>,
+    value: alloc::sync::Arc<atomic_take::AtomicTake<oneshot::Sender<T>>>,
 }
 impl<T> AtomicOneshot<T> {
     fn new(sender: oneshot::Sender<T>) -> Self {
         Self {
-            value: std::sync::Arc::new(atomic_take::AtomicTake::new(sender)),
+            value: alloc::sync::Arc::new(atomic_take::AtomicTake::new(sender)),
         }
     }
 
@@ -358,7 +361,7 @@ fn mk_pool(num_threads: usize) -> Runtime {
 
 fn gated2(thread: bool) -> impl Future<Output = &'static str> {
     use loom::thread;
-    use std::sync::Arc;
+    use alloc::sync::Arc;
 
     let gate = Arc::new(AtomicBool::new(false));
     let mut fired = false;

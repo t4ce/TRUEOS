@@ -4,10 +4,13 @@
 //! of spawned tasks and allows asynchronously awaiting the output of those
 //! tasks as they complete. See the documentation for the [`JoinSet`] type for
 //! details.
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-use std::{fmt, panic};
+use alloc::vec::Vec;
+use core::future::{poll_fn, Future};
+use core::option::Option::{self, None, Some};
+use core::pin::Pin;
+use core::result::Result::{self, Err, Ok};
+use core::task::{Context, Poll};
+use core::{derive, fmt, panic};
 
 use crate::runtime::Handle;
 use crate::task::Id;
@@ -294,7 +297,7 @@ impl<T: 'static> JoinSet<T> {
     /// statement and some other branch completes first, it is guaranteed that no tasks were
     /// removed from this `JoinSet`.
     pub async fn join_next(&mut self) -> Option<Result<T, JoinError>> {
-        std::future::poll_fn(|cx| self.poll_join_next(cx)).await
+        poll_fn(|cx| self.poll_join_next(cx)).await
     }
 
     /// Waits until one of the tasks in the set completes and returns its
@@ -314,7 +317,7 @@ impl<T: 'static> JoinSet<T> {
     /// [task ID]: crate::task::Id
     /// [`JoinError::id`]: fn@crate::task::JoinError::id
     pub async fn join_next_with_id(&mut self) -> Option<Result<(Id, T), JoinError>> {
-        std::future::poll_fn(|cx| self.poll_join_next_with_id(cx)).await
+        poll_fn(|cx| self.poll_join_next_with_id(cx)).await
     }
 
     /// Tries to join one of the tasks in the set that has completed and return its output.

@@ -1,5 +1,8 @@
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 use super::Config;
-use std::marker::PhantomData;
+use core::marker::PhantomData;
 
 impl TaskHooks {
     pub(crate) fn spawn(&self, meta: &TaskMeta<'_>) {
@@ -80,4 +83,4 @@ impl<'a> TaskMeta<'a> {
 }
 
 /// Runs on specific task-related events
-pub(crate) type TaskCallback = std::sync::Arc<dyn Fn(&TaskMeta<'_>) + Send + Sync>;
+pub(crate) type TaskCallback = alloc::sync::Arc<dyn Fn(&TaskMeta<'_>) + Send + Sync>;

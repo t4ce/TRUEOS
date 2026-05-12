@@ -1,3 +1,6 @@
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 use crate::runtime::{Config, MetricsBatch, WorkerMetrics};
 
 use crate::time::Instant;

@@ -1,15 +1,18 @@
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 mod yield_now;
 
-use crate::loom::sync::atomic::{AtomicUsize, Ordering};
-use crate::loom::sync::Arc;
+use core::sync::atomic::{AtomicUsize, Ordering};
+use alloc::sync::Arc;
 use crate::loom::thread;
 use crate::runtime::{Builder, Runtime};
 use crate::sync::oneshot::{self, Receiver};
 use crate::task;
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::atomic::Ordering::{Acquire, Release};
-use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+use core::future::Future;
+use core::pin::Pin;
+use core::sync::atomic::Ordering::{Acquire, Release};
+use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
 fn assert_at_most_num_polls(rt: Arc<Runtime>, at_most_polls: usize) {
     let (tx, rx) = oneshot::channel();
@@ -133,8 +136,8 @@ fn drop_jh_during_schedule() {
         let waker_refcnt = AtomicUsize::new(1);
         {
             // Set up the join waker.
-            use std::future::Future;
-            use std::pin::Pin;
+            use core::future::Future;
+            use core::pin::Pin;
 
             // SAFETY: Before `waker_refcnt` goes out of scope, this test asserts that the refcnt
             // has dropped to zero.

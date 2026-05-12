@@ -22,6 +22,7 @@
 #![cfg_attr(docsrs, allow(unused_attributes))]
 #![cfg_attr(loom, allow(dead_code, unreachable_pub))]
 #![cfg_attr(windows, allow(rustdoc::broken_intra_doc_links))]
+#![cfg_attr(any(target_os = "trueos", target_os = "zkvm"), no_std)]
 
 //! A runtime for writing reliable network applications without compromising speed.
 //!
@@ -459,6 +460,7 @@
 //
 // TODO: improve once we have MSRV access to const eval to make more flexible.
 #[cfg(not(any(target_pointer_width = "32", target_pointer_width = "64")))]
+
 compile_error! {
     "Tokio requires the platform pointer width to be at least 32 bits"
 }

@@ -178,6 +178,9 @@
 //! poll call will notice it when the poll finishes, and the task is cancelled
 //! at that point.
 
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 mod core;
 use self::core::Cell;
 use self::core::Header;
@@ -222,14 +225,14 @@ cfg_taskdump! {
     pub(crate) mod trace;
 }
 
-use crate::future::Future;
+use core::future::Future;
 use crate::util::linked_list;
 use crate::util::sharded_list;
 
 use crate::runtime::TaskCallback;
-use std::marker::PhantomData;
+use core::marker::PhantomData;
 use std::panic::Location;
-use std::ptr::NonNull;
+use core::ptr::NonNull;
 use std::{fmt, mem};
 
 /// An owned handle to the task, tracked by ref count.
@@ -383,8 +386,8 @@ cfg_rt! {
             raw: task.raw,
             _p: PhantomData,
         };
-        std::mem::forget(task);
-        std::mem::forget(notified);
+        core::mem::forget(task);
+        core::mem::forget(notified);
 
         (unowned, join)
     }
@@ -657,7 +660,7 @@ mod spawn_location {
     #[cfg(test)]
     #[test]
     fn spawn_location_is_zero_sized() {
-        assert_eq!(std::mem::size_of::<SpawnLocation>(), 0);
+        assert_eq!(core::mem::size_of::<SpawnLocation>(), 0);
     }
 }
 

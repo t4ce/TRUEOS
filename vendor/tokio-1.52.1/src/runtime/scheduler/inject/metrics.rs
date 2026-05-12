@@ -1,3 +1,6 @@
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 use super::Inject;
 
 impl<T: 'static> Inject<T> {

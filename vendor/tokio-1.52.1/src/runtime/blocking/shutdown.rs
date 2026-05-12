@@ -3,7 +3,10 @@
 //! Each worker holds the `Sender` half. When all the `Sender` halves are
 //! dropped, the `Receiver` receives a notification.
 
-use crate::loom::sync::Arc;
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
+use alloc::sync::Arc;
 use crate::sync::oneshot;
 
 use core::time::Duration;

@@ -1,5 +1,8 @@
-use crate::future::Future;
-use crate::loom::sync::Arc;
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
+use core::future::Future;
+use alloc::sync::Arc;
 use crate::runtime::scheduler::multi_thread::worker;
 use crate::runtime::task::{Notified, Task, TaskHarnessScheduleHooks};
 use crate::runtime::{
@@ -9,8 +12,8 @@ use crate::runtime::{
 };
 use crate::util::RngSeedGenerator;
 
-use std::fmt;
-use std::num::NonZeroU64;
+use core::fmt;
+use core::num::NonZeroU64;
 
 mod metrics;
 
@@ -19,7 +22,7 @@ cfg_taskdump! {
 }
 
 #[cfg(all(tokio_unstable, feature = "time"))]
-use crate::loom::sync::atomic::{AtomicBool, Ordering::SeqCst};
+use core::sync::atomic::{AtomicBool, Ordering::SeqCst};
 
 /// Handle to the multi thread scheduler
 pub(crate) struct Handle {
@@ -59,7 +62,7 @@ impl Handle {
         spawned_at: SpawnLocation,
     ) -> JoinHandle<F::Output>
     where
-        F: crate::future::Future + Send + 'static,
+        F: core::future::Future + Send + 'static,
         F::Output: Send + 'static,
     {
         Self::bind_new_task(me, future, id, spawned_at)
@@ -68,7 +71,7 @@ impl Handle {
     #[cfg(all(tokio_unstable, feature = "time"))]
     pub(crate) fn is_shutdown(&self) -> bool {
         self.is_shutdown
-            .load(crate::loom::sync::atomic::Ordering::SeqCst)
+            .load(core::sync::atomic::Ordering::SeqCst)
     }
 
     pub(crate) fn shutdown(&self) {

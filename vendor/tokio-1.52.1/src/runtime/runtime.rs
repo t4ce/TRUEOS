@@ -1,3 +1,6 @@
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 use super::BOX_FUTURE_THRESHOLD;
 use crate::runtime::blocking::BlockingPool;
 use crate::runtime::scheduler::CurrentThread;
@@ -6,9 +9,9 @@ use crate::task::JoinHandle;
 use crate::util::error::RUNTIME_SHUTTING_DOWN_ERROR;
 use crate::util::trace::SpawnMeta;
 
-use std::future::Future;
+use core::future::Future;
 use std::io;
-use std::mem;
+use core::mem;
 use core::time::Duration;
 
 cfg_rt_multi_thread! {
@@ -89,8 +92,8 @@ cfg_rt_multi_thread! {
 /// [`Handle`]: struct@Handle
 /// [main]: macro@crate::main
 /// [`tokio::spawn`]: crate::spawn
-/// [`Arc::try_unwrap`]: std::sync::Arc::try_unwrap
-/// [Arc]: std::sync::Arc
+/// [`Arc::try_unwrap`]: alloc::sync::Arc::try_unwrap
+/// [Arc]: alloc::sync::Arc
 /// [`shutdown_background`]: method@Runtime::shutdown_background
 /// [`shutdown_timeout`]: method@Runtime::shutdown_timeout
 #[derive(Debug)]
@@ -517,8 +520,8 @@ impl std::panic::UnwindSafe for Runtime {}
 
 impl std::panic::RefUnwindSafe for Runtime {}
 
-fn display_eq(d: impl std::fmt::Display, s: &str) -> bool {
-    use std::fmt::Write;
+fn display_eq(d: impl core::fmt::Display, s: &str) -> bool {
+    use core::fmt::Write;
 
     struct FormatEq<'r> {
         remainder: &'r str,
@@ -526,7 +529,7 @@ fn display_eq(d: impl std::fmt::Display, s: &str) -> bool {
     }
 
     impl<'r> Write for FormatEq<'r> {
-        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        fn write_str(&mut self, s: &str) -> core::fmt::Result {
             if !self.unequal {
                 if let Some(new_remainder) = self.remainder.strip_prefix(s) {
                     self.remainder = new_remainder;

@@ -1,10 +1,13 @@
 use crate::time::{sleep_until, Duration, Instant, Sleep};
 use crate::util::trace;
 
-use std::future::{poll_fn, Future};
-use std::panic::Location;
-use std::pin::Pin;
-use std::task::{ready, Context, Poll};
+use alloc::boxed::Box;
+use core::future::{poll_fn, Future};
+use core::option::Option::{self, None};
+use core::panic::Location;
+use core::pin::Pin;
+use core::task::{ready, Context, Poll};
+use core::{assert, derive};
 
 /// Creates new [`Interval`] that yields with interval of `period`. The first
 /// tick completes immediately. The default [`MissedTickBehavior`] is

@@ -1,13 +1,16 @@
 #![cfg_attr(not(feature = "net"), allow(dead_code))]
 
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 use crate::io::interest::Interest;
 use crate::runtime::io::{Direction, Handle, ReadyEvent, ScheduledIo};
 use crate::runtime::scheduler;
 
 use mio::event::Source;
 use std::io;
-use std::sync::Arc;
-use std::task::{ready, Context, Poll};
+use alloc::sync::Arc;
+use core::task::{ready, Context, Poll};
 
 cfg_io_driver! {
     /// Associates an I/O resource with the reactor instance that drives it.
@@ -219,7 +222,7 @@ impl Registration {
         loop {
             let event = self.readiness(interest).await?;
 
-            let coop = std::future::poll_fn(crate::task::coop::poll_proceed).await;
+            let coop = core::future::poll_fn(crate::task::coop::poll_proceed).await;
 
             match f() {
                 Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {

@@ -23,10 +23,10 @@
 /// ```
 #[cfg_attr(docsrs, doc(cfg(feature = "rt")))]
 pub async fn consume_budget() {
-    let mut status = std::task::Poll::Pending;
+    let mut status = core::task::Poll::Pending;
 
-    std::future::poll_fn(move |cx| {
-        std::task::ready!(crate::trace::trace_leaf(cx));
+    core::future::poll_fn(move |cx| {
+        core::task::ready!(crate::trace::trace_leaf(cx));
         if status.is_ready() {
             return status;
         }

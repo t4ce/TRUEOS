@@ -1,8 +1,13 @@
 #![allow(clippy::trivially_copy_pass_by_ref)]
 
-use std::fmt;
-use std::ops;
+use core::option::Option;
 use core::time::Duration;
+use core::{derive, fmt, ops};
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub(crate) type StdInstant = Duration;
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+pub(crate) type StdInstant = std::time::Instant;
 
 /// A measurement of a monotonically nondecreasing clock.
 /// Opaque and useful only with `Duration`.
@@ -32,7 +37,7 @@ use core::time::Duration;
 /// take advantage of `time::pause()` and `time::advance()`.
 #[derive(Clone, Copy, Eq, PartialEq, PartialOrd, Ord, Hash)]
 pub struct Instant {
-    std: std::time::Instant,
+    std: StdInstant,
 }
 
 impl Instant {
@@ -50,7 +55,7 @@ impl Instant {
     }
 
     /// Create a `tokio::time::Instant` from a `std::time::Instant`.
-    pub fn from_std(std: std::time::Instant) -> Instant {
+    pub fn from_std(std: StdInstant) -> Instant {
         Instant { std }
     }
 
@@ -63,7 +68,7 @@ impl Instant {
     }
 
     /// Convert the value into a `std::time::Instant`.
-    pub fn into_std(self) -> std::time::Instant {
+    pub fn into_std(self) -> StdInstant {
         self.std
     }
 
@@ -150,14 +155,14 @@ impl Instant {
     }
 }
 
-impl From<std::time::Instant> for Instant {
-    fn from(time: std::time::Instant) -> Instant {
+impl From<StdInstant> for Instant {
+    fn from(time: StdInstant) -> Instant {
         Instant::from_std(time)
     }
 }
 
-impl From<Instant> for std::time::Instant {
-    fn from(time: Instant) -> std::time::Instant {
+impl From<Instant> for StdInstant {
+    fn from(time: Instant) -> StdInstant {
         time.into_std()
     }
 }
@@ -188,7 +193,7 @@ impl ops::Sub<Duration> for Instant {
     type Output = Instant;
 
     fn sub(self, rhs: Duration) -> Instant {
-        Instant::from_std(std::time::Instant::sub(self.std, rhs))
+        Instant::from_std(self.std - rhs)
     }
 }
 

@@ -90,6 +90,8 @@ cfg_rt! {
 // the outer future against the cooperating budget.
 
 use crate::runtime::context;
+use core::derive;
+use core::option::Option::{self, None, Some};
 
 /// Opaque type tracking the amount of "work" a task may still do before
 /// yielding back to the scheduler.
@@ -248,11 +250,11 @@ cfg_rt! {
 
 cfg_coop! {
     use pin_project_lite::pin_project;
-    use std::cell::Cell;
-    use std::future::Future;
-    use std::marker::PhantomData;
-    use std::pin::Pin;
-    use std::task::{ready, Context, Poll};
+    use core::cell::Cell;
+    use core::future::Future;
+    use core::marker::PhantomData;
+    use core::pin::Pin;
+    use core::task::{ready, Context, Poll};
 
     /// Value returned by the [`poll_proceed`] method.
     #[derive(Debug)]

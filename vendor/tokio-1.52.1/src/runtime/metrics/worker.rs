@@ -1,6 +1,9 @@
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 use crate::runtime::Config;
 use crate::util::metric_atomics::{MetricAtomicU64, MetricAtomicUsize};
-use std::sync::atomic::Ordering::Relaxed;
+use core::sync::atomic::Ordering::Relaxed;
 use std::sync::Mutex;
 use std::thread::ThreadId;
 

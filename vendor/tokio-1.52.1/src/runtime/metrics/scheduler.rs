@@ -1,4 +1,7 @@
-use crate::loom::sync::atomic::Ordering::Relaxed;
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
+use core::sync::atomic::Ordering::Relaxed;
 use crate::util::metric_atomics::MetricAtomicU64;
 
 /// Retrieves metrics from the Tokio runtime.

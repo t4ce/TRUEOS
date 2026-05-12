@@ -1,10 +1,13 @@
-use crate::loom::sync::atomic::AtomicPtr;
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
+use core::sync::atomic::AtomicPtr;
 use crate::runtime::task::{Header, Notified, RawTask};
 
-use std::marker::PhantomData;
-use std::ptr;
-use std::ptr::NonNull;
-use std::sync::atomic::Ordering::SeqCst;
+use core::marker::PhantomData;
+use core::ptr;
+use core::ptr::NonNull;
+use core::sync::atomic::Ordering::SeqCst;
 
 /// An atomic cell which can contain a pointer to a [`Notified`] task.
 ///

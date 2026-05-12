@@ -1,11 +1,14 @@
-use crate::loom::sync::atomic::AtomicUsize;
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
+use core::sync::atomic::AtomicUsize;
 use crate::runtime::io::ScheduledIo;
 use crate::util::linked_list::{self, LinkedList};
 
 use std::io;
-use std::ptr::NonNull;
-use std::sync::atomic::Ordering::{Acquire, Release};
-use std::sync::Arc;
+use core::ptr::NonNull;
+use core::sync::atomic::Ordering::{Acquire, Release};
+use alloc::sync::Arc;
 
 // Kind of arbitrary, but buffering 16 `ScheduledIo`s doesn't seem like much
 const NOTIFY_AFTER: usize = 16;
@@ -102,7 +105,7 @@ impl RegistrationSet {
     }
 
     pub(super) fn release(&self, synced: &mut Synced) {
-        let pending = std::mem::take(&mut synced.pending_release);
+        let pending = core::mem::take(&mut synced.pending_release);
 
         for io in pending {
             // safety: the registration is part of our list

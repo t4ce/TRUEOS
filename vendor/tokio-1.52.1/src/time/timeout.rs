@@ -10,10 +10,13 @@ use crate::{
     util::trace,
 };
 
+use core::derive;
+use core::future::{Future, IntoFuture};
+use core::option::Option::{None, Some};
+use core::pin::Pin;
+use core::result::Result::{self, Err, Ok};
+use core::task::{self, Poll};
 use pin_project_lite::pin_project;
-use std::future::{Future, IntoFuture};
-use std::pin::Pin;
-use std::task::{self, Poll};
 
 /// Requires a `Future` to complete before the specified duration has elapsed.
 ///

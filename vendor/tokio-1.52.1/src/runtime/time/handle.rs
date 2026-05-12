@@ -1,5 +1,8 @@
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 use crate::runtime::time::TimeSource;
-use std::fmt;
+use core::fmt;
 
 /// Handle to time driver instance.
 pub(crate) struct Handle {
@@ -23,11 +26,11 @@ impl Handle {
         #[cfg(feature = "test-util")]
         match self.inner {
             super::Inner::Traditional { ref did_wake, .. } => {
-                did_wake.store(true, std::sync::atomic::Ordering::SeqCst);
+                did_wake.store(true, core::sync::atomic::Ordering::SeqCst);
             }
             #[cfg(all(tokio_unstable, feature = "rt-multi-thread"))]
             super::Inner::Alternative { ref did_wake, .. } => {
-                did_wake.store(true, std::sync::atomic::Ordering::SeqCst);
+                did_wake.store(true, core::sync::atomic::Ordering::SeqCst);
             }
         }
     }

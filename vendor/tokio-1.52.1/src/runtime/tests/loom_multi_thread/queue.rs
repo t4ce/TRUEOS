@@ -1,8 +1,11 @@
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 use crate::runtime::scheduler::multi_thread::{queue, Stats};
 use crate::runtime::tests::{unowned, NoopSchedule};
 
 use loom::thread;
-use std::cell::RefCell;
+use core::cell::RefCell;
 
 fn new_stats() -> Stats {
     Stats::new(&crate::runtime::WorkerMetrics::new())

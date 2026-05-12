@@ -1,3 +1,6 @@
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 // Signal handling
 cfg_signal_internal_and_unix! {
     mod signal;
@@ -16,9 +19,9 @@ use crate::runtime::io::registration_set;
 use crate::runtime::io::{IoDriverMetrics, RegistrationSet, ScheduledIo};
 
 use mio::event::Source;
-use std::fmt;
+use core::fmt;
 use std::io;
-use std::sync::Arc;
+use alloc::sync::Arc;
 use core::time::Duration;
 
 /// I/O driver, backed by Mio.

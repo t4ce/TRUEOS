@@ -1,7 +1,10 @@
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 use crate::runtime::metrics::batch::duration_as_u64;
-use std::cmp;
+use core::cmp;
 use std::error::Error;
-use std::fmt::{Display, Formatter};
+use core::fmt::{Display, Formatter};
 use core::time::Duration;
 
 const DEFAULT_MIN_VALUE: Duration = Duration::from_nanos(100);
@@ -84,7 +87,7 @@ impl LogHistogram {
         offset_bucket.min(max as u64) as usize
     }
 
-    pub(crate) fn bucket_range(&self, bucket: usize) -> std::ops::Range<u64> {
+    pub(crate) fn bucket_range(&self, bucket: usize) -> core::ops::Range<u64> {
         let LogHistogram {
             p,
             bucket_offset,
@@ -268,7 +271,7 @@ pub enum InvalidHistogramConfiguration {
 }
 
 impl Display for InvalidHistogramConfiguration {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         match self {
             InvalidHistogramConfiguration::TooManyBuckets { required_bucket_count } =>
                 write!(f, "The configuration for this histogram would have required {required_bucket_count} buckets")

@@ -1,5 +1,8 @@
-use crate::loom::sync::atomic::AtomicBool;
-use crate::loom::sync::Arc;
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
+use core::sync::atomic::AtomicBool;
+use alloc::sync::Arc;
 use crate::runtime::driver::{self, Driver};
 use crate::runtime::scheduler::{self, Defer, Inject};
 use crate::runtime::task::{
@@ -12,12 +15,12 @@ use crate::sync::notify::Notify;
 use crate::util::atomic_cell::AtomicCell;
 use crate::util::{waker_ref, RngSeedGenerator, Wake, WakerRef};
 
-use std::cell::RefCell;
-use std::collections::VecDeque;
-use std::future::{poll_fn, Future};
-use std::sync::atomic::Ordering::{AcqRel, Acquire, Release};
-use std::task::Poll::{Pending, Ready};
-use std::task::Waker;
+use core::cell::RefCell;
+use alloc::collections::VecDeque;
+use core::future::{poll_fn, Future};
+use core::sync::atomic::Ordering::{AcqRel, Acquire, Release};
+use core::task::Poll::{Pending, Ready};
+use core::task::Waker;
 use std::thread::ThreadId;
 use core::time::Duration;
 use std::{fmt, thread};
@@ -486,7 +489,7 @@ impl Handle {
         spawned_at: SpawnLocation,
     ) -> JoinHandle<F::Output>
     where
-        F: crate::future::Future + Send + 'static,
+        F: core::future::Future + Send + 'static,
         F::Output: Send + 'static,
     {
         let (handle, notified) = me.shared.owned.bind(future, me.clone(), id, spawned_at);
@@ -519,7 +522,7 @@ impl Handle {
         spawned_at: SpawnLocation,
     ) -> JoinHandle<F::Output>
     where
-        F: crate::future::Future + 'static,
+        F: core::future::Future + 'static,
         F::Output: 'static,
     {
         // Safety: the caller guarantees that this is only called on a `LocalRuntime`.
@@ -652,7 +655,7 @@ cfg_unstable_metrics! {
     }
 }
 
-use std::num::NonZeroU64;
+use core::num::NonZeroU64;
 
 impl Handle {
     pub(crate) fn owned_id(&self) -> NonZeroU64 {
@@ -778,7 +781,7 @@ impl CoreGuard<'_> {
     fn block_on<F: Future>(self, future: F) -> F::Output {
         let ret = self.enter(|mut core, context| {
             let waker = Handle::waker_ref(&context.handle);
-            let mut cx = std::task::Context::from_waker(&waker);
+            let mut cx = core::task::Context::from_waker(&waker);
 
             pin!(future);
 

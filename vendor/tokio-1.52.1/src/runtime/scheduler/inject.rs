@@ -1,5 +1,8 @@
 //! Inject queue used to send wakeups to a work-stealing scheduler
 
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 use crate::loom::sync::Mutex;
 use crate::runtime::task;
 
