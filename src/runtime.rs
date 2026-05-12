@@ -41,7 +41,7 @@ pub fn run_ap_forever() -> ! {
         if counter.is_multiple_of(5_000) {
             let slot = crate::percpu::this_cpu().cpu_index() as usize;
             if slot > 0 {
-                let _ = crate::tst_ui2_coreticks_demo::ui2_coreticks_tick_tile_index(slot);
+                let _ = crate::tst::ui2::coreticks_demo::ui2_coreticks_tick_tile_index(slot);
             }
         }
         counter = counter.wrapping_add(1);

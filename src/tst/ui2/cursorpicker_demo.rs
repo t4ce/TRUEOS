@@ -4,8 +4,8 @@ use alloc::vec::Vec;
 
 use crate::r::ui2::{self, Ui2FontTier, Ui2HostedInteractiveRect, Ui2Rect, Ui2WindowResizeMode};
 
-const UI2_CURSORPICKER_TEX_ID: u32 = crate::tst_ui2_ids::Ui2DemoTexId::CursorPicker.get();
-const UI2_CURSORPICKER_CONTENT_ID: u32 = crate::tst_ui2_ids::Ui2DemoContentId::CursorPicker.get();
+const UI2_CURSORPICKER_TEX_ID: u32 = crate::tst::ui2::ids::Ui2DemoTexId::CursorPicker.get();
+const UI2_CURSORPICKER_CONTENT_ID: u32 = crate::tst::ui2::ids::Ui2DemoContentId::CursorPicker.get();
 const UI2_CURSORPICKER_WINDOW_TITLE: &str = "Cursor Picker";
 const UI2_CURSORPICKER_TITLE_ICON: char = '🦋';
 const UI2_CURSORPICKER_VIEW_W: u32 = 360;

@@ -2,8 +2,8 @@ use alloc::{format, string::String, vec, vec::Vec};
 
 use crate::r::ui2::{self, Ui2FontTier, Ui2Rect};
 
-const UI2_RAPLE_TEX_ID: u32 = crate::tst_ui2_ids::Ui2DemoTexId::Raple.get();
-const UI2_RAPLE_CONTENT_ID: u32 = crate::tst_ui2_ids::Ui2DemoContentId::Raple.get();
+const UI2_RAPLE_TEX_ID: u32 = crate::tst::ui2::ids::Ui2DemoTexId::Raple.get();
+const UI2_RAPLE_CONTENT_ID: u32 = crate::tst::ui2::ids::Ui2DemoContentId::Raple.get();
 const UI2_RAPLE_WINDOW_TITLE: &str = "raple";
 const UI2_RAPLE_VIEW_W: u32 = 440;
 const UI2_RAPLE_VIEW_H: u32 = 272;

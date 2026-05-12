@@ -2,8 +2,8 @@ extern crate alloc;
 
 use alloc::{vec, vec::Vec};
 
-const UI2_ANALOG_CLOCK_TEX_ID: u32 = crate::tst_ui2_ids::Ui2DemoTexId::AnalogClock.get();
-const UI2_ANALOG_CLOCK_CONTENT_ID: u32 = crate::tst_ui2_ids::Ui2DemoContentId::AnalogClock.get();
+const UI2_ANALOG_CLOCK_TEX_ID: u32 = crate::tst::ui2::ids::Ui2DemoTexId::AnalogClock.get();
+const UI2_ANALOG_CLOCK_CONTENT_ID: u32 = crate::tst::ui2::ids::Ui2DemoContentId::AnalogClock.get();
 const UI2_ANALOG_CLOCK_WINDOW_TITLE: &str = "Analog 360";
 const UI2_ANALOG_CLOCK_VIEW_W: u32 = 192;
 const UI2_ANALOG_CLOCK_VIEW_H: u32 = 192;
