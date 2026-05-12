@@ -16,8 +16,10 @@ mod allocators;
 pub mod allports;
 mod aud;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[path = "hv/blueprint/blueprint_net_broker.rs"]
 mod blueprint_net_broker;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[path = "hv/blueprint/blueprint_net_wire.rs"]
 mod blueprint_net_wire;
 #[path = "Chronos.rs"]
 mod chronos;
@@ -102,7 +104,7 @@ mod tst_html_demo;
 mod tst_html_shack;
 #[path = "tst/http_trueosfs.rs"]
 mod tst_http_trueosfs;
-#[path = "tst/mandelbrot_gpu_sidequest.rs"]
+#[path = "intel/gpgpu/mandelbrot_gpu_sidequest.rs"]
 mod tst_mandelbrot_gpu_sidequest;
 #[path = "tst/net_tcp_shell.rs"]
 mod tst_net_tcp_shell;
