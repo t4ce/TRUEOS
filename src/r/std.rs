@@ -12,4 +12,6 @@ pub mod io {
 }
 
 /// Surface-backed path facade.
-pub mod path {}
+pub mod path {
+    pub use crate::r::path::*;
+}

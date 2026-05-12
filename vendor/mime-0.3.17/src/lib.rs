@@ -43,12 +43,10 @@ mod ascii {
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod cmp {
-    pub use core::cmp::*;
 }
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod error {
-    pub use core::error::*;
 }
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
@@ -58,12 +56,10 @@ mod fmt {
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod hash {
-    pub use core::hash::*;
 }
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod iter {
-    pub use core::iter::*;
 }
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
@@ -73,7 +69,6 @@ mod slice {
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod str {
-    pub use core::str::*;
 }
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]

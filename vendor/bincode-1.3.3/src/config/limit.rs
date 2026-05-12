@@ -1,3 +1,5 @@
+#[cfg(target_os = "trueos")]
+use crate::prelude::*;
 use error::{ErrorKind, Result};
 
 /// A trait for stopping serialization and deserialization when a certain limit has been reached.

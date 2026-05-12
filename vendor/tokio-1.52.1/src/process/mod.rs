@@ -256,7 +256,7 @@ use alloc::vec::Vec;
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{ready, Context, Poll};
-use core::ffi::OsStr;
+use std::ffi::OsStr;
 use std::io;
 use std::path::Path;
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]

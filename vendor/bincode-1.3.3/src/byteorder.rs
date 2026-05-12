@@ -1,6 +1,14 @@
 // Copyright (c) 2015 Andrew Gallant
 
+#[cfg(target_os = "trueos")]
+use crate::prelude::*;
+#[cfg(target_os = "trueos")]
+use crate::io;
+#[cfg(not(target_os = "trueos"))]
 use std::io;
+#[cfg(target_os = "trueos")]
+use crate::io::Result;
+#[cfg(not(target_os = "trueos"))]
 use std::io::Result;
 use core::ptr::copy_nonoverlapping;
 

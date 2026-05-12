@@ -1,4 +1,9 @@
 use config::{BincodeByteOrder, Options};
+#[cfg(target_os = "trueos")]
+use crate::prelude::*;
+#[cfg(target_os = "trueos")]
+use crate::io::Read;
+#[cfg(not(target_os = "trueos"))]
 use std::io::Read;
 
 use self::read::{BincodeRead, IoReader, SliceReader};

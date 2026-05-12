@@ -1,4 +1,9 @@
 use serde;
+#[cfg(target_os = "trueos")]
+use crate::prelude::*;
+#[cfg(target_os = "trueos")]
+use crate::io::{Read, Write};
+#[cfg(not(target_os = "trueos"))]
 use std::io::{Read, Write};
 use core::marker::PhantomData;
 

@@ -1,3 +1,4 @@
+#![cfg_attr(target_os = "trueos", no_std)]
 #![deny(missing_docs)]
 #![allow(unknown_lints, bare_trait_objects, deprecated)]
 
@@ -31,6 +32,155 @@
 
 #[macro_use]
 extern crate serde;
+#[cfg(target_os = "trueos")]
+#[macro_use]
+extern crate alloc;
+
+#[cfg(target_os = "trueos")]
+mod prelude {
+    #[allow(unused_imports)]
+    pub(crate) use alloc::{
+        borrow::ToOwned,
+        boxed::Box,
+        format,
+        string::{String, ToString},
+        vec,
+        vec::Vec,
+    };
+    #[allow(unused_imports)]
+    pub(crate) use core::prelude::rust_2021::*;
+    #[allow(unused_imports)]
+    pub(crate) use core::{assert, derive, try, write};
+}
+
+#[cfg(target_os = "trueos")]
+pub mod io {
+    use alloc::boxed::Box;
+    use core::fmt;
+
+    pub type Result<T> = core::result::Result<T, Error>;
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum ErrorKind {
+        UnexpectedEof,
+        Other,
+    }
+
+    #[derive(Debug)]
+    pub struct Error {
+        kind: ErrorKind,
+        message: &'static str,
+    }
+
+    impl Error {
+        pub fn new(kind: ErrorKind, message: &'static str) -> Self {
+            Self { kind, message }
+        }
+
+        pub fn kind(&self) -> ErrorKind {
+            self.kind
+        }
+    }
+
+    impl From<ErrorKind> for Error {
+        fn from(kind: ErrorKind) -> Self {
+            Self { kind, message: "" }
+        }
+    }
+
+    impl fmt::Display for Error {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            if self.message.is_empty() {
+                write!(f, "{:?}", self.kind)
+            } else {
+                f.write_str(self.message)
+            }
+        }
+    }
+
+    impl core::error::Error for Error {}
+
+    pub trait Read {
+        fn read(&mut self, buf: &mut [u8]) -> Result<usize>;
+
+        fn read_exact(&mut self, mut buf: &mut [u8]) -> Result<()> {
+            while !buf.is_empty() {
+                match self.read(buf)? {
+                    0 => return Err(ErrorKind::UnexpectedEof.into()),
+                    n => {
+                        let tmp = buf;
+                        buf = &mut tmp[n..];
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+
+    impl<R: Read + ?Sized> Read for &mut R {
+        fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+            (**self).read(buf)
+        }
+
+        fn read_exact(&mut self, buf: &mut [u8]) -> Result<()> {
+            (**self).read_exact(buf)
+        }
+    }
+
+    impl Read for &[u8] {
+        fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+            let amt = core::cmp::min(buf.len(), self.len());
+            let (read, rest) = self.split_at(amt);
+            buf[..amt].copy_from_slice(read);
+            *self = rest;
+            Ok(amt)
+        }
+    }
+
+    pub trait Write {
+        fn write(&mut self, buf: &[u8]) -> Result<usize>;
+
+        fn write_all(&mut self, mut buf: &[u8]) -> Result<()> {
+            while !buf.is_empty() {
+                match self.write(buf)? {
+                    0 => return Err(ErrorKind::UnexpectedEof.into()),
+                    n => buf = &buf[n..],
+                }
+            }
+            Ok(())
+        }
+    }
+
+    impl<W: Write + ?Sized> Write for &mut W {
+        fn write(&mut self, buf: &[u8]) -> Result<usize> {
+            (**self).write(buf)
+        }
+
+        fn write_all(&mut self, buf: &[u8]) -> Result<()> {
+            (**self).write_all(buf)
+        }
+    }
+
+    impl Write for alloc::vec::Vec<u8> {
+        fn write(&mut self, buf: &[u8]) -> Result<usize> {
+            self.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+    }
+
+    impl Write for Box<[u8]> {
+        fn write(&mut self, buf: &[u8]) -> Result<usize> {
+            let amt = core::cmp::min(buf.len(), self.len());
+            self[..amt].copy_from_slice(&buf[..amt]);
+            Ok(amt)
+        }
+    }
+}
+
+#[cfg(target_os = "trueos")]
+use crate::io as bincode_io;
+#[cfg(not(target_os = "trueos"))]
+use std::io as bincode_io;
 
 pub mod config;
 /// Deserialize bincode data to a Rust data structure.
@@ -89,7 +239,7 @@ pub fn options() -> DefaultOptions {
 /// module for more details
 pub fn serialize_into<W, T: ?Sized>(writer: W, value: &T) -> Result<()>
 where
-    W: std::io::Write,
+    W: bincode_io::Write,
     T: serde::Serialize,
 {
     DefaultOptions::new()
@@ -123,7 +273,7 @@ where
 /// module for more details
 pub fn deserialize_from<R, T>(reader: R) -> Result<T>
 where
-    R: std::io::Read,
+    R: bincode_io::Read,
     T: serde::de::DeserializeOwned,
 {
     DefaultOptions::new()
