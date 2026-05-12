@@ -1,5 +1,8 @@
 use super::{FastRand, RngSeed};
 
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use crate::loom::sync::Mutex;
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::sync::Mutex;
 
 /// A deterministic generator for seeds (and other generators).

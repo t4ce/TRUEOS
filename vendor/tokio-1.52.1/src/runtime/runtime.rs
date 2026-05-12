@@ -579,9 +579,18 @@ fn display_eq(d: impl core::fmt::Display, s: &str) -> bool {
 /// ```
 pub fn is_rt_shutdown_err(err: &io::Error) -> bool {
     if let Some(inner) = err.get_ref() {
-        err.kind() == io::ErrorKind::Other
-            && inner.source().is_none()
-            && display_eq(inner, RUNTIME_SHUTTING_DOWN_ERROR)
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        {
+            return err.kind() == io::ErrorKind::Other
+                && display_eq(inner, RUNTIME_SHUTTING_DOWN_ERROR);
+        }
+
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+        {
+            err.kind() == io::ErrorKind::Other
+                && inner.source().is_none()
+                && display_eq(inner, RUNTIME_SHUTTING_DOWN_ERROR)
+        }
     } else {
         false
     }

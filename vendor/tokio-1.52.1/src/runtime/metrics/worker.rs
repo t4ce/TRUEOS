@@ -4,6 +4,9 @@ use crate::runtime::prelude::*;
 use crate::runtime::Config;
 use crate::util::metric_atomics::{MetricAtomicU64, MetricAtomicUsize};
 use core::sync::atomic::Ordering::Relaxed;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use crate::loom::sync::Mutex;
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::sync::Mutex;
 use std::thread::ThreadId;
 

@@ -10,6 +10,9 @@ use core::fmt;
 use std::io;
 use core::pin::Pin;
 use std::sync::Arc;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use crate::loom::sync::Mutex;
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::sync::Mutex;
 use core::task::{Context, Poll};
 
