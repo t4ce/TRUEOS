@@ -36,9 +36,126 @@
 
 #[cfg(feature = "std")]
 extern crate std;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+extern crate self as std;
 
 #[macro_use]
 extern crate alloc;
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod fs {
+    use alloc::string::String;
+
+    use crate::{io, path::Path};
+
+    pub fn read_to_string<P: AsRef<Path>>(_path: P) -> io::Result<String> {
+        Err(trueos_io::other("hickory zone file include unavailable"))
+    }
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod io {
+    pub use trueos_io::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod net {
+    pub use core::net::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod path {
+    use alloc::string::String;
+    use core::ops::Deref;
+
+    #[repr(transparent)]
+    pub struct Path {
+        inner: str,
+    }
+
+    #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+    pub struct PathBuf {
+        inner: String,
+    }
+
+    impl Path {
+        pub fn new<S: AsRef<str> + ?Sized>(path: &S) -> &Self {
+            unsafe { &*(path.as_ref() as *const str as *const Self) }
+        }
+
+        pub fn as_str(&self) -> &str {
+            &self.inner
+        }
+
+        pub fn is_absolute(&self) -> bool {
+            self.as_str().starts_with('/')
+        }
+
+        pub fn parent(&self) -> Option<&Path> {
+            let trimmed = self.as_str().trim_end_matches('/');
+            let idx = trimmed.rfind('/')?;
+            if idx == 0 {
+                Some(Path::new("/"))
+            } else {
+                Some(Path::new(&trimmed[..idx]))
+            }
+        }
+
+        pub fn to_path_buf(&self) -> PathBuf {
+            PathBuf {
+                inner: String::from(self.as_str()),
+            }
+        }
+
+        pub fn join<P: AsRef<Path>>(&self, path: P) -> PathBuf {
+            let path = path.as_ref();
+            if path.is_absolute() || self.as_str().is_empty() {
+                return path.to_path_buf();
+            }
+
+            let mut inner = String::from(self.as_str().trim_end_matches('/'));
+            if !inner.is_empty() {
+                inner.push('/');
+            }
+            inner.push_str(path.as_str().trim_start_matches('/'));
+            PathBuf { inner }
+        }
+    }
+
+    impl PathBuf {
+        pub fn parent(&self) -> Option<&Path> {
+            self.as_path().parent()
+        }
+
+        pub fn as_path(&self) -> &Path {
+            Path::new(&self.inner)
+        }
+
+        pub fn join<P: AsRef<Path>>(&self, path: P) -> PathBuf {
+            self.as_path().join(path)
+        }
+    }
+
+    impl AsRef<Path> for Path {
+        fn as_ref(&self) -> &Path {
+            self
+        }
+    }
+
+    impl AsRef<Path> for PathBuf {
+        fn as_ref(&self) -> &Path {
+            self.as_path()
+        }
+    }
+
+    impl Deref for PathBuf {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            self.as_path()
+        }
+    }
+}
 
 #[cfg(feature = "std")]
 macro_rules! try_ready_stream {

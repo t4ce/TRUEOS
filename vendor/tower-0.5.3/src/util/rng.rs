@@ -10,6 +10,7 @@
 //! [PRNG]: https://en.wikipedia.org/wiki/Pseudorandom_number_generator
 
 use std::{
+    boxed::Box,
     collections::hash_map::RandomState,
     hash::{BuildHasher, Hasher},
     ops::Range,

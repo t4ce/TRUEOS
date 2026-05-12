@@ -11,6 +11,7 @@ json-target-spec = true
 linker = "rust-lld"
 rustflags = [
 	"--cfg", "getrandom_backend=\"custom\"",
+	"-Awarnings",
 	"-L", "native=bld/empty-libs",
 	"-C", "link-arg=-Tlinker.ld",
 	"-C", "force-frame-pointers=yes"
@@ -19,6 +20,7 @@ rustflags = [
 [target.'cfg(target_os = "none")']
 rustflags = [
 	"--cfg", "getrandom_backend=\"custom\"",
+	"-Awarnings",
 	"-C", "link-arg=-Tlinker.ld",
 	"-C", "force-frame-pointers=yes"
 ]
@@ -26,6 +28,7 @@ rustflags = [
 [target.'cfg(target_os = "trueos")']
 rustflags = [
 	"--cfg", "getrandom_backend=\"custom\"",
+	"-Awarnings",
 	"-L", "native=bld/empty-libs",
 	"-C", "link-arg=-Tlinker.ld",
 	"-C", "force-frame-pointers=yes"
@@ -34,6 +37,7 @@ rustflags = [
 [target.'cfg(target_os = "zkvm")']
 rustflags = [
 	"--cfg", "getrandom_backend=\"custom\"",
+	"-Awarnings",
 	"-C", "link-arg=-Tlinker.ld",
 	"-C", "force-frame-pointers=yes"
 ]

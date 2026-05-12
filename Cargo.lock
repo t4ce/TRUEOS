@@ -1293,7 +1293,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4f467dd6dccf739c208452f8014c75c18bb8301b050ad1cfb27153803edb0f51"
 dependencies = [
  "foldhash 0.2.0",
- "rustc-std-workspace-alloc",
 ]
 
 [[package]]
@@ -1347,6 +1346,7 @@ dependencies = [
  "tinyvec",
  "tokio",
  "tracing",
+ "trueos-io",
  "url",
 ]
 
@@ -2509,12 +2509,6 @@ dependencies = [
  "subtle",
  "zeroize",
 ]
-
-[[package]]
-name = "rustc-std-workspace-alloc"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9d441c3b2ebf55cebf796bfdc265d67fa09db17b7bb6bd4be75c509e1e8fec3"
 
 [[package]]
 name = "rustc_version"
