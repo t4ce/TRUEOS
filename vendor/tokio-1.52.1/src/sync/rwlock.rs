@@ -2,10 +2,10 @@ use crate::sync::batch_semaphore::{Semaphore, TryAcquireError};
 use crate::sync::mutex::TryLockError;
 #[cfg(all(tokio_unstable, feature = "tracing"))]
 use crate::util::trace;
-use std::cell::UnsafeCell;
-use std::marker;
-use std::marker::PhantomData;
-use std::sync::Arc;
+use core::cell::UnsafeCell;
+use core::marker;
+use core::marker::PhantomData;
+use crate::loom::sync::Arc;
 
 pub(crate) mod owned_read_guard;
 pub(crate) mod owned_write_guard;
@@ -206,7 +206,7 @@ impl<T: ?Sized> RwLock<T> {
     {
         #[cfg(all(tokio_unstable, feature = "tracing"))]
         let resource_span = {
-            let location = std::panic::Location::caller();
+            let location = core::panic::Location::caller();
             let resource_span = tracing::trace_span!(
                 parent: None,
                 "runtime.resource",
@@ -278,7 +278,7 @@ impl<T: ?Sized> RwLock<T> {
 
         #[cfg(all(tokio_unstable, feature = "tracing"))]
         let resource_span = {
-            let location = std::panic::Location::caller();
+            let location = core::panic::Location::caller();
 
             let resource_span = tracing::trace_span!(
                 parent: None,

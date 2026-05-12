@@ -1,10 +1,11 @@
 #![cfg_attr(
-#[allow(unused_imports)]
-use crate::runtime::prelude::*;
-
     not(all(feature = "rt", feature = "net", feature = "io-uring", tokio_unstable)),
     allow(dead_code)
 )]
+
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
+
 mod driver;
 use driver::{Direction, Tick};
 pub(crate) use driver::{Driver, Handle, ReadyEvent};

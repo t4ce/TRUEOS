@@ -1,9 +1,9 @@
 use crate::sync::rwlock::owned_read_guard::OwnedRwLockReadGuard;
 use crate::sync::rwlock::owned_write_guard_mapped::OwnedRwLockMappedWriteGuard;
 use crate::sync::rwlock::RwLock;
-use std::marker::PhantomData;
-use std::sync::Arc;
-use std::{fmt, mem, ops, ptr};
+use core::marker::PhantomData;
+use crate::loom::sync::Arc;
+use core::{fmt, mem, ops, ptr};
 
 /// Owned RAII structure used to release the exclusive write access of a lock when
 /// dropped.
@@ -335,7 +335,7 @@ impl<T: ?Sized> OwnedRwLockWriteGuard<T> {
     ///
     /// ```
     /// # use tokio::sync::RwLock;
-    /// # use std::sync::Arc;
+    /// # use crate::loom::sync::Arc;
     /// #
     /// # #[tokio::main(flavor = "current_thread")]
     /// # async fn main() {

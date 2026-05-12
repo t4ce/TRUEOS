@@ -8,8 +8,9 @@ cfg_time! {
     use crate::time::Duration;
 }
 
-use std::fmt;
-use std::task::{Context, Poll};
+use alloc::vec::Vec;
+use core::fmt;
+use core::task::{Context, Poll};
 
 /// Sends values to the associated `Receiver`.
 ///
@@ -241,7 +242,7 @@ impl<T> Receiver<T> {
     /// # }
     /// ```
     pub async fn recv(&mut self) -> Option<T> {
-        use std::future::poll_fn;
+        use core::future::poll_fn;
         poll_fn(|cx| self.chan.recv(cx)).await
     }
 
@@ -317,7 +318,7 @@ impl<T> Receiver<T> {
     /// # }
     /// ```
     pub async fn recv_many(&mut self, buffer: &mut Vec<T>, limit: usize) -> usize {
-        use std::future::poll_fn;
+        use core::future::poll_fn;
         poll_fn(|cx| self.chan.recv_many(cx, buffer, limit)).await
     }
 
@@ -674,8 +675,8 @@ impl<T> Receiver<T> {
     /// # Examples
     ///
     /// ```
-    /// use std::task::{Context, Poll};
-    /// use std::pin::Pin;
+    /// use core::task::{Context, Poll};
+    /// use core::pin::Pin;
     /// use tokio::sync::mpsc;
     /// use futures::Future;
     ///
@@ -1690,7 +1691,7 @@ impl<T> Permit<'_, T> {
     /// # }
     /// ```
     pub fn send(self, value: T) {
-        use std::mem;
+        use core::mem;
 
         self.chan.send(value);
 

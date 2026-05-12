@@ -129,13 +129,13 @@ use crate::loom::sync::Arc;
 #[cfg(all(tokio_unstable, feature = "tracing"))]
 use crate::util::trace;
 
-use std::fmt;
-use std::future::Future;
-use std::mem::MaybeUninit;
-use std::pin::Pin;
-use std::sync::atomic::Ordering::{self, AcqRel, Acquire};
-use std::task::Poll::{Pending, Ready};
-use std::task::{ready, Context, Poll, Waker};
+use core::fmt;
+use core::future::Future;
+use core::mem::MaybeUninit;
+use core::pin::Pin;
+use core::sync::atomic::Ordering::{self, AcqRel, Acquire};
+use core::task::Poll::{Pending, Ready};
+use core::task::{ready, Context, Poll, Waker};
 
 /// Sends a value to the associated [`Receiver`].
 ///
@@ -339,7 +339,7 @@ pub struct Receiver<T> {
 pub mod error {
     //! `Oneshot` error types.
 
-    use std::fmt;
+    use core::fmt;
 
     /// Error returned by the `Future` implementation for `Receiver`.
     ///
@@ -497,7 +497,7 @@ struct State(usize);
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
     #[cfg(all(tokio_unstable, feature = "tracing"))]
     let resource_span = {
-        let location = std::panic::Location::caller();
+        let location = core::panic::Location::caller();
 
         let resource_span = tracing::trace_span!(
             parent: None,
@@ -725,7 +725,7 @@ impl<T> Sender<T> {
     /// # }
     /// ```
     pub async fn closed(&mut self) {
-        use std::future::poll_fn;
+        use core::future::poll_fn;
 
         #[cfg(all(tokio_unstable, feature = "tracing"))]
         let resource_span = self.resource_span.clone();
@@ -802,7 +802,7 @@ impl<T> Sender<T> {
     /// ```
     /// use tokio::sync::oneshot;
     ///
-    /// use std::future::poll_fn;
+    /// use core::future::poll_fn;
     ///
     /// # #[tokio::main(flavor = "current_thread")]
     /// # async fn main() {
@@ -970,7 +970,7 @@ impl<T> Receiver<T> {
     /// ```
     /// use tokio::sync::oneshot;
     ///
-    /// use std::task::Poll;
+    /// use core::task::Poll;
     ///
     /// # #[tokio::main(flavor = "current_thread")]
     /// # async fn main() {
@@ -1470,7 +1470,7 @@ impl<T> Drop for Inner<T> {
 
 impl<T: fmt::Debug> fmt::Debug for Inner<T> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use std::sync::atomic::Ordering::Relaxed;
+        use core::sync::atomic::Ordering::Relaxed;
 
         fmt.debug_struct("Inner")
             .field("state", &State::load(&self.state, Relaxed))

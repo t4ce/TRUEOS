@@ -274,6 +274,9 @@
 //! [`task::yield_now`]: crate::task::yield_now()
 //! [`thread::yield_now`]: std::thread::yield_now
 
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub use core::task::{ready, Context, Poll, RawWaker, RawWakerVTable, Waker};
+
 cfg_rt! {
     pub use crate::runtime::task::{JoinError, JoinHandle};
 

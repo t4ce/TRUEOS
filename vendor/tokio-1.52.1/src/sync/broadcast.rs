@@ -123,13 +123,14 @@ use crate::task::coop::cooperative;
 use crate::util::linked_list::{self, GuardedLinkedList, LinkedList};
 use crate::util::WakeList;
 
-use std::fmt;
-use std::future::Future;
-use std::marker::PhantomPinned;
-use std::pin::Pin;
-use std::ptr::NonNull;
-use std::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release, SeqCst};
-use std::task::{ready, Context, Poll, Waker};
+use alloc::{boxed::Box, vec::Vec};
+use core::fmt;
+use core::future::Future;
+use core::marker::PhantomPinned;
+use core::pin::Pin;
+use core::ptr::NonNull;
+use core::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release, SeqCst};
+use core::task::{ready, Context, Poll, Waker};
 
 /// Sending-half of the [`broadcast`] channel.
 ///
@@ -247,7 +248,7 @@ pub struct Receiver<T> {
 pub mod error {
     //! Broadcast error types
 
-    use std::fmt;
+    use core::fmt;
 
     /// Error returned by the [`send`] function on a [`Sender`].
     ///
@@ -503,7 +504,7 @@ const MAX_RECEIVERS: usize = usize::MAX >> 2;
 /// This will panic if `capacity` is equal to `0`.
 ///
 /// This pre-allocates space for `capacity` messages. Allocation failure may result in a panic or
-/// [an allocation error](std::alloc::handle_alloc_error).
+/// [an allocation error](alloc::alloc::handle_alloc_error).
 #[track_caller]
 pub fn channel<T: Clone>(capacity: usize) -> (Sender<T>, Receiver<T>) {
     // SAFETY: In the line below we are creating one extra receiver, so there will be 1 in total.

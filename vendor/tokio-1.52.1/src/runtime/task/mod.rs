@@ -225,14 +225,14 @@ cfg_taskdump! {
     pub(crate) mod trace;
 }
 
-use core::future::Future;
+use ::core::future::Future;
 use crate::util::linked_list;
 use crate::util::sharded_list;
 
 use crate::runtime::TaskCallback;
-use core::marker::PhantomData;
+use ::core::marker::PhantomData;
 use std::panic::Location;
-use core::ptr::NonNull;
+use ::core::ptr::NonNull;
 use std::{fmt, mem};
 
 /// An owned handle to the task, tracked by ref count.
@@ -386,8 +386,8 @@ cfg_rt! {
             raw: task.raw,
             _p: PhantomData,
         };
-        core::mem::forget(task);
-        core::mem::forget(notified);
+        ::core::mem::forget(task);
+        ::core::mem::forget(notified);
 
         (unowned, join)
     }

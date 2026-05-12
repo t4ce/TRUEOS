@@ -1,6 +1,3 @@
-#[allow(unused_imports)]
-use crate::runtime::prelude::*;
-
 // Currently, rust warns when an unsafe fn contains an unsafe {} block. However,
 // in the future, this will change to the reverse. For now, suppress this
 // warning and generally stick with being explicit about unsafety.
@@ -8,6 +5,9 @@ use crate::runtime::prelude::*;
 #![cfg_attr(not(feature = "rt"), allow(dead_code))]
 
 //! Time driver.
+
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
 
 mod entry;
 pub(crate) use entry::TimerEntry;

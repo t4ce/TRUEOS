@@ -4,10 +4,10 @@ use crate::loom::cell::UnsafeCell;
 use crate::loom::hint;
 use crate::loom::sync::atomic::AtomicUsize;
 
-use std::fmt;
+use core::fmt;
 use std::panic::{resume_unwind, AssertUnwindSafe, RefUnwindSafe, UnwindSafe};
-use std::sync::atomic::Ordering::{AcqRel, Acquire, Release};
-use std::task::Waker;
+use core::sync::atomic::Ordering::{AcqRel, Acquire, Release};
+use core::task::Waker;
 
 /// A synchronization primitive for task waking.
 ///

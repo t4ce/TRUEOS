@@ -10,7 +10,7 @@ use core::option::Option::{self, None, Some};
 use core::pin::Pin;
 use core::result::Result::{self, Err, Ok};
 use core::task::{Context, Poll};
-use core::{derive, fmt, panic};
+use core::{fmt, panic};
 
 use crate::runtime::Handle;
 use crate::task::Id;

@@ -1,14 +1,14 @@
 //! Abstracts out the entire chain of runtime sub-drivers into common types.
 
-#[allow(unused_imports)]
-use crate::runtime::prelude::*;
-
 // Eventually, this file will see significant refactoring / cleanup. For now, we
 // don't need to worry much about dead code with certain feature permutations.
 #![cfg_attr(
     any(not(all(tokio_unstable, feature = "full")), target_family = "wasm"),
     allow(dead_code)
 )]
+
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
 
 use crate::runtime::park::{ParkThread, UnparkThread};
 

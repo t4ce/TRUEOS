@@ -460,10 +460,12 @@
 //
 // TODO: improve once we have MSRV access to const eval to make more flexible.
 #[cfg(not(any(target_pointer_width = "32", target_pointer_width = "64")))]
-
 compile_error! {
     "Tokio requires the platform pointer width to be at least 32 bits"
 }
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+include!("trueos_std.rs");
 
 #[cfg(all(
     not(tokio_unstable),
@@ -642,7 +644,7 @@ pub mod doc;
 #[allow(unused)]
 pub(crate) use self::doc::os;
 
-#[cfg(not(all(docsrs, unix)))]
+#[cfg(all(not(all(docsrs, unix)), not(any(target_os = "trueos", target_os = "zkvm"))))]
 #[allow(unused)]
 pub(crate) use std::os;
 

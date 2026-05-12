@@ -11,14 +11,14 @@ use crate::loom::sync::Mutex;
 use crate::util::linked_list::{self, GuardedLinkedList, LinkedList};
 use crate::util::WakeList;
 
-use std::future::Future;
-use std::marker::PhantomPinned;
-use std::panic::{RefUnwindSafe, UnwindSafe};
-use std::pin::Pin;
-use std::ptr::NonNull;
-use std::sync::atomic::Ordering::{self, Acquire, Relaxed, Release, SeqCst};
-use std::sync::Arc;
-use std::task::{Context, Poll, Waker};
+use core::future::Future;
+use core::marker::PhantomPinned;
+use core::panic::{RefUnwindSafe, UnwindSafe};
+use core::pin::Pin;
+use core::ptr::NonNull;
+use core::sync::atomic::Ordering::{self, Acquire, Relaxed, Release, SeqCst};
+use crate::loom::sync::Arc;
+use core::task::{Context, Poll, Waker};
 
 type WaitList = LinkedList<Waiter, <Waiter as linked_list::Link>::Target>;
 type GuardedWaitList = GuardedLinkedList<Waiter, <Waiter as linked_list::Link>::Target>;
@@ -1229,7 +1229,7 @@ impl NotifiedProject<'_> {
                     #[cfg(feature = "taskdump")]
                     if let Some(waker) = waker {
                         let mut ctx = Context::from_waker(waker);
-                        std::task::ready!(crate::trace::trace_leaf(&mut ctx));
+                        core::task::ready!(crate::trace::trace_leaf(&mut ctx));
                     }
 
                     if waiter.notification.load(Acquire).is_some() {
@@ -1323,7 +1323,7 @@ impl NotifiedProject<'_> {
                     #[cfg(feature = "taskdump")]
                     if let Some(waker) = waker {
                         let mut ctx = Context::from_waker(waker);
-                        std::task::ready!(crate::trace::trace_leaf(&mut ctx));
+                        core::task::ready!(crate::trace::trace_leaf(&mut ctx));
                     }
                     return Poll::Ready(());
                 }

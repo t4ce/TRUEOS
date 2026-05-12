@@ -1,6 +1,6 @@
 use crate::sync::batch_semaphore::Semaphore;
-use std::marker::PhantomData;
-use std::{fmt, mem, ops};
+use core::marker::PhantomData;
+use core::{fmt, mem, ops};
 
 /// RAII structure used to release the exclusive write access of a lock when
 /// dropped.

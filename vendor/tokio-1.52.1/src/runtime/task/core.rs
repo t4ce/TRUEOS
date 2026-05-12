@@ -9,9 +9,6 @@
 //! Make sure to consult the relevant safety section of each function before
 //! use.
 
-#[allow(unused_imports)]
-use crate::runtime::prelude::*;
-
 // It doesn't make sense to enforce `unsafe_op_in_unsafe_fn` for this module because
 //
 // * This module is doing the low-level task management that requires tons of unsafe
@@ -20,6 +17,9 @@ use crate::runtime::prelude::*;
 // TODO: replace with `#[expect(unsafe_op_in_unsafe_fn)]` after bumpping
 // the MSRV to 1.81.0.
 #![allow(unsafe_op_in_unsafe_fn)]
+
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
 
 use core::future::Future;
 use crate::loom::cell::UnsafeCell;
