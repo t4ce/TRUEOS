@@ -67,15 +67,12 @@ mod shell2;
 mod smp;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod stackkeeper;
+mod surfer;
 mod t;
 mod tga;
 mod tst;
 #[path = "tst/boot_factory_ram_probe.rs"]
 mod tst_boot_factory_ram_probe;
-#[path = "surfer/html_demo.rs"]
-mod tst_html_demo;
-#[path = "surfer/html_shack.rs"]
-mod tst_html_shack;
 #[path = "tst/http_trueosfs.rs"]
 mod tst_http_trueosfs;
 #[path = "intel/gpgpu/mandelbrot_gpu_sidequest.rs"]

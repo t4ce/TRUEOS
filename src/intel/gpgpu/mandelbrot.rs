@@ -15,7 +15,7 @@ fn gpgpu_primary_scanout_pixel_quiet_program() -> GpgpuEuProgram {
 
 fn gpgpu_primary_scanout_mandelbrot8_program() -> GpgpuEuProgram {
     let artifact =
-        trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_ESCAPE_HDC1_BTI1_STORE_THEN_TS_EOT;
+        trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_ESCAPE_HDC1_BTI34_STORE_THEN_TS_EOT;
     GpgpuEuProgram {
         name: artifact.name,
         kind: artifact.kind,
@@ -330,6 +330,17 @@ fn submit_gpgpu_primary_scanout_mandelbrot_strip(
     if row_gpu >> 32 != 0 {
         return gpgpu_one_tile_sentinel_failure("strip-gpu-high32-unsupported", program, row_gpu);
     }
+    if row_gpu < scanout_gpu {
+        return gpgpu_one_tile_sentinel_failure("strip-before-scanout", program, row_gpu);
+    }
+    let row_offset = row_gpu - scanout_gpu;
+    if row_offset >> 32 != 0 {
+        return gpgpu_one_tile_sentinel_failure(
+            "strip-offset-high32-unsupported",
+            program,
+            row_gpu,
+        );
+    }
 
     let x_step_q12 = mandelbrot_q12_x_step(width);
     let c_re_base_q12 = mandelbrot_q12_c_re_base(x_base, width);
@@ -346,7 +357,7 @@ fn submit_gpgpu_primary_scanout_mandelbrot_strip(
     let output_first_before = before_words[0];
 
     let mut strip_words =
-        trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_ESCAPE_HDC1_BTI1_STORE_THEN_TS_EOT_WORDS;
+        trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_ESCAPE_HDC1_BTI34_STORE_THEN_TS_EOT_WORDS;
     let x_step_dwords = trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_X_STEP_DWORDS;
     let c_re_base_dwords = trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_C_RE_BASE_DWORDS;
     let address_offset_dwords =
@@ -354,7 +365,7 @@ fn submit_gpgpu_primary_scanout_mandelbrot_strip(
     for strip in 0..trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_STRIPS_PER_PROGRAM {
         strip_words[x_step_dwords[strip]] = x_step_q12 as u32;
         strip_words[c_re_base_dwords[strip]] = c_re_base_q12 as u32;
-        strip_words[address_offset_dwords[strip]] = row_gpu as u32;
+        strip_words[address_offset_dwords[strip]] = row_offset as u32;
     }
     strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_C_IM_DWORD] =
         c_im_q12 as u32;
@@ -365,7 +376,8 @@ fn submit_gpgpu_primary_scanout_mandelbrot_strip(
         let c_re_base_dword = c_re_base_dwords[0];
         let address_offset_dword = address_offset_dwords[0];
         crate::log!(
-            "intel/gpgpu: primary-scanout-mandelbrot16-patch row_gpu=0x{:X} row_virt=0x{:X} row={} x_base={} width={} height={} phase={} addressing=simd8x2-lane-derived-stateless-absolute-g127 q12_frac_bits={} max_iter={} store_surface=0x{:02X} lanes_per_send={} sends_per_program={} pixels_per_program={} x_step_q12={} c_re_base_q12={} c_im_q12={} x_step_dword={} c_re_base_dword={} c_im_dword={} address_offset_dword={} address_offset=0x{:X} first_before=0x{:08X} send_desc=0x{:08X} send_exdesc=0x{:08X} kernel_off=0x{:X} artifact_bytes=0x{:X} artifact_end_off=0x{:X} dynamic_state_off=0x{:X} bt_off=0x{:X} surf_off=0x{:X} store_state_after_artifact={} note=uniform-setup-patched-eu-words-before-upload\n",
+            "intel/gpgpu: primary-scanout-mandelbrot16-patch scanout_gpu=0x{:X} row_gpu=0x{:X} row_virt=0x{:X} row={} x_base={} width={} height={} phase={} addressing=simd8x2-lane-derived-bti34-surface-relative-g127 q12_frac_bits={} max_iter={} store_surface=0x{:02X} lanes_per_send={} sends_per_program={} pixels_per_program={} x_step_q12={} c_re_base_q12={} c_im_q12={} x_step_dword={} c_re_base_dword={} c_im_dword={} address_offset_dword={} address_offset=0x{:X} first_before=0x{:08X} send_desc=0x{:08X} send_exdesc=0x{:08X} kernel_off=0x{:X} artifact_bytes=0x{:X} artifact_end_off=0x{:X} dynamic_state_off=0x{:X} bt_off=0x{:X} surf_off=0x{:X} store_state_after_artifact={} note=uniform-setup-patched-eu-words-before-upload\n",
+            scanout_gpu,
             row_gpu,
             row_virt as usize,
             y,
@@ -615,15 +627,15 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot_preview(
             proof.finished && proof.finish_marker == RCS_EXEC_RESULT_COMPUTE_WALKER_DONE;
         if strip_finished {
             finished_strips += 1;
-            advanced_strips += 1;
         }
         if strip_changed {
             accepted_strips += 1;
-        }
-        last_proof = proof;
-        if !strip_finished {
+            advanced_strips += 1;
+        } else {
+            last_proof = proof;
             break;
         }
+        last_proof = proof;
         idx += 1;
         if idx == total_strips {
             idx = 0;
@@ -649,7 +661,7 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot_preview(
         (accepted_strips != 0 && (start_cursor == 0 || next_cursor == 0)) || !last_proof.finished;
     if should_log_preview {
         crate::log!(
-            "intel/gpgpu: primary-scanout-mandelbrot16-preview submitted_programs={} finished_programs={} changed_programs={} advanced_programs={} pixels_per_program={} submitted_pixels={} changed_pixels={} strict_readback_ok={} reason={} program_source={} primary_gpu=0x{:X} primary_bytes=0x{:X} cursor_in={} cursor_out={} strip_budget={} burst_cap={} last_gpu=0x{:X} last_first_before=0x{:08X} last_first_after=0x{:08X} last_change_mask=0x{:016X} display_notified={} finish_marker=0x{:08X} finish_expected=0x{:08X} action={} next={} deliverable=visible-mandelbrot-frame-progress\n",
+            "intel/gpgpu: primary-scanout-mandelbrot16-preview submitted_programs={} finished_programs={} changed_programs={} advanced_programs={} pixels_per_program={} submitted_pixels={} changed_pixels={} strict_readback_ok={} reason={} program_source={} primary_gpu=0x{:X} primary_bytes=0x{:X} cursor_in={} cursor_out={} strip_budget={} burst_cap={} last_gpu=0x{:X} last_first_before=0x{:08X} last_first_after=0x{:08X} last_change_mask=0x{:016X} display_notified={} finish_marker=0x{:08X} finish_expected=0x{:08X} lane_dispatch_delta={} action={} next={} deliverable=visible-mandelbrot-frame-progress\n",
             submitted_strips,
             finished_strips,
             accepted_strips,
@@ -673,6 +685,7 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot_preview(
             display_notified as u8,
             last_proof.finish_marker,
             last_proof.expected_finish_marker,
+            last_proof.dispatch_delta,
             if readback_ok {
                 "continue-gpgpu-strip-preview"
             } else {

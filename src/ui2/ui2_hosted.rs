@@ -1,35 +1,27 @@
 use super::*;
 
 pub(super) type HostedContentId = u32;
-pub(super) type UiHostedSurfaceState = trueos_qjs::browser_task::HostedBrowserSurfaceState;
-pub(super) type UiHostedInteractiveState = trueos_qjs::browser_task::HostedBrowserInteractiveState;
-pub(super) type UiHostedGadgetSnapshot = trueos_qjs::browser_task::HostedBrowserGadgetSnapshot;
-pub(super) type UiHostedKeyboardEvent = trueos_qjs::browser_task::HostedKeyboardEvent;
+pub(super) type UiHostedSurfaceState = crate::surfer::HostedSurfaceState;
+pub(super) type UiHostedInteractiveState = crate::surfer::HostedInteractiveState;
+pub(super) type UiHostedGadgetSnapshot = crate::surfer::HostedGadgetSnapshot;
+pub(super) type UiHostedKeyboardEvent = crate::surfer::HostedKeyboardEvent;
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
-use spin::Mutex;
 
 pub(super) const PRIMARY_HOSTED_CONTENT_ID: HostedContentId = 1;
-pub(super) const HOSTED_KEYBOARD_MOD_SHIFT: u8 =
-    trueos_qjs::browser_task::HOSTED_KEYBOARD_MOD_SHIFT;
-pub(super) const HOSTED_KEYBOARD_MOD_CTRL: u8 = trueos_qjs::browser_task::HOSTED_KEYBOARD_MOD_CTRL;
-pub(super) const HOSTED_KEYBOARD_MOD_ALT: u8 = trueos_qjs::browser_task::HOSTED_KEYBOARD_MOD_ALT;
-pub(super) const HOSTED_KEYBOARD_MOD_META: u8 = trueos_qjs::browser_task::HOSTED_KEYBOARD_MOD_META;
+pub(super) const HOSTED_KEYBOARD_MOD_SHIFT: u8 = crate::surfer::HOSTED_KEYBOARD_MOD_SHIFT;
+pub(super) const HOSTED_KEYBOARD_MOD_CTRL: u8 = crate::surfer::HOSTED_KEYBOARD_MOD_CTRL;
+pub(super) const HOSTED_KEYBOARD_MOD_ALT: u8 = crate::surfer::HOSTED_KEYBOARD_MOD_ALT;
+pub(super) const HOSTED_KEYBOARD_MOD_META: u8 = crate::surfer::HOSTED_KEYBOARD_MOD_META;
 
 const UI2_BROWSER_ADAPTER_ENABLED: bool = true;
-pub(super) const HOSTED_BROWSER_DIRTY_CONTENT: u32 = 1 << 0;
-pub(super) const HOSTED_BROWSER_DIRTY_INTERACTIVE: u32 = 1 << 1;
 const TITLE_ICON_FETCH_POLL_MS: u64 = 8;
 
-#[derive(Copy, Clone, Debug, Default)]
-pub(super) struct HostedBrowserDirtyMask {
-    pub content: u64,
-    pub interactive: u64,
-}
+pub(super) type HostedBrowserDirtyMask = crate::surfer::HostedBrowserDirtyMask;
 
 #[derive(Clone, Debug, Default)]
 pub(super) struct UiHostedBrowserSnapshot {
@@ -38,23 +30,8 @@ pub(super) struct UiHostedBrowserSnapshot {
     pub gadget_snapshot: UiHostedGadgetSnapshot,
 }
 
-#[derive(Copy, Clone, Debug, Default)]
-struct HostedBrowserFactorySignalState {
-    latest_mask: u64,
-    seq: u32,
-    taken_seq: u32,
-}
-
-static HOSTED_BROWSER_FACTORY_SIGNAL: Mutex<HostedBrowserFactorySignalState> =
-    Mutex::new(HostedBrowserFactorySignalState {
-        latest_mask: 0,
-        seq: 0,
-        taken_seq: 0,
-    });
 static UI2_HOSTED_SYNC_STARTED: AtomicBool = AtomicBool::new(false);
 static UI2_HOSTED_CONTAINER_SYNC_QUEUED: AtomicBool = AtomicBool::new(false);
-static HOSTED_BROWSER_DIRTY_CONTENT_MASK: AtomicU64 = AtomicU64::new(0);
-static HOSTED_BROWSER_DIRTY_INTERACTIVE_MASK: AtomicU64 = AtomicU64::new(0);
 const UI2_HOSTED_VM_ID: u8 = 0;
 static UI2_VM_START_REQUESTED: AtomicBool = AtomicBool::new(false);
 static UI2_VM_RUNNING_RENDERED: AtomicBool = AtomicBool::new(false);
@@ -160,19 +137,19 @@ struct BrowserUiHostedAdapter;
 
 impl UiHostedSurfaceProvider for BrowserUiHostedAdapter {
     fn interactive_seq(&self, content_id: HostedContentId) -> u32 {
-        trueos_qjs::browser_task::hosted_interactive_seq_for_browser(content_id)
+        crate::surfer::hosted_interactive_seq(content_id)
     }
 
     fn surface_state(&self, content_id: HostedContentId) -> UiHostedSurfaceState {
-        trueos_qjs::browser_task::hosted_surface_state_for_browser(content_id)
+        crate::surfer::hosted_surface_state(content_id)
     }
 
     fn interactive_state(&self, content_id: HostedContentId) -> UiHostedInteractiveState {
-        trueos_qjs::browser_task::hosted_interactive_state_for_browser(content_id)
+        crate::surfer::hosted_interactive_state(content_id)
     }
 
     fn gadget_snapshot(&self, content_id: HostedContentId) -> UiHostedGadgetSnapshot {
-        trueos_qjs::browser_task::hosted_gadget_snapshot_for_browser(content_id)
+        crate::surfer::hosted_gadget_snapshot(content_id)
     }
 }
 
@@ -187,7 +164,7 @@ impl UiHostedViewportSink for BrowserUiHostedAdapter {
         content_width: u32,
         content_height: u32,
     ) -> bool {
-        trueos_qjs::browser_task::set_hosted_viewport_for_browser(
+        crate::surfer::set_hosted_viewport(
             content_id,
             viewport_width,
             viewport_height,
@@ -203,17 +180,10 @@ impl UiHostedInputSink for BrowserUiHostedAdapter {
     fn send_input(&self, content_id: HostedContentId, input: UiHostedInput<'_>) -> bool {
         match input {
             UiHostedInput::Scroll { scroll_x, scroll_y } => {
-                trueos_qjs::browser_task::set_hosted_scroll_for_browser(
-                    content_id, scroll_x, scroll_y,
-                )
+                crate::surfer::set_hosted_scroll(content_id, scroll_x, scroll_y)
             }
             UiHostedInput::Keyboard { events } => {
-                let window_id =
-                    trueos_qjs::browser_task::browser_window_id_for_instance(content_id);
-                if window_id == 0 {
-                    return false;
-                }
-                trueos_qjs::browser_task::queue_hosted_keyboard_events(window_id, events)
+                crate::surfer::queue_hosted_keyboard_events(content_id, events)
             }
         }
     }
@@ -221,15 +191,15 @@ impl UiHostedInputSink for BrowserUiHostedAdapter {
 
 impl UiHostedWindowBinder for BrowserUiHostedAdapter {
     fn bind_window(&self, content_id: HostedContentId, window_id: u32) -> bool {
-        trueos_qjs::browser_task::bind_browser_window_to_instance(content_id, window_id)
+        crate::surfer::bind_browser_window_to_instance(content_id, window_id)
     }
 
     fn primary_window_id(&self) -> u32 {
-        self.window_id_for_content(PRIMARY_HOSTED_CONTENT_ID)
+        crate::surfer::primary_browser_window_id()
     }
 
     fn window_id_for_content(&self, content_id: HostedContentId) -> u32 {
-        trueos_qjs::browser_task::browser_window_id_for_instance(content_id)
+        crate::surfer::browser_window_id_for_instance(content_id)
     }
 }
 
@@ -351,52 +321,18 @@ pub(super) fn hosted_queue_keyboard_events(
     hosted_adapter().send_input(content_id, UiHostedInput::Keyboard { events })
 }
 
-pub(crate) fn signal_hosted_browser_factory_mask(mask: u64) {
-    let mut signal = HOSTED_BROWSER_FACTORY_SIGNAL.lock();
-    signal.latest_mask = mask;
-    signal.seq = signal.seq.wrapping_add(1).max(1);
-}
-
 #[inline]
 pub(super) fn queue_hosted_container_sync() {
     UI2_HOSTED_CONTAINER_SYNC_QUEUED.store(true, Ordering::Release);
 }
 
-#[inline]
-fn hosted_browser_bit(content_id: HostedContentId) -> Option<u64> {
-    if !(1..=64).contains(&content_id) {
-        return None;
-    }
-    Some(1u64 << content_id.saturating_sub(1))
-}
-
-pub(crate) fn signal_hosted_browser_dirty(content_id: HostedContentId, flags: u32) {
-    let Some(bit) = hosted_browser_bit(content_id) else {
-        return;
-    };
-    if (flags & HOSTED_BROWSER_DIRTY_CONTENT) != 0 {
-        HOSTED_BROWSER_DIRTY_CONTENT_MASK.fetch_or(bit, Ordering::Release);
-    }
-    if (flags & HOSTED_BROWSER_DIRTY_INTERACTIVE) != 0 {
-        HOSTED_BROWSER_DIRTY_INTERACTIVE_MASK.fetch_or(bit, Ordering::Release);
-    }
-}
-
 pub(super) fn take_hosted_browser_dirty_mask() -> HostedBrowserDirtyMask {
-    HostedBrowserDirtyMask {
-        content: HOSTED_BROWSER_DIRTY_CONTENT_MASK.swap(0, Ordering::AcqRel),
-        interactive: HOSTED_BROWSER_DIRTY_INTERACTIVE_MASK.swap(0, Ordering::AcqRel),
-    }
+    crate::surfer::take_hosted_browser_dirty_mask()
 }
 
 #[inline]
 pub(super) fn take_hosted_browser_factory_mask() -> Option<u64> {
-    let mut signal = HOSTED_BROWSER_FACTORY_SIGNAL.lock();
-    if signal.seq == signal.taken_seq {
-        return None;
-    }
-    signal.taken_seq = signal.seq;
-    Some(signal.latest_mask)
+    crate::surfer::take_hosted_browser_factory_mask()
 }
 
 fn hosted_browser_factory_content_rect_for_view(
@@ -431,7 +367,7 @@ pub(super) fn sync_hosted_browser_factory_windows(active_mask: u64) -> usize {
         return 0;
     }
 
-    let active_ids: Vec<u32> = (1..=trueos_qjs::browser_task::MAX_BROWSER_INSTANCE_ID)
+    let active_ids: Vec<u32> = (1..=crate::surfer::MAX_BROWSER_INSTANCE_ID)
         .filter(|browser_instance_id| {
             let bit = 1u64 << browser_instance_id.saturating_sub(1);
             (active_mask & bit) != 0
@@ -456,8 +392,7 @@ pub(super) fn sync_hosted_browser_factory_windows(active_mask: u64) -> usize {
         let title = format!("Truesurfer {}", browser_instance_id);
         let content_rect =
             hosted_browser_factory_content_rect_for_view(view_w, view_h, slot as u32, total);
-        let tex_id =
-            trueos_qjs::browser_task::render_tex_id_for_browser_instance(browser_instance_id);
+        let tex_id = crate::surfer::render_tex_id_for_browser_instance(browser_instance_id);
         let window_id = create_hosted_browser_content_window(
             title.as_str(),
             content_rect,
@@ -619,36 +554,6 @@ fn ico_best_png_payload(bytes: &[u8]) -> Option<&[u8]> {
     best.map(|(_, _, offset, end)| &bytes[offset..end])
 }
 
-fn fetch_url_bytes_started(url: &str) -> Result<u32, i32> {
-    if url.starts_with('/') {
-        trueos_qjs::async_fs::start_read_file(url.as_bytes())
-    } else {
-        trueos_qjs::async_fs::start_net_fetch_bytes(url.as_bytes())
-    }
-}
-
-async fn wait_for_fetch_bytes(op_id: u32) -> Result<Vec<u8>, i32> {
-    loop {
-        let rc_or_done = trueos_qjs::async_fs::result_len(op_id);
-        if rc_or_done == trueos_qjs::async_fs::FS_ERR_NOT_FOUND as isize {
-            Timer::after(EmbassyDuration::from_millis(TITLE_ICON_FETCH_POLL_MS)).await;
-            continue;
-        }
-        if rc_or_done < 0 {
-            let _ = trueos_qjs::async_fs::discard(op_id);
-            return Err(rc_or_done as i32);
-        }
-        let mut bytes = vec![0u8; rc_or_done as usize];
-        let got = trueos_qjs::async_fs::read_result(op_id, bytes.as_mut_ptr(), bytes.len());
-        if got < 0 {
-            let _ = trueos_qjs::async_fs::discard(op_id);
-            return Err(got as i32);
-        }
-        bytes.truncate(got as usize);
-        return Ok(bytes);
-    }
-}
-
 async fn wait_for_texture_ready(tex_id: u32) -> Result<(), i32> {
     loop {
         let status = crate::r::io::cabi::trueos_cabi_gfx_texture_status(tex_id);
@@ -728,7 +633,7 @@ fn sync_hosted_browser_window_metadata(state: &mut Ui2State, spawner: &Spawner) 
         .collect();
     for (window_id, browser_instance_id) in browser_windows {
         let Some(parse_result) =
-            trueos_qjs::browser_task::latest_parse_result_for_browser(browser_instance_id)
+            crate::surfer::latest_parse_result_for_browser(browser_instance_id)
         else {
             continue;
         };
@@ -747,11 +652,7 @@ fn sync_hosted_browser_window_metadata(state: &mut Ui2State, spawner: &Spawner) 
 
 #[embassy_executor::task(pool_size = 8)]
 async fn browser_title_icon_fetch_task(window_id: u32, load_seq: u32, tex_id: u32, url: String) {
-    let op_id = match fetch_url_bytes_started(url.as_str()) {
-        Ok(op_id) => op_id,
-        Err(_) => return,
-    };
-    let bytes = match wait_for_fetch_bytes(op_id).await {
+    let bytes = match crate::surfer::fetch_browser_asset_bytes(url.as_str()).await {
         Ok(bytes) => bytes,
         Err(_) => return,
     };

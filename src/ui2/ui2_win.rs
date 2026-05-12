@@ -631,7 +631,7 @@ pub(super) fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) 
     let (next_browser_instance_id, next_tex_id, fork_reason) = match next_kind {
         Ui2WindowKind::HostedBrowser => {
             let source_browser_instance_id = window_browser_instance_id(source_window);
-            let target_browser_instance_id = trueos_qjs::browser_task::BOOT_BROWSER_INSTANCE_IDS
+            let target_browser_instance_id = crate::surfer::boot_browser_instance_ids()
                 .iter()
                 .copied()
                 .find(|browser_instance_id| {
@@ -651,9 +651,7 @@ pub(super) fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) 
             };
             (
                 target_browser_instance_id,
-                trueos_qjs::browser_task::render_tex_id_for_browser_instance(
-                    target_browser_instance_id,
-                ),
+                crate::surfer::render_tex_id_for_browser_instance(target_browser_instance_id),
                 "fork-browser-window",
             )
         }
@@ -712,10 +710,8 @@ pub(super) fn fork_window_in_state(state: &mut Ui2State, source_window_id: u32) 
 
     if next_kind == Ui2WindowKind::HostedBrowser {
         let _ = hosted_bind_window(next_browser_instance_id, id);
-        let _ = trueos_qjs::browser_task::set_browser_render_target_tex_id_for_browser(
-            next_browser_instance_id,
-            next_tex_id,
-        );
+        let _ =
+            crate::surfer::set_browser_render_target_tex_id(next_browser_instance_id, next_tex_id);
     }
     state.compose_reason = fork_reason;
     let _ = note_window_dirty(state, id, fork_reason);
@@ -969,10 +965,7 @@ pub fn create_hosted_browser_window(
         UI2_BROWSER_WINDOW_ID.store(id, Ordering::Release);
     }
     let _ = hosted_bind_window(browser_instance_id, id);
-    let _ = trueos_qjs::browser_task::set_browser_render_target_tex_id_for_browser(
-        browser_instance_id,
-        tex_id,
-    );
+    let _ = crate::surfer::set_browser_render_target_tex_id(browser_instance_id, tex_id);
     state.compose_reason = "create-browser-window";
     refresh_window_hit_entries(&mut state, id);
     UI2_DIRTY.store(true, Ordering::Release);

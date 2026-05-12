@@ -36,8 +36,8 @@ pub(crate) use self::ui2_hid::{
 };
 pub(crate) use self::ui2_hit::ui2_hit_task;
 use self::ui2_hit::*;
+pub(crate) use self::ui2_hosted::ui2_hosted_task;
 use self::ui2_hosted::*;
-pub(crate) use self::ui2_hosted::{signal_hosted_browser_factory_mask, ui2_hosted_task};
 pub use self::ui2_win::*;
 pub use self::ui2_win_deco::*;
 use trueos_gfx_core::{
@@ -1232,7 +1232,7 @@ fn note_window_viewport_sync_needed(state: &mut Ui2State, id: u32) -> bool {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_ui2_signal_hosted_browser_dirty(content_id: u32, flags: u32) {
-    signal_hosted_browser_dirty(content_id, flags);
+    crate::surfer::signal_hosted_browser_dirty(content_id, flags);
 }
 
 #[unsafe(no_mangle)]
