@@ -62,12 +62,6 @@ mod power;
 #[path = "power/power_disabled.rs"]
 mod power;
 mod r;
-#[cfg(target_arch = "x86_64")]
-#[path = "power/rapl.rs"]
-mod rapl;
-#[cfg(not(target_arch = "x86_64"))]
-#[path = "power/rapl_disabled.rs"]
-mod rapl;
 mod runtime;
 mod shell2;
 mod smp;

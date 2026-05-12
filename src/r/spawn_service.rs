@@ -578,7 +578,7 @@ fn spawn_intel_hda_probe_task(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_raple_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::rapl::raple_service())
+    spawn_local(spawner, |_spawner| crate::power::rapl::raple_service())
 }
 
 fn spawn_gfx_texture_upload_service(spawner: Spawner) -> SpawnAttempt {

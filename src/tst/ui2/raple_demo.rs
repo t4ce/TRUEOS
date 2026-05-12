@@ -205,8 +205,8 @@ fn render_chart(
 }
 
 fn domain_rows(
-    current: &crate::rapl::RaplSnapshot,
-    previous: Option<&crate::rapl::RaplSnapshot>,
+    current: &crate::power::rapl::RaplSnapshot,
+    previous: Option<&crate::power::rapl::RaplSnapshot>,
 ) -> Option<[DomainDisplay; 5]> {
     let latest = current.latest?;
     let elapsed = previous
@@ -214,7 +214,8 @@ fn domain_rows(
         .unwrap_or(0.0);
     let prev_probe = previous.and_then(|prev| prev.latest);
 
-    let power_for = |cur: crate::rapl::RaplSample, prev: Option<crate::rapl::RaplSample>| {
+    let power_for = |cur: crate::power::rapl::RaplSample,
+                     prev: Option<crate::power::rapl::RaplSample>| {
         let Some(prev) = prev else {
             return None;
         };
@@ -257,8 +258,8 @@ fn domain_rows(
 
 fn compose_raple(
     atlases: &ui2::Ui2FontCpuAtlases,
-    current: &crate::rapl::RaplSnapshot,
-    previous: Option<&crate::rapl::RaplSnapshot>,
+    current: &crate::power::rapl::RaplSnapshot,
+    previous: Option<&crate::power::rapl::RaplSnapshot>,
     history: &[f32],
 ) -> Vec<u8> {
     let dst_w = UI2_RAPLE_VIEW_W as usize;
@@ -402,8 +403,8 @@ fn compose_raple(
 
 fn maybe_push_history(
     history: &mut Vec<f32>,
-    previous: &crate::rapl::RaplSnapshot,
-    current: &crate::rapl::RaplSnapshot,
+    previous: &crate::power::rapl::RaplSnapshot,
+    current: &crate::power::rapl::RaplSnapshot,
 ) {
     let Some(cur) = current.latest else {
         return;
@@ -433,8 +434,8 @@ fn maybe_push_history(
 fn present_raple(
     surface: &ui2::Ui2SurfaceWindow,
     atlases: &ui2::Ui2FontCpuAtlases,
-    current: &crate::rapl::RaplSnapshot,
-    previous: Option<&crate::rapl::RaplSnapshot>,
+    current: &crate::power::rapl::RaplSnapshot,
+    previous: Option<&crate::power::rapl::RaplSnapshot>,
     history: &[f32],
 ) {
     let _ =
@@ -487,11 +488,11 @@ pub async fn ui2_raple_demo_task() {
     let _ = ui2::set_window_bottom_scrollbar_visible(window_id, false);
 
     let mut history = Vec::with_capacity(UI2_RAPLE_HISTORY_SECS);
-    let mut current = crate::rapl::latest_snapshot();
-    let mut previous = None::<crate::rapl::RaplSnapshot>;
+    let mut current = crate::power::rapl::latest_snapshot();
+    let mut previous = None::<crate::power::rapl::RaplSnapshot>;
     present_raple(&surface, &atlases, &current, previous.as_ref(), history.as_slice());
 
-    let mut receiver = crate::rapl::subscribe();
+    let mut receiver = crate::power::rapl::subscribe();
     loop {
         if crate::r::spawn_service::task_stop_requested("ui2-raple-demo") {
             break;
@@ -502,7 +503,7 @@ pub async fn ui2_raple_demo_task() {
             if crate::r::spawn_service::wait_task_or_timeout_ms("ui2-raple-demo", 1_000).await {
                 break;
             }
-            crate::rapl::latest_snapshot()
+            crate::power::rapl::latest_snapshot()
         };
 
         if next.update_count != current.update_count {

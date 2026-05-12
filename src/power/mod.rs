@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+pub(crate) mod rapl;
 pub(crate) mod turbo;
 
 use core::arch::x86_64::__cpuid;

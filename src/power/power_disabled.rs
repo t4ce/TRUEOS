@@ -4,6 +4,10 @@ use core::sync::atomic::{AtomicU8, Ordering};
 
 use spin::Once;
 
+pub mod rapl {
+    include!("rapl_disabled.rs");
+}
+
 pub mod turbo {
     use core::sync::atomic::{AtomicU8, Ordering};
 
