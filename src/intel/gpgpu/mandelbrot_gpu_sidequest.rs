@@ -14,8 +14,9 @@ pub(crate) const MANDELBROT_FRAGMENT_SPIRV_BYTES: &[u8] =
 pub(crate) const MANDELBROT_TARGET_WIDTH: u32 = 2560;
 pub(crate) const MANDELBROT_TARGET_HEIGHT: u32 = 1440;
 pub(crate) const MANDELBROT_PUSH_CONSTANT_BYTES: u16 = 24;
-pub(crate) const MANDELBROT_GPGPU_LOOP_MS: u64 = 100;
+pub(crate) const MANDELBROT_GPGPU_LOOP_MS: u64 = 1_000;
 pub(crate) const MANDELBROT_GPGPU_PREVIEW_PIXELS_PER_TICK: usize = 8192;
+pub(crate) const MANDELBROT_GPGPU_FULLSCREEN_ROWS_PER_TICK: u64 = 16;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum MandelbrotGpuArtifactStage {
@@ -124,7 +125,7 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
     let spirv_sig = byte_signature(shader_desc.bytes);
 
     crate::log!(
-        "mandelbrot-gpu-sidequest: attempted name={} called=1 hot=1 artifact_stage={} source={} spirv={} spirv_bytes={} spirv_sig=0x{:016X} target={}x{} rgba_bytes=0x{:X} push_constants={} render_path={} fallback_present={} scanout={}x{} primary_gpu=0x{:X} shader_helper_ready={} upload=custom-intel-gpgpu-program action=render-visible-mandelbrot-frame next=gpgpu-primary-framebuffer-q12-mandelbrot\n",
+        "mandelbrot-gpu-sidequest: attempted name={} called=1 hot=1 artifact_stage={} source={} spirv={} spirv_bytes={} spirv_sig=0x{:016X} target={}x{} rgba_bytes=0x{:X} push_constants={} render_path={} fallback_present={} scanout={}x{} primary_gpu=0x{:X} shader_helper_ready={} upload=custom-intel-gpgpu-program action=render-row2560-simd8-then-fullscreen-line320 next=lane-indexed-row-before-mandelbrot-fill\n",
         plan.name,
         plan.stage.as_str(),
         plan.source_path,
@@ -145,52 +146,101 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
 
     let mut frame: u64 = 0;
     let mut released_lumen = false;
-    let mut preview_cursor = 0usize;
-    let mut target_phase = 0usize;
+    let row_probe = crate::intel::submit_gpgpu_primary_scanout_row2560_simd8_probe(1, frame as u32);
+    if row_probe.submitted && !released_lumen {
+        crate::r::readiness::set(crate::r::readiness::MANDELBROT_GPU_SIDEQUEST_READY);
+        released_lumen = true;
+    }
+    crate::log!(
+        "mandelbrot-gpu-sidequest: gpgpu-primary-framebuffer-row2560-simd8-probe submitted={} finished={} readback_ok={} reason={} program_source={} target_gpu=0x{:X} sample_change_mask=0x{:016X} lane_dispatch_delta={} finish_marker=0x{:08X} lumen_released={} action={} next={} deliverable=one-submit-full-width-row\n",
+        row_probe.submitted as u8,
+        row_probe.finished as u8,
+        row_probe.readback_ok as u8,
+        row_probe.reason,
+        row_probe.program_name,
+        row_probe.output_gpu,
+        row_probe.output_hits_lo64,
+        row_probe.dispatch_delta,
+        row_probe.finish_marker,
+        released_lumen as u8,
+        if row_probe.readback_ok {
+            "continue-fullscreen-line-pilot"
+        } else {
+            "keep-line320-sweep-while-fixing-row2560"
+        },
+        if row_probe.readback_ok {
+            "promote-row2560-simd8-sweep"
+        } else {
+            "fix-simd8-store-payload"
+        },
+    );
+    let line_pixels = trueos_eu::gfx12::PRIMARY_SCANOUT_LINE320_SCALAR_BW_LANES as u64;
+    let segments_per_row = core::cmp::max(
+        1,
+        (scanout_w as u64).saturating_add(line_pixels.saturating_sub(1)) / line_pixels,
+    );
+    let submits_per_tick =
+        segments_per_row.saturating_mul(MANDELBROT_GPGPU_FULLSCREEN_ROWS_PER_TICK);
     loop {
-        let cursor_before = preview_cursor;
-        let target_quadrant = target_phase & 3;
-        let (proof, next_cursor) = crate::intel::submit_gpgpu_primary_scanout_mandelbrot_preview(
-            preview_cursor,
-            target_phase,
-            MANDELBROT_GPGPU_PREVIEW_PIXELS_PER_TICK,
-        );
-        preview_cursor = next_cursor;
-        target_phase = target_phase.wrapping_add(1);
-        let cursor_moved = preview_cursor != cursor_before;
-        if cursor_moved && !released_lumen {
-            crate::r::readiness::set(crate::r::readiness::MANDELBROT_GPU_SIDEQUEST_READY);
-            released_lumen = true;
+        let first_serial = frame.saturating_mul(submits_per_tick);
+        let mut submitted = 0u64;
+        let mut finished = 0u64;
+        let mut readback_ok = 0u64;
+        let mut dispatch_delta = 0u64;
+        let mut submit = 0u64;
+        let mut last_proof = None;
+        while submit < submits_per_tick {
+            let serial = first_serial.saturating_add(submit);
+            let row = serial / segments_per_row;
+            let mode = (row & 1) as u32;
+            let proof = crate::intel::submit_gpgpu_primary_scanout_line_pilot(mode, serial as u32);
+            submitted = submitted.saturating_add(proof.submitted as u64);
+            finished = finished.saturating_add(proof.finished as u64);
+            readback_ok = readback_ok.saturating_add(proof.readback_ok as u64);
+            dispatch_delta = dispatch_delta.saturating_add(proof.dispatch_delta as u64);
+            if proof.submitted && !released_lumen {
+                crate::r::readiness::set(crate::r::readiness::MANDELBROT_GPU_SIDEQUEST_READY);
+                released_lumen = true;
+            }
+            let proof_ok = proof.readback_ok;
+            last_proof = Some(proof);
+            if !proof_ok {
+                break;
+            }
+            submit += 1;
         }
-        let should_log_frame = frame < 4 || frame % 64 == 0 || proof.readback_ok;
-        if should_log_frame {
+
+        let should_log_frame = frame < 4 || frame % 8 == 0 || readback_ok != submitted;
+        if should_log_frame && let Some(last_proof) = last_proof {
             crate::log!(
-                "mandelbrot-gpu-sidequest: gpgpu-primary-framebuffer-mandelbrot8-loop frame={} target_quadrant={} submitted={} finished={} readback_ok={} reason={} program_source={} target_gpu=0x{:X} first_before=0x{:08X} after=0x{:08X} lane_change_mask=0x{:016X} lane_dispatch_delta={} finish_marker=0x{:08X} preview_cursor={} pixels_per_tick={} lumen_released={} action={} next={} deliverable=visible-mandelbrot-pixels\n",
+                "mandelbrot-gpu-sidequest: gpgpu-primary-framebuffer-fullscreen-line320-loop frame={} first_serial={} segments_per_row={} rows_per_tick={} submitted={} finished={} readback_ok={} reason={} program_source={} target_gpu=0x{:X} sample_before=0x{:08X} sample_after=0x{:08X} sample_change_mask=0x{:016X} lane_dispatch_delta={} finish_marker=0x{:08X} lumen_released={} action={} next={} deliverable=full-screen-line320-pilot\n",
                 frame,
-                target_quadrant,
-                proof.submitted as u8,
-                proof.finished as u8,
-                proof.readback_ok as u8,
-                proof.reason,
-                proof.program_name,
-                proof.output_gpu,
-                proof.output_first_before,
-                proof.output_first_after,
-                proof.output_hits_lo64,
-                proof.dispatch_delta,
-                proof.finish_marker,
-                preview_cursor,
-                MANDELBROT_GPGPU_PREVIEW_PIXELS_PER_TICK,
+                first_serial,
+                segments_per_row,
+                MANDELBROT_GPGPU_FULLSCREEN_ROWS_PER_TICK,
+                submitted,
+                finished,
+                readback_ok,
+                last_proof.reason,
+                last_proof.program_name,
+                last_proof.output_gpu,
+                last_proof.output_first_before,
+                last_proof.output_first_after,
+                last_proof.output_hits_lo64,
+                dispatch_delta,
+                last_proof.finish_marker,
                 released_lumen as u8,
-                if cursor_moved {
-                    "continue-sidequest-loop"
+                if submitted != 0 {
+                    "continue-fullscreen-line-pilot"
                 } else {
-                    "hold-lumen-load"
+                    "hold-fullscreen-line-pilot"
                 },
-                if cursor_moved {
-                    "continue-visible-gpgpu-pilot"
+                if readback_ok == submitted {
+                    "continue-fullscreen-fill"
+                } else if dispatch_delta != 0 {
+                    "fix-fullscreen-line-store"
                 } else {
-                    "fix-gpgpu-mandelbrot8-strip"
+                    "fix-fullscreen-line-submit"
                 },
             );
         }

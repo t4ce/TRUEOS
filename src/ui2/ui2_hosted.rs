@@ -331,11 +331,11 @@ pub(super) fn take_hosted_browser_dirty_mask() -> HostedBrowserDirtyMask {
 }
 
 #[inline]
-pub(super) fn take_hosted_browser_factory_mask() -> Option<u64> {
-    crate::surfer::take_hosted_browser_factory_mask()
+pub(super) fn take_hosted_browser_parse_pool_mask() -> Option<u64> {
+    crate::surfer::take_hosted_browser_parse_pool_mask()
 }
 
-fn hosted_browser_factory_content_rect_for_view(
+fn hosted_browser_parse_pool_content_rect_for_view(
     view_w: u32,
     view_h: u32,
     slot: u32,
@@ -362,7 +362,7 @@ fn hosted_browser_factory_content_rect_for_view(
     )
 }
 
-pub(super) fn sync_hosted_browser_factory_windows(active_mask: u64) -> usize {
+pub(super) fn sync_hosted_browser_parse_pool_windows(active_mask: u64) -> usize {
     if active_mask == 0 {
         return 0;
     }
@@ -391,7 +391,7 @@ pub(super) fn sync_hosted_browser_factory_windows(active_mask: u64) -> usize {
         }
         let title = format!("Truesurfer {}", browser_instance_id);
         let content_rect =
-            hosted_browser_factory_content_rect_for_view(view_w, view_h, slot as u32, total);
+            hosted_browser_parse_pool_content_rect_for_view(view_w, view_h, slot as u32, total);
         let tex_id = crate::surfer::render_tex_id_for_browser_instance(browser_instance_id);
         let window_id = create_hosted_browser_content_window(
             title.as_str(),
@@ -402,7 +402,7 @@ pub(super) fn sync_hosted_browser_factory_windows(active_mask: u64) -> usize {
             tex_id,
         );
         crate::log!(
-            "ui2: hosted-browser-factory window={} browser={} tex={} slot={} total={}\n",
+            "ui2: hosted-browser-parse-pool window={} browser={} tex={} slot={} total={}\n",
             window_id,
             browser_instance_id,
             tex_id,

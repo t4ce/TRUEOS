@@ -190,24 +190,22 @@ async fn store_ready_html(html: Html) -> usize {
 }
 
 pub async fn handoff_html_to_truesurfer(html: Html) -> bool {
-    let Some(browser_instance_id) = crate::surfer::spawn_truesurfer_tab_with_html() else {
-        crate::log!("html_shack: browser_handoff skipped url={} reason=spawn_failed\n", html.url);
+    let url = html.url.clone();
+    let Some(ticket) = crate::surfer::queue_html_parse(html.html, Some(url.clone())).await else {
+        crate::log!(
+            "html_shack: browser_handoff skipped url={} reason=parse_pool_unavailable\n",
+            url
+        );
         return false;
     };
 
-    let handed_off = crate::surfer::queue_html_for_browser(
-        browser_instance_id,
-        html.html,
-        Some(html.url.clone()),
-    )
-    .await;
     crate::log!(
         "html_shack: browser_handoff url={} browser={} ok={}\n",
-        html.url,
-        browser_instance_id,
-        if handed_off { 1 } else { 0 }
+        url,
+        ticket.browser_instance_id,
+        if ticket.queued { 1 } else { 0 }
     );
-    handed_off
+    ticket.queued
 }
 
 fn normalize_file_reference(path: &str) -> String {

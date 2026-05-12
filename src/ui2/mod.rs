@@ -2841,10 +2841,10 @@ pub async fn ui2_task() {
             UI2_DIRTY.store(true, Ordering::Release);
         }
 
-        let mut created_factory_windows = 0usize;
-        if let Some(active_mask) = take_hosted_browser_factory_mask() {
-            created_factory_windows = sync_hosted_browser_factory_windows(active_mask);
-            if created_factory_windows != 0 {
+        let mut created_parse_pool_windows = 0usize;
+        if let Some(active_mask) = take_hosted_browser_parse_pool_mask() {
+            created_parse_pool_windows = sync_hosted_browser_parse_pool_windows(active_mask);
+            if created_parse_pool_windows != 0 {
                 UI2_DIRTY.store(true, Ordering::Release);
             }
         }
@@ -2856,8 +2856,8 @@ pub async fn ui2_task() {
             if materialized_vm_windows != 0 {
                 state.compose_reason = "vm-app-window-materialize";
             }
-            if created_factory_windows != 0 {
-                state.compose_reason = "hosted-browser-factory";
+            if created_parse_pool_windows != 0 {
+                state.compose_reason = "hosted-browser-parse-pool";
             }
 
             let athlas_small_ready_seq = crate::gfx::althlasfont::athlas_tier_ready_seq(0);

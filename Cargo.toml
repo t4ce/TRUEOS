@@ -85,7 +85,7 @@ rdrand = { version = "0.8", default-features = false }
 
 [profile.dev]
 panic = "abort"
-opt-level = 0
+opt-level = 1
 
 [profile.release]
 panic = "abort"

@@ -539,6 +539,27 @@ pub(crate) fn submit_gpgpu_primary_scanout_marker_probe() -> GpgpuOneTileSentine
     self::gpgpu::submit_gpgpu_primary_scanout_marker_probe()
 }
 
+pub(crate) fn submit_gpgpu_primary_scanout_line_pilot(
+    mode: u32,
+    line_index: u32,
+) -> GpgpuOneTileSentinelProof {
+    self::gpgpu::submit_gpgpu_primary_scanout_line_pilot(mode, line_index)
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_groupid_line320_probe(
+    mode: u32,
+    row_index: u32,
+) -> GpgpuOneTileSentinelProof {
+    self::gpgpu::submit_gpgpu_primary_scanout_groupid_line320_probe(mode, row_index)
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd8_probe(
+    mode: u32,
+    row_index: u32,
+) -> GpgpuOneTileSentinelProof {
+    self::gpgpu::submit_gpgpu_primary_scanout_row2560_simd8_probe(mode, row_index)
+}
+
 pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot_preview(
     cursor: usize,
     target_phase: usize,
