@@ -39,8 +39,8 @@ pub enum hyper_code {
 
 impl hyper_error {
     fn code(&self) -> hyper_code {
-        use crate::error::Kind as ErrorKind;
-        use crate::error::User;
+        use crate::hyper_error::Kind as ErrorKind;
+        use crate::hyper_error::User;
 
         match self.0.kind() {
             ErrorKind::Parse(_) => hyper_code::HYPERE_INVALID_PEER_MESSAGE,

@@ -455,23 +455,53 @@ fn hyper_http1_probe_enabled() -> bool {
 }
 
 fn spawn_chat_http(spawner: Spawner) -> SpawnAttempt {
+    #[cfg(feature = "vmx-web")]
     spawn_local(spawner, |_spawner| crate::tst_chatserver::chat_http_service_task())
+    #[cfg(not(feature = "vmx-web"))]
+    {
+        let _ = spawner;
+        SpawnAttempt::Skipped
+    }
 }
 
 fn spawn_mail_http(spawner: Spawner) -> SpawnAttempt {
+    #[cfg(feature = "vmx-web")]
     spawn_local(spawner, |_spawner| crate::r::net::srv::mail::mail_http_service_task())
+    #[cfg(not(feature = "vmx-web"))]
+    {
+        let _ = spawner;
+        SpawnAttempt::Skipped
+    }
 }
 
 fn spawn_axum_boot(spawner: Spawner) -> SpawnAttempt {
+    #[cfg(feature = "vmx-web")]
     spawn_local(spawner, |_spawner| crate::r::net::srv::axum_boot::axum_boot_service_task())
+    #[cfg(not(feature = "vmx-web"))]
+    {
+        let _ = spawner;
+        SpawnAttempt::Skipped
+    }
 }
 
 fn spawn_fileexplorer_http(spawner: Spawner) -> SpawnAttempt {
+    #[cfg(feature = "vmx-web")]
     spawn_local(spawner, |_spawner| crate::tst_fileexplorer_axum::fileexplorer_http_service_task())
+    #[cfg(not(feature = "vmx-web"))]
+    {
+        let _ = spawner;
+        SpawnAttempt::Skipped
+    }
 }
 
 fn spawn_webdevices_http(spawner: Spawner) -> SpawnAttempt {
+    #[cfg(feature = "vmx-web")]
     spawn_local(spawner, |_spawner| crate::tst_webdevices_axum::webdevices_http_service_task())
+    #[cfg(not(feature = "vmx-web"))]
+    {
+        let _ = spawner;
+        SpawnAttempt::Skipped
+    }
 }
 
 fn spawn_ws_time(spawner: Spawner) -> SpawnAttempt {

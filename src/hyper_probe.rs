@@ -162,6 +162,7 @@ async fn probe_hyper_http1_loopback() -> Result<(), &'static str> {
     }
 }
 
+#[cfg(feature = "vmx-web")]
 async fn probe_hyper_http1_server_loopback() -> Result<(), &'static str> {
     let (client_io, server_io) = tokio::io::duplex(2048);
 
@@ -353,6 +354,7 @@ pub(crate) fn log_boot_probe() {
     crate::log!("hyper_probe: wired hyper 1.9 client/http1 surface directly beside tokio\n");
 
     let _ = hyper::client::conn::http1::Builder::new;
+    #[cfg(feature = "vmx-web")]
     let _ = hyper::server::conn::http1::Builder::new;
     let _ = hyper::Method::GET;
     let _ = hyper::Version::HTTP_11;
@@ -373,6 +375,7 @@ pub(crate) fn log_boot_probe() {
         Err(stage) => crate::log!("hyper_probe: failure {}\n", stage),
     }
 
+    #[cfg(feature = "vmx-web")]
     match runtime.block_on(probe_hyper_http1_server_loopback()) {
         Ok(()) => crate::log!("hyper_probe: success http1.server_loopback_request_response\n"),
         Err(stage) => crate::log!("hyper_probe: failure {}\n", stage),

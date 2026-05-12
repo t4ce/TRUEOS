@@ -16,7 +16,7 @@ use smallvec::{smallvec, smallvec_inline, SmallVec};
 use crate::body::DecodedLength;
 #[cfg(feature = "server")]
 use crate::common::date;
-use crate::error::Parse;
+use crate::hyper_error::Parse;
 use crate::ext::HeaderCaseMap;
 #[cfg(feature = "ffi")]
 use crate::ext::OriginalHeaderOrder;
@@ -463,7 +463,7 @@ impl Http1Transaction for Server {
     }
 
     fn on_error(err: &crate::Error) -> Option<MessageHead<Self::Outgoing>> {
-        use crate::error::Kind;
+        use crate::hyper_error::Kind;
         let status = match *err.kind() {
             Kind::Parse(Parse::Method)
             | Kind::Parse(Parse::Header(_))
@@ -1543,13 +1543,13 @@ fn record_header_indices(
     bytes: &[u8],
     headers: &[httparse::Header<'_>],
     indices: &mut [MaybeUninit<HeaderIndices>],
-) -> Result<(), crate::error::Parse> {
+) -> Result<(), crate::hyper_error::Parse> {
     let bytes_ptr = bytes.as_ptr() as usize;
 
     for (header, indices) in headers.iter().zip(indices.iter_mut()) {
         if header.name.len() >= (1 << 16) {
             debug!("header name larger than 64kb: {:?}", header.name);
-            return Err(crate::error::Parse::TooLarge);
+            return Err(crate::hyper_error::Parse::TooLarge);
         }
         let name_start = header.name.as_ptr() as usize - bytes_ptr;
         let name_end = name_start + header.name.len();
@@ -1949,7 +1949,7 @@ mod tests {
             .expect("parse complete")
         }
 
-        fn parse_err(s: &str, comment: &str) -> crate::error::Parse {
+        fn parse_err(s: &str, comment: &str) -> crate::hyper_error::Parse {
             let mut bytes = BytesMut::from(s);
             Server::parse(
                 &mut bytes,
@@ -2221,7 +2221,7 @@ mod tests {
             .expect("parse complete")
         }
 
-        fn parse_err(s: &str) -> crate::error::Parse {
+        fn parse_err(s: &str) -> crate::hyper_error::Parse {
             let mut bytes = BytesMut::from(s);
             Client::parse(
                 &mut bytes,

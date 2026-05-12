@@ -53,12 +53,12 @@ impl DecodedLength {
 
     /// Checks the `u64` is within the maximum allowed for content-length.
     #[cfg(any(feature = "http1", feature = "http2"))]
-    pub(crate) fn checked_new(len: u64) -> Result<Self, crate::error::Parse> {
+    pub(crate) fn checked_new(len: u64) -> Result<Self, crate::hyper_error::Parse> {
         if len <= MAX_LEN {
             Ok(DecodedLength(len))
         } else {
             warn!("content-length bigger than maximum: {} > {}", len, MAX_LEN);
-            Err(crate::error::Parse::TooLarge)
+            Err(crate::hyper_error::Parse::TooLarge)
         }
     }
 

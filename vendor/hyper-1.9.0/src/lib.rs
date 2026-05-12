@@ -5,6 +5,7 @@
 #![cfg_attr(all(test, feature = "full"), deny(warnings))]
 #![cfg_attr(all(test, feature = "nightly"), feature(test))]
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![cfg_attr(any(target_os = "trueos", target_os = "zkvm"), no_std)]
 
 //! # hyper
 //!
@@ -90,6 +91,241 @@
 //!   behavior, for the purposes of protection. It is also possible to _change_
 //!   what the default options are set to, also in efforts to protect the
 //!   most people possible.
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+extern crate alloc;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+extern crate self as std;
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod any {
+    pub use core::any::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod boxed {
+    pub use alloc::boxed::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod cmp {
+    pub use core::cmp::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod collections {
+    pub use alloc::collections::*;
+    pub use hashbrown::{HashMap, HashSet};
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod error {
+    pub use core::error::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod fmt {
+    pub use core::fmt::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod future {
+    pub use core::future::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod io {
+    pub use trueos_io::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod marker {
+    pub use core::marker::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod mem {
+    pub use core::mem::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod ops {
+    pub use core::ops::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod pin {
+    pub use core::pin::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod prelude {
+    pub mod rust_2021 {
+        pub use alloc::{
+            boxed::Box,
+            format,
+            string::{String, ToString},
+            vec,
+            vec::Vec,
+        };
+        pub use core::prelude::rust_2021::*;
+    }
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod process {
+    pub fn abort() -> ! {
+        loop {
+            core::hint::spin_loop();
+        }
+    }
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod rc {
+    pub use alloc::rc::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod result {
+    pub use core::result::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod string {
+    pub use alloc::string::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod sync {
+    pub use alloc::sync::{Arc, Weak};
+    pub use core::sync::atomic;
+
+    use core::{
+        cell::UnsafeCell,
+        convert::Infallible,
+        ops::{Deref, DerefMut},
+        sync::atomic::{AtomicBool, Ordering},
+    };
+
+    pub struct Mutex<T: ?Sized> {
+        locked: AtomicBool,
+        value: UnsafeCell<T>,
+    }
+
+    pub struct MutexGuard<'a, T: ?Sized> {
+        mutex: &'a Mutex<T>,
+    }
+
+    unsafe impl<T: ?Sized + Send> Send for Mutex<T> {}
+    unsafe impl<T: ?Sized + Send> Sync for Mutex<T> {}
+
+    impl<T> Mutex<T> {
+        pub const fn new(value: T) -> Self {
+            Self {
+                locked: AtomicBool::new(false),
+                value: UnsafeCell::new(value),
+            }
+        }
+
+        pub fn into_inner(self) -> Result<T, Infallible> {
+            Ok(self.value.into_inner())
+        }
+    }
+
+    impl<T: ?Sized> Mutex<T> {
+        pub fn lock(&self) -> Result<MutexGuard<'_, T>, Infallible> {
+            while self
+                .locked
+                .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+            {
+                core::hint::spin_loop();
+            }
+            Ok(MutexGuard { mutex: self })
+        }
+    }
+
+    impl<T: ?Sized> Drop for MutexGuard<'_, T> {
+        fn drop(&mut self) {
+            self.mutex.locked.store(false, Ordering::Release);
+        }
+    }
+
+    impl<T: ?Sized> Deref for MutexGuard<'_, T> {
+        type Target = T;
+
+        fn deref(&self) -> &T {
+            unsafe { &*self.mutex.value.get() }
+        }
+    }
+
+    impl<T: ?Sized> DerefMut for MutexGuard<'_, T> {
+        fn deref_mut(&mut self) -> &mut T {
+            unsafe { &mut *self.mutex.value.get() }
+        }
+    }
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod task {
+    pub use core::task::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod thread {
+    pub fn panicking() -> bool {
+        false
+    }
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod time {
+    pub use core::time::Duration;
+    pub use tokio::time::Instant;
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
+    pub struct SystemTime(Duration);
+
+    pub const UNIX_EPOCH: SystemTime = SystemTime(Duration::from_secs(0));
+
+    impl SystemTime {
+        pub fn now() -> Self {
+            UNIX_EPOCH
+        }
+
+        pub fn duration_since(self, earlier: SystemTime) -> Result<Duration, Duration> {
+            self.0.checked_sub(earlier.0).ok_or_else(|| earlier.0 - self.0)
+        }
+    }
+
+    impl core::ops::Add<Duration> for SystemTime {
+        type Output = SystemTime;
+
+        fn add(self, rhs: Duration) -> SystemTime {
+            SystemTime(self.0 + rhs)
+        }
+    }
+
+    impl core::ops::Sub<Duration> for SystemTime {
+        type Output = SystemTime;
+
+        fn sub(self, rhs: Duration) -> SystemTime {
+            SystemTime(self.0 - rhs)
+        }
+    }
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod usize {
+    pub use core::usize::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod vec {
+    pub use alloc::vec::*;
+}
+
 #[doc(hidden)]
 pub use http;
 
@@ -99,7 +335,7 @@ extern crate test;
 #[doc(no_inline)]
 pub use http::{header, HeaderMap, Method, Request, Response, StatusCode, Uri, Version};
 
-pub use crate::error::{Error, Result};
+pub use crate::hyper_error::{Error, Result};
 
 #[macro_use]
 mod cfg;
@@ -112,7 +348,8 @@ mod platform;
 
 pub mod body;
 mod common;
-mod error;
+#[path = "error.rs"]
+mod hyper_error;
 pub mod ext;
 #[cfg(test)]
 mod mock;

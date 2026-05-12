@@ -57,7 +57,7 @@ pub(crate) trait Http1Transaction {
 }
 
 /// Result newtype for Http1Transaction::parse.
-pub(crate) type ParseResult<T> = Result<Option<ParsedMessage<T>>, crate::error::Parse>;
+pub(crate) type ParseResult<T> = Result<Option<ParsedMessage<T>>, crate::hyper_error::Parse>;
 
 #[derive(Debug)]
 pub(crate) struct ParsedMessage<T> {
