@@ -1,6 +1,8 @@
 use super::{FromRequest, FromRequestParts, Request};
 use crate::response::{IntoResponse, Response};
 use http::request::Parts;
+use core::marker::{Send, Sync};
+use core::result::Result::{self, Ok};
 use std::{convert::Infallible, future::Future};
 
 #[diagnostic::do_not_recommend]

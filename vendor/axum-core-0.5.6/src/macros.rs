@@ -136,7 +136,7 @@ macro_rules! __define_rejection {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 f.write_str($body)?;
                 f.write_str(": ")?;
-                self.0.fmt(f)
+                core::fmt::Display::fmt(&self.0, f)
             }
         }
 

@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use std::{fmt, iter, mem, slice};
 
 /// A single URL parameter, consisting of a key and a value.

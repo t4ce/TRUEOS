@@ -1,6 +1,10 @@
 use crate::tree::Node;
 use crate::{InsertError, MatchError, Params};
 
+use alloc::string::String;
+use core::option::Option;
+use core::result::Result::{self, Err, Ok};
+
 /// A zero-copy URL router.
 ///
 /// See [the crate documentation](crate) for details.

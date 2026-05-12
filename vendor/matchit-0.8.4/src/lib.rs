@@ -111,7 +111,48 @@ by the number of children with registered values, increasing the chance of choos
 As it turns out, this method of routing is extremely fast. See the [benchmark results](https://github.com/ibraheemdev/matchit?tab=readme-ov-file#benchmarks) for details.
 */
 
+#![cfg_attr(any(target_os = "trueos", target_os = "zkvm"), no_std)]
 #![deny(rust_2018_idioms, clippy::all)]
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+extern crate alloc;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+extern crate self as std;
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod fmt {
+    pub use core::fmt::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod iter {
+    pub use core::iter::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod mem {
+    pub use core::mem::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod ops {
+    pub use core::ops::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod slice {
+    pub use core::slice::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod string {
+    pub use alloc::string::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod vec {
+    pub use alloc::vec::*;
+}
 
 mod error;
 mod escape;

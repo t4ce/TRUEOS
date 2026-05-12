@@ -3,7 +3,11 @@ use crate::{body::Body, RequestExt};
 use bytes::{BufMut, Bytes, BytesMut};
 use http::{request::Parts, Extensions, HeaderMap, Method, Uri, Version};
 use http_body_util::BodyExt;
+use alloc::string::String;
 use core::convert::Infallible;
+use core::marker::{Send, Sync};
+use core::option::Option::Some;
+use core::result::Result::{self, Ok};
 
 impl<S> FromRequest<S> for Request
 where

@@ -8,6 +8,8 @@ use crate::{body::Body, response::IntoResponse};
 use http::request::Parts;
 use core::convert::Infallible;
 use core::future::Future;
+use core::marker::{Send, Sized, Sync};
+use core::result::Result::{self, Ok};
 
 pub mod rejection;
 

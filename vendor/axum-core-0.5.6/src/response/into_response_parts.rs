@@ -3,6 +3,9 @@ use http::{
     header::{HeaderMap, HeaderName, HeaderValue},
     Extensions, StatusCode,
 };
+use alloc::string::ToString;
+use core::option::Option::{self, Some};
+use core::result::Result::{self, Err, Ok};
 use std::{convert::Infallible, fmt};
 
 /// Trait for adding headers and extensions to a response.
