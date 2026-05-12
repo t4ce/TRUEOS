@@ -1,5 +1,10 @@
 use error::Result;
+#[cfg(target_os = "trueos")]
+use crate::prelude::*;
 use serde;
+#[cfg(target_os = "trueos")]
+use crate::io;
+#[cfg(not(target_os = "trueos"))]
 use std::io;
 
 /// An optional Read trait for advanced Bincode usage.

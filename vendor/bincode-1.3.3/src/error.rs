@@ -1,12 +1,17 @@
 use core::error::Error as StdError;
+#[cfg(target_os = "trueos")]
+use crate::prelude::*;
+#[cfg(target_os = "trueos")]
+use crate::io;
+#[cfg(not(target_os = "trueos"))]
 use std::io;
 use core::str::Utf8Error;
-use std::{error, fmt};
+use core::{error, fmt};
 
 use serde;
 
 /// The result of a serialization or deserialization operation.
-pub type Result<T> = ::std::result::Result<T, Error>;
+pub type Result<T> = core::result::Result<T, Error>;
 
 /// An error that can be produced during (de)serializing.
 pub type Error = Box<ErrorKind>;

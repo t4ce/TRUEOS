@@ -1,3 +1,8 @@
+#[cfg(target_os = "trueos")]
+use crate::prelude::*;
+#[cfg(target_os = "trueos")]
+use crate::io::Write;
+#[cfg(not(target_os = "trueos"))]
 use std::io::Write;
 use core::mem::size_of;
 

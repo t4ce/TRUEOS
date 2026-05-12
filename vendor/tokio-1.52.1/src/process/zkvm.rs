@@ -6,7 +6,9 @@ use alloc::vec::Vec;
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
+use std::ffi::OsStr;
 use std::io;
+use std::path::Path;
 
 fn unsupported() -> io::Error {
     io::Error::new(io::ErrorKind::Other, "tokio process is not supported on zkvm")
@@ -57,14 +59,14 @@ pub struct Command;
 impl Command {
     pub fn new<S>(_program: S) -> Self
     where
-        S: AsRef<core::ffi::OsStr>,
+        S: AsRef<OsStr>,
     {
         Self
     }
 
     pub fn arg<S>(&mut self, _arg: S) -> &mut Self
     where
-        S: AsRef<core::ffi::OsStr>,
+        S: AsRef<OsStr>,
     {
         self
     }
@@ -72,15 +74,15 @@ impl Command {
     pub fn args<I, S>(&mut self, _args: I) -> &mut Self
     where
         I: IntoIterator<Item = S>,
-        S: AsRef<core::ffi::OsStr>,
+        S: AsRef<OsStr>,
     {
         self
     }
 
     pub fn env<K, V>(&mut self, _key: K, _val: V) -> &mut Self
     where
-        K: AsRef<core::ffi::OsStr>,
-        V: AsRef<core::ffi::OsStr>,
+        K: AsRef<OsStr>,
+        V: AsRef<OsStr>,
     {
         self
     }
@@ -88,15 +90,15 @@ impl Command {
     pub fn envs<I, K, V>(&mut self, _vars: I) -> &mut Self
     where
         I: IntoIterator<Item = (K, V)>,
-        K: AsRef<core::ffi::OsStr>,
-        V: AsRef<core::ffi::OsStr>,
+        K: AsRef<OsStr>,
+        V: AsRef<OsStr>,
     {
         self
     }
 
     pub fn env_remove<K>(&mut self, _key: K) -> &mut Self
     where
-        K: AsRef<core::ffi::OsStr>,
+        K: AsRef<OsStr>,
     {
         self
     }
@@ -107,7 +109,7 @@ impl Command {
 
     pub fn current_dir<P>(&mut self, _dir: P) -> &mut Self
     where
-        P: AsRef<std::path::Path>,
+        P: AsRef<Path>,
     {
         self
     }

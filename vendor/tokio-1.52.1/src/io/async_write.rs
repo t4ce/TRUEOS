@@ -4,6 +4,78 @@ use core::ops::DerefMut;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 
+fn write_vectored<W>(writer: &mut W, bufs: &[IoSlice<'_>]) -> io::Result<usize>
+where
+    W: io::Write + ?Sized,
+{
+    for buf in bufs {
+        if !buf.is_empty() {
+            return <W as io::Write>::write(writer, buf);
+        }
+    }
+
+    Ok(0)
+}
+
+fn write_cursor_vec(cursor: &mut io::Cursor<Vec<u8>>, buf: &[u8]) -> io::Result<usize> {
+    let pos = cursor.position() as usize;
+    let end = pos.saturating_add(buf.len());
+    let vec = cursor.get_mut();
+
+    if pos > vec.len() {
+        vec.resize(pos, 0);
+    }
+    if end > vec.len() {
+        vec.resize(end, 0);
+    }
+
+    vec[pos..end].copy_from_slice(buf);
+    cursor.set_position(end as u64);
+    Ok(buf.len())
+}
+
+fn write_cursor_mut_vec(cursor: &mut io::Cursor<&mut Vec<u8>>, buf: &[u8]) -> io::Result<usize> {
+    let pos = cursor.position() as usize;
+    let end = pos.saturating_add(buf.len());
+    let vec = cursor.get_mut();
+
+    if pos > vec.len() {
+        vec.resize(pos, 0);
+    }
+    if end > vec.len() {
+        vec.resize(end, 0);
+    }
+
+    vec[pos..end].copy_from_slice(buf);
+    cursor.set_position(end as u64);
+    Ok(buf.len())
+}
+
+fn write_cursor_box(cursor: &mut io::Cursor<Box<[u8]>>, buf: &[u8]) -> io::Result<usize> {
+    let len = cursor.get_ref().len();
+    let pos = core::cmp::min(cursor.position() as usize, len);
+    let amt = core::cmp::min(buf.len(), len.saturating_sub(pos));
+    let end = pos + amt;
+
+    cursor.get_mut()[pos..end].copy_from_slice(&buf[..amt]);
+    cursor.set_position(end as u64);
+    Ok(amt)
+}
+
+fn write_cursor_vectored<W>(
+    writer: &mut W,
+    bufs: &[IoSlice<'_>],
+    mut write_one: impl FnMut(&mut W, &[u8]) -> io::Result<usize>,
+) -> io::Result<usize> {
+    for buf in bufs {
+        if !buf.is_empty() {
+            return write_one(writer, buf);
+        }
+    }
+
+    Ok(0)
+}
+
 /// Writes bytes asynchronously.
 ///
 /// This trait is analogous to the [`std::io::Write`] trait, but integrates with
@@ -266,7 +338,7 @@ impl AsyncWrite for Vec<u8> {
         _: &mut Context<'_>,
         bufs: &[IoSlice<'_>],
     ) -> Poll<io::Result<usize>> {
-        Poll::Ready(io::Write::write_vectored(&mut *self, bufs))
+        Poll::Ready(write_vectored(&mut *self, bufs))
     }
 
     fn is_write_vectored(&self) -> bool {
@@ -288,7 +360,7 @@ impl AsyncWrite for io::Cursor<&mut [u8]> {
         _: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        Poll::Ready(io::Write::write(&mut *self, buf))
+        Poll::Ready(<_ as io::Write>::write(&mut *self, buf))
     }
 
     fn poll_write_vectored(
@@ -296,7 +368,7 @@ impl AsyncWrite for io::Cursor<&mut [u8]> {
         _: &mut Context<'_>,
         bufs: &[IoSlice<'_>],
     ) -> Poll<io::Result<usize>> {
-        Poll::Ready(io::Write::write_vectored(&mut *self, bufs))
+        Poll::Ready(write_vectored(&mut *self, bufs))
     }
 
     fn is_write_vectored(&self) -> bool {
@@ -304,7 +376,7 @@ impl AsyncWrite for io::Cursor<&mut [u8]> {
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Poll::Ready(io::Write::flush(&mut *self))
+        Poll::Ready(<_ as io::Write>::flush(&mut *self))
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
@@ -318,7 +390,7 @@ impl AsyncWrite for io::Cursor<&mut Vec<u8>> {
         _: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        Poll::Ready(io::Write::write(&mut *self, buf))
+        Poll::Ready(write_cursor_mut_vec(&mut *self, buf))
     }
 
     fn poll_write_vectored(
@@ -326,15 +398,15 @@ impl AsyncWrite for io::Cursor<&mut Vec<u8>> {
         _: &mut Context<'_>,
         bufs: &[IoSlice<'_>],
     ) -> Poll<io::Result<usize>> {
-        Poll::Ready(io::Write::write_vectored(&mut *self, bufs))
+        Poll::Ready(write_cursor_vectored(&mut *self, bufs, write_cursor_mut_vec))
     }
 
     fn is_write_vectored(&self) -> bool {
         true
     }
 
-    fn poll_flush(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Poll::Ready(io::Write::flush(&mut *self))
+    fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
@@ -348,7 +420,7 @@ impl AsyncWrite for io::Cursor<Vec<u8>> {
         _: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        Poll::Ready(io::Write::write(&mut *self, buf))
+        Poll::Ready(write_cursor_vec(&mut *self, buf))
     }
 
     fn poll_write_vectored(
@@ -356,15 +428,15 @@ impl AsyncWrite for io::Cursor<Vec<u8>> {
         _: &mut Context<'_>,
         bufs: &[IoSlice<'_>],
     ) -> Poll<io::Result<usize>> {
-        Poll::Ready(io::Write::write_vectored(&mut *self, bufs))
+        Poll::Ready(write_cursor_vectored(&mut *self, bufs, write_cursor_vec))
     }
 
     fn is_write_vectored(&self) -> bool {
         true
     }
 
-    fn poll_flush(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Poll::Ready(io::Write::flush(&mut *self))
+    fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
@@ -378,7 +450,7 @@ impl AsyncWrite for io::Cursor<Box<[u8]>> {
         _: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        Poll::Ready(io::Write::write(&mut *self, buf))
+        Poll::Ready(write_cursor_box(&mut *self, buf))
     }
 
     fn poll_write_vectored(
@@ -386,15 +458,15 @@ impl AsyncWrite for io::Cursor<Box<[u8]>> {
         _: &mut Context<'_>,
         bufs: &[IoSlice<'_>],
     ) -> Poll<io::Result<usize>> {
-        Poll::Ready(io::Write::write_vectored(&mut *self, bufs))
+        Poll::Ready(write_cursor_vectored(&mut *self, bufs, write_cursor_box))
     }
 
     fn is_write_vectored(&self) -> bool {
         true
     }
 
-    fn poll_flush(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Poll::Ready(io::Write::flush(&mut *self))
+    fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {

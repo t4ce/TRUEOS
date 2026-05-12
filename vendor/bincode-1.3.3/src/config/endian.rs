@@ -1,3 +1,6 @@
+#[cfg(target_os = "trueos")]
+use crate::prelude::*;
+
 pub trait BincodeByteOrder {
     type Endian: ::byteorder::ByteOrder + 'static;
 }

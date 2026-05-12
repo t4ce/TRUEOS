@@ -147,3 +147,6 @@ parking_lot_core = { path = "vendor/parking_lot_core-0.9.12" }
 tokio = { path = "vendor/tokio-1.52.1" }
 mio = { path = "vendor/mio-1.2.0" }
 socket2 = { path = "vendor/socket2-0.6.3" }
+radix_trie = { path = "vendor/radix_trie-0.2.1" }
+dma-api = { path = "vendor/dma-api-0.7.2" }
+half = { path = "vendor/half-2.7.1" }

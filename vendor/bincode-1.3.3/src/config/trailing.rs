@@ -1,3 +1,5 @@
+#[cfg(target_os = "trueos")]
+use crate::prelude::*;
 use de::read::SliceReader;
 use {ErrorKind, Result};
 

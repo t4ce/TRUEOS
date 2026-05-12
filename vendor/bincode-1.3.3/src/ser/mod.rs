@@ -1,5 +1,10 @@
+#[cfg(target_os = "trueos")]
+use crate::prelude::*;
+#[cfg(target_os = "trueos")]
+use crate::io::Write;
+#[cfg(not(target_os = "trueos"))]
 use std::io::Write;
-use std::u32;
+use core::u32;
 
 use serde;
 
