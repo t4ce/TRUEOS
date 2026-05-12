@@ -10,7 +10,9 @@ use crate::runtime::{Builder, Callback, Handle, BOX_FUTURE_THRESHOLD};
 use crate::util::metric_atomics::MetricAtomicUsize;
 use crate::util::trace::{blocking_task, SpawnMeta};
 
-use std::collections::{HashMap, VecDeque};
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::fmt;
 use std::io;
 use std::sync::atomic::Ordering;
@@ -138,9 +140,11 @@ struct Shared {
     /// necessary but helps avoid Valgrind false positives, see
     /// <https://github.com/tokio-rs/tokio/commit/646fbae76535e397ef79dbcaacb945d4c829f666>
     /// for more information.
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     last_exiting_thread: Option<thread::JoinHandle<()>>,
     /// This holds the `JoinHandles` for all running threads; on shutdown, the thread
     /// calling shutdown handles joining on these.
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     worker_threads: HashMap<usize, thread::JoinHandle<()>>,
     /// This is a counter used to iterate `worker_threads` in a consistent order (for loom's
     /// benefit).
@@ -245,7 +249,9 @@ impl BlockingPool {
                         num_notify: 0,
                         shutdown: false,
                         shutdown_tx: Some(shutdown_tx),
+                        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
                         last_exiting_thread: None,
+                        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
                         worker_threads: HashMap::new(),
                         worker_thread_index: 0,
                     }),
@@ -281,23 +287,27 @@ impl BlockingPool {
         shared.shutdown_tx = None;
         self.spawner.inner.condvar.notify_all();
 
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         let last_exited_thread = std::mem::take(&mut shared.last_exiting_thread);
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         let workers = std::mem::take(&mut shared.worker_threads);
 
         drop(shared);
 
         if self.shutdown_rx.wait(timeout) {
+            #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
             let _ = last_exited_thread.map(thread::JoinHandle::join);
 
             // Loom requires that execution be deterministic, so sort by thread ID before joining.
             // (HashMaps use a randomly-seeded hash function, so the order is nondeterministic)
-            #[cfg(loom)]
+            #[cfg(all(loom, not(any(target_os = "trueos", target_os = "zkvm"))))]
             let workers: Vec<(usize, thread::JoinHandle<()>)> = {
                 let mut workers: Vec<_> = workers.into_iter().collect();
                 workers.sort_by_key(|(id, _)| *id);
                 workers
             };
 
+            #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
             for (_id, handle) in workers {
                 let _ = handle.join();
             }
@@ -563,11 +573,15 @@ fn is_temporary_os_thread_error(error: &io::Error) -> bool {
 
 impl Inner {
     fn run(&self, worker_thread_id: usize) {
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        let _ = worker_thread_id;
+
         if let Some(f) = &self.after_start {
             f();
         }
 
         let mut shared = self.shared.lock();
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         let mut join_on_thread = None;
         // is this thread currently counted in `num_idle_threads`?
         let mut is_counted_idle;
@@ -608,10 +622,6 @@ impl Inner {
                     }
 
                     if !shared.shutdown && crate::platform::monotonic_nanos() >= idle_deadline {
-                        let my_handle = shared.worker_threads.remove(&worker_thread_id);
-                        join_on_thread =
-                            std::mem::replace(&mut shared.last_exiting_thread, my_handle);
-
                         break 'main;
                     }
 
@@ -690,6 +700,7 @@ impl Inner {
             f();
         }
 
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         if let Some(handle) = join_on_thread {
             let _ = handle.join();
         }

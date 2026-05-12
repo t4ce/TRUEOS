@@ -23,6 +23,48 @@ pub fn cos_f32(x: f32) -> f32 {
     libm::cosf(x)
 }
 
+#[inline]
+pub fn acos_f32(x: f32) -> f32 {
+    libm::acosf(x)
+}
+
+#[inline]
+pub fn asin_f32(x: f32) -> f32 {
+    libm::asinf(x)
+}
+
+#[inline]
+pub fn log2_f32(x: f32) -> f32 {
+    libm::log2f(x)
+}
+
+// Kernel-side C math ABI symbols needed by linked no_std code. Keep this list
+// intentionally narrow; trueos-math owns these f32 wrappers over libm.
+#[unsafe(no_mangle)]
+pub extern "C" fn sinf(x: f32) -> f32 {
+    sin_f32(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn cosf(x: f32) -> f32 {
+    cos_f32(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn acosf(x: f32) -> f32 {
+    acos_f32(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn asinf(x: f32) -> f32 {
+    asin_f32(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn log2f(x: f32) -> f32 {
+    log2_f32(x)
+}
+
 pub(crate) mod ascii_tree;
 
 #[cfg(any(feature = "alloc", test))]

@@ -202,6 +202,9 @@ impl Inner {
         }
 
         if dur == Duration::from_millis(0) {
+            #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+            crate::platform::poll_once();
+
             return;
         }
 

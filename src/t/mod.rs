@@ -6,6 +6,8 @@
 pub mod net;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod platform;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+mod tokio_environment;
 pub mod tokio_probe;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod tokio_platform;
@@ -67,6 +69,13 @@ where
     Ok(())
 }
 
+/// Drop the Tokio observation handle while leaving the task scheduled.
+///
+/// This is TRUEOS detach vocabulary for Tokio tasks, not a pthread detach.
+pub fn detach_tokio_task<T>(handle: tokio::task::JoinHandle<T>) {
+    drop(handle);
+}
+
 pub async fn run_on_shared_tokio<F, T, MakeFuture>(make_future: MakeFuture) -> Result<T, RunError>
 where
     F: Future<Output = T> + 'static,
@@ -110,7 +119,7 @@ pub async fn shared_tokio_job_pump() {
         };
 
         if let Some(make_job) = job {
-            tokio::task::spawn_local(make_job());
+            detach_tokio_task(tokio::task::spawn_local(make_job()));
         } else {
             SHARED_TOKIO_WAIT.wait_for_event_timeout(25).await;
         }

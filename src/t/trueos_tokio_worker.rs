@@ -17,7 +17,7 @@ static LOGGED_VTHREAD_BACKING: AtomicBool = AtomicBool::new(false);
 async fn tokio_blocking_job_task(
     job: TokioBlockingJob,
     lane: crate::stackkeeper::TokioLaneLease,
-    _carrier_lease: crate::r::lane::LaneLease,
+    _carrier_lease: crate::hv::lane::LaneLease,
     purpose: &'static str,
 ) {
     if !LOGGED_TASK_ENTER.swap(true, Ordering::AcqRel) {
@@ -62,9 +62,9 @@ fn reject_until_background_ap_ready() -> i32 {
 }
 
 fn spawn_on_background_ap(job: TokioBlockingJob, purpose: &'static str) -> i32 {
-    let carrier = match crate::r::lane::pick_tokio_blocking_lane() {
+    let carrier = match crate::hv::lane::pick_tokio_blocking_lane() {
         Ok(carrier) => carrier,
-        Err(crate::r::lane::LanePickError::MissingWorkerLane) => {
+        Err(crate::hv::lane::LanePickError::MissingWorkerLane) => {
             let _ = job;
             return reject_until_background_ap_ready();
         }
