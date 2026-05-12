@@ -250,6 +250,8 @@ optional = true
 [dependencies.base64]
 version = "0.22"
 optional = true
+features = ["alloc"]
+default-features = false
 
 [dependencies.bitflags]
 version = "2.0.2"

@@ -154,6 +154,8 @@ path = "tests/proxy.rs"
 [dependencies.base64]
 version = "0.22"
 optional = true
+features = ["alloc"]
+default-features = false
 
 [dependencies.bytes]
 version = "1.7.1"
@@ -184,6 +186,7 @@ default-features = false
 [dependencies.ipnet]
 version = "2.9"
 optional = true
+default-features = false
 
 [dependencies.libc]
 version = "0.2"

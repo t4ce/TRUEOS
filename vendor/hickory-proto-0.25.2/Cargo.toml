@@ -158,7 +158,6 @@ std = [
     "futures-channel/std",
     "futures-io/std",
     "futures-util/std",
-    "ipnet/std",
     "rand/std",
     "rand/thread_rng",
     "ring?/std",
