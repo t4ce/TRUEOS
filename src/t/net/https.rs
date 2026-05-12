@@ -1,5 +1,4 @@
 extern crate alloc;
-extern crate std;
 
 use super::dns::{self, DnsConfig};
 use super::http::{self, HttpFetchError};

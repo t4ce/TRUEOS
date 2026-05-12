@@ -53,9 +53,6 @@ crc32fast = { version = "1.5.0", default-features = false }
 sha2 = { version = "0.10.9", default-features = false }
 embedded-websocket = { version = "0.9.4", default-features = false }
 smoltcp = { version = "0.13", default-features = false, features = ["alloc", "proto-ipv4", "proto-ipv6", "multicast", "socket-raw", "socket-udp", "socket-tcp", "socket-icmp", "socket-dhcpv4", "medium-ethernet"] }
-hickory-resolver = { version = "0.25.2", default-features = false, features = ["tokio"] }
-hickory-client = { version = "0.25.2", default-features = false }
-hickory-proto = { version = "0.25.2", default-features = false }
 crab-usb = { version = "0.6.2", default-features = false }
 dma-api = { version = "0.7.2", default-features = false }
 trueos-math = { path = "crates/trueos-math", features = ["alloc"] }
@@ -140,9 +137,6 @@ svgtypes = { path = "vendor/svgtypes-0.15.3" }
 xmlwriter = { path = "vendor/xmlwriter-0.1.0" }
 crc32fast = { path = "vendor/crc32fast-1.5.0" }
 embedded-websocket = { path = "vendor/embedded-websocket-0.9.4" }
-hickory-client = { path = "vendor/hickory-client-0.25.2" }
-hickory-resolver = { path = "vendor/hickory-resolver-0.25.2" }
-hickory-proto = { path = "vendor/hickory-proto-0.25.2" }
 crab-usb = { path = "vendor/crab-usb-0.6.2/crab-usb-0.6.2" }
 parking_lot = { path = "vendor/parking_lot-0.12.5" }
 parking_lot_core = { path = "vendor/parking_lot_core-0.9.12" }

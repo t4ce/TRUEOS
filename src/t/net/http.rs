@@ -1,5 +1,4 @@
 extern crate alloc;
-extern crate std;
 
 use crate::r::net::NetProfile;
 use crate::t::net::dns::{self, DnsConfig};
