@@ -23,6 +23,7 @@
 //! ```
 
 use crate::byte_str::ByteStr;
+use alloc::boxed::Box;
 use std::convert::TryFrom;
 
 use bytes::Bytes;

@@ -1,7 +1,8 @@
 #![allow(missing_docs)]
 
-use std::{fmt, io, net};
-use std::net::SocketAddr;
+use core::fmt;
+use core::net::SocketAddr;
+use core3::io;
 
 use crate::zkvm_net::Socket;
 use crate::{event, Interest, Registry, Token};
@@ -18,7 +19,8 @@ impl TcpListener {
         })
     }
 
-    pub fn from_std(_: net::TcpListener) -> TcpListener {
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+    pub fn from_std(_: std::net::TcpListener) -> TcpListener {
         panic!("mio zkvm backend cannot wrap std::net::TcpListener yet")
     }
 
@@ -33,14 +35,14 @@ impl TcpListener {
 
     pub fn set_ttl(&self, _: u32) -> io::Result<()> {
         Err(io::Error::new(
-            io::ErrorKind::Unsupported,
+            io::ErrorKind::Other,
             "mio zkvm TcpListener::set_ttl is not wired yet",
         ))
     }
 
     pub fn ttl(&self) -> io::Result<u32> {
         Err(io::Error::new(
-            io::ErrorKind::Unsupported,
+            io::ErrorKind::Other,
             "mio zkvm TcpListener::ttl is not wired yet",
         ))
     }
@@ -64,7 +66,8 @@ impl event::Source for TcpListener {
     }
 }
 
-impl From<TcpListener> for net::TcpListener {
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+impl From<TcpListener> for std::net::TcpListener {
     fn from(_: TcpListener) -> Self {
         panic!("mio zkvm backend cannot convert TcpListener into std yet")
     }

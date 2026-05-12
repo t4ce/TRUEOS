@@ -903,7 +903,10 @@ impl Socket {
     pub fn take_error(&self) -> io::Result<Option<io::Error>> {
         match unsafe { getsockopt::<c_int>(self.as_raw(), sys::SOL_SOCKET, sys::SO_ERROR) } {
             Ok(0) => Ok(None),
-            Ok(errno) => Ok(Some(io::Error::from_raw_os_error(errno))),
+            Ok(_) => Ok(Some(io::Error::new(
+                io::ErrorKind::Other,
+                "socket2 stored socket error",
+            ))),
             Err(err) => Err(err),
         }
     }
@@ -2187,6 +2190,7 @@ impl Read for Socket {
     }
 
     #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     fn read_vectored(&mut self, bufs: &mut [IoSliceMut<'_>]) -> io::Result<usize> {
         // Safety: both `IoSliceMut` and `MaybeUninitSlice` promise to have the
         // same layout, that of `iovec`/`WSABUF`. Furthermore, `recv_vectored`
@@ -2205,6 +2209,7 @@ impl<'a> Read for &'a Socket {
     }
 
     #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     fn read_vectored(&mut self, bufs: &mut [IoSliceMut<'_>]) -> io::Result<usize> {
         // Safety: see other `Read::read` impl.
         let bufs = unsafe { &mut *(bufs as *mut [IoSliceMut<'_>] as *mut [MaybeUninitSlice<'_>]) };
@@ -2218,6 +2223,7 @@ impl Write for Socket {
     }
 
     #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
         self.send_vectored(bufs)
     }
@@ -2233,6 +2239,7 @@ impl<'a> Write for &'a Socket {
     }
 
     #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
         self.send_vectored(bufs)
     }

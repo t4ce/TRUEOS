@@ -1,3 +1,4 @@
+use alloc::boxed::Box;
 use std::any::{type_name, Any, TypeId};
 use std::collections::HashMap;
 use std::fmt;

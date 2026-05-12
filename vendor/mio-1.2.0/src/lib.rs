@@ -5,6 +5,7 @@
     unused_imports,
     dead_code
 )]
+#![cfg_attr(any(target_os = "trueos", target_os = "zkvm"), no_std)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 // Disallow warnings when running tests.
 #![cfg_attr(test, deny(warnings))]
@@ -42,6 +43,46 @@
 
 #[cfg(all(target_family = "wasm", not(target_os = "wasi")))]
 compile_error!("This wasm target is unsupported by mio. If using Tokio, disable the net feature.");
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+extern crate alloc;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+extern crate self as std;
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod fmt {
+    //! TRUEOS no_std compatibility re-exports for existing mio paths.
+    pub use core::fmt::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod io {
+    //! TRUEOS no_std compatibility re-exports for existing mio paths.
+    pub use core3::io::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod num {
+    //! TRUEOS no_std compatibility re-exports for existing mio paths.
+    pub use core::num::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod ops {
+    //! TRUEOS no_std compatibility re-exports for existing mio paths.
+    pub use core::ops::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod sync {
+    //! TRUEOS no_std compatibility re-exports for existing mio paths.
+    pub use alloc::sync::Arc;
+
+    /// Atomic types from core.
+    pub mod atomic {
+        pub use core::sync::atomic::*;
+    }
+}
 
 // macros used internally
 #[macro_use]
