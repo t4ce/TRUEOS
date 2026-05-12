@@ -2,7 +2,7 @@ use super::batch_semaphore as ll; // low level implementation
 use super::{AcquireError, TryAcquireError};
 #[cfg(all(tokio_unstable, feature = "tracing"))]
 use crate::util::trace;
-use std::sync::Arc;
+use crate::loom::sync::Arc;
 
 /// Counting semaphore performing asynchronous permit acquisition.
 ///
@@ -456,7 +456,7 @@ impl Semaphore {
     pub fn new(permits: usize) -> Self {
         #[cfg(all(tokio_unstable, feature = "tracing"))]
         let resource_span = {
-            let location = std::panic::Location::caller();
+            let location = core::panic::Location::caller();
 
             tracing::trace_span!(
                 parent: None,

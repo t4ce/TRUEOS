@@ -14,7 +14,7 @@ use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use alloc::rc::Rc;
 use core::cell::Cell;
-use core::future::{poll_fn, Future};
+use core::future::Future;
 use core::marker::PhantomData;
 use core::option::Option::{self, None, Some};
 use core::pin::Pin;
@@ -1332,7 +1332,7 @@ mod tests {
             }));
 
             // poll the run until future once
-            poll_fn(|cx| {
+            core::future::poll_fn(|cx| {
                 let _ = run_until.as_mut().poll(cx);
                 Poll::Ready(())
             })

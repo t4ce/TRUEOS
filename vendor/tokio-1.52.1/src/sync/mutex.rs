@@ -4,12 +4,12 @@ use crate::sync::batch_semaphore as semaphore;
 #[cfg(all(tokio_unstable, feature = "tracing"))]
 use crate::util::trace;
 
-use std::cell::UnsafeCell;
-use std::error::Error;
-use std::marker::PhantomData;
-use std::ops::{Deref, DerefMut};
-use std::sync::Arc;
-use std::{fmt, mem, ptr};
+use core::cell::UnsafeCell;
+use core::error::Error;
+use core::marker::PhantomData;
+use core::ops::{Deref, DerefMut};
+use crate::loom::sync::Arc;
+use core::{fmt, mem, ptr};
 
 /// An asynchronous `Mutex`-like type.
 ///
@@ -341,7 +341,7 @@ impl<T: ?Sized> Mutex<T> {
     {
         #[cfg(all(tokio_unstable, feature = "tracing"))]
         let resource_span = {
-            let location = std::panic::Location::caller();
+            let location = core::panic::Location::caller();
 
             tracing::trace_span!(
                 parent: None,

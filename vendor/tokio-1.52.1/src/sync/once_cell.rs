@@ -1,12 +1,12 @@
 use super::{Semaphore, SemaphorePermit, TryAcquireError};
 use crate::loom::cell::UnsafeCell;
-use std::error::Error;
-use std::fmt;
-use std::future::Future;
-use std::mem::MaybeUninit;
-use std::ops::Drop;
-use std::ptr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use core::error::Error;
+use core::fmt;
+use core::future::Future;
+use core::mem::MaybeUninit;
+use core::ops::Drop;
+use core::ptr;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 // This file contains an implementation of an OnceCell. The principle
 // behind the safety of the cell is that any thread with an `&OnceCell` may

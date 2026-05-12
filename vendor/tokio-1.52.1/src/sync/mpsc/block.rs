@@ -1,11 +1,12 @@
 use crate::loom::cell::UnsafeCell;
 use crate::loom::sync::atomic::{AtomicPtr, AtomicUsize};
 
-use std::alloc::Layout;
-use std::mem::MaybeUninit;
-use std::ops;
-use std::ptr::{self, NonNull};
-use std::sync::atomic::Ordering::{self, AcqRel, Acquire, Release};
+use alloc::alloc::{alloc, handle_alloc_error, Layout};
+use alloc::boxed::Box;
+use core::mem::MaybeUninit;
+use core::ops;
+use core::ptr::{self, NonNull};
+use core::sync::atomic::Ordering::{self, AcqRel, Acquire, Release};
 
 /// A block in a linked list.
 ///
@@ -96,10 +97,10 @@ impl<T> Block<T> {
         unsafe {
             // Allocate the block on the heap.
             // SAFETY: The size of the Block<T> is non-zero, since it is at least the size of the header.
-            let block = std::alloc::alloc(Layout::new::<Block<T>>()) as *mut Block<T>;
+            let block = alloc(Layout::new::<Block<T>>()) as *mut Block<T>;
             let block = match NonNull::new(block) {
                 Some(block) => block,
-                None => std::alloc::handle_alloc_error(Layout::new::<Block<T>>()),
+                None => handle_alloc_error(Layout::new::<Block<T>>()),
             };
 
             // Write the header to the block.

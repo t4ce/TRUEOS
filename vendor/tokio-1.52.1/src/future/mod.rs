@@ -2,6 +2,9 @@
 
 //! Asynchronous values.
 
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub use core::future::{poll_fn, Future, IntoFuture};
+
 #[cfg(any(feature = "macros", feature = "process"))]
 pub(crate) mod maybe_done;
 
@@ -23,6 +26,7 @@ cfg_trace! {
 
 cfg_not_trace! {
     cfg_rt! {
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         pub(crate) use std::future::Future;
     }
 }

@@ -3,14 +3,14 @@ use super::Notify;
 use crate::loom::cell::UnsafeCell;
 use crate::loom::sync::atomic::AtomicBool;
 
-use std::error::Error;
-use std::fmt;
-use std::future::{poll_fn, Future};
-use std::mem::MaybeUninit;
-use std::ops::Drop;
-use std::ptr;
-use std::sync::atomic::Ordering;
-use std::task::Poll;
+use core::error::Error;
+use core::fmt;
+use core::future::{poll_fn, Future};
+use core::mem::MaybeUninit;
+use core::ops::Drop;
+use core::ptr;
+use core::sync::atomic::Ordering;
+use core::task::Poll;
 
 // This file contains an implementation of an SetOnce. The value of SetOnce
 // can only be modified once during initialization.

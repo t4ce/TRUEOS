@@ -1,8 +1,8 @@
 use crate::sync::batch_semaphore::Semaphore;
 use crate::sync::rwlock::read_guard::RwLockReadGuard;
 use crate::sync::rwlock::write_guard_mapped::RwLockMappedWriteGuard;
-use std::marker::PhantomData;
-use std::{fmt, mem, ops};
+use core::marker::PhantomData;
+use core::{fmt, mem, ops};
 
 /// RAII structure used to release the exclusive write access of a lock when
 /// dropped.
@@ -350,7 +350,7 @@ impl<'a, T: ?Sized> RwLockWriteGuard<'a, T> {
     ///
     /// ```
     /// # use tokio::sync::RwLock;
-    /// # use std::sync::Arc;
+    /// # use crate::loom::sync::Arc;
     /// #
     /// # #[tokio::main(flavor = "current_thread")]
     /// # async fn main() {

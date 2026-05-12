@@ -1,7 +1,7 @@
 use crate::sync::rwlock::RwLock;
-use std::marker::PhantomData;
-use std::sync::Arc;
-use std::{fmt, mem, ops, ptr};
+use core::marker::PhantomData;
+use crate::loom::sync::Arc;
+use core::{fmt, mem, ops, ptr};
 
 /// Owned RAII structure used to release the shared read access of a lock when
 /// dropped.

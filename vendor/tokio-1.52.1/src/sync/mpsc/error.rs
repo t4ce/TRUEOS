@@ -1,7 +1,7 @@
 //! Channel error types.
 
-use std::error::Error;
-use std::fmt;
+use core::error::Error;
+use core::fmt;
 
 /// Error returned by [`Sender::send`](super::Sender::send).
 #[derive(PartialEq, Eq, Clone, Copy)]

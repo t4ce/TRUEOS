@@ -3,7 +3,7 @@ use crate::util::trace;
 
 use alloc::boxed::Box;
 use core::future::{poll_fn, Future};
-use core::option::Option::{self, None};
+use core::option::Option;
 use core::panic::Location;
 use core::pin::Pin;
 use core::task::{ready, Context, Poll};

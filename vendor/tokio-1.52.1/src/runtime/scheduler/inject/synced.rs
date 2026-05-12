@@ -1,10 +1,10 @@
 #![cfg_attr(
-#[allow(unused_imports)]
-use crate::runtime::prelude::*;
-
     any(not(all(tokio_unstable, feature = "full")), target_family = "wasm"),
     allow(dead_code)
 )]
+
+#[allow(unused_imports)]
+use crate::runtime::prelude::*;
 
 use crate::runtime::task;
 
