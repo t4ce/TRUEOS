@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use alloc::vec::Vec;
 use core::fmt;
 use std::io::IoSlice;
 
@@ -316,6 +317,7 @@ where
         }
     }
 
+    #[cfg(feature = "std")]
     #[inline]
     fn chunks_vectored<'t>(&'t self, dst: &mut [IoSlice<'t>]) -> usize {
         match self.kind {

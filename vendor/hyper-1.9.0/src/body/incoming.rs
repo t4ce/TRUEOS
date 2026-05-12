@@ -6,14 +6,14 @@ use core::task::{Context, Poll};
 
 use bytes::Bytes;
 #[cfg(all(feature = "http1", any(feature = "client", feature = "server")))]
-use futures_channel::{mpsc, oneshot};
+use futures_channel::oneshot;
 #[cfg(all(
     any(feature = "http1", feature = "http2"),
     any(feature = "client", feature = "server")
 ))]
 use futures_core::ready;
 #[cfg(all(feature = "http1", any(feature = "client", feature = "server")))]
-use futures_core::{stream::FusedStream, Stream}; // for mpsc::Receiver
+use tokio::sync::mpsc;
 #[cfg(all(feature = "http1", any(feature = "client", feature = "server")))]
 use http::HeaderMap;
 use http_body::{Body, Frame, SizeHint};
@@ -29,7 +29,9 @@ use crate::common::watch;
 use crate::proto::h2::ping;
 
 #[cfg(all(feature = "http1", any(feature = "client", feature = "server")))]
-type BodySender = mpsc::Sender<Result<Bytes, crate::Error>>;
+type BodySender = mpsc::UnboundedSender<Result<Bytes, crate::Error>>;
+#[cfg(all(feature = "http1", any(feature = "client", feature = "server")))]
+type BodyReceiver = mpsc::UnboundedReceiver<Result<Bytes, crate::Error>>;
 #[cfg(all(feature = "http1", any(feature = "client", feature = "server")))]
 type TrailersSender = oneshot::Sender<HeaderMap>;
 
@@ -59,7 +61,7 @@ enum Kind {
     Chan {
         content_length: DecodedLength,
         want_tx: watch::Sender,
-        data_rx: mpsc::Receiver<Result<Bytes, crate::Error>>,
+        data_rx: BodyReceiver,
         trailers_rx: oneshot::Receiver<HeaderMap>,
     },
     #[cfg(all(feature = "http2", any(feature = "client", feature = "server")))]
@@ -112,7 +114,7 @@ impl Incoming {
 
     #[cfg(all(feature = "http1", any(feature = "client", feature = "server")))]
     pub(crate) fn new_channel(content_length: DecodedLength, wanter: bool) -> (Sender, Incoming) {
-        let (data_tx, data_rx) = mpsc::channel(0);
+        let (data_tx, data_rx) = mpsc::unbounded_channel();
         let (trailers_tx, trailers_rx) = oneshot::channel();
 
         // If wanter is true, `Sender::poll_ready()` won't becoming ready
@@ -219,8 +221,9 @@ impl Body for Incoming {
             } => {
                 want_tx.send(WANT_READY);
 
-                if !data_rx.is_terminated() {
-                    if let Some(chunk) = ready!(Pin::new(data_rx).poll_next(cx)?) {
+                if !data_rx.is_closed() || !data_rx.is_empty() {
+                    if let Some(chunk) = ready!(data_rx.poll_recv(cx)) {
+                        let chunk = chunk?;
                         len.sub_if(chunk.len() as u64);
                         return Poll::Ready(Some(Ok(Frame::data(chunk))));
                     }
@@ -353,9 +356,8 @@ impl Sender {
     pub(crate) fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<crate::Result<()>> {
         // Check if the receiver end has tried polling for the body yet
         ready!(self.poll_want(cx)?);
-        self.data_tx
-            .poll_ready(cx)
-            .map_err(|_| crate::Error::new_closed())
+        let _ = cx;
+        Poll::Ready(Ok(()))
     }
 
     fn poll_want(&mut self, cx: &mut Context<'_>) -> Poll<crate::Result<()>> {
@@ -407,8 +409,8 @@ impl Sender {
     #[cfg(feature = "http1")]
     pub(crate) fn try_send_data(&mut self, chunk: Bytes) -> Result<(), Bytes> {
         self.data_tx
-            .try_send(Ok(chunk))
-            .map_err(|err| err.into_inner().expect("just sent Ok"))
+            .send(Ok(chunk))
+            .map_err(|err| err.0.expect("just sent Ok"))
     }
 
     #[cfg(feature = "http1")]
@@ -432,9 +434,7 @@ impl Sender {
     pub(crate) fn send_error(&mut self, err: crate::Error) {
         let _ = self
             .data_tx
-            // clone so the send works even if buffer is full
-            .clone()
-            .try_send(Err(err));
+            .send(Err(err));
     }
 }
 

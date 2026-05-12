@@ -5,6 +5,7 @@ use std::{
     pin::Pin,
     task::{Context, Poll},
 };
+use alloc::boxed::Box;
 
 use crate::rt::{Read, Write};
 use bytes::{Buf, Bytes};

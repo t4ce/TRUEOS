@@ -1,3 +1,4 @@
+use alloc::{string::String, vec::Vec};
 use bytes::Bytes;
 
 /// A reason phrase in an HTTP/1 response.

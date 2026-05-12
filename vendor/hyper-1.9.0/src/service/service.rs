@@ -1,4 +1,5 @@
 use core::future::Future;
+use alloc::boxed::Box;
 
 /// An asynchronous function from a `Request` to a `Response`.
 ///

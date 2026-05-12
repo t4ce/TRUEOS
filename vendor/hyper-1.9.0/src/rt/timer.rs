@@ -65,6 +65,7 @@ use std::{
     pin::Pin,
     time::{Duration, Instant},
 };
+use alloc::boxed::Box;
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 fn instant_now() -> Instant {

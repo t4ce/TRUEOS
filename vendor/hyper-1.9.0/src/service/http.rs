@@ -1,5 +1,6 @@
 use core::error::Error as StdError;
 use core::future::Future;
+use alloc::boxed::Box;
 
 use crate::body::Body;
 use crate::service::service::Service;
