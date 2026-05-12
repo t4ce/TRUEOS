@@ -7,8 +7,10 @@
 
 //! Error types for the crate
 
+use alloc::string::String;
 use std::{fmt, io};
 
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use futures_channel::mpsc;
 use thiserror::Error;
 
@@ -45,6 +47,7 @@ pub enum ErrorKind {
     Proto(#[from] ProtoError),
 
     /// Queue send error
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     #[error("error sending to mpsc: {0}")]
     SendError(#[from] mpsc::SendError),
 
@@ -64,6 +67,7 @@ impl Clone for ErrorKind {
             DnsSec(dnssec) => DnsSec(dnssec.clone()),
             Io(io) => Io(std::io::Error::from(io.kind())),
             Proto(proto) => Proto(proto.clone()),
+            #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
             SendError(e) => SendError(e.clone()),
             Timeout => Timeout,
         }
@@ -118,6 +122,7 @@ impl From<&'static str> for Error {
     }
 }
 
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 impl From<mpsc::SendError> for Error {
     fn from(e: mpsc::SendError) -> Self {
         ErrorKind::from(e).into()

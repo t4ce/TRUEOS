@@ -315,7 +315,10 @@ default-features = false
 
 [dependencies.rand]
 version = "0.9"
-features = ["alloc"]
+features = [
+    "alloc",
+    "std_rng",
+]
 default-features = false
 
 [dependencies.ring]

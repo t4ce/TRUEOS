@@ -7,6 +7,7 @@
 
 //! Error types for the crate
 
+use alloc::{boxed::Box, format, string::String};
 use std::{fmt, io, sync};
 
 use thiserror::Error;
@@ -190,6 +191,7 @@ impl From<ResolveError> for io::Error {
     }
 }
 
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 impl<T> From<sync::PoisonError<T>> for ResolveError {
     fn from(e: sync::PoisonError<T>) -> Self {
         ResolveErrorKind::Msg(format!("lock was poisoned, this is non-recoverable: {e}")).into()

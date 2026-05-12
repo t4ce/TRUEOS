@@ -7,6 +7,7 @@
 
 //! Lookup result from a resolution of ipv4 and ipv6 records with a Resolver.
 
+use alloc::{boxed::Box, vec::Vec};
 use std::{
     cmp::min,
     pin::Pin,

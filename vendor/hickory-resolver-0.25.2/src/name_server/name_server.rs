@@ -5,13 +5,14 @@
 // https://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
+use alloc::boxed::Box;
 use core::fmt::{self, Debug, Formatter};
 use core::pin::Pin;
 use std::sync::Arc;
 use std::time::Instant;
 
-use futures_util::lock::Mutex;
 use futures_util::stream::{Stream, once};
+use tokio::sync::Mutex;
 use tracing::debug;
 
 use crate::config::{NameServerConfig, ResolverOpts};

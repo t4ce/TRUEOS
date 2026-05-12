@@ -237,7 +237,7 @@ pub trait ClientHandle: 'static + Clone + DnsHandle + Send {
 
         // build the message
         let mut message: Message = Message::new();
-        let id: u16 = rand::random();
+        let id: u16 = 0;
         message
             .set_id(id)
             // 3.3. NOTIFY is similar to QUERY in that it has a request message with

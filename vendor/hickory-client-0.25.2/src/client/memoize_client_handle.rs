@@ -4,13 +4,14 @@
 // https://apache.org/licenses/LICENSE-2.0> or the MIT license <LICENSE-MIT or
 // https://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
+use alloc::boxed::Box;
 use std::collections::HashMap;
 use core::pin::Pin;
 use std::sync::Arc;
 
 use futures_util::future::FutureExt;
-use futures_util::lock::Mutex;
 use futures_util::stream::Stream;
+use tokio::sync::Mutex;
 use hickory_proto::{
     ProtoError,
     op::Query,

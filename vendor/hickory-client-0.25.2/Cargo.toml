@@ -117,9 +117,15 @@ default-features = false
 [dependencies.hickory-proto]
 version = "0.25"
 features = [
+    "no-std-rand",
     "text-parsing",
     "tokio",
 ]
+default-features = false
+
+[target.'cfg(any(target_os = "trueos", target_os = "zkvm"))'.dependencies.hashbrown]
+version = "0.17.0"
+features = ["default-hasher"]
 default-features = false
 
 [dependencies.once_cell]

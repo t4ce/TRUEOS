@@ -11,7 +11,7 @@ use std::sync::atomic::{self, AtomicU8};
 use std::time::Instant;
 
 use crate::proto::op::Edns;
-use futures_util::lock::Mutex;
+use tokio::sync::Mutex;
 
 pub(crate) struct NameServerState {
     conn_state: AtomicU8,
