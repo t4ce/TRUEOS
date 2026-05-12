@@ -2,6 +2,7 @@ use core::str::SplitWhitespace;
 
 use super::super::{ShellBackend2, print_shell_line};
 use super::tlb_helper::print_table;
+use crate::power::turbo as power_turbo;
 use crate::shell2::shell2_cmd::ParseOutcome;
 
 const TURBO_MENU_HEADERS: [&str; 2] = ["Subcommand", "Arguments"];
@@ -34,16 +35,16 @@ pub(crate) fn try_parse(
             return ParseOutcome::Handled;
         }
 
-        let armed = crate::turbo::armed();
-        match crate::turbo::local_state() {
+        let armed = power_turbo::armed();
+        match power_turbo::local_state() {
             Ok(state) => {
                 let msg = alloc::format!("turbo: armed={} state={:?}", armed, state);
                 line(io, msg.as_str());
             }
-            Err(crate::turbo::TurboSetError::Unsupported) => {
+            Err(power_turbo::TurboSetError::Unsupported) => {
                 line(io, "turbo: unsupported (intel-only)");
             }
-            Err(crate::turbo::TurboSetError::Disarmed) => {
+            Err(power_turbo::TurboSetError::Disarmed) => {
                 line(io, "turbo: disarmed");
             }
         }
@@ -59,7 +60,7 @@ pub(crate) fn try_parse(
             return ParseOutcome::Handled;
         }
 
-        crate::turbo::set_armed(true);
+        power_turbo::set_armed(true);
         line(io, "turbo: armed");
         return ParseOutcome::Handled;
     }
@@ -70,7 +71,7 @@ pub(crate) fn try_parse(
             return ParseOutcome::Handled;
         }
 
-        crate::turbo::set_armed(false);
+        power_turbo::set_armed(false);
         line(io, "turbo: disarmed");
         return ParseOutcome::Handled;
     }
@@ -91,7 +92,7 @@ pub(crate) fn try_parse(
             return ParseOutcome::Handled;
         }
 
-        match crate::turbo::verify_all(spins) {
+        match power_turbo::verify_all(spins) {
             Ok(report) => {
                 let suffix = if report.timed_out { " TIMEOUT" } else { "" };
                 let msg = alloc::format!(
@@ -110,10 +111,10 @@ pub(crate) fn try_parse(
                 );
                 line(io, msg.as_str());
             }
-            Err(crate::turbo::TurboSetError::Disarmed) => {
+            Err(power_turbo::TurboSetError::Disarmed) => {
                 line(io, "turbo: msr disarmed (verify should not require arm)");
             }
-            Err(crate::turbo::TurboSetError::Unsupported) => {
+            Err(power_turbo::TurboSetError::Unsupported) => {
                 line(io, "turbo: unsupported (intel-only)");
             }
         }
@@ -138,7 +139,7 @@ pub(crate) fn try_parse(
         return ParseOutcome::Handled;
     }
 
-    match crate::turbo::set_enabled_all(enable) {
+    match power_turbo::set_enabled_all(enable) {
         Ok(report) => {
             let msg = alloc::format!(
                 "turbo: requested={} ap_submitted={}/{} busy={} total_cpus={} seq={}",
@@ -151,10 +152,10 @@ pub(crate) fn try_parse(
             );
             line(io, msg.as_str());
         }
-        Err(crate::turbo::TurboSetError::Disarmed) => {
+        Err(power_turbo::TurboSetError::Disarmed) => {
             line(io, "turbo: msr disarmed (run `turbo arm`)");
         }
-        Err(crate::turbo::TurboSetError::Unsupported) => {
+        Err(power_turbo::TurboSetError::Unsupported) => {
             line(io, "turbo: unsupported (intel-only)");
         }
     }

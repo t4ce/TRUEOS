@@ -95,12 +95,6 @@ mod tst_net_tcp_shell;
 mod tst_uas_skhynix_route_probe;
 #[path = "tst/ws_time.rs"]
 mod tst_ws_time;
-#[cfg(target_arch = "x86_64")]
-#[path = "power/turbo.rs"]
-mod turbo;
-#[cfg(not(target_arch = "x86_64"))]
-#[path = "turbo_disabled.rs"]
-mod turbo;
 mod usb2;
 mod wait;
 mod workers;

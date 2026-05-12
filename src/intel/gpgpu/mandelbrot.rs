@@ -560,6 +560,7 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot_preview(
     let mut submitted_strips = 0usize;
     let mut finished_strips = 0usize;
     let mut accepted_strips = 0usize;
+    let mut advanced_strips = 0usize;
     let mut idx = start_cursor;
     while submitted_strips < strip_budget {
         let strip_x = idx % strips_per_row;
@@ -610,12 +611,13 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot_preview(
             proof.finished && proof.finish_marker == RCS_EXEC_RESULT_COMPUTE_WALKER_DONE;
         if strip_finished {
             finished_strips += 1;
+            advanced_strips += 1;
         }
         if strip_changed {
             accepted_strips += 1;
         }
         last_proof = proof;
-        if !strip_finished || !strip_changed {
+        if !strip_finished {
             break;
         }
         idx += 1;
@@ -636,17 +638,18 @@ pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot_preview(
             flush_offset,
             flush_bytes,
         );
-    let next_cursor = (start_cursor + accepted_strips) % total_strips;
+    let next_cursor = (start_cursor + advanced_strips) % total_strips;
     let readback_ok =
         submitted_strips != 0 && submitted_strips == accepted_strips && last_proof.readback_ok;
     let should_log_preview =
         (accepted_strips != 0 && (start_cursor == 0 || next_cursor == 0)) || !last_proof.finished;
     if should_log_preview {
         crate::log!(
-            "intel/gpgpu: primary-scanout-mandelbrot16-preview submitted_programs={} finished_programs={} changed_programs={} pixels_per_program={} submitted_pixels={} changed_pixels={} strict_readback_ok={} reason={} program_source={} primary_gpu=0x{:X} primary_bytes=0x{:X} cursor_in={} cursor_out={} strip_budget={} burst_cap={} last_gpu=0x{:X} last_first_before=0x{:08X} last_first_after=0x{:08X} last_change_mask=0x{:016X} display_notified={} finish_marker=0x{:08X} finish_expected=0x{:08X} action={} next={} deliverable=visible-mandelbrot-frame-progress\n",
+            "intel/gpgpu: primary-scanout-mandelbrot16-preview submitted_programs={} finished_programs={} changed_programs={} advanced_programs={} pixels_per_program={} submitted_pixels={} changed_pixels={} strict_readback_ok={} reason={} program_source={} primary_gpu=0x{:X} primary_bytes=0x{:X} cursor_in={} cursor_out={} strip_budget={} burst_cap={} last_gpu=0x{:X} last_first_before=0x{:08X} last_first_after=0x{:08X} last_change_mask=0x{:016X} display_notified={} finish_marker=0x{:08X} finish_expected=0x{:08X} action={} next={} deliverable=visible-mandelbrot-frame-progress\n",
             submitted_strips,
             finished_strips,
             accepted_strips,
+            advanced_strips,
             PIXELS_PER_PROGRAM,
             submitted_strips.saturating_mul(PIXELS_PER_PROGRAM),
             accepted_strips.saturating_mul(PIXELS_PER_PROGRAM),
