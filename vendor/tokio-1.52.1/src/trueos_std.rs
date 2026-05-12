@@ -52,29 +52,6 @@ pub mod fmt {
     pub use core::fmt::*;
 }
 
-pub mod future {
-    pub use core::future::{poll_fn, Future, IntoFuture};
-    use core::pin::Pin;
-    use core::task::{Context, Poll};
-
-    #[derive(Debug, Clone)]
-    pub struct Ready<T>(Option<T>);
-
-    pub fn ready<T>(value: T) -> Ready<T> {
-        Ready(Some(value))
-    }
-
-    impl<T> Unpin for Ready<T> {}
-
-    impl<T> Future for Ready<T> {
-        type Output = T;
-
-        fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<T> {
-            Poll::Ready(self.get_mut().0.take().expect("Ready polled after completion"))
-        }
-    }
-}
-
 pub mod hash {
     pub use core::hash::*;
 }
@@ -392,10 +369,6 @@ pub mod str {
 
 pub mod string {
     pub use alloc::string::*;
-}
-
-pub mod task {
-    pub use core::task::*;
 }
 
 pub mod thread {

@@ -5,7 +5,30 @@
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub use core::future::{poll_fn, Future, IntoFuture};
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
-pub use std::future::{ready, Ready};
+use core::pin::Pin;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use core::task::{Context, Poll};
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[derive(Debug, Clone)]
+pub struct Ready<T>(Option<T>);
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub fn ready<T>(value: T) -> Ready<T> {
+    Ready(Some(value))
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+impl<T> Unpin for Ready<T> {}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+impl<T> Future for Ready<T> {
+    type Output = T;
+
+    fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<T> {
+        Poll::Ready(self.get_mut().0.take().expect("Ready polled after completion"))
+    }
+}
 
 #[cfg(any(feature = "macros", feature = "process"))]
 pub(crate) mod maybe_done;

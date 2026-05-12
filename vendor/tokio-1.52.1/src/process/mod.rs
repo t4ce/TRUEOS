@@ -250,20 +250,21 @@ use crate::io::{AsyncRead, AsyncWrite, ReadBuf};
 use crate::process::kill::Kill;
 use crate::runtime::prelude::*;
 
-use std::ffi::OsStr;
-use std::future::Future;
-use std::io;
-use std::path::Path;
-use std::pin::Pin;
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-use std::process::{Child as StdChild, Command as StdCommand, ExitStatus, Output, Stdio};
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use self::imp::{Child as StdChild, Command as StdCommand, ExitStatus, Output, Stdio};
-use std::task::{ready, Context, Poll};
+use alloc::vec::Vec;
+use core::future::Future;
+use core::pin::Pin;
+use core::task::{ready, Context, Poll};
+use std::ffi::OsStr;
+use std::io;
+use std::path::Path;
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+use std::process::{Child as StdChild, Command as StdCommand, ExitStatus, Output, Stdio};
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub fn abort() -> ! {
-    panic!("abort")
+    core::panic!("abort")
 }
 
 #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
@@ -1523,10 +1524,16 @@ impl ChildStdin {
     /// This method may fail if an error is encountered when setting the pipe to
     /// non-blocking mode, or when registering the pipe with the runtime's IO
     /// driver.
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     pub fn from_std(inner: std::process::ChildStdin) -> io::Result<Self> {
         Ok(Self {
             inner: imp::stdio(inner)?,
         })
+    }
+
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    pub fn from_std(inner: imp::ChildStdio) -> io::Result<Self> {
+        Ok(Self { inner })
     }
 }
 
@@ -1538,10 +1545,16 @@ impl ChildStdout {
     /// This method may fail if an error is encountered when setting the pipe to
     /// non-blocking mode, or when registering the pipe with the runtime's IO
     /// driver.
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     pub fn from_std(inner: std::process::ChildStdout) -> io::Result<Self> {
         Ok(Self {
             inner: imp::stdio(inner)?,
         })
+    }
+
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    pub fn from_std(inner: imp::ChildStdio) -> io::Result<Self> {
+        Ok(Self { inner })
     }
 }
 
@@ -1553,10 +1566,16 @@ impl ChildStderr {
     /// This method may fail if an error is encountered when setting the pipe to
     /// non-blocking mode, or when registering the pipe with the runtime's IO
     /// driver.
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     pub fn from_std(inner: std::process::ChildStderr) -> io::Result<Self> {
         Ok(Self {
             inner: imp::stdio(inner)?,
         })
+    }
+
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    pub fn from_std(inner: imp::ChildStdio) -> io::Result<Self> {
+        Ok(Self { inner })
     }
 }
 

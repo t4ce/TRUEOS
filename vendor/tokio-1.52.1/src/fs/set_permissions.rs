@@ -1,5 +1,8 @@
 use crate::fs::asyncify;
 
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use crate::fs::trueos::Permissions;
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::fs::Permissions;
 use std::io;
 use std::path::Path;
@@ -11,5 +14,8 @@ use std::path::Path;
 /// [std]: fn@std::fs::set_permissions
 pub async fn set_permissions(path: impl AsRef<Path>, perm: Permissions) -> io::Result<()> {
     let path = path.as_ref().to_owned();
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    return crate::fs::trueos::set_permissions(&path, perm).await;
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     asyncify(|| std::fs::set_permissions(path, perm)).await
 }

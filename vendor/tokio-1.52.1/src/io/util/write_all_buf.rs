@@ -48,7 +48,8 @@ where
         while me.buf.has_remaining() {
             let n = if me.writer.is_write_vectored() {
                 let mut slices = [IoSlice::new(&[]); MAX_VECTOR_ELEMENTS];
-                let cnt = me.buf.chunks_vectored(&mut slices);
+                slices[0] = IoSlice::new(me.buf.chunk());
+                let cnt = 1;
                 ready!(Pin::new(&mut *me.writer).poll_write_vectored(cx, &slices[..cnt]))?
             } else {
                 ready!(Pin::new(&mut *me.writer).poll_write(cx, me.buf.chunk())?)

@@ -7,9 +7,10 @@ use crate::runtime::prelude::*;
 use pin_project_lite::pin_project;
 use core::future::Future;
 use core::marker::PhantomPinned;
+use core::mem;
 use core::pin::Pin;
 use core::task::{ready, Context, Poll};
-use std::{io, mem};
+use std::io;
 
 pin_project! {
     /// Future for the [`read_to_string`](super::AsyncReadExt::read_to_string) method.
