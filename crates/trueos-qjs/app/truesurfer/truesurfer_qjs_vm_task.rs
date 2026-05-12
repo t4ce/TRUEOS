@@ -24,6 +24,7 @@ unsafe extern "C" {
 }
 
 pub const MAX_BROWSER_INSTANCE_ID: u32 = 50;
+pub const TRUESURFER_TASK_POOL_SIZE: usize = 100;
 pub const BOOT_BROWSER_INSTANCE_IDS: [u32; 10] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
 pub const HOSTED_KEYBOARD_MOD_SHIFT: u8 = 1 << 0;
@@ -979,7 +980,7 @@ unsafe fn runtime_has_pending_work(rt: *mut qjs::JSRuntime, ctx: *mut qjs::JSCon
         || qjs::workers::has_pending_for_ctx(ctx)
 }
 
-#[embassy_executor::task(pool_size = 100)]
+#[embassy_executor::task(pool_size = TRUESURFER_TASK_POOL_SIZE)]
 pub async fn truesurfer_task(browser_instance_id: u32) {
     if !browser_valid(browser_instance_id) {
         log_error(format!("qjs-truesurfer[{}]: invalid browser instance\n", browser_instance_id));

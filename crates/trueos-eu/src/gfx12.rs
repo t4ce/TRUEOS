@@ -448,6 +448,47 @@ pub const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_X_BASE_DWORD: usize = 11;
 pub const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_COLOR_SEED_DWORD: usize = 19;
 pub const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_ADDRESS_BASE_DWORD: usize = 35;
 pub const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_STORE_SEND_DWORD: usize = 38;
+pub const PRIMARY_SCANOUT_LINE8_SCALAR8_BW_PROGRAM_NAME: &str =
+    "gfx12-primary-scanout-line8-scalar8-bw-hdc1-stateless-unrolled-store-then-ts-eot";
+pub const PRIMARY_SCANOUT_LINE8_SCALAR8_BW_LANES: usize = 8;
+pub const PRIMARY_SCANOUT_LINE8_SCALAR8_BW_ADDRESS_BASE_DWORD: usize = 7;
+pub const PRIMARY_SCANOUT_LINE8_SCALAR8_BW_COLOR_DWORD: usize = 3;
+pub const PRIMARY_SCANOUT_LINE8_SCALAR8_BW_STORE_SEND_DWORD: usize = 11;
+pub const PRIMARY_SCANOUT_LINE320_SCALAR_BW_PROGRAM_NAME: &str =
+    "gfx12-primary-scanout-line320-scalar-bw-hdc1-stateless-unrolled-store-then-ts-eot";
+pub const PRIMARY_SCANOUT_LINE320_SCALAR_BW_LANES: usize = 320;
+pub const PRIMARY_SCANOUT_LINE320_SCALAR_BW_WORD_DWORDS: usize =
+    PRIMARY_SCANOUT_LINE320_SCALAR_BW_LANES * 8 + 12;
+pub const PRIMARY_SCANOUT_LINE320_SCALAR_BW_ADDRESS_BASE_DWORD: usize = 7;
+pub const PRIMARY_SCANOUT_LINE320_SCALAR_BW_COLOR_DWORD: usize = 3;
+pub const PRIMARY_SCANOUT_LINE320_SCALAR_BW_STORE_SEND_DWORD: usize = 11;
+pub const PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_PROGRAM_NAME: &str =
+    "gfx12-primary-scanout-groupid-line320-scalar-bw-hdc1-stateless-unrolled-store-then-ts-eot";
+pub const PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_GROUPS: usize = 8;
+pub const PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_LANES: usize =
+    PRIMARY_SCANOUT_LINE320_SCALAR_BW_LANES;
+pub const PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_STRIDE_SHIFT: usize = 12;
+pub const PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_WORD_DWORDS: usize =
+    PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_LANES * 8 + 34;
+pub const PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_ADDRESS_BASE_DWORD: usize = 25;
+pub const PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_COLOR_DWORD: usize = 29;
+pub const PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_STORE_SEND_DWORD: usize = 30;
+pub const PRIMARY_SCANOUT_ROW2560_SIMD8_BW_PROGRAM_NAME: &str =
+    "gfx12-primary-scanout-row2560-simd8-bw-hdc1-stateless-unrolled-store-then-ts-eot";
+pub const PRIMARY_SCANOUT_ROW2560_SIMD8_BW_PIXELS: usize = 2560;
+pub const PRIMARY_SCANOUT_ROW2560_SIMD8_BW_SENDS: usize =
+    PRIMARY_SCANOUT_ROW2560_SIMD8_BW_PIXELS / PRIMARY_SCANOUT_LINE8_SIMD8_BW_LANES;
+pub const PRIMARY_SCANOUT_ROW2560_SIMD8_BW_WORD_DWORDS: usize =
+    20 + 4 + ((PRIMARY_SCANOUT_ROW2560_SIMD8_BW_SENDS - 1) * 8) + 8;
+pub const PRIMARY_SCANOUT_ROW2560_SIMD8_BW_ADDRESS_BASE_DWORD: usize = 15;
+pub const PRIMARY_SCANOUT_ROW2560_SIMD8_BW_COLOR_DWORD: usize = 19;
+pub const PRIMARY_SCANOUT_ROW2560_SIMD8_BW_STORE_SEND_DWORD: usize = 23;
+pub const PRIMARY_SCANOUT_LINE8_SIMD8_BW_PROGRAM_NAME: &str =
+    "gfx12-primary-scanout-line8-simd8-bw-hdc1-bti1-offset-store-then-ts-eot";
+pub const PRIMARY_SCANOUT_LINE8_SIMD8_BW_LANES: usize = 8;
+pub const PRIMARY_SCANOUT_LINE8_SIMD8_BW_ADDRESS_BASE_DWORD: usize = 15;
+pub const PRIMARY_SCANOUT_LINE8_SIMD8_BW_COLOR_DWORD: usize = 19;
+pub const PRIMARY_SCANOUT_LINE8_SIMD8_BW_STORE_SEND_DWORD: usize = 23;
 
 // T5 diagnostic control: preserve the T5 arena payload shape and final HDC1
 // send, but remove live loads and math.  It should write:
@@ -933,6 +974,315 @@ pub static PRIMARY_SCANOUT_MANDELBROT8_HDC1_STATELESS_STORE_THEN_TS_EOT: EuArtif
     expects_store: true,
 };
 
+const fn primary_scanout_line8_scalar8_bw_words() -> [u32; 76] {
+    let mut words = [0u32; 76];
+    words[0] = 0x80030061;
+    words[1] = 0x04054660;
+    words[2] = 0x00000000;
+    words[3] = 0x00FF00FF;
+    words[4] = 0x80030061;
+    words[5] = 0x7F054220;
+    words[6] = 0x00000000;
+    words[7] = 0x00840058;
+
+    let mut cursor = 8usize;
+    let mut pixel = 0usize;
+    while pixel < PRIMARY_SCANOUT_LINE8_SCALAR8_BW_LANES {
+        words[cursor] = 0x00030131;
+        words[cursor + 1] = 0x00000000;
+        words[cursor + 2] = 0xCDFA7F0C;
+        words[cursor + 3] = 0x009A040C;
+        cursor += 4;
+        pixel += 1;
+
+        if pixel < PRIMARY_SCANOUT_LINE8_SCALAR8_BW_LANES {
+            words[cursor] = 0x00030140;
+            words[cursor + 1] = 0x7F058660;
+            words[cursor + 2] = 0x06467F05;
+            words[cursor + 3] = 0x00000004;
+            cursor += 4;
+        }
+    }
+
+    words[cursor] = 0x80030061;
+    words[cursor + 1] = 0x7F050220;
+    words[cursor + 2] = 0x00460005;
+    words[cursor + 3] = 0x00000000;
+    words[cursor + 4] = 0x80030131;
+    words[cursor + 5] = 0x00000004;
+    words[cursor + 6] = 0x70007F0C;
+    words[cursor + 7] = 0x00000000;
+    words
+}
+
+// Mandelbrot sidequest line-pilot scalar8 control.
+//
+// Runtime patches:
+// - `g127 = row_gpu` once for the absolute stateless byte address
+// - `g4 = color` once for a uniform black/white fill
+//
+// The EU emits eight known scalar HDC stores, adding four bytes to g127 between
+// stores. This keeps the CPU contract to one address and one color while
+// reusing the scalar HDC payload shape already proven by the scanout marker
+// path.
+pub static PRIMARY_SCANOUT_LINE8_SCALAR8_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS: [u32;
+    76] = primary_scanout_line8_scalar8_bw_words();
+
+pub static PRIMARY_SCANOUT_LINE8_SCALAR8_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT: EuArtifact =
+    EuArtifact {
+        name: PRIMARY_SCANOUT_LINE8_SCALAR8_BW_PROGRAM_NAME,
+        isa: EuIsa::Gfx12,
+        kind: EuArtifactKind::PrimaryScanoutLine8Scalar8BwThenHdc1StoreThenThreadSpawnerEot,
+        words: &PRIMARY_SCANOUT_LINE8_SCALAR8_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS,
+        expects_store: true,
+    };
+
+const fn primary_scanout_line320_scalar_bw_words()
+-> [u32; PRIMARY_SCANOUT_LINE320_SCALAR_BW_WORD_DWORDS] {
+    let mut words = [0u32; PRIMARY_SCANOUT_LINE320_SCALAR_BW_WORD_DWORDS];
+    words[0] = 0x80030061;
+    words[1] = 0x04054660;
+    words[2] = 0x00000000;
+    words[3] = 0x00FF00FF;
+    words[4] = 0x80030061;
+    words[5] = 0x7F054220;
+    words[6] = 0x00000000;
+    words[7] = 0x00840058;
+
+    let mut cursor = 8usize;
+    let mut pixel = 0usize;
+    while pixel < PRIMARY_SCANOUT_LINE320_SCALAR_BW_LANES {
+        words[cursor] = 0x00030131;
+        words[cursor + 1] = 0x00000000;
+        words[cursor + 2] = 0xCDFA7F0C;
+        words[cursor + 3] = 0x009A040C;
+        cursor += 4;
+        pixel += 1;
+
+        if pixel < PRIMARY_SCANOUT_LINE320_SCALAR_BW_LANES {
+            words[cursor] = 0x00030140;
+            words[cursor + 1] = 0x7F058660;
+            words[cursor + 2] = 0x06467F05;
+            words[cursor + 3] = 0x00000004;
+            cursor += 4;
+        }
+    }
+
+    words[cursor] = 0x80030061;
+    words[cursor + 1] = 0x7F050220;
+    words[cursor + 2] = 0x00460005;
+    words[cursor + 3] = 0x00000000;
+    words[cursor + 4] = 0x80030131;
+    words[cursor + 5] = 0x00000004;
+    words[cursor + 6] = 0x70007F0C;
+    words[cursor + 7] = 0x00000000;
+    words
+}
+
+// Mandelbrot sidequest visible line pilot.
+//
+// Runtime patches stay intentionally tiny:
+// - `g127 = line_start_gpu` once for the absolute stateless byte address
+// - `g4 = color` once for a uniform black/white fill
+//
+// The EU emits 320 scalar HDC stores, adding four bytes between stores. This
+// keeps the same proven scalar send path as the 8-pixel pilot, but makes one
+// submit wide enough for the sidequest loop to sweep full scanout rows.
+pub static PRIMARY_SCANOUT_LINE320_SCALAR_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS:
+    [u32; PRIMARY_SCANOUT_LINE320_SCALAR_BW_WORD_DWORDS] =
+    primary_scanout_line320_scalar_bw_words();
+
+pub static PRIMARY_SCANOUT_LINE320_SCALAR_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT: EuArtifact =
+    EuArtifact {
+        name: PRIMARY_SCANOUT_LINE320_SCALAR_BW_PROGRAM_NAME,
+        isa: EuIsa::Gfx12,
+        kind: EuArtifactKind::PrimaryScanoutLine320ScalarBwThenHdc1StoreThenThreadSpawnerEot,
+        words: &PRIMARY_SCANOUT_LINE320_SCALAR_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS,
+        expects_store: true,
+    };
+
+const fn primary_scanout_groupid_line320_scalar_bw_words()
+-> [u32; PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_WORD_DWORDS] {
+    let mut words = [0u32; PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_WORD_DWORDS];
+
+    // Mesa row-indexed oracle reads `gl_WorkGroupID.x` from `g0.1` and adds a
+    // push/base value from `g1.4`.  TRUEOS still uses a dummy CURBE here, so
+    // this first probe deliberately shifts `g0.1` directly.
+    words[0] = 0x80030061;
+    words[1] = 0x31050220;
+    words[2] = 0x00000024;
+    words[3] = 0x00000000;
+    words[4] = 0x80030061;
+    words[5] = 0x32054220;
+    words[6] = 0x00000000;
+    words[7] = 0x00000000;
+    words[8] = 0x80030061;
+    words[9] = 0x33054220;
+    words[10] = 0x00000000;
+    words[11] = 0x00000000;
+    words[12] = 0xA40D0340;
+    words[13] = 0x0111310A;
+    words[14] = 0x80000361;
+    words[15] = 0x32454620;
+    words[16] = 0x00000000;
+    words[17] = 0x00000000;
+    words[18] = 0x80030269;
+    words[19] = 0x1C058660;
+    words[20] = 0x02003104;
+    words[21] = PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_STRIDE_SHIFT as u32;
+    words[22] = 0x80030240;
+    words[23] = 0x7F058660;
+    words[24] = 0x06001C04;
+    words[25] = 0x00840058;
+    words[26] = 0x80030061;
+    words[27] = 0x04054660;
+    words[28] = 0x00000000;
+    words[29] = 0x00000000;
+
+    let mut cursor = PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_STORE_SEND_DWORD;
+    let mut pixel = 0usize;
+    while pixel < PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_LANES {
+        words[cursor] = 0x00030131;
+        words[cursor + 1] = 0x00000000;
+        words[cursor + 2] = 0xCDFA7F0C;
+        words[cursor + 3] = 0x009A040C;
+        cursor += 4;
+        pixel += 1;
+
+        if pixel < PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_LANES {
+            words[cursor] = 0x00030140;
+            words[cursor + 1] = 0x7F058660;
+            words[cursor + 2] = 0x06467F05;
+            words[cursor + 3] = 0x00000004;
+            cursor += 4;
+        }
+    }
+
+    words[cursor] = 0x80030061;
+    words[cursor + 1] = 0x7F050220;
+    words[cursor + 2] = 0x00460005;
+    words[cursor + 3] = 0x00000000;
+    words[cursor + 4] = 0x80030131;
+    words[cursor + 5] = 0x00000004;
+    words[cursor + 6] = 0x70007F0C;
+    words[cursor + 7] = 0x00000000;
+    words
+}
+
+// Mandelbrot sidequest group-id visible probe.
+//
+// Runtime patches stay to one base address and one color.  If the walker
+// exposes a real group id, one submit with x_dim=8 paints eight separate
+// 320-pixel blocks.  If all groups see zero, the same artifact collapses to the
+// first block and the readback mask shows that directly.
+pub static PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS:
+    [u32; PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_WORD_DWORDS] =
+    primary_scanout_groupid_line320_scalar_bw_words();
+
+pub static PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT:
+    EuArtifact = EuArtifact {
+    name: PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_PROGRAM_NAME,
+    isa: EuIsa::Gfx12,
+    kind: EuArtifactKind::PrimaryScanoutGroupidLine320ScalarBwThenHdc1StoreThenThreadSpawnerEot,
+    words: &PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS,
+    expects_store: true,
+};
+
+const fn primary_scanout_row2560_simd8_bw_words()
+-> [u32; PRIMARY_SCANOUT_ROW2560_SIMD8_BW_WORD_DWORDS] {
+    let mut words = [0u32; PRIMARY_SCANOUT_ROW2560_SIMD8_BW_WORD_DWORDS];
+
+    words[0] = 0x80030061;
+    words[1] = 0x01054410;
+    words[2] = 0x00000000;
+    words[3] = 0x76543210;
+    words[4] = 0x80030261;
+    words[5] = 0x01050120;
+    words[6] = 0x00460105;
+    words[7] = 0x00000000;
+    words[8] = 0x00030069;
+    words[9] = 0x7F058660;
+    words[10] = 0x02460105;
+    words[11] = 0x00000002;
+    words[12] = 0x00030140;
+    words[13] = 0x7F058660;
+    words[14] = 0x06467F05;
+    words[15] = 0x00000000;
+    words[16] = 0x80030061;
+    words[17] = 0x04054660;
+    words[18] = 0x00000000;
+    words[19] = 0x00FF00FF;
+
+    let mut cursor = 20usize;
+    let mut send = 0usize;
+    while send < PRIMARY_SCANOUT_ROW2560_SIMD8_BW_SENDS {
+        words[cursor] = 0x00030131;
+        words[cursor + 1] = 0x00000000;
+        words[cursor + 2] = 0xCDFA7F0C;
+        words[cursor + 3] = 0x009A040C;
+        cursor += 4;
+        send += 1;
+
+        if send < PRIMARY_SCANOUT_ROW2560_SIMD8_BW_SENDS {
+            words[cursor] = 0x00030140;
+            words[cursor + 1] = 0x7F058660;
+            words[cursor + 2] = 0x06467F05;
+            words[cursor + 3] = 0x00000020;
+            cursor += 4;
+        }
+    }
+
+    words[cursor] = 0x80030061;
+    words[cursor + 1] = 0x7F050220;
+    words[cursor + 2] = 0x00460005;
+    words[cursor + 3] = 0x00000000;
+    words[cursor + 4] = 0x80030131;
+    words[cursor + 5] = 0x00000004;
+    words[cursor + 6] = 0x70007F0C;
+    words[cursor + 7] = 0x00000000;
+    words
+}
+
+pub static PRIMARY_SCANOUT_ROW2560_SIMD8_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS:
+    [u32; PRIMARY_SCANOUT_ROW2560_SIMD8_BW_WORD_DWORDS] =
+    primary_scanout_row2560_simd8_bw_words();
+
+pub static PRIMARY_SCANOUT_ROW2560_SIMD8_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT:
+    EuArtifact = EuArtifact {
+    name: PRIMARY_SCANOUT_ROW2560_SIMD8_BW_PROGRAM_NAME,
+    isa: EuIsa::Gfx12,
+    kind: EuArtifactKind::PrimaryScanoutRow2560Simd8BwThenHdc1StoreThenThreadSpawnerEot,
+    words: &PRIMARY_SCANOUT_ROW2560_SIMD8_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS,
+    expects_store: true,
+};
+
+// Mandelbrot sidequest line-pilot probe from
+// `crates/trueos-shader/scanout_block/scanout_8px.asm`.
+//
+// Runtime patches:
+// - `g127 += row_offset` for the byte offset into BTI 1
+// - `g4 = color` for a uniform black/white fill
+//
+// The EU derives `row_offset + lane * 4`, and BTI 1 is bound to the primary
+// scanout. One SIMD8 HDC send should write eight adjacent pixels. This is
+// intentionally simpler than the coord-color pilot so the next boot
+// distinguishes "SIMD8 store payload broken" from color math.
+pub static PRIMARY_SCANOUT_LINE8_SIMD8_BW_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS: [u32; 32] = [
+    0x80030061, 0x01054410, 0x00000000, 0x76543210, 0x80030261, 0x01050120, 0x00460105, 0x00000000,
+    0x00030069, 0x7F058660, 0x02460105, 0x00000002, 0x00030140, 0x7F058660, 0x06467F05, 0x00000000,
+    0x80030061, 0x04054660, 0x00000000, 0x00FF00FF, 0x00030131, 0x00000000, 0xCC027F0C, 0x009A040C,
+    0x80030061, 0x7F050220, 0x00460005, 0x00000000, 0x80030131, 0x00000004, 0x70007F0C, 0x00000000,
+];
+
+pub static PRIMARY_SCANOUT_LINE8_SIMD8_BW_HDC1_STATELESS_STORE_THEN_TS_EOT: EuArtifact =
+    EuArtifact {
+        name: PRIMARY_SCANOUT_LINE8_SIMD8_BW_PROGRAM_NAME,
+        isa: EuIsa::Gfx12,
+        kind: EuArtifactKind::PrimaryScanoutLine8Simd8BwThenHdc1StoreThenThreadSpawnerEot,
+        words: &PRIMARY_SCANOUT_LINE8_SIMD8_BW_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS,
+        expects_store: true,
+    };
+
 // Mandelbrot sidequest coord-color pilot. This is the first artifact after the
 // scalar store proof that moves useful strip work into the EU program:
 // - runtime patches x_base, row/phase color seed, and row_gpu
@@ -961,31 +1311,46 @@ pub static PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_COLOR_HDC1_STATELESS_STORE_TH
     expects_store: true,
 };
 
-// Mandelbrot sidequest q12 escape-count artifact. This uses a bound-surface HDC
-// write suffix inside the IDD-advertised binding table count: the CPU patches
-// one primary-scanout-relative row offset per 16-pixel program, while the EU
-// computes two contiguous SIMD8 escape-count strips and lane-derived byte offsets.
-pub const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_PROGRAM_NAME: &str =
-    "gfx12-primary-scanout-mandelbrot16-simd8x2-q12i8-bti1-relative-g127-sync-store-then-ts-eot";
+// Mandelbrot sidequest q12 escape-count artifact. This keeps the SIMD8 math
+// body and 32-pixel window, but uses the same stateless HDC scanout write
+// suffix as the visible 8-pixel strip proof: the CPU patches setup scalars plus
+// absolute row GPU bases, while the EU computes escape counts, colors, and lane
+// byte offsets for four contiguous SIMD8 strips.
+pub const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_PROGRAM_NAME: &str = "gfx12-primary-scanout-mandelbrot32-simd8x4-q12i8-stateless-absolute-g127-sync-store-then-ts-eot";
 pub const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_LANES: usize = 8;
-pub const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_STRIPS_PER_PROGRAM: usize = 2;
+pub const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_STRIPS_PER_PROGRAM: usize = 4;
 pub const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_PIXELS_PER_PROGRAM: usize =
     PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_LANES
         * PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_STRIPS_PER_PROGRAM;
 pub const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_FRAC_BITS: u32 = 12;
 pub const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_MAX_ITER: u32 = 8;
-pub const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_STORE_SURFACE: u32 = 0x01;
+pub const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_STORE_SURFACE: u32 = 0xFD;
+pub const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_BINDING_TABLE_SURFACE: u32 = 0x01;
 pub const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_X_STEP_DWORDS: [usize;
-    PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_STRIPS_PER_PROGRAM] = [11, 535];
+    PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_STRIPS_PER_PROGRAM] = [11, 535, 1055, 1575];
 pub const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_C_RE_BASE_DWORDS: [usize;
-    PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_STRIPS_PER_PROGRAM] = [15, 539];
+    PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_STRIPS_PER_PROGRAM] = [15, 539, 1059, 1579];
 pub const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_C_IM_DWORD: usize = 19;
-pub const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_ADDRESS_OFFSET_DWORDS: [usize;
-    PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_STRIPS_PER_PROGRAM] = [519, 1039];
+pub const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_ADDRESS_BASE_DWORDS: [usize;
+    PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_STRIPS_PER_PROGRAM] = [519, 1039, 1559, 2079];
 pub const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_STORE_EXDESC_DWORD: usize = 527;
 
-pub static PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_ESCAPE_HDC1_BTI1_STORE_THEN_TS_EOT_WORDS: [u32;
-    1056] = [
+// Preserve the generated SIMD8x2 Q12 program body and widen only by reusing
+// its already-proven second-strip block. The Q12 iteration math, color math,
+// and TS EOT suffix remain byte-for-byte from the generated base artifact; only
+// the store descriptors are switched to the proven stateless scanout suffix.
+const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_BASE_WORDS_DWORDS: usize = 1056;
+const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_STRIP0_DWORDS: usize = 132 * 4;
+const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_STRIPN_DWORDS: usize = 130 * 4;
+const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_EOT_DWORDS: usize = 2 * 4;
+const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_WORDS_DWORDS: usize =
+    PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_STRIP0_DWORDS
+        + (PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_STRIPS_PER_PROGRAM - 1)
+            * PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_STRIPN_DWORDS
+        + PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_EOT_DWORDS;
+
+const PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_ESCAPE_HDC1_STATELESS_STORE_THEN_TS_EOT_BASE_WORDS:
+    [u32; 1056] = [
     0x80030061, 0x01054410, 0x00000000, 0x76543210, 0x80030261, 0x01050160, 0x00460105, 0x00000000,
     0x00030141, 0x02058660, 0x06460105, 0x00000005, 0x00030140, 0x02058660, 0x06460205, 0xFFFFE000,
     0x80030061, 0x03054660, 0x00000000, 0xFFFFF000, 0x80030061, 0x06054660, 0x00000000, 0x00000000,
@@ -1051,7 +1416,7 @@ pub static PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_ESCAPE_HDC1_BTI1_STORE_THEN_TS_
     0x00030140, 0x04050660, 0x06460405, 0x00461605, 0x00030140, 0x04058660, 0x06460405, 0x00002040,
     0x00030170, 0x00018660, 0x46460805, 0x00000008, 0x01030161, 0x04054660, 0x00000000, 0x00000000,
     0x00030069, 0x7F058660, 0x02460105, 0x00000002, 0x00030140, 0x7F058660, 0x06467F05, 0x00000000,
-    0x80000101, 0x00000000, 0x00000000, 0x00000000, 0x00030131, 0x00000000, 0xCC027F0C, 0x009A040C,
+    0x80000101, 0x00000000, 0x00000000, 0x00000000, 0x00030131, 0x00000000, 0xCDFA7F0C, 0x009A040C,
     0x00030140, 0x01058660, 0x06460105, 0x00000008, 0x00030141, 0x02058660, 0x06460105, 0x00000005,
     0x00030140, 0x02058660, 0x06460205, 0xFFFFE000, 0x80030061, 0x06054660, 0x00000000, 0x00000000,
     0x80030061, 0x07054660, 0x00000000, 0x00000000, 0x80030061, 0x08054660, 0x00000000, 0x00000000,
@@ -1116,19 +1481,64 @@ pub static PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_ESCAPE_HDC1_BTI1_STORE_THEN_TS_
     0x00030140, 0x04050660, 0x06460405, 0x00461605, 0x00030140, 0x04058660, 0x06460405, 0x00002040,
     0x00030170, 0x00018660, 0x46460805, 0x00000008, 0x01030161, 0x04054660, 0x00000000, 0x00000000,
     0x00030069, 0x7F058660, 0x02460105, 0x00000002, 0x00030140, 0x7F058660, 0x06467F05, 0x00000000,
-    0x80000101, 0x00000000, 0x00000000, 0x00000000, 0x00030131, 0x00000000, 0xCC027F0C, 0x009A040C,
+    0x80000101, 0x00000000, 0x00000000, 0x00000000, 0x00030131, 0x00000000, 0xCDFA7F0C, 0x009A040C,
     0x80030061, 0x7F050220, 0x00460005, 0x00000000, 0x80030131, 0x00000004, 0x70007F0C, 0x00000000,
 ];
 
-pub static PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_ESCAPE_HDC1_BTI1_STORE_THEN_TS_EOT: EuArtifact =
-    EuArtifact {
-        name: PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_PROGRAM_NAME,
-        isa: EuIsa::Gfx12,
-        kind:
-            EuArtifactKind::PrimaryScanoutMandelbrot8Simd8Q12EscapeThenHdc1StoreThenThreadSpawnerEot,
-        words: &PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_ESCAPE_HDC1_BTI1_STORE_THEN_TS_EOT_WORDS,
-        expects_store: true,
-    };
+const fn primary_scanout_mandelbrot8_simd8_q12_escape_words()
+-> [u32; PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_WORDS_DWORDS] {
+    let mut words = [0u32; PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_WORDS_DWORDS];
+    let mut dst = 0usize;
+    let mut src = 0usize;
+
+    while src < PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_STRIP0_DWORDS {
+        words[dst] =
+            PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_ESCAPE_HDC1_STATELESS_STORE_THEN_TS_EOT_BASE_WORDS
+                [src];
+        src += 1;
+        dst += 1;
+    }
+
+    let mut strip = 1usize;
+    while strip < PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_STRIPS_PER_PROGRAM {
+        src = PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_STRIP0_DWORDS;
+        let strip_end = PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_STRIP0_DWORDS
+            + PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_STRIPN_DWORDS;
+        while src < strip_end {
+            words[dst] =
+                PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_ESCAPE_HDC1_STATELESS_STORE_THEN_TS_EOT_BASE_WORDS
+                    [src];
+            src += 1;
+            dst += 1;
+        }
+        strip += 1;
+    }
+
+    src = PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_BASE_WORDS_DWORDS
+        - PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_EOT_DWORDS;
+    while src < PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_BASE_WORDS_DWORDS {
+        words[dst] =
+            PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_ESCAPE_HDC1_STATELESS_STORE_THEN_TS_EOT_BASE_WORDS
+                [src];
+        src += 1;
+        dst += 1;
+    }
+
+    words
+}
+
+pub static PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_ESCAPE_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS:
+    [u32; PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_WORDS_DWORDS] =
+    primary_scanout_mandelbrot8_simd8_q12_escape_words();
+
+pub static PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_ESCAPE_HDC1_STATELESS_STORE_THEN_TS_EOT:
+    EuArtifact = EuArtifact {
+    name: PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_PROGRAM_NAME,
+    isa: EuIsa::Gfx12,
+    kind: EuArtifactKind::PrimaryScanoutMandelbrot8Simd8Q12EscapeThenHdc1StoreThenThreadSpawnerEot,
+    words: &PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_ESCAPE_HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS,
+    expects_store: true,
+};
 
 // T5 live4 bridge: preserve the Mesa live-load/math prefix, but replace only
 // the final surface-indexed store with the proven stateless HDC store suffix.

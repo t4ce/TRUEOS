@@ -93,7 +93,7 @@ define_started_flags!(
     PCIIDS_GIT_STARTED,
     ATOMIC_BOMB_STARTED,
     HTML_DEMO_STARTED,
-    SURFER_FACTORY_STARTED
+    SURFER_PARSE_POOL_STARTED
 );
 
 macro_rules! define_stop_flags {
@@ -580,8 +580,8 @@ fn html_fetch_service(spawner: Spawner) -> SpawnAttempt {
     spawn_bool_result_to_attempt(crate::surfer::spawn_html_fetch_service(spawner))
 }
 
-fn spawn_truesurfer_factory(spawner: Spawner) -> SpawnAttempt {
-    spawn_bool_result_to_attempt(crate::surfer::spawn_truesurfer_factory(spawner))
+fn spawn_truesurfer_parse_pool(spawner: Spawner) -> SpawnAttempt {
+    spawn_bool_result_to_attempt(crate::surfer::spawn_truesurfer_parse_pool(spawner))
 }
 
 fn spawn_ui2(spawner: Spawner) -> SpawnAttempt {
@@ -1168,7 +1168,12 @@ static TASKS: [TaskSpec; 65] = [
         &UI2_HIT_TASK_STARTED,
         spawn_ui2_hit,
     ),
-    TaskSpec::enabled("truesurfer-factory", 0, &SURFER_FACTORY_STARTED, spawn_truesurfer_factory),
+    TaskSpec::enabled(
+        "truesurfer-parse-pool",
+        0,
+        &SURFER_PARSE_POOL_STARTED,
+        spawn_truesurfer_parse_pool,
+    ),
     TaskSpec::enabled(
         "ui2-athlas-third-demo",
         UI2_DEMO_READY,

@@ -27,7 +27,14 @@ pub(crate) const HOSTED_KEYBOARD_MOD_META: u8 = trueos_qjs::browser_task::HOSTED
 pub(crate) const HOSTED_BROWSER_DIRTY_CONTENT: u32 = 1 << 0;
 pub(crate) const HOSTED_BROWSER_DIRTY_INTERACTIVE: u32 = 1 << 1;
 
-const TRUESURFER_FACTORY_BOOT_COUNT: u32 = 0;
+pub(crate) const BROWSER_PARSE_HOST_POOL_SIZE: u32 =
+    trueos_qjs::browser_task::TRUESURFER_TASK_POOL_SIZE as u32;
+const BROWSER_PARSE_HOST_LIMIT: u32 = if BROWSER_PARSE_HOST_POOL_SIZE < MAX_BROWSER_INSTANCE_ID {
+    BROWSER_PARSE_HOST_POOL_SIZE
+} else {
+    MAX_BROWSER_INSTANCE_ID
+};
+const BROWSER_PARSE_POOL_BOOT_COUNT: u32 = 0;
 const BROWSER_ASSET_FETCH_POLL_MS: u64 = 8;
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -37,27 +44,35 @@ pub(crate) struct HostedBrowserDirtyMask {
 }
 
 #[derive(Copy, Clone, Debug, Default)]
-struct HostedBrowserFactorySignalState {
+struct HostedBrowserParsePoolSignalState {
     latest_mask: u64,
     seq: u32,
     taken_seq: u32,
 }
 
-struct TruesurferFactory {
-    next_instance_id: u32,
-    spawned_mask: u64,
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BrowserParseQueueTicket {
+    pub browser_instance_id: u32,
+    pub queued: bool,
 }
 
-impl TruesurferFactory {
+struct BrowserParsePool {
+    next_instance_id: u32,
+    spawned_mask: u64,
+    queued_html_count: u32,
+}
+
+impl BrowserParsePool {
     const fn new() -> Self {
         Self {
             next_instance_id: 1,
             spawned_mask: 0,
+            queued_html_count: 0,
         }
     }
 
     fn next_instance_id(&self) -> Option<u32> {
-        if self.next_instance_id > MAX_BROWSER_INSTANCE_ID {
+        if self.next_instance_id > BROWSER_PARSE_HOST_LIMIT {
             None
         } else {
             Some(self.next_instance_id)
@@ -70,14 +85,19 @@ impl TruesurferFactory {
         self.spawned_mask |= bit;
     }
 
+    fn mark_html_queued(&mut self) -> u32 {
+        self.queued_html_count = self.queued_html_count.saturating_add(1);
+        self.queued_html_count
+    }
+
     fn spawned_mask(&self) -> u64 {
         self.spawned_mask
     }
 }
 
-static TRUESURFER_FACTORY: Mutex<TruesurferFactory> = Mutex::new(TruesurferFactory::new());
-static HOSTED_BROWSER_FACTORY_SIGNAL: Mutex<HostedBrowserFactorySignalState> =
-    Mutex::new(HostedBrowserFactorySignalState {
+static BROWSER_PARSE_POOL: Mutex<BrowserParsePool> = Mutex::new(BrowserParsePool::new());
+static HOSTED_BROWSER_PARSE_POOL_SIGNAL: Mutex<HostedBrowserParsePoolSignalState> =
+    Mutex::new(HostedBrowserParsePoolSignalState {
         latest_mask: 0,
         seq: 0,
         taken_seq: 0,
@@ -85,11 +105,11 @@ static HOSTED_BROWSER_FACTORY_SIGNAL: Mutex<HostedBrowserFactorySignalState> =
 static HOSTED_BROWSER_DIRTY_CONTENT_MASK: AtomicU64 = AtomicU64::new(0);
 static HOSTED_BROWSER_DIRTY_INTERACTIVE_MASK: AtomicU64 = AtomicU64::new(0);
 
-pub(crate) const fn truesurfer_factory_boot_count() -> u32 {
-    if TRUESURFER_FACTORY_BOOT_COUNT > MAX_BROWSER_INSTANCE_ID {
-        MAX_BROWSER_INSTANCE_ID
+pub(crate) const fn browser_parse_pool_boot_count() -> u32 {
+    if BROWSER_PARSE_POOL_BOOT_COUNT > BROWSER_PARSE_HOST_LIMIT {
+        BROWSER_PARSE_HOST_LIMIT
     } else {
-        TRUESURFER_FACTORY_BOOT_COUNT
+        BROWSER_PARSE_POOL_BOOT_COUNT
     }
 }
 
@@ -124,14 +144,14 @@ pub(crate) fn take_hosted_browser_dirty_mask() -> HostedBrowserDirtyMask {
     }
 }
 
-pub(crate) fn signal_hosted_browser_factory_mask(mask: u64) {
-    let mut signal = HOSTED_BROWSER_FACTORY_SIGNAL.lock();
+pub(crate) fn signal_hosted_browser_parse_pool_mask(mask: u64) {
+    let mut signal = HOSTED_BROWSER_PARSE_POOL_SIGNAL.lock();
     signal.latest_mask = mask;
     signal.seq = signal.seq.wrapping_add(1).max(1);
 }
 
-pub(crate) fn take_hosted_browser_factory_mask() -> Option<u64> {
-    let mut signal = HOSTED_BROWSER_FACTORY_SIGNAL.lock();
+pub(crate) fn take_hosted_browser_parse_pool_mask() -> Option<u64> {
+    let mut signal = HOSTED_BROWSER_PARSE_POOL_SIGNAL.lock();
     if signal.seq == signal.taken_seq {
         return None;
     }
@@ -226,6 +246,31 @@ pub(crate) async fn queue_html_for_browser(
         .await
 }
 
+pub(crate) async fn queue_html_parse(
+    html: String,
+    url: Option<String>,
+) -> Option<BrowserParseQueueTicket> {
+    let browser_instance_id = spawn_parse_host_for_html_queue()?;
+    let queued = queue_html_for_browser(browser_instance_id, html, url).await;
+    if queued {
+        let queued_total = BROWSER_PARSE_POOL.lock().mark_html_queued();
+        crate::log!(
+            "truesurfer-parse-queue: queued browser_instance_id={} queued_total={}\n",
+            browser_instance_id,
+            queued_total
+        );
+    } else {
+        crate::log!(
+            "truesurfer-parse-queue: enqueue failed browser_instance_id={}\n",
+            browser_instance_id
+        );
+    }
+    Some(BrowserParseQueueTicket {
+        browser_instance_id,
+        queued,
+    })
+}
+
 fn spawn_truesurfer_on_worker(browser_instance_id: u32) -> Result<bool, SpawnError> {
     let Some(worker_spawner) = crate::workers::pick_background_spawner() else {
         return Ok(false);
@@ -255,71 +300,71 @@ pub(crate) fn spawn_truesurfer_batch(
         return Ok(false);
     }
 
-    let mut factory = TRUESURFER_FACTORY.lock();
+    let mut parse_pool = BROWSER_PARSE_POOL.lock();
     let mut spawned_any = false;
 
     for _ in 0..requested {
-        let Some(browser_instance_id) = factory.next_instance_id() else {
-            break;
-        };
-
-        match spawn_truesurfer_on_worker(browser_instance_id) {
-            Ok(true) => {
-                factory.mark_spawned(browser_instance_id);
-                signal_hosted_browser_factory_mask(factory.spawned_mask());
-                spawned_any = true;
-                crate::log!(
-                    "truesurfer-factory: spawned browser_instance_id={} mask={:#x} remaining={}\n",
-                    browser_instance_id,
-                    factory.spawned_mask(),
-                    MAX_BROWSER_INSTANCE_ID.saturating_sub(browser_instance_id)
-                );
-            }
-            Ok(false) => break,
-            Err(e) => {
-                if !spawned_any {
-                    return Err(e);
-                }
-                crate::log!(
-                    "truesurfer-factory: spawn failed browser_instance_id={} err={:?}\n",
-                    browser_instance_id,
-                    e
-                );
-                break;
-            }
+        match spawn_next_parse_host_locked(&mut parse_pool, "batch-spawned") {
+            Ok(Some(_browser_instance_id)) => spawned_any = true,
+            Ok(None) => break,
+            Err(_) if spawned_any => break,
+            Err(e) => return Err(e),
         }
     }
 
     Ok(spawned_any)
 }
 
-pub(crate) fn spawn_truesurfer_factory(spawner: Spawner) -> Result<bool, SpawnError> {
-    spawn_truesurfer_batch(spawner, truesurfer_factory_boot_count())
+pub(crate) fn spawn_truesurfer_parse_pool(spawner: Spawner) -> Result<bool, SpawnError> {
+    spawn_truesurfer_batch(spawner, browser_parse_pool_boot_count())
 }
 
-pub(crate) fn spawn_truesurfer_tab_with_html() -> Option<u32> {
-    let mut factory = TRUESURFER_FACTORY.lock();
-    let browser_instance_id = factory.next_instance_id()?;
+fn spawn_next_parse_host_locked(
+    parse_pool: &mut BrowserParsePool,
+    reason: &str,
+) -> Result<Option<u32>, SpawnError> {
+    let Some(browser_instance_id) = parse_pool.next_instance_id() else {
+        return Ok(None);
+    };
 
     match spawn_truesurfer_on_worker(browser_instance_id) {
         Ok(true) => {
-            factory.mark_spawned(browser_instance_id);
-            signal_hosted_browser_factory_mask(factory.spawned_mask());
+            parse_pool.mark_spawned(browser_instance_id);
+            signal_hosted_browser_parse_pool_mask(parse_pool.spawned_mask());
             crate::log!(
-                "truesurfer-factory: handoff-spawned browser_instance_id={} mask={:#x} remaining={}\n",
+                "truesurfer-parse-pool: {} browser_instance_id={} mask={:#x} remaining={}\n",
+                reason,
                 browser_instance_id,
-                factory.spawned_mask(),
-                MAX_BROWSER_INSTANCE_ID.saturating_sub(browser_instance_id)
+                parse_pool.spawned_mask(),
+                BROWSER_PARSE_HOST_LIMIT.saturating_sub(browser_instance_id)
             );
-            Some(browser_instance_id)
+            Ok(Some(browser_instance_id))
         }
-        Ok(false) | Err(_) => {
+        Ok(false) => {
             crate::log!(
-                "truesurfer-factory: handoff-spawn skipped browser_instance_id={}\n",
-                browser_instance_id
+                "truesurfer-parse-pool: {} skipped browser_instance_id={}\n",
+                reason,
+                browser_instance_id,
             );
-            None
+            Ok(None)
         }
+        Err(e) => {
+            crate::log!(
+                "truesurfer-parse-pool: {} failed browser_instance_id={} err={:?}\n",
+                reason,
+                browser_instance_id,
+                e
+            );
+            Err(e)
+        }
+    }
+}
+
+fn spawn_parse_host_for_html_queue() -> Option<u32> {
+    let mut parse_pool = BROWSER_PARSE_POOL.lock();
+    match spawn_next_parse_host_locked(&mut parse_pool, "html-queue-spawned") {
+        Ok(Some(browser_instance_id)) => Some(browser_instance_id),
+        Ok(None) | Err(_) => None,
     }
 }
 
