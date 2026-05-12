@@ -52,6 +52,8 @@ pub(crate) fn memchr(needle: u8, haystack: &[u8]) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec::Vec;
+
     use super::memchr;
 
     #[test]

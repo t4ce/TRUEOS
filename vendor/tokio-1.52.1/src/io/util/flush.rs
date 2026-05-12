@@ -1,11 +1,11 @@
 use crate::io::AsyncWrite;
 
 use pin_project_lite::pin_project;
-use std::future::Future;
+use core::future::Future;
 use std::io;
-use std::marker::PhantomPinned;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::marker::PhantomPinned;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 pin_project! {
     /// A future used to fully flush an I/O object.

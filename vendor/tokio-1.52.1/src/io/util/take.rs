@@ -1,10 +1,11 @@
 use crate::io::{AsyncBufRead, AsyncRead, ReadBuf};
 
 use pin_project_lite::pin_project;
-use std::convert::TryFrom;
-use std::pin::Pin;
-use std::task::{ready, Context, Poll};
-use std::{cmp, io};
+use core::convert::TryFrom;
+use core::pin::Pin;
+use core::task::{ready, Context, Poll};
+use core::cmp;
+use std::io;
 
 pin_project! {
     /// Stream for the [`take`](super::AsyncReadExt::take) method.

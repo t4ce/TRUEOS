@@ -1,11 +1,11 @@
 use crate::io::AsyncBufRead;
 
 use pin_project_lite::pin_project;
-use std::future::Future;
+use core::future::Future;
 use std::io;
-use std::marker::PhantomPinned;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::marker::PhantomPinned;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 pin_project! {
     /// Future for the [`fill_buf`](crate::io::AsyncBufReadExt::fill_buf) method.
@@ -46,7 +46,7 @@ impl<'a, R: AsyncBufRead + ?Sized + Unpin> Future for FillBuf<'a, R> {
                 // Otherwise the caller could poll us again after
                 // completion, and access the mutable reference while the
                 // returned immutable reference still exists.
-                let slice = std::mem::transmute::<&[u8], &'a [u8]>(slice);
+                let slice = core::mem::transmute::<&[u8], &'a [u8]>(slice);
                 Poll::Ready(Ok(slice))
             },
             Poll::Ready(Err(err)) => Poll::Ready(Err(err)),

@@ -1,11 +1,12 @@
 use crate::io::util::read_line::read_line_internal;
 use crate::io::AsyncBufRead;
+use crate::runtime::prelude::*;
 
 use pin_project_lite::pin_project;
 use std::io;
-use std::mem;
-use std::pin::Pin;
-use std::task::{ready, Context, Poll};
+use core::mem;
+use core::pin::Pin;
+use core::task::{ready, Context, Poll};
 
 pin_project! {
     /// Reads lines from an [`AsyncBufRead`].
@@ -67,7 +68,7 @@ where
     /// # }
     /// ```
     pub async fn next_line(&mut self) -> io::Result<Option<String>> {
-        use std::future::poll_fn;
+        use core::future::poll_fn;
 
         poll_fn(|cx| Pin::new(&mut *self).poll_next_line(cx)).await
     }

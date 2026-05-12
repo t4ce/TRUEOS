@@ -4,8 +4,8 @@ use crate::io::util::poll_proceed_and_make_progress;
 use crate::io::{AsyncRead, ReadBuf};
 
 use std::io;
-use std::pin::Pin;
-use std::task::{ready, Context, Poll};
+use core::pin::Pin;
+use core::task::{ready, Context, Poll};
 
 cfg_io_util! {
     /// An async reader which yields one byte over and over and over and over and

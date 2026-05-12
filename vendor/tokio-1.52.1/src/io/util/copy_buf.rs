@@ -1,8 +1,8 @@
 use crate::io::{AsyncBufRead, AsyncWrite};
-use std::future::Future;
+use core::future::Future;
 use std::io;
-use std::pin::Pin;
-use std::task::{ready, Context, Poll};
+use core::pin::Pin;
+use core::task::{ready, Context, Poll};
 
 cfg_io_util! {
     /// A future that asynchronously copies the entire contents of a reader into a
@@ -111,7 +111,7 @@ mod tests {
 
     #[test]
     fn assert_unpin() {
-        use std::marker::PhantomPinned;
+        use core::marker::PhantomPinned;
         crate::is_unpin::<CopyBuf<'_, PhantomPinned, PhantomPinned>>();
     }
 }

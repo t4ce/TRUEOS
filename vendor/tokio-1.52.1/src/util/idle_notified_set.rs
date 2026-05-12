@@ -6,6 +6,9 @@
 //! specified using the `T` parameter. It will usually be a `JoinHandle` or
 //! similar.
 
+use alloc::vec::Vec;
+
+use crate::runtime::prelude::*;
 use std::marker::PhantomPinned;
 use std::mem::ManuallyDrop;
 use std::ptr::NonNull;

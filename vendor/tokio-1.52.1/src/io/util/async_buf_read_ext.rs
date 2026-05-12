@@ -4,6 +4,7 @@ use crate::io::util::read_line::{read_line, ReadLine};
 use crate::io::util::read_until::{read_until, ReadUntil};
 use crate::io::util::split::{split, Split};
 use crate::io::AsyncBufRead;
+use crate::runtime::prelude::*;
 
 cfg_io_util! {
     /// An extension trait which adds utility methods to [`AsyncBufRead`] types.

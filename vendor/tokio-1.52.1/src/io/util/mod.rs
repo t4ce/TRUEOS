@@ -88,16 +88,16 @@ cfg_io_util! {
     const DEFAULT_BUF_SIZE: usize = 8 * 1024;
 
     cfg_coop! {
-        fn poll_proceed_and_make_progress(cx: &mut std::task::Context<'_>) -> std::task::Poll<()> {
-            let coop = std::task::ready!(crate::task::coop::poll_proceed(cx));
+        fn poll_proceed_and_make_progress(cx: &mut core::task::Context<'_>) -> core::task::Poll<()> {
+            let coop = core::task::ready!(crate::task::coop::poll_proceed(cx));
             coop.made_progress();
-            std::task::Poll::Ready(())
+            core::task::Poll::Ready(())
         }
     }
 
     cfg_not_coop! {
-        fn poll_proceed_and_make_progress(_: &mut std::task::Context<'_>) -> std::task::Poll<()> {
-            std::task::Poll::Ready(())
+        fn poll_proceed_and_make_progress(_: &mut core::task::Context<'_>) -> core::task::Poll<()> {
+            core::task::Poll::Ready(())
         }
     }
 }

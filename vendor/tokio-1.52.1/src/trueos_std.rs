@@ -52,6 +52,29 @@ pub mod fmt {
     pub use core::fmt::*;
 }
 
+pub mod future {
+    pub use core::future::{poll_fn, Future, IntoFuture};
+    use core::pin::Pin;
+    use core::task::{Context, Poll};
+
+    #[derive(Debug, Clone)]
+    pub struct Ready<T>(Option<T>);
+
+    pub fn ready<T>(value: T) -> Ready<T> {
+        Ready(Some(value))
+    }
+
+    impl<T> Unpin for Ready<T> {}
+
+    impl<T> Future for Ready<T> {
+        type Output = T;
+
+        fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<T> {
+            Poll::Ready(self.get_mut().0.take().expect("Ready polled after completion"))
+        }
+    }
+}
+
 pub mod hash {
     pub use core::hash::*;
 }
@@ -96,6 +119,7 @@ pub mod os {
 pub mod path {
     extern crate alloc;
 
+    use alloc::borrow::ToOwned;
     use alloc::string::{String, ToString};
     use core::borrow::Borrow;
     use core::fmt;
@@ -335,6 +359,7 @@ pub mod pin {
 pub mod prelude {
     pub mod rust_2021 {
         pub use alloc::{
+            borrow::ToOwned,
             boxed::Box,
             format,
             string::{String, ToString},
@@ -367,6 +392,10 @@ pub mod str {
 
 pub mod string {
     pub use alloc::string::*;
+}
+
+pub mod task {
+    pub use core::task::*;
 }
 
 pub mod thread {
@@ -460,4 +489,9 @@ pub mod thread {
 
 pub mod vec {
     pub use alloc::vec::*;
+}
+
+#[macro_export]
+macro_rules! eprintln {
+    ($($tt:tt)*) => {{}};
 }

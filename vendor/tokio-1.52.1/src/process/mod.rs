@@ -31,6 +31,7 @@
 //!     Ok(())
 //! }
 //! ```
+
 //!
 //! Next, let's take a look at an example where we not only spawn `echo hello
 //! world` but we also capture its output.
@@ -247,6 +248,7 @@ mod kill;
 
 use crate::io::{AsyncRead, AsyncWrite, ReadBuf};
 use crate::process::kill::Kill;
+use crate::runtime::prelude::*;
 
 use std::ffi::OsStr;
 use std::future::Future;
@@ -258,6 +260,11 @@ use std::process::{Child as StdChild, Command as StdCommand, ExitStatus, Output,
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use self::imp::{Child as StdChild, Command as StdCommand, ExitStatus, Output, Stdio};
 use std::task::{ready, Context, Poll};
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub fn abort() -> ! {
+    panic!("abort")
+}
 
 #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
 use std::os::unix::process::CommandExt;

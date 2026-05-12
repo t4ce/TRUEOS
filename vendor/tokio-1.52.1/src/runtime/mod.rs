@@ -406,6 +406,7 @@ mod tests;
 pub(crate) mod prelude {
     #[allow(unused_imports)]
     pub(crate) use alloc::{
+        borrow::ToOwned,
         boxed::Box,
         format,
         string::{String, ToString},

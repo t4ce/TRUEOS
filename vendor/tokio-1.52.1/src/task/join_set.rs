@@ -10,7 +10,11 @@ use core::option::Option::{self, None, Some};
 use core::pin::Pin;
 use core::result::Result::{self, Err, Ok};
 use core::task::{Context, Poll};
-use core::{fmt, panic};
+use core::fmt;
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+use core::panic;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use crate::panic;
 
 use crate::runtime::Handle;
 use crate::task::Id;
