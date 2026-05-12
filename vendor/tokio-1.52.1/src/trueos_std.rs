@@ -374,8 +374,17 @@ pub mod string {
 pub mod thread {
     extern crate alloc;
 
+    use alloc::boxed::Box;
     use core::fmt;
+    use core::marker::PhantomData;
+    use core::sync::atomic::{AtomicUsize, Ordering};
     use core::time::Duration;
+
+    const TRUEOS_THREAD_LOCAL_SLOT_COUNT: usize = 64;
+
+    unsafe extern "Rust" {
+        fn trueos_tokio_tls_current_slot() -> u32;
+    }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub struct AccessError;
@@ -402,8 +411,12 @@ pub mod thread {
     }
 
     pub struct LocalKey<T> {
-        _marker: core::marker::PhantomData<T>,
+        init: fn() -> T,
+        slots: [AtomicUsize; TRUEOS_THREAD_LOCAL_SLOT_COUNT],
+        _marker: PhantomData<T>,
     }
+
+    unsafe impl<T> Sync for LocalKey<T> {}
 
     impl Thread {
         pub fn id(&self) -> ThreadId {
@@ -441,7 +454,11 @@ pub mod thread {
             self
         }
 
-        pub fn spawn<F, T>(self, f: F) -> Result<JoinHandle<T>>
+        pub fn stack_size(self, _: usize) -> Self {
+            self
+        }
+
+        pub fn spawn<F, T>(self, f: F) -> crate::io::Result<JoinHandle<T>>
         where
             F: FnOnce() -> T,
         {
@@ -458,6 +475,53 @@ pub mod thread {
             current()
         }
     }
+
+    impl<T: 'static> LocalKey<T> {
+        pub const fn new(init: fn() -> T) -> Self {
+            Self {
+                init,
+                slots: [const { AtomicUsize::new(0) }; TRUEOS_THREAD_LOCAL_SLOT_COUNT],
+                _marker: PhantomData,
+            }
+        }
+
+        pub fn with<F, R>(&'static self, f: F) -> R
+        where
+            F: FnOnce(&T) -> R,
+        {
+            self.try_with(f)
+                .unwrap_or_else(|_| unreachable!("TRUEOS thread local storage is never destroyed"))
+        }
+
+        pub fn try_with<F, R>(&'static self, f: F) -> core::result::Result<R, AccessError>
+        where
+            F: FnOnce(&T) -> R,
+        {
+            let ptr = self.get_or_init_ptr();
+            Ok(f(unsafe { &*(ptr as *const T) }))
+        }
+
+        fn get_or_init_ptr(&'static self) -> usize {
+            let slot = unsafe { trueos_tokio_tls_current_slot() } as usize;
+            let slot = if slot < TRUEOS_THREAD_LOCAL_SLOT_COUNT {
+                slot
+            } else {
+                0
+            };
+            let cell = &self.slots[slot];
+
+            let existing = cell.load(Ordering::Acquire);
+            if existing != 0 {
+                return existing;
+            }
+
+            let ptr = Box::leak(Box::new((self.init)())) as *mut T as usize;
+            match cell.compare_exchange(0, ptr, Ordering::AcqRel, Ordering::Acquire) {
+                Ok(_) => ptr,
+                Err(existing) => existing,
+            }
+        }
+    }
 }
 
 pub mod vec {
@@ -467,4 +531,27 @@ pub mod vec {
 #[macro_export]
 macro_rules! eprintln {
     ($($tt:tt)*) => {{}};
+}
+
+#[macro_export]
+macro_rules! thread_local {
+    ($(#[$attrs:meta])* $vis:vis static $name:ident: $ty:ty = const { $expr:expr } $(;)?) => {
+        $(#[$attrs])*
+        $vis static $name: $crate::thread::LocalKey<$ty> = {
+            fn __trueos_thread_local_init() -> $ty {
+                $expr
+            }
+            $crate::thread::LocalKey::new(__trueos_thread_local_init)
+        };
+    };
+
+    ($(#[$attrs:meta])* $vis:vis static $name:ident: $ty:ty = $expr:expr $(;)?) => {
+        $(#[$attrs])*
+        $vis static $name: $crate::thread::LocalKey<$ty> = {
+            fn __trueos_thread_local_init() -> $ty {
+                $expr
+            }
+            $crate::thread::LocalKey::new(__trueos_thread_local_init)
+        };
+    };
 }

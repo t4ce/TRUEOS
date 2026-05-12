@@ -3,6 +3,9 @@ use crate::runtime::prelude::*;
 
 use super::{Pop, Synced};
 
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use crate::loom::sync::atomic::AtomicUsize;
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use core::sync::atomic::AtomicUsize;
 use crate::runtime::task;
 

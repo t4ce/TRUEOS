@@ -122,11 +122,11 @@ impl ReadDir {
         loop {
             match *self.0 {
                 State::Idle(ref mut data) => {
-                    let (buf, _, ref remain) = data.as_mut().unwrap();
+                    let (buf, _, remain) = data.as_mut().unwrap();
 
                     if let Some(ent) = buf.pop_front() {
                         return Poll::Ready(ent.map(Some));
-                    } else if !remain {
+                    } else if !*remain {
                         return Poll::Ready(Ok(None));
                     }
 

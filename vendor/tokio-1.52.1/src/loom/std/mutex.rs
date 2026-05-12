@@ -90,6 +90,18 @@ impl<T> Mutex<T> {
             value: UnsafeCell::new(t),
         }
     }
+
+    #[inline]
+    pub(crate) fn into_inner(self) -> Result<T, core::convert::Infallible> {
+        Ok(self.value.into_inner())
+    }
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+impl<T: Default> Default for Mutex<T> {
+    fn default() -> Self {
+        Self::new(T::default())
+    }
 }
 
 #[allow(dead_code)]
@@ -124,6 +136,19 @@ impl<T: ?Sized> Mutex<T> {
             crate::platform::note_semantic_gap(crate::platform::SEMANTIC_GAP_MUTEX_SPIN);
         }
         guard
+    }
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+impl<'a, T: ?Sized> MutexGuard<'a, T> {
+    #[inline]
+    pub(crate) fn unwrap(self) -> Self {
+        self
+    }
+
+    #[inline]
+    pub(crate) fn expect(self, _: &str) -> Self {
+        self
     }
 }
 

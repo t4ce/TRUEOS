@@ -79,13 +79,13 @@ pub(crate) mod sync {
         any(target_os = "trueos", target_os = "zkvm")
     ))]
     #[allow(unused_imports)]
-    pub(crate) use std::sync::{Condvar, RwLockReadGuard, WaitTimeoutResult};
+    pub(crate) use crate::sync::{Condvar, WaitTimeoutResult};
 
     #[cfg(not(all(feature = "parking_lot", not(miri))))]
     pub(crate) use crate::loom::std::mutex::{Mutex, MutexGuard};
 
     #[cfg(not(all(feature = "parking_lot", not(miri))))]
-    pub(crate) use crate::loom::std::rwlock::RwLock;
+    pub(crate) use crate::loom::std::rwlock::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
     pub(crate) mod atomic {
         pub(crate) use crate::loom::std::atomic_u16::AtomicU16;
