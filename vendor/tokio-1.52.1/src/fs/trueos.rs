@@ -107,7 +107,7 @@ impl TrueosDirEntry {
         PathBuf::new()
     }
 
-    pub(crate) fn file_name(&self) -> core::ffi::OsString {
+    pub(crate) fn file_name(&self) -> crate::ffi::OsString {
         String::new()
     }
 
@@ -120,10 +120,10 @@ impl TrueosDirEntry {
     }
 }
 
-fn unsupported<T>(op: &'static str) -> io::Result<T> {
+fn unsupported<T>(_op: &'static str) -> io::Result<T> {
     Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        format!("TRUEOS fs {op} is not exposed through CABI yet"),
+        io::ErrorKind::Other,
+        "TRUEOS fs operation is not exposed through CABI yet",
     ))
 }
 
@@ -197,7 +197,7 @@ fn normalize_app_path(path: &Path) -> io::Result<PathBuf> {
     }
 }
 
-fn fs_status_to_io(rc: i32, op: &'static str) -> io::Error {
+fn fs_status_to_io(rc: i32, _op: &'static str) -> io::Error {
     let kind = match rc {
         -4 | -6 => io::ErrorKind::InvalidInput,
         -5 => io::ErrorKind::NotFound,
@@ -206,7 +206,7 @@ fn fs_status_to_io(rc: i32, op: &'static str) -> io::Error {
         -14 => io::ErrorKind::TimedOut,
         _ => io::ErrorKind::Other,
     };
-    io::Error::new(kind, format!("TRUEOS fs CABI {op} failed rc={rc}"))
+    io::Error::new(kind, "TRUEOS fs CABI operation failed")
 }
 
 fn read_sync(path: &Path) -> io::Result<Vec<u8>> {
@@ -612,7 +612,7 @@ pub(crate) async fn try_exists(path: &Path) -> io::Result<bool> {
 
 pub(crate) async fn canonicalize(path: &Path) -> io::Result<PathBuf> {
     let canonical = normalize_app_path(path)?;
-    if canonical == Path::new("/") {
+    if canonical == PathBuf::from("/") {
         return Ok(canonical);
     }
 

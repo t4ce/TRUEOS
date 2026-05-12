@@ -248,7 +248,7 @@ pub struct ValueIterMut<'a, T> {
 #[derive(Debug)]
 pub struct ValueDrain<'a, T> {
     first: Option<T>,
-    next: Option<::std::vec::IntoIter<T>>,
+    next: Option<::alloc::vec::IntoIter<T>>,
     lt: PhantomData<&'a mut HeaderMap<T>>,
 }
 

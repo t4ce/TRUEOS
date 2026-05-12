@@ -1,4 +1,6 @@
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use crate::fs::asyncify;
+use alloc::borrow::ToOwned;
 
 use std::io;
 use std::path::Path;
@@ -13,5 +15,11 @@ pub async fn rename(from: impl AsRef<Path>, to: impl AsRef<Path>) -> io::Result<
     let from = from.as_ref().to_owned();
     let to = to.as_ref().to_owned();
 
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    return Err(io::Error::new(
+        io::ErrorKind::Other,
+        "TRUEOS fs rename is not exposed through CABI yet",
+    ));
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     asyncify(move || std::fs::rename(from, to)).await
 }

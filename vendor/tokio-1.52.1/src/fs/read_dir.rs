@@ -1,6 +1,7 @@
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use crate::fs::asyncify;
 
+use alloc::borrow::ToOwned;
 use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;
@@ -11,7 +12,7 @@ use crate::fs::trueos::{TrueosDirEntry as StdDirEntry, TrueosReadDir as StdReadD
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{ready, Context, Poll};
-use core::ffi::OsString;
+use crate::ffi::OsString;
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::fs::{FileType, Metadata};
 use std::io;
@@ -316,8 +317,14 @@ impl DirEntry {
     /// # }
     /// ```
     pub async fn metadata(&self) -> io::Result<Metadata> {
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        return self.std.metadata();
+
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+        {
         let std = self.std.clone();
         asyncify(move || std.metadata()).await
+        }
     }
 
     /// Returns the file type for the file that this entry points at.
@@ -364,8 +371,14 @@ impl DirEntry {
             return Ok(file_type);
         }
 
-        let std = self.std.clone();
-        asyncify(move || std.file_type()).await
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        return self.std.file_type();
+
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+        {
+            let std = self.std.clone();
+            asyncify(move || std.file_type()).await
+        }
     }
 
     /// Returns a reference to the underlying `std::fs::DirEntry`.

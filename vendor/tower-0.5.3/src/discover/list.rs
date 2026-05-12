@@ -59,4 +59,4 @@ type ListVecTest<T> = ServiceList<Vec<T>>;
 
 #[cfg(test)]
 #[allow(dead_code)]
-type ListVecIterTest<T> = ServiceList<::std::vec::IntoIter<T>>;
+type ListVecIterTest<T> = ServiceList<::alloc::vec::IntoIter<T>>;

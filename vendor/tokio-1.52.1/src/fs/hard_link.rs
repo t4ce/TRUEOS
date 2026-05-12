@@ -1,4 +1,6 @@
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use crate::fs::asyncify;
+use alloc::borrow::ToOwned;
 
 use std::io;
 use std::path::Path;
@@ -40,5 +42,11 @@ pub async fn hard_link(original: impl AsRef<Path>, link: impl AsRef<Path>) -> io
     let original = original.as_ref().to_owned();
     let link = link.as_ref().to_owned();
 
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    return Err(io::Error::new(
+        io::ErrorKind::Other,
+        "TRUEOS fs hard_link is not exposed through CABI yet",
+    ));
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     asyncify(move || std::fs::hard_link(original, link)).await
 }
