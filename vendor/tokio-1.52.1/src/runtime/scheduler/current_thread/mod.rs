@@ -19,7 +19,7 @@ use std::sync::atomic::Ordering::{AcqRel, Acquire, Release};
 use std::task::Poll::{Pending, Ready};
 use std::task::Waker;
 use std::thread::ThreadId;
-use std::time::Duration;
+use core::time::Duration;
 use std::{fmt, thread};
 
 /// Executes tasks on the current thread

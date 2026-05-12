@@ -74,7 +74,7 @@ use crate::util::rand::{FastRand, RngSeedGenerator};
 use std::cell::RefCell;
 use std::task::Waker;
 use std::thread;
-use std::time::Duration;
+use core::time::Duration;
 
 mod metrics;
 

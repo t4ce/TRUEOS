@@ -8,7 +8,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::task::{ready, Poll};
 use std::thread;
-use std::time::Duration;
+use core::time::Duration;
 
 use http::header::HeaderValue;
 use log::{error, trace};
@@ -68,7 +68,7 @@ pub struct Client {
 ///
 /// ```
 /// # fn run() -> Result<(), reqwest::Error> {
-/// use std::time::Duration;
+/// use core::time::Duration;
 ///
 /// let client = reqwest::blocking::Client::builder()
 ///     .timeout(Duration::from_secs(10))
@@ -1154,7 +1154,7 @@ impl ClientBuilder {
     ///
     /// Example usage:
     /// ```
-    /// use std::time::Duration;
+    /// use core::time::Duration;
     ///
     /// let client = reqwest::blocking::Client::builder()
     ///                      // resolved to outermost layer, meaning while we are waiting on concurrency limit

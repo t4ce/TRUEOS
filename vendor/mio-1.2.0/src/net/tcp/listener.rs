@@ -34,7 +34,7 @@ use crate::{event, sys, Interest, Registry, Token};
 /// # fn main() -> Result<(), Box<dyn Error>> {
 /// use mio::{Events, Interest, Poll, Token};
 /// use mio::net::TcpListener;
-/// use std::time::Duration;
+/// use core::time::Duration;
 ///
 /// let mut listener = TcpListener::bind("127.0.0.1:34255".parse()?)?;
 ///

@@ -6,7 +6,7 @@ cfg_unstable_metrics! {
 
 use crate::time::Instant;
 use std::sync::atomic::Ordering::Relaxed;
-use std::time::Duration;
+use core::time::Duration;
 
 pub(crate) struct MetricsBatch {
     /// The total busy duration in nanoseconds.

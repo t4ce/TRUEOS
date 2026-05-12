@@ -5,7 +5,7 @@ use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 use std::slice;
 #[cfg(debug_assertions)]
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
+use core::time::Duration;
 use std::{cmp, io, ptr};
 
 use crate::Interest;

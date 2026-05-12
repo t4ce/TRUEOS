@@ -9,7 +9,7 @@ use crate::util::trace::SpawnMeta;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::mem;
-use std::time::Duration;
+use core::time::Duration;
 
 /// A local Tokio runtime.
 ///
@@ -318,7 +318,7 @@ impl LocalRuntime {
     /// use tokio::task;
     ///
     /// use std::thread;
-    /// use std::time::Duration;
+    /// use core::time::Duration;
     ///
     /// fn main() {
     ///    let runtime = LocalRuntime::new().unwrap();

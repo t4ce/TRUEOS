@@ -13,7 +13,8 @@ use core::{
     sync::atomic::{AtomicPtr, AtomicUsize, Ordering},
 };
 use smallvec::SmallVec;
-use std::time::{Duration, Instant};
+use core::time::Duration;
+use std::time::Instant;
 
 // Don't use Instant on wasm32-unknown-unknown, it just panics.
 cfg_if::cfg_if! {

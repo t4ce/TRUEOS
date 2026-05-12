@@ -7,7 +7,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{self, ready, Poll};
-use std::time::Duration;
+use core::time::Duration;
 
 use futures_util::future::Either;
 use http::uri::{Scheme, Uri};
@@ -1189,7 +1189,8 @@ mod tests {
     #[cfg_attr(not(feature = "__internal_happy_eyeballs_tests"), ignore)]
     fn client_happy_eyeballs() {
         use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpListener};
-        use std::time::{Duration, Instant};
+        use core::time::Duration;
+use std::time::Instant;
 
         use super::dns;
         use super::ConnectingTcp;
@@ -1398,7 +1399,7 @@ mod tests {
         }
     }
 
-    use std::time::Duration;
+    use core::time::Duration;
 
     #[test]
     fn no_tcp_keepalive_config() {

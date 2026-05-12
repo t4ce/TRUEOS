@@ -18,7 +18,7 @@ use std::io;
 #[cfg(all(feature = "net", debug_assertions))]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use core::time::Duration;
 
 #[cfg(feature = "net")]
 use crate::{Interest, Token};

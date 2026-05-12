@@ -8,7 +8,7 @@
 //! #[cfg(feature = "deadlock_detection")]
 //! { // only for #[cfg]
 //! use std::thread;
-//! use std::time::Duration;
+//! use core::time::Duration;
 //! use parking_lot::deadlock;
 //!
 //! // Create a background thread which checks for deadlocks every 10s
@@ -43,7 +43,7 @@ mod tests {
     use crate::{Mutex, ReentrantMutex, RwLock};
     use std::sync::{Arc, Barrier};
     use std::thread::{self, sleep};
-    use std::time::Duration;
+    use core::time::Duration;
 
     // We need to serialize these tests since deadlock detection uses global state
     static DEADLOCK_DETECTION_LOCK: Mutex<()> = crate::const_mutex(());

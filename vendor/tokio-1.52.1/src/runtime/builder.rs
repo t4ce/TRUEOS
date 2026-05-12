@@ -15,7 +15,7 @@ use crate::runtime::scheduler::CurrentThread;
 use std::fmt;
 use std::io;
 use std::thread::ThreadId;
-use std::time::Duration;
+use core::time::Duration;
 
 /// Builds Tokio Runtime with custom configuration values.
 ///
@@ -1129,7 +1129,7 @@ impl Builder {
     /// # #[cfg(not(target_family = "wasm"))]
     /// # {
     /// # use tokio::runtime;
-    /// # use std::time::Duration;
+    /// # use core::time::Duration;
     /// # pub fn main() {
     /// let rt = runtime::Builder::new_multi_thread()
     ///     .thread_keep_alive(Duration::from_millis(100))
@@ -1405,7 +1405,7 @@ impl Builder {
         ///     .build()
         ///     .unwrap();
         /// # // Test default values here
-        /// # fn us(n: u64) -> std::time::Duration { std::time::Duration::from_micros(n) }
+        /// # fn us(n: u64) -> core::time::Duration { core::time::Duration::from_micros(n) }
         /// # let m = rt.handle().metrics();
         /// # assert_eq!(m.poll_time_histogram_num_buckets(), 10);
         /// # assert_eq!(m.poll_time_histogram_bucket_range(0), us(0)..us(100));
@@ -1492,7 +1492,7 @@ impl Builder {
         /// # #[cfg(not(target_family = "wasm"))]
         /// # {
         /// use tokio::runtime;
-        /// use std::time::Duration;
+        /// use core::time::Duration;
         /// use tokio::runtime::HistogramConfiguration;
         ///
         /// let rt = runtime::Builder::new_multi_thread()
@@ -1512,7 +1512,7 @@ impl Builder {
         /// ```
         /// # #[cfg(not(target_family = "wasm"))]
         /// # {
-        /// use std::time::Duration;
+        /// use core::time::Duration;
         /// use tokio::runtime;
         /// use tokio::runtime::{HistogramConfiguration, LogHistogram};
         ///
@@ -1536,7 +1536,7 @@ impl Builder {
         /// to match the previous behavior, use `precision_exact(0)`. This creates a histogram
         /// where each bucket is twice the size of the previous bucket.
         /// ```rust
-        /// use std::time::Duration;
+        /// use core::time::Duration;
         /// use tokio::runtime::{HistogramConfiguration, LogHistogram};
         /// let rt = tokio::runtime::Builder::new_current_thread()
         ///     .enable_all()
@@ -1582,7 +1582,7 @@ impl Builder {
         /// # #[cfg(not(target_family = "wasm"))]
         /// # {
         /// use tokio::runtime;
-        /// use std::time::Duration;
+        /// use core::time::Duration;
         ///
         /// # #[allow(deprecated)]
         /// let rt = runtime::Builder::new_multi_thread()

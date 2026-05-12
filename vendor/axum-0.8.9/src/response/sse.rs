@@ -8,7 +8,8 @@
 //!     routing::get,
 //!     response::sse::{Event, KeepAlive, Sse},
 //! };
-//! use std::{time::Duration, convert::Infallible};
+//! use core::time::Duration;
+//! use std::convert::Infallible;
 //! use tokio_stream::StreamExt as _ ;
 //! use futures_util::stream::{self, Stream};
 //!
@@ -34,6 +35,7 @@ use axum_core::{
     response::{IntoResponse, Response},
 };
 use bytes::{BufMut, BytesMut};
+use core::time::Duration;
 use futures_util::stream::{Stream, TryStream};
 use http_body::Frame;
 use pin_project_lite::pin_project;
@@ -43,7 +45,6 @@ use std::{
     mem,
     pin::Pin,
     task::{ready, Context, Poll},
-    time::Duration,
 };
 use sync_wrapper::SyncWrapper;
 

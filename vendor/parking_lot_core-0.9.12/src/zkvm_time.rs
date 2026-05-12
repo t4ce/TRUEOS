@@ -1,4 +1,5 @@
-use std::time::{Duration, Instant};
+use core::time::Duration;
+use std::time::Instant;
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 unsafe extern "Rust" {

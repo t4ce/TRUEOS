@@ -21,7 +21,7 @@ use std::pin::Pin;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use core::time::Duration;
 
 use windows_sys::Win32::Foundation::{
     ERROR_INVALID_HANDLE, ERROR_IO_PENDING, HANDLE, STATUS_CANCELLED, WAIT_TIMEOUT,
@@ -688,7 +688,7 @@ impl Drop for SelectorInner {
 
             let result = self
                 .cp
-                .get_many(&mut statuses, Some(std::time::Duration::from_millis(0)));
+                .get_many(&mut statuses, Some(core::time::Duration::from_millis(0)));
             match result {
                 Ok(iocp_events) => {
                     events_num = iocp_events.iter().len();

@@ -707,7 +707,7 @@ mod tests {
     use super::*;
     use crate::common::io::Compat;
     use crate::proto::h1::ClientTransaction;
-    use std::time::Duration;
+    use core::time::Duration;
 
     #[test]
     fn client_read_bytes_before_writing_request() {
@@ -752,7 +752,7 @@ mod tests {
         let (io, _handle) = tokio_test::io::Builder::new()
             .write(b"POST / HTTP/1.1\r\ncontent-length: 4\r\n\r\n")
             .read(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n")
-            .wait(std::time::Duration::from_secs(2))
+            .wait(core::time::Duration::from_secs(2))
             .build_with_handle();
 
         let (mut tx, rx) = crate::client::dispatch::channel();

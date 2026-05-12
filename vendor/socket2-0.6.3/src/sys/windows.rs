@@ -17,7 +17,8 @@ use std::os::windows::io::{
 };
 use std::path::Path;
 use std::sync::Once;
-use std::time::{Duration, Instant};
+use core::time::Duration;
+use std::time::Instant;
 use std::{process, ptr, slice};
 
 use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT};

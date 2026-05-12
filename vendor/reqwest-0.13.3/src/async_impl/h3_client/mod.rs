@@ -14,7 +14,7 @@ use log::trace;
 use std::future::{self, Future};
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use std::time::Duration;
+use core::time::Duration;
 use sync_wrapper::SyncWrapper;
 use tower::Service;
 

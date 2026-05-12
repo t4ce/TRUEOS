@@ -70,7 +70,7 @@ use std::mem;
 use std::mem::MaybeUninit;
 use std::net::SocketAddr;
 use std::ops::{Deref, DerefMut};
-use std::time::Duration;
+use core::time::Duration;
 
 /// Macro to implement `fmt::Debug` for a type, printing the constant names
 /// rather than a number.

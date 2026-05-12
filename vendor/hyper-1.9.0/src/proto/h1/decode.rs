@@ -705,7 +705,7 @@ mod tests {
     use super::*;
     use crate::rt::{Read, ReadBuf};
     use std::pin::Pin;
-    use std::time::Duration;
+    use core::time::Duration;
 
     impl MemRead for &[u8] {
         fn read_mem(&mut self, _: &mut Context<'_>, len: usize) -> Poll<io::Result<Bytes>> {

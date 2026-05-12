@@ -1,5 +1,5 @@
 cfg_not_wasi! {
-    use std::time::Duration;
+    use core::time::Duration;
 }
 
 cfg_not_wasip1! {
@@ -1348,7 +1348,7 @@ impl TcpStream {
         /// # Examples
         ///
         /// ```no_run
-        /// use std::time::Duration;
+        /// use core::time::Duration;
         /// use tokio::net::TcpStream;
         ///
         /// # async fn dox() -> Result<(), Box<dyn std::error::Error>> {

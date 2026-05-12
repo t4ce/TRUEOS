@@ -9,7 +9,7 @@ use std::fmt;
 use std::future::{poll_fn, Future};
 use std::pin::Pin;
 use std::task::{self, Poll};
-use std::time::Duration;
+use core::time::Duration;
 
 use futures_util::future::{self, Either, FutureExt, TryFutureExt};
 use http::uri::Scheme;
@@ -120,7 +120,7 @@ impl Client<(), ()> {
     /// ```
     /// # #[cfg(feature = "tokio")]
     /// # fn run () {
-    /// use std::time::Duration;
+    /// use core::time::Duration;
     /// use hyper_util::client::legacy::Client;
     /// use hyper_util::rt::{TokioExecutor, TokioTimer};
     ///
@@ -996,7 +996,7 @@ fn is_schema_secure(uri: &Uri) -> bool {
 /// ```
 /// # #[cfg(feature = "tokio")]
 /// # fn run () {
-/// use std::time::Duration;
+/// use core::time::Duration;
 /// use hyper_util::client::legacy::Client;
 /// use hyper_util::rt::TokioExecutor;
 ///
@@ -1059,7 +1059,7 @@ impl Builder {
     /// ```
     /// # #[cfg(feature = "tokio")]
     /// # fn run () {
-    /// use std::time::Duration;
+    /// use core::time::Duration;
     /// use hyper_util::client::legacy::Client;
     /// use hyper_util::rt::{TokioExecutor, TokioTimer};
     ///

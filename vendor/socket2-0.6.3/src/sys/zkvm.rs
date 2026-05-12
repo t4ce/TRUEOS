@@ -4,7 +4,7 @@ use std::mem::MaybeUninit;
 use std::net::{Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::ptr;
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use core::time::Duration;
 
 use trueos_sys::vcabi;
 

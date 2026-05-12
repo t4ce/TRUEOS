@@ -3,7 +3,7 @@
 use std::fmt;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
+use core::time::Duration;
 use std::time::Instant;
 
 use hyper::rt::Sleep;

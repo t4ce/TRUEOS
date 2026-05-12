@@ -8,7 +8,7 @@ use std::sync::atomic::Ordering::Relaxed;
 use crate::runtime::metrics::batch::duration_as_u64;
 use std::cmp;
 use std::ops::Range;
-use std::time::Duration;
+use core::time::Duration;
 
 #[derive(Debug)]
 pub(crate) struct Histogram {

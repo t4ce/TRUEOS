@@ -22,7 +22,7 @@ use std::fmt;
 /// # use std::error::Error;
 /// # fn main() -> Result<(), Box<dyn Error>> {
 /// use mio::{Events, Poll};
-/// use std::time::Duration;
+/// use core::time::Duration;
 ///
 /// let mut events = Events::with_capacity(1024);
 /// let mut poll = Poll::new()?;
@@ -57,7 +57,7 @@ pub struct Events {
 /// # use std::error::Error;
 /// # fn main() -> Result<(), Box<dyn Error>> {
 /// use mio::{Events, Poll};
-/// use std::time::Duration;
+/// use core::time::Duration;
 ///
 /// let mut events = Events::with_capacity(1024);
 /// let mut poll = Poll::new()?;
@@ -130,7 +130,7 @@ impl Events {
     /// # use std::error::Error;
     /// # fn main() -> Result<(), Box<dyn Error>> {
     /// use mio::{Events, Poll};
-    /// use std::time::Duration;
+    /// use core::time::Duration;
     ///
     /// let mut events = Events::with_capacity(1024);
     /// let mut poll = Poll::new()?;
@@ -166,7 +166,7 @@ impl Events {
     /// # use std::error::Error;
     /// # fn main() -> Result<(), Box<dyn Error>> {
     /// use mio::{Events, Poll};
-    /// use std::time::Duration;
+    /// use core::time::Duration;
     ///
     /// let mut events = Events::with_capacity(1024);
     /// let mut poll = Poll::new()?;

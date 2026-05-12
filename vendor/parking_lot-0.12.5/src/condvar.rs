@@ -14,8 +14,9 @@ use core::{
 };
 use lock_api::RawMutex as RawMutex_;
 use parking_lot_core::{self, ParkResult, RequeueOp, UnparkResult, DEFAULT_PARK_TOKEN};
+use core::time::Duration;
 use std::ops::DerefMut;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 /// A type indicating whether a timed wait on a condition variable returned
 /// due to a time out or not.
@@ -530,7 +531,7 @@ mod tests {
     use std::thread;
     use std::thread::sleep;
     use std::thread::JoinHandle;
-    use std::time::Duration;
+    use core::time::Duration;
     use std::time::Instant;
 
     #[test]
@@ -916,7 +917,8 @@ mod tests {
 #[cfg(test)]
 mod webkit_queue_test {
     use crate::{Condvar, Mutex, MutexGuard};
-    use std::{collections::VecDeque, sync::Arc, thread, time::Duration};
+    use core::time::Duration;
+    use std::{collections::VecDeque, sync::Arc, thread};
 
     #[derive(Clone, Copy)]
     enum Timeout {

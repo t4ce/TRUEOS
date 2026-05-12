@@ -19,7 +19,7 @@ use mio::event::Source;
 use std::fmt;
 use std::io;
 use std::sync::Arc;
-use std::time::Duration;
+use core::time::Duration;
 
 /// I/O driver, backed by Mio.
 pub(crate) struct Driver {

@@ -26,7 +26,7 @@
 
 use std::any::type_name;
 use std::fmt::Debug;
-use std::time::Duration;
+use core::time::Duration;
 
 use http::Extensions;
 

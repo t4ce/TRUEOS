@@ -253,7 +253,7 @@ pub mod guide {
     #![cfg_attr(all(feature = "os-poll", feature = "net"), doc = "```")]
     #![cfg_attr(not(all(feature = "os-poll", feature = "net")), doc = "```ignore")]
     //! # use std::io;
-    //! # use std::time::Duration;
+    //! # use core::time::Duration;
     //! # use mio::net::TcpListener;
     //! # use mio::{Poll, Token, Interest, Events};
     //! # fn main() -> io::Result<()> {

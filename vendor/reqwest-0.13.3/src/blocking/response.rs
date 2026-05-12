@@ -3,7 +3,7 @@ use std::io::{self, Read};
 use std::mem;
 use std::net::SocketAddr;
 use std::pin::Pin;
-use std::time::Duration;
+use core::time::Duration;
 
 use bytes::Bytes;
 use futures_util::TryStreamExt;

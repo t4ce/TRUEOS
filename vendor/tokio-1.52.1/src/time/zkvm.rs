@@ -1,4 +1,4 @@
-use std::time::Duration;
+use core::time::Duration;
 
 pub(crate) fn platform_instant_now() -> std::time::Instant {
     let duration = Duration::from_nanos(crate::platform::monotonic_nanos());

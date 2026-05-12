@@ -44,7 +44,7 @@ use crate::Socket;
 /// #    let listener = std::net::TcpListener::bind(address).unwrap();
 /// #    b2.wait();
 /// #    let (stream, _) = listener.accept().unwrap();
-/// #    std::thread::sleep(std::time::Duration::from_millis(10));
+/// #    std::thread::sleep(core::time::Duration::from_millis(10));
 /// #    drop(stream);
 /// # });
 /// # b1.wait();

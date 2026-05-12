@@ -2,7 +2,7 @@ use std::error::Error as StdError;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use std::time::Duration;
+use core::time::Duration;
 
 use bytes::Bytes;
 use futures_core::ready;

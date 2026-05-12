@@ -6,7 +6,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::Duration;
+use core::time::Duration;
 
 use crate::rt::{Read, Write};
 use crate::upgrade::Upgraded;
@@ -52,7 +52,7 @@ pin_project_lite::pin_project! {
 /// # Example
 ///
 /// ```
-/// # use std::time::Duration;
+/// # use core::time::Duration;
 /// # use hyper::server::conn::http1::Builder;
 /// # fn main() {
 /// let mut http = Builder::new();

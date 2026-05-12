@@ -13,7 +13,7 @@ use std::os::fd::RawFd;
 use std::os::hermit::io::RawFd;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::Duration;
+use core::time::Duration;
 use std::{cmp, fmt, io};
 
 use crate::sys::unix::waker::Waker as WakerInternal;

@@ -20,7 +20,7 @@ use std::net::IpAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::Duration;
+use core::time::Duration;
 
 #[cfg(feature = "__native-tls")]
 use self::native_tls_conn::NativeTlsConn;

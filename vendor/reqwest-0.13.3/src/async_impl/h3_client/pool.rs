@@ -5,7 +5,7 @@ use std::pin::Pin;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
-use std::time::Duration;
+use core::time::Duration;
 use tokio::sync::{oneshot, watch};
 use tokio::time::Instant;
 

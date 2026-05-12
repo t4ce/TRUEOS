@@ -2,7 +2,7 @@
 
 use std::fmt;
 use std::ops;
-use std::time::Duration;
+use core::time::Duration;
 
 /// A measurement of a monotonically nondecreasing clock.
 /// Opaque and useful only with `Duration`.

@@ -19,7 +19,7 @@ use std::os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(all(debug_assertions, not(target_os = "wasi")))]
 use std::sync::Arc;
-use std::time::Duration;
+use core::time::Duration;
 use std::{fmt, io};
 
 use crate::{event, sys, Events, Interest, Token};
@@ -154,7 +154,7 @@ use crate::{event, sys, Events, Interest, Token};
 /// use mio::{Poll, Interest, Token};
 /// use mio::net::TcpStream;
 /// use std::net::SocketAddr;
-/// use std::time::Duration;
+/// use core::time::Duration;
 /// use std::thread;
 ///
 /// let address: SocketAddr = "127.0.0.1:0".parse()?;
@@ -302,7 +302,7 @@ impl Poll {
         /// # use std::error::Error;
         /// # fn main() -> Result<(), Box<dyn Error>> {
         /// use mio::{Poll, Events};
-        /// use std::time::Duration;
+        /// use core::time::Duration;
         ///
         /// let mut poll = match Poll::new() {
         ///     Ok(poll) => poll,
@@ -531,7 +531,8 @@ impl Registry {
     /// use mio::{Events, Poll, Interest, Token};
     /// use mio::net::TcpStream;
     /// use std::net::SocketAddr;
-    /// use std::time::{Duration, Instant};
+    /// use core::time::Duration;
+    /// use std::time::Instant;
     ///
     /// let mut poll = Poll::new()?;
     ///
@@ -676,7 +677,7 @@ impl Registry {
     /// use mio::{Events, Poll, Interest, Token};
     /// use mio::net::TcpStream;
     /// use std::net::SocketAddr;
-    /// use std::time::Duration;
+    /// use core::time::Duration;
     ///
     /// let mut poll = Poll::new()?;
     ///

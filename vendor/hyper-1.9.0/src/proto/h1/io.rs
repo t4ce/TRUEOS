@@ -644,7 +644,7 @@ enum WriteStrategy {
 mod tests {
     use super::*;
     use crate::common::io::Compat;
-    use std::time::Duration;
+    use core::time::Duration;
 
     use tokio_test::io::Builder as Mock;
 

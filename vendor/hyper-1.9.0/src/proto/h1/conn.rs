@@ -6,7 +6,7 @@ use std::marker::{PhantomData, Unpin};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 #[cfg(feature = "server")]
-use std::time::Duration;
+use core::time::Duration;
 
 use crate::rt::{Read, Write};
 use bytes::{Buf, Bytes};

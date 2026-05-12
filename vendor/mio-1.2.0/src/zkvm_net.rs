@@ -218,7 +218,7 @@ impl Socket {
 pub(crate) fn selector_poll(
     selector_id: usize,
     out_events: &mut Vec<ReadyEventRaw>,
-    timeout: Option<std::time::Duration>,
+    timeout: Option<core::time::Duration>,
 ) {
     let cap = out_events.capacity();
     out_events.clear();

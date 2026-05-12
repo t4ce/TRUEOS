@@ -4,7 +4,7 @@ use crate::loom::thread::AccessError;
 use crate::util::markers::NotSendOrSync;
 
 use std::marker::PhantomData;
-use std::time::Duration;
+use core::time::Duration;
 
 /// Guard tracking that a caller has entered a blocking region.
 #[must_use]

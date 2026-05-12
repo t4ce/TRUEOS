@@ -7,7 +7,7 @@ use std::io;
 use std::mem;
 use std::os::windows::io::*;
 use std::ptr::null_mut;
-use std::time::Duration;
+use core::time::Duration;
 
 use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::System::IO::{

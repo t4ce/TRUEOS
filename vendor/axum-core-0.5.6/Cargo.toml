@@ -61,18 +61,23 @@ path = "src/lib.rs"
 
 [dependencies.bytes]
 version = "1.2"
+default-features = false
 
 [dependencies.futures-core]
 version = "0.3"
+default-features = false
 
 [dependencies.http]
 version = "1.0.0"
+default-features = false
 
 [dependencies.http-body]
 version = "1.0.0"
+default-features = false
 
 [dependencies.http-body-util]
 version = "0.1.0"
+default-features = false
 
 [dependencies.mime]
 version = "0.3.16"
@@ -82,6 +87,7 @@ version = "0.2.7"
 
 [dependencies.sync_wrapper]
 version = "1.0.0"
+default-features = false
 
 [dependencies.tower-http]
 version = "0.6.0"

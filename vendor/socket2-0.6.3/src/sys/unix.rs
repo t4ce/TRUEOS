@@ -53,7 +53,8 @@ use std::os::unix::net::{UnixDatagram, UnixListener, UnixStream};
 #[cfg(not(target_os = "wasi"))]
 use std::path::Path;
 use std::ptr;
-use std::time::{Duration, Instant};
+use core::time::Duration;
+use std::time::Instant;
 use std::{io, slice};
 
 #[cfg(not(any(

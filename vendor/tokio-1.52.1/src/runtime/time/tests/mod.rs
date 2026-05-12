@@ -1,6 +1,7 @@
 #![cfg(not(target_os = "wasi"))]
 
-use std::{task::Context, time::Duration};
+use core::time::Duration;
+use std::task::Context;
 
 #[cfg(not(loom))]
 use futures::task::noop_waker_ref;
@@ -263,7 +264,7 @@ fn instant_to_tick_max() {
     let handle = rt.handle().inner.driver().time();
 
     let start_time = handle.time_source.start_time();
-    let long_future = start_time + std::time::Duration::from_millis(MAX_SAFE_MILLIS_DURATION + 1);
+    let long_future = start_time + core::time::Duration::from_millis(MAX_SAFE_MILLIS_DURATION + 1);
 
     assert!(handle.time_source.instant_to_tick(long_future) <= MAX_SAFE_MILLIS_DURATION);
 }

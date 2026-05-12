@@ -10,7 +10,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::Duration;
+use core::time::Duration;
 use tokio::fs as async_fs;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;

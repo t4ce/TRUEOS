@@ -24,7 +24,7 @@
 //! Wait 100ms and print "100 ms have elapsed"
 //!
 //! ```
-//! use std::time::Duration;
+//! use core::time::Duration;
 //! use tokio::time::sleep;
 //!
 //! # #[tokio::main(flavor = "current_thread")]
@@ -110,4 +110,4 @@ pub use timeout::{timeout, timeout_at, Timeout};
 
 // Re-export for convenience
 #[doc(no_inline)]
-pub use std::time::Duration;
+pub use core::time::Duration;

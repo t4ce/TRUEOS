@@ -38,7 +38,7 @@ use std::io;
 #[cfg_attr(not(feature = "os-poll"), doc = "```ignore")]
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// use std::thread;
-/// use std::time::Duration;
+/// use core::time::Duration;
 /// use std::sync::Arc;
 ///
 /// use mio::{Events, Token, Poll, Waker};

@@ -155,7 +155,7 @@ cfg_test_util! {
     ///     // The clock will NOT auto-advance while this blocking task runs
     ///     let result = task::spawn_blocking(|| {
     ///         // Perform I/O operations here
-    ///         std::thread::sleep(std::time::Duration::from_millis(10));
+    ///         std::thread::sleep(core::time::Duration::from_millis(10));
     ///         42
     ///     }).await.unwrap();
     ///

@@ -2,7 +2,7 @@ use crate::runtime::scheduler::multi_thread::{queue, Stats};
 
 use std::cell::RefCell;
 use std::thread;
-use std::time::Duration;
+use core::time::Duration;
 
 #[allow(unused)]
 macro_rules! assert_metrics {

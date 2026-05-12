@@ -1,10 +1,10 @@
+use core::time::Duration;
 use std::{
     convert::Infallible,
     future::Future,
     marker::PhantomData,
     pin::Pin,
     task::{Context, Poll},
-    time::Duration,
 };
 
 use crate::rt::{Read, Write};

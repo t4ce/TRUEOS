@@ -7,7 +7,7 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::Duration;
+use core::time::Duration;
 
 use crate::rt::{Read, Write};
 use futures_core::ready;

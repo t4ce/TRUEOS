@@ -1,7 +1,7 @@
 use std::fmt;
 use std::net::SocketAddr;
 use std::pin::Pin;
-use std::time::Duration;
+use core::time::Duration;
 
 use bytes::Bytes;
 use http_body_util::BodyExt;

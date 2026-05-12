@@ -157,10 +157,12 @@ optional = true
 
 [dependencies.bytes]
 version = "1.7.1"
+default-features = false
 
 [dependencies.futures-channel]
 version = "0.3"
 optional = true
+default-features = false
 
 [dependencies.futures-util]
 version = "0.3.16"
@@ -169,12 +171,15 @@ default-features = false
 
 [dependencies.http]
 version = "1.0"
+default-features = false
 
 [dependencies.http-body]
 version = "1.0.0"
+default-features = false
 
 [dependencies.hyper]
 version = "1.8.0"
+default-features = false
 
 [dependencies.ipnet]
 version = "2.9"
@@ -187,6 +192,7 @@ optional = true
 [dependencies.percent-encoding]
 version = "2.3"
 optional = true
+default-features = false
 
 [dependencies.pin-project-lite]
 version = "0.2.4"
@@ -195,6 +201,7 @@ version = "0.2.4"
 version = ">=0.5.9, <0.7"
 features = ["all"]
 optional = true
+default-features = false
 
 [dependencies.tokio]
 version = "1"

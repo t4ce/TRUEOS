@@ -2,7 +2,7 @@ use crate::runtime::metrics::batch::duration_as_u64;
 use std::cmp;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::time::Duration;
+use core::time::Duration;
 
 const DEFAULT_MIN_VALUE: Duration = Duration::from_nanos(100);
 const DEFAULT_MAX_VALUE: Duration = Duration::from_secs(60);
@@ -308,7 +308,7 @@ mod test {
         use crate::runtime::metrics::batch::duration_as_u64;
         use crate::runtime::metrics::histogram::h2_histogram::MAX_PRECISION;
         use proptest::prelude::*;
-        use std::time::Duration;
+        use core::time::Duration;
 
         fn valid_log_histogram_strategy() -> impl Strategy<Value = LogHistogram> {
             (1..=50u32, 0..=MAX_PRECISION, 0..100usize).prop_map(|(n, p, bucket_offset)| {
