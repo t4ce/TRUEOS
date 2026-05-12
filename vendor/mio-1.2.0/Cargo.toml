@@ -122,6 +122,9 @@ version = "0.1.2"
 default-features = false
 features = ["alloc"]
 
+[target.'cfg(any(target_os = "trueos", target_os = "zkvm"))'.dependencies.trueos-io]
+path = "../../crates/trueos-io"
+
 [target.'cfg(any(target_os = "trueos", target_os = "zkvm"))'.dependencies.spin]
 version = "0.10"
 

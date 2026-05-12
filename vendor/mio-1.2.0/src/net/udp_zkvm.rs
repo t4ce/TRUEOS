@@ -2,7 +2,7 @@
 
 use core::fmt;
 use core::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
-use core3::io;
+use trueos_io as io;
 
 use crate::zkvm_net::Socket;
 use crate::{event, Interest, Registry, Token};

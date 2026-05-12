@@ -4,7 +4,7 @@ use crate::{Interest, Registry, Token};
 
 use alloc::{vec, vec::Vec};
 use core::net::SocketAddr;
-use core3::io;
+use trueos_io as io;
 
 const STATUS_UNSUPPORTED: i32 = -1;
 const STATUS_WOULD_BLOCK: i32 = -2;

@@ -16,6 +16,7 @@ embassy-sync = { version = "0.8.0", default-features = false }
 embassy-time = { version = "0.5.1", default-features = false, features = ["tick-hz-1_000"] }
 embassy-time-driver = { version = "0.2.2", default-features = false }
 embedded-io-async = { version = "0.7.0", default-features = false }
+trueos-io = { path = "crates/trueos-io" }
 heapless = { version = "0.9", default-features = false }
 bytes = { version = "1.11.1", default-features = false }
 limine = { version = "0.6", default-features = false }

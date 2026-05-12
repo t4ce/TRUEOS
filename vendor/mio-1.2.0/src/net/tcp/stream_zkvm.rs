@@ -2,7 +2,7 @@
 
 use core::fmt;
 use core::net::SocketAddr;
-use core3::io::{self, Read, Write};
+use trueos_io::{self as io, Read, Write};
 
 use crate::zkvm_net::Socket;
 use crate::{event, Interest, Registry, Token};

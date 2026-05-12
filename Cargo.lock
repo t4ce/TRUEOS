@@ -66,6 +66,7 @@ dependencies = [
  "trueos-eu",
  "trueos-fs",
  "trueos-gfx-core",
+ "trueos-io",
  "trueos-math",
  "trueos-qjs",
  "trueos-vm",
@@ -1948,6 +1949,7 @@ dependencies = [
  "core3",
  "libc",
  "spin 0.10.0",
+ "trueos-io",
  "wasi",
  "windows-sys 0.61.2",
 ]
@@ -2911,6 +2913,7 @@ dependencies = [
  "core3",
  "libc",
  "spin 0.10.0",
+ "trueos-io",
  "windows-sys 0.61.2",
 ]
 
@@ -3306,6 +3309,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "trueos-io"
+version = "0.1.0"
+dependencies = [
+ "core3",
+]
+
+[[package]]
 name = "trueos-locale"
 version = "0.1.0"
 
@@ -3367,6 +3377,7 @@ dependencies = [
  "log",
  "rand 0.9.4",
  "thiserror",
+ "trueos-io",
 ]
 
 [[package]]

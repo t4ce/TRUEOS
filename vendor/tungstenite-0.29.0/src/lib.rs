@@ -86,7 +86,7 @@ pub mod hash {
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod io {
     //! TRUEOS no_std IO compatibility.
-    pub use core3::io::*;
+    pub use trueos_io::*;
 }
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
