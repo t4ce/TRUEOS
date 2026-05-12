@@ -1,3 +1,4 @@
+use alloc::{string::String, vec::Vec};
 use bytes::{Bytes, BytesMut};
 use core::{
     borrow::Borrow,

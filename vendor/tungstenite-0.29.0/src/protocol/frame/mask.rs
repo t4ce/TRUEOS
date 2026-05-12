@@ -1,6 +1,18 @@
 /// Generate a random frame mask.
 #[inline]
 pub fn generate_mask() -> [u8; 4] {
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    {
+        use core::sync::atomic::{AtomicU32, Ordering};
+
+        static MASK_COUNTER: AtomicU32 = AtomicU32::new(0x9e37_79b9);
+        return MASK_COUNTER
+            .fetch_add(0x9e37_79b9, Ordering::Relaxed)
+            .rotate_left(13)
+            .to_ne_bytes();
+    }
+
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     rand::random()
 }
 

@@ -137,6 +137,11 @@ harness = false
 version = "1.9.0"
 default-features = false
 
+[target.'cfg(any(target_os = "trueos", target_os = "zkvm"))'.dependencies.core3]
+version = "0.1.2"
+features = ["alloc"]
+default-features = false
+
 [dependencies.data-encoding]
 version = "2"
 features = ["alloc"]

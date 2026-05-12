@@ -4,6 +4,7 @@
 //! It is filled by reading from a stream supporting `Read` and is then
 //! accessible as a cursor for reading bytes.
 
+use alloc::{boxed::Box, vec::Vec};
 use std::io::{Cursor, Read, Result as IoResult};
 
 use bytes::Buf;
@@ -69,15 +70,21 @@ impl<const CHUNK_SIZE: usize> ReadBuffer<CHUNK_SIZE> {
 
 impl<const CHUNK_SIZE: usize> Buf for ReadBuffer<CHUNK_SIZE> {
     fn remaining(&self) -> usize {
-        Buf::remaining(self.as_cursor())
+        self.storage
+            .get_ref()
+            .len()
+            .saturating_sub(self.storage.position() as usize)
     }
 
     fn chunk(&self) -> &[u8] {
-        Buf::chunk(self.as_cursor())
+        let pos = self.storage.position() as usize;
+        &self.storage.get_ref()[pos.min(self.storage.get_ref().len())..]
     }
 
     fn advance(&mut self, cnt: usize) {
-        Buf::advance(self.as_cursor_mut(), cnt);
+        let position = (self.storage.position() as usize).saturating_add(cnt);
+        self.storage
+            .set_position(position.min(self.storage.get_ref().len()) as u64);
     }
 }
 

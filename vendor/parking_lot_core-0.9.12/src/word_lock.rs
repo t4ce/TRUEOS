@@ -49,6 +49,14 @@ impl ThreadData {
 // Invokes the given closure with a reference to the current thread `ThreadData`.
 #[inline]
 fn with_thread_data<T>(f: impl FnOnce(&ThreadData) -> T) -> T {
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    {
+        let thread_data = ThreadData::new();
+        return f(&thread_data);
+    }
+
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+    {
     let mut thread_data_ptr = ptr::null();
     // If ThreadData is expensive to construct, then we want to use a cached
     // version in thread-local storage if possible.
@@ -65,6 +73,7 @@ fn with_thread_data<T>(f: impl FnOnce(&ThreadData) -> T) -> T {
     }
 
     f(unsafe { &*thread_data_ptr })
+    }
 }
 
 const LOCKED_BIT: usize = 1;

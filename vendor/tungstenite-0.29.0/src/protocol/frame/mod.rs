@@ -17,6 +17,7 @@ use crate::{
     protocol::frame::mask::apply_mask,
     Message,
 };
+use alloc::vec::Vec;
 use bytes::BytesMut;
 use log::*;
 use std::io::{self, Cursor, Error as IoError, ErrorKind as IoErrorKind, Read, Write};

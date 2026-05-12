@@ -17,6 +17,7 @@ use crate::{
     error::{CapacityError, Error, ProtocolError, Result},
     protocol::frame::Utf8Bytes,
 };
+use alloc::vec::Vec;
 use log::*;
 use core::mem::replace;
 use std::{
