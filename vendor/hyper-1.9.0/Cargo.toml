@@ -189,6 +189,14 @@ default-features = false
 version = "0.3"
 optional = true
 
+[target.'cfg(any(target_os = "trueos", target_os = "zkvm"))'.dependencies.hashbrown]
+version = "0.17.0"
+features = ["alloc"]
+default-features = false
+
+[target.'cfg(any(target_os = "trueos", target_os = "zkvm"))'.dependencies.trueos-io]
+path = "../../crates/trueos-io"
+
 [dev-dependencies.form_urlencoded]
 version = "1"
 

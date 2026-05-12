@@ -498,7 +498,7 @@ impl KeepAlive {
 
 impl KeepAliveTimedOut {
     pub(super) fn crate_error(self) -> crate::Error {
-        crate::Error::new(crate::error::Kind::Http2).with(self)
+        crate::Error::new(crate::hyper_error::Kind::Http2).with(self)
     }
 }
 
@@ -510,6 +510,6 @@ impl fmt::Display for KeepAliveTimedOut {
 
 impl core::error::Error for KeepAliveTimedOut {
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
-        Some(&crate::error::TimedOut)
+        Some(&crate::hyper_error::TimedOut)
     }
 }

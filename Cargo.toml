@@ -6,6 +6,8 @@ edition = "2024"
 [features]
 default = []
 hda-boot-probe = []
+vmx-web = ["dep:axum", "hyper/server"]
+vmx-reqwest = ["dep:reqwest"]
 
 [dependencies]
 x86_64 = { version = "0.15.4", default-features = false, features = ["instructions", "nightly"] }
@@ -76,11 +78,11 @@ serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 tokio = { version = "1.52.1", default-features = false, features = ["rt", "rt-multi-thread", "macros", "sync", "time", "net", "io-util", "io-std", "fs", "process", "signal", "test-util"] }
 socket2 = { version = "0.6.3", default-features = false }
 mio = { version = "1.2.0", default-features = false, features = ["os-poll", "net"] }
-hyper = { version = "1.9.0", default-features = false, features = ["client", "server", "http1"] }
-axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio", "tower-log", "ws", "original-uri"] }
+hyper = { version = "1.9.0", default-features = false, features = ["client", "http1"] }
+axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio", "tower-log", "ws", "original-uri"], optional = true }
 lumen = { path = "vendor/lumen", default-features = false, features = ["cpu-trueos"] }
 tower = { version = "0.5.3", default-features = false, features = ["util"] }
-reqwest = { version = "0.13.3", default-features = false }
+reqwest = { version = "0.13.3", default-features = false, optional = true }
 
 [target.'cfg(target_arch = "x86_64")'.dependencies]
 rdrand = { version = "0.8", default-features = false }
