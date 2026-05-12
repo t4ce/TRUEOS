@@ -116,6 +116,7 @@ http-body = { path = "vendor/http-body-1.0.1" }
 http-body-util = { path = "vendor/http-body-util-0.1.3" }
 ipnet = { path = "vendor/ipnet-2.12.0" }
 tower = { path = "vendor/tower-0.5.3" }
+tower-layer = { path = "vendor/tower-layer-0.3.3" }
 tower-http = { path = "vendor/tower-http-0.6.9" }
 matchit = { path = "vendor/matchit-0.8.4" }
 mime = { path = "vendor/mime-0.3.17" }
