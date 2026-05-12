@@ -1,5 +1,6 @@
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use crate::fs::asyncify;
+use alloc::borrow::ToOwned;
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use crate::fs::trueos::Metadata;

@@ -1,5 +1,6 @@
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use crate::{fs::asyncify, util::as_ref::OwnedBuf};
+use alloc::borrow::ToOwned;
 
 use std::{io, path::Path};
 
