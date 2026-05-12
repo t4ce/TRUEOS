@@ -11,6 +11,43 @@
 
 #![warn(missing_docs)]
 #![warn(rust_2018_idioms)]
+#![cfg_attr(any(target_os = "trueos", target_os = "zkvm"), no_std)]
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+extern crate alloc;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+extern crate self as std;
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod prelude {
+    pub mod rust_2021 {
+        pub use alloc::{
+            boxed::Box,
+            format,
+            string::{String, ToString},
+            vec,
+            vec::Vec,
+        };
+        pub use core::prelude::rust_2021::*;
+    }
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod ops {
+    pub use core::ops::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod sync {
+    pub mod atomic {
+        pub use core::sync::atomic::*;
+    }
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod time {
+    pub use parking_lot_core::time::Instant;
+}
 
 mod condvar;
 mod elision;

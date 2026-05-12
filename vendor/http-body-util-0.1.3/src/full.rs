@@ -1,3 +1,4 @@
+use alloc::{borrow::ToOwned, string::String, vec::Vec};
 use bytes::{Buf, Bytes};
 use http_body::{Body, Frame, SizeHint};
 use pin_project_lite::pin_project;

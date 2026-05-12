@@ -1,4 +1,6 @@
 #![deny(missing_debug_implementations, missing_docs, unreachable_pub)]
+#![cfg_attr(any(target_os = "trueos", target_os = "zkvm"), allow(missing_docs))]
+#![cfg_attr(any(target_os = "trueos", target_os = "zkvm"), no_std)]
 #![cfg_attr(test, deny(warnings))]
 
 //! Utilities for [`http_body::Body`].
@@ -6,6 +8,88 @@
 //! [`BodyExt`] adds extensions to the common trait.
 //!
 //! [`Empty`] and [`Full`] provide simple implementations.
+
+extern crate alloc;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+extern crate self as std;
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod prelude {
+    pub mod rust_2018 {
+        pub use alloc::{
+            boxed::Box,
+            string::{String, ToString},
+            vec,
+            vec::Vec,
+        };
+        pub use core::prelude::rust_2018::*;
+    }
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod any {
+    pub use core::any::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod borrow {
+    pub use alloc::borrow::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod boxed {
+    pub use alloc::boxed::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod collections {
+    pub use alloc::collections::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod convert {
+    pub use core::convert::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod error {
+    pub use core::error::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod fmt {
+    pub use core::fmt::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod future {
+    pub use core::future::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod io {
+    pub use trueos_io::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod marker {
+    pub use core::marker::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod pin {
+    pub use core::pin::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod ptr {
+    pub use core::ptr::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod task {
+    pub use core::task::*;
+}
 
 mod collected;
 pub mod combinators;

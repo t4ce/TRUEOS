@@ -1,3 +1,4 @@
+use alloc::boxed::Box;
 use std::error::Error;
 use std::fmt::Debug;
 use std::pin::Pin;
