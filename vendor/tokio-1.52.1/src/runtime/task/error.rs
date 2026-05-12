@@ -1,7 +1,7 @@
 #[allow(unused_imports)]
 use crate::runtime::prelude::*;
 
-use std::any::Any;
+use core::any::Any;
 use core::fmt;
 use std::io;
 
@@ -169,7 +169,7 @@ impl fmt::Debug for JoinError {
     }
 }
 
-impl std::error::Error for JoinError {}
+impl core::error::Error for JoinError {}
 
 impl From<JoinError> for io::Error {
     fn from(src: JoinError) -> io::Error {

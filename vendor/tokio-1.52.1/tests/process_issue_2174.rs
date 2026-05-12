@@ -10,7 +10,7 @@
 #![cfg(all(unix, not(target_os = "freebsd"), not(miri)))]
 
 use std::process::Stdio;
-use std::time::Duration;
+use core::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::time;

@@ -1,10 +1,10 @@
 #![warn(rust_2018_idioms)]
 #![cfg(feature = "full")]
 
-use std::error::Error;
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::error::Error;
+use core::future::Future;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 use tokio::runtime::Runtime;
 use tokio::sync::oneshot;
 use tokio::task::{self, Id, LocalSet};

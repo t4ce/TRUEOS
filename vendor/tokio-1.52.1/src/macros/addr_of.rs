@@ -18,7 +18,7 @@ macro_rules! generate_addr_of_methods {
             $vis unsafe fn $fn_name(me: ::core::ptr::NonNull<Self>) -> ::core::ptr::NonNull<$field_type> {
                 let me = me.as_ptr();
                 // safety: the caller guarantees that `me` is valid
-                let field = unsafe { ::std::ptr::addr_of_mut!((*me) $(.$field_name)+ ) };
+                let field = unsafe { ::core::ptr::addr_of_mut!((*me) $(.$field_name)+ ) };
                 // safety: the field pointer is never null
                 unsafe { ::core::ptr::NonNull::new_unchecked(field) }
             }

@@ -53,7 +53,7 @@ fn test_join_error_panic() {
 fn test_join_error_cancelled() {
     let rt = rt();
     let handle = rt.spawn(async {
-        std::future::pending::<()>().await;
+        core::future::pending::<()>().await;
     });
     handle.abort();
     let join_err = rt.block_on(handle).unwrap_err();

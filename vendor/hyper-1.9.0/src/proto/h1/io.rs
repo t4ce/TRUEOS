@@ -1,8 +1,8 @@
-use std::cmp;
-use std::fmt;
+use core::cmp;
+use core::fmt;
 use std::io::{self, IoSlice};
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 use crate::rt::{Read, ReadBuf, Write};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
@@ -324,7 +324,7 @@ where
     }
 
     #[cfg(test)]
-    fn flush(&mut self) -> impl std::future::Future<Output = io::Result<()>> + '_ {
+    fn flush(&mut self) -> impl core::future::Future<Output = io::Result<()>> + '_ {
         futures_util::future::poll_fn(move |cx| self.poll_flush(cx))
     }
 }
@@ -344,11 +344,11 @@ where
 {
     fn read_mem(&mut self, cx: &mut Context<'_>, len: usize) -> Poll<io::Result<Bytes>> {
         if !self.read_buf.is_empty() {
-            let n = std::cmp::min(len, self.read_buf.len());
+            let n = core::cmp::min(len, self.read_buf.len());
             Poll::Ready(Ok(self.read_buf.split_to(n).freeze()))
         } else {
             let n = ready!(self.poll_read_from_io(cx))?;
-            Poll::Ready(Ok(self.read_buf.split_to(::std::cmp::min(len, n)).freeze()))
+            Poll::Ready(Ok(self.read_buf.split_to(::core::cmp::min(len, n)).freeze()))
         }
     }
 }

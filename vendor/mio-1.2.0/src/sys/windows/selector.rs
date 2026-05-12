@@ -12,11 +12,11 @@ cfg_net! {
 
 use super::iocp::{CompletionPort, CompletionStatus};
 use std::collections::VecDeque;
-use std::ffi::c_void;
+use core::ffi::c_void;
 use std::io;
-use std::marker::PhantomPinned;
+use core::marker::PhantomPinned;
 use std::os::windows::io::RawSocket;
-use std::pin::Pin;
+use core::pin::Pin;
 #[cfg(debug_assertions)]
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -522,8 +522,8 @@ impl SelectorInner {
 }
 
 cfg_io_source! {
-    use std::mem::size_of;
-    use std::ptr::null_mut;
+    use core::mem::size_of;
+    use core::ptr::null_mut;
 
     use windows_sys::Win32::Networking::WinSock::{
         WSAGetLastError, WSAIoctl, SIO_BASE_HANDLE, SIO_BSP_HANDLE,

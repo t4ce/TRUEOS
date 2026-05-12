@@ -7,9 +7,9 @@ use crate::on_early_drop::guard::OnEarlyDropGuard;
 use crate::on_early_drop::traits::{OnBodyDrop, OnDropCallback};
 use http::Response;
 use pin_project_lite::pin_project;
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::future::Future;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 pin_project! {
     /// Response future for [`OnEarlyDropService`].
@@ -30,7 +30,7 @@ pin_project! {
         // Retained for `make_at_response`.
         on_body_drop: Option<OBD>,
         // `fn(ReqB)` keeps Send/Sync and other auto-traits independent of ReqB.
-        _phantom: std::marker::PhantomData<fn(ReqB)>,
+        _phantom: core::marker::PhantomData<fn(ReqB)>,
     }
 }
 
@@ -51,7 +51,7 @@ where
             future_guard: Some(OnEarlyDropGuard::new(future_callback)),
             intermediate: Some(intermediate),
             on_body_drop: Some(on_body_drop),
-            _phantom: std::marker::PhantomData,
+            _phantom: core::marker::PhantomData,
         }
     }
 }

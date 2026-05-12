@@ -1,7 +1,7 @@
-use std::fmt;
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{ready, Context, Poll};
+use core::fmt;
+use core::future::Future;
+use core::pin::Pin;
+use core::task::{ready, Context, Poll};
 use core::time::Duration;
 
 use bytes::Bytes;
@@ -21,7 +21,7 @@ pub struct Body {
 
 enum Inner {
     Reusable(Bytes),
-    Streaming(BoxBody<Bytes, Box<dyn std::error::Error + Send + Sync>>),
+    Streaming(BoxBody<Bytes, Box<dyn core::error::Error + Send + Sync>>),
 }
 
 pin_project! {
@@ -85,7 +85,7 @@ impl Body {
     pub fn wrap_stream<S>(stream: S) -> Body
     where
         S: futures_core::stream::TryStream + Send + 'static,
-        S::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+        S::Error: Into<Box<dyn core::error::Error + Send + Sync>>,
         Bytes: From<S::Ok>,
     {
         Body::stream(stream)
@@ -95,7 +95,7 @@ impl Body {
     pub(crate) fn stream<S>(stream: S) -> Body
     where
         S: futures_core::stream::TryStream + Send + 'static,
-        S::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+        S::Error: Into<Box<dyn core::error::Error + Send + Sync>>,
         Bytes: From<S::Ok>,
     {
         use futures_util::TryStreamExt;
@@ -139,7 +139,7 @@ impl Body {
     where
         B: HttpBody + Send + Sync + 'static,
         B::Data: Into<Bytes>,
-        B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+        B::Error: Into<Box<dyn core::error::Error + Send + Sync>>,
     {
         use http_body_util::BodyExt;
 
@@ -295,7 +295,7 @@ pub(crate) fn with_read_timeout<B>(body: B, timeout: Duration) -> ReadTimeoutBod
 impl<B> hyper::body::Body for TotalTimeoutBody<B>
 where
     B: hyper::body::Body,
-    B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    B::Error: Into<Box<dyn core::error::Error + Send + Sync>>,
 {
     type Data = B::Data;
     type Error = crate::Error;
@@ -328,7 +328,7 @@ where
 impl<B> hyper::body::Body for ReadTimeoutBody<B>
 where
     B: hyper::body::Body,
-    B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    B::Error: Into<Box<dyn core::error::Error + Send + Sync>>,
 {
     type Data = B::Data;
     type Error = crate::Error;
@@ -371,12 +371,12 @@ where
 }
 
 pub(crate) type ResponseBody =
-    http_body_util::combinators::BoxBody<Bytes, Box<dyn std::error::Error + Send + Sync>>;
+    http_body_util::combinators::BoxBody<Bytes, Box<dyn core::error::Error + Send + Sync>>;
 
 pub(crate) fn boxed<B>(body: B) -> ResponseBody
 where
     B: hyper::body::Body<Data = Bytes> + Send + Sync + 'static,
-    B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    B::Error: Into<Box<dyn core::error::Error + Send + Sync>>,
 {
     use http_body_util::BodyExt;
 
@@ -390,7 +390,7 @@ pub(crate) fn response<B>(
 ) -> ResponseBody
 where
     B: hyper::body::Body<Data = Bytes> + Send + Sync + 'static,
-    B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    B::Error: Into<Box<dyn core::error::Error + Send + Sync>>,
 {
     use http_body_util::BodyExt;
 
@@ -405,9 +405,9 @@ where
     }
 }
 
-fn box_err<E>(err: E) -> Box<dyn std::error::Error + Send + Sync>
+fn box_err<E>(err: E) -> Box<dyn core::error::Error + Send + Sync>
 where
-    E: Into<Box<dyn std::error::Error + Send + Sync>>,
+    E: Into<Box<dyn core::error::Error + Send + Sync>>,
 {
     err.into()
 }

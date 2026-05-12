@@ -247,7 +247,7 @@ impl ClassifyEos for GrpcEosErrorsAsFailures {
 #[derive(Debug)]
 pub enum GrpcFailureClass {
     /// A gRPC response was classified as a failure with the corresponding status.
-    Code(std::num::NonZeroI32),
+    Code(core::num::NonZeroI32),
     /// A gRPC response was classified as an error with the corresponding error description.
     Error(String),
 }

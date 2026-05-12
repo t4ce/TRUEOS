@@ -10,10 +10,10 @@
     not(miri)
 ))]
 
-use std::future::poll_fn;
+use core::future::poll_fn;
 use std::io;
 use std::sync::Arc;
-use std::time::Duration;
+use core::time::Duration;
 use tokio::{io::ReadBuf, net::UdpSocket, time};
 use tokio_test::assert_ok;
 

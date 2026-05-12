@@ -224,7 +224,7 @@ use std::{
 /// ```rust
 /// use axum_core::extract::{FromRequestParts, FromRef};
 /// use http::request::Parts;
-/// use std::convert::Infallible;
+/// use core::convert::Infallible;
 ///
 /// // the extractor your library provides
 /// struct MyLibraryExtractor;

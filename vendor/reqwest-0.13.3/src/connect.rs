@@ -14,12 +14,12 @@ use tower::util::{BoxCloneSyncServiceLayer, MapRequestLayer};
 use tower::{timeout::TimeoutLayer, util::BoxCloneSyncService, ServiceBuilder};
 use tower_service::Service;
 
-use std::future::Future;
+use core::future::Future;
 use std::io::{self, IoSlice};
 use std::net::IpAddr;
-use std::pin::Pin;
+use core::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 use core::time::Duration;
 
 #[cfg(feature = "__native-tls")]
@@ -83,7 +83,7 @@ pub(crate) struct ConnectorBuilder {
     #[cfg(unix)]
     unix_socket: Option<Arc<std::path::Path>>,
     #[cfg(target_os = "windows")]
-    windows_named_pipe: Option<Arc<std::ffi::OsStr>>,
+    windows_named_pipe: Option<Arc<core::ffi::OsStr>>,
 }
 
 impl ConnectorBuilder {
@@ -474,7 +474,7 @@ where {
     }
 
     #[cfg(target_os = "windows")]
-    pub(crate) fn set_windows_named_pipe(&mut self, pipe: Option<Arc<std::ffi::OsStr>>) {
+    pub(crate) fn set_windows_named_pipe(&mut self, pipe: Option<Arc<core::ffi::OsStr>>) {
         self.windows_named_pipe = pipe;
     }
 }
@@ -502,7 +502,7 @@ pub(crate) struct ConnectorService {
     #[cfg(unix)]
     unix_socket: Option<Arc<std::path::Path>>,
     #[cfg(target_os = "windows")]
-    windows_named_pipe: Option<Arc<std::ffi::OsStr>>,
+    windows_named_pipe: Option<Arc<core::ffi::OsStr>>,
 }
 
 #[derive(Clone)]
@@ -565,7 +565,7 @@ impl ConnectorService {
             #[cfg(feature = "__rustls")]
             Inner::RustlsTls { http, tls, .. } => {
                 if dst.scheme() == Some(&Scheme::HTTPS) {
-                    use std::convert::TryFrom;
+                    use core::convert::TryFrom;
                     use tokio_rustls::TlsConnector as RustlsConnector;
 
                     let tls = tls.clone();
@@ -848,7 +848,7 @@ impl ConnectorService {
             } => {
                 if dst.scheme() == Some(&Scheme::HTTPS) {
                     use rustls_pki_types::ServerName;
-                    use std::convert::TryFrom;
+                    use core::convert::TryFrom;
                     use tokio_rustls::TlsConnector as RustlsConnector;
 
                     log::trace!("tunneling HTTPS over proxy");
@@ -1422,7 +1422,7 @@ pub(crate) mod uds {
 // Sealed trait for Windows Named Pipe support
 #[cfg(target_os = "windows")]
 pub(crate) mod windows_named_pipe {
-    use std::ffi::OsStr;
+    use core::ffi::OsStr;
     /// A provider for Windows Named Pipe paths.
     ///
     /// This trait is sealed. This allows us to expand support in the future
@@ -1454,7 +1454,7 @@ pub(crate) mod windows_named_pipe {
         &'_ str,
         std::path::PathBuf,
         &'_ std::path::Path,
-        std::ffi::OsString,
+        core::ffi::OsString,
         &'_ OsStr,
     ];
 }
@@ -1929,8 +1929,8 @@ mod socks {
         }
     }
 
-    impl std::fmt::Display for SocksProxyError {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    impl core::fmt::Display for SocksProxyError {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             match self {
                 Self::SocksNoHostInUrl => f.write_str("socks proxy destination has no host"),
                 Self::SocksLocalResolve(_) => f.write_str("error resolving for socks proxy"),
@@ -1939,8 +1939,8 @@ mod socks {
         }
     }
 
-    impl std::error::Error for SocksProxyError {
-        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+    impl core::error::Error for SocksProxyError {
+        fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
             match self {
                 Self::SocksNoHostInUrl => None,
                 Self::SocksLocalResolve(ref e) => Some(&**e),
@@ -1954,11 +1954,11 @@ mod verbose {
     use crate::util::Escape;
     use hyper::rt::{Read, ReadBufCursor, Write};
     use hyper_util::client::legacy::connect::{Connected, Connection};
-    use std::cmp::min;
-    use std::fmt;
+    use core::cmp::min;
+    use core::fmt;
     use std::io::{self, IoSlice};
-    use std::pin::Pin;
-    use std::task::{Context, Poll};
+    use core::pin::Pin;
+    use core::task::{Context, Poll};
 
     pub(super) const OFF: Wrapper = Wrapper(false);
 

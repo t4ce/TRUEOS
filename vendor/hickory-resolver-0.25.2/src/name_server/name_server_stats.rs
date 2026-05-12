@@ -209,7 +209,7 @@ impl NameServerStats {
 #[cfg(test)]
 #[allow(clippy::extra_unused_type_parameters)]
 mod tests {
-    use std::cmp::Ordering;
+    use core::cmp::Ordering;
 
     use super::*;
 

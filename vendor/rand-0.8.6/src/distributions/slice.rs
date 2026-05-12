@@ -114,4 +114,4 @@ impl core::fmt::Display for EmptySlice {
 }
 
 #[cfg(feature = "std")]
-impl std::error::Error for EmptySlice {}
+impl core::error::Error for EmptySlice {}

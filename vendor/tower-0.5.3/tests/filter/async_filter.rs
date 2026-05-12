@@ -2,7 +2,7 @@
 #[path = "../support.rs"]
 mod support;
 use futures_util::future::pin_mut;
-use std::future::{poll_fn, Future};
+use core::future::{poll_fn, Future};
 use tower::filter::{error::Error, AsyncFilter};
 use tower_service::Service;
 use tower_test::{assert_request_eq, mock};

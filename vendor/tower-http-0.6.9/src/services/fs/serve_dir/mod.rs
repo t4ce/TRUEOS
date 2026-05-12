@@ -312,7 +312,7 @@ impl<F> ServeDir<F> {
         F: Service<Request<ReqBody>, Response = Response<FResBody>, Error = Infallible> + Clone,
         F::Future: Send + 'static,
         FResBody: http_body::Body<Data = Bytes> + Send + 'static,
-        FResBody::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+        FResBody::Error: Into<Box<dyn core::error::Error + Send + Sync>>,
     {
         if req.method() != Method::GET && req.method() != Method::HEAD {
             if self.call_fallback_on_method_not_allowed {
@@ -332,7 +332,7 @@ impl<F> ServeDir<F> {
         // this is necessary because we cannot clone bodies
         let (mut parts, body) = req.into_parts();
         // same goes for extensions
-        let extensions = std::mem::take(&mut parts.extensions);
+        let extensions = core::mem::take(&mut parts.extensions);
         let req = Request::from_parts(parts, Empty::<Bytes>::new());
 
         let fallback_and_request = self.fallback.as_mut().map(|fallback| {
@@ -344,7 +344,7 @@ impl<F> ServeDir<F> {
 
             // get the ready fallback and leave a non-ready clone in its place
             let clone = fallback.clone();
-            let fallback = std::mem::replace(fallback, clone);
+            let fallback = core::mem::replace(fallback, clone);
 
             (fallback, fallback_req)
         });
@@ -392,7 +392,7 @@ where
     F: Service<Request<ReqBody>, Response = Response<FResBody>, Error = Infallible> + Clone,
     F::Future: Send + 'static,
     FResBody: http_body::Body<Data = Bytes> + Send + 'static,
-    FResBody::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    FResBody::Error: Into<Box<dyn core::error::Error + Send + Sync>>,
 {
     type Response = Response<ResponseBody>;
     type Error = Infallible;

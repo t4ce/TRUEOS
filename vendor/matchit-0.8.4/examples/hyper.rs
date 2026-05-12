@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::convert::Infallible;
+use core::convert::Infallible;
 use std::sync::{Arc, Mutex};
 
 use hyper::server::Server;

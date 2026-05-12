@@ -5,13 +5,13 @@ use futures_core::Stream;
 use futures_util::{stream::FuturesUnordered, task::AtomicWaker};
 pub use indexmap::Equivalent;
 use indexmap::IndexMap;
-use std::fmt;
-use std::future::Future;
-use std::hash::Hash;
-use std::pin::Pin;
+use core::fmt;
+use core::future::Future;
+use core::hash::Hash;
+use core::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 use tower_service::Service;
 use tracing::{debug, trace};
 
@@ -104,7 +104,7 @@ pin_project_lite::pin_project! {
         key: Option<K>,
         cancel: Option<CancelRx>,
         ready: Option<S>,
-        _pd: std::marker::PhantomData<Req>,
+        _pd: core::marker::PhantomData<Req>,
     }
 }
 
@@ -260,7 +260,7 @@ where
             key: Some(key),
             cancel: Some(cancel_rx),
             ready: Some(svc),
-            _pd: std::marker::PhantomData,
+            _pd: core::marker::PhantomData,
         });
     }
 

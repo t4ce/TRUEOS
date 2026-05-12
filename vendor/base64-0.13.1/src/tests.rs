@@ -1,6 +1,6 @@
 use crate::{decode_config, encode::encoded_size, encode_config_buf, CharacterSet, Config};
 
-use std::str;
+use core::str;
 
 use rand::{
     distributions::{Distribution, Uniform},

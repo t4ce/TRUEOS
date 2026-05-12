@@ -28,7 +28,7 @@ fn spawn_task_hook_fires() {
         .unwrap();
 
     for _ in 0..TASKS {
-        runtime.spawn(std::future::pending::<()>());
+        runtime.spawn(core::future::pending::<()>());
     }
 
     let count_realized = count.load(Ordering::SeqCst);
@@ -59,7 +59,7 @@ fn terminate_task_hook_fires() {
         .unwrap();
 
     for _ in 0..TASKS {
-        runtime.spawn(std::future::ready(()));
+        runtime.spawn(core::future::ready(()));
     }
 
     runtime.block_on(async {
@@ -162,7 +162,7 @@ fn task_hook_spawn_location_multi_thread() {
 
     // Give the runtime to shut down so that we see all the expected calls to
     // the task hooks.
-    runtime.shutdown_timeout(std::time::Duration::from_secs(60));
+    runtime.shutdown_timeout(core::time::Duration::from_secs(60));
 
     // Note: we "read" the counters using `fetch_add(0, SeqCst)` rather than
     // `load(SeqCst)` because read-write-modify operations are guaranteed to

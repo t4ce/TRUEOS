@@ -14,8 +14,8 @@ use crate::net::UnixStream;
 use crate::net::unix::SocketAddr;
 use std::io;
 use std::net::Shutdown;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 cfg_io_util! {
     use bytes::BufMut;

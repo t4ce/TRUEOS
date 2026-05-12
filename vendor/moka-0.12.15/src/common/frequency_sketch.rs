@@ -189,7 +189,7 @@ impl FrequencySketch {
 
     #[cfg(feature = "unstable-debug-counters")]
     pub(crate) fn table_size(&self) -> u64 {
-        (self.table.len() * std::mem::size_of::<u64>()) as u64
+        (self.table.len() * core::mem::size_of::<u64>()) as u64
     }
 }
 
@@ -209,7 +209,7 @@ impl FrequencySketch {
 mod tests {
     use super::FrequencySketch;
     use once_cell::sync::Lazy;
-    use std::hash::{BuildHasher, Hash};
+    use core::hash::{BuildHasher, Hash};
 
     static ITEM: Lazy<u32> = Lazy::new(|| {
         let mut buf = [0; 4];

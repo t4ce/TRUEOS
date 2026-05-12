@@ -6,12 +6,12 @@
 // copied, modified, or distributed except according to those terms.
 
 //! Structs for creating and using a Resolver
-use std::fmt;
-use std::future::Future;
+use core::fmt;
+use core::future::Future;
 use std::net::IpAddr;
-use std::pin::Pin;
+use core::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 
 use futures_util::{FutureExt, future};
 use tracing::debug;
@@ -1237,7 +1237,7 @@ mod tests {
 
     #[test]
     fn test_build_names() {
-        use std::str::FromStr;
+        use core::str::FromStr;
 
         let handle = TokioConnectionProvider::default();
         let mut config = ResolverConfig::default();

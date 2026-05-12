@@ -1,6 +1,6 @@
-use std::cell::RefCell;
-use std::fmt::{self, Write};
-use std::str;
+use core::cell::RefCell;
+use core::fmt::{self, Write};
+use core::str;
 use core::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 

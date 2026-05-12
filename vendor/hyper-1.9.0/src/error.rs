@@ -1,6 +1,6 @@
 //! Error and Result module.
-use std::error::Error as StdError;
-use std::fmt;
+use core::error::Error as StdError;
+use core::fmt;
 
 /// Result type often returned from methods that can have hyper `Error`s.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -15,7 +15,7 @@ type Cause = Box<dyn StdError + Send + Sync>;
 /// this level of error, even though it may have been caused by another error
 /// and contain that error in its source. To print all the relevant
 /// information, including the source chain, using something like
-/// `std::error::Report`, or equivalent 3rd party types.
+/// `core::error::Report`, or equivalent 3rd party types.
 ///
 /// The contents of the formatted error message of this specific `Error` type
 /// is unspecified. **You must not depend on it.** The wording and details may
@@ -663,7 +663,7 @@ impl StdError for TimedOut {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::mem;
+    use core::mem;
 
     fn assert_send_sync<T: Send + Sync + 'static>() {}
 

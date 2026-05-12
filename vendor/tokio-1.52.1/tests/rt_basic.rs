@@ -6,10 +6,10 @@ use tokio::sync::oneshot;
 use tokio::time::{timeout, Duration};
 use tokio_test::{assert_err, assert_ok};
 
-use std::future::Future;
-use std::pin::Pin;
+use core::future::Future;
+use core::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 use std::thread;
 
 mod support {
@@ -47,12 +47,12 @@ fn spawned_task_does_not_progress_without_block_on() {
 #[test]
 fn no_extra_poll() {
     use pin_project_lite::pin_project;
-    use std::pin::Pin;
+    use core::pin::Pin;
     use std::sync::{
         atomic::{AtomicUsize, Ordering::SeqCst},
         Arc,
     };
-    use std::task::{Context, Poll};
+    use core::task::{Context, Poll};
     use tokio_stream::{Stream, StreamExt};
 
     pin_project! {
@@ -505,7 +505,7 @@ fn before_park_yields() {
             if !woken2.swap(true, Ordering::SeqCst) {
                 let mut cx = Context::from_waker(&waker);
                 // `yield_now` pushes the waker to the defer slot.
-                let fut = std::pin::pin!(tokio::task::yield_now());
+                let fut = core::pin::pin!(tokio::task::yield_now());
                 let _ = fut.poll(&mut cx);
             }
         })

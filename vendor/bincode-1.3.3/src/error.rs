@@ -1,6 +1,6 @@
-use std::error::Error as StdError;
+use core::error::Error as StdError;
 use std::io;
-use std::str::Utf8Error;
+use core::str::Utf8Error;
 use std::{error, fmt};
 
 use serde;

@@ -92,7 +92,7 @@ impl<T: ?Sized> MiniArc<T> {
     /// comparing `MiniArc<dyn Trait>` instances.
     ///
     /// To fix this, we must rise the minimum supported Rust version (MSRV) to
-    /// 1.76 and use `std::ptr::addr_eq` internally instead of `eq` (`==`).
+    /// 1.76 and use `core::ptr::addr_eq` internally instead of `eq` (`==`).
     /// `addr_eq` compares the _addresses_ of the pointers for equality,
     /// ignoring any metadata in fat pointers.
     ///

@@ -1,9 +1,9 @@
 use super::support;
 use futures_core::Stream;
 use futures_util::pin_mut;
-use std::fmt;
-use std::future::{ready, Future, Ready};
-use std::task::{Context, Poll};
+use core::fmt;
+use core::future::{ready, Future, Ready};
+use core::task::{Context, Poll};
 use std::{cell::Cell, rc::Rc};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_test::{assert_pending, assert_ready, task};
@@ -11,7 +11,7 @@ use tower::util::ServiceExt;
 use tower_service::*;
 use tower_test::{assert_request_eq, mock, mock::Mock};
 
-type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
+type Error = Box<dyn core::error::Error + Send + Sync + 'static>;
 
 #[derive(Debug, Eq, PartialEq)]
 struct Srv {
@@ -181,7 +181,7 @@ async fn poll_ready_error() {
         }
     }
 
-    impl std::error::Error for StringErr {}
+    impl core::error::Error for StringErr {}
 
     impl Service<&'static str> for ReadyOnceThenErr {
         type Response = &'static str;

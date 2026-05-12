@@ -20,12 +20,12 @@
 //!     Ok::<_, Infallible>(iter::once(SocketAddr::from(([127, 0, 0, 1], 8080))))
 //! });
 //! ```
-use std::error::Error;
-use std::future::Future;
+use core::error::Error;
+use core::future::Future;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, ToSocketAddrs};
-use std::pin::Pin;
-use std::str::FromStr;
-use std::task::{self, Poll};
+use core::pin::Pin;
+use core::str::FromStr;
+use core::task::{self, Poll};
 use std::{fmt, io, vec};
 
 use tokio::task::JoinHandle;
@@ -251,8 +251,8 @@ impl Iterator for SocketAddrs {
 }
 
 mod sealed {
-    use std::future::Future;
-    use std::task::{self, Poll};
+    use core::future::Future;
+    use core::task::{self, Poll};
 
     use super::{Name, SocketAddr};
     use tower_service::Service;
@@ -260,7 +260,7 @@ mod sealed {
     // "Trait alias" for `Service<Name, Response = Addrs>`
     pub trait Resolve {
         type Addrs: Iterator<Item = SocketAddr>;
-        type Error: Into<Box<dyn std::error::Error + Send + Sync>>;
+        type Error: Into<Box<dyn core::error::Error + Send + Sync>>;
         type Future: Future<Output = Result<Self::Addrs, Self::Error>>;
 
         fn poll_ready(&mut self, cx: &mut task::Context<'_>) -> Poll<Result<(), Self::Error>>;
@@ -271,7 +271,7 @@ mod sealed {
     where
         S: Service<Name>,
         S::Response: Iterator<Item = SocketAddr>,
-        S::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+        S::Error: Into<Box<dyn core::error::Error + Send + Sync>>,
     {
         type Addrs = S::Response;
         type Error = S::Error;
@@ -291,7 +291,7 @@ pub(super) async fn resolve<R>(resolver: &mut R, name: Name) -> Result<R::Addrs,
 where
     R: Resolve,
 {
-    std::future::poll_fn(|cx| resolver.poll_ready(cx)).await?;
+    core::future::poll_fn(|cx| resolver.poll_ready(cx)).await?;
     resolver.resolve(name).await
 }
 

@@ -9,7 +9,7 @@ use crate::task::Id;
 use backtrace::BacktraceFrame;
 use core::cell::Cell;
 use alloc::collections::VecDeque;
-use std::ffi::c_void;
+use core::ffi::c_void;
 use core::fmt;
 use core::future::Future;
 use core::pin::Pin;

@@ -29,7 +29,7 @@
 //! }
 //!
 //! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # async fn main() -> Result<(), Box<dyn core::error::Error>> {
 //! let svc = ServiceBuilder::new()
 //!     // Timeout requests after 30 seconds with the specified status code
 //!     .layer(TimeoutLayer::with_status_code(StatusCode::REQUEST_TIMEOUT, Duration::from_secs(30)))
@@ -38,7 +38,7 @@
 //! # }
 //! ```
 //!
-//! [`Infallible`]: std::convert::Infallible
+//! [`Infallible`]: core::convert::Infallible
 
 mod body;
 mod service;

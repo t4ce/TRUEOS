@@ -8,7 +8,7 @@
 
 #![allow(missing_docs)]
 
-use std::convert::Infallible;
+use core::convert::Infallible;
 
 use bytes::{Buf, Bytes};
 use http_body::Body;
@@ -20,9 +20,9 @@ macro_rules! body_methods {
     () => {
         #[inline]
         fn poll_frame(
-            self: std::pin::Pin<&mut Self>,
-            cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+            self: core::pin::Pin<&mut Self>,
+            cx: &mut core::task::Context<'_>,
+        ) -> core::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
             self.project().inner.poll_frame(cx)
         }
 

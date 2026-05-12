@@ -8,7 +8,7 @@ extern crate serde_bytes;
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::fmt::{self, Debug};
+use core::fmt::{self, Debug};
 use std::result::Result as StdResult;
 
 use bincode::{
@@ -649,7 +649,7 @@ fn test_zero_copy_parse_deserialize_into() {
                 return Err(SliceReader::unexpected_eof());
             }
 
-            let string = match ::std::str::from_utf8(&self.slice[..length]) {
+            let string = match ::core::str::from_utf8(&self.slice[..length]) {
                 Ok(s) => s,
                 Err(e) => return Err(ErrorKind::InvalidUtf8Encoding(e).into()),
             };
@@ -719,7 +719,7 @@ fn not_human_readable() {
     the_same(ip);
     assert_eq!(&ip.octets()[..], &serialize(&ip).unwrap()[..]);
     assert_eq!(
-        ::std::mem::size_of::<Ipv4Addr>() as u64,
+        ::core::mem::size_of::<Ipv4Addr>() as u64,
         serialized_size(&ip).unwrap()
     );
 }
@@ -869,14 +869,14 @@ fn test_varint_length_prefixes() {
             .with_varint_encoding()
             .serialized_size(&c[..])
             .unwrap(),
-        (1 + std::mem::size_of::<u16>()) as u64
+        (1 + core::mem::size_of::<u16>()) as u64
     ); // 251
     assert_eq!(
         DefaultOptions::new()
             .with_varint_encoding()
             .serialized_size(&d[..])
             .unwrap(),
-        (1 + std::mem::size_of::<u32>()) as u64
+        (1 + core::mem::size_of::<u32>()) as u64
     ); // 2 ** 16 + 1
 }
 

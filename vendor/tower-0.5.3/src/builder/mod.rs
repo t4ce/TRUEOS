@@ -3,7 +3,7 @@
 use tower_layer::{Identity, Layer, Stack};
 use tower_service::Service;
 
-use std::fmt;
+use core::fmt;
 
 /// Declaratively construct [`Service`] values.
 ///
@@ -89,7 +89,7 @@ use std::fmt;
 /// ```
 /// # use tower::Service;
 /// # use tower::builder::ServiceBuilder;
-/// # use std::time::Duration;
+/// # use core::time::Duration;
 /// # #[cfg(all(feature = "buffer", feature = "limit"))]
 /// # async fn wrap<S>(svc: S) where S: Service<(), Error = &'static str> + 'static + Send, S::Future: Send {
 /// ServiceBuilder::new()
@@ -138,7 +138,7 @@ impl<L> ServiceBuilder<L> {
     /// Optionally add a new layer `T` into the [`ServiceBuilder`].
     ///
     /// ```
-    /// # use std::time::Duration;
+    /// # use core::time::Duration;
     /// # use tower::Service;
     /// # use tower::builder::ServiceBuilder;
     /// # use tower::timeout::TimeoutLayer;
@@ -214,7 +214,7 @@ impl<L> ServiceBuilder<L> {
     ///
     /// [`LoadShed`]: crate::load_shed
     /// [`poll_ready`]: crate::Service::poll_ready
-    /// [`Pending`]: std::task::Poll::Pending
+    /// [`Pending`]: core::task::Poll::Pending
     #[cfg(feature = "load-shed")]
     pub fn load_shed(self) -> ServiceBuilder<Stack<crate::load_shed::LoadShedLayer, L>> {
         self.layer(crate::load_shed::LoadShedLayer::new())
@@ -230,7 +230,7 @@ impl<L> ServiceBuilder<L> {
     pub fn rate_limit(
         self,
         num: u64,
-        per: std::time::Duration,
+        per: core::time::Duration,
     ) -> ServiceBuilder<Stack<crate::limit::RateLimitLayer, L>> {
         self.layer(crate::limit::RateLimitLayer::new(num, per))
     }
@@ -262,7 +262,7 @@ impl<L> ServiceBuilder<L> {
     #[cfg(feature = "timeout")]
     pub fn timeout(
         self,
-        timeout: std::time::Duration,
+        timeout: core::time::Duration,
     ) -> ServiceBuilder<Stack<crate::timeout::TimeoutLayer, L>> {
         self.layer(crate::timeout::TimeoutLayer::new(timeout))
     }
@@ -512,7 +512,7 @@ impl<L> ServiceBuilder<L> {
     /// # Example
     ///
     /// ```rust
-    /// use std::time::Duration;
+    /// use core::time::Duration;
     /// use tower::{ServiceBuilder, ServiceExt, BoxError, service_fn};
     ///
     /// # #[tokio::main]
@@ -626,7 +626,7 @@ impl<L> ServiceBuilder<L> {
     ///
     /// ```rust
     /// use tower::ServiceBuilder;
-    /// use std::task::{Poll, Context};
+    /// use core::task::{Poll, Context};
     /// use tower::{Service, ServiceExt};
     ///
     /// // An example service
@@ -635,7 +635,7 @@ impl<L> ServiceBuilder<L> {
     /// impl Service<Request> for MyService {
     ///   type Response = Response;
     ///   type Error = Error;
-    ///   type Future = std::future::Ready<Result<Response, Error>>;
+    ///   type Future = core::future::Ready<Result<Response, Error>>;
     ///
     ///   fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
     ///       // ...
@@ -680,7 +680,7 @@ impl<L> ServiceBuilder<L> {
     ///
     /// ```
     /// use tower::{Service, ServiceBuilder, BoxError, util::BoxService};
-    /// use std::time::Duration;
+    /// use core::time::Duration;
     /// #
     /// # struct Request;
     /// # struct Response;
@@ -738,7 +738,7 @@ impl<L> ServiceBuilder<L> {
     ///
     /// ```
     /// use tower::{Service, ServiceBuilder, BoxError, util::BoxCloneService};
-    /// use std::time::Duration;
+    /// use core::time::Duration;
     /// #
     /// # struct Request;
     /// # struct Response;
@@ -801,7 +801,7 @@ impl<L> ServiceBuilder<L> {
     ///
     /// ```
     /// use tower::{Service, ServiceBuilder, BoxError, util::BoxCloneSyncService};
-    /// use std::time::Duration;
+    /// use core::time::Duration;
     /// #
     /// # struct Request;
     /// # struct Response;

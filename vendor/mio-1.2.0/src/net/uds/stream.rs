@@ -1,4 +1,4 @@
-use std::fmt;
+use core::fmt;
 use std::io::{self, IoSlice, IoSliceMut, Read, Write};
 use std::net::Shutdown;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
@@ -96,7 +96,7 @@ impl UnixStream {
     /// # Examples
     ///
     /// ```
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     /// #
     /// # fn main() -> Result<(), Box<dyn Error>> {
     /// use std::io;

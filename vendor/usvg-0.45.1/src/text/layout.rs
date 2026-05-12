@@ -3,7 +3,7 @@
 
 use alloc::{boxed::Box, string::String, vec::Vec};
 use std::collections::HashMap;
-use std::num::NonZeroU16;
+use core::num::NonZeroU16;
 use alloc::sync::Arc;
 
 use fontdb::{Database, ID};

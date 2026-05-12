@@ -13,7 +13,7 @@
 //!
 //! In summary, this only (barely) works using a single thread.
 
-use std::cmp::min;
+use core::cmp::min;
 use std::io;
 #[cfg(all(feature = "net", debug_assertions))]
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -257,7 +257,7 @@ pub(crate) type Events = Vec<Event>;
 pub(crate) type Event = wasi::Event;
 
 pub(crate) mod event {
-    use std::fmt;
+    use core::fmt;
 
     use crate::sys::Event;
     use crate::Token;

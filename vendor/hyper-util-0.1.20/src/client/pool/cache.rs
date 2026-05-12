@@ -18,11 +18,11 @@ pub use self::internal::Cached;
 // more public, but we can't change type shapes (generics) once things are
 // public.
 mod internal {
-    use std::fmt;
-    use std::future::Future;
-    use std::pin::Pin;
+    use core::fmt;
+    use core::future::Future;
+    use core::pin::Pin;
     use std::sync::{Arc, Mutex, Weak};
-    use std::task::{self, ready, Poll};
+    use core::task::{self, ready, Poll};
 
     use futures_util::future;
     use tokio::sync::oneshot;
@@ -450,7 +450,7 @@ mod tests {
         let mut cache = super::builder().build(mock);
         handle.allow(1);
 
-        std::future::poll_fn(|cx| cache.poll_ready(cx))
+        core::future::poll_fn(|cx| cache.poll_ready(cx))
             .await
             .unwrap();
 
@@ -472,7 +472,7 @@ mod tests {
         // only 1 connection should ever be made
         handle.allow(1);
 
-        std::future::poll_fn(|cx| cache.poll_ready(cx))
+        core::future::poll_fn(|cx| cache.poll_ready(cx))
             .await
             .unwrap();
         let f = cache.call(1);
@@ -484,7 +484,7 @@ mod tests {
         .expect("call");
         drop(cached);
 
-        std::future::poll_fn(|cx| cache.poll_ready(cx))
+        core::future::poll_fn(|cx| cache.poll_ready(cx))
             .await
             .unwrap();
         let f = cache.call(1);

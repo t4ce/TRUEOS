@@ -16,9 +16,9 @@
 //! use bytes::Bytes;
 //!
 //! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # async fn main() -> Result<(), Box<dyn core::error::Error>> {
 //! # let render_html = tower::service_fn(|request: Request<Full<Bytes>>| async move {
-//! #     Ok::<_, std::convert::Infallible>(Response::new(request.into_body()))
+//! #     Ok::<_, core::convert::Infallible>(Response::new(request.into_body()))
 //! # });
 //! #
 //! let mut svc = ServiceBuilder::new()
@@ -55,9 +55,9 @@
 //! use http_body::Body as _; // for `Body::size_hint`
 //!
 //! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # async fn main() -> Result<(), Box<dyn core::error::Error>> {
 //! # let render_html = tower::service_fn(|request: Request<Full<Bytes>>| async move {
-//! #     Ok::<_, std::convert::Infallible>(Response::new(Full::from("1234567890")))
+//! #     Ok::<_, core::convert::Infallible>(Response::new(Full::from("1234567890")))
 //! # });
 //! #
 //! let mut svc = ServiceBuilder::new()
@@ -120,7 +120,7 @@ impl<M> fmt::Debug for SetResponseHeaderLayer<M> {
         f.debug_struct("SetResponseHeaderLayer")
             .field("header_name", &self.header_name)
             .field("mode", &self.mode)
-            .field("make", &std::any::type_name::<M>())
+            .field("make", &core::any::type_name::<M>())
             .finish()
     }
 }
@@ -241,7 +241,7 @@ where
             .field("inner", &self.inner)
             .field("header_name", &self.header_name)
             .field("mode", &self.mode)
-            .field("make", &std::any::type_name::<M>())
+            .field("make", &core::any::type_name::<M>())
             .finish()
     }
 }
@@ -304,7 +304,7 @@ mod tests {
     use super::*;
     use crate::test_helpers::Body;
     use http::{header, HeaderValue};
-    use std::convert::Infallible;
+    use core::convert::Infallible;
     use tower::{service_fn, ServiceExt};
 
     #[tokio::test]

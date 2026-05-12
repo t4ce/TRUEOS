@@ -10,7 +10,7 @@
 
 extern crate test;
 
-use std::str::FromStr;
+use core::str::FromStr;
 
 use test::Bencher;
 

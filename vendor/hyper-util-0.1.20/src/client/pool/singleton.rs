@@ -21,14 +21,14 @@
 //! ```
 
 use std::sync::{Arc, Mutex};
-use std::task::{self, Poll};
+use core::task::{self, Poll};
 
 use tokio::sync::oneshot;
 use tower_service::Service;
 
 use self::internal::{DitchGuard, SingletonError, SingletonFuture, State};
 
-type BoxError = Box<dyn std::error::Error + Send + Sync>;
+type BoxError = Box<dyn core::error::Error + Send + Sync>;
 
 #[cfg(docsrs)]
 pub use self::internal::Singled;
@@ -149,10 +149,10 @@ where
 
 // Holds some "pub" items that otherwise shouldn't be public.
 mod internal {
-    use std::future::Future;
-    use std::pin::Pin;
+    use core::future::Future;
+    use core::pin::Pin;
     use std::sync::{Mutex, Weak};
-    use std::task::{self, ready, Poll};
+    use core::task::{self, ready, Poll};
 
     use pin_project_lite::pin_project;
     use tokio::sync::oneshot;
@@ -224,7 +224,7 @@ mod internal {
                         Ok(svc) => {
                             if let Some(state) = singleton.0.upgrade() {
                                 let mut locked = state.lock().unwrap();
-                                match std::mem::replace(&mut *locked, State::Made(svc.clone())) {
+                                match core::mem::replace(&mut *locked, State::Made(svc.clone())) {
                                     State::Making(waiters) => {
                                         for tx in waiters {
                                             let _ = tx.send(svc.clone());
@@ -237,7 +237,7 @@ mod internal {
                                 }
                             }
                             // take out of the DitchGuard so it doesn't treat as "ditched"
-                            let state = std::mem::replace(&mut singleton.0, Weak::new());
+                            let state = core::mem::replace(&mut singleton.0, Weak::new());
                             Poll::Ready(Ok(Singled::new(svc, state)))
                         }
                         Err(e) => {
@@ -309,14 +309,14 @@ mod internal {
     #[derive(Debug)]
     pub struct SingletonError(pub(super) BoxError);
 
-    impl std::fmt::Display for SingletonError {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    impl core::fmt::Display for SingletonError {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             f.write_str("singleton connection error")
         }
     }
 
-    impl std::error::Error for SingletonError {
-        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+    impl core::error::Error for SingletonError {
+        fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
             Some(&*self.0)
         }
     }
@@ -324,20 +324,20 @@ mod internal {
     #[derive(Debug)]
     struct Canceled;
 
-    impl std::fmt::Display for Canceled {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    impl core::fmt::Display for Canceled {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             f.write_str("singleton connection canceled")
         }
     }
 
-    impl std::error::Error for Canceled {}
+    impl core::error::Error for Canceled {}
 }
 
 #[cfg(test)]
 mod tests {
-    use std::future::Future;
-    use std::pin::Pin;
-    use std::task::Poll;
+    use core::future::Future;
+    use core::pin::Pin;
+    use core::task::Poll;
 
     use tower_service::Service;
 
@@ -350,7 +350,7 @@ mod tests {
         let mut singleton = Singleton::new(mock_svc);
 
         handle.allow(1);
-        std::future::poll_fn(|cx| singleton.poll_ready(cx))
+        core::future::poll_fn(|cx| singleton.poll_ready(cx))
             .await
             .unwrap();
         // First call: should go into Driving
@@ -373,7 +373,7 @@ mod tests {
         let mut singleton = Singleton::new(mock_svc);
 
         handle.allow(1);
-        std::future::poll_fn(|cx| singleton.poll_ready(cx))
+        core::future::poll_fn(|cx| singleton.poll_ready(cx))
             .await
             .unwrap();
         // Drive first call to completion
@@ -395,7 +395,7 @@ mod tests {
 
         // Allow the singleton to be made
         outer_handle.allow(2);
-        std::future::poll_fn(|cx| singleton.poll_ready(cx))
+        core::future::poll_fn(|cx| singleton.poll_ready(cx))
             .await
             .unwrap();
 
@@ -416,7 +416,7 @@ mod tests {
         ));
 
         // Drive poll_ready on cached service
-        let err = std::future::poll_fn(|cx| cached.poll_ready(cx))
+        let err = core::future::poll_fn(|cx| cached.poll_ready(cx))
             .await
             .err()
             .expect("expected poll_ready error");
@@ -424,7 +424,7 @@ mod tests {
 
         // After error, the singleton should be cleared, so a new call drives outer again
         outer_handle.allow(1);
-        std::future::poll_fn(|cx| singleton.poll_ready(cx))
+        core::future::poll_fn(|cx| singleton.poll_ready(cx))
             .await
             .unwrap();
         let fut2 = singleton.call(());
@@ -435,7 +435,7 @@ mod tests {
 
         // The new cached service should still work
         inner_handle2.allow(1);
-        std::future::poll_fn(|cx| cached2.poll_ready(cx))
+        core::future::poll_fn(|cx| cached2.poll_ready(cx))
             .await
             .expect("expected poll_ready");
         let cfut2 = cached2.call(());
@@ -449,7 +449,7 @@ mod tests {
         let (mock_svc, mut handle) = tower_test::mock::pair::<(), &'static str>();
         let mut singleton = Singleton::new(mock_svc);
 
-        std::future::poll_fn(|cx| singleton.poll_ready(cx))
+        core::future::poll_fn(|cx| singleton.poll_ready(cx))
             .await
             .unwrap();
         let fut1 = singleton.call(());
@@ -468,14 +468,14 @@ mod tests {
         let (mock_svc, mut handle) = tower_test::mock::pair::<(), &'static str>();
         let mut singleton = Singleton::new(mock_svc);
 
-        std::future::poll_fn(|cx| singleton.poll_ready(cx))
+        core::future::poll_fn(|cx| singleton.poll_ready(cx))
             .await
             .unwrap();
         let mut fut1 = singleton.call(());
         let fut2 = singleton.call(());
 
         // poll driver just once, and then drop
-        std::future::poll_fn(move |cx| {
+        core::future::poll_fn(move |cx| {
             let _ = Pin::new(&mut fut1).poll(cx);
             Poll::Ready(())
         })

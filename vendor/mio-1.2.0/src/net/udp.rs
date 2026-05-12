@@ -33,7 +33,7 @@ use crate::{event, sys, Interest, Registry, Token};
 ///
 #[cfg_attr(feature = "os-poll", doc = "```")]
 #[cfg_attr(not(feature = "os-poll"), doc = "```ignore")]
-/// # use std::error::Error;
+/// # use core::error::Error;
 /// #
 /// # fn main() -> Result<(), Box<dyn Error>> {
 /// # // Temporarily disabled on WASI pending https://github.com/WebAssembly/wasi-libc/pull/740:
@@ -105,7 +105,7 @@ impl UdpSocket {
     ///
     #[cfg_attr(feature = "os-poll", doc = "```")]
     #[cfg_attr(not(feature = "os-poll"), doc = "```ignore")]
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     /// #
     /// # fn main() -> Result<(), Box<dyn Error>> {
     /// use mio::net::UdpSocket;
@@ -152,7 +152,7 @@ impl UdpSocket {
         any(not(feature = "os-poll"), target_os = "freebsd"),
         doc = "```ignore"
     )]
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     /// #
     /// # fn main() -> Result<(), Box<dyn Error>> {
     /// use mio::net::UdpSocket;
@@ -173,7 +173,7 @@ impl UdpSocket {
     ///
     #[cfg_attr(feature = "os-poll", doc = "```")]
     #[cfg_attr(not(feature = "os-poll"), doc = "```ignore")]
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     /// #
     /// # fn main() -> Result<(), Box<dyn Error>> {
     /// use mio::net::UdpSocket;
@@ -199,7 +199,7 @@ impl UdpSocket {
     /// # Examples
     ///
     /// ```no_run
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     /// # fn main() -> Result<(), Box<dyn Error>> {
     /// use mio::net::UdpSocket;
     ///
@@ -232,7 +232,7 @@ impl UdpSocket {
     /// # Examples
     ///
     /// ```no_run
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     /// #
     /// # fn main() -> Result<(), Box<dyn Error>> {
     /// use mio::net::UdpSocket;
@@ -268,7 +268,7 @@ impl UdpSocket {
     /// # Examples
     ///
     /// ```no_run
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     /// #
     /// # fn main() -> Result<(), Box<dyn Error>> {
     /// use mio::net::UdpSocket;
@@ -343,7 +343,7 @@ impl UdpSocket {
     ///
     #[cfg_attr(feature = "os-poll", doc = "```")]
     #[cfg_attr(not(feature = "os-poll"), doc = "```ignore")]
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     /// #
     /// # fn main() -> Result<(), Box<dyn Error>> {
     /// # // WASI does not yet support broadcast.
@@ -375,7 +375,7 @@ impl UdpSocket {
     ///
     #[cfg_attr(feature = "os-poll", doc = "```")]
     #[cfg_attr(not(feature = "os-poll"), doc = "```ignore")]
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     /// #
     /// # fn main() -> Result<(), Box<dyn Error>> {
     /// # // WASI does not yet support broadcast.
@@ -458,7 +458,7 @@ impl UdpSocket {
     ///
     #[cfg_attr(feature = "os-poll", doc = "```")]
     #[cfg_attr(not(feature = "os-poll"), doc = "```ignore")]
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     /// #
     /// # fn main() -> Result<(), Box<dyn Error>> {
     /// use mio::net::UdpSocket;
@@ -487,7 +487,7 @@ impl UdpSocket {
     ///
     #[cfg_attr(feature = "os-poll", doc = "```")]
     #[cfg_attr(not(feature = "os-poll"), doc = "```ignore")]
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     /// #
     /// # fn main() -> Result<(), Box<dyn Error>> {
     /// use mio::net::UdpSocket;
@@ -578,7 +578,7 @@ impl UdpSocket {
     ///
     #[cfg_attr(unix, doc = "```no_run")]
     #[cfg_attr(windows, doc = "```ignore")]
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     /// #
     /// # fn main() -> Result<(), Box<dyn Error>> {
     /// use std::io;
@@ -601,7 +601,7 @@ impl UdpSocket {
     ///     #[cfg(unix)]
     ///     let res = unsafe { libc::recv(dgram.as_raw_fd(), buf_ptr, buf.len(), 0) };
     ///     #[cfg(windows)]
-    ///     let res = unsafe { libc::recvfrom(dgram.as_raw_socket() as usize, buf_ptr, buf.len() as i32, 0, std::ptr::null_mut(), std::ptr::null_mut()) };
+    ///     let res = unsafe { libc::recvfrom(dgram.as_raw_socket() as usize, buf_ptr, buf.len() as i32, 0, core::ptr::null_mut(), core::ptr::null_mut()) };
     ///     if res != -1 {
     ///         Ok(res as usize)
     ///     } else {

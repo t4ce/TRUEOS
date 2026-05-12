@@ -1,7 +1,7 @@
-use std::mem::MaybeUninit;
+use core::mem::MaybeUninit;
 
 #[cfg(feature = "client")]
-use std::fmt::{self, Write as _};
+use core::fmt::{self, Write as _};
 
 use bytes::Bytes;
 use bytes::BytesMut;
@@ -438,7 +438,7 @@ impl Http1Transaction for Server {
         }
 
         let orig_headers;
-        let extensions = std::mem::take(&mut msg.head.extensions);
+        let extensions = core::mem::take(&mut msg.head.extensions);
         let orig_headers = match extensions.get::<HeaderCaseMap>() {
             None if msg.title_case_headers => {
                 orig_headers = HeaderCaseMap::default();
@@ -977,11 +977,11 @@ impl Server {
 
     /// Helper for zero-copy parsing of request path URI.
     #[inline]
-    fn record_path_range(bytes: &[u8], req_path: &str) -> std::ops::Range<usize> {
+    fn record_path_range(bytes: &[u8], req_path: &str) -> core::ops::Range<usize> {
         let bytes_ptr = bytes.as_ptr() as usize;
         let start = req_path.as_ptr() as usize - bytes_ptr;
         let end = start + req_path.len();
-        std::ops::Range { start, end }
+        core::ops::Range { start, end }
     }
 }
 
@@ -1195,7 +1195,7 @@ impl Http1Transaction for Client {
 
         extend(dst, msg.head.subject.0.as_str().as_bytes());
         extend(dst, b" ");
-        //TODO: add API to http::Uri to encode without std::fmt
+        //TODO: add API to http::Uri to encode without core::fmt
         let _ = write!(FastWrite(dst), "{} ", msg.head.subject.1);
 
         match msg.head.version {
@@ -3052,7 +3052,7 @@ mod tests {
             // Remove all references pointing into BytesMut.
             msg.head.headers.clear();
             headers = Some(msg.head.headers);
-            std::mem::take(&mut msg.head.subject);
+            core::mem::take(&mut msg.head.subject);
 
             restart(&mut raw, len);
         });

@@ -1,4 +1,4 @@
-use std::fmt;
+use core::fmt;
 
 use super::afd;
 use super::iocp::CompletionStatus;
@@ -39,7 +39,7 @@ impl Event {
     }
 
     pub(super) fn to_completion_status(&self) -> CompletionStatus {
-        CompletionStatus::new(self.flags, self.data as usize, std::ptr::null_mut())
+        CompletionStatus::new(self.flags, self.data as usize, core::ptr::null_mut())
     }
 
     #[cfg(feature = "os-ext")]

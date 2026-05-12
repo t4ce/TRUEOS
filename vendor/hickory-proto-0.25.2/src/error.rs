@@ -493,7 +493,7 @@ impl ProtoError {
     }
 
     #[cfg(feature = "std")]
-    pub(crate) fn as_dyn(&self) -> &(dyn std::error::Error + 'static) {
+    pub(crate) fn as_dyn(&self) -> &(dyn core::error::Error + 'static) {
         self
     }
 

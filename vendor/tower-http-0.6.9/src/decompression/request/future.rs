@@ -7,10 +7,10 @@ use http_body::Body;
 use http_body_util::BodyExt;
 use http_body_util::Empty;
 use pin_project_lite::pin_project;
-use std::future::Future;
-use std::pin::Pin;
-use std::task::Context;
-use std::task::Poll;
+use core::future::Future;
+use core::pin::Pin;
+use core::task::Context;
+use core::task::Poll;
 
 pin_project! {
     #[derive(Debug)]

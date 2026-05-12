@@ -1,4 +1,4 @@
-use std::time::Duration;
+use core::time::Duration;
 use tracing::Span;
 
 /// Trait used to tell [`Trace`] what to do when a body chunk has been sent.

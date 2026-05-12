@@ -6,7 +6,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use std::time::Duration;
+use core::time::Duration;
 use std::{
     future::Future,
     io::{self, ErrorKind, Read, Write},
@@ -258,7 +258,7 @@ async fn drop_closes() {
         b.read(&mut [0]).err().unwrap().kind()
     );
 
-    std::mem::drop(afd_a);
+    core::mem::drop(afd_a);
 
     assert_eq!(0, b.read(&mut [0]).unwrap());
 
@@ -277,14 +277,14 @@ async fn drop_closes() {
     let (a, mut b) = socketpair();
     let arc_fd = Arc::new(a);
     let afd_a = AsyncFd::new(ArcFd(arc_fd.clone())).unwrap();
-    std::mem::drop(afd_a);
+    core::mem::drop(afd_a);
 
     assert_eq!(
         ErrorKind::WouldBlock,
         b.read(&mut [0]).err().unwrap().kind()
     );
 
-    std::mem::drop(arc_fd); // suppress unnecessary clone clippy warning
+    core::mem::drop(arc_fd); // suppress unnecessary clone clippy warning
 }
 
 #[tokio::test]
@@ -458,7 +458,7 @@ async fn multiple_waiters() {
                 _ = notify_barrier => unreachable!(),
             }
 
-            std::mem::drop(afd_a);
+            core::mem::drop(afd_a);
         };
 
         tasks.push(tokio::spawn(f));
@@ -467,7 +467,7 @@ async fn multiple_waiters() {
     let mut all_tasks = futures::future::try_join_all(tasks);
 
     tokio::select! {
-        r = std::pin::Pin::new(&mut all_tasks) => {
+        r = core::pin::Pin::new(&mut all_tasks) => {
             r.unwrap(); // propagate panic
             panic!("Tasks exited unexpectedly")
         },
@@ -501,12 +501,12 @@ async fn poll_fns() {
 
     let read_fut = tokio::spawn(async move {
         // Move waker onto this task first
-        assert_pending!(poll!(std::future::poll_fn(|cx| afd_a_2
+        assert_pending!(poll!(core::future::poll_fn(|cx| afd_a_2
             .as_ref()
             .poll_read_ready(cx))));
         barrier_clone.wait().await;
 
-        let _ = std::future::poll_fn(|cx| afd_a_2.as_ref().poll_read_ready(cx)).await;
+        let _ = core::future::poll_fn(|cx| afd_a_2.as_ref().poll_read_ready(cx)).await;
     });
 
     let afd_a_2 = afd_a.clone();
@@ -515,12 +515,12 @@ async fn poll_fns() {
 
     let mut write_fut = tokio::spawn(async move {
         // Move waker onto this task first
-        assert_pending!(poll!(std::future::poll_fn(|cx| afd_a_2
+        assert_pending!(poll!(core::future::poll_fn(|cx| afd_a_2
             .as_ref()
             .poll_write_ready(cx))));
         barrier_clone.wait().await;
 
-        let _ = std::future::poll_fn(|cx| afd_a_2.as_ref().poll_write_ready(cx)).await;
+        let _ = core::future::poll_fn(|cx| afd_a_2.as_ref().poll_write_ready(cx)).await;
     });
 
     r_barrier.wait().await;
@@ -555,7 +555,7 @@ async fn poll_fns() {
     let _ = write_fut.await;
 }
 
-fn assert_pending<T: std::fmt::Debug, F: Future<Output = T>>(f: F) -> std::pin::Pin<Box<F>> {
+fn assert_pending<T: core::fmt::Debug, F: Future<Output = T>>(f: F) -> core::pin::Pin<Box<F>> {
     let mut pinned = Box::pin(f);
 
     assert_pending!(pinned
@@ -584,7 +584,7 @@ fn driver_shutdown_wakes_currently_pending() {
 
     let readable = assert_pending(afd_a.readable());
 
-    std::mem::drop(rt);
+    core::mem::drop(rt);
 
     // The future was initialized **before** dropping the rt
     assert_err!(futures::executor::block_on(readable));
@@ -603,7 +603,7 @@ fn driver_shutdown_wakes_future_pending() {
         AsyncFd::new(a).unwrap()
     };
 
-    std::mem::drop(rt);
+    core::mem::drop(rt);
 
     assert_err!(futures::executor::block_on(afd_a.readable()));
 }
@@ -620,7 +620,7 @@ fn driver_shutdown_wakes_pending_race() {
             AsyncFd::new(a).unwrap()
         };
 
-        let _ = std::thread::spawn(move || std::mem::drop(rt));
+        let _ = std::thread::spawn(move || core::mem::drop(rt));
 
         // This may or may not return an error (but will be awoken)
         let _ = futures::executor::block_on(afd_a.readable());
@@ -631,11 +631,11 @@ fn driver_shutdown_wakes_pending_race() {
 }
 
 async fn poll_readable<T: AsRawFd>(fd: &AsyncFd<T>) -> std::io::Result<AsyncFdReadyGuard<'_, T>> {
-    std::future::poll_fn(|cx| fd.poll_read_ready(cx)).await
+    core::future::poll_fn(|cx| fd.poll_read_ready(cx)).await
 }
 
 async fn poll_writable<T: AsRawFd>(fd: &AsyncFd<T>) -> std::io::Result<AsyncFdReadyGuard<'_, T>> {
-    std::future::poll_fn(|cx| fd.poll_write_ready(cx)).await
+    core::future::poll_fn(|cx| fd.poll_write_ready(cx)).await
 }
 
 #[test]
@@ -653,7 +653,7 @@ fn driver_shutdown_wakes_currently_pending_polls() {
     let readable = assert_pending(poll_readable(&afd_a));
     let writable = assert_pending(poll_writable(&afd_a));
 
-    std::mem::drop(rt);
+    core::mem::drop(rt);
 
     // Attempting to poll readiness when the rt is dropped is an error
     assert_err!(futures::executor::block_on(readable));
@@ -670,7 +670,7 @@ fn driver_shutdown_wakes_poll() {
         AsyncFd::new(a).unwrap()
     };
 
-    std::mem::drop(rt);
+    core::mem::drop(rt);
 
     assert_err!(futures::executor::block_on(poll_readable(&afd_a)));
     assert_err!(futures::executor::block_on(poll_writable(&afd_a)));
@@ -688,7 +688,7 @@ fn driver_shutdown_then_clear_readiness() {
 
     let mut write_ready = rt.block_on(afd_a.writable()).unwrap();
 
-    std::mem::drop(rt);
+    core::mem::drop(rt);
 
     write_ready.clear_ready();
 }
@@ -707,7 +707,7 @@ fn driver_shutdown_wakes_poll_race() {
 
         while afd_a.get_ref().write(&[0; 512]).is_ok() {} // make not writable
 
-        let _ = std::thread::spawn(move || std::mem::drop(rt));
+        let _ = std::thread::spawn(move || core::mem::drop(rt));
 
         // The poll variants will always return an error in this case
         assert_err!(futures::executor::block_on(poll_readable(&afd_a)));
@@ -848,7 +848,7 @@ fn configure_timestamping_socket(udp_socket: &std::net::UdpSocket) -> std::io::R
             libc::SOL_SOCKET,
             libc::SO_TIMESTAMP,
             &options as *const _ as *const libc::c_void,
-            std::mem::size_of_val(&options) as libc::socklen_t,
+            core::mem::size_of_val(&options) as libc::socklen_t,
         )
     };
 
@@ -879,7 +879,7 @@ async fn await_error_readiness_invalid_address() {
             libc::SOL_IP,
             libc::IP_RECVERR,
             &recv_err as *const _ as *const libc::c_void,
-            std::mem::size_of_val(&recv_err) as libc::socklen_t,
+            core::mem::size_of_val(&recv_err) as libc::socklen_t,
         );
         if res == -1 {
             panic!("{:?}", std::io::Error::last_os_error());
@@ -892,7 +892,7 @@ async fn await_error_readiness_invalid_address() {
         // that nobody is listening on port this port. Normally this is ignored (UDP is "fire and forget"),
         // but because IP_RECVERR is enabled, the error will actually be reported to the sending socket
         let mut dest_addr =
-            unsafe { std::mem::MaybeUninit::<libc::sockaddr_in>::zeroed().assume_init() };
+            unsafe { core::mem::MaybeUninit::<libc::sockaddr_in>::zeroed().assume_init() };
         dest_addr.sin_family = libc::AF_INET as _;
         // based on https://en.wikipedia.org/wiki/Ephemeral_port, we should pick a port number
         // below 1024 to guarantee that other tests don't select this port by accident when they
@@ -910,9 +910,9 @@ async fn await_error_readiness_invalid_address() {
 
         // Prepare the destination address for the sendmsg call
         let dest_sockaddr: *const libc::sockaddr = &dest_addr as *const _ as *const libc::sockaddr;
-        let dest_addrlen: libc::socklen_t = std::mem::size_of_val(&dest_addr) as libc::socklen_t;
+        let dest_addrlen: libc::socklen_t = core::mem::size_of_val(&dest_addr) as libc::socklen_t;
 
-        let mut msg: libc::msghdr = unsafe { std::mem::MaybeUninit::zeroed().assume_init() };
+        let mut msg: libc::msghdr = unsafe { core::mem::MaybeUninit::zeroed().assume_init() };
         msg.msg_name = dest_sockaddr as *mut libc::c_void;
         msg.msg_namelen = dest_addrlen;
         msg.msg_iov = &mut iov;

@@ -3,7 +3,7 @@ use crate::runtime::prelude::*;
 
 use crate::runtime::metrics::batch::duration_as_u64;
 use core::cmp;
-use std::error::Error;
+use core::error::Error;
 use core::fmt::{Display, Formatter};
 use core::time::Duration;
 

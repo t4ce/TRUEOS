@@ -1,11 +1,11 @@
 //! HTTP/1 Server Connections
 
-use std::error::Error as StdError;
-use std::fmt;
-use std::future::Future;
-use std::pin::Pin;
+use core::error::Error as StdError;
+use core::fmt;
+use core::future::Future;
+use core::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 use core::time::Duration;
 
 use crate::rt::{Read, Write};
@@ -429,7 +429,7 @@ impl Builder {
     /// # where
     /// #     I: Read + Write + Unpin + Send + 'static,
     /// #     S: Service<hyper::Request<Incoming>, Response=hyper::Response<Incoming>> + Send + 'static,
-    /// #     S::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    /// #     S::Error: Into<Box<dyn core::error::Error + Send + Sync>>,
     /// #     S::Future: Send,
     /// # {
     /// let http = Builder::new();

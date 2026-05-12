@@ -8,17 +8,17 @@
 //! Here, `GET /` will be sent to the `root` service, while all other requests go to `not_found`.
 //!
 //! ```rust
-//! # use std::task::{Context, Poll, ready};
+//! # use core::task::{Context, Poll, ready};
 //! # use tower_service::Service;
 //! # use tower::steer::Steer;
 //! # use tower::service_fn;
 //! # use tower::util::BoxService;
 //! # use tower::ServiceExt;
-//! # use std::convert::Infallible;
+//! # use core::convert::Infallible;
 //! use http::{Request, Response, StatusCode, Method};
 //!
 //! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # async fn main() -> Result<(), Box<dyn core::error::Error>> {
 //! // Service that responds to `GET /`
 //! let root = service_fn(|req: Request<String>| async move {
 //!     # assert_eq!(req.uri().path(), "/");
@@ -67,7 +67,7 @@
 //! # Ok(())
 //! # }
 //! ```
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 use std::{collections::VecDeque, fmt, marker::PhantomData};
 use tower_service::Service;
 

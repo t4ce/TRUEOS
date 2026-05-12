@@ -640,8 +640,8 @@ impl<T> Default for JoinSet<T> {
 /// # }
 /// ```
 ///
-/// [`collect`]: std::iter::Iterator::collect
-impl<T, F> std::iter::FromIterator<F> for JoinSet<T>
+/// [`collect`]: core::iter::Iterator::collect
+impl<T, F> core::iter::FromIterator<F> for JoinSet<T>
 where
     F: Future<Output = T>,
     F: Send + 'static,
@@ -685,7 +685,7 @@ where
 /// }
 /// # }
 /// ```
-impl<T, F> std::iter::Extend<F> for JoinSet<T>
+impl<T, F> core::iter::Extend<F> for JoinSet<T>
 where
     F: Future<Output = T>,
     F: Send + 'static,

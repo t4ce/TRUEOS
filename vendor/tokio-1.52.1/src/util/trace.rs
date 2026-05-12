@@ -1,5 +1,5 @@
 cfg_rt! {
-    use std::marker::PhantomData;
+    use core::marker::PhantomData;
 
     #[derive(Copy, Clone)]
     pub(crate) struct SpawnMeta<'a> {
@@ -53,8 +53,8 @@ cfg_rt! {
             task::{Context, Poll},
         };
         use pin_project_lite::pin_project;
-        use std::mem;
-        use std::future::Future;
+        use core::mem;
+        use core::future::Future;
         use tracing::instrument::Instrument;
         pub(crate) use tracing::instrument::Instrumented;
 
@@ -108,7 +108,7 @@ cfg_rt! {
                 kind = %"blocking",
                 task.name = %spawn_meta.name.unwrap_or_default(),
                 task.id = id,
-                "fn" = %std::any::type_name::<Fn>(),
+                "fn" = %core::any::type_name::<Fn>(),
                 original_size.bytes = original_size,
                 size.bytes = fn_size,
                 loc.file = spawn_meta.spawned_at.0.file(),

@@ -1,4 +1,4 @@
-use std::ffi::OsStr;
+use core::ffi::OsStr;
 use std::io::{self, Read, Write};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, RawHandle};
 use std::sync::atomic::Ordering::{Relaxed, SeqCst};
@@ -203,12 +203,12 @@ impl Inner {
         buf: &mut [u8],
         overlapped: *mut OVERLAPPED,
     ) -> io::Result<Option<usize>> {
-        let len = std::cmp::min(buf.len(), u32::MAX as usize) as u32;
+        let len = core::cmp::min(buf.len(), u32::MAX as usize) as u32;
         let res = ReadFile(
             self.handle.raw(),
             buf.as_mut_ptr() as *mut _,
             len,
-            std::ptr::null_mut(),
+            core::ptr::null_mut(),
             overlapped,
         );
         if res == 0 {
@@ -263,12 +263,12 @@ impl Inner {
         buf: &[u8],
         overlapped: *mut OVERLAPPED,
     ) -> io::Result<Option<usize>> {
-        let len = std::cmp::min(buf.len(), u32::MAX as usize) as u32;
+        let len = core::cmp::min(buf.len(), u32::MAX as usize) as u32;
         let res = WriteFile(
             self.handle.raw(),
             buf.as_ptr() as *const _,
             len,
-            std::ptr::null_mut(),
+            core::ptr::null_mut(),
             overlapped,
         );
         if res == 0 {
@@ -319,8 +319,8 @@ impl Inner {
 
 #[test]
 fn ptr_from() {
-    use std::mem::ManuallyDrop;
-    use std::ptr;
+    use core::mem::ManuallyDrop;
+    use core::ptr;
 
     let pipe = unsafe { ManuallyDrop::new(NamedPipe::from_raw_handle(ptr::null_mut())) };
     let inner: &Inner = &pipe.inner;
@@ -383,7 +383,7 @@ impl NamedPipe {
                 65536,
                 65536,
                 0,
-                std::ptr::null_mut(),
+                core::ptr::null_mut(),
             )
         };
 

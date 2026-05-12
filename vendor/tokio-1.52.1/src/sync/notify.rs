@@ -774,7 +774,7 @@ impl Notify {
         // * This wrapper will empty the list on drop. It is critical for safety
         //   that we will not leave any list entry with a pointer to the local
         //   guard node after this function returns / panics.
-        let mut list = NotifyWaitersList::new(std::mem::take(&mut *waiters), guard.as_ref(), self);
+        let mut list = NotifyWaitersList::new(core::mem::take(&mut *waiters), guard.as_ref(), self);
 
         let mut wakers = WakeList::new();
         'outer: loop {
@@ -1211,7 +1211,7 @@ impl NotifiedProject<'_> {
                         // None when we reach this line.
                         unsafe {
                             old_waker =
-                                waiter.waker.with_mut(|v| std::mem::replace(&mut *v, waker));
+                                waiter.waker.with_mut(|v| core::mem::replace(&mut *v, waker));
                         }
                     }
 

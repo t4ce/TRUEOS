@@ -1,5 +1,5 @@
-use std::convert::Infallible;
-use std::task::{Context, Poll};
+use core::convert::Infallible;
+use core::task::{Context, Poll};
 use tower_service::Service;
 
 /// A [`MakeService`] that produces services by cloning an inner service.
@@ -9,10 +9,10 @@ use tower_service::Service;
 /// # Example
 ///
 /// ```
-/// # use std::task::{Context, Poll};
-/// # use std::pin::Pin;
-/// # use std::convert::Infallible;
-/// use std::future::{Ready, ready};
+/// # use core::task::{Context, Poll};
+/// # use core::pin::Pin;
+/// # use core::convert::Infallible;
+/// use core::future::{Ready, ready};
 /// use tower::make::{MakeService, Shared};
 /// use tower::buffer::Buffer;
 /// use tower::Service;
@@ -93,13 +93,13 @@ where
     }
 
     fn call(&mut self, _target: T) -> Self::Future {
-        SharedFuture::new(std::future::ready(Ok(self.service.clone())))
+        SharedFuture::new(core::future::ready(Ok(self.service.clone())))
     }
 }
 
 opaque_future! {
     /// Response future from [`Shared`] services.
-    pub type SharedFuture<S> = std::future::Ready<Result<S, Infallible>>;
+    pub type SharedFuture<S> = core::future::Ready<Result<S, Infallible>>;
 }
 
 #[cfg(test)]
@@ -107,7 +107,7 @@ mod tests {
     use super::*;
     use crate::make::MakeService;
     use crate::service_fn;
-    use std::future::poll_fn;
+    use core::future::poll_fn;
 
     async fn echo<R>(req: R) -> Result<R, Infallible> {
         Ok(req)

@@ -4,12 +4,12 @@ use bytes::{Bytes, BytesMut};
 use alloc::string::String;
 use alloc::vec::Vec;
 use std::borrow::Borrow;
-use std::convert::TryFrom;
+use core::convert::TryFrom;
 use core::error::Error;
-use std::fmt;
-use std::hash::{Hash, Hasher};
-use std::mem::MaybeUninit;
-use std::str::FromStr;
+use core::fmt;
+use core::hash::{Hash, Hasher};
+use core::mem::MaybeUninit;
+use core::str::FromStr;
 
 /// Represents an HTTP header field name
 ///
@@ -91,7 +91,7 @@ macro_rules! standard_headers {
                 match *self {
                     // Safety: test_parse_standard_headers ensures these &[u8]s are &str-safe.
                     $(
-                    StandardHeader::$konst => unsafe { std::str::from_utf8_unchecked( $name_bytes ) },
+                    StandardHeader::$konst => unsafe { core::str::from_utf8_unchecked( $name_bytes ) },
                     )+
                 }
             }
@@ -120,7 +120,7 @@ macro_rules! standard_headers {
                 assert_eq!(HeaderName::from_bytes(name_bytes).unwrap(), HeaderName::from(std));
 
                 // Test upper case
-                let upper = std::str::from_utf8(name_bytes).expect("byte string constants are all utf-8").to_uppercase();
+                let upper = core::str::from_utf8(name_bytes).expect("byte string constants are all utf-8").to_uppercase();
                 assert_eq!(HeaderName::from_bytes(upper.as_bytes()).unwrap(), HeaderName::from(std));
             }
         }
@@ -128,7 +128,7 @@ macro_rules! standard_headers {
         #[test]
         fn test_standard_headers_into_bytes() {
             for &(std, name_bytes) in TEST_HEADERS {
-                let name = std::str::from_utf8(name_bytes).unwrap();
+                let name = core::str::from_utf8(name_bytes).unwrap();
                 let std = HeaderName::from(std);
                 // Test lower case
                 let bytes: Bytes =
@@ -1680,7 +1680,7 @@ mod tests {
 
         let long = &ONE_TOO_LONG[0..super::super::MAX_HEADER_NAME_LEN];
 
-        let long_str = std::str::from_utf8(long).unwrap();
+        let long_str = core::str::from_utf8(long).unwrap();
         assert_eq!(HeaderName::from_static(long_str), long_str); // shouldn't panic!
 
         assert!(
@@ -1697,7 +1697,7 @@ mod tests {
     #[should_panic]
     fn test_static_invalid_name_lengths() {
         // Safety: ONE_TOO_LONG contains only the UTF-8 safe, single-byte codepoint b'a'.
-        let _ = HeaderName::from_static(unsafe { std::str::from_utf8_unchecked(ONE_TOO_LONG) });
+        let _ = HeaderName::from_static(unsafe { core::str::from_utf8_unchecked(ONE_TOO_LONG) });
     }
 
     #[test]

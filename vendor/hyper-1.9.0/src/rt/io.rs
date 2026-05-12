@@ -1,8 +1,8 @@
-use std::fmt;
-use std::mem::MaybeUninit;
-use std::ops::DerefMut;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::fmt;
+use core::mem::MaybeUninit;
+use core::ops::DerefMut;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 // New IO traits? What?! Why, are you bonkers?
 //
@@ -34,8 +34,8 @@ use std::task::{Context, Poll};
 ///
 /// ```
 /// use hyper::rt::{Read, ReadBufCursor};
-/// use std::pin::Pin;
-/// use std::task::{Context, Poll};
+/// use core::pin::Pin;
+/// use core::task::{Context, Poll};
 /// use std::io;
 ///
 /// struct MyReader {
@@ -268,7 +268,7 @@ impl<'data> ReadBuf<'data> {
             // SAFETY: self.buf is never re-assigned, so its safe to narrow
             // the lifetime.
             buf: unsafe {
-                std::mem::transmute::<&'cursor mut ReadBuf<'data>, &'cursor mut ReadBuf<'cursor>>(
+                core::mem::transmute::<&'cursor mut ReadBuf<'data>, &'cursor mut ReadBuf<'cursor>>(
                     self,
                 )
             },

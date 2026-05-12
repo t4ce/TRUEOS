@@ -30,7 +30,7 @@
 //! }
 //!
 //! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # async fn main() -> Result<(), Box<dyn core::error::Error>> {
 //! // Construct the shared state.
 //! let state = State {
 //!     pool: DatabaseConnectionPool::new(),
@@ -52,7 +52,7 @@
 //! ```
 
 use http::{Request, Response};
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 use tower_layer::Layer;
 use tower_service::Service;
 

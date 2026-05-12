@@ -17,7 +17,7 @@
 //! use tokio::process::Command;
 //!
 //! #[tokio::main]
-//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! async fn main() -> Result<(), Box<dyn core::error::Error>> {
 //!     // The usage is similar as with the standard library's `Command` type
 //!     let mut child = Command::new("echo")
 //!         .arg("hello")
@@ -40,7 +40,7 @@
 //! use tokio::process::Command;
 //!
 //! #[tokio::main]
-//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! async fn main() -> Result<(), Box<dyn core::error::Error>> {
 //!     // Like above, but use `output` which returns a future instead of
 //!     // immediately returning the `Child`.
 //!     let output = Command::new("echo").arg("hello").arg("world")
@@ -63,7 +63,7 @@
 //! use std::process::Stdio;
 //!
 //! #[tokio::main]
-//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! async fn main() -> Result<(), Box<dyn core::error::Error>> {
 //!     let mut cmd = Command::new("cat");
 //!
 //!     // Specify that we want the command's standard output piped back to us.
@@ -108,7 +108,7 @@
 //! use std::process::Stdio;
 //!
 //! #[tokio::main]
-//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! async fn main() -> Result<(), Box<dyn core::error::Error>> {
 //!     let mut cmd = Command::new("sort");
 //!
 //!     // Specifying that we want pipe both the output and the input.
@@ -160,7 +160,7 @@
 //! use std::process::Stdio;
 //!
 //! #[tokio::main]
-//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! async fn main() -> Result<(), Box<dyn core::error::Error>> {
 //!     let mut echo = Command::new("echo")
 //!         .arg("hello world!")
 //!         .stdout(Stdio::piped())
@@ -256,7 +256,7 @@ use alloc::vec::Vec;
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{ready, Context, Poll};
-use std::ffi::OsStr;
+use core::ffi::OsStr;
 use std::io;
 use std::path::Path;
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
@@ -1756,10 +1756,10 @@ mod test {
     use super::ChildDropGuard;
 
     use futures::future::FutureExt;
-    use std::future::Future;
+    use core::future::Future;
     use std::io;
-    use std::pin::Pin;
-    use std::task::{Context, Poll};
+    use core::pin::Pin;
+    use core::task::{Context, Poll};
 
     struct Mock {
         num_kills: usize,

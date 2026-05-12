@@ -86,7 +86,7 @@ impl<'de, R: BincodeRead<'de>, O: Options> Deserializer<R, O> {
     }
 
     fn read_literal_type<T>(&mut self) -> Result<()> {
-        use std::mem::size_of;
+        use core::mem::size_of;
         self.read_bytes(size_of::<T>() as u64)
     }
 
@@ -201,7 +201,7 @@ where
     where
         V: serde::de::Visitor<'de>,
     {
-        use std::str;
+        use core::str;
 
         let error = || ErrorKind::InvalidCharEncoding.into();
 

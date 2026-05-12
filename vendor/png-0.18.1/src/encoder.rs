@@ -657,7 +657,7 @@ impl<W: Write> Writer<W> {
     /// the length of `data` can't be parsed as a `u32` though the length of the chunk data should
     /// not exceed `i32::MAX` or 2,147,483,647.
     pub fn write_chunk(&mut self, name: ChunkType, data: &[u8]) -> Result<()> {
-        use std::convert::TryFrom;
+        use core::convert::TryFrom;
 
         if u32::try_from(data.len()).map_or(true, |length| length > i32::MAX as u32) {
             let kind = FormatErrorKind::WrittenTooMuch(data.len() - i32::MAX as usize);
@@ -1784,7 +1784,7 @@ mod tests {
 
     use io::BufReader;
     use rand::{rng, Rng};
-    use std::cmp;
+    use core::cmp;
     use std::fs::File;
     use std::io::Cursor;
 

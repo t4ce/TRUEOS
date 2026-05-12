@@ -1,7 +1,7 @@
 use crate::sys::windows::Event;
 
-use std::cell::UnsafeCell;
-use std::fmt;
+use core::cell::UnsafeCell;
+use core::fmt;
 
 use windows_sys::Win32::System::IO::{OVERLAPPED, OVERLAPPED_ENTRY};
 
@@ -15,7 +15,7 @@ pub(crate) struct Overlapped {
 impl Overlapped {
     pub(crate) fn new(cb: fn(&OVERLAPPED_ENTRY, Option<&mut Vec<Event>>)) -> Overlapped {
         Overlapped {
-            inner: UnsafeCell::new(unsafe { std::mem::zeroed() }),
+            inner: UnsafeCell::new(unsafe { core::mem::zeroed() }),
             callback: cb,
         }
     }

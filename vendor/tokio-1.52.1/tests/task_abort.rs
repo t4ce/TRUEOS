@@ -108,14 +108,14 @@ fn test_abort_without_panic_3662() {
 fn remote_abort_local_set_3929() {
     struct DropCheck {
         created_on: std::thread::ThreadId,
-        not_send: std::marker::PhantomData<*const ()>,
+        not_send: core::marker::PhantomData<*const ()>,
     }
 
     impl DropCheck {
         fn new() -> Self {
             Self {
                 created_on: std::thread::current().id(),
-                not_send: std::marker::PhantomData,
+                not_send: core::marker::PhantomData,
             }
         }
     }

@@ -3,11 +3,11 @@ use crate::runtime::io::Registration;
 use crate::runtime::scheduler;
 
 use mio::event::Source;
-use std::fmt;
+use core::fmt;
 use std::io;
-use std::ops::Deref;
+use core::ops::Deref;
 use std::panic::{RefUnwindSafe, UnwindSafe};
-use std::task::ready;
+use core::task::ready;
 
 cfg_io_driver! {
     /// Associates an I/O resource that implements the [`std::io::Read`] and/or
@@ -154,7 +154,7 @@ feature! {
     #![any(feature = "net", all(unix, feature = "process"))]
 
     use crate::io::ReadBuf;
-    use std::task::{Context, Poll};
+    use core::task::{Context, Poll};
 
     impl<E: Source> PollEvented<E> {
         // Safety: The caller must ensure that `E` can read into uninitialized memory
@@ -171,7 +171,7 @@ feature! {
             loop {
                 let evt = ready!(self.registration.poll_read_ready(cx))?;
 
-                let b = unsafe { &mut *(buf.unfilled_mut() as *mut [std::mem::MaybeUninit<u8>] as *mut [u8]) };
+                let b = unsafe { &mut *(buf.unfilled_mut() as *mut [core::mem::MaybeUninit<u8>] as *mut [u8]) };
 
                 // used only when the cfgs below apply
                 #[allow(unused_variables)]

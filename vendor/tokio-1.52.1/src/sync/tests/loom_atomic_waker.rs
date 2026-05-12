@@ -3,10 +3,10 @@ use crate::sync::task::AtomicWaker;
 use loom::future::block_on;
 use loom::sync::atomic::AtomicUsize;
 use loom::thread;
-use std::future::poll_fn;
+use core::future::poll_fn;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
-use std::task::Poll::{Pending, Ready};
+use core::task::Poll::{Pending, Ready};
 
 struct Chan {
     num: AtomicUsize,
@@ -47,8 +47,8 @@ fn basic_notification() {
 #[test]
 fn test_panicky_waker() {
     use std::panic;
-    use std::ptr;
-    use std::task::{RawWaker, RawWakerVTable, Waker};
+    use core::ptr;
+    use core::task::{RawWaker, RawWakerVTable, Waker};
 
     static PANICKING_VTABLE: RawWakerVTable =
         RawWakerVTable::new(|_| panic!("clone"), |_| (), |_| (), |_| ());

@@ -1,12 +1,12 @@
-use std::error::Error as StdError;
-use std::fmt;
-use std::future::Future;
+use core::error::Error as StdError;
+use core::fmt;
+use core::future::Future;
 use std::io;
-use std::marker::PhantomData;
+use core::marker::PhantomData;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::pin::Pin;
+use core::pin::Pin;
 use std::sync::Arc;
-use std::task::{self, ready, Poll};
+use core::task::{self, ready, Poll};
 use core::time::Duration;
 
 use futures_util::future::Either;
@@ -89,7 +89,7 @@ struct Config {
         target_os = "visionos",
         target_os = "watchos",
     ))]
-    interface: Option<std::ffi::CString>,
+    interface: Option<core::ffi::CString>,
     #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
     tcp_user_timeout: Option<Duration>,
 }
@@ -421,7 +421,7 @@ impl<R> HttpConnector<R> {
         }
         #[cfg(not(any(target_os = "android", target_os = "fuchsia", target_os = "linux")))]
         {
-            let interface = std::ffi::CString::new(interface)
+            let interface = core::ffi::CString::new(interface)
                 .expect("interface name should not have nulls in it");
             self.config_mut().interface = Some(interface);
         }
@@ -902,7 +902,7 @@ fn connect(
         ))]
         {
             let idx = unsafe { libc::if_nametoindex(interface.as_ptr()) };
-            let idx = std::num::NonZeroU32::new(idx).ok_or_else(|| {
+            let idx = core::num::NonZeroU32::new(idx).ok_or_else(|| {
                 // If the index is 0, check errno and return an I/O error.
                 ConnectError::new(
                     "error converting interface name to index",
@@ -1206,7 +1206,7 @@ use std::time::Instant;
         let local_timeout = Duration::default();
         let unreachable_v4_timeout = measure_connect(unreachable_ipv4_addr()).1;
         let unreachable_v6_timeout = measure_connect(unreachable_ipv6_addr()).1;
-        let fallback_timeout = std::cmp::max(unreachable_v4_timeout, unreachable_v6_timeout)
+        let fallback_timeout = core::cmp::max(unreachable_v4_timeout, unreachable_v6_timeout)
             + Duration::from_millis(250);
 
         let scenarios = &[

@@ -80,7 +80,7 @@ pub type MappedReentrantMutexGuard<'a, T> =
 mod tests {
     use crate::ReentrantMutex;
     use crate::ReentrantMutexGuard;
-    use std::cell::RefCell;
+    use core::cell::RefCell;
     use std::sync::mpsc::channel;
     use std::sync::Arc;
     use std::thread;

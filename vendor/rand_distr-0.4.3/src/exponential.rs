@@ -117,7 +117,7 @@ impl fmt::Display for Error {
 
 #[cfg(feature = "std")]
 #[cfg_attr(doc_cfg, doc(cfg(feature = "std")))]
-impl std::error::Error for Error {}
+impl core::error::Error for Error {}
 
 impl<F: Float> Exp<F>
 where F: Float, Exp1: Distribution<F>

@@ -267,7 +267,7 @@ pub mod error {
         }
     }
 
-    impl<T: fmt::Debug> std::error::Error for SendError<T> {}
+    impl<T: fmt::Debug> core::error::Error for SendError<T> {}
 
     /// An error returned from the [`recv`] function on a [`Receiver`].
     ///
@@ -295,7 +295,7 @@ pub mod error {
         }
     }
 
-    impl std::error::Error for RecvError {}
+    impl core::error::Error for RecvError {}
 
     /// An error returned from the [`try_recv`] function on a [`Receiver`].
     ///
@@ -331,7 +331,7 @@ pub mod error {
         }
     }
 
-    impl std::error::Error for TryRecvError {}
+    impl core::error::Error for TryRecvError {}
 }
 
 use self::error::{RecvError, SendError, TryRecvError};
@@ -1005,7 +1005,7 @@ impl<T> Shared<T> {
         // * This wrapper will empty the list on drop. It is critical for safety
         //   that we will not leave any list entry with a pointer to the local
         //   guard node after this function returns / panics.
-        let mut list = WaitersList::new(std::mem::take(&mut tail.waiters), guard.as_ref(), self);
+        let mut list = WaitersList::new(core::mem::take(&mut tail.waiters), guard.as_ref(), self);
 
         let mut wakers = WakeList::new();
         'outer: loop {

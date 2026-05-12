@@ -13,7 +13,7 @@ use self::transform::{create_transform_fn, TransformFn};
 use self::unfiltering_buffer::UnfilteringBuffer;
 
 use std::io::{BufRead, Seek};
-use std::mem;
+use core::mem;
 
 use crate::adam7::Adam7Info;
 use crate::common::{

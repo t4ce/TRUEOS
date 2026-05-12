@@ -63,7 +63,7 @@ impl fmt::Display for TriangularError {
 
 #[cfg(feature = "std")]
 #[cfg_attr(doc_cfg, doc(cfg(feature = "std")))]
-impl std::error::Error for TriangularError {}
+impl core::error::Error for TriangularError {}
 
 impl<F> Triangular<F>
 where F: Float, Standard: Distribution<F>

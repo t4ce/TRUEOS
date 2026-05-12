@@ -1,11 +1,11 @@
-use std::fmt;
+use core::fmt;
 use std::fs::File;
-use std::future::Future;
+use core::future::Future;
 #[cfg(feature = "multipart")]
 use std::io::Cursor;
 use std::io::{self, Read};
-use std::mem::{self, MaybeUninit};
-use std::ptr;
+use core::mem::{self, MaybeUninit};
+use core::ptr;
 
 use bytes::Bytes;
 use futures_channel::mpsc;
@@ -38,7 +38,7 @@ impl Body {
     /// ```rust
     /// # use std::fs::File;
     /// # use reqwest::blocking::Body;
-    /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// # fn run() -> Result<(), Box<dyn core::error::Error>> {
     /// let file = File::open("national_secrets.txt")?;
     /// let body = Body::new(file);
     /// # Ok(())
@@ -51,7 +51,7 @@ impl Body {
     ///
     /// ```rust
     /// # use reqwest::blocking::Body;
-    /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// # fn run() -> Result<(), Box<dyn core::error::Error>> {
     /// let s = "A stringy body";
     /// let body = Body::from(s);
     /// # Ok(())
@@ -70,7 +70,7 @@ impl Body {
     /// ```rust
     /// # use std::fs::File;
     /// # use reqwest::blocking::Body;
-    /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// # fn run() -> Result<(), Box<dyn core::error::Error>> {
     /// let file = File::open("a_large_file.txt")?;
     /// let file_size = file.metadata()?.len();
     /// let body = Body::sized(file, file_size);
@@ -269,12 +269,12 @@ impl fmt::Display for Abort {
     }
 }
 
-impl std::error::Error for Abort {}
+impl core::error::Error for Abort {}
 
 async fn send_future(sender: Sender) -> Result<(), crate::Error> {
     use bytes::{BufMut, BytesMut};
     use futures_util::SinkExt;
-    use std::cmp;
+    use core::cmp;
 
     let con_len = sender.body.1;
     let cap = cmp::min(sender.body.1.unwrap_or(8192), 8192);

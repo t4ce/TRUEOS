@@ -6,7 +6,7 @@ use tokio::time::{self, timeout, timeout_at, Instant};
 use tokio_test::*;
 
 use futures::future::pending;
-use std::time::Duration;
+use core::time::Duration;
 
 #[tokio::test]
 async fn simultaneous_deadline_future_completion() {

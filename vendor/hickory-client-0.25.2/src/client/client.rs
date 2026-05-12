@@ -695,7 +695,7 @@ impl<R> ClientStreamXfrState<R> {
         if answers.is_empty() {
             return Ok(());
         }
-        match std::mem::replace(self, Invalid) {
+        match core::mem::replace(self, Invalid) {
             Start { inner, maybe_incr } => {
                 if let Some(expected_serial) = get_serial(&answers[0]) {
                     *self = Second {
@@ -1084,7 +1084,7 @@ mod tests {
             rr::{DNSClass, Name, RData, RecordType},
             tcp::TcpClientStream,
         };
-        use std::str::FromStr;
+        use core::str::FromStr;
 
         // Since we used UDP in the previous examples, let's change things up a bit and use TCP here
         let addr = SocketAddr::from(([8, 8, 8, 8], 53));

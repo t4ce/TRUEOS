@@ -1,7 +1,7 @@
 cfg_macros! {
     pub use crate::future::maybe_done::maybe_done;
 
-    pub use std::future::poll_fn;
+    pub use core::future::poll_fn;
 
     pub use crate::macros::join::{BiasedRotator, Rotator, RotatorSelect, SelectNormal, SelectBiased};
 
@@ -27,7 +27,7 @@ cfg_macros! {
     }
 }
 
-pub use std::future::{Future, IntoFuture};
-pub use std::pin::Pin;
+pub use core::future::{Future, IntoFuture};
+pub use core::pin::Pin;
 pub use std::result::Result;
-pub use std::task::{ready, Context, Poll};
+pub use core::task::{ready, Context, Poll};

@@ -1,5 +1,5 @@
-use std::fmt;
-use std::mem::MaybeUninit;
+use core::fmt;
+use core::mem::MaybeUninit;
 
 /// A wrapper around a byte buffer that is incrementally filled and initialized.
 ///
@@ -80,7 +80,7 @@ impl<'a> ReadBuf<'a> {
     /// Returns a new `ReadBuf` comprised of the unfilled section up to `n`.
     #[inline]
     pub fn take(&mut self, n: usize) -> ReadBuf<'_> {
-        let max = std::cmp::min(self.remaining(), n);
+        let max = core::cmp::min(self.remaining(), n);
         // Safety: We don't set any of the `unfilled_mut` with `MaybeUninit::uninit`.
         unsafe { ReadBuf::uninit(&mut self.unfilled_mut()[..max]) }
     }

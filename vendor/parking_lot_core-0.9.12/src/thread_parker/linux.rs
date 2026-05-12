@@ -81,7 +81,7 @@ impl super::ThreadParkerT for ThreadParker {
                 return true;
             }
             // SAFETY: libc::timespec is zero initializable.
-            let mut ts: libc::timespec = std::mem::zeroed();
+            let mut ts: libc::timespec = core::mem::zeroed();
             ts.tv_sec = diff.as_secs() as libc::time_t;
             ts.tv_nsec = diff.subsec_nanos() as tv_nsec_t;
             self.futex_wait(Some(ts));

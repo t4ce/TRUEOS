@@ -225,4 +225,4 @@ mod sealed {
 }
 
 /// Alias for a type-erased error type.
-pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
+pub type BoxError = Box<dyn core::error::Error + Send + Sync>;

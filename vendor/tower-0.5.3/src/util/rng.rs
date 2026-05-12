@@ -26,7 +26,7 @@ pub trait Rng {
     fn next_f64(&mut self) -> f64 {
         // Borrowed from:
         // https://github.com/rust-random/rand/blob/master/src/distr/float.rs#L108
-        let float_size = std::mem::size_of::<f64>() as u32 * 8;
+        let float_size = core::mem::size_of::<f64>() as u32 * 8;
         let precision = 52 + 1;
         let scale = 1.0 / ((1u64 << precision) as f64);
 

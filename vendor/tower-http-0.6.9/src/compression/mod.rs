@@ -9,7 +9,7 @@
 //! use http::{Request, Response, header::ACCEPT_ENCODING};
 //! use http_body_util::{Full, BodyExt, StreamBody, combinators::UnsyncBoxBody};
 //! use http_body::Frame;
-//! use std::convert::Infallible;
+//! use core::convert::Infallible;
 //! use tokio::fs::{self, File};
 //! use tokio_util::io::ReaderStream;
 //! use tower::{Service, ServiceExt, ServiceBuilder, service_fn};
@@ -101,7 +101,7 @@ mod tests {
     use http::{HeaderMap, HeaderName, HeaderValue, Request, Response};
     use http_body::Body as _;
     use http_body_util::BodyExt;
-    use std::convert::Infallible;
+    use core::convert::Infallible;
     use std::io::Read;
     use std::sync::{Arc, RwLock};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -208,7 +208,7 @@ mod tests {
         let compressed_data = body.collect().await.unwrap().to_bytes();
 
         // decompress the body
-        let decompressed = zstd::stream::decode_all(std::io::Cursor::new(compressed_data)).unwrap();
+        let decompressed = zcore::stream::decode_all(std::io::Cursor::new(compressed_data)).unwrap();
         let decompressed = String::from_utf8(decompressed).unwrap();
 
         assert_eq!(decompressed, "Hello, World!");

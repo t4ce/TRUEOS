@@ -1,4 +1,4 @@
-use std::convert::Infallible;
+use core::convert::Infallible;
 
 use crate::test_helpers::Body;
 use http::{header, HeaderValue, Request, Response};

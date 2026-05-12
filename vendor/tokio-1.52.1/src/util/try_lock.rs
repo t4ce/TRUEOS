@@ -1,8 +1,8 @@
 use crate::loom::sync::atomic::AtomicBool;
 
-use std::cell::UnsafeCell;
-use std::marker::PhantomData;
-use std::ops::{Deref, DerefMut};
+use core::cell::UnsafeCell;
+use core::marker::PhantomData;
+use core::ops::{Deref, DerefMut};
 use std::sync::atomic::Ordering::SeqCst;
 
 pub(crate) struct TryLock<T> {

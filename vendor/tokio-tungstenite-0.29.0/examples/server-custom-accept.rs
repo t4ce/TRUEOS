@@ -156,7 +156,7 @@ async fn handle_request(
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<(), Box<dyn core::error::Error>> {
     let state = PeerMap::new(Mutex::new(HashMap::new()));
 
     let addr =

@@ -39,8 +39,8 @@ impl fmt::Display for ServiceError {
     }
 }
 
-impl std::error::Error for ServiceError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+impl core::error::Error for ServiceError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         Some(&**self.inner)
     }
 }
@@ -65,4 +65,4 @@ impl fmt::Display for Closed {
     }
 }
 
-impl std::error::Error for Closed {}
+impl core::error::Error for Closed {}

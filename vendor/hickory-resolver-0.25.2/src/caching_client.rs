@@ -512,7 +512,7 @@ enum Records {
 #[cfg(test)]
 mod tests {
     use std::net::*;
-    use std::str::FromStr;
+    use core::str::FromStr;
     use std::time::*;
 
     use crate::proto::op::{Message, Query};

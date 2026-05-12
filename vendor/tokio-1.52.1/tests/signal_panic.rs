@@ -4,7 +4,7 @@
 #![cfg(panic = "unwind")]
 #![cfg(not(miri))] // No `sigaction` on Miri.
 
-use std::error::Error;
+use core::error::Error;
 use tokio::runtime::Builder;
 use tokio::signal::unix::{signal, SignalKind};
 

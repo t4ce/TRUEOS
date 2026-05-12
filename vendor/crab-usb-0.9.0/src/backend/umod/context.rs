@@ -10,13 +10,13 @@ unsafe impl Sync for Context {}
 
 impl Context {
     pub fn new() -> Result<Arc<Self>> {
-        let mut ctx = std::ptr::null_mut();
+        let mut ctx = core::ptr::null_mut();
         usb!(libusb1_sys::libusb_init(&mut ctx))?;
         Ok(Arc::new(Self(ctx)))
     }
 
     pub fn device_list(&self) -> crate::err::Result<DeviceList> {
-        let mut list: *const *mut libusb_device = std::ptr::null_mut();
+        let mut list: *const *mut libusb_device = core::ptr::null_mut();
         let count = unsafe { libusb1_sys::libusb_get_device_list(self.0, &mut list) };
         Ok(DeviceList {
             list,

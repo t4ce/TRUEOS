@@ -1,4 +1,4 @@
-use std::fmt;
+use core::fmt;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct DecodedLength(u64);

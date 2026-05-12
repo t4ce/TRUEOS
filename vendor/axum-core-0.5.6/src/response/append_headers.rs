@@ -1,6 +1,6 @@
 use super::{IntoResponse, IntoResponseParts, Response, ResponseParts, TryIntoHeaderError};
 use http::header::{HeaderName, HeaderValue};
-use std::fmt;
+use core::fmt;
 
 /// Append headers to a response.
 ///

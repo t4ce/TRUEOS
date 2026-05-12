@@ -272,7 +272,7 @@ impl fmt::Display for PathDeserializationError {
     }
 }
 
-impl std::error::Error for PathDeserializationError {}
+impl core::error::Error for PathDeserializationError {}
 
 /// The kinds of errors that can happen we deserializing into a [`Path`].
 ///
@@ -468,7 +468,7 @@ impl fmt::Display for FailedToDeserializePathParams {
     }
 }
 
-impl std::error::Error for FailedToDeserializePathParams {}
+impl core::error::Error for FailedToDeserializePathParams {}
 
 /// Extractor that will get captures from the URL without deserializing them.
 ///
@@ -545,7 +545,7 @@ impl<'a> IntoIterator for &'a RawPathParams {
 ///
 /// Created with [`RawPathParams::iter`].
 #[derive(Debug)]
-pub struct RawPathParamsIter<'a>(std::slice::Iter<'a, (Arc<str>, PercentDecodedStr)>);
+pub struct RawPathParamsIter<'a>(core::slice::Iter<'a, (Arc<str>, PercentDecodedStr)>);
 
 impl<'a> Iterator for RawPathParamsIter<'a> {
     type Item = (&'a str, &'a str);
@@ -583,7 +583,7 @@ impl fmt::Display for InvalidUtf8InPathParam {
     }
 }
 
-impl std::error::Error for InvalidUtf8InPathParam {}
+impl core::error::Error for InvalidUtf8InPathParam {}
 
 impl IntoResponse for InvalidUtf8InPathParam {
     fn into_response(self) -> Response {

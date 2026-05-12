@@ -20,7 +20,7 @@ use bytes::Bytes;
 ///
 /// // Print out the non-canonical reason phrase, if it has one...
 /// if let Some(reason) = res.extensions().get::<ReasonPhrase>() {
-///     println!("non-canonical reason: {}", std::str::from_utf8(reason.as_bytes()).unwrap());
+///     println!("non-canonical reason: {}", core::str::from_utf8(reason.as_bytes()).unwrap());
 /// }
 /// # Ok(())
 /// # }
@@ -129,13 +129,13 @@ pub struct InvalidReasonPhrase {
     bad_byte: u8,
 }
 
-impl std::fmt::Display for InvalidReasonPhrase {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for InvalidReasonPhrase {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "Invalid byte in reason phrase: {}", self.bad_byte)
     }
 }
 
-impl std::error::Error for InvalidReasonPhrase {}
+impl core::error::Error for InvalidReasonPhrase {}
 
 const fn is_valid_byte(b: u8) -> bool {
     // See https://www.rfc-editor.org/rfc/rfc5234.html#appendix-B.1

@@ -8,14 +8,14 @@
 //! use bytes::Bytes;
 //! use tower::{ServiceBuilder, ServiceExt, Service};
 //! use tower_http::cors::{Any, CorsLayer};
-//! use std::convert::Infallible;
+//! use core::convert::Infallible;
 //!
 //! async fn handle(request: Request<Full<Bytes>>) -> Result<Response<Full<Bytes>>, Infallible> {
 //!     Ok(Response::new(Full::default()))
 //! }
 //!
 //! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # async fn main() -> Result<(), Box<dyn core::error::Error>> {
 //! let cors = CorsLayer::new()
 //!     // allow `GET` and `POST` when accessing the resource
 //!     .allow_methods([Method::GET, Method::POST])
@@ -208,7 +208,7 @@ impl CorsLayer {
     /// Set the value of the [`Access-Control-Max-Age`][mdn] header.
     ///
     /// ```
-    /// use std::time::Duration;
+    /// use core::time::Duration;
     /// use tower_http::cors::CorsLayer;
     ///
     /// let layer = CorsLayer::new().max_age(Duration::from_secs(60) * 10);
@@ -227,7 +227,7 @@ impl CorsLayer {
     ///
     /// ```
     /// # struct MyServerConfig { cors_max_age: Duration }
-    /// use std::time::Duration;
+    /// use core::time::Duration;
     ///
     /// use http::{request::Parts as RequestParts, HeaderValue};
     /// use tower_http::cors::{CorsLayer, MaxAge};

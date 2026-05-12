@@ -45,7 +45,7 @@ impl<K, V> RemovalNotifier<K, V> {
 }
 
 #[cfg(feature = "logging")]
-fn log_panic(payload: &(dyn std::any::Any + Send + 'static), cache_name: Option<&str>) {
+fn log_panic(payload: &(dyn core::any::Any + Send + 'static), cache_name: Option<&str>) {
     // Try to downcast the payload into &str or String.
     //
     // NOTE: Clippy will complain if we use `if let Some(_)` here.

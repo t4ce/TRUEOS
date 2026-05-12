@@ -1,4 +1,4 @@
-use std::time::Duration;
+use core::time::Duration;
 
 /// A rate of requests per time period.
 #[derive(Debug, Copy, Clone)]

@@ -131,7 +131,7 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FromExtractorLayer")
             .field("state", &self.state)
-            .field("extractor", &format_args!("{}", std::any::type_name::<E>()))
+            .field("extractor", &format_args!("{}", core::any::type_name::<E>()))
             .finish()
     }
 }
@@ -190,7 +190,7 @@ where
         f.debug_struct("FromExtractor")
             .field("inner", &self.inner)
             .field("state", &self.state)
-            .field("extractor", &format_args!("{}", std::any::type_name::<E>()))
+            .field("extractor", &format_args!("{}", core::any::type_name::<E>()))
             .finish()
     }
 }
@@ -369,7 +369,7 @@ mod tests {
         where
             S: Send + Sync,
         {
-            type Rejection = std::convert::Infallible;
+            type Rejection = core::convert::Infallible;
 
             async fn from_request_parts(
                 _parts: &mut Parts,

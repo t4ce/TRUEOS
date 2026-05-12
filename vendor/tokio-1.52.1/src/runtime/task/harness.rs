@@ -9,7 +9,7 @@ use crate::runtime::task::{Id, JoinError, Notified, RawTask, Schedule, Task};
 
 #[cfg(tokio_unstable)]
 use crate::runtime::TaskMeta;
-use std::any::Any;
+use core::any::Any;
 use core::mem;
 use core::mem::ManuallyDrop;
 use std::panic;

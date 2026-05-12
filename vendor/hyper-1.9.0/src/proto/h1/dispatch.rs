@@ -583,7 +583,7 @@ cfg_server! {
 // ===== impl Client =====
 
 cfg_client! {
-    use std::convert::Infallible;
+    use core::convert::Infallible;
 
     impl<B> Client<B> {
         pub(crate) fn new(rx: ClientRx<B>) -> Client<B> {

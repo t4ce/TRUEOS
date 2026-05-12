@@ -491,7 +491,7 @@ mod tests {
         assert!(s.poll_future_notify(&t1, 1).unwrap().is_not_ready());
 
         thread::spawn(move || {
-            thread::sleep(::std::time::Duration::from_millis(100));
+            thread::sleep(::core::time::Duration::from_millis(100));
             tk.want();
         });
 

@@ -3,7 +3,7 @@
 use serde::Deserialize;
 use serde_derive::Deserialize;
 use std::collections::BTreeMap as Map;
-use std::fmt::Debug;
+use core::fmt::Debug;
 
 fn test<'de, T>(json: &'de str, expected: &str)
 where

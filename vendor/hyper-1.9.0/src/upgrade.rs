@@ -39,14 +39,14 @@
 //!
 //! [example]: https://github.com/hyperium/hyper/blob/master/examples/upgrades.rs
 
-use std::any::TypeId;
-use std::error::Error as StdError;
-use std::fmt;
-use std::future::Future;
+use core::any::TypeId;
+use core::error::Error as StdError;
+use core::fmt;
+use core::future::Future;
 use std::io;
-use std::pin::Pin;
+use core::pin::Pin;
 use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 
 use crate::rt::{Read, ReadBufCursor, Write};
 use bytes::Bytes;
@@ -303,7 +303,7 @@ impl dyn Io + Send {
 
     fn __hyper_downcast<T: Io>(self: Box<Self>) -> Result<Box<T>, Box<Self>> {
         if self.__hyper_is::<T>() {
-            // Taken from `std::error::Error::downcast()`.
+            // Taken from `core::error::Error::downcast()`.
             unsafe {
                 let raw: *mut dyn Io = Box::into_raw(self);
                 Ok(Box::from_raw(raw as *mut T))

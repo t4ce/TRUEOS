@@ -89,7 +89,7 @@ impl fmt::Display for Error {
 
 #[cfg(feature = "std")]
 #[cfg_attr(doc_cfg, doc(cfg(feature = "std")))]
-impl std::error::Error for Error {}
+impl core::error::Error for Error {}
 
 #[derive(Clone, Copy, Debug)]
 #[cfg_attr(feature = "serde1", derive(Serialize, Deserialize))]
@@ -312,7 +312,7 @@ impl fmt::Display for ChiSquaredError {
 
 #[cfg(feature = "std")]
 #[cfg_attr(doc_cfg, doc(cfg(feature = "std")))]
-impl std::error::Error for ChiSquaredError {}
+impl core::error::Error for ChiSquaredError {}
 
 #[derive(Clone, Copy, Debug)]
 #[cfg_attr(feature = "serde1", derive(Serialize, Deserialize))]
@@ -422,7 +422,7 @@ impl fmt::Display for FisherFError {
 
 #[cfg(feature = "std")]
 #[cfg_attr(doc_cfg, doc(cfg(feature = "std")))]
-impl std::error::Error for FisherFError {}
+impl core::error::Error for FisherFError {}
 
 impl<F> FisherF<F>
 where
@@ -592,7 +592,7 @@ impl fmt::Display for BetaError {
 
 #[cfg(feature = "std")]
 #[cfg_attr(doc_cfg, doc(cfg(feature = "std")))]
-impl std::error::Error for BetaError {}
+impl core::error::Error for BetaError {}
 
 impl<F> Beta<F>
 where

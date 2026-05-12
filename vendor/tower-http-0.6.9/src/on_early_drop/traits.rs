@@ -118,8 +118,8 @@ impl<F> OnBodyDropFn<F> {
     }
 }
 
-impl<F> std::fmt::Debug for OnBodyDropFn<F> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<F> core::fmt::Debug for OnBodyDropFn<F> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("OnBodyDropFn").finish_non_exhaustive()
     }
 }

@@ -4,9 +4,9 @@
 // https://github.com/rust-lang/futures-rs/blob/1803948ff091b4eabf7f3bf39e16bbbdefca5cc8/futures/tests/io_buf_reader.rs
 
 use futures::task::{noop_waker_ref, Context, Poll};
-use std::cmp;
+use core::cmp;
 use std::io::{self, Cursor};
-use std::pin::Pin;
+use core::pin::Pin;
 use tokio::io::{
     AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt, AsyncWriteExt,
     BufReader, ReadBuf, SeekFrom,

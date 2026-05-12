@@ -14,7 +14,7 @@ use serde::ser::{self, Serialize};
 /// # use serde_derive::Serialize;
 /// #
 /// use serde::Serialize;
-/// use std::cell::RefCell;
+/// use core::cell::RefCell;
 ///
 /// #[derive(Serialize)]
 /// struct Outer<'a> {

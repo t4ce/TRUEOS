@@ -10,7 +10,7 @@
 
 use crate::signal::RxFuture;
 use std::io;
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 
 #[cfg(windows)]
 #[path = "windows/sys.rs"]
@@ -30,7 +30,7 @@ mod imp;
 /// use tokio::signal::windows::ctrl_c;
 ///
 /// #[tokio::main]
-/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// async fn main() -> Result<(), Box<dyn core::error::Error>> {
 ///     // A listener of CTRL-C events.
 ///     let mut signal = ctrl_c()?;
 ///
@@ -78,7 +78,7 @@ impl CtrlC {
     /// use tokio::signal::windows::ctrl_c;
     ///
     /// #[tokio::main]
-    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// async fn main() -> Result<(), Box<dyn core::error::Error>> {
     ///     let mut signal = ctrl_c()?;
     ///
     ///     // Print whenever a CTRL-C event is received.
@@ -106,9 +106,9 @@ impl CtrlC {
     /// Polling from a manually implemented future
     ///
     /// ```rust,no_run
-    /// use std::pin::Pin;
-    /// use std::future::Future;
-    /// use std::task::{Context, Poll};
+    /// use core::pin::Pin;
+    /// use core::future::Future;
+    /// use core::task::{Context, Poll};
     /// use tokio::signal::windows::CtrlC;
     ///
     /// struct MyFuture {
@@ -158,7 +158,7 @@ impl CtrlBreak {
     /// use tokio::signal::windows::ctrl_break;
     ///
     /// #[tokio::main]
-    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// async fn main() -> Result<(), Box<dyn core::error::Error>> {
     ///     // A listener of CTRL-BREAK events.
     ///     let mut signal = ctrl_break()?;
     ///
@@ -185,9 +185,9 @@ impl CtrlBreak {
     /// Polling from a manually implemented future
     ///
     /// ```rust,no_run
-    /// use std::pin::Pin;
-    /// use std::future::Future;
-    /// use std::task::{Context, Poll};
+    /// use core::pin::Pin;
+    /// use core::future::Future;
+    /// use core::task::{Context, Poll};
     /// use tokio::signal::windows::CtrlBreak;
     ///
     /// struct MyFuture {
@@ -217,7 +217,7 @@ impl CtrlBreak {
 /// use tokio::signal::windows::ctrl_break;
 ///
 /// #[tokio::main]
-/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// async fn main() -> Result<(), Box<dyn core::error::Error>> {
 ///     // A listener of CTRL-BREAK events.
 ///     let mut signal = ctrl_break()?;
 ///
@@ -243,7 +243,7 @@ pub fn ctrl_break() -> io::Result<CtrlBreak> {
 /// use tokio::signal::windows::ctrl_close;
 ///
 /// #[tokio::main]
-/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// async fn main() -> Result<(), Box<dyn core::error::Error>> {
 ///     // A listener of CTRL-CLOSE events.
 ///     let mut signal = ctrl_close()?;
 ///
@@ -287,7 +287,7 @@ impl CtrlClose {
     /// use tokio::signal::windows::ctrl_close;
     ///
     /// #[tokio::main]
-    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// async fn main() -> Result<(), Box<dyn core::error::Error>> {
     ///     // A listener of CTRL-CLOSE events.
     ///     let mut signal = ctrl_close()?;
     ///
@@ -314,9 +314,9 @@ impl CtrlClose {
     /// Polling from a manually implemented future
     ///
     /// ```rust,no_run
-    /// use std::pin::Pin;
-    /// use std::future::Future;
-    /// use std::task::{Context, Poll};
+    /// use core::pin::Pin;
+    /// use core::future::Future;
+    /// use core::task::{Context, Poll};
     /// use tokio::signal::windows::CtrlClose;
     ///
     /// struct MyFuture {
@@ -346,7 +346,7 @@ impl CtrlClose {
 /// use tokio::signal::windows::ctrl_shutdown;
 ///
 /// #[tokio::main]
-/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// async fn main() -> Result<(), Box<dyn core::error::Error>> {
 ///     // A listener of CTRL-SHUTDOWN events.
 ///     let mut signal = ctrl_shutdown()?;
 ///
@@ -387,7 +387,7 @@ impl CtrlShutdown {
     /// use tokio::signal::windows::ctrl_shutdown;
     ///
     /// #[tokio::main]
-    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// async fn main() -> Result<(), Box<dyn core::error::Error>> {
     ///     // A listener of CTRL-SHUTDOWN events.
     ///     let mut signal = ctrl_shutdown()?;
     ///
@@ -414,9 +414,9 @@ impl CtrlShutdown {
     /// Polling from a manually implemented future
     ///
     /// ```rust,no_run
-    /// use std::pin::Pin;
-    /// use std::future::Future;
-    /// use std::task::{Context, Poll};
+    /// use core::pin::Pin;
+    /// use core::future::Future;
+    /// use core::task::{Context, Poll};
     /// use tokio::signal::windows::CtrlShutdown;
     ///
     /// struct MyFuture {
@@ -446,7 +446,7 @@ impl CtrlShutdown {
 /// use tokio::signal::windows::ctrl_logoff;
 ///
 /// #[tokio::main]
-/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// async fn main() -> Result<(), Box<dyn core::error::Error>> {
 ///     // A listener of CTRL-LOGOFF events.
 ///     let mut signal = ctrl_logoff()?;
 ///
@@ -487,7 +487,7 @@ impl CtrlLogoff {
     /// use tokio::signal::windows::ctrl_logoff;
     ///
     /// #[tokio::main]
-    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// async fn main() -> Result<(), Box<dyn core::error::Error>> {
     ///     // An listener of CTRL-LOGOFF events.
     ///     let mut signal = ctrl_logoff()?;
     ///
@@ -514,9 +514,9 @@ impl CtrlLogoff {
     /// Polling from a manually implemented future
     ///
     /// ```rust,no_run
-    /// use std::pin::Pin;
-    /// use std::future::Future;
-    /// use std::task::{Context, Poll};
+    /// use core::pin::Pin;
+    /// use core::future::Future;
+    /// use core::task::{Context, Poll};
     /// use tokio::signal::windows::CtrlLogoff;
     ///
     /// struct MyFuture {

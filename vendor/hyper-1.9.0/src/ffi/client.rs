@@ -1,5 +1,5 @@
-use std::ffi::c_int;
-use std::ptr;
+use core::ffi::c_int;
+use core::ptr;
 use std::sync::Arc;
 
 use crate::client::conn;
@@ -126,7 +126,7 @@ ffi_fn! {
                     hyper_clientconn { tx: Tx::Http1(tx) }
                 })
         }))
-    } ?= std::ptr::null_mut()
+    } ?= core::ptr::null_mut()
 }
 
 ffi_fn! {
@@ -157,7 +157,7 @@ ffi_fn! {
         };
 
         Box::into_raw(hyper_task::boxed(fut))
-    } ?= std::ptr::null_mut()
+    } ?= core::ptr::null_mut()
 }
 
 ffi_fn! {
@@ -190,7 +190,7 @@ ffi_fn! {
             http2: false,
             exec: WeakExec::new(),
         }))
-    } ?= std::ptr::null_mut()
+    } ?= core::ptr::null_mut()
 }
 
 ffi_fn! {
@@ -232,7 +232,7 @@ ffi_fn! {
 
         let exec = non_null! { Arc::from_raw(exec) ?= () };
         let weak_exec = hyper_executor::downgrade(&exec);
-        std::mem::forget(exec);
+        core::mem::forget(exec);
 
         opts.exec = weak_exec;
     }

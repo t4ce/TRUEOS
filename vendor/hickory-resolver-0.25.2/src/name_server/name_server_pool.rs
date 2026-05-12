@@ -5,14 +5,14 @@
 // https://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
-use std::cmp::Ordering;
-use std::pin::Pin;
+use core::cmp::Ordering;
+use core::pin::Pin;
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering as AtomicOrdering},
 };
-use std::task::{Context, Poll};
-use std::time::Duration;
+use core::task::{Context, Poll};
+use core::time::Duration;
 
 use futures_util::future::FutureExt;
 use futures_util::stream::{FuturesUnordered, Stream, StreamExt, once};
@@ -379,7 +379,7 @@ impl Stream for Local {
 #[cfg(feature = "tokio")]
 mod tests {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-    use std::str::FromStr;
+    use core::str::FromStr;
 
     use test_support::subscribe;
     use tokio::runtime::Runtime;

@@ -2,13 +2,13 @@ use crate::io::{Interest, PollEvented, ReadBuf, Ready};
 use crate::net::unix::SocketAddr;
 use crate::util::check_socket_for_blocking;
 
-use std::fmt;
+use core::fmt;
 use std::io;
 use std::net::Shutdown;
 use std::os::unix::io::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, RawFd};
 use std::os::unix::net;
 use std::path::Path;
-use std::task::{ready, Context, Poll};
+use core::task::{ready, Context, Poll};
 
 cfg_io_util! {
     use bytes::BufMut;
@@ -36,7 +36,7 @@ cfg_net_unix! {
     /// # Examples
     /// Using named sockets, associated with a filesystem path:
     /// ```
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn Error>> {
     /// # if cfg!(miri) { return Ok(()); } // No `socket` in miri.
@@ -69,7 +69,7 @@ cfg_net_unix! {
     ///
     /// Using unnamed sockets, created as a pair
     /// ```
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn Error>> {
     /// # if cfg!(miri) { return Ok(()); } // No SOCK_DGRAM for `socketpair` in miri.
@@ -374,7 +374,7 @@ impl UnixDatagram {
     ///
     /// # Examples
     /// ```
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn Error>> {
     /// # if cfg!(miri) { return Ok(()); } // No `socket` in miri.
@@ -407,7 +407,7 @@ impl UnixDatagram {
     ///
     /// # Examples
     /// ```
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn Error>> {
     /// # if cfg!(miri) { return Ok(()); } // No SOCK_DGRAM for `socketpair` in miri.
@@ -466,7 +466,7 @@ impl UnixDatagram {
     /// explicitly with [`Runtime::enter`](crate::runtime::Runtime::enter) function.
     /// # Examples
     /// ```
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn Error>> {
     /// # if cfg!(miri) { return Ok(()); } // No `socket` in miri.
@@ -505,7 +505,7 @@ impl UnixDatagram {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     /// # async fn dox() -> Result<(), Box<dyn Error>> {
     /// let tokio_socket = tokio::net::UnixDatagram::bind("/path/to/the/socket")?;
     /// let std_socket = tokio_socket.into_std()?;
@@ -533,7 +533,7 @@ impl UnixDatagram {
     ///
     /// # Examples
     /// ```
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn Error>> {
     /// # if cfg!(miri) { return Ok(()); } // No `socket` in miri.
@@ -573,7 +573,7 @@ impl UnixDatagram {
     ///
     /// # Examples
     /// ```
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn Error>> {
     /// # if cfg!(miri) { return Ok(()); } // No `socket` in miri.
@@ -618,7 +618,7 @@ impl UnixDatagram {
     ///
     /// # Examples
     /// ```
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn Error>> {
     /// # if cfg!(miri) { return Ok(()); } // No SOCK_DGRAM for `socketpair` in miri.
@@ -749,7 +749,7 @@ impl UnixDatagram {
     ///
     /// # Examples
     /// ```
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn Error>> {
     /// # if cfg!(miri) { return Ok(()); } // No SOCK_DGRAM for `socketpair` in miri.
@@ -877,7 +877,7 @@ impl UnixDatagram {
             let (n, addr) = self.io.registration().try_io(Interest::READABLE, || {
                 let dst = buf.chunk_mut();
                 let dst =
-                    unsafe { &mut *(dst as *mut _ as *mut [std::mem::MaybeUninit<u8>] as *mut [u8]) };
+                    unsafe { &mut *(dst as *mut _ as *mut [core::mem::MaybeUninit<u8>] as *mut [u8]) };
 
                 // Safety: We trust `UnixDatagram::recv_from` to have filled up `n` bytes in the
                 // buffer.
@@ -900,7 +900,7 @@ impl UnixDatagram {
         ///
         /// # Examples
         /// ```
-        /// # use std::error::Error;
+        /// # use core::error::Error;
         /// # #[tokio::main]
         /// # async fn main() -> Result<(), Box<dyn Error>> {
         /// # if cfg!(miri) { return Ok(()); } // No `socket` in miri.
@@ -934,7 +934,7 @@ impl UnixDatagram {
             self.io.registration().async_io(Interest::READABLE, || {
                 let dst = buf.chunk_mut();
                 let dst =
-                    unsafe { &mut *(dst as *mut _ as *mut [std::mem::MaybeUninit<u8>] as *mut [u8]) };
+                    unsafe { &mut *(dst as *mut _ as *mut [core::mem::MaybeUninit<u8>] as *mut [u8]) };
 
                 // Safety: We trust `UnixDatagram::recv_from` to have filled up `n` bytes in the
                 // buffer.
@@ -996,7 +996,7 @@ impl UnixDatagram {
             self.io.registration().try_io(Interest::READABLE, || {
                 let dst = buf.chunk_mut();
                 let dst =
-                    unsafe { &mut *(dst as *mut _ as *mut [std::mem::MaybeUninit<u8>] as *mut [u8]) };
+                    unsafe { &mut *(dst as *mut _ as *mut [core::mem::MaybeUninit<u8>] as *mut [u8]) };
 
                 // Safety: We trust `UnixDatagram::recv` to have filled up `n` bytes in the
                 // buffer.
@@ -1017,7 +1017,7 @@ impl UnixDatagram {
         ///
         /// # Examples
         /// ```
-        /// # use std::error::Error;
+        /// # use core::error::Error;
         /// # #[tokio::main]
         /// # async fn main() -> Result<(), Box<dyn Error>> {
         /// # if cfg!(miri) { return Ok(()); } // No SOCK_DGRAM for `socketpair` in miri.
@@ -1044,7 +1044,7 @@ impl UnixDatagram {
             self.io.registration().async_io(Interest::READABLE, || {
                 let dst = buf.chunk_mut();
                 let dst =
-                    unsafe { &mut *(dst as *mut _ as *mut [std::mem::MaybeUninit<u8>] as *mut [u8]) };
+                    unsafe { &mut *(dst as *mut _ as *mut [core::mem::MaybeUninit<u8>] as *mut [u8]) };
 
                 // Safety: We trust `UnixDatagram::recv_from` to have filled up `n` bytes in the
                 // buffer.
@@ -1068,7 +1068,7 @@ impl UnixDatagram {
     ///
     /// # Examples
     /// ```
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn Error>> {
     /// # if cfg!(miri) { return Ok(()); } // No `socket` in miri.
@@ -1119,7 +1119,7 @@ impl UnixDatagram {
     ///
     /// # Examples
     /// ```
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn Error>> {
     /// # if cfg!(miri) { return Ok(()); } // No `socket` in miri.
@@ -1185,7 +1185,7 @@ impl UnixDatagram {
         let (n, addr) = ready!(self.io.registration().poll_read_io(cx, || {
             // Safety: will not read the maybe uninitialized bytes.
             let b = unsafe {
-                &mut *(buf.unfilled_mut() as *mut [std::mem::MaybeUninit<u8>] as *mut [u8])
+                &mut *(buf.unfilled_mut() as *mut [core::mem::MaybeUninit<u8>] as *mut [u8])
             };
 
             self.io.recv_from(b)
@@ -1287,7 +1287,7 @@ impl UnixDatagram {
         let n = ready!(self.io.registration().poll_read_io(cx, || {
             // Safety: will not read the maybe uninitialized bytes.
             let b = unsafe {
-                &mut *(buf.unfilled_mut() as *mut [std::mem::MaybeUninit<u8>] as *mut [u8])
+                &mut *(buf.unfilled_mut() as *mut [core::mem::MaybeUninit<u8>] as *mut [u8])
             };
 
             self.io.recv(b)
@@ -1436,7 +1436,7 @@ impl UnixDatagram {
     /// # Examples
     /// For a socket bound to a local path
     /// ```
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn Error>> {
     /// # if cfg!(miri) { return Ok(()); } // No `socket` in miri.
@@ -1459,7 +1459,7 @@ impl UnixDatagram {
     ///
     /// For an unbound socket
     /// ```
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn Error>> {
     /// # if cfg!(miri) { return Ok(()); } // No `socket` in miri.
@@ -1484,7 +1484,7 @@ impl UnixDatagram {
     /// # Examples
     /// For a peer with a local path
     /// ```
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn Error>> {
     /// # if cfg!(miri) { return Ok(()); } // No `socket` in miri.
@@ -1510,7 +1510,7 @@ impl UnixDatagram {
     ///
     /// For an unbound peer
     /// ```
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn Error>> {
     /// # if cfg!(miri) { return Ok(()); } // No SOCK_DGRAM for `socketpair` in miri.
@@ -1532,7 +1532,7 @@ impl UnixDatagram {
     ///
     /// # Examples
     /// ```
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn Error>> {
     /// # if cfg!(miri) { return Ok(()); } // No `socket` in miri.
@@ -1560,7 +1560,7 @@ impl UnixDatagram {
     ///
     /// # Examples
     /// ```
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn Error>> {
     /// # if cfg!(miri) { return Ok(()); } // No SOCK_DGRAM for `socketpair` in miri.

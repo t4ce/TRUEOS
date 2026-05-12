@@ -46,7 +46,7 @@ impl<K, V> BucketArray<K, V> {
         {
             use debug_counters::InternalGlobalDebugCounters as Counters;
 
-            let size = (buckets.len() * std::mem::size_of::<Atomic<Bucket<K, V>>>()) as u64;
+            let size = (buckets.len() * core::mem::size_of::<Atomic<Bucket<K, V>>>()) as u64;
             Counters::bucket_array_created(size);
         }
 
@@ -71,7 +71,7 @@ impl<K, V> Drop for BucketArray<K, V> {
     fn drop(&mut self) {
         use debug_counters::InternalGlobalDebugCounters as Counters;
 
-        let size = (self.buckets.len() * std::mem::size_of::<Atomic<Bucket<K, V>>>()) as u64;
+        let size = (self.buckets.len() * core::mem::size_of::<Atomic<Bucket<K, V>>>()) as u64;
         Counters::bucket_array_dropped(size);
     }
 }
@@ -436,7 +436,7 @@ impl<'g, K: 'g, V: 'g> BucketArray<K, V> {
             Ok(lk) => lk,
             Err(TryLockError::WouldBlock) => {
                 // Wait until the lock become available.
-                std::mem::drop(self.rehash_lock.lock());
+                core::mem::drop(self.rehash_lock.lock());
                 // We need to return here to see if rehashing is still needed.
                 return None;
             }
@@ -508,7 +508,7 @@ impl<'g, K: 'g, V: 'g> BucketArray<K, V> {
         }
 
         guard.flush();
-        std::mem::drop(lock);
+        core::mem::drop(lock);
 
         Some(next_array)
     }

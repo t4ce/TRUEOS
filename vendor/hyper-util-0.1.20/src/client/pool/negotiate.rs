@@ -10,11 +10,11 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+//! # async fn run() -> Result<(), Box<dyn core::error::Error>> {
 //! # struct Conn;
 //! # impl Conn { fn negotiated_protocol(&self) -> &[u8] { b"h2" } }
 //! # let some_tls_connector = tower::service::service_fn(|_| async move {
-//! #     Ok::<_, std::convert::Infallible>(Conn)
+//! #     Ok::<_, core::convert::Infallible>(Conn)
 //! # });
 //! # let http1_layer = tower::layer::layer_fn(|s| s);
 //! # let http2_layer = tower::layer::layer_fn(|s| s);
@@ -46,16 +46,16 @@ pub use self::internal::Negotiate;
 pub use self::internal::Negotiated;
 
 mod internal {
-    use std::future::Future;
-    use std::pin::Pin;
+    use core::future::Future;
+    use core::pin::Pin;
     use std::sync::{Arc, Mutex};
-    use std::task::{self, ready, Poll};
+    use core::task::{self, ready, Poll};
 
     use pin_project_lite::pin_project;
     use tower_layer::Layer;
     use tower_service::Service;
 
-    type BoxError = Box<dyn std::error::Error + Send + Sync>;
+    type BoxError = Box<dyn core::error::Error + Send + Sync>;
 
     /// A negotiating pool over an inner make service.
     ///
@@ -277,7 +277,7 @@ mod internal {
                     dst: Some(dst),
                 },
                 // place clone, take original that we already polled-ready.
-                left: std::mem::replace(&mut self.left, left),
+                left: core::mem::replace(&mut self.left, left),
                 right: self.right.clone(),
             }
         }
@@ -508,7 +508,7 @@ mod internal {
     impl<S, Target> Service<Target> for Inspected<S> {
         type Response = S;
         type Error = BoxError;
-        type Future = std::future::Ready<Result<S, BoxError>>;
+        type Future = core::future::Ready<Result<S, BoxError>>;
 
         fn poll_ready(&mut self, _cx: &mut task::Context<'_>) -> Poll<Result<(), Self::Error>> {
             if self.slot.lock().unwrap().is_some() {
@@ -525,7 +525,7 @@ mod internal {
                 .unwrap()
                 .take()
                 .ok_or_else(|| UseOther.into());
-            std::future::ready(s)
+            core::future::ready(s)
         }
     }
 
@@ -540,16 +540,16 @@ mod internal {
     #[derive(Debug)]
     struct UseOther;
 
-    impl std::fmt::Display for UseOther {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    impl core::fmt::Display for UseOther {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             f.write_str("sentinel error; using other")
         }
     }
 
-    impl std::error::Error for UseOther {}
+    impl core::error::Error for UseOther {}
 
     impl UseOther {
-        fn is(err: &(dyn std::error::Error + 'static)) -> bool {
+        fn is(err: &(dyn core::error::Error + 'static)) -> bool {
             let mut source = Some(err);
             while let Some(err) = source {
                 if err.is::<UseOther>() {
@@ -579,7 +579,7 @@ mod tests {
             .upgrade(layer_fn(|s| s))
             .build();
 
-        std::future::poll_fn(|cx| negotiate.poll_ready(cx))
+        core::future::poll_fn(|cx| negotiate.poll_ready(cx))
             .await
             .unwrap();
 
@@ -604,7 +604,7 @@ mod tests {
             .upgrade(layer_fn(|s| s))
             .build();
 
-        std::future::poll_fn(|cx| negotiate.poll_ready(cx))
+        core::future::poll_fn(|cx| negotiate.poll_ready(cx))
             .await
             .unwrap();
 

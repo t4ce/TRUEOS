@@ -2,7 +2,7 @@
 #[path = "../support.rs"]
 mod support;
 
-use std::future;
+use core::future;
 
 use tokio_test::{assert_pending, assert_ready_err, assert_ready_ok, task};
 use tower::retry::Policy;
@@ -115,7 +115,7 @@ async fn retry_mutating_policy() {
 type Req = &'static str;
 type Res = &'static str;
 type InnerError = &'static str;
-type Error = Box<dyn std::error::Error + Send + Sync>;
+type Error = Box<dyn core::error::Error + Send + Sync>;
 type Mock = mock::Mock<Req, Res>;
 type Handle = mock::Handle<Req, Res>;
 

@@ -1,4 +1,4 @@
-use std::future::Future;
+use core::future::Future;
 
 pub(crate) trait InstrumentedFuture: Future {
     fn id(&self) -> Option<tracing::Id>;

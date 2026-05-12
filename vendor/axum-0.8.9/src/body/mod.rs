@@ -39,7 +39,7 @@ use http_body_util::{BodyExt, Limited};
 /// match to_bytes(body, 1).await {
 ///     Ok(_bytes) => panic!("should have hit the limit"),
 ///     Err(err) => {
-///         let source = std::error::Error::source(&err).unwrap();
+///         let source = core::error::Error::source(&err).unwrap();
 ///         assert!(source.is::<LengthLimitError>());
 ///     }
 /// }

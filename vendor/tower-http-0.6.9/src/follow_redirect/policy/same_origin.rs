@@ -1,5 +1,5 @@
 use super::{eq_origin, Action, Attempt, Policy};
-use std::fmt;
+use core::fmt;
 
 /// A redirection [`Policy`] that stops cross-origin redirections.
 #[derive(Clone, Copy, Default)]

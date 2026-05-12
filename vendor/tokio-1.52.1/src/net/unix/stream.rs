@@ -5,8 +5,8 @@ use crate::net::unix::ucred::{self, UCred};
 use crate::net::unix::SocketAddr;
 use crate::util::check_socket_for_blocking;
 
-use std::fmt;
-use std::future::poll_fn;
+use core::fmt;
+use core::future::poll_fn;
 use std::io::{self, Read, Write};
 use std::net::Shutdown;
 #[cfg(target_os = "android")]
@@ -18,8 +18,8 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::io::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, RawFd};
 use std::os::unix::net::{self, SocketAddr as StdSocketAddr};
 use std::path::Path;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 cfg_io_util! {
     use bytes::BufMut;
@@ -125,7 +125,7 @@ impl UnixStream {
     /// ```no_run
     /// use tokio::io::Interest;
     /// use tokio::net::UnixStream;
-    /// use std::error::Error;
+    /// use core::error::Error;
     /// use std::io;
     ///
     /// #[tokio::main]
@@ -194,7 +194,7 @@ impl UnixStream {
     ///
     /// ```no_run
     /// use tokio::net::UnixStream;
-    /// use std::error::Error;
+    /// use core::error::Error;
     /// use std::io;
     ///
     /// #[tokio::main]
@@ -296,7 +296,7 @@ impl UnixStream {
     ///
     /// ```no_run
     /// use tokio::net::UnixStream;
-    /// use std::error::Error;
+    /// use core::error::Error;
     /// use std::io;
     ///
     /// #[tokio::main]
@@ -369,7 +369,7 @@ impl UnixStream {
     ///
     /// ```no_run
     /// use tokio::net::UnixStream;
-    /// use std::error::Error;
+    /// use core::error::Error;
     /// use std::io::{self, IoSliceMut};
     ///
     /// #[tokio::main]
@@ -442,7 +442,7 @@ impl UnixStream {
         ///
         /// ```no_run
         /// use tokio::net::UnixStream;
-        /// use std::error::Error;
+        /// use core::error::Error;
         /// use std::io;
         ///
         /// #[tokio::main]
@@ -483,7 +483,7 @@ impl UnixStream {
 
                 let dst = buf.chunk_mut();
                 let dst =
-                    unsafe { &mut *(dst as *mut _ as *mut [std::mem::MaybeUninit<u8>] as *mut [u8]) };
+                    unsafe { &mut *(dst as *mut _ as *mut [core::mem::MaybeUninit<u8>] as *mut [u8]) };
 
                 // Safety: We trust `UnixStream::read` to have filled up `n` bytes in the
                 // buffer.
@@ -514,7 +514,7 @@ impl UnixStream {
     ///
     /// ```no_run
     /// use tokio::net::UnixStream;
-    /// use std::error::Error;
+    /// use core::error::Error;
     /// use std::io;
     ///
     /// #[tokio::main]
@@ -602,7 +602,7 @@ impl UnixStream {
     ///
     /// ```no_run
     /// use tokio::net::UnixStream;
-    /// use std::error::Error;
+    /// use core::error::Error;
     /// use std::io;
     ///
     /// #[tokio::main]
@@ -662,7 +662,7 @@ impl UnixStream {
     ///
     /// ```no_run
     /// use tokio::net::UnixStream;
-    /// use std::error::Error;
+    /// use core::error::Error;
     /// use std::io;
     ///
     /// #[tokio::main]
@@ -803,7 +803,7 @@ impl UnixStream {
     /// ```no_run
     /// use tokio::net::UnixStream;
     /// use std::os::unix::net::UnixStream as StdUnixStream;
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     ///
     /// # async fn dox() -> Result<(), Box<dyn Error>> {
     /// let std_stream = StdUnixStream::connect("/path/to/the/socket")?;
@@ -840,7 +840,7 @@ impl UnixStream {
     /// # Examples
     ///
     /// ```
-    /// use std::error::Error;
+    /// use core::error::Error;
     /// use std::io::Read;
     /// use tokio::net::UnixListener;
     /// # use tokio::net::UnixStream;
@@ -902,7 +902,7 @@ impl UnixStream {
     /// ```no_run
     /// use tokio::net::UnixStream;
     ///
-    /// # async fn dox() -> Result<(), Box<dyn std::error::Error>> {
+    /// # async fn dox() -> Result<(), Box<dyn core::error::Error>> {
     /// let dir = tempfile::tempdir().unwrap();
     /// let bind_path = dir.path().join("bind_path");
     /// let stream = UnixStream::connect(bind_path).await?;
@@ -922,7 +922,7 @@ impl UnixStream {
     /// ```no_run
     /// use tokio::net::UnixStream;
     ///
-    /// # async fn dox() -> Result<(), Box<dyn std::error::Error>> {
+    /// # async fn dox() -> Result<(), Box<dyn core::error::Error>> {
     /// let dir = tempfile::tempdir().unwrap();
     /// let bind_path = dir.path().join("bind_path");
     /// let stream = UnixStream::connect(bind_path).await?;

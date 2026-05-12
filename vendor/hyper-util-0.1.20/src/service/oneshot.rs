@@ -1,7 +1,7 @@
 use pin_project_lite::pin_project;
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{ready, Context, Poll};
+use core::future::Future;
+use core::pin::Pin;
+use core::task::{ready, Context, Poll};
 use tower_service::Service;
 
 // Vendored from tower::util to reduce dependencies, the code is small enough.

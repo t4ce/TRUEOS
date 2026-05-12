@@ -3,10 +3,10 @@ use alloc::vec;
 use alloc::vec::Vec;
 use std::collections::hash_map::RandomState;
 use std::collections::HashMap;
-use std::convert::TryFrom;
-use std::hash::{BuildHasher, Hash, Hasher};
-use std::iter::{FromIterator, FusedIterator};
-use std::marker::PhantomData;
+use core::convert::TryFrom;
+use core::hash::{BuildHasher, Hash, Hasher};
+use core::iter::{FromIterator, FusedIterator};
+use core::marker::PhantomData;
 use std::{fmt, mem, ops, ptr};
 
 use crate::Error;
@@ -155,7 +155,7 @@ pub struct IntoIter<T> {
 /// associated value.
 #[derive(Debug)]
 pub struct Keys<'a, T> {
-    inner: ::std::slice::Iter<'a, Bucket<T>>,
+    inner: ::core::slice::Iter<'a, Bucket<T>>,
 }
 
 /// `HeaderMap` value iterator.
@@ -2060,7 +2060,7 @@ impl<T> FromIterator<(HeaderName, T)> for HeaderMap<T> {
 ///
 /// ```
 /// use std::collections::HashMap;
-/// use std::convert::TryInto;
+/// use core::convert::TryInto;
 /// use http::HeaderMap;
 ///
 /// let mut map = HashMap::new();
@@ -3686,7 +3686,7 @@ impl FnvHasher {
     }
 }
 
-impl std::hash::Hasher for FnvHasher {
+impl core::hash::Hasher for FnvHasher {
     #[inline]
     fn finish(&self) -> u64 {
         self.0

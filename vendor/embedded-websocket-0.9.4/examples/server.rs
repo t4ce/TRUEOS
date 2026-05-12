@@ -10,7 +10,7 @@
 
 use embedded_websocket as ws;
 use std::net::{TcpListener, TcpStream};
-use std::str::Utf8Error;
+use core::str::Utf8Error;
 use std::thread;
 use std::{
     io::{Read, Write},

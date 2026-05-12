@@ -3,7 +3,7 @@ use crate::engine::{general_purpose::STANDARD, DecodeEstimate, Engine};
 use alloc::vec::Vec;
 use core::fmt;
 #[cfg(any(feature = "std", test))]
-use std::error;
+use core::error;
 
 /// Errors that can occur while decoding.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -345,7 +345,7 @@ mod tests {
 #[cfg(test)]
 mod coverage_gaming {
     use super::*;
-    use std::error::Error;
+    use core::error::Error;
 
     #[test]
     fn decode_error() {

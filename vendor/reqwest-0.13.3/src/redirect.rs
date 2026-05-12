@@ -4,7 +4,7 @@
 //! maximum redirect chain of 10 hops. To customize this behavior, a
 //! `redirect::Policy` can be used with a `ClientBuilder`.
 
-use std::fmt;
+use core::fmt;
 use std::{error::Error as StdError, sync::Arc};
 
 use crate::header::{AUTHORIZATION, COOKIE, PROXY_AUTHORIZATION, REFERER, WWW_AUTHENTICATE};

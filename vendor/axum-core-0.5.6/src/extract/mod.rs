@@ -6,8 +6,8 @@
 
 use crate::{body::Body, response::IntoResponse};
 use http::request::Parts;
-use std::convert::Infallible;
-use std::future::Future;
+use core::convert::Infallible;
+use core::future::Future;
 
 pub mod rejection;
 

@@ -182,7 +182,7 @@ unsafe impl Send for Device {}
 impl Device {
     pub(crate) fn new(info: &DeviceInfo, ctx: Arc<Context>) -> Result<Self> {
         let raw = info.raw;
-        let mut handle = std::ptr::null_mut();
+        let mut handle = core::ptr::null_mut();
         usb!(libusb_open(raw, &mut handle))?;
 
         let desc = info.desc.clone();

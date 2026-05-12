@@ -19,7 +19,7 @@ use tower_service::Service;
 ///
 /// ```
 /// use tower::{Service, ServiceBuilder, BoxError, util::BoxCloneService};
-/// use std::time::Duration;
+/// use core::time::Duration;
 /// #
 /// # struct Request;
 /// # struct Response;

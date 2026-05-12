@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::iter::Iterator;
+use core::iter::Iterator;
 
 fn main() {
     println!("pub const INVALID_VALUE: u8 = 255;");

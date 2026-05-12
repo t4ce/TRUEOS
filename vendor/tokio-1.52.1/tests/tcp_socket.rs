@@ -10,7 +10,7 @@
     not(miri)
 ))]
 
-use std::time::Duration;
+use core::time::Duration;
 use tokio::net::TcpSocket;
 use tokio_test::assert_ok;
 

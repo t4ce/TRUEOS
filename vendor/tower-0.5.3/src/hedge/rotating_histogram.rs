@@ -1,5 +1,5 @@
 use hdrhistogram::Histogram;
-use std::time::Duration;
+use core::time::Duration;
 use tokio::time::Instant;
 use tracing::trace;
 
@@ -53,7 +53,7 @@ impl RotatingHistogram {
     }
 
     fn rotate(&mut self) {
-        std::mem::swap(&mut self.read, &mut self.write);
+        core::mem::swap(&mut self.read, &mut self.write);
         trace!("Rotated {:?} points into read", self.read.len());
         self.write.clear();
     }

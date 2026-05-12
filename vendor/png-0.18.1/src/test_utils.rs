@@ -86,7 +86,7 @@ pub fn generate_rgba8_with_width_and_height(width: u32, height: u32) -> Vec<u8> 
         });
         row.extend(row_pixels);
 
-        std::iter::repeat(row)
+        core::iter::repeat(row)
             .take(height as usize)
             .flatten()
             .collect::<Vec<_>>()

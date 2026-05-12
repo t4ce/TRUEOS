@@ -16,11 +16,11 @@ use tokio::try_join;
 use tokio_test::task;
 use tokio_test::{assert_ok, assert_pending, assert_ready_ok};
 
-use std::future::poll_fn;
+use core::future::poll_fn;
 use std::io;
-use std::task::Poll;
+use core::task::Poll;
 #[cfg(not(target_os = "wasi"))]
-use std::time::Duration;
+use core::time::Duration;
 
 #[tokio::test]
 #[cfg(not(target_os = "wasi"))] // WASI does not yet support `SO_LINGER`
@@ -179,7 +179,7 @@ async fn try_read_write() {
 
 #[test]
 fn buffer_not_included_in_future() {
-    use std::mem;
+    use core::mem;
 
     const N: usize = 4096;
 

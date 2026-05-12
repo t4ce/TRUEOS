@@ -1,8 +1,8 @@
 use super::Balance;
 use crate::discover::Discover;
 use pin_project_lite::pin_project;
-use std::hash::Hash;
-use std::marker::PhantomData;
+use core::hash::Hash;
+use core::marker::PhantomData;
 use std::{
     fmt,
     future::Future,

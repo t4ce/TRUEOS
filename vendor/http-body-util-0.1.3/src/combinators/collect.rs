@@ -26,7 +26,7 @@ pin_project! {
 impl<T: Body + ?Sized> Future for Collect<T> {
     type Output = Result<crate::Collected<T::Data>, T::Error>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> std::task::Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> core::task::Poll<Self::Output> {
         let mut me = self.project();
 
         loop {

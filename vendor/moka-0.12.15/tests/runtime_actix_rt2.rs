@@ -7,7 +7,7 @@ use moka::future::Cache;
 use tokio::sync::Barrier;
 
 #[actix_rt::test]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<(), Box<dyn core::error::Error>> {
     const NUM_TASKS: usize = 12;
     const NUM_THREADS: usize = 4;
     const NUM_KEYS_PER_TASK: usize = 64;

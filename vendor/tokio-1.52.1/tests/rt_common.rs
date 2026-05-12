@@ -78,14 +78,14 @@ rt_test! {
     use tokio_test::assert_err;
     use tokio_test::assert_ok;
 
-    use std::future::{poll_fn, Future};
-    use std::pin::Pin;
+    use core::future::{poll_fn, Future};
+    use core::pin::Pin;
 
     #[cfg(not(target_os="wasi"))]
     use std::sync::mpsc;
 
     use std::sync::Arc;
-    use std::task::{Context, Poll};
+    use core::task::{Context, Poll};
 
     #[cfg(not(target_os="wasi"))]
     use std::thread;
@@ -664,9 +664,9 @@ rt_test! {
                 loop {
                     // Don't use Tokio's `yield_now()` to avoid special defer
                     // logic.
-                    std::future::poll_fn::<(), _>(|cx| {
+                    core::future::poll_fn::<(), _>(|cx| {
                         cx.waker().wake_by_ref();
-                        std::task::Poll::Pending
+                        core::task::Poll::Pending
                     }).await;
                 }
             });
@@ -717,7 +717,7 @@ rt_test! {
             }
 
             // Wait a bit and run the test again.
-            std::thread::sleep(std::time::Duration::from_secs(2));
+            std::thread::sleep(core::time::Duration::from_secs(2));
         }
 
         panic!("yield_defers_until_park is failing consistently");
@@ -735,7 +735,7 @@ rt_test! {
             }
 
             // Wait a bit and run the test again.
-            std::thread::sleep(std::time::Duration::from_secs(2));
+            std::thread::sleep(core::time::Duration::from_secs(2));
         }
 
         panic!("yield_defers_until_park is failing consistently");
@@ -766,7 +766,7 @@ rt_test! {
                     barrier.wait();
 
                     while !flag.load(SeqCst) {
-                        std::thread::sleep(std::time::Duration::from_millis(1));
+                        std::thread::sleep(core::time::Duration::from_millis(1));
                     }
                 });
             }
@@ -1077,7 +1077,7 @@ rt_test! {
         let runtime = rt();
 
         runtime.block_on(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            tokio::time::sleep(core::time::Duration::from_millis(100)).await;
         });
 
         Arc::try_unwrap(runtime).unwrap().shutdown_timeout(Duration::from_secs(10_000));
@@ -1090,7 +1090,7 @@ rt_test! {
     #[cfg(not(windows))]
     #[cfg_attr(target_os = "wasi", ignore = "Wasi does not support threads")]
     fn runtime_in_thread_local() {
-        use std::cell::RefCell;
+        use core::cell::RefCell;
         use std::thread;
 
         thread_local!(
@@ -1198,7 +1198,7 @@ rt_test! {
 
     #[test]
     fn coop() {
-        use std::task::Poll::Ready;
+        use core::task::Poll::Ready;
         use tokio::sync::mpsc;
 
         let rt = rt();
@@ -1226,7 +1226,7 @@ rt_test! {
 
     #[test]
     fn coop_unconstrained() {
-        use std::task::Poll::Ready;
+        use core::task::Poll::Ready;
         use tokio::sync::mpsc;
 
         let rt = rt();
@@ -1270,7 +1270,7 @@ rt_test! {
                 // to finish the whole work (assuming the total budget of 128)
                 assert!(Pin::new(&mut worker).poll(cx).is_pending());
                 assert!(*counter_clone.lock().unwrap() < 1000);
-                std::task::Poll::Ready(())
+                core::task::Poll::Ready(())
             }).await;
         });
     }
@@ -1387,9 +1387,9 @@ rt_test! {
     }
 
     fn wake_from_thread_local(by_ref: bool) {
-        use std::cell::RefCell;
+        use core::cell::RefCell;
         use std::sync::mpsc::{channel, Sender};
-        use std::task::Waker;
+        use core::task::Waker;
 
         struct TLData {
             by_ref: bool,

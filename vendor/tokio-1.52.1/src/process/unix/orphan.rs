@@ -135,7 +135,7 @@ pub(crate) mod test {
     use crate::runtime::io::Driver as IoDriver;
     use crate::runtime::signal::{Driver as SignalDriver, Handle as SignalHandle};
     use crate::sync::watch;
-    use std::cell::{Cell, RefCell};
+    use core::cell::{Cell, RefCell};
     use std::io;
     use std::os::unix::process::ExitStatusExt;
     use std::process::ExitStatus;

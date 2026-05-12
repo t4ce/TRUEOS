@@ -18,7 +18,7 @@
 //! }
 //!
 //! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # async fn main() -> Result<(), Box<dyn core::error::Error>> {
 //! let mut service = ServiceBuilder::new()
 //!     // Mark the `Authorization` header as sensitive so it doesn't show in logs
 //!     //
@@ -59,13 +59,13 @@
 //! # use http::{Request, Response};
 //! # use bytes::Bytes;
 //! # use http_body_util::Full;
-//! # use std::convert::Infallible;
+//! # use core::convert::Infallible;
 //! # async fn handle(req: Request<Full<Bytes>>) -> Result<Response<Full<Bytes>>, Infallible> {
 //! #     Ok(Response::new(Full::default()))
 //! # }
 //!
 //! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # async fn main() -> Result<(), Box<dyn core::error::Error>> {
 //! let headers: Arc<[_]> = Arc::new([
 //!     header::AUTHORIZATION,
 //!     header::PROXY_AUTHORIZATION,

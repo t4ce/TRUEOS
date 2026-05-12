@@ -49,7 +49,7 @@ pub(crate) use waker::Waker;
 cfg_io_source! {
     use std::io;
     use std::os::windows::io::RawSocket;
-    use std::pin::Pin;
+    use core::pin::Pin;
     use std::sync::{Arc, Mutex};
 
     use crate::{Interest, Registry, Token};

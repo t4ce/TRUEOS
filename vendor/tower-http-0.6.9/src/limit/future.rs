@@ -3,9 +3,9 @@ use super::ResponseBody;
 use http::Response;
 use http_body::Body;
 use pin_project_lite::pin_project;
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{ready, Context, Poll};
+use core::future::Future;
+use core::pin::Pin;
+use core::task::{ready, Context, Poll};
 
 pin_project! {
     /// Response future for [`RequestBodyLimit`].

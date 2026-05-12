@@ -1126,7 +1126,7 @@ mod tests {
     }
 
     #[test]
-    fn invalidate_entries_if() -> Result<(), Box<dyn std::error::Error>> {
+    fn invalidate_entries_if() -> Result<(), Box<dyn core::error::Error>> {
         use std::collections::{HashMap, HashSet};
 
         const SEGMENTS: usize = 4;
@@ -1302,7 +1302,7 @@ mod tests {
                             // TODO: Update keys in a random order?
                             cache.insert(key, make_value(key));
                         }
-                        std::mem::drop(read_lock);
+                        core::mem::drop(read_lock);
                     })
                 } else {
                     // This thread will iterate the cache.
@@ -1315,14 +1315,14 @@ mod tests {
                         }
                         // Ensure there are no missing or duplicate keys in the iteration.
                         assert_eq!(key_set.len(), NUM_KEYS);
-                        std::mem::drop(read_lock);
+                        core::mem::drop(read_lock);
                     })
                 }
             })
             .collect::<Vec<_>>();
 
         // Let these threads to run by releasing the write lock.
-        std::mem::drop(write_lock);
+        core::mem::drop(write_lock);
 
         handles.into_iter().for_each(|h| h.join().expect("Failed"));
 
@@ -1557,7 +1557,7 @@ mod tests {
         pub struct MyError(String);
 
         impl Display for MyError {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 write!(f, "{}", self.0)
             }
         }
@@ -1906,7 +1906,7 @@ mod tests {
         assert_eq!(counters.invalidated(), MAX_CAPACITY, "invalidated");
         assert_eq!(counters.value_dropped(), KEYS, "value_dropped");
 
-        std::mem::drop(cache);
+        core::mem::drop(cache);
         assert_eq!(counters.value_dropped(), KEYS, "value_dropped");
     }
 
@@ -1933,9 +1933,9 @@ mod tests {
         actual: Arc<Mutex<Vec<NotificationTriple<K, V>>>>,
         expected: &[NotificationTriple<K, V>],
     ) where
-        K: std::hash::Hash + Eq + std::fmt::Debug + Send + Sync + 'static,
-        V: Eq + std::fmt::Debug + Clone + Send + Sync + 'static,
-        S: std::hash::BuildHasher + Clone + Send + Sync + 'static,
+        K: core::hash::Hash + Eq + core::fmt::Debug + Send + Sync + 'static,
+        V: Eq + core::fmt::Debug + Clone + Send + Sync + 'static,
+        S: core::hash::BuildHasher + Clone + Send + Sync + 'static,
     {
         // Retries will be needed when testing in a QEMU VM.
         const MAX_RETRIES: usize = 5;
@@ -1968,9 +1968,9 @@ mod tests {
         actual: Arc<Mutex<std::collections::HashMap<Arc<K>, NotificationPair<V>>>>,
         expected: &std::collections::HashMap<Arc<K>, NotificationPair<V>>,
     ) where
-        K: std::hash::Hash + Eq + std::fmt::Display + Send + Sync + 'static,
-        V: Eq + std::fmt::Debug + Clone + Send + Sync + 'static,
-        S: std::hash::BuildHasher + Clone + Send + Sync + 'static,
+        K: core::hash::Hash + Eq + core::fmt::Display + Send + Sync + 'static,
+        V: Eq + core::fmt::Debug + Clone + Send + Sync + 'static,
+        S: core::hash::BuildHasher + Clone + Send + Sync + 'static,
     {
         // Retries will be needed when testing in a QEMU VM.
         const MAX_RETRIES: usize = 5;

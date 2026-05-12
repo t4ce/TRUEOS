@@ -1,7 +1,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
-use std::convert::TryFrom;
-use std::str::FromStr;
+use core::convert::TryFrom;
+use core::str::FromStr;
 use std::{cmp, fmt, hash, str};
 
 use bytes::Bytes;

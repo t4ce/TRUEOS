@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use alloc::{boxed::Box, string::String, vec::Vec};
-use std::mem;
+use core::mem;
 use alloc::sync::Arc;
 
 use fontdb::{Database, ID};

@@ -1,4 +1,4 @@
-use std::ffi::{c_int, c_void};
+use core::ffi::{c_int, c_void};
 
 use bytes::Bytes;
 
@@ -89,7 +89,7 @@ ffi_fn! {
     /// `hyper_request_free` or `hyper_clientconn_send`.
     fn hyper_request_new() -> *mut hyper_request {
         Box::into_raw(Box::new(hyper_request(Request::new(IncomingBody::empty()))))
-    } ?= std::ptr::null_mut()
+    } ?= core::ptr::null_mut()
 }
 
 ffi_fn! {
@@ -106,7 +106,7 @@ ffi_fn! {
     /// Set the HTTP Method of the request.
     fn hyper_request_set_method(req: *mut hyper_request, method: *const u8, method_len: size_t) -> hyper_code {
         let bytes = unsafe {
-            std::slice::from_raw_parts(method, method_len as usize)
+            core::slice::from_raw_parts(method, method_len as usize)
         };
         let req = non_null!(&mut *req ?= hyper_code::HYPERE_INVALID_ARG);
         match Method::from_bytes(bytes) {
@@ -138,7 +138,7 @@ ffi_fn! {
     /// To set each slot explicitly, use `hyper_request_set_uri_parts`.
     fn hyper_request_set_uri(req: *mut hyper_request, uri: *const u8, uri_len: size_t) -> hyper_code {
         let bytes = unsafe {
-            std::slice::from_raw_parts(uri, uri_len as usize)
+            core::slice::from_raw_parts(uri, uri_len as usize)
         };
         let req = non_null!(&mut *req ?= hyper_code::HYPERE_INVALID_ARG);
         match Uri::from_maybe_shared(bytes) {
@@ -173,19 +173,19 @@ ffi_fn! {
         let mut builder = Uri::builder();
         if !scheme.is_null() {
             let scheme_bytes = unsafe {
-                std::slice::from_raw_parts(scheme, scheme_len as usize)
+                core::slice::from_raw_parts(scheme, scheme_len as usize)
             };
             builder = builder.scheme(scheme_bytes);
         }
         if !authority.is_null() {
             let authority_bytes = unsafe {
-                std::slice::from_raw_parts(authority, authority_len as usize)
+                core::slice::from_raw_parts(authority, authority_len as usize)
             };
             builder = builder.authority(authority_bytes);
         }
         if !path_and_query.is_null() {
             let path_and_query_bytes = unsafe {
-                std::slice::from_raw_parts(path_and_query, path_and_query_len as usize)
+                core::slice::from_raw_parts(path_and_query, path_and_query_len as usize)
             };
             builder = builder.path_and_query(path_and_query_bytes);
         }
@@ -233,9 +233,9 @@ ffi_fn! {
     /// This is not an owned reference, so it should not be accessed after the
     /// `hyper_request` has been consumed.
     fn hyper_request_headers(req: *mut hyper_request) -> *mut hyper_headers {
-        let req = non_null!(&mut *req ?= std::ptr::null_mut());
+        let req = non_null!(&mut *req ?= core::ptr::null_mut());
         hyper_headers::get_or_default(req.0.extensions_mut())
-    } ?= std::ptr::null_mut()
+    } ?= core::ptr::null_mut()
 }
 
 ffi_fn! {
@@ -329,8 +329,8 @@ ffi_fn! {
     /// Use `hyper_response_reason_phrase_len()` to get the length of this
     /// buffer.
     fn hyper_response_reason_phrase(resp: *const hyper_response) -> *const u8 {
-        non_null!(&*resp ?= std::ptr::null()).reason_phrase().as_ptr()
-    } ?= std::ptr::null()
+        non_null!(&*resp ?= core::ptr::null()).reason_phrase().as_ptr()
+    } ?= core::ptr::null()
 }
 
 ffi_fn! {
@@ -369,9 +369,9 @@ ffi_fn! {
     /// This is not an owned reference, so it should not be accessed after the
     /// `hyper_response` has been freed.
     fn hyper_response_headers(resp: *mut hyper_response) -> *mut hyper_headers {
-        let resp = non_null!(&mut *resp ?= std::ptr::null_mut());
+        let resp = non_null!(&mut *resp ?= core::ptr::null_mut());
         hyper_headers::get_or_default(resp.0.extensions_mut())
-    } ?= std::ptr::null_mut()
+    } ?= core::ptr::null_mut()
 }
 
 ffi_fn! {
@@ -382,14 +382,14 @@ ffi_fn! {
     /// To avoid a memory leak, the body must eventually be consumed by
     /// `hyper_body_free`, `hyper_body_foreach`, or `hyper_request_set_body`.
     fn hyper_response_body(resp: *mut hyper_response) -> *mut hyper_body {
-        let body = std::mem::replace(non_null!(&mut *resp ?= std::ptr::null_mut()).0.body_mut(), IncomingBody::empty());
+        let body = core::mem::replace(non_null!(&mut *resp ?= core::ptr::null_mut()).0.body_mut(), IncomingBody::empty());
         Box::into_raw(Box::new(hyper_body(body)))
-    } ?= std::ptr::null_mut()
+    } ?= core::ptr::null_mut()
 }
 
 impl hyper_response {
     pub(super) fn wrap(mut resp: Response<IncomingBody>) -> hyper_response {
-        let headers = std::mem::take(resp.headers_mut());
+        let headers = core::mem::take(resp.headers_mut());
         let orig_casing = resp
             .extensions_mut()
             .remove::<HeaderCaseMap>()
@@ -561,13 +561,13 @@ unsafe fn raw_name_value(
     value: *const u8,
     value_len: size_t,
 ) -> Result<(HeaderName, HeaderValue, Bytes), hyper_code> {
-    let name = std::slice::from_raw_parts(name, name_len);
+    let name = core::slice::from_raw_parts(name, name_len);
     let orig_name = Bytes::copy_from_slice(name);
     let name = match HeaderName::from_bytes(name) {
         Ok(name) => name,
         Err(_) => return Err(hyper_code::HYPERE_INVALID_ARG),
     };
-    let value = std::slice::from_raw_parts(value, value_len);
+    let value = core::slice::from_raw_parts(value, value_len);
     let value = match HeaderValue::from_bytes(value) {
         Ok(val) => val,
         Err(_) => return Err(hyper_code::HYPERE_INVALID_ARG),
@@ -629,8 +629,8 @@ mod tests {
         ) -> c_int {
             unsafe {
                 let vec = &mut *(vec as *mut Vec<u8>);
-                let name = std::slice::from_raw_parts(name, name_len);
-                let value = std::slice::from_raw_parts(value, value_len);
+                let name = core::slice::from_raw_parts(name, name_len);
+                let value = core::slice::from_raw_parts(value, value_len);
                 vec.extend(name);
                 vec.extend(b": ");
                 vec.extend(value);
@@ -678,7 +678,7 @@ mod tests {
         let mut vec = Vec::<u8>::new();
         hyper_headers_foreach(&headers, concat, &mut vec as *mut _ as *mut c_void);
 
-        println!("{}", std::str::from_utf8(&vec).unwrap());
+        println!("{}", core::str::from_utf8(&vec).unwrap());
         assert_eq!(
             vec,
             b"Set-CookiE: a=b\r\nContent-Encoding: gzip\r\nSET-COOKIE: c=d\r\n"
@@ -693,8 +693,8 @@ mod tests {
         ) -> c_int {
             unsafe {
                 let vec = &mut *(vec as *mut Vec<u8>);
-                let name = std::slice::from_raw_parts(name, name_len);
-                let value = std::slice::from_raw_parts(value, value_len);
+                let name = core::slice::from_raw_parts(name, name_len);
+                let value = core::slice::from_raw_parts(value, value_len);
                 vec.extend(name);
                 vec.extend(b": ");
                 vec.extend(value);

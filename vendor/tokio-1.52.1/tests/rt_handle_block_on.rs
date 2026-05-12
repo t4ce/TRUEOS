@@ -7,7 +7,7 @@
 //
 // When this has been fixed we want to re-enable these tests.
 
-use std::time::Duration;
+use core::time::Duration;
 use tokio::runtime::{Handle, Runtime};
 use tokio::sync::mpsc;
 #[cfg(not(target_os = "wasi"))]

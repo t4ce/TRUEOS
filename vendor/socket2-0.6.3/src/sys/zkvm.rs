@@ -892,26 +892,26 @@ impl Drop for Socket {
     }
 }
 
-impl std::fmt::Debug for crate::Domain {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for crate::Domain {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_tuple("Domain").field(&self.0).finish()
     }
 }
 
-impl std::fmt::Debug for crate::Type {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for crate::Type {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_tuple("Type").field(&self.0).finish()
     }
 }
 
-impl std::fmt::Debug for crate::Protocol {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for crate::Protocol {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_tuple("Protocol").field(&self.0).finish()
     }
 }
 
-impl std::fmt::Debug for crate::RecvFlags {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for crate::RecvFlags {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_tuple("RecvFlags").field(&self.0).finish()
     }
 }

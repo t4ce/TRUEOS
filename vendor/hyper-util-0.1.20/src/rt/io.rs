@@ -1,10 +1,10 @@
-use std::marker::Unpin;
-use std::pin::Pin;
-use std::task::{ready, Poll};
+use core::marker::Unpin;
+use core::pin::Pin;
+use core::task::{ready, Poll};
 
 use hyper::rt::{Read, ReadBuf, Write};
 
-use std::future::poll_fn;
+use core::future::poll_fn;
 
 pub(crate) async fn read<T>(io: &mut T, buf: &mut [u8]) -> Result<usize, std::io::Error>
 where

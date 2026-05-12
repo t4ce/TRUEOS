@@ -18,9 +18,9 @@
 use self::extension::{AllocatedExtension, InlineExtension};
 use self::Inner::*;
 
-use std::convert::TryFrom;
+use core::convert::TryFrom;
 use core::error::Error;
-use std::str::FromStr;
+use core::str::FromStr;
 use std::{fmt, str};
 
 /// The Request Method (VERB)
@@ -310,7 +310,7 @@ mod extension {
     use alloc::vec::Vec;
 
     use super::InvalidMethod;
-    use std::str;
+    use core::str;
 
     #[derive(Clone, PartialEq, Eq, Hash)]
     // Invariant: the first self.1 bytes of self.0 are valid UTF-8.

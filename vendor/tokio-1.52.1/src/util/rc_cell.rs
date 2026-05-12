@@ -47,7 +47,7 @@ impl<T> RcCell<T> {
     pub(crate) fn replace(&self, val: Option<Rc<T>>) -> Option<Rc<T>> {
         // safety: No destructors or other unknown user-code will run inside the
         // `with_inner` call, so no recursive call to `with_inner` can happen.
-        unsafe { self.with_inner(|rc| std::mem::replace(rc, val)) }
+        unsafe { self.with_inner(|rc| core::mem::replace(rc, val)) }
     }
 
     pub(crate) fn set(&self, val: Option<Rc<T>>) {

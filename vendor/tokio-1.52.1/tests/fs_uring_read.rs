@@ -9,12 +9,12 @@
 ))]
 
 use futures::future::Future;
-use std::future::poll_fn;
+use core::future::poll_fn;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::mpsc;
-use std::task::{Context, Poll, Waker};
-use std::time::Duration;
+use core::task::{Context, Poll, Waker};
+use core::time::Duration;
 use tempfile::NamedTempFile;
 use tokio::fs::read;
 use tokio::runtime::{Builder, Runtime};

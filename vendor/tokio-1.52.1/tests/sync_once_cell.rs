@@ -1,10 +1,10 @@
 #![warn(rust_2018_idioms)]
 #![cfg(feature = "full")]
 
-use std::mem;
+use core::mem;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use core::time::Duration;
 use tokio::runtime;
 use tokio::sync::OnceCell;
 use tokio::sync::SetError;

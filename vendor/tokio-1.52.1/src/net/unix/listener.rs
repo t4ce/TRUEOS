@@ -2,7 +2,7 @@ use crate::io::{Interest, PollEvented};
 use crate::net::unix::{SocketAddr, UnixStream};
 use crate::util::check_socket_for_blocking;
 
-use std::fmt;
+use core::fmt;
 use std::io;
 #[cfg(target_os = "android")]
 use std::os::android::net::SocketAddrExt;
@@ -13,7 +13,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::io::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, RawFd};
 use std::os::unix::net::{self, SocketAddr as StdSocketAddr};
 use std::path::Path;
-use std::task::{ready, Context, Poll};
+use core::task::{ready, Context, Poll};
 
 cfg_net_unix! {
     /// A Unix socket which can accept connections from other Unix sockets.
@@ -118,7 +118,7 @@ impl UnixListener {
     /// ```no_run
     /// use tokio::net::UnixListener;
     /// use std::os::unix::net::UnixListener as StdUnixListener;
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     ///
     /// # async fn dox() -> Result<(), Box<dyn Error>> {
     /// let std_listener = StdUnixListener::bind("/path/to/the/socket")?;
@@ -153,7 +153,7 @@ impl UnixListener {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     /// # async fn dox() -> Result<(), Box<dyn Error>> {
     /// let tokio_listener = tokio::net::UnixListener::bind("/path/to/the/socket")?;
     /// let std_listener = tokio_listener.into_std()?;

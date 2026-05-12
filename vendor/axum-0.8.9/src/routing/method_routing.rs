@@ -41,7 +41,7 @@ macro_rules! top_level_service_fn {
             ///     body::Body,
             /// };
             /// use http::Response;
-            /// use std::convert::Infallible;
+            /// use core::convert::Infallible;
             ///
             /// let service = tower::service_fn(|request: Request| async {
             ///     Ok::<_, Infallible>(Response::new(Body::empty()))
@@ -190,7 +190,7 @@ macro_rules! chained_service_fn {
             ///     body::Body,
             /// };
             /// use http::Response;
-            /// use std::convert::Infallible;
+            /// use core::convert::Infallible;
             ///
             /// let service = tower::service_fn(|request: Request| async {
             ///     Ok::<_, Infallible>(Response::new(Body::empty()))
@@ -355,7 +355,7 @@ top_level_service_fn!(trace_service, TRACE);
 ///     routing::{MethodFilter, on_service},
 /// };
 /// use http::Response;
-/// use std::convert::Infallible;
+/// use core::convert::Infallible;
 ///
 /// let service = tower::service_fn(|request: Request| async {
 ///     Ok::<_, Infallible>(Response::new(Body::empty()))
@@ -387,7 +387,7 @@ where
 ///     body::Body,
 /// };
 /// use http::Response;
-/// use std::convert::Infallible;
+/// use core::convert::Infallible;
 ///
 /// let service = tower::service_fn(|request: Request| async {
 ///     Ok::<_, Infallible>(Response::new(Body::empty()))
@@ -408,7 +408,7 @@ where
 ///     body::Body,
 /// };
 /// use http::Response;
-/// use std::convert::Infallible;
+/// use core::convert::Infallible;
 ///
 /// let service = tower::service_fn(|request: Request| async {
 ///     # Ok::<_, Infallible>(Response::new(Body::empty()))
@@ -799,7 +799,7 @@ where
     ///     body::Body,
     /// };
     /// use http::Response;
-    /// use std::convert::Infallible;
+    /// use core::convert::Infallible;
     ///
     /// let service = tower::service_fn(|request: Request| async {
     ///     Ok::<_, Infallible>(Response::new(Body::empty()))
@@ -1182,7 +1182,7 @@ fn append_allow_header(allow_header: &mut AllowHeader, method: &'static str) {
         }
         AllowHeader::Skip => {}
         AllowHeader::Bytes(allow_header) => {
-            if let Ok(s) = std::str::from_utf8(allow_header) {
+            if let Ok(s) = core::str::from_utf8(allow_header) {
                 if !s.contains(method) {
                     allow_header.extend_from_slice(b",");
                     allow_header.extend_from_slice(method.as_bytes());
@@ -1329,14 +1329,14 @@ const _: () = {
     {
         type Response = Self;
         type Error = Infallible;
-        type Future = std::future::Ready<Result<Self::Response, Self::Error>>;
+        type Future = core::future::Ready<Result<Self::Response, Self::Error>>;
 
         fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
         }
 
         fn call(&mut self, _req: serve::IncomingStream<'_, L>) -> Self::Future {
-            std::future::ready(Ok(self.clone().with_state(())))
+            core::future::ready(Ok(self.clone().with_state(())))
         }
     }
 };
@@ -1416,7 +1416,7 @@ mod tests {
     #[crate::test]
     async fn layer() {
         let mut svc = MethodRouter::new()
-            .get(|| async { std::future::pending::<()>().await })
+            .get(|| async { core::future::pending::<()>().await })
             .layer(ValidateRequestHeaderLayer::bearer("password"));
 
         // method with route
@@ -1432,7 +1432,7 @@ mod tests {
     #[crate::test]
     async fn route_layer() {
         let mut svc = MethodRouter::new()
-            .get(|| async { std::future::pending::<()>().await })
+            .get(|| async { core::future::pending::<()>().await })
             .route_layer(ValidateRequestHeaderLayer::bearer("password"));
 
         // method with route

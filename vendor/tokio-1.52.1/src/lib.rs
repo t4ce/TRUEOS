@@ -279,7 +279,7 @@
 //! use tokio::io::{AsyncReadExt, AsyncWriteExt};
 //!
 //! #[tokio::main]
-//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! async fn main() -> Result<(), Box<dyn core::error::Error>> {
 //!     let listener = TcpListener::bind("127.0.0.1:8080").await?;
 //!
 //!     loop {
@@ -581,14 +581,14 @@ mod trace {
     cfg_not_taskdump! {
         #[inline(always)]
         #[allow(dead_code)]
-        pub(crate) fn trace_leaf(_: &mut std::task::Context<'_>) -> std::task::Poll<()> {
-            std::task::Poll::Ready(())
+        pub(crate) fn trace_leaf(_: &mut core::task::Context<'_>) -> core::task::Poll<()> {
+            core::task::Poll::Ready(())
         }
     }
 
     #[cfg_attr(not(feature = "sync"), allow(dead_code))]
     pub(crate) async fn async_trace_leaf() {
-        std::future::poll_fn(trace_leaf).await
+        core::future::poll_fn(trace_leaf).await
     }
 }
 

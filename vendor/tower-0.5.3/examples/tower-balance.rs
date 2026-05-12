@@ -4,8 +4,8 @@ use futures_core::{Stream, TryStream};
 use futures_util::{stream, stream::StreamExt, stream::TryStreamExt};
 use hdrhistogram::Histogram;
 use pin_project_lite::pin_project;
-use std::hash::Hash;
-use std::time::Duration;
+use core::hash::Hash;
+use core::time::Duration;
 use std::{
     pin::Pin,
     task::{Context, Poll},
@@ -73,7 +73,7 @@ async fn main() {
     run("P2C+LeastLoaded...", ll).await;
 }
 
-type Error = Box<dyn std::error::Error + Send + Sync>;
+type Error = Box<dyn core::error::Error + Send + Sync>;
 
 type Key = usize;
 
@@ -146,7 +146,7 @@ where
     D::Service: Service<Req, Response = Rsp> + load::Load + Send,
     <D::Service as Service<Req>>::Error: Into<Error>,
     <D::Service as Service<Req>>::Future: Send,
-    <D::Service as load::Load>::Metric: std::fmt::Debug,
+    <D::Service as load::Load>::Metric: core::fmt::Debug,
 {
     println!("{name}");
 

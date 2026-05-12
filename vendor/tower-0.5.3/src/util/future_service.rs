@@ -1,4 +1,4 @@
-use std::fmt;
+use core::fmt;
 use std::{
     future::Future,
     pin::Pin,
@@ -15,7 +15,7 @@ use tower_service::Service;
 /// ```
 /// use tower::{service_fn, Service, ServiceExt};
 /// use tower::util::future_service;
-/// use std::convert::Infallible;
+/// use core::convert::Infallible;
 ///
 /// # fn main() {
 /// # async {
@@ -71,7 +71,7 @@ impl<F, S> FutureService<F, S> {
     /// ```
     /// use tower::{service_fn, Service, ServiceExt};
     /// use tower::util::FutureService;
-    /// use std::convert::Infallible;
+    /// use core::convert::Infallible;
     ///
     /// # fn main() {
     /// # async {
@@ -133,7 +133,7 @@ where
         match self {
             State::Future(_) => f
                 .debug_tuple("State::Future")
-                .field(&format_args!("<{}>", std::any::type_name::<F>()))
+                .field(&format_args!("<{}>", core::any::type_name::<F>()))
                 .finish(),
             State::Service(svc) => f.debug_tuple("State::Service").field(svc).finish(),
         }
@@ -154,7 +154,7 @@ where
             self.state = match &mut self.state {
                 State::Future(fut) => {
                     let fut = Pin::new(fut);
-                    let svc = std::task::ready!(fut.poll(cx)?);
+                    let svc = core::task::ready!(fut.poll(cx)?);
                     State::Service(svc)
                 }
                 State::Service(svc) => return svc.poll_ready(cx),

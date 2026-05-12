@@ -214,7 +214,7 @@ pub trait BodyExt: http_body::Body {
     fn with_trailers<F>(self, trailers: F) -> combinators::WithTrailers<Self, F>
     where
         Self: Sized,
-        F: std::future::Future<Output = Option<Result<http::HeaderMap, Self::Error>>>,
+        F: core::future::Future<Output = Option<Result<http::HeaderMap, Self::Error>>>,
     {
         combinators::WithTrailers::new(self, trailers)
     }

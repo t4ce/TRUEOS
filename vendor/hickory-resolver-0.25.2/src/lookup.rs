@@ -467,7 +467,7 @@ lookup_type!(NsLookup, NsLookupIter, NsLookupIntoIter, RData::NS, NS);
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
+    use core::str::FromStr;
     use std::sync::Arc;
 
     #[cfg(feature = "__dnssec")]

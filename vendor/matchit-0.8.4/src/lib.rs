@@ -4,7 +4,7 @@ A high performance, zero-copy URL router.
 ```rust
 use matchit::Router;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn core::error::Error>> {
     let mut router = Router::new();
     router.insert("/home", "Welcome!")?;
     router.insert("/users/{id}", "A User")?;
@@ -26,7 +26,7 @@ by a `/` or the end of the route. Dynamic suffixes are not currently supported.
 
 ```rust
 # use matchit::Router;
-# fn main() -> Result<(), Box<dyn std::error::Error>> {
+# fn main() -> Result<(), Box<dyn core::error::Error>> {
 let mut m = Router::new();
 m.insert("/users/{id}", true)?;
 
@@ -41,7 +41,7 @@ Catch-all parameters start with `*` and match anything until the end of the path
 
 ```rust
 # use matchit::Router;
-# fn main() -> Result<(), Box<dyn std::error::Error>> {
+# fn main() -> Result<(), Box<dyn core::error::Error>> {
 let mut m = Router::new();
 m.insert("/{*p}", true)?;
 
@@ -58,7 +58,7 @@ The literal characters `{` and `}` may be included in a static route by escaping
 
 ```rust
 # use matchit::Router;
-# fn main() -> Result<(), Box<dyn std::error::Error>> {
+# fn main() -> Result<(), Box<dyn core::error::Error>> {
 let mut m = Router::new();
 m.insert("/{{hello}}", true)?;
 m.insert("/{hello}", true)?;
@@ -78,7 +78,7 @@ Static and dynamic route segments are allowed to overlap. If they do, static seg
 
 ```rust
 # use matchit::Router;
-# fn main() -> Result<(), Box<dyn std::error::Error>> {
+# fn main() -> Result<(), Box<dyn core::error::Error>> {
 let mut m = Router::new();
 m.insert("/", "Welcome!").unwrap();      // priority: 1
 m.insert("/about", "About Me").unwrap(); // priority: 1

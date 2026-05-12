@@ -221,7 +221,7 @@ macro_rules! doc {
         /// a reference to the future. Doing so requires the future to be [`Unpin`]. A
         /// future can be made [`Unpin`] by either using [`Box::pin`] or stack pinning.
         ///
-        /// [`Unpin`]: std::marker::Unpin
+        /// [`Unpin`]: core::marker::Unpin
         /// [`Box::pin`]: std::boxed::Box::pin
         ///
         /// Here, a stream is consumed for at most 1 second.
@@ -461,7 +461,7 @@ macro_rules! doc {
         /// unintended behavior like data loss.
         ///
         /// ```
-        /// use std::pin::pin;
+        /// use core::pin::pin;
         ///
         /// use futures::stream::unfold;
         /// use tokio_stream::StreamExt;

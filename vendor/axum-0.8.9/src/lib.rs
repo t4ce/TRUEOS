@@ -467,7 +467,7 @@
 //! [axum-macros]: https://docs.rs/axum-macros
 //! [`debug_handler`]: https://docs.rs/axum-macros/latest/axum_macros/attr.debug_handler.html
 //! [`Handler`]: crate::handler::Handler
-//! [`Infallible`]: std::convert::Infallible
+//! [`Infallible`]: core::convert::Infallible
 //! [load shed]: tower::load_shed
 //! [`axum-core`]: http://crates.io/crates/axum-core
 //! [`State`]: crate::extract::State

@@ -5,7 +5,7 @@ use crate::common::{
     CacheRegion,
 };
 
-use std::ptr::NonNull;
+use core::ptr::NonNull;
 use tagptr::TagNonNull;
 
 pub(crate) struct Deques<K> {

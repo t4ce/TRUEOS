@@ -1,6 +1,6 @@
 use super::{ClassifiedResponse, ClassifyEos, ClassifyResponse};
 use http::{HeaderMap, Response};
-use std::fmt;
+use core::fmt;
 
 /// Response classifier that transforms the failure class of some other
 /// classifier.
@@ -26,7 +26,7 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MapFailureClass")
             .field("inner", &self.inner)
-            .field("f", &format_args!("{}", std::any::type_name::<F>()))
+            .field("f", &format_args!("{}", core::any::type_name::<F>()))
             .finish()
     }
 }
@@ -54,7 +54,7 @@ where
 
     fn classify_error<E>(self, error: &E) -> Self::FailureClass
     where
-        E: std::fmt::Display + 'static,
+        E: core::fmt::Display + 'static,
     {
         (self.f)(self.inner.classify_error(error))
     }
@@ -73,7 +73,7 @@ where
 
     fn classify_error<E>(self, error: &E) -> Self::FailureClass
     where
-        E: std::fmt::Display + 'static,
+        E: core::fmt::Display + 'static,
     {
         (self.f)(self.inner.classify_error(error))
     }

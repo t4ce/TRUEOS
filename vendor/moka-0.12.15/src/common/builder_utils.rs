@@ -1,4 +1,4 @@
-use std::time::Duration;
+use core::time::Duration;
 
 const YEAR_SECONDS: u64 = 365 * 24 * 3600;
 

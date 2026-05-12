@@ -11,7 +11,7 @@ use crate::fs::trueos::{TrueosDirEntry as StdDirEntry, TrueosReadDir as StdReadD
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{ready, Context, Poll};
-use std::ffi::OsString;
+use core::ffi::OsString;
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::fs::{FileType, Metadata};
 use std::io;

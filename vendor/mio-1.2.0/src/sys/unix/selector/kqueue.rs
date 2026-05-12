@@ -1,8 +1,8 @@
-use std::mem;
-use std::mem::MaybeUninit;
-use std::ops::{Deref, DerefMut};
+use core::mem;
+use core::mem::MaybeUninit;
+use core::ops::{Deref, DerefMut};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
-use std::slice;
+use core::slice;
 #[cfg(debug_assertions)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use core::time::Duration;
@@ -385,7 +385,7 @@ unsafe impl Send for Events {}
 unsafe impl Sync for Events {}
 
 pub mod event {
-    use std::fmt;
+    use core::fmt;
 
     use crate::sys::Event;
     use crate::Token;

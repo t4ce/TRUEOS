@@ -8,7 +8,7 @@ use http::{header, Method, Response};
 use http::{Request, StatusCode};
 use http_body::Body as HttpBody;
 use http_body_util::BodyExt;
-use std::convert::Infallible;
+use core::convert::Infallible;
 use std::fs;
 use std::io::Read;
 use tower::{service_fn, ServiceExt};
@@ -467,7 +467,7 @@ async fn empty_directory_without_index_no_information_leak() {
 async fn body_into_text<B>(body: B) -> String
 where
     B: HttpBody<Data = bytes::Bytes> + Unpin,
-    B::Error: std::fmt::Debug,
+    B::Error: core::fmt::Debug,
 {
     let bytes = to_bytes(body).await.unwrap();
     String::from_utf8(bytes.to_vec()).unwrap()
@@ -884,7 +884,7 @@ fn verify_windows_device(name: &str, is_positive: bool) {
     use std::os::windows::io::AsRawHandle;
 
     extern "system" {
-        fn GetFileType(hFile: *mut std::ffi::c_void) -> u32;
+        fn GetFileType(hFile: *mut core::ffi::c_void) -> u32;
     }
     const FILE_TYPE_CHAR: u32 = 0x0002;
 

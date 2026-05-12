@@ -1,8 +1,8 @@
-use std::fmt;
+use core::fmt;
 #[cfg(all(feature = "http1", any(feature = "client", feature = "server")))]
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::future::Future;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 use bytes::Bytes;
 #[cfg(all(feature = "http1", any(feature = "client", feature = "server")))]
@@ -459,9 +459,9 @@ impl fmt::Debug for Sender {
 #[cfg(test)]
 mod tests {
     #[cfg(all(feature = "http1", any(feature = "client", feature = "server")))]
-    use std::mem;
+    use core::mem;
     #[cfg(all(feature = "http1", any(feature = "client", feature = "server")))]
-    use std::task::Poll;
+    use core::task::Poll;
 
     #[cfg(all(feature = "http1", any(feature = "client", feature = "server")))]
     use super::{Body, Incoming, SizeHint};

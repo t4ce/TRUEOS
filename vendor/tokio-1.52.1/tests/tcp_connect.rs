@@ -199,7 +199,7 @@ mod linux {
 
     use futures_util::future::poll_fn;
     use std::io::Write;
-    use std::time::Duration;
+    use core::time::Duration;
     use std::{net, thread};
 
     #[tokio::test]

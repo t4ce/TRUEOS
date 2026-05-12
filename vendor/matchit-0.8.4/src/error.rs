@@ -1,7 +1,7 @@
 use crate::escape::{UnescapedRef, UnescapedRoute};
 use crate::tree::{denormalize_params, Node};
 
-use std::fmt;
+use core::fmt;
 
 /// Represents errors that can occur when inserting a new route.
 #[non_exhaustive]
@@ -47,7 +47,7 @@ impl fmt::Display for InsertError {
     }
 }
 
-impl std::error::Error for InsertError {}
+impl core::error::Error for InsertError {}
 
 impl InsertError {
     /// Returns an error for a route conflict with the given node.
@@ -101,7 +101,7 @@ impl InsertError {
 ///
 /// ```
 /// use matchit::{MatchError, Router};
-/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # fn main() -> Result<(), Box<dyn core::error::Error>> {
 /// let mut router = Router::new();
 /// router.insert("/home", "Welcome!")?;
 /// router.insert("/blog", "Our blog.")?;
@@ -124,4 +124,4 @@ impl fmt::Display for MatchError {
     }
 }
 
-impl std::error::Error for MatchError {}
+impl core::error::Error for MatchError {}

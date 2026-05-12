@@ -1,12 +1,12 @@
 //! Bindings to IOCP, I/O Completion Ports
 
 use super::{Handle, Overlapped};
-use std::cmp;
-use std::fmt;
+use core::cmp;
+use core::fmt;
 use std::io;
-use std::mem;
+use core::mem;
 use std::os::windows::io::*;
-use std::ptr::null_mut;
+use core::ptr::null_mut;
 use core::time::Duration;
 
 use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};

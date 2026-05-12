@@ -1293,7 +1293,7 @@ mod tests {
         input: &[u8],
     ) -> Result<Vec<u8>, TestDecompressionError> {
         let r_whole = decompress_by_chunks(input, vec![input.len()], false);
-        let r_bytewise = decompress_by_chunks(input, std::iter::repeat(1), false);
+        let r_bytewise = decompress_by_chunks(input, core::iter::repeat(1), false);
         assert_eq!(r_whole, r_bytewise);
         r_whole // Returning an arbitrary result, since this is equal to `r_bytewise`.
     }

@@ -1,7 +1,7 @@
-use std::error::Error as StdError;
-use std::fmt;
-use std::future::Future;
-use std::marker::PhantomData;
+use core::error::Error as StdError;
+use core::fmt;
+use core::future::Future;
+use core::marker::PhantomData;
 
 use crate::body::Body;
 use crate::service::service::Service;

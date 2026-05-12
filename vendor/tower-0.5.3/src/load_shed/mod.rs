@@ -1,6 +1,6 @@
 //! Middleware for shedding load when inner services aren't ready.
 
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 use tower_service::Service;
 
 pub mod error;

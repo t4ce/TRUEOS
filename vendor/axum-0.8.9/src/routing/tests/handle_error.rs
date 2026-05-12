@@ -1,5 +1,5 @@
 use super::*;
-use std::future::pending;
+use core::future::pending;
 use tower::timeout::TimeoutLayer;
 
 async fn unit() {}

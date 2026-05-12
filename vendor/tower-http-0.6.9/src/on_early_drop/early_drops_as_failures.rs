@@ -141,7 +141,7 @@ mod tests {
     use http::{Request, Response, StatusCode};
     use http_body_util::{BodyExt, Full};
     use std::sync::{Arc, Mutex};
-    use std::time::Duration;
+    use core::time::Duration;
     use tokio::time::{sleep, timeout};
     use tower::{service_fn, Layer, ServiceExt};
     use tracing::Span;
@@ -164,7 +164,7 @@ mod tests {
 
         let slow_service = service_fn(|_req: Request<()>| async move {
             sleep(Duration::from_secs(60)).await;
-            Ok::<_, std::convert::Infallible>(
+            Ok::<_, core::convert::Infallible>(
                 Response::builder()
                     .status(StatusCode::OK)
                     .body(Full::new(Bytes::new()))
@@ -194,13 +194,13 @@ mod tests {
         struct PendingBody;
         impl http_body::Body for PendingBody {
             type Data = Bytes;
-            type Error = std::convert::Infallible;
+            type Error = core::convert::Infallible;
             fn poll_frame(
-                self: std::pin::Pin<&mut Self>,
-                _cx: &mut std::task::Context<'_>,
-            ) -> std::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>>
+                self: core::pin::Pin<&mut Self>,
+                _cx: &mut core::task::Context<'_>,
+            ) -> core::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>>
             {
-                std::task::Poll::Pending
+                core::task::Poll::Pending
             }
             fn is_end_stream(&self) -> bool {
                 false
@@ -208,7 +208,7 @@ mod tests {
         }
 
         let service = service_fn(|_req: Request<()>| async move {
-            Ok::<_, std::convert::Infallible>(
+            Ok::<_, core::convert::Infallible>(
                 Response::builder()
                     .status(StatusCode::CREATED)
                     .body(PendingBody)
@@ -238,7 +238,7 @@ mod tests {
         let events = recorder.events.clone();
 
         let ok_service = service_fn(|_req: Request<()>| async move {
-            Ok::<_, std::convert::Infallible>(
+            Ok::<_, core::convert::Infallible>(
                 Response::builder()
                     .status(StatusCode::OK)
                     .body(Full::new(Bytes::from_static(b"hi")))

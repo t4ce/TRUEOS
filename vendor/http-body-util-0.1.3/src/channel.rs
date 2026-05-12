@@ -14,7 +14,7 @@ use tokio::sync::{mpsc, oneshot};
 
 pin_project! {
     /// A body backed by a channel.
-    pub struct Channel<D, E = std::convert::Infallible> {
+    pub struct Channel<D, E = core::convert::Infallible> {
         rx_frame: mpsc::Receiver<Frame<D>>,
         #[pin]
         rx_error: oneshot::Receiver<E>,
@@ -63,8 +63,8 @@ where
     }
 }
 
-impl<D, E: std::fmt::Debug> std::fmt::Debug for Channel<D, E> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<D, E: core::fmt::Debug> core::fmt::Debug for Channel<D, E> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Channel")
             .field("rx_frame", &self.rx_frame)
             .field("rx_error", &self.rx_error)
@@ -73,7 +73,7 @@ impl<D, E: std::fmt::Debug> std::fmt::Debug for Channel<D, E> {
 }
 
 /// A sender half created through [`Channel::new`].
-pub struct Sender<D, E = std::convert::Infallible> {
+pub struct Sender<D, E = core::convert::Infallible> {
     tx_frame: mpsc::Sender<Frame<D>>,
     tx_error: oneshot::Sender<E>,
 }
@@ -126,7 +126,7 @@ impl<D, E> Sender<D, E> {
     /// ```
     /// use bytes::Bytes;
     /// use http_body_util::{BodyExt, channel::Channel};
-    /// use std::convert::Infallible;
+    /// use core::convert::Infallible;
     ///
     /// #[tokio::main]
     /// async fn main() {
@@ -157,7 +157,7 @@ impl<D, E> Sender<D, E> {
     /// ```
     /// use bytes::Bytes;
     /// use http_body_util::{BodyExt, channel::Channel};
-    /// use std::convert::Infallible;
+    /// use core::convert::Infallible;
     ///
     /// #[tokio::main]
     /// async fn main() {
@@ -179,8 +179,8 @@ impl<D, E> Sender<D, E> {
     }
 }
 
-impl<D, E: std::fmt::Debug> std::fmt::Debug for Sender<D, E> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<D, E: core::fmt::Debug> core::fmt::Debug for Sender<D, E> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Sender")
             .field("tx_frame", &self.tx_frame)
             .field("tx_error", &self.tx_error)
@@ -194,12 +194,12 @@ impl<D, E: std::fmt::Debug> std::fmt::Debug for Sender<D, E> {
 pub struct SendError;
 
 impl Display for SendError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "failed to send frame")
     }
 }
 
-impl std::error::Error for SendError {}
+impl core::error::Error for SendError {}
 
 #[cfg(test)]
 mod tests {

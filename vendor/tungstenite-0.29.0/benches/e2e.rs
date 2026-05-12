@@ -77,8 +77,8 @@ fn benchmark(c: &mut Criterion) {
 
 struct HumanLen(usize);
 
-impl std::fmt::Display for HumanLen {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for HumanLen {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self.0 {
             n if n < 1024 => write!(f, "{n} B"),
             n if n < 1024 * 1024 => write!(f, "{} KiB", n / 1024),

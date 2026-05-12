@@ -1,6 +1,6 @@
-use std::cell::UnsafeCell;
-use std::fmt;
-use std::ops::Deref;
+use core::cell::UnsafeCell;
+use core::fmt;
+use core::ops::Deref;
 use std::panic;
 
 /// `AtomicU32` providing an additional `unsync_load` function.

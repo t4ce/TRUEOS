@@ -1,5 +1,5 @@
 use std::io;
-use std::mem;
+use core::mem;
 use std::net::SocketAddr;
 use std::sync::Once;
 

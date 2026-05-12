@@ -1,12 +1,12 @@
 //! HTTP/2 client connections
 
-use std::error::Error;
-use std::fmt;
-use std::future::Future;
-use std::marker::PhantomData;
-use std::pin::Pin;
+use core::error::Error;
+use core::fmt;
+use core::future::Future;
+use core::marker::PhantomData;
+use core::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 use core::time::Duration;
 
 use crate::rt::{Read, Write};
@@ -543,7 +543,7 @@ mod tests {
 
         impl<F> crate::rt::Executor<F> for LocalTokioExecutor
         where
-            F: std::future::Future + 'static, // not requiring `Send`
+            F: core::future::Future + 'static, // not requiring `Send`
         {
             fn execute(&self, fut: F) {
                 // This will spawn into the currently running `LocalSet`.
@@ -572,12 +572,12 @@ mod tests {
     async fn not_send_not_sync_executor_of_not_send_futures() {
         #[derive(Clone)]
         struct LocalTokioExecutor {
-            _x: std::marker::PhantomData<std::rc::Rc<()>>,
+            _x: core::marker::PhantomData<std::rc::Rc<()>>,
         }
 
         impl<F> crate::rt::Executor<F> for LocalTokioExecutor
         where
-            F: std::future::Future + 'static, // not requiring `Send`
+            F: core::future::Future + 'static, // not requiring `Send`
         {
             fn execute(&self, fut: F) {
                 // This will spawn into the currently running `LocalSet`.
@@ -608,12 +608,12 @@ mod tests {
     async fn send_not_sync_executor_of_not_send_futures() {
         #[derive(Clone)]
         struct LocalTokioExecutor {
-            _x: std::marker::PhantomData<std::cell::Cell<()>>,
+            _x: core::marker::PhantomData<core::cell::Cell<()>>,
         }
 
         impl<F> crate::rt::Executor<F> for LocalTokioExecutor
         where
-            F: std::future::Future + 'static, // not requiring `Send`
+            F: core::future::Future + 'static, // not requiring `Send`
         {
             fn execute(&self, fut: F) {
                 // This will spawn into the currently running `LocalSet`.
@@ -647,7 +647,7 @@ mod tests {
 
         impl<F> crate::rt::Executor<F> for TokioExecutor
         where
-            F: std::future::Future + 'static + Send,
+            F: core::future::Future + 'static + Send,
             F::Output: Send + 'static,
         {
             fn execute(&self, fut: F) {
@@ -677,12 +677,12 @@ mod tests {
         #[derive(Clone)]
         struct TokioExecutor {
             // !Sync
-            _x: std::marker::PhantomData<std::cell::Cell<()>>,
+            _x: core::marker::PhantomData<core::cell::Cell<()>>,
         }
 
         impl<F> crate::rt::Executor<F> for TokioExecutor
         where
-            F: std::future::Future + 'static + Send,
+            F: core::future::Future + 'static + Send,
             F::Output: Send + 'static,
         {
             fn execute(&self, fut: F) {

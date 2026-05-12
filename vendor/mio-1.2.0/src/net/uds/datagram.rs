@@ -131,7 +131,7 @@ impl UnixDatagram {
     /// # Examples
     ///
     /// ```
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     /// #
     /// # fn main() -> Result<(), Box<dyn Error>> {
     /// use std::io;

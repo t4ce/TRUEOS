@@ -8,7 +8,7 @@ use self::level::Level;
 use super::cancellation_queue::Sender;
 use super::{EntryHandle, EntryList, WakeQueue};
 
-use std::array;
+use core::array;
 
 /// Hashed timing wheel implementation.
 ///

@@ -1,10 +1,10 @@
 //! HTTP/1 client connections
 
-use std::error::Error as StdError;
-use std::fmt;
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::error::Error as StdError;
+use core::fmt;
+use core::future::Future;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 use crate::rt::{Read, Write};
 use bytes::Bytes;

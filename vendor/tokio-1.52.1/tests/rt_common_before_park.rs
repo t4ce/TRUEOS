@@ -78,7 +78,7 @@ fn wake_from_other_thread_block_on() {
 
     let th = std::thread::spawn(move || {
         // Give the main thread time to park
-        std::thread::sleep(std::time::Duration::from_millis(5));
+        std::thread::sleep(core::time::Duration::from_millis(5));
         handle.block_on(async move {
             notify2.notify_one();
         });

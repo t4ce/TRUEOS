@@ -18,7 +18,7 @@ impl Handle {
     pub fn into_raw(self) -> RawHandle {
         let ret = self.0;
         // This is super important so that drop is not called!
-        std::mem::forget(self);
+        core::mem::forget(self);
         ret as RawHandle
     }
 }

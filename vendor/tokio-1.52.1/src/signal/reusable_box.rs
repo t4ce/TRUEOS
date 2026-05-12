@@ -1,10 +1,10 @@
 use alloc::boxed::Box;
 use core::alloc::Layout;
-use std::future::Future;
+use core::future::Future;
 use std::panic::AssertUnwindSafe;
-use std::pin::Pin;
-use std::ptr::{self, NonNull};
-use std::task::{Context, Poll};
+use core::pin::Pin;
+use core::ptr::{self, NonNull};
+use core::task::{Context, Poll};
 use std::{fmt, panic};
 
 /// A reusable `Pin<Box<dyn Future<Output = T> + Send>>`.
@@ -159,9 +159,9 @@ mod test {
     use super::ReusableBoxFuture;
     use futures::future::FutureExt;
     use std::alloc::Layout;
-    use std::future::Future;
-    use std::pin::Pin;
-    use std::task::{Context, Poll};
+    use core::future::Future;
+    use core::pin::Pin;
+    use core::task::{Context, Poll};
 
     #[test]
     fn test_different_futures() {

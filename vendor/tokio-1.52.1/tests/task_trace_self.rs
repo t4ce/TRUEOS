@@ -6,11 +6,11 @@
     any(target_arch = "aarch64", target_arch = "x86", target_arch = "x86_64")
 ))]
 
-use std::future::Future;
-use std::pin::Pin;
-use std::ptr;
+use core::future::Future;
+use core::pin::Pin;
+use core::ptr;
 use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use tokio::runtime::dump::{trace_with, Root, Trace, TraceMeta};

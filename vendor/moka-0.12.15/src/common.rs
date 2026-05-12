@@ -1,4 +1,4 @@
-use std::time::Duration;
+use core::time::Duration;
 
 pub(crate) mod builder_utils;
 pub(crate) mod concurrent;

@@ -2,8 +2,8 @@
 #[path = "../support.rs"]
 mod support;
 
-use std::future::Future;
-use std::task::{Context, Poll};
+use core::future::Future;
+use core::task::{Context, Poll};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_test::{assert_pending, assert_ready, task};
 use tower::balance::p2c::Balance;
@@ -59,12 +59,12 @@ fn stress() {
                     }
                 } else {
                     // use a service
-                    use std::task::Poll;
+                    use core::task::Poll;
                     match task.enter(|cx, _| cache.poll_ready(cx)) {
                         Poll::Ready(Ok(())) => {
                             assert_ne!(nready, 0, "got ready when no service is ready");
                             let mut fut = cache.call("hello");
-                            let mut fut = std::pin::Pin::new(&mut fut);
+                            let mut fut = core::pin::Pin::new(&mut fut);
                             assert_pending!(task.enter(|cx, _| fut.as_mut().poll(cx)));
                             let mut found = false;
                             for (_, (handle, ready)) in &mut services {
@@ -157,7 +157,7 @@ fn stress() {
             nready -= 1;
         }
 
-        use std::task::Poll;
+        use core::task::Poll;
         match r {
             Poll::Ready(Ok(())) => {
                 assert_ne!(nready, 0, "got ready when no service is ready");

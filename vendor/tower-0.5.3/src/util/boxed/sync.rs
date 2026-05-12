@@ -4,7 +4,7 @@ use tower_service::Service;
 
 use sync_wrapper::SyncWrapper;
 
-use std::fmt;
+use core::fmt;
 use std::{
     future::Future,
     pin::Pin,
@@ -28,7 +28,7 @@ use std::{
 /// # Examples
 ///
 /// ```
-/// use std::future::ready;
+/// use core::future::ready;
 /// # use tower_service::Service;
 /// # use tower::util::{BoxService, service_fn};
 /// // Respond to requests using a closure, but closures cannot be named...

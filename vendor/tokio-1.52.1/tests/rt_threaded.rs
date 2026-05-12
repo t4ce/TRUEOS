@@ -8,12 +8,12 @@ use tokio::runtime;
 use tokio::sync::oneshot;
 use tokio_test::{assert_err, assert_ok, assert_pending};
 
-use std::future::{poll_fn, Future};
-use std::pin::Pin;
+use core::future::{poll_fn, Future};
+use core::pin::Pin;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
-use std::task::{Context, Poll, Waker};
+use core::task::{Context, Poll, Waker};
 
 macro_rules! cfg_metrics {
     ($($t:tt)*) => {
@@ -525,10 +525,10 @@ async fn hang_on_shutdown() {
     });
 
     tokio::spawn(async {
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        tokio::time::sleep(core::time::Duration::from_secs(2)).await;
         drop(sync_tx);
     });
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    tokio::time::sleep(core::time::Duration::from_secs(1)).await;
 }
 
 /// Demonstrates tokio-rs/tokio#3869
@@ -699,7 +699,7 @@ fn mutex_in_block_in_place() {
 // Integration test for: https://github.com/tokio-rs/tokio/issues/4941
 #[test]
 fn lifo_stealable() {
-    use std::time::Duration;
+    use core::time::Duration;
 
     // This test constructs a scenario where a task (the "blocker task")
     // notifies another task (the "victim task") and then blocks that worker
@@ -855,7 +855,7 @@ fn wake_deferred_tasks_before_block_in_place() {
 #[cfg(not(tokio_no_tuning_tests))]
 fn test_tuning() {
     use std::sync::atomic::AtomicBool;
-    use std::time::Duration;
+    use core::time::Duration;
 
     let rt = runtime::Builder::new_multi_thread()
         .worker_threads(1)
@@ -1019,7 +1019,7 @@ mod unstable {
         let (kill_bg_thread, recv) = channel::<()>();
         let handle = rt.handle().clone();
         let bg_thread = std::thread::spawn(move || {
-            let one_sec = std::time::Duration::from_secs(1);
+            let one_sec = core::time::Duration::from_secs(1);
             while recv.recv_timeout(one_sec) == Err(RecvTimeoutError::Timeout) {
                 handle.spawn(async {});
             }

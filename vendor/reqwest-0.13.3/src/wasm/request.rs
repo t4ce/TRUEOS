@@ -1,5 +1,5 @@
-use std::convert::TryFrom;
-use std::fmt;
+use core::convert::TryFrom;
+use core::fmt;
 use core::time::Duration;
 
 use bytes::Bytes;

@@ -26,14 +26,14 @@ pub(crate) mod future {
 }
 
 pub(crate) mod hint {
-    pub(crate) use std::hint::spin_loop;
+    pub(crate) use core::hint::spin_loop;
 }
 
 pub(crate) mod rand {
     #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     use std::collections::hash_map::RandomState;
     #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-    use std::hash::{BuildHasher, Hash, Hasher};
+    use core::hash::{BuildHasher, Hash, Hasher};
     use std::sync::atomic::AtomicU32;
     use std::sync::atomic::Ordering::Relaxed;
 
@@ -113,7 +113,7 @@ pub(crate) mod sys {
         not(any(target_os = "trueos", target_os = "zkvm"))
     ))]
     pub(crate) fn num_cpus() -> usize {
-        use std::num::NonZeroUsize;
+        use core::num::NonZeroUsize;
 
         const ENV_WORKER_THREADS: &str = "TOKIO_WORKER_THREADS";
 
@@ -143,7 +143,7 @@ pub(crate) mod sys {
 pub(crate) mod thread {
     #[inline]
     pub(crate) fn yield_now() {
-        std::hint::spin_loop();
+        core::hint::spin_loop();
     }
 
     #[allow(unused_imports)]

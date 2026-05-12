@@ -272,10 +272,10 @@ impl<T, S> Handler<private::IntoResponseHandler, S> for T
 where
     T: IntoResponse + Clone + Send + Sync + 'static,
 {
-    type Future = std::future::Ready<Response>;
+    type Future = core::future::Ready<Response>;
 
     fn call(self, _req: Request, _state: S) -> Self::Future {
-        std::future::ready(self.into_response())
+        core::future::ready(self.into_response())
     }
 }
 

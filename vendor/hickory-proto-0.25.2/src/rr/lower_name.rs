@@ -59,7 +59,7 @@ impl LowerName {
     /// # Examples
     ///
     /// ```
-    /// use std::str::FromStr;
+    /// use core::str::FromStr;
     /// use hickory_proto::rr::{LowerName, Name};
     ///
     /// let name = LowerName::from(Name::from_str("www").unwrap());
@@ -80,7 +80,7 @@ impl LowerName {
     /// # Examples
     ///
     /// ```
-    /// use std::str::FromStr;
+    /// use core::str::FromStr;
     /// use hickory_proto::rr::{LowerName, Name};
     ///
     /// let example_com = LowerName::from(Name::from_str("example.com").unwrap());
@@ -97,7 +97,7 @@ impl LowerName {
     /// # Example
     ///
     /// ```rust
-    /// use std::str::FromStr;
+    /// use core::str::FromStr;
     /// use hickory_proto::rr::{LowerName, Name};
     ///
     /// let name = LowerName::from(Name::from_str("www.example.com").unwrap());
@@ -115,7 +115,7 @@ impl LowerName {
     /// # Examples
     ///
     /// ```
-    /// use std::str::FromStr;
+    /// use core::str::FromStr;
     /// use hickory_proto::rr::{LowerName, Name};
     ///
     /// let root = LowerName::from(Name::root());

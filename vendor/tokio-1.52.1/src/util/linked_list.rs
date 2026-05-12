@@ -479,7 +479,7 @@ pub(crate) mod tests {
     use super::*;
 
     use alloc::{boxed::Box, vec, vec::Vec};
-    use std::pin::Pin;
+    use core::pin::Pin;
 
     #[derive(Debug)]
     #[repr(C)]

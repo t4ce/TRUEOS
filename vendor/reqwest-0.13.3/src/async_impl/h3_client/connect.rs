@@ -9,7 +9,7 @@ use hyper_util::client::legacy::connect::dns::Name;
 use quinn::crypto::rustls::QuicClientConfig;
 use quinn::{ClientConfig, Endpoint, TransportConfig};
 use std::net::{IpAddr, SocketAddr};
-use std::str::FromStr;
+use core::str::FromStr;
 use std::sync::Arc;
 
 type H3Connection = (

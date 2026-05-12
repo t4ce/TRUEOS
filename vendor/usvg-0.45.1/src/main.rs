@@ -408,7 +408,7 @@ fn process(args: Args) -> Result<(), String> {
         Some(p) => Some(
             std::fs::read(&p)
                 .ok()
-                .and_then(|s| std::str::from_utf8(&s).ok().map(|s| s.to_string()))
+                .and_then(|s| core::str::from_utf8(&s).ok().map(|s| s.to_string()))
                 .ok_or("failed to read stylesheet".to_string())?,
         ),
         None => None,

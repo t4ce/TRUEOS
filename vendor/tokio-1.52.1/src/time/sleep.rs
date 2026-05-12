@@ -176,9 +176,9 @@ pin_project! {
     /// Use in a struct with boxing. By pinning the `Sleep` with a `Box`, the
     /// `HasSleep` struct implements `Unpin`, even though `Sleep` does not.
     /// ```
-    /// use std::future::Future;
-    /// use std::pin::Pin;
-    /// use std::task::{Context, Poll};
+    /// use core::future::Future;
+    /// use core::pin::Pin;
+    /// use core::task::{Context, Poll};
     /// use tokio::time::Sleep;
     ///
     /// struct HasSleep {
@@ -196,9 +196,9 @@ pin_project! {
     /// Use in a struct with pin projection. This method avoids the `Box`, but
     /// the `HasSleep` struct will not be `Unpin` as a consequence.
     /// ```
-    /// use std::future::Future;
-    /// use std::pin::Pin;
-    /// use std::task::{Context, Poll};
+    /// use core::future::Future;
+    /// use core::pin::Pin;
+    /// use core::task::{Context, Poll};
     /// use tokio::time::Sleep;
     /// use pin_project_lite::pin_project;
     ///
@@ -350,7 +350,7 @@ impl Sleep {
     ///
     /// See also the top-level examples.
     ///
-    /// [`Pin::as_mut`]: fn@std::pin::Pin::as_mut
+    /// [`Pin::as_mut`]: fn@core::pin::Pin::as_mut
     pub fn reset(self: Pin<&mut Self>, deadline: Instant) {
         self.reset_inner(deadline);
     }

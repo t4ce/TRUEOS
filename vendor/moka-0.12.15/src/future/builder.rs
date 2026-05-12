@@ -29,7 +29,7 @@ use std::{
 /// // futures = "0.3"
 ///
 /// use moka::future::Cache;
-/// use std::time::Duration;
+/// use core::time::Duration;
 ///
 /// #[tokio::main]
 /// async fn main() {
@@ -313,7 +313,7 @@ impl<K, V, C> CacheBuilder<K, V, C> {
         let async_listener = move |k, v, c| {
             {
                 listener(k, v, c);
-                std::future::ready(())
+                core::future::ready(())
             }
             .boxed()
         };
@@ -434,7 +434,7 @@ impl<K, V, C> CacheBuilder<K, V, C> {
 mod tests {
     use super::CacheBuilder;
 
-    use std::time::Duration;
+    use core::time::Duration;
 
     #[tokio::test]
     async fn build_cache() {

@@ -1,6 +1,6 @@
-use std::cell::UnsafeCell;
-use std::fmt;
-use std::ops;
+use core::cell::UnsafeCell;
+use core::fmt;
+use core::ops;
 use std::panic;
 
 /// `AtomicUsize` providing an additional `unsync_load` function.

@@ -1,5 +1,5 @@
 use super::Timeout;
-use std::time::Duration;
+use core::time::Duration;
 use tower_layer::Layer;
 
 /// Applies a timeout to requests via the supplied inner service.

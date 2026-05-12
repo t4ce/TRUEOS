@@ -83,7 +83,7 @@ impl fmt::Display for NoMatchingMethodFilter {
     }
 }
 
-impl std::error::Error for NoMatchingMethodFilter {}
+impl core::error::Error for NoMatchingMethodFilter {}
 
 impl TryFrom<Method> for MethodFilter {
     type Error = NoMatchingMethodFilter;

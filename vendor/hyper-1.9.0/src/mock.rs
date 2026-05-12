@@ -2,7 +2,7 @@
 /*
 #[cfg(feature = "runtime")]
 use std::collections::HashMap;
-use std::cmp;
+use core::cmp;
 use std::io::{self, Read, Write};
 #[cfg(feature = "runtime")]
 use std::sync::{Arc, Mutex};

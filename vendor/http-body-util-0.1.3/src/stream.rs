@@ -143,7 +143,7 @@ mod tests {
     use bytes::Bytes;
     use futures_util::StreamExt;
     use http_body::Frame;
-    use std::convert::Infallible;
+    use core::convert::Infallible;
 
     #[tokio::test]
     async fn body_from_stream() {

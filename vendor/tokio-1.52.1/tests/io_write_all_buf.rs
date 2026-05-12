@@ -5,10 +5,10 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio_test::{assert_err, assert_ok};
 
 use bytes::{Buf, Bytes, BytesMut};
-use std::cmp;
+use core::cmp;
 use std::io;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 #[tokio::test]
 async fn write_all_buf() {

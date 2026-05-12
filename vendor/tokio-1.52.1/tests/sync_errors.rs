@@ -4,7 +4,7 @@
 #[cfg(all(target_family = "wasm", not(target_os = "wasi")))]
 use wasm_bindgen_test::wasm_bindgen_test as test;
 
-fn is_error<T: std::error::Error + Send + Sync>() {}
+fn is_error<T: core::error::Error + Send + Sync>() {}
 
 #[test]
 fn mpsc_error_bound() {

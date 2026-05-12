@@ -1,8 +1,8 @@
 use alloc::boxed::Box;
-use std::error::Error;
-use std::fmt::Debug;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::error::Error;
+use core::fmt::Debug;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 use bytes::Buf;
 use http_body::{Body, Frame, SizeHint};
@@ -106,8 +106,8 @@ pub(crate) mod proj {
     //! ```
     //!
     //! [pin-project-lite]: https://docs.rs/pin-project-lite/latest/pin_project_lite/
-    use std::marker::PhantomData;
-    use std::pin::Pin;
+    use core::marker::PhantomData;
+    use core::pin::Pin;
 
     use super::Either;
 

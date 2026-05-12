@@ -444,7 +444,7 @@ pub enum WeightedError {
 }
 
 #[cfg(feature = "std")]
-impl std::error::Error for WeightedError {}
+impl core::error::Error for WeightedError {}
 
 impl fmt::Display for WeightedError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

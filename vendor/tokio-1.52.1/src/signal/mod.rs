@@ -16,7 +16,7 @@
 //! use tokio::signal;
 //!
 //! #[tokio::main]
-//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! async fn main() -> Result<(), Box<dyn core::error::Error>> {
 //!     signal::ctrl_c().await?;
 //!     println!("ctrl-c received!");
 //!     Ok(())
@@ -30,7 +30,7 @@
 //! use tokio::signal::unix::{signal, SignalKind};
 //!
 //! #[tokio::main]
-//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! async fn main() -> Result<(), Box<dyn core::error::Error>> {
 //!     // An infinite stream of hangup signals.
 //!     let mut stream = signal(SignalKind::hangup())?;
 //!
@@ -43,7 +43,7 @@
 //! # }
 //! ```
 use crate::sync::watch::Receiver;
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 
 #[cfg(feature = "signal")]
 mod ctrl_c;
@@ -80,7 +80,7 @@ impl RxFuture {
     }
 
     async fn recv(&mut self) {
-        use std::future::poll_fn;
+        use core::future::poll_fn;
         poll_fn(|cx| self.poll_recv(cx)).await
     }
 

@@ -10,9 +10,9 @@
 //!
 //! [backoff]: https://en.wikipedia.org/wiki/Exponential_backoff
 
-use std::fmt::Display;
-use std::future::Future;
-use std::time::Duration;
+use core::fmt::Display;
+use core::future::Future;
+use core::time::Duration;
 use tokio::time;
 
 use crate::util::rng::{HasherRng, Rng};
@@ -200,12 +200,12 @@ impl Default for ExponentialBackoffMaker {
 pub struct InvalidBackoff(&'static str);
 
 impl Display for InvalidBackoff {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "invalid backoff: {}", self.0)
     }
 }
 
-impl std::error::Error for InvalidBackoff {}
+impl core::error::Error for InvalidBackoff {}
 
 #[cfg(test)]
 mod tests {

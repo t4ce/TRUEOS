@@ -4,7 +4,7 @@ use std::{
     task::{Context, Poll},
 };
 
-// TODO: replace with `std::future::poll_fn` once MSRV >= 1.64
+// TODO: replace with `core::future::poll_fn` once MSRV >= 1.64
 pub(crate) fn poll_fn<T, F>(f: F) -> PollFn<F>
 where
     F: FnMut(&mut Context<'_>) -> Poll<T>,

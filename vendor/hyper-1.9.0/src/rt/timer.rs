@@ -110,7 +110,7 @@ pub trait Sleep: Send + Sync + Future<Output = ()> {
 }
 
 impl dyn Sleep {
-    //! This is a re-implementation of downcast methods from std::any::Any
+    //! This is a re-implementation of downcast methods from core::any::Any
 
     /// Check whether the type is the same as `T`
     pub fn is<T>(&self) -> bool

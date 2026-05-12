@@ -1,4 +1,4 @@
-use std::fmt;
+use core::fmt;
 use std::io::{self, IoSlice, IoSliceMut, Read, Write};
 use std::net::{self, Shutdown, SocketAddr};
 #[cfg(any(unix, target_os = "wasi"))]
@@ -27,7 +27,7 @@ use crate::{event, Interest, Registry, Token};
 #[cfg_attr(feature = "os-poll", doc = "```")]
 #[cfg_attr(not(feature = "os-poll"), doc = "```ignore")]
 /// # use std::net::{TcpListener, SocketAddr};
-/// # use std::error::Error;
+/// # use core::error::Error;
 /// #
 /// # fn main() -> Result<(), Box<dyn Error>> {
 /// let address: SocketAddr = "127.0.0.1:0".parse()?;
@@ -245,7 +245,7 @@ impl TcpStream {
     ///
     #[cfg_attr(unix, doc = "```no_run")]
     #[cfg_attr(windows, doc = "```ignore")]
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     /// #
     /// # fn main() -> Result<(), Box<dyn Error>> {
     /// use std::io;
@@ -268,7 +268,7 @@ impl TcpStream {
     ///     #[cfg(unix)]
     ///     let res = unsafe { libc::recv(stream.as_raw_fd(), buf_ptr, buf.len(), 0) };
     ///     #[cfg(windows)]
-    ///     let res = unsafe { libc::recvfrom(stream.as_raw_socket() as usize, buf_ptr, buf.len() as i32, 0, std::ptr::null_mut(), std::ptr::null_mut()) };
+    ///     let res = unsafe { libc::recvfrom(stream.as_raw_socket() as usize, buf_ptr, buf.len() as i32, 0, core::ptr::null_mut(), core::ptr::null_mut()) };
     ///     if res != -1 {
     ///         Ok(res as usize)
     ///     } else {

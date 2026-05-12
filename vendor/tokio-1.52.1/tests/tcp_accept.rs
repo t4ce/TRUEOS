@@ -54,12 +54,12 @@ test_accept! {
     (ip_port_tuple, ("127.0.0.1".parse::<IpAddr>().unwrap(), 0)),
 }
 
-use std::pin::Pin;
+use core::pin::Pin;
 use std::sync::{
     atomic::{AtomicUsize, Ordering::SeqCst},
     Arc,
 };
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 use tokio_stream::{Stream, StreamExt};
 
 struct TrackPolls<'a> {
@@ -110,7 +110,7 @@ async fn no_extra_poll() {
 
 #[tokio::test]
 async fn accept_many() {
-    use std::future::{poll_fn, Future};
+    use core::future::{poll_fn, Future};
     use std::sync::atomic::AtomicBool;
 
     const N: usize = 50;

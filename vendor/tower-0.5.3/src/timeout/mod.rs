@@ -10,8 +10,8 @@ mod layer;
 pub use self::layer::TimeoutLayer;
 
 use self::future::ResponseFuture;
-use std::task::{Context, Poll};
-use std::time::Duration;
+use core::task::{Context, Poll};
+use core::time::Duration;
 use tower_service::Service;
 
 /// Applies a timeout to requests.

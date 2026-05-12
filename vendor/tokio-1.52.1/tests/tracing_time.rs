@@ -5,7 +5,7 @@
 #![warn(rust_2018_idioms)]
 #![cfg(all(tokio_unstable, feature = "tracing", target_has_atomic = "64"))]
 
-use std::time::Duration;
+use core::time::Duration;
 
 use tracing_mock::{expect, subscriber};
 

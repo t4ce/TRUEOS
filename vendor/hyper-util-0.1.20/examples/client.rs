@@ -5,7 +5,7 @@ use hyper::Request;
 use hyper_util::client::legacy::{connect::HttpConnector, Client};
 
 #[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<(), Box<dyn core::error::Error>> {
     let url = match env::args().nth(1) {
         Some(url) => url,
         None => {

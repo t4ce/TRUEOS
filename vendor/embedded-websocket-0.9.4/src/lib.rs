@@ -253,8 +253,8 @@ impl core::fmt::Display for Error {
 }
 
 #[cfg(feature = "std")]
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+impl core::error::Error for Error {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         if let Self::HttpHeader(error) = self {
             Some(error)
         } else {
@@ -428,7 +428,7 @@ where
     /// let len = ws_server
     ///     .server_accept(&ws_key, Some(&sub_protocol), &mut buffer)
     ///     .unwrap();
-    /// let response = std::str::from_utf8(&buffer[..len]).unwrap();
+    /// let response = core::str::from_utf8(&buffer[..len]).unwrap();
     ///
     /// assert_eq!("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Protocol: chat\r\nSec-WebSocket-Accept: ptPnPeDOTo6khJlzmLhOZSh2tAY=\r\n\r\n", response);
     /// ```
@@ -488,7 +488,7 @@ where
     ///
     /// let (len, web_socket_key) = ws_client.client_connect(&websocket_options, &mut buffer).unwrap();
     ///
-    /// let actual_http = std::str::from_utf8(&buffer[..len]).unwrap();
+    /// let actual_http = core::str::from_utf8(&buffer[..len]).unwrap();
     /// let mut expected_http = String::new();
     /// expected_http.push_str("GET /chat HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ");
     /// expected_http.push_str(web_socket_key.as_str());
@@ -1116,7 +1116,7 @@ Upgrade: websocket
         let size = web_socket
             .server_accept(&web_socket_context.sec_websocket_key, None, &mut ws_buffer)
             .unwrap();
-        let response = std::str::from_utf8(&ws_buffer[..size]).unwrap();
+        let response = core::str::from_utf8(&ws_buffer[..size]).unwrap();
         let client_response_expected = "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: ptPnPeDOTo6khJlzmLhOZSh2tAY=\r\n\r\n";
         assert_eq!(client_response_expected, response);
     }
@@ -1146,7 +1146,7 @@ Upgrade: websocket
         let size = ws_server
             .server_accept(&ws_key, Some(&sub_protocol), &mut buffer)
             .unwrap();
-        let response = std::str::from_utf8(&buffer[..size]).unwrap();
+        let response = core::str::from_utf8(&buffer[..size]).unwrap();
         assert_eq!("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Protocol: chat\r\nSec-WebSocket-Accept: ptPnPeDOTo6khJlzmLhOZSh2tAY=\r\n\r\n", response);
     }
 
@@ -1222,7 +1222,7 @@ Upgrade: websocket
         // check that the Server receives the Text message
         let ws_result = ws_server.read(&buffer1[..num_bytes], &mut buffer2).unwrap();
         assert_eq!(WebSocketReceiveMessageType::Text, ws_result.message_type);
-        let received = std::str::from_utf8(&buffer2[..ws_result.len_to]).unwrap();
+        let received = core::str::from_utf8(&buffer2[..ws_result.len_to]).unwrap();
         assert_eq!(hello, received);
     }
 
@@ -1250,7 +1250,7 @@ Upgrade: websocket
         // check that the client receives the Text message
         let ws_result = ws_client.read(&buffer1[..num_bytes], &mut buffer2).unwrap();
         assert_eq!(WebSocketReceiveMessageType::Text, ws_result.message_type);
-        let received = std::str::from_utf8(&buffer2[..ws_result.len_to]).unwrap();
+        let received = core::str::from_utf8(&buffer2[..ws_result.len_to]).unwrap();
         assert_eq!(hello, received);
     }
 
@@ -1311,14 +1311,14 @@ Upgrade: websocket
         assert_eq!(1, ws_result.len_to);
         assert_eq!(
             "h",
-            std::str::from_utf8(&buffer2[..ws_result.len_to]).unwrap()
+            core::str::from_utf8(&buffer2[..ws_result.len_to]).unwrap()
         );
         assert_eq!(false, ws_result.end_of_message);
         let ws_result = ws_client.read(&buffer1[3..], &mut buffer2).unwrap();
         assert_eq!(4, ws_result.len_to);
         assert_eq!(
             "ello",
-            std::str::from_utf8(&buffer2[..ws_result.len_to]).unwrap()
+            core::str::from_utf8(&buffer2[..ws_result.len_to]).unwrap()
         );
         assert_eq!(true, ws_result.end_of_message);
     }
@@ -1383,7 +1383,7 @@ Upgrade: websocket
 
         assert_eq!(
             message,
-            std::str::from_utf8(&buffer2[..buffer2_cursor]).unwrap()
+            core::str::from_utf8(&buffer2[..buffer2_cursor]).unwrap()
         );
     }
 
@@ -1430,12 +1430,12 @@ Upgrade: websocket
         assert_eq!(true, ws_result.end_of_message);
         assert_eq!(
             message1,
-            std::str::from_utf8(&buffer2[..buffer2_cursor]).unwrap()
+            core::str::from_utf8(&buffer2[..buffer2_cursor]).unwrap()
         );
 
         assert_eq!(
             message2,
-            std::str::from_utf8(&buffer2[buffer2_cursor..buffer2_cursor + ws_result.len_to])
+            core::str::from_utf8(&buffer2[buffer2_cursor..buffer2_cursor + ws_result.len_to])
                 .unwrap()
         );
     }
@@ -1464,7 +1464,7 @@ Upgrade: websocket
         assert_eq!(1, ws_result.len_to);
         assert_eq!(
             "h",
-            std::str::from_utf8(&buffer2[..ws_result.len_to]).unwrap()
+            core::str::from_utf8(&buffer2[..ws_result.len_to]).unwrap()
         );
         assert_eq!(false, ws_result.end_of_message);
         let ws_result = ws_client
@@ -1473,7 +1473,7 @@ Upgrade: websocket
         assert_eq!(4, ws_result.len_to);
         assert_eq!(
             "ello",
-            std::str::from_utf8(&buffer2[..ws_result.len_to]).unwrap()
+            core::str::from_utf8(&buffer2[..ws_result.len_to]).unwrap()
         );
         assert_eq!(true, ws_result.end_of_message);
     }
@@ -1527,7 +1527,7 @@ Upgrade: websocket
         assert_eq!(true, ws_result2.end_of_message);
 
         let received =
-            std::str::from_utf8(&buffer2[..ws_result1.len_to + ws_result2.len_to]).unwrap();
+            core::str::from_utf8(&buffer2[..ws_result1.len_to + ws_result2.len_to]).unwrap();
         assert_eq!("Hello, World!", received);
     }
 
@@ -1577,7 +1577,7 @@ Upgrade: websocket
         // check that the client receives the "fragment1" Text message
         let ws_result = ws_client.read(&buffer1, &mut buffer2).unwrap();
         assert_eq!(WebSocketReceiveMessageType::Text, ws_result.message_type);
-        let received = std::str::from_utf8(&buffer2[..ws_result.len_to]).unwrap();
+        let received = core::str::from_utf8(&buffer2[..ws_result.len_to]).unwrap();
         assert_eq!(fragment1, received);
         assert_eq!(ws_result.end_of_message, false);
         let mut read_cursor = ws_result.len_from;
@@ -1587,7 +1587,7 @@ Upgrade: websocket
             .read(&buffer1[read_cursor..], &mut buffer2)
             .unwrap();
         assert_eq!(WebSocketReceiveMessageType::Text, ws_result.message_type);
-        let received = std::str::from_utf8(&buffer2[..ws_result.len_to]).unwrap();
+        let received = core::str::from_utf8(&buffer2[..ws_result.len_to]).unwrap();
         assert_eq!(fragment2, received);
         assert_eq!(ws_result.end_of_message, false);
         read_cursor += ws_result.len_from;
@@ -1597,7 +1597,7 @@ Upgrade: websocket
             .read(&buffer1[read_cursor..], &mut buffer2)
             .unwrap();
         assert_eq!(WebSocketReceiveMessageType::Text, ws_result.message_type);
-        let received = std::str::from_utf8(&buffer2[..ws_result.len_to]).unwrap();
+        let received = core::str::from_utf8(&buffer2[..ws_result.len_to]).unwrap();
         assert_eq!(fragment3, received);
         assert_eq!(ws_result.end_of_message, true);
 

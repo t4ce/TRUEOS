@@ -6,9 +6,9 @@
     target_has_atomic = "64"
 ))]
 
-use std::future::Future;
+use core::future::Future;
 use std::sync::{mpsc, Arc, Mutex};
-use std::task::Poll;
+use core::task::Poll;
 use std::thread;
 use tokio::macros::support::poll_fn;
 
@@ -304,7 +304,7 @@ fn worker_poll_count_and_time() {
 
     async fn task() {
         // Sync sleep
-        std::thread::sleep(std::time::Duration::from_micros(10));
+        std::thread::sleep(core::time::Duration::from_micros(10));
     }
 
     let rt = current_thread();

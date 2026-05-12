@@ -4460,7 +4460,7 @@ extern "C" {
     // the list of callbacks e.g.
     // #[link_section = "__DATA_CONST,__pth_jit_func"]
     // static callbacks: [libc::pthread_jit_write_callback_t; 2] = [native_jit_write_cb,
-    // std::mem::transmute::<libc::pthread_jit_write_callback_t>(std::ptr::null())];
+    // core::mem::transmute::<libc::pthread_jit_write_callback_t>(core::ptr::null())];
     // (a handy PTHREAD_JIT_WRITE_CALLBACK_NP macro for other languages).
     pub fn pthread_jit_write_with_callback_np(
         callback: crate::pthread_jit_write_callback_t,

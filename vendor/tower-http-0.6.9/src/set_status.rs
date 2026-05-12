@@ -16,7 +16,7 @@
 //! }
 //!
 //! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # async fn main() -> Result<(), Box<dyn core::error::Error>> {
 //! let mut service = ServiceBuilder::new()
 //!     // change the status to `404 Not Found` regardless what the inner service returns
 //!     .layer(SetStatusLayer::new(StatusCode::NOT_FOUND))

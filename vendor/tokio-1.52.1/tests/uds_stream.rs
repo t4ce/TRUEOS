@@ -8,7 +8,7 @@ use std::io;
 use std::os::android::net::SocketAddrExt;
 #[cfg(target_os = "linux")]
 use std::os::linux::net::SocketAddrExt;
-use std::task::Poll;
+use core::task::Poll;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt, Interest};
 use tokio::net::{UnixListener, UnixStream};
@@ -401,7 +401,7 @@ async fn epollhup() -> io::Result<()> {
 
     // Poll `connect` once.
     poll_fn(|cx| {
-        use std::future::Future;
+        use core::future::Future;
 
         assert_pending!(connect.as_mut().poll(cx));
         Poll::Ready(())

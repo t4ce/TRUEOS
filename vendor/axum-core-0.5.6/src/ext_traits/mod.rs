@@ -3,7 +3,7 @@ pub(crate) mod request_parts;
 
 #[cfg(test)]
 mod tests {
-    use std::convert::Infallible;
+    use core::convert::Infallible;
 
     use crate::extract::{FromRef, FromRequestParts};
     use http::request::Parts;

@@ -1,4 +1,4 @@
-use std::ffi::OsStr;
+use core::ffi::OsStr;
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::{self, SocketAddr};

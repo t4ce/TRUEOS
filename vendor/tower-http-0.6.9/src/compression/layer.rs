@@ -126,7 +126,7 @@ mod tests {
     use crate::test_helpers::Body;
     use http::{header::ACCEPT_ENCODING, Request, Response};
     use http_body_util::BodyExt;
-    use std::convert::Infallible;
+    use core::convert::Infallible;
     use tokio::fs::File;
     use tokio_util::io::ReaderStream;
     use tower::{Service, ServiceBuilder, ServiceExt};

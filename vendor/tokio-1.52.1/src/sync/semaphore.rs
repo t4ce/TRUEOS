@@ -1031,7 +1031,7 @@ impl<'a> SemaphorePermit<'a> {
     #[track_caller]
     pub fn merge(&mut self, mut other: Self) {
         assert!(
-            std::ptr::eq(self.sem, other.sem),
+            core::ptr::eq(self.sem, other.sem),
             "merging permits from different semaphore instances"
         );
         self.permits += other.permits;

@@ -12,8 +12,8 @@ pub struct OnEarlyDropLayer<OFD, OBD> {
     on_body_drop: OBD,
 }
 
-impl<OFD, OBD> std::fmt::Debug for OnEarlyDropLayer<OFD, OBD> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<OFD, OBD> core::fmt::Debug for OnEarlyDropLayer<OFD, OBD> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("OnEarlyDropLayer")
             .field("on_future_drop", &format_args!(".."))
             .field("on_body_drop", &format_args!(".."))

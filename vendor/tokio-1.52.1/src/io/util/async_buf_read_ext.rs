@@ -301,7 +301,7 @@ cfg_io_util! {
         where
             Self: Unpin,
         {
-            std::pin::Pin::new(self).consume(amt);
+            core::pin::Pin::new(self).consume(amt);
         }
 
         /// Returns a stream over the lines of this reader.

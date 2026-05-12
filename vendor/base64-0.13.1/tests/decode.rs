@@ -78,7 +78,7 @@ fn decode_reject_null() {
 #[test]
 fn decode_single_pad_byte_after_2_chars_in_trailing_quad_ok() {
     for num_quads in 0..25 {
-        let mut s: String = std::iter::repeat("ABCD").take(num_quads).collect();
+        let mut s: String = core::iter::repeat("ABCD").take(num_quads).collect();
         s.push_str("Zg=");
 
         let input_len = num_quads * 3 + 1;
@@ -101,7 +101,7 @@ fn decode_single_pad_byte_after_2_chars_in_trailing_quad_ok() {
 #[test]
 fn decode_1_pad_byte_in_fast_loop_then_extra_padding_chunk_error() {
     for num_quads in 0..25 {
-        let mut s: String = std::iter::repeat("ABCD").take(num_quads).collect();
+        let mut s: String = core::iter::repeat("ABCD").take(num_quads).collect();
         s.push_str("YWxpY2U=====");
 
         // since the first 8 bytes are handled in stage 1 or 2, the padding is detected as a
@@ -118,7 +118,7 @@ fn decode_1_pad_byte_in_fast_loop_then_extra_padding_chunk_error() {
 #[test]
 fn decode_2_pad_bytes_in_leftovers_then_extra_padding_chunk_error() {
     for num_quads in 0..25 {
-        let mut s: String = std::iter::repeat("ABCD").take(num_quads).collect();
+        let mut s: String = core::iter::repeat("ABCD").take(num_quads).collect();
         s.push_str("YWxpY2UABB====");
 
         // 6 bytes (4 padding) after last 8-byte chunk, so it's decoded by stage 4.
@@ -133,7 +133,7 @@ fn decode_2_pad_bytes_in_leftovers_then_extra_padding_chunk_error() {
 #[test]
 fn decode_valid_bytes_after_padding_in_leftovers_error() {
     for num_quads in 0..25 {
-        let mut s: String = std::iter::repeat("ABCD").take(num_quads).collect();
+        let mut s: String = core::iter::repeat("ABCD").take(num_quads).collect();
         s.push_str("YWxpY2UABB=B");
 
         // 4 bytes after last 8-byte chunk, so it's decoded by stage 4.
@@ -148,7 +148,7 @@ fn decode_valid_bytes_after_padding_in_leftovers_error() {
 #[test]
 fn decode_absurd_pad_error() {
     for num_quads in 0..25 {
-        let mut s: String = std::iter::repeat("ABCD").take(num_quads).collect();
+        let mut s: String = core::iter::repeat("ABCD").take(num_quads).collect();
         s.push_str("==Y=Wx===pY=2U=====");
 
         // Plenty of remaining bytes, so handled by stage 1 or 2.
@@ -163,7 +163,7 @@ fn decode_absurd_pad_error() {
 #[test]
 fn decode_extra_padding_after_1_pad_bytes_in_trailing_quad_returns_error() {
     for num_quads in 0..25 {
-        let mut s: String = std::iter::repeat("ABCD").take(num_quads).collect();
+        let mut s: String = core::iter::repeat("ABCD").take(num_quads).collect();
         s.push_str("EEE===");
 
         // handled by stage 1, 2, or 4 depending on length
@@ -178,7 +178,7 @@ fn decode_extra_padding_after_1_pad_bytes_in_trailing_quad_returns_error() {
 #[test]
 fn decode_extra_padding_after_2_pad_bytes_in_trailing_quad_2_returns_error() {
     for num_quads in 0..25 {
-        let mut s: String = std::iter::repeat("ABCD").take(num_quads).collect();
+        let mut s: String = core::iter::repeat("ABCD").take(num_quads).collect();
         s.push_str("EE====");
 
         // handled by stage 1, 2, or 4 depending on length
@@ -195,8 +195,8 @@ fn decode_start_quad_with_padding_returns_error() {
     for num_quads in 0..25 {
         // add enough padding to ensure that we'll hit all 4 stages at the different lengths
         for pad_bytes in 1..32 {
-            let mut s: String = std::iter::repeat("ABCD").take(num_quads).collect();
-            let padding: String = std::iter::repeat("=").take(pad_bytes).collect();
+            let mut s: String = core::iter::repeat("ABCD").take(num_quads).collect();
+            let padding: String = core::iter::repeat("=").take(pad_bytes).collect();
             s.push_str(&padding);
 
             if pad_bytes % 4 == 1 {
@@ -219,8 +219,8 @@ fn decode_start_quad_with_padding_returns_error() {
 fn decode_padding_followed_by_non_padding_returns_error() {
     for num_quads in 0..25 {
         for pad_bytes in 0..31 {
-            let mut s: String = std::iter::repeat("ABCD").take(num_quads).collect();
-            let padding: String = std::iter::repeat("=").take(pad_bytes).collect();
+            let mut s: String = core::iter::repeat("ABCD").take(num_quads).collect();
+            let padding: String = core::iter::repeat("=").take(pad_bytes).collect();
             s.push_str(&padding);
             s.push_str("E");
 
@@ -242,7 +242,7 @@ fn decode_padding_followed_by_non_padding_returns_error() {
 #[test]
 fn decode_one_char_in_quad_with_padding_error() {
     for num_quads in 0..25 {
-        let mut s: String = std::iter::repeat("ABCD").take(num_quads).collect();
+        let mut s: String = core::iter::repeat("ABCD").take(num_quads).collect();
         s.push_str("E=");
 
         assert_eq!(
@@ -268,7 +268,7 @@ fn decode_one_char_in_quad_with_padding_error() {
 #[test]
 fn decode_one_char_in_quad_without_padding_error() {
     for num_quads in 0..25 {
-        let mut s: String = std::iter::repeat("ABCD").take(num_quads).collect();
+        let mut s: String = core::iter::repeat("ABCD").take(num_quads).collect();
         s.push('E');
 
         assert_eq!(DecodeError::InvalidLength, decode(&s).unwrap_err());
@@ -280,8 +280,8 @@ fn decode_reject_invalid_bytes_with_correct_error() {
     for length in 1..100 {
         for index in 0_usize..length {
             for invalid_byte in " \t\n\r\x0C\x0B\x00%*.".bytes() {
-                let prefix: String = std::iter::repeat("A").take(index).collect();
-                let suffix: String = std::iter::repeat("B").take(length - index - 1).collect();
+                let prefix: String = core::iter::repeat("A").take(index).collect();
+                let suffix: String = core::iter::repeat("B").take(length - index - 1).collect();
 
                 let input = prefix + &String::from_utf8(vec![invalid_byte]).unwrap() + &suffix;
                 assert_eq!(

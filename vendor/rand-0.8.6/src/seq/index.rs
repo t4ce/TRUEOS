@@ -58,7 +58,7 @@ impl IndexVec {
 
     /// Return the value at the given `index`.
     ///
-    /// (Note: we cannot implement [`std::ops::Index`] because of lifetime
+    /// (Note: we cannot implement [`core::ops::Index`] because of lifetime
     /// restrictions.)
     #[inline]
     pub fn index(&self, index: usize) -> usize {

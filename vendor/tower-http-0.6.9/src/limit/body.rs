@@ -3,8 +3,8 @@ use http::{HeaderValue, Response, StatusCode};
 use http_body::{Body, SizeHint};
 use http_body_util::Full;
 use pin_project_lite::pin_project;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 pin_project! {
     /// Response body for [`RequestBodyLimit`].

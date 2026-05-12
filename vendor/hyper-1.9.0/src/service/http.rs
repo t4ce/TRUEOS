@@ -1,5 +1,5 @@
-use std::error::Error as StdError;
-use std::future::Future;
+use core::error::Error as StdError;
+use core::future::Future;
 
 use crate::body::Body;
 use crate::service::service::Service;

@@ -24,7 +24,7 @@
 //! use tower_http::follow_redirect::{FollowRedirectLayer, RequestUri};
 //!
 //! # #[tokio::main]
-//! # async fn main() -> Result<(), std::convert::Infallible> {
+//! # async fn main() -> Result<(), core::convert::Infallible> {
 //! # let http_client = tower::service_fn(|req: Request<_>| async move {
 //! #     let dest = "https://www.rust-lang.org/";
 //! #     let mut res = http::Response::builder();
@@ -33,7 +33,7 @@
 //! #             .status(http::StatusCode::MOVED_PERMANENTLY)
 //! #             .header(http::header::LOCATION, dest);
 //! #     }
-//! #     Ok::<_, std::convert::Infallible>(res.body(Full::<Bytes>::default()).unwrap())
+//! #     Ok::<_, core::convert::Infallible>(res.body(Full::<Bytes>::default()).unwrap())
 //! # });
 //! let mut client = ServiceBuilder::new()
 //!     .layer(FollowRedirectLayer::new())
@@ -403,7 +403,7 @@ mod tests {
     use super::{policy::*, *};
     use crate::test_helpers::Body;
     use http::header::LOCATION;
-    use std::convert::Infallible;
+    use core::convert::Infallible;
     use tower::{ServiceBuilder, ServiceExt};
 
     #[tokio::test]

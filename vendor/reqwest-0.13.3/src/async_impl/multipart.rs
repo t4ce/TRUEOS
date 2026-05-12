@@ -1,7 +1,7 @@
 //! multipart/form-data
 use std::borrow::Cow;
-use std::fmt;
-use std::pin::Pin;
+use core::fmt;
+use core::pin::Pin;
 
 #[cfg(feature = "stream")]
 use std::io;
@@ -439,7 +439,7 @@ impl<P: PartProps> FormParts<P> {
 
     /// Take the fields vector of this instance, replacing with an empty vector.
     fn take_fields(&mut self) -> Vec<(Cow<'static, str>, P)> {
-        std::mem::replace(&mut self.fields, Vec::new())
+        core::mem::replace(&mut self.fields, Vec::new())
     }
 }
 
@@ -604,7 +604,7 @@ mod tests {
     use super::*;
     use futures_util::stream;
     use futures_util::TryStreamExt;
-    use std::future;
+    use core::future;
     use tokio::{self, runtime};
 
     #[test]
@@ -675,10 +675,10 @@ mod tests {
         // These prints are for debug purposes in case the test fails
         println!(
             "START REAL\n{}\nEND REAL",
-            std::str::from_utf8(&out).unwrap()
+            core::str::from_utf8(&out).unwrap()
         );
         println!("START EXPECTED\n{expected}\nEND EXPECTED");
-        assert_eq!(std::str::from_utf8(&out).unwrap(), expected);
+        assert_eq!(core::str::from_utf8(&out).unwrap(), expected);
     }
 
     #[test]
@@ -707,10 +707,10 @@ mod tests {
         // These prints are for debug purposes in case the test fails
         println!(
             "START REAL\n{}\nEND REAL",
-            std::str::from_utf8(&out).unwrap()
+            core::str::from_utf8(&out).unwrap()
         );
         println!("START EXPECTED\n{expected}\nEND EXPECTED");
-        assert_eq!(std::str::from_utf8(&out).unwrap(), expected);
+        assert_eq!(core::str::from_utf8(&out).unwrap(), expected);
     }
 
     #[test]

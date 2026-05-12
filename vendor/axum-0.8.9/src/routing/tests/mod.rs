@@ -136,7 +136,7 @@ async fn router_type_doesnt_change() {
 
 #[crate::test]
 async fn routing_between_services() {
-    use std::convert::Infallible;
+    use core::convert::Infallible;
     use tower::service_fn;
 
     async fn handle(_: Request) -> &'static str {
@@ -305,7 +305,7 @@ async fn wildcard_sees_whole_url() {
 #[crate::test]
 async fn middleware_applies_to_routes_above() {
     let app = Router::new()
-        .route("/one", get(std::future::pending::<()>))
+        .route("/one", get(core::future::pending::<()>))
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
             Duration::ZERO,

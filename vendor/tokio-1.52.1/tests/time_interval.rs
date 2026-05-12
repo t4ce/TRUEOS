@@ -1,8 +1,8 @@
 #![warn(rust_2018_idioms)]
 #![cfg(feature = "full")]
 
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 use futures::{Stream, StreamExt};
 use tokio::time::{self, Duration, Instant, Interval, MissedTickBehavior};

@@ -184,7 +184,7 @@ fn notified_multi_notify_last_drop() {
 #[test]
 fn notify_in_drop_after_wake() {
     use futures::task::ArcWake;
-    use std::future::Future;
+    use core::future::Future;
     use std::sync::Arc;
 
     let notify = Arc::new(Notify::new());
@@ -207,7 +207,7 @@ fn notify_in_drop_after_wake() {
 
     {
         let waker = futures::task::waker(Arc::new(NotifyOnDrop(notify.clone())));
-        let mut cx = std::task::Context::from_waker(&waker);
+        let mut cx = core::task::Context::from_waker(&waker);
         assert!(fut.as_mut().poll(&mut cx).is_pending());
     }
 
@@ -288,8 +288,8 @@ fn test_enable_consumes_permit() {
 #[test]
 fn test_waker_update() {
     use futures::task::noop_waker;
-    use std::future::Future;
-    use std::task::Context;
+    use core::future::Future;
+    use core::task::Context;
 
     let notify = Arc::new(Notify::new());
     let mut future = spawn(notify.clone().notified_owned());

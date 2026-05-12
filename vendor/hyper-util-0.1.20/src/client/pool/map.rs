@@ -70,7 +70,7 @@ where
 impl<T, Req> Map<T, Req>
 where
     T: target::Target<Req>,
-    T::Key: Eq + std::hash::Hash,
+    T::Key: Eq + core::hash::Hash,
 {
     /// Get a service after extracting the key from `req`.
     pub fn service(&mut self, req: &Req) -> &mut T::Service {
@@ -107,7 +107,7 @@ mod target {
 
 // sealed and unnameable for now
 mod builder {
-    use std::marker::PhantomData;
+    use core::marker::PhantomData;
 
     /// A builder to configure a `Map`.
     ///
@@ -173,7 +173,7 @@ mod builder {
     impl<Dst, K, S> Builder<Dst, K, S>
     where
         Built<K, S>: super::target::Target<Dst>,
-        <Built<K, S> as super::target::Target<Dst>>::Key: Eq + std::hash::Hash,
+        <Built<K, S> as super::target::Target<Dst>>::Key: Eq + core::hash::Hash,
     {
         /// Build the `Map` pool.
         pub fn build(self) -> super::Map<Built<K, S>, Dst> {
@@ -201,7 +201,7 @@ mod builder {
     where
         K: Fn(&Dst) -> KK,
         S: Fn(&Dst) -> SS,
-        KK: Eq + std::hash::Hash,
+        KK: Eq + core::hash::Hash,
     {
         type Key = KK;
         type Service = SS;

@@ -1,15 +1,15 @@
 #![allow(dead_code)]
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::convert::Infallible;
-use std::error::Error as StdError;
-use std::fmt::{self, Debug};
-use std::future::Future;
-use std::hash::Hash;
-use std::ops::{Deref, DerefMut};
-use std::pin::Pin;
+use core::convert::Infallible;
+use core::error::Error as StdError;
+use core::fmt::{self, Debug};
+use core::future::Future;
+use core::hash::Hash;
+use core::ops::{Deref, DerefMut};
+use core::pin::Pin;
 use std::sync::{Arc, Mutex, Weak};
-use std::task::{self, ready, Poll};
+use core::task::{self, ready, Poll};
 
 use core::time::Duration;
 use std::time::Instant;
@@ -836,11 +836,11 @@ impl<T> WeakOpt<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::fmt::Debug;
-    use std::future::Future;
-    use std::hash::Hash;
-    use std::pin::Pin;
-    use std::task::{self, Poll};
+    use core::fmt::Debug;
+    use core::future::Future;
+    use core::hash::Hash;
+    use core::pin::Pin;
+    use core::task::{self, Poll};
     use core::time::Duration;
 
     use super::{Connecting, Key, Pool, Poolable, Reservation, WeakOpt};

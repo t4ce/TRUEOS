@@ -84,7 +84,7 @@ if_hyper! {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::error::Error;
+    use core::error::Error;
 
     #[test]
     fn into_url_file_scheme() {

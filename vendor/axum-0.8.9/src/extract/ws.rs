@@ -143,8 +143,8 @@ pub struct WebSocketUpgrade<F = DefaultOnFailedUpgrade> {
     sec_websocket_protocol: BTreeSet<HeaderValue>,
 }
 
-impl<F> std::fmt::Debug for WebSocketUpgrade<F> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<F> core::fmt::Debug for WebSocketUpgrade<F> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("WebSocketUpgrade")
             .field("config", &self.config)
             .field("protocol", &self.protocol)
@@ -532,7 +532,7 @@ fn header_contains(headers: &HeaderMap, key: HeaderName, value: &'static str) ->
         return false;
     };
 
-    if let Ok(header) = std::str::from_utf8(header.as_bytes()) {
+    if let Ok(header) = core::str::from_utf8(header.as_bytes()) {
         header.to_ascii_lowercase().contains(value)
     } else {
         false
@@ -642,7 +642,7 @@ impl Utf8Bytes {
     }
 }
 
-impl std::ops::Deref for Utf8Bytes {
+impl core::ops::Deref for Utf8Bytes {
     type Target = str;
 
     /// ```
@@ -663,15 +663,15 @@ impl std::ops::Deref for Utf8Bytes {
     }
 }
 
-impl std::fmt::Display for Utf8Bytes {
+impl core::fmt::Display for Utf8Bytes {
     #[inline]
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(self.as_str())
     }
 }
 
 impl TryFrom<Bytes> for Utf8Bytes {
-    type Error = std::str::Utf8Error;
+    type Error = core::str::Utf8Error;
 
     #[inline]
     fn try_from(bytes: Bytes) -> Result<Self, Self::Error> {
@@ -680,7 +680,7 @@ impl TryFrom<Bytes> for Utf8Bytes {
 }
 
 impl TryFrom<Vec<u8>> for Utf8Bytes {
-    type Error = std::str::Utf8Error;
+    type Error = core::str::Utf8Error;
 
     #[inline]
     fn try_from(v: Vec<u8>) -> Result<Self, Self::Error> {
@@ -871,7 +871,7 @@ impl Message {
         match *self {
             Self::Text(ref string) => Ok(string.as_str()),
             Self::Binary(ref data) | Self::Ping(ref data) | Self::Pong(ref data) => {
-                Ok(std::str::from_utf8(data).map_err(Error::new)?)
+                Ok(core::str::from_utf8(data).map_err(Error::new)?)
             }
             Self::Close(None) => Ok(""),
             Self::Close(Some(ref frame)) => Ok(&frame.reason),
@@ -1099,7 +1099,7 @@ pub mod close_code {
 
 #[cfg(test)]
 mod tests {
-    use std::future::ready;
+    use core::future::ready;
 
     use super::*;
     use crate::{routing::any, test_helpers::spawn_service, Router};
@@ -1119,7 +1119,7 @@ mod tests {
                 rejection,
                 WebSocketUpgradeRejection::ConnectionNotUpgradable(_)
             ));
-            std::future::ready(())
+            core::future::ready(())
         });
 
         let req = Request::builder()
@@ -1198,7 +1198,7 @@ mod tests {
         let status = response.status();
         if status != 200 {
             let body = response.into_body().collect().await.unwrap().to_bytes();
-            let body = std::str::from_utf8(&body).unwrap();
+            let body = core::str::from_utf8(&body).unwrap();
             panic!("response status was {status}: {body}");
         }
         let upgraded = hyper::upgrade::on(&mut response).await.unwrap();

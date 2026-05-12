@@ -13,9 +13,9 @@
 //! use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
 //!
 //! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # async fn main() -> Result<(), Box<dyn core::error::Error>> {
 //! # let handler = tower::service_fn(|request: Request<Full<Bytes>>| async move {
-//! #     Ok::<_, std::convert::Infallible>(Response::new(request.into_body()))
+//! #     Ok::<_, core::convert::Infallible>(Response::new(request.into_body()))
 //! # });
 //! #
 //! // A `MakeRequestId` that increments an atomic counter
@@ -70,9 +70,9 @@
 //! # use http_body_util::Full;
 //! # use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
 //! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # async fn main() -> Result<(), Box<dyn core::error::Error>> {
 //! # let handler = tower::service_fn(|request: Request<Full<Bytes>>| async move {
-//! #     Ok::<_, std::convert::Infallible>(Response::new(request.into_body()))
+//! #     Ok::<_, core::convert::Infallible>(Response::new(request.into_body()))
 //! # });
 //! # #[derive(Clone, Default)]
 //! # struct MyMakeRequestId {
@@ -124,9 +124,9 @@
 //! # use bytes::Bytes;
 //! # use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
 //! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # async fn main() -> Result<(), Box<dyn core::error::Error>> {
 //! # let handler = tower::service_fn(|request: Request<Full<Bytes>>| async move {
-//! #     Ok::<_, std::convert::Infallible>(Response::new(request.into_body()))
+//! #     Ok::<_, core::convert::Infallible>(Response::new(request.into_body()))
 //! # });
 //! # #[derive(Clone, Default)]
 //! # struct MyMakeRequestId {
@@ -175,7 +175,7 @@ use http::{
     Request, Response,
 };
 use pin_project_lite::pin_project;
-use std::task::{ready, Context, Poll};
+use core::task::{ready, Context, Poll};
 use std::{future::Future, pin::Pin};
 use tower_layer::Layer;
 use tower_service::Service;

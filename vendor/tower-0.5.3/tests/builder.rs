@@ -35,13 +35,13 @@ async fn builder_service() {
 
 #[derive(Debug, Clone, Default)]
 struct MockPolicy<Req, Res> {
-    _pd: std::marker::PhantomData<(Req, Res)>,
+    _pd: core::marker::PhantomData<(Req, Res)>,
 }
 
 impl<Req, Res, E> Policy<Req, Res, E> for MockPolicy<Req, Res>
 where
     Req: Clone,
-    E: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
+    E: Into<Box<dyn core::error::Error + Send + Sync + 'static>>,
 {
     type Future = Ready<()>;
 

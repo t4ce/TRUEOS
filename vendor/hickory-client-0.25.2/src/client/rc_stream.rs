@@ -5,9 +5,9 @@
 // https://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
-use std::pin::Pin;
+use core::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 
 use futures_util::lock::Mutex;
 use futures_util::stream::{Fuse, Stream, StreamExt};

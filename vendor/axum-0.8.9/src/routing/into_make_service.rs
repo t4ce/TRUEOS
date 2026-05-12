@@ -40,7 +40,7 @@ where
 opaque_future! {
     /// Response future for [`IntoMakeService`].
     pub type IntoMakeServiceFuture<S> =
-        std::future::Ready<Result<S, Infallible>>;
+        core::future::Ready<Result<S, Infallible>>;
 }
 
 #[cfg(test)]

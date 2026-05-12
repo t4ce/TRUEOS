@@ -138,8 +138,8 @@ where
     I: Iterator,
     I2: Iterator<Item = I::Item>,
 {
-    let a = a.map(Some).chain(std::iter::repeat_with(|| None));
-    let b = b.map(Some).chain(std::iter::repeat_with(|| None));
+    let a = a.map(Some).chain(core::iter::repeat_with(|| None));
+    let b = b.map(Some).chain(core::iter::repeat_with(|| None));
     a.zip(b).map_while(|(a, b)| match (a, b) {
         (Some(a), Some(b)) => Some(Item::Both(a, b)),
         (Some(a), None) => Some(Item::First(a)),

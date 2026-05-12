@@ -4,9 +4,9 @@ use crate::io::blocking::Blocking;
 use crate::io::stdio_common::SplitByUtf8BoundaryIfWindows;
 use crate::io::AsyncWrite;
 use std::io;
-use std::pin::Pin;
-use std::task::Context;
-use std::task::Poll;
+use core::pin::Pin;
+use core::task::Context;
+use core::task::Poll;
 
 cfg_io_std! {
     /// A handle to the standard output stream of a process.

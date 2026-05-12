@@ -2,7 +2,7 @@
 #![cfg(windows)]
 
 use std::io;
-use std::time::Duration;
+use core::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::windows::named_pipe::{ClientOptions, PipeMode, ServerOptions};
 use tokio::time;

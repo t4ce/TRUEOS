@@ -386,7 +386,7 @@ impl<K> TimerWheel<K> {
     }
 
     unsafe fn drop_node(node: NonNull<DeqNode<TimerNode<K>>>) {
-        std::mem::drop(Box::from_raw(node.as_ptr()));
+        core::mem::drop(Box::from_raw(node.as_ptr()));
     }
 
     /// Advances the timer wheel to the current time, and returns an iterator over

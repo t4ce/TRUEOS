@@ -1,12 +1,12 @@
 #[cfg(any(feature = "__native-tls", feature = "__rustls",))]
-use std::any::Any;
-use std::convert::TryInto;
-use std::fmt;
-use std::future::Future;
+use core::any::Any;
+use core::convert::TryInto;
+use core::fmt;
+use core::future::Future;
 use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::task::{ready, Poll};
+use core::task::{ready, Poll};
 use std::thread;
 use core::time::Duration;
 
@@ -763,7 +763,7 @@ impl ClientBuilder {
     /// ```
     /// # use std::fs::File;
     /// # use std::io::Read;
-    /// # fn build_client() -> Result<(), Box<dyn std::error::Error>> {
+    /// # fn build_client() -> Result<(), Box<dyn core::error::Error>> {
     /// // read a local binary DER encoded certificate
     /// let der = std::fs::read("my-cert.der")?;
     ///
@@ -1475,7 +1475,7 @@ where
     futures_util::pin_mut!(fut);
 
     // "select" on the sender being canceled, and the future completing
-    let res = std::future::poll_fn(|cx| {
+    let res = core::future::poll_fn(|cx| {
         match fut.as_mut().poll(cx) {
             Poll::Ready(val) => Poll::Ready(Some(val)),
             Poll::Pending => {

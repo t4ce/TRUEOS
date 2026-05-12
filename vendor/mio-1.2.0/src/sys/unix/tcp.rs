@@ -1,5 +1,5 @@
 use std::io;
-use std::mem::{size_of, MaybeUninit};
+use core::mem::{size_of, MaybeUninit};
 use std::net::{self, SocketAddr};
 #[cfg(not(target_os = "hermit"))]
 use std::os::fd::{AsRawFd, FromRawFd};

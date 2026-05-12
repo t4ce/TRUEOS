@@ -3,8 +3,8 @@
 #![cfg(panic = "unwind")]
 
 use futures::future;
-use std::error::Error;
-use std::time::Duration;
+use core::error::Error;
+use core::time::Duration;
 use tokio::runtime::{Builder, Runtime};
 use tokio::time::{self, interval, interval_at, timeout, Instant};
 

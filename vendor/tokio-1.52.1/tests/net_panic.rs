@@ -2,7 +2,7 @@
 #![cfg(all(feature = "full", not(target_os = "wasi")))]
 #![cfg(panic = "unwind")]
 
-use std::error::Error;
+use core::error::Error;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::runtime::{Builder, Runtime};
 

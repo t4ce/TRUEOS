@@ -13,7 +13,7 @@
 //! use tower_http::services::Redirect;
 //!
 //! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # async fn main() -> Result<(), Box<dyn core::error::Error>> {
 //! let uri: Uri = "https://example.com/".parse().unwrap();
 //! let mut service: Redirect<Full<Bytes>> = Redirect::permanent(uri);
 //!

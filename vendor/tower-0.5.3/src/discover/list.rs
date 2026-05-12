@@ -1,8 +1,8 @@
 use super::Change;
 use futures_core::Stream;
 use pin_project_lite::pin_project;
-use std::convert::Infallible;
-use std::iter::{Enumerate, IntoIterator};
+use core::convert::Infallible;
+use core::iter::{Enumerate, IntoIterator};
 use std::{
     pin::Pin,
     task::{Context, Poll},

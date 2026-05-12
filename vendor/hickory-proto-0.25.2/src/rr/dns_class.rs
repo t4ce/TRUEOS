@@ -49,7 +49,7 @@ impl FromStr for DNSClass {
     /// Convert from `&str` to `DNSClass`
     ///
     /// ```
-    /// use std::str::FromStr;
+    /// use core::str::FromStr;
     /// use hickory_proto::rr::dns_class::DNSClass;
     ///
     /// let var: DNSClass = DNSClass::from_str("IN").unwrap();

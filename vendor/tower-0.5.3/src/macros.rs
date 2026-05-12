@@ -22,19 +22,19 @@ macro_rules! opaque_future {
             }
         }
 
-        impl<$($param),+> std::fmt::Debug for $name<$($param),+> {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        impl<$($param),+> core::fmt::Debug for $name<$($param),+> {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 f.debug_tuple(stringify!($name)).field(&format_args!("...")).finish()
             }
         }
 
-        impl<$($param),+> std::future::Future for $name<$($param),+>
+        impl<$($param),+> core::future::Future for $name<$($param),+>
         where
-            $actual: std::future::Future,
+            $actual: core::future::Future,
         {
-            type Output = <$actual as std::future::Future>::Output;
+            type Output = <$actual as core::future::Future>::Output;
             #[inline]
-            fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+            fn poll(self: core::pin::Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> core::task::Poll<Self::Output> {
                 self.project().inner.poll(cx)
             }
         }

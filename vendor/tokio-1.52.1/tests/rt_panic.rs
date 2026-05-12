@@ -4,7 +4,7 @@
 #![cfg(panic = "unwind")]
 
 use futures::future;
-use std::error::Error;
+use core::error::Error;
 use tokio::runtime::{Builder, Handle, Runtime};
 
 mod support {

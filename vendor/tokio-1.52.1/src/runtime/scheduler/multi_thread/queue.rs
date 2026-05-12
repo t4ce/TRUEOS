@@ -365,7 +365,7 @@ impl<T> Local<T> {
             head: head.wrapping_add(NUM_TASKS_TAKEN) as UnsignedLong,
             i: 0,
         };
-        overflow.push_batch(batch_iter.chain(std::iter::once(task)));
+        overflow.push_batch(batch_iter.chain(core::iter::once(task)));
 
         // Add 1 to factor in the task currently being scheduled.
         stats.incr_overflow_count();

@@ -12,7 +12,7 @@ use std::{pin::Pin, task::ready};
 use super::completion::{CompleteOnResponse, TrackCompletion, TrackCompletionFuture};
 use super::Load;
 use std::sync::Arc;
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 use tower_service::Service;
 
 /// Measures the load of the underlying service using the number of currently-pending requests.

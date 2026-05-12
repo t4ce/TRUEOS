@@ -2,10 +2,10 @@ use crate::io::{Interest, PollEvented, ReadBuf, Ready};
 use crate::net::{to_socket_addrs, ToSocketAddrs};
 use crate::util::check_socket_for_blocking;
 
-use std::fmt;
+use core::fmt;
 use std::io;
 use std::net::{self, Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::task::{ready, Context, Poll};
+use core::task::{ready, Context, Poll};
 
 cfg_io_util! {
     use bytes::BufMut;
@@ -236,7 +236,7 @@ impl UdpSocket {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// use std::error::Error;
+    /// use core::error::Error;
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn Error>> {
@@ -824,7 +824,7 @@ impl UdpSocket {
         let n = ready!(self.io.registration().poll_read_io(cx, || {
             // Safety: will not read the maybe uninitialized bytes.
             let b = unsafe {
-                &mut *(buf.unfilled_mut() as *mut [std::mem::MaybeUninit<u8>] as *mut [u8])
+                &mut *(buf.unfilled_mut() as *mut [core::mem::MaybeUninit<u8>] as *mut [u8])
             };
 
             self.io.recv(b)
@@ -948,7 +948,7 @@ impl UdpSocket {
             self.io.registration().try_io(Interest::READABLE, || {
                 let dst = buf.chunk_mut();
                 let dst =
-                    unsafe { &mut *(dst as *mut _ as *mut [std::mem::MaybeUninit<u8>] as *mut [u8]) };
+                    unsafe { &mut *(dst as *mut _ as *mut [core::mem::MaybeUninit<u8>] as *mut [u8]) };
 
                 let n = (*self.io).recv(dst)?;
 
@@ -998,7 +998,7 @@ impl UdpSocket {
                 .async_io(Interest::READABLE | Interest::ERROR, || {
                 let dst = buf.chunk_mut();
                 let dst =
-                    unsafe { &mut *(dst as *mut _ as *mut [std::mem::MaybeUninit<u8>] as *mut [u8]) };
+                    unsafe { &mut *(dst as *mut _ as *mut [core::mem::MaybeUninit<u8>] as *mut [u8]) };
 
                 let n = (*self.io).recv(dst)?;
 
@@ -1074,7 +1074,7 @@ impl UdpSocket {
             self.io.registration().try_io(Interest::READABLE, || {
                 let dst = buf.chunk_mut();
                 let dst =
-                    unsafe { &mut *(dst as *mut _ as *mut [std::mem::MaybeUninit<u8>] as *mut [u8]) };
+                    unsafe { &mut *(dst as *mut _ as *mut [core::mem::MaybeUninit<u8>] as *mut [u8]) };
 
                 let (n, addr) = (*self.io).recv_from(dst)?;
 
@@ -1132,7 +1132,7 @@ impl UdpSocket {
                 .async_io(Interest::READABLE | Interest::ERROR, || {
                 let dst = buf.chunk_mut();
                 let dst =
-                    unsafe { &mut *(dst as *mut _ as *mut [std::mem::MaybeUninit<u8>] as *mut [u8]) };
+                    unsafe { &mut *(dst as *mut _ as *mut [core::mem::MaybeUninit<u8>] as *mut [u8]) };
 
                 let (n, addr) = (*self.io).recv_from(dst)?;
 
@@ -1242,7 +1242,7 @@ impl UdpSocket {
     ///
     /// ```no_run
     /// use tokio::net::UdpSocket;
-    /// use std::error::Error;
+    /// use core::error::Error;
     /// use std::io;
     ///
     /// #[tokio::main]
@@ -1366,7 +1366,7 @@ impl UdpSocket {
         let (n, addr) = ready!(self.io.registration().poll_read_io(cx, || {
             // Safety: will not read the maybe uninitialized bytes.
             let b = unsafe {
-                &mut *(buf.unfilled_mut() as *mut [std::mem::MaybeUninit<u8>] as *mut [u8])
+                &mut *(buf.unfilled_mut() as *mut [core::mem::MaybeUninit<u8>] as *mut [u8])
             };
 
             self.io.recv_from(b)
@@ -1616,7 +1616,7 @@ impl UdpSocket {
         let n = ready!(self.io.registration().poll_read_io(cx, || {
             // Safety: will not read the maybe uninitialized bytes.
             let b = unsafe {
-                &mut *(buf.unfilled_mut() as *mut [std::mem::MaybeUninit<u8>] as *mut [u8])
+                &mut *(buf.unfilled_mut() as *mut [core::mem::MaybeUninit<u8>] as *mut [u8])
             };
 
             self.io.peek(b)
@@ -1763,7 +1763,7 @@ impl UdpSocket {
         let (n, addr) = ready!(self.io.registration().poll_read_io(cx, || {
             // Safety: will not read the maybe uninitialized bytes.
             let b = unsafe {
-                &mut *(buf.unfilled_mut() as *mut [std::mem::MaybeUninit<u8>] as *mut [u8])
+                &mut *(buf.unfilled_mut() as *mut [core::mem::MaybeUninit<u8>] as *mut [u8])
             };
 
             self.io.peek_from(b)

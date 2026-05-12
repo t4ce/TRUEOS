@@ -388,7 +388,7 @@ impl Semaphore {
                 AcqRel,
                 Acquire,
             ) {
-                Ok(_) => return std::cmp::min(curr, n),
+                Ok(_) => return core::cmp::min(curr, n),
                 Err(actual) => curr_bits = actual,
             };
         }
@@ -729,7 +729,7 @@ impl fmt::Display for AcquireError {
     }
 }
 
-impl std::error::Error for AcquireError {}
+impl core::error::Error for AcquireError {}
 
 // ===== impl TryAcquireError =====
 
@@ -757,7 +757,7 @@ impl fmt::Display for TryAcquireError {
     }
 }
 
-impl std::error::Error for TryAcquireError {}
+impl core::error::Error for TryAcquireError {}
 
 /// # Safety
 ///

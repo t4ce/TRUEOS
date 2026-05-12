@@ -1,6 +1,6 @@
-use std::fmt;
+use core::fmt;
 use std::net::SocketAddr;
-use std::pin::Pin;
+use core::pin::Pin;
 use core::time::Duration;
 
 use bytes::Bytes;
@@ -150,7 +150,7 @@ impl Response {
     /// # Example
     ///
     /// ```
-    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// # async fn run() -> Result<(), Box<dyn core::error::Error>> {
     /// let content = reqwest::get("http://httpbin.org/range/26")
     ///     .await?
     ///     .text()
@@ -193,7 +193,7 @@ impl Response {
     /// # Example
     ///
     /// ```
-    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// # async fn run() -> Result<(), Box<dyn core::error::Error>> {
     /// let content = reqwest::get("http://httpbin.org/range/26")
     ///     .await?
     ///     .text_with_charset("utf-8")
@@ -277,7 +277,7 @@ impl Response {
     /// # Example
     ///
     /// ```
-    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// # async fn run() -> Result<(), Box<dyn core::error::Error>> {
     /// let bytes = reqwest::get("http://httpbin.org/ip")
     ///     .await?
     ///     .bytes()
@@ -303,7 +303,7 @@ impl Response {
     /// # Example
     ///
     /// ```
-    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// # async fn run() -> Result<(), Box<dyn core::error::Error>> {
     /// let mut res = reqwest::get("https://hyper.rs").await?;
     ///
     /// while let Some(chunk) = res.chunk().await? {
@@ -336,7 +336,7 @@ impl Response {
     /// ```
     /// use futures_util::StreamExt;
     ///
-    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// # async fn run() -> Result<(), Box<dyn core::error::Error>> {
     /// let mut stream = reqwest::get("http://httpbin.org/ip")
     ///     .await?
     ///     .bytes_stream();

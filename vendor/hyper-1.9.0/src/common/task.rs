@@ -1,19 +1,19 @@
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 #[cfg(feature = "client")]
-use std::task::{RawWaker, RawWakerVTable, Waker};
+use core::task::{RawWaker, RawWakerVTable, Waker};
 
 /// A function to help "yield" a future, such that it is re-scheduled immediately.
 ///
 /// Useful for spin counts, so a future doesn't hog too much time.
-pub(crate) fn yield_now(cx: &mut Context<'_>) -> Poll<std::convert::Infallible> {
+pub(crate) fn yield_now(cx: &mut Context<'_>) -> Poll<core::convert::Infallible> {
     cx.waker().wake_by_ref();
     Poll::Pending
 }
 
-// TODO: replace with `std::task::Waker::noop()` once MSRV >= 1.85
+// TODO: replace with `core::task::Waker::noop()` once MSRV >= 1.85
 #[cfg(feature = "client")]
 fn noop_waker() -> Waker {
-    const NOOP_RAW_WAKER: RawWaker = RawWaker::new(std::ptr::null(), &NOOP_VTABLE);
+    const NOOP_RAW_WAKER: RawWaker = RawWaker::new(core::ptr::null(), &NOOP_VTABLE);
     const NOOP_VTABLE: RawWakerVTable = RawWakerVTable::new(
         // `clone` returns the same noop waker again
         |_: *const ()| NOOP_RAW_WAKER,
@@ -33,10 +33,10 @@ fn noop_waker() -> Waker {
 /// If the future wasn't ready, it future likely can't be driven to completion any more: the polling
 /// uses a no-op waker, so knowledge of what the pending future was waiting for is lost.
 #[cfg(feature = "client")]
-pub(crate) fn now_or_never<F: std::future::Future>(fut: F) -> Option<F::Output> {
+pub(crate) fn now_or_never<F: core::future::Future>(fut: F) -> Option<F::Output> {
     let waker = noop_waker();
     let mut cx = Context::from_waker(&waker);
-    // TODO: replace with std::pin::pin! once MSRV >= 1.68
+    // TODO: replace with core::pin::pin! once MSRV >= 1.68
     tokio::pin!(fut);
     match fut.poll(&mut cx) {
         Poll::Ready(res) => Some(res),

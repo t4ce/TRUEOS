@@ -3,7 +3,7 @@
 use crate::PAD_BYTE;
 use core::{convert, fmt};
 #[cfg(any(feature = "std", test))]
-use std::error;
+use core::error;
 
 const ALPHABET_SIZE: usize = 64;
 

@@ -8,7 +8,7 @@ pub mod error;
 pub mod future;
 
 use self::future::ResponseFuture;
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 use tower_service::Service;
 
 /// Optionally forwards requests to an inner service.

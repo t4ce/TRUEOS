@@ -452,7 +452,7 @@ impl<T> OnceCell<T> {
     /// Takes ownership of the current value, leaving the cell empty.  Returns
     /// `None` if the cell is empty.
     pub fn take(&mut self) -> Option<T> {
-        std::mem::take(self).into_inner()
+        core::mem::take(self).into_inner()
     }
 }
 

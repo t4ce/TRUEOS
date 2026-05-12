@@ -1,8 +1,8 @@
 use crate::runtime::prelude::*;
 use std::io::{self, SeekFrom};
-use std::ops::DerefMut;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::ops::DerefMut;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 /// Seek bytes asynchronously.
 ///

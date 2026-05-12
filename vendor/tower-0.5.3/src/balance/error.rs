@@ -2,7 +2,7 @@
 //!
 //! [`tower::balance`]: crate::balance
 
-use std::fmt;
+use core::fmt;
 
 /// The balancer's endpoint discovery stream failed.
 #[derive(Debug)]
@@ -14,8 +14,8 @@ impl fmt::Display for Discover {
     }
 }
 
-impl std::error::Error for Discover {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+impl core::error::Error for Discover {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         Some(&*self.0)
     }
 }

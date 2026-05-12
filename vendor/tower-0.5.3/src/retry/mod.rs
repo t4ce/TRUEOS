@@ -11,7 +11,7 @@ pub use self::policy::Policy;
 
 use self::future::ResponseFuture;
 use pin_project_lite::pin_project;
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 use tower_service::Service;
 
 pin_project! {

@@ -121,7 +121,7 @@ async fn memory_leak_when_fd_closed_before_drop() {
 
         let raw_fd = fd_a.as_raw_fd();
         set_nonblocking(&fd_a);
-        std::mem::forget(fd_a);
+        core::mem::forget(fd_a);
 
         let wrapper = Arc::new(RawFdWrapper { fd: raw_fd });
         let async_fd = AsyncFd::new(ArcFd(wrapper)).unwrap();
@@ -150,7 +150,7 @@ async fn memory_leak_when_fd_closed_before_drop() {
 
         let raw_fd = fd_a.as_raw_fd();
         set_nonblocking(&fd_a);
-        std::mem::forget(fd_a);
+        core::mem::forget(fd_a);
 
         let wrapper = Arc::new(RawFdWrapper { fd: raw_fd });
         let async_fd = AsyncFd::new(ArcFd(wrapper)).unwrap();
@@ -177,7 +177,7 @@ async fn memory_leak_when_fd_closed_before_drop() {
 
         let raw_fd = fd_a.as_raw_fd();
         set_nonblocking(&fd_a);
-        std::mem::forget(fd_a);
+        core::mem::forget(fd_a);
 
         let wrapper = Arc::new(RawFdWrapper { fd: raw_fd });
         let async_fd = AsyncFd::new(ArcFd(wrapper)).unwrap();

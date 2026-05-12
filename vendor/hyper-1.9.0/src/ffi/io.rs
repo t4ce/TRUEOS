@@ -1,6 +1,6 @@
-use std::ffi::c_void;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::ffi::c_void;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 use super::task::hyper_context;
 use crate::ffi::size_t;
@@ -55,9 +55,9 @@ ffi_fn! {
         Box::into_raw(Box::new(hyper_io {
             read: read_noop,
             write: write_noop,
-            userdata: std::ptr::null_mut(),
+            userdata: core::ptr::null_mut(),
         }))
-    } ?= std::ptr::null_mut()
+    } ?= core::ptr::null_mut()
 }
 
 ffi_fn! {

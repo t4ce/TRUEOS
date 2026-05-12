@@ -29,8 +29,8 @@ pub fn parse_asctime(c: &mut Criterion) {
 
 struct BlackBoxWrite;
 
-impl std::fmt::Write for BlackBoxWrite {
-    fn write_str(&mut self, s: &str) -> Result<(), std::fmt::Error> {
+impl core::fmt::Write for BlackBoxWrite {
+    fn write_str(&mut self, s: &str) -> Result<(), core::fmt::Error> {
         black_box(s);
         Ok(())
     }
@@ -41,7 +41,7 @@ pub fn encode_date(c: &mut Criterion) {
         let d = "Wed, 21 Oct 2015 07:28:00 GMT";
         black_box(httpdate::parse_http_date(d)).unwrap();
         b.iter(|| {
-            use std::fmt::Write;
+            use core::fmt::Write;
             let _ = write!(BlackBoxWrite, "{}", d);
         })
     });

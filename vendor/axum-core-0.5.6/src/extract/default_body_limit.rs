@@ -198,7 +198,7 @@ impl<S> Layer<S> for DefaultBodyLimit {
 mod private {
     use super::DefaultBodyLimitKind;
     use http::Request;
-    use std::task::Context;
+    use core::task::Context;
     use tower_service::Service;
 
     #[derive(Debug, Clone, Copy)]
@@ -216,7 +216,7 @@ mod private {
         type Future = S::Future;
 
         #[inline]
-        fn poll_ready(&mut self, cx: &mut Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
+        fn poll_ready(&mut self, cx: &mut Context<'_>) -> core::task::Poll<Result<(), Self::Error>> {
             self.inner.poll_ready(cx)
         }
 

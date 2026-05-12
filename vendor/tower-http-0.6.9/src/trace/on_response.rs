@@ -1,7 +1,7 @@
 use super::{Latency, DEFAULT_MESSAGE_LEVEL};
 use crate::LatencyUnit;
 use http::Response;
-use std::time::Duration;
+use core::time::Duration;
 use tracing::Level;
 use tracing::Span;
 

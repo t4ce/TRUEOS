@@ -51,7 +51,7 @@ use crate::{event, sys, Events, Interest, Token};
 ///
 #[cfg_attr(all(feature = "os-poll", feature = "net"), doc = "```")]
 #[cfg_attr(not(all(feature = "os-poll", feature = "net")), doc = "```ignore")]
-/// # use std::error::Error;
+/// # use core::error::Error;
 /// # fn main() -> Result<(), Box<dyn Error>> {
 /// use mio::{Events, Poll, Interest, Token};
 /// use mio::net::TcpStream;
@@ -148,7 +148,7 @@ use crate::{event, sys, Events, Interest, Token};
 ///
 #[cfg_attr(all(feature = "os-poll", feature = "net"), doc = "```")]
 #[cfg_attr(not(all(feature = "os-poll", feature = "net")), doc = "```ignore")]
-/// # use std::error::Error;
+/// # use core::error::Error;
 /// # use std::net;
 /// # fn main() -> Result<(), Box<dyn Error>> {
 /// use mio::{Poll, Interest, Token};
@@ -299,7 +299,7 @@ impl Poll {
         /// # Examples
         ///
         /// ```
-        /// # use std::error::Error;
+        /// # use core::error::Error;
         /// # fn main() -> Result<(), Box<dyn Error>> {
         /// use mio::{Poll, Events};
         /// use core::time::Duration;
@@ -386,7 +386,7 @@ impl Poll {
     ///
     #[cfg_attr(all(feature = "os-poll", feature = "net"), doc = "```")]
     #[cfg_attr(not(all(feature = "os-poll", feature = "net")), doc = "```ignore")]
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     /// # fn main() -> Result<(), Box<dyn Error>> {
     /// # // WASI does not yet support multithreading:
     /// # if cfg!(target_os = "wasi") { return Ok(()) }
@@ -525,7 +525,7 @@ impl Registry {
     ///
     #[cfg_attr(all(feature = "os-poll", feature = "net"), doc = "```")]
     #[cfg_attr(not(all(feature = "os-poll", feature = "net")), doc = "```ignore")]
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     /// # use std::net;
     /// # fn main() -> Result<(), Box<dyn Error>> {
     /// use mio::{Events, Poll, Interest, Token};
@@ -604,7 +604,7 @@ impl Registry {
     ///
     #[cfg_attr(all(feature = "os-poll", feature = "net"), doc = "```")]
     #[cfg_attr(not(all(feature = "os-poll", feature = "net")), doc = "```ignore")]
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     /// # use std::net;
     /// # fn main() -> Result<(), Box<dyn Error>> {
     /// use mio::{Poll, Interest, Token};
@@ -671,7 +671,7 @@ impl Registry {
     ///
     #[cfg_attr(all(feature = "os-poll", feature = "net"), doc = "```")]
     #[cfg_attr(not(all(feature = "os-poll", feature = "net")), doc = "```ignore")]
-    /// # use std::error::Error;
+    /// # use core::error::Error;
     /// # use std::net;
     /// # fn main() -> Result<(), Box<dyn Error>> {
     /// use mio::{Events, Poll, Interest, Token};

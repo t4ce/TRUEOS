@@ -1,6 +1,6 @@
 use crate::body::Body;
 use crate::extract::{DefaultBodyLimitKind, FromRequest, FromRequestParts, Request};
-use std::future::Future;
+use core::future::Future;
 
 mod sealed {
     pub trait Sealed {}
@@ -95,7 +95,7 @@ pub trait RequestExt: sealed::Sealed + Sized {
     ///     String: FromRef<S>,
     ///     S: Send + Sync,
     /// {
-    ///     type Rejection = std::convert::Infallible;
+    ///     type Rejection = core::convert::Infallible;
     ///
     ///     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
     ///         let requires_state = req.extract_with_state::<RequiresState, _, _>(state).await?;
@@ -113,7 +113,7 @@ pub trait RequestExt: sealed::Sealed + Sized {
     ///     S: Send + Sync,
     /// {
     ///     // ...
-    ///     # type Rejection = std::convert::Infallible;
+    ///     # type Rejection = core::convert::Infallible;
     ///     # async fn from_request(req: Request, _state: &S) -> Result<Self, Self::Rejection> {
     ///     #     todo!()
     ///     # }
@@ -234,7 +234,7 @@ pub trait RequestExt: sealed::Sealed + Sized {
     ///     S: Send + Sync,
     /// {
     ///     // ...
-    ///     # type Rejection = std::convert::Infallible;
+    ///     # type Rejection = core::convert::Infallible;
     ///     # async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
     ///     #     todo!()
     ///     # }
@@ -298,8 +298,8 @@ impl RequestExt for Request {
         *req.version_mut() = self.version();
         *req.method_mut() = self.method().clone();
         *req.uri_mut() = self.uri().clone();
-        *req.headers_mut() = std::mem::take(self.headers_mut());
-        *req.extensions_mut() = std::mem::take(self.extensions_mut());
+        *req.headers_mut() = core::mem::take(self.headers_mut());
+        *req.extensions_mut() = core::mem::take(self.extensions_mut());
         let (mut parts, ()) = req.into_parts();
 
         let result = E::from_request_parts(&mut parts, state).await;
@@ -307,8 +307,8 @@ impl RequestExt for Request {
         *self.version_mut() = parts.version;
         *self.method_mut() = parts.method.clone();
         *self.uri_mut() = parts.uri.clone();
-        *self.headers_mut() = std::mem::take(&mut parts.headers);
-        *self.extensions_mut() = std::mem::take(&mut parts.extensions);
+        *self.headers_mut() = core::mem::take(&mut parts.headers);
+        *self.extensions_mut() = core::mem::take(&mut parts.extensions);
 
         result
     }

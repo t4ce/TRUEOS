@@ -9,7 +9,7 @@
 //! ```
 //! use reqwest::blocking::multipart;
 //!
-//! # fn run() -> Result<(), Box<dyn std::error::Error>> {
+//! # fn run() -> Result<(), Box<dyn core::error::Error>> {
 //! let form = multipart::Form::new()
 //!     // Adding just a simple text field...
 //!     .text("username", "seanmonstar")
@@ -37,7 +37,7 @@
 //!
 //! [builder]: ../struct.RequestBuilder.html#method.multipart
 use std::borrow::Cow;
-use std::fmt;
+use core::fmt;
 use std::fs::File;
 use std::io::{self, Cursor, Read};
 use std::path::Path;
@@ -426,10 +426,10 @@ mod tests {
         // These prints are for debug purposes in case the test fails
         println!(
             "START REAL\n{}\nEND REAL",
-            std::str::from_utf8(&output).unwrap()
+            core::str::from_utf8(&output).unwrap()
         );
         println!("START EXPECTED\n{expected}\nEND EXPECTED");
-        assert_eq!(std::str::from_utf8(&output).unwrap(), expected);
+        assert_eq!(core::str::from_utf8(&output).unwrap(), expected);
         assert!(length.is_none());
     }
 
@@ -459,10 +459,10 @@ mod tests {
         // These prints are for debug purposes in case the test fails
         println!(
             "START REAL\n{}\nEND REAL",
-            std::str::from_utf8(&output).unwrap()
+            core::str::from_utf8(&output).unwrap()
         );
         println!("START EXPECTED\n{expected}\nEND EXPECTED");
-        assert_eq!(std::str::from_utf8(&output).unwrap(), expected);
+        assert_eq!(core::str::from_utf8(&output).unwrap(), expected);
         assert_eq!(length.unwrap(), expected.len() as u64);
     }
 
@@ -486,9 +486,9 @@ mod tests {
         // These prints are for debug purposes in case the test fails
         println!(
             "START REAL\n{}\nEND REAL",
-            std::str::from_utf8(&output).unwrap()
+            core::str::from_utf8(&output).unwrap()
         );
         println!("START EXPECTED\n{expected}\nEND EXPECTED");
-        assert_eq!(std::str::from_utf8(&output).unwrap(), expected);
+        assert_eq!(core::str::from_utf8(&output).unwrap(), expected);
     }
 }

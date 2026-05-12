@@ -1,5 +1,5 @@
 use alloc::vec::Vec;
-use std::hash::Hash;
+use core::hash::Hash;
 
 pub(crate) trait ScanningGet<K, V>
 where
