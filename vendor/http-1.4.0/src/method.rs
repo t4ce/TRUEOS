@@ -19,7 +19,7 @@ use self::extension::{AllocatedExtension, InlineExtension};
 use self::Inner::*;
 
 use std::convert::TryFrom;
-use std::error::Error;
+use core::error::Error;
 use std::str::FromStr;
 use std::{fmt, str};
 
@@ -305,6 +305,10 @@ impl fmt::Display for InvalidMethod {
 impl Error for InvalidMethod {}
 
 mod extension {
+    use alloc::boxed::Box;
+    use alloc::vec;
+    use alloc::vec::Vec;
+
     use super::InvalidMethod;
     use std::str;
 

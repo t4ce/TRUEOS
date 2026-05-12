@@ -1,4 +1,4 @@
-use std::error;
+use core::error;
 use std::fmt;
 use std::result;
 

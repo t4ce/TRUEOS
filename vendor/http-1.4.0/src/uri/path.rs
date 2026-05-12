@@ -1,3 +1,5 @@
+use alloc::string::String;
+use alloc::vec::Vec;
 use std::convert::TryFrom;
 use std::str::FromStr;
 use std::{cmp, fmt, hash, str};

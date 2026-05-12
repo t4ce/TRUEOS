@@ -24,11 +24,13 @@
 
 use crate::byte_str::ByteStr;
 use alloc::boxed::Box;
+use alloc::string::String;
+use alloc::vec::Vec;
 use std::convert::TryFrom;
 
 use bytes::Bytes;
 
-use std::error::Error;
+use core::error::Error;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::str::{self, FromStr};

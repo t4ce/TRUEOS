@@ -1,9 +1,11 @@
 use crate::byte_str::ByteStr;
 use bytes::{Bytes, BytesMut};
 
+use alloc::string::String;
+use alloc::vec::Vec;
 use std::borrow::Borrow;
 use std::convert::TryFrom;
-use std::error::Error;
+use core::error::Error;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::mem::MaybeUninit;
