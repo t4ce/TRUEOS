@@ -1,8 +1,8 @@
 #![allow(missing_docs)]
 
-use std::io;
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::{fmt, net};
+use core::fmt;
+use core::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use core3::io;
 
 use crate::zkvm_net::Socket;
 use crate::{event, Interest, Registry, Token};
@@ -19,7 +19,8 @@ impl UdpSocket {
         })
     }
 
-    pub fn from_std(_: net::UdpSocket) -> UdpSocket {
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+    pub fn from_std(_: std::net::UdpSocket) -> UdpSocket {
         panic!("mio zkvm backend cannot wrap std::net::UdpSocket yet")
     }
 
@@ -41,7 +42,7 @@ impl UdpSocket {
 
     pub fn peek_from(&self, _: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
         Err(io::Error::new(
-            io::ErrorKind::Unsupported,
+            io::ErrorKind::Other,
             "mio zkvm UdpSocket::peek_from is not wired yet",
         ))
     }
@@ -57,7 +58,7 @@ impl UdpSocket {
 
     pub fn peek(&self, _: &mut [u8]) -> io::Result<usize> {
         Err(io::Error::new(
-            io::ErrorKind::Unsupported,
+            io::ErrorKind::Other,
             "mio zkvm UdpSocket::peek is not wired yet",
         ))
     }
@@ -108,28 +109,28 @@ impl UdpSocket {
 
     pub fn join_multicast_v4(&self, _: &Ipv4Addr, _: &Ipv4Addr) -> io::Result<()> {
         Err(io::Error::new(
-            io::ErrorKind::Unsupported,
+            io::ErrorKind::Other,
             "mio zkvm UdpSocket::join_multicast_v4 is not wired yet",
         ))
     }
 
     pub fn join_multicast_v6(&self, _: &Ipv6Addr, _: u32) -> io::Result<()> {
         Err(io::Error::new(
-            io::ErrorKind::Unsupported,
+            io::ErrorKind::Other,
             "mio zkvm UdpSocket::join_multicast_v6 is not wired yet",
         ))
     }
 
     pub fn leave_multicast_v4(&self, _: &Ipv4Addr, _: &Ipv4Addr) -> io::Result<()> {
         Err(io::Error::new(
-            io::ErrorKind::Unsupported,
+            io::ErrorKind::Other,
             "mio zkvm UdpSocket::leave_multicast_v4 is not wired yet",
         ))
     }
 
     pub fn leave_multicast_v6(&self, _: &Ipv6Addr, _: u32) -> io::Result<()> {
         Err(io::Error::new(
-            io::ErrorKind::Unsupported,
+            io::ErrorKind::Other,
             "mio zkvm UdpSocket::leave_multicast_v6 is not wired yet",
         ))
     }
@@ -164,7 +165,8 @@ impl event::Source for UdpSocket {
     }
 }
 
-impl From<UdpSocket> for net::UdpSocket {
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+impl From<UdpSocket> for std::net::UdpSocket {
     fn from(_: UdpSocket) -> Self {
         panic!("mio zkvm backend cannot convert UdpSocket into std yet")
     }

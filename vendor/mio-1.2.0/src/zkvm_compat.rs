@@ -1,12 +1,13 @@
 use core::time::Duration;
-use std::{fmt, io};
+use core::fmt;
+use core3::io;
 
 unsafe extern "C" {
     fn trueos_cabi_poll_once();
 }
 
 pub(crate) fn unsupported_io_error(detail: &'static str) -> io::Error {
-    io::Error::new(io::ErrorKind::Unsupported, detail)
+    io::Error::new(io::ErrorKind::Other, detail)
 }
 
 #[inline]

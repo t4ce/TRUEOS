@@ -1,3 +1,5 @@
+use alloc::boxed::Box;
+use alloc::vec::Vec;
 use std::collections::hash_map::RandomState;
 use std::collections::HashMap;
 use std::convert::TryFrom;

@@ -1,8 +1,8 @@
 #![allow(missing_docs)]
 
-use std::fmt;
-use std::io::{self, IoSlice, IoSliceMut, Read, Write};
-use std::net::{self, Shutdown, SocketAddr};
+use core::fmt;
+use core::net::SocketAddr;
+use core3::io::{self, Read, Write};
 
 use crate::zkvm_net::Socket;
 use crate::{event, Interest, Registry, Token};
@@ -23,7 +23,8 @@ impl TcpStream {
         TcpStream { inner }
     }
 
-    pub fn from_std(_: net::TcpStream) -> TcpStream {
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+    pub fn from_std(_: std::net::TcpStream) -> TcpStream {
         panic!("mio zkvm backend cannot wrap std::net::TcpStream yet")
     }
 
@@ -35,7 +36,7 @@ impl TcpStream {
         self.inner.local_addr()
     }
 
-    pub fn shutdown(&self, _: Shutdown) -> io::Result<()> {
+    pub fn shutdown(&self, _: crate::net::Shutdown) -> io::Result<()> {
         self.inner.shutdown()
     }
 
@@ -49,14 +50,14 @@ impl TcpStream {
 
     pub fn set_ttl(&self, _: u32) -> io::Result<()> {
         Err(io::Error::new(
-            io::ErrorKind::Unsupported,
+            io::ErrorKind::Other,
             "mio zkvm TcpStream::set_ttl is not wired yet",
         ))
     }
 
     pub fn ttl(&self) -> io::Result<u32> {
         Err(io::Error::new(
-            io::ErrorKind::Unsupported,
+            io::ErrorKind::Other,
             "mio zkvm TcpStream::ttl is not wired yet",
         ))
     }
@@ -67,7 +68,7 @@ impl TcpStream {
 
     pub fn peek(&self, _: &mut [u8]) -> io::Result<usize> {
         Err(io::Error::new(
-            io::ErrorKind::Unsupported,
+            io::ErrorKind::Other,
             "mio zkvm TcpStream::peek is not wired yet",
         ))
     }
@@ -84,29 +85,11 @@ impl Read for TcpStream {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         self.inner.read(buf)
     }
-
-    fn read_vectored(&mut self, bufs: &mut [IoSliceMut<'_>]) -> io::Result<usize> {
-        for buf in bufs {
-            if !buf.is_empty() {
-                return self.inner.read(buf);
-            }
-        }
-        Ok(0)
-    }
 }
 
 impl Read for &'_ TcpStream {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         self.inner.read(buf)
-    }
-
-    fn read_vectored(&mut self, bufs: &mut [IoSliceMut<'_>]) -> io::Result<usize> {
-        for buf in bufs {
-            if !buf.is_empty() {
-                return self.inner.read(buf);
-            }
-        }
-        Ok(0)
     }
 }
 
@@ -114,16 +97,6 @@ impl Write for TcpStream {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.inner.write(buf)
     }
-
-    fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
-        for buf in bufs {
-            if !buf.is_empty() {
-                return self.inner.write(buf);
-            }
-        }
-        Ok(0)
-    }
-
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
@@ -133,16 +106,6 @@ impl Write for &'_ TcpStream {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.inner.write(buf)
     }
-
-    fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
-        for buf in bufs {
-            if !buf.is_empty() {
-                return self.inner.write(buf);
-            }
-        }
-        Ok(0)
-    }
-
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
@@ -162,7 +125,8 @@ impl event::Source for TcpStream {
     }
 }
 
-impl From<TcpStream> for net::TcpStream {
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+impl From<TcpStream> for std::net::TcpStream {
     fn from(_: TcpStream) -> Self {
         panic!("mio zkvm backend cannot convert TcpStream into std yet")
     }

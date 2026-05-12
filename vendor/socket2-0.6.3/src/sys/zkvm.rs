@@ -1,16 +1,14 @@
-use std::collections::BTreeMap;
-use std::io;
-use std::mem::MaybeUninit;
-use std::net::{Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, SocketAddrV4, SocketAddrV6};
-use std::ptr;
-use std::sync::{Mutex, OnceLock};
+use alloc::{collections::BTreeMap, vec::Vec};
+use core::mem::MaybeUninit;
+use core::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
+use core::ptr;
+use spin::{Mutex, Once};
 use core::time::Duration;
-
-use trueos_sys::vcabi;
+use core3::io;
 
 use crate::{MsgHdr, MsgHdrMut, RecvFlags, SockAddr, TcpKeepalive};
 
-pub(crate) use std::ffi::c_int;
+pub(crate) use core::ffi::c_int;
 
 pub(crate) const AF_UNIX: c_int = 1;
 pub(crate) const AF_INET: c_int = 2;
@@ -188,6 +186,7 @@ struct SocketMeta {
     domain: c_int,
     socket_type: c_int,
     protocol: c_int,
+    backend: Option<RawSocket>,
     nonblocking: bool,
     recv_timeout: Option<Duration>,
     send_timeout: Option<Duration>,
@@ -195,13 +194,72 @@ struct SocketMeta {
     peer: Option<SocketAddr>,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct TrueosMioSocketAddr {
+    family: u8,
+    port: u16,
+    addr: [u8; 16],
+}
+
+unsafe extern "C" {
+    fn trueos_mio_tcp_listener_bind(addr: TrueosMioSocketAddr, out_socket_id: *mut u32) -> i32;
+    fn trueos_mio_tcp_stream_connect(addr: TrueosMioSocketAddr, out_socket_id: *mut u32) -> i32;
+    fn trueos_mio_udp_socket_bind(addr: TrueosMioSocketAddr, out_socket_id: *mut u32) -> i32;
+    fn trueos_mio_socket_close(socket_id: u32) -> i32;
+    fn trueos_mio_socket_local_addr(socket_id: u32, out_addr: *mut TrueosMioSocketAddr) -> i32;
+    fn trueos_mio_socket_peer_addr(socket_id: u32, out_addr: *mut TrueosMioSocketAddr) -> i32;
+    fn trueos_mio_socket_take_error(socket_id: u32) -> i32;
+    fn trueos_mio_tcp_stream_read(socket_id: u32, out_ptr: *mut u8, out_cap: usize) -> isize;
+    fn trueos_mio_tcp_stream_write(socket_id: u32, data_ptr: *const u8, data_len: usize) -> isize;
+    fn trueos_mio_udp_socket_connect(socket_id: u32, addr: TrueosMioSocketAddr) -> i32;
+    fn trueos_mio_udp_socket_send_to(
+        socket_id: u32,
+        addr: TrueosMioSocketAddr,
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> isize;
+    fn trueos_mio_udp_socket_recv_from(
+        socket_id: u32,
+        out_addr: *mut TrueosMioSocketAddr,
+        out_ptr: *mut u8,
+        out_cap: usize,
+    ) -> isize;
+    fn trueos_mio_tcp_listener_accept(
+        socket_id: u32,
+        out_socket_id: *mut u32,
+        out_addr: *mut TrueosMioSocketAddr,
+    ) -> i32;
+}
+
+fn next_socket_id() -> RawSocket {
+    static NEXT: Once<Mutex<RawSocket>> = Once::new();
+    let mut next = NEXT.call_once(|| Mutex::new(1)).lock();
+    let id = *next;
+    *next = next.saturating_add(1).max(1);
+    id
+}
+
 fn socket_registry() -> &'static Mutex<BTreeMap<RawSocket, SocketMeta>> {
-    static REGISTRY: OnceLock<Mutex<BTreeMap<RawSocket, SocketMeta>>> = OnceLock::new();
-    REGISTRY.get_or_init(|| Mutex::new(BTreeMap::new()))
+    static REGISTRY: Once<Mutex<BTreeMap<RawSocket, SocketMeta>>> = Once::new();
+    REGISTRY.call_once(|| Mutex::new(BTreeMap::new()))
 }
 
 fn io_error_from_neg_rc(rc: i32) -> io::Error {
-    io::Error::from_raw_os_error(-rc)
+    let kind = match -rc {
+        9 => io::ErrorKind::NotFound,
+        11 => io::ErrorKind::WouldBlock,
+        22 => io::ErrorKind::InvalidInput,
+        32 => io::ErrorKind::BrokenPipe,
+        101 => io::ErrorKind::NotFound,
+        104 => io::ErrorKind::ConnectionReset,
+        107 => io::ErrorKind::NotConnected,
+        110 => io::ErrorKind::TimedOut,
+        111 => io::ErrorKind::ConnectionRefused,
+        115 => io::ErrorKind::WouldBlock,
+        _ => io::ErrorKind::Other,
+    };
+    io::Error::new(kind, "socket2 zkvm socket error")
 }
 
 fn rc_to_io(rc: i32) -> io::Result<()> {
@@ -216,7 +274,67 @@ fn ssize_to_io(value: isize) -> io::Result<usize> {
     if value >= 0 {
         Ok(value as usize)
     } else {
-        Err(io::Error::from_raw_os_error((-value) as i32))
+        Err(io_error_from_neg_rc(value as i32))
+    }
+}
+
+fn mio_status_to_error(status: i32, detail: &'static str) -> io::Error {
+    let kind = match status {
+        -1 => io::ErrorKind::Other,
+        -2 => io::ErrorKind::WouldBlock,
+        -3 => io::ErrorKind::NotConnected,
+        -4 => io::ErrorKind::InvalidInput,
+        -5 => io::ErrorKind::NotFound,
+        -7 => io::ErrorKind::TimedOut,
+        -8 => io::ErrorKind::NotFound,
+        _ => io::ErrorKind::Other,
+    };
+    io::Error::new(kind, detail)
+}
+
+fn mio_status_to_io(status: i32, detail: &'static str) -> io::Result<()> {
+    if status == 0 {
+        Ok(())
+    } else {
+        Err(mio_status_to_error(status, detail))
+    }
+}
+
+fn mio_ssize_to_io(value: isize, detail: &'static str) -> io::Result<usize> {
+    if value >= 0 {
+        Ok(value as usize)
+    } else {
+        Err(mio_status_to_error(value as i32, detail))
+    }
+}
+
+fn socket_addr_to_mio(addr: SocketAddr) -> TrueosMioSocketAddr {
+    match addr {
+        SocketAddr::V4(addr) => {
+            let mut raw = TrueosMioSocketAddr {
+                family: 4,
+                port: addr.port(),
+                addr: [0; 16],
+            };
+            raw.addr[..4].copy_from_slice(&addr.ip().octets());
+            raw
+        }
+        SocketAddr::V6(addr) => TrueosMioSocketAddr {
+            family: 6,
+            port: addr.port(),
+            addr: addr.ip().octets(),
+        },
+    }
+}
+
+fn mio_to_socket_addr(raw: TrueosMioSocketAddr) -> io::Result<SocketAddr> {
+    match raw.family {
+        4 => Ok(SocketAddr::from(([raw.addr[0], raw.addr[1], raw.addr[2], raw.addr[3]], raw.port))),
+        6 => Ok(SocketAddr::from((raw.addr, raw.port))),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "socket2 zkvm invalid TRUEOS mio socket address family",
+        )),
     }
 }
 
@@ -227,11 +345,11 @@ fn timeout_to_cabi(timeout: Option<Duration>) -> u64 {
 }
 
 fn invalid_socket() -> io::Error {
-    io::Error::from_raw_os_error(9)
+    io::Error::new(io::ErrorKind::NotFound, "socket2 zkvm invalid socket")
 }
 
 fn with_meta<T>(socket: RawSocket, f: impl FnOnce(&SocketMeta) -> T) -> io::Result<T> {
-    let registry = socket_registry().lock().expect("socket registry poisoned");
+    let registry = socket_registry().lock();
     let Some(meta) = registry.get(&socket) else {
         return Err(invalid_socket());
     };
@@ -239,20 +357,30 @@ fn with_meta<T>(socket: RawSocket, f: impl FnOnce(&SocketMeta) -> T) -> io::Resu
 }
 
 fn with_meta_mut<T>(socket: RawSocket, f: impl FnOnce(&mut SocketMeta) -> T) -> io::Result<T> {
-    let mut registry = socket_registry().lock().expect("socket registry poisoned");
+    let mut registry = socket_registry().lock();
     let Some(meta) = registry.get_mut(&socket) else {
         return Err(invalid_socket());
     };
     Ok(f(meta))
 }
 
+fn with_backend<T>(
+    socket: RawSocket,
+    detail: &'static str,
+    f: impl FnOnce(RawSocket) -> io::Result<T>,
+) -> io::Result<T> {
+    let backend = with_meta(socket, |meta| meta.backend)?
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, detail))?;
+    f(backend)
+}
+
 unsafe fn cast_value<T, U: Copy>(value: U) -> T {
-    debug_assert_eq!(std::mem::size_of::<T>(), std::mem::size_of::<U>());
+    debug_assert_eq!(core::mem::size_of::<T>(), core::mem::size_of::<U>());
     let mut out = MaybeUninit::<T>::uninit();
     ptr::copy_nonoverlapping(
         (&value as *const U).cast::<u8>(),
         out.as_mut_ptr().cast::<u8>(),
-        std::mem::size_of::<U>(),
+        core::mem::size_of::<U>(),
     );
     out.assume_init()
 }
@@ -274,32 +402,33 @@ pub(crate) fn socket_as_raw(socket: &Socket) -> RawSocket {
 
 pub(crate) fn socket_into_raw(socket: Socket) -> RawSocket {
     let raw = socket.0;
-    std::mem::forget(socket);
+    core::mem::forget(socket);
     raw
 }
 
 fn unsupported() -> io::Error {
     io::Error::new(
-        io::ErrorKind::Unsupported,
+        io::ErrorKind::Other,
         "socket2 zkvm backend is not wired to TRUEOS net yet",
     )
 }
 
 pub(crate) fn socket(domain: c_int, socket_type: c_int, protocol: c_int) -> io::Result<RawSocket> {
-    let raw = unsafe { vcabi::trueos_cabi_socket_tcp_open(domain, socket_type, protocol) };
-    if raw < 0 {
-        return Err(io_error_from_neg_rc(raw));
+    if !matches!(socket_type, SOCK_STREAM | SOCK_DGRAM) {
+        return Err(unsupported());
     }
+
+    let raw = next_socket_id();
 
     socket_registry()
         .lock()
-        .expect("socket registry poisoned")
         .insert(
             raw,
             SocketMeta {
                 domain,
                 socket_type,
                 protocol,
+                backend: None,
                 nonblocking: false,
                 recv_timeout: None,
                 send_timeout: None,
@@ -319,25 +448,18 @@ pub(crate) fn bind(socket: RawSocket, address: &SockAddr) -> io::Result<()> {
         return Err(unsupported());
     };
 
-    match address {
-        SocketAddr::V4(address) => {
-            rc_to_io(unsafe {
-                vcabi::trueos_cabi_socket_tcp_bind_v4(
-                    socket as u32,
-                    u32::from_be_bytes(address.ip().octets()),
-                    address.port().to_be(),
-                )
-            })?;
-        }
-        SocketAddr::V6(address) => {
-            rc_to_io(unsafe {
-                vcabi::trueos_cabi_socket_tcp_bind_v6(
-                    socket as u32,
-                    address.ip().octets().as_ptr(),
-                    address.port().to_be(),
-                )
-            })?;
-        }
+    let socket_type = with_meta(socket, |meta| meta.socket_type)?;
+    if socket_type == SOCK_DGRAM {
+        let mut backend = 0u32;
+        let status = unsafe {
+            trueos_mio_udp_socket_bind(socket_addr_to_mio(address), &mut backend)
+        };
+        mio_status_to_io(status, "socket2 zkvm UDP bind failed")?;
+        let _ = with_meta_mut(socket, |meta| {
+            meta.backend = Some(backend as RawSocket);
+            meta.local = Some(address);
+        })?;
+        return Ok(());
     }
 
     let _ = with_meta_mut(socket, |meta| meta.local = Some(address));
@@ -348,62 +470,119 @@ pub(crate) fn connect(socket: RawSocket, address: &SockAddr) -> io::Result<()> {
     let Some(address) = address.as_socket() else {
         return Err(unsupported());
     };
-    let nonblocking = with_meta(socket, |meta| meta.nonblocking)?;
-
-    let rc = match address {
-        SocketAddr::V4(address) => unsafe {
-            vcabi::trueos_cabi_socket_tcp_connect_v4(
-                socket as u32,
-                u32::from_be_bytes(address.ip().octets()),
-                address.port().to_be(),
-                nonblocking as u32,
-            )
-        },
-        SocketAddr::V6(address) => unsafe {
-            vcabi::trueos_cabi_socket_tcp_connect_v6(
-                socket as u32,
-                address.ip().octets().as_ptr(),
-                address.port().to_be(),
-                nonblocking as u32,
-            )
-        },
-    };
-
-    let result = rc_to_io(rc);
-    if result.is_ok() || result.as_ref().err().and_then(|err| err.raw_os_error()) == Some(115) {
+    let socket_type = with_meta(socket, |meta| meta.socket_type)?;
+    if socket_type == SOCK_DGRAM {
+        with_backend(socket, "socket2 zkvm UDP connect before bind", |backend| {
+            let status = unsafe {
+                trueos_mio_udp_socket_connect(backend as u32, socket_addr_to_mio(address))
+            };
+            mio_status_to_io(status, "socket2 zkvm UDP connect failed")
+        })?;
         let _ = with_meta_mut(socket, |meta| meta.peer = Some(address));
+        return Ok(());
     }
-    result
+
+    let mut backend = 0u32;
+    let status = unsafe {
+        trueos_mio_tcp_stream_connect(socket_addr_to_mio(address), &mut backend)
+    };
+    mio_status_to_io(status, "socket2 zkvm TCP connect failed")?;
+    let _ = with_meta_mut(socket, |meta| {
+        meta.backend = Some(backend as RawSocket);
+        meta.peer = Some(address);
+    })?;
+    Ok(())
 }
 
 pub(crate) fn poll_connect(socket: &crate::Socket, timeout: Duration) -> io::Result<()> {
-    rc_to_io(unsafe {
-        vcabi::trueos_cabi_socket_tcp_poll_connect(
-            socket.as_raw() as u32,
-            timeout.as_millis().min(u128::from(u64::MAX)) as u64,
-        )
+    let _ = timeout;
+    with_backend(socket.as_raw(), "socket2 zkvm TCP connect not submitted", |backend| {
+        let status = unsafe { trueos_mio_socket_take_error(backend as u32) };
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(mio_status_to_error(status, "socket2 zkvm TCP connect failed"))
+        }
     })
 }
 
-pub(crate) fn listen(_: RawSocket, _: c_int) -> io::Result<()> {
-    Err(unsupported())
-}
-
-pub(crate) fn accept(_: RawSocket) -> io::Result<(RawSocket, SockAddr)> {
-    Err(unsupported())
-}
-
-pub(crate) fn getsockname(socket: RawSocket) -> io::Result<SockAddr> {
+pub(crate) fn listen(socket: RawSocket, _: c_int) -> io::Result<()> {
     let address = with_meta(socket, |meta| {
         meta.local
             .unwrap_or_else(|| default_local_addr(meta.domain))
     })?;
+    let mut backend = 0u32;
+    let status = unsafe {
+        trueos_mio_tcp_listener_bind(socket_addr_to_mio(address), &mut backend)
+    };
+    mio_status_to_io(status, "socket2 zkvm TCP listen failed")?;
+    let _ = with_meta_mut(socket, |meta| {
+        meta.backend = Some(backend as RawSocket);
+        meta.local = Some(address);
+    })?;
+    Ok(())
+}
+
+pub(crate) fn accept(socket: RawSocket) -> io::Result<(RawSocket, SockAddr)> {
+    with_backend(socket, "socket2 zkvm accept before listen", |backend| {
+        let mut child = 0u32;
+        let mut addr = TrueosMioSocketAddr::default();
+        let status = unsafe {
+            trueos_mio_tcp_listener_accept(backend as u32, &mut child, &mut addr)
+        };
+        mio_status_to_io(status, "socket2 zkvm TCP accept failed")?;
+        let peer = mio_to_socket_addr(addr)?;
+        let child_socket = next_socket_id();
+        let parent_meta = with_meta(socket, Clone::clone)?;
+        socket_registry()
+            .lock()
+            .insert(
+                child_socket,
+                SocketMeta {
+                    domain: parent_meta.domain,
+                    socket_type: SOCK_STREAM,
+                    protocol: IPPROTO_TCP,
+                    backend: Some(child as RawSocket),
+                    nonblocking: parent_meta.nonblocking,
+                    recv_timeout: parent_meta.recv_timeout,
+                    send_timeout: parent_meta.send_timeout,
+                    local: parent_meta.local,
+                    peer: Some(peer),
+                },
+            );
+        Ok((child_socket, SockAddr::from(peer)))
+    })
+}
+
+pub(crate) fn getsockname(socket: RawSocket) -> io::Result<SockAddr> {
+    let address = if let Some(backend) = with_meta(socket, |meta| meta.backend)? {
+        let mut addr = TrueosMioSocketAddr::default();
+        let status = unsafe { trueos_mio_socket_local_addr(backend as u32, &mut addr) };
+        if status == 0 {
+            mio_to_socket_addr(addr)?
+        } else {
+            with_meta(socket, |meta| meta.local.unwrap_or_else(|| default_local_addr(meta.domain)))?
+        }
+    } else {
+        with_meta(socket, |meta| meta.local.unwrap_or_else(|| default_local_addr(meta.domain)))?
+    };
     Ok(SockAddr::from(address))
 }
 
 pub(crate) fn getpeername(socket: RawSocket) -> io::Result<SockAddr> {
-    let address =
-        with_meta(socket, |meta| meta.peer)?.ok_or_else(|| io::Error::from_raw_os_error(107))?;
+    let address = if let Some(backend) = with_meta(socket, |meta| meta.backend)? {
+        let mut addr = TrueosMioSocketAddr::default();
+        let status = unsafe { trueos_mio_socket_peer_addr(backend as u32, &mut addr) };
+        if status == 0 {
+            mio_to_socket_addr(addr)?
+        } else {
+            with_meta(socket, |meta| meta.peer)?
+                .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "socket2 zkvm peer not connected"))?
+        }
+    } else {
+        with_meta(socket, |meta| meta.peer)?
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "socket2 zkvm peer not connected"))?
+    };
     Ok(SockAddr::from(address))
 }
 
@@ -416,20 +595,23 @@ pub(crate) fn nonblocking(socket: RawSocket) -> io::Result<bool> {
 }
 
 pub(crate) fn set_nonblocking(socket: RawSocket, nonblocking: bool) -> io::Result<()> {
-    rc_to_io(unsafe {
-        vcabi::trueos_cabi_socket_tcp_set_nonblocking(socket as u32, nonblocking as u32)
-    })?;
     let _ = with_meta_mut(socket, |meta| meta.nonblocking = nonblocking)?;
     Ok(())
 }
 
-pub(crate) fn shutdown(socket: RawSocket, how: Shutdown) -> io::Result<()> {
+pub(crate) fn shutdown(socket: RawSocket, how: std::net::Shutdown) -> io::Result<()> {
     let how = match how {
-        Shutdown::Read => 0,
-        Shutdown::Write => 1,
-        Shutdown::Both => 2,
+        std::net::Shutdown::Read => 0,
+        std::net::Shutdown::Write => 1,
+        std::net::Shutdown::Both => 2,
     };
-    rc_to_io(unsafe { vcabi::trueos_cabi_socket_tcp_shutdown(socket as u32, how) })
+    let _ = how;
+    with_backend(socket, "socket2 zkvm shutdown before connect", |backend| {
+        mio_status_to_io(
+            unsafe { trueos_mio_socket_close(backend as u32) },
+            "socket2 zkvm socket shutdown failed",
+        )
+    })
 }
 
 pub(crate) fn recv(
@@ -437,25 +619,42 @@ pub(crate) fn recv(
     buf: &mut [MaybeUninit<u8>],
     flags: c_int,
 ) -> io::Result<usize> {
-    let (nonblocking, timeout) = with_meta(socket, |meta| (meta.nonblocking, meta.recv_timeout))?;
-    ssize_to_io(unsafe {
-        vcabi::trueos_cabi_socket_tcp_recv(
-            socket as u32,
-            buf.as_mut_ptr().cast::<u8>(),
-            buf.len(),
-            flags,
-            nonblocking as u32,
-            timeout_to_cabi(timeout),
+    let _ = flags;
+    with_backend(socket, "socket2 zkvm recv before connect", |backend| {
+        mio_ssize_to_io(
+            unsafe {
+                trueos_mio_tcp_stream_read(
+                    backend as u32,
+                    buf.as_mut_ptr().cast::<u8>(),
+                    buf.len(),
+                )
+            },
+            "socket2 zkvm TCP recv failed",
         )
     })
 }
 
 pub(crate) fn recv_from(
-    _: RawSocket,
-    _: &mut [MaybeUninit<u8>],
-    _: c_int,
+    socket: RawSocket,
+    buf: &mut [MaybeUninit<u8>],
+    flags: c_int,
 ) -> io::Result<(usize, SockAddr)> {
-    Err(unsupported())
+    let _ = flags;
+    with_backend(socket, "socket2 zkvm UDP recv_from before bind", |backend| {
+        let mut addr = TrueosMioSocketAddr::default();
+        let len = mio_ssize_to_io(
+            unsafe {
+                trueos_mio_udp_socket_recv_from(
+                    backend as u32,
+                    &mut addr,
+                    buf.as_mut_ptr().cast::<u8>(),
+                    buf.len(),
+                )
+            },
+            "socket2 zkvm UDP recv_from failed",
+        )?;
+        Ok((len, SockAddr::from(mio_to_socket_addr(addr)?)))
+    })
 }
 
 pub(crate) fn peek_sender(_: RawSocket) -> io::Result<SockAddr> {
@@ -483,8 +682,11 @@ pub(crate) fn recvmsg(_: RawSocket, _: &mut MsgHdrMut<'_, '_, '_>, _: c_int) -> 
 }
 
 pub(crate) fn send(socket: RawSocket, buf: &[u8], _: c_int) -> io::Result<usize> {
-    ssize_to_io(unsafe {
-        vcabi::trueos_cabi_socket_tcp_send(socket as u32, buf.as_ptr(), buf.len())
+    with_backend(socket, "socket2 zkvm send before connect", |backend| {
+        mio_ssize_to_io(
+            unsafe { trueos_mio_tcp_stream_write(backend as u32, buf.as_ptr(), buf.len()) },
+            "socket2 zkvm TCP send failed",
+        )
     })
 }
 
@@ -501,8 +703,23 @@ pub(crate) fn send_vectored(
     send(socket, &merged, flags)
 }
 
-pub(crate) fn send_to(_: RawSocket, _: &[u8], _: &SockAddr, _: c_int) -> io::Result<usize> {
-    Err(unsupported())
+pub(crate) fn send_to(socket: RawSocket, buf: &[u8], address: &SockAddr, _: c_int) -> io::Result<usize> {
+    let Some(address) = address.as_socket() else {
+        return Err(unsupported());
+    };
+    with_backend(socket, "socket2 zkvm UDP send_to before bind", |backend| {
+        mio_ssize_to_io(
+            unsafe {
+                trueos_mio_udp_socket_send_to(
+                    backend as u32,
+                    socket_addr_to_mio(address),
+                    buf.as_ptr(),
+                    buf.len(),
+                )
+            },
+            "socket2 zkvm UDP send_to failed",
+        )
+    })
 }
 
 pub(crate) fn send_to_vectored(
@@ -559,9 +776,11 @@ pub(crate) unsafe fn getsockopt<T>(socket: RawSocket, level: c_int, name: c_int)
             Ok(cast_value(socket_type))
         }
         (SOL_SOCKET, SO_ERROR) => {
-            let value = unsafe { vcabi::trueos_cabi_socket_tcp_take_error(socket as u32) };
+            let value = with_meta(socket, |meta| meta.backend)?.map_or(0, |backend| unsafe {
+                trueos_mio_socket_take_error(backend as u32)
+            });
             if value < 0 {
-                Err(io_error_from_neg_rc(value))
+                Err(mio_status_to_error(value, "socket2 zkvm socket error"))
             } else {
                 Ok(cast_value(value as c_int))
             }
@@ -662,11 +881,14 @@ pub(crate) fn msghdr_control_len(msg: &msghdr) -> usize {
 
 impl Drop for Socket {
     fn drop(&mut self) {
-        let _ = unsafe { vcabi::trueos_cabi_socket_tcp_close(self.0 as u32) };
-        let _ = socket_registry()
+        let meta = socket_registry()
             .lock()
-            .expect("socket registry poisoned")
             .remove(&self.0);
+        if let Some(meta) = meta {
+            if let Some(backend) = meta.backend {
+                let _ = unsafe { trueos_mio_socket_close(backend as u32) };
+            }
+        }
     }
 }
 

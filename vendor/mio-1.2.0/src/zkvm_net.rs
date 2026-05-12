@@ -2,8 +2,9 @@
 
 use crate::{Interest, Registry, Token};
 
-use std::io;
-use std::net::SocketAddr;
+use alloc::{vec, vec::Vec};
+use core::net::SocketAddr;
+use core3::io;
 
 const STATUS_UNSUPPORTED: i32 = -1;
 const STATUS_WOULD_BLOCK: i32 = -2;
@@ -294,7 +295,7 @@ fn read_write_result(status: isize, detail: &'static str) -> io::Result<usize> {
 
 fn status_to_error(status: i32, detail: &'static str) -> io::Error {
     let kind = match status {
-        STATUS_UNSUPPORTED => io::ErrorKind::Unsupported,
+        STATUS_UNSUPPORTED => io::ErrorKind::Other,
         STATUS_WOULD_BLOCK => io::ErrorKind::WouldBlock,
         STATUS_NOT_CONNECTED => io::ErrorKind::NotConnected,
         STATUS_INVALID_INPUT => io::ErrorKind::InvalidInput,

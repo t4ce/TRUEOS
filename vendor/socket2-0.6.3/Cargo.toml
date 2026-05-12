@@ -93,9 +93,13 @@ path = "src/lib.rs"
 [target.'cfg(any(unix, target_os = "wasi"))'.dependencies.libc]
 version = "0.2.172"
 
-[target.'cfg(any(target_os = "trueos", target_os = "zkvm"))'.dependencies.trueos_sys]
-package = "trueos-sys"
-path = "../../crates/trueos-sys"
+[target.'cfg(any(target_os = "trueos", target_os = "zkvm"))'.dependencies.core3]
+version = "0.1.2"
+default-features = false
+features = ["alloc"]
+
+[target.'cfg(any(target_os = "trueos", target_os = "zkvm"))'.dependencies.spin]
+version = "0.10"
 
 [target."cfg(windows)".dependencies.windows-sys]
 version = ">=0.60, <0.62"

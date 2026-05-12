@@ -1943,7 +1943,9 @@ dependencies = [
 name = "mio"
 version = "1.2.0"
 dependencies = [
+ "core3",
  "libc",
+ "spin 0.10.0",
  "wasi",
  "windows-sys 0.61.2",
 ]
@@ -2903,8 +2905,9 @@ dependencies = [
 name = "socket2"
 version = "0.6.3"
 dependencies = [
+ "core3",
  "libc",
- "trueos-sys",
+ "spin 0.10.0",
  "windows-sys 0.61.2",
 ]
 

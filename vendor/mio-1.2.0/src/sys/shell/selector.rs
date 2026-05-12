@@ -1,10 +1,14 @@
-use std::collections::{HashMap, VecDeque};
-use std::io;
-#[cfg(unix)]
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use alloc::{
+    collections::{BTreeMap, VecDeque},
+    sync::Arc,
+    vec::Vec,
+};
+use core::sync::atomic::{AtomicUsize, Ordering};
 use core::time::Duration;
+use core3::io;
+#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
+use spin::Mutex;
 
 use crate::{Interest, Token};
 
@@ -37,7 +41,7 @@ struct Registration {
 
 #[derive(Debug, Default)]
 struct SelectorState {
-    registrations: Mutex<HashMap<usize, Registration>>,
+    registrations: Mutex<BTreeMap<usize, Registration>>,
     ready: Mutex<VecDeque<Event>>,
 }
 
@@ -108,7 +112,7 @@ impl Selector {
         token: Token,
         interests: Interest,
     ) -> io::Result<()> {
-        let mut registrations = self.state.registrations.lock().unwrap();
+        let mut registrations = self.state.registrations.lock();
         registrations.insert(source_id, Registration { token, interests });
         Ok(())
     }
@@ -123,13 +127,13 @@ impl Selector {
     }
 
     pub(crate) fn deregister_source(&self, source_id: usize) -> io::Result<()> {
-        let mut registrations = self.state.registrations.lock().unwrap();
+        let mut registrations = self.state.registrations.lock();
         registrations.remove(&source_id);
         Ok(())
     }
 
     pub(crate) fn push_waker_event(&self, token: Token) -> io::Result<()> {
-        let mut ready = self.state.ready.lock().unwrap();
+        let mut ready = self.state.ready.lock();
         ready.push_back(Event {
             token,
             readiness: Ready {
@@ -141,7 +145,7 @@ impl Selector {
     }
 
     fn drain_ready(&self, events: &mut Events) -> bool {
-        let mut ready = self.state.ready.lock().unwrap();
+        let mut ready = self.state.ready.lock();
         while events.len() < events.capacity() {
             let Some(event) = ready.pop_front() else {
                 break;
@@ -238,14 +242,14 @@ cfg_io_source! {
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
 impl AsFd for Selector {
     fn as_fd(&self) -> BorrowedFd<'_> {
         os_required!()
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
 impl AsRawFd for Selector {
     fn as_raw_fd(&self) -> RawFd {
         os_required!()
@@ -256,7 +260,7 @@ impl AsRawFd for Selector {
 pub mod event {
     use crate::sys::Event;
     use crate::Token;
-    use std::fmt;
+    use core::fmt;
 
     pub fn token(event: &Event) -> Token {
         event.token

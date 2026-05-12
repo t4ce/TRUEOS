@@ -53,6 +53,7 @@
 //! that are not available on all OSs.
 
 #![deny(missing_docs, missing_debug_implementations, rust_2018_idioms)]
+#![cfg_attr(any(target_os = "trueos", target_os = "zkvm"), no_std)]
 // Automatically generate required OS/features for docs.rs.
 #![cfg_attr(docsrs, feature(doc_cfg))]
 // Disallow warnings when running tests.
@@ -60,13 +61,155 @@
 // Disallow warnings in examples.
 #![doc(test(attr(deny(warnings))))]
 
-use std::fmt;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+extern crate alloc;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+extern crate self as std;
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod collections {
+    //! TRUEOS no_std compatibility re-exports for existing socket2 paths.
+    pub use alloc::collections::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod ffi {
+    //! TRUEOS no_std compatibility re-exports for existing socket2 paths.
+    pub use core::ffi::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod fmt {
+    //! TRUEOS no_std compatibility re-exports for existing socket2 paths.
+    pub use core::fmt::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod hash {
+    //! TRUEOS no_std compatibility re-exports for existing socket2 paths.
+    pub use core::hash::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod io {
+    //! TRUEOS no_std compatibility re-exports for existing socket2 paths.
+    pub use core3::io::*;
+
+    /// Minimal no_std IoSlice used by socket2's vectored API surface.
+    #[derive(Clone, Copy, Debug)]
+    pub struct IoSlice<'a>(&'a [u8]);
+
+    impl<'a> IoSlice<'a> {
+        /// Create an IoSlice from a byte slice.
+        pub fn new(buf: &'a [u8]) -> Self {
+            Self(buf)
+        }
+    }
+
+    impl core::ops::Deref for IoSlice<'_> {
+        type Target = [u8];
+
+        fn deref(&self) -> &[u8] {
+            self.0
+        }
+    }
+
+    /// Minimal no_std IoSliceMut used by socket2's vectored API surface.
+    #[derive(Debug)]
+    pub struct IoSliceMut<'a>(&'a mut [u8]);
+
+    impl<'a> IoSliceMut<'a> {
+        /// Create an IoSliceMut from a mutable byte slice.
+        pub fn new(buf: &'a mut [u8]) -> Self {
+            Self(buf)
+        }
+    }
+
+    impl core::ops::Deref for IoSliceMut<'_> {
+        type Target = [u8];
+
+        fn deref(&self) -> &[u8] {
+            self.0
+        }
+    }
+
+    impl core::ops::DerefMut for IoSliceMut<'_> {
+        fn deref_mut(&mut self) -> &mut [u8] {
+            self.0
+        }
+    }
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod marker {
+    //! TRUEOS no_std compatibility re-exports for existing socket2 paths.
+    pub use core::marker::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod mem {
+    //! TRUEOS no_std compatibility re-exports for existing socket2 paths.
+    pub use core::mem::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod net {
+    //! TRUEOS no_std compatibility re-exports for existing socket2 paths.
+    pub use core::net::*;
+
+    /// no_std equivalent of std::net::Shutdown for TRUEOS sockets.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum Shutdown {
+        /// Shut down reads.
+        Read,
+        /// Shut down writes.
+        Write,
+        /// Shut down reads and writes.
+        Both,
+    }
+
+    /// Placeholder for std conversion APIs, unsupported on TRUEOS.
+    #[derive(Debug)]
+    pub struct TcpStream;
+    /// Placeholder for std conversion APIs, unsupported on TRUEOS.
+    #[derive(Debug)]
+    pub struct TcpListener;
+    /// Placeholder for std conversion APIs, unsupported on TRUEOS.
+    #[derive(Debug)]
+    pub struct UdpSocket;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod ops {
+    //! TRUEOS no_std compatibility re-exports for existing socket2 paths.
+    pub use core::ops::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod path {
+    //! TRUEOS no_std compatibility placeholder for unsupported Unix socket APIs.
+    /// Placeholder path type for unsupported Unix socket APIs.
+    #[derive(Debug)]
+    pub struct Path;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod ptr {
+    //! TRUEOS no_std compatibility re-exports for existing socket2 paths.
+    pub use core::ptr::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod slice {
+    //! TRUEOS no_std compatibility re-exports for existing socket2 paths.
+    pub use core::slice::*;
+}
+
 #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
 use std::io::IoSlice;
 #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
 use std::marker::PhantomData;
 #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
-use std::mem;
 use std::mem::MaybeUninit;
 use std::net::SocketAddr;
 use std::ops::{Deref, DerefMut};
