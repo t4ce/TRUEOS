@@ -1361,9 +1361,10 @@ static TASKS: [TaskSpec; 71] = [
         &GFX_TEXTURE_UPLOAD_SERVICE_STARTED,
         spawn_gfx_texture_upload_service,
     ),
-    TaskSpec::enabled(
+    TaskSpec::enabled_gated(
         "mandelbrot-gpu-sidequest",
         0,
+        intel_cursor_service_gate,
         &MANDELBROT_GPU_SIDEQUEST_STARTED,
         spawn_mandelbrot_gpu_sidequest,
     ),
