@@ -1,3 +1,5 @@
+pub use core::convert::*;
+
 macro_rules! if_downcast_into {
     ($in_ty:ty, $out_ty:ty, $val:ident, $body:expr) => {{
         if std::any::TypeId::of::<$in_ty>() == std::any::TypeId::of::<$out_ty>() {

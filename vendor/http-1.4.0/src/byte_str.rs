@@ -1,3 +1,4 @@
+use alloc::string::String;
 use bytes::Bytes;
 
 use std::{ops, str};

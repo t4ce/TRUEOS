@@ -59,6 +59,11 @@ path = "tests/status_code.rs"
 version = "1"
 default-features = false
 
+[dependencies.hashbrown]
+version = "0.17"
+default-features = false
+features = ["default-hasher"]
+
 [dependencies.itoa]
 version = "1"
 

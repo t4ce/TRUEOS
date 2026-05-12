@@ -1,7 +1,9 @@
 use bytes::{Bytes, BytesMut};
 
+use alloc::string::String;
+use alloc::vec::Vec;
 use std::convert::TryFrom;
-use std::error::Error;
+use core::error::Error;
 use std::fmt::Write;
 use std::hash::{Hash, Hasher};
 use std::str::FromStr;

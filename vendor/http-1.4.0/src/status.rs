@@ -14,8 +14,9 @@
 //! assert!(StatusCode::OK.is_success());
 //! ```
 
+use alloc::borrow::ToOwned;
 use std::convert::TryFrom;
-use std::error::Error;
+use core::error::Error;
 use std::fmt;
 use std::num::NonZeroU16;
 use std::str::FromStr;

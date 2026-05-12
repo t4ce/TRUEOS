@@ -1,4 +1,5 @@
 use alloc::boxed::Box;
+use alloc::vec;
 use alloc::vec::Vec;
 use std::collections::hash_map::RandomState;
 use std::collections::HashMap;
@@ -6,7 +7,7 @@ use std::convert::TryFrom;
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::iter::{FromIterator, FusedIterator};
 use std::marker::PhantomData;
-use std::{fmt, mem, ops, ptr, vec};
+use std::{fmt, mem, ops, ptr};
 
 use crate::Error;
 
@@ -3627,7 +3628,7 @@ impl fmt::Display for MaxSizeReached {
     }
 }
 
-impl std::error::Error for MaxSizeReached {}
+impl core::error::Error for MaxSizeReached {}
 
 // ===== impl Utils =====
 
@@ -3806,6 +3807,8 @@ mod into_header_name {
 }
 
 mod as_header_name {
+    use alloc::string::String;
+
     use super::{Entry, HdrName, HeaderMap, HeaderName, InvalidHeaderName, MaxSizeReached};
 
     /// A marker trait used to identify values that can be used as search keys

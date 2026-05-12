@@ -155,9 +155,149 @@
 
 #![deny(warnings, missing_docs, missing_debug_implementations)]
 
-//#![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(not(feature = "std"), no_std)]
+
 #[cfg(not(feature = "std"))]
-compile_error!("`std` feature currently required, support for `no_std` may be added later");
+extern crate alloc;
+#[cfg(not(feature = "std"))]
+extern crate self as std;
+
+#[cfg(not(feature = "std"))]
+pub mod any {
+    //! no_std compatibility re-exports for existing http paths.
+    pub use core::any::*;
+}
+
+#[cfg(not(feature = "std"))]
+pub mod borrow {
+    //! no_std compatibility re-exports for existing http paths.
+    pub use alloc::borrow::*;
+}
+
+#[cfg(not(feature = "std"))]
+pub mod boxed {
+    //! no_std compatibility re-exports for existing http paths.
+    pub use alloc::boxed::*;
+}
+
+#[cfg(not(feature = "std"))]
+pub mod cmp {
+    //! no_std compatibility re-exports for existing http paths.
+    pub use core::cmp::*;
+}
+
+#[cfg(not(feature = "std"))]
+pub mod collections {
+    //! no_std compatibility re-exports for existing http paths.
+    pub use hashbrown::HashMap;
+
+    /// hash_map compatibility items.
+    pub mod hash_map {
+        use core::hash::BuildHasher;
+
+        pub use hashbrown::hash_map::*;
+
+        /// no_std replacement for std::collections::hash_map::RandomState.
+        #[derive(Clone, Debug, Default)]
+        pub struct RandomState(hashbrown::DefaultHashBuilder);
+
+        impl RandomState {
+            /// Construct a new random state.
+            pub fn new() -> Self {
+                Self::default()
+            }
+        }
+
+        impl BuildHasher for RandomState {
+            type Hasher = <hashbrown::DefaultHashBuilder as BuildHasher>::Hasher;
+
+            fn build_hasher(&self) -> Self::Hasher {
+                self.0.build_hasher()
+            }
+        }
+    }
+}
+
+#[cfg(not(feature = "std"))]
+pub mod fmt {
+    //! no_std compatibility re-exports for existing http paths.
+    pub use core::fmt::*;
+}
+
+#[cfg(not(feature = "std"))]
+pub mod hash {
+    //! no_std compatibility re-exports for existing http paths.
+    pub use core::hash::*;
+}
+
+#[cfg(not(feature = "std"))]
+pub mod iter {
+    //! no_std compatibility re-exports for existing http paths.
+    pub use core::iter::*;
+}
+
+#[cfg(not(feature = "std"))]
+pub mod marker {
+    //! no_std compatibility re-exports for existing http paths.
+    pub use core::marker::*;
+}
+
+#[cfg(not(feature = "std"))]
+pub mod mem {
+    //! no_std compatibility re-exports for existing http paths.
+    pub use core::mem::*;
+}
+
+#[cfg(not(feature = "std"))]
+pub mod num {
+    //! no_std compatibility re-exports for existing http paths.
+    pub use core::num::*;
+}
+
+#[cfg(not(feature = "std"))]
+pub mod ops {
+    //! no_std compatibility re-exports for existing http paths.
+    pub use core::ops::*;
+}
+
+#[cfg(not(feature = "std"))]
+pub mod ptr {
+    //! no_std compatibility re-exports for existing http paths.
+    pub use core::ptr::*;
+}
+
+#[cfg(not(feature = "std"))]
+pub mod result {
+    //! no_std compatibility re-exports for existing http paths.
+    pub use core::result::*;
+}
+
+#[cfg(not(feature = "std"))]
+pub mod slice {
+    //! no_std compatibility re-exports for existing http paths.
+    pub use core::slice::*;
+}
+
+#[cfg(not(feature = "std"))]
+pub mod str {
+    //! no_std compatibility re-exports for existing http paths.
+    pub use core::str::*;
+}
+
+#[cfg(not(feature = "std"))]
+pub mod string {
+    //! no_std compatibility re-exports for existing http paths.
+    pub use alloc::string::*;
+}
+
+#[cfg(not(feature = "std"))]
+pub mod vec {
+    //! no_std compatibility re-exports for existing http paths.
+    pub use alloc::vec::*;
+}
+
+#[cfg(not(feature = "std"))]
+pub use core::{i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize};
 
 #[cfg(test)]
 #[macro_use]
