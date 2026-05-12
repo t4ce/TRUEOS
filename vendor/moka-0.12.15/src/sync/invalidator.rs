@@ -1,4 +1,5 @@
 use super::{base_cache::Inner, PredicateId, PredicateIdStr};
+use alloc::{format, string::ToString, vec::Vec};
 use crate::{
     common::{
         concurrent::{arc::MiniArc, AccessTime, KvEntry, ValueEntry},
@@ -16,7 +17,6 @@ use std::{
         Arc,
     },
 };
-use uuid::Uuid;
 
 pub(crate) type PredicateFun<K, V> = Arc<dyn Fn(&K, &V) -> bool + Send + Sync + 'static>;
 
@@ -117,7 +117,12 @@ impl<K, V, S> Invalidator<K, V, S> {
         let preds = &self.predicates;
 
         while tries < MAX_RETRY {
-            let id = Uuid::new_v4().as_hyphenated().to_string();
+            static NEXT_PREDICATE_ID: core::sync::atomic::AtomicU64 =
+                core::sync::atomic::AtomicU64::new(1);
+            let id = format!(
+                "trueos-predicate-{}",
+                NEXT_PREDICATE_ID.fetch_add(1, Ordering::Relaxed)
+            );
 
             let hash = preds.hash(&id);
             if preds.contains_key(hash, |k| k == &id) {

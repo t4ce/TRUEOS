@@ -7,6 +7,17 @@ use std::str::Bytes;
 
 use super::{Mime, MimeIter, Source, ParamSource, Indexed, CHARSET, UTF_8};
 
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use alloc::{borrow::ToOwned, string::String, vec};
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use core::{
+    iter::Iterator,
+    option::Option,
+    option::Option::{None, Some},
+    result::Result,
+    result::Result::{Err, Ok},
+};
+
 #[derive(Debug)]
 pub enum ParseError {
     MissingSlash,
@@ -391,6 +402,7 @@ fn is_restricted_quoted_char(c: u8) -> bool {
     c > 31 && c != 127
 }
 
+#[cfg(test)]
 #[test]
 #[allow(warnings)] // ... ranges deprecated
 fn test_lookup_tables() {
@@ -421,6 +433,7 @@ fn test_lookup_tables() {
     }
 }
 
+#[cfg(test)]
 #[test]
 fn test_parse_iterator() {
     let mut iter = MimeIter::new("application/json, application/json");
@@ -437,6 +450,7 @@ fn test_parse_iterator() {
     assert_eq!(iter.next(), None);
 }
 
+#[cfg(test)]
 #[test]
 fn test_parse_iterator_invalid() {
     let mut iter = MimeIter::new("application/json, invalid, application/json");
@@ -446,6 +460,7 @@ fn test_parse_iterator_invalid() {
     assert_eq!(iter.next(), None);
 }
 
+#[cfg(test)]
 #[test]
 fn test_parse_iterator_all_invalid() {
     let mut iter = MimeIter::new("application/json, text/html");

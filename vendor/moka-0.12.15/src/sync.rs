@@ -1,5 +1,58 @@
 //! Provides thread-safe, concurrent cache implementations.
 
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use core::fmt;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use parking_lot::MutexGuard;
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub use alloc::sync::{Arc, Weak};
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod atomic {
+    pub use core::sync::atomic::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub struct Mutex<T>(parking_lot::Mutex<T>);
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+impl<T> Mutex<T> {
+    pub fn new(value: T) -> Self {
+        Self(parking_lot::Mutex::new(value))
+    }
+
+    pub fn lock(&self) -> Result<MutexGuard<'_, T>, PoisonError<MutexGuard<'_, T>>> {
+        Ok(self.0.lock())
+    }
+
+    pub fn try_lock(&self) -> Result<MutexGuard<'_, T>, TryLockError<MutexGuard<'_, T>>> {
+        self.0.try_lock().ok_or(TryLockError::WouldBlock)
+    }
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub struct PoisonError<T>(pub T);
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub enum TryLockError<T> {
+    Poisoned(PoisonError<T>),
+    WouldBlock,
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+impl<T> fmt::Debug for TryLockError<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Poisoned(_) => f.write_str("Poisoned"),
+            Self::WouldBlock => f.write_str("WouldBlock"),
+        }
+    }
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use alloc::string::String;
+
 mod base_cache;
 mod builder;
 mod cache;

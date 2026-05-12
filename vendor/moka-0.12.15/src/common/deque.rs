@@ -12,6 +12,7 @@
 // For full authorship information, see the version control history of
 // https://github.com/rust-lang/rust/ or https://thanks.rust-lang.org
 
+use alloc::boxed::Box;
 use std::{marker::PhantomData, ptr::NonNull};
 
 use super::CacheRegion;

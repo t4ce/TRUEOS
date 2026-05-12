@@ -1,5 +1,7 @@
 //! Cache operations.
 
+pub use core::ops::*;
+
 /// Operations used by the `and_compute_with` and similar methods.
 pub mod compute {
     use std::sync::Arc;

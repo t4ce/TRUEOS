@@ -27,13 +27,79 @@
 #![deny(warnings)]
 #![deny(missing_docs)]
 #![deny(missing_debug_implementations)]
+#![cfg_attr(any(target_os = "trueos", target_os = "zkvm"), no_std)]
 
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+extern crate alloc;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+extern crate self as std;
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+mod ascii {
+    /// Compatibility shim for the old `std::ascii::AsciiExt` import.
+    pub trait AsciiExt {}
+    impl AsciiExt for str {}
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+mod cmp {
+    pub use core::cmp::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+mod error {
+    pub use core::error::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+mod fmt {
+    pub use core::fmt::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+mod hash {
+    pub use core::hash::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+mod iter {
+    pub use core::iter::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+mod slice {
+    pub use core::slice::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+mod str {
+    pub use core::str::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use alloc::{string::String, vec::Vec};
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use core::{
+    clone::Clone,
+    cmp::{Eq, Ord, PartialEq, PartialOrd},
+    convert::{AsRef, From},
+    hash::Hash,
+    iter::Iterator,
+    marker::Copy,
+    option::Option,
+    option::Option::{None, Some},
+    result::Result,
+};
 
 use std::cmp::Ordering;
 use std::error::Error;
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::fmt;
-use std::hash::{Hash, Hasher};
+use std::hash::Hasher;
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+use std::hash::Hash;
 use std::str::FromStr;
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::slice;
 
 mod parse;
@@ -582,6 +648,7 @@ macro_rules! names {
         };
         )*
 
+        #[cfg(test)]
         #[test]
         fn test_names_macro_consts() {
             #[allow(unused, deprecated)]
@@ -665,6 +732,7 @@ macro_rules! mimes {
             }
         )*
 
+        #[cfg(test)]
         #[test]
         fn test_mimes_macro_consts() {
             let _ = [

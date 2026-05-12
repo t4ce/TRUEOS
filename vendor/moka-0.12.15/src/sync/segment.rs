@@ -1,5 +1,6 @@
 use equivalent::Equivalent;
 
+use alloc::{borrow::ToOwned, boxed::Box, string::String, vec::Vec};
 use super::{cache::Cache, CacheBuilder, OwnedKeyEntrySelector, RefKeyEntrySelector};
 use crate::common::concurrent::Weigher;
 use crate::common::time::Clock;
@@ -721,9 +722,9 @@ where
         let actual_num_segments = num_segments.next_power_of_two();
         let segment_shift = 64 - actual_num_segments.trailing_zeros();
         let seg_max_capacity =
-            max_capacity.map(|n| (n as f64 / actual_num_segments as f64).ceil() as u64);
+            max_capacity.map(|n| n.div_ceil(actual_num_segments as u64));
         let seg_init_capacity =
-            initial_capacity.map(|cap| (cap as f64 / actual_num_segments as f64).ceil() as usize);
+            initial_capacity.map(|cap| cap.div_ceil(actual_num_segments));
         // NOTE: We cannot initialize the segments as `vec![cache; actual_num_segments]`
         // because Cache::clone() does not clone its inner but shares the same inner.
         let segments = (0..actual_num_segments)

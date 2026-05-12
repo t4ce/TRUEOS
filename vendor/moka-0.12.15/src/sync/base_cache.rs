@@ -4,6 +4,7 @@ use super::{
     PredicateId,
 };
 
+use alloc::{rc::Rc, string::String, vec::Vec};
 use crate::{
     common::{
         self,
@@ -26,11 +27,11 @@ use crate::{
         CacheRegion, HousekeeperConfig,
     },
     notification::{notifier::RemovalNotifier, EvictionListener, RemovalCause},
+    platform::channel::{self, Receiver, Sender, TrySendError},
     policy::{EvictionPolicy, EvictionPolicyConfig, ExpirationPolicy},
     Entry, Expiry, Policy, PredicateError,
 };
 
-use crossbeam_channel::{Receiver, Sender, TrySendError};
 use crossbeam_utils::atomic::AtomicCell;
 use equivalent::Equivalent;
 use parking_lot::{Mutex, RwLock};
@@ -39,7 +40,6 @@ use std::{
     borrow::Borrow,
     collections::hash_map::RandomState,
     hash::{BuildHasher, Hash},
-    rc::Rc,
     sync::{
         atomic::{AtomicBool, AtomicU8, Ordering},
         Arc,
@@ -157,8 +157,8 @@ where
         let is_eviction_listener_enabled = eviction_listener.is_some();
         let fast_now = clock.fast_now();
 
-        let (r_snd, r_rcv) = crossbeam_channel::bounded(r_size);
-        let (w_snd, w_rcv) = crossbeam_channel::bounded(w_size);
+        let (r_snd, r_rcv) = channel::bounded(r_size);
+        let (w_snd, w_rcv) = channel::bounded(w_size);
 
         let inner = Arc::new(Inner::new(
             name,
@@ -605,7 +605,7 @@ where
                 old_info.last_modified,
             );
         }
-        crossbeam_epoch::pin().flush();
+        crate::platform::epoch::pin().flush();
         (upd_op, ts)
     }
 
@@ -705,7 +705,7 @@ impl<K, V, S> BaseCache<K, V, S> {
 
         let current_duration = exp_time.map(|time| {
             let std_time = clock.to_std_instant(time);
-            std_time.saturating_duration_since(current_time)
+            std_time.saturating_duration_since(current_time).into()
         });
 
         let duration = expiry(key, &value_entry.value, current_time, current_duration);
@@ -897,7 +897,7 @@ impl<K, V, S> Drop for Inner<K, V, S> {
         // Ensure crossbeam-epoch to collect garbages (`deferred_fn`s) in the
         // global bag so that previously cached values will be dropped.
         for _ in 0..128 {
-            crossbeam_epoch::pin().flush();
+            crate::platform::epoch::pin().flush();
         }
 
         // NOTE: The `CacheStore` (`cht`) will be dropped after returning from this
@@ -1309,7 +1309,7 @@ where
         self.weighted_size
             .store(eviction_state.counters.weighted_size);
 
-        crossbeam_epoch::pin().flush();
+        crate::platform::epoch::pin().flush();
 
         // Ensure the deqs lock is held until here.
         drop(deqs);

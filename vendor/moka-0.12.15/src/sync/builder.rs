@@ -1,4 +1,5 @@
 use super::{Cache, SegmentedCache};
+use alloc::string::{String, ToString};
 use crate::{
     common::{builder_utils, concurrent::Weigher, time::Clock, HousekeeperConfig},
     notification::{EvictionListener, RemovalCause},

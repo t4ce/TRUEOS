@@ -1,3 +1,4 @@
+use alloc::{boxed::Box, vec::Vec};
 use std::{
     hash::{BuildHasher, Hash},
     mem::{self, MaybeUninit},

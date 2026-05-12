@@ -11,6 +11,7 @@
 // - `std::sync::Arc` in the Rust Standard Library (1.81.0).
 //     -  MIT or Apache-2.0 License
 
+use alloc::boxed::Box;
 use std::{
     fmt,
     hash::{Hash, Hasher},

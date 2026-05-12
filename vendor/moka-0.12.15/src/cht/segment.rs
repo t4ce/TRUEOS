@@ -35,6 +35,7 @@ use crate::cht::map::{
     DefaultHashBuilder,
 };
 
+use alloc::{boxed::Box, vec::Vec};
 use super::iter::{Iter, ScanningGet};
 
 use std::{
@@ -231,7 +232,7 @@ impl<K, V, S> HashMap<K, V, S> {
     /// capacity of each segment at any time by adding elements.
     #[cfg(any(test, feature = "unstable-debug-counters"))]
     pub(crate) fn capacity(&self) -> usize {
-        let guard = &crossbeam_epoch::pin();
+        let guard = &crate::platform::epoch::pin();
 
         self.segments
             .iter()

@@ -3,6 +3,7 @@ use super::{
     value_initializer::{InitResult, ValueInitializer},
     CacheBuilder, OwnedKeyEntrySelector, RefKeyEntrySelector,
 };
+use alloc::{borrow::ToOwned, string::String, vec::Vec};
 use crate::{
     common::{
         concurrent::{
@@ -14,12 +15,12 @@ use crate::{
     },
     notification::EvictionListener,
     ops::compute::{self, CompResult},
+    platform::channel::{Sender, TrySendError},
     policy::{EvictionPolicy, ExpirationPolicy},
     sync::{Iter, PredicateId},
     Entry, Policy, PredicateError,
 };
 
-use crossbeam_channel::{Sender, TrySendError};
 use equivalent::Equivalent;
 use std::{
     collections::hash_map::RandomState,
@@ -1046,7 +1047,7 @@ where
             .try_init_or_read(&key, type_id, get, init, insert, post_init)
         {
             InitResult::Initialized(v) => {
-                crossbeam_epoch::pin().flush();
+                crate::platform::epoch::pin().flush();
                 Entry::new(k, v, true, false)
             }
             InitResult::ReadExisting(v) => Entry::new(k, v, false, false),
@@ -1267,12 +1268,12 @@ where
             .try_init_or_read(&key, type_id, get, init, insert, post_init)
         {
             InitResult::Initialized(v) => {
-                crossbeam_epoch::pin().flush();
+                crate::platform::epoch::pin().flush();
                 Some(Entry::new(k, v, true, false))
             }
             InitResult::ReadExisting(v) => Some(Entry::new(k, v, false, false)),
             InitResult::InitErr(_) => {
-                crossbeam_epoch::pin().flush();
+                crate::platform::epoch::pin().flush();
                 None
             }
         }
@@ -1459,12 +1460,12 @@ where
             .try_init_or_read(&key, type_id, get, init, insert, post_init)
         {
             InitResult::Initialized(v) => {
-                crossbeam_epoch::pin().flush();
+                crate::platform::epoch::pin().flush();
                 Ok(Entry::new(k, v, true, false))
             }
             InitResult::ReadExisting(v) => Ok(Entry::new(k, v, false, false)),
             InitResult::InitErr(e) => {
-                crossbeam_epoch::pin().flush();
+                crate::platform::epoch::pin().flush();
                 Err(e)
             }
         }
@@ -1635,7 +1636,7 @@ where
                     hk,
                 )
                 .expect("Failed to remove");
-                crossbeam_epoch::pin().flush();
+                crate::platform::epoch::pin().flush();
                 maybe_v
             }
         }

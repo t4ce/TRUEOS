@@ -3,6 +3,7 @@
 // Temporary disable this lint as the MSRV (1.51) require an older lint name:
 // #![deny(rustdoc::broken_intra_doc_links)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![cfg_attr(any(target_os = "trueos", target_os = "zkvm"), no_std)]
 
 //! Moka is a fast, concurrent cache library for Rust. Moka is inspired by the
 //! [Caffeine][caffeine-git] library for Java.
@@ -235,6 +236,221 @@
 //! when one of the conditions in the [Bounded Channels](#bounded-channels) section
 //! is met.
 
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+extern crate alloc;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+extern crate self as std;
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod any {
+    pub use core::any::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod borrow {
+    pub use alloc::borrow::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod boxed {
+    pub use alloc::boxed::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod cell {
+    pub use core::cell::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod cmp {
+    pub use core::cmp::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod collections {
+    pub mod hash_map {
+        use core::hash::{BuildHasher, Hasher};
+
+        #[derive(Clone, Copy, Debug, Default)]
+        pub struct RandomState;
+
+        #[derive(Clone, Copy, Debug, Default)]
+        pub struct DefaultHasher(u64);
+
+        impl BuildHasher for RandomState {
+            type Hasher = DefaultHasher;
+
+            fn build_hasher(&self) -> Self::Hasher {
+                DefaultHasher(0xcbf2_9ce4_8422_2325)
+            }
+        }
+
+        impl Hasher for DefaultHasher {
+            fn finish(&self) -> u64 {
+                self.0
+            }
+
+            fn write(&mut self, bytes: &[u8]) {
+                for byte in bytes {
+                    self.0 ^= u64::from(*byte);
+                    self.0 = self.0.wrapping_mul(0x100_0000_01b3);
+                }
+            }
+        }
+    }
+
+    pub use alloc::collections::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod convert {
+    pub use core::convert::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod default {
+    pub use core::default::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod error {
+    pub use core::error::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod fmt {
+    pub use core::fmt::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod future {
+    pub use core::future::*;
+    pub use core::future::{ready, Ready};
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod hash {
+    pub use core::hash::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod iter {
+    pub use core::iter::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod marker {
+    pub use core::marker::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod mem {
+    pub use core::mem::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod panic {
+    pub use core::panic::{AssertUnwindSafe, Location, RefUnwindSafe, UnwindSafe};
+
+    pub fn catch_unwind<F: FnOnce() -> R, R>(f: F) -> Result<R, alloc::boxed::Box<dyn core::any::Any + Send>> {
+        Ok(f())
+    }
+
+    pub fn resume_unwind(_: alloc::boxed::Box<dyn core::any::Any + Send>) -> ! {
+        panic!("panic resume is not available on TRUEOS")
+    }
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod prelude {
+    pub mod rust_2021 {
+        pub use alloc::{
+            borrow::ToOwned,
+            boxed::Box,
+            format,
+            string::{String, ToString},
+            vec,
+            vec::Vec,
+        };
+        pub use core::prelude::rust_2021::*;
+    }
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod ptr {
+    pub use core::ptr::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod result {
+    pub use core::result::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod pin {
+    pub use core::pin::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod process {
+    pub fn abort() -> ! {
+        panic!("abort")
+    }
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod rc {
+    pub use alloc::rc::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod string {
+    pub use alloc::string::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod thread {
+    pub fn sleep(_: core::time::Duration) {}
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod time {
+    pub use core::time::Duration;
+
+    #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+    pub struct Instant(parking_lot::time::Instant);
+
+    impl Instant {
+        pub fn now() -> Self {
+            Self(parking_lot::time::Instant::now())
+        }
+
+        pub fn elapsed(&self) -> Duration {
+            self.0.elapsed().into()
+        }
+
+        pub fn saturating_duration_since(&self, earlier: Self) -> Duration {
+            self.0.saturating_duration_since(earlier.0).into()
+        }
+    }
+
+    impl core::ops::Add<Duration> for Instant {
+        type Output = Instant;
+
+        fn add(self, duration: Duration) -> Self::Output {
+            let nanos = u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX);
+            Self(parking_lot::time::Instant::from_nanos(
+                self.0.as_nanos().saturating_add(nanos),
+            ))
+        }
+    }
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod vec {
+    pub use alloc::vec::*;
+}
+
 #[cfg(not(any(feature = "sync", feature = "future")))]
 compile_error!(
     "At least one of the crate features `sync` or `future` must be enabled for \
@@ -261,6 +477,9 @@ pub(crate) mod cht;
 
 #[cfg(any(feature = "sync", feature = "future"))]
 pub(crate) mod common;
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub(crate) mod platform;
 
 #[cfg(any(feature = "sync", feature = "future"))]
 #[cfg_attr(docsrs, doc(cfg(any(feature = "sync", feature = "future"))))]

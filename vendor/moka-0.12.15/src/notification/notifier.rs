@@ -3,6 +3,8 @@ use std::sync::{
     Arc,
 };
 
+use alloc::string::String;
+
 use crate::notification::{EvictionListener, RemovalCause};
 
 pub(crate) struct RemovalNotifier<K, V> {

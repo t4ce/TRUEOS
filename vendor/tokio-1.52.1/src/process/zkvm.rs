@@ -5,7 +5,6 @@ use crate::process::SpawnedChild;
 use std::future::Future;
 use std::io;
 use std::pin::Pin;
-use std::process::{Child as StdChild, ExitStatus, Stdio};
 use std::task::{Context, Poll};
 
 fn unsupported() -> io::Error {
@@ -15,9 +14,135 @@ fn unsupported() -> io::Error {
     )
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ExitStatus {
+    code: Option<i32>,
+}
+
+impl ExitStatus {
+    pub fn success(&self) -> bool {
+        self.code == Some(0)
+    }
+
+    pub fn code(&self) -> Option<i32> {
+        self.code
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct Output {
+    pub status: ExitStatus,
+    pub stdout: alloc::vec::Vec<u8>,
+    pub stderr: alloc::vec::Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Stdio;
+
+impl Stdio {
+    pub fn null() -> Self {
+        Self
+    }
+
+    pub fn inherit() -> Self {
+        Self
+    }
+
+    pub fn piped() -> Self {
+        Self
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct Command;
+
+impl Command {
+    pub fn new<S>(_program: S) -> Self
+    where
+        S: AsRef<std::ffi::OsStr>,
+    {
+        Self
+    }
+
+    pub fn arg<S>(&mut self, _arg: S) -> &mut Self
+    where
+        S: AsRef<std::ffi::OsStr>,
+    {
+        self
+    }
+
+    pub fn args<I, S>(&mut self, _args: I) -> &mut Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<std::ffi::OsStr>,
+    {
+        self
+    }
+
+    pub fn env<K, V>(&mut self, _key: K, _val: V) -> &mut Self
+    where
+        K: AsRef<std::ffi::OsStr>,
+        V: AsRef<std::ffi::OsStr>,
+    {
+        self
+    }
+
+    pub fn envs<I, K, V>(&mut self, _vars: I) -> &mut Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: AsRef<std::ffi::OsStr>,
+        V: AsRef<std::ffi::OsStr>,
+    {
+        self
+    }
+
+    pub fn env_remove<K>(&mut self, _key: K) -> &mut Self
+    where
+        K: AsRef<std::ffi::OsStr>,
+    {
+        self
+    }
+
+    pub fn env_clear(&mut self) -> &mut Self {
+        self
+    }
+
+    pub fn current_dir<P>(&mut self, _dir: P) -> &mut Self
+    where
+        P: AsRef<std::path::Path>,
+    {
+        self
+    }
+
+    pub fn stdin<T>(&mut self, _cfg: T) -> &mut Self
+    where
+        T: Into<Stdio>,
+    {
+        self
+    }
+
+    pub fn stdout<T>(&mut self, _cfg: T) -> &mut Self
+    where
+        T: Into<Stdio>,
+    {
+        self
+    }
+
+    pub fn stderr<T>(&mut self, _cfg: T) -> &mut Self
+    where
+        T: Into<Stdio>,
+    {
+        self
+    }
+
+    pub fn spawn(&mut self) -> io::Result<Child> {
+        Err(unsupported())
+    }
+}
+
 #[must_use = "futures do nothing unless polled"]
 pub(crate) struct Child {
-    child: StdChild,
+    id: u32,
 }
 
 impl core::fmt::Debug for Child {
@@ -26,9 +151,9 @@ impl core::fmt::Debug for Child {
     }
 }
 
-pub(crate) fn build_child(child: StdChild) -> io::Result<SpawnedChild> {
+pub(crate) fn build_child(child: Child) -> io::Result<SpawnedChild> {
     Ok(SpawnedChild {
-        child: Child { child },
+        child,
         stdin: None,
         stdout: None,
         stderr: None,
@@ -37,28 +162,25 @@ pub(crate) fn build_child(child: StdChild) -> io::Result<SpawnedChild> {
 
 impl Child {
     pub(crate) fn id(&self) -> u32 {
-        self.child.id()
+        self.id
     }
 
     pub(crate) fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
-        self.child.try_wait()
+        Ok(None)
     }
 }
 
 impl Kill for Child {
     fn kill(&mut self) -> io::Result<()> {
-        self.child.kill()
+        Ok(())
     }
 }
 
 impl Future for Child {
     type Output = io::Result<ExitStatus>;
 
-    fn poll(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match self.child.try_wait()? {
-            Some(status) => Poll::Ready(Ok(status)),
-            None => Poll::Ready(Err(unsupported())),
-        }
+    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+        Poll::Ready(Err(unsupported()))
     }
 }
 

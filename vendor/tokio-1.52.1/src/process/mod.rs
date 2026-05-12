@@ -253,7 +253,10 @@ use std::future::Future;
 use std::io;
 use std::path::Path;
 use std::pin::Pin;
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::process::{Child as StdChild, Command as StdCommand, ExitStatus, Output, Stdio};
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use self::imp::{Child as StdChild, Command as StdCommand, ExitStatus, Output, Stdio};
 use std::task::{ready, Context, Poll};
 
 #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
