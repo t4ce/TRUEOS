@@ -3,6 +3,7 @@ use core::mem::MaybeUninit;
 use core::ops::DerefMut;
 use core::pin::Pin;
 use core::task::{Context, Poll};
+use alloc::boxed::Box;
 
 // New IO traits? What?! Why, are you bonkers?
 //

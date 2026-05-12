@@ -47,6 +47,7 @@ use std::io;
 use core::pin::Pin;
 use std::sync::{Arc, Mutex};
 use core::task::{Context, Poll};
+use alloc::{boxed::Box, vec::Vec};
 
 use crate::rt::{Read, ReadBufCursor, Write};
 use bytes::Bytes;

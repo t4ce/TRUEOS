@@ -3,6 +3,7 @@ use core::fmt;
 use std::io::{self, IoSlice};
 use core::pin::Pin;
 use core::task::{Context, Poll};
+use alloc::vec::Vec;
 
 use crate::rt::{Read, ReadBuf, Write};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
@@ -627,10 +628,24 @@ impl<B: Buf> Buf for WriteBuf<B> {
         }
     }
 
+    #[cfg(feature = "std")]
     #[inline]
     fn chunks_vectored<'t>(&'t self, dst: &mut [IoSlice<'t>]) -> usize {
         let n = self.headers.chunks_vectored(dst);
         self.queue.chunks_vectored(&mut dst[n..]) + n
+    }
+}
+
+#[cfg(not(feature = "std"))]
+impl<B: Buf> WriteBuf<B> {
+    #[inline]
+    pub(crate) fn chunks_vectored<'t>(&'t self, dst: &mut [IoSlice<'t>]) -> usize {
+        if dst.is_empty() || !self.has_remaining() {
+            0
+        } else {
+            dst[0] = IoSlice::new(self.chunk());
+            1
+        }
     }
 }
 

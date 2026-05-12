@@ -2,6 +2,8 @@ use bytes::BytesMut;
 use http::{HeaderMap, Method};
 use httparse::ParserConfig;
 
+use alloc::vec::Vec;
+
 use crate::body::DecodedLength;
 use crate::proto::{BodyLength, MessageHead};
 

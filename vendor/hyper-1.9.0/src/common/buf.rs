@@ -24,6 +24,17 @@ impl<T: Buf> BufList<T> {
     pub(crate) fn bufs_cnt(&self) -> usize {
         self.bufs.len()
     }
+
+    #[cfg(not(feature = "std"))]
+    #[inline]
+    pub(crate) fn chunks_vectored<'t>(&'t self, dst: &mut [IoSlice<'t>]) -> usize {
+        if dst.is_empty() || !self.has_remaining() {
+            0
+        } else {
+            dst[0] = IoSlice::new(self.chunk());
+            1
+        }
+    }
 }
 
 impl<T: Buf> Buf for BufList<T> {
@@ -55,6 +66,7 @@ impl<T: Buf> Buf for BufList<T> {
         }
     }
 
+    #[cfg(feature = "std")]
     #[inline]
     fn chunks_vectored<'t>(&'t self, dst: &mut [IoSlice<'t>]) -> usize {
         if dst.is_empty() {

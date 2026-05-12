@@ -2,6 +2,7 @@ use core::error::Error as StdError;
 use core::fmt;
 use core::future::Future;
 use core::marker::PhantomData;
+use alloc::boxed::Box;
 
 use crate::body::Body;
 use crate::service::service::Service;

@@ -5,6 +5,7 @@ use core::fmt;
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
+use alloc::boxed::Box;
 
 use crate::rt::{Read, Write};
 use bytes::Bytes;

@@ -1,4 +1,5 @@
 use core::mem::MaybeUninit;
+use alloc::vec::Vec;
 
 #[cfg(feature = "client")]
 use core::fmt::{self, Write as _};

@@ -2,6 +2,7 @@ use core::error::Error as StdError;
 use core::fmt;
 use std::io;
 use core::task::{Context, Poll};
+use alloc::{vec, vec::Vec};
 
 use bytes::{BufMut, Bytes, BytesMut};
 use futures_core::ready;
@@ -160,7 +161,7 @@ impl Decoder {
                     } else if num == 0 {
                         return Poll::Ready(Err(io::Error::new(
                             io::ErrorKind::UnexpectedEof,
-                            IncompleteBody,
+                            "incomplete body",
                         )));
                     } else {
                         *remaining -= num;
@@ -502,7 +503,7 @@ impl ChunkedState {
             *rem = 0;
             return Poll::Ready(Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
-                IncompleteBody,
+                "incomplete body",
             )));
         }
         *buf = Some(slice);
@@ -661,7 +662,7 @@ fn decode_trailers(buf: &mut BytesMut, count: usize) -> Result<HeaderMap, io::Er
                     Err(_) => {
                         return Err(io::Error::new(
                             io::ErrorKind::InvalidInput,
-                            format!("Invalid header name: {:?}", &header),
+                            "invalid header name",
                         ));
                     }
                 };
@@ -671,7 +672,7 @@ fn decode_trailers(buf: &mut BytesMut, count: usize) -> Result<HeaderMap, io::Er
                     Err(_) => {
                         return Err(io::Error::new(
                             io::ErrorKind::InvalidInput,
-                            format!("Invalid header value: {:?}", &header),
+                            "invalid header value",
                         ));
                     }
                 };
@@ -685,7 +686,7 @@ fn decode_trailers(buf: &mut BytesMut, count: usize) -> Result<HeaderMap, io::Er
             io::ErrorKind::InvalidInput,
             "Partial header",
         )),
-        Err(e) => Err(io::Error::new(io::ErrorKind::InvalidInput, e)),
+        Err(_) => Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid header")),
     }
 }
 
