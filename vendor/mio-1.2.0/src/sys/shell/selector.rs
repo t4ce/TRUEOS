@@ -5,7 +5,7 @@ use alloc::{
 };
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::time::Duration;
-use core3::io;
+use trueos_io as io;
 #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
 use spin::Mutex;

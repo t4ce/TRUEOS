@@ -142,6 +142,9 @@ version = "0.1.2"
 features = ["alloc"]
 default-features = false
 
+[target.'cfg(any(target_os = "trueos", target_os = "zkvm"))'.dependencies.trueos-io]
+path = "../../crates/trueos-io"
+
 [dependencies.data-encoding]
 version = "2"
 features = ["alloc"]

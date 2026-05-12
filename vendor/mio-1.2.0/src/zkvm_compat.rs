@@ -1,6 +1,6 @@
 use core::time::Duration;
 use core::fmt;
-use core3::io;
+use trueos_io as io;
 
 unsafe extern "C" {
     fn trueos_cabi_poll_once();

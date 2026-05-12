@@ -93,51 +93,7 @@ pub mod hash {
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod io {
     //! TRUEOS no_std compatibility re-exports for existing socket2 paths.
-    pub use core3::io::*;
-
-    /// Minimal no_std IoSlice used by socket2's vectored API surface.
-    #[derive(Clone, Copy, Debug)]
-    pub struct IoSlice<'a>(&'a [u8]);
-
-    impl<'a> IoSlice<'a> {
-        /// Create an IoSlice from a byte slice.
-        pub fn new(buf: &'a [u8]) -> Self {
-            Self(buf)
-        }
-    }
-
-    impl core::ops::Deref for IoSlice<'_> {
-        type Target = [u8];
-
-        fn deref(&self) -> &[u8] {
-            self.0
-        }
-    }
-
-    /// Minimal no_std IoSliceMut used by socket2's vectored API surface.
-    #[derive(Debug)]
-    pub struct IoSliceMut<'a>(&'a mut [u8]);
-
-    impl<'a> IoSliceMut<'a> {
-        /// Create an IoSliceMut from a mutable byte slice.
-        pub fn new(buf: &'a mut [u8]) -> Self {
-            Self(buf)
-        }
-    }
-
-    impl core::ops::Deref for IoSliceMut<'_> {
-        type Target = [u8];
-
-        fn deref(&self) -> &[u8] {
-            self.0
-        }
-    }
-
-    impl core::ops::DerefMut for IoSliceMut<'_> {
-        fn deref_mut(&mut self) -> &mut [u8] {
-            self.0
-        }
-    }
+    pub use trueos_io::*;
 }
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]

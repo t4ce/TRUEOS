@@ -4,7 +4,7 @@ use core::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use core::ptr;
 use spin::{Mutex, Once};
 use core::time::Duration;
-use core3::io;
+use trueos_io as io;
 
 use crate::{MsgHdr, MsgHdrMut, RecvFlags, SockAddr, TcpKeepalive};
 
