@@ -1,14 +1,15 @@
 use crate::io::util::read_until::read_until_internal;
 use crate::io::AsyncBufRead;
+use crate::runtime::prelude::*;
 
 use pin_project_lite::pin_project;
-use std::future::Future;
+use core::future::Future;
 use std::io;
-use std::marker::PhantomPinned;
-use std::mem;
-use std::pin::Pin;
-use std::string::FromUtf8Error;
-use std::task::{ready, Context, Poll};
+use core::marker::PhantomPinned;
+use core::mem;
+use core::pin::Pin;
+use alloc::string::FromUtf8Error;
+use core::task::{ready, Context, Poll};
 
 pin_project! {
     /// Future for the [`read_line`](crate::io::AsyncBufReadExt::read_line) method.

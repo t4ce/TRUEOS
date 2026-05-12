@@ -3,8 +3,8 @@ use crate::io::{AsyncBufRead, AsyncRead, AsyncSeek, AsyncWrite, ReadBuf};
 
 use pin_project_lite::pin_project;
 use std::io::{self, IoSlice, SeekFrom};
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 pin_project! {
     /// Wraps a type that is [`AsyncWrite`] and [`AsyncRead`], and buffers its input and output.

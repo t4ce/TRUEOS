@@ -1,3 +1,4 @@
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use crate::io::blocking::Blocking;
 use crate::io::{AsyncRead, ReadBuf};
 
@@ -65,7 +66,7 @@ cfg_io_std! {
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
 mod sys {
     use std::os::unix::io::{AsFd, AsRawFd, BorrowedFd, RawFd};
 
@@ -101,6 +102,7 @@ cfg_windows! {
 }
 
 impl AsyncRead for Stdin {
+    #[cfg_attr(any(target_os = "trueos", target_os = "zkvm"), allow(unused_mut))]
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,

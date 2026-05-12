@@ -1,13 +1,14 @@
 use crate::io::util::vec_with_initialized::{into_read_buf_parts, VecU8, VecWithInitialized};
 use crate::io::{AsyncRead, ReadBuf};
+use crate::runtime::prelude::*;
 
 use pin_project_lite::pin_project;
-use std::future::Future;
+use core::future::Future;
 use std::io;
-use std::marker::PhantomPinned;
-use std::mem::{self, MaybeUninit};
-use std::pin::Pin;
-use std::task::{ready, Context, Poll};
+use core::marker::PhantomPinned;
+use core::mem::{self, MaybeUninit};
+use core::pin::Pin;
+use core::task::{ready, Context, Poll};
 
 pin_project! {
     #[derive(Debug)]

@@ -1,3 +1,6 @@
+use crate::runtime::prelude::*;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use alloc::{borrow::ToOwned, string::String, vec::Vec};
 use std::future;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};

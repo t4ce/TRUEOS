@@ -1,9 +1,10 @@
 use crate::io::{AsyncRead, AsyncWrite, ReadBuf};
+use crate::runtime::prelude::*;
 
-use std::future::Future;
+use core::future::Future;
 use std::io;
-use std::pin::Pin;
-use std::task::{ready, Context, Poll};
+use core::pin::Pin;
+use core::task::{ready, Context, Poll};
 
 #[derive(Debug)]
 pub(super) struct CopyBuffer {

@@ -1,4 +1,6 @@
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use crate::io::blocking::Blocking;
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use crate::io::stdio_common::SplitByUtf8BoundaryIfWindows;
 use crate::io::AsyncWrite;
 
@@ -104,7 +106,7 @@ cfg_io_std! {
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
 mod sys {
     use std::os::unix::io::{AsFd, AsRawFd, BorrowedFd, RawFd};
 
@@ -140,6 +142,7 @@ cfg_windows! {
 }
 
 impl AsyncWrite for Stderr {
+    #[cfg_attr(any(target_os = "trueos", target_os = "zkvm"), allow(unused_mut))]
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -154,6 +157,7 @@ impl AsyncWrite for Stderr {
         Pin::new(&mut self.std).poll_write(cx, buf)
     }
 
+    #[cfg_attr(any(target_os = "trueos", target_os = "zkvm"), allow(unused_mut))]
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
         #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         {
@@ -164,6 +168,7 @@ impl AsyncWrite for Stderr {
         Pin::new(&mut self.std).poll_flush(cx)
     }
 
+    #[cfg_attr(any(target_os = "trueos", target_os = "zkvm"), allow(unused_mut))]
     fn poll_shutdown(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,

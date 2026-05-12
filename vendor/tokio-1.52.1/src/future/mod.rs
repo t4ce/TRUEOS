@@ -4,6 +4,8 @@
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub use core::future::{poll_fn, Future, IntoFuture};
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub use std::future::{ready, Ready};
 
 #[cfg(any(feature = "macros", feature = "process"))]
 pub(crate) mod maybe_done;

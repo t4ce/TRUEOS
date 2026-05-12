@@ -2,11 +2,11 @@ use crate::io::AsyncWrite;
 
 use bytes::Buf;
 use pin_project_lite::pin_project;
-use std::future::Future;
+use core::future::Future;
 use std::io::{self, IoSlice};
-use std::marker::PhantomPinned;
-use std::pin::Pin;
-use std::task::{ready, Context, Poll};
+use core::marker::PhantomPinned;
+use core::pin::Pin;
+use core::task::{ready, Context, Poll};
 
 pin_project! {
     /// A future to write some of the buffer to an `AsyncWrite`.
