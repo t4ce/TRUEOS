@@ -1,4 +1,5 @@
 use super::{arc::MiniArc, KeyHashDate, ValueEntry};
+use alloc::boxed::Box;
 use crate::common::{
     deque::{DeqNode, Deque},
     CacheRegion,

@@ -3,6 +3,7 @@
 #[cfg(feature = "sync")]
 pub(crate) mod notifier;
 
+use alloc::boxed::Box;
 use std::{future::Future, pin::Pin, sync::Arc};
 
 /// A future returned by an eviction listener.

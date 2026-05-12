@@ -11,6 +11,8 @@
 // For full authorship information, see the version control history of
 // https://github.com/ben-manes/caffeine/
 
+use alloc::{boxed::Box, vec};
+
 /// A probabilistic multi-set for estimating the popularity of an element within
 /// a time window. The maximum frequency of an element is limited to 15 (4-bits)
 /// and an aging process periodically halves the popularity of all elements.

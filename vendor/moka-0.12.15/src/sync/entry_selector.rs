@@ -1,5 +1,6 @@
 use equivalent::Equivalent;
 
+use alloc::borrow::ToOwned;
 use crate::{ops::compute, Entry};
 
 use super::Cache;

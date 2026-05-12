@@ -11,6 +11,7 @@
 // For full authorship information, see the version control history of
 // https://github.com/ben-manes/caffeine/
 
+use alloc::{boxed::Box, vec::Vec};
 use std::{ptr::NonNull, time::Duration};
 
 use super::{

@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use std::hash::Hash;
 
 pub(crate) trait ScanningGet<K, V>

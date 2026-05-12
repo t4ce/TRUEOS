@@ -1,3 +1,4 @@
+use alloc::{boxed::Box, vec::Vec};
 use std::{hash::Hash, sync::Arc};
 
 // This trait is implemented by `sync::BaseCache` and `sync::Cache`.

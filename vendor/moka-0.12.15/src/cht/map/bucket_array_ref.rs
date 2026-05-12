@@ -1,5 +1,6 @@
 use super::bucket::{self, Bucket, BucketArray, InsertOrModifyState, RehashOp};
 
+use alloc::vec::Vec;
 use std::{
     hash::{BuildHasher, Hash},
     sync::atomic::{AtomicUsize, Ordering},
@@ -24,7 +25,7 @@ where
         mut eq: impl FnMut(&K) -> bool,
         with_entry: impl FnOnce(&K, &V) -> Option<T>,
     ) -> Option<T> {
-        let guard = &crossbeam_epoch::pin();
+        let guard = &crate::platform::epoch::pin();
         let current_ref = self.get(guard);
         let mut bucket_array_ref = current_ref;
 
@@ -68,7 +69,7 @@ where
         mut condition: impl FnMut(&K, &V) -> bool,
         with_previous_entry: impl FnOnce(&K, &V) -> T,
     ) -> Option<T> {
-        let guard = &crossbeam_epoch::pin();
+        let guard = &crate::platform::epoch::pin();
         let current_ref = self.get(guard);
         let mut bucket_array_ref = current_ref;
 
@@ -134,7 +135,7 @@ where
     ) -> Option<T> {
         use bucket::InsertionResult;
 
-        let guard = &crossbeam_epoch::pin();
+        let guard = &crate::platform::epoch::pin();
         let current_ref = self.get(guard);
         let mut bucket_array_ref = current_ref;
         let mut state = InsertOrModifyState::New(key, on_insert);
@@ -203,7 +204,7 @@ where
         mut on_modify: impl FnMut(&K, &V) -> V,
         with_old_entry: impl FnOnce(&K, &V) -> T,
     ) -> Option<T> {
-        let guard = &crossbeam_epoch::pin();
+        let guard = &crate::platform::epoch::pin();
         let current_ref = self.get(guard);
         let mut bucket_array_ref = current_ref;
         let mut state = InsertOrModifyState::New(key, on_insert);
@@ -265,7 +266,7 @@ where
     }
 
     pub(crate) fn keys<T>(&self, mut with_key: impl FnMut(&K) -> T) -> Vec<T> {
-        let guard = &crossbeam_epoch::pin();
+        let guard = &crate::platform::epoch::pin();
         let current_ref = self.get(guard);
         let mut bucket_array_ref = current_ref;
 
