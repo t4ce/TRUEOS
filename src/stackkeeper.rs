@@ -86,8 +86,8 @@ pub extern "Rust" fn trueos_tokio_tls_current_cpu_slot() -> u32 {
 
 #[unsafe(no_mangle)]
 pub extern "Rust" fn trueos_tokio_tls_current_slot() -> u32 {
-    if crate::th::vthread::tokio_blocking_backing_enabled()
-        && let Some(slot) = crate::th::vthread::current_tls_slot()
+    if crate::t::th::vthread::tokio_blocking_backing_enabled()
+        && let Some(slot) = crate::t::th::vthread::current_tls_slot()
     {
         return slot;
     }
@@ -252,8 +252,8 @@ impl TokioLaneLease {
         self.tag
     }
 
-    pub fn vthread_record(self) -> &'static crate::th::vthread::VThreadRecord {
-        crate::th::vthread::record_for_lane(self.tag.lane_id as usize)
+    pub fn vthread_record(self) -> &'static crate::t::th::vthread::VThreadRecord {
+        crate::t::th::vthread::record_for_lane(self.tag.lane_id as usize)
     }
 }
 

@@ -1839,7 +1839,7 @@ async fn vm_task(vm_id: u8, _lane_lease: crate::hv::lane::LaneLease) {
     hvlogf(format_args!(
         "hv: vm{} reporting: vthread hull fs_base=0x{:016X}",
         vm_id,
-        crate::th::vthread::vm_hull_fs_base(vm_id)
+        crate::t::th::vthread::vm_hull_fs_base(vm_id)
     ));
     let _entered_guest_alloc = crate::allocators::enter_hv_guest_domain_current_cpu(vm_id);
     let launch_result = vmx_launch_once_with_ept(lineage_record).await;
@@ -2538,7 +2538,7 @@ fn setup_vmcs_for_launch(
             ));
             let fs_base = unsafe { Msr::new(crate::hv::vmx::IA32_FS_BASE).read() };
             let gs_base = unsafe { Msr::new(crate::hv::vmx::IA32_GS_BASE).read() };
-            let guest_fs_base = crate::th::vthread::vm_hull_fs_base(vm_id);
+            let guest_fs_base = crate::t::th::vthread::vm_hull_fs_base(vm_id);
             let sysenter_cs = unsafe { Msr::new(crate::hv::vmx::IA32_SYSENTER_CS).read() };
             let sysenter_esp = unsafe { Msr::new(crate::hv::vmx::IA32_SYSENTER_ESP).read() };
             let sysenter_eip = unsafe { Msr::new(crate::hv::vmx::IA32_SYSENTER_EIP).read() };
@@ -2725,7 +2725,7 @@ fn setup_vmcs_for_launch(
     };
     let fs_base = unsafe { Msr::new(crate::hv::vmx::IA32_FS_BASE).read() };
     let gs_base = unsafe { Msr::new(crate::hv::vmx::IA32_GS_BASE).read() };
-    let guest_fs_base = crate::th::vthread::vm_hull_fs_base(vm_id);
+    let guest_fs_base = crate::t::th::vthread::vm_hull_fs_base(vm_id);
     let sysenter_cs = unsafe { Msr::new(crate::hv::vmx::IA32_SYSENTER_CS).read() };
     let sysenter_esp = unsafe { Msr::new(crate::hv::vmx::IA32_SYSENTER_ESP).read() };
     let sysenter_eip = unsafe { Msr::new(crate::hv::vmx::IA32_SYSENTER_EIP).read() };

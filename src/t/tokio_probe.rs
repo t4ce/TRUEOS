@@ -37,7 +37,7 @@ struct StdTlsIsolationSample {
 
 struct VThreadIdentitySample {
     label: u32,
-    probe: crate::th::vthread::VThreadTlsProbe,
+    probe: crate::t::th::vthread::VThreadTlsProbe,
 }
 
 async fn probe_async_identity() -> u32 {
@@ -530,7 +530,7 @@ fn vthread_identity_probe_ready() -> bool {
 }
 
 fn mark_vthread_tls_canary_on_boot_cpu() {
-    let probe = crate::th::vthread::probe_tls_touch(0xB5B5_0001);
+    let probe = crate::t::th::vthread::probe_tls_touch(0xB5B5_0001);
     if let Some(snapshot) = probe.snapshot {
         crate::log!(
             "tokio_probe: note vthread.tls boot canary armed vtid={} slot={} before=0x{:08X} after=0x{:08X}\n",
@@ -562,11 +562,11 @@ fn run_vthread_tls_isolation_worker(label: u32, release: Arc<AtomicU32>) -> StdT
         core::hint::spin_loop();
     }
 
-    let probe = crate::th::vthread::probe_tls_touch(label);
+    let probe = crate::t::th::vthread::probe_tls_touch(label);
 
     let mut leaked = 0;
     for _ in 0..4096 {
-        let seen = crate::th::vthread::probe_tls_touch(label).before;
+        let seen = crate::t::th::vthread::probe_tls_touch(label).before;
         if seen != label {
             leaked = seen;
             break;
@@ -636,7 +636,7 @@ async fn probe_vthread_tls_isolation_surface() {
             right.cpu_slot,
             right.tokio_lane
         );
-    } else if crate::th::vthread::tokio_blocking_backing_enabled() {
+    } else if crate::t::th::vthread::tokio_blocking_backing_enabled() {
         crate::log!(
             "tokio_probe: note vthread.tls carrier_isolation accepted under vthread backing left(label=0x{:08X} cpu={} lane={} before=0x{:08X} after=0x{:08X} leaked=0x{:08X}) right(label=0x{:08X} cpu={} lane={} before=0x{:08X} after=0x{:08X} leaked=0x{:08X}); use vthread TLS identity for Rayon-style schedulers\n",
             left.label,
@@ -678,7 +678,7 @@ fn run_vthread_identity_worker(label: u32, release: Arc<AtomicU32>) -> VThreadId
 
     VThreadIdentitySample {
         label,
-        probe: crate::th::vthread::probe_tls_touch(label),
+        probe: crate::t::th::vthread::probe_tls_touch(label),
     }
 }
 
@@ -820,7 +820,7 @@ fn spawn_deferred_vthread_identity_probe() {
 async fn tokio_vthread_tls_canary_task() {
     crate::r::readiness::wait_for(crate::r::readiness::BACKGROUND_AP_WORKER_READY).await;
 
-    let probe = crate::th::vthread::probe_tls_touch(0xA9A9_0001);
+    let probe = crate::t::th::vthread::probe_tls_touch(0xA9A9_0001);
 
     if let Some(snapshot) = probe.snapshot {
         crate::log!(

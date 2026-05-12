@@ -75,9 +75,6 @@ mod smp;
 mod stackkeeper;
 mod t;
 mod tga;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
-#[path = "t/th/mod.rs"]
-mod th;
 mod tst;
 #[path = "tst/boot_factory_ram_probe.rs"]
 mod tst_boot_factory_ram_probe;

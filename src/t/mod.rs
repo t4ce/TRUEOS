@@ -7,6 +7,8 @@ pub mod net;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod platform;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod th;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod tokio_environment;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod tokio_platform;
