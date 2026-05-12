@@ -191,6 +191,8 @@ path = "src/lib.rs"
 
 [dependencies.base64]
 version = "0.22"
+features = ["alloc"]
+default-features = false
 
 [dependencies.bytes]
 version = "1.2"
