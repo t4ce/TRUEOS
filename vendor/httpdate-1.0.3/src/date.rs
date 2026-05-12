@@ -1,6 +1,6 @@
-use std::cmp;
-use std::fmt::{self, Display, Formatter};
-use std::str::FromStr;
+use core::cmp;
+use core::fmt::{self, Display, Formatter};
+use core::str::FromStr;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::Error;
@@ -224,7 +224,7 @@ impl Display for HttpDate {
         buf[21] = b'0' + (self.min % 10);
         buf[23] = b'0' + (self.sec / 10);
         buf[24] = b'0' + (self.sec % 10);
-        f.write_str(std::str::from_utf8(&buf[..]).unwrap())
+        f.write_str(core::str::from_utf8(&buf[..]).unwrap())
     }
 }
 

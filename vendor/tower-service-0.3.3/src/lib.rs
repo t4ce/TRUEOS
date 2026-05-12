@@ -5,6 +5,7 @@
     unreachable_pub
 )]
 #![forbid(unsafe_code)]
+#![cfg_attr(any(target_os = "trueos", target_os = "zkvm"), no_std)]
 // `rustdoc::broken_intra_doc_links` is checked on CI
 
 //! Definition of the core `Service` trait to Tower
@@ -13,8 +14,13 @@
 //! request / response clients and servers. It is simple but powerful and is
 //! used as the foundation for the rest of Tower.
 
-use std::future::Future;
-use std::task::{Context, Poll};
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+extern crate alloc;
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use alloc::boxed::Box;
+use core::future::Future;
+use core::task::{Context, Poll};
 
 /// An asynchronous function from a `Request` to a `Response`.
 ///

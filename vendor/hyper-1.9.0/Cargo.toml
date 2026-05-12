@@ -152,6 +152,7 @@ default-features = false
 [dependencies.httparse]
 version = "1.9"
 optional = true
+default-features = false
 
 [dependencies.httpdate]
 version = "1.0"

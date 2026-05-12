@@ -2,6 +2,7 @@
 #![deny(warnings)]
 #![deny(missing_docs)]
 #![deny(missing_debug_implementations)]
+#![cfg_attr(any(target_os = "trueos", target_os = "zkvm"), no_std)]
 
 //! A Futures channel-like utility to signal when a value is wanted.
 //!
@@ -80,16 +81,22 @@
 //! # fn main() {}
 //! ```
 
-use std::fmt;
-use std::future::Future;
-use std::mem;
-use std::pin::Pin;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+extern crate alloc;
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use alloc::sync::Arc;
+use core::fmt;
+use core::future::Future;
+use core::mem;
+use core::pin::Pin;
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
+use core::sync::atomic::AtomicUsize;
 // SeqCst is the only ordering used to ensure accessing the state and
 // TryLock are never re-ordered.
-use std::sync::atomic::Ordering::SeqCst;
-use std::task::{self, Poll, Waker};
+use core::sync::atomic::Ordering::SeqCst;
+use core::task::{self, Poll, Waker};
 
 
 use try_lock::TryLock;

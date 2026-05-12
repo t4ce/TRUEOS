@@ -109,12 +109,16 @@ optional = true
 
 [dependencies.crossbeam-channel]
 version = "0.5.15"
+default-features = false
 
 [dependencies.crossbeam-epoch]
 version = "0.9.18"
+features = ["alloc"]
+default-features = false
 
 [dependencies.crossbeam-utils]
 version = "0.8.21"
+default-features = false
 
 [dependencies.equivalent]
 version = "1.0"
