@@ -12,9 +12,9 @@ pub(crate) use matmul::{
     log_gpgpu_t63_first_tile_output_detail_once, stage_gpgpu_one_tile_record_probe,
     stage_gpgpu_tile_record_rows_probe, submit_gpgpu_one_tile_output_compare_probe,
     submit_gpgpu_one_tile_output_sentinel_probe, submit_gpgpu_sidequest_target_buffer_probe,
-    submit_gpgpu_t5_one_row_matvec_probe, submit_gpgpu_t61_one_row_matvec_probe,
-    submit_gpgpu_t62_partial_matvec_probe, submit_gpgpu_t63_accum16_hi_live32_partial_matvec_probe,
-    submit_gpgpu_t63_partial_matvec_probe, submit_gpgpu_t6_one_row_matvec_probe,
+    submit_gpgpu_t5_one_row_matvec_probe, submit_gpgpu_t6_one_row_matvec_probe,
+    submit_gpgpu_t61_one_row_matvec_probe, submit_gpgpu_t62_partial_matvec_probe,
+    submit_gpgpu_t63_accum16_hi_live32_partial_matvec_probe, submit_gpgpu_t63_partial_matvec_probe,
 };
 
 const FORCEWAKE_RENDER: usize = 0x0A278;
