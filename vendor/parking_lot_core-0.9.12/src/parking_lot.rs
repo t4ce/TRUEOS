@@ -7,6 +7,8 @@
 use crate::thread_parker::{ThreadParker, ThreadParkerT, UnparkHandleT};
 use crate::util::UncheckedOptionExt;
 use crate::word_lock::WordLock;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use alloc::{boxed::Box, vec::Vec};
 use core::{
     cell::{Cell, UnsafeCell},
     ptr,
@@ -67,6 +69,16 @@ static HASHTABLE: AtomicPtr<HashTable> = AtomicPtr::new(ptr::null_mut());
 // Even with 3x more buckets than threads, the memory overhead per thread is
 // still only a few hundred bytes per thread.
 const LOAD_FACTOR: usize = 3;
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+fn duration_to_embassy(duration: Duration) -> embassy_time::Duration {
+    embassy_time::Duration::from_nanos(
+        duration
+            .as_secs()
+            .saturating_mul(1_000_000_000)
+            .saturating_add(u64::from(duration.subsec_nanos())),
+    )
+}
 
 struct HashTable {
     // Hash buckets for the table
@@ -146,7 +158,14 @@ impl FairTimeout {
         if now > self.timeout {
             // Time between 0 and 1ms.
             let nanos = self.gen_u32() % 1_000_000;
-            self.timeout = now + Duration::new(0, nanos);
+            #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+            {
+                self.timeout = now + duration_to_embassy(Duration::new(0, nanos));
+            }
+            #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+            {
+                self.timeout = now + Duration::new(0, nanos);
+            }
             true
         } else {
             false
@@ -209,6 +228,14 @@ impl ThreadData {
 // Invokes the given closure with a reference to the current thread `ThreadData`.
 #[inline(always)]
 fn with_thread_data<T>(f: impl FnOnce(&ThreadData) -> T) -> T {
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    {
+        let thread_data = ThreadData::new();
+        return f(&thread_data);
+    }
+
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+    {
     // Unlike word_lock::ThreadData, parking_lot::ThreadData is always expensive
     // to construct. Try to use a thread-local version if possible. Otherwise just
     // create a ThreadData on the stack
@@ -219,6 +246,7 @@ fn with_thread_data<T>(f: impl FnOnce(&ThreadData) -> T) -> T {
         .unwrap_or_else(|_| thread_data_storage.get_or_insert_with(ThreadData::new));
 
     f(unsafe { &*thread_data_ptr })
+    }
 }
 
 impl Drop for ThreadData {

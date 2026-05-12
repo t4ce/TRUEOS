@@ -1,6 +1,9 @@
 //! Error handling.
 
-use alloc::string;
+use alloc::{
+    boxed::Box,
+    string::{self, String, ToString},
+};
 use core::{result, str};
 use std::io;
 

@@ -2180,6 +2180,7 @@ name = "parking_lot_core"
 version = "0.9.12"
 dependencies = [
  "cfg-if",
+ "embassy-time",
  "libc",
  "redox_syscall",
  "smallvec",
@@ -3362,6 +3363,7 @@ name = "tungstenite"
 version = "0.29.0"
 dependencies = [
  "bytes",
+ "core3",
  "log",
  "rand 0.9.4",
  "thiserror",
