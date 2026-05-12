@@ -29,10 +29,18 @@
 //! that the items are not compatible (e.g. that a type doesn't implement a
 //! necessary trait).
 
+#![cfg_attr(any(target_os = "trueos", target_os = "zkvm"), no_std)]
+
+extern crate alloc;
+
+use alloc::vec::Vec;
+use core::derive;
+use core::prelude::rust_2018::*;
+
 use crate::rand::distributions::{Distribution, Uniform};
 use crate::rand::rngs::SmallRng;
 use crate::rand::seq::index;
-use crate::rand::{thread_rng, Rng, SeedableRng};
+use crate::rand::{Rng, SeedableRng};
 
 use ndarray::{Array, Axis, RemoveAxis, ShapeBuilder};
 use ndarray::{ArrayBase, DataOwned, RawData, Data, Dimension};
@@ -314,7 +322,7 @@ impl Arbitrary for SamplingStrategy {
 }
 
 fn get_rng() -> SmallRng {
-    SmallRng::from_rng(thread_rng()).expect("create SmallRng from thread_rng failed")
+    SmallRng::seed_from_u64(0)
 }
 
 /// A wrapper type that allows casting f64 distributions to f32
