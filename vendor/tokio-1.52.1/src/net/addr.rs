@@ -183,7 +183,19 @@ cfg_net! {
             let s = self.to_owned();
 
             MaybeReady(sealed::State::Blocking(spawn_blocking(move || {
-                std::net::ToSocketAddrs::to_socket_addrs(&s)
+                #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+                {
+                    let _ = s;
+                    Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        "DNS resolution is unavailable on TRUEOS",
+                    ))
+                }
+
+                #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+                {
+                    std::net::ToSocketAddrs::to_socket_addrs(&s)
+                }
             })))
         }
     }
@@ -220,7 +232,19 @@ cfg_net! {
             let host = host.to_owned();
 
             MaybeReady(sealed::State::Blocking(spawn_blocking(move || {
-                std::net::ToSocketAddrs::to_socket_addrs(&(&host[..], port))
+                #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+                {
+                    let _ = (host, port);
+                    Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        "DNS resolution is unavailable on TRUEOS",
+                    ))
+                }
+
+                #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+                {
+                    std::net::ToSocketAddrs::to_socket_addrs(&(&host[..], port))
+                }
             })))
         }
     }

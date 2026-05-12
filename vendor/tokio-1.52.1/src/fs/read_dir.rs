@@ -1,15 +1,23 @@
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use crate::fs::asyncify;
 
 use alloc::boxed::Box;
-use std::collections::VecDeque;
+use alloc::collections::VecDeque;
+use alloc::sync::Arc;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use crate::fs::trueos::{FileType, Metadata};
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use crate::fs::trueos::{TrueosDirEntry as StdDirEntry, TrueosReadDir as StdReadDir};
+use core::future::Future;
+use core::pin::Pin;
+use core::task::{ready, Context, Poll};
 use std::ffi::OsString;
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::fs::{FileType, Metadata};
-use std::future::Future;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{ready, Context, Poll};
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+use std::fs::{DirEntry as StdDirEntry, ReadDir as StdReadDir};
 
 #[cfg(test)]
 use super::mocks::spawn_blocking;
@@ -32,6 +40,16 @@ const CHUNK_SIZE: usize = 32;
 /// [`spawn_blocking`]: crate::task::spawn_blocking
 pub async fn read_dir(path: impl AsRef<Path>) -> io::Result<ReadDir> {
     let path = path.as_ref().to_owned();
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    {
+        let mut std = crate::fs::trueos::read_dir(&path).await?;
+        let mut buf = VecDeque::with_capacity(CHUNK_SIZE);
+        let remain = ReadDir::next_chunk(&mut buf, &mut std);
+
+        return Ok(ReadDir(Box::new(State::Idle(Some((buf, Box::new(std), remain))))));
+    }
+
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     asyncify(|| -> io::Result<ReadDir> {
         let mut std = std::fs::read_dir(path)?;
         let mut buf = VecDeque::with_capacity(CHUNK_SIZE);
@@ -66,8 +84,8 @@ pub struct ReadDir(Box<State>);
 
 #[derive(Debug)]
 enum State {
-    Idle(Option<(VecDeque<io::Result<DirEntry>>, Box<std::fs::ReadDir>, bool)>),
-    Pending(JoinHandle<(VecDeque<io::Result<DirEntry>>, Box<std::fs::ReadDir>, bool)>),
+    Idle(Option<(VecDeque<io::Result<DirEntry>>, Box<StdReadDir>, bool)>),
+    Pending(JoinHandle<(VecDeque<io::Result<DirEntry>>, Box<StdReadDir>, bool)>),
 }
 
 impl ReadDir {
@@ -77,7 +95,7 @@ impl ReadDir {
     ///
     /// This method is cancellation safe.
     pub async fn next_entry(&mut self) -> io::Result<Option<DirEntry>> {
-        use std::future::poll_fn;
+        use core::future::poll_fn;
         poll_fn(|cx| self.poll_next_entry(cx)).await
     }
 
@@ -125,7 +143,7 @@ impl ReadDir {
         }
     }
 
-    fn next_chunk(buf: &mut VecDeque<io::Result<DirEntry>>, std: &mut std::fs::ReadDir) -> bool {
+    fn next_chunk(buf: &mut VecDeque<io::Result<DirEntry>>, std: &mut StdReadDir) -> bool {
         for _ in 0..CHUNK_SIZE {
             let ret = match std.next() {
                 Some(ret) => ret,
@@ -158,7 +176,7 @@ impl ReadDir {
 }
 
 feature! {
-    #![unix]
+    #![all(unix, not(any(target_os = "trueos", target_os = "zkvm")))]
 
     use std::os::unix::fs::DirEntryExt;
 
@@ -209,7 +227,7 @@ pub struct DirEntry {
         target_os = "vita",
     )))]
     file_type: Option<FileType>,
-    std: Arc<std::fs::DirEntry>,
+    std: Arc<StdDirEntry>,
 }
 
 impl DirEntry {
@@ -351,8 +369,8 @@ impl DirEntry {
     }
 
     /// Returns a reference to the underlying `std::fs::DirEntry`.
-    #[cfg(unix)]
-    pub(super) fn as_inner(&self) -> &std::fs::DirEntry {
+    #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
+    pub(super) fn as_inner(&self) -> &StdDirEntry {
         &self.std
     }
 }

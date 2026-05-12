@@ -1,17 +1,15 @@
+use super::kill::Kill;
+use super::SpawnedChild;
 use crate::io::{AsyncRead, AsyncWrite, ReadBuf};
-use crate::process::kill::Kill;
-use crate::process::SpawnedChild;
 
-use std::future::Future;
+use alloc::vec::Vec;
+use core::future::Future;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 use std::io;
-use std::pin::Pin;
-use std::task::{Context, Poll};
 
 fn unsupported() -> io::Error {
-    io::Error::new(
-        io::ErrorKind::Unsupported,
-        "tokio process is not supported on zkvm",
-    )
+    io::Error::new(io::ErrorKind::Other, "tokio process is not supported on zkvm")
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -32,8 +30,8 @@ impl ExitStatus {
 #[derive(Debug, Default)]
 pub struct Output {
     pub status: ExitStatus,
-    pub stdout: alloc::vec::Vec<u8>,
-    pub stderr: alloc::vec::Vec<u8>,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]

@@ -1,10 +1,143 @@
 use crate::io::ReadBuf;
+use crate::loom::sync as trueos_sync;
 use crate::runtime::prelude::*;
-use std::fmt;
-use std::fs::Metadata;
+use alloc::string::String;
+use alloc::vec::Vec;
+use core::fmt;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
-use std::sync::Mutex;
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FileType {
+    is_file: bool,
+    is_dir: bool,
+    is_symlink: bool,
+}
+
+impl FileType {
+    pub fn is_dir(&self) -> bool {
+        self.is_dir
+    }
+
+    pub fn is_file(&self) -> bool {
+        self.is_file
+    }
+
+    pub fn is_symlink(&self) -> bool {
+        self.is_symlink
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Permissions {
+    readonly: bool,
+}
+
+impl Permissions {
+    pub fn readonly(&self) -> bool {
+        self.readonly
+    }
+
+    pub fn set_readonly(&mut self, readonly: bool) {
+        self.readonly = readonly;
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Metadata {
+    len: u64,
+    file_type: FileType,
+    permissions: Permissions,
+}
+
+impl Metadata {
+    fn file(len: u64) -> Self {
+        Self {
+            len,
+            file_type: FileType {
+                is_file: true,
+                is_dir: false,
+                is_symlink: false,
+            },
+            permissions: Permissions::default(),
+        }
+    }
+
+    pub fn file_type(&self) -> FileType {
+        self.file_type
+    }
+
+    pub fn is_dir(&self) -> bool {
+        self.file_type.is_dir()
+    }
+
+    pub fn is_file(&self) -> bool {
+        self.file_type.is_file()
+    }
+
+    pub fn is_symlink(&self) -> bool {
+        self.file_type.is_symlink()
+    }
+
+    pub fn len(&self) -> u64 {
+        self.len
+    }
+
+    pub fn permissions(&self) -> Permissions {
+        self.permissions
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct TrueosReadDir;
+
+#[derive(Debug)]
+pub(crate) struct TrueosDirEntry;
+
+impl Iterator for TrueosReadDir {
+    type Item = io::Result<TrueosDirEntry>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        None
+    }
+}
+
+impl TrueosDirEntry {
+    pub(crate) fn path(&self) -> PathBuf {
+        PathBuf::new()
+    }
+
+    pub(crate) fn file_name(&self) -> std::ffi::OsString {
+        String::new()
+    }
+
+    pub(crate) fn metadata(&self) -> io::Result<Metadata> {
+        unsupported("read_dir metadata")
+    }
+
+    pub(crate) fn file_type(&self) -> io::Result<FileType> {
+        unsupported("read_dir file_type")
+    }
+}
+
+fn unsupported<T>(op: &'static str) -> io::Result<T> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        format!("TRUEOS fs {op} is not exposed through CABI yet"),
+    ))
+}
+
+struct Mutex<T>(trueos_sync::Mutex<T>);
+
+impl<T> Mutex<T> {
+    fn new(value: T) -> Self {
+        Self(trueos_sync::Mutex::new(value))
+    }
+
+    fn lock(&self) -> io::Result<trueos_sync::MutexGuard<'_, T>> {
+        Ok(self.0.lock())
+    }
+}
 
 unsafe extern "C" {
     fn trueos_cabi_fs_read_file(
@@ -366,11 +499,12 @@ impl TrueosFile {
         Ok(())
     }
 
-    pub(crate) fn metadata(&self) -> io::Result<std::fs::Metadata> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "TRUEOS fs metadata is not exposed through CABI yet",
-        ))
+    pub(crate) fn metadata(&self) -> io::Result<Metadata> {
+        let inner = self
+            .inner
+            .lock()
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "TRUEOS fs file mutex poisoned"))?;
+        Ok(Metadata::file(inner.data.len() as u64))
     }
 
     pub(crate) fn try_clone(&self) -> io::Result<TrueosFile> {
@@ -391,11 +525,8 @@ impl TrueosFile {
         })
     }
 
-    pub(crate) fn set_permissions(&self, _perm: std::fs::Permissions) -> io::Result<()> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "TRUEOS fs permissions are not exposed through CABI yet",
-        ))
+    pub(crate) fn set_permissions(&self, _perm: Permissions) -> io::Result<()> {
+        unsupported("permissions")
     }
 }
 
@@ -496,10 +627,16 @@ pub(crate) async fn canonicalize(path: &Path) -> io::Result<PathBuf> {
 }
 
 pub(crate) async fn metadata(_path: &Path) -> io::Result<Metadata> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "TRUEOS fs metadata is not exposed through CABI yet",
-    ))
+    let bytes = read_sync(_path)?;
+    Ok(Metadata::file(bytes.len() as u64))
+}
+
+pub(crate) async fn read_dir(_path: &Path) -> io::Result<TrueosReadDir> {
+    unsupported("read_dir")
+}
+
+pub(crate) async fn set_permissions(_path: &Path, _perm: Permissions) -> io::Result<()> {
+    unsupported("permissions")
 }
 
 pub(crate) async fn remove_file(path: &Path) -> io::Result<()> {

@@ -7,15 +7,18 @@ use crate::io::blocking::{Buf, DEFAULT_MAX_BUF_SIZE};
 use crate::io::{AsyncRead, AsyncSeek, AsyncWrite, ReadBuf};
 use crate::sync::Mutex;
 
-use std::cmp;
-use std::fmt;
+use alloc::sync::Arc;
+use core::cmp;
+use core::fmt;
+use core::future::Future;
+use core::pin::Pin;
+use core::task::{ready, Context, Poll};
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use crate::fs::trueos::{Metadata, Permissions};
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::fs::{Metadata, Permissions};
-use std::future::Future;
 use std::io::{self, Seek, SeekFrom};
 use std::path::Path;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{ready, Context, Poll};
 
 #[cfg(test)]
 use super::mocks::JoinHandle;
@@ -1169,7 +1172,7 @@ impl Inner {
     }
 
     async fn complete_inflight(&mut self) {
-        use std::future::poll_fn;
+        use core::future::poll_fn;
 
         poll_fn(|cx| self.poll_complete_inflight(cx)).await;
     }
