@@ -1,7 +1,6 @@
 pub mod althlasfont;
 pub mod backends;
 pub mod jpeg_codec;
-mod jpeg_decode_pool;
 pub mod lyon;
 pub mod mandelbrot;
 pub mod png_codec;

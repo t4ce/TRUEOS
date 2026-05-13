@@ -32,7 +32,7 @@ impl JpegDecodeError {
 
 pub fn decode_jpeg_rgba(bytes: &[u8]) -> Result<DecodedJpeg, JpegDecodeError> {
     let options = DecoderOptions::default()
-        .jpeg_set_out_colorspace(ColorSpace::RGB)
+        .jpeg_set_out_colorspace(ColorSpace::RGBA)
         .set_use_unsafe(true);
     if !JPEG_DECODE_GATE_LOGGED.swap(true, Ordering::AcqRel) {
         crate::log!(
@@ -53,18 +53,9 @@ pub fn decode_jpeg_rgba(bytes: &[u8]) -> Result<DecodedJpeg, JpegDecodeError> {
         return Err(JpegDecodeError::Invalid);
     }
 
-    let rgb = decoder
+    let rgba = decoder
         .decode()
         .map_err(|_| JpegDecodeError::DecodeFailed)?;
-    if rgb.len()
-        != (width as usize)
-            .saturating_mul(height as usize)
-            .saturating_mul(3)
-    {
-        return Err(JpegDecodeError::Unsupported);
-    }
-
-    let rgba = super::jpeg_decode_pool::expand_jpeg_rgb_to_rgba(width, height, rgb)?;
     if rgba.len()
         != (width as usize)
             .saturating_mul(height as usize)

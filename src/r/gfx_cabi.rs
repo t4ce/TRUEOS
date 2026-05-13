@@ -1671,6 +1671,7 @@ pub mod cabi {
     const ASYNC_TEX_STATUS_READY: i32 = 2;
     const GFX_CABI_VM_HOST_ONLY_RC: i32 = -90;
     const ASYNC_PNG_DECODE_TASK_POOL_SIZE: usize = 4;
+    const ASYNC_JPEG_DECODE_TASK_POOL_SIZE: usize = 4;
     static ASYNC_TEX_STATUS: spin::Mutex<Vec<i32>> = spin::Mutex::new(Vec::new());
     static ASYNC_JPEG_REQS: spin::Mutex<VecDeque<AsyncJpegUploadReq>> =
         spin::Mutex::new(VecDeque::new());
@@ -1679,11 +1680,8 @@ pub mod cabi {
     const TEXTURE_UPLOAD_RING_CAP: usize = 64;
     static TEXTURE_UPLOAD_REQS: spin::Mutex<TextureWorkRing> =
         spin::Mutex::new(TextureWorkRing::new());
-    static ASYNC_JPEG_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
     static ASYNC_SVG_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
     static TEXTURE_UPLOAD_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
-    static ASYNC_JPEG_WORKER_STARTED: core::sync::atomic::AtomicBool =
-        core::sync::atomic::AtomicBool::new(false);
     static ASYNC_SVG_WORKER_STARTED: core::sync::atomic::AtomicBool =
         core::sync::atomic::AtomicBool::new(false);
     const VM_TEXTURE_OWNER_CAP: usize = 256;
@@ -2122,7 +2120,6 @@ pub mod cabi {
         ASYNC_JPEG_REQS
             .lock()
             .push_back(AsyncJpegUploadReq { tex_id, bytes });
-        ASYNC_JPEG_WAIT.notify_one();
     }
 
     fn enqueue_async_svg_upload(tex_id: u32, bytes: Vec<u8>) {
@@ -2142,6 +2139,10 @@ pub mod cabi {
 
     fn take_async_jpeg_upload() -> Option<AsyncJpegUploadReq> {
         ASYNC_JPEG_REQS.lock().pop_front()
+    }
+
+    fn requeue_async_jpeg_upload_front(req: AsyncJpegUploadReq) {
+        ASYNC_JPEG_REQS.lock().push_front(req);
     }
 
     fn take_async_svg_upload() -> Option<AsyncSvgUploadReq> {
@@ -2802,6 +2803,12 @@ pub mod cabi {
         async_png_decode_upload_inner(tex_id, bytes).await;
     }
 
+    #[embassy_executor::task(pool_size = ASYNC_JPEG_DECODE_TASK_POOL_SIZE)]
+    async fn async_jpeg_decode_upload_task(tex_id: u32, bytes: Vec<u8>) {
+        async_jpeg_decode_upload_inner(tex_id, bytes).await;
+        try_spawn_async_jpeg_decode_uploads();
+    }
+
     async fn async_jpeg_decode_upload_inner(tex_id: u32, bytes: Vec<u8>) {
         let rc = match crate::gfx::jpeg_codec::decode_jpeg_rgba(bytes.as_slice()) {
             Ok(decoded) => {
@@ -2826,22 +2833,6 @@ pub mod cabi {
         if rc != 0 {
             set_async_tex_status(tex_id, rc);
         }
-    }
-
-    async fn async_jpeg_upload_service_inner() {
-        loop {
-            let Some(req) = take_async_jpeg_upload() else {
-                ASYNC_JPEG_WAIT.wait_for_event().await;
-                continue;
-            };
-            async_jpeg_decode_upload_inner(req.tex_id, req.bytes).await;
-            Timer::after_millis(1).await;
-        }
-    }
-
-    #[embassy_executor::task]
-    async fn async_jpeg_upload_service_task() {
-        async_jpeg_upload_service_inner().await;
     }
 
     async fn async_svg_decode_upload_inner(tex_id: u32, bytes: Vec<u8>) {
@@ -2913,48 +2904,40 @@ pub mod cabi {
         0
     }
 
-    fn try_start_async_jpeg_worker() {
-        if ASYNC_JPEG_WORKER_STARTED.load(core::sync::atomic::Ordering::Acquire) {
-            return;
-        }
 
-        if let Some(worker_spawner) = crate::workers::pick_background_spawner() {
-            if ASYNC_JPEG_WORKER_STARTED
-                .compare_exchange(
-                    false,
-                    true,
-                    core::sync::atomic::Ordering::AcqRel,
-                    core::sync::atomic::Ordering::Acquire,
-                )
-                .is_ok()
+    fn try_spawn_async_jpeg_decode_uploads() {
+        loop {
+            let Some(req) = take_async_jpeg_upload() else {
+                return;
+            };
+            let AsyncJpegUploadReq { tex_id, bytes } = req;
+
+            if let Some((slot, kind, spawner)) = crate::workers::pick_background_spawner_with_slot()
             {
-                if let Ok(token) = async_jpeg_upload_service_task() {
-                    worker_spawner.spawn(token);
-                } else {
-                    ASYNC_JPEG_WORKER_STARTED.store(false, core::sync::atomic::Ordering::Release);
-                }
+                let Ok(token) = async_jpeg_decode_upload_task(tex_id, bytes) else {
+                    requeue_async_jpeg_upload_front(AsyncJpegUploadReq { tex_id, bytes });
+                    return;
+                };
+                spawner.spawn(token);
+                crate::globalog::log(format_args!(
+                    "async-jpeg: decode task queued tex={} slot={} core_kind={}\n",
+                    tex_id, slot, kind
+                ));
+                continue;
             }
-            return;
-        }
 
-        if crate::smp::cpu_count() > 1 {
-            crate::globalog::log(format_args!(
-                "async-jpeg: no background spawner available on multicore system; worker not started\n"
-            ));
-        }
+            if crate::smp::cpu_count() > 1 {
+                requeue_async_jpeg_upload_front(AsyncJpegUploadReq { tex_id, bytes });
+                crate::globalog::log(format_args!(
+                    "async-jpeg: no background spawner available; decode remains queued tex={}\n",
+                    tex_id
+                ));
+                return;
+            }
 
-        if crate::smp::cpu_count() <= 1
-            && ASYNC_JPEG_WORKER_STARTED
-                .compare_exchange(
-                    false,
-                    true,
-                    core::sync::atomic::Ordering::AcqRel,
-                    core::sync::atomic::Ordering::Acquire,
-                )
-                .is_ok()
-        {
             crate::wait::spawn_local_detached(async move {
-                async_jpeg_upload_service_inner().await;
+                async_jpeg_decode_upload_inner(tex_id, bytes).await;
+                try_spawn_async_jpeg_decode_uploads();
             });
         }
     }
@@ -5767,7 +5750,7 @@ pub mod cabi {
         let bytes = unsafe { core::slice::from_raw_parts(data_ptr, data_len) }.to_vec();
         set_async_tex_status(tex_id, ASYNC_TEX_STATUS_PENDING);
         enqueue_async_jpeg_upload(tex_id, bytes);
-        try_start_async_jpeg_worker();
+        try_spawn_async_jpeg_decode_uploads();
         0
     }
 
