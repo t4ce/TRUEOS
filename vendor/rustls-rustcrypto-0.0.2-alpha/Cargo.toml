@@ -140,7 +140,7 @@ version = "2.1.0"
 default-features = false
 
 [dependencies.webpki]
-version = "0.103.13"
+version = "0.103.10"
 default-features = false
 package = "rustls-webpki"
 
