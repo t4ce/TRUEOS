@@ -202,7 +202,7 @@ fn process_jpeg_job(job: HwPicJob) -> HwPicOutput {
     };
 
     crate::log!(
-        "intel/hw_pic: jpeg encoded-stream id={} engine={} bytes=0x{:X}/0x{:X} bitstream_gpu=0x{:X} bitstream_phys=0x{:X} bitstream_virt=0x{:X} sig=0x{:08X} fw_ack=0x{:08X} fw_awake={}\n",
+        "intel/hw_pic: jpeg encoded-stream id={} engine={} bytes=0x{:X}/0x{:X} bitstream_gpu=0x{:X} bitstream_phys=0x{:X} bitstream_virt=0x{:X} sig=0x{:08X} fw_engine_ack_reg=0x{:X} fw_engine_ack=0x{:08X} fw_engine_awake={} fw_global_ack=0x{:08X} fw_awake={}\n",
         job.id,
         proof.engine_name,
         proof.bytes_written,
@@ -211,8 +211,70 @@ fn process_jpeg_job(job: HwPicJob) -> HwPicOutput {
         proof.bitstream_phys,
         proof.bitstream_virt,
         proof.signature,
+        proof.forcewake_engine_ack_reg,
+        proof.forcewake_engine_ack,
+        proof.forcewake_engine_awake,
         proof.forcewake_global_ack,
         proof.forcewake_awake_count
+    );
+
+    let Some(smoke) = super::xelp_media2_ngin::submit_jpeg_smoke_batch(
+        dev,
+        engine,
+        windows,
+        backing,
+        proof.bytes_written,
+        job.id,
+    ) else {
+        return failed_output(&job, -7);
+    };
+
+    crate::log!(
+        "intel/hw_pic: jpeg smoke-submit id={} engine={} retired={} polls={} batch_gpu=0x{:X} result_gpu=0x{:X} bitstream_gpu=0x{:X} output_gpu=0x{:X} bytes=0x{:X} batch_bytes=0x{:X} ring_bytes=0x{:X} kickoff=0x{:08X}/0x{:08X} presubmit=0x{:08X}/0x{:08X} postsubmit=0x{:08X}/0x{:08X} complete=0x{:08X}/0x{:08X} el=0x{:08X}:0x{:08X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} acthd64=0x{:016X} acthd_region={} acthd_off=0x{:X} acthd_dword=0x{:08X} bbaddr64=0x{:016X} dma_fadd64=0x{:016X} bbstate=0x{:08X} esr=0x{:08X} instps=0x{:08X} psmi_ctl=0x{:08X} nopid=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} fault8=0x{:08X} fault12=0x{:08X} fault8_tlb=0x{:08X}/0x{:08X} fault12_tlb=0x{:08X}/0x{:08X} bitstream_dword0=0x{:08X}\n",
+        job.id,
+        smoke.engine_name,
+        smoke.retired as u8,
+        smoke.poll_iters,
+        smoke.batch_gpu_addr,
+        smoke.result_gpu_addr,
+        smoke.bitstream_gpu_addr,
+        smoke.output_surface_gpu_addr,
+        smoke.bitstream_bytes,
+        smoke.batch_tail_bytes,
+        smoke.ring_tail_bytes,
+        smoke.kickoff_value,
+        smoke.kickoff_marker,
+        smoke.presubmit_value,
+        smoke.presubmit_marker,
+        smoke.postsubmit_value,
+        smoke.postsubmit_marker,
+        smoke.complete_value,
+        smoke.complete_marker,
+        smoke.execlist_status_lo,
+        smoke.execlist_status_hi,
+        smoke.ring_head,
+        smoke.ring_tail,
+        smoke.ring_acthd,
+        ((smoke.ring_acthd_hi as u64) << 32) | smoke.ring_acthd as u64,
+        smoke.acthd_region,
+        smoke.acthd_offset_bytes,
+        smoke.acthd_dword,
+        ((smoke.bbaddr_hi as u64) << 32) | smoke.bbaddr_lo as u64,
+        ((smoke.dma_fadd_hi as u64) << 32) | smoke.dma_fadd_lo as u64,
+        smoke.bbstate,
+        smoke.esr,
+        smoke.instps,
+        smoke.psmi_ctl,
+        smoke.nopid,
+        smoke.ipeir,
+        smoke.ipehr,
+        smoke.fault_gen8,
+        smoke.fault_gen12,
+        smoke.fault_tlb_data0_gen8,
+        smoke.fault_tlb_data1_gen8,
+        smoke.fault_tlb_data0_gen12,
+        smoke.fault_tlb_data1_gen12,
+        smoke.bitstream_dword0,
     );
 
     // The first hardware integration stage proves the service owns the media
@@ -229,6 +291,6 @@ fn process_jpeg_job(job: HwPicJob) -> HwPicOutput {
         gpu_addr: windows.output_surface_gpu_addr,
         phys_addr: backing.output_surface_phys,
         virt_addr: backing.output_surface_virt as usize,
-        error_code: -8,
+        error_code: if smoke.retired { -8 } else { -13 },
     }
 }

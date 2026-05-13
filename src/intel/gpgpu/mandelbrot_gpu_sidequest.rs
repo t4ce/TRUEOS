@@ -429,6 +429,7 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
         let mut burst = 0u64;
         let mut last_proof = None;
         let burst_window_start = burst_cursor;
+        let phase_rows = sweep_frame.wrapping_mul(control.phase_rows_per_sweep as u64);
         while burst < bursts_per_frame_budget {
             let burst_slot = assign_burst_slot();
             let burst_index = (burst_window_start + burst) % bursts_per_frame;
@@ -438,7 +439,6 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
                 row_groups_per_frame.saturating_sub(local_row_group),
             );
             let local_row = local_row_group.saturating_mul(rows_per_segment);
-            let phase_rows = sweep_frame.wrapping_mul(control.phase_rows_per_sweep as u64);
             let band = local_row.saturating_add(phase_rows) / MANDELBROT_GPGPU_ANIM_BAND_HEIGHT;
             let color_seed = if control.full_frame_color_flip() {
                 MANDELBROT_GPGPU_ANIM_PALETTE[(sweep_frame & 7) as usize]
