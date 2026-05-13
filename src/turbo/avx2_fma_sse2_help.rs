@@ -3,6 +3,118 @@ pub(crate) fn bf16_to_f32(bits: u16) -> f32 {
     f32::from_bits((bits as u32) << 16)
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Bf16HelperSmoke {
+    pub rows: usize,
+    pub k_dim: usize,
+    pub scalar_checksum: u32,
+    pub sse2_checksum: u32,
+    pub avx2_checksum: u32,
+    pub sse2_ran: bool,
+    pub avx2_ran: bool,
+    pub max_abs_delta: f32,
+}
+
+pub(crate) fn exercise_bf16_helpers_once() -> Bf16HelperSmoke {
+    const ROWS: usize = 5;
+    const K_DIM: usize = 17;
+
+    let mut x = [0.0f32; K_DIM];
+    let mut w = [0u8; ROWS * K_DIM * 2];
+    let mut scalar = [0.0f32; ROWS];
+    let mut sse2 = [0.0f32; ROWS];
+    let mut avx2 = [0.0f32; ROWS];
+
+    for (idx, value) in x.iter_mut().enumerate() {
+        *value = ((idx as f32) + 1.0) * 0.0625;
+    }
+    for row in 0..ROWS {
+        for col in 0..K_DIM {
+            let pattern = 0x3F80u16.wrapping_add(((row * 23 + col * 7) & 0x7f) as u16);
+            let off = (row * K_DIM + col) * 2;
+            let bytes = pattern.to_le_bytes();
+            w[off] = bytes[0];
+            w[off + 1] = bytes[1];
+        }
+    }
+
+    let _bf16_probe = bf16_to_f32(u16::from_le_bytes([w[0], w[1]]));
+    matvec_rows_bf16_scalar(&x, &w, K_DIM, &mut scalar, 0, ROWS);
+
+    let mut smoke = Bf16HelperSmoke {
+        rows: ROWS,
+        k_dim: K_DIM,
+        scalar_checksum: checksum_f32_bits(&scalar),
+        ..Bf16HelperSmoke::default()
+    };
+
+    #[cfg(target_arch = "x86_64")]
+    {
+        unsafe {
+            matvec_rows_bf16_sse2(&x, &w, K_DIM, &mut sse2, 0, ROWS);
+        }
+        smoke.sse2_ran = true;
+        smoke.sse2_checksum = checksum_f32_bits(&sse2);
+        smoke.max_abs_delta = smoke.max_abs_delta.max(max_abs_delta(&scalar, &sse2));
+
+        if crate::cpu::simd_status().avx2_fma_ready {
+            unsafe {
+                matvec_rows_bf16_avx2_fma(&x, &w, K_DIM, &mut avx2, 0, ROWS);
+            }
+            smoke.avx2_ran = true;
+            smoke.avx2_checksum = checksum_f32_bits(&avx2);
+            smoke.max_abs_delta = smoke.max_abs_delta.max(max_abs_delta(&scalar, &avx2));
+        }
+    }
+
+    smoke
+}
+
+#[embassy_executor::task]
+pub(crate) async fn bf16_helper_boot_exercise_task() {
+    embassy_time::Timer::after(embassy_time::Duration::from_millis(250)).await;
+    let start = embassy_time_driver::now();
+    let mut last = Bf16HelperSmoke::default();
+    for _ in 0..8 {
+        last = exercise_bf16_helpers_once();
+        crate::time::poll();
+    }
+    let elapsed_ticks = embassy_time_driver::now().saturating_sub(start);
+    crate::log!(
+        "lumen-simd-help: bf16 helper boot exercise rows={} k_dim={} scalar=0x{:08X} sse2=0x{:08X} avx2=0x{:08X} sse2_ran={} avx2_ran={} max_abs_delta={:.8} ticks={}\n",
+        last.rows,
+        last.k_dim,
+        last.scalar_checksum,
+        last.sse2_checksum,
+        last.avx2_checksum,
+        last.sse2_ran,
+        last.avx2_ran,
+        last.max_abs_delta,
+        elapsed_ticks
+    );
+}
+
+fn checksum_f32_bits(values: &[f32]) -> u32 {
+    let mut acc = 0xA5A5_5A5Au32;
+    for (idx, value) in values.iter().enumerate() {
+        acc ^= value.to_bits().rotate_left(((idx as u32) & 15) + 1);
+        acc = acc.rotate_left(5).wrapping_add(0x9E37_79B9);
+    }
+    acc
+}
+
+fn max_abs_delta(a: &[f32], b: &[f32]) -> f32 {
+    let mut max = 0.0f32;
+    let len = a.len().min(b.len());
+    for idx in 0..len {
+        let delta = (a[idx] - b[idx]).abs();
+        if delta > max {
+            max = delta;
+        }
+    }
+    max
+}
+
 #[allow(dead_code)]
 pub(crate) fn matvec_rows_bf16_scalar(
     x: &[f32],
@@ -36,8 +148,9 @@ pub(crate) unsafe fn matvec_rows_bf16_avx2_fma(
     row_end: usize,
 ) {
     use core::arch::x86_64::{
-        __m256, __m256i, _mm_loadu_si128, _mm256_castsi256_ps, _mm256_cvtepu16_epi32,
-        _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_setzero_ps, _mm256_slli_epi32, _mm256_storeu_ps,
+        __m256, __m256i, _mm_loadu_si128, _mm256_add_ps, _mm256_castsi256_ps,
+        _mm256_cvtepu16_epi32, _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_setzero_ps,
+        _mm256_slli_epi32, _mm256_storeu_ps,
     };
 
     #[inline(always)]
@@ -83,7 +196,7 @@ pub(crate) unsafe fn matvec_rows_bf16_avx2_fma(
             idx += 8;
         }
 
-        let mut acc = unsafe { reduce_f32x8(_mm256_add_ps_inline(acc0, acc1)) };
+        let mut acc = unsafe { reduce_f32x8(_mm256_add_ps(acc0, acc1)) };
         while idx < k_dim {
             let off = idx * 2;
             let lo = unsafe { *weights.add(off) };
@@ -114,6 +227,32 @@ pub(crate) unsafe fn matvec_rows_bf16_avx2_fma(
         let mut acc1 = _mm256_setzero_ps();
         let mut acc2 = _mm256_setzero_ps();
         let mut acc3 = _mm256_setzero_ps();
+        let mut acc4 = _mm256_setzero_ps();
+        let mut acc5 = _mm256_setzero_ps();
+        let mut acc6 = _mm256_setzero_ps();
+        let mut acc7 = _mm256_setzero_ps();
+
+        while idx + 16 <= k_dim {
+            let x0 = unsafe { _mm256_loadu_ps(x.as_ptr().add(idx)) };
+            let x1 = unsafe { _mm256_loadu_ps(x.as_ptr().add(idx + 8)) };
+            let r00 = unsafe { load_bf16x8_as_f32(w0.add(idx * 2)) };
+            let r01 = unsafe { load_bf16x8_as_f32(w0.add((idx + 8) * 2)) };
+            let r10 = unsafe { load_bf16x8_as_f32(w1.add(idx * 2)) };
+            let r11 = unsafe { load_bf16x8_as_f32(w1.add((idx + 8) * 2)) };
+            let r20 = unsafe { load_bf16x8_as_f32(w2.add(idx * 2)) };
+            let r21 = unsafe { load_bf16x8_as_f32(w2.add((idx + 8) * 2)) };
+            let r30 = unsafe { load_bf16x8_as_f32(w3.add(idx * 2)) };
+            let r31 = unsafe { load_bf16x8_as_f32(w3.add((idx + 8) * 2)) };
+            acc0 = _mm256_fmadd_ps(x0, r00, acc0);
+            acc1 = _mm256_fmadd_ps(x0, r10, acc1);
+            acc2 = _mm256_fmadd_ps(x0, r20, acc2);
+            acc3 = _mm256_fmadd_ps(x0, r30, acc3);
+            acc4 = _mm256_fmadd_ps(x1, r01, acc4);
+            acc5 = _mm256_fmadd_ps(x1, r11, acc5);
+            acc6 = _mm256_fmadd_ps(x1, r21, acc6);
+            acc7 = _mm256_fmadd_ps(x1, r31, acc7);
+            idx += 16;
+        }
 
         while idx + 8 <= k_dim {
             let xv = unsafe { _mm256_loadu_ps(x.as_ptr().add(idx)) };
@@ -128,10 +267,10 @@ pub(crate) unsafe fn matvec_rows_bf16_avx2_fma(
             idx += 8;
         }
 
-        let mut sum0 = unsafe { reduce_f32x8(acc0) };
-        let mut sum1 = unsafe { reduce_f32x8(acc1) };
-        let mut sum2 = unsafe { reduce_f32x8(acc2) };
-        let mut sum3 = unsafe { reduce_f32x8(acc3) };
+        let mut sum0 = unsafe { reduce_f32x8(_mm256_add_ps(acc0, acc4)) };
+        let mut sum1 = unsafe { reduce_f32x8(_mm256_add_ps(acc1, acc5)) };
+        let mut sum2 = unsafe { reduce_f32x8(_mm256_add_ps(acc2, acc6)) };
+        let mut sum3 = unsafe { reduce_f32x8(_mm256_add_ps(acc3, acc7)) };
         while idx < k_dim {
             let off = idx * 2;
             let bits0 = u16::from_le_bytes([unsafe { *w0.add(off) }, unsafe { *w0.add(off + 1) }]);
@@ -149,11 +288,6 @@ pub(crate) unsafe fn matvec_rows_bf16_avx2_fma(
         out[row + 1] = sum1;
         out[row + 2] = sum2;
         out[row + 3] = sum3;
-    }
-
-    #[inline(always)]
-    unsafe fn _mm256_add_ps_inline(a: __m256, b: __m256) -> __m256 {
-        core::arch::x86_64::_mm256_add_ps(a, b)
     }
 
     let mut row = row_start;
