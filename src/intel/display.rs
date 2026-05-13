@@ -333,7 +333,7 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
     log_primary_scanout_pte_window(dev, "after-primary-init", byte_len);
 
     let logo_ok = if PRIMARY_BOOT_LOGO_ENABLED {
-        present_sw_logo_decode()
+        probe_hw_logo_decode()
     } else {
         false
     };
