@@ -65,6 +65,7 @@ mod r;
 mod runtime;
 mod shell2;
 mod smp;
+mod std_abi_shim;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod stackkeeper;
 mod surfer;
