@@ -5,7 +5,9 @@
 // The heavy shared media backend remains in xelp_media2_ngin for now; this
 // module is the focused entry surface for the logo decode mission.
 
-use super::xelp_media2_ngin::{self as media, MediaBitstreamBacking, MediaEngineDescriptor, MediaGpuWindowLayout};
+use super::xelp_media2_ngin::{
+    self as media, MediaBitstreamBacking, MediaEngineDescriptor, MediaGpuWindowLayout,
+};
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct JpegQuantTables {
@@ -129,10 +131,9 @@ pub(super) struct MediaJpegSmokeSubmitProof {
 }
 
 const JPEG_QM_SCAN_8X8: [usize; 64] = [
-    0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40,
-    48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29,
-    22, 15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54,
-    47, 55, 62, 63,
+    0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20,
+    13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59,
+    52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
 ];
 
 #[inline]
@@ -382,7 +383,10 @@ pub(super) fn parse_jpeg_huff_tables(encoded: &[u8]) -> Option<JpegHuffTables> {
                     let mut counts = [0u8; 16];
                     counts.copy_from_slice(&encoded[seg_idx..seg_idx + 16]);
                     seg_idx += 16;
-                    let symbol_count = counts.iter().map(|&count| usize::from(count)).sum::<usize>();
+                    let symbol_count = counts
+                        .iter()
+                        .map(|&count| usize::from(count))
+                        .sum::<usize>();
                     if seg_idx + symbol_count > seg_end {
                         return None;
                     }
@@ -576,11 +580,8 @@ pub(super) fn parse_jpeg_scan_info(encoded: &[u8]) -> Option<JpegScanInfo> {
                     return None;
                 }
 
-                let input_format = jpeg_input_format_from_sampling(
-                    component_count,
-                    &h_sampling,
-                    &v_sampling,
-                )?;
+                let input_format =
+                    jpeg_input_format_from_sampling(component_count, &h_sampling, &v_sampling)?;
 
                 let mut scan_component_ids = [0u8; 3];
                 for component_idx in 0..usize::from(scan_component_count) {
@@ -612,8 +613,7 @@ pub(super) fn parse_jpeg_scan_info(encoded: &[u8]) -> Option<JpegScanInfo> {
                 let mcu_count = if interleaved {
                     let mcu_width = 8u32.saturating_mul(u32::from(max_h_sampling));
                     let mcu_height = 8u32.saturating_mul(u32::from(max_v_sampling));
-                    ceil_div_u32(width, mcu_width)
-                        .saturating_mul(ceil_div_u32(height, mcu_height))
+                    ceil_div_u32(width, mcu_width).saturating_mul(ceil_div_u32(height, mcu_height))
                 } else {
                     let scan_component_id = scan_component_ids[0];
                     let component_idx = component_ids[..usize::from(component_count)]
@@ -653,10 +653,8 @@ pub(super) fn parse_jpeg_scan_info(encoded: &[u8]) -> Option<JpegScanInfo> {
 }
 
 pub(super) fn default_decode_engine_and_window(
-) -> (
-    super::xelp_media2_ngin::MediaEngineDescriptor,
-    super::xelp_media2_ngin::MediaGpuWindowLayout,
-) {
+) -> (super::xelp_media2_ngin::MediaEngineDescriptor, super::xelp_media2_ngin::MediaGpuWindowLayout)
+{
     super::xelp_media2_ngin::default_decode_engine_and_window()
 }
 
@@ -799,8 +797,9 @@ fn build_jpeg_smoke_batch_skeleton(
     let jpeg_output_format = jpeg_scan_info
         .map(|scan_info| jpeg_output_format_from_input(scan_info.input_format))
         .unwrap_or(0);
-    let mut stage_flags =
-        MEDIA_STAGE_FLAG_JPEG_SMOKE | MEDIA_STAGE_FLAG_JPEG_PIC_STATE | MEDIA_STAGE_FLAG_JPEG_QM_STATE;
+    let mut stage_flags = MEDIA_STAGE_FLAG_JPEG_SMOKE
+        | MEDIA_STAGE_FLAG_JPEG_PIC_STATE
+        | MEDIA_STAGE_FLAG_JPEG_QM_STATE;
     if jpeg_huff_tables.is_some() {
         stage_flags |= MEDIA_STAGE_FLAG_JPEG_HUFF_STATE;
     }
@@ -1056,8 +1055,7 @@ fn build_jpeg_smoke_batch_skeleton(
             | media::MI_FLUSH_DW_POST_SYNC_WRITE_IMMEDIATE,
     )?;
     batch[done_flush + 1] = (result_gpu_addr + media::MEDIA_RESULT_COMPLETE_SLOT) as u32;
-    batch[done_flush + 2] =
-        ((result_gpu_addr + media::MEDIA_RESULT_COMPLETE_SLOT) >> 32) as u32;
+    batch[done_flush + 2] = ((result_gpu_addr + media::MEDIA_RESULT_COMPLETE_SLOT) >> 32) as u32;
     batch[done_flush + 3] = complete_marker;
     batch[done_flush + 4] = 0;
 
@@ -1205,11 +1203,7 @@ pub(super) fn submit_jpeg_smoke_batch(
 
     {
         super::mmio_write(dev, engine.ring_base + media::RING_CONTEXT_CONTROL, ctx_ctl_after);
-        super::mmio_write(
-            dev,
-            engine.ring_base + media::RING_CONTEXT_CONTROL_REF,
-            ctx_ctl_after,
-        );
+        super::mmio_write(dev, engine.ring_base + media::RING_CONTEXT_CONTROL_REF, ctx_ctl_after);
         super::mmio_write(
             dev,
             engine.ring_base + media::RING_MI_MODE,
@@ -1219,22 +1213,26 @@ pub(super) fn submit_jpeg_smoke_batch(
     }
 
     let submit_counter = submit_token.wrapping_add(1) & 0x3F;
-    let (ctx_desc_lo, ctx_desc_hi) =
-        media::build_media_execlist_context_descriptor(context_gpu_addr, engine, submit_counter, true);
+    let (ctx_desc_lo, ctx_desc_hi) = media::build_media_execlist_context_descriptor(
+        context_gpu_addr,
+        engine,
+        submit_counter,
+        true,
+    );
     core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
     media::execlist_submit_port_push(dev, engine.ring_base, ctx_desc_lo, ctx_desc_hi, 0, 0);
-    super::mmio_write(
-        dev,
-        engine.ring_base + media::RING_EXECLIST_CONTROL,
-        media::EL_CTRL_LOAD,
-    );
+    super::mmio_write(dev, engine.ring_base + media::RING_EXECLIST_CONTROL, media::EL_CTRL_LOAD);
 
     let mut retired = false;
     let mut poll_iters = 0usize;
     let mut complete_value = 0u32;
     while poll_iters < media::MEDIA_SUBMIT_POLL_ITERS {
         super::dma_flush(
-            unsafe { backing.result_virt.add(media::MEDIA_RESULT_COMPLETE_SLOT as usize) },
+            unsafe {
+                backing
+                    .result_virt
+                    .add(media::MEDIA_RESULT_COMPLETE_SLOT as usize)
+            },
             8,
         );
         complete_value =
@@ -1288,8 +1286,13 @@ pub(super) fn submit_jpeg_smoke_batch(
     let dma_fadd_hi = super::mmio_read(dev, engine.ring_base + media::RING_DMA_FADD_UDW);
     let fault_gen8 = super::mmio_read(dev, 0x4094);
     let fault_gen12 = super::mmio_read(dev, media::GEN12_RING_FAULT_REG);
-    let (acthd_region, acthd_offset_bytes, acthd_dword) =
-        media::classify_media_acthd(ring_acthd, windows, backing, batch_tail_bytes, ring_tail_bytes);
+    let (acthd_region, acthd_offset_bytes, acthd_dword) = media::classify_media_acthd(
+        ring_acthd,
+        windows,
+        backing,
+        batch_tail_bytes,
+        ring_tail_bytes,
+    );
 
     Some(MediaJpegSmokeSubmitProof {
         engine_name: engine.name,
@@ -1334,7 +1337,10 @@ pub(super) fn submit_jpeg_smoke_batch(
         presubmit_marker,
         postsubmit_marker,
         complete_marker,
-        kickoff_value: media::read_result_dword(backing.result_virt, media::MEDIA_RESULT_KICKOFF_SLOT),
+        kickoff_value: media::read_result_dword(
+            backing.result_virt,
+            media::MEDIA_RESULT_KICKOFF_SLOT,
+        ),
         presubmit_value: media::read_result_dword(
             backing.result_virt,
             media::MEDIA_RESULT_PRESUBMIT_SLOT,
