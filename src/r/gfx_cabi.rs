@@ -1670,9 +1670,8 @@ pub mod cabi {
     const ASYNC_TEX_STATUS_PENDING: i32 = 1;
     const ASYNC_TEX_STATUS_READY: i32 = 2;
     const GFX_CABI_VM_HOST_ONLY_RC: i32 = -90;
+    const ASYNC_PNG_DECODE_TASK_POOL_SIZE: usize = 4;
     static ASYNC_TEX_STATUS: spin::Mutex<Vec<i32>> = spin::Mutex::new(Vec::new());
-    static ASYNC_PNG_REQS: spin::Mutex<VecDeque<AsyncPngUploadReq>> =
-        spin::Mutex::new(VecDeque::new());
     static ASYNC_JPEG_REQS: spin::Mutex<VecDeque<AsyncJpegUploadReq>> =
         spin::Mutex::new(VecDeque::new());
     static ASYNC_SVG_REQS: spin::Mutex<VecDeque<AsyncSvgUploadReq>> =
@@ -1680,12 +1679,9 @@ pub mod cabi {
     const TEXTURE_UPLOAD_RING_CAP: usize = 64;
     static TEXTURE_UPLOAD_REQS: spin::Mutex<TextureWorkRing> =
         spin::Mutex::new(TextureWorkRing::new());
-    static ASYNC_PNG_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
     static ASYNC_JPEG_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
     static ASYNC_SVG_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
     static TEXTURE_UPLOAD_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
-    static ASYNC_PNG_WORKER_STARTED: core::sync::atomic::AtomicBool =
-        core::sync::atomic::AtomicBool::new(false);
     static ASYNC_JPEG_WORKER_STARTED: core::sync::atomic::AtomicBool =
         core::sync::atomic::AtomicBool::new(false);
     static ASYNC_SVG_WORKER_STARTED: core::sync::atomic::AtomicBool =
@@ -1745,11 +1741,6 @@ pub mod cabi {
     #[inline]
     fn gfx_cabi_vm_context() -> bool {
         crate::hv::current_hull_guest_context_vm_id().is_some()
-    }
-
-    struct AsyncPngUploadReq {
-        tex_id: u32,
-        bytes: Vec<u8>,
     }
 
     struct AsyncJpegUploadReq {
@@ -2127,13 +2118,6 @@ pub mod cabi {
             .map(|entry| (entry.width, entry.height))
     }
 
-    fn enqueue_async_png_upload(tex_id: u32, bytes: Vec<u8>) {
-        ASYNC_PNG_REQS
-            .lock()
-            .push_back(AsyncPngUploadReq { tex_id, bytes });
-        ASYNC_PNG_WAIT.notify_one();
-    }
-
     fn enqueue_async_jpeg_upload(tex_id: u32, bytes: Vec<u8>) {
         ASYNC_JPEG_REQS
             .lock()
@@ -2154,10 +2138,6 @@ pub mod cabi {
         } else {
             TEXTURE_UPLOAD_WAIT.notify_one();
         }
-    }
-
-    fn take_async_png_upload() -> Option<AsyncPngUploadReq> {
-        ASYNC_PNG_REQS.lock().pop_front()
     }
 
     fn take_async_jpeg_upload() -> Option<AsyncJpegUploadReq> {
@@ -2817,20 +2797,9 @@ pub mod cabi {
         }
     }
 
-    async fn async_png_upload_service_inner() {
-        loop {
-            let Some(req) = take_async_png_upload() else {
-                ASYNC_PNG_WAIT.wait_for_event().await;
-                continue;
-            };
-            async_png_decode_upload_inner(req.tex_id, req.bytes).await;
-            Timer::after_millis(1).await;
-        }
-    }
-
-    #[embassy_executor::task]
-    async fn async_png_upload_service_task() {
-        async_png_upload_service_inner().await;
+    #[embassy_executor::task(pool_size = ASYNC_PNG_DECODE_TASK_POOL_SIZE)]
+    async fn async_png_decode_upload_task(tex_id: u32, bytes: Vec<u8>) {
+        async_png_decode_upload_inner(tex_id, bytes).await;
     }
 
     async fn async_jpeg_decode_upload_inner(tex_id: u32, bytes: Vec<u8>) {
@@ -2917,50 +2886,31 @@ pub mod cabi {
         async_svg_upload_service_inner().await;
     }
 
-    fn try_start_async_png_worker() {
-        if ASYNC_PNG_WORKER_STARTED.load(core::sync::atomic::Ordering::Acquire) {
-            return;
-        }
-
-        if let Some(worker_spawner) = crate::workers::pick_background_spawner() {
-            if ASYNC_PNG_WORKER_STARTED
-                .compare_exchange(
-                    false,
-                    true,
-                    core::sync::atomic::Ordering::AcqRel,
-                    core::sync::atomic::Ordering::Acquire,
-                )
-                .is_ok()
-            {
-                if let Ok(token) = async_png_upload_service_task() {
-                    worker_spawner.spawn(token);
-                } else {
-                    ASYNC_PNG_WORKER_STARTED.store(false, core::sync::atomic::Ordering::Release);
-                }
-            }
-            return;
-        }
-
-        if crate::smp::cpu_count() > 1 {
+    fn spawn_async_png_decode_upload(tex_id: u32, bytes: Vec<u8>) -> i32 {
+        let Some((slot, kind, spawner)) = crate::workers::pick_background_spawner_with_slot()
+        else {
             crate::globalog::log(format_args!(
-                "async-png: no background spawner available on multicore system; worker not started\n"
+                "async-png: no background spawner available; decode not queued tex={}\n",
+                tex_id
             ));
-        }
+            return -4;
+        };
 
-        if crate::smp::cpu_count() <= 1
-            && ASYNC_PNG_WORKER_STARTED
-                .compare_exchange(
-                    false,
-                    true,
-                    core::sync::atomic::Ordering::AcqRel,
-                    core::sync::atomic::Ordering::Acquire,
-                )
-                .is_ok()
-        {
-            crate::wait::spawn_local_detached(async move {
-                async_png_upload_service_inner().await;
-            });
-        }
+        let Ok(token) = async_png_decode_upload_task(tex_id, bytes) else {
+            crate::globalog::log(format_args!(
+                "async-png: decode task pool exhausted tex={}\n",
+                tex_id
+            ));
+            return -4;
+        };
+
+        set_async_tex_status(tex_id, ASYNC_TEX_STATUS_PENDING);
+        spawner.spawn(token);
+        crate::globalog::log(format_args!(
+            "async-png: decode task queued tex={} slot={} core_kind={}\n",
+            tex_id, slot, kind
+        ));
+        0
     }
 
     fn try_start_async_jpeg_worker() {
@@ -5740,10 +5690,7 @@ pub mod cabi {
             return -3;
         }
         let bytes = unsafe { core::slice::from_raw_parts(data_ptr, data_len) }.to_vec();
-        set_async_tex_status(tex_id, ASYNC_TEX_STATUS_PENDING);
-        enqueue_async_png_upload(tex_id, bytes);
-        try_start_async_png_worker();
-        0
+        spawn_async_png_decode_upload(tex_id, bytes)
     }
 
     #[unsafe(no_mangle)]
@@ -5905,7 +5852,6 @@ pub mod cabi {
             };
         }
         if get_async_tex_status(tex_id) == ASYNC_TEX_STATUS_PENDING {
-            try_start_async_png_worker();
             try_start_async_svg_worker();
         }
         let status = get_async_tex_status(tex_id);

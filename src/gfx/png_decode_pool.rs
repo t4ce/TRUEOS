@@ -8,7 +8,7 @@ use spin::Mutex;
 
 use super::png_codec::PngDecodeError;
 
-const PNG_ROW_EXPAND_TASK_POOL_SIZE: usize = 4;
+const PNG_ROW_EXPAND_TASK_POOL_SIZE: usize = 16;
 const PNG_ROW_EXPAND_MIN_ROWS_PER_TASK: usize = 8;
 const PNG_ROW_EXPAND_SINGLE_AP_MAX_PIXELS: usize = 256 * 256;
 

@@ -3,6 +3,148 @@ pub(crate) fn bf16_to_f32(bits: u16) -> f32 {
     f32::from_bits((bits as u32) << 16)
 }
 
+#[inline]
+pub(crate) fn f32_to_bf16_bits(value: f32) -> u16 {
+    let bits = value.to_bits();
+    let exp = bits & 0x7F80_0000;
+    let mantissa = bits & 0x007F_FFFF;
+    if exp == 0x7F80_0000 && mantissa != 0 {
+        return (((bits >> 16) | 0x0040) & 0xFFFF) as u16;
+    }
+    let round_bit = (bits >> 16) & 1;
+    ((bits.wrapping_add(0x7FFF + round_bit)) >> 16) as u16
+}
+
+#[inline]
+pub(crate) fn bf16_rowmajor_len_bytes(n_rows: usize, k_dim: usize) -> Option<usize> {
+    n_rows.checked_mul(k_dim)?.checked_mul(2)
+}
+
+pub(crate) fn pack_f32_to_bf16_le(src: &[f32], dst: &mut [u8]) -> Result<(), Bf16MatvecError> {
+    let Some(needed) = src.len().checked_mul(2) else {
+        return Err(Bf16MatvecError::ShapeOverflow);
+    };
+    if dst.len() < needed {
+        return Err(Bf16MatvecError::OutputTooSmall);
+    }
+    for (idx, value) in src.iter().copied().enumerate() {
+        let bytes = f32_to_bf16_bits(value).to_le_bytes();
+        let off = idx * 2;
+        dst[off] = bytes[0];
+        dst[off + 1] = bytes[1];
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Bf16MatvecLane {
+    Scalar,
+    Sse2,
+    Avx2Fma,
+}
+
+impl Bf16MatvecLane {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Scalar => "scalar",
+            Self::Sse2 => "sse2",
+            Self::Avx2Fma => "avx2-fma",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Bf16MatvecError {
+    EmptyKDim,
+    BadRowRange,
+    ShapeOverflow,
+    XTooSmall,
+    WeightTooSmall,
+    OutputTooSmall,
+}
+
+pub(crate) fn selected_bf16_matvec_lane() -> Bf16MatvecLane {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if crate::cpu::simd_status().avx2_fma_ready {
+            Bf16MatvecLane::Avx2Fma
+        } else {
+            Bf16MatvecLane::Sse2
+        }
+    }
+
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        Bf16MatvecLane::Scalar
+    }
+}
+
+pub(crate) fn validate_rowmajor_bf16_matvec(
+    x: &[f32],
+    w_rowmajor_bf16: &[u8],
+    n_rows: usize,
+    k_dim: usize,
+    out: &[f32],
+    row_start: usize,
+    row_end: usize,
+) -> Result<(), Bf16MatvecError> {
+    if k_dim == 0 {
+        return Err(Bf16MatvecError::EmptyKDim);
+    }
+    if row_start > row_end || row_end > n_rows {
+        return Err(Bf16MatvecError::BadRowRange);
+    }
+    let Some(w_len) = bf16_rowmajor_len_bytes(n_rows, k_dim) else {
+        return Err(Bf16MatvecError::ShapeOverflow);
+    };
+    if x.len() < k_dim {
+        return Err(Bf16MatvecError::XTooSmall);
+    }
+    if w_rowmajor_bf16.len() < w_len {
+        return Err(Bf16MatvecError::WeightTooSmall);
+    }
+    if out.len() < n_rows {
+        return Err(Bf16MatvecError::OutputTooSmall);
+    }
+    Ok(())
+}
+
+pub(crate) fn matvec_rowmajor_bf16_dispatch(
+    x: &[f32],
+    w_rowmajor_bf16: &[u8],
+    n_rows: usize,
+    k_dim: usize,
+    out: &mut [f32],
+    row_start: usize,
+    row_end: usize,
+) -> Result<Bf16MatvecLane, Bf16MatvecError> {
+    validate_rowmajor_bf16_matvec(x, w_rowmajor_bf16, n_rows, k_dim, out, row_start, row_end)?;
+
+    let lane = selected_bf16_matvec_lane();
+    match lane {
+        Bf16MatvecLane::Scalar => {
+            matvec_rows_bf16_scalar(x, w_rowmajor_bf16, k_dim, out, row_start, row_end);
+        }
+        Bf16MatvecLane::Sse2 => {
+            #[cfg(target_arch = "x86_64")]
+            unsafe {
+                matvec_rows_bf16_sse2(x, w_rowmajor_bf16, k_dim, out, row_start, row_end);
+            }
+            #[cfg(not(target_arch = "x86_64"))]
+            matvec_rows_bf16_scalar(x, w_rowmajor_bf16, k_dim, out, row_start, row_end);
+        }
+        Bf16MatvecLane::Avx2Fma => {
+            #[cfg(target_arch = "x86_64")]
+            unsafe {
+                matvec_rows_bf16_avx2_fma(x, w_rowmajor_bf16, k_dim, out, row_start, row_end);
+            }
+            #[cfg(not(target_arch = "x86_64"))]
+            matvec_rows_bf16_scalar(x, w_rowmajor_bf16, k_dim, out, row_start, row_end);
+        }
+    }
+    Ok(lane)
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Bf16HelperSmoke {
     pub rows: usize,
@@ -10,6 +152,9 @@ pub(crate) struct Bf16HelperSmoke {
     pub scalar_checksum: u32,
     pub sse2_checksum: u32,
     pub avx2_checksum: u32,
+    pub dispatch_checksum: u32,
+    pub scalar_lane: &'static str,
+    pub dispatch_lane: &'static str,
     pub sse2_ran: bool,
     pub avx2_ran: bool,
     pub max_abs_delta: f32,
@@ -24,27 +169,35 @@ pub(crate) fn exercise_bf16_helpers_once() -> Bf16HelperSmoke {
     let mut scalar = [0.0f32; ROWS];
     let mut sse2 = [0.0f32; ROWS];
     let mut avx2 = [0.0f32; ROWS];
+    let mut dispatch = [0.0f32; ROWS];
+    let mut w_f32 = [0.0f32; ROWS * K_DIM];
 
     for (idx, value) in x.iter_mut().enumerate() {
         *value = ((idx as f32) + 1.0) * 0.0625;
     }
     for row in 0..ROWS {
         for col in 0..K_DIM {
-            let pattern = 0x3F80u16.wrapping_add(((row * 23 + col * 7) & 0x7f) as u16);
-            let off = (row * K_DIM + col) * 2;
-            let bytes = pattern.to_le_bytes();
-            w[off] = bytes[0];
-            w[off + 1] = bytes[1];
+            let idx = row * K_DIM + col;
+            w_f32[idx] = 1.0 + ((row * 23 + col * 7) as f32) * 0.0009765625;
         }
     }
 
+    let _ = pack_f32_to_bf16_le(&w_f32, &mut w);
     let _bf16_probe = bf16_to_f32(u16::from_le_bytes([w[0], w[1]]));
+    let _ = validate_rowmajor_bf16_matvec(&x, &w, ROWS, K_DIM, &scalar, 0, ROWS);
     matvec_rows_bf16_scalar(&x, &w, K_DIM, &mut scalar, 0, ROWS);
+    let dispatch_lane = matvec_rowmajor_bf16_dispatch(&x, &w, ROWS, K_DIM, &mut dispatch, 0, ROWS)
+        .map(|lane| lane.as_str())
+        .unwrap_or("error");
 
     let mut smoke = Bf16HelperSmoke {
         rows: ROWS,
         k_dim: K_DIM,
         scalar_checksum: checksum_f32_bits(&scalar),
+        dispatch_checksum: checksum_f32_bits(&dispatch),
+        scalar_lane: Bf16MatvecLane::Scalar.as_str(),
+        dispatch_lane,
+        max_abs_delta: max_abs_delta(&scalar, &dispatch),
         ..Bf16HelperSmoke::default()
     };
 
@@ -81,10 +234,13 @@ pub(crate) async fn bf16_helper_boot_exercise_task() {
     }
     let elapsed_ticks = embassy_time_driver::now().saturating_sub(start);
     crate::log!(
-        "lumen-simd-help: bf16 helper boot exercise rows={} k_dim={} scalar=0x{:08X} sse2=0x{:08X} avx2=0x{:08X} sse2_ran={} avx2_ran={} max_abs_delta={:.8} ticks={}\n",
+        "lumen-simd-help: bf16 helper boot exercise rows={} k_dim={} scalar=0x{:08X} scalar_lane={} dispatch=0x{:08X} dispatch_lane={} sse2=0x{:08X} avx2=0x{:08X} sse2_ran={} avx2_ran={} max_abs_delta={:.8} ticks={}\n",
         last.rows,
         last.k_dim,
         last.scalar_checksum,
+        last.scalar_lane,
+        last.dispatch_checksum,
+        last.dispatch_lane,
         last.sse2_checksum,
         last.avx2_checksum,
         last.sse2_ran,
