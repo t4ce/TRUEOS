@@ -21,6 +21,7 @@ pub(crate) mod hw_pic;
 pub(crate) mod state;
 pub(crate) mod stats;
 pub(crate) mod xelp_media2_ngin;
+pub(crate) mod xelp_media2_ngin_hw_pic;
 pub(crate) mod xelp_media_h264src;
 pub(crate) mod xelp_media_matroska;
 pub(crate) mod xelp_media_mp4;
