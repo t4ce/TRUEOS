@@ -22,10 +22,6 @@ pub(crate) mod state;
 pub(crate) mod stats;
 pub(crate) mod xelp_media2_ngin;
 pub(crate) mod xelp_media2_ngin_hw_pic;
-pub(crate) mod xelp_media_h264src;
-pub(crate) mod xelp_media_matroska;
-pub(crate) mod xelp_media_mp4;
-pub(crate) mod xelp_media_source;
 
 use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_executor::SendSpawner;

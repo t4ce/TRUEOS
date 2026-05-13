@@ -4,12 +4,6 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;
 
 use super::xelp_media2_ngin_hw_pic::MediaEncodedStreamProof;
-use super::xelp_media_h264src::parse_h264_source_summary;
-use super::xelp_media_mp4::{
-    AnnexBAccessUnit, H264VclInfo, ParsedPps, ParsedSps, h264_crop_offsets_px, parse_pps,
-    parse_sample_vcl_info, parse_sps, visible_h264_frame_dims, write_annex_b_for_sample,
-};
-use super::xelp_media_source;
 
 const MAX_MEDIA_ENGINES: usize = 4;
 const MAX_MEDIA_API_ROUTES: usize = 4;
@@ -356,7 +350,7 @@ pub(crate) struct MediaSliceWakeAck {
 }
 
 #[derive(Copy, Clone, Debug)]
-struct MediaEngineForcewakeAck {
+pub(super) struct MediaEngineForcewakeAck {
     ack_reg: usize,
     ack_value: u32,
     awake: bool,
@@ -818,24 +812,9 @@ pub(super) fn classify_media_acthd(
 ) -> (&'static str, u32, u32) {
     let acthd_aligned = acthd & !0x3;
     let regions = [
-        (
-            "ring",
-            windows.ring_gpu_addr,
-            ring_tail_bytes,
-            backing.ring_virt,
-        ),
-        (
-            "batch",
-            windows.batch_gpu_addr,
-            batch_tail_bytes,
-            backing.batch_virt,
-        ),
-        (
-            "bitstream",
-            windows.bitstream_gpu_addr,
-            backing.bitstream_bytes,
-            backing.bitstream_virt,
-        ),
+        ("ring", windows.ring_gpu_addr, ring_tail_bytes, backing.ring_virt),
+        ("batch", windows.batch_gpu_addr, batch_tail_bytes, backing.batch_virt),
+        ("bitstream", windows.bitstream_gpu_addr, backing.bitstream_bytes, backing.bitstream_virt),
         (
             "output",
             windows.output_surface_gpu_addr,
@@ -853,11 +832,7 @@ pub(super) fn classify_media_acthd(
         if offset >= buffer_bytes {
             continue;
         }
-        return (
-            name,
-            offset as u32,
-            sample_buffer_dword(base_virt, buffer_bytes, offset),
-        );
+        return (name, offset as u32, sample_buffer_dword(base_virt, buffer_bytes, offset));
     }
 
     ("unknown", 0, 0)
@@ -1223,6 +1198,7 @@ fn present_nv12_frame(
     (false, signature, nonzero_samples)
 }
 
+#[cfg(any())]
 pub(super) fn decode_and_present_frame(
     dev: crate::intel::Dev,
     engine: MediaEngineDescriptor,
@@ -1498,7 +1474,11 @@ fn build_execlist_context_descriptor_for_gpu_addr(context_gpu_addr: u64) -> (u32
 
 fn media_sw_context_id_for_submit(context_gpu_addr: u64) -> u32 {
     let sw_context_id = ((context_gpu_addr >> 12) as u32) & 0x7FF;
-    if sw_context_id == 0 { 1 } else { sw_context_id }
+    if sw_context_id == 0 {
+        1
+    } else {
+        sw_context_id
+    }
 }
 
 pub(super) fn build_media_execlist_context_descriptor(
@@ -1515,7 +1495,8 @@ pub(super) fn build_media_execlist_context_descriptor(
     // Match the working render/gpgpu Gen12/Xe execlist descriptor layout on
     // this platform: upper dword carries only the context upper address plus
     // the software context id.
-    let hi = ((context_gpu_addr >> 32) as u32) | (media_sw_context_id_for_submit(context_gpu_addr) << 7);
+    let hi =
+        ((context_gpu_addr >> 32) as u32) | (media_sw_context_id_for_submit(context_gpu_addr) << 7);
     (lo, hi)
 }
 
@@ -2001,6 +1982,7 @@ pub(super) fn read_result_dword(base_virt: *mut u8, slot_off: u64) -> u32 {
     unsafe { core::ptr::read_volatile(ptr) }
 }
 
+#[cfg(any())]
 fn coded_h264_frame_dims(sps: &ParsedSps) -> (u32, u32) {
     let width_mbs = sps.pic_width_in_mbs_minus1 + 1;
     let pic_height_map_units = sps.pic_height_in_map_units_minus1 + 1;
@@ -2012,6 +1994,7 @@ fn coded_h264_frame_dims(sps: &ParsedSps) -> (u32, u32) {
     (width_mbs.saturating_mul(16), frame_height_mbs.saturating_mul(16))
 }
 
+#[cfg(any())]
 fn build_h264_decode_batch_skeleton(
     batch_virt: *mut u8,
     batch_bytes: usize,
@@ -2054,8 +2037,8 @@ fn build_h264_decode_batch_skeleton(
     };
     let frame_dims = visible_width | (visible_height << 16);
     let output_pitch = align_up_u32(coded_width.max(128), 128); // Y-tile: 128-byte tile width
-    // Y-tile NV12: chroma plane must start on a 32-row tile boundary so the
-    // HW doesn't share a physical tile row between Y bottom and UV top.
+                                                                // Y-tile NV12: chroma plane must start on a 32-row tile boundary so the
+                                                                // HW doesn't share a physical tile row between Y bottom and UV top.
     let chroma_y_offset = align_up_u32(coded_height, 32);
     let stage_flags = (has_idr as u32) | (1 << 1);
 
@@ -2213,7 +2196,7 @@ fn build_h264_decode_batch_skeleton(
     // DW4-5: Post Deblocking Destination = output surface
     packet_write_addr64(batch, pipe_buf, 4, output_surface_gpu_addr);
     batch[pipe_buf + 6] = MFX_MOCS_UC; // Post Deblocking Attributes
-    // DW9: Original Uncompressed Picture Source Attributes
+                                       // DW9: Original Uncompressed Picture Source Attributes
     batch[pipe_buf + 9] = MFX_MOCS_UC;
     // DW7-8: Original Uncompressed Picture Source = reference surface (previous frame)
     if !has_idr {
@@ -2224,12 +2207,12 @@ fn build_h264_decode_batch_skeleton(
     // DW13-14: Intra Row Store Scratch Buffer (32KB at +0x00000)
     packet_write_addr64(batch, pipe_buf, 13, scratch_gpu_addr);
     batch[pipe_buf + 15] = MFX_MOCS_UC; // Intra Row Store Attributes
-    // DW16-17: Deblocking Filter Row Store Scratch Buffer (32KB at +0x08000)
-    // Gen12 needs width_in_mbs × 256 bytes; for 1280px = 80 MBs = 20KB.
+                                        // DW16-17: Deblocking Filter Row Store Scratch Buffer (32KB at +0x08000)
+                                        // Gen12 needs width_in_mbs × 256 bytes; for 1280px = 80 MBs = 20KB.
     packet_write_addr64(batch, pipe_buf, 16, scratch_gpu_addr + 0x08000);
     batch[pipe_buf + 18] = MFX_MOCS_UC; // Deblocking Filter Row Store Attributes
-    // DW19-50: Reference Picture Frame Store addresses (16 refs × 2 DWords each)
-    //          For non-IDR frames, point ref 0 to the reference surface (previous decoded frame).
+                                        // DW19-50: Reference Picture Frame Store addresses (16 refs × 2 DWords each)
+                                        //          For non-IDR frames, point ref 0 to the reference surface (previous decoded frame).
     if !has_idr {
         packet_write_addr64(batch, pipe_buf, 19, ref_surface_gpu_addr);
     }
@@ -2279,7 +2262,7 @@ fn build_h264_decode_batch_skeleton(
     // BSD Row Store (32KB at +0x10000)
     packet_write_addr64(batch, bsp, 1, scratch_gpu_addr + 0x10000);
     batch[bsp + 3] = MFX_MOCS_UC; // BSD Row Store Attributes
-    // MPR Row Store (32KB at +0x18000)
+                                  // MPR Row Store (32KB at +0x18000)
     packet_write_addr64(batch, bsp, 4, scratch_gpu_addr + 0x18000);
     batch[bsp + 6] = MFX_MOCS_UC; // MPR Row Store Attributes
     batch[bsp + 9] = MFX_MOCS_UC; // Bitplane Read Buffer Attributes
@@ -2769,6 +2752,7 @@ pub(super) fn seed_media_ring_live_state(
     super::mmio_write(dev, ring_base + RING_HWSTAM, !0u32);
 }
 
+#[cfg(any())]
 fn submit_h264_frame(
     dev: crate::intel::Dev,
     engine: MediaEngineDescriptor,
@@ -2800,6 +2784,7 @@ fn submit_h264_frame(
     )
 }
 
+#[cfg(any())]
 fn submit_h264_frame_once(
     dev: crate::intel::Dev,
     engine: MediaEngineDescriptor,
@@ -2817,7 +2802,7 @@ fn submit_h264_frame_once(
 ) -> Option<(bool, usize, usize, u64, u64, *mut u8)> {
     let (coded_width, coded_height) = coded_h264_frame_dims(sps);
     let output_pitch = align_up_u32(coded_width.max(128), 128) as usize; // Y-tile: 128-byte tile width
-    // Y-tile NV12: chroma starts at tile-row-aligned height (same as batch builder).
+                                                                         // Y-tile NV12: chroma starts at tile-row-aligned height (same as batch builder).
     let chroma_y_aligned = ((coded_height as usize) + 31) & !31;
     let total_height = chroma_y_aligned + ((coded_height as usize) + 1) / 2;
     let total_tile_rows = (total_height + 31) & !31;
@@ -3255,6 +3240,7 @@ pub(crate) async fn run_media_decode_async() {
     let _ = run_media2_first_frame_async().await;
 }
 
+#[cfg(any())]
 pub(crate) async fn run_media2_first_frame_async() -> Option<Media2FirstFrameState> {
     kickoff_once();
 
@@ -3415,4 +3401,13 @@ pub(crate) async fn run_media2_first_frame_async() -> Option<Media2FirstFrameSta
     MEDIA_DECODE_RAN.store(true, Ordering::Release);
     store_kickoff_state(MediaKickoffStage::Smoke, Some(demo));
     Some(media2_first_frame_state(demo))
+}
+
+#[cfg(not(any()))]
+pub(crate) async fn run_media2_first_frame_async() -> Option<Media2FirstFrameState> {
+    kickoff_once();
+    crate::log!("intel/media2: first-frame disabled reason=h264-general-cut\n");
+    store_kickoff_state(MediaKickoffStage::SubmissionWiring, None);
+    MEDIA_DECODE_RAN.store(true, Ordering::Release);
+    None
 }
