@@ -57,6 +57,7 @@ define_started_flags!(
     MANDELBROT_GPU_SIDEQUEST_STARTED,
     INTEL_CURSOR_SERVICE_STARTED,
     HW_PIC_SERVICE_STARTED,
+    HW_LOGO_PRESENT_TASK_STARTED,
     INTEL_HDA_PROBE_STARTED,
     RAPLE_SERVICE_STARTED,
     GFX_TEXTURE_UPLOAD_SERVICE_STARTED,
@@ -539,6 +540,10 @@ fn spawn_intel_cursor_service_task(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_hw_pic_service(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |_worker_spawner| crate::intel::hw_pic_service())
+}
+
+fn spawn_hw_logo_present_task(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_worker(spawner, |_worker_spawner| crate::intel::hw_logo_present_task())
 }
 
 fn spawn_intel_hda_probe_task(spawner: Spawner) -> SpawnAttempt {
@@ -1142,6 +1147,13 @@ static TASKS: [TaskSpec; 66] = [
         intel_media_engine_gate,
         &HW_PIC_SERVICE_STARTED,
         spawn_hw_pic_service,
+    ),
+    TaskSpec::enabled_gated(
+        "hw_logo_present_task",
+        0,
+        intel_media_engine_gate,
+        &HW_LOGO_PRESENT_TASK_STARTED,
+        spawn_hw_logo_present_task,
     ),
     TaskSpec::disabled("intel-hda-probe", 0, &INTEL_HDA_PROBE_STARTED, spawn_intel_hda_probe_task),
     TaskSpec::enabled("raple-service", 0, &RAPLE_SERVICE_STARTED, spawn_raple_service),

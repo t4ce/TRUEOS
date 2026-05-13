@@ -890,8 +890,19 @@ pub(crate) fn hw_pic_output_for_id(id: u32) -> Option<self::hw_pic::HwPicOutput>
     self::hw_pic::output_for_id(id)
 }
 
+pub(crate) async fn hw_pic_wait_output_for_id(
+    id: u32,
+    timeout_ms: u64,
+) -> Option<self::hw_pic::HwPicOutput> {
+    self::hw_pic::wait_output_for_id(id, timeout_ms).await
+}
+
 pub(crate) fn hw_pic_snapshot() -> self::hw_pic::HwPicQueueSnapshot {
     self::hw_pic::snapshot()
+}
+
+pub(crate) fn hw_logo_present_task() -> Result<embassy_executor::SpawnToken<impl Send>, embassy_executor::SpawnError> {
+    self::display::hw_logo_present_task()
 }
 
 pub async fn run_media_source_warmup_async() {

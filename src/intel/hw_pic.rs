@@ -13,6 +13,7 @@ static SERVICE_STARTED: AtomicBool = AtomicBool::new(false);
 static PENDING: Mutex<VecDeque<HwPicJob>> = Mutex::new(VecDeque::new());
 static OUTPUTS: Mutex<VecDeque<HwPicOutput>> = Mutex::new(VecDeque::new());
 static WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
+static OUTPUT_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum HwPicCodec {
@@ -97,6 +98,19 @@ pub(crate) fn output_for_id(id: u32) -> Option<HwPicOutput> {
     outputs.remove(pos)
 }
 
+pub(crate) async fn wait_output_for_id(id: u32, timeout_ms: u64) -> Option<HwPicOutput> {
+    loop {
+        if let Some(output) = output_for_id(id) {
+            return Some(output);
+        }
+        if timeout_ms == 0 {
+            OUTPUT_WAIT.wait_for_event().await;
+        } else if !OUTPUT_WAIT.wait_for_event_timeout(timeout_ms).await {
+            return None;
+        }
+    }
+}
+
 pub(crate) fn snapshot() -> HwPicQueueSnapshot {
     HwPicQueueSnapshot {
         pending: PENDING.lock().len(),
@@ -115,6 +129,8 @@ fn push_output(output: HwPicOutput) {
         outputs.pop_front();
     }
     outputs.push_back(output);
+    drop(outputs);
+    OUTPUT_WAIT.notify_all();
 }
 
 #[embassy_executor::task]

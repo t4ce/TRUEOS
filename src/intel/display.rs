@@ -85,6 +85,8 @@ static PRIMARY_PRESENT_SEQ: AtomicU32 = AtomicU32::new(0);
 static PRIMARY_SURFACE: Mutex<Option<PrimarySurface>> = Mutex::new(None);
 static OVERLAY_PRESENT_SEQ: AtomicU32 = AtomicU32::new(0);
 static OVERLAY_SURFACE: Mutex<Option<OverlaySurface>> = Mutex::new(None);
+static HW_LOGO_PENDING_ID: AtomicU32 = AtomicU32::new(0);
+static HW_LOGO_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
 
 #[derive(Copy, Clone)]
 pub(super) struct PipeInfo {
@@ -363,6 +365,8 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
 fn probe_hw_logo_decode() -> bool {
     match crate::intel::hw_pic_submit_jpeg(PRIMARY_BOOT_LOGO_JPEG) {
         Ok(id) => {
+            HW_LOGO_PENDING_ID.store(id, Ordering::Release);
+            HW_LOGO_WAIT.notify_all();
             let snap = crate::intel::hw_pic_snapshot();
             crate::log!(
                 "intel/display: hw-logo submit ok id={} bytes=0x{:X} pending={} outputs={} service={}\n",
@@ -386,6 +390,76 @@ fn probe_hw_logo_decode() -> bool {
             );
             false
         }
+    }
+}
+
+#[embassy_executor::task]
+pub(crate) async fn hw_logo_present_task() {
+    loop {
+        let pending_id = HW_LOGO_PENDING_ID.load(Ordering::Acquire);
+        if pending_id == 0 {
+            HW_LOGO_WAIT.wait_for_event().await;
+            continue;
+        }
+
+        let Some(output) = crate::intel::hw_pic_wait_output_for_id(pending_id, 500).await else {
+            let snap = crate::intel::hw_pic_snapshot();
+            crate::log!(
+                "intel/display: hw-logo wait id={} pending={} outputs={} service={} timeout_ms=500\n",
+                pending_id,
+                snap.pending,
+                snap.outputs,
+                snap.service_started as u8,
+            );
+            continue;
+        };
+
+        HW_LOGO_PENDING_ID.compare_exchange(
+            pending_id,
+            0,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ).ok();
+
+        let presented = if output.status == crate::intel::hw_pic::HwPicStatus::Ready
+            && output.format == crate::intel::hw_pic::HwPicPixelFormat::Nv12
+            && output.width != 0
+            && output.height != 0
+            && output.pitch_bytes != 0
+            && output.byte_len != 0
+            && output.virt_addr != 0
+        {
+            let src = unsafe {
+                core::slice::from_raw_parts(output.virt_addr as *const u8, output.byte_len)
+            };
+            present_nv12_surface_center(
+                src,
+                output.width,
+                output.height,
+                0,
+                0,
+                output.width,
+                output.height,
+                output.pitch_bytes,
+            )
+        } else {
+            false
+        };
+
+        crate::log!(
+            "intel/display: hw-logo output id={} status={:?} fmt={:?} size={}x{} pitch=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} presented={} err={}\n",
+            output.id,
+            output.status,
+            output.format,
+            output.width,
+            output.height,
+            output.pitch_bytes,
+            output.byte_len,
+            output.gpu_addr,
+            output.phys_addr,
+            presented as u8,
+            output.error_code,
+        );
     }
 }
 
