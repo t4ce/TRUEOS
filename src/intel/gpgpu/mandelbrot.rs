@@ -13,7 +13,7 @@ enum MandelbrotCommandStreamSource {
 }
 
 const MANDELBROT_COMMAND_STREAM_SOURCE: MandelbrotCommandStreamSource =
-    MandelbrotCommandStreamSource::OracleLatestHandle9Batch;
+    MandelbrotCommandStreamSource::DynamicEncoded;
 
 fn gpgpu_primary_scanout_pixel_quiet_program() -> GpgpuEuProgram {
     let artifact = trueos_eu::gfx12::HDC1_STATELESS_STORE_THEN_TS_EOT;

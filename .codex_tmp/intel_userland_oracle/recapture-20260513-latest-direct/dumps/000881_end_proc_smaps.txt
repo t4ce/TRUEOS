@@ -1,0 +1,1482 @@
+578e25582000-578e25584000 r--p 00000000 103:03 11143572                  /home/t4ce/REPOS/TRUEOS/crates/trueos-shader/intel_userland_oracle/latest/build/vk_compute_sentinel
+Size:                  8 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                   8 kB
+Pss:                   8 kB
+Pss_Dirty:             0 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         8 kB
+Private_Dirty:         0 kB
+Referenced:            8 kB
+Anonymous:             0 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd mr mw me sd 
+578e25584000-578e25586000 r-xp 00002000 103:03 11143572                  /home/t4ce/REPOS/TRUEOS/crates/trueos-shader/intel_userland_oracle/latest/build/vk_compute_sentinel
+Size:                  8 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                   8 kB
+Pss:                   8 kB
+Pss_Dirty:             0 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         8 kB
+Private_Dirty:         0 kB
+Referenced:            8 kB
+Anonymous:             0 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd ex mr mw me sd 
+578e25586000-578e25587000 r--p 00004000 103:03 11143572                  /home/t4ce/REPOS/TRUEOS/crates/trueos-shader/intel_userland_oracle/latest/build/vk_compute_sentinel
+Size:                  4 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                   4 kB
+Pss:                   4 kB
+Pss_Dirty:             0 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         4 kB
+Private_Dirty:         0 kB
+Referenced:            4 kB
+Anonymous:             0 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd mr mw me sd 
+578e25587000-578e25588000 r--p 00005000 103:03 11143572                  /home/t4ce/REPOS/TRUEOS/crates/trueos-shader/intel_userland_oracle/latest/build/vk_compute_sentinel
+Size:                  4 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                   4 kB
+Pss:                   4 kB
+Pss_Dirty:             4 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         4 kB
+Referenced:            4 kB
+Anonymous:             4 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd mr mw me ac sd 
+578e25588000-578e25589000 rw-p 00006000 103:03 11143572                  /home/t4ce/REPOS/TRUEOS/crates/trueos-shader/intel_userland_oracle/latest/build/vk_compute_sentinel
+Size:                  4 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                   4 kB
+Pss:                   4 kB
+Pss_Dirty:             4 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         4 kB
+Referenced:            4 kB
+Anonymous:             4 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd wr mr mw me ac sd 
+578e54ab3000-578e5562e000 rw-p 00000000 00:00 0                          [heap]
+Size:              11756 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:               11536 kB
+Pss:               11536 kB
+Pss_Dirty:         11536 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:     11536 kB
+Referenced:        11536 kB
+Anonymous:         11536 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd wr mr mw me ac sd 
+7b9a9c000000-7b9a9c021000 rw-p 00000000 00:00 0 
+Size:                132 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                  12 kB
+Pss:                  12 kB
+Pss_Dirty:            12 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:        12 kB
+Referenced:           12 kB
+Anonymous:            12 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd wr mr mw me ac sd 
+7b9a9c021000-7b9aa0000000 ---p 00000000 00:00 0 
+Size:              65404 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                   0 kB
+Pss:                   0 kB
+Pss_Dirty:             0 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         0 kB
+Referenced:            0 kB
+Anonymous:             0 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: mr mw me sd 
+7b9aa197e000-7b9aa217f000 rw-p 00000000 00:00 0 
+Size:               8196 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                   8 kB
+Pss:                   8 kB
+Pss_Dirty:             8 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         8 kB
+Referenced:            8 kB
+Anonymous:             8 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd wr mr mw me ac sd nh 
+7b9aa21ff000-7b9aa2a00000 rw-p 00000000 00:00 0 
+Size:               8196 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                  20 kB
+Pss:                  20 kB
+Pss_Dirty:            20 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:        20 kB
+Referenced:           20 kB
+Anonymous:            20 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd wr mr mw me ac sd nh 
+7b9aa4000000-7b9aa40a2000 r--p 00000000 103:03 93226225                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.34
+Size:                648 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                 648 kB
+Pss:                  21 kB
+Pss_Dirty:             0 kB
+Shared_Clean:        648 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         0 kB
+Referenced:          648 kB
+Anonymous:             0 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd mr mw me sd 
+7b9aa40a2000-7b9aa41ef000 r-xp 000a2000 103:03 93226225                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.34
+Size:               1332 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                 744 kB
+Pss:                  89 kB
+Pss_Dirty:             0 kB
+Shared_Clean:        680 kB
+Shared_Dirty:          0 kB
+Private_Clean:        64 kB
+Private_Dirty:         0 kB
+Referenced:          744 kB
+Anonymous:             0 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd ex mr mw me sd 
+7b9aa41ef000-7b9aa4277000 r--p 001ef000 103:03 93226225                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.34
+Size:                544 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                  64 kB
+Pss:                   1 kB
+Pss_Dirty:             0 kB
+Shared_Clean:         64 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         0 kB
+Referenced:           64 kB
+Anonymous:             0 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd mr mw me sd 
+7b9aa4277000-7b9aa4286000 r--p 00276000 103:03 93226225                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.34
+Size:                 60 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                  60 kB
+Pss:                  60 kB
+Pss_Dirty:            60 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:        60 kB
+Referenced:           60 kB
+Anonymous:            60 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd mr mw me ac sd 
+7b9aa4286000-7b9aa4289000 rw-p 00285000 103:03 93226225                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.34
+Size:                 12 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                  12 kB
+Pss:                  12 kB
+Pss_Dirty:            12 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:        12 kB
+Referenced:           12 kB
+Anonymous:            12 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd wr mr mw me ac sd 
+7b9aa4289000-7b9aa428d000 rw-p 00000000 00:00 0 
+Size:                 16 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                  12 kB
+Pss:                  12 kB
+Pss_Dirty:            12 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:        12 kB
+Referenced:           12 kB
+Anonymous:            12 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd wr mr mw me ac sd 
+7b9aa42f3000-7b9aa4304000 r--p 00000000 103:03 93194293                  /usr/lib/x86_64-linux-gnu/libm.so.6
+Size:                 68 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                  64 kB
+Pss:                   0 kB
+Pss_Dirty:             0 kB
+Shared_Clean:         64 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         0 kB
+Referenced:           64 kB
+Anonymous:             0 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd mr mw me sd 
+7b9aa4304000-7b9aa438f000 r-xp 00011000 103:03 93194293                  /usr/lib/x86_64-linux-gnu/libm.so.6
+Size:                556 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                 232 kB
+Pss:                   1 kB
+Pss_Dirty:             0 kB
+Shared_Clean:        232 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         0 kB
+Referenced:          232 kB
+Anonymous:             0 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd ex mr mw me sd 
+7b9aa438f000-7b9aa43fe000 r--p 0009c000 103:03 93194293                  /usr/lib/x86_64-linux-gnu/libm.so.6
+Size:                444 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                   0 kB
+Pss:                   0 kB
+Pss_Dirty:             0 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         0 kB
+Referenced:            0 kB
+Anonymous:             0 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd mr mw me sd 
+7b9aa43fe000-7b9aa43ff000 r--p 0010a000 103:03 93194293                  /usr/lib/x86_64-linux-gnu/libm.so.6
+Size:                  4 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                   4 kB
+Pss:                   4 kB
+Pss_Dirty:             4 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         4 kB
+Referenced:            4 kB
+Anonymous:             4 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd mr mw me ac sd 
+7b9aa43ff000-7b9aa4400000 rw-p 0010b000 103:03 93194293                  /usr/lib/x86_64-linux-gnu/libm.so.6
+Size:                  4 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                   4 kB
+Pss:                   4 kB
+Pss_Dirty:             4 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         4 kB
+Referenced:            4 kB
+Anonymous:             4 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd wr mr mw me ac sd 
+7b9aa5539000-7b9aa553d000 r--p 00000000 103:03 93225759                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+Size:                 16 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                  16 kB
+Pss:                   0 kB
+Pss_Dirty:             0 kB
+Shared_Clean:         16 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         0 kB
+Referenced:           16 kB
+Anonymous:             0 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd mr mw me sd 
+7b9aa553d000-7b9aa5560000 r-xp 00004000 103:03 93225759                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+Size:                140 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                 128 kB
+Pss:                  19 kB
+Pss_Dirty:             0 kB
+Shared_Clean:        128 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         0 kB
+Referenced:          128 kB
+Anonymous:             0 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd ex mr mw me sd 
+7b9aa5560000-7b9aa5564000 r--p 00027000 103:03 93225759                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+Size:                 16 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                  16 kB
+Pss:                   0 kB
+Pss_Dirty:             0 kB
+Shared_Clean:         16 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         0 kB
+Referenced:           16 kB
+Anonymous:             0 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd mr mw me sd 
+7b9aa5564000-7b9aa5565000 r--p 0002a000 103:03 93225759                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+Size:                  4 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                   4 kB
+Pss:                   4 kB
+Pss_Dirty:             4 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         4 kB
+Referenced:            4 kB
+Anonymous:             4 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd mr mw me ac sd 
+7b9aa5565000-7b9aa5566000 rw-p 0002b000 103:03 93225759                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+Size:                  4 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                   4 kB
+Pss:                   4 kB
+Pss_Dirty:             4 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         4 kB
+Referenced:            4 kB
+Anonymous:             4 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd wr mr mw me ac sd 
+7b9aa5600000-7b9aa5628000 r--p 00000000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
+Size:                160 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                 156 kB
+Pss:                   0 kB
+Pss_Dirty:             0 kB
+Shared_Clean:        156 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         0 kB
+Referenced:          156 kB
+Anonymous:             0 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd mr mw me sd 
+7b9aa5628000-7b9aa57c1000 r-xp 00028000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
+Size:               1636 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                1428 kB
+Pss:                   7 kB
+Pss_Dirty:             0 kB
+Shared_Clean:       1428 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         0 kB
+Referenced:         1428 kB
+Anonymous:             0 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd ex mr mw me sd 
+7b9aa57c1000-7b9aa5830000 r--p 001c1000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
+Size:                444 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                 436 kB
+Pss:                 212 kB
+Pss_Dirty:             0 kB
+Shared_Clean:        244 kB
+Shared_Dirty:          0 kB
+Private_Clean:       192 kB
+Private_Dirty:         0 kB
+Referenced:          436 kB
+Anonymous:             0 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd mr mw me sd 
+7b9aa5830000-7b9aa5834000 r--p 0022f000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
+Size:                 16 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                  16 kB
+Pss:                  16 kB
+Pss_Dirty:            16 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:        16 kB
+Referenced:           16 kB
+Anonymous:            16 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd mr mw me ac sd 
+7b9aa5834000-7b9aa5836000 rw-p 00233000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
+Size:                  8 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                   8 kB
+Pss:                   8 kB
+Pss_Dirty:             8 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         8 kB
+Referenced:            8 kB
+Anonymous:             8 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd wr mr mw me ac sd 
+7b9aa5836000-7b9aa5843000 rw-p 00000000 00:00 0 
+Size:                 52 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                  20 kB
+Pss:                  20 kB
+Pss_Dirty:            20 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:        20 kB
+Referenced:           20 kB
+Anonymous:            20 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd wr mr mw me ac sd 
+7b9aa5952000-7b9aa5958000 r--p 00000000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
+Size:                 24 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                  24 kB
+Pss:                   8 kB
+Pss_Dirty:             0 kB
+Shared_Clean:         24 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         0 kB
+Referenced:           24 kB
+Anonymous:             0 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd mr mw me sd 
+7b9aa5958000-7b9aa59aa000 r-xp 00006000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
+Size:                328 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                 296 kB
+Pss:                 203 kB
+Pss_Dirty:             0 kB
+Shared_Clean:        128 kB
+Shared_Dirty:          0 kB
+Private_Clean:       168 kB
+Private_Dirty:         0 kB
+Referenced:          296 kB
+Anonymous:             0 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd ex mr mw me sd 
+7b9aa59aa000-7b9aa59e1000 r--p 00058000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
+Size:                220 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                 208 kB
+Pss:                 137 kB
+Pss_Dirty:             0 kB
+Shared_Clean:        132 kB
+Shared_Dirty:          0 kB
+Private_Clean:        76 kB
+Private_Dirty:         0 kB
+Referenced:          208 kB
+Anonymous:             0 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd mr mw me sd 
+7b9aa59e1000-7b9aa59e2000 r--p 0008f000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
+Size:                  4 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                   4 kB
+Pss:                   4 kB
+Pss_Dirty:             4 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         4 kB
+Referenced:            4 kB
+Anonymous:             4 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd mr mw me ac sd 
+7b9aa59e2000-7b9aa59e3000 rw-p 00090000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
+Size:                  4 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                   4 kB
+Pss:                   4 kB
+Pss_Dirty:             4 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         4 kB
+Referenced:            4 kB
+Anonymous:             4 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd wr mr mw me ac sd 
+7b9aa59ff000-7b9aa5a00000 rw-p 00000000 00:00 0 
+Size:                  4 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                   4 kB
+Pss:                   4 kB
+Pss_Dirty:             4 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         4 kB
+Referenced:            4 kB
+Anonymous:             4 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd wr mr mw me ac sd 
+7b9aa5a00000-7b9aa5a01000 r--p 00000000 103:03 11143570                  /home/t4ce/REPOS/TRUEOS/crates/trueos-shader/intel_userland_oracle/latest/build/libtrueos_ioctl_trace.so
+Size:                  4 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                   4 kB
+Pss:                   4 kB
+Pss_Dirty:             0 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         4 kB
+Private_Dirty:         0 kB
+Referenced:            4 kB
+Anonymous:             0 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd mr mw me sd 
+7b9aa5a01000-7b9aa5a04000 r-xp 00001000 103:03 11143570                  /home/t4ce/REPOS/TRUEOS/crates/trueos-shader/intel_userland_oracle/latest/build/libtrueos_ioctl_trace.so
+Size:                 12 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                  12 kB
+Pss:                  12 kB
+Pss_Dirty:             0 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:        12 kB
+Private_Dirty:         0 kB
+Referenced:           12 kB
+Anonymous:             0 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd ex mr mw me sd 
+7b9aa5a04000-7b9aa5a06000 r--p 00004000 103:03 11143570                  /home/t4ce/REPOS/TRUEOS/crates/trueos-shader/intel_userland_oracle/latest/build/libtrueos_ioctl_trace.so
+Size:                  8 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                   8 kB
+Pss:                   8 kB
+Pss_Dirty:             0 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         8 kB
+Private_Dirty:         0 kB
+Referenced:            8 kB
+Anonymous:             0 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd mr mw me sd 
+7b9aa5a06000-7b9aa5a07000 r--p 00005000 103:03 11143570                  /home/t4ce/REPOS/TRUEOS/crates/trueos-shader/intel_userland_oracle/latest/build/libtrueos_ioctl_trace.so
+Size:                  4 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                   4 kB
+Pss:                   4 kB
+Pss_Dirty:             4 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         4 kB
+Referenced:            4 kB
+Anonymous:             4 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd mr mw me ac sd 
+7b9aa5a07000-7b9aa5a08000 rw-p 00006000 103:03 11143570                  /home/t4ce/REPOS/TRUEOS/crates/trueos-shader/intel_userland_oracle/latest/build/libtrueos_ioctl_trace.so
+Size:                  4 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                   4 kB
+Pss:                   4 kB
+Pss_Dirty:             4 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         4 kB
+Referenced:            4 kB
+Anonymous:             4 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd wr mr mw me ac sd 
+7b9aa5a08000-7b9aa5c90000 rw-p 00000000 00:00 0 
+Size:               2592 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                  16 kB
+Pss:                  16 kB
+Pss_Dirty:            16 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:        16 kB
+Referenced:           16 kB
+Anonymous:            16 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd wr mr mw me ac sd 
+7b9aa5c90000-7b9aa5c91000 rw-p 00000000 00:00 0 
+Size:                  4 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                   4 kB
+Pss:                   4 kB
+Pss_Dirty:             4 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         4 kB
+Referenced:            4 kB
+Anonymous:             4 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd wr mr mw me nr wf dd sd dp 
+7b9aa5c9e000-7b9aa5ca3000 rw-p 00000000 00:00 0 
+Size:                 20 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                  16 kB
+Pss:                  16 kB
+Pss_Dirty:            16 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:        16 kB
+Referenced:           16 kB
+Anonymous:            16 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd wr mr mw me ac sd 
+7b9aa5ca3000-7b9aa5ca7000 r--p 00000000 00:00 0                          [vvar]
+Size:                 16 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                   0 kB
+Pss:                   0 kB
+Pss_Dirty:             0 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         0 kB
+Referenced:            0 kB
+Anonymous:             0 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd mr pf io de dd sd 
+7b9aa5ca7000-7b9aa5ca9000 r--p 00000000 00:00 0                          [vvar_vclock]
+Size:                  8 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                   0 kB
+Pss:                   0 kB
+Pss_Dirty:             0 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         0 kB
+Referenced:            0 kB
+Anonymous:             0 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd mr pf io de dd sd 
+7b9aa5ca9000-7b9aa5cab000 r-xp 00000000 00:00 0                          [vdso]
+Size:                  8 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                   8 kB
+Pss:                   0 kB
+Pss_Dirty:             0 kB
+Shared_Clean:          8 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         0 kB
+Referenced:            8 kB
+Anonymous:             0 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd ex mr mw me de sd 
+7b9aa5cab000-7b9aa5cac000 r--p 00000000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+Size:                  4 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                   4 kB
+Pss:                   0 kB
+Pss_Dirty:             0 kB
+Shared_Clean:          4 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         0 kB
+Referenced:            4 kB
+Anonymous:             0 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd mr mw me sd 
+7b9aa5cac000-7b9aa5cda000 r-xp 00001000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+Size:                184 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                 180 kB
+Pss:                   0 kB
+Pss_Dirty:             0 kB
+Shared_Clean:        180 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         0 kB
+Referenced:          180 kB
+Anonymous:             0 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd ex mr mw me sd 
+7b9aa5cda000-7b9aa5ce8000 r--p 0002f000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+Size:                 56 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                  56 kB
+Pss:                   0 kB
+Pss_Dirty:             0 kB
+Shared_Clean:         56 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         0 kB
+Referenced:           56 kB
+Anonymous:             0 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd mr mw me sd 
+7b9aa5ce8000-7b9aa5cea000 r--p 0003d000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+Size:                  8 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                   8 kB
+Pss:                   8 kB
+Pss_Dirty:             8 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         8 kB
+Referenced:            8 kB
+Anonymous:             8 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd mr mw me ac sd 
+7b9aa5cea000-7b9aa5ceb000 rw-p 0003f000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+Size:                  4 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                   4 kB
+Pss:                   4 kB
+Pss_Dirty:             4 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         4 kB
+Referenced:            4 kB
+Anonymous:             4 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd wr mr mw me ac sd 
+7b9aa5ceb000-7b9aa5cec000 rw-p 00000000 00:00 0 
+Size:                  4 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                   4 kB
+Pss:                   4 kB
+Pss_Dirty:             4 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         4 kB
+Referenced:            4 kB
+Anonymous:             4 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd wr mr mw me ac sd 
+7fffe3fb4000-7fffe3fd6000 rw-p 00000000 00:00 0                          [stack]
+Size:                136 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                  68 kB
+Pss:                  68 kB
+Pss_Dirty:            68 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:        68 kB
+Referenced:           68 kB
+Anonymous:            68 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: rd wr mr mw me gd ac 
+ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsyscall]
+Size:                  4 kB
+KernelPageSize:        4 kB
+MMUPageSize:           4 kB
+Rss:                   0 kB
+Pss:                   0 kB
+Pss_Dirty:             0 kB
+Shared_Clean:          0 kB
+Shared_Dirty:          0 kB
+Private_Clean:         0 kB
+Private_Dirty:         0 kB
+Referenced:            0 kB
+Anonymous:             0 kB
+KSM:                   0 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+THPeligible:           0
+ProtectionKey:         0
+VmFlags: ex 
