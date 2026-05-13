@@ -125,20 +125,27 @@ const STOP_RING: u32 = 1 << 8;
 const MEDIA_PIPELINE_MFX: u32 = 2;
 const MEDIA_CMD_OPCODE_MFX_COMMON: u32 = 0;
 const MEDIA_CMD_OPCODE_MFX_AVC: u32 = 1;
+const MEDIA_CMD_OPCODE_MFX_JPEG: u32 = 7;
 const MFX_PIPE_MODE_SELECT: u32 = 0;
 const MFX_SURFACE_STATE: u32 = 1;
 const MFX_PIPE_BUF_ADDR_STATE: u32 = 2;
 const MFX_IND_OBJ_BASE_ADDR_STATE: u32 = 3;
 const MFX_BSP_BUF_BASE_ADDR_STATE: u32 = 4;
+const MFX_JPEG_PIC_STATE: u32 = 0;
 const MFX_AVC_IMG_STATE: u32 = 0;
+const MFD_JPEG_BSD_OBJECT: u32 = 8;
 const MFD_AVC_BSD_OBJECT: u32 = 8;
 const MFX_CMD_LEN_PIPE_MODE_SELECT: u32 = 3;
 const MFX_CMD_LEN_SURFACE_STATE: u32 = 4;
 const MFX_CMD_LEN_PIPE_BUF_ADDR_STATE: u32 = 63;
 const MFX_CMD_LEN_IND_OBJ_BASE_ADDR_STATE: u32 = 24;
 const MFX_CMD_LEN_BSP_BUF_BASE_ADDR_STATE: u32 = 8;
+const MFX_CMD_LEN_JPEG_PIC_STATE: u32 = 1;
+const MFX_CMD_LEN_JPEG_BSD_OBJECT: u32 = 4;
 const MFX_CMD_LEN_AVC_IMG_STATE: u32 = 19;
 const MFX_CMD_LEN_AVC_BSD_OBJECT: u32 = 5;
+const MFX_JPEG_HUFF_TABLE_STATE: u32 = 2;
+const MFX_CMD_LEN_JPEG_HUFF_TABLE_STATE: u32 = 51;
 
 const MFX_QM_STATE: u32 = 7;
 const MFX_CMD_LEN_QM_STATE: u32 = 16;
@@ -195,6 +202,17 @@ const MEDIA_RESULT_OUTPUT_SURFACE_BYTES_SLOT: u64 =
 const MEDIA_RESULT_FRAME_DIMS_SLOT: u64 =
     MEDIA_RESULT_OUTPUT_SURFACE_BYTES_SLOT + MEDIA_RESULT_SLOT_BYTES;
 const MEDIA_STAGE_FLAG_JPEG_SMOKE: u32 = 1 << 8;
+const MEDIA_STAGE_FLAG_JPEG_PIC_STATE: u32 = 1 << 9;
+const MEDIA_STAGE_FLAG_JPEG_QM_STATE: u32 = 1 << 10;
+const MEDIA_STAGE_FLAG_JPEG_HUFF_STATE: u32 = 1 << 11;
+const MEDIA_STAGE_FLAG_JPEG_BSD_OBJECT: u32 = 1 << 12;
+
+const JPEG_QM_SCAN_8X8: [usize; 64] = [
+    0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40,
+    48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29,
+    22, 15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54,
+    47, 55, 62, 63,
+];
 
 static MEDIA_KICKOFF_RAN: AtomicBool = AtomicBool::new(false);
 static MEDIA_DECODE_RAN: AtomicBool = AtomicBool::new(false);
@@ -635,6 +653,7 @@ pub(super) struct MediaJpegSmokeSubmitProof {
     pub fault_tlb_data1_gen8: u32,
     pub fault_tlb_data0_gen12: u32,
     pub fault_tlb_data1_gen12: u32,
+    pub stage_flags_value: u32,
     pub bitstream_dword0: u32,
 }
 
@@ -1404,6 +1423,548 @@ fn align_up_u32(value: u32, align: u32) -> u32 {
 }
 
 #[inline]
+fn ceil_div_u32(value: u32, divisor: u32) -> u32 {
+    if divisor == 0 {
+        0
+    } else {
+        value.saturating_add(divisor.saturating_sub(1)) / divisor
+    }
+}
+
+fn parse_jpeg_frame_dims(encoded: &[u8]) -> Option<(u32, u32)> {
+    if encoded.len() < 4 || encoded[0] != 0xFF || encoded[1] != 0xD8 {
+        return None;
+    }
+
+    let mut idx = 2usize;
+    while idx + 3 < encoded.len() {
+        if encoded[idx] != 0xFF {
+            idx += 1;
+            continue;
+        }
+        while idx < encoded.len() && encoded[idx] == 0xFF {
+            idx += 1;
+        }
+        if idx >= encoded.len() {
+            break;
+        }
+        let marker = encoded[idx];
+        idx += 1;
+
+        if marker == 0xD9 || marker == 0xDA {
+            break;
+        }
+        if matches!(marker, 0x01 | 0xD0..=0xD7) {
+            continue;
+        }
+        if idx + 1 >= encoded.len() {
+            break;
+        }
+        let segment_len = u16::from_be_bytes([encoded[idx], encoded[idx + 1]]) as usize;
+        idx += 2;
+        if segment_len < 2 || idx + segment_len - 2 > encoded.len() {
+            break;
+        }
+
+        if matches!(marker, 0xC0..=0xC2 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF)
+            && segment_len >= 7
+        {
+            let height = u16::from_be_bytes([encoded[idx + 1], encoded[idx + 2]]) as u32;
+            let width = u16::from_be_bytes([encoded[idx + 3], encoded[idx + 4]]) as u32;
+            if width != 0 && height != 0 {
+                return Some((width, height));
+            }
+        }
+
+        idx += segment_len - 2;
+    }
+
+    None
+}
+
+#[derive(Clone, Copy, Debug)]
+struct JpegQuantTables {
+    tables: [[u8; 64]; 4],
+    present_mask: u8,
+    component_qtable: [u8; 3],
+    component_count: u8,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct JpegHuffTables {
+    dc_bits: [[u8; 12]; 4],
+    dc_values: [[u8; 12]; 4],
+    ac_bits: [[u8; 16]; 4],
+    ac_values: [[u8; 162]; 4],
+    dc_present_mask: u8,
+    ac_present_mask: u8,
+    y_dc_selector: u8,
+    y_ac_selector: u8,
+    chroma_dc_selector: u8,
+    chroma_ac_selector: u8,
+    has_chroma_selector: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct JpegScanInfo {
+    input_format: u8,
+    scan_data_offset: u32,
+    scan_data_length: u32,
+    scan_component_count: u8,
+    interleaved: bool,
+    restart_interval: u16,
+    mcu_count: u32,
+}
+
+fn jpeg_input_format_from_sampling(
+    component_count: u8,
+    h_sampling: &[u8; 3],
+    v_sampling: &[u8; 3],
+) -> Option<u8> {
+    if component_count == 1 {
+        return Some(0);
+    }
+    if component_count < 3 {
+        return None;
+    }
+
+    let y = (h_sampling[0], v_sampling[0]);
+    let cb = (h_sampling[1], v_sampling[1]);
+    let cr = (h_sampling[2], v_sampling[2]);
+    if cb != cr {
+        return None;
+    }
+
+    match (y, cb) {
+        ((2, 2), (1, 1)) => Some(1),
+        ((2, 1), (1, 1)) => Some(2),
+        ((1, 1), (1, 1)) => Some(3),
+        ((4, 1), (1, 1)) => Some(4),
+        ((1, 2), (1, 1)) => Some(5),
+        ((2, 2), (1, 2)) => Some(6),
+        ((2, 2), (2, 1)) => Some(7),
+        _ => None,
+    }
+}
+
+fn parse_jpeg_quant_tables(encoded: &[u8]) -> Option<JpegQuantTables> {
+    if encoded.len() < 4 || encoded[0] != 0xFF || encoded[1] != 0xD8 {
+        return None;
+    }
+
+    let mut parsed = JpegQuantTables {
+        tables: [[0; 64]; 4],
+        present_mask: 0,
+        component_qtable: [0, 1, 1],
+        component_count: 1,
+    };
+    let mut idx = 2usize;
+
+    while idx + 3 < encoded.len() {
+        if encoded[idx] != 0xFF {
+            idx += 1;
+            continue;
+        }
+        while idx < encoded.len() && encoded[idx] == 0xFF {
+            idx += 1;
+        }
+        if idx >= encoded.len() {
+            break;
+        }
+        let marker = encoded[idx];
+        idx += 1;
+
+        if marker == 0xD9 || marker == 0xDA {
+            break;
+        }
+        if matches!(marker, 0x01 | 0xD0..=0xD7) {
+            continue;
+        }
+        if idx + 1 >= encoded.len() {
+            break;
+        }
+        let segment_len = u16::from_be_bytes([encoded[idx], encoded[idx + 1]]) as usize;
+        idx += 2;
+        if segment_len < 2 || idx + segment_len - 2 > encoded.len() {
+            break;
+        }
+
+        match marker {
+            0xDB => {
+                let mut seg_idx = idx;
+                let seg_end = idx + segment_len - 2;
+                while seg_idx < seg_end {
+                    let pq_tq = encoded[seg_idx];
+                    seg_idx += 1;
+                    let precision = pq_tq >> 4;
+                    let table_id = (pq_tq & 0x0F) as usize;
+                    if precision != 0 || table_id >= parsed.tables.len() || seg_idx + 64 > seg_end {
+                        return None;
+                    }
+                    for (zigzag_idx, &raster_idx) in JPEG_QM_SCAN_8X8.iter().enumerate() {
+                        parsed.tables[table_id][raster_idx] = encoded[seg_idx + zigzag_idx];
+                    }
+                    parsed.present_mask |= 1 << table_id;
+                    seg_idx += 64;
+                }
+            }
+            0xC0..=0xC2 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF => {
+                if segment_len >= 8 {
+                    let component_count = encoded[idx + 5].min(3);
+                    parsed.component_count = component_count.max(1);
+                    for component_idx in 0..usize::from(component_count) {
+                        parsed.component_qtable[component_idx] = encoded[idx + 8 + component_idx * 3] & 0x0F;
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        idx += segment_len - 2;
+    }
+
+    Some(parsed)
+}
+
+fn parse_jpeg_huff_tables(encoded: &[u8]) -> Option<JpegHuffTables> {
+    if encoded.len() < 4 || encoded[0] != 0xFF || encoded[1] != 0xD8 {
+        return None;
+    }
+
+    let mut parsed = JpegHuffTables {
+        dc_bits: [[0; 12]; 4],
+        dc_values: [[0; 12]; 4],
+        ac_bits: [[0; 16]; 4],
+        ac_values: [[0; 162]; 4],
+        dc_present_mask: 0,
+        ac_present_mask: 0,
+        y_dc_selector: 0,
+        y_ac_selector: 0,
+        chroma_dc_selector: 1,
+        chroma_ac_selector: 1,
+        has_chroma_selector: false,
+    };
+    let mut sof_component_ids = [0u8, 1, 2];
+    let mut sof_component_count = 1u8;
+    let mut saw_scan = false;
+    let mut idx = 2usize;
+
+    while idx + 3 < encoded.len() {
+        if encoded[idx] != 0xFF {
+            idx += 1;
+            continue;
+        }
+        while idx < encoded.len() && encoded[idx] == 0xFF {
+            idx += 1;
+        }
+        if idx >= encoded.len() {
+            break;
+        }
+        let marker = encoded[idx];
+        idx += 1;
+
+        if marker == 0xD9 {
+            break;
+        }
+        if matches!(marker, 0x01 | 0xD0..=0xD7) {
+            continue;
+        }
+        if idx + 1 >= encoded.len() {
+            break;
+        }
+        let segment_len = u16::from_be_bytes([encoded[idx], encoded[idx + 1]]) as usize;
+        idx += 2;
+        if segment_len < 2 || idx + segment_len - 2 > encoded.len() {
+            break;
+        }
+
+        match marker {
+            0xC4 => {
+                let mut seg_idx = idx;
+                let seg_end = idx + segment_len - 2;
+                while seg_idx < seg_end {
+                    let tc_th = encoded[seg_idx];
+                    seg_idx += 1;
+                    let table_class = tc_th >> 4;
+                    let table_id = (tc_th & 0x0F) as usize;
+                    if table_id >= 4 || seg_idx + 16 > seg_end {
+                        return None;
+                    }
+
+                    let mut counts = [0u8; 16];
+                    counts.copy_from_slice(&encoded[seg_idx..seg_idx + 16]);
+                    seg_idx += 16;
+                    let symbol_count = counts.iter().map(|&count| usize::from(count)).sum::<usize>();
+                    if seg_idx + symbol_count > seg_end {
+                        return None;
+                    }
+
+                    match table_class {
+                        0 => {
+                            if counts[12..].iter().any(|&count| count != 0) || symbol_count > 12 {
+                                return None;
+                            }
+                            parsed.dc_bits[table_id].copy_from_slice(&counts[..12]);
+                            parsed.dc_values[table_id][..symbol_count]
+                                .copy_from_slice(&encoded[seg_idx..seg_idx + symbol_count]);
+                            parsed.dc_present_mask |= 1 << table_id;
+                        }
+                        1 => {
+                            if symbol_count > 162 {
+                                return None;
+                            }
+                            parsed.ac_bits[table_id].copy_from_slice(&counts);
+                            parsed.ac_values[table_id][..symbol_count]
+                                .copy_from_slice(&encoded[seg_idx..seg_idx + symbol_count]);
+                            parsed.ac_present_mask |= 1 << table_id;
+                        }
+                        _ => return None,
+                    }
+
+                    seg_idx += symbol_count;
+                }
+            }
+            0xC0..=0xC2 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF => {
+                if segment_len >= 8 {
+                    let component_count = encoded[idx + 5].min(3);
+                    sof_component_count = component_count.max(1);
+                    for component_idx in 0..usize::from(component_count) {
+                        sof_component_ids[component_idx] = encoded[idx + 6 + component_idx * 3];
+                    }
+                }
+            }
+            0xDA => {
+                if segment_len < 6 {
+                    return None;
+                }
+                let scan_component_count = encoded[idx].min(3);
+                let required_len = 2 + 1 + usize::from(scan_component_count) * 2 + 3;
+                if segment_len < required_len {
+                    return None;
+                }
+
+                let mut saw_y_selector = false;
+                for component_idx in 0..usize::from(scan_component_count) {
+                    let base = idx + 1 + component_idx * 2;
+                    let component_id = encoded[base];
+                    let selectors = encoded[base + 1];
+                    let dc_selector = selectors >> 4;
+                    let ac_selector = selectors & 0x0F;
+                    let is_luma = component_id == sof_component_ids[0]
+                        || (!saw_y_selector && component_idx == 0)
+                        || sof_component_count == 1;
+
+                    if is_luma && !saw_y_selector {
+                        parsed.y_dc_selector = dc_selector;
+                        parsed.y_ac_selector = ac_selector;
+                        saw_y_selector = true;
+                    } else if !parsed.has_chroma_selector {
+                        parsed.chroma_dc_selector = dc_selector;
+                        parsed.chroma_ac_selector = ac_selector;
+                        parsed.has_chroma_selector = true;
+                    }
+                }
+
+                if !saw_y_selector {
+                    return None;
+                }
+                saw_scan = true;
+                break;
+            }
+            _ => {}
+        }
+
+        idx += segment_len - 2;
+    }
+
+    if !saw_scan {
+        return None;
+    }
+
+    if (parsed.dc_present_mask & (1 << parsed.y_dc_selector)) == 0
+        || (parsed.ac_present_mask & (1 << parsed.y_ac_selector)) == 0
+    {
+        return None;
+    }
+    if parsed.has_chroma_selector
+        && ((parsed.dc_present_mask & (1 << parsed.chroma_dc_selector)) == 0
+            || (parsed.ac_present_mask & (1 << parsed.chroma_ac_selector)) == 0)
+    {
+        return None;
+    }
+
+    Some(parsed)
+}
+
+fn parse_jpeg_scan_info(encoded: &[u8]) -> Option<JpegScanInfo> {
+    if encoded.len() < 4 || encoded[0] != 0xFF || encoded[1] != 0xD8 {
+        return None;
+    }
+
+    let mut width = 0u32;
+    let mut height = 0u32;
+    let mut component_ids = [0u8, 1, 2];
+    let mut h_sampling = [1u8; 3];
+    let mut v_sampling = [1u8; 3];
+    let mut component_count = 0u8;
+    let mut max_h_sampling = 1u8;
+    let mut max_v_sampling = 1u8;
+    let mut restart_interval = 0u16;
+    let mut saw_sof = false;
+    let mut idx = 2usize;
+
+    while idx + 3 < encoded.len() {
+        if encoded[idx] != 0xFF {
+            idx += 1;
+            continue;
+        }
+        while idx < encoded.len() && encoded[idx] == 0xFF {
+            idx += 1;
+        }
+        if idx >= encoded.len() {
+            break;
+        }
+
+        let marker = encoded[idx];
+        idx += 1;
+
+        if marker == 0xD9 {
+            break;
+        }
+        if matches!(marker, 0x01 | 0xD0..=0xD7) {
+            continue;
+        }
+        if idx + 1 >= encoded.len() {
+            break;
+        }
+
+        let segment_len = u16::from_be_bytes([encoded[idx], encoded[idx + 1]]) as usize;
+        idx += 2;
+        if segment_len < 2 || idx + segment_len - 2 > encoded.len() {
+            break;
+        }
+        let payload_len = segment_len - 2;
+
+        match marker {
+            0xC0..=0xC2 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF => {
+                if payload_len < 6 {
+                    return None;
+                }
+                let sof_component_count = encoded[idx + 5].min(3);
+                let required_len = 6usize + usize::from(sof_component_count) * 3;
+                if sof_component_count == 0 || payload_len < required_len {
+                    return None;
+                }
+
+                width = u16::from_be_bytes([encoded[idx + 3], encoded[idx + 4]]) as u32;
+                height = u16::from_be_bytes([encoded[idx + 1], encoded[idx + 2]]) as u32;
+                component_count = sof_component_count;
+                max_h_sampling = 1;
+                max_v_sampling = 1;
+                for component_idx in 0..usize::from(sof_component_count) {
+                    let base = idx + 6 + component_idx * 3;
+                    component_ids[component_idx] = encoded[base];
+                    let sampling = encoded[base + 1];
+                    h_sampling[component_idx] = (sampling >> 4).max(1);
+                    v_sampling[component_idx] = (sampling & 0x0F).max(1);
+                    max_h_sampling = max_h_sampling.max(h_sampling[component_idx]);
+                    max_v_sampling = max_v_sampling.max(v_sampling[component_idx]);
+                }
+                saw_sof = true;
+            }
+            0xDD => {
+                if payload_len != 2 {
+                    return None;
+                }
+                restart_interval = u16::from_be_bytes([encoded[idx], encoded[idx + 1]]);
+            }
+            0xDA => {
+                if !saw_sof || payload_len < 4 {
+                    return None;
+                }
+                let scan_component_count = encoded[idx].min(3);
+                let required_len = 1usize + usize::from(scan_component_count) * 2 + 3;
+                if scan_component_count == 0 || payload_len < required_len {
+                    return None;
+                }
+
+                let input_format = jpeg_input_format_from_sampling(
+                    component_count,
+                    &h_sampling,
+                    &v_sampling,
+                )?;
+
+                let mut scan_component_ids = [0u8; 3];
+                for component_idx in 0..usize::from(scan_component_count) {
+                    scan_component_ids[component_idx] = encoded[idx + 1 + component_idx * 2];
+                }
+
+                let scan_data_offset = idx + required_len;
+                let mut scan_end = scan_data_offset;
+                while scan_end < encoded.len() {
+                    if encoded[scan_end] != 0xFF {
+                        scan_end += 1;
+                        continue;
+                    }
+                    if scan_end + 1 >= encoded.len() {
+                        scan_end = encoded.len();
+                        break;
+                    }
+                    match encoded[scan_end + 1] {
+                        0x00 | 0xD0..=0xD7 => scan_end += 2,
+                        0xFF => scan_end += 1,
+                        _ => break,
+                    }
+                }
+                if scan_end <= scan_data_offset {
+                    return None;
+                }
+
+                let interleaved = scan_component_count > 1;
+                let mcu_count = if interleaved {
+                    let mcu_width = 8u32.saturating_mul(u32::from(max_h_sampling));
+                    let mcu_height = 8u32.saturating_mul(u32::from(max_v_sampling));
+                    ceil_div_u32(width, mcu_width)
+                        .saturating_mul(ceil_div_u32(height, mcu_height))
+                } else {
+                    let scan_component_id = scan_component_ids[0];
+                    let component_idx = component_ids[..usize::from(component_count)]
+                        .iter()
+                        .position(|&component_id| component_id == scan_component_id)
+                        .unwrap_or(0);
+                    let component_h = u32::from(h_sampling[component_idx]);
+                    let component_v = u32::from(v_sampling[component_idx]);
+                    let blocks_wide = ceil_div_u32(
+                        width.saturating_mul(component_h),
+                        8u32.saturating_mul(u32::from(max_h_sampling)),
+                    );
+                    let blocks_high = ceil_div_u32(
+                        height.saturating_mul(component_v),
+                        8u32.saturating_mul(u32::from(max_v_sampling)),
+                    );
+                    blocks_wide.saturating_mul(blocks_high)
+                };
+
+                return Some(JpegScanInfo {
+                    input_format,
+                    scan_data_offset: scan_data_offset as u32,
+                    scan_data_length: (scan_end - scan_data_offset) as u32,
+                    scan_component_count,
+                    interleaved,
+                    restart_interval,
+                    mcu_count,
+                });
+            }
+            _ => {}
+        }
+
+        idx += payload_len;
+    }
+
+    None
+}
+
+#[inline]
 fn masked_bits_update(set_bits: u32, clear_bits: u32) -> u32 {
     let update = set_bits | clear_bits;
     set_bits | (update << 16)
@@ -1954,6 +2515,81 @@ fn begin_batch_packet(
 fn packet_write_addr64(batch: &mut [u32], packet_start: usize, dword_index: usize, gpu_addr: u64) {
     batch[packet_start + dword_index] = gpu_addr as u32;
     batch[packet_start + dword_index + 1] = (gpu_addr >> 32) as u32;
+}
+
+#[inline]
+fn pack_u8x4(bytes: &[u8]) -> u32 {
+    let mut value = 0u32;
+    for (shift, byte) in bytes.iter().enumerate() {
+        value |= u32::from(*byte) << (shift * 8);
+    }
+    value
+}
+
+fn emit_jpeg_huff_table_state(
+    batch: &mut [u32],
+    idx: &mut usize,
+    huff_table_id: u32,
+    dc_bits: &[u8; 12],
+    dc_values: &[u8; 12],
+    ac_bits: &[u8; 16],
+    ac_values: &[u8; 162],
+) -> Option<()> {
+    let huff = begin_batch_packet(
+        batch,
+        idx,
+        (MFX_CMD_LEN_JPEG_HUFF_TABLE_STATE + 2) as usize,
+        media_cmd_header(
+            MEDIA_CMD_OPCODE_MFX_JPEG,
+            0,
+            MFX_JPEG_HUFF_TABLE_STATE,
+            MFX_CMD_LEN_JPEG_HUFF_TABLE_STATE,
+        ),
+    )?;
+
+    batch[huff + 1] = huff_table_id;
+    for dw in 0..3 {
+        let base = dw * 4;
+        batch[huff + 2 + dw] = pack_u8x4(&dc_bits[base..base + 4]);
+        batch[huff + 5 + dw] = pack_u8x4(&dc_values[base..base + 4]);
+    }
+    for dw in 0..4 {
+        let base = dw * 4;
+        batch[huff + 8 + dw] = pack_u8x4(&ac_bits[base..base + 4]);
+    }
+    for dw in 0..40 {
+        let base = dw * 4;
+        batch[huff + 12 + dw] = pack_u8x4(&ac_values[base..base + 4]);
+    }
+    batch[huff + 52] = u32::from(ac_values[160]) | (u32::from(ac_values[161]) << 8);
+    Some(())
+}
+
+fn emit_jpeg_bsd_object(
+    batch: &mut [u32],
+    idx: &mut usize,
+    scan_info: &JpegScanInfo,
+) -> Option<()> {
+    let bsd = begin_batch_packet(
+        batch,
+        idx,
+        (MFX_CMD_LEN_JPEG_BSD_OBJECT + 2) as usize,
+        media_cmd_header(
+            MEDIA_CMD_OPCODE_MFX_JPEG,
+            1,
+            MFD_JPEG_BSD_OBJECT,
+            MFX_CMD_LEN_JPEG_BSD_OBJECT,
+        ),
+    )?;
+
+    batch[bsd + 1] = scan_info.scan_data_length;
+    batch[bsd + 2] = scan_info.scan_data_offset;
+    batch[bsd + 3] = 0;
+    batch[bsd + 4] = (scan_info.mcu_count & 0x03ff_ffff)
+        | (u32::from(scan_info.scan_component_count) << 27)
+        | ((scan_info.interleaved as u32) << 30);
+    batch[bsd + 5] = u32::from(scan_info.restart_interval);
+    Some(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3253,6 +3889,14 @@ pub(super) fn submit_jpeg_smoke_batch(
         core::ptr::write_bytes(backing.result_virt, 0, backing.result_bytes);
     }
 
+    let bitstream = unsafe {
+        core::slice::from_raw_parts(backing.bitstream_virt as *const u8, bitstream_bytes)
+    };
+    let (coded_width, coded_height) = parse_jpeg_frame_dims(bitstream).unwrap_or((128, 128));
+    let jpeg_quant_tables = parse_jpeg_quant_tables(bitstream);
+    let jpeg_huff_tables = parse_jpeg_huff_tables(bitstream);
+    let jpeg_scan_info = parse_jpeg_scan_info(bitstream);
+
     let batch_tail_bytes = build_jpeg_smoke_batch_skeleton(
         backing.batch_virt,
         backing.batch_bytes,
@@ -3261,6 +3905,11 @@ pub(super) fn submit_jpeg_smoke_batch(
         windows.output_surface_gpu_addr,
         backing.output_surface_bytes,
         bitstream_bytes,
+        coded_width,
+        coded_height,
+        jpeg_quant_tables.as_ref(),
+        jpeg_huff_tables.as_ref(),
+        jpeg_scan_info.as_ref(),
         kickoff_marker,
         presubmit_marker,
         postsubmit_marker,
@@ -3404,6 +4053,7 @@ pub(super) fn submit_jpeg_smoke_batch(
         fault_tlb_data1_gen8: super::mmio_read(dev, 0x4B14),
         fault_tlb_data0_gen12: super::mmio_read(dev, 0xCEB8),
         fault_tlb_data1_gen12: super::mmio_read(dev, 0xCEBC),
+        stage_flags_value: read_result_dword(backing.result_virt, MEDIA_RESULT_STAGE_FLAGS_SLOT),
         bitstream_dword0: sample_buffer_dword(backing.bitstream_virt, backing.bitstream_bytes, 0),
     })
 }
@@ -3416,6 +4066,11 @@ fn build_jpeg_smoke_batch_skeleton(
     output_surface_gpu_addr: u64,
     output_surface_bytes: usize,
     bitstream_bytes: usize,
+    coded_width: u32,
+    coded_height: u32,
+    jpeg_quant_tables: Option<&JpegQuantTables>,
+    jpeg_huff_tables: Option<&JpegHuffTables>,
+    jpeg_scan_info: Option<&JpegScanInfo>,
     kickoff_marker: u32,
     presubmit_marker: u32,
     postsubmit_marker: u32,
@@ -3428,6 +4083,18 @@ fn build_jpeg_smoke_batch_skeleton(
         )
     };
     let mut idx = 0usize;
+    let output_pitch = align_up_u32(coded_width.max(128), 128);
+    let chroma_y_offset = align_up_u32(coded_height, 32);
+    let frame_width_blocks_minus1 = (align_up_u32(coded_width.max(8), 8) / 8).saturating_sub(1);
+    let frame_height_blocks_minus1 = (align_up_u32(coded_height.max(8), 8) / 8).saturating_sub(1);
+    let mut stage_flags =
+        MEDIA_STAGE_FLAG_JPEG_SMOKE | MEDIA_STAGE_FLAG_JPEG_PIC_STATE | MEDIA_STAGE_FLAG_JPEG_QM_STATE;
+    if jpeg_huff_tables.is_some() {
+        stage_flags |= MEDIA_STAGE_FLAG_JPEG_HUFF_STATE;
+    }
+    if jpeg_scan_info.is_some() {
+        stage_flags |= MEDIA_STAGE_FLAG_JPEG_BSD_OBJECT;
+    }
 
     if !emit_store_dword_ppgtt(
         batch,
@@ -3458,7 +4125,7 @@ fn build_jpeg_smoke_batch_skeleton(
         batch,
         &mut idx,
         result_gpu_addr + MEDIA_RESULT_STAGE_FLAGS_SLOT,
-        MEDIA_STAGE_FLAG_JPEG_SMOKE,
+        stage_flags,
     ) || !emit_store_dword_ppgtt(
         batch,
         &mut idx,
@@ -3478,7 +4145,7 @@ fn build_jpeg_smoke_batch_skeleton(
         batch,
         &mut idx,
         result_gpu_addr + MEDIA_RESULT_FRAME_DIMS_SLOT,
-        0,
+        coded_width | (coded_height << 16),
     ) {
         return None;
     }
@@ -3505,6 +4172,159 @@ fn build_jpeg_smoke_batch_skeleton(
 
     if !emit_mfx_wait(batch, &mut idx) {
         return None;
+    }
+
+    let pipe_mode = begin_batch_packet(
+        batch,
+        &mut idx,
+        (MFX_CMD_LEN_PIPE_MODE_SELECT + 2) as usize,
+        media_cmd_header(
+            MEDIA_CMD_OPCODE_MFX_COMMON,
+            0,
+            MFX_PIPE_MODE_SELECT,
+            MFX_CMD_LEN_PIPE_MODE_SELECT,
+        ),
+    )?;
+    // Reuse the known-good common MFX decode setup shape as a bind-only probe.
+    batch[pipe_mode + 1] = 2 | (1 << 9);
+
+    if !emit_mfx_wait(batch, &mut idx) {
+        return None;
+    }
+
+    let surface = begin_batch_packet(
+        batch,
+        &mut idx,
+        (MFX_CMD_LEN_SURFACE_STATE + 2) as usize,
+        media_cmd_header(
+            MEDIA_CMD_OPCODE_MFX_COMMON,
+            0,
+            MFX_SURFACE_STATE,
+            MFX_CMD_LEN_SURFACE_STATE,
+        ),
+    )?;
+    batch[surface + 2] =
+        ((coded_width.saturating_sub(1)) << 4) | ((coded_height.saturating_sub(1)) << 18);
+    batch[surface + 3] =
+        (1 << 1) | ((output_pitch.saturating_sub(1)) << 3) | (1 << 26) | (1 << 27) | (4 << 28);
+    batch[surface + 4] = chroma_y_offset;
+    batch[surface + 5] = chroma_y_offset;
+
+    let pipe_buf = begin_batch_packet(
+        batch,
+        &mut idx,
+        (MFX_CMD_LEN_PIPE_BUF_ADDR_STATE + 2) as usize,
+        media_cmd_header(
+            MEDIA_CMD_OPCODE_MFX_COMMON,
+            0,
+            MFX_PIPE_BUF_ADDR_STATE,
+            MFX_CMD_LEN_PIPE_BUF_ADDR_STATE,
+        ),
+    )?;
+    packet_write_addr64(batch, pipe_buf, 1, output_surface_gpu_addr);
+    batch[pipe_buf + 3] = MFX_MOCS_UC;
+    packet_write_addr64(batch, pipe_buf, 4, output_surface_gpu_addr);
+    batch[pipe_buf + 6] = MFX_MOCS_UC;
+    batch[pipe_buf + 9] = MFX_MOCS_UC;
+    batch[pipe_buf + 12] = MFX_MOCS_UC;
+
+    let ind_obj = begin_batch_packet(
+        batch,
+        &mut idx,
+        (MFX_CMD_LEN_IND_OBJ_BASE_ADDR_STATE + 2) as usize,
+        media_cmd_header(
+            MEDIA_CMD_OPCODE_MFX_COMMON,
+            0,
+            MFX_IND_OBJ_BASE_ADDR_STATE,
+            MFX_CMD_LEN_IND_OBJ_BASE_ADDR_STATE,
+        ),
+    )?;
+    packet_write_addr64(batch, ind_obj, 1, bitstream_gpu_addr);
+    batch[ind_obj + 3] = MFX_MOCS_UC;
+    packet_write_addr64(batch, ind_obj, 4, bitstream_gpu_addr + bitstream_bytes as u64);
+    batch[ind_obj + 8] = MFX_MOCS_UC;
+    batch[ind_obj + 13] = MFX_MOCS_UC;
+    batch[ind_obj + 18] = MFX_MOCS_UC;
+    batch[ind_obj + 23] = MFX_MOCS_UC;
+
+    // Keep the first JPEG-specific steps narrow: picture-state plus quant
+    // matrices, before adding Huffman and BSD-object programming.
+    let jpeg_pic = begin_batch_packet(
+        batch,
+        &mut idx,
+        (MFX_CMD_LEN_JPEG_PIC_STATE + 2) as usize,
+        media_cmd_header(
+            MEDIA_CMD_OPCODE_MFX_JPEG,
+            0,
+            MFX_JPEG_PIC_STATE,
+            MFX_CMD_LEN_JPEG_PIC_STATE,
+        ),
+    )?;
+    batch[jpeg_pic + 1] = jpeg_scan_info
+        .map(|scan_info| u32::from(scan_info.input_format))
+        .unwrap_or(0);
+    batch[jpeg_pic + 2] = frame_width_blocks_minus1 | (frame_height_blocks_minus1 << 16);
+
+    let fallback_qm = [16u8; 64];
+    let component_count = jpeg_quant_tables
+        .map(|tables| tables.component_count.max(1))
+        .unwrap_or(1);
+    for component_idx in 0..usize::from(component_count) {
+        let mut qm_matrix = fallback_qm;
+        if let Some(tables) = jpeg_quant_tables {
+            let table_selector = usize::from(tables.component_qtable[component_idx] & 0x03);
+            if (tables.present_mask & (1 << table_selector)) != 0 {
+                qm_matrix = tables.tables[table_selector];
+            }
+        }
+
+        let qm = begin_batch_packet(
+            batch,
+            &mut idx,
+            (MFX_CMD_LEN_QM_STATE + 2) as usize,
+            media_cmd_header(
+                MEDIA_CMD_OPCODE_MFX_COMMON,
+                0,
+                MFX_QM_STATE,
+                MFX_CMD_LEN_QM_STATE,
+            ),
+        )?;
+        batch[qm + 1] = component_idx as u32;
+        for dw in 0..16 {
+            let base = dw * 4;
+            batch[qm + 2 + dw] = (qm_matrix[base] as u32)
+                | ((qm_matrix[base + 1] as u32) << 8)
+                | ((qm_matrix[base + 2] as u32) << 16)
+                | ((qm_matrix[base + 3] as u32) << 24);
+        }
+    }
+
+    if let Some(huff_tables) = jpeg_huff_tables {
+        emit_jpeg_huff_table_state(
+            batch,
+            &mut idx,
+            0,
+            &huff_tables.dc_bits[usize::from(huff_tables.y_dc_selector)],
+            &huff_tables.dc_values[usize::from(huff_tables.y_dc_selector)],
+            &huff_tables.ac_bits[usize::from(huff_tables.y_ac_selector)],
+            &huff_tables.ac_values[usize::from(huff_tables.y_ac_selector)],
+        )?;
+
+        if huff_tables.has_chroma_selector {
+            emit_jpeg_huff_table_state(
+                batch,
+                &mut idx,
+                1,
+                &huff_tables.dc_bits[usize::from(huff_tables.chroma_dc_selector)],
+                &huff_tables.dc_values[usize::from(huff_tables.chroma_dc_selector)],
+                &huff_tables.ac_bits[usize::from(huff_tables.chroma_ac_selector)],
+                &huff_tables.ac_values[usize::from(huff_tables.chroma_ac_selector)],
+            )?;
+        }
+    }
+
+    if let Some(scan_info) = jpeg_scan_info {
+        emit_jpeg_bsd_object(batch, &mut idx, scan_info)?;
     }
 
     if !emit_store_dword_ppgtt(
