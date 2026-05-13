@@ -2457,11 +2457,20 @@ impl Default for Client {
 
 #[cfg(feature = "__rustls")]
 fn default_rustls_crypto_provider() -> Arc<rustls::crypto::CryptoProvider> {
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    {
+        return Arc::new(rustls_rustcrypto::provider());
+    }
+
     #[cfg(not(feature = "__rustls-aws-lc-rs"))]
-    panic!("No provider set");
+    {
+        return Arc::new(rustls_rustcrypto::provider());
+    }
 
     #[cfg(feature = "__rustls-aws-lc-rs")]
-    Arc::new(rustls::crypto::aws_lc_rs::default_provider())
+    {
+        Arc::new(rustls::crypto::aws_lc_rs::default_provider())
+    }
 }
 
 impl Client {

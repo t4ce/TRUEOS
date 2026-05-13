@@ -83,6 +83,7 @@ __rustls = [
     "dep:rustls",
     "__tls",
 ]
+__rustls-rustcrypto = ["dep:rustls-rustcrypto"]
 __rustls-aws-lc-rs = [
     "hyper-rustls?/aws-lc-rs",
     "tokio-rustls?/aws-lc-rs",
@@ -167,11 +168,12 @@ query = [
     "dep:serde_urlencoded",
 ]
 rustls = [
-    "__rustls-aws-lc-rs",
+    "__rustls-rustcrypto",
     "dep:rustls-platform-verifier",
     "__rustls",
 ]
 rustls-no-provider = [
+    "__rustls-rustcrypto",
     "dep:rustls-platform-verifier",
     "__rustls",
 ]
@@ -401,6 +403,15 @@ default-features = false
 
 [target.'cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))'.dependencies.rustls]
 version = "0.23.4"
+features = [
+    "std",
+    "tls12",
+]
+optional = true
+default-features = false
+
+[target.'cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))'.dependencies.rustls-rustcrypto]
+version = "0.0.2-alpha"
 features = [
     "std",
     "tls12",
