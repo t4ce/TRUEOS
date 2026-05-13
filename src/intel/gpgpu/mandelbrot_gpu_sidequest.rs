@@ -37,8 +37,9 @@ pub(crate) const MANDELBROT_GPGPU_ANIM_PALETTE: [u32; 8] = [
     0x0088_FF00,
     0x00FF_8800,
 ];
-pub(crate) const MANDELBROT_GPGPU_RUN_ROW2560_SIMD8_PROBE: bool = false;
+pub(crate) const MANDELBROT_GPGPU_RUN_ROW2560_SIMD8_PROBE: bool = true;
 pub(crate) const MANDELBROT_GPGPU_NOTIFY_AFTER_FULLSCREEN_SWEEP: bool = true;
+pub(crate) const MANDELBROT_GPGPU_RUN_GROUPID_LINE320_PROBE: bool = false;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum MandelbrotGpuArtifactStage {
@@ -147,7 +148,7 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
     let spirv_sig = byte_signature(shader_desc.bytes);
 
     crate::log!(
-        "mandelbrot-gpu-sidequest: attempted name={} called=1 hot=1 artifact_stage={} source={} spirv={} spirv_bytes={} spirv_sig=0x{:016X} target={}x{} rgba_bytes=0x{:X} push_constants={} render_path={} fallback_present={} scanout={}x{} primary_gpu=0x{:X} shader_helper_ready={} upload=custom-intel-gpgpu-program action=render-visible-line1280-1440p-color-frame next=hardware-thread-id-or-simd8-row\n",
+        "mandelbrot-gpu-sidequest: attempted name={} called=1 hot=1 artifact_stage={} source={} spirv={} spirv_bytes={} spirv_sig=0x{:016X} target={}x{} rgba_bytes=0x{:X} push_constants={} render_path={} fallback_present={} scanout={}x{} primary_gpu=0x{:X} shader_helper_ready={} upload=custom-intel-gpgpu-program action=probe-groupid-then-render-visible-line1280-1440p-color-frame next=hardware-thread-id-row-fill\n",
         plan.name,
         plan.stage.as_str(),
         plan.source_path,
@@ -196,6 +197,36 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
                 "promote-row2560-simd8-sweep"
             } else {
                 "fix-simd8-store-payload"
+            },
+        );
+    }
+    if MANDELBROT_GPGPU_RUN_GROUPID_LINE320_PROBE {
+        let groupid_probe = crate::intel::submit_gpgpu_primary_scanout_groupid_line320_probe(1, 2);
+        if groupid_probe.submitted && !released_lumen {
+            crate::r::readiness::set(crate::r::readiness::MANDELBROT_GPU_SIDEQUEST_READY);
+            released_lumen = true;
+        }
+        crate::log!(
+            "mandelbrot-gpu-sidequest: gpgpu-primary-framebuffer-groupid-line320-probe submitted={} finished={} readback_ok={} reason={} program_source={} target_gpu=0x{:X} group_hit_mask=0x{:02X} lane_dispatch_delta={} finish_marker=0x{:08X} lumen_released={} action={} next={} deliverable=one-submit-pilot-id-visible-blocks\n",
+            groupid_probe.submitted as u8,
+            groupid_probe.finished as u8,
+            groupid_probe.readback_ok as u8,
+            groupid_probe.reason,
+            groupid_probe.program_name,
+            groupid_probe.output_gpu,
+            groupid_probe.output_hits_lo64 as u32,
+            groupid_probe.dispatch_delta,
+            groupid_probe.finish_marker,
+            released_lumen as u8,
+            if groupid_probe.readback_ok {
+                "continue-line1280-baseline-with-pilot-id-proven"
+            } else {
+                "continue-line1280-baseline-without-pilot-id"
+            },
+            if groupid_probe.readback_ok {
+                "promote-groupid-row2560"
+            } else {
+                "fix-groupid-payload"
             },
         );
     }
