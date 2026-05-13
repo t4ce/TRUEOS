@@ -201,7 +201,67 @@ async fn execute_request(_spawner: &Spawner, request: AppVmLaunchRequest) {
         return;
     }
 
+    if request.archive.ends_with(".bp") {
+        execute_blueprint(&request, &log);
+        return;
+    }
+
     log("hv run: blueprint payload support disabled");
+}
+
+fn execute_blueprint(request: &AppVmLaunchRequest, log: &dyn Fn(&str)) {
+    let module = match crate::hv::blueprint::parse_blueprint(request.module_bytes.as_slice()) {
+        Ok(module) => module,
+        Err(err) => {
+            log(alloc::format!("hv run: blueprint parse failed: {}", err).as_str());
+            return;
+        }
+    };
+
+    let unpacked = match crate::hv::blueprint::unpack_blueprint(&module) {
+        Ok(unpacked) => unpacked,
+        Err(err) => {
+            log(alloc::format!("hv run: blueprint unpack failed: {}", err).as_str());
+            return;
+        }
+    };
+
+    let app_fs_root = crate::hv::blueprint::app_fs_root_for_archive(
+        request.archive.as_str(),
+        request.module_bytes.as_slice(),
+    );
+    let process_args = crate::hv::blueprint::build_process_args(
+        request.archive.as_str(),
+        request.app_args.as_slice(),
+    );
+    let process_env = crate::hv::blueprint::build_process_env(
+        request.archive.as_str(),
+        Some(app_fs_root.as_str()),
+    );
+
+    log(
+        alloc::format!(
+            "hv run: blueprint version={} flags={} entry=0x{:016x} payload={} raw={}",
+            module.version,
+            module.flags,
+            module.entry,
+            module.payload.len(),
+            module.raw_payload_len
+        )
+        .as_str(),
+    );
+
+    match crate::hv::blueprint::invoke_host_rel(
+        unpacked.as_slice(),
+        module.entry,
+        process_args,
+        process_env,
+        Some(request.target.clone()),
+        Some(app_fs_root),
+    ) {
+        Ok(()) => log("hv run: blueprint completed"),
+        Err(err) => log(alloc::format!("hv run: blueprint failed: {}", err).as_str()),
+    }
 }
 
 fn execute_tc4o(module_bytes: &[u8], log: &dyn Fn(&str)) {
