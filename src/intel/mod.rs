@@ -871,7 +871,8 @@ pub(crate) fn has_media_decode_engine() -> bool {
     has_claimed_device()
 }
 
-pub(crate) fn hw_pic_service() -> Result<embassy_executor::SpawnToken<impl Send>, embassy_executor::SpawnError> {
+pub(crate) fn hw_pic_service()
+-> Result<embassy_executor::SpawnToken<impl Send>, embassy_executor::SpawnError> {
     self::hw_pic::hw_pic_service()
 }
 
@@ -898,7 +899,8 @@ pub(crate) fn hw_pic_snapshot() -> self::hw_pic::HwPicQueueSnapshot {
     self::hw_pic::snapshot()
 }
 
-pub(crate) fn hw_logo_present_task() -> Result<embassy_executor::SpawnToken<impl Send>, embassy_executor::SpawnError> {
+pub(crate) fn hw_logo_present_task()
+-> Result<embassy_executor::SpawnToken<impl Send>, embassy_executor::SpawnError> {
     self::display::hw_logo_present_task()
 }
 

@@ -432,12 +432,9 @@ pub(crate) async fn hw_logo_present_task() {
             continue;
         };
 
-        HW_LOGO_PENDING_ID.compare_exchange(
-            pending_id,
-            0,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        ).ok();
+        HW_LOGO_PENDING_ID
+            .compare_exchange(pending_id, 0, Ordering::AcqRel, Ordering::Acquire)
+            .ok();
 
         let presented = if output.status == crate::intel::hw_pic::HwPicStatus::Ready
             && output.format == crate::intel::hw_pic::HwPicPixelFormat::Nv12

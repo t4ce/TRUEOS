@@ -55,12 +55,7 @@ fn decode_indexed_png_rgba(bytes: &[u8]) -> Result<DecodedPng, PngDecodeError> {
         width,
         height,
         rgba: super::png_decode_pool::expand_indexed_png_to_rgba(
-            width,
-            height,
-            bit_depth,
-            indexed,
-            palette,
-            trns,
+            width, height, bit_depth, indexed, palette, trns,
         )?,
     })
 }
