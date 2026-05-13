@@ -10,6 +10,8 @@ pub(crate) use mandelbrot::{
     submit_gpgpu_primary_scanout_line_pilot_rect,
     submit_gpgpu_primary_scanout_line_pilot_rect_color,
     submit_gpgpu_primary_scanout_line_pilot_rect_color_burst,
+    submit_gpgpu_primary_scanout_line1280_groupid_rows_color_burst,
+    submit_gpgpu_primary_scanout_line1280_groupid_rows_fullwidth_color_burst,
     submit_gpgpu_primary_scanout_mandelbrot_preview, submit_gpgpu_primary_scanout_marker_probe,
     submit_gpgpu_primary_scanout_row2560_simd8_probe,
 };
@@ -834,6 +836,7 @@ fn is_gpgpu_submit_name(name: &str) -> bool {
             | "gpgpu-compute-walker"
             | "gpgpu-one-tile-sentinel"
             | "gpgpu-one-tile-compare"
+            | "gpgpu-primary-scanout-groupid-line1280-fullwidth"
             | "gpgpu-pre-submit"
     )
 }
@@ -845,6 +848,8 @@ fn uses_gpgpu_pipeline_submit_name(name: &str) -> bool {
             "gpgpu-primary-scanout-mandelbrot8-strip"
                 | "gpgpu-primary-scanout-gpu-color8-witness"
                 | "gpgpu-primary-scanout-line1280-burst"
+                | "gpgpu-primary-scanout-groupid-line1280-rows"
+                | "gpgpu-primary-scanout-groupid-line1280-fullwidth"
         )
 }
 
@@ -858,6 +863,8 @@ fn should_log_gpgpu_submit_name(name: &str) -> bool {
             | "gpgpu-primary-scanout-mandelbrot8-strip"
             | "gpgpu-primary-scanout-gpu-color8-witness"
             | "gpgpu-primary-scanout-line1280-burst"
+            | "gpgpu-primary-scanout-groupid-line1280-rows"
+            | "gpgpu-primary-scanout-groupid-line1280-fullwidth"
     )
 }
 
@@ -1372,6 +1379,7 @@ fn should_log_gpgpu_program_shape(name: &str) -> bool {
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_COORD_PROGRAM_NAME
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_PROGRAM_NAME
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_PROGRAM_NAME
+        || name == trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_PROGRAM_NAME
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD8_BW_PROGRAM_NAME
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_LINE1280_SCALAR_BW_PROGRAM_NAME
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_LINE320_SCALAR_BW_PROGRAM_NAME
@@ -1387,6 +1395,7 @@ fn should_log_gpgpu_surface_state(note: &str) -> bool {
     note != "bind-send-bti-to-result-raw-buffer"
         && !note.contains("-quiet")
         && !note.contains("line1280-burst")
+        && !note.contains("groupid-line1280")
 }
 
 fn gpgpu_store_eot_program() -> GpgpuEuProgram {
@@ -1483,6 +1492,10 @@ static MANDELBROT_GPU_COLOR_WITNESS_FAILURE_LOGGED: AtomicBool = AtomicBool::new
 static MANDELBROT_LINE1280_TEMPLATE_UPLOADED: AtomicBool = AtomicBool::new(false);
 static MANDELBROT_LINE1280_BURST_SUCCESS_LOGGED: AtomicBool = AtomicBool::new(false);
 static MANDELBROT_LINE1280_BURST_FAILURE_LOGGED: AtomicBool = AtomicBool::new(false);
+static MANDELBROT_GROUPID_LINE1280_TEMPLATE_UPLOADED: AtomicBool = AtomicBool::new(false);
+static MANDELBROT_GROUPID_LINE1280_BURST_SUCCESS_LOGGED: AtomicBool = AtomicBool::new(false);
+static MANDELBROT_GROUPID_LINE1280_BURST_FAILURE_LOGGED: AtomicBool = AtomicBool::new(false);
+static MANDELBROT_GROUPID_LINE1280_SUBMIT_SERIAL: AtomicU32 = AtomicU32::new(0);
 
 pub(crate) fn notify_gpgpu_primary_scanout_external_write(
     reason: &str,

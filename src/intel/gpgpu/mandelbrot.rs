@@ -58,6 +58,22 @@ fn gpgpu_primary_scanout_groupid_line320_program() -> GpgpuEuProgram {
     }
 }
 
+fn gpgpu_primary_scanout_groupid_line1280_rows_program() -> GpgpuEuProgram {
+    let artifact =
+        trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT;
+    GpgpuEuProgram {
+        name: artifact.name,
+        kind: artifact.kind,
+        words: artifact.words,
+        expects_store: artifact.expects_store,
+        expected_store_value: 0,
+        store_send_dword: Some(
+            trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_STORE_SEND_DWORD,
+        ),
+        visible_seed_dword: None,
+    }
+}
+
 fn gpgpu_primary_scanout_row2560_simd8_program() -> GpgpuEuProgram {
     let artifact =
         trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD8_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT;
@@ -882,41 +898,56 @@ fn line1280_rect_segment_offset(
     Ok((row_offset, x_base, y))
 }
 
-fn line1280_segment_color_seed(
-    base_color: u32,
+fn line1280_lane8rows_rect_segment_offset(
     serial_index: usize,
-    x: usize,
-    y: usize,
     rect_x: usize,
     rect_y: usize,
     rect_width: usize,
     rect_height: usize,
-) -> u32 {
-    const LANES_PER_PILOT: usize = trueos_eu::gfx12::PRIMARY_SCANOUT_LINE1280_SCALAR_BW_LANES;
+    target_width: usize,
+    target_height: usize,
+    target_pitch_bytes: usize,
+    target_byte_len: usize,
+) -> Result<(usize, usize, usize), &'static str> {
+    const LANES_PER_PILOT: usize = trueos_eu::gfx12::PRIMARY_SCANOUT_LINE1280_LANE8ROWS_LANES;
+    const ROWS_PER_PILOT: usize = trueos_eu::gfx12::PRIMARY_SCANOUT_LINE1280_LANE8ROWS_ROWS;
 
-    let segments_per_row =
-        core::cmp::max(1, rect_width.saturating_add(LANES_PER_PILOT - 1) / LANES_PER_PILOT);
-    let frame_span = core::cmp::max(1, segments_per_row.saturating_mul(rect_height));
-    let frame_phase = (serial_index / frame_span) as u32;
-    let segment = (serial_index % segments_per_row) as u32;
-    let x_rel = x.saturating_sub(rect_x) as u32;
-    let y_rel = y.saturating_sub(rect_y) as u32;
-
-    let band = (y_rel >> 4).wrapping_add(frame_phase.wrapping_mul(3));
-    let tile = (x_rel >> 7).wrapping_add(segment.wrapping_mul(17));
-    let diagonal = (x_rel >> 5)
-        .wrapping_add(y_rel >> 3)
-        .wrapping_add(frame_phase.wrapping_mul(11));
-    let base_r = (base_color >> 16) & 0xFF;
-    let base_g = (base_color >> 8) & 0xFF;
-    let base_b = base_color & 0xFF;
-    let r = base_r.wrapping_add(diagonal.wrapping_mul(5)) & 0xFF;
-    let g = base_g.wrapping_add(band.wrapping_mul(9).wrapping_add(tile.wrapping_mul(13))) & 0xFF;
-    let b = base_b.wrapping_add(
-        tile.wrapping_mul(23)
-            .wrapping_add(frame_phase.wrapping_mul(29)),
-    ) & 0xFF;
-    (r << 16) | (g << 8) | b
+    if rect_width < LANES_PER_PILOT || rect_height == 0 {
+        return Err("lane8rows-rect-too-small");
+    }
+    let rect_x = core::cmp::min(rect_x, target_width.saturating_sub(rect_width));
+    let rect_y = core::cmp::min(rect_y, target_height.saturating_sub(rect_height));
+    let segments_per_row = rect_width.saturating_add(LANES_PER_PILOT - 1) / LANES_PER_PILOT;
+    let segments_per_row = core::cmp::max(1, segments_per_row);
+    let row_groups = rect_height.saturating_add(ROWS_PER_PILOT - 1) / ROWS_PER_PILOT;
+    let row_groups = core::cmp::max(1, row_groups);
+    let segment = serial_index % segments_per_row;
+    let row_group = (serial_index / segments_per_row) % row_groups;
+    let y_in_rect = row_group.saturating_mul(ROWS_PER_PILOT);
+    let y = rect_y.saturating_add(y_in_rect);
+    let x_in_rect = if segments_per_row <= 1 {
+        0
+    } else {
+        core::cmp::min(
+            segment.saturating_mul(LANES_PER_PILOT),
+            rect_width.saturating_sub(LANES_PER_PILOT),
+        )
+    };
+    let x_base = rect_x.saturating_add(x_in_rect);
+    if y >= target_height || x_base >= target_width {
+        return Err("lane8rows-outside-target");
+    }
+    let row_offset = y
+        .saturating_mul(target_pitch_bytes)
+        .saturating_add(x_base.saturating_mul(core::mem::size_of::<u32>()));
+    let pilot_bytes = LANES_PER_PILOT.saturating_mul(core::mem::size_of::<u32>());
+    let row_span_bytes = (ROWS_PER_PILOT - 1)
+        .saturating_mul(target_pitch_bytes)
+        .saturating_add(pilot_bytes);
+    if row_offset.saturating_add(row_span_bytes) > target_byte_len {
+        return Err("lane8rows-outside-scanout");
+    }
+    Ok((row_offset, x_base, y))
 }
 
 fn encode_gfx12_gpgpu_line1280_burst_batch(
@@ -1024,10 +1055,11 @@ fn encode_gfx12_gpgpu_line1280_burst_batch(
                 * core::mem::size_of::<u32>()) as u64;
 
     let mut cursor = walker_start;
+    push_store_imm32(batch_dwords, &mut cursor, color_gpu, color_seed)?;
     let mut segment = 0usize;
     while segment < segment_count {
         let serial = first_line_index.saturating_add(segment);
-        let (row_offset, x_base, y) = line1280_rect_segment_offset(
+        let (row_offset, _x_base, _y) = line1280_rect_segment_offset(
             serial,
             rect_x,
             rect_y,
@@ -1042,17 +1074,6 @@ fn encode_gfx12_gpgpu_line1280_burst_batch(
         if row_gpu >> 32 != 0 {
             return Err("line1280-burst-gpu-high32-unsupported");
         }
-        let segment_color = line1280_segment_color_seed(
-            color_seed,
-            serial,
-            x_base,
-            y,
-            rect_x,
-            rect_y,
-            rect_width,
-            rect_height,
-        );
-        push_store_imm32(batch_dwords, &mut cursor, color_gpu, segment_color)?;
         push_store_imm32(batch_dwords, &mut cursor, address_gpu, row_gpu as u32)?;
         push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS)?;
         copy = 0;
@@ -1126,16 +1147,7 @@ pub(crate) fn submit_gpgpu_primary_scanout_line_pilot_rect_color_burst(
         Ok(offset) => offset,
         Err(reason) => return gpgpu_one_tile_sentinel_failure(reason, program, target.gpu),
     };
-    let first_segment_color = line1280_segment_color_seed(
-        color_seed,
-        first_serial,
-        first_x,
-        first_y,
-        rect_x,
-        rect_y,
-        rect_width,
-        rect_height,
-    );
+    let first_segment_color = color_seed;
 
     if !MANDELBROT_LINE1280_TEMPLATE_UPLOADED.load(Ordering::Acquire) {
         let strip_words =
@@ -1240,7 +1252,7 @@ pub(crate) fn submit_gpgpu_primary_scanout_line_pilot_rect_color_burst(
     };
     if should_log {
         crate::log!(
-            "intel/gpgpu: primary-scanout-line1280-burst first_serial={} segments={} first_x={} first_y={} rect={}x{}@{},{} base_color_seed=0x{:08X} first_segment_color=0x{:08X} segment_seed_pattern=row-segment-frame-rgb artifact_color_step_pixels={} artifact_color_step=0x00010101 cpu_color_dwords_patched=0 cpu_address_dwords_patched=0 cpu_batch_param_dwords={} store_pixels_per_segment={} expected_lane_dispatch={} readback_ok={} reason={} finish_marker=0x{:08X} lane_dispatch_delta={} program_source={} deliverable=visible-window-line1280-10k-lane-burst\n",
+            "intel/gpgpu: primary-scanout-line1280-burst first_serial={} segments={} first_x={} first_y={} rect={}x{}@{},{} base_color_seed=0x{:08X} first_segment_color=0x{:08X} segment_seed_pattern=scalar-line-color-seed artifact_color_step_pixels={} artifact_color_step=0x00010101 cpu_frame_color_params=1 cpu_segment_address_params={} cpu_batch_param_dwords={} store_pixels_per_segment={} rows_per_segment={} expected_lane_dispatch={} readback_ok={} reason={} finish_marker=0x{:08X} lane_dispatch_delta={} program_source={} deliverable=visible-window-line1280-scalar-baseline-burst\n",
             first_serial,
             segment_count,
             first_x,
@@ -1252,8 +1264,10 @@ pub(crate) fn submit_gpgpu_primary_scanout_line_pilot_rect_color_burst(
             color_seed,
             first_segment_color,
             trueos_eu::gfx12::PRIMARY_SCANOUT_LINE1280_SCALAR_BW_COLOR_STEP_PIXELS,
-            segment_count.saturating_mul(2),
+            segment_count,
+            segment_count.saturating_add(1),
             trueos_eu::gfx12::PRIMARY_SCANOUT_LINE1280_SCALAR_BW_LANES,
+            1,
             segment_count.saturating_mul(8),
             readback_ok as u8,
             reason,
@@ -1286,6 +1300,649 @@ pub(crate) fn submit_gpgpu_primary_scanout_line_pilot_rect_color_burst(
         dispatch_delta,
         finish_marker,
         expected_finish_marker: RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        batch_bytes,
+    }
+}
+
+fn line1280_groupid_rows_rect_base_offset(
+    first_row_group: usize,
+    x_segment: usize,
+    row_group_count: usize,
+    rect_x: usize,
+    rect_y: usize,
+    rect_width: usize,
+    rect_height: usize,
+    target_width: usize,
+    target_height: usize,
+    target_pitch_bytes: usize,
+    target_byte_len: usize,
+) -> Result<(usize, usize, usize), &'static str> {
+    const LANES_PER_GROUP: usize =
+        trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_LANES;
+
+    if rect_width < LANES_PER_GROUP || rect_height == 0 || row_group_count == 0 {
+        return Err("groupid-line1280-rect-too-small");
+    }
+    if first_row_group >= rect_height {
+        return Err("groupid-line1280-row-outside-rect");
+    }
+    let rect_x = core::cmp::min(rect_x, target_width.saturating_sub(rect_width));
+    let rect_y = core::cmp::min(rect_y, target_height.saturating_sub(rect_height));
+    let segments_per_row = rect_width.saturating_add(LANES_PER_GROUP - 1) / LANES_PER_GROUP;
+    let segments_per_row = core::cmp::max(1, segments_per_row);
+    let segment = x_segment % segments_per_row;
+    let x_in_rect = if segments_per_row <= 1 {
+        0
+    } else {
+        core::cmp::min(
+            segment.saturating_mul(LANES_PER_GROUP),
+            rect_width.saturating_sub(LANES_PER_GROUP),
+        )
+    };
+    let x_base = rect_x.saturating_add(x_in_rect);
+    let y = rect_y.saturating_add(first_row_group);
+    if y >= target_height || x_base >= target_width {
+        return Err("groupid-line1280-base-outside-target");
+    }
+    let row_offset = y
+        .saturating_mul(target_pitch_bytes)
+        .saturating_add(x_base.saturating_mul(core::mem::size_of::<u32>()));
+    let row_span = row_group_count
+        .saturating_sub(1)
+        .saturating_mul(target_pitch_bytes)
+        .saturating_add(LANES_PER_GROUP.saturating_mul(core::mem::size_of::<u32>()));
+    if row_offset.saturating_add(row_span) > target_byte_len {
+        return Err("groupid-line1280-outside-scanout");
+    }
+    Ok((row_offset, x_base, y))
+}
+
+fn encode_gfx12_gpgpu_line1280_groupid_rows_batch(
+    warm: RenderWarmState,
+    batch_dwords: &mut [u32],
+    store_surface: GpgpuStoreSurfaceState,
+    program: GpgpuEuProgram,
+    base_gpu: u64,
+    second_base_gpu: Option<u64>,
+    color_seed: u32,
+    row_group_count: u32,
+    completion_marker: u32,
+) -> Result<usize, &'static str> {
+    const WALKER_AND_MSF_DWORDS: usize = 17;
+    const POST_WALKER_FLUSH_DWORDS: usize = 6;
+
+    fn push(batch_dwords: &mut [u32], cursor: &mut usize, value: u32) -> Result<(), &'static str> {
+        if *cursor >= batch_dwords.len() {
+            return Err("groupid-line1280-batch-exhausted");
+        }
+        batch_dwords[*cursor] = value;
+        *cursor += 1;
+        Ok(())
+    }
+
+    fn push_store_imm32(
+        batch_dwords: &mut [u32],
+        cursor: &mut usize,
+        dst: u64,
+        value: u32,
+    ) -> Result<(), &'static str> {
+        push(batch_dwords, cursor, MI_STORE_DATA_IMM_GGTT_DW1)?;
+        push(batch_dwords, cursor, dst as u32)?;
+        push(batch_dwords, cursor, (dst >> 32) as u32)?;
+        push(batch_dwords, cursor, value)
+    }
+
+    fn push_pipe_control(
+        batch_dwords: &mut [u32],
+        cursor: &mut usize,
+        flags: u32,
+    ) -> Result<(), &'static str> {
+        push(batch_dwords, cursor, PIPE_CONTROL_CMD)?;
+        push(batch_dwords, cursor, flags)?;
+        push(batch_dwords, cursor, 0)?;
+        push(batch_dwords, cursor, 0)?;
+        push(batch_dwords, cursor, 0)?;
+        push(batch_dwords, cursor, 0)
+    }
+
+    if row_group_count == 0 {
+        return Err("groupid-line1280-empty");
+    }
+    if base_gpu >> 32 != 0 {
+        return Err("groupid-line1280-gpu-high32-unsupported");
+    }
+    if let Some(second_base_gpu) = second_base_gpu
+        && second_base_gpu >> 32 != 0
+    {
+        return Err("groupid-line1280-second-gpu-high32-unsupported");
+    }
+
+    let template_bytes = encode_gfx12_gpgpu_walker_probe_batch(
+        warm,
+        batch_dwords,
+        store_surface,
+        program,
+        row_group_count,
+    )?;
+    let template_dwords = template_bytes / core::mem::size_of::<u32>();
+    let mut walker_start = None;
+    let mut index = 0usize;
+    while index < template_dwords {
+        if batch_dwords[index] == GPGPU_WALKER_IPEHR_LEN13 {
+            walker_start = Some(index);
+            break;
+        }
+        index += 1;
+    }
+    let walker_start = walker_start.ok_or("groupid-line1280-no-walker")?;
+    let post_walker_flush_start = walker_start.saturating_add(WALKER_AND_MSF_DWORDS);
+    let marker_start = post_walker_flush_start.saturating_add(POST_WALKER_FLUSH_DWORDS);
+    let template_end = marker_start.saturating_add(4).saturating_add(2);
+    if template_end > template_dwords {
+        return Err("groupid-line1280-template-short");
+    }
+    if batch_dwords[marker_start] != MI_STORE_DATA_IMM_GGTT_DW1 {
+        return Err("groupid-line1280-template-marker");
+    }
+
+    let mut walker_and_msf = [0u32; WALKER_AND_MSF_DWORDS];
+    let mut copy = 0usize;
+    while copy < WALKER_AND_MSF_DWORDS {
+        walker_and_msf[copy] = batch_dwords[walker_start + copy];
+        copy += 1;
+    }
+
+    let color_gpu = GPU_VA_DRAW_STATE_BASE
+        + (GPGPU_EU_KERNEL_OFFSET_BYTES
+            + trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_COLOR_DWORD
+                * core::mem::size_of::<u32>()) as u64;
+    let address_gpu = GPU_VA_DRAW_STATE_BASE
+        + (GPGPU_EU_KERNEL_OFFSET_BYTES
+            + trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_ADDRESS_BASE_DWORD
+                * core::mem::size_of::<u32>()) as u64;
+
+    let mut cursor = walker_start;
+    push_store_imm32(batch_dwords, &mut cursor, color_gpu, color_seed)?;
+    push_store_imm32(batch_dwords, &mut cursor, address_gpu, base_gpu as u32)?;
+    push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS)?;
+    copy = 0;
+    while copy < WALKER_AND_MSF_DWORDS {
+        push(batch_dwords, &mut cursor, walker_and_msf[copy])?;
+        copy += 1;
+    }
+    if let Some(second_base_gpu) = second_base_gpu {
+        push_store_imm32(batch_dwords, &mut cursor, address_gpu, second_base_gpu as u32)?;
+        push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS)?;
+        copy = 0;
+        while copy < WALKER_AND_MSF_DWORDS {
+            push(batch_dwords, &mut cursor, walker_and_msf[copy])?;
+            copy += 1;
+        }
+    }
+
+    let marker_gpu = GPU_VA_RESULT_BASE
+        + (RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD as u64) * core::mem::size_of::<u32>() as u64;
+    push_store_imm32(batch_dwords, &mut cursor, marker_gpu, completion_marker)?;
+    push(batch_dwords, &mut cursor, MI_BATCH_BUFFER_END)?;
+    push(batch_dwords, &mut cursor, MI_NOOP)?;
+    Ok(cursor * core::mem::size_of::<u32>())
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_line1280_groupid_rows_color_burst(
+    color_seed: u32,
+    first_row_group: u32,
+    row_group_count: u32,
+    x_segment: u32,
+    rect_x: u32,
+    rect_y: u32,
+    rect_width: u32,
+    rect_height: u32,
+) -> crate::intel::GpgpuOneTileSentinelProof {
+    let program = gpgpu_primary_scanout_groupid_line1280_rows_program();
+    let Some(dev) = crate::intel::claimed_device() else {
+        return gpgpu_one_tile_sentinel_failure("no-device", program, 0);
+    };
+    let Some(warm) = warm_state() else {
+        return gpgpu_one_tile_sentinel_failure("no-warm-state", program, 0);
+    };
+    let Some(target) = crate::intel::display::primary_surface_gpgpu_marker_target() else {
+        return gpgpu_one_tile_sentinel_failure("no-primary-scanout", program, 0);
+    };
+    if row_group_count == 0 {
+        return gpgpu_one_tile_sentinel_failure("groupid-line1280-empty", program, target.gpu);
+    }
+    if !forcewake_render_acquire(warm) {
+        return gpgpu_one_tile_sentinel_failure("forcewake", program, target.gpu);
+    }
+    if !ensure_gpgpu_warm_buffers_mapped(dev, warm) {
+        return gpgpu_one_tile_sentinel_failure("ggtt-map", program, target.gpu);
+    }
+
+    let rect_width = core::cmp::min(rect_width as usize, target.width as usize);
+    let rect_height = core::cmp::min(rect_height as usize, target.height as usize);
+    let rect_x =
+        core::cmp::min(rect_x as usize, (target.width as usize).saturating_sub(rect_width));
+    let rect_y =
+        core::cmp::min(rect_y as usize, (target.height as usize).saturating_sub(rect_height));
+    let first_row_group = first_row_group as usize;
+    let available_rows = rect_height.saturating_sub(core::cmp::min(first_row_group, rect_height));
+    let row_group_count = core::cmp::min(row_group_count as usize, available_rows);
+    let (first_row_offset, first_x, first_y) = match line1280_groupid_rows_rect_base_offset(
+        first_row_group,
+        x_segment as usize,
+        row_group_count,
+        rect_x,
+        rect_y,
+        rect_width,
+        rect_height,
+        target.width as usize,
+        target.height as usize,
+        target.pitch_bytes as usize,
+        target.byte_len,
+    ) {
+        Ok(offset) => offset,
+        Err(reason) => return gpgpu_one_tile_sentinel_failure(reason, program, target.gpu),
+    };
+    let base_gpu = target.gpu + first_row_offset as u64;
+    if base_gpu >> 32 != 0 {
+        return gpgpu_one_tile_sentinel_failure(
+            "groupid-line1280-gpu-high32-unsupported",
+            program,
+            base_gpu,
+        );
+    }
+
+    if !MANDELBROT_GROUPID_LINE1280_TEMPLATE_UPLOADED.load(Ordering::Acquire) {
+        let strip_words =
+            trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS;
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                strip_words.as_ptr() as *const u8,
+                warm.draw_state_virt.add(GPGPU_EU_KERNEL_OFFSET_BYTES),
+                core::mem::size_of_val(&strip_words),
+            );
+        }
+        crate::intel::dma_flush(
+            unsafe { warm.draw_state_virt.add(GPGPU_EU_KERNEL_OFFSET_BYTES) },
+            core::mem::size_of_val(&strip_words),
+        );
+        MANDELBROT_GROUPID_LINE1280_TEMPLATE_UPLOADED.store(true, Ordering::Release);
+    }
+
+    unsafe {
+        core::ptr::write_volatile(
+            warm.result_virt
+                .add(RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD * core::mem::size_of::<u32>())
+                as *mut u32,
+            0,
+        );
+        core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
+        core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
+    }
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+
+    let batch_dwords = warm.batch_len / core::mem::size_of::<u32>();
+    let batch =
+        unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, batch_dwords) };
+    let store_surface = prepare_gpgpu_mandelbrot_store_surface_state_for_target_span(
+        warm,
+        target.gpu,
+        target.byte_len,
+        "stateless-hdc253-primary-scanout-groupid-line1280-rows",
+    );
+    let completion_marker = 0xC0DE_0000
+        | (MANDELBROT_GROUPID_LINE1280_SUBMIT_SERIAL
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1)
+            & 0x0000_FFFF);
+    let batch_bytes = match encode_gfx12_gpgpu_line1280_groupid_rows_batch(
+        warm,
+        batch,
+        store_surface,
+        program,
+        base_gpu,
+        None,
+        color_seed,
+        row_group_count as u32,
+        completion_marker,
+    ) {
+        Ok(bytes) => bytes,
+        Err(reason) => return gpgpu_one_tile_sentinel_failure(reason, program, base_gpu),
+    };
+    crate::intel::dma_flush(warm.batch_virt, batch_bytes);
+
+    let dispatch_before = read_gpgpu_threads_dispatched(dev);
+    let finished = submit_warm_render_batch(
+        dev,
+        warm,
+        completion_marker,
+        RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD,
+        "gpgpu-primary-scanout-groupid-line1280-rows",
+    );
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+    let dispatch_after = read_gpgpu_threads_dispatched(dev);
+    let dispatch_delta = dispatch_after.saturating_sub(dispatch_before);
+    let finish_marker = read_result_dword(warm, RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD);
+    let expected_lane_dispatch = row_group_count.saturating_mul(8);
+    let readback_ok = finished
+        && finish_marker == completion_marker
+        && dispatch_delta >= expected_lane_dispatch as u64;
+    let reason = if readback_ok {
+        "groupid-line1280-burst-retired-visual-only"
+    } else if !finished {
+        "groupid-line1280-submit-not-finished"
+    } else if dispatch_delta == 0 {
+        "groupid-line1280-no-eu-dispatch"
+    } else {
+        "groupid-line1280-marker-missing"
+    };
+    let should_log = if readback_ok {
+        !MANDELBROT_GROUPID_LINE1280_BURST_SUCCESS_LOGGED.swap(true, Ordering::AcqRel)
+    } else {
+        !MANDELBROT_GROUPID_LINE1280_BURST_FAILURE_LOGGED.swap(true, Ordering::AcqRel)
+    };
+    if should_log {
+        crate::log!(
+            "intel/gpgpu: primary-scanout-groupid-line1280-rows first_row_group={} row_groups={} x_segment={} first_x={} first_y={} rect={}x{}@{},{} base_color_seed=0x{:08X} cpu_frame_color_params=1 cpu_burst_address_params=1 cpu_row_address_params=0 artifact_pitch_bytes=0x{:X} artifact_color_step_pixels={} walker_groups={} store_pixels_per_group={} expected_store_pixels={} expected_lane_dispatch={} readback_ok={} reason={} finish_marker=0x{:08X} lane_dispatch_delta={} program_source={} color_dword={} address_base_dword={} address_base=0x{:X} deliverable=visible-window-line1280-groupid-row-burst\n",
+            first_row_group,
+            row_group_count,
+            x_segment,
+            first_x,
+            first_y,
+            rect_width,
+            rect_height,
+            rect_x,
+            rect_y,
+            color_seed,
+            trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_PITCH_BYTES,
+            trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_COLOR_STEP_PIXELS,
+            row_group_count,
+            trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_LANES,
+            row_group_count.saturating_mul(
+                trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_LANES
+            ),
+            expected_lane_dispatch,
+            readback_ok as u8,
+            reason,
+            finish_marker,
+            dispatch_delta,
+            program.name,
+            trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_COLOR_DWORD,
+            trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_ADDRESS_BASE_DWORD,
+            base_gpu as u32,
+        );
+    }
+    if !finished {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "gpgpu-primary-scanout-groupid-line1280-rows",
+        );
+    }
+
+    crate::intel::GpgpuOneTileSentinelProof {
+        submitted: batch_bytes != 0,
+        finished,
+        readback_ok,
+        reason,
+        program_name: program.name,
+        output_gpu: base_gpu,
+        sentinel: 0,
+        output_first_before: 0,
+        output_first_after: color_seed,
+        output_nonzero_before: 0,
+        output_nonzero_after: (color_seed != 0) as usize,
+        output_hits_lo64: row_group_count.min(u64::MAX as usize) as u64,
+        dispatch_delta,
+        finish_marker,
+        expected_finish_marker: completion_marker,
+        batch_bytes,
+    }
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_line1280_groupid_rows_fullwidth_color_burst(
+    color_seed: u32,
+    first_row_group: u32,
+    row_group_count: u32,
+    rect_x: u32,
+    rect_y: u32,
+    rect_width: u32,
+    rect_height: u32,
+) -> crate::intel::GpgpuOneTileSentinelProof {
+    let program = gpgpu_primary_scanout_groupid_line1280_rows_program();
+    let Some(dev) = crate::intel::claimed_device() else {
+        return gpgpu_one_tile_sentinel_failure("no-device", program, 0);
+    };
+    let Some(warm) = warm_state() else {
+        return gpgpu_one_tile_sentinel_failure("no-warm-state", program, 0);
+    };
+    let Some(target) = crate::intel::display::primary_surface_gpgpu_marker_target() else {
+        return gpgpu_one_tile_sentinel_failure("no-primary-scanout", program, 0);
+    };
+    if row_group_count == 0 {
+        return gpgpu_one_tile_sentinel_failure("groupid-line1280-full-empty", program, target.gpu);
+    }
+    if !forcewake_render_acquire(warm) {
+        return gpgpu_one_tile_sentinel_failure("forcewake", program, target.gpu);
+    }
+    if !ensure_gpgpu_warm_buffers_mapped(dev, warm) {
+        return gpgpu_one_tile_sentinel_failure("ggtt-map", program, target.gpu);
+    }
+
+    let rect_width = core::cmp::min(rect_width as usize, target.width as usize);
+    let rect_height = core::cmp::min(rect_height as usize, target.height as usize);
+    let rect_x =
+        core::cmp::min(rect_x as usize, (target.width as usize).saturating_sub(rect_width));
+    let rect_y =
+        core::cmp::min(rect_y as usize, (target.height as usize).saturating_sub(rect_height));
+    let first_row_group = first_row_group as usize;
+    let available_rows = rect_height.saturating_sub(core::cmp::min(first_row_group, rect_height));
+    let row_group_count = core::cmp::min(row_group_count as usize, available_rows);
+    let lanes_per_segment = trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_LANES;
+    let segments_per_row = rect_width.saturating_add(lanes_per_segment - 1) / lanes_per_segment;
+    let segments_per_row = core::cmp::max(1, segments_per_row);
+    if segments_per_row > 2 {
+        return gpgpu_one_tile_sentinel_failure(
+            "groupid-line1280-full-too-wide",
+            program,
+            target.gpu,
+        );
+    }
+
+    let (first_row_offset, first_x, first_y) = match line1280_groupid_rows_rect_base_offset(
+        first_row_group,
+        0,
+        row_group_count,
+        rect_x,
+        rect_y,
+        rect_width,
+        rect_height,
+        target.width as usize,
+        target.height as usize,
+        target.pitch_bytes as usize,
+        target.byte_len,
+    ) {
+        Ok(offset) => offset,
+        Err(reason) => return gpgpu_one_tile_sentinel_failure(reason, program, target.gpu),
+    };
+    let second_row_offset = if segments_per_row > 1 {
+        match line1280_groupid_rows_rect_base_offset(
+            first_row_group,
+            1,
+            row_group_count,
+            rect_x,
+            rect_y,
+            rect_width,
+            rect_height,
+            target.width as usize,
+            target.height as usize,
+            target.pitch_bytes as usize,
+            target.byte_len,
+        ) {
+            Ok((offset, _, _)) => Some(offset),
+            Err(reason) => return gpgpu_one_tile_sentinel_failure(reason, program, target.gpu),
+        }
+    } else {
+        None
+    };
+    let base_gpu = target.gpu + first_row_offset as u64;
+    let second_base_gpu = second_row_offset.map(|offset| target.gpu + offset as u64);
+    if base_gpu >> 32 != 0 || second_base_gpu.is_some_and(|gpu| gpu >> 32 != 0) {
+        return gpgpu_one_tile_sentinel_failure(
+            "groupid-line1280-full-gpu-high32-unsupported",
+            program,
+            base_gpu,
+        );
+    }
+
+    if !MANDELBROT_GROUPID_LINE1280_TEMPLATE_UPLOADED.load(Ordering::Acquire) {
+        let strip_words =
+            trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS;
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                strip_words.as_ptr() as *const u8,
+                warm.draw_state_virt.add(GPGPU_EU_KERNEL_OFFSET_BYTES),
+                core::mem::size_of_val(&strip_words),
+            );
+        }
+        crate::intel::dma_flush(
+            unsafe { warm.draw_state_virt.add(GPGPU_EU_KERNEL_OFFSET_BYTES) },
+            core::mem::size_of_val(&strip_words),
+        );
+        MANDELBROT_GROUPID_LINE1280_TEMPLATE_UPLOADED.store(true, Ordering::Release);
+    }
+
+    unsafe {
+        core::ptr::write_volatile(
+            warm.result_virt
+                .add(RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD * core::mem::size_of::<u32>())
+                as *mut u32,
+            0,
+        );
+        core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
+        core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
+    }
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+
+    let batch_dwords = warm.batch_len / core::mem::size_of::<u32>();
+    let batch =
+        unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, batch_dwords) };
+    let store_surface = prepare_gpgpu_mandelbrot_store_surface_state_for_target_span(
+        warm,
+        target.gpu,
+        target.byte_len,
+        "stateless-hdc253-primary-scanout-groupid-line1280-fullwidth",
+    );
+    let completion_marker = 0xC0DE_0000
+        | (MANDELBROT_GROUPID_LINE1280_SUBMIT_SERIAL
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1)
+            & 0x0000_FFFF);
+    let batch_bytes = match encode_gfx12_gpgpu_line1280_groupid_rows_batch(
+        warm,
+        batch,
+        store_surface,
+        program,
+        base_gpu,
+        second_base_gpu,
+        color_seed,
+        row_group_count as u32,
+        completion_marker,
+    ) {
+        Ok(bytes) => bytes,
+        Err(reason) => return gpgpu_one_tile_sentinel_failure(reason, program, base_gpu),
+    };
+    crate::intel::dma_flush(warm.batch_virt, batch_bytes);
+
+    let dispatch_before = read_gpgpu_threads_dispatched(dev);
+    let finished = submit_warm_render_batch(
+        dev,
+        warm,
+        completion_marker,
+        RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD,
+        "gpgpu-primary-scanout-groupid-line1280-fullwidth",
+    );
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+    let dispatch_after = read_gpgpu_threads_dispatched(dev);
+    let dispatch_delta = dispatch_after.saturating_sub(dispatch_before);
+    let finish_marker = read_result_dword(warm, RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD);
+    let expected_lane_dispatch = row_group_count
+        .saturating_mul(8)
+        .saturating_mul(segments_per_row);
+    let readback_ok = finished
+        && finish_marker == completion_marker
+        && dispatch_delta >= expected_lane_dispatch as u64;
+    let reason = if readback_ok {
+        "groupid-line1280-fullwidth-retired-visual-only"
+    } else if !finished {
+        "groupid-line1280-fullwidth-submit-not-finished"
+    } else if dispatch_delta == 0 {
+        "groupid-line1280-fullwidth-no-eu-dispatch"
+    } else {
+        "groupid-line1280-fullwidth-marker-missing"
+    };
+    let should_log = if readback_ok {
+        !MANDELBROT_GROUPID_LINE1280_BURST_SUCCESS_LOGGED.swap(true, Ordering::AcqRel)
+    } else {
+        !MANDELBROT_GROUPID_LINE1280_BURST_FAILURE_LOGGED.swap(true, Ordering::AcqRel)
+    };
+    if should_log {
+        crate::log!(
+            "intel/gpgpu: primary-scanout-groupid-line1280-fullwidth first_row_group={} row_groups={} segments_per_row={} first_x={} first_y={} rect={}x{}@{},{} base_color_seed=0x{:08X} cpu_frame_color_params=1 cpu_burst_address_params={} cpu_row_address_params=0 artifact_pitch_bytes=0x{:X} artifact_color_step_pixels={} walker_groups_per_segment={} store_pixels_per_group={} expected_store_pixels={} expected_lane_dispatch={} readback_ok={} reason={} finish_marker=0x{:08X} lane_dispatch_delta={} program_source={} color_dword={} address_base_dword={} address_base=0x{:X} second_address_base=0x{:X} deliverable=visible-window-line1280-groupid-fullwidth-burst\n",
+            first_row_group,
+            row_group_count,
+            segments_per_row,
+            first_x,
+            first_y,
+            rect_width,
+            rect_height,
+            rect_x,
+            rect_y,
+            color_seed,
+            segments_per_row,
+            trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_PITCH_BYTES,
+            trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_COLOR_STEP_PIXELS,
+            row_group_count,
+            lanes_per_segment.saturating_mul(segments_per_row),
+            row_group_count
+                .saturating_mul(lanes_per_segment)
+                .saturating_mul(segments_per_row),
+            expected_lane_dispatch,
+            readback_ok as u8,
+            reason,
+            finish_marker,
+            dispatch_delta,
+            program.name,
+            trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_COLOR_DWORD,
+            trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_ADDRESS_BASE_DWORD,
+            base_gpu as u32,
+            second_base_gpu.unwrap_or(0) as u32,
+        );
+    }
+    if !finished {
+        recover_render_engine_after_nonretired_submit(
+            dev,
+            warm,
+            "gpgpu-primary-scanout-groupid-line1280-fullwidth",
+        );
+    }
+
+    crate::intel::GpgpuOneTileSentinelProof {
+        submitted: batch_bytes != 0,
+        finished,
+        readback_ok,
+        reason,
+        program_name: program.name,
+        output_gpu: base_gpu,
+        sentinel: 0,
+        output_first_before: 0,
+        output_first_after: color_seed,
+        output_nonzero_before: 0,
+        output_nonzero_after: (color_seed != 0) as usize,
+        output_hits_lo64: row_group_count.min(u64::MAX as usize) as u64,
+        dispatch_delta,
+        finish_marker,
+        expected_finish_marker: completion_marker,
         batch_bytes,
     }
 }
@@ -1656,7 +2313,7 @@ pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd8_probe(
         trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD8_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS;
     strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD8_BW_COLOR_DWORD] = color_seed;
     strip_words[trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD8_BW_ADDRESS_BASE_DWORD] =
-        row_gpu as u32;
+        row_offset as u32;
     if !upload_and_verify_gpu_program_at(warm, GPGPU_EU_KERNEL_OFFSET_BYTES, &strip_words) {
         return gpgpu_one_tile_sentinel_failure("row2560-program-upload", program, row_gpu);
     }
@@ -1775,7 +2432,7 @@ pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd8_probe(
     };
 
     crate::log!(
-        "intel/gpgpu: primary-scanout-row2560-simd8 y={} requested_mode={} row_offset=0x{:X} row_gpu=0x{:X} color_seed=0x{:08X} setup_dwords=2 cpu_color_dwords_patched=1 cpu_address_dwords_patched=1 walker_groups=1 simd8_sends={} expected_store_pixels={} after_color_pixels={} readback_ok={} reason={} first_before=0x{:08X} first_after=0x{:08X} sample_change_mask=0x{:016X} display_notified={} notify_bytes=0x{:X} finish_marker=0x{:08X} lane_dispatch_delta={} expected_lane_dispatch=8 program_source={} color_dword={} address_base_dword={} address_base=0x{:X} contract=one-submit-full-row-simd8-lane-offsets deliverable=full-width-visible-row\n",
+        "intel/gpgpu: primary-scanout-row2560-simd8 y={} requested_mode={} row_offset=0x{:X} row_gpu=0x{:X} color_seed=0x{:08X} setup_dwords=2 cpu_color_dwords_patched=1 cpu_address_dwords_patched=1 walker_groups=1 simd8_sends={} expected_store_pixels={} after_color_pixels={} readback_ok={} reason={} first_before=0x{:08X} first_after=0x{:08X} sample_change_mask=0x{:016X} display_notified={} notify_bytes=0x{:X} finish_marker=0x{:08X} lane_dispatch_delta={} expected_lane_dispatch=8 program_source={} color_dword={} address_base_dword={} address_base=0x{:X} contract=one-submit-full-row-simd8-bti-offsets deliverable=full-width-visible-row\n",
         y,
         requested_mode,
         row_offset,
@@ -1796,7 +2453,7 @@ pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd8_probe(
         program.name,
         trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD8_BW_COLOR_DWORD,
         trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD8_BW_ADDRESS_BASE_DWORD,
-        row_gpu as u32,
+        row_offset as u32,
     );
     if !finished {
         recover_render_engine_after_nonretired_submit(
@@ -1863,7 +2520,7 @@ pub(crate) fn submit_gpgpu_primary_scanout_line_pilot_rect_color(
     rect_width: u32,
     rect_height: u32,
 ) -> crate::intel::GpgpuOneTileSentinelProof {
-    const LANES_PER_PILOT: usize = trueos_eu::gfx12::PRIMARY_SCANOUT_LINE1280_SCALAR_BW_LANES;
+    const LANES_PER_PILOT: usize = trueos_eu::gfx12::PRIMARY_SCANOUT_LINE1280_LANE8ROWS_LANES;
 
     let program = gpgpu_primary_scanout_mandelbrot8_gpu_color_program();
     let Some(dev) = crate::intel::claimed_device() else {

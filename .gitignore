@@ -12,5 +12,3 @@ vid/
 *.gguf
 tools/*.gguf
 tinyllama/
-
-tools/CommitMessageGenerate/work

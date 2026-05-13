@@ -28,6 +28,7 @@ pub enum EuArtifactKind {
     T63Accum16HiLive32Bf16DotThenHdc1StoreThenThreadSpawnerEot,
     PrimaryScanoutMandelbrot8ThenHdc1StoreThenThreadSpawnerEot,
     PrimaryScanoutGroupidLine320ScalarBwThenHdc1StoreThenThreadSpawnerEot,
+    PrimaryScanoutGroupidLine1280RowsScalarBwThenHdc1StoreThenThreadSpawnerEot,
     PrimaryScanoutRow2560Simd8BwThenHdc1StoreThenThreadSpawnerEot,
     PrimaryScanoutLine1280ScalarBwThenHdc1StoreThenThreadSpawnerEot,
     PrimaryScanoutLine320ScalarBwThenHdc1StoreThenThreadSpawnerEot,

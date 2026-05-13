@@ -47,7 +47,6 @@ BP_SKIP_EMBED := 1
 QEMU_RUNNER := tools/qemu/run.sh
 QEMU_BIN ?= qemu-system-x86_64
 QEMU_UEFI_FIRMWARE = $(OVMF_BUNDLE_PATH)
-DISK_IMG := tools/disk.img
 NVME_IMG := tools/nvme.img
 CNT_FILE := tools/cnt
 QEMU_BRIDGE ?= br0
@@ -69,11 +68,7 @@ CARGO_GFX_FLAGS =
 
 IMG_SIZE ?= 25G
 
-images: $(DISK_IMG) $(NVME_IMG)
-
-$(DISK_IMG):
-	mkdir -p $(@D)
-	truncate -s $(IMG_SIZE) $@
+images: $(NVME_IMG)
 
 $(NVME_IMG):
 	mkdir -p $(@D)
