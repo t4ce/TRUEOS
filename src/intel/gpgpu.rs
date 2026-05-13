@@ -7,6 +7,9 @@ mod matmul;
 
 pub(crate) use mandelbrot::{
     submit_gpgpu_primary_scanout_groupid_line320_probe, submit_gpgpu_primary_scanout_line_pilot,
+    submit_gpgpu_primary_scanout_line_pilot_rect,
+    submit_gpgpu_primary_scanout_line_pilot_rect_color,
+    submit_gpgpu_primary_scanout_line_pilot_rect_color_burst,
     submit_gpgpu_primary_scanout_mandelbrot_preview, submit_gpgpu_primary_scanout_marker_probe,
     submit_gpgpu_primary_scanout_row2560_simd8_probe,
 };
@@ -104,10 +107,10 @@ const GPU_VA_VERTEX_BASE: u64 = 0x0087_0000;
 const GPU_VA_STREAMOUT_BASE: u64 = 0x0088_0000;
 const GPU_VA_GPGPU_TILE_ARENA_BASE: u64 = 0x0400_0000;
 const GPGPU_EU_KERNEL_OFFSET_BYTES: usize = 0x3000;
-// Keep dynamic walker state out of the EU program window.  The Q12 Mandelbrot
-// scanout artifact is deliberately larger than the tiny proof kernels; the
-// 32-pixel SIMD8x4 body reaches past 0x5000 when uploaded at 0x3000.
-const GPGPU_WALKER_SCRATCH_OFFSET_BYTES: usize = 0x6000;
+// Keep dynamic walker state out of the EU program window.  The visible scanout
+// sidequest now uses a 1280-pixel scalar artifact; uploaded at 0x3000, that
+// body reaches past 0xD000, so IDD/CURBE live near the top of draw-state.
+const GPGPU_WALKER_SCRATCH_OFFSET_BYTES: usize = 0xE000;
 const GPGPU_TILE_ROWS: usize = 256;
 const GPGPU_TILE_K_DIM: usize = 2048;
 const GPGPU_TILE_WEIGHT_BYTES_PER_ELEM: usize = 2;
@@ -115,6 +118,9 @@ const GPGPU_TILE_X_BYTES_PER_ELEM: usize = 4;
 const GPGPU_TILE_OUTPUT_BYTES_PER_ELEM: usize = 4;
 const GPGPU_TILE_TARGET_TILES: usize = 3;
 const MANDELBROT_STRIP_READBACK_POLLS: usize = 256;
+const MANDELBROT_LINE1280_VERIFY_SCANOUT_READBACK: bool = false;
+const MANDELBROT_LINE1280_VERIFY_PROGRAM_UPLOAD: bool = false;
+const MANDELBROT_LINE1280_NOTIFY_SCANOUT_WRITES: bool = false;
 const GPGPU_WEIGHT_TILE_BYTES: usize =
     GPGPU_TILE_ROWS * GPGPU_TILE_K_DIM * GPGPU_TILE_WEIGHT_BYTES_PER_ELEM;
 const GPGPU_X_VECTOR_BYTES: usize = GPGPU_TILE_K_DIM * GPGPU_TILE_X_BYTES_PER_ELEM;
@@ -836,7 +842,9 @@ fn uses_gpgpu_pipeline_submit_name(name: &str) -> bool {
     is_gpgpu_submit_name(name)
         || matches!(
             name,
-            "gpgpu-primary-scanout-mandelbrot8-strip" | "gpgpu-primary-scanout-gpu-color8-witness"
+            "gpgpu-primary-scanout-mandelbrot8-strip"
+                | "gpgpu-primary-scanout-gpu-color8-witness"
+                | "gpgpu-primary-scanout-line1280-burst"
         )
 }
 
@@ -849,6 +857,7 @@ fn should_log_gpgpu_submit_name(name: &str) -> bool {
             | "gpgpu-primary-scanout-pixel-quiet"
             | "gpgpu-primary-scanout-mandelbrot8-strip"
             | "gpgpu-primary-scanout-gpu-color8-witness"
+            | "gpgpu-primary-scanout-line1280-burst"
     )
 }
 
@@ -1364,6 +1373,7 @@ fn should_log_gpgpu_program_shape(name: &str) -> bool {
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_MANDELBROT8_SIMD8_Q12_PROGRAM_NAME
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_PROGRAM_NAME
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_ROW2560_SIMD8_BW_PROGRAM_NAME
+        || name == trueos_eu::gfx12::PRIMARY_SCANOUT_LINE1280_SCALAR_BW_PROGRAM_NAME
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_LINE320_SCALAR_BW_PROGRAM_NAME
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_LINE8_SCALAR8_BW_PROGRAM_NAME
         || name == trueos_eu::gfx12::PRIMARY_SCANOUT_LINE8_SIMD8_BW_PROGRAM_NAME
@@ -1374,7 +1384,9 @@ fn should_log_gpgpu_program_shape(name: &str) -> bool {
 }
 
 fn should_log_gpgpu_surface_state(note: &str) -> bool {
-    note != "bind-send-bti-to-result-raw-buffer" && !note.contains("-quiet")
+    note != "bind-send-bti-to-result-raw-buffer"
+        && !note.contains("-quiet")
+        && !note.contains("line1280-burst")
 }
 
 fn gpgpu_store_eot_program() -> GpgpuEuProgram {
@@ -1431,8 +1443,8 @@ fn gpgpu_store_send_desc_words(program: GpgpuEuProgram) -> (u32, u32) {
 
 const GPGPU_STORE_BINDING_TABLE_OFFSET_BYTES: usize = 0x3400;
 const GPGPU_STORE_SURFACE_STATE_OFFSET_BYTES: usize = 0x3500;
-const GPGPU_MANDELBROT_STORE_BINDING_TABLE_OFFSET_BYTES: usize = 0x7000;
-const GPGPU_MANDELBROT_STORE_SURFACE_STATE_OFFSET_BYTES: usize = 0x7100;
+const GPGPU_MANDELBROT_STORE_BINDING_TABLE_OFFSET_BYTES: usize = 0xF000;
+const GPGPU_MANDELBROT_STORE_SURFACE_STATE_OFFSET_BYTES: usize = 0xF100;
 const GPGPU_STORE_BINDING_TABLE_INDEX: usize = 0x34;
 // The active Mandelbrot Q12 send is stateless (surface 0xFD). Keep the old BTI1
 // surface state populated only to preserve the walker/IDD store-state shape.
@@ -1468,6 +1480,17 @@ static MANDELBROT_WALKER_SHAPE_LOGGED: AtomicBool = AtomicBool::new(false);
 static MANDELBROT_PREVIEW_FAILURE_LOGGED: AtomicBool = AtomicBool::new(false);
 static MANDELBROT_GPU_COLOR_WITNESS_SUCCESS_LOGGED: AtomicBool = AtomicBool::new(false);
 static MANDELBROT_GPU_COLOR_WITNESS_FAILURE_LOGGED: AtomicBool = AtomicBool::new(false);
+static MANDELBROT_LINE1280_TEMPLATE_UPLOADED: AtomicBool = AtomicBool::new(false);
+static MANDELBROT_LINE1280_BURST_SUCCESS_LOGGED: AtomicBool = AtomicBool::new(false);
+static MANDELBROT_LINE1280_BURST_FAILURE_LOGGED: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn notify_gpgpu_primary_scanout_external_write(
+    reason: &str,
+    flush_offset: usize,
+    flush_bytes: usize,
+) -> bool {
+    crate::intel::display::notify_primary_surface_external_write(reason, flush_offset, flush_bytes)
+}
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct GpgpuPreflightStatus {

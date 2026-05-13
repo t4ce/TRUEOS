@@ -462,6 +462,20 @@ pub const PRIMARY_SCANOUT_LINE320_SCALAR_BW_WORD_DWORDS: usize =
 pub const PRIMARY_SCANOUT_LINE320_SCALAR_BW_ADDRESS_BASE_DWORD: usize = 7;
 pub const PRIMARY_SCANOUT_LINE320_SCALAR_BW_COLOR_DWORD: usize = 3;
 pub const PRIMARY_SCANOUT_LINE320_SCALAR_BW_STORE_SEND_DWORD: usize = 11;
+pub const PRIMARY_SCANOUT_LINE1280_SCALAR_BW_PROGRAM_NAME: &str =
+    "gfx12-primary-scanout-line1280-scalar-step8-color-hdc1-stateless-unrolled-store-then-ts-eot";
+pub const PRIMARY_SCANOUT_LINE1280_SCALAR_BW_LANES: usize = 1280;
+pub const PRIMARY_SCANOUT_LINE1280_SCALAR_BW_COLOR_STEP_PIXELS: usize = 8;
+pub const PRIMARY_SCANOUT_LINE1280_SCALAR_BW_COLOR_STEP_DWORDS: usize =
+    (PRIMARY_SCANOUT_LINE1280_SCALAR_BW_LANES - 1)
+        / PRIMARY_SCANOUT_LINE1280_SCALAR_BW_COLOR_STEP_PIXELS;
+pub const PRIMARY_SCANOUT_LINE1280_SCALAR_BW_WORD_DWORDS: usize =
+    PRIMARY_SCANOUT_LINE1280_SCALAR_BW_LANES * 8
+        + PRIMARY_SCANOUT_LINE1280_SCALAR_BW_COLOR_STEP_DWORDS * 4
+        + 12;
+pub const PRIMARY_SCANOUT_LINE1280_SCALAR_BW_ADDRESS_BASE_DWORD: usize = 7;
+pub const PRIMARY_SCANOUT_LINE1280_SCALAR_BW_COLOR_DWORD: usize = 3;
+pub const PRIMARY_SCANOUT_LINE1280_SCALAR_BW_STORE_SEND_DWORD: usize = 11;
 pub const PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_PROGRAM_NAME: &str =
     "gfx12-primary-scanout-groupid-line320-scalar-bw-hdc1-stateless-unrolled-store-then-ts-eot";
 pub const PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_GROUPS: usize = 8;
@@ -1100,6 +1114,73 @@ pub static PRIMARY_SCANOUT_LINE320_SCALAR_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_
         words: &PRIMARY_SCANOUT_LINE320_SCALAR_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS,
         expects_store: true,
     };
+
+const fn primary_scanout_line1280_scalar_bw_words()
+-> [u32; PRIMARY_SCANOUT_LINE1280_SCALAR_BW_WORD_DWORDS] {
+    let mut words = [0u32; PRIMARY_SCANOUT_LINE1280_SCALAR_BW_WORD_DWORDS];
+    words[0] = 0x80030061;
+    words[1] = 0x04054660;
+    words[2] = 0x00000000;
+    words[3] = 0x00FF00FF;
+    words[4] = 0x80030061;
+    words[5] = 0x7F054220;
+    words[6] = 0x00000000;
+    words[7] = 0x00840058;
+
+    let mut cursor = 8usize;
+    let mut pixel = 0usize;
+    while pixel < PRIMARY_SCANOUT_LINE1280_SCALAR_BW_LANES {
+        words[cursor] = 0x00030131;
+        words[cursor + 1] = 0x00000000;
+        words[cursor + 2] = 0xCDFA7F0C;
+        words[cursor + 3] = 0x009A040C;
+        cursor += 4;
+        pixel += 1;
+
+        if pixel < PRIMARY_SCANOUT_LINE1280_SCALAR_BW_LANES {
+            if pixel % PRIMARY_SCANOUT_LINE1280_SCALAR_BW_COLOR_STEP_PIXELS == 0 {
+                words[cursor] = 0x00030140;
+                words[cursor + 1] = 0x04058660;
+                words[cursor + 2] = 0x06460405;
+                words[cursor + 3] = 0x00010101;
+                cursor += 4;
+            }
+            words[cursor] = 0x00030140;
+            words[cursor + 1] = 0x7F058660;
+            words[cursor + 2] = 0x06467F05;
+            words[cursor + 3] = 0x00000004;
+            cursor += 4;
+        }
+    }
+
+    words[cursor] = 0x80030061;
+    words[cursor + 1] = 0x7F050220;
+    words[cursor + 2] = 0x00460005;
+    words[cursor + 3] = 0x00000000;
+    words[cursor + 4] = 0x80030131;
+    words[cursor + 5] = 0x00000004;
+    words[cursor + 6] = 0x70007F0C;
+    words[cursor + 7] = 0x00000000;
+    words
+}
+
+// Mandelbrot sidequest half-row pilot.
+//
+// This intentionally stays on the same scalar stateless HDC send as line320.
+// The CPU still patches one seed color and one base address per segment; the EU
+// bumps the color every 8 stores so the visible proof is not a flat blit.
+pub static PRIMARY_SCANOUT_LINE1280_SCALAR_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS:
+    [u32; PRIMARY_SCANOUT_LINE1280_SCALAR_BW_WORD_DWORDS] =
+    primary_scanout_line1280_scalar_bw_words();
+
+pub static PRIMARY_SCANOUT_LINE1280_SCALAR_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT:
+    EuArtifact = EuArtifact {
+    name: PRIMARY_SCANOUT_LINE1280_SCALAR_BW_PROGRAM_NAME,
+    isa: EuIsa::Gfx12,
+    kind: EuArtifactKind::PrimaryScanoutLine1280ScalarBwThenHdc1StoreThenThreadSpawnerEot,
+    words: &PRIMARY_SCANOUT_LINE1280_SCALAR_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS,
+    expects_store: true,
+};
 
 const fn primary_scanout_groupid_line320_scalar_bw_words()
 -> [u32; PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_WORD_DWORDS] {

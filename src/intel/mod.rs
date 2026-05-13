@@ -546,6 +546,70 @@ pub(crate) fn submit_gpgpu_primary_scanout_line_pilot(
     self::gpgpu::submit_gpgpu_primary_scanout_line_pilot(mode, line_index)
 }
 
+pub(crate) fn submit_gpgpu_primary_scanout_line_pilot_rect(
+    mode: u32,
+    line_index: u32,
+    rect_x: u32,
+    rect_y: u32,
+    rect_width: u32,
+    rect_height: u32,
+) -> GpgpuOneTileSentinelProof {
+    self::gpgpu::submit_gpgpu_primary_scanout_line_pilot_rect(
+        mode,
+        line_index,
+        rect_x,
+        rect_y,
+        rect_width,
+        rect_height,
+    )
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_line_pilot_rect_color(
+    color_seed: u32,
+    line_index: u32,
+    rect_x: u32,
+    rect_y: u32,
+    rect_width: u32,
+    rect_height: u32,
+) -> GpgpuOneTileSentinelProof {
+    self::gpgpu::submit_gpgpu_primary_scanout_line_pilot_rect_color(
+        color_seed,
+        line_index,
+        rect_x,
+        rect_y,
+        rect_width,
+        rect_height,
+    )
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_line_pilot_rect_color_burst(
+    color_seed: u32,
+    first_line_index: u32,
+    segment_count: u32,
+    rect_x: u32,
+    rect_y: u32,
+    rect_width: u32,
+    rect_height: u32,
+) -> GpgpuOneTileSentinelProof {
+    self::gpgpu::submit_gpgpu_primary_scanout_line_pilot_rect_color_burst(
+        color_seed,
+        first_line_index,
+        segment_count,
+        rect_x,
+        rect_y,
+        rect_width,
+        rect_height,
+    )
+}
+
+pub(crate) fn notify_gpgpu_primary_scanout_external_write(
+    reason: &str,
+    flush_offset: usize,
+    flush_bytes: usize,
+) -> bool {
+    self::gpgpu::notify_gpgpu_primary_scanout_external_write(reason, flush_offset, flush_bytes)
+}
+
 pub(crate) fn submit_gpgpu_primary_scanout_groupid_line320_probe(
     mode: u32,
     row_index: u32,
