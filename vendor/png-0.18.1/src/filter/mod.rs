@@ -1,4 +1,9 @@
 use core::convert::TryInto;
+#[cfg(target_arch = "x86_64")]
+use core::sync::atomic::{AtomicBool, Ordering};
+
+#[cfg(target_arch = "x86_64")]
+use core::arch::x86_64::{__m128i, _mm_add_epi8, _mm_loadu_si128, _mm_storeu_si128};
 
 use crate::{common::BytesPerPixel, Compression};
 
@@ -6,6 +11,9 @@ mod paeth;
 
 #[cfg(feature = "unstable")]
 mod simd;
+
+#[cfg(target_arch = "x86_64")]
+static UP_FASTPATH_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[inline]
 fn unfilter_up_chunked(previous: &[u8], current: &mut [u8]) {
@@ -26,6 +34,49 @@ fn unfilter_up_chunked(previous: &[u8], current: &mut [u8]) {
         .zip(previous_chunks.remainder())
     {
         *curr = curr.wrapping_add(above);
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline]
+fn unfilter_up(previous: &[u8], current: &mut [u8]) {
+    if !UP_FASTPATH_LOGGED.swap(true, Ordering::AcqRel) {
+        let len = current.len().min(previous.len());
+        log::info!(
+            "png: up fastpath lane=sse2 current_len={} previous_len={} min_len={} tail={} prove=vendor-fastpath-first-hit",
+            current.len(),
+            previous.len(),
+            len,
+            len & 15
+        );
+    }
+    unsafe {
+        unfilter_up_sse2(previous, current);
+    }
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+#[inline]
+fn unfilter_up(previous: &[u8], current: &mut [u8]) {
+    unfilter_up_chunked(previous, current);
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline]
+unsafe fn unfilter_up_sse2(previous: &[u8], current: &mut [u8]) {
+    let len = current.len().min(previous.len());
+    let mut offset = 0usize;
+
+    while offset + 16 <= len {
+        let curr = unsafe { _mm_loadu_si128(current.as_ptr().add(offset).cast::<__m128i>()) };
+        let above = unsafe { _mm_loadu_si128(previous.as_ptr().add(offset).cast::<__m128i>()) };
+        let sum = _mm_add_epi8(curr, above);
+        unsafe { _mm_storeu_si128(current.as_mut_ptr().add(offset).cast::<__m128i>(), sum) };
+        offset += 16;
+    }
+
+    for idx in offset..len {
+        current[idx] = current[idx].wrapping_add(previous[idx]);
     }
 }
 
@@ -217,7 +268,7 @@ pub(crate) fn unfilter(
             }
         },
         Up => {
-            unfilter_up_chunked(previous, current);
+            unfilter_up(previous, current);
         }
         Avg if previous.is_empty() => match tbpp {
             BytesPerPixel::One => {
