@@ -556,7 +556,7 @@ fn submit_warm_render_batch_observed(
     capture_dispatch: bool,
 ) -> WarmRenderBatchSubmitProof {
     let log_submit = should_log_gpgpu_submit_name(submit_name);
-    if is_gpgpu_submit_name(submit_name) {
+    if needs_gpgpu_pre_submit_recovery(submit_name) {
         recover_render_engine_after_nonretired_submit(dev, warm, "gpgpu-pre-submit");
     }
     if uses_gpgpu_pipeline_submit_name(submit_name) {
@@ -650,8 +650,7 @@ fn submit_warm_render_batch_observed(
     }
 
     let gpgpu_submit = is_gpgpu_submit_name(submit_name);
-    let extended_poll = uses_extended_submit_poll(submit_name);
-    let poll_limit = if extended_poll { 4 * 1024 * 1024 } else { 4096 };
+    let poll_limit = submit_poll_limit(submit_name);
     let mut completed = false;
     let mut iter = 0usize;
     while iter < poll_limit {
@@ -892,6 +891,10 @@ fn is_gpgpu_submit_name(name: &str) -> bool {
     )
 }
 
+fn needs_gpgpu_pre_submit_recovery(name: &str) -> bool {
+    is_gpgpu_submit_name(name) && name != "gpgpu-primary-scanout-groupid-line1280-fullwidth"
+}
+
 fn uses_gpgpu_pipeline_submit_name(name: &str) -> bool {
     is_gpgpu_submit_name(name)
         || matches!(
@@ -921,6 +924,16 @@ fn should_log_gpgpu_submit_name(name: &str) -> bool {
 
 fn uses_extended_submit_poll(name: &str) -> bool {
     uses_gpgpu_pipeline_submit_name(name)
+}
+
+fn submit_poll_limit(name: &str) -> usize {
+    if name == "gpgpu-primary-scanout-groupid-line1280-fullwidth" {
+        262_144
+    } else if uses_extended_submit_poll(name) {
+        4 * 1024 * 1024
+    } else {
+        4096
+    }
 }
 
 fn seed_result_debug_slots(warm: RenderWarmState) {

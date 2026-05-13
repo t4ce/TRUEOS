@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+
 use embassy_executor::{SpawnError, Spawner};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use trueos_gfx_core::{ShaderDesc, ShaderFormat, ShaderStage};
@@ -17,14 +19,15 @@ pub(crate) const MANDELBROT_PUSH_CONSTANT_BYTES: u16 = 24;
 pub(crate) const MANDELBROT_GPGPU_LOOP_MS: u64 = 16;
 pub(crate) const MANDELBROT_GPGPU_PREVIEW_PIXELS_PER_TICK: usize = 8192;
 pub(crate) const MANDELBROT_GPGPU_RGB_ZOOM_RECT_WIDTH: u64 = 1280;
-pub(crate) const MANDELBROT_GPGPU_RGB_ZOOM_RECT_HEIGHT: u64 = 256;
+pub(crate) const MANDELBROT_GPGPU_RGB_ZOOM_RECT_HEIGHT: u64 = MANDELBROT_TARGET_HEIGHT as u64;
 pub(crate) const MANDELBROT_GPGPU_ANIM_BAND_HEIGHT: u64 = 8;
 pub(crate) const MANDELBROT_GPGPU_ANIM_PHASE_ROWS_PER_FRAME: u64 =
     MANDELBROT_GPGPU_ANIM_BAND_HEIGHT;
 pub(crate) const MANDELBROT_GPGPU_FULL_FRAME_COLOR_FLIP: bool = true;
-pub(crate) const MANDELBROT_GPGPU_GROUPID_LINE1280_ROWS_PER_BURST: u64 = 256;
-// One 384-row submit dispatches partway but misses the post-walker marker.
-// Keep this as one centered area and one walker submit while we raise row-pilot parallelism.
+pub(crate) const MANDELBROT_GPGPU_GROUPID_LINE1280_ROWS_PER_BURST: u64 = 128;
+// One 256+ row submit dispatches partway but misses the post-walker marker.
+// Keep the visible area larger, but split it into smaller row-group walkers.
+pub(crate) const MANDELBROT_GPGPU_GROUPID_VISUAL_ONLY_IGNORE_RETIRE: bool = true;
 pub(crate) const MANDELBROT_GPGPU_LINE1280_MAX_SEGMENTS_PER_BURST: u64 =
     MANDELBROT_TARGET_HEIGHT as u64;
 pub(crate) const MANDELBROT_GPGPU_PRESENT_FLUSH_BYTES: usize = 0xE10000;
@@ -41,6 +44,141 @@ pub(crate) const MANDELBROT_GPGPU_ANIM_PALETTE: [u32; 8] = [
 pub(crate) const MANDELBROT_GPGPU_RUN_ROW2560_SIMD8_PROBE: bool = false;
 pub(crate) const MANDELBROT_GPGPU_NOTIFY_AFTER_FULLSCREEN_SWEEP: bool = true;
 pub(crate) const MANDELBROT_GPGPU_RUN_GROUPID_LINE320_PROBE: bool = false;
+pub(crate) const MANDELBROT_BURST_LANE_POOL_START: u32 = 3;
+pub(crate) const MANDELBROT_BURST_LANE_POOL_SIZE: u32 = 4;
+pub(crate) const MANDELBROT_GPGPU_BURSTS_PER_FRAME_BUDGET: u64 = 2;
+pub(crate) const MANDELBROT_ARTIFACT_FLAG_FULL_FRAME_COLOR_FLIP: u32 = 1 << 0;
+pub(crate) const MANDELBROT_ARTIFACT_FLAG_VISUAL_ONLY_IGNORE_RETIRE: u32 = 1 << 1;
+pub(crate) const MANDELBROT_ARTIFACT_FLAG_NOTIFY_AFTER_SWEEP: u32 = 1 << 2;
+pub(crate) const MANDELBROT_ARTIFACT_KNOWN_FLAGS: u32 =
+    MANDELBROT_ARTIFACT_FLAG_FULL_FRAME_COLOR_FLIP
+        | MANDELBROT_ARTIFACT_FLAG_VISUAL_ONLY_IGNORE_RETIRE
+        | MANDELBROT_ARTIFACT_FLAG_NOTIFY_AFTER_SWEEP;
+pub(crate) const MANDELBROT_ARTIFACT_DEFAULT_FLAGS: u32 =
+    MANDELBROT_ARTIFACT_FLAG_FULL_FRAME_COLOR_FLIP
+        | MANDELBROT_ARTIFACT_FLAG_VISUAL_ONLY_IGNORE_RETIRE
+        | MANDELBROT_ARTIFACT_FLAG_NOTIFY_AFTER_SWEEP;
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MandelbrotArtifactControlSnapshot {
+    pub(crate) version: u64,
+    pub(crate) flags: u32,
+    pub(crate) rect_height_rows: u32,
+    pub(crate) row_groups_per_burst: u32,
+    pub(crate) bursts_per_frame_budget: u32,
+    pub(crate) phase_rows_per_sweep: u32,
+}
+
+impl MandelbrotArtifactControlSnapshot {
+    pub(crate) const fn default_runtime() -> Self {
+        Self {
+            version: 0,
+            flags: MANDELBROT_ARTIFACT_DEFAULT_FLAGS,
+            rect_height_rows: MANDELBROT_GPGPU_RGB_ZOOM_RECT_HEIGHT as u32,
+            row_groups_per_burst: MANDELBROT_GPGPU_GROUPID_LINE1280_ROWS_PER_BURST as u32,
+            bursts_per_frame_budget: MANDELBROT_GPGPU_BURSTS_PER_FRAME_BUDGET as u32,
+            phase_rows_per_sweep: MANDELBROT_GPGPU_ANIM_PHASE_ROWS_PER_FRAME as u32,
+        }
+    }
+
+    pub(crate) const fn full_frame_color_flip(self) -> bool {
+        self.flags & MANDELBROT_ARTIFACT_FLAG_FULL_FRAME_COLOR_FLIP != 0
+    }
+
+    pub(crate) const fn visual_only_ignore_retire(self) -> bool {
+        self.flags & MANDELBROT_ARTIFACT_FLAG_VISUAL_ONLY_IGNORE_RETIRE != 0
+    }
+
+    pub(crate) const fn notify_after_sweep(self) -> bool {
+        self.flags & MANDELBROT_ARTIFACT_FLAG_NOTIFY_AFTER_SWEEP != 0
+    }
+}
+
+static MANDELBROT_ARTIFACT_CONTROL_VERSION: AtomicU64 = AtomicU64::new(0);
+static MANDELBROT_ARTIFACT_CONTROL_FLAGS: AtomicU32 =
+    AtomicU32::new(MANDELBROT_ARTIFACT_DEFAULT_FLAGS);
+static MANDELBROT_ARTIFACT_CONTROL_RECT_HEIGHT_ROWS: AtomicU32 =
+    AtomicU32::new(MANDELBROT_GPGPU_RGB_ZOOM_RECT_HEIGHT as u32);
+static MANDELBROT_ARTIFACT_CONTROL_ROW_GROUPS_PER_BURST: AtomicU32 =
+    AtomicU32::new(MANDELBROT_GPGPU_GROUPID_LINE1280_ROWS_PER_BURST as u32);
+static MANDELBROT_ARTIFACT_CONTROL_BURSTS_PER_FRAME_BUDGET: AtomicU32 =
+    AtomicU32::new(MANDELBROT_GPGPU_BURSTS_PER_FRAME_BUDGET as u32);
+static MANDELBROT_ARTIFACT_CONTROL_PHASE_ROWS_PER_SWEEP: AtomicU32 =
+    AtomicU32::new(MANDELBROT_GPGPU_ANIM_PHASE_ROWS_PER_FRAME as u32);
+
+/// Per-burst slot assignment for row-group walker distribution across CPU cores.
+/// Minimal thread coordination: round-robin bursts within a stable slot pool.
+static BURST_SLOT_COORDINATOR: AtomicU32 = AtomicU32::new(0);
+
+pub(crate) fn mandelbrot_artifact_control_snapshot() -> MandelbrotArtifactControlSnapshot {
+    MandelbrotArtifactControlSnapshot {
+        version: MANDELBROT_ARTIFACT_CONTROL_VERSION.load(Ordering::Acquire),
+        flags: MANDELBROT_ARTIFACT_CONTROL_FLAGS.load(Ordering::Acquire),
+        rect_height_rows: MANDELBROT_ARTIFACT_CONTROL_RECT_HEIGHT_ROWS.load(Ordering::Acquire),
+        row_groups_per_burst: MANDELBROT_ARTIFACT_CONTROL_ROW_GROUPS_PER_BURST.load(Ordering::Acquire),
+        bursts_per_frame_budget: MANDELBROT_ARTIFACT_CONTROL_BURSTS_PER_FRAME_BUDGET
+            .load(Ordering::Acquire),
+        phase_rows_per_sweep: MANDELBROT_ARTIFACT_CONTROL_PHASE_ROWS_PER_SWEEP
+            .load(Ordering::Acquire),
+    }
+}
+
+pub(crate) fn mandelbrot_artifact_control_replace(
+    mut next: MandelbrotArtifactControlSnapshot,
+) -> MandelbrotArtifactControlSnapshot {
+    next.flags &= MANDELBROT_ARTIFACT_KNOWN_FLAGS;
+    next.rect_height_rows = next.rect_height_rows.clamp(1, MANDELBROT_TARGET_HEIGHT);
+    next.row_groups_per_burst = next
+        .row_groups_per_burst
+        .clamp(1, MANDELBROT_TARGET_HEIGHT);
+    next.bursts_per_frame_budget = next.bursts_per_frame_budget.clamp(1, MANDELBROT_TARGET_HEIGHT);
+    next.phase_rows_per_sweep = next.phase_rows_per_sweep.clamp(1, MANDELBROT_TARGET_HEIGHT);
+
+    MANDELBROT_ARTIFACT_CONTROL_FLAGS.store(next.flags, Ordering::Release);
+    MANDELBROT_ARTIFACT_CONTROL_RECT_HEIGHT_ROWS.store(next.rect_height_rows, Ordering::Release);
+    MANDELBROT_ARTIFACT_CONTROL_ROW_GROUPS_PER_BURST
+        .store(next.row_groups_per_burst, Ordering::Release);
+    MANDELBROT_ARTIFACT_CONTROL_BURSTS_PER_FRAME_BUDGET
+        .store(next.bursts_per_frame_budget, Ordering::Release);
+    MANDELBROT_ARTIFACT_CONTROL_PHASE_ROWS_PER_SWEEP
+        .store(next.phase_rows_per_sweep, Ordering::Release);
+    next.version = MANDELBROT_ARTIFACT_CONTROL_VERSION.fetch_add(1, Ordering::AcqRel) + 1;
+    next
+}
+
+fn assign_burst_slot() -> u32 {
+    let all_slots = crate::workers::background_worker_slots();
+    if all_slots.is_empty() {
+        return 0; // fallback to any available slot
+    }
+    // Use stable pool starting at MANDELBROT_BURST_LANE_POOL_START
+    let _pool_start = MANDELBROT_BURST_LANE_POOL_START as usize;
+    let pool_size = MANDELBROT_BURST_LANE_POOL_SIZE as usize;
+    
+    // Find how many slots we can actually use from our pool
+    let available_from_pool = all_slots.iter()
+        .filter(|&&s| s >= MANDELBROT_BURST_LANE_POOL_START)
+        .count()
+        .min(pool_size);
+    
+    if available_from_pool == 0 {
+        // Fallback: use first available background slot
+        return all_slots[0];
+    }
+    
+    let burst_counter = BURST_SLOT_COORDINATOR.fetch_add(1, Ordering::Relaxed);
+    let offset = (burst_counter as usize) % available_from_pool;
+    let mut count = 0;
+    for &slot in &all_slots {
+        if slot >= MANDELBROT_BURST_LANE_POOL_START {
+            if count == offset {
+                return slot;
+            }
+            count += 1;
+        }
+    }
+    all_slots[0] // fallback
+}
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum MandelbrotGpuArtifactStage {
@@ -236,50 +374,76 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
         core::cmp::min(MANDELBROT_GPGPU_RGB_ZOOM_RECT_WIDTH, scanout_w as u64),
         line_pixels,
     );
-    let rect_h = core::cmp::min(MANDELBROT_GPGPU_RGB_ZOOM_RECT_HEIGHT, scanout_h as u64);
     let rect_x = (scanout_w as u64).saturating_sub(rect_w) / 2;
-    let rect_y = (scanout_h as u64).saturating_sub(rect_h) / 2;
     let rows_per_segment = 1u64;
     let segments_per_row =
         core::cmp::max(1, rect_w.saturating_add(line_pixels.saturating_sub(1)) / line_pixels);
-    let row_groups_per_frame = core::cmp::max(
-        1,
-        rect_h.saturating_add(rows_per_segment.saturating_sub(1)) / rows_per_segment,
-    );
-    let submits_per_tick = row_groups_per_frame;
-    let row_groups_per_burst = if MANDELBROT_GPGPU_FULL_FRAME_COLOR_FLIP {
-        core::cmp::min(row_groups_per_frame, MANDELBROT_GPGPU_GROUPID_LINE1280_ROWS_PER_BURST)
-    } else {
-        core::cmp::max(
-            1,
-            MANDELBROT_GPGPU_ANIM_BAND_HEIGHT.saturating_add(rows_per_segment.saturating_sub(1))
-                / rows_per_segment,
-        )
-    };
-    let bursts_per_frame = row_groups_per_frame
-        .saturating_add(row_groups_per_burst.saturating_sub(1))
-        / row_groups_per_burst;
+    let mut burst_cursor = 0u64;
+    let mut control_version_seen = u64::MAX;
     loop {
+        let control = mandelbrot_artifact_control_snapshot();
+        if control.version != control_version_seen {
+            BURST_SLOT_COORDINATOR.store(0, Ordering::Release);
+            burst_cursor = 0;
+            control_version_seen = control.version;
+            crate::log!(
+                "mandelbrot-gpu-sidequest: control version={} flags=0x{:X} rect_h={} row_burst={} frame_budget={} phase_rows={} protocol=kernel-artifact-control\n",
+                control.version,
+                control.flags,
+                control.rect_height_rows,
+                control.row_groups_per_burst,
+                control.bursts_per_frame_budget,
+                control.phase_rows_per_sweep,
+            );
+        }
+        let rect_h = core::cmp::min(control.rect_height_rows as u64, scanout_h as u64);
+        let rect_y = (scanout_h as u64).saturating_sub(rect_h) / 2;
+        let row_groups_per_frame = core::cmp::max(
+            1,
+            rect_h.saturating_add(rows_per_segment.saturating_sub(1)) / rows_per_segment,
+        );
+        let submits_per_tick = row_groups_per_frame;
+        let row_groups_per_burst = core::cmp::max(
+            1,
+            core::cmp::min(row_groups_per_frame, control.row_groups_per_burst as u64),
+        );
+        let bursts_per_frame = row_groups_per_frame
+            .saturating_add(row_groups_per_burst.saturating_sub(1))
+            / row_groups_per_burst;
+        let bursts_per_frame_budget = core::cmp::max(
+            1,
+            core::cmp::min(control.bursts_per_frame_budget as u64, bursts_per_frame),
+        );
+        let frames_per_sweep = core::cmp::max(
+            1,
+            bursts_per_frame
+                .saturating_add(bursts_per_frame_budget.saturating_sub(1))
+                / bursts_per_frame_budget,
+        );
         let first_serial = frame.saturating_mul(submits_per_tick);
+        let sweep_frame = frame / frames_per_sweep;
         let mut submitted = 0u64;
         let mut finished = 0u64;
         let mut readback_ok = 0u64;
         let mut dispatch_delta = 0u64;
         let mut burst = 0u64;
         let mut last_proof = None;
-        while burst < bursts_per_frame {
-            let local_row_group = burst.saturating_mul(row_groups_per_burst);
+        let burst_window_start = burst_cursor;
+        while burst < bursts_per_frame_budget {
+            let burst_slot = assign_burst_slot();
+            let burst_index = (burst_window_start + burst) % bursts_per_frame;
+            let local_row_group = burst_index.saturating_mul(row_groups_per_burst);
             let row_groups_this_burst = core::cmp::min(
                 row_groups_per_burst,
                 row_groups_per_frame.saturating_sub(local_row_group),
             );
             let local_row = local_row_group.saturating_mul(rows_per_segment);
-            let phase_rows = frame.wrapping_mul(MANDELBROT_GPGPU_ANIM_PHASE_ROWS_PER_FRAME);
+            let phase_rows = sweep_frame.wrapping_mul(control.phase_rows_per_sweep as u64);
             let band = local_row.saturating_add(phase_rows) / MANDELBROT_GPGPU_ANIM_BAND_HEIGHT;
-            let color_seed = if MANDELBROT_GPGPU_FULL_FRAME_COLOR_FLIP {
-                MANDELBROT_GPGPU_ANIM_PALETTE[(frame & 7) as usize]
+            let color_seed = if control.full_frame_color_flip() {
+                MANDELBROT_GPGPU_ANIM_PALETTE[(sweep_frame & 7) as usize]
             } else {
-                MANDELBROT_GPGPU_ANIM_PALETTE[((band.saturating_add(frame)) & 7) as usize]
+                MANDELBROT_GPGPU_ANIM_PALETTE[((band.saturating_add(sweep_frame)) & 7) as usize]
             };
             let proof =
                 crate::intel::submit_gpgpu_primary_scanout_line1280_groupid_rows_fullwidth_color_burst(
@@ -291,6 +455,22 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
                     rect_w as u32,
                     rect_h as u32,
                 );
+            let burst_snapshot = crate::chronos::latest_snapshot();
+            if frame < 2 || frame % 64 == 0 {
+                crate::log!(
+                    "mandelbrot-gpu-sidequest: burst frame={} idx={} slot={} rows={}..+{} seed=0x{:08X} result={} ms={} ticks={} seq={}\n",
+                    frame,
+                    burst,
+                    burst_slot,
+                    local_row_group,
+                    row_groups_this_burst,
+                    color_seed,
+                    if proof.submitted { "ok" } else { "fail" },
+                    burst_snapshot.mono_ms,
+                    burst_snapshot.mono_ticks,
+                    burst_snapshot.seq
+                );
+            }
             if proof.submitted {
                 submitted = submitted.saturating_add(row_groups_this_burst);
             }
@@ -305,23 +485,46 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
                 crate::r::readiness::set(crate::r::readiness::MANDELBROT_GPU_SIDEQUEST_READY);
                 released_lumen = true;
             }
-            let proof_ok = proof.readback_ok;
+            let proof_ok = proof.readback_ok
+                || (control.visual_only_ignore_retire() && proof.submitted);
             last_proof = Some(proof);
             if !proof_ok {
                 break;
             }
             burst += 1;
         }
+        if bursts_per_frame != 0 {
+            burst_cursor = (burst_window_start + burst) % bursts_per_frame;
+        }
         let frame_notified = submitted != 0
-            && readback_ok == submitted
-            && MANDELBROT_GPGPU_NOTIFY_AFTER_FULLSCREEN_SWEEP
+            && (readback_ok == submitted || control.visual_only_ignore_retire())
+            && control.notify_after_sweep()
             && crate::intel::notify_gpgpu_primary_scanout_external_write(
                 "gpgpu-primary-scanout-line1280-frame",
                 0,
                 MANDELBROT_GPGPU_PRESENT_FLUSH_BYTES,
             );
 
-        let should_log_frame = frame < 4 || frame % 64 == 0 || readback_ok != submitted;
+        let telemetry_failed =
+            readback_ok != submitted && !control.visual_only_ignore_retire();
+        let should_log_frame = frame < 4 || frame % 64 == 0 || telemetry_failed;
+        if should_log_frame && let Some(last_proof) = last_proof {
+            crate::log!(
+                "mandelbrot-gpu-sidequest: frame-summary frame={} sweep_frame={} frames_per_sweep={} burst_cursor={} bursts_actual={} bursts_budget={} bursts_max={} slot_pool={}..+{} control_version={} gpu=0x{:X} fps_nominal=60 visual_only={}\n",
+                frame,
+                sweep_frame,
+                frames_per_sweep,
+                burst_window_start,
+                burst,
+                bursts_per_frame_budget,
+                bursts_per_frame,
+                MANDELBROT_BURST_LANE_POOL_START,
+                MANDELBROT_BURST_LANE_POOL_SIZE,
+                control.version,
+                last_proof.output_gpu,
+                control.visual_only_ignore_retire() as u8
+            );
+        }
         if should_log_frame && let Some(last_proof) = last_proof {
             crate::log!(
                 "mandelbrot-gpu-sidequest: gpgpu-primary-framebuffer-visible-line1280-groupid-row-loop frame={} first_serial={} rect={}x{}@{},{} segments_per_row={} rows_per_segment={} row_groups_per_frame={} row_groups_per_burst={} bursts_per_frame={} walker_submits_per_frame={} full_frame_color_flip={} band_height={} phase_rows={} submitted={} finished={} readback_ok={} frame_notified={} reason={} program_source={} target_gpu=0x{:X} sample_before=0x{:08X} sample_after=0x{:08X} sample_change_mask=0x{:016X} lane_dispatch_delta={} finish_marker=0x{:08X} lumen_released={} action={} next={} deliverable=visible-window-line1280-groupid-row-animated\n",
@@ -336,10 +539,10 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
                 row_groups_per_frame,
                 row_groups_per_burst,
                 bursts_per_frame,
-                bursts_per_frame,
-                MANDELBROT_GPGPU_FULL_FRAME_COLOR_FLIP as u8,
+                bursts_per_frame_budget,
+                control.full_frame_color_flip() as u8,
                 MANDELBROT_GPGPU_ANIM_BAND_HEIGHT,
-                frame.wrapping_mul(MANDELBROT_GPGPU_ANIM_PHASE_ROWS_PER_FRAME),
+                phase_rows,
                 submitted,
                 finished,
                 readback_ok,
@@ -360,6 +563,8 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
                 },
                 if readback_ok == submitted {
                     "continue-fullscreen-fill"
+                } else if control.visual_only_ignore_retire() && submitted != 0 {
+                    "continue-visual-groupid-flow"
                 } else if dispatch_delta != 0 {
                     "fix-fullscreen-line-store"
                 } else {

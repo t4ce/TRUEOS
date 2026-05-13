@@ -183,7 +183,7 @@ fn process_jpeg_job(job: HwPicJob) -> HwPicOutput {
     let Some(dev) = super::claimed_device() else {
         return failed_output(&job, -2);
     };
-    let (_engine, windows) = super::xelp_media2_ngin::default_decode_engine_and_window();
+    let (engine, windows) = super::xelp_media2_ngin::default_decode_engine_and_window();
     let Some(backing) = super::xelp_media2_ngin::ensure_decode_backing(dev, windows) else {
         return failed_output(&job, -5);
     };
@@ -191,9 +191,32 @@ fn process_jpeg_job(job: HwPicJob) -> HwPicOutput {
         return failed_output(&job, -12);
     }
 
-    // First landing patch owns the async object model and proven media backing.
-    // The JPEG MFX packet builder will replace this placeholder with a submitted
-    // VDBOX decode and publish the decoded surface under the same id.
+    let Some(proof) = super::xelp_media2_ngin::stream_encoded_to_bitstream(
+        dev,
+        engine,
+        windows,
+        backing,
+        job.encoded.as_slice(),
+    ) else {
+        return failed_output(&job, -6);
+    };
+
+    crate::log!(
+        "intel/hw_pic: jpeg encoded-stream id={} engine={} bytes=0x{:X}/0x{:X} bitstream_gpu=0x{:X} bitstream_phys=0x{:X} bitstream_virt=0x{:X} sig=0x{:08X} fw_ack=0x{:08X} fw_awake={}\n",
+        job.id,
+        proof.engine_name,
+        proof.bytes_written,
+        proof.capacity,
+        proof.bitstream_gpu_addr,
+        proof.bitstream_phys,
+        proof.bitstream_virt,
+        proof.signature,
+        proof.forcewake_global_ack,
+        proof.forcewake_awake_count
+    );
+
+    // The first hardware integration stage proves the service owns the media
+    // bitstream path. JPEG MFX command emission will turn this into Ready.
     HwPicOutput {
         id: job.id,
         codec: job.codec,
