@@ -660,6 +660,19 @@ pub(crate) fn submit_gpgpu_primary_scanout_groupid_line320_probe(
     self::gpgpu::submit_gpgpu_primary_scanout_groupid_line320_probe(mode, row_index)
 }
 
+pub(crate) type MandelbrotArtifactControlSnapshot =
+    crate::tst_mandelbrot_gpu_sidequest::MandelbrotArtifactControlSnapshot;
+
+pub(crate) fn mandelbrot_artifact_control_snapshot() -> MandelbrotArtifactControlSnapshot {
+    crate::tst_mandelbrot_gpu_sidequest::mandelbrot_artifact_control_snapshot()
+}
+
+pub(crate) fn mandelbrot_artifact_control_replace(
+    next: MandelbrotArtifactControlSnapshot,
+) -> MandelbrotArtifactControlSnapshot {
+    crate::tst_mandelbrot_gpu_sidequest::mandelbrot_artifact_control_replace(next)
+}
+
 pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd8_probe(
     mode: u32,
     row_index: u32,

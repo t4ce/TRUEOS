@@ -8,7 +8,7 @@ pub(crate) const SERVICE_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const NET_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
 pub(crate) const USB_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const STORAGE_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
-pub(crate) const GFX_LOG_LEVEL: LevelFilter = LevelFilter::Error;
+pub(crate) const GFX_LOG_LEVEL: LevelFilter = LevelFilter::Info;
 pub(crate) const HV_LOG_LEVEL: LevelFilter = LevelFilter::Error;
 
 #[allow(non_upper_case_globals)]

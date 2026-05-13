@@ -871,6 +871,14 @@ fn surface_signature(bytes: &[u8]) -> (u32, usize) {
     (signature, nonzero)
 }
 
+fn byte_signature(bytes: &[u8]) -> u32 {
+    let mut signature = 0u32;
+    for &value in bytes.iter().take(4096) {
+        signature = signature.rotate_left(5) ^ u32::from(value);
+    }
+    signature
+}
+
 const MEDIA_YTILE_W: usize = 128;
 const MEDIA_YTILE_H: usize = 32;
 
