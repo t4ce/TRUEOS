@@ -334,7 +334,7 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
     let _ = notify_primary_surface_present(primary_surface, "scanout-demo", byte_len);
 
     let logo_ok = if PRIMARY_BOOT_LOGO_ENABLED {
-        probe_hw_logo_decode()
+        present_sw_logo_decode()
     } else {
         false
     };
@@ -360,6 +360,25 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
         ok as u8,
         logo_ok as u8
     );
+}
+
+fn present_sw_logo_decode() -> bool {
+    match crate::gfx::jpeg_codec::decode_jpeg_rgba(PRIMARY_BOOT_LOGO_JPEG) {
+        Ok(decoded) => present_rgba_surface_center(
+            decoded.rgba.as_slice(),
+            decoded.width,
+            decoded.height,
+            (decoded.width as usize).saturating_mul(4),
+        ),
+        Err(err) => {
+            crate::log!(
+                "intel/display: primary-logo decode failed code={} bytes=0x{:X}\n",
+                err.code(),
+                PRIMARY_BOOT_LOGO_JPEG.len()
+            );
+            false
+        }
+    }
 }
 
 fn probe_hw_logo_decode() -> bool {

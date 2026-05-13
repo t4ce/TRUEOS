@@ -1,5 +1,6 @@
-use alloc::vec::Vec;
 use core3::io::Cursor;
+
+use alloc::vec::Vec;
 
 pub struct DecodedPng {
     pub width: u32,
@@ -22,75 +23,6 @@ impl PngDecodeError {
             Self::DecodeFailed => -9,
         }
     }
-}
-
-fn indexed_row_bytes(width: u32, bit_depth: png::BitDepth) -> Result<usize, PngDecodeError> {
-    let bits_per_pixel = match bit_depth {
-        png::BitDepth::One => 1usize,
-        png::BitDepth::Two => 2usize,
-        png::BitDepth::Four => 4usize,
-        png::BitDepth::Eight => 8usize,
-        png::BitDepth::Sixteen => return Err(PngDecodeError::Unsupported),
-    };
-    let width = width as usize;
-    Ok(width.saturating_mul(bits_per_pixel).saturating_add(7) / 8)
-}
-
-fn indexed_sample(bits: &[u8], bit_depth: png::BitDepth, x: usize) -> Result<u8, PngDecodeError> {
-    match bit_depth {
-        png::BitDepth::One => {
-            let byte = *bits.get(x / 8).ok_or(PngDecodeError::DecodeFailed)?;
-            Ok((byte >> (7 - (x % 8))) & 0x01)
-        }
-        png::BitDepth::Two => {
-            let byte = *bits.get(x / 4).ok_or(PngDecodeError::DecodeFailed)?;
-            Ok((byte >> (6 - ((x % 4) * 2))) & 0x03)
-        }
-        png::BitDepth::Four => {
-            let byte = *bits.get(x / 2).ok_or(PngDecodeError::DecodeFailed)?;
-            Ok(if (x & 1) == 0 { byte >> 4 } else { byte & 0x0F })
-        }
-        png::BitDepth::Eight => bits.get(x).copied().ok_or(PngDecodeError::DecodeFailed),
-        png::BitDepth::Sixteen => Err(PngDecodeError::Unsupported),
-    }
-}
-
-fn expand_indexed_png_to_rgba(
-    width: u32,
-    height: u32,
-    bit_depth: png::BitDepth,
-    packed_indices: &[u8],
-    palette: &[u8],
-    trns: Option<&[u8]>,
-) -> Result<Vec<u8>, PngDecodeError> {
-    if palette.len() < 3 {
-        return Err(PngDecodeError::Invalid);
-    }
-
-    let row_bytes = indexed_row_bytes(width, bit_depth)?;
-    let pixel_count = (width as usize).saturating_mul(height as usize);
-    let expected = row_bytes.saturating_mul(height as usize);
-    if packed_indices.len() < expected {
-        return Err(PngDecodeError::DecodeFailed);
-    }
-
-    let mut rgba = Vec::with_capacity(pixel_count.saturating_mul(4));
-    for y in 0..height as usize {
-        let row_start = y.saturating_mul(row_bytes);
-        let row = &packed_indices[row_start..row_start + row_bytes];
-        for x in 0..width as usize {
-            let sample = indexed_sample(row, bit_depth, x)? as usize;
-            let palette_idx = sample.saturating_mul(3);
-            let rgb = palette
-                .get(palette_idx..palette_idx + 3)
-                .ok_or(PngDecodeError::DecodeFailed)?;
-            let alpha = trns
-                .and_then(|table| table.get(sample).copied())
-                .unwrap_or(0xFF);
-            rgba.extend_from_slice(&[rgb[0], rgb[1], rgb[2], alpha]);
-        }
-    }
-    Ok(rgba)
 }
 
 fn decode_indexed_png_rgba(bytes: &[u8]) -> Result<DecodedPng, PngDecodeError> {
@@ -122,51 +54,15 @@ fn decode_indexed_png_rgba(bytes: &[u8]) -> Result<DecodedPng, PngDecodeError> {
     Ok(DecodedPng {
         width,
         height,
-        rgba: expand_indexed_png_to_rgba(
+        rgba: super::png_decode_pool::expand_indexed_png_to_rgba(
             width,
             height,
             bit_depth,
-            indexed.as_slice(),
-            palette.as_slice(),
-            trns.as_deref(),
+            indexed,
+            palette,
+            trns,
         )?,
     })
-}
-
-fn expand_png_output_to_rgba(
-    color_type: png::ColorType,
-    bit_depth: png::BitDepth,
-    pixels: &[u8],
-) -> Result<Vec<u8>, PngDecodeError> {
-    if bit_depth != png::BitDepth::Eight {
-        return Err(PngDecodeError::Unsupported);
-    }
-
-    match color_type {
-        png::ColorType::Rgba => Ok(pixels.to_vec()),
-        png::ColorType::Rgb => {
-            let mut out = Vec::with_capacity((pixels.len() / 3) * 4);
-            for chunk in pixels.chunks_exact(3) {
-                out.extend_from_slice(&[chunk[0], chunk[1], chunk[2], 0xFF]);
-            }
-            Ok(out)
-        }
-        png::ColorType::Grayscale => {
-            let mut out = Vec::with_capacity(pixels.len() * 4);
-            for &v in pixels {
-                out.extend_from_slice(&[v, v, v, 0xFF]);
-            }
-            Ok(out)
-        }
-        png::ColorType::GrayscaleAlpha => {
-            let mut out = Vec::with_capacity((pixels.len() / 2) * 4);
-            for chunk in pixels.chunks_exact(2) {
-                out.extend_from_slice(&[chunk[0], chunk[0], chunk[0], chunk[1]]);
-            }
-            Ok(out)
-        }
-        png::ColorType::Indexed => Err(PngDecodeError::Unsupported),
-    }
 }
 
 pub fn decode_png_rgba(bytes: &[u8]) -> Result<DecodedPng, PngDecodeError> {
@@ -194,7 +90,13 @@ pub fn decode_png_rgba(bytes: &[u8]) -> Result<DecodedPng, PngDecodeError> {
         .next_frame(&mut rgba)
         .map_err(|_| PngDecodeError::DecodeFailed)?;
     rgba.truncate(info.buffer_size());
-    let rgba = expand_png_output_to_rgba(info.color_type, info.bit_depth, &rgba)?;
+    let rgba = super::png_decode_pool::expand_png_output_to_rgba(
+        info.color_type,
+        info.bit_depth,
+        info.width,
+        info.height,
+        rgba,
+    )?;
 
     Ok(DecodedPng {
         width: info.width,

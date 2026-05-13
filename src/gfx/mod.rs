@@ -4,6 +4,7 @@ pub mod jpeg_codec;
 pub mod lyon;
 pub mod mandelbrot;
 pub mod png_codec;
+mod png_decode_pool;
 pub mod screenshot;
 pub mod svg;
 pub mod virtio_gpu_3d;
