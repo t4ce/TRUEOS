@@ -67,7 +67,7 @@ const PLANE_COLOR_ALPHA_MASK: u32 = 0x03 << 4;
 const PIPE_BOTTOM_COLOR_RGB: u32 = 0x00FF_37FF;
 const PRIMARY_FORMAT_PROBE_XRGB: u32 = 0;
 const PRIMARY_FORMAT_PROBE_XBGR: u32 = 1;
-const PRIMARY_FORMAT_PROBE_MODE: u32 = PRIMARY_FORMAT_PROBE_XBGR;
+const PRIMARY_FORMAT_PROBE_MODE: u32 = PRIMARY_FORMAT_PROBE_XRGB;
 const PRIMARY_PRESENT_DISABLE_PSR_PROBE: bool = true;
 const PRIMARY_BYTES_PER_PIXEL: u32 = 4;
 const PRIMARY_BASELINE_COLOR: u32 = 0x00FF_37FF;
@@ -331,7 +331,6 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
     };
     *PRIMARY_SURFACE.lock() = Some(primary_surface);
     log_primary_scanout_pte_window(dev, "after-primary-init", byte_len);
-    let _ = notify_primary_surface_present(primary_surface, "scanout-demo", byte_len);
 
     let logo_ok = if PRIMARY_BOOT_LOGO_ENABLED {
         present_sw_logo_decode()
@@ -763,9 +762,7 @@ pub(crate) fn present_rgba_surface_center(
         }
     }
 
-    let byte_len = dst_pitch.saturating_mul(dst_height);
-    crate::intel::dma_flush(surface.virt, byte_len);
-    notify_primary_surface_present(surface, "rgba-center", byte_len);
+    crate::intel::dma_flush(surface.virt, dst_pitch.saturating_mul(dst_height));
     true
 }
 

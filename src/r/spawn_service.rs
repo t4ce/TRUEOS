@@ -543,8 +543,7 @@ fn spawn_hw_pic_service(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_hw_logo_present_task(spawner: Spawner) -> SpawnAttempt {
-    let _ = spawner;
-    SpawnAttempt::Skipped
+    spawn_on_worker(spawner, |_worker_spawner| crate::intel::hw_logo_present_task())
 }
 
 fn spawn_intel_hda_probe_task(spawner: Spawner) -> SpawnAttempt {

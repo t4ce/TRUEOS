@@ -10,6 +10,7 @@ use super::png_codec::PngDecodeError;
 
 const PNG_ROW_EXPAND_TASK_POOL_SIZE: usize = 4;
 const PNG_ROW_EXPAND_MIN_ROWS_PER_TASK: usize = 8;
+const PNG_ROW_EXPAND_SINGLE_AP_MAX_PIXELS: usize = 256 * 256;
 
 enum RowExpandKind {
     Indexed {
@@ -252,8 +253,14 @@ fn expand_gray_alpha_rows(
     Ok(out)
 }
 
-fn desired_part_count(height: usize) -> usize {
-    let max_parts = cmp::min(PNG_ROW_EXPAND_TASK_POOL_SIZE, height.max(1));
+fn desired_part_count(width: usize, height: usize) -> usize {
+    let pixel_count = width.saturating_mul(height);
+    let pool_cap = if pixel_count <= PNG_ROW_EXPAND_SINGLE_AP_MAX_PIXELS {
+        2
+    } else {
+        PNG_ROW_EXPAND_TASK_POOL_SIZE
+    };
+    let max_parts = cmp::min(pool_cap, height.max(1));
     if max_parts <= 1 {
         return 1;
     }
@@ -280,7 +287,7 @@ fn partition_rows(height: usize, part_count: usize) -> Vec<Range<usize>> {
 }
 
 fn run_parallel(plan: RowExpandPlan) -> Result<Vec<u8>, PngDecodeError> {
-    let part_count = desired_part_count(plan.height);
+    let part_count = desired_part_count(plan.width, plan.height);
     if part_count <= 1 {
         return plan.process_rows(0..plan.height);
     }
@@ -307,9 +314,7 @@ fn spawn_parallel(job: &Arc<RowExpandJob>) {
         let Ok(token) = png_row_expand_task(job.clone(), part_index) else {
             break;
         };
-        if spawner.spawn(token).is_err() {
-            break;
-        }
+        spawner.spawn(token);
         spawned[part_index] = true;
     }
 
@@ -349,7 +354,7 @@ pub(super) fn expand_indexed_png_to_rgba(
     if !crate::workers::has_background_worker_slot() {
         return plan.process_rows(0..plan.height);
     }
-    let ranges = partition_rows(plan.height, desired_part_count(plan.height));
+    let ranges = partition_rows(plan.height, desired_part_count(plan.width, plan.height));
     if ranges.len() <= 1 {
         return plan.process_rows(0..plan.height);
     }
@@ -392,7 +397,7 @@ pub(super) fn expand_png_output_to_rgba(
     if !crate::workers::has_background_worker_slot() {
         return plan.process_rows(0..plan.height);
     }
-    let ranges = partition_rows(plan.height, desired_part_count(plan.height));
+    let ranges = partition_rows(plan.height, desired_part_count(plan.width, plan.height));
     if ranges.len() <= 1 {
         return plan.process_rows(0..plan.height);
     }
