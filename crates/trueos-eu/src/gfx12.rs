@@ -476,6 +476,33 @@ pub const PRIMARY_SCANOUT_LINE1280_SCALAR_BW_WORD_DWORDS: usize =
 pub const PRIMARY_SCANOUT_LINE1280_SCALAR_BW_ADDRESS_BASE_DWORD: usize = 7;
 pub const PRIMARY_SCANOUT_LINE1280_SCALAR_BW_COLOR_DWORD: usize = 3;
 pub const PRIMARY_SCANOUT_LINE1280_SCALAR_BW_STORE_SEND_DWORD: usize = 11;
+pub const PRIMARY_SCANOUT_LINE1280_ADDRCOLOR_SCALAR_BW_PROGRAM_NAME: &str =
+    "gfx12-primary-scanout-line1280-scalar-address-color-step8-hdc1-stateless-unrolled-store-then-ts-eot";
+pub const PRIMARY_SCANOUT_LINE1280_ADDRCOLOR_SCALAR_BW_LANES: usize =
+    PRIMARY_SCANOUT_LINE1280_SCALAR_BW_LANES;
+pub const PRIMARY_SCANOUT_LINE1280_ADDRCOLOR_SCALAR_BW_WORD_DWORDS: usize =
+    PRIMARY_SCANOUT_LINE1280_SCALAR_BW_WORD_DWORDS + 4;
+pub const PRIMARY_SCANOUT_LINE1280_ADDRCOLOR_SCALAR_BW_ADDRESS_BASE_DWORD: usize = 7;
+pub const PRIMARY_SCANOUT_LINE1280_ADDRCOLOR_SCALAR_BW_COLOR_SEED_DWORD: usize = 11;
+pub const PRIMARY_SCANOUT_LINE1280_ADDRCOLOR_SCALAR_BW_STORE_SEND_DWORD: usize = 15;
+pub const PRIMARY_SCANOUT_LINE1280_LANE8ROWS_PROGRAM_NAME: &str =
+    "gfx12-primary-scanout-line1280-lane8rows-address-color-step8-hdc1-t62-send-bti1-simd8-store-then-ts-eot";
+pub const PRIMARY_SCANOUT_LINE1280_LANE8ROWS_LANES: usize =
+    PRIMARY_SCANOUT_LINE1280_SCALAR_BW_LANES;
+pub const PRIMARY_SCANOUT_LINE1280_LANE8ROWS_ROWS: usize = 8;
+pub const PRIMARY_SCANOUT_LINE1280_LANE8ROWS_PITCH_BYTES: u32 = 0x2800;
+pub const PRIMARY_SCANOUT_LINE1280_LANE8ROWS_COLOR_STEP_PIXELS: usize =
+    PRIMARY_SCANOUT_LINE1280_SCALAR_BW_COLOR_STEP_PIXELS;
+pub const PRIMARY_SCANOUT_LINE1280_LANE8ROWS_COLOR_STEP_DWORDS: usize =
+    PRIMARY_SCANOUT_LINE1280_SCALAR_BW_COLOR_STEP_DWORDS;
+pub const PRIMARY_SCANOUT_LINE1280_LANE8ROWS_WORD_DWORDS: usize =
+    20 + PRIMARY_SCANOUT_LINE1280_LANE8ROWS_LANES * 4
+        + (PRIMARY_SCANOUT_LINE1280_LANE8ROWS_LANES - 1) * 4
+        + PRIMARY_SCANOUT_LINE1280_LANE8ROWS_COLOR_STEP_DWORDS * 4
+        + 8;
+pub const PRIMARY_SCANOUT_LINE1280_LANE8ROWS_ADDRESS_BASE_DWORD: usize = 15;
+pub const PRIMARY_SCANOUT_LINE1280_LANE8ROWS_COLOR_SEED_DWORD: usize = 19;
+pub const PRIMARY_SCANOUT_LINE1280_LANE8ROWS_STORE_SEND_DWORD: usize = 23;
 pub const PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_PROGRAM_NAME: &str =
     "gfx12-primary-scanout-groupid-line320-scalar-bw-hdc1-stateless-unrolled-store-then-ts-eot";
 pub const PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_GROUPS: usize = 8;
@@ -487,6 +514,22 @@ pub const PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_WORD_DWORDS: usize =
 pub const PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_ADDRESS_BASE_DWORD: usize = 25;
 pub const PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_COLOR_DWORD: usize = 29;
 pub const PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_STORE_SEND_DWORD: usize = 30;
+pub const PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_PROGRAM_NAME: &str =
+    "gfx12-primary-scanout-groupid-line1280-rows-scalar-step8-color-hdc1-stateless-unrolled-store-then-ts-eot";
+pub const PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_LANES: usize =
+    PRIMARY_SCANOUT_LINE1280_SCALAR_BW_LANES;
+pub const PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_PITCH_BYTES: u32 = 0x2800;
+pub const PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_COLOR_STEP_PIXELS: usize =
+    PRIMARY_SCANOUT_LINE1280_SCALAR_BW_COLOR_STEP_PIXELS;
+pub const PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_COLOR_STEP_DWORDS: usize =
+    PRIMARY_SCANOUT_LINE1280_SCALAR_BW_COLOR_STEP_DWORDS;
+pub const PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_WORD_DWORDS: usize =
+    PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_LANES * 8
+        + PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_COLOR_STEP_DWORDS * 4
+        + 34;
+pub const PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_ADDRESS_BASE_DWORD: usize = 25;
+pub const PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_COLOR_DWORD: usize = 29;
+pub const PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_STORE_SEND_DWORD: usize = 33;
 pub const PRIMARY_SCANOUT_ROW2560_SIMD8_BW_PROGRAM_NAME: &str =
     "gfx12-primary-scanout-row2560-simd8-bw-hdc1-stateless-unrolled-store-then-ts-eot";
 pub const PRIMARY_SCANOUT_ROW2560_SIMD8_BW_PIXELS: usize = 2560;
@@ -1182,6 +1225,136 @@ pub static PRIMARY_SCANOUT_LINE1280_SCALAR_BW_HDC1_STATELESS_UNROLLED_STORE_THEN
     expects_store: true,
 };
 
+const fn primary_scanout_line1280_addrcolor_scalar_bw_words()
+-> [u32; PRIMARY_SCANOUT_LINE1280_ADDRCOLOR_SCALAR_BW_WORD_DWORDS] {
+    let mut words = [0u32; PRIMARY_SCANOUT_LINE1280_ADDRCOLOR_SCALAR_BW_WORD_DWORDS];
+    words[0] = 0x80030061;
+    words[1] = 0x04054660;
+    words[2] = 0x00000000;
+    words[3] = 0x00000000;
+    words[4] = 0x80030061;
+    words[5] = 0x7F054220;
+    words[6] = 0x00000000;
+    words[7] = 0x00840058;
+    words[8] = 0x00030140;
+    words[9] = 0x04058660;
+    words[10] = 0x06467F05;
+    words[11] = 0x00000000;
+
+    let mut cursor = 12usize;
+    let mut pixel = 0usize;
+    while pixel < PRIMARY_SCANOUT_LINE1280_ADDRCOLOR_SCALAR_BW_LANES {
+        words[cursor] = 0x00030131;
+        words[cursor + 1] = 0x00000000;
+        words[cursor + 2] = 0xCDFA7F0C;
+        words[cursor + 3] = 0x009A040C;
+        cursor += 4;
+        pixel += 1;
+
+        if pixel < PRIMARY_SCANOUT_LINE1280_ADDRCOLOR_SCALAR_BW_LANES {
+            if pixel % PRIMARY_SCANOUT_LINE1280_SCALAR_BW_COLOR_STEP_PIXELS == 0 {
+                words[cursor] = 0x00030140;
+                words[cursor + 1] = 0x04058660;
+                words[cursor + 2] = 0x06460405;
+                words[cursor + 3] = 0x00010101;
+                cursor += 4;
+            }
+            words[cursor] = 0x00030140;
+            words[cursor + 1] = 0x7F058660;
+            words[cursor + 2] = 0x06467F05;
+            words[cursor + 3] = 0x00000004;
+            cursor += 4;
+        }
+    }
+
+    words[cursor] = 0x80030061;
+    words[cursor + 1] = 0x7F050220;
+    words[cursor + 2] = 0x00460005;
+    words[cursor + 3] = 0x00000000;
+    words[cursor + 4] = 0x80030131;
+    words[cursor + 5] = 0x00000004;
+    words[cursor + 6] = 0x70007F0C;
+    words[cursor + 7] = 0x00000000;
+    words
+}
+
+pub static PRIMARY_SCANOUT_LINE1280_ADDRCOLOR_SCALAR_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS:
+    [u32; PRIMARY_SCANOUT_LINE1280_ADDRCOLOR_SCALAR_BW_WORD_DWORDS] =
+    primary_scanout_line1280_addrcolor_scalar_bw_words();
+
+pub static PRIMARY_SCANOUT_LINE1280_ADDRCOLOR_SCALAR_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT:
+    EuArtifact = EuArtifact {
+    name: PRIMARY_SCANOUT_LINE1280_ADDRCOLOR_SCALAR_BW_PROGRAM_NAME,
+    isa: EuIsa::Gfx12,
+    kind: EuArtifactKind::PrimaryScanoutLine1280ScalarBwThenHdc1StoreThenThreadSpawnerEot,
+    words: &PRIMARY_SCANOUT_LINE1280_ADDRCOLOR_SCALAR_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS,
+    expects_store: true,
+};
+
+const PRIMARY_SCANOUT_LINE1280_LANE8ROWS_HEX_BYTES: &[u8] =
+    include_bytes!("../../trueos-shader/scanout_block/scanout_line1280_lane8rows.hex");
+
+const fn scanout_hex_is_ws(byte: u8) -> bool {
+    byte == b' ' || byte == b'\n' || byte == b'\r' || byte == b'\t'
+}
+
+const fn scanout_hex_value(byte: u8) -> u32 {
+    match byte {
+        b'0'..=b'9' => (byte - b'0') as u32,
+        b'a'..=b'f' => (byte - b'a' + 10) as u32,
+        b'A'..=b'F' => (byte - b'A' + 10) as u32,
+        _ => 0,
+    }
+}
+
+const fn scanout_skip_hex_ws(bytes: &[u8], mut index: usize) -> usize {
+    while index < bytes.len() && scanout_hex_is_ws(bytes[index]) {
+        index += 1;
+    }
+    index
+}
+
+const fn scanout_hex_words<const WORDS: usize>(bytes: &[u8]) -> [u32; WORDS] {
+    let mut words = [0u32; WORDS];
+    let mut index = 0usize;
+    let mut out_byte = 0usize;
+    while out_byte < WORDS * 4 {
+        index = scanout_skip_hex_ws(bytes, index);
+        if index >= bytes.len() {
+            break;
+        }
+        let hi = scanout_hex_value(bytes[index]);
+        index += 1;
+        index = scanout_skip_hex_ws(bytes, index);
+        if index >= bytes.len() {
+            break;
+        }
+        let lo = scanout_hex_value(bytes[index]);
+        index += 1;
+
+        let word_index = out_byte / 4;
+        let word_shift = (out_byte % 4) * 8;
+        words[word_index] |= (hi << 4 | lo) << word_shift;
+        out_byte += 1;
+    }
+    words
+}
+
+// One workgroup is still one SIMD8 EU thread, but each lane is now a row pilot:
+// lane n stores the same 1280-pixel x run at base + n * scanout pitch.
+pub static PRIMARY_SCANOUT_LINE1280_LANE8ROWS_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS:
+    [u32; PRIMARY_SCANOUT_LINE1280_LANE8ROWS_WORD_DWORDS] =
+    scanout_hex_words(PRIMARY_SCANOUT_LINE1280_LANE8ROWS_HEX_BYTES);
+
+pub static PRIMARY_SCANOUT_LINE1280_LANE8ROWS_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT:
+    EuArtifact = EuArtifact {
+    name: PRIMARY_SCANOUT_LINE1280_LANE8ROWS_PROGRAM_NAME,
+    isa: EuIsa::Gfx12,
+    kind: EuArtifactKind::PrimaryScanoutLine1280ScalarBwThenHdc1StoreThenThreadSpawnerEot,
+    words: &PRIMARY_SCANOUT_LINE1280_LANE8ROWS_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS,
+    expects_store: true,
+};
+
 const fn primary_scanout_groupid_line320_scalar_bw_words()
 -> [u32; PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_WORD_DWORDS] {
     let mut words = [0u32; PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_WORD_DWORDS];
@@ -1266,6 +1439,97 @@ pub static PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_HDC1_STATELESS_UNROLLED_STO
     isa: EuIsa::Gfx12,
     kind: EuArtifactKind::PrimaryScanoutGroupidLine320ScalarBwThenHdc1StoreThenThreadSpawnerEot,
     words: &PRIMARY_SCANOUT_GROUPID_LINE320_SCALAR_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS,
+    expects_store: true,
+};
+
+const fn primary_scanout_groupid_line1280_rows_scalar_bw_words()
+-> [u32; PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_WORD_DWORDS] {
+    let mut words = [0u32; PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_WORD_DWORDS];
+
+    words[0] = 0x80030061;
+    words[1] = 0x31050220;
+    words[2] = 0x00000024;
+    words[3] = 0x00000000;
+    words[4] = 0x80030061;
+    words[5] = 0x32054220;
+    words[6] = 0x00000000;
+    words[7] = 0x00000000;
+    words[8] = 0x80030061;
+    words[9] = 0x33054220;
+    words[10] = 0x00000000;
+    words[11] = 0x00000000;
+    words[12] = 0xA40D0340;
+    words[13] = 0x0111310A;
+    words[14] = 0x80000361;
+    words[15] = 0x32454620;
+    words[16] = 0x00000000;
+    words[17] = 0x00000000;
+    words[18] = 0x80030241;
+    words[19] = 0x1C058660;
+    words[20] = 0x02003104;
+    words[21] = PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_PITCH_BYTES;
+    words[22] = 0x80030240;
+    words[23] = 0x7F058660;
+    words[24] = 0x06001C04;
+    words[25] = 0x00840058;
+    words[26] = 0x80030061;
+    words[27] = 0x04054660;
+    words[28] = 0x00000000;
+    words[29] = 0x00000000;
+
+    let mut cursor = 30usize;
+    let mut pixel = 0usize;
+    while pixel < PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_LANES {
+        words[cursor] = 0x00030131;
+        words[cursor + 1] = 0x00000000;
+        words[cursor + 2] = 0xCDFA7F0C;
+        words[cursor + 3] = 0x009A040C;
+        cursor += 4;
+        pixel += 1;
+
+        if pixel < PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_LANES {
+            if pixel % PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_COLOR_STEP_PIXELS == 0 {
+                words[cursor] = 0x00030140;
+                words[cursor + 1] = 0x04058660;
+                words[cursor + 2] = 0x06460405;
+                words[cursor + 3] = 0x00010101;
+                cursor += 4;
+            }
+            words[cursor] = 0x00030140;
+            words[cursor + 1] = 0x7F058660;
+            words[cursor + 2] = 0x06467F05;
+            words[cursor + 3] = 0x00000004;
+            cursor += 4;
+        }
+    }
+
+    words[cursor] = 0x80030061;
+    words[cursor + 1] = 0x7F050220;
+    words[cursor + 2] = 0x00460005;
+    words[cursor + 3] = 0x00000000;
+    words[cursor + 4] = 0x80030131;
+    words[cursor + 5] = 0x00000004;
+    words[cursor + 6] = 0x70007F0C;
+    words[cursor + 7] = 0x00000000;
+    words
+}
+
+// Mandelbrot sidequest row-pilot artifact.
+//
+// Runtime patches one base address and one color per row burst.  The walker
+// x-dimension supplies `gl_WorkGroupID.x`; EU code multiplies it by the live
+// scanout pitch (0x2800 bytes) so one walker covers many rows without a CPU
+// address patch for each row.
+pub static PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS:
+    [u32; PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_WORD_DWORDS] =
+    primary_scanout_groupid_line1280_rows_scalar_bw_words();
+
+pub static PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT:
+    EuArtifact = EuArtifact {
+    name: PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_PROGRAM_NAME,
+    isa: EuIsa::Gfx12,
+    kind: EuArtifactKind::PrimaryScanoutGroupidLine1280RowsScalarBwThenHdc1StoreThenThreadSpawnerEot,
+    words: &PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_HDC1_STATELESS_UNROLLED_STORE_THEN_TS_EOT_WORDS,
     expects_store: true,
 };
 

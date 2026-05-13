@@ -16,14 +16,15 @@ pub(crate) const MANDELBROT_TARGET_HEIGHT: u32 = 1440;
 pub(crate) const MANDELBROT_PUSH_CONSTANT_BYTES: u16 = 24;
 pub(crate) const MANDELBROT_GPGPU_LOOP_MS: u64 = 16;
 pub(crate) const MANDELBROT_GPGPU_PREVIEW_PIXELS_PER_TICK: usize = 8192;
-pub(crate) const MANDELBROT_GPGPU_RGB_ZOOM_RECT_WIDTH: u64 = MANDELBROT_TARGET_WIDTH as u64;
-pub(crate) const MANDELBROT_GPGPU_RGB_ZOOM_RECT_HEIGHT: u64 = MANDELBROT_TARGET_HEIGHT as u64;
+pub(crate) const MANDELBROT_GPGPU_RGB_ZOOM_RECT_WIDTH: u64 = 1280;
+pub(crate) const MANDELBROT_GPGPU_RGB_ZOOM_RECT_HEIGHT: u64 = 192;
 pub(crate) const MANDELBROT_GPGPU_ANIM_BAND_HEIGHT: u64 = 8;
 pub(crate) const MANDELBROT_GPGPU_ANIM_PHASE_ROWS_PER_FRAME: u64 =
     MANDELBROT_GPGPU_ANIM_BAND_HEIGHT;
 pub(crate) const MANDELBROT_GPGPU_FULL_FRAME_COLOR_FLIP: bool = true;
-// One full-frame submit dispatches partway but misses the post-walker marker.
-// Keep the next larger retiring candidate: two half-frame submits per 1440p frame.
+pub(crate) const MANDELBROT_GPGPU_GROUPID_LINE1280_ROWS_PER_BURST: u64 = 192;
+// One full-height submit dispatches partway but misses the post-walker marker.
+// Keep this baseline to one centered half-height area while we raise row-pilot parallelism.
 pub(crate) const MANDELBROT_GPGPU_LINE1280_MAX_SEGMENTS_PER_BURST: u64 =
     MANDELBROT_TARGET_HEIGHT as u64;
 pub(crate) const MANDELBROT_GPGPU_PRESENT_FLUSH_BYTES: usize = 0xE10000;
@@ -37,7 +38,7 @@ pub(crate) const MANDELBROT_GPGPU_ANIM_PALETTE: [u32; 8] = [
     0x0088_FF00,
     0x00FF_8800,
 ];
-pub(crate) const MANDELBROT_GPGPU_RUN_ROW2560_SIMD8_PROBE: bool = true;
+pub(crate) const MANDELBROT_GPGPU_RUN_ROW2560_SIMD8_PROBE: bool = false;
 pub(crate) const MANDELBROT_GPGPU_NOTIFY_AFTER_FULLSCREEN_SWEEP: bool = true;
 pub(crate) const MANDELBROT_GPGPU_RUN_GROUPID_LINE320_PROBE: bool = false;
 
@@ -148,7 +149,7 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
     let spirv_sig = byte_signature(shader_desc.bytes);
 
     crate::log!(
-        "mandelbrot-gpu-sidequest: attempted name={} called=1 hot=1 artifact_stage={} source={} spirv={} spirv_bytes={} spirv_sig=0x{:016X} target={}x{} rgba_bytes=0x{:X} push_constants={} render_path={} fallback_present={} scanout={}x{} primary_gpu=0x{:X} shader_helper_ready={} upload=custom-intel-gpgpu-program action=probe-groupid-then-render-visible-line1280-1440p-color-frame next=hardware-thread-id-row-fill\n",
+        "mandelbrot-gpu-sidequest: attempted name={} called=1 hot=1 artifact_stage={} source={} spirv={} spirv_bytes={} spirv_sig=0x{:016X} target={}x{} rgba_bytes=0x{:X} push_constants={} render_path={} fallback_present={} scanout={}x{} primary_gpu=0x{:X} shader_helper_ready={} upload=custom-intel-gpgpu-program action=render-visible-groupid-line1280-row-frame next=raise-row-burst-or-fold-x-segment\n",
         plan.name,
         plan.stage.as_str(),
         plan.source_path,
@@ -230,24 +231,34 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
             },
         );
     }
-    let rect_w = core::cmp::min(MANDELBROT_GPGPU_RGB_ZOOM_RECT_WIDTH, scanout_w as u64);
+    let line_pixels = trueos_eu::gfx12::PRIMARY_SCANOUT_LINE1280_SCALAR_BW_LANES as u64;
+    let rect_w = core::cmp::min(
+        core::cmp::min(MANDELBROT_GPGPU_RGB_ZOOM_RECT_WIDTH, scanout_w as u64),
+        line_pixels,
+    );
     let rect_h = core::cmp::min(MANDELBROT_GPGPU_RGB_ZOOM_RECT_HEIGHT, scanout_h as u64);
     let rect_x = (scanout_w as u64).saturating_sub(rect_w) / 2;
     let rect_y = (scanout_h as u64).saturating_sub(rect_h) / 2;
-    let line_pixels = trueos_eu::gfx12::PRIMARY_SCANOUT_LINE1280_SCALAR_BW_LANES as u64;
+    let rows_per_segment = 1u64;
     let segments_per_row =
         core::cmp::max(1, rect_w.saturating_add(line_pixels.saturating_sub(1)) / line_pixels);
-    let rows_per_tick = core::cmp::max(1, rect_h);
-    let submits_per_tick = segments_per_row.saturating_mul(rows_per_tick);
-    let max_rows_per_burst =
-        core::cmp::max(1, MANDELBROT_GPGPU_LINE1280_MAX_SEGMENTS_PER_BURST / segments_per_row);
-    let rows_per_burst = if MANDELBROT_GPGPU_FULL_FRAME_COLOR_FLIP {
-        core::cmp::min(rows_per_tick, max_rows_per_burst)
+    let row_groups_per_frame = core::cmp::max(
+        1,
+        rect_h.saturating_add(rows_per_segment.saturating_sub(1)) / rows_per_segment,
+    );
+    let submits_per_tick = row_groups_per_frame;
+    let row_groups_per_burst = if MANDELBROT_GPGPU_FULL_FRAME_COLOR_FLIP {
+        core::cmp::min(row_groups_per_frame, MANDELBROT_GPGPU_GROUPID_LINE1280_ROWS_PER_BURST)
     } else {
-        core::cmp::max(1, MANDELBROT_GPGPU_ANIM_BAND_HEIGHT)
+        core::cmp::max(
+            1,
+            MANDELBROT_GPGPU_ANIM_BAND_HEIGHT.saturating_add(rows_per_segment.saturating_sub(1))
+                / rows_per_segment,
+        )
     };
-    let bursts_per_frame =
-        rows_per_tick.saturating_add(rows_per_burst.saturating_sub(1)) / rows_per_burst;
+    let bursts_per_frame = row_groups_per_frame
+        .saturating_add(row_groups_per_burst.saturating_sub(1))
+        / row_groups_per_burst;
     loop {
         let first_serial = frame.saturating_mul(submits_per_tick);
         let mut submitted = 0u64;
@@ -257,10 +268,12 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
         let mut burst = 0u64;
         let mut last_proof = None;
         while burst < bursts_per_frame {
-            let local_row = burst.saturating_mul(rows_per_burst);
-            let rows_this_burst = core::cmp::min(rows_per_burst, rect_h.saturating_sub(local_row));
-            let segment_count = rows_this_burst.saturating_mul(segments_per_row);
-            let serial = first_serial.saturating_add(local_row.saturating_mul(segments_per_row));
+            let local_row_group = burst.saturating_mul(row_groups_per_burst);
+            let row_groups_this_burst = core::cmp::min(
+                row_groups_per_burst,
+                row_groups_per_frame.saturating_sub(local_row_group),
+            );
+            let local_row = local_row_group.saturating_mul(rows_per_segment);
             let phase_rows = frame.wrapping_mul(MANDELBROT_GPGPU_ANIM_PHASE_ROWS_PER_FRAME);
             let band = local_row.saturating_add(phase_rows) / MANDELBROT_GPGPU_ANIM_BAND_HEIGHT;
             let color_seed = if MANDELBROT_GPGPU_FULL_FRAME_COLOR_FLIP {
@@ -268,23 +281,24 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
             } else {
                 MANDELBROT_GPGPU_ANIM_PALETTE[((band.saturating_add(frame)) & 7) as usize]
             };
-            let proof = crate::intel::submit_gpgpu_primary_scanout_line_pilot_rect_color_burst(
-                color_seed,
-                serial as u32,
-                segment_count as u32,
-                rect_x as u32,
-                rect_y as u32,
-                rect_w as u32,
-                rect_h as u32,
-            );
+            let proof =
+                crate::intel::submit_gpgpu_primary_scanout_line1280_groupid_rows_fullwidth_color_burst(
+                    color_seed,
+                    local_row_group as u32,
+                    row_groups_this_burst as u32,
+                    rect_x as u32,
+                    rect_y as u32,
+                    rect_w as u32,
+                    rect_h as u32,
+                );
             if proof.submitted {
-                submitted = submitted.saturating_add(segment_count);
+                submitted = submitted.saturating_add(row_groups_this_burst);
             }
             if proof.finished {
-                finished = finished.saturating_add(segment_count);
+                finished = finished.saturating_add(row_groups_this_burst);
             }
             if proof.readback_ok {
-                readback_ok = readback_ok.saturating_add(segment_count);
+                readback_ok = readback_ok.saturating_add(row_groups_this_burst);
             }
             dispatch_delta = dispatch_delta.saturating_add(proof.dispatch_delta as u64);
             if proof.submitted && !released_lumen {
@@ -310,7 +324,7 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
         let should_log_frame = frame < 4 || frame % 64 == 0 || readback_ok != submitted;
         if should_log_frame && let Some(last_proof) = last_proof {
             crate::log!(
-                "mandelbrot-gpu-sidequest: gpgpu-primary-framebuffer-visible-line1280-burst-loop frame={} first_serial={} rect={}x{}@{},{} segments_per_row={} rows_per_tick={} rows_per_burst={} bursts_per_frame={} full_frame_color_flip={} band_height={} phase_rows={} submitted={} finished={} readback_ok={} frame_notified={} reason={} program_source={} target_gpu=0x{:X} sample_before=0x{:08X} sample_after=0x{:08X} sample_change_mask=0x{:016X} lane_dispatch_delta={} finish_marker=0x{:08X} lumen_released={} action={} next={} deliverable=visible-window-line1280-10k-lane-animated\n",
+                "mandelbrot-gpu-sidequest: gpgpu-primary-framebuffer-visible-line1280-groupid-row-loop frame={} first_serial={} rect={}x{}@{},{} segments_per_row={} rows_per_segment={} row_groups_per_frame={} row_groups_per_burst={} bursts_per_frame={} walker_submits_per_frame={} full_frame_color_flip={} band_height={} phase_rows={} submitted={} finished={} readback_ok={} frame_notified={} reason={} program_source={} target_gpu=0x{:X} sample_before=0x{:08X} sample_after=0x{:08X} sample_change_mask=0x{:016X} lane_dispatch_delta={} finish_marker=0x{:08X} lumen_released={} action={} next={} deliverable=visible-window-line1280-groupid-row-animated\n",
                 frame,
                 first_serial,
                 rect_w,
@@ -318,8 +332,10 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
                 rect_x,
                 rect_y,
                 segments_per_row,
-                rows_per_tick,
-                rows_per_burst,
+                rows_per_segment,
+                row_groups_per_frame,
+                row_groups_per_burst,
+                bursts_per_frame,
                 bursts_per_frame,
                 MANDELBROT_GPGPU_FULL_FRAME_COLOR_FLIP as u8,
                 MANDELBROT_GPGPU_ANIM_BAND_HEIGHT,

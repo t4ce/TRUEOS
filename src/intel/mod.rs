@@ -17,6 +17,7 @@ mod gpgpu;
 mod guc;
 pub mod hda;
 mod hw_cursor;
+pub(crate) mod hw_pic;
 pub(crate) mod state;
 pub(crate) mod stats;
 pub(crate) mod xelp_media2_ngin;
@@ -602,6 +603,48 @@ pub(crate) fn submit_gpgpu_primary_scanout_line_pilot_rect_color_burst(
     )
 }
 
+pub(crate) fn submit_gpgpu_primary_scanout_line1280_groupid_rows_color_burst(
+    color_seed: u32,
+    first_row_group: u32,
+    row_group_count: u32,
+    x_segment: u32,
+    rect_x: u32,
+    rect_y: u32,
+    rect_width: u32,
+    rect_height: u32,
+) -> GpgpuOneTileSentinelProof {
+    self::gpgpu::submit_gpgpu_primary_scanout_line1280_groupid_rows_color_burst(
+        color_seed,
+        first_row_group,
+        row_group_count,
+        x_segment,
+        rect_x,
+        rect_y,
+        rect_width,
+        rect_height,
+    )
+}
+
+pub(crate) fn submit_gpgpu_primary_scanout_line1280_groupid_rows_fullwidth_color_burst(
+    color_seed: u32,
+    first_row_group: u32,
+    row_group_count: u32,
+    rect_x: u32,
+    rect_y: u32,
+    rect_width: u32,
+    rect_height: u32,
+) -> GpgpuOneTileSentinelProof {
+    self::gpgpu::submit_gpgpu_primary_scanout_line1280_groupid_rows_fullwidth_color_burst(
+        color_seed,
+        first_row_group,
+        row_group_count,
+        rect_x,
+        rect_y,
+        rect_width,
+        rect_height,
+    )
+}
+
 pub(crate) fn notify_gpgpu_primary_scanout_external_write(
     reason: &str,
     flush_offset: usize,
@@ -812,6 +855,22 @@ pub async fn run_media_decode_async() {
 pub async fn run_media2_first_frame_async() -> Option<self::xelp_media2_ngin::Media2FirstFrameState>
 {
     self::xelp_media2_ngin::run_media2_first_frame_async().await
+}
+
+pub(crate) fn hw_pic_submit_jpeg(encoded: &[u8]) -> Result<u32, i32> {
+    self::hw_pic::submit_jpeg(encoded)
+}
+
+pub(crate) fn hw_pic_take_output() -> Option<self::hw_pic::HwPicOutput> {
+    self::hw_pic::take_output()
+}
+
+pub(crate) fn hw_pic_output_for_id(id: u32) -> Option<self::hw_pic::HwPicOutput> {
+    self::hw_pic::output_for_id(id)
+}
+
+pub(crate) fn hw_pic_snapshot() -> self::hw_pic::HwPicQueueSnapshot {
+    self::hw_pic::snapshot()
 }
 
 pub async fn run_media_source_warmup_async() {
