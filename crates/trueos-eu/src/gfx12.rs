@@ -1299,7 +1299,7 @@ const fn primary_scanout_row2560_simd8_bw_words()
     while send < PRIMARY_SCANOUT_ROW2560_SIMD8_BW_SENDS {
         words[cursor] = 0x00030131;
         words[cursor + 1] = 0x00000000;
-        words[cursor + 2] = 0xCDFA7F0C;
+        words[cursor + 2] = 0xCC027F0C;
         words[cursor + 3] = 0x009A040C;
         cursor += 4;
         send += 1;

@@ -894,10 +894,8 @@ fn line1280_segment_color_seed(
 ) -> u32 {
     const LANES_PER_PILOT: usize = trueos_eu::gfx12::PRIMARY_SCANOUT_LINE1280_SCALAR_BW_LANES;
 
-    let segments_per_row = core::cmp::max(
-        1,
-        rect_width.saturating_add(LANES_PER_PILOT - 1) / LANES_PER_PILOT,
-    );
+    let segments_per_row =
+        core::cmp::max(1, rect_width.saturating_add(LANES_PER_PILOT - 1) / LANES_PER_PILOT);
     let frame_span = core::cmp::max(1, segments_per_row.saturating_mul(rect_height));
     let frame_phase = (serial_index / frame_span) as u32;
     let segment = (serial_index % segments_per_row) as u32;
@@ -914,8 +912,10 @@ fn line1280_segment_color_seed(
     let base_b = base_color & 0xFF;
     let r = base_r.wrapping_add(diagonal.wrapping_mul(5)) & 0xFF;
     let g = base_g.wrapping_add(band.wrapping_mul(9).wrapping_add(tile.wrapping_mul(13))) & 0xFF;
-    let b = base_b.wrapping_add(tile.wrapping_mul(23).wrapping_add(frame_phase.wrapping_mul(29)))
-        & 0xFF;
+    let b = base_b.wrapping_add(
+        tile.wrapping_mul(23)
+            .wrapping_add(frame_phase.wrapping_mul(29)),
+    ) & 0xFF;
     (r << 16) | (g << 8) | b
 }
 
