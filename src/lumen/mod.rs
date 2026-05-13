@@ -11,6 +11,7 @@ use ::lumen::precision::DType;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
+pub(crate) mod avx2_fma_sse2_help;
 pub(crate) mod burn_baba;
 pub(crate) mod burn_baby;
 pub(crate) mod cgp;

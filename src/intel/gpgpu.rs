@@ -6,23 +6,24 @@ use spin::Mutex;
 mod descriptors;
 #[path = "compute/kernel_startpointer.rs"]
 mod kernel_startpointer;
+mod mandelbrot;
+mod matmul;
 #[path = "compute/payload.rs"]
 mod payload;
 #[path = "compute/surfaces.rs"]
 mod surfaces;
 #[path = "compute/walker_command.rs"]
 mod walker_command;
-mod mandelbrot;
-mod matmul;
 
 use kernel_startpointer::{
-    prepare_gpgpu_program_artifact, upload_and_verify_gpu_program_at, GpgpuEuProgram,
-    GpgpuProgramArtifactProof,
+    GpgpuEuProgram, GpgpuProgramArtifactProof, prepare_gpgpu_program_artifact,
+    upload_and_verify_gpu_program_at,
 };
 use surfaces::{
-    disabled_gpgpu_store_surface_state, prepare_gpgpu_mandelbrot_store_surface_state_for_target_span,
+    GpgpuStoreSurfaceState, disabled_gpgpu_store_surface_state,
+    prepare_gpgpu_mandelbrot_store_surface_state_for_target_span,
     prepare_gpgpu_store_surface_state, prepare_gpgpu_store_surface_state_for_target,
-    prepare_gpgpu_store_surface_state_for_target_span, GpgpuStoreSurfaceState,
+    prepare_gpgpu_store_surface_state_for_target_span,
 };
 use walker_command::encode_gfx12_gpgpu_walker_probe_batch;
 

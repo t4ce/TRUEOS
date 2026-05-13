@@ -167,7 +167,8 @@ fn prepare_primary_scanout_groupid_line1280_rows_dynamic_command_stream(
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
 
     let batch_dwords = warm.batch_len / core::mem::size_of::<u32>();
-    let batch = unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, batch_dwords) };
+    let batch =
+        unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, batch_dwords) };
     let store_surface = prepare_gpgpu_mandelbrot_store_surface_state_for_target_span(
         warm,
         target_gpu,
@@ -228,10 +229,7 @@ fn prepare_primary_scanout_groupid_line1280_rows_oracle_latest_handle9_batch_com
     }
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
     crate::intel::dma_flush(warm.batch_virt, batch_bytes);
-    Ok((
-        batch_bytes,
-        MANDELBROT_ORACLE_LATEST_HANDLE9_COMPLETION_MARKER,
-    ))
+    Ok((batch_bytes, MANDELBROT_ORACLE_LATEST_HANDLE9_COMPLETION_MARKER))
 }
 
 fn gpgpu_primary_scanout_row2560_simd8_program() -> GpgpuEuProgram {

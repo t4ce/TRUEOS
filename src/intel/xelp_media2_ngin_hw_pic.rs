@@ -652,9 +652,8 @@ pub(super) fn parse_jpeg_scan_info(encoded: &[u8]) -> Option<JpegScanInfo> {
     None
 }
 
-pub(super) fn default_decode_engine_and_window(
-) -> (super::xelp_media2_ngin::MediaEngineDescriptor, super::xelp_media2_ngin::MediaGpuWindowLayout)
-{
+pub(super) fn default_decode_engine_and_window()
+-> (super::xelp_media2_ngin::MediaEngineDescriptor, super::xelp_media2_ngin::MediaGpuWindowLayout) {
     super::xelp_media2_ngin::default_decode_engine_and_window()
 }
 

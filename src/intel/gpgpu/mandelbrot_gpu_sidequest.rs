@@ -115,7 +115,8 @@ pub(crate) fn mandelbrot_artifact_control_snapshot() -> MandelbrotArtifactContro
         version: MANDELBROT_ARTIFACT_CONTROL_VERSION.load(Ordering::Acquire),
         flags: MANDELBROT_ARTIFACT_CONTROL_FLAGS.load(Ordering::Acquire),
         rect_height_rows: MANDELBROT_ARTIFACT_CONTROL_RECT_HEIGHT_ROWS.load(Ordering::Acquire),
-        row_groups_per_burst: MANDELBROT_ARTIFACT_CONTROL_ROW_GROUPS_PER_BURST.load(Ordering::Acquire),
+        row_groups_per_burst: MANDELBROT_ARTIFACT_CONTROL_ROW_GROUPS_PER_BURST
+            .load(Ordering::Acquire),
         bursts_per_frame_budget: MANDELBROT_ARTIFACT_CONTROL_BURSTS_PER_FRAME_BUDGET
             .load(Ordering::Acquire),
         phase_rows_per_sweep: MANDELBROT_ARTIFACT_CONTROL_PHASE_ROWS_PER_SWEEP
@@ -128,10 +129,10 @@ pub(crate) fn mandelbrot_artifact_control_replace(
 ) -> MandelbrotArtifactControlSnapshot {
     next.flags &= MANDELBROT_ARTIFACT_KNOWN_FLAGS;
     next.rect_height_rows = next.rect_height_rows.clamp(1, MANDELBROT_TARGET_HEIGHT);
-    next.row_groups_per_burst = next
-        .row_groups_per_burst
+    next.row_groups_per_burst = next.row_groups_per_burst.clamp(1, MANDELBROT_TARGET_HEIGHT);
+    next.bursts_per_frame_budget = next
+        .bursts_per_frame_budget
         .clamp(1, MANDELBROT_TARGET_HEIGHT);
-    next.bursts_per_frame_budget = next.bursts_per_frame_budget.clamp(1, MANDELBROT_TARGET_HEIGHT);
     next.phase_rows_per_sweep = next.phase_rows_per_sweep.clamp(1, MANDELBROT_TARGET_HEIGHT);
 
     MANDELBROT_ARTIFACT_CONTROL_FLAGS.store(next.flags, Ordering::Release);
@@ -154,18 +155,19 @@ fn assign_burst_slot() -> u32 {
     // Use stable pool starting at MANDELBROT_BURST_LANE_POOL_START
     let _pool_start = MANDELBROT_BURST_LANE_POOL_START as usize;
     let pool_size = MANDELBROT_BURST_LANE_POOL_SIZE as usize;
-    
+
     // Find how many slots we can actually use from our pool
-    let available_from_pool = all_slots.iter()
+    let available_from_pool = all_slots
+        .iter()
         .filter(|&&s| s >= MANDELBROT_BURST_LANE_POOL_START)
         .count()
         .min(pool_size);
-    
+
     if available_from_pool == 0 {
         // Fallback: use first available background slot
         return all_slots[0];
     }
-    
+
     let burst_counter = BURST_SLOT_COORDINATOR.fetch_add(1, Ordering::Relaxed);
     let offset = (burst_counter as usize) % available_from_pool;
     let mut count = 0;
@@ -416,8 +418,7 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
         );
         let frames_per_sweep = core::cmp::max(
             1,
-            bursts_per_frame
-                .saturating_add(bursts_per_frame_budget.saturating_sub(1))
+            bursts_per_frame.saturating_add(bursts_per_frame_budget.saturating_sub(1))
                 / bursts_per_frame_budget,
         );
         let first_serial = frame.saturating_mul(submits_per_tick);
@@ -485,8 +486,8 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
                 crate::r::readiness::set(crate::r::readiness::MANDELBROT_GPU_SIDEQUEST_READY);
                 released_lumen = true;
             }
-            let proof_ok = proof.readback_ok
-                || (control.visual_only_ignore_retire() && proof.submitted);
+            let proof_ok =
+                proof.readback_ok || (control.visual_only_ignore_retire() && proof.submitted);
             last_proof = Some(proof);
             if !proof_ok {
                 break;
@@ -505,8 +506,7 @@ pub(crate) async fn mandelbrot_gpu_sidequest_task() {
                 MANDELBROT_GPGPU_PRESENT_FLUSH_BYTES,
             );
 
-        let telemetry_failed =
-            readback_ok != submitted && !control.visual_only_ignore_retire();
+        let telemetry_failed = readback_ok != submitted && !control.visual_only_ignore_retire();
         let should_log_frame = frame < 4 || frame % 64 == 0 || telemetry_failed;
         if should_log_frame && let Some(last_proof) = last_proof {
             crate::log!(

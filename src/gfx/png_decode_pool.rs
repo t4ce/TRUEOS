@@ -118,9 +118,7 @@ impl RowExpandPlan {
                 trns.as_deref().map(|bytes| bytes.as_slice()),
             ),
             RowExpandKind::Rgb { pixels } => expand_rgb_rows(self.width, rows, pixels.as_slice()),
-            RowExpandKind::Gray { pixels } => {
-                expand_gray_rows(self.width, rows, pixels.as_slice())
-            }
+            RowExpandKind::Gray { pixels } => expand_gray_rows(self.width, rows, pixels.as_slice()),
             RowExpandKind::GrayAlpha { pixels } => {
                 expand_gray_alpha_rows(self.width, rows, pixels.as_slice())
             }
@@ -195,7 +193,11 @@ fn expand_indexed_rows(
     Ok(rgba)
 }
 
-fn expand_rgb_rows(width: usize, rows: Range<usize>, pixels: &[u8]) -> Result<Vec<u8>, PngDecodeError> {
+fn expand_rgb_rows(
+    width: usize,
+    rows: Range<usize>,
+    pixels: &[u8],
+) -> Result<Vec<u8>, PngDecodeError> {
     let src_row_bytes = width.saturating_mul(3);
     let expected = src_row_bytes.saturating_mul(rows.end);
     if pixels.len() < expected {
@@ -213,7 +215,11 @@ fn expand_rgb_rows(width: usize, rows: Range<usize>, pixels: &[u8]) -> Result<Ve
     Ok(out)
 }
 
-fn expand_gray_rows(width: usize, rows: Range<usize>, pixels: &[u8]) -> Result<Vec<u8>, PngDecodeError> {
+fn expand_gray_rows(
+    width: usize,
+    rows: Range<usize>,
+    pixels: &[u8],
+) -> Result<Vec<u8>, PngDecodeError> {
     let src_row_bytes = width;
     let expected = src_row_bytes.saturating_mul(rows.end);
     if pixels.len() < expected {

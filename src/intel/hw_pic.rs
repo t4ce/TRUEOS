@@ -326,7 +326,11 @@ fn process_jpeg_job(job: HwPicJob) -> HwPicOutput {
         },
         width: if retired { smoke.coded_width } else { 0 },
         height: if retired { smoke.coded_height } else { 0 },
-        pitch_bytes: if retired { smoke.output_surface_pitch } else { 0 },
+        pitch_bytes: if retired {
+            smoke.output_surface_pitch
+        } else {
+            0
+        },
         byte_len: if retired {
             smoke.output_surface_bytes
         } else {
