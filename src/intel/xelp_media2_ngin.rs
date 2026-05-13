@@ -43,6 +43,9 @@ const RING_START: usize = 0x38;
 const RING_CTL: usize = 0x3C;
 const RING_ACTHD: usize = 0x74;
 const RING_MI_MODE: usize = 0x9C;
+const RING_PSMI_CTL: usize = 0x50;
+const RING_ACTHD_UDW: usize = 0x5C;
+const RING_DMA_FADD_UDW: usize = 0x60;
 const RING_IPEIR: usize = 0x64;
 const RING_IPEHR: usize = 0x68;
 const RING_INSTDONE: usize = 0x6C;
@@ -73,6 +76,10 @@ const RING_EXECLIST_SQ_LO: usize = 0x510;
 const RING_EXECLIST_SQ_HI: usize = 0x514;
 const RING_BBADDR: usize = 0x140;
 const RING_BBADDR_UDW: usize = 0x168;
+const RING_DMA_FADD: usize = 0x78;
+const RING_NOPID: usize = 0x94;
+const RING_ESR: usize = 0xB8;
+const RING_BBSTATE: usize = 0x110;
 const GEN12_RING_FAULT_REG: usize = 0x0000_CEC4;
 
 const MI_STORE_DWORD_IMM_GEN4: u32 = (0x20 << 23) | 2;
@@ -185,6 +192,7 @@ const MEDIA_RESULT_OUTPUT_SURFACE_BYTES_SLOT: u64 =
     MEDIA_RESULT_OUTPUT_SURFACE_ADDR_HI_SLOT + MEDIA_RESULT_SLOT_BYTES;
 const MEDIA_RESULT_FRAME_DIMS_SLOT: u64 =
     MEDIA_RESULT_OUTPUT_SURFACE_BYTES_SLOT + MEDIA_RESULT_SLOT_BYTES;
+const MEDIA_STAGE_FLAG_JPEG_SMOKE: u32 = 1 << 8;
 
 static MEDIA_KICKOFF_RAN: AtomicBool = AtomicBool::new(false);
 static MEDIA_DECODE_RAN: AtomicBool = AtomicBool::new(false);
@@ -339,6 +347,13 @@ pub(crate) struct MediaSliceWakeAck {
     pub name: &'static str,
     pub value: u32,
     pub awake: bool,
+}
+
+#[derive(Copy, Clone, Debug)]
+struct MediaEngineForcewakeAck {
+    ack_reg: usize,
+    ack_value: u32,
+    awake: bool,
 }
 
 impl MediaSliceWakeAck {
@@ -562,8 +577,60 @@ pub(super) struct MediaEncodedStreamProof {
     pub bytes_written: usize,
     pub capacity: usize,
     pub signature: u32,
+    pub forcewake_engine_ack_reg: usize,
+    pub forcewake_engine_ack: u32,
+    pub forcewake_engine_awake: bool,
     pub forcewake_global_ack: u32,
     pub forcewake_awake_count: usize,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub(super) struct MediaJpegSmokeSubmitProof {
+    pub engine_name: &'static str,
+    pub batch_gpu_addr: u64,
+    pub result_gpu_addr: u64,
+    pub bitstream_gpu_addr: u64,
+    pub output_surface_gpu_addr: u64,
+    pub bitstream_bytes: usize,
+    pub batch_tail_bytes: usize,
+    pub ring_tail_bytes: usize,
+    pub kickoff_marker: u32,
+    pub presubmit_marker: u32,
+    pub postsubmit_marker: u32,
+    pub complete_marker: u32,
+    pub kickoff_value: u32,
+    pub presubmit_value: u32,
+    pub postsubmit_value: u32,
+    pub complete_value: u32,
+    pub retired: bool,
+    pub poll_iters: usize,
+    pub execlist_status_lo: u32,
+    pub execlist_status_hi: u32,
+    pub ring_head: u32,
+    pub ring_tail: u32,
+    pub ring_acthd: u32,
+    pub ring_acthd_hi: u32,
+    pub acthd_region: &'static str,
+    pub acthd_offset_bytes: u32,
+    pub acthd_dword: u32,
+    pub bbaddr_lo: u32,
+    pub bbaddr_hi: u32,
+    pub dma_fadd_lo: u32,
+    pub dma_fadd_hi: u32,
+    pub bbstate: u32,
+    pub esr: u32,
+    pub instps: u32,
+    pub psmi_ctl: u32,
+    pub nopid: u32,
+    pub ipeir: u32,
+    pub ipehr: u32,
+    pub fault_gen8: u32,
+    pub fault_gen12: u32,
+    pub fault_tlb_data0_gen8: u32,
+    pub fault_tlb_data1_gen8: u32,
+    pub fault_tlb_data0_gen12: u32,
+    pub fault_tlb_data1_gen12: u32,
+    pub bitstream_dword0: u32,
 }
 
 #[inline]
@@ -788,6 +855,67 @@ fn snapshot_runtime(
         instdone,
         instps,
     }
+}
+
+fn sample_buffer_dword(base_virt: *mut u8, buffer_bytes: usize, offset_bytes: usize) -> u32 {
+    if offset_bytes.saturating_add(core::mem::size_of::<u32>()) > buffer_bytes {
+        return 0;
+    }
+    unsafe { core::ptr::read_volatile(base_virt.add(offset_bytes) as *const u32) }
+}
+
+fn classify_media_acthd(
+    acthd: u32,
+    windows: MediaGpuWindowLayout,
+    backing: MediaBitstreamBacking,
+    batch_tail_bytes: usize,
+    ring_tail_bytes: usize,
+) -> (&'static str, u32, u32) {
+    let acthd_aligned = acthd & !0x3;
+    let regions = [
+        (
+            "ring",
+            windows.ring_gpu_addr,
+            ring_tail_bytes,
+            backing.ring_virt,
+        ),
+        (
+            "batch",
+            windows.batch_gpu_addr,
+            batch_tail_bytes,
+            backing.batch_virt,
+        ),
+        (
+            "bitstream",
+            windows.bitstream_gpu_addr,
+            backing.bitstream_bytes,
+            backing.bitstream_virt,
+        ),
+        (
+            "output",
+            windows.output_surface_gpu_addr,
+            backing.output_surface_bytes,
+            backing.output_surface_virt,
+        ),
+    ];
+
+    for (name, gpu_addr, buffer_bytes, base_virt) in regions {
+        let base = gpu_addr as u32;
+        if acthd_aligned < base {
+            continue;
+        }
+        let offset = acthd_aligned.wrapping_sub(base) as usize;
+        if offset >= buffer_bytes {
+            continue;
+        }
+        return (
+            name,
+            offset as u32,
+            sample_buffer_dword(base_virt, buffer_bytes, offset),
+        );
+    }
+
+    ("unknown", 0, 0)
 }
 
 fn rebuild_kickoff_state(
@@ -1397,7 +1525,7 @@ fn build_ring_batch_start_words(
     dwords[1] = (result_gpu_addr + MEDIA_RESULT_KICKOFF_SLOT) as u32;
     dwords[2] = ((result_gpu_addr + MEDIA_RESULT_KICKOFF_SLOT) >> 32) as u32;
     dwords[3] = prelaunch_marker;
-    dwords[4] = MI_BATCH_BUFFER_START_GEN8;
+    dwords[4] = MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_GTT;
     dwords[5] = batch_gpu_addr as u32;
     dwords[6] = (batch_gpu_addr >> 32) as u32;
     dwords[7] = MI_ARB_CHECK;
@@ -1430,24 +1558,19 @@ fn media_sw_context_id_for_submit(context_gpu_addr: u64) -> u32 {
 
 fn build_media_execlist_context_descriptor(
     context_gpu_addr: u64,
-    engine: MediaEngineDescriptor,
-    sw_counter: u32,
+    _engine: MediaEngineDescriptor,
+    _sw_counter: u32,
     force_restore: bool,
 ) -> (u32, u32) {
-    let (lo, mut hi) = build_execlist_context_descriptor_for_gpu_addr(context_gpu_addr);
+    let (lo, _hi) = build_execlist_context_descriptor_for_gpu_addr(context_gpu_addr);
     let mut lo = lo;
-    // Pre-DG2 Gen12 descriptors include engine class [63:61] and instance [53:48].
-    let class = match engine.id.class {
-        MediaEngineClass::VideoDecode => 1u32,
-        MediaEngineClass::VideoEnhancement => 2u32,
-    };
     if force_restore {
         lo |= CTX_DESC_FORCE_RESTORE;
     }
-    hi |= (media_sw_context_id_for_submit(context_gpu_addr) & 0x7FF) << 5;
-    hi |= (engine.id.instance as u32 & 0x3F) << 16;
-    hi |= (sw_counter & 0x3F) << 23;
-    hi |= (class & 0x7) << 29;
+    // Match the working render/gpgpu Gen12/Xe execlist descriptor layout on
+    // this platform: upper dword carries only the context upper address plus
+    // the software context id.
+    let hi = ((context_gpu_addr >> 32) as u32) | (media_sw_context_id_for_submit(context_gpu_addr) << 7);
     (lo, hi)
 }
 
@@ -1566,18 +1689,17 @@ fn init_gen12_video_context_image(
     let dwords = unsafe { core::slice::from_raw_parts_mut(context_virt as *mut u32, total_dwords) };
     dwords.fill(0);
     let state = &mut dwords[LRC_STATE_OFFSET_DWORDS..];
-    if state.len() < 112 {
+    if state.len() < 192 {
         return false;
     }
     let ring_base = ring_base as u32;
     let mut idx = 0usize;
     state[idx] = MI_NOOP;
     idx += 1;
+
     state[idx] = mi_lri_cmd(13, MI_LRI_FORCE_POSTED);
     idx += 1;
     state[idx] = ring_base + 0x244;
-    // Gen12 media follows the reference LRC template: inhibit synchronous
-    // context switch, and use restore-inhibit for empty/default contexts.
     state[idx + 1] = media_ctx_control_value(inhibit_restore);
     state[idx + 2] = ring_base + 0x34;
     state[idx + 3] = ring_head;
@@ -1598,16 +1720,22 @@ fn init_gen12_video_context_image(
     state[idx + 18] = ring_base + 0x1C4;
     state[idx + 19] = 0;
     state[idx + 20] = ring_base + 0x1C8;
+    // Match the working render/gpgpu paths: keep indirect context offset zero.
     state[idx + 21] = 0;
     state[idx + 22] = ring_base + 0x180;
     state[idx + 23] = 0;
     state[idx + 24] = ring_base + 0x2B4;
     state[idx + 25] = 0;
-    idx += 26;
+    state[idx + 26] = ring_base + 0x5A8;
+    state[idx + 27] = 0;
+    state[idx + 28] = ring_base + 0x5AC;
+    state[idx + 29] = 0;
+    idx += 30;
+
     push_mi_nops(state, &mut idx, 5);
+
     state[idx] = mi_lri_cmd(9, MI_LRI_FORCE_POSTED);
     idx += 1;
-    // CTX_TIMESTAMP, PDP3..PDP1 (unused=0), PDP0 = PML4 phys
     let pdp_values: [(u32, u32); 9] = [
         (0x3A8, 0),                        // CTX_TIMESTAMP
         (0x28C, 0),                        // PDP3_UDW
@@ -1624,14 +1752,135 @@ fn init_gen12_video_context_image(
         state[idx + 1] = value;
         idx += 2;
     }
-    // Keep MI_MODE aligned with the cold-start path by explicitly clearing
-    // STOP_RING from the restored context image on every replay.
+
+    state[idx] = mi_lri_cmd(3, MI_LRI_FORCE_POSTED);
+    idx += 1;
+    state[idx] = ring_base + 0x1B0;
+    state[idx + 1] = 0;
+    state[idx + 2] = ring_base + 0x5A8;
+    state[idx + 3] = 0;
+    state[idx + 4] = ring_base + 0x5AC;
+    state[idx + 5] = 0;
+    idx += 6;
+
+    push_mi_nops(state, &mut idx, 6);
+
     state[idx] = mi_lri_cmd(1, MI_LRI_FORCE_POSTED);
     idx += 1;
-    state[idx] = ring_base + 0x9C;
-    state[idx + 1] = masked_bit_disable(STOP_RING);
+    state[idx] = ring_base + 0xC8;
+    state[idx + 1] = 0x7FFF_FFFF;
     idx += 2;
-    push_mi_nops(state, &mut idx, 12);
+
+    push_mi_nops(state, &mut idx, 13);
+
+    state[idx] = mi_lri_cmd(51, MI_LRI_FORCE_POSTED);
+    idx += 1;
+    state[idx] = ring_base + 0x588;
+    state[idx + 1] = 0;
+    state[idx + 2] = ring_base + 0x588;
+    state[idx + 3] = 0;
+    state[idx + 4] = ring_base + 0x588;
+    state[idx + 5] = 0;
+    state[idx + 6] = ring_base + 0x588;
+    state[idx + 7] = 0;
+    state[idx + 8] = ring_base + 0x588;
+    state[idx + 9] = 0;
+    state[idx + 10] = ring_base + 0x588;
+    state[idx + 11] = 0;
+    state[idx + 12] = ring_base + 0x28;
+    state[idx + 13] = 0;
+    state[idx + 14] = ring_base + 0x9C;
+    state[idx + 15] = masked_bit_disable(STOP_RING);
+    state[idx + 16] = ring_base + 0xC0;
+    state[idx + 17] = 0;
+    state[idx + 18] = ring_base + 0x178;
+    state[idx + 19] = 0;
+    state[idx + 20] = ring_base + 0x17C;
+    state[idx + 21] = 0;
+    state[idx + 22] = ring_base + 0x358;
+    state[idx + 23] = 0;
+    state[idx + 24] = ring_base + 0x170;
+    state[idx + 25] = 0;
+    state[idx + 26] = ring_base + 0x150;
+    state[idx + 27] = 0;
+    state[idx + 28] = ring_base + 0x154;
+    state[idx + 29] = 0;
+    state[idx + 30] = ring_base + 0x158;
+    state[idx + 31] = 0;
+    state[idx + 32] = ring_base + 0x41C;
+    state[idx + 33] = 0;
+    state[idx + 34] = ring_base + 0x600;
+    state[idx + 35] = 0;
+    state[idx + 36] = ring_base + 0x604;
+    state[idx + 37] = 0;
+    state[idx + 38] = ring_base + 0x608;
+    state[idx + 39] = 0;
+    state[idx + 40] = ring_base + 0x60C;
+    state[idx + 41] = 0;
+    state[idx + 42] = ring_base + 0x610;
+    state[idx + 43] = 0;
+    state[idx + 44] = ring_base + 0x614;
+    state[idx + 45] = 0;
+    state[idx + 46] = ring_base + 0x618;
+    state[idx + 47] = 0;
+    state[idx + 48] = ring_base + 0x61C;
+    state[idx + 49] = 0;
+    state[idx + 50] = ring_base + 0x620;
+    state[idx + 51] = 0;
+    state[idx + 52] = ring_base + 0x624;
+    state[idx + 53] = 0;
+    state[idx + 54] = ring_base + 0x628;
+    state[idx + 55] = 0;
+    state[idx + 56] = ring_base + 0x62C;
+    state[idx + 57] = 0;
+    state[idx + 58] = ring_base + 0x630;
+    state[idx + 59] = 0;
+    state[idx + 60] = ring_base + 0x634;
+    state[idx + 61] = 0;
+    state[idx + 62] = ring_base + 0x638;
+    state[idx + 63] = 0;
+    state[idx + 64] = ring_base + 0x63C;
+    state[idx + 65] = 0;
+    state[idx + 66] = ring_base + 0x640;
+    state[idx + 67] = 0;
+    state[idx + 68] = ring_base + 0x644;
+    state[idx + 69] = 0;
+    state[idx + 70] = ring_base + 0x648;
+    state[idx + 71] = 0;
+    state[idx + 72] = ring_base + 0x64C;
+    state[idx + 73] = 0;
+    state[idx + 74] = ring_base + 0x650;
+    state[idx + 75] = 0;
+    state[idx + 76] = ring_base + 0x654;
+    state[idx + 77] = 0;
+    state[idx + 78] = ring_base + 0x658;
+    state[idx + 79] = 0;
+    state[idx + 80] = ring_base + 0x65C;
+    state[idx + 81] = 0;
+    state[idx + 82] = ring_base + 0x660;
+    state[idx + 83] = 0;
+    state[idx + 84] = ring_base + 0x664;
+    state[idx + 85] = 0;
+    state[idx + 86] = ring_base + 0x668;
+    state[idx + 87] = 0;
+    state[idx + 88] = ring_base + 0x66C;
+    state[idx + 89] = 0;
+    state[idx + 90] = ring_base + 0x670;
+    state[idx + 91] = 0;
+    state[idx + 92] = ring_base + 0x674;
+    state[idx + 93] = 0;
+    state[idx + 94] = ring_base + 0x678;
+    state[idx + 95] = 0;
+    state[idx + 96] = ring_base + 0x67C;
+    state[idx + 97] = 0;
+    state[idx + 98] = ring_base + 0x68;
+    state[idx + 99] = 0;
+    state[idx + 100] = ring_base + 0x84;
+    state[idx + 101] = 0;
+    idx += 102;
+
+    state[idx] = MI_NOOP;
+    idx += 1;
     state[CTX_RING_HEAD_DW] = 0;
     state[CTX_RING_TAIL_DW] = ring_tail;
     state[CTX_RING_START_DW] = ring_start;
@@ -2383,7 +2632,10 @@ fn media_execlists_ready_for_hot_submit(
     false
 }
 
-fn wake_media_engine_forcewake(dev: crate::intel::Dev, engine: MediaEngineDescriptor) {
+fn wake_media_engine_forcewake(
+    dev: crate::intel::Dev,
+    engine: MediaEngineDescriptor,
+) -> MediaEngineForcewakeAck {
     let (req, ack) = match engine.id.class {
         MediaEngineClass::VideoDecode => match engine.id.instance {
             0 => (FORCEWAKE_MEDIA_VDBOX0, FORCEWAKE_ACK_VDBOX0),
@@ -2399,11 +2651,18 @@ fn wake_media_engine_forcewake(dev: crate::intel::Dev, engine: MediaEngineDescri
         },
     };
     super::mmio_write(dev, req, super::mask_en(FORCEWAKE_KERNEL));
+    let mut ack_value = 0u32;
     for _ in 0..20_000 {
-        if (super::mmio_read(dev, ack) & FORCEWAKE_KERNEL) != 0 {
+        ack_value = super::mmio_read(dev, ack);
+        if (ack_value & FORCEWAKE_KERNEL) != 0 {
             break;
         }
         core::hint::spin_loop();
+    }
+    MediaEngineForcewakeAck {
+        ack_reg: ack,
+        ack_value,
+        awake: (ack_value & FORCEWAKE_KERNEL) != 0,
     }
 }
 
@@ -2864,8 +3123,10 @@ pub(super) fn ensure_decode_backing(
     }
     super::ggtt_invalidate(dev);
 
-    // Build PPGTT page tables so MFX pipe data addresses resolve
+    // Build PPGTT page tables so the context can resolve any batch/data window
+    // that the media ring or MFX packets touch during submit.
     let ppgtt_pml4_phys = build_ppgtt_for_ranges(&[
+        (windows.batch_gpu_addr, batch_phys, MEDIA_DEFAULT_BATCH_BYTES),
         (windows.bitstream_gpu_addr, bitstream_phys, MEDIA_DEFAULT_BITSTREAM_BYTES),
         (windows.output_surface_gpu_addr, output_surface_phys, MEDIA_DEFAULT_OUTPUT_SURFACE_BYTES),
         (windows.result_gpu_addr, result_phys, MEDIA_DEFAULT_RESULT_BYTES),
@@ -2907,7 +3168,7 @@ pub(super) fn stream_encoded_to_bitstream(
         return None;
     }
 
-    wake_media_engine_forcewake(dev, engine);
+    let engine_wake = wake_media_engine_forcewake(dev, engine);
     let wake = snapshot_forcewake(dev);
 
     unsafe {
@@ -2928,9 +3189,330 @@ pub(super) fn stream_encoded_to_bitstream(
         bytes_written: encoded.len(),
         capacity: backing.bitstream_bytes,
         signature: byte_signature(encoded),
+        forcewake_engine_ack_reg: engine_wake.ack_reg,
+        forcewake_engine_ack: engine_wake.ack_value,
+        forcewake_engine_awake: engine_wake.awake,
         forcewake_global_ack: wake.global_ack,
         forcewake_awake_count: wake.awake_count,
     })
+}
+
+pub(super) fn submit_jpeg_smoke_batch(
+    dev: crate::intel::Dev,
+    engine: MediaEngineDescriptor,
+    windows: MediaGpuWindowLayout,
+    backing: MediaBitstreamBacking,
+    bitstream_bytes: usize,
+    submit_token: u32,
+) -> Option<MediaJpegSmokeSubmitProof> {
+    if bitstream_bytes == 0 || bitstream_bytes > backing.bitstream_bytes {
+        return None;
+    }
+
+    let ring_virt = backing.ring_virt;
+    let context_virt = backing.context_virt;
+    let ring_gpu_addr = windows.ring_gpu_addr;
+    let context_gpu_addr = windows.context_gpu_addr;
+    let kickoff_marker = marker_base(engine)
+        .wrapping_add(0x80)
+        .wrapping_add((submit_token & 0x3F) << 2);
+    let ring_prelaunch_marker = kickoff_marker.wrapping_sub(1);
+    let presubmit_marker = kickoff_marker + 1;
+    let postsubmit_marker = kickoff_marker + 2;
+    let complete_marker = kickoff_marker + 3;
+
+    reset_media_engine(dev, engine, context_virt);
+    wake_media_engine_forcewake(dev, engine);
+
+    unsafe {
+        core::ptr::write_bytes(ring_virt, 0, backing.ring_bytes);
+        core::ptr::write_bytes(context_virt, 0, backing.context_bytes);
+        core::ptr::write_bytes(backing.batch_virt, 0, backing.batch_bytes);
+        core::ptr::write_bytes(backing.result_virt, 0, backing.result_bytes);
+    }
+
+    let batch_tail_bytes = build_jpeg_smoke_batch_skeleton(
+        backing.batch_virt,
+        backing.batch_bytes,
+        windows.result_gpu_addr,
+        windows.bitstream_gpu_addr,
+        windows.output_surface_gpu_addr,
+        backing.output_surface_bytes,
+        bitstream_bytes,
+        kickoff_marker,
+        presubmit_marker,
+        postsubmit_marker,
+        complete_marker,
+    )?;
+
+    let ring_tail_bytes = build_ring_batch_start_words(
+        ring_virt,
+        backing.ring_bytes,
+        0,
+        windows.result_gpu_addr,
+        ring_prelaunch_marker,
+        windows.batch_gpu_addr,
+    )?;
+    let ring_ctl = ring_ctl_value_for_size(backing.ring_bytes)?;
+    let ring_start = ring_gpu_addr as u32;
+    let pphwsp_gpu = (context_gpu_addr & !0xFFF) as u32;
+    let ctx_ctl_after = media_ctx_control_value(false);
+    if !init_gen12_video_context_image(
+        context_virt,
+        backing.context_bytes,
+        engine.ring_base,
+        0,
+        ring_start,
+        ring_tail_bytes as u32,
+        ring_ctl,
+        pphwsp_gpu,
+        backing.ppgtt_pml4_phys,
+        false,
+    ) {
+        return None;
+    }
+
+    {
+        let mode_bits = GFX_RUN_LIST_ENABLE | GEN11_GFX_DISABLE_LEGACY_MODE;
+        super::mmio_write(dev, engine.ring_base + RING_MODE_GEN7, mode_bits | (mode_bits << 16));
+    }
+    seed_media_ring_live_state(
+        dev,
+        engine.ring_base,
+        pphwsp_gpu,
+        ring_start,
+        ring_ctl,
+        ring_tail_bytes as u32,
+    );
+    init_csb_pointers(dev, engine.ring_base, context_virt);
+
+    super::dma_flush(backing.batch_virt, batch_tail_bytes);
+    super::dma_flush(ring_virt, ring_tail_bytes);
+    super::dma_flush(context_virt, backing.context_bytes);
+    super::dma_flush(backing.result_virt, backing.result_bytes);
+
+    {
+        super::mmio_write(dev, engine.ring_base + RING_CONTEXT_CONTROL, ctx_ctl_after);
+        super::mmio_write(dev, engine.ring_base + RING_CONTEXT_CONTROL_REF, ctx_ctl_after);
+        super::mmio_write(dev, engine.ring_base + RING_MI_MODE, masked_bit_disable(STOP_RING));
+        super::mmio_write(dev, engine.ring_base + RING_HWS_PGA, pphwsp_gpu);
+    }
+
+    let submit_counter = submit_token.wrapping_add(1) & 0x3F;
+    let (ctx_desc_lo, ctx_desc_hi) =
+        build_media_execlist_context_descriptor(context_gpu_addr, engine, submit_counter, true);
+    core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+    execlist_submit_port_push(dev, engine.ring_base, ctx_desc_lo, ctx_desc_hi, 0, 0);
+    super::mmio_write(dev, engine.ring_base + RING_EXECLIST_CONTROL, EL_CTRL_LOAD);
+
+    let mut retired = false;
+    let mut poll_iters = 0usize;
+    let mut complete_value = 0u32;
+    while poll_iters < MEDIA_SUBMIT_POLL_ITERS {
+        super::dma_flush(
+            unsafe { backing.result_virt.add(MEDIA_RESULT_COMPLETE_SLOT as usize) },
+            8,
+        );
+        complete_value = read_result_dword(backing.result_virt, MEDIA_RESULT_COMPLETE_SLOT);
+        if complete_value == complete_marker {
+            retired = true;
+            break;
+        }
+        core::hint::spin_loop();
+        poll_iters += 1;
+    }
+
+    super::dma_flush(backing.result_virt, backing.result_bytes);
+    let ring_acthd = super::mmio_read(dev, engine.ring_base + RING_ACTHD);
+    let ring_acthd_hi = super::mmio_read(dev, engine.ring_base + RING_ACTHD_UDW);
+    let bbaddr_lo = super::mmio_read(dev, engine.ring_base + RING_BBADDR);
+    let bbaddr_hi = super::mmio_read(dev, engine.ring_base + RING_BBADDR_UDW);
+    let dma_fadd_lo = super::mmio_read(dev, engine.ring_base + RING_DMA_FADD);
+    let dma_fadd_hi = super::mmio_read(dev, engine.ring_base + RING_DMA_FADD_UDW);
+    let fault_gen8 = super::mmio_read(dev, 0x4094);
+    let fault_gen12 = super::mmio_read(dev, GEN12_RING_FAULT_REG);
+    let (acthd_region, acthd_offset_bytes, acthd_dword) =
+        classify_media_acthd(ring_acthd, windows, backing, batch_tail_bytes, ring_tail_bytes);
+
+    Some(MediaJpegSmokeSubmitProof {
+        engine_name: engine.name,
+        batch_gpu_addr: windows.batch_gpu_addr,
+        result_gpu_addr: windows.result_gpu_addr,
+        bitstream_gpu_addr: windows.bitstream_gpu_addr,
+        output_surface_gpu_addr: windows.output_surface_gpu_addr,
+        bitstream_bytes,
+        batch_tail_bytes,
+        ring_tail_bytes,
+        kickoff_marker,
+        presubmit_marker,
+        postsubmit_marker,
+        complete_marker,
+        kickoff_value: read_result_dword(backing.result_virt, MEDIA_RESULT_KICKOFF_SLOT),
+        presubmit_value: read_result_dword(backing.result_virt, MEDIA_RESULT_PRESUBMIT_SLOT),
+        postsubmit_value: read_result_dword(backing.result_virt, MEDIA_RESULT_POSTSUBMIT_SLOT),
+        complete_value,
+        retired,
+        poll_iters,
+        execlist_status_lo: super::mmio_read(dev, engine.ring_base + RING_EXECLIST_STATUS_LO),
+        execlist_status_hi: super::mmio_read(dev, engine.ring_base + RING_EXECLIST_STATUS_HI),
+        ring_head: super::mmio_read(dev, engine.ring_base + RING_HEAD),
+        ring_tail: super::mmio_read(dev, engine.ring_base + RING_TAIL),
+        ring_acthd,
+        ring_acthd_hi,
+        acthd_region,
+        acthd_offset_bytes,
+        acthd_dword,
+        bbaddr_lo,
+        bbaddr_hi,
+        dma_fadd_lo,
+        dma_fadd_hi,
+        bbstate: super::mmio_read(dev, engine.ring_base + RING_BBSTATE),
+        esr: super::mmio_read(dev, engine.ring_base + RING_ESR),
+        instps: super::mmio_read(dev, engine.ring_base + RING_INSTPS),
+        psmi_ctl: super::mmio_read(dev, engine.ring_base + RING_PSMI_CTL),
+        nopid: super::mmio_read(dev, engine.ring_base + RING_NOPID),
+        ipeir: super::mmio_read(dev, engine.ring_base + RING_IPEIR),
+        ipehr: super::mmio_read(dev, engine.ring_base + RING_IPEHR),
+        fault_gen8,
+        fault_gen12,
+        fault_tlb_data0_gen8: super::mmio_read(dev, 0x4B10),
+        fault_tlb_data1_gen8: super::mmio_read(dev, 0x4B14),
+        fault_tlb_data0_gen12: super::mmio_read(dev, 0xCEB8),
+        fault_tlb_data1_gen12: super::mmio_read(dev, 0xCEBC),
+        bitstream_dword0: sample_buffer_dword(backing.bitstream_virt, backing.bitstream_bytes, 0),
+    })
+}
+
+fn build_jpeg_smoke_batch_skeleton(
+    batch_virt: *mut u8,
+    batch_bytes: usize,
+    result_gpu_addr: u64,
+    bitstream_gpu_addr: u64,
+    output_surface_gpu_addr: u64,
+    output_surface_bytes: usize,
+    bitstream_bytes: usize,
+    kickoff_marker: u32,
+    presubmit_marker: u32,
+    postsubmit_marker: u32,
+    complete_marker: u32,
+) -> Option<usize> {
+    let batch = unsafe {
+        core::slice::from_raw_parts_mut(
+            batch_virt as *mut u32,
+            batch_bytes / core::mem::size_of::<u32>(),
+        )
+    };
+    let mut idx = 0usize;
+
+    if !emit_store_dword(
+        batch,
+        &mut idx,
+        result_gpu_addr + MEDIA_RESULT_KICKOFF_SLOT,
+        kickoff_marker,
+    ) || !emit_store_dword(
+        batch,
+        &mut idx,
+        result_gpu_addr + MEDIA_RESULT_BITSTREAM_ADDR_LO_SLOT,
+        bitstream_gpu_addr as u32,
+    ) || !emit_store_dword(
+        batch,
+        &mut idx,
+        result_gpu_addr + MEDIA_RESULT_BITSTREAM_ADDR_HI_SLOT,
+        (bitstream_gpu_addr >> 32) as u32,
+    ) || !emit_store_dword(
+        batch,
+        &mut idx,
+        result_gpu_addr + MEDIA_RESULT_BITSTREAM_BYTES_SLOT,
+        bitstream_bytes as u32,
+    ) || !emit_store_dword(
+        batch,
+        &mut idx,
+        result_gpu_addr + MEDIA_RESULT_SAMPLE_NALS_SLOT,
+        0,
+    ) || !emit_store_dword(
+        batch,
+        &mut idx,
+        result_gpu_addr + MEDIA_RESULT_STAGE_FLAGS_SLOT,
+        MEDIA_STAGE_FLAG_JPEG_SMOKE,
+    ) || !emit_store_dword(
+        batch,
+        &mut idx,
+        result_gpu_addr + MEDIA_RESULT_OUTPUT_SURFACE_ADDR_LO_SLOT,
+        output_surface_gpu_addr as u32,
+    ) || !emit_store_dword(
+        batch,
+        &mut idx,
+        result_gpu_addr + MEDIA_RESULT_OUTPUT_SURFACE_ADDR_HI_SLOT,
+        (output_surface_gpu_addr >> 32) as u32,
+    ) || !emit_store_dword(
+        batch,
+        &mut idx,
+        result_gpu_addr + MEDIA_RESULT_OUTPUT_SURFACE_BYTES_SLOT,
+        output_surface_bytes as u32,
+    ) || !emit_store_dword(
+        batch,
+        &mut idx,
+        result_gpu_addr + MEDIA_RESULT_FRAME_DIMS_SLOT,
+        0,
+    ) {
+        return None;
+    }
+
+    let presubmit_flush = begin_batch_packet(
+        batch,
+        &mut idx,
+        5,
+        MI_FLUSH_DW
+            | MI_FLUSH_DW_VIDEO_PIPELINE_CACHE_INVALIDATE
+            | MI_FLUSH_DW_POST_SYNC_WRITE_IMMEDIATE,
+    )?;
+    batch[presubmit_flush + 1] =
+        ((result_gpu_addr + MEDIA_RESULT_PRESUBMIT_SLOT) as u32) | MI_FLUSH_DW_ADDR_GTT;
+    batch[presubmit_flush + 2] = ((result_gpu_addr + MEDIA_RESULT_PRESUBMIT_SLOT) >> 32) as u32;
+    batch[presubmit_flush + 3] = presubmit_marker;
+    batch[presubmit_flush + 4] = 0;
+
+    if idx.saturating_add(2) > batch.len() {
+        return None;
+    }
+    batch[idx] = MI_FORCE_WAKEUP;
+    batch[idx + 1] = MI_FORCE_WAKEUP_MFX_WELL;
+    idx += 2;
+
+    if !emit_mfx_wait(batch, &mut idx) {
+        return None;
+    }
+
+    if !emit_store_dword(
+        batch,
+        &mut idx,
+        result_gpu_addr + MEDIA_RESULT_POSTSUBMIT_SLOT,
+        postsubmit_marker,
+    ) {
+        return None;
+    }
+
+    let done_flush = begin_batch_packet(
+        batch,
+        &mut idx,
+        5,
+        MI_FLUSH_DW
+            | MI_FLUSH_DW_VIDEO_PIPELINE_CACHE_INVALIDATE
+            | MI_FLUSH_DW_POST_SYNC_WRITE_IMMEDIATE,
+    )?;
+    batch[done_flush + 1] =
+        ((result_gpu_addr + MEDIA_RESULT_COMPLETE_SLOT) as u32) | MI_FLUSH_DW_ADDR_GTT;
+    batch[done_flush + 2] = ((result_gpu_addr + MEDIA_RESULT_COMPLETE_SLOT) >> 32) as u32;
+    batch[done_flush + 3] = complete_marker;
+    batch[done_flush + 4] = 0;
+
+    if idx.saturating_add(3) > batch.len() {
+        return None;
+    }
+    batch[idx] = MI_ARB_CHECK;
+    batch[idx + 1] = MI_BATCH_BUFFER_END;
+    batch[idx + 2] = MI_NOOP;
+    Some((idx + 3).saturating_mul(core::mem::size_of::<u32>()))
 }
 
 pub(crate) fn kickoff_once() {
