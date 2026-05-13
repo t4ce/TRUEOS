@@ -29,6 +29,7 @@ pub enum EuArtifactKind {
     PrimaryScanoutMandelbrot8ThenHdc1StoreThenThreadSpawnerEot,
     PrimaryScanoutGroupidLine320ScalarBwThenHdc1StoreThenThreadSpawnerEot,
     PrimaryScanoutRow2560Simd8BwThenHdc1StoreThenThreadSpawnerEot,
+    PrimaryScanoutLine1280ScalarBwThenHdc1StoreThenThreadSpawnerEot,
     PrimaryScanoutLine320ScalarBwThenHdc1StoreThenThreadSpawnerEot,
     PrimaryScanoutLine8Scalar8BwThenHdc1StoreThenThreadSpawnerEot,
     PrimaryScanoutLine8Simd8BwThenHdc1StoreThenThreadSpawnerEot,
