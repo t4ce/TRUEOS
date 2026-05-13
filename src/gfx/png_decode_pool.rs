@@ -11,6 +11,7 @@ use super::png_codec::PngDecodeError;
 const PNG_ROW_EXPAND_TASK_POOL_SIZE: usize = 16;
 const PNG_ROW_EXPAND_MIN_ROWS_PER_TASK: usize = 8;
 const PNG_ROW_EXPAND_SINGLE_AP_MAX_PIXELS: usize = 256 * 256;
+const PNG_ROW_EXPAND_POOL_ENABLED: bool = false;
 
 enum RowExpandKind {
     Indexed {
@@ -357,6 +358,9 @@ pub(super) fn expand_indexed_png_to_rgba(
             trns: trns.map(Arc::new),
         },
     };
+    if !PNG_ROW_EXPAND_POOL_ENABLED {
+        return plan.process_rows(0..plan.height);
+    }
     if !crate::workers::has_background_worker_slot() {
         return plan.process_rows(0..plan.height);
     }
@@ -400,6 +404,9 @@ pub(super) fn expand_png_output_to_rgba(
         height: height as usize,
         kind: plan_kind,
     };
+    if !PNG_ROW_EXPAND_POOL_ENABLED {
+        return plan.process_rows(0..plan.height);
+    }
     if !crate::workers::has_background_worker_slot() {
         return plan.process_rows(0..plan.height);
     }
