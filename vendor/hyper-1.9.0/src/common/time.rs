@@ -3,6 +3,7 @@
     all(feature = "server", feature = "http1"),
 ))]
 use core::time::Duration;
+use std::boxed::Box;
 use std::{fmt, sync::Arc};
 use std::{pin::Pin, time::Instant};
 

@@ -163,6 +163,8 @@ pub mod slice {
 
 #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
 use std::io::IoSlice;
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+use std::{fmt, mem};
 #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
 use core::marker::PhantomData;
 #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
