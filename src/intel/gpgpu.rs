@@ -523,6 +523,12 @@ fn wait_eq_bool(dev: crate::intel::Dev, reg: usize, mask: u32, want: u32, n: usi
     false
 }
 
+struct WarmRenderBatchSubmitProof {
+    completed: bool,
+    dispatch_before: u64,
+    dispatch_after: u64,
+}
+
 fn submit_warm_render_batch(
     dev: crate::intel::Dev,
     warm: RenderWarmState,
@@ -530,6 +536,25 @@ fn submit_warm_render_batch(
     expected_result_slot_dword: usize,
     submit_name: &'static str,
 ) -> bool {
+    submit_warm_render_batch_observed(
+        dev,
+        warm,
+        expected_result,
+        expected_result_slot_dword,
+        submit_name,
+        false,
+    )
+    .completed
+}
+
+fn submit_warm_render_batch_observed(
+    dev: crate::intel::Dev,
+    warm: RenderWarmState,
+    expected_result: u32,
+    expected_result_slot_dword: usize,
+    submit_name: &'static str,
+    capture_dispatch: bool,
+) -> WarmRenderBatchSubmitProof {
     let log_submit = should_log_gpgpu_submit_name(submit_name);
     if is_gpgpu_submit_name(submit_name) {
         recover_render_engine_after_nonretired_submit(dev, warm, "gpgpu-pre-submit");
@@ -554,12 +579,20 @@ fn submit_warm_render_batch(
         );
     }
     if !ppgtt_ok {
-        return false;
+        return WarmRenderBatchSubmitProof {
+            completed: false,
+            dispatch_before: 0,
+            dispatch_after: 0,
+        };
     }
 
     let ring_tail_bytes = build_ring_batch_start(warm, GPU_VA_BATCH_BASE);
     let Some(ring_ctl) = ring_ctl_value(warm.ring_len) else {
-        return false;
+        return WarmRenderBatchSubmitProof {
+            completed: false,
+            dispatch_before: 0,
+            dispatch_after: 0,
+        };
     };
     if !init_gen12_lrc_context_image(
         warm,
@@ -567,7 +600,11 @@ fn submit_warm_render_batch(
         ring_tail_bytes as u32,
         ring_ctl,
     ) {
-        return false;
+        return WarmRenderBatchSubmitProof {
+            completed: false,
+            dispatch_before: 0,
+            dispatch_after: 0,
+        };
     }
     let (context_desc_lo, context_desc_hi) = build_execlist_context_descriptor(GPU_VA_CONTEXT_BASE);
     write_lrc_ring_tail(warm, ring_tail_bytes as u32);
@@ -586,6 +623,11 @@ fn submit_warm_render_batch(
 
     super::ggtt_invalidate(dev);
     core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+    let dispatch_before = if capture_dispatch {
+        read_gpgpu_threads_dispatched(dev)
+    } else {
+        0
+    };
     execlist_submit_port_push(dev, context_desc_lo, context_desc_hi, 0, 0);
     crate::intel::mmio_write(dev, RCS_RING_EXECLIST_CONTROL, EL_CTRL_LOAD);
 
@@ -668,7 +710,16 @@ fn submit_warm_render_batch(
         log_gpgpu_stall_detail(dev, submit_name);
     }
 
-    completed
+    let dispatch_after = if capture_dispatch {
+        read_gpgpu_threads_dispatched(dev)
+    } else {
+        0
+    };
+    WarmRenderBatchSubmitProof {
+        completed,
+        dispatch_before,
+        dispatch_after,
+    }
 }
 
 fn log_gpgpu_stall_detail(dev: crate::intel::Dev, submit_name: &'static str) {

@@ -553,6 +553,19 @@ pub(super) struct MediaBitstreamBacking {
 unsafe impl Send for MediaBitstreamBacking {}
 unsafe impl Sync for MediaBitstreamBacking {}
 
+#[derive(Copy, Clone, Debug)]
+pub(super) struct MediaEncodedStreamProof {
+    pub engine_name: &'static str,
+    pub bitstream_gpu_addr: u64,
+    pub bitstream_phys: u64,
+    pub bitstream_virt: usize,
+    pub bytes_written: usize,
+    pub capacity: usize,
+    pub signature: u32,
+    pub forcewake_global_ack: u32,
+    pub forcewake_awake_count: usize,
+}
+
 #[inline]
 fn media_msg_slice_regs() -> [(&'static str, usize); 8] {
     [
@@ -2873,6 +2886,43 @@ pub(super) fn ensure_decode_backing(
     };
     *MEDIA_BACKING.lock() = Some(backing);
     Some(backing)
+}
+
+pub(super) fn stream_encoded_to_bitstream(
+    dev: crate::intel::Dev,
+    engine: MediaEngineDescriptor,
+    windows: MediaGpuWindowLayout,
+    backing: MediaBitstreamBacking,
+    encoded: &[u8],
+) -> Option<MediaEncodedStreamProof> {
+    if encoded.is_empty() || encoded.len() > backing.bitstream_bytes {
+        return None;
+    }
+
+    wake_media_engine_forcewake(dev, engine);
+    let wake = snapshot_forcewake(dev);
+
+    unsafe {
+        core::ptr::copy_nonoverlapping(encoded.as_ptr(), backing.bitstream_virt, encoded.len());
+        let clear_start = encoded.len();
+        let clear_len = backing.bitstream_bytes.saturating_sub(clear_start).min(256);
+        if clear_len != 0 {
+            core::ptr::write_bytes(backing.bitstream_virt.add(clear_start), 0, clear_len);
+        }
+    }
+    super::dma_flush(backing.bitstream_virt, encoded.len());
+
+    Some(MediaEncodedStreamProof {
+        engine_name: engine.name,
+        bitstream_gpu_addr: windows.bitstream_gpu_addr,
+        bitstream_phys: backing.bitstream_phys,
+        bitstream_virt: backing.bitstream_virt as usize,
+        bytes_written: encoded.len(),
+        capacity: backing.bitstream_bytes,
+        signature: byte_signature(encoded),
+        forcewake_global_ack: wake.global_ack,
+        forcewake_awake_count: wake.awake_count,
+    })
 }
 
 pub(crate) fn kickoff_once() {

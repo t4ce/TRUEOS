@@ -332,22 +332,7 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
     let _ = notify_primary_surface_present(primary_surface, "scanout-demo", byte_len);
 
     let logo_ok = if PRIMARY_BOOT_LOGO_ENABLED {
-        match crate::gfx::jpeg_codec::decode_jpeg_rgba(PRIMARY_BOOT_LOGO_JPEG) {
-            Ok(decoded) => present_rgba_surface_center(
-                decoded.rgba.as_slice(),
-                decoded.width,
-                decoded.height,
-                (decoded.width as usize).saturating_mul(4),
-            ),
-            Err(err) => {
-                crate::log!(
-                    "intel/display: primary-logo decode failed code={} bytes=0x{:X}\n",
-                    err.code(),
-                    PRIMARY_BOOT_LOGO_JPEG.len()
-                );
-                false
-            }
-        }
+        probe_hw_logo_decode()
     } else {
         false
     };
@@ -373,6 +358,35 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
         ok as u8,
         logo_ok as u8
     );
+}
+
+fn probe_hw_logo_decode() -> bool {
+    match crate::intel::hw_pic_submit_jpeg(PRIMARY_BOOT_LOGO_JPEG) {
+        Ok(id) => {
+            let snap = crate::intel::hw_pic_snapshot();
+            crate::log!(
+                "intel/display: hw-logo submit ok id={} bytes=0x{:X} pending={} outputs={} service={}\n",
+                id,
+                PRIMARY_BOOT_LOGO_JPEG.len(),
+                snap.pending,
+                snap.outputs,
+                snap.service_started as u8
+            );
+            true
+        }
+        Err(code) => {
+            let snap = crate::intel::hw_pic_snapshot();
+            crate::log!(
+                "intel/display: hw-logo submit failed code={} bytes=0x{:X} pending={} outputs={} service={}\n",
+                code,
+                PRIMARY_BOOT_LOGO_JPEG.len(),
+                snap.pending,
+                snap.outputs,
+                snap.service_started as u8
+            );
+            false
+        }
+    }
 }
 
 fn log_cpu_scanout_proof(dev: crate::intel::Dev, surface: PrimarySurface) {
