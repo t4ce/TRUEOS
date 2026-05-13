@@ -1,7 +1,7 @@
 //! TRUEOS kernel platform hooks used by Hyper internals.
 
 use core::time::Duration;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use crate::time::{Instant, SystemTime, UNIX_EPOCH};
 
 unsafe extern "Rust" {
     fn trueos_platform_monotonic_nanos() -> u64;

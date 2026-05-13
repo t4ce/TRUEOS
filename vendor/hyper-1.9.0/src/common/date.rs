@@ -1,8 +1,10 @@
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use core::cell::RefCell;
 use core::fmt::{self, Write};
 use core::str;
 use core::time::Duration;
-use std::time::{SystemTime, UNIX_EPOCH};
+use crate::vec::Vec;
+use crate::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(feature = "http2")]
 use http::header::HeaderValue;
@@ -13,22 +15,17 @@ pub(crate) const DATE_VALUE_LENGTH: usize = 29;
 
 #[cfg(feature = "http1")]
 pub(crate) fn extend(dst: &mut Vec<u8>) {
-    CACHED.with(|cache| {
-        dst.extend_from_slice(cache.borrow().buffer());
-    })
+    with_cache(|cache| dst.extend_from_slice(cache.buffer()))
 }
 
 #[cfg(feature = "http1")]
 pub(crate) fn update() {
-    CACHED.with(|cache| {
-        cache.borrow_mut().check();
-    })
+    with_cache(|cache| cache.check())
 }
 
 #[cfg(feature = "http2")]
 pub(crate) fn update_and_header_value() -> HeaderValue {
-    CACHED.with(|cache| {
-        let mut cache = cache.borrow_mut();
+    with_cache(|cache| {
         cache.check();
         cache.header_value.clone()
     })
@@ -42,7 +39,26 @@ struct CachedDate {
     next_update: SystemTime,
 }
 
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+static CACHED: crate::sync::Mutex<Option<CachedDate>> = crate::sync::Mutex::new(None);
+
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 thread_local!(static CACHED: RefCell<CachedDate> = RefCell::new(CachedDate::new()));
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+fn with_cache<R>(f: impl FnOnce(&mut CachedDate) -> R) -> R {
+    let mut guard = CACHED.lock().unwrap();
+    let cache = guard.get_or_insert_with(CachedDate::new);
+    f(cache)
+}
+
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+fn with_cache<R>(f: impl FnOnce(&mut CachedDate) -> R) -> R {
+    CACHED.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        f(&mut cache)
+    })
+}
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 fn system_time_now() -> SystemTime {
@@ -52,6 +68,17 @@ fn system_time_now() -> SystemTime {
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 fn system_time_now() -> SystemTime {
     SystemTime::now()
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+fn http_date_from_system_time(now: SystemTime) -> HttpDate {
+    let duration_since_epoch = now.duration_since(UNIX_EPOCH).unwrap_or_default();
+    HttpDate::from(httpdate::time::UNIX_EPOCH + duration_since_epoch)
+}
+
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+fn http_date_from_system_time(now: SystemTime) -> HttpDate {
+    HttpDate::from(now)
 }
 
 impl CachedDate {
@@ -90,7 +117,7 @@ impl CachedDate {
 
     fn render(&mut self, now: SystemTime) {
         self.pos = 0;
-        let _ = write!(self, "{}", HttpDate::from(now));
+        let _ = write!(self, "{}", http_date_from_system_time(now));
         debug_assert!(self.pos == DATE_VALUE_LENGTH);
         self.render_http2();
     }
@@ -144,7 +171,26 @@ mod tests {
         let mut date = CachedDate::new();
         let now = system_time_now();
         date.render(now);
-        b.bytes = date.buffer().len() as u64;
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        static CACHED: crate::sync::Mutex<Option<CachedDate>> = crate::sync::Mutex::new(None);
+
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+        thread_local!(static CACHED: RefCell<CachedDate> = RefCell::new(CachedDate::new()));
+
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        fn with_cache<R>(f: impl FnOnce(&mut CachedDate) -> R) -> R {
+            let mut guard = CACHED.lock().unwrap();
+            let cache = guard.get_or_insert_with(CachedDate::new);
+            f(cache)
+        }
+
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+        fn with_cache<R>(f: impl FnOnce(&mut CachedDate) -> R) -> R {
+            CACHED.with(|cache| {
+                let mut cache = cache.borrow_mut();
+                f(&mut cache)
+            })
+        }
 
         b.iter(|| {
             date.render(now);

@@ -121,6 +121,7 @@ default-features = false
 version = "0.3"
 optional = true
 default-features = false
+features = ["alloc"]
 
 [dependencies.futures-core]
 version = "0.3.31"

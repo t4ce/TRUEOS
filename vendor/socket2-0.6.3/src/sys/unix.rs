@@ -8,7 +8,7 @@
 
 use core::cmp::min;
 #[cfg(not(target_os = "wasi"))]
-use core::ffi::OsStr;
+use std::ffi::OsStr;
 #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
 use std::io::IoSlice;
 use core::marker::PhantomData;

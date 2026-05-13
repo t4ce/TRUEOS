@@ -1,6 +1,7 @@
 use core::fmt;
 #[cfg(feature = "server")]
 use core::future::Future;
+use std::boxed::Box;
 use std::io;
 use core::marker::{PhantomData, Unpin};
 use core::pin::Pin;
