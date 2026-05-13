@@ -162,7 +162,7 @@ impl Condvar {
     pub(crate) fn wait<'a, T>(
         &self,
         mut guard: MutexGuard<'a, T>,
-    ) -> ::std::sync::LockResult<MutexGuard<'a, T>> {
+    ) -> Result<MutexGuard<'a, T>, ()> {
         self.1.wait(&mut guard.1);
         Ok(guard)
     }
@@ -172,7 +172,7 @@ impl Condvar {
         &self,
         mut guard: MutexGuard<'a, T>,
         timeout: Duration,
-    ) -> ::std::sync::LockResult<(MutexGuard<'a, T>, WaitTimeoutResult)> {
+    ) -> Result<(MutexGuard<'a, T>, WaitTimeoutResult), ()> {
         let wtr = self.1.wait_for(&mut guard.1, timeout);
         Ok((guard, wtr))
     }
