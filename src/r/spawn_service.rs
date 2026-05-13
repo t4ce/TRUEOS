@@ -56,6 +56,7 @@ define_started_flags!(
     GFX_VIRGL_CURSOR_OVERLAY_STARTED,
     MANDELBROT_GPU_SIDEQUEST_STARTED,
     INTEL_CURSOR_SERVICE_STARTED,
+    HW_PIC_SERVICE_STARTED,
     INTEL_HDA_PROBE_STARTED,
     RAPLE_SERVICE_STARTED,
     GFX_TEXTURE_UPLOAD_SERVICE_STARTED,
@@ -536,6 +537,10 @@ fn spawn_intel_cursor_service_task(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| intel_cursor_service_task())
 }
 
+fn spawn_hw_pic_service(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_worker(spawner, |_worker_spawner| crate::intel::hw_pic_service())
+}
+
 fn spawn_intel_hda_probe_task(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |worker_spawner| {
         let _ = worker_spawner;
@@ -606,6 +611,11 @@ fn gfx_backend_boot_gate() -> bool {
 #[inline]
 fn intel_cursor_service_gate() -> bool {
     crate::intel::has_claimed_device()
+}
+
+#[inline]
+fn intel_media_engine_gate() -> bool {
+    crate::intel::has_media_decode_engine()
 }
 
 #[inline]
@@ -984,7 +994,7 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::APP_VM_READY
     | crate::r::readiness::GFX_TEXTURE_UPLOAD_SERVICE_READY
     | crate::r::readiness::NET_SOCKET_READY
     | crate::r::readiness::TLS_SOCKET_SERVICE_READY;
-static TASKS: [TaskSpec; 65] = [
+static TASKS: [TaskSpec; 66] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
         "globalog-persist-once",
@@ -1125,6 +1135,13 @@ static TASKS: [TaskSpec; 65] = [
         intel_cursor_service_gate,
         &INTEL_CURSOR_SERVICE_STARTED,
         spawn_intel_cursor_service_task,
+    ),
+    TaskSpec::enabled_gated(
+        "hw_pic_service",
+        0,
+        intel_media_engine_gate,
+        &HW_PIC_SERVICE_STARTED,
+        spawn_hw_pic_service,
     ),
     TaskSpec::disabled("intel-hda-probe", 0, &INTEL_HDA_PROBE_STARTED, spawn_intel_hda_probe_task),
     TaskSpec::enabled("raple-service", 0, &RAPLE_SERVICE_STARTED, spawn_raple_service),

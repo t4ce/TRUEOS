@@ -9,7 +9,7 @@ const HW_PIC_PENDING_CAP: usize = 16;
 const HW_PIC_OUTPUT_CAP: usize = 32;
 
 static NEXT_ID: AtomicU32 = AtomicU32::new(1);
-static WORKER_STARTED: AtomicBool = AtomicBool::new(false);
+static SERVICE_STARTED: AtomicBool = AtomicBool::new(false);
 static PENDING: Mutex<VecDeque<HwPicJob>> = Mutex::new(VecDeque::new());
 static OUTPUTS: Mutex<VecDeque<HwPicOutput>> = Mutex::new(VecDeque::new());
 static WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
@@ -53,7 +53,7 @@ pub(crate) struct HwPicOutput {
 pub(crate) struct HwPicQueueSnapshot {
     pub pending: usize,
     pub outputs: usize,
-    pub worker_started: bool,
+    pub service_started: bool,
 }
 
 struct HwPicJob {
@@ -79,7 +79,6 @@ pub(crate) fn submit_encoded(codec: HwPicCodec, encoded: &[u8]) -> Result<u32, i
     });
     drop(pending);
 
-    try_start_worker();
     WAIT.notify_one();
     Ok(id)
 }
@@ -102,7 +101,7 @@ pub(crate) fn snapshot() -> HwPicQueueSnapshot {
     HwPicQueueSnapshot {
         pending: PENDING.lock().len(),
         outputs: OUTPUTS.lock().len(),
-        worker_started: WORKER_STARTED.load(Ordering::Acquire),
+        service_started: SERVICE_STARTED.load(Ordering::Acquire),
     }
 }
 
@@ -118,42 +117,19 @@ fn push_output(output: HwPicOutput) {
     outputs.push_back(output);
 }
 
-fn try_start_worker() {
-    if WORKER_STARTED.load(Ordering::Acquire) {
-        return;
-    }
-
-    if let Some(spawner) = crate::workers::pick_background_spawner() {
-        if WORKER_STARTED
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-        {
-            if let Ok(token) = hw_pic_worker_task() {
-                spawner.spawn(token);
-            } else {
-                WORKER_STARTED.store(false, Ordering::Release);
-            }
-        }
-        return;
-    }
-
-    if crate::smp::cpu_count() <= 1
-        && WORKER_STARTED
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-    {
-        crate::wait::spawn_local_detached(async move {
-            hw_pic_worker_inner().await;
-        });
-    }
-}
-
 #[embassy_executor::task]
-async fn hw_pic_worker_task() {
-    hw_pic_worker_inner().await;
+pub(crate) async fn hw_pic_service() {
+    if SERVICE_STARTED.swap(true, Ordering::AcqRel) {
+        crate::log!("intel/hw_pic: duplicate service task entered; parking\n");
+        loop {
+            embassy_time::Timer::after_secs(3600).await;
+        }
+    }
+    crate::log!("intel/hw_pic: service started backend=media-vdbox\n");
+    hw_pic_service_inner().await;
 }
 
-async fn hw_pic_worker_inner() {
+async fn hw_pic_service_inner() {
     loop {
         let Some(job) = take_job() else {
             WAIT.wait_for_event().await;
