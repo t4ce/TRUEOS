@@ -30,6 +30,9 @@ impl RngSeedGenerator {
 
     /// Returns the next seed in the sequence.
     pub(crate) fn next_seed(&self) -> RngSeed {
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        let mut rng = self.state.lock();
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         let mut rng = self
             .state
             .lock()

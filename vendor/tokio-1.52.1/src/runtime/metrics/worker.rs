@@ -83,7 +83,10 @@ impl WorkerMetrics {
     }
 
     pub(crate) fn set_thread_id(&self, thread_id: ThreadId) {
-        *self.thread_id.lock().unwrap() = Some(thread_id);
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        { *self.thread_id.lock() = Some(thread_id); }
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+        { *self.thread_id.lock().unwrap() = Some(thread_id); }
     }
 
     cfg_metrics_variant! {

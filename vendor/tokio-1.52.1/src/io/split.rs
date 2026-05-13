@@ -60,6 +60,9 @@ struct Inner<T> {
 
 impl<T> Inner<T> {
     fn with_lock<R>(&self, f: impl FnOnce(Pin<&mut T>) -> R) -> R {
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        let mut guard = self.stream.lock();
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         let mut guard = self.stream.lock().unwrap();
 
         // safety: we do not move the stream.
@@ -95,7 +98,12 @@ impl<T> ReadHalf<T> {
                 .ok()
                 .expect("`Arc::try_unwrap` failed");
 
-            inner.stream.into_inner().unwrap()
+            #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+            let inner_stream = inner.stream.into_inner().unwrap();
+            #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+            let inner_stream = inner.stream.into_inner().unwrap();
+
+            inner_stream
         } else {
             panic!("Unrelated `split::Write` passed to `split::Read::unsplit`.")
         }

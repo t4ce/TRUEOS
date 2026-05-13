@@ -2914,7 +2914,7 @@ pub mod cabi {
 
             if let Some((slot, kind, spawner)) = crate::workers::pick_background_spawner_with_slot()
             {
-                let Ok(token) = async_jpeg_decode_upload_task(tex_id, bytes) else {
+                let Ok(token) = async_jpeg_decode_upload_task(tex_id, bytes.clone()) else {
                     requeue_async_jpeg_upload_front(AsyncJpegUploadReq { tex_id, bytes });
                     return;
                 };
