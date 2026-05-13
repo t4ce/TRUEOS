@@ -7,6 +7,28 @@ mod paeth;
 #[cfg(feature = "unstable")]
 mod simd;
 
+#[inline]
+fn unfilter_up_chunked(previous: &[u8], current: &mut [u8]) {
+    const CHUNK_SIZE: usize = 32;
+    let len = current.len().min(previous.len());
+
+    let mut current_chunks = current[..len].chunks_exact_mut(CHUNK_SIZE);
+    let mut previous_chunks = previous[..len].chunks_exact(CHUNK_SIZE);
+    for (curr, above) in (&mut current_chunks).zip(&mut previous_chunks) {
+        for i in 0..CHUNK_SIZE {
+            curr[i] = curr[i].wrapping_add(above[i]);
+        }
+    }
+
+    for (curr, &above) in current_chunks
+        .into_remainder()
+        .iter_mut()
+        .zip(previous_chunks.remainder())
+    {
+        *curr = curr.wrapping_add(above);
+    }
+}
+
 /// The byte level filter applied to scanlines to prepare them for compression.
 ///
 /// Compression in general benefits from repetitive data. The filter is a content-aware method of
@@ -195,9 +217,7 @@ pub(crate) fn unfilter(
             }
         },
         Up => {
-            for (curr, &above) in current.iter_mut().zip(previous) {
-                *curr = curr.wrapping_add(above);
-            }
+            unfilter_up_chunked(previous, current);
         }
         Avg if previous.is_empty() => match tbpp {
             BytesPerPixel::One => {
