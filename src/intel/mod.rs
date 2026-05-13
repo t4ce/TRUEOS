@@ -857,6 +857,14 @@ pub async fn run_media2_first_frame_async() -> Option<self::xelp_media2_ngin::Me
     self::xelp_media2_ngin::run_media2_first_frame_async().await
 }
 
+pub(crate) fn has_media_decode_engine() -> bool {
+    has_claimed_device()
+}
+
+pub(crate) fn hw_pic_service() -> Result<embassy_executor::SpawnToken<impl Send>, embassy_executor::SpawnError> {
+    self::hw_pic::hw_pic_service()
+}
+
 pub(crate) fn hw_pic_submit_jpeg(encoded: &[u8]) -> Result<u32, i32> {
     self::hw_pic::submit_jpeg(encoded)
 }
