@@ -92,7 +92,7 @@ pub(super) fn gpgpu_kernel_start_pointer_negative_control_enabled() -> bool {
 	GPGPU_KSP_NEGATIVE_CONTROL
 }
 
-fn upload_and_verify_gpu_program_at(
+pub(super) fn upload_and_verify_gpu_program_at(
 	warm: RenderWarmState,
 	offset_bytes: usize,
 	program: &[u32],

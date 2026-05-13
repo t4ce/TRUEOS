@@ -15,7 +15,10 @@ mod walker_command;
 mod mandelbrot;
 mod matmul;
 
-use kernel_startpointer::{prepare_gpgpu_program_artifact, GpgpuEuProgram, GpgpuProgramArtifactProof};
+use kernel_startpointer::{
+    prepare_gpgpu_program_artifact, upload_and_verify_gpu_program_at, GpgpuEuProgram,
+    GpgpuProgramArtifactProof,
+};
 use surfaces::{
     disabled_gpgpu_store_surface_state, prepare_gpgpu_mandelbrot_store_surface_state_for_target_span,
     prepare_gpgpu_store_surface_state, prepare_gpgpu_store_surface_state_for_target,
@@ -890,6 +893,12 @@ fn read_rcs_cs_gpr(dev: crate::intel::Dev, index: usize) -> u64 {
     let off = RCS_CS_GPR_BASE + index * core::mem::size_of::<u64>();
     let lo = crate::intel::mmio_read(dev, off) as u64;
     let hi = crate::intel::mmio_read(dev, off + 4) as u64;
+    (hi << 32) | lo
+}
+
+fn read_gpgpu_threads_dispatched(dev: crate::intel::Dev) -> u64 {
+    let lo = crate::intel::mmio_read(dev, TS_GPGPU_THREADS_DISPATCHED_LO) as u64;
+    let hi = crate::intel::mmio_read(dev, TS_GPGPU_THREADS_DISPATCHED_HI) as u64;
     (hi << 32) | lo
 }
 
@@ -2410,6 +2419,14 @@ fn submit_gpgpu_compute_walker_probe(
         post_curbe_load,
         batch_bytes,
     }
+}
+
+fn encode_gfx125_compute_walker_probe_batch(
+    _batch_dwords: &mut [u32],
+    _store_surface: GpgpuStoreSurfaceState,
+    _program: GpgpuEuProgram,
+) -> Result<usize, &'static str> {
+    Err("gfx125-compute-walker-not-ported")
 }
 
 fn log_gpgpu_compute_walker_status(proof: GpgpuComputeWalkerProof) {
