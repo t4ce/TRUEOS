@@ -83,6 +83,7 @@ mod tst_net_tcp_shell;
 mod tst_uas_skhynix_route_probe;
 #[path = "tst/ws_time.rs"]
 mod tst_ws_time;
+mod turbo;
 mod usb2;
 mod wait;
 mod workers;
@@ -272,6 +273,10 @@ pub extern "C" fn kmain() -> ! {
         if simd.avx2_fma_ready { "yes" } else { "no" },
         simd.avx2_fma_reason.as_str()
     );
+    match crate::turbo::avx2_fma_sse2_help::bf16_helper_boot_exercise_task() {
+        Ok(token) => spawner.spawn(token),
+        Err(e) => crate::log!("lumen-simd-help: bf16 helper boot exercise spawn failed: {:?}\n", e),
+    }
     _loop(executor, spawner, smp_resp)
 }
 

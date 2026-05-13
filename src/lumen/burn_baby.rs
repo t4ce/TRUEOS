@@ -4,7 +4,7 @@ use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
-use crate::lumen::avx2_fma_sse2_help::bf16_to_f32;
+use crate::turbo::avx2_fma_sse2_help::bf16_to_f32;
 use spin::Mutex;
 
 const TARGET_CHUNKS_PER_WORKER: usize = 4;
@@ -1011,7 +1011,7 @@ fn matvec_rows_bf16(
                 );
             }
             unsafe {
-                crate::lumen::avx2_fma_sse2_help::matvec_rows_bf16_avx2_fma(
+                crate::turbo::avx2_fma_sse2_help::matvec_rows_bf16_avx2_fma(
                     x,
                     w_rowmajor_bf16,
                     k_dim,
@@ -1031,7 +1031,7 @@ fn matvec_rows_bf16(
             );
         }
         unsafe {
-            crate::lumen::avx2_fma_sse2_help::matvec_rows_bf16_sse2(
+            crate::turbo::avx2_fma_sse2_help::matvec_rows_bf16_sse2(
                 x,
                 w_rowmajor_bf16,
                 k_dim,
@@ -1044,7 +1044,7 @@ fn matvec_rows_bf16(
     }
 
     #[cfg(not(target_arch = "x86_64"))]
-    crate::lumen::avx2_fma_sse2_help::matvec_rows_bf16_scalar(
+    crate::turbo::avx2_fma_sse2_help::matvec_rows_bf16_scalar(
         x,
         w_rowmajor_bf16,
         k_dim,
