@@ -281,20 +281,38 @@ fn process_jpeg_job(job: HwPicJob) -> HwPicOutput {
         smoke.bitstream_dword0,
     );
 
-    // The current stage proves common MFX bind state plus JPEG picture-state
-    // emission. Quant, Huffman, and BSD-object submission still gate Ready.
+    let retired = smoke.retired;
+    let output_ready = retired && smoke.output_surface_detail;
     HwPicOutput {
         id: job.id,
         codec: job.codec,
-        status: HwPicStatus::Failed,
-        format: HwPicPixelFormat::Unknown,
-        width: 0,
-        height: 0,
-        pitch_bytes: 0,
-        byte_len: job.encoded.len(),
+        status: if output_ready {
+            HwPicStatus::Ready
+        } else {
+            HwPicStatus::Failed
+        },
+        format: if retired {
+            HwPicPixelFormat::Nv12
+        } else {
+            HwPicPixelFormat::Unknown
+        },
+        width: if retired { smoke.coded_width } else { 0 },
+        height: if retired { smoke.coded_height } else { 0 },
+        pitch_bytes: if retired { smoke.output_surface_pitch } else { 0 },
+        byte_len: if retired {
+            smoke.output_surface_bytes
+        } else {
+            job.encoded.len()
+        },
         gpu_addr: windows.output_surface_gpu_addr,
         phys_addr: backing.output_surface_phys,
         virt_addr: backing.output_surface_virt as usize,
-        error_code: if smoke.retired { -8 } else { -13 },
+        error_code: if output_ready {
+            0
+        } else if retired {
+            -14
+        } else {
+            -13
+        },
     }
 }

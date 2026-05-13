@@ -612,6 +612,14 @@ pub(super) struct MediaJpegSmokeSubmitProof {
     pub bitstream_gpu_addr: u64,
     pub output_surface_gpu_addr: u64,
     pub bitstream_bytes: usize,
+    pub coded_width: u32,
+    pub coded_height: u32,
+    pub output_surface_pitch: usize,
+    pub output_surface_bytes: usize,
+    pub output_surface_signature: u32,
+    pub output_surface_nonzero_samples: usize,
+    pub output_surface_probe: MediaSurfaceProbe,
+    pub output_surface_detail: bool,
     pub batch_tail_bytes: usize,
     pub ring_tail_bytes: usize,
     pub kickoff_marker: u32,
@@ -1544,6 +1552,14 @@ fn jpeg_input_format_from_sampling(
         ((2, 2), (1, 2)) => Some(6),
         ((2, 2), (2, 1)) => Some(7),
         _ => None,
+    }
+}
+
+#[inline]
+fn jpeg_output_format_from_input(input_format: u8) -> u8 {
+    match input_format {
+        1 => 1,
+        _ => 0,
     }
 }
 
@@ -3993,7 +4009,40 @@ pub(super) fn submit_jpeg_smoke_batch(
         poll_iters += 1;
     }
 
+    super::dma_flush(backing.output_surface_virt, backing.output_surface_bytes);
     super::dma_flush(backing.result_virt, backing.result_bytes);
+    let output_surface = unsafe {
+        core::slice::from_raw_parts(
+            backing.output_surface_virt as *const u8,
+            backing.output_surface_bytes,
+        )
+    };
+    let output_surface_pitch = align_up_u32(coded_width.max(128), 128) as usize;
+    let output_surface_probe = probe_output_surface(
+        output_surface,
+        u16::try_from(coded_width).unwrap_or(u16::MAX),
+        u16::try_from(coded_height).unwrap_or(u16::MAX),
+        0,
+        0,
+        u16::try_from(coded_width).unwrap_or(u16::MAX),
+        u16::try_from(coded_height).unwrap_or(u16::MAX),
+        output_surface_pitch,
+    );
+    log_output_surface_probe(engine.name, submit_token, retired, output_surface_probe);
+    let output_surface_detail = output_surface_has_decoded_detail(&output_surface_probe);
+    let (output_surface_signature, output_surface_nonzero_samples) =
+        surface_signature(output_surface);
+    if !output_surface_detail {
+        crate::log!(
+            "intel/media2: jpeg blank-surface engine={} sample={} retired={} detail_range=0 sig=0x{:08X} nonzero_samples={}\n",
+            engine.name,
+            submit_token,
+            retired as u8,
+            output_surface_signature,
+            output_surface_nonzero_samples,
+        );
+    }
+
     let ring_acthd = super::mmio_read(dev, engine.ring_base + RING_ACTHD);
     let ring_acthd_hi = super::mmio_read(dev, engine.ring_base + RING_ACTHD_UDW);
     let bbaddr_lo = super::mmio_read(dev, engine.ring_base + RING_BBADDR);
@@ -4012,6 +4061,14 @@ pub(super) fn submit_jpeg_smoke_batch(
         bitstream_gpu_addr: windows.bitstream_gpu_addr,
         output_surface_gpu_addr: windows.output_surface_gpu_addr,
         bitstream_bytes,
+        coded_width,
+        coded_height,
+        output_surface_pitch,
+        output_surface_bytes: backing.output_surface_bytes,
+        output_surface_signature,
+        output_surface_nonzero_samples,
+        output_surface_probe,
+        output_surface_detail,
         batch_tail_bytes,
         ring_tail_bytes,
         kickoff_marker,
@@ -4087,6 +4144,9 @@ fn build_jpeg_smoke_batch_skeleton(
     let chroma_y_offset = align_up_u32(coded_height, 32);
     let frame_width_blocks_minus1 = (align_up_u32(coded_width.max(8), 8) / 8).saturating_sub(1);
     let frame_height_blocks_minus1 = (align_up_u32(coded_height.max(8), 8) / 8).saturating_sub(1);
+    let jpeg_output_format = jpeg_scan_info
+        .map(|scan_info| jpeg_output_format_from_input(scan_info.input_format))
+        .unwrap_or(0);
     let mut stage_flags =
         MEDIA_STAGE_FLAG_JPEG_SMOKE | MEDIA_STAGE_FLAG_JPEG_PIC_STATE | MEDIA_STAGE_FLAG_JPEG_QM_STATE;
     if jpeg_huff_tables.is_some() {
@@ -4262,7 +4322,8 @@ fn build_jpeg_smoke_batch_skeleton(
     )?;
     batch[jpeg_pic + 1] = jpeg_scan_info
         .map(|scan_info| u32::from(scan_info.input_format))
-        .unwrap_or(0);
+        .unwrap_or(0)
+        | (u32::from(jpeg_output_format) << 8);
     batch[jpeg_pic + 2] = frame_width_blocks_minus1 | (frame_height_blocks_minus1 << 16);
 
     let fallback_qm = [16u8; 64];
