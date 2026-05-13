@@ -148,3 +148,5 @@ petgraph = { path = "vendor/petgraph-0.8.3" }
 smoltcp = { path = "vendor/smoltcp-0.13.1" }
 xhci = { path = "vendor/xhci-0.9.2" }
 aml = { path = "vendor/aml-0.16.4" }
+zune-core = { path = "vendor/zune-core-0.5.1" }
+zune-jpeg = { path = "vendor/zune-jpeg-0.5.15" }
