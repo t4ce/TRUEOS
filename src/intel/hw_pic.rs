@@ -199,15 +199,15 @@ fn process_jpeg_job(job: HwPicJob) -> HwPicOutput {
     let Some(dev) = super::claimed_device() else {
         return failed_output(&job, -2);
     };
-    let (engine, windows) = super::xelp_media2_ngin::default_decode_engine_and_window();
-    let Some(backing) = super::xelp_media2_ngin::ensure_decode_backing(dev, windows) else {
+    let (engine, windows) = super::xelp_media2_ngin_hw_pic::default_decode_engine_and_window();
+    let Some(backing) = super::xelp_media2_ngin_hw_pic::ensure_decode_backing(dev, windows) else {
         return failed_output(&job, -5);
     };
     if job.encoded.len() > backing.bitstream_bytes {
         return failed_output(&job, -12);
     }
 
-    let Some(proof) = super::xelp_media2_ngin::stream_encoded_to_bitstream(
+    let Some(proof) = super::xelp_media2_ngin_hw_pic::stream_encoded_to_bitstream(
         dev,
         engine,
         windows,
@@ -234,7 +234,7 @@ fn process_jpeg_job(job: HwPicJob) -> HwPicOutput {
         proof.forcewake_awake_count
     );
 
-    let Some(smoke) = super::xelp_media2_ngin::submit_jpeg_smoke_batch(
+    let Some(smoke) = super::xelp_media2_ngin_hw_pic::submit_jpeg_smoke_batch(
         dev,
         engine,
         windows,
@@ -246,7 +246,7 @@ fn process_jpeg_job(job: HwPicJob) -> HwPicOutput {
     };
 
     crate::log!(
-        "intel/hw_pic: jpeg smoke-submit id={} engine={} retired={} polls={} batch_gpu=0x{:X} result_gpu=0x{:X} bitstream_gpu=0x{:X} output_gpu=0x{:X} bytes=0x{:X} batch_bytes=0x{:X} ring_bytes=0x{:X} kickoff=0x{:08X}/0x{:08X} presubmit=0x{:08X}/0x{:08X} postsubmit=0x{:08X}/0x{:08X} complete=0x{:08X}/0x{:08X} stage_flags=0x{:08X} el=0x{:08X}:0x{:08X} start=0x{:08X} ctl=0x{:08X} hws=0x{:08X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} acthd64=0x{:016X} acthd_region={} acthd_off=0x{:X} acthd_dword=0x{:08X} bbaddr64=0x{:016X} dma_fadd64=0x{:016X} bbstate=0x{:08X} esr=0x{:08X} instps=0x{:08X} psmi_ctl=0x{:08X} nopid=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} fault8=0x{:08X} fault12=0x{:08X} fault8_tlb=0x{:08X}/0x{:08X} fault12_tlb=0x{:08X}/0x{:08X} bitstream_dword0=0x{:08X}\n",
+        "intel/hw_pic: jpeg smoke-submit id={} engine={} retired={} polls={} batch_gpu=0x{:X} result_gpu=0x{:X} bitstream_gpu=0x{:X} output_gpu=0x{:X} bytes=0x{:X} coded={}x{} jpeg_in={} jpeg_out={} scan_components={} interleaved={} dri={} mcu_count={} surface=0x{:08X}/0x{:08X} jpeg_pic=0x{:08X}/0x{:08X} batch_bytes=0x{:X} ring_bytes=0x{:X} kickoff=0x{:08X}/0x{:08X} presubmit=0x{:08X}/0x{:08X} postsubmit=0x{:08X}/0x{:08X} complete=0x{:08X}/0x{:08X} stage_flags=0x{:08X} el=0x{:08X}:0x{:08X} start=0x{:08X} ctl=0x{:08X} hws=0x{:08X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} acthd64=0x{:016X} acthd_region={} acthd_off=0x{:X} acthd_dword=0x{:08X} bbaddr64=0x{:016X} dma_fadd64=0x{:016X} bbstate=0x{:08X} esr=0x{:08X} instps=0x{:08X} psmi_ctl=0x{:08X} nopid=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} fault8=0x{:08X} fault12=0x{:08X} fault8_tlb=0x{:08X}/0x{:08X} fault12_tlb=0x{:08X}/0x{:08X} bitstream_dword0=0x{:08X}\n",
         job.id,
         smoke.engine_name,
         smoke.retired as u8,
@@ -256,6 +256,18 @@ fn process_jpeg_job(job: HwPicJob) -> HwPicOutput {
         smoke.bitstream_gpu_addr,
         smoke.output_surface_gpu_addr,
         smoke.bitstream_bytes,
+        smoke.coded_width,
+        smoke.coded_height,
+        smoke.jpeg_input_format,
+        smoke.jpeg_output_format,
+        smoke.jpeg_scan_component_count,
+        smoke.jpeg_interleaved as u8,
+        smoke.jpeg_restart_interval,
+        smoke.jpeg_mcu_count,
+        smoke.surface_dw2,
+        smoke.surface_dw3,
+        smoke.jpeg_pic_dw1,
+        smoke.jpeg_pic_dw2,
         smoke.batch_tail_bytes,
         smoke.ring_tail_bytes,
         smoke.kickoff_value,
