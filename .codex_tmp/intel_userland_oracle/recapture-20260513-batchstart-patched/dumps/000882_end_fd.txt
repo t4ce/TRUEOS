@@ -1,0 +1,8 @@
+fd=0 target="/dev/pts/3"
+fd=1 target="/home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/recapture-20260513-batchstart-patched/log.txt"
+fd=2 target="/home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/recapture-20260513-batchstart-patched/log.txt"
+fd=3 target="/home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/recapture-20260513-batchstart-patched/log.txt"
+fd=4 target="/proc/410432/fd"
+fd=5 target="/home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/recapture-20260513-batchstart-patched/dumps/000882_end_fd.txt"
+fd=49 target="/dev/ptmx"
+fd=103 target="/usr/share/code-insiders/v8_context_snapshot.bin"

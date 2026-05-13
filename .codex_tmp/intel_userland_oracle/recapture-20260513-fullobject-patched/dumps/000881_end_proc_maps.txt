@@ -1,0 +1,57 @@
+62f4b13cb000-62f4b13cd000 r--p 00000000 103:03 11143572                  /home/t4ce/REPOS/TRUEOS/crates/trueos-shader/intel_userland_oracle/latest/build/vk_compute_sentinel
+62f4b13cd000-62f4b13cf000 r-xp 00002000 103:03 11143572                  /home/t4ce/REPOS/TRUEOS/crates/trueos-shader/intel_userland_oracle/latest/build/vk_compute_sentinel
+62f4b13cf000-62f4b13d0000 r--p 00004000 103:03 11143572                  /home/t4ce/REPOS/TRUEOS/crates/trueos-shader/intel_userland_oracle/latest/build/vk_compute_sentinel
+62f4b13d0000-62f4b13d1000 r--p 00005000 103:03 11143572                  /home/t4ce/REPOS/TRUEOS/crates/trueos-shader/intel_userland_oracle/latest/build/vk_compute_sentinel
+62f4b13d1000-62f4b13d2000 rw-p 00006000 103:03 11143572                  /home/t4ce/REPOS/TRUEOS/crates/trueos-shader/intel_userland_oracle/latest/build/vk_compute_sentinel
+62f4d8250000-62f4d8dcb000 rw-p 00000000 00:00 0                          [heap]
+73e3c8000000-73e3c8021000 rw-p 00000000 00:00 0 
+73e3c8021000-73e3cc000000 ---p 00000000 00:00 0 
+73e3cf3fe000-73e3d0400000 rw-p 00000000 00:00 0 
+73e3d1a00000-73e3d1aa2000 r--p 00000000 103:03 93226225                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.34
+73e3d1aa2000-73e3d1bef000 r-xp 000a2000 103:03 93226225                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.34
+73e3d1bef000-73e3d1c77000 r--p 001ef000 103:03 93226225                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.34
+73e3d1c77000-73e3d1c86000 r--p 00276000 103:03 93226225                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.34
+73e3d1c86000-73e3d1c89000 rw-p 00285000 103:03 93226225                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.34
+73e3d1c89000-73e3d1c8d000 rw-p 00000000 00:00 0 
+73e3d2e99000-73e3d2e9d000 r--p 00000000 103:03 93225759                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+73e3d2e9d000-73e3d2ec0000 r-xp 00004000 103:03 93225759                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+73e3d2ec0000-73e3d2ec4000 r--p 00027000 103:03 93225759                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+73e3d2ec4000-73e3d2ec5000 r--p 0002a000 103:03 93225759                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+73e3d2ec5000-73e3d2ec6000 rw-p 0002b000 103:03 93225759                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+73e3d2ec6000-73e3d2ed7000 r--p 00000000 103:03 93194293                  /usr/lib/x86_64-linux-gnu/libm.so.6
+73e3d2ed7000-73e3d2f62000 r-xp 00011000 103:03 93194293                  /usr/lib/x86_64-linux-gnu/libm.so.6
+73e3d2f62000-73e3d2fd1000 r--p 0009c000 103:03 93194293                  /usr/lib/x86_64-linux-gnu/libm.so.6
+73e3d2fd1000-73e3d2fd2000 r--p 0010a000 103:03 93194293                  /usr/lib/x86_64-linux-gnu/libm.so.6
+73e3d2fd2000-73e3d2fd3000 rw-p 0010b000 103:03 93194293                  /usr/lib/x86_64-linux-gnu/libm.so.6
+73e3d3000000-73e3d3028000 r--p 00000000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
+73e3d3028000-73e3d31c1000 r-xp 00028000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
+73e3d31c1000-73e3d3230000 r--p 001c1000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
+73e3d3230000-73e3d3234000 r--p 0022f000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
+73e3d3234000-73e3d3236000 rw-p 00233000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
+73e3d3236000-73e3d3243000 rw-p 00000000 00:00 0 
+73e3d336f000-73e3d3375000 r--p 00000000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
+73e3d3375000-73e3d33c7000 r-xp 00006000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
+73e3d33c7000-73e3d33fe000 r--p 00058000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
+73e3d33fe000-73e3d33ff000 r--p 0008f000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
+73e3d33ff000-73e3d3400000 rw-p 00090000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
+73e3d3400000-73e3d3401000 r--p 00000000 103:03 77863580                  /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/patched-libtrueos_ioctl_trace.so
+73e3d3401000-73e3d3404000 r-xp 00001000 103:03 77863580                  /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/patched-libtrueos_ioctl_trace.so
+73e3d3404000-73e3d3406000 r--p 00004000 103:03 77863580                  /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/patched-libtrueos_ioctl_trace.so
+73e3d3406000-73e3d3407000 r--p 00005000 103:03 77863580                  /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/patched-libtrueos_ioctl_trace.so
+73e3d3407000-73e3d3408000 rw-p 00006000 103:03 77863580                  /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/patched-libtrueos_ioctl_trace.so
+73e3d3408000-73e3d3690000 rw-p 00000000 00:00 0 
+73e3d36fb000-73e3d36fe000 rw-p 00000000 00:00 0 
+73e3d3719000-73e3d371a000 rw-p 00000000 00:00 0 
+73e3d371a000-73e3d371b000 rw-p 00000000 00:00 0 
+73e3d371b000-73e3d371d000 rw-p 00000000 00:00 0 
+73e3d371d000-73e3d3721000 r--p 00000000 00:00 0                          [vvar]
+73e3d3721000-73e3d3723000 r--p 00000000 00:00 0                          [vvar_vclock]
+73e3d3723000-73e3d3725000 r-xp 00000000 00:00 0                          [vdso]
+73e3d3725000-73e3d3726000 r--p 00000000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+73e3d3726000-73e3d3754000 r-xp 00001000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+73e3d3754000-73e3d3762000 r--p 0002f000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+73e3d3762000-73e3d3764000 r--p 0003d000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+73e3d3764000-73e3d3765000 rw-p 0003f000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+73e3d3765000-73e3d3766000 rw-p 00000000 00:00 0 
+7fff52235000-7fff52257000 rw-p 00000000 00:00 0                          [stack]
+ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsyscall]
