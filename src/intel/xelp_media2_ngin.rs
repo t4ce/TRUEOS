@@ -3,11 +3,7 @@ extern crate alloc;
 use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;
 
-use super::xelp_media2_ngin_hw_pic::{
-    JpegHuffTables, JpegQuantTables, JpegScanInfo, MediaEncodedStreamProof,
-    MediaJpegSmokeSubmitProof, jpeg_output_format_from_input, parse_jpeg_frame_dims,
-    parse_jpeg_huff_tables, parse_jpeg_quant_tables, parse_jpeg_scan_info,
-};
+use super::xelp_media2_ngin_hw_pic::MediaEncodedStreamProof;
 use super::xelp_media_h264src::parse_h264_source_summary;
 use super::xelp_media_mp4::{
     AnnexBAccessUnit, H264VclInfo, ParsedPps, ParsedSps, h264_crop_offsets_px, parse_pps,
@@ -42,25 +38,25 @@ const GEN11_VCS1_RING_BASE: usize = 0x1C4000;
 const GEN11_VECS0_RING_BASE: usize = 0x1C8000;
 const GEN11_VECS1_RING_BASE: usize = 0x1D8000;
 
-const RING_TAIL: usize = 0x30;
-const RING_HEAD: usize = 0x34;
-const RING_START: usize = 0x38;
-const RING_CTL: usize = 0x3C;
-const RING_ACTHD: usize = 0x74;
-const RING_MI_MODE: usize = 0x9C;
-const RING_PSMI_CTL: usize = 0x50;
-const RING_ACTHD_UDW: usize = 0x5C;
-const RING_DMA_FADD_UDW: usize = 0x60;
-const RING_IPEIR: usize = 0x64;
-const RING_IPEHR: usize = 0x68;
+pub(super) const RING_TAIL: usize = 0x30;
+pub(super) const RING_HEAD: usize = 0x34;
+pub(super) const RING_START: usize = 0x38;
+pub(super) const RING_CTL: usize = 0x3C;
+pub(super) const RING_ACTHD: usize = 0x74;
+pub(super) const RING_MI_MODE: usize = 0x9C;
+pub(super) const RING_PSMI_CTL: usize = 0x50;
+pub(super) const RING_ACTHD_UDW: usize = 0x5C;
+pub(super) const RING_DMA_FADD_UDW: usize = 0x60;
+pub(super) const RING_IPEIR: usize = 0x64;
+pub(super) const RING_IPEHR: usize = 0x68;
 const RING_INSTDONE: usize = 0x6C;
-const RING_INSTPS: usize = 0x70;
-const RING_CONTEXT_CONTROL: usize = 0x244;
-const RING_CONTEXT_CONTROL_REF: usize = 0x5A0;
-const RING_MODE_GEN7: usize = 0x29C;
-const RING_EXECLIST_STATUS_LO: usize = 0x234;
-const RING_EXECLIST_STATUS_HI: usize = 0x238;
-const RING_EXECLIST_CONTROL: usize = 0x550;
+pub(super) const RING_INSTPS: usize = 0x70;
+pub(super) const RING_CONTEXT_CONTROL: usize = 0x244;
+pub(super) const RING_CONTEXT_CONTROL_REF: usize = 0x5A0;
+pub(super) const RING_MODE_GEN7: usize = 0x29C;
+pub(super) const RING_EXECLIST_STATUS_LO: usize = 0x234;
+pub(super) const RING_EXECLIST_STATUS_HI: usize = 0x238;
+pub(super) const RING_EXECLIST_CONTROL: usize = 0x550;
 
 const MEDIA_ENGINE_GPU_ADDR_BASE: u64 = 0x0120_0000;
 const MEDIA_ENGINE_GPU_ADDR_STRIDE: u64 = 0x0100_0000;
@@ -72,42 +68,42 @@ const MEDIA_DEFAULT_BITSTREAM_BYTES: usize = 8 * 1024 * 1024;
 const MEDIA_DEFAULT_OUTPUT_SURFACE_BYTES: usize = 16 * 1024 * 1024;
 const MEDIA_DEFAULT_SCRATCH_BYTES: usize = 256 * 1024;
 const MEDIA_SCRATCH_OFFSET_BYTES: usize = MEDIA_DEFAULT_SCRATCH_BYTES;
-const MEDIA_SUBMIT_POLL_ITERS: usize = 100_000;
+pub(super) const MEDIA_SUBMIT_POLL_ITERS: usize = 100_000;
 
-const RING_HWS_PGA: usize = 0x80;
+pub(super) const RING_HWS_PGA: usize = 0x80;
 const RING_HWSTAM: usize = 0x98;
 const RING_EXECLIST_SUBMIT_PORT: usize = 0x230;
 const RING_EXECLIST_SQ_LO: usize = 0x510;
 const RING_EXECLIST_SQ_HI: usize = 0x514;
-const RING_BBADDR: usize = 0x140;
-const RING_BBADDR_UDW: usize = 0x168;
-const RING_DMA_FADD: usize = 0x78;
-const RING_NOPID: usize = 0x94;
-const RING_ESR: usize = 0xB8;
-const RING_BBSTATE: usize = 0x110;
-const GEN12_RING_FAULT_REG: usize = 0x0000_CEC4;
+pub(super) const RING_BBADDR: usize = 0x140;
+pub(super) const RING_BBADDR_UDW: usize = 0x168;
+pub(super) const RING_DMA_FADD: usize = 0x78;
+pub(super) const RING_NOPID: usize = 0x94;
+pub(super) const RING_ESR: usize = 0xB8;
+pub(super) const RING_BBSTATE: usize = 0x110;
+pub(super) const GEN12_RING_FAULT_REG: usize = 0x0000_CEC4;
 
 const MI_STORE_DWORD_IMM_GEN4: u32 = (0x20 << 23) | 2;
 const MI_USE_GGTT: u32 = 1 << 22;
 const MI_STORE_DWORD_IMM_GEN4_LEN_DW4_PPGTT: u32 = MI_STORE_DWORD_IMM_GEN4 | (4 - 2);
 const MI_STORE_DWORD_IMM_GEN4_LEN_DW4: u32 = MI_STORE_DWORD_IMM_GEN4 | MI_USE_GGTT | (4 - 2);
-const MI_FLUSH_DW: u32 = (0x26 << 23) | 3;
-const MI_FLUSH_DW_VIDEO_PIPELINE_CACHE_INVALIDATE: u32 = 1 << 7;
-const MI_FLUSH_DW_POST_SYNC_WRITE_IMMEDIATE: u32 = 1 << 14;
+pub(super) const MI_FLUSH_DW: u32 = (0x26 << 23) | 3;
+pub(super) const MI_FLUSH_DW_VIDEO_PIPELINE_CACHE_INVALIDATE: u32 = 1 << 7;
+pub(super) const MI_FLUSH_DW_POST_SYNC_WRITE_IMMEDIATE: u32 = 1 << 14;
 const MI_FLUSH_DW_ADDR_GTT: u32 = 1 << 2;
-const MI_ARB_CHECK: u32 = 0x0280_0000;
-const MI_BATCH_BUFFER_END: u32 = 0x0500_0000;
+pub(super) const MI_ARB_CHECK: u32 = 0x0280_0000;
+pub(super) const MI_BATCH_BUFFER_END: u32 = 0x0500_0000;
 const MI_BATCH_BUFFER_START_GEN8: u32 = (0x31 << 23) | 1;
 const MI_BATCH_GTT: u32 = 2 << 6;
 const MI_BATCH_PPGTT: u32 = 1 << 8;
-const MI_NOOP: u32 = 0;
-const MI_FORCE_WAKEUP: u32 = 29 << 23;
-const MI_FORCE_WAKEUP_MFX_WELL: u32 = (1 << 9) | (0x300 << 16);
+pub(super) const MI_NOOP: u32 = 0;
+pub(super) const MI_FORCE_WAKEUP: u32 = 29 << 23;
+pub(super) const MI_FORCE_WAKEUP_MFX_WELL: u32 = (1 << 9) | (0x300 << 16);
 const MI_LOAD_REGISTER_IMM: u32 = 0x1100_0000;
 const MI_LRI_CS_MMIO: u32 = 1 << 19;
 const MI_LRI_FORCE_POSTED: u32 = 1 << 12;
 
-const EL_CTRL_LOAD: u32 = 1 << 0;
+pub(super) const EL_CTRL_LOAD: u32 = 1 << 0;
 const CTX_CTRL_RS_CTX_ENABLE: u32 = 1 << 1;
 const CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT: u32 = 1 << 0;
 const CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT: u32 = 1 << 2;
@@ -119,41 +115,34 @@ const CTX_DESC_PRIVILEGE: u32 = 1 << 8;
 const CTX_DESC_PRIORITY_NORMAL: u32 = 1 << 9;
 const CTX_DESC_ADDRESSING_MODE_SHIFT: u32 = 3;
 const INTEL_LEGACY_64B_CONTEXT: u32 = 3;
-const GEN11_GFX_DISABLE_LEGACY_MODE: u32 = 1 << 3;
+pub(super) const GEN11_GFX_DISABLE_LEGACY_MODE: u32 = 1 << 3;
 /// Enable ExecList submission mode (i915: GFX_RUN_LIST_ENABLE).  Without
 /// this the scheduler stays in legacy ring-buffer mode and never promotes
 /// pending SQ entries to active.  GuC firmware sets it during boot; GDRST
 /// clears it, so we must re-set it after every engine reset.
-const GFX_RUN_LIST_ENABLE: u32 = 1 << 15;
-const STOP_RING: u32 = 1 << 8;
+pub(super) const GFX_RUN_LIST_ENABLE: u32 = 1 << 15;
+pub(super) const STOP_RING: u32 = 1 << 8;
 
 const MEDIA_PIPELINE_MFX: u32 = 2;
-const MEDIA_CMD_OPCODE_MFX_COMMON: u32 = 0;
+pub(super) const MEDIA_CMD_OPCODE_MFX_COMMON: u32 = 0;
 const MEDIA_CMD_OPCODE_MFX_AVC: u32 = 1;
-const MEDIA_CMD_OPCODE_MFX_JPEG: u32 = 7;
-const MFX_PIPE_MODE_SELECT: u32 = 0;
-const MFX_SURFACE_STATE: u32 = 1;
-const MFX_PIPE_BUF_ADDR_STATE: u32 = 2;
-const MFX_IND_OBJ_BASE_ADDR_STATE: u32 = 3;
+pub(super) const MFX_PIPE_MODE_SELECT: u32 = 0;
+pub(super) const MFX_SURFACE_STATE: u32 = 1;
+pub(super) const MFX_PIPE_BUF_ADDR_STATE: u32 = 2;
+pub(super) const MFX_IND_OBJ_BASE_ADDR_STATE: u32 = 3;
 const MFX_BSP_BUF_BASE_ADDR_STATE: u32 = 4;
-const MFX_JPEG_PIC_STATE: u32 = 0;
 const MFX_AVC_IMG_STATE: u32 = 0;
-const MFD_JPEG_BSD_OBJECT: u32 = 8;
 const MFD_AVC_BSD_OBJECT: u32 = 8;
-const MFX_CMD_LEN_PIPE_MODE_SELECT: u32 = 3;
-const MFX_CMD_LEN_SURFACE_STATE: u32 = 4;
-const MFX_CMD_LEN_PIPE_BUF_ADDR_STATE: u32 = 63;
-const MFX_CMD_LEN_IND_OBJ_BASE_ADDR_STATE: u32 = 24;
+pub(super) const MFX_CMD_LEN_PIPE_MODE_SELECT: u32 = 3;
+pub(super) const MFX_CMD_LEN_SURFACE_STATE: u32 = 4;
+pub(super) const MFX_CMD_LEN_PIPE_BUF_ADDR_STATE: u32 = 63;
+pub(super) const MFX_CMD_LEN_IND_OBJ_BASE_ADDR_STATE: u32 = 24;
 const MFX_CMD_LEN_BSP_BUF_BASE_ADDR_STATE: u32 = 8;
-const MFX_CMD_LEN_JPEG_PIC_STATE: u32 = 1;
-const MFX_CMD_LEN_JPEG_BSD_OBJECT: u32 = 4;
 const MFX_CMD_LEN_AVC_IMG_STATE: u32 = 19;
 const MFX_CMD_LEN_AVC_BSD_OBJECT: u32 = 5;
-const MFX_JPEG_HUFF_TABLE_STATE: u32 = 2;
-const MFX_CMD_LEN_JPEG_HUFF_TABLE_STATE: u32 = 51;
 
-const MFX_QM_STATE: u32 = 7;
-const MFX_CMD_LEN_QM_STATE: u32 = 16;
+pub(super) const MFX_QM_STATE: u32 = 7;
+pub(super) const MFX_CMD_LEN_QM_STATE: u32 = 16;
 const MFX_AVC_DIRECTMODE_STATE: u32 = 2;
 const MFX_CMD_LEN_AVC_DIRECTMODE_STATE: u32 = 69;
 // MFX_AVC_SLICE_STATE: SubOpcodeA=0, SubOpcodeB=3, MediaCmdOpcode=1, length=11 (bias 2)
@@ -182,35 +171,34 @@ const MFD_AVC_PICID_STATE_SUBOPCODE_A: u32 = 1;
 const MFX_CMD_LEN_AVC_PICID_STATE: u32 = 8;
 
 // TGL MOCS index 1 = pagetable-controlled (UC). Index 0 = error/invalid.
-const MFX_MOCS_UC: u32 = 1;
+pub(super) const MFX_MOCS_UC: u32 = 1;
 
 const MEDIA_RESULT_SLOT_BYTES: u64 = 8;
-const MEDIA_RESULT_KICKOFF_SLOT: u64 = 0;
-const MEDIA_RESULT_PRESUBMIT_SLOT: u64 = MEDIA_RESULT_KICKOFF_SLOT + MEDIA_RESULT_SLOT_BYTES;
-const MEDIA_RESULT_POSTSUBMIT_SLOT: u64 = MEDIA_RESULT_PRESUBMIT_SLOT + MEDIA_RESULT_SLOT_BYTES;
-const MEDIA_RESULT_COMPLETE_SLOT: u64 = MEDIA_RESULT_POSTSUBMIT_SLOT + MEDIA_RESULT_SLOT_BYTES;
-const MEDIA_RESULT_BITSTREAM_ADDR_LO_SLOT: u64 =
+pub(super) const MEDIA_RESULT_KICKOFF_SLOT: u64 = 0;
+pub(super) const MEDIA_RESULT_PRESUBMIT_SLOT: u64 =
+    MEDIA_RESULT_KICKOFF_SLOT + MEDIA_RESULT_SLOT_BYTES;
+pub(super) const MEDIA_RESULT_POSTSUBMIT_SLOT: u64 =
+    MEDIA_RESULT_PRESUBMIT_SLOT + MEDIA_RESULT_SLOT_BYTES;
+pub(super) const MEDIA_RESULT_COMPLETE_SLOT: u64 =
+    MEDIA_RESULT_POSTSUBMIT_SLOT + MEDIA_RESULT_SLOT_BYTES;
+pub(super) const MEDIA_RESULT_BITSTREAM_ADDR_LO_SLOT: u64 =
     MEDIA_RESULT_COMPLETE_SLOT + MEDIA_RESULT_SLOT_BYTES;
-const MEDIA_RESULT_BITSTREAM_ADDR_HI_SLOT: u64 =
+pub(super) const MEDIA_RESULT_BITSTREAM_ADDR_HI_SLOT: u64 =
     MEDIA_RESULT_BITSTREAM_ADDR_LO_SLOT + MEDIA_RESULT_SLOT_BYTES;
-const MEDIA_RESULT_BITSTREAM_BYTES_SLOT: u64 =
+pub(super) const MEDIA_RESULT_BITSTREAM_BYTES_SLOT: u64 =
     MEDIA_RESULT_BITSTREAM_ADDR_HI_SLOT + MEDIA_RESULT_SLOT_BYTES;
-const MEDIA_RESULT_SAMPLE_NALS_SLOT: u64 =
+pub(super) const MEDIA_RESULT_SAMPLE_NALS_SLOT: u64 =
     MEDIA_RESULT_BITSTREAM_BYTES_SLOT + MEDIA_RESULT_SLOT_BYTES;
-const MEDIA_RESULT_STAGE_FLAGS_SLOT: u64 = MEDIA_RESULT_SAMPLE_NALS_SLOT + MEDIA_RESULT_SLOT_BYTES;
-const MEDIA_RESULT_OUTPUT_SURFACE_ADDR_LO_SLOT: u64 =
+pub(super) const MEDIA_RESULT_STAGE_FLAGS_SLOT: u64 =
+    MEDIA_RESULT_SAMPLE_NALS_SLOT + MEDIA_RESULT_SLOT_BYTES;
+pub(super) const MEDIA_RESULT_OUTPUT_SURFACE_ADDR_LO_SLOT: u64 =
     MEDIA_RESULT_STAGE_FLAGS_SLOT + MEDIA_RESULT_SLOT_BYTES;
-const MEDIA_RESULT_OUTPUT_SURFACE_ADDR_HI_SLOT: u64 =
+pub(super) const MEDIA_RESULT_OUTPUT_SURFACE_ADDR_HI_SLOT: u64 =
     MEDIA_RESULT_OUTPUT_SURFACE_ADDR_LO_SLOT + MEDIA_RESULT_SLOT_BYTES;
-const MEDIA_RESULT_OUTPUT_SURFACE_BYTES_SLOT: u64 =
+pub(super) const MEDIA_RESULT_OUTPUT_SURFACE_BYTES_SLOT: u64 =
     MEDIA_RESULT_OUTPUT_SURFACE_ADDR_HI_SLOT + MEDIA_RESULT_SLOT_BYTES;
-const MEDIA_RESULT_FRAME_DIMS_SLOT: u64 =
+pub(super) const MEDIA_RESULT_FRAME_DIMS_SLOT: u64 =
     MEDIA_RESULT_OUTPUT_SURFACE_BYTES_SLOT + MEDIA_RESULT_SLOT_BYTES;
-const MEDIA_STAGE_FLAG_JPEG_SMOKE: u32 = 1 << 8;
-const MEDIA_STAGE_FLAG_JPEG_PIC_STATE: u32 = 1 << 9;
-const MEDIA_STAGE_FLAG_JPEG_QM_STATE: u32 = 1 << 10;
-const MEDIA_STAGE_FLAG_JPEG_HUFF_STATE: u32 = 1 << 11;
-const MEDIA_STAGE_FLAG_JPEG_BSD_OBJECT: u32 = 1 << 12;
 
 static MEDIA_KICKOFF_RAN: AtomicBool = AtomicBool::new(false);
 static MEDIA_DECODE_RAN: AtomicBool = AtomicBool::new(false);
@@ -810,14 +798,18 @@ fn snapshot_runtime(
     }
 }
 
-fn sample_buffer_dword(base_virt: *mut u8, buffer_bytes: usize, offset_bytes: usize) -> u32 {
+pub(super) fn sample_buffer_dword(
+    base_virt: *mut u8,
+    buffer_bytes: usize,
+    offset_bytes: usize,
+) -> u32 {
     if offset_bytes.saturating_add(core::mem::size_of::<u32>()) > buffer_bytes {
         return 0;
     }
     unsafe { core::ptr::read_volatile(base_virt.add(offset_bytes) as *const u32) }
 }
 
-fn classify_media_acthd(
+pub(super) fn classify_media_acthd(
     acthd: u32,
     windows: MediaGpuWindowLayout,
     backing: MediaBitstreamBacking,
@@ -924,7 +916,7 @@ fn media2_first_frame_state(demo: MediaDecodeFrameState) -> Media2FirstFrameStat
     }
 }
 
-fn marker_base(engine: MediaEngineDescriptor) -> u32 {
+pub(super) fn marker_base(engine: MediaEngineDescriptor) -> u32 {
     let class_base = match engine.id.class {
         MediaEngineClass::VideoDecode => 0x4D44_1000,
         MediaEngineClass::VideoEnhancement => 0x4D45_1000,
@@ -932,7 +924,7 @@ fn marker_base(engine: MediaEngineDescriptor) -> u32 {
     class_base + (engine.id.instance as u32) * 0x100
 }
 
-fn surface_signature(bytes: &[u8]) -> (u32, usize) {
+pub(super) fn surface_signature(bytes: &[u8]) -> (u32, usize) {
     let sample_count = bytes.len().min(4096);
     if sample_count == 0 {
         return (0, 0);
@@ -1025,7 +1017,7 @@ fn luma_band_to_chroma_band(luma_row: usize, luma_rows: usize) -> (usize, usize)
     (chroma_row, chroma_end.saturating_sub(chroma_row))
 }
 
-fn probe_output_surface(
+pub(super) fn probe_output_surface(
     output_surface: &[u8],
     coded_width: u16,
     coded_height: u16,
@@ -1130,7 +1122,7 @@ fn probe_output_surface(
     }
 }
 
-fn log_output_surface_probe(
+pub(super) fn log_output_surface_probe(
     engine_name: &'static str,
     sample_idx: u32,
     submit_completed: bool,
@@ -1179,7 +1171,7 @@ fn log_output_surface_probe(
     );
 }
 
-fn output_surface_has_decoded_detail(probe: &MediaSurfaceProbe) -> bool {
+pub(super) fn output_surface_has_decoded_detail(probe: &MediaSurfaceProbe) -> bool {
     probe.valid
         && (probe.luma_visible_last_row.has_range()
             || probe.luma_prev_mb_row.has_range()
@@ -1343,7 +1335,7 @@ pub(super) fn decode_and_present_frame(
 }
 
 #[inline]
-fn align_up_u32(value: u32, align: u32) -> u32 {
+pub(super) fn align_up_u32(value: u32, align: u32) -> u32 {
     if align == 0 {
         value
     } else {
@@ -1358,7 +1350,7 @@ fn masked_bits_update(set_bits: u32, clear_bits: u32) -> u32 {
 }
 
 #[inline]
-fn masked_bit_disable(bit: u32) -> u32 {
+pub(super) fn masked_bit_disable(bit: u32) -> u32 {
     bit << 16
 }
 
@@ -1459,7 +1451,7 @@ fn build_ppgtt_for_ranges(ranges: &[(u64, u64, usize)]) -> Option<u64> {
     Some(pml4_phys)
 }
 
-fn build_ring_batch_start_words(
+pub(super) fn build_ring_batch_start_words(
     ring_virt: *mut u8,
     ring_bytes: usize,
     ring_offset: usize,
@@ -1487,7 +1479,7 @@ fn build_ring_batch_start_words(
     Some(ring_offset + 40)
 }
 
-fn ring_ctl_value_for_size(size: usize) -> Option<u32> {
+pub(super) fn ring_ctl_value_for_size(size: usize) -> Option<u32> {
     let size = u32::try_from(size).ok()?;
     Some(size.checked_sub(4096)? | 1)
 }
@@ -1509,7 +1501,7 @@ fn media_sw_context_id_for_submit(context_gpu_addr: u64) -> u32 {
     if sw_context_id == 0 { 1 } else { sw_context_id }
 }
 
-fn build_media_execlist_context_descriptor(
+pub(super) fn build_media_execlist_context_descriptor(
     context_gpu_addr: u64,
     _engine: MediaEngineDescriptor,
     _sw_counter: u32,
@@ -1527,7 +1519,7 @@ fn build_media_execlist_context_descriptor(
     (lo, hi)
 }
 
-fn media_ctx_control_value(inhibit_restore: bool) -> u32 {
+pub(super) fn media_ctx_control_value(inhibit_restore: bool) -> u32 {
     let mut ctl =
         masked_bits_update(CTX_CTRL_INHIBIT_SYN_CTX_SWITCH, CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT);
     if inhibit_restore {
@@ -1614,7 +1606,7 @@ fn read_video_lrc_slot(context_virt: *mut u8, context_len: usize, slot_dw: usize
     dwords[LRC_STATE_OFFSET_DWORDS + slot_dw]
 }
 
-fn init_gen12_video_context_image(
+pub(super) fn init_gen12_video_context_image(
     context_virt: *mut u8,
     context_len: usize,
     ring_base: usize,
@@ -1854,7 +1846,12 @@ fn emit_store_dword(batch: &mut [u32], idx: &mut usize, gpu_addr: u64, value: u3
     true
 }
 
-fn emit_store_dword_ppgtt(batch: &mut [u32], idx: &mut usize, gpu_addr: u64, value: u32) -> bool {
+pub(super) fn emit_store_dword_ppgtt(
+    batch: &mut [u32],
+    idx: &mut usize,
+    gpu_addr: u64,
+    value: u32,
+) -> bool {
     if idx.saturating_add(4) > batch.len() {
         return false;
     }
@@ -1867,7 +1864,7 @@ fn emit_store_dword_ppgtt(batch: &mut [u32], idx: &mut usize, gpu_addr: u64, val
 }
 
 #[inline]
-fn media_cmd_header(
+pub(super) fn media_cmd_header(
     media_opcode: u32,
     subopcode_a: u32,
     subopcode_b: u32,
@@ -1881,7 +1878,7 @@ fn media_cmd_header(
         | dword_length
 }
 
-fn begin_batch_packet(
+pub(super) fn begin_batch_packet(
     batch: &mut [u32],
     idx: &mut usize,
     dword_count: usize,
@@ -1899,84 +1896,14 @@ fn begin_batch_packet(
 }
 
 #[inline]
-fn packet_write_addr64(batch: &mut [u32], packet_start: usize, dword_index: usize, gpu_addr: u64) {
+pub(super) fn packet_write_addr64(
+    batch: &mut [u32],
+    packet_start: usize,
+    dword_index: usize,
+    gpu_addr: u64,
+) {
     batch[packet_start + dword_index] = gpu_addr as u32;
     batch[packet_start + dword_index + 1] = (gpu_addr >> 32) as u32;
-}
-
-#[inline]
-fn pack_u8x4(bytes: &[u8]) -> u32 {
-    let mut value = 0u32;
-    for (shift, byte) in bytes.iter().enumerate() {
-        value |= u32::from(*byte) << (shift * 8);
-    }
-    value
-}
-
-fn emit_jpeg_huff_table_state(
-    batch: &mut [u32],
-    idx: &mut usize,
-    huff_table_id: u32,
-    dc_bits: &[u8; 12],
-    dc_values: &[u8; 12],
-    ac_bits: &[u8; 16],
-    ac_values: &[u8; 162],
-) -> Option<()> {
-    let huff = begin_batch_packet(
-        batch,
-        idx,
-        (MFX_CMD_LEN_JPEG_HUFF_TABLE_STATE + 2) as usize,
-        media_cmd_header(
-            MEDIA_CMD_OPCODE_MFX_JPEG,
-            0,
-            MFX_JPEG_HUFF_TABLE_STATE,
-            MFX_CMD_LEN_JPEG_HUFF_TABLE_STATE,
-        ),
-    )?;
-
-    batch[huff + 1] = huff_table_id;
-    for dw in 0..3 {
-        let base = dw * 4;
-        batch[huff + 2 + dw] = pack_u8x4(&dc_bits[base..base + 4]);
-        batch[huff + 5 + dw] = pack_u8x4(&dc_values[base..base + 4]);
-    }
-    for dw in 0..4 {
-        let base = dw * 4;
-        batch[huff + 8 + dw] = pack_u8x4(&ac_bits[base..base + 4]);
-    }
-    for dw in 0..40 {
-        let base = dw * 4;
-        batch[huff + 12 + dw] = pack_u8x4(&ac_values[base..base + 4]);
-    }
-    batch[huff + 52] = u32::from(ac_values[160]) | (u32::from(ac_values[161]) << 8);
-    Some(())
-}
-
-fn emit_jpeg_bsd_object(
-    batch: &mut [u32],
-    idx: &mut usize,
-    scan_info: &JpegScanInfo,
-) -> Option<()> {
-    let bsd = begin_batch_packet(
-        batch,
-        idx,
-        (MFX_CMD_LEN_JPEG_BSD_OBJECT + 2) as usize,
-        media_cmd_header(
-            MEDIA_CMD_OPCODE_MFX_JPEG,
-            1,
-            MFD_JPEG_BSD_OBJECT,
-            MFX_CMD_LEN_JPEG_BSD_OBJECT,
-        ),
-    )?;
-
-    batch[bsd + 1] = scan_info.scan_data_length;
-    batch[bsd + 2] = scan_info.scan_data_offset;
-    batch[bsd + 3] = 0;
-    batch[bsd + 4] = (scan_info.mcu_count & 0x03ff_ffff)
-        | (u32::from(scan_info.scan_component_count) << 27)
-        | ((scan_info.interleaved as u32) << 30);
-    batch[bsd + 5] = u32::from(scan_info.restart_interval);
-    Some(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2059,7 +1986,7 @@ fn log_media2_batch_geometry(
     );
 }
 
-fn emit_mfx_wait(batch: &mut [u32], idx: &mut usize) -> bool {
+pub(super) fn emit_mfx_wait(batch: &mut [u32], idx: &mut usize) -> bool {
     if *idx >= batch.len() {
         return false;
     }
@@ -2069,7 +1996,7 @@ fn emit_mfx_wait(batch: &mut [u32], idx: &mut usize) -> bool {
 }
 
 #[inline]
-fn read_result_dword(base_virt: *mut u8, slot_off: u64) -> u32 {
+pub(super) fn read_result_dword(base_virt: *mut u8, slot_off: u64) -> u32 {
     let ptr = (base_virt as usize).saturating_add(slot_off as usize) as *const u32;
     unsafe { core::ptr::read_volatile(ptr) }
 }
@@ -2639,7 +2566,7 @@ fn build_h264_decode_batch_skeleton(
     Some((idx + 3).saturating_mul(core::mem::size_of::<u32>()))
 }
 
-fn execlist_submit_port_push(
+pub(super) fn execlist_submit_port_push(
     dev: crate::intel::Dev,
     ring_base: usize,
     context0_lo: u32,
@@ -2672,7 +2599,7 @@ fn media_execlists_ready_for_hot_submit(
     false
 }
 
-fn wake_media_engine_forcewake(
+pub(super) fn wake_media_engine_forcewake(
     dev: crate::intel::Dev,
     engine: MediaEngineDescriptor,
 ) -> MediaEngineForcewakeAck {
@@ -2749,7 +2676,7 @@ fn drain_csb(dev: crate::intel::Dev, engine: MediaEngineDescriptor, hwsp_virt: *
 const GEN12_HWSP_CSB_BUF0_OFFSET: usize = 0x40; // dword 0x10 = byte 0x40
 const GEN12_CSB_ENTRIES: usize = 12;
 
-fn init_csb_pointers(dev: crate::intel::Dev, ring_base: usize, hwsp_virt: *mut u8) {
+pub(super) fn init_csb_pointers(dev: crate::intel::Dev, ring_base: usize, hwsp_virt: *mut u8) {
     let csb_init: u32 = 0xFFFF_0000 | (GEN12_CSB_RESET_VALUE << 8) | GEN12_CSB_RESET_VALUE;
 
     // First MMIO write + posting read (i915 pattern).
@@ -2781,7 +2708,7 @@ fn init_csb_pointers(dev: crate::intel::Dev, ring_base: usize, hwsp_virt: *mut u
 
 /// Wait for prior execution to retire and acknowledge pending CSB events.
 /// Fallback to GDRST only if the engine refuses to go idle.
-fn reset_media_engine(
+pub(super) fn reset_media_engine(
     dev: crate::intel::Dev,
     engine: MediaEngineDescriptor,
     _context_virt: *mut u8,
@@ -2821,7 +2748,7 @@ fn reset_media_engine(
     super::ggtt_invalidate(dev);
 }
 
-fn seed_media_ring_live_state(
+pub(super) fn seed_media_ring_live_state(
     dev: crate::intel::Dev,
     ring_base: usize,
     pphwsp_gpu: u32,
@@ -3240,595 +3167,6 @@ pub(super) fn stream_encoded_to_bitstream(
         forcewake_global_ack: wake.global_ack,
         forcewake_awake_count: wake.awake_count,
     })
-}
-
-pub(super) fn submit_jpeg_smoke_batch(
-    dev: crate::intel::Dev,
-    engine: MediaEngineDescriptor,
-    windows: MediaGpuWindowLayout,
-    backing: MediaBitstreamBacking,
-    bitstream_bytes: usize,
-    submit_token: u32,
-) -> Option<MediaJpegSmokeSubmitProof> {
-    if bitstream_bytes == 0 || bitstream_bytes > backing.bitstream_bytes {
-        return None;
-    }
-
-    let ring_virt = backing.ring_virt;
-    let context_virt = backing.context_virt;
-    let ring_gpu_addr = windows.ring_gpu_addr;
-    let context_gpu_addr = windows.context_gpu_addr;
-    let kickoff_marker = marker_base(engine)
-        .wrapping_add(0x80)
-        .wrapping_add((submit_token & 0x3F) << 2);
-    let ring_prelaunch_marker = kickoff_marker.wrapping_sub(1);
-    let presubmit_marker = kickoff_marker + 1;
-    let postsubmit_marker = kickoff_marker + 2;
-    let complete_marker = kickoff_marker + 3;
-
-    reset_media_engine(dev, engine, context_virt);
-    wake_media_engine_forcewake(dev, engine);
-
-    unsafe {
-        core::ptr::write_bytes(ring_virt, 0, backing.ring_bytes);
-        core::ptr::write_bytes(context_virt, 0, backing.context_bytes);
-        core::ptr::write_bytes(backing.batch_virt, 0, backing.batch_bytes);
-        core::ptr::write_bytes(backing.result_virt, 0, backing.result_bytes);
-    }
-
-    let bitstream = unsafe {
-        core::slice::from_raw_parts(backing.bitstream_virt as *const u8, bitstream_bytes)
-    };
-    let (coded_width, coded_height) = parse_jpeg_frame_dims(bitstream).unwrap_or((128, 128));
-    let jpeg_quant_tables = parse_jpeg_quant_tables(bitstream);
-    let jpeg_huff_tables = parse_jpeg_huff_tables(bitstream);
-    let jpeg_scan_info = parse_jpeg_scan_info(bitstream);
-    let output_surface_pitch = align_up_u32(coded_width.max(128), 128) as usize;
-    let frame_width_blocks_minus1 = (align_up_u32(coded_width.max(8), 8) / 8).saturating_sub(1);
-    let frame_height_blocks_minus1 = (align_up_u32(coded_height.max(8), 8) / 8).saturating_sub(1);
-    let jpeg_input_format = jpeg_scan_info
-        .as_ref()
-        .map(|scan_info| scan_info.input_format)
-        .unwrap_or(0);
-    let jpeg_output_format = jpeg_output_format_from_input(jpeg_input_format);
-    let surface_dw2 =
-        ((coded_width.saturating_sub(1)) << 4) | ((coded_height.saturating_sub(1)) << 18);
-    let surface_dw3 = (1 << 1)
-        | ((u32::try_from(output_surface_pitch)
-            .unwrap_or(u32::MAX)
-            .saturating_sub(1))
-            << 3)
-        | (1 << 26)
-        | (1 << 27)
-        | (4 << 28);
-    let jpeg_pic_dw1 = u32::from(jpeg_input_format) | (u32::from(jpeg_output_format) << 8);
-    let jpeg_pic_dw2 = frame_width_blocks_minus1 | (frame_height_blocks_minus1 << 16);
-
-    let batch_tail_bytes = build_jpeg_smoke_batch_skeleton(
-        backing.batch_virt,
-        backing.batch_bytes,
-        windows.result_gpu_addr,
-        windows.bitstream_gpu_addr,
-        windows.output_surface_gpu_addr,
-        backing.output_surface_bytes,
-        bitstream_bytes,
-        coded_width,
-        coded_height,
-        jpeg_quant_tables.as_ref(),
-        jpeg_huff_tables.as_ref(),
-        jpeg_scan_info.as_ref(),
-        kickoff_marker,
-        presubmit_marker,
-        postsubmit_marker,
-        complete_marker,
-    )?;
-
-    let ring_tail_bytes = build_ring_batch_start_words(
-        ring_virt,
-        backing.ring_bytes,
-        0,
-        windows.result_gpu_addr,
-        ring_prelaunch_marker,
-        windows.batch_gpu_addr,
-    )?;
-    let ring_ctl = ring_ctl_value_for_size(backing.ring_bytes)?;
-    let ring_start = ring_gpu_addr as u32;
-    let pphwsp_gpu = (context_gpu_addr & !0xFFF) as u32;
-    let ctx_ctl_after = media_ctx_control_value(false);
-    if !init_gen12_video_context_image(
-        context_virt,
-        backing.context_bytes,
-        engine.ring_base,
-        0,
-        ring_start,
-        ring_tail_bytes as u32,
-        ring_ctl,
-        pphwsp_gpu,
-        backing.ppgtt_pml4_phys,
-        false,
-    ) {
-        return None;
-    }
-
-    {
-        let mode_bits = GFX_RUN_LIST_ENABLE | GEN11_GFX_DISABLE_LEGACY_MODE;
-        super::mmio_write(dev, engine.ring_base + RING_MODE_GEN7, mode_bits | (mode_bits << 16));
-    }
-    seed_media_ring_live_state(
-        dev,
-        engine.ring_base,
-        pphwsp_gpu,
-        ring_start,
-        ring_ctl,
-        ring_tail_bytes as u32,
-    );
-    init_csb_pointers(dev, engine.ring_base, context_virt);
-
-    super::dma_flush(backing.batch_virt, batch_tail_bytes);
-    super::dma_flush(ring_virt, ring_tail_bytes);
-    super::dma_flush(context_virt, backing.context_bytes);
-    super::dma_flush(backing.result_virt, backing.result_bytes);
-
-    {
-        super::mmio_write(dev, engine.ring_base + RING_CONTEXT_CONTROL, ctx_ctl_after);
-        super::mmio_write(dev, engine.ring_base + RING_CONTEXT_CONTROL_REF, ctx_ctl_after);
-        super::mmio_write(dev, engine.ring_base + RING_MI_MODE, masked_bit_disable(STOP_RING));
-        super::mmio_write(dev, engine.ring_base + RING_HWS_PGA, pphwsp_gpu);
-    }
-
-    let submit_counter = submit_token.wrapping_add(1) & 0x3F;
-    let (ctx_desc_lo, ctx_desc_hi) =
-        build_media_execlist_context_descriptor(context_gpu_addr, engine, submit_counter, true);
-    core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
-    execlist_submit_port_push(dev, engine.ring_base, ctx_desc_lo, ctx_desc_hi, 0, 0);
-    super::mmio_write(dev, engine.ring_base + RING_EXECLIST_CONTROL, EL_CTRL_LOAD);
-
-    let mut retired = false;
-    let mut poll_iters = 0usize;
-    let mut complete_value = 0u32;
-    while poll_iters < MEDIA_SUBMIT_POLL_ITERS {
-        super::dma_flush(
-            unsafe { backing.result_virt.add(MEDIA_RESULT_COMPLETE_SLOT as usize) },
-            8,
-        );
-        complete_value = read_result_dword(backing.result_virt, MEDIA_RESULT_COMPLETE_SLOT);
-        if complete_value == complete_marker {
-            retired = true;
-            break;
-        }
-        core::hint::spin_loop();
-        poll_iters += 1;
-    }
-
-    super::dma_flush(backing.output_surface_virt, backing.output_surface_bytes);
-    super::dma_flush(backing.result_virt, backing.result_bytes);
-    let output_surface = unsafe {
-        core::slice::from_raw_parts(
-            backing.output_surface_virt as *const u8,
-            backing.output_surface_bytes,
-        )
-    };
-    let output_surface_probe = probe_output_surface(
-        output_surface,
-        u16::try_from(coded_width).unwrap_or(u16::MAX),
-        u16::try_from(coded_height).unwrap_or(u16::MAX),
-        0,
-        0,
-        u16::try_from(coded_width).unwrap_or(u16::MAX),
-        u16::try_from(coded_height).unwrap_or(u16::MAX),
-        output_surface_pitch,
-    );
-    log_output_surface_probe(engine.name, submit_token, retired, output_surface_probe);
-    let output_surface_detail = output_surface_has_decoded_detail(&output_surface_probe);
-    let (output_surface_signature, output_surface_nonzero_samples) =
-        surface_signature(output_surface);
-    if !output_surface_detail {
-        crate::log!(
-            "intel/media2: jpeg blank-surface engine={} sample={} retired={} detail_range=0 sig=0x{:08X} nonzero_samples={}\n",
-            engine.name,
-            submit_token,
-            retired as u8,
-            output_surface_signature,
-            output_surface_nonzero_samples,
-        );
-    }
-
-    let ring_acthd = super::mmio_read(dev, engine.ring_base + RING_ACTHD);
-    let ring_acthd_hi = super::mmio_read(dev, engine.ring_base + RING_ACTHD_UDW);
-    let bbaddr_lo = super::mmio_read(dev, engine.ring_base + RING_BBADDR);
-    let bbaddr_hi = super::mmio_read(dev, engine.ring_base + RING_BBADDR_UDW);
-    let dma_fadd_lo = super::mmio_read(dev, engine.ring_base + RING_DMA_FADD);
-    let dma_fadd_hi = super::mmio_read(dev, engine.ring_base + RING_DMA_FADD_UDW);
-    let fault_gen8 = super::mmio_read(dev, 0x4094);
-    let fault_gen12 = super::mmio_read(dev, GEN12_RING_FAULT_REG);
-    let (acthd_region, acthd_offset_bytes, acthd_dword) =
-        classify_media_acthd(ring_acthd, windows, backing, batch_tail_bytes, ring_tail_bytes);
-
-    Some(MediaJpegSmokeSubmitProof {
-        engine_name: engine.name,
-        batch_gpu_addr: windows.batch_gpu_addr,
-        result_gpu_addr: windows.result_gpu_addr,
-        bitstream_gpu_addr: windows.bitstream_gpu_addr,
-        output_surface_gpu_addr: windows.output_surface_gpu_addr,
-        bitstream_bytes,
-        coded_width,
-        coded_height,
-        jpeg_input_format,
-        jpeg_output_format,
-        jpeg_scan_component_count: jpeg_scan_info
-            .as_ref()
-            .map(|scan_info| scan_info.scan_component_count)
-            .unwrap_or(0),
-        jpeg_interleaved: jpeg_scan_info
-            .as_ref()
-            .map(|scan_info| scan_info.interleaved)
-            .unwrap_or(false),
-        jpeg_restart_interval: jpeg_scan_info
-            .as_ref()
-            .map(|scan_info| scan_info.restart_interval)
-            .unwrap_or(0),
-        jpeg_mcu_count: jpeg_scan_info
-            .as_ref()
-            .map(|scan_info| scan_info.mcu_count)
-            .unwrap_or(0),
-        output_surface_pitch,
-        output_surface_bytes: backing.output_surface_bytes,
-        surface_dw2,
-        surface_dw3,
-        jpeg_pic_dw1,
-        jpeg_pic_dw2,
-        output_surface_signature,
-        output_surface_nonzero_samples,
-        output_surface_probe,
-        output_surface_detail,
-        batch_tail_bytes,
-        ring_tail_bytes,
-        kickoff_marker,
-        presubmit_marker,
-        postsubmit_marker,
-        complete_marker,
-        kickoff_value: read_result_dword(backing.result_virt, MEDIA_RESULT_KICKOFF_SLOT),
-        presubmit_value: read_result_dword(backing.result_virt, MEDIA_RESULT_PRESUBMIT_SLOT),
-        postsubmit_value: read_result_dword(backing.result_virt, MEDIA_RESULT_POSTSUBMIT_SLOT),
-        complete_value,
-        retired,
-        poll_iters,
-        execlist_status_lo: super::mmio_read(dev, engine.ring_base + RING_EXECLIST_STATUS_LO),
-        execlist_status_hi: super::mmio_read(dev, engine.ring_base + RING_EXECLIST_STATUS_HI),
-        ring_start: super::mmio_read(dev, engine.ring_base + RING_START),
-        ring_ctl: super::mmio_read(dev, engine.ring_base + RING_CTL),
-        ring_hws_pga: super::mmio_read(dev, engine.ring_base + RING_HWS_PGA),
-        ring_head: super::mmio_read(dev, engine.ring_base + RING_HEAD),
-        ring_tail: super::mmio_read(dev, engine.ring_base + RING_TAIL),
-        ring_acthd,
-        ring_acthd_hi,
-        acthd_region,
-        acthd_offset_bytes,
-        acthd_dword,
-        bbaddr_lo,
-        bbaddr_hi,
-        dma_fadd_lo,
-        dma_fadd_hi,
-        bbstate: super::mmio_read(dev, engine.ring_base + RING_BBSTATE),
-        esr: super::mmio_read(dev, engine.ring_base + RING_ESR),
-        instps: super::mmio_read(dev, engine.ring_base + RING_INSTPS),
-        psmi_ctl: super::mmio_read(dev, engine.ring_base + RING_PSMI_CTL),
-        nopid: super::mmio_read(dev, engine.ring_base + RING_NOPID),
-        ipeir: super::mmio_read(dev, engine.ring_base + RING_IPEIR),
-        ipehr: super::mmio_read(dev, engine.ring_base + RING_IPEHR),
-        fault_gen8,
-        fault_gen12,
-        fault_tlb_data0_gen8: super::mmio_read(dev, 0x4B10),
-        fault_tlb_data1_gen8: super::mmio_read(dev, 0x4B14),
-        fault_tlb_data0_gen12: super::mmio_read(dev, 0xCEB8),
-        fault_tlb_data1_gen12: super::mmio_read(dev, 0xCEBC),
-        stage_flags_value: read_result_dword(backing.result_virt, MEDIA_RESULT_STAGE_FLAGS_SLOT),
-        bitstream_dword0: sample_buffer_dword(backing.bitstream_virt, backing.bitstream_bytes, 0),
-    })
-}
-
-fn build_jpeg_smoke_batch_skeleton(
-    batch_virt: *mut u8,
-    batch_bytes: usize,
-    result_gpu_addr: u64,
-    bitstream_gpu_addr: u64,
-    output_surface_gpu_addr: u64,
-    output_surface_bytes: usize,
-    bitstream_bytes: usize,
-    coded_width: u32,
-    coded_height: u32,
-    jpeg_quant_tables: Option<&JpegQuantTables>,
-    jpeg_huff_tables: Option<&JpegHuffTables>,
-    jpeg_scan_info: Option<&JpegScanInfo>,
-    kickoff_marker: u32,
-    presubmit_marker: u32,
-    postsubmit_marker: u32,
-    complete_marker: u32,
-) -> Option<usize> {
-    let batch = unsafe {
-        core::slice::from_raw_parts_mut(
-            batch_virt as *mut u32,
-            batch_bytes / core::mem::size_of::<u32>(),
-        )
-    };
-    let mut idx = 0usize;
-    let output_pitch = align_up_u32(coded_width.max(128), 128);
-    let chroma_y_offset = align_up_u32(coded_height, 32);
-    let frame_width_blocks_minus1 = (align_up_u32(coded_width.max(8), 8) / 8).saturating_sub(1);
-    let frame_height_blocks_minus1 = (align_up_u32(coded_height.max(8), 8) / 8).saturating_sub(1);
-    let jpeg_output_format = jpeg_scan_info
-        .map(|scan_info| jpeg_output_format_from_input(scan_info.input_format))
-        .unwrap_or(0);
-    let mut stage_flags =
-        MEDIA_STAGE_FLAG_JPEG_SMOKE | MEDIA_STAGE_FLAG_JPEG_PIC_STATE | MEDIA_STAGE_FLAG_JPEG_QM_STATE;
-    if jpeg_huff_tables.is_some() {
-        stage_flags |= MEDIA_STAGE_FLAG_JPEG_HUFF_STATE;
-    }
-    if jpeg_scan_info.is_some() {
-        stage_flags |= MEDIA_STAGE_FLAG_JPEG_BSD_OBJECT;
-    }
-
-    if !emit_store_dword_ppgtt(
-        batch,
-        &mut idx,
-        result_gpu_addr + MEDIA_RESULT_KICKOFF_SLOT,
-        kickoff_marker,
-    ) || !emit_store_dword_ppgtt(
-        batch,
-        &mut idx,
-        result_gpu_addr + MEDIA_RESULT_BITSTREAM_ADDR_LO_SLOT,
-        bitstream_gpu_addr as u32,
-    ) || !emit_store_dword_ppgtt(
-        batch,
-        &mut idx,
-        result_gpu_addr + MEDIA_RESULT_BITSTREAM_ADDR_HI_SLOT,
-        (bitstream_gpu_addr >> 32) as u32,
-    ) || !emit_store_dword_ppgtt(
-        batch,
-        &mut idx,
-        result_gpu_addr + MEDIA_RESULT_BITSTREAM_BYTES_SLOT,
-        bitstream_bytes as u32,
-    ) || !emit_store_dword_ppgtt(
-        batch,
-        &mut idx,
-        result_gpu_addr + MEDIA_RESULT_SAMPLE_NALS_SLOT,
-        0,
-    ) || !emit_store_dword_ppgtt(
-        batch,
-        &mut idx,
-        result_gpu_addr + MEDIA_RESULT_STAGE_FLAGS_SLOT,
-        stage_flags,
-    ) || !emit_store_dword_ppgtt(
-        batch,
-        &mut idx,
-        result_gpu_addr + MEDIA_RESULT_OUTPUT_SURFACE_ADDR_LO_SLOT,
-        output_surface_gpu_addr as u32,
-    ) || !emit_store_dword_ppgtt(
-        batch,
-        &mut idx,
-        result_gpu_addr + MEDIA_RESULT_OUTPUT_SURFACE_ADDR_HI_SLOT,
-        (output_surface_gpu_addr >> 32) as u32,
-    ) || !emit_store_dword_ppgtt(
-        batch,
-        &mut idx,
-        result_gpu_addr + MEDIA_RESULT_OUTPUT_SURFACE_BYTES_SLOT,
-        output_surface_bytes as u32,
-    ) || !emit_store_dword_ppgtt(
-        batch,
-        &mut idx,
-        result_gpu_addr + MEDIA_RESULT_FRAME_DIMS_SLOT,
-        coded_width | (coded_height << 16),
-    ) {
-        return None;
-    }
-
-    let presubmit_flush = begin_batch_packet(
-        batch,
-        &mut idx,
-        5,
-        MI_FLUSH_DW
-            | MI_FLUSH_DW_VIDEO_PIPELINE_CACHE_INVALIDATE
-            | MI_FLUSH_DW_POST_SYNC_WRITE_IMMEDIATE,
-    )?;
-    batch[presubmit_flush + 1] = (result_gpu_addr + MEDIA_RESULT_PRESUBMIT_SLOT) as u32;
-    batch[presubmit_flush + 2] = ((result_gpu_addr + MEDIA_RESULT_PRESUBMIT_SLOT) >> 32) as u32;
-    batch[presubmit_flush + 3] = presubmit_marker;
-    batch[presubmit_flush + 4] = 0;
-
-    if idx.saturating_add(2) > batch.len() {
-        return None;
-    }
-    batch[idx] = MI_FORCE_WAKEUP;
-    batch[idx + 1] = MI_FORCE_WAKEUP_MFX_WELL;
-    idx += 2;
-
-    if !emit_mfx_wait(batch, &mut idx) {
-        return None;
-    }
-
-    let pipe_mode = begin_batch_packet(
-        batch,
-        &mut idx,
-        (MFX_CMD_LEN_PIPE_MODE_SELECT + 2) as usize,
-        media_cmd_header(
-            MEDIA_CMD_OPCODE_MFX_COMMON,
-            0,
-            MFX_PIPE_MODE_SELECT,
-            MFX_CMD_LEN_PIPE_MODE_SELECT,
-        ),
-    )?;
-    // Reuse the known-good common MFX decode setup shape as a bind-only probe.
-    batch[pipe_mode + 1] = 2 | (1 << 9);
-
-    if !emit_mfx_wait(batch, &mut idx) {
-        return None;
-    }
-
-    let surface = begin_batch_packet(
-        batch,
-        &mut idx,
-        (MFX_CMD_LEN_SURFACE_STATE + 2) as usize,
-        media_cmd_header(
-            MEDIA_CMD_OPCODE_MFX_COMMON,
-            0,
-            MFX_SURFACE_STATE,
-            MFX_CMD_LEN_SURFACE_STATE,
-        ),
-    )?;
-    batch[surface + 2] =
-        ((coded_width.saturating_sub(1)) << 4) | ((coded_height.saturating_sub(1)) << 18);
-    batch[surface + 3] =
-        (1 << 1) | ((output_pitch.saturating_sub(1)) << 3) | (1 << 26) | (1 << 27) | (4 << 28);
-    batch[surface + 4] = chroma_y_offset;
-    batch[surface + 5] = chroma_y_offset;
-
-    let pipe_buf = begin_batch_packet(
-        batch,
-        &mut idx,
-        (MFX_CMD_LEN_PIPE_BUF_ADDR_STATE + 2) as usize,
-        media_cmd_header(
-            MEDIA_CMD_OPCODE_MFX_COMMON,
-            0,
-            MFX_PIPE_BUF_ADDR_STATE,
-            MFX_CMD_LEN_PIPE_BUF_ADDR_STATE,
-        ),
-    )?;
-    packet_write_addr64(batch, pipe_buf, 1, output_surface_gpu_addr);
-    batch[pipe_buf + 3] = MFX_MOCS_UC;
-    packet_write_addr64(batch, pipe_buf, 4, output_surface_gpu_addr);
-    batch[pipe_buf + 6] = MFX_MOCS_UC;
-    batch[pipe_buf + 9] = MFX_MOCS_UC;
-    batch[pipe_buf + 12] = MFX_MOCS_UC;
-
-    let ind_obj = begin_batch_packet(
-        batch,
-        &mut idx,
-        (MFX_CMD_LEN_IND_OBJ_BASE_ADDR_STATE + 2) as usize,
-        media_cmd_header(
-            MEDIA_CMD_OPCODE_MFX_COMMON,
-            0,
-            MFX_IND_OBJ_BASE_ADDR_STATE,
-            MFX_CMD_LEN_IND_OBJ_BASE_ADDR_STATE,
-        ),
-    )?;
-    packet_write_addr64(batch, ind_obj, 1, bitstream_gpu_addr);
-    batch[ind_obj + 3] = MFX_MOCS_UC;
-    packet_write_addr64(batch, ind_obj, 4, bitstream_gpu_addr + bitstream_bytes as u64);
-    batch[ind_obj + 8] = MFX_MOCS_UC;
-    batch[ind_obj + 13] = MFX_MOCS_UC;
-    batch[ind_obj + 18] = MFX_MOCS_UC;
-    batch[ind_obj + 23] = MFX_MOCS_UC;
-
-    // Keep the first JPEG-specific steps narrow: picture-state plus quant
-    // matrices, before adding Huffman and BSD-object programming.
-    let jpeg_pic = begin_batch_packet(
-        batch,
-        &mut idx,
-        (MFX_CMD_LEN_JPEG_PIC_STATE + 2) as usize,
-        media_cmd_header(
-            MEDIA_CMD_OPCODE_MFX_JPEG,
-            0,
-            MFX_JPEG_PIC_STATE,
-            MFX_CMD_LEN_JPEG_PIC_STATE,
-        ),
-    )?;
-    batch[jpeg_pic + 1] = jpeg_scan_info
-        .map(|scan_info| u32::from(scan_info.input_format))
-        .unwrap_or(0)
-        | (u32::from(jpeg_output_format) << 8);
-    batch[jpeg_pic + 2] = frame_width_blocks_minus1 | (frame_height_blocks_minus1 << 16);
-
-    let fallback_qm = [16u8; 64];
-    let component_count = jpeg_quant_tables
-        .map(|tables| tables.component_count.max(1))
-        .unwrap_or(1);
-    for component_idx in 0..usize::from(component_count) {
-        let mut qm_matrix = fallback_qm;
-        if let Some(tables) = jpeg_quant_tables {
-            let table_selector = usize::from(tables.component_qtable[component_idx] & 0x03);
-            if (tables.present_mask & (1 << table_selector)) != 0 {
-                qm_matrix = tables.tables[table_selector];
-            }
-        }
-
-        let qm = begin_batch_packet(
-            batch,
-            &mut idx,
-            (MFX_CMD_LEN_QM_STATE + 2) as usize,
-            media_cmd_header(
-                MEDIA_CMD_OPCODE_MFX_COMMON,
-                0,
-                MFX_QM_STATE,
-                MFX_CMD_LEN_QM_STATE,
-            ),
-        )?;
-        batch[qm + 1] = component_idx as u32;
-        for dw in 0..16 {
-            let base = dw * 4;
-            batch[qm + 2 + dw] = (qm_matrix[base] as u32)
-                | ((qm_matrix[base + 1] as u32) << 8)
-                | ((qm_matrix[base + 2] as u32) << 16)
-                | ((qm_matrix[base + 3] as u32) << 24);
-        }
-    }
-
-    if let Some(huff_tables) = jpeg_huff_tables {
-        emit_jpeg_huff_table_state(
-            batch,
-            &mut idx,
-            0,
-            &huff_tables.dc_bits[usize::from(huff_tables.y_dc_selector)],
-            &huff_tables.dc_values[usize::from(huff_tables.y_dc_selector)],
-            &huff_tables.ac_bits[usize::from(huff_tables.y_ac_selector)],
-            &huff_tables.ac_values[usize::from(huff_tables.y_ac_selector)],
-        )?;
-
-        if huff_tables.has_chroma_selector {
-            emit_jpeg_huff_table_state(
-                batch,
-                &mut idx,
-                1,
-                &huff_tables.dc_bits[usize::from(huff_tables.chroma_dc_selector)],
-                &huff_tables.dc_values[usize::from(huff_tables.chroma_dc_selector)],
-                &huff_tables.ac_bits[usize::from(huff_tables.chroma_ac_selector)],
-                &huff_tables.ac_values[usize::from(huff_tables.chroma_ac_selector)],
-            )?;
-        }
-    }
-
-    if let Some(scan_info) = jpeg_scan_info {
-        emit_jpeg_bsd_object(batch, &mut idx, scan_info)?;
-    }
-
-    if !emit_store_dword_ppgtt(
-        batch,
-        &mut idx,
-        result_gpu_addr + MEDIA_RESULT_POSTSUBMIT_SLOT,
-        postsubmit_marker,
-    ) {
-        return None;
-    }
-
-    let done_flush = begin_batch_packet(
-        batch,
-        &mut idx,
-        5,
-        MI_FLUSH_DW
-            | MI_FLUSH_DW_VIDEO_PIPELINE_CACHE_INVALIDATE
-            | MI_FLUSH_DW_POST_SYNC_WRITE_IMMEDIATE,
-    )?;
-    batch[done_flush + 1] = (result_gpu_addr + MEDIA_RESULT_COMPLETE_SLOT) as u32;
-    batch[done_flush + 2] = ((result_gpu_addr + MEDIA_RESULT_COMPLETE_SLOT) >> 32) as u32;
-    batch[done_flush + 3] = complete_marker;
-    batch[done_flush + 4] = 0;
-
-    if idx.saturating_add(3) > batch.len() {
-        return None;
-    }
-    batch[idx] = MI_ARB_CHECK;
-    batch[idx + 1] = MI_BATCH_BUFFER_END;
-    batch[idx + 2] = MI_NOOP;
-    Some((idx + 3).saturating_mul(core::mem::size_of::<u32>()))
 }
 
 pub(crate) fn kickoff_once() {

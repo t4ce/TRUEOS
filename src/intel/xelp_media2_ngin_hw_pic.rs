@@ -5,6 +5,8 @@
 // The heavy shared media backend remains in xelp_media2_ngin for now; this
 // module is the focused entry surface for the logo decode mission.
 
+use super::xelp_media2_ngin::{self as media, MediaBitstreamBacking, MediaEngineDescriptor, MediaGpuWindowLayout};
+
 #[derive(Clone, Copy, Debug)]
 pub(super) struct JpegQuantTables {
     pub(super) tables: [[u8; 64]; 4],
@@ -675,20 +677,718 @@ pub(super) fn stream_encoded_to_bitstream(
     super::xelp_media2_ngin::stream_encoded_to_bitstream(dev, engine, windows, backing, encoded)
 }
 
+const MEDIA_CMD_OPCODE_MFX_JPEG: u32 = 7;
+const MFX_JPEG_PIC_STATE: u32 = 0;
+const MFD_JPEG_BSD_OBJECT: u32 = 8;
+const MFX_CMD_LEN_JPEG_PIC_STATE: u32 = 1;
+const MFX_CMD_LEN_JPEG_BSD_OBJECT: u32 = 4;
+const MFX_JPEG_HUFF_TABLE_STATE: u32 = 2;
+const MFX_CMD_LEN_JPEG_HUFF_TABLE_STATE: u32 = 51;
+const MEDIA_STAGE_FLAG_JPEG_SMOKE: u32 = 1 << 8;
+const MEDIA_STAGE_FLAG_JPEG_PIC_STATE: u32 = 1 << 9;
+const MEDIA_STAGE_FLAG_JPEG_QM_STATE: u32 = 1 << 10;
+const MEDIA_STAGE_FLAG_JPEG_HUFF_STATE: u32 = 1 << 11;
+const MEDIA_STAGE_FLAG_JPEG_BSD_OBJECT: u32 = 1 << 12;
+
+#[inline]
+fn pack_u8x4(bytes: &[u8]) -> u32 {
+    let mut value = 0u32;
+    for (shift, byte) in bytes.iter().enumerate() {
+        value |= u32::from(*byte) << (shift * 8);
+    }
+    value
+}
+
+fn emit_jpeg_huff_table_state(
+    batch: &mut [u32],
+    idx: &mut usize,
+    huff_table_id: u32,
+    dc_bits: &[u8; 12],
+    dc_values: &[u8; 12],
+    ac_bits: &[u8; 16],
+    ac_values: &[u8; 162],
+) -> Option<()> {
+    let huff = media::begin_batch_packet(
+        batch,
+        idx,
+        (MFX_CMD_LEN_JPEG_HUFF_TABLE_STATE + 2) as usize,
+        media::media_cmd_header(
+            MEDIA_CMD_OPCODE_MFX_JPEG,
+            0,
+            MFX_JPEG_HUFF_TABLE_STATE,
+            MFX_CMD_LEN_JPEG_HUFF_TABLE_STATE,
+        ),
+    )?;
+
+    batch[huff + 1] = huff_table_id;
+    for dw in 0..3 {
+        let base = dw * 4;
+        batch[huff + 2 + dw] = pack_u8x4(&dc_bits[base..base + 4]);
+        batch[huff + 5 + dw] = pack_u8x4(&dc_values[base..base + 4]);
+    }
+    for dw in 0..4 {
+        let base = dw * 4;
+        batch[huff + 8 + dw] = pack_u8x4(&ac_bits[base..base + 4]);
+    }
+    for dw in 0..40 {
+        let base = dw * 4;
+        batch[huff + 12 + dw] = pack_u8x4(&ac_values[base..base + 4]);
+    }
+    batch[huff + 52] = u32::from(ac_values[160]) | (u32::from(ac_values[161]) << 8);
+    Some(())
+}
+
+fn emit_jpeg_bsd_object(
+    batch: &mut [u32],
+    idx: &mut usize,
+    scan_info: &JpegScanInfo,
+) -> Option<()> {
+    let bsd = media::begin_batch_packet(
+        batch,
+        idx,
+        (MFX_CMD_LEN_JPEG_BSD_OBJECT + 2) as usize,
+        media::media_cmd_header(
+            MEDIA_CMD_OPCODE_MFX_JPEG,
+            1,
+            MFD_JPEG_BSD_OBJECT,
+            MFX_CMD_LEN_JPEG_BSD_OBJECT,
+        ),
+    )?;
+
+    batch[bsd + 1] = scan_info.scan_data_length;
+    batch[bsd + 2] = scan_info.scan_data_offset;
+    batch[bsd + 3] = 0;
+    batch[bsd + 4] = (scan_info.mcu_count & 0x03ff_ffff)
+        | (u32::from(scan_info.scan_component_count) << 27)
+        | ((scan_info.interleaved as u32) << 30);
+    batch[bsd + 5] = u32::from(scan_info.restart_interval);
+    Some(())
+}
+
+fn build_jpeg_smoke_batch_skeleton(
+    batch_virt: *mut u8,
+    batch_bytes: usize,
+    result_gpu_addr: u64,
+    bitstream_gpu_addr: u64,
+    output_surface_gpu_addr: u64,
+    output_surface_bytes: usize,
+    bitstream_bytes: usize,
+    coded_width: u32,
+    coded_height: u32,
+    jpeg_quant_tables: Option<&JpegQuantTables>,
+    jpeg_huff_tables: Option<&JpegHuffTables>,
+    jpeg_scan_info: Option<&JpegScanInfo>,
+    kickoff_marker: u32,
+    presubmit_marker: u32,
+    postsubmit_marker: u32,
+    complete_marker: u32,
+) -> Option<usize> {
+    let batch = unsafe {
+        core::slice::from_raw_parts_mut(
+            batch_virt as *mut u32,
+            batch_bytes / core::mem::size_of::<u32>(),
+        )
+    };
+    let mut idx = 0usize;
+    let output_pitch = media::align_up_u32(coded_width.max(128), 128);
+    let chroma_y_offset = media::align_up_u32(coded_height, 32);
+    let frame_width_blocks_minus1 =
+        (media::align_up_u32(coded_width.max(8), 8) / 8).saturating_sub(1);
+    let frame_height_blocks_minus1 =
+        (media::align_up_u32(coded_height.max(8), 8) / 8).saturating_sub(1);
+    let jpeg_output_format = jpeg_scan_info
+        .map(|scan_info| jpeg_output_format_from_input(scan_info.input_format))
+        .unwrap_or(0);
+    let mut stage_flags =
+        MEDIA_STAGE_FLAG_JPEG_SMOKE | MEDIA_STAGE_FLAG_JPEG_PIC_STATE | MEDIA_STAGE_FLAG_JPEG_QM_STATE;
+    if jpeg_huff_tables.is_some() {
+        stage_flags |= MEDIA_STAGE_FLAG_JPEG_HUFF_STATE;
+    }
+    if jpeg_scan_info.is_some() {
+        stage_flags |= MEDIA_STAGE_FLAG_JPEG_BSD_OBJECT;
+    }
+
+    if !media::emit_store_dword_ppgtt(
+        batch,
+        &mut idx,
+        result_gpu_addr + media::MEDIA_RESULT_KICKOFF_SLOT,
+        kickoff_marker,
+    ) || !media::emit_store_dword_ppgtt(
+        batch,
+        &mut idx,
+        result_gpu_addr + media::MEDIA_RESULT_BITSTREAM_ADDR_LO_SLOT,
+        bitstream_gpu_addr as u32,
+    ) || !media::emit_store_dword_ppgtt(
+        batch,
+        &mut idx,
+        result_gpu_addr + media::MEDIA_RESULT_BITSTREAM_ADDR_HI_SLOT,
+        (bitstream_gpu_addr >> 32) as u32,
+    ) || !media::emit_store_dword_ppgtt(
+        batch,
+        &mut idx,
+        result_gpu_addr + media::MEDIA_RESULT_BITSTREAM_BYTES_SLOT,
+        bitstream_bytes as u32,
+    ) || !media::emit_store_dword_ppgtt(
+        batch,
+        &mut idx,
+        result_gpu_addr + media::MEDIA_RESULT_SAMPLE_NALS_SLOT,
+        0,
+    ) || !media::emit_store_dword_ppgtt(
+        batch,
+        &mut idx,
+        result_gpu_addr + media::MEDIA_RESULT_STAGE_FLAGS_SLOT,
+        stage_flags,
+    ) || !media::emit_store_dword_ppgtt(
+        batch,
+        &mut idx,
+        result_gpu_addr + media::MEDIA_RESULT_OUTPUT_SURFACE_ADDR_LO_SLOT,
+        output_surface_gpu_addr as u32,
+    ) || !media::emit_store_dword_ppgtt(
+        batch,
+        &mut idx,
+        result_gpu_addr + media::MEDIA_RESULT_OUTPUT_SURFACE_ADDR_HI_SLOT,
+        (output_surface_gpu_addr >> 32) as u32,
+    ) || !media::emit_store_dword_ppgtt(
+        batch,
+        &mut idx,
+        result_gpu_addr + media::MEDIA_RESULT_OUTPUT_SURFACE_BYTES_SLOT,
+        output_surface_bytes as u32,
+    ) || !media::emit_store_dword_ppgtt(
+        batch,
+        &mut idx,
+        result_gpu_addr + media::MEDIA_RESULT_FRAME_DIMS_SLOT,
+        coded_width | (coded_height << 16),
+    ) {
+        return None;
+    }
+
+    let presubmit_flush = media::begin_batch_packet(
+        batch,
+        &mut idx,
+        5,
+        media::MI_FLUSH_DW
+            | media::MI_FLUSH_DW_VIDEO_PIPELINE_CACHE_INVALIDATE
+            | media::MI_FLUSH_DW_POST_SYNC_WRITE_IMMEDIATE,
+    )?;
+    batch[presubmit_flush + 1] = (result_gpu_addr + media::MEDIA_RESULT_PRESUBMIT_SLOT) as u32;
+    batch[presubmit_flush + 2] =
+        ((result_gpu_addr + media::MEDIA_RESULT_PRESUBMIT_SLOT) >> 32) as u32;
+    batch[presubmit_flush + 3] = presubmit_marker;
+    batch[presubmit_flush + 4] = 0;
+
+    if idx.saturating_add(2) > batch.len() {
+        return None;
+    }
+    batch[idx] = media::MI_FORCE_WAKEUP;
+    batch[idx + 1] = media::MI_FORCE_WAKEUP_MFX_WELL;
+    idx += 2;
+
+    if !media::emit_mfx_wait(batch, &mut idx) {
+        return None;
+    }
+
+    let pipe_mode = media::begin_batch_packet(
+        batch,
+        &mut idx,
+        (media::MFX_CMD_LEN_PIPE_MODE_SELECT + 2) as usize,
+        media::media_cmd_header(
+            media::MEDIA_CMD_OPCODE_MFX_COMMON,
+            0,
+            media::MFX_PIPE_MODE_SELECT,
+            media::MFX_CMD_LEN_PIPE_MODE_SELECT,
+        ),
+    )?;
+    batch[pipe_mode + 1] = 2 | (1 << 9);
+
+    if !media::emit_mfx_wait(batch, &mut idx) {
+        return None;
+    }
+
+    let surface = media::begin_batch_packet(
+        batch,
+        &mut idx,
+        (media::MFX_CMD_LEN_SURFACE_STATE + 2) as usize,
+        media::media_cmd_header(
+            media::MEDIA_CMD_OPCODE_MFX_COMMON,
+            0,
+            media::MFX_SURFACE_STATE,
+            media::MFX_CMD_LEN_SURFACE_STATE,
+        ),
+    )?;
+    batch[surface + 2] =
+        ((coded_width.saturating_sub(1)) << 4) | ((coded_height.saturating_sub(1)) << 18);
+    batch[surface + 3] =
+        (1 << 1) | ((output_pitch.saturating_sub(1)) << 3) | (1 << 26) | (1 << 27) | (4 << 28);
+    batch[surface + 4] = chroma_y_offset;
+    batch[surface + 5] = chroma_y_offset;
+
+    let pipe_buf = media::begin_batch_packet(
+        batch,
+        &mut idx,
+        (media::MFX_CMD_LEN_PIPE_BUF_ADDR_STATE + 2) as usize,
+        media::media_cmd_header(
+            media::MEDIA_CMD_OPCODE_MFX_COMMON,
+            0,
+            media::MFX_PIPE_BUF_ADDR_STATE,
+            media::MFX_CMD_LEN_PIPE_BUF_ADDR_STATE,
+        ),
+    )?;
+    media::packet_write_addr64(batch, pipe_buf, 1, output_surface_gpu_addr);
+    batch[pipe_buf + 3] = media::MFX_MOCS_UC;
+    media::packet_write_addr64(batch, pipe_buf, 4, output_surface_gpu_addr);
+    batch[pipe_buf + 6] = media::MFX_MOCS_UC;
+    batch[pipe_buf + 9] = media::MFX_MOCS_UC;
+    batch[pipe_buf + 12] = media::MFX_MOCS_UC;
+
+    let ind_obj = media::begin_batch_packet(
+        batch,
+        &mut idx,
+        (media::MFX_CMD_LEN_IND_OBJ_BASE_ADDR_STATE + 2) as usize,
+        media::media_cmd_header(
+            media::MEDIA_CMD_OPCODE_MFX_COMMON,
+            0,
+            media::MFX_IND_OBJ_BASE_ADDR_STATE,
+            media::MFX_CMD_LEN_IND_OBJ_BASE_ADDR_STATE,
+        ),
+    )?;
+    media::packet_write_addr64(batch, ind_obj, 1, bitstream_gpu_addr);
+    batch[ind_obj + 3] = media::MFX_MOCS_UC;
+    media::packet_write_addr64(batch, ind_obj, 4, bitstream_gpu_addr + bitstream_bytes as u64);
+    batch[ind_obj + 8] = media::MFX_MOCS_UC;
+    batch[ind_obj + 13] = media::MFX_MOCS_UC;
+    batch[ind_obj + 18] = media::MFX_MOCS_UC;
+    batch[ind_obj + 23] = media::MFX_MOCS_UC;
+
+    let jpeg_pic = media::begin_batch_packet(
+        batch,
+        &mut idx,
+        (MFX_CMD_LEN_JPEG_PIC_STATE + 2) as usize,
+        media::media_cmd_header(
+            MEDIA_CMD_OPCODE_MFX_JPEG,
+            0,
+            MFX_JPEG_PIC_STATE,
+            MFX_CMD_LEN_JPEG_PIC_STATE,
+        ),
+    )?;
+    batch[jpeg_pic + 1] = jpeg_scan_info
+        .map(|scan_info| u32::from(scan_info.input_format))
+        .unwrap_or(0)
+        | (u32::from(jpeg_output_format) << 8);
+    batch[jpeg_pic + 2] = frame_width_blocks_minus1 | (frame_height_blocks_minus1 << 16);
+
+    let fallback_qm = [16u8; 64];
+    let component_count = jpeg_quant_tables
+        .map(|tables| tables.component_count.max(1))
+        .unwrap_or(1);
+    for component_idx in 0..usize::from(component_count) {
+        let mut qm_matrix = fallback_qm;
+        if let Some(tables) = jpeg_quant_tables {
+            let table_selector = usize::from(tables.component_qtable[component_idx] & 0x03);
+            if (tables.present_mask & (1 << table_selector)) != 0 {
+                qm_matrix = tables.tables[table_selector];
+            }
+        }
+
+        let qm = media::begin_batch_packet(
+            batch,
+            &mut idx,
+            (media::MFX_CMD_LEN_QM_STATE + 2) as usize,
+            media::media_cmd_header(
+                media::MEDIA_CMD_OPCODE_MFX_COMMON,
+                0,
+                media::MFX_QM_STATE,
+                media::MFX_CMD_LEN_QM_STATE,
+            ),
+        )?;
+        batch[qm + 1] = component_idx as u32;
+        for dw in 0..16 {
+            let base = dw * 4;
+            batch[qm + 2 + dw] = (qm_matrix[base] as u32)
+                | ((qm_matrix[base + 1] as u32) << 8)
+                | ((qm_matrix[base + 2] as u32) << 16)
+                | ((qm_matrix[base + 3] as u32) << 24);
+        }
+    }
+
+    if let Some(huff_tables) = jpeg_huff_tables {
+        emit_jpeg_huff_table_state(
+            batch,
+            &mut idx,
+            0,
+            &huff_tables.dc_bits[usize::from(huff_tables.y_dc_selector)],
+            &huff_tables.dc_values[usize::from(huff_tables.y_dc_selector)],
+            &huff_tables.ac_bits[usize::from(huff_tables.y_ac_selector)],
+            &huff_tables.ac_values[usize::from(huff_tables.y_ac_selector)],
+        )?;
+
+        if huff_tables.has_chroma_selector {
+            emit_jpeg_huff_table_state(
+                batch,
+                &mut idx,
+                1,
+                &huff_tables.dc_bits[usize::from(huff_tables.chroma_dc_selector)],
+                &huff_tables.dc_values[usize::from(huff_tables.chroma_dc_selector)],
+                &huff_tables.ac_bits[usize::from(huff_tables.chroma_ac_selector)],
+                &huff_tables.ac_values[usize::from(huff_tables.chroma_ac_selector)],
+            )?;
+        }
+    }
+
+    if let Some(scan_info) = jpeg_scan_info {
+        emit_jpeg_bsd_object(batch, &mut idx, scan_info)?;
+    }
+
+    if !media::emit_store_dword_ppgtt(
+        batch,
+        &mut idx,
+        result_gpu_addr + media::MEDIA_RESULT_POSTSUBMIT_SLOT,
+        postsubmit_marker,
+    ) {
+        return None;
+    }
+
+    let done_flush = media::begin_batch_packet(
+        batch,
+        &mut idx,
+        5,
+        media::MI_FLUSH_DW
+            | media::MI_FLUSH_DW_VIDEO_PIPELINE_CACHE_INVALIDATE
+            | media::MI_FLUSH_DW_POST_SYNC_WRITE_IMMEDIATE,
+    )?;
+    batch[done_flush + 1] = (result_gpu_addr + media::MEDIA_RESULT_COMPLETE_SLOT) as u32;
+    batch[done_flush + 2] =
+        ((result_gpu_addr + media::MEDIA_RESULT_COMPLETE_SLOT) >> 32) as u32;
+    batch[done_flush + 3] = complete_marker;
+    batch[done_flush + 4] = 0;
+
+    if idx.saturating_add(3) > batch.len() {
+        return None;
+    }
+    batch[idx] = media::MI_ARB_CHECK;
+    batch[idx + 1] = media::MI_BATCH_BUFFER_END;
+    batch[idx + 2] = media::MI_NOOP;
+    Some((idx + 3).saturating_mul(core::mem::size_of::<u32>()))
+}
+
 pub(super) fn submit_jpeg_smoke_batch(
     dev: crate::intel::Dev,
-    engine: super::xelp_media2_ngin::MediaEngineDescriptor,
-    windows: super::xelp_media2_ngin::MediaGpuWindowLayout,
-    backing: super::xelp_media2_ngin::MediaBitstreamBacking,
+    engine: MediaEngineDescriptor,
+    windows: MediaGpuWindowLayout,
+    backing: MediaBitstreamBacking,
     bitstream_bytes: usize,
     submit_token: u32,
 ) -> Option<MediaJpegSmokeSubmitProof> {
-    super::xelp_media2_ngin::submit_jpeg_smoke_batch(
-        dev,
-        engine,
-        windows,
-        backing,
+    if bitstream_bytes == 0 || bitstream_bytes > backing.bitstream_bytes {
+        return None;
+    }
+
+    let ring_virt = backing.ring_virt;
+    let context_virt = backing.context_virt;
+    let ring_gpu_addr = windows.ring_gpu_addr;
+    let context_gpu_addr = windows.context_gpu_addr;
+    let kickoff_marker = media::marker_base(engine)
+        .wrapping_add(0x80)
+        .wrapping_add((submit_token & 0x3F) << 2);
+    let ring_prelaunch_marker = kickoff_marker.wrapping_sub(1);
+    let presubmit_marker = kickoff_marker + 1;
+    let postsubmit_marker = kickoff_marker + 2;
+    let complete_marker = kickoff_marker + 3;
+
+    media::reset_media_engine(dev, engine, context_virt);
+    media::wake_media_engine_forcewake(dev, engine);
+
+    unsafe {
+        core::ptr::write_bytes(ring_virt, 0, backing.ring_bytes);
+        core::ptr::write_bytes(context_virt, 0, backing.context_bytes);
+        core::ptr::write_bytes(backing.batch_virt, 0, backing.batch_bytes);
+        core::ptr::write_bytes(backing.result_virt, 0, backing.result_bytes);
+    }
+
+    let bitstream = unsafe {
+        core::slice::from_raw_parts(backing.bitstream_virt as *const u8, bitstream_bytes)
+    };
+    let (coded_width, coded_height) = parse_jpeg_frame_dims(bitstream).unwrap_or((128, 128));
+    let jpeg_quant_tables = parse_jpeg_quant_tables(bitstream);
+    let jpeg_huff_tables = parse_jpeg_huff_tables(bitstream);
+    let jpeg_scan_info = parse_jpeg_scan_info(bitstream);
+    let output_surface_pitch = media::align_up_u32(coded_width.max(128), 128) as usize;
+    let frame_width_blocks_minus1 =
+        (media::align_up_u32(coded_width.max(8), 8) / 8).saturating_sub(1);
+    let frame_height_blocks_minus1 =
+        (media::align_up_u32(coded_height.max(8), 8) / 8).saturating_sub(1);
+    let jpeg_input_format = jpeg_scan_info
+        .as_ref()
+        .map(|scan_info| scan_info.input_format)
+        .unwrap_or(0);
+    let jpeg_output_format = jpeg_output_format_from_input(jpeg_input_format);
+    let surface_dw2 =
+        ((coded_width.saturating_sub(1)) << 4) | ((coded_height.saturating_sub(1)) << 18);
+    let surface_dw3 = (1 << 1)
+        | ((u32::try_from(output_surface_pitch)
+            .unwrap_or(u32::MAX)
+            .saturating_sub(1))
+            << 3)
+        | (1 << 26)
+        | (1 << 27)
+        | (4 << 28);
+    let jpeg_pic_dw1 = u32::from(jpeg_input_format) | (u32::from(jpeg_output_format) << 8);
+    let jpeg_pic_dw2 = frame_width_blocks_minus1 | (frame_height_blocks_minus1 << 16);
+
+    let batch_tail_bytes = build_jpeg_smoke_batch_skeleton(
+        backing.batch_virt,
+        backing.batch_bytes,
+        windows.result_gpu_addr,
+        windows.bitstream_gpu_addr,
+        windows.output_surface_gpu_addr,
+        backing.output_surface_bytes,
         bitstream_bytes,
-        submit_token,
-    )
+        coded_width,
+        coded_height,
+        jpeg_quant_tables.as_ref(),
+        jpeg_huff_tables.as_ref(),
+        jpeg_scan_info.as_ref(),
+        kickoff_marker,
+        presubmit_marker,
+        postsubmit_marker,
+        complete_marker,
+    )?;
+
+    let ring_tail_bytes = media::build_ring_batch_start_words(
+        ring_virt,
+        backing.ring_bytes,
+        0,
+        windows.result_gpu_addr,
+        ring_prelaunch_marker,
+        windows.batch_gpu_addr,
+    )?;
+    let ring_ctl = media::ring_ctl_value_for_size(backing.ring_bytes)?;
+    let ring_start = ring_gpu_addr as u32;
+    let pphwsp_gpu = (context_gpu_addr & !0xFFF) as u32;
+    let ctx_ctl_after = media::media_ctx_control_value(false);
+    if !media::init_gen12_video_context_image(
+        context_virt,
+        backing.context_bytes,
+        engine.ring_base,
+        0,
+        ring_start,
+        ring_tail_bytes as u32,
+        ring_ctl,
+        pphwsp_gpu,
+        backing.ppgtt_pml4_phys,
+        false,
+    ) {
+        return None;
+    }
+
+    {
+        let mode_bits = media::GFX_RUN_LIST_ENABLE | media::GEN11_GFX_DISABLE_LEGACY_MODE;
+        super::mmio_write(
+            dev,
+            engine.ring_base + media::RING_MODE_GEN7,
+            mode_bits | (mode_bits << 16),
+        );
+    }
+    media::seed_media_ring_live_state(
+        dev,
+        engine.ring_base,
+        pphwsp_gpu,
+        ring_start,
+        ring_ctl,
+        ring_tail_bytes as u32,
+    );
+    media::init_csb_pointers(dev, engine.ring_base, context_virt);
+
+    super::dma_flush(backing.batch_virt, batch_tail_bytes);
+    super::dma_flush(ring_virt, ring_tail_bytes);
+    super::dma_flush(context_virt, backing.context_bytes);
+    super::dma_flush(backing.result_virt, backing.result_bytes);
+
+    {
+        super::mmio_write(dev, engine.ring_base + media::RING_CONTEXT_CONTROL, ctx_ctl_after);
+        super::mmio_write(
+            dev,
+            engine.ring_base + media::RING_CONTEXT_CONTROL_REF,
+            ctx_ctl_after,
+        );
+        super::mmio_write(
+            dev,
+            engine.ring_base + media::RING_MI_MODE,
+            media::masked_bit_disable(media::STOP_RING),
+        );
+        super::mmio_write(dev, engine.ring_base + media::RING_HWS_PGA, pphwsp_gpu);
+    }
+
+    let submit_counter = submit_token.wrapping_add(1) & 0x3F;
+    let (ctx_desc_lo, ctx_desc_hi) =
+        media::build_media_execlist_context_descriptor(context_gpu_addr, engine, submit_counter, true);
+    core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+    media::execlist_submit_port_push(dev, engine.ring_base, ctx_desc_lo, ctx_desc_hi, 0, 0);
+    super::mmio_write(
+        dev,
+        engine.ring_base + media::RING_EXECLIST_CONTROL,
+        media::EL_CTRL_LOAD,
+    );
+
+    let mut retired = false;
+    let mut poll_iters = 0usize;
+    let mut complete_value = 0u32;
+    while poll_iters < media::MEDIA_SUBMIT_POLL_ITERS {
+        super::dma_flush(
+            unsafe { backing.result_virt.add(media::MEDIA_RESULT_COMPLETE_SLOT as usize) },
+            8,
+        );
+        complete_value =
+            media::read_result_dword(backing.result_virt, media::MEDIA_RESULT_COMPLETE_SLOT);
+        if complete_value == complete_marker {
+            retired = true;
+            break;
+        }
+        core::hint::spin_loop();
+        poll_iters += 1;
+    }
+
+    super::dma_flush(backing.output_surface_virt, backing.output_surface_bytes);
+    super::dma_flush(backing.result_virt, backing.result_bytes);
+    let output_surface = unsafe {
+        core::slice::from_raw_parts(
+            backing.output_surface_virt as *const u8,
+            backing.output_surface_bytes,
+        )
+    };
+    let output_surface_probe = media::probe_output_surface(
+        output_surface,
+        u16::try_from(coded_width).unwrap_or(u16::MAX),
+        u16::try_from(coded_height).unwrap_or(u16::MAX),
+        0,
+        0,
+        u16::try_from(coded_width).unwrap_or(u16::MAX),
+        u16::try_from(coded_height).unwrap_or(u16::MAX),
+        output_surface_pitch,
+    );
+    media::log_output_surface_probe(engine.name, submit_token, retired, output_surface_probe);
+    let output_surface_detail = media::output_surface_has_decoded_detail(&output_surface_probe);
+    let (output_surface_signature, output_surface_nonzero_samples) =
+        media::surface_signature(output_surface);
+    if !output_surface_detail {
+        crate::log!(
+            "intel/media2: jpeg blank-surface engine={} sample={} retired={} detail_range=0 sig=0x{:08X} nonzero_samples={}\n",
+            engine.name,
+            submit_token,
+            retired as u8,
+            output_surface_signature,
+            output_surface_nonzero_samples,
+        );
+    }
+
+    let ring_acthd = super::mmio_read(dev, engine.ring_base + media::RING_ACTHD);
+    let ring_acthd_hi = super::mmio_read(dev, engine.ring_base + media::RING_ACTHD_UDW);
+    let bbaddr_lo = super::mmio_read(dev, engine.ring_base + media::RING_BBADDR);
+    let bbaddr_hi = super::mmio_read(dev, engine.ring_base + media::RING_BBADDR_UDW);
+    let dma_fadd_lo = super::mmio_read(dev, engine.ring_base + media::RING_DMA_FADD);
+    let dma_fadd_hi = super::mmio_read(dev, engine.ring_base + media::RING_DMA_FADD_UDW);
+    let fault_gen8 = super::mmio_read(dev, 0x4094);
+    let fault_gen12 = super::mmio_read(dev, media::GEN12_RING_FAULT_REG);
+    let (acthd_region, acthd_offset_bytes, acthd_dword) =
+        media::classify_media_acthd(ring_acthd, windows, backing, batch_tail_bytes, ring_tail_bytes);
+
+    Some(MediaJpegSmokeSubmitProof {
+        engine_name: engine.name,
+        batch_gpu_addr: windows.batch_gpu_addr,
+        result_gpu_addr: windows.result_gpu_addr,
+        bitstream_gpu_addr: windows.bitstream_gpu_addr,
+        output_surface_gpu_addr: windows.output_surface_gpu_addr,
+        bitstream_bytes,
+        coded_width,
+        coded_height,
+        jpeg_input_format,
+        jpeg_output_format,
+        jpeg_scan_component_count: jpeg_scan_info
+            .as_ref()
+            .map(|scan_info| scan_info.scan_component_count)
+            .unwrap_or(0),
+        jpeg_interleaved: jpeg_scan_info
+            .as_ref()
+            .map(|scan_info| scan_info.interleaved)
+            .unwrap_or(false),
+        jpeg_restart_interval: jpeg_scan_info
+            .as_ref()
+            .map(|scan_info| scan_info.restart_interval)
+            .unwrap_or(0),
+        jpeg_mcu_count: jpeg_scan_info
+            .as_ref()
+            .map(|scan_info| scan_info.mcu_count)
+            .unwrap_or(0),
+        output_surface_pitch,
+        output_surface_bytes: backing.output_surface_bytes,
+        surface_dw2,
+        surface_dw3,
+        jpeg_pic_dw1,
+        jpeg_pic_dw2,
+        output_surface_signature,
+        output_surface_nonzero_samples,
+        output_surface_probe,
+        output_surface_detail,
+        batch_tail_bytes,
+        ring_tail_bytes,
+        kickoff_marker,
+        presubmit_marker,
+        postsubmit_marker,
+        complete_marker,
+        kickoff_value: media::read_result_dword(backing.result_virt, media::MEDIA_RESULT_KICKOFF_SLOT),
+        presubmit_value: media::read_result_dword(
+            backing.result_virt,
+            media::MEDIA_RESULT_PRESUBMIT_SLOT,
+        ),
+        postsubmit_value: media::read_result_dword(
+            backing.result_virt,
+            media::MEDIA_RESULT_POSTSUBMIT_SLOT,
+        ),
+        complete_value,
+        retired,
+        poll_iters,
+        execlist_status_lo: super::mmio_read(
+            dev,
+            engine.ring_base + media::RING_EXECLIST_STATUS_LO,
+        ),
+        execlist_status_hi: super::mmio_read(
+            dev,
+            engine.ring_base + media::RING_EXECLIST_STATUS_HI,
+        ),
+        ring_start: super::mmio_read(dev, engine.ring_base + media::RING_START),
+        ring_ctl: super::mmio_read(dev, engine.ring_base + media::RING_CTL),
+        ring_hws_pga: super::mmio_read(dev, engine.ring_base + media::RING_HWS_PGA),
+        ring_head: super::mmio_read(dev, engine.ring_base + media::RING_HEAD),
+        ring_tail: super::mmio_read(dev, engine.ring_base + media::RING_TAIL),
+        ring_acthd,
+        ring_acthd_hi,
+        acthd_region,
+        acthd_offset_bytes,
+        acthd_dword,
+        bbaddr_lo,
+        bbaddr_hi,
+        dma_fadd_lo,
+        dma_fadd_hi,
+        bbstate: super::mmio_read(dev, engine.ring_base + media::RING_BBSTATE),
+        esr: super::mmio_read(dev, engine.ring_base + media::RING_ESR),
+        instps: super::mmio_read(dev, engine.ring_base + media::RING_INSTPS),
+        psmi_ctl: super::mmio_read(dev, engine.ring_base + media::RING_PSMI_CTL),
+        nopid: super::mmio_read(dev, engine.ring_base + media::RING_NOPID),
+        ipeir: super::mmio_read(dev, engine.ring_base + media::RING_IPEIR),
+        ipehr: super::mmio_read(dev, engine.ring_base + media::RING_IPEHR),
+        fault_gen8,
+        fault_gen12,
+        fault_tlb_data0_gen8: super::mmio_read(dev, 0x4B10),
+        fault_tlb_data1_gen8: super::mmio_read(dev, 0x4B14),
+        fault_tlb_data0_gen12: super::mmio_read(dev, 0xCEB8),
+        fault_tlb_data1_gen12: super::mmio_read(dev, 0xCEBC),
+        stage_flags_value: media::read_result_dword(
+            backing.result_virt,
+            media::MEDIA_RESULT_STAGE_FLAGS_SLOT,
+        ),
+        bitstream_dword0: media::sample_buffer_dword(
+            backing.bitstream_virt,
+            backing.bitstream_bytes,
+            0,
+        ),
+    })
 }
