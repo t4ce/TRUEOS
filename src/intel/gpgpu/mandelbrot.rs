@@ -1611,17 +1611,19 @@ pub(crate) fn submit_gpgpu_primary_scanout_line1280_groupid_rows_color_burst(
     };
     crate::intel::dma_flush(warm.batch_virt, batch_bytes);
 
-    let dispatch_before = read_gpgpu_threads_dispatched(dev);
-    let finished = submit_warm_render_batch(
+    let submit_proof = submit_warm_render_batch_observed(
         dev,
         warm,
         completion_marker,
         RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD,
         "gpgpu-primary-scanout-groupid-line1280-rows",
+        true,
     );
+    let finished = submit_proof.completed;
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
-    let dispatch_after = read_gpgpu_threads_dispatched(dev);
-    let dispatch_delta = dispatch_after.saturating_sub(dispatch_before);
+    let dispatch_delta = submit_proof
+        .dispatch_after
+        .saturating_sub(submit_proof.dispatch_before);
     let finish_marker = read_result_dword(warm, RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD);
     let expected_lane_dispatch = row_group_count.saturating_mul(8);
     let readback_ok = finished
@@ -1643,7 +1645,7 @@ pub(crate) fn submit_gpgpu_primary_scanout_line1280_groupid_rows_color_burst(
     };
     if should_log {
         crate::log!(
-            "intel/gpgpu: primary-scanout-groupid-line1280-rows first_row_group={} row_groups={} x_segment={} first_x={} first_y={} rect={}x{}@{},{} base_color_seed=0x{:08X} cpu_frame_color_params=1 cpu_burst_address_params=1 cpu_row_address_params=0 artifact_pitch_bytes=0x{:X} artifact_color_step_pixels={} walker_groups={} store_pixels_per_group={} expected_store_pixels={} expected_lane_dispatch={} readback_ok={} reason={} finish_marker=0x{:08X} lane_dispatch_delta={} program_source={} color_dword={} address_base_dword={} address_base=0x{:X} deliverable=visible-window-line1280-groupid-row-burst\n",
+            "intel/gpgpu: primary-scanout-groupid-line1280-rows first_row_group={} row_groups={} x_segment={} first_x={} first_y={} rect={}x{}@{},{} base_color_seed=0x{:08X} cpu_frame_color_params=1 cpu_burst_address_params=1 cpu_row_address_params=0 artifact_pitch_bytes=0x{:X} artifact_color_step_pixels={} walker_groups={} store_pixels_per_group={} expected_store_pixels={} expected_lane_dispatch={} readback_ok={} reason={} finish_marker=0x{:08X} lane_dispatch_delta={} dispatch_before={} dispatch_after={} program_source={} color_dword={} address_base_dword={} address_base=0x{:X} deliverable=visible-window-line1280-groupid-row-burst\n",
             first_row_group,
             row_group_count,
             x_segment,
@@ -1666,6 +1668,8 @@ pub(crate) fn submit_gpgpu_primary_scanout_line1280_groupid_rows_color_burst(
             reason,
             finish_marker,
             dispatch_delta,
+            submit_proof.dispatch_before,
+            submit_proof.dispatch_after,
             program.name,
             trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_COLOR_DWORD,
             trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_ADDRESS_BASE_DWORD,
@@ -1854,17 +1858,19 @@ pub(crate) fn submit_gpgpu_primary_scanout_line1280_groupid_rows_fullwidth_color
     };
     crate::intel::dma_flush(warm.batch_virt, batch_bytes);
 
-    let dispatch_before = read_gpgpu_threads_dispatched(dev);
-    let finished = submit_warm_render_batch(
+    let submit_proof = submit_warm_render_batch_observed(
         dev,
         warm,
         completion_marker,
         RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD,
         "gpgpu-primary-scanout-groupid-line1280-fullwidth",
+        true,
     );
+    let finished = submit_proof.completed;
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
-    let dispatch_after = read_gpgpu_threads_dispatched(dev);
-    let dispatch_delta = dispatch_after.saturating_sub(dispatch_before);
+    let dispatch_delta = submit_proof
+        .dispatch_after
+        .saturating_sub(submit_proof.dispatch_before);
     let finish_marker = read_result_dword(warm, RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD);
     let expected_lane_dispatch = row_group_count
         .saturating_mul(8)
@@ -1888,7 +1894,7 @@ pub(crate) fn submit_gpgpu_primary_scanout_line1280_groupid_rows_fullwidth_color
     };
     if should_log {
         crate::log!(
-            "intel/gpgpu: primary-scanout-groupid-line1280-fullwidth first_row_group={} row_groups={} segments_per_row={} first_x={} first_y={} rect={}x{}@{},{} base_color_seed=0x{:08X} cpu_frame_color_params=1 cpu_burst_address_params={} cpu_row_address_params=0 artifact_pitch_bytes=0x{:X} artifact_color_step_pixels={} walker_groups_per_segment={} store_pixels_per_group={} expected_store_pixels={} expected_lane_dispatch={} readback_ok={} reason={} finish_marker=0x{:08X} lane_dispatch_delta={} program_source={} color_dword={} address_base_dword={} address_base=0x{:X} second_address_base=0x{:X} deliverable=visible-window-line1280-groupid-fullwidth-burst\n",
+            "intel/gpgpu: primary-scanout-groupid-line1280-fullwidth first_row_group={} row_groups={} segments_per_row={} first_x={} first_y={} rect={}x{}@{},{} base_color_seed=0x{:08X} cpu_frame_color_params=1 cpu_burst_address_params={} cpu_row_address_params=0 artifact_pitch_bytes=0x{:X} artifact_color_step_pixels={} walker_groups_per_segment={} store_pixels_per_group={} expected_store_pixels={} expected_lane_dispatch={} readback_ok={} reason={} finish_marker=0x{:08X} lane_dispatch_delta={} dispatch_before={} dispatch_after={} program_source={} color_dword={} address_base_dword={} address_base=0x{:X} second_address_base=0x{:X} deliverable=visible-window-line1280-groupid-fullwidth-burst\n",
             first_row_group,
             row_group_count,
             segments_per_row,
@@ -1912,6 +1918,8 @@ pub(crate) fn submit_gpgpu_primary_scanout_line1280_groupid_rows_fullwidth_color
             reason,
             finish_marker,
             dispatch_delta,
+            submit_proof.dispatch_before,
+            submit_proof.dispatch_after,
             program.name,
             trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_COLOR_DWORD,
             trueos_eu::gfx12::PRIMARY_SCANOUT_GROUPID_LINE1280_ROWS_SCALAR_BW_ADDRESS_BASE_DWORD,

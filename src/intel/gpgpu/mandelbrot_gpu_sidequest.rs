@@ -17,14 +17,14 @@ pub(crate) const MANDELBROT_PUSH_CONSTANT_BYTES: u16 = 24;
 pub(crate) const MANDELBROT_GPGPU_LOOP_MS: u64 = 16;
 pub(crate) const MANDELBROT_GPGPU_PREVIEW_PIXELS_PER_TICK: usize = 8192;
 pub(crate) const MANDELBROT_GPGPU_RGB_ZOOM_RECT_WIDTH: u64 = 1280;
-pub(crate) const MANDELBROT_GPGPU_RGB_ZOOM_RECT_HEIGHT: u64 = 192;
+pub(crate) const MANDELBROT_GPGPU_RGB_ZOOM_RECT_HEIGHT: u64 = 256;
 pub(crate) const MANDELBROT_GPGPU_ANIM_BAND_HEIGHT: u64 = 8;
 pub(crate) const MANDELBROT_GPGPU_ANIM_PHASE_ROWS_PER_FRAME: u64 =
     MANDELBROT_GPGPU_ANIM_BAND_HEIGHT;
 pub(crate) const MANDELBROT_GPGPU_FULL_FRAME_COLOR_FLIP: bool = true;
-pub(crate) const MANDELBROT_GPGPU_GROUPID_LINE1280_ROWS_PER_BURST: u64 = 192;
-// One full-height submit dispatches partway but misses the post-walker marker.
-// Keep this baseline to one centered half-height area while we raise row-pilot parallelism.
+pub(crate) const MANDELBROT_GPGPU_GROUPID_LINE1280_ROWS_PER_BURST: u64 = 256;
+// One 384-row submit dispatches partway but misses the post-walker marker.
+// Keep this as one centered area and one walker submit while we raise row-pilot parallelism.
 pub(crate) const MANDELBROT_GPGPU_LINE1280_MAX_SEGMENTS_PER_BURST: u64 =
     MANDELBROT_TARGET_HEIGHT as u64;
 pub(crate) const MANDELBROT_GPGPU_PRESENT_FLUSH_BYTES: usize = 0xE10000;

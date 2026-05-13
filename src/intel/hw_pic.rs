@@ -136,6 +136,21 @@ async fn hw_pic_service_inner() {
             continue;
         };
         let output = process_job(job);
+        crate::log!(
+            "intel/hw_pic: output id={} codec={:?} status={:?} fmt={:?} size={}x{} pitch=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} virt=0x{:X} err={}\n",
+            output.id,
+            output.codec,
+            output.status,
+            output.format,
+            output.width,
+            output.height,
+            output.pitch_bytes,
+            output.byte_len,
+            output.gpu_addr,
+            output.phys_addr,
+            output.virt_addr,
+            output.error_code
+        );
         push_output(output);
         embassy_time::Timer::after_millis(1).await;
     }
