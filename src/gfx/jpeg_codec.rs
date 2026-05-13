@@ -1,9 +1,12 @@
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use zune_core::bytestream::ZCursor;
 use zune_core::colorspace::ColorSpace;
 use zune_core::options::DecoderOptions;
 use zune_jpeg::JpegDecoder;
+
+static JPEG_DECODE_GATE_LOGGED: AtomicBool = AtomicBool::new(false);
 
 pub struct DecodedJpeg {
     pub width: u32,
@@ -29,8 +32,16 @@ impl JpegDecodeError {
 
 pub fn decode_jpeg_rgba(bytes: &[u8]) -> Result<DecodedJpeg, JpegDecodeError> {
     let options = DecoderOptions::default()
-        .jpeg_set_out_colorspace(ColorSpace::RGBA)
-        .set_use_unsafe(false);
+        .jpeg_set_out_colorspace(ColorSpace::RGB)
+        .set_use_unsafe(true);
+    if !JPEG_DECODE_GATE_LOGGED.swap(true, Ordering::AcqRel) {
+        crate::log!(
+            "jpeg: zune gate use_unsafe={} use_avx2={} bytes={} prove=logo-zune-gate\n",
+            options.use_unsafe(),
+            options.use_avx2(),
+            bytes.len(),
+        );
+    }
     let mut decoder = JpegDecoder::new_with_options(ZCursor::new(bytes), options);
     decoder
         .decode_headers()
@@ -42,9 +53,18 @@ pub fn decode_jpeg_rgba(bytes: &[u8]) -> Result<DecodedJpeg, JpegDecodeError> {
         return Err(JpegDecodeError::Invalid);
     }
 
-    let rgba = decoder
+    let rgb = decoder
         .decode()
         .map_err(|_| JpegDecodeError::DecodeFailed)?;
+    if rgb.len()
+        != (width as usize)
+            .saturating_mul(height as usize)
+            .saturating_mul(3)
+    {
+        return Err(JpegDecodeError::Unsupported);
+    }
+
+    let rgba = super::jpeg_decode_pool::expand_jpeg_rgb_to_rgba(width, height, rgb)?;
     if rgba.len()
         != (width as usize)
             .saturating_mul(height as usize)
