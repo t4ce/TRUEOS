@@ -543,7 +543,8 @@ fn spawn_hw_pic_service(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_hw_logo_present_task(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_worker(spawner, |_worker_spawner| crate::intel::hw_logo_present_task())
+    let _ = spawner;
+    SpawnAttempt::Skipped
 }
 
 fn spawn_intel_hda_probe_task(spawner: Spawner) -> SpawnAttempt {
@@ -999,7 +1000,7 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::APP_VM_READY
     | crate::r::readiness::GFX_TEXTURE_UPLOAD_SERVICE_READY
     | crate::r::readiness::NET_SOCKET_READY
     | crate::r::readiness::TLS_SOCKET_SERVICE_READY;
-static TASKS: [TaskSpec; 66] = [
+static TASKS: [TaskSpec; 67] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
         "globalog-persist-once",
