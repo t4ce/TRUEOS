@@ -12,6 +12,75 @@
 use crate::bit_depth::ByteEndian;
 use crate::colorspace::ColorSpace;
 
+#[cfg(all(not(feature = "std"), target_arch = "x86_64"))]
+#[inline]
+fn runtime_has_x86_avx2() -> bool {
+    use core::arch::x86_64::{__cpuid, __cpuid_count};
+
+    const CPUID1_ECX_XSAVE: u32 = 1 << 26;
+    const CPUID1_ECX_AVX: u32 = 1 << 28;
+    const CPUID7_EBX_AVX2: u32 = 1 << 5;
+    const XCR0_X87: u64 = 1 << 0;
+    const XCR0_SSE: u64 = 1 << 1;
+    const XCR0_YMM: u64 = 1 << 2;
+
+    let r1 = __cpuid(1);
+    if (r1.ecx & (CPUID1_ECX_XSAVE | CPUID1_ECX_AVX)) != (CPUID1_ECX_XSAVE | CPUID1_ECX_AVX) {
+        return false;
+    }
+
+    let xcr0 = unsafe { xgetbv(0) };
+    if (xcr0 & (XCR0_X87 | XCR0_SSE | XCR0_YMM)) != (XCR0_X87 | XCR0_SSE | XCR0_YMM) {
+        return false;
+    }
+
+    let r7 = __cpuid_count(7, 0);
+    (r7.ebx & CPUID7_EBX_AVX2) != 0
+}
+
+#[cfg(all(not(feature = "std"), target_arch = "x86"))]
+#[inline]
+fn runtime_has_x86_avx2() -> bool {
+    use core::arch::x86::{__cpuid, __cpuid_count};
+
+    const CPUID1_ECX_XSAVE: u32 = 1 << 26;
+    const CPUID1_ECX_AVX: u32 = 1 << 28;
+    const CPUID7_EBX_AVX2: u32 = 1 << 5;
+    const XCR0_X87: u64 = 1 << 0;
+    const XCR0_SSE: u64 = 1 << 1;
+    const XCR0_YMM: u64 = 1 << 2;
+
+    let r1 = __cpuid(1);
+    if (r1.ecx & (CPUID1_ECX_XSAVE | CPUID1_ECX_AVX)) != (CPUID1_ECX_XSAVE | CPUID1_ECX_AVX) {
+        return false;
+    }
+
+    let xcr0 = unsafe { xgetbv(0) };
+    if (xcr0 & (XCR0_X87 | XCR0_SSE | XCR0_YMM)) != (XCR0_X87 | XCR0_SSE | XCR0_YMM) {
+        return false;
+    }
+
+    let r7 = __cpuid_count(7, 0);
+    (r7.ebx & CPUID7_EBX_AVX2) != 0
+}
+
+#[cfg(all(not(feature = "std"), any(target_arch = "x86_64", target_arch = "x86")))]
+#[inline(always)]
+unsafe fn xgetbv(xcr: u32) -> u64 {
+    let eax: u32;
+    let edx: u32;
+    unsafe {
+        core::arch::asm!(
+            "xgetbv",
+            in("ecx") xcr,
+            lateout("eax") eax,
+            lateout("edx") edx,
+            options(nostack, preserves_flags),
+        );
+    }
+    ((edx as u64) << 32) | (eax as u64)
+}
+
 /// A decoder that can handle errors
 fn decoder_error_tolerance_mode() -> DecoderFlags {
     // similar to fast options currently, so no need to write a new one
@@ -580,6 +649,12 @@ impl DecoderOptions {
             #[cfg(feature = "std")]
             {
                 if is_x86_feature_detected!("avx2") {
+                    return true;
+                }
+            }
+            #[cfg(not(feature = "std"))]
+            {
+                if runtime_has_x86_avx2() {
                     return true;
                 }
             }
