@@ -175,6 +175,10 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
             log(alloc::format!("run: guest ELF import scan failed: {}", err).as_str());
         }
     }
+    match crate::hv::blueprint::elf_rel_debug_summary(unpacked.as_slice(), module.entry) {
+        Ok(summary) => log(alloc::format!("run: guest {}", summary).as_str()),
+        Err(err) => log(alloc::format!("run: guest ELF diag failed: {}", err).as_str()),
+    }
 
     let app_fs_root = crate::hv::blueprint::app_fs_root_for_archive(
         state.archive.as_str(),

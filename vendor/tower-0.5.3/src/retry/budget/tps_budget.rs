@@ -1,9 +1,15 @@
 //! Transactions Per Minute (Tps) Budget implementations
 
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use alloc::{boxed::Box, vec::Vec};
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use tokio::sync::Mutex;
+
 use std::{
     fmt,
     sync::{
         atomic::{AtomicIsize, Ordering},
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         Mutex,
     },
     time::Duration,
@@ -112,6 +118,9 @@ impl TpsBudget {
     }
 
     fn expire(&self) {
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        let mut gen = self.generation.blocking_lock();
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         let mut gen = self.generation.lock().expect("generation lock");
 
         let now = Instant::now();

@@ -509,6 +509,8 @@ fn find_main_addr(
         .get(strtab_section.file_offset..strtab_section.file_offset + strtab_section.size)
         .ok_or("ELF string table truncated")?;
 
+    let mut rust_main: Option<(usize, usize)> = None;
+
     for index in 0..(symtab.len() / ELF64_SYM_LEN) {
         let sym = read_symbol(symtab, index)?;
         if sym.section_index == SHN_UNDEF {
@@ -517,7 +519,8 @@ fn find_main_addr(
         if sym.info & 0x0f != 2 {
             continue;
         }
-        if sym_name(strtab, &sym)? != "main" {
+        let name = sym_name(strtab, &sym)?;
+        if name != "main" && !looks_like_rust_main_symbol(name) {
             continue;
         }
         let section_index = usize::from(sym.section_index);
@@ -527,12 +530,78 @@ fn find_main_addr(
         if base == 0 {
             return Err(String::from("ELF main section not loaded"));
         }
-        return base
+        let addr = base
             .checked_add(sym.value as usize)
-            .ok_or_else(|| String::from("ELF main address overflow"));
+            .ok_or_else(|| String::from("ELF main address overflow"))?;
+        if name == "main" {
+            return Ok(addr);
+        }
+        let prefer_rust_main = match &rust_main {
+            Some((_, best_len)) => name.len() < *best_len,
+            None => true,
+        };
+        if prefer_rust_main {
+            rust_main = Some((addr, name.len()));
+        }
+    }
+
+    if let Some((addr, _)) = rust_main {
+        return Ok(addr);
     }
 
     Err(String::from("ELF main symbol missing"))
+}
+
+fn looks_like_rust_main_symbol(name: &str) -> bool {
+    (name.starts_with("_R") && name.ends_with("4main"))
+        || (name.starts_with("_ZN") && name.contains("4main17h") && name.ends_with('E'))
+}
+
+fn best_entry_symbol<'a>(
+    bytes: &'a [u8],
+    sections: &[ElfSection],
+    symtab_index: usize,
+) -> Result<Option<(&'static str, String, u16, u64)>, String> {
+    let symtab_section = sections
+        .get(symtab_index)
+        .ok_or_else(|| String::from("ELF symbol table missing"))?;
+    let sym_count = symtab_section.size / ELF64_SYM_LEN;
+    let mut rust_main: Option<(String, u16, u64)> = None;
+
+    for sym_index in 0..sym_count {
+        let (sym, name) = read_symbol_with_name(bytes, sections, symtab_index, sym_index)?;
+        if sym.section_index == SHN_UNDEF || sym.info & 0x0f != 2 {
+            continue;
+        }
+        if name == "main" {
+            return Ok(Some((
+                "exact",
+                String::from(name),
+                sym.section_index,
+                sym.value,
+            )));
+        }
+        if looks_like_rust_main_symbol(name) {
+            let prefer = match &rust_main {
+                Some((best_name, _, _)) => name.len() < best_name.len(),
+                None => true,
+            };
+            if prefer {
+                rust_main = Some((String::from(name), sym.section_index, sym.value));
+            }
+        }
+    }
+
+    Ok(rust_main.map(|(name, section_index, value)| ("rust", name, section_index, value)))
+}
+
+fn abbreviate_symbol_name(name: &str) -> String {
+    const HEAD: usize = 24;
+    const TAIL: usize = 20;
+    if name.len() <= HEAD + TAIL + 2 {
+        return String::from(name);
+    }
+    alloc::format!("{}..{}", &name[..HEAD], &name[name.len() - TAIL..])
 }
 
 fn collect_gotpc_rel_symbols(bytes: &[u8], sections: &[ElfSection]) -> Result<Vec<usize>, String> {
@@ -882,6 +951,44 @@ pub(crate) fn elf_type_name(bytes: &[u8]) -> Option<&'static str> {
         4 => Some("CORE"),
         _ => Some("UNKNOWN"),
     }
+}
+
+pub(crate) fn elf_rel_debug_summary(bytes: &[u8], entry_hint: u64) -> Result<String, String> {
+    let sections = parse_sections(bytes).map_err(String::from)?;
+    let mut alloc_sections = 0usize;
+    let mut alloc_bytes = 0usize;
+    for section in sections.iter() {
+        if section.flags & SHF_ALLOC == 0 {
+            continue;
+        }
+        alloc_sections += 1;
+        alloc_bytes = alloc_bytes.saturating_add(section.size);
+    }
+
+    let entry_symbol = match find_symtab(sections.as_slice()) {
+        Ok(symtab_index) => match best_entry_symbol(bytes, sections.as_slice(), symtab_index) {
+            Ok(Some((kind, name, section_index, value))) => alloc::format!(
+                "entry_symbol={} sec={} value=0x{:x} kind={}",
+                abbreviate_symbol_name(name.as_str()),
+                section_index,
+                value,
+                kind
+            ),
+            Ok(None) => String::from("entry_symbol=missing"),
+            Err(err) => alloc::format!("entry_symbol=scan-failed:{}", err),
+        },
+        Err(err) => alloc::format!("entry_symbol=scan-failed:{}", err),
+    };
+
+    Ok(alloc::format!(
+        "ELF diag sections={} alloc_sections={} alloc_bytes={} entry_hint=sec:{}+0x{:x} {}",
+        sections.len(),
+        alloc_sections,
+        alloc_bytes,
+        entry_hint_section(entry_hint),
+        entry_hint_offset(entry_hint),
+        entry_symbol
+    ))
 }
 
 pub(crate) fn elf_imports<'a>(bytes: &'a [u8]) -> Result<Vec<ElfImport<'a>>, &'static str> {

@@ -99,7 +99,10 @@ impl<T> ReadHalf<T> {
                 .expect("`Arc::try_unwrap` failed");
 
             #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
-            let inner_stream = inner.stream.into_inner().unwrap();
+            let inner_stream = inner
+                .stream
+                .into_inner()
+                .expect("TRUEOS split mutex is infallible");
             #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
             let inner_stream = inner.stream.into_inner().unwrap();
 

@@ -133,6 +133,7 @@ reconnect = [
 ]
 retry = [
     "tokio/time",
+    "tokio/sync",
     "util",
 ]
 spawn-ready = [

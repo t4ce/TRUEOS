@@ -7,7 +7,7 @@
     target_os = "android",
     target_os = "emscripten",
     target_os = "l4re",
-    target_os = "linux",
+    any(target_os = "linux", target_os = "trueos"),
     target_os = "qurt",
     target_vendor = "apple",
 ))]

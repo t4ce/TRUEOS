@@ -25,6 +25,8 @@ pub type pthread_once_t = c_int;
 pub type pthread_spinlock_t = c_int;
 pub type __kernel_fsid_t = __c_anonymous__kernel_fsid_t;
 pub type __kernel_clockid_t = c_int;
+#[cfg(target_os = "trueos")]
+pub type Ioctl = c_ulong;
 
 pub type __u8 = c_uchar;
 pub type __u16 = c_ushort;

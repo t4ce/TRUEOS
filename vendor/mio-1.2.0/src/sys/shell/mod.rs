@@ -15,7 +15,7 @@ pub(crate) use self::waker::Waker;
 cfg_net! {
     pub(crate) mod tcp;
     pub(crate) mod udp;
-    #[cfg(unix)]
+    #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
     pub(crate) mod uds;
 }
 

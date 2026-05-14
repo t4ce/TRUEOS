@@ -1122,8 +1122,6 @@ dependencies = [
 [[package]]
 name = "getrandom"
 version = "0.2.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff2abc00be7fca6ebc474524697ae276ad847ad0a6b3faa4bcb027e9a4614ad0"
 dependencies = [
  "cfg-if",
  "libc",
@@ -3455,3 +3453,19 @@ version = "0.5.15"
 dependencies = [
  "zune-core",
 ]
+
+[[patch.unused]]
+name = "nix"
+version = "0.28.0"
+
+[[patch.unused]]
+name = "rustix"
+version = "1.1.4"
+
+[[patch.unused]]
+name = "rustyline"
+version = "14.0.0"
+
+[[patch.unused]]
+name = "tokio-rustls"
+version = "0.26.4"
