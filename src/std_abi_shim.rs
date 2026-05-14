@@ -49,7 +49,7 @@ pub unsafe extern "C" fn sys_rand(recv_buf: *mut u32, words: usize) {
 
     let byte_len = words.saturating_mul(core::mem::size_of::<u32>());
     let bytes = unsafe { slice::from_raw_parts_mut(recv_buf.cast::<u8>(), byte_len) };
-    if !crate::Tyche::fill_bytes(bytes) {
+    if !crate::tyche::fill_bytes(bytes) {
         unsafe { ptr::write_bytes(recv_buf, 0, words) };
     }
 }
