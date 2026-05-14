@@ -223,7 +223,10 @@ impl Socket {
         match res {
             Ok(()) => return Ok(()),
             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {}
-            #[cfg(any(unix, all(target_os = "wasi", not(target_env = "p1"))))]
+            #[cfg(any(
+                all(unix, not(any(target_os = "trueos", target_os = "zkvm"))),
+                all(target_os = "wasi", not(target_env = "p1"))
+            ))]
             Err(ref e) if e.raw_os_error() == Some(libc::EINPROGRESS) => {}
             Err(e) => return Err(e),
         }

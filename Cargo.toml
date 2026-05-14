@@ -139,8 +139,13 @@ lazy_static = { path = "vendor/lazy_static-1.5.0" }
 rustls-rustcrypto = { path = "vendor/rustls-rustcrypto-0.0.2-alpha" }
 crab-usb = { path = "vendor/crab-usb-0.6.2/crab-usb-0.6.2" }
 tokio = { path = "vendor/tokio-1.52.1" }
+tokio-rustls = { path = "vendor/tokio-rustls-0.26.4" }
 mio = { path = "vendor/mio-1.2.0" }
+nix = { path = "vendor/nix-0.28.0" }
+rustix = { path = "vendor/rustix-1.1.4" }
 socket2 = { path = "vendor/socket2-0.6.3" }
+getrandom = { path = "vendor/getrandom-0.2.17" }
+rustyline = { path = "vendor/rustyline-14.0.0" }
 dma-api = { path = "vendor/dma-api-0.7.2" }
 half = { path = "vendor/half-2.7.1" }
 fontdue = { path = "vendor/fontdue-0.9.3" }

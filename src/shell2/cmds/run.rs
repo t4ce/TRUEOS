@@ -261,6 +261,10 @@ async fn execute_blueprint(spawner: &Spawner, request: &AppVmLaunchRequest, log:
         } else {
             log("hv run: unpacked payload looks like ELF");
         }
+        match crate::hv::blueprint::elf_rel_debug_summary(unpacked.as_slice(), module.entry) {
+            Ok(summary) => log(alloc::format!("hv run: {}", summary).as_str()),
+            Err(err) => log(alloc::format!("hv run: ELF diag failed: {}", err).as_str()),
+        }
     } else {
         log("hv run: unpacked payload does not look like ELF");
     }
