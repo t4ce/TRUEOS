@@ -2912,10 +2912,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "trueos-sys"
-version = "0.1.0"
-
-[[package]]
 name = "trueos-vm"
 version = "0.1.0"
 dependencies = [
@@ -3061,7 +3057,6 @@ dependencies = [
  "serde",
  "serde_json",
  "spin",
- "trueos-sys",
 ]
 
 [[package]]
