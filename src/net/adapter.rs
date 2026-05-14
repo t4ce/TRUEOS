@@ -1563,7 +1563,7 @@ impl NetService {
         let hw_addr = HardwareAddress::Ethernet(EthernetAddress(mac));
 
         let mut cfg = IfaceConfig::new(hw_addr);
-        cfg.random_seed = crate::Tyche::rdrand_u64().unwrap_or(0x9E37_79B9);
+        cfg.random_seed = crate::tyche::rdrand_u64().unwrap_or(0x9E37_79B9);
 
         let mut rx_buffer = VecDeque::new();
         let mut tx_buffer = VecDeque::new();
@@ -3219,7 +3219,7 @@ impl NetService {
     }
 
     fn dhcp6_new_xid(&self) -> [u8; 3] {
-        let r = crate::Tyche::rdrand_u64().unwrap_or(0x6a09e667_f3bcc909);
+        let r = crate::tyche::rdrand_u64().unwrap_or(0x6a09e667_f3bcc909);
         let mut xid = [
             (r & 0xFF) as u8,
             ((r >> 8) & 0xFF) as u8,

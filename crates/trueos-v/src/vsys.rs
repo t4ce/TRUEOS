@@ -1,3 +1,7 @@
+use alloc::string::String;
+use core::fmt;
+use core::fmt::Write as _;
+
 use crate::vcabi;
 
 #[inline]
@@ -6,11 +10,16 @@ pub fn poll_once() {
 }
 
 #[inline]
+pub fn sleep_ms(ms: u64) {
+    unsafe { vcabi::trueos_cabi_sleep_ms(ms) }
+}
+
+#[inline]
 pub fn write_stream(stream: u32, bytes: &[u8]) {
     if bytes.is_empty() {
         return;
     }
-    //unsafe { vcabi::trueos_cabi_write(stream, bytes.as_ptr(), bytes.len()) }
+    unsafe { vcabi::trueos_cabi_write(stream, bytes.as_ptr(), bytes.len()) }
 }
 
 #[inline]
@@ -26,4 +35,51 @@ pub fn log_info(s: &str) {
 #[inline]
 pub fn log_error(s: &str) {
     write_log_stream(2, s);
+}
+
+#[inline]
+pub fn log_infof(args: fmt::Arguments<'_>) {
+    logf(1, args);
+}
+
+#[inline]
+pub fn log_errorf(args: fmt::Arguments<'_>) {
+    logf(2, args);
+}
+
+#[inline]
+pub fn log_info_with_args(prefix: &str, args: &[&str]) {
+    log_with_args(1, prefix, args);
+}
+
+#[inline]
+pub fn log_error_with_args(prefix: &str, args: &[&str]) {
+    log_with_args(2, prefix, args);
+}
+
+fn log_with_args(stream: u32, prefix: &str, args: &[&str]) {
+    let mut line = String::from(prefix);
+    if args.is_empty() {
+        line.push_str(" args=(none)\n");
+    } else {
+        line.push_str(" args=");
+        for (idx, arg) in args.iter().enumerate() {
+            if idx != 0 {
+                line.push(' ');
+            }
+            line.push_str(arg);
+        }
+        line.push('\n');
+    }
+
+    write_log_stream(stream, line.as_str());
+}
+
+fn logf(stream: u32, args: fmt::Arguments<'_>) {
+    let mut line = String::new();
+    let _ = line.write_fmt(args);
+    if !line.ends_with('\n') {
+        line.push('\n');
+    }
+    write_log_stream(stream, line.as_str());
 }

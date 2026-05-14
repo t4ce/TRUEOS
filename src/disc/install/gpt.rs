@@ -94,7 +94,7 @@ fn crc32_ieee(bytes: &[u8]) -> u32 {
 
 fn fill_guid_bytes(out: &mut [u8; 16]) {
     out.fill(0);
-    if crate::Tyche::fill_bytes(out) {
+    if crate::tyche::fill_bytes(out) {
         // Ensure it's not all-zero.
         if out.iter().all(|b| *b == 0) {
             out[0] = 1;

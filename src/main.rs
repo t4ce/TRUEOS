@@ -10,7 +10,7 @@ const _: f16 = 0.0_f16;
 pub extern crate alloc;
 
 #[allow(non_snake_case)]
-mod Tyche;
+mod tyche;
 mod allcaps;
 mod allocators;
 pub mod allports;
@@ -221,7 +221,7 @@ pub extern "C" fn kmain() -> ! {
 
     pci::vrng::init_once();
     //pci::vrng::smoke_test_once();
-    crate::Tyche::init();
+    crate::tyche::init();
 
     disc::probe_once();
     efi::acpi::ensure_tables();

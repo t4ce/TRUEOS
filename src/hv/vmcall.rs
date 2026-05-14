@@ -261,7 +261,7 @@ pub fn dispatch(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             };
             let out = unsafe { &mut (&mut (*p).payload)[..want] };
-            if crate::Tyche::fill_bytes(out) {
+            if crate::tyche::fill_bytes(out) {
                 write_response(vm_id, seq, STATUS_OK, want as u64, want as u32);
             } else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
