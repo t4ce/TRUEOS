@@ -675,10 +675,7 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
         {
             bound_any = true;
         }
-        if super::skhynix_green::maybe_start_skhynix_green(host, dev, spawner, controller_id).await
-        {
-            bound_any = true;
-        } else if super::pen::maybe_start_mass_storage(host, dev, spawner, controller_id).await {
+        if super::pen::maybe_start_mass_storage(host, dev, spawner, controller_id).await {
             bound_any = true;
         }
         if bound_any && usb_log_all_enabled() {
