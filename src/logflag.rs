@@ -2,17 +2,17 @@ use core::sync::atomic::{AtomicBool, AtomicU32};
 use log::{Level, LevelFilter};
 use spin::Once;
 
-pub(crate) const GLOBAL_LOG_LEVEL: LevelFilter = LevelFilter::Info;
+pub(crate) const GLOBAL_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
 pub(crate) const BOOT_LOG_LEVEL: LevelFilter = LevelFilter::Error;
 pub(crate) const SERVICE_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const NET_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
 pub(crate) const USB_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const STORAGE_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
 pub(crate) const GFX_LOG_LEVEL: LevelFilter = LevelFilter::Info;
-pub(crate) const HV_LOG_LEVEL: LevelFilter = LevelFilter::Error;
+pub(crate) const HV_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
 
 #[allow(non_upper_case_globals)]
-pub(crate) const dont_persist_globalog: bool = true;
+pub(crate) const dont_persist_globalog: bool = false;
 
 pub(crate) const NET_LOG_RX_TAP: bool = false;
 pub(crate) const NET_LOG_TX_TAP: bool = false;
@@ -28,8 +28,8 @@ pub(crate) const VNET_EXERCISE_LOGS: bool = false;
 
 pub(crate) const R8125_VERBOSE_LOGS: bool = false;
 pub(crate) const BOOT_INFO_LOGS: bool = false;
-pub(crate) const HV_LOGS: bool = false;
-pub(crate) const PORTAL_LOGS: bool = false;
+pub(crate) const HV_LOGS: bool = true;
+pub(crate) const PORTAL_LOGS: bool = true;
 
 pub(crate) const UI2_ENABLE_VERBOSE_COMPOSE_LOGS: bool = false;
 pub(crate) const VHTTPS_VERBOSE: bool = false;
@@ -59,7 +59,7 @@ pub(crate) static GFX_CABI_VIRGL_FIRST_FRAME_SEEN: AtomicBool = AtomicBool::new(
 
 pub(crate) static USB_LOG_ALL: AtomicBool = AtomicBool::new(true);
 pub(crate) const USB_VENDOR_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
-pub(crate) const BLUEPRINT_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
+pub(crate) const BLUEPRINT_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
 pub(crate) const USB_AUDIO_DEBUG_LOGS: bool = false;
 pub(crate) const HID_DEBUG_REPORT_LOGS: bool = false;
 pub(crate) const USB_MASS_UAS_ADVANCED_PROBE_LOGS: bool = true;
