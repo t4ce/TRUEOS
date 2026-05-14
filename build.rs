@@ -10,7 +10,7 @@ fn main() {
 }
 
 fn generate_portal_imports(manifest_dir: &Path) -> Result<(), String> {
-    let vcabi_path = manifest_dir.join("crates/trueos-sys/src/vcabi.rs");
+    let vcabi_path = manifest_dir.join("crates/trueos-v/src/vcabi.rs");
     println!("cargo:rerun-if-changed={}", vcabi_path.display());
 
     let import_names = parse_declared_cabi_imports(&vcabi_path)?;
