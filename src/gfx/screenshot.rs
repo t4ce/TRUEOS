@@ -268,7 +268,7 @@ pub unsafe extern "C" fn trueos_cabi_gfx_capture_screenshot_data_url(
     out_ptr: *mut u8,
     out_cap: usize,
 ) -> isize {
-    if crate::hv::current_vm_id_by_lapic_low().is_some() {
+    if crate::hv::current_guest_execution_context_vm_id().is_some() {
         return -1;
     }
     if out_ptr.is_null() || out_cap == 0 {

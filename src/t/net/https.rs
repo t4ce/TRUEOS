@@ -211,6 +211,7 @@ async fn cabi_net_fetch_task_inner(
     timeout_ms: u32,
     max_bytes: usize,
 ) {
+    let _host_alloc_domain = crate::allocators::enter_host_alloc_domain_current_cpu();
     let t0 = Instant::now();
     if !net_fetch_acquire_slot_while("file", op_id, || {
         net_fetch_file_task_has_interest(op_id, key.as_str())
@@ -341,6 +342,7 @@ async fn cabi_net_fetch_bytes_task_inner(
     timeout_ms: u32,
     max_bytes: usize,
 ) {
+    let _host_alloc_domain = crate::allocators::enter_host_alloc_domain_current_cpu();
     let cpu_slot = crate::percpu::current_slot();
     let lapic_id = crate::percpu::current_lapic_id_via_cpuid();
     let t0 = Instant::now();
@@ -768,6 +770,7 @@ async fn cabi_net_fetch_post_json_task_inner(
     timeout_ms: u32,
     max_bytes: usize,
 ) {
+    let _host_alloc_domain = crate::allocators::enter_host_alloc_domain_current_cpu();
     let t0 = Instant::now();
     net_fetch_acquire_slot().await;
 
@@ -872,6 +875,7 @@ async fn cabi_net_fetch_post_json_bytes_task_inner(
     timeout_ms: u32,
     max_bytes: usize,
 ) {
+    let _host_alloc_domain = crate::allocators::enter_host_alloc_domain_current_cpu();
     let t0 = Instant::now();
     net_fetch_acquire_slot().await;
 
@@ -969,6 +973,7 @@ fn spawn_cabi_net_fetch_post_json_bytes(
 }
 
 async fn cabi_net_prewarm_url_task_inner(url: String) {
+    let _host_alloc_domain = crate::allocators::enter_host_alloc_domain_current_cpu();
     let Some(parsed) = parse_https_url(url.as_str()) else {
         return;
     };

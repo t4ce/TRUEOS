@@ -268,7 +268,7 @@ pub extern "C" fn trueos_cabi_gfx_frame_lock_end() {
 
 #[inline]
 fn system_lock_requester_id() -> u32 {
-    if let Some(vm_id) = crate::hv::current_vm_id_by_lapic_low() {
+    if let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() {
         return 0x8000_0000 | vm_id as u32;
     }
     crate::percpu::this_cpu().cpu_index() as u32

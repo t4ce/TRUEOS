@@ -165,7 +165,7 @@ pub fn host_heap_contains_addr(addr: usize) -> bool {
 
 #[inline]
 fn reject_hv_guest_host_heap_dealloc(ptr: *mut u8) -> bool {
-    if crate::hv::current_hull_guest_context_vm_id().is_none() {
+    if crate::hv::current_guest_execution_context_vm_id().is_none() {
         return false;
     }
     if !host_heap_contains_addr(ptr as usize) {
@@ -562,10 +562,10 @@ fn current_alloc_domain() -> AllocDomain {
         return AllocDomain::Host;
     }
 
-    // Guest-side allocator routing must prove that execution is actually inside
-    // the Hull guest stack. Host services can run on VM-tagged lanes while
-    // servicing CABI work and must keep using the host heap.
-    if let Some(vm_id) = crate::hv::current_hull_guest_context_vm_id() {
+    // Guest-side allocator routing must prove logical guest execution. Host
+    // services can run on VM-tagged lanes while servicing CABI work and must
+    // keep using the host heap.
+    if let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() {
         return AllocDomain::HvGuest(vm_id);
     }
 
@@ -613,6 +613,32 @@ pub fn with_host_alloc_domain<T>(f: impl FnOnce() -> T) -> T {
     let out = f();
     depth.fetch_sub(1, Ordering::AcqRel);
     out
+}
+
+pub struct HostAllocDomainGuard {
+    slot: Option<usize>,
+}
+
+impl Drop for HostAllocDomainGuard {
+    fn drop(&mut self) {
+        if let Some(slot) = self.slot
+            && let Some(depth) = HOST_ALLOC_DOMAIN_FORCE_DEPTH_BY_CPU.get(slot)
+        {
+            depth.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
+}
+
+pub fn enter_host_alloc_domain_current_cpu() -> HostAllocDomainGuard {
+    init_fallback_regions();
+    let Some(slot) = cpuid_slot() else {
+        return HostAllocDomainGuard { slot: None };
+    };
+    let Some(depth) = HOST_ALLOC_DOMAIN_FORCE_DEPTH_BY_CPU.get(slot) else {
+        return HostAllocDomainGuard { slot: None };
+    };
+    depth.fetch_add(1, Ordering::AcqRel);
+    HostAllocDomainGuard { slot: Some(slot) }
 }
 
 fn allocator_for_domain(domain: AllocDomain) -> &'static Mutex<FreeList> {

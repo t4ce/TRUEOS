@@ -42,7 +42,12 @@ async fn tokio_blocking_job_task(
                 "tokio-worker: vthread backing enabled for blocking workers\n"
             );
         }
-        Some(crate::t::th::vthread::enter(lane.vthread_record()))
+        // Guest-originated blocking jobs run on a host carrier, but their TLS
+        // identity must remain the VM hull identity.
+        let record = guest_vm_id
+            .map(crate::t::th::vthread::record_for_vm_hull)
+            .unwrap_or_else(|| lane.vthread_record());
+        Some(crate::t::th::vthread::enter(record))
     } else {
         None
     };
@@ -185,6 +190,9 @@ pub extern "Rust" fn trueos_tokio_spawn_blocking_job(job: TokioBlockingJob) -> i
         } else {
             -6
         };
+    }
+    if let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() {
+        return spawn_on_background_ap(job, "guest-tokio-blocking-job", Some(vm_id));
     }
     spawn_blocking_job_with_purpose(job, "tokio-blocking-job")
 }

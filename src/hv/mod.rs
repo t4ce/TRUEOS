@@ -526,6 +526,24 @@ pub(crate) fn current_hull_guest_context_vm_id() -> Option<u8> {
     }
 }
 
+pub(crate) fn current_guest_execution_context_vm_id() -> Option<u8> {
+    if let Some(vm_id) = current_hull_guest_context_vm_id() {
+        return Some(vm_id);
+    }
+
+    let snapshot = crate::t::th::vthread::current_snapshot()?;
+    if snapshot.role != crate::t::th::vthread::VTHREAD_ROLE_VM_HULL {
+        return None;
+    }
+
+    let vm_id = snapshot.lane_id as usize;
+    if vm_id < crate::allcaps::hv::VM_ID_LIMIT {
+        Some(vm_id as u8)
+    } else {
+        None
+    }
+}
+
 pub(crate) fn current_vm_lapic_low_tag_addr() -> u64 {
     let lapic_id = crate::percpu::current_lapic_id_via_cpuid();
     (&CURRENT_VM_ID_BY_LAPIC_LOW[(lapic_id & 0xFF) as usize] as *const AtomicU8) as u64
@@ -994,7 +1012,7 @@ pub fn log_blueprint_app_window_event(args: core::fmt::Arguments<'_>) {
 }
 
 fn close_or_defer_app_window(vm_id: u8, window_id: u32, reason: &'static str) {
-    if current_hull_guest_context_vm_id().is_none() {
+    if current_guest_execution_context_vm_id().is_none() {
         let _ = crate::r::ui2::close_window(window_id);
         return;
     }
@@ -1111,7 +1129,7 @@ pub fn defer_blueprint_app_window_create(
     tex_id: u32,
     blend_enabled: bool,
 ) -> u32 {
-    let Some(vm_id) = current_vm_id_by_lapic_low() else {
+    let Some(vm_id) = current_guest_execution_context_vm_id() else {
         return 0;
     };
     let kind_id = deferred_app_window_kind(kind);
@@ -1348,7 +1366,7 @@ pub fn deferred_blueprint_app_window_vm_id(window_id: u32) -> Option<u8> {
 
 pub fn deferred_blueprint_app_window_current_vm(window_id: u32) -> Option<u8> {
     let vm_id = deferred_blueprint_app_window_vm_id(window_id)?;
-    if current_vm_id_by_lapic_low() == Some(vm_id) {
+    if current_guest_execution_context_vm_id() == Some(vm_id) {
         Some(vm_id)
     } else {
         None
