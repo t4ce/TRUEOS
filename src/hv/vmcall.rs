@@ -45,6 +45,7 @@ pub const OP_BP_FS_EXISTS: u32 = 0x33; // payload path -> 0/1/rc
 pub const OP_BP_FS_REMOVE: u32 = 0x34; // payload path -> rc
 pub const OP_BP_FS_STAT: u32 = 0x60; // payload path -> rc + kind in response_data[63:32]
 pub const OP_BP_THREAD_CURRENT_ID: u32 = 0x61; // response is current TRUEOS vthread id
+pub const OP_BP_TOKIO_BLOCKING_SPAWN: u32 = 0x62; // arg0/arg1 boxed blocking job raw parts
 pub const OP_BP_SOCKET_TCP_OPEN: u32 = 0x35; // arg0 domain/type, arg1 protocol -> socket/rc
 pub const OP_BP_SOCKET_TCP_CLOSE: u32 = 0x36; // arg0 socket -> rc
 pub const OP_BP_SOCKET_TCP_SET_NONBLOCKING: u32 = 0x37; // arg0 socket, arg1 bool -> rc
@@ -273,6 +274,18 @@ pub fn dispatch(vm_id: u8) -> DispatchOutcome {
             let vtid = crate::t::th::vthread::current_id()
                 .unwrap_or_else(|| crate::t::th::vthread::record_for_vm_hull(vm_id).vtid());
             write_response(vm_id, seq, STATUS_OK, vtid as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_TOKIO_BLOCKING_SPAWN => {
+            let rc = unsafe {
+                crate::t::trueos_tokio_worker::spawn_guest_blocking_job_from_raw(
+                    vm_id,
+                    arg0 as usize,
+                    arg1 as usize,
+                    "guest-tokio-blocking-job",
+                )
+            };
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
         OP_NET_TCP_WRITE => {

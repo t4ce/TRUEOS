@@ -140,18 +140,15 @@ fn collect_candidates(profile: LaneProfile) -> Vec<LaneCandidate> {
 }
 
 fn collect_ap2_candidates() -> Vec<LaneCandidate> {
-    let slots = crate::workers::background_worker_slots();
     let mut pool = Vec::new();
-    for slot in slots {
+    for slot in crate::workers::background_slot_range() {
         if slot < AP2_FIRST_CARRIER_SLOT {
             continue;
         }
         let Some(spawner) = crate::workers::spawner_for_slot(slot) else {
             continue;
         };
-        let core_kind = crate::cpu::CpuProfile::for_slot(slot)
-            .map(|profile| profile.core_kind())
-            .unwrap_or(crate::workers::CORE_KIND_UNKNOWN);
+        let core_kind = crate::workers::core_kind_for_slot(slot);
         pool.push(LaneCandidate {
             slot,
             core_kind,

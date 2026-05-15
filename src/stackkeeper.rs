@@ -9,6 +9,7 @@ const LANE_TAG_MAGIC: u32 = 0x304B_5453; // "STK0", little endian in memory.
 const NO_CPU_SLOT: u32 = u32::MAX;
 const TRUEOS_KERNEL_VM_ID: u8 = 0;
 const LANE_DOMAIN_HOST: u8 = 0;
+const LANE_DOMAIN_GUEST: u8 = 1;
 const LANE_ROLE_TOKIO_BLOCKING: u8 = 1;
 
 #[repr(align(64))]
@@ -151,6 +152,31 @@ pub fn try_acquire_tokio_lane(
     core_kind: u8,
     purpose: &'static str,
 ) -> Option<TokioLaneLease> {
+    try_acquire_tokio_lane_for_domain(
+        cpu_slot,
+        core_kind,
+        TRUEOS_KERNEL_VM_ID,
+        LANE_DOMAIN_HOST,
+        purpose,
+    )
+}
+
+pub fn try_acquire_tokio_lane_for_vm(
+    cpu_slot: u32,
+    core_kind: u8,
+    vm_id: u8,
+    purpose: &'static str,
+) -> Option<TokioLaneLease> {
+    try_acquire_tokio_lane_for_domain(cpu_slot, core_kind, vm_id, LANE_DOMAIN_GUEST, purpose)
+}
+
+fn try_acquire_tokio_lane_for_domain(
+    cpu_slot: u32,
+    core_kind: u8,
+    vm_id: u8,
+    domain: u8,
+    purpose: &'static str,
+) -> Option<TokioLaneLease> {
     for lane_id in 0..TOKIO_LANE_COUNT {
         if TOKIO_LANE_LEASED[lane_id]
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -166,8 +192,8 @@ pub fn try_acquire_tokio_lane(
 
         TOKIO_LANE_OWNER_CPU_SLOT[lane_id].store(cpu_slot, Ordering::Release);
         TOKIO_LANE_OWNER_CORE_KIND[lane_id].store(core_kind as u32, Ordering::Release);
-        TOKIO_LANE_OWNER_VM_ID[lane_id].store(TRUEOS_KERNEL_VM_ID as u32, Ordering::Release);
-        TOKIO_LANE_OWNER_DOMAIN[lane_id].store(LANE_DOMAIN_HOST as u32, Ordering::Release);
+        TOKIO_LANE_OWNER_VM_ID[lane_id].store(vm_id as u32, Ordering::Release);
+        TOKIO_LANE_OWNER_DOMAIN[lane_id].store(domain as u32, Ordering::Release);
         TOKIO_LANE_OWNER_ROLE[lane_id].store(LANE_ROLE_TOKIO_BLOCKING as u32, Ordering::Release);
 
         if !LOGGED_TOKIO_LANE[lane_id].swap(true, Ordering::AcqRel) {
@@ -175,8 +201,8 @@ pub fn try_acquire_tokio_lane(
                 "stackkeeper: reserved tagged Tokio lane{} for {} vm={} domain={} role={} cpu_slot={} scratch={:#x}+{}\n",
                 lane_id,
                 purpose,
-                TRUEOS_KERNEL_VM_ID,
-                LANE_DOMAIN_HOST,
+                vm_id,
+                domain,
                 LANE_ROLE_TOKIO_BLOCKING,
                 cpu_slot,
                 scratch_base,
@@ -187,9 +213,9 @@ pub fn try_acquire_tokio_lane(
         return Some(TokioLaneLease {
             tag: LaneTag {
                 magic: LANE_TAG_MAGIC,
-                domain: LANE_DOMAIN_HOST,
+                domain,
                 role: LANE_ROLE_TOKIO_BLOCKING,
-                vm_id: TRUEOS_KERNEL_VM_ID,
+                vm_id,
                 core_kind,
                 lane_id: lane_id as u32,
                 cpu_slot,
