@@ -608,7 +608,7 @@ unsafe extern "C" fn trueos_global_log_line(
     }
     line.push(b'\n');
 
-    v::vcabi::trueos_cabi_write(1, line.as_ptr(), line.len());
+    qjs::platform::sys::write_stdout(&line);
     qjs::JS_FreeCString(ctx, line_c);
     js_int32(0)
 }
@@ -1061,7 +1061,7 @@ fn log_bytes(bytes: &[u8]) {
     if bytes.is_empty() {
         return;
     }
-    v::vsys::write_stream(1, bytes);
+    qjs::platform::sys::write_stdout(bytes);
 }
 
 #[inline]
