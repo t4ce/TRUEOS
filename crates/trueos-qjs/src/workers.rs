@@ -14,16 +14,8 @@ use spin::Mutex;
 
 use crate as qjs;
 
-unsafe extern "C" {
-    fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
-}
-
 unsafe extern "Rust" {
-    fn trueos_kernel_worker_register_core_spawner(
-        cpu_slot: u32,
-        core_kind: u8,
-        spawner: Spawner,
-    );
+    fn trueos_kernel_worker_register_core_spawner(cpu_slot: u32, core_kind: u8, spawner: Spawner);
     fn trueos_kernel_worker_core_kind_for_slot(cpu_slot: u32) -> u8;
     fn trueos_kernel_worker_spawner_for_slot(cpu_slot: u32) -> Option<SendSpawner>;
     fn trueos_kernel_worker_background_worker_slots() -> Vec<u32>;
@@ -35,7 +27,7 @@ fn log_bytes(bytes: &[u8]) {
     if bytes.is_empty() {
         return;
     }
-    unsafe { trueos_cabi_write(2, bytes.as_ptr(), bytes.len()) };
+    qjs::platform::sys::write_stderr(bytes);
 }
 
 #[inline]

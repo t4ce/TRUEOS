@@ -856,11 +856,7 @@ unsafe fn ensure_global_fetch(ctx: *mut qjs::JSContext) {
         (b"__trueosFetchBytes\0", trueos_fetch_bytes, 1),
         (b"__trueosPrewarmUrl\0", trueos_prewarm_url, 1),
         (b"__trueosGlobalLogLine\0", trueos_global_log_line, 1),
-        (
-            b"__trueosResolveReadyImageTexture\0",
-            trueos_resolve_ready_image_texture,
-            1,
-        ),
+        (b"__trueosResolveReadyImageTexture\0", trueos_resolve_ready_image_texture, 1),
         (b"__trueosPrefetchModule\0", trueos_prefetch_module, 2),
     ];
     for &(name, func, argc) in helpers {
@@ -1367,13 +1363,7 @@ unsafe fn make_formatter_object(
     let ro = make_resolved_options(ctx, profile, kind);
     let _ = qjs::jsbind::install_fn(ctx, obj, b"format\0", 1, Some(intl_format));
     let _ = qjs::JS_SetPropertyStr(ctx, obj, b"__resolvedOptions\0".as_ptr() as *const c_char, ro);
-    let _ = qjs::jsbind::install_fn(
-        ctx,
-        obj,
-        b"resolvedOptions\0",
-        0,
-        Some(intl_resolved_options),
-    );
+    let _ = qjs::jsbind::install_fn(ctx, obj, b"resolvedOptions\0", 0, Some(intl_resolved_options));
     obj
 }
 
@@ -1476,14 +1466,8 @@ unsafe fn ensure_global_intl(ctx: *mut qjs::JSContext) {
         (b"Locale\0", intl_locale_ctor),
     ];
     for &(name, func) in ctors {
-        let _ = qjs::jsbind::install_fn_kind(
-            ctx,
-            intl,
-            name,
-            1,
-            qjs::JS_CFUNC_CONSTRUCTOR,
-            Some(func),
-        );
+        let _ =
+            qjs::jsbind::install_fn_kind(ctx, intl, name, 1, qjs::JS_CFUNC_CONSTRUCTOR, Some(func));
     }
     let _ = qjs::jsbind::install_fn(
         ctx,

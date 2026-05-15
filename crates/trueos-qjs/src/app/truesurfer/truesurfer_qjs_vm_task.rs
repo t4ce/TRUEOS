@@ -19,10 +19,6 @@ use spin::{Mutex, Once};
 
 use crate as qjs;
 
-unsafe extern "C" {
-    fn trueos_cabi_ui2_signal_hosted_browser_dirty(content_id: u32, flags: u32);
-}
-
 pub const MAX_BROWSER_INSTANCE_ID: u32 = 50;
 pub const TRUESURFER_TASK_POOL_SIZE: usize = 100;
 pub const BOOT_BROWSER_INSTANCE_IDS: [u32; 10] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
@@ -308,9 +304,7 @@ fn with_browser_state<R>(
 #[inline]
 fn signal_ui2_hosted_browser_dirty(browser_instance_id: u32, flags: u32) {
     if browser_valid(browser_instance_id) && flags != 0 {
-        unsafe {
-            trueos_cabi_ui2_signal_hosted_browser_dirty(browser_instance_id, flags);
-        }
+        qjs::platform::ui::signal_hosted_browser_dirty(browser_instance_id, flags);
     }
 }
 

@@ -13,32 +13,8 @@ use spin::Mutex;
 use crate as qjs;
 
 use crate::async_fs;
+use crate::platform;
 use crate::trueos_shims::{trueos_cabi_fs_read_file, trueos_cabi_fs_remove};
-
-unsafe extern "C" {
-    fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
-    fn trueos_cabi_gfx_upload_texture_png_async(
-        tex_id: u32,
-        data_ptr: *const u8,
-        data_len: usize,
-    ) -> i32;
-    fn trueos_cabi_gfx_upload_texture_jpeg_async(
-        tex_id: u32,
-        data_ptr: *const u8,
-        data_len: usize,
-    ) -> i32;
-    fn trueos_cabi_gfx_upload_texture_svg_async(
-        tex_id: u32,
-        data_ptr: *const u8,
-        data_len: usize,
-    ) -> i32;
-    fn trueos_cabi_gfx_texture_status(tex_id: u32) -> i32;
-    fn trueos_cabi_gfx_texture_dimensions(
-        tex_id: u32,
-        out_width: *mut u32,
-        out_height: *mut u32,
-    ) -> i32;
-}
 
 const ASYNC_TEX_STATUS_UNKNOWN: i32 = 0;
 const ASYNC_TEX_STATUS_PENDING: i32 = 1;
@@ -112,7 +88,7 @@ fn image_diag_log(msg: &str) {
     if msg.is_empty() {
         return;
     }
-    unsafe { trueos_cabi_write(2, msg.as_ptr(), msg.len()) };
+    platform::sys::write_stderr(msg.as_bytes());
 }
 
 fn image_diag_allowed() -> bool {
@@ -330,7 +306,7 @@ fn read_png_dimensions(bytes: &[u8]) -> Result<(u32, u32), i32> {
 fn queue_png_texture_upload(tex_id: u32, bytes: &[u8]) -> Result<(u32, u32), i32> {
     let (width, height) = read_png_dimensions(bytes)?;
     let rc =
-        unsafe { trueos_cabi_gfx_upload_texture_png_async(tex_id, bytes.as_ptr(), bytes.len()) };
+        unsafe { platform::gfx::upload_texture_png_async(tex_id, bytes.as_ptr(), bytes.len()) };
     if rc != 0 {
         return Err(rc);
     }
@@ -349,7 +325,7 @@ fn path_has_jpeg_suffix(path: &[u8]) -> bool {
 
 fn queue_jpeg_texture_upload(tex_id: u32, bytes: &[u8]) -> Result<(), i32> {
     let rc =
-        unsafe { trueos_cabi_gfx_upload_texture_jpeg_async(tex_id, bytes.as_ptr(), bytes.len()) };
+        unsafe { platform::gfx::upload_texture_jpeg_async(tex_id, bytes.as_ptr(), bytes.len()) };
     if rc != 0 {
         return Err(rc);
     }
@@ -375,7 +351,7 @@ fn path_has_svg_suffix(path: &[u8]) -> bool {
 
 fn queue_svg_texture_upload(tex_id: u32, bytes: &[u8]) -> Result<(), i32> {
     let rc =
-        unsafe { trueos_cabi_gfx_upload_texture_svg_async(tex_id, bytes.as_ptr(), bytes.len()) };
+        unsafe { platform::gfx::upload_texture_svg_async(tex_id, bytes.as_ptr(), bytes.len()) };
     if rc != 0 {
         return Err(rc);
     }
@@ -385,10 +361,11 @@ fn queue_svg_texture_upload(tex_id: u32, bytes: &[u8]) -> Result<(), i32> {
 fn texture_dimensions(tex_id: u32) -> Option<(u32, u32)> {
     let mut width = 0u32;
     let mut height = 0u32;
-    let rc = unsafe {
-        trueos_cabi_gfx_texture_dimensions(tex_id, &mut width as *mut u32, &mut height as *mut u32)
-    };
-    if rc == 0 && width > 0 && height > 0 {
+    if let Some((tex_width, tex_height)) = platform::gfx::texture_dimensions(tex_id) {
+        width = tex_width;
+        height = tex_height;
+    }
+    if width > 0 && height > 0 {
         Some((width, height))
     } else {
         None
@@ -529,7 +506,7 @@ unsafe fn pump_image_requests(ctx: *mut qjs::JSContext) -> bool {
                 }
             }
             PendingImageStage::Upload => {
-                let status = trueos_cabi_gfx_texture_status(op.tex_id);
+                let status = platform::gfx::texture_status(op.tex_id);
                 if status == ASYNC_TEX_STATUS_READY {
                     progress = true;
                     if (op.width == 0 || op.height == 0)
