@@ -299,6 +299,14 @@ pub static HDC1_STATELESS_STORE_THEN_TS_EOT: EuArtifact = EuArtifact {
     expects_store: true,
 };
 
+pub const C4_STORE_IMM32_STATELESS_WORDS: usize = HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS.len();
+
+pub fn c4_store_imm32_stateless_words(value: u32) -> [u32; C4_STORE_IMM32_STATELESS_WORDS] {
+    let mut words = HDC1_STATELESS_STORE_THEN_TS_EOT_WORDS;
+    words[HDC1_BTI34_STORE_IMM_DWORD] = value;
+    words
+}
+
 // Mesa brw_asm source, dependency-shaped tiny ALU rung:
 //
 // mov(8)   g2<1>D      0xC0DE7729D

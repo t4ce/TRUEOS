@@ -2841,6 +2841,9 @@ dependencies = [
 [[package]]
 name = "trueos-c4"
 version = "0.1.0"
+dependencies = [
+ "trueos-eu",
+]
 
 [[package]]
 name = "trueos-chat"
