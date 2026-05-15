@@ -825,6 +825,23 @@ pub mod cabi {
     }
 
     #[unsafe(no_mangle)]
+    pub extern "C" fn trueos_cabi_thread_current_id() -> usize {
+        if crate::hv::current_hull_guest_context_vm_id().is_some() {
+            let (status, id) =
+                trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_THREAD_CURRENT_ID, 0, 0);
+            return if status == trueos_vm::vmcall::STATUS_OK {
+                id as usize
+            } else {
+                0
+            };
+        }
+        if let Some(vtid) = crate::t::th::vthread::current_id() {
+            return vtid as usize;
+        }
+        crate::percpu::current_slot().saturating_add(1)
+    }
+
+    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_write_cstr(stream: u32, cstr: *const u8) {
         if cstr.is_null() {
             return;

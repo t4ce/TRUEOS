@@ -31,7 +31,7 @@
 mod addr;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub use core::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(all(feature = "net", any(target_os = "trueos", target_os = "zkvm")))]
 pub use socket2::net::Shutdown;
 
 cfg_not_wasip1! {

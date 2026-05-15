@@ -386,6 +386,10 @@ pub mod thread {
         fn trueos_tokio_tls_current_slot() -> u32;
     }
 
+    unsafe extern "C" {
+        fn trueos_cabi_thread_current_id() -> usize;
+    }
+
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub struct AccessError;
 
@@ -425,7 +429,9 @@ pub mod thread {
     }
 
     pub fn current() -> Thread {
-        Thread { id: ThreadId(0) }
+        Thread {
+            id: ThreadId(unsafe { trueos_cabi_thread_current_id() }),
+        }
     }
 
     pub fn panicking() -> bool {
