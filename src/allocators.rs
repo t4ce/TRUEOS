@@ -12,10 +12,10 @@ pub const FALLBACK_HEAP_SIZE: usize = 256 * 1024;
 pub const HV_GUEST_HEAP_FALLBACK_SIZE: usize = 8 * 1024 * 1024;
 const HV_GUEST_HEAP_ALIGN: usize = 2 * 1024 * 1024;
 const HV_GUEST_HEAP_CANDIDATES: [usize; 4] = [
-    1024 * 1024 * 1024,
     512 * 1024 * 1024,
     256 * 1024 * 1024,
     128 * 1024 * 1024,
+    64 * 1024 * 1024,
 ];
 
 static mut FALLBACK_HEAP: [u8; FALLBACK_HEAP_SIZE] = [0; FALLBACK_HEAP_SIZE];
@@ -514,6 +514,8 @@ pub(crate) fn hv_guest_allocator_state_spans() -> [(u64, usize); 2] {
 
 const HOST_ALLOC_TAG: u8 = u8::MAX;
 static ALLOC_DOMAIN_OVERRIDE_BY_CPU: [AtomicU8; 64] = [const { AtomicU8::new(HOST_ALLOC_TAG) }; 64];
+static HOST_ALLOC_DOMAIN_FORCE_DEPTH_BY_CPU: [AtomicU32; 64] =
+    [const { AtomicU32::new(0) }; 64];
 
 fn alloc_domain_from_tag(tag: &AllocTag) -> AllocDomain {
     if (tag.domain as usize) < crate::allcaps::hv::VM_ID_LIMIT {
@@ -554,6 +556,12 @@ fn cpuid_slot() -> Option<usize> {
 }
 
 fn current_alloc_domain() -> AllocDomain {
+    if let Some(slot) = cpuid_slot()
+        && HOST_ALLOC_DOMAIN_FORCE_DEPTH_BY_CPU[slot].load(Ordering::Acquire) != 0
+    {
+        return AllocDomain::Host;
+    }
+
     // Guest-side allocator routing must prove that execution is actually inside
     // the Hull guest stack. Host services can run on VM-tagged lanes while
     // servicing CABI work and must keep using the host heap.
@@ -591,6 +599,20 @@ fn current_alloc_domain() -> AllocDomain {
     } else {
         AllocDomain::Host
     }
+}
+
+pub fn with_host_alloc_domain<T>(f: impl FnOnce() -> T) -> T {
+    init_fallback_regions();
+    let Some(slot) = cpuid_slot() else {
+        return f();
+    };
+    let Some(depth) = HOST_ALLOC_DOMAIN_FORCE_DEPTH_BY_CPU.get(slot) else {
+        return f();
+    };
+    depth.fetch_add(1, Ordering::AcqRel);
+    let out = f();
+    depth.fetch_sub(1, Ordering::AcqRel);
+    out
 }
 
 fn allocator_for_domain(domain: AllocDomain) -> &'static Mutex<FreeList> {
