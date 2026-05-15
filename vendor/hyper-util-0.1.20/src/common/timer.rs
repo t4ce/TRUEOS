@@ -2,11 +2,11 @@
 
 use core::fmt;
 use core::pin::Pin;
-use std::sync::Arc;
 use core::time::Duration;
-use std::time::Instant;
+use std::sync::Arc;
 
 use hyper::rt::Sleep;
+use hyper::time::Instant;
 
 #[derive(Clone)]
 pub(crate) struct Timer(Arc<dyn hyper::rt::Timer + Send + Sync>);
