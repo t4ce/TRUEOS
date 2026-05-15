@@ -169,14 +169,13 @@ query = [
 ]
 rustls = [
     "__rustls-rustcrypto",
-    "dep:rustls-platform-verifier",
     "__rustls",
 ]
 rustls-no-provider = [
     "__rustls-rustcrypto",
-    "dep:rustls-platform-verifier",
     "__rustls",
 ]
+rustls-platform-verifier = ["dep:rustls-platform-verifier"]
 socks = []
 stream = [
     "tokio/fs",
