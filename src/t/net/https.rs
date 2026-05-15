@@ -67,9 +67,9 @@ fn wait_on_net_fetch_queue_blocking(timeout_ms: u64) -> bool {
             .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
         {
-            crate::log!("net-fetch-wait: mode=parked\n");
+            crate::log!("net-fetch-wait: mode=spin-ready\n");
         }
-        return CABI_NET_FETCH_WAIT.wait_for_event_blocking_parked(timeout_ms);
+        return CABI_NET_FETCH_WAIT.wait_for_event_blocking(timeout_ms);
     }
 
     // Early boot and degraded bring-up still fall back to the conservative polling wait.
@@ -290,12 +290,7 @@ fn spawn_cabi_net_fetch(
     max_bytes: usize,
 ) {
     let caller_slot = crate::percpu::current_slot() as u32;
-    let picked_spawner = if crate::workers::is_background_worker_slot(caller_slot) {
-        crate::workers::pick_background_spawner_excluding_slot(caller_slot)
-            .or_else(crate::workers::pick_background_spawner_with_slot)
-    } else {
-        crate::workers::pick_background_spawner_with_slot()
-    };
+    let picked_spawner = pick_net_fetch_background_spawner(caller_slot);
 
     if let Some((_cpu_slot, _core_kind, spawner)) = picked_spawner {
         if let Ok(token) = cabi_net_fetch_task(
@@ -424,12 +419,7 @@ async fn cabi_net_fetch_bytes_task(op_id: u32, url: String, timeout_ms: u32, max
 
 fn spawn_cabi_net_fetch_bytes(op_id: u32, url: String, timeout_ms: u32, max_bytes: usize) {
     let caller_slot = crate::percpu::current_slot() as u32;
-    let picked_spawner = if crate::workers::is_background_worker_slot(caller_slot) {
-        crate::workers::pick_background_spawner_excluding_slot(caller_slot)
-            .or_else(crate::workers::pick_background_spawner_with_slot)
-    } else {
-        crate::workers::pick_background_spawner_with_slot()
-    };
+    let picked_spawner = pick_net_fetch_background_spawner(caller_slot);
 
     if let Some((cpu_slot, core_kind, spawner)) = picked_spawner {
         if let Ok(token) = cabi_net_fetch_bytes_task(op_id, url.clone(), timeout_ms, max_bytes) {
@@ -473,6 +463,15 @@ fn spawn_cabi_net_fetch_bytes(op_id: u32, url: String, timeout_ms: u32, max_byte
     crate::wait::spawn_local_detached(async move {
         cabi_net_fetch_bytes_task_inner(op_id, url, timeout_ms, max_bytes).await;
     });
+}
+
+fn pick_net_fetch_background_spawner(
+    caller_slot: u32,
+) -> Option<(u32, u8, embassy_executor::SendSpawner)> {
+    crate::workers::pick_background_spawner_where(|slot| {
+        (!crate::workers::is_background_worker_slot(caller_slot) || slot != caller_slot)
+            && crate::hv::lane::is_carrier_lane_free(slot)
+    })
 }
 
 #[inline]
@@ -841,7 +840,8 @@ fn spawn_cabi_net_fetch_post_json(
     timeout_ms: u32,
     max_bytes: usize,
 ) {
-    if let Some(spawner) = crate::workers::pick_background_spawner()
+    let caller_slot = crate::percpu::current_slot() as u32;
+    if let Some((_cpu_slot, _core_kind, spawner)) = pick_net_fetch_background_spawner(caller_slot)
         && let Ok(token) = cabi_net_fetch_post_json_task(
             op_id,
             key.clone(),
@@ -945,7 +945,8 @@ fn spawn_cabi_net_fetch_post_json_bytes(
     timeout_ms: u32,
     max_bytes: usize,
 ) {
-    if let Some(spawner) = crate::workers::pick_background_spawner()
+    let caller_slot = crate::percpu::current_slot() as u32;
+    if let Some((_cpu_slot, _core_kind, spawner)) = pick_net_fetch_background_spawner(caller_slot)
         && let Ok(token) = cabi_net_fetch_post_json_bytes_task(
             request_id,
             url.clone(),
@@ -989,7 +990,8 @@ async fn cabi_net_prewarm_url_task(url: String) {
 }
 
 fn spawn_cabi_net_prewarm_url(url: String) {
-    if let Some(spawner) = crate::workers::pick_background_spawner()
+    let caller_slot = crate::percpu::current_slot() as u32;
+    if let Some((_cpu_slot, _core_kind, spawner)) = pick_net_fetch_background_spawner(caller_slot)
         && let Ok(token) = cabi_net_prewarm_url_task(url.clone())
     {
         spawner.spawn(token);

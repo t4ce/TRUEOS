@@ -20,7 +20,7 @@ static LOGGED_PTHREAD_SYNC: AtomicI32 = AtomicI32::new(0);
 static PTHREAD_SYNC_TRACE_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 const PTHREAD_SYNC_TRACE_LIMIT: usize = 48;
-const C_ALLOCATION_CAPACITY: usize = 1024;
+const C_ALLOCATION_CAPACITY: usize = 8192;
 const PTHREAD_MUTEX_CAPACITY: usize = 256;
 const PTHREAD_COND_CAPACITY: usize = 256;
 
@@ -235,8 +235,8 @@ fn c_allocation_layout(size: usize, align: usize) -> Option<Layout> {
     Layout::from_size_align(size.max(1), align.max(1)).ok()
 }
 
-fn c_allocation_insert(ptr: *mut u8, record: AllocationRecord) {
-    let _ = C_ALLOCATIONS.lock().insert(ptr as usize, record);
+fn c_allocation_insert(ptr: *mut u8, record: AllocationRecord) -> bool {
+    C_ALLOCATIONS.lock().insert(ptr as usize, record).is_ok()
 }
 
 fn c_allocation_remove(ptr: *mut c_void) {
@@ -257,13 +257,17 @@ fn c_malloc_aligned(size: usize, align: usize) -> *mut c_void {
         TRUEOS_ERRNO.store(12, Ordering::Relaxed);
         return ptr::null_mut();
     }
-    c_allocation_insert(
+    if !c_allocation_insert(
         ptr,
         AllocationRecord {
             size: size.max(1),
             align: align.max(1),
         },
-    );
+    ) {
+        unsafe { crate::allocators::dealloc_raw(ptr) };
+        TRUEOS_ERRNO.store(12, Ordering::Relaxed);
+        return ptr::null_mut();
+    }
     ptr.cast::<c_void>()
 }
 
@@ -283,10 +287,10 @@ fn c_realloc_ptr(ptr: *mut c_void, size: usize) -> *mut c_void {
         c_free_ptr(ptr);
         return ptr::null_mut();
     }
-    let old = c_allocation_get(ptr).unwrap_or(AllocationRecord {
-        size: 1,
-        align: core::mem::align_of::<usize>(),
-    });
+    let Some(old) = c_allocation_get(ptr) else {
+        TRUEOS_ERRNO.store(12, Ordering::Relaxed);
+        return ptr::null_mut();
+    };
     let new_ptr = c_malloc_aligned(size, old.align);
     if new_ptr.is_null() {
         return ptr::null_mut();

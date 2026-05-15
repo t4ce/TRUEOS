@@ -10,6 +10,7 @@ pub mod io {
 
 pub mod net;
 pub(crate) mod static_map;
+pub(crate) mod static_slots;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod platform;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
