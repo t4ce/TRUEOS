@@ -222,9 +222,12 @@ fn deferred_app_window_kind(kind: &str) -> u8 {
     }
 }
 
-fn seed_deferred_surface_texture(tex_id: u32, width: u32, height: u32) -> bool {
+fn seed_deferred_surface_texture(tex_id: u32, host_tex_id: u32, width: u32, height: u32) -> bool {
     if tex_id == 0 || width == 0 || height == 0 {
         return false;
+    }
+    if host_tex_id != 0 && crate::r::io::cabi::host_texture_has_image(host_tex_id) {
+        return true;
     }
     let Some(pixel_count) = (width as usize).checked_mul(height as usize) else {
         return false;
@@ -588,7 +591,7 @@ pub fn defer_blueprint_app_window_create(
     let height = height.max(1);
     if kind_id == APP_WINDOW_DEFERRED_KIND_SURFACE
         && tex_id != 0
-        && !seed_deferred_surface_texture(tex_id, width, height)
+        && !seed_deferred_surface_texture(tex_id, host_tex_id, width, height)
     {
         app_window_broker_log(format_args!(
             "app-window-broker: vm{} deferred surface texture init failed title={} tex={} host_tex={} size={}x{}",
@@ -1249,6 +1252,38 @@ pub fn materialize_pending_deferred_blueprint_app_windows() -> usize {
         sync_materialized_deferred_blueprint_app_window_updates(vm_id as u8);
     }
     materialized
+}
+
+pub fn request_deferred_blueprint_app_windows_for_host_texture(
+    host_tex_id: u32,
+    reason: &'static str,
+) -> usize {
+    if host_tex_id == 0 {
+        return 0;
+    }
+
+    let mut window_ids: HVec<u32, APP_WINDOW_DEFERRED_CAP> = HVec::new();
+    for records_lock in APP_WINDOW_DEFERRED_RECORDS.iter() {
+        let records = records_lock.lock();
+        for record in records.iter() {
+            if record.active
+                && record.tex_id == host_tex_id
+                && record.materialized_window_id != 0
+                && record.materialized_window_id != DeferredAppWindowRecord::MATERIALIZING
+                && !record.close_requested
+            {
+                let _ = window_ids.push(record.materialized_window_id);
+            }
+        }
+    }
+
+    let mut requested = 0usize;
+    for window_id in window_ids {
+        if crate::r::ui2::request_window_content_present(window_id, reason) {
+            requested += 1;
+        }
+    }
+    requested
 }
 
 pub fn finish_blueprint_app_window_session(vm_id: u8, close_windows: bool) {

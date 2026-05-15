@@ -48,6 +48,12 @@ pub const OP_BP_THREAD_CURRENT_ID: u32 = 0x61; // response is current TRUEOS vth
 pub const OP_BP_TOKIO_BLOCKING_SPAWN: u32 = 0x62; // arg0/arg1 boxed blocking job raw parts
 pub const OP_BP_UI2_WINDOW_CREATE: u32 = 0x63; // payload deferred window create request
 pub const OP_BP_UI2_WINDOW_OP: u32 = 0x64; // arg0 window id, payload deferred window op
+pub const OP_BP_GFX_TEXTURE_UPLOAD_BEGIN: u32 = 0x65; // payload texture upload header
+pub const OP_BP_GFX_TEXTURE_UPLOAD_CHUNK: u32 = 0x66; // arg0 offset, payload rgba chunk
+pub const OP_BP_GFX_TEXTURE_UPLOAD_FINISH: u32 = 0x67; // finalize pending texture upload
+pub const OP_BP_INPUT_CURSOR_POS: u32 = 0x68; // arg0 cursor id -> packed x/y
+pub const OP_BP_INPUT_CURSOR_BUTTONS: u32 = 0x69; // arg0 cursor id -> buttons
+pub const OP_BP_INPUT_CURSOR_EVENTS: u32 = 0x6A; // arg0 read seq, arg1 cap -> payload events
 pub const OP_BP_SOCKET_TCP_OPEN: u32 = 0x35; // arg0 domain/type, arg1 protocol -> socket/rc
 pub const OP_BP_SOCKET_TCP_CLOSE: u32 = 0x36; // arg0 socket -> rc
 pub const OP_BP_SOCKET_TCP_SET_NONBLOCKING: u32 = 0x37; // arg0 socket, arg1 bool -> rc
@@ -324,6 +330,64 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 Ok(rc) => write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0),
                 Err(()) => write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0),
             }
+            DispatchOutcome::Resume
+        }
+        OP_BP_GFX_TEXTURE_UPLOAD_BEGIN => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let bytes = unsafe { &(&(*p).payload)[..n] };
+            let rc = crate::r::io::cabi::handle_vm_texture_upload_begin(vm_id, bytes);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_GFX_TEXTURE_UPLOAD_CHUNK => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let bytes = unsafe { &(&(*p).payload)[..n] };
+            let rc =
+                crate::r::io::cabi::handle_vm_texture_upload_chunk(vm_id, arg0 as usize, bytes);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_GFX_TEXTURE_UPLOAD_FINISH => {
+            let rc = crate::r::io::cabi::handle_vm_texture_upload_finish(vm_id);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_INPUT_CURSOR_POS => {
+            let mut x = 0i32;
+            let mut y = 0i32;
+            let rc = crate::r::io::cabi::host_input_cursor_pos(arg0 as u32, &mut x, &mut y);
+            let packed = ((x as u32 as u64) << 32) | (y as u32 as u64);
+            if rc == 0 {
+                write_response(vm_id, seq, STATUS_OK, packed, 0);
+            } else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, (rc as i64) as u64, 0);
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_INPUT_CURSOR_BUTTONS => {
+            let mut buttons = 0u32;
+            let rc = crate::r::io::cabi::host_input_cursor_buttons(arg0 as u32, &mut buttons);
+            write_response(vm_id, seq, STATUS_OK, ((rc as i64 as u64) << 32) | (buttons as u64), 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_INPUT_CURSOR_EVENTS => {
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let (wrote, response_len) =
+                crate::r::io::cabi::host_input_cursor_events_since(arg0, arg1 as u32, unsafe {
+                    &mut (*p).payload
+                });
+            write_response(vm_id, seq, STATUS_OK, wrote as u64, response_len as u32);
             DispatchOutcome::Resume
         }
         OP_NET_TCP_WRITE => {
