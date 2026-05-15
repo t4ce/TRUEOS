@@ -5,12 +5,11 @@ use core::{
     pin::Pin,
     task::{Context, Poll},
 };
+use crate::t::io;
 use hyper::{
     body::{Body, Bytes, Frame, SizeHint},
     rt::{Read as HyperRead, ReadBufCursor, Write as HyperWrite},
 };
-use tokio::io::{AsyncRead, AsyncWrite};
-use trueos_io as io;
 
 pub struct HyperBytesBody {
     bytes: Option<Bytes>,
@@ -59,7 +58,7 @@ impl<T> HyperTokioIo<T> {
 
 impl<T> HyperRead for HyperTokioIo<T>
 where
-    T: AsyncRead + Unpin,
+    T: io::AsyncRead + Unpin,
 {
     fn poll_read(
         mut self: Pin<&mut Self>,
@@ -72,7 +71,7 @@ where
         }
 
         let mut scratch = [0u8; 2048];
-        let mut tokio_buf = tokio::io::ReadBuf::new(&mut scratch[..limit]);
+        let mut tokio_buf = io::ReadBuf::new(&mut scratch[..limit]);
         match Pin::new(&mut self.inner).poll_read(cx, &mut tokio_buf) {
             Poll::Ready(Ok(())) => {
                 buf.put_slice(tokio_buf.filled());
@@ -86,7 +85,7 @@ where
 
 impl<T> HyperWrite for HyperTokioIo<T>
 where
-    T: AsyncWrite + Unpin,
+    T: io::AsyncWrite + Unpin,
 {
     fn poll_write(
         mut self: Pin<&mut Self>,
