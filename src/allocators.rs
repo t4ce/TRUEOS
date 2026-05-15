@@ -12,10 +12,10 @@ pub const FALLBACK_HEAP_SIZE: usize = 256 * 1024;
 pub const HV_GUEST_HEAP_FALLBACK_SIZE: usize = 8 * 1024 * 1024;
 const HV_GUEST_HEAP_ALIGN: usize = 2 * 1024 * 1024;
 const HV_GUEST_HEAP_CANDIDATES: [usize; 4] = [
+    1024 * 1024 * 1024,
+    512 * 1024 * 1024,
+    256 * 1024 * 1024,
     128 * 1024 * 1024,
-    64 * 1024 * 1024,
-    32 * 1024 * 1024,
-    16 * 1024 * 1024,
 ];
 
 static mut FALLBACK_HEAP: [u8; FALLBACK_HEAP_SIZE] = [0; FALLBACK_HEAP_SIZE];
@@ -499,6 +499,19 @@ static HV_GUEST_ALLOCATORS: [Mutex<FreeList>; crate::allcaps::hv::VM_ID_LIMIT] =
 static HV_GUEST_ACTIVE_CPU_MASK: AtomicU64 = AtomicU64::new(0);
 static HV_GUEST_HEAP_READY_MASK: AtomicU64 = AtomicU64::new(0);
 
+pub(crate) fn hv_guest_allocator_state_spans() -> [(u64, usize); 2] {
+    [
+        (
+            (&HV_GUEST_ALLOCATORS as *const _) as u64,
+            core::mem::size_of_val(&HV_GUEST_ALLOCATORS),
+        ),
+        (
+            (&HV_GUEST_HEAP_READY_MASK as *const _) as u64,
+            core::mem::size_of_val(&HV_GUEST_HEAP_READY_MASK),
+        ),
+    ]
+}
+
 const HOST_ALLOC_TAG: u8 = u8::MAX;
 static ALLOC_DOMAIN_OVERRIDE_BY_CPU: [AtomicU8; 64] = [const { AtomicU8::new(HOST_ALLOC_TAG) }; 64];
 
@@ -695,6 +708,8 @@ unsafe impl GlobalAlloc for Allocator {
         if !ptr.is_null() {
             let tag_ptr = ptr.sub(size_of::<AllocTag>()) as *mut AllocTag;
             (*tag_ptr).domain = alloc_domain_tag(domain);
+        } else if let Some(vm_id) = alloc_domain_vm_id(domain) {
+            log_hv_guest_alloc_failure(vm_id, layout, "global");
         }
         ptr
     }
@@ -726,38 +741,43 @@ pub unsafe fn alloc_raw(layout: Layout) -> *mut u8 {
         let tag_ptr = ptr.sub(size_of::<AllocTag>()) as *mut AllocTag;
         (*tag_ptr).domain = alloc_domain_tag(domain);
     } else if let Some(vm_id) = alloc_domain_vm_id(domain) {
-        let stats = hv_guest_heap_stats(vm_id);
-        let trace = last_alloc_trace();
-        crate::log!(
-            "hv-guest-alloc: vm{} alloc_raw failed size={} align={} src={:?} usable_total={} free_bytes={} largest_free={} free_blocks={} init={}\n",
-            vm_id,
-            layout.size(),
-            layout.align(),
-            stats.source,
-            stats.usable_total,
-            stats.free_bytes,
-            stats.largest_free_block,
-            stats.free_blocks,
-            stats.initialized,
-        );
-        crate::log!(
-            "hv-guest-alloc: trace seq={} caller=0x{:016X} caller1=0x{:016X} caller2=0x{:016X} size={} align={} stage={} head=0x{:016X} block=0x{:016X} block_size={} next=0x{:016X} payload=0x{:016X} aligned_used={}\n",
-            trace.seq,
-            trace.caller_rip,
-            trace.caller_rip_1,
-            trace.caller_rip_2,
-            trace.layout_size,
-            trace.layout_align,
-            trace.stage,
-            trace.head_ptr,
-            trace.block_ptr,
-            trace.block_size,
-            trace.block_next,
-            trace.payload_start,
-            trace.aligned_used,
-        );
+        log_hv_guest_alloc_failure(vm_id, layout, "raw");
     }
     ptr
+}
+
+fn log_hv_guest_alloc_failure(vm_id: u8, layout: Layout, path: &str) {
+    let stats = hv_guest_heap_stats(vm_id);
+    let trace = last_alloc_trace();
+    crate::log!(
+        "hv-guest-alloc: vm{} {} failed size={} align={} src={:?} usable_total={} free_bytes={} largest_free={} free_blocks={} init={}\n",
+        vm_id,
+        path,
+        layout.size(),
+        layout.align(),
+        stats.source,
+        stats.usable_total,
+        stats.free_bytes,
+        stats.largest_free_block,
+        stats.free_blocks,
+        stats.initialized,
+    );
+    crate::log!(
+        "hv-guest-alloc: trace seq={} caller=0x{:016X} caller1=0x{:016X} caller2=0x{:016X} size={} align={} stage={} head=0x{:016X} block=0x{:016X} block_size={} next=0x{:016X} payload=0x{:016X} aligned_used={}\n",
+        trace.seq,
+        trace.caller_rip,
+        trace.caller_rip_1,
+        trace.caller_rip_2,
+        trace.layout_size,
+        trace.layout_align,
+        trace.stage,
+        trace.head_ptr,
+        trace.block_ptr,
+        trace.block_size,
+        trace.block_next,
+        trace.payload_start,
+        trace.aligned_used,
+    );
 }
 
 pub unsafe fn dealloc_raw(ptr: *mut u8) {

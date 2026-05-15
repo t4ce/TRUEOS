@@ -169,7 +169,7 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
             log(alloc::format!("run: guest ELF import scan failed: {}", err).as_str());
         }
     }
-    match crate::hv::blueprint::elf_rel_debug_summary(unpacked.as_slice(), module.entry) {
+    match crate::hv::blueprint::elf_rel_debug_summary(unpacked, module.entry) {
         Ok(summary) => log(alloc::format!("run: guest {}", summary).as_str()),
         Err(err) => log(alloc::format!("run: guest ELF diag failed: {}", err).as_str()),
     }
@@ -191,7 +191,7 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
     crate::hv::begin_blueprint_app_window_session(vm_id, state.archive.as_str());
     crate::blueprint_net_broker::set_vmx_guest_net_backend(true);
     let invoke_result = crate::hv::blueprint::invoke_host_rel(
-        unpacked.as_slice(),
+        unpacked,
         module.entry,
         process_args,
         process_env,
