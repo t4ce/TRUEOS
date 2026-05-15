@@ -5,10 +5,6 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 use crate as qjs;
 
-unsafe extern "C" {
-    fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
-}
-
 static PROMISE_REJECTION_LOGS: AtomicU32 = AtomicU32::new(0);
 
 #[inline]
@@ -16,7 +12,7 @@ fn log_bytes(bytes: &[u8]) {
     if bytes.is_empty() {
         return;
     }
-    unsafe { trueos_cabi_write(1, bytes.as_ptr(), bytes.len()) };
+    qjs::platform::sys::write_stdout(bytes);
 }
 
 #[inline]
