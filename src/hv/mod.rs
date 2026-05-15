@@ -1903,9 +1903,7 @@ async fn vm_task(vm_id: u8, _lane_lease: crate::hv::lane::LaneLease) {
         vm_id,
         crate::t::th::vthread::vm_hull_fs_base(vm_id)
     ));
-    let _entered_guest_alloc = crate::allocators::enter_hv_guest_domain_current_cpu(vm_id);
     let launch_result = vmx_launch_once_with_ept(lineage_record).await;
-    crate::allocators::leave_hv_guest_domain_current_cpu();
     clear_current_vm_id();
     let blueprint_crash_state = blueprint_launch_snapshot(vm_id);
     let mut pending_crash = None;

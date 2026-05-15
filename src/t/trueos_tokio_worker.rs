@@ -31,10 +31,12 @@ async fn tokio_blocking_job_task(
             tag.core_kind
         );
     }
-    let entered_guest_alloc = guest_vm_id
-        .map(crate::allocators::enter_hv_guest_domain_current_cpu)
-        .unwrap_or(false);
-
+    let _task_domain = crate::t::kernel_task_domain::enter(
+        crate::t::kernel_task_domain::KernelTaskDomain::TokioCarrier,
+        guest_vm_id,
+    );
+    // Keep guest-originated blocking work on host allocation by default. The
+    // VM/vthread tag below is ownership/TLS identity, not heap ownership.
     let vthread_guard = if crate::t::th::vthread::tokio_blocking_backing_enabled() {
         if !LOGGED_VTHREAD_BACKING.swap(true, Ordering::AcqRel) {
             crate::log_info!(
@@ -55,9 +57,6 @@ async fn tokio_blocking_job_task(
     job();
     drop(guard);
     drop(vthread_guard);
-    if entered_guest_alloc {
-        crate::allocators::leave_hv_guest_domain_current_cpu();
-    }
     let _ = crate::stackkeeper::release_tokio_lane(lane);
     if !LOGGED_TASK_EXIT.swap(true, Ordering::AcqRel) {
         crate::log_info!(target: "service"; "tokio-worker: exited {}\n", purpose);

@@ -117,7 +117,11 @@ pub struct ComputeStats {
 
 #[embassy_executor::task(pool_size = 128)]
 async fn compute_job_task(job: ComputeJob) {
-    execute_job(job);
+    crate::t::kernel_task_domain::with(
+        crate::t::kernel_task_domain::KernelTaskDomain::ComputeWorker,
+        None,
+        || execute_job(job),
+    );
 }
 
 pub fn stats() -> ComputeStats {
@@ -182,7 +186,11 @@ pub fn poll_compute_lane() -> bool {
         counter.fetch_add(1, Ordering::AcqRel);
     }
     POLLED_JOBS.fetch_add(1, Ordering::AcqRel);
-    execute_job(job);
+    crate::t::kernel_task_domain::with(
+        crate::t::kernel_task_domain::KernelTaskDomain::ComputeWorker,
+        None,
+        || execute_job(job),
+    );
     true
 }
 

@@ -383,7 +383,19 @@ pub fn rasterize_svg_bytes_rgba(bytes: &[u8]) -> Result<(SvgTextureInfo, Vec<u8>
 }
 
 pub fn tessellate_svg_text(svg_text: &str) -> Result<SvgMeshDocument, i32> {
-    let tree = Tree::from_str(svg_text, &Options::default()).map_err(|_| ERR_SVG_PARSE)?;
+    let tree = match Tree::from_str(svg_text, &Options::default()) {
+        Ok(tree) => tree,
+        Err(err) => {
+            let trimmed = svg_text.trim_start();
+            crate::log!(
+                "gfx-svg: parse failed len={} starts_svg={} err={}\n",
+                svg_text.len(),
+                trimmed.starts_with("<svg") as u8,
+                err
+            );
+            return Err(ERR_SVG_PARSE);
+        }
+    };
     let (width, height, svg_w, svg_h) = choose_output_size(&tree)?;
     tessellate_svg_tree_with_size(&tree, width, height, svg_w, svg_h)
 }
