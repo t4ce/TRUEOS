@@ -857,35 +857,43 @@ fn spawn_app_vm_run_queue(spawner: Spawner) -> SpawnAttempt {
 #[derive(Clone, Copy)]
 enum BlueprintAutostart {
     CurrencyReqwest,
+    Flags,
 }
 
 impl BlueprintAutostart {
     const fn label(self) -> &'static str {
         match self {
             Self::CurrencyReqwest => "currency_reqwest",
+            Self::Flags => "flags",
         }
     }
 
     const fn archive(self) -> &'static str {
         match self {
             Self::CurrencyReqwest => "currency_reqwest.bp",
+            Self::Flags => "flags.bp",
         }
     }
 
     const fn slot(self) -> &'static str {
         match self {
             Self::CurrencyReqwest => "cur",
+            Self::Flags => "flg",
         }
     }
 
     const fn settle_ms(self) -> u64 {
         match self {
             Self::CurrencyReqwest => 0,
+            Self::Flags => 750,
         }
     }
 }
 
-const BP_AUTOSTARTS: &[BlueprintAutostart] = &[BlueprintAutostart::CurrencyReqwest];
+const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
+    BlueprintAutostart::CurrencyReqwest,
+    BlueprintAutostart::Flags,
+];
 
 #[embassy_executor::task]
 async fn bp_autostart_task() {
