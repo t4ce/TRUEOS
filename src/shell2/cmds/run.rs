@@ -1,4 +1,3 @@
-use alloc::collections::VecDeque;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -16,6 +15,9 @@ use super::tlb_helper::TlbTable;
 use crate::shell2::shell2_cmd::ParseOutcome;
 
 const TABLE_HEADERS: &[&str; 3] = &["id", "module", "source"];
+const BLUEPRINT_READINESS_TIMEOUT: EmbassyDuration = EmbassyDuration::from_secs(30);
+
+use alloc::collections::VecDeque;
 
 static APP_VM_RUN_QUEUE: Mutex<VecDeque<AppVmLaunchRequest>> = Mutex::new(VecDeque::new());
 
@@ -182,6 +184,11 @@ fn enqueue_request(request: AppVmLaunchRequest) {
     APP_VM_RUN_QUEUE.lock().push_back(request);
 }
 
+fn log_run_target_line(target: &MatrixTarget, line: &str) {
+    print_matrix_target_line(target, line);
+    crate::hv::hvlogf(format_args!("{}", line));
+}
+
 fn dequeue_request() -> Option<AppVmLaunchRequest> {
     APP_VM_RUN_QUEUE.lock().pop_front()
 }
@@ -268,7 +275,7 @@ async fn execute_blueprint(spawner: &Spawner, request: &AppVmLaunchRequest, log:
     } else {
         log("hv run: unpacked payload does not look like ELF");
     }
-    let mut required_readiness = blueprint_base_readiness();
+    let mut required_readiness = crate::hv::blueprint::prebind_base_readiness();
     if unpacked.starts_with(b"\x7fELF") {
         match crate::hv::blueprint::elf_imports(unpacked.as_slice()) {
             Ok(imports) => {
@@ -286,7 +293,7 @@ async fn execute_blueprint(spawner: &Spawner, request: &AppVmLaunchRequest, log:
                     )
                     .as_str());
                     for import in imports.iter() {
-                        required_readiness |= blueprint_import_readiness(import.name);
+                        required_readiness |= crate::hv::blueprint::prebind_import_readiness(import.name);
                         match import.resolved_addr {
                             Some(addr) => log(alloc::format!(
                                 "hv run: import {} -> 0x{:x}",
@@ -323,7 +330,22 @@ async fn execute_blueprint(spawner: &Spawner, request: &AppVmLaunchRequest, log:
     )
     .as_str());
     if missing_readiness != 0 {
-        crate::r::readiness::wait_for(required_readiness).await;
+        let ready = crate::r::readiness::wait_for_timeout(
+            required_readiness,
+            BLUEPRINT_READINESS_TIMEOUT,
+        )
+        .await;
+        if !ready {
+            let still_missing = required_readiness & !crate::r::readiness::mask();
+            log(alloc::format!(
+                "hv run: readiness timeout after {}ms required={} missing={}",
+                BLUEPRINT_READINESS_TIMEOUT.as_millis(),
+                readiness_mask_text(required_readiness).as_str(),
+                readiness_mask_text(still_missing).as_str()
+            )
+            .as_str());
+            return;
+        }
         log(alloc::format!(
             "hv run: readiness ok required={}",
             readiness_mask_text(required_readiness).as_str()
@@ -358,47 +380,6 @@ async fn execute_blueprint(spawner: &Spawner, request: &AppVmLaunchRequest, log:
             let _ = crate::hv::take_blueprint_launch(vm_id);
         }
     }
-}
-
-fn blueprint_base_readiness() -> u32 {
-    crate::r::readiness::BACKGROUND_AP_WORKER_READY
-}
-
-fn blueprint_import_readiness(name: &str) -> u32 {
-    let mut mask = 0;
-
-    if name.starts_with("trueos_cabi_app_") || name.starts_with("trueos_cabi_ui2_") {
-        mask |= crate::r::readiness::UI2_READY;
-    }
-
-    if name.starts_with("trueos_cabi_gfx_upload_texture_") {
-        mask |= crate::r::readiness::GFX_TEXTURE_UPLOAD_SERVICE_READY;
-    } else if name.starts_with("trueos_cabi_gfx_queue_render_")
-        || name.starts_with("trueos_cabi_gfx_draw_")
-        || name.starts_with("trueos_cabi_gfx_begin_frame")
-        || name.starts_with("trueos_cabi_gfx_end_frame")
-        || name.starts_with("trueos_cabi_gfx_capture_")
-    {
-        mask |= crate::r::readiness::GFX_BACKEND_READY;
-    }
-
-    if name.starts_with("trueos_cabi_fs_") || name.starts_with("trueos_cabi_trueosfs_") {
-        mask |= crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
-    }
-
-    if name.starts_with("trueos_cabi_net_fetch_") {
-        mask |= crate::r::readiness::NET_ANY_CONFIGURED
-            | crate::r::readiness::NET_SOCKET_READY
-            | crate::r::readiness::TLS_SOCKET_SERVICE_READY;
-    } else if name.starts_with("trueos_cabi_socket_") {
-        mask |= crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::NET_SOCKET_READY;
-    }
-
-    if name.starts_with("trueos_cabi_hda_") || name.starts_with("trueos_cabi_audio_") {
-        mask |= crate::r::readiness::INTEL_HDA_READY;
-    }
-
-    mask
 }
 
 fn readiness_mask_text(mask: u32) -> String {
@@ -482,39 +463,57 @@ pub(crate) fn enqueue_blueprint_bytes(
     archive: String,
     module_bytes: Vec<u8>,
     app_args: Vec<String>,
-) {
+) -> Result<(), String> {
+    let required_readiness = crate::hv::blueprint::prebind_required_readiness(module_bytes.as_slice())
+        .map_err(|err| {
+            let line = alloc::format!("hv run: not queued {} {}", archive.as_str(), err.as_str());
+            log_run_target_line(&target, line.as_str());
+            line
+        })?;
+    let missing_readiness = required_readiness & !crate::r::readiness::mask();
+    if missing_readiness != 0 {
+        let line = alloc::format!(
+            "hv run: not queued {} required={} missing={}",
+            archive.as_str(),
+            readiness_mask_text(required_readiness).as_str(),
+            readiness_mask_text(missing_readiness).as_str()
+        );
+        log_run_target_line(&target, line.as_str());
+        return Err(line);
+    }
+
     let line = alloc::format!("hv run: queued {}", archive.as_str());
-    print_matrix_target_line(&target, line.as_str());
-    crate::hv::hvlogf(format_args!("{}", line.as_str()));
+    log_run_target_line(&target, line.as_str());
     enqueue_request(AppVmLaunchRequest {
         archive,
         module_bytes,
         app_args,
         target,
     });
+    Ok(())
 }
 
 pub(crate) async fn submit_archive_name_to_target_prefer_trueosfs_async(
     target: MatrixTarget,
     archive_name: &str,
     app_args: Vec<String>,
-) -> Result<&'static str, &'static str> {
+) -> Result<&'static str, String> {
     if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
         if let Some(module_bytes) = crate::r::fs::trueosfs::file_out_async(disk, archive_name)
             .await
-            .map_err(|_| "failed to read selected module from TRUEOSFS")?
+            .map_err(|_| String::from("failed to read selected module from TRUEOSFS"))?
         {
-            enqueue_blueprint_bytes(target, String::from(archive_name), module_bytes, app_args);
+            enqueue_blueprint_bytes(target, String::from(archive_name), module_bytes, app_args)?;
             return Ok("TRUEOSFS root");
         }
     }
 
     if let Some(module_bytes) = embedded_module_bytes_by_archive_name(archive_name)? {
-        enqueue_blueprint_bytes(target, String::from(archive_name), module_bytes, app_args);
+        enqueue_blueprint_bytes(target, String::from(archive_name), module_bytes, app_args)?;
         return Ok("boot embedded");
     }
 
-    Err("archive not found")
+    Err(String::from("archive not found"))
 }
 
 pub(crate) fn submit_run(io: &'static dyn ShellBackend2, archive: String, app_args: Vec<String>) {
@@ -527,7 +526,7 @@ pub(crate) fn submit_run(io: &'static dyn ShellBackend2, archive: String, app_ar
         }
     };
 
-    enqueue_blueprint_bytes(target, archive, module_bytes, app_args);
+    let _ = enqueue_blueprint_bytes(target, archive, module_bytes, app_args);
 }
 
 fn submit_archive_entry(
@@ -546,7 +545,7 @@ fn submit_archive_entry(
                 print_shell_line(io, "hv run: failed to read selected embedded module");
                 return;
             };
-            enqueue_blueprint_bytes(target, entry.archive.clone(), module_bytes.to_vec(), app_args);
+            let _ = enqueue_blueprint_bytes(target, entry.archive.clone(), module_bytes.to_vec(), app_args);
         }
     }
 }

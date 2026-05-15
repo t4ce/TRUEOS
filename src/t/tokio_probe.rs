@@ -1356,3 +1356,12 @@ pub(crate) fn log_boot_probe() {
     spawn_deferred_tokio_net_probe();
     spawn_deferred_tokio_fs_probe();
 }
+
+pub(crate) fn assume_ready_when_probe_disabled() {
+    if crate::r::readiness::is_set(crate::r::readiness::TOKIO_RUNTIME_READY) {
+        return;
+    }
+
+    crate::r::readiness::set(crate::r::readiness::TOKIO_RUNTIME_READY);
+    crate::log!("tokio_probe: disabled; assuming TOKIO_RUNTIME_READY at boot call site\n");
+}

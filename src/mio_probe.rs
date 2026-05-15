@@ -9,6 +9,13 @@ const MIO_NET_PROBE_PORT: u16 = crate::allports::probes::MIO_NET_PROBE_PORT;
 
 static MIO_NET_PROBE_TASK_SPAWNED: AtomicBool = AtomicBool::new(false);
 
+#[task]
+async fn mio_net_ready_assume_task() {
+    crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
+    crate::log!("mio_probe: disabled; assuming NET_SOCKET_READY after NET_ANY_CONFIGURED\n");
+    crate::r::readiness::set(crate::r::readiness::NET_SOCKET_READY);
+}
+
 fn log_io_failure<E: core::fmt::Display>(stage: &str, err: &E) {
     crate::log!("mio_probe: failure {} err={}\n", stage, err);
 }
@@ -157,6 +164,34 @@ pub(crate) fn spawn_deferred_net_readiness_probe() {
         Ok(token) => spawner.spawn(token),
         Err(err) => {
             crate::log!("mio_probe: note net surface task spawn failed: {:?}\n", err)
+        }
+    }
+}
+
+pub(crate) fn assume_ready_when_probe_disabled() {
+    if crate::r::readiness::is_set(crate::r::readiness::NET_SOCKET_READY) {
+        return;
+    }
+
+    if crate::r::readiness::is_set(crate::r::readiness::NET_ANY_CONFIGURED) {
+        crate::log!("mio_probe: disabled; assuming NET_SOCKET_READY after NET_ANY_CONFIGURED\n");
+        crate::r::readiness::set(crate::r::readiness::NET_SOCKET_READY);
+        return;
+    }
+
+    if MIO_NET_PROBE_TASK_SPAWNED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    let Some(spawner) = crate::workers::spawner_for_slot(0) else {
+        crate::log!("mio_probe: disabled; fallback NET_SOCKET_READY task not spawned (no slot0 spawner)\n");
+        return;
+    };
+
+    match mio_net_ready_assume_task() {
+        Ok(token) => spawner.spawn(token),
+        Err(err) => {
+            crate::log!("mio_probe: disabled; fallback NET_SOCKET_READY task spawn failed: {:?}\n", err)
         }
     }
 }
