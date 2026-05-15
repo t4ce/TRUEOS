@@ -1713,6 +1713,8 @@ pub mod cabi {
     const TEXTURE_UPLOAD_RING_CAP: usize = 64;
     static TEXTURE_UPLOAD_REQS: spin::Mutex<TextureWorkRing> =
         spin::Mutex::new(TextureWorkRing::new());
+    static VM_TEXTURE_UPLOADS: spin::Mutex<Vec<VmTextureUploadPending>> =
+        spin::Mutex::new(Vec::new());
     static ASYNC_SVG_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
     static TEXTURE_UPLOAD_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
     static ASYNC_SVG_WORKER_STARTED: core::sync::atomic::AtomicBool =
@@ -1794,6 +1796,18 @@ pub mod cabi {
         repaint_window_id: u32,
         repaint_reason: &'static str,
         update_async_status: bool,
+    }
+
+    struct VmTextureUploadPending {
+        vm_id: u8,
+        guest_tex_id: u32,
+        host_tex_id: u32,
+        width: u32,
+        height: u32,
+        region: Option<ImageRegion>,
+        sample_kind: TexSampleKind,
+        rgba: Vec<u8>,
+        received: usize,
     }
 
     struct TextureDrawRgbReq {
@@ -2163,7 +2177,7 @@ pub mod cabi {
     }
 
     fn notify_texture_work_available() {
-        if gfx_cabi_vm_context() {
+        if crate::hv::current_hull_guest_context_vm_id().is_some() {
             TEXTURE_UPLOAD_WAIT.notify_guest_signal();
         } else {
             TEXTURE_UPLOAD_WAIT.notify_one();
@@ -2266,12 +2280,243 @@ pub mod cabi {
         TEXTURE_UPLOAD_REQS.lock().pop_front()
     }
 
-    fn request_texture_work_present(window_id: u32, reason: &'static str) {
+    fn request_texture_work_present(window_id: u32, host_tex_id: u32, reason: &'static str) {
         if window_id == 0 {
+            let _ = crate::hv::request_deferred_blueprint_app_windows_for_host_texture(
+                host_tex_id,
+                reason,
+            );
             return;
         }
         let host_window_id = crate::hv::host_blueprint_app_window_id(window_id);
         let _ = crate::r::ui2::request_window_content_present(host_window_id, reason);
+    }
+
+    fn vm_texture_upload_get_u32(payload: &[u8], offset: usize) -> Option<u32> {
+        payload
+            .get(offset..offset + 4)
+            .map(|bytes| u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+    }
+
+    fn vm_texture_upload_put_u32(payload: &mut [u8], offset: usize, value: u32) {
+        payload[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn vm_texture_upload_expected_len(
+        width: u32,
+        height: u32,
+        region: Option<ImageRegion>,
+    ) -> Option<usize> {
+        match region {
+            Some(region) => {
+                if region.width == 0
+                    || region.height == 0
+                    || region.x.saturating_add(region.width) > width
+                    || region.y.saturating_add(region.height) > height
+                {
+                    return None;
+                }
+                (region.width as usize)
+                    .checked_mul(region.height as usize)?
+                    .checked_mul(4)
+            }
+            None => checked_reasonable_rgba_len(width, height),
+        }
+    }
+
+    pub fn handle_vm_texture_upload_begin(vm_id: u8, payload: &[u8]) -> i32 {
+        const HEADER_LEN: usize = 40;
+        if payload.len() < HEADER_LEN {
+            return -1;
+        }
+        let guest_tex_id = vm_texture_upload_get_u32(payload, 0).unwrap_or(0);
+        let width = vm_texture_upload_get_u32(payload, 4).unwrap_or(0);
+        let height = vm_texture_upload_get_u32(payload, 8).unwrap_or(0);
+        let region_flag = vm_texture_upload_get_u32(payload, 12).unwrap_or(0);
+        let region = if region_flag == 0 {
+            None
+        } else {
+            Some(ImageRegion {
+                x: vm_texture_upload_get_u32(payload, 16).unwrap_or(0),
+                y: vm_texture_upload_get_u32(payload, 20).unwrap_or(0),
+                width: vm_texture_upload_get_u32(payload, 24).unwrap_or(0),
+                height: vm_texture_upload_get_u32(payload, 28).unwrap_or(0),
+            })
+        };
+        let sample_kind = match vm_texture_upload_get_u32(payload, 32).unwrap_or(u32::MAX) {
+            0 => TexSampleKind::Mask,
+            1 => TexSampleKind::Rgba,
+            _ => return -2,
+        };
+        let total_len = vm_texture_upload_get_u32(payload, 36).unwrap_or(0) as usize;
+        if guest_tex_id == 0 || width == 0 || height == 0 {
+            return -3;
+        }
+        if !claim_vm_texture_id_for_vm(vm_id, guest_tex_id, "vm-texture-upload-begin") {
+            return -4;
+        }
+        let host_tex_id = host_texture_id_for_vm(vm_id, guest_tex_id);
+        if host_tex_id == 0 || reject_unreasonable_tex_id(host_tex_id, "vm-texture-upload-host") {
+            return -5;
+        }
+        let Some(expected) = vm_texture_upload_expected_len(width, height, region) else {
+            return -6;
+        };
+        if total_len < expected {
+            return -7;
+        }
+
+        let mut uploads = VM_TEXTURE_UPLOADS.lock();
+        uploads.retain(|upload| upload.vm_id != vm_id);
+        let mut rgba = Vec::new();
+        if rgba.try_reserve_exact(expected).is_err() {
+            return -8;
+        }
+        rgba.resize(expected, 0);
+        uploads.push(VmTextureUploadPending {
+            vm_id,
+            guest_tex_id,
+            host_tex_id,
+            width,
+            height,
+            region,
+            sample_kind,
+            rgba,
+            received: 0,
+        });
+        0
+    }
+
+    pub fn handle_vm_texture_upload_chunk(vm_id: u8, offset: usize, payload: &[u8]) -> i32 {
+        let mut uploads = VM_TEXTURE_UPLOADS.lock();
+        let Some(upload) = uploads.iter_mut().find(|upload| upload.vm_id == vm_id) else {
+            return -1;
+        };
+        if offset != upload.received {
+            return -2;
+        }
+        let end = offset.saturating_add(payload.len());
+        if end > upload.rgba.len() {
+            return -3;
+        }
+        upload.rgba[offset..end].copy_from_slice(payload);
+        upload.received = end;
+        0
+    }
+
+    pub fn handle_vm_texture_upload_finish(vm_id: u8) -> i32 {
+        let pending = {
+            let mut uploads = VM_TEXTURE_UPLOADS.lock();
+            let Some(idx) = uploads.iter().position(|upload| upload.vm_id == vm_id) else {
+                return -1;
+            };
+            uploads.swap_remove(idx)
+        };
+        if pending.received != pending.rgba.len() {
+            return -2;
+        }
+        record_vm_texture_dimensions(pending.guest_tex_id, pending.width, pending.height);
+        enqueue_texture_upload(TextureUploadReq {
+            tex_id: pending.host_tex_id,
+            width: pending.width,
+            height: pending.height,
+            region: pending.region,
+            rgba: pending.rgba,
+            sample_kind: pending.sample_kind,
+            repaint_window_id: 0,
+            repaint_reason: "vm-upload-rgba",
+            update_async_status: false,
+        });
+        0
+    }
+
+    fn vmcall_texture_rgba_upload_from_ptr(
+        tex_id: u32,
+        width: u32,
+        height: u32,
+        region: Option<ImageRegion>,
+        data_ptr: *const u8,
+        data_len: usize,
+        sample_kind: TexSampleKind,
+    ) -> i32 {
+        if tex_id == 0 || width == 0 || height == 0 {
+            return -1;
+        }
+        if data_ptr.is_null() {
+            return -2;
+        }
+        let Some(expected) = vm_texture_upload_expected_len(width, height, region) else {
+            return -3;
+        };
+        if data_len < expected || expected > u32::MAX as usize {
+            return -4;
+        }
+
+        let mut header = [0u8; 40];
+        vm_texture_upload_put_u32(&mut header, 0, tex_id);
+        vm_texture_upload_put_u32(&mut header, 4, width);
+        vm_texture_upload_put_u32(&mut header, 8, height);
+        vm_texture_upload_put_u32(&mut header, 12, u32::from(region.is_some()));
+        if let Some(region) = region {
+            vm_texture_upload_put_u32(&mut header, 16, region.x);
+            vm_texture_upload_put_u32(&mut header, 20, region.y);
+            vm_texture_upload_put_u32(&mut header, 24, region.width);
+            vm_texture_upload_put_u32(&mut header, 28, region.height);
+        }
+        vm_texture_upload_put_u32(
+            &mut header,
+            32,
+            match sample_kind {
+                TexSampleKind::Mask => 0,
+                TexSampleKind::Rgba => 1,
+            },
+        );
+        vm_texture_upload_put_u32(&mut header, 36, expected as u32);
+
+        let mut out = [0u8; 0];
+        let (status, rc) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_GFX_TEXTURE_UPLOAD_BEGIN,
+            0,
+            0,
+            &header,
+            &mut out,
+        );
+        if status != trueos_vm::vmcall::STATUS_OK || (rc as i64 as i32) != 0 {
+            return if status == trueos_vm::vmcall::STATUS_OK {
+                rc as i64 as i32
+            } else {
+                -90
+            };
+        }
+
+        let data = unsafe { core::slice::from_raw_parts(data_ptr, expected) };
+        let mut offset = 0usize;
+        while offset < expected {
+            let end = core::cmp::min(offset + trueos_vm::vmcall::PAYLOAD_CAP, expected);
+            let (status, rc) = trueos_vm::vmcall::call_with_payload(
+                trueos_vm::vmcall::OP_BP_GFX_TEXTURE_UPLOAD_CHUNK,
+                offset as u64,
+                0,
+                &data[offset..end],
+                &mut out,
+            );
+            if status != trueos_vm::vmcall::STATUS_OK || (rc as i64 as i32) != 0 {
+                return if status == trueos_vm::vmcall::STATUS_OK {
+                    rc as i64 as i32
+                } else {
+                    -91
+                };
+            }
+            offset = end;
+        }
+
+        let (status, rc) =
+            trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_GFX_TEXTURE_UPLOAD_FINISH, 0, 0);
+        if status == trueos_vm::vmcall::STATUS_OK {
+            rc as i64 as i32
+        } else {
+            -92
+        }
     }
 
     fn log_texture_work_failed(
@@ -2724,7 +2969,11 @@ pub mod cabi {
                         }
                     }
                     if rc == 0 {
-                        request_texture_work_present(req.repaint_window_id, req.repaint_reason);
+                        request_texture_work_present(
+                            req.repaint_window_id,
+                            req.tex_id,
+                            req.repaint_reason,
+                        );
                     } else {
                         log_texture_work_failed(
                             "upload",
@@ -2743,7 +2992,11 @@ pub mod cabi {
                         req.verts.as_slice(),
                     );
                     if rc == 0 {
-                        request_texture_work_present(req.repaint_window_id, req.repaint_reason);
+                        request_texture_work_present(
+                            req.repaint_window_id,
+                            req.tex_id,
+                            req.repaint_reason,
+                        );
                     } else {
                         log_texture_work_failed(
                             "draw-rgb",
@@ -2758,7 +3011,11 @@ pub mod cabi {
                 TextureWorkReq::DrawMandelbrot(req) => {
                     let rc = render_mandelbrot_to_texture_now(req.tex_id, req.ticks, req.tick_hz);
                     if rc == 0 {
-                        request_texture_work_present(req.repaint_window_id, req.repaint_reason);
+                        request_texture_work_present(
+                            req.repaint_window_id,
+                            req.tex_id,
+                            req.repaint_reason,
+                        );
                     } else {
                         log_texture_work_failed(
                             "draw-mandelbrot",
@@ -2779,7 +3036,11 @@ pub mod cabi {
                         req.particle_shader,
                     );
                     if rc == 0 {
-                        request_texture_work_present(req.repaint_window_id, req.repaint_reason);
+                        request_texture_work_present(
+                            req.repaint_window_id,
+                            req.target_tex_id,
+                            req.repaint_reason,
+                        );
                     } else {
                         log_texture_work_failed(
                             "draw-tex",
@@ -3482,6 +3743,10 @@ pub mod cabi {
             .and_then(|images| images.get(idx))
             .and_then(|entry| entry.as_ref())
             .map(|img| (img.width, img.height))
+    }
+
+    pub fn host_texture_has_image(tex_id: u32) -> bool {
+        texture_dimensions_inner(tex_id).is_some()
     }
 
     #[inline]
@@ -5234,6 +5499,28 @@ pub mod cabi {
         call_init: bool,
     ) -> i32 {
         if gfx_cabi_vm_context() {
+            if crate::hv::current_hull_guest_context_vm_id().is_some() {
+                if let Some(rgba) = owned_rgba.as_ref() {
+                    return vmcall_texture_rgba_upload_from_ptr(
+                        tex_id,
+                        width,
+                        height,
+                        region,
+                        rgba.as_ptr(),
+                        rgba.len(),
+                        sample_kind,
+                    );
+                }
+                return vmcall_texture_rgba_upload_from_ptr(
+                    tex_id,
+                    width,
+                    height,
+                    region,
+                    data_ptr,
+                    data_len,
+                    sample_kind,
+                );
+            }
             let reason = if call_init {
                 "vm-upload-rgba"
             } else {
@@ -5532,6 +5819,17 @@ pub mod cabi {
         sample_kind: TexSampleKind,
     ) -> i32 {
         if gfx_cabi_vm_context() {
+            if crate::hv::current_hull_guest_context_vm_id().is_some() {
+                return vmcall_texture_rgba_upload_from_ptr(
+                    tex_id,
+                    width,
+                    height,
+                    region,
+                    data_ptr,
+                    data_len,
+                    sample_kind,
+                );
+            }
             return queue_texture_rgba_upload_from_ptr(
                 tex_id,
                 width,
@@ -5845,6 +6143,42 @@ pub mod cabi {
             return -2;
         }
         let data = core::slice::from_raw_parts(data_ptr, data_len);
+        if gfx_cabi_vm_context() {
+            return match crate::gfx::svg::rasterize_svg_bytes_rgba(data) {
+                Ok((info, rgba)) => {
+                    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+                        return vmcall_texture_rgba_upload_from_ptr(
+                            tex_id,
+                            info.width,
+                            info.height,
+                            None,
+                            rgba.as_ptr(),
+                            rgba.len(),
+                            TexSampleKind::Rgba,
+                        );
+                    }
+                    if queue_texture_rgba_upload_owned(
+                        tex_id,
+                        info.width,
+                        info.height,
+                        None,
+                        rgba,
+                        TexSampleKind::Rgba,
+                        0,
+                        "vm-upload-svg",
+                        false,
+                    ) {
+                        0
+                    } else {
+                        -5
+                    }
+                }
+                Err(code) => {
+                    log_svg_upload_failure("vm-sync-svg", tex_id, data_len, code, Some(data));
+                    code
+                }
+            };
+        }
         match crate::gfx::svg::upload_svg_bytes_to_texture(tex_id, data) {
             Ok(_) => 0,
             Err(code) => {
