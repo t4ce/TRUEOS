@@ -3,7 +3,7 @@ use core::alloc::{GlobalAlloc, Layout};
 use core::arch::asm;
 use core::mem::{align_of, size_of};
 use core::ptr::{NonNull, addr_of_mut, null_mut};
-use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use spin::Mutex;
 
 use crate::phys::{self, HeapArena};
@@ -165,7 +165,7 @@ pub fn host_heap_contains_addr(addr: usize) -> bool {
 
 #[inline]
 fn reject_hv_guest_host_heap_dealloc(ptr: *mut u8) -> bool {
-    if crate::hv::current_guest_execution_context_vm_id().is_none() {
+    if crate::hv::current_hull_guest_context_vm_id().is_none() {
         return false;
     }
     if !host_heap_contains_addr(ptr as usize) {
@@ -496,7 +496,6 @@ struct Allocator;
 static ALLOCATOR: Mutex<FreeList> = Mutex::new(FreeList::new());
 static HV_GUEST_ALLOCATORS: [Mutex<FreeList>; crate::allcaps::hv::VM_ID_LIMIT] =
     [const { Mutex::new(FreeList::new()) }; crate::allcaps::hv::VM_ID_LIMIT];
-static HV_GUEST_ACTIVE_CPU_MASK: AtomicU64 = AtomicU64::new(0);
 static HV_GUEST_HEAP_READY_MASK: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn hv_guest_allocator_state_spans() -> [(u64, usize); 2] {
@@ -510,7 +509,6 @@ pub(crate) fn hv_guest_allocator_state_spans() -> [(u64, usize); 2] {
 }
 
 const HOST_ALLOC_TAG: u8 = u8::MAX;
-static ALLOC_DOMAIN_OVERRIDE_BY_CPU: [AtomicU8; 64] = [const { AtomicU8::new(HOST_ALLOC_TAG) }; 64];
 static HOST_ALLOC_DOMAIN_FORCE_DEPTH_BY_CPU: [AtomicU32; 64] = [const { AtomicU32::new(0) }; 64];
 
 fn alloc_domain_from_tag(tag: &AllocTag) -> AllocDomain {
@@ -535,17 +533,6 @@ fn alloc_domain_vm_id(domain: AllocDomain) -> Option<u8> {
     }
 }
 
-fn hv_guest_domain_override_for_slot(slot: usize) -> Option<AllocDomain> {
-    let override_tag = ALLOC_DOMAIN_OVERRIDE_BY_CPU
-        .get(slot)?
-        .load(Ordering::Acquire);
-    if (override_tag as usize) < crate::allcaps::hv::VM_ID_LIMIT {
-        Some(AllocDomain::HvGuest(override_tag))
-    } else {
-        None
-    }
-}
-
 fn cpuid_slot() -> Option<usize> {
     let slot = crate::percpu::current_slot_via_cpuid();
     if slot < 64 { Some(slot) } else { None }
@@ -558,43 +545,22 @@ fn current_alloc_domain() -> AllocDomain {
         return AllocDomain::Host;
     }
 
-    // Guest-side allocator routing must prove logical guest execution. Host
-    // services can run on VM-tagged lanes while servicing CABI work and must
-    // keep using the host heap.
-    if let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() {
+    // Guest-side allocator routing must prove that execution is actually on
+    // the Hull guest stack. Host carriers may keep VM/vthread identity for
+    // ownership and TLS, but their service allocations belong to the host heap.
+    if let Some(vm_id) = crate::hv::current_hull_guest_context_vm_id() {
         return AllocDomain::HvGuest(vm_id);
     }
 
-    if let Some(slot) = cpuid_slot()
-        && let Some(domain) = hv_guest_domain_override_for_slot(slot)
-    {
-        return domain;
+    if let Some(vm_id) = crate::t::kernel_task_domain::guest_owned_alloc_vm_id() {
+        return AllocDomain::HvGuest(vm_id);
     }
 
-    // During the first Hull guest entry, avoid CPUID/slot discovery entirely.
-    // The guest shares the same image as the host, so the host-side boot-armed
-    // flag is visible here and is enough to route early allocations to the
-    // guest allocator without touching percpu discovery.
-    if crate::hv::guest_boot_active() {
-        if let Some(vm_id) = crate::hv::current_vm_id() {
-            return AllocDomain::HvGuest(vm_id);
-        }
-    }
     let slot = crate::percpu::current_slot();
     if slot >= 64 {
         return AllocDomain::Host;
     }
-    if let Some(domain) = hv_guest_domain_override_for_slot(slot) {
-        return domain;
-    }
-    if (HV_GUEST_ACTIVE_CPU_MASK.load(Ordering::Acquire) & (1u64 << slot)) != 0 {
-        match crate::hv::current_vm_id() {
-            Some(vm_id) => AllocDomain::HvGuest(vm_id),
-            None => AllocDomain::Host,
-        }
-    } else {
-        AllocDomain::Host
-    }
+    AllocDomain::Host
 }
 
 pub fn with_host_alloc_domain<T>(f: impl FnOnce() -> T) -> T {
@@ -666,41 +632,16 @@ fn init_fallback_regions() {
     }
 }
 
-pub fn enter_hv_guest_domain_current_cpu(vm_id: u8) -> bool {
-    init_fallback_regions();
-    let Some(slot) = cpuid_slot() else {
-        return false;
-    };
-    if slot >= 64 || (vm_id as usize) >= crate::allcaps::hv::VM_ID_LIMIT {
-        return false;
-    }
-    if !ensure_hv_guest_heap_ready(vm_id) {
-        return false;
-    }
-    HV_GUEST_ACTIVE_CPU_MASK.fetch_or(1u64 << slot, Ordering::AcqRel);
-    ALLOC_DOMAIN_OVERRIDE_BY_CPU[slot].store(vm_id, Ordering::Release);
-    true
-}
-
-pub fn leave_hv_guest_domain_current_cpu() {
-    let Some(slot) = cpuid_slot() else {
-        return;
-    };
-    HV_GUEST_ACTIVE_CPU_MASK.fetch_and(!(1u64 << slot), Ordering::AcqRel);
-    ALLOC_DOMAIN_OVERRIDE_BY_CPU[slot].store(HOST_ALLOC_TAG, Ordering::Release);
-}
-
 pub fn with_hv_guest_alloc_domain<T>(vm_id: u8, f: impl FnOnce() -> T) -> Option<T> {
     init_fallback_regions();
     if (vm_id as usize) >= crate::allcaps::hv::VM_ID_LIMIT || !ensure_hv_guest_heap_ready(vm_id) {
         return None;
     }
-    let slot = cpuid_slot()?;
-    let override_slot = ALLOC_DOMAIN_OVERRIDE_BY_CPU.get(slot)?;
-    let previous = override_slot.swap(vm_id, Ordering::AcqRel);
-    let out = f();
-    override_slot.store(previous, Ordering::Release);
-    Some(out)
+    Some(crate::t::kernel_task_domain::with(
+        crate::t::kernel_task_domain::KernelTaskDomain::VmGuestOwnedAlloc,
+        Some(vm_id),
+        f,
+    ))
 }
 
 pub fn ensure_hv_guest_heap_ready(vm_id: u8) -> bool {

@@ -933,8 +933,13 @@ pub mod cabi {
     }
 
     #[inline]
+    fn cabi_vm_alloc_vm_id() -> Option<u8> {
+        crate::hv::current_guest_execution_context_vm_id()
+    }
+
+    #[inline]
     fn cabi_vm_alloc_active() -> bool {
-        crate::hv::current_guest_execution_context_vm_id().is_some()
+        cabi_vm_alloc_vm_id().is_some()
     }
 
     #[inline]
@@ -943,7 +948,7 @@ pub mod cabi {
         cabi_layout_for(total, cabi_malloc_align())
     }
 
-    unsafe fn cabi_vm_alloc(size: usize) -> *mut u8 {
+    unsafe fn cabi_vm_alloc_inner(size: usize) -> *mut u8 {
         let Some(layout) = cabi_vm_layout_for(size) else {
             return core::ptr::null_mut();
         };
@@ -954,6 +959,17 @@ pub mod cabi {
         (base as *mut usize).write(size);
         (base as *mut usize).add(1).write(cabi_malloc_align());
         base.add(VM_CABI_ALLOC_HEADER_BYTES)
+    }
+
+    unsafe fn cabi_vm_alloc(size: usize) -> *mut u8 {
+        if crate::hv::current_hull_guest_context_vm_id().is_some() {
+            return cabi_vm_alloc_inner(size);
+        }
+        let Some(vm_id) = cabi_vm_alloc_vm_id() else {
+            return core::ptr::null_mut();
+        };
+        crate::allocators::with_hv_guest_alloc_domain(vm_id, || cabi_vm_alloc_inner(size))
+            .unwrap_or(core::ptr::null_mut())
     }
 
     unsafe fn cabi_vm_meta(ptr: *const u8) -> Option<(usize, usize, *mut u8)> {

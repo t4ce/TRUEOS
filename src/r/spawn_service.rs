@@ -152,6 +152,30 @@ pub fn task_run_guard(name: &'static str) -> TaskRunGuard {
     TaskRunGuard { name }
 }
 
+pub fn kernel_task_domain_for_name(name: &str) -> crate::t::kernel_task_domain::KernelTaskDomain {
+    if name.starts_with("ui2-") {
+        crate::t::kernel_task_domain::KernelTaskDomain::Ui2Service
+    } else if name.starts_with("net-")
+        || name.contains("http")
+        || name.contains("tls")
+        || name.contains("ftp")
+        || name.contains("sntp")
+        || name.contains("ntp")
+    {
+        crate::t::kernel_task_domain::KernelTaskDomain::NetService
+    } else if name.starts_with("gfx-") {
+        crate::t::kernel_task_domain::KernelTaskDomain::GfxService
+    } else if name.starts_with("app-vm") || name.starts_with("bp-") || name.starts_with("hv-vm") {
+        crate::t::kernel_task_domain::KernelTaskDomain::VmRun
+    } else {
+        crate::t::kernel_task_domain::KernelTaskDomain::HostService
+    }
+}
+
+pub fn with_task_domain<T>(name: &str, f: impl FnOnce() -> T) -> T {
+    crate::t::kernel_task_domain::with(kernel_task_domain_for_name(name), None, f)
+}
+
 pub fn task_stop_requested(name: &str) -> bool {
     stop_flag_by_task_name(name)
         .map(|flag| flag.load(Ordering::Acquire))
