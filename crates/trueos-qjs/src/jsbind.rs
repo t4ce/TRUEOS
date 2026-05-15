@@ -82,7 +82,18 @@ pub unsafe fn new_c_function(
     argc: i32,
     func: Option<qjs::JSCFunction>,
 ) -> qjs::JSValue {
-    qjs::JS_NewCFunction2(ctx, func, name.as_ptr() as *const c_char, argc, qjs::JS_CFUNC_GENERIC, 0)
+    new_c_function_kind(ctx, name, argc, qjs::JS_CFUNC_GENERIC, func)
+}
+
+#[inline]
+pub unsafe fn new_c_function_kind(
+    ctx: *mut qjs::JSContext,
+    name: &[u8],
+    argc: i32,
+    kind: i32,
+    func: Option<qjs::JSCFunction>,
+) -> qjs::JSValue {
+    qjs::JS_NewCFunction2(ctx, func, name.as_ptr() as *const c_char, argc, kind, 0)
 }
 
 #[inline]
@@ -93,7 +104,19 @@ pub unsafe fn install_fn(
     argc: i32,
     func: Option<qjs::JSCFunction>,
 ) -> bool {
-    set_prop(ctx, obj, name, new_c_function(ctx, name, argc, func))
+    install_fn_kind(ctx, obj, name, argc, qjs::JS_CFUNC_GENERIC, func)
+}
+
+#[inline]
+pub unsafe fn install_fn_kind(
+    ctx: *mut qjs::JSContext,
+    obj: qjs::JSValueConst,
+    name: &[u8],
+    argc: i32,
+    kind: i32,
+    func: Option<qjs::JSCFunction>,
+) -> bool {
+    set_prop(ctx, obj, name, new_c_function_kind(ctx, name, argc, kind, func))
 }
 
 #[inline]

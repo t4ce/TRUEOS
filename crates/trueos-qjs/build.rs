@@ -767,7 +767,7 @@ fn main() {
         .define("__NO_FORTIFY", Some("1"))
         .flag("-w")
         // Prevent QuickJS from enabling pthread-backed Atomics and stack checking.
-        .define("EMSCRIPTEN", None)
+        .define("__EMSCRIPTEN__", Some("1"))
         .define("CONFIG_VERSION", Some("\"TRUEOS\""));
 
     if arch == "x86_64" {

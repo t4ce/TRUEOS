@@ -851,95 +851,21 @@ unsafe fn ensure_global_fetch(ctx: *mut qjs::JSContext) {
         return;
     }
 
-    let helper = qjs::JS_NewCFunction2(
-        ctx,
-        Some(trueos_fetch_text),
-        b"__trueosFetchText\0".as_ptr() as *const c_char,
-        1,
-        qjs::JS_CFUNC_GENERIC,
-        0,
-    );
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        global,
-        b"__trueosFetchText\0".as_ptr() as *const c_char,
-        helper,
-    );
-
-    let bytes_helper = qjs::JS_NewCFunction2(
-        ctx,
-        Some(trueos_fetch_bytes),
-        b"__trueosFetchBytes\0".as_ptr() as *const c_char,
-        1,
-        qjs::JS_CFUNC_GENERIC,
-        0,
-    );
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        global,
-        b"__trueosFetchBytes\0".as_ptr() as *const c_char,
-        bytes_helper,
-    );
-
-    let prewarm_helper = qjs::JS_NewCFunction2(
-        ctx,
-        Some(trueos_prewarm_url),
-        b"__trueosPrewarmUrl\0".as_ptr() as *const c_char,
-        1,
-        qjs::JS_CFUNC_GENERIC,
-        0,
-    );
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        global,
-        b"__trueosPrewarmUrl\0".as_ptr() as *const c_char,
-        prewarm_helper,
-    );
-
-    let global_log_helper = qjs::JS_NewCFunction2(
-        ctx,
-        Some(trueos_global_log_line),
-        b"__trueosGlobalLogLine\0".as_ptr() as *const c_char,
-        1,
-        qjs::JS_CFUNC_GENERIC,
-        0,
-    );
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        global,
-        b"__trueosGlobalLogLine\0".as_ptr() as *const c_char,
-        global_log_helper,
-    );
-
-    let image_helper = qjs::JS_NewCFunction2(
-        ctx,
-        Some(trueos_resolve_ready_image_texture),
-        b"__trueosResolveReadyImageTexture\0".as_ptr() as *const c_char,
-        1,
-        qjs::JS_CFUNC_GENERIC,
-        0,
-    );
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        global,
-        b"__trueosResolveReadyImageTexture\0".as_ptr() as *const c_char,
-        image_helper,
-    );
-
-    let prefetch_module_helper = qjs::JS_NewCFunction2(
-        ctx,
-        Some(trueos_prefetch_module),
-        b"__trueosPrefetchModule\0".as_ptr() as *const c_char,
-        2,
-        qjs::JS_CFUNC_GENERIC,
-        0,
-    );
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        global,
-        b"__trueosPrefetchModule\0".as_ptr() as *const c_char,
-        prefetch_module_helper,
-    );
+    let helpers: &[(&[u8], qjs::JSCFunction, i32)] = &[
+        (b"__trueosFetchText\0", trueos_fetch_text, 1),
+        (b"__trueosFetchBytes\0", trueos_fetch_bytes, 1),
+        (b"__trueosPrewarmUrl\0", trueos_prewarm_url, 1),
+        (b"__trueosGlobalLogLine\0", trueos_global_log_line, 1),
+        (
+            b"__trueosResolveReadyImageTexture\0",
+            trueos_resolve_ready_image_texture,
+            1,
+        ),
+        (b"__trueosPrefetchModule\0", trueos_prefetch_module, 2),
+    ];
+    for &(name, func, argc) in helpers {
+        let _ = qjs::jsbind::install_fn(ctx, global, name, argc, Some(func));
+    }
 
     let shim_src = br#"
 (function (G) {
@@ -1439,25 +1365,15 @@ unsafe fn make_formatter_object(
         return obj;
     }
     let ro = make_resolved_options(ctx, profile, kind);
-    let format_fn = qjs::JS_NewCFunction2(
-        ctx,
-        Some(intl_format),
-        b"format\0".as_ptr() as *const c_char,
-        1,
-        qjs::JS_CFUNC_GENERIC,
-        0,
-    );
-    let ro_fn = qjs::JS_NewCFunction2(
-        ctx,
-        Some(intl_resolved_options),
-        b"resolvedOptions\0".as_ptr() as *const c_char,
-        0,
-        qjs::JS_CFUNC_GENERIC,
-        0,
-    );
-    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"format\0".as_ptr() as *const c_char, format_fn);
+    let _ = qjs::jsbind::install_fn(ctx, obj, b"format\0", 1, Some(intl_format));
     let _ = qjs::JS_SetPropertyStr(ctx, obj, b"__resolvedOptions\0".as_ptr() as *const c_char, ro);
-    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"resolvedOptions\0".as_ptr() as *const c_char, ro_fn);
+    let _ = qjs::jsbind::install_fn(
+        ctx,
+        obj,
+        b"resolvedOptions\0",
+        0,
+        Some(intl_resolved_options),
+    );
     obj
 }
 
@@ -1549,106 +1465,32 @@ unsafe fn ensure_global_intl(ctx: *mut qjs::JSContext) {
         return;
     }
 
-    let number_ctor = qjs::JS_NewCFunction2(
+    let ctors: &[(&[u8], qjs::JSCFunction)] = &[
+        (b"NumberFormat\0", intl_number_ctor),
+        (b"DateTimeFormat\0", intl_datetime_ctor),
+        (b"Collator\0", intl_simple_ctor),
+        (b"PluralRules\0", intl_simple_ctor),
+        (b"RelativeTimeFormat\0", intl_simple_ctor),
+        (b"ListFormat\0", intl_simple_ctor),
+        (b"DisplayNames\0", intl_simple_ctor),
+        (b"Locale\0", intl_locale_ctor),
+    ];
+    for &(name, func) in ctors {
+        let _ = qjs::jsbind::install_fn_kind(
+            ctx,
+            intl,
+            name,
+            1,
+            qjs::JS_CFUNC_CONSTRUCTOR,
+            Some(func),
+        );
+    }
+    let _ = qjs::jsbind::install_fn(
         ctx,
-        Some(intl_number_ctor),
-        b"NumberFormat\0".as_ptr() as *const c_char,
+        intl,
+        b"getCanonicalLocales\0",
         1,
-        qjs::JS_CFUNC_CONSTRUCTOR,
-        0,
-    );
-    let dt_ctor = qjs::JS_NewCFunction2(
-        ctx,
-        Some(intl_datetime_ctor),
-        b"DateTimeFormat\0".as_ptr() as *const c_char,
-        1,
-        qjs::JS_CFUNC_CONSTRUCTOR,
-        0,
-    );
-    let collator_ctor = qjs::JS_NewCFunction2(
-        ctx,
-        Some(intl_simple_ctor),
-        b"Collator\0".as_ptr() as *const c_char,
-        1,
-        qjs::JS_CFUNC_CONSTRUCTOR,
-        0,
-    );
-    let plural_ctor = qjs::JS_NewCFunction2(
-        ctx,
-        Some(intl_simple_ctor),
-        b"PluralRules\0".as_ptr() as *const c_char,
-        1,
-        qjs::JS_CFUNC_CONSTRUCTOR,
-        0,
-    );
-    let rtf_ctor = qjs::JS_NewCFunction2(
-        ctx,
-        Some(intl_simple_ctor),
-        b"RelativeTimeFormat\0".as_ptr() as *const c_char,
-        1,
-        qjs::JS_CFUNC_CONSTRUCTOR,
-        0,
-    );
-    let list_ctor = qjs::JS_NewCFunction2(
-        ctx,
-        Some(intl_simple_ctor),
-        b"ListFormat\0".as_ptr() as *const c_char,
-        1,
-        qjs::JS_CFUNC_CONSTRUCTOR,
-        0,
-    );
-    let display_ctor = qjs::JS_NewCFunction2(
-        ctx,
-        Some(intl_simple_ctor),
-        b"DisplayNames\0".as_ptr() as *const c_char,
-        1,
-        qjs::JS_CFUNC_CONSTRUCTOR,
-        0,
-    );
-    let locale_ctor = qjs::JS_NewCFunction2(
-        ctx,
-        Some(intl_locale_ctor),
-        b"Locale\0".as_ptr() as *const c_char,
-        1,
-        qjs::JS_CFUNC_CONSTRUCTOR,
-        0,
-    );
-    let get_can = qjs::JS_NewCFunction2(
-        ctx,
         Some(intl_get_canonical_locales),
-        b"getCanonicalLocales\0".as_ptr() as *const c_char,
-        1,
-        qjs::JS_CFUNC_GENERIC,
-        0,
-    );
-
-    let _ =
-        qjs::JS_SetPropertyStr(ctx, intl, b"NumberFormat\0".as_ptr() as *const c_char, number_ctor);
-    let _ =
-        qjs::JS_SetPropertyStr(ctx, intl, b"DateTimeFormat\0".as_ptr() as *const c_char, dt_ctor);
-    let _ =
-        qjs::JS_SetPropertyStr(ctx, intl, b"Collator\0".as_ptr() as *const c_char, collator_ctor);
-    let _ =
-        qjs::JS_SetPropertyStr(ctx, intl, b"PluralRules\0".as_ptr() as *const c_char, plural_ctor);
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        intl,
-        b"RelativeTimeFormat\0".as_ptr() as *const c_char,
-        rtf_ctor,
-    );
-    let _ = qjs::JS_SetPropertyStr(ctx, intl, b"ListFormat\0".as_ptr() as *const c_char, list_ctor);
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        intl,
-        b"DisplayNames\0".as_ptr() as *const c_char,
-        display_ctor,
-    );
-    let _ = qjs::JS_SetPropertyStr(ctx, intl, b"Locale\0".as_ptr() as *const c_char, locale_ctor);
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        intl,
-        b"getCanonicalLocales\0".as_ptr() as *const c_char,
-        get_can,
     );
     let _ = qjs::JS_SetPropertyStr(ctx, global, key.as_ptr() as *const c_char, intl);
     qjs::js_free_value(ctx, global);
