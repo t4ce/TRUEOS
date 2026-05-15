@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, Weak};
 use core::task::{self, ready, Poll};
 
 use core::time::Duration;
-use std::time::Instant;
+use hyper::time::Instant;
 
 use futures_channel::oneshot;
 use tracing::{debug, trace};

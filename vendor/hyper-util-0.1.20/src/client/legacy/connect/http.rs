@@ -1,6 +1,9 @@
 use core::error::Error as StdError;
 use core::fmt;
 use core::future::Future;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use hyper::io;
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::io;
 use core::marker::PhantomData;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -787,7 +790,7 @@ impl ConnectingTcpRemote {
             Some(e) => Err(e),
             None => Err(ConnectError::new(
                 "tcp connect error",
-                std::io::Error::new(std::io::ErrorKind::NotConnected, "Network unreachable"),
+                io::Error::new(io::ErrorKind::NotConnected, "Network unreachable"),
             )),
         }
     }
@@ -835,7 +838,10 @@ fn connect(
                 Some(dur) => match tokio::time::timeout(dur, connect).await {
                     Ok(Ok(s)) => Ok(s),
                     Ok(Err(e)) => Err(e),
-                    Err(e) => Err(io::Error::new(io::ErrorKind::TimedOut, e)),
+                    Err(_) => Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "tcp connect timed out",
+                    )),
                 },
                 None => connect.await,
             }

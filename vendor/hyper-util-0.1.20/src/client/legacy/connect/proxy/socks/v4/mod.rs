@@ -76,7 +76,8 @@ impl SocksConfig {
             Err(_) => {
                 if self.local_dns {
                     (host, port)
-                        .to_socket_addrs()?
+                        .to_socket_addrs()
+                        .map_err(|_| SocksError::DnsFailure)?
                         .find_map(|s| {
                             if let SocketAddr::V4(v4) = s {
                                 Some(Address::Socket(v4))
