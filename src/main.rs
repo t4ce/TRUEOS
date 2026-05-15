@@ -246,9 +246,13 @@ pub extern "C" fn kmain() -> ! {
 
     if crate::allcaps::probes::TOKIO_BOOT_PROBE {
         t::tokio_probe::log_boot_probe();
+    } else {
+        t::tokio_probe::assume_ready_when_probe_disabled();
     }
     if crate::allcaps::probes::MIO_BOOT_PROBE {
         mio_probe::log_boot_probe();
+    } else {
+        mio_probe::assume_ready_when_probe_disabled();
     }
     if crate::allcaps::probes::HYPER_BOOT_PROBE {
         hyper_probe::log_boot_probe();
