@@ -397,7 +397,8 @@ fn encode_basic_auth(user: &str, pass: Option<&str>) -> HeaderValue {
     if let Some(password) = pass {
         raw.extend_from_slice(password.as_bytes());
     }
-    BASE64_STANDARD.encode_string(&raw, &mut buf);
+    let encoded = BASE64_STANDARD.encode(&raw);
+    buf.extend_from_slice(encoded.as_bytes());
     let mut header = HeaderValue::from_bytes(&buf).expect("base64 is always valid HeaderValue");
     header.set_sensitive(true);
     header

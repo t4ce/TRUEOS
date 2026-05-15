@@ -5,8 +5,12 @@ use core::pin::Pin;
 use core::task::{self, ready, Poll};
 
 use http::{HeaderMap, HeaderValue, Uri};
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use hyper::io;
 use hyper::rt::{Read, Write};
 use pin_project_lite::pin_project;
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+use std::io;
 use tower_service::Service;
 
 /// Tunnel Proxy via HTTP CONNECT
@@ -31,7 +35,7 @@ enum Headers {
 #[derive(Debug)]
 pub enum TunnelError {
     ConnectFailed(Box<dyn StdError + Send + Sync>),
-    Io(std::io::Error),
+    Io(io::Error),
     MissingHost,
     ProxyAuthRequired,
     ProxyHeadersTooLong,

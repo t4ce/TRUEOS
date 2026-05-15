@@ -2,11 +2,11 @@ use core::marker::Unpin;
 use core::pin::Pin;
 use core::task::{ready, Poll};
 
-use hyper::rt::{Read, ReadBuf, Write};
+use hyper::{io, rt::{Read, ReadBuf, Write}};
 
 use core::future::poll_fn;
 
-pub(crate) async fn read<T>(io: &mut T, buf: &mut [u8]) -> Result<usize, std::io::Error>
+pub(crate) async fn read<T>(io: &mut T, buf: &mut [u8]) -> Result<usize, io::Error>
 where
     T: Read + Unpin,
 {
@@ -18,7 +18,7 @@ where
     .await
 }
 
-pub(crate) async fn write_all<T>(io: &mut T, buf: &[u8]) -> Result<(), std::io::Error>
+pub(crate) async fn write_all<T>(io: &mut T, buf: &[u8]) -> Result<(), io::Error>
 where
     T: Write + Unpin,
 {

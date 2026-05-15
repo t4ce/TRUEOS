@@ -116,7 +116,8 @@ impl SocksConfig {
             Err(_) if host.len() <= 255 => {
                 if self.local_dns {
                     let socket = (host, port)
-                        .to_socket_addrs()?
+                        .to_socket_addrs()
+                        .map_err(|_| SocksError::DnsFailure)?
                         .next()
                         .ok_or(SocksError::DnsFailure)?;
 

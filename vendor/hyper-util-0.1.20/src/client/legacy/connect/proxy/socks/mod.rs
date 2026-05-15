@@ -11,12 +11,16 @@ use core::task::{Context, Poll};
 
 use bytes::BytesMut;
 
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use hyper::io;
 use hyper::rt::Read;
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+use std::io;
 
 #[derive(Debug)]
 pub enum SocksError<C> {
     Inner(C),
-    Io(std::io::Error),
+    Io(io::Error),
 
     DnsFailure,
     MissingHost,
@@ -58,8 +62,8 @@ where
                     if buf.spare_capacity_mut().is_empty() {
                         return Err(SocksError::Parsing(ParsingError::WouldOverflow));
                     } else {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::UnexpectedEof,
+                        return Err(io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
                             "unexpected eof",
                         )
                         .into());
@@ -95,8 +99,8 @@ impl<C> core::fmt::Display for SocksError<C> {
 
 impl<C: core::fmt::Debug + core::fmt::Display> core::error::Error for SocksError<C> {}
 
-impl<C> From<std::io::Error> for SocksError<C> {
-    fn from(err: std::io::Error) -> Self {
+impl<C> From<io::Error> for SocksError<C> {
+    fn from(err: io::Error) -> Self {
         Self::Io(err)
     }
 }
