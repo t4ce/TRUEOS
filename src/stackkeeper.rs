@@ -41,6 +41,7 @@ static LOGGED_TOKIO_LANE: [AtomicBool; TOKIO_LANE_COUNT] =
 static TOKIO_CURRENT_LANE_BY_CPU: [AtomicU32; TOKIO_TLS_CPU_TRACK_COUNT] =
     [const { AtomicU32::new(u32::MAX) }; TOKIO_TLS_CPU_TRACK_COUNT];
 static LOGGED_TOKIO_LANE_BUSY: AtomicBool = AtomicBool::new(false);
+static LOGGED_GUEST_TOKIO_TLS_SLOT: [AtomicBool; 32] = [const { AtomicBool::new(false) }; 32];
 
 #[derive(Clone, Copy, Debug)]
 pub struct LaneTag {
@@ -86,9 +87,38 @@ pub extern "Rust" fn trueos_tokio_tls_current_cpu_slot() -> u32 {
 
 #[unsafe(no_mangle)]
 pub extern "Rust" fn trueos_tokio_tls_current_slot() -> u32 {
+    let guest_vm_id = crate::hv::current_hull_guest_context_vm_id();
+
     if crate::t::th::vthread::tokio_blocking_backing_enabled()
         && let Some(slot) = crate::t::th::vthread::current_tls_slot()
     {
+        if let Some(vm_id) = guest_vm_id {
+            let vm_index = vm_id as usize;
+            if vm_index < LOGGED_GUEST_TOKIO_TLS_SLOT.len()
+                && !LOGGED_GUEST_TOKIO_TLS_SLOT[vm_index].swap(true, Ordering::AcqRel)
+            {
+                crate::log!(
+                    "stackkeeper: guest tokio tls slot source=vthread vm={} slot={}\n",
+                    vm_id,
+                    slot
+                );
+            }
+        }
+        return slot;
+    }
+
+    if let Some(vm_id) = guest_vm_id {
+        let slot = (TOKIO_LANE_COUNT as u32).saturating_add(vm_id as u32);
+        let vm_index = vm_id as usize;
+        if vm_index < LOGGED_GUEST_TOKIO_TLS_SLOT.len()
+            && !LOGGED_GUEST_TOKIO_TLS_SLOT[vm_index].swap(true, Ordering::AcqRel)
+        {
+            crate::log!(
+                "stackkeeper: guest tokio tls slot source=vm-fallback vm={} slot={}\n",
+                vm_id,
+                slot
+            );
+        }
         return slot;
     }
 
@@ -107,11 +137,13 @@ pub extern "Rust" fn trueos_tokio_tls_current_slot() -> u32 {
     }
 
     let fallback = TOKIO_LANE_COUNT as u32;
-    if cpu_slot == NO_CPU_SLOT {
+    let slot = if cpu_slot == NO_CPU_SLOT {
         fallback
     } else {
         fallback.saturating_add(cpu_slot)
-    }
+    };
+
+    slot
 }
 
 pub fn try_acquire_tokio_lane(

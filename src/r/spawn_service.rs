@@ -995,6 +995,7 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
 const UI2_DEMO_READY: u32 =
     crate::r::readiness::UI2_READY | crate::r::readiness::GFX_TEXTURE_UPLOAD_SERVICE_READY;
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::APP_VM_READY
+    | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::UI2_READY
     | crate::r::readiness::GFX_TEXTURE_UPLOAD_SERVICE_READY
     | crate::r::readiness::NET_SOCKET_READY

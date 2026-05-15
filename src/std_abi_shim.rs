@@ -139,9 +139,9 @@ fn pthread_mutex_state_mut(
     create: bool,
 ) -> Option<&mut PthreadMutexState> {
     let mut empty_slot = None;
-    for (index, entry) in table.iter_mut().enumerate() {
-        match entry {
-            Some(entry) if entry.key == key => return Some(&mut entry.state),
+    for index in 0..table.len() {
+        match table[index].as_ref() {
+            Some(entry) if entry.key == key => return table[index].as_mut().map(|entry| &mut entry.state),
             None if empty_slot.is_none() => empty_slot = Some(index),
             _ => {}
         }
@@ -180,9 +180,9 @@ fn pthread_cond_state_mut(
     create: bool,
 ) -> Option<&mut PthreadCondState> {
     let mut empty_slot = None;
-    for (index, entry) in table.iter_mut().enumerate() {
-        match entry {
-            Some(entry) if entry.key == key => return Some(&mut entry.state),
+    for index in 0..table.len() {
+        match table[index].as_ref() {
+            Some(entry) if entry.key == key => return table[index].as_mut().map(|entry| &mut entry.state),
             None if empty_slot.is_none() => empty_slot = Some(index),
             _ => {}
         }
