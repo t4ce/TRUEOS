@@ -397,18 +397,27 @@ unsafe fn getaddrinfo_service_port(service: *const c_char) -> Result<u16, c_int>
 }
 
 fn getaddrinfo_resolve_ipv4(host: &str) -> Result<[u8; 4], c_int> {
-    crate::t::block_on_io(crate::t::net::dns::resolve_ipv4_with_profile(
-        host,
-        crate::r::net::NetProfile::default(),
-        crate::t::net::dns::DnsConfig::default(),
-    ))
-    .map_err(|_| TRUEOS_EAI_SYSTEM)?
-    .map_err(|err| match err {
-        crate::t::net::dns::DnsError::BadName => TRUEOS_EAI_NONAME,
-        crate::t::net::dns::DnsError::NoNic => TRUEOS_EAI_SYSTEM,
-        crate::t::net::dns::DnsError::Timeout => TRUEOS_EAI_SYSTEM,
-        crate::t::net::dns::DnsError::NoAnswer => TRUEOS_EAI_NONAME,
-    })
+    crate::t::net::vlayer::resolve_ipv4_for_sync_abi(host).map_err(dns_resolve_error_to_eai)
+}
+
+fn dns_resolve_error_to_eai(err: crate::t::net::vlayer::DnsResolveError) -> c_int {
+    match err {
+        crate::t::net::vlayer::DnsResolveError::BadName
+        | crate::t::net::vlayer::DnsResolveError::NoAnswer => TRUEOS_EAI_NONAME,
+        crate::t::net::vlayer::DnsResolveError::Runtime
+        | crate::t::net::vlayer::DnsResolveError::NoNic
+        | crate::t::net::vlayer::DnsResolveError::Timeout => TRUEOS_EAI_SYSTEM,
+    }
+}
+
+fn dns_resolve_error_to_cabi_errno(err: crate::t::net::vlayer::DnsResolveError) -> c_int {
+    match err {
+        crate::t::net::vlayer::DnsResolveError::BadName
+        | crate::t::net::vlayer::DnsResolveError::NoAnswer => TRUEOS_EIO,
+        crate::t::net::vlayer::DnsResolveError::Runtime
+        | crate::t::net::vlayer::DnsResolveError::NoNic
+        | crate::t::net::vlayer::DnsResolveError::Timeout => TRUEOS_ETIMEDOUT,
+    }
 }
 
 unsafe fn freeaddrinfo_chain(mut res: *mut TrueosAddrInfo) {
@@ -943,29 +952,15 @@ pub unsafe extern "C" fn trueos_cabi_dns_resolve_ipv4(
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
         return TRUEOS_EINVAL;
     };
-    crate::log!("std-abi: dns resolve ipv4 begin host={}\n", host_name);
-    match getaddrinfo_resolve_ipv4(host_name) {
+    match crate::t::net::vlayer::resolve_ipv4_for_sync_abi(host_name) {
         Ok(ip) => {
-            crate::log!(
-                "std-abi: dns resolve ipv4 ok host={} ip={}.{}.{}.{}\n",
-                host_name,
-                ip[0],
-                ip[1],
-                ip[2],
-                ip[3]
-            );
             unsafe { ptr::copy_nonoverlapping(ip.as_ptr(), out_octets, ip.len()) };
             0
         }
-        Err(TRUEOS_EAI_NONAME) => {
-            crate::log!("std-abi: dns resolve ipv4 noname host={}\n", host_name);
-            TRUEOS_ERRNO.store(TRUEOS_EIO, Ordering::Relaxed);
-            TRUEOS_EIO
-        }
-        Err(_) => {
-            crate::log!("std-abi: dns resolve ipv4 failed host={}\n", host_name);
-            TRUEOS_ERRNO.store(TRUEOS_ETIMEDOUT, Ordering::Relaxed);
-            TRUEOS_ETIMEDOUT
+        Err(err) => {
+            let errno = dns_resolve_error_to_cabi_errno(err);
+            TRUEOS_ERRNO.store(errno, Ordering::Relaxed);
+            errno
         }
     }
 }

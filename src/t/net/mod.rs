@@ -12,6 +12,7 @@ pub mod https;
 pub mod hyper_io;
 pub mod ping;
 pub mod tls_stream;
+pub mod vlayer;
 pub mod vnet_stream;
 
 use alloc::string::String;
