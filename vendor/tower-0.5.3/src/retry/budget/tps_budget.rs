@@ -7,13 +7,11 @@ use tokio::sync::Mutex;
 
 use std::{
     fmt,
-    sync::{
-        atomic::{AtomicIsize, Ordering},
-        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-        Mutex,
-    },
+    sync::atomic::{AtomicIsize, Ordering},
     time::Duration,
 };
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+use std::sync::Mutex;
 use tokio::time::Instant;
 
 use super::Budget;

@@ -388,18 +388,16 @@ fn parse_env_uri(val: &str) -> Option<Intercept> {
 }
 
 fn encode_basic_auth(user: &str, pass: Option<&str>) -> HeaderValue {
+    use base64::Engine;
     use base64::prelude::BASE64_STANDARD;
-    use base64::write::EncoderWriter;
-    use std::io::Write;
 
     let mut buf = b"Basic ".to_vec();
-    {
-        let mut encoder = EncoderWriter::new(&mut buf, &BASE64_STANDARD);
-        let _ = write!(encoder, "{user}:");
-        if let Some(password) = pass {
-            let _ = write!(encoder, "{password}");
-        }
+    let mut raw = user.as_bytes().to_vec();
+    raw.push(b':');
+    if let Some(password) = pass {
+        raw.extend_from_slice(password.as_bytes());
     }
+    BASE64_STANDARD.encode_string(&raw, &mut buf);
     let mut header = HeaderValue::from_bytes(&buf).expect("base64 is always valid HeaderValue");
     header.set_sensitive(true);
     header
