@@ -1472,11 +1472,14 @@ mod native_tls_conn {
     use hyper_util::client::legacy::connect::{Connected, Connection};
     use hyper_util::rt::TokioIo;
     use pin_project_lite::pin_project;
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    use hyper::io::{self, IoSlice};
     use std::{
-        io::{self, IoSlice},
         pin::Pin,
         task::{Context, Poll},
     };
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+    use std::io::{self, IoSlice};
     use tokio::io::{AsyncRead, AsyncWrite};
     use tokio::net::TcpStream;
     use tokio_native_tls::TlsStream;
@@ -1658,11 +1661,14 @@ mod rustls_tls_conn {
     use hyper_util::client::legacy::connect::{Connected, Connection};
     use hyper_util::rt::TokioIo;
     use pin_project_lite::pin_project;
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    use hyper::io::{self, IoSlice};
     use std::{
-        io::{self, IoSlice},
         pin::Pin,
         task::{Context, Poll},
     };
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+    use std::io::{self, IoSlice};
     use tokio::io::{AsyncRead, AsyncWrite};
     use tokio::net::TcpStream;
     use tokio_rustls::client::TlsStream;
