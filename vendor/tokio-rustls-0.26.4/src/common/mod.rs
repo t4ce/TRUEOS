@@ -1,16 +1,45 @@
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-use std::io::{self, BufRead as _, IoSlice, Read, Write};
+use std::io::{self as std_io, BufRead as _, IoSlice as StdIoSlice, Read, Write};
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use rustls::{ConnectionCommon, SideData};
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
-use tokio::io::{self, BufRead as _, IoSlice, Read, Write};
-use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, ReadBuf};
+use tokio::io::{self, AsyncBufRead, AsyncRead, AsyncWrite, IoSlice, ReadBuf};
 
 mod handshake;
 pub(crate) use handshake::{IoSession, MidHandshake};
+
+pub(crate) fn std_to_tokio_error(err: std_io::Error) -> io::Error {
+    std_to_tokio_error_kind(err.kind()).into()
+}
+
+pub(crate) fn tokio_to_std_error(err: io::Error) -> std_io::Error {
+    tokio_to_std_error_kind(err.kind()).into()
+}
+
+fn std_to_tokio_error_kind(kind: std_io::ErrorKind) -> io::ErrorKind {
+    match kind {
+        std_io::ErrorKind::WouldBlock => io::ErrorKind::WouldBlock,
+        std_io::ErrorKind::InvalidData => io::ErrorKind::InvalidData,
+        std_io::ErrorKind::WriteZero => io::ErrorKind::WriteZero,
+        std_io::ErrorKind::UnexpectedEof => io::ErrorKind::UnexpectedEof,
+        std_io::ErrorKind::NotConnected => io::ErrorKind::NotConnected,
+        std_io::ErrorKind::ConnectionAborted => io::ErrorKind::ConnectionAborted,
+        _ => io::ErrorKind::Other,
+    }
+}
+
+fn tokio_to_std_error_kind(kind: io::ErrorKind) -> std_io::ErrorKind {
+    match kind {
+        io::ErrorKind::WouldBlock => std_io::ErrorKind::WouldBlock,
+        io::ErrorKind::InvalidData => std_io::ErrorKind::InvalidData,
+        io::ErrorKind::WriteZero => std_io::ErrorKind::WriteZero,
+        io::ErrorKind::UnexpectedEof => std_io::ErrorKind::UnexpectedEof,
+        io::ErrorKind::NotConnected => std_io::ErrorKind::NotConnected,
+        io::ErrorKind::ConnectionAborted => std_io::ErrorKind::ConnectionAborted,
+        _ => std_io::ErrorKind::Other,
+    }
+}
 
 #[derive(Debug)]
 pub(crate) enum TlsState {
@@ -105,17 +134,17 @@ where
 
         let n = match self.session.read_tls(&mut reader) {
             Ok(n) => n,
-            Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => return Poll::Pending,
-            Err(err) => return Poll::Ready(Err(err)),
+            Err(ref err) if err.kind() == std_io::ErrorKind::WouldBlock => return Poll::Pending,
+            Err(err) => return Poll::Ready(Err(std_to_tokio_error(err))),
         };
 
-        self.session.process_new_packets().map_err(|err| {
+        self.session.process_new_packets().map_err(|_| {
             // In case we have an alert to send describing this error,
             // try a last-gasp write -- but don't predate the primary
             // error.
             let _ = self.write_io(cx);
 
-            io::Error::new(io::ErrorKind::InvalidData, err)
+            io::Error::from(io::ErrorKind::InvalidData)
         })?;
 
         Poll::Ready(Ok(n))
@@ -125,8 +154,9 @@ where
         let mut writer = SyncWriteAdapter { io: self.io, cx };
 
         match self.session.write_tls(&mut writer) {
-            Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => Poll::Pending,
-            result => Poll::Ready(result),
+            Err(ref err) if err.kind() == std_io::ErrorKind::WouldBlock => Poll::Pending,
+            Ok(result) => Poll::Ready(Ok(result)),
+            Err(err) => Poll::Ready(Err(std_to_tokio_error(err))),
         }
     }
 
@@ -218,7 +248,7 @@ where
                 // received and there is no more buffered data.
                 Poll::Ready(Ok(buf))
             }
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+            Err(e) if e.kind() == std_io::ErrorKind::WouldBlock => {
                 if !io_pending {
                     // If `wants_read()` is satisfied, rustls will not return `WouldBlock`.
                     // but if it does, we can try again.
@@ -230,7 +260,7 @@ where
 
                 Poll::Pending
             }
-            Err(e) => Poll::Ready(Err(e)),
+            Err(e) => Poll::Ready(Err(std_to_tokio_error(e))),
         }
     }
 }
@@ -291,7 +321,7 @@ where
 
             match self.session.writer().write(&buf[pos..]) {
                 Ok(n) => pos += n,
-                Err(err) => return Poll::Ready(Err(err)),
+                Err(err) => return Poll::Ready(Err(std_to_tokio_error(err))),
             };
 
             while self.session.wants_write() {
@@ -326,7 +356,15 @@ where
 
         loop {
             let mut would_block = false;
-            let written = self.session.writer().write_vectored(bufs)?;
+            let std_bufs: Vec<StdIoSlice<'_>> = bufs
+                .iter()
+                .map(|buf| StdIoSlice::new(buf.as_ref()))
+                .collect();
+            let written = self
+                .session
+                .writer()
+                .write_vectored(&std_bufs)
+                .map_err(std_to_tokio_error)?;
 
             while self.session.wants_write() {
                 match self.write_io(cx) {
@@ -353,7 +391,7 @@ where
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        self.session.writer().flush()?;
+        self.session.writer().flush().map_err(std_to_tokio_error)?;
         while self.session.wants_write() {
             if ready!(self.write_io(cx))? == 0 {
                 return Poll::Ready(Err(io::ErrorKind::WriteZero.into()));
@@ -389,12 +427,12 @@ pub(crate) struct SyncReadAdapter<'a, 'b, T> {
 
 impl<T: AsyncRead + Unpin> Read for SyncReadAdapter<'_, '_, T> {
     #[inline]
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+    fn read(&mut self, buf: &mut [u8]) -> std_io::Result<usize> {
         let mut buf = ReadBuf::new(buf);
         match Pin::new(&mut self.io).poll_read(self.cx, &mut buf) {
             Poll::Ready(Ok(())) => Ok(buf.filled().len()),
-            Poll::Ready(Err(err)) => Err(err),
-            Poll::Pending => Err(io::ErrorKind::WouldBlock.into()),
+            Poll::Ready(Err(err)) => Err(tokio_to_std_error(err)),
+            Poll::Pending => Err(std_io::ErrorKind::WouldBlock.into()),
         }
     }
 }
@@ -413,26 +451,31 @@ impl<T: Unpin> SyncWriteAdapter<'_, '_, T> {
     fn poll_with<U>(
         &mut self,
         f: impl FnOnce(Pin<&mut T>, &mut Context<'_>) -> Poll<io::Result<U>>,
-    ) -> io::Result<U> {
+    ) -> std_io::Result<U> {
         match f(Pin::new(self.io), self.cx) {
-            Poll::Ready(result) => result,
-            Poll::Pending => Err(io::ErrorKind::WouldBlock.into()),
+            Poll::Ready(Ok(result)) => Ok(result),
+            Poll::Ready(Err(err)) => Err(tokio_to_std_error(err)),
+            Poll::Pending => Err(std_io::ErrorKind::WouldBlock.into()),
         }
     }
 }
 
 impl<T: AsyncWrite + Unpin> Write for SyncWriteAdapter<'_, '_, T> {
     #[inline]
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+    fn write(&mut self, buf: &[u8]) -> std_io::Result<usize> {
         self.poll_with(|io, cx| io.poll_write(cx, buf))
     }
 
     #[inline]
-    fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
-        self.poll_with(|io, cx| io.poll_write_vectored(cx, bufs))
+    fn write_vectored(&mut self, bufs: &[StdIoSlice<'_>]) -> std_io::Result<usize> {
+        let tokio_bufs: Vec<IoSlice<'_>> = bufs
+            .iter()
+            .map(|buf| IoSlice::new(buf.as_ref()))
+            .collect();
+        self.poll_with(|io, cx| io.poll_write_vectored(cx, &tokio_bufs))
     }
 
-    fn flush(&mut self) -> io::Result<()> {
+    fn flush(&mut self) -> std_io::Result<()> {
         self.poll_with(|io, cx| io.poll_flush(cx))
     }
 }

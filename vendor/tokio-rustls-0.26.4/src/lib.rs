@@ -37,9 +37,6 @@
 //! see <https://github.com/tokio-rs/tls/issues/41>
 
 #![warn(unreachable_pub, clippy::use_self)]
-
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-use std::io;
 #[cfg(unix)]
 use std::os::unix::io::{AsRawFd, RawFd};
 #[cfg(windows)]
@@ -50,9 +47,7 @@ use std::task::{Context, Poll};
 pub use rustls;
 
 use rustls::CommonState;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
-use tokio::io;
-use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, ReadBuf};
+use tokio::io::{self, AsyncBufRead, AsyncRead, AsyncWrite, IoSlice, ReadBuf};
 
 macro_rules! ready {
     ( $e:expr ) => {
@@ -200,7 +195,7 @@ where
     fn poll_write_vectored(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        bufs: &[io::IoSlice<'_>],
+        bufs: &[IoSlice<'_>],
     ) -> Poll<io::Result<usize>> {
         match self.get_mut() {
             Self::Client(x) => Pin::new(x).poll_write_vectored(cx, bufs),
