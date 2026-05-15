@@ -4,15 +4,15 @@
 //! services: time, blocking workers, filesystem shims, and VNet/Mio/socket2.
 
 pub mod io {
-    pub use trueos_io::*;
     pub use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+    pub use trueos_io::*;
 }
 
 pub mod net;
-pub(crate) mod static_map;
-pub(crate) mod static_slots;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod platform;
+pub(crate) mod static_map;
+pub(crate) mod static_slots;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod th;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]

@@ -175,6 +175,7 @@ enum MioSocketKind {
 
 struct MioSocketState {
     id: u32,
+    owner_vm: Option<u8>,
     kind: MioSocketKind,
     handle: Option<api::NetHandle>,
     local: Option<CompatAddr>,
@@ -196,6 +197,7 @@ struct PendingOpen {
 struct SelectorRegistration {
     selector_id: usize,
     socket_id: u32,
+    owner_vm: Option<u8>,
     token: usize,
     interests: u8,
 }
@@ -222,8 +224,15 @@ const MIO_ADDR_BYTES: usize = core::mem::size_of::<TrueosMioSocketAddr>();
 const MIO_READY_EVENT_BYTES: usize = core::mem::size_of::<TrueosMioReadyEvent>();
 
 #[inline]
-fn vm_guest_active() -> bool {
+fn vm_guest_vmcall_active() -> bool {
+    // Only the actual VM hull stack may execute the vmcall instruction.
+    // Host-carried guest workers keep VM identity but use host broker state.
     crate::hv::current_hull_guest_context_vm_id().is_some()
+}
+
+#[inline]
+fn current_owner_vm() -> Option<u8> {
+    crate::hv::current_guest_execution_context_vm_id()
 }
 
 #[inline]
@@ -354,6 +363,20 @@ impl MioCompat {
             .find(|socket| socket.id == socket_id)
     }
 
+    fn socket_for_owner(&self, socket_id: u32, owner_vm: Option<u8>) -> Option<&MioSocketState> {
+        self.socket(socket_id)
+            .filter(|socket| socket.owner_vm == owner_vm)
+    }
+
+    fn socket_mut_for_owner(
+        &mut self,
+        socket_id: u32,
+        owner_vm: Option<u8>,
+    ) -> Option<&mut MioSocketState> {
+        self.socket_mut(socket_id)
+            .filter(|socket| socket.owner_vm == owner_vm)
+    }
+
     fn socket_by_handle_mut(&mut self, handle: api::NetHandle) -> Option<&mut MioSocketState> {
         self.sockets
             .iter_mut()
@@ -447,7 +470,7 @@ impl MioCompat {
                 {
                     let child_id = self.alloc_socket_id();
                     let event_peer = CompatAddr::from_vnet(peer, peer6);
-                    let (local, fallback_peer, port, inherited_rx) = {
+                    let (owner_vm, local, fallback_peer, port, inherited_rx) = {
                         let listener = self.socket_mut(listener_id).unwrap();
                         let mut inherited_rx = VecDeque::new();
                         core::mem::swap(&mut inherited_rx, &mut listener.rx_stream);
@@ -461,6 +484,7 @@ impl MioCompat {
                             );
                         }
                         (
+                            listener.owner_vm,
                             listener.local,
                             listener.local.map(CompatAddr::unspecified_same_family),
                             listener.listen_port,
@@ -471,6 +495,7 @@ impl MioCompat {
 
                     self.sockets.push(MioSocketState {
                         id: child_id,
+                        owner_vm,
                         kind: MioSocketKind::TcpStream,
                         handle: Some(handle),
                         local,
@@ -631,6 +656,7 @@ impl MioCompat {
 
     fn selector_poll(
         &mut self,
+        owner_vm: Option<u8>,
         selector_id: usize,
         out_events: *mut TrueosMioReadyEvent,
         out_cap: usize,
@@ -647,7 +673,7 @@ impl MioCompat {
             for reg in self
                 .registrations
                 .iter()
-                .filter(|reg| reg.selector_id == selector_id)
+                .filter(|reg| reg.owner_vm == owner_vm && reg.selector_id == selector_id)
             {
                 if written >= out_cap {
                     break;
@@ -740,6 +766,7 @@ pub(crate) unsafe fn mio_tcp_listener_bind_host(
         return STATUS_INVALID_INPUT;
     };
 
+    let owner_vm = current_owner_vm();
     with_compat(|compat| {
         let local = match local {
             CompatAddr::V4 { addr, port } => CompatAddr::V4 {
@@ -766,6 +793,7 @@ pub(crate) unsafe fn mio_tcp_listener_bind_host(
         let socket_id = compat.alloc_socket_id();
         compat.sockets.push(MioSocketState {
             id: socket_id,
+            owner_vm,
             kind: MioSocketKind::TcpListener,
             handle: None,
             local: Some(local),
@@ -805,7 +833,7 @@ pub unsafe extern "C" fn trueos_mio_tcp_listener_bind(
     addr: TrueosMioSocketAddr,
     out_socket_id: *mut u32,
 ) -> i32 {
-    if vm_guest_active() {
+    if vm_guest_vmcall_active() {
         return guest_mio_socket_out(
             trueos_vm::vmcall::OP_BP_MIO_TCP_LISTENER_BIND,
             addr,
@@ -826,10 +854,12 @@ pub(crate) unsafe fn mio_tcp_stream_connect_host(
         return STATUS_INVALID_INPUT;
     };
 
+    let owner_vm = current_owner_vm();
     with_compat(|compat| {
         let socket_id = compat.alloc_socket_id();
         compat.sockets.push(MioSocketState {
             id: socket_id,
+            owner_vm,
             kind: MioSocketKind::TcpStream,
             handle: None,
             local: None,
@@ -880,7 +910,7 @@ pub unsafe extern "C" fn trueos_mio_tcp_stream_connect(
     addr: TrueosMioSocketAddr,
     out_socket_id: *mut u32,
 ) -> i32 {
-    if vm_guest_active() {
+    if vm_guest_vmcall_active() {
         return guest_mio_socket_out(
             trueos_vm::vmcall::OP_BP_MIO_TCP_STREAM_CONNECT,
             addr,
@@ -901,6 +931,7 @@ pub(crate) unsafe fn mio_udp_socket_bind_host(
         return STATUS_INVALID_INPUT;
     };
 
+    let owner_vm = current_owner_vm();
     with_compat(|compat| {
         let local = match local {
             CompatAddr::V4 { addr, port } => CompatAddr::V4 {
@@ -924,6 +955,7 @@ pub(crate) unsafe fn mio_udp_socket_bind_host(
         let socket_id = compat.alloc_socket_id();
         compat.sockets.push(MioSocketState {
             id: socket_id,
+            owner_vm,
             kind: MioSocketKind::Udp,
             handle: None,
             local: Some(local),
@@ -967,7 +999,7 @@ pub unsafe extern "C" fn trueos_mio_udp_socket_bind(
     addr: TrueosMioSocketAddr,
     out_socket_id: *mut u32,
 ) -> i32 {
-    if vm_guest_active() {
+    if vm_guest_vmcall_active() {
         return guest_mio_socket_out(
             trueos_vm::vmcall::OP_BP_MIO_UDP_SOCKET_BIND,
             addr,
@@ -978,9 +1010,10 @@ pub unsafe extern "C" fn trueos_mio_udp_socket_bind(
 }
 
 pub(crate) unsafe fn mio_socket_close_host(socket_id: u32) -> i32 {
+    let owner_vm = current_owner_vm();
     with_compat(|compat| {
         compat.pump();
-        let Some(socket) = compat.socket_mut(socket_id) else {
+        let Some(socket) = compat.socket_mut_for_owner(socket_id, owner_vm) else {
             return STATUS_NOT_FOUND;
         };
         let handle = socket.handle.take();
@@ -994,7 +1027,7 @@ pub(crate) unsafe fn mio_socket_close_host(socket_id: u32) -> i32 {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_mio_socket_close(socket_id: u32) -> i32 {
-    if vm_guest_active() {
+    if vm_guest_vmcall_active() {
         let (status, data) =
             trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_MIO_SOCKET_CLOSE, socket_id as u64, 0);
         return if status == trueos_vm::vmcall::STATUS_OK {
@@ -1013,9 +1046,10 @@ pub(crate) unsafe fn mio_socket_local_addr_host(
     if out_addr.is_null() {
         return STATUS_INVALID_INPUT;
     }
+    let owner_vm = current_owner_vm();
     with_compat(|compat| {
         compat.pump();
-        let Some(socket) = compat.socket(socket_id) else {
+        let Some(socket) = compat.socket_for_owner(socket_id, owner_vm) else {
             return STATUS_NOT_FOUND;
         };
         let Some(addr) = socket.local else {
@@ -1031,7 +1065,7 @@ pub unsafe extern "C" fn trueos_mio_socket_local_addr(
     socket_id: u32,
     out_addr: *mut TrueosMioSocketAddr,
 ) -> i32 {
-    if vm_guest_active() {
+    if vm_guest_vmcall_active() {
         return guest_mio_addr_out(
             trueos_vm::vmcall::OP_BP_MIO_SOCKET_LOCAL_ADDR,
             socket_id,
@@ -1048,9 +1082,10 @@ pub(crate) unsafe fn mio_socket_peer_addr_host(
     if out_addr.is_null() {
         return STATUS_INVALID_INPUT;
     }
+    let owner_vm = current_owner_vm();
     with_compat(|compat| {
         compat.pump();
-        let Some(socket) = compat.socket(socket_id) else {
+        let Some(socket) = compat.socket_for_owner(socket_id, owner_vm) else {
             return STATUS_NOT_FOUND;
         };
         let Some(addr) = socket.peer else {
@@ -1066,7 +1101,7 @@ pub unsafe extern "C" fn trueos_mio_socket_peer_addr(
     socket_id: u32,
     out_addr: *mut TrueosMioSocketAddr,
 ) -> i32 {
-    if vm_guest_active() {
+    if vm_guest_vmcall_active() {
         return guest_mio_addr_out(
             trueos_vm::vmcall::OP_BP_MIO_SOCKET_PEER_ADDR,
             socket_id,
@@ -1077,9 +1112,10 @@ pub unsafe extern "C" fn trueos_mio_socket_peer_addr(
 }
 
 pub(crate) unsafe fn mio_socket_take_error_host(socket_id: u32) -> i32 {
+    let owner_vm = current_owner_vm();
     with_compat(|compat| {
         compat.pump();
-        let Some(socket) = compat.socket_mut(socket_id) else {
+        let Some(socket) = compat.socket_mut_for_owner(socket_id, owner_vm) else {
             return STATUS_NOT_FOUND;
         };
         let status = socket.error;
@@ -1090,7 +1126,7 @@ pub(crate) unsafe fn mio_socket_take_error_host(socket_id: u32) -> i32 {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_mio_socket_take_error(socket_id: u32) -> i32 {
-    if vm_guest_active() {
+    if vm_guest_vmcall_active() {
         let (status, data) = trueos_vm::vmcall::call(
             trueos_vm::vmcall::OP_BP_MIO_SOCKET_TAKE_ERROR,
             socket_id as u64,
@@ -1113,9 +1149,10 @@ pub(crate) unsafe fn mio_tcp_stream_read_host(
     if out_ptr.is_null() && out_cap != 0 {
         return STATUS_INVALID_INPUT as isize;
     }
+    let owner_vm = current_owner_vm();
     with_compat(|compat| {
         compat.pump();
-        let Some(socket) = compat.socket_mut(socket_id) else {
+        let Some(socket) = compat.socket_mut_for_owner(socket_id, owner_vm) else {
             return STATUS_NOT_FOUND as isize;
         };
         if socket.kind != MioSocketKind::TcpStream {
@@ -1163,7 +1200,7 @@ pub unsafe extern "C" fn trueos_mio_tcp_stream_read(
     out_ptr: *mut u8,
     out_cap: usize,
 ) -> isize {
-    if vm_guest_active() {
+    if vm_guest_vmcall_active() {
         if out_ptr.is_null() && out_cap != 0 {
             return STATUS_INVALID_INPUT as isize;
         }
@@ -1198,9 +1235,10 @@ pub(crate) unsafe fn mio_tcp_stream_write_host(
     if data_ptr.is_null() && data_len != 0 {
         return STATUS_INVALID_INPUT as isize;
     }
+    let owner_vm = current_owner_vm();
     with_compat(|compat| {
         compat.pump();
-        let Some(socket) = compat.socket(socket_id) else {
+        let Some(socket) = compat.socket_for_owner(socket_id, owner_vm) else {
             return STATUS_NOT_FOUND as isize;
         };
         if socket.kind != MioSocketKind::TcpStream {
@@ -1244,7 +1282,7 @@ pub unsafe extern "C" fn trueos_mio_tcp_stream_write(
     data_ptr: *const u8,
     data_len: usize,
 ) -> isize {
-    if vm_guest_active() {
+    if vm_guest_vmcall_active() {
         if data_ptr.is_null() && data_len != 0 {
             return STATUS_INVALID_INPUT as isize;
         }
@@ -1275,8 +1313,9 @@ pub(crate) unsafe fn mio_udp_socket_connect_host(socket_id: u32, addr: TrueosMio
     let Some(peer) = CompatAddr::from_raw(addr) else {
         return STATUS_INVALID_INPUT;
     };
+    let owner_vm = current_owner_vm();
     with_compat(|compat| {
-        let Some(socket) = compat.socket_mut(socket_id) else {
+        let Some(socket) = compat.socket_mut_for_owner(socket_id, owner_vm) else {
             return STATUS_NOT_FOUND;
         };
         if socket.kind != MioSocketKind::Udp {
@@ -1292,7 +1331,7 @@ pub unsafe extern "C" fn trueos_mio_udp_socket_connect(
     socket_id: u32,
     addr: TrueosMioSocketAddr,
 ) -> i32 {
-    if vm_guest_active() {
+    if vm_guest_vmcall_active() {
         let mut out = [0u8; 1];
         let (status, data) = trueos_vm::vmcall::call_with_payload(
             trueos_vm::vmcall::OP_BP_MIO_UDP_SOCKET_CONNECT,
@@ -1322,9 +1361,10 @@ pub(crate) unsafe fn mio_udp_socket_send_to_host(
     let Some(peer) = CompatAddr::from_raw(addr) else {
         return STATUS_INVALID_INPUT as isize;
     };
+    let owner_vm = current_owner_vm();
     with_compat(|compat| {
         compat.pump();
-        let Some(socket) = compat.socket(socket_id) else {
+        let Some(socket) = compat.socket_for_owner(socket_id, owner_vm) else {
             return STATUS_NOT_FOUND as isize;
         };
         if socket.kind != MioSocketKind::Udp {
@@ -1363,7 +1403,7 @@ pub unsafe extern "C" fn trueos_mio_udp_socket_send_to(
     data_ptr: *const u8,
     data_len: usize,
 ) -> isize {
-    if vm_guest_active() {
+    if vm_guest_vmcall_active() {
         if data_ptr.is_null() && data_len != 0 {
             return STATUS_INVALID_INPUT as isize;
         }
@@ -1395,9 +1435,10 @@ pub(crate) unsafe fn mio_udp_socket_recv_from_host(
     if out_addr.is_null() || (out_ptr.is_null() && out_cap != 0) {
         return STATUS_INVALID_INPUT as isize;
     }
+    let owner_vm = current_owner_vm();
     with_compat(|compat| {
         compat.pump();
-        let Some(socket) = compat.socket_mut(socket_id) else {
+        let Some(socket) = compat.socket_mut_for_owner(socket_id, owner_vm) else {
             return STATUS_NOT_FOUND as isize;
         };
         if socket.kind != MioSocketKind::Udp {
@@ -1422,7 +1463,7 @@ pub unsafe extern "C" fn trueos_mio_udp_socket_recv_from(
     out_ptr: *mut u8,
     out_cap: usize,
 ) -> isize {
-    if vm_guest_active() {
+    if vm_guest_vmcall_active() {
         if out_addr.is_null() || (out_ptr.is_null() && out_cap != 0) {
             return STATUS_INVALID_INPUT as isize;
         }
@@ -1461,12 +1502,13 @@ pub(crate) unsafe fn mio_tcp_listener_accept_host(
     if out_socket_id.is_null() || out_addr.is_null() {
         return STATUS_INVALID_INPUT;
     }
+    let owner_vm = current_owner_vm();
     with_compat(|compat| {
         compat.pump();
         let Some(listener_index) = compat
             .sockets
             .iter()
-            .position(|socket| socket.id == socket_id)
+            .position(|socket| socket.id == socket_id && socket.owner_vm == owner_vm)
         else {
             return STATUS_NOT_FOUND;
         };
@@ -1484,7 +1526,7 @@ pub(crate) unsafe fn mio_tcp_listener_accept_host(
             return STATUS_WOULD_BLOCK;
         };
         let peer_addr = compat
-            .socket(child_id)
+            .socket_for_owner(child_id, owner_vm)
             .and_then(|socket| socket.peer)
             .unwrap_or(fallback_addr);
         unsafe {
@@ -1501,7 +1543,7 @@ pub unsafe extern "C" fn trueos_mio_tcp_listener_accept(
     out_socket_id: *mut u32,
     out_addr: *mut TrueosMioSocketAddr,
 ) -> i32 {
-    if vm_guest_active() {
+    if vm_guest_vmcall_active() {
         if out_socket_id.is_null() || out_addr.is_null() {
             return STATUS_INVALID_INPUT;
         }
@@ -1536,16 +1578,15 @@ pub(crate) unsafe fn mio_selector_register_socket_host(
     token: usize,
     interests: u8,
 ) -> i32 {
+    let owner_vm = current_owner_vm();
     with_compat(|compat| {
-        if compat.socket(socket_id).is_none() {
+        if compat.socket_for_owner(socket_id, owner_vm).is_none() {
             return STATUS_NOT_FOUND;
         }
 
-        if let Some(reg) = compat
-            .registrations
-            .iter_mut()
-            .find(|reg| reg.selector_id == selector_id && reg.socket_id == socket_id)
-        {
+        if let Some(reg) = compat.registrations.iter_mut().find(|reg| {
+            reg.owner_vm == owner_vm && reg.selector_id == selector_id && reg.socket_id == socket_id
+        }) {
             reg.token = token;
             reg.interests = interests;
             return STATUS_OK;
@@ -1554,6 +1595,7 @@ pub(crate) unsafe fn mio_selector_register_socket_host(
         compat.registrations.push(SelectorRegistration {
             selector_id,
             socket_id,
+            owner_vm,
             token,
             interests,
         });
@@ -1568,7 +1610,7 @@ pub unsafe extern "C" fn trueos_mio_selector_register_socket(
     token: usize,
     interests: u8,
 ) -> i32 {
-    if vm_guest_active() {
+    if vm_guest_vmcall_active() {
         let arg0 = selector_id as u64;
         let arg1 = (socket_id as u64) | ((interests as u64) << 32);
         let mut req = [0u8; 8];
@@ -1594,10 +1636,13 @@ pub(crate) unsafe fn mio_selector_deregister_socket_host(
     selector_id: usize,
     socket_id: u32,
 ) -> i32 {
+    let owner_vm = current_owner_vm();
     with_compat(|compat| {
-        compat
-            .registrations
-            .retain(|reg| !(reg.selector_id == selector_id && reg.socket_id == socket_id));
+        compat.registrations.retain(|reg| {
+            !(reg.owner_vm == owner_vm
+                && reg.selector_id == selector_id
+                && reg.socket_id == socket_id)
+        });
         STATUS_OK
     })
 }
@@ -1607,7 +1652,7 @@ pub unsafe extern "C" fn trueos_mio_selector_deregister_socket(
     selector_id: usize,
     socket_id: u32,
 ) -> i32 {
-    if vm_guest_active() {
+    if vm_guest_vmcall_active() {
         let (status, data) = trueos_vm::vmcall::call(
             trueos_vm::vmcall::OP_BP_MIO_SELECTOR_DEREGISTER_SOCKET,
             selector_id as u64,
@@ -1631,7 +1676,10 @@ pub(crate) unsafe fn mio_selector_poll_host(
     if out_events.is_null() && out_cap != 0 {
         return 0;
     }
-    with_compat(|compat| compat.selector_poll(selector_id, out_events, out_cap, timeout_nanos))
+    let owner_vm = current_owner_vm();
+    with_compat(|compat| {
+        compat.selector_poll(owner_vm, selector_id, out_events, out_cap, timeout_nanos)
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -1641,7 +1689,7 @@ pub unsafe extern "C" fn trueos_mio_selector_poll(
     out_cap: usize,
     timeout_nanos: u64,
 ) -> usize {
-    if vm_guest_active() {
+    if vm_guest_vmcall_active() {
         if out_events.is_null() && out_cap != 0 {
             return 0;
         }

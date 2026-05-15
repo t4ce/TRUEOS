@@ -1,11 +1,11 @@
 //! Small Hyper/Tokio IO adapters shared by TRUEOS networking code.
 
+use crate::t::io;
 use core::{
     convert::Infallible,
     pin::Pin,
     task::{Context, Poll},
 };
-use crate::t::io;
 use hyper::{
     body::{Body, Bytes, Frame, SizeHint},
     rt::{Read as HyperRead, ReadBufCursor, Write as HyperWrite},

@@ -6,7 +6,7 @@ use core::slice;
 use spin::Mutex;
 use v::vnet as api;
 
-use super::VNet;
+use crate::blueprint_net_broker::VNetBridge;
 
 const EBADF: i32 = 9;
 const EAGAIN: i32 = 11;
@@ -42,10 +42,11 @@ enum RemoteAddr {
 }
 
 struct SocketState {
+    owner_vm: Option<u8>,
     domain: i32,
     socket_type: i32,
     protocol: i32,
-    vnet: Option<VNet>,
+    vnet: Option<VNetBridge>,
     handle: Option<api::NetHandle>,
     remote: Option<RemoteAddr>,
     local_v4: Option<([u8; 4], u16)>,
@@ -58,8 +59,9 @@ struct SocketState {
 }
 
 impl SocketState {
-    fn new(domain: i32, socket_type: i32, protocol: i32) -> Self {
+    fn new(owner_vm: Option<u8>, domain: i32, socket_type: i32, protocol: i32) -> Self {
         Self {
+            owner_vm,
             domain,
             socket_type,
             protocol,
@@ -83,7 +85,7 @@ impl SocketState {
         if crate::net::device_count() == 0 {
             return Err(-ENETUNREACH);
         }
-        let Some(vnet) = VNet::open_primary() else {
+        let Some(vnet) = VNetBridge::open_primary() else {
             return Err(-ENETUNREACH);
         };
         self.vnet = Some(vnet);
@@ -102,10 +104,14 @@ fn with_socket_mut<T>(
     socket_id: u32,
     f: impl FnOnce(&mut SocketState) -> Result<T, i32>,
 ) -> Result<T, i32> {
+    let owner_vm = crate::hv::current_guest_execution_context_vm_id();
     let mut sockets = SOCKETS.lock();
     let Some(socket) = sockets.get_mut(&socket_id) else {
         return Err(-EBADF);
     };
+    if socket.owner_vm != owner_vm {
+        return Err(-EBADF);
+    }
     f(socket)
 }
 
@@ -212,7 +218,9 @@ fn finish_connect(socket_id: u32, timeout_ms: Option<u64>) -> Result<(), i32> {
 }
 
 #[inline]
-fn vm_guest_active() -> bool {
+fn vm_guest_vmcall_active() -> bool {
+    // Only the actual VM hull stack may execute the vmcall instruction.
+    // Host-carried guest workers keep VM identity but use host broker state.
     crate::hv::current_hull_guest_context_vm_id().is_some()
 }
 
@@ -385,16 +393,26 @@ pub(crate) fn socket_tcp_open_host(domain: i32, socket_type: i32, protocol: i32)
     }
 
     let socket_id = next_socket_id();
+    let owner_vm = crate::hv::current_guest_execution_context_vm_id();
     SOCKETS
         .lock()
-        .insert(socket_id, SocketState::new(domain, socket_type, protocol));
+        .insert(socket_id, SocketState::new(owner_vm, domain, socket_type, protocol));
     socket_id as i32
 }
 
 pub(crate) fn socket_tcp_close_host(socket_id: u32) -> i32 {
-    let Some(mut socket) = SOCKETS.lock().remove(&socket_id) else {
+    let owner_vm = crate::hv::current_guest_execution_context_vm_id();
+    let mut sockets = SOCKETS.lock();
+    let Some(socket) = sockets.get(&socket_id) else {
         return -EBADF;
     };
+    if socket.owner_vm != owner_vm {
+        return -EBADF;
+    }
+    let Some(mut socket) = sockets.remove(&socket_id) else {
+        return -EBADF;
+    };
+    drop(sockets);
     close_socket_state(&mut socket);
     0
 }
@@ -614,7 +632,7 @@ pub(crate) fn socket_tcp_peer_v6_host(socket_id: u32) -> Result<([u8; 16], u16),
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_socket_tcp_open(domain: i32, socket_type: i32, protocol: i32) -> i32 {
-    if vm_guest_active() {
+    if vm_guest_vmcall_active() {
         return guest_call_i32(
             trueos_vm::vmcall::OP_BP_SOCKET_TCP_OPEN,
             pack_i32_pair(domain, socket_type),
@@ -626,7 +644,7 @@ pub extern "C" fn trueos_cabi_socket_tcp_open(domain: i32, socket_type: i32, pro
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_socket_tcp_close(socket_id: u32) -> i32 {
-    if vm_guest_active() {
+    if vm_guest_vmcall_active() {
         return guest_call_i32(trueos_vm::vmcall::OP_BP_SOCKET_TCP_CLOSE, socket_id as u64, 0);
     }
     socket_tcp_close_host(socket_id)
@@ -634,7 +652,7 @@ pub extern "C" fn trueos_cabi_socket_tcp_close(socket_id: u32) -> i32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_socket_tcp_set_nonblocking(socket_id: u32, nonblocking: u32) -> i32 {
-    if vm_guest_active() {
+    if vm_guest_vmcall_active() {
         return guest_call_i32(
             trueos_vm::vmcall::OP_BP_SOCKET_TCP_SET_NONBLOCKING,
             socket_id as u64,
@@ -650,7 +668,7 @@ pub extern "C" fn trueos_cabi_socket_tcp_bind_v4(
     addr_be: u32,
     port_be: u16,
 ) -> i32 {
-    if vm_guest_active() {
+    if vm_guest_vmcall_active() {
         return guest_call_i32(
             trueos_vm::vmcall::OP_BP_SOCKET_TCP_BIND_V4,
             socket_id as u64,
@@ -674,7 +692,7 @@ pub extern "C" fn trueos_cabi_socket_tcp_bind_v6(
     // SAFETY: the caller provides a 16-byte IPv6 buffer.
     unsafe { addr.copy_from_slice(slice::from_raw_parts(addr_ptr, 16)) };
 
-    if vm_guest_active() {
+    if vm_guest_vmcall_active() {
         return guest_call_i32_payload(
             trueos_vm::vmcall::OP_BP_SOCKET_TCP_BIND_V6,
             socket_id as u64,
@@ -692,7 +710,7 @@ pub extern "C" fn trueos_cabi_socket_tcp_connect_v4(
     port_be: u16,
     nonblocking: u32,
 ) -> i32 {
-    if vm_guest_active() {
+    if vm_guest_vmcall_active() {
         return guest_call_i32(
             trueos_vm::vmcall::OP_BP_SOCKET_TCP_CONNECT_V4,
             socket_id as u64,
@@ -717,7 +735,7 @@ pub extern "C" fn trueos_cabi_socket_tcp_connect_v6(
     // SAFETY: the caller provides a 16-byte IPv6 buffer.
     unsafe { addr.copy_from_slice(slice::from_raw_parts(addr_ptr, 16)) };
 
-    if vm_guest_active() {
+    if vm_guest_vmcall_active() {
         return guest_call_i32_payload(
             trueos_vm::vmcall::OP_BP_SOCKET_TCP_CONNECT_V6,
             socket_id as u64,
@@ -730,7 +748,7 @@ pub extern "C" fn trueos_cabi_socket_tcp_connect_v6(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_socket_tcp_poll_connect(socket_id: u32, timeout_ms: u64) -> i32 {
-    if vm_guest_active() {
+    if vm_guest_vmcall_active() {
         return guest_call_i32(
             trueos_vm::vmcall::OP_BP_SOCKET_TCP_POLL_CONNECT,
             socket_id as u64,
@@ -755,7 +773,7 @@ pub extern "C" fn trueos_cabi_socket_tcp_send(
 
     // SAFETY: the caller provides a valid pointer for `data_len` bytes.
     let data = unsafe { slice::from_raw_parts(data_ptr, data_len) };
-    if vm_guest_active() {
+    if vm_guest_vmcall_active() {
         let mut sent = 0usize;
         while sent < data.len() {
             let end = core::cmp::min(sent + trueos_vm::vmcall::PAYLOAD_CAP, data.len());
@@ -809,7 +827,7 @@ pub extern "C" fn trueos_cabi_socket_tcp_recv(
 
     // SAFETY: the caller provides a valid output buffer for `out_cap` bytes.
     let out = unsafe { slice::from_raw_parts_mut(out_ptr, out_cap) };
-    if vm_guest_active() {
+    if vm_guest_vmcall_active() {
         let want = core::cmp::min(out.len(), trueos_vm::vmcall::PAYLOAD_CAP);
         let mut req = [0u8; 16];
         req[..4].copy_from_slice(&flags.to_le_bytes());
@@ -841,7 +859,7 @@ pub extern "C" fn trueos_cabi_socket_tcp_recv(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_socket_tcp_shutdown(socket_id: u32, _how: u32) -> i32 {
-    if vm_guest_active() {
+    if vm_guest_vmcall_active() {
         return guest_call_i32(
             trueos_vm::vmcall::OP_BP_SOCKET_TCP_SHUTDOWN,
             socket_id as u64,
@@ -853,7 +871,7 @@ pub extern "C" fn trueos_cabi_socket_tcp_shutdown(socket_id: u32, _how: u32) -> 
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_socket_tcp_take_error(socket_id: u32) -> i32 {
-    if vm_guest_active() {
+    if vm_guest_vmcall_active() {
         return guest_call_i32(trueos_vm::vmcall::OP_BP_SOCKET_TCP_TAKE_ERROR, socket_id as u64, 0);
     }
     socket_tcp_take_error_host(socket_id)
@@ -868,7 +886,7 @@ pub extern "C" fn trueos_cabi_socket_tcp_peer_v4(
     if out_addr_be.is_null() || out_port_be.is_null() {
         return -EINVAL;
     }
-    if vm_guest_active() {
+    if vm_guest_vmcall_active() {
         let mut bytes = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
         let (status, rc) = trueos_vm::vmcall::call_with_payload(
             trueos_vm::vmcall::OP_BP_SOCKET_TCP_PEER_V4,
@@ -917,7 +935,7 @@ pub extern "C" fn trueos_cabi_socket_tcp_peer_v6(
     if out_addr_ptr.is_null() || out_port_be.is_null() {
         return -EINVAL;
     }
-    if vm_guest_active() {
+    if vm_guest_vmcall_active() {
         let mut bytes = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
         let (status, rc) = trueos_vm::vmcall::call_with_payload(
             trueos_vm::vmcall::OP_BP_SOCKET_TCP_PEER_V6,

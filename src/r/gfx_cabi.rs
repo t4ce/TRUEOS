@@ -2921,7 +2921,6 @@ pub mod cabi {
         0
     }
 
-
     fn try_spawn_async_jpeg_decode_uploads() {
         loop {
             let Some(req) = take_async_jpeg_upload() else {

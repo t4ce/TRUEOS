@@ -9,8 +9,6 @@ const _: f16 = 0.0_f16;
 #[macro_use]
 pub extern crate alloc;
 
-#[allow(non_snake_case)]
-mod tyche;
 mod allcaps;
 mod allocators;
 pub mod allports;
@@ -65,9 +63,9 @@ mod r;
 mod runtime;
 mod shell2;
 mod smp;
-mod std_abi_shim;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod stackkeeper;
+mod std_abi_shim;
 mod surfer;
 mod t;
 mod tga;
@@ -85,6 +83,8 @@ mod tst_uas_skhynix_route_probe;
 #[path = "tst/ws_time.rs"]
 mod tst_ws_time;
 mod turbo;
+#[allow(non_snake_case)]
+mod tyche;
 mod usb2;
 mod wait;
 mod workers;
