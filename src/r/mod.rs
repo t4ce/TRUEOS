@@ -13,6 +13,7 @@ pub mod keyboard;
 pub mod net;
 pub mod path;
 pub mod readiness;
+pub mod shader;
 pub mod spawn_service;
 pub mod spawn_spec;
 pub mod stream;

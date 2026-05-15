@@ -25,6 +25,7 @@ const TOOL_JSON_FILE: &str = r#"{"type":"object","properties":{"action":{"type":
 const TOOL_JSON_HV: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["status","run","pause","stop","preserve"],"description":"HV subcommand to run."},"id":{"type":"integer","minimum":1,"description":"Blueprint archive id for run, or VM id for pause/stop/preserve."},"args":{"type":"array","items":{"type":"string"},"description":"CLI arguments passed to the selected blueprint when subcommand=run."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_NET: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["icmp","irc","nic","hostname"],"description":"net subcommand to run."},"target":{"type":"string","description":"Target host for net icmp."},"selector":{"type":"string","description":"Optional NIC selector like index, vid:pid, or bb:dd.f."},"host":{"type":"string","description":"Host for net irc."},"channel":{"type":"string","description":"Optional channel like #trueos for net irc."},"name":{"type":"string","description":"Optional hostname for net hostname."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_SET: &str = r#"{"type":"object","properties":{"width":{"type":"integer","minimum":50,"maximum":500,"description":"Shell line width."}},"required":["width"],"additionalProperties":false}"#;
+const TOOL_JSON_SHADER: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["list","compile","demo","now"],"description":"Shader compiler service action."},"path":{"type":"string","description":"Optional /shader source path for compile or now."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_SMP: &str = r#"{"type":"object","properties":{"slot":{"type":"integer","minimum":0,"description":"Optional SMP slot. Omit to list all slots."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_TLB: &str = r#"{"type":"object","properties":{"target":{"type":"string","enum":["pci","pcibar","mem","cpu","acpi","aml","facp","madt","hpet","mcfg","ssdt","uefi","x2apic","usb","usb_probe","dump"],"description":"Table or view to print."},"signature":{"type":"string","minLength":4,"maxLength":4,"description":"Optional ACPI signature when target=acpi, for example SSDT or FACP."},"index":{"type":"integer","minimum":1,"description":"Optional 1-based instance index when target=acpi and the signature repeats."},"subcommand":{"type":"string","enum":["ec","symbol","prefix"],"description":"Optional AML subcommand when target=aml."},"path":{"type":"string","description":"Optional AML path or prefix when target=aml and subcommand is symbol or prefix."}},"required":["target"],"additionalProperties":false}"#;
 const TOOL_JSON_TURBO: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["status","arm","disarm","on","off","verify"],"description":"turbo action to run."},"spins":{"type":"integer","minimum":0,"description":"Optional spin count for action=verify."}},"required":["action"],"additionalProperties":false}"#;
@@ -52,6 +53,10 @@ fn dispatch_install(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &st
 fn dispatch_set(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
     super::cmds::set::try_parse(io, &mut args)
+}
+
+fn dispatch_shader(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::shader::try_parse(io, rest)
 }
 
 fn dispatch_smp(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -215,6 +220,14 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         handler: dispatch_set,
         tool_description: Some("Set the shell line width."),
         tool_parameters_json: Some(TOOL_JSON_SET),
+    },
+    BuiltinShell2CmdEntry {
+        name: "shader",
+        mode: "cmd",
+        color: Some((120, 210, 255)),
+        handler: dispatch_shader,
+        tool_description: Some("List or queue C4 shader files for the EU32 artifact compiler."),
+        tool_parameters_json: Some(TOOL_JSON_SHADER),
     },
     BuiltinShell2CmdEntry {
         name: "smp",

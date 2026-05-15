@@ -92,6 +92,7 @@ define_started_flags!(
     NET_TCP_SHELL_STARTED,
     LOGTOTCP_STARTED,
     LUMEN_SERVICE_STARTED,
+    SHADER_COMPILE_SERVICE_STARTED,
     PCIIDS_GIT_STARTED,
     ATOMIC_BOMB_STARTED,
     HTML_DEMO_STARTED,
@@ -405,6 +406,10 @@ fn spawn_logtotcp(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_lumen_service(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::lumen::lumen_service::lumen_service_task())
+}
+
+fn spawn_shader_compile_service(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::r::shader::shader_compile_service_task())
 }
 
 fn spawn_mandelbrot_gpu_sidequest(spawner: Spawner) -> SpawnAttempt {
@@ -882,6 +887,7 @@ fn spawn_app_vm_run_queue(spawner: Spawner) -> SpawnAttempt {
 enum BlueprintAutostart {
     CurrencyReqwest,
     Flags,
+    Weather,
 }
 
 impl BlueprintAutostart {
@@ -889,6 +895,7 @@ impl BlueprintAutostart {
         match self {
             Self::CurrencyReqwest => "currency_reqwest",
             Self::Flags => "flags",
+            Self::Weather => "weather",
         }
     }
 
@@ -896,6 +903,7 @@ impl BlueprintAutostart {
         match self {
             Self::CurrencyReqwest => "currency_reqwest.bp",
             Self::Flags => "flags.bp",
+            Self::Weather => "weather.bp",
         }
     }
 
@@ -903,6 +911,7 @@ impl BlueprintAutostart {
         match self {
             Self::CurrencyReqwest => "cur",
             Self::Flags => "flg",
+            Self::Weather => "wth",
         }
     }
 
@@ -910,6 +919,7 @@ impl BlueprintAutostart {
         match self {
             Self::CurrencyReqwest => 0,
             Self::Flags => 750,
+            Self::Weather => 750,
         }
     }
 }
@@ -917,6 +927,7 @@ impl BlueprintAutostart {
 const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
     BlueprintAutostart::CurrencyReqwest,
     BlueprintAutostart::Flags,
+    BlueprintAutostart::Weather,
 ];
 
 #[embassy_executor::task]
@@ -1032,7 +1043,7 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::APP_VM_READY
     | crate::r::readiness::GFX_TEXTURE_UPLOAD_SERVICE_READY
     | crate::r::readiness::NET_SOCKET_READY
     | crate::r::readiness::TLS_SOCKET_SERVICE_READY;
-static TASKS: [TaskSpec; 67] = [
+static TASKS: [TaskSpec; 68] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
         "globalog-persist-once",
@@ -1100,6 +1111,12 @@ static TASKS: [TaskSpec; 67] = [
         NET_ANY_CONFIGURED_AND_ROOT_READY,
         &HTTP_TRUEOSFS_STARTED,
         spawn_http_trueosfs,
+    ),
+    TaskSpec::enabled(
+        "shader-compile-service",
+        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
+        &SHADER_COMPILE_SERVICE_STARTED,
+        spawn_shader_compile_service,
     ),
     TaskSpec::enabled("pciids-git", PCIIDS_GIT_READY, &PCIIDS_GIT_STARTED, spawn_pciids_git),
     TaskSpec::enabled_gated(
