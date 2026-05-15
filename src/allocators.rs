@@ -388,6 +388,16 @@ impl FreeList {
         let tag = *tag_ptr;
         let block_size = tag.block_size;
         let block_start = tag.block_start;
+        if !self.is_plausible_alloc_block(block_start, block_size) {
+            crate::log!(
+                "alloc: ignored invalid dealloc ptr=0x{:016X} tag_block=0x{:016X} tag_size={} tag_domain={}\n",
+                ptr as usize,
+                block_start,
+                block_size,
+                tag.domain
+            );
+            return;
+        }
         let block_ptr = block_start as *mut FreeBlock;
         block_ptr.write(FreeBlock {
             size: block_size,
@@ -452,6 +462,15 @@ impl FreeList {
         ptr >= heap_start
             && ptr.saturating_add(size_of::<FreeBlock>()) <= heap_end
             && ptr.is_multiple_of(align_of::<FreeBlock>())
+    }
+
+    fn is_plausible_alloc_block(&mut self, block_start: usize, block_size: usize) -> bool {
+        let (heap_start, heap_len) = self.ensure_heap_backing();
+        let heap_end = heap_start.saturating_add(heap_len);
+        block_start >= heap_start
+            && block_start.saturating_add(block_size) <= heap_end
+            && block_size >= minimum_block_size()
+            && block_start.is_multiple_of(align_of::<FreeBlock>())
     }
 
     unsafe fn try_merge_with_next(&mut self, mut node: NonNull<FreeBlock>) {

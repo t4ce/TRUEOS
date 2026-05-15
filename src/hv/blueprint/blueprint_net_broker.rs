@@ -19,7 +19,9 @@ enum VNetBridgeBackend {
 
 impl VNetBridge {
     pub(crate) fn open_primary() -> Option<Self> {
-        if VMX_GUEST_NET_BACKEND.load(Ordering::Acquire) {
+        if VMX_GUEST_NET_BACKEND.load(Ordering::Acquire)
+            && crate::hv::current_hull_guest_context_vm_id().is_some()
+        {
             if let Some(vmx) = VmxBroker::open_primary() {
                 return Some(Self {
                     backend: VNetBridgeBackend::Vmx(vmx),

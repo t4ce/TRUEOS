@@ -1168,6 +1168,13 @@ pub unsafe extern "C" fn trueos_mio_tcp_stream_read(
             return STATUS_INVALID_INPUT as isize;
         }
         let want = out_cap.min(trueos_vm::vmcall::PAYLOAD_CAP);
+        crate::log!(
+            "mio_compat: tcp read guest-vmcall begin socket={} out=0x{:x} cap={} want={}\n",
+            socket_id,
+            out_ptr as usize,
+            out_cap,
+            want
+        );
         let mut bytes = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
         let (status, data) = trueos_vm::vmcall::call_with_payload(
             trueos_vm::vmcall::OP_BP_MIO_TCP_STREAM_READ,
@@ -1181,9 +1188,22 @@ pub unsafe extern "C" fn trueos_mio_tcp_stream_read(
         }
         let rc = vmcall_isize(data);
         if rc <= 0 {
+            crate::log!(
+                "mio_compat: tcp read guest-vmcall done socket={} rc={} status={}\n",
+                socket_id,
+                rc,
+                status
+            );
             return rc;
         }
         let got = (rc as usize).min(want);
+        crate::log!(
+            "mio_compat: tcp read guest-vmcall copy socket={} out=0x{:x} got={} rc={}\n",
+            socket_id,
+            out_ptr as usize,
+            got,
+            rc
+        );
         core::ptr::copy_nonoverlapping(bytes.as_ptr(), out_ptr, got);
         return got as isize;
     }

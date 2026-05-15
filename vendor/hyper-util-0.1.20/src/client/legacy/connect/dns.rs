@@ -55,6 +55,29 @@ pub struct GaiFuture {
     inner: JoinHandle<Result<SocketAddrs, io::Error>>,
 }
 
+#[cfg(target_os = "trueos")]
+unsafe extern "C" {
+    fn trueos_cabi_dns_resolve_ipv4(host: *const u8, host_len: usize, out_octets: *mut u8) -> i32;
+}
+
+#[cfg(target_os = "trueos")]
+fn trueos_lookup_host(host: &str) -> io::Result<SocketAddrs> {
+    if let Some(addrs) = SocketAddrs::try_parse(host, 0) {
+        return Ok(addrs);
+    }
+
+    let mut octets = [0u8; 4];
+    let rc = unsafe { trueos_cabi_dns_resolve_ipv4(host.as_ptr(), host.len(), octets.as_mut_ptr()) };
+    if rc != 0 {
+        return Err(io::Error::from_raw_os_error(rc));
+    }
+
+    Ok(SocketAddrs::new(vec![SocketAddr::V4(SocketAddrV4::new(
+        Ipv4Addr::new(octets[0], octets[1], octets[2], octets[3]),
+        0,
+    ))]))
+}
+
 impl Name {
     pub(super) fn new(host: Box<str>) -> Name {
         Name { host }
@@ -117,9 +140,17 @@ impl Service<Name> for GaiResolver {
 
     fn call(&mut self, name: Name) -> Self::Future {
         let blocking = tokio::task::spawn_blocking(move || {
+            #[cfg(target_os = "trueos")]
+            {
+                trueos_lookup_host(&name.host)
+            }
+
+            #[cfg(not(target_os = "trueos"))]
+            {
             (&*name.host, 0)
                 .to_socket_addrs()
                 .map(|i| SocketAddrs { iter: i })
+            }
         });
 
         GaiFuture { inner: blocking }
