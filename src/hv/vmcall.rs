@@ -225,6 +225,10 @@ fn write_mio_addr(out: &mut [u8], addr: crate::mio_compat::TrueosMioSocketAddr) 
 
 /// Called from the vmexit loop on every VMCALL exit.
 pub fn dispatch(vm_id: u8) -> DispatchOutcome {
+    crate::allocators::with_host_alloc_domain(|| dispatch_inner(vm_id))
+}
+
+fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
     let Some((op, seq, arg0, arg1, req_len)) = read_request(vm_id) else {
         hvlogf(format_args!("hv: vm{} reporting: vmcall bad vm id", vm_id));
         return DispatchOutcome::Stop;
