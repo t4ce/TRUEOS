@@ -2,13 +2,13 @@ use std::future::Future;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use std::{io, mem};
+use std::{io as std_io, mem};
 
 use rustls::server::AcceptedAlert;
 use rustls::{ConnectionCommon, SideData};
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{self, AsyncRead, AsyncWrite};
 
-use crate::common::{Stream, SyncWriteAdapter, TlsState};
+use crate::common::{std_to_tokio_error, Stream, SyncWriteAdapter, TlsState};
 
 pub(crate) trait IoSession {
     type Io;
@@ -53,11 +53,12 @@ where
                 error,
             } => loop {
                 match alert.write(&mut SyncWriteAdapter { io: &mut io, cx }) {
-                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    Err(e) if e.kind() == std_io::ErrorKind::WouldBlock => {
                         *this = Self::SendAlert { io, error, alert };
                         return Poll::Pending;
                     }
-                    Err(_) | Ok(0) => return Poll::Ready(Err((error, io))),
+                    Err(err) => return Poll::Ready(Err((std_to_tokio_error(err), io))),
+                    Ok(0) => return Poll::Ready(Err((error, io))),
                     Ok(_) => {}
                 };
             },

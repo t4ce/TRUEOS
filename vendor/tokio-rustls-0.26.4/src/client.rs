@@ -1,20 +1,17 @@
 use std::future::Future;
+use std::io::BufRead as _;
 #[cfg(unix)]
 use std::os::unix::io::{AsRawFd, RawFd};
 #[cfg(windows)]
 use std::os::windows::io::{AsRawSocket, RawSocket};
 use std::pin::Pin;
+use std::sync::Arc;
 #[cfg(feature = "early-data")]
 use std::task::Waker;
 use std::task::{Context, Poll};
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-use std::io::{self, BufRead as _};
-use std::sync::Arc;
 
 use rustls::{pki_types::ServerName, ClientConfig, ClientConnection};
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
-use tokio::io::{self, BufRead as _};
-use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, ReadBuf};
+use tokio::io::{self, AsyncBufRead, AsyncRead, AsyncWrite, IoSlice, ReadBuf};
 
 use crate::common::{IoSession, MidHandshake, Stream, TlsState};
 
@@ -69,11 +66,12 @@ impl TlsConnector {
         let mut session = match ClientConnection::new_with_alpn(self.inner.clone(), domain, alpn) {
             Ok(session) => session,
             Err(error) => {
+                let _ = error;
                 return Connect(MidHandshake::Error {
                     io: stream,
                     // TODO(eliza): should this really return an `io::Error`?
                     // Probably not...
-                    error: io::Error::new(io::ErrorKind::Other, error),
+                    error: io::Error::new(io::ErrorKind::Other, "tls client config error"),
                 });
             }
         };
@@ -399,7 +397,7 @@ where
     fn poll_write_vectored(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        bufs: &[io::IoSlice<'_>],
+        bufs: &[IoSlice<'_>],
     ) -> Poll<io::Result<usize>> {
         let this = self.get_mut();
         let mut stream = Stream::new(&mut this.io, &mut this.session)
@@ -484,15 +482,12 @@ fn poll_handle_early_data<IO>(
     stream: &mut Stream<IO, ClientConnection>,
     early_waker: &mut Option<Waker>,
     cx: &mut Context<'_>,
-    bufs: &[io::IoSlice<'_>],
+    bufs: &[IoSlice<'_>],
 ) -> Poll<io::Result<usize>>
 where
     IO: AsyncRead + AsyncWrite + Unpin,
 {
     if let TlsState::EarlyData(pos, data) = state {
-        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
-        use tokio::io::Write;
-        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         use std::io::Write;
 
         // write early data

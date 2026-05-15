@@ -1,6 +1,6 @@
 use std::future::Future;
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-use std::io::{self, BufRead as _};
+use std::io::BufRead as _;
+use std::io as std_io;
 #[cfg(unix)]
 use std::os::unix::io::{AsRawFd, RawFd};
 #[cfg(windows)]
@@ -11,11 +11,12 @@ use std::task::{Context, Poll};
 
 use rustls::server::AcceptedAlert;
 use rustls::{ServerConfig, ServerConnection};
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
-use tokio::io::{self, BufRead as _};
-use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, ReadBuf};
+use tokio::io::{self, AsyncBufRead, AsyncRead, AsyncWrite, IoSlice, ReadBuf};
 
-use crate::common::{IoSession, MidHandshake, Stream, SyncReadAdapter, SyncWriteAdapter, TlsState};
+use crate::common::{
+    std_to_tokio_error, IoSession, MidHandshake, Stream, SyncReadAdapter, SyncWriteAdapter,
+    TlsState,
+};
 
 /// A wrapper around a `rustls::ServerConfig`, providing an async `accept` method.
 #[derive(Clone)]
@@ -46,11 +47,12 @@ impl TlsAcceptor {
         let mut session = match ServerConnection::new(self.inner.clone()) {
             Ok(session) => session,
             Err(error) => {
+                let _ = error;
                 return Accept(MidHandshake::Error {
                     io: stream,
                     // TODO(eliza): should this really return an `io::Error`?
                     // Probably not...
-                    error: io::Error::new(io::ErrorKind::Other, error),
+                    error: io::Error::new(io::ErrorKind::Other, "tls server config error"),
                 });
             }
         };
@@ -156,12 +158,16 @@ where
 
             if let Some((err, mut alert)) = this.alert.take() {
                 match alert.write(&mut SyncWriteAdapter { io, cx }) {
-                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    Err(e) if e.kind() == std_io::ErrorKind::WouldBlock => {
                         this.alert = Some((err, alert));
                         return Poll::Pending;
                     }
                     Ok(0) | Err(_) => {
-                        return Poll::Ready(Err(io::Error::new(io::ErrorKind::InvalidData, err)))
+                        let _ = err;
+                        return Poll::Ready(Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "tls alert write failed",
+                        )))
                     }
                     Ok(_) => {
                         this.alert = Some((err, alert));
@@ -174,8 +180,8 @@ where
             match this.acceptor.read_tls(&mut reader) {
                 Ok(0) => return Err(io::ErrorKind::UnexpectedEof.into()).into(),
                 Ok(_) => {}
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Poll::Pending,
-                Err(e) => return Err(e).into(),
+                Err(e) if e.kind() == std_io::ErrorKind::WouldBlock => return Poll::Pending,
+                Err(e) => return Err(std_to_tokio_error(e)).into(),
             }
 
             match this.acceptor.accept() {
@@ -232,12 +238,13 @@ where
         let mut conn = match self.accepted.into_connection(config) {
             Ok(conn) => conn,
             Err((error, alert)) => {
+                let _ = error;
                 return Accept(MidHandshake::SendAlert {
                     io: self.io,
                     alert,
                     // TODO(eliza): should this really return an `io::Error`?
                     // Probably not...
-                    error: io::Error::new(io::ErrorKind::InvalidData, error),
+                    error: io::Error::new(io::ErrorKind::InvalidData, "tls accept config error"),
                 });
             }
         };
@@ -430,7 +437,7 @@ where
     fn poll_write_vectored(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        bufs: &[io::IoSlice<'_>],
+        bufs: &[IoSlice<'_>],
     ) -> Poll<io::Result<usize>> {
         let this = self.get_mut();
         let mut stream =
