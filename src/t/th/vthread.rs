@@ -103,6 +103,11 @@ impl VThreadRecord {
 
     #[inline]
     fn snapshot(&'static self, fs_base: usize) -> VThreadSnapshot {
+        let cpu_slot = if self.role == VTHREAD_ROLE_VM_HULL {
+            VTHREAD_NO_ID
+        } else {
+            current_cpu_slot_for_snapshot()
+        };
         VThreadSnapshot {
             record_addr: self as *const Self as usize,
             vtid: self.vtid,
@@ -110,7 +115,7 @@ impl VThreadRecord {
             lane_id: self.lane_id,
             tls_slot: self.tls_slot,
             fs_base,
-            cpu_slot: current_cpu_slot_for_snapshot(),
+            cpu_slot,
         }
     }
 }

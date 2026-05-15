@@ -1297,7 +1297,7 @@ pub unsafe extern "C" fn trueos_cabi_app_window_create(
         return 0;
     };
     let title = String::from(title);
-    if crate::hv::current_vm_id_by_lapic_low().is_some() {
+    if crate::hv::current_guest_execution_context_vm_id().is_some() {
         return crate::hv::defer_blueprint_app_window_create(
             "plain",
             title.as_str(),
@@ -1363,7 +1363,7 @@ pub unsafe extern "C" fn trueos_cabi_ui2_surface_window_create(
         return 0;
     };
     let title = String::from(title);
-    if crate::hv::current_vm_id_by_lapic_low().is_some() {
+    if crate::hv::current_guest_execution_context_vm_id().is_some() {
         return crate::hv::defer_blueprint_app_window_create(
             "surface",
             title.as_str(),
@@ -1427,7 +1427,7 @@ pub unsafe extern "C" fn trueos_cabi_app_surface_window_create(
         return 0;
     };
     let title = String::from(title);
-    if crate::hv::current_vm_id_by_lapic_low().is_some() {
+    if crate::hv::current_guest_execution_context_vm_id().is_some() {
         return crate::hv::defer_blueprint_app_window_create(
             "surface",
             title.as_str(),
@@ -1508,7 +1508,7 @@ fn vm_deferred_window_any(window_id: u32) -> bool {
 
 #[inline]
 fn ui2_cabi_target_window_id(window_id: u32) -> u32 {
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+    if crate::hv::current_guest_execution_context_vm_id().is_some() {
         return window_id;
     }
     crate::hv::host_blueprint_app_window_id(window_id)
@@ -1516,7 +1516,7 @@ fn ui2_cabi_target_window_id(window_id: u32) -> u32 {
 
 #[inline]
 fn current_vm_origin_id() -> Option<u8> {
-    crate::hv::current_vm_id_by_lapic_low()
+    crate::hv::current_guest_execution_context_vm_id()
 }
 
 #[inline]

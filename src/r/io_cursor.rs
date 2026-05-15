@@ -340,7 +340,7 @@ fn input_write_cursor_event(
     if slot_id == 0 {
         return -1;
     }
-    if let Some(vm_id) = crate::hv::current_hull_guest_context_vm_id() {
+    if let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() {
         let count = VM_CURSOR_WRITE_REJECT_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
         if count <= 8 || count.is_multiple_of(64) {
             crate::log!(

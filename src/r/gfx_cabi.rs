@@ -5,7 +5,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 fn runtime_context_key() -> u32 {
-    if let Some(vm_id) = crate::hv::current_vm_id_by_lapic_low() {
+    if let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() {
         return 0x8000_0000 | vm_id as u32;
     }
     crate::percpu::this_cpu().cpu_index()
@@ -269,7 +269,7 @@ pub mod env {
 
     #[inline]
     fn context_slot() -> usize {
-        if let Some(vm_id) = crate::hv::current_vm_id_by_lapic_low() {
+        if let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() {
             return (vm_id as usize).min(VM_CONTEXT_SLOTS.saturating_sub(1));
         }
         VM_CONTEXT_SLOTS + (crate::percpu::this_cpu().cpu_index() as usize % HOST_CONTEXT_SLOTS)
@@ -934,7 +934,7 @@ pub mod cabi {
 
     #[inline]
     fn cabi_vm_alloc_active() -> bool {
-        crate::hv::current_hull_guest_context_vm_id().is_some()
+        crate::hv::current_guest_execution_context_vm_id().is_some()
     }
 
     #[inline]
@@ -1755,7 +1755,7 @@ pub mod cabi {
 
     #[inline]
     fn gfx_cabi_vm_context() -> bool {
-        crate::hv::current_hull_guest_context_vm_id().is_some()
+        crate::hv::current_guest_execution_context_vm_id().is_some()
     }
 
     struct AsyncJpegUploadReq {
@@ -1918,7 +1918,7 @@ pub mod cabi {
     }
 
     fn host_texture_id_for_current_context(tex_id: u32) -> u32 {
-        match crate::hv::current_hull_guest_context_vm_id() {
+        match crate::hv::current_guest_execution_context_vm_id() {
             Some(vm_id) => host_texture_id_for_vm(vm_id, tex_id),
             None => tex_id,
         }
