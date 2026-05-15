@@ -99,7 +99,10 @@ impl<T> ReadHalf<T> {
                 .expect("`Arc::try_unwrap` failed");
 
             #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
-            let inner_stream = inner.stream.into_inner();
+            let inner_stream = match inner.stream.into_inner() {
+                Ok(stream) => stream,
+                Err(never) => match never {},
+            };
             #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
             let inner_stream = inner.stream.into_inner().unwrap();
 
