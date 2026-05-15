@@ -1,8 +1,12 @@
 use core::pin::Pin;
 use core::task::{self, Poll};
-use std::{fmt, io};
+use std::fmt;
 
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use hyper::io;
 use hyper_util::rt::TokioIo;
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+use std::io;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 /// An upgraded HTTP connection.
