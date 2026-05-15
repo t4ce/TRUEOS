@@ -86,6 +86,7 @@ pub enum VmBootMode {
 pub struct BlueprintLaunchState {
     pub archive: AllocString,
     pub module_bytes: AllocVec<u8>,
+    pub unpacked_bytes: AllocVec<u8>,
     pub app_args: AllocVec<AllocString>,
     pub console_target: Option<MatrixTarget>,
 }

@@ -169,3 +169,10 @@ fn try_lease(slot: u32, role: LaneRole) -> Option<LaneLease> {
         armed: true,
     })
 }
+
+pub fn is_carrier_lane_free(slot: u32) -> bool {
+    LANE_OWNER
+        .get(slot as usize)
+        .map(|owner| owner.load(Ordering::Acquire) == LANE_FREE)
+        .unwrap_or(false)
+}

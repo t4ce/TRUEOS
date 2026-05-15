@@ -381,11 +381,22 @@ fn start_blueprint_launch(spawner: &Spawner, request: &AppVmLaunchRequest, log: 
         return;
     };
 
+    let unpacked_bytes = match crate::hv::blueprint::parse_blueprint(request.module_bytes.as_slice())
+        .and_then(|module| crate::hv::blueprint::unpack_blueprint(&module))
+    {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            log(alloc::format!("hv run: app-vm unpack failed: {}", err).as_str());
+            return;
+        }
+    };
+
     if let Err(err) = crate::hv::stage_blueprint_launch(
         vm_id,
         crate::hv::BlueprintLaunchState {
             archive: request.archive.clone(),
             module_bytes: request.module_bytes.clone(),
+            unpacked_bytes,
             app_args: request.app_args.clone(),
             console_target: Some(request.target.clone()),
         },

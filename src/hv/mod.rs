@@ -279,6 +279,7 @@ pub enum VmBootMode {
 pub struct BlueprintLaunchState {
     pub archive: AllocString,
     pub module_bytes: AllocVec<u8>,
+    pub unpacked_bytes: AllocVec<u8>,
     pub app_args: AllocVec<AllocString>,
     pub console_target: Option<MatrixTarget>,
 }
@@ -523,6 +524,11 @@ pub(crate) fn current_hull_guest_context_vm_id() -> Option<u8> {
     } else {
         None
     }
+}
+
+pub(crate) fn current_vm_lapic_low_tag_addr() -> u64 {
+    let lapic_id = crate::percpu::current_lapic_id_via_cpuid();
+    (&CURRENT_VM_ID_BY_LAPIC_LOW[(lapic_id & 0xFF) as usize] as *const AtomicU8) as u64
 }
 
 fn set_current_vm_id(vm_id: u8) {
@@ -955,6 +961,13 @@ pub fn blueprint_launch_active(vm_id: u8) -> bool {
         .get(vm_id as usize)
         .map(|slot| slot.lock().is_some())
         .unwrap_or(false)
+}
+
+pub(crate) fn blueprint_launch_states_span() -> (u64, usize) {
+    (
+        (&BLUEPRINT_LAUNCH_STATES as *const _) as u64,
+        core::mem::size_of_val(&BLUEPRINT_LAUNCH_STATES),
+    )
 }
 
 fn app_window_broker_log(args: core::fmt::Arguments<'_>) {
@@ -1824,6 +1837,14 @@ async fn vm_task(vm_id: u8, _lane_lease: crate::hv::lane::LaneLease) {
     }
     hvlogf(format_args!("hv: vm{} reporting: vmx preflight ok, stage=m1", vm_id));
     hvlogf(format_args!("hv: vm{} reporting: vlayer policy=integrity-first", vm_id));
+    if boot_mode == VmBootMode::Hull {
+        if let Err(err) = memory::ensure_guest_hull_rw_template_ready() {
+            hvlogf(format_args!(
+                "hv: vm{} reporting: hull rw template prepare failed ({})",
+                vm_id, err
+            ));
+        }
+    }
     let guest_heap_ready = crate::allocators::ensure_hv_guest_heap_ready(vm_id);
     if guest_heap_ready {
         let stats = crate::allocators::hv_guest_heap_stats(vm_id);

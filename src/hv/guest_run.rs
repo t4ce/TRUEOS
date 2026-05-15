@@ -136,22 +136,16 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
         }
     };
 
-    let unpacked = match crate::hv::blueprint::unpack_blueprint(&module) {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            log(alloc::format!("run: guest blueprint unpack failed: {}", err).as_str());
-            return false;
-        }
-    };
+    let unpacked = state.unpacked_bytes.as_slice();
 
     if !unpacked.starts_with(b"\x7fELF")
-        || !matches!(crate::hv::blueprint::elf_type_name(unpacked.as_slice()), Some("REL"))
+        || !matches!(crate::hv::blueprint::elf_type_name(unpacked), Some("REL"))
     {
         log("run: guest blueprint rejected non-REL payload");
         return false;
     }
 
-    match crate::hv::blueprint::elf_imports(unpacked.as_slice()) {
+    match crate::hv::blueprint::elf_imports(unpacked) {
         Ok(imports) => {
             let unresolved = imports
                 .iter()

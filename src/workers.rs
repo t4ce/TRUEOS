@@ -104,6 +104,13 @@ pub fn pick_background_spawner_with_slot() -> Option<(u32, u8, SendSpawner)> {
     pick_background_spawner_with_filter(|_| true)
 }
 
+pub fn pick_background_spawner_where<F>(accept_slot: F) -> Option<(u32, u8, SendSpawner)>
+where
+    F: Fn(u32) -> bool,
+{
+    pick_background_spawner_with_filter(accept_slot)
+}
+
 pub fn pick_background_spawner_excluding_slot(
     excluded_slot: u32,
 ) -> Option<(u32, u8, SendSpawner)> {
