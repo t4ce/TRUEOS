@@ -3,6 +3,11 @@
 //! This module owns the boundary between Tokio-facing crates and TRUEOS runtime
 //! services: time, blocking workers, filesystem shims, and VNet/Mio/socket2.
 
+pub mod io {
+    pub use trueos_io::*;
+    pub use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+}
+
 pub mod net;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod platform;

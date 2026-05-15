@@ -5,7 +5,7 @@
 use core::convert::Infallible;
 use core::pin::Pin;
 use core::task::{Context, Poll};
-use trueos_io as io;
+use crate::t::io;
 
 use hyper::body::{Body, Bytes, Frame, SizeHint};
 use hyper::rt::{Read, ReadBufCursor, Write};

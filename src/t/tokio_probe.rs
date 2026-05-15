@@ -11,7 +11,7 @@ use core::net::SocketAddr;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use embassy_executor::task;
 use socket2::{Domain, Protocol, Socket, Type};
-use trueos_io as io;
+use crate::t::io;
 
 const VNET_PROBE_PORT: u16 = crate::allports::probes::VNET_PROBE_PORT;
 const TOKIO_NET_PROBE_PORT: u16 = crate::allports::probes::TOKIO_NET_PROBE_PORT;
