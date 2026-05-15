@@ -29,6 +29,9 @@ impl VNetBridge {
             }
         }
 
+        // Host-carried VM work is already running in VMX root. It keeps VM
+        // vthread identity for ownership, but must use the host VNet broker
+        // directly instead of issuing a guest vmcall.
         let vnet = VNet::open_primary()?;
         Some(Self {
             backend: VNetBridgeBackend::LocalVnet(vnet),

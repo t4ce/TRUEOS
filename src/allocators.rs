@@ -501,10 +501,7 @@ static HV_GUEST_HEAP_READY_MASK: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn hv_guest_allocator_state_spans() -> [(u64, usize); 2] {
     [
-        (
-            (&HV_GUEST_ALLOCATORS as *const _) as u64,
-            core::mem::size_of_val(&HV_GUEST_ALLOCATORS),
-        ),
+        ((&HV_GUEST_ALLOCATORS as *const _) as u64, core::mem::size_of_val(&HV_GUEST_ALLOCATORS)),
         (
             (&HV_GUEST_HEAP_READY_MASK as *const _) as u64,
             core::mem::size_of_val(&HV_GUEST_HEAP_READY_MASK),
@@ -514,8 +511,7 @@ pub(crate) fn hv_guest_allocator_state_spans() -> [(u64, usize); 2] {
 
 const HOST_ALLOC_TAG: u8 = u8::MAX;
 static ALLOC_DOMAIN_OVERRIDE_BY_CPU: [AtomicU8; 64] = [const { AtomicU8::new(HOST_ALLOC_TAG) }; 64];
-static HOST_ALLOC_DOMAIN_FORCE_DEPTH_BY_CPU: [AtomicU32; 64] =
-    [const { AtomicU32::new(0) }; 64];
+static HOST_ALLOC_DOMAIN_FORCE_DEPTH_BY_CPU: [AtomicU32; 64] = [const { AtomicU32::new(0) }; 64];
 
 fn alloc_domain_from_tag(tag: &AllocTag) -> AllocDomain {
     if (tag.domain as usize) < crate::allcaps::hv::VM_ID_LIMIT {

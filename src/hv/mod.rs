@@ -79,6 +79,8 @@ static trueos_vm_ids: [TrueosVmId; TRUEOS_VM_ID_LIMIT] =
 static CURRENT_VM_ID_BY_CPU: [AtomicU8; TRUEOS_VM_CPU_SLOT_LIMIT] =
     [const { AtomicU8::new(0) }; TRUEOS_VM_CPU_SLOT_LIMIT];
 static CURRENT_VM_ID_BY_LAPIC_LOW: [AtomicU8; 256] = [const { AtomicU8::new(0) }; 256];
+static CURRENT_GUEST_BROKER_VM_ID_BY_CPU: [AtomicU8; TRUEOS_VM_CPU_SLOT_LIMIT] =
+    [const { AtomicU8::new(0) }; TRUEOS_VM_CPU_SLOT_LIMIT];
 static GUEST_KERNEL_GS_BASE_BY_VM: [AtomicU64; TRUEOS_VM_ID_LIMIT] =
     [const { AtomicU64::new(0) }; TRUEOS_VM_ID_LIMIT];
 static VMX_ROOT_ACTIVE_BY_CPU: [AtomicBool; TRUEOS_VM_CPU_SLOT_LIMIT] =
@@ -531,6 +533,15 @@ pub(crate) fn current_guest_execution_context_vm_id() -> Option<u8> {
         return Some(vm_id);
     }
 
+    let slot = crate::percpu::current_slot();
+    if let Some(tagged) = CURRENT_GUEST_BROKER_VM_ID_BY_CPU
+        .get(slot)
+        .map(|slot| slot.load(Ordering::Acquire))
+        && let Some(vm_id) = tagged.checked_sub(1)
+    {
+        return Some(vm_id);
+    }
+
     let snapshot = crate::t::th::vthread::current_snapshot()?;
     if snapshot.role != crate::t::th::vthread::VTHREAD_ROLE_VM_HULL {
         return None;
@@ -542,6 +553,17 @@ pub(crate) fn current_guest_execution_context_vm_id() -> Option<u8> {
     } else {
         None
     }
+}
+
+pub(crate) fn with_guest_broker_context<R>(vm_id: u8, f: impl FnOnce() -> R) -> R {
+    let slot = crate::percpu::current_slot();
+    let Some(owner_slot) = CURRENT_GUEST_BROKER_VM_ID_BY_CPU.get(slot) else {
+        return f();
+    };
+    let previous = owner_slot.swap(vm_id.saturating_add(1), Ordering::AcqRel);
+    let result = f();
+    owner_slot.store(previous, Ordering::Release);
+    result
 }
 
 pub(crate) fn current_vm_lapic_low_tag_addr() -> u64 {
@@ -1912,9 +1934,7 @@ async fn vm_task(vm_id: u8, _lane_lease: crate::hv::lane::LaneLease) {
             ));
             hvlogf(format_args!(
                 "hv: vm{}-{} reporting: symbolize_hint=addr2line -e TRUEOS.full.elf 0x{:016X}",
-                vm_id,
-                lineage_record.level,
-                lr.guest_rip
+                vm_id, lineage_record.level, lr.guest_rip
             ));
         }
         Err(e) => {

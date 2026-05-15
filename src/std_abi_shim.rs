@@ -1,7 +1,7 @@
 extern crate alloc;
 
 use core::alloc::Layout;
-use core::ffi::{c_char, c_int, c_void, CStr};
+use core::ffi::{CStr, c_char, c_int, c_void};
 use core::ptr;
 use core::slice;
 use core::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
@@ -552,7 +552,9 @@ pub unsafe extern "C" fn sys_halt() -> ! {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn errno_location() -> *mut c_int {
-    (&TRUEOS_ERRNO as *const AtomicI32).cast_mut().cast::<c_int>()
+    (&TRUEOS_ERRNO as *const AtomicI32)
+        .cast_mut()
+        .cast::<c_int>()
 }
 
 #[unsafe(no_mangle)]
@@ -609,11 +611,7 @@ pub unsafe extern "C" fn strerror_r(errnum: c_int, buf: *mut c_char, buflen: usi
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __xpg_strerror_r(
-    errnum: c_int,
-    buf: *mut c_char,
-    buflen: usize,
-) -> c_int {
+pub unsafe extern "C" fn __xpg_strerror_r(errnum: c_int, buf: *mut c_char, buflen: usize) -> c_int {
     unsafe { strerror_r(errnum, buf, buflen) }
 }
 

@@ -62,11 +62,9 @@ impl<K: Copy + Eq, V, const N: usize> FixedKeyMap<K, V, N> {
     }
 
     fn find_index(&self, key: K) -> Option<usize> {
-        self.entries.iter().position(|entry| {
-            entry
-                .as_ref()
-                .is_some_and(|entry| entry.key == key)
-        })
+        self.entries
+            .iter()
+            .position(|entry| entry.as_ref().is_some_and(|entry| entry.key == key))
     }
 
     fn first_empty_index(&self) -> Option<usize> {

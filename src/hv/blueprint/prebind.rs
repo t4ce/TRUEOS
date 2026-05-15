@@ -45,10 +45,10 @@ pub(crate) fn prebind_required_readiness(module_bytes: &[u8]) -> Result<u32, Str
     let module = super::parse_blueprint(module_bytes).map_err(String::from)?;
     let unpacked = super::unpack_blueprint(&module).map_err(String::from)?;
 
-    if !unpacked.starts_with(b"\x7fELF") || !matches!(super::elf_type_name(unpacked.as_slice()), Some("REL")) {
-        return Err(String::from(
-            "only ELF REL blueprints are supported for app-vm launch",
-        ));
+    if !unpacked.starts_with(b"\x7fELF")
+        || !matches!(super::elf_type_name(unpacked.as_slice()), Some("REL"))
+    {
+        return Err(String::from("only ELF REL blueprints are supported for app-vm launch"));
     }
 
     let mut required = prebind_base_readiness();

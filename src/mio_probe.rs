@@ -184,14 +184,19 @@ pub(crate) fn assume_ready_when_probe_disabled() {
     }
 
     let Some(spawner) = crate::workers::spawner_for_slot(0) else {
-        crate::log!("mio_probe: disabled; fallback NET_SOCKET_READY task not spawned (no slot0 spawner)\n");
+        crate::log!(
+            "mio_probe: disabled; fallback NET_SOCKET_READY task not spawned (no slot0 spawner)\n"
+        );
         return;
     };
 
     match mio_net_ready_assume_task() {
         Ok(token) => spawner.spawn(token),
         Err(err) => {
-            crate::log!("mio_probe: disabled; fallback NET_SOCKET_READY task spawn failed: {:?}\n", err)
+            crate::log!(
+                "mio_probe: disabled; fallback NET_SOCKET_READY task spawn failed: {:?}\n",
+                err
+            )
         }
     }
 }

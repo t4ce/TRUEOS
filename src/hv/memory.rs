@@ -88,13 +88,14 @@ struct GuestStackBacking {
 }
 
 static GUEST_STACK_BACKINGS: StaticSlots<GuestStackBacking, { crate::allcaps::hv::VM_ID_LIMIT }> =
-    StaticSlots::from_slots([const {
-        Mutex::new(GuestStackBacking {
-            arena: None,
-            active_bytes: GUEST_STACK_DEFAULT_BYTES,
-        })
-    };
-        crate::allcaps::hv::VM_ID_LIMIT]);
+    StaticSlots::from_slots(
+        [const {
+            Mutex::new(GuestStackBacking {
+                arena: None,
+                active_bytes: GUEST_STACK_DEFAULT_BYTES,
+            })
+        }; crate::allcaps::hv::VM_ID_LIMIT],
+    );
 
 #[derive(Copy, Clone)]
 struct GuestHullRwBacking {
@@ -103,15 +104,18 @@ struct GuestHullRwBacking {
     active_bytes: usize,
 }
 
-static GUEST_HULL_RW_BACKINGS: StaticSlots<GuestHullRwBacking, { crate::allcaps::hv::VM_ID_LIMIT }> =
-    StaticSlots::from_slots([const {
+static GUEST_HULL_RW_BACKINGS: StaticSlots<
+    GuestHullRwBacking,
+    { crate::allcaps::hv::VM_ID_LIMIT },
+> = StaticSlots::from_slots(
+    [const {
         Mutex::new(GuestHullRwBacking {
             arena: None,
             guest_start: 0,
             active_bytes: 0,
         })
-    };
-        crate::allcaps::hv::VM_ID_LIMIT]);
+    }; crate::allcaps::hv::VM_ID_LIMIT],
+);
 static GUEST_HULL_RW_TEMPLATE: Mutex<GuestHullRwBacking> = Mutex::new(GuestHullRwBacking {
     arena: None,
     guest_start: 0,
@@ -130,10 +134,14 @@ pub struct VmSnapshotMeta {
     pub exit_guest_rip: u64,
 }
 
-pub static VM_SNAPSHOT_META: StaticSlots<Option<VmSnapshotMeta>, { crate::allcaps::hv::VM_ID_LIMIT }> =
-    StaticSlots::from_slots([const { Mutex::new(None) }; crate::allcaps::hv::VM_ID_LIMIT]);
-pub static VM_RESTORE_META: StaticSlots<Option<VmSnapshotMeta>, { crate::allcaps::hv::VM_ID_LIMIT }> =
-    StaticSlots::from_slots([const { Mutex::new(None) }; crate::allcaps::hv::VM_ID_LIMIT]);
+pub static VM_SNAPSHOT_META: StaticSlots<
+    Option<VmSnapshotMeta>,
+    { crate::allcaps::hv::VM_ID_LIMIT },
+> = StaticSlots::from_slots([const { Mutex::new(None) }; crate::allcaps::hv::VM_ID_LIMIT]);
+pub static VM_RESTORE_META: StaticSlots<
+    Option<VmSnapshotMeta>,
+    { crate::allcaps::hv::VM_ID_LIMIT },
+> = StaticSlots::from_slots([const { Mutex::new(None) }; crate::allcaps::hv::VM_ID_LIMIT]);
 
 pub fn vm_snapshot_meta_lock(vm_id: u8) -> Option<&'static Mutex<Option<VmSnapshotMeta>>> {
     VM_SNAPSHOT_META.get_u8(vm_id)
@@ -622,9 +630,7 @@ fn prepare_guest_hull_rw_backing_for_vm(
         patch_guest_hull_rw_bytes(arena.virt_start, guest_start, bytes, guest_addr, len);
         hvlogf(format_args!(
             "hv: vm{} reporting: hull rw patched blueprint-launch-state bytes={} guest=0x{:016X}",
-            vm_id,
-            len,
-            guest_addr
+            vm_id, len, guest_addr
         ));
     }
 
@@ -714,12 +720,14 @@ fn prepare_guest_hull_rw_template(
     let bytes = guest_end
         .checked_sub(guest_start)
         .ok_or("hull rw template span underflow")? as usize;
-    let arena = crate::phys::reserve_heap_arena(bytes, PAGE_SIZE_4K).ok_or("hull rw template alloc")?;
+    let arena =
+        crate::phys::reserve_heap_arena(bytes, PAGE_SIZE_4K).ok_or("hull rw template alloc")?;
     unsafe {
         core::ptr::write_bytes(arena.virt_start as *mut u8, 0, bytes);
     }
     let template_source = if let Some(kernel_bytes) = crate::limine::guest_kernel_bytes() {
-        if copy_guest_hull_rw_template_from_elf(kernel_bytes, arena.virt_start, guest_start, bytes) {
+        if copy_guest_hull_rw_template_from_elf(kernel_bytes, arena.virt_start, guest_start, bytes)
+        {
             "elf"
         } else {
             unsafe {
@@ -759,11 +767,7 @@ fn prepare_guest_hull_rw_template(
     *GUEST_HULL_RW_TEMPLATE.lock() = template;
     hvlogf(format_args!(
         "hv: hull rw template source={} guest=0x{:016X}..0x{:016X} phys=0x{:016X} bytes={}",
-        template_source,
-        guest_start,
-        guest_end,
-        arena.phys_start,
-        bytes
+        template_source, guest_start, guest_end, arena.phys_start, bytes
     ));
     Ok(template)
 }
@@ -798,7 +802,8 @@ fn copy_guest_hull_rw_template_from_elf(
 
     let mut copied_any = false;
     for idx in 0..phnum as usize {
-        let Some(phdr_off) = (phoff as usize).checked_add(idx.saturating_mul(phentsize as usize)) else {
+        let Some(phdr_off) = (phoff as usize).checked_add(idx.saturating_mul(phentsize as usize))
+        else {
             return copied_any;
         };
         if phdr_off.saturating_add(phentsize as usize) > elf.len() {
@@ -1723,7 +1728,9 @@ fn map_guest_hull_private_rw_span(
     };
     let layout = crate::hv::guest::hull_image_layout();
     let rw_start = backing.guest_start;
-    let rw_end = backing.guest_start.saturating_add(backing.active_bytes as u64);
+    let rw_end = backing
+        .guest_start
+        .saturating_add(backing.active_bytes as u64);
     let chunk_start = page_align_down_2m(rw_start);
     let chunk_end = page_align_up_2m(rw_end);
     let (image_start, image_end) = crate::hv::guest::hull_image_bounds();
@@ -1749,8 +1756,7 @@ fn map_guest_hull_private_rw_span(
                     | PT_ENTRY_PRESENT
                     | PT_ENTRY_WRITABLE
             } else if page_va >= image_start && page_va < image_end {
-                (kernel_va_to_pa(page_va).ok_or("guest hull rw image pa")?
-                    & 0x000F_FFFF_FFFF_F000)
+                (kernel_va_to_pa(page_va).ok_or("guest hull rw image pa")? & 0x000F_FFFF_FFFF_F000)
                     | PT_ENTRY_PRESENT
                     | PT_ENTRY_WRITABLE
             } else {
