@@ -748,34 +748,43 @@ impl ClientBuilder {
                             ));
                         }
 
-                        let verifier = if config.root_certs.is_empty() {
-                            rustls_platform_verifier::Verifier::new(provider.clone())
-                                .map_err(crate::error::builder)?
-                        } else {
-                            #[cfg(any(
-                                all(unix, not(target_os = "android")),
-                                target_os = "windows"
-                            ))]
-                            {
-                                rustls_platform_verifier::Verifier::new_with_extra_roots(
-                                    crate::tls::rustls_der(config.root_certs)?,
-                                    provider.clone(),
-                                )
-                                .map_err(crate::error::builder)?
-                            }
+                        #[cfg(feature = "rustls-platform-verifier")]
+                        {
+                            let verifier = if config.root_certs.is_empty() {
+                                rustls_platform_verifier::Verifier::new(provider.clone())
+                                    .map_err(crate::error::builder)?
+                            } else {
+                                #[cfg(any(
+                                    all(unix, not(target_os = "android")),
+                                    target_os = "windows"
+                                ))]
+                                {
+                                    rustls_platform_verifier::Verifier::new_with_extra_roots(
+                                        crate::tls::rustls_der(config.root_certs)?,
+                                        provider.clone(),
+                                    )
+                                    .map_err(crate::error::builder)?
+                                }
 
-                            #[cfg(not(any(
-                                all(unix, not(target_os = "android")),
-                                target_os = "windows"
-                            )))]
-                            return Err(crate::error::builder(
-                                "rustls-platform-verifier could not load extra certs",
-                            ));
-                        };
+                                #[cfg(not(any(
+                                    all(unix, not(target_os = "android")),
+                                    target_os = "windows"
+                                )))]
+                                return Err(crate::error::builder(
+                                    "rustls-platform-verifier could not load extra certs",
+                                ));
+                            };
 
-                        config_builder
-                            .dangerous()
-                            .with_custom_certificate_verifier(Arc::new(verifier))
+                            config_builder
+                                .dangerous()
+                                .with_custom_certificate_verifier(Arc::new(verifier))
+                        }
+                        #[cfg(not(feature = "rustls-platform-verifier"))]
+                        {
+                            config_builder.with_root_certificates(crate::tls::rustls_store(
+                                config.root_certs,
+                            )?)
+                        }
                     } else {
                         if config.crls.is_empty() {
                             config_builder.with_root_certificates(crate::tls::rustls_store(
