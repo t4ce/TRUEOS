@@ -609,6 +609,14 @@ fn prepare_guest_hull_rw_backing_for_vm(
         crate::hv::current_vm_lapic_low_tag_addr(),
         vm_id.saturating_add(1),
     );
+    for (guest_addr, len) in crate::allocators::hv_guest_allocator_state_spans() {
+        patch_guest_hull_rw_bytes(arena.virt_start, guest_start, bytes, guest_addr, len);
+    }
+    hvlogf(format_args!(
+        "hv: vm{} reporting: hull rw patched hv-guest-allocator-state spans={}",
+        vm_id,
+        crate::allocators::hv_guest_allocator_state_spans().len()
+    ));
     if crate::hv::blueprint_launch_active(vm_id) {
         let (guest_addr, len) = crate::hv::blueprint_launch_states_span();
         patch_guest_hull_rw_bytes(arena.virt_start, guest_start, bytes, guest_addr, len);
