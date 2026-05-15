@@ -598,7 +598,12 @@ pub fn enter_hv_guest_domain_current_cpu(vm_id: u8) -> bool {
     if slot >= 64 || (vm_id as usize) >= crate::allcaps::hv::VM_ID_LIMIT {
         return false;
     }
-    ensure_hv_guest_heap_ready(vm_id)
+    if !ensure_hv_guest_heap_ready(vm_id) {
+        return false;
+    }
+    HV_GUEST_ACTIVE_CPU_MASK.fetch_or(1u64 << slot, Ordering::AcqRel);
+    ALLOC_DOMAIN_OVERRIDE_BY_CPU[slot].store(vm_id, Ordering::Release);
+    true
 }
 
 pub fn leave_hv_guest_domain_current_cpu() {

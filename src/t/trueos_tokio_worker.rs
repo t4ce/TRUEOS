@@ -18,6 +18,7 @@ async fn tokio_blocking_job_task(
     job: TokioBlockingJob,
     lane: crate::stackkeeper::TokioLaneLease,
     _carrier_lease: crate::hv::lane::LaneLease,
+    guest_vm_id: Option<u8>,
     purpose: &'static str,
 ) {
     if !LOGGED_TASK_ENTER.swap(true, Ordering::AcqRel) {
@@ -30,7 +31,11 @@ async fn tokio_blocking_job_task(
             tag.core_kind
         );
     }
-    let _vthread_guard = if crate::t::th::vthread::tokio_blocking_backing_enabled() {
+    let entered_guest_alloc = guest_vm_id
+        .map(crate::allocators::enter_hv_guest_domain_current_cpu)
+        .unwrap_or(false);
+
+    let vthread_guard = if crate::t::th::vthread::tokio_blocking_backing_enabled() {
         if !LOGGED_VTHREAD_BACKING.swap(true, Ordering::AcqRel) {
             crate::log_info!(
                 target: "service";
@@ -41,10 +46,13 @@ async fn tokio_blocking_job_task(
     } else {
         None
     };
-    let _guard = crate::stackkeeper::enter_tokio_lane(lane, purpose);
+    let guard = crate::stackkeeper::enter_tokio_lane(lane, purpose);
     job();
-    drop(_guard);
-    drop(_vthread_guard);
+    drop(guard);
+    drop(vthread_guard);
+    if entered_guest_alloc {
+        crate::allocators::leave_hv_guest_domain_current_cpu();
+    }
     let _ = crate::stackkeeper::release_tokio_lane(lane);
     if !LOGGED_TASK_EXIT.swap(true, Ordering::AcqRel) {
         crate::log_info!(target: "service"; "tokio-worker: exited {}\n", purpose);
@@ -61,7 +69,11 @@ fn reject_until_background_ap_ready() -> i32 {
     -2
 }
 
-fn spawn_on_background_ap(job: TokioBlockingJob, purpose: &'static str) -> i32 {
+fn spawn_on_background_ap(
+    job: TokioBlockingJob,
+    purpose: &'static str,
+    guest_vm_id: Option<u8>,
+) -> i32 {
     let carrier = match crate::hv::lane::pick_tokio_blocking_lane() {
         Ok(carrier) => carrier,
         Err(crate::hv::lane::LanePickError::MissingWorkerLane) => {
@@ -84,8 +96,13 @@ fn spawn_on_background_ap(job: TokioBlockingJob, purpose: &'static str) -> i32 {
     let core_kind = carrier.core_kind;
     let spawner = carrier.spawner.clone();
 
-    let Some(lane) = crate::stackkeeper::try_acquire_tokio_lane(cpu_slot, core_kind, purpose)
-    else {
+    let lane = if let Some(vm_id) = guest_vm_id {
+        crate::stackkeeper::try_acquire_tokio_lane_for_vm(cpu_slot, core_kind, vm_id, purpose)
+    } else {
+        crate::stackkeeper::try_acquire_tokio_lane(cpu_slot, core_kind, purpose)
+    };
+
+    let Some(lane) = lane else {
         let _ = job;
         if !LOGGED_NO_LANE.swap(true, Ordering::AcqRel) {
             crate::log_warn!(target: "service";
@@ -97,7 +114,7 @@ fn spawn_on_background_ap(job: TokioBlockingJob, purpose: &'static str) -> i32 {
         return -4;
     };
 
-    let token = match tokio_blocking_job_task(job, lane, carrier.lease, purpose) {
+    let token = match tokio_blocking_job_task(job, lane, carrier.lease, guest_vm_id, purpose) {
         Ok(token) => token,
         Err(_) => {
             let _ = crate::stackkeeper::release_tokio_lane(lane);
@@ -136,10 +153,38 @@ pub fn spawn_blocking_job_with_purpose(
     job: Box<dyn FnOnce() + Send + 'static>,
     purpose: &'static str,
 ) -> i32 {
-    spawn_on_background_ap(job, purpose)
+    spawn_on_background_ap(job, purpose, None)
+}
+
+pub unsafe fn spawn_guest_blocking_job_from_raw(
+    vm_id: u8,
+    data: usize,
+    vtable: usize,
+    purpose: &'static str,
+) -> i32 {
+    if data == 0 || vtable == 0 {
+        return -5;
+    }
+    let raw: *mut (dyn FnOnce() + Send + 'static) = core::mem::transmute((data, vtable));
+    let job = Box::from_raw(raw);
+    spawn_on_background_ap(job, purpose, Some(vm_id))
 }
 
 #[unsafe(no_mangle)]
 pub extern "Rust" fn trueos_tokio_spawn_blocking_job(job: TokioBlockingJob) -> i32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let raw = Box::into_raw(job);
+        let (data, vtable): (usize, usize) = unsafe { core::mem::transmute(raw) };
+        let (status, rc) = crate::hv::vmcall::guest_call(
+            crate::hv::vmcall::OP_BP_TOKIO_BLOCKING_SPAWN,
+            data as u64,
+            vtable as u64,
+        );
+        return if status == crate::hv::vmcall::STATUS_OK {
+            rc as i32
+        } else {
+            -6
+        };
+    }
     spawn_blocking_job_with_purpose(job, "tokio-blocking-job")
 }

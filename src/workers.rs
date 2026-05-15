@@ -2,7 +2,7 @@ extern crate alloc;
 
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 
 use embassy_executor::{SendSpawner, Spawner};
 use spin::Mutex;
@@ -13,13 +13,23 @@ pub const CORE_KIND_EFF: u8 = 2;
 
 // Slot 0 is BSP and slot 1 is the UI2/service AP; background carriers start at AP2.
 const FIRST_BACKGROUND_SLOT: u32 = 2;
+const WORKER_SLOT_LIMIT: usize = crate::allcaps::hv::VM_CPU_SLOT_LIMIT;
 
 static CORE_SPAWNERS: Mutex<BTreeMap<u32, SendSpawner>> = Mutex::new(BTreeMap::new());
 static CORE_KINDS: Mutex<BTreeMap<u32, u8>> = Mutex::new(BTreeMap::new());
+static CORE_SPAWNER_BY_SLOT: [Mutex<Option<SendSpawner>>; WORKER_SLOT_LIMIT] =
+    [const { Mutex::new(None) }; WORKER_SLOT_LIMIT];
+static CORE_KIND_BY_SLOT: [AtomicU8; WORKER_SLOT_LIMIT] =
+    [const { AtomicU8::new(CORE_KIND_UNKNOWN) }; WORKER_SLOT_LIMIT];
 static SPAWN_RR: AtomicU32 = AtomicU32::new(0);
 
 pub fn register_core_spawner(cpu_slot: u32, core_kind: u8, spawner: Spawner) {
-    CORE_SPAWNERS.lock().insert(cpu_slot, spawner.make_send());
+    let send_spawner = spawner.make_send();
+    if let Some(slot) = CORE_SPAWNER_BY_SLOT.get(cpu_slot as usize) {
+        *slot.lock() = Some(send_spawner);
+        CORE_KIND_BY_SLOT[cpu_slot as usize].store(core_kind, Ordering::Release);
+    }
+    CORE_SPAWNERS.lock().insert(cpu_slot, send_spawner);
     CORE_KINDS.lock().insert(cpu_slot, core_kind);
 }
 
@@ -33,10 +43,9 @@ pub extern "Rust" fn trueos_kernel_worker_register_core_spawner(
 }
 
 pub fn core_kind_for_slot(cpu_slot: u32) -> u8 {
-    CORE_KINDS
-        .lock()
-        .get(&cpu_slot)
-        .copied()
+    CORE_KIND_BY_SLOT
+        .get(cpu_slot as usize)
+        .map(|kind| kind.load(Ordering::Acquire))
         .unwrap_or(CORE_KIND_UNKNOWN)
 }
 
@@ -46,7 +55,13 @@ pub extern "Rust" fn trueos_kernel_worker_core_kind_for_slot(cpu_slot: u32) -> u
 }
 
 pub fn spawner_for_slot(cpu_slot: u32) -> Option<SendSpawner> {
-    CORE_SPAWNERS.lock().get(&cpu_slot).cloned()
+    CORE_SPAWNER_BY_SLOT
+        .get(cpu_slot as usize)
+        .and_then(|slot| *slot.lock())
+}
+
+pub fn background_slot_range() -> core::ops::Range<u32> {
+    FIRST_BACKGROUND_SLOT..WORKER_SLOT_LIMIT as u32
 }
 
 #[unsafe(no_mangle)]
