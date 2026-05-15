@@ -27,6 +27,7 @@ struct AppVmLaunchRequest {
     module_bytes: Vec<u8>,
     app_args: Vec<String>,
     target: MatrixTarget,
+    preflight_complete: bool,
 }
 
 #[derive(Clone)]
@@ -184,6 +185,22 @@ fn enqueue_request(request: AppVmLaunchRequest) {
     APP_VM_RUN_QUEUE.lock().push_back(request);
 }
 
+fn enqueue_blueprint_request(
+    target: MatrixTarget,
+    archive: String,
+    module_bytes: Vec<u8>,
+    app_args: Vec<String>,
+    preflight_complete: bool,
+) {
+    enqueue_request(AppVmLaunchRequest {
+        archive,
+        module_bytes,
+        app_args,
+        target,
+        preflight_complete,
+    });
+}
+
 fn log_run_target_line(target: &MatrixTarget, line: &str) {
     print_matrix_target_line(target, line);
     crate::hv::hvlogf(format_args!("{}", line));
@@ -217,25 +234,28 @@ async fn execute_request(spawner: &Spawner, request: AppVmLaunchRequest) {
 }
 
 async fn execute_blueprint(spawner: &Spawner, request: &AppVmLaunchRequest, log: &dyn Fn(&str)) {
-    let module = match crate::hv::blueprint::parse_blueprint(request.module_bytes.as_slice()) {
-        Ok(module) => module,
-        Err(err) => {
-            log(alloc::format!("hv run: {}", err).as_str());
-            return;
-        }
-    };
+    if !request.preflight_complete
+        && let Err(err) = preflight_blueprint_launch(request.archive.as_str(), request.module_bytes.as_slice(), log).await
+    {
+        log(alloc::format!("hv run: {}", err).as_str());
+        return;
+    }
 
-    let unpacked = match crate::hv::blueprint::unpack_blueprint(&module) {
-        Ok(unpacked) => unpacked,
-        Err(err) => {
-            log(alloc::format!("hv run: {}", err).as_str());
-            return;
-        }
-    };
+    start_blueprint_launch(spawner, request, log);
+}
+
+async fn preflight_blueprint_launch(
+    archive: &str,
+    module_bytes: &[u8],
+    log: &dyn Fn(&str),
+) -> Result<(), String> {
+    let module = crate::hv::blueprint::parse_blueprint(module_bytes)?;
+
+    let unpacked = crate::hv::blueprint::unpack_blueprint(&module)?;
 
     log(alloc::format!(
         "hv run: module={} version={} flags={} entry_hint=sec:{}+0x{:x}",
-        request.archive,
+        archive,
         module.version,
         module.flags,
         crate::hv::blueprint::entry_hint_section(module.entry),
@@ -275,6 +295,7 @@ async fn execute_blueprint(spawner: &Spawner, request: &AppVmLaunchRequest, log:
     } else {
         log("hv run: unpacked payload does not look like ELF");
     }
+
     let mut required_readiness = crate::hv::blueprint::prebind_base_readiness();
     if unpacked.starts_with(b"\x7fELF") {
         match crate::hv::blueprint::elf_imports(unpacked.as_slice()) {
@@ -302,8 +323,7 @@ async fn execute_blueprint(spawner: &Spawner, request: &AppVmLaunchRequest, log:
                             )
                             .as_str()),
                             None => {
-                                log(alloc::format!("hv run: import {} -> unresolved", import.name)
-                                    .as_str())
+                                log(alloc::format!("hv run: import {} -> unresolved", import.name).as_str())
                             }
                         }
                     }
@@ -318,8 +338,9 @@ async fn execute_blueprint(spawner: &Spawner, request: &AppVmLaunchRequest, log:
     if !unpacked.starts_with(b"\x7fELF")
         || !matches!(crate::hv::blueprint::elf_type_name(unpacked.as_slice()), Some("REL"))
     {
-        log("hv run: only ELF REL blueprints are supported for app-vm launch");
-        return;
+        return Err(String::from(
+            "only ELF REL blueprints are supported for app-vm launch",
+        ));
     }
 
     let missing_readiness = required_readiness & !crate::r::readiness::mask();
@@ -337,14 +358,12 @@ async fn execute_blueprint(spawner: &Spawner, request: &AppVmLaunchRequest, log:
         .await;
         if !ready {
             let still_missing = required_readiness & !crate::r::readiness::mask();
-            log(alloc::format!(
-                "hv run: readiness timeout after {}ms required={} missing={}",
+            return Err(alloc::format!(
+                "readiness timeout after {}ms required={} missing={}",
                 BLUEPRINT_READINESS_TIMEOUT.as_millis(),
                 readiness_mask_text(required_readiness).as_str(),
                 readiness_mask_text(still_missing).as_str()
-            )
-            .as_str());
-            return;
+            ));
         }
         log(alloc::format!(
             "hv run: readiness ok required={}",
@@ -353,6 +372,10 @@ async fn execute_blueprint(spawner: &Spawner, request: &AppVmLaunchRequest, log:
         .as_str());
     }
 
+    Ok(())
+}
+
+fn start_blueprint_launch(spawner: &Spawner, request: &AppVmLaunchRequest, log: &dyn Fn(&str)) {
     let Some(vm_id) = crate::hv::first_free_vm_id() else {
         log("hv run: no free app-vm ids");
         return;
@@ -484,13 +507,17 @@ pub(crate) fn enqueue_blueprint_bytes(
 
     let line = alloc::format!("hv run: queued {}", archive.as_str());
     log_run_target_line(&target, line.as_str());
-    enqueue_request(AppVmLaunchRequest {
-        archive,
-        module_bytes,
-        app_args,
-        target,
-    });
+    enqueue_blueprint_request(target, archive, module_bytes, app_args, false);
     Ok(())
+}
+
+async fn preflight_archive_name_to_target_async(
+    target: &MatrixTarget,
+    archive_name: &str,
+    module_bytes: &[u8],
+) -> Result<(), String> {
+    let log = |line: &str| log_run_target_line(target, line);
+    preflight_blueprint_launch(archive_name, module_bytes, &log).await
 }
 
 pub(crate) async fn submit_archive_name_to_target_prefer_trueosfs_async(
@@ -503,13 +530,67 @@ pub(crate) async fn submit_archive_name_to_target_prefer_trueosfs_async(
             .await
             .map_err(|_| String::from("failed to read selected module from TRUEOSFS"))?
         {
-            enqueue_blueprint_bytes(target, String::from(archive_name), module_bytes, app_args)?;
+            preflight_archive_name_to_target_async(&target, archive_name, module_bytes.as_slice())
+                .await?;
+            let required_readiness = crate::hv::blueprint::prebind_required_readiness(module_bytes.as_slice())
+                .map_err(|err| {
+                    let line = alloc::format!("hv run: not queued {} {}", archive_name, err.as_str());
+                    log_run_target_line(&target, line.as_str());
+                    line
+                })?;
+            let missing_readiness = required_readiness & !crate::r::readiness::mask();
+            if missing_readiness != 0 {
+                let line = alloc::format!(
+                    "hv run: not queued {} required={} missing={} ",
+                    archive_name,
+                    readiness_mask_text(required_readiness).as_str(),
+                    readiness_mask_text(missing_readiness).as_str()
+                );
+                log_run_target_line(&target, line.as_str());
+                return Err(line);
+            }
+            let line = alloc::format!("hv run: queued {}", archive_name);
+            log_run_target_line(&target, line.as_str());
+            enqueue_blueprint_request(
+                target,
+                String::from(archive_name),
+                module_bytes,
+                app_args,
+                true,
+            );
             return Ok("TRUEOSFS root");
         }
     }
 
     if let Some(module_bytes) = embedded_module_bytes_by_archive_name(archive_name)? {
-        enqueue_blueprint_bytes(target, String::from(archive_name), module_bytes, app_args)?;
+        preflight_archive_name_to_target_async(&target, archive_name, module_bytes.as_slice())
+            .await?;
+        let required_readiness = crate::hv::blueprint::prebind_required_readiness(module_bytes.as_slice())
+            .map_err(|err| {
+                let line = alloc::format!("hv run: not queued {} {}", archive_name, err.as_str());
+                log_run_target_line(&target, line.as_str());
+                line
+            })?;
+        let missing_readiness = required_readiness & !crate::r::readiness::mask();
+        if missing_readiness != 0 {
+            let line = alloc::format!(
+                "hv run: not queued {} required={} missing={} ",
+                archive_name,
+                readiness_mask_text(required_readiness).as_str(),
+                readiness_mask_text(missing_readiness).as_str()
+            );
+            log_run_target_line(&target, line.as_str());
+            return Err(line);
+        }
+        let line = alloc::format!("hv run: queued {}", archive_name);
+        log_run_target_line(&target, line.as_str());
+        enqueue_blueprint_request(
+            target,
+            String::from(archive_name),
+            module_bytes,
+            app_args,
+            true,
+        );
         return Ok("boot embedded");
     }
 
