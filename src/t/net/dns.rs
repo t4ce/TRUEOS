@@ -6,6 +6,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer, with_timeout};
 use heapless::Vec as HVec;
 use spin::Mutex;
+use tokio::time::Duration as TokioDuration;
 use v::vnet;
 
 use crate::net::tls::{TlsClientConfig, TlsRoots};
@@ -871,7 +872,11 @@ async fn dns_tls_exchange_v4(
                 _ => {}
             }
         }
-        Timer::after(EmbassyDuration::from_millis(5)).await;
+        if tokio::runtime::Handle::try_current().is_ok() {
+            tokio::time::sleep(TokioDuration::from_millis(5)).await;
+        } else {
+            Timer::after(EmbassyDuration::from_millis(5)).await;
+        }
     }
 
     if let Some(h) = handle {

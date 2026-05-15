@@ -2088,8 +2088,13 @@ async fn vmx_launch_once_with_ept(
             ));
             let regs = crate::hv::vmx::guest_registers();
             hvlogf(format_args!(
-                "hv: vm{} reporting: pf-regs rsi=0x{:016X} rdi=0x{:016X} rcx=0x{:016X} rdx=0x{:016X} exit_qual=0x{:016X}",
+                "hv: vm{} reporting: pf-regs rip=0x{:016X} rsp=0x{:016X} rax=0x{:016X} rbx=0x{:016X} rbp=0x{:016X} rsi=0x{:016X} rdi=0x{:016X} rcx=0x{:016X} rdx=0x{:016X} exit_qual=0x{:016X}",
                 current_vm_id_for_log(),
+                lr.guest_rip,
+                guest_rsp,
+                regs.rax,
+                regs.rbx,
+                regs.rbp,
                 regs.rsi,
                 regs.rdi,
                 regs.rcx,

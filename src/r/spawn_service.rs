@@ -1063,7 +1063,7 @@ static TASKS: [TaskSpec; 67] = [
         spawn_ai_qjs_oneshot,
     ),
     TaskSpec::disabled("html-demo", 0, &HTML_DEMO_STARTED, spawn_html_demo),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "http-trueosfs",
         NET_ANY_CONFIGURED_AND_ROOT_READY,
         &HTTP_TRUEOSFS_STARTED,
@@ -1158,7 +1158,7 @@ static TASKS: [TaskSpec; 67] = [
     ),
     TaskSpec::disabled("intel-hda-probe", 0, &INTEL_HDA_PROBE_STARTED, spawn_intel_hda_probe_task),
     TaskSpec::enabled("raple-service", 0, &RAPLE_SERVICE_STARTED, spawn_raple_service),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "html_fetch_service",
         crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
         &HTML_SHACK_SERVICE_STARTED,

@@ -1180,6 +1180,9 @@ fn resolve_std_abi_import(name: &str) -> Option<usize> {
         "getaddrinfo" => Some(crate::std_abi_shim::getaddrinfo as *const () as usize),
         "freeaddrinfo" => Some(crate::std_abi_shim::freeaddrinfo as *const () as usize),
         "gai_strerror" => Some(crate::std_abi_shim::gai_strerror as *const () as usize),
+        "trueos_cabi_dns_resolve_ipv4" => {
+            Some(crate::std_abi_shim::trueos_cabi_dns_resolve_ipv4 as *const () as usize)
+        }
         "posix_memalign" => Some(crate::std_abi_shim::posix_memalign as *const () as usize),
         "getcwd" => Some(crate::std_abi_shim::getcwd as *const () as usize),
         "sysconf" => Some(crate::std_abi_shim::sysconf as *const () as usize),

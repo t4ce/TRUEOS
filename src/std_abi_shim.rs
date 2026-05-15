@@ -2,7 +2,7 @@ extern crate alloc;
 
 use alloc::collections::BTreeMap;
 use core::alloc::Layout;
-use core::ffi::{c_char, c_int, c_void};
+use core::ffi::{c_char, c_int, c_void, CStr};
 use core::ptr;
 use core::slice;
 use core::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
@@ -29,12 +29,20 @@ const TRUEOS_ENOSYS: c_int = 38;
 const TRUEOS_EIO: c_int = 5;
 const TRUEOS_EBADF: c_int = 9;
 const TRUEOS_EAI_SYSTEM: c_int = 11;
+const TRUEOS_EAI_FAMILY: c_int = 5;
+const TRUEOS_EAI_MEMORY: c_int = 6;
+const TRUEOS_EAI_NONAME: c_int = 8;
+const TRUEOS_EAI_SERVICE: c_int = 9;
+const TRUEOS_EAI_SOCKTYPE: c_int = 10;
 const TRUEOS_ETIMEDOUT: c_int = 110;
 const TRUEOS_O_RDONLY: c_int = 0;
 const TRUEOS_SC_PAGESIZE: c_int = 30;
 const TRUEOS_SC_PAGE_SIZE: c_int = TRUEOS_SC_PAGESIZE;
 const TRUEOS_SC_NPROCESSORS_CONF: c_int = 83;
 const TRUEOS_SC_NPROCESSORS_ONLN: c_int = 84;
+const TRUEOS_AF_UNSPEC: c_int = 0;
+const TRUEOS_AF_INET: c_int = 2;
+const TRUEOS_SOCK_STREAM: c_int = 1;
 
 #[repr(C)]
 pub struct Iovec {
@@ -45,6 +53,31 @@ pub struct Iovec {
 #[repr(C)]
 pub struct TrueosDir {
     _private: u8,
+}
+
+#[repr(C)]
+struct TrueosInAddr {
+    s_addr: u32,
+}
+
+#[repr(C)]
+struct TrueosSockAddrIn {
+    sin_family: u16,
+    sin_port: u16,
+    sin_addr: TrueosInAddr,
+    sin_zero: [u8; 8],
+}
+
+#[repr(C)]
+struct TrueosAddrInfo {
+    ai_flags: c_int,
+    ai_family: c_int,
+    ai_socktype: c_int,
+    ai_protocol: c_int,
+    ai_addrlen: u32,
+    ai_addr: *mut c_void,
+    ai_canonname: *mut c_char,
+    ai_next: *mut TrueosAddrInfo,
 }
 
 static GAI_STRERROR_SYSTEM: &[u8] = b"trueos getaddrinfo unavailable\0";
@@ -340,6 +373,54 @@ fn c_realloc_ptr(ptr: *mut c_void, size: usize) -> *mut c_void {
     }
     c_free_ptr(ptr);
     new_ptr
+}
+
+unsafe fn cstr_arg<'a>(ptr: *const c_char) -> Option<&'a str> {
+    if ptr.is_null() {
+        return None;
+    }
+    let bytes = unsafe { CStr::from_ptr(ptr).to_bytes() };
+    core::str::from_utf8(bytes).ok()
+}
+
+unsafe fn getaddrinfo_service_port(service: *const c_char) -> Result<u16, c_int> {
+    let Some(service) = (unsafe { cstr_arg(service) }) else {
+        return Ok(0);
+    };
+    if service.is_empty() {
+        return Ok(0);
+    }
+    let Ok(port) = service.parse::<u16>() else {
+        return Err(TRUEOS_EAI_SERVICE);
+    };
+    Ok(port)
+}
+
+fn getaddrinfo_resolve_ipv4(host: &str) -> Result<[u8; 4], c_int> {
+    crate::t::block_on_io(crate::t::net::dns::resolve_ipv4_with_profile(
+        host,
+        crate::r::net::NetProfile::default(),
+        crate::t::net::dns::DnsConfig::default(),
+    ))
+    .map_err(|_| TRUEOS_EAI_SYSTEM)?
+    .map_err(|err| match err {
+        crate::t::net::dns::DnsError::BadName => TRUEOS_EAI_NONAME,
+        crate::t::net::dns::DnsError::NoNic => TRUEOS_EAI_SYSTEM,
+        crate::t::net::dns::DnsError::Timeout => TRUEOS_EAI_SYSTEM,
+        crate::t::net::dns::DnsError::NoAnswer => TRUEOS_EAI_NONAME,
+    })
+}
+
+unsafe fn freeaddrinfo_chain(mut res: *mut TrueosAddrInfo) {
+    while !res.is_null() {
+        let next = unsafe { (*res).ai_next };
+        let addr = unsafe { (*res).ai_addr };
+        if !addr.is_null() {
+            c_free_ptr(addr);
+        }
+        c_free_ptr(res.cast::<c_void>());
+        res = next;
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -759,17 +840,135 @@ pub unsafe extern "C" fn dirfd(_dir: *mut TrueosDir) -> c_int {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn getaddrinfo(
-    _node: *const c_char,
-    _service: *const c_char,
-    _hints: *const c_void,
-    _res: *mut *mut c_void,
+    node: *const c_char,
+    service: *const c_char,
+    hints: *const c_void,
+    res: *mut *mut c_void,
 ) -> c_int {
-    TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
-    TRUEOS_EAI_SYSTEM
+    if res.is_null() {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return TRUEOS_EAI_SYSTEM;
+    }
+    unsafe { *res = ptr::null_mut() };
+
+    let Some(host) = (unsafe { cstr_arg(node) }) else {
+        return TRUEOS_EAI_NONAME;
+    };
+    if host.trim().is_empty() {
+        return TRUEOS_EAI_NONAME;
+    }
+
+    let (socktype, protocol) = if hints.is_null() {
+        (TRUEOS_SOCK_STREAM, 0)
+    } else {
+        let hints = unsafe { &*hints.cast::<TrueosAddrInfo>() };
+        if hints.ai_family != TRUEOS_AF_UNSPEC && hints.ai_family != TRUEOS_AF_INET {
+            return TRUEOS_EAI_FAMILY;
+        }
+        if hints.ai_socktype != 0 && hints.ai_socktype != TRUEOS_SOCK_STREAM {
+            return TRUEOS_EAI_SOCKTYPE;
+        }
+        (hints.ai_socktype.max(TRUEOS_SOCK_STREAM), hints.ai_protocol)
+    };
+
+    let port = match unsafe { getaddrinfo_service_port(service) } {
+        Ok(port) => port,
+        Err(err) => return err,
+    };
+    let ip = match getaddrinfo_resolve_ipv4(host) {
+        Ok(ip) => ip,
+        Err(err) => return err,
+    };
+
+    let addr_ptr = c_malloc_aligned(
+        core::mem::size_of::<TrueosSockAddrIn>(),
+        core::mem::align_of::<TrueosSockAddrIn>(),
+    )
+    .cast::<TrueosSockAddrIn>();
+    if addr_ptr.is_null() {
+        return TRUEOS_EAI_MEMORY;
+    }
+
+    let info_ptr = c_malloc_aligned(
+        core::mem::size_of::<TrueosAddrInfo>(),
+        core::mem::align_of::<TrueosAddrInfo>(),
+    )
+    .cast::<TrueosAddrInfo>();
+    if info_ptr.is_null() {
+        c_free_ptr(addr_ptr.cast::<c_void>());
+        return TRUEOS_EAI_MEMORY;
+    }
+
+    unsafe {
+        *addr_ptr = TrueosSockAddrIn {
+            sin_family: TRUEOS_AF_INET as u16,
+            sin_port: port.to_be(),
+            sin_addr: TrueosInAddr {
+                s_addr: u32::from_ne_bytes(ip),
+            },
+            sin_zero: [0; 8],
+        };
+        *info_ptr = TrueosAddrInfo {
+            ai_flags: 0,
+            ai_family: TRUEOS_AF_INET,
+            ai_socktype: socktype,
+            ai_protocol: protocol,
+            ai_addrlen: core::mem::size_of::<TrueosSockAddrIn>() as u32,
+            ai_addr: addr_ptr.cast::<c_void>(),
+            ai_canonname: ptr::null_mut(),
+            ai_next: ptr::null_mut(),
+        };
+        *res = info_ptr.cast::<c_void>();
+    }
+    0
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn freeaddrinfo(_res: *mut c_void) {}
+pub unsafe extern "C" fn freeaddrinfo(res: *mut c_void) {
+    unsafe { freeaddrinfo_chain(res.cast::<TrueosAddrInfo>()) };
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_dns_resolve_ipv4(
+    host: *const u8,
+    host_len: usize,
+    out_octets: *mut u8,
+) -> c_int {
+    if host.is_null() || out_octets.is_null() || host_len == 0 {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return TRUEOS_EINVAL;
+    }
+    let host_bytes = unsafe { slice::from_raw_parts(host, host_len) };
+    let Ok(host_name) = core::str::from_utf8(host_bytes) else {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return TRUEOS_EINVAL;
+    };
+    crate::log!("std-abi: dns resolve ipv4 begin host={}\n", host_name);
+    match getaddrinfo_resolve_ipv4(host_name) {
+        Ok(ip) => {
+            crate::log!(
+                "std-abi: dns resolve ipv4 ok host={} ip={}.{}.{}.{}\n",
+                host_name,
+                ip[0],
+                ip[1],
+                ip[2],
+                ip[3]
+            );
+            unsafe { ptr::copy_nonoverlapping(ip.as_ptr(), out_octets, ip.len()) };
+            0
+        }
+        Err(TRUEOS_EAI_NONAME) => {
+            crate::log!("std-abi: dns resolve ipv4 noname host={}\n", host_name);
+            TRUEOS_ERRNO.store(TRUEOS_EIO, Ordering::Relaxed);
+            TRUEOS_EIO
+        }
+        Err(_) => {
+            crate::log!("std-abi: dns resolve ipv4 failed host={}\n", host_name);
+            TRUEOS_ERRNO.store(TRUEOS_ETIMEDOUT, Ordering::Relaxed);
+            TRUEOS_ETIMEDOUT
+        }
+    }
+}
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn gai_strerror(_ecode: c_int) -> *const c_char {
