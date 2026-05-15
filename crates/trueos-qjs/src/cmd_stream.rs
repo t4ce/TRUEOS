@@ -3,46 +3,11 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use core::ffi::{c_char, CStr};
+use core::ffi::{CStr, c_char};
 use core::sync::atomic::{AtomicU32, Ordering};
 use spin::Mutex;
 
 use crate as qjs;
-
-unsafe extern "C" {
-    fn trueos_cabi_gfx_upload_texture_rgba(
-        tex_id: u32,
-        width: u32,
-        height: u32,
-        data_ptr: *const u8,
-        data_len: usize,
-    ) -> i32;
-    fn trueos_cabi_gfx_upload_texture_png(tex_id: u32, data_ptr: *const u8, data_len: usize)
-        -> i32;
-    fn trueos_cabi_gfx_upload_texture_png_async(
-        tex_id: u32,
-        data_ptr: *const u8,
-        data_len: usize,
-    ) -> i32;
-    fn trueos_cabi_gfx_upload_texture_jpeg(
-        tex_id: u32,
-        data_ptr: *const u8,
-        data_len: usize,
-    ) -> i32;
-    fn trueos_cabi_gfx_upload_texture_jpeg_async(
-        tex_id: u32,
-        data_ptr: *const u8,
-        data_len: usize,
-    ) -> i32;
-    fn trueos_cabi_gfx_upload_texture_svg(tex_id: u32, data_ptr: *const u8, data_len: usize)
-        -> i32;
-    fn trueos_cabi_gfx_upload_texture_svg_async(
-        tex_id: u32,
-        data_ptr: *const u8,
-        data_len: usize,
-    ) -> i32;
-    fn trueos_cabi_gfx_texture_status(tex_id: u32) -> i32;
-}
 
 static CMD_STREAM_NEXT_TEX_ID: AtomicU32 = AtomicU32::new(16);
 static CMD_STREAM_TEX_IDS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
@@ -148,7 +113,7 @@ unsafe fn cmd_stream_with_u8_buffer<R>(
     Some(f(ptr as *const u8, len))
 }
 
-type CmdStreamEncodedUploadFn = unsafe extern "C" fn(u32, *const u8, usize) -> i32;
+type CmdStreamEncodedUploadFn = unsafe fn(u32, *const u8, usize) -> i32;
 
 #[inline]
 unsafe fn cmd_stream_create_texture_from_encoded(
@@ -231,7 +196,8 @@ unsafe extern "C" fn qjs_cmd_stream_create_texture_rgba(
     let mut uploaded = false;
     let _ = unsafe {
         cmd_stream_with_u8_buffer(ctx, args[2], |ptr, len| {
-            if len >= need && trueos_cabi_gfx_upload_texture_rgba(tex_id, w, h, ptr, need) == 0 {
+            if len >= need && qjs::platform::gfx::upload_texture_rgba(tex_id, w, h, ptr, need) == 0
+            {
                 uploaded = true;
             }
         })
@@ -250,7 +216,12 @@ unsafe extern "C" fn qjs_cmd_stream_create_texture_png(
     argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
     unsafe {
-        cmd_stream_create_texture_from_encoded(ctx, argc, argv, trueos_cabi_gfx_upload_texture_png)
+        cmd_stream_create_texture_from_encoded(
+            ctx,
+            argc,
+            argv,
+            qjs::platform::gfx::upload_texture_png,
+        )
     }
 }
 
@@ -265,7 +236,7 @@ unsafe extern "C" fn qjs_cmd_stream_create_texture_png_async(
             ctx,
             argc,
             argv,
-            trueos_cabi_gfx_upload_texture_png_async,
+            qjs::platform::gfx::upload_texture_png_async,
         )
     }
 }
@@ -277,7 +248,12 @@ unsafe extern "C" fn qjs_cmd_stream_create_texture_jpeg(
     argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
     unsafe {
-        cmd_stream_create_texture_from_encoded(ctx, argc, argv, trueos_cabi_gfx_upload_texture_jpeg)
+        cmd_stream_create_texture_from_encoded(
+            ctx,
+            argc,
+            argv,
+            qjs::platform::gfx::upload_texture_jpeg,
+        )
     }
 }
 
@@ -292,7 +268,7 @@ unsafe extern "C" fn qjs_cmd_stream_create_texture_jpeg_async(
             ctx,
             argc,
             argv,
-            trueos_cabi_gfx_upload_texture_jpeg_async,
+            qjs::platform::gfx::upload_texture_jpeg_async,
         )
     }
 }
@@ -304,7 +280,12 @@ unsafe extern "C" fn qjs_cmd_stream_create_texture_svg(
     argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
     unsafe {
-        cmd_stream_create_texture_from_encoded(ctx, argc, argv, trueos_cabi_gfx_upload_texture_svg)
+        cmd_stream_create_texture_from_encoded(
+            ctx,
+            argc,
+            argv,
+            qjs::platform::gfx::upload_texture_svg,
+        )
     }
 }
 
@@ -319,7 +300,7 @@ unsafe extern "C" fn qjs_cmd_stream_create_texture_svg_async(
             ctx,
             argc,
             argv,
-            trueos_cabi_gfx_upload_texture_svg_async,
+            qjs::platform::gfx::upload_texture_svg_async,
         )
     }
 }
@@ -353,7 +334,7 @@ unsafe extern "C" fn qjs_cmd_stream_update_texture_rgba(
     let _ = unsafe {
         cmd_stream_with_u8_buffer(ctx, args[3], |ptr, len| {
             if len >= need {
-                let _ = trueos_cabi_gfx_upload_texture_rgba(tex_id, w, h, ptr, need);
+                let _ = qjs::platform::gfx::upload_texture_rgba(tex_id, w, h, ptr, need);
             }
         })
     };
@@ -367,7 +348,12 @@ unsafe extern "C" fn qjs_cmd_stream_update_texture_png(
     argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
     unsafe {
-        cmd_stream_update_texture_from_encoded(ctx, argc, argv, trueos_cabi_gfx_upload_texture_png)
+        cmd_stream_update_texture_from_encoded(
+            ctx,
+            argc,
+            argv,
+            qjs::platform::gfx::upload_texture_png,
+        )
     }
 }
 
@@ -378,7 +364,12 @@ unsafe extern "C" fn qjs_cmd_stream_update_texture_jpeg(
     argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
     unsafe {
-        cmd_stream_update_texture_from_encoded(ctx, argc, argv, trueos_cabi_gfx_upload_texture_jpeg)
+        cmd_stream_update_texture_from_encoded(
+            ctx,
+            argc,
+            argv,
+            qjs::platform::gfx::upload_texture_jpeg,
+        )
     }
 }
 
@@ -389,7 +380,12 @@ unsafe extern "C" fn qjs_cmd_stream_update_texture_svg(
     argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
     unsafe {
-        cmd_stream_update_texture_from_encoded(ctx, argc, argv, trueos_cabi_gfx_upload_texture_svg)
+        cmd_stream_update_texture_from_encoded(
+            ctx,
+            argc,
+            argv,
+            qjs::platform::gfx::upload_texture_svg,
+        )
     }
 }
 
@@ -410,8 +406,9 @@ unsafe extern "C" fn qjs_cmd_stream_destroy_texture(
         return qjs::JSValue::undefined();
     }
     let clear = [0u8, 0, 0, 0];
-    let _ =
-        unsafe { trueos_cabi_gfx_upload_texture_rgba(tex_id, 1, 1, clear.as_ptr(), clear.len()) };
+    let _ = unsafe {
+        qjs::platform::gfx::upload_texture_rgba(tex_id, 1, 1, clear.as_ptr(), clear.len())
+    };
     cmd_stream_release_tex_id(tex_id);
     qjs::JSValue::undefined()
 }
@@ -429,7 +426,7 @@ unsafe extern "C" fn qjs_cmd_stream_get_texture_status(
         return unsafe { qjs::JS_NewFloat64(ctx, 0.0) };
     };
     let tex_id = (tex_id_f as i64).max(0) as u32;
-    unsafe { qjs::JS_NewFloat64(ctx, trueos_cabi_gfx_texture_status(tex_id) as f64) }
+    unsafe { qjs::JS_NewFloat64(ctx, qjs::platform::gfx::texture_status(tex_id) as f64) }
 }
 
 type CmdStreamQjsCallback = unsafe extern "C" fn(

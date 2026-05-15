@@ -51,6 +51,9 @@ pub mod workers;
 pub mod qjs_diag;
 
 #[cfg(feature = "trueos")]
+pub mod platform;
+
+#[cfg(feature = "trueos")]
 pub mod lightningcss_native;
 
 #[cfg(feature = "trueos")]

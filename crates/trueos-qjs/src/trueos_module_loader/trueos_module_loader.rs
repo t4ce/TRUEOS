@@ -11,17 +11,6 @@ use crate as qjs;
 mod compiled;
 mod embedded;
 
-unsafe extern "C" {
-    fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
-    fn trueos_cabi_poll_once();
-    fn trueos_cabi_fs_read_file(
-        path_ptr: *const u8,
-        path_len: usize,
-        out_ptr: *mut u8,
-        out_cap: usize,
-    ) -> isize;
-}
-
 include!("../../../../src/r/cabi_codes.rs");
 
 #[inline]
@@ -29,7 +18,7 @@ fn log_bytes(bytes: &[u8]) {
     if bytes.is_empty() {
         return;
     }
-    unsafe { trueos_cabi_write(1, bytes.as_ptr(), bytes.len()) };
+    qjs::platform::sys::write_stdout(bytes);
 }
 
 #[inline]
@@ -195,7 +184,12 @@ unsafe fn read_file_js_malloc_rc(
     ctx: *mut qjs::JSContext,
     path: &[u8],
 ) -> Result<(*mut u8, usize), isize> {
-    let len = trueos_cabi_fs_read_file(path.as_ptr(), path.len(), core::ptr::null_mut(), 0);
+    let len = qjs::trueos_shims::trueos_cabi_fs_read_file(
+        path.as_ptr(),
+        path.len(),
+        core::ptr::null_mut(),
+        0,
+    );
     if len < 0 {
         return Err(len);
     }
@@ -205,7 +199,7 @@ unsafe fn read_file_js_malloc_rc(
         return Err(FS_ERR_NO_SPACE as isize);
     }
     *buf.add(len) = 0;
-    let got = trueos_cabi_fs_read_file(path.as_ptr(), path.len(), buf, len);
+    let got = qjs::trueos_shims::trueos_cabi_fs_read_file(path.as_ptr(), path.len(), buf, len);
     if got < 0 {
         qjs::js_free(ctx, buf as *mut core::ffi::c_void);
         return Err(got);
@@ -281,7 +275,7 @@ unsafe fn fetch_to_cache_rc_async(
                         if total_ticks != 0 && now() >= deadline {
                             return Err(FS_ERR_TIMEOUT);
                         }
-                        trueos_cabi_poll_once();
+                        qjs::platform::sys::poll_once();
                         if backoff_ticks == 0 {
                             break;
                         }
