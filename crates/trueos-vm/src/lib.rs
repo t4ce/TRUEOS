@@ -81,6 +81,8 @@ pub mod vmcall {
     pub const OP_BP_FETCH_BYTES_DISCARD: u32 = 0x26;
     pub const OP_BP_THREAD_CURRENT_ID: u32 = 0x61;
     pub const OP_BP_TOKIO_BLOCKING_SPAWN: u32 = 0x62;
+    pub const OP_BP_UI2_WINDOW_CREATE: u32 = 0x63;
+    pub const OP_BP_UI2_WINDOW_OP: u32 = 0x64;
 
     pub const STATUS_OK: u32 = 0;
     pub const STATUS_BAD_ARG: u32 = 2;

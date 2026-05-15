@@ -2868,7 +2868,39 @@ pub mod cabi {
         }
     }
 
+    fn svg_bytes_start_like_svg(data: &[u8]) -> bool {
+        let mut offset = 0;
+        while offset < data.len() && matches!(data[offset], b' ' | b'\n' | b'\r' | b'\t') {
+            offset += 1;
+        }
+        data.get(offset..)
+            .is_some_and(|tail| tail.starts_with(b"<svg"))
+    }
+
+    fn log_svg_upload_failure(
+        path: &'static str,
+        tex_id: u32,
+        data_len: usize,
+        rc: i32,
+        data: Option<&[u8]>,
+    ) {
+        let task_domain = crate::t::kernel_task_domain::current();
+        let starts_svg = data.map(svg_bytes_start_like_svg).unwrap_or(false);
+        crate::log!(
+            "gfx-cabi: svg upload failed path={} tex={} len={} rc={} starts_svg={} vm_ctx={:?} hull_vm={:?} task_domain={:?}\n",
+            path,
+            tex_id,
+            data_len,
+            rc,
+            starts_svg as u8,
+            crate::hv::current_guest_execution_context_vm_id(),
+            crate::hv::current_hull_guest_context_vm_id(),
+            task_domain,
+        );
+    }
+
     async fn async_svg_decode_upload_inner(tex_id: u32, bytes: Vec<u8>) {
+        let data_len = bytes.len();
         let rc = match crate::gfx::svg::rasterize_svg_bytes_rgba(bytes.as_slice()) {
             Ok((info, rgba)) => {
                 if queue_texture_rgba_upload_owned(
@@ -2890,6 +2922,7 @@ pub mod cabi {
             Err(code) => code,
         };
         if rc != 0 {
+            log_svg_upload_failure("async-svg", tex_id, data_len, rc, None);
             set_async_tex_status(tex_id, rc);
         }
     }
@@ -5814,7 +5847,10 @@ pub mod cabi {
         let data = core::slice::from_raw_parts(data_ptr, data_len);
         match crate::gfx::svg::upload_svg_bytes_to_texture(tex_id, data) {
             Ok(_) => 0,
-            Err(code) => code,
+            Err(code) => {
+                log_svg_upload_failure("sync-svg", tex_id, data_len, code, Some(data));
+                code
+            }
         }
     }
 
