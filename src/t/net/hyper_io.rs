@@ -1,6 +1,5 @@
 //! Small Hyper/Tokio IO adapters shared by TRUEOS networking code.
 
-use crate::r::std::io;
 use core::{
     convert::Infallible,
     pin::Pin,
@@ -11,6 +10,7 @@ use hyper::{
     rt::{Read as HyperRead, ReadBufCursor, Write as HyperWrite},
 };
 use tokio::io::{AsyncRead, AsyncWrite};
+use trueos_io as io;
 
 pub struct HyperBytesBody {
     bytes: Option<Bytes>,

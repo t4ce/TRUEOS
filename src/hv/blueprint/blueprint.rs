@@ -1141,6 +1141,10 @@ fn resolve_std_abi_import(name: &str) -> Option<usize> {
         "sys_alloc_aligned" => Some(crate::std_abi_shim::sys_alloc_aligned as *const () as usize),
         "sys_rand" => Some(crate::std_abi_shim::sys_rand as *const () as usize),
         "sys_write" => Some(crate::std_abi_shim::sys_write as *const () as usize),
+        "read" => Some(crate::std_abi_shim::read as *const () as usize),
+        "readv" => Some(crate::std_abi_shim::readv as *const () as usize),
+        "write" => Some(crate::std_abi_shim::write as *const () as usize),
+        "writev" => Some(crate::std_abi_shim::writev as *const () as usize),
         "trueos_internal_log_write" => {
             Some(crate::std_abi_shim::trueos_internal_log_write as *const () as usize)
         }
@@ -1155,6 +1159,77 @@ fn resolve_std_abi_import(name: &str) -> Option<usize> {
         "sys_cycle_count" => Some(crate::std_abi_shim::sys_cycle_count as *const () as usize),
         "sys_panic" => Some(crate::std_abi_shim::sys_panic as *const () as usize),
         "sys_halt" => Some(crate::std_abi_shim::sys_halt as *const () as usize),
+        "errno_location" => Some(crate::std_abi_shim::errno_location as *const () as usize),
+        "__errno_location" => Some(crate::std_abi_shim::__errno_location as *const () as usize),
+        "__errno" => Some(crate::std_abi_shim::__errno as *const () as usize),
+        "strerror_r" => Some(crate::std_abi_shim::strerror_r as *const () as usize),
+        "__xpg_strerror_r" => Some(crate::std_abi_shim::__xpg_strerror_r as *const () as usize),
+        "malloc" => Some(trueos_qjs::trueos_shims::malloc as *const () as usize),
+        "calloc" => Some(trueos_qjs::trueos_shims::calloc as *const () as usize),
+        "realloc" => Some(trueos_qjs::trueos_shims::realloc as *const () as usize),
+        "free" => Some(trueos_qjs::trueos_shims::free as *const () as usize),
+        "open" => Some(crate::std_abi_shim::open as *const () as usize),
+        "close" => Some(crate::std_abi_shim::close as *const () as usize),
+        "lseek" => Some(crate::std_abi_shim::lseek as *const () as usize),
+        "fstat" => Some(crate::std_abi_shim::fstat as *const () as usize),
+        "stat" => Some(crate::std_abi_shim::stat as *const () as usize),
+        "opendir" => Some(crate::std_abi_shim::opendir as *const () as usize),
+        "readdir" => Some(crate::std_abi_shim::readdir as *const () as usize),
+        "closedir" => Some(crate::std_abi_shim::closedir as *const () as usize),
+        "dirfd" => Some(crate::std_abi_shim::dirfd as *const () as usize),
+        "getaddrinfo" => Some(crate::std_abi_shim::getaddrinfo as *const () as usize),
+        "freeaddrinfo" => Some(crate::std_abi_shim::freeaddrinfo as *const () as usize),
+        "gai_strerror" => Some(crate::std_abi_shim::gai_strerror as *const () as usize),
+        "posix_memalign" => Some(crate::std_abi_shim::posix_memalign as *const () as usize),
+        "getcwd" => Some(crate::std_abi_shim::getcwd as *const () as usize),
+        "sysconf" => Some(crate::std_abi_shim::sysconf as *const () as usize),
+        "pthread_mutexattr_init" => {
+            Some(crate::std_abi_shim::pthread_mutexattr_init as *const () as usize)
+        }
+        "pthread_mutexattr_settype" => {
+            Some(crate::std_abi_shim::pthread_mutexattr_settype as *const () as usize)
+        }
+        "pthread_mutexattr_destroy" => {
+            Some(crate::std_abi_shim::pthread_mutexattr_destroy as *const () as usize)
+        }
+        "pthread_mutex_init" => Some(crate::std_abi_shim::pthread_mutex_init as *const () as usize),
+        "pthread_mutex_destroy" => {
+            Some(crate::std_abi_shim::pthread_mutex_destroy as *const () as usize)
+        }
+        "pthread_mutex_lock" => Some(crate::std_abi_shim::pthread_mutex_lock as *const () as usize),
+        "pthread_mutex_trylock" => {
+            Some(crate::std_abi_shim::pthread_mutex_trylock as *const () as usize)
+        }
+        "pthread_mutex_unlock" => {
+            Some(crate::std_abi_shim::pthread_mutex_unlock as *const () as usize)
+        }
+        "pthread_self" => Some(crate::std_abi_shim::pthread_self as *const () as usize),
+        "pthread_setname_np" => Some(crate::std_abi_shim::pthread_setname_np as *const () as usize),
+        "pthread_cond_init" => Some(crate::std_abi_shim::pthread_cond_init as *const () as usize),
+        "pthread_condattr_init" => {
+            Some(crate::std_abi_shim::pthread_condattr_init as *const () as usize)
+        }
+        "pthread_condattr_setclock" => {
+            Some(crate::std_abi_shim::pthread_condattr_setclock as *const () as usize)
+        }
+        "pthread_condattr_destroy" => {
+            Some(crate::std_abi_shim::pthread_condattr_destroy as *const () as usize)
+        }
+        "pthread_cond_destroy" => Some(crate::std_abi_shim::pthread_cond_destroy as *const () as usize),
+        "pthread_cond_wait" => Some(crate::std_abi_shim::pthread_cond_wait as *const () as usize),
+        "pthread_cond_timedwait" => {
+            Some(crate::std_abi_shim::pthread_cond_timedwait as *const () as usize)
+        }
+        "pthread_cond_signal" => Some(crate::std_abi_shim::pthread_cond_signal as *const () as usize),
+        "pthread_cond_broadcast" => {
+            Some(crate::std_abi_shim::pthread_cond_broadcast as *const () as usize)
+        }
+        "trueos_platform_monotonic_nanos" => {
+            Some(crate::t::platform::trueos_platform_monotonic_nanos as *const () as usize)
+        }
+        "trueos_tokio_spawn_blocking_job" => {
+            Some(crate::t::trueos_tokio_worker::trueos_tokio_spawn_blocking_job as *const () as usize)
+        }
         "trueos_time_monotonic_nanos" => {
             Some(crate::std_abi_shim::trueos_time_monotonic_nanos as *const () as usize)
         }
@@ -1163,6 +1238,18 @@ fn resolve_std_abi_import(name: &str) -> Option<usize> {
         }
         "trueos_time_unix_seconds" => {
             Some(crate::std_abi_shim::trueos_time_unix_seconds as *const () as usize)
+        }
+        "trueos_tokio_platform_log_semantic_gap" => {
+            Some(crate::t::tokio_platform::trueos_tokio_platform_log_semantic_gap as *const () as usize)
+        }
+        "trueos_tokio_platform_monotonic_nanos" => {
+            Some(crate::t::tokio_platform::trueos_tokio_platform_monotonic_nanos as *const () as usize)
+        }
+        "trueos_tokio_platform_poll_once" => {
+            Some(crate::t::tokio_platform::trueos_tokio_platform_poll_once as *const () as usize)
+        }
+        "trueos_tokio_platform_sleep_ms" => {
+            Some(crate::t::tokio_platform::trueos_tokio_platform_sleep_ms as *const () as usize)
         }
         "trueos_mio_tcp_listener_bind" => {
             Some(crate::mio_compat::trueos_mio_tcp_listener_bind as *const () as usize)

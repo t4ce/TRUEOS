@@ -15,7 +15,6 @@ pub mod path;
 pub mod readiness;
 pub mod spawn_service;
 pub mod spawn_spec;
-pub mod std;
 pub mod stream;
 pub mod sync;
 pub mod time;
