@@ -1871,6 +1871,12 @@ async fn vm_task(vm_id: u8, _lane_lease: crate::hv::lane::LaneLease) {
                 lr.exit_qualification,
                 lr.guest_rip
             ));
+            hvlogf(format_args!(
+                "hv: vm{}-{} reporting: symbolize_hint=addr2line -e TRUEOS.full.elf 0x{:016X}",
+                vm_id,
+                lineage_record.level,
+                lr.guest_rip
+            ));
         }
         Err(e) => {
             if let Some(state) = blueprint_crash_state.as_ref() {
@@ -2109,6 +2115,11 @@ async fn vmx_launch_once_with_ept(
             crate::hv::memory::log_guest_mapping("fault-linear", guest_linear);
             crate::hv::memory::log_guest_mapping("fault-rsp", guest_rsp);
             crate::hv::memory::log_guest_mapping("fault-rip", lr.guest_rip);
+            hvlogf(format_args!(
+                "hv: vm{} reporting: fault-rip symbolize_hint=addr2line -e TRUEOS.full.elf 0x{:016X}",
+                current_vm_id_for_log(),
+                lr.guest_rip
+            ));
             crate::hv::memory::log_guest_mapping_from_cr3("fault-linear", guest_cr3, guest_linear);
             crate::hv::memory::log_guest_mapping_from_cr3("fault-rip", guest_cr3, lr.guest_rip);
             crate::hv::memory::log_guest_phys_pt_context("fault-linear", guest_cr3, guest_linear);
