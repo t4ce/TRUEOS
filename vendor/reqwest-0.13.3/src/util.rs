@@ -6,18 +6,17 @@ where
     U: fmt::Display,
     P: fmt::Display,
 {
+    use base64::Engine;
     use base64::prelude::BASE64_STANDARD;
-    use base64::write::EncoderWriter;
-    use std::io::Write;
+
+    let credentials = match password {
+        Some(password) => format!("{username}:{password}"),
+        None => format!("{username}:"),
+    };
+    let encoded = BASE64_STANDARD.encode(credentials.as_bytes());
 
     let mut buf = b"Basic ".to_vec();
-    {
-        let mut encoder = EncoderWriter::new(&mut buf, &BASE64_STANDARD);
-        let _ = write!(encoder, "{username}:");
-        if let Some(password) = password {
-            let _ = write!(encoder, "{password}");
-        }
-    }
+    buf.extend_from_slice(encoded.as_bytes());
     let mut header = HeaderValue::from_maybe_shared(bytes::Bytes::from(buf))
         .expect("base64 is always valid HeaderValue");
     header.set_sensitive(true);

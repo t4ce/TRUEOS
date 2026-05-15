@@ -251,7 +251,9 @@ use crate::process::kill::Kill;
 use crate::runtime::prelude::*;
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
-use self::imp::{Child as StdChild, Command as StdCommand, ExitStatus, Output, Stdio};
+pub use self::imp::{ExitStatus, Output, Stdio};
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use self::imp::{Child as StdChild, Command as StdCommand};
 use alloc::vec::Vec;
 use core::future::Future;
 use core::pin::Pin;

@@ -4,6 +4,8 @@ use http::header::HeaderValue;
 use http::uri::Scheme;
 use http::Uri;
 use hyper::rt::{Read, ReadBufCursor, Write};
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use hyper::io::{self, IoSlice};
 use hyper_util::client::legacy::connect::{Connected, Connection};
 #[cfg(any(feature = "socks", feature = "__tls", unix, target_os = "windows"))]
 use hyper_util::rt::TokioIo;
@@ -15,6 +17,7 @@ use tower::{timeout::TimeoutLayer, util::BoxCloneSyncService, ServiceBuilder};
 use tower_service::Service;
 
 use core::future::Future;
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::io::{self, IoSlice};
 use std::net::IpAddr;
 use core::pin::Pin;
@@ -1952,10 +1955,13 @@ mod socks {
 
 mod verbose {
     use crate::util::Escape;
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    use hyper::io::{self, IoSlice};
     use hyper::rt::{Read, ReadBufCursor, Write};
     use hyper_util::client::legacy::connect::{Connected, Connection};
     use core::cmp::min;
     use core::fmt;
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     use std::io::{self, IoSlice};
     use core::pin::Pin;
     use core::task::{Context, Poll};
@@ -1995,7 +2001,7 @@ mod verbose {
             mut self: Pin<&mut Self>,
             cx: &mut Context,
             mut buf: ReadBufCursor<'_>,
-        ) -> Poll<std::io::Result<()>> {
+        ) -> Poll<io::Result<()>> {
             // TODO: This _does_ forget the `init` len, so it could result in
             // re-initializing twice. Needs upstream support, perhaps.
             // SAFETY: Passing to a ReadBuf will never de-initialize any bytes.
@@ -2022,7 +2028,7 @@ mod verbose {
             mut self: Pin<&mut Self>,
             cx: &mut Context,
             buf: &[u8],
-        ) -> Poll<Result<usize, std::io::Error>> {
+        ) -> Poll<Result<usize, io::Error>> {
             match Pin::new(&mut self.inner).poll_write(cx, buf) {
                 Poll::Ready(Ok(n)) => {
                     log::trace!("{:08x} write: {:?}", self.id, Escape::new(&buf[..n]));
@@ -2059,14 +2065,14 @@ mod verbose {
         fn poll_flush(
             mut self: Pin<&mut Self>,
             cx: &mut Context,
-        ) -> Poll<Result<(), std::io::Error>> {
+        ) -> Poll<Result<(), io::Error>> {
             Pin::new(&mut self.inner).poll_flush(cx)
         }
 
         fn poll_shutdown(
             mut self: Pin<&mut Self>,
             cx: &mut Context,
-        ) -> Poll<Result<(), std::io::Error>> {
+        ) -> Poll<Result<(), io::Error>> {
             Pin::new(&mut self.inner).poll_shutdown(cx)
         }
     }
