@@ -5,14 +5,21 @@ use core::alloc::Layout;
 use core::ffi::{c_char, c_int, c_void};
 use core::ptr;
 use core::slice;
-use core::sync::atomic::{AtomicI32, Ordering};
+use core::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 use spin::Mutex;
 
 static TRUEOS_ERRNO: AtomicI32 = AtomicI32::new(0);
 static C_ALLOCATIONS: Mutex<BTreeMap<usize, AllocationRecord>> = Mutex::new(BTreeMap::new());
-static PTHREAD_CONDS: Mutex<BTreeMap<usize, PthreadCondState>> = Mutex::new(BTreeMap::new());
-static PTHREAD_MUTEXES: Mutex<BTreeMap<usize, PthreadMutexState>> = Mutex::new(BTreeMap::new());
+static PTHREAD_CONDS: Mutex<[Option<PthreadCondEntry>; PTHREAD_COND_CAPACITY]> =
+    Mutex::new([None; PTHREAD_COND_CAPACITY]);
+static PTHREAD_MUTEXES: Mutex<[Option<PthreadMutexEntry>; PTHREAD_MUTEX_CAPACITY]> =
+    Mutex::new([None; PTHREAD_MUTEX_CAPACITY]);
 static LOGGED_PTHREAD_SYNC: AtomicI32 = AtomicI32::new(0);
+static PTHREAD_SYNC_TRACE_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+const PTHREAD_SYNC_TRACE_LIMIT: usize = 48;
+const PTHREAD_MUTEX_CAPACITY: usize = 256;
+const PTHREAD_COND_CAPACITY: usize = 256;
 
 const TRUEOS_EAGAIN: c_int = 11;
 const TRUEOS_EBUSY: c_int = 16;
@@ -54,9 +61,21 @@ struct PthreadCondState {
 }
 
 #[derive(Clone, Copy)]
+struct PthreadCondEntry {
+    key: usize,
+    state: PthreadCondState,
+}
+
+#[derive(Clone, Copy)]
 struct PthreadMutexState {
     locked: bool,
     owner: usize,
+}
+
+#[derive(Clone, Copy)]
+struct PthreadMutexEntry {
+    key: usize,
+    state: PthreadMutexState,
 }
 
 fn uart_write(bytes: &[u8]) {
@@ -101,13 +120,105 @@ fn pthread_sync_probe_log() {
     }
 }
 
+fn pthread_sync_trace(op: &str, key: usize) {
+    let seq = PTHREAD_SYNC_TRACE_COUNT.fetch_add(1, Ordering::Relaxed);
+    if seq < PTHREAD_SYNC_TRACE_LIMIT {
+        crate::log!(
+            "std-abi: pthread trace seq={} op={} key=0x{:x} owner={}\n",
+            seq,
+            op,
+            key,
+            pthread_current_id()
+        );
+    }
+}
+
+fn pthread_mutex_state_mut(
+    table: &mut [Option<PthreadMutexEntry>; PTHREAD_MUTEX_CAPACITY],
+    key: usize,
+    create: bool,
+) -> Option<&mut PthreadMutexState> {
+    let mut empty_slot = None;
+    for (index, entry) in table.iter_mut().enumerate() {
+        match entry {
+            Some(entry) if entry.key == key => return Some(&mut entry.state),
+            None if empty_slot.is_none() => empty_slot = Some(index),
+            _ => {}
+        }
+    }
+
+    if !create {
+        return None;
+    }
+
+    let index = empty_slot?;
+    table[index] = Some(PthreadMutexEntry {
+        key,
+        state: PthreadMutexState {
+            locked: false,
+            owner: 0,
+        },
+    });
+    table[index].as_mut().map(|entry| &mut entry.state)
+}
+
+fn pthread_mutex_remove(
+    table: &mut [Option<PthreadMutexEntry>; PTHREAD_MUTEX_CAPACITY],
+    key: usize,
+) {
+    for entry in table.iter_mut() {
+        if entry.as_ref().is_some_and(|entry| entry.key == key) {
+            *entry = None;
+            return;
+        }
+    }
+}
+
+fn pthread_cond_state_mut(
+    table: &mut [Option<PthreadCondEntry>; PTHREAD_COND_CAPACITY],
+    key: usize,
+    create: bool,
+) -> Option<&mut PthreadCondState> {
+    let mut empty_slot = None;
+    for (index, entry) in table.iter_mut().enumerate() {
+        match entry {
+            Some(entry) if entry.key == key => return Some(&mut entry.state),
+            None if empty_slot.is_none() => empty_slot = Some(index),
+            _ => {}
+        }
+    }
+
+    if !create {
+        return None;
+    }
+
+    let index = empty_slot?;
+    table[index] = Some(PthreadCondEntry {
+        key,
+        state: PthreadCondState { generation: 0 },
+    });
+    table[index].as_mut().map(|entry| &mut entry.state)
+}
+
+fn pthread_cond_remove(
+    table: &mut [Option<PthreadCondEntry>; PTHREAD_COND_CAPACITY],
+    key: usize,
+) {
+    for entry in table.iter_mut() {
+        if entry.as_ref().is_some_and(|entry| entry.key == key) {
+            *entry = None;
+            return;
+        }
+    }
+}
+
 fn pthread_mutex_unlock_key(key: usize) -> c_int {
+    pthread_sync_trace("mutex.unlock", key);
     let owner = pthread_current_id();
     let mut table = PTHREAD_MUTEXES.lock();
-    let state = table.entry(key).or_insert(PthreadMutexState {
-        locked: false,
-        owner: 0,
-    });
+    let Some(state) = pthread_mutex_state_mut(&mut table, key, false) else {
+        return 0;
+    };
     if state.locked && state.owner != owner {
         return TRUEOS_EINVAL;
     }
@@ -118,14 +229,14 @@ fn pthread_mutex_unlock_key(key: usize) -> c_int {
 
 fn pthread_mutex_lock_key(key: usize) -> c_int {
     pthread_sync_probe_log();
+    pthread_sync_trace("mutex.lock", key);
     let owner = pthread_current_id();
     loop {
         {
             let mut table = PTHREAD_MUTEXES.lock();
-            let state = table.entry(key).or_insert(PthreadMutexState {
-                locked: false,
-                owner: 0,
-            });
+            let Some(state) = pthread_mutex_state_mut(&mut table, key, true) else {
+                return TRUEOS_EAGAIN;
+            };
             if !state.locked {
                 state.locked = true;
                 state.owner = owner;
@@ -138,12 +249,12 @@ fn pthread_mutex_lock_key(key: usize) -> c_int {
 
 fn pthread_mutex_trylock_key(key: usize) -> c_int {
     pthread_sync_probe_log();
+    pthread_sync_trace("mutex.trylock", key);
     let owner = pthread_current_id();
     let mut table = PTHREAD_MUTEXES.lock();
-    let state = table.entry(key).or_insert(PthreadMutexState {
-        locked: false,
-        owner: 0,
-    });
+    let Some(state) = pthread_mutex_state_mut(&mut table, key, true) else {
+        return TRUEOS_EAGAIN;
+    };
     if state.locked {
         return TRUEOS_EBUSY;
     }
@@ -154,17 +265,16 @@ fn pthread_mutex_trylock_key(key: usize) -> c_int {
 
 fn pthread_cond_generation(key: usize) -> u64 {
     let mut table = PTHREAD_CONDS.lock();
-    table
-        .entry(key)
-        .or_insert(PthreadCondState { generation: 0 })
-        .generation
+    pthread_cond_state_mut(&mut table, key, true)
+        .map(|state| state.generation)
+        .unwrap_or(0)
 }
 
 fn pthread_cond_notify_key(key: usize) -> c_int {
     let mut table = PTHREAD_CONDS.lock();
-    let state = table
-        .entry(key)
-        .or_insert(PthreadCondState { generation: 0 });
+    let Some(state) = pthread_cond_state_mut(&mut table, key, true) else {
+        return TRUEOS_EAGAIN;
+    };
     state.generation = state.generation.wrapping_add(1);
     0
 }
@@ -700,20 +810,23 @@ pub unsafe extern "C" fn pthread_mutex_init(mutex: *mut c_void, _attr: *const c_
     let Some(key) = pthread_key(mutex) else {
         return TRUEOS_EINVAL;
     };
-    PTHREAD_MUTEXES.lock().insert(
-        key,
-        PthreadMutexState {
-            locked: false,
-            owner: 0,
-        },
-    );
+    pthread_sync_trace("mutex.init", key);
+    let mut table = PTHREAD_MUTEXES.lock();
+    let Some(state) = pthread_mutex_state_mut(&mut table, key, true) else {
+        return TRUEOS_EAGAIN;
+    };
+    *state = PthreadMutexState {
+        locked: false,
+        owner: 0,
+    };
     0
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pthread_mutex_destroy(mutex: *mut c_void) -> c_int {
     if let Some(key) = pthread_key(mutex) {
-        PTHREAD_MUTEXES.lock().remove(&key);
+        pthread_sync_trace("mutex.destroy", key);
+        pthread_mutex_remove(&mut PTHREAD_MUTEXES.lock(), key);
     }
     0
 }
@@ -747,9 +860,12 @@ pub unsafe extern "C" fn pthread_cond_init(cond: *mut c_void, _attr: *const c_vo
     let Some(key) = pthread_key(cond) else {
         return TRUEOS_EINVAL;
     };
-    PTHREAD_CONDS
-        .lock()
-        .insert(key, PthreadCondState { generation: 0 });
+    pthread_sync_trace("cond.init", key);
+    let mut table = PTHREAD_CONDS.lock();
+    let Some(state) = pthread_cond_state_mut(&mut table, key, true) else {
+        return TRUEOS_EAGAIN;
+    };
+    *state = PthreadCondState { generation: 0 };
     0
 }
 
@@ -771,7 +887,8 @@ pub unsafe extern "C" fn pthread_condattr_destroy(_attr: *mut c_void) -> c_int {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pthread_cond_destroy(cond: *mut c_void) -> c_int {
     if let Some(key) = pthread_key(cond) {
-        PTHREAD_CONDS.lock().remove(&key);
+        pthread_sync_trace("cond.destroy", key);
+        pthread_cond_remove(&mut PTHREAD_CONDS.lock(), key);
     }
     0
 }
@@ -784,6 +901,9 @@ pub unsafe extern "C" fn pthread_cond_wait(cond: *mut c_void, mutex: *mut c_void
     let Some(mutex_key) = pthread_key(mutex) else {
         return TRUEOS_EINVAL;
     };
+
+    pthread_sync_trace("cond.wait", cond_key);
+    pthread_sync_trace("cond.wait.mutex", mutex_key);
 
     let generation = pthread_cond_generation(cond_key);
     let unlock_rc = pthread_mutex_unlock_key(mutex_key);
@@ -811,6 +931,9 @@ pub unsafe extern "C" fn pthread_cond_timedwait(
         return TRUEOS_EINVAL;
     };
 
+    pthread_sync_trace("cond.timedwait", cond_key);
+    pthread_sync_trace("cond.timedwait.mutex", mutex_key);
+
     let generation = pthread_cond_generation(cond_key);
     let unlock_rc = pthread_mutex_unlock_key(mutex_key);
     if unlock_rc != 0 {
@@ -833,6 +956,7 @@ pub unsafe extern "C" fn pthread_cond_signal(cond: *mut c_void) -> c_int {
     let Some(key) = pthread_key(cond) else {
         return TRUEOS_EINVAL;
     };
+    pthread_sync_trace("cond.signal", key);
     pthread_cond_notify_key(key)
 }
 
@@ -841,6 +965,7 @@ pub unsafe extern "C" fn pthread_cond_broadcast(cond: *mut c_void) -> c_int {
     let Some(key) = pthread_key(cond) else {
         return TRUEOS_EINVAL;
     };
+    pthread_sync_trace("cond.broadcast", key);
     pthread_cond_notify_key(key)
 }
 

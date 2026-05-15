@@ -1672,9 +1672,11 @@ impl Builder {
 
         let mut cfg = self.get_cfg();
         cfg.timer_flavor = TimerFlavor::Traditional;
+        crate::platform::note_semantic_gap(crate::platform::TRUEOS_DEBUG_BUILD_DRIVER_NEW);
         let (driver, driver_handle) = driver::Driver::new(cfg)?;
 
         // Blocking pool
+        crate::platform::note_semantic_gap(crate::platform::TRUEOS_DEBUG_BUILD_BLOCKING_POOL);
         let blocking_pool = blocking::create_blocking_pool(self, self.max_blocking_threads);
         let blocking_spawner = blocking_pool.spawner().clone();
 
@@ -1686,6 +1688,7 @@ impl Builder {
         // there are no futures ready to do something, it'll let the timer or
         // the reactor to generate some new stimuli for the futures to continue
         // in their life.
+        crate::platform::note_semantic_gap(crate::platform::TRUEOS_DEBUG_BUILD_CURRENT_THREAD);
         let (scheduler, handle) = CurrentThread::new(
             driver,
             driver_handle,
@@ -1716,6 +1719,7 @@ impl Builder {
             self.name.clone(),
         );
 
+        crate::platform::note_semantic_gap(crate::platform::TRUEOS_DEBUG_BUILD_CURRENT_THREAD_READY);
         let handle = Handle {
             inner: scheduler::Handle::CurrentThread(handle),
         };

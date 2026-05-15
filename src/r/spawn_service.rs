@@ -856,36 +856,36 @@ fn spawn_app_vm_run_queue(spawner: Spawner) -> SpawnAttempt {
 
 #[derive(Clone, Copy)]
 enum BlueprintAutostart {
-    Weather,
+    CurrencyReqwest,
 }
 
 impl BlueprintAutostart {
     const fn label(self) -> &'static str {
         match self {
-            Self::Weather => "weather",
+            Self::CurrencyReqwest => "currency_reqwest",
         }
     }
 
     const fn archive(self) -> &'static str {
         match self {
-            Self::Weather => "weather.bp",
+            Self::CurrencyReqwest => "currency_reqwest.bp",
         }
     }
 
     const fn slot(self) -> &'static str {
         match self {
-            Self::Weather => "wx",
+            Self::CurrencyReqwest => "cur",
         }
     }
 
     const fn settle_ms(self) -> u64 {
         match self {
-            Self::Weather => 0,
+            Self::CurrencyReqwest => 0,
         }
     }
 }
 
-const BP_AUTOSTARTS: &[BlueprintAutostart] = &[BlueprintAutostart::Weather];
+const BP_AUTOSTARTS: &[BlueprintAutostart] = &[BlueprintAutostart::CurrencyReqwest];
 
 #[embassy_executor::task]
 async fn bp_autostart_task() {
@@ -1083,7 +1083,7 @@ static TASKS: [TaskSpec; 67] = [
         spawn_axum_boot,
     ),
     TaskSpec::enabled("app-vm-run-queue", 0, &APP_VM_RUN_QUEUE_STARTED, spawn_app_vm_run_queue),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "bp-autostart",
         BP_AUTOSTART_READY,
         &BP_AUTOSTART_STARTED,
