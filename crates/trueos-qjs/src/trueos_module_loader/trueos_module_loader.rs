@@ -136,11 +136,6 @@ unsafe fn load_native_module(
         return yoga_mod;
     }
 
-    let three_mod = unsafe { crate::threejs::try_create_native_module(ctx, module_name) };
-    if !three_mod.is_null() {
-        return three_mod;
-    }
-
     let workers_mod = unsafe { crate::workers::try_create_native_module(ctx, module_name) };
     if !workers_mod.is_null() {
         return workers_mod;
@@ -593,8 +588,6 @@ pub(crate) unsafe fn normalize_with_mode(
             || spec == b"worker_threads"
             || spec == b"trueos:yoga"
             || spec == b"yoga-native"
-            || spec == b"trueos:threejs"
-            || spec == b"threejs-native"
             || spec == b"process"
             || spec == b"node:process"
             || spec == b"node:worker_threads"
@@ -696,7 +689,7 @@ unsafe fn load_url_module(
     trace_bytes(&cache_path);
     trace_nl();
 
-    // If the URL cache file is provided as an embedded module (via crates/trueos-qjs/app/cdn/*),
+    // If the URL cache file is provided as an embedded module (via crates/trueos-qjs/src/app/cdn/*),
     // prefer that over touching the filesystem or network.
     if let Some(em) = embedded::find(&cache_path) {
         // Fast-path: build-time bytecode.
