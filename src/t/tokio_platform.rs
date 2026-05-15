@@ -9,6 +9,10 @@ const SEMANTIC_GAP_RUNTIME_PARK_POLL: u32 = 2;
 const SEMANTIC_GAP_BLOCKING_POOL_POLL: u32 = 3;
 const SEMANTIC_GAP_MULTI_THREAD_PARK_POLL: u32 = 4;
 const SEMANTIC_GAP_BARRIER_POLL: u32 = 5;
+const TRUEOS_DEBUG_BUILD_DRIVER_NEW: u32 = 6;
+const TRUEOS_DEBUG_BUILD_BLOCKING_POOL: u32 = 7;
+const TRUEOS_DEBUG_BUILD_CURRENT_THREAD: u32 = 8;
+const TRUEOS_DEBUG_BUILD_CURRENT_THREAD_READY: u32 = 9;
 
 fn semantic_gap_message(code: u32) -> &'static str {
     match code {
@@ -26,6 +30,18 @@ fn semantic_gap_message(code: u32) -> &'static str {
         }
         SEMANTIC_GAP_BARRIER_POLL => {
             "tokio-platform: loom Barrier uses Platform sleep/poll; no kernel barrier wait queue yet"
+        }
+        TRUEOS_DEBUG_BUILD_DRIVER_NEW => {
+            "tokio-platform: debug current_thread build entering Driver::new"
+        }
+        TRUEOS_DEBUG_BUILD_BLOCKING_POOL => {
+            "tokio-platform: debug current_thread build entering blocking::create_blocking_pool"
+        }
+        TRUEOS_DEBUG_BUILD_CURRENT_THREAD => {
+            "tokio-platform: debug current_thread build entering CurrentThread::new"
+        }
+        TRUEOS_DEBUG_BUILD_CURRENT_THREAD_READY => {
+            "tokio-platform: debug current_thread build CurrentThread::new returned"
         }
         _ => "tokio-platform: unknown semantic gap marker",
     }

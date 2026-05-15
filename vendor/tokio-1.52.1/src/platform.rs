@@ -10,6 +10,10 @@ pub(crate) const SEMANTIC_GAP_RUNTIME_PARK_POLL: u32 = 2;
 pub(crate) const SEMANTIC_GAP_BLOCKING_POOL_POLL: u32 = 3;
 pub(crate) const SEMANTIC_GAP_MULTI_THREAD_PARK_POLL: u32 = 4;
 pub(crate) const SEMANTIC_GAP_BARRIER_POLL: u32 = 5;
+pub(crate) const TRUEOS_DEBUG_BUILD_DRIVER_NEW: u32 = 6;
+pub(crate) const TRUEOS_DEBUG_BUILD_BLOCKING_POOL: u32 = 7;
+pub(crate) const TRUEOS_DEBUG_BUILD_CURRENT_THREAD: u32 = 8;
+pub(crate) const TRUEOS_DEBUG_BUILD_CURRENT_THREAD_READY: u32 = 9;
 
 unsafe extern "Rust" {
     fn trueos_platform_cpu_count() -> usize;

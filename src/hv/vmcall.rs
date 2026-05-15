@@ -270,7 +270,8 @@ pub fn dispatch(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_THREAD_CURRENT_ID => {
-            let vtid = crate::t::th::vthread::record_for_vm_hull(vm_id).vtid();
+            let vtid = crate::t::th::vthread::current_id()
+                .unwrap_or_else(|| crate::t::th::vthread::record_for_vm_hull(vm_id).vtid());
             write_response(vm_id, seq, STATUS_OK, vtid as u64, 0);
             DispatchOutcome::Resume
         }
