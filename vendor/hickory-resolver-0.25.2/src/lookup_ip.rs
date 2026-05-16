@@ -15,7 +15,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use core::pin::Pin;
 use std::sync::Arc;
 use core::task::{Context, Poll};
-use std::time::Instant;
+use crate::time::Instant;
 
 use futures_util::{FutureExt, future, future::Either};
 use tracing::debug;

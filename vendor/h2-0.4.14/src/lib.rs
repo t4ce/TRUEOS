@@ -105,6 +105,17 @@ macro_rules! ready {
     };
 }
 
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+mod time {
+    pub(crate) use core::time::Duration;
+    pub(crate) use tokio::time::Instant;
+}
+
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+mod time {
+    pub(crate) use std::time::{Duration, Instant};
+}
+
 #[cfg_attr(feature = "unstable", allow(missing_docs))]
 mod codec;
 mod error;

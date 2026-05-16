@@ -29,7 +29,7 @@ use crate::frame::{StreamId, StreamIdOverflow};
 use crate::proto::*;
 
 use bytes::Bytes;
-use std::time::Duration;
+use crate::time::Duration;
 
 #[derive(Debug)]
 pub struct Config {

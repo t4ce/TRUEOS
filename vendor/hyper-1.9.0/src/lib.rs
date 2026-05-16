@@ -99,6 +99,8 @@
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 extern crate alloc;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub extern crate std as real_std;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 extern crate self as std;
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
@@ -120,6 +122,11 @@ pub mod cmp {
 pub mod collections {
     pub use alloc::collections::*;
     pub use hashbrown::{HashMap, HashSet};
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod convert {
+    pub use core::convert::*;
 }
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]

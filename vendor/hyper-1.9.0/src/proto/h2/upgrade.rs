@@ -1,5 +1,5 @@
+use alloc::boxed::Box;
 use core::future::Future;
-use std::io::Cursor;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 
@@ -44,7 +44,7 @@ pub(super) struct H2Upgraded {
 }
 
 struct UpgradedSendStreamBridge {
-    tx: mpsc::Sender<Cursor<Box<[u8]>>>,
+    tx: mpsc::Sender<Bytes>,
     error_rx: oneshot::Receiver<crate::Error>,
 }
 
@@ -54,7 +54,7 @@ pin_project! {
         #[pin]
         h2_tx: SendStream<SendBuf<B>>,
         #[pin]
-        rx: mpsc::Receiver<Cursor<Box<[u8]>>>,
+        rx: mpsc::Receiver<Bytes>,
         error_tx: Option<oneshot::Sender<crate::Error>>,
     }
 }
@@ -114,9 +114,9 @@ where
             }
 
             match me.rx.as_mut().poll_next(cx) {
-                Poll::Ready(Some(cursor)) => {
+                Poll::Ready(Some(bytes)) => {
                     me.h2_tx
-                        .send_data(SendBuf::Cursor(cursor), false)
+                        .send_data(SendBuf::Bytes(bytes), false)
                         .map_err(crate::Error::new_body_write)?;
                 }
                 Poll::Ready(None) => {
@@ -175,9 +175,10 @@ impl Read for H2Upgraded {
                     Some(Err(e)) => {
                         return Poll::Ready(match e.reason() {
                             Some(Reason::NO_ERROR) | Some(Reason::CANCEL) => Ok(()),
-                            Some(Reason::STREAM_CLOSED) => {
-                                Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, e))
-                            }
+                            Some(Reason::STREAM_CLOSED) => Err(std::io::Error::new(
+                                std::io::ErrorKind::BrokenPipe,
+                                "h2 stream closed",
+                            )),
                             _ => Err(h2_to_io_error(e)),
                         })
                     }
@@ -219,7 +220,7 @@ impl Write for H2Upgraded {
         }
 
         let n = buf.len();
-        match self.send_stream.tx.start_send(Cursor::new(buf.into())) {
+        match self.send_stream.tx.start_send(Bytes::copy_from_slice(buf)) {
             Ok(()) => Poll::Ready(Ok(n)),
             Err(_task_dropped) => {
                 // if the task dropped, check if there was an error
@@ -268,13 +269,14 @@ impl Write for H2Upgraded {
 }
 
 fn io_error(e: crate::Error) -> std::io::Error {
-    std::io::Error::new(std::io::ErrorKind::Other, e)
+    let _ = e;
+    std::io::Error::new(std::io::ErrorKind::Other, "h2 upgraded stream error")
 }
 
 fn h2_to_io_error(e: h2::Error) -> std::io::Error {
     if e.is_io() {
         e.into_io().unwrap()
     } else {
-        std::io::Error::new(std::io::ErrorKind::Other, e)
+        std::io::Error::new(std::io::ErrorKind::Other, "h2 protocol error")
     }
 }

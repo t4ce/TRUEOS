@@ -10,7 +10,7 @@ use std::sync::{
     atomic::{self, AtomicU32},
 };
 #[cfg(not(test))]
-use std::time::{Duration, Instant};
+use crate::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 #[cfg(test)]

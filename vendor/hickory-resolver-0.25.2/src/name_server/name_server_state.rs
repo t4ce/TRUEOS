@@ -8,7 +8,7 @@
 use core::cmp::Ordering;
 use std::sync::Arc;
 use std::sync::atomic::{self, AtomicU8};
-use std::time::Instant;
+use crate::time::Instant;
 
 use crate::proto::op::Edns;
 use tokio::sync::Mutex;

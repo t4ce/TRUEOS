@@ -19,13 +19,14 @@
 //!    3c. Calculate bdp as bytes/rtt.
 //!    3d. If bdp is over 2/3 max, set new max to bdp and update windows.
 
+use alloc::boxed::Box;
 use core::fmt;
 use core::future::Future;
 use core::pin::Pin;
 use std::sync::{Arc, Mutex};
 use core::task::{self, Poll};
 use core::time::Duration;
-use std::time::Instant;
+use crate::time::Instant;
 
 use h2::{Ping, PingPong};
 

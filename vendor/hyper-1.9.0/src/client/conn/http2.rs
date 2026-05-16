@@ -1,5 +1,6 @@
 //! HTTP/2 client connections
 
+use alloc::boxed::Box;
 use core::error::Error;
 use core::fmt;
 use core::future::Future;

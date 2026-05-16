@@ -1,3 +1,4 @@
+use alloc::boxed::Box;
 use core::error::Error as StdError;
 use core::future::Future;
 use core::pin::Pin;
