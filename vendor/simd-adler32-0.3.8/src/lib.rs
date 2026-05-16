@@ -95,6 +95,7 @@ pub mod hash;
 #[doc(hidden)]
 pub mod imp;
 
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 pub use hash::*;
 use imp::{get_imp, Adler32Imp};
 

@@ -2,13 +2,14 @@
 //!
 //! [`File`]: File
 
-use crate::fs::{asyncify, OpenOptions};
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+use crate::fs::asyncify;
+use crate::fs::OpenOptions;
 use crate::io::blocking::{Buf, DEFAULT_MAX_BUF_SIZE};
 use crate::io::{AsyncRead, AsyncSeek, AsyncWrite, ReadBuf};
 use crate::sync::Mutex;
 
 use alloc::sync::Arc;
-use core::cmp;
 use core::fmt;
 use core::future::Future;
 use core::pin::Pin;
@@ -17,7 +18,7 @@ use core::task::{ready, Context, Poll};
 use crate::fs::trueos::{Metadata, Permissions};
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::fs::{Metadata, Permissions};
-use std::io::{self, Seek, SeekFrom};
+use std::io::{self, SeekFrom};
 use std::path::Path;
 
 #[cfg(test)]
@@ -28,8 +29,10 @@ use super::mocks::MockFile as StdFile;
 use super::mocks::{spawn_blocking, spawn_mandatory_blocking};
 #[cfg(not(test))]
 use crate::blocking::JoinHandle;
-#[cfg(not(test))]
+#[cfg(all(not(test), not(any(target_os = "trueos", target_os = "zkvm"))))]
 use crate::blocking::{spawn_blocking, spawn_mandatory_blocking};
+#[cfg(all(not(test), any(target_os = "trueos", target_os = "zkvm")))]
+use crate::blocking::spawn_blocking;
 #[cfg(all(not(test), not(any(target_os = "trueos", target_os = "zkvm"))))]
 use std::fs::File as StdFile;
 #[cfg(all(not(test), any(target_os = "trueos", target_os = "zkvm")))]

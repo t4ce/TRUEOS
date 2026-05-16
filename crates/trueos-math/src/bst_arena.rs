@@ -181,7 +181,7 @@ impl<K, V, X> BstArena<K, V, X> {
         W: Write,
         F: FnMut(NodeId, &BstNode<K, V, X>, &mut W) -> fmt::Result,
     {
-        use crate::ascii_tree::{AsciiBranches, AsciiStack, Frame, write_ascii_tree};
+        use crate::ascii_tree::{Frame, write_ascii_tree};
 
         if max_nodes == 0 {
             return Ok(());

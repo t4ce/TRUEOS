@@ -583,7 +583,7 @@ unsafe fn pump_net_fetch_text(ctx: *mut qjs::JSContext) -> bool {
             continue;
         }
 
-        let Some(mut op) = take_pending(ctx, op_id) else {
+        let Some(op) = take_pending(ctx, op_id) else {
             let _ = async_fs::discard(op_id);
             continue;
         };

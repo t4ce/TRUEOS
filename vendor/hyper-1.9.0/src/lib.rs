@@ -2,7 +2,7 @@
 #![deny(missing_debug_implementations)]
 #![cfg_attr(
     any(target_os = "trueos", target_os = "zkvm"),
-    allow(missing_docs, missing_debug_implementations)
+    allow(dead_code, missing_docs, missing_debug_implementations, unused_imports)
 )]
 #![cfg_attr(test, deny(rust_2018_idioms))]
 #![cfg_attr(all(test, feature = "full"), deny(unreachable_pub))]

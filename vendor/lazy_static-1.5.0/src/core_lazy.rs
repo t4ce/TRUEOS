@@ -15,7 +15,7 @@ impl<T: Sync> Lazy<T> {
     pub const INIT: Self = Lazy(Once::INIT);
 
     #[inline(always)]
-    pub fn get<F>(&'static self, builder: F) -> &T
+    pub fn get<F>(&'static self, builder: F) -> &'static T
     where
         F: FnOnce() -> T,
     {

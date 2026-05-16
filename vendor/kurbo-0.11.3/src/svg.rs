@@ -4,7 +4,6 @@
 //! SVG path representation.
 
 use alloc::vec::Vec;
-use alloc::string::String;
 use core::f64::consts::PI;
 use core::fmt::{self, Display, Formatter};
 use core::iter::Iterator;

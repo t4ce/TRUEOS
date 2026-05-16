@@ -1,6 +1,7 @@
 #![cfg_attr(target_os = "trueos", no_std)]
 #![deny(missing_docs)]
 #![allow(unknown_lints, bare_trait_objects, deprecated)]
+#![cfg_attr(target_os = "trueos", allow(non_local_definitions, unused_imports))]
 
 //! Bincode is a crate for encoding and decoding using a tiny binary
 //! serialization strategy.  Using it, you can easily go from having

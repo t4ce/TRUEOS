@@ -10,6 +10,19 @@
     rust_2018_idioms,
     unreachable_pub
 )]
+#![cfg_attr(
+    any(target_os = "trueos", target_os = "zkvm"),
+    allow(
+        dead_code,
+        missing_debug_implementations,
+        missing_docs,
+        private_interfaces,
+        unreachable_pub,
+        unused_imports,
+        unused_mut,
+        unused_variables
+    )
+)]
 #![deny(unused_must_use, unsafe_op_in_unsafe_fn)]
 #![doc(test(
     no_crate_inject,

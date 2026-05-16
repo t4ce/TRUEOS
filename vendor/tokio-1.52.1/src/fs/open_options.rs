@@ -1,4 +1,6 @@
-use crate::fs::{asyncify, File};
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+use crate::fs::asyncify;
+use crate::fs::File;
 use alloc::borrow::ToOwned;
 
 use std::io;

@@ -50,6 +50,16 @@ and can focus just on the rendering part.
 #![warn(missing_docs)]
 #![warn(missing_debug_implementations)]
 #![warn(missing_copy_implementations)]
+#![cfg_attr(
+  any(target_os = "trueos", target_os = "zkvm"),
+  allow(
+    dead_code,
+    missing_copy_implementations,
+    missing_debug_implementations,
+    missing_docs,
+    unused_imports
+  )
+)]
 #![no_std]
 
 extern crate alloc;

@@ -9,11 +9,13 @@
 use core::fmt;
 use std::io::{self, Read, Write};
 #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
-use std::io::{IoSlice, IoSliceMut};
+use std::io::IoSlice;
+#[cfg(not(any(target_os = "redox", target_os = "wasi", target_os = "trueos", target_os = "zkvm")))]
+use std::io::IoSliceMut;
 use core::mem::MaybeUninit;
 #[cfg(not(target_os = "nto"))]
 use std::net::Ipv6Addr;
-use std::net::{self, Ipv4Addr, Shutdown};
+use std::net::{Ipv4Addr, Shutdown};
 #[cfg(any(
     all(unix, not(any(target_os = "trueos", target_os = "zkvm"))),
     all(target_os = "wasi", not(target_env = "p1"))

@@ -3,11 +3,11 @@ use alloc::vec::Vec;
 use crate::text_metadata::{ITXtChunk, TEXtChunk, ZTXtChunk};
 #[allow(unused_imports)] // used by doc comments only
 use crate::Filter;
-use std::{borrow::Cow, convert::TryFrom, fmt, io};
+use std::{borrow::Cow, convert::TryFrom, fmt};
 #[cfg(feature = "png-encoding")]
 use crate::{chunk, encoder};
 #[cfg(feature = "png-encoding")]
-use io::Write;
+use std::io::Write;
 
 /// Describes how a pixel is encoded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
