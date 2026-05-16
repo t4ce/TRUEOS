@@ -6,7 +6,7 @@ use crate::on_early_drop::failure::{BodyDropped, DroppedFailure, FutureDropped};
 use crate::on_early_drop::traits::{OnBodyDrop, OnDropCallback, OnFutureDrop};
 use crate::trace::OnFailure;
 use http::{response, Request, StatusCode};
-use std::time::Instant;
+use tokio::time::Instant;
 use tracing::Span;
 
 /// Bridges early-drop events to [`trace::OnFailure`](crate::trace::OnFailure).

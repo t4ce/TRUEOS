@@ -5,7 +5,7 @@ use crate::sys::time::TimeSpec;
 use crate::unistd::Pid;
 use crate::{Errno, Result};
 use libc::{self, clockid_t};
-use std::mem::MaybeUninit;
+use core::mem::MaybeUninit;
 
 /// Clock identifier
 ///

@@ -2,7 +2,7 @@
 // https://github.com/rust-lang/libc/issues/1848
 pub use libc::{suseconds_t, time_t};
 use libc::{timespec, timeval};
-use std::time::Duration;
+use core::time::Duration;
 use std::{cmp, fmt, ops};
 
 const fn zero_init_timespec() -> timespec {

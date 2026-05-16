@@ -1,6 +1,6 @@
 use super::{ClassifiedResponse, ClassifyResponse, NeverClassifyEos, SharedClassifier};
 use http::StatusCode;
-use std::{fmt, ops::RangeInclusive};
+use core::{fmt, ops::RangeInclusive};
 
 /// Response classifier that considers responses with a status code within some range to be
 /// failures.

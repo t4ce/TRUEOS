@@ -6,12 +6,12 @@ use crate::classify::{ClassifiedResponse, ClassifyResponse};
 use http::Response;
 use http_body::Body;
 use pin_project_lite::pin_project;
-use std::{
+use core::{
     future::Future,
     pin::Pin,
     task::{ready, Context, Poll},
-    time::Instant,
 };
+use tokio::time::Instant;
 use tracing::Span;
 
 pin_project! {

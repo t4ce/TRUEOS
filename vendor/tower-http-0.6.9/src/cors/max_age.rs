@@ -1,4 +1,6 @@
-use std::{fmt, sync::Arc, time::Duration};
+use core::time::Duration;
+use core::fmt;
+use std::sync::Arc;
 
 use http::{
     header::{self, HeaderName, HeaderValue},

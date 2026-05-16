@@ -63,9 +63,9 @@ use std::{
     any::TypeId,
     future::Future,
     pin::Pin,
-    time::{Duration, Instant},
 };
 use alloc::boxed::Box;
+use crate::time::{Duration, Instant};
 
 #[cfg(target_os = "zkvm")]
 fn instant_now() -> Instant {

@@ -5,7 +5,8 @@
 use core::time::Duration;
 use std::boxed::Box;
 use std::{fmt, sync::Arc};
-use std::{pin::Pin, time::Instant};
+use core::pin::Pin;
+use crate::time::Instant;
 
 use crate::rt::Sleep;
 use crate::rt::Timer;

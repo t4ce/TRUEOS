@@ -8,7 +8,8 @@
 
 use http::{header, Extensions, HeaderMap, StatusCode, Version};
 use http_body::Body;
-use std::{fmt, sync::Arc};
+use core::fmt;
+use std::sync::Arc;
 
 /// Predicate used to determine if a response should be compressed or not.
 pub trait Predicate: Clone {

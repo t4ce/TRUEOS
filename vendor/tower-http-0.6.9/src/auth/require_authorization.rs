@@ -61,7 +61,7 @@ use http::{
     header::{self, HeaderValue},
     Request, Response, StatusCode,
 };
-use std::{fmt, marker::PhantomData};
+use core::{fmt, marker::PhantomData};
 
 const BASE64: base64::engine::GeneralPurpose = base64::engine::general_purpose::STANDARD;
 
