@@ -482,7 +482,7 @@ impl State {
     }
 
     pub(super) fn ref_inc(&self) {
-        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+        #[cfg(not(target_os = "zkvm"))]
         use std::process;
         use core::sync::atomic::Ordering::Relaxed;
 
@@ -501,9 +501,9 @@ impl State {
 
         // If the reference count overflowed, abort.
         if prev > isize::MAX as usize {
-            #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+            #[cfg(target_os = "zkvm")]
             panic!("tokio task reference count overflow");
-            #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+            #[cfg(not(target_os = "zkvm"))]
             process::abort();
         }
     }

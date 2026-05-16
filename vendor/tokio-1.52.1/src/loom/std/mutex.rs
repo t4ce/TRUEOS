@@ -1,4 +1,4 @@
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 use core::{
     cell::UnsafeCell,
     fmt,
@@ -6,12 +6,12 @@ use core::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+#[cfg(not(target_os = "zkvm"))]
 use std::sync::{self, MutexGuard, TryLockError};
 
 /// Adapter for `std::Mutex` that removes the poisoning aspects
 /// from its API.
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+#[cfg(not(target_os = "zkvm"))]
 #[derive(Debug)]
 pub(crate) struct Mutex<T: ?Sized>(sync::Mutex<T>);
 
@@ -20,24 +20,24 @@ pub(crate) struct Mutex<T: ?Sized>(sync::Mutex<T>);
 // no fairness, and no blocking wait queue. That matches Tokio's loom adapter
 // shape well enough for short internal critical sections, but long waits should
 // grow a real kernel RawMutex or wait-aware lock instead of becoming pthreads.
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 pub(crate) struct Mutex<T: ?Sized> {
     locked: AtomicBool,
     value: UnsafeCell<T>,
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 pub(crate) struct MutexGuard<'a, T: ?Sized> {
     mutex: &'a Mutex<T>,
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 unsafe impl<T: ?Sized + Send> Send for Mutex<T> {}
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 unsafe impl<T: ?Sized + Send> Sync for Mutex<T> {}
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 impl<T: ?Sized + fmt::Debug> fmt::Debug for Mutex<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Mutex").finish_non_exhaustive()
@@ -45,7 +45,7 @@ impl<T: ?Sized + fmt::Debug> fmt::Debug for Mutex<T> {
 }
 
 #[allow(dead_code)]
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+#[cfg(not(target_os = "zkvm"))]
 impl<T> Mutex<T> {
     #[inline]
     pub(crate) fn new(t: T) -> Mutex<T> {
@@ -76,7 +76,7 @@ impl<T> Mutex<T> {
 }
 
 #[allow(dead_code)]
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 impl<T> Mutex<T> {
     #[inline]
     pub(crate) fn new(t: T) -> Mutex<T> {
@@ -97,7 +97,7 @@ impl<T> Mutex<T> {
     }
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 impl<T: Default> Default for Mutex<T> {
     fn default() -> Self {
         Self::new(T::default())
@@ -105,7 +105,7 @@ impl<T: Default> Default for Mutex<T> {
 }
 
 #[allow(dead_code)]
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 impl<T: ?Sized> Mutex<T> {
     #[inline]
     pub(crate) fn lock(&self) -> MutexGuard<'_, T> {
@@ -139,7 +139,7 @@ impl<T: ?Sized> Mutex<T> {
     }
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 impl<'a, T: ?Sized> MutexGuard<'a, T> {
     #[inline]
     pub(crate) fn unwrap(self) -> Self {
@@ -152,14 +152,14 @@ impl<'a, T: ?Sized> MutexGuard<'a, T> {
     }
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 impl<T: ?Sized> Drop for MutexGuard<'_, T> {
     fn drop(&mut self) {
         self.mutex.locked.store(false, Ordering::Release);
     }
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 impl<T: ?Sized> Deref for MutexGuard<'_, T> {
     type Target = T;
 
@@ -168,7 +168,7 @@ impl<T: ?Sized> Deref for MutexGuard<'_, T> {
     }
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 impl<T: ?Sized> DerefMut for MutexGuard<'_, T> {
     fn deref_mut(&mut self) -> &mut T {
         unsafe { &mut *self.mutex.value.get() }
