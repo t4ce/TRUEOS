@@ -1,4 +1,4 @@
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+#[cfg(not(target_os = "zkvm"))]
 use crate::fs::asyncify;
 use crate::runtime::prelude::*;
 use alloc::borrow::ToOwned;
@@ -59,10 +59,10 @@ use std::{io, path::Path};
 pub async fn read(path: impl AsRef<Path>) -> io::Result<Vec<u8>> {
     let path = path.as_ref().to_owned();
 
-    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    #[cfg(target_os = "zkvm")]
     return crate::fs::trueos::read(&path).await;
 
-    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+    #[cfg(not(target_os = "zkvm"))]
     {
     #[cfg(all(
         tokio_unstable,
