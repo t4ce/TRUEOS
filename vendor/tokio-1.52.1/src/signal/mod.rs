@@ -50,13 +50,13 @@ mod ctrl_c;
 #[cfg(feature = "signal")]
 pub use ctrl_c::ctrl_c;
 
-#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
+#[cfg(all(unix, not(target_os = "zkvm")))]
 pub(crate) mod registry;
 
-#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
+#[cfg(all(unix, not(target_os = "zkvm")))]
 pub mod unix;
 pub mod windows;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 mod zkvm;
 
 mod reusable_box;

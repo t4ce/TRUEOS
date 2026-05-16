@@ -30,22 +30,22 @@ pub(crate) mod hint {
 }
 
 pub(crate) mod rand {
-    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+    #[cfg(not(target_os = "zkvm"))]
     use std::collections::hash_map::RandomState;
-    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+    #[cfg(not(target_os = "zkvm"))]
     use core::hash::{BuildHasher, Hash, Hasher};
     use std::sync::atomic::AtomicU32;
     use std::sync::atomic::Ordering::Relaxed;
 
     static COUNTER: AtomicU32 = AtomicU32::new(1);
 
-    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    #[cfg(target_os = "zkvm")]
     pub(crate) fn seed() -> u64 {
         let value = COUNTER.fetch_add(1, Relaxed) as u64;
         0x9e37_79b9_7f4a_7c15 ^ value.wrapping_mul(0xbf58_476d_1ce4_e5b9)
     }
 
-    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+    #[cfg(not(target_os = "zkvm"))]
     pub(crate) fn seed() -> u64 {
         let rand_state = RandomState::new();
         // Hash some unique-ish data to generate some new state
@@ -69,14 +69,14 @@ pub(crate) mod sync {
 
     #[cfg(all(
         not(all(feature = "parking_lot", not(miri))),
-        not(any(target_os = "trueos", target_os = "zkvm"))
+        not(target_os = "zkvm")
     ))]
     #[allow(unused_imports)]
     pub(crate) use std::sync::{Condvar, MutexGuard, RwLockReadGuard, WaitTimeoutResult};
 
     #[cfg(all(
         not(all(feature = "parking_lot", not(miri))),
-        any(target_os = "trueos", target_os = "zkvm")
+        target_os = "zkvm"
     ))]
     #[allow(unused_imports)]
     pub(crate) use crate::sync::{Condvar, WaitTimeoutResult};
@@ -102,7 +102,7 @@ pub(crate) mod sync {
 pub(crate) mod sys {
     #[cfg(all(
         feature = "rt-multi-thread",
-        any(target_os = "trueos", target_os = "zkvm")
+        target_os = "zkvm"
     ))]
     pub(crate) fn num_cpus() -> usize {
         crate::platform::cpu_count()
@@ -110,7 +110,7 @@ pub(crate) mod sys {
 
     #[cfg(all(
         feature = "rt-multi-thread",
-        not(any(target_os = "trueos", target_os = "zkvm"))
+        not(target_os = "zkvm")
     ))]
     pub(crate) fn num_cpus() -> usize {
         use core::num::NonZeroUsize;
