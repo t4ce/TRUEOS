@@ -9,13 +9,14 @@ use core::marker::PhantomPinned;
 use core::mem::MaybeUninit;
 use core::pin::Pin;
 use core::task::{ready, Context, Poll};
-use std::{error::Error as StdError, io};
+use std::error::Error as StdError;
 
 use bytes::Bytes;
 use http::{Request, Response};
 use http_body::Body;
 use hyper::{
     body::Incoming,
+    io,
     rt::{Read, ReadBuf, Timer, Write},
     service::Service,
 };

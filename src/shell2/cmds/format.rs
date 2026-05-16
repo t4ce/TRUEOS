@@ -59,6 +59,13 @@ pub(crate) fn start_format_session_for_disk(
     prefix: &str,
 ) -> ParseOutcome {
     print_target_summary(io, disk, prefix);
+    if !disk.info().writable {
+        print_shell_line(
+            io,
+            &alloc::format!("{prefix}: refused; target is read-only"),
+        );
+        return ParseOutcome::Handled;
+    }
     print_shell_line(io, &alloc::format!("{prefix}: DANGER: this destroys all data on the disk"));
     print_shell_line(io, &alloc::format!("{prefix}: type `sure`"));
     ParseOutcome::StartSession(CommandSessionKind::FormatSure(disk.id().raw()))
@@ -80,6 +87,10 @@ pub(crate) fn handle_session_input(
         print_shell_line(io, "format: selected disk disappeared");
         return CommandSessionInputResult::CompleteIdle;
     };
+    if !disk.info().writable {
+        print_shell_line(io, "format: refused; selected disk is read-only");
+        return CommandSessionInputResult::CompleteIdle;
+    }
 
     submit_format(spawner, io, target, disk);
     CommandSessionInputResult::CompleteRunning

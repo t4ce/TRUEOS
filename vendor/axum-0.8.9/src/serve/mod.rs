@@ -4,7 +4,6 @@ use std::{
     convert::Infallible,
     fmt::Debug,
     future::{Future, IntoFuture},
-    io,
     marker::PhantomData,
     pin::pin,
 };
@@ -15,6 +14,7 @@ use hyper::body::Incoming;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 #[cfg(any(feature = "http1", feature = "http2"))]
 use hyper_util::{server::conn::auto::Builder, service::TowerToHyperService};
+use tokio::io;
 use tokio::sync::watch;
 use tower::ServiceExt as _;
 use tower_service::Service;

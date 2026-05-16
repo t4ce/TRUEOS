@@ -1,6 +1,7 @@
-use std::{cmp, io};
+use std::cmp;
 
 use bytes::{Buf, Bytes};
+use hyper::io;
 use hyper::rt::{Read, ReadBufCursor, Write};
 
 use std::{
