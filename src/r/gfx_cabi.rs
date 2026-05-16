@@ -365,6 +365,14 @@ pub mod env {
         let rel = normalize_app_path(path, allow_empty)?;
         if rel.is_empty() {
             Some(root)
+        } else if rel == "common" {
+            Some(String::from("apps/common"))
+        } else if let Some(shared_rel) = rel.strip_prefix("common/") {
+            if shared_rel.is_empty() {
+                Some(String::from("apps/common"))
+            } else {
+                Some(alloc::format!("apps/common/{}", shared_rel))
+            }
         } else {
             Some(alloc::format!("{}/{}", root.trim_matches('/'), rel))
         }

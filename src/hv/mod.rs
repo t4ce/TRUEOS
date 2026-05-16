@@ -11,7 +11,6 @@ pub mod security;
 pub mod snapshot;
 pub mod store;
 pub mod vmcall;
-pub mod vmm;
 pub mod vmui2;
 pub mod vmx;
 pub mod vnet;

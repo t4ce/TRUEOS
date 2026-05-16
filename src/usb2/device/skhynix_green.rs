@@ -456,7 +456,7 @@ pub(crate) async fn skhynix_uas_flow_service_task(
             }
             SkhynixUasFlowRequest::Write { lba, blocks, data } => {
                 let data_len = data.len();
-                let result = mass::write_blocks_uas_skhynix(
+                let result = match mass::write_blocks_uas_skhynix(
                     &mut pipes.command_out,
                     &mut pipes.status_in,
                     &mut pipes.data_out,
@@ -466,7 +466,22 @@ pub(crate) async fn skhynix_uas_flow_service_task(
                     u32::from(tag),
                 )
                 .await
-                .map_err(map_mass_probe_error);
+                {
+                    Ok(()) => Ok(()),
+                    Err(err) => {
+                        log_mass_probe_failure("write-10", err, lba, blocks, data_len);
+                        let sense_tag = pipes.next_command_tag();
+                        let sense = mass::request_sense_fixed_uas_skhynix_result(
+                            &mut pipes.command_out,
+                            &mut pipes.status_in,
+                            &mut pipes.data_in,
+                            u32::from(sense_tag),
+                        )
+                        .await;
+                        log_request_sense_result("write-10", sense_tag, sense);
+                        Err(map_mass_probe_error(err))
+                    }
+                };
 
                 state.active_lanes = 0;
                 state.completed = state.completed.saturating_add(1);
@@ -495,13 +510,28 @@ pub(crate) async fn skhynix_uas_flow_service_task(
                 }
             }
             SkhynixUasFlowRequest::Flush => {
-                let result = mass::synchronize_cache_uas_skhynix(
+                let result = match mass::synchronize_cache_uas_skhynix(
                     &mut pipes.command_out,
                     &mut pipes.status_in,
                     u32::from(tag),
                 )
                 .await
-                .map_err(map_mass_probe_error);
+                {
+                    Ok(()) => Ok(()),
+                    Err(err) => {
+                        log_mass_probe_failure("sync-cache-10", err, 0, 0, 0);
+                        let sense_tag = pipes.next_command_tag();
+                        let sense = mass::request_sense_fixed_uas_skhynix_result(
+                            &mut pipes.command_out,
+                            &mut pipes.status_in,
+                            &mut pipes.data_in,
+                            u32::from(sense_tag),
+                        )
+                        .await;
+                        log_request_sense_result("sync-cache-10", sense_tag, sense);
+                        Err(map_mass_probe_error(err))
+                    }
+                };
 
                 state.active_lanes = 0;
                 state.completed = state.completed.saturating_add(1);
@@ -529,6 +559,68 @@ fn map_mass_probe_error(err: mass::MassProbeError) -> SkhynixUasFlowError {
         mass::MassProbeError::Transport(_) => SkhynixUasFlowError::Transport,
         mass::MassProbeError::ShortData => SkhynixUasFlowError::ShortData,
         mass::MassProbeError::Csw => SkhynixUasFlowError::Status,
+    }
+}
+
+fn log_mass_probe_failure(
+    cmd: &'static str,
+    err: mass::MassProbeError,
+    lba: u32,
+    blocks: u16,
+    bytes: usize,
+) {
+    let submit = crab_usb::debug_last_submit();
+    let event = crab_usb::debug_last_event();
+    crate::log!(
+        "crabusb: skhynix-green proof=uas-flow cmd={} status=failed lba={} blocks={} bytes={} err={:?} reason={:?} last_submit[slot={} dci={} dir={} stream={} len={} ptr=0x{:X} ring=0x{:X}] last_event[slot={} ep={} cc={} residual={} ptr=0x{:X}]\n",
+        cmd,
+        lba,
+        blocks,
+        bytes,
+        err,
+        err.transport_reason(),
+        submit.slot_id,
+        submit.dci,
+        submit.direction,
+        submit.stream_id,
+        submit.len,
+        submit.ptr,
+        submit.ring_ptr,
+        event.slot_id,
+        event.ep_id,
+        event.completion_code,
+        event.residual,
+        event.ptr
+    );
+}
+
+fn log_request_sense_result(
+    after_cmd: &'static str,
+    tag: u16,
+    result: Result<Option<crate::usb2::scsi::SenseFixed>, mass::MassProbeError>,
+) {
+    match result {
+        Ok(Some(sense)) => crate::log!(
+            "crabusb: skhynix-green proof=uas-flow request-sense after={} tag=0x{:04X} status=ok response=0x{:02X} key={:?} asc=0x{:02X} ascq=0x{:02X}\n",
+            after_cmd,
+            tag,
+            sense.response_code,
+            sense.sense_key,
+            sense.asc,
+            sense.ascq
+        ),
+        Ok(None) => crate::log!(
+            "crabusb: skhynix-green proof=uas-flow request-sense after={} tag=0x{:04X} status=no-sense-data\n",
+            after_cmd,
+            tag
+        ),
+        Err(err) => crate::log!(
+            "crabusb: skhynix-green proof=uas-flow request-sense after={} tag=0x{:04X} status=failed err={:?} reason={:?}\n",
+            after_cmd,
+            tag,
+            err,
+            err.transport_reason()
+        ),
     }
 }
 
