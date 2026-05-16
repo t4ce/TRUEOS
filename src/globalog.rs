@@ -8,28 +8,6 @@ extern crate alloc;
 
 static USB_XHCI_COMPLETION_LAST_LOG_TICK: AtomicU64 = AtomicU64::new(0);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LogRange {
-    Start,
-    End,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LogAmount {
-    Lines,
-    Chars,
-}
-
-pub mod range {
-    use super::LogRange;
-    pub const START: LogRange = LogRange::Start;
-    pub const BEGIN: LogRange = LogRange::Start;
-    pub const FRONT: LogRange = LogRange::Start;
-    pub const END: LogRange = LogRange::End;
-    pub const BACK: LogRange = LogRange::End;
-    pub const REAR: LogRange = LogRange::End;
-}
-
 #[macro_export]
 macro_rules! log {
     (purpose = $purpose:expr; $($tt:tt)*) => {{
@@ -63,14 +41,14 @@ macro_rules! log_debug {
     (target: $target:expr; $($tt:tt)*) => {{
         $crate::globalog::log_with_concept_level(
             $target,
-            $crate::globalog::level::DEBUG,
+            log::Level::Debug,
             format_args!($($tt)*),
         );
     }};
     ($($tt:tt)*) => {{
         $crate::globalog::log_with_concept_level(
             "boot",
-            $crate::globalog::level::DEBUG,
+            log::Level::Debug,
             format_args!($($tt)*),
         );
     }};
@@ -117,14 +95,14 @@ macro_rules! log_error {
     (target: $target:expr; $($tt:tt)*) => {{
         $crate::globalog::log_with_concept_level(
             $target,
-            $crate::globalog::level::ERROR,
+            log::Level::Error,
             format_args!($($tt)*),
         );
     }};
     ($($tt:tt)*) => {{
         $crate::globalog::log_with_concept_level(
             "boot",
-            $crate::globalog::level::ERROR,
+            log::Level::Error,
             format_args!($($tt)*),
         );
     }};
@@ -177,10 +155,8 @@ pub fn purpose_for_level(level: log::Level) -> &'static str {
 
 pub mod level {
     pub const TRACE: log::Level = log::Level::Trace;
-    pub const DEBUG: log::Level = log::Level::Debug;
     pub const INFO: log::Level = log::Level::Info;
     pub const WARN: log::Level = log::Level::Warn;
-    pub const ERROR: log::Level = log::Level::Error;
 }
 
 pub fn log_with_level(level: log::Level, args: fmt::Arguments<'_>) {
@@ -265,64 +241,6 @@ static KERNEL_LOG_FACADE: KernelLogFacade = KernelLogFacade;
 pub fn init_log_facade() {
     let _ = log::set_logger(&KERNEL_LOG_FACADE);
     log::set_max_level(crate::logflag::GLOBAL_LOG_LEVEL);
-}
-
-pub fn log_excerpt(src: &str, range: LogRange, amount: LogAmount, count: usize) {
-    let excerpt = match amount {
-        LogAmount::Lines => excerpt_lines(src, range, count),
-        LogAmount::Chars => excerpt_chars(src, range, count),
-    };
-    log(format_args!("{}\n", excerpt));
-}
-
-fn excerpt_chars(src: &str, range: LogRange, count: usize) -> alloc::string::String {
-    if count == 0 || src.is_empty() {
-        return alloc::string::String::new();
-    }
-
-    match range {
-        LogRange::Start => src.chars().take(count).collect(),
-        LogRange::End => src
-            .chars()
-            .rev()
-            .take(count)
-            .collect::<alloc::vec::Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect(),
-    }
-}
-
-fn excerpt_lines(src: &str, range: LogRange, count: usize) -> alloc::string::String {
-    if count == 0 || src.is_empty() {
-        return alloc::string::String::new();
-    }
-
-    let lines: alloc::vec::Vec<&str> = src.lines().collect();
-    if lines.is_empty() {
-        return alloc::string::String::new();
-    }
-
-    let slice = match range {
-        LogRange::Start => &lines[..core::cmp::min(count, lines.len())],
-        LogRange::End => &lines[lines.len().saturating_sub(count)..],
-    };
-
-    let mut out = alloc::string::String::new();
-    for (idx, line) in slice.iter().enumerate() {
-        if idx != 0 {
-            out.push('\n');
-        }
-        out.push_str(line);
-    }
-    out
-}
-
-pub fn snapshot() -> alloc::vec::Vec<u8> {
-    if crate::logflag::dont_persist_globalog {
-        return alloc::vec::Vec::new();
-    }
-    placeholder::snapshot()
 }
 
 pub(crate) fn append_raw(bytes: &[u8]) {

@@ -391,6 +391,12 @@ fn copy_u32_to_active_guest(vm_id: u8, dst: *mut u32, value: u32) -> bool {
     copy_to_active_guest(vm_id, dst.cast::<u8>(), &value.to_ne_bytes())
 }
 
+fn direct_guest_vm_for_ptr(ptr: *const u8, len: usize) -> Option<u8> {
+    let vm_id = crate::hv::current_vm_id_by_lapic_low()?;
+    active_guest_host_ptr(vm_id, ptr, len)?;
+    Some(vm_id)
+}
+
 fn copy_mio_addr_to_active_guest(
     vm_id: u8,
     dst: *mut TrueosMioSocketAddr,
@@ -1167,6 +1173,19 @@ pub unsafe extern "C" fn trueos_mio_tcp_stream_connect(
         }
         return rc;
     }
+    if let Some(vm_id) = direct_guest_vm_for_ptr(
+        out_socket_id.cast_const().cast::<u8>(),
+        core::mem::size_of::<u32>(),
+    ) {
+        let mut socket_id = 0u32;
+        let rc = crate::hv::with_guest_broker_context(vm_id, || {
+            mio_tcp_stream_connect_host(addr, &mut socket_id)
+        });
+        if rc == STATUS_OK && !copy_u32_to_active_guest(vm_id, out_socket_id, socket_id) {
+            return STATUS_INVALID_INPUT;
+        }
+        return rc;
+    }
     mio_tcp_stream_connect_host(addr, out_socket_id)
 }
 
@@ -1399,9 +1418,22 @@ pub(crate) unsafe fn mio_socket_take_error_host(socket_id: u32) -> i32 {
                 compat.drive_tcp_connect_until_status(socket_id, owner_vm, CONNECT_IO_FASTPATH_NS);
         }
         let Some(socket) = compat.socket_mut_for_owner(socket_id, owner_vm) else {
+            crate::log!(
+                "mio_compat: take_error not-found socket={} owner={}\n",
+                socket_id,
+                owner_vm.map(|id| id as i32).unwrap_or(-1)
+            );
             return STATUS_NOT_FOUND;
         };
         let status = socket.error;
+        if probe_tcp_socket(socket) {
+            crate::log!(
+                "mio_compat: take_error socket={} owner={} status={}\n",
+                socket.id,
+                owner_vm.map(|id| id as i32).unwrap_or(-1),
+                status
+            );
+        }
         socket.error = STATUS_OK;
         status
     })
@@ -1964,6 +1996,14 @@ pub(crate) unsafe fn mio_selector_register_socket_host(
     with_compat(|compat| {
         let Some(socket_owner) = compat.socket(socket_id).and_then(|socket| socket.owner_vm) else {
             if compat.socket_for_owner(socket_id, owner_vm).is_none() {
+                crate::log!(
+                    "mio_compat: selector-register not-found selector={} socket={} owner={} token={} interests=0x{:02x}\n",
+                    selector_id,
+                    socket_id,
+                    owner_vm.map(|id| id as i32).unwrap_or(-1),
+                    token,
+                    interests
+                );
                 return STATUS_NOT_FOUND;
             }
             let socket_owner = owner_vm;
@@ -1988,9 +2028,26 @@ pub(crate) unsafe fn mio_selector_register_socket_host(
             return STATUS_OK;
         };
         if !owner_matches(Some(socket_owner), owner_vm) {
+            crate::log!(
+                "mio_compat: selector-register owner-mismatch selector={} socket={} socket_owner={} owner={} token={} interests=0x{:02x}\n",
+                selector_id,
+                socket_id,
+                socket_owner,
+                owner_vm.map(|id| id as i32).unwrap_or(-1),
+                token,
+                interests
+            );
             return STATUS_NOT_FOUND;
         }
         let registration_owner = owner_vm.or(Some(socket_owner));
+        crate::log!(
+            "mio_compat: selector-register selector={} socket={} owner={} token={} interests=0x{:02x}\n",
+            selector_id,
+            socket_id,
+            registration_owner.map(|id| id as i32).unwrap_or(-1),
+            token,
+            interests
+        );
 
         if let Some(reg) = compat.registrations.iter_mut().find(|reg| {
             owner_matches(reg.owner_vm, owner_vm)

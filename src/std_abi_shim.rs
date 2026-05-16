@@ -351,6 +351,35 @@ fn dns_resolve_error_to_cabi_errno(err: crate::t::net::vlayer::DnsResolveError) 
     }
 }
 
+fn active_guest_stack_host_ptr(ptr: *mut u8, len: usize) -> Option<*mut u8> {
+    let vm_id = crate::hv::current_guest_execution_context_vm_id()
+        .or_else(crate::hv::current_vm_id_by_lapic_low)?;
+    let guest_va = ptr as usize as u64;
+    let offset = guest_va.checked_sub(crate::hv::memory::GUEST_STACK_VA_BASE)? as usize;
+    let stack = crate::hv::memory::guest_stack_slice_for_vm(vm_id)?;
+    let end = offset.checked_add(len)?;
+    if end > stack.len() {
+        return None;
+    }
+    let base = crate::hv::memory::guest_stack_mut_ptr_for_vm(vm_id)?;
+    Some(unsafe { base.add(offset) })
+}
+
+fn copy_to_abi_out(ptr: *mut u8, bytes: &[u8]) -> bool {
+    if ptr.is_null() {
+        return false;
+    }
+    let dst = if let Some(dst) = active_guest_stack_host_ptr(ptr, bytes.len()) {
+        dst
+    } else if (ptr as u64) < 0x0000_8000_0000_0000 {
+        return false;
+    } else {
+        ptr
+    };
+    unsafe { ptr::copy_nonoverlapping(bytes.as_ptr(), dst, bytes.len()) };
+    true
+}
+
 unsafe fn freeaddrinfo_chain(mut res: *mut TrueosAddrInfo) {
     while !res.is_null() {
         let next = unsafe { (*res).ai_next };
@@ -883,8 +912,12 @@ pub unsafe extern "C" fn trueos_cabi_dns_resolve_ipv4(
     };
     match crate::t::net::vlayer::resolve_ipv4_for_sync_abi(host_name) {
         Ok(ip) => {
-            unsafe { ptr::copy_nonoverlapping(ip.as_ptr(), out_octets, ip.len()) };
-            0
+            if copy_to_abi_out(out_octets, &ip) {
+                0
+            } else {
+                TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+                TRUEOS_EINVAL
+            }
         }
         Err(err) => {
             let errno = dns_resolve_error_to_cabi_errno(err);
