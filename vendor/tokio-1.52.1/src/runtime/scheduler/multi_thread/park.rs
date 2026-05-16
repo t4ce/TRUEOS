@@ -14,13 +14,13 @@ use crate::util::TryLock;
 use core::sync::atomic::Ordering::SeqCst;
 use core::time::Duration;
 
-#[cfg(not(target_os = "zkvm"))]
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use crate::loom::sync::Condvar;
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 struct Condvar;
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 impl Condvar {
     fn new() -> Self {
         Condvar
@@ -200,7 +200,7 @@ impl Inner {
             Err(actual) => panic!("inconsistent park state; actual = {actual}"),
         }
 
-        #[cfg(not(target_os = "zkvm"))]
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         let timeout_at = duration.map(|d| {
             crate::time::Instant::now()
                 .into_std()
@@ -209,7 +209,7 @@ impl Inner {
                 .unwrap_or(crate::time::Instant::now().into_std() + Duration::from_secs(1))
         });
 
-        #[cfg(target_os = "zkvm")]
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         {
             crate::platform::note_semantic_gap(
                 crate::platform::SEMANTIC_GAP_MULTI_THREAD_PARK_POLL,
@@ -250,7 +250,7 @@ impl Inner {
             }
         }
 
-        #[cfg(not(target_os = "zkvm"))]
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         loop {
             let is_timeout;
             (m, is_timeout) = match timeout_at {
@@ -381,7 +381,7 @@ impl Inner {
     }
 }
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 fn duration_to_nanos(duration: Duration) -> u64 {
     duration
         .as_secs()
@@ -389,7 +389,7 @@ fn duration_to_nanos(duration: Duration) -> u64 {
         .saturating_add(u64::from(duration.subsec_nanos()))
 }
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 fn remaining_sleep_ms(remaining_nanos: u64) -> u64 {
     (remaining_nanos / 1_000_000).min(1)
 }

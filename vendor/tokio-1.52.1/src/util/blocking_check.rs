@@ -1,7 +1,7 @@
-#[cfg(all(unix, not(target_os = "zkvm")))]
+#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
 use std::os::fd::AsFd;
 
-#[cfg(all(unix, not(target_os = "zkvm")))]
+#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
 #[allow(unused_variables)]
 #[track_caller]
 pub(crate) fn check_socket_for_blocking<S: AsFd>(s: &S) -> crate::io::Result<()> {
@@ -20,7 +20,7 @@ pub(crate) fn check_socket_for_blocking<S: AsFd>(s: &S) -> crate::io::Result<()>
     Ok(())
 }
 
-#[cfg(any(not(unix), target_os = "zkvm", target_os = "zkvm"))]
+#[cfg(any(not(unix), any(target_os = "trueos", target_os = "zkvm"), any(target_os = "trueos", target_os = "zkvm")))]
 #[allow(unused_variables)]
 pub(crate) fn check_socket_for_blocking<S>(s: &S) -> crate::io::Result<()> {
     // we cannot retrieve the nonblocking status on windows

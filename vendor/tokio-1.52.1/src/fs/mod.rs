@@ -249,9 +249,9 @@ pub use self::read_link::read_link;
 
 mod read_to_string;
 pub use self::read_to_string::read_to_string;
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod trueos;
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub use self::trueos::{FileType, Metadata, Permissions};
 
 mod remove_dir;

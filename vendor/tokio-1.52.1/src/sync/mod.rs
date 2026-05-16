@@ -449,23 +449,23 @@
 //! because they require access to the Tokio timer. See the documentation of
 //! each `*_timeout` method for more information on its use.
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub use alloc::sync::{Arc, Weak};
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod atomic {
     pub use core::sync::atomic::*;
 }
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 #[derive(Debug)]
 pub struct Condvar;
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 #[derive(Clone, Copy, Debug)]
 pub struct WaitTimeoutResult(bool);
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 impl WaitTimeoutResult {
     pub fn timed_out(&self) -> bool {
         self.0

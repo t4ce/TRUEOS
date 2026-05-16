@@ -835,14 +835,14 @@ impl TcpSocket {
     /// }
     /// ```
     pub async fn connect(self, addr: SocketAddr) -> io::Result<TcpStream> {
-        #[cfg(target_os = "zkvm")]
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         {
             let _ = self;
             let mio = mio::net::TcpStream::connect(addr)?;
             return TcpStream::connect_mio(mio).await;
         }
 
-        #[cfg(not(target_os = "zkvm"))]
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         {
         if let Err(err) = self.inner.connect(&addr.into()) {
             #[cfg(not(windows))]

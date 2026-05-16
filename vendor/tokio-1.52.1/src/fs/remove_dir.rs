@@ -1,4 +1,4 @@
-#[cfg(not(target_os = "zkvm"))]
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use crate::fs::asyncify;
 use alloc::borrow::ToOwned;
 
@@ -10,8 +10,8 @@ use std::path::Path;
 /// This is an async version of [`std::fs::remove_dir`].
 pub async fn remove_dir(path: impl AsRef<Path>) -> io::Result<()> {
     let path = path.as_ref().to_owned();
-    #[cfg(target_os = "zkvm")]
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
     return crate::fs::trueos::remove_file(&path).await;
-    #[cfg(not(target_os = "zkvm"))]
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     asyncify(move || std::fs::remove_dir(path)).await
 }
