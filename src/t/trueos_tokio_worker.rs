@@ -36,7 +36,9 @@ async fn tokio_blocking_job_task(
         guest_vm_id,
     );
     // Keep guest-originated blocking work on host allocation by default. The
-    // VM/vthread tag below is ownership/TLS identity, not heap ownership.
+    // task-domain VM tag above is ownership identity; the vthread record below
+    // must remain a carrier-lane TLS identity so Tokio does not reuse guest
+    // runtime TLS entries whose contents may point at the low guest stack.
     let vthread_guard = if crate::t::th::vthread::tokio_blocking_backing_enabled() {
         if !LOGGED_VTHREAD_BACKING.swap(true, Ordering::AcqRel) {
             crate::log_info!(
@@ -44,11 +46,7 @@ async fn tokio_blocking_job_task(
                 "tokio-worker: vthread backing enabled for blocking workers\n"
             );
         }
-        // Guest-originated blocking jobs run on a host carrier, but their TLS
-        // identity must remain the VM hull identity.
-        let record = guest_vm_id
-            .map(crate::t::th::vthread::record_for_vm_hull)
-            .unwrap_or_else(|| lane.vthread_record());
+        let record = lane.vthread_record();
         Some(crate::t::th::vthread::enter(record))
     } else {
         None
