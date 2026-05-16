@@ -13,7 +13,7 @@ pub(crate) mod class;
 mod crabusb_service;
 pub(crate) mod descriptor;
 pub(crate) mod hid;
-mod mass;
+pub(crate) mod mass;
 #[path = "device/midi.rs"]
 pub(crate) mod midi;
 #[path = "device/pen.rs"]
