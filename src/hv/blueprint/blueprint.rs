@@ -1414,6 +1414,7 @@ pub(crate) fn build_process_env(
     if let Some(root) = app_fs_root {
         vars.insert(String::from("TRUEOS_APP_FS_ROOT"), String::from(root));
     }
+    vars.insert(String::from("TRUEOS_APP_FS_COMMON"), String::from("apps/common"));
     vars
 }
 
@@ -1451,8 +1452,8 @@ fn safe_archive_stem(archive: &str) -> String {
     }
 }
 
-pub(crate) fn app_fs_root_for_archive(archive: &str, module_bytes: &[u8]) -> String {
-    alloc::format!("apps/{}/{}", safe_archive_stem(archive), sha256_hex(module_bytes))
+pub(crate) fn app_fs_root_for_archive(archive: &str, _module_bytes: &[u8]) -> String {
+    alloc::format!("apps/{}", safe_archive_stem(archive))
 }
 
 pub(crate) fn parse_blueprint(bytes: &[u8]) -> Result<BlueprintModule<'_>, &'static str> {

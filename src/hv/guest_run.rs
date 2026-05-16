@@ -178,12 +178,32 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
         state.archive.as_str(),
         state.module_bytes.as_slice(),
     );
+    match crate::r::io::kfs::create_dir_all(app_fs_root.as_str()) {
+        Ok(()) => {
+            log(alloc::format!("run: guest app fs root ready path={}", app_fs_root.as_str())
+                .as_str())
+        }
+        Err(err) => log(alloc::format!(
+            "run: guest app fs root create failed path={} err={:?}",
+            app_fs_root.as_str(),
+            err
+        )
+        .as_str()),
+    }
+    match crate::r::io::kfs::create_dir_all("apps/common") {
+        Ok(()) => log("run: guest app fs common ready path=apps/common"),
+        Err(err) => log(alloc::format!(
+            "run: guest app fs common create failed path=apps/common err={:?}",
+            err
+        )
+        .as_str()),
+    }
     let process_args =
         crate::hv::blueprint::build_process_args(state.archive.as_str(), state.app_args.as_slice());
     let process_env =
         crate::hv::blueprint::build_process_env(state.archive.as_str(), Some(app_fs_root.as_str()));
     log(alloc::format!(
-        "run: guest app fs root prepared logically path={} fs_create=deferred-vm-service",
+        "run: guest app fs root prepared path={} common=apps/common",
         app_fs_root.as_str()
     )
     .as_str());

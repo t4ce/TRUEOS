@@ -37,10 +37,6 @@ pub mod store {
     pub async fn vm_store_replication_task() {}
 }
 
-pub mod vmm {
-    pub const MAX_VMS: usize = 10;
-}
-
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum StartError {
     UnsupportedVmId,

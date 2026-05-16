@@ -5,7 +5,7 @@ cmd="${1:-start}"
 
 host="${TRUEOS_BAREMETAL_LOG_HOST:-192.168.178.94}"
 port="${TRUEOS_BAREMETAL_LOG_PORT:-1}"
-delay="${TRUEOS_BAREMETAL_LOG_DELAY:-15}"
+delay="${TRUEOS_BAREMETAL_LOG_DELAY:-0}"
 log_dir="${TRUEOS_BAREMETAL_LOG_DIR:-bld/baremetal-logs}"
 pid_file="${TRUEOS_BAREMETAL_LOG_PID:-bld/baremetal-log-drain.pid}"
 slot_file="${TRUEOS_BAREMETAL_LOG_SLOT:-bld/baremetal-log-drain.slot}"
@@ -70,7 +70,9 @@ start() {
 
         {
             printf "trueos baremetal log drain: delay=%ss target=%s:%s started_at=%s\n" "$delay" "$host" "$port" "$(date -Is)"
-            sleep "$delay"
+            if [[ "$delay" != "0" ]]; then
+                sleep "$delay"
+            fi
             printf "trueos baremetal log drain: connecting_at=%s\n" "$(date -Is)"
             exec nc "$host" "$port"
         } >> "$log_path" 2>&1
