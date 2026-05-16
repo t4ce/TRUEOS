@@ -436,6 +436,16 @@ pub(crate) fn current_guest_execution_context_vm_id() -> Option<u8> {
         return Some(vm_id);
     }
 
+    let domain = crate::t::kernel_task_domain::current();
+    if matches!(
+        domain.domain,
+        crate::t::kernel_task_domain::KernelTaskDomain::VmBroker
+            | crate::t::kernel_task_domain::KernelTaskDomain::TokioCarrier
+    ) && let Some(vm_id) = domain.vm_id
+    {
+        return Some(vm_id);
+    }
+
     let snapshot = crate::t::th::vthread::current_snapshot()?;
     if snapshot.role != crate::t::th::vthread::VTHREAD_ROLE_VM_HULL {
         return None;

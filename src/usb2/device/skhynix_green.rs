@@ -505,29 +505,31 @@ pub(crate) async fn maybe_start_skhynix_green(
         next_tag: 0x4752_0001,
     };
 
-    match spawner.spawn(skhynix_uas_flow_service_task(
+    let task = match skhynix_uas_flow_service_task(
         &SKHYNIX_UAS_FLOW_SERVICE,
         pipes,
-    )) {
-        Ok(()) => {
-            crate::log!(
-                "crabusb: skhynix-green {:04X}:{:04X} proof=uas-flow status=started bs={} blocks={} clean_stack_only=true no_block_register=true trueosfs_auto_mount=false\n",
-                vendor_id,
-                product_id,
-                probe.block_size.max(1),
-                probe.block_count.max(1)
-            );
-        }
+    ) {
+        Ok(task) => task,
         Err(err) => {
             crate::log!(
-                "crabusb: skhynix-green {:04X}:{:04X} proof=uas-flow status=spawn-failed err={:?} no_block_register=true trueosfs_auto_mount=false\n",
+                "crabusb: skhynix-green {:04X}:{:04X} proof=uas-flow status=task-token-failed err={:?} no_block_register=true trueosfs_auto_mount=false\n",
                 vendor_id,
                 product_id,
                 err
             );
             unregister_active_green_probe(active_probe);
+            return true;
         }
-    }
+    };
+
+    spawner.spawn(task);
+    crate::log!(
+        "crabusb: skhynix-green {:04X}:{:04X} proof=uas-flow status=started bs={} blocks={} clean_stack_only=true no_block_register=true trueosfs_auto_mount=false\n",
+        vendor_id,
+        product_id,
+        probe.block_size.max(1),
+        probe.block_count.max(1)
+    );
 
     true
 }

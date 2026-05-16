@@ -889,36 +889,48 @@ fn spawn_app_vm_run_queue(spawner: Spawner) -> SpawnAttempt {
 
 #[derive(Clone, Copy)]
 enum BlueprintAutostart {
+    CurrencyReqwest,
+    Flags,
     Weather,
 }
 
 impl BlueprintAutostart {
     const fn label(self) -> &'static str {
         match self {
+            Self::CurrencyReqwest => "currency_reqwest",
+            Self::Flags => "flags",
             Self::Weather => "weather",
         }
     }
 
     const fn archive(self) -> &'static str {
         match self {
+            Self::CurrencyReqwest => "currency_reqwest.bp",
+            Self::Flags => "flags.bp",
             Self::Weather => "weather.bp",
         }
     }
 
     const fn slot(self) -> &'static str {
         match self {
+            Self::CurrencyReqwest => "cur",
+            Self::Flags => "flg",
             Self::Weather => "wth",
         }
     }
 
     const fn settle_ms(self) -> u64 {
         match self {
+            Self::CurrencyReqwest => 750,
+            Self::Flags => 750,
             Self::Weather => 750,
         }
     }
 }
 
 const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
+    BlueprintAutostart::CurrencyReqwest,
+    BlueprintAutostart::Flags,
     BlueprintAutostart::Weather,
 ];
 
