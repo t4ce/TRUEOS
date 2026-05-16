@@ -6,8 +6,8 @@
 // copied, modified, or distributed except according to those terms.
 
 use core::cmp::Ordering;
-use std::sync::Arc;
-use std::sync::atomic::{self, AtomicU8};
+use alloc::sync::Arc;
+use core::sync::atomic::{self, AtomicU8};
 use crate::time::Instant;
 
 use crate::proto::op::Edns;

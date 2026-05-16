@@ -101,7 +101,7 @@ impl<Request, S: Service<Request> + ?Sized> Service<Request> for std::rc::Rc<S> 
     }
 }
 
-impl<Request, S: Service<Request> + ?Sized> Service<Request> for std::sync::Arc<S> {
+impl<Request, S: Service<Request> + ?Sized> Service<Request> for alloc::sync::Arc<S> {
     type Response = S::Response;
     type Error = S::Error;
     type Future = S::Future;

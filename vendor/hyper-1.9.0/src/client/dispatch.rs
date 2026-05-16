@@ -1,6 +1,6 @@
 use core::task::{Context, Poll};
 #[cfg(feature = "http2")]
-use std::{future::Future, pin::Pin};
+use core::{future::Future, pin::Pin};
 
 #[cfg(feature = "http2")]
 use http::{Request, Response};

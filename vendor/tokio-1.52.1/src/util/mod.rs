@@ -101,7 +101,7 @@ cfg_io_driver_impl! {
     pub(crate) mod ptr_expose;
 }
 
-use std::{ops::DerefMut, pin::Pin};
+use core::{ops::DerefMut, pin::Pin};
 
 /// Copy of [`core::pin::Pin::as_deref_mut`].
 // TODO: Remove this once we bump the MSRV to 1.84.

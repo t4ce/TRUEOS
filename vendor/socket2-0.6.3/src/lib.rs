@@ -169,7 +169,7 @@ use std::{fmt, mem};
 use core::marker::PhantomData;
 #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
 use core::mem::MaybeUninit;
-use std::net::SocketAddr;
+use core::net::SocketAddr;
 use core::ops::{Deref, DerefMut};
 use core::time::Duration;
 
