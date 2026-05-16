@@ -1249,6 +1249,9 @@ fn resolve_std_abi_import(name: &str) -> Option<usize> {
         "trueos_platform_monotonic_nanos" => {
             Some(crate::t::platform::trueos_platform_monotonic_nanos as *const () as usize)
         }
+        "trueos_platform_unix_seconds" => {
+            Some(crate::t::platform::trueos_platform_unix_seconds as *const () as usize)
+        }
         "trueos_tokio_spawn_blocking_job" => Some(
             crate::t::trueos_tokio_worker::trueos_tokio_spawn_blocking_job as *const () as usize,
         ),

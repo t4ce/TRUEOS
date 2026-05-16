@@ -490,10 +490,10 @@ where
 mod private {
     use std::{
         future::Future,
-        io,
         pin::Pin,
         task::{Context, Poll},
     };
+    use tokio::io;
 
     pub struct ServeFuture(pub(super) futures_util::future::BoxFuture<'static, io::Result<()>>);
 

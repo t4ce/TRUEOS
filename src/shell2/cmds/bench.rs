@@ -101,9 +101,7 @@ pub(crate) async fn skhynix_uas_flow_read_bench(
     let bytes_per_read = block_size
         .checked_mul(blocks_per_read as usize)
         .ok_or(crate::usb2::mass::MassProbeError::ShortData)?;
-    let lanes = config
-        .lanes
-        .clamp(1, SKHYNIX_UAS_FLOW_BENCH_MAX_LANES);
+    let lanes = config.lanes.clamp(1, SKHYNIX_UAS_FLOW_BENCH_MAX_LANES);
     let rounds = config.rounds_per_lane.max(1);
     let readable_blocks = config.block_count.min(u64::from(u32::MAX) + 1);
     let max_start_lba = readable_blocks.saturating_sub(u64::from(blocks_per_read));
@@ -149,7 +147,11 @@ pub(crate) async fn skhynix_uas_flow_read_bench(
         reads,
         bytes,
         elapsed_ms,
-        min_read_us: if min_read_us == u64::MAX { 0 } else { min_read_us },
+        min_read_us: if min_read_us == u64::MAX {
+            0
+        } else {
+            min_read_us
+        },
         max_read_us,
     })
 }

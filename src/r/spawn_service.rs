@@ -888,50 +888,43 @@ fn spawn_app_vm_run_queue(spawner: Spawner) -> SpawnAttempt {
 }
 
 #[derive(Clone, Copy)]
-enum BlueprintAutostart {
-    CurrencyReqwest,
-    Flags,
-    Weather,
-}
-
-impl BlueprintAutostart {
-    const fn label(self) -> &'static str {
-        match self {
-            Self::CurrencyReqwest => "currency_reqwest",
-            Self::Flags => "flags",
-            Self::Weather => "weather",
-        }
-    }
-
-    const fn archive(self) -> &'static str {
-        match self {
-            Self::CurrencyReqwest => "currency_reqwest.bp",
-            Self::Flags => "flags.bp",
-            Self::Weather => "weather.bp",
-        }
-    }
-
-    const fn slot(self) -> &'static str {
-        match self {
-            Self::CurrencyReqwest => "cur",
-            Self::Flags => "flg",
-            Self::Weather => "wth",
-        }
-    }
-
-    const fn settle_ms(self) -> u64 {
-        match self {
-            Self::CurrencyReqwest => 750,
-            Self::Flags => 750,
-            Self::Weather => 750,
-        }
-    }
+struct BlueprintAutostart {
+    enabled: bool,
+    label: &'static str,
+    archive: &'static str,
+    slot: &'static str,
+    settle_ms: u64,
 }
 
 const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
-    BlueprintAutostart::CurrencyReqwest,
-    BlueprintAutostart::Flags,
-    BlueprintAutostart::Weather,
+    BlueprintAutostart {
+        enabled: false,
+        label: "currency_reqwest",
+        archive: "currency_reqwest.bp",
+        slot: "cur",
+        settle_ms: 750,
+    },
+    BlueprintAutostart {
+        enabled: false,
+        label: "flags",
+        archive: "flags.bp",
+        slot: "flg",
+        settle_ms: 750,
+    },
+    BlueprintAutostart {
+        enabled: false,
+        label: "weather",
+        archive: "weather.bp",
+        slot: "wth",
+        settle_ms: 750,
+    },
+    BlueprintAutostart {
+        enabled: true,
+        label: "chatserver",
+        archive: "chatserver.bp",
+        slot: "cht",
+        settle_ms: 750,
+    },
 ];
 
 #[embassy_executor::task]
@@ -939,42 +932,49 @@ async fn bp_autostart_task() {
     crate::r::readiness::wait_for(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED).await;
 
     for config in BP_AUTOSTARTS {
-        let settle_ms = config.settle_ms();
-        if settle_ms != 0 {
-            Timer::after(EmbassyDuration::from_millis(settle_ms)).await;
+        if !config.enabled {
+            crate::log!(
+                "spawn-svc: bp-autostart disabled label={} archive={} slot={}\n",
+                config.label,
+                config.archive,
+                config.slot
+            );
+            continue;
         }
 
-        let target = crate::shell2::matrix_target_for_slot_name(
-            crate::shell2::OUTPUT_UI2_MASK,
-            config.slot(),
-        );
+        if config.settle_ms != 0 {
+            Timer::after(EmbassyDuration::from_millis(config.settle_ms)).await;
+        }
+
+        let target =
+            crate::shell2::matrix_target_for_slot_name(crate::shell2::OUTPUT_UI2_MASK, config.slot);
 
         crate::log!(
             "spawn-svc: bp-autostart begin label={} archive={} slot={}\n",
-            config.label(),
-            config.archive(),
-            config.slot()
+            config.label,
+            config.archive,
+            config.slot
         );
 
         match crate::shell2::cmds::run::submit_archive_name_to_target_prefer_trueosfs_async(
             target,
-            config.archive(),
+            config.archive,
             Vec::new(),
         )
         .await
         {
             Ok(source) => crate::log!(
                 "spawn-svc: bp-autostart queued label={} archive={} slot={} source={}\n",
-                config.label(),
-                config.archive(),
-                config.slot(),
+                config.label,
+                config.archive,
+                config.slot,
                 source
             ),
             Err(err) => crate::log!(
                 "spawn-svc: bp-autostart skipped label={} archive={} slot={} err={}\n",
-                config.label(),
-                config.archive(),
-                config.slot(),
+                config.label,
+                config.archive,
+                config.slot,
                 err
             ),
         }
