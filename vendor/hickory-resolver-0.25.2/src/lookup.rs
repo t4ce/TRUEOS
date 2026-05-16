@@ -13,8 +13,8 @@ use std::{
     pin::Pin,
     slice::Iter,
     sync::Arc,
-    time::{Duration, Instant},
 };
+use crate::time::{Duration, Instant};
 
 use futures_util::stream::Stream;
 

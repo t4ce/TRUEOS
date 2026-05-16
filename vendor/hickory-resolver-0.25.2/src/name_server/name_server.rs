@@ -9,7 +9,7 @@ use alloc::boxed::Box;
 use core::fmt::{self, Debug, Formatter};
 use core::pin::Pin;
 use std::sync::Arc;
-use std::time::Instant;
+use crate::time::Instant;
 
 use futures_util::stream::{Stream, once};
 use tokio::sync::Mutex;

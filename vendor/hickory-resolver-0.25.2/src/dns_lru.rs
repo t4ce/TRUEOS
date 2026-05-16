@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 use std::collections::HashMap;
 use core::ops::RangeInclusive;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use crate::time::{Duration, Instant};
 
 use moka::{Expiry, sync::Cache};
 #[cfg(feature = "serde")]

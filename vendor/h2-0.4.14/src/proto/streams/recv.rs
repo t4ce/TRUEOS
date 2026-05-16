@@ -7,7 +7,7 @@ use http::{HeaderMap, Request, Response};
 
 use std::cmp::Ordering;
 use std::task::{Context, Poll, Waker};
-use std::time::Instant;
+use crate::time::Instant;
 use tokio::io;
 
 #[derive(Debug)]

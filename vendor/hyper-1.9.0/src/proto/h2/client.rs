@@ -1,3 +1,4 @@
+use alloc::boxed::Box;
 use core::time::Duration;
 use std::{
     convert::Infallible,
