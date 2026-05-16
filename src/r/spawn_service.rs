@@ -426,7 +426,6 @@ fn spawn_mandelbrot_gpu_sidequest(spawner: Spawner) -> SpawnAttempt {
 
 fn boot_lumen_service_enabled() -> bool {
     crate::allcaps::lumen::BOOT_MODEL_SERVICE
-        || crate::r::fs::trueosfs::skhynix_lumen_monopoly_enabled()
 }
 
 fn spawn_ai_qjs_oneshot(spawner: Spawner) -> SpawnAttempt {

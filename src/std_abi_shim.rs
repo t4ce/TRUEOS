@@ -1,7 +1,9 @@
 extern crate alloc;
 
+use alloc::string::String;
+use alloc::vec::Vec;
 use core::alloc::Layout;
-use core::ffi::{CStr, c_char, c_int, c_void};
+use core::ffi::{c_char, c_int, c_void};
 use core::ptr;
 use core::slice;
 use core::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
@@ -72,6 +74,7 @@ struct TrueosSockAddrIn {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 struct TrueosAddrInfo {
     ai_flags: c_int,
     ai_family: c_int,
@@ -113,9 +116,7 @@ fn copy_bytes_to_words(out_words: *mut u32, out_nwords: usize, bytes: &[u8]) -> 
     if !out_words.is_null() && out_nwords != 0 {
         let cap = out_nwords.saturating_mul(core::mem::size_of::<u32>());
         if cap >= bytes.len() {
-            unsafe {
-                ptr::copy_nonoverlapping(bytes.as_ptr(), out_words.cast::<u8>(), bytes.len());
-            }
+            let _ = copy_to_abi_out(out_words.cast::<u8>(), bytes);
         }
     }
     bytes.len()
@@ -252,7 +253,14 @@ fn c_malloc_aligned(size: usize, align: usize) -> *mut c_void {
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
         return ptr::null_mut();
     };
-    let ptr = unsafe { crate::allocators::alloc_raw(layout) };
+    let ptr = if let Some(vm_id) = active_abi_guest_vm_id() {
+        crate::allocators::with_hv_guest_alloc_domain(vm_id, || unsafe {
+            crate::allocators::alloc_raw(layout)
+        })
+        .unwrap_or(ptr::null_mut())
+    } else {
+        unsafe { crate::allocators::alloc_raw(layout) }
+    };
     if ptr.is_null() {
         TRUEOS_ERRNO.store(12, Ordering::Relaxed);
         return ptr::null_mut();
@@ -306,12 +314,11 @@ fn c_realloc_ptr(ptr: *mut c_void, size: usize) -> *mut c_void {
     new_ptr
 }
 
-unsafe fn cstr_arg<'a>(ptr: *const c_char) -> Option<&'a str> {
+unsafe fn cstr_arg(ptr: *const c_char) -> Option<String> {
     if ptr.is_null() {
         return None;
     }
-    let bytes = unsafe { CStr::from_ptr(ptr).to_bytes() };
-    core::str::from_utf8(bytes).ok()
+    abi_cstr_to_string(ptr, 4096)
 }
 
 unsafe fn getaddrinfo_service_port(service: *const c_char) -> Result<u16, c_int> {
@@ -351,9 +358,12 @@ fn dns_resolve_error_to_cabi_errno(err: crate::t::net::vlayer::DnsResolveError) 
     }
 }
 
-fn active_guest_stack_host_ptr(ptr: *mut u8, len: usize) -> Option<*mut u8> {
-    let vm_id = crate::hv::current_guest_execution_context_vm_id()
-        .or_else(crate::hv::current_vm_id_by_lapic_low)?;
+fn active_abi_guest_vm_id() -> Option<u8> {
+    crate::hv::current_guest_execution_context_vm_id()
+        .or_else(crate::hv::current_vm_id_by_lapic_low)
+}
+
+fn active_guest_stack_host_ptr_for_vm(vm_id: u8, ptr: *mut u8, len: usize) -> Option<*mut u8> {
     let guest_va = ptr as usize as u64;
     let offset = guest_va.checked_sub(crate::hv::memory::GUEST_STACK_VA_BASE)? as usize;
     let stack = crate::hv::memory::guest_stack_slice_for_vm(vm_id)?;
@@ -365,16 +375,79 @@ fn active_guest_stack_host_ptr(ptr: *mut u8, len: usize) -> Option<*mut u8> {
     Some(unsafe { base.add(offset) })
 }
 
+fn active_guest_heap_host_ptr_for_vm(vm_id: u8, ptr: *mut u8, len: usize) -> Option<*mut u8> {
+    let guest_va = ptr as usize;
+    let stats = crate::allocators::hv_guest_heap_stats(vm_id);
+    if !stats.initialized || stats.heap_end <= stats.heap_start {
+        return None;
+    }
+    let end = guest_va.checked_add(len)?;
+    if guest_va >= stats.heap_start && end <= stats.heap_end {
+        Some(ptr)
+    } else {
+        None
+    }
+}
+
+fn abi_host_ptr(ptr: *mut u8, len: usize) -> Option<*mut u8> {
+    if ptr.is_null() {
+        return None;
+    }
+    if len == 0 {
+        return Some(ptr);
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return Some(ptr);
+    }
+    let Some(vm_id) = active_abi_guest_vm_id() else {
+        return Some(ptr);
+    };
+    active_guest_stack_host_ptr_for_vm(vm_id, ptr, len)
+        .or_else(|| active_guest_heap_host_ptr_for_vm(vm_id, ptr, len))
+}
+
+fn abi_read_bytes<'a>(ptr: *const u8, len: usize) -> Option<&'a [u8]> {
+    if len == 0 {
+        return Some(&[]);
+    }
+    let host = abi_host_ptr(ptr.cast_mut(), len)?;
+    Some(unsafe { slice::from_raw_parts(host.cast::<u8>(), len) })
+}
+
+fn abi_write_bytes<'a>(ptr: *mut u8, len: usize) -> Option<&'a mut [u8]> {
+    if len == 0 {
+        return Some(&mut []);
+    }
+    let host = abi_host_ptr(ptr, len)?;
+    Some(unsafe { slice::from_raw_parts_mut(host, len) })
+}
+
+fn abi_read_struct<T: Copy>(ptr: *const T) -> Option<T> {
+    let bytes = abi_read_bytes(ptr.cast::<u8>(), core::mem::size_of::<T>())?;
+    Some(unsafe { ptr::read_unaligned(bytes.as_ptr().cast::<T>()) })
+}
+
+fn abi_cstr_to_string(ptr: *const c_char, max_len: usize) -> Option<String> {
+    if ptr.is_null() {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    for offset in 0..max_len {
+        let byte = *abi_read_bytes(unsafe { ptr.cast::<u8>().add(offset) }, 1)?.first()?;
+        if byte == 0 {
+            return String::from_utf8(bytes).ok();
+        }
+        bytes.push(byte);
+    }
+    None
+}
+
 fn copy_to_abi_out(ptr: *mut u8, bytes: &[u8]) -> bool {
     if ptr.is_null() {
         return false;
     }
-    let dst = if let Some(dst) = active_guest_stack_host_ptr(ptr, bytes.len()) {
-        dst
-    } else if (ptr as u64) < 0x0000_8000_0000_0000 {
+    let Some(dst) = abi_host_ptr(ptr, bytes.len()) else {
         return false;
-    } else {
-        ptr
     };
     unsafe { ptr::copy_nonoverlapping(bytes.as_ptr(), dst, bytes.len()) };
     true
@@ -412,7 +485,14 @@ pub unsafe extern "C" fn sys_alloc_aligned(size: usize, align: usize) -> *mut u8
         return ptr::null_mut();
     };
 
-    unsafe { crate::allocators::alloc_raw(layout) }
+    if let Some(vm_id) = active_abi_guest_vm_id() {
+        crate::allocators::with_hv_guest_alloc_domain(vm_id, || unsafe {
+            crate::allocators::alloc_raw(layout)
+        })
+        .unwrap_or(ptr::null_mut())
+    } else {
+        unsafe { crate::allocators::alloc_raw(layout) }
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -422,9 +502,11 @@ pub unsafe extern "C" fn sys_rand(recv_buf: *mut u32, words: usize) {
     }
 
     let byte_len = words.saturating_mul(core::mem::size_of::<u32>());
-    let bytes = unsafe { slice::from_raw_parts_mut(recv_buf.cast::<u8>(), byte_len) };
+    let Some(bytes) = abi_write_bytes(recv_buf.cast::<u8>(), byte_len) else {
+        return;
+    };
     if !crate::tyche::fill_bytes(bytes) {
-        unsafe { ptr::write_bytes(recv_buf, 0, words) };
+        bytes.fill(0);
     }
 }
 
@@ -433,7 +515,9 @@ pub unsafe extern "C" fn sys_write(_fd: u32, write_buf: *const u8, nbytes: usize
     if write_buf.is_null() || nbytes == 0 {
         return;
     }
-    let bytes = unsafe { slice::from_raw_parts(write_buf, nbytes) };
+    let Some(bytes) = abi_read_bytes(write_buf, nbytes) else {
+        return;
+    };
     uart_write(bytes);
     crate::globalog::append_raw(bytes);
 }
@@ -443,7 +527,9 @@ pub unsafe extern "C" fn trueos_internal_log_write(bytes: *const u8, len: usize)
     if bytes.is_null() || len == 0 {
         return;
     }
-    let bytes = unsafe { slice::from_raw_parts(bytes, len) };
+    let Some(bytes) = abi_read_bytes(bytes, len) else {
+        return;
+    };
     uart_write(bytes);
     crate::globalog::append_raw(bytes);
 }
@@ -454,7 +540,9 @@ pub unsafe extern "C" fn sys_read(_fd: u32, recv_buf: *mut u8, nrequested: usize
         return 0;
     }
 
-    let out = unsafe { slice::from_raw_parts_mut(recv_buf, nrequested) };
+    let Some(out) = abi_write_bytes(recv_buf, nrequested) else {
+        return 0;
+    };
     let mut read = 0usize;
     while read < out.len() {
         let Some(byte) = crate::shell2::uart1_com1::read_byte() else {
@@ -476,7 +564,9 @@ pub unsafe extern "C" fn sys_getenv(
     if varname.is_null() {
         return usize::MAX;
     }
-    let key_bytes = unsafe { slice::from_raw_parts(varname, varname_len) };
+    let Some(key_bytes) = abi_read_bytes(varname, varname_len) else {
+        return usize::MAX;
+    };
     let Ok(key) = core::str::from_utf8(key_bytes) else {
         return usize::MAX;
     };
@@ -518,9 +608,18 @@ pub unsafe extern "C" fn sys_sha_compress(
     }
 
     if in_state.is_null() {
-        unsafe { (*out_state) = [0; 8] };
+        let _ = copy_to_abi_out(out_state.cast::<u8>(), &[0; core::mem::size_of::<[u32; 8]>()]);
     } else {
-        unsafe { *out_state = *in_state };
+        let Some(state) = abi_read_struct(in_state) else {
+            return;
+        };
+        let bytes = unsafe {
+            slice::from_raw_parts(
+                (&state as *const [u32; 8]).cast::<u8>(),
+                core::mem::size_of::<[u32; 8]>(),
+            )
+        };
+        let _ = copy_to_abi_out(out_state.cast::<u8>(), bytes);
     }
 }
 
@@ -539,8 +638,9 @@ pub unsafe extern "C" fn sys_log(msg_ptr: *const u8, len: usize) {
     if msg_ptr.is_null() || len == 0 {
         return;
     }
-    let bytes = unsafe { slice::from_raw_parts(msg_ptr, len) };
-    uart_write(bytes);
+    if let Some(bytes) = abi_read_bytes(msg_ptr, len) {
+        uart_write(bytes);
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -568,10 +668,11 @@ pub extern "C" fn trueos_time_unix_nanos() -> u64 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sys_panic(msg_ptr: *const u8, len: usize) -> ! {
     if !msg_ptr.is_null() && len != 0 {
-        let bytes = unsafe { slice::from_raw_parts(msg_ptr, len) };
-        uart_write(b"std-trueos panic: ");
-        uart_write(bytes);
-        uart_write(b"\n");
+        if let Some(bytes) = abi_read_bytes(msg_ptr, len) {
+            uart_write(b"std-trueos panic: ");
+            uart_write(bytes);
+            uart_write(b"\n");
+        }
     }
     unsafe { sys_halt() }
 }
@@ -606,7 +707,9 @@ pub unsafe extern "C" fn strerror_r(errnum: c_int, buf: *mut c_char, buflen: usi
         return 0;
     }
     let prefix = b"trueos errno ";
-    let out = unsafe { slice::from_raw_parts_mut(buf.cast::<u8>(), buflen) };
+    let Some(out) = abi_write_bytes(buf.cast::<u8>(), buflen) else {
+        return TRUEOS_EINVAL;
+    };
     let mut pos = 0usize;
     for byte in prefix {
         if pos + 1 >= out.len() {
@@ -664,7 +767,10 @@ pub unsafe extern "C" fn posix_memalign(
     if ptr.is_null() && size != 0 {
         return 12;
     }
-    unsafe { *memptr = ptr };
+    if !copy_usize_to_abi_out(memptr.cast::<usize>(), ptr as usize) {
+        c_free_ptr(ptr);
+        return TRUEOS_EINVAL;
+    }
     0
 }
 
@@ -679,7 +785,10 @@ pub unsafe extern "C" fn getcwd(buf: *mut c_char, size: usize) -> *mut c_char {
         TRUEOS_ERRNO.store(TRUEOS_ERANGE, Ordering::Relaxed);
         return ptr::null_mut();
     }
-    let out = unsafe { slice::from_raw_parts_mut(buf.cast::<u8>(), size) };
+    let Some(out) = abi_write_bytes(buf.cast::<u8>(), size) else {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return ptr::null_mut();
+    };
     out[..cwd.len()].copy_from_slice(cwd);
     out[cwd.len()] = 0;
     buf
@@ -717,9 +826,16 @@ pub unsafe extern "C" fn readv(fd: c_int, iov: *const Iovec, iovcnt: c_int) -> i
         TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
         return -1;
     }
-    let entries = unsafe { slice::from_raw_parts(iov, iovcnt as usize) };
+    let Some(entries) = abi_read_bytes(
+        iov.cast::<u8>(),
+        (iovcnt as usize).saturating_mul(core::mem::size_of::<Iovec>()),
+    ) else {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    };
     let mut total = 0usize;
-    for entry in entries {
+    for chunk in entries.chunks_exact(core::mem::size_of::<Iovec>()) {
+        let entry = unsafe { ptr::read_unaligned(chunk.as_ptr().cast::<Iovec>()) };
         if entry.base.is_null() || entry.len == 0 {
             continue;
         }
@@ -737,9 +853,15 @@ pub unsafe extern "C" fn writev(fd: c_int, iov: *const Iovec, iovcnt: c_int) -> 
     if iov.is_null() || iovcnt < 0 {
         return -1;
     }
-    let entries = unsafe { slice::from_raw_parts(iov, iovcnt as usize) };
+    let Some(entries) = abi_read_bytes(
+        iov.cast::<u8>(),
+        (iovcnt as usize).saturating_mul(core::mem::size_of::<Iovec>()),
+    ) else {
+        return -1;
+    };
     let mut written = 0usize;
-    for entry in entries {
+    for chunk in entries.chunks_exact(core::mem::size_of::<Iovec>()) {
+        let entry = unsafe { ptr::read_unaligned(chunk.as_ptr().cast::<Iovec>()) };
         if !entry.base.is_null() && entry.len != 0 {
             unsafe { sys_write(fd as u32, entry.base, entry.len) };
             written = written.saturating_add(entry.len);
@@ -835,7 +957,10 @@ pub unsafe extern "C" fn getaddrinfo(
     let (socktype, protocol) = if hints.is_null() {
         (TRUEOS_SOCK_STREAM, 0)
     } else {
-        let hints = unsafe { &*hints.cast::<TrueosAddrInfo>() };
+        let Some(hints) = abi_read_struct(hints.cast::<TrueosAddrInfo>()) else {
+            TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+            return TRUEOS_EAI_SYSTEM;
+        };
         if hints.ai_family != TRUEOS_AF_UNSPEC && hints.ai_family != TRUEOS_AF_INET {
             return TRUEOS_EAI_FAMILY;
         }
@@ -849,7 +974,7 @@ pub unsafe extern "C" fn getaddrinfo(
         Ok(port) => port,
         Err(err) => return err,
     };
-    let ip = match getaddrinfo_resolve_ipv4(host) {
+    let ip = match getaddrinfo_resolve_ipv4(host.as_str()) {
         Ok(ip) => ip,
         Err(err) => return err,
     };
@@ -917,7 +1042,10 @@ pub unsafe extern "C" fn trueos_cabi_dns_resolve_ipv4(
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
         return TRUEOS_EINVAL;
     }
-    let host_bytes = unsafe { slice::from_raw_parts(host, host_len) };
+    let Some(host_bytes) = abi_read_bytes(host, host_len) else {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return TRUEOS_EINVAL;
+    };
     let Ok(host_name) = core::str::from_utf8(host_bytes) else {
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
         return TRUEOS_EINVAL;

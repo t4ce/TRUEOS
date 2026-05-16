@@ -161,6 +161,104 @@ fn remember_registered_disk(runtime_key: u64, handle: block::DeviceHandle) {
     });
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum UasRoutePhase {
+    Init,
+    Fill,
+    Submit,
+    Reclaim,
+    Reset,
+    Done,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct UasRouteTiming {
+    pub fill_ms: u64,
+    pub command_ms: u64,
+    pub ready_ms: u64,
+    pub data_ms: u64,
+    pub status_ms: u64,
+    pub reclaim_ms: u64,
+    pub finish_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct UasRouteCounters {
+    pub submitted: u64,
+    pub reclaimed: u64,
+    pub stalled: u64,
+    pub resets: u64,
+    pub quarantined: u64,
+    pub bytes_submitted: u64,
+    pub bytes_reclaimed: u64,
+    pub max_inflight: usize,
+    pub live_streams: u32,
+    pub dead_streams: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum UasRouteProbeKind {
+    Read,
+    Write,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct UasRouteProbeConfig {
+    pub kind: UasRouteProbeKind,
+    pub lba: u64,
+    pub total_bytes: u64,
+    pub chunk_bytes: usize,
+    pub max_inflight: usize,
+    pub pattern_seed: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct UasRouteProbeResult {
+    pub phase: UasRoutePhase,
+    pub timing: UasRouteTiming,
+    pub counters: UasRouteCounters,
+    pub chunk_bytes: usize,
+    pub max_inflight: usize,
+    pub lba: u64,
+    pub total_bytes: u64,
+    pub error: Option<block::Error>,
+}
+
+pub(crate) fn find_uas_skhynix_route_disk() -> Option<block::DeviceHandle> {
+    None
+}
+
+pub(crate) async fn set_uas_skhynix_route_window(
+    _disk: block::DeviceHandle,
+    _chunk_bytes: usize,
+    _max_inflight: usize,
+) -> block::Result<(usize, usize)> {
+    Err(block::Error::NotSupported)
+}
+
+pub(crate) async fn reset_uas_skhynix_route_transport(
+    _disk: block::DeviceHandle,
+    _stage: &'static str,
+) -> block::Result<()> {
+    Err(block::Error::NotSupported)
+}
+
+pub(crate) async fn run_uas_skhynix_route_probe(
+    _disk: block::DeviceHandle,
+    config: UasRouteProbeConfig,
+) -> block::Result<UasRouteProbeResult> {
+    Ok(UasRouteProbeResult {
+        phase: UasRoutePhase::Done,
+        timing: UasRouteTiming::default(),
+        counters: UasRouteCounters::default(),
+        chunk_bytes: config.chunk_bytes,
+        max_inflight: config.max_inflight,
+        lba: config.lba,
+        total_bytes: config.total_bytes,
+        error: Some(block::Error::NotSupported),
+    })
+}
+
 #[derive(Clone)]
 struct MassIdentity {
     runtime_key: u64,
