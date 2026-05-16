@@ -9,7 +9,7 @@ use crate::io::{AsyncRead, AsyncWrite, ReadBuf};
 use core::fmt;
 use std::io;
 use core::pin::Pin;
-use std::sync::Arc;
+use alloc::sync::Arc;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use crate::loom::sync::Mutex;
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]

@@ -36,7 +36,8 @@ mod h2_common {
 #[cfg_attr(docsrs, doc(cfg(all(feature = "client", feature = "http2"))))]
 mod h2_client {
     use alloc::boxed::Box;
-    use std::{error::Error, future::Future};
+    use core::future::Future;
+    use std::error::Error;
 
     use crate::rt::{Read, Write};
     use crate::{proto::h2::client::H2ClientFuture, rt::Executor};

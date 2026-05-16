@@ -4,8 +4,8 @@ use core::error::Error as StdError;
 use core::fmt;
 use core::future::Future;
 use core::pin::Pin;
-use std::boxed::Box;
-use std::sync::Arc;
+use alloc::boxed::Box;
+use alloc::sync::Arc;
 use core::task::{Context, Poll};
 use core::time::Duration;
 

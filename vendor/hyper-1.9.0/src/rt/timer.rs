@@ -67,12 +67,12 @@ use std::{
 use alloc::boxed::Box;
 use crate::time::{Duration, Instant};
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 fn instant_now() -> Instant {
     crate::platform::instant_now()
 }
 
-#[cfg(not(target_os = "zkvm"))]
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 fn instant_now() -> Instant {
     Instant::now()
 }

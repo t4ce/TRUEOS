@@ -438,11 +438,39 @@ pub mod thread {
         false
     }
 
-    pub fn park() {}
+    fn duration_to_sleep_ms(duration: Duration) -> u64 {
+        if duration.is_zero() {
+            return 0;
+        }
 
-    pub fn park_timeout(_: Duration) {}
+        let millis = duration.as_millis();
+        if millis > u128::from(u64::MAX) {
+            return u64::MAX;
+        }
 
-    pub fn sleep(_: Duration) {}
+        let mut millis = millis as u64;
+        if duration.subsec_nanos() % 1_000_000 != 0 {
+            millis = millis.saturating_add(1);
+        }
+        millis.max(1)
+    }
+
+    pub fn park() {
+        crate::platform::poll_once();
+    }
+
+    pub fn park_timeout(duration: Duration) {
+        let millis = duration_to_sleep_ms(duration);
+        if millis == 0 {
+            crate::platform::poll_once();
+        } else {
+            crate::platform::sleep_ms(millis);
+        }
+    }
+
+    pub fn sleep(duration: Duration) {
+        park_timeout(duration);
+    }
 
     pub fn spawn<F, T>(f: F) -> JoinHandle<T>
     where
