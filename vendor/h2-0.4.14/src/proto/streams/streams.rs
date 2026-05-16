@@ -35,7 +35,7 @@ where
     /// been shown to be necessary.
     send_buffer: Arc<SendBuffer<B>>,
 
-    _p: ::std::marker::PhantomData<P>,
+    _p: ::core::marker::PhantomData<P>,
 }
 
 // Like `Streams` but with a `peer::Dyn` field instead of a static `P: Peer` type parameter.
@@ -115,7 +115,7 @@ where
         Streams {
             inner: Inner::new(peer, config),
             send_buffer: Arc::new(SendBuffer::new()),
-            _p: ::std::marker::PhantomData,
+            _p: ::core::marker::PhantomData,
         }
     }
 
@@ -1058,7 +1058,7 @@ where
         Streams {
             inner: self.inner.clone(),
             send_buffer: self.send_buffer.clone(),
-            _p: ::std::marker::PhantomData,
+            _p: ::core::marker::PhantomData,
         }
     }
 }

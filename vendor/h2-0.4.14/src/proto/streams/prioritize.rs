@@ -918,7 +918,7 @@ where
         self.inner.chunk()
     }
 
-    fn chunks_vectored<'a>(&'a self, dst: &mut [std::io::IoSlice<'a>]) -> usize {
+    fn chunks_vectored<'a>(&'a self, dst: &mut [io::IoSlice<'a>]) -> usize {
         self.inner.chunks_vectored(dst)
     }
 

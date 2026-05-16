@@ -1,5 +1,5 @@
-use std::collections::VecDeque;
-use std::io::IoSlice;
+use alloc::collections::VecDeque;
+use tokio::io::IoSlice;
 
 use bytes::{Buf, Bytes};
 

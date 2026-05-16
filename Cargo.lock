@@ -3453,8 +3453,32 @@ dependencies = [
 ]
 
 [[patch.unused]]
+name = "h2"
+version = "0.4.14"
+
+[[patch.unused]]
+name = "h3"
+version = "0.0.8"
+
+[[patch.unused]]
+name = "h3-quinn"
+version = "0.0.10"
+
+[[patch.unused]]
 name = "nix"
 version = "0.28.0"
+
+[[patch.unused]]
+name = "quinn"
+version = "0.11.9"
+
+[[patch.unused]]
+name = "quinn-proto"
+version = "0.11.14"
+
+[[patch.unused]]
+name = "quinn-udp"
+version = "0.5.14"
 
 [[patch.unused]]
 name = "rustix"
@@ -3467,3 +3491,7 @@ version = "14.0.0"
 [[patch.unused]]
 name = "tokio-rustls"
 version = "0.26.4"
+
+[[patch.unused]]
+name = "tokio-util"
+version = "0.7.18"
