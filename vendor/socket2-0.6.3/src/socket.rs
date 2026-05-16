@@ -15,6 +15,8 @@ use std::io::IoSliceMut;
 use core::mem::MaybeUninit;
 #[cfg(not(target_os = "nto"))]
 use std::net::Ipv6Addr;
+#[cfg(not(target_os = "zkvm"))]
+use std::net;
 use std::net::{Ipv4Addr, Shutdown};
 #[cfg(any(
     all(unix, not(target_os = "zkvm")),

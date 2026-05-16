@@ -1391,7 +1391,7 @@ impl<T: Clone> Receiver<T> {
     /// ```
     pub fn resubscribe(&self) -> Self {
         let shared = self.shared.clone();
-        new_receiver(shared)
+        new_receiver::<T>(shared)
     }
     /// Receives the next value for this receiver.
     ///

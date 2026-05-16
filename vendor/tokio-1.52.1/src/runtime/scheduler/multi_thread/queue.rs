@@ -18,26 +18,14 @@ use core::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release};
 cfg_has_atomic_u64! {
     type UnsignedShort = u32;
     type UnsignedLong = u64;
-    #[cfg(target_os = "zkvm")]
     type AtomicUnsignedShort = crate::loom::sync::atomic::AtomicU32;
-    #[cfg(target_os = "zkvm")]
     type AtomicUnsignedLong = crate::loom::sync::atomic::AtomicU64;
-    #[cfg(not(target_os = "zkvm"))]
-    type AtomicUnsignedShort = core::sync::atomic::AtomicU32;
-    #[cfg(not(target_os = "zkvm"))]
-    type AtomicUnsignedLong = core::sync::atomic::AtomicU64;
 }
 cfg_not_has_atomic_u64! {
     type UnsignedShort = u16;
     type UnsignedLong = u32;
-    #[cfg(target_os = "zkvm")]
     type AtomicUnsignedShort = crate::loom::sync::atomic::AtomicU16;
-    #[cfg(target_os = "zkvm")]
     type AtomicUnsignedLong = crate::loom::sync::atomic::AtomicU32;
-    #[cfg(not(target_os = "zkvm"))]
-    type AtomicUnsignedShort = core::sync::atomic::AtomicU16;
-    #[cfg(not(target_os = "zkvm"))]
-    type AtomicUnsignedLong = core::sync::atomic::AtomicU32;
 }
 
 /// Producer handle. May only be used from a single thread.
