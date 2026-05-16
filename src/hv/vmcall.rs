@@ -945,7 +945,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             };
             let mut socket_id = 0u32;
-            let status = match op {
+            let status = crate::hv::with_guest_broker_context(vm_id, || match op {
                 OP_BP_MIO_TCP_LISTENER_BIND => unsafe {
                     crate::mio_compat::mio_tcp_listener_bind_host(addr, &mut socket_id)
                 },
@@ -953,7 +953,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                     crate::mio_compat::mio_tcp_stream_connect_host(addr, &mut socket_id)
                 },
                 _ => unsafe { crate::mio_compat::mio_udp_socket_bind_host(addr, &mut socket_id) },
-            };
+            });
             if status == 0 {
                 write_response(vm_id, seq, STATUS_OK, socket_id as u64, 0);
             } else {
@@ -962,7 +962,9 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_MIO_SOCKET_CLOSE => {
-            let rc = unsafe { crate::mio_compat::mio_socket_close_host(arg0 as u32) };
+            let rc = crate::hv::with_guest_broker_context(vm_id, || unsafe {
+                crate::mio_compat::mio_socket_close_host(arg0 as u32)
+            });
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
@@ -972,11 +974,13 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             };
             let mut addr = crate::mio_compat::TrueosMioSocketAddr::default();
-            let rc = if op == OP_BP_MIO_SOCKET_LOCAL_ADDR {
-                unsafe { crate::mio_compat::mio_socket_local_addr_host(arg0 as u32, &mut addr) }
-            } else {
-                unsafe { crate::mio_compat::mio_socket_peer_addr_host(arg0 as u32, &mut addr) }
-            };
+            let rc = crate::hv::with_guest_broker_context(vm_id, || {
+                if op == OP_BP_MIO_SOCKET_LOCAL_ADDR {
+                    unsafe { crate::mio_compat::mio_socket_local_addr_host(arg0 as u32, &mut addr) }
+                } else {
+                    unsafe { crate::mio_compat::mio_socket_peer_addr_host(arg0 as u32, &mut addr) }
+                }
+            });
             if rc == 0 {
                 let out = unsafe { &mut (&mut (*p).payload)[..PAYLOAD_CAP] };
                 let len = if write_mio_addr(out, addr) {
@@ -991,7 +995,9 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_MIO_SOCKET_TAKE_ERROR => {
-            let rc = unsafe { crate::mio_compat::mio_socket_take_error_host(arg0 as u32) };
+            let rc = crate::hv::with_guest_broker_context(vm_id, || unsafe {
+                crate::mio_compat::mio_socket_take_error_host(arg0 as u32)
+            });
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
@@ -1002,9 +1008,9 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             };
             let out = unsafe { &mut (&mut (*p).payload)[..want] };
-            let rc = unsafe {
+            let rc = crate::hv::with_guest_broker_context(vm_id, || unsafe {
                 crate::mio_compat::mio_tcp_stream_read_host(arg0 as u32, out.as_mut_ptr(), want)
-            };
+            });
             let len = if rc > 0 { rc as u32 } else { 0 };
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, len);
             DispatchOutcome::Resume
@@ -1016,13 +1022,13 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             };
             let bytes = unsafe { &(&(*p).payload)[..n] };
-            let rc = unsafe {
+            let rc = crate::hv::with_guest_broker_context(vm_id, || unsafe {
                 crate::mio_compat::mio_tcp_stream_write_host(
                     arg0 as u32,
                     bytes.as_ptr(),
                     bytes.len(),
                 )
-            };
+            });
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
@@ -1037,7 +1043,9 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 write_response(vm_id, seq, STATUS_OK, (-4i64) as u64, 0);
                 return DispatchOutcome::Resume;
             };
-            let rc = unsafe { crate::mio_compat::mio_udp_socket_connect_host(arg0 as u32, addr) };
+            let rc = crate::hv::with_guest_broker_context(vm_id, || unsafe {
+                crate::mio_compat::mio_udp_socket_connect_host(arg0 as u32, addr)
+            });
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
@@ -1054,14 +1062,14 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             };
             let data_len = core::cmp::min(arg1 as usize, n.saturating_sub(MIO_ADDR_BYTES));
             let data = &bytes[MIO_ADDR_BYTES..MIO_ADDR_BYTES + data_len];
-            let rc = unsafe {
+            let rc = crate::hv::with_guest_broker_context(vm_id, || unsafe {
                 crate::mio_compat::mio_udp_socket_send_to_host(
                     arg0 as u32,
                     addr,
                     data.as_ptr(),
                     data.len(),
                 )
-            };
+            });
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
@@ -1073,14 +1081,14 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             };
             let payload = unsafe { &mut (*p).payload };
             let mut addr = crate::mio_compat::TrueosMioSocketAddr::default();
-            let rc = unsafe {
+            let rc = crate::hv::with_guest_broker_context(vm_id, || unsafe {
                 crate::mio_compat::mio_udp_socket_recv_from_host(
                     arg0 as u32,
                     &mut addr,
                     payload[MIO_ADDR_BYTES..].as_mut_ptr(),
                     want,
                 )
-            };
+            });
             if rc > 0 {
                 let _ = write_mio_addr(&mut payload[..MIO_ADDR_BYTES], addr);
                 write_response(
@@ -1102,13 +1110,13 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             };
             let mut socket_id = 0u32;
             let mut addr = crate::mio_compat::TrueosMioSocketAddr::default();
-            let rc = unsafe {
+            let rc = crate::hv::with_guest_broker_context(vm_id, || unsafe {
                 crate::mio_compat::mio_tcp_listener_accept_host(
                     arg0 as u32,
                     &mut socket_id,
                     &mut addr,
                 )
-            };
+            });
             if rc == 0 {
                 let out = unsafe { &mut (&mut (*p).payload)[..PAYLOAD_CAP] };
                 let len = if write_mio_addr(out, addr) {
@@ -1138,21 +1146,21 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             ]) as usize;
             let socket_id = arg1 as u32;
             let interests = ((arg1 >> 32) & 0xFF) as u8;
-            let rc = unsafe {
+            let rc = crate::hv::with_guest_broker_context(vm_id, || unsafe {
                 crate::mio_compat::mio_selector_register_socket_host(
                     arg0 as usize,
                     socket_id,
                     token,
                     interests,
                 )
-            };
+            });
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_MIO_SELECTOR_DEREGISTER_SOCKET => {
-            let rc = unsafe {
+            let rc = crate::hv::with_guest_broker_context(vm_id, || unsafe {
                 crate::mio_compat::mio_selector_deregister_socket_host(arg0 as usize, arg1 as u32)
-            };
+            });
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
@@ -1179,14 +1187,14 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             };
             let out = unsafe { &mut (&mut (*p).payload)[..PAYLOAD_CAP] };
-            let count = unsafe {
+            let count = crate::hv::with_guest_broker_context(vm_id, || unsafe {
                 crate::mio_compat::mio_selector_poll_host(
                     arg0 as usize,
                     out.as_mut_ptr() as *mut crate::mio_compat::TrueosMioReadyEvent,
                     max_events,
                     timeout_nanos,
                 )
-            };
+            });
             let count = core::cmp::min(count, max_events);
             write_response(
                 vm_id,

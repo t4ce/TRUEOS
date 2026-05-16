@@ -31,6 +31,12 @@ const EPT_DYNAMIC_PD_CAP: usize = crate::allcaps::hv::EPT_DYNAMIC_PD_CAP;
 // include up to 1 GiB of host heap plus the guest heap, stack, and kernel image.
 // At 4 KiB granularity each PT covers 2 MiB, so we need a few hundred PT pages.
 const EPT_DYNAMIC_PT_CAP: usize = crate::allcaps::hv::EPT_DYNAMIC_PT_CAP;
+const EPT_ENTRY_READ: u64 = 1 << 0;
+const EPT_ENTRY_WRITE: u64 = 1 << 1;
+const EPT_ENTRY_EXEC: u64 = 1 << 2;
+const EPT_ENTRY_PRESENT: u64 = EPT_ENTRY_READ | EPT_ENTRY_WRITE | EPT_ENTRY_EXEC;
+const EPT_ENTRY_MEMTYPE_WB: u64 = 6 << 3;
+const EPT_ENTRY_LARGE_PAGE: u64 = 1 << 7;
 
 // Page table entry flags
 pub const PT_ENTRY_PRESENT: u64 = 1 << 0;
@@ -294,6 +300,7 @@ pub fn build_ept_identity_4g() -> Result<u64, &'static str> {
     }
     let mut next_pd = 0usize;
     let mut next_pt = 0usize;
+    let mut leaf_2m = 0usize;
 
     let (kernel_virt_base, kernel_phys_base) =
         crate::limine::executable_address_bases().ok_or("ept kernel image base")?;
@@ -304,6 +311,7 @@ pub fn build_ept_identity_4g() -> Result<u64, &'static str> {
         pdpt,
         &mut next_pd,
         &mut next_pt,
+        &mut leaf_2m,
         kernel_phys_base,
         kernel_phys_end.saturating_sub(kernel_phys_base),
         "kernel-image",
@@ -314,6 +322,7 @@ pub fn build_ept_identity_4g() -> Result<u64, &'static str> {
             pdpt,
             &mut next_pd,
             &mut next_pt,
+            &mut leaf_2m,
             stack.phys_start,
             stack.length as u64,
             "guest-stack",
@@ -325,6 +334,7 @@ pub fn build_ept_identity_4g() -> Result<u64, &'static str> {
             pdpt,
             &mut next_pd,
             &mut next_pt,
+            &mut leaf_2m,
             comm_pa,
             PAGE_SIZE_4K as u64,
             "comm-page",
@@ -338,6 +348,7 @@ pub fn build_ept_identity_4g() -> Result<u64, &'static str> {
             pdpt,
             &mut next_pd,
             &mut next_pt,
+            &mut leaf_2m,
             cpu_slot_table_pa,
             cpu_slot_table_len as u64,
             "percpu-slot-table",
@@ -349,6 +360,7 @@ pub fn build_ept_identity_4g() -> Result<u64, &'static str> {
             pdpt,
             &mut next_pd,
             &mut next_pt,
+            &mut leaf_2m,
             guest_tables.phys_start,
             guest_tables.length as u64,
             "guest-tables",
@@ -361,6 +373,7 @@ pub fn build_ept_identity_4g() -> Result<u64, &'static str> {
                 pdpt,
                 &mut next_pd,
                 &mut next_pt,
+                &mut leaf_2m,
                 arena.phys_start,
                 backing.active_bytes as u64,
                 "hull-rw-private",
@@ -381,6 +394,7 @@ pub fn build_ept_identity_4g() -> Result<u64, &'static str> {
             pdpt,
             &mut next_pd,
             &mut next_pt,
+            &mut leaf_2m,
             host_heap.phys_start as u64,
             host_heap.heap_end.saturating_sub(host_heap.heap_start) as u64,
             "host-heap",
@@ -406,6 +420,7 @@ pub fn build_ept_identity_4g() -> Result<u64, &'static str> {
             pdpt,
             &mut next_pd,
             &mut next_pt,
+            &mut leaf_2m,
             guest_heap.phys_start as u64,
             guest_heap.heap_end.saturating_sub(guest_heap.heap_start) as u64,
             "hv-guest-heap",
@@ -414,11 +429,12 @@ pub fn build_ept_identity_4g() -> Result<u64, &'static str> {
 
     let eptp = (pml4_pa & 0x000F_FFFF_FFFF_F000) | 6 | (3 << 3);
     hvlogf(format_args!(
-        "hv: vm{} reporting: ept v1 sparse map ready eptp=0x{:016X} pd_used={} pt_used={}",
+        "hv: vm{} reporting: ept v1 sparse map ready eptp=0x{:016X} pd_used={} pt_used={} leaf_2m={}",
         current_vm_id_for_log(),
         eptp,
         next_pd,
         next_pt,
+        leaf_2m,
     ));
     Ok(eptp)
 }
@@ -427,6 +443,7 @@ fn map_ept_identity_span(
     pdpt: *mut [u64; 512],
     next_pd: &mut usize,
     next_pt: &mut usize,
+    leaf_2m: &mut usize,
     phys_start: u64,
     bytes: u64,
     label: &str,
@@ -446,6 +463,7 @@ fn map_ept_identity_span(
 
     let mut gpa = start;
     while gpa < end {
+        let perms = crate::hv::security::ept_permissions_for_span(label, EPT_ENTRY_PRESENT);
         let pdpt_idx = pdpt_index(gpa);
         let pd = ensure_ept_table_entry(
             pdpt,
@@ -455,17 +473,36 @@ fn map_ept_identity_span(
             EPT_DYNAMIC_PD_CAP,
             "ept pd pool",
         )?;
-        let pt = ensure_ept_table_entry(
+        if is_2m_aligned(gpa) && gpa.saturating_add(PAGE_SIZE_2M) <= end {
+            let pde = unsafe { &mut (*pd)[pd_index(gpa)] };
+            let large_entry =
+                (gpa & 0x000F_FFFF_FFE0_0000) | perms | EPT_ENTRY_MEMTYPE_WB | EPT_ENTRY_LARGE_PAGE;
+            if *pde == 0 {
+                *pde = large_entry;
+                *leaf_2m += 1;
+                gpa = gpa.checked_add(PAGE_SIZE_2M).ok_or("ept gpa overflow")?;
+                continue;
+            }
+            if (*pde & EPT_ENTRY_LARGE_PAGE) != 0 {
+                if *pde == large_entry {
+                    gpa = gpa.checked_add(PAGE_SIZE_2M).ok_or("ept gpa overflow")?;
+                    continue;
+                }
+                return Err("ept 2m conflict");
+            }
+        }
+
+        let pt = ensure_ept_pt_entry(
             pd,
             pd_index(gpa),
             next_pt,
+            leaf_2m,
             unsafe { core::ptr::addr_of_mut!((*ept_tables).pts[0].0) },
             EPT_DYNAMIC_PT_CAP,
             "ept pt pool",
         )?;
         unsafe {
-            let perms = crate::hv::security::ept_permissions_for_span(label, 0x7);
-            (*pt)[pt_index(gpa)] = (gpa & 0x000F_FFFF_FFFF_F000) | perms | (6 << 3);
+            (*pt)[pt_index(gpa)] = (gpa & 0x000F_FFFF_FFFF_F000) | perms | EPT_ENTRY_MEMTYPE_WB;
         }
         gpa = gpa
             .checked_add(PAGE_SIZE_4K as u64)
@@ -492,6 +529,9 @@ fn ensure_ept_table_entry(
 ) -> Result<*mut [u64; 512], &'static str> {
     let existing = unsafe { (*table)[index] };
     if existing & 0x7 != 0 {
+        if (existing & EPT_ENTRY_LARGE_PAGE) != 0 {
+            return Err(err);
+        }
         let pa = existing & 0x000F_FFFF_FFFF_F000;
         return ept_table_ptr_from_pa(pool_base, pool_cap, pa).ok_or(err);
     }
@@ -507,6 +547,52 @@ fn ensure_ept_table_entry(
     let slot_pa = host_va_to_pa(slot_ptr as u64).ok_or(err)?;
     unsafe {
         (*table)[index] = (slot_pa & 0x000F_FFFF_FFFF_F000) | 0x7;
+    }
+    *next_slot += 1;
+    Ok(slot_ptr)
+}
+
+fn ensure_ept_pt_entry(
+    table: *mut [u64; 512],
+    index: usize,
+    next_slot: &mut usize,
+    leaf_2m: &mut usize,
+    pool_base: *mut [u64; 512],
+    pool_cap: usize,
+    err: &'static str,
+) -> Result<*mut [u64; 512], &'static str> {
+    let existing = unsafe { (*table)[index] };
+    if existing & 0x7 != 0 && (existing & EPT_ENTRY_LARGE_PAGE) == 0 {
+        let pa = existing & 0x000F_FFFF_FFFF_F000;
+        return ept_table_ptr_from_pa(pool_base, pool_cap, pa).ok_or(err);
+    }
+
+    if *next_slot >= pool_cap {
+        return Err(err);
+    }
+
+    let slot_ptr = unsafe { pool_base.add(*next_slot) };
+    unsafe {
+        core::ptr::write_bytes(slot_ptr as *mut u8, 0, PAGE_SIZE_4K);
+    }
+
+    if existing & EPT_ENTRY_LARGE_PAGE != 0 {
+        let base = existing & 0x000F_FFFF_FFE0_0000;
+        let attrs = existing & 0xFFF & !EPT_ENTRY_LARGE_PAGE;
+        for page in 0..512usize {
+            let phys = base
+                .checked_add((page * PAGE_SIZE_4K) as u64)
+                .ok_or("ept split overflow")?;
+            unsafe {
+                (*slot_ptr)[page] = (phys & 0x000F_FFFF_FFFF_F000) | attrs;
+            }
+        }
+        *leaf_2m = leaf_2m.saturating_sub(1);
+    }
+
+    let slot_pa = host_va_to_pa(slot_ptr as u64).ok_or(err)?;
+    unsafe {
+        (*table)[index] = (slot_pa & 0x000F_FFFF_FFFF_F000) | EPT_ENTRY_PRESENT;
     }
     *next_slot += 1;
     Ok(slot_ptr)
@@ -1623,6 +1709,10 @@ fn page_align_up_4k(addr: u64) -> u64 {
 
 fn page_align_down_2m(addr: u64) -> u64 {
     addr & !(PAGE_SIZE_2M - 1)
+}
+
+fn is_2m_aligned(addr: u64) -> bool {
+    addr & (PAGE_SIZE_2M - 1) == 0
 }
 
 fn page_align_up_2m(addr: u64) -> u64 {

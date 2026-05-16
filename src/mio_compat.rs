@@ -21,8 +21,8 @@ const READY_ERROR: u8 = 0b0000_0100;
 const READY_READ_CLOSED: u8 = 0b0000_1000;
 const READY_WRITE_CLOSED: u8 = 0b0001_0000;
 
-const CONNECT_FASTPATH_SPINS: usize = 512;
-const CONNECT_IO_FASTPATH_SPINS: usize = 256;
+const CONNECT_COMPAT_WAIT_NS: u64 = 2_000_000_000;
+const CONNECT_IO_FASTPATH_NS: u64 = 1_000_000_000;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -191,7 +191,9 @@ fn compat_addr_port(addr: Option<CompatAddr>) -> Option<u16> {
 }
 
 fn probe_tcp_socket(socket: &MioSocketState) -> bool {
-    socket.kind == MioSocketKind::TcpStream && matches!(compat_addr_port(socket.local), Some(4 | 5))
+    socket.kind == MioSocketKind::TcpStream
+        && (matches!(compat_addr_port(socket.local), Some(4 | 5))
+            || matches!(compat_addr_port(socket.peer), Some(80 | 443)))
 }
 
 fn should_log_selector_probe(readiness: u8) -> bool {
@@ -294,6 +296,15 @@ fn vm_guest_vmcall_active() -> bool {
 #[inline]
 fn current_owner_vm() -> Option<u8> {
     crate::hv::current_guest_execution_context_vm_id()
+}
+
+#[inline]
+fn owner_matches(socket_owner: Option<u8>, requested_owner: Option<u8>) -> bool {
+    requested_owner.is_none() || socket_owner == requested_owner
+}
+
+fn socket_owner_vm(socket_id: u32) -> Option<u8> {
+    with_compat(|compat| compat.socket(socket_id).and_then(|socket| socket.owner_vm))
 }
 
 #[inline]
@@ -548,7 +559,7 @@ impl MioCompat {
 
     fn socket_for_owner(&self, socket_id: u32, owner_vm: Option<u8>) -> Option<&MioSocketState> {
         self.socket(socket_id)
-            .filter(|socket| socket.owner_vm == owner_vm)
+            .filter(|socket| owner_matches(socket.owner_vm, owner_vm))
     }
 
     fn socket_mut_for_owner(
@@ -557,7 +568,7 @@ impl MioCompat {
         owner_vm: Option<u8>,
     ) -> Option<&mut MioSocketState> {
         self.socket_mut(socket_id)
-            .filter(|socket| socket.owner_vm == owner_vm)
+            .filter(|socket| owner_matches(socket.owner_vm, owner_vm))
     }
 
     fn socket_by_handle_mut(&mut self, handle: api::NetHandle) -> Option<&mut MioSocketState> {
@@ -578,26 +589,38 @@ impl MioCompat {
             .retain(|pending| pending.socket_id != socket_id);
     }
 
-    fn tcp_socket_open_or_done(&self, socket_id: u32, owner_vm: Option<u8>) -> bool {
-        self.socket_for_owner(socket_id, owner_vm)
-            .map(|socket| {
-                socket.kind == MioSocketKind::TcpStream
-                    && (socket.connected || socket.closed || socket.error != STATUS_OK)
-            })
-            .unwrap_or(true)
+    fn tcp_connect_status_for_owner(&self, socket_id: u32, owner_vm: Option<u8>) -> Option<i32> {
+        let socket = self.socket_for_owner(socket_id, owner_vm)?;
+        if socket.kind != MioSocketKind::TcpStream {
+            return Some(STATUS_INVALID_INPUT);
+        }
+        if socket.connected {
+            return Some(STATUS_OK);
+        }
+        if socket.error != STATUS_OK {
+            return Some(socket.error);
+        }
+        if socket.closed {
+            return Some(STATUS_IO);
+        }
+        None
     }
 
-    fn drive_tcp_connect_fastpath(
+    fn drive_tcp_connect_until_status(
         &mut self,
         socket_id: u32,
         owner_vm: Option<u8>,
-        max_spins: usize,
-    ) {
-        for _ in 0..max_spins {
+        timeout_ns: u64,
+    ) -> Option<i32> {
+        let deadline = crate::chronos::monotonic_nanos().saturating_add(timeout_ns);
+        loop {
             self.kick_net();
             self.pump();
-            if self.tcp_socket_open_or_done(socket_id, owner_vm) {
-                return;
+            if let Some(status) = self.tcp_connect_status_for_owner(socket_id, owner_vm) {
+                return Some(status);
+            }
+            if crate::chronos::monotonic_nanos() >= deadline {
+                return None;
             }
             crate::wait::spin_step();
         }
@@ -875,104 +898,88 @@ impl MioCompat {
         ready
     }
 
-    fn selector_poll(
+    fn selector_poll_ready_once(
         &mut self,
         owner_vm: Option<u8>,
         selector_id: usize,
         out_events: *mut TrueosMioReadyEvent,
         out_cap: usize,
-        timeout_nanos: u64,
     ) -> usize {
-        let block_forever = timeout_nanos == u64::MAX;
-        let mut spins = 0u64;
+        self.kick_net();
+        self.pump();
 
-        loop {
-            self.kick_net();
-            self.pump();
+        let mut written = 0usize;
+        for reg in self
+            .registrations
+            .iter()
+            .filter(|reg| owner_matches(reg.owner_vm, owner_vm) && reg.selector_id == selector_id)
+        {
+            if written >= out_cap {
+                break;
+            }
 
-            let mut written = 0usize;
-            for reg in self
-                .registrations
-                .iter()
-                .filter(|reg| reg.owner_vm == owner_vm && reg.selector_id == selector_id)
+            let Some(socket) = self.socket(reg.socket_id) else {
+                continue;
+            };
+
+            let readiness = self.ready_mask(socket, reg.interests);
+            if readiness == 0 {
+                continue;
+            }
+
+            if probe_tcp_socket(socket) && should_log_selector_probe(readiness) {
+                crate::log!(
+                    "mio_compat: tcp selector-ready selector={} socket={} token={} interests=0x{:02x} readiness=0x{:02x} rx={} closed={}\n",
+                    selector_id,
+                    socket.id,
+                    reg.token,
+                    reg.interests,
+                    readiness,
+                    socket.rx_stream.len(),
+                    socket.closed as u8
+                );
+            }
+            if crate::logflag::NET_LOG_TCP_FLOW
+                && socket.kind == MioSocketKind::Udp
+                && (readiness & READY_WRITABLE) != 0
             {
-                if written >= out_cap {
-                    break;
-                }
-
-                let Some(socket) = self.socket(reg.socket_id) else {
-                    continue;
-                };
-
-                let readiness = self.ready_mask(socket, reg.interests);
-                if readiness == 0 {
-                    continue;
-                }
-
-                if probe_tcp_socket(socket) && should_log_selector_probe(readiness) {
+                static UDP_WRITABLE_FLOW_LAST_LOG_NS: AtomicU64 = AtomicU64::new(0);
+                if once_per_second(&UDP_WRITABLE_FLOW_LAST_LOG_NS) {
                     crate::log!(
-                        "mio_compat: tcp selector-ready selector={} socket={} token={} interests=0x{:02x} readiness=0x{:02x} rx={} closed={}\n",
+                        "mio_compat: udp selector-ready selector={} socket={} token={} readiness=0x{:02x}\n",
                         selector_id,
                         socket.id,
                         reg.token,
-                        reg.interests,
-                        readiness,
-                        socket.rx_stream.len(),
-                        socket.closed as u8
+                        readiness
                     );
                 }
-                if crate::logflag::NET_LOG_TCP_FLOW
-                    && socket.kind == MioSocketKind::Udp
-                    && (readiness & READY_WRITABLE) != 0
-                {
-                    static UDP_WRITABLE_FLOW_LAST_LOG_NS: AtomicU64 = AtomicU64::new(0);
-                    if once_per_second(&UDP_WRITABLE_FLOW_LAST_LOG_NS) {
-                        crate::log!(
-                            "mio_compat: udp selector-ready selector={} socket={} token={} readiness=0x{:02x}\n",
-                            selector_id,
-                            socket.id,
-                            reg.token,
-                            readiness
-                        );
-                    }
-                }
-                if crate::logflag::NET_LOG_TCP_FLOW
-                    && socket.kind == MioSocketKind::TcpStream
-                    && (readiness & READY_WRITABLE) != 0
-                {
-                    static TCP_WRITABLE_FLOW_LAST_LOG_NS: AtomicU64 = AtomicU64::new(0);
-                    if once_per_second(&TCP_WRITABLE_FLOW_LAST_LOG_NS) {
-                        crate::log!(
-                            "mio_compat: tcp selector-ready selector={} socket={} token={} readiness=0x{:02x}\n",
-                            selector_id,
-                            socket.id,
-                            reg.token,
-                            readiness
-                        );
-                    }
-                }
-
-                unsafe {
-                    out_events.add(written).write(TrueosMioReadyEvent {
-                        token: reg.token,
-                        readiness,
-                    });
-                }
-                written += 1;
             }
-
-            if written != 0 || timeout_nanos == 0 {
-                return written;
-            }
-
-            if !block_forever && spins >= timeout_nanos.saturating_div(1_000_000).saturating_add(1)
+            if crate::logflag::NET_LOG_TCP_FLOW
+                && socket.kind == MioSocketKind::TcpStream
+                && (readiness & READY_WRITABLE) != 0
             {
-                return 0;
+                static TCP_WRITABLE_FLOW_LAST_LOG_NS: AtomicU64 = AtomicU64::new(0);
+                if once_per_second(&TCP_WRITABLE_FLOW_LAST_LOG_NS) {
+                    crate::log!(
+                        "mio_compat: tcp selector-ready selector={} socket={} token={} readiness=0x{:02x}\n",
+                        selector_id,
+                        socket.id,
+                        reg.token,
+                        readiness
+                    );
+                }
             }
 
-            spins = spins.saturating_add(1);
-            crate::wait::spin_step();
+            unsafe {
+                out_events.add(written).write(TrueosMioReadyEvent {
+                    token: reg.token,
+                    readiness,
+                });
+            }
+            written += 1;
         }
+
+        written
     }
 }
 
@@ -1127,7 +1134,12 @@ pub(crate) unsafe fn mio_tcp_stream_connect_host(
         };
 
         if status == STATUS_OK {
-            compat.drive_tcp_connect_fastpath(socket_id, owner_vm, CONNECT_FASTPATH_SPINS);
+            if let Some(connect_status) =
+                compat.drive_tcp_connect_until_status(socket_id, owner_vm, CONNECT_COMPAT_WAIT_NS)
+                && connect_status != STATUS_OK
+            {
+                return connect_status;
+            }
             unsafe { *out_socket_id = socket_id };
         }
 
@@ -1383,7 +1395,8 @@ pub(crate) unsafe fn mio_socket_take_error_host(socket_id: u32) -> i32 {
             && !socket.closed
             && socket.error == STATUS_OK
         {
-            compat.drive_tcp_connect_fastpath(socket_id, owner_vm, CONNECT_IO_FASTPATH_SPINS);
+            let _ =
+                compat.drive_tcp_connect_until_status(socket_id, owner_vm, CONNECT_IO_FASTPATH_NS);
         }
         let Some(socket) = compat.socket_mut_for_owner(socket_id, owner_vm) else {
             return STATUS_NOT_FOUND;
@@ -1519,6 +1532,28 @@ pub unsafe extern "C" fn trueos_mio_tcp_stream_read(
         }
         return got as isize;
     }
+    if let Some(vm_id) = socket_owner_vm(socket_id) {
+        if out_ptr.is_null() && out_cap != 0 {
+            return STATUS_INVALID_INPUT as isize;
+        }
+        let want = out_cap.min(trueos_vm::vmcall::PAYLOAD_CAP);
+        if want == 0 {
+            return 0;
+        }
+        let mut bytes = Vec::new();
+        bytes.resize(want, 0);
+        let rc = crate::hv::with_guest_broker_context(vm_id, || {
+            mio_tcp_stream_read_host(socket_id, bytes.as_mut_ptr(), want)
+        });
+        if rc <= 0 {
+            return rc;
+        }
+        let got = (rc as usize).min(want);
+        if !copy_to_active_guest(vm_id, out_ptr, &bytes[..got]) {
+            return STATUS_INVALID_INPUT as isize;
+        }
+        return got as isize;
+    }
     mio_tcp_stream_read_host(socket_id, out_ptr, out_cap)
 }
 
@@ -1539,7 +1574,8 @@ pub(crate) unsafe fn mio_tcp_stream_write_host(
             && !socket.closed
             && socket.error == STATUS_OK
         {
-            compat.drive_tcp_connect_fastpath(socket_id, owner_vm, CONNECT_IO_FASTPATH_SPINS);
+            let _ =
+                compat.drive_tcp_connect_until_status(socket_id, owner_vm, CONNECT_IO_FASTPATH_NS);
         }
         let Some(socket) = compat.socket_for_owner(socket_id, owner_vm) else {
             return STATUS_NOT_FOUND as isize;
@@ -1622,6 +1658,17 @@ pub unsafe extern "C" fn trueos_mio_tcp_stream_write(
             return STATUS_INVALID_INPUT as isize;
         };
         return mio_tcp_stream_write_host(socket_id, data.as_ptr(), data.len());
+    }
+    if let Some(vm_id) = socket_owner_vm(socket_id) {
+        if data_ptr.is_null() && data_len != 0 {
+            return STATUS_INVALID_INPUT as isize;
+        }
+        let Some(data) = copy_from_active_guest(vm_id, data_ptr, data_len) else {
+            return STATUS_INVALID_INPUT as isize;
+        };
+        return crate::hv::with_guest_broker_context(vm_id, || {
+            mio_tcp_stream_write_host(socket_id, data.as_ptr(), data.len())
+        });
     }
     mio_tcp_stream_write_host(socket_id, data_ptr, data_len)
 }
@@ -1915,13 +1962,42 @@ pub(crate) unsafe fn mio_selector_register_socket_host(
 ) -> i32 {
     let owner_vm = current_owner_vm();
     with_compat(|compat| {
-        if compat.socket_for_owner(socket_id, owner_vm).is_none() {
+        let Some(socket_owner) = compat.socket(socket_id).and_then(|socket| socket.owner_vm) else {
+            if compat.socket_for_owner(socket_id, owner_vm).is_none() {
+                return STATUS_NOT_FOUND;
+            }
+            let socket_owner = owner_vm;
+            if let Some(reg) = compat.registrations.iter_mut().find(|reg| {
+                owner_matches(reg.owner_vm, owner_vm)
+                    && reg.selector_id == selector_id
+                    && reg.socket_id == socket_id
+            }) {
+                reg.owner_vm = socket_owner;
+                reg.token = token;
+                reg.interests = interests;
+                return STATUS_OK;
+            }
+
+            compat.registrations.push(SelectorRegistration {
+                selector_id,
+                socket_id,
+                owner_vm: socket_owner,
+                token,
+                interests,
+            });
+            return STATUS_OK;
+        };
+        if !owner_matches(Some(socket_owner), owner_vm) {
             return STATUS_NOT_FOUND;
         }
+        let registration_owner = owner_vm.or(Some(socket_owner));
 
         if let Some(reg) = compat.registrations.iter_mut().find(|reg| {
-            reg.owner_vm == owner_vm && reg.selector_id == selector_id && reg.socket_id == socket_id
+            owner_matches(reg.owner_vm, owner_vm)
+                && reg.selector_id == selector_id
+                && reg.socket_id == socket_id
         }) {
+            reg.owner_vm = registration_owner;
             reg.token = token;
             reg.interests = interests;
             return STATUS_OK;
@@ -1930,7 +2006,7 @@ pub(crate) unsafe fn mio_selector_register_socket_host(
         compat.registrations.push(SelectorRegistration {
             selector_id,
             socket_id,
-            owner_vm,
+            owner_vm: registration_owner,
             token,
             interests,
         });
@@ -1974,7 +2050,7 @@ pub(crate) unsafe fn mio_selector_deregister_socket_host(
     let owner_vm = current_owner_vm();
     with_compat(|compat| {
         compat.registrations.retain(|reg| {
-            !(reg.owner_vm == owner_vm
+            !(owner_matches(reg.owner_vm, owner_vm)
                 && reg.selector_id == selector_id
                 && reg.socket_id == socket_id)
         });
@@ -2012,9 +2088,21 @@ pub(crate) unsafe fn mio_selector_poll_host(
         return 0;
     }
     let owner_vm = current_owner_vm();
-    with_compat(|compat| {
-        compat.selector_poll(owner_vm, selector_id, out_events, out_cap, timeout_nanos)
-    })
+    let block_forever = timeout_nanos == u64::MAX;
+    let deadline = crate::chronos::monotonic_nanos().saturating_add(timeout_nanos);
+
+    loop {
+        let written = with_compat(|compat| {
+            compat.selector_poll_ready_once(owner_vm, selector_id, out_events, out_cap)
+        });
+        if written != 0 || timeout_nanos == 0 {
+            return written;
+        }
+        if !block_forever && crate::chronos::monotonic_nanos() >= deadline {
+            return 0;
+        }
+        crate::wait::spin_step();
+    }
 }
 
 #[unsafe(no_mangle)]
