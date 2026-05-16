@@ -2200,6 +2200,8 @@ cfg_if! {
     } else if #[cfg(target_os = "trueos")] {
         mod linux;
         pub use self::linux::*;
+        mod linux_l4re_shared;
+        pub use self::linux_l4re_shared::*;
     } else if #[cfg(target_os = "l4re")] {
         mod l4re;
         pub use self::l4re::*;
