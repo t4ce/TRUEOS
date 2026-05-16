@@ -7,11 +7,11 @@ use crate::proto::*;
 
 use bytes::Bytes;
 use futures_core::Stream;
-use std::io;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
+use tokio::io;
 use tokio::io::AsyncRead;
 
 /// An H2 connection
@@ -338,11 +338,7 @@ where
                     }
                 }
                 // Only NO_ERROR should be waiting for idle
-                debug_assert_eq!(
-                    reason,
-                    Reason::NO_ERROR,
-                    "graceful GOAWAY should be NO_ERROR"
-                );
+                debug_assert_eq!(reason, Reason::NO_ERROR, "graceful GOAWAY should be NO_ERROR");
             }
             ready!(self.poll_ready(cx))?;
 
@@ -545,10 +541,7 @@ where
                 tracing::trace!(?frame, "recv PING");
                 let status = self.ping_pong.recv_ping(frame);
                 if status.is_shutdown() {
-                    assert!(
-                        self.go_away.is_going_away(),
-                        "received unexpected shutdown ping"
-                    );
+                    assert!(self.go_away.is_going_away(), "received unexpected shutdown ping");
 
                     let last_processed_id = self.streams.last_processed_id();
                     self.go_away(last_processed_id, Reason::NO_ERROR);

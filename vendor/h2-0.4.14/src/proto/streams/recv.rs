@@ -6,9 +6,9 @@ use crate::proto;
 use http::{HeaderMap, Request, Response};
 
 use std::cmp::Ordering;
-use std::io;
 use std::task::{Context, Poll, Waker};
 use std::time::Instant;
+use tokio::io;
 
 #[derive(Debug)]
 pub(super) struct Recv {
@@ -814,10 +814,7 @@ impl Recv {
                  headers frame is over size; promised_id={:?};",
                 frame.promised_id(),
             );
-            return Err(Error::library_reset(
-                frame.promised_id(),
-                Reason::PROTOCOL_ERROR,
-            ));
+            return Err(Error::library_reset(frame.promised_id(), Reason::PROTOCOL_ERROR));
         }
 
         let promised_id = frame.promised_id();
@@ -856,10 +853,7 @@ impl Recv {
     pub fn ensure_not_idle(&self, id: StreamId) -> Result<(), Reason> {
         if let Ok(next) = self.next_stream_id {
             if id >= next {
-                tracing::debug!(
-                    "stream ID implicitly closed, PROTOCOL_ERROR; stream={:?}",
-                    id
-                );
+                tracing::debug!("stream ID implicitly closed, PROTOCOL_ERROR; stream={:?}", id);
                 return Err(Reason::PROTOCOL_ERROR);
             }
         }

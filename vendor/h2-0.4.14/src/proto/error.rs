@@ -3,7 +3,7 @@ use crate::frame::{Reason, StreamId};
 
 use bytes::Bytes;
 use std::fmt;
-use std::io;
+use tokio::io;
 
 /// Either an H2 reason  or an I/O error
 #[derive(Clone, Debug)]
@@ -89,7 +89,15 @@ impl From<io::ErrorKind> for Error {
 
 impl From<io::Error> for Error {
     fn from(src: io::Error) -> Self {
-        Error::Io(src.kind(), src.get_ref().map(|inner| inner.to_string()))
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        {
+            Error::Io(src.kind(), None)
+        }
+
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+        {
+            Error::Io(src.kind(), src.get_ref().map(|inner| inner.to_string()))
+        }
     }
 }
 

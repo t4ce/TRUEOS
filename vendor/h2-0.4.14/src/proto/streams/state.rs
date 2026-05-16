@@ -1,5 +1,5 @@
 use std::fmt;
-use std::io;
+use tokio::io;
 
 use crate::codec::UserError;
 use crate::frame::{self, Reason, StreamId};
@@ -281,10 +281,8 @@ impl State {
                     state,
                     queued
                 );
-                self.inner = Closed(Cause::Error(Error::remote_reset(
-                    frame.stream_id(),
-                    frame.reason(),
-                )));
+                self.inner =
+                    Closed(Cause::Error(Error::remote_reset(frame.stream_id(), frame.reason())));
             }
         }
     }
@@ -363,10 +361,7 @@ impl State {
     }
 
     pub fn is_remote_reset(&self) -> bool {
-        matches!(
-            self.inner,
-            Closed(Cause::Error(Error::Reset(_, _, Initiator::Remote)))
-        )
+        matches!(self.inner, Closed(Cause::Error(Error::Reset(_, _, Initiator::Remote))))
     }
 
     /// Returns true if the stream is already reset.
@@ -420,10 +415,7 @@ impl State {
     }
 
     pub fn is_send_closed(&self) -> bool {
-        matches!(
-            self.inner,
-            Closed(..) | HalfClosedLocal(..) | ReservedRemote
-        )
+        matches!(self.inner, Closed(..) | HalfClosedLocal(..) | ReservedRemote)
     }
 
     pub fn is_idle(&self) -> bool {

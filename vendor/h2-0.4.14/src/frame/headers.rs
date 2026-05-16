@@ -1006,18 +1006,9 @@ mod test {
             StreamId::ZERO,
             Default::default(),
             HeaderMap::from_iter(vec![
-                (
-                    HeaderName::from_static("hello"),
-                    HeaderValue::from_static("world"),
-                ),
-                (
-                    HeaderName::from_static("hello"),
-                    HeaderValue::from_static("zomg"),
-                ),
-                (
-                    HeaderName::from_static("hello"),
-                    HeaderValue::from_static("sup"),
-                ),
+                (HeaderName::from_static("hello"), HeaderValue::from_static("world")),
+                (HeaderName::from_static("hello"), HeaderValue::from_static("zomg")),
+                (HeaderName::from_static("hello"), HeaderValue::from_static("sup")),
             ]),
         );
 
@@ -1063,11 +1054,7 @@ mod test {
         // See: https://datatracker.ietf.org/doc/html/rfc9113#section-8.5
 
         assert_eq!(
-            Pseudo::request(
-                Method::CONNECT,
-                Uri::from_static("https://example.com:8443"),
-                None
-            ),
+            Pseudo::request(Method::CONNECT, Uri::from_static("https://example.com:8443"), None),
             Pseudo {
                 method: Method::CONNECT.into(),
                 authority: BytesStr::from_static("example.com:8443").into(),
@@ -1076,11 +1063,7 @@ mod test {
         );
 
         assert_eq!(
-            Pseudo::request(
-                Method::CONNECT,
-                Uri::from_static("https://example.com/test"),
-                None
-            ),
+            Pseudo::request(Method::CONNECT, Uri::from_static("https://example.com/test"), None),
             Pseudo {
                 method: Method::CONNECT.into(),
                 authority: BytesStr::from_static("example.com").into(),
@@ -1184,11 +1167,7 @@ mod test {
 
         for method in methods {
             assert_eq!(
-                Pseudo::request(
-                    method.clone(),
-                    Uri::from_static("http://example.com:8080"),
-                    None,
-                ),
+                Pseudo::request(method.clone(), Uri::from_static("http://example.com:8080"), None,),
                 Pseudo {
                     method: method.clone().into(),
                     authority: BytesStr::from_static("example.com:8080").into(),

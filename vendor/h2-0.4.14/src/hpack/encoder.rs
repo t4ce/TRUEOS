@@ -478,10 +478,7 @@ mod test {
         // Using the name component of a previously indexed header (without
         // sensitive flag set)
 
-        let _ = encode(
-            &mut encoder,
-            vec![self::header("my-password", "not-so-secret")],
-        );
+        let _ = encode(&mut encoder, vec![self::header("my-password", "not-so-secret")]);
 
         let name = "my-password".parse().unwrap();
         let mut value = HeaderValue::from_bytes(b"12345").unwrap();

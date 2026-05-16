@@ -9,9 +9,10 @@ use crate::codec::UserError::*;
 use bytes::buf::Take;
 use std::{
     cmp::{self, Ordering},
-    fmt, io, mem,
+    fmt, mem,
     task::{Context, Poll, Waker},
 };
+use tokio::io;
 
 /// # Warning
 ///
@@ -602,11 +603,7 @@ impl Prioritize {
     where
         B: Buf,
     {
-        tracing::trace!(
-            ?frame,
-            sz = frame.payload().inner.get_ref().remaining(),
-            "reclaimed"
-        );
+        tracing::trace!(?frame, sz = frame.payload().inner.get_ref().remaining(), "reclaimed");
 
         let mut eos = false;
         let key = frame.payload().stream;

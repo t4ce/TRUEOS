@@ -9,7 +9,8 @@ use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_util::io::poll_write_buf;
 
-use std::io::{self, Cursor};
+use std::io::Cursor;
+use tokio::io;
 
 // A macro to get around a method needing to borrow &mut self
 macro_rules! limited_write_buf {

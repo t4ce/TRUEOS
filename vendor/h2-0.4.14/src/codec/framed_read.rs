@@ -10,7 +10,7 @@ use futures_core::Stream;
 
 use bytes::{Buf, BytesMut};
 
-use std::io;
+use tokio::io;
 
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -394,13 +394,9 @@ where
                 max_continuation_frames,
                 ..
             } = *self;
-            if let Some(frame) = decode_frame(
-                hpack,
-                max_header_list_size,
-                max_continuation_frames,
-                partial,
-                bytes,
-            )? {
+            if let Some(frame) =
+                decode_frame(hpack, max_header_list_size, max_continuation_frames, partial, bytes)?
+            {
                 tracing::debug!(?frame, "received");
                 return Poll::Ready(Some(Ok(frame)));
             }
@@ -409,14 +405,25 @@ where
 }
 
 fn map_err(err: io::Error) -> Error {
-    if let io::ErrorKind::InvalidData = err.kind() {
-        if let Some(custom) = err.get_ref() {
-            if custom.is::<LengthDelimitedCodecError>() {
-                return Error::library_go_away(Reason::FRAME_SIZE_ERROR);
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    {
+        if let io::ErrorKind::InvalidData = err.kind() {
+            return Error::library_go_away(Reason::FRAME_SIZE_ERROR);
+        }
+        err.into()
+    }
+
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+    {
+        if let io::ErrorKind::InvalidData = err.kind() {
+            if let Some(custom) = err.get_ref() {
+                if custom.is::<LengthDelimitedCodecError>() {
+                    return Error::library_go_away(Reason::FRAME_SIZE_ERROR);
+                }
             }
         }
+        err.into()
     }
-    err.into()
 }
 
 // ===== impl Continuable =====

@@ -2,8 +2,8 @@ use crate::codec::Codec;
 use crate::frame::{self, Reason, StreamId};
 
 use bytes::Buf;
-use std::io;
 use std::task::{Context, Poll};
+use tokio::io;
 use tokio::io::AsyncWrite;
 
 /// Manages our sending of GOAWAY frames.
