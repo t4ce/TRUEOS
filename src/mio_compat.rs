@@ -257,6 +257,57 @@ fn read_addr(bytes: &[u8]) -> Option<TrueosMioSocketAddr> {
     Some(unsafe { core::ptr::read_unaligned(bytes.as_ptr() as *const TrueosMioSocketAddr) })
 }
 
+fn guest_stack_host_ptr(vm_id: u8, guest_ptr: *const u8, len: usize) -> Option<*mut u8> {
+    let guest_va = guest_ptr as usize as u64;
+    let offset = guest_va.checked_sub(crate::hv::memory::GUEST_STACK_VA_BASE)? as usize;
+    let stack = crate::hv::memory::guest_stack_slice_for_vm(vm_id)?;
+    let end = offset.checked_add(len)?;
+    if end > stack.len() {
+        return None;
+    }
+    let base = crate::hv::memory::guest_stack_mut_ptr_for_vm(vm_id)?;
+    Some(unsafe { base.add(offset) })
+}
+
+fn copy_from_guest_stack(vm_id: u8, src: *const u8, len: usize) -> Option<Vec<u8>> {
+    if len == 0 {
+        return Some(Vec::new());
+    }
+    let bytes = if let Some(host_ptr) = guest_stack_host_ptr(vm_id, src, len) {
+        unsafe { core::slice::from_raw_parts(host_ptr.cast_const(), len) }
+    } else {
+        unsafe { core::slice::from_raw_parts(src, len) }
+    };
+    Some(Vec::from(bytes))
+}
+
+fn copy_to_guest_stack(vm_id: u8, dst: *mut u8, bytes: &[u8]) -> bool {
+    if bytes.is_empty() {
+        return true;
+    }
+    let dst_ptr = guest_stack_host_ptr(vm_id, dst.cast_const(), bytes.len()).unwrap_or(dst);
+    unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), dst_ptr, bytes.len()) };
+    true
+}
+
+fn copy_u32_to_guest_stack(vm_id: u8, dst: *mut u32, value: u32) -> bool {
+    copy_to_guest_stack(vm_id, dst.cast::<u8>(), &value.to_ne_bytes())
+}
+
+fn copy_mio_addr_to_guest_stack(
+    vm_id: u8,
+    dst: *mut TrueosMioSocketAddr,
+    value: TrueosMioSocketAddr,
+) -> bool {
+    let bytes = unsafe {
+        core::slice::from_raw_parts(
+            (&value as *const TrueosMioSocketAddr).cast::<u8>(),
+            MIO_ADDR_BYTES,
+        )
+    };
+    copy_to_guest_stack(vm_id, dst.cast::<u8>(), bytes)
+}
+
 fn guest_mio_socket_out(op: u32, addr: TrueosMioSocketAddr, out_socket_id: *mut u32) -> i32 {
     if out_socket_id.is_null() {
         return STATUS_INVALID_INPUT;
@@ -840,6 +891,14 @@ pub unsafe extern "C" fn trueos_mio_tcp_listener_bind(
             out_socket_id,
         );
     }
+    if let Some(vm_id) = current_owner_vm() {
+        let mut socket_id = 0u32;
+        let rc = mio_tcp_listener_bind_host(addr, &mut socket_id);
+        if rc == STATUS_OK && !copy_u32_to_guest_stack(vm_id, out_socket_id, socket_id) {
+            return STATUS_INVALID_INPUT;
+        }
+        return rc;
+    }
     mio_tcp_listener_bind_host(addr, out_socket_id)
 }
 
@@ -916,6 +975,14 @@ pub unsafe extern "C" fn trueos_mio_tcp_stream_connect(
             addr,
             out_socket_id,
         );
+    }
+    if let Some(vm_id) = current_owner_vm() {
+        let mut socket_id = 0u32;
+        let rc = mio_tcp_stream_connect_host(addr, &mut socket_id);
+        if rc == STATUS_OK && !copy_u32_to_guest_stack(vm_id, out_socket_id, socket_id) {
+            return STATUS_INVALID_INPUT;
+        }
+        return rc;
     }
     mio_tcp_stream_connect_host(addr, out_socket_id)
 }
@@ -1006,6 +1073,14 @@ pub unsafe extern "C" fn trueos_mio_udp_socket_bind(
             out_socket_id,
         );
     }
+    if let Some(vm_id) = current_owner_vm() {
+        let mut socket_id = 0u32;
+        let rc = mio_udp_socket_bind_host(addr, &mut socket_id);
+        if rc == STATUS_OK && !copy_u32_to_guest_stack(vm_id, out_socket_id, socket_id) {
+            return STATUS_INVALID_INPUT;
+        }
+        return rc;
+    }
     mio_udp_socket_bind_host(addr, out_socket_id)
 }
 
@@ -1072,6 +1147,14 @@ pub unsafe extern "C" fn trueos_mio_socket_local_addr(
             out_addr,
         );
     }
+    if let Some(vm_id) = current_owner_vm() {
+        let mut addr = TrueosMioSocketAddr::default();
+        let rc = mio_socket_local_addr_host(socket_id, &mut addr);
+        if rc == STATUS_OK && !copy_mio_addr_to_guest_stack(vm_id, out_addr, addr) {
+            return STATUS_INVALID_INPUT;
+        }
+        return rc;
+    }
     mio_socket_local_addr_host(socket_id, out_addr)
 }
 
@@ -1107,6 +1190,14 @@ pub unsafe extern "C" fn trueos_mio_socket_peer_addr(
             socket_id,
             out_addr,
         );
+    }
+    if let Some(vm_id) = current_owner_vm() {
+        let mut addr = TrueosMioSocketAddr::default();
+        let rc = mio_socket_peer_addr_host(socket_id, &mut addr);
+        if rc == STATUS_OK && !copy_mio_addr_to_guest_stack(vm_id, out_addr, addr) {
+            return STATUS_INVALID_INPUT;
+        }
+        return rc;
     }
     mio_socket_peer_addr_host(socket_id, out_addr)
 }
@@ -1224,6 +1315,26 @@ pub unsafe extern "C" fn trueos_mio_tcp_stream_read(
         core::ptr::copy_nonoverlapping(bytes.as_ptr(), out_ptr, got);
         return got as isize;
     }
+    if let Some(vm_id) = current_owner_vm() {
+        if out_ptr.is_null() && out_cap != 0 {
+            return STATUS_INVALID_INPUT as isize;
+        }
+        let want = out_cap.min(trueos_vm::vmcall::PAYLOAD_CAP);
+        if want == 0 {
+            return 0;
+        }
+        let mut bytes = Vec::new();
+        bytes.resize(want, 0);
+        let rc = mio_tcp_stream_read_host(socket_id, bytes.as_mut_ptr(), want);
+        if rc <= 0 {
+            return rc;
+        }
+        let got = (rc as usize).min(want);
+        if !copy_to_guest_stack(vm_id, out_ptr, &bytes[..got]) {
+            return STATUS_INVALID_INPUT as isize;
+        }
+        return got as isize;
+    }
     mio_tcp_stream_read_host(socket_id, out_ptr, out_cap)
 }
 
@@ -1305,6 +1416,15 @@ pub unsafe extern "C" fn trueos_mio_tcp_stream_write(
             sent += (rc as usize).min(end - sent);
         }
         return sent as isize;
+    }
+    if let Some(vm_id) = current_owner_vm() {
+        if data_ptr.is_null() && data_len != 0 {
+            return STATUS_INVALID_INPUT as isize;
+        }
+        let Some(data) = copy_from_guest_stack(vm_id, data_ptr, data_len) else {
+            return STATUS_INVALID_INPUT as isize;
+        };
+        return mio_tcp_stream_write_host(socket_id, data.as_ptr(), data.len());
     }
     mio_tcp_stream_write_host(socket_id, data_ptr, data_len)
 }
@@ -1716,6 +1836,36 @@ pub unsafe extern "C" fn trueos_mio_selector_poll(
                 out_events as *mut u8,
                 count * MIO_READY_EVENT_BYTES,
             );
+        }
+        return count;
+    }
+    if let Some(vm_id) = current_owner_vm() {
+        if out_events.is_null() && out_cap != 0 {
+            return 0;
+        }
+        let max_events = (trueos_vm::vmcall::PAYLOAD_CAP / MIO_READY_EVENT_BYTES).min(out_cap);
+        if max_events == 0 {
+            return 0;
+        }
+        let mut events = Vec::new();
+        events.resize(max_events, TrueosMioReadyEvent::default());
+        let count = mio_selector_poll_host(
+            selector_id,
+            events.as_mut_ptr(),
+            max_events,
+            timeout_nanos,
+        )
+        .min(max_events);
+        if count != 0 {
+            let bytes = unsafe {
+                core::slice::from_raw_parts(
+                    events.as_ptr().cast::<u8>(),
+                    count * MIO_READY_EVENT_BYTES,
+                )
+            };
+            if !copy_to_guest_stack(vm_id, out_events.cast::<u8>(), bytes) {
+                return 0;
+            }
         }
         return count;
     }

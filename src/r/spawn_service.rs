@@ -38,6 +38,7 @@ define_started_flags!(
     HV_VM_STORE_NET_STARTED,
     NET_POLL_STARTED,
     NET_SERVICE_STARTED,
+    NET_CACHE_SERVICE_STARTED,
     TLS_SOCKET_SERVICE_STARTED,
     NTP_SYNC_STARTED,
     SNTP_SERVICE_STARTED,
@@ -382,6 +383,10 @@ fn spawn_net_service(spawner: Spawner) -> SpawnAttempt {
     } else {
         SpawnAttempt::Skipped
     }
+}
+
+fn spawn_net_cache_service(spawner: Spawner) -> SpawnAttempt {
+    spawn_bool_result_to_attempt(crate::net::cache_service::ensure_service_started(spawner))
 }
 
 fn spawn_tls_socket_service(spawner: Spawner) -> SpawnAttempt {
@@ -1043,7 +1048,7 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::APP_VM_READY
     | crate::r::readiness::GFX_TEXTURE_UPLOAD_SERVICE_READY
     | crate::r::readiness::NET_SOCKET_READY
     | crate::r::readiness::TLS_SOCKET_SERVICE_READY;
-static TASKS: [TaskSpec; 68] = [
+static TASKS: [TaskSpec; 69] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
         "globalog-persist-once",
@@ -1074,6 +1079,12 @@ static TASKS: [TaskSpec; 68] = [
     TaskSpec::enabled("hv-vm-store-net", 0, &HV_VM_STORE_NET_STARTED, spawn_hv_vm_store_net),
     TaskSpec::enabled("net-poll-tasks", 0, &NET_POLL_STARTED, spawn_net_poll_tasks),
     TaskSpec::enabled("net-service", 0, &NET_SERVICE_STARTED, spawn_net_service),
+    TaskSpec::enabled(
+        "net-cache-service",
+        0,
+        &NET_CACHE_SERVICE_STARTED,
+        spawn_net_cache_service,
+    ),
     TaskSpec::enabled(
         "tls-socket-service",
         crate::r::readiness::NET_ANY_CONFIGURED,
