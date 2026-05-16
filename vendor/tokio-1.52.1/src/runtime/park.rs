@@ -10,14 +10,14 @@ use crate::loom::sync::Mutex;
 use core::sync::atomic::Ordering::SeqCst;
 use core::time::Duration;
 
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+#[cfg(not(target_os = "zkvm"))]
 use crate::loom::sync::Condvar;
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 #[derive(Debug)]
 struct Condvar;
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 impl Condvar {
     fn new() -> Self {
         Condvar
@@ -50,12 +50,12 @@ const EMPTY: usize = 0;
 const PARKED: usize = 1;
 const NOTIFIED: usize = 2;
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 fn trueos_now_nanos() -> u64 {
     crate::platform::monotonic_nanos()
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 fn trueos_duration_nanos(duration: Duration) -> u64 {
     duration
         .as_secs()
@@ -63,7 +63,7 @@ fn trueos_duration_nanos(duration: Duration) -> u64 {
         .saturating_add(u64::from(duration.subsec_nanos()))
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 fn trueos_park_step(remaining_nanos: Option<u64>) {
     crate::platform::note_semantic_gap(crate::platform::SEMANTIC_GAP_RUNTIME_PARK_POLL);
 
@@ -160,7 +160,7 @@ impl Inner {
             Err(actual) => panic!("inconsistent park state; actual = {actual}"),
         }
 
-        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        #[cfg(target_os = "zkvm")]
         {
             drop(m);
 
@@ -173,7 +173,7 @@ impl Inner {
             }
         }
 
-        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+        #[cfg(not(target_os = "zkvm"))]
         {
             let mut m = m;
             loop {
@@ -206,7 +206,7 @@ impl Inner {
         }
 
         if dur == Duration::from_millis(0) {
-            #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+            #[cfg(target_os = "zkvm")]
             crate::platform::poll_once();
 
             return;
@@ -226,7 +226,7 @@ impl Inner {
             Err(actual) => panic!("inconsistent park_timeout state; actual = {actual}"),
         }
 
-        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        #[cfg(target_os = "zkvm")]
         {
             drop(m);
             let deadline = trueos_now_nanos().saturating_add(trueos_duration_nanos(dur));
@@ -248,8 +248,8 @@ impl Inner {
         }
 
         #[cfg(all(
-            not(any(target_os = "trueos", target_os = "zkvm")),
-            not(any(target_os = "trueos", target_os = "zkvm")),
+            not(target_os = "zkvm"),
+            not(target_os = "zkvm"),
             not(all(target_family = "wasm", not(target_feature = "atomics")))
         ))]
         // Wait with a timeout, and if we spuriously wake up or otherwise wake up
@@ -259,8 +259,8 @@ impl Inner {
         let (_m, _result) = self.condvar.wait_timeout(m, dur).unwrap();
 
         #[cfg(all(
-            not(any(target_os = "trueos", target_os = "zkvm")),
-            not(any(target_os = "trueos", target_os = "zkvm")),
+            not(target_os = "zkvm"),
+            not(target_os = "zkvm"),
             target_family = "wasm",
             not(target_feature = "atomics")
         ))]

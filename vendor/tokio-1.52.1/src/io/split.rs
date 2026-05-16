@@ -10,9 +10,9 @@ use core::fmt;
 use std::io;
 use core::pin::Pin;
 use std::sync::Arc;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 use crate::loom::sync::Mutex;
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+#[cfg(not(target_os = "zkvm"))]
 use std::sync::Mutex;
 use core::task::{Context, Poll};
 
@@ -60,9 +60,9 @@ struct Inner<T> {
 
 impl<T> Inner<T> {
     fn with_lock<R>(&self, f: impl FnOnce(Pin<&mut T>) -> R) -> R {
-        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        #[cfg(target_os = "zkvm")]
         let mut guard = self.stream.lock();
-        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+        #[cfg(not(target_os = "zkvm"))]
         let mut guard = self.stream.lock().unwrap();
 
         // safety: we do not move the stream.
@@ -98,14 +98,14 @@ impl<T> ReadHalf<T> {
                 .ok()
                 .expect("`Arc::try_unwrap` failed");
 
-            #[cfg(all(any(target_os = "trueos", target_os = "zkvm"), feature = "parking_lot", not(miri)))]
+            #[cfg(all(target_os = "zkvm", feature = "parking_lot", not(miri)))]
             let inner_stream = inner.stream.into_inner();
-            #[cfg(all(any(target_os = "trueos", target_os = "zkvm"), not(all(feature = "parking_lot", not(miri)))))]
+            #[cfg(all(target_os = "zkvm", not(all(feature = "parking_lot", not(miri)))))]
             let inner_stream = match inner.stream.into_inner() {
                 Ok(stream) => stream,
                 Err(never) => match never {},
             };
-            #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+            #[cfg(not(target_os = "zkvm"))]
             let inner_stream = inner.stream.into_inner().unwrap();
 
             inner_stream

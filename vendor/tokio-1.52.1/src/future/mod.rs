@@ -2,26 +2,26 @@
 
 //! Asynchronous values.
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 pub use core::future::{poll_fn, Future, IntoFuture};
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 use core::pin::Pin;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 use core::task::{Context, Poll};
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 #[derive(Debug, Clone)]
 pub struct Ready<T>(Option<T>);
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 pub fn ready<T>(value: T) -> Ready<T> {
     Ready(Some(value))
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 impl<T> Unpin for Ready<T> {}
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 impl<T> Future for Ready<T> {
     type Output = T;
 
@@ -51,7 +51,7 @@ cfg_trace! {
 
 cfg_not_trace! {
     cfg_rt! {
-        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+        #[cfg(not(target_os = "zkvm"))]
         pub(crate) use core::future::Future;
     }
 }

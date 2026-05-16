@@ -1,5 +1,5 @@
 use crate::runtime::prelude::*;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 use alloc::{borrow::ToOwned, string::String, vec::Vec};
 use core::future;
 use std::io;
@@ -183,7 +183,7 @@ cfg_net! {
             let s = self.to_owned();
 
             MaybeReady(sealed::State::Blocking(spawn_blocking(move || {
-                #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+                #[cfg(target_os = "zkvm")]
                 {
                     let _ = s;
                     Err(io::Error::new(
@@ -192,7 +192,7 @@ cfg_net! {
                     ))
                 }
 
-                #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+                #[cfg(not(target_os = "zkvm"))]
                 {
                     std::net::ToSocketAddrs::to_socket_addrs(&s)
                 }
@@ -232,7 +232,7 @@ cfg_net! {
             let host = host.to_owned();
 
             MaybeReady(sealed::State::Blocking(spawn_blocking(move || {
-                #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+                #[cfg(target_os = "zkvm")]
                 {
                     let _ = (host, port);
                     Err(io::Error::new(
@@ -241,7 +241,7 @@ cfg_net! {
                     ))
                 }
 
-                #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+                #[cfg(not(target_os = "zkvm"))]
                 {
                     std::net::ToSocketAddrs::to_socket_addrs(&(&host[..], port))
                 }
