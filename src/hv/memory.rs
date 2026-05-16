@@ -1554,12 +1554,10 @@ fn verify_guest_mapping_chain(label: &str, guest_va: u64) -> Result<(), &'static
         return Err("guest verify pd");
     }
 
-    let pte = unsafe {
-        if low_half {
-            read_guest_low_pt_entry(guest_va, pde)
-        } else {
-            read_guest_high_pt_entry(guest_va, pde)
-        }
+    let pte = if low_half {
+        read_guest_low_pt_entry(guest_va, pde)
+    } else {
+        read_guest_high_pt_entry(guest_va, pde)
     };
     if pte & PT_ENTRY_PRESENT == 0 {
         hvlogf(format_args!(
@@ -1729,7 +1727,7 @@ fn kernel_image_start_va() -> Option<u64> {
 }
 
 fn kernel_image_end_va() -> u64 {
-    unsafe { core::ptr::addr_of!(kernel_end) as u64 }
+    core::ptr::addr_of!(kernel_end) as u64
 }
 
 pub fn map_guest_kernel_image(

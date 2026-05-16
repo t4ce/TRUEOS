@@ -21,22 +21,21 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    allcaps::mail as mail_caps,
     allports::{mail as mail_config, services::MAIL_HTTP_TCP_PORT},
     r::net::{cli::pop3::Pop3Client, smtp::SmtpClient},
 };
 
-const MAIL_HTTP_BODY_MAX: usize = mail_caps::WEBMAIL_HTTP_BODY_MAX;
+const MAIL_HTTP_BODY_MAX: usize = 64 * 1024;
 const MAIL_HTTP_BLOCKING_LANE_RETRY_MS: u64 = 1000;
 const MAIL_STORE_PATH: &str = "mail/box.json";
 const MAIL_CONFIG_PATH: &str = "mail/config.json";
 const MAIL_CONFIG_PASSWORD_PLACEHOLDER: &str = "ENTER_MAIL_PASSWORD_HERE";
 const MAIL_SMTP_TIMEOUT_MS: u32 = 20_000;
 const MAIL_POP3_TIMEOUT_MS: u32 = 20_000;
-const MAIL_LIST_LIMIT: usize = mail_caps::WEBMAIL_LIST_LIMIT;
+const MAIL_LIST_LIMIT: usize = 10;
 const MAIL_POP3_MAX_MESSAGES: usize = MAIL_LIST_LIMIT;
-const MAIL_POP3_MAX_MESSAGE_BYTES: usize = mail_caps::WEBMAIL_POP3_MAX_MESSAGE_BYTES;
-const MAIL_INBOX_REFRESH_INTERVAL_SECS: u64 = mail_caps::WEBMAIL_INBOX_REFRESH_INTERVAL_SECS;
+const MAIL_POP3_MAX_MESSAGE_BYTES: usize = 5 * 1024 * 1024;
+const MAIL_INBOX_REFRESH_INTERVAL_SECS: u64 = 30;
 
 static MAIL_HTTP_PORT: AtomicU16 = AtomicU16::new(0);
 static MAIL_ID_SEQ: AtomicU32 = AtomicU32::new(1);
