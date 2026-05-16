@@ -480,15 +480,7 @@ compile_error! {
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 extern crate alloc;
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
-extern crate alloc;
-
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-pub mod ffi {
-    pub use std::ffi::*;
-}
-
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod ffi {
     pub use std::ffi::*;
 }
