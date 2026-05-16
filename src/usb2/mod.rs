@@ -19,6 +19,8 @@ pub(crate) mod midi;
 #[path = "device/pen.rs"]
 pub(crate) mod pen;
 pub(crate) mod scsi;
+#[path = "device/skhynix_green.rs"]
+pub(crate) mod skhynix_green;
 pub(crate) mod sound;
 pub(crate) mod video;
 

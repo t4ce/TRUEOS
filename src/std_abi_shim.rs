@@ -389,6 +389,24 @@ fn active_guest_heap_host_ptr_for_vm(vm_id: u8, ptr: *mut u8, len: usize) -> Opt
     }
 }
 
+fn any_guest_host_ptr(ptr: *mut u8, len: usize) -> Option<*mut u8> {
+    for vm_id in 0..crate::allcaps::hv::VM_ID_LIMIT {
+        let vm_id = vm_id as u8;
+        if let Some(host) = active_guest_stack_host_ptr_for_vm(vm_id, ptr, len)
+            .or_else(|| active_guest_heap_host_ptr_for_vm(vm_id, ptr, len))
+        {
+            return Some(host);
+        }
+    }
+    None
+}
+
+fn looks_like_low_guest_ptr(ptr: *const u8) -> bool {
+    let guest_va = ptr as usize as u64;
+    guest_va >= crate::hv::memory::GUEST_STACK_VA_BASE
+        && guest_va < crate::hv::memory::GUEST_COMM_PAGE_VA
+}
+
 fn abi_host_ptr(ptr: *mut u8, len: usize) -> Option<*mut u8> {
     if ptr.is_null() {
         return None;
@@ -400,10 +418,24 @@ fn abi_host_ptr(ptr: *mut u8, len: usize) -> Option<*mut u8> {
         return Some(ptr);
     }
     let Some(vm_id) = active_abi_guest_vm_id() else {
-        return Some(ptr);
+        return any_guest_host_ptr(ptr, len).or_else(|| {
+            if looks_like_low_guest_ptr(ptr) {
+                None
+            } else {
+                Some(ptr)
+            }
+        });
     };
     active_guest_stack_host_ptr_for_vm(vm_id, ptr, len)
         .or_else(|| active_guest_heap_host_ptr_for_vm(vm_id, ptr, len))
+        .or_else(|| any_guest_host_ptr(ptr, len))
+        .or_else(|| {
+            if looks_like_low_guest_ptr(ptr) {
+                None
+            } else {
+                Some(ptr)
+            }
+        })
 }
 
 fn abi_read_bytes<'a>(ptr: *const u8, len: usize) -> Option<&'a [u8]> {

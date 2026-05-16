@@ -437,6 +437,8 @@ impl FreeList {
     }
 
     fn install_heap(&mut self, virt_start: usize, phys_start: usize, len: usize) {
+        self.head = None;
+        self.initialized = false;
         self.heap_virt_start = virt_start;
         self.heap_len = len;
         self.heap_phys_start = phys_start;
@@ -704,10 +706,60 @@ pub fn prepare_hv_guest_heap_for_vm(vm_id: u8, requested_size: usize) -> bool {
     let ready_bit = 1u64 << vm_id;
     let mut guard = HV_GUEST_ALLOCATORS[vm_id as usize].lock();
     if guard.initialized {
-        return guard.heap_len >= requested_size || guard.heap_source == HeapSourceKind::Fallback;
+        if guard.heap_source == HeapSourceKind::Arena {
+            return guard.heap_len >= requested_size;
+        }
+        if guard.heap_len >= requested_size {
+            return true;
+        }
+        let Some(arena) = phys::reserve_heap_arena(requested_size, HV_GUEST_HEAP_ALIGN) else {
+            crate::log!(
+                "heap: hv guest vm{} fallback upgrade unavailable size={} MiB fallback={} KiB\n",
+                vm_id,
+                requested_size / (1024 * 1024),
+                guard.heap_len / 1024
+            );
+            return false;
+        };
+        guard.install_heap(arena.virt_start, arena.phys_start as usize, arena.length);
+        HV_GUEST_HEAP_READY_MASK.fetch_or(ready_bit, Ordering::AcqRel);
+        crate::log!(
+            "heap: hv guest vm{} arena virt=0x{:X} phys=0x{:X} size={} MiB upgraded-from=fallback requested={} MiB\n",
+            vm_id,
+            arena.virt_start,
+            arena.phys_start,
+            arena.length / (1024 * 1024),
+            requested_size / (1024 * 1024)
+        );
+        return true;
     }
     if guard.heap_len != 0 {
-        HV_GUEST_HEAP_READY_MASK.fetch_or(ready_bit, Ordering::AcqRel);
+        if guard.heap_source == HeapSourceKind::Arena && guard.heap_len >= requested_size {
+            HV_GUEST_HEAP_READY_MASK.fetch_or(ready_bit, Ordering::AcqRel);
+            return true;
+        }
+        if guard.heap_source == HeapSourceKind::Fallback && guard.heap_len < requested_size {
+            let Some(arena) = phys::reserve_heap_arena(requested_size, HV_GUEST_HEAP_ALIGN) else {
+                crate::log!(
+                    "heap: hv guest vm{} fallback upgrade unavailable size={} MiB fallback={} KiB\n",
+                    vm_id,
+                    requested_size / (1024 * 1024),
+                    guard.heap_len / 1024
+                );
+                return false;
+            };
+            guard.install_heap(arena.virt_start, arena.phys_start as usize, arena.length);
+            HV_GUEST_HEAP_READY_MASK.fetch_or(ready_bit, Ordering::AcqRel);
+            crate::log!(
+                "heap: hv guest vm{} arena virt=0x{:X} phys=0x{:X} size={} MiB upgraded-from=fallback requested={} MiB\n",
+                vm_id,
+                arena.virt_start,
+                arena.phys_start,
+                arena.length / (1024 * 1024),
+                requested_size / (1024 * 1024)
+            );
+            return true;
+        }
         return guard.heap_len >= requested_size;
     }
 
@@ -717,8 +769,7 @@ pub fn prepare_hv_guest_heap_for_vm(vm_id: u8, requested_size: usize) -> bool {
             vm_id,
             requested_size / (1024 * 1024)
         );
-        drop(guard);
-        return ensure_hv_guest_heap_ready(vm_id);
+        return false;
     };
     guard.install_heap(arena.virt_start, arena.phys_start as usize, arena.length);
     HV_GUEST_HEAP_READY_MASK.fetch_or(ready_bit, Ordering::AcqRel);
