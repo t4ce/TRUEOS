@@ -109,7 +109,7 @@ macro_rules! log_error {
 }
 
 pub fn log(args: fmt::Arguments<'_>) {
-    log_with_purpose(None, args);
+    log_with_level(log::Level::Info, args);
 }
 
 pub fn log_with_purpose(purpose: Option<&str>, args: fmt::Arguments<'_>) {

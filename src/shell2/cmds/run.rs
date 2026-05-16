@@ -758,6 +758,39 @@ async fn preflight_archive_name_to_target_async(
     preflight_blueprint_launch(archive_name, module_bytes, &log).await
 }
 
+async fn submit_module_bytes_to_target_async(
+    target: MatrixTarget,
+    archive_name: &str,
+    module_bytes: Vec<u8>,
+    app_args: Vec<String>,
+    source: &'static str,
+) -> Result<&'static str, String> {
+    preflight_archive_name_to_target_async(&target, archive_name, module_bytes.as_slice()).await?;
+    let required_readiness = crate::hv::blueprint::prebind_required_readiness(
+        module_bytes.as_slice(),
+    )
+    .map_err(|err| {
+        let line = alloc::format!("hv run: not queued {} {}", archive_name, err.as_str());
+        log_run_target_line(&target, line.as_str());
+        line
+    })?;
+    let missing_readiness = required_readiness & !crate::r::readiness::mask();
+    if missing_readiness != 0 {
+        let line = alloc::format!(
+            "hv run: not queued {} required={} missing={} ",
+            archive_name,
+            readiness_mask_text(required_readiness).as_str(),
+            readiness_mask_text(missing_readiness).as_str()
+        );
+        log_run_target_line(&target, line.as_str());
+        return Err(line);
+    }
+    let line = alloc::format!("hv run: queued {}", archive_name);
+    log_run_target_line(&target, line.as_str());
+    enqueue_blueprint_request(target, String::from(archive_name), module_bytes, app_args, true);
+    Ok(source)
+}
+
 pub(crate) async fn submit_archive_name_to_target_prefer_trueosfs_async(
     target: MatrixTarget,
     archive_name: &str,
@@ -768,66 +801,61 @@ pub(crate) async fn submit_archive_name_to_target_prefer_trueosfs_async(
             .await
             .map_err(|_| String::from("failed to read selected module from TRUEOSFS"))?
         {
-            preflight_archive_name_to_target_async(&target, archive_name, module_bytes.as_slice())
-                .await?;
-            let required_readiness = crate::hv::blueprint::prebind_required_readiness(
-                module_bytes.as_slice(),
-            )
-            .map_err(|err| {
-                let line = alloc::format!("hv run: not queued {} {}", archive_name, err.as_str());
-                log_run_target_line(&target, line.as_str());
-                line
-            })?;
-            let missing_readiness = required_readiness & !crate::r::readiness::mask();
-            if missing_readiness != 0 {
-                let line = alloc::format!(
-                    "hv run: not queued {} required={} missing={} ",
-                    archive_name,
-                    readiness_mask_text(required_readiness).as_str(),
-                    readiness_mask_text(missing_readiness).as_str()
-                );
-                log_run_target_line(&target, line.as_str());
-                return Err(line);
-            }
-            let line = alloc::format!("hv run: queued {}", archive_name);
-            log_run_target_line(&target, line.as_str());
-            enqueue_blueprint_request(
+            return submit_module_bytes_to_target_async(
                 target,
-                String::from(archive_name),
+                archive_name,
                 module_bytes,
                 app_args,
-                true,
-            );
-            return Ok("TRUEOSFS root");
+                "TRUEOSFS root",
+            )
+            .await;
         }
     }
 
     if let Some(module_bytes) = embedded_module_bytes_by_archive_name(archive_name)? {
-        preflight_archive_name_to_target_async(&target, archive_name, module_bytes.as_slice())
-            .await?;
-        let required_readiness = crate::hv::blueprint::prebind_required_readiness(
-            module_bytes.as_slice(),
+        return submit_module_bytes_to_target_async(
+            target,
+            archive_name,
+            module_bytes,
+            app_args,
+            "boot embedded",
         )
-        .map_err(|err| {
-            let line = alloc::format!("hv run: not queued {} {}", archive_name, err.as_str());
-            log_run_target_line(&target, line.as_str());
-            line
-        })?;
-        let missing_readiness = required_readiness & !crate::r::readiness::mask();
-        if missing_readiness != 0 {
-            let line = alloc::format!(
-                "hv run: not queued {} required={} missing={} ",
+        .await;
+    }
+
+    Err(String::from("archive not found"))
+}
+
+pub(crate) async fn submit_archive_name_to_target_prefer_embedded_async(
+    target: MatrixTarget,
+    archive_name: &str,
+    app_args: Vec<String>,
+) -> Result<&'static str, String> {
+    if let Some(module_bytes) = embedded_module_bytes_by_archive_name(archive_name)? {
+        return submit_module_bytes_to_target_async(
+            target,
+            archive_name,
+            module_bytes,
+            app_args,
+            "boot embedded",
+        )
+        .await;
+    }
+
+    if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
+        if let Some(module_bytes) = crate::r::fs::trueosfs::file_out_async(disk, archive_name)
+            .await
+            .map_err(|_| String::from("failed to read selected module from TRUEOSFS"))?
+        {
+            return submit_module_bytes_to_target_async(
+                target,
                 archive_name,
-                readiness_mask_text(required_readiness).as_str(),
-                readiness_mask_text(missing_readiness).as_str()
-            );
-            log_run_target_line(&target, line.as_str());
-            return Err(line);
+                module_bytes,
+                app_args,
+                "TRUEOSFS root",
+            )
+            .await;
         }
-        let line = alloc::format!("hv run: queued {}", archive_name);
-        log_run_target_line(&target, line.as_str());
-        enqueue_blueprint_request(target, String::from(archive_name), module_bytes, app_args, true);
-        return Ok("boot embedded");
     }
 
     Err(String::from("archive not found"))

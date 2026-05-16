@@ -956,7 +956,7 @@ async fn bp_autostart_task() {
             config.slot
         );
 
-        match crate::shell2::cmds::run::submit_archive_name_to_target_prefer_trueosfs_async(
+        match crate::shell2::cmds::run::submit_archive_name_to_target_prefer_embedded_async(
             target,
             config.archive,
             Vec::new(),
