@@ -31,6 +31,8 @@ pub type nfds_t = u32;
 pub type nlink_t = c_ushort;
 pub type pthread_t = c_ulong;
 pub type pthread_key_t = c_uint;
+pub type pthread_once_t = c_int;
+pub type pthread_spinlock_t = c_int;
 pub type rlim_t = u32;
 
 cfg_if! {
@@ -222,6 +224,10 @@ s! {
         bits: [u32; 32],
     }
 
+    pub struct sched_param {
+        pub sched_priority: c_int,
+    }
+
     pub struct pthread_attr_t {
         // Unverified
         #[cfg(not(target_os = "espidf"))]
@@ -324,6 +330,17 @@ s! {
     pub struct pthread_condattr_t {
         // Unverified
         size: [u8; crate::__SIZEOF_PTHREAD_CONDATTR_T],
+    }
+
+    #[repr(align(4))]
+    pub struct pthread_barrierattr_t {
+        // Unverified
+        size: [u8; crate::__SIZEOF_PTHREAD_BARRIERATTR_T],
+    }
+
+    pub struct pthread_barrier_t {
+        // Unverified
+        size: [u8; crate::__SIZEOF_PTHREAD_BARRIER_T],
     }
 }
 
@@ -584,6 +601,7 @@ cfg_if! {
 }
 
 pub const AF_UNSPEC: c_int = 0;
+pub const AF_UNIX: c_int = 1;
 pub const AF_INET: c_int = 2;
 
 pub const CLOCK_REALTIME: crate::clockid_t = 1;
@@ -592,6 +610,61 @@ pub const CLOCK_BOOTTIME: crate::clockid_t = 4;
 
 pub const SOCK_STREAM: c_int = 1;
 pub const SOCK_DGRAM: c_int = 2;
+
+pub const SOMAXCONN: c_int = 128;
+
+pub const AT_FDCWD: c_int = -2;
+pub const AT_REMOVEDIR: c_int = 8;
+pub const AT_SYMLINK_NOFOLLOW: c_int = 2;
+
+pub const O_DIRECTORY: c_int = 0x200000;
+pub const O_NOFOLLOW: c_int = 0x100000;
+
+pub const TIMER_ABSTIME: c_int = 1;
+pub const PTHREAD_STACK_MIN: size_t = 2048;
+pub const UTIME_OMIT: c_long = -1;
+
+pub const _SC_PAGESIZE: c_int = 8;
+pub const _SC_PAGE_SIZE: c_int = _SC_PAGESIZE;
+pub const _SC_GETPW_R_SIZE_MAX: c_int = 51;
+pub const _SC_HOST_NAME_MAX: c_int = 65;
+
+pub const SIG_BLOCK: c_int = 1;
+pub const SIG_UNBLOCK: c_int = 2;
+pub const SIG_SETMASK: c_int = 0;
+pub const SIGHUP: c_int = 1;
+pub const SIGINT: c_int = 2;
+pub const SIGQUIT: c_int = 3;
+pub const SIGILL: c_int = 4;
+pub const SIGTRAP: c_int = 5;
+pub const SIGABRT: c_int = 6;
+pub const SIGIOT: c_int = SIGABRT;
+pub const SIGEMT: c_int = 7;
+pub const SIGFPE: c_int = 8;
+pub const SIGKILL: c_int = 9;
+pub const SIGBUS: c_int = 10;
+pub const SIGSEGV: c_int = 11;
+pub const SIGSYS: c_int = 12;
+pub const SIGPIPE: c_int = 13;
+pub const SIGALRM: c_int = 14;
+pub const SIGTERM: c_int = 15;
+pub const SIGURG: c_int = 16;
+pub const SIGSTOP: c_int = 17;
+pub const SIGTSTP: c_int = 18;
+pub const SIGCONT: c_int = 19;
+pub const SIGCHLD: c_int = 20;
+pub const SIGTTIN: c_int = 21;
+pub const SIGTTOU: c_int = 22;
+pub const SIGIO: c_int = 23;
+pub const SIGWINCH: c_int = 24;
+pub const SIGUSR1: c_int = 25;
+pub const SIGUSR2: c_int = 26;
+pub const SIGVTALRM: c_int = 26;
+pub const SIGPROF: c_int = 27;
+pub const SIGXCPU: c_int = 24;
+pub const SIGXFSZ: c_int = 25;
+
+pub const EAI_SYSTEM: c_int = 11;
 
 pub const SHUT_RD: c_int = 0;
 pub const SHUT_WR: c_int = 1;
@@ -843,6 +916,42 @@ f! {
     }
 }
 
+safe_f! {
+    pub const fn WIFSTOPPED(status: c_int) -> bool {
+        (status & 0xff) == 0x7f
+    }
+
+    pub const fn WSTOPSIG(status: c_int) -> c_int {
+        WEXITSTATUS(status)
+    }
+
+    pub const fn WIFSIGNALED(status: c_int) -> bool {
+        ((status & 0x7f) > 0) && ((status & 0x7f) < 0x7f)
+    }
+
+    pub const fn WTERMSIG(status: c_int) -> c_int {
+        status & 0x7f
+    }
+
+    pub const fn WIFEXITED(status: c_int) -> bool {
+        (status & 0xff) == 0
+    }
+
+    pub const fn WEXITSTATUS(status: c_int) -> c_int {
+        (status >> 8) & 0xff
+    }
+
+    pub const fn WIFCONTINUED(_status: c_int) -> bool {
+        true
+    }
+
+    pub const fn WCOREDUMP(_status: c_int) -> bool {
+        false
+    }
+}
+
+pub const WNOHANG: c_int = 1;
+
 extern "C" {
     pub fn getrlimit(resource: c_int, rlim: *mut crate::rlimit) -> c_int;
     pub fn setrlimit(resource: c_int, rlim: *const crate::rlimit) -> c_int;
@@ -861,6 +970,12 @@ extern "C" {
     #[cfg(not(all(target_arch = "powerpc", target_vendor = "nintendo")))]
     #[cfg_attr(target_os = "espidf", link_name = "lwip_bind")]
     pub fn bind(fd: c_int, addr: *const sockaddr, len: socklen_t) -> c_int;
+    pub fn clock_nanosleep(
+        clock_id: crate::clockid_t,
+        flags: c_int,
+        request: *const crate::timespec,
+        remain: *mut crate::timespec,
+    ) -> c_int;
     pub fn clock_settime(clock_id: crate::clockid_t, tp: *const crate::timespec) -> c_int;
     pub fn clock_gettime(clock_id: crate::clockid_t, tp: *mut crate::timespec) -> c_int;
     pub fn clock_getres(clock_id: crate::clockid_t, res: *mut crate::timespec) -> c_int;
@@ -903,6 +1018,18 @@ extern "C" {
     pub fn sigaltstack(ss: *const stack_t, oss: *mut stack_t) -> c_int;
     pub fn sem_close(sem: *mut sem_t) -> c_int;
     pub fn getdtablesize() -> c_int;
+    pub fn dirfd(dirp: *mut crate::DIR) -> c_int;
+    pub fn futimens(fd: c_int, times: *const crate::timespec) -> c_int;
+    pub fn utimensat(
+        dirfd: c_int,
+        pathname: *const c_char,
+        times: *const crate::timespec,
+        flags: c_int,
+    ) -> c_int;
+    pub fn writev(fd: c_int, iov: *const crate::iovec, iovcnt: c_int) -> ssize_t;
+    pub fn readv(fd: c_int, iov: *const crate::iovec, iovcnt: c_int) -> ssize_t;
+    pub fn setgroups(ngroups: c_int, ptr: *const crate::gid_t) -> c_int;
+    pub fn pthread_setname_np(thread: crate::pthread_t, name: *const c_char) -> c_int;
     pub fn getgrnam_r(
         name: *const c_char,
         grp: *mut crate::group,
@@ -943,6 +1070,8 @@ extern "C" {
 
 mod generic;
 pub use self::generic::*;
+
+pub type stat64 = stat;
 
 cfg_if! {
     if #[cfg(target_os = "espidf")] {

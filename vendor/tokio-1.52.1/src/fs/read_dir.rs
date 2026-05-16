@@ -1,23 +1,23 @@
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+#[cfg(not(target_os = "zkvm"))]
 use crate::fs::asyncify;
 
 use alloc::borrow::ToOwned;
 use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 use crate::fs::trueos::{FileType, Metadata};
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 use crate::fs::trueos::{TrueosDirEntry as StdDirEntry, TrueosReadDir as StdReadDir};
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{ready, Context, Poll};
 use crate::ffi::OsString;
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+#[cfg(not(target_os = "zkvm"))]
 use std::fs::{FileType, Metadata};
 use std::io;
 use std::path::{Path, PathBuf};
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+#[cfg(not(target_os = "zkvm"))]
 use std::fs::{DirEntry as StdDirEntry, ReadDir as StdReadDir};
 
 #[cfg(test)]
@@ -41,7 +41,7 @@ const CHUNK_SIZE: usize = 32;
 /// [`spawn_blocking`]: crate::task::spawn_blocking
 pub async fn read_dir(path: impl AsRef<Path>) -> io::Result<ReadDir> {
     let path = path.as_ref().to_owned();
-    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    #[cfg(target_os = "zkvm")]
     {
         let mut std = crate::fs::trueos::read_dir(&path).await?;
         let mut buf = VecDeque::with_capacity(CHUNK_SIZE);
@@ -50,7 +50,7 @@ pub async fn read_dir(path: impl AsRef<Path>) -> io::Result<ReadDir> {
         return Ok(ReadDir(Box::new(State::Idle(Some((buf, Box::new(std), remain))))));
     }
 
-    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+    #[cfg(not(target_os = "zkvm"))]
     asyncify(|| -> io::Result<ReadDir> {
         let mut std = std::fs::read_dir(path)?;
         let mut buf = VecDeque::with_capacity(CHUNK_SIZE);
@@ -177,7 +177,7 @@ impl ReadDir {
 }
 
 feature! {
-    #![all(unix, not(any(target_os = "trueos", target_os = "zkvm")))]
+    #![all(unix, not(target_os = "zkvm"))]
 
     use std::os::unix::fs::DirEntryExt;
 
@@ -317,10 +317,10 @@ impl DirEntry {
     /// # }
     /// ```
     pub async fn metadata(&self) -> io::Result<Metadata> {
-        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        #[cfg(target_os = "zkvm")]
         return self.std.metadata();
 
-        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+        #[cfg(not(target_os = "zkvm"))]
         {
         let std = self.std.clone();
         asyncify(move || std.metadata()).await
@@ -371,10 +371,10 @@ impl DirEntry {
             return Ok(file_type);
         }
 
-        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        #[cfg(target_os = "zkvm")]
         return self.std.file_type();
 
-        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+        #[cfg(not(target_os = "zkvm"))]
         {
             let std = self.std.clone();
             asyncify(move || std.file_type()).await
@@ -382,7 +382,7 @@ impl DirEntry {
     }
 
     /// Returns a reference to the underlying `std::fs::DirEntry`.
-    #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
+    #[cfg(all(unix, not(target_os = "zkvm")))]
     pub(super) fn as_inner(&self) -> &StdDirEntry {
         &self.std
     }
