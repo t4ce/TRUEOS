@@ -130,6 +130,56 @@ fn log_tcp_endpoint(prefix: &str, socket_id: u32, handle_id: u32, peer: CompatAd
     }
 }
 
+fn log_mio_pending_endpoint(
+    prefix: &str,
+    msg: &'static str,
+    pending_count: usize,
+    socket: &MioSocketState,
+) {
+    match socket.peer {
+        Some(CompatAddr::V4 { addr, port }) => crate::log!(
+            "{} msg={} pending={} socket={} kind={} handle={} connected={} peer={}.{}.{}.{}:{}\n",
+            prefix,
+            msg,
+            pending_count,
+            socket.id,
+            mio_socket_kind_label(socket.kind),
+            socket.handle.map(|h| h.0).unwrap_or(0),
+            socket.connected as u8,
+            addr[0],
+            addr[1],
+            addr[2],
+            addr[3],
+            port
+        ),
+        Some(CompatAddr::V6 { addr, port }) => crate::log!(
+            "{} msg={} pending={} socket={} kind={} handle={} connected={} peer={:02x}{:02x}:{:02x}{:02x}:...:{}\n",
+            prefix,
+            msg,
+            pending_count,
+            socket.id,
+            mio_socket_kind_label(socket.kind),
+            socket.handle.map(|h| h.0).unwrap_or(0),
+            socket.connected as u8,
+            addr[0],
+            addr[1],
+            addr[2],
+            addr[3],
+            port
+        ),
+        None => crate::log!(
+            "{} msg={} pending={} socket={} kind={} handle={} connected={} peer=none\n",
+            prefix,
+            msg,
+            pending_count,
+            socket.id,
+            mio_socket_kind_label(socket.kind),
+            socket.handle.map(|h| h.0).unwrap_or(0),
+            socket.connected as u8
+        ),
+    }
+}
+
 fn compat_addr_port(addr: Option<CompatAddr>) -> Option<u16> {
     match addr {
         Some(CompatAddr::V4 { port, .. }) | Some(CompatAddr::V6 { port, .. }) => Some(port),
@@ -171,6 +221,14 @@ enum MioSocketKind {
     TcpStream,
     TcpListener,
     Udp,
+}
+
+fn mio_socket_kind_label(kind: MioSocketKind) -> &'static str {
+    match kind {
+        MioSocketKind::TcpStream => "tcp-stream",
+        MioSocketKind::TcpListener => "tcp-listener",
+        MioSocketKind::Udp => "udp",
+    }
 }
 
 struct MioSocketState {
@@ -517,6 +575,23 @@ impl MioCompat {
             .retain(|pending| pending.socket_id != socket_id);
     }
 
+    fn log_unattributed_error(&self, msg: &'static str) {
+        let pending_count = self.pending_opens.len();
+        if let Some(pending) = self.pending_opens.front()
+            && let Some(socket) = self.socket(pending.socket_id)
+        {
+            log_mio_pending_endpoint(
+                "mio_compat: vnet error unattributed; pending open left active",
+                msg,
+                pending_count,
+                socket,
+            );
+            return;
+        }
+
+        crate::log!("mio_compat: vnet error unattributed; no pending open msg={}\n", msg);
+    }
+
     fn submit(&mut self, cmd: api::Command) -> Result<(), i32> {
         self.ensure_net()?;
         let result = self
@@ -725,12 +800,8 @@ impl MioCompat {
                     socket.closed = true;
                 }
             }
-            api::Event::Error { .. } => {
-                if let Some(pending) = self.pending_opens.pop_front()
-                    && let Some(socket) = self.socket_mut(pending.socket_id)
-                {
-                    socket.error = STATUS_IO;
-                }
+            api::Event::Error { msg } => {
+                self.log_unattributed_error(msg);
             }
             api::Event::IcmpReply { .. } => {}
             api::Event::IcmpReplyV6 { .. } => {}
