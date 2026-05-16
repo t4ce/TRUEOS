@@ -15,15 +15,15 @@ pub(crate) use self::waker::Waker;
 cfg_net! {
     pub(crate) mod tcp;
     pub(crate) mod udp;
-    #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
+    #[cfg(all(unix, not(target_os = "zkvm")))]
     pub(crate) mod uds;
 }
 
 cfg_io_source! {
     use std::io;
-    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    #[cfg(target_os = "zkvm")]
     use std::sync::atomic::{AtomicUsize, Ordering};
-    #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
+    #[cfg(all(unix, not(target_os = "zkvm")))]
     use std::os::fd::RawFd;
     // TODO: once <https://github.com/rust-lang/rust/issues/126198> is fixed this
     // can use `std::os::fd` and be merged with the above.
@@ -32,15 +32,15 @@ cfg_io_source! {
     #[cfg(windows)]
     use std::os::windows::io::RawSocket;
 
-    #[cfg(any(windows, all(unix, not(any(target_os = "trueos", target_os = "zkvm"))), target_os = "hermit"))]
+    #[cfg(any(windows, all(unix, not(target_os = "zkvm")), target_os = "hermit"))]
     use crate::{Registry, Token, Interest};
 
-    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    #[cfg(target_os = "zkvm")]
     #[allow(dead_code)]
     static NEXT_SOURCE_ID: AtomicUsize = AtomicUsize::new(1);
 
     pub(crate) struct IoSourceState {
-        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        #[cfg(target_os = "zkvm")]
         source_id: usize,
     }
 
@@ -48,7 +48,7 @@ cfg_io_source! {
     impl IoSourceState {
         pub fn new() -> IoSourceState {
             IoSourceState {
-                #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+                #[cfg(target_os = "zkvm")]
                 source_id: NEXT_SOURCE_ID.fetch_add(1, Ordering::Relaxed),
             }
         }
@@ -63,7 +63,7 @@ cfg_io_source! {
         }
     }
 
-    #[cfg(any(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))), target_os = "hermit"))]
+    #[cfg(any(all(unix, not(target_os = "zkvm")), target_os = "hermit"))]
     impl IoSourceState {
         pub fn register(
             &mut self,
@@ -90,7 +90,7 @@ cfg_io_source! {
         }
     }
 
-    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    #[cfg(target_os = "zkvm")]
     impl IoSourceState {
         pub fn register(
             &mut self,

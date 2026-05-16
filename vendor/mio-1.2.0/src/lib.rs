@@ -5,7 +5,7 @@
     unused_imports,
     dead_code
 )]
-#![cfg_attr(any(target_os = "trueos", target_os = "zkvm"), no_std)]
+#![cfg_attr(target_os = "zkvm", no_std)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 // Disallow warnings when running tests.
 #![cfg_attr(test, deny(warnings))]
@@ -44,36 +44,36 @@
 #[cfg(all(target_family = "wasm", not(target_os = "wasi")))]
 compile_error!("This wasm target is unsupported by mio. If using Tokio, disable the net feature.");
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 extern crate alloc;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 extern crate self as std;
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 pub mod fmt {
     //! TRUEOS no_std compatibility re-exports for existing mio paths.
     pub use core::fmt::*;
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 pub mod io {
     //! TRUEOS no_std compatibility re-exports for existing mio paths.
     pub use trueos_io::*;
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 pub mod num {
     //! TRUEOS no_std compatibility re-exports for existing mio paths.
     pub use core::num::*;
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 pub mod ops {
     //! TRUEOS no_std compatibility re-exports for existing mio paths.
     pub use core::ops::*;
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 pub mod sync {
     //! TRUEOS no_std compatibility re-exports for existing mio paths.
     pub use alloc::sync::Arc;
@@ -94,11 +94,11 @@ mod sys;
 mod token;
 #[cfg(not(target_os = "wasi"))]
 mod waker;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 mod platform;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 mod zkvm_compat;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 mod zkvm_net;
 
 pub mod event;
@@ -121,14 +121,14 @@ pub use waker::Waker;
 
 #[cfg(all(
     unix,
-    not(any(target_os = "trueos", target_os = "zkvm")),
+    not(target_os = "zkvm"),
     feature = "os-ext"
 ))]
 #[cfg_attr(
     docsrs,
     doc(cfg(all(
         unix,
-        not(any(target_os = "trueos", target_os = "zkvm")),
+        not(target_os = "zkvm"),
         feature = "os-ext"
     )))
 )]

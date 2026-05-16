@@ -51,7 +51,7 @@ cfg_os_poll! {
 }
 
 #[cfg(any(
-    all(unix, not(any(target_os = "trueos", target_os = "zkvm"))),
+    all(unix, not(target_os = "zkvm")),
     target_os = "hermit",
     all(target_os = "wasi", not(target_env = "p1"))
 ))]
@@ -67,7 +67,7 @@ cfg_os_poll! {
     pub use self::windows::*;
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 cfg_os_poll! {
     mod shell;
     pub(crate) use self::shell::*;

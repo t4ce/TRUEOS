@@ -12,7 +12,6 @@
         target_os = "solaris",
         target_os = "vita",
         target_os = "cygwin",
-        target_os = "trueos",
         target_os = "zkvm",
     )),
 ))]
@@ -457,7 +456,6 @@ impl Poll {
         target_os = "solaris",
         target_os = "vita",
         target_os = "cygwin",
-        target_os = "trueos",
         target_os = "zkvm",
     )),
 ))]
@@ -762,7 +760,6 @@ impl fmt::Debug for Registry {
         target_os = "solaris",
         target_os = "vita",
         target_os = "cygwin",
-        target_os = "trueos",
         target_os = "zkvm",
     )),
 ))]
@@ -786,7 +783,6 @@ impl AsFd for Registry {
         target_os = "solaris",
         target_os = "vita",
         target_os = "cygwin",
-        target_os = "trueos",
         target_os = "zkvm",
     )),
 ))]
@@ -809,7 +805,6 @@ cfg_os_poll! {
             target_os = "solaris",
             target_os = "vita",
             target_os = "cygwin",
-            target_os = "trueos",
             target_os = "zkvm",
         )),
     ))]
