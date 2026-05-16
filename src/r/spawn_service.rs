@@ -1079,12 +1079,7 @@ static TASKS: [TaskSpec; 69] = [
     TaskSpec::enabled("hv-vm-store-net", 0, &HV_VM_STORE_NET_STARTED, spawn_hv_vm_store_net),
     TaskSpec::enabled("net-poll-tasks", 0, &NET_POLL_STARTED, spawn_net_poll_tasks),
     TaskSpec::enabled("net-service", 0, &NET_SERVICE_STARTED, spawn_net_service),
-    TaskSpec::enabled(
-        "net-cache-service",
-        0,
-        &NET_CACHE_SERVICE_STARTED,
-        spawn_net_cache_service,
-    ),
+    TaskSpec::enabled("net-cache-service", 0, &NET_CACHE_SERVICE_STARTED, spawn_net_cache_service),
     TaskSpec::enabled(
         "tls-socket-service",
         crate::r::readiness::NET_ANY_CONFIGURED,

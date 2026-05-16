@@ -347,20 +347,22 @@ pub async fn ui2_analog_clock_demo_task() {
 
         let next_second = current_second_index();
         if next_second != last_second {
-            let uploaded = crate::r::spawn_service::with_task_domain("ui2-analog-clock-demo", || {
-                let dirty = DirtyRect::needle(last_second).union(DirtyRect::needle(next_second));
-                restore_rect_from_face(pixels.as_mut_slice(), face.as_slice(), dirty);
-                draw_needle(pixels.as_mut_slice(), next_second);
-                let region = copy_rect_rgba(pixels.as_slice(), dirty);
-                surface.upload_rgba_region(
-                    dirty.x,
-                    dirty.y,
-                    dirty.w,
-                    dirty.h,
-                    region.as_slice(),
-                    "ui2-analog-clock-tick",
-                )
-            });
+            let uploaded =
+                crate::r::spawn_service::with_task_domain("ui2-analog-clock-demo", || {
+                    let dirty =
+                        DirtyRect::needle(last_second).union(DirtyRect::needle(next_second));
+                    restore_rect_from_face(pixels.as_mut_slice(), face.as_slice(), dirty);
+                    draw_needle(pixels.as_mut_slice(), next_second);
+                    let region = copy_rect_rgba(pixels.as_slice(), dirty);
+                    surface.upload_rgba_region(
+                        dirty.x,
+                        dirty.y,
+                        dirty.w,
+                        dirty.h,
+                        region.as_slice(),
+                        "ui2-analog-clock-tick",
+                    )
+                });
             if !uploaded {
                 break;
             }

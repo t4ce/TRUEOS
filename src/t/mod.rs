@@ -8,8 +8,8 @@ pub mod io {
     pub use trueos_io::*;
 }
 
-pub mod net;
 pub(crate) mod kernel_task_domain;
+pub mod net;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod platform;
 pub(crate) mod static_map;
