@@ -8,7 +8,8 @@
 //! Caching related functionality for the Resolver.
 
 use alloc::{boxed::Box, vec, vec::Vec};
-use std::{borrow::Cow, future::Future, pin::Pin, sync::Arc, time::Instant};
+use crate::time::Instant;
+use std::{borrow::Cow, future::Future, pin::Pin, sync::Arc};
 
 use futures_util::future::TryFutureExt;
 use once_cell::sync::Lazy;

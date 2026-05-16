@@ -1,6 +1,7 @@
 use super::{Latency, DEFAULT_ERROR_LEVEL};
 use crate::LatencyUnit;
-use std::{fmt, time::Duration};
+use core::fmt;
+use core::time::Duration;
 use tracing::{Level, Span};
 
 /// Trait used to tell [`Trace`] what to do when a request fails.

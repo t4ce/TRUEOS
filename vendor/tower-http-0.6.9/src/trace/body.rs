@@ -2,12 +2,12 @@ use super::{DefaultOnBodyChunk, DefaultOnEos, DefaultOnFailure, OnBodyChunk, OnE
 use crate::classify::ClassifyEos;
 use http_body::{Body, Frame};
 use pin_project_lite::pin_project;
-use std::{
+use core::{
     fmt,
     pin::Pin,
     task::{ready, Context, Poll},
-    time::Instant,
 };
+use tokio::time::Instant;
 use tracing::Span;
 
 pin_project! {

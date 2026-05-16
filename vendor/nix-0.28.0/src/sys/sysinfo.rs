@@ -1,5 +1,5 @@
 use libc::{self, SI_LOAD_SHIFT};
-use std::time::Duration;
+use core::time::Duration;
 use std::{cmp, mem};
 
 use crate::errno::Errno;

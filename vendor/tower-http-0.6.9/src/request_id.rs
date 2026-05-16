@@ -176,7 +176,7 @@ use http::{
 };
 use pin_project_lite::pin_project;
 use core::task::{ready, Context, Poll};
-use std::{future::Future, pin::Pin};
+use core::{future::Future, pin::Pin};
 use tower_layer::Layer;
 use tower_service::Service;
 use uuid::Uuid;

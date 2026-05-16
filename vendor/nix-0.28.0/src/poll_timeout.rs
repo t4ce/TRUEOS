@@ -1,4 +1,4 @@
-use std::time::Duration;
+use core::time::Duration;
 
 /// PollTimeout argument for polling.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]

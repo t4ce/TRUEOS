@@ -1,7 +1,7 @@
 //! Tools for classifying responses as either success or failure.
 
 use http::{HeaderMap, Request, Response, StatusCode};
-use std::{convert::Infallible, fmt, marker::PhantomData};
+use core::{convert::Infallible, fmt, marker::PhantomData};
 
 pub(crate) mod grpc_errors_as_failures;
 mod map_failure_class;

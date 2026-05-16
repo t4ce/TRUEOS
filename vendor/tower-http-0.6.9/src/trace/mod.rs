@@ -384,7 +384,8 @@
 //! [`ServerErrorsAsFailures`]: crate::classify::ServerErrorsAsFailures
 //! [`Body::poll_frame`]: http_body::Body::poll_frame
 
-use std::{fmt, time::Duration};
+use core::time::Duration;
+use core::fmt;
 
 use tracing::Level;
 

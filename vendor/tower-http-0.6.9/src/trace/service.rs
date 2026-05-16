@@ -8,11 +8,11 @@ use crate::classify::{
 };
 use http::{Request, Response};
 use http_body::Body;
-use std::{
+use core::{
     fmt,
     task::{Context, Poll},
-    time::Instant,
 };
+use tokio::time::Instant;
 use tower_service::Service;
 
 /// Middleware that adds high level [tracing] to a [`Service`].

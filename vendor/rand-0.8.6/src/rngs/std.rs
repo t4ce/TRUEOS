@@ -10,9 +10,8 @@
 
 use crate::{CryptoRng, Error, RngCore, SeedableRng};
 
-use rand_chacha::ChaCha12Rng as Rng;
+use rand_chacha::{ChaCha12Core as Core, ChaCha12Rng as Rng};
 
-pub(crate) type Core = Rng;
 
 /// The standard RNG. The PRNG algorithm in `StdRng` is chosen to be efficient
 /// on the current platform, to be statistically strong and unpredictable

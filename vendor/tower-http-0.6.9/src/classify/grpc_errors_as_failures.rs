@@ -1,7 +1,7 @@
 use super::{ClassifiedResponse, ClassifyEos, ClassifyResponse, SharedClassifier};
 use bitflags::bitflags;
 use http::{HeaderMap, Response};
-use std::{fmt, num::NonZeroI32};
+use core::{fmt, num::NonZeroI32};
 
 /// gRPC status codes.
 ///
