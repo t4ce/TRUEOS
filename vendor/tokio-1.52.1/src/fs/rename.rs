@@ -1,5 +1,6 @@
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use crate::fs::asyncify;
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use alloc::borrow::ToOwned;
 
 use std::io;
@@ -12,7 +13,9 @@ use std::path::Path;
 ///
 /// This is an async version of [`std::fs::rename`].
 pub async fn rename(from: impl AsRef<Path>, to: impl AsRef<Path>) -> io::Result<()> {
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     let from = from.as_ref().to_owned();
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     let to = to.as_ref().to_owned();
 
     #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
