@@ -99,8 +99,6 @@
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 extern crate alloc;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
-pub extern crate std as real_std;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 extern crate self as std;
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]

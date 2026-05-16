@@ -254,7 +254,7 @@ impl<B: Buf> Buf for SendBuf<B> {
         }
     }
 
-    fn chunks_vectored<'a>(&'a self, dst: &mut [crate::real_std::io::IoSlice<'a>]) -> usize {
+    fn chunks_vectored<'a>(&'a self, dst: &mut [std::io::IoSlice<'a>]) -> usize {
         match *self {
             Self::Buf(ref b) => b.chunks_vectored(dst),
             Self::Bytes(ref b) => b.chunks_vectored(dst),

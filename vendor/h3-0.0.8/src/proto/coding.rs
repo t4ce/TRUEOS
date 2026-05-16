@@ -5,7 +5,7 @@ use super::varint::VarInt;
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub struct UnexpectedEnd(pub usize);
 
-pub type Result<T> = ::std::result::Result<T, UnexpectedEnd>;
+pub type Result<T> = ::core::result::Result<T, UnexpectedEnd>;
 
 // Trait for encoding / decoding helpers on basic types, such as `u16`, for
 // example: `buf.decode::<u16>()?`.
