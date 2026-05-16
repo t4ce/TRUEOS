@@ -10,7 +10,7 @@ macro_rules! tokio_thread_local {
     ($($tts:tt)+) => { loom::thread_local!{ $($tts)+ } }
 }
 
-#[cfg(all(not(all(loom, test)), target_os = "zkvm"))]
+#[cfg(all(not(all(loom, test)), any(target_os = "trueos", target_os = "zkvm")))]
 pub(crate) mod trueos_tls {
     use alloc::boxed::Box;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -75,7 +75,7 @@ pub(crate) mod trueos_tls {
     }
 }
 
-#[cfg(all(not(all(loom, test)), target_os = "zkvm"))]
+#[cfg(all(not(all(loom, test)), any(target_os = "trueos", target_os = "zkvm")))]
 macro_rules! tokio_thread_local {
     ($(#[$attrs:meta])* $vis:vis static $name:ident: $ty:ty = const { $expr:expr } $(;)?) => {
         $(#[$attrs])*
@@ -100,7 +100,7 @@ macro_rules! tokio_thread_local {
 
 #[cfg(all(
     not(all(loom, test)),
-    not(target_os = "zkvm")
+    not(any(target_os = "trueos", target_os = "zkvm"))
 ))]
 macro_rules! tokio_thread_local {
     ($($tts:tt)+) => {

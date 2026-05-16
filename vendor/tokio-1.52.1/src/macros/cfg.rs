@@ -51,8 +51,8 @@ macro_rules! cfg_windows {
 macro_rules! cfg_unix {
     ($($item:item)*) => {
         $(
-            #[cfg(any(all(doc, docsrs), all(unix, not(target_os = "zkvm"))))]
-            #[cfg_attr(docsrs, doc(cfg(all(unix, not(target_os = "zkvm")))))]
+            #[cfg(any(all(doc, docsrs), all(unix, not(any(target_os = "trueos", target_os = "zkvm")))))]
+            #[cfg_attr(docsrs, doc(cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))))]
             $item
         )*
     }
@@ -63,8 +63,8 @@ macro_rules! cfg_unix {
 macro_rules! cfg_unix_or_wasi {
     ($($item:item)*) => {
         $(
-            #[cfg(any(all(doc, docsrs), all(unix, not(target_os = "zkvm")), target_os = "wasi"))]
-            #[cfg_attr(docsrs, doc(cfg(any(all(unix, not(target_os = "zkvm")), target_os = "wasi"))))]
+            #[cfg(any(all(doc, docsrs), all(unix, not(any(target_os = "trueos", target_os = "zkvm"))), target_os = "wasi"))]
+            #[cfg_attr(docsrs, doc(cfg(any(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))), target_os = "wasi"))))]
             $item
         )*
     }
@@ -374,8 +374,8 @@ macro_rules! cfg_net_or_uring {
 macro_rules! cfg_net_unix {
     ($($item:item)*) => {
         $(
-            #[cfg(all(unix, not(target_os = "zkvm"), feature = "net"))]
-            #[cfg_attr(docsrs, doc(cfg(all(unix, not(target_os = "zkvm"), feature = "net"))))]
+            #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm")), feature = "net"))]
+            #[cfg_attr(docsrs, doc(cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm")), feature = "net"))))]
             $item
         )*
     }
@@ -405,7 +405,7 @@ macro_rules! cfg_process {
 
 macro_rules! cfg_process_driver {
     ($($item:item)*) => {
-        #[cfg(all(unix, not(target_os = "zkvm")))]
+        #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
         #[cfg(not(loom))]
         cfg_process! { $($item)* }
     }
@@ -414,7 +414,7 @@ macro_rules! cfg_process_driver {
 macro_rules! cfg_not_process_driver {
     ($($item:item)*) => {
         $(
-            #[cfg(not(all(unix, not(target_os = "zkvm"), not(loom), feature = "process")))]
+            #[cfg(not(all(unix, not(any(target_os = "trueos", target_os = "zkvm")), not(loom), feature = "process")))]
             $item
         )*
     }
@@ -435,7 +435,7 @@ macro_rules! cfg_signal {
 macro_rules! cfg_signal_internal {
     ($($item:item)*) => {
         $(
-            #[cfg(any(feature = "signal", all(unix, not(target_os = "zkvm"), feature = "process")))]
+            #[cfg(any(feature = "signal", all(unix, not(any(target_os = "trueos", target_os = "zkvm")), feature = "process")))]
             #[cfg(not(loom))]
             $item
         )*
@@ -444,7 +444,7 @@ macro_rules! cfg_signal_internal {
 
 macro_rules! cfg_signal_internal_and_unix {
     ($($item:item)*) => {
-        #[cfg(all(unix, not(target_os = "zkvm")))]
+        #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
         cfg_signal_internal! { $($item)* }
     }
 }
@@ -452,7 +452,7 @@ macro_rules! cfg_signal_internal_and_unix {
 macro_rules! cfg_not_signal_internal {
     ($($item:item)*) => {
         $(
-            #[cfg(any(loom, not(unix), target_os = "zkvm", not(any(feature = "signal", all(unix, not(target_os = "zkvm"), feature = "process")))))]
+            #[cfg(any(loom, not(unix), any(target_os = "trueos", target_os = "zkvm"), not(any(feature = "signal", all(unix, not(any(target_os = "trueos", target_os = "zkvm")), feature = "process")))))]
             $item
         )*
     }

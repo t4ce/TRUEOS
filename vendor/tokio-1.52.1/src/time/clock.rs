@@ -11,24 +11,24 @@ use core::option::Option::{self, None, Some};
 use core::result::Result::{self, Err, Ok};
 use core::{derive, panic};
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 fn std_now() -> StdInstant {
     crate::time::zkvm::platform_instant_now()
 }
 
-#[cfg(not(target_os = "zkvm"))]
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 fn std_now() -> StdInstant {
     std::time::Instant::now()
 }
 
 #[cfg(feature = "test-util")]
 fn std_duration_since(now: StdInstant, earlier: StdInstant) -> core::time::Duration {
-    #[cfg(target_os = "zkvm")]
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
     {
         return now.saturating_sub(earlier);
     }
 
-    #[cfg(not(target_os = "zkvm"))]
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     {
         now.saturating_duration_since(earlier)
     }
@@ -59,9 +59,9 @@ cfg_test_util! {
     use crate::time::{Duration, Instant};
     use crate::loom::sync::Mutex;
     use crate::loom::sync::atomic::Ordering;
-    #[cfg(target_os = "zkvm")]
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
     use core::sync::atomic::AtomicBool as StdAtomicBool;
-    #[cfg(not(target_os = "zkvm"))]
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     use std::sync::atomic::AtomicBool as StdAtomicBool;
 
     cfg_rt! {

@@ -1,8 +1,8 @@
-#[cfg(all(unix, not(target_os = "zkvm")))]
+#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
 use super::unix::{self as os_impl};
 #[cfg(windows)]
 use super::windows::{self as os_impl};
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use super::zkvm::{self as os_impl};
 
 use std::io;

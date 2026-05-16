@@ -1,6 +1,6 @@
-#[cfg(not(target_os = "zkvm"))]
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use crate::io::blocking::Blocking;
-#[cfg(not(target_os = "zkvm"))]
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use crate::io::stdio_common::SplitByUtf8BoundaryIfWindows;
 use crate::io::AsyncWrite;
 use std::io;
@@ -61,13 +61,13 @@ cfg_io_std! {
     /// }
     /// ```
     #[derive(Debug)]
-    #[cfg(not(target_os = "zkvm"))]
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     pub struct Stdout {
         std: SplitByUtf8BoundaryIfWindows<Blocking<std::io::Stdout>>,
     }
 
     #[derive(Debug)]
-    #[cfg(target_os = "zkvm")]
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
     pub struct Stdout {
         _priv: (),
     }
@@ -137,7 +137,7 @@ cfg_io_std! {
     ///     }
     /// }
     /// ```
-    #[cfg(not(target_os = "zkvm"))]
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     pub fn stdout() -> Stdout {
         let std = io::stdout();
         // SAFETY: The `Read` implementation of `std` does not read from the
@@ -149,13 +149,13 @@ cfg_io_std! {
         }
     }
 
-    #[cfg(target_os = "zkvm")]
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
     pub fn stdout() -> Stdout {
         Stdout { _priv: () }
     }
 }
 
-#[cfg(all(unix, not(target_os = "zkvm")))]
+#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
 mod sys {
     use std::os::unix::io::{AsFd, AsRawFd, BorrowedFd, RawFd};
 
@@ -191,43 +191,43 @@ cfg_windows! {
 }
 
 impl AsyncWrite for Stdout {
-    #[cfg_attr(target_os = "zkvm", allow(unused_mut))]
+    #[cfg_attr(any(target_os = "trueos", target_os = "zkvm"), allow(unused_mut))]
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        #[cfg(target_os = "zkvm")]
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         {
             let _ = (self, cx);
             return Poll::Ready(Ok(buf.len()));
         }
-        #[cfg(not(target_os = "zkvm"))]
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         Pin::new(&mut self.std).poll_write(cx, buf)
     }
 
-    #[cfg_attr(target_os = "zkvm", allow(unused_mut))]
+    #[cfg_attr(any(target_os = "trueos", target_os = "zkvm"), allow(unused_mut))]
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
-        #[cfg(target_os = "zkvm")]
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         {
             let _ = (self, cx);
             return Poll::Ready(Ok(()));
         }
-        #[cfg(not(target_os = "zkvm"))]
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         Pin::new(&mut self.std).poll_flush(cx)
     }
 
-    #[cfg_attr(target_os = "zkvm", allow(unused_mut))]
+    #[cfg_attr(any(target_os = "trueos", target_os = "zkvm"), allow(unused_mut))]
     fn poll_shutdown(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Result<(), io::Error>> {
-        #[cfg(target_os = "zkvm")]
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         {
             let _ = (self, cx);
             return Poll::Ready(Ok(()));
         }
-        #[cfg(not(target_os = "zkvm"))]
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         Pin::new(&mut self.std).poll_shutdown(cx)
     }
 }
