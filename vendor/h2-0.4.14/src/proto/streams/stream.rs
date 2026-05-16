@@ -405,15 +405,8 @@ impl fmt::Debug for Stream {
             .field("requested_send_capacity", &self.requested_send_capacity)
             .field("buffered_send_data", &self.buffered_send_data)
             .h2_field_some("send_task", &self.send_task.as_ref().map(|_| ()))
-            .h2_field_if_then(
-                "pending_send",
-                !self.pending_send.is_empty(),
-                &self.pending_send,
-            )
-            .h2_field_some(
-                "next_pending_send_capacity",
-                &self.next_pending_send_capacity,
-            )
+            .h2_field_if_then("pending_send", !self.pending_send.is_empty(), &self.pending_send)
+            .h2_field_some("next_pending_send_capacity", &self.next_pending_send_capacity)
             .h2_field_if("is_pending_send_capacity", &self.is_pending_send_capacity)
             .h2_field_if("send_capacity_inc", &self.send_capacity_inc)
             .h2_field_some("next_open", &self.next_open)
@@ -427,11 +420,7 @@ impl fmt::Debug for Stream {
             .h2_field_if("is_pending_window_update", &self.is_pending_window_update)
             .h2_field_some("reset_at", &self.reset_at)
             .h2_field_some("next_reset_expire", &self.next_reset_expire)
-            .h2_field_if_then(
-                "pending_recv",
-                !self.pending_recv.is_empty(),
-                &self.pending_recv,
-            )
+            .h2_field_if_then("pending_recv", !self.pending_recv.is_empty(), &self.pending_recv)
             .h2_field_if("is_recv", &self.is_recv)
             .h2_field_some("recv_task", &self.recv_task.as_ref().map(|_| ()))
             .h2_field_some("push_task", &self.push_task.as_ref().map(|_| ()))

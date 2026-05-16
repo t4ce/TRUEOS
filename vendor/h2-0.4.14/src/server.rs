@@ -122,11 +122,12 @@ use crate::{FlowControl, PingPong, RecvStream, SendStream};
 
 use bytes::{Buf, Bytes};
 use http::{HeaderMap, Method, Request, Response};
+use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
-use std::{fmt, io};
+use tokio::io;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tracing::instrument::{Instrument, Instrumented};
 
@@ -1176,9 +1177,7 @@ impl<B: Buf> SendResponse<B> {
                 status,
                 stream_id
             );
-            return Err(crate::Error::from(
-                UserError::InvalidInformationalStatusCode,
-            ));
+            return Err(crate::Error::from(UserError::InvalidInformationalStatusCode));
         }
 
         tracing::trace!(
@@ -1190,10 +1189,7 @@ impl<B: Buf> SendResponse<B> {
             stream_id, response, false, // NOT end_of_stream for informational responses
         );
 
-        tracing::trace!(
-            "sending interim informational headers frame for stream: {:?}",
-            stream_id
-        );
+        tracing::trace!("sending interim informational headers frame for stream: {:?}", stream_id);
 
         // Use the proper H2 streams API for sending interim informational headers
         // This bypasses the normal response flow and allows multiple informational responses
@@ -1601,12 +1597,7 @@ impl Peer {
 
         let pseudo = Pseudo::request(method, uri, None);
 
-        Ok(frame::PushPromise::new(
-            stream_id,
-            promised_id,
-            pseudo,
-            headers,
-        ))
+        Ok(frame::PushPromise::new(stream_id, promised_id, pseudo, headers))
     }
 }
 
@@ -1673,11 +1664,7 @@ impl proto::Peer for Peer {
         if let Some(authority) = pseudo.authority {
             let maybe_authority = uri::Authority::from_maybe_shared(authority.clone().into_inner());
             parts.authority = Some(maybe_authority.or_else(|why| {
-                malformed!(
-                    "malformed headers: malformed authority ({:?}): {}",
-                    authority,
-                    why,
-                )
+                malformed!("malformed headers: malformed authority ({:?}): {}", authority, why,)
             })?);
         }
 
@@ -1688,11 +1675,7 @@ impl proto::Peer for Peer {
             }
             let maybe_scheme = scheme.parse();
             let scheme = maybe_scheme.or_else(|why| {
-                malformed!(
-                    "malformed headers: malformed scheme ({:?}): {}",
-                    scheme,
-                    why,
-                )
+                malformed!("malformed headers: malformed scheme ({:?}): {}", scheme, why,)
             })?;
 
             // It's not possible to build an `Uri` from a scheme and path. So,

@@ -104,10 +104,7 @@ async fn send_requests(addr: &str) -> Result<(), Box<dyn Error>> {
     println!("Overall: {}ms.", instant.elapsed().as_millis());
     println!("Fastest: {}ms", result.iter().min().unwrap().as_millis());
     println!("Slowest: {}ms", result.iter().max().unwrap().as_millis());
-    println!(
-        "Avg    : {}ms",
-        sum.div_f64(NUM_REQUESTS_TO_SEND as f64).as_millis()
-    );
+    println!("Avg    : {}ms", sum.div_f64(NUM_REQUESTS_TO_SEND as f64).as_millis());
     Ok(())
 }
 

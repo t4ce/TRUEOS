@@ -18,7 +18,7 @@ use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::codec::length_delimited;
 
-use std::io;
+use tokio::io;
 
 #[derive(Debug)]
 pub struct Codec<T, B> {

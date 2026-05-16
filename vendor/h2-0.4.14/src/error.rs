@@ -3,7 +3,8 @@ use crate::frame::StreamId;
 use crate::proto::{self, Initiator};
 
 use bytes::Bytes;
-use std::{error, fmt, io};
+use std::{error, fmt};
+use tokio::io;
 
 pub use crate::frame::Reason;
 
@@ -127,7 +128,18 @@ impl From<proto::Error> for Error {
                     Kind::GoAway(debug_data, reason, initiator)
                 }
                 Io(kind, inner) => {
-                    Kind::Io(inner.map_or_else(|| kind.into(), |inner| io::Error::new(kind, inner)))
+                    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+                    {
+                        let _ = inner;
+                        Kind::Io(kind.into())
+                    }
+
+                    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+                    {
+                        Kind::Io(
+                            inner.map_or_else(|| kind.into(), |inner| io::Error::new(kind, inner)),
+                        )
+                    }
                 }
             },
         }

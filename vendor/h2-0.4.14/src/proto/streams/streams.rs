@@ -12,8 +12,9 @@ use http::{HeaderMap, Request, Response};
 use std::task::{Context, Poll, Waker};
 use tokio::io::AsyncWrite;
 
+use std::fmt;
 use std::sync::{Arc, Mutex};
-use std::{fmt, io};
+use tokio::io;
 
 #[derive(Debug)]
 pub(crate) struct Streams<B, P>
@@ -132,11 +133,7 @@ where
         let me = &mut *me;
         me.actions.recv.next_incoming(&mut me.store).map(|key| {
             let stream = &mut me.store.resolve(key);
-            tracing::trace!(
-                "next_incoming; id={:?}, state={:?}",
-                stream.id,
-                stream.state
-            );
+            tracing::trace!("next_incoming; id={:?}, state={:?}", stream.id, stream.state);
             // TODO: ideally, OpaqueStreamRefs::new would do this, but we're holding
             // the lock, so it can't.
             me.refs += 1;
@@ -964,13 +961,8 @@ impl Inner {
         let stream = self.store.resolve(key);
         let mut send_buffer = send_buffer.inner.lock().unwrap();
         let send_buffer = &mut *send_buffer;
-        self.actions.send_reset(
-            stream,
-            reason,
-            Initiator::Library,
-            &mut self.counts,
-            send_buffer,
-        )
+        self.actions
+            .send_reset(stream, reason, Initiator::Library, &mut self.counts, send_buffer)
     }
 }
 
@@ -1645,14 +1637,8 @@ impl Actions {
                 }
             }
 
-            self.send.send_reset(
-                reason,
-                initiator,
-                send_buffer,
-                stream,
-                counts,
-                &mut self.task,
-            );
+            self.send
+                .send_reset(reason, initiator, send_buffer, stream, counts, &mut self.task);
             self.recv.enqueue_reset_expiration(stream, counts);
             // if a RecvStream is parked, ensure it's notified
             stream.notify_recv();

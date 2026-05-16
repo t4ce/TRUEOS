@@ -10,8 +10,8 @@ use bytes::Buf;
 use tokio::io::AsyncWrite;
 
 use std::cmp::Ordering;
-use std::io;
 use std::task::{Context, Poll, Waker};
+use tokio::io;
 
 /// Manages state transitions related to outbound frames.
 #[derive(Debug)]
@@ -130,11 +130,7 @@ impl Send {
         counts: &mut Counts,
         task: &mut Option<Waker>,
     ) -> Result<(), UserError> {
-        tracing::trace!(
-            "send_headers; frame={:?}; init_window={:?}",
-            frame,
-            self.init_window_sz
-        );
+        tracing::trace!("send_headers; frame={:?}; init_window={:?}", frame, self.init_window_sz);
 
         Self::check_headers(frame.fields())?;
 
@@ -230,10 +226,7 @@ impl Send {
 
         if is_reset {
             // Don't double reset
-            tracing::trace!(
-                " -> not sending RST_STREAM ({:?} is already reset)",
-                stream_id
-            );
+            tracing::trace!(" -> not sending RST_STREAM ({:?} is already reset)", stream_id);
             return;
         }
 

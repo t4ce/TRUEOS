@@ -108,6 +108,9 @@ hyper-util = { path = "vendor/hyper-util-0.1.20" }
 h2 = { path = "vendor/h2-0.4.14" }
 h3 = { path = "vendor/h3-0.0.8" }
 h3-quinn = { path = "vendor/h3-quinn-0.0.10" }
+quinn = { path = "vendor/quinn-0.11.9" }
+quinn-proto = { path = "vendor/quinn-proto-0.11.14" }
+quinn-udp = { path = "vendor/quinn-udp-0.5.14" }
 axum = { path = "vendor/axum-0.8.9" }
 axum-core = { path = "vendor/axum-core-0.5.6" }
 base64 = { path = "vendor/base64-0.22.1" }
