@@ -134,7 +134,7 @@ impl event::Source for TcpStream {
     }
 }
 
-#[cfg(not(target_os = "zkvm"))]
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 impl From<TcpStream> for std::net::TcpStream {
     fn from(_: TcpStream) -> Self {
         panic!("mio zkvm backend cannot convert TcpStream into std yet")

@@ -89,9 +89,9 @@ macro_rules! error {
 
 macro_rules! log {
     ($level: ident, $($t:tt)*) => {
-        #[cfg(all(feature = "log", target_os = "zkvm"))]
+        #[cfg(all(feature = "log", any(target_os = "trueos", target_os = "zkvm")))]
         { $crate::zkvm_compat::log(stringify!($level), format_args!($($t)*)) }
-        #[cfg(all(feature = "log", not(target_os = "zkvm")))]
+        #[cfg(all(feature = "log", not(any(target_os = "trueos", target_os = "zkvm"))))]
         { log::$level!($($t)*) }
         // Silence unused variables warnings.
         #[cfg(not(feature = "log"))]

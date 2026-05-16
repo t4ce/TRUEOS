@@ -65,7 +65,7 @@ impl event::Source for TcpListener {
     }
 }
 
-#[cfg(not(target_os = "zkvm"))]
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 impl From<TcpListener> for std::net::TcpListener {
     fn from(_: TcpListener) -> Self {
         panic!("mio zkvm backend cannot convert TcpListener into std yet")

@@ -25,19 +25,19 @@
 //! <https://github.com/rust-lang/rust/issues/55794>. The best advice we can
 //! give is to always call receive with a large enough buffer.
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub use core::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
 mod tcp;
 pub use self::tcp::{TcpListener, TcpStream};
 
 #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
-#[cfg_attr(target_os = "zkvm", path = "udp_zkvm.rs")]
+#[cfg_attr(any(target_os = "trueos", target_os = "zkvm"), path = "udp_zkvm.rs")]
 mod udp;
 #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 pub use self::udp::UdpSocket;
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 /// no_std equivalent of `std::net::Shutdown` for TRUEOS sockets.
 pub enum Shutdown {
@@ -49,7 +49,7 @@ pub enum Shutdown {
     Both,
 }
 
-#[cfg(all(unix, not(target_os = "zkvm")))]
+#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
 mod uds;
-#[cfg(all(unix, not(target_os = "zkvm")))]
+#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
 pub use self::uds::{UnixDatagram, UnixListener, UnixStream};
