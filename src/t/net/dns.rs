@@ -1385,6 +1385,49 @@ pub async fn resolve_ipv4_for_device(
     Err(DnsError::NoAnswer)
 }
 
+pub async fn resolve_ipv4_for_device_sync_abi(
+    dev_idx: usize,
+    host: &str,
+    cfg: DnsConfig,
+) -> Result<[u8; 4], DnsError> {
+    let host_trimmed = host.trim().trim_end_matches('.');
+    if host_trimmed.is_empty() {
+        return Err(DnsError::BadName);
+    }
+    crate::log_info!(target: "net"; "dns: sync-abi resolve begin host={} dev={} qtype=A\n", host_trimmed, dev_idx);
+
+    {
+        let now = embassy_time_driver::now();
+        let mut cache = DNS_CACHE.lock();
+        cache.retain(|e| e.expires_at > now);
+        if let Some(e) = cache
+            .iter()
+            .find(|e| e.dev_idx as usize == dev_idx && e.host.as_str() == host_trimmed)
+        {
+            log_dns_ip("dns: sync-abi cache hit", host_trimmed, dev_idx, e.ip);
+            return Ok(e.ip);
+        }
+    }
+
+    crate::log_info!(target: "net";
+        "dns: sync-abi secure lookup begin host={} dev={} qtype=A servers={} timeout_ms={} resend_ms={}\n",
+        host_trimmed,
+        dev_idx,
+        cfg.server_count,
+        cfg.timeout_ms,
+        cfg.resend_ms
+    );
+    if let Ok(ip) =
+        resolve_ipv4_secure_policy(dev_idx, host_trimmed, cfg, SecureDnsPolicy::default()).await
+    {
+        dns_cache_insert(dev_idx, host_trimmed, ip);
+        return Ok(ip);
+    }
+    crate::log_info!(target: "net"; "dns: sync-abi secure lookup failed host={} dev={} qtype=A\n", host_trimmed, dev_idx);
+
+    Err(DnsError::NoAnswer)
+}
+
 pub async fn resolve_ipv6_for_device(
     dev_idx: usize,
     host: &str,

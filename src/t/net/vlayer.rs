@@ -21,10 +21,12 @@ impl From<super::dns::DnsError> for DnsResolveError {
 }
 
 pub fn resolve_ipv4_for_sync_abi(host: &str) -> Result<[u8; 4], DnsResolveError> {
-    crate::t::block_on_io(super::dns::resolve_ipv4_with_profile(
+    let profile = crate::r::net::NetProfile::default();
+    let dev_idx = profile.resolve_device_index().unwrap_or(0);
+    crate::t::block_on_io(super::dns::resolve_ipv4_for_device_sync_abi(
+        dev_idx,
         host,
-        crate::r::net::NetProfile::default(),
-        super::dns::DnsConfig::default(),
+        super::dns::DnsConfig::for_profile(profile),
     ))
     .map_err(|_| DnsResolveError::Runtime)?
     .map_err(DnsResolveError::from)

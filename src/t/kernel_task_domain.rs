@@ -1,4 +1,4 @@
-use core::sync::atomic::{AtomicU32, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

@@ -145,8 +145,9 @@ async fn compile_path_async(path: String) -> Result<ShaderCompileReport, ShaderS
         .map_err(|err| ShaderServiceError::Emit(err.message))?;
     let artifact = serialize_eu32_artifact(&object);
     let artifact_path = artifact_path_for_source(path.as_str());
-    let ok = crate::r::fs::trueosfs::file_in_async(disk, artifact_path.as_str(), artifact.as_slice())
-        .await?;
+    let ok =
+        crate::r::fs::trueosfs::file_in_async(disk, artifact_path.as_str(), artifact.as_slice())
+            .await?;
     if !ok {
         return Err(ShaderServiceError::WriteFailed);
     }
