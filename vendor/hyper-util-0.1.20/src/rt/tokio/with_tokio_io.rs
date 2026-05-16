@@ -1,9 +1,12 @@
 use pin_project_lite::pin_project;
 use std::{
+    io as tokio_io,
     pin::Pin,
     task::{Context, Poll},
 };
-use hyper::io;
+use hyper::io as hyper_io;
+
+use super::{hyper_to_tokio_error, tokio_to_hyper_slices};
 
 pin_project! {
     /// Extends an underlying [`hyper`] I/O with [`tokio`] I/O implementations.
@@ -31,7 +34,7 @@ where
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         tbuf: &mut tokio::io::ReadBuf<'_>,
-    ) -> Poll<Result<(), io::Error>> {
+    ) -> Poll<Result<(), tokio_io::Error>> {
         //let init = tbuf.initialized().len();
         let filled = tbuf.filled().len();
         let sub_filled = unsafe {
@@ -39,7 +42,8 @@ where
 
             match hyper::rt::Read::poll_read(self.project().inner, cx, buf.unfilled()) {
                 Poll::Ready(Ok(())) => buf.filled().len(),
-                other => return other,
+                Poll::Ready(Err(err)) => return Poll::Ready(Err(hyper_to_tokio_error(err))),
+                Poll::Pending => return Poll::Pending,
             }
         };
 
@@ -67,19 +71,19 @@ where
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &[u8],
-    ) -> Poll<Result<usize, io::Error>> {
-        hyper::rt::Write::poll_write(self.project().inner, cx, buf)
+    ) -> Poll<Result<usize, tokio_io::Error>> {
+        hyper::rt::Write::poll_write(self.project().inner, cx, buf).map_err(hyper_to_tokio_error)
     }
 
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
-        hyper::rt::Write::poll_flush(self.project().inner, cx)
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), tokio_io::Error>> {
+        hyper::rt::Write::poll_flush(self.project().inner, cx).map_err(hyper_to_tokio_error)
     }
 
     fn poll_shutdown(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-    ) -> Poll<Result<(), io::Error>> {
-        hyper::rt::Write::poll_shutdown(self.project().inner, cx)
+    ) -> Poll<Result<(), tokio_io::Error>> {
+        hyper::rt::Write::poll_shutdown(self.project().inner, cx).map_err(hyper_to_tokio_error)
     }
 
     fn is_write_vectored(&self) -> bool {
@@ -89,9 +93,11 @@ where
     fn poll_write_vectored(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        bufs: &[io::IoSlice<'_>],
-    ) -> Poll<Result<usize, io::Error>> {
-        hyper::rt::Write::poll_write_vectored(self.project().inner, cx, bufs)
+        bufs: &[tokio_io::IoSlice<'_>],
+    ) -> Poll<Result<usize, tokio_io::Error>> {
+        let bufs = tokio_to_hyper_slices(bufs);
+        hyper::rt::Write::poll_write_vectored(self.project().inner, cx, &bufs)
+            .map_err(hyper_to_tokio_error)
     }
 }
 
@@ -107,12 +113,12 @@ where
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &[u8],
-    ) -> Poll<Result<usize, io::Error>> {
+    ) -> Poll<Result<usize, hyper_io::Error>> {
         self.project().inner.poll_write(cx, buf)
     }
 
     #[inline]
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), hyper_io::Error>> {
         self.project().inner.poll_flush(cx)
     }
 
@@ -120,7 +126,7 @@ where
     fn poll_shutdown(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-    ) -> Poll<Result<(), io::Error>> {
+    ) -> Poll<Result<(), hyper_io::Error>> {
         self.project().inner.poll_shutdown(cx)
     }
 
@@ -133,8 +139,8 @@ where
     fn poll_write_vectored(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        bufs: &[io::IoSlice<'_>],
-    ) -> Poll<Result<usize, io::Error>> {
+        bufs: &[hyper_io::IoSlice<'_>],
+    ) -> Poll<Result<usize, hyper_io::Error>> {
         self.project().inner.poll_write_vectored(cx, bufs)
     }
 }
@@ -173,7 +179,7 @@ where
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: hyper::rt::ReadBufCursor<'_>,
-    ) -> Poll<Result<(), io::Error>> {
+    ) -> Poll<Result<(), hyper_io::Error>> {
         self.project().inner.poll_read(cx, buf)
     }
 }

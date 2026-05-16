@@ -67,12 +67,12 @@ use std::{
 };
 use alloc::boxed::Box;
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 fn instant_now() -> Instant {
     crate::platform::instant_now()
 }
 
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+#[cfg(not(target_os = "zkvm"))]
 fn instant_now() -> Instant {
     Instant::now()
 }

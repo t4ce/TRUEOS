@@ -1,9 +1,12 @@
 use pin_project_lite::pin_project;
 use std::{
+    io as tokio_io,
     pin::Pin,
     task::{Context, Poll},
 };
-use hyper::io;
+use hyper::io as hyper_io;
+
+use super::{hyper_to_tokio_slices, tokio_to_hyper_error};
 
 pin_project! {
     /// Extends an underlying [`tokio`] I/O with [`hyper`] I/O implementations.
@@ -53,12 +56,13 @@ where
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         mut buf: hyper::rt::ReadBufCursor<'_>,
-    ) -> Poll<Result<(), io::Error>> {
+    ) -> Poll<Result<(), hyper_io::Error>> {
         let n = unsafe {
             let mut tbuf = tokio::io::ReadBuf::uninit(buf.as_mut());
             match tokio::io::AsyncRead::poll_read(self.project().inner, cx, &mut tbuf) {
                 Poll::Ready(Ok(())) => tbuf.filled().len(),
-                other => return other,
+                Poll::Ready(Err(err)) => return Poll::Ready(Err(tokio_to_hyper_error(err))),
+                Poll::Pending => return Poll::Pending,
             }
         };
 
@@ -81,19 +85,21 @@ where
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &[u8],
-    ) -> Poll<Result<usize, io::Error>> {
+    ) -> Poll<Result<usize, hyper_io::Error>> {
         tokio::io::AsyncWrite::poll_write(self.project().inner, cx, buf)
+            .map_err(tokio_to_hyper_error)
     }
 
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
-        tokio::io::AsyncWrite::poll_flush(self.project().inner, cx)
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), hyper_io::Error>> {
+        tokio::io::AsyncWrite::poll_flush(self.project().inner, cx).map_err(tokio_to_hyper_error)
     }
 
     fn poll_shutdown(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-    ) -> Poll<Result<(), io::Error>> {
+    ) -> Poll<Result<(), hyper_io::Error>> {
         tokio::io::AsyncWrite::poll_shutdown(self.project().inner, cx)
+            .map_err(tokio_to_hyper_error)
     }
 
     fn is_write_vectored(&self) -> bool {
@@ -103,9 +109,11 @@ where
     fn poll_write_vectored(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        bufs: &[io::IoSlice<'_>],
-    ) -> Poll<Result<usize, io::Error>> {
-        tokio::io::AsyncWrite::poll_write_vectored(self.project().inner, cx, bufs)
+        bufs: &[hyper_io::IoSlice<'_>],
+    ) -> Poll<Result<usize, hyper_io::Error>> {
+        let bufs = hyper_to_tokio_slices(bufs);
+        tokio::io::AsyncWrite::poll_write_vectored(self.project().inner, cx, &bufs)
+            .map_err(tokio_to_hyper_error)
     }
 }
 
@@ -121,7 +129,7 @@ where
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> Poll<Result<(), io::Error>> {
+    ) -> Poll<Result<(), tokio_io::Error>> {
         self.project().inner.poll_read(cx, buf)
     }
 }
@@ -138,12 +146,12 @@ where
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &[u8],
-    ) -> Poll<Result<usize, io::Error>> {
+    ) -> Poll<Result<usize, tokio_io::Error>> {
         self.project().inner.poll_write(cx, buf)
     }
 
     #[inline]
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), tokio_io::Error>> {
         self.project().inner.poll_flush(cx)
     }
 
@@ -151,7 +159,7 @@ where
     fn poll_shutdown(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-    ) -> Poll<Result<(), io::Error>> {
+    ) -> Poll<Result<(), tokio_io::Error>> {
         self.project().inner.poll_shutdown(cx)
     }
 
@@ -164,8 +172,8 @@ where
     fn poll_write_vectored(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        bufs: &[io::IoSlice<'_>],
-    ) -> Poll<Result<usize, io::Error>> {
+        bufs: &[tokio_io::IoSlice<'_>],
+    ) -> Poll<Result<usize, tokio_io::Error>> {
         self.project().inner.poll_write_vectored(cx, bufs)
     }
 }
