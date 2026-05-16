@@ -21,6 +21,9 @@ const READY_ERROR: u8 = 0b0000_0100;
 const READY_READ_CLOSED: u8 = 0b0000_1000;
 const READY_WRITE_CLOSED: u8 = 0b0001_0000;
 
+const CONNECT_FASTPATH_SPINS: usize = 512;
+const CONNECT_IO_FASTPATH_SPINS: usize = 256;
+
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct TrueosMioSocketAddr {
@@ -575,6 +578,31 @@ impl MioCompat {
             .retain(|pending| pending.socket_id != socket_id);
     }
 
+    fn tcp_socket_open_or_done(&self, socket_id: u32, owner_vm: Option<u8>) -> bool {
+        self.socket_for_owner(socket_id, owner_vm)
+            .map(|socket| {
+                socket.kind == MioSocketKind::TcpStream
+                    && (socket.connected || socket.closed || socket.error != STATUS_OK)
+            })
+            .unwrap_or(true)
+    }
+
+    fn drive_tcp_connect_fastpath(
+        &mut self,
+        socket_id: u32,
+        owner_vm: Option<u8>,
+        max_spins: usize,
+    ) {
+        for _ in 0..max_spins {
+            self.kick_net();
+            self.pump();
+            if self.tcp_socket_open_or_done(socket_id, owner_vm) {
+                return;
+            }
+            crate::wait::spin_step();
+        }
+    }
+
     fn log_unattributed_error(&self, msg: &'static str) {
         let pending_count = self.pending_opens.len();
         if let Some(pending) = self.pending_opens.front()
@@ -1099,6 +1127,7 @@ pub(crate) unsafe fn mio_tcp_stream_connect_host(
         };
 
         if status == STATUS_OK {
+            compat.drive_tcp_connect_fastpath(socket_id, owner_vm, CONNECT_FASTPATH_SPINS);
             unsafe { *out_socket_id = socket_id };
         }
 
@@ -1348,6 +1377,14 @@ pub(crate) unsafe fn mio_socket_take_error_host(socket_id: u32) -> i32 {
     let owner_vm = current_owner_vm();
     with_compat(|compat| {
         compat.pump();
+        if let Some(socket) = compat.socket_for_owner(socket_id, owner_vm)
+            && socket.kind == MioSocketKind::TcpStream
+            && !socket.connected
+            && !socket.closed
+            && socket.error == STATUS_OK
+        {
+            compat.drive_tcp_connect_fastpath(socket_id, owner_vm, CONNECT_IO_FASTPATH_SPINS);
+        }
         let Some(socket) = compat.socket_mut_for_owner(socket_id, owner_vm) else {
             return STATUS_NOT_FOUND;
         };
@@ -1496,6 +1533,14 @@ pub(crate) unsafe fn mio_tcp_stream_write_host(
     let owner_vm = current_owner_vm();
     with_compat(|compat| {
         compat.pump();
+        if let Some(socket) = compat.socket_for_owner(socket_id, owner_vm)
+            && socket.kind == MioSocketKind::TcpStream
+            && !socket.connected
+            && !socket.closed
+            && socket.error == STATUS_OK
+        {
+            compat.drive_tcp_connect_fastpath(socket_id, owner_vm, CONNECT_IO_FASTPATH_SPINS);
+        }
         let Some(socket) = compat.socket_for_owner(socket_id, owner_vm) else {
             return STATUS_NOT_FOUND as isize;
         };
