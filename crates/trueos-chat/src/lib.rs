@@ -569,6 +569,7 @@ let since=0;
 const room='lobby';
 const bubbles=new Map();
 const status=document.querySelector('#status');
+const messageList=document.querySelector('#messages');
 const textInput=document.querySelector('#text');
 const sendButton=document.querySelector('#post button');
 const esc=s=>s.replace(/[&<>"']/g,c=>({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[c]));
@@ -580,12 +581,13 @@ function showMessage(m,source){{
   if(!li){{
     li=document.createElement('li');
     bubbles.set(key,li);
-    document.querySelector('#messages').appendChild(li);
+        messageList.appendChild(li);
   }}
   const waiting=m.statement&&!m.text;
   li.className=waiting?'waiting animate-pulse':'';
   const tag=m.statement?` statement ${{esc(m.statement)}}`:'';
   li.innerHTML=`<div class="meta">${{esc(m.user)}} #${{m.id}}${{tag}} - ${{source}}</div><div class="body">${{esc(m.text)}}</div>`;
+    messageList.scrollTop=messageList.scrollHeight;
 }}
 async function poll(){{
   const encodedRoom=encodeURIComponent(room);
