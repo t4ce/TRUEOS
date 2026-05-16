@@ -12,7 +12,7 @@ use core::result::Result::{self, Err, Ok};
 use core::task::{Context, Poll};
 use core::fmt;
 #[cfg(not(target_os = "zkvm"))]
-use core::panic;
+use std::panic;
 #[cfg(target_os = "zkvm")]
 use crate::panic;
 

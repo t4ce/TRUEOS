@@ -10,6 +10,7 @@ use crate::io::{AsyncRead, AsyncSeek, AsyncWrite, ReadBuf};
 use crate::sync::Mutex;
 
 use alloc::sync::Arc;
+use core::cmp;
 use core::fmt;
 use core::future::Future;
 use core::pin::Pin;
@@ -18,7 +19,7 @@ use core::task::{ready, Context, Poll};
 use crate::fs::trueos::{Metadata, Permissions};
 #[cfg(not(target_os = "zkvm"))]
 use std::fs::{Metadata, Permissions};
-use std::io::{self, SeekFrom};
+use std::io::{self, Seek, SeekFrom};
 use std::path::Path;
 
 #[cfg(test)]
