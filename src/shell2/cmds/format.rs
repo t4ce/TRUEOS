@@ -60,10 +60,7 @@ pub(crate) fn start_format_session_for_disk(
 ) -> ParseOutcome {
     print_target_summary(io, disk, prefix);
     if !disk.info().writable {
-        print_shell_line(
-            io,
-            &alloc::format!("{prefix}: refused; target is read-only"),
-        );
+        print_shell_line(io, &alloc::format!("{prefix}: refused; target is read-only"));
         return ParseOutcome::Handled;
     }
     print_shell_line(io, &alloc::format!("{prefix}: DANGER: this destroys all data on the disk"));

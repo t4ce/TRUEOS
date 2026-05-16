@@ -360,11 +360,7 @@ fn post_message_fields(body: &[u8]) -> (Option<String>, Option<String>, Option<S
             return (Some(json.user), Some(json.text), json.statement);
         }
     }
-    (
-        form_value(body, "user"),
-        form_value(body, "text"),
-        form_value(body, "statement"),
-    )
+    (form_value(body, "user"), form_value(body, "text"), form_value(body, "statement"))
 }
 
 fn append_limited_text(existing: &str, delta: &str, max_len: usize) -> String {
@@ -539,33 +535,34 @@ fn index_html() -> Vec<u8> {
 <header class="chat-topbar">
 <div class="brand">
 <div class="brand-mark">CH</div>
-<div><h1>TRUEOS Chat <span class="tag ok">HTTP</span></h1><p>Lobby room, kernel-backed message hub</p></div>
+<div><h1>TRUEOS Chat</h1><p>Kernel-backed message hub</p></div>
 </div>
 <div class="chat-settings">
-<div class="chat-field"><label for="room">Room</label><input id="room" value="lobby" maxlength="32" disabled></div>
-<div class="chat-field"><label for="user">Display name</label><input id="user" value="guest" maxlength="32"></div>
+<label class="chat-field" for="room"><span>Room</span><input id="room" value="lobby" maxlength="32" disabled></label>
+<label class="chat-field" for="user"><span>Name</span><input id="user" value="guest" maxlength="32"></label>
 </div>
-<span class="tag">polling</span>
+<div class="chat-mode"><span class="tag ok">HTTP</span><span class="tag">polling</span></div>
 </header>
 <main class="chat-main">
-<div class="chat-board">
-<section class="chat-panel">
-<div class="chat-panel-head"><h2>Messages</h2><span class="tag">lobby</span></div>
-<ul id="messages"></ul>
+<section class="chat-room">
+<div class="chat-panel-head"><div><h2>Lobby</h2><p id="status" aria-live="polite">starting...</p></div><span class="tag">/api/rooms/lobby/messages</span></div>
+<ul id="messages" aria-label="Messages"></ul>
+<form id="post" class="chat-composer">
+<input id="text" autocomplete="off" maxlength="1024" placeholder="Message lobby">
+<button>Send</button>
+</form>
 </section>
 <aside class="chat-side">
 <section class="chat-panel">
 <div class="chat-panel-head"><h2>Connection</h2><span class="tag ok">live</span></div>
-<div class="kv"><div>Endpoint</div><div>/api/rooms/lobby/messages</div><div>Mode</div><div>HTTP post + poll</div><div>Store</div><div>chat/rooms.json</div></div>
+<div class="kv"><div>Endpoint</div><div>/api/rooms/lobby/messages</div><div>Mode</div><div>POST + poll</div><div>Store</div><div>chat/rooms.json</div></div>
 </section>
 <section class="chat-panel">
-<div class="chat-panel-head"><h2>Status</h2></div>
-<div id="status" class="status" aria-live="polite"></div>
+<div class="chat-panel-head"><h2>Session</h2></div>
+<div class="chat-session"><div><span>Room</span><strong>lobby</strong></div><div><span>Port</span><strong>3</strong></div><div><span>Transport</span><strong>Axum</strong></div></div>
 </section>
 </aside>
-</div>
 </main>
-<form id="post" class="chat-composer"><input id="text" autocomplete="off" maxlength="1024" placeholder="Message lobby"><button>Send</button></form>
 </div>
 <script>
 let since=0;

@@ -87,7 +87,16 @@ pub(crate) struct SkhynixUasFlowCompletion {
 
 #[allow(dead_code)]
 pub(crate) enum SkhynixUasFlowRequest {
-    Read { lba: u32, blocks: u16 },
+    Read {
+        lba: u32,
+        blocks: u16,
+    },
+    Write {
+        lba: u32,
+        blocks: u16,
+        data: AllocVec<u8>,
+    },
+    Flush,
 }
 
 #[allow(dead_code)]
@@ -98,13 +107,20 @@ pub(crate) enum SkhynixUasFlowReply {
         blocks: u16,
         result: Result<AllocVec<u8>, SkhynixUasFlowError>,
     },
+    Write {
+        tag: u16,
+        lba: u32,
+        blocks: u16,
+        result: Result<(), SkhynixUasFlowError>,
+    },
+    Flush {
+        tag: u16,
+        result: Result<(), SkhynixUasFlowError>,
+    },
 }
 
-type SkhynixUasFlowChannel = Channel<
-    crate::wait::EmbassySpinRawMutex,
-    SkhynixUasFlowRequest,
-    SKHYNIX_UAS_FLOW_QUEUE_DEPTH,
->;
+type SkhynixUasFlowChannel =
+    Channel<crate::wait::EmbassySpinRawMutex, SkhynixUasFlowRequest, SKHYNIX_UAS_FLOW_QUEUE_DEPTH>;
 
 static SKHYNIX_UAS_FLOW_STATE: Watch<
     crate::wait::EmbassySpinRawMutex,
@@ -148,10 +164,7 @@ impl SkhynixUasFlowService {
             .unwrap_or(SkhynixUasFlowState::offline())
     }
 
-    pub fn try_submit(
-        &self,
-        request: SkhynixUasFlowRequest,
-    ) -> Result<(), SkhynixUasFlowError> {
+    pub fn try_submit(&self, request: SkhynixUasFlowRequest) -> Result<(), SkhynixUasFlowError> {
         self.requests.try_send(request).map_err(|err| match err {
             TrySendError::Full(_) => SkhynixUasFlowError::QueueFull,
         })
@@ -166,9 +179,33 @@ impl SkhynixUasFlowService {
         lba: u32,
         blocks: u16,
     ) -> Result<AllocVec<u8>, SkhynixUasFlowError> {
-        self.submit(SkhynixUasFlowRequest::Read { lba, blocks }).await;
+        self.submit(SkhynixUasFlowRequest::Read { lba, blocks })
+            .await;
         match SKHYNIX_UAS_FLOW_REPLY.wait().await {
             SkhynixUasFlowReply::Read { result, .. } => result,
+            _ => Err(SkhynixUasFlowError::Transport),
+        }
+    }
+
+    pub async fn write_blocks(
+        &self,
+        lba: u32,
+        blocks: u16,
+        data: AllocVec<u8>,
+    ) -> Result<(), SkhynixUasFlowError> {
+        self.submit(SkhynixUasFlowRequest::Write { lba, blocks, data })
+            .await;
+        match SKHYNIX_UAS_FLOW_REPLY.wait().await {
+            SkhynixUasFlowReply::Write { result, .. } => result,
+            _ => Err(SkhynixUasFlowError::Transport),
+        }
+    }
+
+    pub async fn flush(&self) -> Result<(), SkhynixUasFlowError> {
+        self.submit(SkhynixUasFlowRequest::Flush).await;
+        match SKHYNIX_UAS_FLOW_REPLY.wait().await {
+            SkhynixUasFlowReply::Flush { result, .. } => result,
+            _ => Err(SkhynixUasFlowError::Transport),
         }
     }
 }
@@ -195,6 +232,24 @@ impl SkhynixUasFlowBlockDevice {
         }
         Ok((lba as u32, blocks as u16, bytes))
     }
+
+    fn write_bounds(&self, lba: u64, buf_len: usize) -> block::Result<(u32, u16)> {
+        let block_size = self.block_size.max(1) as usize;
+        if buf_len == 0 || !buf_len.is_multiple_of(block_size) {
+            return Err(block::Error::InvalidParam);
+        }
+        if buf_len as u64 > SKHYNIX_UAS_FLOW_MAX_TRANSFER_BYTES {
+            return Err(block::Error::InvalidParam);
+        }
+        let blocks = buf_len / block_size;
+        let end = lba
+            .checked_add(blocks as u64)
+            .ok_or(block::Error::OutOfBounds)?;
+        if end > self.block_count || lba > u64::from(u32::MAX) || blocks > u16::MAX as usize {
+            return Err(block::Error::OutOfBounds);
+        }
+        Ok((lba as u32, blocks as u16))
+    }
 }
 
 impl block::BlockDevice for SkhynixUasFlowBlockDevice {
@@ -208,6 +263,10 @@ impl block::BlockDevice for SkhynixUasFlowBlockDevice {
 
     fn max_transfer_bytes(&self) -> u64 {
         SKHYNIX_UAS_FLOW_MAX_TRANSFER_BYTES
+    }
+
+    fn supports_write(&self) -> bool {
+        true
     }
 
     fn read_blocks<'a>(
@@ -244,6 +303,29 @@ impl block::BlockDevice for SkhynixUasFlowBlockDevice {
             }
             dst.copy_from_slice(data.as_slice());
             Ok(())
+        })
+    }
+
+    fn write_blocks<'a>(
+        &'a mut self,
+        lba: u64,
+        buf: &'a [u8],
+    ) -> block::BoxFuture<'a, block::Result<()>> {
+        Box::pin(async move {
+            let (lba, blocks) = self.write_bounds(lba, buf.len())?;
+            SKHYNIX_UAS_FLOW_SERVICE
+                .write_blocks(lba, blocks, buf.to_vec())
+                .await
+                .map_err(flow_error_to_block_error)
+        })
+    }
+
+    fn flush<'a>(&'a mut self) -> block::BoxFuture<'a, block::Result<()>> {
+        Box::pin(async move {
+            SKHYNIX_UAS_FLOW_SERVICE
+                .flush()
+                .await
+                .map_err(flow_error_to_block_error)
         })
     }
 }
@@ -306,7 +388,12 @@ pub(crate) async fn skhynix_uas_flow_service_task(
                     report.reads,
                     report.bytes,
                     report.elapsed_ms,
-                    crate::shell2::cmds::bench::format_speed(crate::shell2::cmds::bench::bps_from_progress(report.bytes, report.elapsed_ms)),
+                    crate::shell2::cmds::bench::format_speed(
+                        crate::shell2::cmds::bench::bps_from_progress(
+                            report.bytes,
+                            report.elapsed_ms
+                        )
+                    ),
                     report.min_read_us,
                     report.max_read_us
                 );
@@ -366,6 +453,64 @@ pub(crate) async fn skhynix_uas_flow_service_task(
                     blocks,
                     result,
                 });
+            }
+            SkhynixUasFlowRequest::Write { lba, blocks, data } => {
+                let data_len = data.len();
+                let result = mass::write_blocks_uas_skhynix(
+                    &mut pipes.command_out,
+                    &mut pipes.status_in,
+                    &mut pipes.data_out,
+                    lba,
+                    blocks,
+                    data.as_slice(),
+                    u32::from(tag),
+                )
+                .await
+                .map_err(map_mass_probe_error);
+
+                state.active_lanes = 0;
+                state.completed = state.completed.saturating_add(1);
+                match result {
+                    Ok(()) => {
+                        state.bytes_out = state.bytes_out.saturating_add(data_len as u64);
+                        state.last_error = None;
+                        state_sender.send(state);
+                        SKHYNIX_UAS_FLOW_REPLY.signal(SkhynixUasFlowReply::Write {
+                            tag,
+                            lba,
+                            blocks,
+                            result: Ok(()),
+                        });
+                    }
+                    Err(err) => {
+                        state.last_error = Some(err);
+                        state_sender.send(state);
+                        SKHYNIX_UAS_FLOW_REPLY.signal(SkhynixUasFlowReply::Write {
+                            tag,
+                            lba,
+                            blocks,
+                            result: Err(err),
+                        });
+                    }
+                }
+            }
+            SkhynixUasFlowRequest::Flush => {
+                let result = mass::synchronize_cache_uas_skhynix(
+                    &mut pipes.command_out,
+                    &mut pipes.status_in,
+                    u32::from(tag),
+                )
+                .await
+                .map_err(map_mass_probe_error);
+
+                state.active_lanes = 0;
+                state.completed = state.completed.saturating_add(1);
+                match result {
+                    Ok(()) => state.last_error = None,
+                    Err(err) => state.last_error = Some(err),
+                }
+                state_sender.send(state);
+                SKHYNIX_UAS_FLOW_REPLY.signal(SkhynixUasFlowReply::Flush { tag, result });
             }
         }
     }
@@ -662,10 +807,7 @@ pub(crate) async fn maybe_start_skhynix_green(
         block_count: probe.block_count.max(1),
     };
 
-    let task = match skhynix_uas_flow_service_task(
-        &SKHYNIX_UAS_FLOW_SERVICE,
-        pipes,
-    ) {
+    let task = match skhynix_uas_flow_service_task(&SKHYNIX_UAS_FLOW_SERVICE, pipes) {
         Ok(task) => task,
         Err(err) => {
             crate::log!(
@@ -689,8 +831,7 @@ pub(crate) async fn maybe_start_skhynix_green(
     );
 
     let desc = block::DeviceDescriptor::new(block::DeviceKind::Unknown)
-        .with_label(String::from("skhynix-uas-flow"))
-        .mark_read_only();
+        .with_label(String::from("skhynix-uas-flow"));
     let handle = block::register_device_deferred_mount(
         desc,
         SkhynixUasFlowBlockDevice {
@@ -699,7 +840,7 @@ pub(crate) async fn maybe_start_skhynix_green(
         },
     );
     crate::log!(
-        "crabusb: skhynix-green {:04X}:{:04X} proof=mass-handoff status=registered disk={} label=skhynix-uas-flow read_only=1 deferred_mount=true\n",
+        "crabusb: skhynix-green {:04X}:{:04X} proof=mass-handoff status=registered disk={} label=skhynix-uas-flow writable=1 deferred_mount=true\n",
         vendor_id,
         product_id,
         handle.id()
