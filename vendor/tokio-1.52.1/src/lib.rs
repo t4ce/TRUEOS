@@ -11,7 +11,7 @@
     unreachable_pub
 )]
 #![cfg_attr(
-    target_os = "zkvm",
+    any(target_os = "trueos", target_os = "zkvm"),
     allow(
         dead_code,
         missing_debug_implementations,
@@ -35,7 +35,7 @@
 #![cfg_attr(docsrs, allow(unused_attributes))]
 #![cfg_attr(loom, allow(dead_code, unreachable_pub))]
 #![cfg_attr(windows, allow(rustdoc::broken_intra_doc_links))]
-#![cfg_attr(target_os = "zkvm", no_std)]
+#![cfg_attr(any(target_os = "trueos", target_os = "zkvm"), no_std)]
 
 //! A runtime for writing reliable network applications without compromising speed.
 //!
@@ -477,23 +477,23 @@ compile_error! {
     "Tokio requires the platform pointer width to be at least 32 bits"
 }
 
-#[cfg(not(target_os = "zkvm"))]
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 extern crate alloc;
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 extern crate alloc;
 
-#[cfg(not(target_os = "zkvm"))]
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 pub mod ffi {
     pub use std::ffi::*;
 }
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod ffi {
     pub use std::ffi::*;
 }
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 include!("trueos_std.rs");
 
 #[cfg(all(
@@ -548,7 +548,7 @@ pub mod net;
 
 mod loom;
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub(crate) mod platform;
 
 cfg_process! {
@@ -673,7 +673,7 @@ pub mod doc;
 #[allow(unused)]
 pub(crate) use self::doc::os;
 
-#[cfg(all(not(all(docsrs, unix)), not(target_os = "zkvm")))]
+#[cfg(all(not(all(docsrs, unix)), not(any(target_os = "trueos", target_os = "zkvm"))))]
 #[allow(unused)]
 pub(crate) use std::os;
 

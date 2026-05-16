@@ -4,9 +4,9 @@ use core::option::Option;
 use core::time::Duration;
 use core::{derive, fmt, ops};
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub(crate) type StdInstant = Duration;
-#[cfg(not(target_os = "zkvm"))]
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 pub(crate) type StdInstant = std::time::Instant;
 
 /// A measurement of a monotonically nondecreasing clock.
@@ -75,12 +75,12 @@ impl Instant {
     /// Returns the amount of time elapsed from another instant to this one, or
     /// zero duration if that instant is later than this one.
     pub fn duration_since(&self, earlier: Instant) -> Duration {
-        #[cfg(target_os = "zkvm")]
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         {
             return self.std.saturating_sub(earlier.std);
         }
 
-        #[cfg(not(target_os = "zkvm"))]
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         {
             self.std.saturating_duration_since(earlier.std)
         }
@@ -104,12 +104,12 @@ impl Instant {
     /// # }
     /// ```
     pub fn checked_duration_since(&self, earlier: Instant) -> Option<Duration> {
-        #[cfg(target_os = "zkvm")]
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         {
             return self.std.checked_sub(earlier.std);
         }
 
-        #[cfg(not(target_os = "zkvm"))]
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         {
             self.std.checked_duration_since(earlier.std)
         }
@@ -133,12 +133,12 @@ impl Instant {
     /// }
     /// ```
     pub fn saturating_duration_since(&self, earlier: Instant) -> Duration {
-        #[cfg(target_os = "zkvm")]
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         {
             return self.std.saturating_sub(earlier.std);
         }
 
-        #[cfg(not(target_os = "zkvm"))]
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         {
             self.std.saturating_duration_since(earlier.std)
         }
@@ -209,12 +209,12 @@ impl ops::Sub for Instant {
     type Output = Duration;
 
     fn sub(self, rhs: Instant) -> Duration {
-        #[cfg(target_os = "zkvm")]
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         {
             return self.std.saturating_sub(rhs.std);
         }
 
-        #[cfg(not(target_os = "zkvm"))]
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         {
             self.std.saturating_duration_since(rhs.std)
         }
@@ -246,12 +246,12 @@ mod variant {
     use super::Instant;
 
     pub(super) fn now() -> Instant {
-        #[cfg(target_os = "zkvm")]
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         {
             return Instant::from_std(crate::time::zkvm::platform_instant_now());
         }
 
-        #[cfg(not(target_os = "zkvm"))]
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         {
             Instant::from_std(std::time::Instant::now())
         }

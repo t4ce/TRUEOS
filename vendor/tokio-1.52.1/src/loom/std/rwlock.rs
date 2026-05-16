@@ -1,4 +1,4 @@
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use core::{
     cell::UnsafeCell,
     fmt,
@@ -6,52 +6,52 @@ use core::{
     sync::atomic::{AtomicIsize, Ordering},
 };
 
-#[cfg(not(target_os = "zkvm"))]
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::sync::{self, RwLockReadGuard, RwLockWriteGuard, TryLockError};
 
 /// Adapter for `std::sync::RwLock` that removes the poisoning aspects
 /// from its api.
-#[cfg(not(target_os = "zkvm"))]
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 #[derive(Debug)]
 pub(crate) struct RwLock<T: ?Sized>(sync::RwLock<T>);
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub(crate) struct RwLock<T: ?Sized> {
     state: AtomicIsize,
     value: UnsafeCell<T>,
 }
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub(crate) struct RwLockReadGuard<'a, T: ?Sized> {
     lock: &'a RwLock<T>,
 }
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub(crate) struct RwLockWriteGuard<'a, T: ?Sized> {
     lock: &'a RwLock<T>,
 }
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 impl<T: ?Sized + fmt::Debug> fmt::Debug for RwLockReadGuard<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(&**self, f)
     }
 }
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 impl<T: ?Sized + fmt::Debug> fmt::Debug for RwLockWriteGuard<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(&**self, f)
     }
 }
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 unsafe impl<T: ?Sized + Send> Send for RwLock<T> {}
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 unsafe impl<T: ?Sized + Send + Sync> Sync for RwLock<T> {}
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 impl<T: ?Sized + fmt::Debug> fmt::Debug for RwLock<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RwLock").finish_non_exhaustive()
@@ -59,7 +59,7 @@ impl<T: ?Sized + fmt::Debug> fmt::Debug for RwLock<T> {
 }
 
 #[allow(dead_code)]
-#[cfg(not(target_os = "zkvm"))]
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 impl<T> RwLock<T> {
     #[inline]
     pub(crate) fn new(t: T) -> Self {
@@ -102,7 +102,7 @@ impl<T> RwLock<T> {
 }
 
 #[allow(dead_code)]
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 impl<T> RwLock<T> {
     #[inline]
     pub(crate) fn new(t: T) -> Self {
@@ -114,7 +114,7 @@ impl<T> RwLock<T> {
 }
 
 #[allow(dead_code)]
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 impl<T: ?Sized> RwLock<T> {
     #[inline]
     pub(crate) fn read(&self) -> RwLockReadGuard<'_, T> {
@@ -167,21 +167,21 @@ impl<T: ?Sized> RwLock<T> {
     }
 }
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 impl<T: ?Sized> Drop for RwLockReadGuard<'_, T> {
     fn drop(&mut self) {
         self.lock.state.fetch_sub(1, Ordering::Release);
     }
 }
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 impl<T: ?Sized> Drop for RwLockWriteGuard<'_, T> {
     fn drop(&mut self) {
         self.lock.state.store(0, Ordering::Release);
     }
 }
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 impl<T: ?Sized> Deref for RwLockReadGuard<'_, T> {
     type Target = T;
 
@@ -190,7 +190,7 @@ impl<T: ?Sized> Deref for RwLockReadGuard<'_, T> {
     }
 }
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 impl<T: ?Sized> Deref for RwLockWriteGuard<'_, T> {
     type Target = T;
 
@@ -199,7 +199,7 @@ impl<T: ?Sized> Deref for RwLockWriteGuard<'_, T> {
     }
 }
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 impl<T: ?Sized> DerefMut for RwLockWriteGuard<'_, T> {
     fn deref_mut(&mut self) -> &mut T {
         unsafe { &mut *self.lock.value.get() }

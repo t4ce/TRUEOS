@@ -221,15 +221,15 @@ pub use self::read_buf::ReadBuf;
 // Re-export some types from `std::io` so that users don't have to deal
 // with conflicts when `use`ing `tokio::io` and `std::io`.
 #[doc(no_inline)]
-#[cfg(not(target_os = "zkvm"))]
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 pub use std::io::{Error, ErrorKind, Result, SeekFrom};
 #[doc(no_inline)]
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub use trueos_io::{
     BufRead, Cursor, Error, ErrorKind, IoSlice, IoSliceMut, Read, Result, Seek, SeekFrom, Write,
 };
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod prelude {
     pub use trueos_io::{BufRead, Read, Seek, Write};
 }

@@ -228,10 +228,10 @@
 //! [`Child`]: crate::process::Child
 
 #[path = "unix/mod.rs"]
-#[cfg(all(unix, not(target_os = "zkvm")))]
+#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
 mod imp;
 
-#[cfg(all(unix, not(target_os = "zkvm")))]
+#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
 pub(crate) mod unix {
     pub(crate) use super::imp::*;
 }
@@ -241,7 +241,7 @@ pub(crate) mod unix {
 mod imp;
 
 #[path = "zkvm.rs"]
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod imp;
 
 mod kill;
@@ -250,9 +250,9 @@ use crate::io::{AsyncRead, AsyncWrite, ReadBuf};
 use crate::process::kill::Kill;
 use crate::runtime::prelude::*;
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub use self::imp::{ExitStatus, Output, Stdio};
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use self::imp::{Child as StdChild, Command as StdCommand};
 use alloc::vec::Vec;
 use core::future::Future;
@@ -261,15 +261,15 @@ use core::task::{ready, Context, Poll};
 use std::ffi::OsStr;
 use std::io;
 use std::path::Path;
-#[cfg(not(target_os = "zkvm"))]
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::process::{Child as StdChild, Command as StdCommand, ExitStatus, Output, Stdio};
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub fn abort() -> ! {
     core::panic!("abort")
 }
 
-#[cfg(all(unix, not(target_os = "zkvm")))]
+#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
 use std::os::unix::process::CommandExt;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -698,8 +698,8 @@ impl Command {
     /// Sets the child process's user ID. This translates to a
     /// `setuid` call in the child process. Failure in the `setuid`
     /// call will cause the spawn to fail.
-    #[cfg(all(unix, not(target_os = "zkvm")))]
-    #[cfg_attr(docsrs, doc(cfg(all(unix, not(target_os = "zkvm")))))]
+    #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
+    #[cfg_attr(docsrs, doc(cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))))]
     pub fn uid(&mut self, id: u32) -> &mut Command {
         #[cfg(target_os = "nto")]
         let id = id as i32;
@@ -709,8 +709,8 @@ impl Command {
 
     /// Similar to `uid` but sets the group ID of the child process. This has
     /// the same semantics as the `uid` field.
-    #[cfg(all(unix, not(target_os = "zkvm")))]
-    #[cfg_attr(docsrs, doc(cfg(all(unix, not(target_os = "zkvm")))))]
+    #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
+    #[cfg_attr(docsrs, doc(cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))))]
     pub fn gid(&mut self, id: u32) -> &mut Command {
         #[cfg(target_os = "nto")]
         let id = id as i32;
@@ -722,8 +722,8 @@ impl Command {
     ///
     /// Set the first process argument, `argv[0]`, to something other than the
     /// default executable path.
-    #[cfg(all(unix, not(target_os = "zkvm")))]
-    #[cfg_attr(docsrs, doc(cfg(all(unix, not(target_os = "zkvm")))))]
+    #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
+    #[cfg_attr(docsrs, doc(cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))))]
     pub fn arg0<S>(&mut self, arg: S) -> &mut Command
     where
         S: AsRef<OsStr>,
@@ -761,8 +761,8 @@ impl Command {
     /// When this closure is run, aspects such as the stdio file descriptors and
     /// working directory have successfully been changed, so output to these
     /// locations may not appear where intended.
-    #[cfg(all(unix, not(target_os = "zkvm")))]
-    #[cfg_attr(docsrs, doc(cfg(all(unix, not(target_os = "zkvm")))))]
+    #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
+    #[cfg_attr(docsrs, doc(cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))))]
     pub unsafe fn pre_exec<F>(&mut self, f: F) -> &mut Command
     where
         F: FnMut() -> io::Result<()> + Send + Sync + 'static,
@@ -802,8 +802,8 @@ impl Command {
     /// ```
     ///
     /// [signal handler]: crate::signal
-    #[cfg(all(unix, not(target_os = "zkvm")))]
-    #[cfg_attr(docsrs, doc(cfg(all(unix, not(target_os = "zkvm")))))]
+    #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
+    #[cfg_attr(docsrs, doc(cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))))]
     pub fn process_group(&mut self, pgroup: i32) -> &mut Command {
         self.std.process_group(pgroup);
         self
@@ -1526,14 +1526,14 @@ impl ChildStdin {
     /// This method may fail if an error is encountered when setting the pipe to
     /// non-blocking mode, or when registering the pipe with the runtime's IO
     /// driver.
-    #[cfg(not(target_os = "zkvm"))]
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     pub fn from_std(inner: std::process::ChildStdin) -> io::Result<Self> {
         Ok(Self {
             inner: imp::stdio(inner)?,
         })
     }
 
-    #[cfg(target_os = "zkvm")]
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
     pub fn from_std(inner: imp::ChildStdio) -> io::Result<Self> {
         Ok(Self { inner })
     }
@@ -1547,14 +1547,14 @@ impl ChildStdout {
     /// This method may fail if an error is encountered when setting the pipe to
     /// non-blocking mode, or when registering the pipe with the runtime's IO
     /// driver.
-    #[cfg(not(target_os = "zkvm"))]
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     pub fn from_std(inner: std::process::ChildStdout) -> io::Result<Self> {
         Ok(Self {
             inner: imp::stdio(inner)?,
         })
     }
 
-    #[cfg(target_os = "zkvm")]
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
     pub fn from_std(inner: imp::ChildStdio) -> io::Result<Self> {
         Ok(Self { inner })
     }
@@ -1568,14 +1568,14 @@ impl ChildStderr {
     /// This method may fail if an error is encountered when setting the pipe to
     /// non-blocking mode, or when registering the pipe with the runtime's IO
     /// driver.
-    #[cfg(not(target_os = "zkvm"))]
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     pub fn from_std(inner: std::process::ChildStderr) -> io::Result<Self> {
         Ok(Self {
             inner: imp::stdio(inner)?,
         })
     }
 
-    #[cfg(target_os = "zkvm")]
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
     pub fn from_std(inner: imp::ChildStdio) -> io::Result<Self> {
         Ok(Self { inner })
     }
@@ -1655,8 +1655,8 @@ impl TryInto<Stdio> for ChildStderr {
     }
 }
 
-#[cfg(all(unix, not(target_os = "zkvm")))]
-#[cfg_attr(docsrs, doc(cfg(all(unix, not(target_os = "zkvm")))))]
+#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
+#[cfg_attr(docsrs, doc(cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))))]
 mod sys {
     use std::{
         io,
