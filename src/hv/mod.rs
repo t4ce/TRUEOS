@@ -48,7 +48,6 @@ const VMX_PAGE_SIZE: usize = 4096;
 const HV_LOG_CAP: usize = crate::allcaps::hv::LOG_CAP;
 const HV_LOG_LINE: usize = crate::allcaps::hv::LOG_LINE_BYTES;
 pub const TRUEOS_VM_ID_LIMIT: usize = crate::allcaps::hv::VM_ID_LIMIT;
-const TRUEOS_VM_TASK_POOL_SIZE: usize = crate::allcaps::hv::VM_TASK_POOL_SIZE;
 const TRUEOS_VM_CPU_SLOT_LIMIT: usize = crate::allcaps::hv::VM_CPU_SLOT_LIMIT;
 
 struct TrueosVmId {
@@ -1351,7 +1350,7 @@ async fn vmx_launch_once_with_ept(
                 let mut regs = crate::hv::vmx::guest_registers();
                 let leaf = regs.rax as u32;
                 let subleaf = regs.rcx as u32;
-                let out = unsafe { __cpuid_count(leaf, subleaf) };
+                let out = __cpuid_count(leaf, subleaf);
                 regs.rax = out.eax as u64;
                 regs.rbx = guest_cpuid_ebx(leaf, subleaf, out.ebx) as u64;
                 regs.rcx = out.ecx as u64;

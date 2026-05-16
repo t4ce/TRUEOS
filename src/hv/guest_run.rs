@@ -86,7 +86,7 @@ pub extern "C" fn trueos_hv_guest_shell_run() -> ! {
     let executor: &'static mut RawExecutor =
         Box::leak(Box::new(RawExecutor::new(core::ptr::null_mut())));
 
-    let spawner = unsafe { executor.spawner() };
+    let spawner = executor.spawner();
 
     match crate::shell2::task(spawner, &VMCALL_SHELL) {
         Ok(token) => {

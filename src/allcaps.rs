@@ -49,7 +49,6 @@ pub mod hv {
     pub const LOG_LINE_BYTES: usize = 200;
 
     pub const VM_ID_LIMIT: usize = 32;
-    pub const VM_TASK_POOL_SIZE: usize = VM_ID_LIMIT;
     pub const VM_CPU_SLOT_LIMIT: usize = 256;
 
     pub const GUEST_STACK_MIN_MIB: usize = 8;
@@ -88,13 +87,6 @@ pub mod net {
     pub const TRUEOS_SWARM_PEER_RX_BUF_BYTES: usize = 1024;
 }
 
-pub mod mail {
-    pub const WEBMAIL_HTTP_BODY_MAX: usize = 64 * 1024;
-    pub const WEBMAIL_LIST_LIMIT: usize = 10;
-    pub const WEBMAIL_POP3_MAX_MESSAGE_BYTES: usize = 5 * 1024 * 1024;
-    pub const WEBMAIL_INBOX_REFRESH_INTERVAL_SECS: u64 = 30;
-}
-
 pub mod storage {
     pub const NVME_ADMIN_TIMEOUT_MS: u64 = 1_500;
     pub const NVME_IO_TIMEOUT_MS: u64 = 5_000;
@@ -120,18 +112,10 @@ pub mod storage {
     pub const USB_MASS_RUNTIME_WAIT_DELAY_MS: u64 = 10;
     pub const USB_MASS_MIN_IO_BYTES: usize = 8 * 1024;
     pub const USB_MASS_MAX_IO_BYTES: usize = 1024 * 1024;
-    pub const USB_MASS_UAS_READ_WINDOW_MAX_INFLIGHT: usize = 8;
-    pub const USB_MASS_UAS_READ_WINDOW_MAX_TRANSFER_BYTES: usize = 8 * 1024 * 1024;
-    pub const USB_MASS_UAS_SKHYNIX_SEQUENCE_WAIT_LIMIT: u16 = 5_000;
-    pub const USB_MASS_UAS_SKHYNIX_SEQUENCE_WAIT_DELAY_MS: u64 = 1;
-    pub const USB_MASS_UAS_SKHYNIX_SEQUENCE_WAIT_LOG_MS: u64 = 5_000;
-    pub const USB_MASS_UAS_SKHYNIX_SEQUENCE_SWITCH_GRACE_MS: u64 = 3;
     pub const USB_MASS_IO_GROW_SUCCESS_TARGET: u16 = 16;
     pub const USB_MASS_IO_GROW_SUCCESS_TARGET_FAST_BOT: u16 = 4;
     pub const USB_MASS_FAST_BOT_INITIAL_IO_BYTES: usize = 1024 * 1024;
     pub const USB_MASS_FAST_BOT_WRITE_MAX_IO_BYTES: usize = 128 * 1024;
-    pub const USB_MASS_UAS_SKHYNIX_WRITE_MAX_IO_BYTES: usize = 1024 * 1024;
-    pub const USB_MASS_SKHYNIX_USE_UAS: bool = true;
     pub const USB_MASS_UAS_SKHYNIX_ROUTE_PROBE_WRITE_ENABLED: bool = false;
     pub const USB_MASS_UAS_SKHYNIX_ROUTE_PROBE_WRITE_X2: bool = false;
     pub const USB_MASS_UAS_SKHYNIX_ROUTE_PROBE_CHUNK_BYTES: usize = 1024 * 1024;
@@ -144,10 +128,4 @@ pub mod input {
     pub const HID_MOUSE_RING_CAP: usize = 2048;
     pub const HID_KEYBOARD_RING_CAP: usize = 512;
     pub const HID_TABLET_RING_CAP: usize = 1024;
-}
-
-pub mod ui_shell {
-    pub const SHELL_MAX_LINE: usize = 192;
-    pub const SHELL_SECTION_STATUS_HOLD_MS: u64 = 1000;
-    pub const SHELL_SECTION_RAINBOW_FRAME_MS: u64 = 120;
 }
