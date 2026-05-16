@@ -5,6 +5,7 @@ use core::net::{Ipv4Addr, Ipv6Addr};
 use core::str::SplitWhitespace;
 use core::sync::atomic::{AtomicU64, Ordering};
 
+use crab_usb::{EndpointBulkIn, EndpointBulkOut};
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use v::vnet as api;
@@ -22,6 +23,10 @@ const INTERNAL_NETBENCH_MAX_FLOWS: usize = 4;
 const CPUBENCH_PHASE_MS: u64 = 10_000;
 const CPUBENCH_STOP_GRACE_MS: u64 = 2_000;
 const PROGRESS_LOG_MS: u64 = 3000;
+const SKHYNIX_UAS_FLOW_BENCH_MAX_LANES: u8 = 4;
+const SKHYNIX_UAS_FLOW_BENCH_DEFAULT_LANES: u8 = 4;
+const SKHYNIX_UAS_FLOW_BENCH_DEFAULT_ROUNDS: u16 = 4;
+const SKHYNIX_UAS_FLOW_BENCH_DEFAULT_BLOCKS_PER_READ: u16 = 8;
 const BENCH_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
 const BENCH_MENU_ROWS: [[&str; 2]; 4] = [
     ["cpu", "Run CPU-only compute benchmark"],
@@ -41,6 +46,113 @@ struct BenchSessionState {
 
 static BENCH_SESSIONS: spin::Mutex<Vec<BenchSessionState>> = spin::Mutex::new(Vec::new());
 static NEXT_BENCH_SESSION_ID: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SkhynixUasFlowBenchConfig {
+    pub block_size: u32,
+    pub block_count: u64,
+    pub lanes: u8,
+    pub rounds_per_lane: u16,
+    pub blocks_per_read: u16,
+}
+
+impl SkhynixUasFlowBenchConfig {
+    pub(crate) fn boot_default(block_size: u32, block_count: u64) -> Self {
+        Self {
+            block_size,
+            block_count,
+            lanes: SKHYNIX_UAS_FLOW_BENCH_DEFAULT_LANES,
+            rounds_per_lane: SKHYNIX_UAS_FLOW_BENCH_DEFAULT_ROUNDS,
+            blocks_per_read: SKHYNIX_UAS_FLOW_BENCH_DEFAULT_BLOCKS_PER_READ,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SkhynixUasFlowBenchReport {
+    pub lanes: u8,
+    pub reads: u32,
+    pub bytes: u64,
+    pub elapsed_ms: u64,
+    pub min_read_us: u64,
+    pub max_read_us: u64,
+}
+
+fn ticks_to_us(ticks: u64) -> u64 {
+    let hz = embassy_time_driver::TICK_HZ.max(1);
+    ticks.saturating_mul(1_000_000) / hz
+}
+
+fn next_uas_bench_tag(next_tag: &mut u32) -> u32 {
+    let tag = (*next_tag).max(1);
+    *next_tag = next_tag.wrapping_add(1).max(1);
+    tag
+}
+
+pub(crate) async fn skhynix_uas_flow_read_bench(
+    command_out: &mut EndpointBulkOut,
+    status_in: &mut EndpointBulkIn,
+    data_in: &mut EndpointBulkIn,
+    next_tag: &mut u32,
+    config: SkhynixUasFlowBenchConfig,
+) -> Result<SkhynixUasFlowBenchReport, crate::usb2::mass::MassProbeError> {
+    let block_size = config.block_size.max(1) as usize;
+    let blocks_per_read = config.blocks_per_read.max(1);
+    let bytes_per_read = block_size
+        .checked_mul(blocks_per_read as usize)
+        .ok_or(crate::usb2::mass::MassProbeError::ShortData)?;
+    let lanes = config
+        .lanes
+        .clamp(1, SKHYNIX_UAS_FLOW_BENCH_MAX_LANES);
+    let rounds = config.rounds_per_lane.max(1);
+    let readable_blocks = config.block_count.min(u64::from(u32::MAX) + 1);
+    let max_start_lba = readable_blocks.saturating_sub(u64::from(blocks_per_read));
+    let stride = u64::from(blocks_per_read);
+    let mut buf = alloc::vec![0u8; bytes_per_read];
+    let start_tick = embassy_time_driver::now();
+    let mut reads = 0u32;
+    let mut bytes = 0u64;
+    let mut min_read_us = u64::MAX;
+    let mut max_read_us = 0u64;
+
+    for round in 0..rounds {
+        for lane in 0..lanes {
+            let logical = (u64::from(round) * u64::from(lanes) + u64::from(lane)) * stride;
+            let lba = if max_start_lba == 0 {
+                0
+            } else {
+                logical % (max_start_lba + 1)
+            };
+            let tag = next_uas_bench_tag(next_tag);
+            let read_start = embassy_time_driver::now();
+            crate::usb2::mass::read_blocks_uas_skhynix(
+                command_out,
+                status_in,
+                data_in,
+                lba as u32,
+                blocks_per_read,
+                buf.as_mut_slice(),
+                tag,
+            )
+            .await?;
+            let read_us = ticks_to_us(embassy_time_driver::now().saturating_sub(read_start));
+            min_read_us = min_read_us.min(read_us);
+            max_read_us = max_read_us.max(read_us);
+            reads = reads.saturating_add(1);
+            bytes = bytes.saturating_add(bytes_per_read as u64);
+        }
+    }
+
+    let elapsed_ms = elapsed_ms_since(start_tick).max(1);
+    Ok(SkhynixUasFlowBenchReport {
+        lanes,
+        reads,
+        bytes,
+        elapsed_ms,
+        min_read_us: if min_read_us == u64::MAX { 0 } else { min_read_us },
+        max_read_us,
+    })
+}
 
 #[derive(Clone, Copy)]
 struct CpuBenchPhase {
