@@ -34,8 +34,23 @@ pub type __s16 = c_short;
 pub type __u32 = c_uint;
 pub type __s32 = c_int;
 
+#[cfg(target_os = "trueos")]
+pub const NLMSG_OVERRUN: c_int = 0x4;
+#[cfg(target_os = "trueos")]
+pub const NLMSG_MIN_TYPE: c_int = 0x10;
+
 // linux/sctp.h
 pub type sctp_assoc_t = __s32;
+
+#[cfg(target_os = "trueos")]
+extern "C" {
+    pub fn pthread_getname_np(
+        thread: crate::pthread_t,
+        name: *mut c_char,
+        len: size_t,
+    ) -> c_int;
+    pub fn pthread_setname_np(thread: crate::pthread_t, name: *const c_char) -> c_int;
+}
 
 pub type eventfd_t = u64;
 
@@ -4426,7 +4441,7 @@ cfg_if! {
     } else if #[cfg(any(target_env = "musl", target_env = "ohos"))] {
         mod musl;
         pub use self::musl::*;
-    } else if #[cfg(target_env = "gnu")] {
+    } else if #[cfg(any(target_env = "gnu", target_os = "trueos"))] {
         mod gnu;
         pub use self::gnu::*;
     }
