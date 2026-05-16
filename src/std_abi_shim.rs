@@ -380,6 +380,10 @@ fn copy_to_abi_out(ptr: *mut u8, bytes: &[u8]) -> bool {
     true
 }
 
+fn copy_usize_to_abi_out(ptr: *mut usize, value: usize) -> bool {
+    copy_to_abi_out(ptr.cast::<u8>(), &value.to_ne_bytes())
+}
+
 unsafe fn freeaddrinfo_chain(mut res: *mut TrueosAddrInfo) {
     while !res.is_null() {
         let next = unsafe { (*res).ai_next };
@@ -816,7 +820,10 @@ pub unsafe extern "C" fn getaddrinfo(
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
         return TRUEOS_EAI_SYSTEM;
     }
-    unsafe { *res = ptr::null_mut() };
+    if !copy_usize_to_abi_out(res.cast::<usize>(), 0) {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return TRUEOS_EAI_SYSTEM;
+    }
 
     let Some(host) = (unsafe { cstr_arg(node) }) else {
         return TRUEOS_EAI_NONAME;
@@ -885,7 +892,12 @@ pub unsafe extern "C" fn getaddrinfo(
             ai_canonname: ptr::null_mut(),
             ai_next: ptr::null_mut(),
         };
-        *res = info_ptr.cast::<c_void>();
+    }
+    if !copy_usize_to_abi_out(res.cast::<usize>(), info_ptr.cast::<c_void>() as usize) {
+        c_free_ptr(addr_ptr.cast::<c_void>());
+        c_free_ptr(info_ptr.cast::<c_void>());
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return TRUEOS_EAI_SYSTEM;
     }
     0
 }

@@ -835,6 +835,15 @@ impl TcpSocket {
     /// }
     /// ```
     pub async fn connect(self, addr: SocketAddr) -> io::Result<TcpStream> {
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        {
+            let _ = self;
+            let mio = mio::net::TcpStream::connect(addr)?;
+            return TcpStream::connect_mio(mio).await;
+        }
+
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+        {
         if let Err(err) = self.inner.connect(&addr.into()) {
             #[cfg(not(windows))]
             if err.raw_os_error() != Some(libc::EINPROGRESS) {
@@ -862,6 +871,7 @@ impl TcpSocket {
         };
 
         TcpStream::connect_mio(mio).await
+        }
     }
 
     /// Converts the socket into a `TcpListener`.
