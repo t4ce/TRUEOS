@@ -17,19 +17,19 @@
 //! The `HttpDate` (8 bytes) is smaller than `SystemTime` (16 bytes) and
 //! using the display impl avoids a temporary allocation.
 #![forbid(unsafe_code)]
-#![cfg_attr(any(target_os = "trueos", target_os = "zkvm"), no_std)]
+#![cfg_attr(target_os = "zkvm", no_std)]
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 extern crate alloc;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 extern crate self as std;
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 use alloc::{format, string::String};
 use core::fmt::{Display, Formatter};
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+#[cfg(not(target_os = "zkvm"))]
 use std::{format, string::String};
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+#[cfg(not(target_os = "zkvm"))]
 use std::io;
 use std::time::SystemTime;
 
@@ -55,22 +55,22 @@ impl From<Error> for io::Error {
     }
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 pub mod cmp {
     pub use core::cmp::*;
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 pub mod error {
     pub use core::error::*;
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 pub mod fmt {
     pub use core::fmt::*;
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 pub mod io {
     use core::fmt;
 
@@ -103,12 +103,12 @@ pub mod io {
     impl core::error::Error for Error {}
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 pub mod str {
     pub use core::str::*;
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 pub mod time {
     pub use core::time::Duration;
 
