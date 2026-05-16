@@ -6,7 +6,7 @@ use alloc::{
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::time::Duration;
 use trueos_io as io;
-#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
+#[cfg(all(unix, not(target_os = "zkvm")))]
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
 use spin::Mutex;
 
@@ -155,7 +155,7 @@ impl Selector {
         !events.is_empty()
     }
 
-    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    #[cfg(target_os = "zkvm")]
     fn drain_socket_ready(&self, events: &mut Events) -> bool {
         let remaining = events.capacity().saturating_sub(events.len());
         if remaining == 0 {
@@ -177,13 +177,13 @@ impl Selector {
         !events.is_empty()
     }
 
-    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+    #[cfg(not(target_os = "zkvm"))]
     fn drain_socket_ready(&self, events: &mut Events) -> bool {
         !events.is_empty()
     }
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 impl Ready {
     fn from_zkvm_bits(bits: u8) -> Self {
         Self {
@@ -197,7 +197,7 @@ impl Ready {
     }
 }
 
-#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
+#[cfg(all(unix, not(target_os = "zkvm")))]
 cfg_os_ext! {
     impl Selector {
         pub fn register(&self, _: RawFd, _: Token, _: Interest) -> io::Result<()> {
@@ -234,7 +234,7 @@ cfg_any_os_ext! {
 }
 
 cfg_io_source! {
-    #[cfg(any(debug_assertions, any(target_os = "trueos", target_os = "zkvm")))]
+    #[cfg(any(debug_assertions, target_os = "zkvm"))]
     impl Selector {
         pub fn id(&self) -> usize {
             self.id
@@ -242,14 +242,14 @@ cfg_io_source! {
     }
 }
 
-#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
+#[cfg(all(unix, not(target_os = "zkvm")))]
 impl AsFd for Selector {
     fn as_fd(&self) -> BorrowedFd<'_> {
         os_required!()
     }
 }
 
-#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
+#[cfg(all(unix, not(target_os = "zkvm")))]
 impl AsRawFd for Selector {
     fn as_raw_fd(&self) -> RawFd {
         os_required!()

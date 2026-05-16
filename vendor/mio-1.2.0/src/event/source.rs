@@ -1,7 +1,7 @@
 use crate::{Interest, Registry, Token};
 
 use std::io;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 use alloc::boxed::Box;
 
 /// An event source that may be registered with [`Registry`].
