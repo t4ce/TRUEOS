@@ -11,8 +11,10 @@ use crate::phys::{self, HeapArena};
 pub const FALLBACK_HEAP_SIZE: usize = 256 * 1024;
 pub const HV_GUEST_HEAP_FALLBACK_SIZE: usize = 8 * 1024 * 1024;
 const HV_GUEST_HEAP_ALIGN: usize = 2 * 1024 * 1024;
+pub const HV_GUEST_HEAP_MIN_ARENA_SIZE: usize = 16 * 1024 * 1024;
+pub const HV_GUEST_HEAP_MAX_ARENA_SIZE: usize = 512 * 1024 * 1024;
 const HV_GUEST_HEAP_CANDIDATES: [usize; 4] = [
-    512 * 1024 * 1024,
+    HV_GUEST_HEAP_MAX_ARENA_SIZE,
     256 * 1024 * 1024,
     128 * 1024 * 1024,
     64 * 1024 * 1024,
@@ -682,6 +684,52 @@ pub fn ensure_hv_guest_heap_ready(vm_id: u8) -> bool {
         guard.fallback_len / 1024
     );
     HV_GUEST_HEAP_READY_MASK.fetch_or(ready_bit, Ordering::AcqRel);
+    true
+}
+
+fn round_hv_guest_heap_request(size: usize) -> usize {
+    let clamped = size
+        .max(HV_GUEST_HEAP_MIN_ARENA_SIZE)
+        .min(HV_GUEST_HEAP_MAX_ARENA_SIZE);
+    clamped.next_multiple_of(HV_GUEST_HEAP_ALIGN)
+}
+
+pub fn prepare_hv_guest_heap_for_vm(vm_id: u8, requested_size: usize) -> bool {
+    init_fallback_regions();
+    if (vm_id as usize) >= crate::allcaps::hv::VM_ID_LIMIT {
+        return false;
+    }
+
+    let requested_size = round_hv_guest_heap_request(requested_size);
+    let ready_bit = 1u64 << vm_id;
+    let mut guard = HV_GUEST_ALLOCATORS[vm_id as usize].lock();
+    if guard.initialized {
+        return guard.heap_len >= requested_size || guard.heap_source == HeapSourceKind::Fallback;
+    }
+    if guard.heap_len != 0 {
+        HV_GUEST_HEAP_READY_MASK.fetch_or(ready_bit, Ordering::AcqRel);
+        return guard.heap_len >= requested_size;
+    }
+
+    let Some(arena) = phys::reserve_heap_arena(requested_size, HV_GUEST_HEAP_ALIGN) else {
+        crate::log!(
+            "heap: hv guest vm{} requested arena unavailable size={} MiB\n",
+            vm_id,
+            requested_size / (1024 * 1024)
+        );
+        drop(guard);
+        return ensure_hv_guest_heap_ready(vm_id);
+    };
+    guard.install_heap(arena.virt_start, arena.phys_start as usize, arena.length);
+    HV_GUEST_HEAP_READY_MASK.fetch_or(ready_bit, Ordering::AcqRel);
+    crate::log!(
+        "heap: hv guest vm{} arena virt=0x{:X} phys=0x{:X} size={} MiB requested={} MiB\n",
+        vm_id,
+        arena.virt_start,
+        arena.phys_start,
+        arena.length / (1024 * 1024),
+        requested_size / (1024 * 1024)
+    );
     true
 }
 

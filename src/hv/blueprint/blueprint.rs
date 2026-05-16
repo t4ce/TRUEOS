@@ -42,6 +42,13 @@ pub(crate) struct ElfImport<'a> {
     pub(crate) resolved_addr: Option<usize>,
 }
 
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct ElfAllocStats {
+    pub(crate) sections: usize,
+    pub(crate) alloc_sections: usize,
+    pub(crate) alloc_bytes: usize,
+}
+
 #[derive(Copy, Clone)]
 struct ElfSection {
     section_type: u32,
@@ -574,12 +581,7 @@ fn best_entry_symbol<'a>(
             continue;
         }
         if name == "main" {
-            return Ok(Some((
-                "exact",
-                String::from(name),
-                sym.section_index,
-                sym.value,
-            )));
+            return Ok(Some(("exact", String::from(name), sym.section_index, sym.value)));
         }
         if looks_like_rust_main_symbol(name) {
             let prefer = match &rust_main {
@@ -953,17 +955,30 @@ pub(crate) fn elf_type_name(bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
-pub(crate) fn elf_rel_debug_summary(bytes: &[u8], entry_hint: u64) -> Result<String, String> {
+pub(crate) fn elf_alloc_stats(bytes: &[u8]) -> Result<ElfAllocStats, String> {
     let sections = parse_sections(bytes).map_err(String::from)?;
-    let mut alloc_sections = 0usize;
-    let mut alloc_bytes = 0usize;
+    Ok(elf_alloc_stats_from_sections(sections.as_slice()))
+}
+
+fn elf_alloc_stats_from_sections(sections: &[ElfSection]) -> ElfAllocStats {
+    let mut stats = ElfAllocStats {
+        sections: sections.len(),
+        alloc_sections: 0,
+        alloc_bytes: 0,
+    };
     for section in sections.iter() {
         if section.flags & SHF_ALLOC == 0 {
             continue;
         }
-        alloc_sections += 1;
-        alloc_bytes = alloc_bytes.saturating_add(section.size);
+        stats.alloc_sections += 1;
+        stats.alloc_bytes = stats.alloc_bytes.saturating_add(section.size);
     }
+    stats
+}
+
+pub(crate) fn elf_rel_debug_summary(bytes: &[u8], entry_hint: u64) -> Result<String, String> {
+    let sections = parse_sections(bytes).map_err(String::from)?;
+    let stats = elf_alloc_stats_from_sections(sections.as_slice());
 
     let entry_symbol = match find_symtab(sections.as_slice()) {
         Ok(symtab_index) => match best_entry_symbol(bytes, sections.as_slice(), symtab_index) {
@@ -982,9 +997,9 @@ pub(crate) fn elf_rel_debug_summary(bytes: &[u8], entry_hint: u64) -> Result<Str
 
     Ok(alloc::format!(
         "ELF diag sections={} alloc_sections={} alloc_bytes={} entry_hint=sec:{}+0x{:x} {}",
-        sections.len(),
-        alloc_sections,
-        alloc_bytes,
+        stats.sections,
+        stats.alloc_sections,
+        stats.alloc_bytes,
         entry_hint_section(entry_hint),
         entry_hint_offset(entry_hint),
         entry_symbol
@@ -1218,21 +1233,25 @@ fn resolve_std_abi_import(name: &str) -> Option<usize> {
         "pthread_condattr_destroy" => {
             Some(crate::std_abi_shim::pthread_condattr_destroy as *const () as usize)
         }
-        "pthread_cond_destroy" => Some(crate::std_abi_shim::pthread_cond_destroy as *const () as usize),
+        "pthread_cond_destroy" => {
+            Some(crate::std_abi_shim::pthread_cond_destroy as *const () as usize)
+        }
         "pthread_cond_wait" => Some(crate::std_abi_shim::pthread_cond_wait as *const () as usize),
         "pthread_cond_timedwait" => {
             Some(crate::std_abi_shim::pthread_cond_timedwait as *const () as usize)
         }
-        "pthread_cond_signal" => Some(crate::std_abi_shim::pthread_cond_signal as *const () as usize),
+        "pthread_cond_signal" => {
+            Some(crate::std_abi_shim::pthread_cond_signal as *const () as usize)
+        }
         "pthread_cond_broadcast" => {
             Some(crate::std_abi_shim::pthread_cond_broadcast as *const () as usize)
         }
         "trueos_platform_monotonic_nanos" => {
             Some(crate::t::platform::trueos_platform_monotonic_nanos as *const () as usize)
         }
-        "trueos_tokio_spawn_blocking_job" => {
-            Some(crate::t::trueos_tokio_worker::trueos_tokio_spawn_blocking_job as *const () as usize)
-        }
+        "trueos_tokio_spawn_blocking_job" => Some(
+            crate::t::trueos_tokio_worker::trueos_tokio_spawn_blocking_job as *const () as usize,
+        ),
         "trueos_time_monotonic_nanos" => {
             Some(crate::std_abi_shim::trueos_time_monotonic_nanos as *const () as usize)
         }
@@ -1242,12 +1261,12 @@ fn resolve_std_abi_import(name: &str) -> Option<usize> {
         "trueos_time_unix_seconds" => {
             Some(crate::std_abi_shim::trueos_time_unix_seconds as *const () as usize)
         }
-        "trueos_tokio_platform_log_semantic_gap" => {
-            Some(crate::t::tokio_platform::trueos_tokio_platform_log_semantic_gap as *const () as usize)
-        }
-        "trueos_tokio_platform_monotonic_nanos" => {
-            Some(crate::t::tokio_platform::trueos_tokio_platform_monotonic_nanos as *const () as usize)
-        }
+        "trueos_tokio_platform_log_semantic_gap" => Some(
+            crate::t::tokio_platform::trueos_tokio_platform_log_semantic_gap as *const () as usize,
+        ),
+        "trueos_tokio_platform_monotonic_nanos" => Some(
+            crate::t::tokio_platform::trueos_tokio_platform_monotonic_nanos as *const () as usize,
+        ),
         "trueos_tokio_platform_poll_once" => {
             Some(crate::t::tokio_platform::trueos_tokio_platform_poll_once as *const () as usize)
         }

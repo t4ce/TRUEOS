@@ -17,6 +17,7 @@ use crate::shell2::shell2_cmd::ParseOutcome;
 
 const TABLE_HEADERS: &[&str; 3] = &["id", "module", "source"];
 const BLUEPRINT_READINESS_TIMEOUT: EmbassyDuration = EmbassyDuration::from_secs(30);
+const MIB: usize = 1024 * 1024;
 
 use alloc::collections::VecDeque;
 
@@ -29,6 +30,40 @@ struct AppVmLaunchRequest {
     app_args: Vec<String>,
     target: MatrixTarget,
     preflight_complete: bool,
+}
+
+#[derive(Copy, Clone)]
+enum BlueprintMemoryClass {
+    TinyUi,
+    Ui,
+    TokioRuntime,
+    NetworkClient,
+    HeavyGraphics,
+    Unknown,
+}
+
+impl BlueprintMemoryClass {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::TinyUi => "tiny-ui",
+            Self::Ui => "ui",
+            Self::TokioRuntime => "tokio-runtime",
+            Self::NetworkClient => "network-client",
+            Self::HeavyGraphics => "heavy-graphics",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+struct BlueprintVmMemoryProfile {
+    class: BlueprintMemoryClass,
+    heap_lower_mib: usize,
+    heap_recommended_mib: usize,
+    heap_upper_mib: usize,
+    stack_lower_mib: usize,
+    stack_recommended_mib: usize,
+    stack_upper_mib: usize,
 }
 
 #[derive(Clone)]
@@ -250,6 +285,160 @@ async fn execute_blueprint(spawner: &Spawner, request: &AppVmLaunchRequest, log:
     start_blueprint_launch(spawner, request, log);
 }
 
+fn ceil_mib(bytes: usize) -> usize {
+    bytes.saturating_add(MIB - 1) / MIB
+}
+
+fn clamp_mib(value: usize, lower: usize, upper: usize) -> usize {
+    value.max(lower).min(upper)
+}
+
+fn round_pow2_mib(value: usize) -> usize {
+    value.max(1).next_power_of_two()
+}
+
+fn import_name_has(imports: &[crate::hv::blueprint::ElfImport<'_>], needle: &str) -> bool {
+    imports.iter().any(|import| import.name.contains(needle))
+}
+
+fn archive_has(archive: &str, needle: &str) -> bool {
+    archive.contains(needle)
+}
+
+fn classify_blueprint_memory(
+    archive: &str,
+    raw_payload_len: usize,
+    stats: crate::hv::blueprint::ElfAllocStats,
+    imports: &[crate::hv::blueprint::ElfImport<'_>],
+) -> BlueprintMemoryClass {
+    let network_signal = archive_has(archive, "weather")
+        || archive_has(archive, "currency")
+        || archive_has(archive, "reqwest")
+        || archive_has(archive, "http")
+        || archive_has(archive, "https")
+        || import_name_has(imports, "trueos_mio_")
+        || import_name_has(imports, "dns_resolve")
+        || import_name_has(imports, "net_fetch")
+        || import_name_has(imports, "tcp_stream")
+        || import_name_has(imports, "tokio_spawn_blocking");
+    if network_signal {
+        return BlueprintMemoryClass::NetworkClient;
+    }
+
+    let tokio_signal = archive_has(archive, "tokio")
+        || import_name_has(imports, "trueos_tokio_")
+        || import_name_has(imports, "tokio_")
+        || import_name_has(imports, "sleep_ms");
+    if tokio_signal {
+        return BlueprintMemoryClass::TokioRuntime;
+    }
+
+    let heavy_graphics_signal = archive_has(archive, "mandelbrot")
+        || archive_has(archive, "shader")
+        || archive_has(archive, "particle")
+        || archive_has(archive, "virgl")
+        || import_name_has(imports, "gfx")
+        || stats.alloc_bytes > 4 * MIB
+        || raw_payload_len > 8 * MIB;
+    if heavy_graphics_signal {
+        return BlueprintMemoryClass::HeavyGraphics;
+    }
+
+    let tiny_ui_signal = raw_payload_len <= MIB
+        && stats.alloc_bytes <= 512 * 1024
+        && import_name_has(imports, "ui2")
+        && !imports.is_empty();
+    if tiny_ui_signal {
+        return BlueprintMemoryClass::TinyUi;
+    }
+
+    if import_name_has(imports, "ui2") || import_name_has(imports, "app_surface_window") {
+        return BlueprintMemoryClass::Ui;
+    }
+
+    BlueprintMemoryClass::Unknown
+}
+
+fn estimate_blueprint_memory_profile(
+    archive: &str,
+    module: &crate::hv::blueprint::BlueprintModule<'_>,
+    unpacked: &[u8],
+    imports: &[crate::hv::blueprint::ElfImport<'_>],
+) -> BlueprintVmMemoryProfile {
+    let stats = crate::hv::blueprint::elf_alloc_stats(unpacked).unwrap_or_default();
+    let class = classify_blueprint_memory(archive, module.raw_payload_len, stats, imports);
+    let base_live_mib = ceil_mib(module.raw_payload_len).max(ceil_mib(stats.alloc_bytes));
+
+    let (heap_lower, heap_recommended, heap_upper, stack_lower, stack_recommended, stack_upper) =
+        match class {
+            BlueprintMemoryClass::TinyUi => (
+                16,
+                round_pow2_mib(base_live_mib.saturating_mul(8).saturating_add(16)).max(32),
+                128,
+                8,
+                8,
+                32,
+            ),
+            BlueprintMemoryClass::Ui => (
+                32,
+                round_pow2_mib(base_live_mib.saturating_mul(10).saturating_add(32)).max(64),
+                192,
+                8,
+                16,
+                64,
+            ),
+            BlueprintMemoryClass::TokioRuntime => (
+                64,
+                round_pow2_mib(base_live_mib.saturating_mul(12).saturating_add(64)).max(128),
+                256,
+                8,
+                16,
+                64,
+            ),
+            BlueprintMemoryClass::NetworkClient => (
+                64,
+                round_pow2_mib(base_live_mib.saturating_mul(16).saturating_add(96)).max(128),
+                384,
+                8,
+                16,
+                64,
+            ),
+            BlueprintMemoryClass::HeavyGraphics => (
+                128,
+                round_pow2_mib(base_live_mib.saturating_mul(16).saturating_add(128)).max(256),
+                512,
+                16,
+                32,
+                128,
+            ),
+            BlueprintMemoryClass::Unknown => (64, 128, 512, 8, 16, 64),
+        };
+
+    BlueprintVmMemoryProfile {
+        class,
+        heap_lower_mib: heap_lower,
+        heap_recommended_mib: clamp_mib(heap_recommended, heap_lower, heap_upper),
+        heap_upper_mib: heap_upper,
+        stack_lower_mib: stack_lower,
+        stack_recommended_mib: clamp_mib(stack_recommended, stack_lower, stack_upper),
+        stack_upper_mib: stack_upper,
+    }
+}
+
+fn log_blueprint_memory_profile(profile: BlueprintVmMemoryProfile, log: &dyn Fn(&str)) {
+    log(format!(
+        "hv run: memory profile class={} heap_mib={}/{}/{} stack_mib={}/{}/{}",
+        profile.class.label(),
+        profile.heap_lower_mib,
+        profile.heap_recommended_mib,
+        profile.heap_upper_mib,
+        profile.stack_lower_mib,
+        profile.stack_recommended_mib,
+        profile.stack_upper_mib
+    )
+    .as_str());
+}
+
 async fn preflight_blueprint_launch(
     archive: &str,
     module_bytes: &[u8],
@@ -303,6 +492,7 @@ async fn preflight_blueprint_launch(
     }
 
     let mut required_readiness = crate::hv::blueprint::prebind_base_readiness();
+    let mut imports_for_profile = Vec::new();
     if unpacked.starts_with(b"\x7fELF") {
         match crate::hv::blueprint::elf_imports(unpacked.as_slice()) {
             Ok(imports) => {
@@ -336,12 +526,21 @@ async fn preflight_blueprint_launch(
                         }
                     }
                 }
+                imports_for_profile = imports;
             }
             Err(err) => {
                 log(alloc::format!("hv run: ELF import scan failed: {}", err).as_str());
             }
         }
     }
+
+    let profile = estimate_blueprint_memory_profile(
+        archive,
+        &module,
+        unpacked.as_slice(),
+        imports_for_profile.as_slice(),
+    );
+    log_blueprint_memory_profile(profile, log);
 
     if !unpacked.starts_with(b"\x7fELF")
         || !matches!(crate::hv::blueprint::elf_type_name(unpacked.as_slice()), Some("REL"))
@@ -385,16 +584,36 @@ fn start_blueprint_launch(spawner: &Spawner, request: &AppVmLaunchRequest, log: 
         return;
     };
 
-    let unpacked_bytes =
-        match crate::hv::blueprint::parse_blueprint(request.module_bytes.as_slice())
-            .and_then(|module| crate::hv::blueprint::unpack_blueprint(&module))
-        {
-            Ok(bytes) => bytes,
-            Err(err) => {
-                log(alloc::format!("hv run: app-vm unpack failed: {}", err).as_str());
-                return;
-            }
-        };
+    let module = match crate::hv::blueprint::parse_blueprint(request.module_bytes.as_slice()) {
+        Ok(module) => module,
+        Err(err) => {
+            log(alloc::format!("hv run: app-vm parse failed: {}", err).as_str());
+            return;
+        }
+    };
+    let unpacked_bytes = match crate::hv::blueprint::unpack_blueprint(&module) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            log(alloc::format!("hv run: app-vm unpack failed: {}", err).as_str());
+            return;
+        }
+    };
+    let imports = crate::hv::blueprint::elf_imports(unpacked_bytes.as_slice()).unwrap_or_default();
+    let profile = estimate_blueprint_memory_profile(
+        request.archive.as_str(),
+        &module,
+        unpacked_bytes.as_slice(),
+        imports.as_slice(),
+    );
+    log_blueprint_memory_profile(profile, log);
+
+    if !crate::allocators::prepare_hv_guest_heap_for_vm(
+        vm_id,
+        profile.heap_recommended_mib.saturating_mul(MIB),
+    ) {
+        log("hv run: app-vm heap profile allocation failed");
+        return;
+    }
 
     if let Err(err) = crate::hv::stage_blueprint_launch(
         vm_id,
@@ -410,7 +629,8 @@ fn start_blueprint_launch(spawner: &Spawner, request: &AppVmLaunchRequest, log: 
         return;
     }
 
-    match crate::hv::start(vm_id, spawner, &UART1_COM1_BACKEND, None) {
+    match crate::hv::start(vm_id, spawner, &UART1_COM1_BACKEND, Some(profile.stack_recommended_mib))
+    {
         Ok(()) => {
             log(alloc::format!("hv run: app-vm{} launch requested", vm_id).as_str());
         }
