@@ -139,6 +139,7 @@ lazy_static = { path = "vendor/lazy_static-1.5.0" }
 rustls-rustcrypto = { path = "vendor/rustls-rustcrypto-0.0.2-alpha" }
 crab-usb = { path = "vendor/crab-usb-0.6.2/crab-usb-0.6.2" }
 tokio = { path = "vendor/tokio-1.52.1" }
+tokio-util = { path = "vendor/tokio-util-0.7.18" }
 tokio-rustls = { path = "vendor/tokio-rustls-0.26.4" }
 mio = { path = "vendor/mio-1.2.0" }
 nix = { path = "vendor/nix-0.28.0" }

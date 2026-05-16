@@ -222,7 +222,9 @@ pub use self::read_buf::ReadBuf;
 // with conflicts when `use`ing `tokio::io` and `std::io`.
 #[doc(no_inline)]
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-pub use std::io::{Error, ErrorKind, Result, SeekFrom};
+pub use std::io::{
+    BufRead, Cursor, Error, ErrorKind, IoSlice, IoSliceMut, Read, Result, Seek, SeekFrom, Write,
+};
 #[doc(no_inline)]
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub use trueos_io::{
