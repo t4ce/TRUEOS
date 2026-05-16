@@ -166,6 +166,7 @@ default-features = false
 
 [dependencies.bytes]
 version = "1.0"
+features = ["std"]
 default-features = false
 
 [dependencies.form_urlencoded]
@@ -227,6 +228,7 @@ optional = true
 
 [dependencies.percent-encoding]
 version = "2.1"
+features = ["alloc"]
 default-features = false
 
 [dependencies.pin-project-lite]
@@ -256,6 +258,7 @@ version = "1.0"
 features = [
     "alloc",
     "raw_value",
+    "std",
 ]
 optional = true
 default-features = false
