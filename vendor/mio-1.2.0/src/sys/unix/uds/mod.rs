@@ -96,7 +96,6 @@ where
         target_os = "watchos",
         target_os = "espidf",
         target_os = "vita",
-        target_os = "trueos",
     )))]
     let flags = flags | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC;
 
@@ -121,7 +120,6 @@ where
         target_os = "watchos",
         target_os = "espidf",
         target_os = "vita",
-        target_os = "trueos",
     ))]
     {
         syscall!(fcntl(fds[0], libc::F_SETFL, libc::O_NONBLOCK))?;
