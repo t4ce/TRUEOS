@@ -48,6 +48,7 @@ cfg_os_poll! {
         target_os = "hurd",
         target_os = "nto",
         target_os = "solaris",
+        target_os = "trueos",
         target_os = "vita",
         target_os = "cygwin",
         target_os = "wasi",
@@ -102,6 +103,7 @@ cfg_os_poll! {
         target_os = "openbsd",
         target_os = "redox",
         target_os = "solaris",
+        target_os = "trueos",
         target_os = "vita",
         target_os = "cygwin",
         all(target_os = "wasi", target_env = "p1")
@@ -153,6 +155,7 @@ cfg_os_poll! {
             target_os = "openbsd",
             target_os = "redox",
             target_os = "solaris",
+            target_os = "trueos",
             target_os = "vita",
             target_os = "cygwin",
         ),

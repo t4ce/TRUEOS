@@ -477,10 +477,10 @@ compile_error! {
     "Tokio requires the platform pointer width to be at least 32 bits"
 }
 
-#[cfg(target_os = "trueos")]
+#[cfg(target_os = "zkvm")]
 extern crate alloc;
 
-#[cfg(target_os = "trueos")]
+#[cfg(target_os = "zkvm")]
 pub mod ffi {
     pub use std::ffi::*;
 }

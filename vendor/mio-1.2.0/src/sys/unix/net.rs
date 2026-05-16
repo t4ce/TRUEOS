@@ -66,6 +66,7 @@ pub(crate) fn new_socket(domain: libc::c_int, socket_type: libc::c_int) -> io::R
         target_os = "espidf",
         target_os = "vita",
         target_os = "nto",
+        target_os = "trueos",
     ))]
     {
         if let Err(err) = syscall!(fcntl(socket, libc::F_SETFL, libc::O_NONBLOCK)) {
@@ -135,6 +136,7 @@ pub(crate) fn socket_addr(addr: &SocketAddr) -> (SocketAddrCRepr, libc::socklen_
                     target_os = "vita",
                     target_os = "hermit",
                     target_os = "nto",
+                    target_os = "trueos",
                 ))]
                 sin_len: 0,
                 #[cfg(target_os = "vita")]
@@ -170,6 +172,7 @@ pub(crate) fn socket_addr(addr: &SocketAddr) -> (SocketAddrCRepr, libc::socklen_
                     target_os = "espidf",
                     target_os = "vita",
                     target_os = "nto",
+                    target_os = "trueos",
                     target_os = "hermit",
                 ))]
                 sin6_len: 0,

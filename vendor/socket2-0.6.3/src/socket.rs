@@ -10,14 +10,14 @@ use core::fmt;
 use std::io::{self, Read, Write};
 #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
 use std::io::IoSlice;
-#[cfg(not(any(target_os = "redox", target_os = "wasi", target_os = "trueos", target_os = "zkvm")))]
+#[cfg(not(any(target_os = "redox", target_os = "wasi", target_os = "zkvm", target_os = "zkvm")))]
 use std::io::IoSliceMut;
 use core::mem::MaybeUninit;
 #[cfg(not(target_os = "nto"))]
 use std::net::Ipv6Addr;
 use std::net::{Ipv4Addr, Shutdown};
 #[cfg(any(
-    all(unix, not(any(target_os = "trueos", target_os = "zkvm"))),
+    all(unix, not(target_os = "zkvm")),
     all(target_os = "wasi", not(target_env = "p1"))
 ))]
 use std::os::fd::{FromRawFd, IntoRawFd};
@@ -226,7 +226,7 @@ impl Socket {
             Ok(()) => return Ok(()),
             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {}
             #[cfg(any(
-                all(unix, not(any(target_os = "trueos", target_os = "zkvm"))),
+                all(unix, not(target_os = "zkvm")),
                 all(target_os = "wasi", not(target_env = "p1"))
             ))]
             Err(ref e) if e.raw_os_error() == Some(libc::EINPROGRESS) => {}
@@ -782,7 +782,7 @@ fn set_common_flags(socket: Socket) -> io::Result<Socket> {
     // On platforms that don't have `SOCK_CLOEXEC` use `FD_CLOEXEC`.
     #[cfg(all(
         unix,
-        not(any(target_os = "trueos", target_os = "zkvm")),
+        not(target_os = "zkvm"),
         not(any(
             target_os = "android",
             target_os = "dragonfly",
@@ -833,7 +833,7 @@ fn set_common_accept_flags(socket: Socket) -> io::Result<Socket> {
     // On platforms that don't have `SOCK_CLOEXEC` use `FD_CLOEXEC`.
     #[cfg(all(
         unix,
-        not(any(target_os = "trueos", target_os = "zkvm")),
+        not(target_os = "zkvm"),
         not(any(
             target_os = "android",
             target_os = "dragonfly",
@@ -2195,7 +2195,7 @@ impl Read for Socket {
     }
 
     #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
-    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+    #[cfg(not(target_os = "zkvm"))]
     fn read_vectored(&mut self, bufs: &mut [IoSliceMut<'_>]) -> io::Result<usize> {
         // Safety: both `IoSliceMut` and `MaybeUninitSlice` promise to have the
         // same layout, that of `iovec`/`WSABUF`. Furthermore, `recv_vectored`
@@ -2214,7 +2214,7 @@ impl<'a> Read for &'a Socket {
     }
 
     #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
-    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+    #[cfg(not(target_os = "zkvm"))]
     fn read_vectored(&mut self, bufs: &mut [IoSliceMut<'_>]) -> io::Result<usize> {
         // Safety: see other `Read::read` impl.
         let bufs = unsafe { &mut *(bufs as *mut [IoSliceMut<'_>] as *mut [MaybeUninitSlice<'_>]) };
@@ -2228,7 +2228,7 @@ impl Write for Socket {
     }
 
     #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
-    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+    #[cfg(not(target_os = "zkvm"))]
     fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
         self.send_vectored(bufs)
     }
@@ -2244,7 +2244,7 @@ impl<'a> Write for &'a Socket {
     }
 
     #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
-    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+    #[cfg(not(target_os = "zkvm"))]
     fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
         self.send_vectored(bufs)
     }
@@ -2267,15 +2267,15 @@ impl fmt::Debug for Socket {
 // zkvm currently exposes a compile-time socket surface only. Keep the std
 // socket conversion impls disabled there until the backend can create and own
 // real std-compatible socket handles.
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+#[cfg(not(target_os = "zkvm"))]
 from!(net::TcpStream, Socket);
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+#[cfg(not(target_os = "zkvm"))]
 from!(net::TcpListener, Socket);
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+#[cfg(not(target_os = "zkvm"))]
 from!(net::UdpSocket, Socket);
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+#[cfg(not(target_os = "zkvm"))]
 from!(Socket, net::TcpStream);
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+#[cfg(not(target_os = "zkvm"))]
 from!(Socket, net::TcpListener);
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+#[cfg(not(target_os = "zkvm"))]
 from!(Socket, net::UdpSocket);

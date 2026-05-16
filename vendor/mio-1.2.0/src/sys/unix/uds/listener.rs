@@ -65,6 +65,7 @@ pub(crate) fn accept(listener: &net::UnixListener) -> io::Result<(UnixStream, So
         target_os = "espidf",
         target_os = "vita",
         target_os = "nto",
+        target_os = "trueos",
         // Android x86's seccomp profile forbids calls to `accept4(2)`
         // See https://github.com/tokio-rs/mio/issues/1445 for details
         all(target_arch = "x86", target_os = "android"),
@@ -93,6 +94,7 @@ pub(crate) fn accept(listener: &net::UnixListener) -> io::Result<(UnixStream, So
         target_os = "espidf",
         target_os = "vita",
         target_os = "nto",
+        target_os = "trueos",
         all(target_arch = "x86", target_os = "android")
     ))]
     let socket = syscall!(accept(
@@ -113,6 +115,7 @@ pub(crate) fn accept(listener: &net::UnixListener) -> io::Result<(UnixStream, So
             target_os = "espidf",
             target_os = "vita",
             target_os = "nto",
+            target_os = "trueos",
         ))]
         syscall!(fcntl(socket, libc::F_SETFL, libc::O_NONBLOCK))?;
 

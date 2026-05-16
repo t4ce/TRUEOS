@@ -249,7 +249,7 @@ impl Inner {
 
         #[cfg(all(
             not(target_os = "zkvm"),
-            not(target_os = "trueos"),
+            not(target_os = "zkvm"),
             not(all(target_family = "wasm", not(target_feature = "atomics")))
         ))]
         // Wait with a timeout, and if we spuriously wake up or otherwise wake up
@@ -260,7 +260,7 @@ impl Inner {
 
         #[cfg(all(
             not(target_os = "zkvm"),
-            not(target_os = "trueos"),
+            not(target_os = "zkvm"),
             target_family = "wasm",
             not(target_feature = "atomics")
         ))]

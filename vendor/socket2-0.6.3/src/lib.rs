@@ -53,7 +53,7 @@
 //! that are not available on all OSs.
 
 #![deny(missing_docs, missing_debug_implementations, rust_2018_idioms)]
-#![cfg_attr(any(target_os = "trueos", target_os = "zkvm"), no_std)]
+#![cfg_attr(target_os = "zkvm", no_std)]
 // Automatically generate required OS/features for docs.rs.
 #![cfg_attr(docsrs, feature(doc_cfg))]
 // Disallow warnings when running tests.
@@ -61,54 +61,54 @@
 // Disallow warnings in examples.
 #![doc(test(attr(deny(warnings))))]
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 extern crate alloc;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 extern crate self as std;
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 pub mod collections {
     //! TRUEOS no_std compatibility re-exports for existing socket2 paths.
     pub use alloc::collections::*;
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 pub mod ffi {
     //! TRUEOS no_std compatibility re-exports for existing socket2 paths.
     pub use core::ffi::*;
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 pub mod fmt {
     //! TRUEOS no_std compatibility re-exports for existing socket2 paths.
     pub use core::fmt::*;
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 pub mod hash {
     //! TRUEOS no_std compatibility re-exports for existing socket2 paths.
     pub use core::hash::*;
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 pub mod io {
     //! TRUEOS no_std compatibility re-exports for existing socket2 paths.
     pub use trueos_io::*;
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 pub mod marker {
     //! TRUEOS no_std compatibility re-exports for existing socket2 paths.
     pub use core::marker::*;
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 pub mod mem {
     //! TRUEOS no_std compatibility re-exports for existing socket2 paths.
     pub use core::mem::*;
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 pub mod net {
     //! TRUEOS no_std compatibility re-exports for existing socket2 paths.
     pub use core::net::*;
@@ -135,13 +135,13 @@ pub mod net {
     pub struct UdpSocket;
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 pub mod ops {
     //! TRUEOS no_std compatibility re-exports for existing socket2 paths.
     pub use core::ops::*;
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 pub mod path {
     //! TRUEOS no_std compatibility placeholder for unsupported Unix socket APIs.
     /// Placeholder path type for unsupported Unix socket APIs.
@@ -149,13 +149,13 @@ pub mod path {
     pub struct Path;
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 pub mod ptr {
     //! TRUEOS no_std compatibility re-exports for existing socket2 paths.
     pub use core::ptr::*;
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 pub mod slice {
     //! TRUEOS no_std compatibility re-exports for existing socket2 paths.
     pub use core::slice::*;
@@ -163,8 +163,8 @@ pub mod slice {
 
 #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
 use std::io::IoSlice;
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-use std::{fmt, mem};
+#[cfg(not(target_os = "zkvm"))]
+use std::{fmt, mem, net};
 #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
 use core::marker::PhantomData;
 #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
@@ -211,7 +211,7 @@ macro_rules! from {
         impl From<$from> for $for {
             fn from(socket: $from) -> $for {
                 #[cfg(any(
-                    all(unix, not(any(target_os = "trueos", target_os = "zkvm"))),
+                    all(unix, not(target_os = "zkvm")),
                     all(target_os = "wasi", not(target_env = "p1"))
                 ))]
                 unsafe {
@@ -221,7 +221,7 @@ macro_rules! from {
                 unsafe {
                     <$for>::from_raw_socket(socket.into_raw_socket())
                 }
-                #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+                #[cfg(target_os = "zkvm")]
                 {
                     let _ = socket;
                     panic!("socket2 zkvm backend cannot convert std sockets yet")
@@ -287,19 +287,19 @@ mod sockref;
 
 #[cfg_attr(
     any(
-        all(unix, not(any(target_os = "trueos", target_os = "zkvm"))),
+        all(unix, not(target_os = "zkvm")),
         all(target_os = "wasi", not(target_env = "p1"))
     ),
     path = "sys/unix.rs"
 )]
-#[cfg_attr(any(target_os = "trueos", target_os = "zkvm"), path = "sys/zkvm.rs")]
+#[cfg_attr(target_os = "zkvm", path = "sys/zkvm.rs")]
 #[cfg_attr(windows, path = "sys/windows.rs")]
 mod sys;
 
 #[cfg(not(any(
     windows,
     unix,
-    any(target_os = "trueos", target_os = "zkvm"),
+    target_os = "zkvm",
     all(target_os = "wasi", not(target_env = "p1"))
 )))]
 compile_error!("Socket2 doesn't support the compile target");

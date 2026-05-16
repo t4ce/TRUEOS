@@ -509,9 +509,9 @@ fn run(worker: Arc<Worker>) {
         fn drop(&mut self) {
             if std::thread::panicking() {
                 eprintln!("worker thread panicking; aborting process");
-                #[cfg(target_os = "trueos")]
+                #[cfg(target_os = "zkvm")]
                 panic!("worker thread panicked");
-                #[cfg(not(target_os = "trueos"))]
+                #[cfg(not(target_os = "zkvm"))]
                 std::process::abort();
             }
         }
