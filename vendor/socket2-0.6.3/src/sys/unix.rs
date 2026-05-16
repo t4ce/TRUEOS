@@ -406,6 +406,7 @@ type IovLen = usize;
     target_os = "watchos",
     target_os = "espidf",
     target_os = "vita",
+    target_os = "trueos",
     target_os = "cygwin",
 ))]
 type IovLen = c_int;

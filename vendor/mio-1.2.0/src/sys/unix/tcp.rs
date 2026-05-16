@@ -101,6 +101,7 @@ pub(crate) fn accept(listener: &net::TcpListener) -> io::Result<(net::TcpStream,
         target_os = "vita",
         target_os = "hermit",
         target_os = "nto",
+        target_os = "trueos",
         target_os = "wasi",
         all(target_arch = "x86", target_os = "android"),
     ))]
@@ -123,6 +124,7 @@ pub(crate) fn accept(listener: &net::TcpListener) -> io::Result<(net::TcpStream,
                 target_os = "vita",
                 target_os = "hermit",
                 target_os = "nto",
+                target_os = "trueos",
             ))]
             syscall!(fcntl(s.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK))?;
 

@@ -3,7 +3,7 @@ use core::marker::PhantomData;
 use core::mem::ManuallyDrop;
 use core::ops::Deref;
 #[cfg(any(
-    all(unix, not(any(target_os = "trueos", target_os = "zkvm"))),
+    all(unix, not(target_os = "zkvm")),
     all(target_os = "wasi", not(target_env = "p1"))
 ))]
 use std::os::fd::{AsFd, AsRawFd, FromRawFd};
@@ -81,7 +81,7 @@ impl<'s> Deref for SockRef<'s> {
 
 /// On Windows, a corresponding `From<&impl AsSocket>` implementation exists.
 #[cfg(any(
-    all(unix, not(any(target_os = "trueos", target_os = "zkvm"))),
+    all(unix, not(target_os = "zkvm")),
     all(target_os = "wasi", not(target_env = "p1"))
 ))]
 impl<'s, S> From<&'s S> for SockRef<'s>
@@ -116,7 +116,7 @@ where
     }
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 impl<'s, S> From<&'s S> for SockRef<'s> {
     fn from(_: &'s S) -> Self {
         panic!("socket2 SockRef is not wired to zkvm socket handles yet")

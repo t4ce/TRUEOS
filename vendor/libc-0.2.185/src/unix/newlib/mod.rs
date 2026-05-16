@@ -3,7 +3,7 @@ use crate::prelude::*;
 pub type blkcnt_t = i32;
 pub type blksize_t = i32;
 
-pub type clockid_t = c_ulong;
+pub type clockid_t = c_int;
 
 cfg_if! {
     if #[cfg(any(target_os = "espidf"))] {
@@ -95,6 +95,28 @@ s! {
         pub imr_interface: in_addr,
     }
 
+    pub struct ip_mreq_source {
+        pub imr_multiaddr: in_addr,
+        pub imr_interface: in_addr,
+        pub imr_sourceaddr: in_addr,
+    }
+
+    pub struct ip_mreqn {
+        pub imr_multiaddr: in_addr,
+        pub imr_address: in_addr,
+        pub imr_ifindex: c_int,
+    }
+
+    pub struct msghdr {
+        pub msg_name: *mut c_void,
+        pub msg_namelen: socklen_t,
+        pub msg_iov: *mut crate::iovec,
+        pub msg_iovlen: c_int,
+        pub msg_control: *mut c_void,
+        pub msg_controllen: size_t,
+        pub msg_flags: c_int,
+    }
+
     pub struct in_addr {
         pub s_addr: crate::in_addr_t,
     }
@@ -152,10 +174,45 @@ s! {
         pub f_namemax: c_ulong,
     }
 
+    pub struct fsid_t {
+        pub __val: [c_int; 2],
+    }
+
+    pub struct statfs {
+        pub f_type: c_ulong,
+        pub f_bsize: c_ulong,
+        pub f_blocks: fsblkcnt_t,
+        pub f_bfree: fsblkcnt_t,
+        pub f_bavail: fsblkcnt_t,
+        pub f_files: fsfilcnt_t,
+        pub f_ffree: fsfilcnt_t,
+        pub f_fsid: fsid_t,
+        pub f_namelen: c_ulong,
+        pub f_frsize: c_ulong,
+        pub f_flags: c_ulong,
+        pub f_spare: [c_ulong; 4],
+    }
+
+    pub struct flock {
+        pub l_type: c_short,
+        pub l_whence: c_short,
+        pub l_start: off_t,
+        pub l_len: off_t,
+        pub l_pid: crate::pid_t,
+    }
+
+    pub struct siginfo_t {
+        pub si_signo: c_int,
+        pub si_errno: c_int,
+        pub si_code: c_int,
+        pub _pad: [c_int; 29],
+    }
+
     // FIXME(1.0): This should not implement `PartialEq`
     #[allow(unpredictable_function_pointer_comparisons)]
     pub struct sigaction {
         pub sa_handler: extern "C" fn(arg1: c_int),
+        pub sa_sigaction: crate::sighandler_t,
         pub sa_mask: sigset_t,
         pub sa_flags: c_int,
     }
@@ -564,6 +621,11 @@ pub const SEEK_END: c_int = 2;
 
 pub const FIOCLEX: c_ulong = 0x20006601;
 pub const FIONCLEX: c_ulong = 0x20006602;
+pub const FIONREAD: c_ulong = 0x541B;
+pub const TIOCEXCL: c_ulong = 0x540C;
+pub const TIOCNXCL: c_ulong = 0x540D;
+pub const TIOCGWINSZ: c_ulong = 0x5413;
+pub const TIOCSWINSZ: c_ulong = 0x5414;
 
 pub const S_BLKSIZE: mode_t = 1024;
 pub const S_IREAD: mode_t = 0o0400;
@@ -581,12 +643,15 @@ pub const S_IFIFO: mode_t = 0o1_0000;
 pub const S_IRUSR: mode_t = 0o0400;
 pub const S_IWUSR: mode_t = 0o0200;
 pub const S_IXUSR: mode_t = 0o0100;
+pub const S_IRWXU: mode_t = S_IRUSR | S_IWUSR | S_IXUSR;
 pub const S_IRGRP: mode_t = 0o0040;
 pub const S_IWGRP: mode_t = 0o0020;
 pub const S_IXGRP: mode_t = 0o0010;
+pub const S_IRWXG: mode_t = S_IRGRP | S_IWGRP | S_IXGRP;
 pub const S_IROTH: mode_t = 0o0004;
 pub const S_IWOTH: mode_t = 0o0002;
 pub const S_IXOTH: mode_t = 0o0001;
+pub const S_IRWXO: mode_t = S_IROTH | S_IWOTH | S_IXOTH;
 
 pub const SOL_TCP: c_int = 6;
 
@@ -607,21 +672,35 @@ pub const AF_INET: c_int = 2;
 pub const CLOCK_REALTIME: crate::clockid_t = 1;
 pub const CLOCK_MONOTONIC: crate::clockid_t = 4;
 pub const CLOCK_BOOTTIME: crate::clockid_t = 4;
+pub const CLOCK_PROCESS_CPUTIME_ID: crate::clockid_t = 2;
+pub const CLOCK_THREAD_CPUTIME_ID: crate::clockid_t = 3;
 
 pub const SOCK_STREAM: c_int = 1;
 pub const SOCK_DGRAM: c_int = 2;
+pub const SOCK_RAW: c_int = 3;
+pub const SOCK_RDM: c_int = 4;
+pub const SOCK_SEQPACKET: c_int = 5;
+
+pub const MSG_EOR: c_int = 0x08;
+pub const MSG_TRUNC: c_int = 0x10;
 
 pub const SOMAXCONN: c_int = 128;
 
 pub const AT_FDCWD: c_int = -2;
+pub const AT_EACCESS: c_int = 0x200;
 pub const AT_REMOVEDIR: c_int = 8;
+pub const AT_SYMLINK_FOLLOW: c_int = 0x400;
 pub const AT_SYMLINK_NOFOLLOW: c_int = 2;
 
 pub const O_DIRECTORY: c_int = 0x200000;
+pub const O_NOCTTY: c_int = 0x8000;
 pub const O_NOFOLLOW: c_int = 0x100000;
+pub const O_DSYNC: c_int = 0x2000;
+pub const O_ASYNC: c_int = 0x40;
 
 pub const TIMER_ABSTIME: c_int = 1;
 pub const PTHREAD_STACK_MIN: size_t = 2048;
+pub const UTIME_NOW: c_long = 1073741823;
 pub const UTIME_OMIT: c_long = -1;
 
 pub const _SC_PAGESIZE: c_int = 8;
@@ -663,8 +742,240 @@ pub const SIGVTALRM: c_int = 26;
 pub const SIGPROF: c_int = 27;
 pub const SIGXCPU: c_int = 24;
 pub const SIGXFSZ: c_int = 25;
+pub const SA_SIGINFO: c_int = 0x40;
+pub const SA_RESTART: c_int = 0x10000000;
 
 pub const EAI_SYSTEM: c_int = 11;
+pub const RTLD_DEFAULT: *mut c_void = 0 as *mut c_void;
+
+pub const R_OK: c_int = 4;
+pub const W_OK: c_int = 2;
+pub const X_OK: c_int = 1;
+pub const F_OK: c_int = 0;
+
+pub const IPV6_RECVHOPLIMIT: c_int = 51;
+pub const IPV6_RECVTCLASS: c_int = 66;
+pub const IP_HDRINCL: c_int = 2;
+pub const IP_RECVTOS: c_int = 13;
+pub const IP_ADD_SOURCE_MEMBERSHIP: c_int = 39;
+pub const IP_DROP_SOURCE_MEMBERSHIP: c_int = 40;
+
+pub const F_RDLCK: c_int = 0;
+pub const F_WRLCK: c_int = 1;
+pub const F_UNLCK: c_int = 2;
+
+pub const POLLRDNORM: c_short = 0x0040;
+pub const POLLWRNORM: c_short = 0x0004;
+pub const POLLRDBAND: c_short = 0x0080;
+pub const POLLWRBAND: c_short = 0x0100;
+
+pub const LOCK_SH: c_int = 1;
+pub const LOCK_EX: c_int = 2;
+pub const LOCK_NB: c_int = 4;
+pub const LOCK_UN: c_int = 8;
+
+pub const POSIX_FADV_NORMAL: c_int = 0;
+pub const POSIX_FADV_RANDOM: c_int = 1;
+pub const POSIX_FADV_SEQUENTIAL: c_int = 2;
+pub const POSIX_FADV_WILLNEED: c_int = 3;
+pub const POSIX_FADV_DONTNEED: c_int = 4;
+pub const POSIX_FADV_NOREUSE: c_int = 5;
+
+pub const FALLOC_FL_KEEP_SIZE: c_int = 0x01;
+pub const FALLOC_FL_PUNCH_HOLE: c_int = 0x02;
+pub const FALLOC_FL_COLLAPSE_RANGE: c_int = 0x08;
+pub const FALLOC_FL_ZERO_RANGE: c_int = 0x10;
+pub const FALLOC_FL_INSERT_RANGE: c_int = 0x20;
+pub const FALLOC_FL_UNSHARE_RANGE: c_int = 0x40;
+
+pub const ST_RDONLY: c_ulong = 1;
+pub const ST_NOSUID: c_ulong = 2;
+
+pub const EADV: c_int = 68;
+pub const EBADE: c_int = 52;
+pub const EBADFD: c_int = 77;
+pub const EBADR: c_int = 53;
+pub const EBADRQC: c_int = 56;
+pub const EBADSLT: c_int = 57;
+pub const EBFONT: c_int = 59;
+pub const ECHRNG: c_int = 44;
+pub const ECOMM: c_int = 70;
+pub const EDEADLOCK: c_int = 35;
+pub const EDOTDOT: c_int = 73;
+pub const EHWPOISON: c_int = 133;
+pub const EISNAM: c_int = 120;
+pub const EKEYEXPIRED: c_int = 127;
+pub const EKEYREJECTED: c_int = 129;
+pub const EKEYREVOKED: c_int = 128;
+pub const EL2HLT: c_int = 51;
+pub const EL2NSYNC: c_int = 45;
+pub const EL3HLT: c_int = 46;
+pub const EL3RST: c_int = 47;
+pub const ELIBACC: c_int = 79;
+pub const ELIBBAD: c_int = 80;
+pub const ELIBEXEC: c_int = 83;
+pub const ELIBMAX: c_int = 82;
+pub const ELIBSCN: c_int = 81;
+pub const ELNRNG: c_int = 48;
+pub const EMEDIUMTYPE: c_int = 124;
+pub const ENAVAIL: c_int = 119;
+pub const ENOANO: c_int = 55;
+pub const ENOCSI: c_int = 50;
+pub const ENOKEY: c_int = 126;
+pub const ENOMEDIUM: c_int = 123;
+pub const ENONET: c_int = 64;
+pub const ENOPKG: c_int = 65;
+pub const ENOTBLK: c_int = 15;
+pub const ENOTNAM: c_int = 118;
+pub const ENOTUNIQ: c_int = 76;
+pub const EREMCHG: c_int = 78;
+pub const EREMOTE: c_int = 66;
+pub const EREMOTEIO: c_int = 121;
+pub const ERESTART: c_int = 85;
+pub const ERFKILL: c_int = 132;
+pub const ESHUTDOWN: c_int = 108;
+pub const ESOCKTNOSUPPORT: c_int = 94;
+pub const ESRMNT: c_int = 69;
+pub const ESTRPIPE: c_int = 86;
+pub const EUCLEAN: c_int = 117;
+pub const EUNATCH: c_int = 49;
+pub const EUSERS: c_int = 87;
+pub const EXFULL: c_int = 54;
+
+pub const IGNBRK: crate::tcflag_t = 0x00000001;
+pub const BRKINT: crate::tcflag_t = 0x00000002;
+pub const IGNPAR: crate::tcflag_t = 0x00000004;
+pub const PARMRK: crate::tcflag_t = 0x00000008;
+pub const INPCK: crate::tcflag_t = 0x00000010;
+pub const ISTRIP: crate::tcflag_t = 0x00000020;
+pub const INLCR: crate::tcflag_t = 0x00000040;
+pub const IGNCR: crate::tcflag_t = 0x00000080;
+pub const ICRNL: crate::tcflag_t = 0x00000100;
+pub const IXON: crate::tcflag_t = 0x00000400;
+pub const IXANY: crate::tcflag_t = 0x00000800;
+pub const IXOFF: crate::tcflag_t = 0x00001000;
+pub const IMAXBEL: crate::tcflag_t = 0x00002000;
+pub const IUTF8: crate::tcflag_t = 0x00004000;
+pub const OPOST: crate::tcflag_t = 0x00000001;
+pub const OLCUC: crate::tcflag_t = 0x00000002;
+pub const ONLCR: crate::tcflag_t = 0x00000004;
+pub const OCRNL: crate::tcflag_t = 0x00000008;
+pub const ONOCR: crate::tcflag_t = 0x00000010;
+pub const ONLRET: crate::tcflag_t = 0x00000020;
+pub const OFILL: crate::tcflag_t = 0x00000040;
+pub const OFDEL: crate::tcflag_t = 0x00000080;
+pub const NLDLY: crate::tcflag_t = 0x00000100;
+pub const NL0: crate::tcflag_t = 0;
+pub const NL1: crate::tcflag_t = 0x00000100;
+pub const CRDLY: crate::tcflag_t = 0x00000600;
+pub const CR0: crate::tcflag_t = 0;
+pub const CR1: crate::tcflag_t = 0x00000200;
+pub const CR2: crate::tcflag_t = 0x00000400;
+pub const CR3: crate::tcflag_t = 0x00000600;
+pub const TABDLY: crate::tcflag_t = 0x00001800;
+pub const TAB0: crate::tcflag_t = 0;
+pub const TAB1: crate::tcflag_t = 0x00000800;
+pub const TAB2: crate::tcflag_t = 0x00001000;
+pub const TAB3: crate::tcflag_t = 0x00001800;
+pub const XTABS: crate::tcflag_t = TAB3;
+pub const BSDLY: crate::tcflag_t = 0x00002000;
+pub const BS0: crate::tcflag_t = 0;
+pub const BS1: crate::tcflag_t = 0x00002000;
+pub const FFDLY: crate::tcflag_t = 0x00008000;
+pub const FF0: crate::tcflag_t = 0;
+pub const FF1: crate::tcflag_t = 0x00008000;
+pub const VTDLY: crate::tcflag_t = 0x00004000;
+pub const VT0: crate::tcflag_t = 0;
+pub const VT1: crate::tcflag_t = 0x00004000;
+pub const CSIZE: crate::tcflag_t = 0x00000030;
+pub const CS5: crate::tcflag_t = 0;
+pub const CS6: crate::tcflag_t = 0x00000010;
+pub const CS7: crate::tcflag_t = 0x00000020;
+pub const CS8: crate::tcflag_t = 0x00000030;
+pub const CSTOPB: crate::tcflag_t = 0x00000040;
+pub const CREAD: crate::tcflag_t = 0x00000080;
+pub const PARENB: crate::tcflag_t = 0x00000100;
+pub const PARODD: crate::tcflag_t = 0x00000200;
+pub const HUPCL: crate::tcflag_t = 0x00000400;
+pub const CLOCAL: crate::tcflag_t = 0x00000800;
+pub const CRTSCTS: crate::tcflag_t = 0x80000000;
+pub const CMSPAR: crate::tcflag_t = 0x40000000;
+pub const ECHOCTL: crate::tcflag_t = 0x00000200;
+pub const ECHOPRT: crate::tcflag_t = 0x00000400;
+pub const ECHOKE: crate::tcflag_t = 0x00000800;
+pub const FLUSHO: crate::tcflag_t = 0x00001000;
+pub const PENDIN: crate::tcflag_t = 0x00002000;
+pub const EXTPROC: crate::tcflag_t = 0x00010000;
+pub const ISIG: crate::tcflag_t = 0x00000001;
+pub const ICANON: crate::tcflag_t = 0x00000002;
+pub const ECHO: crate::tcflag_t = 0x00000008;
+pub const ECHOE: crate::tcflag_t = 0x00000010;
+pub const ECHOK: crate::tcflag_t = 0x00000020;
+pub const ECHONL: crate::tcflag_t = 0x00000040;
+pub const NOFLSH: crate::tcflag_t = 0x00000080;
+pub const TOSTOP: crate::tcflag_t = 0x00000100;
+pub const IEXTEN: crate::tcflag_t = 0x00008000;
+
+pub const B0: crate::speed_t = 0;
+pub const B50: crate::speed_t = 50;
+pub const B75: crate::speed_t = 75;
+pub const B110: crate::speed_t = 110;
+pub const B134: crate::speed_t = 134;
+pub const B150: crate::speed_t = 150;
+pub const B200: crate::speed_t = 200;
+pub const B300: crate::speed_t = 300;
+pub const B600: crate::speed_t = 600;
+pub const B1200: crate::speed_t = 1200;
+pub const B1800: crate::speed_t = 1800;
+pub const B2400: crate::speed_t = 2400;
+pub const B4800: crate::speed_t = 4800;
+pub const B9600: crate::speed_t = 9600;
+pub const B19200: crate::speed_t = 19200;
+pub const B38400: crate::speed_t = 38400;
+pub const B57600: crate::speed_t = 57600;
+pub const B115200: crate::speed_t = 115200;
+pub const B230400: crate::speed_t = 230400;
+pub const B460800: crate::speed_t = 460800;
+pub const B500000: crate::speed_t = 500000;
+pub const B576000: crate::speed_t = 576000;
+pub const B921600: crate::speed_t = 921600;
+pub const B1000000: crate::speed_t = 1000000;
+pub const B1152000: crate::speed_t = 1152000;
+pub const B1500000: crate::speed_t = 1500000;
+pub const B2000000: crate::speed_t = 2000000;
+pub const B2500000: crate::speed_t = 2500000;
+pub const B3000000: crate::speed_t = 3000000;
+pub const B3500000: crate::speed_t = 3500000;
+pub const B4000000: crate::speed_t = 4000000;
+
+pub const VINTR: c_int = 0;
+pub const VQUIT: c_int = 1;
+pub const VERASE: c_int = 2;
+pub const VKILL: c_int = 3;
+pub const VEOF: c_int = 4;
+pub const VTIME: c_int = 5;
+pub const VMIN: c_int = 6;
+pub const VSWTC: c_int = 7;
+pub const VSTART: c_int = 8;
+pub const VSTOP: c_int = 9;
+pub const VSUSP: c_int = 10;
+pub const VEOL: c_int = 11;
+pub const VREPRINT: c_int = 12;
+pub const VDISCARD: c_int = 13;
+pub const VWERASE: c_int = 14;
+pub const VLNEXT: c_int = 15;
+pub const VEOL2: c_int = 16;
+
+pub const TCSANOW: c_int = 0;
+pub const TCSADRAIN: c_int = 1;
+pub const TCSAFLUSH: c_int = 2;
+pub const TCIFLUSH: c_int = 0;
+pub const TCOFLUSH: c_int = 1;
+pub const TCIOFLUSH: c_int = 2;
+pub const TCOOFF: c_int = 0;
+pub const TCOON: c_int = 1;
+pub const TCIOFF: c_int = 2;
+pub const TCION: c_int = 3;
 
 pub const SHUT_RD: c_int = 0;
 pub const SHUT_WR: c_int = 1;
@@ -948,6 +1259,25 @@ safe_f! {
     pub const fn WCOREDUMP(_status: c_int) -> bool {
         false
     }
+
+    pub const fn makedev(major: c_uint, minor: c_uint) -> crate::dev_t {
+        let major = major as u64;
+        let minor = minor as u64;
+        ((((major & 0xfffff000) << 32)
+            | ((major & 0xfff) << 8)
+            | ((minor & 0xffffff00) << 12)
+            | (minor & 0xff)) as crate::dev_t)
+    }
+
+    pub const fn major(dev: crate::dev_t) -> c_uint {
+        let dev = dev as u64;
+        (((dev >> 8) & 0xfff) | ((dev >> 32) & 0xfffff000)) as c_uint
+    }
+
+    pub const fn minor(dev: crate::dev_t) -> c_uint {
+        let dev = dev as u64;
+        ((dev & 0xff) | ((dev >> 12) & 0xffffff00)) as c_uint
+    }
 }
 
 pub const WNOHANG: c_int = 1;
@@ -982,6 +1312,7 @@ extern "C" {
     #[cfg_attr(target_os = "espidf", link_name = "lwip_close")]
     pub fn closesocket(sockfd: c_int) -> c_int;
     pub fn ioctl(fd: c_int, request: c_ulong, ...) -> c_int;
+    pub fn seekdir(dirp: *mut crate::DIR, loc: c_long);
     #[cfg(not(all(target_arch = "powerpc", target_vendor = "nintendo")))]
     #[cfg_attr(target_os = "espidf", link_name = "lwip_recvfrom")]
     pub fn recvfrom(
@@ -992,6 +1323,8 @@ extern "C" {
         addr: *mut sockaddr,
         addr_len: *mut socklen_t,
     ) -> isize;
+    pub fn recvmsg(socket: c_int, message: *mut msghdr, flags: c_int) -> ssize_t;
+    pub fn sendmsg(socket: c_int, message: *const msghdr, flags: c_int) -> ssize_t;
     #[cfg(not(all(target_arch = "powerpc", target_vendor = "nintendo")))]
     pub fn getnameinfo(
         sa: *const sockaddr,
@@ -1020,6 +1353,17 @@ extern "C" {
     pub fn getdtablesize() -> c_int;
     pub fn dirfd(dirp: *mut crate::DIR) -> c_int;
     pub fn futimens(fd: c_int, times: *const crate::timespec) -> c_int;
+    pub fn faccessat(dirfd: c_int, pathname: *const c_char, mode: c_int, flags: c_int) -> c_int;
+    pub fn mknodat(dirfd: c_int, pathname: *const c_char, mode: crate::mode_t, dev: crate::dev_t) -> c_int;
+    pub fn statfs(path: *const c_char, buf: *mut statfs) -> c_int;
+    pub fn fstatfs(fd: c_int, buf: *mut statfs) -> c_int;
+    pub fn posix_fadvise(fd: c_int, offset: off_t, len: off_t, advice: c_int) -> c_int;
+    pub fn posix_fallocate(fd: c_int, offset: off_t, len: off_t) -> c_int;
+    pub fn preadv(fd: c_int, iov: *const crate::iovec, iovcnt: c_int, offset: off_t) -> ssize_t;
+    pub fn pwritev(fd: c_int, iov: *const crate::iovec, iovcnt: c_int, offset: off_t) -> ssize_t;
+    pub fn dup3(oldfd: c_int, newfd: c_int, flags: c_int) -> c_int;
+    pub fn sync();
+    pub fn fdatasync(fd: c_int) -> c_int;
     pub fn utimensat(
         dirfd: c_int,
         pathname: *const c_char,

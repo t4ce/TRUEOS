@@ -300,7 +300,7 @@ impl SockAddr {
                 addr.sin6_flowinfo,
                 #[cfg(any(
                     unix,
-                    any(target_os = "trueos", target_os = "zkvm"),
+                    target_os = "zkvm",
                     all(target_os = "wasi", not(target_env = "p1"))
                 ))]
                 addr.sin6_scope_id,
@@ -399,7 +399,7 @@ impl From<SocketAddrV6> for SockAddr {
             storage.sin6_flowinfo = addr.flowinfo();
             #[cfg(any(
                 unix,
-                any(target_os = "trueos", target_os = "zkvm"),
+                target_os = "zkvm",
                 all(target_os = "wasi", not(target_env = "p1"))
             ))]
             {
