@@ -1,11 +1,10 @@
 //! Module defining an Either type.
 use std::{
     future::Future,
-    io::SeekFrom,
     pin::Pin,
     task::{Context, Poll},
 };
-use tokio::io::{AsyncBufRead, AsyncRead, AsyncSeek, AsyncWrite, ReadBuf, Result};
+use tokio::io::{AsyncBufRead, AsyncRead, AsyncSeek, AsyncWrite, ReadBuf, Result, SeekFrom};
 
 /// Combines two different futures, streams, or sinks having the same associated types into a single type.
 ///

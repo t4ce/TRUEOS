@@ -105,6 +105,9 @@ usvg = { path = "vendor/usvg-0.45.1" }
 imagesize = { path = "vendor/imagesize-0.13.0" }
 hyper = { path = "vendor/hyper-1.9.0" }
 hyper-util = { path = "vendor/hyper-util-0.1.20" }
+h2 = { path = "vendor/h2-0.4.14" }
+h3 = { path = "vendor/h3-0.0.8" }
+h3-quinn = { path = "vendor/h3-quinn-0.0.10" }
 axum = { path = "vendor/axum-0.8.9" }
 axum-core = { path = "vendor/axum-core-0.5.6" }
 base64 = { path = "vendor/base64-0.22.1" }

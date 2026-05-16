@@ -400,8 +400,9 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use std::error::Error as StdError;
+use std::io::Cursor;
 use std::{cmp, fmt, mem};
-use tokio::io::{self, Cursor};
+use tokio::io;
 
 /// Configure length delimited `LengthDelimitedCodec`s.
 ///
@@ -522,7 +523,7 @@ impl LengthDelimitedCodec {
             if n > self.builder.max_frame_len as u64 {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
-                    LengthDelimitedCodecError { _priv: () },
+                    "frame length exceeds maximum",
                 ));
             }
 
@@ -608,7 +609,7 @@ impl Encoder<Bytes> for LengthDelimitedCodec {
         if n > self.builder.max_frame_len {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                LengthDelimitedCodecError { _priv: () },
+                "frame length exceeds maximum",
             ));
         }
 
