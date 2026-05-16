@@ -77,10 +77,6 @@ struct FileWriteStream {
 static FILE_WRITE_STREAM_SEQ: AtomicU32 = AtomicU32::new(1);
 static FILE_WRITE_STREAMS: Mutex<BTreeMap<u32, FileWriteStream>> = Mutex::new(BTreeMap::new());
 
-pub fn skhynix_lumen_monopoly_enabled() -> bool {
-    crate::allcaps::lumen::SKHYNIX_UAS_LUMEN_MONOPOLY
-}
-
 /// Request that TRUEOSFS probing/mounting be performed asynchronously.
 ///
 /// This is intended for driver hotplug contexts (e.g. USB mass-storage attach) where

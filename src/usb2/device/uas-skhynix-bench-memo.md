@@ -1,6 +1,6 @@
-# SK hynix UAS Bench Memo
+# SK hynix UAS Historical Bench Memo
 
-Current target: SK hynix PSSD X31 `152E:7001` on the UAS-specific path. TRUEOSFS root now mounts normally; `bench uas` is diagnostic only and is no longer required to make the disk usable.
+Current target: SK hynix PSSD X31 `152E:7001` on the UAS-specific path. TRUEOSFS root now mounts normally; the old shell UAS benchmark path has been removed and is no longer part of the runtime workflow.
 
 ## Known State
 
@@ -14,7 +14,7 @@ Current target: SK hynix PSSD X31 `152E:7001` on the UAS-specific path. TRUEOSFS
 ## Known Bad Turns
 
 - Do not defer TRUEOSFS root readiness for SK hynix UAS anymore. The bench phase is over; the disk should be public through the normal root mount.
-- Do not reintroduce ramdisk/preflight writes to the SK hynix path. The bench owns the write experiments.
+- Do not reintroduce ramdisk/preflight writes to the SK hynix path. Keep write experiments out of the normal mount path.
 - Do not assume bigger single WRITE(10) is the next speed lever. `2 MiB` already failed.
 - Do not prearm final status immediately after `WRITE_READY` in the windowed writer unless a new lower-layer change justifies retesting. On this bridge it timed out before `WRITE_READY` on a previously-good `1 MiB x1` probe.
 
@@ -29,19 +29,8 @@ Current target: SK hynix PSSD X31 `152E:7001` on the UAS-specific path. TRUEOSFS
 - If a probe times out or returns `Io`, reset the SK hynix UAS transport before any final write or next probe.
 - If read speed regresses together with write speed, look below SCSI first: xHCI events, DMA mapping, cache flushes, or unrelated system load.
 
-## Next Measurement
-
-If `bench uas` is run manually, compare these lines:
-
-- `write result ... fill=... data=... finish=...`
-- `write final done ...`
-- `write final timing fill=... data=... finish=...`
-
-The default production path is `1 MiB x1`. A real 2x win should show up as lower `data_ms`, not just a prettier average.
-
 ## Next Steps
 
-1. Boot normally and confirm TRUEOSFS root mounts on `transport=uas-skhynix` without running `bench uas`.
-2. If `bench uas` is used later, keep the next write-speed probe narrow: compare only `1 MiB x1` against `1 MiB x2`.
-3. If `1 MiB x1` still times out before `WRITE_READY`, stop tuning bench parameters and inspect the UAS write command/data/status setup below SCSI.
-4. If read and write both regress in the same run, do not chase WRITE(10) first; check xHCI event flow, DMA mapping, and global logging/load.
+1. Boot normally and confirm TRUEOSFS root mounts on `transport=uas-skhynix`.
+2. If `1 MiB x1` still times out before `WRITE_READY`, inspect the UAS write command/data/status setup below SCSI.
+3. If read and write both regress in the same run, do not chase WRITE(10) first; check xHCI event flow, DMA mapping, and global logging/load.
