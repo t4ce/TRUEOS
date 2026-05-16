@@ -1,10 +1,10 @@
-use alloc::{boxed::Box, vec::Vec as AllocVec};
 use crab_usb::{Device, DeviceInfo, EndpointBulkIn, EndpointBulkOut, USBHost};
 use embassy_executor::Spawner;
+use embassy_sync::channel::{Channel, TrySendError};
+use embassy_sync::signal::Signal;
+use embassy_sync::watch::{Receiver as WatchReceiver, Watch};
 use heapless::Vec;
 use spin::Mutex;
-
-use crate::disc::block;
 
 use super::api::claim_interface;
 use super::mass;
@@ -12,7 +12,9 @@ use super::mass;
 const SKHYNIX_GREEN_VID: u16 = 0x152E;
 const SKHYNIX_GREEN_PID: u16 = 0x7001;
 const MAX_ACTIVE_GREEN_PROBES: usize = 4;
-const GREEN_MAX_TRANSFER_BYTES: u64 = 1024 * 1024;
+const SKHYNIX_UAS_FLOW_QUEUE_DEPTH: usize = 8;
+const SKHYNIX_UAS_FLOW_STATE_RECEIVERS: usize = 4;
+const SKHYNIX_UAS_FLOW_MAX_LANES: u8 = 4;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct ActiveGreenProbe {
@@ -23,141 +25,210 @@ struct ActiveGreenProbe {
 static ACTIVE_GREEN_PROBES: Mutex<Vec<ActiveGreenProbe, MAX_ACTIVE_GREEN_PROBES>> =
     Mutex::new(Vec::new());
 
-struct GreenSkhynixBlockDevice {
-    _device: Device,
-    command_out: EndpointBulkOut,
-    status_in: EndpointBulkIn,
-    data_in: EndpointBulkIn,
-    _data_out: EndpointBulkOut,
-    block_size: u32,
-    block_count: u64,
-    next_tag: u32,
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SkhynixUasFlowDirection {
+    NoData,
+    DataIn,
+    DataOut,
 }
 
-unsafe impl Send for GreenSkhynixBlockDevice {}
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SkhynixUasFlowError {
+    QueueFull,
+    NotReady,
+    Transport,
+    ShortData,
+    Status,
+}
 
-impl GreenSkhynixBlockDevice {
-    fn next_command_tag(&mut self) -> u32 {
-        let tag = self.next_tag.max(1);
-        self.next_tag = self.next_tag.wrapping_add(1).max(1);
-        tag
-    }
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SkhynixUasFlowState {
+    pub online: bool,
+    pub max_lanes: u8,
+    pub active_lanes: u8,
+    pub queued: u8,
+    pub completed: u64,
+    pub bytes_in: u64,
+    pub bytes_out: u64,
+    pub last_error: Option<SkhynixUasFlowError>,
+}
 
-    fn validate_read(&self, lba: u64, blocks: usize, dst_len: usize) -> block::Result<usize> {
-        let bs = self.block_size as usize;
-        if bs == 0 {
-            return Err(block::Error::InvalidParam);
+#[allow(dead_code)]
+impl SkhynixUasFlowState {
+    pub const fn offline() -> Self {
+        Self {
+            online: false,
+            max_lanes: SKHYNIX_UAS_FLOW_MAX_LANES,
+            active_lanes: 0,
+            queued: 0,
+            completed: 0,
+            bytes_in: 0,
+            bytes_out: 0,
+            last_error: None,
         }
-        if blocks == 0 {
-            return if dst_len == 0 {
-                Ok(0)
-            } else {
-                Err(block::Error::InvalidParam)
-            };
-        }
-        let bytes = blocks.checked_mul(bs).ok_or(block::Error::InvalidParam)?;
-        if dst_len != bytes {
-            return Err(block::Error::InvalidParam);
-        }
-        let end = lba
-            .checked_add(blocks as u64)
-            .ok_or(block::Error::OutOfBounds)?;
-        if end > self.block_count || end > u64::from(u32::MAX) + 1 {
-            return Err(block::Error::OutOfBounds);
-        }
-        if bytes as u64 > GREEN_MAX_TRANSFER_BYTES {
-            return Err(block::Error::InvalidParam);
-        }
-        Ok(bytes)
-    }
-
-    async fn read_blocks_into_green(
-        &mut self,
-        lba: u64,
-        blocks: usize,
-        dst: &mut [u8],
-    ) -> block::Result<()> {
-        let bs = self.block_size as usize;
-        let _bytes = self.validate_read(lba, blocks, dst.len())?;
-        if blocks == 0 {
-            return Ok(());
-        }
-
-        let max_blocks_by_bytes = (GREEN_MAX_TRANSFER_BYTES as usize / bs).max(1);
-        let max_blocks = max_blocks_by_bytes.min(u16::MAX as usize).max(1);
-        let mut cur_lba = lba;
-        let mut remaining = blocks;
-        let mut off = 0usize;
-
-        while remaining != 0 {
-            let blocks_here = remaining.min(max_blocks);
-            let bytes_here = blocks_here * bs;
-            let tag = self.next_command_tag();
-            mass::read_blocks_uas_skhynix(
-                &mut self.command_out,
-                &mut self.status_in,
-                &mut self.data_in,
-                cur_lba as u32,
-                blocks_here as u16,
-                &mut dst[off..off + bytes_here],
-                tag,
-            )
-            .await
-            .map_err(|err| {
-                crate::log!(
-                    "crabusb: skhynix-green read err lba={} blocks={} tag=0x{:08X} err={:?}\n",
-                    cur_lba,
-                    blocks_here,
-                    tag,
-                    err
-                );
-                block::Error::Io
-            })?;
-
-            cur_lba = cur_lba.saturating_add(blocks_here as u64);
-            remaining = remaining.saturating_sub(blocks_here);
-            off = off.saturating_add(bytes_here);
-        }
-
-        Ok(())
     }
 }
 
-impl block::BlockDevice for GreenSkhynixBlockDevice {
-    fn block_size_bytes(&self) -> u32 {
-        self.block_size
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SkhynixUasFlowCompletion {
+    pub tag: u16,
+    pub direction: SkhynixUasFlowDirection,
+    pub transferred: usize,
+    pub result: Result<(), SkhynixUasFlowError>,
+}
+
+#[allow(dead_code)]
+pub(crate) struct SkhynixUasFlowRequest<'a> {
+    pub direction: SkhynixUasFlowDirection,
+    pub cdb: &'a [u8],
+    pub data_in: Option<&'a mut [u8]>,
+    pub data_out: Option<&'a [u8]>,
+    pub reply: &'a Signal<crate::wait::EmbassySpinRawMutex, SkhynixUasFlowCompletion>,
+}
+
+type SkhynixUasFlowChannel<'a> = Channel<
+    crate::wait::EmbassySpinRawMutex,
+    SkhynixUasFlowRequest<'a>,
+    SKHYNIX_UAS_FLOW_QUEUE_DEPTH,
+>;
+
+static SKHYNIX_UAS_FLOW_STATE: Watch<
+    crate::wait::EmbassySpinRawMutex,
+    SkhynixUasFlowState,
+    SKHYNIX_UAS_FLOW_STATE_RECEIVERS,
+> = Watch::new_with(SkhynixUasFlowState::offline());
+
+static SKHYNIX_UAS_FLOW_SERVICE: SkhynixUasFlowService<'static> = SkhynixUasFlowService::new();
+
+#[allow(dead_code)]
+pub(crate) type SkhynixUasFlowStateReceiver<'a> = WatchReceiver<
+    'a,
+    crate::wait::EmbassySpinRawMutex,
+    SkhynixUasFlowState,
+    SKHYNIX_UAS_FLOW_STATE_RECEIVERS,
+>;
+
+#[allow(dead_code)]
+pub(crate) struct SkhynixUasFlowService<'a> {
+    requests: SkhynixUasFlowChannel<'a>,
+}
+
+#[allow(dead_code)]
+impl<'a> SkhynixUasFlowService<'a> {
+    pub const fn new() -> Self {
+        Self {
+            requests: Channel::new(),
+        }
     }
 
-    fn block_count(&self) -> u64 {
-        self.block_count
+    pub fn subscribe_state() -> Option<SkhynixUasFlowStateReceiver<'static>> {
+        SKHYNIX_UAS_FLOW_STATE.receiver()
     }
 
-    fn max_transfer_bytes(&self) -> u64 {
-        GREEN_MAX_TRANSFER_BYTES
+    pub fn latest_state() -> SkhynixUasFlowState {
+        SKHYNIX_UAS_FLOW_STATE
+            .try_get()
+            .unwrap_or(SkhynixUasFlowState::offline())
     }
 
-    fn read_blocks<'a>(
-        &'a mut self,
-        lba: u64,
-        blocks: usize,
-    ) -> block::BoxFuture<'a, block::Result<AllocVec<u8>>> {
-        Box::pin(async move {
-            let bs = self.block_size as usize;
-            let bytes = blocks.checked_mul(bs).ok_or(block::Error::InvalidParam)?;
-            let mut out = alloc::vec![0u8; bytes];
-            self.read_blocks_into_green(lba, blocks, out.as_mut_slice())
-                .await?;
-            Ok(out)
+    pub fn try_submit(
+        &self,
+        request: SkhynixUasFlowRequest<'a>,
+    ) -> Result<(), SkhynixUasFlowError> {
+        self.requests.try_send(request).map_err(|err| match err {
+            TrySendError::Full(_) => SkhynixUasFlowError::QueueFull,
         })
     }
 
-    fn read_blocks_into<'a>(
-        &'a mut self,
-        lba: u64,
-        blocks: usize,
-        dst: &'a mut [u8],
-    ) -> block::BoxFuture<'a, block::Result<()>> {
-        Box::pin(async move { self.read_blocks_into_green(lba, blocks, dst).await })
+    pub async fn submit(&self, request: SkhynixUasFlowRequest<'a>) {
+        self.requests.send(request).await;
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) struct SkhynixUasFlowPipes {
+    device: Device,
+    command_out: EndpointBulkOut,
+    status_in: EndpointBulkIn,
+    data_in: EndpointBulkIn,
+    data_out: EndpointBulkOut,
+    next_tag: u32,
+}
+
+impl SkhynixUasFlowPipes {
+    fn next_command_tag(&mut self) -> u16 {
+        let tag = mass::uas_stream_id_from_tag(self.next_tag);
+        self.next_tag = self.next_tag.wrapping_add(1).max(1);
+        tag
+    }
+}
+
+#[allow(dead_code)]
+#[embassy_executor::task(pool_size = 1)]
+pub(crate) async fn skhynix_uas_flow_service_task(
+    service: &'static SkhynixUasFlowService<'static>,
+    mut pipes: SkhynixUasFlowPipes,
+) {
+    let state_sender = SKHYNIX_UAS_FLOW_STATE.sender();
+    let mut state = SkhynixUasFlowState {
+        online: true,
+        ..SkhynixUasFlowState::offline()
+    };
+    state_sender.send(state);
+
+    loop {
+        let request = service.requests.receive().await;
+        state.queued = 0;
+        state.active_lanes = 1;
+        state_sender.send(state);
+
+        let tag = pipes.next_command_tag();
+        let result = match request.direction {
+            SkhynixUasFlowDirection::NoData => {
+                let _ = (&mut pipes.device, &mut pipes.command_out, &mut pipes.status_in);
+                Err(SkhynixUasFlowError::NotReady)
+            }
+            SkhynixUasFlowDirection::DataIn => {
+                let _ = (
+                    &mut pipes.device,
+                    &mut pipes.command_out,
+                    &mut pipes.status_in,
+                    &mut pipes.data_in,
+                    request.cdb,
+                    request.data_in,
+                );
+                Err(SkhynixUasFlowError::NotReady)
+            }
+            SkhynixUasFlowDirection::DataOut => {
+                let _ = (
+                    &mut pipes.device,
+                    &mut pipes.command_out,
+                    &mut pipes.status_in,
+                    &mut pipes.data_out,
+                    request.cdb,
+                    request.data_out,
+                );
+                Err(SkhynixUasFlowError::NotReady)
+            }
+        };
+
+        state.active_lanes = 0;
+        state.completed = state.completed.saturating_add(1);
+        if let Err(err) = result {
+            state.last_error = Some(err);
+        }
+        state_sender.send(state);
+
+        request.reply.signal(SkhynixUasFlowCompletion {
+            tag,
+            direction: request.direction,
+            transferred: 0,
+            result,
+        });
     }
 }
 
@@ -186,8 +257,6 @@ pub(crate) async fn maybe_start_skhynix_green(
     spawner: &Spawner,
     controller_id: u32,
 ) -> bool {
-    let _ = spawner;
-
     let desc = dev_info.descriptor();
     let vendor_id = desc.vendor_id;
     let product_id = desc.product_id;
@@ -221,11 +290,11 @@ pub(crate) async fn maybe_start_skhynix_green(
         mass::pick_skhynix_uas_target(vendor_id, product_id, transport_plan.uas.as_slice())
     else {
         crate::log!(
-            "crabusb: skhynix-green {:04X}:{:04X} proof=uas-target status=missing TODO=raw-pipe-usage-refinement no_block_register=true\n",
+            "crabusb: skhynix-green {:04X}:{:04X} proof=uas-target status=missing fallback=bot no_block_register=true\n",
             vendor_id,
             product_id
         );
-        return true;
+        return false;
     };
 
     crate::log!(
@@ -427,31 +496,38 @@ pub(crate) async fn maybe_start_skhynix_green(
 
     drop(interface);
 
-    let label = alloc::format!("skhynix-green-{:04X}:{:04X}", vendor_id, product_id);
-    let desc = block::DeviceDescriptor::new(block::DeviceKind::Unknown)
-        .with_label(label)
-        .mark_read_only();
-    let handle = block::register_device(
-        desc,
-        GreenSkhynixBlockDevice {
-            _device: device,
-            command_out,
-            status_in,
-            data_in,
-            _data_out: data_out,
-            block_size: probe.block_size.max(1),
-            block_count: probe.block_count.max(1),
-            next_tag: 0x4752_0001,
-        },
-    );
+    let pipes = SkhynixUasFlowPipes {
+        device,
+        command_out,
+        status_in,
+        data_in,
+        data_out,
+        next_tag: 0x4752_0001,
+    };
 
-    crate::log!(
-        "crabusb: skhynix-green {:04X}:{:04X} proof=green-disk status=registered disk={} label=skhynix-green read_only=1 max_xfer={} no_legacy_mass=true\n",
-        vendor_id,
-        product_id,
-        handle.id(),
-        GREEN_MAX_TRANSFER_BYTES
-    );
+    match spawner.spawn(skhynix_uas_flow_service_task(
+        &SKHYNIX_UAS_FLOW_SERVICE,
+        pipes,
+    )) {
+        Ok(()) => {
+            crate::log!(
+                "crabusb: skhynix-green {:04X}:{:04X} proof=uas-flow status=started bs={} blocks={} clean_stack_only=true no_block_register=true trueosfs_auto_mount=false\n",
+                vendor_id,
+                product_id,
+                probe.block_size.max(1),
+                probe.block_count.max(1)
+            );
+        }
+        Err(err) => {
+            crate::log!(
+                "crabusb: skhynix-green {:04X}:{:04X} proof=uas-flow status=spawn-failed err={:?} no_block_register=true trueosfs_auto_mount=false\n",
+                vendor_id,
+                product_id,
+                err
+            );
+            unregister_active_green_probe(active_probe);
+        }
+    }
 
     true
 }

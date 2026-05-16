@@ -348,6 +348,9 @@ fn active_guest_host_ptr(vm_id: u8, guest_ptr: *const u8, len: usize) -> Option<
     if guest_ptr.is_null() {
         return None;
     }
+    if crate::hv::current_hull_guest_context_vm_id() == Some(vm_id) {
+        return Some(guest_ptr.cast_mut());
+    }
     if let Some(host_ptr) = guest_stack_host_ptr(vm_id, guest_ptr, len) {
         return Some(host_ptr);
     }
@@ -412,24 +415,11 @@ fn copy_mio_addr_to_active_guest(
 }
 
 fn copy_from_guest_stack(vm_id: u8, src: *const u8, len: usize) -> Option<Vec<u8>> {
-    if len == 0 {
-        return Some(Vec::new());
-    }
-    let bytes = if let Some(host_ptr) = guest_stack_host_ptr(vm_id, src, len) {
-        unsafe { core::slice::from_raw_parts(host_ptr.cast_const(), len) }
-    } else {
-        unsafe { core::slice::from_raw_parts(src, len) }
-    };
-    Some(Vec::from(bytes))
+    copy_from_active_guest(vm_id, src, len)
 }
 
 fn copy_to_guest_stack(vm_id: u8, dst: *mut u8, bytes: &[u8]) -> bool {
-    if bytes.is_empty() {
-        return true;
-    }
-    let dst_ptr = guest_stack_host_ptr(vm_id, dst.cast_const(), bytes.len()).unwrap_or(dst);
-    unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), dst_ptr, bytes.len()) };
-    true
+    copy_to_active_guest(vm_id, dst, bytes)
 }
 
 fn copy_u32_to_guest_stack(vm_id: u8, dst: *mut u32, value: u32) -> bool {
