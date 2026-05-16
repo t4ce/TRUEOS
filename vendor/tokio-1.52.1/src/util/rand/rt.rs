@@ -1,8 +1,8 @@
 use super::{FastRand, RngSeed};
 
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use crate::loom::sync::Mutex;
-#[cfg(not(target_os = "zkvm"))]
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::sync::Mutex;
 
 /// A deterministic generator for seeds (and other generators).
@@ -30,9 +30,9 @@ impl RngSeedGenerator {
 
     /// Returns the next seed in the sequence.
     pub(crate) fn next_seed(&self) -> RngSeed {
-        #[cfg(target_os = "zkvm")]
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         let mut rng = self.state.lock();
-        #[cfg(not(target_os = "zkvm"))]
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         let mut rng = self
             .state
             .lock()

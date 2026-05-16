@@ -1,4 +1,4 @@
-#[cfg(not(target_os = "zkvm"))]
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use crate::io::blocking::Blocking;
 use crate::io::{AsyncRead, ReadBuf};
 
@@ -27,13 +27,13 @@ cfg_io_std! {
     /// [`stdin`]: fn@stdin
     /// [`AsyncRead`]: trait@AsyncRead
     #[derive(Debug)]
-    #[cfg(not(target_os = "zkvm"))]
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     pub struct Stdin {
         std: Blocking<std::io::Stdin>,
     }
 
     #[derive(Debug)]
-    #[cfg(target_os = "zkvm")]
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
     pub struct Stdin {
         _priv: (),
     }
@@ -48,7 +48,7 @@ cfg_io_std! {
     ///
     /// For interactive uses, it is recommended to spawn a thread dedicated to
     /// user input and use blocking IO directly in that thread.
-    #[cfg(not(target_os = "zkvm"))]
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     pub fn stdin() -> Stdin {
         let std = io::stdin();
         // SAFETY: The `Read` implementation of `std` does not read from the
@@ -60,13 +60,13 @@ cfg_io_std! {
         }
     }
 
-    #[cfg(target_os = "zkvm")]
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
     pub fn stdin() -> Stdin {
         Stdin { _priv: () }
     }
 }
 
-#[cfg(all(unix, not(target_os = "zkvm")))]
+#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
 mod sys {
     use std::os::unix::io::{AsFd, AsRawFd, BorrowedFd, RawFd};
 
@@ -102,18 +102,18 @@ cfg_windows! {
 }
 
 impl AsyncRead for Stdin {
-    #[cfg_attr(target_os = "zkvm", allow(unused_mut))]
+    #[cfg_attr(any(target_os = "trueos", target_os = "zkvm"), allow(unused_mut))]
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        #[cfg(target_os = "zkvm")]
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         {
             let _ = (self, cx, buf);
             return Poll::Ready(Ok(()));
         }
-        #[cfg(not(target_os = "zkvm"))]
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         Pin::new(&mut self.std).poll_read(cx, buf)
     }
 }

@@ -1,4 +1,4 @@
-#[cfg(not(target_os = "zkvm"))]
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use crate::fs::asyncify;
 use alloc::borrow::ToOwned;
 
@@ -92,7 +92,7 @@ impl DirBuilder {
     /// ```
     pub async fn create(&self, path: impl AsRef<Path>) -> io::Result<()> {
         let path = path.as_ref().to_owned();
-        #[cfg(target_os = "zkvm")]
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         {
             if self.recursive {
                 return crate::fs::trueos::create_dir_all(&path).await;
@@ -100,7 +100,7 @@ impl DirBuilder {
             return crate::fs::trueos::create_dir(&path).await;
         }
 
-        #[cfg(not(target_os = "zkvm"))]
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         {
         let mut builder = std::fs::DirBuilder::new();
         builder.recursive(self.recursive);
@@ -118,7 +118,7 @@ impl DirBuilder {
 }
 
 feature! {
-    #![all(unix, not(target_os = "zkvm"))]
+    #![all(unix, not(any(target_os = "trueos", target_os = "zkvm")))]
 
     impl DirBuilder {
         /// Sets the mode to create new directories with.

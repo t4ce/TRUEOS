@@ -13,7 +13,7 @@ pub async fn symlink(original: impl AsRef<Path>, link: impl AsRef<Path>) -> io::
     let original = original.as_ref().to_owned();
     let link = link.as_ref().to_owned();
 
-    #[cfg(target_os = "zkvm")]
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
     {
         let _ = (original, link);
         Err(io::Error::new(
@@ -22,6 +22,6 @@ pub async fn symlink(original: impl AsRef<Path>, link: impl AsRef<Path>) -> io::
         ))
     }
 
-    #[cfg(not(target_os = "zkvm"))]
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     asyncify(move || std::os::unix::fs::symlink(original, link)).await
 }

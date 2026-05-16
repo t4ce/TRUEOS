@@ -14,9 +14,9 @@ use crate::util::check_socket_for_blocking;
 
 use core::fmt;
 use std::io;
-#[cfg(target_os = "zkvm")]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use core::net::SocketAddr;
-#[cfg(not(target_os = "zkvm"))]
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::net::{Shutdown, SocketAddr};
 use core::pin::Pin;
 use core::task::{ready, Context, Poll};
@@ -211,12 +211,12 @@ impl TcpStream {
     /// explicitly with [`Runtime::enter`](crate::runtime::Runtime::enter) function.
     #[track_caller]
     pub fn from_std(stream: std::net::TcpStream) -> io::Result<TcpStream> {
-        #[cfg(target_os = "zkvm")]
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         {
             return Ok(stream);
         }
 
-        #[cfg(not(target_os = "zkvm"))]
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         {
         check_socket_for_blocking(&stream)?;
 
@@ -266,7 +266,7 @@ impl TcpStream {
     /// [`std::net::TcpStream`]: std::net::TcpStream
     /// [`set_nonblocking`]: fn@std::net::TcpStream::set_nonblocking
     pub fn into_std(self) -> io::Result<std::net::TcpStream> {
-        #[cfg(all(unix, not(target_os = "zkvm")))]
+        #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
         {
             use std::os::unix::io::{FromRawFd, IntoRawFd};
             self.io
@@ -293,7 +293,7 @@ impl TcpStream {
                 .map(|raw_fd| unsafe { std::net::TcpStream::from_raw_fd(raw_fd) })
         }
 
-        #[cfg(target_os = "zkvm")]
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         {
             Err(io::Error::new(
                 io::ErrorKind::Other,
@@ -1147,7 +1147,7 @@ impl TcpStream {
     /// this function call and the OS closing this socket because of external events (e.g. TCP reset).
     /// See <https://github.com/tokio-rs/tokio/issues/4665> for more information.
     pub(super) fn shutdown_std(&self, how: std::net::Shutdown) -> io::Result<()> {
-        #[cfg(target_os = "zkvm")]
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
         let how = match how {
             std::net::Shutdown::Read => mio::net::Shutdown::Read,
             std::net::Shutdown::Write => mio::net::Shutdown::Write,
@@ -1486,7 +1486,7 @@ impl TcpStream {
     }
 }
 
-#[cfg(not(target_os = "zkvm"))]
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 impl TryFrom<std::net::TcpStream> for TcpStream {
     type Error = io::Error;
 
@@ -1557,7 +1557,7 @@ impl AsRef<Self> for TcpStream {
     }
 }
 
-#[cfg(all(unix, not(target_os = "zkvm")))]
+#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
 mod sys {
     use super::TcpStream;
     use std::os::unix::prelude::*;
