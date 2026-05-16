@@ -101,11 +101,10 @@
 use alloc::borrow::ToOwned;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use crate::{chunk, DecodingError};
+use crate::DecodingError;
 use fdeflate::BoundedDecompressionError;
-use core::convert::TryFrom;
 #[cfg(feature = "png-encoding")]
-use crate::{encoder, EncodingError};
+use crate::{chunk, encoder, EncodingError};
 #[cfg(feature = "png-encoding")]
 use flate2::write::ZlibEncoder;
 #[cfg(feature = "png-encoding")]

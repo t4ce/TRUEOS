@@ -81,5 +81,6 @@ features = ["derive"]
 
 [features]
 alloc = []
+cargo-clippy = []
 default = ["std"]
 std = ["alloc"]

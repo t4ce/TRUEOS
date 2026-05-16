@@ -23,6 +23,10 @@ keywords = ["random", "rng", "distribution", "probability"]
 categories = ["algorithms", "no-std"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/rust-random/rand"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(doc_cfg)'] }
+
 [dependencies.num-traits]
 version = "0.2"
 features = ["libm"]

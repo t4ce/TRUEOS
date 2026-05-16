@@ -4,6 +4,16 @@
     rust_2018_idioms,
     unreachable_pub
 )]
+#![cfg_attr(
+    any(target_os = "trueos", target_os = "zkvm"),
+    allow(
+        dead_code,
+        missing_debug_implementations,
+        missing_docs,
+        unreachable_pub,
+        unused_imports
+    )
+)]
 #![forbid(unsafe_code)]
 #![allow(elided_lifetimes_in_paths, clippy::type_complexity)]
 #![cfg_attr(test, allow(clippy::float_cmp))]

@@ -1,7 +1,7 @@
 use core::cmp::Ordering;
 use core::fmt::{self, Write};
 
-use crate::bst_arena::{BstArena, BstNode, NodeId};
+use crate::bst_arena::{BstArena, NodeId};
 
 /// AVL extra data stored in each node: the subtree height.
 type AvlExtra = i32;

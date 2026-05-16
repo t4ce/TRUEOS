@@ -4,6 +4,17 @@
     rust_2018_idioms,
     unreachable_pub
 )]
+#![cfg_attr(
+    any(target_os = "trueos", target_os = "zkvm"),
+    allow(
+        dead_code,
+        missing_debug_implementations,
+        missing_docs,
+        unreachable_pub,
+        unused_extern_crates,
+        unused_imports
+    )
+)]
 #![cfg_attr(any(target_os = "trueos", target_os = "zkvm"), no_std)]
 #![forbid(unsafe_code)]
 // `rustdoc::broken_intra_doc_links` is checked on CI

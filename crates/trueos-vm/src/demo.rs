@@ -298,7 +298,7 @@ fn build_probe_title(buf: &mut [u8; 64], fs_ok: bool, net_ok: bool) -> usize {
 fn guest_apic_id() -> u32 {
     use core::arch::x86_64::__cpuid;
 
-    unsafe { (__cpuid(1).ebx >> 24) & 0xff }
+    (__cpuid(1).ebx >> 24) & 0xff
 }
 
 #[cfg(not(target_arch = "x86_64"))]
