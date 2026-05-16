@@ -53,7 +53,6 @@
 
 use std::{
     future::Future,
-    io as tokio_io,
     pin::Pin,
     task::{Context, Poll},
     time::Duration,
@@ -62,6 +61,7 @@ use std::{
 use hyper::{io as hyper_io, time::Instant};
 use hyper::rt::{Executor, Sleep, Timer};
 use pin_project_lite::pin_project;
+use tokio::io as tokio_io;
 
 #[cfg(feature = "tracing")]
 use tracing::instrument::Instrument;

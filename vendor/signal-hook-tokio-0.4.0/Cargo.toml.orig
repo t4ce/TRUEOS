@@ -1,0 +1,38 @@
+[package]
+name = "signal-hook-tokio"
+version = "0.4.0"
+authors = [
+    "Michal 'vorner' Vaner <vorner@vorner.cz>",
+    "Thomas Himmelstoss <thimm@posteo.de>",
+]
+
+description = "Tokio support for signal-hook"
+documentation = "https://docs.rs/signal-hook-tokio"
+readme = "README.md"
+repository = "https://github.com/vorner/signal-hook"
+keywords = ["signal", "unix", "tokio"]
+license = "MIT OR Apache-2.0"
+
+edition = "2018"
+
+[badges]
+travis-ci = { repository = "vorner/signal-hook" }
+maintenance = { status = "actively-developed" }
+
+[features]
+futures-v0_3 = ["futures-core-0_3"]
+
+[dependencies]
+libc = "~0.2"
+signal-hook = { version = "~0.4", path = ".." }
+futures-core-0_3 = { package = "futures-core", version = "~0.3", optional = true }
+tokio = { version = "~1", features = ["net"] }
+
+[dev-dependencies]
+tokio = { package = "tokio", version = "~1", features = ["full"] }
+futures = "~0.3"
+serial_test = { path = "../serial_test" }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

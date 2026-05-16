@@ -1,10 +1,10 @@
 use pin_project_lite::pin_project;
 use std::{
-    io as tokio_io,
     pin::Pin,
     task::{Context, Poll},
 };
 use hyper::io as hyper_io;
+use tokio::io as tokio_io;
 
 use super::{hyper_to_tokio_slices, tokio_to_hyper_error};
 
