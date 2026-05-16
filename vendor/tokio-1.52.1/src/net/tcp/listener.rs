@@ -242,12 +242,12 @@ impl TcpListener {
     /// explicitly with [`Runtime::enter`](crate::runtime::Runtime::enter) function.
     #[track_caller]
     pub fn from_std(listener: net::TcpListener) -> io::Result<TcpListener> {
-        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        #[cfg(target_os = "zkvm")]
         {
             return Ok(listener);
         }
 
-        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+        #[cfg(not(target_os = "zkvm"))]
         {
         check_socket_for_blocking(&listener)?;
 
@@ -280,7 +280,7 @@ impl TcpListener {
     /// [`std::net::TcpListener`]: std::net::TcpListener
     /// [`set_nonblocking`]: fn@std::net::TcpListener::set_nonblocking
     pub fn into_std(self) -> io::Result<std::net::TcpListener> {
-        #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
+        #[cfg(all(unix, not(target_os = "zkvm")))]
         {
             use std::os::unix::io::{FromRawFd, IntoRawFd};
             self.io
@@ -307,7 +307,7 @@ impl TcpListener {
                 .map(|raw_fd| unsafe { std::net::TcpListener::from_raw_fd(raw_fd) })
         }
 
-        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        #[cfg(target_os = "zkvm")]
         {
             Err(io::Error::new(
                 io::ErrorKind::Other,
@@ -403,7 +403,7 @@ impl TcpListener {
     }
 }
 
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+#[cfg(not(target_os = "zkvm"))]
 impl TryFrom<net::TcpListener> for TcpListener {
     type Error = io::Error;
 
@@ -422,7 +422,7 @@ impl fmt::Debug for TcpListener {
     }
 }
 
-#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
+#[cfg(all(unix, not(target_os = "zkvm")))]
 mod sys {
     use super::TcpListener;
     use std::os::unix::prelude::*;

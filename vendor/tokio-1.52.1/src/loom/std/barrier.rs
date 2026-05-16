@@ -2,13 +2,13 @@
 //!
 //! This implementation mirrors that of the Rust standard library.
 
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+#[cfg(not(target_os = "zkvm"))]
 use crate::loom::sync::Condvar;
 use crate::loom::sync::Mutex;
 use core::fmt;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 use core::time::Duration;
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+#[cfg(not(target_os = "zkvm"))]
 use core::time::Duration;
 use std::time::Instant;
 
@@ -43,7 +43,7 @@ use std::time::Instant;
 /// ```
 pub(crate) struct Barrier {
     lock: Mutex<BarrierState>,
-    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+    #[cfg(not(target_os = "zkvm"))]
     cvar: Condvar,
     num_threads: usize,
 }
@@ -95,7 +95,7 @@ impl Barrier {
                 count: 0,
                 generation_id: 0,
             }),
-            #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+            #[cfg(not(target_os = "zkvm"))]
             cvar: Condvar::new(),
             num_threads: n,
         }
@@ -142,7 +142,7 @@ impl Barrier {
         let local_gen = lock.generation_id;
         lock.count += 1;
         if lock.count < self.num_threads {
-            #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+            #[cfg(target_os = "zkvm")]
             {
                 crate::platform::note_semantic_gap(crate::platform::SEMANTIC_GAP_BARRIER_POLL);
                 loop {
@@ -155,7 +155,7 @@ impl Barrier {
                 }
             }
 
-            #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+            #[cfg(not(target_os = "zkvm"))]
             // We need a while loop to guard against spurious wakeups.
             // https://en.wikipedia.org/wiki/Spurious_wakeup
             while local_gen == lock.generation_id {
@@ -165,7 +165,7 @@ impl Barrier {
         } else {
             lock.count = 0;
             lock.generation_id = lock.generation_id.wrapping_add(1);
-            #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+            #[cfg(not(target_os = "zkvm"))]
             self.cvar.notify_all();
             BarrierWaitResult(true)
         }
@@ -174,7 +174,7 @@ impl Barrier {
     /// Blocks the current thread until all threads have rendezvoused here for
     /// at most `timeout` duration.
     pub(crate) fn wait_timeout(&self, timeout: Duration) -> Option<BarrierWaitResult> {
-        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        #[cfg(target_os = "zkvm")]
         {
             crate::platform::note_semantic_gap(crate::platform::SEMANTIC_GAP_BARRIER_POLL);
             let deadline =
@@ -216,7 +216,7 @@ impl Barrier {
             return Some(BarrierWaitResult(true));
         }
 
-        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+        #[cfg(not(target_os = "zkvm"))]
         {
             // This implementation mirrors `wait`, but with each blocking operation
             // replaced by a timeout-amenable alternative.
@@ -290,7 +290,7 @@ impl BarrierWaitResult {
     }
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 fn duration_to_nanos(duration: Duration) -> u64 {
     duration
         .as_secs()
@@ -298,7 +298,7 @@ fn duration_to_nanos(duration: Duration) -> u64 {
         .saturating_add(u64::from(duration.subsec_nanos()))
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(target_os = "zkvm")]
 fn remaining_sleep_ms(remaining_nanos: u64) -> u64 {
     (remaining_nanos / 1_000_000).min(1)
 }
