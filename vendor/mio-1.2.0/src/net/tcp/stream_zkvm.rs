@@ -48,17 +48,11 @@ impl TcpStream {
     }
 
     pub fn set_ttl(&self, _: u32) -> io::Result<()> {
-        Err(io::Error::new(
-            io::ErrorKind::Other,
-            "mio zkvm TcpStream::set_ttl is not wired yet",
-        ))
+        Ok(())
     }
 
     pub fn ttl(&self) -> io::Result<u32> {
-        Err(io::Error::new(
-            io::ErrorKind::Other,
-            "mio zkvm TcpStream::ttl is not wired yet",
-        ))
+        Ok(64)
     }
 
     pub fn take_error(&self) -> io::Result<Option<io::Error>> {

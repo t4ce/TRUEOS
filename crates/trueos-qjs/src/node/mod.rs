@@ -1252,14 +1252,6 @@ fn js_int32(v: i32) -> qjs::JSValue {
     }
 }
 
-#[inline]
-fn js_null() -> qjs::JSValue {
-    qjs::JSValue {
-        u: qjs::JSValueUnion { int32: 0 },
-        tag: qjs::JS_TAG_NULL,
-    }
-}
-
 unsafe fn locale_profile_from_arg0(
     ctx: *mut qjs::JSContext,
     argc: c_int,

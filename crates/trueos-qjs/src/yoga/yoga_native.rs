@@ -216,7 +216,7 @@ pub(crate) unsafe fn try_create_native_module(
         js_u32(ctx, backend::node_get_child_count(unsafe { arg_u32(ctx, argc, argv, 0) }))
     }
 
-    unsafe extern "C" fn yoga_node_set_i32(
+    unsafe fn yoga_node_set_i32(
         ctx: *mut qjs::JSContext,
         argc: i32,
         argv: *const qjs::JSValueConst,
@@ -227,7 +227,7 @@ pub(crate) unsafe fn try_create_native_module(
         f(h, v);
     }
 
-    unsafe extern "C" fn yoga_node_set_f32(
+    unsafe fn yoga_node_set_f32(
         ctx: *mut qjs::JSContext,
         argc: i32,
         argv: *const qjs::JSValueConst,
@@ -238,7 +238,7 @@ pub(crate) unsafe fn try_create_native_module(
         f(h, v);
     }
 
-    unsafe extern "C" fn yoga_node_set_edge_f32(
+    unsafe fn yoga_node_set_edge_f32(
         ctx: *mut qjs::JSContext,
         argc: i32,
         argv: *const qjs::JSValueConst,
