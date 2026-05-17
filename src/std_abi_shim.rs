@@ -73,7 +73,8 @@ struct TrueosInAddr {
 
 #[repr(C)]
 struct TrueosSockAddrIn {
-    sin_family: u16,
+    sin_len: u8,
+    sin_family: u8,
     sin_port: u16,
     sin_addr: TrueosInAddr,
     sin_zero: [u8; 8],
@@ -87,8 +88,8 @@ struct TrueosAddrInfo {
     ai_socktype: c_int,
     ai_protocol: c_int,
     ai_addrlen: u32,
-    ai_addr: *mut c_void,
     ai_canonname: *mut c_char,
+    ai_addr: *mut c_void,
     ai_next: *mut TrueosAddrInfo,
 }
 
@@ -1185,7 +1186,8 @@ pub unsafe extern "C" fn getaddrinfo(
 
     unsafe {
         *addr_ptr = TrueosSockAddrIn {
-            sin_family: TRUEOS_AF_INET as u16,
+            sin_len: core::mem::size_of::<TrueosSockAddrIn>() as u8,
+            sin_family: TRUEOS_AF_INET as u8,
             sin_port: port.to_be(),
             sin_addr: TrueosInAddr {
                 s_addr: u32::from_ne_bytes(ip),
@@ -1198,8 +1200,8 @@ pub unsafe extern "C" fn getaddrinfo(
             ai_socktype: socktype,
             ai_protocol: protocol,
             ai_addrlen: core::mem::size_of::<TrueosSockAddrIn>() as u32,
-            ai_addr: addr_ptr.cast::<c_void>(),
             ai_canonname: ptr::null_mut(),
+            ai_addr: addr_ptr.cast::<c_void>(),
             ai_next: ptr::null_mut(),
         };
     }

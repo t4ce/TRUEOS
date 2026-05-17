@@ -955,9 +955,13 @@ pub mod cabi {
     }
 
     const VM_CABI_ALLOC_HEADER_BYTES: usize = 16;
+    const CABI_VM_ALLOC_BUCKET_SHIFT: usize = 24;
+    const CABI_VM_ALLOC_BUCKET_INIT: u32 = u32::MAX;
 
     static CABI_ALLOC_TABLE: spin::Mutex<alloc::collections::BTreeMap<usize, AllocMeta>> =
         spin::Mutex::new(alloc::collections::BTreeMap::new());
+    static CABI_VM_ALLOC_FREE_BUCKET_BY_VM: [AtomicU32; crate::allcaps::hv::VM_ID_LIMIT] =
+        [const { AtomicU32::new(CABI_VM_ALLOC_BUCKET_INIT) }; crate::allcaps::hv::VM_ID_LIMIT];
 
     #[inline]
     fn cabi_malloc_align() -> usize {
@@ -974,7 +978,8 @@ pub mod cabi {
 
     #[inline]
     fn cabi_vm_alloc_vm_id() -> Option<u8> {
-        crate::hv::current_guest_execution_context_vm_id()
+        crate::hv::current_hull_guest_context_vm_id()
+            .or_else(crate::t::kernel_task_domain::guest_owned_alloc_vm_id)
     }
 
     fn cabi_vm_heap_owner(ptr: *const u8) -> Option<u8> {
@@ -1019,12 +1024,77 @@ pub mod cabi {
         base.add(VM_CABI_ALLOC_HEADER_BYTES)
     }
 
-    unsafe fn cabi_vm_alloc_for_vm(vm_id: u8, size: usize) -> *mut u8 {
-        if crate::hv::current_hull_guest_context_vm_id().is_some() {
-            return cabi_vm_alloc_inner(size);
+    #[inline]
+    unsafe fn cabi_return_address(depth: usize) -> usize {
+        #[cfg(target_arch = "x86_64")]
+        {
+            let rbp: usize;
+            core::arch::asm!("mov {}, rbp", out(reg) rbp, options(nomem, nostack, preserves_flags));
+            let mut frame = rbp as *const usize;
+            let mut remaining = depth;
+            while remaining != 0 {
+                if frame.is_null()
+                    || !(frame as usize).is_multiple_of(core::mem::align_of::<usize>())
+                {
+                    return 0;
+                }
+                frame = *frame as *const usize;
+                remaining -= 1;
+            }
+            if frame.is_null() || !(frame as usize).is_multiple_of(core::mem::align_of::<usize>())
+            {
+                0
+            } else {
+                *frame.add(1)
+            }
         }
-        crate::allocators::with_hv_guest_alloc_domain(vm_id, || cabi_vm_alloc_inner(size))
-            .unwrap_or(core::ptr::null_mut())
+
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            let _ = depth;
+            0
+        }
+    }
+
+    fn log_cabi_vm_alloc_watermark(vm_id: u8, size: usize, ptr: *mut u8) {
+        let Some(bucket_slot) = CABI_VM_ALLOC_FREE_BUCKET_BY_VM.get(vm_id as usize) else {
+            return;
+        };
+        let stats = crate::allocators::hv_guest_heap_stats(vm_id);
+        let bucket = (stats.free_bytes >> CABI_VM_ALLOC_BUCKET_SHIFT) as u32;
+        let previous = bucket_slot.swap(bucket, Ordering::AcqRel);
+        let should_log = ptr.is_null()
+            || size >= 1024 * 1024
+            || previous == CABI_VM_ALLOC_BUCKET_INIT
+            || bucket != previous;
+        if !should_log {
+            return;
+        }
+        crate::log!(
+            "cabi-alloc: vm{} size={} ptr=0x{:X} free={} largest={} blocks={} bucket={} prev={} caller=0x{:016X} caller1=0x{:016X} caller2=0x{:016X}\n",
+            vm_id,
+            size,
+            ptr as usize,
+            stats.free_bytes,
+            stats.largest_free_block,
+            stats.free_blocks,
+            bucket,
+            previous,
+            unsafe { cabi_return_address(3) },
+            unsafe { cabi_return_address(4) },
+            unsafe { cabi_return_address(5) },
+        );
+    }
+
+    unsafe fn cabi_vm_alloc_for_vm(vm_id: u8, size: usize) -> *mut u8 {
+        let ptr = if crate::hv::current_hull_guest_context_vm_id().is_some() {
+            cabi_vm_alloc_inner(size)
+        } else {
+            crate::allocators::with_hv_guest_alloc_domain(vm_id, || cabi_vm_alloc_inner(size))
+                .unwrap_or(core::ptr::null_mut())
+        };
+        log_cabi_vm_alloc_watermark(vm_id, size, ptr);
+        ptr
     }
 
     unsafe fn cabi_vm_alloc(size: usize) -> *mut u8 {
@@ -1160,6 +1230,34 @@ pub mod cabi {
             .get(&(ptr as usize))
             .map(|m| m.size)
             .unwrap_or(0)
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_heap_stats(
+        out: *mut v::vcabi::TrueosCabiHeapStats,
+    ) -> i32 {
+        if out.is_null() {
+            return -1;
+        }
+        let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() else {
+            return -2;
+        };
+        let stats = crate::allocators::hv_guest_heap_stats(vm_id);
+        let source = match stats.source {
+            crate::allocators::HeapSourceKind::Unconfigured => 0,
+            crate::allocators::HeapSourceKind::Arena => 1,
+        };
+        unsafe {
+            (*out).heap_start = stats.heap_start;
+            (*out).heap_end = stats.heap_end;
+            (*out).usable_total = stats.usable_total;
+            (*out).free_bytes = stats.free_bytes;
+            (*out).largest_free_block = stats.largest_free_block;
+            (*out).free_blocks = stats.free_blocks;
+            (*out).initialized = u32::from(stats.initialized);
+            (*out).source = source;
+        }
+        0
     }
 
     #[inline]

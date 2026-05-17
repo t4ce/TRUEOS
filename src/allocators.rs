@@ -23,6 +23,8 @@ const ALLOC_TRACE_STAGE_BLOCK: u32 = 2;
 const ALLOC_TRACE_STAGE_COMPARE: u32 = 3;
 const ALLOC_TRACE_STAGE_SUCCESS: u32 = 4;
 const ALLOC_TRACE_STAGE_INVALID_PTR: u32 = 5;
+const HV_GUEST_ALLOC_BUCKET_SHIFT: usize = 24;
+const HV_GUEST_ALLOC_BUCKET_INIT: u32 = u32::MAX;
 
 static ALLOC_TRACE_SEQ: AtomicU64 = AtomicU64::new(0);
 static ALLOC_TRACE_CALLER: AtomicUsize = AtomicUsize::new(0);
@@ -40,6 +42,8 @@ static ALLOC_TRACE_ALIGNED_USED: AtomicUsize = AtomicUsize::new(0);
 static HOST_HEAP_VIRT_START: AtomicUsize = AtomicUsize::new(0);
 static HOST_HEAP_VIRT_END: AtomicUsize = AtomicUsize::new(0);
 static HV_GUEST_HOST_DEALLOC_LOGGED: AtomicU32 = AtomicU32::new(0);
+static HV_GUEST_ALLOC_FREE_BUCKET_BY_VM: [AtomicU32; crate::allcaps::hv::VM_ID_LIMIT] =
+    [const { AtomicU32::new(HV_GUEST_ALLOC_BUCKET_INIT) }; crate::allcaps::hv::VM_ID_LIMIT];
 
 #[derive(Copy, Clone, Debug)]
 pub struct AllocTrace {
@@ -756,6 +760,9 @@ unsafe impl GlobalAlloc for Allocator {
         if !ptr.is_null() {
             let tag_ptr = ptr.sub(size_of::<AllocTag>()) as *mut AllocTag;
             (*tag_ptr).domain = alloc_domain_tag(domain);
+            if let Some(vm_id) = alloc_domain_vm_id(domain) {
+                log_hv_guest_alloc_watermark(vm_id, layout, ptr, "global");
+            }
         } else if let Some(vm_id) = alloc_domain_vm_id(domain) {
             log_hv_guest_alloc_failure(vm_id, layout, "global");
         }
@@ -782,15 +789,56 @@ static GLOBAL_ALLOCATOR: Allocator = Allocator;
 
 pub unsafe fn alloc_raw(layout: Layout) -> *mut u8 {
     let domain = current_alloc_domain();
-    let mut guard = allocator_for_domain(domain).lock();
-    let ptr = guard.alloc(domain, layout);
+    let ptr = {
+        let mut guard = allocator_for_domain(domain).lock();
+        guard.alloc(domain, layout)
+    };
     if !ptr.is_null() {
         let tag_ptr = ptr.sub(size_of::<AllocTag>()) as *mut AllocTag;
         (*tag_ptr).domain = alloc_domain_tag(domain);
+        if let Some(vm_id) = alloc_domain_vm_id(domain) {
+            log_hv_guest_alloc_watermark(vm_id, layout, ptr, "raw");
+        }
     } else if let Some(vm_id) = alloc_domain_vm_id(domain) {
         log_hv_guest_alloc_failure(vm_id, layout, "raw");
     }
     ptr
+}
+
+fn log_hv_guest_alloc_watermark(vm_id: u8, layout: Layout, ptr: *mut u8, path: &str) {
+    with_host_alloc_domain(|| {
+        let Some(bucket_slot) = HV_GUEST_ALLOC_FREE_BUCKET_BY_VM.get(vm_id as usize) else {
+            return;
+        };
+        let stats = hv_guest_heap_stats(vm_id);
+        let bucket = (stats.free_bytes >> HV_GUEST_ALLOC_BUCKET_SHIFT) as u32;
+        let previous = bucket_slot.swap(bucket, Ordering::AcqRel);
+        let should_log = layout.size() >= 1024 * 1024
+            || previous == HV_GUEST_ALLOC_BUCKET_INIT
+            || bucket != previous;
+        if !should_log {
+            return;
+        }
+        let trace = last_alloc_trace();
+        crate::log!(
+            "hv-guest-alloc: vm{} {} ok size={} align={} ptr=0x{:016X} free_bytes={} largest_free={} free_blocks={} bucket={} prev={} trace_size={} trace_align={} caller=0x{:016X} caller1=0x{:016X} caller2=0x{:016X}\n",
+            vm_id,
+            path,
+            layout.size(),
+            layout.align(),
+            ptr as usize,
+            stats.free_bytes,
+            stats.largest_free_block,
+            stats.free_blocks,
+            bucket,
+            previous,
+            trace.layout_size,
+            trace.layout_align,
+            trace.caller_rip,
+            trace.caller_rip_1,
+            trace.caller_rip_2,
+        );
+    });
 }
 
 fn log_hv_guest_alloc_failure(vm_id: u8, layout: Layout, path: &str) {
