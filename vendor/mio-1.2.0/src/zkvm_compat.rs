@@ -6,6 +6,7 @@ unsafe extern "C" {
     fn trueos_cabi_poll_once();
 }
 
+#[allow(dead_code)]
 pub(crate) fn unsupported_io_error(detail: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::Other, detail)
 }
