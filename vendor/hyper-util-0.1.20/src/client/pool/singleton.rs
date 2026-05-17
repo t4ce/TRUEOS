@@ -20,7 +20,8 @@
 //! // svc1 == svc2
 //! ```
 
-use std::sync::{Arc, Mutex};
+use alloc::sync::Arc;
+use std::sync::Mutex;
 use core::task::{self, Poll};
 
 use tokio::sync::oneshot;

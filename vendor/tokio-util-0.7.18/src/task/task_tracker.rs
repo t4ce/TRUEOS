@@ -3,12 +3,12 @@
 //! See the documentation of [`TaskTracker`] for more information.
 
 use pin_project_lite::pin_project;
-use std::fmt;
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::task::{Context, Poll};
+use alloc::sync::Arc;
+use core::fmt;
+use core::future::Future;
+use core::pin::Pin;
+use core::sync::atomic::{AtomicUsize, Ordering};
+use core::task::{Context, Poll};
 use tokio::sync::{futures::Notified, Notify};
 
 #[cfg(feature = "rt")]

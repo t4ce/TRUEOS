@@ -3,9 +3,9 @@
 //! TCP/UDP/Unix helpers for tokio.
 
 use crate::either::Either;
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::future::Future;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 use tokio::io::Result;
 
 #[cfg(unix)]

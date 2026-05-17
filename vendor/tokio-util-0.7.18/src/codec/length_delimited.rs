@@ -401,7 +401,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use std::error::Error as StdError;
 use std::io::Cursor;
-use std::{cmp, fmt, mem};
+use core::{cmp, fmt, mem};
 use tokio::io;
 
 /// Configure length delimited `LengthDelimitedCodec`s.

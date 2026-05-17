@@ -2,7 +2,8 @@ use crate::codec::decoder::Decoder;
 use crate::codec::encoder::Encoder;
 
 use bytes::{Buf, BufMut, BytesMut};
-use std::{cmp, fmt, str};
+use core::{cmp, fmt};
+use std::str;
 use tokio::io;
 
 /// A simple [`Decoder`] and [`Encoder`] implementation that splits up data into lines.

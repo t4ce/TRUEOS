@@ -1,10 +1,10 @@
 #![allow(dead_code)]
 
 use hyper::rt::Executor;
+use alloc::sync::Arc;
 use core::fmt;
 use core::future::Future;
 use core::pin::Pin;
-use std::sync::Arc;
 
 pub(crate) type BoxSendFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 

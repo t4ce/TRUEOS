@@ -1,4 +1,4 @@
-use std::cmp;
+use core::cmp;
 
 use bytes::{Buf, Bytes};
 use hyper::io;

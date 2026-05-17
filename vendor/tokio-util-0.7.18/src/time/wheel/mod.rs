@@ -6,7 +6,7 @@ mod stack;
 pub(crate) use self::stack::Stack;
 
 use std::borrow::Borrow;
-use std::fmt::Debug;
+use core::fmt::Debug;
 
 /// Timing wheel implementation.
 ///

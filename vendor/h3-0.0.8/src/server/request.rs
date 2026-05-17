@@ -1,4 +1,5 @@
-use std::{convert::TryFrom, sync::Arc};
+use alloc::sync::Arc;
+use core::convert::TryFrom;
 
 use bytes::Buf;
 use http::{Request, StatusCode};

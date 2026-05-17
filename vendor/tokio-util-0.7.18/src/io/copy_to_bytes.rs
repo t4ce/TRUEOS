@@ -2,8 +2,8 @@ use bytes::Bytes;
 use futures_core::stream::Stream;
 use futures_sink::Sink;
 use pin_project_lite::pin_project;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 pin_project! {
     /// A helper that wraps a [`Sink`]`<`[`Bytes`]`>` and converts it into a

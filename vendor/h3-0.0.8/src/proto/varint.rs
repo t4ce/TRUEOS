@@ -1,4 +1,4 @@
-use std::{convert::TryInto, fmt, ops::Div};
+use core::{convert::TryInto, fmt, ops::Div};
 
 use bytes::{Buf, BufMut};
 

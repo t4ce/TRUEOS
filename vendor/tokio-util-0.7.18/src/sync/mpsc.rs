@@ -1,7 +1,7 @@
 use futures_sink::Sink;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-use std::{fmt, mem};
+use core::pin::Pin;
+use core::task::{Context, Poll};
+use core::{fmt, mem};
 use tokio::sync::mpsc::OwnedPermit;
 use tokio::sync::mpsc::Sender;
 

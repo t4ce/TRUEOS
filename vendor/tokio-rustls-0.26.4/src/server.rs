@@ -1,13 +1,13 @@
-use std::future::Future;
+use core::future::Future;
 use std::io::BufRead as _;
 use std::io as std_io;
 #[cfg(unix)]
 use std::os::unix::io::{AsRawFd, RawFd};
 #[cfg(windows)]
 use std::os::windows::io::{AsRawSocket, RawSocket};
-use std::pin::Pin;
+use core::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 
 use rustls::server::AcceptedAlert;
 use rustls::{ServerConfig, ServerConnection};

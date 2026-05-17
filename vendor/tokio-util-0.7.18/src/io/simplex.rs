@@ -8,9 +8,10 @@ use futures_core::ready;
 use tokio::io::Error as IoError;
 use tokio::io::ErrorKind as IoErrorKind;
 use tokio::io::IoSlice;
-use std::pin::Pin;
-use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll, Waker};
+use alloc::sync::Arc;
+use core::pin::Pin;
+use std::sync::Mutex;
+use core::task::{Context, Poll, Waker};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 type IoResult<T> = Result<T, IoError>;

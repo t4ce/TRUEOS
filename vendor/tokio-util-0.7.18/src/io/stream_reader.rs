@@ -2,8 +2,8 @@ use bytes::Buf;
 use futures_core::stream::Stream;
 use futures_sink::Sink;
 use tokio::io;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::pin::Pin;
+use core::task::{Context, Poll};
 use tokio::io::{AsyncBufRead, AsyncRead, ReadBuf};
 
 /// Convert a [`Stream`] of byte chunks into an [`AsyncRead`].
@@ -257,7 +257,7 @@ where
             Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
             Poll::Pending => return Poll::Pending,
         };
-        let len = std::cmp::min(inner_buf.len(), buf.remaining());
+        let len = core::cmp::min(inner_buf.len(), buf.remaining());
         buf.put_slice(&inner_buf[..len]);
 
         self.consume(len);

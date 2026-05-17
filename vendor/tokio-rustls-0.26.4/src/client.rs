@@ -1,14 +1,14 @@
-use std::future::Future;
+use core::future::Future;
 use std::io::BufRead as _;
 #[cfg(unix)]
 use std::os::unix::io::{AsRawFd, RawFd};
 #[cfg(windows)]
 use std::os::windows::io::{AsRawSocket, RawSocket};
-use std::pin::Pin;
+use core::pin::Pin;
 use std::sync::Arc;
 #[cfg(feature = "early-data")]
-use std::task::Waker;
-use std::task::{Context, Poll};
+use core::task::Waker;
+use core::task::{Context, Poll};
 
 use rustls::{pki_types::ServerName, ClientConfig, ClientConnection};
 use tokio::io::{self, AsyncBufRead, AsyncRead, AsyncWrite, IoSlice, ReadBuf};

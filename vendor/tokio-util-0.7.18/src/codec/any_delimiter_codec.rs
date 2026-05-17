@@ -2,7 +2,8 @@ use crate::codec::decoder::Decoder;
 use crate::codec::encoder::Encoder;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use std::{cmp, fmt, str};
+use core::{cmp, fmt};
+use std::str;
 use tokio::io;
 
 const DEFAULT_SEEK_DELIMITERS: &[u8] = b",;\n\r";

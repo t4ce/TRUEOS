@@ -123,7 +123,7 @@ pub(crate) fn child_node(parent: &Arc<TreeNode>) -> Arc<TreeNode> {
 ///
 /// Takes a reference to [Inner] to make sure the parent is already locked.
 fn disconnect_children(node: &mut Inner) {
-    for child in std::mem::take(&mut node.children) {
+    for child in core::mem::take(&mut node.children) {
         let mut locked_child = child.inner.lock().unwrap();
         locked_child.parent_idx = 0;
         locked_child.parent = None;
@@ -203,7 +203,7 @@ fn move_children_to_parent(node: &mut Inner, parent: &mut Inner) {
     // Pre-allocate in the parent, for performance
     parent.children.reserve(node.children.len());
 
-    for child in std::mem::take(&mut node.children) {
+    for child in core::mem::take(&mut node.children) {
         {
             let mut child_locked = child.inner.lock().unwrap();
             child_locked.parent.clone_from(&node.parent);

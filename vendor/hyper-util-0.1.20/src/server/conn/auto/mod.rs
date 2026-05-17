@@ -36,7 +36,7 @@ use crate::common::rewind::Rewind;
 
 type Error = Box<dyn core::error::Error + Send + Sync>;
 
-type Result<T> = std::result::Result<T, Error>;
+type Result<T> = core::result::Result<T, Error>;
 
 const H2_PREFACE: &[u8] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 

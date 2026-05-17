@@ -1,7 +1,7 @@
 //! Unix domain socket helpers.
 
 use super::Listener;
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 use tokio::io::Result;
 
 impl Listener for tokio::net::UnixListener {

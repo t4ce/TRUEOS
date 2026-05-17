@@ -21,7 +21,8 @@ mod internal {
     use core::fmt;
     use core::future::Future;
     use core::pin::Pin;
-    use std::sync::{Arc, Mutex, Weak};
+    use alloc::sync::Arc;
+    use std::sync::{Mutex, Weak};
     use core::task::{self, ready, Poll};
 
     use futures_util::future;

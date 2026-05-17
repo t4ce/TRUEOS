@@ -3,7 +3,7 @@
 
 use tokio::task::{AbortHandle, JoinError, JoinHandle};
 
-use std::{
+use core::{
     future::Future,
     mem::ManuallyDrop,
     pin::Pin,
@@ -57,8 +57,8 @@ impl<T> AbortOnDropHandle<T> {
     }
 }
 
-impl<T> std::fmt::Debug for AbortOnDropHandle<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<T> core::fmt::Debug for AbortOnDropHandle<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("AbortOnDropHandle")
             .field("id", &self.0.id())
             .finish()

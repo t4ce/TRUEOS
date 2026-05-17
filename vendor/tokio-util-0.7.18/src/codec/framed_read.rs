@@ -7,9 +7,9 @@ use tokio::io::AsyncRead;
 use bytes::BytesMut;
 use futures_sink::Sink;
 use pin_project_lite::pin_project;
-use std::fmt;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::fmt;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 use super::FramedParts;
 

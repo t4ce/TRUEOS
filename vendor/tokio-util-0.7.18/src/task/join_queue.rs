@@ -1,6 +1,6 @@
 use super::AbortOnDropHandle;
-use std::{
-    collections::VecDeque,
+use alloc::collections::VecDeque;
+use core::{
     future::Future,
     pin::Pin,
     task::{Context, Poll},
@@ -160,7 +160,7 @@ impl<T> JoinQueue<T> {
     /// statement and some other branch completes first, it is guaranteed that no tasks were
     /// removed from this [`JoinQueue`].
     pub async fn join_next(&mut self) -> Option<Result<T, JoinError>> {
-        std::future::poll_fn(|cx| self.poll_join_next(cx)).await
+        core::future::poll_fn(|cx| self.poll_join_next(cx)).await
     }
 
     /// Waits until the next task in FIFO order completes and returns its output,
@@ -180,7 +180,7 @@ impl<T> JoinQueue<T> {
     /// [task ID]: tokio::task::Id
     /// [`JoinError::id`]: fn@tokio::task::JoinError::id
     pub async fn join_next_with_id(&mut self) -> Option<Result<(Id, T), JoinError>> {
-        std::future::poll_fn(|cx| self.poll_join_next_with_id(cx)).await
+        core::future::poll_fn(|cx| self.poll_join_next_with_id(cx)).await
     }
 
     /// Tries to poll an `AbortOnDropHandle` without blocking or yielding.
@@ -193,7 +193,7 @@ impl<T> JoinQueue<T> {
 
         // Since this function is not async and cannot be forced to yield, we should
         // disable budgeting when we want to check for the `JoinHandle` readiness.
-        let jh = std::pin::pin!(tokio::task::coop::unconstrained(jh));
+        let jh = core::pin::pin!(tokio::task::coop::unconstrained(jh));
         if let Poll::Ready(res) = jh.poll(&mut cx) {
             Some(res)
         } else {
@@ -378,8 +378,8 @@ impl<T> JoinQueue<T> {
     }
 }
 
-impl<T> std::fmt::Debug for JoinQueue<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<T> core::fmt::Debug for JoinQueue<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_list()
             .entries(self.0.iter().map(|jh| JoinHandle::id(jh.as_ref())))
             .finish()

@@ -1,11 +1,11 @@
 use hashbrown::hash_table::Entry;
 use hashbrown::{HashMap, HashTable};
+use core::fmt;
+use core::future::Future;
+use core::marker::PhantomData;
 use std::borrow::Borrow;
 use std::collections::hash_map::RandomState;
-use std::fmt;
-use std::future::Future;
 use std::hash::{BuildHasher, Hash};
-use std::marker::PhantomData;
 use tokio::runtime::Handle;
 use tokio::task::{AbortHandle, Id, JoinError, JoinSet, LocalSet};
 
@@ -403,7 +403,7 @@ where
             Entry::Occupied(occ) => {
                 // There was a previous task spawned with the same key! Cancel
                 // that task, and remove its ID from the map of hashes by task IDs.
-                (key, abort) = std::mem::replace(occ.into_mut(), (key, abort));
+                (key, abort) = core::mem::replace(occ.into_mut(), (key, abort));
 
                 // Remove the old task ID.
                 let _prev_hash = self.hashes_by_task.remove(&abort.id());

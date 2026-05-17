@@ -9,8 +9,8 @@ use futures_sink::Sink;
 use pin_project_lite::pin_project;
 use std::borrow::{Borrow, BorrowMut};
 use tokio::io;
-use std::pin::Pin;
-use std::task::{ready, Context, Poll};
+use core::pin::Pin;
+use core::task::{ready, Context, Poll};
 
 pin_project! {
     #[derive(Debug)]

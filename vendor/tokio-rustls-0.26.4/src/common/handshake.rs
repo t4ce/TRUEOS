@@ -1,8 +1,9 @@
-use std::future::Future;
-use std::ops::{Deref, DerefMut};
-use std::pin::Pin;
-use std::task::{Context, Poll};
-use std::{io as std_io, mem};
+use core::future::Future;
+use core::ops::{Deref, DerefMut};
+use core::pin::Pin;
+use core::task::{Context, Poll};
+use core::mem;
+use std::io as std_io;
 
 use rustls::server::AcceptedAlert;
 use rustls::{ConnectionCommon, SideData};

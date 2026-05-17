@@ -14,7 +14,7 @@ cfg_rt! {
 
 cfg_not_rt! {
     #[cfg_attr(not(feature = "io"), allow(unused))]
-    use std::task::{Context, Poll};
+    use core::task::{Context, Poll};
 
     #[cfg_attr(not(feature = "io"), allow(unused))]
     pub(crate) struct RestoreOnPending;
