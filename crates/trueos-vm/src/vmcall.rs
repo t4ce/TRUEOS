@@ -112,6 +112,12 @@ pub fn hull_bss_anchor() -> u64 {
     core::ptr::addr_of!(SEQ) as u64
 }
 
+pub fn hull_bss_anchor_range() -> (u64, u64) {
+    let start = hull_bss_anchor();
+    let end = start.saturating_add(core::mem::size_of::<AtomicU32>() as u64);
+    (start, end)
+}
+
 /// Issue a vmcall and return (response_status, response_data).
 /// Synchronous: host writes response before vmresume, so data is ready
 /// on return.

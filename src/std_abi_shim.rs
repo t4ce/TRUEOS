@@ -3,7 +3,7 @@ extern crate alloc;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::alloc::Layout;
-use core::ffi::{c_char, c_int, c_void};
+use core::ffi::{c_char, c_int, c_long, c_void};
 use core::ptr;
 use core::slice;
 use core::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
@@ -28,7 +28,9 @@ const PTHREAD_COND_CAPACITY: usize = 256;
 
 const TRUEOS_EAGAIN: c_int = 11;
 const TRUEOS_EBUSY: c_int = 16;
+const TRUEOS_ENOENT: c_int = 2;
 const TRUEOS_EINVAL: c_int = 22;
+const TRUEOS_ENAMETOOLONG: c_int = 36;
 const TRUEOS_ERANGE: c_int = 34;
 const TRUEOS_ENOSYS: c_int = 38;
 const TRUEOS_EIO: c_int = 5;
@@ -48,6 +50,10 @@ const TRUEOS_SC_NPROCESSORS_ONLN: c_int = 84;
 const TRUEOS_AF_UNSPEC: c_int = 0;
 const TRUEOS_AF_INET: c_int = 2;
 const TRUEOS_SOCK_STREAM: c_int = 1;
+const TRUEOS_S_IFDIR: u32 = 0o040000;
+const TRUEOS_S_IFREG: u32 = 0o100000;
+const TRUEOS_DIR_MODE: u32 = TRUEOS_S_IFDIR | 0o755;
+const TRUEOS_FILE_MODE: u32 = TRUEOS_S_IFREG | 0o644;
 
 #[repr(C)]
 pub struct Iovec {
@@ -84,6 +90,28 @@ struct TrueosAddrInfo {
     ai_addr: *mut c_void,
     ai_canonname: *mut c_char,
     ai_next: *mut TrueosAddrInfo,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct TrueosStat {
+    st_dev: u32,
+    st_ino: u32,
+    st_mode: u32,
+    st_nlink: u16,
+    st_uid: u32,
+    st_gid: u32,
+    st_rdev: u32,
+    st_size: i64,
+    st_atime: i32,
+    st_atime_nsec: c_long,
+    st_mtime: i32,
+    st_mtime_nsec: c_long,
+    st_ctime: i32,
+    st_ctime_nsec: c_long,
+    st_blksize: i32,
+    st_blocks: i32,
+    st_spare4: [c_long; 2],
 }
 
 static GAI_STRERROR_SYSTEM: &[u8] = b"trueos getaddrinfo unavailable\0";
@@ -489,6 +517,18 @@ fn copy_usize_to_abi_out(ptr: *mut usize, value: usize) -> bool {
     copy_to_abi_out(ptr.cast::<u8>(), &value.to_ne_bytes())
 }
 
+fn fs_rc_to_errno(rc: i32) -> c_int {
+    match rc {
+        crate::r::io::cabi::FS_ERR_NOT_FOUND => TRUEOS_ENOENT,
+        crate::r::io::cabi::FS_ERR_BAD_PATH
+        | crate::r::io::cabi::FS_ERR_BAD_PARAM
+        | crate::r::io::cabi::FS_ERR_BAD_UTF8 => TRUEOS_EINVAL,
+        crate::r::io::cabi::FS_ERR_TOO_LARGE => TRUEOS_ENAMETOOLONG,
+        crate::r::io::cabi::FS_ERR_NO_SPACE => TRUEOS_EIO,
+        _ => TRUEOS_EIO,
+    }
+}
+
 unsafe fn freeaddrinfo_chain(mut res: *mut TrueosAddrInfo) {
     while !res.is_null() {
         let next = unsafe { (*res).ai_next };
@@ -534,6 +574,28 @@ pub unsafe extern "C" fn sys_rand(recv_buf: *mut u32, words: usize) {
     }
 
     let byte_len = words.saturating_mul(core::mem::size_of::<u32>());
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let bytes = unsafe { slice::from_raw_parts_mut(recv_buf.cast::<u8>(), byte_len) };
+        let mut offset = 0usize;
+        let mut chunk = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
+        while offset < bytes.len() {
+            let want = core::cmp::min(chunk.len(), bytes.len() - offset);
+            let (status, got) = trueos_vm::vmcall::call_with_payload(
+                trueos_vm::vmcall::OP_RAND_BYTES,
+                want as u64,
+                0,
+                &[],
+                &mut chunk[..want],
+            );
+            if status != trueos_vm::vmcall::STATUS_OK || got as usize != want {
+                bytes[offset..].fill(0);
+                return;
+            }
+            bytes[offset..offset + want].copy_from_slice(&chunk[..want]);
+            offset += want;
+        }
+        return;
+    }
     let Some(bytes) = abi_write_bytes(recv_buf.cast::<u8>(), byte_len) else {
         return;
     };
@@ -909,9 +971,73 @@ pub unsafe extern "C" fn readdir(_dir: *mut c_void) -> *mut c_void {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn stat(_path: *const c_char, _buf: *mut c_void) -> c_int {
-    TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
-    -1
+pub unsafe extern "C" fn stat(path: *const c_char, buf: *mut c_void) -> c_int {
+    if path.is_null() || buf.is_null() {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    }
+    let Some(path) = abi_cstr_to_string(path, 4096) else {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    };
+
+    let mut kind = 0u32;
+    let mut len = 0u64;
+    let rc = unsafe {
+        crate::r::io::cabi::trueos_cabi_fs_stat(
+            path.as_ptr(),
+            path.len(),
+            &mut kind as *mut u32,
+            &mut len as *mut u64,
+        )
+    };
+    if rc != 0 {
+        TRUEOS_ERRNO.store(fs_rc_to_errno(rc), Ordering::Relaxed);
+        return -1;
+    }
+
+    let mode = match kind {
+        1 => TRUEOS_FILE_MODE,
+        2 => TRUEOS_DIR_MODE,
+        _ => {
+            TRUEOS_ERRNO.store(TRUEOS_EIO, Ordering::Relaxed);
+            return -1;
+        }
+    };
+    let blocks = core::cmp::min(len.saturating_add(511) / 512, i32::MAX as u64) as i32;
+    let out = TrueosStat {
+        st_dev: 1,
+        st_ino: 1,
+        st_mode: mode,
+        st_nlink: if kind == 2 { 2 } else { 1 },
+        st_uid: 0,
+        st_gid: 0,
+        st_rdev: 0,
+        st_size: core::cmp::min(len, i64::MAX as u64) as i64,
+        st_atime: 0,
+        st_atime_nsec: 0,
+        st_mtime: 0,
+        st_mtime_nsec: 0,
+        st_ctime: 0,
+        st_ctime_nsec: 0,
+        st_blksize: 1024,
+        st_blocks: blocks,
+        st_spare4: [0; 2],
+    };
+    if !copy_to_abi_out(
+        buf.cast::<u8>(),
+        unsafe {
+            slice::from_raw_parts(
+                (&out as *const TrueosStat).cast::<u8>(),
+                core::mem::size_of::<TrueosStat>(),
+            )
+        },
+    ) {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    }
+    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+    0
 }
 
 #[unsafe(no_mangle)]

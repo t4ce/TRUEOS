@@ -364,6 +364,15 @@ fn parse_sections(bytes: &[u8]) -> Result<Vec<ElfSection>, &'static str> {
     if shentsize != ELF64_SECTION_HEADER_LEN {
         return Err("unsupported ELF section header size");
     }
+    let section_bytes = shnum
+        .checked_mul(shentsize)
+        .ok_or("ELF section header overflow")?;
+    let section_end = shoff
+        .checked_add(section_bytes)
+        .ok_or("ELF section header overflow")?;
+    if section_end > bytes.len() {
+        return Err("ELF section header truncated");
+    }
 
     let mut out = Vec::with_capacity(shnum);
     for section_index in 0..shnum {

@@ -893,15 +893,17 @@ struct BlueprintAutostart {
     label: &'static str,
     archive: &'static str,
     slot: &'static str,
+    args: &'static [&'static str],
     settle_ms: u64,
 }
 
 const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
     BlueprintAutostart {
-        enabled: false,
+        enabled: true,
         label: "currency_reqwest",
         archive: "currency_reqwest.bp",
         slot: "cur",
+        args: &[],
         settle_ms: 750,
     },
     BlueprintAutostart {
@@ -909,6 +911,7 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
         label: "flags",
         archive: "flags.bp",
         slot: "flg",
+        args: &[],
         settle_ms: 750,
     },
     BlueprintAutostart {
@@ -916,6 +919,23 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
         label: "weather",
         archive: "weather.bp",
         slot: "wth",
+        args: &[],
+        settle_ms: 750,
+    },
+    BlueprintAutostart {
+        enabled: true,
+        label: "chart",
+        archive: "chart.bp",
+        slot: "chr",
+        args: &[],
+        settle_ms: 750,
+    },
+    BlueprintAutostart {
+        enabled: true,
+        label: "hello_world",
+        archive: "hello_world.bp",
+        slot: "hel",
+        args: &[],
         settle_ms: 750,
     },
     BlueprintAutostart {
@@ -923,6 +943,15 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
         label: "chatserver",
         archive: "chatserver.bp",
         slot: "cht",
+        args: &[],
+        settle_ms: 750,
+    },
+    BlueprintAutostart {
+        enabled: false,
+        label: "bat",
+        archive: "bat.bp",
+        slot: "bat",
+        args: &["--help"],
         settle_ms: 750,
     },
 ];
@@ -959,7 +988,7 @@ async fn bp_autostart_task() {
         match crate::shell2::cmds::run::submit_archive_name_to_target_prefer_embedded_async(
             target,
             config.archive,
-            Vec::new(),
+            config.args.iter().map(|arg| String::from(*arg)).collect(),
         )
         .await
         {
