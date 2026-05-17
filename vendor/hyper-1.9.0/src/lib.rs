@@ -142,6 +142,9 @@ pub mod future {
     pub use core::future::*;
 }
 
+// Hyper's runtime I/O traits use the same TRUEOS platform I/O vocabulary as
+// Tokio. Ecosystem trait boundaries that require real `std::io` are handled at
+// the Blueprint overlay layer.
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod io {
     pub use trueos_io::*;
