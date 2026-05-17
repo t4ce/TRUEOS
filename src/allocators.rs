@@ -995,6 +995,16 @@ pub fn hv_guest_heap_stats(vm_id: u8) -> HeapStats {
     heap_stats_from_guard(&mut guard)
 }
 
+pub fn hv_guest_heap_stats_if_configured(vm_id: u8) -> Option<HeapStats> {
+    init_fallback_regions();
+    let allocator = HV_GUEST_ALLOCATORS.get(vm_id as usize)?;
+    let mut guard = allocator.lock();
+    if !guard.initialized && guard.heap_len == 0 {
+        return None;
+    }
+    Some(heap_stats_from_guard(&mut guard))
+}
+
 pub fn hv_guest_heap_stats_total() -> HeapStats {
     init_fallback_regions();
     let mut total = HeapStats {

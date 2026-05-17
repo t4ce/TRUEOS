@@ -106,12 +106,9 @@ pub fn hull_image_layout() -> HullImageLayout {
     let data_start = image_data_start as *const () as u64;
     let data_end = image_data_end as *const () as u64;
 
-    let vmcall_bss_start = crate::vmcall::hull_bss_anchor();
-    let vmcall_bss_end = vmcall_bss_start.saturating_add(64);
-    let vpanic_bss_start = crate::vpanic::hull_bss_anchor();
-    let vpanic_bss_end = vpanic_bss_start.saturating_add(64);
-    let demo_bss_start = crate::demo::hull_bss_anchor();
-    let demo_bss_end = demo_bss_start.saturating_add(64);
+    let (vmcall_bss_start, vmcall_bss_end) = crate::vmcall::hull_bss_anchor_range();
+    let (vpanic_bss_start, vpanic_bss_end) = crate::vpanic::hull_bss_anchor_range();
+    let (demo_bss_start, demo_bss_end) = crate::demo::hull_bss_anchor_range();
     let bss_start = image_bss_start as *const () as u64;
     let bss_end = image_bss_end as *const () as u64;
 

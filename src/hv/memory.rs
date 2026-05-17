@@ -408,23 +408,28 @@ pub fn build_ept_identity_4g() -> Result<u64, &'static str> {
         ));
     }
 
-    let guest_heap = crate::allocators::hv_guest_heap_stats(current_vm_id_for_log());
-    if guest_heap.initialized
-        && guest_heap.phys_start != 0
-        && guest_heap.heap_end > guest_heap.heap_start
-    {
-        // Securit Risk and a Id to it: HVSR-0003
-        // This span should remain guest-owned and non-executable once EPT
-        // permissions are narrowed per label.
-        map_ept_identity_span(
-            pdpt,
-            &mut next_pd,
-            &mut next_pt,
-            &mut leaf_2m,
-            guest_heap.phys_start as u64,
-            guest_heap.heap_end.saturating_sub(guest_heap.heap_start) as u64,
-            "hv-guest-heap",
-        )?;
+    for vm_id in 0..crate::allcaps::hv::VM_ID_LIMIT {
+        let Some(guest_heap) = crate::allocators::hv_guest_heap_stats_if_configured(vm_id as u8)
+        else {
+            continue;
+        };
+        if guest_heap.initialized
+            && guest_heap.phys_start != 0
+            && guest_heap.heap_end > guest_heap.heap_start
+        {
+            // Securit Risk and a Id to it: HVSR-0003
+            // This span should remain guest-owned and non-executable once EPT
+            // permissions are narrowed per label.
+            map_ept_identity_span(
+                pdpt,
+                &mut next_pd,
+                &mut next_pt,
+                &mut leaf_2m,
+                guest_heap.phys_start as u64,
+                guest_heap.heap_end.saturating_sub(guest_heap.heap_start) as u64,
+                "hv-guest-heap",
+            )?;
+        }
     }
 
     let eptp = (pml4_pa & 0x000F_FFFF_FFFF_F000) | 6 | (3 << 3);
@@ -1616,6 +1621,21 @@ fn classify_guest_va(guest_va: u64) -> &'static str {
     {
         return "hv-guest-heap";
     }
+    for vm_id in 0..crate::allcaps::hv::VM_ID_LIMIT {
+        if Some(vm_id as u8) == crate::hv::current_vm_id() {
+            continue;
+        }
+        let Some(hv_guest_heap) = crate::allocators::hv_guest_heap_stats_if_configured(vm_id as u8)
+        else {
+            continue;
+        };
+        if hv_guest_heap.initialized
+            && guest_va >= hv_guest_heap.heap_start as u64
+            && guest_va < hv_guest_heap.heap_end as u64
+        {
+            return "hv-guest-heap-other";
+        }
+    }
 
     if let Some(region) = classify_hull_guest_va(guest_va) {
         return region;
@@ -1877,17 +1897,21 @@ fn map_guest_heap_span(
     image_start: u64,
     image_end: u64,
 ) -> Result<(), &'static str> {
-    let hv_guest_heap = crate::allocators::hv_guest_heap_stats(current_vm_id_for_log());
-    let ranges = [(
-        "hv-guest-heap",
-        hv_guest_heap.initialized,
-        hv_guest_heap.heap_start as u64,
-        hv_guest_heap.heap_end as u64,
-    )];
-    if !ranges
-        .iter()
-        .any(|(_, initialized, start, end)| *initialized && *start != 0 && *end > *start)
-    {
+    let mut have_heap = false;
+    for vm_id in 0..crate::allcaps::hv::VM_ID_LIMIT {
+        let Some(hv_guest_heap) = crate::allocators::hv_guest_heap_stats_if_configured(vm_id as u8)
+        else {
+            continue;
+        };
+        if hv_guest_heap.initialized
+            && hv_guest_heap.heap_start != 0
+            && hv_guest_heap.heap_end > hv_guest_heap.heap_start
+        {
+            have_heap = true;
+            break;
+        }
+    }
+    if !have_heap {
         return Ok(());
     }
 
@@ -1897,15 +1921,24 @@ fn map_guest_heap_span(
     let mut heap_pd_slots = [usize::MAX; 512];
     let mut heap_pd_count = 0usize;
 
-    for (label, initialized, start, end) in ranges {
-        if !initialized || start == 0 || end <= start {
+    for vm_id in 0..crate::allcaps::hv::VM_ID_LIMIT {
+        let Some(hv_guest_heap) = crate::allocators::hv_guest_heap_stats_if_configured(vm_id as u8)
+        else {
+            continue;
+        };
+        if !hv_guest_heap.initialized
+            || hv_guest_heap.heap_start == 0
+            || hv_guest_heap.heap_end <= hv_guest_heap.heap_start
+        {
             continue;
         }
+        let start = hv_guest_heap.heap_start as u64;
+        let end = hv_guest_heap.heap_end as u64;
         if range_covered_by(start, end, image_start, image_end) {
             hvlogf(format_args!(
-                "hv: vm{} reporting: {} already covered by image map start=0x{:016X} end=0x{:016X}",
+                "hv: vm{} reporting: hv-guest-heap vm{} already covered by image map start=0x{:016X} end=0x{:016X}",
                 current_vm_id_for_log(),
-                label,
+                vm_id,
                 start,
                 end
             ));
@@ -1920,10 +1953,19 @@ fn map_guest_heap_span(
         map_table_entry(pml4, pml4_index(start), heap_pdpt_pa);
     }
 
-    for (label, initialized, start, end) in ranges {
-        if !initialized || start == 0 || end <= start {
+    for vm_id in 0..crate::allcaps::hv::VM_ID_LIMIT {
+        let Some(hv_guest_heap) = crate::allocators::hv_guest_heap_stats_if_configured(vm_id as u8)
+        else {
+            continue;
+        };
+        if !hv_guest_heap.initialized
+            || hv_guest_heap.heap_start == 0
+            || hv_guest_heap.heap_end <= hv_guest_heap.heap_start
+        {
             continue;
         }
+        let start = hv_guest_heap.heap_start as u64;
+        let end = hv_guest_heap.heap_end as u64;
         if range_covered_by(start, end, image_start, image_end) {
             continue;
         }
@@ -1975,9 +2017,9 @@ fn map_guest_heap_span(
         }
 
         hvlogf(format_args!(
-            "hv: vm{} reporting: {} map start=0x{:016X} end=0x{:016X} span_mib={} pt_cap={} pt_used={}",
+            "hv: vm{} reporting: hv-guest-heap vm{} map start=0x{:016X} end=0x{:016X} span_mib={} pt_cap={} pt_used={}",
             current_vm_id_for_log(),
-            label,
+            vm_id,
             start,
             end,
             end.saturating_sub(start) / (1024 * 1024),

@@ -1385,16 +1385,20 @@ async fn vmx_launch_once_with_ept(
                     crate::hv::vmcall::DispatchOutcome::Resume => {}
                     crate::hv::vmcall::DispatchOutcome::Stop => break,
                     crate::hv::vmcall::DispatchOutcome::Yield => {
+                        clear_current_vm_id();
                         materialize_deferred_blueprint_app_windows(vm_id);
                         Timer::after(EmbassyDuration::from_millis(1)).await;
+                        set_current_vm_id(vm_id);
                     }
                     crate::hv::vmcall::DispatchOutcome::SleepMs(ms) => {
+                        clear_current_vm_id();
                         materialize_deferred_blueprint_app_windows(vm_id);
                         if ms == 0 {
                             Timer::after(EmbassyDuration::from_millis(1)).await;
                         } else {
                             Timer::after(EmbassyDuration::from_millis(ms)).await;
                         }
+                        set_current_vm_id(vm_id);
                     }
                 }
                 // service vmcall — loop → vmresume

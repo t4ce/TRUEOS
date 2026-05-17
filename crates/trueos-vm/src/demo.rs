@@ -35,6 +35,15 @@ pub fn hull_bss_anchor() -> u64 {
     core::ptr::addr_of!(HULL_WINDOW_ID) as u64
 }
 
+pub fn hull_bss_anchor_range() -> (u64, u64) {
+    let window = hull_bss_anchor();
+    let flags = core::ptr::addr_of!(HULL_PROBE_FLAGS) as u64;
+    let atom = core::mem::size_of::<AtomicU32>() as u64;
+    let start = window.min(flags);
+    let end = window.max(flags).saturating_add(atom);
+    (start, end)
+}
+
 pub fn idle() -> ! {
     vpanic::set_stage(0x1100);
     net_line("VMHULL: idle");
@@ -207,7 +216,11 @@ fn refresh_probe_window_title(_now: u64) {
 }
 
 fn bool_mark(ok: bool) -> &'static str {
-    if ok { "ok" } else { "no" }
+    if ok {
+        "ok"
+    } else {
+        "no"
+    }
 }
 
 fn net_line(text: &str) {
