@@ -23,7 +23,12 @@ mod driver_mock;
 #[cfg(feature = "mock-driver")]
 pub use driver_mock::MockDriver;
 
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", any(target_os = "trueos", target_os = "zkvm")))]
+compile_error!(
+    "embassy-time std driver is not supported on TRUEOS/zkvm; use the kernel time driver"
+);
+
+#[cfg(all(feature = "std", not(any(target_os = "trueos", target_os = "zkvm"))))]
 mod driver_std;
 #[cfg(feature = "wasm")]
 mod driver_wasm;

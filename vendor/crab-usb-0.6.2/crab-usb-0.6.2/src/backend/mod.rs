@@ -8,7 +8,7 @@ use usb_if::err::USBError;
 use crate::backend::ty::{DeviceInfoOp, DeviceOp};
 use crate::topology::DeviceTree;
 
-#[cfg(umod)]
+#[cfg(all(umod, not(any(target_os = "trueos", target_os = "zkvm"))))]
 pub mod umod;
 
 #[cfg(kmod)]

@@ -162,12 +162,16 @@ impl Instant {
 
     /// Adds one Duration to self, returning a new `Instant` or None in the event of an overflow.
     pub fn checked_add(&self, duration: Duration) -> Option<Instant> {
-        self.ticks.checked_add(duration.ticks).map(|ticks| Instant { ticks })
+        self.ticks
+            .checked_add(duration.ticks)
+            .map(|ticks| Instant { ticks })
     }
 
     /// Subtracts one Duration to self, returning a new `Instant` or None in the event of an overflow.
     pub fn checked_sub(&self, duration: Duration) -> Option<Instant> {
-        self.ticks.checked_sub(duration.ticks).map(|ticks| Instant { ticks })
+        self.ticks
+            .checked_sub(duration.ticks)
+            .map(|ticks| Instant { ticks })
     }
 
     /// Adds a Duration to self. In case of overflow, the maximum value is returned.

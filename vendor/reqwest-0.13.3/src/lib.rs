@@ -370,7 +370,9 @@ if_hyper! {
 
 
     mod async_impl;
-    #[cfg(feature = "blocking")]
+    #[cfg(all(feature = "blocking", any(target_os = "trueos", target_os = "zkvm")))]
+    compile_error!("reqwest blocking client is not supported on TRUEOS/zkvm; use the async Client so work stays on Tokio/TRUEOS carriers");
+    #[cfg(all(feature = "blocking", not(any(target_os = "trueos", target_os = "zkvm"))))]
     pub mod blocking;
     mod connect;
     #[cfg(feature = "cookies")]

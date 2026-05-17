@@ -10,7 +10,7 @@ use crate::DeviceId;
 #[cfg(kmod)]
 pub use super::backend::kmod::*;
 
-#[cfg(umod)]
+#[cfg(all(umod, not(any(target_os = "trueos", target_os = "zkvm"))))]
 pub use super::backend::umod::*;
 
 pub use crate::device::{Device, DeviceInfo};

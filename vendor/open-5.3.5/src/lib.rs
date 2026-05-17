@@ -146,8 +146,10 @@ use std::{
     ffi::OsStr,
     io,
     process::{Command, Stdio},
-    thread,
 };
+
+#[cfg(not(target_os = "trueos"))]
+use std::thread;
 
 /// Open path with the default application without blocking.
 ///
@@ -245,6 +247,7 @@ pub fn with_command(path: impl AsRef<OsStr>, app: impl Into<String>) -> Command 
 /// Open path with the default application in a new thread to assure it's non-blocking.
 ///
 /// See documentation of [`that()`] for more details.
+#[cfg(not(target_os = "trueos"))]
 pub fn that_in_background(path: impl AsRef<OsStr>) -> thread::JoinHandle<io::Result<()>> {
     let path = path.as_ref().to_os_string();
     thread::spawn(|| that(path))
@@ -255,6 +258,7 @@ pub fn that_in_background(path: impl AsRef<OsStr>) -> thread::JoinHandle<io::Res
 /// straightforward error handling.
 ///
 /// See documentation of [`with()`] for more details.
+#[cfg(not(target_os = "trueos"))]
 pub fn with_in_background<T: AsRef<OsStr>>(
     path: T,
     app: impl Into<String>,

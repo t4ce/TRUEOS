@@ -55,7 +55,9 @@ impl Inner {
     }
 
     fn now(&mut self) -> u64 {
-        StdInstant::now().duration_since(self.zero_instant.unwrap()).as_micros() as u64
+        StdInstant::now()
+            .duration_since(self.zero_instant.unwrap())
+            .as_micros() as u64
     }
 
     fn set_alarm(&mut self, timestamp: u64) -> bool {

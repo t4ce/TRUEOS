@@ -33,9 +33,6 @@ mod tests {
             .body(())
             .unwrap();
 
-        assert_eq!(
-            response.extensions().get::<ResponseUrl>(),
-            Some(&ResponseUrl(url))
-        );
+        assert_eq!(response.extensions().get::<ResponseUrl>(), Some(&ResponseUrl(url)));
     }
 }

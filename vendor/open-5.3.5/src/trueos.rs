@@ -1,7 +1,4 @@
-use std::{
-    ffi::OsStr,
-    process::Command,
-};
+use std::{ffi::OsStr, process::Command};
 
 pub fn commands<T: AsRef<OsStr>>(path: T) -> Vec<Command> {
     vec![with_command(path, "trueos-open")]
