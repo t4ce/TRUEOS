@@ -227,10 +227,10 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
         )
         .as_str()),
     }
-    let process_args =
-        crate::hv::blueprint::build_process_args(state.archive.as_str(), state.app_args.as_slice());
-    let process_env =
-        crate::hv::blueprint::build_process_env(state.archive.as_str(), Some(app_fs_root.as_str()));
+    let Some(process_context) = crate::hv::blueprint_process_context(vm_id) else {
+        log("run: guest blueprint missing staged process context");
+        return false;
+    };
     log(alloc::format!(
         "run: guest app fs root prepared path={} common={}",
         app_fs_root.as_str(),
@@ -243,8 +243,8 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
     let invoke_result = crate::hv::blueprint::invoke_host_rel(
         unpacked,
         module.entry,
-        process_args,
-        process_env,
+        process_context.args,
+        process_context.vars,
         state.console_target.clone(),
         Some(app_fs_root),
     );

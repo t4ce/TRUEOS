@@ -977,6 +977,24 @@ pub mod cabi {
         crate::hv::current_guest_execution_context_vm_id()
     }
 
+    fn cabi_vm_heap_owner(ptr: *const u8) -> Option<u8> {
+        if ptr.is_null() {
+            return None;
+        }
+
+        let addr = ptr as usize;
+        for vm_id in 0..crate::allcaps::hv::VM_ID_LIMIT {
+            let Some(stats) = crate::allocators::hv_guest_heap_stats_if_configured(vm_id as u8)
+            else {
+                continue;
+            };
+            if stats.initialized && addr >= stats.heap_start && addr < stats.heap_end {
+                return Some(vm_id as u8);
+            }
+        }
+        None
+    }
+
     #[inline]
     fn cabi_vm_alloc_active() -> bool {
         cabi_vm_alloc_vm_id().is_some()
@@ -1001,15 +1019,19 @@ pub mod cabi {
         base.add(VM_CABI_ALLOC_HEADER_BYTES)
     }
 
-    unsafe fn cabi_vm_alloc(size: usize) -> *mut u8 {
+    unsafe fn cabi_vm_alloc_for_vm(vm_id: u8, size: usize) -> *mut u8 {
         if crate::hv::current_hull_guest_context_vm_id().is_some() {
             return cabi_vm_alloc_inner(size);
         }
+        crate::allocators::with_hv_guest_alloc_domain(vm_id, || cabi_vm_alloc_inner(size))
+            .unwrap_or(core::ptr::null_mut())
+    }
+
+    unsafe fn cabi_vm_alloc(size: usize) -> *mut u8 {
         let Some(vm_id) = cabi_vm_alloc_vm_id() else {
             return core::ptr::null_mut();
         };
-        crate::allocators::with_hv_guest_alloc_domain(vm_id, || cabi_vm_alloc_inner(size))
-            .unwrap_or(core::ptr::null_mut())
+        cabi_vm_alloc_for_vm(vm_id, size)
     }
 
     unsafe fn cabi_vm_meta(ptr: *const u8) -> Option<(usize, usize, *mut u8)> {
@@ -1061,7 +1083,7 @@ pub mod cabi {
         if ptr.is_null() {
             return;
         }
-        if cabi_vm_alloc_active() {
+        if cabi_vm_alloc_active() || cabi_vm_heap_owner(ptr).is_some() {
             let Some((size, align, base)) = cabi_vm_meta(ptr) else {
                 return;
             };
@@ -1093,11 +1115,11 @@ pub mod cabi {
             return core::ptr::null_mut();
         }
 
-        if cabi_vm_alloc_active() {
+        if let Some(vm_id) = cabi_vm_alloc_vm_id().or_else(|| cabi_vm_heap_owner(ptr)) {
             let Some((old_size, _, _)) = cabi_vm_meta(ptr) else {
                 return core::ptr::null_mut();
             };
-            let new_ptr = cabi_vm_alloc(size);
+            let new_ptr = cabi_vm_alloc_for_vm(vm_id, size);
             if new_ptr.is_null() {
                 return core::ptr::null_mut();
             }
@@ -1130,7 +1152,7 @@ pub mod cabi {
         if ptr.is_null() {
             return 0;
         }
-        if cabi_vm_alloc_active() {
+        if cabi_vm_alloc_active() || cabi_vm_heap_owner(ptr).is_some() {
             return cabi_vm_meta(ptr).map(|(size, _, _)| size).unwrap_or(0);
         }
         CABI_ALLOC_TABLE

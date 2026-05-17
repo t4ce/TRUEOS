@@ -272,7 +272,7 @@ pub struct BlueprintLaunchState {
 }
 
 #[derive(Clone)]
-struct BlueprintProcessContext {
+pub(crate) struct BlueprintProcessContext {
     args: AllocVec<AllocString>,
     vars: BTreeMap<AllocString, AllocString>,
 }
@@ -414,7 +414,6 @@ pub(crate) fn current_vm_id_by_lapic_low() -> Option<u8> {
 }
 
 pub(crate) fn current_hull_guest_context_vm_id() -> Option<u8> {
-    let vm_id = current_vm_id_by_lapic_low()?;
     let rsp: u64;
     unsafe {
         core::arch::asm!(
@@ -423,11 +422,20 @@ pub(crate) fn current_hull_guest_context_vm_id() -> Option<u8> {
             options(nomem, nostack, preserves_flags)
         );
     }
-    if rsp >= memory::GUEST_STACK_VA_BASE && rsp < memory::GUEST_COMM_PAGE_VA {
-        Some(vm_id)
-    } else {
-        None
+    if rsp < memory::GUEST_STACK_VA_BASE || rsp >= memory::GUEST_COMM_PAGE_VA {
+        return None;
     }
+
+    if let Some(tag) = crate::hv::vmcall::guest_comm_page_vm_id_tag()
+        && tag != 0
+    {
+        let vm_id = tag.saturating_sub(1) as u8;
+        if (vm_id as usize) < TRUEOS_VM_ID_LIMIT {
+            return Some(vm_id);
+        }
+    }
+
+    current_vm_id_by_lapic_low()
 }
 
 pub(crate) fn current_guest_execution_context_vm_id() -> Option<u8> {
@@ -895,21 +903,24 @@ pub fn stage_blueprint_launch(vm_id: u8, state: BlueprintLaunchState) -> Result<
     let Some(process_slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else {
         return Err(StartError::UnsupportedVmId);
     };
-    let app_fs_root = crate::hv::blueprint::app_fs_root_for_archive(
-        state.archive.as_str(),
-        state.module_bytes.as_slice(),
-    );
-    let process_context = BlueprintProcessContext {
-        args: crate::hv::blueprint::build_process_args(
-            state.archive.as_str(),
-            state.app_args.as_slice(),
-        ),
-        vars: crate::hv::blueprint::build_process_env(
-            state.archive.as_str(),
-            Some(app_fs_root.as_str()),
-        ),
-    };
-    let Some(guest_state) = crate::allocators::with_hv_guest_alloc_domain(vm_id, || state.clone())
+    let Some((guest_state, process_context)) =
+        crate::allocators::with_hv_guest_alloc_domain(vm_id, || {
+            let app_fs_root = crate::hv::blueprint::app_fs_root_for_archive(
+                state.archive.as_str(),
+                state.module_bytes.as_slice(),
+            );
+            let process_context = BlueprintProcessContext {
+                args: crate::hv::blueprint::build_process_args(
+                    state.archive.as_str(),
+                    state.app_args.as_slice(),
+                ),
+                vars: crate::hv::blueprint::build_process_env(
+                    state.archive.as_str(),
+                    Some(app_fs_root.as_str()),
+                ),
+            };
+            (state.clone(), process_context)
+        })
     else {
         return Err(StartError::GuestMemoryUnavailable);
     };
@@ -948,6 +959,14 @@ pub(crate) fn blueprint_process_env_var(vm_id: u8, key: &str) -> Option<AllocStr
     context.as_ref()?.vars.get(key).cloned()
 }
 
+pub(crate) fn blueprint_process_context(vm_id: u8) -> Option<BlueprintProcessContext> {
+    BLUEPRINT_PROCESS_CONTEXTS
+        .get(vm_id as usize)?
+        .lock()
+        .as_ref()
+        .cloned()
+}
+
 fn clear_blueprint_process_context(vm_id: u8) {
     if let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) {
         *slot.lock() = None;
@@ -958,6 +977,13 @@ pub(crate) fn blueprint_launch_states_span() -> (u64, usize) {
     (
         (&BLUEPRINT_LAUNCH_STATES as *const _) as u64,
         core::mem::size_of_val(&BLUEPRINT_LAUNCH_STATES),
+    )
+}
+
+pub(crate) fn blueprint_process_contexts_span() -> (u64, usize) {
+    (
+        (&BLUEPRINT_PROCESS_CONTEXTS as *const _) as u64,
+        core::mem::size_of_val(&BLUEPRINT_PROCESS_CONTEXTS),
     )
 }
 
@@ -1214,6 +1240,9 @@ async fn vmx_launch_once_with_ept(
         Ok(v) => v,
         Err(e) => return Err(e),
     };
+    if !crate::hv::vmcall::prepare_for_vm(vm_id) {
+        return Err("vmcall comm page");
+    }
     if let Err(e) = setup_vmcs_for_launch(vm_id, eptp, lineage_record, boot_mode_for_vm(vm_id)) {
         return Err(e);
     }
@@ -1273,9 +1302,10 @@ async fn vmx_launch_once_with_ept(
         let reason = lr.exit_reason & 0xFFFF;
         crate::hv::vmx::log_vmexit_interrupt_info("vmexit");
         if reason == 0x0 {
-            if let Some((vector, vector_name, kind, info, err)) = guest_exception_summary() {
+            let guest_exception = guest_exception_summary();
+            if let Some((vector, vector_name, kind, info, err)) = guest_exception {
                 hvlogf(format_args!(
-                    "hv: vm{} reporting: guest exception vector={} name={} type={}({}) err=0x{:X} intr_info=0x{:08X}",
+                    "hv: vm{} fault-exc v={} {} type={}({}) err=0x{:X} info=0x{:08X}",
                     current_vm_id_for_log(),
                     vector,
                     vector_name,
@@ -1312,17 +1342,13 @@ async fn vmx_launch_once_with_ept(
             ));
             let regs = crate::hv::vmx::guest_registers();
             hvlogf(format_args!(
-                "hv: vm{} reporting: pf-regs rip=0x{:016X} rsp=0x{:016X} rax=0x{:016X} rbx=0x{:016X} rbp=0x{:016X} rsi=0x{:016X} rdi=0x{:016X} rcx=0x{:016X} rdx=0x{:016X} exit_qual=0x{:016X}",
+                "hv: vm{} fault-regs rip=0x{:016X} rsp=0x{:016X} rsi=0x{:016X} rdi=0x{:016X} rcx=0x{:016X} qual=0x{:016X}",
                 current_vm_id_for_log(),
                 lr.guest_rip,
                 guest_rsp,
-                regs.rax,
-                regs.rbx,
-                regs.rbp,
                 regs.rsi,
                 regs.rdi,
                 regs.rcx,
-                regs.rdx,
                 lr.exit_qualification
             ));
             let host_heap = crate::allocators::heap_stats();
@@ -1340,6 +1366,25 @@ async fn vmx_launch_once_with_ept(
                     host_heap.heap_start as u64,
                     host_heap.heap_end as u64
                 ));
+            }
+            let memcpy_addr = trueos_qjs::trueos_shims::memcpy as *const () as usize as u64;
+            if lr.guest_rip >= memcpy_addr && lr.guest_rip < memcpy_addr.saturating_add(128) {
+                let (vector, vector_name, _, _, err) =
+                    guest_exception.unwrap_or((0xFF, "unknown", 0, 0, intr_err));
+                hvlogf(format_args!(
+                    "hv: vm{} memcpy-fault v={} {} err=0x{:X} rip=0x{:016X} dst=0x{:016X} src=0x{:016X} len={} lin=0x{:016X}",
+                    current_vm_id_for_log(),
+                    vector,
+                    vector_name,
+                    err,
+                    lr.guest_rip,
+                    regs.rdi,
+                    regs.rsi,
+                    regs.rcx,
+                    guest_linear
+                ));
+                crate::hv::memory::log_guest_mapping("fault-memcpy-dst", regs.rdi);
+                crate::hv::memory::log_guest_mapping("fault-memcpy-src", regs.rsi);
             }
             crate::hv::memory::log_guest_mapping("fault-linear", guest_linear);
             crate::hv::memory::log_guest_mapping("fault-rsp", guest_rsp);

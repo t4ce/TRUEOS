@@ -342,6 +342,33 @@ fn c_realloc_ptr(ptr: *mut c_void, size: usize) -> *mut c_void {
     new_ptr
 }
 
+pub unsafe extern "C" fn malloc(size: usize) -> *mut c_void {
+    c_malloc_aligned(size, core::mem::align_of::<usize>())
+}
+
+pub unsafe extern "C" fn calloc(nmemb: usize, size: usize) -> *mut c_void {
+    let Some(total) = nmemb.checked_mul(size) else {
+        TRUEOS_ERRNO.store(12, Ordering::Relaxed);
+        return ptr::null_mut();
+    };
+    if total == 0 {
+        return ptr::null_mut();
+    }
+    let ptr = c_malloc_aligned(total, core::mem::align_of::<usize>());
+    if !ptr.is_null() {
+        unsafe { ptr::write_bytes(ptr, 0, total) };
+    }
+    ptr
+}
+
+pub unsafe extern "C" fn free(ptr: *mut c_void) {
+    c_free_ptr(ptr);
+}
+
+pub unsafe extern "C" fn realloc(ptr: *mut c_void, size: usize) -> *mut c_void {
+    c_realloc_ptr(ptr, size)
+}
+
 unsafe fn cstr_arg(ptr: *const c_char) -> Option<String> {
     if ptr.is_null() {
         return None;

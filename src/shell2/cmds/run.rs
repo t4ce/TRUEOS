@@ -168,7 +168,9 @@ fn embedded_module_bytes_by_archive_name(
         let Some(module_bytes) = crate::limine::module_bytes_by_string(cmdline) else {
             return Err("failed to read selected embedded module");
         };
-        return Ok(Some(module_bytes.to_vec()));
+        return Ok(Some(crate::allocators::with_host_alloc_domain(|| {
+            module_bytes.to_vec()
+        })));
     }
 
     Ok(None)
@@ -282,7 +284,7 @@ async fn execute_blueprint(spawner: &Spawner, request: &AppVmLaunchRequest, log:
         return;
     }
 
-    start_blueprint_launch(spawner, request, log);
+    crate::allocators::with_host_alloc_domain(|| start_blueprint_launch(spawner, request, log));
 }
 
 fn ceil_mib(bytes: usize) -> usize {
@@ -397,8 +399,8 @@ fn estimate_blueprint_memory_profile(
             ),
             BlueprintMemoryClass::NetworkClient => (
                 64,
-                round_pow2_mib(base_live_mib.saturating_mul(16).saturating_add(96)).max(128),
-                384,
+                round_pow2_mib(base_live_mib.saturating_mul(32).saturating_add(128)).max(256),
+                512,
                 8,
                 16,
                 64,
@@ -785,9 +787,11 @@ async fn submit_module_bytes_to_target_async(
         log_run_target_line(&target, line.as_str());
         return Err(line);
     }
-    let line = alloc::format!("hv run: queued {}", archive_name);
-    log_run_target_line(&target, line.as_str());
-    enqueue_blueprint_request(target, String::from(archive_name), module_bytes, app_args, true);
+    crate::allocators::with_host_alloc_domain(|| {
+        let line = alloc::format!("hv run: queued {}", archive_name);
+        log_run_target_line(&target, line.as_str());
+        enqueue_blueprint_request(target, String::from(archive_name), module_bytes, app_args, true);
+    });
     Ok(source)
 }
 

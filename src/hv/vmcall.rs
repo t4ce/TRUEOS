@@ -90,6 +90,7 @@ pub const STATUS_OK: u32 = 0;
 pub const STATUS_UNKNOWN_OP: u32 = 1;
 pub const STATUS_BAD_ARG: u32 = 2;
 const MAX_GUEST_SLEEP_MS: u64 = 10_000;
+pub const COMM_PAGE_VM_ID_MAGIC: u32 = 0x4856_0000;
 
 // ── shared page ─────────────────────────────────────────────────────────────
 
@@ -145,6 +146,31 @@ fn host_ptr(vm_id: u8) -> Option<*mut CommPage> {
         return None;
     }
     Some(unsafe { core::ptr::addr_of_mut!(COMM_PAGES[vm_id as usize].0) as *mut CommPage })
+}
+
+pub fn prepare_for_vm(vm_id: u8) -> bool {
+    let Some(p) = host_ptr(vm_id) else {
+        return false;
+    };
+    unsafe {
+        core::ptr::write_bytes(p as *mut u8, 0, core::mem::size_of::<CommPage>());
+        core::ptr::write_volatile(
+            &mut (*p).response_pad,
+            COMM_PAGE_VM_ID_MAGIC | vm_id.saturating_add(1) as u32,
+        );
+    }
+    true
+}
+
+pub(crate) fn guest_comm_page_vm_id_tag() -> Option<u32> {
+    let p = comm_page_guest_va() as *const CommPage;
+    unsafe {
+        let tag = core::ptr::read_volatile(&(*p).response_pad);
+        if (tag & 0xFFFF_0000) != COMM_PAGE_VM_ID_MAGIC {
+            return None;
+        }
+        Some(tag & 0xFF)
+    }
 }
 
 pub fn pa_for_vm(vm_id: u8) -> Option<u64> {

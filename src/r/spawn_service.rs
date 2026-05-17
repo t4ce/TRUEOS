@@ -899,7 +899,7 @@ struct BlueprintAutostart {
 
 const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
     BlueprintAutostart {
-        enabled: true,
+        enabled: false,
         label: "currency_reqwest",
         archive: "currency_reqwest.bp",
         slot: "cur",
@@ -915,7 +915,7 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
         settle_ms: 750,
     },
     BlueprintAutostart {
-        enabled: false,
+        enabled: true,
         label: "weather",
         archive: "weather.bp",
         slot: "wth",
@@ -923,7 +923,7 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
         settle_ms: 750,
     },
     BlueprintAutostart {
-        enabled: true,
+        enabled: false,
         label: "chart",
         archive: "chart.bp",
         slot: "chr",
@@ -931,7 +931,7 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
         settle_ms: 750,
     },
     BlueprintAutostart {
-        enabled: true,
+        enabled: false,
         label: "hello_world",
         archive: "hello_world.bp",
         slot: "hel",
@@ -939,7 +939,7 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
         settle_ms: 750,
     },
     BlueprintAutostart {
-        enabled: true,
+        enabled: false,
         label: "chatserver",
         archive: "chatserver.bp",
         slot: "cht",
