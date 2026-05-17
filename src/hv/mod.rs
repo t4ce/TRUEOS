@@ -19,6 +19,7 @@ use crate::hv::vmx::*;
 
 pub use trueos_vm::guest;
 
+use alloc::collections::BTreeMap;
 use alloc::string::String as AllocString;
 use alloc::vec::Vec as AllocVec;
 use core::arch::x86_64::{__cpuid, __cpuid_count};
@@ -90,6 +91,8 @@ static HV_CONTROL_NUDGE_SEQ: AtomicU64 = AtomicU64::new(1);
 static VM_BOOT_MODES: [Mutex<VmBootMode>; TRUEOS_VM_ID_LIMIT] =
     [const { Mutex::new(VmBootMode::Hull) }; TRUEOS_VM_ID_LIMIT];
 static BLUEPRINT_LAUNCH_STATES: [Mutex<Option<BlueprintLaunchState>>; TRUEOS_VM_ID_LIMIT] =
+    [const { Mutex::new(None) }; TRUEOS_VM_ID_LIMIT];
+static BLUEPRINT_PROCESS_CONTEXTS: [Mutex<Option<BlueprintProcessContext>>; TRUEOS_VM_ID_LIMIT] =
     [const { Mutex::new(None) }; TRUEOS_VM_ID_LIMIT];
 
 #[derive(Clone)]
@@ -266,6 +269,12 @@ pub struct BlueprintLaunchState {
     pub unpacked_bytes: AllocVec<u8>,
     pub app_args: AllocVec<AllocString>,
     pub console_target: Option<MatrixTarget>,
+}
+
+#[derive(Clone)]
+struct BlueprintProcessContext {
+    args: AllocVec<AllocString>,
+    vars: BTreeMap<AllocString, AllocString>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -883,11 +892,29 @@ pub fn stage_blueprint_launch(vm_id: u8, state: BlueprintLaunchState) -> Result<
     let Some(slot) = BLUEPRINT_LAUNCH_STATES.get(vm_id as usize) else {
         return Err(StartError::UnsupportedVmId);
     };
+    let Some(process_slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else {
+        return Err(StartError::UnsupportedVmId);
+    };
+    let app_fs_root = crate::hv::blueprint::app_fs_root_for_archive(
+        state.archive.as_str(),
+        state.module_bytes.as_slice(),
+    );
+    let process_context = BlueprintProcessContext {
+        args: crate::hv::blueprint::build_process_args(
+            state.archive.as_str(),
+            state.app_args.as_slice(),
+        ),
+        vars: crate::hv::blueprint::build_process_env(
+            state.archive.as_str(),
+            Some(app_fs_root.as_str()),
+        ),
+    };
     let Some(guest_state) = crate::allocators::with_hv_guest_alloc_domain(vm_id, || state.clone())
     else {
         return Err(StartError::GuestMemoryUnavailable);
     };
     *slot.lock() = Some(guest_state);
+    *process_slot.lock() = Some(process_context);
     Ok(())
 }
 
@@ -904,6 +931,27 @@ pub fn blueprint_launch_active(vm_id: u8) -> bool {
         .get(vm_id as usize)
         .map(|slot| slot.lock().is_some())
         .unwrap_or(false)
+}
+
+pub(crate) fn blueprint_process_arg_count(vm_id: u8) -> Option<usize> {
+    let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize)?.lock();
+    Some(context.as_ref()?.args.len())
+}
+
+pub(crate) fn blueprint_process_arg(vm_id: u8, index: usize) -> Option<AllocString> {
+    let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize)?.lock();
+    context.as_ref()?.args.get(index).cloned()
+}
+
+pub(crate) fn blueprint_process_env_var(vm_id: u8, key: &str) -> Option<AllocString> {
+    let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize)?.lock();
+    context.as_ref()?.vars.get(key).cloned()
+}
+
+fn clear_blueprint_process_context(vm_id: u8) {
+    if let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) {
+        *slot.lock() = None;
+    }
 }
 
 pub(crate) fn blueprint_launch_states_span() -> (u64, usize) {
@@ -1085,6 +1133,7 @@ async fn vm_task(vm_id: u8, _lane_lease: crate::hv::lane::LaneLease) {
     vm.preserve_req.store(false, Ordering::Release);
     vm.preserve_exit.store(false, Ordering::Release);
     let _ = take_blueprint_launch(vm_id);
+    clear_blueprint_process_context(vm_id);
     hvlogf(format_args!("hv: vm{} lifecycle: stopped", vm_id));
     if let Some(pending) = pending_crash {
         crate::hv::app_crash::write(vm_id, pending).await;

@@ -251,10 +251,14 @@ pub mod kfs {
 pub mod env {
     use super::{BTreeMap, String, Vec};
     use crate::shell2::MatrixTarget;
+    use core::sync::atomic::{AtomicUsize, Ordering};
+    use core::{ffi::c_char, ptr, slice, str};
 
     const VM_CONTEXT_SLOTS: usize = crate::allcaps::hv::VM_ID_LIMIT;
     const HOST_CONTEXT_SLOTS: usize = 64;
     const CONTEXT_SLOTS: usize = VM_CONTEXT_SLOTS + HOST_CONTEXT_SLOTS;
+    const GETENV_SLOTS: usize = 8;
+    const GETENV_VALUE_CAP: usize = 4096;
 
     #[derive(Clone)]
     struct LaunchContext {
@@ -266,6 +270,22 @@ pub mod env {
 
     static CONTEXTS: [spin::Mutex<Vec<LaunchContext>>; CONTEXT_SLOTS] =
         [const { spin::Mutex::new(Vec::new()) }; CONTEXT_SLOTS];
+    static NEXT_GETENV_SLOT: AtomicUsize = AtomicUsize::new(0);
+    static mut GETENV_VALUES: [[u8; GETENV_VALUE_CAP]; GETENV_SLOTS] =
+        [[0; GETENV_VALUE_CAP]; GETENV_SLOTS];
+
+    unsafe fn cstr_to_str<'a>(ptr: *const c_char) -> Option<&'a str> {
+        if ptr.is_null() {
+            return None;
+        }
+
+        let mut len = 0usize;
+        while unsafe { *ptr.add(len) } != 0 {
+            len = len.saturating_add(1);
+        }
+
+        str::from_utf8(unsafe { slice::from_raw_parts(ptr.cast::<u8>(), len) }).ok()
+    }
 
     #[inline]
     fn context_slot() -> usize {
@@ -320,6 +340,32 @@ pub mod env {
     pub fn var(key: &str) -> Option<String> {
         let stack = context_stack().lock();
         stack.last().and_then(|ctx| ctx.vars.get(key)).cloned()
+    }
+
+    pub(crate) unsafe extern "C" fn getenv(name: *const c_char) -> *mut c_char {
+        let Some(key) = (unsafe { cstr_to_str(name) }) else {
+            return ptr::null_mut();
+        };
+
+        let Some(value) = var(key) else {
+            return ptr::null_mut();
+        };
+        let bytes = value.as_bytes();
+        if bytes.len() >= GETENV_VALUE_CAP {
+            return ptr::null_mut();
+        }
+
+        let slot = NEXT_GETENV_SLOT.fetch_add(1, Ordering::Relaxed) % GETENV_SLOTS;
+        let out = unsafe {
+            ptr::addr_of_mut!(GETENV_VALUES)
+                .cast::<u8>()
+                .add(slot * GETENV_VALUE_CAP)
+        };
+        unsafe {
+            ptr::copy_nonoverlapping(bytes.as_ptr(), out, bytes.len());
+            *out.add(bytes.len()) = 0;
+        }
+        out.cast::<c_char>()
     }
 
     pub(crate) fn console_target() -> Option<MatrixTarget> {

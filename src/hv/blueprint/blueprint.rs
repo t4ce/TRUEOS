@@ -1165,6 +1165,7 @@ fn resolve_std_abi_import(name: &str) -> Option<usize> {
         }
         "sys_read" => Some(crate::std_abi_shim::sys_read as *const () as usize),
         "sys_getenv" => Some(crate::std_abi_shim::sys_getenv as *const () as usize),
+        "getenv" => Some(crate::r::io::env::getenv as *const () as usize),
         "sys_argc" => Some(crate::std_abi_shim::sys_argc as *const () as usize),
         "sys_argv" => Some(crate::std_abi_shim::sys_argv as *const () as usize),
         "sys_output" => Some(crate::std_abi_shim::sys_output as *const () as usize),
@@ -1409,12 +1410,40 @@ pub(crate) fn build_process_env(
     app_fs_root: Option<&str>,
 ) -> BTreeMap<String, String> {
     let mut vars = BTreeMap::new();
+    let app_home = app_fs_root
+        .map(|root| alloc::format!("/{root}"))
+        .unwrap_or_else(|| alloc::format!("/apps/{}", safe_archive_stem(archive)));
     vars.insert(String::from("PWD"), String::from("/"));
+    vars.insert(String::from("HOME"), app_home.clone());
+    vars.insert(
+        String::from("XDG_CONFIG_HOME"),
+        alloc::format!("{app_home}/config"),
+    );
+    vars.insert(
+        String::from("XDG_CACHE_HOME"),
+        alloc::format!("{app_home}/cache"),
+    );
+    vars.insert(
+        String::from("BAT_CONFIG_DIR"),
+        alloc::format!("{app_home}/config/bat"),
+    );
+    vars.insert(
+        String::from("BAT_CACHE_PATH"),
+        alloc::format!("{app_home}/cache/bat"),
+    );
     vars.insert(String::from("TRUEOS_APP_ARCHIVE"), String::from(archive));
     if let Some(root) = app_fs_root {
         vars.insert(String::from("TRUEOS_APP_FS_ROOT"), String::from(root));
     }
-    vars.insert(String::from("TRUEOS_APP_FS_COMMON"), String::from("apps/common"));
+    let app_common = app_fs_common_for_archive(archive);
+    vars.insert(
+        String::from("TRUEOS_APP_FS_COMMON"),
+        app_common.clone(),
+    );
+    vars.insert(
+        String::from("TRUEOS_APP_COMMON"),
+        alloc::format!("/{app_common}"),
+    );
     vars
 }
 
@@ -1454,6 +1483,10 @@ fn safe_archive_stem(archive: &str) -> String {
 
 pub(crate) fn app_fs_root_for_archive(archive: &str, _module_bytes: &[u8]) -> String {
     alloc::format!("apps/{}", safe_archive_stem(archive))
+}
+
+pub(crate) fn app_fs_common_for_archive(archive: &str) -> String {
+    alloc::format!("apps/common/{}", safe_archive_stem(archive))
 }
 
 pub(crate) fn parse_blueprint(bytes: &[u8]) -> Result<BlueprintModule<'_>, &'static str> {
