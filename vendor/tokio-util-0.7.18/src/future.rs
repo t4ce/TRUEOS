@@ -3,7 +3,7 @@
 mod with_cancellation_token;
 use with_cancellation_token::{WithCancellationTokenFuture, WithCancellationTokenFutureOwned};
 
-use std::future::Future;
+use core::future::Future;
 
 use crate::sync::CancellationToken;
 

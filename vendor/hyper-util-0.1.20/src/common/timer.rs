@@ -1,9 +1,9 @@
 #![allow(dead_code)]
 
+use alloc::sync::Arc;
 use core::fmt;
 use core::pin::Pin;
 use core::time::Duration;
-use std::sync::Arc;
 
 use hyper::rt::Sleep;
 use hyper::time::Instant;

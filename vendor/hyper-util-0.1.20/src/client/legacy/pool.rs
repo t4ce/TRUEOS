@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use alloc::collections::VecDeque;
+use std::collections::{HashMap, HashSet};
 use core::convert::Infallible;
 use core::error::Error as StdError;
 use core::fmt::{self, Debug};
@@ -8,7 +9,8 @@ use core::future::Future;
 use core::hash::Hash;
 use core::ops::{Deref, DerefMut};
 use core::pin::Pin;
-use std::sync::{Arc, Mutex, Weak};
+use alloc::sync::Arc;
+use std::sync::{Mutex, Weak};
 use core::task::{self, ready, Poll};
 
 use core::time::Duration;

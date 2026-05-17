@@ -6,6 +6,8 @@
 //! This crate is less-stable than [`hyper`](https://docs.rs/hyper). However,
 //! does respect Rust's semantic version regarding breaking changes.
 
+extern crate alloc;
+
 #[cfg(feature = "client")]
 pub mod client;
 mod common;

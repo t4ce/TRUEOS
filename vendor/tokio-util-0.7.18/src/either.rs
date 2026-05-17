@@ -1,5 +1,5 @@
 //! Module defining an Either type.
-use std::{
+use core::{
     future::Future,
     pin::Pin,
     task::{Context, Poll},
@@ -154,7 +154,7 @@ where
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         bufs: &[tokio::io::IoSlice<'_>],
-    ) -> Poll<std::result::Result<usize, tokio::io::Error>> {
+    ) -> Poll<core::result::Result<usize, tokio::io::Error>> {
         delegate_call!(self.poll_write_vectored(cx, bufs))
     }
 
@@ -188,25 +188,25 @@ where
     fn poll_ready(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-    ) -> Poll<std::result::Result<(), Self::Error>> {
+    ) -> Poll<core::result::Result<(), Self::Error>> {
         delegate_call!(self.poll_ready(cx))
     }
 
-    fn start_send(self: Pin<&mut Self>, item: Item) -> std::result::Result<(), Self::Error> {
+    fn start_send(self: Pin<&mut Self>, item: Item) -> core::result::Result<(), Self::Error> {
         delegate_call!(self.start_send(item))
     }
 
     fn poll_flush(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-    ) -> Poll<std::result::Result<(), Self::Error>> {
+    ) -> Poll<core::result::Result<(), Self::Error>> {
         delegate_call!(self.poll_flush(cx))
     }
 
     fn poll_close(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-    ) -> Poll<std::result::Result<(), Self::Error>> {
+    ) -> Poll<core::result::Result<(), Self::Error>> {
         delegate_call!(self.poll_close(cx))
     }
 }

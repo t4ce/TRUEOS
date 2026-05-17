@@ -1,8 +1,9 @@
-use std::future::Future;
-use std::pin::Pin;
+use core::future::Future;
+use core::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
-use std::{fmt, io};
+use core::task::{Context, Poll};
+use core::fmt;
+use std::io;
 
 use http::Uri;
 use hyper::rt;
@@ -221,7 +222,7 @@ pub trait ResolveServerName {
     )
 ))]
 mod tests {
-    use std::future::poll_fn;
+    use core::future::poll_fn;
 
     use http::Uri;
     use hyper_util::rt::TokioIo;

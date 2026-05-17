@@ -1,8 +1,8 @@
 use futures_core::Stream;
-use std::fmt;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{ready, Context, Poll};
+use alloc::sync::Arc;
+use core::fmt;
+use core::pin::Pin;
+use core::task::{ready, Context, Poll};
 use tokio::sync::{AcquireError, OwnedSemaphorePermit, Semaphore, TryAcquireError};
 
 use super::ReusableBoxFuture;

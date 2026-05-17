@@ -41,8 +41,8 @@
 use std::os::unix::io::{AsRawFd, RawFd};
 #[cfg(windows)]
 use std::os::windows::io::{AsRawSocket, RawSocket};
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 pub use rustls;
 
@@ -52,8 +52,8 @@ use tokio::io::{self, AsyncBufRead, AsyncRead, AsyncWrite, IoSlice, ReadBuf};
 macro_rules! ready {
     ( $e:expr ) => {
         match $e {
-            std::task::Poll::Ready(t) => t,
-            std::task::Poll::Pending => return std::task::Poll::Pending,
+            core::task::Poll::Ready(t) => t,
+            core::task::Poll::Pending => return core::task::Poll::Pending,
         }
     };
 }

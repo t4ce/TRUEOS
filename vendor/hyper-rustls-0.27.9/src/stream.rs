@@ -1,7 +1,7 @@
 // Copied from hyperium/hyper-tls#62e3376/src/stream.rs
-use std::fmt;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::fmt;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 use hyper::{io, rt};
 use hyper_util::client::legacy::connect::{Connected, Connection};

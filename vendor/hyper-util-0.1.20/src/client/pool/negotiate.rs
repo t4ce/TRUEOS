@@ -48,7 +48,8 @@ pub use self::internal::Negotiated;
 mod internal {
     use core::future::Future;
     use core::pin::Pin;
-    use std::sync::{Arc, Mutex};
+    use alloc::sync::Arc;
+    use std::sync::Mutex;
     use core::task::{self, ready, Poll};
 
     use pin_project_lite::pin_project;

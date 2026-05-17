@@ -113,8 +113,8 @@
 
 use pin_project_lite::pin_project;
 use tokio::io;
-use std::pin::Pin;
-use std::task::{ready, Context, Poll};
+use core::pin::Pin;
+use core::task::{ready, Context, Poll};
 
 pin_project! {
     /// A compatibility layer that allows conversion between the

@@ -1,5 +1,5 @@
 use std::borrow::Borrow;
-use std::cmp::Eq;
+use core::cmp::Eq;
 use std::hash::Hash;
 
 /// Abstracts the stack operations needed to track timeouts.

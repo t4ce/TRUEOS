@@ -1,6 +1,6 @@
 use tokio::io;
-use std::mem::MaybeUninit;
-use std::sync::Arc;
+use alloc::sync::Arc;
+use core::mem::MaybeUninit;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 /// Read data from an `AsyncRead` into an `Arc`.

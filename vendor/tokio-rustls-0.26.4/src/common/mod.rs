@@ -1,7 +1,7 @@
 use std::io::{self as std_io, BufRead as _, IoSlice as StdIoSlice, Read, Write};
-use std::ops::{Deref, DerefMut};
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::ops::{Deref, DerefMut};
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 use rustls::{ConnectionCommon, SideData};
 use tokio::io::{self, AsyncBufRead, AsyncRead, AsyncWrite, IoSlice, ReadBuf};

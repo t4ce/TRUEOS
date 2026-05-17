@@ -1,8 +1,8 @@
 use bytes::{Bytes, BytesMut};
 use futures_core::stream::Stream;
 use pin_project_lite::pin_project;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::pin::Pin;
+use core::task::{Context, Poll};
 use tokio::io::AsyncRead;
 
 const DEFAULT_CAPACITY: usize = 4096;

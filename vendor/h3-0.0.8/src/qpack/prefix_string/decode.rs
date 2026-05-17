@@ -20,7 +20,7 @@ struct HuffmanDecoder {
 
 impl HuffmanDecoder {
     fn check_eof(&self, bit_pos: &mut BitWindow, input: &[u8]) -> Result<Option<u32>, Error> {
-        use std::cmp::Ordering;
+        use core::cmp::Ordering;
         match ((bit_pos.byte + 1) as usize).cmp(&input.len()) {
             // Position is out-of-range
             Ordering::Greater => {

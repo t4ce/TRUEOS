@@ -1,8 +1,8 @@
 use bytes::BufMut;
-use std::future::Future;
+use core::future::Future;
 use tokio::io;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::pin::Pin;
+use core::task::{Context, Poll};
 use tokio::io::AsyncRead;
 
 /// Read data from an `AsyncRead` into an implementer of the [`BufMut`] trait.

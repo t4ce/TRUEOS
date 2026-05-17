@@ -21,7 +21,9 @@
 //! }
 //! ```
 
-use std::{collections::HashSet, result::Result, sync::Arc};
+use alloc::sync::Arc;
+use core::result::Result;
+use std::collections::HashSet;
 
 use bytes::Buf;
 
