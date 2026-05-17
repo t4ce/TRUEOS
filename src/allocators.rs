@@ -2,14 +2,12 @@ use core::alloc::{GlobalAlloc, Layout};
 #[cfg(target_arch = "x86_64")]
 use core::arch::asm;
 use core::mem::{align_of, size_of};
-use core::ptr::{NonNull, addr_of_mut, null_mut};
+use core::ptr::{NonNull, null_mut};
 use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use spin::Mutex;
 
 use crate::phys::{self, HeapArena};
 
-pub const FALLBACK_HEAP_SIZE: usize = 256 * 1024;
-pub const HV_GUEST_HEAP_FALLBACK_SIZE: usize = 8 * 1024 * 1024;
 const HV_GUEST_HEAP_ALIGN: usize = 2 * 1024 * 1024;
 pub const HV_GUEST_HEAP_MIN_ARENA_SIZE: usize = 16 * 1024 * 1024;
 pub const HV_GUEST_HEAP_MAX_ARENA_SIZE: usize = 512 * 1024 * 1024;
@@ -19,10 +17,6 @@ const HV_GUEST_HEAP_CANDIDATES: [usize; 4] = [
     128 * 1024 * 1024,
     64 * 1024 * 1024,
 ];
-
-static mut FALLBACK_HEAP: [u8; FALLBACK_HEAP_SIZE] = [0; FALLBACK_HEAP_SIZE];
-static mut HV_GUEST_FALLBACK_HEAP: [u8; HV_GUEST_HEAP_FALLBACK_SIZE] =
-    [0; HV_GUEST_HEAP_FALLBACK_SIZE];
 
 const ALLOC_TRACE_STAGE_ENTRY: u32 = 1;
 const ALLOC_TRACE_STAGE_BLOCK: u32 = 2;
@@ -73,13 +67,19 @@ unsafe fn read_return_address(depth: usize) -> usize {
         let mut frame = rbp as *const usize;
         let mut remaining = depth;
         while remaining != 0 {
-            if frame.is_null() {
+            if frame.is_null() || !(frame as usize).is_multiple_of(core::mem::align_of::<usize>()) {
                 return 0;
             }
             frame = (*frame) as *const usize;
             remaining -= 1;
         }
-        return if frame.is_null() { 0 } else { *frame.add(1) };
+        return if frame.is_null()
+            || !(frame as usize).is_multiple_of(core::mem::align_of::<usize>())
+        {
+            0
+        } else {
+            *frame.add(1)
+        };
     }
 
     #[cfg(not(target_arch = "x86_64"))]
@@ -228,7 +228,7 @@ struct AllocTag {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum HeapSourceKind {
-    Fallback,
+    Unconfigured,
     Arena,
 }
 
@@ -245,8 +245,6 @@ struct FreeList {
     heap_len: usize,
     heap_phys_start: usize,
     heap_source: HeapSourceKind,
-    fallback_virt_start: usize,
-    fallback_len: usize,
 }
 
 unsafe impl Send for FreeList {}
@@ -259,9 +257,7 @@ impl FreeList {
             heap_virt_start: 0,
             heap_len: 0,
             heap_phys_start: 0,
-            heap_source: HeapSourceKind::Fallback,
-            fallback_virt_start: 0,
-            fallback_len: 0,
+            heap_source: HeapSourceKind::Unconfigured,
         }
     }
 
@@ -294,7 +290,8 @@ impl FreeList {
             self.init_once();
         }
 
-        let trace_enabled = matches!(domain, AllocDomain::Host);
+        let trace_enabled = matches!(domain, AllocDomain::Host)
+            && crate::hv::current_guest_execution_context_vm_id().is_none();
         let mut current = self.head;
         trace_alloc_entry(trace_enabled, layout, current);
         let mut prev: Option<NonNull<FreeBlock>> = None;
@@ -446,17 +443,6 @@ impl FreeList {
     }
 
     fn ensure_heap_backing(&mut self) -> (usize, usize) {
-        if self.heap_len == 0 {
-            let start = self.fallback_virt_start;
-            let len = self.fallback_len;
-            if start == 0 || len == 0 {
-                return (0, 0);
-            }
-            self.heap_virt_start = start;
-            self.heap_len = len;
-            self.heap_phys_start = 0;
-            self.heap_source = HeapSourceKind::Fallback;
-        }
         (self.heap_virt_start, self.heap_len)
     }
 
@@ -514,6 +500,10 @@ pub(crate) fn hv_guest_allocator_state_spans() -> [(u64, usize); 2] {
 
 const HOST_ALLOC_TAG: u8 = u8::MAX;
 static HOST_ALLOC_DOMAIN_FORCE_DEPTH_BY_CPU: [AtomicU32; 64] = [const { AtomicU32::new(0) }; 64];
+static HV_GUEST_ALLOC_DOMAIN_FORCE_DEPTH_BY_CPU: [AtomicU32; 64] =
+    [const { AtomicU32::new(0) }; 64];
+static HV_GUEST_ALLOC_DOMAIN_FORCE_VM_BY_CPU: [AtomicU32; 64] =
+    [const { AtomicU32::new(0) }; 64];
 
 fn alloc_domain_from_tag(tag: &AllocTag) -> AllocDomain {
     if (tag.domain as usize) < crate::allcaps::hv::VM_ID_LIMIT {
@@ -544,6 +534,15 @@ fn cpuid_slot() -> Option<usize> {
 
 fn current_alloc_domain() -> AllocDomain {
     if let Some(slot) = cpuid_slot()
+        && HV_GUEST_ALLOC_DOMAIN_FORCE_DEPTH_BY_CPU[slot].load(Ordering::Acquire) != 0
+    {
+        let vm_tag = HV_GUEST_ALLOC_DOMAIN_FORCE_VM_BY_CPU[slot].load(Ordering::Acquire);
+        if vm_tag != 0 {
+            return AllocDomain::HvGuest(vm_tag.saturating_sub(1) as u8);
+        }
+    }
+
+    if let Some(slot) = cpuid_slot()
         && HOST_ALLOC_DOMAIN_FORCE_DEPTH_BY_CPU[slot].load(Ordering::Acquire) != 0
     {
         return AllocDomain::Host;
@@ -568,7 +567,6 @@ fn current_alloc_domain() -> AllocDomain {
 }
 
 pub fn with_host_alloc_domain<T>(f: impl FnOnce() -> T) -> T {
-    init_fallback_regions();
     let Some(slot) = cpuid_slot() else {
         return f();
     };
@@ -596,7 +594,6 @@ impl Drop for HostAllocDomainGuard {
 }
 
 pub fn enter_host_alloc_domain_current_cpu() -> HostAllocDomainGuard {
-    init_fallback_regions();
     let Some(slot) = cpuid_slot() else {
         return HostAllocDomainGuard { slot: None };
     };
@@ -616,40 +613,32 @@ fn allocator_for_domain(domain: AllocDomain) -> &'static Mutex<FreeList> {
     }
 }
 
-fn init_fallback_regions() {
-    let host_fallback = addr_of_mut!(FALLBACK_HEAP) as *mut u8 as usize;
-    let hv_fallback = addr_of_mut!(HV_GUEST_FALLBACK_HEAP) as *mut u8 as usize;
-    {
-        let mut guard = ALLOCATOR.lock();
-        if guard.fallback_virt_start == 0 {
-            guard.fallback_virt_start = host_fallback;
-            guard.fallback_len = FALLBACK_HEAP_SIZE;
-        }
-    }
-    let per_vm_fallback_len = HV_GUEST_HEAP_FALLBACK_SIZE / crate::allcaps::hv::VM_ID_LIMIT;
-    for (idx, allocator) in HV_GUEST_ALLOCATORS.iter().enumerate() {
-        let mut guard = allocator.lock();
-        if guard.fallback_virt_start == 0 {
-            guard.fallback_virt_start = hv_fallback.saturating_add(idx * per_vm_fallback_len);
-            guard.fallback_len = per_vm_fallback_len;
-        }
-    }
-}
-
 pub fn with_hv_guest_alloc_domain<T>(vm_id: u8, f: impl FnOnce() -> T) -> Option<T> {
-    init_fallback_regions();
     if (vm_id as usize) >= crate::allcaps::hv::VM_ID_LIMIT || !ensure_hv_guest_heap_ready(vm_id) {
         return None;
     }
-    Some(crate::t::kernel_task_domain::with(
+    let Some(slot) = cpuid_slot() else {
+        return Some(crate::t::kernel_task_domain::with(
+            crate::t::kernel_task_domain::KernelTaskDomain::VmGuestOwnedAlloc,
+            Some(vm_id),
+            f,
+        ));
+    };
+    let depth = HV_GUEST_ALLOC_DOMAIN_FORCE_DEPTH_BY_CPU.get(slot)?;
+    let vm_force = HV_GUEST_ALLOC_DOMAIN_FORCE_VM_BY_CPU.get(slot)?;
+    let previous_vm = vm_force.swap(vm_id as u32 + 1, Ordering::AcqRel);
+    depth.fetch_add(1, Ordering::AcqRel);
+    let out = crate::t::kernel_task_domain::with(
         crate::t::kernel_task_domain::KernelTaskDomain::VmGuestOwnedAlloc,
         Some(vm_id),
         f,
-    ))
+    );
+    depth.fetch_sub(1, Ordering::AcqRel);
+    vm_force.store(previous_vm, Ordering::Release);
+    Some(out)
 }
 
 pub fn ensure_hv_guest_heap_ready(vm_id: u8) -> bool {
-    init_fallback_regions();
     if (vm_id as usize) >= crate::allcaps::hv::VM_ID_LIMIT {
         return false;
     }
@@ -660,6 +649,15 @@ pub fn ensure_hv_guest_heap_ready(vm_id: u8) -> bool {
 
     let mut guard = HV_GUEST_ALLOCATORS[vm_id as usize].lock();
     if guard.initialized || guard.heap_len != 0 {
+        if guard.heap_source != HeapSourceKind::Arena {
+            crate::log!(
+                "heap: hv guest vm{} non-arena heap already live src={:?} size={} KiB; refusing readiness\n",
+                vm_id,
+                guard.heap_source,
+                guard.heap_len / 1024
+            );
+            return false;
+        }
         HV_GUEST_HEAP_READY_MASK.fetch_or(ready_bit, Ordering::AcqRel);
         return true;
     }
@@ -681,12 +679,10 @@ pub fn ensure_hv_guest_heap_ready(vm_id: u8) -> bool {
     }
 
     crate::log!(
-        "heap: hv guest vm{} arena unavailable, falling back to private {} KiB heap\n",
-        vm_id,
-        guard.fallback_len / 1024
+        "heap: hv guest vm{} arena unavailable; no guest fallback configured\n",
+        vm_id
     );
-    HV_GUEST_HEAP_READY_MASK.fetch_or(ready_bit, Ordering::AcqRel);
-    true
+    false
 }
 
 fn round_hv_guest_heap_request(size: usize) -> usize {
@@ -697,7 +693,6 @@ fn round_hv_guest_heap_request(size: usize) -> usize {
 }
 
 pub fn prepare_hv_guest_heap_for_vm(vm_id: u8, requested_size: usize) -> bool {
-    init_fallback_regions();
     if (vm_id as usize) >= crate::allcaps::hv::VM_ID_LIMIT {
         return false;
     }
@@ -709,58 +704,28 @@ pub fn prepare_hv_guest_heap_for_vm(vm_id: u8, requested_size: usize) -> bool {
         if guard.heap_source == HeapSourceKind::Arena {
             return guard.heap_len >= requested_size;
         }
-        if guard.heap_len >= requested_size {
-            return true;
-        }
-        let Some(arena) = phys::reserve_heap_arena(requested_size, HV_GUEST_HEAP_ALIGN) else {
-            crate::log!(
-                "heap: hv guest vm{} fallback upgrade unavailable size={} MiB fallback={} KiB\n",
-                vm_id,
-                requested_size / (1024 * 1024),
-                guard.heap_len / 1024
-            );
-            return false;
-        };
-        guard.install_heap(arena.virt_start, arena.phys_start as usize, arena.length);
-        HV_GUEST_HEAP_READY_MASK.fetch_or(ready_bit, Ordering::AcqRel);
         crate::log!(
-            "heap: hv guest vm{} arena virt=0x{:X} phys=0x{:X} size={} MiB upgraded-from=fallback requested={} MiB\n",
+            "heap: hv guest vm{} non-arena heap already initialized src={:?} size={} KiB requested={} MiB; refusing launch\n",
             vm_id,
-            arena.virt_start,
-            arena.phys_start,
-            arena.length / (1024 * 1024),
+            guard.heap_source,
+            guard.heap_len / 1024,
             requested_size / (1024 * 1024)
         );
-        return true;
+        return false;
     }
     if guard.heap_len != 0 {
         if guard.heap_source == HeapSourceKind::Arena && guard.heap_len >= requested_size {
             HV_GUEST_HEAP_READY_MASK.fetch_or(ready_bit, Ordering::AcqRel);
             return true;
         }
-        if guard.heap_source == HeapSourceKind::Fallback && guard.heap_len < requested_size {
-            let Some(arena) = phys::reserve_heap_arena(requested_size, HV_GUEST_HEAP_ALIGN) else {
-                crate::log!(
-                    "heap: hv guest vm{} fallback upgrade unavailable size={} MiB fallback={} KiB\n",
-                    vm_id,
-                    requested_size / (1024 * 1024),
-                    guard.heap_len / 1024
-                );
-                return false;
-            };
-            guard.install_heap(arena.virt_start, arena.phys_start as usize, arena.length);
-            HV_GUEST_HEAP_READY_MASK.fetch_or(ready_bit, Ordering::AcqRel);
-            crate::log!(
-                "heap: hv guest vm{} arena virt=0x{:X} phys=0x{:X} size={} MiB upgraded-from=fallback requested={} MiB\n",
-                vm_id,
-                arena.virt_start,
-                arena.phys_start,
-                arena.length / (1024 * 1024),
-                requested_size / (1024 * 1024)
-            );
-            return true;
-        }
-        return guard.heap_len >= requested_size;
+        crate::log!(
+            "heap: hv guest vm{} non-arena heap configured src={:?} size={} KiB requested={} MiB; refusing launch\n",
+            vm_id,
+            guard.heap_source,
+            guard.heap_len / 1024,
+            requested_size / (1024 * 1024)
+        );
+        return false;
     }
 
     let Some(arena) = phys::reserve_heap_arena(requested_size, HV_GUEST_HEAP_ALIGN) else {
@@ -786,7 +751,6 @@ pub fn prepare_hv_guest_heap_for_vm(vm_id: u8, requested_size: usize) -> bool {
 
 unsafe impl GlobalAlloc for Allocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        init_fallback_regions();
         let domain = current_alloc_domain();
         let ptr = allocator_for_domain(domain).lock().alloc(domain, layout);
         if !ptr.is_null() {
@@ -817,7 +781,6 @@ unsafe impl GlobalAlloc for Allocator {
 static GLOBAL_ALLOCATOR: Allocator = Allocator;
 
 pub unsafe fn alloc_raw(layout: Layout) -> *mut u8 {
-    init_fallback_regions();
     let domain = current_alloc_domain();
     let mut guard = allocator_for_domain(domain).lock();
     let ptr = guard.alloc(domain, layout);
@@ -831,37 +794,39 @@ pub unsafe fn alloc_raw(layout: Layout) -> *mut u8 {
 }
 
 fn log_hv_guest_alloc_failure(vm_id: u8, layout: Layout, path: &str) {
-    let stats = hv_guest_heap_stats(vm_id);
-    let trace = last_alloc_trace();
-    crate::log!(
-        "hv-guest-alloc: vm{} {} failed size={} align={} src={:?} usable_total={} free_bytes={} largest_free={} free_blocks={} init={}\n",
-        vm_id,
-        path,
-        layout.size(),
-        layout.align(),
-        stats.source,
-        stats.usable_total,
-        stats.free_bytes,
-        stats.largest_free_block,
-        stats.free_blocks,
-        stats.initialized,
-    );
-    crate::log!(
-        "hv-guest-alloc: trace seq={} caller=0x{:016X} caller1=0x{:016X} caller2=0x{:016X} size={} align={} stage={} head=0x{:016X} block=0x{:016X} block_size={} next=0x{:016X} payload=0x{:016X} aligned_used={}\n",
-        trace.seq,
-        trace.caller_rip,
-        trace.caller_rip_1,
-        trace.caller_rip_2,
-        trace.layout_size,
-        trace.layout_align,
-        trace.stage,
-        trace.head_ptr,
-        trace.block_ptr,
-        trace.block_size,
-        trace.block_next,
-        trace.payload_start,
-        trace.aligned_used,
-    );
+    with_host_alloc_domain(|| {
+        let stats = hv_guest_heap_stats(vm_id);
+        let trace = last_alloc_trace();
+        crate::log!(
+            "hv-guest-alloc: vm{} {} failed size={} align={} src={:?} usable_total={} free_bytes={} largest_free={} free_blocks={} init={}\n",
+            vm_id,
+            path,
+            layout.size(),
+            layout.align(),
+            stats.source,
+            stats.usable_total,
+            stats.free_bytes,
+            stats.largest_free_block,
+            stats.free_blocks,
+            stats.initialized,
+        );
+        crate::log!(
+            "hv-guest-alloc: trace seq={} caller=0x{:016X} caller1=0x{:016X} caller2=0x{:016X} size={} align={} stage={} head=0x{:016X} block=0x{:016X} block_size={} next=0x{:016X} payload=0x{:016X} aligned_used={}\n",
+            trace.seq,
+            trace.caller_rip,
+            trace.caller_rip_1,
+            trace.caller_rip_2,
+            trace.layout_size,
+            trace.layout_align,
+            trace.stage,
+            trace.head_ptr,
+            trace.block_ptr,
+            trace.block_size,
+            trace.block_next,
+            trace.payload_start,
+            trace.aligned_used,
+        );
+    });
 }
 
 pub unsafe fn dealloc_raw(ptr: *mut u8) {
@@ -893,7 +858,6 @@ pub struct HeapStats {
 }
 
 pub fn heap_stats() -> HeapStats {
-    init_fallback_regions();
     let mut guard = ALLOCATOR.lock();
     unsafe {
         if !guard.initialized {
@@ -976,7 +940,6 @@ fn heap_stats_from_guard(guard: &mut FreeList) -> HeapStats {
 }
 
 pub fn hv_guest_heap_stats(vm_id: u8) -> HeapStats {
-    init_fallback_regions();
     let Some(allocator) = HV_GUEST_ALLOCATORS.get(vm_id as usize) else {
         return HeapStats {
             heap_start: 0,
@@ -988,7 +951,7 @@ pub fn hv_guest_heap_stats(vm_id: u8) -> HeapStats {
             largest_free_block: 0,
             free_blocks: 0,
             initialized: false,
-            source: HeapSourceKind::Fallback,
+            source: HeapSourceKind::Unconfigured,
         };
     };
     let mut guard = allocator.lock();
@@ -996,7 +959,6 @@ pub fn hv_guest_heap_stats(vm_id: u8) -> HeapStats {
 }
 
 pub fn hv_guest_heap_stats_if_configured(vm_id: u8) -> Option<HeapStats> {
-    init_fallback_regions();
     let allocator = HV_GUEST_ALLOCATORS.get(vm_id as usize)?;
     let mut guard = allocator.lock();
     if !guard.initialized && guard.heap_len == 0 {
@@ -1006,7 +968,6 @@ pub fn hv_guest_heap_stats_if_configured(vm_id: u8) -> Option<HeapStats> {
 }
 
 pub fn hv_guest_heap_stats_total() -> HeapStats {
-    init_fallback_regions();
     let mut total = HeapStats {
         heap_start: 0,
         heap_end: 0,
@@ -1017,7 +978,7 @@ pub fn hv_guest_heap_stats_total() -> HeapStats {
         largest_free_block: 0,
         free_blocks: 0,
         initialized: false,
-        source: HeapSourceKind::Arena,
+        source: HeapSourceKind::Unconfigured,
     };
 
     for allocator in HV_GUEST_ALLOCATORS.iter() {
@@ -1043,15 +1004,14 @@ pub fn hv_guest_heap_stats_total() -> HeapStats {
         total.largest_free_block = total.largest_free_block.max(stats.largest_free_block);
         total.free_blocks = total.free_blocks.saturating_add(stats.free_blocks);
         total.initialized |= stats.initialized;
-        if stats.source == HeapSourceKind::Fallback {
-            total.source = HeapSourceKind::Fallback;
+        if stats.source == HeapSourceKind::Arena {
+            total.source = HeapSourceKind::Arena;
         }
     }
     total
 }
 
 pub fn install_heap_arena(arena: HeapArena) -> bool {
-    init_fallback_regions();
     if arena.length < minimum_block_size() {
         crate::log!(
             "heap: requested arena too small size={} bytes (need >= {})\n",
@@ -1091,8 +1051,11 @@ fn align_up(addr: usize, align: usize) -> usize {
 }
 
 fn aligned_payload(block_start: usize, layout: Layout) -> Option<usize> {
-    let payload_start =
-        align_up(block_start + size_of::<FreeBlock>() + size_of::<AllocTag>(), layout.align());
+    let payload_align = core::cmp::max(layout.align(), align_of::<AllocTag>());
+    let payload_start = align_up(
+        block_start + size_of::<FreeBlock>() + size_of::<AllocTag>(),
+        payload_align,
+    );
     if payload_start > usize::MAX - layout.size() {
         None
     } else {

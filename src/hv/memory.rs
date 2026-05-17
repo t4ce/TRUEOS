@@ -723,6 +723,12 @@ fn prepare_guest_hull_rw_backing_for_vm(
             "hv: vm{} reporting: hull rw patched blueprint-launch-state bytes={} guest=0x{:016X}",
             vm_id, len, guest_addr
         ));
+        let (guest_addr, len) = crate::hv::blueprint_process_contexts_span();
+        patch_guest_hull_rw_bytes(arena.virt_start, guest_start, bytes, guest_addr, len);
+        hvlogf(format_args!(
+            "hv: vm{} reporting: hull rw patched blueprint-process-context bytes={} guest=0x{:016X}",
+            vm_id, len, guest_addr
+        ));
     }
 
     let backing = GuestHullRwBacking {
