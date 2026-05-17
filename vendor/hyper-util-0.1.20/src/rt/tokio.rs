@@ -128,12 +128,16 @@ fn hyper_to_tokio_error(err: hyper_io::Error) -> tokio_io::Error {
 fn tokio_to_hyper_slices<'buf>(
     bufs: &'buf [tokio_io::IoSlice<'buf>],
 ) -> Vec<hyper_io::IoSlice<'buf>> {
+    // On TRUEOS both sides re-export `trueos-io` platform I/O. Keep the
+    // conversion shape so the bridge remains source-compatible upstream.
     bufs.iter().map(|buf| hyper_io::IoSlice::new(&**buf)).collect()
 }
 
 fn hyper_to_tokio_slices<'buf>(
     bufs: &'buf [hyper_io::IoSlice<'buf>],
 ) -> Vec<tokio_io::IoSlice<'buf>> {
+    // On TRUEOS both sides re-export `trueos-io` platform I/O. Keep the
+    // conversion shape so the bridge remains source-compatible upstream.
     bufs.iter().map(|buf| tokio_io::IoSlice::new(&**buf)).collect()
 }
 

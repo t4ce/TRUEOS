@@ -2,8 +2,12 @@
 
 //! TRUEOS platform I/O facade.
 //!
-//! This is the no_std, alloc-backed subset that maps cleanly to the parts of
-//! `std::io` used by kernel-side ecosystem crates.
+//! This crate is the kernel-internal I/O vocabulary. Tokio, Hyper, and their
+//! adapters should re-export these platform I/O types instead of defining local
+//! `IoSlice`, error, reader, or writer facades.
+//!
+//! Keep "platform I/O" for TRUEOS runtime traits. Use "std I/O" only at
+//! ecosystem boundaries whose trait signatures explicitly require `std::io`.
 
 extern crate alloc;
 
