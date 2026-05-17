@@ -69,7 +69,7 @@ where
     pub async fn resolve_request(
         mut self,
     ) -> Result<(Request<()>, RequestStream<C::BidiStream, B>), StreamError> {
-        let frame = std::future::poll_fn(|cx| self.frame_stream.poll_next(cx)).await;
+        let frame = core::future::poll_fn(|cx| self.frame_stream.poll_next(cx)).await;
         let req = self.accept_with_frame(frame)?;
         Ok(req.resolve().await?)
     }

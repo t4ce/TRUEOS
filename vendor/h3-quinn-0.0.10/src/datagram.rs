@@ -2,8 +2,8 @@
 //!
 //! This module implements the traits defined in h3-datagram for the quinn crate.
 
-use std::future::Future;
-use std::task::{ready, Poll};
+use core::future::Future;
+use core::task::{ready, Poll};
 
 use futures::{stream, StreamExt};
 use h3_datagram::datagram::EncodedDatagram;
@@ -45,7 +45,7 @@ impl RecvDatagram for RecvDatagramHandler {
     fn poll_incoming_datagram(
         &mut self,
         cx: &mut core::task::Context<'_>,
-    ) -> std::task::Poll<Result<Self::Buffer, ConnectionErrorIncoming>> {
+    ) -> core::task::Poll<Result<Self::Buffer, ConnectionErrorIncoming>> {
         Poll::Ready(
             ready!(self.datagrams.poll_next_unpin(cx))
                 .expect("self. datagrams never returns None")

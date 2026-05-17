@@ -1,4 +1,4 @@
-use std::fmt;
+use core::fmt;
 
 use bytes::{Buf, BufMut};
 
@@ -10,8 +10,8 @@ pub enum Error {
     UnexpectedEnd,
 }
 
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::Overflow => write!(f, "value overflow"),
             Error::UnexpectedEnd => write!(f, "unexpected end"),

@@ -1,5 +1,9 @@
-use std::{
+use alloc::{
     borrow::Cow,
+    string::String,
+    vec::Vec,
+};
+use core::{
     fmt::{Display, Formatter},
 };
 
@@ -53,7 +57,7 @@ impl AsRef<HeaderField> for HeaderField {
 }
 
 impl Display for HeaderField {
-    fn fmt(&self, f: &mut Formatter) -> Result<(), std::fmt::Error> {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), core::fmt::Error> {
         write!(
             f,
             "\"{}\": \"{}\"",

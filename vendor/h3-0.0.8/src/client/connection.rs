@@ -235,7 +235,7 @@ where
 {
     fn clone(&self) -> Self {
         self.sender_count
-            .fetch_add(1, std::sync::atomic::Ordering::Release);
+            .fetch_add(1, core::sync::atomic::Ordering::Release);
 
         Self {
             conn_state: self.conn_state.clone(),
@@ -256,7 +256,7 @@ where
     fn drop(&mut self) {
         if self
             .sender_count
-            .fetch_sub(1, std::sync::atomic::Ordering::AcqRel)
+            .fetch_sub(1, core::sync::atomic::Ordering::AcqRel)
             == 1
         {
             self.handle_connection_error_on_stream(InternalConnectionError::new(

@@ -1,5 +1,5 @@
 use bytes::{Buf, BufMut};
-use std::convert::TryInto;
+use core::convert::TryInto;
 
 use super::{
     parse_error::ParseError,
