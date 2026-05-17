@@ -264,12 +264,7 @@ impl fmt::Display for Error {
                     "HTTP status server error"
                 };
                 if let Some(reason) = reason {
-                    write!(
-                        f,
-                        "{prefix} ({} {})",
-                        code.as_str(),
-                        Escape::new(reason.as_bytes())
-                    )?;
+                    write!(f, "{prefix} ({} {})", code.as_str(), Escape::new(reason.as_bytes()))?;
                 } else {
                     write!(f, "{prefix} ({code})")?;
                 }

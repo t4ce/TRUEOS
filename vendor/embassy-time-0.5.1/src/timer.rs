@@ -1,9 +1,9 @@
-use core::future::{Future, poll_fn};
+use core::future::{poll_fn, Future};
 use core::pin::Pin;
 use core::task::{Context, Poll};
 
-use futures_core::Stream;
 use futures_core::stream::FusedStream;
+use futures_core::Stream;
 
 use crate::{Duration, Instant};
 
@@ -243,7 +243,10 @@ impl Ticker {
     /// Creates a new ticker that ticks at the specified duration interval.
     pub fn every(duration: Duration) -> Self {
         let expires_at = Instant::now() + duration;
-        Self { expires_at, duration }
+        Self {
+            expires_at,
+            duration,
+        }
     }
 
     /// Resets the ticker back to its original state.
