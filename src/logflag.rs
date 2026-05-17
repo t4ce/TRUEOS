@@ -11,9 +11,6 @@ pub(crate) const STORAGE_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
 pub(crate) const GFX_LOG_LEVEL: LevelFilter = LevelFilter::Info;
 pub(crate) const HV_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 
-#[allow(non_upper_case_globals)]
-pub(crate) const dont_persist_globalog: bool = false;
-
 pub(crate) const NET_LOG_RX_TAP: bool = false;
 pub(crate) const NET_LOG_TX_TAP: bool = false;
 pub(crate) const NET_LOG_TCP_FLOW: bool = false;
@@ -28,8 +25,8 @@ pub(crate) const VNET_EXERCISE_LOGS: bool = false;
 
 pub(crate) const R8125_VERBOSE_LOGS: bool = false;
 pub(crate) const BOOT_INFO_LOGS: bool = false;
-pub(crate) const HV_LOGS: bool = true;
-pub(crate) const PORTAL_LOGS: bool = true;
+pub(crate) const HV_LOGS: bool = false;
+pub(crate) const PORTAL_LOGS: bool = false;
 
 pub(crate) const UI2_ENABLE_VERBOSE_COMPOSE_LOGS: bool = false;
 pub(crate) const VHTTPS_VERBOSE: bool = false;

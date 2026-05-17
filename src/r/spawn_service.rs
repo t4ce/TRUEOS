@@ -30,7 +30,6 @@ macro_rules! define_started_flags {
 
 define_started_flags!(
     JOB_RUNNER_STARTED,
-    GLOBALOG_PERSIST_ONCE_STARTED,
     QJS_ASYNC_FS_SERVICE_STARTED,
     TRUEOSFS_MOUNT_SERVICE_STARTED,
     TRUEOSFS_INDEX_SERVICE_STARTED,
@@ -282,10 +281,6 @@ fn spawn_bool_result_to_attempt(result: Result<bool, SpawnError>) -> SpawnAttemp
 
 fn spawn_job_runner(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::wait::job_runner_task())
-}
-
-fn spawn_globalog_persist_once(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::globalog::persist_once_task())
 }
 
 fn spawn_factory_ram_probe(spawner: Spawner) -> SpawnAttempt {
@@ -939,7 +934,7 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
         settle_ms: 750,
     },
     BlueprintAutostart {
-        enabled: false,
+        enabled: true,
         label: "chatserver",
         archive: "chatserver.bp",
         slot: "cht",
@@ -947,7 +942,7 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
         settle_ms: 750,
     },
     BlueprintAutostart {
-        enabled: false,
+        enabled: true,
         label: "bat",
         archive: "bat.bp",
         slot: "bat",
@@ -1070,16 +1065,10 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
     | crate::r::readiness::QJS_ASYNC_FS_READY;
 const UI2_DEMO_READY: u32 =
     crate::r::readiness::UI2_READY | crate::r::readiness::GFX_TEXTURE_UPLOAD_SERVICE_READY;
-const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
-    | crate::r::readiness::BACKGROUND_AP_WORKER_READY;
-static TASKS: [TaskSpec; 69] = [
+const BP_AUTOSTART_READY: u32 =
+    crate::r::readiness::TRUEOSFS_ROOT_MOUNTED | crate::r::readiness::BACKGROUND_AP_WORKER_READY;
+static TASKS: [TaskSpec; 68] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
-    TaskSpec::enabled(
-        "globalog-persist-once",
-        0,
-        &GLOBALOG_PERSIST_ONCE_STARTED,
-        spawn_globalog_persist_once,
-    ),
     TaskSpec::enabled("factory-ram-probe", 0, &FACTORY_RAM_PROBE_STARTED, spawn_factory_ram_probe),
     TaskSpec::enabled(
         "qjs-async-fs-service",

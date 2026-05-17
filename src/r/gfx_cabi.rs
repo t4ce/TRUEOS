@@ -527,12 +527,30 @@ pub mod cabi {
     }
 
     fn process_vm_text_stream(stream: CStream, text: &str) {
-        for raw_line in text.split('\n') {
-            let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
-            if line.is_empty() {
-                continue;
+        let cpu = current_cpu_key();
+        let mut lines = VecDeque::new();
+
+        {
+            let mut buffers = CABI_TEXT_BUFFERS.lock();
+            let pending = buffers
+                .entry(cpu)
+                .or_insert_with(StreamTextBuffers::new)
+                .pending_mut(stream);
+            pending.push_str(text);
+
+            while let Some(newline_idx) = pending.find('\n') {
+                let mut line = String::from(&pending[..newline_idx]);
+                if line.ends_with('\r') {
+                    line.pop();
+                }
+                lines.push_back(line);
+                pending.drain(..=newline_idx);
             }
-            emit_vm_console_stream_line(stream, line);
+        }
+
+        for line in lines {
+            emit_console_stream_line(stream, line.as_str());
+            emit_vm_console_stream_line(stream, line.as_str());
         }
     }
 
