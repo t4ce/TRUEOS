@@ -2,9 +2,9 @@ mod bitwin;
 mod decode;
 mod encode;
 
-use std::convert::TryInto;
-use std::fmt;
-use std::num::TryFromIntError;
+use core::convert::TryInto;
+use core::fmt;
+use core::num::TryFromIntError;
 
 use bytes::{Buf, BufMut};
 
@@ -27,8 +27,8 @@ pub enum Error {
     BufSize(TryFromIntError),
 }
 
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::UnexpectedEnd => write!(f, "unexpected end"),
             Error::Integer(e) => write!(f, "could not parse integer: {}", e),

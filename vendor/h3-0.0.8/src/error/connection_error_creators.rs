@@ -1,6 +1,6 @@
 //! functions to create the error structs
 
-use std::task::Poll;
+use core::task::Poll;
 
 use bytes::Buf;
 
@@ -68,7 +68,7 @@ where
     /// Returns an Result to allow using ? in the calling function
     pub fn poll_connection_error(
         &mut self,
-        cx: &mut std::task::Context<'_>,
+        cx: &mut core::task::Context<'_>,
     ) -> Poll<Result<(), ConnectionError>> {
         if let Some(ref error) = self.handled_connection_error {
             return Poll::Ready(Err(error.clone()));

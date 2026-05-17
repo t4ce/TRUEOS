@@ -12,7 +12,7 @@ use crate::{
 };
 
 use super::connection::RequestEnd;
-use std::sync::Arc;
+use alloc::sync::Arc;
 
 use std::{
     option::Option,

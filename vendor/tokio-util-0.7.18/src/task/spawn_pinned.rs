@@ -1,13 +1,22 @@
+use alloc::boxed::Box;
+use alloc::sync::Arc;
+use core::fmt;
+use core::fmt::{Debug, Formatter};
+use core::future::Future;
+use core::sync::atomic::{AtomicUsize, Ordering};
 use futures_util::future::{AbortHandle, Abortable};
-use std::fmt;
-use std::fmt::{Debug, Formatter};
-use std::future::Future;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 use tokio::runtime::Builder;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot;
 use tokio::task::{spawn_local, JoinHandle, LocalSet};
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+type TrueosBlockingJob = Box<dyn FnOnce() + Send + 'static>;
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+unsafe extern "Rust" {
+    fn trueos_tokio_spawn_blocking_job(job: TrueosBlockingJob) -> i32;
+}
 
 /// A cloneable handle to a local pool, used for spawning `!Send` tasks.
 ///
@@ -324,12 +333,7 @@ impl LocalPool {
             // worker. Otherwise, restart the search.
             if worker
                 .task_count
-                .compare_exchange(
-                    task_count,
-                    task_count + 1,
-                    Ordering::SeqCst,
-                    Ordering::Relaxed,
-                )
+                .compare_exchange(task_count, task_count + 1, Ordering::SeqCst, Ordering::Relaxed)
                 .is_ok()
             {
                 return (worker, JobCountGuard(Arc::clone(&worker.task_count)));
@@ -387,12 +391,32 @@ impl LocalWorkerHandle {
         let task_count = Arc::new(AtomicUsize::new(0));
         let task_count_clone = Arc::clone(&task_count);
 
-        std::thread::spawn(|| Self::run(runtime, receiver, task_count_clone));
+        Self::spawn_worker_carrier(runtime, receiver, task_count_clone);
 
         LocalWorkerHandle {
             runtime_handle,
             spawner: sender,
             task_count,
+        }
+    }
+
+    fn spawn_worker_carrier(
+        runtime: tokio::runtime::Runtime,
+        receiver: UnboundedReceiver<PinnedFutureSpawner>,
+        task_count: Arc<AtomicUsize>,
+    ) {
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        {
+            let job: TrueosBlockingJob = Box::new(move || Self::run(runtime, receiver, task_count));
+            let rc = unsafe { trueos_tokio_spawn_blocking_job(job) };
+            if rc != 0 {
+                panic!("Failed to start a TRUEOS pinned worker carrier: rc={rc}");
+            }
+        }
+
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+        {
+            std::thread::spawn(move || Self::run(runtime, receiver, task_count));
         }
     }
 

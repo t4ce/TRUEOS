@@ -417,8 +417,8 @@ pin_project! {
     }
 }
 
-impl<S, B> std::fmt::Debug for BufRecvStream<S, B> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<S, B> core::fmt::Debug for BufRecvStream<S, B> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("BufRecvStream")
             .field("buf", &self.buf)
             .field("eos", &self.eos)
@@ -487,7 +487,7 @@ impl<S: RecvStream, B> RecvStream for BufRecvStream<S, B> {
 
     fn poll_data(
         &mut self,
-        cx: &mut std::task::Context<'_>,
+        cx: &mut core::task::Context<'_>,
     ) -> Poll<Result<Option<Self::Buf>, StreamErrorIncoming>> {
         // There is data buffered, return that immediately
         if let Some(chunk) = self.buf.take_first_chunk() {
@@ -518,7 +518,7 @@ where
 {
     fn poll_finish(
         &mut self,
-        cx: &mut std::task::Context<'_>,
+        cx: &mut core::task::Context<'_>,
     ) -> Poll<Result<(), StreamErrorIncoming>> {
         self.stream.poll_finish(cx)
     }
@@ -533,7 +533,7 @@ where
 
     fn poll_ready(
         &mut self,
-        cx: &mut std::task::Context<'_>,
+        cx: &mut core::task::Context<'_>,
     ) -> Poll<Result<(), StreamErrorIncoming>> {
         self.stream.poll_ready(cx)
     }
@@ -551,7 +551,7 @@ where
     #[inline]
     fn poll_send<D: Buf>(
         &mut self,
-        cx: &mut std::task::Context<'_>,
+        cx: &mut core::task::Context<'_>,
         buf: &mut D,
     ) -> Poll<Result<usize, StreamErrorIncoming>> {
         self.stream.poll_send(cx, buf)

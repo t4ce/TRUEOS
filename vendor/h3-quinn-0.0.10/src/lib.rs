@@ -3,11 +3,13 @@
 //! This module implements QUIC traits with Quinn.
 #![deny(missing_docs)]
 
-use std::{
+extern crate alloc;
+
+use alloc::{boxed::Box, sync::Arc};
+use core::{
     convert::TryInto,
     future::Future,
     pin::Pin,
-    sync::Arc,
     task::{self, Poll},
 };
 

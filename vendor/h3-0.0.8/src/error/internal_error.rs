@@ -5,7 +5,7 @@ use std::error::Error;
 use crate::{frame::FrameProtocolError, quic::ConnectionErrorIncoming};
 
 use super::codes::Code;
-use std::fmt::Display;
+use core::fmt::Display;
 
 /// This error type represents an internal error type, which is used
 /// to represent errors, which have not yet affected the connection state
@@ -75,7 +75,7 @@ pub enum ErrorOrigin {
 }
 
 impl Display for ErrorOrigin {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             ErrorOrigin::Internal(error) => write!(f, "Internal Error: {}", error.message),
             ErrorOrigin::Quic(error) => write!(f, "Quic Error: {:?}", error),

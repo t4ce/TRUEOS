@@ -17,6 +17,8 @@
 //! [`tokio`] crate. However, `tokio-util` _will_ respect Rust's
 //! semantic versioning policy, especially with regard to breaking changes.
 
+extern crate alloc;
+
 #[macro_use]
 mod cfg;
 

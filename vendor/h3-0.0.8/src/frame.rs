@@ -1,4 +1,4 @@
-use std::task::{Context, Poll};
+use core::task::{Context, Poll};
 
 use bytes::Buf;
 

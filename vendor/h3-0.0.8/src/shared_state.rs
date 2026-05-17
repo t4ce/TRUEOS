@@ -83,13 +83,13 @@ pub trait ConnectionState {
     fn set_closing(&self) {
         self.shared_state()
             .closing
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+            .store(true, core::sync::atomic::Ordering::Relaxed);
     }
     /// Check if the connection is closing
     fn is_closing(&self) -> bool {
         self.shared_state()
             .closing
-            .load(std::sync::atomic::Ordering::Relaxed)
+            .load(core::sync::atomic::Ordering::Relaxed)
     }
     /// Set the settings
     fn set_settings(&self, settings: Settings) {
