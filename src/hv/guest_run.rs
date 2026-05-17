@@ -20,6 +20,35 @@ use trueos_vm::vmcall;
 
 use crate::shell2::{ShellBackend2, ShellIo2};
 
+fn create_blueprint_dir_all(path: &str) -> Result<(), alloc::string::String> {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        if path.len() > trueos_vm::vmcall::PAYLOAD_CAP {
+            return Err(alloc::format!("TooLarge(len={})", path.len()));
+        }
+
+        let mut out = [0u8; 1];
+        let (status, rc) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_FS_CREATE_DIR_ALL,
+            0,
+            0,
+            path.as_bytes(),
+            &mut out,
+        );
+        if status != trueos_vm::vmcall::STATUS_OK {
+            return Err(alloc::format!("VmcallStatus({})", status));
+        }
+
+        let rc = (rc as i64) as i32;
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(alloc::format!("CabiRc({})", rc))
+        }
+    } else {
+        crate::r::io::kfs::create_dir_all(path).map_err(|err| alloc::format!("{:?}", err))
+    }
+}
+
 // ── VmcallShellBackend ────────────────────────────────────────────────────────
 
 pub(crate) struct VmcallShellBackend;
@@ -178,7 +207,8 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
         state.archive.as_str(),
         state.module_bytes.as_slice(),
     );
-    match crate::r::io::kfs::create_dir_all(app_fs_root.as_str()) {
+    let app_fs_common = crate::hv::blueprint::app_fs_common_for_archive(state.archive.as_str());
+    match create_blueprint_dir_all(app_fs_root.as_str()) {
         Ok(()) => {
             log(alloc::format!("run: guest app fs root ready path={}", app_fs_root.as_str())
                 .as_str())
@@ -190,10 +220,17 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
         )
         .as_str()),
     }
-    match crate::r::io::kfs::create_dir_all("apps/common") {
-        Ok(()) => log("run: guest app fs common ready path=apps/common"),
+    match create_blueprint_dir_all(app_fs_common.as_str()) {
+        Ok(()) => log(
+            alloc::format!(
+                "run: guest app fs common ready path={}",
+                app_fs_common.as_str()
+            )
+            .as_str(),
+        ),
         Err(err) => log(alloc::format!(
-            "run: guest app fs common create failed path=apps/common err={:?}",
+            "run: guest app fs common create failed path={} err={:?}",
+            app_fs_common.as_str(),
             err
         )
         .as_str()),
@@ -203,8 +240,9 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
     let process_env =
         crate::hv::blueprint::build_process_env(state.archive.as_str(), Some(app_fs_root.as_str()));
     log(alloc::format!(
-        "run: guest app fs root prepared path={} common=apps/common",
-        app_fs_root.as_str()
+        "run: guest app fs root prepared path={} common={}",
+        app_fs_root.as_str(),
+        app_fs_common.as_str()
     )
     .as_str());
 

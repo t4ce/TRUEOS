@@ -549,12 +549,15 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_ENV_ARGS_COUNT => {
-            let count = crate::r::io::env::arg_count();
+            let count = crate::hv::blueprint_process_arg_count(vm_id)
+                .unwrap_or_else(crate::r::io::env::arg_count);
             write_response(vm_id, seq, STATUS_OK, count as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_ENV_ARG => {
-            let Some(arg) = crate::r::io::env::arg(arg0 as usize) else {
+            let Some(arg) = crate::hv::blueprint_process_arg(vm_id, arg0 as usize)
+                .or_else(|| crate::r::io::env::arg(arg0 as usize))
+            else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             };
@@ -581,7 +584,9 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             };
-            let Some(value) = crate::r::io::env::var(key) else {
+            let Some(value) = crate::hv::blueprint_process_env_var(vm_id, key)
+                .or_else(|| crate::r::io::env::var(key))
+            else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             };
