@@ -28,6 +28,7 @@ use core::str::FromStr;
 use core::task::{self, Poll};
 use std::{fmt, io, vec};
 
+#[cfg(not(target_os = "trueos"))]
 use tokio::task::JoinHandle;
 use tower_service::Service;
 
@@ -52,6 +53,9 @@ pub struct GaiAddrs {
 
 /// A future to resolve a name returned by `GaiResolver`.
 pub struct GaiFuture {
+    #[cfg(target_os = "trueos")]
+    inner: Option<Result<SocketAddrs, io::Error>>,
+    #[cfg(not(target_os = "trueos"))]
     inner: JoinHandle<Result<SocketAddrs, io::Error>>,
 }
 
@@ -139,20 +143,21 @@ impl Service<Name> for GaiResolver {
     }
 
     fn call(&mut self, name: Name) -> Self::Future {
-        let blocking = tokio::task::spawn_blocking(move || {
-            #[cfg(target_os = "trueos")]
-            {
-                trueos_lookup_host(&name.host)
-            }
+        #[cfg(target_os = "trueos")]
+        {
+            return GaiFuture {
+                inner: Some(trueos_lookup_host(&name.host)),
+            };
+        }
 
-            #[cfg(not(target_os = "trueos"))]
-            {
+        #[cfg(not(target_os = "trueos"))]
+        let blocking = tokio::task::spawn_blocking(move || {
             (&*name.host, 0)
                 .to_socket_addrs()
                 .map(|i| SocketAddrs { iter: i })
-            }
         });
 
+        #[cfg(not(target_os = "trueos"))]
         GaiFuture { inner: blocking }
     }
 }
@@ -167,6 +172,17 @@ impl Future for GaiFuture {
     type Output = Result<GaiAddrs, io::Error>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
+        #[cfg(target_os = "trueos")]
+        {
+            return Poll::Ready(
+                self.inner
+                    .take()
+                    .unwrap_or_else(|| Err(io::Error::new(io::ErrorKind::Interrupted, "resolver polled after completion")))
+                    .map(|addrs| GaiAddrs { inner: addrs }),
+            );
+        }
+
+        #[cfg(not(target_os = "trueos"))]
         Pin::new(&mut self.inner).poll(cx).map(|res| match res {
             Ok(Ok(addrs)) => Ok(GaiAddrs { inner: addrs }),
             Ok(Err(err)) => Err(err),
@@ -189,6 +205,7 @@ impl fmt::Debug for GaiFuture {
 
 impl Drop for GaiFuture {
     fn drop(&mut self) {
+        #[cfg(not(target_os = "trueos"))]
         self.inner.abort();
     }
 }
