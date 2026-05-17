@@ -11,7 +11,8 @@ use crate::shell2::CommandSessionInputResult;
 use crate::shell2::shell2_cmd::{CommandSessionKind, ParseOutcome};
 
 const FORMAT_STATUS_TIMEOUT_MS: u64 = 5_000;
-const FORMAT_OPERATION_TIMEOUT_MS: u64 = 6_000;
+const FORMAT_OPERATION_TIMEOUT_MS: u64 =
+    crate::allcaps::storage::USB_MASS_UAS_IO_TIMEOUT_MS.saturating_add(5_000);
 
 pub(crate) fn print_format_disk_table(io: &'static dyn ShellBackend2) {
     let choices = super::tlb_helper::collect_top_level_disk_choices();
