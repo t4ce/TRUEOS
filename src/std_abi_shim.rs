@@ -1,5 +1,7 @@
 extern crate alloc;
 
+use alloc::boxed::Box;
+use alloc::sync::Arc;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::alloc::Layout;
@@ -18,13 +20,17 @@ static PTHREAD_CONDS: Mutex<FixedKeyMap<usize, PthreadCondState, PTHREAD_COND_CA
     Mutex::new(FixedKeyMap::new());
 static PTHREAD_MUTEXES: Mutex<FixedKeyMap<usize, PthreadMutexState, PTHREAD_MUTEX_CAPACITY>> =
     Mutex::new(FixedKeyMap::new());
+static PTHREAD_THREADS: Mutex<FixedKeyMap<usize, PthreadThreadState, PTHREAD_THREAD_CAPACITY>> =
+    Mutex::new(FixedKeyMap::new());
 static LOGGED_PTHREAD_SYNC: AtomicI32 = AtomicI32::new(0);
 static PTHREAD_SYNC_TRACE_COUNT: AtomicUsize = AtomicUsize::new(0);
+static PTHREAD_NEXT_THREAD_ID: AtomicUsize = AtomicUsize::new(1);
 
 const PTHREAD_SYNC_TRACE_LIMIT: usize = 48;
 const C_ALLOCATION_CAPACITY: usize = 8192;
 const PTHREAD_MUTEX_CAPACITY: usize = 256;
 const PTHREAD_COND_CAPACITY: usize = 256;
+const PTHREAD_THREAD_CAPACITY: usize = 64;
 
 const TRUEOS_EAGAIN: c_int = 11;
 const TRUEOS_EBUSY: c_int = 16;
@@ -35,6 +41,10 @@ const TRUEOS_ERANGE: c_int = 34;
 const TRUEOS_ENOSYS: c_int = 38;
 const TRUEOS_EIO: c_int = 5;
 const TRUEOS_EBADF: c_int = 9;
+const TRUEOS_EPERM: c_int = 1;
+const TRUEOS_ESRCH: c_int = 3;
+const TRUEOS_ECHILD: c_int = 10;
+const TRUEOS_ENOTTY: c_int = 25;
 const TRUEOS_EAI_SYSTEM: c_int = 11;
 const TRUEOS_EAI_FAMILY: c_int = 5;
 const TRUEOS_EAI_MEMORY: c_int = 6;
@@ -134,11 +144,24 @@ struct PthreadMutexState {
     owner: usize,
 }
 
+struct PthreadThreadState {
+    completion: Arc<crate::wait::CompletionCell<usize>>,
+    detached: bool,
+}
+
 fn uart_write(bytes: &[u8]) {
     if bytes.is_empty() {
         return;
     }
     crate::shell2::uart1_com1::write_bytes(bytes);
+}
+
+fn stdio_write(fd: u32, bytes: &[u8]) {
+    match fd {
+        1 => crate::r::io::cabi::write_bytes(crate::r::io::cabi::CStream::Stdout, bytes),
+        2 => crate::r::io::cabi::write_bytes(crate::r::io::cabi::CStream::Stderr, bytes),
+        _ => uart_write(bytes),
+    }
 }
 
 fn copy_bytes_to_words(out_words: *mut u32, out_nwords: usize, bytes: &[u8]) -> usize {
@@ -259,6 +282,17 @@ fn pthread_cond_notify_key(key: usize) -> c_int {
     };
     state.generation = state.generation.wrapping_add(1);
     0
+}
+
+fn pthread_thread_finish(thread_id: usize) {
+    let mut table = PTHREAD_THREADS.lock();
+    let remove = table
+        .get(thread_id)
+        .map(|state| state.detached)
+        .unwrap_or(false);
+    if remove {
+        let _ = table.remove(thread_id);
+    }
 }
 
 fn c_allocation_layout(size: usize, align: usize) -> Option<Layout> {
@@ -633,15 +667,14 @@ pub unsafe extern "C" fn sys_rand(recv_buf: *mut u32, words: usize) {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sys_write(_fd: u32, write_buf: *const u8, nbytes: usize) {
+pub unsafe extern "C" fn sys_write(fd: u32, write_buf: *const u8, nbytes: usize) {
     if write_buf.is_null() || nbytes == 0 {
         return;
     }
     let Some(bytes) = abi_read_bytes(write_buf, nbytes) else {
         return;
     };
-    uart_write(bytes);
-    crate::globalog::append_raw(bytes);
+    stdio_write(fd, bytes);
 }
 
 #[unsafe(no_mangle)]
@@ -653,7 +686,6 @@ pub unsafe extern "C" fn trueos_internal_log_write(bytes: *const u8, len: usize)
         return;
     };
     uart_write(bytes);
-    crate::globalog::append_raw(bytes);
 }
 
 #[unsafe(no_mangle)]
@@ -1118,6 +1150,31 @@ pub unsafe extern "C" fn dirfd(_dir: *mut TrueosDir) -> c_int {
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn unlink(_path: *const c_char) -> c_int {
+    TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
+    -1
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn readlink(
+    _path: *const c_char,
+    _buf: *mut c_char,
+    _bufsiz: usize,
+) -> isize {
+    TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
+    -1
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn realpath(
+    _path: *const c_char,
+    _resolved_path: *mut c_char,
+) -> *mut c_char {
+    TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
+    ptr::null_mut()
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn getaddrinfo(
     node: *const c_char,
     service: *const c_char,
@@ -1271,6 +1328,72 @@ pub unsafe extern "C" fn sysconf(name: c_int) -> isize {
             -1
         }
     }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sched_yield() -> c_int {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tcgetattr(fd: c_int, _termios_p: *mut c_void) -> c_int {
+    if !(0..=2).contains(&fd) {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+    } else {
+        TRUEOS_ERRNO.store(TRUEOS_ENOTTY, Ordering::Relaxed);
+    }
+    -1
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tcsetattr(fd: c_int, _optional_actions: c_int, _termios_p: *const c_void) -> c_int {
+    if !(0..=2).contains(&fd) {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+    } else {
+        TRUEOS_ERRNO.store(TRUEOS_ENOTTY, Ordering::Relaxed);
+    }
+    -1
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn signal(_signum: c_int, handler: usize) -> usize {
+    handler
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn waitpid(_pid: c_int, _status: *mut c_int, _options: c_int) -> c_int {
+    TRUEOS_ERRNO.store(TRUEOS_ECHILD, Ordering::Relaxed);
+    -1
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn setuid(_uid: u32) -> c_int {
+    TRUEOS_ERRNO.store(TRUEOS_EPERM, Ordering::Relaxed);
+    -1
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn setgid(_gid: u32) -> c_int {
+    TRUEOS_ERRNO.store(TRUEOS_EPERM, Ordering::Relaxed);
+    -1
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn setgroups(_size: usize, _list: *const u32) -> c_int {
+    TRUEOS_ERRNO.store(TRUEOS_EPERM, Ordering::Relaxed);
+    -1
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn setsid() -> c_int {
+    TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
+    -1
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn setpgid(_pid: c_int, _pgid: c_int) -> c_int {
+    TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
+    -1
 }
 
 #[unsafe(no_mangle)]
@@ -1462,5 +1585,94 @@ pub unsafe extern "C" fn pthread_self() -> usize {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pthread_setname_np(_thread: usize, _name: *const c_char) -> c_int {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_create(
+    thread: *mut usize,
+    _attr: *const c_void,
+    start_routine: *const c_void,
+    arg: *mut c_void,
+) -> c_int {
+    if thread.is_null() || start_routine.is_null() {
+        return TRUEOS_EINVAL;
+    }
+
+    let thread_id = PTHREAD_NEXT_THREAD_ID.fetch_add(1, Ordering::AcqRel);
+    let completion = Arc::new(crate::wait::CompletionCell::new());
+    let state = PthreadThreadState {
+        completion: completion.clone(),
+        detached: false,
+    };
+
+    if PTHREAD_THREADS.lock().insert(thread_id, state).is_err() {
+        return TRUEOS_EAGAIN;
+    }
+
+    let id_bytes = thread_id.to_ne_bytes();
+    let Some(out) = abi_write_bytes(thread.cast::<u8>(), core::mem::size_of::<usize>()) else {
+        let _ = PTHREAD_THREADS.lock().remove(thread_id);
+        return TRUEOS_EINVAL;
+    };
+    out.copy_from_slice(&id_bytes);
+
+    let start = start_routine as usize;
+    let arg = arg as usize;
+    let job = Box::new(move || {
+        let start: unsafe extern "C" fn(*mut c_void) -> *mut c_void =
+            unsafe { core::mem::transmute(start) };
+        let result = unsafe { start(arg as *mut c_void) } as usize;
+        let _ = completion.complete(result);
+        pthread_thread_finish(thread_id);
+    });
+
+    let rc = crate::t::trueos_tokio_worker::trueos_tokio_spawn_blocking_job(job);
+    if rc == 0 {
+        0
+    } else {
+        let _ = PTHREAD_THREADS.lock().remove(thread_id);
+        TRUEOS_EAGAIN
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_join(thread: usize, retval: *mut *mut c_void) -> c_int {
+    let completion = {
+        let table = PTHREAD_THREADS.lock();
+        let Some(state) = table.get(thread) else {
+            return TRUEOS_ESRCH;
+        };
+        if state.detached {
+            return TRUEOS_EINVAL;
+        }
+        state.completion.clone()
+    };
+
+    let result = completion.join_blocking();
+    let _ = PTHREAD_THREADS.lock().remove(thread);
+
+    if !retval.is_null() {
+        let bytes = result.to_ne_bytes();
+        let Some(out) = abi_write_bytes(retval.cast::<u8>(), core::mem::size_of::<usize>()) else {
+            return TRUEOS_EINVAL;
+        };
+        out.copy_from_slice(&bytes);
+    }
+
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_detach(thread: usize) -> c_int {
+    let mut table = PTHREAD_THREADS.lock();
+    let Some(state) = table.get_mut(thread) else {
+        return TRUEOS_ESRCH;
+    };
+    if state.completion.try_take().is_some() {
+        let _ = table.remove(thread);
+    } else {
+        state.detached = true;
+    }
     0
 }

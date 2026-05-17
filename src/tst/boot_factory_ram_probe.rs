@@ -1,15 +1,11 @@
-use alloc::string::String;
 use core::cmp::min;
-use core::fmt::Write;
 
 use embassy_time::{Duration as EmbassyDuration, Timer};
-use sha2::{Digest, Sha256};
 use spin::Mutex;
 
 const FACTORY_RAM_PROBE_PAGE_BYTES: usize = 4096;
 const FACTORY_RAM_PROBE_SAMPLE_BYTES: usize = 100;
 const FACTORY_RAM_PROBE_DELAY_SECS: u64 = 5;
-const FACTORY_RAM_PROBE_MAGIC: &[u8; 8] = b"RAMWALK1";
 
 #[derive(Clone, Debug)]
 pub struct FactoryRamProbeSnapshot {
@@ -26,7 +22,6 @@ struct FactoryRamProbeState {
     sample_count: usize,
     sample_phys: [u64; FACTORY_RAM_PROBE_SAMPLE_BYTES],
     sample_values: [u8; FACTORY_RAM_PROBE_SAMPLE_BYTES],
-    binary_logged: bool,
 }
 
 static FACTORY_RAM_PROBE_STATE: Mutex<Option<FactoryRamProbeState>> = Mutex::new(None);
@@ -85,42 +80,7 @@ fn build_random_sample(page_phys: u64) -> FactoryRamProbeState {
         sample_count: count,
         sample_phys,
         sample_values,
-        binary_logged: false,
     }
-}
-
-fn build_binary_blob(
-    snapshot: &FactoryRamProbeSnapshot,
-) -> [u8; 8 + 8 + 4 + 4 + (FACTORY_RAM_PROBE_SAMPLE_BYTES * 9)] {
-    let mut out = [0u8; 8 + 8 + 4 + 4 + (FACTORY_RAM_PROBE_SAMPLE_BYTES * 9)];
-    let mut at = 0usize;
-
-    out[at..at + 8].copy_from_slice(FACTORY_RAM_PROBE_MAGIC);
-    at += 8;
-    out[at..at + 8].copy_from_slice(&snapshot.page_phys.to_le_bytes());
-    at += 8;
-    out[at..at + 4].copy_from_slice(&(snapshot.page_bytes as u32).to_le_bytes());
-    at += 4;
-    out[at..at + 4].copy_from_slice(&(snapshot.sample_count as u32).to_le_bytes());
-    at += 4;
-
-    for idx in 0..FACTORY_RAM_PROBE_SAMPLE_BYTES {
-        out[at..at + 8].copy_from_slice(&snapshot.sample_phys[idx].to_le_bytes());
-        at += 8;
-        out[at] = snapshot.sample_values[idx];
-        at += 1;
-    }
-
-    out
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    let mut out = String::with_capacity(digest.len() * 2);
-    for b in digest.iter() {
-        let _ = write!(&mut out, "{:02x}", b);
-    }
-    out
 }
 
 #[embassy_executor::task]
@@ -152,7 +112,6 @@ pub async fn boot_factory_ram_probe_task() {
         let Some(state) = guard.as_mut() else {
             return;
         };
-        state.binary_logged = true;
         FactoryRamProbeSnapshot {
             page_phys: state.page_phys,
             page_bytes: FACTORY_RAM_PROBE_PAGE_BYTES,
@@ -161,10 +120,6 @@ pub async fn boot_factory_ram_probe_task() {
             sample_values: state.sample_values,
         }
     };
-
-    let blob = build_binary_blob(&snapshot);
-    let blob_sha256 = sha256_hex(blob.as_slice());
-    crate::globalog::append_raw(blob.as_slice());
 
     if !crate::phys::free_phys_range(snapshot.page_phys, FACTORY_RAM_PROBE_PAGE_BYTES) {
         crate::log_warn!(
@@ -178,9 +133,8 @@ pub async fn boot_factory_ram_probe_task() {
     *FACTORY_RAM_PROBE_STATE.lock() = None;
     crate::log_info!(
         target: "boot";
-        "factory-ram-probe: binary blob appended bytes={} phys=0x{:X} sha256={}\n",
-        blob.len(),
+        "factory-ram-probe: released phys=0x{:X} sampled={}\n",
         snapshot.page_phys,
-        blob_sha256.as_str()
+        snapshot.sample_count
     );
 }

@@ -1202,6 +1202,9 @@ fn resolve_std_abi_import(name: &str) -> Option<usize> {
         "readdir" => Some(crate::std_abi_shim::readdir as *const () as usize),
         "closedir" => Some(crate::std_abi_shim::closedir as *const () as usize),
         "dirfd" => Some(crate::std_abi_shim::dirfd as *const () as usize),
+        "unlink" => Some(crate::std_abi_shim::unlink as *const () as usize),
+        "readlink" => Some(crate::std_abi_shim::readlink as *const () as usize),
+        "realpath" => Some(crate::std_abi_shim::realpath as *const () as usize),
         "getaddrinfo" => Some(crate::std_abi_shim::getaddrinfo as *const () as usize),
         "freeaddrinfo" => Some(crate::std_abi_shim::freeaddrinfo as *const () as usize),
         "gai_strerror" => Some(crate::std_abi_shim::gai_strerror as *const () as usize),
@@ -1211,6 +1214,16 @@ fn resolve_std_abi_import(name: &str) -> Option<usize> {
         "posix_memalign" => Some(crate::std_abi_shim::posix_memalign as *const () as usize),
         "getcwd" => Some(crate::std_abi_shim::getcwd as *const () as usize),
         "sysconf" => Some(crate::std_abi_shim::sysconf as *const () as usize),
+        "sched_yield" => Some(crate::std_abi_shim::sched_yield as *const () as usize),
+        "tcgetattr" => Some(crate::std_abi_shim::tcgetattr as *const () as usize),
+        "tcsetattr" => Some(crate::std_abi_shim::tcsetattr as *const () as usize),
+        "signal" => Some(crate::std_abi_shim::signal as *const () as usize),
+        "waitpid" => Some(crate::std_abi_shim::waitpid as *const () as usize),
+        "setuid" => Some(crate::std_abi_shim::setuid as *const () as usize),
+        "setgid" => Some(crate::std_abi_shim::setgid as *const () as usize),
+        "setgroups" => Some(crate::std_abi_shim::setgroups as *const () as usize),
+        "setsid" => Some(crate::std_abi_shim::setsid as *const () as usize),
+        "setpgid" => Some(crate::std_abi_shim::setpgid as *const () as usize),
         "pthread_mutexattr_init" => {
             Some(crate::std_abi_shim::pthread_mutexattr_init as *const () as usize)
         }
@@ -1231,6 +1244,9 @@ fn resolve_std_abi_import(name: &str) -> Option<usize> {
         "pthread_mutex_unlock" => {
             Some(crate::std_abi_shim::pthread_mutex_unlock as *const () as usize)
         }
+        "pthread_create" => Some(crate::std_abi_shim::pthread_create as *const () as usize),
+        "pthread_join" => Some(crate::std_abi_shim::pthread_join as *const () as usize),
+        "pthread_detach" => Some(crate::std_abi_shim::pthread_detach as *const () as usize),
         "pthread_self" => Some(crate::std_abi_shim::pthread_self as *const () as usize),
         "pthread_setname_np" => Some(crate::std_abi_shim::pthread_setname_np as *const () as usize),
         "pthread_cond_init" => Some(crate::std_abi_shim::pthread_cond_init as *const () as usize),
