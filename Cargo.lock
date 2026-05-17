@@ -1520,7 +1520,7 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.185"
+version = "0.2.186"
 
 [[package]]
 name = "libm"
@@ -2690,7 +2690,7 @@ checksum = "8d2d250f87fb3fb6f225c907cf54381509f47b40b74b1d1f12d2dccbc915bdfe"
 
 [[package]]
 name = "tokio"
-version = "1.52.1"
+version = "1.52.3"
 dependencies = [
  "bytes",
  "libc",

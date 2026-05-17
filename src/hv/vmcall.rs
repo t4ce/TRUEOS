@@ -54,6 +54,7 @@ pub const OP_BP_GFX_TEXTURE_UPLOAD_FINISH: u32 = 0x67; // finalize pending textu
 pub const OP_BP_INPUT_CURSOR_POS: u32 = 0x68; // arg0 cursor id -> packed x/y
 pub const OP_BP_INPUT_CURSOR_BUTTONS: u32 = 0x69; // arg0 cursor id -> buttons
 pub const OP_BP_INPUT_CURSOR_EVENTS: u32 = 0x6A; // arg0 read seq, arg1 cap -> payload events
+pub const OP_BP_DNS_RESOLVE_IPV4: u32 = 0x6B; // payload host -> response payload IPv4 bytes
 pub const OP_BP_SOCKET_TCP_OPEN: u32 = 0x35; // arg0 domain/type, arg1 protocol -> socket/rc
 pub const OP_BP_SOCKET_TCP_CLOSE: u32 = 0x36; // arg0 socket -> rc
 pub const OP_BP_SOCKET_TCP_SET_NONBLOCKING: u32 = 0x37; // arg0 socket, arg1 bool -> rc
@@ -414,6 +415,44 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                     &mut (*p).payload
                 });
             write_response(vm_id, seq, STATUS_OK, wrote as u64, response_len as u32);
+            DispatchOutcome::Resume
+        }
+        OP_BP_DNS_RESOLVE_IPV4 => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let bytes = unsafe { &(&(*p).payload)[..n] };
+            let Ok(host) = core::str::from_utf8(bytes) else {
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_OK,
+                    crate::t::net::vlayer::dns_resolve_error_code(
+                        crate::t::net::vlayer::DnsResolveError::BadName,
+                    ),
+                    0,
+                );
+                return DispatchOutcome::Resume;
+            };
+            match crate::t::net::vlayer::resolve_ipv4_for_sync_abi_host(host) {
+                Ok(ip) => {
+                    unsafe {
+                        (&mut (*p).payload)[..4].copy_from_slice(&ip);
+                    }
+                    write_response(vm_id, seq, STATUS_OK, 0, 4);
+                }
+                Err(err) => {
+                    write_response(
+                        vm_id,
+                        seq,
+                        STATUS_OK,
+                        crate::t::net::vlayer::dns_resolve_error_code(err),
+                        0,
+                    );
+                }
+            }
             DispatchOutcome::Resume
         }
         OP_NET_TCP_WRITE => {
