@@ -81,7 +81,6 @@ struct KernelCursorSurface {
     width: u32,
     height: u32,
     pitch_bytes: u32,
-    phys: u64,
     virt: *mut u8,
 }
 
@@ -89,6 +88,7 @@ unsafe impl Send for KernelCursorSurface {}
 unsafe impl Sync for KernelCursorSurface {}
 
 #[derive(Copy, Clone, Eq, PartialEq)]
+#[allow(dead_code)]
 enum CursorProbeKind {
     CurPosOnly,
     CurBaseOnly,
@@ -1409,7 +1409,6 @@ fn ensure_kernel_cursor_surface(
         width: KERNEL_CURSOR_DIM,
         height: KERNEL_CURSOR_DIM,
         pitch_bytes,
-        phys,
         virt,
     };
     state.surface = Some(surface);

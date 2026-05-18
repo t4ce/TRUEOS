@@ -2,6 +2,7 @@
 pub(crate) struct CssInfo {
     pub(crate) offset: usize,
     pub(crate) module_type: u32,
+    pub(crate) header_version: u32,
     pub(crate) vendor: u32,
     pub(crate) sw_version: u32,
     pub(crate) private_data_size: u32,
@@ -61,6 +62,7 @@ pub(crate) fn parse_css(blob: &[u8]) -> Option<CssInfo> {
             return Some(CssInfo {
                 offset: off,
                 module_type: css.module_type,
+                header_version: css.header_version,
                 vendor: css.vendor,
                 sw_version: css.sw_version,
                 private_data_size: css.private_data_size,

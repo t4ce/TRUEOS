@@ -538,28 +538,6 @@ pub(crate) fn submit_gpgpu_one_tile_output_sentinel_probe(
     )
 }
 
-pub(crate) fn submit_gpgpu_primary_scanout_line1280_groupid_rows_color_burst(
-    color_seed: u32,
-    first_row_group: u32,
-    row_group_count: u32,
-    x_segment: u32,
-    rect_x: u32,
-    rect_y: u32,
-    rect_width: u32,
-    rect_height: u32,
-) -> GpgpuOneTileSentinelProof {
-    self::gpgpu::submit_gpgpu_primary_scanout_line1280_groupid_rows_color_burst(
-        color_seed,
-        first_row_group,
-        row_group_count,
-        x_segment,
-        rect_x,
-        rect_y,
-        rect_width,
-        rect_height,
-    )
-}
-
 pub(crate) fn submit_gpgpu_primary_scanout_line1280_groupid_rows_fullwidth_color_burst(
     color_seed: u32,
     first_row_group: u32,

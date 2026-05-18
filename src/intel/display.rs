@@ -113,6 +113,7 @@ unsafe impl Send for PrimarySurface {}
 unsafe impl Sync for PrimarySurface {}
 
 #[derive(Copy, Clone)]
+#[allow(dead_code)]
 pub(super) struct PrimarySurfaceGpgpuTarget {
     pub(super) width: u32,
     pub(super) height: u32,
@@ -121,6 +122,11 @@ pub(super) struct PrimarySurfaceGpgpuTarget {
     pub(super) phys: u64,
     pub(super) virt: *mut u8,
     pub(super) byte_len: usize,
+    pub(super) marker_gpu: u64,
+    pub(super) marker_virt: *mut u8,
+    pub(super) marker_offset: usize,
+    pub(super) marker_x: u32,
+    pub(super) marker_y: u32,
 }
 
 unsafe impl Send for PrimarySurfaceGpgpuTarget {}
@@ -648,7 +654,15 @@ pub(super) fn primary_surface_gpgpu_marker_target() -> Option<PrimarySurfaceGpgp
         return None;
     }
 
+    let marker_x = core::cmp::min(32, surface.width.saturating_sub(1));
+    let marker_y = core::cmp::min(32, surface.height.saturating_sub(1));
+    let marker_offset = (marker_y as usize)
+        .saturating_mul(surface.pitch_bytes as usize)
+        .saturating_add((marker_x as usize).saturating_mul(PRIMARY_BYTES_PER_PIXEL as usize));
     let byte_len = (surface.pitch_bytes as usize).saturating_mul(surface.height as usize);
+    if marker_offset.saturating_add(core::mem::size_of::<u32>()) > byte_len {
+        return None;
+    }
 
     Some(PrimarySurfaceGpgpuTarget {
         width: surface.width,
@@ -658,6 +672,11 @@ pub(super) fn primary_surface_gpgpu_marker_target() -> Option<PrimarySurfaceGpgp
         phys: surface.phys,
         virt: surface.virt,
         byte_len,
+        marker_gpu: crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE + marker_offset as u64,
+        marker_virt: unsafe { surface.virt.add(marker_offset) },
+        marker_offset,
+        marker_x,
+        marker_y,
     })
 }
 

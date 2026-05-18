@@ -33,7 +33,6 @@ mod exceptions;
 mod exceptions;
 mod gfx;
 mod globalog;
-mod host_api;
 #[cfg(target_arch = "x86_64")]
 mod hv;
 #[cfg(not(target_arch = "x86_64"))]

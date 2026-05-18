@@ -1,5 +1,5 @@
 use crate::disc::block::DeviceHandle;
-use crate::usb2::pen::{UasRouteProbeConfig, UasRouteProbeKind, UasRouteProbeResult};
+use crate::usb2::pen::{UasRouteProbeConfig, UasRouteProbeResult};
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 
@@ -85,20 +85,8 @@ async fn reset_after_failure(disk: DeviceHandle, stage: &'static str) {
     }
 }
 
-fn route_kind_for_op(op: ProbeOp) -> Option<UasRouteProbeKind> {
-    match op.kind {
-        ProbeOpKind::Read => Some(UasRouteProbeKind::Read),
-        ProbeOpKind::Write => Some(UasRouteProbeKind::Write),
-        ProbeOpKind::Skip => None,
-    }
-}
-
-fn route_pattern_seed(op: ProbeOp) -> u64 {
-    op.lba
-        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-        .wrapping_add(op.bytes as u64)
-        .wrapping_add(op.name.len() as u64)
-        .wrapping_add(0x5541_5352_4F55_5445)
+fn route_op_enabled(op: ProbeOp) -> bool {
+    matches!(op.kind, ProbeOpKind::Read | ProbeOpKind::Write)
 }
 
 fn log_route_result(op: ProbeOp, result: UasRouteProbeResult) {
@@ -134,7 +122,7 @@ fn log_route_result(op: ProbeOp, result: UasRouteProbeResult) {
 }
 
 async fn run_route_op(disk: DeviceHandle, op: ProbeOp, chunk_bytes: usize, inflight: usize) {
-    let Some(kind) = route_kind_for_op(op) else {
+    if !route_op_enabled(op) {
         crate::log!(
             "uas-skhynix-route-probe: op={} fill_ms=0 command_ms=0 ready_ms=0 data_ms=0 status_ms=0 reclaim_ms=0 finish_ms=0 chunk_bytes={} inflight={} lba={} bytes={} result={}\n",
             op.name,
@@ -145,15 +133,13 @@ async fn run_route_op(disk: DeviceHandle, op: ProbeOp, chunk_bytes: usize, infli
             op.result
         );
         return;
-    };
+    }
 
     let config = UasRouteProbeConfig {
-        kind,
         lba: op.lba,
         total_bytes: op.bytes as u64,
         chunk_bytes,
         max_inflight: inflight,
-        pattern_seed: route_pattern_seed(op),
     };
 
     match crate::usb2::pen::run_uas_skhynix_route_probe(disk, config).await {
