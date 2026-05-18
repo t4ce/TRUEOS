@@ -2613,7 +2613,7 @@ fn append_usb_overview_dump(out: &mut String) {
         let runtime = crate::usb2::crabusb_runtime_diag(ctrl.index);
         writeln!(
             out,
-            "ctrl {} runtime phase={} lifecycle={} event={} probe_req={} port_change={} empty={} fail={} early_fatal={} last={} devices={} recovery(quiescent_before={} q={}ms init={}ms quiet={}ms skip_delayed={})",
+            "ctrl {} runtime phase={} lifecycle={} event={} probe_req={} port_change={} empty={} fail={} early_fatal={} last={} probe_new={} recovery(quiescent_before={} q={}ms init={}ms quiet={}ms skip_delayed={})",
             ctrl.index,
             ctrl.controller_phase,
             ctrl.root_hub_lifecycle,
@@ -2777,7 +2777,7 @@ fn append_usb_stashed_detail_dump(out: &mut String) {
         let runtime = crate::usb2::crabusb_runtime_diag(ctrl.index);
         writeln!(
             out,
-            "Controller {} {:02X}:{:02X}.{} {:04X}:{:04X} phase={} lifecycle={} event={} probe_req={} port_change={} empty={} fail={} early_fatal={} last={} devices={} recovery_quiescent_before={}",
+            "Controller {} {:02X}:{:02X}.{} {:04X}:{:04X} phase={} lifecycle={} event={} probe_req={} port_change={} empty={} fail={} early_fatal={} last={} probe_new={} recovery_quiescent_before={}",
             ctrl.index,
             ctrl.bus,
             ctrl.slot,

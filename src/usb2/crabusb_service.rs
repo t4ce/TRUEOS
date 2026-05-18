@@ -624,6 +624,7 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
         }
 
         let controller_id = info.index as u32;
+        const HOST2_MOUSE_ONLY: bool = true;
         let mut bound_any = false;
         let mut shared_led_device = None;
         if usb_log_all_enabled()
@@ -636,7 +637,7 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
         {
             super::descriptor::log_hid_report_descriptors(host, dev).await;
         }
-        if super::hid::leds::should_share_probe_device(dev) {
+        if !HOST2_MOUSE_ONLY && super::hid::leds::should_share_probe_device(dev) {
             match host.open_device(dev).await {
                 Ok(mut device) => {
                     super::descriptor::log_hid_report_descriptors_on_device(&mut device, dev).await;
@@ -652,7 +653,7 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
                 }
             }
         }
-        if super::hid::boot::maybe_start_hid_boot_streams(
+        if super::hid::boot::maybe_start_hid_mouse_streams(
             host,
             dev,
             spawner,
@@ -662,6 +663,18 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
         .await
         {
             bound_any = true;
+        }
+        if HOST2_MOUSE_ONLY {
+            if bound_any && usb_log_all_enabled() {
+                crate::log!(
+                    "crabusb: bind ctrl={} root_port={} vid={:04X} pid={:04X} handoff=mouse-only\n",
+                    info.index,
+                    topo.root_port_id,
+                    desc.vendor_id,
+                    desc.product_id
+                );
+            }
+            continue;
         }
         if let Some(device) = shared_led_device {
             if super::hid::leds::maybe_start_led_controller_with_device(
