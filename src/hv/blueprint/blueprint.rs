@@ -1456,6 +1456,17 @@ pub(crate) fn build_process_env(
         String::from("BAT_CACHE_PATH"),
         alloc::format!("{app_home}/cache/bat"),
     );
+    if safe_archive_stem(archive) == "bat" {
+        vars.insert(
+            String::from("BAT_OPTS"),
+            String::from(
+                "--color=never --paging=never --style=plain --decorations=never --terminal-width=100 --no-custom-assets",
+            ),
+        );
+        vars.insert(String::from("BAT_PAGING"), String::from("never"));
+        vars.insert(String::from("BAT_PAGER"), String::new());
+        vars.insert(String::from("BAT_WIDTH"), String::from("100"));
+    }
     vars.insert(String::from("TRUEOS_APP_ARCHIVE"), String::from(archive));
     if let Some(root) = app_fs_root {
         vars.insert(String::from("TRUEOS_APP_FS_ROOT"), String::from(root));

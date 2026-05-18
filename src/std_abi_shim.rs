@@ -156,10 +156,16 @@ fn uart_write(bytes: &[u8]) {
     crate::shell2::uart1_com1::write_bytes(bytes);
 }
 
-fn stdio_write(fd: u32, bytes: &[u8]) {
+fn write_platform_fd(fd: u32, bytes: &[u8]) {
     match fd {
-        1 => crate::r::io::cabi::write_bytes(crate::r::io::cabi::CStream::Stdout, bytes),
-        2 => crate::r::io::cabi::write_bytes(crate::r::io::cabi::CStream::Stderr, bytes),
+        1 => crate::r::io::cabi::write_console_bytes(
+            crate::r::io::cabi::ConsoleStream::Out,
+            bytes,
+        ),
+        2 => crate::r::io::cabi::write_console_bytes(
+            crate::r::io::cabi::ConsoleStream::Err,
+            bytes,
+        ),
         _ => uart_write(bytes),
     }
 }
@@ -504,9 +510,6 @@ fn abi_host_ptr(ptr: *mut u8, len: usize) -> Option<*mut u8> {
     if len == 0 {
         return Some(ptr);
     }
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        return Some(ptr);
-    }
     let Some(vm_id) = active_abi_guest_vm_id() else {
         return any_guest_host_ptr(ptr, len).or_else(|| {
             if looks_like_low_guest_ptr(ptr) {
@@ -674,7 +677,7 @@ pub unsafe extern "C" fn sys_write(fd: u32, write_buf: *const u8, nbytes: usize)
     let Some(bytes) = abi_read_bytes(write_buf, nbytes) else {
         return;
     };
-    stdio_write(fd, bytes);
+    write_platform_fd(fd, bytes);
 }
 
 #[unsafe(no_mangle)]

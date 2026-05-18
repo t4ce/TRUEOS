@@ -7,6 +7,7 @@ use log::{Metadata, Record};
 extern crate alloc;
 
 static USB_XHCI_COMPLETION_LAST_LOG_TICK: AtomicU64 = AtomicU64::new(0);
+static LOG_WRITE_LOCK: spin::Mutex<()> = spin::Mutex::new(());
 
 #[macro_export]
 macro_rules! log {
@@ -113,6 +114,8 @@ pub fn log(args: fmt::Arguments<'_>) {
 }
 
 pub fn log_with_purpose(purpose: Option<&str>, args: fmt::Arguments<'_>) {
+    let _guard = LOG_WRITE_LOCK.lock();
+
     struct PurposeWriter<'a> {
         purpose: Option<&'a str>,
         wrote_prefix: bool,
