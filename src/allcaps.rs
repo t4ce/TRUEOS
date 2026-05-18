@@ -43,7 +43,6 @@ pub mod stackkeeper {
 }
 
 pub mod hv {
-    pub const LOG_CAP: usize = 64;
     pub const LOG_LINE_BYTES: usize = 200;
 
     pub const VM_ID_LIMIT: usize = 32;

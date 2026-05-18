@@ -5,11 +5,9 @@
 
 use alloc::format;
 use alloc::string::String;
-use alloc::vec;
-use alloc::vec::Vec;
 
 use super::pattern::Pattern;
-use super::synth::{CHANNELS, SAMPLE_RATE, SynthEngine};
+use super::synth::SynthEngine;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Player State
