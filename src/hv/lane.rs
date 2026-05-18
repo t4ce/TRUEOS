@@ -12,7 +12,6 @@ const AP2_FIRST_CARRIER_SLOT: u32 = 2;
 const LANE_FREE: u8 = 0;
 const LANE_VM_HULL: u8 = 1;
 const LANE_TOKIO_BLOCKING: u8 = 2;
-const LANE_WORKER: u8 = 3;
 
 static LANE_OWNER: [AtomicU8; crate::allcaps::hv::VM_CPU_SLOT_LIMIT] =
     [const { AtomicU8::new(LANE_FREE) }; crate::allcaps::hv::VM_CPU_SLOT_LIMIT];
@@ -22,7 +21,6 @@ static LANE_RR: AtomicU64 = AtomicU64::new(0);
 pub enum LaneRole {
     VmHull,
     TokioBlocking,
-    Worker,
 }
 
 impl LaneRole {
@@ -30,7 +28,6 @@ impl LaneRole {
         match self {
             Self::VmHull => LANE_VM_HULL,
             Self::TokioBlocking => LANE_TOKIO_BLOCKING,
-            Self::Worker => LANE_WORKER,
         }
     }
 }
@@ -53,6 +50,20 @@ pub struct LaneTarget {
     pub core_kind: u8,
     pub spawner: SendSpawner,
     pub lease: LaneLease,
+}
+
+impl LaneTarget {
+    pub fn core_kind_name(&self) -> &'static str {
+        match self.core_kind {
+            crate::workers::CORE_KIND_PERF => "perf",
+            crate::workers::CORE_KIND_EFF => "eff",
+            _ => "unknown",
+        }
+    }
+
+    pub const fn is_ap2_carrier_lane(&self) -> bool {
+        self.slot >= AP2_FIRST_CARRIER_SLOT
+    }
 }
 
 #[derive(Debug)]
@@ -130,6 +141,13 @@ pub fn pick_tokio_blocking_lane() -> Result<LaneTarget, LanePickError> {
     pick_carrier_lane(LaneProfile {
         role: LaneRole::TokioBlocking,
         placement: SpawnPlacement::Worker,
+    })
+}
+
+pub fn pick_vm_hull_lane() -> Result<LaneTarget, LanePickError> {
+    pick_carrier_lane(LaneProfile {
+        role: LaneRole::VmHull,
+        placement: SpawnPlacement::ReservedVmLane,
     })
 }
 

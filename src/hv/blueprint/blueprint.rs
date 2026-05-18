@@ -3,7 +3,6 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::alloc::Layout;
 use core::ffi::c_char;
-use sha2::{Digest, Sha256};
 use spin::Mutex;
 
 const BLUEPRINT_HEADER_LEN: usize = 24;
@@ -1487,17 +1486,6 @@ pub(crate) fn build_process_env(
         alloc::format!("/{app_common}"),
     );
     vars
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let digest = Sha256::digest(bytes);
-    let mut out = String::with_capacity(64);
-    for byte in digest {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    out
 }
 
 fn safe_archive_stem(archive: &str) -> String {

@@ -55,7 +55,6 @@ const TRUEOS_EAI_SOCKTYPE: c_int = 10;
 const TRUEOS_ETIMEDOUT: c_int = 110;
 const TRUEOS_O_RDONLY: c_int = 0;
 const TRUEOS_SC_PAGESIZE: c_int = 30;
-const TRUEOS_SC_PAGE_SIZE: c_int = TRUEOS_SC_PAGESIZE;
 const TRUEOS_SC_NPROCESSORS_CONF: c_int = 83;
 const TRUEOS_SC_NPROCESSORS_ONLN: c_int = 84;
 const TRUEOS_AF_UNSPEC: c_int = 0;

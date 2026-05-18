@@ -48,7 +48,6 @@ type SharedTokioJob =
 static SHARED_TOKIO_JOBS: Mutex<Vec<SharedTokioJob>> = Mutex::new(Vec::new());
 static SHARED_TOKIO_WAIT: WaitQueue = WaitQueue::new();
 static SHARED_TOKIO_READY: AtomicBool = AtomicBool::new(false);
-static SHARED_TOKIO_PUMP_LOGGED: AtomicBool = AtomicBool::new(false);
 static SHARED_TOKIO_UNREADY_LOGGED: AtomicBool = AtomicBool::new(false);
 
 struct SharedTokioResult<T> {
@@ -79,13 +78,6 @@ where
     Ok(())
 }
 
-/// Drop the Tokio observation handle while leaving the task scheduled.
-///
-/// This is TRUEOS detach vocabulary for Tokio tasks, not a pthread detach.
-pub fn detach_tokio_task<T>(handle: tokio::task::JoinHandle<T>) {
-    drop(handle);
-}
-
 pub async fn run_on_shared_tokio<F, T, MakeFuture>(make_future: MakeFuture) -> Result<T, RunError>
 where
     F: Future<Output = T> + 'static,
@@ -109,30 +101,6 @@ where
             return Ok(result);
         }
         state.wait.wait_for_event().await;
-    }
-}
-
-pub async fn shared_tokio_job_pump() {
-    SHARED_TOKIO_READY.store(true, Ordering::Release);
-    if !SHARED_TOKIO_PUMP_LOGGED.swap(true, Ordering::AcqRel) {
-        crate::log!("t/tokio: shared job pump online\n");
-    }
-
-    loop {
-        let job = {
-            let mut jobs = SHARED_TOKIO_JOBS.lock();
-            if jobs.is_empty() {
-                None
-            } else {
-                Some(jobs.remove(0))
-            }
-        };
-
-        if let Some(make_job) = job {
-            detach_tokio_task(tokio::task::spawn_local(make_job()));
-        } else {
-            SHARED_TOKIO_WAIT.wait_for_event_timeout(25).await;
-        }
     }
 }
 

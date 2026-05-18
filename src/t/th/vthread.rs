@@ -35,7 +35,6 @@ pub struct VThreadSnapshot {
     pub role: u32,
     pub lane_id: u32,
     pub tls_slot: u32,
-    pub fs_base: usize,
     pub cpu_slot: u32,
 }
 
@@ -85,11 +84,6 @@ impl VThreadRecord {
     }
 
     #[inline]
-    pub fn lane_id(&self) -> u32 {
-        self.lane_id
-    }
-
-    #[inline]
     pub fn tls_slot(&self) -> u32 {
         self.tls_slot
     }
@@ -102,7 +96,7 @@ impl VThreadRecord {
     }
 
     #[inline]
-    fn snapshot(&'static self, fs_base: usize) -> VThreadSnapshot {
+    fn snapshot(&'static self) -> VThreadSnapshot {
         let cpu_slot = if self.role == VTHREAD_ROLE_VM_HULL {
             VTHREAD_NO_ID
         } else {
@@ -114,7 +108,6 @@ impl VThreadRecord {
             role: self.role,
             lane_id: self.lane_id,
             tls_slot: self.tls_slot,
-            fs_base,
             cpu_slot,
         }
     }
@@ -268,8 +261,7 @@ pub fn current_record() -> Option<&'static VThreadRecord> {
 
 #[inline]
 pub fn current_snapshot() -> Option<VThreadSnapshot> {
-    let fs_base = read_fs_base();
-    record_from_fs_base(fs_base).map(|record| record.snapshot(fs_base))
+    record_from_fs_base(read_fs_base()).map(VThreadRecord::snapshot)
 }
 
 #[inline]
@@ -280,11 +272,6 @@ pub fn current_id() -> Option<u32> {
 #[inline]
 pub fn current_tls_slot() -> Option<u32> {
     current_record().map(VThreadRecord::tls_slot)
-}
-
-#[inline]
-pub fn current_fs_base_for_probe() -> usize {
-    read_fs_base()
 }
 
 pub fn enter(record: &'static VThreadRecord) -> VThreadGuard {

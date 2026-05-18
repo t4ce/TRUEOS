@@ -3,7 +3,6 @@ pub mod blueprint;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod blueprint_net;
 pub mod guest_run;
-pub mod guest_work;
 pub mod hv_remote_restore_service;
 pub mod lane;
 pub mod memory;
@@ -38,7 +37,6 @@ use x86_64::registers::segmentation::{CS, DS, ES, FS, GS, SS, Segment};
 
 use crate::shell2::{MatrixTarget, ShellBackend2};
 
-use guest_work::{VmLaneProfile, pick_vm_hull_lane};
 use memory::*;
 use snapshot::*;
 pub use vmui2::*;
@@ -657,16 +655,17 @@ fn start_with_mode(
 
     let _ = spawner;
     let _ = io;
-    let profile = VmLaneProfile::vm_default();
-    let target = match pick_vm_hull_lane() {
+    const VM_HULL_ROLE: &str = "vm-hull";
+    const VM_HULL_PLACEMENT: &str = "reserved-vm-lane";
+    let target = match lane::pick_vm_hull_lane() {
         Ok(target) => target,
         Err(error) => {
             vm.starting.store(false, Ordering::Release);
             hvlogf(format_args!(
                 "hv: vm{} lane pick failed: role={} placement={} reason={}",
                 vm_id,
-                profile.role_name(),
-                profile.placement_name(),
+                VM_HULL_ROLE,
+                VM_HULL_PLACEMENT,
                 error.as_str()
             ));
             return Err(StartError::NoVmSpawner);
@@ -676,13 +675,13 @@ fn start_with_mode(
     // Preserve the VM hull execution contract:
     // actual guest work must stay on HV-reserved VM lanes only, never on BSP
     // and never on the AP1 UI2/service lane.
-    if !profile.requires_reserved_vm_lane() || !target.supports(profile) {
+    if !target.is_ap2_carrier_lane() {
         vm.starting.store(false, Ordering::Release);
         hvlogf(format_args!(
             "hv: vm{} lane rejected: role={} placement={} slot={} requires reserved VM lane on AP2+",
             vm_id,
-            profile.role_name(),
-            profile.placement_name(),
+            VM_HULL_ROLE,
+            VM_HULL_PLACEMENT,
             target.slot
         ));
         return Err(StartError::NoVmSpawner);
@@ -692,8 +691,8 @@ fn start_with_mode(
         "hv: vm{} lane: mode={:?} role={} placement={} slot={} kind={} stack_mib={}",
         vm_id,
         boot_mode,
-        profile.role_name(),
-        profile.placement_name(),
+        VM_HULL_ROLE,
+        VM_HULL_PLACEMENT,
         target.slot,
         target.core_kind_name(),
         memory::active_guest_stack_mb_for_vm(vm_id)
@@ -713,8 +712,8 @@ fn start_with_mode(
             hvlogf(format_args!(
                 "hv: vm{} lane spawn submitted: role={} placement={} slot={}",
                 vm_id,
-                profile.role_name(),
-                profile.placement_name(),
+                VM_HULL_ROLE,
+                VM_HULL_PLACEMENT,
                 target.slot
             ));
             crate::log!("app-vm-run-queue: vm task submitted vm={} slot={}\n", vm_id, target.slot);
