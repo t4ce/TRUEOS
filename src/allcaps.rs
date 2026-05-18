@@ -19,7 +19,6 @@ pub mod probes {
 }
 
 pub mod lumen {
-    pub const BOOT_MODEL_SERVICE: bool = false;
     pub const RUNTIME_DIAGNOSTIC_PROBES: bool = false;
     pub const ROUTE_BF16_MATVEC_TO_NET_BACKEND: bool = false;
     pub const SHADOW_BF16_MATVEC_TO_NET_BACKEND: bool = false;
