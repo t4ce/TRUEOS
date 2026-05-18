@@ -23,11 +23,12 @@ static PTHREAD_MUTEXES: Mutex<FixedKeyMap<usize, PthreadMutexState, PTHREAD_MUTE
 static PTHREAD_THREADS: Mutex<FixedKeyMap<usize, PthreadThreadState, PTHREAD_THREAD_CAPACITY>> =
     Mutex::new(FixedKeyMap::new());
 static LOGGED_PTHREAD_SYNC: AtomicI32 = AtomicI32::new(0);
+static LOGGED_C_ALLOCATION_TRACK_OVERFLOW: AtomicI32 = AtomicI32::new(0);
 static PTHREAD_SYNC_TRACE_COUNT: AtomicUsize = AtomicUsize::new(0);
 static PTHREAD_NEXT_THREAD_ID: AtomicUsize = AtomicUsize::new(1);
 
 const PTHREAD_SYNC_TRACE_LIMIT: usize = 48;
-const C_ALLOCATION_CAPACITY: usize = 8192;
+const C_ALLOCATION_CAPACITY: usize = 16384;
 const PTHREAD_MUTEX_CAPACITY: usize = 256;
 const PTHREAD_COND_CAPACITY: usize = 256;
 const PTHREAD_THREAD_CAPACITY: usize = 64;
@@ -303,6 +304,39 @@ fn c_allocation_insert(ptr: *mut u8, record: AllocationRecord) -> bool {
     C_ALLOCATIONS.lock().insert(ptr as usize, record).is_ok()
 }
 
+fn log_c_allocation_track_overflow(ptr: *mut u8, record: AllocationRecord) {
+    if LOGGED_C_ALLOCATION_TRACK_OVERFLOW
+        .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        crate::log!(
+            "std-abi: c allocation tracking full; returning untracked ptr=0x{:X} size={} align={} cap={}\n",
+            ptr as usize,
+            record.size,
+            record.align,
+            C_ALLOCATION_CAPACITY
+        );
+    }
+}
+
+fn log_posix_memalign_failure(reason: &str, memptr: *mut *mut c_void, size: usize, align: usize) {
+    let vm_id = active_abi_guest_vm_id()
+        .map(|id| id as usize)
+        .unwrap_or(usize::MAX);
+    let hull_vm_id = crate::hv::current_hull_guest_context_vm_id()
+        .map(|id| id as usize)
+        .unwrap_or(usize::MAX);
+    crate::log!(
+        "std-abi: posix_memalign failed reason={} memptr=0x{:X} size={} align={} active_vm={} hull_vm={}\n",
+        reason,
+        memptr as usize,
+        size,
+        align,
+        vm_id,
+        hull_vm_id,
+    );
+}
+
 fn c_allocation_remove(ptr: *mut c_void) {
     let _ = C_ALLOCATIONS.lock().remove(ptr as usize);
 }
@@ -325,19 +359,16 @@ fn c_malloc_aligned(size: usize, align: usize) -> *mut c_void {
         unsafe { crate::allocators::alloc_raw(layout) }
     };
     if ptr.is_null() {
+        log_posix_memalign_failure("alloc-null", ptr::null_mut(), size, align);
         TRUEOS_ERRNO.store(12, Ordering::Relaxed);
         return ptr::null_mut();
     }
-    if !c_allocation_insert(
-        ptr,
-        AllocationRecord {
-            size: size.max(1),
-            align: align.max(1),
-        },
-    ) {
-        unsafe { crate::allocators::dealloc_raw(ptr) };
-        TRUEOS_ERRNO.store(12, Ordering::Relaxed);
-        return ptr::null_mut();
+    let record = AllocationRecord {
+        size: size.max(1),
+        align: align.max(1),
+    };
+    if !c_allocation_insert(ptr, record) {
+        log_c_allocation_track_overflow(ptr, record);
     }
     ptr.cast::<c_void>()
 }
@@ -456,6 +487,14 @@ fn active_abi_guest_vm_id() -> Option<u8> {
 fn active_guest_stack_host_ptr_for_vm(vm_id: u8, ptr: *mut u8, len: usize) -> Option<*mut u8> {
     let guest_va = ptr as usize as u64;
     let offset = guest_va.checked_sub(crate::hv::memory::GUEST_STACK_VA_BASE)? as usize;
+    if crate::hv::current_hull_guest_context_vm_id() == Some(vm_id) {
+        let stack_bytes = crate::hv::memory::active_guest_stack_bytes_for_vm(vm_id);
+        let end = offset.checked_add(len)?;
+        if end <= stack_bytes {
+            return Some(ptr);
+        }
+        return None;
+    }
     let stack = crate::hv::memory::guest_stack_slice_for_vm(vm_id)?;
     let end = offset.checked_add(len)?;
     if end > stack.len() {
@@ -909,9 +948,11 @@ pub unsafe extern "C" fn posix_memalign(
     size: usize,
 ) -> c_int {
     if memptr.is_null() {
+        log_posix_memalign_failure("null-memptr", memptr, size, align);
         return TRUEOS_EINVAL;
     }
     if !align.is_power_of_two() || align < core::mem::size_of::<usize>() {
+        log_posix_memalign_failure("bad-align", memptr, size, align);
         return TRUEOS_EINVAL;
     }
     let ptr = c_malloc_aligned(size, align);
@@ -920,6 +961,7 @@ pub unsafe extern "C" fn posix_memalign(
     }
     if !copy_usize_to_abi_out(memptr.cast::<usize>(), ptr as usize) {
         c_free_ptr(ptr);
+        log_posix_memalign_failure("copy-out-failed", memptr, size, align);
         return TRUEOS_EINVAL;
     }
     0

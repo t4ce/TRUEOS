@@ -48,6 +48,7 @@ function parseArgs(argv) {
     tftpRoot: path.resolve(__dirname, "bld"),
     httpPort: DEFAULT_HTTP_PORT,
     enableHttp: true,
+    embedApps: false,
     dryRun: false,
     verbose: false,
   };
@@ -62,13 +63,15 @@ function parseArgs(argv) {
       out.httpPort = Number(argv[++i]);
     } else if (a === "--no-http") {
       out.enableHttp = false;
+    } else if (a === "--with-apps") {
+      out.embedApps = true;
     } else if (a === "--dry-run") {
       out.dryRun = true;
     } else if (a === "--verbose") {
       out.verbose = true;
     } else if (a === "-h" || a === "--help") {
       process.stdout.write(
-        "Usage: sudo node pxe2.js [--iface <dev>] [--tftp-root <path>] [--http-port <port>] [--no-http] [--dry-run] [--verbose]\n"
+        "Usage: sudo node pxe2.js [--iface <dev>] [--tftp-root <path>] [--http-port <port>] [--no-http] [--with-apps] [--dry-run] [--verbose]\n"
       );
       process.exit(0);
     } else {
@@ -246,24 +249,55 @@ function detectInterfaceIPv4(iface) {
   return { ip, prefix };
 }
 
-function ensureTftpFiles(tftpRoot) {
+function filterLimineApps(conf) {
+  const out = [];
+  let skipNextModuleString = false;
+  for (const line of conf.split(/\r?\n/)) {
+    if (skipNextModuleString) {
+      skipNextModuleString = false;
+      if (/^module_string:\s*(trueos\.app\.|trueos\.install\.efi_img$)/.test(line)) {
+        continue;
+      }
+    }
+    if (/^module_path:\s*boot\(\):\/EFI\/BOOT\/apps\/.*\.bp$/.test(line)) {
+      skipNextModuleString = true;
+      continue;
+    }
+    if (/^module_path:\s*boot\(\):\/efi\.img$/.test(line)) {
+      skipNextModuleString = true;
+      continue;
+    }
+    out.push(line);
+  }
+  return out.join("\n");
+}
+
+function ensureTftpFiles(tftpRoot, { embedApps }) {
   const bootPath = path.join(tftpRoot, BOOTFILE);
   const limineBootPath = path.join(tftpRoot, "limine/prefix-x86_64/share/limine/BOOTX64.EFI");
   const kernelPath = path.join(tftpRoot, "TRUEOS.elf");
 
-  if (!fs.existsSync(bootPath)) {
-    if (!fs.existsSync(limineBootPath)) {
-      die(
-        `Missing required TFTP file: ${bootPath}\n` +
-          `Also missing Limine source file for PXE symlink: ${limineBootPath}\n` +
-          `Hint: run \`make iso\` first to build Limine and stage TRUEOS netboot files into ${tftpRoot}.`
+  if (!fs.existsSync(limineBootPath)) {
+    die(
+      `Missing Limine source file for PXE boot: ${limineBootPath}\n` +
+        `Hint: run \`make iso\` first to build Limine and stage TRUEOS netboot files into ${tftpRoot}.`
+    );
+  }
+  fs.mkdirSync(path.dirname(bootPath), { recursive: true });
+  if (fs.existsSync(bootPath)) {
+    const bootStat = fs.statSync(bootPath);
+    const limineStat = fs.statSync(limineBootPath);
+    if (bootStat.dev !== limineStat.dev || bootStat.ino !== limineStat.ino) {
+      fs.rmSync(bootPath, { force: true });
+      fs.linkSync(limineBootPath, bootPath);
+      process.stdout.write(
+        `Repaired PXE ${BOOTFILE} hardlink to ${limineBootPath}; no duplicate BOOTX64.EFI data written.\n`
       );
     }
-    fs.mkdirSync(path.dirname(bootPath), { recursive: true });
-    const relativeTarget = path.relative(path.dirname(bootPath), limineBootPath);
-    fs.symlinkSync(relativeTarget, bootPath);
+  } else {
+    fs.linkSync(limineBootPath, bootPath);
     process.stdout.write(
-      `Staged PXE ${BOOTFILE} symlink -> ${relativeTarget}; no duplicate BOOTX64.EFI copy written.\n`
+      `Staged PXE ${BOOTFILE} hardlink to ${limineBootPath}; no duplicate BOOTX64.EFI data written.\n`
     );
   }
 
@@ -279,11 +313,13 @@ function ensureTftpFiles(tftpRoot) {
   const pxeLimineConf = path.join(tftpRoot, "EFI/BOOT/limine.conf");
   const isoBootLimineConf = path.join(tftpRoot, "iso-bootroot/limine.conf");
 
-  if (fs.existsSync(isoBootLimineConf) && !fs.existsSync(pxeLimineConf)) {
+  if (fs.existsSync(isoBootLimineConf)) {
     fs.mkdirSync(path.dirname(pxeLimineConf), { recursive: true });
-    fs.copyFileSync(isoBootLimineConf, pxeLimineConf);
+    const source = fs.readFileSync(isoBootLimineConf, "utf8");
+    const staged = embedApps ? source : filterLimineApps(source);
+    fs.writeFileSync(pxeLimineConf, staged);
     process.stdout.write(
-      `Staged PXE limine.conf at ${pxeLimineConf} from ${isoBootLimineConf}.\n`
+      `Staged PXE limine.conf at ${pxeLimineConf} from ${isoBootLimineConf} apps=${embedApps ? 1 : 0}.\n`
     );
   }
 
@@ -340,7 +376,7 @@ function buildDnsmasqArgs({ iface, tftpRoot, serverIp, lanNetwork, lanNetmask })
     const iface = opts.iface || detectDefaultInterface();
     const tftpRoot = opts.tftpRoot;
 
-    ensureTftpFiles(tftpRoot);
+    ensureTftpFiles(tftpRoot, { embedApps: opts.embedApps });
     let httpAssets = [];
     if (opts.enableHttp) {
       httpAssets = ensureHttpAssets();
@@ -378,6 +414,7 @@ function buildDnsmasqArgs({ iface, tftpRoot, serverIp, lanNetwork, lanNetmask })
           `lan-network=${lanNetwork} netmask=${lanNetmask}`,
           "Firewall (typical): allow UDP 67, 69, 4011 (+ TFTP data high UDP ports)",
           opts.enableHttp ? `Firewall (HTTP): allow TCP ${opts.httpPort}` : "HTTP media host disabled.",
+          opts.embedApps ? "PXE apps: enabled; Blueprint modules will transfer over TFTP." : "PXE apps: disabled; Blueprint modules are filtered from limine.conf.",
           "Note: ProxyDHCP usually requires same L2/VLAN broadcast domain.",
           "",
           "dnsmasq argv:",

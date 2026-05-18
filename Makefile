@@ -257,8 +257,6 @@ iso: baremetal-reboot-log artifacts images limine
 		cp $(ISO_DIR)/EFI/BOOT/adlp_guc_70.bin $(ISO_BOOT_DIR)/EFI/BOOT/adlp_guc_70.bin; \
 	fi
 	cp $(LIMINE_CFG_GENERATED) $(ISO_BOOT_DIR)/limine.conf
-	rm -f $(ISO_DIR)/EFI/BOOT/BOOTX64.EFI
-	cp $(LIMINE_CFG_GENERATED) $(ISO_DIR)/EFI/BOOT/limine.conf
 	cp $(ISO_BOOT_DIR)/TRUEOS.elf $(ISO_DIR)/TRUEOS.elf
 	rm -f $(ISO_BOOT_DIR)/$(ISO_EFI_IMG)
 	@efi_payload_kib=$$(du -sk "$(LIMINE_BOOTX64)" | cut -f1); \
