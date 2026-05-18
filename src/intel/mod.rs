@@ -12,15 +12,18 @@
 // modules must each emit their own named proof lines.
 
 mod display;
+mod dmc;
 pub(crate) mod format;
 mod fw_probe;
 mod gpgpu;
 mod guc;
 pub mod hda;
+mod huc;
 mod hw_cursor;
 pub(crate) mod hw_pic;
 pub(crate) mod state;
 pub(crate) mod stats;
+mod uc_fw;
 pub(crate) mod xelp_media2_ngin;
 pub(crate) mod xelp_media2_ngin_hw_pic;
 
@@ -32,6 +35,7 @@ use spin::Mutex;
 pub(crate) const INTEL_VENDOR_ID: u16 = 0x8086;
 pub(crate) const PCI_CLASS_DISPLAY: u8 = 0x03;
 pub(crate) const GPU_VA_GUC_FW_BASE: u64 = 0x0085_0000;
+pub(crate) const GPU_VA_HUC_FW_BASE: u64 = 0x0090_0000;
 pub(crate) const GPU_VA_GUC_ADS_BASE: u64 = 0x0100_0000;
 pub(crate) const GPU_VA_DISPLAY_PRIMARY_BASE: u64 = 0x0200_0000;
 pub(crate) const GPU_VA_DISPLAY_OVERLAY_BASE: u64 = 0x0300_0000;
@@ -338,6 +342,8 @@ pub fn init_once() {
     );
     *CLAIMED_DEVICE.lock() = Some(dev);
     self::fw_probe::log_probe_modules(dev.device_id);
+    self::dmc::wire_load_path(dev);
+    let huc_fw = self::huc::load_fw();
     let fw = self::guc::load_fw();
     if fw.len == 0 {
         crate::log!("intel/guc: firmware module missing or invalid\n");
@@ -374,6 +380,17 @@ pub fn init_once() {
     );
     if ready {
         self::guc::prove_h2g_mmio_once(dev, "boot-control-ctb-disable");
+        if huc_fw.len != 0 {
+            if map_ggtt(dev, huc_fw.phys, huc_fw.len, huc_fw.gpu) {
+                ggtt_invalidate(dev);
+                self::huc::authenticate_via_guc(dev, huc_fw);
+            } else {
+                crate::log!(
+                    "intel/huc: auth skipped reason=ggtt-map-failed fw_len=0x{:X}\n",
+                    huc_fw.len
+                );
+            }
+        }
     }
     if DISPLAY_PLANE1_BOOT_DEMO_ENABLED {
         self::display::init_primary_boot_surface(dev);
@@ -433,6 +450,22 @@ pub fn guc_ready() -> bool {
 
 pub(crate) fn guc_h2g_mmio_accepted() -> bool {
     self::guc::h2g_mmio_accepted()
+}
+
+pub fn huc_ready() -> bool {
+    self::huc::authenticated()
+}
+
+pub fn huc_present() -> bool {
+    self::huc::present()
+}
+
+pub fn dmc_present() -> bool {
+    self::dmc::present()
+}
+
+pub fn dmc_load_path_wired() -> bool {
+    self::dmc::load_path_wired()
 }
 
 pub fn has_claimed_device() -> bool {

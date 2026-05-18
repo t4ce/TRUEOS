@@ -934,7 +934,7 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
         settle_ms: 750,
     },
     BlueprintAutostart {
-        enabled: false,
+        enabled: true,
         label: "chatserver",
         archive: "chatserver.bp",
         slot: "cht",

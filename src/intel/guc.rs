@@ -81,29 +81,6 @@ static H2G_MMIO_ERROR: AtomicU32 = AtomicU32::new(0);
 
 #[repr(C, packed)]
 #[derive(Copy, Clone)]
-struct UcCssHeader {
-    module_type: u32,
-    header_size_dw: u32,
-    _v: u32,
-    _id: u32,
-    _vendor: u32,
-    _date: u32,
-    size_dw: u32,
-    key_size_dw: u32,
-    modulus_size_dw: u32,
-    exponent_size_dw: u32,
-    _time: u32,
-    _user: [u8; 8],
-    _build: [u8; 12],
-    _sw: u32,
-    _vf: u32,
-    _r: [u32; 12],
-    private_data_size: u32,
-    _info: u32,
-}
-
-#[repr(C, packed)]
-#[derive(Copy, Clone)]
 struct GucMmioRegSet {
     _a: u32,
     _b: u16,
@@ -162,8 +139,7 @@ pub(crate) fn load_fw() -> crate::intel::Buf {
     let Some(blob) = crate::limine::module_bytes_by_string(GUC_MODULE_STRING) else {
         return crate::intel::empty();
     };
-    let Some((css_offset, xfer_len, rsa_offset, rsa_size, private_data_size)) = parse_css(blob)
-    else {
+    let Some(css) = crate::intel::uc_fw::parse_css(blob) else {
         return crate::intel::empty();
     };
     let len = blob.len().div_ceil(crate::intel::WARM_ALIGN) * crate::intel::WARM_ALIGN;
@@ -180,11 +156,11 @@ pub(crate) fn load_fw() -> crate::intel::Buf {
         virt,
         len,
         gpu: crate::intel::GPU_VA_GUC_FW_BASE,
-        css_offset,
-        xfer_len,
-        private_data_size,
-        rsa_offset,
-        rsa_size,
+        css_offset: css.offset,
+        xfer_len: css.xfer_len,
+        private_data_size: css.private_data_size as usize,
+        rsa_offset: css.rsa_offset,
+        rsa_size: css.rsa_size,
     }
 }
 
@@ -509,6 +485,36 @@ struct MmioH2gResult {
     poll_iters: usize,
 }
 
+pub(crate) struct H2gMmioResult {
+    pub(crate) accepted: bool,
+    pub(crate) response: u32,
+    pub(crate) response_type: u32,
+    pub(crate) error: u32,
+    pub(crate) poll_iters: usize,
+}
+
+pub(crate) fn send_h2g_mmio_action(
+    dev: crate::intel::Dev,
+    action: u32,
+    args: &[u32],
+) -> H2gMmioResult {
+    let mut request = [0u32; 4];
+    let mut len = 1usize;
+    request[0] = hxg_request_header(action);
+    while len < request.len() && len - 1 < args.len() {
+        request[len] = args[len - 1];
+        len += 1;
+    }
+    let result = send_mmio_hxg(dev, &request[..len]);
+    H2gMmioResult {
+        accepted: result.accepted,
+        response: result.response,
+        response_type: result.response_type,
+        error: result.error,
+        poll_iters: result.poll_iters,
+    }
+}
+
 fn hxg_request_header(action: u32) -> u32 {
     (GUC_HXG_TYPE_REQUEST << 28) | (action & 0xFFFF)
 }
@@ -571,33 +577,4 @@ fn send_mmio_hxg(dev: crate::intel::Dev, request: &[u32]) -> MmioH2gResult {
         error,
         poll_iters,
     }
-}
-
-fn parse_css(blob: &[u8]) -> Option<(usize, usize, usize, usize, usize)> {
-    let end = blob
-        .len()
-        .checked_sub(core::mem::size_of::<UcCssHeader>())?;
-    for off in (0..=end).step_by(4) {
-        let css = unsafe { (blob.as_ptr().add(off) as *const UcCssHeader).read_unaligned() };
-        if css.module_type != 5 && css.module_type != 6 {
-            continue;
-        }
-        let fixed = css
-            .header_size_dw
-            .checked_sub(css.key_size_dw)?
-            .checked_sub(css.modulus_size_dw)?
-            .checked_sub(css.exponent_size_dw)?;
-        if fixed != 32 {
-            continue;
-        }
-        let header = css.header_size_dw.checked_mul(4)? as usize;
-        let total = css.size_dw.checked_mul(4)? as usize;
-        let xfer = 128usize.checked_add(total.checked_sub(header)?)?;
-        let rsa_size = css.key_size_dw.checked_mul(4)? as usize;
-        let rsa_off = off.checked_add(xfer)?;
-        if off.checked_add(xfer)? <= blob.len() && rsa_off.checked_add(rsa_size)? <= blob.len() {
-            return Some((off, xfer, rsa_off, rsa_size, css.private_data_size as usize));
-        }
-    }
-    None
 }
