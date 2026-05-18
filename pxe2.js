@@ -7,6 +7,7 @@ const { spawn, spawnSync } = require("child_process");
 const BOOTFILE = "EFI/BOOT/BOOTX64.EFI";
 const LEASES = "/tmp/trueos-pxe2.leases";
 const DEFAULT_HTTP_PORT = 8080;
+const DEFAULT_PXE_APPS = ["weather.bp", "file-system.bp", "chatserver.bp"];
 const HARDCODED_HTTP_ASSETS = [
   {
     kind: "video",
@@ -48,7 +49,8 @@ function parseArgs(argv) {
     tftpRoot: path.resolve(__dirname, "bld"),
     httpPort: DEFAULT_HTTP_PORT,
     enableHttp: true,
-    embedApps: false,
+    appsMode: "default",
+    appNames: DEFAULT_PXE_APPS.slice(),
     dryRun: false,
     verbose: false,
   };
@@ -63,15 +65,22 @@ function parseArgs(argv) {
       out.httpPort = Number(argv[++i]);
     } else if (a === "--no-http") {
       out.enableHttp = false;
+    } else if (a === "--no-apps") {
+      out.appsMode = "none";
+      out.appNames = [];
     } else if (a === "--with-apps") {
-      out.embedApps = true;
+      out.appsMode = "all";
+      out.appNames = [];
+    } else if (a === "--apps" && i + 1 < argv.length) {
+      out.appsMode = "selected";
+      out.appNames = parseAppList(argv[++i]);
     } else if (a === "--dry-run") {
       out.dryRun = true;
     } else if (a === "--verbose") {
       out.verbose = true;
     } else if (a === "-h" || a === "--help") {
       process.stdout.write(
-        "Usage: sudo node pxe2.js [--iface <dev>] [--tftp-root <path>] [--http-port <port>] [--no-http] [--with-apps] [--dry-run] [--verbose]\n"
+        "Usage: sudo node pxe2.js [--iface <dev>] [--tftp-root <path>] [--http-port <port>] [--no-http] [--no-apps] [--with-apps] [--apps <a.bp,b.bp>] [--dry-run] [--verbose]\n"
       );
       process.exit(0);
     } else {
@@ -79,6 +88,29 @@ function parseArgs(argv) {
     }
   }
   return out;
+}
+
+function parseAppList(raw) {
+  const names = String(raw)
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((name) => (name.endsWith(".bp") ? name : `${name}.bp`));
+  if (names.length === 0) {
+    die("--apps requires at least one app name");
+  }
+  for (const name of names) {
+    if (!/^[A-Za-z0-9_.-]+\.bp$/.test(name) || name.includes("/") || name.includes("\\")) {
+      die(`Invalid app name for --apps: ${name}`);
+    }
+  }
+  return Array.from(new Set(names));
+}
+
+function appSelectionLabel({ appsMode, appNames }) {
+  if (appsMode === "all") return "all";
+  if (appsMode === "none") return "none";
+  return appNames.join(",");
 }
 
 function resolveHttpAssets() {
@@ -272,7 +304,101 @@ function filterLimineApps(conf) {
   return out.join("\n");
 }
 
-function ensureTftpFiles(tftpRoot, { embedApps }) {
+function selectedAppSet({ appsMode, appNames }) {
+  if (appsMode !== "default" && appsMode !== "selected") {
+    return null;
+  }
+  return new Set(appNames);
+}
+
+function appNameFromModulePath(line) {
+  const match = /^module_path:\s*boot\(\):\/EFI\/BOOT\/apps\/([^/\\]+\.bp)$/.exec(line);
+  return match ? match[1] : null;
+}
+
+function filterLimineAppsToSelection(conf, appNames) {
+  const selected = new Set(appNames);
+  const emitted = new Set();
+  const out = [];
+  let pendingAppPath = null;
+  let skipNextInstallModuleString = false;
+
+  for (const line of conf.split(/\r?\n/)) {
+    if (skipNextInstallModuleString) {
+      skipNextInstallModuleString = false;
+      if (/^module_string:\s*trueos\.install\.efi_img$/.test(line)) {
+        continue;
+      }
+    }
+
+    if (pendingAppPath) {
+      const keep = selected.has(pendingAppPath);
+      const isAppString = /^module_string:\s*trueos\.app\./.test(line);
+      if (keep) {
+        out.push(`module_path: boot():/EFI/BOOT/apps/${pendingAppPath}`);
+        out.push(line);
+        emitted.add(pendingAppPath);
+      }
+      pendingAppPath = null;
+      if (isAppString) {
+        continue;
+      }
+    }
+
+    const appName = appNameFromModulePath(line);
+    if (appName) {
+      pendingAppPath = appName;
+      continue;
+    }
+    if (/^module_path:\s*boot\(\):\/efi\.img$/.test(line)) {
+      skipNextInstallModuleString = true;
+      continue;
+    }
+    out.push(line);
+  }
+
+  if (pendingAppPath && selected.has(pendingAppPath)) {
+    out.push(`module_path: boot():/EFI/BOOT/apps/${pendingAppPath}`);
+    out.push(`module_string: trueos.app.${path.basename(pendingAppPath, ".bp")}`);
+    emitted.add(pendingAppPath);
+  }
+
+  for (const appName of appNames) {
+    if (emitted.has(appName)) {
+      continue;
+    }
+    out.push(`module_path: boot():/EFI/BOOT/apps/${appName}`);
+    out.push(`module_string: trueos.app.${path.basename(appName, ".bp")}`);
+  }
+
+  return out.join("\n");
+}
+
+function stageSelectedApps(tftpRoot, appNames) {
+  const appDir = path.join(tftpRoot, "EFI/BOOT/apps");
+  fs.mkdirSync(appDir, { recursive: true });
+
+  for (const appName of appNames) {
+    const stagedPath = path.join(appDir, appName);
+    const distPath = path.resolve(__dirname, "crates/TRUEOS-Blueprints/dist", appName);
+    if (!fs.existsSync(distPath)) {
+      if (fs.existsSync(stagedPath)) {
+        process.stdout.write(`Using existing staged PXE app ${stagedPath}; dist artifact missing.\n`);
+        continue;
+      }
+      die(`Missing selected PXE app ${appName}: ${distPath}\nHint: build the blueprint dist artifacts first.`);
+    }
+
+    if (fs.existsSync(stagedPath)) {
+      fs.rmSync(stagedPath, { force: true });
+    }
+
+    fs.copyFileSync(distPath, stagedPath);
+    process.stdout.write(`Staged PXE app ${appName} copy from ${distPath}.\n`);
+  }
+}
+
+function ensureTftpFiles(tftpRoot, appSelection) {
   const bootPath = path.join(tftpRoot, BOOTFILE);
   const limineBootPath = path.join(tftpRoot, "limine/prefix-x86_64/share/limine/BOOTX64.EFI");
   const kernelPath = path.join(tftpRoot, "TRUEOS.elf");
@@ -316,11 +442,20 @@ function ensureTftpFiles(tftpRoot, { embedApps }) {
   if (fs.existsSync(isoBootLimineConf)) {
     fs.mkdirSync(path.dirname(pxeLimineConf), { recursive: true });
     const source = fs.readFileSync(isoBootLimineConf, "utf8");
-    const staged = embedApps ? source : filterLimineApps(source);
+    const selectedApps = selectedAppSet(appSelection);
+    const staged =
+      appSelection.appsMode === "all"
+        ? source
+        : selectedApps
+          ? filterLimineAppsToSelection(source, appSelection.appNames)
+          : filterLimineApps(source);
     fs.writeFileSync(pxeLimineConf, staged);
     process.stdout.write(
-      `Staged PXE limine.conf at ${pxeLimineConf} from ${isoBootLimineConf} apps=${embedApps ? 1 : 0}.\n`
+      `Staged PXE limine.conf at ${pxeLimineConf} from ${isoBootLimineConf} apps=${appSelectionLabel(appSelection)}.\n`
     );
+    if (selectedApps) {
+      stageSelectedApps(tftpRoot, appSelection.appNames);
+    }
   }
 
   if (!fs.existsSync(pxeLimineConf)) {
@@ -376,7 +511,7 @@ function buildDnsmasqArgs({ iface, tftpRoot, serverIp, lanNetwork, lanNetmask })
     const iface = opts.iface || detectDefaultInterface();
     const tftpRoot = opts.tftpRoot;
 
-    ensureTftpFiles(tftpRoot, { embedApps: opts.embedApps });
+    ensureTftpFiles(tftpRoot, opts);
     let httpAssets = [];
     if (opts.enableHttp) {
       httpAssets = ensureHttpAssets();
@@ -414,7 +549,11 @@ function buildDnsmasqArgs({ iface, tftpRoot, serverIp, lanNetwork, lanNetmask })
           `lan-network=${lanNetwork} netmask=${lanNetmask}`,
           "Firewall (typical): allow UDP 67, 69, 4011 (+ TFTP data high UDP ports)",
           opts.enableHttp ? `Firewall (HTTP): allow TCP ${opts.httpPort}` : "HTTP media host disabled.",
-          opts.embedApps ? "PXE apps: enabled; Blueprint modules will transfer over TFTP." : "PXE apps: disabled; Blueprint modules are filtered from limine.conf.",
+          opts.appsMode === "all"
+            ? "PXE apps: all enabled; Blueprint modules will transfer over TFTP."
+            : opts.appsMode === "none"
+              ? "PXE apps: disabled; Blueprint modules are filtered from limine.conf."
+              : `PXE apps: selected ${opts.appNames.join(", ")}; only these Blueprint modules will transfer over TFTP.`,
           "Note: ProxyDHCP usually requires same L2/VLAN broadcast domain.",
           "",
           "dnsmasq argv:",
