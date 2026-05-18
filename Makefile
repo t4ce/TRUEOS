@@ -17,9 +17,8 @@ RELEASE_ARCHIVE := $(ISO_DIR)/TrueOS.7z
 BUNDLED_OVMF_NAME := ovmf-code-x86_64.fd
 OVMF_BUNDLE_PATH ?= $(firstword $(wildcard /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd /opt/homebrew/share/qemu/edk2-x86_64-code.fd /usr/local/share/qemu/edk2-x86_64-code.fd))
 OVMF_LICENSE_PATH ?= $(firstword $(wildcard /usr/share/doc/ovmf/copyright /opt/homebrew/share/doc/qemu/LICENSE /usr/local/share/doc/qemu/LICENSE))
-# Extra slack added on top of the staged EFI payload when sizing the embedded
-# EFI System Partition image. This keeps the image close to minimal while
-# leaving room for FAT metadata and small growth in embedded artifacts.
+# Extra slack added on top of the EFI bootloader when sizing the embedded EFI
+# System Partition image. Runtime payloads live once in the ISO filesystem.
 EFI_IMG_OVERHEAD_KIB ?= 1024
 EFI_IMG_MIN_SIZE_KIB ?= 0
 LIMINE_CFG := limine.conf
@@ -39,6 +38,10 @@ LIMINE_TOOLCHAIN_STAMP := $(LIMINE_BUILD_DIR)/.toolchain_args
 LIMINE_INSTALL_STAMP := $(LIMINE_BUILD_DIR)/.installed
 GUC_FW_HOST_PATH ?= /lib/firmware/i915/adlp_guc_70.bin.zst
 GUC_FW_ISO_REL_PATH ?= EFI/BOOT/adlp_guc_70.bin
+DMC_FW_HOST_PATH ?= /lib/firmware/i915/adls_dmc_ver2_01.bin.zst
+DMC_FW_ISO_REL_PATH ?= EFI/BOOT/adls_dmc_ver2_01.bin
+HUC_FW_HOST_PATH ?= /lib/firmware/i915/tgl_huc_7.5.0.bin.zst
+HUC_FW_ISO_REL_PATH ?= EFI/BOOT/tgl_huc_7.5.0.bin
 BLUEPRINTS_ROOT ?= crates/TRUEOS-Blueprints
 BP_DIST_DIR ?= $(BLUEPRINTS_ROOT)/dist
 BP_ISO_DIR_REL ?= EFI/BOOT/apps
@@ -187,8 +190,32 @@ iso: baremetal-reboot-log artifacts images limine
 			cp "$(GUC_FW_HOST_PATH)" "$(ISO_DIR)/EFI/BOOT/adlp_guc_70.bin"; \
 			;; \
 	esac
+	@if [ -f "$(DMC_FW_HOST_PATH)" ]; then \
+		case "$(DMC_FW_HOST_PATH)" in \
+			*.zst) zstd -d -c "$(DMC_FW_HOST_PATH)" > "$(ISO_DIR)/EFI/BOOT/$$(basename "$(DMC_FW_ISO_REL_PATH)")" ;; \
+			*) cp "$(DMC_FW_HOST_PATH)" "$(ISO_DIR)/EFI/BOOT/$$(basename "$(DMC_FW_ISO_REL_PATH)")" ;; \
+		esac; \
+	else \
+		echo "iso: skipping DMC firmware probe artifact, missing $(DMC_FW_HOST_PATH)"; \
+	fi
+	@if [ -f "$(HUC_FW_HOST_PATH)" ]; then \
+		case "$(HUC_FW_HOST_PATH)" in \
+			*.zst) zstd -d -c "$(HUC_FW_HOST_PATH)" > "$(ISO_DIR)/EFI/BOOT/$$(basename "$(HUC_FW_ISO_REL_PATH)")" ;; \
+			*) cp "$(HUC_FW_HOST_PATH)" "$(ISO_DIR)/EFI/BOOT/$$(basename "$(HUC_FW_ISO_REL_PATH)")" ;; \
+		esac; \
+	else \
+		echo "iso: skipping HuC firmware probe artifact, missing $(HUC_FW_HOST_PATH)"; \
+	fi
 	mkdir -p $(ISO_BOOT_DIR)/$(dir $(GUC_FW_ISO_REL_PATH))
 	cp $(ISO_DIR)/EFI/BOOT/adlp_guc_70.bin $(ISO_BOOT_DIR)/$(GUC_FW_ISO_REL_PATH)
+	@if [ -f "$(ISO_DIR)/EFI/BOOT/$$(basename "$(DMC_FW_ISO_REL_PATH)")" ]; then \
+		mkdir -p $(ISO_BOOT_DIR)/$(dir $(DMC_FW_ISO_REL_PATH)); \
+		cp "$(ISO_DIR)/EFI/BOOT/$$(basename "$(DMC_FW_ISO_REL_PATH)")" "$(ISO_BOOT_DIR)/$(DMC_FW_ISO_REL_PATH)"; \
+	fi
+	@if [ -f "$(ISO_DIR)/EFI/BOOT/$$(basename "$(HUC_FW_ISO_REL_PATH)")" ]; then \
+		mkdir -p $(ISO_BOOT_DIR)/$(dir $(HUC_FW_ISO_REL_PATH)); \
+		cp "$(ISO_DIR)/EFI/BOOT/$$(basename "$(HUC_FW_ISO_REL_PATH)")" "$(ISO_BOOT_DIR)/$(HUC_FW_ISO_REL_PATH)"; \
+	fi
 	@if [ "$(BP_SKIP_EMBED)" != "1" ]; then \
 		mkdir -p $(ISO_BOOT_DIR)/$(BP_ISO_DIR_REL); \
 		$(BP_FILES_CMD) | while IFS= read -r bp; do \
@@ -207,20 +234,30 @@ iso: baremetal-reboot-log artifacts images limine
 				"module_path: boot():/$(BP_ISO_DIR_REL)/$$(basename "$$bp")" \
 				"module_string: trueos.app.$$bp_name" \
 				>> "$(LIMINE_CFG_GENERATED)"; \
-		done; \
+			done; \
+	fi
+	@if [ -f "$(ISO_BOOT_DIR)/$(DMC_FW_ISO_REL_PATH)" ]; then \
+		printf '%s\n%s\n' \
+			"module_path: boot():/$(DMC_FW_ISO_REL_PATH)" \
+			"module_string: trueos.fw.dmc" \
+			>> "$(LIMINE_CFG_GENERATED)"; \
+	fi
+	@if [ -f "$(ISO_BOOT_DIR)/$(HUC_FW_ISO_REL_PATH)" ]; then \
+		printf '%s\n%s\n' \
+			"module_path: boot():/$(HUC_FW_ISO_REL_PATH)" \
+			"module_string: trueos.fw.huc.candidate.tgl" \
+			>> "$(LIMINE_CFG_GENERATED)"; \
 	fi
 	@if [ "$(GUC_FW_ISO_REL_PATH)" != "EFI/BOOT/adlp_guc_70.bin" ]; then \
 		mkdir -p $(ISO_BOOT_DIR)/EFI/BOOT; \
 		cp $(ISO_DIR)/EFI/BOOT/adlp_guc_70.bin $(ISO_BOOT_DIR)/EFI/BOOT/adlp_guc_70.bin; \
 	fi
 	cp $(LIMINE_CFG_GENERATED) $(ISO_BOOT_DIR)/limine.conf
-	cp $(LIMINE_BOOTX64) $(ISO_DIR)/EFI/BOOT/BOOTX64.EFI
+	rm -f $(ISO_DIR)/EFI/BOOT/BOOTX64.EFI
 	cp $(LIMINE_CFG_GENERATED) $(ISO_DIR)/EFI/BOOT/limine.conf
 	cp $(ISO_BOOT_DIR)/TRUEOS.elf $(ISO_DIR)/TRUEOS.elf
-	mkdir -p $(ISO_BOOT_DIR)/EFI/BOOT
-	cp $(LIMINE_BOOTX64) $(ISO_BOOT_DIR)/EFI/BOOT/BOOTX64.EFI
 	rm -f $(ISO_BOOT_DIR)/$(ISO_EFI_IMG)
-	@efi_payload_kib=$$(du -sk "$(ISO_BOOT_DIR)/EFI" | cut -f1); \
+	@efi_payload_kib=$$(du -sk "$(LIMINE_BOOTX64)" | cut -f1); \
 		efi_img_size_kib=$$((efi_payload_kib + $(EFI_IMG_OVERHEAD_KIB))); \
 		if [ "$$efi_img_size_kib" -lt "$(EFI_IMG_MIN_SIZE_KIB)" ]; then \
 			efi_img_size_kib="$(EFI_IMG_MIN_SIZE_KIB)"; \
@@ -229,16 +266,7 @@ iso: baremetal-reboot-log artifacts images limine
 		dd if=/dev/zero of=$(ISO_BOOT_DIR)/$(ISO_EFI_IMG) bs=1k count=$$efi_img_size_kib
 	mkfs.vfat -n TRUEOS_EFI $(ISO_BOOT_DIR)/$(ISO_EFI_IMG)
 	mmd -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) ::/EFI ::/EFI/BOOT
-	@if [ "$(BP_SKIP_EMBED)" != "1" ]; then \
-		mmd -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) ::/EFI/BOOT/apps; \
-	fi
 	mcopy -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) $(LIMINE_BOOTX64) ::/EFI/BOOT/BOOTX64.EFI
-	mcopy -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) $(ISO_DIR)/EFI/BOOT/adlp_guc_70.bin ::/EFI/BOOT/adlp_guc_70.bin
-	@if [ "$(BP_SKIP_EMBED)" != "1" ]; then \
-		$(BP_FILES_CMD) | while IFS= read -r bp; do \
-			mcopy -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) "$(ISO_BOOT_DIR)/$(BP_ISO_DIR_REL)/$$(basename "$$bp")" ::/$(BP_ISO_DIR_REL)/$$(basename "$$bp"); \
-		done; \
-	fi
 	xorriso -as mkisofs \
 		-iso-level 3 -full-iso9660-filenames \
 		-R \
@@ -251,6 +279,7 @@ iso: baremetal-reboot-log artifacts images limine
 
 release: BUILD_MODE := release
 release: CARGO_BUILD_FLAGS += --release
+release: BP_SKIP_EMBED := 1
 release: iso
 	@if [ -z "$(OVMF_BUNDLE_PATH)" ] || [ ! -f "$(OVMF_BUNDLE_PATH)" ]; then \
 		echo "error: no OVMF firmware found to bundle"; \

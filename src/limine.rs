@@ -112,7 +112,11 @@ pub fn install_kernel_bytes() -> Option<&'static [u8]> {
 }
 
 pub fn install_bootx64_bytes() -> Option<&'static [u8]> {
-    module_bytes_by_string(b"trueos.install.bootx64")
+    if let Some(bootx64) = module_bytes_by_string(b"trueos.install.bootx64") {
+        return Some(bootx64);
+    }
+    let efi_img = module_bytes_by_string(b"trueos.install.efi_img")?;
+    crate::efi_img::bootx64_from_efi_img(efi_img)
 }
 
 pub fn guest_kernel_bytes() -> Option<&'static [u8]> {

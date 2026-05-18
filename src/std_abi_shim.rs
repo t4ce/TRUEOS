@@ -1,8 +1,8 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
-use alloc::sync::Arc;
 use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::alloc::Layout;
 use core::ffi::{c_char, c_int, c_long, c_void};
@@ -158,14 +158,8 @@ fn uart_write(bytes: &[u8]) {
 
 fn write_platform_fd(fd: u32, bytes: &[u8]) {
     match fd {
-        1 => crate::r::io::cabi::write_console_bytes(
-            crate::r::io::cabi::ConsoleStream::Out,
-            bytes,
-        ),
-        2 => crate::r::io::cabi::write_console_bytes(
-            crate::r::io::cabi::ConsoleStream::Err,
-            bytes,
-        ),
+        1 => crate::r::io::cabi::write_console_bytes(crate::r::io::cabi::ConsoleStream::Out, bytes),
+        2 => crate::r::io::cabi::write_console_bytes(crate::r::io::cabi::ConsoleStream::Err, bytes),
         _ => uart_write(bytes),
     }
 }
@@ -1087,15 +1081,12 @@ pub unsafe extern "C" fn stat(path: *const c_char, buf: *mut c_void) -> c_int {
         st_blocks: blocks,
         st_spare4: [0; 2],
     };
-    if !copy_to_abi_out(
-        buf.cast::<u8>(),
-        unsafe {
-            slice::from_raw_parts(
-                (&out as *const TrueosStat).cast::<u8>(),
-                core::mem::size_of::<TrueosStat>(),
-            )
-        },
-    ) {
+    if !copy_to_abi_out(buf.cast::<u8>(), unsafe {
+        slice::from_raw_parts(
+            (&out as *const TrueosStat).cast::<u8>(),
+            core::mem::size_of::<TrueosStat>(),
+        )
+    }) {
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
         return -1;
     }
@@ -1349,7 +1340,11 @@ pub unsafe extern "C" fn tcgetattr(fd: c_int, _termios_p: *mut c_void) -> c_int 
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn tcsetattr(fd: c_int, _optional_actions: c_int, _termios_p: *const c_void) -> c_int {
+pub unsafe extern "C" fn tcsetattr(
+    fd: c_int,
+    _optional_actions: c_int,
+    _termios_p: *const c_void,
+) -> c_int {
     if !(0..=2).contains(&fd) {
         TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
     } else {

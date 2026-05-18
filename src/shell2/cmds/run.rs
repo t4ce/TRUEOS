@@ -168,9 +168,7 @@ fn embedded_module_bytes_by_archive_name(
         let Some(module_bytes) = crate::limine::module_bytes_by_string(cmdline) else {
             return Err("failed to read selected embedded module");
         };
-        return Ok(Some(crate::allocators::with_host_alloc_domain(|| {
-            module_bytes.to_vec()
-        })));
+        return Ok(Some(crate::allocators::with_host_alloc_domain(|| module_bytes.to_vec())));
     }
 
     Ok(None)

@@ -13,6 +13,7 @@
 
 mod display;
 pub(crate) mod format;
+mod fw_probe;
 mod gpgpu;
 mod guc;
 pub mod hda;
@@ -336,6 +337,7 @@ pub fn init_once() {
         dev.mmio_len
     );
     *CLAIMED_DEVICE.lock() = Some(dev);
+    self::fw_probe::log_probe_modules(dev.device_id);
     let fw = self::guc::load_fw();
     if fw.len == 0 {
         crate::log!("intel/guc: firmware module missing or invalid\n");

@@ -1058,8 +1058,7 @@ pub mod cabi {
                 frame = *frame as *const usize;
                 remaining -= 1;
             }
-            if frame.is_null() || !(frame as usize).is_multiple_of(core::mem::align_of::<usize>())
-            {
+            if frame.is_null() || !(frame as usize).is_multiple_of(core::mem::align_of::<usize>()) {
                 0
             } else {
                 *frame.add(1)
