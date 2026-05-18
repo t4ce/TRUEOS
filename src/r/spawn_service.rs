@@ -934,7 +934,7 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
         settle_ms: 750,
     },
     BlueprintAutostart {
-        enabled: true,
+        enabled: false,
         label: "chatserver",
         archive: "chatserver.bp",
         slot: "cht",
@@ -942,7 +942,7 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
         settle_ms: 750,
     },
     BlueprintAutostart {
-        enabled: true,
+        enabled: false,
         label: "bat",
         archive: "bat.bp",
         slot: "bat",
@@ -1066,7 +1066,10 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
 const UI2_DEMO_READY: u32 =
     crate::r::readiness::UI2_READY | crate::r::readiness::GFX_TEXTURE_UPLOAD_SERVICE_READY;
 const BP_AUTOSTART_READY: u32 =
-    crate::r::readiness::TRUEOSFS_ROOT_MOUNTED | crate::r::readiness::BACKGROUND_AP_WORKER_READY;
+    crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
+        | crate::r::readiness::BACKGROUND_AP_WORKER_READY
+        | crate::r::readiness::UI2_READY
+        | crate::r::readiness::GFX_TEXTURE_UPLOAD_SERVICE_READY;
 static TASKS: [TaskSpec; 68] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled("factory-ram-probe", 0, &FACTORY_RAM_PROBE_STARTED, spawn_factory_ram_probe),
