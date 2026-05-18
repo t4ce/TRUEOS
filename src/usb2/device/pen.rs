@@ -1,7 +1,9 @@
 use alloc::{boxed::Box, string::String, vec::Vec as AllocVec};
 
 use crab_usb::usb_if;
-use crab_usb::{Device, EndpointBulkIn, EndpointBulkOut};
+use crab_usb::Device;
+
+use crate::usb2::api::{EndpointBulkIn, EndpointBulkOut};
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::Vec;

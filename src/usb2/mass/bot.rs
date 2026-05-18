@@ -1,4 +1,6 @@
-use crab_usb::{EndpointBulkIn, EndpointBulkOut, usb_if};
+use crab_usb::usb_if;
+
+use crate::usb2::api::{EndpointBulkIn, EndpointBulkOut};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use usb_if::host::ControlSetup;
 use usb_if::transfer::{Recipient, Request, RequestType};
