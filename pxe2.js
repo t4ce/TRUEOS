@@ -248,7 +248,24 @@ function detectInterfaceIPv4(iface) {
 
 function ensureTftpFiles(tftpRoot) {
   const bootPath = path.join(tftpRoot, BOOTFILE);
+  const limineBootPath = path.join(tftpRoot, "limine/prefix-x86_64/share/limine/BOOTX64.EFI");
   const kernelPath = path.join(tftpRoot, "TRUEOS.elf");
+
+  if (!fs.existsSync(bootPath)) {
+    if (!fs.existsSync(limineBootPath)) {
+      die(
+        `Missing required TFTP file: ${bootPath}\n` +
+          `Also missing Limine source file for PXE symlink: ${limineBootPath}\n` +
+          `Hint: run \`make iso\` first to build Limine and stage TRUEOS netboot files into ${tftpRoot}.`
+      );
+    }
+    fs.mkdirSync(path.dirname(bootPath), { recursive: true });
+    const relativeTarget = path.relative(path.dirname(bootPath), limineBootPath);
+    fs.symlinkSync(relativeTarget, bootPath);
+    process.stdout.write(
+      `Staged PXE ${BOOTFILE} symlink -> ${relativeTarget}; no duplicate BOOTX64.EFI copy written.\n`
+    );
+  }
 
   for (const p of [bootPath, kernelPath]) {
     if (!fs.existsSync(p)) {
