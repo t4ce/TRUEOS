@@ -1,7 +1,3 @@
-extern crate alloc;
-
-use alloc::vec::Vec;
-
 const FETCH_PENDING_RC: i32 = -8;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -27,10 +23,6 @@ impl BytesJob {
             Err(FETCH_PENDING_RC) => Ok(Poll::Pending),
             Err(rc) => Err(rc),
         }
-    }
-
-    pub fn read_all(self) -> Result<Vec<u8>, i32> {
-        v::vfetch::fetch_bytes_read(self.op_id)
     }
 
     pub fn discard(self) -> i32 {

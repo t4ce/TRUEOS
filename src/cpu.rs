@@ -419,18 +419,6 @@ pub unsafe fn enable_sse() {
 }
 
 #[cfg(target_arch = "x86_64")]
-#[inline]
-pub(crate) fn xsave_avx_enabled() -> bool {
-    XSAVE_AVX_ENABLED.load(Ordering::Acquire)
-}
-
-#[cfg(not(target_arch = "x86_64"))]
-#[inline]
-pub(crate) fn xsave_avx_enabled() -> bool {
-    false
-}
-
-#[cfg(target_arch = "x86_64")]
 pub fn simd_status() -> SimdStatus {
     let avx_state_enabled = XSAVE_AVX_ENABLED.load(Ordering::Acquire);
     let avx_state_reason = SimdReason::from_u8(XSAVE_AVX_REASON.load(Ordering::Acquire));
