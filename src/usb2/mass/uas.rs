@@ -342,6 +342,7 @@ fn log_uas_debug(stage: &'static str, cmd: &'static str, tag: u16) {
         return;
     }
 
+    /*
     let submit = crab_usb::debug_last_submit();
     let event = crab_usb::debug_last_event();
     let stream_cfg = crab_usb::debug_last_stream_config();
@@ -373,6 +374,14 @@ fn log_uas_debug(stage: &'static str, cmd: &'static str, tag: u16) {
             event.completion_code,
             event.residual,
             event.ptr
+        ),
+    );
+    */
+    crate::globalog::log_with_level(
+        log::Level::Trace,
+        format_args!(
+            "crabusb: mass uas-debug stage={} cmd={} tag=0x{:04X}\n",
+            stage, cmd, tag
         ),
     );
 }
@@ -425,6 +434,7 @@ fn log_uas_iu(stage: &'static str, cmd: &'static str, tag: u16, iu: &[u8]) {
 }
 
 fn log_uas_write_flow(stage: &'static str, tag: u16, detail: &'static str) {
+    /*
     let submit = crab_usb::debug_last_submit();
     let event = crab_usb::debug_last_event();
     crate::log!(
@@ -444,6 +454,13 @@ fn log_uas_write_flow(stage: &'static str, tag: u16, detail: &'static str) {
         event.completion_code,
         event.residual,
         event.ptr
+    );
+    */
+    crate::log!(
+        "crabusb: skhynix-green proof=uas-flow cmd=write-10 stage={} tag=0x{:04X} detail={}\n",
+        stage,
+        tag,
+        detail
     );
 }
 

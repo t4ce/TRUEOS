@@ -6,7 +6,6 @@ edition = "2024"
 [features]
 default = []
 hda-boot-probe = []
-usb-host2 = ["dep:crab-usb-host2"]
 vmx-web = ["dep:axum", "hyper/server"]
 vmx-reqwest = ["dep:reqwest"]
 
@@ -53,8 +52,7 @@ crc32fast = { version = "1.5.0", default-features = false }
 sha2 = { version = "0.10.9", default-features = false }
 embedded-websocket = { version = "0.9.4", default-features = false }
 smoltcp = { version = "0.13", default-features = false, features = ["alloc", "proto-ipv4", "proto-ipv6", "multicast", "socket-raw", "socket-udp", "socket-tcp", "socket-icmp", "socket-dhcpv4", "medium-ethernet"] }
-crab-usb = { version = "0.6.2", default-features = false }
-crab-usb-host2 = { package = "crab-usb", path = "vendor/crab-usb-0.9.3", default-features = false, optional = true }
+crab-usb = { path = "vendor/crab-usb-0.9.3", default-features = false }
 dma-api = { version = "=0.7.3", default-features = false }
 trueos-math = { path = "crates/trueos-math", features = ["alloc"] }
 trueos-fs = { path = "crates/trueos-fs" }
@@ -145,7 +143,6 @@ embassy-time = { path = "vendor/embassy-time-0.5.1" }
 aarch64-cpu = { path = "vendor/aarch64-cpu-10.0.0" }
 lazy_static = { path = "vendor/lazy_static-1.5.0" }
 rustls-rustcrypto = { path = "vendor/rustls-rustcrypto-0.0.2-alpha" }
-crab-usb = { path = "vendor/crab-usb-0.6.2/crab-usb-0.6.2" }
 tokio = { path = "vendor/tokio-1.52.3" }
 tokio-util = { path = "vendor/tokio-util-0.7.18" }
 tokio-rustls = { path = "vendor/tokio-rustls-0.26.4" }
