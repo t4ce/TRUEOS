@@ -660,6 +660,36 @@ pub(crate) async fn maybe_start_hid_boot_streams(
     controller_id: u32,
     log_descriptors: bool,
 ) -> bool {
+    maybe_start_hid_boot_streams_filtered(host, dev_info, spawner, controller_id, log_descriptors, None)
+        .await
+}
+
+pub(crate) async fn maybe_start_hid_mouse_streams(
+    host: &mut USBHost,
+    dev_info: &crab_usb::DeviceInfo,
+    spawner: &Spawner,
+    controller_id: u32,
+    log_descriptors: bool,
+) -> bool {
+    maybe_start_hid_boot_streams_filtered(
+        host,
+        dev_info,
+        spawner,
+        controller_id,
+        log_descriptors,
+        Some(HidBootKind::Mouse),
+    )
+    .await
+}
+
+async fn maybe_start_hid_boot_streams_filtered(
+    host: &mut USBHost,
+    dev_info: &crab_usb::DeviceInfo,
+    spawner: &Spawner,
+    controller_id: u32,
+    log_descriptors: bool,
+    only_kind: Option<HidBootKind>,
+) -> bool {
     let desc = dev_info.descriptor();
     let vendor_id = desc.vendor_id;
     let product_id = desc.product_id;
@@ -763,6 +793,18 @@ pub(crate) async fn maybe_start_hid_boot_streams(
                     );
                 }
             }
+        }
+
+        if only_kind.is_some_and(|kind| target.kind != kind) {
+            crate::log_info!(target: "usb";
+                "crabusb: hid {:04X}:{:04X} skipping {} target in mouse-only host2 path if#{} ep=0x{:02X}\n",
+                vendor_id,
+                product_id,
+                target.kind.as_str(),
+                target.interface_number,
+                target.in_endpoint
+            );
+            continue;
         }
 
         let active_stream = ActiveHidStream {

@@ -1,4 +1,4 @@
-#![no_std]
+#![cfg_attr(not(umod), no_std)]
 extern crate alloc;
 #[macro_use]
 extern crate log;
