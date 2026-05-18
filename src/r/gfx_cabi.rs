@@ -420,9 +420,9 @@ pub mod cabi {
 
     #[repr(u32)]
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-    pub enum CStream {
-        Stdout = 1,
-        Stderr = 2,
+    pub enum ConsoleStream {
+        Out = 1,
+        Err = 2,
     }
 
     struct StreamTextBuffers {
@@ -438,10 +438,10 @@ pub mod cabi {
             }
         }
 
-        fn pending_mut(&mut self, stream: CStream) -> &mut String {
+        fn pending_mut(&mut self, stream: ConsoleStream) -> &mut String {
             match stream {
-                CStream::Stdout => &mut self.stdout,
-                CStream::Stderr => &mut self.stderr,
+                ConsoleStream::Out => &mut self.stdout,
+                ConsoleStream::Err => &mut self.stderr,
             }
         }
     }
@@ -498,35 +498,35 @@ pub mod cabi {
         );
     }
 
-    fn emit_plain_stream_line(_stream: CStream, line: &str) {
+    fn emit_plain_stream_line(_stream: ConsoleStream, line: &str) {
         crate::globalog::log(format_args!("{}\n", line));
     }
 
-    fn emit_console_stream_line(stream: CStream, line: &str) {
+    fn emit_console_stream_line(stream: ConsoleStream, line: &str) {
         let Some(target) = super::env::console_target() else {
             return;
         };
         match stream {
-            CStream::Stdout => crate::shell2::print_matrix_target_line(&target, line),
-            CStream::Stderr => crate::shell2::print_matrix_target_line(
+            ConsoleStream::Out => crate::shell2::print_matrix_target_line(&target, line),
+            ConsoleStream::Err => crate::shell2::print_matrix_target_line(
                 &target,
                 alloc::format!("error: {}", line).as_str(),
             ),
         }
     }
 
-    fn emit_vm_console_stream_line(stream: CStream, line: &str) {
+    fn emit_vm_console_stream_line(stream: ConsoleStream, line: &str) {
         match stream {
-            CStream::Stdout => {
+            ConsoleStream::Out => {
                 crate::hv::log_active_blueprint_console_line(format_args!("guest: {}", line))
             }
-            CStream::Stderr => {
+            ConsoleStream::Err => {
                 crate::hv::log_active_blueprint_console_line(format_args!("guest error: {}", line))
             }
         }
     }
 
-    fn process_vm_text_stream(stream: CStream, text: &str) {
+    fn process_vm_text_stream(stream: ConsoleStream, text: &str) {
         let cpu = current_cpu_key();
         let mut lines = VecDeque::new();
 
@@ -554,7 +554,7 @@ pub mod cabi {
         }
     }
 
-    fn process_text_stream(stream: CStream, text: &str) {
+    fn process_text_stream(stream: ConsoleStream, text: &str) {
         let cpu = current_cpu_key();
         let mut lines = VecDeque::new();
 
@@ -610,7 +610,7 @@ pub mod cabi {
     }
 
     #[inline]
-    pub fn write_bytes(stream: CStream, bytes: &[u8]) {
+    pub fn write_console_bytes(stream: ConsoleStream, bytes: &[u8]) {
         if bytes.is_empty() {
             return;
         }
@@ -643,12 +643,12 @@ pub mod cabi {
         }
 
         let stream = match stream {
-            1 => CStream::Stdout,
-            2 => CStream::Stderr,
-            _ => CStream::Stdout,
+            1 => ConsoleStream::Out,
+            2 => ConsoleStream::Err,
+            _ => ConsoleStream::Out,
         };
         let slice = core::slice::from_raw_parts(bytes, len);
-        write_bytes(stream, slice);
+        write_console_bytes(stream, slice);
     }
 
     #[unsafe(no_mangle)]
@@ -848,12 +848,11 @@ pub mod cabi {
         let Ok(text) = core::str::from_utf8(data) else {
             return 0;
         };
-        if crate::hv::current_hull_guest_context_vm_id().is_some() {
-            crate::hv::log_active_blueprint_console_line(format_args!("guest: {}", text));
-            return data_len;
-        }
         if let Some(target) = super::env::console_target() {
             crate::shell2::print_matrix_target_line(&target, text);
+            if crate::hv::current_hull_guest_context_vm_id().is_some() {
+                crate::hv::log_active_blueprint_console_line(format_args!("guest: {}", text));
+            }
         } else {
             crate::shell2::print_shell_line(&crate::shell2::UART1_COM1_BACKEND, text);
         }
