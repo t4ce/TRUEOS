@@ -50,6 +50,21 @@ pub enum ShaderServiceError {
     Fs(crate::disc::block::Error),
 }
 
+impl core::fmt::Display for ShaderServiceError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::NoRoot => f.write_str("no TRUEOSFS root"),
+            Self::BadPath => f.write_str("bad shader path"),
+            Self::NotFound => f.write_str("shader source not found"),
+            Self::InvalidUtf8 => f.write_str("shader source is not utf-8"),
+            Self::Parse(message) => write!(f, "parse: {}", message),
+            Self::Emit(message) => write!(f, "emit: {}", message),
+            Self::WriteFailed => f.write_str("artifact write failed"),
+            Self::Fs(err) => write!(f, "fs: {:?}", err),
+        }
+    }
+}
+
 impl From<crate::disc::block::Error> for ShaderServiceError {
     fn from(value: crate::disc::block::Error) -> Self {
         Self::Fs(value)
@@ -121,7 +136,7 @@ async fn compile_scan_dir(id: u64) -> Result<usize, ShaderServiceError> {
             Err(err) => {
                 crate::log_warn!(
                     target: "service";
-                    "shader-compile: job={} source={} failed err={:?}\n",
+                    "shader-compile: job={} source={} failed err={}\n",
                     id,
                     path.as_str(),
                     err
@@ -248,7 +263,7 @@ pub async fn shader_compile_service_task() {
                     ),
                     Err(err) => crate::log_warn!(
                         target: "service";
-                        "shader-compile: job={} source={} failed err={:?}\n",
+                        "shader-compile: job={} source={} failed err={}\n",
                         id,
                         path.as_str(),
                         err
@@ -264,7 +279,7 @@ pub async fn shader_compile_service_task() {
                 ),
                 Err(err) => crate::log_warn!(
                     target: "service";
-                    "shader-compile: scan job={} failed err={:?}\n",
+                    "shader-compile: scan job={} failed err={}\n",
                     id,
                     err
                 ),
