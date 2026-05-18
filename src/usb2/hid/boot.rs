@@ -379,7 +379,6 @@ async fn hid_boot_stream_task(
     let mut set_idle_ok = false;
 
     if let Err(err) = device
-        .ep_ctrl()
         .set_configuration(target.configuration_value)
         .await
     {

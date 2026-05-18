@@ -435,7 +435,6 @@ pub async fn midi_stream_task(mut device: Device, controller_id: u32, target: Mi
     };
 
     if let Err(err) = device
-        .ep_ctrl()
         .set_configuration(target.configuration_value)
         .await
     {
