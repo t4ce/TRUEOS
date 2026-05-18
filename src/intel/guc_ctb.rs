@@ -155,11 +155,7 @@ pub(crate) fn init_and_enable(dev: crate::intel::Dev) -> bool {
     ok
 }
 
-pub(crate) fn send_hxg_action(
-    dev: crate::intel::Dev,
-    action: u32,
-    args: &[u32],
-) -> CtbSendResult {
+pub(crate) fn send_hxg_action(dev: crate::intel::Dev, action: u32, args: &[u32]) -> CtbSendResult {
     if !enabled() {
         return CtbSendResult {
             accepted: false,

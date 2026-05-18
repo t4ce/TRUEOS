@@ -91,7 +91,9 @@ pub(crate) fn load_fw() -> crate::intel::Buf {
 
 pub(crate) fn map_rsa(dev: crate::intel::Dev) -> bool {
     let Some(rsa) = *RSA_DATA.lock() else {
-        crate::log!("intel/huc: rsa-map skipped reason=rsa-stage-missing fallback=firmware-inline-rsa\n");
+        crate::log!(
+            "intel/huc: rsa-map skipped reason=rsa-stage-missing fallback=firmware-inline-rsa\n"
+        );
         return true;
     };
     let mapped = crate::intel::map_ggtt(dev, rsa.phys, rsa.len, rsa.gpu);
@@ -221,7 +223,11 @@ fn huc_auth_verified(status: u32) -> bool {
 }
 
 fn stage_rsa_only(blob: &[u8], rsa_offset: usize, rsa_size: usize) -> u64 {
-    if rsa_size == 0 || rsa_offset.checked_add(rsa_size).map_or(true, |end| end > blob.len()) {
+    if rsa_size == 0
+        || rsa_offset
+            .checked_add(rsa_size)
+            .map_or(true, |end| end > blob.len())
+    {
         *RSA_DATA.lock() = None;
         return crate::intel::GPU_VA_HUC_FW_BASE + rsa_offset as u64;
     }

@@ -762,6 +762,78 @@ fn emit_jpeg_bsd_object(
     Some(())
 }
 
+fn nv12_tiled_surface_bytes(coded_height: u32, output_pitch: usize) -> Option<usize> {
+    const YTILE_H: usize = 32;
+
+    if coded_height == 0 || output_pitch == 0 {
+        return None;
+    }
+    let coded_height = coded_height as usize;
+    let chroma_y_offset = media::align_up_u32(coded_height as u32, YTILE_H as u32) as usize;
+    let total_height = chroma_y_offset + coded_height.div_ceil(2);
+    Some(total_height.div_ceil(YTILE_H) * output_pitch * YTILE_H)
+}
+
+fn clear_output_surface_to_nv12_black(
+    output_surface_virt: *mut u8,
+    output_surface_bytes: usize,
+    coded_width: u32,
+    coded_height: u32,
+    output_pitch: usize,
+) -> bool {
+    const YTILE_W: usize = 128;
+    const YTILE_H: usize = 32;
+
+    #[inline(always)]
+    fn ytile_offset(byte_x: usize, row_y: usize, tiles_per_row: usize) -> usize {
+        let tile_col = byte_x / YTILE_W;
+        let tile_row = row_y / YTILE_H;
+        let in_x = byte_x % YTILE_W;
+        let in_y = row_y % YTILE_H;
+        let oword_col = in_x / 16;
+        let byte_in_oword = in_x % 16;
+        let within_tile = oword_col * 512 + in_y * 16 + byte_in_oword;
+        (tile_row * tiles_per_row + tile_col) * 4096 + within_tile
+    }
+
+    if output_surface_virt.is_null()
+        || coded_width == 0
+        || coded_height == 0
+        || output_pitch < coded_width as usize
+        || !output_pitch.is_multiple_of(YTILE_W)
+    {
+        return false;
+    }
+
+    let coded_width = coded_width as usize;
+    let coded_height = coded_height as usize;
+    let tiles_per_row = output_pitch / YTILE_W;
+    let chroma_y_offset = media::align_up_u32(coded_height as u32, YTILE_H as u32) as usize;
+    let Some(needed) = nv12_tiled_surface_bytes(coded_height as u32, output_pitch) else {
+        return false;
+    };
+    if output_surface_bytes < needed {
+        return false;
+    }
+
+    unsafe {
+        core::ptr::write_bytes(output_surface_virt, 0, output_surface_bytes);
+    }
+
+    for chroma_row in 0..coded_height.div_ceil(2) {
+        let surface_row = chroma_y_offset + chroma_row;
+        for byte_x in 0..coded_width {
+            let offset = ytile_offset(byte_x, surface_row, tiles_per_row);
+            unsafe {
+                core::ptr::write_volatile(output_surface_virt.add(offset), 0x80);
+            }
+        }
+    }
+
+    super::dma_flush(output_surface_virt, output_surface_bytes);
+    true
+}
+
 fn build_jpeg_smoke_batch_skeleton(
     batch_virt: *mut u8,
     batch_bytes: usize,
@@ -1118,6 +1190,20 @@ pub(super) fn submit_jpeg_smoke_batch(
         .map(|scan_info| scan_info.input_format)
         .unwrap_or(0);
     let jpeg_output_format = jpeg_output_format_from_input(jpeg_input_format);
+    let output_surface_bytes =
+        nv12_tiled_surface_bytes(coded_height, output_surface_pitch).unwrap_or(0);
+    if output_surface_bytes == 0 || output_surface_bytes > backing.output_surface_bytes {
+        return None;
+    }
+    if !clear_output_surface_to_nv12_black(
+        backing.output_surface_virt,
+        backing.output_surface_bytes,
+        coded_width,
+        coded_height,
+        output_surface_pitch,
+    ) {
+        return None;
+    }
     let surface_dw2 =
         ((coded_width.saturating_sub(1)) << 4) | ((coded_height.saturating_sub(1)) << 18);
     let surface_dw3 = (1 << 1)
@@ -1137,7 +1223,7 @@ pub(super) fn submit_jpeg_smoke_batch(
         windows.result_gpu_addr,
         windows.bitstream_gpu_addr,
         windows.output_surface_gpu_addr,
-        backing.output_surface_bytes,
+        output_surface_bytes,
         bitstream_bytes,
         coded_width,
         coded_height,
@@ -1244,13 +1330,10 @@ pub(super) fn submit_jpeg_smoke_batch(
         poll_iters += 1;
     }
 
-    super::dma_flush(backing.output_surface_virt, backing.output_surface_bytes);
+    super::dma_flush(backing.output_surface_virt, output_surface_bytes);
     super::dma_flush(backing.result_virt, backing.result_bytes);
     let output_surface = unsafe {
-        core::slice::from_raw_parts(
-            backing.output_surface_virt as *const u8,
-            backing.output_surface_bytes,
-        )
+        core::slice::from_raw_parts(backing.output_surface_virt as *const u8, output_surface_bytes)
     };
     let output_surface_probe = media::probe_output_surface(
         output_surface,
@@ -1321,7 +1404,7 @@ pub(super) fn submit_jpeg_smoke_batch(
             .map(|scan_info| scan_info.mcu_count)
             .unwrap_or(0),
         output_surface_pitch,
-        output_surface_bytes: backing.output_surface_bytes,
+        output_surface_bytes,
         surface_dw2,
         surface_dw3,
         jpeg_pic_dw1,

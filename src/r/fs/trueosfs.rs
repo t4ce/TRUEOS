@@ -1411,6 +1411,7 @@ async fn ensure_index_async(
             if let Some(m) = roots.iter_mut().find(|m| m.disk_id == disk_id) {
                 if m.cache_gen == start_cache_gen {
                     m.index = Some(tree);
+                    crate::r::readiness::set(crate::r::readiness::TRUEOSFS_INDEX_READY);
                 } else {
                     needs_rebuild = true;
                 }
