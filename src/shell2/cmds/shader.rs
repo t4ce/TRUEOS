@@ -40,7 +40,7 @@ fn list(io: &'static dyn ShellBackend2) {
             }
         }
         Err(err) => {
-            print_shell_line(io, format!("shader: list failed err={:?}", err).as_str());
+            print_shell_line(io, format!("shader: list failed err={}", err).as_str());
         }
     }
 }
@@ -59,7 +59,7 @@ fn compile(io: &'static dyn ShellBackend2, path: Option<&str>) {
                 .as_str(),
             ),
             Err(err) => {
-                print_shell_line(io, format!("shader: queue failed err={:?}", err).as_str())
+                print_shell_line(io, format!("shader: queue failed err={}", err).as_str())
             }
         },
         None => {
@@ -98,7 +98,7 @@ fn demo(io: &'static dyn ShellBackend2) {
             .as_str(),
         ),
         Err(err) => {
-            print_shell_line(io, format!("shader: demo queue failed err={:?}", err).as_str())
+            print_shell_line(io, format!("shader: demo queue failed err={}", err).as_str())
         }
     }
 }
@@ -121,7 +121,7 @@ fn compile_now(io: &'static dyn ShellBackend2, path: Option<&str>) {
             )
             .as_str(),
         ),
-        Err(err) => print_shell_line(io, format!("shader: compile failed err={:?}", err).as_str()),
+        Err(err) => print_shell_line(io, format!("shader: compile failed err={}", err).as_str()),
     }
 }
 
