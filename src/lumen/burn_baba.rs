@@ -354,7 +354,7 @@ pub(crate) fn share_matvec_rowmajor_bf16(n_rows: usize, k_dim: usize, chunk_rows
         "upload-gfx125-c-store-kernel"
     };
     crate::log!(
-        "burn-baba: gpgpu-dispatch-gate director={} role={} cgp_backend={} output_owner={} enabled={} h2g_mmio={} input_buffers_ab_in_ggtt={} ctb_enabled=0 guc_context_registered=0 guc_sched_enabled=0 eu_kernel_uploaded={} eu_walker_encoded={} eu_walker_submitted={} eu_walker_retired={} eu_execution_runs={} eu_dispatch_delta={} result_c_slot={} result_c_value=0x{:08X} result_c_changed_by_eu={} cpu_reads_c_back={} arena_ready={} cpu_reference_compare=1 dispatch=disabled blocker={} next={} net_gpu_role={} net_gpu_action=deferred does_not_prove=gpu_matmul\n",
+        "burn-baba: gpgpu-dispatch-gate director={} role={} cgp_backend={} output_owner={} enabled={} h2g_mmio={} input_buffers_ab_in_ggtt={} ctb_enabled={} guc_context_registered=0 guc_sched_enabled=0 eu_kernel_uploaded={} eu_walker_encoded={} eu_walker_submitted={} eu_walker_retired={} eu_execution_runs={} eu_dispatch_delta={} result_c_slot={} result_c_value=0x{:08X} result_c_changed_by_eu={} cpu_reads_c_back={} arena_ready={} cpu_reference_compare=1 dispatch=disabled blocker={} next={} net_gpu_role={} net_gpu_action=deferred does_not_prove=gpu_matmul\n",
         director.director,
         director.local_gpu_role.as_str(),
         gpu_burn_baby.name,
@@ -362,6 +362,7 @@ pub(crate) fn share_matvec_rowmajor_bf16(n_rows: usize, k_dim: usize, chunk_rows
         LOCAL_GPGPU_PROOF_BACKEND_ENABLED as u8,
         crate::intel::guc_h2g_mmio_accepted() as u8,
         gpu.accepted as u8,
+        crate::intel::guc_ctb_enabled() as u8,
         gpu.eu_kernel_uploaded as u8,
         gpu.eu_walker_encoded as u8,
         gpu.eu_walker_submitted as u8,

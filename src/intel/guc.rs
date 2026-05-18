@@ -317,7 +317,7 @@ pub(crate) fn log_submission_contract(dev: crate::intel::Dev, label: &'static st
     let scratch_devid = crate::intel::mmio_read(dev, SOFT_SCRATCH_BASE + 6 * 4);
 
     crate::log!(
-        "intel/guc: submission-contract label={} ready={} status=0x{:08X} bootrom={} ukernel={} auth=0x{:X} doorbells={} dist_dbs=0x{:08X} scratch0=0x{:08X} scratch_ads=0x{:08X} scratch_devid=0x{:08X} h2g_mmio_probed={} h2g_mmio_accepted={} h2g_mmio_response=0x{:08X} submission=rcs-execlist guc_sched=not-enabled-yet next=ctb-h2g-context-register does_not_prove=guc_owns_batch_submission\n",
+        "intel/guc: submission-contract label={} ready={} status=0x{:08X} bootrom={} ukernel={} auth=0x{:X} doorbells={} dist_dbs=0x{:08X} scratch0=0x{:08X} scratch_ads=0x{:08X} scratch_devid=0x{:08X} h2g_mmio_probed={} h2g_mmio_accepted={} h2g_mmio_response=0x{:08X} ctb_enabled={} submission=rcs-execlist guc_sched=transport-ready-context-not-registered next=guc-register-context-and-submit-queue does_not_prove=guc_owns_batch_submission\n",
         label,
         ready as u8,
         status,
@@ -332,6 +332,7 @@ pub(crate) fn log_submission_contract(dev: crate::intel::Dev, label: &'static st
         H2G_MMIO_PROBED.load(Ordering::Acquire) as u8,
         H2G_MMIO_ACCEPTED.load(Ordering::Acquire) as u8,
         H2G_MMIO_RESPONSE.load(Ordering::Acquire),
+        crate::intel::guc_ctb_enabled() as u8,
     );
 }
 

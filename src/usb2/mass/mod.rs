@@ -26,7 +26,6 @@ pub(super) const USB_PROTO_UAS: u8 = 0x62;
 pub(super) const BOT_IO_RETRIES: usize = 8;
 pub(super) const BOT_IO_TIMEOUT_MS: u64 = crate::allcaps::storage::USB_MASS_BOT_IO_TIMEOUT_MS;
 pub(super) const UAS_IO_TIMEOUT_MS: u64 = crate::allcaps::storage::USB_MASS_UAS_IO_TIMEOUT_MS;
-pub(super) const UAS_STATUS_GRACE_MS: u64 = 100;
 pub(super) const BOT_RECOVERY_SETTLE_MS: u64 =
     crate::allcaps::storage::USB_MASS_BOT_RECOVERY_SETTLE_MS;
 

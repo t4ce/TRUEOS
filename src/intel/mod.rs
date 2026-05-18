@@ -17,6 +17,7 @@ pub(crate) mod format;
 mod fw_probe;
 mod gpgpu;
 mod guc;
+pub(crate) mod guc_ctb;
 pub mod hda;
 mod huc;
 mod hw_cursor;
@@ -34,8 +35,10 @@ use spin::Mutex;
 
 pub(crate) const INTEL_VENDOR_ID: u16 = 0x8086;
 pub(crate) const PCI_CLASS_DISPLAY: u8 = 0x03;
+pub(crate) const GPU_VA_HUC_FW_BASE: u64 = 0x0020_0000;
+pub(crate) const GPU_VA_HUC_RSA_BASE: u64 = 0x0030_0000;
+pub(crate) const GPU_VA_GUC_CTB_BASE: u64 = 0x0700_0000;
 pub(crate) const GPU_VA_GUC_FW_BASE: u64 = 0x0085_0000;
-pub(crate) const GPU_VA_HUC_FW_BASE: u64 = 0x0090_0000;
 pub(crate) const GPU_VA_GUC_ADS_BASE: u64 = 0x0100_0000;
 pub(crate) const GPU_VA_DISPLAY_PRIMARY_BASE: u64 = 0x0200_0000;
 pub(crate) const GPU_VA_DISPLAY_OVERLAY_BASE: u64 = 0x0300_0000;
@@ -361,12 +364,28 @@ pub fn init_once() {
         crate::log!("intel/guc: ads alloc failed private_data=0x{:X}\n", fw.private_data_size);
         return;
     }
+    let huc_mapped = huc_fw.len != 0
+        && map_ggtt(dev, huc_fw.phys, huc_fw.len, huc_fw.gpu)
+        && self::huc::map_rsa(dev);
     if !map_ggtt(dev, fw.phys, fw.len, fw.gpu) || !map_ggtt(dev, ads.phys, ads.len, ads.gpu) {
         crate::log!("intel/guc: ggtt map failed fw_len=0x{:X} ads_len=0x{:X}\n", fw.len, ads.len);
         return;
     }
     ggtt_invalidate(dev);
     forcewake(dev);
+    let huc_uploaded = if huc_fw.len != 0 {
+        if huc_mapped {
+            self::huc::upload_via_dma(dev, huc_fw)
+        } else {
+            crate::log!(
+                "intel/huc: dma-upload skipped reason=ggtt-map-failed fw_len=0x{:X}\n",
+                huc_fw.len
+            );
+            false
+        }
+    } else {
+        false
+    };
     let ready = self::guc::bootstrap(dev, fw, ads);
     let status = self::guc::status(dev);
     let (bootrom, ukernel, auth) = self::guc::describe_status(status);
@@ -379,17 +398,14 @@ pub fn init_once() {
         auth
     );
     if ready {
-        self::guc::prove_h2g_mmio_once(dev, "boot-control-ctb-disable");
-        if huc_fw.len != 0 {
-            if map_ggtt(dev, huc_fw.phys, huc_fw.len, huc_fw.gpu) {
-                ggtt_invalidate(dev);
-                self::huc::authenticate_via_guc(dev, huc_fw);
-            } else {
-                crate::log!(
-                    "intel/huc: auth skipped reason=ggtt-map-failed fw_len=0x{:X}\n",
-                    huc_fw.len
-                );
-            }
+        let ctb_ready = self::guc_ctb::init_and_enable(dev);
+        if !ctb_ready {
+            self::guc::prove_h2g_mmio_once(dev, "boot-control-ctb-disable");
+        }
+        if huc_uploaded {
+            self::huc::authenticate_via_guc(dev, huc_fw);
+        } else if huc_fw.len != 0 {
+            crate::log!("intel/huc: auth skipped reason=dma-upload-not-complete\n");
         }
     }
     if DISPLAY_PLANE1_BOOT_DEMO_ENABLED {
@@ -450,6 +466,10 @@ pub fn guc_ready() -> bool {
 
 pub(crate) fn guc_h2g_mmio_accepted() -> bool {
     self::guc::h2g_mmio_accepted()
+}
+
+pub(crate) fn guc_ctb_enabled() -> bool {
+    self::guc_ctb::enabled()
 }
 
 pub fn huc_ready() -> bool {
