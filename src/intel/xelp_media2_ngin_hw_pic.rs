@@ -240,27 +240,18 @@ pub(super) fn jpeg_output_format_from_input(input_format: u8) -> u8 {
 }
 
 fn jpeg_frame_blocks_minus1(input_format: u8, width: u32, height: u32) -> (u32, u32) {
+    let _ = input_format;
+    (
+        ceil_div_u32(width.max(8), 8).saturating_sub(1),
+        ceil_div_u32(height.max(8), 8).saturating_sub(1),
+    )
+}
+
+fn jpeg_decode_surface_height(input_format: u8, height: u32) -> u32 {
     match input_format {
-        3 | 5 => (
-            ceil_div_u32(width.max(8), 8).saturating_sub(1),
-            ceil_div_u32(height.max(8), 8).saturating_sub(1),
-        ),
-        4 => (
-            ceil_div_u32(width.max(32), 32)
-                .saturating_mul(4)
-                .saturating_sub(1),
-            ceil_div_u32(height.max(32), 32)
-                .saturating_mul(4)
-                .saturating_sub(1),
-        ),
-        _ => (
-            ceil_div_u32(width.max(16), 16)
-                .saturating_mul(2)
-                .saturating_sub(1),
-            ceil_div_u32(height.max(16), 16)
-                .saturating_mul(2)
-                .saturating_sub(1),
-        ),
+        3 | 5 => media::align_up_u32(height.max(8), 8),
+        4 => media::align_up_u32(height.max(32), 32),
+        _ => media::align_up_u32(height.max(16), 16),
     }
 }
 
@@ -919,6 +910,7 @@ fn build_jpeg_smoke_batch_skeleton(
     let jpeg_input_format = jpeg_scan_info
         .map(|scan_info| scan_info.input_format)
         .unwrap_or(0);
+    let decode_surface_height = jpeg_decode_surface_height(jpeg_input_format, coded_height);
     let (frame_width_blocks_minus1, frame_height_blocks_minus1) =
         jpeg_frame_blocks_minus1(jpeg_input_format, coded_width, coded_height);
     let pipe_mode_dw1 =
@@ -1041,7 +1033,8 @@ fn build_jpeg_smoke_batch_skeleton(
         ),
     )?;
     batch[surface + 2] =
-        ((coded_width.saturating_sub(1)) << 4) | ((coded_height.saturating_sub(1)) << 18);
+        ((coded_width.saturating_sub(1)) << 4)
+            | ((decode_surface_height.saturating_sub(1)) << 18);
     batch[surface + 3] = (1 << 1) | 1 | ((output_pitch.saturating_sub(1)) << 3) | (4 << 28);
     batch[surface + 4] = chroma_y_offset;
     batch[surface + 5] = cr_y_offset;
@@ -1237,6 +1230,7 @@ pub(super) fn submit_jpeg_smoke_batch(
         .map(|scan_info| scan_info.input_format)
         .unwrap_or(0);
     let jpeg_output_format = jpeg_output_format_from_input(jpeg_input_format);
+    let decode_surface_height = jpeg_decode_surface_height(jpeg_input_format, coded_height);
     let (frame_width_blocks_minus1, frame_height_blocks_minus1) =
         jpeg_frame_blocks_minus1(jpeg_input_format, coded_width, coded_height);
     let (chroma_y_offset, cr_y_offset, output_surface_bytes) =
@@ -1248,13 +1242,14 @@ pub(super) fn submit_jpeg_smoke_batch(
         backing.output_surface_virt,
         backing.output_surface_bytes,
         coded_width,
-        coded_height,
+        decode_surface_height,
         output_surface_pitch,
     ) {
         return None;
     }
     let surface_dw2 =
-        ((coded_width.saturating_sub(1)) << 4) | ((coded_height.saturating_sub(1)) << 18);
+        ((coded_width.saturating_sub(1)) << 4)
+            | ((decode_surface_height.saturating_sub(1)) << 18);
     let surface_dw3 = (1 << 1)
         | 1
         | ((u32::try_from(output_surface_pitch)

@@ -389,6 +389,9 @@ impl MediaSurfaceProbeBand {
 pub(crate) struct MediaSurfaceProbe {
     pub valid: bool,
     pub luma_visible_last_row: MediaSurfaceProbeBand,
+    pub luma_visible_tail8_row: MediaSurfaceProbeBand,
+    pub luma_storage_pad_first_row: MediaSurfaceProbeBand,
+    pub luma_storage_pad_last_row: MediaSurfaceProbeBand,
     pub luma_center_band: MediaSurfaceProbeBand,
     pub luma_prev_mb_row: MediaSurfaceProbeBand,
     pub luma_bottom_mb_row: MediaSurfaceProbeBand,
@@ -406,6 +409,9 @@ impl MediaSurfaceProbe {
         Self {
             valid: false,
             luma_visible_last_row: MediaSurfaceProbeBand::empty(),
+            luma_visible_tail8_row: MediaSurfaceProbeBand::empty(),
+            luma_storage_pad_first_row: MediaSurfaceProbeBand::empty(),
+            luma_storage_pad_last_row: MediaSurfaceProbeBand::empty(),
             luma_center_band: MediaSurfaceProbeBand::empty(),
             luma_prev_mb_row: MediaSurfaceProbeBand::empty(),
             luma_bottom_mb_row: MediaSurfaceProbeBand::empty(),
@@ -882,12 +888,39 @@ pub(super) fn probe_output_surface(
     let prev_luma_rows = bottom_luma_row.min(16);
     let prev_luma_row = bottom_luma_row.saturating_sub(prev_luma_rows);
     let visible_last_row = visible_bottom.saturating_sub(1);
+    let visible_tail8_row = visible_bottom.saturating_sub(8).max(visible_y);
     let center_luma_rows = visible_height.min(16);
     let center_luma_row = visible_y
         .saturating_add(visible_height / 2)
         .saturating_sub(center_luma_rows / 2)
         .min(coded_height.saturating_sub(center_luma_rows));
     let chroma_y_offset = (coded_height + MEDIA_YTILE_H - 1) & !(MEDIA_YTILE_H - 1);
+    let luma_storage_pad_first_row = if chroma_y_offset > coded_height {
+        probe_tiled_rect(
+            output_surface,
+            output_pitch,
+            0,
+            coded_height,
+            coded_width,
+            1,
+            0,
+        )
+    } else {
+        None
+    };
+    let luma_storage_pad_last_row = if chroma_y_offset > coded_height {
+        probe_tiled_rect(
+            output_surface,
+            output_pitch,
+            0,
+            chroma_y_offset.saturating_sub(1),
+            coded_width,
+            1,
+            0,
+        )
+    } else {
+        None
+    };
     let chroma_plane_rows = coded_height.div_ceil(2);
     let chroma_plane_stride_rows =
         (chroma_plane_rows + MEDIA_YTILE_H - 1) & !(MEDIA_YTILE_H - 1);
@@ -907,6 +940,15 @@ pub(super) fn probe_output_surface(
         output_pitch,
         visible_x,
         visible_last_row,
+        visible_width,
+        1,
+        0,
+    );
+    let luma_visible_tail8_row = probe_tiled_rect(
+        output_surface,
+        output_pitch,
+        visible_x,
+        visible_tail8_row,
         visible_width,
         1,
         0,
@@ -1002,6 +1044,7 @@ pub(super) fn probe_output_surface(
         0x80,
     );
     let valid = luma_visible_last_row.is_some()
+        && luma_visible_tail8_row.is_some()
         && luma_center_band.is_some()
         && luma_prev_mb_row.is_some()
         && luma_bottom_mb_row.is_some()
@@ -1015,6 +1058,12 @@ pub(super) fn probe_output_surface(
     MediaSurfaceProbe {
         valid,
         luma_visible_last_row: luma_visible_last_row.unwrap_or_else(MediaSurfaceProbeBand::empty),
+        luma_visible_tail8_row: luma_visible_tail8_row
+            .unwrap_or_else(MediaSurfaceProbeBand::empty),
+        luma_storage_pad_first_row: luma_storage_pad_first_row
+            .unwrap_or_else(MediaSurfaceProbeBand::empty),
+        luma_storage_pad_last_row: luma_storage_pad_last_row
+            .unwrap_or_else(MediaSurfaceProbeBand::empty),
         luma_center_band: luma_center_band.unwrap_or_else(MediaSurfaceProbeBand::empty),
         luma_prev_mb_row: luma_prev_mb_row.unwrap_or_else(MediaSurfaceProbeBand::empty),
         luma_bottom_mb_row: luma_bottom_mb_row.unwrap_or_else(MediaSurfaceProbeBand::empty),
@@ -1044,7 +1093,7 @@ pub(super) fn log_output_surface_probe(
         return;
     }
     crate::log!(
-        "intel/media2: output-probe phase=pre-present engine={} sample={} submit_completed={} y_last(sig=0x{:08X} active={}/{} range={}..{}) y_center(sig=0x{:08X} active={}/{} range={}..{}) y_prev_mb(sig=0x{:08X} active={}/{} range={}..{}) y_bottom_mb(sig=0x{:08X} active={}/{} range={}..{}) cb_center(sig=0x{:08X} active={}/{} range={}..{}) cb_center_hi(sig=0x{:08X} active={}/{} range={}..{}) cb_prev_mb(sig=0x{:08X} active={}/{} range={}..{}) cb_bottom_mb(sig=0x{:08X} active={}/{} range={}..{}) cr_center(sig=0x{:08X} active={}/{} range={}..{}) cr_prev_mb(sig=0x{:08X} active={}/{} range={}..{}) cr_bottom_mb(sig=0x{:08X} active={}/{} range={}..{})\n",
+        "intel/media2: output-probe phase=pre-present engine={} sample={} submit_completed={} y_last(sig=0x{:08X} active={}/{} range={}..{}) y_tail8(sig=0x{:08X} active={}/{} range={}..{}) y_pad_first(sig=0x{:08X} active={}/{} range={}..{}) y_pad_last(sig=0x{:08X} active={}/{} range={}..{}) y_center(sig=0x{:08X} active={}/{} range={}..{}) y_prev_mb(sig=0x{:08X} active={}/{} range={}..{}) y_bottom_mb(sig=0x{:08X} active={}/{} range={}..{}) cb_center(sig=0x{:08X} active={}/{} range={}..{}) cb_center_hi(sig=0x{:08X} active={}/{} range={}..{}) cb_prev_mb(sig=0x{:08X} active={}/{} range={}..{}) cb_bottom_mb(sig=0x{:08X} active={}/{} range={}..{}) cr_center(sig=0x{:08X} active={}/{} range={}..{}) cr_prev_mb(sig=0x{:08X} active={}/{} range={}..{}) cr_bottom_mb(sig=0x{:08X} active={}/{} range={}..{})\n",
         engine_name,
         sample_idx,
         submit_completed,
@@ -1053,6 +1102,21 @@ pub(super) fn log_output_surface_probe(
         probe.luma_visible_last_row.sample_count,
         probe.luma_visible_last_row.min_value,
         probe.luma_visible_last_row.max_value,
+        probe.luma_visible_tail8_row.signature,
+        probe.luma_visible_tail8_row.active_samples,
+        probe.luma_visible_tail8_row.sample_count,
+        probe.luma_visible_tail8_row.min_value,
+        probe.luma_visible_tail8_row.max_value,
+        probe.luma_storage_pad_first_row.signature,
+        probe.luma_storage_pad_first_row.active_samples,
+        probe.luma_storage_pad_first_row.sample_count,
+        probe.luma_storage_pad_first_row.min_value,
+        probe.luma_storage_pad_first_row.max_value,
+        probe.luma_storage_pad_last_row.signature,
+        probe.luma_storage_pad_last_row.active_samples,
+        probe.luma_storage_pad_last_row.sample_count,
+        probe.luma_storage_pad_last_row.min_value,
+        probe.luma_storage_pad_last_row.max_value,
         probe.luma_center_band.signature,
         probe.luma_center_band.active_samples,
         probe.luma_center_band.sample_count,
@@ -1109,6 +1173,9 @@ pub(super) fn log_output_surface_probe(
 pub(super) fn output_surface_has_decoded_detail(probe: &MediaSurfaceProbe) -> bool {
     probe.valid
         && (probe.luma_visible_last_row.has_range()
+            || probe.luma_visible_tail8_row.has_range()
+            || probe.luma_storage_pad_first_row.has_range()
+            || probe.luma_storage_pad_last_row.has_range()
             || probe.luma_center_band.has_range()
             || probe.luma_prev_mb_row.has_range()
             || probe.luma_bottom_mb_row.has_range()

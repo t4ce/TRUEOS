@@ -1012,24 +1012,16 @@ pub async fn bsp_service(controller_index: usize) {
                                 info.index
                             );
                         }
-                        if intel_settle_probe
-                            && !EVENT_HANDLER_READY[info.index].load(Ordering::Acquire)
-                        {
-                            if usb_log_all_enabled() {
-                                crate::log!(
-                                    "crabusb: controller {} installing event pump before settled probe\n",
-                                    info.index
-                                );
-                            }
-                            install_event_handler(info.index, host.create_event_handler());
-                            if let Ok(token) = event_pump_task(info.index) {
-                                spawner.spawn(token);
-                            }
-                        }
                         probe_and_bind(&mut host, info, &spawner).await;
                         hotplug_poll_deadline =
                             Instant::now() + EmbassyDuration::from_millis(HOTPLUG_POLL_MS);
-                        if !intel_settle_probe {
+                        if !EVENT_HANDLER_READY[info.index].load(Ordering::Acquire) {
+                            if usb_log_all_enabled() {
+                                crate::log!(
+                                    "crabusb: controller {} installing event pump after settled probe\n",
+                                    info.index
+                                );
+                            }
                             install_event_handler(info.index, host.create_event_handler());
                             if let Ok(token) = event_pump_task(info.index) {
                                 spawner.spawn(token);

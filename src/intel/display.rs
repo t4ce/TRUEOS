@@ -765,6 +765,9 @@ fn aspect_fit_size(
     if src_width == 0 || src_height == 0 || dst_width == 0 || dst_height == 0 {
         return (0, 0);
     }
+    if src_width <= dst_width && src_height <= dst_height {
+        return (src_width, src_height);
+    }
     if dst_width.saturating_mul(src_height) <= dst_height.saturating_mul(src_width) {
         let copy_w = dst_width.max(1);
         let copy_h = src_height
