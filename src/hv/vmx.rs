@@ -39,7 +39,6 @@ pub const VMCS_CTRL_SECONDARY: u64 = 0x401E;
 pub const VMCS_CTRL_EPT_POINTER: u64 = 0x201A;
 pub const VMCS_CTRL_VMCS_LINK_POINTER: u64 = 0x2800;
 
-pub const VMCS_CTRL_VPID: u64 = 0x0000;
 pub const VMCS_TSC_OFFSET: u64 = 0x2010;
 pub const VMCS_CTRL_VMFUNC_CONTROLS: u64 = 0x2018;
 pub const VMCS_CTRL_EPTP_LIST_ADDR: u64 = 0x2024;
@@ -139,7 +138,6 @@ pub const PROC_BASED_VMX_PREEMPTION_TIMER: u64 = 1 << 6;
 pub const PROC_BASED_ACTIVATE_SECONDARY: u64 = 1 << 31;
 pub const PROC2_BASED_ENABLE_EPT: u64 = 1 << 1;
 pub const PROC_BASED_USE_TSC_OFFSETTING: u64 = 1 << 3;
-pub const PROC2_BASED_ENABLE_VPID: u64 = 1 << 5;
 pub const PROC2_BASED_ENABLE_VMFUNC: u64 = 1 << 13;
 pub const VMFUNC_EPTP_SWITCHING: u64 = 1 << 0;
 pub const EXIT_CTL_HOST_ADDR_SPACE_SIZE: u64 = 1 << 9;
@@ -344,34 +342,6 @@ pub fn vmptrld(pa: u64) -> bool {
             "vmptrld [{pa}]",
             "setna {fail}",
             pa = in(reg) &pa_ptr,
-            fail = lateout(reg_byte) fail,
-            options(nostack, preserves_flags),
-        );
-        fail == 0
-    }
-}
-
-pub fn vmptrst() -> Option<u64> {
-    let mut out: u64 = !0u64;
-    unsafe {
-        let mut fail: u8;
-        core::arch::asm!(
-            "vmptrst [{out}]",
-            "setna {fail}",
-            out = in(reg) &mut out,
-            fail = lateout(reg_byte) fail,
-            options(nostack, preserves_flags),
-        );
-        if fail == 0 { Some(out) } else { None }
-    }
-}
-
-pub fn vmxoff() -> bool {
-    unsafe {
-        let mut fail: u8;
-        core::arch::asm!(
-            "vmxoff",
-            "setna {fail}",
             fail = lateout(reg_byte) fail,
             options(nostack, preserves_flags),
         );

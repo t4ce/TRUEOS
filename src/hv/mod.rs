@@ -28,7 +28,7 @@ use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
 use embassy_executor::{Spawner, task};
 use embassy_time::{Duration as EmbassyDuration, Timer};
-use heapless::{Deque, String};
+use heapless::String;
 use spin::Mutex;
 use x86_64::instructions::tables::{sgdt, sidt};
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr3, Cr4, Cr4Flags};
@@ -45,7 +45,6 @@ pub use vmui2::*;
 
 const MAIN_LOOP_MARKER: &[u8] = b"main: entering executor loop";
 const VMX_PAGE_SIZE: usize = 4096;
-const HV_LOG_CAP: usize = crate::allcaps::hv::LOG_CAP;
 const HV_LOG_LINE: usize = crate::allcaps::hv::LOG_LINE_BYTES;
 pub const TRUEOS_VM_ID_LIMIT: usize = crate::allcaps::hv::VM_ID_LIMIT;
 const TRUEOS_VM_CPU_SLOT_LIMIT: usize = crate::allcaps::hv::VM_CPU_SLOT_LIMIT;
@@ -84,7 +83,6 @@ static GUEST_KERNEL_GS_BASE_BY_VM: [AtomicU64; TRUEOS_VM_ID_LIMIT] =
     [const { AtomicU64::new(0) }; TRUEOS_VM_ID_LIMIT];
 static VMX_ROOT_ACTIVE_BY_CPU: [AtomicBool; TRUEOS_VM_CPU_SLOT_LIMIT] =
     [const { AtomicBool::new(false) }; TRUEOS_VM_CPU_SLOT_LIMIT];
-static HV_LOG_SEQ: AtomicU64 = AtomicU64::new(0);
 static HV_CONTROL_NUDGE_SEQ: AtomicU64 = AtomicU64::new(1);
 static VM_BOOT_MODES: [Mutex<VmBootMode>; TRUEOS_VM_ID_LIMIT] =
     [const { Mutex::new(VmBootMode::Hull) }; TRUEOS_VM_ID_LIMIT];
@@ -92,14 +90,6 @@ static BLUEPRINT_LAUNCH_STATES: [Mutex<Option<BlueprintLaunchState>>; TRUEOS_VM_
     [const { Mutex::new(None) }; TRUEOS_VM_ID_LIMIT];
 static BLUEPRINT_PROCESS_CONTEXTS: [Mutex<Option<BlueprintProcessContext>>; TRUEOS_VM_ID_LIMIT] =
     [const { Mutex::new(None) }; TRUEOS_VM_ID_LIMIT];
-
-#[derive(Clone)]
-struct HvLogEntry {
-    seq: u64,
-    msg: String<HV_LOG_LINE>,
-}
-
-static HV_LOG_RING: Mutex<Deque<HvLogEntry, HV_LOG_CAP>> = Mutex::new(Deque::new());
 
 pub static mut VMXON_REGIONS: [VmxPage; TRUEOS_VM_CPU_SLOT_LIMIT] =
     [const { VmxPage([0u8; VMX_PAGE_SIZE]) }; TRUEOS_VM_CPU_SLOT_LIMIT];
@@ -278,7 +268,6 @@ pub(crate) struct BlueprintProcessContext {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum StopError {
     UnsupportedVmId,
-    NotRunning,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -537,18 +526,6 @@ pub fn hvlogf(args: core::fmt::Arguments<'_>) {
         return;
     }
 
-    let seq = HV_LOG_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
-    {
-        let mut ring = HV_LOG_RING.lock();
-        if ring.is_full() {
-            let _ = ring.pop_front();
-        }
-        let _ = ring.push_back(HvLogEntry {
-            seq,
-            msg: line.clone(),
-        });
-    }
-
     let level = hvlog_console_level(line.as_str());
     if hvlog_console_enabled(line.as_str(), level) {
         crate::globalog::log_with_concept_level("hv", level, format_args!("{}\n", line.as_str()));
@@ -606,14 +583,6 @@ pub fn start(
     stack_mb: Option<usize>,
 ) -> Result<(), StartError> {
     start_with_mode(vm_id, spawner, io, VmBootMode::Hull, stack_mb)
-}
-
-pub fn start_full(
-    vm_id: u8,
-    spawner: &Spawner,
-    io: &'static dyn ShellBackend2,
-) -> Result<(), StartError> {
-    start_with_mode(vm_id, spawner, io, VmBootMode::Full, None)
 }
 
 fn start_with_mode(
@@ -2180,141 +2149,5 @@ fn setup_vmcs_for_launch(
     vmwrite(VMCS_GUEST_TR_AR, 0x008B)?;
     vmwrite(VMCS_GUEST_LDTR_AR, 0x10000)?;
 
-    Ok(())
-}
-
-fn vmx_smoke() -> Result<(), &'static str> {
-    let caps = status();
-    if !caps.vendor_intel || !caps.has_msr || !caps.has_vmx {
-        return Err("vmx unsupported");
-    }
-
-    let cr0_fixed0 = unsafe { Msr::new(vmx::IA32_VMX_CR0_FIXED0).read() };
-    let cr0_fixed1 = unsafe { Msr::new(vmx::IA32_VMX_CR0_FIXED1).read() };
-    let cr4_fixed0 = unsafe { Msr::new(vmx::IA32_VMX_CR4_FIXED0).read() };
-    let cr4_fixed1 = unsafe { Msr::new(vmx::IA32_VMX_CR4_FIXED1).read() };
-
-    let mut cr0 = Cr0::read().bits();
-    let mut cr4 = Cr4::read().bits();
-    cr0 = (cr0 | cr0_fixed0) & cr0_fixed1;
-    cr4 = (cr4 | cr4_fixed0) & cr4_fixed1;
-    cr4 |= Cr4Flags::VIRTUAL_MACHINE_EXTENSIONS.bits();
-    unsafe {
-        Cr0::write(Cr0Flags::from_bits_truncate(cr0));
-        Cr4::write(Cr4Flags::from_bits_truncate(cr4));
-    }
-
-    let basic = unsafe { Msr::new(vmx::IA32_VMX_BASIC).read() };
-    let revision = (basic & 0x7fff_ffff) as u32;
-
-    let (vmxon_va, vmcs_va) = current_vmx_pages()?;
-    unsafe {
-        core::ptr::write_bytes(vmxon_va, 0, VMX_PAGE_SIZE);
-        core::ptr::write_bytes(vmcs_va, 0, VMX_PAGE_SIZE);
-        *(vmxon_va as *mut u32) = revision;
-        *(vmcs_va as *mut u32) = revision;
-    }
-
-    let vmxon_pa = kernel_va_to_pa(vmxon_va as u64).ok_or("vmxon pa")?;
-    let vmcs_pa = kernel_va_to_pa(vmcs_va as u64).ok_or("vmcs pa")?;
-    hvlogf(format_args!(
-        "hv: vm{} reporting: vmx setup revision=0x{:08X} vmxon_pa=0x{:016X} vmcs_pa=0x{:016X}",
-        current_vm_id_for_log(),
-        revision,
-        vmxon_pa,
-        vmcs_pa
-    ));
-
-    let rip = vmx::current_rip();
-    if !vmxon(vmxon_pa) {
-        hvlogf(format_args!(
-            "hv: vm{} reporting: vmxon failed rip=0x{:016X} pa=0x{:016X}",
-            current_vm_id_for_log(),
-            rip,
-            vmxon_pa
-        ));
-        return Err("vmxon");
-    }
-    hvlogf(format_args!(
-        "hv: vm{} reporting: vmxon ok rip=0x{:016X}",
-        current_vm_id_for_log(),
-        rip
-    ));
-
-    let rip = vmx::current_rip();
-    if !vmclear(vmcs_pa) {
-        hvlogf(format_args!(
-            "hv: vm{} reporting: vmclear failed rip=0x{:016X} pa=0x{:016X}",
-            current_vm_id_for_log(),
-            rip,
-            vmcs_pa
-        ));
-        let _ = vmxoff();
-        return Err("vmclear");
-    }
-    hvlogf(format_args!(
-        "hv: vm{} reporting: vmclear ok rip=0x{:016X}",
-        current_vm_id_for_log(),
-        rip
-    ));
-
-    let rip = vmx::current_rip();
-    if !vmptrld(vmcs_pa) {
-        hvlogf(format_args!(
-            "hv: vm{} reporting: vmptrld failed rip=0x{:016X} pa=0x{:016X}",
-            current_vm_id_for_log(),
-            rip,
-            vmcs_pa
-        ));
-        let _ = vmxoff();
-        return Err("vmptrld");
-    }
-    hvlogf(format_args!(
-        "hv: vm{} reporting: vmptrld ok rip=0x{:016X}",
-        current_vm_id_for_log(),
-        rip
-    ));
-
-    let ptr = match vmx::vmptrst() {
-        Some(v) => v,
-        None => {
-            let rip = vmx::current_rip();
-            hvlogf(format_args!(
-                "hv: vm{} reporting: vmptrst failed rip=0x{:016X}",
-                current_vm_id_for_log(),
-                rip
-            ));
-            let _ = vmxoff();
-            return Err("vmptrst");
-        }
-    };
-    if ptr != vmcs_pa {
-        let rip = vmx::current_rip();
-        hvlogf(format_args!(
-            "hv: vm{} reporting: vmptrst mismatch rip=0x{:016X} got=0x{:016X} want=0x{:016X}",
-            current_vm_id_for_log(),
-            rip,
-            ptr,
-            vmcs_pa
-        ));
-        let _ = vmxoff();
-        return Err("vmptrst mismatch");
-    }
-    hvlogf(format_args!(
-        "hv: vm{} reporting: vmptrst ok current_vmcs=0x{:016X}",
-        current_vm_id_for_log(),
-        ptr
-    ));
-
-    if !vmxoff() {
-        let rip = vmx::current_rip();
-        hvlogf(format_args!(
-            "hv: vm{} reporting: vmxoff failed rip=0x{:016X}",
-            current_vm_id_for_log(),
-            rip
-        ));
-        return Err("vmxoff");
-    }
-    hvlogf(format_args!("hv: vm{} reporting: vmxoff ok", current_vm_id_for_log()));
     Ok(())
 }

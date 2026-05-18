@@ -210,6 +210,7 @@ pub extern "C" fn kmain() -> ! {
 
     disc::probe_once();
     efi::acpi::ensure_tables();
+    efi::log_reset_runtime_once();
 
     // Chronos awake hpet dependend
     efi::acpi::hpet::ensure();
