@@ -103,6 +103,7 @@ pub fn compute_code_lengths(
     }
 }
 
+#[cfg(any(feature = "fdeflate-compression", test))]
 const fn compute_codes<const NSYMS: usize>(lengths: &[u8; NSYMS]) -> Option<[u16; NSYMS]> {
     let mut codes = [0u16; NSYMS];
 

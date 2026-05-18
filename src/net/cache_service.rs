@@ -4,7 +4,7 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-use embassy_executor::{SpawnError, SpawnToken, Spawner};
+use embassy_executor::{SpawnError, Spawner};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use sha2::{Digest, Sha256};
 use spin::Mutex;

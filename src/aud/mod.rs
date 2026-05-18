@@ -15,7 +15,6 @@ pub mod player;
 pub mod synth;
 pub mod tables;
 
-use alloc::format;
 use alloc::string::String;
 use core::sync::atomic::{AtomicU32, Ordering};
 use spin::Mutex;
