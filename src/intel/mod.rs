@@ -1,16 +1,3 @@
-// Intel bring-up source contracts.
-//
-// These comments intentionally mirror `may_help/stateoftheart`, but live next
-// to the code so the documentary facts do not drift away from the driver.
-//
-// Current proven hardware claim:
-// - PCI claim has reached `00:02.0 device=0x4680 rev=0x0C`.
-// - The observed MMIO aperture is `0x1000000` bytes.
-//
-// This module proves only ownership, MMIO bounds, shared address constants, and
-// top-level sequencing.  It does not prove render progress; render/display/GuC
-// modules must each emit their own named proof lines.
-
 mod display;
 mod dmc;
 pub(crate) mod format;
@@ -74,20 +61,8 @@ const DISPLAY_PLANE1_BOOT_DEMO_ENABLED: bool = true;
 const MEDIA_BOOT_DEMO_ENABLED: bool = false;
 const MEDIA_BOOT_DEMO_DELAY_MS: u64 = 5_000;
 const MEDIA_BOOT_DEMO_PREFERRED_AP_SLOT: u32 = 3;
-const GPGPU_BURN_MIN_ROWS: usize = 512;
-const GPGPU_BURN_MIN_K_DIM: usize = 512;
-const GPGPU_TILE_ROWS: usize = 256;
-
 static INIT: AtomicBool = AtomicBool::new(false);
 static CLAIMED_DEVICE: Mutex<Option<Dev>> = Mutex::new(None);
-
-#[derive(Copy, Clone, Debug)]
-pub struct RenderWarmState {
-    pub device_id: u16,
-    pub revision_id: u8,
-    pub mmio_base: usize,
-    pub mmio_len: usize,
-}
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct GpgpuPreflightStatus {
@@ -476,33 +451,12 @@ pub fn huc_ready() -> bool {
     self::huc::authenticated()
 }
 
-pub fn huc_present() -> bool {
-    self::huc::present()
-}
-
-pub fn dmc_present() -> bool {
-    self::dmc::present()
-}
-
-pub fn dmc_load_path_wired() -> bool {
-    self::dmc::load_path_wired()
-}
-
 pub fn has_claimed_device() -> bool {
     CLAIMED_DEVICE.lock().is_some()
 }
 
 pub(crate) fn claimed_device() -> Option<Dev> {
     *CLAIMED_DEVICE.lock()
-}
-
-pub fn warm_state() -> Option<RenderWarmState> {
-    claimed_device().map(|dev| RenderWarmState {
-        device_id: dev.device_id,
-        revision_id: dev.revision_id,
-        mmio_base: dev.mmio as usize,
-        mmio_len: dev.mmio_len,
-    })
 }
 
 pub(crate) fn gpgpu_preflight_status() -> GpgpuPreflightStatus {
@@ -584,77 +538,6 @@ pub(crate) fn submit_gpgpu_one_tile_output_sentinel_probe(
     )
 }
 
-pub(crate) fn submit_gpgpu_sidequest_target_buffer_probe() -> GpgpuOneTileSentinelProof {
-    self::gpgpu::submit_gpgpu_sidequest_target_buffer_probe()
-}
-
-pub(crate) fn submit_gpgpu_primary_scanout_marker_probe() -> GpgpuOneTileSentinelProof {
-    self::gpgpu::submit_gpgpu_primary_scanout_marker_probe()
-}
-
-pub(crate) fn submit_gpgpu_primary_scanout_line_pilot(
-    mode: u32,
-    line_index: u32,
-) -> GpgpuOneTileSentinelProof {
-    self::gpgpu::submit_gpgpu_primary_scanout_line_pilot(mode, line_index)
-}
-
-pub(crate) fn submit_gpgpu_primary_scanout_line_pilot_rect(
-    mode: u32,
-    line_index: u32,
-    rect_x: u32,
-    rect_y: u32,
-    rect_width: u32,
-    rect_height: u32,
-) -> GpgpuOneTileSentinelProof {
-    self::gpgpu::submit_gpgpu_primary_scanout_line_pilot_rect(
-        mode,
-        line_index,
-        rect_x,
-        rect_y,
-        rect_width,
-        rect_height,
-    )
-}
-
-pub(crate) fn submit_gpgpu_primary_scanout_line_pilot_rect_color(
-    color_seed: u32,
-    line_index: u32,
-    rect_x: u32,
-    rect_y: u32,
-    rect_width: u32,
-    rect_height: u32,
-) -> GpgpuOneTileSentinelProof {
-    self::gpgpu::submit_gpgpu_primary_scanout_line_pilot_rect_color(
-        color_seed,
-        line_index,
-        rect_x,
-        rect_y,
-        rect_width,
-        rect_height,
-    )
-}
-
-pub(crate) fn submit_gpgpu_primary_scanout_line_pilot_rect_color_burst(
-    color_seed: u32,
-    first_line_index: u32,
-    segment_count: u32,
-    rect_x: u32,
-    rect_y: u32,
-    rect_width: u32,
-    rect_height: u32,
-) -> GpgpuOneTileSentinelProof {
-    self::gpgpu::submit_gpgpu_primary_scanout_line_pilot_rect_color_burst(
-        color_seed,
-        first_line_index,
-        segment_count,
-        rect_x,
-        rect_y,
-        rect_width,
-        rect_height,
-    )
-}
-
 pub(crate) fn submit_gpgpu_primary_scanout_line1280_groupid_rows_color_burst(
     color_seed: u32,
     first_row_group: u32,
@@ -712,32 +595,11 @@ pub(crate) fn submit_gpgpu_primary_scanout_groupid_line320_probe(
     self::gpgpu::submit_gpgpu_primary_scanout_groupid_line320_probe(mode, row_index)
 }
 
-pub(crate) type MandelbrotArtifactControlSnapshot =
-    crate::tst_mandelbrot_gpu_sidequest::MandelbrotArtifactControlSnapshot;
-
-pub(crate) fn mandelbrot_artifact_control_snapshot() -> MandelbrotArtifactControlSnapshot {
-    crate::tst_mandelbrot_gpu_sidequest::mandelbrot_artifact_control_snapshot()
-}
-
-pub(crate) fn mandelbrot_artifact_control_replace(
-    next: MandelbrotArtifactControlSnapshot,
-) -> MandelbrotArtifactControlSnapshot {
-    crate::tst_mandelbrot_gpu_sidequest::mandelbrot_artifact_control_replace(next)
-}
-
 pub(crate) fn submit_gpgpu_primary_scanout_row2560_simd8_probe(
     mode: u32,
     row_index: u32,
 ) -> GpgpuOneTileSentinelProof {
     self::gpgpu::submit_gpgpu_primary_scanout_row2560_simd8_probe(mode, row_index)
-}
-
-pub(crate) fn submit_gpgpu_primary_scanout_mandelbrot_preview(
-    cursor: usize,
-    target_phase: usize,
-    pixel_budget: usize,
-) -> (GpgpuOneTileSentinelProof, usize) {
-    self::gpgpu::submit_gpgpu_primary_scanout_mandelbrot_preview(cursor, target_phase, pixel_budget)
 }
 
 pub(crate) fn submit_gpgpu_one_tile_output_compare_probe(
@@ -810,22 +672,6 @@ pub(crate) fn submit_gpgpu_t62_partial_matvec_probe(
     )
 }
 
-pub(crate) fn submit_gpgpu_t63_partial_matvec_probe(
-    output_gpu: u64,
-    output_bytes: usize,
-    expected_words: [u32; 8],
-    row_count: usize,
-    live_k_dim: usize,
-) -> GpgpuT62PartialMatvecProof {
-    self::gpgpu::submit_gpgpu_t63_partial_matvec_probe(
-        output_gpu,
-        output_bytes,
-        expected_words,
-        row_count,
-        live_k_dim,
-    )
-}
-
 pub(crate) fn submit_gpgpu_t63_accum16_hi_live32_partial_matvec_probe(
     output_gpu: u64,
     output_bytes: usize,
@@ -858,22 +704,6 @@ pub(crate) fn log_gpgpu_t63_first_tile_output_detail_once(
     )
 }
 
-pub fn guc_status(warm: RenderWarmState) -> u32 {
-    self::guc::status(Dev {
-        bus: 0,
-        slot: 0,
-        function: 0,
-        device_id: warm.device_id,
-        revision_id: warm.revision_id,
-        mmio: warm.mmio_base as *mut u8,
-        mmio_len: warm.mmio_len,
-    })
-}
-
-pub(crate) fn log_guc_submission_contract(dev: Dev, label: &'static str) {
-    self::guc::log_submission_contract(dev, label);
-}
-
 pub fn active_scanout_dimensions() -> Option<(u32, u32)> {
     self::display::active_scanout_dimensions()
 }
@@ -899,24 +729,6 @@ pub fn kernel_hw_cursor_slot() -> Option<u32> {
     self::hw_cursor::kernel_hw_cursor_slot()
 }
 
-pub fn media_kickoff_once() {
-    self::xelp_media2_ngin::kickoff_once();
-}
-
-pub fn media_kickoff_state() -> Option<self::xelp_media2_ngin::MediaKickoffState> {
-    self::xelp_media2_ngin::kickoff_state()
-}
-
-pub fn media_decode_surface_window(
-    name: &str,
-) -> Option<self::xelp_media2_ngin::MediaSurfaceWindow> {
-    self::xelp_media2_ngin::decode_surface_window(name)
-}
-
-pub async fn run_media_decode_async() {
-    self::xelp_media2_ngin::run_media_decode_async().await
-}
-
 pub async fn run_media2_first_frame_async() -> Option<self::xelp_media2_ngin::Media2FirstFrameState>
 {
     self::xelp_media2_ngin::run_media2_first_frame_async().await
@@ -933,14 +745,6 @@ pub(crate) fn hw_pic_service()
 
 pub(crate) fn hw_pic_submit_jpeg(encoded: &[u8]) -> Result<u32, i32> {
     self::hw_pic::submit_jpeg(encoded)
-}
-
-pub(crate) fn hw_pic_take_output() -> Option<self::hw_pic::HwPicOutput> {
-    self::hw_pic::take_output()
-}
-
-pub(crate) fn hw_pic_output_for_id(id: u32) -> Option<self::hw_pic::HwPicOutput> {
-    self::hw_pic::output_for_id(id)
 }
 
 pub(crate) async fn hw_pic_wait_output_for_id(

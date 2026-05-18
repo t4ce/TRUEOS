@@ -22,7 +22,6 @@ pub(crate) enum HwPicCodec {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum HwPicStatus {
-    Pending,
     Ready,
     Failed,
 }
@@ -30,7 +29,6 @@ pub(crate) enum HwPicStatus {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum HwPicPixelFormat {
     Nv12,
-    Rgba8,
     Unknown,
 }
 
@@ -86,10 +84,6 @@ pub(crate) fn submit_encoded(codec: HwPicCodec, encoded: &[u8]) -> Result<u32, i
 
 pub(crate) fn submit_jpeg(encoded: &[u8]) -> Result<u32, i32> {
     submit_encoded(HwPicCodec::Jpeg, encoded)
-}
-
-pub(crate) fn take_output() -> Option<HwPicOutput> {
-    OUTPUTS.lock().pop_front()
 }
 
 pub(crate) fn output_for_id(id: u32) -> Option<HwPicOutput> {

@@ -314,37 +314,6 @@ pub(crate) fn prove_h2g_mmio_once(dev: crate::intel::Dev, label: &'static str) -
     result.accepted
 }
 
-pub(crate) fn log_submission_contract(dev: crate::intel::Dev, label: &'static str) {
-    let status = status(dev);
-    let (bootrom, ukernel, auth) = describe_status(status);
-    let ready = ready();
-    let dist_dbs = crate::intel::mmio_read(dev, DIST_DBS_POPULATED);
-    let doorbells =
-        ((dist_dbs & DOORBELLS_PER_SQIDI_MASK) >> DOORBELLS_PER_SQIDI_SHIFT).saturating_add(1);
-    let scratch0 = crate::intel::mmio_read(dev, SOFT_SCRATCH_BASE);
-    let scratch_ads = crate::intel::mmio_read(dev, SOFT_SCRATCH_BASE + 5 * 4);
-    let scratch_devid = crate::intel::mmio_read(dev, SOFT_SCRATCH_BASE + 6 * 4);
-
-    crate::log!(
-        "intel/guc: submission-contract label={} ready={} status=0x{:08X} bootrom={} ukernel={} auth=0x{:X} doorbells={} dist_dbs=0x{:08X} scratch0=0x{:08X} scratch_ads=0x{:08X} scratch_devid=0x{:08X} h2g_mmio_probed={} h2g_mmio_accepted={} h2g_mmio_response=0x{:08X} ctb_enabled={} submission=rcs-execlist guc_sched=transport-ready-context-not-registered next=guc-register-context-and-submit-queue does_not_prove=guc_owns_batch_submission\n",
-        label,
-        ready as u8,
-        status,
-        bootrom,
-        ukernel,
-        auth,
-        doorbells,
-        dist_dbs,
-        scratch0,
-        scratch_ads,
-        scratch_devid,
-        H2G_MMIO_PROBED.load(Ordering::Acquire) as u8,
-        H2G_MMIO_ACCEPTED.load(Ordering::Acquire) as u8,
-        H2G_MMIO_RESPONSE.load(Ordering::Acquire),
-        crate::intel::guc_ctb_enabled() as u8,
-    );
-}
-
 pub(crate) fn describe_status(s: u32) -> (&'static str, &'static str, u32) {
     let boot = match bootrom(s) {
         0x13 => "NO_KEY",
