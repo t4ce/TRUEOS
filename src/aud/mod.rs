@@ -8,6 +8,8 @@
 //! Architecture:
 //!   SynthEngine → render samples → write to HDA buffer → DMA playback
 
+#![allow(dead_code)]
+
 pub mod pattern;
 pub mod player;
 pub mod synth;

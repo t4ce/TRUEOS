@@ -5,7 +5,9 @@ use core::sync::atomic::{AtomicBool, Ordering};
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::{__m128i, _mm_add_epi8, _mm_loadu_si128, _mm_storeu_si128};
 
-use crate::{common::BytesPerPixel, Compression};
+use crate::common::BytesPerPixel;
+#[cfg(feature = "png-encoding")]
+use crate::Compression;
 
 mod paeth;
 
@@ -15,6 +17,7 @@ mod simd;
 #[cfg(target_arch = "x86_64")]
 static UP_FASTPATH_LOGGED: AtomicBool = AtomicBool::new(false);
 
+#[cfg(not(target_arch = "x86_64"))]
 #[inline]
 fn unfilter_up_chunked(previous: &[u8], current: &mut [u8]) {
     const CHUNK_SIZE: usize = 32;
@@ -120,6 +123,7 @@ impl From<RowFilter> for Filter {
 }
 
 impl Filter {
+    #[cfg(feature = "png-encoding")]
     pub(crate) fn from_simple(compression: Compression) -> Self {
         match compression {
             Compression::NoCompression => Filter::NoFilter, // with no DEFLATE filtering would only waste time
@@ -160,7 +164,8 @@ impl RowFilter {
         }
     }
 
-    pub fn from_method(strat: Filter) -> Option<Self> {
+    #[cfg(any(feature = "png-encoding", feature = "benchmarks", test))]
+    pub(crate) fn from_method(strat: Filter) -> Option<Self> {
         match strat {
             Filter::NoFilter => Some(Self::NoFilter),
             Filter::Sub => Some(Self::Sub),
@@ -429,6 +434,7 @@ pub(crate) fn unfilter(
     }
 }
 
+#[cfg(any(feature = "png-encoding", test))]
 fn filter_internal(
     method: RowFilter,
     bpp: usize,
@@ -568,6 +574,7 @@ fn filter_internal(
     }
 }
 
+#[cfg(any(feature = "png-encoding", test))]
 fn adaptive_filter(
     f: impl Fn(&[u8]) -> u64,
     bpp: usize,
@@ -598,6 +605,7 @@ fn adaptive_filter(
     filter_choice
 }
 
+#[cfg(any(feature = "png-encoding", test))]
 pub(crate) fn filter(
     method: Filter,
     bpp: BytesPerPixel,
@@ -620,11 +628,13 @@ pub(crate) fn filter(
 
 /// Estimate the value of i * log2(i) without using floating point operations,
 /// implementation originally from oxipng.
+#[cfg(any(feature = "png-encoding", test))]
 fn ilog2i(i: u32) -> u32 {
     let log = 32 - i.leading_zeros() - 1;
     i * log + ((i - (1 << log)) << 1)
 }
 
+#[cfg(any(feature = "png-encoding", test))]
 fn entropy(buf: &[u8]) -> u64 {
     let mut counts = [[0_u32; 256]; 4];
     let mut total = 0;
@@ -676,6 +686,7 @@ fn entropy(buf: &[u8]) -> u64 {
 }
 
 // Helper function for Adaptive filter buffer summation
+#[cfg(any(feature = "png-encoding", test))]
 fn sum_buffer(buf: &[u8]) -> u64 {
     const CHUNK_SIZE: usize = 32;
 
