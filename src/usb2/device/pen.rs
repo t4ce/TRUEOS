@@ -3,7 +3,7 @@ use alloc::{boxed::Box, string::String, vec::Vec as AllocVec};
 use crab_usb::usb_if;
 use crab_usb::Device;
 
-use crate::usb2::api::{EndpointBulkIn, EndpointBulkOut};
+use crate::usb2::api::{EndpointBulkIn, EndpointBulkOut, EndpointSubmitExt};
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::Vec;
@@ -1089,62 +1089,23 @@ pub(crate) async fn maybe_start_mass_storage(
     let desc = dev_info.descriptor();
     let vendor_id = desc.vendor_id;
     let product_id = desc.product_id;
-    let topology = dev_info.topology();
+    let port_speed = usb_if::Speed::Full;
     let uas_candidate_count = transport_plan.uas.len().min(u8::MAX as usize) as u8;
 
-    for uas in transport_plan.uas.iter() {
-        let mut bulk_in = String::new();
-        for (idx, ep) in uas.bulk_in.iter().enumerate() {
-            if idx > 0 {
-                bulk_in.push(',');
-            }
-            bulk_in
-                .push_str(alloc::format!("0x{:02X}/{}", ep.address, ep.max_packet_size).as_str());
-        }
-
-        let mut bulk_out = String::new();
-        for (idx, ep) in uas.bulk_out.iter().enumerate() {
-            if idx > 0 {
-                bulk_out.push(',');
-            }
-            bulk_out
-                .push_str(alloc::format!("0x{:02X}/{}", ep.address, ep.max_packet_size).as_str());
-        }
-
-        if let Some(target) = transport_plan.bot {
-            crate::log!(
-                "crabusb: mass {:04X}:{:04X} uas candidate if#{} alt={} cfg={} in=[{}] out=[{}] bot_target if#{} alt={} proto={:02X}\n",
-                vendor_id,
-                product_id,
-                uas.interface_number,
-                uas.alternate_setting,
-                uas.configuration_value,
-                bulk_in,
-                bulk_out,
-                target.interface_number,
-                target.alternate_setting,
-                target.protocol,
-            );
-        } else {
-            crate::log!(
-                "crabusb: mass {:04X}:{:04X} uas candidate if#{} alt={} cfg={} in=[{}] out=[{}] bot_target=none\n",
-                vendor_id,
-                product_id,
-                uas.interface_number,
-                uas.alternate_setting,
-                uas.configuration_value,
-                bulk_in,
-                bulk_out,
-            );
-        }
+    if uas_candidate_count > 0 {
+        crate::log!(
+            "crabusb: mass {:04X}:{:04X} uas candidates ignored count={} reason=disabled\n",
+            vendor_id,
+            product_id,
+            uas_candidate_count
+        );
     }
 
     let Some(target) = transport_plan.bot else {
         return false;
     };
     let transport_kind = mass::MassTransportKind::Bot;
-    let io_profile =
-        choose_mass_io_profile(transport_kind, vendor_id, product_id, topology.port_speed, &target);
+    let io_profile = MassIoProfile::ConservativeBot;
 
     let device = match host.open_device(dev_info).await {
         Ok(device) => device,
@@ -1173,7 +1134,7 @@ pub(crate) async fn maybe_start_mass_storage(
         target,
         transport_kind,
         io_profile,
-        topology.port_speed,
+        port_speed,
         uas_candidate_count,
     ) {
         Ok(token) => {
@@ -1191,7 +1152,7 @@ pub(crate) async fn maybe_start_mass_storage(
                 target.bulk_out_max_packet_size,
                 mass_transport_label(transport_kind),
                 mass_io_profile_label(io_profile),
-                topology.port_speed,
+                port_speed,
                 uas_candidate_count,
             );
         }

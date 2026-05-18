@@ -5,18 +5,10 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 use usb_if::host::ControlSetup;
 
 mod bot;
-mod uas;
 
 pub(crate) use self::bot::{
     MassTarget, bot_recovery, keepalive_mass_bot, pick_mass_target, probe_mass_bot,
     read_blocks_bot, request_sense_fixed, synchronize_cache_bot, write_blocks_bot,
-};
-pub(crate) use self::uas::{
-    UAS_XHCI_MAX_STREAM_ID, UasCandidate, UasReadStatusKind, UasTarget, UasWriteStatusKind,
-    classify_uas_read_status_iu, classify_uas_write_status_iu, exercise_mass_uas_skhynix,
-    keepalive_mass_uas_skhynix, pick_skhynix_uas_target, read_blocks_uas_skhynix,
-    request_sense_fixed_uas_skhynix_result, send_read10_uas_skhynix, send_write10_uas_skhynix,
-    synchronize_cache_uas_skhynix, uas_stream_id_from_tag, write_blocks_uas_skhynix,
 };
 
 pub(super) const USB_CLASS_MASS_STORAGE: u8 = 0x08;
@@ -38,7 +30,7 @@ pub(crate) enum MassTransportKind {
 #[derive(Clone, Debug)]
 pub(crate) struct MassTransportPlan {
     pub bot: Option<MassTarget>,
-    pub uas: Vec<UasCandidate>,
+    pub uas: Vec<()>,
 }
 
 pub(crate) fn inspect_mass_transports(
@@ -46,7 +38,7 @@ pub(crate) fn inspect_mass_transports(
 ) -> MassTransportPlan {
     MassTransportPlan {
         bot: pick_mass_target(configs),
-        uas: uas::collect_uas_candidates(configs),
+        uas: Vec::new(),
     }
 }
 
