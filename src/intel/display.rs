@@ -333,7 +333,7 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
     log_primary_scanout_pte_window(dev, "after-primary-init", byte_len);
 
     let logo_ok = if PRIMARY_BOOT_LOGO_ENABLED {
-        present_sw_logo_decode()
+        probe_hw_logo_decode()
     } else {
         false
     };
@@ -359,25 +359,6 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
         ok as u8,
         logo_ok as u8
     );
-}
-
-fn present_sw_logo_decode() -> bool {
-    match crate::gfx::jpeg_codec::decode_jpeg_rgba(PRIMARY_BOOT_LOGO_JPEG) {
-        Ok(decoded) => present_rgba_surface_center(
-            decoded.rgba.as_slice(),
-            decoded.width,
-            decoded.height,
-            (decoded.width as usize).saturating_mul(4),
-        ),
-        Err(err) => {
-            crate::log!(
-                "intel/display: primary-logo decode failed code={} bytes=0x{:X}\n",
-                err.code(),
-                PRIMARY_BOOT_LOGO_JPEG.len()
-            );
-            false
-        }
-    }
 }
 
 fn probe_hw_logo_decode() -> bool {
@@ -436,6 +417,21 @@ pub(crate) async fn hw_logo_present_task() {
             .compare_exchange(pending_id, 0, Ordering::AcqRel, Ordering::Acquire)
             .ok();
 
+        let (target_width, target_height) = if output.width != 0 && output.height != 0 {
+            if let Some(surface) = *PRIMARY_SURFACE.lock() {
+                aspect_fit_size(
+                    output.width as usize,
+                    output.height as usize,
+                    surface.width as usize,
+                    surface.height as usize,
+                )
+            } else {
+                (0, 0)
+            }
+        } else {
+            (0, 0)
+        };
+
         let presented = if output.status == crate::intel::hw_pic::HwPicStatus::Ready
             && output.format == crate::intel::hw_pic::HwPicPixelFormat::Nv12
             && output.width != 0
@@ -462,12 +458,14 @@ pub(crate) async fn hw_logo_present_task() {
         };
 
         crate::log!(
-            "intel/display: hw-logo output id={} status={:?} fmt={:?} size={}x{} pitch=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} presented={} err={}\n",
+            "intel/display: hw-logo output id={} status={:?} fmt={:?} decoded={}x{} target={}x{} pitch=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} presented={} err={}\n",
             output.id,
             output.status,
             output.format,
             output.width,
             output.height,
+            target_width,
+            target_height,
             output.pitch_bytes,
             output.byte_len,
             output.gpu_addr,
@@ -819,6 +817,36 @@ fn clamp_u8_i32(value: i32) -> u8 {
     value.clamp(0, 255) as u8
 }
 
+fn aspect_fit_size(
+    src_width: usize,
+    src_height: usize,
+    dst_width: usize,
+    dst_height: usize,
+) -> (usize, usize) {
+    if src_width == 0 || src_height == 0 || dst_width == 0 || dst_height == 0 {
+        return (0, 0);
+    }
+    if dst_width.saturating_mul(src_height) <= dst_height.saturating_mul(src_width) {
+        let copy_w = dst_width.max(1);
+        let copy_h = src_height
+            .saturating_mul(copy_w)
+            .checked_div(src_width)
+            .unwrap_or(1)
+            .max(1)
+            .min(dst_height);
+        (copy_w, copy_h)
+    } else {
+        let copy_h = dst_height.max(1);
+        let copy_w = src_width
+            .saturating_mul(copy_h)
+            .checked_div(src_height)
+            .unwrap_or(1)
+            .max(1)
+            .min(dst_width);
+        (copy_w, copy_h)
+    }
+}
+
 pub(crate) fn present_nv12_surface_center(
     src: &[u8],
     coded_width: u32,
@@ -888,26 +916,10 @@ pub(crate) fn present_nv12_surface_center(
     // Fit the visible video into the destination while preserving aspect ratio.
     // The previous code only downscaled and never upscaled, so a 1080p video on
     // a taller panel would leave whole green tile rows unused at the bottom.
-    let (copy_w, copy_h) =
-        if dst_width.saturating_mul(visible_height) <= dst_height.saturating_mul(visible_width) {
-            let copy_w = dst_width.max(1);
-            let copy_h = visible_height
-                .saturating_mul(copy_w)
-                .checked_div(visible_width.max(1))
-                .unwrap_or(1)
-                .max(1)
-                .min(dst_height);
-            (copy_w, copy_h)
-        } else {
-            let copy_h = dst_height.max(1);
-            let copy_w = visible_width
-                .saturating_mul(copy_h)
-                .checked_div(visible_height.max(1))
-                .unwrap_or(1)
-                .max(1)
-                .min(dst_width);
-            (copy_w, copy_h)
-        };
+    let (copy_w, copy_h) = aspect_fit_size(visible_width, visible_height, dst_width, dst_height);
+    if copy_w == 0 || copy_h == 0 {
+        return false;
+    }
     let dst_x = dst_width.saturating_sub(copy_w) / 2;
     let dst_y = dst_height.saturating_sub(copy_h) / 2;
 

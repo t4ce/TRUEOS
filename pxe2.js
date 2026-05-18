@@ -7,7 +7,7 @@ const { spawn, spawnSync } = require("child_process");
 const BOOTFILE = "EFI/BOOT/BOOTX64.EFI";
 const LEASES = "/tmp/trueos-pxe2.leases";
 const DEFAULT_HTTP_PORT = 8080;
-const DEFAULT_PXE_APPS = ["weather.bp", "file-system.bp", "chatserver.bp"];
+const DEFAULT_PXE_APPS = ["file-system.bp"];
 const HARDCODED_HTTP_ASSETS = [
   {
     kind: "video",
@@ -377,6 +377,15 @@ function filterLimineAppsToSelection(conf, appNames) {
 function stageSelectedApps(tftpRoot, appNames) {
   const appDir = path.join(tftpRoot, "EFI/BOOT/apps");
   fs.mkdirSync(appDir, { recursive: true });
+  const selected = new Set(appNames);
+
+  for (const entry of fs.readdirSync(appDir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith(".bp") || selected.has(entry.name)) {
+      continue;
+    }
+    fs.rmSync(path.join(appDir, entry.name), { force: true });
+    process.stdout.write(`Removed unselected PXE app ${entry.name} from ${appDir}.\n`);
+  }
 
   for (const appName of appNames) {
     const stagedPath = path.join(appDir, appName);
