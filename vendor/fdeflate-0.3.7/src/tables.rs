@@ -4,6 +4,7 @@ use crate::decompress::{EXCEPTIONAL_ENTRY, LITERAL_ENTRY};
 ///
 /// These values work well for PNGs with some form of filtering enabled, but will likely make most
 /// other inputs worse.
+#[cfg(any(feature = "fdeflate-compression", test))]
 pub(crate) const HUFFMAN_LENGTHS: [u8; 286] = [
     2, 3, 4, 5, 5, 6, 6, 7, 7, 7, 8, 8, 8, 8, 8, 9, 9, 9, 9, 9, 9, 9, 10, 10, 10, 10, 10, 10, 10,
     10, 10, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12,
@@ -19,12 +20,14 @@ pub(crate) const HUFFMAN_LENGTHS: [u8; 286] = [
     12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 9,
 ];
 
+#[cfg(any(feature = "fdeflate-compression", test))]
 pub(crate) const HUFFMAN_CODES: [u16; 286] = match crate::compute_codes(&HUFFMAN_LENGTHS) {
     Some(codes) => codes,
     None => panic!("HUFFMAN_LENGTHS is invalid"),
 };
 
 /// Length code for length values (derived from deflate spec).
+#[cfg(any(feature = "fdeflate-compression", test))]
 pub(crate) const LENGTH_TO_SYMBOL: [u16; 256] = [
     257, 258, 259, 260, 261, 262, 263, 264, 265, 265, 266, 266, 267, 267, 268, 268, 269, 269, 269,
     269, 270, 270, 270, 270, 271, 271, 271, 271, 272, 272, 272, 272, 273, 273, 273, 273, 273, 273,
@@ -43,6 +46,7 @@ pub(crate) const LENGTH_TO_SYMBOL: [u16; 256] = [
 ];
 
 /// Number of extra bits for length values (derived from deflate spec).
+#[cfg(any(feature = "fdeflate-compression", test))]
 pub(crate) const LENGTH_TO_LEN_EXTRA: [u8; 256] = [
     0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
     3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
@@ -54,6 +58,7 @@ pub(crate) const LENGTH_TO_LEN_EXTRA: [u8; 256] = [
     5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 0,
 ];
 
+#[cfg(any(feature = "fdeflate-compression", test))]
 pub(crate) const BITMASKS: [u32; 17] = [
     0x0000, 0x0001, 0x0003, 0x0007, 0x000F, 0x001F, 0x003F, 0x007F, 0x00FF, 0x01FF, 0x03FF, 0x07FF,
     0x0FFF, 0x1FFF, 0x3FFF, 0x7FFF, 0xFFFF,

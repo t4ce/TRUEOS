@@ -10,7 +10,7 @@ pub mod socket_cabi;
 pub mod srv;
 pub mod udp;
 
-pub use cli::{ftp, html, json, ntp, smtp};
+pub use cli::{ftp, html, json, ntp};
 pub use srv::sntp;
 
 use v::vnet as api;

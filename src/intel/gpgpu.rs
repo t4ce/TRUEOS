@@ -29,7 +29,6 @@ use walker_command::encode_gfx12_gpgpu_walker_probe_batch;
 
 pub(crate) use mandelbrot::{
     submit_gpgpu_primary_scanout_groupid_line320_probe,
-    submit_gpgpu_primary_scanout_line1280_groupid_rows_color_burst,
     submit_gpgpu_primary_scanout_line1280_groupid_rows_fullwidth_color_burst,
     submit_gpgpu_primary_scanout_row2560_simd8_probe,
 };
