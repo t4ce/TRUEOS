@@ -38,6 +38,7 @@ pub(super) struct JpegScanInfo {
     pub(super) scan_data_offset: u32,
     pub(super) scan_data_length: u32,
     pub(super) scan_component_count: u8,
+    pub(super) scan_component_mask: u8,
     pub(super) interleaved: bool,
     pub(super) restart_interval: u16,
     pub(super) mcu_count: u32,
@@ -75,10 +76,15 @@ pub(super) struct MediaJpegSmokeSubmitProof {
     pub jpeg_interleaved: bool,
     pub jpeg_restart_interval: u16,
     pub jpeg_mcu_count: u32,
+    pub jpeg_scan_data_offset: u32,
+    pub jpeg_scan_data_length: u32,
+    pub jpeg_bsd_dw4: u32,
     pub output_surface_pitch: usize,
     pub output_surface_bytes: usize,
     pub surface_dw2: u32,
     pub surface_dw3: u32,
+    pub surface_dw4: u32,
+    pub surface_dw5: u32,
     pub pipe_mode_dw1: u32,
     pub jpeg_pic_dw1: u32,
     pub jpeg_pic_dw2: u32,
@@ -581,9 +587,15 @@ pub(super) fn parse_jpeg_scan_info(encoded: &[u8]) -> Option<JpegScanInfo> {
                 let input_format =
                     jpeg_input_format_from_sampling(component_count, &h_sampling, &v_sampling)?;
 
-                let mut scan_component_ids = [0u8; 3];
+                let mut scan_component_mask = 0u8;
                 for component_idx in 0..usize::from(scan_component_count) {
-                    scan_component_ids[component_idx] = encoded[idx + 1 + component_idx * 2];
+                    let scan_component_id = encoded[idx + 1 + component_idx * 2];
+                    if let Some(component_pos) = component_ids[..usize::from(component_count)]
+                        .iter()
+                        .position(|&component_id| component_id == scan_component_id)
+                    {
+                        scan_component_mask |= 1 << component_pos;
+                    }
                 }
 
                 let scan_data_offset = idx + required_len;
@@ -613,7 +625,7 @@ pub(super) fn parse_jpeg_scan_info(encoded: &[u8]) -> Option<JpegScanInfo> {
                     let mcu_height = 8u32.saturating_mul(u32::from(max_v_sampling));
                     ceil_div_u32(width, mcu_width).saturating_mul(ceil_div_u32(height, mcu_height))
                 } else {
-                    let scan_component_id = scan_component_ids[0];
+                    let scan_component_id = encoded[idx + 1];
                     let component_idx = component_ids[..usize::from(component_count)]
                         .iter()
                         .position(|&component_id| component_id == scan_component_id)
@@ -636,6 +648,7 @@ pub(super) fn parse_jpeg_scan_info(encoded: &[u8]) -> Option<JpegScanInfo> {
                     scan_data_offset: scan_data_offset as u32,
                     scan_data_length: (scan_end - scan_data_offset) as u32,
                     scan_component_count,
+                    scan_component_mask,
                     interleaved,
                     restart_interval,
                     mcu_count,
@@ -755,14 +768,19 @@ fn emit_jpeg_bsd_object(
     batch[bsd + 1] = scan_info.scan_data_length;
     batch[bsd + 2] = scan_info.scan_data_offset;
     batch[bsd + 3] = 0;
-    batch[bsd + 4] = (scan_info.mcu_count & 0x03ff_ffff)
-        | (u32::from(scan_info.scan_component_count) << 27)
-        | ((scan_info.interleaved as u32) << 30);
+    batch[bsd + 4] = jpeg_bsd_dw4(scan_info);
     batch[bsd + 5] = u32::from(scan_info.restart_interval);
     Some(())
 }
 
-fn nv12_tiled_surface_bytes(coded_height: u32, output_pitch: usize) -> Option<usize> {
+#[inline]
+fn jpeg_bsd_dw4(scan_info: &JpegScanInfo) -> u32 {
+    (scan_info.mcu_count & 0x03ff_ffff)
+        | (u32::from(scan_info.scan_component_mask) << 27)
+        | ((scan_info.interleaved as u32) << 30)
+}
+
+fn imc3_tiled_surface_layout(coded_height: u32, output_pitch: usize) -> Option<(u32, u32, usize)> {
     const YTILE_H: usize = 32;
 
     if coded_height == 0 || output_pitch == 0 {
@@ -770,11 +788,15 @@ fn nv12_tiled_surface_bytes(coded_height: u32, output_pitch: usize) -> Option<us
     }
     let coded_height = coded_height as usize;
     let chroma_y_offset = media::align_up_u32(coded_height as u32, YTILE_H as u32) as usize;
-    let total_height = chroma_y_offset + coded_height.div_ceil(2);
-    Some(total_height.div_ceil(YTILE_H) * output_pitch * YTILE_H)
+    let chroma_plane_rows = coded_height.div_ceil(2);
+    let chroma_plane_stride_rows = chroma_plane_rows.div_ceil(YTILE_H) * YTILE_H;
+    let cr_y_offset = chroma_y_offset + chroma_plane_stride_rows;
+    let total_height = cr_y_offset + chroma_plane_rows;
+    let bytes = total_height.div_ceil(YTILE_H) * output_pitch * YTILE_H;
+    Some((chroma_y_offset as u32, cr_y_offset as u32, bytes))
 }
 
-fn clear_output_surface_to_nv12_black(
+fn clear_output_surface_to_imc3_black(
     output_surface_virt: *mut u8,
     output_surface_bytes: usize,
     coded_width: u32,
@@ -808,10 +830,13 @@ fn clear_output_surface_to_nv12_black(
     let coded_width = coded_width as usize;
     let coded_height = coded_height as usize;
     let tiles_per_row = output_pitch / YTILE_W;
-    let chroma_y_offset = media::align_up_u32(coded_height as u32, YTILE_H as u32) as usize;
-    let Some(needed) = nv12_tiled_surface_bytes(coded_height as u32, output_pitch) else {
+    let Some((chroma_y_offset, cr_y_offset, needed)) =
+        imc3_tiled_surface_layout(coded_height as u32, output_pitch)
+    else {
         return false;
     };
+    let chroma_y_offset = chroma_y_offset as usize;
+    let cr_y_offset = cr_y_offset as usize;
     if output_surface_bytes < needed {
         return false;
     }
@@ -821,11 +846,14 @@ fn clear_output_surface_to_nv12_black(
     }
 
     for chroma_row in 0..coded_height.div_ceil(2) {
-        let surface_row = chroma_y_offset + chroma_row;
+        let cb_row = chroma_y_offset + chroma_row;
+        let cr_row = cr_y_offset + chroma_row;
         for byte_x in 0..coded_width {
-            let offset = ytile_offset(byte_x, surface_row, tiles_per_row);
+            let cb_offset = ytile_offset(byte_x, cb_row, tiles_per_row);
+            let cr_offset = ytile_offset(byte_x, cr_row, tiles_per_row);
             unsafe {
-                core::ptr::write_volatile(output_surface_virt.add(offset), 0x80);
+                core::ptr::write_volatile(output_surface_virt.add(cb_offset), 0x80);
+                core::ptr::write_volatile(output_surface_virt.add(cr_offset), 0x80);
             }
         }
     }
@@ -860,7 +888,8 @@ fn build_jpeg_smoke_batch_skeleton(
     };
     let mut idx = 0usize;
     let output_pitch = media::align_up_u32(coded_width.max(128), 128);
-    let chroma_y_offset = media::align_up_u32(coded_height, 32);
+    let (chroma_y_offset, cr_y_offset, _) =
+        imc3_tiled_surface_layout(coded_height, output_pitch as usize)?;
     let frame_width_blocks_minus1 =
         (media::align_up_u32(coded_width.max(8), 8) / 8).saturating_sub(1);
     let frame_height_blocks_minus1 =
@@ -988,10 +1017,9 @@ fn build_jpeg_smoke_batch_skeleton(
     )?;
     batch[surface + 2] =
         ((coded_width.saturating_sub(1)) << 4) | ((coded_height.saturating_sub(1)) << 18);
-    batch[surface + 3] =
-        (1 << 1) | ((output_pitch.saturating_sub(1)) << 3) | (1 << 26) | (1 << 27) | (4 << 28);
+    batch[surface + 3] = (1 << 1) | 1 | ((output_pitch.saturating_sub(1)) << 3) | (4 << 28);
     batch[surface + 4] = chroma_y_offset;
-    batch[surface + 5] = chroma_y_offset;
+    batch[surface + 5] = cr_y_offset;
 
     let pipe_buf = media::begin_batch_packet(
         batch,
@@ -1191,12 +1219,12 @@ pub(super) fn submit_jpeg_smoke_batch(
         .map(|scan_info| scan_info.input_format)
         .unwrap_or(0);
     let jpeg_output_format = jpeg_output_format_from_input(jpeg_input_format);
-    let output_surface_bytes =
-        nv12_tiled_surface_bytes(coded_height, output_surface_pitch).unwrap_or(0);
+    let (chroma_y_offset, cr_y_offset, output_surface_bytes) =
+        imc3_tiled_surface_layout(coded_height, output_surface_pitch).unwrap_or((0, 0, 0));
     if output_surface_bytes == 0 || output_surface_bytes > backing.output_surface_bytes {
         return None;
     }
-    if !clear_output_surface_to_nv12_black(
+    if !clear_output_surface_to_imc3_black(
         backing.output_surface_virt,
         backing.output_surface_bytes,
         coded_width,
@@ -1208,12 +1236,11 @@ pub(super) fn submit_jpeg_smoke_batch(
     let surface_dw2 =
         ((coded_width.saturating_sub(1)) << 4) | ((coded_height.saturating_sub(1)) << 18);
     let surface_dw3 = (1 << 1)
+        | 1
         | ((u32::try_from(output_surface_pitch)
             .unwrap_or(u32::MAX)
             .saturating_sub(1))
             << 3)
-        | (1 << 26)
-        | (1 << 27)
         | (4 << 28);
     let pipe_mode_dw1 = MFX_PIPE_MODE_CODEC_JPEG | MFX_PIPE_MODE_DECODE;
     let jpeg_pic_dw1 = u32::from(jpeg_input_format) | (u32::from(jpeg_output_format) << 8);
@@ -1405,10 +1432,21 @@ pub(super) fn submit_jpeg_smoke_batch(
             .as_ref()
             .map(|scan_info| scan_info.mcu_count)
             .unwrap_or(0),
+        jpeg_scan_data_offset: jpeg_scan_info
+            .as_ref()
+            .map(|scan_info| scan_info.scan_data_offset)
+            .unwrap_or(0),
+        jpeg_scan_data_length: jpeg_scan_info
+            .as_ref()
+            .map(|scan_info| scan_info.scan_data_length)
+            .unwrap_or(0),
+        jpeg_bsd_dw4: jpeg_scan_info.as_ref().map(jpeg_bsd_dw4).unwrap_or(0),
         output_surface_pitch,
         output_surface_bytes,
         surface_dw2,
         surface_dw3,
+        surface_dw4: chroma_y_offset,
+        surface_dw5: cr_y_offset,
         pipe_mode_dw1,
         jpeg_pic_dw1,
         jpeg_pic_dw2,

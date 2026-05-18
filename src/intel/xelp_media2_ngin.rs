@@ -55,8 +55,8 @@ pub(super) const RING_EXECLIST_SQ_HI: usize = 0x514;
 pub(super) const RING_EXECLIST_CONTROL: usize = 0x550;
 pub(super) const GEN12_RING_FAULT_REG: usize = 0x0000_CEC4;
 
-const MEDIA_ENGINE_GPU_ADDR_BASE: u64 = 0x0120_0000;
-const MEDIA_ENGINE_GPU_ADDR_STRIDE: u64 = 0x0100_0000;
+const MEDIA_ENGINE_GPU_ADDR_BASE: u64 = 0x0900_0000;
+const MEDIA_ENGINE_GPU_ADDR_STRIDE: u64 = 0x0200_0000;
 const MEDIA_DEFAULT_RING_BYTES: usize = 16 * 1024;
 const MEDIA_DEFAULT_CONTEXT_BYTES: usize = 22 * 4096;
 const MEDIA_DEFAULT_BATCH_BYTES: usize = 32 * 1024;
@@ -571,9 +571,9 @@ fn engine_window(slot: usize) -> MediaGpuWindowLayout {
         ring_gpu_addr: base,
         context_gpu_addr: base + 0x0001_0000,
         batch_gpu_addr: base + 0x0008_0000,
-        bitstream_gpu_addr: base + 0x0014_0000,
-        output_surface_gpu_addr: base + 0x0020_0000,
-        result_gpu_addr: base + 0x00A0_0000,
+        result_gpu_addr: base + 0x0010_0000,
+        bitstream_gpu_addr: base + 0x0020_0000,
+        output_surface_gpu_addr: base + 0x00A0_0000,
     }
 }
 
