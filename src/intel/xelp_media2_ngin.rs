@@ -546,7 +546,7 @@ fn current_topology() -> MediaTopology {
         capabilities: MediaCapabilities {
             decode: true,
             enhance: false,
-            huc_assist: true,
+            huc_assist: crate::intel::huc_ready(),
             sfc: true,
             relative_mmio_lrc: true,
         },
