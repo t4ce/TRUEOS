@@ -434,7 +434,7 @@ pub(crate) async fn hw_logo_present_task() {
         };
 
         let presented = if output.status == crate::intel::hw_pic::HwPicStatus::Ready
-            && output.format == crate::intel::hw_pic::HwPicPixelFormat::Nv12
+            && matches!(output.format, crate::intel::hw_pic::HwPicPixelFormat::Imc3)
             && output.width != 0
             && output.height != 0
             && output.pitch_bytes != 0
@@ -444,16 +444,19 @@ pub(crate) async fn hw_logo_present_task() {
             let src = unsafe {
                 core::slice::from_raw_parts(output.virt_addr as *const u8, output.byte_len)
             };
-            present_nv12_surface_center(
-                src,
-                output.width,
-                output.height,
-                0,
-                0,
-                output.width,
-                output.height,
-                output.pitch_bytes,
-            )
+            match output.format {
+                crate::intel::hw_pic::HwPicPixelFormat::Imc3 => present_imc3_surface_center(
+                    src,
+                    output.width,
+                    output.height,
+                    0,
+                    0,
+                    output.width,
+                    output.height,
+                    output.pitch_bytes,
+                ),
+                _ => false,
+            }
         } else {
             false
         };
@@ -782,7 +785,7 @@ fn aspect_fit_size(
     }
 }
 
-pub(crate) fn present_nv12_surface_center(
+pub(crate) fn present_imc3_surface_center(
     src: &[u8],
     coded_width: u32,
     coded_height: u32,
@@ -814,15 +817,17 @@ pub(crate) fn present_nv12_surface_center(
         return false;
     }
 
-    // Y-tile: 128 bytes wide × 32 rows tall = 4096 bytes per tile.
-    // In NV12 tiled, both Y and UV planes share the same tiled surface.
-    // UV plane starts at row chroma_y_offset = align(src_height, 32) for
-    // tile boundary alignment (must match MFX_SURFACE_STATE programming).
     const YTILE_W: usize = 128;
     const YTILE_H: usize = 32;
     let tiles_per_row = src_pitch_bytes / YTILE_W;
+    if tiles_per_row == 0 {
+        return false;
+    }
     let chroma_y_offset = (coded_height + YTILE_H - 1) & !(YTILE_H - 1);
-    let total_height = chroma_y_offset + (coded_height + 1) / 2;
+    let chroma_plane_rows = coded_height.div_ceil(2);
+    let chroma_plane_stride_rows = (chroma_plane_rows + YTILE_H - 1) & !(YTILE_H - 1);
+    let cr_y_offset = chroma_y_offset + chroma_plane_stride_rows;
+    let total_height = cr_y_offset + chroma_plane_rows;
     let total_tile_rows = (total_height + YTILE_H - 1) / YTILE_H;
     let needed = total_tile_rows * tiles_per_row * 4096;
     if src.len() < needed {
@@ -836,10 +841,6 @@ pub(crate) fn present_nv12_surface_center(
         return false;
     }
 
-    // Repaint the whole destination every frame. The NV12 copy does not always
-    // touch every pixel of the scanout surface, so reusing prior contents leaves
-    // deterministic stale bands at the bottom/edges when the copied region is
-    // even slightly smaller than the destination.
     fill_surface_color(
         surface.virt,
         dst_pitch,
@@ -848,9 +849,6 @@ pub(crate) fn present_nv12_surface_center(
         PRIMARY_BASELINE_COLOR,
     );
 
-    // Fit the visible video into the destination while preserving aspect ratio.
-    // The previous code only downscaled and never upscaled, so a 1080p video on
-    // a taller panel would leave whole green tile rows unused at the bottom.
     let (copy_w, copy_h) = aspect_fit_size(visible_width, visible_height, dst_width, dst_height);
     if copy_w == 0 || copy_h == 0 {
         return false;
@@ -858,9 +856,6 @@ pub(crate) fn present_nv12_surface_center(
     let dst_x = dst_width.saturating_sub(copy_w) / 2;
     let dst_y = dst_height.saturating_sub(copy_h) / 2;
 
-    // Detile helper: given (byte_x, row_y) return byte offset in the tiled surface.
-    // Y-tile internal layout is OWord-column-major: 8 columns of 16 bytes,
-    // each column stored for all 32 rows before the next column.
     #[inline(always)]
     fn ytile_offset(byte_x: usize, row_y: usize, tiles_per_row: usize) -> usize {
         let tile_col = byte_x / YTILE_W;
@@ -885,7 +880,8 @@ pub(crate) fn present_nv12_surface_center(
             .saturating_mul(dst_pitch)
             .saturating_add(dst_x.saturating_mul(4));
         let dst_row = unsafe { surface.virt.add(dst_row_off) as *mut u32 };
-        let uv_row = chroma_y_offset + src_y / 2;
+        let cb_row = chroma_y_offset + src_y / 2;
+        let cr_row = cr_y_offset + src_y / 2;
         for col_idx in 0..copy_w {
             let src_x = visible_x.saturating_add(
                 col_idx
@@ -895,24 +891,16 @@ pub(crate) fn present_nv12_surface_center(
                     .min(visible_width.saturating_sub(1)),
             );
             let y_off = ytile_offset(src_x, src_y, tiles_per_row);
+            let chroma_x = src_x / 2;
+            let cb_off = ytile_offset(chroma_x, cb_row, tiles_per_row);
+            let cr_off = ytile_offset(chroma_x, cr_row, tiles_per_row);
             let y = unsafe { i32::from(*src.get_unchecked(y_off)) };
             let c = (y - 16).max(0);
-            let (r, g, b) = if crate::logflag::INTEL_MEDIA_PRESENT_LUMA_ONLY {
-                let luma = clamp_u8_i32((298 * c + 128) >> 8);
-                (luma, luma, luma)
-            } else {
-                // UV plane is in the same tiled surface, starting at row chroma_y_offset.
-                // Intel MFX NV12 chroma: byte 0 = Cr (V), byte 1 = Cb (U).
-                let uv_x = src_x & !1;
-                let uv_off = ytile_offset(uv_x, uv_row, tiles_per_row);
-                let v = unsafe { i32::from(*src.get_unchecked(uv_off)) } - 128;
-                let u = unsafe { i32::from(*src.get_unchecked(uv_off + 1)) } - 128;
-                (
-                    clamp_u8_i32((298 * c + 409 * v + 128) >> 8),
-                    clamp_u8_i32((298 * c - 100 * u - 208 * v + 128) >> 8),
-                    clamp_u8_i32((298 * c + 516 * u + 128) >> 8),
-                )
-            };
+            let u = unsafe { i32::from(*src.get_unchecked(cb_off)) } - 128;
+            let v = unsafe { i32::from(*src.get_unchecked(cr_off)) } - 128;
+            let r = clamp_u8_i32((298 * c + 409 * v + 128) >> 8);
+            let g = clamp_u8_i32((298 * c - 100 * u - 208 * v + 128) >> 8);
+            let b = clamp_u8_i32((298 * c + 516 * u + 128) >> 8);
             let pixel = u32::from_le_bytes([b, g, r, 0]);
             unsafe {
                 core::ptr::write_volatile(dst_row.add(col_idx), pixel);
@@ -922,7 +910,7 @@ pub(crate) fn present_nv12_surface_center(
 
     let byte_len = dst_pitch.saturating_mul(dst_height);
     crate::intel::dma_flush(surface.virt, byte_len);
-    notify_primary_surface_present(surface, "nv12-center", byte_len);
+    notify_primary_surface_present(surface, "imc3-center", byte_len);
     true
 }
 

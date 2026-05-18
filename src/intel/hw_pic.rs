@@ -28,7 +28,7 @@ pub(crate) enum HwPicStatus {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum HwPicPixelFormat {
-    Nv12,
+    Imc3,
     Unknown,
 }
 
@@ -317,7 +317,7 @@ fn process_jpeg_job(job: HwPicJob) -> HwPicOutput {
         smoke.ring_tail_bytes
     );
     crate::log!(
-        "intel/hw_pic-stage: id={} stage=jpeg-state accepted=1 input={} output={} components={} interleaved={} dri={} mcu_count={} pipe_mode=0x{:08X} surface_dw=0x{:08X}/0x{:08X} pic_dw=0x{:08X}/0x{:08X} stage_flags=0x{:08X}\n",
+        "intel/hw_pic-stage: id={} stage=jpeg-state accepted=1 input={} output={} components={} interleaved={} dri={} mcu_count={} scan=0x{:X}+0x{:X} bsd_dw4=0x{:08X} pipe_mode=0x{:08X} surface_dw=0x{:08X}/0x{:08X}/0x{:08X}/0x{:08X} pic_dw=0x{:08X}/0x{:08X} stage_flags=0x{:08X}\n",
         job.id,
         smoke.jpeg_input_format,
         smoke.jpeg_output_format,
@@ -325,9 +325,14 @@ fn process_jpeg_job(job: HwPicJob) -> HwPicOutput {
         smoke.jpeg_interleaved as u8,
         smoke.jpeg_restart_interval,
         smoke.jpeg_mcu_count,
+        smoke.jpeg_scan_data_offset,
+        smoke.jpeg_scan_data_length,
+        smoke.jpeg_bsd_dw4,
         smoke.pipe_mode_dw1,
         smoke.surface_dw2,
         smoke.surface_dw3,
+        smoke.surface_dw4,
+        smoke.surface_dw5,
         smoke.jpeg_pic_dw1,
         smoke.jpeg_pic_dw2,
         smoke.stage_flags_value
@@ -455,7 +460,7 @@ fn process_jpeg_job(job: HwPicJob) -> HwPicOutput {
             HwPicStatus::Failed
         },
         format: if retired {
-            HwPicPixelFormat::Nv12
+            HwPicPixelFormat::Imc3
         } else {
             HwPicPixelFormat::Unknown
         },
