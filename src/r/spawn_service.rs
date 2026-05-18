@@ -779,7 +779,13 @@ fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
 
     let mut spawned_any = false;
     for i in 0..count {
-        match spawn_local(spawner, |_spawner| crate::usb2::crabusb_bsp_service(i)) {
+        #[cfg(feature = "usb-host2")]
+        let spawn_result =
+            spawn_local(spawner, |_spawner| crate::usb2::crabusb_host2_bsp_service(i));
+        #[cfg(not(feature = "usb-host2"))]
+        let spawn_result = spawn_local(spawner, |_spawner| crate::usb2::crabusb_bsp_service(i));
+
+        match spawn_result {
             SpawnAttempt::Spawned => {
                 spawned_any = true;
             }
