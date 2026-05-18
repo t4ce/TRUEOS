@@ -471,6 +471,40 @@ fn connected_ports_summary(controller_id: usize) -> String {
     out
 }
 
+#[derive(Clone, Copy)]
+struct ObservedPortLocation {
+    root_port_id: u8,
+    port_id: u8,
+    route_string: u32,
+    speed: usb_if::Speed,
+}
+
+fn observed_port_location(controller_id: usize, ordinal: usize, fallback_id: usize) -> ObservedPortLocation {
+    if let Some(diag) = super::controller_mmio_diag(controller_id)
+        && let Some(port) = diag
+            .ports
+            .iter()
+            .filter(|port| (port.portsc & 0x1) != 0)
+            .nth(ordinal)
+    {
+        let raw_speed = (port.portsc >> 10) & 0xF;
+        return ObservedPortLocation {
+            root_port_id: port.port_id,
+            port_id: port.port_id,
+            route_string: u32::from(port.port_id) << 24,
+            speed: usb_if::Speed::from_xhci_portsc(raw_speed as u8),
+        };
+    }
+
+    let fallback_port = fallback_id.min(u8::MAX as usize) as u8;
+    ObservedPortLocation {
+        root_port_id: fallback_port,
+        port_id: fallback_port,
+        route_string: u32::from(fallback_port) << 24,
+        speed: usb_if::Speed::Full,
+    }
+}
+
 fn install_event_handler(controller_id: usize, handler: EventHandler) {
     *EVENT_HANDLER[controller_id].lock() = Some(handler);
     EVENT_HANDLER_READY[controller_id].store(true, Ordering::Release);
@@ -528,22 +562,21 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
     }
 
     let mut current_devices: Vec<ObservedUsbDevice> = Vec::new();
-    for dev in devices.iter() {
+    for (ordinal, dev) in devices.iter().enumerate() {
         let desc = dev.descriptor();
         // Keep the observation pass non-consuming. The kmod crabusb backend
         // transfers leaf ownership on open_device(); doing that here just to
         // decorate the table with strings forces the later class bind path to
         // re-address an already-addressed physical device.
-        let topo = dev.topology();
-        let location = dev.location();
+        let location = observed_port_location(info.index, ordinal, dev.id());
         current_devices.push(ObservedUsbDevice {
             backend_id: dev.id(),
             slot_id: dev.id() as u32,
             stable_id: dev.id() as u32,
-            root_port_id: topo.root_port_id,
-            port_id: topo.port_id,
+            root_port_id: location.root_port_id,
+            port_id: location.port_id,
             route_string: location.route_string,
-            speed: speed_label(topo.port_speed),
+            speed: speed_label(location.speed),
             vendor_id: desc.vendor_id,
             product_id: desc.product_id,
             class: desc.class,
@@ -565,9 +598,9 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
         note_connected_device(info.index, dev);
     }
 
-    for dev in devices.iter() {
+    for (ordinal, dev) in devices.iter().enumerate() {
         let desc = dev.descriptor();
-        let topo = dev.topology();
+        let location = observed_port_location(info.index, ordinal, dev.id());
         let if_count: usize = dev
             .configurations()
             .iter()
@@ -585,20 +618,20 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
             crate::log!(
                 "crabusb: dev ctrl={} root_port={} vid={:04X} pid={:04X} class={:02X} subclass={:02X} proto={:02X} speed={} ifs={} eps={}\n",
                 info.index,
-                topo.root_port_id,
+                location.root_port_id,
                 desc.vendor_id,
                 desc.product_id,
                 desc.class,
                 desc.subclass,
                 desc.protocol,
-                speed_label(topo.port_speed),
+                speed_label(location.speed),
                 if_count,
                 ep_count
             );
             crate::log!(
                 "crabusb: descriptor check ctrl={} root_port={} ok cfgs={}\n",
                 info.index,
-                topo.root_port_id,
+                location.root_port_id,
                 dev.configurations().len()
             );
 
@@ -628,7 +661,7 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
                 crate::log!(
                     "crabusb: bind ctrl={} root_port={} vid={:04X} pid={:04X} skip=hub\n",
                     info.index,
-                    topo.root_port_id,
+                    location.root_port_id,
                     desc.vendor_id,
                     desc.product_id
                 );
@@ -683,7 +716,7 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
                 crate::log!(
                     "crabusb: bind ctrl={} root_port={} vid={:04X} pid={:04X} handoff=mouse-only\n",
                     info.index,
-                    topo.root_port_id,
+                    location.root_port_id,
                     desc.vendor_id,
                     desc.product_id
                 );
@@ -746,7 +779,7 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
             crate::log!(
                 "crabusb: bind ctrl={} root_port={} vid={:04X} pid={:04X} handoff=true\n",
                 info.index,
-                topo.root_port_id,
+                location.root_port_id,
                 desc.vendor_id,
                 desc.product_id
             );
