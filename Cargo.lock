@@ -12,7 +12,7 @@ dependencies = [
  "bytes",
  "core3",
  "crab-usb 0.6.2",
- "crab-usb 0.9.0",
+ "crab-usb 0.9.1",
  "crc32fast",
  "dma-api",
  "embassy-executor",
@@ -429,6 +429,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "convert_case"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "633458d4ef8c78b72454de2d54fd6ab2e60f9e02be22f3c6104cdc8a4e0fceb9"
+dependencies = [
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "cordyceps"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -483,7 +492,8 @@ dependencies = [
 
 [[package]]
 name = "crab-usb"
-version = "0.9.0"
+version = "0.9.1"
+source = "git+https://github.com/drivercraft/CrabUSB?branch=main#e83b56b0672460b400105f3855222af58c03af87"
 dependencies = [
  "anyhow",
  "bitflags 2.11.1",
@@ -501,7 +511,7 @@ dependencies = [
  "thiserror",
  "tock-registers",
  "trait-ffi",
- "usb-if 0.7.1",
+ "usb-if 0.7.0",
  "xhci",
 ]
 
@@ -721,6 +731,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "derive_more"
+version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d751e9e49156b02b44f9c1815bcb94b984cdcc4396ecc32521c739452808b134"
+dependencies = [
+ "derive_more-impl",
+]
+
+[[package]]
+name = "derive_more-impl"
+version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "799a97264921d8623a957f6c3b9011f3b5492f557bbb7a5a19b7fa6d06ba8dcb"
+dependencies = [
+ "convert_case 0.10.0",
+ "proc-macro2",
+ "quote",
+ "rustc_version",
+ "syn",
+ "unicode-xid",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -745,13 +778,15 @@ dependencies = [
 
 [[package]]
 name = "dma-api"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "aarch64-cpu-ext",
  "cfg-if",
+ "derive_more",
  "log",
  "mbarrier",
  "spin",
+ "thiserror",
 ]
 
 [[package]]
@@ -2856,7 +2891,7 @@ version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d87d49469ee333631b3130bec28965c47dcf0d4f3a792f8ed425dd036cf84be7"
 dependencies = [
- "convert_case",
+ "convert_case 0.8.0",
  "lenient_semver",
  "proc-macro2",
  "quote",
@@ -3014,6 +3049,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9629274872b2bfaf8d66f5f15725007f635594914870f65218920345aa11aa8c"
 
 [[package]]
+name = "unicode-xid"
+version = "0.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
+
+[[package]]
 name = "universal-hash"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3056,9 +3097,8 @@ dependencies = [
 
 [[package]]
 name = "usb-if"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4d2f3d338fd260603442d59d583012de4d3ca6b0122593602dc50db3fb7f6817"
+version = "0.7.0"
+source = "git+https://github.com/drivercraft/CrabUSB?branch=main#e83b56b0672460b400105f3855222af58c03af87"
 dependencies = [
  "anyhow",
  "futures",

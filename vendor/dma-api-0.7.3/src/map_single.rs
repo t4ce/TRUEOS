@@ -1,6 +1,5 @@
-use core::{num::NonZeroUsize, ptr::NonNull};
-
 use alloc::vec::Vec;
+use core::{num::NonZeroUsize, ptr::NonNull};
 
 use crate::{DeviceDma, DmaDirection, DmaError, DmaMapHandle};
 
