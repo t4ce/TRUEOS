@@ -916,13 +916,11 @@ fn build_jpeg_smoke_batch_skeleton(
     let output_pitch = media::align_up_u32(coded_width.max(128), 128);
     let (chroma_y_offset, cr_y_offset, _) =
         imc3_tiled_surface_layout(coded_height, output_pitch as usize)?;
-    let frame_width_blocks_minus1 =
-        (media::align_up_u32(coded_width.max(8), 8) / 8).saturating_sub(1);
-    let frame_height_blocks_minus1 =
-        (media::align_up_u32(coded_height.max(8), 8) / 8).saturating_sub(1);
-    let jpeg_output_format = jpeg_scan_info
-        .map(|scan_info| jpeg_output_format_from_input(scan_info.input_format))
+    let jpeg_input_format = jpeg_scan_info
+        .map(|scan_info| scan_info.input_format)
         .unwrap_or(0);
+    let (frame_width_blocks_minus1, frame_height_blocks_minus1) =
+        jpeg_frame_blocks_minus1(jpeg_input_format, coded_width, coded_height);
     let pipe_mode_dw1 =
         MFX_PIPE_MODE_LONG_FORMAT | MFX_PIPE_MODE_PRE_DEBLOCK_OUTPUT | MFX_PIPE_MODE_CODEC_JPEG;
     let mut stage_flags = MEDIA_STAGE_FLAG_JPEG_SMOKE
@@ -1096,10 +1094,7 @@ fn build_jpeg_smoke_batch_skeleton(
             MFX_CMD_LEN_JPEG_PIC_STATE,
         ),
     )?;
-    batch[jpeg_pic + 1] = jpeg_scan_info
-        .map(|scan_info| u32::from(scan_info.input_format))
-        .unwrap_or(0)
-        | (u32::from(jpeg_output_format) << 8);
+    batch[jpeg_pic + 1] = u32::from(jpeg_input_format);
     batch[jpeg_pic + 2] = frame_width_blocks_minus1 | (frame_height_blocks_minus1 << 16);
 
     let fallback_qm = [16u8; 64];
@@ -1237,15 +1232,13 @@ pub(super) fn submit_jpeg_smoke_batch(
     let jpeg_huff_tables = parse_jpeg_huff_tables(bitstream);
     let jpeg_scan_info = parse_jpeg_scan_info(bitstream);
     let output_surface_pitch = media::align_up_u32(coded_width.max(128), 128) as usize;
-    let frame_width_blocks_minus1 =
-        (media::align_up_u32(coded_width.max(8), 8) / 8).saturating_sub(1);
-    let frame_height_blocks_minus1 =
-        (media::align_up_u32(coded_height.max(8), 8) / 8).saturating_sub(1);
     let jpeg_input_format = jpeg_scan_info
         .as_ref()
         .map(|scan_info| scan_info.input_format)
         .unwrap_or(0);
     let jpeg_output_format = jpeg_output_format_from_input(jpeg_input_format);
+    let (frame_width_blocks_minus1, frame_height_blocks_minus1) =
+        jpeg_frame_blocks_minus1(jpeg_input_format, coded_width, coded_height);
     let (chroma_y_offset, cr_y_offset, output_surface_bytes) =
         imc3_tiled_surface_layout(coded_height, output_surface_pitch).unwrap_or((0, 0, 0));
     if output_surface_bytes == 0 || output_surface_bytes > backing.output_surface_bytes {
@@ -1271,7 +1264,7 @@ pub(super) fn submit_jpeg_smoke_batch(
         | (4 << 28);
     let pipe_mode_dw1 =
         MFX_PIPE_MODE_LONG_FORMAT | MFX_PIPE_MODE_PRE_DEBLOCK_OUTPUT | MFX_PIPE_MODE_CODEC_JPEG;
-    let jpeg_pic_dw1 = u32::from(jpeg_input_format) | (u32::from(jpeg_output_format) << 8);
+    let jpeg_pic_dw1 = u32::from(jpeg_input_format);
     let jpeg_pic_dw2 = frame_width_blocks_minus1 | (frame_height_blocks_minus1 << 16);
 
     let batch_tail_bytes = build_jpeg_smoke_batch_skeleton(
