@@ -9,12 +9,24 @@ use xhci::{
 };
 
 use super::{reg::XhciRegisters, ring::SendRing};
-use crate::{err::ConvertXhciError, osal::Kernel, queue::Finished};
+use crate::{BusAddr, err::ConvertXhciError, osal::Kernel, queue::Finished};
 
 #[derive(Clone)]
 pub struct CommandRing(Arc<Mutex<Inner>>);
 
 impl CommandRing {
+    fn submit(&self, trb: command::Allowed) -> BusAddr {
+        let mut inner = self.0.lock();
+        let trb_addr = inner.ring.enque_command(trb);
+        wmb();
+        inner
+            .reg
+            .write()
+            .doorbell
+            .write_volatile_at(0, doorbell::Register::default());
+        trb_addr
+    }
+
     pub fn new(
         direction: crate::osal::DmaDirection,
         dma: &Kernel,
@@ -40,20 +52,23 @@ impl CommandRing {
         inner.ring.finished_handle()
     }
 
+    pub fn submit_for_poll(&mut self, trb: command::Allowed) -> BusAddr {
+        self.submit(trb)
+    }
+
+    pub fn poll_finished(&self, addr: BusAddr) -> Option<CommandCompletion> {
+        let inner = self.0.lock();
+        inner.ring.get_finished(addr)
+    }
+
     pub async fn cmd_request(
         &mut self,
         trb: command::Allowed,
     ) -> Result<CommandCompletion, TransferError> {
         let fur = {
-            let mut inner = self.0.lock();
-            let trb_addr = inner.ring.enque_command(trb);
+            let trb_addr = self.submit(trb);
+            let inner = self.0.lock();
             let fur = inner.ring.take_finished_future(trb_addr);
-            wmb();
-            inner
-                .reg
-                .write()
-                .doorbell
-                .write_volatile_at(0, doorbell::Register::default());
             fur
         };
 

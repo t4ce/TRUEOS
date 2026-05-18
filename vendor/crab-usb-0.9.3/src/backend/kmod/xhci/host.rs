@@ -28,7 +28,7 @@ use crate::{
         kmod::{hub::HubOp, kcore::CoreOp, xhci::reg::SlotBell},
         ty::{DeviceOp, Event, EventHandlerOp},
     },
-    err::Result,
+    err::{ConvertXhciError, Result},
     osal::{Kernel, SpinWhile},
     queue::Finished,
 };
@@ -82,6 +82,9 @@ impl CoreOp for Xhci {
 }
 
 impl Xhci {
+    const COMMAND_POLL_DELAY_MS: u64 = 1;
+    const COMMAND_POLL_LIMIT: usize = 2_000;
+
     pub fn new(mmio: Mmio, kernel: &'static dyn KernelOp) -> Result<Self> {
         let reg = XhciRegisters::new(mmio);
 
@@ -492,6 +495,40 @@ impl Xhci {
         self.cmd.cmd_request(trb)
     }
 
+    fn poll_command_completion(
+        &mut self,
+        stage: &'static str,
+        addr: crate::BusAddr,
+    ) -> core::result::Result<CommandCompletion, TransferError> {
+        for _ in 0..Self::COMMAND_POLL_LIMIT {
+            if let Some(handler) = self.event_handler.as_ref() {
+                let _ = handler.handle_event();
+            }
+
+            if let Some(cpl) = self.cmd.poll_finished(addr) {
+                return Ok(cpl);
+            }
+
+            self.kernel
+                .delay(Duration::from_millis(Self::COMMAND_POLL_DELAY_MS));
+        }
+
+        let sts = self.reg.read().operational.usbsts.read_volatile();
+        let cmd = self.reg.read().operational.usbcmd.read_volatile();
+        Err(TransferError::Other(anyhow!(
+            "xHCI command timed out during {} addr={:#x} halted={} cnr={} reset={} hse={} hce={} eint={} pcd={}",
+            stage,
+            addr.raw(),
+            sts.hc_halted(),
+            sts.controller_not_ready(),
+            cmd.host_controller_reset(),
+            sts.host_system_error(),
+            sts.host_controller_error(),
+            sts.event_interrupt(),
+            sts.port_change_detect()
+        )))
+    }
+
     pub(crate) fn is_64bit_ctx(&self) -> bool {
         self.reg
             .read()
@@ -508,10 +545,18 @@ impl Xhci {
     pub(crate) async fn device_slot_assignment(
         &mut self,
     ) -> core::result::Result<SlotId, TransferError> {
-        // enable slot
-        let result = self
-            .cmd_request(command::Allowed::EnableSlot(command::EnableSlot::default()))
-            .await?;
+        let cmd_addr = self
+            .cmd
+            .submit_for_poll(command::Allowed::EnableSlot(command::EnableSlot::default()));
+        let result = self.poll_command_completion("enable-slot", cmd_addr)?;
+        match result.completion_code() {
+            Ok(code) => code.to_result()?,
+            Err(err) => {
+                return Err(TransferError::Other(anyhow!(
+                    "enable-slot completion decode failed: {err:?}"
+                )));
+            }
+        }
 
         let slot_id = result.slot_id();
         trace!("assigned slot id: {slot_id}");
@@ -575,10 +620,9 @@ impl EventHandler {
             });
     }
 
-    fn clean_event_ring(&self) -> (Event, bool) {
+    fn clean_event_ring(&self) -> Event {
         use xhci::ring::trb::event::Allowed;
         let mut event = Event::Nothing;
-        let mut drained = false;
         let mut command_events = 0usize;
         let mut port_events = 0usize;
         let mut transfer_events = 0usize;
@@ -586,7 +630,6 @@ impl EventHandler {
         let mut event_loop = 0usize;
 
         while let Some(allowed) = self.event_ring().next() {
-            drained = true;
             match allowed {
                 Allowed::CommandCompletion(c) => {
                     command_events += 1;
@@ -657,16 +700,20 @@ impl EventHandler {
                 count: transfer_events,
             };
         }
-        (event, drained)
+        event
     }
 }
 
 impl EventHandlerOp for EventHandler {
     fn handle_event(&self) -> Event {
+        let mut res = Event::Nothing;
         let sts = self.reg().operational.usbsts.read_volatile();
         let has_event_interrupt = sts.event_interrupt();
         let has_pending_event = self.event_ring().has_pending_event();
-        let (res, drained) = self.clean_event_ring();
+
+        if !has_event_interrupt && !has_pending_event {
+            return res;
+        }
 
         {
             let irq = self.reg().interrupter_register_set.interrupter_mut(0);
@@ -695,10 +742,6 @@ impl EventHandlerOp for EventHandler {
             }
         }
 
-        if !has_event_interrupt && !has_pending_event && !drained {
-            return Event::Nothing;
-        }
-
         if has_event_interrupt {
             self.reg().operational.usbsts.update_volatile(|r| {
                 r.clear_event_interrupt();
@@ -712,6 +755,7 @@ impl EventHandlerOp for EventHandler {
             r.clear_interrupt_pending();
         });
 
+        res = self.clean_event_ring();
         self.update_erdp(true);
 
         res
