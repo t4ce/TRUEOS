@@ -57,7 +57,6 @@ struct TrueosVmId {
     preserve_req: AtomicBool,
     preserve_exit: AtomicBool,
     marker_seen: AtomicBool,
-    guest_boot_armed: AtomicBool,
 }
 
 impl TrueosVmId {
@@ -69,7 +68,6 @@ impl TrueosVmId {
             preserve_req: AtomicBool::new(false),
             preserve_exit: AtomicBool::new(false),
             marker_seen: AtomicBool::new(false),
-            guest_boot_armed: AtomicBool::new(false),
         }
     }
 }
@@ -883,20 +881,6 @@ fn snapshot_on_preserve_exit(vm_id: u8) {
     }
 }
 
-pub fn guest_boot_take() -> bool {
-    let vm_id = current_vm_id_for_log();
-    vm_slot(vm_id)
-        .map(|vm| vm.guest_boot_armed.swap(false, Ordering::AcqRel))
-        .unwrap_or(false)
-}
-
-pub fn guest_boot_active() -> bool {
-    let vm_id = current_vm_id_for_log();
-    vm_slot(vm_id)
-        .map(|vm| vm.guest_boot_armed.load(Ordering::Acquire))
-        .unwrap_or(false)
-}
-
 pub fn request_preserve_active_vm() -> bool {
     if let Some(vm_id) = current_vm_id() {
         return request_preserve(vm_id).unwrap_or(false);
@@ -1303,14 +1287,8 @@ async fn vmx_launch_once_with_ept(
         }
 
         if first {
-            if let Some(vm) = vm {
-                vm.guest_boot_armed.store(true, Ordering::Release);
-            }
             crate::log!("app-vm-run-queue: vmlaunch begin vm={}\n", vm_id);
             vmlaunch_once_wrapper(&mut lr);
-            if let Some(vm) = vm {
-                vm.guest_boot_armed.store(false, Ordering::Release);
-            }
             first = false;
         } else {
             vmresume_once_wrapper(&mut lr);
