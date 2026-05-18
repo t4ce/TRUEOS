@@ -9,7 +9,7 @@ use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
-use crate::usb2::api::{InterfaceEndpointError, claim_interface};
+use crate::usb2::api::{EndpointSubmitExt, InterfaceEndpointError, claim_interface};
 
 const HID_INTERRUPT_TIMEOUT_MS: u64 = 1000;
 

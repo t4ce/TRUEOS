@@ -271,9 +271,11 @@ async fn bot_command_in(
     }
 
     let mut got = 0usize;
+    let data_len = data.len();
+    let data_ptr = data.as_ptr();
     for _ in 0..BOT_IO_RETRIES {
         let Some(result) =
-            with_timeout_or_none(bulk_in.submit_and_wait(data), BOT_IO_TIMEOUT_MS).await
+            with_timeout_or_none(bulk_in.submit_and_wait(&mut *data), BOT_IO_TIMEOUT_MS).await
         else {
             log_bot_transport_debug(
                 "data-timeout",
@@ -281,14 +283,14 @@ async fn bot_command_in(
                 tag,
                 bulk_in_ep,
                 1,
-                data.len(),
-                data.as_ptr(),
+                data_len,
+                data_ptr,
             );
             log_transport_debug("data-timeout");
             return Err(MassProbeError::Transport("data-timeout"));
         };
         got = result.map_err(|_| {
-            log_bot_transport_debug("data-in", cmd, tag, bulk_in_ep, 1, data.len(), data.as_ptr());
+            log_bot_transport_debug("data-in", cmd, tag, bulk_in_ep, 1, data_len, data_ptr);
             log_transport_debug("data-in");
             MassProbeError::Transport("data-in")
         })?;
