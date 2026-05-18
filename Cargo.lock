@@ -11,7 +11,8 @@ dependencies = [
  "axum",
  "bytes",
  "core3",
- "crab-usb",
+ "crab-usb 0.6.2",
+ "crab-usb 0.9.0",
  "crc32fast",
  "dma-api",
  "embassy-executor",
@@ -476,7 +477,31 @@ dependencies = [
  "thiserror",
  "tock-registers",
  "trait-ffi",
- "usb-if",
+ "usb-if 0.5.1",
+ "xhci",
+]
+
+[[package]]
+name = "crab-usb"
+version = "0.9.0"
+dependencies = [
+ "anyhow",
+ "bitflags 2.11.1",
+ "crossbeam",
+ "crossbeam-skiplist",
+ "dma-api",
+ "enum_dispatch",
+ "futures",
+ "id-arena",
+ "log",
+ "mbarrier",
+ "nb",
+ "num_enum",
+ "spin",
+ "thiserror",
+ "tock-registers",
+ "trait-ffi",
+ "usb-if 0.7.1",
  "xhci",
 ]
 
@@ -3020,6 +3045,20 @@ name = "usb-if"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3de4fe2143ed39a466b07f4546c23f64c51723ed437e04ed811e7f03ceb7cd69"
+dependencies = [
+ "anyhow",
+ "futures",
+ "log",
+ "num_enum",
+ "spin",
+ "thiserror",
+]
+
+[[package]]
+name = "usb-if"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4d2f3d338fd260603442d59d583012de4d3ca6b0122593602dc50db3fb7f6817"
 dependencies = [
  "anyhow",
  "futures",
