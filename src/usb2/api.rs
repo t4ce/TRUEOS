@@ -24,6 +24,12 @@ pub(crate) trait EndpointSubmitExt {
         buffer: &'a [u8],
         packets: usize,
     ) -> impl Future<Output = Result<usize, TransferError>> + 'a;
+
+    fn submit_iso_in_and_wait<'a>(
+        &'a mut self,
+        buffer: &'a mut [u8],
+        packets: usize,
+    ) -> impl Future<Output = Result<usize, TransferError>> + 'a;
 }
 
 pub(crate) trait EndpointSubmitBuffer<'a> {
@@ -92,6 +98,21 @@ impl EndpointSubmitExt for Endpoint {
             *last = last.saturating_add(rem);
         }
         completion_len(self.wait(TransferRequest::iso_out(buffer, &packet_lengths)).await).await
+    }
+
+    async fn submit_iso_in_and_wait<'a>(
+        &'a mut self,
+        buffer: &'a mut [u8],
+        packets: usize,
+    ) -> Result<usize, TransferError> {
+        let packet_count = packets.max(1);
+        let base = buffer.len() / packet_count;
+        let rem = buffer.len() % packet_count;
+        let mut packet_lengths = alloc::vec![base; packet_count];
+        if let Some(last) = packet_lengths.last_mut() {
+            *last = last.saturating_add(rem);
+        }
+        completion_len(self.wait(TransferRequest::iso_in(buffer, &packet_lengths)).await).await
     }
 }
 

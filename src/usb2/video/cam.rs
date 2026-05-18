@@ -4,11 +4,11 @@ use alloc::vec::Vec;
 use core::future::Future;
 use core::task::Poll;
 
-use crab_usb::{EndpointBulkIn, EndpointIsoIn, USBHost, usb_if};
+use crab_usb::{USBHost, usb_if};
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
-use crate::usb2::api::claim_interface;
+use crate::usb2::api::{EndpointBulkIn, EndpointIsoIn, EndpointSubmitExt, claim_interface};
 
 const CAMERA_CONTROL_TIMEOUT_MS: u64 = 1000;
 const CAMERA_BOOT_DELAY_MS: u64 = 2500;
@@ -212,7 +212,7 @@ async fn read_raw_configuration_descriptor(
 ) -> Option<Vec<u8>> {
     let mut header = [0u8; 9];
     if device
-        .ep_ctrl()
+        .ctrl_ep_mut()
         .get_descriptor(
             usb_if::descriptor::DescriptorType::CONFIGURATION,
             config_index,
@@ -230,7 +230,7 @@ async fn read_raw_configuration_descriptor(
     }
     let mut raw = alloc::vec![0u8; total_len];
     device
-        .ep_ctrl()
+        .ctrl_ep_mut()
         .get_descriptor(
             usb_if::descriptor::DescriptorType::CONFIGURATION,
             config_index,
@@ -663,7 +663,7 @@ async fn stream_iso(
 
     loop {
         let read = match iso_in
-            .submit_and_wait(rx.as_mut_slice(), ISO_PACKETS_PER_READ)
+            .submit_iso_in_and_wait(rx.as_mut_slice(), ISO_PACKETS_PER_READ)
             .await
         {
             Ok(n) => n.min(rx.len()),
@@ -824,11 +824,7 @@ async fn camera_stream_task(
         choice.encoding.name()
     );
 
-    if let Err(err) = device
-        .ep_ctrl()
-        .set_configuration(target.configuration_value)
-        .await
-    {
+    if let Err(err) = device.set_configuration(target.configuration_value).await {
         crate::log!(
             "crabusb: camera {:04X}:{:04X} set cfg={} failed: {:?}\n",
             vendor_id,
@@ -925,7 +921,7 @@ pub(crate) async fn maybe_start_camera(
     let desc = dev_info.descriptor();
     let vendor_id = desc.vendor_id;
     let product_id = desc.product_id;
-    let stable_id = dev_info.stable_id().raw();
+    let stable_id = dev_info.id() as u32;
 
     let device = match host.open_device(dev_info).await {
         Ok(device) => device,
