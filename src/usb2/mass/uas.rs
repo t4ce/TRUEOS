@@ -949,7 +949,7 @@ pub(crate) async fn keepalive_mass_uas_skhynix(
     status_in: &mut EndpointBulkIn,
     tag: u32,
 ) -> Result<(), MassProbeError> {
-    let cdb = scsi::cdb_test_unit_ready();
+    let cdb = [0, 0, 0, 0, 0, 0];
     uas_command_no_data(command_out, status_in, "test-unit-ready", &cdb, tag).await
 }
 

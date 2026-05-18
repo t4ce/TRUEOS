@@ -46,7 +46,6 @@ impl SenseKey {
     }
 }
 
-pub const OP_TEST_UNIT_READY: u8 = 0x00;
 pub const OP_REQUEST_SENSE: u8 = 0x03;
 pub const OP_INQUIRY: u8 = 0x12;
 pub const OP_READ_CAPACITY_10: u8 = 0x25;
@@ -69,10 +68,6 @@ pub enum CdbBuildError {
     MisalignedOffset,
     MisalignedLength,
     TransferTooLarge,
-}
-
-pub fn cdb_test_unit_ready() -> [u8; 6] {
-    [OP_TEST_UNIT_READY, 0, 0, 0, 0, 0]
 }
 
 pub fn cdb_request_sense(allocation_len: u8) -> [u8; 6] {

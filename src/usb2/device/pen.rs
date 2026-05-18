@@ -62,10 +62,7 @@ struct UsbMassRuntime {
     bulk_in_ep: u8,
     bulk_out_ep: u8,
     endpoints: UsbMassEndpoints,
-    transport_kind: mass::MassTransportKind,
     io_profile: MassIoProfile,
-    port_speed: usb_if::Speed,
-    uas_candidate_count: u8,
     io_tag: u32,
     sync_cache_unsupported: bool,
     current_max_io_bytes: usize,
@@ -163,11 +160,6 @@ fn remember_registered_disk(runtime_key: u64, handle: block::DeviceHandle) {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum UasRoutePhase {
-    Init,
-    Fill,
-    Submit,
-    Reclaim,
-    Reset,
     Done,
 }
 
@@ -196,20 +188,12 @@ pub(crate) struct UasRouteCounters {
     pub dead_streams: u32,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum UasRouteProbeKind {
-    Read,
-    Write,
-}
-
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct UasRouteProbeConfig {
-    pub kind: UasRouteProbeKind,
     pub lba: u64,
     pub total_bytes: u64,
     pub chunk_bytes: usize,
     pub max_inflight: usize,
-    pub pattern_seed: u64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1023,10 +1007,7 @@ pub async fn mass_storage_task(
         bulk_in_ep: target.bulk_in,
         bulk_out_ep: target.bulk_out,
         endpoints: UsbMassEndpoints::Bot { bulk_in, bulk_out },
-        transport_kind,
         io_profile,
-        port_speed,
-        uas_candidate_count,
         io_tag: 0x544F_0000 | u32::from(slot),
         sync_cache_unsupported: false,
         current_max_io_bytes: initial_io_bytes,

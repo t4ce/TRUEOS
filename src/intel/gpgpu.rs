@@ -36,10 +36,9 @@ pub(crate) use mandelbrot::{
 pub(crate) use matmul::{
     log_gpgpu_t63_first_tile_output_detail_once, stage_gpgpu_one_tile_record_probe,
     stage_gpgpu_tile_record_rows_probe, submit_gpgpu_one_tile_output_compare_probe,
-    submit_gpgpu_one_tile_output_sentinel_probe,
-    submit_gpgpu_t5_one_row_matvec_probe, submit_gpgpu_t6_one_row_matvec_probe,
-    submit_gpgpu_t61_one_row_matvec_probe, submit_gpgpu_t62_partial_matvec_probe,
-    submit_gpgpu_t63_accum16_hi_live32_partial_matvec_probe,
+    submit_gpgpu_one_tile_output_sentinel_probe, submit_gpgpu_t5_one_row_matvec_probe,
+    submit_gpgpu_t6_one_row_matvec_probe, submit_gpgpu_t61_one_row_matvec_probe,
+    submit_gpgpu_t62_partial_matvec_probe, submit_gpgpu_t63_accum16_hi_live32_partial_matvec_probe,
 };
 
 const FORCEWAKE_RENDER: usize = 0x0A278;
@@ -138,6 +137,12 @@ const GPGPU_TILE_X_BYTES_PER_ELEM: usize = 4;
 const GPGPU_TILE_OUTPUT_BYTES_PER_ELEM: usize = 4;
 const GPGPU_TILE_TARGET_TILES: usize = 3;
 const MANDELBROT_STRIP_READBACK_POLLS: usize = 256;
+#[allow(dead_code)]
+const MANDELBROT_LINE1280_VERIFY_SCANOUT_READBACK: bool = false;
+#[allow(dead_code)]
+const MANDELBROT_LINE1280_VERIFY_PROGRAM_UPLOAD: bool = false;
+#[allow(dead_code)]
+const MANDELBROT_LINE1280_NOTIFY_SCANOUT_WRITES: bool = false;
 const GPGPU_WEIGHT_TILE_BYTES: usize =
     GPGPU_TILE_ROWS * GPGPU_TILE_K_DIM * GPGPU_TILE_WEIGHT_BYTES_PER_ELEM;
 const GPGPU_X_VECTOR_BYTES: usize = GPGPU_TILE_K_DIM * GPGPU_TILE_X_BYTES_PER_ELEM;
@@ -1409,6 +1414,7 @@ const GPGPU_WALKER_SIMD8_LANES: u32 = 8;
 // Burn/matmul kernel path; it is only a bounded oscilloscope for the current
 // phase: if the dispatched EU thread can write shared RAM, then we know it
 // decoded enough instructions to issue a dataport side effect before/around EOT.
+#[allow(dead_code)]
 static GPU_PROGRAM_SHARED_RAM_WRITE_CODE: [u32; 12] = [
     0xA07E0061,
     0x00010000,
@@ -1544,7 +1550,21 @@ static GPGPU_EU_C_STORE_VALUE: AtomicU32 = AtomicU32::new(0);
 static GPGPU_EU_PROVEN_WALKER_RETIRED: AtomicBool = AtomicBool::new(false);
 static GPGPU_EU_PROVEN_DISPATCH_DELTA: AtomicU32 = AtomicU32::new(0);
 static GPGPU_EU_PROVEN_C_STORE_VALUE: AtomicU32 = AtomicU32::new(0);
+#[allow(dead_code)]
+static MANDELBROT_Q12_PATCH_LOGGED: AtomicBool = AtomicBool::new(false);
 static MANDELBROT_WALKER_SHAPE_LOGGED: AtomicBool = AtomicBool::new(false);
+#[allow(dead_code)]
+static MANDELBROT_PREVIEW_FAILURE_LOGGED: AtomicBool = AtomicBool::new(false);
+#[allow(dead_code)]
+static MANDELBROT_GPU_COLOR_WITNESS_SUCCESS_LOGGED: AtomicBool = AtomicBool::new(false);
+#[allow(dead_code)]
+static MANDELBROT_GPU_COLOR_WITNESS_FAILURE_LOGGED: AtomicBool = AtomicBool::new(false);
+#[allow(dead_code)]
+static MANDELBROT_LINE1280_TEMPLATE_UPLOADED: AtomicBool = AtomicBool::new(false);
+#[allow(dead_code)]
+static MANDELBROT_LINE1280_BURST_SUCCESS_LOGGED: AtomicBool = AtomicBool::new(false);
+#[allow(dead_code)]
+static MANDELBROT_LINE1280_BURST_FAILURE_LOGGED: AtomicBool = AtomicBool::new(false);
 static MANDELBROT_GROUPID_LINE1280_TEMPLATE_UPLOADED: AtomicBool = AtomicBool::new(false);
 static MANDELBROT_GROUPID_LINE1280_BURST_SUCCESS_LOGGED: AtomicBool = AtomicBool::new(false);
 static MANDELBROT_GROUPID_LINE1280_BURST_FAILURE_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -1729,6 +1749,32 @@ fn gpgpu_one_tile_sentinel_failure(
         GPGPU_ONE_TILE_OUTPUT_SENTINEL,
         RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
     );
+    crate::intel::GpgpuOneTileSentinelProof {
+        submitted: false,
+        finished: false,
+        readback_ok: false,
+        reason,
+        program_name: program.name,
+        output_gpu,
+        sentinel: GPGPU_ONE_TILE_OUTPUT_SENTINEL,
+        output_first_before: 0,
+        output_first_after: 0,
+        output_nonzero_before: 0,
+        output_nonzero_after: 0,
+        output_hits_lo64: 0,
+        dispatch_delta: 0,
+        finish_marker: 0,
+        expected_finish_marker: RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
+        batch_bytes: 0,
+    }
+}
+
+#[allow(dead_code)]
+fn gpgpu_one_tile_sentinel_failure_quiet(
+    reason: &'static str,
+    program: GpgpuEuProgram,
+    output_gpu: u64,
+) -> crate::intel::GpgpuOneTileSentinelProof {
     crate::intel::GpgpuOneTileSentinelProof {
         submitted: false,
         finished: false,

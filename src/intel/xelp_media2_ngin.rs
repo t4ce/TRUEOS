@@ -230,6 +230,7 @@ pub(crate) struct MediaGpuWindowLayout {
 }
 
 #[derive(Copy, Clone, Debug)]
+#[allow(dead_code)]
 pub(crate) struct MediaEngineRuntimeSnapshot {
     pub name: &'static str,
     pub ring_base: usize,
@@ -277,6 +278,7 @@ impl MediaEngineRuntimeSnapshot {
 }
 
 #[derive(Copy, Clone, Debug)]
+#[allow(dead_code)]
 pub(crate) struct MediaSliceWakeAck {
     pub name: &'static str,
     pub value: u32,
@@ -301,6 +303,7 @@ pub(super) struct MediaEngineForcewakeAck {
 }
 
 #[derive(Copy, Clone, Debug)]
+#[allow(dead_code)]
 pub(crate) struct MediaForcewakeSnapshot {
     pub global_req: u32,
     pub global_ack: u32,
@@ -310,6 +313,7 @@ pub(crate) struct MediaForcewakeSnapshot {
 }
 
 #[derive(Copy, Clone, Debug)]
+#[allow(dead_code)]
 pub(crate) struct MediaApiRoute {
     pub name: &'static str,
     pub workload: MediaWorkloadKind,
@@ -346,6 +350,7 @@ impl MediaApiShape {
 }
 
 #[derive(Copy, Clone, Debug)]
+#[allow(dead_code)]
 pub(crate) struct MediaTopology {
     pub sku_name: &'static str,
     pub active_engine_count: usize,
@@ -404,6 +409,7 @@ impl MediaSurfaceProbe {
 }
 
 #[derive(Copy, Clone, Debug)]
+#[allow(dead_code)]
 pub(crate) struct MediaDecodeFrameState {
     pub ready: bool,
     pub engine_name: &'static str,
@@ -434,6 +440,7 @@ pub(crate) struct MediaDecodeFrameState {
 }
 
 #[derive(Copy, Clone, Debug)]
+#[allow(dead_code)]
 pub(crate) struct MediaKickoffState {
     pub topology: MediaTopology,
     pub runtime_count: usize,
@@ -448,6 +455,7 @@ pub(crate) struct MediaKickoffState {
 }
 
 #[derive(Copy, Clone, Debug)]
+#[allow(dead_code)]
 pub(crate) struct Media2FirstFrameState {
     pub ready: bool,
     pub submit_completed: bool,

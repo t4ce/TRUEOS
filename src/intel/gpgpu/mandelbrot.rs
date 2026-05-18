@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use super::*;
 
 const MANDELBROT_ORACLE_LATEST_HANDLE9_BATCH_BYTES: &[u8] = include_bytes!(

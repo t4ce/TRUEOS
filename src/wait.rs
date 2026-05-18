@@ -334,10 +334,6 @@ impl<T> CompletionCell<T> {
         Poll::Pending
     }
 
-    pub async fn join(&self) -> T {
-        core::future::poll_fn(|cx| self.poll_take(cx)).await
-    }
-
     pub fn join_blocking(&self) -> T {
         loop {
             if let Some(value) = self.try_take() {
@@ -355,8 +351,6 @@ pub struct LocalJoinHandle<T> {
 impl<T> Unpin for LocalJoinHandle<T> {}
 
 impl<T> LocalJoinHandle<T> {
-    pub fn detach(self) {}
-
     pub fn join_blocking(self) -> T {
         self.completion.join_blocking()
     }
