@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use core::cmp::min;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use crab_usb::{EndpointKind, USBHost, usb_if};
+use crab_usb::{USBHost, usb_if};
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
@@ -338,8 +338,8 @@ async fn stream_target_audio(
     };
     let wav = &body[wav_data_off..wav_data_off + wav_data_len];
 
-    let endpoint_kind = match device.get_endpoint(target.endpoint_address).await {
-        Ok(kind) => kind,
+    let mut iso_out = match device.endpoint(target.endpoint_address) {
+        Ok(endpoint) => endpoint,
         Err(err) => {
             crate::log!(
                 "crabusb: target {:04X}:{:04X} ep=0x{:02X} open failed: {:?}\n",
@@ -352,7 +352,10 @@ async fn stream_target_audio(
         }
     };
 
-    let EndpointKind::IsochronousOut(mut iso_out) = endpoint_kind else {
+    let endpoint_info = iso_out.info();
+    if endpoint_info.transfer_type != usb_if::descriptor::EndpointType::Isochronous
+        || endpoint_info.direction != usb_if::transfer::Direction::Out
+    {
         crate::log!(
             "crabusb: target {:04X}:{:04X} if#{} alt={} ep=0x{:02X} is not iso-out\n",
             vendor_id,
@@ -362,7 +365,7 @@ async fn stream_target_audio(
             target.endpoint_address
         );
         return;
-    };
+    }
 
     let endpoint_payload_limit = usize::from(target.max_packet_size & 0x07FF);
     let packet_bytes = choose_audio_packet_bytes(endpoint_payload_limit);
@@ -494,7 +497,7 @@ pub(crate) async fn maybe_start_target_audio(
     let desc = dev_info.descriptor();
     let vendor_id = desc.vendor_id;
     let product_id = desc.product_id;
-    let stable_id = dev_info.stable_id().raw();
+    let stable_id = dev_info.id() as u32;
 
     let mut device = match host.open_device(dev_info).await {
         Ok(device) => device,

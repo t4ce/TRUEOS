@@ -539,7 +539,7 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
         current_devices.push(ObservedUsbDevice {
             backend_id: dev.id(),
             slot_id: dev.id() as u32,
-            stable_id: dev.stable_id().raw(),
+            stable_id: dev.id() as u32,
             root_port_id: topo.root_port_id,
             port_id: topo.port_id,
             route_string: location.route_string,
@@ -693,9 +693,6 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
             bound_any = true;
         }
         if super::midi::maybe_start_midi(host, dev, spawner, controller_id).await {
-            bound_any = true;
-        }
-        if super::video::cam::maybe_start_camera(host, dev, spawner, controller_id).await {
             bound_any = true;
         }
         let audio_started = super::sound::maybe_start_target_audio(host, dev, spawner).await;

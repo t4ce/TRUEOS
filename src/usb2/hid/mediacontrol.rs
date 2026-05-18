@@ -324,7 +324,7 @@ pub(crate) async fn maybe_start_media_control(
 
         let slot_id = u32::from(device.slot_id());
         let ep_target = endpoint_target_from_address(target.in_endpoint);
-        let stable_id = dev_info.stable_id().raw();
+        let stable_id = dev_info.id() as u32;
         let active_stream = ActiveMediaControlStream {
             stable_id,
             controller_id,
