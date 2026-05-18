@@ -693,7 +693,7 @@ async fn maybe_start_hid_boot_streams_filtered(
     let desc = dev_info.descriptor();
     let vendor_id = desc.vendor_id;
     let product_id = desc.product_id;
-    let stable_id = dev_info.stable_id().raw();
+    let stable_id = dev_info.id() as u32;
     let targets = pick_hid_boot_targets(dev_info.configurations());
     if targets.is_empty() {
         let hid_iface_count = dev_info
