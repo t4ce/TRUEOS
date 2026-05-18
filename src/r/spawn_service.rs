@@ -420,10 +420,6 @@ fn spawn_mandelbrot_gpu_sidequest(spawner: Spawner) -> SpawnAttempt {
     }
 }
 
-fn boot_lumen_service_enabled() -> bool {
-    crate::allcaps::lumen::BOOT_MODEL_SERVICE
-}
-
 fn spawn_ai_qjs_oneshot(spawner: Spawner) -> SpawnAttempt {
     let _ = spawner;
     SpawnAttempt::Skipped
@@ -1389,11 +1385,10 @@ static TASKS: [TaskSpec; 68] = [
         &TRUEOSFS_READY_HOOK_STARTED,
         spawn_trueosfs_ready_hook,
     ),
-    TaskSpec::enabled_gated(
+    TaskSpec::disabled(
         "lumen-service",
         crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
             | crate::r::readiness::MANDELBROT_GPU_SIDEQUEST_READY,
-        boot_lumen_service_enabled,
         &LUMEN_SERVICE_STARTED,
         spawn_lumen_service,
     ),

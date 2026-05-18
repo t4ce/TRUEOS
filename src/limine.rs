@@ -101,6 +101,16 @@ pub fn module_bytes_by_string(expected: &[u8]) -> Option<&'static [u8]> {
     None
 }
 
+pub fn module_bytes_by_path_suffix(expected_suffix: &[u8]) -> Option<&'static [u8]> {
+    let resp = MODULE_REQUEST.response()?;
+    for m in resp.modules().iter() {
+        if m.path().as_bytes().ends_with(expected_suffix) {
+            return bytes_from_limine_file(m);
+        }
+    }
+    None
+}
+
 pub fn kernel_file_bytes() -> Option<&'static [u8]> {
     let resp = EXECUTABLE_FILE_REQUEST.response()?;
     bytes_from_limine_file(resp.executable_file())

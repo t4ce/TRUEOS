@@ -45,7 +45,7 @@ HUC_FW_ISO_REL_PATH ?= EFI/BOOT/tgl_huc.bin
 BLUEPRINTS_ROOT ?= crates/TRUEOS-Blueprints
 BP_DIST_DIR ?= $(BLUEPRINTS_ROOT)/dist
 BP_ISO_DIR_REL ?= EFI/BOOT/apps
-BP_FILES_CMD ?= find "$(BP_DIST_DIR)" -maxdepth 1 -type f -name '*.bp' -print
+BP_FILES_CMD ?= find "$(BP_DIST_DIR)" -maxdepth 1 -type f -name 'file-system.bp' -print
 BP_SKIP_EMBED := 0
 QEMU_RUNNER := tools/qemu/run.sh
 QEMU_BIN ?= qemu-system-x86_64
@@ -218,6 +218,7 @@ iso: baremetal-reboot-log artifacts images limine
 		cp "$(ISO_DIR)/EFI/BOOT/$$(basename "$(HUC_FW_ISO_REL_PATH)")" "$(ISO_BOOT_DIR)/$(HUC_FW_ISO_REL_PATH)"; \
 	fi
 	@if [ "$(BP_SKIP_EMBED)" != "1" ]; then \
+		rm -rf "$(ISO_BOOT_DIR)/$(BP_ISO_DIR_REL)" "$(ISO_DIR)/$(BP_ISO_DIR_REL)"; \
 		mkdir -p $(ISO_BOOT_DIR)/$(BP_ISO_DIR_REL); \
 		$(BP_FILES_CMD) | while IFS= read -r bp; do \
 			cp "$$bp" "$(ISO_BOOT_DIR)/$(BP_ISO_DIR_REL)/$$(basename "$$bp")"; \
