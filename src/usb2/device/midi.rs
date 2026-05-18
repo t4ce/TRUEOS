@@ -7,7 +7,7 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::{Deque, Vec};
 use spin::Mutex;
 
-use super::api::{InterfaceEndpointError, claim_interface};
+use super::api::{EndpointSubmitExt, InterfaceEndpointError, claim_interface};
 
 const USB_CLASS_AUDIO: u8 = 0x01;
 const USB_SUBCLASS_MIDISTREAMING: u8 = 0x03;

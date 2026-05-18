@@ -9,6 +9,8 @@ use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
+use crate::usb2::api::EndpointSubmitExt;
+
 const AUDIO_DEMO_ENABLED: bool = false;
 const AUDIO_HTTP_LOCAL_DEMO_URLS: [&str; 1] = [crate::allports::local_assets::AUDIO_DEMO_URL];
 const AUDIO_HTTP_DEMO_TIMEOUT_MS: u32 = 30_000;
@@ -413,7 +415,7 @@ async fn stream_target_audio(
         }
 
         match iso_out
-            .submit_and_wait(packet_batch.as_slice(), packets_per_request)
+            .submit_iso_out_and_wait(packet_batch.as_slice(), packets_per_request)
             .await
         {
             Ok(sent) => {
