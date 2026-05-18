@@ -2,7 +2,6 @@ use core::fmt::Write;
 use core::str::SplitWhitespace;
 
 use acpi::sdt::fadt::Fadt;
-use acpi::sdt::madt::Madt;
 use acpi::sdt::mcfg::Mcfg;
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
@@ -1437,16 +1436,19 @@ fn cmd_tlb_facp(io: &'static dyn ShellBackend2) {
 }
 
 fn cmd_tlb_madt(io: &'static dyn ShellBackend2) {
-    let Some(tables) = crate::efi::acpi::ensure_tables() else {
+    if crate::efi::acpi::ensure_tables().is_none() {
         line(io, "tlb madt: no tables found");
         return;
-    };
+    }
 
-    if let Some(madt) = tables.find_table::<Madt>() {
-        line(io, alloc::format!("MADT Found @ 0x{:X}", madt.physical_start).as_str());
-        multiline(io, alloc::format!("{:#?}", unsafe { madt.virtual_start.as_ref() }).as_str());
-    } else {
+    let mut out = String::new();
+    crate::efi::acpi::madt::walk_subtables(|entry| {
+        writeln!(&mut out, "{:#?}", entry).unwrap();
+    });
+    if out.is_empty() {
         line(io, "MADT: Not found");
+    } else {
+        multiline(io, out.as_str());
     }
 }
 

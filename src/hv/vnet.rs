@@ -15,7 +15,6 @@ pub const VM_NET_OP_TCP_READ: u32 = 0x11;
 pub enum VmNetStatus {
     Ok = 0,
     BadArg = 1,
-    NotReady = 2,
 }
 
 #[repr(C)]
@@ -142,24 +141,6 @@ fn push_console_bytes(ctx: &mut VmNetContext, bytes: &[u8]) {
         emit_console_line(line.as_str());
         ctx.pending_console_text.drain(..=newline_idx);
     }
-}
-
-pub fn flush_console(vm_id: u8) {
-    let Some(ctx_lock) = context(vm_id) else {
-        return;
-    };
-
-    let mut ctx = ctx_lock.lock();
-    ctx.vm_id = vm_id;
-    if ctx.pending_console_text.is_empty() {
-        return;
-    }
-
-    let mut line = core::mem::take(&mut ctx.pending_console_text);
-    if line.ends_with('\r') {
-        line.pop();
-    }
-    emit_console_line(line.as_str());
 }
 
 pub fn tcp_write(vm_id: u8, bytes: &[u8]) -> Result<usize, VmNetStatus> {

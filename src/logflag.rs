@@ -29,7 +29,6 @@ pub(crate) const HV_LOGS: bool = true;
 pub(crate) const PORTAL_LOGS: bool = false;
 
 pub(crate) const UI2_ENABLE_VERBOSE_COMPOSE_LOGS: bool = false;
-pub(crate) const VHTTPS_VERBOSE: bool = false;
 pub(crate) const HTML_SHACK_VERBOSE: bool = false;
 pub(crate) const HTML_SHACK_IDLE_LOGS: bool = false;
 pub(crate) const GFX_FRAME_PROGRESS_LOGS: bool = false;
@@ -45,8 +44,6 @@ pub(crate) static VIRGL_PRESENT_DIAG_LOGS: AtomicU32 = AtomicU32::new(0);
 pub(crate) const INTEL_CURSOR_PROBE_LOGS: bool = false;
 
 pub(crate) const INTEL_DISPLAY_NGIN_LOGS: bool = true;
-pub(crate) const INTEL_MEDIA_NGIN_LOGS: bool = true;
-pub(crate) const INTEL_MEDIA_FS_CACHE_ENABLED: bool = true;
 pub(crate) const INTEL_MEDIA_PRESENT_LUMA_ONLY: bool = true;
 
 pub(crate) const GFX_CABI_FRAME_DEBUG_LOGS: bool = false;
@@ -59,7 +56,6 @@ pub(crate) const USB_VENDOR_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const BLUEPRINT_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
 pub(crate) const USB_AUDIO_DEBUG_LOGS: bool = false;
 pub(crate) const HID_DEBUG_REPORT_LOGS: bool = false;
-pub(crate) const USB_MASS_UAS_ADVANCED_PROBE_LOGS: bool = true;
 pub(crate) const USB_MASS_UAS_TRACE_LOGS: bool = false;
 pub(crate) const LUMEN_STORAGE_TRACE_LOGS: bool = false;
 

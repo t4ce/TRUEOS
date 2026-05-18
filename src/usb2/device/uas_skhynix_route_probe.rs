@@ -261,9 +261,13 @@ pub(crate) async fn boot_uas_skhynix_route_probe_task() {
     }
 
     crate::log!(
-        "uas-skhynix-route-probe: start disk={} label={} bs={} blocks={} max_xfer={} write_enabled={} write_x2={} write_lba={} chunk_bytes={} inflight={}\n",
+        "uas-skhynix-route-probe: start disk={} label={} serial={} bs={} blocks={} max_xfer={} write_enabled={} write_x2={} write_lba={} chunk_bytes={} inflight={}\n",
         info.id.raw(),
         info.label.as_deref().unwrap_or("-"),
+        info.serial
+            .as_ref()
+            .map(|serial| serial.as_str())
+            .unwrap_or("-"),
         info.block_size,
         info.block_count,
         info.max_transfer_bytes,

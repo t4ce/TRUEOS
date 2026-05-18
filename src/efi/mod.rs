@@ -1,11 +1,14 @@
 use crate::pci::mmio;
 
 use crate::limine;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 pub mod acpi;
 // pub mod acpi_uefi;
 
 const EFI_SYSTEM_TABLE_SIGNATURE: u64 = 0x5453_5953_2049_4249; // "IBI SYST"
+
+static EFI_RESET_BOOT_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -262,11 +265,66 @@ pub struct EfiRuntimeServices {
 }
 
 #[repr(usize)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum EfiResetType {
     Cold = 0,
     Warm = 1,
     Shutdown = 2,
     PlatformSpecific = 3,
+}
+
+impl EfiResetType {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Cold => "cold",
+            Self::Warm => "warm",
+            Self::Shutdown => "shutdown",
+            Self::PlatformSpecific => "platform-specific",
+        }
+    }
+}
+
+pub(crate) fn log_reset_runtime_once() {
+    if EFI_RESET_BOOT_LOGGED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    let Some(st) = system_table() else {
+        crate::log!("efi/reset: runtime-services present=0 reason=system-table-missing\n");
+        return;
+    };
+    let Ok(rt_ptr) = mmio::map_limine_struct::<EfiRuntimeServices>(st.runtime_services as u64)
+    else {
+        crate::log!(
+            "efi/reset: runtime-services present=0 reason=runtime-map-failed phys=0x{:X}\n",
+            st.runtime_services
+        );
+        return;
+    };
+    let rt = unsafe { rt_ptr.as_ref() };
+    let reset_phys = rt.reset_system as u64;
+    let reset_present = reset_phys != 0;
+    let acpi20_guid = EfiGuid::from_uefi_bytes([
+        0x71, 0xE8, 0x68, 0x88, 0xF1, 0xE4, 0xD3, 0x11, 0xBC, 0x22, 0x00, 0x80, 0xC7, 0x3C, 0x88,
+        0x81,
+    ]);
+    let reset_types = [
+        EfiResetType::Cold,
+        EfiResetType::Warm,
+        EfiResetType::Shutdown,
+        EfiResetType::PlatformSpecific,
+    ];
+    crate::log!(
+        "efi/reset: runtime-services present=1 reset_system_present={} reset_system_phys=0x{:X} reset_types={},{},{},{} guid_probe={} guid_name={} action=log-only\n",
+        reset_present as u8,
+        reset_phys,
+        reset_types[0].label(),
+        reset_types[1].label(),
+        reset_types[2].label(),
+        reset_types[3].label(),
+        acpi20_guid.fmt_canonical(),
+        cfg_guid_name(&acpi20_guid).unwrap_or("unknown"),
+    );
 }
 
 pub unsafe fn runtime_services_reset(reset_type: EfiResetType) {
