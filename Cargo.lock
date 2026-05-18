@@ -12,7 +12,7 @@ dependencies = [
  "bytes",
  "core3",
  "crab-usb 0.6.2",
- "crab-usb 0.9.1",
+ "crab-usb 0.9.3",
  "crc32fast",
  "dma-api",
  "embassy-executor",
@@ -492,8 +492,7 @@ dependencies = [
 
 [[package]]
 name = "crab-usb"
-version = "0.9.1"
-source = "git+https://github.com/drivercraft/CrabUSB?branch=main#e83b56b0672460b400105f3855222af58c03af87"
+version = "0.9.3"
 dependencies = [
  "anyhow",
  "bitflags 2.11.1",
@@ -511,7 +510,7 @@ dependencies = [
  "thiserror",
  "tock-registers",
  "trait-ffi",
- "usb-if 0.7.0",
+ "usb-if 0.7.1",
  "xhci",
 ]
 
@@ -3097,8 +3096,9 @@ dependencies = [
 
 [[package]]
 name = "usb-if"
-version = "0.7.0"
-source = "git+https://github.com/drivercraft/CrabUSB?branch=main#e83b56b0672460b400105f3855222af58c03af87"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4d2f3d338fd260603442d59d583012de4d3ca6b0122593602dc50db3fb7f6817"
 dependencies = [
  "anyhow",
  "futures",
