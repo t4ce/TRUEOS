@@ -875,6 +875,13 @@ pub unsafe extern "C" fn sys_halt() -> ! {
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn exit(code: c_int) -> ! {
+    let _ = code;
+    uart_write(b"std-abi: exit\n");
+    unsafe { sys_halt() }
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn errno_location() -> *mut c_int {
     (&TRUEOS_ERRNO as *const AtomicI32)
         .cast_mut()
@@ -1134,6 +1141,11 @@ pub unsafe extern "C" fn stat(path: *const c_char, buf: *mut c_void) -> c_int {
     }
     TRUEOS_ERRNO.store(0, Ordering::Relaxed);
     0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lstat(path: *const c_char, buf: *mut c_void) -> c_int {
+    unsafe { stat(path, buf) }
 }
 
 #[unsafe(no_mangle)]

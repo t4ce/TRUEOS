@@ -1184,6 +1184,8 @@ fn resolve_std_abi_import(name: &str) -> Option<usize> {
         "sys_cycle_count" => Some(crate::std_abi_shim::sys_cycle_count as *const () as usize),
         "sys_panic" => Some(crate::std_abi_shim::sys_panic as *const () as usize),
         "sys_halt" => Some(crate::std_abi_shim::sys_halt as *const () as usize),
+        "exit" => Some(crate::std_abi_shim::exit as *const () as usize),
+        "abort" => Some(trueos_qjs::trueos_shims::abort as *const () as usize),
         "errno_location" => Some(crate::std_abi_shim::errno_location as *const () as usize),
         "__errno_location" => Some(crate::std_abi_shim::__errno_location as *const () as usize),
         "__errno" => Some(crate::std_abi_shim::__errno as *const () as usize),
@@ -1198,6 +1200,7 @@ fn resolve_std_abi_import(name: &str) -> Option<usize> {
         "lseek" => Some(crate::std_abi_shim::lseek as *const () as usize),
         "fstat" => Some(crate::std_abi_shim::fstat as *const () as usize),
         "stat" => Some(crate::std_abi_shim::stat as *const () as usize),
+        "lstat" => Some(crate::std_abi_shim::lstat as *const () as usize),
         "opendir" => Some(crate::std_abi_shim::opendir as *const () as usize),
         "readdir" => Some(crate::std_abi_shim::readdir as *const () as usize),
         "closedir" => Some(crate::std_abi_shim::closedir as *const () as usize),
@@ -1277,6 +1280,9 @@ fn resolve_std_abi_import(name: &str) -> Option<usize> {
         }
         "trueos_platform_unix_seconds" => {
             Some(crate::t::platform::trueos_platform_unix_seconds as *const () as usize)
+        }
+        "trueos_platform_cpu_count" => {
+            Some(crate::t::platform::trueos_platform_cpu_count as *const () as usize)
         }
         "trueos_tokio_spawn_blocking_job" => Some(
             crate::t::trueos_tokio_worker::trueos_tokio_spawn_blocking_job as *const () as usize,
