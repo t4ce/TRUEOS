@@ -228,6 +228,13 @@ fn enqueue_blueprint_request(
     app_args: Vec<String>,
     preflight_complete: bool,
 ) {
+    crate::log!(
+        "app-vm-run-queue: enqueue archive={} bytes={} args={} preflight={}\n",
+        archive.as_str(),
+        module_bytes.len(),
+        app_args.len(),
+        preflight_complete as u8
+    );
     enqueue_request(AppVmLaunchRequest {
         archive,
         module_bytes,
@@ -255,6 +262,11 @@ async fn execute_request(spawner: &Spawner, request: AppVmLaunchRequest) {
 
     log(alloc::format!("hv run: worker start module={}", request.archive.as_str()).as_str());
     log(alloc::format!("hv run: module bytes={}", request.module_bytes.len()).as_str());
+    crate::log!(
+        "app-vm-run-queue: worker start archive={} bytes={}\n",
+        request.archive.as_str(),
+        request.module_bytes.len()
+    );
 
     if request.module_bytes.starts_with(b"TC4O") || request.archive.ends_with(".vm") {
         execute_tc4o(request.module_bytes.as_slice(), &log);
@@ -632,9 +644,22 @@ fn start_blueprint_launch(spawner: &Spawner, request: &AppVmLaunchRequest, log: 
     match crate::hv::start(vm_id, spawner, &UART1_COM1_BACKEND, Some(profile.stack_recommended_mib))
     {
         Ok(()) => {
+            crate::log!(
+                "app-vm-run-queue: hv start ok vm={} archive={} stack_mib={}\n",
+                vm_id,
+                request.archive.as_str(),
+                profile.stack_recommended_mib
+            );
             log(alloc::format!("hv run: app-vm{} launch requested", vm_id).as_str());
         }
         Err(err) => {
+            crate::log_warn!(
+                target: "service";
+                "app-vm-run-queue: hv start failed vm={} archive={} err={:?}\n",
+                vm_id,
+                request.archive.as_str(),
+                err
+            );
             log(alloc::format!("hv run: app-vm start failed: {:?}", err).as_str());
             let _ = crate::hv::take_blueprint_launch(vm_id);
         }

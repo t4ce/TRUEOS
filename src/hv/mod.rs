@@ -731,6 +731,14 @@ fn start_with_mode(
         target.core_kind_name(),
         memory::active_guest_stack_mb_for_vm(vm_id)
     ));
+    crate::log!(
+        "app-vm-run-queue: lane picked vm={} mode={:?} slot={} kind={} stack_mib={}\n",
+        vm_id,
+        boot_mode,
+        target.slot,
+        target.core_kind_name(),
+        memory::active_guest_stack_mb_for_vm(vm_id)
+    );
 
     match vm_task(vm_id, target.lease) {
         Ok(token) => {
@@ -742,6 +750,11 @@ fn start_with_mode(
                 profile.placement_name(),
                 target.slot
             ));
+            crate::log!(
+                "app-vm-run-queue: vm task submitted vm={} slot={}\n",
+                vm_id,
+                target.slot
+            );
         }
         Err(_) => {
             vm.starting.store(false, Ordering::Release);
@@ -1034,6 +1047,11 @@ async fn vm_task(vm_id: u8, _lane_lease: crate::hv::lane::LaneLease) {
             vm_id, lineage_record.level
         ));
     }
+    crate::log!(
+        "app-vm-run-queue: vm task running vm={} lineage={}\n",
+        vm_id,
+        lineage_record.level
+    );
 
     let boot_mode = boot_mode_for_vm(vm_id);
     let guest = crate::limine::guest_kernel_bytes();
@@ -1095,7 +1113,18 @@ async fn vm_task(vm_id: u8, _lane_lease: crate::hv::lane::LaneLease) {
         vm_id,
         crate::t::th::vthread::vm_hull_fs_base(vm_id)
     ));
+    crate::log!(
+        "app-vm-run-queue: vm launch enter vm={} mode={:?} stack_mib={}\n",
+        vm_id,
+        boot_mode,
+        memory::active_guest_stack_mb_for_vm(vm_id)
+    );
     let launch_result = vmx_launch_once_with_ept(lineage_record).await;
+    crate::log!(
+        "app-vm-run-queue: vm launch returned vm={} mode={:?}\n",
+        vm_id,
+        boot_mode
+    );
     clear_current_vm_id();
     let blueprint_crash_state = blueprint_launch_snapshot(vm_id);
     let mut pending_crash = None;
@@ -1246,6 +1275,11 @@ async fn vmx_launch_once_with_ept(
     if let Err(e) = setup_vmcs_for_launch(vm_id, eptp, lineage_record, boot_mode_for_vm(vm_id)) {
         return Err(e);
     }
+    crate::log!(
+        "app-vm-run-queue: vmcs ready vm={} entry=0x{:016X}\n",
+        vm_id,
+        guest_launch_rip()
+    );
 
     // ── vmexit dispatch loop ──────────────────────────────────────────────────
     let mut lr = LaunchResult::default();
@@ -1272,6 +1306,7 @@ async fn vmx_launch_once_with_ept(
             if let Some(vm) = vm {
                 vm.guest_boot_armed.store(true, Ordering::Release);
             }
+            crate::log!("app-vm-run-queue: vmlaunch begin vm={}\n", vm_id);
             vmlaunch_once_wrapper(&mut lr);
             if let Some(vm) = vm {
                 vm.guest_boot_armed.store(false, Ordering::Release);

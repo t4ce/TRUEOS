@@ -11,6 +11,7 @@ const SPAWN_SERVICE_AFTER_START_MS: u64 = 25;
 const SPAWN_SERVICE_PENDING_MS: u64 = 100;
 const SPAWN_SERVICE_IDLE_MS: u64 = 500;
 static PCIIDS_GIT_PENDING_MISSING: AtomicU32 = AtomicU32::new(0);
+static BP_AUTOSTART_PENDING_MISSING: AtomicU32 = AtomicU32::new(0);
 
 /// Central task orchestrator ("FSM spawn service").
 ///
@@ -1077,8 +1078,7 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::NET_ANY_CONFIGURED
     | crate::r::readiness::NET_SOCKET_READY
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
-    | crate::r::readiness::UI2_READY
-    | crate::r::readiness::GFX_TEXTURE_UPLOAD_SERVICE_READY;
+    | crate::r::readiness::VTHREAD_HW_TAG_READY;
 static TASKS: [TaskSpec; 68] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled("factory-ram-probe", 0, &FACTORY_RAM_PROBE_STARTED, spawn_factory_ram_probe),
@@ -1509,6 +1509,25 @@ fn log_pciids_git_pending_marker(ready: u32) {
     );
 }
 
+fn log_bp_autostart_pending_marker(ready: u32) {
+    let missing = BP_AUTOSTART_READY & !ready;
+    if missing == 0 {
+        BP_AUTOSTART_PENDING_MISSING.store(0, Ordering::Release);
+        return;
+    }
+
+    if BP_AUTOSTART_PENDING_MISSING.swap(missing, Ordering::AcqRel) == missing {
+        return;
+    }
+
+    crate::log!(
+        "spawn-svc: bp-autostart pending missing={} ready=0x{:08X} required=0x{:08X}\n",
+        readiness_names(missing).as_str(),
+        ready,
+        BP_AUTOSTART_READY
+    );
+}
+
 #[embassy_executor::task]
 pub async fn spawn_service_task(spawner: Spawner) {
     async move {
@@ -1527,6 +1546,8 @@ pub async fn spawn_service_task(spawner: Spawner) {
                 if (ready & spec.required) != spec.required {
                     if spec.name == "pciids-git" {
                         log_pciids_git_pending_marker(ready);
+                    } else if spec.name == "bp-autostart" {
+                        log_bp_autostart_pending_marker(ready);
                     }
                     pending += 1;
                     continue;
