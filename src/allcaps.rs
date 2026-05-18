@@ -98,7 +98,6 @@ pub mod storage {
     pub const USB_MASS_MAX_RUNTIMES: usize = 8;
     pub const USB_MASS_MAX_ACTIVE_STREAMS: usize = 8;
     pub const USB_MASS_BOT_KEEPALIVE_ENABLED: bool = false;
-    pub const USB_MASS_UAS_KEEPALIVE_ENABLED: bool = false;
     pub const USB_MASS_FORCE_CONSERVATIVE_BOT: bool = true;
     pub const USB_MASS_BOT_IO_TIMEOUT_MS: u64 = 60_000;
     pub const USB_MASS_UAS_IO_TIMEOUT_MS: u64 = 10_000;

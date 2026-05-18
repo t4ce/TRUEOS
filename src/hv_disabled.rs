@@ -159,14 +159,6 @@ pub fn restore_snapshot(_vm_id: u8) -> Result<usize, RestoreError> {
     Err(RestoreError::MissingFile)
 }
 
-pub fn guest_boot_take() -> bool {
-    false
-}
-
-pub fn guest_boot_active() -> bool {
-    false
-}
-
 pub fn request_preserve_active_vm() -> bool {
     false
 }

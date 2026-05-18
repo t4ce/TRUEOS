@@ -125,11 +125,11 @@ pub unsafe extern "C" fn _start() -> ! {
         // Use `call` (not `jmp`) so the callee sees the expected stack
         // alignment (RSP % 16 == 8 at function entry). Some Rust/C code
         // assumes this and will fault on unaligned `movaps` spills.
-        "call {dispatch}",
+        "call {main}",
         "ud2",
         stack = sym BSP_BOOT_STACK,
         stack_size = const BSP_BOOT_STACK_BYTES,
-        dispatch = sym start_dispatch,
+        main = sym kmain,
     );
 }
 
@@ -146,29 +146,14 @@ pub unsafe extern "C" fn _start() -> ! {
         "add x0, x0, x1",
         "and x0, x0, #0xfffffffffffffff0",
         "mov sp, x0",
-        "bl {dispatch}",
+        "bl {main}",
         "brk #0",
         stack = sym BSP_BOOT_STACK,
         stack_size_0 = const (BSP_BOOT_STACK_BYTES & 0xffff),
         stack_size_16 = const ((BSP_BOOT_STACK_BYTES >> 16) & 0xffff),
         stack_size_32 = const ((BSP_BOOT_STACK_BYTES >> 32) & 0xffff),
-        dispatch = sym start_dispatch,
+        main = sym kmain,
     );
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn start_dispatch() -> ! {
-    #[cfg(target_arch = "x86_64")]
-    if crate::hv::guest_boot_take() {
-        unsafe { crate::hv::guest::entry() }
-    } else {
-        kmain()
-    }
-
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        kmain()
-    }
 }
 
 #[unsafe(no_mangle)]
