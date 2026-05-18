@@ -1,5 +1,5 @@
 use alloc::{boxed::Box, string::String, vec::Vec as AllocVec};
-use crab_usb::{Device, DeviceInfo, EndpointBulkIn, EndpointBulkOut, USBHost};
+use crab_usb::{Device, DeviceInfo, USBHost};
 use embassy_executor::Spawner;
 use embassy_sync::channel::{Channel, TrySendError};
 use embassy_sync::signal::Signal;
@@ -9,6 +9,7 @@ use spin::Mutex;
 
 use super::api::claim_interface;
 use super::mass;
+use crate::usb2::api::{EndpointBulkIn, EndpointBulkOut};
 use crate::disc::block;
 
 const SKHYNIX_GREEN_VID: u16 = 0x152E;

@@ -1,9 +1,9 @@
 use crab_usb::{Device, Endpoint, err::USBError, usb_if};
 
-type EndpointBulkIn = Endpoint;
-type EndpointBulkOut = Endpoint;
-type EndpointInterruptIn = Endpoint;
-type EndpointIsoIn = Endpoint;
+pub(crate) type EndpointBulkIn = Endpoint;
+pub(crate) type EndpointBulkOut = Endpoint;
+pub(crate) type EndpointInterruptIn = Endpoint;
+pub(crate) type EndpointIsoIn = Endpoint;
 
 #[derive(Debug)]
 pub(crate) enum InterfaceEndpointError {

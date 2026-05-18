@@ -3,7 +3,9 @@ use core::{
     sync::atomic::{AtomicU64, Ordering},
     task::Poll,
 };
-use crab_usb::{EndpointBulkIn, EndpointBulkOut, usb_if};
+use crab_usb::usb_if;
+
+use crate::usb2::api::{EndpointBulkIn, EndpointBulkOut};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
 use super::super::scsi;
