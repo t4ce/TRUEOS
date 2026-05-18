@@ -1,7 +1,9 @@
-use crab_usb::{
-    Device, EndpointBulkIn, EndpointBulkOut, EndpointInterruptIn, EndpointIsoIn, EndpointKind,
-    err::USBError,
-};
+use crab_usb::{Device, Endpoint, err::USBError, usb_if};
+
+type EndpointBulkIn = Endpoint;
+type EndpointBulkOut = Endpoint;
+type EndpointInterruptIn = Endpoint;
+type EndpointIsoIn = Endpoint;
 
 #[derive(Debug)]
 pub(crate) enum InterfaceEndpointError {
@@ -39,12 +41,17 @@ impl ClaimedInterface<'_> {
         &mut self,
         address: u8,
     ) -> Result<EndpointBulkIn, InterfaceEndpointError> {
-        match self.device.get_endpoint(address).await? {
-            EndpointKind::BulkIn(endpoint) => Ok(endpoint),
-            _ => Err(InterfaceEndpointError::WrongKind {
+        let endpoint = self.device.endpoint(address)?;
+        let info = endpoint.info();
+        if info.transfer_type == usb_if::descriptor::EndpointType::Bulk
+            && info.direction == usb_if::transfer::Direction::In
+        {
+            Ok(endpoint)
+        } else {
+            Err(InterfaceEndpointError::WrongKind {
                 address,
                 expected: "bulk-in",
-            }),
+            })
         }
     }
 
@@ -52,12 +59,17 @@ impl ClaimedInterface<'_> {
         &mut self,
         address: u8,
     ) -> Result<EndpointBulkOut, InterfaceEndpointError> {
-        match self.device.get_endpoint(address).await? {
-            EndpointKind::BulkOut(endpoint) => Ok(endpoint),
-            _ => Err(InterfaceEndpointError::WrongKind {
+        let endpoint = self.device.endpoint(address)?;
+        let info = endpoint.info();
+        if info.transfer_type == usb_if::descriptor::EndpointType::Bulk
+            && info.direction == usb_if::transfer::Direction::Out
+        {
+            Ok(endpoint)
+        } else {
+            Err(InterfaceEndpointError::WrongKind {
                 address,
                 expected: "bulk-out",
-            }),
+            })
         }
     }
 
@@ -65,12 +77,17 @@ impl ClaimedInterface<'_> {
         &mut self,
         address: u8,
     ) -> Result<EndpointIsoIn, InterfaceEndpointError> {
-        match self.device.get_endpoint(address).await? {
-            EndpointKind::IsochronousIn(endpoint) => Ok(endpoint),
-            _ => Err(InterfaceEndpointError::WrongKind {
+        let endpoint = self.device.endpoint(address)?;
+        let info = endpoint.info();
+        if info.transfer_type == usb_if::descriptor::EndpointType::Isochronous
+            && info.direction == usb_if::transfer::Direction::In
+        {
+            Ok(endpoint)
+        } else {
+            Err(InterfaceEndpointError::WrongKind {
                 address,
                 expected: "iso-in",
-            }),
+            })
         }
     }
 
@@ -78,12 +95,17 @@ impl ClaimedInterface<'_> {
         &mut self,
         address: u8,
     ) -> Result<EndpointInterruptIn, InterfaceEndpointError> {
-        match self.device.get_endpoint(address).await? {
-            EndpointKind::InterruptIn(endpoint) => Ok(endpoint),
-            _ => Err(InterfaceEndpointError::WrongKind {
+        let endpoint = self.device.endpoint(address)?;
+        let info = endpoint.info();
+        if info.transfer_type == usb_if::descriptor::EndpointType::Interrupt
+            && info.direction == usb_if::transfer::Direction::In
+        {
+            Ok(endpoint)
+        } else {
+            Err(InterfaceEndpointError::WrongKind {
                 address,
                 expected: "interrupt-in",
-            }),
+            })
         }
     }
 }
