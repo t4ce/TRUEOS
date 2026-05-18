@@ -715,7 +715,6 @@ pub(crate) async fn maybe_start_skhynix_green(
     );
 
     if let Err(err) = device
-        .ep_ctrl()
         .set_configuration(target.configuration_value)
         .await
     {

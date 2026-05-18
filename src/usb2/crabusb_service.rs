@@ -623,6 +623,19 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
             }
         }
 
+        let Some(dev_info) = dev.as_device_info() else {
+            if usb_log_all_enabled() {
+                crate::log!(
+                    "crabusb: bind ctrl={} root_port={} vid={:04X} pid={:04X} skip=hub\n",
+                    info.index,
+                    topo.root_port_id,
+                    desc.vendor_id,
+                    desc.product_id
+                );
+            }
+            continue;
+        };
+
         let controller_id = info.index as u32;
         const HOST2_MOUSE_ONLY: bool = true;
         let mut bound_any = false;
@@ -635,12 +648,13 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
             )
             .is_none()
         {
-            super::descriptor::log_hid_report_descriptors(host, dev).await;
+            super::descriptor::log_hid_report_descriptors(host, dev_info).await;
         }
-        if !HOST2_MOUSE_ONLY && super::hid::leds::should_share_probe_device(dev) {
-            match host.open_device(dev).await {
+        if !HOST2_MOUSE_ONLY && super::hid::leds::should_share_probe_device(dev_info) {
+            match host.open_device(dev_info).await {
                 Ok(mut device) => {
-                    super::descriptor::log_hid_report_descriptors_on_device(&mut device, dev).await;
+                    super::descriptor::log_hid_report_descriptors_on_device(&mut device, dev_info)
+                        .await;
                     shared_led_device = Some(device);
                 }
                 Err(err) => {
@@ -655,7 +669,7 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
         }
         if super::hid::boot::maybe_start_hid_mouse_streams(
             host,
-            dev,
+            dev_info,
             spawner,
             controller_id,
             shared_led_device.is_none(),
@@ -679,7 +693,7 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
         if let Some(device) = shared_led_device {
             if super::hid::leds::maybe_start_led_controller_with_device(
                 device,
-                dev,
+                dev_info,
                 spawner,
                 controller_id,
             )
@@ -687,22 +701,27 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
             {
                 bound_any = true;
             }
-        } else if super::hid::leds::maybe_start_led_controller(host, dev, spawner, controller_id)
+        } else if super::hid::leds::maybe_start_led_controller(
+            host,
+            dev_info,
+            spawner,
+            controller_id,
+        )
             .await
         {
             bound_any = true;
         }
-        if super::midi::maybe_start_midi(host, dev, spawner, controller_id).await {
+        if super::midi::maybe_start_midi(host, dev_info, spawner, controller_id).await {
             bound_any = true;
         }
-        let audio_started = super::sound::maybe_start_target_audio(host, dev, spawner).await;
+        let audio_started = super::sound::maybe_start_target_audio(host, dev_info, spawner).await;
         if audio_started {
             bound_any = true;
         }
         if !audio_started
             && super::hid::mediacontrol::maybe_start_media_control(
                 host,
-                dev,
+                dev_info,
                 spawner,
                 controller_id,
             )
@@ -710,10 +729,17 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
         {
             bound_any = true;
         }
-        if super::skhynix_green::maybe_start_skhynix_green(host, dev, spawner, controller_id).await
+        if super::skhynix_green::maybe_start_skhynix_green(
+            host,
+            dev_info,
+            spawner,
+            controller_id,
+        )
+        .await
         {
             bound_any = true;
-        } else if super::pen::maybe_start_mass_storage(host, dev, spawner, controller_id).await {
+        } else if super::pen::maybe_start_mass_storage(host, dev_info, spawner, controller_id).await
+        {
             bound_any = true;
         }
         if bound_any && usb_log_all_enabled() {
@@ -832,6 +858,9 @@ pub async fn event_pump_task(controller_id: usize) {
                     );
                 }
             }
+            Some(Event::TransferActivity { .. }) => {
+                idle_yields = 0;
+            }
             Some(Event::Stopped) => {
                 idle_yields = 0;
                 update_runtime_diag(controller_id, |diag| {
@@ -889,12 +918,7 @@ pub async fn bsp_service(controller_index: usize) {
 
         crate::pci::enable_mem_and_bus_master(info.bus, info.slot, info.function);
 
-        let mut host = match USBHost::new_xhci_with_pci_ids(
-            info.mmio_base,
-            &CRABUSB_KERNEL,
-            info.vendor_id,
-            info.device_id,
-        ) {
+        let mut host = match USBHost::new_xhci(info.mmio_base, &CRABUSB_KERNEL) {
             Ok(host) => host,
             Err(_) => {
                 Timer::after(EmbassyDuration::from_millis(RETRY_MS)).await;

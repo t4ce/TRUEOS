@@ -152,7 +152,6 @@ async fn media_control_task(
     };
 
     if let Err(err) = device
-        .ep_ctrl()
         .set_configuration(target.configuration_value)
         .await
     {
