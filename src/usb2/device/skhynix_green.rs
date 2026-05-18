@@ -14,6 +14,7 @@ use crate::disc::block;
 const SKHYNIX_GREEN_VID: u16 = 0x152E;
 const SKHYNIX_GREEN_PID: u16 = 0x7001;
 const MAX_ACTIVE_GREEN_PROBES: usize = 4;
+const SKHYNIX_FORCE_BOT_TEST: bool = crate::allcaps::storage::USB_MASS_FORCE_CONSERVATIVE_BOT;
 const SKHYNIX_UAS_FLOW_QUEUE_DEPTH: usize = 8;
 const SKHYNIX_UAS_FLOW_STATE_RECEIVERS: usize = 4;
 const SKHYNIX_UAS_FLOW_MAX_LANES: u8 = 4;
@@ -677,6 +678,15 @@ pub(crate) async fn maybe_start_skhynix_green(
         transport_plan.uas.len(),
         transport_plan.bot.is_some()
     );
+
+    if SKHYNIX_FORCE_BOT_TEST && transport_plan.bot.is_some() {
+        crate::log!(
+            "crabusb: skhynix-green {:04X}:{:04X} proof=force-bot-test status=handoff-to-bot flag=USB_MASS_FORCE_CONSERVATIVE_BOT\n",
+            vendor_id,
+            product_id
+        );
+        return false;
+    }
 
     let Some(target) =
         mass::pick_skhynix_uas_target(vendor_id, product_id, transport_plan.uas.as_slice())
