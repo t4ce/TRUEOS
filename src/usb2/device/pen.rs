@@ -1,7 +1,7 @@
 use alloc::{boxed::Box, string::String, vec::Vec as AllocVec};
 
-use crab_usb::usb_if;
 use crab_usb::Device;
+use crab_usb::usb_if;
 
 use crate::usb2::api::{EndpointBulkIn, EndpointBulkOut};
 use embassy_executor::Spawner;
@@ -886,10 +886,7 @@ pub async fn mass_storage_task(
         slot_id: u32::from(slot),
     };
 
-    if let Err(err) = device
-        .set_configuration(target.configuration_value)
-        .await
-    {
+    if let Err(err) = device.set_configuration(target.configuration_value).await {
         crate::log!(
             "crabusb: mass {:04X}:{:04X} set cfg={} failed: {:?}\n",
             vendor_id,

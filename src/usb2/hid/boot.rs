@@ -378,10 +378,7 @@ async fn hid_boot_stream_task(
     let mut boot_protocol_ok = false;
     let mut set_idle_ok = false;
 
-    if let Err(err) = device
-        .set_configuration(target.configuration_value)
-        .await
-    {
+    if let Err(err) = device.set_configuration(target.configuration_value).await {
         crate::log_info!(target: "usb";
             "crabusb: hid {} {:04X}:{:04X} set cfg={} failed: {:?}\n",
             target.kind.as_str(),
@@ -659,8 +656,15 @@ pub(crate) async fn maybe_start_hid_boot_streams(
     controller_id: u32,
     log_descriptors: bool,
 ) -> bool {
-    maybe_start_hid_boot_streams_filtered(host, dev_info, spawner, controller_id, log_descriptors, None)
-        .await
+    maybe_start_hid_boot_streams_filtered(
+        host,
+        dev_info,
+        spawner,
+        controller_id,
+        log_descriptors,
+        None,
+    )
+    .await
 }
 
 pub(crate) async fn maybe_start_hid_mouse_streams(

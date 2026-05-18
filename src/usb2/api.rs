@@ -33,39 +33,58 @@ pub(crate) trait EndpointSubmitExt {
 }
 
 pub(crate) trait EndpointSubmitBuffer<'a> {
-    fn request(self, transfer_type: usb_if::descriptor::EndpointType) -> Result<TransferRequest, TransferError>;
+    fn request(
+        self,
+        transfer_type: usb_if::descriptor::EndpointType,
+    ) -> Result<TransferRequest, TransferError>;
 }
 
 impl<'a> EndpointSubmitBuffer<'a> for &'a mut [u8] {
-    fn request(self, transfer_type: usb_if::descriptor::EndpointType) -> Result<TransferRequest, TransferError> {
+    fn request(
+        self,
+        transfer_type: usb_if::descriptor::EndpointType,
+    ) -> Result<TransferRequest, TransferError> {
         match transfer_type {
             usb_if::descriptor::EndpointType::Bulk => Ok(TransferRequest::bulk_in(self)),
             usb_if::descriptor::EndpointType::Interrupt => Ok(TransferRequest::interrupt_in(self)),
-            usb_if::descriptor::EndpointType::Isochronous => Ok(TransferRequest::iso_in(self, &[self.len()])),
+            usb_if::descriptor::EndpointType::Isochronous => {
+                Ok(TransferRequest::iso_in(self, &[self.len()]))
+            }
             usb_if::descriptor::EndpointType::Control => Err(TransferError::InvalidEndpoint),
         }
     }
 }
 
 impl<'a, const N: usize> EndpointSubmitBuffer<'a> for &'a mut [u8; N] {
-    fn request(self, transfer_type: usb_if::descriptor::EndpointType) -> Result<TransferRequest, TransferError> {
+    fn request(
+        self,
+        transfer_type: usb_if::descriptor::EndpointType,
+    ) -> Result<TransferRequest, TransferError> {
         <&'a mut [u8] as EndpointSubmitBuffer<'a>>::request(self.as_mut_slice(), transfer_type)
     }
 }
 
 impl<'a> EndpointSubmitBuffer<'a> for &'a [u8] {
-    fn request(self, transfer_type: usb_if::descriptor::EndpointType) -> Result<TransferRequest, TransferError> {
+    fn request(
+        self,
+        transfer_type: usb_if::descriptor::EndpointType,
+    ) -> Result<TransferRequest, TransferError> {
         match transfer_type {
             usb_if::descriptor::EndpointType::Bulk => Ok(TransferRequest::bulk_out(self)),
             usb_if::descriptor::EndpointType::Interrupt => Ok(TransferRequest::interrupt_out(self)),
-            usb_if::descriptor::EndpointType::Isochronous => Ok(TransferRequest::iso_out(self, &[self.len()])),
+            usb_if::descriptor::EndpointType::Isochronous => {
+                Ok(TransferRequest::iso_out(self, &[self.len()]))
+            }
             usb_if::descriptor::EndpointType::Control => Err(TransferError::InvalidEndpoint),
         }
     }
 }
 
 impl<'a, const N: usize> EndpointSubmitBuffer<'a> for &'a [u8; N] {
-    fn request(self, transfer_type: usb_if::descriptor::EndpointType) -> Result<TransferRequest, TransferError> {
+    fn request(
+        self,
+        transfer_type: usb_if::descriptor::EndpointType,
+    ) -> Result<TransferRequest, TransferError> {
         <&'a [u8] as EndpointSubmitBuffer<'a>>::request(self.as_slice(), transfer_type)
     }
 }
@@ -97,7 +116,11 @@ impl EndpointSubmitExt for Endpoint {
         if let Some(last) = packet_lengths.last_mut() {
             *last = last.saturating_add(rem);
         }
-        completion_len(self.wait(TransferRequest::iso_out(buffer, &packet_lengths)).await).await
+        completion_len(
+            self.wait(TransferRequest::iso_out(buffer, &packet_lengths))
+                .await,
+        )
+        .await
     }
 
     async fn submit_iso_in_and_wait<'a>(
@@ -112,7 +135,11 @@ impl EndpointSubmitExt for Endpoint {
         if let Some(last) = packet_lengths.last_mut() {
             *last = last.saturating_add(rem);
         }
-        completion_len(self.wait(TransferRequest::iso_in(buffer, &packet_lengths)).await).await
+        completion_len(
+            self.wait(TransferRequest::iso_in(buffer, &packet_lengths))
+                .await,
+        )
+        .await
     }
 }
 

@@ -151,10 +151,7 @@ async fn media_control_task(
         interface_number: target.interface_number,
     };
 
-    if let Err(err) = device
-        .set_configuration(target.configuration_value)
-        .await
-    {
+    if let Err(err) = device.set_configuration(target.configuration_value).await {
         crate::log!(
             "crabusb: hid mediacontrol {:04X}:{:04X} set cfg={} failed: {:?}\n",
             vendor_id,

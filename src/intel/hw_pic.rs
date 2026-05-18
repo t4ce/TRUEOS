@@ -317,7 +317,7 @@ fn process_jpeg_job(job: HwPicJob) -> HwPicOutput {
         smoke.ring_tail_bytes
     );
     crate::log!(
-        "intel/hw_pic-stage: id={} stage=jpeg-state accepted=1 input={} output={} components={} interleaved={} dri={} mcu_count={} surface_dw=0x{:08X}/0x{:08X} pic_dw=0x{:08X}/0x{:08X} stage_flags=0x{:08X}\n",
+        "intel/hw_pic-stage: id={} stage=jpeg-state accepted=1 input={} output={} components={} interleaved={} dri={} mcu_count={} pipe_mode=0x{:08X} surface_dw=0x{:08X}/0x{:08X} pic_dw=0x{:08X}/0x{:08X} stage_flags=0x{:08X}\n",
         job.id,
         smoke.jpeg_input_format,
         smoke.jpeg_output_format,
@@ -325,6 +325,7 @@ fn process_jpeg_job(job: HwPicJob) -> HwPicOutput {
         smoke.jpeg_interleaved as u8,
         smoke.jpeg_restart_interval,
         smoke.jpeg_mcu_count,
+        smoke.pipe_mode_dw1,
         smoke.surface_dw2,
         smoke.surface_dw3,
         smoke.jpeg_pic_dw1,

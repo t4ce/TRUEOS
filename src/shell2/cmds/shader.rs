@@ -58,9 +58,7 @@ fn compile(io: &'static dyn ShellBackend2, path: Option<&str>) {
                 )
                 .as_str(),
             ),
-            Err(err) => {
-                print_shell_line(io, format!("shader: queue failed err={}", err).as_str())
-            }
+            Err(err) => print_shell_line(io, format!("shader: queue failed err={}", err).as_str()),
         },
         None => {
             let job = crate::r::shader::enqueue_scan_dir();
@@ -97,9 +95,7 @@ fn demo(io: &'static dyn ShellBackend2) {
             )
             .as_str(),
         ),
-        Err(err) => {
-            print_shell_line(io, format!("shader: demo queue failed err={}", err).as_str())
-        }
+        Err(err) => print_shell_line(io, format!("shader: demo queue failed err={}", err).as_str()),
     }
 }
 

@@ -277,15 +277,7 @@ async fn bot_command_in(
         let Some(result) =
             with_timeout_or_none(bulk_in.submit_and_wait(&mut *data), BOT_IO_TIMEOUT_MS).await
         else {
-            log_bot_transport_debug(
-                "data-timeout",
-                cmd,
-                tag,
-                bulk_in_ep,
-                1,
-                data_len,
-                data_ptr,
-            );
+            log_bot_transport_debug("data-timeout", cmd, tag, bulk_in_ep, 1, data_len, data_ptr);
             log_transport_debug("data-timeout");
             return Err(MassProbeError::Transport("data-timeout"));
         };
