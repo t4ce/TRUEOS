@@ -5,12 +5,8 @@ pub(super) struct GpgpuStoreSurfaceState {
     pub(super) ready: bool,
     pub(super) binding_table_offset: usize,
     pub(super) surface_state_offset: usize,
-    pub(super) binding_table_index: usize,
     pub(super) surface_gpu: u64,
     pub(super) target_gpu: u64,
-    pub(super) surface_dword0: u32,
-    pub(super) surface_dword2: u32,
-    pub(super) surface_dword3: u32,
     pub(super) binding_entry: u32,
 }
 
@@ -121,12 +117,8 @@ pub(super) fn prepare_gpgpu_store_surface_state_for_target_span_at_offsets(
             ready: false,
             binding_table_offset,
             surface_state_offset,
-            binding_table_index,
             surface_gpu: GPU_VA_DRAW_STATE_BASE + surface_state_offset as u64,
             target_gpu,
-            surface_dword0: 0,
-            surface_dword2: 0,
-            surface_dword3: 0,
             binding_entry: 0,
         };
     }
@@ -191,12 +183,8 @@ pub(super) fn prepare_gpgpu_store_surface_state_for_target_span_at_offsets(
         ready: true,
         binding_table_offset,
         surface_state_offset,
-        binding_table_index,
         surface_gpu: GPU_VA_DRAW_STATE_BASE + surface_state_offset as u64,
         target_gpu,
-        surface_dword0,
-        surface_dword2,
-        surface_dword3,
         binding_entry,
     }
 }
@@ -206,13 +194,9 @@ pub(super) fn disabled_gpgpu_store_surface_state() -> GpgpuStoreSurfaceState {
         ready: false,
         binding_table_offset: GPGPU_STORE_BINDING_TABLE_OFFSET_BYTES,
         surface_state_offset: GPGPU_STORE_SURFACE_STATE_OFFSET_BYTES,
-        binding_table_index: GPGPU_STORE_BINDING_TABLE_INDEX,
         surface_gpu: GPU_VA_DRAW_STATE_BASE + GPGPU_STORE_SURFACE_STATE_OFFSET_BYTES as u64,
         target_gpu: GPU_VA_RESULT_BASE
             + (RESULT_SLOT_GPGPU_EU_C_STORE_DWORD as u64) * core::mem::size_of::<u32>() as u64,
-        surface_dword0: 0,
-        surface_dword2: 0,
-        surface_dword3: 0,
         binding_entry: 0,
     }
 }

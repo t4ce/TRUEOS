@@ -28,22 +28,18 @@ use surfaces::{
 use walker_command::encode_gfx12_gpgpu_walker_probe_batch;
 
 pub(crate) use mandelbrot::{
-    submit_gpgpu_primary_scanout_groupid_line320_probe, submit_gpgpu_primary_scanout_line_pilot,
-    submit_gpgpu_primary_scanout_line_pilot_rect,
-    submit_gpgpu_primary_scanout_line_pilot_rect_color,
-    submit_gpgpu_primary_scanout_line_pilot_rect_color_burst,
+    submit_gpgpu_primary_scanout_groupid_line320_probe,
     submit_gpgpu_primary_scanout_line1280_groupid_rows_color_burst,
     submit_gpgpu_primary_scanout_line1280_groupid_rows_fullwidth_color_burst,
-    submit_gpgpu_primary_scanout_mandelbrot_preview, submit_gpgpu_primary_scanout_marker_probe,
     submit_gpgpu_primary_scanout_row2560_simd8_probe,
 };
 pub(crate) use matmul::{
     log_gpgpu_t63_first_tile_output_detail_once, stage_gpgpu_one_tile_record_probe,
     stage_gpgpu_tile_record_rows_probe, submit_gpgpu_one_tile_output_compare_probe,
-    submit_gpgpu_one_tile_output_sentinel_probe, submit_gpgpu_sidequest_target_buffer_probe,
+    submit_gpgpu_one_tile_output_sentinel_probe,
     submit_gpgpu_t5_one_row_matvec_probe, submit_gpgpu_t6_one_row_matvec_probe,
     submit_gpgpu_t61_one_row_matvec_probe, submit_gpgpu_t62_partial_matvec_probe,
-    submit_gpgpu_t63_accum16_hi_live32_partial_matvec_probe, submit_gpgpu_t63_partial_matvec_probe,
+    submit_gpgpu_t63_accum16_hi_live32_partial_matvec_probe,
 };
 
 const FORCEWAKE_RENDER: usize = 0x0A278;
@@ -142,9 +138,6 @@ const GPGPU_TILE_X_BYTES_PER_ELEM: usize = 4;
 const GPGPU_TILE_OUTPUT_BYTES_PER_ELEM: usize = 4;
 const GPGPU_TILE_TARGET_TILES: usize = 3;
 const MANDELBROT_STRIP_READBACK_POLLS: usize = 256;
-const MANDELBROT_LINE1280_VERIFY_SCANOUT_READBACK: bool = false;
-const MANDELBROT_LINE1280_VERIFY_PROGRAM_UPLOAD: bool = false;
-const MANDELBROT_LINE1280_NOTIFY_SCANOUT_WRITES: bool = false;
 const GPGPU_WEIGHT_TILE_BYTES: usize =
     GPGPU_TILE_ROWS * GPGPU_TILE_K_DIM * GPGPU_TILE_WEIGHT_BYTES_PER_ELEM;
 const GPGPU_X_VECTOR_BYTES: usize = GPGPU_TILE_K_DIM * GPGPU_TILE_X_BYTES_PER_ELEM;
@@ -182,7 +175,6 @@ const GEN8_CTX_PPGTT_ENABLE: u32 = 1 << 5;
 const GEN8_CTX_PRIVILEGE: u32 = 1 << 8;
 const GEN12_CTX_PRIORITY_NORMAL: u32 = 1 << 9;
 const GEN8_CTX_ADDRESSING_MODE_SHIFT: u32 = 3;
-const GEN12_CTX_RCS_INDIRECT_CTX_OFFSET_DEFAULT: u32 = 0xD;
 const RCS_EXEC_RESULT_GPGPU_PREFLIGHT_DONE: u32 = 0xC0DE_7731;
 const RCS_EXEC_RESULT_COMPUTE_WALKER_DONE: u32 = 0xC0DE_7732;
 const GPGPU_ONE_TILE_OUTPUT_SENTINEL: u32 = 0xC0DE_7747;
@@ -1518,19 +1510,6 @@ fn gpgpu_one_tile_output_sentinel_program() -> GpgpuEuProgram {
     }
 }
 
-fn gpgpu_store_send_desc_words(program: GpgpuEuProgram) -> (u32, u32) {
-    let Some(send_exdesc_dword) = program.store_send_dword else {
-        return (0, 0);
-    };
-    let send_desc = send_exdesc_dword
-        .checked_sub(1)
-        .and_then(|dword| program.words.get(dword))
-        .copied()
-        .unwrap_or(0);
-    let send_exdesc = program.words.get(send_exdesc_dword).copied().unwrap_or(0);
-    (send_desc, send_exdesc)
-}
-
 const GPGPU_STORE_BINDING_TABLE_OFFSET_BYTES: usize = 0x3400;
 const GPGPU_STORE_SURFACE_STATE_OFFSET_BYTES: usize = 0x3500;
 const GPGPU_MANDELBROT_STORE_BINDING_TABLE_OFFSET_BYTES: usize = 0xF000;
@@ -1565,14 +1544,7 @@ static GPGPU_EU_C_STORE_VALUE: AtomicU32 = AtomicU32::new(0);
 static GPGPU_EU_PROVEN_WALKER_RETIRED: AtomicBool = AtomicBool::new(false);
 static GPGPU_EU_PROVEN_DISPATCH_DELTA: AtomicU32 = AtomicU32::new(0);
 static GPGPU_EU_PROVEN_C_STORE_VALUE: AtomicU32 = AtomicU32::new(0);
-static MANDELBROT_Q12_PATCH_LOGGED: AtomicBool = AtomicBool::new(false);
 static MANDELBROT_WALKER_SHAPE_LOGGED: AtomicBool = AtomicBool::new(false);
-static MANDELBROT_PREVIEW_FAILURE_LOGGED: AtomicBool = AtomicBool::new(false);
-static MANDELBROT_GPU_COLOR_WITNESS_SUCCESS_LOGGED: AtomicBool = AtomicBool::new(false);
-static MANDELBROT_GPU_COLOR_WITNESS_FAILURE_LOGGED: AtomicBool = AtomicBool::new(false);
-static MANDELBROT_LINE1280_TEMPLATE_UPLOADED: AtomicBool = AtomicBool::new(false);
-static MANDELBROT_LINE1280_BURST_SUCCESS_LOGGED: AtomicBool = AtomicBool::new(false);
-static MANDELBROT_LINE1280_BURST_FAILURE_LOGGED: AtomicBool = AtomicBool::new(false);
 static MANDELBROT_GROUPID_LINE1280_TEMPLATE_UPLOADED: AtomicBool = AtomicBool::new(false);
 static MANDELBROT_GROUPID_LINE1280_BURST_SUCCESS_LOGGED: AtomicBool = AtomicBool::new(false);
 static MANDELBROT_GROUPID_LINE1280_BURST_FAILURE_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -1757,31 +1729,6 @@ fn gpgpu_one_tile_sentinel_failure(
         GPGPU_ONE_TILE_OUTPUT_SENTINEL,
         RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
     );
-    crate::intel::GpgpuOneTileSentinelProof {
-        submitted: false,
-        finished: false,
-        readback_ok: false,
-        reason,
-        program_name: program.name,
-        output_gpu,
-        sentinel: GPGPU_ONE_TILE_OUTPUT_SENTINEL,
-        output_first_before: 0,
-        output_first_after: 0,
-        output_nonzero_before: 0,
-        output_nonzero_after: 0,
-        output_hits_lo64: 0,
-        dispatch_delta: 0,
-        finish_marker: 0,
-        expected_finish_marker: RCS_EXEC_RESULT_COMPUTE_WALKER_DONE,
-        batch_bytes: 0,
-    }
-}
-
-fn gpgpu_one_tile_sentinel_failure_quiet(
-    reason: &'static str,
-    program: GpgpuEuProgram,
-    output_gpu: u64,
-) -> crate::intel::GpgpuOneTileSentinelProof {
     crate::intel::GpgpuOneTileSentinelProof {
         submitted: false,
         finished: false,

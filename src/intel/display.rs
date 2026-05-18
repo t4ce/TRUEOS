@@ -121,11 +121,6 @@ pub(super) struct PrimarySurfaceGpgpuTarget {
     pub(super) phys: u64,
     pub(super) virt: *mut u8,
     pub(super) byte_len: usize,
-    pub(super) marker_gpu: u64,
-    pub(super) marker_virt: *mut u8,
-    pub(super) marker_offset: usize,
-    pub(super) marker_x: u32,
-    pub(super) marker_y: u32,
 }
 
 unsafe impl Send for PrimarySurfaceGpgpuTarget {}
@@ -653,15 +648,7 @@ pub(super) fn primary_surface_gpgpu_marker_target() -> Option<PrimarySurfaceGpgp
         return None;
     }
 
-    let marker_x = core::cmp::min(32, surface.width.saturating_sub(1));
-    let marker_y = core::cmp::min(32, surface.height.saturating_sub(1));
-    let marker_offset = (marker_y as usize)
-        .saturating_mul(surface.pitch_bytes as usize)
-        .saturating_add((marker_x as usize).saturating_mul(PRIMARY_BYTES_PER_PIXEL as usize));
     let byte_len = (surface.pitch_bytes as usize).saturating_mul(surface.height as usize);
-    if marker_offset.saturating_add(core::mem::size_of::<u32>()) > byte_len {
-        return None;
-    }
 
     Some(PrimarySurfaceGpgpuTarget {
         width: surface.width,
@@ -671,11 +658,6 @@ pub(super) fn primary_surface_gpgpu_marker_target() -> Option<PrimarySurfaceGpgp
         phys: surface.phys,
         virt: surface.virt,
         byte_len,
-        marker_gpu: crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE + marker_offset as u64,
-        marker_virt: unsafe { surface.virt.add(marker_offset) },
-        marker_offset,
-        marker_x,
-        marker_y,
     })
 }
 
@@ -693,72 +675,6 @@ pub(super) fn notify_primary_surface_external_write(
         crate::intel::dma_flush(unsafe { surface.virt.add(flush_offset) }, flush_bytes);
     }
     notify_primary_surface_present(surface, reason, byte_len)
-}
-
-pub(crate) fn present_rgba_surface_center(
-    src: &[u8],
-    src_width: u32,
-    src_height: u32,
-    src_pitch_bytes: usize,
-) -> bool {
-    let Some(surface) = *PRIMARY_SURFACE.lock() else {
-        return false;
-    };
-    if surface.virt.is_null() || src_width == 0 || src_height == 0 {
-        return false;
-    }
-
-    let dst_width = surface.width as usize;
-    let dst_height = surface.height as usize;
-    let dst_pitch = surface.pitch_bytes as usize;
-    let src_width = src_width as usize;
-    let src_height = src_height as usize;
-    if src_pitch_bytes < src_width.saturating_mul(4) || dst_pitch < dst_width.saturating_mul(4) {
-        return false;
-    }
-
-    fill_surface_color(
-        surface.virt,
-        dst_pitch,
-        surface.width,
-        surface.height,
-        PRIMARY_BASELINE_COLOR,
-    );
-
-    let copy_w = core::cmp::min(dst_width, src_width);
-    let copy_h = core::cmp::min(dst_height, src_height);
-    let dst_x = dst_width.saturating_sub(copy_w) / 2;
-    let dst_y = dst_height.saturating_sub(copy_h) / 2;
-    let src_x = src_width.saturating_sub(copy_w) / 2;
-    let src_y = src_height.saturating_sub(copy_h) / 2;
-
-    for row_idx in 0..copy_h {
-        let src_row_off = (src_y + row_idx)
-            .saturating_mul(src_pitch_bytes)
-            .saturating_add(src_x.saturating_mul(4));
-        let Some(src_row) = src.get(src_row_off..src_row_off + copy_w.saturating_mul(4)) else {
-            return false;
-        };
-        let dst_row_off = (dst_y + row_idx)
-            .saturating_mul(dst_pitch)
-            .saturating_add(dst_x.saturating_mul(4));
-        let dst_row = unsafe { surface.virt.add(dst_row_off) as *mut u32 };
-        for col_idx in 0..copy_w {
-            let src_off = col_idx.saturating_mul(4);
-            let pixel = u32::from_le_bytes([
-                src_row[src_off],
-                src_row[src_off + 1],
-                src_row[src_off + 2],
-                src_row[src_off + 3],
-            ]) & 0x00FF_FFFF;
-            unsafe {
-                core::ptr::write_volatile(dst_row.add(col_idx), pixel);
-            }
-        }
-    }
-
-    crate::intel::dma_flush(surface.virt, dst_pitch.saturating_mul(dst_height));
-    true
 }
 
 pub(crate) fn present_rgba_overlay_top_right(

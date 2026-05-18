@@ -11,10 +11,6 @@ const FORCEWAKE_MEDIA_VDBOX0: usize = 0x0A540;
 const FORCEWAKE_MEDIA_VDBOX1: usize = 0x0A544;
 const FORCEWAKE_MEDIA_VDBOX2: usize = 0x0A548;
 const FORCEWAKE_MEDIA_VDBOX3: usize = 0x0A54C;
-const FORCEWAKE_MEDIA_VEBOX0: usize = 0x0A560;
-const FORCEWAKE_MEDIA_VEBOX1: usize = 0x0A564;
-const FORCEWAKE_MEDIA_VEBOX2: usize = 0x0A568;
-const FORCEWAKE_MEDIA_VEBOX3: usize = 0x0A56C;
 const FORCEWAKE_ACK_MEDIA: usize = 0x0D88;
 const FORCEWAKE_ACK_VDBOX0: usize = 0x0D50;
 const FORCEWAKE_ACK_VDBOX1: usize = 0x0D54;
@@ -27,9 +23,6 @@ const FORCEWAKE_ACK_VEBOX3: usize = 0x0D7C;
 const FORCEWAKE_KERNEL: u32 = 1 << 0;
 
 const GEN11_VCS0_RING_BASE: usize = 0x1C0000;
-const GEN11_VCS1_RING_BASE: usize = 0x1C4000;
-const GEN11_VECS0_RING_BASE: usize = 0x1C8000;
-const GEN11_VECS1_RING_BASE: usize = 0x1D8000;
 
 pub(super) const RING_TAIL: usize = 0x30;
 pub(super) const RING_HEAD: usize = 0x34;
@@ -55,7 +48,6 @@ pub(super) const RING_CONTEXT_CONTROL: usize = 0x244;
 pub(super) const RING_MODE_GEN7: usize = 0x29C;
 pub(super) const RING_CONTEXT_CONTROL_REF: usize = 0x5A0;
 pub(super) const RING_ESR: usize = 0xB8;
-pub(super) const RING_EXECLIST_SUBMIT_PORT: usize = 0x230;
 pub(super) const RING_EXECLIST_STATUS_LO: usize = 0x234;
 pub(super) const RING_EXECLIST_STATUS_HI: usize = 0x238;
 pub(super) const RING_EXECLIST_SQ_LO: usize = 0x510;
@@ -91,7 +83,6 @@ const MI_LRI_FORCE_POSTED: u32 = 1 << 12;
 
 pub(super) const EL_CTRL_LOAD: u32 = 1 << 0;
 const CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT: u32 = 1 << 0;
-const CTX_CTRL_ENGINE_CTX_SAVE_INHIBIT: u32 = 1 << 2;
 const CTX_CTRL_INHIBIT_SYN_CTX_SWITCH: u32 = 1 << 3;
 const CTX_DESC_VALID: u32 = 1 << 0;
 const CTX_DESC_FORCE_RESTORE: u32 = 1 << 2;
@@ -154,13 +145,11 @@ static MEDIA_BACKING: Mutex<Option<MediaBitstreamBacking>> = Mutex::new(None);
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum MediaEngineClass {
     VideoDecode,
-    VideoEnhancement,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum MediaProvisioning {
     Kickoff,
-    ScaleOutReserve,
     Disabled,
 }
 
@@ -168,26 +157,19 @@ pub(crate) enum MediaProvisioning {
 pub(crate) enum MediaWorkloadKind {
     DecodeBitstream,
     DecodeFrame,
-    EnhanceFrame,
     SessionSnapshot,
-    EngineReset,
-    Smoke,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum MediaSubmissionTransport {
-    GuC,
     Execlists,
     Disabled,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum MediaKickoffStage {
-    Discovery,
-    ResourcePlanning,
     SubmissionWiring,
     CommandEncoding,
-    Smoke,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -466,18 +448,6 @@ pub(crate) struct MediaKickoffState {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub(crate) struct MediaSurfaceWindow {
-    pub name: &'static str,
-    pub gpu_addr: u64,
-    pub phys: u64,
-    pub virt: *mut u8,
-    pub bytes: usize,
-}
-
-unsafe impl Send for MediaSurfaceWindow {}
-unsafe impl Sync for MediaSurfaceWindow {}
-
-#[derive(Copy, Clone, Debug)]
 pub(crate) struct Media2FirstFrameState {
     pub ready: bool,
     pub submit_completed: bool,
@@ -713,18 +683,6 @@ pub(crate) fn kickoff_once() {
     store_kickoff_state(MediaKickoffStage::CommandEncoding);
 }
 
-pub(crate) fn kickoff_state() -> Option<MediaKickoffState> {
-    *MEDIA_KICKOFF_STATE.lock()
-}
-
-pub(crate) fn decode_surface_window(_name: &str) -> Option<MediaSurfaceWindow> {
-    None
-}
-
-pub(crate) async fn run_media_decode_async() {
-    let _ = run_media2_first_frame_async().await;
-}
-
 pub(crate) async fn run_media2_first_frame_async() -> Option<Media2FirstFrameState> {
     kickoff_once();
     crate::log!("intel/media2: disabled reason=jpeg-only-engine-cut\n");
@@ -778,11 +736,7 @@ pub(super) fn classify_media_acthd(
 }
 
 pub(super) fn marker_base(engine: MediaEngineDescriptor) -> u32 {
-    let class_base = match engine.id.class {
-        MediaEngineClass::VideoDecode => 0x4D44_1000,
-        MediaEngineClass::VideoEnhancement => 0x4D45_1000,
-    };
-    class_base + (engine.id.instance as u32) * 0x100
+    0x4D44_1000 + (engine.id.instance as u32) * 0x100
 }
 
 pub(super) fn surface_signature(bytes: &[u8]) -> (u32, usize) {
@@ -1406,12 +1360,6 @@ pub(super) fn wake_media_engine_forcewake(
             1 => (FORCEWAKE_MEDIA_VDBOX1, FORCEWAKE_ACK_VDBOX1),
             2 => (FORCEWAKE_MEDIA_VDBOX2, FORCEWAKE_ACK_VDBOX2),
             _ => (FORCEWAKE_MEDIA_VDBOX3, FORCEWAKE_ACK_VDBOX3),
-        },
-        MediaEngineClass::VideoEnhancement => match engine.id.instance {
-            0 => (FORCEWAKE_MEDIA_VEBOX0, FORCEWAKE_ACK_VEBOX0),
-            1 => (FORCEWAKE_MEDIA_VEBOX1, FORCEWAKE_ACK_VEBOX1),
-            2 => (FORCEWAKE_MEDIA_VEBOX2, FORCEWAKE_ACK_VEBOX2),
-            _ => (FORCEWAKE_MEDIA_VEBOX3, FORCEWAKE_ACK_VEBOX3),
         },
     };
     super::mmio_write(dev, req, super::mask_en(FORCEWAKE_KERNEL));

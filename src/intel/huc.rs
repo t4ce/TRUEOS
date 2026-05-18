@@ -34,10 +34,6 @@ struct RsaData {
 
 unsafe impl Send for RsaData {}
 
-pub(crate) fn present() -> bool {
-    PRESENT.load(Ordering::Acquire)
-}
-
 pub(crate) fn authenticated() -> bool {
     AUTHENTICATED.load(Ordering::Acquire)
 }
@@ -254,10 +250,6 @@ fn stage_rsa_only(blob: &[u8], rsa_offset: usize, rsa_size: usize) -> u64 {
 
 fn rsa_gpu() -> Option<u32> {
     RSA_DATA.lock().map(|rsa| rsa.gpu as u32)
-}
-
-pub(crate) fn status2() -> u32 {
-    LAST_STATUS2.load(Ordering::Acquire)
 }
 
 pub(crate) fn upload_via_dma(dev: crate::intel::Dev, fw: crate::intel::Buf) -> bool {

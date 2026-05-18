@@ -16,14 +16,6 @@ struct DmcPackageInfo {
     minor: u32,
 }
 
-pub(crate) fn present() -> bool {
-    PRESENT.load(Ordering::Acquire)
-}
-
-pub(crate) fn load_path_wired() -> bool {
-    LOAD_PATH_WIRED.load(Ordering::Acquire)
-}
-
 pub(crate) fn wire_load_path(_dev: crate::intel::Dev) {
     let Some(bytes) = crate::limine::module_bytes_by_string(DMC_MODULE_STRING) else {
         PRESENT.store(false, Ordering::Release);
