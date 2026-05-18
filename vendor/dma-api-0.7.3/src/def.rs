@@ -1,12 +1,30 @@
-use core::{
-    alloc::{Layout, LayoutError},
-    cmp::PartialOrd,
-    fmt,
-    ops::{Add, AddAssign, Deref, Div, Mul, MulAssign, Sub, SubAssign},
-    ptr::NonNull,
+use core::{alloc::Layout, cmp::PartialOrd, ops::Deref, ptr::NonNull};
+
+use derive_more::{
+    Add, AddAssign, Debug, Display, Div, From, Into, Mul, MulAssign, Sub, SubAssign,
 };
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Hash)]
+#[derive(
+    Debug,
+    Display,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Hash,
+    From,
+    Into,
+    Add,
+    AddAssign,
+    Mul,
+    MulAssign,
+    Sub,
+    SubAssign,
+    Div,
+)]
+#[debug("{}", format_args!("{_0:#X}"))]
+#[display("{}", format_args!("{_0:#X}"))]
 pub struct DmaAddr(u64);
 
 impl DmaAddr {
@@ -32,94 +50,14 @@ impl PartialOrd<u64> for DmaAddr {
 }
 
 /// 物理地址类型
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Display, Clone, Copy, PartialEq, Eq, Hash, From, Into, Add, Mul, Sub)]
+#[debug("{}", format_args!("{_0:#X}"))]
+#[display("{}", format_args!("{_0:#X}"))]
 pub struct PhysAddr(u64);
 
 impl PhysAddr {
     pub fn as_u64(&self) -> u64 {
         self.0
-    }
-}
-
-macro_rules! addr_impls {
-    ($ty:ident) => {
-        impl From<u64> for $ty {
-            fn from(value: u64) -> Self {
-                Self(value)
-            }
-        }
-
-        impl From<$ty> for u64 {
-            fn from(value: $ty) -> Self {
-                value.0
-            }
-        }
-
-        impl fmt::Debug for $ty {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(f, "{:#X}", self.0)
-            }
-        }
-
-        impl fmt::Display for $ty {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(f, "{:#X}", self.0)
-            }
-        }
-
-        impl Add for $ty {
-            type Output = Self;
-
-            fn add(self, rhs: Self) -> Self::Output {
-                Self(self.0 + rhs.0)
-            }
-        }
-
-        impl Mul for $ty {
-            type Output = Self;
-
-            fn mul(self, rhs: Self) -> Self::Output {
-                Self(self.0 * rhs.0)
-            }
-        }
-
-        impl Sub for $ty {
-            type Output = Self;
-
-            fn sub(self, rhs: Self) -> Self::Output {
-                Self(self.0 - rhs.0)
-            }
-        }
-    };
-}
-
-addr_impls!(PhysAddr);
-
-addr_impls!(DmaAddr);
-
-impl AddAssign for DmaAddr {
-    fn add_assign(&mut self, rhs: Self) {
-        self.0 += rhs.0;
-    }
-}
-
-impl MulAssign for DmaAddr {
-    fn mul_assign(&mut self, rhs: Self) {
-        self.0 *= rhs.0;
-    }
-}
-
-impl SubAssign for DmaAddr {
-    fn sub_assign(&mut self, rhs: Self) {
-        self.0 -= rhs.0;
-    }
-}
-
-impl Div for DmaAddr {
-    type Output = Self;
-
-    fn div(self, rhs: Self) -> Self::Output {
-        Self(self.0 / rhs.0)
     }
 }
 
@@ -135,40 +73,21 @@ pub enum DmaDirection {
 }
 
 /// DMA 错误类型
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 pub enum DmaError {
+    #[error("DMA allocation failed")]
     NoMemory,
-    LayoutError(LayoutError),
+    #[error("Invalid layout")]
+    LayoutError(#[from] core::alloc::LayoutError),
+    #[error("DMA address {addr} does not match device mask {mask:#X}")]
     DmaMaskNotMatch { addr: DmaAddr, mask: u64 },
+    #[error("DMA align mismatch: required={required:#X}, but address={address}")]
     AlignMismatch { required: usize, address: DmaAddr },
+    #[error("Null pointer provided for DMA mapping")]
     NullPointer,
+    #[error("Zero-sized buffer cannot be used for DMA")]
     ZeroSizedBuffer,
 }
-
-impl From<LayoutError> for DmaError {
-    fn from(value: LayoutError) -> Self {
-        Self::LayoutError(value)
-    }
-}
-
-impl fmt::Display for DmaError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NoMemory => f.write_str("DMA allocation failed"),
-            Self::LayoutError(_) => f.write_str("Invalid layout"),
-            Self::DmaMaskNotMatch { addr, mask } => {
-                write!(f, "DMA address {addr} does not match device mask {mask:#X}")
-            }
-            Self::AlignMismatch { required, address } => {
-                write!(f, "DMA align mismatch: required={required:#X}, but address={address}")
-            }
-            Self::NullPointer => f.write_str("Null pointer provided for DMA mapping"),
-            Self::ZeroSizedBuffer => f.write_str("Zero-sized buffer cannot be used for DMA"),
-        }
-    }
-}
-
-impl core::error::Error for DmaError {}
 
 /// Handle for DMA memory allocation.
 ///

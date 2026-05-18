@@ -1,9 +1,9 @@
-use core::ops::{Deref, DerefMut};
-
 use alloc::{
     collections::VecDeque,
     sync::{Arc, Weak},
 };
+use core::ops::{Deref, DerefMut};
+
 use spin::Mutex;
 
 use crate::{DArray, DeviceDma, DmaDirection, DmaError};
