@@ -544,6 +544,7 @@ pub enum SrgbRenderingIntent {
 }
 
 impl SrgbRenderingIntent {
+    #[cfg(feature = "png-encoding")]
     pub(crate) fn into_raw(self) -> u8 {
         self as u8
     }
@@ -839,6 +840,7 @@ impl Info<'_> {
     ///
     /// Source gamma and chromaticities will be written only if they're set to fallback
     /// values specified in [11.3.2.5](https://www.w3.org/TR/png-3/#sRGB-gAMA-cHRM).
+    #[cfg(feature = "png-encoding")]
     pub(crate) fn set_source_srgb(&mut self, rendering_intent: SrgbRenderingIntent) {
         self.srgb = Some(rendering_intent);
         self.icc_profile = None;
@@ -858,6 +860,7 @@ impl BytesPerPixel {
         }
     }
 
+    #[cfg(any(feature = "png-encoding", test))]
     pub(crate) fn into_usize(self) -> usize {
         self as usize
     }

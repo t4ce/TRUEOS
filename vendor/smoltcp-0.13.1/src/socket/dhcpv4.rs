@@ -329,6 +329,7 @@ impl<'a> Socket<'a> {
             }
         };
 
+        #[allow(irrefutable_let_patterns)]
         let HardwareAddress::Ethernet(ethernet_addr) = cx.hardware_addr() else {
             panic!("using DHCPv4 socket with a non-ethernet hardware address.");
         };
