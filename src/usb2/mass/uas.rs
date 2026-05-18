@@ -8,8 +8,8 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 
 use super::super::scsi;
 use super::{
-    MassProbeError, MassProbeInfo, UAS_IO_TIMEOUT_MS, UAS_STATUS_GRACE_MS, USB_CLASS_MASS_STORAGE,
-    USB_PROTO_UAS, USB_SUBCLASS_SCSI, decode_ascii_field, with_timeout_or_none,
+    MassProbeError, MassProbeInfo, UAS_IO_TIMEOUT_MS, USB_CLASS_MASS_STORAGE, USB_PROTO_UAS,
+    USB_SUBCLASS_SCSI, decode_ascii_field, with_timeout_or_none,
 };
 
 const UAS_IU_COMMAND: u8 = 0x01;
@@ -424,6 +424,57 @@ fn log_uas_iu(stage: &'static str, cmd: &'static str, tag: u16, iu: &[u8]) {
     );
 }
 
+fn log_uas_write_flow(stage: &'static str, tag: u16, detail: &'static str) {
+    let submit = crab_usb::debug_last_submit();
+    let event = crab_usb::debug_last_event();
+    crate::log!(
+        "crabusb: skhynix-green proof=uas-flow cmd=write-10 stage={} tag=0x{:04X} detail={} last_submit[slot={} dci={} dir={} stream={} len={} ptr=0x{:X} ring=0x{:X}] last_event[slot={} ep={} cc={} residual={} ptr=0x{:X}]\n",
+        stage,
+        tag,
+        detail,
+        submit.slot_id,
+        submit.dci,
+        submit.direction,
+        submit.stream_id,
+        submit.len,
+        submit.ptr,
+        submit.ring_ptr,
+        event.slot_id,
+        event.ep_id,
+        event.completion_code,
+        event.residual,
+        event.ptr
+    );
+}
+
+fn log_uas_write_iu(stage: &'static str, tag: u16, iu: &[u8]) {
+    let mut bytes = [0u8; 16];
+    let n = iu.len().min(bytes.len());
+    bytes[..n].copy_from_slice(&iu[..n]);
+    crate::log!(
+        "crabusb: skhynix-green proof=uas-flow cmd=write-10 stage={} tag=0x{:04X} iu_len={} iu={:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}\n",
+        stage,
+        tag,
+        iu.len(),
+        bytes[0],
+        bytes[1],
+        bytes[2],
+        bytes[3],
+        bytes[4],
+        bytes[5],
+        bytes[6],
+        bytes[7],
+        bytes[8],
+        bytes[9],
+        bytes[10],
+        bytes[11],
+        bytes[12],
+        bytes[13],
+        bytes[14],
+        bytes[15]
+    );
+}
+
 async fn uas_send_command(
     command_out: &mut EndpointBulkOut,
     cmd: &'static str,
@@ -478,22 +529,28 @@ async fn uas_drain_status_grace(
     let mut status = [0u8; 96];
     match with_timeout_or_none(
         status_in.submit_on_stream_and_wait(tag, &mut status),
-        UAS_STATUS_GRACE_MS,
+        UAS_IO_TIMEOUT_MS,
     )
     .await
     {
         Some(Ok(got)) => {
             if got < 4 {
                 log_uas_debug("status-short-after-ready-data", cmd, tag);
-                return Ok(());
+                return Err(MassProbeError::ShortData);
             }
             let status = &status[..got.min(status.len())];
             log_uas_iu("status-iu-after-ready-data", cmd, tag, status);
             validate_uas_status(cmd, status, tag)?;
             log_uas_debug("status-after-ready-data", cmd, tag);
         }
-        Some(Err(_)) => log_uas_debug("status-error-after-ready-data", cmd, tag),
-        None => log_uas_debug("status-timeout-after-ready-data", cmd, tag),
+        Some(Err(_)) => {
+            log_uas_debug("status-error-after-ready-data", cmd, tag);
+            return Err(MassProbeError::Transport("uas-status-in"));
+        }
+        None => {
+            log_uas_debug("status-timeout-after-ready-data", cmd, tag);
+            return Err(MassProbeError::Transport("uas-status-timeout"));
+        }
     }
     Ok(())
 }
@@ -555,7 +612,7 @@ async fn uas_command_in(
         FirstInCompletion::Data(got) => {
             let got = got?;
             log_uas_debug("data-in-complete-before-status", cmd, tag);
-            match with_timeout_or_none(ready_handle.as_mut(), UAS_STATUS_GRACE_MS).await {
+            match with_timeout_or_none(ready_handle.as_mut(), UAS_IO_TIMEOUT_MS).await {
                 Some(Ok(transfer)) => {
                     let ready_got = transfer.transfer_len;
                     if ready_got >= 4 {
@@ -574,10 +631,17 @@ async fn uas_command_in(
                         }
                     } else {
                         log_uas_debug("status-short-after-data", cmd, tag);
+                        return Err(MassProbeError::ShortData);
                     }
                 }
-                Some(Err(_)) => log_uas_debug("status-error-after-data", cmd, tag),
-                None => log_uas_debug("status-timeout-after-data", cmd, tag),
+                Some(Err(_)) => {
+                    log_uas_debug("status-error-after-data", cmd, tag);
+                    return Err(MassProbeError::Transport("uas-status-in"));
+                }
+                None => {
+                    log_uas_debug("status-timeout-after-data", cmd, tag);
+                    return Err(MassProbeError::Transport("uas-status-timeout"));
+                }
             }
             Ok(got)
         }
@@ -637,60 +701,171 @@ async fn uas_command_out(
     tag: u32,
 ) -> Result<(), MassProbeError> {
     let tag = uas_tag(tag);
-    let mut ready_iu = [0u8; 16];
-    let ready_handle = status_in
-        .submit_on_stream(tag, &mut ready_iu)
-        .map_err(|_| MassProbeError::Transport("uas-status-submit"))?;
-    log_uas_debug("status-submit", cmd, tag);
-    uas_send_command(command_out, cmd, cdb, tag).await?;
-
-    let mut ready_handle = core::pin::pin!(ready_handle);
-    let ready_got = with_timeout_or_none(ready_handle.as_mut(), UAS_IO_TIMEOUT_MS)
-        .await
-        .ok_or_else(|| {
-            log_uas_debug("ready-timeout", cmd, tag);
-            MassProbeError::Transport("uas-status-timeout")
-        })?
-        .map_err(|_| MassProbeError::Transport("uas-status-in"))?
-        .transfer_len;
-    if ready_got < 4 {
-        return Err(MassProbeError::ShortData);
-    }
-
-    let ready = &ready_iu[..ready_got.min(ready_iu.len())];
-    log_uas_iu("ready-iu", cmd, tag, ready);
-    let ready_id = ready[0];
-    let ready_tag = parse_uas_tag(ready).unwrap_or(0);
-    if ready_tag != tag {
-        return Err(MassProbeError::Csw);
-    }
-    if ready_id == UAS_IU_STATUS {
-        validate_uas_status(cmd, ready, tag)?;
-        log_uas_debug("status-before-write-ready", cmd, tag);
-        return Err(MassProbeError::Csw);
-    }
-    if ready_id != UAS_IU_WRITE_READY {
-        return Err(MassProbeError::Csw);
-    }
-    log_uas_debug("write-ready", cmd, tag);
-
     let data_handle = data_out
         .submit_on_stream(tag, data)
         .map_err(|_| MassProbeError::Transport("uas-data-submit"))?;
     log_uas_debug("data-out-submit", cmd, tag);
+    if cmd == "write-10" {
+        log_uas_write_flow("data-out-submit", tag, "data-out-preposted");
+    }
 
-    let data_sent = with_timeout_or_none(data_handle, UAS_IO_TIMEOUT_MS)
-        .await
-        .ok_or_else(|| {
-            log_uas_debug("data-out-timeout", cmd, tag);
-            MassProbeError::Transport("uas-data-timeout")
-        })?
-        .map_err(|_| MassProbeError::Transport("uas-data-out"))?
-        .transfer_len;
-    log_uas_debug("data-out-complete", cmd, tag);
+    let mut ready_iu = [0u8; 16];
+    if cmd == "write-10" {
+        log_uas_write_flow("ready-submit-before", tag, "posting-status-ready");
+    }
+    let ready_handle = status_in
+        .submit_on_stream(tag, &mut ready_iu)
+        .map_err(|_| MassProbeError::Transport("uas-status-submit"))?;
+    log_uas_debug("status-submit", cmd, tag);
+    if cmd == "write-10" {
+        log_uas_write_flow("ready-submit-after", tag, "status-ready-posted");
+    }
+    uas_send_command(command_out, cmd, cdb, tag).await?;
+    if cmd == "write-10" {
+        log_uas_write_flow("command-complete", tag, "waiting-data-or-status");
+    }
+
+    enum FirstOutCompletion {
+        Status(Result<usize, MassProbeError>),
+        Data(Result<usize, MassProbeError>),
+        Timeout,
+    }
+
+    let mut ready_handle = core::pin::pin!(ready_handle);
+    let mut data_handle = core::pin::pin!(data_handle);
+    let mut timeout =
+        core::pin::pin!(Timer::after(EmbassyDuration::from_millis(UAS_IO_TIMEOUT_MS)));
+    let first = core::future::poll_fn(|cx| {
+        if let Poll::Ready(result) = data_handle.as_mut().poll(cx) {
+            return Poll::Ready(FirstOutCompletion::Data(
+                result
+                    .map(|transfer| transfer.transfer_len)
+                    .map_err(|_| MassProbeError::Transport("uas-data-out")),
+            ));
+        }
+        if let Poll::Ready(result) = ready_handle.as_mut().poll(cx) {
+            return Poll::Ready(FirstOutCompletion::Status(
+                result
+                    .map(|transfer| transfer.transfer_len)
+                    .map_err(|_| MassProbeError::Transport("uas-status-in")),
+            ));
+        }
+        if timeout.as_mut().poll(cx).is_ready() {
+            return Poll::Ready(FirstOutCompletion::Timeout);
+        }
+        Poll::Pending
+    })
+    .await;
+
+    let (data_sent, need_final_status) = match first {
+        FirstOutCompletion::Data(sent) => {
+            let sent = sent?;
+            log_uas_debug("data-out-complete-before-status", cmd, tag);
+            if cmd == "write-10" {
+                log_uas_write_flow("data-out-complete", tag, "checking-status-grace");
+            }
+
+            match with_timeout_or_none(ready_handle.as_mut(), UAS_IO_TIMEOUT_MS).await {
+                Some(Ok(transfer)) => {
+                    let ready_got = transfer.transfer_len;
+                    if ready_got < 4 {
+                        return Err(MassProbeError::ShortData);
+                    }
+                    let ready = &ready_iu[..ready_got.min(ready_iu.len())];
+                    log_uas_iu("ready-iu", cmd, tag, ready);
+                    if cmd == "write-10" {
+                        log_uas_write_iu("ready-iu-after-data", tag, ready);
+                    }
+                    let ready_id = ready[0];
+                    let ready_tag = parse_uas_tag(ready).unwrap_or(0);
+                    if ready_tag != tag {
+                        return Err(MassProbeError::Csw);
+                    }
+                    if ready_id == UAS_IU_STATUS {
+                        validate_uas_status(cmd, ready, tag)?;
+                        log_uas_debug("status-after-data", cmd, tag);
+                        (sent, false)
+                    } else if ready_id == UAS_IU_WRITE_READY {
+                        log_uas_debug("write-ready-after-data", cmd, tag);
+                        (sent, true)
+                    } else {
+                        return Err(MassProbeError::Csw);
+                    }
+                }
+                Some(Err(_)) => return Err(MassProbeError::Transport("uas-status-in")),
+                None => {
+                    log_uas_debug("status-timeout-after-data", cmd, tag);
+                    if cmd == "write-10" {
+                        log_uas_write_flow(
+                            "status-timeout-after-data",
+                            tag,
+                            "missing-required-status",
+                        );
+                    }
+                    return Err(MassProbeError::Transport("uas-status-timeout"));
+                }
+            }
+        }
+        FirstOutCompletion::Status(ready_got) => {
+            let ready_got = ready_got?;
+            if ready_got < 4 {
+                return Err(MassProbeError::ShortData);
+            }
+
+            let ready = &ready_iu[..ready_got.min(ready_iu.len())];
+            log_uas_iu("ready-iu", cmd, tag, ready);
+            if cmd == "write-10" {
+                log_uas_write_iu("ready-iu", tag, ready);
+            }
+            let ready_id = ready[0];
+            let ready_tag = parse_uas_tag(ready).unwrap_or(0);
+            if ready_tag != tag {
+                return Err(MassProbeError::Csw);
+            }
+            if ready_id == UAS_IU_STATUS {
+                validate_uas_status(cmd, ready, tag)?;
+                log_uas_debug("status-before-write-ready", cmd, tag);
+                return Err(MassProbeError::Csw);
+            }
+            if ready_id != UAS_IU_WRITE_READY {
+                return Err(MassProbeError::Csw);
+            }
+            log_uas_debug("write-ready", cmd, tag);
+            if cmd == "write-10" {
+                log_uas_write_flow("write-ready", tag, "waiting-data-out");
+            }
+
+            let sent = with_timeout_or_none(data_handle.as_mut(), UAS_IO_TIMEOUT_MS)
+                .await
+                .ok_or_else(|| {
+                    log_uas_debug("data-out-timeout", cmd, tag);
+                    if cmd == "write-10" {
+                        log_uas_write_flow("data-out-timeout", tag, "data-out-not-complete");
+                    }
+                    MassProbeError::Transport("uas-data-timeout")
+                })?
+                .map_err(|_| MassProbeError::Transport("uas-data-out"))?
+                .transfer_len;
+            log_uas_debug("data-out-complete", cmd, tag);
+            if cmd == "write-10" {
+                log_uas_write_flow("data-out-complete", tag, "waiting-final-status");
+            }
+            (sent, true)
+        }
+        FirstOutCompletion::Timeout => {
+            log_uas_debug("write-timeout", cmd, tag);
+            if cmd == "write-10" {
+                log_uas_write_flow("write-timeout", tag, "no-data-or-status-completion");
+            }
+            return Err(MassProbeError::Transport("uas-status-timeout"));
+        }
+    };
 
     if data_sent != data.len() {
         return Err(MassProbeError::ShortData);
+    }
+    if !need_final_status {
+        return Ok(());
     }
 
     let mut final_status = [0u8; 96];
@@ -701,11 +876,17 @@ async fn uas_command_out(
     .await
     .ok_or_else(|| {
         log_uas_debug("final-status-timeout", cmd, tag);
+        if cmd == "write-10" {
+            log_uas_write_flow("final-status-timeout", tag, "no-final-status-iu");
+        }
         MassProbeError::Transport("uas-status-timeout")
     })?
     .map_err(|_| MassProbeError::Transport("uas-status-in"))?;
     let status = &final_status[..final_got.min(final_status.len())];
     log_uas_iu("final-status-iu", cmd, tag, status);
+    if cmd == "write-10" {
+        log_uas_write_iu("final-status-iu", tag, status);
+    }
     log_uas_debug("final-status-complete", cmd, tag);
     validate_uas_status(cmd, status, tag)
 }

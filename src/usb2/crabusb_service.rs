@@ -363,6 +363,31 @@ impl DmaOp for TrueosCrabUsbKernel {
         })
     }
 
+    fn confirm_write(
+        &self,
+        handle: &DmaMapHandle,
+        offset: usize,
+        size: usize,
+        direction: DmaDirection,
+    ) {
+        if !matches!(direction, DmaDirection::ToDevice | DmaDirection::Bidirectional) {
+            return;
+        }
+
+        let origin_ptr = unsafe { handle.as_ptr().add(offset) };
+        if let Some(bounce_virt) = handle.alloc_virt()
+            && bounce_virt != handle.as_ptr()
+        {
+            let bounce_ptr = unsafe { bounce_virt.add(offset) };
+            unsafe {
+                core::ptr::copy_nonoverlapping(origin_ptr.as_ptr(), bounce_ptr.as_ptr(), size);
+            }
+            self.flush(bounce_ptr, size);
+        } else {
+            self.flush(origin_ptr, size);
+        }
+    }
+
     unsafe fn unmap_single(&self, handle: DmaMapHandle) {
         if let Some(alloc_virt) = handle.alloc_virt() {
             let mapping = {
