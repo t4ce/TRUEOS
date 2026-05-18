@@ -235,7 +235,7 @@ static KERNEL_LOG_FACADE: KernelLogFacade = KernelLogFacade;
 
 pub fn init_log_facade() {
     let _ = log::set_logger(&KERNEL_LOG_FACADE);
-    log::set_max_level(crate::logflag::GLOBAL_LOG_LEVEL);
+    log::set_max_level(log::LevelFilter::Trace);
 }
 
 #[inline(always)]

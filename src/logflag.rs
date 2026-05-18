@@ -6,7 +6,7 @@ pub(crate) const GLOBAL_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const BOOT_LOG_LEVEL: LevelFilter = LevelFilter::Error;
 pub(crate) const SERVICE_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const NET_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
-pub(crate) const USB_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
+pub(crate) const USB_LOG_LEVEL: LevelFilter = LevelFilter::Info;
 pub(crate) const STORAGE_LOG_LEVEL: LevelFilter = LevelFilter::Info;
 pub(crate) const GFX_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const HV_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
@@ -52,7 +52,7 @@ pub(crate) static GFX_CABI_VIRGL_END_FRAME_DIAG_LOGS: AtomicU32 = AtomicU32::new
 pub(crate) static GFX_CABI_VIRGL_FIRST_FRAME_SEEN: AtomicBool = AtomicBool::new(true);
 
 pub(crate) static USB_LOG_ALL: AtomicBool = AtomicBool::new(true);
-pub(crate) const USB_VENDOR_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
+pub(crate) const USB_VENDOR_LOG_LEVEL: LevelFilter = LevelFilter::Info;
 pub(crate) const BLUEPRINT_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
 pub(crate) const USB_AUDIO_DEBUG_LOGS: bool = false;
 pub(crate) const HID_DEBUG_REPORT_LOGS: bool = false;
@@ -74,10 +74,6 @@ pub(crate) fn blueprint_log_enabled(level: Level) -> bool {
 }
 
 pub(crate) fn concept_log_enabled(concept: &str, level: Level) -> bool {
-    if !level_enabled(GLOBAL_LOG_LEVEL, level) {
-        return false;
-    }
-
     let filter = match concept {
         "boot" | "cpu" | "tokio" | "rapl" | "tga" => BOOT_LOG_LEVEL,
         "service" | "spawn-svc" | "http" => SERVICE_LOG_LEVEL,

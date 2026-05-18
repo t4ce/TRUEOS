@@ -71,7 +71,8 @@ const PRIMARY_FORMAT_PROBE_MODE: u32 = PRIMARY_FORMAT_PROBE_XRGB;
 const PRIMARY_PRESENT_DISABLE_PSR_PROBE: bool = true;
 const PRIMARY_BYTES_PER_PIXEL: u32 = 4;
 const PRIMARY_BASELINE_COLOR: u32 = 0x00FF_37FF;
-const PRIMARY_BOOT_LOGO_JPEG: &[u8] = include_bytes!("../../logo.jpg");
+const PRIMARY_BOOT_LOGO_JPEG: &[u8] =
+    include_bytes!("../../tools/vid/demo_yelly3_first_frame_q90.jpg");
 const PRIMARY_BOOT_LOGO_ENABLED: bool = true;
 const CPU_SCANOUT_PROOF_ENABLED: bool = true;
 const CPU_SCANOUT_PROOF_COLOR: u32 = 0x00FF_00FF;

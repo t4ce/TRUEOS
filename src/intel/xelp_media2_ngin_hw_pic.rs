@@ -239,6 +239,31 @@ pub(super) fn jpeg_output_format_from_input(input_format: u8) -> u8 {
     }
 }
 
+fn jpeg_frame_blocks_minus1(input_format: u8, width: u32, height: u32) -> (u32, u32) {
+    match input_format {
+        3 | 5 => (
+            ceil_div_u32(width.max(8), 8).saturating_sub(1),
+            ceil_div_u32(height.max(8), 8).saturating_sub(1),
+        ),
+        4 => (
+            ceil_div_u32(width.max(32), 32)
+                .saturating_mul(4)
+                .saturating_sub(1),
+            ceil_div_u32(height.max(32), 32)
+                .saturating_mul(4)
+                .saturating_sub(1),
+        ),
+        _ => (
+            ceil_div_u32(width.max(16), 16)
+                .saturating_mul(2)
+                .saturating_sub(1),
+            ceil_div_u32(height.max(16), 16)
+                .saturating_mul(2)
+                .saturating_sub(1),
+        ),
+    }
+}
+
 pub(super) fn parse_jpeg_quant_tables(encoded: &[u8]) -> Option<JpegQuantTables> {
     if encoded.len() < 4 || encoded[0] != 0xFF || encoded[1] != 0xD8 {
         return None;
@@ -693,7 +718,8 @@ const MFX_CMD_LEN_JPEG_BSD_OBJECT: u32 = 4;
 const MFX_JPEG_HUFF_TABLE_STATE: u32 = 2;
 const MFX_CMD_LEN_JPEG_HUFF_TABLE_STATE: u32 = 51;
 const MFX_PIPE_MODE_CODEC_JPEG: u32 = 3;
-const MFX_PIPE_MODE_DECODE: u32 = 1 << 9;
+const MFX_PIPE_MODE_LONG_FORMAT: u32 = 1 << 17;
+const MFX_PIPE_MODE_PRE_DEBLOCK_OUTPUT: u32 = 1 << 8;
 const MEDIA_STAGE_FLAG_JPEG_SMOKE: u32 = 1 << 8;
 const MEDIA_STAGE_FLAG_JPEG_PIC_STATE: u32 = 1 << 9;
 const MEDIA_STAGE_FLAG_JPEG_QM_STATE: u32 = 1 << 10;
@@ -897,7 +923,8 @@ fn build_jpeg_smoke_batch_skeleton(
     let jpeg_output_format = jpeg_scan_info
         .map(|scan_info| jpeg_output_format_from_input(scan_info.input_format))
         .unwrap_or(0);
-    let pipe_mode_dw1 = MFX_PIPE_MODE_CODEC_JPEG | MFX_PIPE_MODE_DECODE;
+    let pipe_mode_dw1 =
+        MFX_PIPE_MODE_LONG_FORMAT | MFX_PIPE_MODE_PRE_DEBLOCK_OUTPUT | MFX_PIPE_MODE_CODEC_JPEG;
     let mut stage_flags = MEDIA_STAGE_FLAG_JPEG_SMOKE
         | MEDIA_STAGE_FLAG_JPEG_PIC_STATE
         | MEDIA_STAGE_FLAG_JPEG_QM_STATE;
@@ -1242,7 +1269,8 @@ pub(super) fn submit_jpeg_smoke_batch(
             .saturating_sub(1))
             << 3)
         | (4 << 28);
-    let pipe_mode_dw1 = MFX_PIPE_MODE_CODEC_JPEG | MFX_PIPE_MODE_DECODE;
+    let pipe_mode_dw1 =
+        MFX_PIPE_MODE_LONG_FORMAT | MFX_PIPE_MODE_PRE_DEBLOCK_OUTPUT | MFX_PIPE_MODE_CODEC_JPEG;
     let jpeg_pic_dw1 = u32::from(jpeg_input_format) | (u32::from(jpeg_output_format) << 8);
     let jpeg_pic_dw2 = frame_width_blocks_minus1 | (frame_height_blocks_minus1 << 16);
 

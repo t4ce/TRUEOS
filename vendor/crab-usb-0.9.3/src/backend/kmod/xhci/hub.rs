@@ -129,8 +129,11 @@ impl XhciRootHub {
     }
 
     async fn _changed_ports(&mut self) -> Result<Vec<PortChangeInfo>, USBError> {
+        info!("xhci/root-hub: changed_ports begin");
         self.handle_uninit().await?;
-        self.handle_reseted().await
+        let ports = self.handle_reseted().await?;
+        info!("xhci/root-hub: changed_ports done count={}", ports.len());
+        Ok(ports)
     }
 
     async fn handle_uninit(&mut self) -> Result<(), USBError> {
@@ -142,7 +145,7 @@ impl XhciRootHub {
             .collect::<Vec<_>>();
 
         for &id in &uninited {
-            debug!("Waiting for port {id} reset ...");
+            info!("xhci/root-hub: waiting for port {id} reset");
             let i = (id - 1) as usize;
 
             let port = self.reg.port_register_set.read_volatile_at(i).portsc;
@@ -151,11 +154,12 @@ impl XhciRootHub {
                 continue;
             }
 
-            debug!(
-                "Port {} reset complete, enable={}, connect={}",
+            info!(
+                "xhci/root-hub: port {} reset complete enable={} connect={} speed_raw={}",
                 id,
                 port.port_enabled_disabled(),
-                port.current_connect_status()
+                port.current_connect_status(),
+                port.port_speed()
             );
 
             self.ports_mut()[i].state = PortState::Reseted;
@@ -183,7 +187,12 @@ impl XhciRootHub {
             }
             let speed_raw = port_reg.portsc.port_speed();
             let speed = Speed::from_xhci_portsc(speed_raw);
-            debug!("Port {} device connected at speed {:?}", id, speed);
+            info!(
+                "xhci/root-hub: port {} device connected speed={:?} raw={}",
+                id,
+                speed,
+                speed_raw
+            );
             debug!("Port {} : \r\n {:?}", id, port_reg.portsc);
             self.ports_mut()[i].state = PortState::Probed;
 
