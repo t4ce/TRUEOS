@@ -575,9 +575,10 @@ impl EventHandler {
             });
     }
 
-    fn clean_event_ring(&self) -> Event {
+    fn clean_event_ring(&self) -> (Event, bool) {
         use xhci::ring::trb::event::Allowed;
         let mut event = Event::Nothing;
+        let mut drained = false;
         let mut command_events = 0usize;
         let mut port_events = 0usize;
         let mut transfer_events = 0usize;
@@ -585,6 +586,7 @@ impl EventHandler {
         let mut event_loop = 0usize;
 
         while let Some(allowed) = self.event_ring().next() {
+            drained = true;
             match allowed {
                 Allowed::CommandCompletion(c) => {
                     command_events += 1;
@@ -655,20 +657,16 @@ impl EventHandler {
                 count: transfer_events,
             };
         }
-        event
+        (event, drained)
     }
 }
 
 impl EventHandlerOp for EventHandler {
     fn handle_event(&self) -> Event {
-        let mut res = Event::Nothing;
         let sts = self.reg().operational.usbsts.read_volatile();
         let has_event_interrupt = sts.event_interrupt();
         let has_pending_event = self.event_ring().has_pending_event();
-
-        if !has_event_interrupt && !has_pending_event {
-            return res;
-        }
+        let (res, drained) = self.clean_event_ring();
 
         {
             let irq = self.reg().interrupter_register_set.interrupter_mut(0);
@@ -697,6 +695,10 @@ impl EventHandlerOp for EventHandler {
             }
         }
 
+        if !has_event_interrupt && !has_pending_event && !drained {
+            return Event::Nothing;
+        }
+
         if has_event_interrupt {
             self.reg().operational.usbsts.update_volatile(|r| {
                 r.clear_event_interrupt();
@@ -710,7 +712,6 @@ impl EventHandlerOp for EventHandler {
             r.clear_interrupt_pending();
         });
 
-        res = self.clean_event_ring();
         self.update_erdp(true);
 
         res

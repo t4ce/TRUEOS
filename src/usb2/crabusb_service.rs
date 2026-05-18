@@ -536,9 +536,11 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
         diag.controller_phase = "probing";
         diag.probe_requested = PROBE_REQUESTED[info.index].load(Ordering::Acquire);
     });
+    crate::log!("crabusb: probe enter ctrl={}\n", info.index);
     let devices = match host.probe_devices().await {
         Ok(devices) => devices,
         Err(_) => {
+            crate::log!("crabusb: probe error ctrl={}\n", info.index);
             update_runtime_diag(info.index, |diag| {
                 diag.controller_phase = "probe-error";
                 diag.last_probe_state = "error";
@@ -547,6 +549,11 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
             return;
         }
     };
+    crate::log!(
+        "crabusb: probe done ctrl={} devices={}\n",
+        info.index,
+        devices.len()
+    );
 
     update_runtime_diag(info.index, |diag| {
         diag.controller_phase = "probe-ok";

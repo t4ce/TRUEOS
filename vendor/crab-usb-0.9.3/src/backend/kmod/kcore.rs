@@ -67,11 +67,25 @@ impl Core {
         let mut out = Vec::new();
 
         let hub_ids: Vec<Id<Hub>> = self.hubs.iter().map(|(id, _)| id).collect();
+        info!("kcore: probe begin hubs={}", hub_ids.len());
 
         for id in hub_ids {
+            info!("kcore: hub {:?} changed_ports begin", id);
             let addr_infos = self.hub_changed_ports(id).await?;
             let parent_hub_id = self.hubs.get(id).unwrap().backend.slot_id();
+            info!(
+                "kcore: hub {:?} changed_ports done count={} parent_slot={}",
+                id,
+                addr_infos.len(),
+                parent_hub_id
+            );
             for addr_info in addr_infos {
+                info!(
+                    "kcore: address begin root_port={} port={} speed={:?}",
+                    addr_info.root_port_id,
+                    addr_info.port_id,
+                    addr_info.port_speed
+                );
                 let info = DeviceAddressInfo {
                     root_port_id: addr_info.root_port_id,
                     port_speed: addr_info.port_speed,
@@ -83,6 +97,16 @@ impl Core {
                 let device = self.backend.new_addressed_device(info).await?;
 
                 let device_id = device.id();
+                let desc = device.descriptor();
+                info!(
+                    "kcore: address done id={} vid={:04x} pid={:04x} class={:02x}/{:02x}/{:02x}",
+                    device_id,
+                    desc.vendor_id,
+                    desc.product_id,
+                    desc.class,
+                    desc.subclass,
+                    desc.protocol
+                );
 
                 if let Some(hub_settings) =
                     HubDevice::is_hub(device.descriptor(), device.configuration_descriptors())
