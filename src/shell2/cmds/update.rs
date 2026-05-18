@@ -165,9 +165,21 @@ async fn update_command_task(target: MatrixTarget, disk: crate::disc::block::Dev
 
         let bootx64 = match crate::iso9660::file_slice(iso_view, "/EFI/BOOT/BOOTX64.EFI") {
             Ok(v) => v,
-            Err(e) => {
-                log(alloc::format!("update: ISO missing BOOTX64.EFI ({:?})", e).as_str());
-                return;
+            Err(_) => {
+                let efi_img = match crate::iso9660::file_slice(iso_view, "/efi.img") {
+                    Ok(v) => v,
+                    Err(e) => {
+                        log(alloc::format!("update: ISO missing efi.img ({:?})", e).as_str());
+                        return;
+                    }
+                };
+                match crate::efi_img::bootx64_from_efi_img(efi_img) {
+                    Some(v) => v,
+                    None => {
+                        log("update: efi.img missing EFI/BOOT/BOOTX64.EFI");
+                        return;
+                    }
+                }
             }
         };
 

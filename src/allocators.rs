@@ -506,8 +506,7 @@ const HOST_ALLOC_TAG: u8 = u8::MAX;
 static HOST_ALLOC_DOMAIN_FORCE_DEPTH_BY_CPU: [AtomicU32; 64] = [const { AtomicU32::new(0) }; 64];
 static HV_GUEST_ALLOC_DOMAIN_FORCE_DEPTH_BY_CPU: [AtomicU32; 64] =
     [const { AtomicU32::new(0) }; 64];
-static HV_GUEST_ALLOC_DOMAIN_FORCE_VM_BY_CPU: [AtomicU32; 64] =
-    [const { AtomicU32::new(0) }; 64];
+static HV_GUEST_ALLOC_DOMAIN_FORCE_VM_BY_CPU: [AtomicU32; 64] = [const { AtomicU32::new(0) }; 64];
 
 fn alloc_domain_from_tag(tag: &AllocTag) -> AllocDomain {
     if (tag.domain as usize) < crate::allcaps::hv::VM_ID_LIMIT {
@@ -682,10 +681,7 @@ pub fn ensure_hv_guest_heap_ready(vm_id: u8) -> bool {
         return true;
     }
 
-    crate::log!(
-        "heap: hv guest vm{} arena unavailable; no guest fallback configured\n",
-        vm_id
-    );
+    crate::log!("heap: hv guest vm{} arena unavailable; no guest fallback configured\n", vm_id);
     false
 }
 
@@ -1100,10 +1096,8 @@ fn align_up(addr: usize, align: usize) -> usize {
 
 fn aligned_payload(block_start: usize, layout: Layout) -> Option<usize> {
     let payload_align = core::cmp::max(layout.align(), align_of::<AllocTag>());
-    let payload_start = align_up(
-        block_start + size_of::<FreeBlock>() + size_of::<AllocTag>(),
-        payload_align,
-    );
+    let payload_start =
+        align_up(block_start + size_of::<FreeBlock>() + size_of::<AllocTag>(), payload_align);
     if payload_start > usize::MAX - layout.size() {
         None
     } else {

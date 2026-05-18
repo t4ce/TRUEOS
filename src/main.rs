@@ -25,6 +25,7 @@ mod cpu;
 mod disc;
 pub mod dma;
 mod efi;
+mod efi_img;
 #[cfg(target_arch = "x86_64")]
 mod exceptions;
 #[cfg(not(target_arch = "x86_64"))]
