@@ -514,10 +514,7 @@ pub(crate) async fn maybe_start_target_audio(
         }
     };
 
-    if let Err(err) = device
-        .set_configuration(target.configuration_value)
-        .await
-    {
+    if let Err(err) = device.set_configuration(target.configuration_value).await {
         crate::log!(
             "crabusb: target {:04X}:{:04X} set cfg={} failed before audio claim: {:?}\n",
             vendor_id,

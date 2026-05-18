@@ -479,7 +479,11 @@ struct ObservedPortLocation {
     speed: usb_if::Speed,
 }
 
-fn observed_port_location(controller_id: usize, ordinal: usize, fallback_id: usize) -> ObservedPortLocation {
+fn observed_port_location(
+    controller_id: usize,
+    ordinal: usize,
+    fallback_id: usize,
+) -> ObservedPortLocation {
     if let Some(diag) = super::controller_mmio_diag(controller_id)
         && let Some(port) = diag
             .ports
@@ -740,7 +744,7 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
             spawner,
             controller_id,
         )
-            .await
+        .await
         {
             bound_any = true;
         }
@@ -765,13 +769,8 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
         {
             bound_any = true;
         }
-        if super::skhynix_green::maybe_start_skhynix_green(
-            host,
-            dev_info,
-            spawner,
-            controller_id,
-        )
-        .await
+        if super::skhynix_green::maybe_start_skhynix_green(host, dev_info, spawner, controller_id)
+            .await
         {
             bound_any = true;
         } else if super::pen::maybe_start_mass_storage(host, dev_info, spawner, controller_id).await

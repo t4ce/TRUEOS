@@ -1,7 +1,9 @@
 use alloc::format;
 use alloc::string::String as AllocString;
 
-use super::{MatrixTarget, ShellBackend2, matrix, matrix_target_for_backend, print_matrix_target_line};
+use super::{
+    MatrixTarget, ShellBackend2, matrix, matrix_target_for_backend, print_matrix_target_line,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LumenPromptMode {

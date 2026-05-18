@@ -679,10 +679,7 @@ fn start_with_mode(
         vm.starting.store(false, Ordering::Release);
         hvlogf(format_args!(
             "hv: vm{} lane rejected: role={} placement={} slot={} requires reserved VM lane on AP2+",
-            vm_id,
-            VM_HULL_ROLE,
-            VM_HULL_PLACEMENT,
-            target.slot
+            vm_id, VM_HULL_ROLE, VM_HULL_PLACEMENT, target.slot
         ));
         return Err(StartError::NoVmSpawner);
     }
@@ -711,10 +708,7 @@ fn start_with_mode(
             target.spawner.spawn(token);
             hvlogf(format_args!(
                 "hv: vm{} lane spawn submitted: role={} placement={} slot={}",
-                vm_id,
-                VM_HULL_ROLE,
-                VM_HULL_PLACEMENT,
-                target.slot
+                vm_id, VM_HULL_ROLE, VM_HULL_PLACEMENT, target.slot
             ));
             crate::log!("app-vm-run-queue: vm task submitted vm={} slot={}\n", vm_id, target.slot);
         }

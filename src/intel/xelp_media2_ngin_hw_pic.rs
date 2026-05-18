@@ -79,6 +79,7 @@ pub(super) struct MediaJpegSmokeSubmitProof {
     pub output_surface_bytes: usize,
     pub surface_dw2: u32,
     pub surface_dw3: u32,
+    pub pipe_mode_dw1: u32,
     pub jpeg_pic_dw1: u32,
     pub jpeg_pic_dw2: u32,
     pub output_surface_detail: bool,
@@ -678,6 +679,8 @@ const MFX_CMD_LEN_JPEG_PIC_STATE: u32 = 1;
 const MFX_CMD_LEN_JPEG_BSD_OBJECT: u32 = 4;
 const MFX_JPEG_HUFF_TABLE_STATE: u32 = 2;
 const MFX_CMD_LEN_JPEG_HUFF_TABLE_STATE: u32 = 51;
+const MFX_PIPE_MODE_CODEC_JPEG: u32 = 3;
+const MFX_PIPE_MODE_DECODE: u32 = 1 << 9;
 const MEDIA_STAGE_FLAG_JPEG_SMOKE: u32 = 1 << 8;
 const MEDIA_STAGE_FLAG_JPEG_PIC_STATE: u32 = 1 << 9;
 const MEDIA_STAGE_FLAG_JPEG_QM_STATE: u32 = 1 << 10;
@@ -865,6 +868,7 @@ fn build_jpeg_smoke_batch_skeleton(
     let jpeg_output_format = jpeg_scan_info
         .map(|scan_info| jpeg_output_format_from_input(scan_info.input_format))
         .unwrap_or(0);
+    let pipe_mode_dw1 = MFX_PIPE_MODE_CODEC_JPEG | MFX_PIPE_MODE_DECODE;
     let mut stage_flags = MEDIA_STAGE_FLAG_JPEG_SMOKE
         | MEDIA_STAGE_FLAG_JPEG_PIC_STATE
         | MEDIA_STAGE_FLAG_JPEG_QM_STATE;
@@ -965,7 +969,7 @@ fn build_jpeg_smoke_batch_skeleton(
             media::MFX_CMD_LEN_PIPE_MODE_SELECT,
         ),
     )?;
-    batch[pipe_mode + 1] = 2 | (1 << 9);
+    batch[pipe_mode + 1] = pipe_mode_dw1;
 
     if !media::emit_mfx_wait(batch, &mut idx) {
         return None;
@@ -1211,6 +1215,7 @@ pub(super) fn submit_jpeg_smoke_batch(
         | (1 << 26)
         | (1 << 27)
         | (4 << 28);
+    let pipe_mode_dw1 = MFX_PIPE_MODE_CODEC_JPEG | MFX_PIPE_MODE_DECODE;
     let jpeg_pic_dw1 = u32::from(jpeg_input_format) | (u32::from(jpeg_output_format) << 8);
     let jpeg_pic_dw2 = frame_width_blocks_minus1 | (frame_height_blocks_minus1 << 16);
 
@@ -1404,6 +1409,7 @@ pub(super) fn submit_jpeg_smoke_batch(
         output_surface_bytes,
         surface_dw2,
         surface_dw3,
+        pipe_mode_dw1,
         jpeg_pic_dw1,
         jpeg_pic_dw2,
         output_surface_detail,

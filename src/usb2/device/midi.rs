@@ -434,10 +434,7 @@ pub async fn midi_stream_task(mut device: Device, controller_id: u32, target: Mi
         slot_id,
     };
 
-    if let Err(err) = device
-        .set_configuration(target.configuration_value)
-        .await
-    {
+    if let Err(err) = device.set_configuration(target.configuration_value).await {
         crate::log!(
             "crabusb: midi {:04X}:{:04X} set cfg={} failed: {:?}\n",
             vendor_id,

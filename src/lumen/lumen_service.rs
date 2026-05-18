@@ -4,7 +4,7 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
-use crate::shell2::{matrix_target_for_slot_name, print_matrix_target_line, OUTPUT_UART1_MASK};
+use crate::shell2::{OUTPUT_UART1_MASK, matrix_target_for_slot_name, print_matrix_target_line};
 
 const SERVICE_SLOT: &str = "LUM";
 const CHAT_AI_NAME: &str = "lumen";
@@ -124,11 +124,7 @@ fn clear_pending_prompts(reason: &str) {
     pending.clear();
     SERVICE_PROMPT_RUNNING.store(false, Ordering::Release);
     if count != 0 {
-        crate::log!(
-            "lumen-service: cleared pending prompts reason={} count={}\n",
-            reason,
-            count
-        );
+        crate::log!("lumen-service: cleared pending prompts reason={} count={}\n", reason, count);
     }
 }
 
