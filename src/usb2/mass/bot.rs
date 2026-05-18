@@ -124,6 +124,7 @@ fn log_bot_transport_debug(
     len: usize,
     ptr: *const u8,
 ) {
+    /*
     let submit = crab_usb::debug_last_submit();
     let event = crab_usb::debug_last_event();
     crate::log!(
@@ -148,6 +149,18 @@ fn log_bot_transport_debug(
         event.completion_code,
         event.residual,
         event.ptr
+    );
+    */
+    crate::log!(
+        "crabusb: mass bot-debug stage={} cmd={} tag=0x{:08X} expect[dci={} ep=0x{:02X} dir={} len={} ptr=0x{:X}]\n",
+        stage,
+        cmd,
+        tag,
+        endpoint_dci(ep),
+        ep,
+        direction,
+        len,
+        ptr as usize
     );
 }
 

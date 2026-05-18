@@ -422,6 +422,7 @@ fn mass_io_backoff(rt: &mut UsbMassRuntime, block_size: usize) {
 }
 
 fn log_transport_mismatch(rt: &UsbMassRuntime, stage: &'static str) {
+    /*
     let submit = crab_usb::debug_last_submit();
     let event = crab_usb::debug_last_event();
     crate::log!(
@@ -446,6 +447,18 @@ fn log_transport_mismatch(rt: &UsbMassRuntime, stage: &'static str) {
         event.completion_code,
         event.residual,
         event.ptr
+    );
+    */
+    crate::log!(
+        "crabusb: mass {:04X}:{:04X} transport stage={} key=0x{:X} expect[ctrl={} slot={} out_ep=0x{:02X} in_ep=0x{:02X}]\n",
+        rt.vendor_id,
+        rt.product_id,
+        stage,
+        rt.runtime_key,
+        rt.controller_id,
+        rt.slot_id,
+        rt.bulk_out_ep,
+        rt.bulk_in_ep
     );
 }
 

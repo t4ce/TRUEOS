@@ -1,6 +1,6 @@
 use core::time::Duration;
 
-use crab_usb_host2::{KernelOp, USBHost};
+use crab_usb::{KernelOp, USBHost};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
 use super::crabusb_service::CRABUSB_KERNEL;

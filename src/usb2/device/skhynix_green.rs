@@ -18,7 +18,6 @@ const SKHYNIX_FORCE_BOT_TEST: bool = crate::allcaps::storage::USB_MASS_FORCE_CON
 const SKHYNIX_UAS_FLOW_QUEUE_DEPTH: usize = 8;
 const SKHYNIX_UAS_FLOW_STATE_RECEIVERS: usize = 4;
 const SKHYNIX_UAS_FLOW_MAX_LANES: u8 = 4;
-const SKHYNIX_UAS_FLOW_BOOT_BENCH_ENABLED: bool = false;
 const SKHYNIX_UAS_FLOW_MAX_TRANSFER_BYTES: u64 = 1024 * 1024;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -363,56 +362,7 @@ pub(crate) async fn skhynix_uas_flow_service_task(
         ..SkhynixUasFlowState::offline()
     };
     state_sender.send(state);
-
-    if SKHYNIX_UAS_FLOW_BOOT_BENCH_ENABLED {
-        let bench_config = crate::shell2::cmds::bench::SkhynixUasFlowBenchConfig::boot_default(
-            pipes.block_size,
-            pipes.block_count,
-        );
-        match crate::shell2::cmds::bench::skhynix_uas_flow_read_bench(
-            &mut pipes.command_out,
-            &mut pipes.status_in,
-            &mut pipes.data_in,
-            &mut pipes.next_tag,
-            bench_config,
-        )
-        .await
-        {
-            Ok(report) => {
-                state.completed = state.completed.saturating_add(u64::from(report.reads));
-                state.bytes_in = state.bytes_in.saturating_add(report.bytes);
-                state.last_error = None;
-                state_sender.send(state);
-                crate::log!(
-                    "crabusb: skhynix-green proof=uas-flow ready=true bench=read-lanes temporary_default=true lanes={} reads={} bytes={} elapsed_ms={} speed={} min_read_us={} max_read_us={} no_block_register=true\n",
-                    report.lanes,
-                    report.reads,
-                    report.bytes,
-                    report.elapsed_ms,
-                    crate::shell2::cmds::bench::format_speed(
-                        crate::shell2::cmds::bench::bps_from_progress(
-                            report.bytes,
-                            report.elapsed_ms
-                        )
-                    ),
-                    report.min_read_us,
-                    report.max_read_us
-                );
-            }
-            Err(err) => {
-                state.last_error = Some(map_mass_probe_error(err));
-                state_sender.send(state);
-                crate::log!(
-                    "crabusb: skhynix-green proof=uas-flow ready=true bench=read-lanes temporary_default=true status=failed err={:?} no_block_register=true\n",
-                    err
-                );
-            }
-        }
-    } else {
-        crate::log!(
-            "crabusb: skhynix-green proof=uas-flow ready=true bench=disabled no_block_register=true\n"
-        );
-    }
+    crate::log!("crabusb: skhynix-green proof=uas-flow ready=true no_block_register=true\n");
 
     loop {
         let request = service.requests.receive().await;
@@ -570,6 +520,7 @@ fn log_mass_probe_failure(
     blocks: u16,
     bytes: usize,
 ) {
+    /*
     let submit = crab_usb::debug_last_submit();
     let event = crab_usb::debug_last_event();
     crate::log!(
@@ -592,6 +543,16 @@ fn log_mass_probe_failure(
         event.completion_code,
         event.residual,
         event.ptr
+    );
+    */
+    crate::log!(
+        "crabusb: skhynix-green proof=uas-flow cmd={} status=failed lba={} blocks={} bytes={} err={:?} reason={:?}\n",
+        cmd,
+        lba,
+        blocks,
+        bytes,
+        err,
+        err.transport_reason()
     );
 }
 

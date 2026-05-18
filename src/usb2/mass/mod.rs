@@ -100,6 +100,7 @@ async fn control_out_with_timeout(
 }
 
 fn log_transport_debug(stage: &'static str) {
+    /*
     let submit = crab_usb::debug_last_submit();
     let event = crab_usb::debug_last_event();
     crate::log!(
@@ -118,6 +119,8 @@ fn log_transport_debug(stage: &'static str) {
         event.residual,
         event.ptr
     );
+    */
+    crate::log!("crabusb: mass debug stage={}\n", stage);
 }
 
 fn decode_ascii_field(field: &[u8]) -> String {
