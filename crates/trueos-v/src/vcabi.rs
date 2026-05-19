@@ -278,6 +278,7 @@ unsafe extern "C" {
     pub fn trueos_cabi_shell1_submit_input(data_ptr: *const u8, data_len: usize) -> usize;
     pub fn trueos_cabi_shell_attached_write(data_ptr: *const u8, data_len: usize) -> usize;
     pub fn trueos_cabi_shell_attached_read_byte() -> i32;
+    pub fn trueos_cabi_shell_attached_retarget_slot(slot_ptr: *const u8, slot_len: usize) -> i32;
     pub fn trueos_cabi_shell_command_registry_json(out_ptr: *mut u8, out_cap: usize) -> isize;
     pub fn trueos_cabi_shell_history_lines_all() -> usize;
     pub fn trueos_cabi_shell_history_lines(

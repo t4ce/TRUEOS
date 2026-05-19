@@ -263,6 +263,14 @@ pub fn attached_read_byte() -> Option<u8> {
 }
 
 #[inline]
+pub fn attached_retarget_slot(slot: &str) -> bool {
+    if slot.is_empty() {
+        return false;
+    }
+    unsafe { vcabi::trueos_cabi_shell_attached_retarget_slot(slot.as_ptr(), slot.len()) == 0 }
+}
+
+#[inline]
 pub fn shell_command_registry_json() -> Option<String> {
     let len = unsafe { vcabi::trueos_cabi_shell_command_registry_json(core::ptr::null_mut(), 0) };
     if len <= 0 {

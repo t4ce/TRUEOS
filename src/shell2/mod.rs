@@ -610,6 +610,16 @@ pub(crate) fn matrix_target_for_slot_name(output_mask: u8, requested: &str) -> M
     }
 }
 
+pub(crate) fn switch_matrix_target_slot(target: &MatrixTarget, requested: &str) -> MatrixTarget {
+    let slot_id = matrix::switch_active_slot(target.output_mask, requested);
+    let interrupt_generation = matrix::slot_interrupt_generation(&slot_id);
+    MatrixTarget {
+        output_mask: target.output_mask,
+        slot_id,
+        interrupt_generation,
+    }
+}
+
 pub(crate) fn spawn_app_vm_run_queue(spawner: Spawner) -> Result<(), embassy_executor::SpawnError> {
     match cmds::run::app_vm_run_queue_task(spawner) {
         Ok(token) => {
