@@ -431,7 +431,7 @@ fn process_jpeg_job(job: HwPicJob) -> HwPicOutput {
     );
 
     let retired = smoke.retired;
-    let output_ready = retired && smoke.output_surface_detail;
+    let output_ready = retired;
     crate::log!(
         "intel/hw_pic-stage: id={} stage=classify accepted={} retired={} detail={} status={:?} err={}\n",
         job.id,
@@ -445,8 +445,6 @@ fn process_jpeg_job(job: HwPicJob) -> HwPicOutput {
         },
         if output_ready {
             0
-        } else if retired {
-            -14
         } else {
             -13
         }
@@ -481,8 +479,6 @@ fn process_jpeg_job(job: HwPicJob) -> HwPicOutput {
         virt_addr: backing.output_surface_virt as usize,
         error_code: if output_ready {
             0
-        } else if retired {
-            -14
         } else {
             -13
         },

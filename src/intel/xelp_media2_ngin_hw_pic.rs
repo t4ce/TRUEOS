@@ -233,18 +233,50 @@ fn jpeg_input_format_from_sampling(
 
 #[inline]
 pub(super) fn jpeg_output_format_from_input(input_format: u8) -> u8 {
-    match input_format {
-        1 => 1,
-        _ => 0,
-    }
+    let _ = input_format;
+    0
+}
+
+fn jpeg_mcu_pixels(input_format: u8, width: u32, height: u32) -> (u32, u32) {
+    let (mcu_w, mcu_h) = match input_format {
+        3 | 5 => (8, 8),
+        4 => (32, 32),
+        _ => (16, 16),
+    };
+    (width % mcu_w, height % mcu_h)
+}
+
+fn jpeg_pic_state_dw1(input_format: u8, output_format: u8, width: u32, height: u32) -> u32 {
+    let (last_mcu_w, last_mcu_h) = jpeg_mcu_pixels(input_format, width, height);
+    u32::from(input_format)
+        | (u32::from(output_format) << 8)
+        | ((last_mcu_h & 0x1f) << 21)
+        | ((last_mcu_w & 0x1f) << 26)
 }
 
 fn jpeg_frame_blocks_minus1(input_format: u8, width: u32, height: u32) -> (u32, u32) {
-    let _ = input_format;
-    (
-        ceil_div_u32(width.max(8), 8).saturating_sub(1),
-        ceil_div_u32(height.max(8), 8).saturating_sub(1),
-    )
+    match input_format {
+        3 | 5 => (
+            ceil_div_u32(width.max(8), 8).saturating_sub(1),
+            ceil_div_u32(height.max(8), 8).saturating_sub(1),
+        ),
+        4 => (
+            ceil_div_u32(width.max(32), 32)
+                .saturating_mul(4)
+                .saturating_sub(1),
+            ceil_div_u32(height.max(32), 32)
+                .saturating_mul(4)
+                .saturating_sub(1),
+        ),
+        _ => (
+            ceil_div_u32(width.max(16), 16)
+                .saturating_mul(2)
+                .saturating_sub(1),
+            ceil_div_u32(height.max(16), 16)
+                .saturating_mul(2)
+                .saturating_sub(1),
+        ),
+    }
 }
 
 fn jpeg_decode_surface_height(input_format: u8, height: u32) -> u32 {
@@ -616,6 +648,7 @@ pub(super) fn parse_jpeg_scan_info(encoded: &[u8]) -> Option<JpegScanInfo> {
 
                 let scan_data_offset = idx + required_len;
                 let mut scan_end = scan_data_offset;
+                let mut scan_tail_marker_bytes = 0usize;
                 while scan_end < encoded.len() {
                     if encoded[scan_end] != 0xFF {
                         scan_end += 1;
@@ -628,6 +661,10 @@ pub(super) fn parse_jpeg_scan_info(encoded: &[u8]) -> Option<JpegScanInfo> {
                     match encoded[scan_end + 1] {
                         0x00 | 0xD0..=0xD7 => scan_end += 2,
                         0xFF => scan_end += 1,
+                        0xD9 => {
+                            scan_tail_marker_bytes = 2;
+                            break;
+                        }
                         _ => break,
                     }
                 }
@@ -662,7 +699,7 @@ pub(super) fn parse_jpeg_scan_info(encoded: &[u8]) -> Option<JpegScanInfo> {
                 return Some(JpegScanInfo {
                     input_format,
                     scan_data_offset: scan_data_offset as u32,
-                    scan_data_length: (scan_end - scan_data_offset) as u32,
+                    scan_data_length: (scan_end + scan_tail_marker_bytes - scan_data_offset) as u32,
                     scan_component_count,
                     scan_component_mask,
                     interleaved,
@@ -910,6 +947,7 @@ fn build_jpeg_smoke_batch_skeleton(
     let jpeg_input_format = jpeg_scan_info
         .map(|scan_info| scan_info.input_format)
         .unwrap_or(0);
+    let jpeg_output_format = jpeg_output_format_from_input(jpeg_input_format);
     let decode_surface_height = jpeg_decode_surface_height(jpeg_input_format, coded_height);
     let (frame_width_blocks_minus1, frame_height_blocks_minus1) =
         jpeg_frame_blocks_minus1(jpeg_input_format, coded_width, coded_height);
@@ -1035,7 +1073,10 @@ fn build_jpeg_smoke_batch_skeleton(
     batch[surface + 2] =
         ((coded_width.saturating_sub(1)) << 4)
             | ((decode_surface_height.saturating_sub(1)) << 18);
-    batch[surface + 3] = (1 << 1) | 1 | ((output_pitch.saturating_sub(1)) << 3) | (4 << 28);
+    batch[surface + 3] = (1 << 1)
+        | 1
+        | ((output_pitch.saturating_sub(1)) << 3)
+        | (u32::from(jpeg_output_format) << 28);
     batch[surface + 4] = chroma_y_offset;
     batch[surface + 5] = cr_y_offset;
 
@@ -1087,7 +1128,8 @@ fn build_jpeg_smoke_batch_skeleton(
             MFX_CMD_LEN_JPEG_PIC_STATE,
         ),
     )?;
-    batch[jpeg_pic + 1] = u32::from(jpeg_input_format);
+    batch[jpeg_pic + 1] =
+        jpeg_pic_state_dw1(jpeg_input_format, jpeg_output_format, coded_width, coded_height);
     batch[jpeg_pic + 2] = frame_width_blocks_minus1 | (frame_height_blocks_minus1 << 16);
 
     let fallback_qm = [16u8; 64];
@@ -1256,10 +1298,11 @@ pub(super) fn submit_jpeg_smoke_batch(
             .unwrap_or(u32::MAX)
             .saturating_sub(1))
             << 3)
-        | (4 << 28);
+        | (u32::from(jpeg_output_format) << 28);
     let pipe_mode_dw1 =
         MFX_PIPE_MODE_LONG_FORMAT | MFX_PIPE_MODE_PRE_DEBLOCK_OUTPUT | MFX_PIPE_MODE_CODEC_JPEG;
-    let jpeg_pic_dw1 = u32::from(jpeg_input_format);
+    let jpeg_pic_dw1 =
+        jpeg_pic_state_dw1(jpeg_input_format, jpeg_output_format, coded_width, coded_height);
     let jpeg_pic_dw2 = frame_width_blocks_minus1 | (frame_height_blocks_minus1 << 16);
 
     let batch_tail_bytes = build_jpeg_smoke_batch_skeleton(

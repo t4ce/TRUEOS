@@ -81,11 +81,20 @@ impl HubOp for XhciRootHub {
         self._changed_ports().boxed()
     }
 
+    fn rearm_port(&mut self, port_id: u8) {
+        let idx = port_id.saturating_sub(1) as usize;
+        if let Some(port) = self.ports_mut().get_mut(idx) {
+            info!("xhci/root-hub: rearm port {}", port_id);
+            port.state = PortState::Uninit;
+            port.changed.store(true, Ordering::Release);
+        }
+    }
+
     fn init(&mut self, info: HubInfo) -> BoxFuture<'_, Result<HubInfo, USBError>> {
         async {
             let mut info = info;
             info.speed = Speed::SuperSpeedPlus;
-            debug!("Resetting all ports of xHCI Root Hub");
+            info!("xhci/root-hub: power ports without blanket reset");
 
             for idx in 0..self.reg.port_register_set.len() {
                 self.reg.port_register_set.update_volatile_at(idx, |reg| {
@@ -93,13 +102,6 @@ impl HubOp for XhciRootHub {
                         trace!("Powering on port {}", idx + 1);
                         reg.portsc.set_port_power();
                     }
-                });
-            }
-
-            for idx in 0..self.reg.port_register_set.len() {
-                self.reg.port_register_set.update_volatile_at(idx, |reg| {
-                    reg.portsc.set_0_port_enabled_disabled();
-                    reg.portsc.set_port_reset();
                 });
             }
 
@@ -145,22 +147,28 @@ impl XhciRootHub {
             .collect::<Vec<_>>();
 
         for &id in &uninited {
-            info!("xhci/root-hub: waiting for port {id} reset");
             let i = (id - 1) as usize;
 
             let port = self.reg.port_register_set.read_volatile_at(i).portsc;
 
-            if port.port_reset() {
-                continue;
-            }
+            let connect = port.current_connect_status();
+            let enable = port.port_enabled_disabled();
+            let speed_raw = port.port_speed();
 
             info!(
-                "xhci/root-hub: port {} reset complete enable={} connect={} speed_raw={}",
+                "xhci/root-hub: port {} initial state enable={} connect={} reset={} speed_raw={}",
                 id,
-                port.port_enabled_disabled(),
-                port.current_connect_status(),
-                port.port_speed()
+                enable,
+                connect,
+                port.port_reset(),
+                speed_raw
             );
+
+            if connect && !enable {
+                info!("xhci/root-hub: port {} connected but not enabled; leaving untouched", id);
+                self.ports_mut()[i].state = PortState::Probed;
+                continue;
+            }
 
             self.ports_mut()[i].state = PortState::Reseted;
         }

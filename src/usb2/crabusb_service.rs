@@ -539,8 +539,8 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
     crate::log!("crabusb: probe enter ctrl={}\n", info.index);
     let devices = match host.probe_devices().await {
         Ok(devices) => devices,
-        Err(_) => {
-            crate::log!("crabusb: probe error ctrl={}\n", info.index);
+        Err(err) => {
+            crate::log!("crabusb: probe error ctrl={} err={:?}\n", info.index, err);
             update_runtime_diag(info.index, |diag| {
                 diag.controller_phase = "probe-error";
                 diag.last_probe_state = "error";

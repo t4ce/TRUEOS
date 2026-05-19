@@ -94,7 +94,22 @@ impl Core {
                     infos: self.hub_infos(),
                 };
 
-                let device = self.backend.new_addressed_device(info).await?;
+                let device = match self.backend.new_addressed_device(info).await {
+                    Ok(device) => device,
+                    Err(err) => {
+                        warn!(
+                            "kcore: address failed root_port={} port={} speed={:?} err={:?}",
+                            addr_info.root_port_id,
+                            addr_info.port_id,
+                            addr_info.port_speed,
+                            err
+                        );
+                        if let Some(hub) = self.hubs.get_mut(id) {
+                            hub.backend.rearm_port(addr_info.port_id);
+                        }
+                        continue;
+                    }
+                };
 
                 let device_id = device.id();
                 let desc = device.descriptor();

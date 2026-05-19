@@ -12,6 +12,7 @@ use usb_if::{err::USBError, host::hub::Speed};
 pub trait HubOp: Send + 'static + Any {
     fn init<'a>(&'a mut self, info: HubInfo) -> BoxFuture<'a, Result<HubInfo, USBError>>;
     fn changed_ports<'a>(&'a mut self) -> BoxFuture<'a, Result<Vec<PortChangeInfo>, USBError>>;
+    fn rearm_port(&mut self, port_id: u8);
     fn slot_id(&self) -> u8;
 }
 
