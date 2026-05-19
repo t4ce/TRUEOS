@@ -512,7 +512,7 @@ tree-edge: 245
     #[test]
     fn test_default_theme_file() {
         use std::fs::File;
-        use trueos_io::Write;
+        use std::io::Write;
         let dir = assert_fs::TempDir::new().unwrap();
         let theme = dir.path().join("theme.yaml");
         let mut file = File::create(&theme).unwrap();

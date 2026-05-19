@@ -798,7 +798,7 @@ filetype:
     #[test]
     fn test_tmp_partial_default_theme_file() {
         use std::fs::File;
-        use trueos_io::Write;
+        use std::io::Write;
         let dir = assert_fs::TempDir::new().unwrap();
         let theme = dir.path().join("icon.yaml");
         let mut file = File::create(&theme).unwrap();

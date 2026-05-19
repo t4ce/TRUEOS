@@ -82,7 +82,7 @@ mod tests {
     use super::*;
     use crate::flags::{Flags, PermissionFlag};
     use std::fs::{File, create_dir};
-    use trueos_io::prelude::*;
+    use std::io::prelude::*;
     use std::process::Command;
     use tempfile::tempdir;
 
