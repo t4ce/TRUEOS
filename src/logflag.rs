@@ -6,7 +6,7 @@ pub(crate) const GLOBAL_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const BOOT_LOG_LEVEL: LevelFilter = LevelFilter::Error;
 pub(crate) const SERVICE_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const NET_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
-pub(crate) const USB_LOG_LEVEL: LevelFilter = LevelFilter::Info;
+pub(crate) const USB_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const STORAGE_LOG_LEVEL: LevelFilter = LevelFilter::Info;
 pub(crate) const GFX_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const HV_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
@@ -52,7 +52,6 @@ pub(crate) static GFX_CABI_VIRGL_END_FRAME_DIAG_LOGS: AtomicU32 = AtomicU32::new
 pub(crate) static GFX_CABI_VIRGL_FIRST_FRAME_SEEN: AtomicBool = AtomicBool::new(true);
 
 pub(crate) static USB_LOG_ALL: AtomicBool = AtomicBool::new(true);
-pub(crate) const USB_VENDOR_LOG_LEVEL: LevelFilter = LevelFilter::Info;
 pub(crate) const BLUEPRINT_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
 pub(crate) const USB_AUDIO_DEBUG_LOGS: bool = false;
 pub(crate) const HID_DEBUG_REPORT_LOGS: bool = false;
@@ -66,7 +65,7 @@ pub(crate) static TGA_MISSING_LOG_ONCE: Once<()> = Once::new();
 pub(crate) static TGA_TASK_STARTED_LOG_ONCE: Once<()> = Once::new();
 
 pub(crate) fn usb_vendor_log_enabled(level: Level) -> bool {
-    level_enabled(USB_VENDOR_LOG_LEVEL, level)
+    level_enabled(USB_LOG_LEVEL, level)
 }
 
 pub(crate) fn blueprint_log_enabled(level: Level) -> bool {

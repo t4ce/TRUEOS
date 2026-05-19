@@ -140,6 +140,10 @@ pub mod path {
             &self.inner
         }
 
+        pub fn to_path_buf(&self) -> PathBuf {
+            self.to_owned()
+        }
+
         pub fn components(&self) -> Components<'_> {
             Components { path: &self.inner, pos: 0, yielded_root: false }
         }
@@ -199,6 +203,47 @@ pub mod path {
 
         pub fn as_os_str(&self) -> &str {
             self.inner.as_str()
+        }
+
+        pub fn file_name(&self) -> Option<&str> {
+            self.inner.trim_end_matches('/').rsplit('/').next().filter(|name| !name.is_empty())
+        }
+
+        pub fn set_file_name<S: AsRef<str>>(&mut self, file_name: S) {
+            let had_parent = self.pop();
+            if had_parent && !self.inner.is_empty() && !self.inner.ends_with('/') {
+                self.inner.push('/');
+            }
+            self.inner.push_str(file_name.as_ref());
+        }
+
+        pub fn set_extension<S: AsRef<str>>(&mut self, extension: S) -> bool {
+            let trimmed_len = self.inner.trim_end_matches('/').len();
+            if trimmed_len == 0 {
+                return false;
+            }
+
+            let name_start = self.inner[..trimmed_len]
+                .rfind('/')
+                .map(|pos| pos + 1)
+                .unwrap_or(0);
+            let name = &self.inner[name_start..trimmed_len];
+            if name.is_empty() || name == "." || name == ".." {
+                return false;
+            }
+
+            let ext_start = self.inner[name_start..trimmed_len]
+                .rfind('.')
+                .map(|pos| name_start + pos)
+                .unwrap_or(trimmed_len);
+            self.inner.truncate(ext_start);
+
+            let extension = extension.as_ref().trim_start_matches('.');
+            if !extension.is_empty() {
+                self.inner.push('.');
+                self.inner.push_str(extension);
+            }
+            true
         }
     }
 

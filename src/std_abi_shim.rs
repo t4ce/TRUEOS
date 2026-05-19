@@ -20,6 +20,10 @@ static PTHREAD_CONDS: Mutex<FixedKeyMap<usize, PthreadCondState, PTHREAD_COND_CA
     Mutex::new(FixedKeyMap::new());
 static PTHREAD_MUTEXES: Mutex<FixedKeyMap<usize, PthreadMutexState, PTHREAD_MUTEX_CAPACITY>> =
     Mutex::new(FixedKeyMap::new());
+static PTHREAD_KEYS: Mutex<FixedKeyMap<usize, usize, PTHREAD_KEY_CAPACITY>> =
+    Mutex::new(FixedKeyMap::new());
+static PTHREAD_TLS_VALUES: Mutex<FixedKeyMap<usize, usize, PTHREAD_TLS_VALUE_CAPACITY>> =
+    Mutex::new(FixedKeyMap::new());
 static PTHREAD_THREADS: Mutex<FixedKeyMap<usize, PthreadThreadState, PTHREAD_THREAD_CAPACITY>> =
     Mutex::new(FixedKeyMap::new());
 static LOGGED_PTHREAD_SYNC: AtomicI32 = AtomicI32::new(0);
@@ -31,6 +35,8 @@ const PTHREAD_SYNC_TRACE_LIMIT: usize = 48;
 const C_ALLOCATION_CAPACITY: usize = 16384;
 const PTHREAD_MUTEX_CAPACITY: usize = 256;
 const PTHREAD_COND_CAPACITY: usize = 256;
+const PTHREAD_KEY_CAPACITY: usize = 128;
+const PTHREAD_TLS_VALUE_CAPACITY: usize = 512;
 const PTHREAD_THREAD_CAPACITY: usize = 64;
 
 const TRUEOS_EAGAIN: c_int = 11;
@@ -186,6 +192,10 @@ fn pthread_current_id() -> usize {
         return 0x1_0000usize.saturating_add(vtid as usize);
     }
     crate::percpu::current_slot().saturating_add(1)
+}
+
+fn pthread_tls_slot(key: usize) -> usize {
+    (pthread_current_id() << 32) ^ key
 }
 
 fn pthread_sync_probe_log() {
@@ -1076,6 +1086,22 @@ pub unsafe extern "C" fn readdir(_dir: *mut c_void) -> *mut c_void {
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn readdir_r(
+    _dir: *mut c_void,
+    _entry: *mut c_void,
+    result: *mut *mut c_void,
+) -> c_int {
+    if !result.is_null() {
+        let Some(out) = abi_write_bytes(result.cast::<u8>(), core::mem::size_of::<usize>()) else {
+            TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+            return TRUEOS_EINVAL;
+        };
+        out.copy_from_slice(&0usize.to_ne_bytes());
+    }
+    0
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn stat(path: *const c_char, buf: *mut c_void) -> c_int {
     if path.is_null() || buf.is_null() {
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
@@ -1445,6 +1471,72 @@ pub unsafe extern "C" fn setsid() -> c_int {
 pub unsafe extern "C" fn setpgid(_pid: c_int, _pgid: c_int) -> c_int {
     TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
     -1
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_key_create(key: *mut u32, _destructor: *const c_void) -> c_int {
+    if key.is_null() {
+        return TRUEOS_EINVAL;
+    }
+    static NEXT_PTHREAD_KEY: AtomicUsize = AtomicUsize::new(1);
+    let next = NEXT_PTHREAD_KEY.fetch_add(1, Ordering::AcqRel);
+    if next > u32::MAX as usize {
+        return TRUEOS_EAGAIN;
+    }
+    if PTHREAD_KEYS.lock().insert(next, 0).is_err() {
+        return TRUEOS_EAGAIN;
+    }
+    let bytes = (next as u32).to_ne_bytes();
+    let Some(out) = abi_write_bytes(key.cast::<u8>(), core::mem::size_of::<u32>()) else {
+        let _ = PTHREAD_KEYS.lock().remove(next);
+        return TRUEOS_EINVAL;
+    };
+    out.copy_from_slice(&bytes);
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_key_delete(key: u32) -> c_int {
+    let key = key as usize;
+    let _ = PTHREAD_KEYS.lock().remove(key);
+    let slot = pthread_tls_slot(key);
+    let _ = PTHREAD_TLS_VALUES.lock().remove(slot);
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_setspecific(key: u32, value: *const c_void) -> c_int {
+    let key = key as usize;
+    if PTHREAD_KEYS.lock().get(key).is_none() {
+        return TRUEOS_EINVAL;
+    }
+    let slot = pthread_tls_slot(key);
+    let value = value as usize;
+    let mut values = PTHREAD_TLS_VALUES.lock();
+    if value == 0 {
+        let _ = values.remove(slot);
+        return 0;
+    }
+    values.insert(slot, value).map(|_| ()).unwrap_or(());
+    if values.get(slot).copied() == Some(value) {
+        0
+    } else {
+        TRUEOS_EAGAIN
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_getspecific(key: u32) -> *mut c_void {
+    let key = key as usize;
+    if PTHREAD_KEYS.lock().get(key).is_none() {
+        return ptr::null_mut();
+    }
+    let slot = pthread_tls_slot(key);
+    PTHREAD_TLS_VALUES
+        .lock()
+        .get(slot)
+        .copied()
+        .unwrap_or(0) as *mut c_void
 }
 
 #[unsafe(no_mangle)]

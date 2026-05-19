@@ -1202,6 +1202,7 @@ fn resolve_std_abi_import(name: &str) -> Option<usize> {
         "lstat" => Some(crate::std_abi_shim::lstat as *const () as usize),
         "opendir" => Some(crate::std_abi_shim::opendir as *const () as usize),
         "readdir" => Some(crate::std_abi_shim::readdir as *const () as usize),
+        "readdir_r" => Some(crate::std_abi_shim::readdir_r as *const () as usize),
         "closedir" => Some(crate::std_abi_shim::closedir as *const () as usize),
         "dirfd" => Some(crate::std_abi_shim::dirfd as *const () as usize),
         "unlink" => Some(crate::std_abi_shim::unlink as *const () as usize),
@@ -1251,6 +1252,18 @@ fn resolve_std_abi_import(name: &str) -> Option<usize> {
         "pthread_detach" => Some(crate::std_abi_shim::pthread_detach as *const () as usize),
         "pthread_self" => Some(crate::std_abi_shim::pthread_self as *const () as usize),
         "pthread_setname_np" => Some(crate::std_abi_shim::pthread_setname_np as *const () as usize),
+        "pthread_key_create" => {
+            Some(crate::std_abi_shim::pthread_key_create as *const () as usize)
+        }
+        "pthread_key_delete" => {
+            Some(crate::std_abi_shim::pthread_key_delete as *const () as usize)
+        }
+        "pthread_setspecific" => {
+            Some(crate::std_abi_shim::pthread_setspecific as *const () as usize)
+        }
+        "pthread_getspecific" => {
+            Some(crate::std_abi_shim::pthread_getspecific as *const () as usize)
+        }
         "pthread_cond_init" => Some(crate::std_abi_shim::pthread_cond_init as *const () as usize),
         "pthread_condattr_init" => {
             Some(crate::std_abi_shim::pthread_condattr_init as *const () as usize)
@@ -1373,7 +1386,13 @@ unsafe extern "C" fn portal_rust_alloc(size: usize, align: usize) -> *mut u8 {
         return core::ptr::null_mut();
     };
 
-    unsafe { crate::allocators::alloc_raw(layout) }
+    let alloc = || unsafe { crate::allocators::alloc_raw(layout) };
+    if let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id().or_else(crate::hv::current_vm_id) {
+        return crate::allocators::with_hv_guest_alloc_domain(vm_id, alloc)
+            .unwrap_or(core::ptr::null_mut());
+    }
+
+    alloc()
 }
 
 unsafe extern "C" fn portal_rust_dealloc(ptr: *mut u8, _size: usize, _align: usize) {

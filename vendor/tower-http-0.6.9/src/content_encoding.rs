@@ -36,7 +36,18 @@ impl Encoding {
         }
     }
 
-    #[cfg(feature = "fs")]
+    #[cfg(all(feature = "fs", any(target_os = "trueos", target_os = "zkvm")))]
+    pub(crate) fn to_file_extension(self) -> Option<&'static tokio::ffi::OsStr> {
+        match self {
+            Encoding::Gzip => Some(".gz"),
+            Encoding::Deflate => Some(".zz"),
+            Encoding::Brotli => Some(".br"),
+            Encoding::Zstd => Some(".zst"),
+            Encoding::Identity => None,
+        }
+    }
+
+    #[cfg(all(feature = "fs", not(any(target_os = "trueos", target_os = "zkvm"))))]
     pub(crate) fn to_file_extension(self) -> Option<&'static core::ffi::OsStr> {
         match self {
             Encoding::Gzip => Some(core::ffi::OsStr::new(".gz")),

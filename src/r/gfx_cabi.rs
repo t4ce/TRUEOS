@@ -395,8 +395,18 @@ pub mod env {
         };
 
         let rel = normalize_app_path(path, allow_empty)?;
+        let root_rel = normalize_app_path(root.as_str(), true)?;
         if rel.is_empty() {
             Some(root)
+        } else if rel == root_rel {
+            Some(root)
+        } else if let Some(app_rel) = rel.strip_prefix(root_rel.as_str()) {
+            let app_rel = app_rel.strip_prefix('/').unwrap_or(app_rel);
+            if app_rel.is_empty() {
+                Some(root)
+            } else {
+                Some(alloc::format!("{}/{}", root.trim_matches('/'), app_rel))
+            }
         } else if rel == "common" {
             Some(String::from("apps/common"))
         } else if let Some(shared_rel) = rel.strip_prefix("common/") {

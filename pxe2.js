@@ -7,7 +7,7 @@ const { spawn, spawnSync } = require("child_process");
 const BOOTFILE = "EFI/BOOT/BOOTX64.EFI";
 const LEASES = "/tmp/trueos-pxe2.leases";
 const DEFAULT_HTTP_PORT = 8080;
-const DEFAULT_PXE_APPS = ["file-system.bp"];
+const DEFAULT_PXE_APPS = ["hello_world.bp"];
 const HARDCODED_HTTP_ASSETS = [
   {
     kind: "video",
@@ -389,7 +389,7 @@ function stageSelectedApps(tftpRoot, appNames) {
 
   for (const appName of appNames) {
     const stagedPath = path.join(appDir, appName);
-    const distPath = path.resolve(__dirname, "crates/TRUEOS-Blueprints/dist", appName);
+    const distPath = resolveBlueprintDistApp(appName);
     if (!fs.existsSync(distPath)) {
       if (fs.existsSync(stagedPath)) {
         process.stdout.write(`Using existing staged PXE app ${stagedPath}; dist artifact missing.\n`);
@@ -405,6 +405,23 @@ function stageSelectedApps(tftpRoot, appNames) {
     fs.copyFileSync(distPath, stagedPath);
     process.stdout.write(`Staged PXE app ${appName} copy from ${distPath}.\n`);
   }
+}
+
+function resolveBlueprintDistApp(appName) {
+  const distDirs = [
+    process.env.TRUEOS_BLUEPRINTS_DIST,
+    path.resolve(__dirname, "../TRUEOS-Blueprints/dist"),
+    path.resolve(__dirname, "crates/TRUEOS-Blueprints/dist"),
+  ].filter(Boolean);
+
+  for (const distDir of distDirs) {
+    const candidate = path.resolve(distDir, appName);
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return path.resolve(distDirs[0], appName);
 }
 
 function ensureTftpFiles(tftpRoot, appSelection) {

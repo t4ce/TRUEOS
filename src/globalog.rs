@@ -113,6 +113,14 @@ pub fn log(args: fmt::Arguments<'_>) {
     log_with_level(log::Level::Info, args);
 }
 
+fn inferred_concept_for_rendered(rendered: &str) -> Option<&'static str> {
+    let rendered = rendered.trim_start();
+    if rendered.starts_with("crabusb:") || rendered.starts_with("crabusb/") {
+        return Some("usb");
+    }
+    None
+}
+
 pub fn log_with_purpose(purpose: Option<&str>, args: fmt::Arguments<'_>) {
     let _guard = LOG_WRITE_LOCK.lock();
 
@@ -155,7 +163,13 @@ pub fn purpose_for_level(level: log::Level) -> &'static str {
 }
 
 pub fn log_with_level(level: log::Level, args: fmt::Arguments<'_>) {
-    log_with_purpose(Some(purpose_for_level(level)), args);
+    let rendered = alloc::format!("{}", args);
+    if let Some(concept) = inferred_concept_for_rendered(rendered.as_str()) {
+        if !crate::logflag::concept_log_enabled(concept, level) {
+            return;
+        }
+    }
+    log_with_purpose(Some(purpose_for_level(level)), format_args!("{}", rendered));
 }
 
 pub fn log_with_concept_level(concept: &str, level: log::Level, args: fmt::Arguments<'_>) {

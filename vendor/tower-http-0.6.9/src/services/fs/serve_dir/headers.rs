@@ -1,6 +1,9 @@
 use http::header::HeaderValue;
 use httpdate::HttpDate;
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::time::SystemTime;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use httpdate::time::SystemTime;
 
 pub(super) struct LastModified(pub(super) HttpDate);
 

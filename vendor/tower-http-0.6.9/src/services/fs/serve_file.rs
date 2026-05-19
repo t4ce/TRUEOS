@@ -3,10 +3,11 @@
 use super::ServeDir;
 use http::{HeaderValue, Request};
 use mime::Mime;
-use std::{
-    path::Path,
-    task::{Context, Poll},
-};
+use std::task::{Context, Poll};
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+use std::path::Path;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use std::path::Path;
 use tower_service::Service;
 
 /// Service that serves a file.
@@ -19,7 +20,7 @@ impl ServeFile {
     ///
     /// The `Content-Type` will be guessed from the file extension.
     pub fn new<P: AsRef<Path>>(path: P) -> Self {
-        let guess = mime_guess::from_path(path.as_ref());
+        let guess = guess_mime(path.as_ref());
         let mime = guess
             .first_raw()
             .map(HeaderValue::from_static)
@@ -118,6 +119,16 @@ impl ServeFile {
     {
         self.0.try_call(req)
     }
+}
+
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+fn guess_mime(path: &Path) -> mime_guess::MimeGuess {
+    mime_guess::from_path(path)
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+fn guess_mime(path: &Path) -> mime_guess::MimeGuess {
+    mime_guess::from_path(path)
 }
 
 impl<ReqBody> Service<Request<ReqBody>> for ServeFile

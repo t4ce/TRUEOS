@@ -42,11 +42,11 @@ DMC_FW_HOST_PATH ?= /lib/firmware/i915/adls_dmc_ver2_01.bin.zst
 DMC_FW_ISO_REL_PATH ?= EFI/BOOT/adls_dmc_ver2_01.bin
 HUC_FW_HOST_PATH ?= /lib/firmware/i915/tgl_huc.bin.zst
 HUC_FW_ISO_REL_PATH ?= EFI/BOOT/tgl_huc.bin
-BLUEPRINTS_ROOT ?= crates/TRUEOS-Blueprints
+BLUEPRINTS_ROOT ?= $(firstword $(wildcard ../TRUEOS-Blueprints) $(wildcard crates/TRUEOS-Blueprints) crates/TRUEOS-Blueprints)
 BP_DIST_DIR ?= $(BLUEPRINTS_ROOT)/dist
 BP_ISO_DIR_REL ?= EFI/BOOT/apps
-BP_FILES_CMD ?= find "$(BP_DIST_DIR)" -maxdepth 1 -type f -name 'file-system.bp' -print
-BP_SKIP_EMBED := 1
+BP_FILES_CMD ?= find "$(BP_DIST_DIR)" -maxdepth 1 -type f -name '*.bp' -print
+BP_SKIP_EMBED := 0
 QEMU_RUNNER := tools/qemu/run.sh
 QEMU_BIN ?= qemu-system-x86_64
 QEMU_UEFI_FIRMWARE = $(OVMF_BUNDLE_PATH)
@@ -218,16 +218,19 @@ iso: baremetal-reboot-log artifacts images limine
 		cp "$(ISO_DIR)/EFI/BOOT/$$(basename "$(HUC_FW_ISO_REL_PATH)")" "$(ISO_BOOT_DIR)/$(HUC_FW_ISO_REL_PATH)"; \
 	fi
 	@if [ "$(BP_SKIP_EMBED)" != "1" ]; then \
-		rm -rf "$(ISO_BOOT_DIR)/$(BP_ISO_DIR_REL)" "$(ISO_DIR)/$(BP_ISO_DIR_REL)"; \
+		rm -rf "$(ISO_BOOT_DIR)/$(BP_ISO_DIR_REL)"; \
 		mkdir -p $(ISO_BOOT_DIR)/$(BP_ISO_DIR_REL); \
 		$(BP_FILES_CMD) | while IFS= read -r bp; do \
 			cp "$$bp" "$(ISO_BOOT_DIR)/$(BP_ISO_DIR_REL)/$$(basename "$$bp")"; \
 		done; \
-		mkdir -p $(ISO_DIR)/$(BP_ISO_DIR_REL); \
-		$(BP_FILES_CMD) | while IFS= read -r bp; do \
-			rm -f "$(ISO_DIR)/$(BP_ISO_DIR_REL)/$$(basename "$$bp")"; \
-			cp "$$bp" "$(ISO_DIR)/$(BP_ISO_DIR_REL)/$$(basename "$$bp")"; \
-		done; \
+		if mkdir -p "$(ISO_DIR)/$(BP_ISO_DIR_REL)" 2>/dev/null && [ -w "$(ISO_DIR)/$(BP_ISO_DIR_REL)" ]; then \
+			rm -f "$(ISO_DIR)/$(BP_ISO_DIR_REL)"/*.bp; \
+			$(BP_FILES_CMD) | while IFS= read -r bp; do \
+				cp "$$bp" "$(ISO_DIR)/$(BP_ISO_DIR_REL)/$$(basename "$$bp")"; \
+			done; \
+		else \
+			echo "iso: skipping PXE app mirror in $(ISO_DIR)/$(BP_ISO_DIR_REL), directory is not writable"; \
+		fi; \
 	fi
 	@awk 'BEGIN { skip_app_string = 0 } skip_app_string && /^module_string: trueos\.app\./ { skip_app_string = 0; next } skip_app_string { skip_app_string = 0 } /^module_path: boot\(\):\/EFI\/BOOT\/apps\/.*\.bp$$/ { skip_app_string = 1; next } { print }' "$(LIMINE_CFG)" > "$(LIMINE_CFG_GENERATED)"
 	@if [ "$(BP_SKIP_EMBED)" != "1" ]; then \
