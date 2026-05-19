@@ -224,7 +224,11 @@ fn seed_deferred_surface_texture(tex_id: u32, host_tex_id: u32, width: u32, heig
     if tex_id == 0 || width == 0 || height == 0 {
         return false;
     }
-    let upload_tex_id = if host_tex_id != 0 { host_tex_id } else { tex_id };
+    let upload_tex_id = if host_tex_id != 0 {
+        host_tex_id
+    } else {
+        tex_id
+    };
     if host_tex_id != 0 && crate::r::io::cabi::host_texture_has_image(host_tex_id) {
         return true;
     }

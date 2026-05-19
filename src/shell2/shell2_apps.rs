@@ -1,5 +1,6 @@
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::fmt::Write;
 
 use embassy_executor::Spawner;
 
@@ -101,6 +102,90 @@ pub(crate) fn print_status(io: &'static dyn ShellBackend2) {
         table.emit_row(&row, |text| print_shell_line(io, text));
     }
     table.emit_footer(|text| print_shell_line(io, text));
+    print_hv_status(io);
+}
+
+fn format_bytes(bytes: usize) -> String {
+    const KIB: usize = 1024;
+    const MIB: usize = 1024 * KIB;
+    const GIB: usize = 1024 * MIB;
+
+    if bytes >= GIB {
+        alloc::format!("{} GiB", bytes / GIB)
+    } else if bytes >= MIB {
+        alloc::format!("{} MiB", bytes / MIB)
+    } else if bytes >= KIB {
+        alloc::format!("{} KiB", bytes / KIB)
+    } else {
+        alloc::format!("{} B", bytes)
+    }
+}
+
+fn active_vm_ids_text(status: &crate::hv::HvStatus) -> String {
+    let mut out = String::new();
+    for maybe_id in status.active_vm_ids {
+        if let Some(id) = maybe_id {
+            if !out.is_empty() {
+                out.push(',');
+            }
+            let _ = write!(out, "{}", id);
+        }
+    }
+    if out.is_empty() {
+        out.push('-');
+    }
+    out
+}
+
+fn print_hv_status(io: &'static dyn ShellBackend2) {
+    let status = crate::hv::status();
+    let heap_used = status
+        .vm_shared_heap_total_bytes
+        .saturating_sub(status.vm_shared_heap_free_bytes);
+
+    line(
+        io,
+        alloc::format!(
+            "apps: slots running={} starting={} limit={} active={}",
+            status.running_count,
+            status.starting_count,
+            status.vm_id_limit,
+            active_vm_ids_text(&status)
+        )
+        .as_str(),
+    );
+    line(
+        io,
+        alloc::format!(
+            "apps: shared heap used={} total={} free={}",
+            format_bytes(heap_used),
+            format_bytes(status.vm_shared_heap_total_bytes),
+            format_bytes(status.vm_shared_heap_free_bytes)
+        )
+        .as_str(),
+    );
+    line(
+        io,
+        alloc::format!(
+            "apps: shared stack={} vmx_state={} stored_snapshots={}",
+            format_bytes(status.vm_shared_stack_bytes),
+            format_bytes(status.vm_shared_vmx_bytes),
+            status.stored_vm_count
+        )
+        .as_str(),
+    );
+    line(
+        io,
+        alloc::format!(
+            "apps: vmx vendor_intel={} has_vmx={} feature_control_locked={} outside_smx={} guest_module={}",
+            status.vendor_intel,
+            status.has_vmx,
+            status.feature_control_locked,
+            status.feature_control_vmx_outside_smx,
+            status.guest_module_present
+        )
+        .as_str(),
+    );
 }
 
 fn print_available(io: &'static dyn ShellBackend2) {

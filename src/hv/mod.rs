@@ -1178,7 +1178,7 @@ fn blueprint_control_shell_command(vm_id: u8, raw: &str) {
         }
         "help" => blueprint_control_shell_line(
             vm_id,
-            "commands: echo hostname homedir env file thread help exit",
+            "commands: echo hostname homedir env disc thread help exit",
         ),
         "exit" | "detach" => {
             blueprint_control_shell_line(vm_id, "vm: switch matrix slots with `§<slot>`")

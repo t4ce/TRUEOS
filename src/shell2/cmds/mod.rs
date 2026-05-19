@@ -7,7 +7,6 @@ pub(crate) mod c4;
 pub(crate) mod disc;
 pub(crate) mod etc;
 pub(crate) mod format;
-pub(crate) mod hv;
 pub(crate) mod install;
 pub(crate) mod kibi;
 pub(crate) mod lsd;
