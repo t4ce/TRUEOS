@@ -384,7 +384,7 @@ fn c_malloc_aligned(size: usize, align: usize) -> *mut c_void {
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
         return ptr::null_mut();
     };
-    let ptr = if let Some(vm_id) = active_abi_guest_vm_id() {
+    let ptr = if let Some(vm_id) = active_abi_alloc_guest_vm_id() {
         crate::allocators::with_hv_guest_alloc_domain(vm_id, || unsafe {
             crate::allocators::alloc_raw(layout)
         })
@@ -516,6 +516,10 @@ fn dns_resolve_error_to_cabi_errno(err: crate::t::net::vlayer::DnsResolveError) 
 fn active_abi_guest_vm_id() -> Option<u8> {
     crate::hv::current_guest_execution_context_vm_id()
         .or_else(crate::hv::current_vm_id_by_lapic_low)
+}
+
+fn active_abi_alloc_guest_vm_id() -> Option<u8> {
+    crate::hv::current_hull_guest_context_vm_id().or_else(crate::hv::current_vm_id_by_lapic_low)
 }
 
 fn active_guest_stack_host_ptr_for_vm(vm_id: u8, ptr: *mut u8, len: usize) -> Option<*mut u8> {
@@ -727,7 +731,7 @@ pub unsafe extern "C" fn sys_alloc_aligned(size: usize, align: usize) -> *mut u8
         return ptr::null_mut();
     };
 
-    if let Some(vm_id) = active_abi_guest_vm_id() {
+    if let Some(vm_id) = active_abi_alloc_guest_vm_id() {
         crate::allocators::with_hv_guest_alloc_domain(vm_id, || unsafe {
             crate::allocators::alloc_raw(layout)
         })

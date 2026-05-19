@@ -1067,6 +1067,59 @@ fn set_input_line(
     }
 }
 
+fn handle_control_c(
+    spawner: &Spawner,
+    io: &'static dyn ShellBackend2,
+    out: &AlignedWriter<'_>,
+    output_mask: u8,
+    line: &mut HString<MAX_LINE>,
+    command_sessions: &mut alloc::vec::Vec<CommandSession>,
+) -> VecDeque<TranscriptEntry> {
+    let active_slot = matrix::active_slot_id(output_mask);
+    let _ = matrix::request_slot_interrupt(&active_slot);
+    matrix::record_line_in_slot(&active_slot, LineSource::User, "^C");
+
+    let session_indexes = find_command_session_indexes(command_sessions.as_slice(), &active_slot);
+    let mut remove_indexes: alloc::vec::Vec<usize> = alloc::vec::Vec::new();
+    for session_idx in session_indexes {
+        if !command_sessions[session_idx].kind.accepts_broadcast_input() {
+            continue;
+        }
+        match handle_command_session_input(
+            spawner,
+            io,
+            &command_sessions[session_idx],
+            "q",
+            output_mask,
+        ) {
+            CommandSessionInputResult::CompleteIdle => {
+                if command_sessions[session_idx].kind.shows_session_activity() {
+                    matrix::set_slot_activity(
+                        &command_sessions[session_idx].slot_id,
+                        matrix::MatrixSlotActivity::Idle,
+                    );
+                }
+                remove_indexes.push(session_idx);
+            }
+            CommandSessionInputResult::CompleteRunning => {
+                remove_indexes.push(session_idx);
+            }
+            CommandSessionInputResult::KeepRunning => {}
+        }
+    }
+    remove_indexes.sort_unstable();
+    remove_indexes.dedup();
+    for session_idx in remove_indexes.into_iter().rev() {
+        let _ = command_sessions.remove(session_idx);
+    }
+
+    line.clear();
+    let transcript = current_transcript_for_task(io);
+    out.render_transcript(&transcript);
+    out.prompt(output_mask);
+    transcript
+}
+
 fn cycle_live_history(up: bool, cursor: &mut Option<usize>) -> Option<AllocString> {
     let history = matrix::live_user_input_record();
     if history.is_empty() {
@@ -1173,6 +1226,21 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
 
         if let Some(b) = io.read_byte() {
             if cmds::etc::handle_input_byte(io) {
+                continue;
+            }
+            if b == 0x03 {
+                esc = EscState::None;
+                text_decode = ecma48::InputDecodeState::None;
+                live_history_cursor = None;
+                cmd_status_text = None;
+                transcript = handle_control_c(
+                    &spawner,
+                    io,
+                    &out,
+                    output_mask,
+                    &mut line,
+                    &mut command_sessions,
+                );
                 continue;
             }
             match esc {

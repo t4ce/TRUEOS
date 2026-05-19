@@ -718,6 +718,13 @@ fn queue_key_sequence(window_id: u32, key_code: u16) -> bool {
 }
 
 pub(crate) fn queue_ui2_keyboard_event(window_id: u32, event: TrueosKeyboardOutputEvent) -> bool {
+    const CTRL_MOD_MASK: u8 = (1 << 0) | (1 << 4);
+    if (event.modifiers & CTRL_MOD_MASK) != 0
+        && matches!(event.codepoint, 3 | 67 | 99)
+    {
+        return queue_input_bytes(window_id, b"\x03");
+    }
+
     match event.kind {
         KEYBOARD_OUTPUT_KIND_TEXT => {
             let utf8_len = (event.utf8_len as usize).min(event.utf8.len());

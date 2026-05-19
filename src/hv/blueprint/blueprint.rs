@@ -122,11 +122,14 @@ struct PortalImageAllocation {
     guard: PortalImageAllocationGuard,
 }
 
+fn portal_guest_alloc_vm_id() -> Option<u8> {
+    crate::hv::current_hull_guest_context_vm_id().or_else(crate::hv::current_vm_id)
+}
+
 impl PortalImageAllocation {
     fn allocate(layout: Layout) -> Result<Self, String> {
         let alloc = || unsafe { crate::allocators::alloc_raw(layout) };
-        let vm_id =
-            crate::hv::current_guest_execution_context_vm_id().or_else(crate::hv::current_vm_id);
+        let vm_id = portal_guest_alloc_vm_id();
         let base = if let Some(vm_id) = vm_id {
             crate::allocators::with_hv_guest_alloc_domain(vm_id, alloc)
                 .unwrap_or(core::ptr::null_mut())
@@ -1470,8 +1473,7 @@ unsafe extern "C" fn portal_rust_alloc(size: usize, align: usize) -> *mut u8 {
     };
 
     let alloc = || unsafe { crate::allocators::alloc_raw(layout) };
-    let vm_id =
-        crate::hv::current_guest_execution_context_vm_id().or_else(crate::hv::current_vm_id);
+    let vm_id = portal_guest_alloc_vm_id();
     let ptr = if let Some(vm_id) = vm_id {
         crate::allocators::with_hv_guest_alloc_domain(vm_id, alloc)
             .unwrap_or(core::ptr::null_mut())
@@ -1563,6 +1565,9 @@ pub(crate) fn build_process_env(
     let app_home = String::from("/");
     vars.insert(String::from("PWD"), String::from("/"));
     vars.insert(String::from("HOME"), app_home.clone());
+    let hostname = crate::net::adapter::get_hostname();
+    vars.insert(String::from("HOSTNAME"), hostname.clone());
+    vars.insert(String::from("TRUEOS_HOSTNAME"), hostname);
     vars.insert(
         String::from("XDG_CONFIG_HOME"),
         String::from("/config"),
