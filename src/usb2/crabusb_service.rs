@@ -691,7 +691,7 @@ async fn probe_and_bind(
 
         let controller_id = info.index as u32;
         let mut bound_any = false;
-        if super::hid::boot::maybe_start_hid_mouse_streams(
+        if super::hid::boot::maybe_start_hid_boot_streams(
             host,
             dev_info,
             spawner,
@@ -936,10 +936,14 @@ pub async fn bsp_service(controller_index: usize) {
             PROBE_REQUESTED[info.index].store(false, Ordering::Release);
             let mut quiet_probe_until = None;
             let mut reprobe_until = None;
+            install_event_handler(info.index, host.create_event_handler());
+            if let Ok(token) = event_pump_task(info.index) {
+                spawner.spawn(token);
+            }
             if intel_settle_probe {
                 if usb_log_all_enabled() {
                     crate::log!(
-                        "crabusb: controller {} intel deferred probe before event pump; waiting {}ms\n",
+                        "crabusb: controller {} intel deferred probe; waiting {}ms\n",
                         info.index,
                         INTEL_PROBE_SETTLE_MS
                     );
@@ -948,10 +952,6 @@ pub async fn bsp_service(controller_index: usize) {
                     Some(Instant::now() + EmbassyDuration::from_millis(INTEL_PROBE_SETTLE_MS));
             } else {
                 probe_and_bind(&mut host, info, &spawner, false).await;
-                install_event_handler(info.index, host.create_event_handler());
-                if let Ok(token) = event_pump_task(info.index) {
-                    spawner.spawn(token);
-                }
             }
 
             loop {
@@ -975,18 +975,6 @@ pub async fn bsp_service(controller_index: usize) {
                         probe_and_bind(&mut host, info, &spawner, false).await;
                         hotplug_poll_deadline =
                             Instant::now() + EmbassyDuration::from_millis(HOTPLUG_POLL_MS);
-                        if !EVENT_HANDLER_READY[info.index].load(Ordering::Acquire) {
-                            if usb_log_all_enabled() {
-                                crate::log!(
-                                    "crabusb: controller {} installing event pump after settled probe\n",
-                                    info.index
-                                );
-                            }
-                            install_event_handler(info.index, host.create_event_handler());
-                            if let Ok(token) = event_pump_task(info.index) {
-                                spawner.spawn(token);
-                            }
-                        }
                         quiet_probe_until = None;
                     }
                 }

@@ -23,6 +23,7 @@ const TOOL_JSON_ACPI: &str = r#"{"type":"object","properties":{"action":{"type":
 const TOOL_JSON_7Z: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS file to compress into a sibling .7z archive."}},"required":["path"],"additionalProperties":false}"#;
 const TOOL_JSON_C4: &str = r#"{"type":"object","properties":{"mode":{"type":"string","enum":["file","inline"],"description":"Compile from a TRUEOSFS file or inline C4 source."},"path":{"type":"string","description":"TRUEOSFS source path when mode=file."},"source":{"type":"string","description":"Inline C4 source when mode=inline."}},"required":["mode"],"additionalProperties":false}"#;
 const TOOL_JSON_DISC: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","format"],"description":"disc action to run."},"disk_id":{"type":"string","description":"Disk id string for action=format."}},"required":["action"],"additionalProperties":false}"#;
+const TOOL_JSON_HYPER: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["status","probe"],"description":"Hyper transport view to print."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_LSD: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"Optional TRUEOSFS path to list."},"long":{"type":"boolean","description":"Show file kind and byte size."},"tree":{"type":"boolean","description":"Walk recursively from the path."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_MV: &str = r#"{"type":"object","properties":{"src":{"type":"string","description":"Source TRUEOSFS path."},"dst":{"type":"string","description":"Destination TRUEOSFS path."},"regex":{"type":"string","description":"Optional -regx pattern. When set, src and dst are directories."}},"required":["src","dst"],"additionalProperties":false}"#;
 const TOOL_JSON_NET: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["icmp","irc","nic","hostname"],"description":"net subcommand to run."},"target":{"type":"string","description":"Target host for net icmp."},"selector":{"type":"string","description":"Optional NIC selector like index, vid:pid, or bb:dd.f."},"host":{"type":"string","description":"Host for net irc."},"channel":{"type":"string","description":"Optional channel like #trueos for net irc."},"name":{"type":"string","description":"Optional hostname for net hostname."}},"required":["subcommand"],"additionalProperties":false}"#;
@@ -45,6 +46,11 @@ fn dispatch_7z(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Parse
 fn dispatch_install(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
     super::cmds::install::try_parse(spawner, io, &mut args)
+}
+
+fn dispatch_hyper(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    let mut args = rest.split_whitespace();
+    super::cmds::hyper::try_parse(io, &mut args)
 }
 
 fn dispatch_lsd(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -195,6 +201,15 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         tool_parameters_json: None,
     },
     BuiltinShell2CmdEntry {
+        name: "hyper",
+        mode: "cmd",
+        color: Some((120, 210, 255)),
+        advertised: true,
+        handler: dispatch_hyper,
+        tool_description: Some("Inspect the kernel Hyper HTTP/HTTPS transport surface."),
+        tool_parameters_json: Some(TOOL_JSON_HYPER),
+    },
+    BuiltinShell2CmdEntry {
         name: "lsd",
         mode: "cmd",
         color: Some((60, 220, 120)),
@@ -260,7 +275,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
     BuiltinShell2CmdEntry {
         name: "net",
         mode: "cmd",
-        color: None,
+        color: Some((120, 210, 255)),
         advertised: true,
         handler: dispatch_net,
         tool_description: Some(
@@ -316,7 +331,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
     BuiltinShell2CmdEntry {
         name: "shader",
         mode: "cmd",
-        color: Some((120, 210, 255)),
+        color: Some((255, 190, 90)),
         advertised: true,
         handler: dispatch_shader,
         tool_description: Some("List or queue C4 shader files for the EU32 artifact compiler."),

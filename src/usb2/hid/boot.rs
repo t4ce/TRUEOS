@@ -16,6 +16,9 @@ const LED_VID_JGINYUE: u16 = 0x0416;
 const LED_PID_JGINYUE: u16 = 0xA125;
 const MOUSE_VID_LAVIEW_CASTOR: u16 = 0x22D4;
 const MOUSE_PID_LAVIEW_CASTOR: u16 = 0x1321;
+const QEMU_HID_VID: u16 = 0x0627;
+const QEMU_HID_PID: u16 = 0x0001;
+const REAL_HW_HID_HANDOFF_ENABLED: bool = false;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum HidBootKind {
@@ -51,12 +54,17 @@ fn should_skip_descriptor_logging(vendor_id: u16, product_id: u16, kind: HidBoot
 }
 
 #[inline]
+fn is_qemu_boot_hid(vendor_id: u16, product_id: u16) -> bool {
+    vendor_id == QEMU_HID_VID && product_id == QEMU_HID_PID
+}
+
+#[inline]
 fn should_skip_qemu_generic_tablet_probe(
     vendor_id: u16,
     product_id: u16,
     kind: HidBootKind,
 ) -> bool {
-    vendor_id == 0x0627 && product_id == 0x0001 && matches!(kind, HidBootKind::Tablet)
+    is_qemu_boot_hid(vendor_id, product_id) && matches!(kind, HidBootKind::Tablet)
 }
 
 #[inline]
@@ -522,43 +530,6 @@ pub(crate) async fn maybe_start_hid_boot_streams(
     controller_id: u32,
     log_descriptors: bool,
 ) -> bool {
-    maybe_start_hid_boot_streams_filtered(
-        host,
-        dev_info,
-        spawner,
-        controller_id,
-        log_descriptors,
-        None,
-    )
-    .await
-}
-
-pub(crate) async fn maybe_start_hid_mouse_streams(
-    host: &mut USBHost,
-    dev_info: &crab_usb::DeviceInfo,
-    spawner: &Spawner,
-    controller_id: u32,
-    log_descriptors: bool,
-) -> bool {
-    maybe_start_hid_boot_streams_filtered(
-        host,
-        dev_info,
-        spawner,
-        controller_id,
-        log_descriptors,
-        Some(HidBootKind::Mouse),
-    )
-    .await
-}
-
-async fn maybe_start_hid_boot_streams_filtered(
-    host: &mut USBHost,
-    dev_info: &crab_usb::DeviceInfo,
-    spawner: &Spawner,
-    controller_id: u32,
-    log_descriptors: bool,
-    only_kind: Option<HidBootKind>,
-) -> bool {
     let desc = dev_info.descriptor();
     let vendor_id = desc.vendor_id;
     let product_id = desc.product_id;
@@ -587,10 +558,20 @@ async fn maybe_start_hid_boot_streams_filtered(
         targets.len()
     );
 
+    if !REAL_HW_HID_HANDOFF_ENABLED && !is_qemu_boot_hid(vendor_id, product_id) {
+        crate::log_info!(target: "usb";
+            "crabusb: hid {:04X}:{:04X} temporary real-hw handoff disabled targets={}\n",
+            vendor_id,
+            product_id,
+            targets.len()
+        );
+        return false;
+    }
+
     let mut started_any = false;
     let mut descriptors_pending = log_descriptors;
 
-    for mut target in targets {
+    for target in targets {
         if should_skip_qemu_generic_tablet_probe(vendor_id, product_id, target.kind) {
             crate::log_info!(target: "usb";
                 "crabusb: hid {:04X}:{:04X} skipping generic-tablet target on qemu if#{} ep=0x{:02X}\n",
@@ -616,29 +597,6 @@ async fn maybe_start_hid_boot_streams_filtered(
                 "crabusb: hid {:04X}:{:04X} skipping generic-tablet target on known mouse supplemental HID if#{} ep=0x{:02X}\n",
                 vendor_id,
                 product_id,
-                target.interface_number,
-                target.in_endpoint
-            );
-            continue;
-        }
-
-        if target.generic_pointer && only_kind == Some(HidBootKind::Mouse) {
-            target.kind = HidBootKind::Mouse;
-            target.report_len = usize::from(target.in_max_packet_size.max(4));
-            crate::log_info!(target: "usb";
-                "crabusb: hid {:04X}:{:04X} generic pointer if#{} classified=mouse fallback=config-descriptor\n",
-                vendor_id,
-                product_id,
-                target.interface_number
-            );
-        }
-
-        if only_kind.is_some_and(|kind| target.kind != kind) {
-            crate::log_info!(target: "usb";
-                "crabusb: hid {:04X}:{:04X} skipping {} target in mouse-only host2 path if#{} ep=0x{:02X}\n",
-                vendor_id,
-                product_id,
-                target.kind.as_str(),
                 target.interface_number,
                 target.in_endpoint
             );
