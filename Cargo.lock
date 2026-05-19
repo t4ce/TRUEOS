@@ -63,6 +63,7 @@ dependencies = [
  "trueos-gfx-core",
  "trueos-io",
  "trueos-kibi",
+ "trueos-lsd",
  "trueos-math",
  "trueos-qjs",
  "trueos-vm",
@@ -2921,6 +2922,14 @@ dependencies = [
 [[package]]
 name = "trueos-locale"
 version = "0.1.0"
+
+[[package]]
+name = "trueos-lsd"
+version = "1.1.5"
+dependencies = [
+ "trueos-io",
+ "v",
+]
 
 [[package]]
 name = "trueos-math"
