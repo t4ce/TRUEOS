@@ -20,5 +20,6 @@ trueos = []
 
 [dependencies]
 trueos-io = { path = "../trueos-io" }
+tokio = { path = "../../vendor/tokio-1.52.3", default-features = false, features = ["time"] }
 v = { path = "../trueos-v" }
 unicode-width = "0.2.2"

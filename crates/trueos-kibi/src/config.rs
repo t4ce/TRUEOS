@@ -6,10 +6,12 @@
 //!
 //! Utilities to configure the text editor.
 
-use std::path::{Path, PathBuf};
-use std::{fmt::Display, fs::read_to_string, num::NonZeroUsize, str::FromStr, time::Duration};
+extern crate alloc;
 
-use crate::sys::conf_dirs as cdirs;
+use alloc::{format, string::{String, ToString}, vec::Vec};
+use core::{fmt::Display, num::NonZeroUsize, str::FromStr};
+use tokio::path::{Path, PathBuf};
+use v::{env, vclock as api_time, vio::kfs, vsys};
 
 /// The global Kibi configuration.
 #[derive(Debug, PartialEq, Eq)]
@@ -20,7 +22,7 @@ pub struct Config {
     /// been made since the file was last changed.
     pub quit_times: usize,
     /// The duration for which messages are shown in the status bar.
-    pub message_dur: Duration,
+    pub message_dur: api_time::Duration,
     /// Whether to display line numbers.
     pub show_line_num: bool,
 }
@@ -32,7 +34,7 @@ impl Default for Config {
             #[expect(clippy::unwrap_used)]
             tab_stop: NonZeroUsize::new(4).unwrap(),
             quit_times: 2,
-            message_dur: Duration::new(3, 0),
+            message_dur: api_time::Duration::from_secs(3),
             show_line_num: true,
         }
     }
@@ -54,15 +56,25 @@ impl Config {
     pub fn load() -> Self {
         let mut conf = Self::default();
 
-        let paths: Vec<_> = cdirs().iter().map(|d| PathBuf::from(d).join("config.ini")).collect();
+        let mut paths = Vec::new();
+        paths.push(PathBuf::from("/etc/kibi").join("config.ini"));
+        if let Ok(xdg_config_home) = env::var("XDG_CONFIG_HOME") {
+            paths.push(PathBuf::from(xdg_config_home).join("kibi").join("config.ini"));
+        } else if let Ok(home) = env::var("HOME") {
+            paths.push(PathBuf::from(home).join(".config").join("kibi").join("config.ini"));
+        }
 
-        for path in paths.iter().filter(|p| p.is_file()).rev() {
+        for path in paths
+            .iter()
+            .filter(|p| kfs::exists(p.as_os_str()).unwrap_or(false))
+            .rev()
+        {
             process_ini_file(path, &mut |key, value| {
                 match key {
                     "tab_stop" => conf.tab_stop = parse_value(value)?,
                     "quit_times" => conf.quit_times = parse_value(value)?,
                     "message_duration" =>
-                        conf.message_dur = Duration::try_from_secs_f32(parse_value(value)?)
+                        conf.message_dur = api_time::Duration::try_from_secs_f32(parse_value(value)?)
                             .map_err(|x| x.to_string())?,
                     "show_line_numbers" => conf.show_line_num = parse_value(value)?,
                     _ => return Err(format!("Invalid key: {key}")),
@@ -83,11 +95,13 @@ impl Config {
 /// Will print warnings to stderr for invalid lines
 pub fn process_ini_file<F>(path: &Path, kv_fn: &mut F)
 where F: FnMut(&str, &str) -> Result<(), String> {
-    read_to_string(path).map_or_else(
-        |e| eprintln!("Could not read {}: {}", path.to_string_lossy(), e),
+    kfs::read_file_utf8(path.as_os_str()).map_or_else(
+        |e| vsys::write_err(format!("Could not read {}: {}\n", path.as_os_str(), e).as_bytes()),
         |config| {
             for (i, line) in config.lines().enumerate().map(|(i, line)| (i, line.trim_start())) {
-                let warn = |msg: &str| eprintln!("{}:{}: {}", path.to_string_lossy(), i + 1, msg);
+                let warn = |msg: &str| {
+                    vsys::write_err(format!("{}:{}: {}\n", path.as_os_str(), i + 1, msg).as_bytes());
+                };
                 match (line.chars().next(), line.split_once('=')) {
                     (Some('#' | ';') | None, _) => (), // Comment or empty line
                     (_, Some((k, v))) => kv_fn(k.trim_end(), v.trim()).unwrap_or_else(|r| warn(&format!("{k}: {r}"))),

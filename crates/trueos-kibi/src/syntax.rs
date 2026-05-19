@@ -2,8 +2,13 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use std::fmt::{self, Display, Formatter};
-use std::path::{Path, PathBuf};
+extern crate alloc;
+
+use alloc::{format, string::String, vec::Vec};
+use core::fmt::{self, Display, Formatter};
+use tokio::path::{Path, PathBuf};
+use trueos_io::status_kind;
+use v::{vio::kfs::{self, FsEntryKind}, vsys};
 
 use crate::config::{self, parse_value as pv, parse_values as pvs};
 
@@ -58,18 +63,22 @@ impl Conf {
     /// If no matching configuration is found, return the default.
     pub fn find(name: &str, data_dirs: &[String]) -> Self {
         for data_dir in data_dirs {
-            match PathBuf::from(data_dir).join("syntax.d").read_dir() {
+            let syntax_dir = PathBuf::from(data_dir.as_str()).join("syntax.d");
+            match kfs::list_dir(syntax_dir.as_os_str(), 4096) {
                 Ok(dir_entries) =>
                     for dir_entry in dir_entries {
-                        match dir_entry.map(|dir_entry| Self::parse(&dir_entry.path())) {
-                            // sfix = suffixes
-                            Ok((sc, sfix)) if sfix.iter().any(|s| name.ends_with(s)) => return sc,
-                            Ok((..)) => (),
-                            Err(e) => eprintln!("Error iterating through {data_dir}/syntax.d: {e}"),
+                        if !matches!(dir_entry.kind, FsEntryKind::File) {
+                            continue;
+                        }
+                        let (sc, sfix) = Self::parse(Path::new(dir_entry.path.as_str()));
+                        if sfix.iter().any(|s| name.ends_with(s)) {
+                            return sc;
                         }
                     },
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => eprintln!("Error iterating through {data_dir}/syntax.d: {e}"),
+                Err(e) if status_kind(e) == trueos_io::ErrorKind::NotFound => {}
+                Err(e) => vsys::write_err(
+                    format!("Error iterating through {data_dir}/syntax.d: {e}\n").as_bytes(),
+                ),
             }
         }
         Self::default()

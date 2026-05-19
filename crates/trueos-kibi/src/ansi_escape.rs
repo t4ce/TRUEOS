@@ -4,6 +4,10 @@
 
 //! # ANSI Escape sequences
 
+extern crate alloc;
+
+use alloc::string::String;
+
 /// Switches to the main buffer.
 pub(crate) const USE_MAIN_SCREEN: &str = "\x1b[?1049l";
 

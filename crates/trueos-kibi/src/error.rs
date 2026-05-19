@@ -4,13 +4,19 @@
 
 //! # Errors
 
+extern crate alloc;
+
+use alloc::{string::String, vec::Vec};
+use core::fmt;
+use trueos_io as io;
+
 /// Kibi error type.
 #[derive(Debug)]
 pub enum Error {
-    /// Wrapper around `std::io::Error`
-    Io(std::io::Error),
-    /// Wrapper around `std::fmt::Error`
-    Fmt(std::fmt::Error),
+    /// Wrapper around `trueos_io::Error`
+    Io(io::Error),
+    /// Wrapper around `core::fmt::Error`
+    Fmt(fmt::Error),
     /// Error returned when the window size obtained through a system call is
     /// invalid.
     InvalidWindowSize,
@@ -23,12 +29,12 @@ pub enum Error {
     BadOption(String),
 }
 
-impl From<std::io::Error> for Error {
+impl From<io::Error> for Error {
     /// Convert an IO Error into a Kibi Error.
-    fn from(err: std::io::Error) -> Self { Self::Io(err) }
+    fn from(err: io::Error) -> Self { Self::Io(err) }
 }
 
-impl From<std::fmt::Error> for Error {
+impl From<fmt::Error> for Error {
     /// Convert an Fmt Error into a Kibi Error.
-    fn from(err: std::fmt::Error) -> Self { Self::Fmt(err) }
+    fn from(err: fmt::Error) -> Self { Self::Fmt(err) }
 }

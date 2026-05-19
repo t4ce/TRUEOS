@@ -2,11 +2,15 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+#![no_std]
+
 //! # Kibi
 //!
 //! Kibi is a text editor in ≤1024 lines of code.
 
-pub use crate::{config::Config, editor::run, error::Error, sys::stdin};
+extern crate alloc;
+
+pub use crate::{config::Config, editor::run, error::Error};
 
 pub mod ansi_escape;
 mod config;
@@ -15,6 +19,3 @@ mod error;
 mod row;
 mod syntax;
 mod terminal;
-
-#[path = "trueos.rs"]
-mod sys;
