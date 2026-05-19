@@ -1,5 +1,5 @@
+use super::metadata::Metadata;
 use crate::color::{ColoredString, Colors, Elem};
-use std::fs::Metadata;
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub struct INode {
@@ -7,16 +7,6 @@ pub struct INode {
 }
 
 impl From<&Metadata> for INode {
-    #[cfg(unix)]
-    fn from(meta: &Metadata) -> Self {
-        use std::os::unix::fs::MetadataExt;
-
-        let index = meta.ino();
-
-        Self { index: Some(index) }
-    }
-
-    #[cfg(windows)]
     fn from(_: &Metadata) -> Self {
         Self { index: None }
     }
@@ -37,8 +27,8 @@ mod tests {
     use super::INode;
     use std::env;
     use std::io;
-    use tokio::path::Path;
     use std::process::{Command, ExitStatus};
+    use tokio::path::Path;
 
     fn cross_platform_touch(path: &Path) -> io::Result<ExitStatus> {
         Command::new("touch").arg(path).status()

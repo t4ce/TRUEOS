@@ -1,5 +1,5 @@
+use super::metadata::{FileKind, Metadata};
 use crate::color::{ColoredString, Colors, Elem};
-use std::fs::Metadata;
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 #[cfg_attr(windows, allow(dead_code))]
@@ -15,78 +15,28 @@ pub enum FileType {
 }
 
 impl FileType {
-    #[cfg(windows)]
-    const EXECUTABLE_EXTENSIONS: &'static [&'static str] = &["exe", "msi", "bat", "ps1"];
-
-    #[cfg(unix)]
     pub fn new(
         meta: &Metadata,
         symlink_meta: Option<&Metadata>,
         permissions: &crate::meta::Permissions,
     ) -> Self {
-        use std::os::unix::fs::FileTypeExt;
-
-        let file_type = meta.file_type();
-
-        if file_type.is_file() {
-            FileType::File {
+        match meta.file_type() {
+            FileKind::File => FileType::File {
                 exec: permissions.is_executable(),
                 uid: permissions.setuid,
-            }
-        } else if file_type.is_dir() {
-            FileType::Directory {
+            },
+            FileKind::Directory => FileType::Directory {
                 uid: permissions.setuid,
-            }
-        } else if file_type.is_fifo() {
-            FileType::Pipe
-        } else if file_type.is_symlink() {
-            FileType::SymLink {
-                // if broken, defaults to false
+            },
+            FileKind::Symlink => FileType::SymLink {
                 is_dir: symlink_meta.map(|m| m.is_dir()).unwrap_or_default(),
-            }
-        } else if file_type.is_char_device() {
-            FileType::CharDevice
-        } else if file_type.is_block_device() {
-            FileType::BlockDevice
-        } else if file_type.is_socket() {
-            FileType::Socket
-        } else {
-            FileType::Special
-        }
-    }
-
-    #[cfg(windows)]
-    pub fn new(meta: &Metadata, symlink_meta: Option<&Metadata>, path: &tokio::path::Path) -> Self {
-        let file_type = meta.file_type();
-
-        if file_type.is_file() {
-            let exec = path
-                .extension()
-                .map(|ext| {
-                    Self::EXECUTABLE_EXTENSIONS
-                        .iter()
-                        .map(std::ffi::OsStr::new)
-                        .any(|exec_ext| ext == exec_ext)
-                })
-                .unwrap_or(false);
-            FileType::File { exec, uid: false }
-        } else if file_type.is_dir() {
-            FileType::Directory { uid: false }
-        } else if file_type.is_symlink() {
-            FileType::SymLink {
-                // if broken, defaults to false
-                is_dir: symlink_meta.map(|m| m.is_dir()).unwrap_or_default(),
-            }
-        } else {
-            FileType::Special
+            },
+            FileKind::Other => FileType::Special,
         }
     }
 
     pub fn is_dirlike(self) -> bool {
-        matches!(
-            self,
-            FileType::Directory { .. } | FileType::SymLink { is_dir: true }
-        )
+        matches!(self, FileType::Directory { .. } | FileType::SymLink { is_dir: true })
     }
 }
 
@@ -112,9 +62,9 @@ mod test {
     #[cfg(unix)]
     use crate::flags::PermissionFlag;
     #[cfg(unix)]
-    use crate::meta::Permissions;
-    #[cfg(unix)]
     use crate::meta::permissions_or_attributes::PermissionsOrAttributes;
+    #[cfg(unix)]
+    use crate::meta::Permissions;
     use crossterm::style::{Color, Stylize};
     use std::fs::File;
     #[cfg(unix)]
@@ -138,10 +88,7 @@ mod test {
         let colors = Colors::new(ThemeOption::NoLscolors);
         let file_type = FileType::new(&meta, None, &Permissions::from(&meta));
 
-        assert_eq!(
-            ".".to_string().with(Color::AnsiValue(184)),
-            file_type.render(&colors)
-        );
+        assert_eq!(".".to_string().with(Color::AnsiValue(184)), file_type.render(&colors));
     }
 
     #[test]
@@ -164,10 +111,7 @@ mod test {
         #[cfg(windows)]
         let file_type = FileType::new(&metadata, None, tmp_dir.path());
 
-        assert_eq!(
-            "d".to_string().with(Color::AnsiValue(33)),
-            file_type.render(&colors)
-        );
+        assert_eq!("d".to_string().with(Color::AnsiValue(33)), file_type.render(&colors));
     }
 
     #[test]
@@ -189,10 +133,7 @@ mod test {
         let colors = Colors::new(ThemeOption::NoLscolors);
         let file_type = FileType::new(&meta, Some(&meta), &Permissions::from(&meta));
 
-        assert_eq!(
-            "l".to_string().with(Color::AnsiValue(44)),
-            file_type.render(&colors)
-        );
+        assert_eq!("l".to_string().with(Color::AnsiValue(44)), file_type.render(&colors));
     }
 
     #[test]
@@ -214,10 +155,7 @@ mod test {
         let colors = Colors::new(ThemeOption::NoLscolors);
         let file_type = FileType::new(&meta, Some(&meta), &Permissions::from(&meta));
 
-        assert_eq!(
-            "l".to_string().with(Color::AnsiValue(44)),
-            file_type.render(&colors)
-        );
+        assert_eq!("l".to_string().with(Color::AnsiValue(44)), file_type.render(&colors));
     }
 
     #[test]
@@ -238,10 +176,7 @@ mod test {
         let colors = Colors::new(ThemeOption::NoLscolors);
         let file_type = FileType::new(&meta, None, &Permissions::from(&meta));
 
-        assert_eq!(
-            "|".to_string().with(Color::AnsiValue(44)),
-            file_type.render(&colors)
-        );
+        assert_eq!("|".to_string().with(Color::AnsiValue(44)), file_type.render(&colors));
     }
 
     #[test]
@@ -266,10 +201,7 @@ mod test {
         let colors = Colors::new(ThemeOption::NoLscolors);
         let file_type = FileType::new(&meta, None, &Permissions::from(&meta));
 
-        assert_eq!(
-            "c".to_string().with(Color::AnsiValue(44)),
-            file_type.render(&colors)
-        );
+        assert_eq!("c".to_string().with(Color::AnsiValue(44)), file_type.render(&colors));
     }
 
     #[test]
@@ -285,10 +217,7 @@ mod test {
         let colors = Colors::new(ThemeOption::NoLscolors);
         let file_type = FileType::new(&meta, None, &Permissions::from(&meta));
 
-        assert_eq!(
-            "s".to_string().with(Color::AnsiValue(44)),
-            file_type.render(&colors)
-        );
+        assert_eq!("s".to_string().with(Color::AnsiValue(44)), file_type.render(&colors));
     }
 
     #[cfg(windows)]
@@ -304,10 +233,7 @@ mod test {
             let colors = Colors::new(ThemeOption::NoLscolors);
             let file_type = FileType::new(&meta, None, &file_path);
 
-            assert_eq!(
-                ".".to_string().with(Color::AnsiValue(40)),
-                file_type.render(&colors)
-            );
+            assert_eq!(".".to_string().with(Color::AnsiValue(40)), file_type.render(&colors));
         }
     }
 
@@ -323,9 +249,6 @@ mod test {
         let colors = Colors::new(ThemeOption::NoLscolors);
         let file_type = FileType::new(&meta, None, &file_path);
 
-        assert_eq!(
-            ".".to_string().with(Color::AnsiValue(184)),
-            file_type.render(&colors)
-        );
+        assert_eq!(".".to_string().with(Color::AnsiValue(184)), file_type.render(&colors));
     }
 }

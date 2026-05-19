@@ -1,11 +1,9 @@
 use super::locale::current_locale;
+use super::metadata::Metadata;
 use crate::color::{ColoredString, Colors, Elem};
 use crate::flags::{DateFlag, Flags};
 use chrono::{DateTime, Duration, Local};
 use chrono_humanize::HumanTime;
-use std::fs::Metadata;
-use std::panic;
-use std::time::SystemTime;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Date {
@@ -13,21 +11,9 @@ pub enum Date {
     Invalid,
 }
 
-// Note that this is split from the From for Metadata so we can test this one (as we can't mock Metadata)
-impl From<SystemTime> for Date {
-    fn from(systime: SystemTime) -> Self {
-        // FIXME: This should really involve a result, but there's upstream issues in chrono. See https://github.com/chronotope/chrono/issues/110
-        let res = panic::catch_unwind(|| systime.into());
-
-        res.map_or(Date::Invalid, Date::Date)
-    }
-}
-
 impl From<&Metadata> for Date {
-    fn from(meta: &Metadata) -> Self {
-        meta.modified()
-            .expect("failed to retrieve modified date")
-            .into()
+    fn from(_: &Metadata) -> Self {
+        Date::Invalid
     }
 }
 
@@ -76,9 +62,9 @@ mod test {
     use chrono::{DateTime, Duration, Local};
     use crossterm::style::{Color, Stylize};
     use std::io;
-    use tokio::path::Path;
     use std::process::{Command, ExitStatus};
     use std::{env, fs};
+    use tokio::path::Path;
 
     #[cfg(unix)]
     fn cross_platform_touch(path: &Path, date: &DateTime<Local>) -> io::Result<ExitStatus> {
@@ -246,10 +232,7 @@ mod test {
             ..Default::default()
         };
 
-        assert_eq!(
-            "now".to_string().with(Color::AnsiValue(40)),
-            date.render(&colors, &flags)
-        );
+        assert_eq!("now".to_string().with(Color::AnsiValue(40)), date.render(&colors, &flags));
 
         fs::remove_file(file_path).unwrap();
     }
@@ -361,9 +344,6 @@ mod test {
             ..Default::default()
         };
 
-        assert_eq!(
-            "-".to_string().with(Color::AnsiValue(36)),
-            date.render(&colors, &flags)
-        );
+        assert_eq!("-".to_string().with(Color::AnsiValue(36)), date.render(&colors, &flags));
     }
 }
