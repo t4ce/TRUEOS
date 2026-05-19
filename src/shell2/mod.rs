@@ -23,9 +23,11 @@ mod shell2_surf;
 mod term_style;
 #[allow(unused_imports)]
 pub(crate) use crate::shell2::backends::{
-    NET_TCP_SHELL_BACKEND, UART1_COM1_BACKEND, UI2_SHELL_BACKEND, Ui2ShellCell,
-    Ui2ShellScreenSnapshot, crlf, queue_ui2_keyboard_event as queue_ui2_shell_keyboard_event,
-    uart1_com1, ui2_shell_attach_window, ui2_shell_last_rendered_seq, ui2_shell_mark_rendered,
+    CONTAINER_SHELL_BACKEND, NET_TCP_SHELL_BACKEND, UART1_COM1_BACKEND, UI2_SHELL_BACKEND,
+    Ui2ShellCell, Ui2ShellScreenSnapshot, container_shell_drain_output,
+    container_shell_read_output_byte, container_shell_submit_input, crlf,
+    queue_ui2_keyboard_event as queue_ui2_shell_keyboard_event, uart1_com1,
+    ui2_shell_attach_window, ui2_shell_last_rendered_seq, ui2_shell_mark_rendered,
     ui2_shell_snapshot,
 };
 pub(crate) use interface::{ShellBackend2, ShellIo2};
@@ -45,6 +47,7 @@ const SYSTEM_TEXT_RGB: (u8, u8, u8) = (60, 183, 161);
 pub(crate) const OUTPUT_UART1_MASK: u8 = 1 << 0;
 pub(crate) const OUTPUT_NET_TCP_MASK: u8 = 1 << 1;
 pub(crate) const OUTPUT_UI2_MASK: u8 = 1 << 2;
+pub(crate) const OUTPUT_CONTAINER_MASK: u8 = 1 << 3;
 const SECTION_STATUS_TEXT: &str = "t4ce is with you";
 const SECTION_STATUS_HOLD_MS: u64 = 1000;
 const SECTION_RAINBOW_FRAME_MS: u64 = 120;
@@ -83,6 +86,7 @@ pub(crate) enum CommandSessionInputResult {
 pub(crate) struct MatrixTarget {
     output_mask: u8,
     slot_id: matrix::MatrixSlotId,
+    interrupt_generation: u64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -525,6 +529,12 @@ fn register_output(io: &'static dyn ShellIo2) {
     let ui2_io: &'static dyn ShellIo2 = &UI2_SHELL_BACKEND;
     if same_backend_io(io, ui2_io) {
         REGISTERED_OUTPUTS.fetch_or(OUTPUT_UI2_MASK, Ordering::Relaxed);
+        return;
+    }
+
+    let container_io: &'static dyn ShellIo2 = &CONTAINER_SHELL_BACKEND;
+    if same_backend_io(io, container_io) {
+        REGISTERED_OUTPUTS.fetch_or(OUTPUT_CONTAINER_MASK, Ordering::Relaxed);
     }
 }
 
@@ -548,21 +558,32 @@ pub(crate) fn output_target_for_backend(io: &'static dyn ShellBackend2) -> u8 {
         return OUTPUT_UI2_MASK;
     }
 
+    let container_io: &'static dyn ShellIo2 = &CONTAINER_SHELL_BACKEND;
+    if same_backend_task(io, container_io) {
+        return OUTPUT_CONTAINER_MASK;
+    }
+
     0
 }
 
 pub(crate) fn matrix_target_for_backend(io: &'static dyn ShellBackend2) -> MatrixTarget {
     let output_mask = output_target_for_backend(io);
+    let slot_id = matrix::active_slot_id(output_mask);
+    let interrupt_generation = matrix::slot_interrupt_generation(&slot_id);
     MatrixTarget {
         output_mask,
-        slot_id: matrix::active_slot_id(output_mask),
+        slot_id,
+        interrupt_generation,
     }
 }
 
 pub(crate) fn matrix_target_for_slot_name(output_mask: u8, requested: &str) -> MatrixTarget {
+    let slot_id = matrix::slot_id_from_name(requested);
+    let interrupt_generation = matrix::slot_interrupt_generation(&slot_id);
     MatrixTarget {
         output_mask,
-        slot_id: matrix::slot_id_from_name(requested),
+        slot_id,
+        interrupt_generation,
     }
 }
 
@@ -580,6 +601,7 @@ fn matrix_target_for_slot(output_mask: u8, slot_id: &matrix::MatrixSlotId) -> Ma
     MatrixTarget {
         output_mask,
         slot_id: slot_id.clone(),
+        interrupt_generation: matrix::slot_interrupt_generation(slot_id),
     }
 }
 
@@ -589,6 +611,26 @@ pub(crate) fn set_matrix_target_active(target: &MatrixTarget, active: bool) {
     } else {
         matrix::end_slot_running(&target.slot_id);
     }
+}
+
+pub(crate) fn matrix_target_interrupted(target: &MatrixTarget) -> bool {
+    matrix::slot_interrupt_generation(&target.slot_id) != target.interrupt_generation
+}
+
+pub(crate) fn bind_matrix_target_vm(target: &MatrixTarget, vm_id: u8) {
+    matrix::bind_slot_vm(&target.slot_id, vm_id, false);
+}
+
+pub(crate) fn bind_matrix_target_vm_input(target: &MatrixTarget, vm_id: u8) {
+    matrix::bind_slot_vm(&target.slot_id, vm_id, true);
+}
+
+pub(crate) fn unbind_matrix_target_vm(target: &MatrixTarget, vm_id: u8) {
+    matrix::unbind_slot_vm(&target.slot_id, vm_id);
+}
+
+pub(crate) fn active_matrix_vm_input_id(output_mask: u8) -> Option<u8> {
+    matrix::active_slot_vm_input_id(output_mask)
 }
 
 pub(crate) fn history_total_lines() -> usize {
@@ -631,6 +673,11 @@ fn output_mask_for_io(io: &dyn ShellIo2) -> u8 {
         return OUTPUT_UI2_MASK;
     }
 
+    let container_io: &'static dyn ShellIo2 = &CONTAINER_SHELL_BACKEND;
+    if same_backend_io(io, container_io) {
+        return OUTPUT_CONTAINER_MASK;
+    }
+
     0
 }
 
@@ -660,6 +707,8 @@ pub(crate) fn raw_write_matrix_target(target: &MatrixTarget, bytes: &[u8]) -> us
         &NET_TCP_SHELL_BACKEND
     } else if (target.output_mask & OUTPUT_UI2_MASK) != 0 {
         &UI2_SHELL_BACKEND
+    } else if (target.output_mask & OUTPUT_CONTAINER_MASK) != 0 {
+        &CONTAINER_SHELL_BACKEND
     } else {
         &UART1_COM1_BACKEND
     };
@@ -680,6 +729,8 @@ pub(crate) fn read_matrix_target_byte(target: &MatrixTarget) -> Option<u8> {
         NET_TCP_SHELL_BACKEND.read_byte()
     } else if (target.output_mask & OUTPUT_UI2_MASK) != 0 {
         UI2_SHELL_BACKEND.read_byte()
+    } else if (target.output_mask & OUTPUT_CONTAINER_MASK) != 0 {
+        CONTAINER_SHELL_BACKEND.read_byte()
     } else {
         UART1_COM1_BACKEND.read_byte()
     }
@@ -1068,49 +1119,38 @@ fn set_input_line(
 }
 
 fn handle_control_c(
-    spawner: &Spawner,
     io: &'static dyn ShellBackend2,
     out: &AlignedWriter<'_>,
     output_mask: u8,
     line: &mut HString<MAX_LINE>,
-    command_sessions: &mut alloc::vec::Vec<CommandSession>,
 ) -> VecDeque<TranscriptEntry> {
     let active_slot = matrix::active_slot_id(output_mask);
-    let _ = matrix::request_slot_interrupt(&active_slot);
     matrix::record_line_in_slot(&active_slot, LineSource::User, "^C");
-
-    let session_indexes = find_command_session_indexes(command_sessions.as_slice(), &active_slot);
-    let mut remove_indexes: alloc::vec::Vec<usize> = alloc::vec::Vec::new();
-    for session_idx in session_indexes {
-        if !command_sessions[session_idx].kind.accepts_broadcast_input() {
-            continue;
-        }
-        match handle_command_session_input(
-            spawner,
-            io,
-            &command_sessions[session_idx],
-            "q",
-            output_mask,
-        ) {
-            CommandSessionInputResult::CompleteIdle => {
-                if command_sessions[session_idx].kind.shows_session_activity() {
-                    matrix::set_slot_activity(
-                        &command_sessions[session_idx].slot_id,
-                        matrix::MatrixSlotActivity::Idle,
-                    );
-                }
-                remove_indexes.push(session_idx);
+    let (_, vm_id) = matrix::request_slot_interrupt(&active_slot);
+    if let Some(vm_id) = vm_id {
+        match crate::hv::stop(vm_id) {
+            Ok(true) => {
+                matrix::record_line_in_slot(
+                    &active_slot,
+                    LineSource::System,
+                    alloc::format!("interrupt: vm{} stop requested", vm_id).as_str(),
+                );
             }
-            CommandSessionInputResult::CompleteRunning => {
-                remove_indexes.push(session_idx);
+            Ok(false) => {
+                matrix::record_line_in_slot(
+                    &active_slot,
+                    LineSource::System,
+                    alloc::format!("interrupt: vm{} is not running", vm_id).as_str(),
+                );
             }
-            CommandSessionInputResult::KeepRunning => {}
+            Err(_) => {
+                matrix::record_line_in_slot(
+                    &active_slot,
+                    LineSource::System,
+                    alloc::format!("interrupt: vm{} stop failed", vm_id).as_str(),
+                );
+            }
         }
-    }
-    remove_indexes.sort_unstable();
-    remove_indexes.dedup();
-    for session_idx in remove_indexes.into_iter().rev() {
-        let _ = command_sessions.remove(session_idx);
     }
 
     line.clear();
@@ -1233,14 +1273,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                 text_decode = ecma48::InputDecodeState::None;
                 live_history_cursor = None;
                 cmd_status_text = None;
-                transcript = handle_control_c(
-                    &spawner,
-                    io,
-                    &out,
-                    output_mask,
-                    &mut line,
-                    &mut command_sessions,
-                );
+                transcript = handle_control_c(io, &out, output_mask, &mut line);
                 continue;
             }
             match esc {
@@ -1342,6 +1375,11 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     esc = EscState::None;
                     continue;
                 }
+            }
+
+            if let Some(vm_id) = active_matrix_vm_input_id(output_mask) {
+                let _ = crate::hv::blueprint_console_submit_input(vm_id, &[b]);
+                continue;
             }
 
             if saw_cr && b == b'\n' {

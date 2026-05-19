@@ -36,6 +36,8 @@ struct MatrixSlot {
     activity: MatrixSlotActivity,
     running_count: usize,
     interrupt_generation: u64,
+    vm_id: Option<u8>,
+    vm_input_attached: bool,
     line_width: usize,
 }
 
@@ -50,6 +52,7 @@ struct MatrixState {
     uart_active: MatrixSlotId,
     net_active: MatrixSlotId,
     ui2_active: MatrixSlotId,
+    container_active: MatrixSlotId,
     user_input_record: VecDeque<AllocString>,
     live_user_input_record: VecDeque<LiveUserInputEntry>,
     revision: u64,
@@ -64,6 +67,7 @@ fn state() -> &'static spin::Mutex<MatrixState> {
             uart_active: default_slot_id(),
             net_active: default_slot_id(),
             ui2_active: default_slot_id(),
+            container_active: default_slot_id(),
             user_input_record: VecDeque::new(),
             live_user_input_record: VecDeque::new(),
             revision: 1,
@@ -110,6 +114,8 @@ fn ensure_slot_index(slots: &mut Vec<MatrixSlot>, id: &MatrixSlotId) -> usize {
         activity: MatrixSlotActivity::Idle,
         running_count: 0,
         interrupt_generation: 0,
+        vm_id: None,
+        vm_input_attached: false,
         line_width: DEFAULT_MATRIX_SLOT_LINE_WIDTH,
     });
     slots.len() - 1
@@ -124,6 +130,8 @@ fn active_slot_id_ref(state: &MatrixState, output_mask: u8) -> &MatrixSlotId {
         &state.net_active
     } else if (output_mask & super::OUTPUT_UI2_MASK) != 0 {
         &state.ui2_active
+    } else if (output_mask & super::OUTPUT_CONTAINER_MASK) != 0 {
+        &state.container_active
     } else {
         &state.uart_active
     }
@@ -134,6 +142,8 @@ fn active_slot_id_mut(state: &mut MatrixState, output_mask: u8) -> &mut MatrixSl
         &mut state.net_active
     } else if (output_mask & super::OUTPUT_UI2_MASK) != 0 {
         &mut state.ui2_active
+    } else if (output_mask & super::OUTPUT_CONTAINER_MASK) != 0 {
+        &mut state.container_active
     } else {
         &mut state.uart_active
     }
@@ -215,6 +225,7 @@ pub(crate) fn free_slot(requested: &str) -> MatrixSlotId {
             slot.activity = MatrixSlotActivity::Idle;
             slot.running_count = 0;
             slot.interrupt_generation = 0;
+            slot.vm_id = None;
             slot.line_width = DEFAULT_MATRIX_SLOT_LINE_WIDTH;
             changed = true;
         }
@@ -291,15 +302,6 @@ pub(crate) fn record_line_in_slot(slot_id: &MatrixSlotId, source: LineSource, te
     bump_revision(&mut guard);
 }
 
-pub(crate) fn request_slot_interrupt(slot_id: &MatrixSlotId) -> u64 {
-    let mut guard = state().lock();
-    let idx = ensure_slot_index(&mut guard.slots, slot_id);
-    guard.slots[idx].interrupt_generation = guard.slots[idx].interrupt_generation.wrapping_add(1);
-    let generation = guard.slots[idx].interrupt_generation;
-    bump_revision(&mut guard);
-    generation
-}
-
 pub(crate) fn record_user_input(text: &str) {
     let mut guard = state().lock();
     push_user_input_record(&mut guard, text);
@@ -365,6 +367,54 @@ pub(crate) fn end_slot_running(slot_id: &MatrixSlotId) {
     guard.slots[idx].running_count = guard.slots[idx].running_count.saturating_sub(1);
     let is_running = visible_activity(&guard.slots[idx]) == MatrixSlotActivity::Running;
     if was_running != is_running {
+        bump_revision(&mut guard);
+    }
+}
+
+pub(crate) fn slot_interrupt_generation(slot_id: &MatrixSlotId) -> u64 {
+    let mut guard = state().lock();
+    let idx = ensure_slot_index(&mut guard.slots, slot_id);
+    guard.slots[idx].interrupt_generation
+}
+
+pub(crate) fn request_slot_interrupt(slot_id: &MatrixSlotId) -> (u64, Option<u8>) {
+    let mut guard = state().lock();
+    let idx = ensure_slot_index(&mut guard.slots, slot_id);
+    guard.slots[idx].interrupt_generation = guard.slots[idx].interrupt_generation.wrapping_add(1);
+    let generation = guard.slots[idx].interrupt_generation;
+    let vm_id = guard.slots[idx].vm_id;
+    bump_revision(&mut guard);
+    (generation, vm_id)
+}
+
+pub(crate) fn active_slot_vm_input_id(output_mask: u8) -> Option<u8> {
+    let mut guard = state().lock();
+    let active = active_slot_id_ref(&guard, output_mask).clone();
+    let idx = ensure_slot_index(&mut guard.slots, &active);
+    if guard.slots[idx].vm_input_attached {
+        guard.slots[idx].vm_id
+    } else {
+        None
+    }
+}
+
+pub(crate) fn bind_slot_vm(slot_id: &MatrixSlotId, vm_id: u8, input_attached: bool) {
+    let mut guard = state().lock();
+    let idx = ensure_slot_index(&mut guard.slots, slot_id);
+    if guard.slots[idx].vm_id != Some(vm_id) || guard.slots[idx].vm_input_attached != input_attached
+    {
+        guard.slots[idx].vm_id = Some(vm_id);
+        guard.slots[idx].vm_input_attached = input_attached;
+        bump_revision(&mut guard);
+    }
+}
+
+pub(crate) fn unbind_slot_vm(slot_id: &MatrixSlotId, vm_id: u8) {
+    let mut guard = state().lock();
+    let idx = ensure_slot_index(&mut guard.slots, slot_id);
+    if guard.slots[idx].vm_id == Some(vm_id) {
+        guard.slots[idx].vm_id = None;
+        guard.slots[idx].vm_input_attached = false;
         bump_revision(&mut guard);
     }
 }

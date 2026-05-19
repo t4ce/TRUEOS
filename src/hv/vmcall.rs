@@ -57,6 +57,8 @@ pub const OP_BP_INPUT_CURSOR_EVENTS: u32 = 0x6A; // arg0 read seq, arg1 cap -> p
 pub const OP_BP_DNS_RESOLVE_IPV4: u32 = 0x6B; // payload host -> response payload IPv4 bytes
 pub const OP_BP_SHELL_ATTACHED_WRITE: u32 = 0x6C; // payload bytes -> attached shell
 pub const OP_BP_SHELL_ATTACHED_READ_BYTE: u32 = 0x6D; // response is byte or u64::MAX
+pub const OP_BP_ENV_ALL: u32 = 0x6E; // response payload is newline-separated key=value text
+pub const OP_BP_FS_LIST_TREE: u32 = 0x6F; // payload path -> response payload tree text
 pub const OP_BP_SOCKET_TCP_OPEN: u32 = 0x35; // arg0 domain/type, arg1 protocol -> socket/rc
 pub const OP_BP_SOCKET_TCP_CLOSE: u32 = 0x36; // arg0 socket -> rc
 pub const OP_BP_SOCKET_TCP_SET_NONBLOCKING: u32 = 0x37; // arg0 socket, arg1 bool -> rc
@@ -665,6 +667,23 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             write_response(vm_id, seq, STATUS_OK, bytes.len() as u64, out_n as u32);
             DispatchOutcome::Resume
         }
+        OP_BP_ENV_ALL => {
+            let Some(text) = crate::hv::blueprint_process_env_text(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let bytes = text.as_bytes();
+            let out_n = core::cmp::min(bytes.len(), PAYLOAD_CAP);
+            unsafe {
+                (&mut (&mut (*p).payload)[..out_n]).copy_from_slice(&bytes[..out_n]);
+            }
+            write_response(vm_id, seq, STATUS_OK, bytes.len() as u64, out_n as u32);
+            DispatchOutcome::Resume
+        }
         OP_BP_SHELL_ATTACHED_WRITE => {
             let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
             let Some(p) = host_ptr(vm_id) else {
@@ -681,6 +700,29 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 .map(u64::from)
                 .unwrap_or(u64::MAX);
             write_response(vm_id, seq, STATUS_OK, byte, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_FS_LIST_TREE => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let path_bytes = unsafe { &(&(*p).payload)[..n] };
+            let Ok(path) = core::str::from_utf8(path_bytes) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let Some(text) = crate::hv::blueprint_process_file_tree_text(vm_id, path) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let bytes = text.as_bytes();
+            let out_n = core::cmp::min(bytes.len(), PAYLOAD_CAP);
+            unsafe {
+                (&mut (&mut (*p).payload)[..out_n]).copy_from_slice(&bytes[..out_n]);
+            }
+            write_response(vm_id, seq, STATUS_OK, bytes.len() as u64, out_n as u32);
             DispatchOutcome::Resume
         }
         OP_BP_FS_READ_FILE => {

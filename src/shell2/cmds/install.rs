@@ -5,8 +5,8 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 
 use crate::shell2::shell2_cmd::ParseOutcome;
 use crate::shell2::{
-    MatrixTarget, ShellBackend2, matrix_target_for_backend, print_matrix_target_line,
-    print_shell_line, set_matrix_target_active,
+    MatrixTarget, ShellBackend2, matrix_target_for_backend, matrix_target_interrupted,
+    print_matrix_target_line, print_shell_line, set_matrix_target_active,
 };
 
 pub(crate) fn print_install_disk_table(io: &'static dyn ShellBackend2) {
@@ -89,6 +89,7 @@ async fn install_command_task(
         let log = |line: &str| {
             print_matrix_target_line(&task_target, line);
         };
+        let interrupted = || matrix_target_interrupted(&task_target);
 
         let info = disk.info();
         log(alloc::format!(
@@ -101,6 +102,10 @@ async fn install_command_task(
             info.label,
         )
         .as_str());
+        if interrupted() {
+            log("install: interrupted before disk probe");
+            return;
+        }
 
         let (status, err) = crate::r::disc::detect::detect_physical_disk_detail(disk).await;
         log(alloc::format!(
@@ -114,6 +119,10 @@ async fn install_command_task(
             }
         )
         .as_str());
+        if interrupted() {
+            log("install: interrupted before install");
+            return;
+        }
 
         let bootx64_ok = bootx64.get(0..2) == Some(b"MZ");
         let kernel_ok = kernel.get(0..4) == Some(b"\x7FELF");

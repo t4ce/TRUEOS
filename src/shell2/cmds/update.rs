@@ -5,8 +5,8 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 
 use crate::shell2::shell2_cmd::ParseOutcome;
 use crate::shell2::{
-    MatrixTarget, ShellBackend2, matrix_target_for_backend, print_matrix_target_line,
-    print_shell_line, set_matrix_target_active,
+    MatrixTarget, ShellBackend2, matrix_target_for_backend, matrix_target_interrupted,
+    print_matrix_target_line, print_shell_line, set_matrix_target_active,
 };
 
 pub(crate) fn print_update_disk_table(io: &'static dyn ShellBackend2) {
@@ -77,10 +77,15 @@ async fn update_command_task(target: MatrixTarget, disk: crate::disc::block::Dev
         let log = |line: &str| {
             print_matrix_target_line(&task_target, line);
         };
+        let interrupted = || matrix_target_interrupted(&task_target);
 
         let info = disk.info();
         log("update: waiting for net");
         crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
+        if interrupted() {
+            log("update: interrupted before download");
+            return;
+        }
 
         log(alloc::format!(
             "update: target id={} ({}) blocks={} bs={} writable={} label={:?}",
@@ -92,6 +97,10 @@ async fn update_command_task(target: MatrixTarget, disk: crate::disc::block::Dev
             info.label,
         )
         .as_str());
+        if interrupted() {
+            log("update: interrupted before disk probe");
+            return;
+        }
 
         let (status, err) = crate::r::disc::detect::detect_physical_disk_detail(disk).await;
         log(alloc::format!(
@@ -111,6 +120,10 @@ async fn update_command_task(target: MatrixTarget, disk: crate::disc::block::Dev
         }
 
         log(alloc::format!("update: download {}", ISO_URL).as_str());
+        if interrupted() {
+            log("update: interrupted before download");
+            return;
+        }
 
         let payload = match crate::t::run_on_shared_tokio(move || async move {
             crate::t::net::https::fetch_https_body_hyper_async(ISO_URL, 120_000, 128 * 1024 * 1024)
@@ -128,6 +141,10 @@ async fn update_command_task(target: MatrixTarget, disk: crate::disc::block::Dev
                 return;
             }
         };
+        if interrupted() {
+            log("update: interrupted after download");
+            return;
+        }
 
         log(alloc::format!(
             "update: downloaded payload={} bytes (7z_magic={})",
@@ -150,6 +167,10 @@ async fn update_command_task(target: MatrixTarget, disk: crate::disc::block::Dev
         };
         drop(payload);
         let iso_view = iso.as_slice();
+        if interrupted() {
+            log("update: interrupted before install");
+            return;
+        }
 
         log(alloc::format!(
             "update: extracted trueos.iso bytes={} (iso9660_magic={})",

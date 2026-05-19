@@ -9,9 +9,14 @@ use super::tlb_helper::print_table;
 use crate::shell2::shell2_cmd::ParseOutcome;
 
 const HV_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
-const HV_MENU_ROWS: [[&str; 2]; 5] = [
+const HV_MENU_ROWS: [[&str; 2]; 7] = [
     ["status", "Show VM slot and shared VM resource status"],
     ["run [id] [args...]", "Launch a blueprint in an app VM"],
+    ["attach <id>", "Route this matrix slot's input to vm[id]"],
+    [
+        "detach <id>",
+        "Stop routing this matrix slot's input to vm[id]",
+    ],
     ["pause <id>", "Request vm[id] stop"],
     ["stop [id]", "Request vm[id] stop"],
     ["preserve <id>", "Sleep vm[id] into the HV ramdisk TRUEOSFS"],
@@ -177,6 +182,41 @@ pub(crate) fn try_parse(
 
     if op.eq_ignore_ascii_case("run") {
         super::run::try_parse(spawner, io, args);
+        return ParseOutcome::Handled;
+    }
+
+    if op.eq_ignore_ascii_case("attach") {
+        let vm_id = match parse_optional_vm_id(io, args.next()) {
+            Some(id) => id,
+            None => return ParseOutcome::Handled,
+        };
+        if args.next().is_some() {
+            print_usage(io);
+            return ParseOutcome::Handled;
+        }
+        let state = crate::hv::vm_state(vm_id);
+        if !state.running && !state.starting {
+            line(io, alloc::format!("hv: vm{} is not running", vm_id).as_str());
+            return ParseOutcome::Handled;
+        }
+        let target = crate::shell2::matrix_target_for_backend(io);
+        crate::shell2::bind_matrix_target_vm_input(&target, vm_id);
+        line(io, alloc::format!("hv: attached this matrix slot to vm{} input", vm_id).as_str());
+        return ParseOutcome::Handled;
+    }
+
+    if op.eq_ignore_ascii_case("detach") {
+        let vm_id = match parse_optional_vm_id(io, args.next()) {
+            Some(id) => id,
+            None => return ParseOutcome::Handled,
+        };
+        if args.next().is_some() {
+            print_usage(io);
+            return ParseOutcome::Handled;
+        }
+        let target = crate::shell2::matrix_target_for_backend(io);
+        crate::shell2::unbind_matrix_target_vm(&target, vm_id);
+        line(io, alloc::format!("hv: detached this matrix slot from vm{} input", vm_id).as_str());
         return ParseOutcome::Handled;
     }
 

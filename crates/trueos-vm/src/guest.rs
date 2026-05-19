@@ -27,10 +27,7 @@ static HULL_RODATA_ANCHOR: [u8; 16] = *b"TRUEOS_VM_HULL\0\0";
 pub extern "C" fn trueos_vm_guest_run() {
     if unsafe { trueos_hv_guest_blueprint_launch_active() } {
         let _ = unsafe { trueos_hv_guest_blueprint_run() };
-        crate::vmcall::preserve();
-        loop {
-            core::hint::spin_loop();
-        }
+        unsafe { trueos_hv_guest_container_shell_run() }
     }
 
     crate::demo::start();
@@ -38,7 +35,7 @@ pub extern "C" fn trueos_vm_guest_run() {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_vm_guest_idle() -> ! {
-    unsafe { trueos_hv_guest_shell_run() }
+    unsafe { trueos_hv_guest_container_shell_run() }
 }
 
 #[unsafe(no_mangle)]
@@ -71,9 +68,9 @@ unsafe extern "C" {
     /// Defined in `src/hv/guest_run.rs`; reports whether a staged blueprint launch
     /// is pending so the guest can avoid falling through into the demo path.
     fn trueos_hv_guest_blueprint_launch_active() -> bool;
-    /// Defined in `src/hv/guest_run.rs`; starts a real shell2 instance over
-    /// the vmcall I/O bridge using the already-live host heap and time driver.
-    fn trueos_hv_guest_shell_run() -> !;
+    /// Defined in `src/hv/guest_run.rs`; starts the lightweight VM/container
+    /// control shell over the attached matrix console.
+    fn trueos_hv_guest_container_shell_run() -> !;
 }
 
 #[derive(Copy, Clone, Debug)]
