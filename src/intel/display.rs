@@ -73,12 +73,12 @@ const PRIMARY_FORMAT_PROBE_MODE: u32 = PRIMARY_FORMAT_PROBE_XRGB;
 const PRIMARY_PRESENT_DISABLE_PSR_PROBE: bool = true;
 const PRIMARY_BYTES_PER_PIXEL: u32 = 4;
 const PRIMARY_BASELINE_COLOR: u32 = 0x00FF_37FF;
+const VIDEO_NV12_BLACK_PROOF_LIFT: bool = true;
 const PRIMARY_BOOT_BUROSCH_JPEG: &[u8] = include_bytes!("../../tools/vid/Buro4K.jpeg");
-const PRIMARY_BOOT_YELLOW_JPEG: &[u8] =
-    include_bytes!("../../tools/vid/trueos_yellow_2560x1440_q90.jpg");
+const PRIMARY_BOOT_YELLY_JPEG: &[u8] = include_bytes!("../../tools/vid/YellyFHD.jpg");
 const PRIMARY_BOOT_LOGO_JPEG: &[u8] = include_bytes!("../../logo.jpg");
 const PRIMARY_BOOT_LOGO_ENABLED: bool = true;
-const PRIMARY_BOOT_LOGO_PRESENT_HOLD_MS: u64 = 125;
+const PRIMARY_BOOT_LOGO_PRESENT_HOLD_MS: u64 = 3000;
 const JPG_CENTER_CROP: bool = true;
 const CPU_SCANOUT_PROOF_ENABLED: bool = true;
 const CPU_SCANOUT_PROOF_COLOR: u32 = 0x00FF_00FF;
@@ -94,6 +94,27 @@ static OVERLAY_PRESENT_SEQ: AtomicU32 = AtomicU32::new(0);
 static OVERLAY_SURFACE: Mutex<Option<OverlaySurface>> = Mutex::new(None);
 static HW_LOGO_PENDING_IDS: Mutex<VecDeque<u32>> = Mutex::new(VecDeque::new());
 static HW_LOGO_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
+static HW_LOGO_NEXT_STAGE: AtomicU32 = AtomicU32::new(0);
+
+struct BootLogoStage {
+    name: &'static str,
+    jpeg: &'static [u8],
+}
+
+const PRIMARY_BOOT_JPEG_STAGES: [BootLogoStage; 3] = [
+    BootLogoStage {
+        name: "burosch4k",
+        jpeg: PRIMARY_BOOT_BUROSCH_JPEG,
+    },
+    BootLogoStage {
+        name: "yelly",
+        jpeg: PRIMARY_BOOT_YELLY_JPEG,
+    },
+    BootLogoStage {
+        name: "logo",
+        jpeg: PRIMARY_BOOT_LOGO_JPEG,
+    },
+];
 
 #[derive(Copy, Clone)]
 pub(super) struct PipeInfo {
@@ -370,11 +391,19 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
 }
 
 fn probe_hw_logo_decode() -> bool {
-    let mut submitted = 0u32;
-    submitted += submit_hw_logo_stage("burosch4k", PRIMARY_BOOT_BUROSCH_JPEG) as u32;
-    submitted += submit_hw_logo_stage("yellow", PRIMARY_BOOT_YELLOW_JPEG) as u32;
-    submitted += submit_hw_logo_stage("logo", PRIMARY_BOOT_LOGO_JPEG) as u32;
-    submitted != 0
+    submit_next_hw_logo_stage()
+}
+
+fn submit_next_hw_logo_stage() -> bool {
+    loop {
+        let stage_idx = HW_LOGO_NEXT_STAGE.fetch_add(1, Ordering::AcqRel) as usize;
+        let Some(stage) = PRIMARY_BOOT_JPEG_STAGES.get(stage_idx) else {
+            return false;
+        };
+        if submit_hw_logo_stage(stage.name, stage.jpeg) {
+            return true;
+        }
+    }
 }
 
 fn submit_hw_logo_stage(name: &'static str, jpeg: &'static [u8]) -> bool {
@@ -507,6 +536,7 @@ pub(crate) async fn hw_logo_present_task() {
         if presented {
             Timer::after(EmbassyDuration::from_millis(PRIMARY_BOOT_LOGO_PRESENT_HOLD_MS)).await;
         }
+        submit_next_hw_logo_stage();
     }
 }
 
@@ -957,6 +987,146 @@ pub(crate) fn present_imc3_surface_center(
     let byte_len = dst_pitch.saturating_mul(dst_height);
     crate::intel::dma_flush(surface.virt, byte_len);
     notify_primary_surface_present(surface, "imc3-center", byte_len);
+    true
+}
+
+pub(crate) fn present_nv12_surface_center(
+    src: &[u8],
+    coded_width: u32,
+    coded_height: u32,
+    visible_x: u32,
+    visible_y: u32,
+    visible_width: u32,
+    visible_height: u32,
+    src_pitch_bytes: usize,
+) -> bool {
+    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+        return false;
+    };
+    if surface.virt.is_null() || coded_width == 0 || coded_height == 0 {
+        return false;
+    }
+
+    let coded_width = coded_width as usize;
+    let coded_height = coded_height as usize;
+    let visible_x = visible_x as usize;
+    let visible_y = visible_y as usize;
+    let visible_width = visible_width as usize;
+    let visible_height = visible_height as usize;
+    if src_pitch_bytes < coded_width || visible_width == 0 || visible_height == 0 {
+        return false;
+    }
+    if visible_x.saturating_add(visible_width) > coded_width
+        || visible_y.saturating_add(visible_height) > coded_height
+    {
+        return false;
+    }
+
+    const YTILE_W: usize = 128;
+    const YTILE_H: usize = 32;
+    let tiles_per_row = src_pitch_bytes / YTILE_W;
+    if tiles_per_row == 0 {
+        return false;
+    }
+    let chroma_y_offset = (coded_height + YTILE_H - 1) & !(YTILE_H - 1);
+    let total_height = chroma_y_offset + coded_height.div_ceil(2);
+    let total_tile_rows = (total_height + YTILE_H - 1) / YTILE_H;
+    let needed = total_tile_rows * tiles_per_row * 4096;
+    if src.len() < needed {
+        return false;
+    }
+
+    let dst_width = surface.width as usize;
+    let dst_height = surface.height as usize;
+    let dst_pitch = surface.pitch_bytes as usize;
+    if dst_pitch < dst_width.saturating_mul(4) {
+        return false;
+    }
+
+    fill_surface_color(
+        surface.virt,
+        dst_pitch,
+        surface.width,
+        surface.height,
+        PRIMARY_BASELINE_COLOR,
+    );
+
+    let (copy_w, copy_h) = aspect_fit_size(visible_width, visible_height, dst_width, dst_height);
+    if copy_w == 0 || copy_h == 0 {
+        return false;
+    }
+    let dst_x = dst_width.saturating_sub(copy_w) / 2;
+    let dst_y = dst_height.saturating_sub(copy_h) / 2;
+
+    #[inline(always)]
+    fn ytile_offset(byte_x: usize, row_y: usize, tiles_per_row: usize) -> usize {
+        let tile_col = byte_x / YTILE_W;
+        let tile_row = row_y / YTILE_H;
+        let in_x = byte_x % YTILE_W;
+        let in_y = row_y % YTILE_H;
+        let oword_col = in_x / 16;
+        let byte_in_oword = in_x % 16;
+        let within_tile = oword_col * 512 + in_y * 16 + byte_in_oword;
+        (tile_row * tiles_per_row + tile_col) * 4096 + within_tile
+    }
+
+    for row_idx in 0..copy_h {
+        let src_y = visible_y.saturating_add(
+            row_idx
+                .saturating_mul(visible_height)
+                .checked_div(copy_h.max(1))
+                .unwrap_or(0)
+                .min(visible_height.saturating_sub(1)),
+        );
+        let dst_row_off = (dst_y + row_idx)
+            .saturating_mul(dst_pitch)
+            .saturating_add(dst_x.saturating_mul(4));
+        let dst_row = unsafe { surface.virt.add(dst_row_off) as *mut u32 };
+        let uv_row = chroma_y_offset + src_y / 2;
+        for col_idx in 0..copy_w {
+            let src_x = visible_x.saturating_add(
+                col_idx
+                    .saturating_mul(visible_width)
+                    .checked_div(copy_w.max(1))
+                    .unwrap_or(0)
+                    .min(visible_width.saturating_sub(1)),
+            );
+            let y_off = ytile_offset(src_x, src_y, tiles_per_row);
+            let uv_x = (src_x / 2) * 2;
+            let u_off = ytile_offset(uv_x, uv_row, tiles_per_row);
+            let v_off = u_off + 1;
+            let y = unsafe { i32::from(*src.get_unchecked(y_off)) };
+            let c = (y - 16).max(0);
+            let u = unsafe { i32::from(*src.get_unchecked(u_off)) } - 128;
+            let v = unsafe { i32::from(*src.get_unchecked(v_off)) } - 128;
+            let (r, g, b) = if VIDEO_NV12_BLACK_PROOF_LIFT
+                && y <= 24
+                && u.abs() <= 4
+                && v.abs() <= 4
+            {
+                let checker = ((row_idx >> 5) ^ (col_idx >> 5)) & 1;
+                if checker == 0 {
+                    (0x30, 0x58, 0xD0)
+                } else {
+                    (0x70, 0x20, 0xA0)
+                }
+            } else {
+                (
+                    clamp_u8_i32((298 * c + 409 * v + 128) >> 8),
+                    clamp_u8_i32((298 * c - 100 * u - 208 * v + 128) >> 8),
+                    clamp_u8_i32((298 * c + 516 * u + 128) >> 8),
+                )
+            };
+            let pixel = u32::from_le_bytes([b, g, r, 0]);
+            unsafe {
+                core::ptr::write_volatile(dst_row.add(col_idx), pixel);
+            }
+        }
+    }
+
+    let byte_len = dst_pitch.saturating_mul(dst_height);
+    crate::intel::dma_flush(surface.virt, byte_len);
+    notify_primary_surface_present(surface, "nv12-center", byte_len);
     true
 }
 

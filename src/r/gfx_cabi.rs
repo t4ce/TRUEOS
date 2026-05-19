@@ -2960,6 +2960,15 @@ pub mod cabi {
         {
             return false;
         }
+        crate::log!(
+            "gfx-cabi: queue mandelbrot guest_tex={} host_tex={} repaint_window={} reason={} ticks={} hz={}\n",
+            tex_id,
+            host_tex_id,
+            repaint_window_id,
+            repaint_reason,
+            ticks,
+            tick_hz
+        );
         enqueue_texture_draw_mandelbrot(TextureDrawMandelbrotReq {
             tex_id: host_tex_id,
             ticks,
@@ -3187,6 +3196,15 @@ pub mod cabi {
                 TextureWorkReq::DrawMandelbrot(req) => {
                     let rc = render_mandelbrot_to_texture_now(req.tex_id, req.ticks, req.tick_hz);
                     if rc == 0 {
+                        set_async_tex_status(req.tex_id, ASYNC_TEX_STATUS_READY);
+                        crate::log!(
+                            "gfx-cabi: mandelbrot render ok tex={} repaint_window={} reason={} ticks={} hz={}\n",
+                            req.tex_id,
+                            req.repaint_window_id,
+                            req.repaint_reason,
+                            req.ticks,
+                            req.tick_hz
+                        );
                         request_texture_work_present(
                             req.repaint_window_id,
                             req.tex_id,

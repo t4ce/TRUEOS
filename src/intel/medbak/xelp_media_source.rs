@@ -3,10 +3,16 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 pub(crate) const MEDIA_DECODE_CACHE_PATH: &str = "media/trueos_h264_diag_mbgrid_2560x1440.mp4";
+const MEDIA_EMBEDDED_DEMO_NAME: &str = "embedded:demo_yelly3.mp4";
+const MEDIA_EMBEDDED_DEMO_MP4: &[u8] = include_bytes!("../../../tools/vid/demo_yelly3.mp4");
 const MEDIA_HTTP_DEMO_TIMEOUT_MS: u32 = 60_000;
 const MEDIA_HTTP_DEMO_MAX_BYTES: usize = 16 * 1024 * 1024;
 
 pub(crate) enum MediaSource {
+    Embedded {
+        source: &'static str,
+        body: &'static [u8],
+    },
     Memory {
         source: &'static str,
         body: Vec<u8>,
@@ -22,12 +28,15 @@ pub(crate) enum MediaSource {
 impl MediaSource {
     pub(crate) fn source_name(&self) -> &'static str {
         match self {
-            Self::Memory { source, .. } | Self::CacheFile { source, .. } => source,
+            Self::Embedded { source, .. }
+            | Self::Memory { source, .. }
+            | Self::CacheFile { source, .. } => source,
         }
     }
 
     pub(crate) fn total_len(&self) -> u64 {
         match self {
+            Self::Embedded { body, .. } => body.len() as u64,
             Self::Memory { body, .. } => body.len() as u64,
             Self::CacheFile { len, .. } => *len,
         }
@@ -35,6 +44,7 @@ impl MediaSource {
 
     pub(crate) fn body(&self) -> Option<&[u8]> {
         match self {
+            Self::Embedded { body, .. } => Some(*body),
             Self::Memory { body, .. } => Some(body.as_slice()),
             Self::CacheFile { .. } => None,
         }
@@ -46,6 +56,18 @@ impl MediaSource {
         dst: &mut [u8],
     ) -> Result<bool, crate::disc::block::Error> {
         match self {
+            Self::Embedded { body, .. } => {
+                let start =
+                    usize::try_from(offset).map_err(|_| crate::disc::block::Error::OutOfBounds)?;
+                let end = start
+                    .checked_add(dst.len())
+                    .ok_or(crate::disc::block::Error::OutOfBounds)?;
+                let Some(slice) = body.get(start..end) else {
+                    return Err(crate::disc::block::Error::OutOfBounds);
+                };
+                dst.copy_from_slice(slice);
+                Ok(true)
+            }
             Self::Memory { body, .. } => {
                 let start =
                     usize::try_from(offset).map_err(|_| crate::disc::block::Error::OutOfBounds)?;
@@ -78,6 +100,18 @@ impl MediaSource {
 }
 
 pub(crate) async fn fetch_media_source_async() -> Option<MediaSource> {
+    if !MEDIA_EMBEDDED_DEMO_MP4.is_empty() {
+        crate::log!(
+            "intel/media: source embedded ready source={} bytes={}\n",
+            MEDIA_EMBEDDED_DEMO_NAME,
+            MEDIA_EMBEDDED_DEMO_MP4.len(),
+        );
+        return Some(MediaSource::Embedded {
+            source: MEDIA_EMBEDDED_DEMO_NAME,
+            body: MEDIA_EMBEDDED_DEMO_MP4,
+        });
+    }
+
     if crate::logflag::INTEL_MEDIA_FS_CACHE_ENABLED {
         let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
             crate::log!(
