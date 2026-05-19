@@ -22,7 +22,6 @@ const TOOL_JSON_ACPI: &str = r#"{"type":"object","properties":{"action":{"type":
 const TOOL_JSON_C4: &str = r#"{"type":"object","properties":{"mode":{"type":"string","enum":["file","inline"],"description":"Compile from a TRUEOSFS file or inline C4 source."},"path":{"type":"string","description":"TRUEOSFS source path when mode=file."},"source":{"type":"string","description":"Inline C4 source when mode=inline."}},"required":["mode"],"additionalProperties":false}"#;
 const TOOL_JSON_ETC: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["ample","go","go2","insane"],"description":"etc subcommand to run."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_DISC: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","format"],"description":"disc action to run."},"disk_id":{"type":"string","description":"Disk id string for action=format."}},"required":["action"],"additionalProperties":false}"#;
-const TOOL_JSON_KIBI: &str = r#"{"type":"object","properties":{"slot":{"type":"string","description":"Optional matrix slot like §ed."},"path":{"type":"string","description":"Optional TRUEOSFS file path to open."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_LSD: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"Optional TRUEOSFS path to list."},"long":{"type":"boolean","description":"Show file kind and byte size."},"tree":{"type":"boolean","description":"Walk recursively from the path."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_NET: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["icmp","irc","nic","hostname"],"description":"net subcommand to run."},"target":{"type":"string","description":"Target host for net icmp."},"selector":{"type":"string","description":"Optional NIC selector like index, vid:pid, or bb:dd.f."},"host":{"type":"string","description":"Host for net irc."},"channel":{"type":"string","description":"Optional channel like #trueos for net irc."},"name":{"type":"string","description":"Optional hostname for net hostname."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_SET: &str = r#"{"type":"object","properties":{"width":{"type":"integer","minimum":50,"maximum":500,"description":"Shell line width."}},"required":["width"],"additionalProperties":false}"#;
@@ -44,10 +43,6 @@ fn dispatch_etc(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Pars
 fn dispatch_install(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
     super::cmds::install::try_parse(spawner, io, &mut args)
-}
-
-fn dispatch_kibi(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    super::cmds::kibi::try_parse(io, rest)
 }
 
 fn dispatch_lsd(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -166,14 +161,6 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         handler: dispatch_install,
         tool_description: None,
         tool_parameters_json: None,
-    },
-    BuiltinShell2CmdEntry {
-        name: "kibi",
-        mode: "cmd",
-        color: Some((60, 183, 161)),
-        handler: dispatch_kibi,
-        tool_description: Some("Open the kibi text editor, optionally in a named matrix slot."),
-        tool_parameters_json: Some(TOOL_JSON_KIBI),
     },
     BuiltinShell2CmdEntry {
         name: "lsd",
