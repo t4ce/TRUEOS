@@ -85,6 +85,30 @@ impl Xhci {
     const COMMAND_POLL_DELAY_MS: u64 = 1;
     const COMMAND_POLL_LIMIT: usize = 2_000;
 
+    fn flush_controller_write(&self) {
+        let _ = self.reg.read().operational.usbsts.read_volatile();
+        mb();
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        #[cfg(target_arch = "x86")]
+        unsafe {
+            core::arch::x86::_mm_mfence();
+        }
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            core::arch::x86_64::_mm_mfence();
+        }
+    }
+
+    fn clear_status_bits(&mut self) {
+        self.reg.write().operational.usbsts.update_volatile(|r| {
+            r.clear_host_system_error();
+            r.clear_event_interrupt();
+            r.clear_port_change_detect();
+            r.clear_save_restore_error();
+        });
+        self.flush_controller_write();
+    }
+
     pub fn new(mmio: Mmio, kernel: &'static dyn KernelOp) -> Result<Self> {
         let reg = XhciRegisters::new(mmio);
 
@@ -152,6 +176,7 @@ impl Xhci {
         // in the USBSTS is ‘0’ before writing any xHC Operational or Runtime
         // registers.
         self.chip_hardware_reset().await?;
+        self.clear_status_bits();
 
         self.disable_irq();
 
@@ -177,9 +202,10 @@ impl Xhci {
         // enumerating devices. System software may follow the procedures described in
         // section 4.3, to enumerate attached devices.
         self.start();
-        mb();
+        self.flush_controller_write();
 
         self.wait_for_running().await;
+        self.clear_status_bits();
 
         self.enable_irq();
         // self.reset_ports().await;
@@ -346,6 +372,7 @@ impl Xhci {
         self.reg.write().operational.usbcmd.update_volatile(|r| {
             r.clear_interrupter_enable();
         });
+        self.flush_controller_write();
     }
 
     pub fn enable_irq(&mut self) {
@@ -353,6 +380,7 @@ impl Xhci {
         self.reg.write().operational.usbcmd.update_volatile(|r| {
             r.set_interrupter_enable();
         });
+        self.flush_controller_write();
     }
 
     fn setup_dcbaap(&mut self) -> Result {
@@ -361,6 +389,7 @@ impl Xhci {
         self.reg.write().operational.dcbaap.update_volatile(|r| {
             r.set(dcbaa_addr.as_u64());
         });
+        self.flush_controller_write();
         Ok(())
     }
 
@@ -377,6 +406,7 @@ impl Xhci {
                 r.clear_ring_cycle_state();
             }
         });
+        self.flush_controller_write();
 
         Ok(())
     }
@@ -410,6 +440,7 @@ impl Xhci {
                 im.set_interrupt_moderation_counter(0);
             });
         }
+        self.flush_controller_write();
 
         {
             debug!("Enabling primary interrupter.");
@@ -429,6 +460,7 @@ impl Xhci {
             r.set_host_system_error_enable();
             r.set_enable_wrap_event();
         });
+        self.flush_controller_write();
         Ok(())
     }
 
@@ -453,6 +485,7 @@ impl Xhci {
             let bus_addr = scratchpad_buf_arr.bus_addr();
 
             self.dev_mut()?.dcbaa.set(0, bus_addr);
+            self.flush_controller_write();
 
             debug!("Setting up {buf_count} scratchpads, at {bus_addr:#0x}");
             scratchpad_buf_arr

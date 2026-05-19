@@ -9,7 +9,9 @@
 // pipeline rendered that memory; render must separately produce `ps-rt-proof
 // accepted=1` before a displayed pixel can be attributed to GPU rendering.
 
+use alloc::collections::VecDeque;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
 macro_rules! intel_display_verbose_log {
@@ -71,9 +73,13 @@ const PRIMARY_FORMAT_PROBE_MODE: u32 = PRIMARY_FORMAT_PROBE_XRGB;
 const PRIMARY_PRESENT_DISABLE_PSR_PROBE: bool = true;
 const PRIMARY_BYTES_PER_PIXEL: u32 = 4;
 const PRIMARY_BASELINE_COLOR: u32 = 0x00FF_37FF;
-const PRIMARY_BOOT_LOGO_JPEG: &[u8] =
-    include_bytes!("../../tools/vid/demo_yelly3_first_frame_q90.jpg");
+const PRIMARY_BOOT_BUROSCH_JPEG: &[u8] = include_bytes!("../../tools/vid/Buro4K.jpeg");
+const PRIMARY_BOOT_YELLOW_JPEG: &[u8] =
+    include_bytes!("../../tools/vid/trueos_yellow_2560x1440_q90.jpg");
+const PRIMARY_BOOT_LOGO_JPEG: &[u8] = include_bytes!("../../logo.jpg");
 const PRIMARY_BOOT_LOGO_ENABLED: bool = true;
+const PRIMARY_BOOT_LOGO_PRESENT_HOLD_MS: u64 = 125;
+const JPG_CENTER_CROP: bool = true;
 const CPU_SCANOUT_PROOF_ENABLED: bool = true;
 const CPU_SCANOUT_PROOF_COLOR: u32 = 0x00FF_00FF;
 const CPU_SCANOUT_PROOF_SIZE: u32 = 8;
@@ -86,7 +92,7 @@ static PRIMARY_PRESENT_SEQ: AtomicU32 = AtomicU32::new(0);
 static PRIMARY_SURFACE: Mutex<Option<PrimarySurface>> = Mutex::new(None);
 static OVERLAY_PRESENT_SEQ: AtomicU32 = AtomicU32::new(0);
 static OVERLAY_SURFACE: Mutex<Option<OverlaySurface>> = Mutex::new(None);
-static HW_LOGO_PENDING_ID: AtomicU32 = AtomicU32::new(0);
+static HW_LOGO_PENDING_IDS: Mutex<VecDeque<u32>> = Mutex::new(VecDeque::new());
 static HW_LOGO_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
 
 #[derive(Copy, Clone)]
@@ -364,15 +370,24 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
 }
 
 fn probe_hw_logo_decode() -> bool {
-    match crate::intel::hw_pic_submit_jpeg(PRIMARY_BOOT_LOGO_JPEG) {
+    let mut submitted = 0u32;
+    submitted += submit_hw_logo_stage("burosch4k", PRIMARY_BOOT_BUROSCH_JPEG) as u32;
+    submitted += submit_hw_logo_stage("yellow", PRIMARY_BOOT_YELLOW_JPEG) as u32;
+    submitted += submit_hw_logo_stage("logo", PRIMARY_BOOT_LOGO_JPEG) as u32;
+    submitted != 0
+}
+
+fn submit_hw_logo_stage(name: &'static str, jpeg: &'static [u8]) -> bool {
+    match crate::intel::hw_pic_submit_jpeg(jpeg) {
         Ok(id) => {
-            HW_LOGO_PENDING_ID.store(id, Ordering::Release);
+            HW_LOGO_PENDING_IDS.lock().push_back(id);
             HW_LOGO_WAIT.notify_all();
             let snap = crate::intel::hw_pic_snapshot();
             crate::log!(
-                "intel/display: hw-logo submit ok id={} bytes=0x{:X} pending={} outputs={} service={}\n",
+                "intel/display: hw-logo submit ok stage={} id={} bytes=0x{:X} pending={} outputs={} service={}\n",
+                name,
                 id,
-                PRIMARY_BOOT_LOGO_JPEG.len(),
+                jpeg.len(),
                 snap.pending,
                 snap.outputs,
                 snap.service_started as u8
@@ -382,9 +397,10 @@ fn probe_hw_logo_decode() -> bool {
         Err(code) => {
             let snap = crate::intel::hw_pic_snapshot();
             crate::log!(
-                "intel/display: hw-logo submit failed code={} bytes=0x{:X} pending={} outputs={} service={}\n",
+                "intel/display: hw-logo submit failed stage={} code={} bytes=0x{:X} pending={} outputs={} service={}\n",
+                name,
                 code,
-                PRIMARY_BOOT_LOGO_JPEG.len(),
+                jpeg.len(),
                 snap.pending,
                 snap.outputs,
                 snap.service_started as u8
@@ -397,41 +413,50 @@ fn probe_hw_logo_decode() -> bool {
 #[embassy_executor::task]
 pub(crate) async fn hw_logo_present_task() {
     loop {
-        let pending_id = HW_LOGO_PENDING_ID.load(Ordering::Acquire);
-        if pending_id == 0 {
+        let pending_id = HW_LOGO_PENDING_IDS.lock().pop_front();
+        let Some(pending_id) = pending_id else {
             HW_LOGO_WAIT.wait_for_event().await;
-            continue;
-        }
-
-        let Some(output) = crate::intel::hw_pic_wait_output_for_id(pending_id, 500).await else {
-            let snap = crate::intel::hw_pic_snapshot();
-            crate::log!(
-                "intel/display: hw-logo wait id={} pending={} outputs={} service={} timeout_ms=500\n",
-                pending_id,
-                snap.pending,
-                snap.outputs,
-                snap.service_started as u8,
-            );
             continue;
         };
 
-        HW_LOGO_PENDING_ID
-            .compare_exchange(pending_id, 0, Ordering::AcqRel, Ordering::Acquire)
-            .ok();
+        let Some(output) = crate::intel::hw_pic_wait_output_for_id(pending_id, 0).await else {
+            continue;
+        };
 
-        let (target_width, target_height) = if output.width != 0 && output.height != 0 {
+        let (visible_x, visible_y, visible_width, visible_height, target_width, target_height) =
+            if output.width != 0 && output.height != 0 {
             if let Some(surface) = *PRIMARY_SURFACE.lock() {
-                aspect_fit_size(
-                    output.width as usize,
-                    output.height as usize,
-                    surface.width as usize,
-                    surface.height as usize,
-                )
+                if JPG_CENTER_CROP
+                    && (output.width > surface.width || output.height > surface.height)
+                {
+                    let (crop_w, crop_h) = center_crop_size(
+                        output.width as usize,
+                        output.height as usize,
+                        surface.width as usize,
+                        surface.height as usize,
+                    );
+                    (
+                        output.width.saturating_sub(crop_w as u32) / 2,
+                        output.height.saturating_sub(crop_h as u32) / 2,
+                        crop_w as u32,
+                        crop_h as u32,
+                        surface.width as usize,
+                        surface.height as usize,
+                    )
+                } else {
+                    let (fit_w, fit_h) = aspect_fit_size(
+                        output.width as usize,
+                        output.height as usize,
+                        surface.width as usize,
+                        surface.height as usize,
+                    );
+                    (0, 0, output.width, output.height, fit_w, fit_h)
+                }
             } else {
-                (0, 0)
+                (0, 0, 0, 0, 0, 0)
             }
         } else {
-            (0, 0)
+            (0, 0, 0, 0, 0, 0)
         };
 
         let presented = if output.status == crate::intel::hw_pic::HwPicStatus::Ready
@@ -450,10 +475,10 @@ pub(crate) async fn hw_logo_present_task() {
                     src,
                     output.width,
                     output.height,
-                    0,
-                    0,
-                    output.width,
-                    output.height,
+                    visible_x,
+                    visible_y,
+                    visible_width,
+                    visible_height,
                     output.pitch_bytes,
                 ),
                 _ => false,
@@ -478,6 +503,10 @@ pub(crate) async fn hw_logo_present_task() {
             presented as u8,
             output.error_code,
         );
+
+        if presented {
+            Timer::after(EmbassyDuration::from_millis(PRIMARY_BOOT_LOGO_PRESENT_HOLD_MS)).await;
+        }
     }
 }
 
@@ -787,6 +816,19 @@ fn aspect_fit_size(
             .min(dst_width);
         (copy_w, copy_h)
     }
+}
+
+fn center_crop_size(
+    src_width: usize,
+    src_height: usize,
+    dst_width: usize,
+    dst_height: usize,
+) -> (usize, usize) {
+    if src_width == 0 || src_height == 0 || dst_width == 0 || dst_height == 0 {
+        return (0, 0);
+    }
+
+    (src_width.min(dst_width), src_height.min(dst_height))
 }
 
 pub(crate) fn present_imc3_surface_center(
