@@ -1338,12 +1338,8 @@ fn resolve_std_abi_import(name: &str) -> Option<usize> {
         "pthread_detach" => Some(crate::std_abi_shim::pthread_detach as *const () as usize),
         "pthread_self" => Some(crate::std_abi_shim::pthread_self as *const () as usize),
         "pthread_setname_np" => Some(crate::std_abi_shim::pthread_setname_np as *const () as usize),
-        "pthread_key_create" => {
-            Some(crate::std_abi_shim::pthread_key_create as *const () as usize)
-        }
-        "pthread_key_delete" => {
-            Some(crate::std_abi_shim::pthread_key_delete as *const () as usize)
-        }
+        "pthread_key_create" => Some(crate::std_abi_shim::pthread_key_create as *const () as usize),
+        "pthread_key_delete" => Some(crate::std_abi_shim::pthread_key_delete as *const () as usize),
         "pthread_setspecific" => {
             Some(crate::std_abi_shim::pthread_setspecific as *const () as usize)
         }
@@ -1475,8 +1471,7 @@ unsafe extern "C" fn portal_rust_alloc(size: usize, align: usize) -> *mut u8 {
     let alloc = || unsafe { crate::allocators::alloc_raw(layout) };
     let vm_id = portal_guest_alloc_vm_id();
     let ptr = if let Some(vm_id) = vm_id {
-        crate::allocators::with_hv_guest_alloc_domain(vm_id, alloc)
-            .unwrap_or(core::ptr::null_mut())
+        crate::allocators::with_hv_guest_alloc_domain(vm_id, alloc).unwrap_or(core::ptr::null_mut())
     } else {
         alloc()
     };
@@ -1565,25 +1560,47 @@ pub(crate) fn build_process_env(
     let app_home = String::from("/");
     vars.insert(String::from("PWD"), String::from("/"));
     vars.insert(String::from("HOME"), app_home.clone());
+    vars.insert(String::from("LANG"), String::from(crate::locale::current_language_code()));
+    vars.insert(String::from("LANGUAGE"), String::from(crate::locale::current_language_code()));
+    vars.insert(
+        String::from("TRUEOS_LANGUAGE"),
+        String::from(crate::locale::current_language_code()),
+    );
+    vars.insert(String::from("LC_ALL"), String::from(crate::locale::current_intl_locale_code()));
+    vars.insert(
+        String::from("LC_COLLATE"),
+        String::from(crate::locale::current_intl_locale_code()),
+    );
+    vars.insert(String::from("LC_CTYPE"), String::from(crate::locale::current_intl_locale_code()));
+    vars.insert(
+        String::from("LC_MESSAGES"),
+        String::from(crate::locale::current_intl_locale_code()),
+    );
+    vars.insert(
+        String::from("LC_MONETARY"),
+        String::from(crate::locale::current_intl_locale_code()),
+    );
+    vars.insert(
+        String::from("LC_NUMERIC"),
+        String::from(crate::locale::current_intl_locale_code()),
+    );
+    vars.insert(String::from("LC_TIME"), String::from(crate::locale::current_intl_locale_code()));
+    vars.insert(
+        String::from("TRUEOS_LOCALE"),
+        String::from(crate::locale::current_intl_locale_code()),
+    );
+    vars.insert(String::from("TZ"), String::from(crate::locale::current_timezone_name()));
+    vars.insert(
+        String::from("TRUEOS_TIMEZONE"),
+        String::from(crate::locale::current_timezone_name()),
+    );
     let hostname = crate::net::adapter::get_hostname();
     vars.insert(String::from("HOSTNAME"), hostname.clone());
     vars.insert(String::from("TRUEOS_HOSTNAME"), hostname);
-    vars.insert(
-        String::from("XDG_CONFIG_HOME"),
-        String::from("/config"),
-    );
-    vars.insert(
-        String::from("XDG_CACHE_HOME"),
-        String::from("/cache"),
-    );
-    vars.insert(
-        String::from("BAT_CONFIG_DIR"),
-        String::from("/config/bat"),
-    );
-    vars.insert(
-        String::from("BAT_CACHE_PATH"),
-        String::from("/cache/bat"),
-    );
+    vars.insert(String::from("XDG_CONFIG_HOME"), String::from("/config"));
+    vars.insert(String::from("XDG_CACHE_HOME"), String::from("/cache"));
+    vars.insert(String::from("BAT_CONFIG_DIR"), String::from("/config/bat"));
+    vars.insert(String::from("BAT_CACHE_PATH"), String::from("/cache/bat"));
     if safe_archive_stem(archive) == "bat" {
         vars.insert(
             String::from("BAT_OPTS"),
@@ -1600,10 +1617,7 @@ pub(crate) fn build_process_env(
         vars.insert(String::from("TRUEOS_APP_FS_ROOT"), String::from(root));
     }
     let app_common = app_fs_common_for_archive(archive);
-    vars.insert(
-        String::from("TRUEOS_APP_FS_COMMON"),
-        app_common.clone(),
-    );
+    vars.insert(String::from("TRUEOS_APP_FS_COMMON"), app_common.clone());
     vars.insert(String::from("TRUEOS_APP_COMMON"), String::from("/common"));
     vars
 }

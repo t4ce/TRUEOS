@@ -32,6 +32,7 @@ mod exceptions;
 #[path = "exceptions_disabled.rs"]
 mod exceptions;
 mod gfx;
+pub(crate) mod gboi;
 mod globalog;
 #[cfg(target_arch = "x86_64")]
 mod hv;
@@ -43,6 +44,7 @@ mod intel;
 #[path = "intel/intel_hda_probe.rs"]
 mod intel_hda_probe;
 mod iso9660;
+mod locale;
 mod limine;
 mod logflag;
 mod lumen;

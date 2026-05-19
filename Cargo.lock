@@ -62,6 +62,7 @@ dependencies = [
  "trueos-fs",
  "trueos-gfx-core",
  "trueos-io",
+ "trueos-locale",
  "trueos-lsd",
  "trueos-math",
  "trueos-qjs",

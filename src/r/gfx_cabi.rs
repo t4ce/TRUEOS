@@ -251,6 +251,28 @@ pub mod env {
     static CONTEXTS: [spin::Mutex<Vec<LaunchContext>>; CONTEXT_SLOTS] =
         [const { spin::Mutex::new(Vec::new()) }; CONTEXT_SLOTS];
 
+    fn insert_kernel_locale_env(vars: &mut BTreeMap<String, String>) {
+        for key in [
+            "LANG",
+            "LANGUAGE",
+            "TRUEOS_LANGUAGE",
+            "LC_ALL",
+            "LC_COLLATE",
+            "LC_CTYPE",
+            "LC_MESSAGES",
+            "LC_MONETARY",
+            "LC_NUMERIC",
+            "LC_TIME",
+            "TRUEOS_LOCALE",
+            "TZ",
+            "TRUEOS_TIMEZONE",
+        ] {
+            if let Some(value) = crate::locale::env_var(key) {
+                vars.entry(String::from(key)).or_insert(String::from(value));
+            }
+        }
+    }
+
     unsafe fn cstr_to_str<'a>(ptr: *const c_char) -> Option<&'a str> {
         if ptr.is_null() {
             return None;
@@ -283,6 +305,8 @@ pub mod env {
         app_fs_root: Option<String>,
         f: impl FnOnce() -> R,
     ) -> R {
+        let mut vars = vars;
+        insert_kernel_locale_env(&mut vars);
         {
             let mut stack = context_stack().lock();
             stack.push(LaunchContext {
@@ -316,7 +340,10 @@ pub mod env {
 
     pub fn var(key: &str) -> Option<String> {
         let stack = context_stack().lock();
-        stack.last().and_then(|ctx| ctx.vars.get(key)).cloned()
+        stack
+            .last()
+            .and_then(|ctx| ctx.vars.get(key).cloned())
+            .or_else(|| crate::locale::env_var(key).map(String::from))
     }
 
     pub(crate) unsafe extern "C" fn getenv(name: *const c_char) -> *mut c_char {

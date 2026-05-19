@@ -85,9 +85,13 @@ impl Cartridge {
             (vec![0u8; 8192], true)
         };
 
-        crate::serial_println!("[NES] ROM: mapper={} PRG={}KB CHR={}KB mirror={:?}",
-            mapper_id, prg_size / 1024, chr_rom.len() / 1024,
-            if mirror == Mirror::Vertical { "V" } else { "H" });
+        crate::log!(
+            "[NES] ROM: mapper={} PRG={}KB CHR={}KB mirror={:?}\n",
+            mapper_id,
+            prg_size / 1024,
+            chr_rom.len() / 1024,
+            if mirror == Mirror::Vertical { "V" } else { "H" }
+        );
 
         Some(Self {
             prg_rom,
