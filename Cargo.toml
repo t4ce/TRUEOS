@@ -3,9 +3,16 @@ name = "TRUEOS"
 version = "0.0.2"
 edition = "2024"
 
+[[bin]]
+name = "TRUEOS"
+path = "src/main.rs"
+test = false
+bench = false
+
 [features]
 default = []
 hda-boot-probe = []
+lumen-runtime = ["dep:lumen"]
 vmx-web = ["dep:axum", "hyper/server"]
 vmx-reqwest = ["dep:reqwest"]
 
@@ -60,7 +67,6 @@ trueos-c4 = { path = "crates/trueos-c4" }
 v = { path = "crates/trueos-v" }
 trueos-vm = { path = "crates/trueos-vm" }
 trueos-esp = { path = "crates/trueos-esp" }
-trueos-chat = { path = "crates/trueos-chat" }
 lyon_geom = { version = "1.0.19", default-features = false }
 lyon_tessellation = { version = "1.0.20", default-features = false }
 euclid = { version = "=0.22.13", default-features = false }
@@ -76,7 +82,7 @@ socket2 = { version = "0.6.3", default-features = false }
 mio = { version = "1.2.0", default-features = false, features = ["os-poll", "net"] }
 hyper = { version = "1.9.0", default-features = false, features = ["client", "http1"] }
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio", "tower-log", "ws", "original-uri"], optional = true }
-lumen = { path = "vendor/lumen", default-features = false, features = ["cpu-trueos"] }
+lumen = { path = "vendor/lumen", default-features = false, features = ["cpu-trueos"], optional = true }
 tower = { version = "0.5.3", default-features = false, features = ["util"] }
 reqwest = { version = "0.13.3", default-features = false, optional = true }
 

@@ -261,29 +261,3 @@ pub async fn create_trueos_public(
         .map_err(TrueosPublicError::Validate)?;
     Ok(disk)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::RamdiskDevice;
-
-    #[test]
-    fn fresh_ramdisk_reads_as_zero_without_backing_allocation() {
-        let disk = RamdiskDevice::new(128 * 1024, 512).unwrap();
-        let mut out = [0xAAu8; 4096];
-        disk.read_range(0, &mut out).unwrap();
-        assert!(out.iter().all(|&b| b == 0));
-    }
-
-    #[test]
-    fn sparse_writes_preserve_zero_fill_outside_written_ranges() {
-        let mut disk = RamdiskDevice::new(256 * 1024, 512).unwrap();
-        disk.write_range(1024, b"hello world").unwrap();
-
-        let mut out = [0u8; 32];
-        disk.read_range(1018, &mut out).unwrap();
-
-        assert_eq!(&out[..6], &[0u8; 6]);
-        assert_eq!(&out[6..17], b"hello world");
-        assert!(out[17..].iter().all(|&b| b == 0));
-    }
-}

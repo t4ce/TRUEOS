@@ -57,7 +57,6 @@ dependencies = [
  "tokio",
  "tower",
  "trueos-c4",
- "trueos-chat",
  "trueos-esp",
  "trueos-eu",
  "trueos-fs",
@@ -1618,7 +1617,6 @@ dependencies = [
  "rand_distr",
  "serde",
  "serde_json",
- "trueos-io",
 ]
 
 [[package]]
@@ -2876,14 +2874,6 @@ name = "trueos-c4"
 version = "0.1.0"
 dependencies = [
  "trueos-eu",
-]
-
-[[package]]
-name = "trueos-chat"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
 ]
 
 [[package]]
