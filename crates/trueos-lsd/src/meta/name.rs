@@ -129,7 +129,7 @@ impl Name {
                     Err(err) => {
                         // If the error is NotFound, it just means the file is a broken symlink.
                         // That is not an error, and the user is already warned that the symlink is broken by the colors.
-                        if err.kind() != trueos_io::ErrorKind::NotFound {
+                        if err.kind() != std::io::ErrorKind::NotFound {
                             print_error!("{}: {}", name, err);
                         }
                         name
