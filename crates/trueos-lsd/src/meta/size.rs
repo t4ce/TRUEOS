@@ -1,6 +1,6 @@
+use super::metadata::Metadata;
 use crate::color::{ColoredString, Colors, Elem};
 use crate::flags::{Flags, SizeFlag};
-use std::fs::Metadata;
 
 const KB: u64 = 1024;
 const MB: u64 = 1024_u64.pow(2);
@@ -149,7 +149,7 @@ impl Size {
 
 #[cfg(test)]
 mod test {
-    use super::{GB, KB, MB, Size, TB};
+    use super::{Size, GB, KB, MB, TB};
     use crate::color::{Colors, ThemeOption};
     use crate::flags::{Flags, SizeFlag};
 

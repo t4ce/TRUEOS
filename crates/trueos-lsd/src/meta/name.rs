@@ -167,10 +167,7 @@ impl Name {
             DisplayOption::None => format!(
                 "{}{}",
                 icons.get(self),
-                self.hyperlink(
-                    self.escape(&self.path.to_string_lossy(), literal),
-                    hyperlink
-                )
+                self.hyperlink(self.escape(&self.path.to_string_lossy(), literal), hyperlink)
             ),
         };
 
@@ -228,15 +225,15 @@ mod test {
     #[cfg(unix)]
     use crate::meta::Permissions;
     use crate::url::Url;
-    use crossterm::style::{Color, Stylize};
     use core::cmp::Ordering;
+    use crossterm::style::{Color, Stylize};
     use std::fs::{self, File};
     #[cfg(unix)]
     use std::os::unix::fs::symlink;
-    use tokio::path::{Path, PathBuf};
     #[cfg(unix)]
     use std::process::Command;
     use tempfile::tempdir;
+    use tokio::path::{Path, PathBuf};
 
     #[test]
     #[cfg(unix)] // Windows uses different default permissions
@@ -255,13 +252,7 @@ mod test {
 
         assert_eq!(
             " file.txt".to_string().with(Color::AnsiValue(184)),
-            name.render(
-                &colors,
-                &icons,
-                &DisplayOption::FileName,
-                HyperlinkOption::Never,
-                true,
-            )
+            name.render(&colors, &icons, &DisplayOption::FileName, HyperlinkOption::Never, true,)
         );
     }
 
@@ -313,13 +304,7 @@ mod test {
 
         assert_eq!(
             " target.tmp".to_string().with(Color::AnsiValue(44)),
-            name.render(
-                &colors,
-                icons,
-                &DisplayOption::FileName,
-                HyperlinkOption::Never,
-                true
-            )
+            name.render(&colors, icons, &DisplayOption::FileName, HyperlinkOption::Never, true)
         );
     }
 
@@ -347,13 +332,7 @@ mod test {
 
         assert_eq!(
             " target.d".to_string().with(Color::AnsiValue(44)),
-            name.render(
-                &colors,
-                &icons,
-                &DisplayOption::FileName,
-                HyperlinkOption::Never,
-                true
-            )
+            name.render(&colors, &icons, &DisplayOption::FileName, HyperlinkOption::Never, true)
         );
     }
 
@@ -379,13 +358,7 @@ mod test {
 
         assert_eq!(
             "󰈲 pipe.tmp".to_string().with(Color::AnsiValue(184)),
-            name.render(
-                &colors,
-                icons,
-                &DisplayOption::FileName,
-                HyperlinkOption::Never,
-                true
-            )
+            name.render(&colors, icons, &DisplayOption::FileName, HyperlinkOption::Never, true)
         );
     }
 
@@ -404,13 +377,7 @@ mod test {
         assert_eq!(
             "file.txt",
             meta.name
-                .render(
-                    &colors,
-                    &icons,
-                    &DisplayOption::FileName,
-                    HyperlinkOption::Never,
-                    true
-                )
+                .render(&colors, &icons, &DisplayOption::FileName, HyperlinkOption::Never, true)
                 .to_string()
         );
     }
@@ -429,21 +396,13 @@ mod test {
 
         let real_path = std::fs::canonicalize(&file_path).expect("canonicalize");
         let expected_url = Url::from_file_path(real_path).expect("absolute path");
-        let expected_text = format!(
-            "\x1B]8;;{}\x1B\x5C{}\x1B]8;;\x1B\x5C",
-            expected_url, "file.txt"
-        );
+        let expected_text =
+            format!("\x1B]8;;{}\x1B\x5C{}\x1B]8;;\x1B\x5C", expected_url, "file.txt");
 
         assert_eq!(
             expected_text,
             meta.name
-                .render(
-                    &colors,
-                    &icons,
-                    &DisplayOption::FileName,
-                    HyperlinkOption::Always,
-                    true
-                )
+                .render(&colors, &icons, &DisplayOption::FileName, HyperlinkOption::Always, true)
                 .to_string()
         );
     }
@@ -604,10 +563,7 @@ mod test {
         );
         let base_path = Path::new("/home/parent2");
 
-        assert_eq!(
-            PathBuf::from("../parent1/child"),
-            name.relative_path(base_path),
-        )
+        assert_eq!(PathBuf::from("../parent1/child"), name.relative_path(base_path),)
     }
 
     #[test]
@@ -658,13 +614,7 @@ mod test {
 
         assert_eq!(
             " file\\ttab.txt".to_string().with(Color::AnsiValue(184)),
-            name.render(
-                &colors,
-                &icons,
-                &DisplayOption::FileName,
-                HyperlinkOption::Never,
-                false,
-            )
+            name.render(&colors, &icons, &DisplayOption::FileName, HyperlinkOption::Never, false,)
         );
 
         let file_path = tmp_dir.path().join("a$a.txt");
@@ -677,13 +627,7 @@ mod test {
 
         assert_eq!(
             " \'a$a.txt\'".to_string().with(Color::AnsiValue(184)),
-            name.render(
-                &colors,
-                &icons,
-                &DisplayOption::FileName,
-                HyperlinkOption::Never,
-                false,
-            )
+            name.render(&colors, &icons, &DisplayOption::FileName, HyperlinkOption::Never, false,)
         );
 
         let file_path = tmp_dir.path().join(PathBuf::from("\\.txt"));
@@ -696,13 +640,7 @@ mod test {
 
         assert_eq!(
             " \'\\.txt\'".to_string().with(Color::AnsiValue(184)),
-            name.render(
-                &colors,
-                &icons,
-                &DisplayOption::FileName,
-                HyperlinkOption::Never,
-                false,
-            )
+            name.render(&colors, &icons, &DisplayOption::FileName, HyperlinkOption::Never, false,)
         );
 
         let file_path = tmp_dir.path().join("\"\'.txt");
@@ -717,13 +655,7 @@ mod test {
             " \'\"\'\\\'\'.txt\'"
                 .to_string()
                 .with(Color::AnsiValue(184)),
-            name.render(
-                &colors,
-                &icons,
-                &DisplayOption::FileName,
-                HyperlinkOption::Never,
-                false,
-            )
+            name.render(&colors, &icons, &DisplayOption::FileName, HyperlinkOption::Never, false,)
         );
 
         let file_path = tmp_dir.path().join("file\nnewline.txt");
@@ -738,13 +670,7 @@ mod test {
             " file\\nnewline.txt"
                 .to_string()
                 .with(Color::AnsiValue(184)),
-            name.render(
-                &colors,
-                &icons,
-                &DisplayOption::FileName,
-                HyperlinkOption::Never,
-                false,
-            )
+            name.render(&colors, &icons, &DisplayOption::FileName, HyperlinkOption::Never, false,)
         );
     }
 }

@@ -1231,10 +1231,9 @@ static TASKS: [TaskSpec; 68] = [
         &HW_PIC_SERVICE_STARTED,
         spawn_hw_pic_service,
     ),
-    TaskSpec::enabled_gated(
+    TaskSpec::disabled(
         "hw_vid_probe_task",
         0,
-        intel_media_engine_gate,
         &HW_VID_PROBE_STARTED,
         spawn_hw_vid_probe_task,
     ),

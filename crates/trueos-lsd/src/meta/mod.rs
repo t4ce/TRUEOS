@@ -6,17 +6,13 @@ mod indicator;
 mod inode;
 mod links;
 mod locale;
+mod metadata;
 pub mod name;
 pub mod owner;
 mod permissions;
 mod permissions_or_attributes;
 mod size;
 mod symlink;
-
-#[cfg(windows)]
-mod windows_attributes;
-#[cfg(windows)]
-mod windows_utils;
 
 pub use self::access_control::AccessControl;
 pub use self::date::Date;
@@ -33,14 +29,15 @@ pub use self::size::Size;
 pub use self::symlink::SymLink;
 
 use crate::flags::{Display, Flags, Layout, PermissionFlag};
-use crate::{ExitCode, print_error};
+use crate::{print_error, ExitCode};
 
 use crate::git::GitCache;
-use trueos_io::{self, Error, ErrorKind};
 use tokio::path::{Component, Path, PathBuf};
+use trueos_io::{self, Error, ErrorKind};
+use v::vfs as api;
 
-#[cfg(windows)]
-use self::windows_attributes::get_attributes;
+use self::metadata::Metadata;
+
 #[derive(Clone, Debug)]
 pub struct Meta {
     pub name: Name,
@@ -128,15 +125,8 @@ impl Meta {
                 continue;
             }
 
-            #[cfg(windows)]
-            let is_hidden =
-                name.to_string_lossy().starts_with('.') || windows_utils::is_path_hidden(&path);
-            #[cfg(not(windows))]
             let is_hidden = name.to_string_lossy().starts_with('.');
 
-            #[cfg(windows)]
-            let is_system = windows_utils::is_path_system(&path);
-            #[cfg(not(windows))]
             let is_system = false;
 
             match flags.display {
@@ -160,7 +150,7 @@ impl Meta {
             // skip files for --tree -d
             if flags.layout == Layout::Tree
                 && flags.display == Display::DirectoryOnly
-                && !entry.file_type()?.is_dir()
+                && !entry_meta.file_type.is_dirlike()
             {
                 continue;
             }
@@ -180,7 +170,7 @@ impl Meta {
                 };
             }
 
-            let is_directory = entry.file_type()?.is_dir();
+            let is_directory = entry_meta.file_type.is_dirlike();
             entry_meta.git_status =
                 cache.and_then(|cache| cache.get(&entry_meta.path, is_directory));
             content.push(entry_meta);
@@ -221,7 +211,7 @@ impl Meta {
     }
 
     fn calculate_total_file_size(path: &Path) -> u64 {
-        let metadata = path.symlink_metadata();
+        let metadata = stat_path(path);
         let metadata = match metadata {
             Ok(meta) => meta,
             Err(err) => {
@@ -229,10 +219,9 @@ impl Meta {
                 return 0;
             }
         };
-        let file_type = metadata.file_type();
-        if file_type.is_file() {
+        if metadata.is_file() {
             metadata.len()
-        } else if file_type.is_dir() {
+        } else if metadata.is_dir() {
             let mut size = metadata.len();
 
             let entries = match path.read_dir() {
@@ -263,22 +252,20 @@ impl Meta {
         dereference: bool,
         permission_flag: PermissionFlag,
     ) -> io::Result<Self> {
-        let mut metadata = path.symlink_metadata()?;
+        let metadata = stat_path(path)?;
         let mut symlink_meta = None;
         let mut broken_link = false;
-        if metadata.file_type().is_symlink() {
-            match path.metadata() {
-                Ok(m) => {
-                    if dereference {
-                        metadata = m;
-                    } else {
-                        symlink_meta = Some(m);
-                    }
-                }
-                Err(e) => {
-                    // This case, it is definitely a symlink or
-                    // path.symlink_metadata would have errored out
-                    if dereference {
+        if metadata.is_symlink() {
+            if dereference {
+                broken_link = true;
+                eprintln!(
+                    "lsd: {}: symbolic links are not exposed by TRUEOS metadata yet",
+                    path.to_str().unwrap_or("")
+                );
+            } else {
+                match stat_path(path) {
+                    Ok(m) => symlink_meta = Some(m),
+                    Err(e) => {
                         broken_link = true;
                         eprintln!("lsd: {}: {}", path.to_str().unwrap_or(""), e);
                     }
@@ -286,51 +273,14 @@ impl Meta {
             }
         }
 
-        #[cfg(unix)]
         let (owner, permissions) = match permission_flag {
             PermissionFlag::Disable => (None, None),
-            _ => (
-                Some(Owner::from(&metadata)),
-                Some(Permissions::from(&metadata)),
-            ),
+            _ => (Some(Owner::from(&metadata)), Some(Permissions::from(&metadata))),
         };
-        #[cfg(unix)]
         let permissions_or_attributes = permissions.map(PermissionsOrAttributes::Permissions);
 
-        #[cfg(windows)]
-        let (owner, permissions_or_attributes) = match permission_flag {
-            PermissionFlag::Disable => (None, None),
-            PermissionFlag::Attributes => (
-                None,
-                Some(PermissionsOrAttributes::WindowsAttributes(get_attributes(
-                    &metadata,
-                ))),
-            ),
-            _ => match windows_utils::get_file_data(path) {
-                Ok((owner, permissions)) => (
-                    Some(owner),
-                    Some(PermissionsOrAttributes::Permissions(permissions)),
-                ),
-                Err(e) => {
-                    eprintln!(
-                        "lsd: {}: {}(Hint: Consider using `--permission disable`.)",
-                        path.to_str().unwrap_or(""),
-                        e
-                    );
-                    (None, None)
-                }
-            },
-        };
-
-        #[cfg(not(windows))]
-        let file_type = FileType::new(
-            &metadata,
-            symlink_meta.as_ref(),
-            &permissions.unwrap_or_default(),
-        );
-
-        #[cfg(windows)]
-        let file_type = FileType::new(&metadata, symlink_meta.as_ref(), path);
+        let file_type =
+            FileType::new(&metadata, symlink_meta.as_ref(), &permissions.unwrap_or_default());
 
         let name = Name::new(path, file_type);
 
@@ -365,6 +315,12 @@ impl Meta {
             git_status: None,
         })
     }
+}
+
+fn stat_path(path: &Path) -> io::Result<Metadata> {
+    api::stat(path.to_string_lossy().as_bytes())
+        .map(Metadata::from_stat)
+        .map_err(trueos_io::status_error)
 }
 
 #[cfg(test)]
