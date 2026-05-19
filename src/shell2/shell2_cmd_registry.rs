@@ -23,6 +23,7 @@ const TOOL_JSON_C4: &str = r#"{"type":"object","properties":{"mode":{"type":"str
 const TOOL_JSON_ETC: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["ample","go","go2","insane"],"description":"etc subcommand to run."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_FILE: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","format","ramdisc"],"description":"file action to run."},"disk_id":{"type":"string","description":"Disk id string for action=format."},"size":{"type":"string","description":"Optional ramdisc size like 512MB or 1GiB for action=ramdisc."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_HV: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["status","run","attach","detach","pause","stop","preserve"],"description":"HV subcommand to run."},"id":{"type":"integer","minimum":1,"description":"Blueprint archive id for run, or VM id for attach/detach/pause/stop/preserve."},"args":{"type":"array","items":{"type":"string"},"description":"CLI arguments passed to the selected blueprint when subcommand=run."}},"required":["subcommand"],"additionalProperties":false}"#;
+const TOOL_JSON_KIBI: &str = r#"{"type":"object","properties":{"slot":{"type":"string","description":"Optional matrix slot like §ed."},"path":{"type":"string","description":"Optional TRUEOSFS file path to open."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_NET: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["icmp","irc","nic","hostname"],"description":"net subcommand to run."},"target":{"type":"string","description":"Target host for net icmp."},"selector":{"type":"string","description":"Optional NIC selector like index, vid:pid, or bb:dd.f."},"host":{"type":"string","description":"Host for net irc."},"channel":{"type":"string","description":"Optional channel like #trueos for net irc."},"name":{"type":"string","description":"Optional hostname for net hostname."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_SET: &str = r#"{"type":"object","properties":{"width":{"type":"integer","minimum":50,"maximum":500,"description":"Shell line width."}},"required":["width"],"additionalProperties":false}"#;
 const TOOL_JSON_SHADER: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["list","compile","demo","now"],"description":"Shader compiler service action."},"path":{"type":"string","description":"Optional /shader source path for compile or now."}},"required":["subcommand"],"additionalProperties":false}"#;
@@ -48,6 +49,10 @@ fn dispatch_hv(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) ->
 fn dispatch_install(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
     super::cmds::install::try_parse(spawner, io, &mut args)
+}
+
+fn dispatch_kibi(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::kibi::try_parse(io, rest)
 }
 
 fn dispatch_set(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -170,6 +175,14 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         handler: dispatch_install,
         tool_description: None,
         tool_parameters_json: None,
+    },
+    BuiltinShell2CmdEntry {
+        name: "kibi",
+        mode: "cmd",
+        color: Some((60, 183, 161)),
+        handler: dispatch_kibi,
+        tool_description: Some("Open the kibi text editor, optionally in a named matrix slot."),
+        tool_parameters_json: Some(TOOL_JSON_KIBI),
     },
     BuiltinShell2CmdEntry {
         name: "net",

@@ -335,6 +335,22 @@ pub mod env {
         stack.last().and_then(|ctx| ctx.console_target.clone())
     }
 
+    pub(crate) fn retarget_console_slot(requested: &str) -> bool {
+        let mut stack = context_stack().lock();
+        let Some(ctx) = stack.last_mut() else {
+            return false;
+        };
+        let next_target = match ctx.console_target.as_ref() {
+            Some(target) => crate::shell2::switch_matrix_target_slot(target, requested),
+            None => crate::shell2::matrix_target_for_slot_name(
+                crate::shell2::OUTPUT_UART1_MASK,
+                requested,
+            ),
+        };
+        ctx.console_target = Some(next_target);
+        true
+    }
+
     fn normalize_app_path(path: &str, allow_empty: bool) -> Option<String> {
         crate::r::path::FsPath::parse(path, allow_empty)
             .ok()
@@ -700,6 +716,25 @@ pub mod cabi {
         crate::shell2::uart1_com1::read_byte()
             .map(i32::from)
             .unwrap_or(-1)
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_shell_attached_retarget_slot(
+        slot_ptr: *const u8,
+        slot_len: usize,
+    ) -> i32 {
+        if slot_ptr.is_null() || slot_len == 0 {
+            return -1;
+        }
+        let slot = core::slice::from_raw_parts(slot_ptr, slot_len);
+        let Ok(slot) = core::str::from_utf8(slot) else {
+            return -1;
+        };
+        if super::env::retarget_console_slot(slot) {
+            0
+        } else {
+            -1
+        }
     }
 
     fn copy_cabi_text(bytes: &[u8], out_ptr: *mut u8, out_cap: usize) -> isize {
