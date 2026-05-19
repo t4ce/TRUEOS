@@ -1,7 +1,6 @@
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::str::SplitWhitespace;
 
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
@@ -13,7 +12,6 @@ use super::super::{
     print_shell_line, set_matrix_target_active,
 };
 use super::tlb_helper::TlbTable;
-use crate::shell2::shell2_cmd::ParseOutcome;
 
 const TABLE_HEADERS: &[&str; 3] = &["id", "module", "source"];
 const BLUEPRINT_READINESS_TIMEOUT: EmbassyDuration = EmbassyDuration::from_secs(30);
@@ -76,10 +74,6 @@ enum ArchiveSource {
 struct ArchiveEntry {
     archive: String,
     source: ArchiveSource,
-}
-
-fn print_usage(io: &'static dyn ShellBackend2) {
-    print_shell_line(io, "apps: usage `start` or `start <id> [args...]`");
 }
 
 fn embedded_archive_name(cmdline: &[u8]) -> Option<String> {
@@ -921,47 +915,4 @@ pub(crate) fn submit_archive_id(
     };
     submit_archive_entry(io, archive, app_args);
     true
-}
-
-pub(crate) fn try_parse(
-    spawner: &Spawner,
-    io: &'static dyn ShellBackend2,
-    args: &mut SplitWhitespace<'_>,
-) -> ParseOutcome {
-    let _ = spawner;
-    let archives = match archive_entries() {
-        Ok(archives) => archives,
-        Err(err) => {
-            print_shell_line(io, alloc::format!("apps: {}", err).as_str());
-            return ParseOutcome::Handled;
-        }
-    };
-
-    let Some(id_text) = args.next() else {
-        if archives.is_empty() {
-            print_shell_line(io, "apps: no .bp or .vm modules available");
-            return ParseOutcome::Handled;
-        }
-        print_archive_table(io, archives.as_slice());
-        return ParseOutcome::Handled;
-    };
-
-    let archive_index = match id_text.parse::<usize>() {
-        Ok(id) if id > 0 => id - 1,
-        _ => {
-            print_usage(io);
-            return ParseOutcome::Handled;
-        }
-    };
-
-    let Some(archive) = archives.get(archive_index) else {
-        print_shell_line(io, "apps: unknown archive id");
-        print_archive_table(io, archives.as_slice());
-        return ParseOutcome::Handled;
-    };
-
-    let app_args = args.map(String::from).collect::<Vec<_>>();
-    submit_archive_entry(io, archive, app_args);
-
-    ParseOutcome::Handled
 }
