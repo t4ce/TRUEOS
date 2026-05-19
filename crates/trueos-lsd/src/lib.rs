@@ -12,11 +12,14 @@ use v::vfs as api;
 use v::vio::kfs;
 
 const MAX_ENTRIES: usize = 4096;
+const DEFAULT_GRID_WIDTH: usize = 96;
+const MIN_CELL_WIDTH: usize = 18;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Options {
     long: bool,
     tree: bool,
+    width: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -25,6 +28,7 @@ struct Entry {
     name: String,
     kind: kfs::FsEntryKind,
     depth: usize,
+    len: Option<u64>,
 }
 
 impl Options {
@@ -32,6 +36,7 @@ impl Options {
         Self {
             long: false,
             tree: false,
+            width: DEFAULT_GRID_WIDTH,
         }
     }
 }
@@ -47,14 +52,6 @@ fn normalize_path(path: &str) -> String {
         return String::new();
     }
     trimmed.trim_matches('/').to_string()
-}
-
-fn entry_kind_text(kind: kfs::FsEntryKind) -> &'static str {
-    match kind {
-        kfs::FsEntryKind::File => "file",
-        kfs::FsEntryKind::Dir => "dir ",
-        kfs::FsEntryKind::Other => "node",
-    }
 }
 
 fn entry_size(path: &str) -> Option<u64> {
@@ -84,6 +81,10 @@ fn path_depth(path: &str) -> usize {
         .count()
 }
 
+fn is_directory_marker(name: &str) -> bool {
+    name == ".keep"
+}
+
 fn immediate_entries(prefix: &str) -> io::Result<Vec<Entry>> {
     let snapshot = kfs::tree(MAX_ENTRIES).map_err(|rc| {
         io::Error::new(trueos_io::status_kind(rc), "TRUEOSFS index unavailable for lsd")
@@ -106,6 +107,9 @@ fn immediate_entries(prefix: &str) -> io::Result<Vec<Entry>> {
         let Some(name) = rest.split('/').next().filter(|name| !name.is_empty()) else {
             continue;
         };
+        if is_directory_marker(name) {
+            continue;
+        }
 
         let path = join_path(prefix, name);
         let kind = if rest.contains('/') {
@@ -127,10 +131,17 @@ fn immediate_entries(prefix: &str) -> io::Result<Vec<Entry>> {
                 name: String::from(name),
                 kind,
                 depth,
+                len: None,
             });
     }
 
-    Ok(children.into_values().collect())
+    Ok(children
+        .into_values()
+        .map(|mut entry| {
+            entry.len = entry_size(entry.path.as_str());
+            entry
+        })
+        .collect())
 }
 
 fn tree_entries(prefix: &str) -> io::Result<Vec<Entry>> {
@@ -152,6 +163,9 @@ fn tree_entries(prefix: &str) -> io::Result<Vec<Entry>> {
             }
 
             let is_leaf = current == raw.path;
+            if is_leaf && is_directory_marker(segment) {
+                continue;
+            }
             let kind = if is_leaf {
                 raw.kind
             } else {
@@ -170,34 +184,174 @@ fn tree_entries(prefix: &str) -> io::Result<Vec<Entry>> {
                     name: String::from(segment),
                     kind,
                     depth,
+                    len: None,
                 });
         }
     }
 
-    Ok(entries.into_values().collect())
+    Ok(entries
+        .into_values()
+        .map(|mut entry| {
+            entry.len = entry_size(entry.path.as_str());
+            entry
+        })
+        .collect())
 }
 
-fn render_entry<W>(entry: &Entry, options: Options, base_depth: usize, write_line: &mut W)
-where
-    W: FnMut(&str),
-{
-    let depth = entry.depth.saturating_sub(base_depth.saturating_add(1));
-    let indent = "  ".repeat(depth);
+fn colorize(text: &str, kind: kfs::FsEntryKind) -> String {
+    match kind {
+        kfs::FsEntryKind::Dir => format!("\x1b[1;38;5;33m{text}\x1b[0m"),
+        kfs::FsEntryKind::File => format!("\x1b[38;5;230m{text}\x1b[0m"),
+        kfs::FsEntryKind::Other => format!("\x1b[38;5;245m{text}\x1b[0m"),
+    }
+}
+
+fn display_name(entry: &Entry) -> String {
     let suffix = if matches!(entry.kind, kfs::FsEntryKind::Dir) {
         "/"
     } else {
         ""
     };
+    format!("{}{suffix}", entry.name)
+}
 
-    if options.long {
-        let size = entry_size(entry.path.as_str())
-            .map(|size| format!("{size:>8}"))
-            .unwrap_or_else(|| String::from("       -"));
-        write_line(
-            format!("{}{} {}{}", entry_kind_text(entry.kind), size, indent, entry.name).as_str(),
-        );
+fn pad_visible(mut text: String, visible_width: usize, target_width: usize) -> String {
+    if visible_width < target_width {
+        text.push_str(" ".repeat(target_width - visible_width).as_str());
+    }
+    text
+}
+
+fn human_size(len: Option<u64>, is_dir: bool) -> String {
+    if is_dir {
+        return String::from("-");
+    }
+    let Some(bytes) = len else {
+        return String::from("?");
+    };
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+    if bytes < KB {
+        format!("{bytes} B")
+    } else if bytes < MB {
+        format!("{} K", (bytes + KB / 2) / KB)
+    } else if bytes < GB {
+        format!("{} M", (bytes + MB / 2) / MB)
     } else {
-        write_line(format!("{indent}{}{suffix}", entry.name).as_str());
+        format!("{} G", (bytes + GB / 2) / GB)
+    }
+}
+
+fn authority(path: &str) -> (&'static str, &'static str) {
+    if path == "apps/common" || path.starts_with("apps/common/") {
+        ("common", "vmx")
+    } else if path.starts_with("apps/") {
+        ("vm", "vmx")
+    } else {
+        ("kernel", "system")
+    }
+}
+
+fn permissions(entry: &Entry) -> &'static str {
+    match entry.kind {
+        kfs::FsEntryKind::Dir => "drwxrwx---",
+        kfs::FsEntryKind::File => "-rw-rw----",
+        kfs::FsEntryKind::Other => "?---------",
+    }
+}
+
+fn render_grid_entry(entry: &Entry, cell_width: usize) -> String {
+    let name = display_name(entry);
+    let visible = name.len();
+    pad_visible(colorize(name.as_str(), entry.kind), visible, cell_width)
+}
+
+fn render_grid<W>(entries: &[Entry], width: usize, write_line: &mut W)
+where
+    W: FnMut(&str),
+{
+    let max_name = entries
+        .iter()
+        .map(|entry| display_name(entry).len())
+        .max()
+        .unwrap_or(MIN_CELL_WIDTH);
+    let cell_width = core::cmp::max(max_name.saturating_add(3), MIN_CELL_WIDTH);
+    let columns = core::cmp::max(1, width.max(MIN_CELL_WIDTH) / cell_width);
+
+    for row in entries.chunks(columns) {
+        let mut line = String::new();
+        for entry in row {
+            line.push_str(render_grid_entry(entry, cell_width).as_str());
+        }
+        write_line(line.trim_end());
+    }
+}
+
+fn render_long<W>(entries: &[Entry], write_line: &mut W)
+where
+    W: FnMut(&str),
+{
+    for entry in entries {
+        render_long_entry(entry, String::new(), write_line);
+    }
+}
+
+fn render_long_entry<W>(entry: &Entry, name_prefix: String, write_line: &mut W)
+where
+    W: FnMut(&str),
+{
+    let (owner, group) = authority(entry.path.as_str());
+    let size = human_size(entry.len, matches!(entry.kind, kfs::FsEntryKind::Dir));
+    let name = colorize(format!("{name_prefix}{}", display_name(entry)).as_str(), entry.kind);
+    write_line(
+        format!(
+            "{} {:<7} {:<7} {:>7} {:>10} {}",
+            permissions(entry),
+            owner,
+            group,
+            size,
+            "-",
+            name
+        )
+        .as_str(),
+    );
+}
+
+fn render_tree<W>(entries: &[Entry], base_depth: usize, write_line: &mut W)
+where
+    W: FnMut(&str),
+{
+    for entry in entries {
+        let depth = entry.depth.saturating_sub(base_depth.saturating_add(1));
+        let indent = "  ".repeat(depth);
+        let name = colorize(display_name(entry).as_str(), entry.kind);
+        write_line(format!("{indent}{name}").as_str());
+    }
+}
+
+fn render_long_tree<W>(entries: &[Entry], base_depth: usize, write_line: &mut W)
+where
+    W: FnMut(&str),
+{
+    for entry in entries {
+        let depth = entry.depth.saturating_sub(base_depth.saturating_add(1));
+        render_long_entry(entry, "  ".repeat(depth), write_line);
+    }
+}
+
+fn render_entries<W>(entries: &[Entry], options: Options, base_depth: usize, write_line: &mut W)
+where
+    W: FnMut(&str),
+{
+    if options.tree && options.long {
+        render_long_tree(entries, base_depth, write_line);
+    } else if options.tree {
+        render_tree(entries, base_depth, write_line);
+    } else if options.long {
+        render_long(entries, write_line);
+    } else {
+        render_grid(entries, options.width, write_line);
     }
 }
 
@@ -210,11 +364,14 @@ where
     if !normalized.is_empty() {
         match api::stat(normalized.as_bytes()) {
             Ok(stat) if matches!(stat.kind, api::FsNodeKind::File) => {
-                if options.long {
-                    write_line(format!("file{size:>8} {}", normalized, size = stat.len).as_str());
-                } else {
-                    write_line(normalized.as_str());
-                }
+                let entry = Entry {
+                    path: normalized.clone(),
+                    name: normalized.clone(),
+                    kind: kfs::FsEntryKind::File,
+                    depth: path_depth(normalized.as_str()),
+                    len: Some(stat.len),
+                };
+                render_entries(&[entry], options, 0, write_line);
                 return Ok(());
             }
             Ok(_) => {}
@@ -239,10 +396,7 @@ where
     }
 
     let base_depth = path_depth(normalized.as_str());
-
-    for entry in entries.iter() {
-        render_entry(entry, options, base_depth, write_line);
-    }
+    render_entries(entries.as_slice(), options, base_depth, write_line);
 
     Ok(())
 }
@@ -252,15 +406,38 @@ where
     W: FnMut(&str),
 {
     write_line("lsd: usage `lsd [path ...]`");
-    write_line("     flags: -l/--long  -R/--tree  --version  help");
+    write_line("     flags: -l/--long  -R/--tree  -lR/-Rl  --version  help");
     write_line("     paths: / and . both mean the TRUEOSFS root");
 }
 
-pub fn run_with_writer<W>(args: &[String], mut write_line: W) -> io::Result<()>
+fn apply_short_flags(flags: &str, options: &mut Options) -> bool {
+    for ch in flags.chars() {
+        match ch {
+            'l' => options.long = true,
+            'R' => options.tree = true,
+            _ => return false,
+        }
+    }
+    true
+}
+
+pub fn run_with_writer<W>(args: &[String], write_line: W) -> io::Result<()>
+where
+    W: FnMut(&str),
+{
+    run_with_writer_and_width(args, DEFAULT_GRID_WIDTH, write_line)
+}
+
+pub fn run_with_writer_and_width<W>(
+    args: &[String],
+    width: usize,
+    mut write_line: W,
+) -> io::Result<()>
 where
     W: FnMut(&str),
 {
     let mut options = Options::new();
+    options.width = width;
     let mut paths = Vec::new();
 
     for arg in args.iter().skip(1) {
@@ -275,6 +452,7 @@ where
             }
             "-l" | "--long" => options.long = true,
             "-R" | "--tree" => options.tree = true,
+            raw if raw.starts_with('-') && apply_short_flags(&raw[1..], &mut options) => {}
             raw if raw.starts_with('-') => {
                 print_usage(&mut write_line);
                 return Err(io::Error::new(ErrorKind::InvalidInput, "unsupported lsd flag"));

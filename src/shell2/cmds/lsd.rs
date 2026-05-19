@@ -3,17 +3,25 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use super::super::{ShellBackend2, matrix_target_for_backend, print_shell_line};
+use super::super::{
+    ShellBackend2, line_width_for_backend, matrix_target_for_backend, print_native_line,
+    print_shell_line,
+};
 use crate::shell2::shell2_cmd::ParseOutcome;
 
 fn run_lsd(io: &'static dyn ShellBackend2, args: Vec<String>) -> trueos_io::Result<()> {
     let target = matrix_target_for_backend(io);
+    let width = line_width_for_backend(io).saturating_sub(2);
     crate::r::io::env::with_launch_context_console_and_fs_root(
         args.clone(),
         BTreeMap::new(),
         Some(target),
         None,
-        || trueos_lsd::run_with_writer(args.as_slice(), |line| print_shell_line(io, line)),
+        || {
+            trueos_lsd::run_with_writer_and_width(args.as_slice(), width, |line| {
+                print_native_line(io, line)
+            })
+        },
     )
 }
 
