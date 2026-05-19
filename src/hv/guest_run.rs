@@ -14,11 +14,155 @@
 //! rediscovering the original network/architecture block by running it live.
 
 use alloc::boxed::Box;
+use alloc::string::String;
+use alloc::vec::Vec;
+use core::fmt::Write;
 
 use embassy_executor::raw::Executor as RawExecutor;
 use trueos_vm::vmcall;
 
 use crate::shell2::{ShellBackend2, ShellIo2};
+
+fn attached_write(bytes: &[u8]) {
+    let mut written = 0usize;
+    while written < bytes.len() {
+        let end = core::cmp::min(written + trueos_vm::vmcall::PAYLOAD_CAP, bytes.len());
+        let (status, count) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_SHELL_ATTACHED_WRITE,
+            0,
+            0,
+            &bytes[written..end],
+            &mut [],
+        );
+        if status != trueos_vm::vmcall::STATUS_OK || count == 0 {
+            break;
+        }
+        written = written.saturating_add(count as usize);
+    }
+}
+
+fn attached_write_str(text: &str) {
+    attached_write(text.as_bytes());
+}
+
+fn attached_write_line(text: &str) {
+    attached_write(text.as_bytes());
+    attached_write(b"\r\n");
+}
+
+fn attached_read_byte() -> Option<u8> {
+    let (status, data) =
+        trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_SHELL_ATTACHED_READ_BYTE, 0, 0);
+    if status == trueos_vm::vmcall::STATUS_OK && data != u64::MAX {
+        Some(data as u8)
+    } else {
+        None
+    }
+}
+
+fn guest_text_vmcall(op: u32, request: &[u8]) -> Option<String> {
+    let mut bytes = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
+    let (status, len) = trueos_vm::vmcall::call_with_payload(op, 0, 0, request, &mut bytes);
+    if status != trueos_vm::vmcall::STATUS_OK {
+        return None;
+    }
+    let got = core::cmp::min(len as usize, bytes.len());
+    core::str::from_utf8(&bytes[..got]).ok().map(String::from)
+}
+
+fn guest_env_var(key: &str) -> Option<String> {
+    guest_text_vmcall(trueos_vm::vmcall::OP_BP_ENV_VAR, key.as_bytes())
+}
+
+fn container_shell_prompt() {
+    attached_write_str("vmx> ");
+}
+
+fn container_shell_read_line(line: &mut Vec<u8>) {
+    line.clear();
+    loop {
+        if let Some(byte) = attached_read_byte() {
+            match byte {
+                b'\r' | b'\n' => {
+                    attached_write(b"\r\n");
+                    return;
+                }
+                0x03 => {
+                    line.clear();
+                    attached_write(b"^C\r\n");
+                    container_shell_prompt();
+                }
+                0x08 | 0x7f => {
+                    if line.pop().is_some() {
+                        attached_write(b"\x08 \x08");
+                    }
+                }
+                byte if byte.is_ascii_graphic() || byte == b' ' => {
+                    if line.len() < 512 {
+                        line.push(byte);
+                        attached_write(&[byte]);
+                    }
+                }
+                _ => {}
+            }
+        } else {
+            trueos_vm::vmcall::sleep_ms(10);
+        }
+    }
+}
+
+fn container_shell_command(raw: &str) -> bool {
+    let trimmed = raw.trim();
+    let mut words = trimmed.splitn(2, char::is_whitespace);
+    let cmd = words.next().unwrap_or("");
+    let rest = words.next().unwrap_or("").trim_start();
+    match cmd {
+        "" => {}
+        "echo" => attached_write_line(rest),
+        "hostname" => {
+            let hostname = guest_env_var("HOSTNAME")
+                .or_else(|| guest_env_var("TRUEOS_HOSTNAME"))
+                .unwrap_or_else(|| String::from("TRUEOS"));
+            attached_write_line(hostname.as_str());
+        }
+        "homedir" => {
+            let home = guest_env_var("HOME").unwrap_or_else(|| String::from("/"));
+            attached_write_line(home.as_str());
+        }
+        "env" => match guest_text_vmcall(trueos_vm::vmcall::OP_BP_ENV_ALL, &[]) {
+            Some(text) if !text.is_empty() => attached_write_str(text.as_str()),
+            _ => attached_write_line("env: unavailable"),
+        },
+        "file" => {
+            let path = if rest.is_empty() {
+                guest_env_var("HOME").unwrap_or_else(|| String::from("/"))
+            } else {
+                String::from(rest)
+            };
+            match guest_text_vmcall(trueos_vm::vmcall::OP_BP_FS_LIST_TREE, path.as_bytes()) {
+                Some(text) if !text.is_empty() => attached_write_str(text.as_str()),
+                _ => attached_write_line("file: unavailable"),
+            }
+        }
+        "thread" => {
+            let vm_id = crate::hv::current_vm_id().unwrap_or(0);
+            let (status, vtid) =
+                trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_THREAD_CURRENT_ID, 0, 0);
+            let mut line = String::new();
+            if status == trueos_vm::vmcall::STATUS_OK {
+                let _ = write!(line, "thread: vm={} vthread={} async_jobs=not-wired", vm_id, vtid);
+            } else {
+                let _ =
+                    write!(line, "thread: vm={} vthread=unavailable async_jobs=not-wired", vm_id);
+            }
+            attached_write_line(line.as_str());
+        }
+        "help" => attached_write_line("commands: echo hostname homedir env file thread help exit"),
+        "exit" => return false,
+        _ => attached_write_line("unknown command; try `help`"),
+    }
+    true
+}
 
 fn create_blueprint_dir_all(path: &str) -> Result<(), alloc::string::String> {
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
@@ -137,6 +281,24 @@ pub extern "C" fn trueos_hv_guest_shell_run() -> ! {
     loop {
         crate::time::poll();
         unsafe { executor.poll() };
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_hv_guest_container_shell_run() -> ! {
+    attached_write_line("vmx-shell: ready");
+    attached_write_line("commands: echo hostname homedir env file thread help exit");
+    let mut line = Vec::new();
+    loop {
+        container_shell_prompt();
+        container_shell_read_line(&mut line);
+        let Ok(text) = core::str::from_utf8(line.as_slice()) else {
+            attached_write_line("input: invalid utf8");
+            continue;
+        };
+        if !container_shell_command(text) {
+            attached_write_line("vmx-shell: exit ignored; hull stays alive");
+        }
     }
 }
 

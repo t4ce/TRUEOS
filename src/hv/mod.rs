@@ -18,7 +18,7 @@ use crate::hv::vmx::*;
 
 pub use trueos_vm::guest;
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, VecDeque};
 use alloc::string::String as AllocString;
 use alloc::vec::Vec as AllocVec;
 use core::arch::x86_64::{__cpuid, __cpuid_count};
@@ -261,6 +261,7 @@ pub(crate) struct BlueprintProcessContext {
     args: AllocVec<AllocString>,
     vars: BTreeMap<AllocString, AllocString>,
     console_target: Option<MatrixTarget>,
+    console_input: VecDeque<u8>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -886,11 +887,15 @@ pub fn stage_blueprint_launch(
             Some(app_fs_root.as_str()),
         ),
         console_target,
+        console_input: VecDeque::new(),
     };
     let Some(guest_state) = crate::allocators::with_hv_guest_alloc_domain(vm_id, || state.clone())
     else {
         return Err(StartError::GuestMemoryUnavailable);
     };
+    if let Some(target) = process_context.console_target.as_ref() {
+        crate::shell2::bind_matrix_target_vm(target, vm_id);
+    }
     *slot.lock() = Some(guest_state);
     *process_slot.lock() = Some(process_context);
     Ok(())
@@ -926,6 +931,164 @@ pub(crate) fn blueprint_process_env_var(vm_id: u8, key: &str) -> Option<AllocStr
     context.as_ref()?.vars.get(key).cloned()
 }
 
+pub(crate) fn blueprint_process_env_text(vm_id: u8) -> Option<AllocString> {
+    let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize)?.lock();
+    let context = context.as_ref()?;
+    let mut out = AllocString::new();
+    for (key, value) in context.vars.iter() {
+        let _ = writeln!(out, "{}={}", key, value);
+    }
+    Some(out)
+}
+
+fn blueprint_context_path(vm_id: u8, requested: &str) -> Option<AllocString> {
+    let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize)?.lock();
+    let context = context.as_ref()?;
+    let root = context.vars.get("TRUEOS_APP_FS_ROOT").cloned();
+    let home = context
+        .vars
+        .get("HOME")
+        .cloned()
+        .unwrap_or_else(|| AllocString::from("/"));
+
+    let logical = if requested.trim().is_empty() {
+        home.as_str()
+    } else {
+        requested.trim()
+    };
+    let rel = crate::r::path::FsPath::parse(logical, true)
+        .ok()
+        .map(|path| path.to_relative_string())?;
+    let Some(root) = root else {
+        return Some(rel);
+    };
+    let root_rel = crate::r::path::FsPath::parse(root.as_str(), true)
+        .ok()
+        .map(|path| path.to_relative_string())?;
+    if rel.is_empty() {
+        Some(root_rel)
+    } else if rel == root_rel || rel.starts_with(root_rel.as_str()) {
+        Some(rel)
+    } else {
+        Some(alloc::format!("{}/{}", root_rel.trim_end_matches('/'), rel))
+    }
+}
+
+fn blueprint_tree_children(paths: &[AllocString], parent: &str) -> AllocVec<AllocString> {
+    let prefix = if parent.is_empty() {
+        AllocString::new()
+    } else {
+        alloc::format!("{}/", parent.trim_end_matches('/'))
+    };
+    let mut children = AllocVec::new();
+    for path in paths.iter() {
+        let rest = if prefix.is_empty() {
+            path.as_str()
+        } else if let Some(rest) = path.strip_prefix(prefix.as_str()) {
+            rest
+        } else {
+            continue;
+        };
+        let seg = rest.split('/').next().unwrap_or("");
+        if !seg.is_empty() {
+            children.push(AllocString::from(seg));
+        }
+    }
+    children.sort();
+    children.dedup();
+    children
+}
+
+fn blueprint_tree_has_descendant(paths: &[AllocString], path: &str) -> bool {
+    let prefix = alloc::format!("{}/", path.trim_end_matches('/'));
+    paths.iter().any(|p| p.starts_with(prefix.as_str()))
+}
+
+pub(crate) fn blueprint_process_file_tree_text(vm_id: u8, requested: &str) -> Option<AllocString> {
+    const MAX_DEPTH: usize = 3;
+    const MAX_CHILDREN: usize = 24;
+    const MAX_LINES: usize = 160;
+
+    let root_path = blueprint_context_path(vm_id, requested)?;
+    let roots = crate::r::fs::trueosfs::list_roots();
+    if roots.is_empty() {
+        return Some(AllocString::from("file: no TRUEOSFS roots mounted\n"));
+    }
+
+    for root in roots.iter().copied() {
+        if !root.index_ready {
+            crate::r::fs::trueosfs::request_warm_index(root.disk_id);
+            continue;
+        }
+        let Some(paths) = crate::r::fs::trueosfs::root_index_paths(root.disk_id, MAX_LINES * 8)
+        else {
+            continue;
+        };
+        let in_tree = paths
+            .iter()
+            .any(|path| path == root_path.as_str() || path.starts_with(root_path.as_str()));
+        if !in_tree && !root_path.is_empty() {
+            continue;
+        }
+
+        let mut out = alloc::format!(
+            "file: {}\n",
+            if root_path.is_empty() {
+                "/"
+            } else {
+                root_path.as_str()
+            }
+        );
+        let mut stack: AllocVec<(AllocString, usize)> = AllocVec::new();
+        stack.push((root_path.clone(), 0));
+        let mut lines = 0usize;
+        while let Some((parent, depth)) = stack.pop() {
+            if depth >= MAX_DEPTH || lines >= MAX_LINES {
+                continue;
+            }
+            let children = blueprint_tree_children(paths.as_slice(), parent.as_str());
+            if children.is_empty() && depth == 0 {
+                let _ = writeln!(out, "  (empty)");
+                lines = lines.saturating_add(1);
+                continue;
+            }
+            for child in children.iter().take(MAX_CHILDREN).rev() {
+                let full = if parent.is_empty() {
+                    child.clone()
+                } else {
+                    alloc::format!("{}/{}", parent.trim_end_matches('/'), child)
+                };
+                let is_dir = blueprint_tree_has_descendant(paths.as_slice(), full.as_str());
+                let indent = "  ".repeat(depth + 1);
+                let _ = writeln!(out, "{}{}{}", indent, child, if is_dir { "/" } else { "" });
+                lines = lines.saturating_add(1);
+                if is_dir {
+                    stack.push((full, depth + 1));
+                }
+                if lines >= MAX_LINES {
+                    break;
+                }
+            }
+            if children.len() > MAX_CHILDREN && lines < MAX_LINES {
+                let indent = "  ".repeat(depth + 1);
+                let _ =
+                    writeln!(out, "{}... {} more entries", indent, children.len() - MAX_CHILDREN);
+                lines = lines.saturating_add(1);
+            }
+        }
+        return Some(out);
+    }
+
+    Some(alloc::format!(
+        "file: index cold or path not found; warming indexes for {}\n",
+        if root_path.is_empty() {
+            "/"
+        } else {
+            root_path.as_str()
+        }
+    ))
+}
+
 pub(crate) fn blueprint_console_write(vm_id: u8, data: &[u8]) -> usize {
     let target = {
         let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize);
@@ -938,13 +1101,33 @@ pub(crate) fn blueprint_console_write(vm_id: u8, data: &[u8]) -> usize {
     data.len()
 }
 
-pub(crate) fn blueprint_console_read_byte(vm_id: u8) -> Option<u8> {
-    let target = {
-        let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize);
-        context.and_then(|slot| slot.lock().as_ref()?.console_target.clone())
+pub(crate) fn blueprint_console_submit_input(vm_id: u8, data: &[u8]) -> usize {
+    const MAX_CONSOLE_INPUT: usize = 64 * 1024;
+    if data.is_empty() {
+        return 0;
+    }
+    let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else {
+        return 0;
     };
-    if let Some(target) = target {
-        return crate::shell2::read_matrix_target_byte(&target);
+    let mut guard = slot.lock();
+    let Some(context) = guard.as_mut() else {
+        return 0;
+    };
+    for &byte in data {
+        if context.console_input.len() >= MAX_CONSOLE_INPUT {
+            let _ = context.console_input.pop_front();
+        }
+        context.console_input.push_back(byte);
+    }
+    data.len()
+}
+
+pub(crate) fn blueprint_console_read_byte(vm_id: u8) -> Option<u8> {
+    if let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) {
+        let mut guard = slot.lock();
+        if let Some(context) = guard.as_mut() {
+            return context.console_input.pop_front();
+        }
     }
     crate::shell2::uart1_com1::read_byte()
 }
@@ -971,7 +1154,12 @@ pub(crate) fn blueprint_process_context(vm_id: u8) -> Option<BlueprintProcessCon
 
 fn clear_blueprint_process_context(vm_id: u8) {
     if let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) {
-        *slot.lock() = None;
+        let previous = slot.lock().take();
+        if let Some(context) = previous
+            && let Some(target) = context.console_target.as_ref()
+        {
+            crate::shell2::unbind_matrix_target_vm(target, vm_id);
+        }
     }
 }
 

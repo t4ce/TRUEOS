@@ -9,8 +9,8 @@ use spin::Mutex;
 
 use super::super::{
     MatrixTarget, ShellBackend2, UART1_COM1_BACKEND, line_width_for_backend,
-    matrix_target_for_backend, print_matrix_target_line, print_shell_line,
-    set_matrix_target_active,
+    matrix_target_for_backend, matrix_target_interrupted, print_matrix_target_line,
+    print_shell_line, set_matrix_target_active,
 };
 use super::tlb_helper::TlbTable;
 use crate::shell2::shell2_cmd::ParseOutcome;
@@ -267,6 +267,10 @@ async fn execute_request(spawner: &Spawner, request: AppVmLaunchRequest) {
         request.archive.as_str(),
         request.module_bytes.len()
     );
+    if matrix_target_interrupted(&target) {
+        log("hv run: interrupted before launch");
+        return;
+    }
 
     if request.module_bytes.starts_with(b"TC4O") || request.archive.ends_with(".vm") {
         execute_tc4o(request.module_bytes.as_slice(), &log);
@@ -282,6 +286,10 @@ async fn execute_request(spawner: &Spawner, request: AppVmLaunchRequest) {
 }
 
 async fn execute_blueprint(spawner: &Spawner, request: &AppVmLaunchRequest, log: &dyn Fn(&str)) {
+    if matrix_target_interrupted(&request.target) {
+        log("hv run: interrupted before preflight");
+        return;
+    }
     if !request.preflight_complete
         && let Err(err) = preflight_blueprint_launch(
             request.archive.as_str(),
@@ -291,6 +299,10 @@ async fn execute_blueprint(spawner: &Spawner, request: &AppVmLaunchRequest, log:
         .await
     {
         log(alloc::format!("hv run: {}", err).as_str());
+        return;
+    }
+    if matrix_target_interrupted(&request.target) {
+        log("hv run: interrupted before vm start");
         return;
     }
 

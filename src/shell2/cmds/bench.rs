@@ -10,8 +10,8 @@ use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use v::vnet as api;
 
 use super::super::{
-    MatrixTarget, ShellBackend2, matrix_target_for_backend, print_matrix_target_line,
-    print_shell_line, set_matrix_target_active,
+    MatrixTarget, ShellBackend2, matrix_target_for_backend, matrix_target_interrupted,
+    print_matrix_target_line, print_shell_line, set_matrix_target_active,
 };
 use crate::shell2::CommandSessionInputResult;
 use crate::shell2::shell2_cmd::ParseOutcome;
@@ -531,6 +531,10 @@ pub(crate) fn bench_cancel_requested(session_id: u64) -> bool {
         .unwrap_or(false)
 }
 
+fn bench_cancel_or_interrupted(session_id: u64, target: &MatrixTarget) -> bool {
+    bench_cancel_requested(session_id) || matrix_target_interrupted(target)
+}
+
 pub(crate) fn session_alive(session_id: u64) -> bool {
     BENCH_SESSIONS.lock().iter().any(|s| s.id == session_id)
 }
@@ -734,7 +738,7 @@ async fn cpubench_task(target: MatrixTarget, session_id: u64) {
         let bench_start_tick = embassy_time_driver::now();
 
         for phase in CPUBENCH_PHASES {
-            if bench_cancel_requested(session_id) {
+            if bench_cancel_or_interrupted(session_id, &task_target) {
                 log("bench cpu: cancelled before next phase");
                 break;
             }
@@ -819,7 +823,7 @@ async fn cpubench_task(target: MatrixTarget, session_id: u64) {
             loop {
                 drain_cpubench_worker_messages(&task_target, phase, workers.as_mut_slice());
 
-                if bench_cancel_requested(session_id) {
+                if bench_cancel_or_interrupted(session_id, &task_target) {
                     stop_cpubench_workers(&task_target, phase, workers.as_mut_slice(), "cancel")
                         .await;
                     break;
@@ -875,7 +879,7 @@ async fn cpubench_task(target: MatrixTarget, session_id: u64) {
                 .as_str(),
             );
 
-            if bench_cancel_requested(session_id) {
+            if bench_cancel_or_interrupted(session_id, &task_target) {
                 break;
             }
         }
@@ -1052,7 +1056,7 @@ async fn netbench_task(target: MatrixTarget, session_id: u64, nic_index: usize) 
 
         log("bench net: waiting for net");
         crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
-        if bench_cancel_requested(session_id) {
+        if bench_cancel_or_interrupted(session_id, &task_target) {
             cancelled = true;
         }
         if cancelled {
@@ -1134,7 +1138,7 @@ async fn netbench_task(target: MatrixTarget, session_id: u64, nic_index: usize) 
 
         let open_deadline = Instant::now() + EmbassyDuration::from_millis(OPEN_TIMEOUT_MS);
         let tcp_handle = loop {
-            if bench_cancel_requested(session_id) {
+            if bench_cancel_or_interrupted(session_id, &task_target) {
                 log("bench net: cancel requested during connect");
                 return;
             }
@@ -1188,7 +1192,7 @@ async fn netbench_task(target: MatrixTarget, session_id: u64, nic_index: usize) 
         let mut next_progress = Instant::now() + EmbassyDuration::from_millis(PROGRESS_LOG_MS);
 
         loop {
-            if bench_cancel_requested(session_id) {
+            if bench_cancel_or_interrupted(session_id, &task_target) {
                 cancelled = true;
                 break;
             }
