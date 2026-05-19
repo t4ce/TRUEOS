@@ -1895,6 +1895,8 @@ pub mod cabi {
     static TEXTURE_UPLOAD_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
     static ASYNC_SVG_WORKER_STARTED: core::sync::atomic::AtomicBool =
         core::sync::atomic::AtomicBool::new(false);
+    static MANDELBROT_QUEUE_LOGS: core::sync::atomic::AtomicU32 =
+        core::sync::atomic::AtomicU32::new(0);
     const VM_TEXTURE_OWNER_CAP: usize = 256;
     const VM_TEXTURE_META_CAP: usize = 256;
     const VM_TEXTURE_GUEST_ID_LIMIT: u32 = 8_191;
@@ -2355,9 +2357,8 @@ pub mod cabi {
     fn notify_texture_work_available() {
         if crate::hv::current_hull_guest_context_vm_id().is_some() {
             TEXTURE_UPLOAD_WAIT.notify_guest_signal();
-        } else {
-            TEXTURE_UPLOAD_WAIT.notify_one();
         }
+        TEXTURE_UPLOAD_WAIT.notify_one();
     }
 
     fn take_async_jpeg_upload() -> Option<AsyncJpegUploadReq> {
@@ -2960,15 +2961,18 @@ pub mod cabi {
         {
             return false;
         }
-        crate::log!(
-            "gfx-cabi: queue mandelbrot guest_tex={} host_tex={} repaint_window={} reason={} ticks={} hz={}\n",
-            tex_id,
-            host_tex_id,
-            repaint_window_id,
-            repaint_reason,
-            ticks,
-            tick_hz
-        );
+        let queue_log = MANDELBROT_QUEUE_LOGS.fetch_add(1, Ordering::Relaxed);
+        if queue_log < 16 || queue_log % 120 == 0 {
+            crate::log!(
+                "gfx-cabi: queue mandelbrot guest_tex={} host_tex={} repaint_window={} reason={} ticks={} hz={}\n",
+                tex_id,
+                host_tex_id,
+                repaint_window_id,
+                repaint_reason,
+                ticks,
+                tick_hz
+            );
+        }
         enqueue_texture_draw_mandelbrot(TextureDrawMandelbrotReq {
             tex_id: host_tex_id,
             ticks,

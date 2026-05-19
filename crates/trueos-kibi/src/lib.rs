@@ -16,9 +16,5 @@ mod row;
 mod syntax;
 mod terminal;
 
-#[cfg_attr(windows, path = "windows.rs")]
-#[cfg_attr(unix, path = "unix.rs")]
-#[cfg_attr(target_os = "wasi", path = "wasi.rs")]
+#[path = "trueos.rs"]
 mod sys;
-
-#[cfg(any(unix, target_os = "wasi"))] mod xdg;
