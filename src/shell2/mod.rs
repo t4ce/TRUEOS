@@ -53,7 +53,7 @@ const SECTION_STATUS_HOLD_MS: u64 = 1000;
 const SECTION_RAINBOW_FRAME_MS: u64 = 120;
 const SECTION_RAINBOW_COLORS: [u8; 8] = [199, 208, 227, 121, 51, 39, 99, 201];
 const STATUS_NORMAL_RGB: (u8, u8, u8) = (255, 255, 255);
-const VMX_CONSOLE_COMMANDS: &str = "echo hostname homedir env file thread help exit";
+const VMX_CONSOLE_COMMANDS: &str = "echo hostname homedir env disc thread help exit";
 
 static REGISTERED_OUTPUTS: AtomicU8 = AtomicU8::new(0);
 
@@ -285,8 +285,7 @@ impl<'a> AlignedWriter<'a> {
         text
     }
 
-    fn vmx_console_status(&self, _cmd_status_text: Option<&str>) {
-    }
+    fn vmx_console_status(&self, _cmd_status_text: Option<&str>) {}
 
     fn main_mode_text(&self, mode: ShellMode2) -> AllocString {
         let mut text = AllocString::new();

@@ -2,9 +2,9 @@ use alloc::string::String as AllocString;
 
 use embassy_executor::Spawner;
 
+use super::ShellBackend2;
 use super::print_shell_line;
 use super::shell2_cmd::ParseOutcome;
-use super::ShellBackend2;
 
 pub(crate) type Shell2CmdHandler = fn(&Spawner, &'static dyn ShellBackend2, &str) -> ParseOutcome;
 
@@ -21,7 +21,7 @@ struct BuiltinShell2CmdEntry {
 const TOOL_JSON_ACPI: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["reboot","S1","S2","S3","S4","S5"],"description":"ACPI action to run."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_C4: &str = r#"{"type":"object","properties":{"mode":{"type":"string","enum":["file","inline"],"description":"Compile from a TRUEOSFS file or inline C4 source."},"path":{"type":"string","description":"TRUEOSFS source path when mode=file."},"source":{"type":"string","description":"Inline C4 source when mode=inline."}},"required":["mode"],"additionalProperties":false}"#;
 const TOOL_JSON_ETC: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["ample","go","go2","insane"],"description":"etc subcommand to run."}},"required":["subcommand"],"additionalProperties":false}"#;
-const TOOL_JSON_FILE: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","format","ramdisc"],"description":"file action to run."},"disk_id":{"type":"string","description":"Disk id string for action=format."},"size":{"type":"string","description":"Optional ramdisc size like 512MB or 1GiB for action=ramdisc."}},"required":["action"],"additionalProperties":false}"#;
+const TOOL_JSON_DISC: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","format"],"description":"disc action to run."},"disk_id":{"type":"string","description":"Disk id string for action=format."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_HV: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["status","run","attach","detach","pause","stop","preserve"],"description":"HV subcommand to run."},"id":{"type":"integer","minimum":1,"description":"Blueprint archive id for run, or VM id for attach/detach/pause/stop/preserve."},"args":{"type":"array","items":{"type":"string"},"description":"CLI arguments passed to the selected blueprint when subcommand=run."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_KIBI: &str = r#"{"type":"object","properties":{"slot":{"type":"string","description":"Optional matrix slot like §ed."},"path":{"type":"string","description":"Optional TRUEOSFS file path to open."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_LSD: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"Optional TRUEOSFS path to list."},"long":{"type":"boolean","description":"Show file kind and byte size."},"tree":{"type":"boolean","description":"Walk recursively from the path."}},"required":[],"additionalProperties":false}"#;
@@ -99,9 +99,9 @@ fn dispatch_c4(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Parse
     super::cmds::c4::try_parse(io, rest)
 }
 
-fn dispatch_file(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+fn dispatch_disc(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
-    super::cmds::file::try_parse(io, &mut args)
+    super::cmds::disc::try_parse(io, &mut args)
 }
 
 fn dispatch_net(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -158,12 +158,12 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         tool_parameters_json: Some(TOOL_JSON_ETC),
     },
     BuiltinShell2CmdEntry {
-        name: "file",
+        name: "disc",
         mode: "cmd",
-        color: None,
-        handler: dispatch_file,
-        tool_description: Some("List mounted TRUEOSFS roots, format a disk, or create a ramdisc."),
-        tool_parameters_json: Some(TOOL_JSON_FILE),
+        color: Some((255, 55, 255)),
+        handler: dispatch_disc,
+        tool_description: Some("List top-level disk devices or format a disk."),
+        tool_parameters_json: Some(TOOL_JSON_DISC),
     },
     BuiltinShell2CmdEntry {
         name: "hv",
