@@ -1,0 +1,14 @@
+[alias]
+xtask = "run --manifest-path ./xtask/Cargo.toml --"
+
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.i686-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.wasm32-wasip1]
+runner = "wasmtime run --wasi cli=y"

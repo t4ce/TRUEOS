@@ -44,6 +44,8 @@ pub(crate) static VIRGL_PRESENT_DIAG_LOGS: AtomicU32 = AtomicU32::new(0);
 pub(crate) const INTEL_CURSOR_PROBE_LOGS: bool = false;
 
 pub(crate) const INTEL_DISPLAY_NGIN_LOGS: bool = true;
+pub(crate) const INTEL_MEDIA_NGIN_LOGS: bool = true;
+pub(crate) const INTEL_MEDIA_FS_CACHE_ENABLED: bool = false;
 pub(crate) const INTEL_MEDIA_PRESENT_LUMA_ONLY: bool = true;
 
 pub(crate) const GFX_CABI_FRAME_DEBUG_LOGS: bool = false;

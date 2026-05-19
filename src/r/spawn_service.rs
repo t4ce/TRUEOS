@@ -57,6 +57,7 @@ define_started_flags!(
     MANDELBROT_GPU_SIDEQUEST_STARTED,
     INTEL_CURSOR_SERVICE_STARTED,
     HW_PIC_SERVICE_STARTED,
+    HW_VID_PROBE_STARTED,
     HW_LOGO_PRESENT_TASK_STARTED,
     INTEL_HDA_PROBE_STARTED,
     RAPLE_SERVICE_STARTED,
@@ -560,6 +561,10 @@ fn spawn_intel_cursor_service_task(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_hw_pic_service(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |_worker_spawner| crate::intel::hw_pic_service())
+}
+
+fn spawn_hw_vid_probe_task(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_worker(spawner, |_worker_spawner| crate::intel::hw_vid_probe_task())
 }
 
 fn spawn_hw_logo_present_task(spawner: Spawner) -> SpawnAttempt {
@@ -1077,7 +1082,7 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::NET_SOCKET_READY
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-static TASKS: [TaskSpec; 67] = [
+static TASKS: [TaskSpec; 68] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled("factory-ram-probe", 0, &FACTORY_RAM_PROBE_STARTED, spawn_factory_ram_probe),
     TaskSpec::enabled(
@@ -1225,6 +1230,13 @@ static TASKS: [TaskSpec; 67] = [
         intel_media_engine_gate,
         &HW_PIC_SERVICE_STARTED,
         spawn_hw_pic_service,
+    ),
+    TaskSpec::enabled_gated(
+        "hw_vid_probe_task",
+        0,
+        intel_media_engine_gate,
+        &HW_VID_PROBE_STARTED,
+        spawn_hw_vid_probe_task,
     ),
     TaskSpec::enabled_gated(
         "hw_logo_present_task",

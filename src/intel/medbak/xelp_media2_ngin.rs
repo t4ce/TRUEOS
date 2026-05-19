@@ -3,7 +3,14 @@ extern crate alloc;
 use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;
 
+use super::xelp_media_h264src::parse_h264_source_summary;
 use super::xelp_media2_ngin_hw_pic::MediaEncodedStreamProof;
+use super::xelp_media_mp4::{
+    AnnexBAccessUnit, H264VclInfo, ParsedPps, ParsedSps, h264_crop_offsets_px,
+    parse_pps, parse_sample_vcl_info, parse_sps, visible_h264_frame_dims,
+    write_annex_b_for_sample,
+};
+use super::xelp_media_source;
 
 const MAX_MEDIA_ENGINES: usize = 4;
 const MAX_MEDIA_API_ROUTES: usize = 4;
@@ -1198,7 +1205,6 @@ fn present_nv12_frame(
     (false, signature, nonzero_samples)
 }
 
-#[cfg(any())]
 pub(super) fn decode_and_present_frame(
     dev: crate::intel::Dev,
     engine: MediaEngineDescriptor,
@@ -1982,7 +1988,6 @@ pub(super) fn read_result_dword(base_virt: *mut u8, slot_off: u64) -> u32 {
     unsafe { core::ptr::read_volatile(ptr) }
 }
 
-#[cfg(any())]
 fn coded_h264_frame_dims(sps: &ParsedSps) -> (u32, u32) {
     let width_mbs = sps.pic_width_in_mbs_minus1 + 1;
     let pic_height_map_units = sps.pic_height_in_map_units_minus1 + 1;
@@ -1994,7 +1999,6 @@ fn coded_h264_frame_dims(sps: &ParsedSps) -> (u32, u32) {
     (width_mbs.saturating_mul(16), frame_height_mbs.saturating_mul(16))
 }
 
-#[cfg(any())]
 fn build_h264_decode_batch_skeleton(
     batch_virt: *mut u8,
     batch_bytes: usize,
@@ -2752,7 +2756,6 @@ pub(super) fn seed_media_ring_live_state(
     super::mmio_write(dev, ring_base + RING_HWSTAM, !0u32);
 }
 
-#[cfg(any())]
 fn submit_h264_frame(
     dev: crate::intel::Dev,
     engine: MediaEngineDescriptor,
@@ -2784,7 +2787,6 @@ fn submit_h264_frame(
     )
 }
 
-#[cfg(any())]
 fn submit_h264_frame_once(
     dev: crate::intel::Dev,
     engine: MediaEngineDescriptor,
@@ -3240,7 +3242,6 @@ pub(crate) async fn run_media_decode_async() {
     let _ = run_media2_first_frame_async().await;
 }
 
-#[cfg(any())]
 pub(crate) async fn run_media2_first_frame_async() -> Option<Media2FirstFrameState> {
     kickoff_once();
 
@@ -3401,13 +3402,4 @@ pub(crate) async fn run_media2_first_frame_async() -> Option<Media2FirstFrameSta
     MEDIA_DECODE_RAN.store(true, Ordering::Release);
     store_kickoff_state(MediaKickoffStage::Smoke, Some(demo));
     Some(media2_first_frame_state(demo))
-}
-
-#[cfg(not(any()))]
-pub(crate) async fn run_media2_first_frame_async() -> Option<Media2FirstFrameState> {
-    kickoff_once();
-    crate::log!("intel/media2: first-frame disabled reason=h264-general-cut\n");
-    store_kickoff_state(MediaKickoffStage::SubmissionWiring, None);
-    MEDIA_DECODE_RAN.store(true, Ordering::Release);
-    None
 }

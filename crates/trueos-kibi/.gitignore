@@ -1,0 +1,8 @@
+debug
+target
+**/*.rs.bk
+release_files
+mutants.out
+.idea
+.vscode
+.zed
