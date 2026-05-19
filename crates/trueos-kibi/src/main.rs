@@ -4,8 +4,29 @@
 
 //! # Kibi
 
-use trueos_kibi::{Error, run, stdin};
-use v::env;
+extern crate alloc;
+
+use alloc::{format, string::String, vec::Vec};
+use trueos_io::{ErrorKind, Read};
+use trueos_kibi::{run, Error};
+use v::{env, vshell};
+
+struct AttachedStdin;
+
+impl Read for AttachedStdin {
+    fn read(&mut self, buf: &mut [u8]) -> trueos_io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        match vshell::attached_read_byte() {
+            Some(byte) => {
+                buf[0] = byte;
+                Ok(1)
+            }
+            None => Err(trueos_io::Error::new(ErrorKind::WouldBlock, "no attached shell input")),
+        }
+    }
+}
 
 /// Load the configuration, initialize the editor and run the program,
 /// optionally opening a file if an argument is given.
@@ -15,12 +36,18 @@ use v::env;
 /// Any error that occur during the execution of the program will be returned by
 /// this function.
 fn main() -> Result<(), Error> {
-    let mut args = env::args();
-    match (args.nth(1).as_deref(), args.next().as_deref(), /* remaining_args= */ args.len()) {
-        (Some("--version"), None | Some("--"), 0) => println!("kibi {}", env!("CARGO_PKG_VERSION")),
+    let args: Vec<_> = env::args().collect();
+    let first = args.get(1).map(String::as_str);
+    let second = args.get(2).map(String::as_str);
+    let remaining_args = args.len().saturating_sub(3);
+
+    match (first, second, remaining_args) {
+        (Some("--version"), None | Some("--"), 0) => {
+            _ = vshell::line(&format!("kibi {}", env!("CARGO_PKG_VERSION")))
+        }
         (Some(o), ..) if o.starts_with('-') && o != "--" => return Err(Error::BadOption(o.into())),
-        (Some("--"), p, 0) | (p, Some("--") | None, 0) => run(p, &mut stdin()?)?,
-        _ => return Err(Error::TooManyArguments(env::args().collect())),
+        (Some("--"), p, 0) | (p, Some("--") | None, 0) => run(p, &mut AttachedStdin)?,
+        _ => return Err(Error::TooManyArguments(args)),
     }
     Ok(())
 }

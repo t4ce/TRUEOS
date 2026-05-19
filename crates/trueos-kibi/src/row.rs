@@ -7,11 +7,14 @@
 //! Utilities for rows. A `Row` owns the underlying characters, the rendered
 //! string and the syntax highlighting information.
 
-use std::{iter::repeat_n, num::NonZeroUsize};
+extern crate alloc;
+
+use alloc::{string::{String, ToString}, vec, vec::Vec};
+use core::{iter::repeat_n, num::NonZeroUsize, ops::Range};
 
 use unicode_width::UnicodeWidthChar;
 
-use crate::ansi_escape::{RESET, WBG, push_colored};
+use crate::ansi_escape::{push_colored, RESET, WBG};
 use crate::syntax::{Conf as SyntaxConf, HlType};
 
 /// The "Highlight State" of the row
@@ -50,12 +53,18 @@ pub struct Row {
     pub hl_state: HlState,
     /// If not `None`, the range that is currently matched during a FIND
     /// operation.
-    pub match_segment: Option<std::ops::Range<usize>>,
+    pub match_segment: Option<Range<usize>>,
 }
 
 impl Row {
     /// Create a new row, containing characters `chars`.
-    pub fn new(chars: Vec<u8>) -> Self { Self { chars, cx2rx: vec![0], ..Self::default() } }
+    pub fn new(chars: Vec<u8>) -> Self {
+        Self {
+            chars,
+            cx2rx: vec![0],
+            ..Self::default()
+        }
+    }
 
     // TODO: Combine update and update_syntax
     /// Update the row: convert tabs into spaces and compute highlight symbols
@@ -65,9 +74,18 @@ impl Row {
         let (mut cx, mut rx) = (0, 0);
         for c in String::from_utf8_lossy(&self.chars).chars() {
             // The number of rendered characters
-            let n_rend_chars =
-                if c == '\t' { tab.get() - (rx % tab) } else { c.width().unwrap_or(1) };
-            self.render.push_str(&(if c == '\t' { " ".repeat(n_rend_chars) } else { c.into() }));
+            let n_rend_chars = if c == '\t' {
+                tab.get() - (rx % tab)
+            } else {
+                c.width().unwrap_or(1)
+            };
+            self.render.push_str(
+                &(if c == '\t' {
+                    " ".repeat(n_rend_chars)
+                } else {
+                    c.into()
+                }),
+            );
             self.cx2rx.extend(repeat_n(rx, c.len_utf8()));
             self.rx2cx.extend(repeat_n(cx, n_rend_chars));
             (rx, cx) = (rx + n_rend_chars, cx + c.len_utf8());
@@ -80,7 +98,12 @@ impl Row {
     /// `self.render`. This is done in constant time by using the difference
     /// between `self.rx2cx[rx]` and the cx for the next character.
     pub fn get_char_size(&self, rx: usize) -> usize {
-        self.rx2cx.iter().skip(rx + 1).map(|cx| cx - self.rx2cx[rx]).find(|d| *d > 0).unwrap_or(1)
+        self.rx2cx
+            .iter()
+            .skip(rx + 1)
+            .map(|cx| cx - self.rx2cx[rx])
+            .find(|d| *d > 0)
+            .unwrap_or(1)
     }
 
     /// Update the syntax highlighting types of the row.
@@ -90,12 +113,18 @@ impl Row {
 
         // Delimiters for multi-line comments and multi-line strings, as Option<&String,
         // &String>
-        let ml_comment_delims = syntax.ml_comment_delims.as_ref().map(|(start, end)| (start, end));
+        let ml_comment_delims = syntax
+            .ml_comment_delims
+            .as_ref()
+            .map(|(start, end)| (start, end));
         let ml_string_delims = syntax.ml_string_delim.as_ref().map(|x| (x, x));
 
         'syntax_loop: while self.hl.len() < line.len() {
             let i = self.hl.len();
-            let find_str = |s: &str| line.get(i..(i + s.len())).is_some_and(|r| r.eq(s.as_bytes()));
+            let find_str = |s: &str| {
+                line.get(i..(i + s.len()))
+                    .is_some_and(|r| r.eq(s.as_bytes()))
+            };
 
             if hl_state == HlState::Normal && syntax.sl_comment_start.iter().any(|s| find_str(s)) {
                 self.hl.extend(repeat_n(HlType::Comment, line.len() - i));
@@ -161,7 +190,8 @@ impl Row {
                 let s_filter = |kw: &str| line.get(i + kw.len()).is_none_or(|c| is_sep(*c));
                 for (keyword_highlight_type, kws) in &syntax.keywords {
                     for keyword in kws.iter().filter(|kw| find_str(kw) && s_filter(kw)) {
-                        self.hl.extend(repeat_n(*keyword_highlight_type, keyword.len()));
+                        self.hl
+                            .extend(repeat_n(*keyword_highlight_type, keyword.len()));
                     }
                 }
             }
@@ -170,8 +200,11 @@ impl Row {
         }
 
         // String state doesn't propagate to the next row
-        self.hl_state =
-            if matches!(hl_state, HlState::String(_)) { HlState::Normal } else { hl_state };
+        self.hl_state = if matches!(hl_state, HlState::String(_)) {
+            HlState::Normal
+        } else {
+            hl_state
+        };
         self.hl_state
     }
 
@@ -182,10 +215,19 @@ impl Row {
     pub fn draw(&self, offset: usize, max_len: usize, buffer: &mut String, use_color: bool) {
         let mut current_hl_type = HlType::Normal;
         let chars = self.render.chars().skip(offset).take(max_len);
-        let mut rx = self.render.chars().take(offset).map(|c| c.width().unwrap_or(1)).sum();
+        let mut rx = self
+            .render
+            .chars()
+            .take(offset)
+            .map(|c| c.width().unwrap_or(1))
+            .sum();
         for (c, mut hl_type) in chars.zip(self.hl.iter().skip(offset)) {
             if c.is_ascii_control() {
-                let rendered_char = if (c as u8) <= 26 { (b'@' + c as u8) as char } else { '?' };
+                let rendered_char = if (c as u8) <= 26 {
+                    (b'@' + c as u8) as char
+                } else {
+                    '?'
+                };
                 push_colored(buffer, WBG, &rendered_char.to_string(), use_color);
                 // Restore previous color
                 if use_color && current_hl_type != HlType::Normal {
