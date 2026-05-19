@@ -97,7 +97,7 @@ impl Cartridge {
         let ram = vec![0u8; ram_size.max(8192)];
 
         let title_str: Vec<u8> = title.iter().copied().take_while(|&c| c != 0 && c >= 0x20).collect();
-        crate::serial_println!("[GB] ROM: \"{}\" type={:#04X} mbc={:?} ROM={}KB RAM={}KB CGB={:#04X}",
+        crate::log!("[GB] ROM: \"{}\" type={:#04X} mbc={:?} ROM={}KB RAM={}KB CGB={:#04X}\n",
             core::str::from_utf8(&title_str).unwrap_or("???"),
             cart_type,
             match mbc_type { MbcType::None => "None", MbcType::Mbc1 => "MBC1", MbcType::Mbc3 => "MBC3", MbcType::Mbc5 => "MBC5" },

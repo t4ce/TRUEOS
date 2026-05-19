@@ -14,6 +14,7 @@ const UI2_GBOI_WINDOW_X: f32 = 760.0;
 const UI2_GBOI_WINDOW_Y: f32 = 140.0;
 const UI2_GBOI_WINDOW_Z: i16 = 41;
 const UI2_GBOI_WINDOW_ALPHA: u8 = 0xFF;
+const UI2_GBOI_FRAME_MS: u64 = 16;
 
 fn argb_to_rgba_owned(argb: &[u32]) -> Vec<u8> {
     let mut rgba = Vec::with_capacity(argb.len().saturating_mul(4));
@@ -26,7 +27,7 @@ fn argb_to_rgba_owned(argb: &[u32]) -> Vec<u8> {
     rgba
 }
 
-fn render_no_rom_frame(emulator: &crate::gboi::nes::NesEmulator) -> Vec<u8> {
+fn render_frame(emulator: &crate::gboi::nes::NesEmulator) -> Vec<u8> {
     let mut argb = alloc::vec![0u32; (UI2_GBOI_VIEW_W * UI2_GBOI_VIEW_H) as usize];
     emulator.render(argb.as_mut_slice(), UI2_GBOI_VIEW_W as usize, UI2_GBOI_VIEW_H as usize);
     argb_to_rgba_owned(argb.as_slice())
@@ -35,7 +36,7 @@ fn render_no_rom_frame(emulator: &crate::gboi::nes::NesEmulator) -> Vec<u8> {
 #[embassy_executor::task]
 pub async fn ui2_gboi_demo_task() {
     let _task_guard = crate::r::spawn_service::task_run_guard(UI2_GBOI_TASK_NAME);
-    let emulator = crate::gboi::nes::NesEmulator::new();
+    let mut emulator = crate::gboi::nes::NesEmulator::new();
 
     let Some(surface) = ui2::Ui2SurfaceWindow::get_or_create_for_hosted_content_with_size(
         UI2_GBOI_WINDOW_TITLE,
@@ -66,14 +67,22 @@ pub async fn ui2_gboi_demo_task() {
     let _ = ui2::set_window_resize_maintain_aspect(surface.window_id(), true);
     let _ = ui2::set_window_content_preserve_scale(surface.window_id(), true);
 
-    let pixels = render_no_rom_frame(&emulator);
-    if !surface.upload_rgba_owned(pixels, "ui2-gboi-demo-present") {
-        crate::log!("ui2-gboi-demo: upload failed tex={}\n", surface.tex_id());
-        return;
-    }
+    let _ = surface.bind_hosted_scroll_state(UI2_GBOI_CONTENT_ID, UI2_GBOI_VIEW_W, UI2_GBOI_VIEW_H);
 
     loop {
-        if crate::r::spawn_service::wait_task_or_timeout_ms(UI2_GBOI_TASK_NAME, 3_600_000).await {
+        if crate::r::spawn_service::task_stop_requested(UI2_GBOI_TASK_NAME) {
+            break;
+        }
+
+        emulator.tick();
+
+        let pixels = render_frame(&emulator);
+        if !surface.upload_rgba_owned(pixels, "ui2-gboi-demo-present") {
+            crate::log!("ui2-gboi-demo: upload failed tex={}\n", surface.tex_id());
+            return;
+        }
+
+        if crate::r::spawn_service::wait_task_or_timeout_ms(UI2_GBOI_TASK_NAME, UI2_GBOI_FRAME_MS).await {
             break;
         }
     }

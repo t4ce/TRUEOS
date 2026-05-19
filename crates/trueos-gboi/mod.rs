@@ -95,7 +95,7 @@ impl GameBoyEmulator {
                 self.cpu.e = 0x56;
                 self.cpu.h = 0x00;
                 self.cpu.l = 0x0D;
-                crate::serial_println!("[GB] CGB mode enabled (A=0x11)");
+                crate::log!("[GB] CGB mode enabled (A=0x11)\n");
             }
             self.gpu = gpu::Gpu::new();
             self.gpu.cgb_mode = is_cgb;
@@ -123,10 +123,10 @@ impl GameBoyEmulator {
             self.key1 = 0;
             self.hdma_active = false;
             self.rom_loaded = true;
-            crate::serial_println!("[GB] ROM loaded successfully (CGB={})", is_cgb);
+            crate::log!("[GB] ROM loaded successfully (CGB={})\n", is_cgb);
             true
         } else {
-            crate::serial_println!("[GB] Failed to load ROM");
+            crate::log!("[GB] Failed to load ROM\n");
             false
         }
     }
@@ -362,7 +362,7 @@ impl GbBus for BusAdapter<'_> {
             // External RAM
             0xA000..=0xBFFF => self.cart.read(addr),
             // WRAM bank 0 ($C000-$CFFF)
-            0xC000..=0xCFFF => self.wram[(addr as usize - 0xC000)],
+            0xC000..=0xCFFF => self.wram[addr as usize - 0xC000],
             // WRAM bank 1-7 ($D000-$DFFF) — CGB switchable
             0xD000..=0xDFFF => {
                 let bank = if self.cgb_mode { (*self.wram_bank).max(1) as usize } else { 1 };
@@ -370,7 +370,7 @@ impl GbBus for BusAdapter<'_> {
                 if offset < self.wram.len() { self.wram[offset] } else { 0xFF }
             },
             // Echo RAM
-            0xE000..=0xEFFF => self.wram[(addr as usize - 0xE000)],
+            0xE000..=0xEFFF => self.wram[addr as usize - 0xE000],
             0xF000..=0xFDFF => {
                 let bank = if self.cgb_mode { (*self.wram_bank).max(1) as usize } else { 1 };
                 let offset = bank * 0x1000 + (addr as usize - 0xF000);
@@ -439,7 +439,7 @@ impl GbBus for BusAdapter<'_> {
             // External RAM
             0xA000..=0xBFFF => self.cart.write(addr, val),
             // WRAM bank 0
-            0xC000..=0xCFFF => self.wram[(addr as usize - 0xC000)] = val,
+            0xC000..=0xCFFF => self.wram[addr as usize - 0xC000] = val,
             // WRAM bank 1-7 (CGB switchable)
             0xD000..=0xDFFF => {
                 let bank = if self.cgb_mode { (*self.wram_bank).max(1) as usize } else { 1 };
@@ -447,7 +447,7 @@ impl GbBus for BusAdapter<'_> {
                 if offset < self.wram.len() { self.wram[offset] = val; }
             },
             // Echo RAM
-            0xE000..=0xEFFF => self.wram[(addr as usize - 0xE000)] = val,
+            0xE000..=0xEFFF => self.wram[addr as usize - 0xE000] = val,
             0xF000..=0xFDFF => {
                 let bank = if self.cgb_mode { (*self.wram_bank).max(1) as usize } else { 1 };
                 let offset = bank * 0x1000 + (addr as usize - 0xF000);
@@ -493,7 +493,7 @@ impl GbBus for BusAdapter<'_> {
                         a @ 0x0000..=0x7FFF => self.cart.read(a),
                         a @ 0x8000..=0x9FFF => self.gpu.read_vram(a),
                         a @ 0xA000..=0xBFFF => self.cart.read(a),
-                        a @ 0xC000..=0xCFFF => self.wram[(a as usize - 0xC000)],
+                        a @ 0xC000..=0xCFFF => self.wram[a as usize - 0xC000],
                         a @ 0xD000..=0xDFFF => {
                             let bank = if self.cgb_mode { (*self.wram_bank).max(1) as usize } else { 1 };
                             let offset = bank * 0x1000 + (a as usize - 0xD000);
@@ -530,7 +530,7 @@ impl GbBus for BusAdapter<'_> {
                                 a @ 0x0000..=0x7FFF => self.cart.read(a),
                                 a @ 0x8000..=0x9FFF => self.gpu.read_vram(a),
                                 a @ 0xA000..=0xBFFF => self.cart.read(a),
-                                a @ 0xC000..=0xCFFF => self.wram[(a as usize - 0xC000)],
+                                a @ 0xC000..=0xCFFF => self.wram[a as usize - 0xC000],
                                 a @ 0xD000..=0xDFFF => {
                                     let bank = (*self.wram_bank).max(1) as usize;
                                     let offset = bank * 0x1000 + (a as usize - 0xD000);
@@ -547,7 +547,7 @@ impl GbBus for BusAdapter<'_> {
                             let byte = match src.wrapping_add(i) {
                                 a @ 0x0000..=0x7FFF => self.cart.read(a),
                                 a @ 0xA000..=0xBFFF => self.cart.read(a),
-                                a @ 0xC000..=0xCFFF => self.wram[(a as usize - 0xC000)],
+                                a @ 0xC000..=0xCFFF => self.wram[a as usize - 0xC000],
                                 a @ 0xD000..=0xDFFF => {
                                     let bank = (*self.wram_bank).max(1) as usize;
                                     let offset = bank * 0x1000 + (a as usize - 0xD000);
