@@ -324,7 +324,6 @@ impl Gpu {
 
         for i in 0..40 {
             let sy = self.oam[i * 4] as i32 - 16;
-            let sx = self.oam[i * 4 + 1] as i32 - 8;
             let tile = self.oam[i * 4 + 2];
             let flags = self.oam[i * 4 + 3];
 
