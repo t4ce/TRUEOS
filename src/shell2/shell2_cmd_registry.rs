@@ -13,6 +13,7 @@ struct BuiltinShell2CmdEntry {
     name: &'static str,
     mode: &'static str,
     color: Option<(u8, u8, u8)>,
+    advertised: bool,
     handler: Shell2CmdHandler,
     tool_description: Option<&'static str>,
     tool_parameters_json: Option<&'static str>,
@@ -21,7 +22,6 @@ struct BuiltinShell2CmdEntry {
 const TOOL_JSON_ACPI: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["reboot","S1","S2","S3","S4","S5"],"description":"ACPI action to run."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_7Z: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS file to compress into a sibling .7z archive."}},"required":["path"],"additionalProperties":false}"#;
 const TOOL_JSON_C4: &str = r#"{"type":"object","properties":{"mode":{"type":"string","enum":["file","inline"],"description":"Compile from a TRUEOSFS file or inline C4 source."},"path":{"type":"string","description":"TRUEOSFS source path when mode=file."},"source":{"type":"string","description":"Inline C4 source when mode=inline."}},"required":["mode"],"additionalProperties":false}"#;
-const TOOL_JSON_ETC: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["ample","go","go2","insane"],"description":"etc subcommand to run."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_DISC: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","format"],"description":"disc action to run."},"disk_id":{"type":"string","description":"Disk id string for action=format."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_LSD: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"Optional TRUEOSFS path to list."},"long":{"type":"boolean","description":"Show file kind and byte size."},"tree":{"type":"boolean","description":"Walk recursively from the path."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_MV: &str = r#"{"type":"object","properties":{"src":{"type":"string","description":"Source TRUEOSFS path."},"dst":{"type":"string","description":"Destination TRUEOSFS path."},"regex":{"type":"string","description":"Optional -regx pattern. When set, src and dst are directories."}},"required":["src","dst"],"additionalProperties":false}"#;
@@ -40,11 +40,6 @@ fn dispatch_acpi(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Par
 
 fn dispatch_7z(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     super::cmds::sevenz::try_parse(io, rest)
-}
-
-fn dispatch_etc(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    let mut args = rest.split_whitespace();
-    super::cmds::etc::try_parse(io, &mut args)
 }
 
 fn dispatch_install(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -149,6 +144,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         name: "7z",
         mode: "cmd",
         color: Some((60, 220, 120)),
+        advertised: true,
         handler: dispatch_7z,
         tool_description: Some("Queue a kernel codec job that compresses a TRUEOSFS file as .7z."),
         tool_parameters_json: Some(TOOL_JSON_7Z),
@@ -157,6 +153,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         name: "acpi",
         mode: "cmd",
         color: None,
+        advertised: true,
         handler: dispatch_acpi,
         tool_description: Some("Run ACPI power actions."),
         tool_parameters_json: Some(TOOL_JSON_ACPI),
@@ -165,6 +162,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         name: "bench",
         mode: "cmd",
         color: None,
+        advertised: true,
         handler: dispatch_bench,
         tool_description: None,
         tool_parameters_json: None,
@@ -173,22 +171,16 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         name: "c4",
         mode: "cmd",
         color: Some((255, 190, 90)),
+        advertised: true,
         handler: dispatch_c4,
         tool_description: Some("Compile C4 source to Rust and TC4O, then run the TC4O VM object."),
         tool_parameters_json: Some(TOOL_JSON_C4),
     },
     BuiltinShell2CmdEntry {
-        name: "etc",
-        mode: "cmd",
-        color: None,
-        handler: dispatch_etc,
-        tool_description: Some("Run small shell demo and utility subcommands."),
-        tool_parameters_json: Some(TOOL_JSON_ETC),
-    },
-    BuiltinShell2CmdEntry {
         name: "disc",
         mode: "cmd",
         color: Some((255, 55, 255)),
+        advertised: true,
         handler: dispatch_disc,
         tool_description: Some("List top-level disk devices or format a disk."),
         tool_parameters_json: Some(TOOL_JSON_DISC),
@@ -197,6 +189,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         name: "install",
         mode: "cmd",
         color: Some((255, 55, 255)),
+        advertised: true,
         handler: dispatch_install,
         tool_description: None,
         tool_parameters_json: None,
@@ -205,6 +198,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         name: "lsd",
         mode: "cmd",
         color: Some((60, 220, 120)),
+        advertised: true,
         handler: dispatch_lsd,
         tool_description: Some("List TRUEOSFS paths with the TRUEOS lsd adapter."),
         tool_parameters_json: Some(TOOL_JSON_LSD),
@@ -213,6 +207,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         name: "rm",
         mode: "cmd",
         color: Some((60, 220, 120)),
+        advertised: true,
         handler: dispatch_rm,
         tool_description: Some("Remove a TRUEOSFS file or directory after confirmation."),
         tool_parameters_json: Some(TOOL_JSON_RM),
@@ -221,6 +216,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         name: "remove",
         mode: "cmd",
         color: Some((60, 220, 120)),
+        advertised: false,
         handler: dispatch_remove,
         tool_description: None,
         tool_parameters_json: None,
@@ -229,6 +225,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         name: "delete",
         mode: "cmd",
         color: Some((60, 220, 120)),
+        advertised: false,
         handler: dispatch_delete,
         tool_description: None,
         tool_parameters_json: None,
@@ -237,6 +234,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         name: "del",
         mode: "cmd",
         color: Some((60, 220, 120)),
+        advertised: false,
         handler: dispatch_del,
         tool_description: None,
         tool_parameters_json: None,
@@ -245,6 +243,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         name: "mv",
         mode: "cmd",
         color: Some((60, 220, 120)),
+        advertised: true,
         handler: dispatch_mv,
         tool_description: Some("Move TRUEOSFS files or directory contents."),
         tool_parameters_json: Some(TOOL_JSON_MV),
@@ -253,6 +252,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         name: "move",
         mode: "cmd",
         color: Some((60, 220, 120)),
+        advertised: false,
         handler: dispatch_move,
         tool_description: None,
         tool_parameters_json: None,
@@ -261,6 +261,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         name: "net",
         mode: "cmd",
         color: None,
+        advertised: true,
         handler: dispatch_net,
         tool_description: Some(
             "Inspect network state, run ICMP, use IRC, or get/set the hostname.",
@@ -271,6 +272,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         name: "tlb",
         mode: "cmd",
         color: None,
+        advertised: true,
         handler: dispatch_tlb,
         tool_description: Some("Print one of the table and hardware inspection views."),
         tool_parameters_json: Some(TOOL_JSON_TLB),
@@ -279,6 +281,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         name: "turbo",
         mode: "cmd",
         color: None,
+        advertised: true,
         handler: dispatch_turbo,
         tool_description: Some("Inspect or change CPU turbo state."),
         tool_parameters_json: Some(TOOL_JSON_TURBO),
@@ -287,6 +290,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         name: "txt",
         mode: "cmd",
         color: None,
+        advertised: true,
         handler: dispatch_txt,
         tool_description: None,
         tool_parameters_json: None,
@@ -295,6 +299,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         name: "update",
         mode: "cmd",
         color: Some((255, 55, 255)),
+        advertised: true,
         handler: dispatch_update,
         tool_description: None,
         tool_parameters_json: None,
@@ -303,6 +308,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         name: "set",
         mode: "cmd",
         color: None,
+        advertised: true,
         handler: dispatch_set,
         tool_description: Some("Set the shell line width."),
         tool_parameters_json: Some(TOOL_JSON_SET),
@@ -311,6 +317,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         name: "shader",
         mode: "cmd",
         color: Some((120, 210, 255)),
+        advertised: true,
         handler: dispatch_shader,
         tool_description: Some("List or queue C4 shader files for the EU32 artifact compiler."),
         tool_parameters_json: Some(TOOL_JSON_SHADER),
@@ -319,6 +326,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         name: "smp",
         mode: "cmd",
         color: None,
+        advertised: true,
         handler: dispatch_smp,
         tool_description: Some("Inspect SMP slot state."),
         tool_parameters_json: Some(TOOL_JSON_SMP),
@@ -361,10 +369,12 @@ pub(crate) fn try_dispatch(
 pub(crate) fn command_names_status_text() -> AllocString {
     let mut out = AllocString::new();
 
-    for (idx, entry) in BUILTIN_CMD_REGISTRY.iter().enumerate() {
-        if idx != 0 {
+    let mut first = true;
+    for entry in BUILTIN_CMD_REGISTRY.iter().filter(|entry| entry.advertised) {
+        if !first {
             out.push(' ');
         }
+        first = false;
         if let Some(color) = entry.color {
             let styled =
                 alloc::format!("{}", super::term_style::paint(entry.name).bold().color(color));
@@ -382,6 +392,9 @@ pub(crate) fn command_registry_json() -> AllocString {
     let mut first = true;
 
     for entry in BUILTIN_CMD_REGISTRY {
+        if !entry.advertised {
+            continue;
+        }
         if !first {
             out.push(',');
         }

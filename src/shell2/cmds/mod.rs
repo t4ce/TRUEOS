@@ -5,7 +5,6 @@ pub(crate) mod ample;
 pub(crate) mod bench;
 pub(crate) mod c4;
 pub(crate) mod disc;
-pub(crate) mod etc;
 pub(crate) mod format;
 pub(crate) mod install;
 pub(crate) mod lsd;

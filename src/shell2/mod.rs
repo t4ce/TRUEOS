@@ -1304,9 +1304,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
         }
 
         if let Some(b) = io.read_byte() {
-            if cmds::etc::handle_input_byte(io) {
-                continue;
-            }
             if b == 0x03 {
                 esc = EscState::None;
                 text_decode = ecma48::InputDecodeState::None;
