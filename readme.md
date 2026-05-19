@@ -21,6 +21,12 @@ Think of TRUE OS as the world’s fast-moving “entropy dividend”:
 A constant influx of resources, money, and safety.
 */
 
+/*
+Retired shell2 etc/go spinner sequences, kept as glyph references:
+go  = ⣿ ⣾ ⣽ ⣻ ⢿ ⡿ ⣟ ⣯ ⣷
+go2 = ⢈ ⡈ ⡐ ⡠ ⣀ ⢄ ⢂ ⢁ ⡁
+*/
+
 
 # install
 sudo apt update && sudo apt upgrade
