@@ -6,7 +6,7 @@ pub(crate) const GLOBAL_LOG_LEVEL: LevelFilter = LevelFilter::Info;
 pub(crate) const BOOT_LOG_LEVEL: LevelFilter = LevelFilter::Error;
 pub(crate) const SERVICE_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const NET_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
-pub(crate) const USB_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
+pub(crate) const USB_LOG_LEVEL: LevelFilter = LevelFilter::Info;
 pub(crate) const STORAGE_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const GFX_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const HV_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
@@ -66,7 +66,14 @@ pub(crate) static BGRT_LOG_ONCE: Once<()> = Once::new();
 pub(crate) static TGA_MISSING_LOG_ONCE: Once<()> = Once::new();
 pub(crate) static TGA_TASK_STARTED_LOG_ONCE: Once<()> = Once::new();
 
-pub(crate) fn usb_vendor_log_enabled(level: Level) -> bool {
+fn canonical_concept(concept: &str) -> &str {
+    match concept {
+        "crabusb" => "usb",
+        other => other,
+    }
+}
+
+pub(crate) fn usb_log_enabled(level: Level) -> bool {
     level_enabled(USB_LOG_LEVEL, level)
 }
 
@@ -75,11 +82,11 @@ pub(crate) fn blueprint_log_enabled(level: Level) -> bool {
 }
 
 pub(crate) fn concept_log_enabled(concept: &str, level: Level) -> bool {
-    let filter = match concept {
+    let filter = match canonical_concept(concept) {
         "boot" | "cpu" | "tokio" | "rapl" | "tga" => BOOT_LOG_LEVEL,
         "service" | "spawn-svc" | "http" => SERVICE_LOG_LEVEL,
         "net" | "dns" | "dhcp" | "tls" | "icmp" => NET_LOG_LEVEL,
-        "usb" | "crabusb" => USB_LOG_LEVEL,
+        "usb" => USB_LOG_LEVEL,
         "fs" | "storage" | "trueosfs" | "nvme" => STORAGE_LOG_LEVEL,
         "gfx" | "intel" | "display" => GFX_LOG_LEVEL,
         "hv" => HV_LOG_LEVEL,

@@ -224,6 +224,7 @@ fn seed_deferred_surface_texture(tex_id: u32, host_tex_id: u32, width: u32, heig
     if tex_id == 0 || width == 0 || height == 0 {
         return false;
     }
+    let upload_tex_id = if host_tex_id != 0 { host_tex_id } else { tex_id };
     if host_tex_id != 0 && crate::r::io::cabi::host_texture_has_image(host_tex_id) {
         return true;
     }
@@ -238,7 +239,7 @@ fn seed_deferred_surface_texture(tex_id: u32, host_tex_id: u32, width: u32, heig
         pixels.extend_from_slice(&[0x08, 0x0C, 0x12, 0xFF]);
     }
     crate::r::io::cabi::queue_texture_rgba_image_upload_owned(
-        tex_id,
+        upload_tex_id,
         width,
         height,
         pixels,

@@ -121,6 +121,20 @@ fn inferred_concept_for_rendered(rendered: &str) -> Option<&'static str> {
     None
 }
 
+fn is_usb_vendor_metadata(metadata: &Metadata<'_>) -> bool {
+    let target = metadata.target();
+    target.contains("crab_usb") || target.contains("crab-usb")
+}
+
+fn is_usb_vendor_record(record: &Record<'_>) -> bool {
+    let module_path = record.module_path().unwrap_or("");
+    let target = record.target();
+    module_path.contains("crab_usb")
+        || module_path.contains("crab-usb")
+        || target.contains("crab_usb")
+        || target.contains("crab-usb")
+}
+
 pub fn log_with_purpose(purpose: Option<&str>, args: fmt::Arguments<'_>) {
     let _guard = LOG_WRITE_LOCK.lock();
 
@@ -215,7 +229,10 @@ fn usb_vendor_rendered_log_allowed(rendered: &str) -> bool {
 struct KernelLogFacade;
 
 impl log::Log for KernelLogFacade {
-    fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+    fn enabled(&self, metadata: &Metadata<'_>) -> bool {
+        if is_usb_vendor_metadata(metadata) {
+            return crate::logflag::usb_log_enabled(metadata.level());
+        }
         true
     }
 
@@ -224,13 +241,7 @@ impl log::Log for KernelLogFacade {
             return;
         }
         let purpose = purpose_for_level(record.level());
-        let module_path = record.module_path().unwrap_or("");
-        let target = record.target();
-        let is_usb_vendor_log = module_path.contains("crab_usb") || target.contains("crab_usb");
-        if is_usb_vendor_log {
-            if !crate::logflag::usb_vendor_log_enabled(record.level()) {
-                return;
-            }
+        if is_usb_vendor_record(record) {
             let rendered = alloc::format!("{}", record.args());
             if !usb_vendor_rendered_log_allowed(rendered.as_str()) {
                 return;

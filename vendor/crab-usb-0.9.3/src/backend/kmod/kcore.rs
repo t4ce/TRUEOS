@@ -1,4 +1,4 @@
-use alloc::{boxed::Box, collections::btree_map::BTreeMap, vec::Vec};
+use alloc::{boxed::Box, collections::btree_map::BTreeMap, format, vec::Vec};
 
 use futures::{
     FutureExt,
@@ -41,6 +41,10 @@ pub struct Core {
     hubs: Arena<Hub>,
     root_hub: Option<Id<Hub>>,
     inited_devices: BTreeMap<usize, Box<dyn DeviceOp>>,
+}
+
+fn is_xhci_command_timeout(err: &USBError) -> bool {
+    format!("{err:?}").contains("xHCI command timed out")
 }
 
 impl Core {
@@ -97,6 +101,7 @@ impl Core {
                 let device = match self.backend.new_addressed_device(info).await {
                     Ok(device) => device,
                     Err(err) => {
+                        let xhci_command_timeout = is_xhci_command_timeout(&err);
                         warn!(
                             "kcore: address failed root_port={} port={} speed={:?} err={:?}",
                             addr_info.root_port_id,
@@ -104,6 +109,14 @@ impl Core {
                             addr_info.port_speed,
                             err
                         );
+                        if xhci_command_timeout {
+                            warn!(
+                                "kcore: address failed on xhci command timeout; suppressing rearm root_port={} port={}",
+                                addr_info.root_port_id,
+                                addr_info.port_id
+                            );
+                            continue;
+                        }
                         if let Some(hub) = self.hubs.get_mut(id) {
                             hub.backend.rearm_port(addr_info.port_id);
                         }

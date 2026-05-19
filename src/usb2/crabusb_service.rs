@@ -531,12 +531,19 @@ fn uninstall_event_handler(controller_id: usize) {
     });
 }
 
-async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawner: &Spawner) {
+async fn probe_and_bind(
+    host: &mut USBHost,
+    info: super::TlbUsbController,
+    spawner: &Spawner,
+    quiet_empty: bool,
+) {
     update_runtime_diag(info.index, |diag| {
         diag.controller_phase = "probing";
         diag.probe_requested = PROBE_REQUESTED[info.index].load(Ordering::Acquire);
     });
-    crate::log!("crabusb: probe enter ctrl={}\n", info.index);
+    if !quiet_empty {
+        crate::log!("crabusb: probe enter ctrl={}\n", info.index);
+    }
     let devices = match host.probe_devices().await {
         Ok(devices) => devices,
         Err(err) => {
@@ -549,11 +556,13 @@ async fn probe_and_bind(host: &mut USBHost, info: super::TlbUsbController, spawn
             return;
         }
     };
-    crate::log!(
-        "crabusb: probe done ctrl={} devices={}\n",
-        info.index,
-        devices.len()
-    );
+    if !quiet_empty || !devices.is_empty() {
+        crate::log!(
+            "crabusb: probe done ctrl={} devices={}\n",
+            info.index,
+            devices.len()
+        );
+    }
 
     update_runtime_diag(info.index, |diag| {
         diag.controller_phase = "probe-ok";
@@ -987,11 +996,11 @@ pub async fn bsp_service(controller_index: usize) {
                 quiet_probe_until =
                     Some(Instant::now() + EmbassyDuration::from_millis(INTEL_PROBE_SETTLE_MS));
             } else {
+                probe_and_bind(&mut host, info, &spawner, false).await;
                 install_event_handler(info.index, host.create_event_handler());
                 if let Ok(token) = event_pump_task(info.index) {
                     spawner.spawn(token);
                 }
-                probe_and_bind(&mut host, info, &spawner).await;
             }
 
             loop {
@@ -1001,7 +1010,7 @@ pub async fn bsp_service(controller_index: usize) {
                             Instant::now() + EmbassyDuration::from_millis(INTEL_PROBE_SETTLE_MS),
                         );
                     } else {
-                        probe_and_bind(&mut host, info, &spawner).await;
+                        probe_and_bind(&mut host, info, &spawner, false).await;
                     }
                 }
                 if let Some(deadline) = quiet_probe_until {
@@ -1012,7 +1021,7 @@ pub async fn bsp_service(controller_index: usize) {
                                 info.index
                             );
                         }
-                        probe_and_bind(&mut host, info, &spawner).await;
+                        probe_and_bind(&mut host, info, &spawner, false).await;
                         hotplug_poll_deadline =
                             Instant::now() + EmbassyDuration::from_millis(HOTPLUG_POLL_MS);
                         if !EVENT_HANDLER_READY[info.index].load(Ordering::Acquire) {
@@ -1038,7 +1047,7 @@ pub async fn bsp_service(controller_index: usize) {
                                 info.index
                             );
                         }
-                        probe_and_bind(&mut host, info, &spawner).await;
+                        probe_and_bind(&mut host, info, &spawner, true).await;
                         reprobe_until =
                             Some(Instant::now() + EmbassyDuration::from_millis(INTEL_REPROBE_MS));
                         hotplug_poll_deadline =
@@ -1046,7 +1055,7 @@ pub async fn bsp_service(controller_index: usize) {
                     }
                 }
                 if quiet_probe_until.is_none() && Instant::now() >= hotplug_poll_deadline {
-                    probe_and_bind(&mut host, info, &spawner).await;
+                    probe_and_bind(&mut host, info, &spawner, true).await;
                     hotplug_poll_deadline =
                         Instant::now() + EmbassyDuration::from_millis(HOTPLUG_POLL_MS);
                 }
