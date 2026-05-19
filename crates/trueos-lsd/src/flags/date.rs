@@ -75,7 +75,7 @@ impl Configurable<Self> for DateFlag {
 
     /// Get a potential `DateFlag` variant from the environment.
     fn from_environment() -> Option<Self> {
-        if let Ok(value) = std::env::var("TIME_STYLE") {
+        if let Ok(value) = v::env::var("TIME_STYLE") {
             match value.as_str() {
                 "full-iso" => Some(Self::Formatted("%F %T.%f %z".into())),
                 "long-iso" => Some(Self::Formatted("%F %R".into())),

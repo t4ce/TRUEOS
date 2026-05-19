@@ -3,7 +3,8 @@ pub mod git;
 pub mod icon;
 
 use tokio::path::Path;
-use std::{fs, io};
+use trueos_io as io;
+use v::vio::kfs;
 
 use serde::{Deserialize, de::DeserializeOwned};
 use thiserror::Error;
@@ -73,12 +74,12 @@ impl Theme {
             return Err(Error::InvalidPath("No valid theme file found".to_string()));
         };
 
-        match fs::read_to_string(valid) {
+        match kfs::read_file_utf8(valid.as_os_str()) {
             Ok(yaml) => match Self::with_yaml(&yaml) {
                 Ok(t) => Ok(t),
                 Err(e) => Err(Error::InvalidFormat(e)),
             },
-            Err(e) => Err(Error::ReadFailed(e)),
+            Err(e) => Err(Error::ReadFailed(trueos_io::status_error(e))),
         }
     }
 

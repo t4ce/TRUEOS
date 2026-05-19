@@ -68,20 +68,8 @@ impl ExitCode {
 macro_rules! print_error {
     ($($arg:tt)*) => {
         {
-            use trueos_io::Write;
-
-            let stderr = std::io::stderr();
-
-            {
-                let mut handle = stderr.lock();
-                // We can write on stderr, so we simply ignore the error and don't print
-                // and stop with success.
-                let res = handle.write_all(alloc::format!("lsd: {}\n\n",
-                                                        alloc::format!($($arg)*)).as_bytes());
-                if res.is_err() {
-                    std::process::exit(0);
-                }
-            }
+            let text = alloc::format!("lsd: {}\n\n", alloc::format!($($arg)*));
+            let _ = v::vshell::attached_write(text.as_bytes());
         }
     };
 }
@@ -91,20 +79,8 @@ macro_rules! print_error {
 #[macro_export]
 macro_rules! print_output {
     ($($arg:tt)*) => {
-        use trueos_io::Write;
-
-        let stderr = std::io::stdout();
-
-
-        {
-            let mut handle = stderr.lock();
-            // We can write on stdout, so we simply ignore the error and don't print
-            // and stop with success.
-            let res = handle.write_all(alloc::format!($($arg)*).as_bytes());
-            if res.is_err() {
-                std::process::exit(0);
-            }
-        }
+        let text = alloc::format!($($arg)*);
+        let _ = v::vshell::attached_write(text.as_bytes());
     };
 }
 
@@ -136,5 +112,6 @@ fn generate_default_config() {
 
     // Print the default config to stdout without the leading '---'
     let config = config_file::DEFAULT_CONFIG.trim_start_matches("---\n");
-    println!("{}", config);
+    let _ = v::vshell::attached_write(config.as_bytes());
+    let _ = v::vshell::attached_write(b"\n");
 }

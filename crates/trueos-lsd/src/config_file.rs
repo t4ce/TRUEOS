@@ -14,8 +14,8 @@ use tokio::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use std::fs;
 use trueos_io as io;
+use v::vio::kfs;
 
 /// A struct to hold an optional configuration items, and provides methods
 /// around error handling in a config file.
@@ -135,7 +135,7 @@ impl Config {
     /// This constructs a Config struct with a passed file path.
     pub fn from_file<P: AsRef<Path>>(file: P) -> Option<Self> {
         let file = file.as_ref();
-        match fs::read(file) {
+        match kfs::read_file(file.as_os_str()) {
             Ok(f) => match Self::from_yaml(&String::from_utf8_lossy(&f)) {
                 Ok(c) => Some(c),
                 Err(e) => {
@@ -148,9 +148,9 @@ impl Config {
                 }
             },
             Err(e) => {
-                if e.kind() != io::ErrorKind::NotFound {
+                if trueos_io::status_kind(e) != io::ErrorKind::NotFound {
                     print_error!(
-                        "Can not open config file {}: {}.",
+                        "Can not open config file {}: platform status {}.",
                         file.to_string_lossy(),
                         e
                     );

@@ -8,7 +8,7 @@ use crate::config_file::Config;
 
 use serde::Deserialize;
 use serde::de::{self, Deserializer, Visitor};
-use std::env;
+use v::env;
 use core::fmt;
 
 /// A collection of flags on how to use colors.
