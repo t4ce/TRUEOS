@@ -12,6 +12,7 @@ pub enum Ui2DemoTexId {
     CursorPicker = 4_725,
     TextInput = 4_726,
     AnalogClock = 4_727,
+    Gboi = 4_728,
 }
 
 impl Ui2DemoTexId {
@@ -31,6 +32,7 @@ pub enum Ui2DemoContentId {
     CursorPicker = 52,
     TextInput = 53,
     AnalogClock = 54,
+    Gboi = 55,
 }
 
 impl Ui2DemoContentId {

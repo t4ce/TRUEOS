@@ -67,6 +67,7 @@ trueos-c4 = { path = "crates/trueos-c4" }
 v = { path = "crates/trueos-v" }
 trueos-vm = { path = "crates/trueos-vm" }
 trueos-esp = { path = "crates/trueos-esp" }
+trueos-locale = { path = "crates/trueos-locale", default-features = false }
 trueos-lsd = { path = "crates/trueos-lsd" }
 lyon_geom = { version = "1.0.19", default-features = false }
 lyon_tessellation = { version = "1.0.20", default-features = false }

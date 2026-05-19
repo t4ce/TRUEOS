@@ -6,8 +6,6 @@ pub mod cartridge;
 pub mod cpu;
 pub mod ppu;
 
-use alloc::vec;
-use alloc::vec::Vec;
 use cartridge::Cartridge;
 use cpu::{Cpu, CpuBus};
 use ppu::Ppu;
@@ -70,7 +68,6 @@ impl<'a> CpuBus for BusAdapter<'a> {
             0x4000..=0x4015 => 0, // APU registers (not emulated)
             0x4018..=0x5FFF => 0, // Expansion
             0x6000..=0xFFFF => self.cart.cpu_read(addr),
-            _ => 0,
         }
     }
 
@@ -93,7 +90,6 @@ impl<'a> CpuBus for BusAdapter<'a> {
             0x4000..=0x4015 | 0x4017 => {} // APU
             0x4018..=0x5FFF => {} // Expansion
             0x6000..=0xFFFF => self.cart.cpu_write(addr, val),
-            _ => {}
         }
     }
 }
@@ -139,7 +135,7 @@ impl NesEmulator {
                 };
                 self.cpu.reset(&mut bus);
             }
-            crate::serial_println!("[NES] ROM loaded, PC={:#06X}", self.cpu.pc);
+            crate::log!("[NES] ROM loaded, PC={:#06X}\n", self.cpu.pc);
             true
         } else {
             false
