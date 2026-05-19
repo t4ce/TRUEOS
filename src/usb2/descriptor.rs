@@ -3,7 +3,7 @@ extern crate alloc;
 use alloc::{string::String, vec::Vec};
 use core::fmt::Write;
 
-use crab_usb::{Device, USBHost, usb_if};
+use crab_usb::{Device, usb_if};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum UsbDescriptorScope {
@@ -317,36 +317,6 @@ fn log_hid_report_decode(slot_id: u32, interface_number: u8, report_desc: &[u8])
             _ => {}
         }
     }
-}
-
-pub(crate) async fn log_hid_report_descriptors(
-    host: &mut USBHost,
-    dev_info: &crab_usb::DeviceInfo,
-) {
-    let interface_numbers: Vec<u8> = dev_info
-        .interface_descriptors()
-        .filter(|iface| iface.class == 0x03)
-        .map(|iface| iface.interface_number)
-        .collect();
-
-    if interface_numbers.is_empty() {
-        return;
-    }
-
-    let mut device = match host.open_device(dev_info).await {
-        Ok(device) => device,
-        Err(err) => {
-            crate::log_info!(target: "usb";
-                "crabusb: hid {:04X}:{:04X} descriptor-open failed: {:?}\n",
-                dev_info.vendor_id(),
-                dev_info.product_id(),
-                err
-            );
-            return;
-        }
-    };
-
-    log_hid_report_descriptors_on_device(&mut device, dev_info).await;
 }
 
 pub(crate) async fn log_hid_report_descriptors_on_device(

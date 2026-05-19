@@ -4,6 +4,7 @@ pub mod pat {
     pub use super::pattern::*;
 }
 
+pub mod codec;
 pub mod cursor;
 pub mod disc;
 pub mod fs;

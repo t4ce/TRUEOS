@@ -31,6 +31,7 @@ macro_rules! define_started_flags {
 
 define_started_flags!(
     JOB_RUNNER_STARTED,
+    CODEC_SERVICE_STARTED,
     QJS_ASYNC_FS_SERVICE_STARTED,
     TRUEOSFS_MOUNT_SERVICE_STARTED,
     TRUEOSFS_INDEX_SERVICE_STARTED,
@@ -285,6 +286,41 @@ fn spawn_bool_result_to_attempt(result: Result<bool, SpawnError>) -> SpawnAttemp
 
 fn spawn_job_runner(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::wait::job_runner_task())
+}
+
+fn spawn_codec_service(spawner: Spawner) -> SpawnAttempt {
+    let _ = spawner;
+    let Some(profile) = crate::cpu::CpuProfile::for_slot(1) else {
+        return SpawnAttempt::Skipped;
+    };
+    let Some(ap1_spawner) = crate::workers::spawner_for_slot(profile.slot()) else {
+        return SpawnAttempt::Skipped;
+    };
+
+    let mut spawned = 0usize;
+    for worker_id in 0..3 {
+        match crate::r::codec::codec_worker_task(worker_id) {
+            Ok(token) => {
+                ap1_spawner.spawn(token);
+                spawned = spawned.saturating_add(1);
+            }
+            Err(err) if spawned == 0 => return SpawnAttempt::Failed(err),
+            Err(err) => {
+                crate::log_warn!(
+                    target: "service";
+                    "codec: worker={} spawn failed err={:?}\n",
+                    worker_id,
+                    err
+                );
+            }
+        }
+    }
+
+    if spawned == 0 {
+        SpawnAttempt::Skipped
+    } else {
+        SpawnAttempt::Spawned
+    }
 }
 
 fn spawn_factory_ram_probe(spawner: Spawner) -> SpawnAttempt {
@@ -1091,8 +1127,14 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::NET_SOCKET_READY
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-static TASKS: [TaskSpec; 69] = [
+static TASKS: [TaskSpec; 70] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
+    TaskSpec::enabled(
+        "codec-service",
+        crate::r::readiness::BACKGROUND_AP_WORKER_READY,
+        &CODEC_SERVICE_STARTED,
+        spawn_codec_service,
+    ),
     TaskSpec::enabled("factory-ram-probe", 0, &FACTORY_RAM_PROBE_STARTED, spawn_factory_ram_probe),
     TaskSpec::enabled(
         "qjs-async-fs-service",
@@ -1241,12 +1283,7 @@ static TASKS: [TaskSpec; 69] = [
         &HW_PIC_SERVICE_STARTED,
         spawn_hw_pic_service,
     ),
-    TaskSpec::disabled(
-        "hw_vid_probe_task",
-        0,
-        &HW_VID_PROBE_STARTED,
-        spawn_hw_vid_probe_task,
-    ),
+    TaskSpec::disabled("hw_vid_probe_task", 0, &HW_VID_PROBE_STARTED, spawn_hw_vid_probe_task),
     TaskSpec::enabled_gated(
         "hw_logo_present_task",
         0,

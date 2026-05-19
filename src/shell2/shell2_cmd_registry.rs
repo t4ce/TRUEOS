@@ -19,6 +19,7 @@ struct BuiltinShell2CmdEntry {
 }
 
 const TOOL_JSON_ACPI: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["reboot","S1","S2","S3","S4","S5"],"description":"ACPI action to run."}},"required":["action"],"additionalProperties":false}"#;
+const TOOL_JSON_7Z: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS file to compress into a sibling .7z archive."}},"required":["path"],"additionalProperties":false}"#;
 const TOOL_JSON_C4: &str = r#"{"type":"object","properties":{"mode":{"type":"string","enum":["file","inline"],"description":"Compile from a TRUEOSFS file or inline C4 source."},"path":{"type":"string","description":"TRUEOSFS source path when mode=file."},"source":{"type":"string","description":"Inline C4 source when mode=inline."}},"required":["mode"],"additionalProperties":false}"#;
 const TOOL_JSON_ETC: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["ample","go","go2","insane"],"description":"etc subcommand to run."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_DISC: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","format"],"description":"disc action to run."},"disk_id":{"type":"string","description":"Disk id string for action=format."}},"required":["action"],"additionalProperties":false}"#;
@@ -35,6 +36,10 @@ const TOOL_JSON_TURBO: &str = r#"{"type":"object","properties":{"action":{"type"
 fn dispatch_acpi(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
     super::cmds::acpi::try_parse(io, &mut args)
+}
+
+fn dispatch_7z(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::sevenz::try_parse(io, rest)
 }
 
 fn dispatch_etc(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -140,6 +145,14 @@ fn dispatch_txt(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -
 }
 
 const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
+    BuiltinShell2CmdEntry {
+        name: "7z",
+        mode: "cmd",
+        color: Some((60, 220, 120)),
+        handler: dispatch_7z,
+        tool_description: Some("Queue a kernel codec job that compresses a TRUEOSFS file as .7z."),
+        tool_parameters_json: Some(TOOL_JSON_7Z),
+    },
     BuiltinShell2CmdEntry {
         name: "acpi",
         mode: "cmd",

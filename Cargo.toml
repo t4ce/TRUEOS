@@ -52,7 +52,7 @@ rustls = { version = "0.23", default-features = false, features = ["custom-provi
 rustls-rustcrypto = { version = "0.0.2-alpha", default-features = false, features = ["alloc", "tls12", "zeroize"] }
 webpki-roots = { version = "1.0.7", default-features = false }
 miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }
-lzma-rust2 = { version = "0.16.2", default-features = false }
+lzma-rust2 = { version = "0.16.2", default-features = false, features = ["encoder"] }
 png = { version = "0.18.1", default-features = false }
 zune-core = { version = "0.5.1", default-features = false }
 zune-jpeg = { version = "0.5.15", default-features = false, features = ["x86", "portable_simd"] }

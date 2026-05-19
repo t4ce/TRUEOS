@@ -691,61 +691,12 @@ async fn probe_and_bind(
 
         let controller_id = info.index as u32;
         let mut bound_any = false;
-        let mut shared_led_device = None;
-        if usb_log_all_enabled()
-            && desc.class == 0x03
-            && super::descriptor::hid_optional_descriptor_skip_reason(
-                desc.vendor_id,
-                desc.product_id,
-            )
-            .is_none()
-        {
-            super::descriptor::log_hid_report_descriptors(host, dev_info).await;
-        }
-        if super::hid::leds::should_share_probe_device(dev_info) {
-            match host.open_device(dev_info).await {
-                Ok(mut device) => {
-                    super::descriptor::log_hid_report_descriptors_on_device(&mut device, dev_info)
-                        .await;
-                    shared_led_device = Some(device);
-                }
-                Err(err) => {
-                    crate::log!(
-                        "crabusb: hid+led {:04X}:{:04X} shared open failed: {:?}\n",
-                        desc.vendor_id,
-                        desc.product_id,
-                        err
-                    );
-                }
-            }
-        }
         if super::hid::boot::maybe_start_hid_mouse_streams(
             host,
             dev_info,
             spawner,
             controller_id,
-            shared_led_device.is_none(),
-        )
-        .await
-        {
-            bound_any = true;
-        }
-        if let Some(device) = shared_led_device {
-            if super::hid::leds::maybe_start_led_controller_with_device(
-                device,
-                dev_info,
-                spawner,
-                controller_id,
-            )
-            .await
-            {
-                bound_any = true;
-            }
-        } else if super::hid::leds::maybe_start_led_controller(
-            host,
-            dev_info,
-            spawner,
-            controller_id,
+            usb_log_all_enabled(),
         )
         .await
         {
