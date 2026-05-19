@@ -633,6 +633,10 @@ pub(crate) fn active_matrix_vm_input_id(output_mask: u8) -> Option<u8> {
     matrix::active_slot_vm_input_id(output_mask)
 }
 
+pub(crate) fn active_matrix_vm_id(output_mask: u8) -> Option<u8> {
+    matrix::active_slot_vm_id(output_mask)
+}
+
 pub(crate) fn history_total_lines() -> usize {
     matrix::history_total_lines()
 }
@@ -1377,11 +1381,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                 }
             }
 
-            if let Some(vm_id) = active_matrix_vm_input_id(output_mask) {
-                let _ = crate::hv::blueprint_console_submit_input(vm_id, &[b]);
-                continue;
-            }
-
             if saw_cr && b == b'\n' {
                 saw_cr = false;
                 continue;
@@ -1541,6 +1540,14 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             minute_text.as_str(),
                             submitted,
                         );
+                    } else if let Some(vm_id) = active_matrix_vm_id(output_mask) {
+                        if !submitted.is_empty() {
+                            record_user_line_for_active_slot(io, submitted);
+                            let _ =
+                                crate::hv::blueprint_console_submit_control_line(vm_id, submitted);
+                            transcript = current_transcript_for_task(io);
+                            out.render_transcript(&transcript);
+                        }
                     } else if has_broadcast_sessions {
                         if !submitted.is_empty() {
                             record_user_line_for_active_slot(io, submitted);

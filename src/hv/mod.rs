@@ -262,6 +262,7 @@ pub(crate) struct BlueprintProcessContext {
     vars: BTreeMap<AllocString, AllocString>,
     console_target: Option<MatrixTarget>,
     console_input: VecDeque<u8>,
+    control_shell_line: AllocVec<u8>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -888,16 +889,18 @@ pub fn stage_blueprint_launch(
         ),
         console_target,
         console_input: VecDeque::new(),
+        control_shell_line: AllocVec::new(),
     };
     let Some(guest_state) = crate::allocators::with_hv_guest_alloc_domain(vm_id, || state.clone())
     else {
         return Err(StartError::GuestMemoryUnavailable);
     };
-    if let Some(target) = process_context.console_target.as_ref() {
-        crate::shell2::bind_matrix_target_vm(target, vm_id);
-    }
+    let console_target = process_context.console_target.clone();
     *slot.lock() = Some(guest_state);
     *process_slot.lock() = Some(process_context);
+    if let Some(target) = console_target.as_ref() {
+        crate::shell2::bind_matrix_target_vm(target, vm_id);
+    }
     Ok(())
 }
 
@@ -1094,6 +1097,10 @@ pub(crate) fn blueprint_console_write(vm_id: u8, data: &[u8]) -> usize {
         let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize);
         context.and_then(|slot| slot.lock().as_ref()?.console_target.clone())
     };
+    blueprint_console_write_to_target(target.as_ref(), data)
+}
+
+fn blueprint_console_write_to_target(target: Option<&MatrixTarget>, data: &[u8]) -> usize {
     if let Some(target) = target {
         return crate::shell2::raw_write_matrix_target(&target, data);
     }
@@ -1101,11 +1108,106 @@ pub(crate) fn blueprint_console_write(vm_id: u8, data: &[u8]) -> usize {
     data.len()
 }
 
+fn blueprint_control_shell_line(vm_id: u8, line: &str) {
+    blueprint_console_print_line(vm_id, line);
+}
+
+fn blueprint_control_shell_write_text(vm_id: u8, text: &str) {
+    let mut wrote = false;
+    for line in text.lines() {
+        blueprint_console_print_line(vm_id, line);
+        wrote = true;
+    }
+    if !wrote {
+        blueprint_console_print_line(vm_id, "");
+    }
+}
+
+fn blueprint_control_shell_command(vm_id: u8, raw: &str) {
+    let trimmed = raw.trim();
+    let mut words = trimmed.splitn(2, char::is_whitespace);
+    let cmd = words.next().unwrap_or("");
+    let rest = words.next().unwrap_or("").trim_start();
+    match cmd {
+        "" => {}
+        "echo" => blueprint_control_shell_line(vm_id, rest),
+        "hostname" => {
+            let hostname = blueprint_process_env_var(vm_id, "HOSTNAME")
+                .or_else(|| blueprint_process_env_var(vm_id, "TRUEOS_HOSTNAME"))
+                .unwrap_or_else(|| AllocString::from("TRUEOS"));
+            blueprint_control_shell_line(vm_id, hostname.as_str());
+        }
+        "homedir" => {
+            let home =
+                blueprint_process_env_var(vm_id, "HOME").unwrap_or_else(|| AllocString::from("/"));
+            blueprint_control_shell_line(vm_id, home.as_str());
+        }
+        "env" => match blueprint_process_env_text(vm_id) {
+            Some(text) if !text.is_empty() => {
+                blueprint_control_shell_write_text(vm_id, text.as_str())
+            }
+            _ => blueprint_control_shell_line(vm_id, "env: unavailable"),
+        },
+        "file" => {
+            let path = if rest.is_empty() {
+                blueprint_process_env_var(vm_id, "HOME").unwrap_or_else(|| AllocString::from("/"))
+            } else {
+                AllocString::from(rest)
+            };
+            match blueprint_process_file_tree_text(vm_id, path.as_str()) {
+                Some(text) if !text.is_empty() => {
+                    blueprint_control_shell_write_text(vm_id, text.as_str())
+                }
+                _ => blueprint_control_shell_line(vm_id, "file: unavailable"),
+            }
+        }
+        "thread" => {
+            let record = crate::t::th::vthread::record_for_vm_hull(vm_id);
+            let state = vm_state(vm_id);
+            blueprint_control_shell_line(
+                vm_id,
+                alloc::format!(
+                    "thread: vm={} vthread={} running={} starting={} async_jobs=not-wired",
+                    vm_id,
+                    record.vtid(),
+                    state.running as u8,
+                    state.starting as u8,
+                )
+                .as_str(),
+            );
+        }
+        "help" => blueprint_control_shell_line(
+            vm_id,
+            "commands: echo hostname homedir env file thread help exit",
+        ),
+        "exit" | "detach" => {
+            blueprint_control_shell_line(vm_id, "vm: switch matrix slots with `§<slot>`")
+        }
+        _ => blueprint_control_shell_line(vm_id, "unknown command; try `help`"),
+    }
+}
+
+pub(crate) fn blueprint_console_submit_control_line(vm_id: u8, line: &str) -> bool {
+    if BLUEPRINT_PROCESS_CONTEXTS
+        .get(vm_id as usize)
+        .and_then(|slot| slot.lock().as_ref().map(|_| ()))
+        .is_none()
+    {
+        return false;
+    }
+    blueprint_control_shell_command(vm_id, line);
+    true
+}
+
 pub(crate) fn blueprint_console_submit_input(vm_id: u8, data: &[u8]) -> usize {
     const MAX_CONSOLE_INPUT: usize = 64 * 1024;
     if data.is_empty() {
         return 0;
     }
+    let target = {
+        let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize);
+        context.and_then(|slot| slot.lock().as_ref()?.console_target.clone())
+    };
     let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else {
         return 0;
     };
@@ -1114,10 +1216,33 @@ pub(crate) fn blueprint_console_submit_input(vm_id: u8, data: &[u8]) -> usize {
         return 0;
     };
     for &byte in data {
-        if context.console_input.len() >= MAX_CONSOLE_INPUT {
-            let _ = context.console_input.pop_front();
+        match byte {
+            b'\r' | b'\n' => {
+                let _ = blueprint_console_write_to_target(target.as_ref(), b"\r\n");
+                let line_bytes = core::mem::take(&mut context.control_shell_line);
+                drop(guard);
+                let line = core::str::from_utf8(line_bytes.as_slice()).unwrap_or("");
+                blueprint_control_shell_command(vm_id, line);
+                return data.len();
+            }
+            0x08 | 0x7f => {
+                if context.control_shell_line.pop().is_some() {
+                    let _ = blueprint_console_write_to_target(target.as_ref(), b"\x08 \x08");
+                }
+            }
+            byte if byte.is_ascii_graphic() || byte == b' ' => {
+                if context.control_shell_line.len() < 512 {
+                    context.control_shell_line.push(byte);
+                    let _ = blueprint_console_write_to_target(target.as_ref(), &[byte]);
+                }
+            }
+            _ => {
+                if context.console_input.len() >= MAX_CONSOLE_INPUT {
+                    let _ = context.console_input.pop_front();
+                }
+                context.console_input.push_back(byte);
+            }
         }
-        context.console_input.push_back(byte);
     }
     data.len()
 }

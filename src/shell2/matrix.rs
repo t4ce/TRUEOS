@@ -398,6 +398,13 @@ pub(crate) fn active_slot_vm_input_id(output_mask: u8) -> Option<u8> {
     }
 }
 
+pub(crate) fn active_slot_vm_id(output_mask: u8) -> Option<u8> {
+    let mut guard = state().lock();
+    let active = active_slot_id_ref(&guard, output_mask).clone();
+    let idx = ensure_slot_index(&mut guard.slots, &active);
+    guard.slots[idx].vm_id
+}
+
 pub(crate) fn bind_slot_vm(slot_id: &MatrixSlotId, vm_id: u8, input_attached: bool) {
     let mut guard = state().lock();
     let idx = ensure_slot_index(&mut guard.slots, slot_id);
