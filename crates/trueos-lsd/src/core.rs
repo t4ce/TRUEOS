@@ -11,7 +11,7 @@ use crate::{ExitCode, print_error, print_output, sort};
 use tokio::path::PathBuf;
 
 #[cfg(not(target_os = "windows"))]
-use trueos_io as io;
+use std::io;
 #[cfg(not(target_os = "windows"))]
 use std::os::unix::io::AsRawFd;
 
@@ -33,6 +33,8 @@ impl Core {
         // Check through libc if stdout is a tty. Unix specific so not on windows.
         // Determine color output availability (and initialize color output (for Windows 10))
         #[cfg(not(target_os = "windows"))]
+        // TODO(TRUEOS): replace raw stdout/isatty probing once vshell exposes
+        // terminal capability detection for attached output.
         let tty_available = unsafe { libc::isatty(io::stdout().as_raw_fd()) == 1 };
 
         #[cfg(not(target_os = "windows"))]
