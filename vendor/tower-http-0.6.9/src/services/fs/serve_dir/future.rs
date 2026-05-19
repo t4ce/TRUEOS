@@ -17,10 +17,13 @@ use pin_project_lite::pin_project;
 use std::{
     convert::Infallible,
     future::Future,
-    io,
     pin::Pin,
     task::{ready, Context, Poll},
 };
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+use std::io;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use tokio::io;
 use tower_service::Service;
 
 pin_project! {
@@ -130,13 +133,13 @@ where
                     }
 
                     Err(err) => {
-                        #[cfg(unix)]
+                        #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
                         // 20 = libc::ENOTDIR => "not a directory
                         // when `io_error_more` landed, this can be changed
                         // to checking for `io::ErrorKind::NotADirectory`.
                         // https://github.com/rust-lang/rust/issues/86442
                         let error_is_not_a_directory = err.raw_os_error() == Some(20);
-                        #[cfg(not(unix))]
+                        #[cfg(any(not(unix), target_os = "trueos", target_os = "zkvm"))]
                         let error_is_not_a_directory = false;
 
                         if matches!(
@@ -211,7 +214,10 @@ where
                     UnsyncBoxBody::new(
                         body.map_err(|err| match err.into().downcast::<io::Error>() {
                             Ok(err) => *err,
+                            #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
                             Err(err) => io::Error::new(io::ErrorKind::Other, err),
+                            #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+                            Err(_err) => io::Error::new(io::ErrorKind::Other, "fallback body error"),
                         })
                         .boxed_unsync(),
                     )

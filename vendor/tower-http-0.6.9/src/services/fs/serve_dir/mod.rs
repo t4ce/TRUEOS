@@ -11,11 +11,26 @@ use http_body_util::{BodyExt, Empty};
 use percent_encoding::percent_decode;
 use std::{
     convert::Infallible,
-    io,
-    path::{Component, Path, PathBuf},
     task::{Context, Poll},
 };
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+use std::{
+    io,
+    path::{Component, Path, PathBuf},
+};
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use std::path as host_path;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use tokio::{
+    io,
+    path::{Component, Path, PathBuf},
+};
 use tower_service::Service;
+
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+type PublicPath = Path;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+type PublicPath = host_path::Path;
 
 pub(crate) mod future;
 mod headers;
@@ -65,10 +80,13 @@ impl ServeDir<DefaultServeDirFallback> {
     /// Create a new [`ServeDir`].
     pub fn new<P>(path: P) -> Self
     where
-        P: AsRef<Path>,
+        P: AsRef<PublicPath>,
     {
         let mut base = PathBuf::from(".");
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         base.push(path.as_ref());
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        base.push(path.as_ref().display().to_string());
 
         Self {
             base,
@@ -84,10 +102,13 @@ impl ServeDir<DefaultServeDirFallback> {
 
     pub(crate) fn new_single_file<P>(path: P, mime: HeaderValue) -> Self
     where
-        P: AsRef<Path>,
+        P: AsRef<PublicPath>,
     {
         Self {
+            #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
             base: path.as_ref().to_owned(),
+            #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+            base: PathBuf::from(path.as_ref().display().to_string()),
             buf_chunk_size: DEFAULT_CAPACITY,
             precompressed_variants: None,
             variant: ServeVariant::SingleFile { mime },

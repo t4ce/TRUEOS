@@ -5,10 +5,13 @@ use futures_core::Stream;
 use http_body::{Body, Frame};
 use pin_project_lite::pin_project;
 use std::{
-    io,
     pin::Pin,
     task::{Context, Poll},
 };
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+use std::io;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use tokio::io;
 use tokio::io::{AsyncRead, AsyncReadExt, Take};
 use tokio_util::io::ReaderStream;
 

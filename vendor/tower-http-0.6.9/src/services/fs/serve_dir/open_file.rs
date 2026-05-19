@@ -7,14 +7,23 @@ use bytes::Bytes;
 use http::{header, HeaderValue, Method, Request, Uri};
 use http_body_util::Empty;
 use http_range_header::RangeUnsatisfiableError;
+use std::ops::RangeInclusive;
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::{
     ffi::OsStr,
     fs::Metadata,
     io::{self, ErrorKind, SeekFrom},
-    ops::RangeInclusive,
     path::{Path, PathBuf},
 };
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use tokio::{fs::File, io::AsyncSeekExt};
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use tokio::{
+    ffi::OsStr,
+    fs::{File, Metadata},
+    io::{self, AsyncSeekExt, ErrorKind, SeekFrom},
+    path::{Path, PathBuf},
+};
 
 pub(super) enum OpenFileOutput {
     FileOpened(Box<FileOpened>),
@@ -75,7 +84,7 @@ pub(super) async fn open_file(
                 return Ok(output);
             }
 
-            mime_guess::from_path(&path_to_file)
+            guess_mime(&path_to_file)
                 .first_raw()
                 .map(HeaderValue::from_static)
                 .unwrap_or_else(|| {
@@ -90,7 +99,7 @@ pub(super) async fn open_file(
         let (meta, maybe_encoding) =
             file_metadata_with_fallback(path_to_file, negotiated_encodings).await?;
 
-        let last_modified = meta.modified().ok().map(LastModified::from);
+        let last_modified = last_modified(&meta);
         if let Some(output) = check_modified_headers(
             last_modified.as_ref(),
             if_unmodified_since,
@@ -121,7 +130,7 @@ pub(super) async fn open_file(
             };
 
         let meta = file.metadata().await?;
-        let last_modified = meta.modified().ok().map(LastModified::from);
+        let last_modified = last_modified(&meta);
         if let Some(output) = check_modified_headers(
             last_modified.as_ref(),
             if_unmodified_since,
@@ -200,8 +209,34 @@ fn check_modified_headers(
     None
 }
 
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+fn last_modified(meta: &Metadata) -> Option<LastModified> {
+    meta.modified().ok().map(LastModified::from)
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+fn last_modified(_meta: &Metadata) -> Option<LastModified> {
+    None
+}
+
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+fn guess_mime(path: &Path) -> mime_guess::MimeGuess {
+    mime_guess::from_path(path)
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+fn guess_mime(path: &Path) -> mime_guess::MimeGuess {
+    let ext = path
+        .as_os_str()
+        .rsplit_once('.')
+        .map(|(_, ext)| ext)
+        .unwrap_or_default();
+    mime_guess::from_ext(ext)
+}
+
 // Returns the preferred_encoding encoding and modifies the path extension
 // to the corresponding file extension for the encoding.
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 fn preferred_encoding(
     path: &mut PathBuf,
     negotiated_encoding: &[(Encoding, QValue)],
@@ -226,6 +261,41 @@ fn preferred_encoding(
     preferred_encoding
 }
 
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+fn preferred_encoding(
+    path: &mut PathBuf,
+    negotiated_encoding: &[(Encoding, QValue)],
+) -> Option<Encoding> {
+    let preferred_encoding = Encoding::preferred_encoding(negotiated_encoding.iter().copied());
+
+    if let Some(file_extension) =
+        preferred_encoding.and_then(|encoding| encoding.to_file_extension())
+    {
+        let new_file_name = path
+            .file_name()
+            .map(|file_name| {
+                let mut os_string = file_name.to_string();
+                os_string.push_str(file_extension);
+                os_string
+            })
+            .unwrap_or_else(|| file_extension.to_string());
+
+        path.set_file_name(new_file_name);
+    }
+
+    preferred_encoding
+}
+
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+fn clear_extension(path: &mut PathBuf) {
+    path.set_extension(OsStr::new(""));
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+fn clear_extension(path: &mut PathBuf) {
+    path.set_extension("");
+}
+
 // Attempts to open the file with any of the possible negotiated_encodings in the
 // preferred order. If none of the negotiated_encodings have a corresponding precompressed
 // file the uncompressed file is used as a fallback.
@@ -241,7 +311,7 @@ async fn open_file_with_fallback(
             (Err(err), Some(encoding)) if err.kind() == io::ErrorKind::NotFound => {
                 // Remove the extension corresponding to a precompressed file (.gz, .br, .zz)
                 // to reset the path before the next iteration.
-                path.set_extension(OsStr::new(""));
+                clear_extension(&mut path);
                 // Remove the encoding from the negotiated_encodings since the file doesn't exist
                 negotiated_encoding
                     .retain(|(negotiated_encoding, _)| *negotiated_encoding != encoding);
@@ -267,7 +337,7 @@ async fn file_metadata_with_fallback(
             (Err(err), Some(encoding)) if err.kind() == io::ErrorKind::NotFound => {
                 // Remove the extension corresponding to a precompressed file (.gz, .br, .zz)
                 // to reset the path before the next iteration.
-                path.set_extension(OsStr::new(""));
+                clear_extension(&mut path);
                 // Remove the encoding from the negotiated_encodings since the file doesn't exist
                 negotiated_encoding
                     .retain(|(negotiated_encoding, _)| *negotiated_encoding != encoding);
