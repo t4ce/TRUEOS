@@ -254,13 +254,13 @@ pub struct BlueprintLaunchState {
     pub module_bytes: AllocVec<u8>,
     pub unpacked_bytes: AllocVec<u8>,
     pub app_args: AllocVec<AllocString>,
-    pub console_target: Option<MatrixTarget>,
 }
 
 #[derive(Clone)]
 pub(crate) struct BlueprintProcessContext {
     args: AllocVec<AllocString>,
     vars: BTreeMap<AllocString, AllocString>,
+    console_target: Option<MatrixTarget>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -521,6 +521,16 @@ pub fn hvlogf(args: core::fmt::Arguments<'_>) {
     let mut line: String<HV_LOG_LINE> = String::new();
     let _ = line.write_fmt(args);
     if line.is_empty() {
+        return;
+    }
+
+    if current_hull_guest_context_vm_id().is_some() {
+        for &b in line.as_bytes() {
+            crate::globalog::debugcon_write_byte_raw(b);
+        }
+        crate::globalog::debugcon_write_byte_raw(b'\n');
+        let _ = trueos_vm::vmcall::net_tcp_write(line.as_bytes());
+        let _ = trueos_vm::vmcall::net_tcp_write(b"\n");
         return;
     }
 
@@ -851,31 +861,33 @@ pub fn request_preserve_active_vm() -> bool {
         .unwrap_or(false)
 }
 
-pub fn stage_blueprint_launch(vm_id: u8, state: BlueprintLaunchState) -> Result<(), StartError> {
+pub fn stage_blueprint_launch(
+    vm_id: u8,
+    state: BlueprintLaunchState,
+    console_target: Option<MatrixTarget>,
+) -> Result<(), StartError> {
     let Some(slot) = BLUEPRINT_LAUNCH_STATES.get(vm_id as usize) else {
         return Err(StartError::UnsupportedVmId);
     };
     let Some(process_slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else {
         return Err(StartError::UnsupportedVmId);
     };
-    let Some((guest_state, process_context)) =
-        crate::allocators::with_hv_guest_alloc_domain(vm_id, || {
-            let app_fs_root = crate::hv::blueprint::app_fs_root_for_archive(
-                state.archive.as_str(),
-                state.module_bytes.as_slice(),
-            );
-            let process_context = BlueprintProcessContext {
-                args: crate::hv::blueprint::build_process_args(
-                    state.archive.as_str(),
-                    state.app_args.as_slice(),
-                ),
-                vars: crate::hv::blueprint::build_process_env(
-                    state.archive.as_str(),
-                    Some(app_fs_root.as_str()),
-                ),
-            };
-            (state.clone(), process_context)
-        })
+    let app_fs_root = crate::hv::blueprint::app_fs_root_for_archive(
+        state.archive.as_str(),
+        state.module_bytes.as_slice(),
+    );
+    let process_context = BlueprintProcessContext {
+        args: crate::hv::blueprint::build_process_args(
+            state.archive.as_str(),
+            state.app_args.as_slice(),
+        ),
+        vars: crate::hv::blueprint::build_process_env(
+            state.archive.as_str(),
+            Some(app_fs_root.as_str()),
+        ),
+        console_target,
+    };
+    let Some(guest_state) = crate::allocators::with_hv_guest_alloc_domain(vm_id, || state.clone())
     else {
         return Err(StartError::GuestMemoryUnavailable);
     };
@@ -914,6 +926,41 @@ pub(crate) fn blueprint_process_env_var(vm_id: u8, key: &str) -> Option<AllocStr
     context.as_ref()?.vars.get(key).cloned()
 }
 
+pub(crate) fn blueprint_console_write(vm_id: u8, data: &[u8]) -> usize {
+    let target = {
+        let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize);
+        context.and_then(|slot| slot.lock().as_ref()?.console_target.clone())
+    };
+    if let Some(target) = target {
+        return crate::shell2::raw_write_matrix_target(&target, data);
+    }
+    crate::shell2::uart1_com1::write_bytes(data);
+    data.len()
+}
+
+pub(crate) fn blueprint_console_read_byte(vm_id: u8) -> Option<u8> {
+    let target = {
+        let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize);
+        context.and_then(|slot| slot.lock().as_ref()?.console_target.clone())
+    };
+    if let Some(target) = target {
+        return crate::shell2::read_matrix_target_byte(&target);
+    }
+    crate::shell2::uart1_com1::read_byte()
+}
+
+pub(crate) fn blueprint_console_print_line(vm_id: u8, line: &str) {
+    let target = {
+        let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize);
+        context.and_then(|slot| slot.lock().as_ref()?.console_target.clone())
+    };
+    if let Some(target) = target {
+        crate::shell2::print_matrix_target_line(&target, line);
+    } else {
+        crate::shell2::print_shell_line(&crate::shell2::UART1_COM1_BACKEND, line);
+    }
+}
+
 pub(crate) fn blueprint_process_context(vm_id: u8) -> Option<BlueprintProcessContext> {
     BLUEPRINT_PROCESS_CONTEXTS
         .get(vm_id as usize)?
@@ -947,6 +994,9 @@ pub fn log_active_blueprint_console_line(args: core::fmt::Arguments<'_>) {
     let _ = line.write_fmt(args);
     if line.is_empty() {
         return;
+    }
+    if let Some(vm_id) = current_hull_guest_context_vm_id().or_else(current_vm_id) {
+        blueprint_console_print_line(vm_id, line.as_str());
     }
     hvlogf(format_args!("{}", line.as_str()));
 }

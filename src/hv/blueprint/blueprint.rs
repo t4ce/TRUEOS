@@ -3,6 +3,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::alloc::Layout;
 use core::ffi::c_char;
+use core::sync::atomic::{AtomicUsize, Ordering};
 use spin::Mutex;
 
 const BLUEPRINT_HEADER_LEN: usize = 24;
@@ -123,12 +124,35 @@ struct PortalImageAllocation {
 
 impl PortalImageAllocation {
     fn allocate(layout: Layout) -> Result<Self, String> {
-        let base = unsafe { crate::allocators::alloc_raw(layout) };
+        let alloc = || unsafe { crate::allocators::alloc_raw(layout) };
+        let vm_id =
+            crate::hv::current_guest_execution_context_vm_id().or_else(crate::hv::current_vm_id);
+        let base = if let Some(vm_id) = vm_id {
+            crate::allocators::with_hv_guest_alloc_domain(vm_id, alloc)
+                .unwrap_or(core::ptr::null_mut())
+        } else {
+            alloc()
+        };
         if base.is_null() {
             return Err(alloc::format!(
                 "portal image allocation failed size={} align={}",
                 layout.size(),
                 layout.align()
+            ));
+        }
+        if crate::logflag::PORTAL_LOGS
+            && PORTAL_IMAGE_ALLOC_TRACE_COUNT.fetch_add(1, Ordering::Relaxed) < 8
+        {
+            let vm_for_stats = vm_id.unwrap_or(0);
+            let stats = crate::allocators::hv_guest_heap_stats(vm_for_stats);
+            crate::hv::hvlogf(format_args!(
+                "portal: image alloc vm={:?} size={} align={} ptr=0x{:016X} guest_heap=[0x{:016X}..0x{:016X})",
+                vm_id,
+                layout.size(),
+                layout.align(),
+                base as usize,
+                stats.heap_start,
+                stats.heap_end,
             ));
         }
         Ok(Self {
@@ -146,6 +170,8 @@ impl PortalImageAllocation {
 
 const PORTAL_IMAGE_CAP_BYTES: usize = crate::allcaps::blueprint::PORTAL_IMAGE_CAP_BYTES;
 static UNRESOLVED_IMPORT_STUBS: Mutex<Vec<UnresolvedImportStub>> = Mutex::new(Vec::new());
+static PORTAL_IMAGE_ALLOC_TRACE_COUNT: AtomicUsize = AtomicUsize::new(0);
+static PORTAL_RUST_ALLOC_TRACE_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 struct UnresolvedImportStub {
     name: String,
@@ -261,9 +287,41 @@ fn unresolved_import_called(slot: usize) -> usize {
         }
     }
     if let Some(name) = warn_name {
-        crate::hv::hvlogf(format_args!("portal: joker import invoked name={}", name));
+        if is_rustc_runtime_import(name.as_str()) {
+            crate::hv::hvlogf(format_args!(
+                "portal: WARNING unresolved rust runtime import invoked name={} action=return-zero likely=missed-nightly-symbol-hash update=dynamic-rustc-import-resolver",
+                name
+            ));
+        } else {
+            crate::hv::hvlogf(format_args!("portal: joker import invoked name={}", name));
+        }
     }
     0
+}
+
+fn is_rustc_runtime_import(name: &str) -> bool {
+    if matches!(
+        name,
+        "__rust_alloc"
+            | "__rust_dealloc"
+            | "__rust_realloc"
+            | "__rust_alloc_zeroed"
+            | "__rust_alloc_error_handler"
+            | "__rust_no_alloc_shim_is_unstable_v2"
+    ) {
+        return true;
+    }
+
+    let Some((_, rustc_tail)) = name.rsplit_once("___rustc") else {
+        return false;
+    };
+
+    rustc_tail.contains("___rust_alloc")
+        || rustc_tail.contains("___rust_dealloc")
+        || rustc_tail.contains("___rust_realloc")
+        || rustc_tail.contains("___rust_alloc_zeroed")
+        || rustc_tail.contains("___rust_alloc_error_handler")
+        || rustc_tail.contains("___rust_no_alloc_shim_is_unstable")
 }
 
 fn portal_logf(args: core::fmt::Arguments<'_>) {
@@ -273,6 +331,12 @@ fn portal_logf(args: core::fmt::Arguments<'_>) {
 }
 
 fn resolve_unresolved_import(name: &str) -> Option<usize> {
+    if is_rustc_runtime_import(name) {
+        crate::hv::hvlogf(format_args!(
+            "portal: WARNING unresolved rust runtime import registered name={} class=rustc-runtime note=missed-nightly-symbol-hash action=joker-stub-installed",
+            name
+        ));
+    }
     let slot = unresolved_import_stub_slot(name)?;
     Some(UNRESOLVED_IMPORT_STUB_FNS[slot] as *const () as usize)
 }
@@ -1109,6 +1173,25 @@ pub(crate) fn elf_imports<'a>(bytes: &'a [u8]) -> Result<Vec<ElfImport<'a>>, &'s
 }
 
 fn resolve_known_import(name: &str) -> Option<usize> {
+    if name.ends_with("___rustc26___rust_alloc_error_handler") {
+        return Some(portal_rust_alloc_error_handler as *const () as usize);
+    }
+    if name.ends_with("___rustc35___rust_no_alloc_shim_is_unstable_v2") {
+        return Some(portal_no_alloc_shim_is_unstable_v2 as *const () as usize);
+    }
+    if name.ends_with("___rustc12___rust_alloc") {
+        return Some(portal_rust_alloc as *const () as usize);
+    }
+    if name.ends_with("___rustc14___rust_dealloc") {
+        return Some(portal_rust_dealloc as *const () as usize);
+    }
+    if name.ends_with("___rustc14___rust_realloc") {
+        return Some(portal_rust_realloc as *const () as usize);
+    }
+    if name.ends_with("___rustc19___rust_alloc_zeroed") {
+        return Some(portal_rust_alloc_zeroed as *const () as usize);
+    }
+
     match name {
         "_RNvCs75cmLyI1ip2_7___rustc26___rust_alloc_error_handler"
         | "_RNvCs2csqI13tepL_7___rustc26___rust_alloc_error_handler" => {
@@ -1387,12 +1470,30 @@ unsafe extern "C" fn portal_rust_alloc(size: usize, align: usize) -> *mut u8 {
     };
 
     let alloc = || unsafe { crate::allocators::alloc_raw(layout) };
-    if let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id().or_else(crate::hv::current_vm_id) {
-        return crate::allocators::with_hv_guest_alloc_domain(vm_id, alloc)
-            .unwrap_or(core::ptr::null_mut());
+    let vm_id =
+        crate::hv::current_guest_execution_context_vm_id().or_else(crate::hv::current_vm_id);
+    let ptr = if let Some(vm_id) = vm_id {
+        crate::allocators::with_hv_guest_alloc_domain(vm_id, alloc)
+            .unwrap_or(core::ptr::null_mut())
+    } else {
+        alloc()
+    };
+    if crate::logflag::PORTAL_LOGS
+        && PORTAL_RUST_ALLOC_TRACE_COUNT.fetch_add(1, Ordering::Relaxed) < 32
+    {
+        let vm_for_stats = vm_id.unwrap_or(0);
+        let stats = crate::allocators::hv_guest_heap_stats(vm_for_stats);
+        crate::hv::hvlogf(format_args!(
+            "portal: rust alloc vm={:?} size={} align={} ptr=0x{:016X} guest_heap=[0x{:016X}..0x{:016X})",
+            vm_id,
+            layout.size(),
+            layout.align(),
+            ptr as usize,
+            stats.heap_start,
+            stats.heap_end,
+        ));
     }
-
-    alloc()
+    ptr
 }
 
 unsafe extern "C" fn portal_rust_dealloc(ptr: *mut u8, _size: usize, _align: usize) {
@@ -1459,26 +1560,24 @@ pub(crate) fn build_process_env(
     app_fs_root: Option<&str>,
 ) -> BTreeMap<String, String> {
     let mut vars = BTreeMap::new();
-    let app_home = app_fs_root
-        .map(|root| alloc::format!("/{root}"))
-        .unwrap_or_else(|| alloc::format!("/apps/{}", safe_archive_stem(archive)));
+    let app_home = String::from("/");
     vars.insert(String::from("PWD"), String::from("/"));
     vars.insert(String::from("HOME"), app_home.clone());
     vars.insert(
         String::from("XDG_CONFIG_HOME"),
-        alloc::format!("{app_home}/config"),
+        String::from("/config"),
     );
     vars.insert(
         String::from("XDG_CACHE_HOME"),
-        alloc::format!("{app_home}/cache"),
+        String::from("/cache"),
     );
     vars.insert(
         String::from("BAT_CONFIG_DIR"),
-        alloc::format!("{app_home}/config/bat"),
+        String::from("/config/bat"),
     );
     vars.insert(
         String::from("BAT_CACHE_PATH"),
-        alloc::format!("{app_home}/cache/bat"),
+        String::from("/cache/bat"),
     );
     if safe_archive_stem(archive) == "bat" {
         vars.insert(
@@ -1500,10 +1599,7 @@ pub(crate) fn build_process_env(
         String::from("TRUEOS_APP_FS_COMMON"),
         app_common.clone(),
     );
-    vars.insert(
-        String::from("TRUEOS_APP_COMMON"),
-        alloc::format!("/{app_common}"),
-    );
+    vars.insert(String::from("TRUEOS_APP_COMMON"), String::from("/common"));
     vars
 }
 

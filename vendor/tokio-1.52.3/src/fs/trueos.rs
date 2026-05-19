@@ -63,6 +63,18 @@ impl Metadata {
         }
     }
 
+    fn dir() -> Self {
+        Self {
+            len: 0,
+            file_type: FileType {
+                is_file: false,
+                is_dir: true,
+                is_symlink: false,
+            },
+            permissions: Permissions::default(),
+        }
+    }
+
     pub fn file_type(&self) -> FileType {
         self.file_type
     }
@@ -158,43 +170,95 @@ unsafe extern "C" {
     fn trueos_cabi_fs_create_dir_all(path_ptr: *const u8, path_len: usize) -> i32;
     fn trueos_cabi_fs_exists(path_ptr: *const u8, path_len: usize) -> i32;
     fn trueos_cabi_fs_remove(path_ptr: *const u8, path_len: usize) -> i32;
+    fn trueos_cabi_fs_stat(
+        path_ptr: *const u8,
+        path_len: usize,
+        out_kind: *mut u32,
+        out_len: *mut u64,
+    ) -> i32;
 }
 
-fn path_bytes(path: &Path) -> io::Result<&[u8]> {
-    path.to_str().map(str::as_bytes).ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidInput, "TRUEOS fs CABI paths must be valid UTF-8")
-    })
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TrueosPathAnchor {
+    Current,
+    Root,
 }
 
-fn normalize_app_path(path: &Path) -> io::Result<PathBuf> {
-    let mut out = PathBuf::new();
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TrueosPath {
+    anchor: TrueosPathAnchor,
+    components: Vec<String>,
+}
 
-    for component in path.components() {
-        match component {
-            Component::CurDir | Component::RootDir => {}
-            Component::Normal(part) => out.push(part),
-            Component::ParentDir => {
-                if !out.pop() {
+impl TrueosPath {
+    fn parse(path: &Path, allow_empty: bool) -> io::Result<Self> {
+        let mut anchor = TrueosPathAnchor::Current;
+        let mut components = Vec::new();
+
+        for component in path.components() {
+            match component {
+                Component::CurDir => {}
+                Component::RootDir => anchor = TrueosPathAnchor::Root,
+                Component::Normal(part) => {
+                    if part.as_bytes().contains(&0) {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "TRUEOS fs paths must not contain NUL",
+                        ));
+                    }
+                    components.push(String::from(part));
+                }
+                Component::ParentDir => {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidInput,
                         "TRUEOS fs path escapes the blueprint app root",
                     ));
                 }
-            }
-            Component::Prefix(_) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "TRUEOS fs paths do not support platform prefixes",
-                ));
+                Component::Prefix(_) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "TRUEOS fs paths do not support platform prefixes",
+                    ));
+                }
             }
         }
+
+        if components.is_empty() && !allow_empty {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "TRUEOS fs path must name a file",
+            ));
+        }
+
+        Ok(Self { anchor, components })
     }
 
-    if out.as_os_str().is_empty() {
-        Ok(PathBuf::from("/"))
-    } else {
-        Ok(PathBuf::from("/").join(out))
+    fn is_root(&self) -> bool {
+        self.anchor == TrueosPathAnchor::Root && self.components.is_empty()
     }
+
+    fn to_cabi_string(&self) -> String {
+        let mut out = String::new();
+        for component in &self.components {
+            if !out.is_empty() {
+                out.push('/');
+            }
+            out.push_str(component);
+        }
+        out
+    }
+
+    fn to_display_path(&self) -> PathBuf {
+        let mut out = PathBuf::from("/");
+        for component in &self.components {
+            out.push(component);
+        }
+        out
+    }
+}
+
+fn cabi_path_string(path: &Path, allow_empty: bool) -> io::Result<String> {
+    Ok(TrueosPath::parse(path, allow_empty)?.to_cabi_string())
 }
 
 fn fs_status_to_io(rc: i32, _op: &'static str) -> io::Error {
@@ -210,7 +274,8 @@ fn fs_status_to_io(rc: i32, _op: &'static str) -> io::Error {
 }
 
 fn read_sync(path: &Path) -> io::Result<Vec<u8>> {
-    let path = path_bytes(path)?;
+    let path = cabi_path_string(path, false)?;
+    let path = path.as_bytes();
     let len =
         unsafe { trueos_cabi_fs_read_file(path.as_ptr(), path.len(), core::ptr::null_mut(), 0) };
     if len < 0 {
@@ -230,7 +295,8 @@ fn read_sync(path: &Path) -> io::Result<Vec<u8>> {
 }
 
 fn write_sync(path: &Path, contents: &[u8]) -> io::Result<()> {
-    let path = path_bytes(path)?;
+    let path = cabi_path_string(path, false)?;
+    let path = path.as_bytes();
     let mut handle = 0u32;
     let rc = unsafe {
         trueos_cabi_fs_write_begin(path.as_ptr(), path.len(), contents.len() as u64, &mut handle)
@@ -255,12 +321,39 @@ fn write_sync(path: &Path, contents: &[u8]) -> io::Result<()> {
 }
 
 fn exists_sync(path: &Path) -> io::Result<bool> {
-    let path = path_bytes(path)?;
+    let path = cabi_path_string(path, true)?;
+    let path = path.as_bytes();
     let rc = unsafe { trueos_cabi_fs_exists(path.as_ptr(), path.len()) };
     if rc < 0 {
         return Err(fs_status_to_io(rc, "exists"));
     }
     Ok(rc != 0)
+}
+
+fn stat_sync(path: &Path) -> io::Result<Metadata> {
+    let path = cabi_path_string(path, true)?;
+    let mut kind = 0u32;
+    let mut len = 0u64;
+    let rc = unsafe {
+        trueos_cabi_fs_stat(
+            path.as_ptr(),
+            path.len(),
+            &mut kind as *mut u32,
+            &mut len as *mut u64,
+        )
+    };
+    if rc != 0 {
+        return Err(fs_status_to_io(rc, "stat"));
+    }
+
+    match kind {
+        1 => Ok(Metadata::file(len)),
+        2 => Ok(Metadata::dir()),
+        _ => Err(io::Error::new(
+            io::ErrorKind::Other,
+            "TRUEOS fs CABI returned an unknown node kind",
+        )),
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -598,7 +691,8 @@ pub(crate) async fn create_dir(path: &Path) -> io::Result<()> {
 }
 
 pub(crate) async fn create_dir_all(path: &Path) -> io::Result<()> {
-    let path = path_bytes(path)?;
+    let path = cabi_path_string(path, true)?;
+    let path = path.as_bytes();
     let rc = unsafe { trueos_cabi_fs_create_dir_all(path.as_ptr(), path.len()) };
     if rc != 0 {
         return Err(fs_status_to_io(rc, "create_dir_all"));
@@ -611,24 +705,19 @@ pub(crate) async fn try_exists(path: &Path) -> io::Result<bool> {
 }
 
 pub(crate) async fn canonicalize(path: &Path) -> io::Result<PathBuf> {
-    let canonical = normalize_app_path(path)?;
-    if canonical == PathBuf::from("/") {
-        return Ok(canonical);
-    }
-
-    if !exists_sync(&canonical)? {
+    let canonical = TrueosPath::parse(path, true)?;
+    if !canonical.is_root() && !exists_sync(path)? {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
             "TRUEOS fs canonicalize target does not exist",
         ));
     }
 
-    Ok(canonical)
+    Ok(canonical.to_display_path())
 }
 
-pub(crate) async fn metadata(_path: &Path) -> io::Result<Metadata> {
-    let bytes = read_sync(_path)?;
-    Ok(Metadata::file(bytes.len() as u64))
+pub(crate) async fn metadata(path: &Path) -> io::Result<Metadata> {
+    stat_sync(path)
 }
 
 pub(crate) async fn read_dir(_path: &Path) -> io::Result<TrueosReadDir> {
@@ -640,7 +729,8 @@ pub(crate) async fn set_permissions(_path: &Path, _perm: Permissions) -> io::Res
 }
 
 pub(crate) async fn remove_file(path: &Path) -> io::Result<()> {
-    let path = path_bytes(path)?;
+    let path = cabi_path_string(path, false)?;
+    let path = path.as_bytes();
     let rc = unsafe { trueos_cabi_fs_remove(path.as_ptr(), path.len()) };
     if rc != 0 {
         return Err(fs_status_to_io(rc, "remove_file"));

@@ -155,7 +155,10 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
 
     let log = |line: &str| crate::hv::hvlogf(format_args!("{}", line));
 
-    log(alloc::format!("run: guest blueprint launch archive={}", state.archive.as_str()).as_str());
+    crate::hv::hvlogf(format_args!(
+        "run: guest blueprint launch archive={}",
+        state.archive.as_str()
+    ));
 
     let module = match crate::hv::blueprint::parse_blueprint(state.module_bytes.as_slice()) {
         Ok(module) => module,
@@ -174,80 +177,116 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
         return false;
     }
 
-    match crate::hv::blueprint::elf_imports(unpacked) {
-        Ok(imports) => {
-            let unresolved = imports
-                .iter()
-                .filter(|import| import.resolved_addr.is_none())
-                .count();
-            log(alloc::format!(
-                "run: guest ELF imports={} unresolved={}",
-                imports.len(),
-                unresolved
-            )
-            .as_str());
-            for import in imports
-                .iter()
-                .filter(|import| import.resolved_addr.is_none())
-                .take(16)
-            {
-                log(alloc::format!("run: guest unresolved import {}", import.name).as_str());
+    if crate::hv::current_hull_guest_context_vm_id().is_none() {
+        match crate::hv::blueprint::elf_imports(unpacked) {
+            Ok(imports) => {
+                let unresolved = imports
+                    .iter()
+                    .filter(|import| import.resolved_addr.is_none())
+                    .count();
+                log(alloc::format!(
+                    "run: guest ELF imports={} unresolved={}",
+                    imports.len(),
+                    unresolved
+                )
+                .as_str());
+                for import in imports
+                    .iter()
+                    .filter(|import| import.resolved_addr.is_none())
+                    .take(16)
+                {
+                    log(alloc::format!("run: guest unresolved import {}", import.name).as_str());
+                }
+            }
+            Err(err) => {
+                log(alloc::format!("run: guest ELF import scan failed: {}", err).as_str());
             }
         }
-        Err(err) => {
-            log(alloc::format!("run: guest ELF import scan failed: {}", err).as_str());
-        }
     }
-    let app_fs_root = crate::hv::blueprint::app_fs_root_for_archive(
-        state.archive.as_str(),
-        state.module_bytes.as_slice(),
-    );
-    let app_fs_common = crate::hv::blueprint::app_fs_common_for_archive(state.archive.as_str());
-    match create_blueprint_dir_all(app_fs_root.as_str()) {
-        Ok(()) => {
-            log(alloc::format!("run: guest app fs root ready path={}", app_fs_root.as_str())
-                .as_str())
-        }
-        Err(err) => log(alloc::format!(
-            "run: guest app fs root create failed path={} err={:?}",
-            app_fs_root.as_str(),
-            err
-        )
-        .as_str()),
-    }
-    match create_blueprint_dir_all(app_fs_common.as_str()) {
-        Ok(()) => {
-            log(alloc::format!("run: guest app fs common ready path={}", app_fs_common.as_str())
-                .as_str())
-        }
-        Err(err) => log(alloc::format!(
-            "run: guest app fs common create failed path={} err={:?}",
-            app_fs_common.as_str(),
-            err
-        )
-        .as_str()),
-    }
-    let Some(process_context) = crate::hv::blueprint_process_context(vm_id) else {
-        log("run: guest blueprint missing staged process context");
+
+    let Some((app_fs_root, app_fs_common)) =
+        crate::allocators::with_hv_guest_alloc_domain(vm_id, || {
+            (
+                crate::hv::blueprint::app_fs_root_for_archive(
+                    state.archive.as_str(),
+                    state.module_bytes.as_slice(),
+                ),
+                crate::hv::blueprint::app_fs_common_for_archive(state.archive.as_str()),
+            )
+        })
+    else {
+        log("run: guest app fs paths failed: guest heap domain unavailable");
         return false;
     };
-    log(alloc::format!(
-        "run: guest app fs root prepared path={} common={}",
-        app_fs_root.as_str(),
-        app_fs_common.as_str()
-    )
-    .as_str());
+
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        if create_blueprint_dir_all(app_fs_root.as_str()).is_err() {
+            log("run: guest app fs root create failed");
+        }
+    } else {
+        match create_blueprint_dir_all(app_fs_root.as_str()) {
+            Ok(()) => {
+                log(alloc::format!("run: guest app fs root ready path={}", app_fs_root.as_str())
+                    .as_str())
+            }
+            Err(err) => log(alloc::format!(
+                "run: guest app fs root create failed path={} err={:?}",
+                app_fs_root.as_str(),
+                err
+            )
+            .as_str()),
+        }
+    }
+
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        if create_blueprint_dir_all(app_fs_common.as_str()).is_err() {
+            log("run: guest app fs common create failed");
+        }
+    } else {
+        match create_blueprint_dir_all(app_fs_common.as_str()) {
+            Ok(()) => log(alloc::format!(
+                "run: guest app fs common ready path={}",
+                app_fs_common.as_str()
+            )
+            .as_str()),
+            Err(err) => log(alloc::format!(
+                "run: guest app fs common create failed path={} err={:?}",
+                app_fs_common.as_str(),
+                err
+            )
+            .as_str()),
+        }
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_none() {
+        log(alloc::format!(
+            "run: guest app fs root prepared path={} common={}",
+            app_fs_root.as_str(),
+            app_fs_common.as_str()
+        )
+        .as_str());
+    }
 
     crate::hv::begin_blueprint_app_window_session(vm_id, state.archive.as_str());
     crate::blueprint_net_broker::set_vmx_guest_net_backend(true);
-    let invoke_result = crate::hv::blueprint::invoke_host_rel(
-        unpacked,
-        module.entry,
-        process_context.args,
-        process_context.vars,
-        state.console_target.clone(),
-        Some(app_fs_root),
-    );
+    let invoke_result = crate::allocators::with_hv_guest_alloc_domain(vm_id, || {
+        let process_args = crate::hv::blueprint::build_process_args(
+            state.archive.as_str(),
+            state.app_args.as_slice(),
+        );
+        let process_env = crate::hv::blueprint::build_process_env(
+            state.archive.as_str(),
+            Some(app_fs_root.as_str()),
+        );
+        crate::hv::blueprint::invoke_host_rel(
+            unpacked,
+            module.entry,
+            process_args,
+            process_env,
+            None,
+            Some(app_fs_root),
+        )
+    })
+    .unwrap_or_else(|| Err(alloc::format!("guest heap domain unavailable vm={}", vm_id)));
     crate::blueprint_net_broker::set_vmx_guest_net_backend(false);
 
     match invoke_result {

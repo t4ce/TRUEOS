@@ -26,10 +26,13 @@ static PTHREAD_TLS_VALUES: Mutex<FixedKeyMap<usize, usize, PTHREAD_TLS_VALUE_CAP
     Mutex::new(FixedKeyMap::new());
 static PTHREAD_THREADS: Mutex<FixedKeyMap<usize, PthreadThreadState, PTHREAD_THREAD_CAPACITY>> =
     Mutex::new(FixedKeyMap::new());
+static OPEN_FILES: Mutex<FixedKeyMap<c_int, OpenFile, OPEN_FILE_CAPACITY>> =
+    Mutex::new(FixedKeyMap::new());
 static LOGGED_PTHREAD_SYNC: AtomicI32 = AtomicI32::new(0);
 static LOGGED_C_ALLOCATION_TRACK_OVERFLOW: AtomicI32 = AtomicI32::new(0);
 static PTHREAD_SYNC_TRACE_COUNT: AtomicUsize = AtomicUsize::new(0);
 static PTHREAD_NEXT_THREAD_ID: AtomicUsize = AtomicUsize::new(1);
+static NEXT_FILE_FD: AtomicI32 = AtomicI32::new(3);
 
 const PTHREAD_SYNC_TRACE_LIMIT: usize = 48;
 const C_ALLOCATION_CAPACITY: usize = 16384;
@@ -38,6 +41,7 @@ const PTHREAD_COND_CAPACITY: usize = 256;
 const PTHREAD_KEY_CAPACITY: usize = 128;
 const PTHREAD_TLS_VALUE_CAPACITY: usize = 512;
 const PTHREAD_THREAD_CAPACITY: usize = 64;
+const OPEN_FILE_CAPACITY: usize = 64;
 
 const TRUEOS_EAGAIN: c_int = 11;
 const TRUEOS_EBUSY: c_int = 16;
@@ -155,6 +159,11 @@ struct PthreadThreadState {
     detached: bool,
 }
 
+struct OpenFile {
+    bytes: Vec<u8>,
+    offset: usize,
+}
+
 fn uart_write(bytes: &[u8]) {
     if bytes.is_empty() {
         return;
@@ -178,6 +187,22 @@ fn copy_bytes_to_words(out_words: *mut u32, out_nwords: usize, bytes: &[u8]) -> 
         }
     }
     bytes.len()
+}
+
+fn copy_vmcall_text_response_to_words(
+    status: u32,
+    len: u64,
+    bytes: &[u8],
+    out_words: *mut u32,
+    out_nwords: usize,
+    missing: usize,
+) -> usize {
+    if status != trueos_vm::vmcall::STATUS_OK {
+        return missing;
+    }
+    let len = len as usize;
+    let n = core::cmp::min(len, bytes.len());
+    copy_bytes_to_words(out_words, out_nwords, &bytes[..n])
 }
 
 fn pthread_key(ptr: *mut c_void) -> Option<usize> {
@@ -636,6 +661,44 @@ fn fs_rc_to_errno(rc: i32) -> c_int {
     }
 }
 
+fn read_file_from_cabi(path: &str) -> Result<Vec<u8>, c_int> {
+    let len = unsafe {
+        crate::r::io::cabi::trueos_cabi_fs_read_file(
+            path.as_ptr(),
+            path.len(),
+            ptr::null_mut(),
+            0,
+        )
+    };
+    if len < 0 {
+        return Err(fs_rc_to_errno(len as i32));
+    }
+
+    let mut bytes = Vec::new();
+    bytes.resize(len as usize, 0);
+    if bytes.is_empty() {
+        return Ok(bytes);
+    }
+
+    let got = unsafe {
+        crate::r::io::cabi::trueos_cabi_fs_read_file(
+            path.as_ptr(),
+            path.len(),
+            bytes.as_mut_ptr(),
+            bytes.len(),
+        )
+    };
+    if got < 0 {
+        return Err(fs_rc_to_errno(got as i32));
+    }
+    bytes.truncate(got as usize);
+    Ok(bytes)
+}
+
+fn next_file_fd() -> c_int {
+    NEXT_FILE_FD.fetch_add(1, Ordering::AcqRel)
+}
+
 unsafe fn freeaddrinfo_chain(mut res: *mut TrueosAddrInfo) {
     while !res.is_null() {
         let next = unsafe { (*res).ai_next };
@@ -766,6 +829,27 @@ pub unsafe extern "C" fn sys_getenv(
     let Some(key_bytes) = abi_read_bytes(varname, varname_len) else {
         return usize::MAX;
     };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        if key_bytes.len() > trueos_vm::vmcall::PAYLOAD_CAP {
+            return usize::MAX;
+        }
+        let mut bytes = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
+        let (status, len) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_ENV_VAR,
+            0,
+            0,
+            key_bytes,
+            &mut bytes,
+        );
+        return copy_vmcall_text_response_to_words(
+            status,
+            len,
+            &bytes,
+            recv_buf,
+            words,
+            usize::MAX,
+        );
+    }
     let Ok(key) = core::str::from_utf8(key_bytes) else {
         return usize::MAX;
     };
@@ -777,6 +861,15 @@ pub unsafe extern "C" fn sys_getenv(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sys_argc() -> usize {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, count) =
+            trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_ENV_ARGS_COUNT, 0, 0);
+        return if status == trueos_vm::vmcall::STATUS_OK {
+            count as usize
+        } else {
+            0
+        };
+    }
     crate::r::io::env::arg_count()
 }
 
@@ -786,6 +879,17 @@ pub unsafe extern "C" fn sys_argv(
     out_nwords: usize,
     arg_index: usize,
 ) -> usize {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let mut bytes = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
+        let (status, len) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_ENV_ARG,
+            arg_index as u64,
+            0,
+            &[],
+            &mut bytes,
+        );
+        return copy_vmcall_text_response_to_words(status, len, &bytes, out_words, out_nwords, 0);
+    }
     let Some(arg) = crate::r::io::env::arg(arg_index) else {
         return 0;
     };
@@ -1018,21 +1122,35 @@ pub unsafe extern "C" fn read(fd: c_int, buf: *mut c_void, count: usize) -> isiz
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
         return -1;
     }
-    if fd != 0 {
+    if fd == 0 {
+        return unsafe { sys_read(fd as u32, buf.cast::<u8>(), count) as isize };
+    }
+
+    if fd < 0 {
         TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
         return -1;
     }
-    unsafe { sys_read(fd as u32, buf.cast::<u8>(), count) as isize }
+
+    let mut table = OPEN_FILES.lock();
+    let Some(file) = table.get_mut(fd) else {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+        return -1;
+    };
+    let remaining = file.bytes.len().saturating_sub(file.offset);
+    let n = core::cmp::min(count, remaining);
+    if n != 0 && !copy_to_abi_out(buf.cast::<u8>(), &file.bytes[file.offset..file.offset + n]) {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    }
+    file.offset = file.offset.saturating_add(n);
+    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+    n as isize
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn readv(fd: c_int, iov: *const Iovec, iovcnt: c_int) -> isize {
     if iov.is_null() || iovcnt < 0 {
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
-        return -1;
-    }
-    if fd != 0 {
-        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
         return -1;
     }
     let Some(entries) = abi_read_bytes(
@@ -1048,7 +1166,11 @@ pub unsafe extern "C" fn readv(fd: c_int, iov: *const Iovec, iovcnt: c_int) -> i
         if entry.base.is_null() || entry.len == 0 {
             continue;
         }
-        let got = unsafe { sys_read(fd as u32, entry.base.cast_mut(), entry.len) };
+        let got = unsafe { read(fd, entry.base.cast_mut().cast::<c_void>(), entry.len) };
+        if got < 0 {
+            return if total == 0 { -1 } else { total as isize };
+        }
+        let got = got as usize;
         total = total.saturating_add(got);
         if got < entry.len {
             break;
@@ -1174,18 +1296,47 @@ pub unsafe extern "C" fn lstat(path: *const c_char, buf: *mut c_void) -> c_int {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn open(_path: *const c_char, flags: c_int, _mode: c_int) -> c_int {
-    if flags == TRUEOS_O_RDONLY {
-        TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
-    } else {
-        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, _mode: c_int) -> c_int {
+    if path.is_null() {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
     }
-    -1
+    if flags & 0x3 != TRUEOS_O_RDONLY {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+        return -1;
+    }
+    let Some(path) = abi_cstr_to_string(path, 4096) else {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    };
+
+    let bytes = match read_file_from_cabi(path.as_str()) {
+        Ok(bytes) => bytes,
+        Err(errno) => {
+            TRUEOS_ERRNO.store(errno, Ordering::Relaxed);
+            return -1;
+        }
+    };
+    let fd = next_file_fd();
+    if OPEN_FILES
+        .lock()
+        .insert(fd, OpenFile { bytes, offset: 0 })
+        .is_err()
+    {
+        TRUEOS_ERRNO.store(TRUEOS_EAGAIN, Ordering::Relaxed);
+        return -1;
+    }
+    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+    fd
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn close(fd: c_int) -> c_int {
     if (0..=2).contains(&fd) {
+        return 0;
+    }
+    if OPEN_FILES.lock().remove(fd).is_some() {
+        TRUEOS_ERRNO.store(0, Ordering::Relaxed);
         return 0;
     }
     TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
@@ -1199,9 +1350,48 @@ pub unsafe extern "C" fn lseek(_fd: c_int, _offset: isize, _whence: c_int) -> is
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fstat(_fd: c_int, _buf: *mut c_void) -> c_int {
-    TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
-    -1
+pub unsafe extern "C" fn fstat(fd: c_int, buf: *mut c_void) -> c_int {
+    if buf.is_null() {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    }
+    let table = OPEN_FILES.lock();
+    let Some(file) = table.get(fd) else {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+        return -1;
+    };
+    let len = file.bytes.len() as u64;
+    let blocks = core::cmp::min(len.saturating_add(511) / 512, i32::MAX as u64) as i32;
+    let out = TrueosStat {
+        st_dev: 1,
+        st_ino: fd as u32,
+        st_mode: TRUEOS_FILE_MODE,
+        st_nlink: 1,
+        st_uid: 0,
+        st_gid: 0,
+        st_rdev: 0,
+        st_size: core::cmp::min(len, i64::MAX as u64) as i64,
+        st_atime: 0,
+        st_atime_nsec: 0,
+        st_mtime: 0,
+        st_mtime_nsec: 0,
+        st_ctime: 0,
+        st_ctime_nsec: 0,
+        st_blksize: 1024,
+        st_blocks: blocks,
+        st_spare4: [0; 2],
+    };
+    if !copy_to_abi_out(buf.cast::<u8>(), unsafe {
+        slice::from_raw_parts(
+            (&out as *const TrueosStat).cast::<u8>(),
+            core::mem::size_of::<TrueosStat>(),
+        )
+    }) {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    }
+    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+    0
 }
 
 #[unsafe(no_mangle)]

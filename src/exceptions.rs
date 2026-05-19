@@ -93,6 +93,7 @@ fn panic(info: &PanicInfo<'_>) -> ! {
     interrupts::disable();
 
     dprintln!("\n\x1b[31m=== KERNEL PANIC ===\x1b[0m");
+    log_panic_context();
 
     if let Some(loc) = info.location() {
         dprintln!("Location: {}:{}:{}", loc.file(), loc.line(), loc.column());
@@ -115,6 +116,59 @@ fn panic(info: &PanicInfo<'_>) -> ! {
     loop {
         hlt();
     }
+}
+
+fn log_panic_context() {
+    let rip: usize;
+    let rsp: usize;
+    let rbp: usize;
+    unsafe {
+        core::arch::asm!(
+            "lea {rip}, [rip + 0]",
+            "mov {rsp}, rsp",
+            "mov {rbp}, rbp",
+            rip = out(reg) rip,
+            rsp = out(reg) rsp,
+            rbp = out(reg) rbp,
+            options(nomem, nostack, preserves_flags)
+        );
+    }
+
+    let vm = crate::hv::current_vm_id();
+    let hull_vm = crate::hv::current_hull_guest_context_vm_id();
+    let exec_vm = crate::hv::current_guest_execution_context_vm_id();
+    if hull_vm.is_some() {
+        dprintln!(
+            "panic-context: rip=0x{:016X} rsp=0x{:016X} rbp=0x{:016X} vm={:?} hull_vm={:?} exec_vm={:?}",
+            rip,
+            rsp,
+            rbp,
+            vm,
+            hull_vm,
+            exec_vm
+        );
+        return;
+    }
+
+    faultln!(
+        "panic-context: rip=0x{:016X} rsp=0x{:016X} rbp=0x{:016X} vm={:?} hull_vm={:?} exec_vm={:?}",
+        rip,
+        rsp,
+        rbp,
+        vm,
+        hull_vm,
+        exec_vm
+    );
+    crate::log!(
+        "panic-context: rip=0x{:016X} rsp=0x{:016X} rbp=0x{:016X} vm={:?} hull_vm={:?} exec_vm={:?}\n",
+        rip,
+        rsp,
+        rbp,
+        vm,
+        hull_vm,
+        exec_vm
+    );
+    log_fault_alloc_trace();
 }
 
 fn log_fault_frame(label: &str, stack_frame: &InterruptStackFrame) {
@@ -154,13 +208,33 @@ fn log_fault_alloc_trace() {
         trace.payload_start,
         trace.aligned_used,
     );
+    crate::globalog::log_with_purpose(Some("info"), format_args!(
+        "alloc-trace: seq={} caller=0x{:016X} caller1=0x{:016X} caller2=0x{:016X} size={} align={} stage={} head=0x{:016X} block=0x{:016X} block_size={} next=0x{:016X} payload=0x{:016X} aligned_used={}\n",
+        trace.seq,
+        trace.caller_rip,
+        trace.caller_rip_1,
+        trace.caller_rip_2,
+        trace.layout_size,
+        trace.layout_align,
+        trace.stage,
+        trace.head_ptr,
+        trace.block_ptr,
+        trace.block_size,
+        trace.block_next,
+        trace.payload_start,
+        trace.aligned_used,
+    ));
 }
 
 #[inline]
 fn is_canonical_addr(v: usize) -> bool {
     let sign = (v >> 47) & 1;
     let high = v >> 48;
-    if sign == 0 { high == 0 } else { high == 0xFFFF }
+    if sign == 0 {
+        high == 0
+    } else {
+        high == 0xFFFF
+    }
 }
 
 fn dump_stack_words(sp: usize, words: usize) {

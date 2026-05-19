@@ -56,33 +56,9 @@ pub mod kfs {
     }
 
     fn normalize_rel(path: &str, allow_empty: bool) -> Result<String> {
-        let mut out = String::new();
-        let t = path.trim();
-        if t.is_empty() {
-            return if allow_empty {
-                Ok(out)
-            } else {
-                Err(FsError::BadPath)
-            };
-        }
-
-        for part in t.split('/') {
-            if part.is_empty() || part == "." {
-                continue;
-            }
-            if part == ".." {
-                return Err(FsError::BadPath);
-            }
-            if !out.is_empty() {
-                out.push('/');
-            }
-            out.push_str(part);
-        }
-
-        if out.is_empty() && !allow_empty {
-            return Err(FsError::BadPath);
-        }
-        Ok(out)
+        crate::r::path::FsPath::parse(path, allow_empty)
+            .map(|path| path.to_relative_string())
+            .map_err(|_| FsError::BadPath)
     }
 
     #[inline]
@@ -360,29 +336,9 @@ pub mod env {
     }
 
     fn normalize_app_path(path: &str, allow_empty: bool) -> Option<String> {
-        let mut out = String::new();
-        let t = path.trim();
-        if t.is_empty() {
-            return allow_empty.then_some(out);
-        }
-
-        for part in t.split('/') {
-            if part.is_empty() || part == "." {
-                continue;
-            }
-            if part == ".." {
-                return None;
-            }
-            if !out.is_empty() {
-                out.push('/');
-            }
-            out.push_str(part);
-        }
-
-        if out.is_empty() && !allow_empty {
-            return None;
-        }
-        Some(out)
+        crate::r::path::FsPath::parse(path, allow_empty)
+            .ok()
+            .map(|path| path.to_relative_string())
     }
 
     pub(crate) fn resolve_fs_path(path: &str, allow_empty: bool) -> Option<String> {
@@ -695,6 +651,27 @@ pub mod cabi {
             return 0;
         }
         let data = core::slice::from_raw_parts(data_ptr, data_len);
+        if crate::hv::current_hull_guest_context_vm_id().is_some() {
+            let mut written = 0usize;
+            while written < data.len() {
+                let end = core::cmp::min(written + trueos_vm::vmcall::PAYLOAD_CAP, data.len());
+                let (status, count) = trueos_vm::vmcall::call_with_payload(
+                    trueos_vm::vmcall::OP_BP_SHELL_ATTACHED_WRITE,
+                    0,
+                    0,
+                    &data[written..end],
+                    &mut [],
+                );
+                if status != trueos_vm::vmcall::STATUS_OK {
+                    break;
+                }
+                written = written.saturating_add(count as usize);
+                if count == 0 {
+                    break;
+                }
+            }
+            return written;
+        }
         if let Some(target) = super::env::console_target() {
             return crate::shell2::raw_write_matrix_target(&target, data);
         }
@@ -704,6 +681,17 @@ pub mod cabi {
 
     #[unsafe(no_mangle)]
     pub extern "C" fn trueos_cabi_shell_attached_read_byte() -> i32 {
+        if crate::hv::current_hull_guest_context_vm_id().is_some() {
+            let (status, data) = trueos_vm::vmcall::call(
+                trueos_vm::vmcall::OP_BP_SHELL_ATTACHED_READ_BYTE,
+                0,
+                0,
+            );
+            if status == trueos_vm::vmcall::STATUS_OK && data != u64::MAX {
+                return data as u8 as i32;
+            }
+            return -1;
+        }
         if let Some(target) = super::env::console_target() {
             return crate::shell2::read_matrix_target_byte(&target)
                 .map(i32::from)
@@ -858,11 +846,13 @@ pub mod cabi {
         let Ok(text) = core::str::from_utf8(data) else {
             return 0;
         };
+        if crate::hv::current_hull_guest_context_vm_id().is_some() {
+            let _ = trueos_cabi_shell_attached_write(data_ptr, data_len);
+            crate::hv::log_active_blueprint_console_line(format_args!("guest: {}", text));
+            return data_len;
+        }
         if let Some(target) = super::env::console_target() {
             crate::shell2::print_matrix_target_line(&target, text);
-            if crate::hv::current_hull_guest_context_vm_id().is_some() {
-                crate::hv::log_active_blueprint_console_line(format_args!("guest: {}", text));
-            }
         } else {
             crate::shell2::print_shell_line(&crate::shell2::UART1_COM1_BACKEND, text);
         }

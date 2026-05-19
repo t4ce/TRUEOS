@@ -1,6 +1,7 @@
 use alloc::{
     borrow::{Cow, ToOwned},
     string::String,
+    vec::Vec,
 };
 use core::borrow::Borrow;
 use core::ops::Deref;
@@ -27,6 +28,89 @@ pub struct Path {
 
 pub struct PathBuf {
     inner: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FsPathAnchor {
+    Current,
+    Root,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FsPath {
+    anchor: FsPathAnchor,
+    components: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FsPathError {
+    Empty,
+    ParentDir,
+    Nul,
+}
+
+impl FsPath {
+    pub fn parse(path: &str, allow_empty: bool) -> Result<Self, FsPathError> {
+        let t = path.trim();
+        if t.is_empty() {
+            if allow_empty {
+                return Ok(Self {
+                    anchor: FsPathAnchor::Current,
+                    components: Vec::new(),
+                });
+            }
+            return Err(FsPathError::Empty);
+        }
+
+        let anchor = if t.starts_with('/') {
+            FsPathAnchor::Root
+        } else {
+            FsPathAnchor::Current
+        };
+        let mut components = Vec::new();
+
+        for part in t.split('/') {
+            if part.is_empty() || part == "." {
+                continue;
+            }
+            if part == ".." {
+                return Err(FsPathError::ParentDir);
+            }
+            if part.as_bytes().contains(&0) {
+                return Err(FsPathError::Nul);
+            }
+            components.push(String::from(part));
+        }
+
+        if components.is_empty() && !allow_empty {
+            return Err(FsPathError::Empty);
+        }
+
+        Ok(Self { anchor, components })
+    }
+
+    pub fn anchor(&self) -> FsPathAnchor {
+        self.anchor
+    }
+
+    pub fn components(&self) -> &[String] {
+        self.components.as_slice()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.components.is_empty()
+    }
+
+    pub fn to_relative_string(&self) -> String {
+        let mut out = String::new();
+        for component in &self.components {
+            if !out.is_empty() {
+                out.push('/');
+            }
+            out.push_str(component);
+        }
+        out
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
