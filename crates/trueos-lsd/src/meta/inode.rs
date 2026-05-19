@@ -36,7 +36,7 @@ impl INode {
 mod tests {
     use super::INode;
     use std::env;
-    use trueos_io as io;
+    use std::io;
     use tokio::path::Path;
     use std::process::{Command, ExitStatus};
 

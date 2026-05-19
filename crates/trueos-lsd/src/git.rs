@@ -95,7 +95,7 @@ impl GitCache {
         match std::fs::canonicalize(filepath) {
             Ok(filename) => Some(self.inner_get(&filename, is_directory)),
             Err(err) => {
-                if err.kind() != trueos_io::ErrorKind::NotFound {
+                if err.kind() != std::io::ErrorKind::NotFound {
                     crate::print_error!("Cannot get git status for {:?}:  {}", filepath, err);
                 }
                 None

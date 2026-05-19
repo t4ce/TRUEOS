@@ -36,7 +36,7 @@ impl Links {
 mod tests {
     use super::Links;
     use std::env;
-    use trueos_io as io;
+    use std::io;
     use tokio::path::Path;
     use std::process::{Command, ExitStatus};
 

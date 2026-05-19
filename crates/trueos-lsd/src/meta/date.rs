@@ -75,7 +75,7 @@ mod test {
     use crate::meta::locale::current_locale;
     use chrono::{DateTime, Duration, Local};
     use crossterm::style::{Color, Stylize};
-    use trueos_io as io;
+    use std::io;
     use tokio::path::Path;
     use std::process::{Command, ExitStatus};
     use std::{env, fs};
