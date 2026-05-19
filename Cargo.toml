@@ -40,6 +40,7 @@ zeroize = { version = "1", default-features = false }
 libm = { version = "0.2", default-features = false }
 hashbrown = { version = "0.17.0", default-features = false }
 memchr = { version = "2.8.0", default-features = false }
+regex-automata = { version = "0.4.14", default-features = false, features = ["alloc", "meta", "syntax"] }
 twoway = { version = "0.2", default-features = false }
 unicode-segmentation = { version = "1", default-features = false }
 unicode-normalization = { version = "0.1", default-features = false }

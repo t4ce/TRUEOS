@@ -13,6 +13,51 @@ use ppu::Ppu;
 const NES_WIDTH: usize = 256;
 const NES_HEIGHT: usize = 240;
 const CYCLES_PER_SCANLINE: u32 = 114; // ~341 PPU dots / 3
+const HOST_KEY_ARROW_UP: u8 = 0xF0;
+const HOST_KEY_ARROW_DOWN: u8 = 0xF1;
+const HOST_KEY_ARROW_LEFT: u8 = 0xF2;
+const HOST_KEY_ARROW_RIGHT: u8 = 0xF3;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NesControllerButton {
+    A,
+    B,
+    Select,
+    Start,
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+impl NesControllerButton {
+    pub fn from_host_key(key: u8) -> Option<Self> {
+        match key {
+            b'x' | b'X' | b' ' => Some(Self::A),
+            b'z' | b'Z' => Some(Self::B),
+            b'c' | b'C' => Some(Self::Select),
+            b'\r' | 10 => Some(Self::Start),
+            b'w' | b'W' | HOST_KEY_ARROW_UP => Some(Self::Up),
+            b's' | b'S' | HOST_KEY_ARROW_DOWN => Some(Self::Down),
+            b'a' | b'A' | HOST_KEY_ARROW_LEFT => Some(Self::Left),
+            b'd' | b'D' | HOST_KEY_ARROW_RIGHT => Some(Self::Right),
+            _ => None,
+        }
+    }
+
+    const fn mask(self) -> u8 {
+        match self {
+            Self::A => 0x80,
+            Self::B => 0x40,
+            Self::Select => 0x20,
+            Self::Start => 0x10,
+            Self::Up => 0x08,
+            Self::Down => 0x04,
+            Self::Left => 0x02,
+            Self::Right => 0x01,
+        }
+    }
+}
 
 /// NES Emulator — desktop integration entry point
 pub struct NesEmulator {
@@ -158,36 +203,25 @@ impl NesEmulator {
     // ======================== Input ========================
 
     // NES controller: A B Select Start Up Down Left Right (bit 7..0)
-    pub fn handle_key(&mut self, key: u8) {
-        match key {
-            b'x' | b'X' => self.key_state |= 0x80, // A
-            b'z' | b'Z' => self.key_state |= 0x40, // B
-            b'c' | b'C' => self.key_state |= 0x20, // Select
-            b'\r' | 10  => self.key_state |= 0x10, // Start (Enter)
-            b'w' | b'W' | 0xF0 => self.key_state |= 0x08, // Up (WASD + arrow)
-            b's' | b'S' | 0xF1 => self.key_state |= 0x04, // Down
-            b'a' | b'A' | 0xF2 => self.key_state |= 0x02, // Left
-            b'd' | b'D' | 0xF3 => self.key_state |= 0x01, // Right
-            b' '        => self.key_state |= 0x80, // Space = A
-            _ => {}
+    pub fn set_button(&mut self, button: NesControllerButton, pressed: bool) {
+        if pressed {
+            self.key_state |= button.mask();
+        } else {
+            self.key_state &= !button.mask();
         }
         self.controller_state[0] = self.key_state;
     }
 
-    pub fn handle_key_release(&mut self, key: u8) {
-        match key {
-            b'x' | b'X' => self.key_state &= !0x80,
-            b'z' | b'Z' => self.key_state &= !0x40,
-            b'c' | b'C' => self.key_state &= !0x20,
-            b'\r' | 10  => self.key_state &= !0x10,
-            b'w' | b'W' | 0xF0 => self.key_state &= !0x08,
-            b's' | b'S' | 0xF1 => self.key_state &= !0x04,
-            b'a' | b'A' | 0xF2 => self.key_state &= !0x02,
-            b'd' | b'D' | 0xF3 => self.key_state &= !0x01,
-            b' '        => self.key_state &= !0x80,
-            _ => {}
+    pub fn handle_key(&mut self, key: u8) {
+        if let Some(button) = NesControllerButton::from_host_key(key) {
+            self.set_button(button, true);
         }
-        self.controller_state[0] = self.key_state;
+    }
+
+    pub fn handle_key_release(&mut self, key: u8) {
+        if let Some(button) = NesControllerButton::from_host_key(key) {
+            self.set_button(button, false);
+        }
     }
 
     // ======================== Emulation ========================

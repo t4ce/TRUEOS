@@ -32,6 +32,7 @@ mod exceptions;
 #[path = "exceptions_disabled.rs"]
 mod exceptions;
 mod gfx;
+#[path = "tst/ui2/gboi.rs"]
 pub(crate) mod gboi;
 mod globalog;
 #[cfg(target_arch = "x86_64")]

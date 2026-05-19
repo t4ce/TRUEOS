@@ -23,7 +23,9 @@ const TOOL_JSON_C4: &str = r#"{"type":"object","properties":{"mode":{"type":"str
 const TOOL_JSON_ETC: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["ample","go","go2","insane"],"description":"etc subcommand to run."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_DISC: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","format"],"description":"disc action to run."},"disk_id":{"type":"string","description":"Disk id string for action=format."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_LSD: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"Optional TRUEOSFS path to list."},"long":{"type":"boolean","description":"Show file kind and byte size."},"tree":{"type":"boolean","description":"Walk recursively from the path."}},"required":[],"additionalProperties":false}"#;
+const TOOL_JSON_MV: &str = r#"{"type":"object","properties":{"src":{"type":"string","description":"Source TRUEOSFS path."},"dst":{"type":"string","description":"Destination TRUEOSFS path."},"regex":{"type":"string","description":"Optional -regx pattern. When set, src and dst are directories."}},"required":["src","dst"],"additionalProperties":false}"#;
 const TOOL_JSON_NET: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["icmp","irc","nic","hostname"],"description":"net subcommand to run."},"target":{"type":"string","description":"Target host for net icmp."},"selector":{"type":"string","description":"Optional NIC selector like index, vid:pid, or bb:dd.f."},"host":{"type":"string","description":"Host for net irc."},"channel":{"type":"string","description":"Optional channel like #trueos for net irc."},"name":{"type":"string","description":"Optional hostname for net hostname."}},"required":["subcommand"],"additionalProperties":false}"#;
+const TOOL_JSON_RM: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS file or directory path."},"regex":{"type":"string","description":"Optional -regx pattern to match children under path."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_SET: &str = r#"{"type":"object","properties":{"width":{"type":"integer","minimum":50,"maximum":500,"description":"Shell line width."}},"required":["width"],"additionalProperties":false}"#;
 const TOOL_JSON_SHADER: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["list","compile","demo","now"],"description":"Shader compiler service action."},"path":{"type":"string","description":"Optional /shader source path for compile or now."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_SMP: &str = r#"{"type":"object","properties":{"slot":{"type":"integer","minimum":0,"description":"Optional SMP slot. Omit to list all slots."}},"required":[],"additionalProperties":false}"#;
@@ -47,6 +49,30 @@ fn dispatch_install(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &st
 
 fn dispatch_lsd(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     super::cmds::lsd::try_parse(io, rest)
+}
+
+fn dispatch_mv(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::mv::try_parse(io, "mv", rest)
+}
+
+fn dispatch_move(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::mv::try_parse(io, "move", rest)
+}
+
+fn dispatch_rm(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::rm::try_parse(io, "rm", rest)
+}
+
+fn dispatch_remove(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::rm::try_parse(io, "remove", rest)
+}
+
+fn dispatch_delete(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::rm::try_parse(io, "delete", rest)
+}
+
+fn dispatch_del(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::rm::try_parse(io, "del", rest)
 }
 
 fn dispatch_set(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -165,10 +191,58 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
     BuiltinShell2CmdEntry {
         name: "lsd",
         mode: "cmd",
-        color: Some((100, 185, 255)),
+        color: Some((60, 220, 120)),
         handler: dispatch_lsd,
         tool_description: Some("List TRUEOSFS paths with the TRUEOS lsd adapter."),
         tool_parameters_json: Some(TOOL_JSON_LSD),
+    },
+    BuiltinShell2CmdEntry {
+        name: "rm",
+        mode: "cmd",
+        color: Some((60, 220, 120)),
+        handler: dispatch_rm,
+        tool_description: Some("Remove a TRUEOSFS file or directory after confirmation."),
+        tool_parameters_json: Some(TOOL_JSON_RM),
+    },
+    BuiltinShell2CmdEntry {
+        name: "remove",
+        mode: "cmd",
+        color: Some((60, 220, 120)),
+        handler: dispatch_remove,
+        tool_description: None,
+        tool_parameters_json: None,
+    },
+    BuiltinShell2CmdEntry {
+        name: "delete",
+        mode: "cmd",
+        color: Some((60, 220, 120)),
+        handler: dispatch_delete,
+        tool_description: None,
+        tool_parameters_json: None,
+    },
+    BuiltinShell2CmdEntry {
+        name: "del",
+        mode: "cmd",
+        color: Some((60, 220, 120)),
+        handler: dispatch_del,
+        tool_description: None,
+        tool_parameters_json: None,
+    },
+    BuiltinShell2CmdEntry {
+        name: "mv",
+        mode: "cmd",
+        color: Some((60, 220, 120)),
+        handler: dispatch_mv,
+        tool_description: Some("Move TRUEOSFS files or directory contents."),
+        tool_parameters_json: Some(TOOL_JSON_MV),
+    },
+    BuiltinShell2CmdEntry {
+        name: "move",
+        mode: "cmd",
+        color: Some((60, 220, 120)),
+        handler: dispatch_move,
+        tool_description: None,
+        tool_parameters_json: None,
     },
     BuiltinShell2CmdEntry {
         name: "net",

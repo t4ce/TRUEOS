@@ -7,6 +7,7 @@ pub(crate) enum CommandSessionKind {
     Ample,
     BenchRunning(u64),
     FormatSure(u32),
+    RemoveSure(u64),
 }
 
 impl CommandSessionKind {
@@ -15,6 +16,7 @@ impl CommandSessionKind {
             Self::Ample => false,
             Self::BenchRunning(_) => false,
             Self::FormatSure(_) => true,
+            Self::RemoveSure(_) => true,
         }
     }
 
@@ -23,6 +25,7 @@ impl CommandSessionKind {
             Self::Ample => false,
             Self::BenchRunning(_) => true,
             Self::FormatSure(_) => false,
+            Self::RemoveSure(_) => false,
         }
     }
 }
