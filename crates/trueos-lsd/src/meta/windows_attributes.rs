@@ -63,7 +63,7 @@ impl WindowsAttributes {
 #[cfg(test)]
 mod test {
     use std::fs;
-    use std::io::Write;
+    use trueos_io::Write;
     use std::process::Command;
 
     use crate::{

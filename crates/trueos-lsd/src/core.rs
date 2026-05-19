@@ -8,10 +8,10 @@ use crate::icon::Icons;
 
 use crate::meta::Meta;
 use crate::{ExitCode, print_error, print_output, sort};
-use std::path::PathBuf;
+use tokio::path::PathBuf;
 
 #[cfg(not(target_os = "windows"))]
-use std::io;
+use trueos_io as io;
 #[cfg(not(target_os = "windows"))]
 use std::os::unix::io::AsRawFd;
 

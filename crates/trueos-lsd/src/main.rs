@@ -9,6 +9,7 @@ extern crate chrono;
 extern crate chrono_humanize;
 extern crate clap;
 extern crate dirs;
+extern crate alloc;
 extern crate libc;
 extern crate lscolors;
 #[cfg(test)]
@@ -67,7 +68,7 @@ impl ExitCode {
 macro_rules! print_error {
     ($($arg:tt)*) => {
         {
-            use std::io::Write;
+            use trueos_io::Write;
 
             let stderr = std::io::stderr();
 
@@ -75,8 +76,8 @@ macro_rules! print_error {
                 let mut handle = stderr.lock();
                 // We can write on stderr, so we simply ignore the error and don't print
                 // and stop with success.
-                let res = handle.write_all(std::format!("lsd: {}\n\n",
-                                                        std::format!($($arg)*)).as_bytes());
+                let res = handle.write_all(alloc::format!("lsd: {}\n\n",
+                                                        alloc::format!($($arg)*)).as_bytes());
                 if res.is_err() {
                     std::process::exit(0);
                 }
@@ -90,7 +91,7 @@ macro_rules! print_error {
 #[macro_export]
 macro_rules! print_output {
     ($($arg:tt)*) => {
-        use std::io::Write;
+        use trueos_io::Write;
 
         let stderr = std::io::stdout();
 
@@ -99,7 +100,7 @@ macro_rules! print_output {
             let mut handle = stderr.lock();
             // We can write on stdout, so we simply ignore the error and don't print
             // and stop with success.
-            let res = handle.write_all(std::format!($($arg)*).as_bytes());
+            let res = handle.write_all(alloc::format!($($arg)*).as_bytes());
             if res.is_err() {
                 std::process::exit(0);
             }

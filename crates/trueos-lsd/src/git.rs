@@ -1,5 +1,5 @@
 use crate::meta::git_file_status::GitFileStatus;
-use std::path::{Path, PathBuf};
+use tokio::path::{Path, PathBuf};
 
 #[allow(dead_code)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
@@ -95,7 +95,7 @@ impl GitCache {
         match std::fs::canonicalize(filepath) {
             Ok(filename) => Some(self.inner_get(&filename, is_directory)),
             Err(err) => {
-                if err.kind() != std::io::ErrorKind::NotFound {
+                if err.kind() != trueos_io::ErrorKind::NotFound {
                     crate::print_error!("Cannot get git status for {:?}:  {}", filepath, err);
                 }
                 None
@@ -110,8 +110,8 @@ impl GitCache {
                 .filter(|&x| x.0.starts_with(filepath))
                 .map(|x| GitFileStatus::new(x.1))
                 .fold(GitFileStatus::default(), |acc, x| GitFileStatus {
-                    index: std::cmp::max(acc.index, x.index),
-                    workdir: std::cmp::max(acc.workdir, x.workdir),
+                    index: core::cmp::max(acc.index, x.index),
+                    workdir: core::cmp::max(acc.workdir, x.workdir),
                 })
         } else {
             self.statuses
@@ -131,7 +131,7 @@ mod tests {
     use assert_fs::prelude::*;
     use git2::build::CheckoutBuilder;
     use git2::{CherrypickOptions, Index, Oid, Repository, RepositoryInitOptions};
-    use std::collections::HashMap;
+    use alloc::collections::HashMap;
     use std::fs::remove_file;
     #[allow(unused)]
     use std::process::Command;

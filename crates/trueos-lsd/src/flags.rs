@@ -116,7 +116,7 @@ impl Flags {
 /// file or a [Default] value.
 pub trait Configurable<T>
 where
-    T: std::default::Default,
+    T: core::default::Default,
 {
     /// Returns a value from either [Cli], a [Config], a [Default] or the environment value.
     /// The first value that is not [None] is used. The order of precedence for the value used is:

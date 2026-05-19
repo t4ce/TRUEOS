@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use std::collections::HashMap;
+use alloc::collections::HashMap;
 
 enum ByFilename {
     Name,
@@ -798,7 +798,7 @@ filetype:
     #[test]
     fn test_tmp_partial_default_theme_file() {
         use std::fs::File;
-        use std::io::Write;
+        use trueos_io::Write;
         let dir = assert_fs::TempDir::new().unwrap();
         let theme = dir.path().join("icon.yaml");
         let mut file = File::create(&theme).unwrap();

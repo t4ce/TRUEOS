@@ -2,7 +2,7 @@
 //! this.
 use crossterm::style::Color;
 use serde::{Deserialize, de::IntoDeserializer};
-use std::fmt;
+use core::fmt;
 
 fn deserialize_option_color<'de, D>(deserializer: D) -> Result<Option<Color>, D::Error>
 where
@@ -512,7 +512,7 @@ tree-edge: 245
     #[test]
     fn test_default_theme_file() {
         use std::fs::File;
-        use std::io::Write;
+        use trueos_io::Write;
         let dir = assert_fs::TempDir::new().unwrap();
         let theme = dir.path().join("theme.yaml");
         let mut file = File::create(&theme).unwrap();

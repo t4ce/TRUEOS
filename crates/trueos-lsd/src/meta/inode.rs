@@ -36,8 +36,8 @@ impl INode {
 mod tests {
     use super::INode;
     use std::env;
-    use std::io;
-    use std::path::Path;
+    use trueos_io as io;
+    use tokio::path::Path;
     use std::process::{Command, ExitStatus};
 
     fn cross_platform_touch(path: &Path) -> io::Result<ExitStatus> {

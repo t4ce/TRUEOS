@@ -1,7 +1,7 @@
 use crate::color::{ColoredString, Colors, Elem};
 use crate::flags::Flags;
 use std::fs::read_link;
-use std::path::Path;
+use tokio::path::Path;
 
 #[derive(Clone, Debug)]
 pub struct SymLink {

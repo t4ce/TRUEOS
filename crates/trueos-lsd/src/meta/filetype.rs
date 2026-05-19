@@ -56,7 +56,7 @@ impl FileType {
     }
 
     #[cfg(windows)]
-    pub fn new(meta: &Metadata, symlink_meta: Option<&Metadata>, path: &std::path::Path) -> Self {
+    pub fn new(meta: &Metadata, symlink_meta: Option<&Metadata>, path: &tokio::path::Path) -> Self {
         let file_type = meta.file_type();
 
         if file_type.is_file() {
