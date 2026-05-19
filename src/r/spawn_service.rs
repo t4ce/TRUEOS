@@ -892,10 +892,10 @@ struct BlueprintAutostart {
 
 const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
     BlueprintAutostart {
-        enabled: false,
-        label: "currency_reqwest",
-        archive: "currency_reqwest.bp",
-        slot: "cur",
+        enabled: true,
+        label: "mandelbrot",
+        archive: "mandelbrot.bp",
+        slot: "man",
         args: &[],
         settle_ms: 750,
     },
@@ -940,7 +940,7 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
         settle_ms: 750,
     },
     BlueprintAutostart {
-        enabled: true,
+        enabled: false,
         label: "file-system",
         archive: "file-system.bp",
         slot: "fs",
