@@ -27,7 +27,6 @@ sudo apt update && sudo apt upgrade
 apt install git gh make rustup autoconf automake mtools nasm xorriso qemu-system gdb build-essential konsole
 apt install gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
 cargo install fmt cargo-outdated cargo-edit --locked
-snap install code-insiders --classic
 rustup component add clippy
 rustup toolchain install nightly --profile minimal --component rust-src,rustfmt,rust-analyzer,llvm-tools-preview
 cargo install cargo-edit --locked
