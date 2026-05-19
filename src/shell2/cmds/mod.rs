@@ -6,6 +6,7 @@ pub(crate) mod bench;
 pub(crate) mod c4;
 pub(crate) mod disc;
 pub(crate) mod format;
+pub(crate) mod hyper;
 pub(crate) mod install;
 pub(crate) mod lsd;
 pub(crate) mod mv;

@@ -28,7 +28,7 @@ use crate::{
         kmod::{hub::HubOp, kcore::CoreOp, xhci::reg::SlotBell},
         ty::{DeviceOp, Event, EventHandlerOp},
     },
-    err::{ConvertXhciError, Result},
+    err::Result,
     osal::{Kernel, SpinWhile},
     queue::Finished,
 };
@@ -82,9 +82,6 @@ impl CoreOp for Xhci {
 }
 
 impl Xhci {
-    const COMMAND_POLL_DELAY_MS: u64 = 1;
-    const ENABLE_SLOT_POLL_LIMIT: usize = 250;
-
     fn flush_controller_write(&self) {
         let _ = self.reg.read().operational.usbsts.read_volatile();
         mb();
@@ -528,41 +525,6 @@ impl Xhci {
         self.cmd.cmd_request(trb)
     }
 
-    fn poll_command_completion_with_limit(
-        &mut self,
-        stage: &'static str,
-        addr: crate::BusAddr,
-        poll_limit: usize,
-    ) -> core::result::Result<CommandCompletion, TransferError> {
-        for _ in 0..poll_limit {
-            if let Some(handler) = self.event_handler.as_ref() {
-                let _ = handler.handle_event();
-            }
-
-            if let Some(cpl) = self.cmd.poll_finished(addr) {
-                return Ok(cpl);
-            }
-
-            self.kernel
-                .delay(Duration::from_millis(Self::COMMAND_POLL_DELAY_MS));
-        }
-
-        let sts = self.reg.read().operational.usbsts.read_volatile();
-        let cmd = self.reg.read().operational.usbcmd.read_volatile();
-        Err(TransferError::Other(anyhow!(
-            "xHCI command timed out during {} addr={:#x} halted={} cnr={} reset={} hse={} hce={} eint={} pcd={}",
-            stage,
-            addr.raw(),
-            sts.hc_halted(),
-            sts.controller_not_ready(),
-            cmd.host_controller_reset(),
-            sts.host_system_error(),
-            sts.host_controller_error(),
-            sts.event_interrupt(),
-            sts.port_change_detect()
-        )))
-    }
-
     pub(crate) fn is_64bit_ctx(&self) -> bool {
         self.reg
             .read()
@@ -579,23 +541,11 @@ impl Xhci {
     pub(crate) async fn device_slot_assignment(
         &mut self,
     ) -> core::result::Result<SlotId, TransferError> {
-        let cmd_addr = self
-            .cmd
-            .submit_for_poll(command::Allowed::EnableSlot(command::EnableSlot::default()));
-        let result = self.poll_command_completion_with_limit(
-            "enable-slot",
-            cmd_addr,
-            Self::ENABLE_SLOT_POLL_LIMIT,
-        )?;
-        match result.completion_code() {
-            Ok(code) => code.to_result()?,
-            Err(err) => {
-                return Err(TransferError::Other(anyhow!(
-                    "enable-slot completion decode failed: {err:?}"
-                )));
-            }
-        }
-
+        let result = self
+            .cmd_request(command::Allowed::EnableSlot(
+                command::EnableSlot::default(),
+            ))
+            .await?;
         let slot_id = result.slot_id();
         trace!("assigned slot id: {slot_id}");
         Ok(slot_id.into())

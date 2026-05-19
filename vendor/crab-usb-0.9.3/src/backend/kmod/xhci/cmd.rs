@@ -52,15 +52,6 @@ impl CommandRing {
         inner.ring.finished_handle()
     }
 
-    pub fn submit_for_poll(&mut self, trb: command::Allowed) -> BusAddr {
-        self.submit(trb)
-    }
-
-    pub fn poll_finished(&self, addr: BusAddr) -> Option<CommandCompletion> {
-        let inner = self.0.lock();
-        inner.ring.get_finished(addr)
-    }
-
     pub async fn cmd_request(
         &mut self,
         trb: command::Allowed,
