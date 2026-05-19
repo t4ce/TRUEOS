@@ -2501,7 +2501,12 @@ pub mod cabi {
             return;
         }
         let host_window_id = crate::hv::host_blueprint_app_window_id(window_id);
-        let _ = crate::r::ui2::request_window_content_present(host_window_id, reason);
+        if !crate::r::ui2::request_window_content_present(host_window_id, reason) {
+            let _ = crate::hv::request_deferred_blueprint_app_windows_for_host_texture(
+                host_tex_id,
+                reason,
+            );
+        }
     }
 
     fn vm_texture_upload_get_u32(payload: &[u8], offset: usize) -> Option<u32> {
@@ -2862,6 +2867,51 @@ pub mod cabi {
             repaint_reason,
             false,
         )
+    }
+
+    pub fn queue_host_texture_rgba_image_upload_owned(
+        host_tex_id: u32,
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+        repaint_window_id: u32,
+        repaint_reason: &'static str,
+    ) -> bool {
+        if host_tex_id == 0 || width == 0 || height == 0 {
+            return false;
+        }
+        if reject_unreasonable_tex_id(host_tex_id, "queue-host-texture-upload") {
+            return false;
+        }
+        if checked_reasonable_rgba_len(width, height).is_none() {
+            crate::log!(
+                "gfx-cabi: reject host texture-upload queue tex={} size={}x{} repaint={} window={}\n",
+                host_tex_id,
+                width,
+                height,
+                repaint_reason,
+                repaint_window_id
+            );
+            return false;
+        }
+        let expected = (width as usize)
+            .saturating_mul(height as usize)
+            .saturating_mul(4);
+        if rgba.len() < expected {
+            return false;
+        }
+        enqueue_texture_upload(TextureUploadReq {
+            tex_id: host_tex_id,
+            width,
+            height,
+            region: None,
+            rgba,
+            sample_kind: TexSampleKind::Rgba,
+            repaint_window_id,
+            repaint_reason,
+            update_async_status: false,
+        });
+        true
     }
 
     pub fn queue_texture_rgba_image_upload_copy(

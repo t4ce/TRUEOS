@@ -6,6 +6,7 @@ use alloc::{sync::Arc, vec::Vec};
 use core::{
     cell::UnsafeCell,
     sync::atomic::{AtomicBool, Ordering},
+    time::Duration,
 };
 
 use futures::{FutureExt, future::BoxFuture, task::AtomicWaker};
@@ -13,6 +14,7 @@ use usb_if::{err::USBError, host::hub::Speed};
 
 use super::reg::XhciRegisters;
 use crate::backend::kmod::hub::{HubInfo, HubOp, PortChangeInfo, PortState};
+use crate::osal::Kernel;
 
 pub struct PortChangeWaker {
     ports: Arc<UnsafeCell<Vec<Port>>>,
@@ -62,6 +64,7 @@ pub struct XhciRootHub {
     reg: XhciRegisters,
 
     ports: Arc<UnsafeCell<Vec<Port>>>,
+    kernel: Kernel,
 }
 
 unsafe impl Send for XhciRootHub {}
@@ -117,11 +120,11 @@ impl HubOp for XhciRootHub {
 
 impl XhciRootHub {
     /// 创建新的 xHCI Root Hub
-    pub fn new(reg: XhciRegisters) -> Result<Self, USBError> {
+    pub fn new(reg: XhciRegisters, kernel: Kernel) -> Result<Self, USBError> {
         let port_num = reg.port_register_set.len();
         let ports = PortChangeWaker::new(port_num as _).ports.clone();
 
-        Ok(Self { reg, ports })
+        Ok(Self { reg, ports, kernel })
     }
 
     pub fn waker(&self) -> PortChangeWaker {
@@ -165,8 +168,15 @@ impl XhciRootHub {
             );
 
             if connect && !enable {
-                info!("xhci/root-hub: port {} connected but not enabled; leaving untouched", id);
-                self.ports_mut()[i].state = PortState::Probed;
+                info!(
+                    "xhci/root-hub: port {} connected but not enabled; issuing targeted reset",
+                    id
+                );
+                self.reg.port_register_set.update_volatile_at(i, |reg| {
+                    reg.portsc.set_port_reset();
+                });
+                self.kernel.delay(Duration::from_millis(50));
+                self.ports_mut()[i].state = PortState::Reseted;
                 continue;
             }
 

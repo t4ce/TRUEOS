@@ -83,7 +83,7 @@ impl CoreOp for Xhci {
 
 impl Xhci {
     const COMMAND_POLL_DELAY_MS: u64 = 1;
-    const COMMAND_POLL_LIMIT: usize = 2_000;
+    const ENABLE_SLOT_POLL_LIMIT: usize = 250;
 
     fn flush_controller_write(&self) {
         let _ = self.reg.read().operational.usbsts.read_volatile();
@@ -144,7 +144,7 @@ impl Xhci {
         let event_ring = EventRing::new(max_event_ring_segments, &kernel)?;
         let event_ring_info = event_ring.info();
 
-        let root_hub = XhciRootHub::new(reg.clone())?;
+        let root_hub = XhciRootHub::new(reg.clone(), kernel.clone())?;
 
         let transfer_result_handler = TransferResultHandler::new(reg_shared.clone());
         let ports = root_hub.waker();
@@ -528,12 +528,13 @@ impl Xhci {
         self.cmd.cmd_request(trb)
     }
 
-    fn poll_command_completion(
+    fn poll_command_completion_with_limit(
         &mut self,
         stage: &'static str,
         addr: crate::BusAddr,
+        poll_limit: usize,
     ) -> core::result::Result<CommandCompletion, TransferError> {
-        for _ in 0..Self::COMMAND_POLL_LIMIT {
+        for _ in 0..poll_limit {
             if let Some(handler) = self.event_handler.as_ref() {
                 let _ = handler.handle_event();
             }
@@ -581,7 +582,11 @@ impl Xhci {
         let cmd_addr = self
             .cmd
             .submit_for_poll(command::Allowed::EnableSlot(command::EnableSlot::default()));
-        let result = self.poll_command_completion("enable-slot", cmd_addr)?;
+        let result = self.poll_command_completion_with_limit(
+            "enable-slot",
+            cmd_addr,
+            Self::ENABLE_SLOT_POLL_LIMIT,
+        )?;
         match result.completion_code() {
             Ok(code) => code.to_result()?,
             Err(err) => {
