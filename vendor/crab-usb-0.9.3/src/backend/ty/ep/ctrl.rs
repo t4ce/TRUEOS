@@ -1,3 +1,5 @@
+use alloc::vec::Vec;
+
 use usb_if::{
     descriptor::{ConfigurationDescriptor, DescriptorType, DeviceDescriptor},
     endpoint::TransferRequest,
@@ -95,17 +97,34 @@ impl Endpoint {
         &mut self,
         index: u8,
     ) -> Result<ConfigurationDescriptor, USBError> {
+        let full_data = self.get_configuration_descriptor_bytes(index).await?;
+
+        ConfigurationDescriptor::parse(&full_data)
+            .ok_or_else(|| anyhow!("config descriptor parse err").into())
+    }
+
+    pub async fn get_configuration_descriptor_bytes(
+        &mut self,
+        index: u8,
+    ) -> Result<Vec<u8>, USBError> {
         let mut header = alloc::vec![0u8; ConfigurationDescriptor::LEN];
-        self.get_descriptor(DescriptorType::CONFIGURATION, index, 0, &mut header)
+        let header_len = self
+            .get_descriptor(DescriptorType::CONFIGURATION, index, 0, &mut header)
             .await?;
+        if header_len < 4 {
+            return Err(anyhow!("short config descriptor header").into());
+        }
 
         let total_length = u16::from_le_bytes(header[2..4].try_into().unwrap()) as usize;
+        if total_length < ConfigurationDescriptor::LEN {
+            return Err(anyhow!("invalid config descriptor length {total_length}").into());
+        }
+
         let mut full_data = alloc::vec![0u8; total_length];
         debug!("Reading configuration descriptor for index {index}, total length: {total_length}");
         self.get_descriptor(DescriptorType::CONFIGURATION, index, 0, &mut full_data)
             .await?;
 
-        ConfigurationDescriptor::parse(&full_data)
-            .ok_or_else(|| anyhow!("config descriptor parse err").into())
+        Ok(full_data)
     }
 }

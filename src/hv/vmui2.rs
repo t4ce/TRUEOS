@@ -238,14 +238,25 @@ fn seed_deferred_surface_texture(tex_id: u32, host_tex_id: u32, width: u32, heig
     for _ in 0..pixel_count {
         pixels.extend_from_slice(&[0x08, 0x0C, 0x12, 0xFF]);
     }
-    crate::r::io::cabi::queue_texture_rgba_image_upload_owned(
-        upload_tex_id,
-        width,
-        height,
-        pixels,
-        0,
-        "vm-surface-init",
-    )
+    if host_tex_id != 0 {
+        crate::r::io::cabi::queue_host_texture_rgba_image_upload_owned(
+            upload_tex_id,
+            width,
+            height,
+            pixels,
+            0,
+            "vm-surface-init",
+        )
+    } else {
+        crate::r::io::cabi::queue_texture_rgba_image_upload_owned(
+            upload_tex_id,
+            width,
+            height,
+            pixels,
+            0,
+            "vm-surface-init",
+        )
+    }
 }
 
 fn truncate_deferred_app_window_title(title: &str) -> String<APP_WINDOW_TITLE_CAP> {

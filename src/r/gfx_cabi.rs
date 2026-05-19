@@ -1864,9 +1864,9 @@ pub mod cabi {
         out_cap: usize,
     ) -> isize {
         let limit = if max_entries == 0 {
-            100usize
+            4096usize
         } else {
-            core::cmp::min(max_entries as usize, 100usize)
+            max_entries as usize
         };
 
         match super::kfs::json_all(limit) {

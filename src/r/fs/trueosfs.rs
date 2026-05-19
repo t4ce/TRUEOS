@@ -1616,9 +1616,9 @@ pub async fn json_all_async(
     ensure_index_async(disk, &placement).await?;
     let disk_id = disk.id();
     let effective_limit = if max_entries == 0 {
-        100usize
+        4096usize
     } else {
-        core::cmp::min(max_entries, 100usize)
+        max_entries
     };
 
     #[derive(Clone)]
