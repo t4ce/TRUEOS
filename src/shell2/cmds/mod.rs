@@ -14,6 +14,7 @@ pub(crate) mod net;
 pub(crate) mod rm;
 pub(crate) mod run;
 pub(crate) mod set;
+pub(crate) mod sevenz;
 pub(crate) mod shader;
 pub(crate) mod smp;
 pub(crate) mod tlb;

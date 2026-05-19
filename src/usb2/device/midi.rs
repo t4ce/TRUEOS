@@ -623,7 +623,7 @@ pub(crate) async fn maybe_start_midi(
                 product_id,
                 err
             );
-            return true;
+            return false;
         }
     };
 

@@ -1,6 +1,7 @@
 extern crate alloc;
 
 use alloc::{string::String, vec::Vec};
+use core::num::NonZeroU64;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum SevenZError {
@@ -12,6 +13,8 @@ pub enum SevenZError {
     Unsupported,
     DecodeFailed,
 }
+
+const LZMA2_DICT_PROP_1_MIB: u8 = 16;
 
 const SIG_LEN: usize = 32;
 
@@ -38,6 +41,127 @@ const K_ENCODED_HEADER: u8 = 0x17;
 const METHOD_COPY: &[u8] = &[0x00];
 const METHOD_LZMA: &[u8] = &[0x03, 0x01, 0x01];
 const METHOD_LZMA2: &[u8] = &[0x21];
+
+fn push_variable_u64(out: &mut Vec<u8>, value: u64) {
+    if value < 0x80 {
+        out.push(value as u8);
+        return;
+    }
+
+    for bytes in 1..8 {
+        let limit = 1u64 << (7 * (bytes + 1));
+        if value < limit {
+            let mut first = 0u8;
+            for bit in 0..bytes {
+                first |= 0x80 >> bit;
+            }
+            let high_bits = (value >> (8 * bytes)) as u8;
+            first |= high_bits & ((0x80 >> bytes) - 1);
+            out.push(first);
+            for idx in 0..bytes {
+                out.push((value >> (8 * idx)) as u8);
+            }
+            return;
+        }
+    }
+
+    out.push(0xFF);
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+fn push_property(out: &mut Vec<u8>, property: u8, body: &[u8]) {
+    out.push(property);
+    push_variable_u64(out, body.len() as u64);
+    out.extend_from_slice(body);
+}
+
+fn push_utf16le_name(body: &mut Vec<u8>, name: &str) {
+    body.push(0);
+    for unit in name.encode_utf16() {
+        body.extend_from_slice(&unit.to_le_bytes());
+    }
+    body.extend_from_slice(&0u16.to_le_bytes());
+}
+
+fn build_single_file_header(
+    name: &str,
+    packed_len: usize,
+    unpacked_len: usize,
+    unpack_crc: u32,
+) -> Vec<u8> {
+    let mut header = Vec::new();
+    header.push(K_HEADER);
+    header.push(K_MAIN_STREAMS_INFO);
+
+    header.push(K_PACK_INFO);
+    push_variable_u64(&mut header, 0);
+    push_variable_u64(&mut header, 1);
+    header.push(K_SIZE);
+    push_variable_u64(&mut header, packed_len as u64);
+    header.push(K_END);
+
+    header.push(K_UNPACK_INFO);
+    header.push(K_FOLDER);
+    push_variable_u64(&mut header, 1);
+    header.push(0);
+    push_variable_u64(&mut header, 1);
+    header.push(0x21);
+    header.push(METHOD_LZMA2[0]);
+    push_variable_u64(&mut header, 1);
+    header.push(LZMA2_DICT_PROP_1_MIB);
+    header.push(K_CODERS_UNPACK_SIZE);
+    push_variable_u64(&mut header, unpacked_len as u64);
+    header.push(K_CRC);
+    header.push(1);
+    header.extend_from_slice(&unpack_crc.to_le_bytes());
+    header.push(K_END);
+
+    header.push(K_END);
+
+    header.push(K_FILES_INFO);
+    push_variable_u64(&mut header, 1);
+    let mut names = Vec::new();
+    push_utf16le_name(&mut names, name);
+    push_property(&mut header, K_NAME, names.as_slice());
+    header.push(K_END);
+
+    header.push(K_END);
+    header
+}
+
+fn lzma2_compress_to_vec(bytes: &[u8]) -> Result<Vec<u8>, SevenZError> {
+    let mut options = lzma_rust2::Lzma2Options::with_preset(1);
+    options.lzma_options.dict_size = 1 << 20;
+    options.set_chunk_size(NonZeroU64::new(256 * 1024));
+
+    let mut writer = lzma_rust2::Lzma2Writer::new(Vec::new(), options);
+    lzma_rust2::Write::write_all(&mut writer, bytes).map_err(|_| SevenZError::DecodeFailed)?;
+    writer.finish().map_err(|_| SevenZError::DecodeFailed)
+}
+
+pub fn compress_single_file_to_vec(name: &str, bytes: &[u8]) -> Result<Vec<u8>, SevenZError> {
+    let packed = lzma2_compress_to_vec(bytes)?;
+    let unpack_crc = crc32fast::hash(bytes);
+    let header = build_single_file_header(name, packed.len(), bytes.len(), unpack_crc);
+    let next_header_crc = crc32fast::hash(header.as_slice());
+    let next_header_offset = packed.len() as u64;
+    let next_header_size = header.len() as u64;
+
+    let mut start_header = Vec::with_capacity(20);
+    start_header.extend_from_slice(&next_header_offset.to_le_bytes());
+    start_header.extend_from_slice(&next_header_size.to_le_bytes());
+    start_header.extend_from_slice(&next_header_crc.to_le_bytes());
+    let start_header_crc = crc32fast::hash(start_header.as_slice());
+
+    let mut out = Vec::with_capacity(SIG_LEN + packed.len() + header.len());
+    out.extend_from_slice(b"7z\xBC\xAF'\x1C");
+    out.extend_from_slice(&[0, 4]);
+    out.extend_from_slice(&start_header_crc.to_le_bytes());
+    out.extend_from_slice(start_header.as_slice());
+    out.extend_from_slice(packed.as_slice());
+    out.extend_from_slice(header.as_slice());
+    Ok(out)
+}
 
 #[derive(Copy, Clone)]
 enum Method {

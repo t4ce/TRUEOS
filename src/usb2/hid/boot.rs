@@ -25,18 +25,6 @@ enum HidBootKind {
     EyeTracker,
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-enum GenericPointerKind {
-    Mouse,
-    Tablet,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-struct GenericPointerInfo {
-    kind: GenericPointerKind,
-    has_report_id: bool,
-}
-
 impl HidBootKind {
     #[inline]
     fn as_str(self) -> &'static str {
@@ -124,128 +112,6 @@ fn endpoint_target_from_address(address: u8) -> u32 {
     } else {
         ep_num * 2
     }
-}
-
-fn hid_item_data(data: &[u8]) -> u32 {
-    let mut value = 0u32;
-    for (idx, byte) in data.iter().enumerate() {
-        value |= u32::from(*byte) << (idx * 8);
-    }
-    value
-}
-
-fn classify_generic_pointer_report(report_desc: &[u8]) -> Option<GenericPointerInfo> {
-    let mut idx = 0usize;
-    let mut usage_page = 0u32;
-    let mut usage: Option<u32> = None;
-    let mut has_report_id = false;
-    let mut saw_mouse = false;
-    let mut saw_tablet = false;
-
-    while idx < report_desc.len() {
-        let prefix = report_desc[idx];
-        idx += 1;
-
-        if prefix == 0xFE {
-            if idx + 1 >= report_desc.len() {
-                break;
-            }
-            let long_len = usize::from(report_desc[idx]);
-            idx = idx.saturating_add(2).saturating_add(long_len);
-            usage = None;
-            continue;
-        }
-
-        let size = match prefix & 0x03 {
-            0 => 0usize,
-            1 => 1usize,
-            2 => 2usize,
-            _ => 4usize,
-        };
-        let item_type = (prefix >> 2) & 0x03;
-        let tag = (prefix >> 4) & 0x0F;
-        if idx + size > report_desc.len() {
-            break;
-        }
-        let value = hid_item_data(&report_desc[idx..idx + size]);
-        idx += size;
-
-        match (item_type, tag) {
-            (1, 0) => usage_page = value,
-            (1, 8) => has_report_id = true,
-            (2, 0) => usage = Some(value),
-            (0, 10) => {
-                if usage_page == 0x01 && usage == Some(0x02) {
-                    saw_mouse = true;
-                }
-                if usage_page == 0x0D {
-                    saw_tablet = true;
-                }
-                usage = None;
-            }
-            (0, 12) => usage = None,
-            _ => {}
-        }
-    }
-
-    if saw_tablet {
-        Some(GenericPointerInfo {
-            kind: GenericPointerKind::Tablet,
-            has_report_id,
-        })
-    } else if saw_mouse {
-        Some(GenericPointerInfo {
-            kind: GenericPointerKind::Mouse,
-            has_report_id,
-        })
-    } else {
-        None
-    }
-}
-
-async fn read_generic_pointer_info(
-    host: &mut USBHost,
-    dev_info: &crab_usb::DeviceInfo,
-    interface_number: u8,
-) -> Option<GenericPointerInfo> {
-    let mut device = host.open_device(dev_info).await.ok()?;
-    let mut hid_desc = [0u8; 9];
-    let read_len = device
-        .control_in(
-            usb_if::host::ControlSetup {
-                request_type: usb_if::transfer::RequestType::Standard,
-                recipient: usb_if::transfer::Recipient::Interface,
-                request: usb_if::transfer::Request::GetDescriptor,
-                value: 0x2100,
-                index: u16::from(interface_number),
-            },
-            &mut hid_desc,
-        )
-        .await
-        .ok()?
-        .min(hid_desc.len());
-
-    let report_len = if read_len >= 9 && hid_desc[6] == 0x22 {
-        u16::from(hid_desc[7]) | (u16::from(hid_desc[8]) << 8)
-    } else {
-        128
-    };
-    let mut report_desc = alloc::vec![0u8; usize::from(report_len)];
-    let report_read_len = device
-        .control_in(
-            usb_if::host::ControlSetup {
-                request_type: usb_if::transfer::RequestType::Standard,
-                recipient: usb_if::transfer::Recipient::Interface,
-                request: usb_if::transfer::Request::GetDescriptor,
-                value: 0x2200,
-                index: u16::from(interface_number),
-            },
-            &mut report_desc,
-        )
-        .await
-        .ok()?
-        .min(report_desc.len());
-    classify_generic_pointer_report(&report_desc[..report_read_len])
 }
 
 fn pick_hid_boot_targets(
@@ -756,46 +622,15 @@ async fn maybe_start_hid_boot_streams_filtered(
             continue;
         }
 
-        if target.generic_pointer {
-            let inferred = read_generic_pointer_info(host, dev_info, target.interface_number).await;
-            match inferred.map(|info| info.kind) {
-                Some(GenericPointerKind::Mouse) => {
-                    let has_report_id = inferred.map(|info| info.has_report_id).unwrap_or(false);
-                    target.kind = HidBootKind::Mouse;
-                    target.strip_report_id = has_report_id;
-                    target.report_len =
-                        usize::from(target.in_max_packet_size.max(if has_report_id {
-                            5
-                        } else {
-                            4
-                        }));
-                    crate::log_info!(target: "usb";
-                        "crabusb: hid {:04X}:{:04X} generic pointer if#{} classified=mouse report_id={}\n",
-                        vendor_id,
-                        product_id,
-                        target.interface_number,
-                        has_report_id
-                    );
-                }
-                Some(GenericPointerKind::Tablet) => {
-                    crate::log_info!(target: "usb";
-                        "crabusb: hid {:04X}:{:04X} generic pointer if#{} classified=tablet\n",
-                        vendor_id,
-                        product_id,
-                        target.interface_number
-                    );
-                }
-                None => {
-                    target.kind = HidBootKind::Mouse;
-                    target.report_len = usize::from(target.in_max_packet_size.max(4));
-                    crate::log_info!(target: "usb";
-                        "crabusb: hid {:04X}:{:04X} generic pointer if#{} classified=mouse fallback=descriptor-unavailable\n",
-                        vendor_id,
-                        product_id,
-                        target.interface_number
-                    );
-                }
-            }
+        if target.generic_pointer && only_kind == Some(HidBootKind::Mouse) {
+            target.kind = HidBootKind::Mouse;
+            target.report_len = usize::from(target.in_max_packet_size.max(4));
+            crate::log_info!(target: "usb";
+                "crabusb: hid {:04X}:{:04X} generic pointer if#{} classified=mouse fallback=config-descriptor\n",
+                vendor_id,
+                product_id,
+                target.interface_number
+            );
         }
 
         if only_kind.is_some_and(|kind| target.kind != kind) {

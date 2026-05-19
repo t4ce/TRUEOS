@@ -17,10 +17,10 @@ pub use host::Xhci;
 use usb_if::host::hub::Speed;
 
 fn parse_default_max_packet_size_from_port_speed(speed: Speed) -> u16 {
-    // 根据 xHCI 规范表 6-30 和 U-Boot 实现：
-    // 参考 U-Boot drivers/usb/host/xhci-mem.c:730-751
+    // Bootstrap EP0 conservatively for LS/FS, then retune from bMaxPacketSize0
+    // after reading the first 8 bytes of the device descriptor.
     match speed {
-        Speed::Full => 64,             // Full Speed → 64 bytes
+        Speed::Full => 8,              // Full Speed → start at 8, then evaluate-context if needed
         Speed::Low => 8,               // Low Speed → 8 bytes
         Speed::High => 64,             // High Speed → 64 bytes
         Speed::SuperSpeed => 512,      // SuperSpeed → 512 bytes
