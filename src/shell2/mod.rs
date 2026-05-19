@@ -53,6 +53,7 @@ const SECTION_STATUS_HOLD_MS: u64 = 1000;
 const SECTION_RAINBOW_FRAME_MS: u64 = 120;
 const SECTION_RAINBOW_COLORS: [u8; 8] = [199, 208, 227, 121, 51, 39, 99, 201];
 const STATUS_NORMAL_RGB: (u8, u8, u8) = (255, 255, 255);
+const VMX_CONSOLE_COMMANDS: &str = "echo hostname homedir env file thread help exit";
 
 static REGISTERED_OUTPUTS: AtomicU8 = AtomicU8::new(0);
 
@@ -212,7 +213,11 @@ impl<'a> AlignedWriter<'a> {
         self.move_to(BANNER_ROW, 1);
         self.clear_line();
         self.banner_left(output_mask, time_text);
-        self.right_text(BANNER_ROW, self.main_mode_text(mode).as_str());
+        if active_matrix_vm_id(output_mask).is_some() {
+            self.right_text(BANNER_ROW, self.vmx_console_text().as_str());
+        } else {
+            self.right_text(BANNER_ROW, self.main_mode_text(mode).as_str());
+        }
     }
 
     fn banner_left(&self, output_mask: u8, time_text: &str) {
@@ -232,6 +237,11 @@ impl<'a> AlignedWriter<'a> {
         self.io.raw_write_str(styled.as_str());
         self.io.raw_write_char(' ');
         self.io.raw_write_str(time_text);
+        if active_matrix_vm_id(output_mask).is_some() {
+            let vmx =
+                alloc::format!(" {}", term_style::paint("VMX").bold().color(STATUS_SELECTED_RGB));
+            self.io.raw_write_str(vmx.as_str());
+        }
     }
 
     fn mode_status(
@@ -251,7 +261,9 @@ impl<'a> AlignedWriter<'a> {
         if !slot_text.is_empty() {
             self.left_text(STATUS_ROW, slot_text.as_str());
         }
-        if mode == ShellMode2::Surf {
+        if active_matrix_vm_id(output_mask).is_some() {
+            self.vmx_console_status(cmd_status_text);
+        } else if mode == ShellMode2::Surf {
             self.surf_status(surf_prefix);
         } else if mode == ShellMode2::Apps {
             self.apps_status(apps_mode);
@@ -263,6 +275,17 @@ impl<'a> AlignedWriter<'a> {
             self.lumen_status(output_mask, lumen_mode);
         }
         self.io.raw_write_str(ecma48::RESET);
+    }
+
+    fn vmx_console_text(&self) -> AllocString {
+        let mut text = AllocString::new();
+        self.push_ai_token(&mut text, "vmx", true);
+        self.push_plain(&mut text, " ");
+        self.push_plain(&mut text, VMX_CONSOLE_COMMANDS);
+        text
+    }
+
+    fn vmx_console_status(&self, _cmd_status_text: Option<&str>) {
     }
 
     fn main_mode_text(&self, mode: ShellMode2) -> AllocString {
@@ -1325,8 +1348,9 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             csi_param = csi_param.saturating_mul(10).saturating_add(digit);
                         }
                         b'~' => {
-                            if let Some(next_mode) =
-                                csi_param.checked_sub(10).and_then(mode_from_function_key)
+                            if active_matrix_vm_id(output_mask).is_none()
+                                && let Some(next_mode) =
+                                    csi_param.checked_sub(10).and_then(mode_from_function_key)
                             {
                                 mode = next_mode;
                                 apply_mode_toggle(
@@ -1352,13 +1376,17 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     continue;
                 }
                 EscState::Ss3 => {
-                    let next_mode = match b {
-                        b'P' => Some(ShellMode2::Surf),
-                        b'Q' => Some(ShellMode2::Apps),
-                        b'R' => Some(ShellMode2::Qjs),
-                        b'S' => Some(ShellMode2::Cmd),
-                        b'T' => Some(ShellMode2::Lumen),
-                        _ => None,
+                    let next_mode = if active_matrix_vm_id(output_mask).is_some() {
+                        None
+                    } else {
+                        match b {
+                            b'P' => Some(ShellMode2::Surf),
+                            b'Q' => Some(ShellMode2::Apps),
+                            b'R' => Some(ShellMode2::Qjs),
+                            b'S' => Some(ShellMode2::Cmd),
+                            b'T' => Some(ShellMode2::Lumen),
+                            _ => None,
+                        }
                     };
                     if let Some(next_mode) = next_mode {
                         mode = next_mode;
@@ -1388,64 +1416,14 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
             saw_cr = b == b'\r';
 
             match b {
-                b'\t' => match mode {
-                    ShellMode2::Surf => {
-                        cmd_status_text = None;
-                        surf_prefix = surf_prefix.next();
-                        out.mode_status(
-                            output_mask,
-                            mode,
-                            qjs_mode,
-                            apps_mode,
-                            lumen_mode,
-                            surf_prefix,
-                            cmd_status_text.as_deref(),
-                            running_go2_phase,
-                        );
-                        out.prompt(output_mask);
-                        for ch in line.chars() {
-                            out.user_char(ch);
-                        }
+                b'\t' => {
+                    if active_matrix_vm_id(output_mask).is_some() {
+                        continue;
                     }
-                    ShellMode2::Qjs => {
-                        cmd_status_text = None;
-                        qjs_mode = qjs_mode.next();
-                        out.mode_status(
-                            output_mask,
-                            mode,
-                            qjs_mode,
-                            apps_mode,
-                            lumen_mode,
-                            surf_prefix,
-                            cmd_status_text.as_deref(),
-                            running_go2_phase,
-                        );
-                        out.prompt(output_mask);
-                        for ch in line.chars() {
-                            out.user_char(ch);
-                        }
-                    }
-                    ShellMode2::Apps => {
-                        cmd_status_text = None;
-                        apps_mode = apps_mode.next();
-                        out.mode_status(
-                            output_mask,
-                            mode,
-                            qjs_mode,
-                            apps_mode,
-                            lumen_mode,
-                            surf_prefix,
-                            cmd_status_text.as_deref(),
-                            running_go2_phase,
-                        );
-                        out.prompt(output_mask);
-                        for ch in line.chars() {
-                            out.user_char(ch);
-                        }
-                    }
-                    ShellMode2::Cmd => {
-                        if line.is_empty() {
-                            cmd_status_text = Some(command_names_status_text());
+                    match mode {
+                        ShellMode2::Surf => {
+                            cmd_status_text = None;
+                            surf_prefix = surf_prefix.next();
                             out.mode_status(
                                 output_mask,
                                 mode,
@@ -1457,26 +1435,81 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                 running_go2_phase,
                             );
                             out.prompt(output_mask);
+                            for ch in line.chars() {
+                                out.user_char(ch);
+                            }
+                        }
+                        ShellMode2::Qjs => {
+                            cmd_status_text = None;
+                            qjs_mode = qjs_mode.next();
+                            out.mode_status(
+                                output_mask,
+                                mode,
+                                qjs_mode,
+                                apps_mode,
+                                lumen_mode,
+                                surf_prefix,
+                                cmd_status_text.as_deref(),
+                                running_go2_phase,
+                            );
+                            out.prompt(output_mask);
+                            for ch in line.chars() {
+                                out.user_char(ch);
+                            }
+                        }
+                        ShellMode2::Apps => {
+                            cmd_status_text = None;
+                            apps_mode = apps_mode.next();
+                            out.mode_status(
+                                output_mask,
+                                mode,
+                                qjs_mode,
+                                apps_mode,
+                                lumen_mode,
+                                surf_prefix,
+                                cmd_status_text.as_deref(),
+                                running_go2_phase,
+                            );
+                            out.prompt(output_mask);
+                            for ch in line.chars() {
+                                out.user_char(ch);
+                            }
+                        }
+                        ShellMode2::Cmd => {
+                            if line.is_empty() {
+                                cmd_status_text = Some(command_names_status_text());
+                                out.mode_status(
+                                    output_mask,
+                                    mode,
+                                    qjs_mode,
+                                    apps_mode,
+                                    lumen_mode,
+                                    surf_prefix,
+                                    cmd_status_text.as_deref(),
+                                    running_go2_phase,
+                                );
+                                out.prompt(output_mask);
+                            }
+                        }
+                        ShellMode2::Lumen => {
+                            cmd_status_text = None;
+                            out.mode_status(
+                                output_mask,
+                                mode,
+                                qjs_mode,
+                                apps_mode,
+                                lumen_mode,
+                                surf_prefix,
+                                cmd_status_text.as_deref(),
+                                running_go2_phase,
+                            );
+                            out.prompt(output_mask);
+                            for ch in line.chars() {
+                                out.user_char(ch);
+                            }
                         }
                     }
-                    ShellMode2::Lumen => {
-                        cmd_status_text = None;
-                        out.mode_status(
-                            output_mask,
-                            mode,
-                            qjs_mode,
-                            apps_mode,
-                            lumen_mode,
-                            surf_prefix,
-                            cmd_status_text.as_deref(),
-                            running_go2_phase,
-                        );
-                        out.prompt(output_mask);
-                        for ch in line.chars() {
-                            out.user_char(ch);
-                        }
-                    }
-                },
+                }
                 b'\r' | b'\n' => {
                     if matches!(text_decode, ecma48::InputDecodeState::Utf8Seq { .. }) {
                         push_input_char(&out, &mut line, 'Ü');
