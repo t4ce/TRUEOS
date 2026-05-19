@@ -1,6 +1,6 @@
 use crate::flags::{DirGrouping, Flags, SortColumn, SortOrder};
 use crate::meta::Meta;
-use std::cmp::Ordering;
+use core::cmp::Ordering;
 use vsort::compare;
 
 pub type SortFn = fn(&Meta, &Meta) -> Ordering;
@@ -82,7 +82,7 @@ mod tests {
     use super::*;
     use crate::flags::{Flags, PermissionFlag};
     use std::fs::{File, create_dir};
-    use std::io::prelude::*;
+    use trueos_io::prelude::*;
     use std::process::Command;
     use tempfile::tempdir;
 

@@ -4,9 +4,9 @@ use crate::icon::Icons;
 use crate::meta::filetype::FileType;
 use crate::print_error;
 use crate::url::Url;
-use std::cmp::{Ordering, PartialOrd};
+use core::cmp::{Ordering, PartialOrd};
 use std::ffi::OsStr;
-use std::path::{Component, Path, PathBuf};
+use tokio::path::{Component, Path, PathBuf};
 
 #[derive(Debug)]
 pub enum DisplayOption<'a> {
@@ -129,7 +129,7 @@ impl Name {
                     Err(err) => {
                         // If the error is NotFound, it just means the file is a broken symlink.
                         // That is not an error, and the user is already warned that the symlink is broken by the colors.
-                        if err.kind() != std::io::ErrorKind::NotFound {
+                        if err.kind() != trueos_io::ErrorKind::NotFound {
                             print_error!("{}: {}", name, err);
                         }
                         name
@@ -229,11 +229,11 @@ mod test {
     use crate::meta::Permissions;
     use crate::url::Url;
     use crossterm::style::{Color, Stylize};
-    use std::cmp::Ordering;
+    use core::cmp::Ordering;
     use std::fs::{self, File};
     #[cfg(unix)]
     use std::os::unix::fs::symlink;
-    use std::path::{Path, PathBuf};
+    use tokio::path::{Path, PathBuf};
     #[cfg(unix)]
     use std::process::Command;
     use tempfile::tempdir;

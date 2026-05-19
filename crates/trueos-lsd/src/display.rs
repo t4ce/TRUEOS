@@ -5,7 +5,7 @@ use crate::git_theme::GitTheme;
 use crate::icon::Icons;
 use crate::meta::name::DisplayOption;
 use crate::meta::{FileType, Meta, OwnerCache};
-use std::collections::HashMap;
+use alloc::collections::HashMap;
 use term_grid::{Cell, Direction, Filling, Grid, GridOptions};
 use terminal_size::terminal_size;
 use unicode_width::UnicodeWidthStr;
@@ -210,7 +210,7 @@ fn add_header(flags: &Flags, cells: &[Cell], grid: &mut Grid) {
     // find max widths of each column
     for (index, cell) in cells.iter().enumerate() {
         let index = index % num_columns;
-        widths[index] = std::cmp::max(widths[index], cell.width);
+        widths[index] = core::cmp::max(widths[index], cell.width);
     }
 
     for (idx, block) in flags.blocks.0.iter().enumerate() {
@@ -511,7 +511,7 @@ mod tests {
     use crate::{flags, sort};
     use assert_fs::prelude::*;
     use clap::Parser;
-    use std::path::Path;
+    use tokio::path::Path;
     use tempfile::tempdir;
 
     #[test]

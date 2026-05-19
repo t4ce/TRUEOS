@@ -36,8 +36,8 @@ use crate::flags::{Display, Flags, Layout, PermissionFlag};
 use crate::{ExitCode, print_error};
 
 use crate::git::GitCache;
-use std::io::{self, Error, ErrorKind};
-use std::path::{Component, Path, PathBuf};
+use trueos_io::{self, Error, ErrorKind};
+use tokio::path::{Component, Path, PathBuf};
 
 #[cfg(windows)]
 use self::windows_attributes::get_attributes;

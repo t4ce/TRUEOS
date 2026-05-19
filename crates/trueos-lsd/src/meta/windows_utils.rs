@@ -1,8 +1,8 @@
 use std::ffi::{OsStr, OsString};
-use std::io;
-use std::mem::MaybeUninit;
+use trueos_io as io;
+use core::mem::MaybeUninit;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
-use std::path::Path;
+use tokio::path::Path;
 
 use windows::Win32::Foundation::HLOCAL;
 use windows::Win32::Security::{self, ACL, Authorization::TRUSTEE_W, PSID};
@@ -56,7 +56,7 @@ pub fn get_file_data(path: &Path) -> Result<(Owner, Permissions), io::Error> {
     };
 
     if error_code.is_err() {
-        return Err(std::io::Error::from_raw_os_error(error_code.0 as i32));
+        return Err(trueos_io::Error::from_raw_os_error(error_code.0 as i32));
     }
 
     // Assumptions:
@@ -240,7 +240,7 @@ unsafe fn trustee_from_sid<P: Into<PSID>>(sid_ptr: P) -> TRUSTEE_W {
 /// function execution
 ///
 /// Returns null-terminated Vec's, one for the name and one for the domain.
-unsafe fn lookup_account_sid(sid: PSID) -> Result<(Vec<u16>, Vec<u16>), std::io::Error> {
+unsafe fn lookup_account_sid(sid: PSID) -> Result<(Vec<u16>, Vec<u16>), trueos_io::Error> {
     let mut name_size: u32 = BUF_SIZE;
     let mut domain_size: u32 = BUF_SIZE;
 

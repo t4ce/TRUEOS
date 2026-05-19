@@ -1,7 +1,7 @@
 use crossterm::style::Color;
 use crossterm::style::{Attribute, ContentStyle, StyledContent, Stylize};
 use lscolors::{Indicator, LsColors};
-use std::path::Path;
+use tokio::path::Path;
 
 pub use crate::flags::color::ThemeOption;
 use crate::git::GitStatus;

@@ -2,7 +2,7 @@ pub mod color;
 pub mod git;
 pub mod icon;
 
-use std::path::Path;
+use tokio::path::Path;
 use std::{fs, io};
 
 use serde::{Deserialize, de::DeserializeOwned};

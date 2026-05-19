@@ -34,7 +34,7 @@ impl Default for SymlinkArrow {
     }
 }
 
-use std::fmt;
+use core::fmt;
 impl fmt::Display for SymlinkArrow {
     // This trait requires `fmt` with this exact signature.
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

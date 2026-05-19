@@ -10,12 +10,12 @@ use crate::flags::sorting::{DirGrouping, SortColumn};
 use crate::flags::{ColorOption, ThemeOption};
 use crate::print_error;
 
-use std::path::{Path, PathBuf};
+use tokio::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
 use std::fs;
-use std::io;
+use trueos_io as io;
 
 /// A struct to hold an optional configuration items, and provides methods
 /// around error handling in a config file.

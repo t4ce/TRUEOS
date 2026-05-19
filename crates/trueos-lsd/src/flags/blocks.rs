@@ -6,7 +6,7 @@ use crate::app::Cli;
 use crate::config_file::Config;
 use crate::print_error;
 
-use std::convert::TryFrom;
+use core::convert::TryFrom;
 
 /// A struct to hold a [Vec] of [Block]s and to provide methods to create it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -522,7 +522,7 @@ mod test_blocks {
 mod test_block {
     use super::Block;
 
-    use std::convert::TryFrom;
+    use core::convert::TryFrom;
 
     #[test]
     fn test_err() {
