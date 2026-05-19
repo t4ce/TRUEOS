@@ -44,6 +44,7 @@ dependencies = [
  "rand_core 0.6.4",
  "raw-cpuid",
  "rdrand",
+ "regex-automata",
  "reqwest",
  "rustls",
  "rustls-rustcrypto",

@@ -13,6 +13,55 @@ use cpu::GbBus;
 
 /// M-cycles per frame (~59.73 fps, 17556 M-cycles @ 4.194304 MHz)
 const FRAME_MCYCLES: u32 = 17556;
+const HOST_KEY_ARROW_UP: u8 = 0xF0;
+const HOST_KEY_ARROW_DOWN: u8 = 0xF1;
+const HOST_KEY_ARROW_LEFT: u8 = 0xF2;
+const HOST_KEY_ARROW_RIGHT: u8 = 0xF3;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GameBoyButton {
+    Right,
+    Left,
+    Up,
+    Down,
+    A,
+    B,
+    Select,
+    Start,
+}
+
+impl GameBoyButton {
+    pub fn from_host_key(key: u8) -> Option<Self> {
+        match key {
+            b'd' | b'D' | HOST_KEY_ARROW_RIGHT => Some(Self::Right),
+            b'a' | b'A' | HOST_KEY_ARROW_LEFT => Some(Self::Left),
+            b'w' | b'W' | HOST_KEY_ARROW_UP => Some(Self::Up),
+            b's' | b'S' | HOST_KEY_ARROW_DOWN => Some(Self::Down),
+            b'x' | b'X' | b' ' => Some(Self::A),
+            b'z' | b'Z' => Some(Self::B),
+            b'c' | b'C' => Some(Self::Select),
+            b'\r' | 10 => Some(Self::Start),
+            _ => None,
+        }
+    }
+
+    const fn mask(self) -> u8 {
+        match self {
+            Self::Right => 0x01,
+            Self::Left => 0x02,
+            Self::Up => 0x04,
+            Self::Down => 0x08,
+            Self::A => 0x01,
+            Self::B => 0x02,
+            Self::Select => 0x04,
+            Self::Start => 0x08,
+        }
+    }
+
+    const fn is_direction(self) -> bool {
+        matches!(self, Self::Right | Self::Left | Self::Up | Self::Down)
+    }
+}
 
 pub struct GameBoyEmulator {
     pub cpu: cpu::Cpu,
@@ -160,32 +209,30 @@ impl GameBoyEmulator {
     // Key handling — active-low (0 = pressed)
     // Joypad buttons: bit3=Start, bit2=Select, bit1=B, bit0=A
     // Joypad dirs:    bit3=Down,  bit2=Up,     bit1=Left, bit0=Right
-    pub fn handle_key(&mut self, key: u8) {
-        match key {
-            b'd' | b'D' | 0xF3 => self.joypad_dirs &= !0x01, // Right
-            b'a' | b'A' | 0xF2 => self.joypad_dirs &= !0x02, // Left
-            b'w' | b'W' | 0xF0 => self.joypad_dirs &= !0x04, // Up
-            b's' | b'S' | 0xF1 => self.joypad_dirs &= !0x08, // Down
-            b'x' | b'X' | b' ' => self.joypad_buttons &= !0x01, // A button
-            b'z' | b'Z'        => self.joypad_buttons &= !0x02, // B button
-            b'\r' | 10         => self.joypad_buttons &= !0x08, // Start (Enter)
-            b'c' | b'C'        => self.joypad_buttons &= !0x04, // Select
-            _ => {}
+    pub fn set_button(&mut self, button: GameBoyButton, pressed: bool) {
+        let mask = button.mask();
+        let reg = if button.is_direction() {
+            &mut self.joypad_dirs
+        } else {
+            &mut self.joypad_buttons
+        };
+        if pressed {
+            *reg &= !mask;
+            self.if_reg |= 0x10; // Joypad interrupt
+        } else {
+            *reg |= mask;
         }
-        self.if_reg |= 0x10; // Joypad interrupt
+    }
+
+    pub fn handle_key(&mut self, key: u8) {
+        if let Some(button) = GameBoyButton::from_host_key(key) {
+            self.set_button(button, true);
+        }
     }
 
     pub fn handle_key_release(&mut self, key: u8) {
-        match key {
-            b'd' | b'D' | 0xF3 => self.joypad_dirs |= 0x01,
-            b'a' | b'A' | 0xF2 => self.joypad_dirs |= 0x02,
-            b'w' | b'W' | 0xF0 => self.joypad_dirs |= 0x04,
-            b's' | b'S' | 0xF1 => self.joypad_dirs |= 0x08,
-            b'x' | b'X' | b' ' => self.joypad_buttons |= 0x01,
-            b'z' | b'Z'        => self.joypad_buttons |= 0x02,
-            b'\r' | 10         => self.joypad_buttons |= 0x08,
-            b'c' | b'C'        => self.joypad_buttons |= 0x04,
-            _ => {}
+        if let Some(button) = GameBoyButton::from_host_key(key) {
+            self.set_button(button, false);
         }
     }
 

@@ -865,6 +865,12 @@ pub(super) fn pump_keyboard_input(state: &mut Ui2State) {
                     for event in raw_events.iter().take(wrote).copied() {
                         note_keyboard_event_source(state, &event);
                         for target_window_id in selected_surface_window_ids.iter().copied() {
+                            if crate::tst::ui2::gboi_demo::queue_keyboard_event(
+                                target_window_id,
+                                event,
+                            ) {
+                                continue;
+                            }
                             if crate::shell2::queue_ui2_shell_keyboard_event(
                                 target_window_id,
                                 event,

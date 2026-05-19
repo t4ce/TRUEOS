@@ -1195,7 +1195,8 @@ static TASKS: [TaskSpec; 69] = [
     ),
     TaskSpec::enabled("esp-gate", 0, &ESP_GATE_STARTED, spawn_esp_gate),
     TaskSpec::enabled("esp-gate-registry", 0, &ESP_GATE_REGISTRY_STARTED, spawn_esp_gate_registry),
-    TaskSpec::enabled(
+    // Keep piano input opt-in while emulator audio owns the single HDA stream.
+    TaskSpec::disabled(
         "esp-piano-udp",
         crate::r::readiness::NET_ANY_CONFIGURED,
         &ESP_PIANO_UDP_STARTED,
@@ -1375,8 +1376,8 @@ static TASKS: [TaskSpec; 69] = [
         spawn_ui2_mandelbrot_demo,
     ),
     // Keep the player demo opt-in because it opens the audio player on boot.
-    // The old hosted-surface window-spam issue was fixed by content-id keyed reuse.
-    TaskSpec::enabled(
+    // HDA is currently a single-owner stream; emulator audio should not race it.
+    TaskSpec::disabled(
         "ui2-player-demo",
         UI2_DEMO_READY,
         &UI2_PLAYER_DEMO_STARTED,
