@@ -1,5 +1,6 @@
 use alloc::{collections::BTreeMap, sync::Arc, vec, vec::Vec};
 
+use core::time::Duration;
 use futures::{FutureExt, future::BoxFuture};
 use mbarrier::mb;
 use spin::Mutex;
@@ -44,6 +45,7 @@ pub struct Device {
     kernel: Kernel,
     current_config_value: Option<u8>,
     config_desc: Vec<ConfigurationDescriptor>,
+    raw_config_desc: Vec<Vec<u8>>,
     port_speed: Speed,
     eps: BTreeMap<u8, Endpoint>,
     ep_interfaces: BTreeMap<u8, u8>,
@@ -51,6 +53,9 @@ pub struct Device {
 }
 
 impl Device {
+    const LS_FS_ADDRESS_DEVICE_SETTLE_MS: u64 = 10;
+    const LS_FS_EP0_REEVALUATE_SETTLE_MS: u64 = 2;
+
     pub(crate) async fn new(host: &mut Xhci) -> Result<Self> {
         let slot_id = host.device_slot_assignment().await?;
         debug!("Slot {slot_id} assigned");
@@ -76,6 +81,7 @@ impl Device {
             transfer_result_handler: host.transfer_result_handler.clone(),
             current_config_value: None,
             config_desc: vec![],
+            raw_config_desc: vec![],
             port_speed: Speed::Full,
             eps: BTreeMap::new(),
             ep_interfaces: BTreeMap::new(),
@@ -100,6 +106,13 @@ impl Device {
     }
 
     pub(crate) async fn init(&mut self, host: &mut Xhci, info: &DeviceAddressInfo) -> Result {
+        info!(
+            "crabusb/xhci/device: init begin slot={} root_port={} port={} speed={:?}",
+            self.id.as_u8(),
+            info.root_port_id,
+            info.port_id,
+            info.port_speed
+        );
         // Keep the raw PORTSC.PortSpeed encoding for interval calculations
         self.port_speed = info.port_speed;
         // let speed = info.port_speed.to_xhci_portsc_value();
@@ -111,7 +124,7 @@ impl Device {
         let base = self.get_device_descriptor_base().await?;
         debug!("Device Descriptor Base: {:#x?}", base);
 
-        self.setup_max_packet(base).await?;
+        self.setup_max_packet(base, info).await?;
 
         // 读取当前配置（应该返回 0，表示未配置）
         let current_config = self.get_configuration().await?;
@@ -121,10 +134,13 @@ impl Device {
 
         // 读取所有配置描述符
         for i in 0..self.desc.num_configurations {
-            let config_desc = self
+            let raw_config_desc = self
                 .control_endpoint_mut()
-                .get_configuration_descriptor(i)
+                .get_configuration_descriptor_bytes(i)
                 .await?;
+            let config_desc = ConfigurationDescriptor::parse(&raw_config_desc)
+                .ok_or_else(|| anyhow!("config descriptor parse err"))?;
+            self.raw_config_desc.push(raw_config_desc);
             self.config_desc.push(config_desc);
         }
 
@@ -136,7 +152,16 @@ impl Device {
             self._set_configuration(config_value).await?;
         }
 
-        debug!("device descriptor ok");
+        info!(
+            "crabusb/xhci/device: init end slot={} vid={:04x} pid={:04x} class={:02x} subclass={:02x} proto={:02x} configs={}",
+            self.id.as_u8(),
+            self.desc.vendor_id,
+            self.desc.product_id,
+            self.desc.class,
+            self.desc.subclass,
+            self.desc.protocol,
+            self.config_desc.len()
+        );
         Ok(())
     }
 
@@ -155,25 +180,48 @@ impl Device {
         Ok(())
     }
 
-    async fn setup_max_packet(&mut self, desc: DeviceDescriptorBase) -> Result {
-        self.ctx.perper_change();
-        // USB 设备描述符的 bMaxPacketSize0 字段（偏移 7）
-        // 对于控制端点，这是直接的字节数值，不需要解码
+    async fn setup_max_packet(
+        &mut self,
+        desc: DeviceDescriptorBase,
+        info: &DeviceAddressInfo,
+    ) -> Result {
+        let is_superspeed = matches!(info.port_speed, Speed::SuperSpeed | Speed::SuperSpeedPlus);
         let packet_size = if desc.max_packet_size_0 == 0 {
-            8u8
+            8
+        } else if is_superspeed && desc.max_packet_size_0 <= 15 {
+            1u16 << desc.max_packet_size_0
         } else {
-            desc.max_packet_size_0
-        } as u16;
+            desc.max_packet_size_0 as u16
+        };
+
+        let current_packet_size = parse_default_max_packet_size_from_port_speed(info.port_speed);
+        if packet_size == current_packet_size {
+            info!(
+                "crabusb/xhci/device: slot={} root_port={} port={} ep0 mps {} already programmed",
+                self.id.as_u8(),
+                info.root_port_id,
+                info.port_id,
+                packet_size
+            );
+            return Ok(());
+        }
+
+        self.ctx.perper_change();
 
         let dci = Dci::CTRL;
         self.ctx.with_input(|input| {
-            let _ = input.control_mut().add_context_flag(1); // Endpoint 0 Context
+            input.control_mut().clear_add_context_flag(0);
+            input.control_mut().set_add_context_flag(1);
 
             let endpoint = input.device_mut().endpoint_mut(dci.as_usize());
             endpoint.set_max_packet_size(packet_size);
         });
 
         self.evaluate().await?;
+        if matches!(info.port_speed, Speed::Low | Speed::Full) {
+            self.kernel
+                .delay(Duration::from_millis(Self::LS_FS_EP0_REEVALUATE_SETTLE_MS));
+        }
 
         Ok(())
     }
@@ -333,6 +381,10 @@ impl Device {
             .await?;
 
         debug!("Address slot ok {result:x?}");
+        if matches!(info.port_speed, Speed::Low | Speed::Full) {
+            self.kernel
+                .delay(Duration::from_millis(Self::LS_FS_ADDRESS_DEVICE_SETTLE_MS));
+        }
 
         Ok(())
     }

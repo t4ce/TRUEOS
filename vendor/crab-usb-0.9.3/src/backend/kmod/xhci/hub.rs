@@ -11,10 +11,30 @@ use core::{
 
 use futures::{FutureExt, future::BoxFuture, task::AtomicWaker};
 use usb_if::{err::USBError, host::hub::Speed};
+use xhci::accessor::single;
+use xhci::registers::{PortRegisterSet, operational::PortStatusAndControlRegister};
 
-use super::reg::XhciRegisters;
+use super::reg::{MemMapper, XhciRegisters};
 use crate::backend::kmod::hub::{HubInfo, HubOp, PortChangeInfo, PortState};
 use crate::osal::Kernel;
+
+const ROOT_PORT_BOOTSTRAP_SETTLE_MS: u64 = 150;
+const ROOT_PORT_ENABLE_WAIT_MS: u64 = 1500;
+const ROOT_PORT_ENABLE_CHECK_MS: u64 = 10;
+const WARM_RESET_SETTLE_MS: u64 = 100;
+const WARM_RESET_WAIT_MS: u64 = 1500;
+
+fn speed_name(spd: u8) -> &'static str {
+    match spd {
+        0 => "-",
+        1 => "FS",
+        2 => "LS",
+        3 => "HS",
+        4 => "SS",
+        5 => "SS+",
+        _ => "?",
+    }
+}
 
 pub struct PortChangeWaker {
     ports: Arc<UnsafeCell<Vec<Port>>>,
@@ -70,12 +90,93 @@ pub struct XhciRootHub {
 unsafe impl Send for XhciRootHub {}
 
 impl XhciRootHub {
+    fn portsc_accessor(
+        &mut self,
+        port_id: u8,
+    ) -> single::ReadWrite<PortStatusAndControlRegister, MemMapper> {
+        let caplength = self.reg.capability.caplength.read_volatile().get();
+        let base = self.reg.mmio_base + usize::from(caplength) + 0x400;
+        let stride = core::mem::size_of::<PortRegisterSet>();
+        let offset = (usize::from(port_id) - 1) * stride;
+        unsafe { single::ReadWrite::new(base + offset, MemMapper) }
+    }
+
+    fn update_portsc<U>(&mut self, port_id: u8, f: U)
+    where
+        U: FnOnce(&mut PortStatusAndControlRegister),
+    {
+        let mut portsc = self.portsc_accessor(port_id);
+        portsc.update_volatile(f);
+    }
+
     fn ports(&self) -> &[Port] {
         unsafe { &*self.ports.get() }
     }
 
     fn ports_mut(&mut self) -> &mut [Port] {
         unsafe { &mut *self.ports.get() }
+    }
+
+    async fn reset_port(&mut self, port_id: u8, speed_raw: u8) -> Result<(), USBError> {
+        let idx = (port_id - 1) as usize;
+        self.update_portsc(port_id, |portsc| {
+            portsc.set_0_port_enabled_disabled();
+            portsc.set_port_reset();
+        });
+
+        let reset_delay_ms = if matches!(Speed::from_xhci_portsc(speed_raw), Speed::Low) {
+            100
+        } else {
+            50
+        };
+        self.kernel.delay(Duration::from_millis(reset_delay_ms));
+
+        for _ in 0..10 {
+            let port = self.reg.port_register_set.read_volatile_at(idx).portsc;
+            if port.port_reset_change() || !port.port_reset() {
+                self.update_portsc(port_id, |portsc| {
+                    if portsc.port_reset_change() {
+                        portsc.clear_port_reset_change();
+                    }
+                });
+                return Ok(());
+            }
+            self.kernel.delay(Duration::from_millis(10));
+        }
+
+        Err(USBError::Timeout)
+    }
+
+    async fn warm_reset_port(&mut self, port_id: u8) -> Result<bool, USBError> {
+        let idx = (port_id - 1) as usize;
+
+        self.update_portsc(port_id, |portsc| {
+            portsc.set_warm_port_reset();
+        });
+
+        self.kernel.delay(Duration::from_millis(WARM_RESET_SETTLE_MS));
+
+        let attempts = WARM_RESET_WAIT_MS / ROOT_PORT_ENABLE_CHECK_MS;
+        for _ in 0..attempts {
+            let port = self.reg.port_register_set.read_volatile_at(idx).portsc;
+            if !port.warm_port_reset() || port.warm_port_reset_change() {
+                self.update_portsc(port_id, |portsc| {
+                    if portsc.warm_port_reset_change() {
+                        portsc.clear_warm_port_reset_change();
+                    }
+                    if portsc.port_reset_change() {
+                        portsc.clear_port_reset_change();
+                    }
+                });
+                let final_port = self.reg.port_register_set.read_volatile_at(idx).portsc;
+                return Ok(final_port.current_connect_status()
+                    && final_port.port_enabled_disabled());
+            }
+            self.kernel
+                .delay(Duration::from_millis(ROOT_PORT_ENABLE_CHECK_MS));
+        }
+
+        Ok(false)
     }
 }
 
@@ -97,15 +198,100 @@ impl HubOp for XhciRootHub {
         async {
             let mut info = info;
             info.speed = Speed::SuperSpeedPlus;
-            info!("xhci/root-hub: power ports without blanket reset");
+            let total_ports = self.reg.port_register_set.len();
 
-            for idx in 0..self.reg.port_register_set.len() {
-                self.reg.port_register_set.update_volatile_at(idx, |reg| {
-                    if !reg.portsc.port_power() {
+            for idx in 0..total_ports {
+                let port_id = (idx + 1) as u8;
+                self.update_portsc(port_id, |portsc| {
+                    if !portsc.port_power() {
                         trace!("Powering on port {}", idx + 1);
-                        reg.portsc.set_port_power();
+                        portsc.set_port_power();
                     }
                 });
+            }
+
+            self.kernel
+                .delay(Duration::from_millis(ROOT_PORT_BOOTSTRAP_SETTLE_MS));
+
+            for idx in 0..total_ports {
+                let port_id = (idx + 1) as u8;
+                let status = self.reg.port_register_set.read_volatile_at(idx).portsc;
+                if !status.current_connect_status() {
+                    continue;
+                }
+
+                self.update_portsc(port_id, |portsc| {
+                    portsc.set_0_port_enabled_disabled();
+                    portsc.set_port_reset();
+                });
+            }
+
+            for idx in 0..total_ports {
+                let status = self.reg.port_register_set.read_volatile_at(idx).portsc;
+                if !status.current_connect_status() {
+                    continue;
+                }
+
+                let mut elapsed_ms = 0;
+                while elapsed_ms < ROOT_PORT_ENABLE_WAIT_MS {
+                    let poll = self.reg.port_register_set.read_volatile_at(idx).portsc;
+                    let reset_cleared = !poll.port_reset();
+                    let enabled = poll.port_enabled_disabled();
+                    if enabled || reset_cleared {
+                        break;
+                    }
+                    self.kernel
+                        .delay(Duration::from_millis(ROOT_PORT_ENABLE_CHECK_MS));
+                    elapsed_ms += ROOT_PORT_ENABLE_CHECK_MS;
+                }
+            }
+
+            let mut kicked_ss = false;
+            for idx in 0..total_ports {
+                let port_id = (idx + 1) as u8;
+                let status = self.reg.port_register_set.read_volatile_at(idx).portsc;
+                if port_id >= 17
+                    && status.port_power()
+                    && !status.current_connect_status()
+                    && status.port_link_state() == 4
+                {
+                    self.update_portsc(port_id, |portsc| {
+                        portsc.set_port_link_state(5);
+                        portsc.set_port_link_state_write_strobe();
+                    });
+                    kicked_ss = true;
+                }
+            }
+            if kicked_ss {
+                self.kernel.delay(Duration::from_millis(500));
+                for idx in 0..total_ports {
+                    let port_id = (idx + 1) as u8;
+                    if port_id < 17 {
+                        continue;
+                    }
+                    let p = self.reg.port_register_set.read_volatile_at(idx).portsc;
+                    if p.current_connect_status() && !p.port_enabled_disabled() {
+                        let _ = self.warm_reset_port(port_id).await;
+                    }
+                }
+            }
+
+            for idx in 0..total_ports {
+                let port_id = (idx + 1) as u8;
+                let status = self.reg.port_register_set.read_volatile_at(idx).portsc;
+                if status.current_connect_status()
+                    && !status.port_enabled_disabled()
+                    && !status.port_reset()
+                {
+                    let _ = self.reset_port(port_id, status.port_speed()).await;
+                    let after_hot = self.reg.port_register_set.read_volatile_at(idx).portsc;
+                    if after_hot.current_connect_status()
+                        && !after_hot.port_enabled_disabled()
+                        && !after_hot.port_reset()
+                    {
+                        let _ = self.warm_reset_port(port_id).await;
+                    }
+                }
             }
 
             Ok(info)
@@ -134,10 +320,14 @@ impl XhciRootHub {
     }
 
     async fn _changed_ports(&mut self) -> Result<Vec<PortChangeInfo>, USBError> {
-        info!("xhci/root-hub: changed_ports begin");
+        debug!("xhci/root-hub: changed_ports begin");
         self.handle_uninit().await?;
         let ports = self.handle_reseted().await?;
-        info!("xhci/root-hub: changed_ports done count={}", ports.len());
+        if ports.is_empty() {
+            debug!("xhci/root-hub: changed_ports done count=0");
+        } else {
+            info!("xhci/root-hub: changed_ports done count={}", ports.len());
+        }
         Ok(ports)
     }
 
@@ -154,30 +344,30 @@ impl XhciRootHub {
 
             let port = self.reg.port_register_set.read_volatile_at(i).portsc;
 
-            let connect = port.current_connect_status();
-            let enable = port.port_enabled_disabled();
-            let speed_raw = port.port_speed();
-
-            info!(
-                "xhci/root-hub: port {} initial state enable={} connect={} reset={} speed_raw={}",
-                id,
-                enable,
-                connect,
-                port.port_reset(),
-                speed_raw
-            );
-
-            if connect && !enable {
-                info!(
-                    "xhci/root-hub: port {} connected but not enabled; issuing targeted reset",
-                    id
-                );
-                self.reg.port_register_set.update_volatile_at(i, |reg| {
-                    reg.portsc.set_port_reset();
-                });
-                self.kernel.delay(Duration::from_millis(50));
-                self.ports_mut()[i].state = PortState::Reseted;
+            if port.port_reset() {
                 continue;
+            }
+
+            if port.current_connect_status() && !port.port_enabled_disabled() {
+                let _ = self.reset_port(id, port.port_speed()).await;
+                let after_hot = self.reg.port_register_set.read_volatile_at(i).portsc;
+                if after_hot.current_connect_status()
+                    && !after_hot.port_enabled_disabled()
+                    && !after_hot.port_reset()
+                {
+                    let _ = self.warm_reset_port(id).await;
+                }
+            }
+
+            let final_port = self.reg.port_register_set.read_volatile_at(i).portsc;
+            if final_port.current_connect_status() || final_port.port_enabled_disabled() {
+                info!(
+                    "xhci/root-hub: port {} reseted ccs={} ped={} speed={}",
+                    id,
+                    final_port.current_connect_status() as u8,
+                    final_port.port_enabled_disabled() as u8,
+                    speed_name(final_port.port_speed())
+                );
             }
 
             self.ports_mut()[i].state = PortState::Reseted;

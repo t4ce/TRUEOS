@@ -71,18 +71,25 @@ impl Core {
         let mut out = Vec::new();
 
         let hub_ids: Vec<Id<Hub>> = self.hubs.iter().map(|(id, _)| id).collect();
-        info!("kcore: probe begin hubs={}", hub_ids.len());
+        debug!("kcore: probe begin hubs={}", hub_ids.len());
 
         for id in hub_ids {
-            info!("kcore: hub {:?} changed_ports begin", id);
+            debug!("kcore: hub {:?} changed_ports begin", id);
             let addr_infos = self.hub_changed_ports(id).await?;
             let parent_hub_id = self.hubs.get(id).unwrap().backend.slot_id();
-            info!(
-                "kcore: hub {:?} changed_ports done count={} parent_slot={}",
-                id,
-                addr_infos.len(),
-                parent_hub_id
-            );
+            if addr_infos.is_empty() {
+                debug!(
+                    "kcore: hub {:?} changed_ports done count=0 parent_slot={}",
+                    id, parent_hub_id
+                );
+            } else {
+                info!(
+                    "kcore: hub {:?} changed_ports done count={} parent_slot={}",
+                    id,
+                    addr_infos.len(),
+                    parent_hub_id
+                );
+            }
             for addr_info in addr_infos {
                 info!(
                     "kcore: address begin root_port={} port={} speed={:?}",
