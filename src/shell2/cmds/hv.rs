@@ -200,8 +200,8 @@ pub(crate) fn try_parse(
             return ParseOutcome::Handled;
         }
         let target = crate::shell2::matrix_target_for_backend(io);
-        crate::shell2::bind_matrix_target_vm_input(&target, vm_id);
-        line(io, alloc::format!("hv: attached this matrix slot to vm{} input", vm_id).as_str());
+        crate::shell2::bind_matrix_target_vm(&target, vm_id);
+        line(io, alloc::format!("hv: bound this matrix slot to vm{}", vm_id).as_str());
         return ParseOutcome::Handled;
     }
 

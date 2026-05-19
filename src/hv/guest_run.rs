@@ -297,7 +297,11 @@ pub extern "C" fn trueos_hv_guest_container_shell_run() -> ! {
             continue;
         };
         if !container_shell_command(text) {
-            attached_write_line("vmx-shell: exit ignored; hull stays alive");
+            attached_write_line("vmx-shell: preserving hull");
+            trueos_vm::vmcall::preserve();
+            loop {
+                core::hint::spin_loop();
+            }
         }
     }
 }
