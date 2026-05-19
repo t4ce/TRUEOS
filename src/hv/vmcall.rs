@@ -55,6 +55,8 @@ pub const OP_BP_INPUT_CURSOR_POS: u32 = 0x68; // arg0 cursor id -> packed x/y
 pub const OP_BP_INPUT_CURSOR_BUTTONS: u32 = 0x69; // arg0 cursor id -> buttons
 pub const OP_BP_INPUT_CURSOR_EVENTS: u32 = 0x6A; // arg0 read seq, arg1 cap -> payload events
 pub const OP_BP_DNS_RESOLVE_IPV4: u32 = 0x6B; // payload host -> response payload IPv4 bytes
+pub const OP_BP_SHELL_ATTACHED_WRITE: u32 = 0x6C; // payload bytes -> attached shell
+pub const OP_BP_SHELL_ATTACHED_READ_BYTE: u32 = 0x6D; // response is byte or u64::MAX
 pub const OP_BP_SOCKET_TCP_OPEN: u32 = 0x35; // arg0 domain/type, arg1 protocol -> socket/rc
 pub const OP_BP_SOCKET_TCP_CLOSE: u32 = 0x36; // arg0 socket -> rc
 pub const OP_BP_SOCKET_TCP_SET_NONBLOCKING: u32 = 0x37; // arg0 socket, arg1 bool -> rc
@@ -661,6 +663,24 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 (&mut (&mut (*p).payload)[..out_n]).copy_from_slice(&bytes[..out_n]);
             }
             write_response(vm_id, seq, STATUS_OK, bytes.len() as u64, out_n as u32);
+            DispatchOutcome::Resume
+        }
+        OP_BP_SHELL_ATTACHED_WRITE => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let data = unsafe { &(&(*p).payload)[..n] };
+            let written = crate::hv::blueprint_console_write(vm_id, data);
+            write_response(vm_id, seq, STATUS_OK, written as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_SHELL_ATTACHED_READ_BYTE => {
+            let byte = crate::hv::blueprint_console_read_byte(vm_id)
+                .map(u64::from)
+                .unwrap_or(u64::MAX);
+            write_response(vm_id, seq, STATUS_OK, byte, 0);
             DispatchOutcome::Resume
         }
         OP_BP_FS_READ_FILE => {

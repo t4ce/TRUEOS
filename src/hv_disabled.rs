@@ -84,7 +84,6 @@ pub struct BlueprintLaunchState {
     pub module_bytes: AllocVec<u8>,
     pub unpacked_bytes: AllocVec<u8>,
     pub app_args: AllocVec<AllocString>,
-    pub console_target: Option<MatrixTarget>,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -163,7 +162,13 @@ pub fn request_preserve_active_vm() -> bool {
     false
 }
 
-pub fn stage_blueprint_launch(_state: BlueprintLaunchState) {}
+pub fn stage_blueprint_launch(
+    _vm_id: u8,
+    _state: BlueprintLaunchState,
+    _console_target: Option<MatrixTarget>,
+) -> Result<(), StartError> {
+    Err(StartError::VmxUnsupported)
+}
 
 pub fn take_blueprint_launch() -> Option<BlueprintLaunchState> {
     None

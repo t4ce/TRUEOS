@@ -12,6 +12,3 @@
 	url = https://github.com/limine-bootloader/limine.git
 	branch = v10.x
 	ignore = untracked
-[submodule "crates/TRUEOS-Blueprints"]
-	path = crates/TRUEOS-Blueprints
-	url = https://github.com/t4ce/TRUEOS-Blueprints.git

@@ -409,7 +409,7 @@ fn estimate_blueprint_memory_profile(
             ),
             BlueprintMemoryClass::NetworkClient => (
                 64,
-                round_pow2_mib(base_live_mib.saturating_mul(32).saturating_add(128)).max(256),
+                round_pow2_mib(base_live_mib.saturating_mul(32).saturating_add(128)).max(512),
                 512,
                 8,
                 16,
@@ -634,8 +634,8 @@ fn start_blueprint_launch(spawner: &Spawner, request: &AppVmLaunchRequest, log: 
             module_bytes: request.module_bytes.clone(),
             unpacked_bytes,
             app_args: request.app_args.clone(),
-            console_target: Some(request.target.clone()),
         },
+        Some(request.target.clone()),
     ) {
         log(alloc::format!("hv run: app-vm stage failed: {:?}", err).as_str());
         return;
