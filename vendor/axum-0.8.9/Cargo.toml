@@ -251,6 +251,7 @@ default-features = false
 
 [dependencies.serde_core]
 version = "1.0.221"
+features = ["alloc"]
 default-features = false
 
 [dependencies.serde_json]

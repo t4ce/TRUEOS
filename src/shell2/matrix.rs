@@ -35,6 +35,7 @@ struct MatrixSlot {
     lines: VecDeque<TranscriptEntry>,
     activity: MatrixSlotActivity,
     running_count: usize,
+    interrupt_generation: u64,
     line_width: usize,
 }
 
@@ -108,6 +109,7 @@ fn ensure_slot_index(slots: &mut Vec<MatrixSlot>, id: &MatrixSlotId) -> usize {
         lines: VecDeque::new(),
         activity: MatrixSlotActivity::Idle,
         running_count: 0,
+        interrupt_generation: 0,
         line_width: DEFAULT_MATRIX_SLOT_LINE_WIDTH,
     });
     slots.len() - 1
@@ -212,6 +214,7 @@ pub(crate) fn free_slot(requested: &str) -> MatrixSlotId {
             slot.lines.clear();
             slot.activity = MatrixSlotActivity::Idle;
             slot.running_count = 0;
+            slot.interrupt_generation = 0;
             slot.line_width = DEFAULT_MATRIX_SLOT_LINE_WIDTH;
             changed = true;
         }
@@ -286,6 +289,15 @@ pub(crate) fn record_line_in_slot(slot_id: &MatrixSlotId, source: LineSource, te
     let idx = ensure_slot_index(&mut guard.slots, slot_id);
     push_line(&mut guard.slots[idx], source, text);
     bump_revision(&mut guard);
+}
+
+pub(crate) fn request_slot_interrupt(slot_id: &MatrixSlotId) -> u64 {
+    let mut guard = state().lock();
+    let idx = ensure_slot_index(&mut guard.slots, slot_id);
+    guard.slots[idx].interrupt_generation = guard.slots[idx].interrupt_generation.wrapping_add(1);
+    let generation = guard.slots[idx].interrupt_generation;
+    bump_revision(&mut guard);
+    generation
 }
 
 pub(crate) fn record_user_input(text: &str) {

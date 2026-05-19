@@ -530,6 +530,7 @@ impl RawPathParams {
     pub fn iter(&self) -> RawPathParamsIter<'_> {
         self.into_iter()
     }
+
 }
 
 impl<'a> IntoIterator for &'a RawPathParams {

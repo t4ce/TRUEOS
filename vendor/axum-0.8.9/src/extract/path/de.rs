@@ -74,8 +74,6 @@ impl<'de> Deserializer<'de> for PathDeserializer<'de> {
     parse_single_value!(deserialize_u128, visit_u128, "u128");
     parse_single_value!(deserialize_f32, visit_f32, "f32");
     parse_single_value!(deserialize_f64, visit_f64, "f64");
-    parse_single_value!(deserialize_string, visit_string, "String");
-    parse_single_value!(deserialize_byte_buf, visit_string, "String");
     parse_single_value!(deserialize_char, visit_char, "char");
 
     fn deserialize_any<V>(self, v: V) -> Result<V::Value, Self::Error>
@@ -84,6 +82,9 @@ impl<'de> Deserializer<'de> for PathDeserializer<'de> {
     {
         self.deserialize_str(v)
     }
+
+    parse_single_value!(deserialize_string, visit_string, "String");
+    parse_single_value!(deserialize_byte_buf, visit_string, "String");
 
     fn deserialize_str<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
@@ -361,8 +362,6 @@ impl<'de> Deserializer<'de> for ValueDeserializer<'de> {
     parse_value!(deserialize_u128, visit_u128, "u128");
     parse_value!(deserialize_f32, visit_f32, "f32");
     parse_value!(deserialize_f64, visit_f64, "f64");
-    parse_value!(deserialize_string, visit_string, "String");
-    parse_value!(deserialize_byte_buf, visit_string, "String");
     parse_value!(deserialize_char, visit_char, "char");
 
     fn deserialize_any<V>(self, v: V) -> Result<V::Value, Self::Error>
@@ -371,6 +370,9 @@ impl<'de> Deserializer<'de> for ValueDeserializer<'de> {
     {
         self.deserialize_str(v)
     }
+
+    parse_value!(deserialize_string, visit_string, "String");
+    parse_value!(deserialize_byte_buf, visit_string, "String");
 
     fn deserialize_str<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
