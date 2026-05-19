@@ -1,0 +1,15 @@
+[package]
+name = "trueos-lsd"
+version = "1.1.5"
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/lsd-rs/lsd"
+publish = false
+autobins = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+trueos-io = { path = "../trueos-io" }
+v = { path = "../trueos-v" }

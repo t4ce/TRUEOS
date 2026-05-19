@@ -68,6 +68,7 @@ v = { path = "crates/trueos-v" }
 trueos-vm = { path = "crates/trueos-vm" }
 trueos-esp = { path = "crates/trueos-esp" }
 trueos-kibi = { path = "crates/trueos-kibi" }
+trueos-lsd = { path = "crates/trueos-lsd" }
 lyon_geom = { version = "1.0.19", default-features = false }
 lyon_tessellation = { version = "1.0.20", default-features = false }
 euclid = { version = "=0.22.13", default-features = false }
