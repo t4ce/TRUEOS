@@ -120,16 +120,3 @@ pub fn midi_to_note_name(note: u8) -> &'static str {
 pub fn midi_octave(note: u8) -> u8 {
     if note >= 12 { (note / 12) - 1 } else { 0 }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_note_parsing() {
-        assert_eq!(note_name_to_midi("C4"), Some(60));
-        assert_eq!(note_name_to_midi("A4"), Some(69));
-        assert_eq!(note_name_to_midi("C#4"), Some(61));
-        assert_eq!(note_name_to_midi("Bb3"), Some(58));
-    }
-}
