@@ -113,6 +113,13 @@ pub mod kfs {
                 });
             }
 
+            if crate::r::fs::trueosfs::dir_has_children_async(disk, name.as_str()).await? {
+                return Ok(FsStat {
+                    kind: FsNodeKind::Directory,
+                    len: 0,
+                });
+            }
+
             Err(FsError::NotFound)
         })
     }
@@ -698,11 +705,8 @@ pub mod cabi {
     #[unsafe(no_mangle)]
     pub extern "C" fn trueos_cabi_shell_attached_read_byte() -> i32 {
         if crate::hv::current_hull_guest_context_vm_id().is_some() {
-            let (status, data) = trueos_vm::vmcall::call(
-                trueos_vm::vmcall::OP_BP_SHELL_ATTACHED_READ_BYTE,
-                0,
-                0,
-            );
+            let (status, data) =
+                trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_SHELL_ATTACHED_READ_BYTE, 0, 0);
             if status == trueos_vm::vmcall::STATUS_OK && data != u64::MAX {
                 return data as u8 as i32;
             }

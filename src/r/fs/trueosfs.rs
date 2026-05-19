@@ -1293,6 +1293,51 @@ pub async fn list_dir_async(
     Ok(Some(out))
 }
 
+/// Async TRUEOSFS: report whether `dir` is represented by any indexed child path.
+///
+/// TRUEOSFS does not currently store directory records. Directories are therefore
+/// meaningful only as path prefixes, plus empty directories represented by their
+/// `.keep` marker at higher layers.
+pub async fn dir_has_children_async(
+    disk: block::DeviceHandle,
+    dir: &str,
+) -> Result<bool, block::Error> {
+    if disk.parent().is_some() {
+        return Err(block::Error::InvalidParam);
+    }
+    let Some(placement) = locate_async(disk).await? else {
+        return Ok(false);
+    };
+
+    let disk_id = disk.id();
+    ensure_index_async(disk, &placement).await?;
+
+    let roots = ROOTS.lock();
+    let Some(mount) = roots.iter().find(|m| m.disk_id == disk_id) else {
+        return Err(block::Error::NotReady);
+    };
+    let Some(index) = &mount.index else {
+        return Err(block::Error::Corrupted);
+    };
+
+    let prefix = normalized_dir_prefix(dir);
+    if prefix.is_empty() {
+        return Ok(!index.is_empty());
+    }
+
+    let prefix_bytes = prefix.as_bytes();
+    for (key, _) in index.range(prefix_bytes.to_vec()..) {
+        if !key.starts_with(prefix_bytes) {
+            break;
+        }
+        if key.len() > prefix_bytes.len() {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
 fn normalized_dir_prefix(dir: &str) -> String {
     if dir.is_empty() || dir == "/" {
         return String::new();

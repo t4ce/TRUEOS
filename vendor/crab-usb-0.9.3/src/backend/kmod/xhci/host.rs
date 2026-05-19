@@ -83,7 +83,6 @@ impl CoreOp for Xhci {
 
 impl Xhci {
     const COMMAND_POLL_DELAY_MS: u64 = 1;
-    const COMMAND_POLL_LIMIT: usize = 500;
     const ENABLE_SLOT_POLL_LIMIT: usize = 250;
 
     fn flush_controller_write(&self) {
@@ -522,27 +521,11 @@ impl Xhci {
             .write_volatile_at(0, doorbell::Register::default());
     }
 
-    pub(crate) async fn cmd_request(
+    pub(crate) fn cmd_request(
         &mut self,
         trb: command::Allowed,
-    ) -> core::result::Result<CommandCompletion, TransferError> {
-        if self.event_handler.is_none() {
-            return self.cmd.cmd_request(trb).await;
-        }
-
-        let cmd_addr = self.cmd.submit_for_poll(trb);
-        let result =
-            self.poll_command_completion_with_limit("command", cmd_addr, Self::COMMAND_POLL_LIMIT)?;
-        match result.completion_code() {
-            Ok(code) => code.to_result()?,
-            Err(err) => {
-                return Err(TransferError::Other(anyhow!(
-                    "command completion decode failed: {err:?}"
-                )));
-            }
-        }
-
-        Ok(result)
+    ) -> impl Future<Output = core::result::Result<CommandCompletion, TransferError>> {
+        self.cmd.cmd_request(trb)
     }
 
     fn poll_command_completion_with_limit(
