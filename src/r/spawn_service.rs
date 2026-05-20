@@ -947,7 +947,7 @@ struct BlueprintAutostart {
 
 const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
     BlueprintAutostart {
-        enabled: true,
+        enabled: false,
         label: "mandelbrot",
         archive: "mandelbrot.bp",
         slot: "man",
