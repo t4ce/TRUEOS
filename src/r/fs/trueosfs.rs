@@ -753,6 +753,38 @@ fn invalidate_root_index(disk_id: block::DiscId) {
     }
 }
 
+fn publish_written_file_metadata(
+    disk_id: block::DiscId,
+    name: &str,
+    record: trueos_fs::FileRecordRef,
+) {
+    file_record_cache_insert(disk_id, name, record);
+
+    let should_request_warm = {
+        let mut roots = ROOTS.lock();
+        if let Some(m) = roots.iter_mut().find(|m| m.disk_id == disk_id) {
+            if let Some(index) = &mut m.index {
+                index.insert(
+                    name.as_bytes().to_vec(),
+                    IndexRef {
+                        kind: trueos_fs::LogKind::Put,
+                        entry_lba: record.entry_lba,
+                    },
+                );
+                false
+            } else {
+                !m.building_index
+            }
+        } else {
+            false
+        }
+    };
+
+    if should_request_warm {
+        request_warm_index(disk_id);
+    }
+}
+
 /// Async TRUEOSFS: write/replace a file.
 ///
 /// Semantics match [`file_in`], but this avoids `block_on` and is safe to call from async contexts.
@@ -774,6 +806,26 @@ pub async fn file_in_async(
         data_end_lba_exclusive: placement.data_end_lba_exclusive,
     };
     let io = KernelBlockIo::new(disk);
+    let predicted_record = {
+        let bs = disk.block_size() as usize;
+        if bs == 0 || name.is_empty() {
+            None
+        } else {
+            let sb = read_blocks_aligned_async(disk, params.super_lba, 1)
+                .await
+                .ok()
+                .and_then(|block| trueos_fs::parse_superblock(block.as_slice()));
+            sb.map(|sb| {
+                let entry_lba = params.data_lba.saturating_add(sb.log_head_rel_blocks);
+                let name_blocks = (name.as_bytes().len() + (bs - 1)) / bs;
+                trueos_fs::FileRecordRef {
+                    entry_lba,
+                    data_lba: entry_lba.saturating_add(1).saturating_add(name_blocks as u64),
+                    data_len: bytes.len() as u64,
+                }
+            })
+        }
+    };
 
     let ok = trueos_fs::write_file(&io, &params, name, bytes)
         .await
@@ -782,7 +834,11 @@ pub async fn file_in_async(
         let disk_id = disk.id();
         bump_root_cache_gen(disk_id);
         file_record_cache_invalidate_path(disk_id, name);
-        invalidate_root_index(disk_id);
+        if let Some(record) = predicted_record {
+            publish_written_file_metadata(disk_id, name, record);
+        } else {
+            invalidate_root_index(disk_id);
+        }
     }
     Ok(ok)
 }

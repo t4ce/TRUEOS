@@ -94,6 +94,7 @@ define_started_flags!(
     UART_SHELL_STARTED,
     NET_TCP_SHELL_STARTED,
     LOGTOTCP_STARTED,
+    SHARED_TOKIO_RUNTIME_STARTED,
     LUMEN_SERVICE_STARTED,
     SHADER_COMPILE_SERVICE_STARTED,
     SILK_SERVICE_STARTED,
@@ -439,6 +440,15 @@ fn spawn_net_shell(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_logtotcp(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::globalog::logtotcp::logtotcp_task())
+}
+
+fn spawn_shared_tokio_runtime(spawner: Spawner) -> SpawnAttempt {
+    let _ = spawner;
+    if crate::t::start_shared_tokio_runtime() {
+        SpawnAttempt::Spawned
+    } else {
+        SpawnAttempt::Skipped
+    }
 }
 
 fn spawn_lumen_service(spawner: Spawner) -> SpawnAttempt {
@@ -1133,7 +1143,7 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::NET_SOCKET_READY
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-static TASKS: [TaskSpec; 71] = [
+static TASKS: [TaskSpec; 72] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
         "codec-service",
@@ -1188,6 +1198,12 @@ static TASKS: [TaskSpec; 71] = [
         crate::r::readiness::NET_ANY_CONFIGURED,
         &LOGTOTCP_STARTED,
         spawn_logtotcp,
+    ),
+    TaskSpec::enabled(
+        "shared-tokio-runtime",
+        crate::r::readiness::TOKIO_RUNTIME_READY | crate::r::readiness::BACKGROUND_AP_WORKER_READY,
+        &SHARED_TOKIO_RUNTIME_STARTED,
+        spawn_shared_tokio_runtime,
     ),
     TaskSpec::disabled(
         "ai-task",

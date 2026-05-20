@@ -16,10 +16,11 @@ const HYPER_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
 const HYPER_MENU_ROWS: [[&str; 2]; 3] = [
     ["status", "Show the kernel Hyper transport surfaces"],
     ["probe", "Describe the background HTTP/1 probe service"],
-    ["<url> [path]", "Download URL into TRUEOSFS"],
+    ["<url> [path]", "Download URL into TRUEOSFS apps/common by default"],
 ];
 const HYPER_DOWNLOAD_TIMEOUT_MS: u32 = 120_000;
 const HYPER_DOWNLOAD_MAX_BYTES: usize = 16 * 1024 * 1024 * 1024;
+const HYPER_DEFAULT_DOWNLOAD_DIR: &str = "apps/common";
 
 fn line(io: &'static dyn ShellBackend2, text: &str) {
     print_shell_line(io, text);
@@ -71,6 +72,10 @@ fn normalize_path(path: &str) -> Result<String, &'static str> {
     crate::r::path::FsPath::parse(path, false)
         .map(|path| path.to_relative_string())
         .map_err(|_| "bad path")
+}
+
+fn default_download_path(url: &str) -> String {
+    alloc::format!("{}/{}", HYPER_DEFAULT_DOWNLOAD_DIR, basename_from_url(url))
 }
 
 fn submit_download(spawner: &Spawner, io: &'static dyn ShellBackend2, url: String, path: String) {
@@ -176,7 +181,7 @@ pub(crate) fn try_parse(
                         return ParseOutcome::Handled;
                     }
                 },
-                None => String::from(basename_from_url(url.as_str())),
+                None => default_download_path(url.as_str()),
             };
             if args.next().is_some() {
                 line(io, "hyper: usage `hyper <url> [path]`");
