@@ -1,3 +1,5 @@
+use crate::path::{Path, TextPath};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ArgumentTemplate {
     pub name: &'static str,
@@ -29,6 +31,8 @@ pub enum ArgumentKind {
     Bytes,
     Number,
     Flag,
+    Path,
+    TextPath,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -37,4 +41,6 @@ pub enum Argument<'a> {
     Bytes(&'a [u8]),
     Number(i64),
     Flag(&'a str),
+    Path(Path<'a>),
+    TextPath(TextPath<'a>),
 }

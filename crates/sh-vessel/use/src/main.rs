@@ -3,6 +3,8 @@ use core::pin::Pin;
 
 use shvessel::callback::{CommandCall, CommandCallback, CommandFuture, CommandResult};
 use shvessel::cmd;
+use shvessel::arg::Argument;
+use shvessel::path::{Path, TextPath};
 use shvessel::vessel::Vessel;
 use shvessel::Command;
 
@@ -25,7 +27,10 @@ fn main() {
     let _ = vessel.register(FOOBAR, foobar_callback);
     let _ = vessel.register(MYCOMMAND, mycommand_callback);
 
-    let args = [];
+    let args = [
+        Argument::Path(Path::from_bytes(b"/raw/source")),
+        Argument::TextPath(TextPath::new("/text/dest")),
+    ];
     let _move_job = vessel.execute("move", &args);
 }
 

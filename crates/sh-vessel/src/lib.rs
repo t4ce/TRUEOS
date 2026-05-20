@@ -6,6 +6,7 @@ pub mod cmd;
 pub mod exec;
 pub mod help;
 pub mod job;
+pub mod path;
 pub mod pretty;
 pub mod reg;
 pub mod vessel;

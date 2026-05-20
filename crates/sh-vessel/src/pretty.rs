@@ -3,6 +3,7 @@ use core::fmt;
 use crate::arg::{Argument, ArgumentKind, ArgumentTemplate};
 use crate::cmd::CommandList;
 use crate::help::Help;
+use crate::path::{Path, TextPath};
 use crate::Command;
 
 impl fmt::Display for Command {
@@ -38,6 +39,8 @@ impl fmt::Display for ArgumentKind {
             Self::Bytes => f.write_str("bytes"),
             Self::Number => f.write_str("number"),
             Self::Flag => f.write_str("flag"),
+            Self::Path => f.write_str("path"),
+            Self::TextPath => f.write_str("text-path"),
         }
     }
 }
@@ -59,6 +62,20 @@ impl fmt::Display for Argument<'_> {
             Self::Bytes(value) => write!(f, "{} bytes", value.len()),
             Self::Number(value) => write!(f, "{}", value),
             Self::Flag(value) => write!(f, "--{}", value),
+            Self::Path(value) => write!(f, "{}", value),
+            Self::TextPath(value) => write!(f, "{}", value),
         }
+    }
+}
+
+impl fmt::Display for Path<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} path-bytes", self.bytes.len())
+    }
+}
+
+impl fmt::Display for TextPath<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.text)
     }
 }
