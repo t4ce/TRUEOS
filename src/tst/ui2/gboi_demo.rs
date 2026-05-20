@@ -18,6 +18,7 @@ const UI2_GBOI_WINDOW_Z: i16 = 41;
 const UI2_GBOI_WINDOW_ALPHA: u8 = 0xFF;
 const UI2_GBOI_FRAME_MS: u64 = 16;
 const UI2_GBOI_SPEED_MULTIPLIER: usize = 2;
+const UI2_GBOI_BOOT_CHIME_ENABLED: bool = true;
 const UI2_GBOI_KEYBOARD_BATCH: usize = 16;
 const UI2_GBOI_INPUT_QUEUE_CAP: usize = 64;
 const UI2_GBOI_BOOT_ROM_7Z: &[u8] =
@@ -86,6 +87,16 @@ fn render_frame(emulator: &crate::gboi::gb::GameBoyEmulator) -> Vec<u8> {
     argb_to_rgba_owned(argb.as_slice())
 }
 
+fn play_boot_chime() {
+    if !UI2_GBOI_BOOT_CHIME_ENABLED {
+        return;
+    }
+
+    if let Err(err) = crate::aud::dmg::play_boot_chime() {
+        crate::log!("ui2-gboi-demo: hda dmg boot chime skipped err={}\n", err);
+    }
+}
+
 fn push_pressed_button(
     pressed_buttons: &mut [Option<crate::gboi::gb::GameBoyButton>; UI2_GBOI_KEYBOARD_BATCH],
     pressed_button_count: &mut usize,
@@ -152,6 +163,7 @@ pub async fn ui2_gboi_demo_task() {
     let mut pressed_buttons: [Option<crate::gboi::gb::GameBoyButton>;
         UI2_GBOI_KEYBOARD_BATCH] = [None; UI2_GBOI_KEYBOARD_BATCH];
     let mut pressed_button_count = 0usize;
+    let mut boot_chime_played = false;
 
     loop {
         if crate::r::spawn_service::task_stop_requested(UI2_GBOI_TASK_NAME) {
@@ -189,6 +201,11 @@ pub async fn ui2_gboi_demo_task() {
         if !surface.upload_rgba_owned(pixels, "ui2-gboi-demo-present") {
             crate::log!("ui2-gboi-demo: upload failed tex={}\n", surface.tex_id());
             return;
+        }
+
+        if !boot_chime_played {
+            boot_chime_played = true;
+            play_boot_chime();
         }
 
         if crate::r::spawn_service::wait_task_or_timeout_ms(UI2_GBOI_TASK_NAME, UI2_GBOI_FRAME_MS)
