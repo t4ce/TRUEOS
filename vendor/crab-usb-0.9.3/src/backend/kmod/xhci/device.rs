@@ -458,39 +458,22 @@ impl Device {
 
     async fn setup_interface_endpoints(&mut self, interface: u8, alternate: u8) -> Result {
         self.ctx.perper_change();
-        let stale_endpoints = self
-            .ep_interfaces
-            .iter()
-            .filter_map(|(address, ep_interface)| (*ep_interface == interface).then_some(*address))
-            .collect::<Vec<_>>();
-        let drop_dcis = stale_endpoints
-            .iter()
-            .filter_map(|address| {
-                self.find_ep_desc_in_current_config(*address)
-                    .ok()
-                    .map(|desc| desc.dci())
-            })
-            .collect::<Vec<_>>();
-        let mut old_endpoints = Vec::with_capacity(stale_endpoints.len());
-        for address in &stale_endpoints {
-            if let Some(endpoint) = self.eps.remove(address) {
-                old_endpoints.push(endpoint);
-            }
-            self.ep_interfaces.remove(address);
-        }
-        self.ctx.with_input(|input| {
-            let control_context = input.control_mut();
-            for dci in drop_dcis {
-                control_context.set_drop_context_flag(dci as _);
-            }
-        });
+        let old_endpoints = core::mem::take(&mut self.eps);
+        self.ep_interfaces.clear();
+
+        let mut max_dci = 1;
+        let mut configured_eps = Vec::new();
 
         for desc in self
             .find_interface_endpoints(interface, alternate)?
             .to_vec()
         {
             let dci = desc.dci();
+            if dci > max_dci {
+                max_dci = dci;
+            }
             let mut ep_raw = self.new_ep(dci.into())?;
+            let packet_size = desc.max_packet_size & 0x07ff;
             let periodic_burst_size = match self.port_speed {
                 Speed::High
                     if matches!(
@@ -498,12 +481,14 @@ impl Device {
                         EndpointType::Isochronous | EndpointType::Interrupt
                     ) =>
                 {
-                    desc.packets_per_microframe.saturating_sub(1)
+                    ((desc.max_packet_size & 0x1800) >> 11)
+                        .min(desc.packets_per_microframe.saturating_sub(1) as u16)
+                        as usize
                 }
                 _ => 0,
             };
             ep_raw.configure_periodic(
-                desc.max_packet_size as usize,
+                packet_size as usize,
                 periodic_burst_size,
                 desc.interval,
             );
@@ -514,69 +499,57 @@ impl Device {
 
             let xhci_interval =
                 self.calculate_xhci_interval(desc.interval, desc.transfer_type, desc.interval);
+            configured_eps.push((desc, dci, ring_addr.raw(), xhci_interval, packet_size));
+        }
 
-            self.ctx.with_input(|input| {
-                let control_context = input.control_mut();
+        self.ctx.with_empty_input(|input| {
+            input.control_mut().set_add_context_flag(0);
+            input
+                .device_mut()
+                .slot_mut()
+                .set_context_entries(max_dci + 1);
 
-                control_context.set_add_context_flag(dci as _);
-                control_context.clear_drop_context_flag(dci as _);
-
+            for (desc, dci, ring_addr, xhci_interval, packet_size) in &configured_eps {
+                input.control_mut().set_add_context_flag(*dci as _);
                 debug!(
                     "init ep addr {:#x}  dci {dci} {:?}",
                     desc.address, desc.transfer_type
                 );
 
-                let ep_mut = input.device_mut().endpoint_mut(dci as _);
+                let ep_mut = input.device_mut().endpoint_mut(*dci as _);
 
                 debug!(
                     "Set XHCI interval: {} (original bInterval: {})",
                     xhci_interval, desc.interval
                 );
-                ep_mut.set_interval(xhci_interval);
+                ep_mut.set_interval(*xhci_interval);
                 ep_mut.set_endpoint_type(desc.endpoint_type());
-                ep_mut.set_tr_dequeue_pointer(ring_addr.raw());
-                ep_mut.set_max_packet_size(desc.max_packet_size);
+                ep_mut.set_tr_dequeue_pointer(*ring_addr);
+                ep_mut.set_max_packet_size(*packet_size);
                 ep_mut.set_error_count(3);
                 ep_mut.set_dequeue_cycle_state();
+                ep_mut.set_mult(0);
 
                 match desc.transfer_type {
                     EndpointType::Isochronous | EndpointType::Interrupt => {
                         // init for isoch/interrupt
-                        ep_mut.set_max_packet_size(desc.max_packet_size);
-                        ep_mut.set_max_burst_size(periodic_burst_size.try_into().unwrap());
-                        ep_mut.set_mult(0); //always 0 for interrupt
-                        let max_esit_payload =
-                            desc.max_packet_size as usize * (periodic_burst_size + 1);
-                        ep_mut
-                            .set_average_trb_length(max_esit_payload.min(u16::MAX as usize) as u16);
+                        let burst = ((desc.max_packet_size & 0x1800) >> 11) as u16;
+                        let max_esit_payload = (burst + 1).saturating_mul(*packet_size);
+                        ep_mut.set_max_burst_size(burst.try_into().unwrap());
                         ep_mut.set_max_endpoint_service_time_interval_payload_low(
-                            max_esit_payload.min(u16::MAX as usize) as u16,
+                            max_esit_payload,
                         );
                     }
-                    _ => {}
+                    EndpointType::Bulk | EndpointType::Control => {
+                        ep_mut.set_max_burst_size(0);
+                        ep_mut.set_average_trb_length(*packet_size);
+                    }
                 }
 
                 if let EndpointType::Isochronous = desc.transfer_type {
                     ep_mut.set_error_count(0);
                 }
-            });
-        }
-
-        let max_dci = self
-            .eps
-            .keys()
-            .filter_map(|address| {
-                self.find_ep_desc_in_current_config(*address)
-                    .ok()
-                    .map(|desc| desc.dci())
-            })
-            .max()
-            .unwrap_or(1);
-        self.ctx.with_input(|input| {
-            input
-                .device_mut()
-                .slot_mut()
-                .set_context_entries(max_dci + 1)
+            }
         });
         mb();
 
@@ -606,30 +579,6 @@ impl Device {
                         if alt.alternate_setting == alternate {
                             return Ok(&alt.endpoints);
                         }
-                    }
-                }
-            }
-        }
-        Err(USBError::NotFound)
-    }
-
-    fn current_config_desc(&self) -> Result<&ConfigurationDescriptor> {
-        let Some(current_config_value) = self.current_config_value else {
-            return Err(USBError::ConfigurationNotSet);
-        };
-        self.config_desc
-            .iter()
-            .find(|config| config.configuration_value == current_config_value)
-            .ok_or(USBError::NotFound)
-    }
-
-    fn find_ep_desc_in_current_config(&self, address: u8) -> Result<&EndpointDescriptor> {
-        let config = self.current_config_desc()?;
-        for iface in &config.interfaces {
-            for alt in &iface.alt_settings {
-                for desc in &alt.endpoints {
-                    if desc.address == address {
-                        return Ok(desc);
                     }
                 }
             }

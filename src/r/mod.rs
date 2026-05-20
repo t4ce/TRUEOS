@@ -15,6 +15,7 @@ pub mod net;
 pub mod path;
 pub mod readiness;
 pub mod shader;
+pub mod silk_service;
 pub mod spawn_service;
 pub mod spawn_spec;
 pub mod stream;

@@ -96,6 +96,7 @@ define_started_flags!(
     LOGTOTCP_STARTED,
     LUMEN_SERVICE_STARTED,
     SHADER_COMPILE_SERVICE_STARTED,
+    SILK_SERVICE_STARTED,
     PCIIDS_GIT_STARTED,
     ATOMIC_BOMB_STARTED,
     HTML_DEMO_STARTED,
@@ -446,6 +447,10 @@ fn spawn_lumen_service(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_shader_compile_service(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::shader::shader_compile_service_task())
+}
+
+fn spawn_silk_service(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_worker(spawner, |_worker_spawner| crate::r::silk_service::silk_service_task())
 }
 
 fn spawn_mandelbrot_gpu_sidequest(spawner: Spawner) -> SpawnAttempt {
@@ -1127,7 +1132,7 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::NET_SOCKET_READY
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-static TASKS: [TaskSpec; 70] = [
+static TASKS: [TaskSpec; 71] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
         "codec-service",
@@ -1201,6 +1206,12 @@ static TASKS: [TaskSpec; 70] = [
         crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
         &SHADER_COMPILE_SERVICE_STARTED,
         spawn_shader_compile_service,
+    ),
+    TaskSpec::enabled(
+        "silk-service",
+        crate::r::readiness::BACKGROUND_AP_WORKER_READY,
+        &SILK_SERVICE_STARTED,
+        spawn_silk_service,
     ),
     TaskSpec::enabled("pciids-git", PCIIDS_GIT_READY, &PCIIDS_GIT_STARTED, spawn_pciids_git),
     TaskSpec::enabled_gated(
@@ -1400,7 +1411,7 @@ static TASKS: [TaskSpec; 70] = [
         &UI2_CURSORPICKER_DEMO_STARTED,
         spawn_ui2_cursorpicker_demo,
     ),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "ui2-gboi-demo",
         UI2_DEMO_READY,
         &UI2_GBOI_DEMO_STARTED,
