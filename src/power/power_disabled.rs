@@ -11,7 +11,7 @@ pub mod rapl {
 pub mod turbo {
     use core::sync::atomic::{AtomicU8, Ordering};
 
-    static TURBO_ARMED: AtomicU8 = AtomicU8::new(0);
+    static TURBO_ARMED: AtomicU8 = AtomicU8::new(1);
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum TurboState {

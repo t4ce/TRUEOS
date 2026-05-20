@@ -1,15 +1,13 @@
 use core::str::SplitWhitespace;
 
-use super::super::{ShellBackend2, print_shell_line};
+use super::super::{print_shell_line, ShellBackend2};
 use super::tlb_helper::print_table;
 use crate::power::turbo as power_turbo;
 use crate::shell2::shell2_cmd::ParseOutcome;
 
 const TURBO_MENU_HEADERS: [&str; 2] = ["Subcommand", "Arguments"];
-const TURBO_MENU_ROWS: [[&str; 2]; 6] = [
+const TURBO_MENU_ROWS: [[&str; 2]; 4] = [
     ["status", ""],
-    ["arm", ""],
-    ["disarm", ""],
     ["on", ""],
     ["off", ""],
     ["verify", "[spins]"],
@@ -35,10 +33,9 @@ pub(crate) fn try_parse(
             return ParseOutcome::Handled;
         }
 
-        let armed = power_turbo::armed();
         match power_turbo::local_state() {
             Ok(state) => {
-                let msg = alloc::format!("turbo: armed={} state={:?}", armed, state);
+                let msg = alloc::format!("turbo: state={:?}", state);
                 line(io, msg.as_str());
             }
             Err(power_turbo::TurboSetError::Unsupported) => {
@@ -48,31 +45,6 @@ pub(crate) fn try_parse(
                 line(io, "turbo: disarmed");
             }
         }
-        if !armed {
-            line(io, "turbo: writes are disarmed (run `turbo arm`)");
-        }
-        return ParseOutcome::Handled;
-    }
-
-    if op.eq_ignore_ascii_case("arm") {
-        if args.next().is_some() {
-            print_usage(io);
-            return ParseOutcome::Handled;
-        }
-
-        power_turbo::set_armed(true);
-        line(io, "turbo: armed");
-        return ParseOutcome::Handled;
-    }
-
-    if op.eq_ignore_ascii_case("disarm") {
-        if args.next().is_some() {
-            print_usage(io);
-            return ParseOutcome::Handled;
-        }
-
-        power_turbo::set_armed(false);
-        line(io, "turbo: disarmed");
         return ParseOutcome::Handled;
     }
 
@@ -112,7 +84,7 @@ pub(crate) fn try_parse(
                 line(io, msg.as_str());
             }
             Err(power_turbo::TurboSetError::Disarmed) => {
-                line(io, "turbo: msr disarmed (verify should not require arm)");
+                line(io, "turbo: verify disarmed unexpectedly");
             }
             Err(power_turbo::TurboSetError::Unsupported) => {
                 line(io, "turbo: unsupported (intel-only)");
@@ -153,7 +125,7 @@ pub(crate) fn try_parse(
             line(io, msg.as_str());
         }
         Err(power_turbo::TurboSetError::Disarmed) => {
-            line(io, "turbo: msr disarmed (run `turbo arm`)");
+            line(io, "turbo: write gate is disarmed");
         }
         Err(power_turbo::TurboSetError::Unsupported) => {
             line(io, "turbo: unsupported (intel-only)");
