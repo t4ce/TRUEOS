@@ -11,6 +11,7 @@
 #![allow(dead_code)]
 
 pub mod pattern;
+pub mod dmg;
 pub mod player;
 pub mod synth;
 pub mod tables;
