@@ -42,11 +42,6 @@ DMC_FW_HOST_PATH ?= /lib/firmware/i915/adls_dmc_ver2_01.bin.zst
 DMC_FW_ISO_REL_PATH ?= EFI/BOOT/adls_dmc_ver2_01.bin
 HUC_FW_HOST_PATH ?= /lib/firmware/i915/tgl_huc.bin.zst
 HUC_FW_ISO_REL_PATH ?= EFI/BOOT/tgl_huc.bin
-BLUEPRINTS_ROOT ?= $(firstword $(wildcard ../TRUEOS-Blueprints) $(wildcard crates/TRUEOS-Blueprints) crates/TRUEOS-Blueprints)
-BP_DIST_DIR ?= $(BLUEPRINTS_ROOT)/dist
-BP_ISO_DIR_REL ?= EFI/BOOT/apps
-BP_FILES_CMD ?= find "$(BP_DIST_DIR)" -maxdepth 1 -type f -name '*.bp' -print
-BP_SKIP_EMBED := 0
 QEMU_RUNNER := tools/qemu/run.sh
 QEMU_BIN ?= qemu-system-x86_64
 QEMU_UEFI_FIRMWARE = $(OVMF_BUNDLE_PATH)
@@ -170,14 +165,6 @@ iso: baremetal-reboot-log artifacts images limine
 	mkdir -p $(ISO_BOOT_DIR)
 	cp $(ARTIFACT_RUNTIME_ELF) $(ISO_BOOT_DIR)/TRUEOS.elf
 	mkdir -p $(ISO_DIR)/EFI/BOOT
-	@if [ "$(BP_SKIP_EMBED)" != "1" ]; then \
-		if ! $(BP_FILES_CMD) 2>/dev/null | grep -q .; then \
-			echo "error: BP_SKIP_EMBED=0 but no blueprint artifacts matched $(BP_DIST_DIR)/*.bp"; \
-			exit 1; \
-		fi; \
-	else \
-		echo "iso: skipping blueprint embed"; \
-	fi
 	@if [ ! -f "$(GUC_FW_HOST_PATH)" ]; then \
 		echo "error: GUC firmware not found at $(GUC_FW_HOST_PATH)"; \
 		exit 1; \
@@ -217,31 +204,7 @@ iso: baremetal-reboot-log artifacts images limine
 		mkdir -p $(ISO_BOOT_DIR)/$(dir $(HUC_FW_ISO_REL_PATH)); \
 		cp "$(ISO_DIR)/EFI/BOOT/$$(basename "$(HUC_FW_ISO_REL_PATH)")" "$(ISO_BOOT_DIR)/$(HUC_FW_ISO_REL_PATH)"; \
 	fi
-	@if [ "$(BP_SKIP_EMBED)" != "1" ]; then \
-		rm -rf "$(ISO_BOOT_DIR)/$(BP_ISO_DIR_REL)"; \
-		mkdir -p $(ISO_BOOT_DIR)/$(BP_ISO_DIR_REL); \
-		$(BP_FILES_CMD) | while IFS= read -r bp; do \
-			cp "$$bp" "$(ISO_BOOT_DIR)/$(BP_ISO_DIR_REL)/$$(basename "$$bp")"; \
-		done; \
-		if mkdir -p "$(ISO_DIR)/$(BP_ISO_DIR_REL)" 2>/dev/null && [ -w "$(ISO_DIR)/$(BP_ISO_DIR_REL)" ]; then \
-			rm -f "$(ISO_DIR)/$(BP_ISO_DIR_REL)"/*.bp; \
-			$(BP_FILES_CMD) | while IFS= read -r bp; do \
-				cp "$$bp" "$(ISO_DIR)/$(BP_ISO_DIR_REL)/$$(basename "$$bp")"; \
-			done; \
-		else \
-			echo "iso: skipping PXE app mirror in $(ISO_DIR)/$(BP_ISO_DIR_REL), directory is not writable"; \
-		fi; \
-	fi
-	@awk 'BEGIN { skip_app_string = 0 } skip_app_string && /^module_string: trueos\.app\./ { skip_app_string = 0; next } skip_app_string { skip_app_string = 0 } /^module_path: boot\(\):\/EFI\/BOOT\/apps\/.*\.bp$$/ { skip_app_string = 1; next } { print }' "$(LIMINE_CFG)" > "$(LIMINE_CFG_GENERATED)"
-	@if [ "$(BP_SKIP_EMBED)" != "1" ]; then \
-		$(BP_FILES_CMD) | while IFS= read -r bp; do \
-			bp_name=$$(basename "$$bp" .bp); \
-			printf '%s\n%s\n' \
-				"module_path: boot():/$(BP_ISO_DIR_REL)/$$(basename "$$bp")" \
-				"module_string: trueos.app.$$bp_name" \
-				>> "$(LIMINE_CFG_GENERATED)"; \
-			done; \
-	fi
+	cp "$(LIMINE_CFG)" "$(LIMINE_CFG_GENERATED)"
 	@if [ -f "$(ISO_BOOT_DIR)/$(DMC_FW_ISO_REL_PATH)" ]; then \
 		printf '%s\n%s\n' \
 			"module_path: boot():/$(DMC_FW_ISO_REL_PATH)" \
@@ -287,7 +250,6 @@ iso: baremetal-reboot-log artifacts images limine
 
 release: BUILD_MODE := release
 release: CARGO_BUILD_FLAGS += --release
-release: BP_SKIP_EMBED := 1
 release: iso
 	@if [ -z "$(OVMF_BUNDLE_PATH)" ] || [ ! -f "$(OVMF_BUNDLE_PATH)" ]; then \
 		echo "error: no OVMF firmware found to bundle"; \

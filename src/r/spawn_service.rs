@@ -1208,7 +1208,7 @@ static TASKS: [TaskSpec; 71] = [
         &SHADER_COMPILE_SERVICE_STARTED,
         spawn_shader_compile_service,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "silk-service",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,
         &SILK_SERVICE_STARTED,
@@ -1241,7 +1241,7 @@ static TASKS: [TaskSpec; 71] = [
         &WS_TIME_STARTED,
         spawn_ws_time,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "usb-controller-tasks",
         0,
         &USB_CONTROLLER_TASKS_STARTED,
@@ -1262,7 +1262,7 @@ static TASKS: [TaskSpec; 71] = [
         &FTP_SERVER_STARTED,
         spawn_ftp_server,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "tga",
         crate::r::readiness::NET_ANY_CONFIGURED,
         &TGA_TASK_STARTED,
@@ -1386,14 +1386,13 @@ static TASKS: [TaskSpec; 71] = [
         &UI2_TWEMOJI_1X_STARTED,
         spawn_ui2_twemoji_1x,
     ),
-    TaskSpec::enabled_gated(
+    TaskSpec::disabled(
         "ui2-text-input-demo",
         UI2_DEMO_READY,
-        ui2_demo_task_gate,
         &UI2_TEXT_INPUT_DEMO_STARTED,
         spawn_ui2_text_input_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui2-analog-clock-demo",
         UI2_DEMO_READY,
         &UI2_ANALOG_CLOCK_DEMO_STARTED,
@@ -1406,7 +1405,7 @@ static TASKS: [TaskSpec; 71] = [
         &UI2_CORETICKS_DEMO_STARTED,
         spawn_ui2_coreticks_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui2-cursorpicker-demo",
         UI2_DEMO_READY,
         &UI2_CURSORPICKER_DEMO_STARTED,
@@ -1418,7 +1417,7 @@ static TASKS: [TaskSpec; 71] = [
         &UI2_GBOI_DEMO_STARTED,
         spawn_ui2_gboi_demo,
     ),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "ui2-mandelbrot-demo",
         UI2_DEMO_READY,
         &UI2_MANDELBROT_DEMO_STARTED,
@@ -1432,7 +1431,7 @@ static TASKS: [TaskSpec; 71] = [
         &UI2_PLAYER_DEMO_STARTED,
         spawn_ui2_player_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui2-raple-demo",
         UI2_DEMO_READY,
         &UI2_RAPLE_DEMO_STARTED,
@@ -1450,7 +1449,7 @@ static TASKS: [TaskSpec; 71] = [
         &UI2_SHELL_DEMO_STARTED,
         spawn_ui2_shell_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui2-swarm-demo",
         UI2_DEMO_READY | crate::r::readiness::NET_ANY_CONFIGURED,
         &UI2_SWARM_DEMO_STARTED,
@@ -1469,10 +1468,9 @@ static TASKS: [TaskSpec; 71] = [
         &LUMEN_SERVICE_STARTED,
         spawn_lumen_service,
     ),
-    TaskSpec::enabled_gated(
+    TaskSpec::disabled(
         "uas-skhynix-route-probe",
         0,
-        uas_skhynix_route_probe_enabled,
         &UAS_SKHYNIX_ROUTE_PROBE_STARTED,
         spawn_uas_skhynix_route_probe,
     ),

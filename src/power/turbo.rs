@@ -7,7 +7,7 @@ use x86_64::registers::model_specific::Msr;
 const MSR_IA32_MISC_ENABLE: u32 = 0x1A0;
 const TURBO_DISABLE_BIT: u64 = 1 << 38;
 
-static TURBO_ARMED: AtomicU8 = AtomicU8::new(0);
+static TURBO_ARMED: AtomicU8 = AtomicU8::new(1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TurboState {

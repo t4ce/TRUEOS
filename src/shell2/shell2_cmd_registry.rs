@@ -2,9 +2,9 @@ use alloc::string::String as AllocString;
 
 use embassy_executor::Spawner;
 
-use super::ShellBackend2;
 use super::print_shell_line;
 use super::shell2_cmd::ParseOutcome;
+use super::ShellBackend2;
 
 pub(crate) type Shell2CmdHandler = fn(&Spawner, &'static dyn ShellBackend2, &str) -> ParseOutcome;
 
@@ -23,7 +23,7 @@ const TOOL_JSON_ACPI: &str = r#"{"type":"object","properties":{"action":{"type":
 const TOOL_JSON_7Z: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS file to compress into a sibling .7z archive."}},"required":["path"],"additionalProperties":false}"#;
 const TOOL_JSON_C4: &str = r#"{"type":"object","properties":{"mode":{"type":"string","enum":["file","inline"],"description":"Compile from a TRUEOSFS file or inline C4 source."},"path":{"type":"string","description":"TRUEOSFS source path when mode=file."},"source":{"type":"string","description":"Inline C4 source when mode=inline."}},"required":["mode"],"additionalProperties":false}"#;
 const TOOL_JSON_DISC: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","format"],"description":"disc action to run."},"disk_id":{"type":"string","description":"Disk id string for action=format."}},"required":["action"],"additionalProperties":false}"#;
-const TOOL_JSON_HYPER: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["status","probe"],"description":"Hyper transport view to print."}},"required":[],"additionalProperties":false}"#;
+const TOOL_JSON_HYPER: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["status","probe"],"description":"Hyper transport view to print."},"url":{"type":"string","description":"Optional URL to download into TRUEOSFS."},"path":{"type":"string","description":"Optional TRUEOSFS destination path."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_LSD: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"Optional TRUEOSFS path to list."},"long":{"type":"boolean","description":"Show file kind and byte size."},"tree":{"type":"boolean","description":"Walk recursively from the path."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_MV: &str = r#"{"type":"object","properties":{"src":{"type":"string","description":"Source TRUEOSFS path."},"dst":{"type":"string","description":"Destination TRUEOSFS path."},"regex":{"type":"string","description":"Optional -regx pattern. When set, src and dst are directories."}},"required":["src","dst"],"additionalProperties":false}"#;
 const TOOL_JSON_NET: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["icmp","irc","nic","hostname"],"description":"net subcommand to run."},"target":{"type":"string","description":"Target host for net icmp."},"selector":{"type":"string","description":"Optional NIC selector like index, vid:pid, or bb:dd.f."},"host":{"type":"string","description":"Host for net irc."},"channel":{"type":"string","description":"Optional channel like #trueos for net irc."},"name":{"type":"string","description":"Optional hostname for net hostname."}},"required":["subcommand"],"additionalProperties":false}"#;
@@ -32,7 +32,7 @@ const TOOL_JSON_SET: &str = r#"{"type":"object","properties":{"width":{"type":"i
 const TOOL_JSON_SHADER: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["list","compile","demo","now"],"description":"Shader compiler service action."},"path":{"type":"string","description":"Optional /shader source path for compile or now."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_SMP: &str = r#"{"type":"object","properties":{"slot":{"type":"integer","minimum":0,"description":"Optional SMP slot. Omit to list all slots."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_TLB: &str = r#"{"type":"object","properties":{"target":{"type":"string","enum":["pci","pcibar","mem","cpu","acpi","aml","facp","madt","hpet","mcfg","ssdt","uefi","x2apic","usb","usb_probe","dump"],"description":"Table or view to print."},"signature":{"type":"string","minLength":4,"maxLength":4,"description":"Optional ACPI signature when target=acpi, for example SSDT or FACP."},"index":{"type":"integer","minimum":1,"description":"Optional 1-based instance index when target=acpi and the signature repeats."},"subcommand":{"type":"string","enum":["ec","symbol","prefix"],"description":"Optional AML subcommand when target=aml."},"path":{"type":"string","description":"Optional AML path or prefix when target=aml and subcommand is symbol or prefix."}},"required":["target"],"additionalProperties":false}"#;
-const TOOL_JSON_TURBO: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["status","arm","disarm","on","off","verify"],"description":"turbo action to run."},"spins":{"type":"integer","minimum":0,"description":"Optional spin count for action=verify."}},"required":["action"],"additionalProperties":false}"#;
+const TOOL_JSON_TURBO: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["status","on","off","verify"],"description":"turbo action to run."},"spins":{"type":"integer","minimum":0,"description":"Optional spin count for action=verify."}},"required":["action"],"additionalProperties":false}"#;
 
 fn dispatch_acpi(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
@@ -48,9 +48,9 @@ fn dispatch_install(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &st
     super::cmds::install::try_parse(spawner, io, &mut args)
 }
 
-fn dispatch_hyper(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+fn dispatch_hyper(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
-    super::cmds::hyper::try_parse(io, &mut args)
+    super::cmds::hyper::try_parse(spawner, io, &mut args)
 }
 
 fn dispatch_lsd(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
