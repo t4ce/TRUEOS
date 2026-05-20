@@ -116,7 +116,7 @@ fn pump_audio(
     stream: &mut crate::aud::dmg::DmgAudioStream,
     samples: &mut Vec<i16>,
 ) {
-    if !UI2_GBOI_AUDIO_ENABLED {
+    if !UI2_GBOI_AUDIO_ENABLED || !crate::hda::is_initialized() {
         return;
     }
 

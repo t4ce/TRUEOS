@@ -13,18 +13,44 @@ buf = fs.read path using main
 log.write buf
 "#;
 
+const PLACE_SOURCE: &str = r#"
+# Tiny boot-time placement plan.
+place demo.art in main align 16
+place arena.art in main align 16
+place path.art in main align 8
+place buf.art in main align 16
+"#;
+
 enum SilkServiceError {
     Parse(trueos_silk::ParseError),
+    PlaceParse(trueos_silk::PlacementError),
     MissingArtifact,
+    MissingPlacementArtifact,
+    UnknownPlacementArena,
 }
 
 impl core::fmt::Display for SilkServiceError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Parse(err) => write!(f, "parse: {:?}", err),
+            Self::PlaceParse(err) => write!(f, "place parse: {:?}", err),
             Self::MissingArtifact => f.write_str("missing in-memory artifact"),
+            Self::MissingPlacementArtifact => f.write_str("missing placement artifact"),
+            Self::UnknownPlacementArena => f.write_str("unknown placement arena"),
         }
     }
+}
+
+struct Artifact<'a> {
+    name: &'static str,
+    bytes: &'a [u8],
+}
+
+fn artifact_bytes<'a>(artifacts: &'a [Artifact<'a>], name: &str) -> Option<&'a [u8]> {
+    artifacts
+        .iter()
+        .find(|artifact| artifact.name == name)
+        .map(|artifact| artifact.bytes)
 }
 
 fn demo_artifact(plan: &trueos_silk::Plan) -> String {
@@ -74,6 +100,40 @@ fn buf_artifact(plan: &trueos_silk::Plan, bytes: &[u8]) -> String {
     )
 }
 
+fn place_artifacts(
+    plan: &trueos_silk::Plan,
+    artifacts: &[Artifact<'_>],
+) -> Result<String, SilkServiceError> {
+    let placement =
+        trueos_silk::parse_placement_program(PLACE_SOURCE).map_err(SilkServiceError::PlaceParse)?;
+    let mut arena = trueos_silk::Arena::new(0x1000, plan.arena.size);
+    let mut report =
+        format!("placement arena={} base=0x{:x} len={}\n", plan.arena.name, arena.base, arena.len);
+
+    for step in &placement.steps {
+        if step.arena != plan.arena.name {
+            return Err(SilkServiceError::UnknownPlacementArena);
+        }
+        let bytes = artifact_bytes(artifacts, step.artifact.as_str())
+            .ok_or(SilkServiceError::MissingPlacementArtifact)?;
+        let placed = arena.alloc_aligned(bytes.len() as u64, step.align);
+        report.push_str(
+            format!(
+                "place {} status={:?} addr=0x{:x} len={} align={} remaining={}\n",
+                step.artifact,
+                placed.status,
+                placed.span.addr,
+                placed.span.len,
+                step.align,
+                arena.remaining()
+            )
+            .as_str(),
+        );
+    }
+
+    Ok(report)
+}
+
 async fn build_and_load_artifacts() -> Result<(), SilkServiceError> {
     let plan = trueos_silk::parse_plan(DEMO_SOURCE).map_err(SilkServiceError::Parse)?;
     let demo = demo_artifact(&plan);
@@ -89,14 +149,35 @@ async fn build_and_load_artifacts() -> Result<(), SilkServiceError> {
     let arena = arena_artifact(&plan, read_bytes.len());
     let path = path_artifact(&plan);
     let buf = buf_artifact(&plan, read_bytes);
+    let artifacts = [
+        Artifact {
+            name: "demo.art",
+            bytes: demo.as_bytes(),
+        },
+        Artifact {
+            name: "arena.art",
+            bytes: arena.as_bytes(),
+        },
+        Artifact {
+            name: "path.art",
+            bytes: path.as_bytes(),
+        },
+        Artifact {
+            name: "buf.art",
+            bytes: buf.as_bytes(),
+        },
+    ];
+    let placement = place_artifacts(&plan, &artifacts)?;
 
     crate::log!(
-        "silk-service: built in-memory artifacts demo={} arena={} path={} buf={}\n",
+        "silk-service: built in-memory artifacts demo={} arena={} path={} buf={} placement={}\n",
         demo.len(),
         arena.len(),
         path.len(),
-        buf.len()
+        buf.len(),
+        placement.len()
     );
+    crate::log!("silk-service: placement begin\n{}silk-service: placement end\n", placement);
     crate::log!(
         "silk-service: log.write {} bytes from {}\n",
         read_bytes.len(),
