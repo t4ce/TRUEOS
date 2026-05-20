@@ -20,6 +20,9 @@ pub(crate) fn prebind_import_readiness(name: &str) -> u32 {
         || name.starts_with("trueos_cabi_gfx_capture_")
     {
         mask |= crate::r::readiness::GFX_BACKEND_READY;
+        if name.starts_with("trueos_cabi_gfx_queue_render_") {
+            mask |= crate::r::readiness::GFX_TEXTURE_UPLOAD_SERVICE_READY;
+        }
     }
 
     if name.starts_with("trueos_cabi_fs_") || name.starts_with("trueos_cabi_trueosfs_") {
