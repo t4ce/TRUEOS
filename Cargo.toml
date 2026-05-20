@@ -10,7 +10,7 @@ test = false
 bench = false
 
 [features]
-default = []
+default = ["hda-boot-probe"]
 hda-boot-probe = []
 lumen-runtime = ["dep:lumen"]
 vmx-web = ["dep:axum", "hyper/server"]

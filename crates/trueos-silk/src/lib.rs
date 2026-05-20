@@ -3,6 +3,7 @@
 extern crate alloc;
 
 use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -216,6 +217,25 @@ pub enum ParseError {
     NameMismatch(&'static str),
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlacementProgram {
+    pub steps: Vec<PlacementStep>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlacementStep {
+    pub artifact: String,
+    pub arena: String,
+    pub align: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PlacementError {
+    UnexpectedLine(usize),
+    BadPlace,
+    BadAlign,
+}
+
 pub fn parse_plan(source: &str) -> Result<Plan, ParseError> {
     let mut arena = None;
     let mut path = None;
@@ -273,6 +293,60 @@ pub fn parse_plan(source: &str) -> Result<Plan, ParseError> {
         path,
         read,
         log,
+    })
+}
+
+pub fn parse_placement_program(source: &str) -> Result<PlacementProgram, PlacementError> {
+    let mut steps = Vec::new();
+
+    for (idx, raw_line) in source.lines().enumerate() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        if !line.starts_with("place ") {
+            return Err(PlacementError::UnexpectedLine(idx + 1));
+        }
+        steps.push(parse_place(line)?);
+    }
+
+    Ok(PlacementProgram { steps })
+}
+
+fn parse_place(line: &str) -> Result<PlacementStep, PlacementError> {
+    let mut parts = line.split_whitespace();
+    if parts.next() != Some("place") {
+        return Err(PlacementError::BadPlace);
+    }
+    let Some(artifact) = parts.next() else {
+        return Err(PlacementError::BadPlace);
+    };
+    if parts.next() != Some("in") {
+        return Err(PlacementError::BadPlace);
+    }
+    let Some(arena) = parts.next() else {
+        return Err(PlacementError::BadPlace);
+    };
+    if parts.next() != Some("align") {
+        return Err(PlacementError::BadPlace);
+    }
+    let Some(align) = parts.next() else {
+        return Err(PlacementError::BadPlace);
+    };
+    if parts.next().is_some() {
+        return Err(PlacementError::BadPlace);
+    }
+
+    let align = align.parse::<u64>().map_err(|_| PlacementError::BadAlign)?;
+    if align == 0 || !align.is_power_of_two() {
+        return Err(PlacementError::BadAlign);
+    }
+
+    Ok(PlacementStep {
+        artifact: artifact.to_string(),
+        arena: arena.to_string(),
+        align,
     })
 }
 
