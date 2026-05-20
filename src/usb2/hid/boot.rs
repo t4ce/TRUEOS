@@ -18,7 +18,6 @@ const MOUSE_VID_LAVIEW_CASTOR: u16 = 0x22D4;
 const MOUSE_PID_LAVIEW_CASTOR: u16 = 0x1321;
 const QEMU_HID_VID: u16 = 0x0627;
 const QEMU_HID_PID: u16 = 0x0001;
-const REAL_HW_HID_HANDOFF_ENABLED: bool = false;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum HidBootKind {
@@ -557,16 +556,6 @@ pub(crate) async fn maybe_start_hid_boot_streams(
         product_id,
         targets.len()
     );
-
-    if !REAL_HW_HID_HANDOFF_ENABLED && !is_qemu_boot_hid(vendor_id, product_id) {
-        crate::log_info!(target: "usb";
-            "crabusb: hid {:04X}:{:04X} temporary real-hw handoff disabled targets={}\n",
-            vendor_id,
-            product_id,
-            targets.len()
-        );
-        return false;
-    }
 
     let mut started_any = false;
     let mut descriptors_pending = log_descriptors;
