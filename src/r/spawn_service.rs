@@ -1126,6 +1126,7 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
     | crate::r::readiness::QJS_ASYNC_FS_READY;
 const UI2_DEMO_READY: u32 =
     crate::r::readiness::UI2_READY | crate::r::readiness::GFX_TEXTURE_UPLOAD_SERVICE_READY;
+const GBOI_DEMO_READY: u32 = crate::r::readiness::BACKGROUND_AP_WORKER_READY;
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::TRUEOSFS_INDEX_READY
     | crate::r::readiness::NET_ANY_CONFIGURED
@@ -1413,7 +1414,7 @@ static TASKS: [TaskSpec; 71] = [
     ),
     TaskSpec::enabled(
         "ui2-gboi-demo",
-        UI2_DEMO_READY,
+        GBOI_DEMO_READY,
         &UI2_GBOI_DEMO_STARTED,
         spawn_ui2_gboi_demo,
     ),

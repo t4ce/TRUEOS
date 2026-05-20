@@ -8,6 +8,7 @@ pub mod cartridge;
 pub mod gpu;
 pub mod timer;
 pub mod cpu;
+pub mod apu;
 
 use cpu::GbBus;
 
@@ -67,6 +68,7 @@ pub struct GameBoyEmulator {
     pub cpu: cpu::Cpu,
     pub gpu: gpu::Gpu,
     pub timer: timer::Timer,
+    pub apu: apu::Apu,
     pub cart: cartridge::Cartridge,
 
     // Memory — CGB: 8 banks of 4KB WRAM ($C000-$CFFF = bank 0, $D000-$DFFF = switchable)
@@ -103,6 +105,7 @@ impl GameBoyEmulator {
             cpu: cpu::Cpu::new(),
             gpu: gpu::Gpu::new(),
             timer: timer::Timer::new(),
+            apu: apu::Apu::new(),
             cart: cartridge::Cartridge::empty(),
             wram: vec![0u8; 32768], // 32KB for CGB support
             hram: [0; 127],
@@ -164,6 +167,7 @@ impl GameBoyEmulator {
                 }
             }
             self.timer = timer::Timer::new();
+            self.apu = apu::Apu::new();
             for b in self.wram.iter_mut() { *b = 0; }
             self.hram = [0; 127];
             self.ie_reg = 0;
@@ -186,6 +190,7 @@ impl GameBoyEmulator {
             hram: &mut self.hram,
             gpu: &mut self.gpu,
             timer: &mut self.timer,
+            apu: &mut self.apu,
             cart: &mut self.cart,
             ie_reg: &mut self.ie_reg,
             if_reg: &mut self.if_reg,
@@ -258,6 +263,7 @@ impl GameBoyEmulator {
                     hram: &mut self.hram,
                     gpu: &mut self.gpu,
                     timer: &mut self.timer,
+                    apu: &mut self.apu,
                     cart: &mut self.cart,
                     ie_reg: &mut self.ie_reg,
                     if_reg: &mut self.if_reg,
@@ -282,6 +288,7 @@ impl GameBoyEmulator {
             // Step GPU and Timer with M-cycles
             self.gpu.step(m);
             self.timer.step(m);
+            self.apu.step(m.saturating_mul(4));
 
             // Collect interrupt requests
             if self.gpu.vblank_irq {
@@ -299,6 +306,10 @@ impl GameBoyEmulator {
 
             frame_cycles += m;
         }
+    }
+
+    pub fn drain_audio_samples_into(&mut self, out: &mut Vec<i16>) {
+        self.apu.drain_samples_into(out);
     }
 
     /// Render to output buffer (upscale 160×144 → output dimensions)
@@ -379,6 +390,7 @@ struct BusAdapter<'a> {
     hram: &'a mut [u8; 127],
     gpu: &'a mut gpu::Gpu,
     timer: &'a mut timer::Timer,
+    apu: &'a mut apu::Apu,
     cart: &'a mut cartridge::Cartridge,
     ie_reg: &'a mut u8,
     if_reg: &'a mut u8,
@@ -441,8 +453,8 @@ impl GbBus for BusAdapter<'_> {
             0xFF06 => self.timer.tma,
             0xFF07 => self.timer.tac,
             0xFF0F => *self.if_reg,
-            // Audio (not emulated)
-            0xFF10..=0xFF3F => 0xFF,
+            // Audio
+            0xFF10..=0xFF3F => self.apu.read(addr),
             // LCD
             0xFF40 => self.gpu.lcdc,
             0xFF41 => self.gpu.read_stat(),
@@ -513,8 +525,8 @@ impl GbBus for BusAdapter<'_> {
             0xFF06 => self.timer.tma = val,
             0xFF07 => self.timer.tac = val,
             0xFF0F => *self.if_reg = val,
-            // Audio (not emulated)
-            0xFF10..=0xFF3F => {}
+            // Audio
+            0xFF10..=0xFF3F => self.apu.write(addr, val),
             // LCD
             0xFF40 => {
                 let old = self.gpu.lcdc;

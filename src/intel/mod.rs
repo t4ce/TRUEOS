@@ -701,6 +701,15 @@ pub fn present_rgba_overlay_top_right(
     self::display::present_rgba_overlay_top_right(src, src_width, src_height, src_pitch_bytes)
 }
 
+pub fn present_rgba_primary_top_right(
+    src: &[u8],
+    src_width: u32,
+    src_height: u32,
+    src_pitch_bytes: usize,
+) -> bool {
+    self::display::present_rgba_primary_top_right(src, src_width, src_height, src_pitch_bytes)
+}
+
 pub fn update_kernel_hw_cursor() -> Option<u32> {
     self::hw_cursor::update_kernel_hw_cursor()
 }
