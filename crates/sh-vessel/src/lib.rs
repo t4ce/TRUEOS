@@ -40,4 +40,5 @@ pub enum ReturnCodes {
     NotFound,
     Full,
     JobsFull,
+    Failed,
 }

@@ -3,6 +3,7 @@ use core::fmt;
 use crate::arg::{Argument, ArgumentKind, ArgumentTemplate};
 use crate::cmd::CommandList;
 use crate::help::Help;
+use crate::job::{CommandJob, JobId, JobTimeout};
 use crate::path::{Path, TextPath};
 use crate::Command;
 
@@ -77,5 +78,27 @@ impl fmt::Display for Path<'_> {
 impl fmt::Display for TextPath<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.text)
+    }
+}
+
+impl fmt::Display for JobId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "job:{}", self.0)
+    }
+}
+
+impl fmt::Display for JobTimeout {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "timeout:{}", self.value)
+    }
+}
+
+impl fmt::Display for CommandJob<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} running {}", self.id, self.command.long)?;
+        if let Some(timeout) = self.timeout {
+            write!(f, " {}", timeout)?;
+        }
+        Ok(())
     }
 }
