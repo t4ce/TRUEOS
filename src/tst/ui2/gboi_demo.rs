@@ -17,10 +17,11 @@ const UI2_GBOI_WINDOW_Y: f32 = 140.0;
 const UI2_GBOI_WINDOW_Z: i16 = 41;
 const UI2_GBOI_WINDOW_ALPHA: u8 = 0xFF;
 const UI2_GBOI_FRAME_MS: u64 = 16;
+const UI2_GBOI_SPEED_MULTIPLIER: usize = 2;
 const UI2_GBOI_KEYBOARD_BATCH: usize = 16;
 const UI2_GBOI_INPUT_QUEUE_CAP: usize = 64;
 const UI2_GBOI_BOOT_ROM_7Z: &[u8] =
-    include_bytes!("../../../crates/trueos-gboi/Super Mario Bros. Deluxe (Europe) (Rev 2).7z");
+    include_bytes!("../../../crates/trueos-gboi/SuperMarioBros.Deluxe.7z"); // 
 
 static UI2_GBOI_INPUT: Mutex<Ui2GboiInputRuntime> = Mutex::new(Ui2GboiInputRuntime {
     window_id: 0,
@@ -173,7 +174,9 @@ pub async fn ui2_gboi_demo_task() {
             }
         }
 
-        emulator.tick();
+        for _ in 0..UI2_GBOI_SPEED_MULTIPLIER {
+            emulator.tick();
+        }
 
         for button in pressed_buttons.iter_mut().take(pressed_button_count) {
             if let Some(button) = button.take() {
