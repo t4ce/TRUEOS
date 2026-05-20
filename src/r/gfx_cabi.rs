@@ -3317,7 +3317,8 @@ pub mod cabi {
                     let rc = render_mandelbrot_to_texture_now(req.tex_id, req.ticks, req.tick_hz);
                     if rc == 0 {
                         set_async_tex_status(req.tex_id, ASYNC_TEX_STATUS_READY);
-                        crate::log!(
+                        crate::log_info!(
+                            target: "gfx";
                             "gfx-cabi: mandelbrot render ok tex={} repaint_window={} reason={} ticks={} hz={}\n",
                             req.tex_id,
                             req.repaint_window_id,

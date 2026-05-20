@@ -118,6 +118,9 @@ fn inferred_concept_for_rendered(rendered: &str) -> Option<&'static str> {
     if rendered.starts_with("crabusb:") || rendered.starts_with("crabusb/") {
         return Some("usb");
     }
+    if rendered.starts_with("gfx-cabi:") || rendered.starts_with("gfx-cabi/") {
+        return Some("gfx");
+    }
     None
 }
 

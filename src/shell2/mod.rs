@@ -1006,9 +1006,6 @@ fn handle_command_session_input(
 ) -> CommandSessionInputResult {
     let target = matrix_target_for_slot(output_mask, &session.slot_id);
     match session.kind {
-        shell2_cmd::CommandSessionKind::Ample => {
-            crate::shell2::cmds::ample::handle_session_input(&target, submitted)
-        }
         shell2_cmd::CommandSessionKind::BenchRunning(session_id) => {
             crate::shell2::cmds::bench::handle_session_input(session_id, &target, submitted)
         }
