@@ -1089,6 +1089,15 @@ pub(crate) async fn maybe_start_mass_storage(
     let port_speed = usb_if::Speed::Full;
     let uas_candidate_count = transport_plan.uas.len().min(u8::MAX as usize) as u8;
 
+    if vendor_id == 0x152E && product_id == 0x7001 {
+        crate::log!(
+            "crabusb: mass {:04X}:{:04X} temporary skip bot/uas before open\n",
+            vendor_id,
+            product_id
+        );
+        return true;
+    }
+
     if uas_candidate_count > 0 {
         crate::log!(
             "crabusb: mass {:04X}:{:04X} uas candidates ignored count={} reason=disabled\n",

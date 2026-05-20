@@ -691,6 +691,16 @@ async fn probe_and_bind(
 
         let controller_id = info.index as u32;
         let mut bound_any = false;
+        if desc.vendor_id == 0x0416 && desc.product_id == 0xA125 {
+            crate::log!(
+                "crabusb: bind ctrl={} root_port={} vid={:04X} pid={:04X} temporary skip known mainboard LED before handoff\n",
+                info.index,
+                location.root_port_id,
+                desc.vendor_id,
+                desc.product_id
+            );
+            continue;
+        }
         if super::hid::boot::maybe_start_hid_boot_streams(
             host,
             dev_info,

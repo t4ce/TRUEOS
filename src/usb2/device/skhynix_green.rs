@@ -10,11 +10,12 @@ pub(crate) async fn maybe_start_skhynix_green(
     let desc = dev_info.descriptor();
     if desc.vendor_id == 0x152E && desc.product_id == 0x7001 {
         crate::log!(
-            "crabusb: skhynix-green {:04X}:{:04X} ctrl={} uas=disabled fallback=bot\n",
+            "crabusb: skhynix-green {:04X}:{:04X} ctrl={} temporary skip uas=disabled bot=disabled\n",
             desc.vendor_id,
             desc.product_id,
             controller_id
         );
+        return true;
     }
     false
 }
