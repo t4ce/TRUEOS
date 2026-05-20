@@ -56,8 +56,15 @@ fn normalize_url(input: &str) -> Result<String, &'static str> {
 fn basename_from_url(url: &str) -> &str {
     let without_query = url.split('?').next().unwrap_or(url);
     let without_fragment = without_query.split('#').next().unwrap_or(without_query);
-    let path = without_fragment.rsplit('/').next().unwrap_or(without_fragment);
-    if path.is_empty() { "download.bin" } else { path }
+    let path = without_fragment
+        .rsplit('/')
+        .next()
+        .unwrap_or(without_fragment);
+    if path.is_empty() {
+        "download.bin"
+    } else {
+        path
+    }
 }
 
 fn normalize_path(path: &str) -> Result<String, &'static str> {
