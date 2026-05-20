@@ -19,7 +19,6 @@ const UI2_GBOI_WINDOW_Z: i16 = 41;
 const UI2_GBOI_WINDOW_ALPHA: u8 = 0xFF;
 const UI2_GBOI_FRAME_MS: u64 = 16;
 const UI2_GBOI_SPEED_MULTIPLIER: usize = 2;
-const UI2_GBOI_AUDIO_ENABLED: bool = true;
 const UI2_GBOI_KEYBOARD_BATCH: usize = 16;
 const UI2_GBOI_INPUT_QUEUE_CAP: usize = 64;
 const UI2_GBOI_BOOT_ROM_7Z: &[u8] =
@@ -111,26 +110,6 @@ fn render_direct_frame(emulator: &crate::gboi::gb::GameBoyEmulator) -> (Vec<u8>,
     (argb_to_rgba_owned(argb.as_slice()), out_w, out_h)
 }
 
-fn pump_audio(
-    emulator: &mut crate::gboi::gb::GameBoyEmulator,
-    stream: &mut crate::aud::dmg::DmgAudioStream,
-    samples: &mut Vec<i16>,
-) {
-    if !UI2_GBOI_AUDIO_ENABLED || !crate::hda::is_initialized() {
-        return;
-    }
-
-    samples.clear();
-    emulator.drain_audio_samples_into(samples);
-    if samples.is_empty() {
-        return;
-    }
-
-    if let Err(err) = stream.push_samples(samples.as_slice()) {
-        crate::log!("ui2-gboi-demo: hda dmg stream skipped err={}\n", err);
-    }
-}
-
 fn push_pressed_button(
     pressed_buttons: &mut [Option<crate::gboi::gb::GameBoyButton>; UI2_GBOI_KEYBOARD_BATCH],
     pressed_button_count: &mut usize,
@@ -166,9 +145,6 @@ fn step_emulator(emulator: &mut crate::gboi::gb::GameBoyEmulator) {
 }
 
 async fn run_intel_primary_mode(mut emulator: crate::gboi::gb::GameBoyEmulator) {
-    let mut audio_stream = crate::aud::dmg::DmgAudioStream::new();
-    let mut audio_samples = Vec::new();
-
     crate::log!(
         "ui2-gboi-demo: present mode=intel-primary-top-right size={}x{} scale={} output={}x{}\n",
         UI2_GBOI_VIEW_W,
@@ -184,7 +160,6 @@ async fn run_intel_primary_mode(mut emulator: crate::gboi::gb::GameBoyEmulator) 
         }
 
         step_emulator(&mut emulator);
-        pump_audio(&mut emulator, &mut audio_stream, &mut audio_samples);
 
         let (pixels, out_w, out_h) = render_direct_frame(&emulator);
         if !crate::intel::present_rgba_primary_top_right(
@@ -252,8 +227,6 @@ async fn run_ui2_window_mode(mut emulator: crate::gboi::gb::GameBoyEmulator) {
     let mut pressed_buttons: [Option<crate::gboi::gb::GameBoyButton>;
         UI2_GBOI_KEYBOARD_BATCH] = [None; UI2_GBOI_KEYBOARD_BATCH];
     let mut pressed_button_count = 0usize;
-    let mut audio_stream = crate::aud::dmg::DmgAudioStream::new();
-    let mut audio_samples = Vec::new();
 
     loop {
         if crate::r::spawn_service::task_stop_requested(UI2_GBOI_TASK_NAME) {
@@ -277,7 +250,6 @@ async fn run_ui2_window_mode(mut emulator: crate::gboi::gb::GameBoyEmulator) {
         }
 
         step_emulator(&mut emulator);
-        pump_audio(&mut emulator, &mut audio_stream, &mut audio_samples);
 
         for button in pressed_buttons.iter_mut().take(pressed_button_count) {
             if let Some(button) = button.take() {
