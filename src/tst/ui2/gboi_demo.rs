@@ -10,8 +10,8 @@ const UI2_GBOI_TEX_ID: u32 = crate::tst::ui2::ids::Ui2DemoTexId::Gboi.get();
 const UI2_GBOI_CONTENT_ID: u32 = crate::tst::ui2::ids::Ui2DemoContentId::Gboi.get();
 const UI2_GBOI_TASK_NAME: &str = "ui2-gboi-demo";
 const UI2_GBOI_WINDOW_TITLE: &str = "GBOI";
-const UI2_GBOI_VIEW_W: u32 = 256;
-const UI2_GBOI_VIEW_H: u32 = 240;
+const UI2_GBOI_VIEW_W: u32 = 160;
+const UI2_GBOI_VIEW_H: u32 = 144;
 const UI2_GBOI_WINDOW_X: f32 = 760.0;
 const UI2_GBOI_WINDOW_Y: f32 = 140.0;
 const UI2_GBOI_WINDOW_Z: i16 = 41;
@@ -19,6 +19,8 @@ const UI2_GBOI_WINDOW_ALPHA: u8 = 0xFF;
 const UI2_GBOI_FRAME_MS: u64 = 16;
 const UI2_GBOI_KEYBOARD_BATCH: usize = 16;
 const UI2_GBOI_INPUT_QUEUE_CAP: usize = 64;
+const UI2_GBOI_BOOT_ROM_7Z: &[u8] =
+    include_bytes!("../../../crates/trueos-gboi/Super Mario Bros. Deluxe (Europe) (Rev 2).7z");
 
 static UI2_GBOI_INPUT: Mutex<Ui2GboiInputRuntime> = Mutex::new(Ui2GboiInputRuntime {
     window_id: 0,
@@ -77,16 +79,16 @@ fn argb_to_rgba_owned(argb: &[u32]) -> Vec<u8> {
     rgba
 }
 
-fn render_frame(emulator: &crate::gboi::nes::NesEmulator) -> Vec<u8> {
+fn render_frame(emulator: &crate::gboi::gb::GameBoyEmulator) -> Vec<u8> {
     let mut argb = alloc::vec![0u32; (UI2_GBOI_VIEW_W * UI2_GBOI_VIEW_H) as usize];
     emulator.render(argb.as_mut_slice(), UI2_GBOI_VIEW_W as usize, UI2_GBOI_VIEW_H as usize);
     argb_to_rgba_owned(argb.as_slice())
 }
 
 fn push_pressed_button(
-    pressed_buttons: &mut [Option<crate::gboi::nes::NesControllerButton>; UI2_GBOI_KEYBOARD_BATCH],
+    pressed_buttons: &mut [Option<crate::gboi::gb::GameBoyButton>; UI2_GBOI_KEYBOARD_BATCH],
     pressed_button_count: &mut usize,
-    button: crate::gboi::nes::NesControllerButton,
+    button: crate::gboi::gb::GameBoyButton,
 ) {
     if *pressed_button_count < pressed_buttons.len() {
         pressed_buttons[*pressed_button_count] = Some(button);
@@ -97,7 +99,21 @@ fn push_pressed_button(
 #[embassy_executor::task]
 pub async fn ui2_gboi_demo_task() {
     let _task_guard = crate::r::spawn_service::task_run_guard(UI2_GBOI_TASK_NAME);
-    let mut emulator = crate::gboi::nes::NesEmulator::new();
+    let mut emulator = crate::gboi::gb::GameBoyEmulator::new();
+    match crate::z7::extract_single_file_to_vec(UI2_GBOI_BOOT_ROM_7Z) {
+        Ok(rom) => {
+            if !emulator.load_rom(rom.as_slice()) {
+                crate::log!("ui2-gboi-demo: boot rom load failed bytes={}\n", rom.len());
+            }
+        }
+        Err(err) => {
+            crate::log!(
+                "ui2-gboi-demo: boot rom 7z decode failed archive_bytes={} err={:?}\n",
+                UI2_GBOI_BOOT_ROM_7Z.len(),
+                err
+            );
+        }
+    }
 
     let Some(surface) = ui2::Ui2SurfaceWindow::get_or_create_for_hosted_content_with_size(
         UI2_GBOI_WINDOW_TITLE,
@@ -111,7 +127,7 @@ pub async fn ui2_gboi_demo_task() {
         UI2_GBOI_WINDOW_ALPHA,
         UI2_GBOI_CONTENT_ID,
         UI2_GBOI_TEX_ID,
-        true,
+        false,
         UI2_GBOI_VIEW_W,
         UI2_GBOI_VIEW_H,
     ) else {
@@ -126,13 +142,13 @@ pub async fn ui2_gboi_demo_task() {
     let _ = ui2::set_window_left_scrollbar_visible(surface.window_id(), false);
     let _ = ui2::set_window_bottom_scrollbar_visible(surface.window_id(), false);
     let _ = ui2::set_window_resize_maintain_aspect(surface.window_id(), true);
-    let _ = ui2::set_window_content_preserve_scale(surface.window_id(), true);
+    let _ = ui2::set_window_content_preserve_scale(surface.window_id(), false);
 
     let _ = surface.bind_hosted_scroll_state(UI2_GBOI_CONTENT_ID, UI2_GBOI_VIEW_W, UI2_GBOI_VIEW_H);
     attach_keyboard_window(surface.window_id());
     let mut raw_events =
         [crate::r::keyboard::TrueosKeyboardOutputEvent::default(); UI2_GBOI_KEYBOARD_BATCH];
-    let mut pressed_buttons: [Option<crate::gboi::nes::NesControllerButton>;
+    let mut pressed_buttons: [Option<crate::gboi::gb::GameBoyButton>;
         UI2_GBOI_KEYBOARD_BATCH] = [None; UI2_GBOI_KEYBOARD_BATCH];
     let mut pressed_button_count = 0usize;
 
@@ -150,7 +166,7 @@ pub async fn ui2_gboi_demo_task() {
                 let Some(control) = crate::gboi::HostControl::from_keyboard_event(event) else {
                     continue;
                 };
-                if let Some(button) = control.nes_button() {
+                if let Some(button) = control.gb_button() {
                     emulator.set_button(button, true);
                     push_pressed_button(&mut pressed_buttons, &mut pressed_button_count, button);
                 }
