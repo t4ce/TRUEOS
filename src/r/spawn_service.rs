@@ -1195,7 +1195,7 @@ static TASKS: [TaskSpec; 71] = [
         &AI_QJS_ONESHOT_STARTED,
         spawn_ai_qjs_oneshot,
     ),
-    TaskSpec::disabled("html-demo", 0, &HTML_DEMO_STARTED, spawn_html_demo),
+    TaskSpec::enabled("html-demo", 0, &HTML_DEMO_STARTED, spawn_html_demo),
     TaskSpec::enabled(
         "http-trueosfs",
         NET_ANY_CONFIGURED_AND_ROOT_READY,
