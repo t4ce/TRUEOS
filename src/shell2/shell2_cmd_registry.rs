@@ -2,9 +2,9 @@ use alloc::string::String as AllocString;
 
 use embassy_executor::Spawner;
 
+use super::ShellBackend2;
 use super::print_shell_line;
 use super::shell2_cmd::ParseOutcome;
-use super::ShellBackend2;
 
 pub(crate) type Shell2CmdHandler = fn(&Spawner, &'static dyn ShellBackend2, &str) -> ParseOutcome;
 
@@ -31,8 +31,7 @@ const TOOL_JSON_RM: &str = r#"{"type":"object","properties":{"path":{"type":"str
 const TOOL_JSON_SET: &str = r#"{"type":"object","properties":{"width":{"type":"integer","minimum":50,"maximum":500,"description":"Shell line width."}},"required":["width"],"additionalProperties":false}"#;
 const TOOL_JSON_SHADER: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["list","compile","demo","now"],"description":"Shader compiler service action."},"path":{"type":"string","description":"Optional /shader source path for compile or now."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_SMP: &str = r#"{"type":"object","properties":{"slot":{"type":"integer","minimum":0,"description":"Optional SMP slot. Omit to list all slots."}},"required":[],"additionalProperties":false}"#;
-const TOOL_JSON_TLB: &str = r#"{"type":"object","properties":{"target":{"type":"string","enum":["pci","pcibar","mem","cpu","acpi","aml","facp","madt","hpet","mcfg","ssdt","uefi","x2apic","usb","usb_probe","dump"],"description":"Table or view to print."},"signature":{"type":"string","minLength":4,"maxLength":4,"description":"Optional ACPI signature when target=acpi, for example SSDT or FACP."},"index":{"type":"integer","minimum":1,"description":"Optional 1-based instance index when target=acpi and the signature repeats."},"subcommand":{"type":"string","enum":["ec","symbol","prefix"],"description":"Optional AML subcommand when target=aml."},"path":{"type":"string","description":"Optional AML path or prefix when target=aml and subcommand is symbol or prefix."}},"required":["target"],"additionalProperties":false}"#;
-const TOOL_JSON_TURBO: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["status","on","off","verify"],"description":"turbo action to run."},"spins":{"type":"integer","minimum":0,"description":"Optional spin count for action=verify."}},"required":["action"],"additionalProperties":false}"#;
+const TOOL_JSON_TLB: &str = r#"{"type":"object","properties":{"target":{"type":"string","enum":["pci","pcibar","mem","cpu","turbo","acpi","aml","facp","madt","hpet","mcfg","ssdt","uefi","x2apic","usb","usb_probe","dump"],"description":"Table or view to print."},"signature":{"type":"string","minLength":4,"maxLength":4,"description":"Optional ACPI signature when target=acpi, for example SSDT or FACP."},"index":{"type":"integer","minimum":1,"description":"Optional 1-based instance index when target=acpi and the signature repeats."},"subcommand":{"type":"string","enum":["ec","symbol","prefix"],"description":"Optional AML subcommand when target=aml."},"path":{"type":"string","description":"Optional AML path or prefix when target=aml and subcommand is symbol or prefix."}},"required":["target"],"additionalProperties":false}"#;
 
 fn dispatch_acpi(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
@@ -134,11 +133,6 @@ fn dispatch_net(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -
 fn dispatch_tlb(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
     super::cmds::tlb::try_parse(spawner, io, &mut args)
-}
-
-fn dispatch_turbo(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    let mut args = rest.split_whitespace();
-    super::cmds::turbo::try_parse(io, &mut args)
 }
 
 fn dispatch_txt(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -291,15 +285,6 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         handler: dispatch_tlb,
         tool_description: Some("Print one of the table and hardware inspection views."),
         tool_parameters_json: Some(TOOL_JSON_TLB),
-    },
-    BuiltinShell2CmdEntry {
-        name: "turbo",
-        mode: "cmd",
-        color: None,
-        advertised: true,
-        handler: dispatch_turbo,
-        tool_description: Some("Inspect or change CPU turbo state."),
-        tool_parameters_json: Some(TOOL_JSON_TURBO),
     },
     BuiltinShell2CmdEntry {
         name: "txt",

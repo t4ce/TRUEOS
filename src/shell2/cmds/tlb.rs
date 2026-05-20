@@ -15,18 +15,19 @@ use crate::shell2::shell2_cmd::ParseOutcome;
 
 pub(crate) const DUMP_FILE_PATH: &str = "trueos/pci/tlb.txt";
 
-const TLB_USAGE: &str = "tlb: usage `tlb [pci|pcibar|mem|cpu|acpi [sig [index]]|aml [ec|symbol <path>|prefix <path>]|facp|madt|hpet|mcfg|ssdt|uefi|x2apic|usb [probe]|dump]`";
+const TLB_USAGE: &str = "tlb: usage `tlb [pci|pcibar|mem|cpu|turbo|acpi [sig [index]]|aml [ec|symbol <path>|prefix <path>]|facp|madt|hpet|mcfg|ssdt|uefi|x2apic|usb [probe]|dump]`";
 const TLB_ACPI_USAGE: &str = "tlb: usage `tlb acpi [sig [index]]`";
 const TLB_AML_USAGE: &str = "tlb: usage `tlb aml [ec|symbol <path>|prefix <path>]`";
 const ACPI_HEXDUMP_MAX_BYTES: usize = 512;
 const ACPI_HEXDUMP_ROW_BYTES: usize = 16;
 const ACPI_AML_DUMP_MAX_BYTES: usize = 1024;
 const TLB_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
-const TLB_MENU_ROWS: [(&str, &str); 15] = [
+const TLB_MENU_ROWS: [(&str, &str); 16] = [
     ("pci", "List PCI devices"),
     ("pcibar", "List PCI BAR windows"),
     ("mem", "List memory map"),
     ("cpu", "List CPU cores"),
+    ("turbo", "List CPU turbo state and all-core verify stats"),
     ("acpi", "List ACPI tables or dump one (`tlb acpi SSDT 3`)"),
     ("aml", "Inspect parsed AML namespace (`tlb aml ec|symbol|prefix`)"),
     ("facp", "Show FACP/FADT details"),
@@ -1198,6 +1199,102 @@ fn cmd_tlb_cpu(io: &'static dyn ShellBackend2) {
             };
             let seq = alloc::format!("{}", info.seq);
             emit_table_row(io, &cols, &[&slot_s, &apic, role, state, &seq]);
+        }
+    }
+}
+
+fn turbo_state_text(state: crate::power::turbo::TurboState) -> &'static str {
+    match state {
+        crate::power::turbo::TurboState::Turbo => "turbo",
+        crate::power::turbo::TurboState::NoTurbo => "noturbo",
+    }
+}
+
+fn cmd_tlb_turbo(io: &'static dyn ShellBackend2) {
+    const VERIFY_SPINS: usize = 200_000;
+
+    let cols = [
+        Column {
+            header: "Metric",
+            width: 18,
+        },
+        Column {
+            header: "Value",
+            width: 18,
+        },
+        Column {
+            header: "Details",
+            width: line_width_for_backend(io).saturating_sub(42).max(24),
+        },
+    ];
+    emit_table_header(io, &cols);
+
+    let armed = if crate::power::turbo::armed() {
+        "yes"
+    } else {
+        "no"
+    };
+    emit_table_row(io, &cols, &["write gate", armed, "armed by boot policy"]);
+
+    match crate::power::turbo::local_status() {
+        crate::power::turbo::TurboStatus::Unsupported => {
+            emit_table_row(
+                io,
+                &cols,
+                &["local state", "unsupported", "intel MSR path unavailable"],
+            );
+            return;
+        }
+        crate::power::turbo::TurboStatus::State(state) => {
+            emit_table_row(
+                io,
+                &cols,
+                &[
+                    "local state",
+                    turbo_state_text(state),
+                    "BSP IA32_MISC_ENABLE",
+                ],
+            );
+        }
+    }
+
+    match crate::power::turbo::verify_all(VERIFY_SPINS) {
+        Ok(report) => {
+            let total = alloc::format!("{}", report.total_cpus);
+            emit_table_row(io, &cols, &["total CPUs", &total, "BSP plus SMP slots"]);
+
+            let aps = alloc::format!("{}/{}", report.completed_aps, report.submitted_aps);
+            let ap_detail = alloc::format!(
+                "online={} busy={} seq={}{}",
+                report.online_aps,
+                report.busy_aps,
+                report.seq,
+                if report.timed_out { " timeout" } else { "" }
+            );
+            emit_table_row(io, &cols, &["AP verify", &aps, &ap_detail]);
+
+            let turbo = alloc::format!("{}", report.turbo_cpus);
+            emit_table_row(io, &cols, &["turbo CPUs", &turbo, "MSR turbo-disable bit clear"]);
+
+            let noturbo = alloc::format!("{}", report.noturbo_cpus);
+            emit_table_row(io, &cols, &["noturbo CPUs", &noturbo, "MSR turbo-disable bit set"]);
+
+            let unknown = alloc::format!("{}", report.unknown_cpus);
+            emit_table_row(
+                io,
+                &cols,
+                &[
+                    "unknown CPUs",
+                    &unknown,
+                    "unsupported or no completed reply",
+                ],
+            );
+        }
+        Err(crate::power::turbo::TurboSetError::Unsupported) => {
+            emit_table_row(io, &cols, &["verify", "unsupported", "intel MSR path unavailable"]);
+        }
+        Err(crate::power::turbo::TurboSetError::Disarmed) => {
+            emit_table_row(io, &cols, &["verify", "disarmed", "unexpected for read-only verify"]);
         }
     }
 }
@@ -3220,6 +3317,7 @@ pub(crate) fn try_parse(
         }
         Some("mem") if ensure_no_args(io, args, "tlb: usage `tlb mem`") => cmd_tlb_mem(io),
         Some("cpu") if ensure_no_args(io, args, "tlb: usage `tlb cpu`") => cmd_tlb_cpu(io),
+        Some("turbo") if ensure_no_args(io, args, "tlb: usage `tlb turbo`") => cmd_tlb_turbo(io),
         Some("acpi") => cmd_tlb_acpi(io, args),
         Some("aml") => cmd_tlb_aml(io, args),
         Some("facp") if ensure_no_args(io, args, "tlb: usage `tlb facp`") => cmd_tlb_facp(io),
