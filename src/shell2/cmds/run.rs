@@ -822,6 +822,41 @@ async fn submit_module_bytes_to_target_async(
     Ok(source)
 }
 
+pub(crate) async fn submit_archive_name_to_target_prefer_trueosfs_async(
+    target: MatrixTarget,
+    archive_name: &str,
+    app_args: Vec<String>,
+) -> Result<&'static str, String> {
+    if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
+        if let Some(module_bytes) = crate::r::fs::trueosfs::file_out_async(disk, archive_name)
+            .await
+            .map_err(|_| String::from("failed to read selected module from TRUEOSFS"))?
+        {
+            return submit_module_bytes_to_target_async(
+                target,
+                archive_name,
+                module_bytes,
+                app_args,
+                "TRUEOSFS root",
+            )
+            .await;
+        }
+    }
+
+    if let Some(module_bytes) = embedded_module_bytes_by_archive_name(archive_name)? {
+        return submit_module_bytes_to_target_async(
+            target,
+            archive_name,
+            module_bytes,
+            app_args,
+            "boot embedded",
+        )
+        .await;
+    }
+
+    Err(String::from("archive not found"))
+}
+
 pub(crate) async fn submit_archive_name_to_target_prefer_embedded_async(
     target: MatrixTarget,
     archive_name: &str,

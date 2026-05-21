@@ -6,6 +6,7 @@ use v::vnet as api;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VNetStreamError {
+    NoDevice,
     OpenTimedOut,
     ConnectTimedOut,
     BridgeRead,
@@ -16,6 +17,7 @@ pub enum VNetStreamError {
 impl VNetStreamError {
     pub const fn as_stage(self) -> &'static str {
         match self {
+            Self::NoDevice => "vnet_stream.no_device",
             Self::OpenTimedOut => "vnet_stream.open_timeout",
             Self::ConnectTimedOut => "vnet_stream.connect_timeout",
             Self::BridgeRead => "vnet_stream.bridge_read",

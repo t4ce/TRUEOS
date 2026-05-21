@@ -1,4 +1,5 @@
 pub mod adapter;
+pub mod cache_service;
 pub mod core;
 pub mod device;
 pub mod dhcpv6;
