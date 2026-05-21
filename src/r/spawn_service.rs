@@ -10,7 +10,6 @@ use crate::r::spawn_spec::{SpawnAttempt, TaskSpec};
 const SPAWN_SERVICE_AFTER_START_MS: u64 = 25;
 const SPAWN_SERVICE_PENDING_MS: u64 = 100;
 const SPAWN_SERVICE_IDLE_MS: u64 = 500;
-static PCIIDS_GIT_PENDING_MISSING: AtomicU32 = AtomicU32::new(0);
 static BP_AUTOSTART_PENDING_MISSING: AtomicU32 = AtomicU32::new(0);
 
 /// Central task orchestrator ("FSM spawn service").
@@ -98,7 +97,6 @@ define_started_flags!(
     LUMEN_SERVICE_STARTED,
     SHADER_COMPILE_SERVICE_STARTED,
     SILK_SERVICE_STARTED,
-    PCIIDS_GIT_STARTED,
     ATOMIC_BOMB_STARTED,
     HTML_DEMO_STARTED,
     SURFER_PARSE_POOL_STARTED
@@ -1090,14 +1088,6 @@ fn spawn_net_tcp_shell(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
-fn spawn_pciids_git(spawner: Spawner) -> SpawnAttempt {
-    crate::log!(
-        "spawn-svc: pciids-git submit marker required={}\n",
-        readiness_names(PCIIDS_GIT_READY).as_str()
-    );
-    spawn_on_worker(spawner, |_worker_spawner| crate::pci::pciids::pciids_git_task())
-}
-
 #[embassy_executor::task]
 async fn atomic_bomb_task() {
     Timer::after(EmbassyDuration::from_secs(5)).await;
@@ -1124,11 +1114,6 @@ fn spawn_atomic_bomb(spawner: Spawner) -> SpawnAttempt {
 
 const NET_ANY_CONFIGURED_AND_ROOT_READY: u32 =
     crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
-const PCIIDS_GIT_READY: u32 = crate::r::readiness::TOKIO_RUNTIME_READY
-    | crate::r::readiness::NET_ANY_CONFIGURED
-    | crate::r::readiness::NET_SOCKET_READY
-    | crate::r::readiness::TLS_SOCKET_SERVICE_READY
-    | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
 const HYPER_HTTP1_PROBE_READY: u32 =
     crate::r::readiness::NET_SOCKET_READY | crate::r::readiness::NET_V4_GATEWAY_REACHABLE;
 const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
@@ -1143,7 +1128,7 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::NET_SOCKET_READY
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-static TASKS: [TaskSpec; 72] = [
+static TASKS: [TaskSpec; 71] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
         "codec-service",
@@ -1230,7 +1215,6 @@ static TASKS: [TaskSpec; 72] = [
         &SILK_SERVICE_STARTED,
         spawn_silk_service,
     ),
-    TaskSpec::enabled("pciids-git", PCIIDS_GIT_READY, &PCIIDS_GIT_STARTED, spawn_pciids_git),
     TaskSpec::enabled_gated(
         "hyper-http1-probe",
         HYPER_HTTP1_PROBE_READY,
@@ -1427,7 +1411,7 @@ static TASKS: [TaskSpec; 72] = [
         &UI2_CURSORPICKER_DEMO_STARTED,
         spawn_ui2_cursorpicker_demo,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "ui2-gboi-demo",
         GBOI_DEMO_READY,
         &UI2_GBOI_DEMO_STARTED,
@@ -1576,25 +1560,6 @@ fn readiness_names(mask: u32) -> String {
     out
 }
 
-fn log_pciids_git_pending_marker(ready: u32) {
-    let missing = PCIIDS_GIT_READY & !ready;
-    if missing == 0 {
-        PCIIDS_GIT_PENDING_MISSING.store(0, Ordering::Release);
-        return;
-    }
-
-    if PCIIDS_GIT_PENDING_MISSING.swap(missing, Ordering::AcqRel) == missing {
-        return;
-    }
-
-    crate::log!(
-        "spawn-svc: pciids-git pending missing={} ready=0x{:08X} required=0x{:08X}\n",
-        readiness_names(missing).as_str(),
-        ready,
-        PCIIDS_GIT_READY
-    );
-}
-
 fn log_bp_autostart_pending_marker(ready: u32) {
     let missing = BP_AUTOSTART_READY & !ready;
     if missing == 0 {
@@ -1630,9 +1595,7 @@ pub async fn spawn_service_task(spawner: Spawner) {
                     continue;
                 }
                 if (ready & spec.required) != spec.required {
-                    if spec.name == "pciids-git" {
-                        log_pciids_git_pending_marker(ready);
-                    } else if spec.name == "bp-autostart" {
+                    if spec.name == "bp-autostart" {
                         log_bp_autostart_pending_marker(ready);
                     }
                     pending += 1;
