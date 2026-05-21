@@ -1196,7 +1196,7 @@ mod tests {
     fn client_happy_eyeballs() {
         use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpListener};
         use core::time::Duration;
-use std::time::Instant;
+        use hyper::time::Instant;
 
         use super::dns;
         use super::ConnectingTcp;

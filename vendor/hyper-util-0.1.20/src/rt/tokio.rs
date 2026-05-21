@@ -51,11 +51,12 @@
 //! [`Write`]: hyper::rt::Write
 //! [tokio-async-docs]: https://docs.rs/tokio/latest/tokio/#asynchronous-io
 
+use alloc::{boxed::Box, vec::Vec};
+use core::time::Duration;
 use std::{
     future::Future,
     pin::Pin,
     task::{Context, Poll},
-    time::Duration,
 };
 
 use hyper::{io as hyper_io, time::Instant};

@@ -1,9 +1,11 @@
 extern crate alloc;
-extern crate std;
 
 use alloc::{boxed::Box, format, string::String, string::ToString, vec::Vec};
-use core::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, Ordering};
-use std::{io, net::SocketAddr};
+use core::{
+    net::SocketAddr,
+    sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, Ordering},
+};
+use tokio::io;
 
 use axum::{
     Router,

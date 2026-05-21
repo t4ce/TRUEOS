@@ -5,7 +5,7 @@ use self::{future::RouteFuture, not_found::NotFound, path_router::PathRouter};
 use crate::extract::connect_info::IntoMakeServiceWithConnectInfo;
 use crate::{
     body::{Body, HttpBody},
-    boxed::BoxedIntoRoute,
+    boxed_route::BoxedIntoRoute,
     handler::Handler,
     util::try_downcast,
 };
@@ -805,3 +805,7 @@ fn traits() {
     assert_send::<RouterIntoService<Body, ()>>();
     assert_sync::<RouterIntoService<Body, ()>>();
 }
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use crate::prelude::rust_2021::*;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use alloc::borrow::ToOwned;

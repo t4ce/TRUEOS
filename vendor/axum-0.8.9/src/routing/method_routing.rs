@@ -5,7 +5,7 @@ use super::{future::InfallibleRouteFuture, IntoMakeService};
 use crate::extract::connect_info::IntoMakeServiceWithConnectInfo;
 use crate::{
     body::{Body, Bytes, HttpBody},
-    boxed::BoxedIntoRoute,
+    boxed_route::BoxedIntoRoute,
     error_handling::{HandleError, HandleErrorLayer},
     handler::Handler,
     http::{Method, StatusCode},
@@ -1657,3 +1657,7 @@ mod tests {
         (StatusCode::CREATED, "created")
     }
 }
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use crate::prelude::rust_2021::*;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use alloc::borrow::ToOwned;

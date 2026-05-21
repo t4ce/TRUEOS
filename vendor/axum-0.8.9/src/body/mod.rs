@@ -52,3 +52,7 @@ pub async fn to_bytes(body: Body, limit: usize) -> Result<Bytes, axum_core::Erro
         .map(|col| col.to_bytes())
         .map_err(axum_core::Error::new)
 }
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use crate::prelude::rust_2021::*;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use alloc::borrow::ToOwned;

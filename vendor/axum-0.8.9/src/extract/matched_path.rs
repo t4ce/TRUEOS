@@ -1,3 +1,7 @@
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use crate::prelude::rust_2021::*;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use alloc::borrow::ToOwned;
 use super::{rejection::*, FromRequestParts};
 use crate::routing::{RouteId, NEST_TAIL_PARAM_CAPTURE};
 use axum_core::extract::OptionalFromRequestParts;

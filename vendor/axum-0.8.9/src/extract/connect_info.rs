@@ -354,3 +354,7 @@ mod tests {
         assert!(body.starts_with("127.0.0.1:"));
     }
 }
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use crate::prelude::rust_2021::*;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use alloc::borrow::ToOwned;

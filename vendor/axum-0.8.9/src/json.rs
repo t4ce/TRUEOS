@@ -1,3 +1,7 @@
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use crate::prelude::rust_2021::*;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use alloc::borrow::ToOwned;
 use crate::extract::Request;
 use crate::extract::{rejection::*, FromRequest};
 use axum_core::extract::OptionalFromRequest;
@@ -232,9 +236,10 @@ where
 
         // Use a small initial capacity of 128 bytes like serde_json::to_vec
         // https://docs.rs/serde_json/1.0.82/src/serde_json/ser.rs.html#2189
-        let mut buf = BytesMut::with_capacity(128).writer();
-        let res = serde_json::to_writer(&mut buf, &self.0);
-        make_response(buf.into_inner(), res)
+        match serde_json::to_vec(&self.0) {
+            Ok(bytes) => make_response(BytesMut::from(bytes.as_slice()), Ok(())),
+            Err(err) => make_response(BytesMut::new(), Err(err)),
+        }
     }
 }
 
