@@ -4,7 +4,6 @@ KERNEL_BIN = tgt/$(KERNEL_TARGET_DIR)/$(BUILD_MODE)/TRUEOS
 KERNEL_EMPTY_LIB_DIR = bld/empty-libs
 ARTIFACT_BUILD_ID ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 ARTIFACT_DIR = bld/artifacts/$(BUILD_MODE)-$(ARTIFACT_BUILD_ID)
-ARTIFACT_FULL_ELF = $(ARTIFACT_DIR)/TRUEOS.full.elf
 ARTIFACT_RUNTIME_ELF = $(ARTIFACT_DIR)/TRUEOS.elf
 ARTIFACT_BUILD_INFO = $(ARTIFACT_DIR)/BUILD_INFO
 ISO_DIR := bld
@@ -24,7 +23,7 @@ EFI_IMG_MIN_SIZE_KIB ?= 0
 LIMINE_CFG := limine.conf
 LIMINE_CFG_GENERATED := $(ISO_DIR)/limine.generated.conf
 LIMINE_SUBMODULE := vendor/limine
-LIMINE_DIST := $(ISO_DIR)/limine
+LIMINE_DIST ?= .limine
 LIMINE_SRC := $(LIMINE_DIST)/src
 LIMINE_BUILD_DIR := $(LIMINE_DIST)/build-x86_64
 LIMINE_PREFIX := $(LIMINE_DIST)/prefix-x86_64
@@ -75,7 +74,7 @@ $(NVME_IMG):
 
 empty-libs:
 	mkdir -p $(KERNEL_EMPTY_LIB_DIR)
-	: > $(KERNEL_EMPTY_LIB_DIR)/empty.o
+	rm -f $(KERNEL_EMPTY_LIB_DIR)/empty.o
 	ar crs $(KERNEL_EMPTY_LIB_DIR)/libc.a
 	ar crs $(KERNEL_EMPTY_LIB_DIR)/libgcc_s.a
 
@@ -84,8 +83,8 @@ kernel: empty-libs
 
 artifacts: kernel
 	mkdir -p $(ARTIFACT_DIR)
-	cp $(KERNEL_BIN) $(ARTIFACT_FULL_ELF)
 	cp $(KERNEL_BIN) $(ARTIFACT_RUNTIME_ELF)
+	rm -f $(ARTIFACT_DIR)/TRUEOS.full.elf
 	strip -s $(ARTIFACT_RUNTIME_ELF) || true
 	@{ \
 		commit=$$(git rev-parse HEAD 2>/dev/null || echo unknown); \
@@ -94,7 +93,6 @@ artifacts: kernel
 		printf "build_id=%s\n" "$(ARTIFACT_BUILD_ID)"; \
 		printf "commit=%s\n" "$$commit"; \
 		printf "timestamp_utc=%s\n" "$$ts"; \
-		printf "full_elf=%s\n" "$(ARTIFACT_FULL_ELF)"; \
 		printf "runtime_elf=%s\n" "$(ARTIFACT_RUNTIME_ELF)"; \
 	} > $(ARTIFACT_BUILD_INFO)
 
