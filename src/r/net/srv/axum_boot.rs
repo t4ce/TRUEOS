@@ -1,9 +1,8 @@
 extern crate alloc;
-extern crate std;
 
 use alloc::boxed::Box;
-use core::sync::atomic::{AtomicU16, Ordering};
-use std::{io, net::SocketAddr};
+use core::{net::SocketAddr, sync::atomic::{AtomicU16, Ordering}};
+use tokio::io;
 
 use axum::{Json, Router, routing::get};
 use embassy_time::{Duration as EmbassyDuration, Timer};

@@ -2,6 +2,7 @@
 
 pub mod upgrade;
 
+use alloc::boxed::Box;
 use hyper::service::HttpService;
 use core::time::Duration;
 use core::future::Future;

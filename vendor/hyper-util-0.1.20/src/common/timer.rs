@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use alloc::sync::Arc;
+use alloc::boxed::Box;
 use core::fmt;
 use core::pin::Pin;
 use core::time::Duration;

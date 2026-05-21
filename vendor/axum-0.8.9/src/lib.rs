@@ -475,13 +475,133 @@
 //! [`Router::with_state`]: crate::routing::Router::with_state
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![cfg_attr(any(target_os = "trueos", target_os = "zkvm"), no_std)]
 #![cfg_attr(test, allow(clippy::float_cmp))]
 #![cfg_attr(not(test), warn(clippy::print_stdout, clippy::dbg_macro))]
+
+extern crate alloc;
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+extern crate self as std;
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod any {
+    pub use core::any::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod borrow {
+    pub use alloc::borrow::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod boxed {
+    pub use alloc::boxed::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod collections {
+    pub use alloc::collections::*;
+    pub use alloc::collections::{BTreeMap as HashMap, BTreeSet as HashSet};
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod convert {
+    pub use core::convert::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod error {
+    pub use core::error::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod fmt {
+    pub use core::fmt::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod future {
+    pub use core::future::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod io {
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub struct Error;
+
+    pub type Result<T> = core::result::Result<T, Error>;
+
+    pub trait Write {
+        fn write(&mut self, buf: &[u8]) -> Result<usize>;
+        fn flush(&mut self) -> Result<()>;
+    }
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod marker {
+    pub use core::marker::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod mem {
+    pub use core::mem::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod net {
+    pub use core::net::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod ops {
+    pub use core::ops::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod pin {
+    pub use core::pin::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod prelude {
+    pub mod rust_2021 {
+        pub use alloc::{
+            boxed::Box,
+            format,
+            string::{String, ToString},
+            vec,
+            vec::Vec,
+        };
+        pub use core::prelude::rust_2021::*;
+    }
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod string {
+    pub use alloc::string::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod sync {
+    pub use alloc::sync::{Arc, Weak};
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod task {
+    pub use core::task::*;
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub mod vec {
+    pub use alloc::vec::*;
+}
 
 #[macro_use]
 pub(crate) mod macros;
 
-mod boxed;
+#[path = "boxed.rs"]
+mod boxed_route;
 mod extension;
 #[cfg(feature = "form")]
 mod form;

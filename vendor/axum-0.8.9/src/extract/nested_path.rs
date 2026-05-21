@@ -1,3 +1,7 @@
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use crate::prelude::rust_2021::*;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use alloc::borrow::ToOwned;
 use std::{
     sync::Arc,
     task::{Context, Poll},
@@ -69,8 +73,8 @@ pub(crate) struct SetNestedPath<S> {
 }
 
 impl<S> SetNestedPath<S> {
-    pub(crate) fn layer(path: &str) -> impl Layer<S, Service = Self> + Clone {
-        let path = Arc::from(path);
+    pub(crate) fn layer(path: impl Into<Arc<str>>) -> impl Layer<S, Service = Self> + Clone {
+        let path = path.into();
         layer_fn(move |inner| Self {
             inner,
             path: Arc::clone(&path),

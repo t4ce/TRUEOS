@@ -1,3 +1,7 @@
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use crate::prelude::rust_2021::*;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use alloc::borrow::ToOwned;
 use crate::extract::Request;
 use crate::extract::{rejection::*, FromRequest, RawForm};
 use axum_core::response::{IntoResponse, Response};

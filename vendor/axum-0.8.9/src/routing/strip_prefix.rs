@@ -1,3 +1,7 @@
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use crate::prelude::rust_2021::*;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use alloc::borrow::ToOwned;
 use http::{Request, Uri};
 use std::{
     sync::Arc,
@@ -14,8 +18,8 @@ pub(super) struct StripPrefix<S> {
 }
 
 impl<S> StripPrefix<S> {
-    pub(super) fn layer(prefix: &str) -> impl Layer<S, Service = Self> + Clone {
-        let prefix = Arc::from(prefix);
+    pub(super) fn layer(prefix: impl Into<Arc<str>>) -> impl Layer<S, Service = Self> + Clone {
+        let prefix = prefix.into();
         layer_fn(move |inner| Self {
             inner,
             prefix: Arc::clone(&prefix),

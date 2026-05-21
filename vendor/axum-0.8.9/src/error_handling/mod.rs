@@ -1,5 +1,9 @@
 #![doc = include_str!("../docs/error_handling.md")]
 
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use crate::prelude::rust_2021::*;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use alloc::borrow::ToOwned;
 use crate::{
     extract::FromRequestParts,
     http::Request,
@@ -224,6 +228,7 @@ impl_service!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, 
 pub mod future {
     //! Future types.
 
+    use crate::prelude::rust_2021::*;
     use crate::response::Response;
     use pin_project_lite::pin_project;
     use std::{

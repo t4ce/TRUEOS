@@ -1,3 +1,7 @@
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use crate::prelude::rust_2021::*;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use alloc::borrow::ToOwned;
 use crate::{
     extract::{nested_path::SetNestedPath, Request},
     handler::Handler,
@@ -227,8 +231,8 @@ where
             let path = path_for_nested_route(prefix, inner_path);
 
             let layer = (
-                StripPrefix::layer(prefix),
-                SetNestedPath::layer(path_to_nest_at),
+                StripPrefix::layer(prefix.to_owned()),
+                SetNestedPath::layer(path_to_nest_at.to_owned()),
             );
             match endpoint.layer(layer) {
                 Endpoint::MethodRouter(method_router) => {

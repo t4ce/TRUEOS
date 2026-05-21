@@ -257,21 +257,9 @@ impl Event {
     where
         T: serde_core::Serialize,
     {
-        struct JsonWriter<'a>(&'a mut EventDataWriter);
-        impl std::io::Write for JsonWriter<'_> {
-            #[inline]
-            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                Ok(self.0.write_buf(buf))
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
-
         let mut writer = self.into_data_writer();
-
-        let json_writer = JsonWriter(&mut writer);
-        serde_json::to_writer(json_writer, &data).map_err(axum_core::Error::new)?;
+        let bytes = serde_json::to_vec(&data).map_err(axum_core::Error::new)?;
+        writer.write_buf(&bytes);
 
         Ok(writer.into_event())
     }
@@ -455,15 +443,13 @@ impl EventDataWriter {
             self.event.flags.insert(EventFlags::HAS_DATA);
         }
 
-        let mut writer = buffer.writer();
-
         let mut last_split = 0;
         for delimiter in memchr::memchr2_iter(b'\n', b'\r', buf) {
-            let _ = writer.write_all(&buf[last_split..=delimiter]);
-            let _ = writer.write_all(b"data: ");
+            buffer.extend_from_slice(&buf[last_split..=delimiter]);
+            buffer.extend_from_slice(b"data: ");
             last_split = delimiter + 1;
         }
-        let _ = writer.write_all(&buf[last_split..]);
+        buffer.extend_from_slice(&buf[last_split..]);
 
         buf.len()
     }
@@ -833,3 +819,7 @@ mod tests {
         fields
     }
 }
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use crate::prelude::rust_2021::*;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use alloc::borrow::ToOwned;

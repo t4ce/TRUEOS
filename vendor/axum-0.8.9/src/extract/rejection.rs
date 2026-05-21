@@ -198,3 +198,7 @@ define_rejection! {
     /// This rejection is used if the matched route wasn't nested.
     pub struct NestedPathRejection;
 }
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use crate::prelude::rust_2021::*;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use alloc::borrow::ToOwned;
