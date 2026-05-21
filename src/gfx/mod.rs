@@ -1,6 +1,7 @@
 pub mod althlasfont;
 pub mod backends;
 pub mod jpeg_codec;
+pub(crate) mod jpeg_layout;
 pub mod lyon;
 pub mod mandelbrot;
 pub mod png_codec;
