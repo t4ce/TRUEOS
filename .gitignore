@@ -1,10 +1,9 @@
 bld/
+.limine/
 tgt/
-target/
 *.img
 virglrenderer-1.0.0/
 Cargo.lock
-xiao/
 node_modules
 package.json
 package-lock.json
