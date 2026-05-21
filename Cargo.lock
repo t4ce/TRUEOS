@@ -68,6 +68,7 @@ dependencies = [
  "trueos-math",
  "trueos-qjs",
  "trueos-silk",
+ "trueos-txt",
  "trueos-vm",
  "twoway",
  "unicode-normalization",
@@ -2951,6 +2952,10 @@ dependencies = [
 
 [[package]]
 name = "trueos-silk"
+version = "0.1.0"
+
+[[package]]
+name = "trueos-txt"
 version = "0.1.0"
 
 [[package]]
