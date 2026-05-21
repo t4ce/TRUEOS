@@ -2,12 +2,12 @@ use core::sync::atomic::{AtomicBool, AtomicU32};
 use log::{Level, LevelFilter};
 use spin::Once;
 
-pub(crate) const GLOBAL_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
-pub(crate) const BOOT_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
+pub(crate) const GLOBAL_LOG_LEVEL: LevelFilter = LevelFilter::Info;
+pub(crate) const BOOT_LOG_LEVEL: LevelFilter = LevelFilter::Error;
 pub(crate) const SERVICE_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const NET_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
-pub(crate) const USB_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
-pub(crate) const STORAGE_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
+pub(crate) const USB_LOG_LEVEL: LevelFilter = LevelFilter::Info;
+pub(crate) const STORAGE_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const GFX_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 pub(crate) const HV_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
 
@@ -60,7 +60,7 @@ pub(crate) const HID_DEBUG_REPORT_LOGS: bool = false;
 pub(crate) const USB_MASS_UAS_TRACE_LOGS: bool = false;
 pub(crate) const LUMEN_STORAGE_TRACE_LOGS: bool = false;
 
-pub(crate) const NVME_VERBOSE: bool = true;
+pub(crate) const NVME_VERBOSE: bool = false;
 
 pub(crate) static BGRT_LOG_ONCE: Once<()> = Once::new();
 pub(crate) static TGA_MISSING_LOG_ONCE: Once<()> = Once::new();

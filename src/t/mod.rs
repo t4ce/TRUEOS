@@ -47,7 +47,7 @@ type SharedTokioJob =
 
 static SHARED_TOKIO_JOBS: Mutex<Vec<SharedTokioJob>> = Mutex::new(Vec::new());
 static SHARED_TOKIO_WAIT: WaitQueue = WaitQueue::new();
-static SHARED_TOKIO_RUNNER_STARTED: AtomicBool = AtomicBool::new(false);
+static SHARED_TOKIO_READY: AtomicBool = AtomicBool::new(false);
 static SHARED_TOKIO_UNREADY_LOGGED: AtomicBool = AtomicBool::new(false);
 
 struct SharedTokioResult<T> {
@@ -56,61 +56,7 @@ struct SharedTokioResult<T> {
 }
 
 pub fn shared_tokio_runtime_ready() -> bool {
-    crate::r::readiness::is_set(crate::r::readiness::TOKIO_RUNTIME_READY)
-}
-
-fn pop_shared_tokio_job() -> Option<SharedTokioJob> {
-    let mut jobs = SHARED_TOKIO_JOBS.lock();
-    if jobs.is_empty() {
-        None
-    } else {
-        Some(jobs.remove(0))
-    }
-}
-
-fn run_shared_tokio_runtime() {
-    crate::log_info!(target: "service"; "shared-tokio: runner start\n");
-
-    let mut builder = tokio::runtime::Builder::new_current_thread();
-    builder.enable_io();
-    builder.enable_time();
-    let runtime = match builder.build() {
-        Ok(runtime) => runtime,
-        Err(_) => {
-            SHARED_TOKIO_RUNNER_STARTED.store(false, Ordering::Release);
-            crate::log_warn!(target: "service"; "shared-tokio: runtime build failed\n");
-            return;
-        }
-    };
-
-    loop {
-        while let Some(job) = pop_shared_tokio_job() {
-            runtime.block_on(job());
-        }
-
-        SHARED_TOKIO_WAIT.wait_for_event_blocking_parked(25);
-    }
-}
-
-pub fn start_shared_tokio_runtime() -> bool {
-    if SHARED_TOKIO_RUNNER_STARTED
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        return true;
-    }
-
-    let rc = crate::t::trueos_tokio_worker::spawn_blocking_job_with_purpose(
-        Box::new(run_shared_tokio_runtime),
-        "shared-tokio-runtime",
-    );
-    if rc != 0 {
-        SHARED_TOKIO_RUNNER_STARTED.store(false, Ordering::Release);
-        crate::log_warn!(target: "service"; "shared-tokio: runner submit failed rc={}\n", rc);
-        return false;
-    }
-
-    true
+    SHARED_TOKIO_READY.load(Ordering::Acquire)
 }
 
 pub fn spawn_on_shared_tokio<F, MakeFuture>(make_future: MakeFuture) -> Result<(), RunError>
