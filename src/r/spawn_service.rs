@@ -43,6 +43,7 @@ define_started_flags!(
     NTP_SYNC_STARTED,
     SNTP_SERVICE_STARTED,
     NET_SHELL_STARTED,
+    TRUEOS_RDP_STARTED,
     AI_QJS_ONESHOT_STARTED,
     HTTP_TRUEOSFS_STARTED,
     HYPER_HTTP1_PROBE_STARTED,
@@ -438,6 +439,10 @@ fn spawn_sntp_service(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_net_shell(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::tst_net_tcp_shell::net_shell_task())
+}
+
+fn spawn_trueos_rdp(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::r::rdp::trueos_rdp_task())
 }
 
 fn spawn_logtotcp(spawner: Spawner) -> SpawnAttempt {
@@ -1109,7 +1114,7 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::NET_SOCKET_READY
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-static TASKS: [TaskSpec; 71] = [
+static TASKS: [TaskSpec; 72] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
         "codec-service",
@@ -1160,6 +1165,12 @@ static TASKS: [TaskSpec; 71] = [
         spawn_sntp_service,
     ),
     TaskSpec::enabled("net-shell", 0, &NET_SHELL_STARTED, spawn_net_shell),
+    TaskSpec::enabled(
+        "trueos-rdp",
+        crate::r::readiness::NET_ANY_CONFIGURED,
+        &TRUEOS_RDP_STARTED,
+        spawn_trueos_rdp,
+    ),
     TaskSpec::enabled(
         "logtotcp",
         crate::r::readiness::NET_ANY_CONFIGURED,
