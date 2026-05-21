@@ -10,8 +10,6 @@ pub(crate) mod xhci {
 
 pub(crate) mod api;
 pub(crate) mod class;
-#[cfg(feature = "usb-host2")]
-mod crabusb_host2;
 mod crabusb_service;
 pub(crate) mod descriptor;
 pub(crate) mod hid;
@@ -497,8 +495,6 @@ pub(crate) fn tlb_usb_snapshot() -> TlbUsbSnapshot {
 
 pub(crate) mod syscall {}
 
-#[cfg(feature = "usb-host2")]
-pub(crate) use self::crabusb_host2::bsp_service2 as crabusb_host2_bsp_service;
 pub(crate) use self::crabusb_service::bsp_service as crabusb_bsp_service;
 pub(crate) use self::crabusb_service::observed_device_summaries as crabusb_observed_device_summaries;
 pub(crate) use self::crabusb_service::observed_devices as crabusb_observed_devices;

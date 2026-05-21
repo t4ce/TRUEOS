@@ -1545,11 +1545,11 @@ pub fn boot_probe_once() -> bool {
 
     match init() {
         Ok(()) => {
-            log::info!("[HDA] Boot probe ready");
+            log::info!("[HDA] Boot init ready");
             true
         }
         Err(err) => {
-            log::info!("[HDA] Boot probe failed: {}", err);
+            log::info!("[HDA] Boot init failed: {}", err);
             false
         }
     }
