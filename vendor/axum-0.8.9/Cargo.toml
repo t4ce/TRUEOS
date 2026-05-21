@@ -10,8 +10,7 @@
 # See Cargo.toml.orig for the original contents.
 
 [package]
-edition = "2021"
-rust-version = "1.80"
+edition = "2024"
 name = "axum"
 version = "0.8.9"
 build = false
@@ -166,7 +165,6 @@ default-features = false
 
 [dependencies.bytes]
 version = "1.0"
-features = ["std"]
 default-features = false
 
 [dependencies.form_urlencoded]
@@ -259,7 +257,6 @@ version = "1.0"
 features = [
     "alloc",
     "raw_value",
-    "std",
 ]
 optional = true
 default-features = false

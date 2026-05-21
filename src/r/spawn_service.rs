@@ -490,17 +490,9 @@ fn hyper_http1_probe_enabled() -> bool {
 }
 
 fn spawn_axum_boot(spawner: Spawner) -> SpawnAttempt {
-    #[cfg(feature = "vmx-web")]
-    {
-        return spawn_local(spawner, |_spawner| {
-            crate::r::net::srv::axum_boot::axum_boot_service_task()
-        });
-    }
-    #[cfg(not(feature = "vmx-web"))]
-    {
-        let _ = spawner;
-        SpawnAttempt::Skipped
-    }
+    spawn_local(spawner, |_spawner| {
+        crate::r::net::srv::axum_boot::axum_boot_service_task()
+    })
 }
 
 fn spawn_ws_time(spawner: Spawner) -> SpawnAttempt {
@@ -842,10 +834,6 @@ fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
 
     let mut spawned_any = false;
     for i in 0..count {
-        #[cfg(feature = "usb-host2")]
-        let spawn_result =
-            spawn_local(spawner, |_spawner| crate::usb2::crabusb_host2_bsp_service(i));
-        #[cfg(not(feature = "usb-host2"))]
         let spawn_result = spawn_local(spawner, |_spawner| crate::usb2::crabusb_bsp_service(i));
 
         match spawn_result {
@@ -1196,7 +1184,7 @@ static TASKS: [TaskSpec; 71] = [
         &AI_QJS_ONESHOT_STARTED,
         spawn_ai_qjs_oneshot,
     ),
-    TaskSpec::enabled("html-demo", 0, &HTML_DEMO_STARTED, spawn_html_demo),
+    TaskSpec::disabled("html-demo", 0, &HTML_DEMO_STARTED, spawn_html_demo),
     TaskSpec::enabled(
         "http-trueosfs",
         NET_ANY_CONFIGURED_AND_ROOT_READY,

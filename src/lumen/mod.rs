@@ -1,5 +1,3 @@
-#[cfg(feature = "lumen-runtime")]
-mod runtime_impl {
 use alloc::collections::VecDeque;
 use alloc::format;
 use alloc::string::{String as AllocString, ToString};
@@ -1460,8 +1458,20 @@ async fn load_lumen_model_from_trueosfs(
 
         let decode_start = embassy_time_driver::now();
         let raw = match dtype {
-            "BF16" => (DType::BF16, TensorRawData::BF16LeBytes(bytes)),
-            "F16" => (DType::F16, TensorRawData::F16LeBytes(bytes)),
+            "BF16" => {
+                let mut values = Vec::with_capacity(bytes.len() / 2);
+                for chunk in bytes.chunks_exact(2) {
+                    values.push(u16::from_le_bytes([chunk[0], chunk[1]]));
+                }
+                (DType::BF16, TensorRawData::BF16(values))
+            }
+            "F16" => {
+                let mut values = Vec::with_capacity(bytes.len() / 2);
+                for chunk in bytes.chunks_exact(2) {
+                    values.push(u16::from_le_bytes([chunk[0], chunk[1]]));
+                }
+                (DType::F16, TensorRawData::F16(values))
+            }
             "F32" => {
                 let mut values = Vec::with_capacity(bytes.len() / 4);
                 for chunk in bytes.chunks_exact(4) {
@@ -2735,52 +2745,4 @@ pub(crate) async fn run_lumen_session(target: MatrixTarget, session_id: u64) {
     .await;
     bench_session_finish(session_id);
     set_matrix_target_active(&target, false);
-}
-}
-
-#[cfg(feature = "lumen-runtime")]
-pub(crate) use runtime_impl::*;
-
-#[cfg(not(feature = "lumen-runtime"))]
-pub(crate) mod burn_baba;
-#[cfg(not(feature = "lumen-runtime"))]
-pub(crate) mod burn_baby;
-#[cfg(not(feature = "lumen-runtime"))]
-pub(crate) mod cgp;
-#[cfg(not(feature = "lumen-runtime"))]
-pub(crate) mod gpu_shadow;
-#[cfg(not(feature = "lumen-runtime"))]
-pub(crate) mod lumen_net;
-#[cfg(not(feature = "lumen-runtime"))]
-pub(crate) mod lumen_service;
-
-#[cfg(not(feature = "lumen-runtime"))]
-#[embassy_executor::task(pool_size = 2)]
-pub(crate) async fn lumenbench_task(target: crate::shell2::MatrixTarget, session_id: u64) {
-    run_lumen_session(target, session_id).await;
-}
-
-#[cfg(not(feature = "lumen-runtime"))]
-pub(crate) async fn run_lumen_session(target: crate::shell2::MatrixTarget, session_id: u64) {
-    crate::shell2::print_matrix_target_line(
-        &target,
-        "bench lumen: runtime disabled; external Lumen crate is untied",
-    );
-    crate::log!(
-        "lumen: runtime disabled session={}\n",
-        session_id
-    );
-    crate::lumen::lumen_service::mark_prompt_complete("runtime-disabled");
-    crate::lumen::lumen_service::mark_offline(session_id);
-    crate::shell2::cmds::bench::bench_session_finish(session_id);
-    crate::shell2::set_matrix_target_active(&target, false);
-}
-
-#[cfg(not(feature = "lumen-runtime"))]
-pub(crate) fn push_lumen_chat_prompt(
-    _session_id: u64,
-    _prompt: &str,
-    _statement: Option<&str>,
-) -> bool {
-    false
 }
