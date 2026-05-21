@@ -13,6 +13,7 @@ pub mod io;
 pub mod keyboard;
 pub mod net;
 pub mod path;
+pub mod rdp;
 pub mod readiness;
 pub mod shader;
 pub mod silk_service;

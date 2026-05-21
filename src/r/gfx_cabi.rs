@@ -4770,6 +4770,9 @@ pub mod cabi {
             _src_alpha,
             _dst_alpha,
         );
+        crate::r::rdp::publish_set_blend(
+            frame_seq, enabled, src_rgb, dst_rgb, _src_alpha, _dst_alpha,
+        );
         0
     }
 
@@ -4821,6 +4824,7 @@ pub mod cabi {
             min_filter,
             mag_filter,
         );
+        crate::r::rdp::publish_set_sampler(frame_seq, wrap_s, wrap_t, min_filter, mag_filter);
         0
     }
 
@@ -4852,6 +4856,7 @@ pub mod cabi {
         let frame_seq = st.frame_seq;
         drop(st);
         gfx_trace_record(GFX_TRACE_OP_SET_SCISSOR, frame_seq, 0, x, y, width, height);
+        crate::r::rdp::publish_set_scissor(frame_seq, x, y, width, height);
         0
     }
 
@@ -4868,6 +4873,7 @@ pub mod cabi {
         let frame_seq = st.frame_seq;
         drop(st);
         gfx_trace_record(GFX_TRACE_OP_CLEAR_SCISSOR, frame_seq, 0, 0, 0, 0, 0);
+        crate::r::rdp::publish_clear_scissor(frame_seq);
         0
     }
 
@@ -4907,6 +4913,7 @@ pub mod cabi {
             width,
             height,
         );
+        crate::r::rdp::publish_clear_rect(frame_seq, rgb, x, y, width, height);
         0
     }
 
@@ -4930,6 +4937,7 @@ pub mod cabi {
             let frame_seq = st.frame_seq;
             drop(st);
             gfx_trace_record(GFX_TRACE_OP_SET_RENDER_TARGET, frame_seq, 0, 0, 0, 0, 0);
+            crate::r::rdp::publish_set_render_target(frame_seq, 0);
             return 0;
         }
         let idx = tex_id.saturating_sub(1) as usize;
@@ -4954,6 +4962,7 @@ pub mod cabi {
         let frame_seq = st.frame_seq;
         drop(st);
         gfx_trace_record(GFX_TRACE_OP_SET_RENDER_TARGET, frame_seq, 0, tex_id, 0, 0, 0);
+        crate::r::rdp::publish_set_render_target(frame_seq, tex_id);
         0
     }
 
@@ -4976,6 +4985,7 @@ pub mod cabi {
         let frame_seq = st.frame_seq;
         drop(st);
         gfx_trace_record(GFX_TRACE_OP_CLEAR_RENDER_TARGET, frame_seq, 0, 0, 0, 0, 0);
+        crate::r::rdp::publish_clear_render_target(frame_seq);
         0
     }
 
@@ -5905,6 +5915,17 @@ pub mod cabi {
             return -3;
         }
         let data = unsafe { core::slice::from_raw_parts(data_ptr, expected) };
+        crate::r::rdp::publish_texture_rgba(
+            tex_id,
+            width,
+            height,
+            match sample_kind {
+                TexSampleKind::Mask => 0,
+                TexSampleKind::Rgba => 1,
+            },
+            region.map(|region| (region.x, region.y, region.width, region.height)),
+            data,
+        );
 
         let Some(ret) = crate::gfx::with_context_tag(
             crate::gfx::SystemLockOwner::UploadTexture,
@@ -6263,6 +6284,7 @@ pub mod cabi {
             return -3;
         }
         let data = unsafe { core::slice::from_raw_parts(data_ptr, expected) };
+        crate::r::rdp::publish_texture_rgba(tex_id, width, height, 0x8000_0001, None, data);
         if !queue_texture_rgba_upload_owned(
             tex_id,
             width,
@@ -6305,6 +6327,7 @@ pub mod cabi {
             return -2;
         }
         let data = core::slice::from_raw_parts(data_ptr, data_len);
+        crate::r::rdp::publish_texture_png(tex_id, 0, data);
         let decoded = match crate::gfx::png_codec::decode_png_rgba(data) {
             Ok(decoded) => decoded,
             Err(err) => return err.code(),
@@ -6351,6 +6374,7 @@ pub mod cabi {
             return -3;
         }
         let bytes = unsafe { core::slice::from_raw_parts(data_ptr, data_len) }.to_vec();
+        crate::r::rdp::publish_texture_png(tex_id, 0x8000_0000, bytes.as_slice());
         spawn_async_png_decode_upload(tex_id, bytes)
     }
 
@@ -6380,6 +6404,7 @@ pub mod cabi {
             return -2;
         }
         let data = core::slice::from_raw_parts(data_ptr, data_len);
+        crate::r::rdp::publish_texture_jpeg(tex_id, 0, data);
         let decoded = match crate::gfx::jpeg_codec::decode_jpeg_rgba(data) {
             Ok(decoded) => decoded,
             Err(err) => return err.code(),
@@ -6426,6 +6451,7 @@ pub mod cabi {
             return -3;
         }
         let bytes = unsafe { core::slice::from_raw_parts(data_ptr, data_len) }.to_vec();
+        crate::r::rdp::publish_texture_jpeg(tex_id, 0x8000_0000, bytes.as_slice());
         set_async_tex_status(tex_id, ASYNC_TEX_STATUS_PENDING);
         enqueue_async_jpeg_upload(tex_id, bytes);
         try_spawn_async_jpeg_decode_uploads();
@@ -6458,6 +6484,7 @@ pub mod cabi {
             return -2;
         }
         let data = core::slice::from_raw_parts(data_ptr, data_len);
+        crate::r::rdp::publish_texture_svg(tex_id, 0, data);
         if gfx_cabi_vm_context() {
             return match crate::gfx::svg::rasterize_svg_bytes_rgba(data) {
                 Ok((info, rgba)) => {
@@ -6533,6 +6560,7 @@ pub mod cabi {
             return -3;
         }
         let bytes = unsafe { core::slice::from_raw_parts(data_ptr, data_len) }.to_vec();
+        crate::r::rdp::publish_texture_svg(tex_id, 0x8000_0000, bytes.as_slice());
         set_async_tex_status(tex_id, ASYNC_TEX_STATUS_PENDING);
         enqueue_async_svg_upload(tex_id, bytes);
         try_start_async_svg_worker();
@@ -6642,6 +6670,7 @@ pub mod cabi {
             flags |= 2;
         }
         gfx_trace_record(GFX_TRACE_OP_BEGIN_FRAME, seq, flags, clear_rgb & 0x00FF_FFFF, 0, 0, 0);
+        crate::r::rdp::publish_begin_frame(seq, flags, clear_rgb & 0x00FF_FFFF);
         0
     }
 
@@ -6725,6 +6754,7 @@ pub mod cabi {
             0,
             0,
         );
+        crate::r::rdp::publish_draw_rgb_triangles(frame_seq, vcount, bytes);
         0
     }
 
@@ -6891,6 +6921,17 @@ pub mod cabi {
                 TexSampleKind::Rgba => 1,
             },
         );
+        crate::r::rdp::publish_draw_tex_triangles(
+            frame_seq,
+            tex_id,
+            vcount,
+            sampler_flags,
+            match sample_kind {
+                TexSampleKind::Mask => 0,
+                TexSampleKind::Rgba => 1,
+            },
+            bytes,
+        );
         0
     }
 
@@ -7039,6 +7080,13 @@ pub mod cabi {
             tex_draws,
             draw_bytes.min(u32::MAX as usize) as u32,
             0,
+        );
+        crate::r::rdp::publish_end_frame(
+            seq,
+            end_flags,
+            rgb_draws,
+            tex_draws,
+            draw_bytes.min(u32::MAX as usize) as u32,
         );
 
         let mut final_render_target_tex_id = 0u32;
