@@ -2,10 +2,10 @@
 #![allow(dead_code)]
 
 pub struct Timer {
-    pub div: u16,       // Internal 16-bit divider (upper byte readable at $FF04)
-    pub tima: u8,       // Timer counter ($FF05)
-    pub tma: u8,        // Timer modulo ($FF06)
-    pub tac: u8,        // Timer control ($FF07)
+    pub div: u16,        // Internal 16-bit divider (upper byte readable at $FF04)
+    pub tima: u8,        // Timer counter ($FF05)
+    pub tma: u8,         // Timer modulo ($FF06)
+    pub tac: u8,         // Timer control ($FF07)
     pub interrupt: bool, // Timer overflow interrupt request
     overflow_cycles: u8, // Delay for interrupt after overflow
 }
@@ -31,10 +31,10 @@ impl Timer {
             // Timer enabled?
             if self.tac & 0x04 != 0 {
                 let bit = match self.tac & 0x03 {
-                    0 => 9,  // 4096 Hz  (every 1024 cycles)
-                    1 => 3,  // 262144 Hz (every 16 cycles)
-                    2 => 5,  // 65536 Hz (every 64 cycles)
-                    3 => 7,  // 16384 Hz (every 256 cycles)
+                    0 => 9, // 4096 Hz  (every 1024 cycles)
+                    1 => 3, // 262144 Hz (every 16 cycles)
+                    2 => 5, // 65536 Hz (every 64 cycles)
+                    3 => 7, // 16384 Hz (every 256 cycles)
                     _ => 9,
                 };
 

@@ -31,9 +31,9 @@ mod exceptions;
 #[cfg(not(target_arch = "x86_64"))]
 #[path = "exceptions_disabled.rs"]
 mod exceptions;
-mod gfx;
 #[path = "tst/ui2/gboi.rs"]
 pub(crate) mod gboi;
+mod gfx;
 mod globalog;
 #[cfg(target_arch = "x86_64")]
 mod hv;
@@ -42,11 +42,11 @@ mod hv;
 mod hv;
 mod hyper_probe;
 mod intel;
-#[path = "intel/intel_hda_probe.rs"]
-mod intel_hda_probe;
+#[path = "intel/intel_hda_audio_demo.rs"]
+mod intel_hda_audio_demo;
 mod iso9660;
-mod locale;
 mod limine;
+mod locale;
 mod logflag;
 mod lumen;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]

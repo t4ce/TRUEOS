@@ -17,32 +17,32 @@ pub const SCREEN_W: usize = 160;
 pub const SCREEN_H: usize = 144;
 
 pub struct Gpu {
-    pub vram: [u8; 8192],     // $8000-$9FFF VRAM bank 0
-    pub vram1: [u8; 8192],    // $8000-$9FFF VRAM bank 1 (CGB only)
-    pub oam: [u8; 160],       // $FE00-$FE9F (40 sprites × 4 bytes)
+    pub vram: [u8; 8192],      // $8000-$9FFF VRAM bank 0
+    pub vram1: [u8; 8192],     // $8000-$9FFF VRAM bank 1 (CGB only)
+    pub oam: [u8; 160],        // $FE00-$FE9F (40 sprites × 4 bytes)
     pub framebuffer: Vec<u32>, // 160×144 ARGB
 
     // LCD registers
-    pub lcdc: u8,   // $FF40 LCD Control
-    pub stat: u8,   // $FF41 LCD Status
-    pub scy: u8,    // $FF42 Scroll Y
-    pub scx: u8,    // $FF43 Scroll X
-    pub ly: u8,     // $FF44 LY (current scanline)
-    pub lyc: u8,    // $FF45 LY Compare
-    pub bgp: u8,    // $FF47 BG Palette (DMG)
-    pub obp0: u8,   // $FF48 Object Palette 0 (DMG)
-    pub obp1: u8,   // $FF49 Object Palette 1 (DMG)
-    pub wy: u8,     // $FF4A Window Y
-    pub wx: u8,     // $FF4B Window X
+    pub lcdc: u8, // $FF40 LCD Control
+    pub stat: u8, // $FF41 LCD Status
+    pub scy: u8,  // $FF42 Scroll Y
+    pub scx: u8,  // $FF43 Scroll X
+    pub ly: u8,   // $FF44 LY (current scanline)
+    pub lyc: u8,  // $FF45 LY Compare
+    pub bgp: u8,  // $FF47 BG Palette (DMG)
+    pub obp0: u8, // $FF48 Object Palette 0 (DMG)
+    pub obp1: u8, // $FF49 Object Palette 1 (DMG)
+    pub wy: u8,   // $FF4A Window Y
+    pub wx: u8,   // $FF4B Window X
 
-    pub mode: u8,       // Current LCD mode (0-3)
-    pub cycles: u32,    // Cycles into current scanline
+    pub mode: u8,    // Current LCD mode (0-3)
+    pub cycles: u32, // Cycles into current scanline
     pub frame_ready: bool,
-    pub stat_irq: bool,  // STAT interrupt request
+    pub stat_irq: bool,   // STAT interrupt request
     pub vblank_irq: bool, // VBlank interrupt request
 
     // Internal
-    pub window_line: u8,     // Current window line counter
+    pub window_line: u8, // Current window line counter
 
     // CGB extensions
     pub cgb_mode: bool,        // Running in CGB mode
@@ -52,7 +52,7 @@ pub struct Gpu {
     pub bcps: u8,              // FF68: BG Color Palette Spec (auto-inc + index)
     pub ocps: u8,              // FF6A: OBJ Color Palette Spec
     // Internal: scanline BG priority info for sprite drawing
-    bg_priority: [u8; 160],    // Per-pixel: bit0=color_id!=0, bit1=BG-to-OAM priority
+    bg_priority: [u8; 160], // Per-pixel: bit0=color_id!=0, bit1=BG-to-OAM priority
 }
 
 impl Gpu {
@@ -99,13 +99,15 @@ impl Gpu {
         self.cycles += cpu_cycles * 4; // Convert to dots
 
         match self.mode {
-            2 => { // OAM Search (80 dots)
+            2 => {
+                // OAM Search (80 dots)
                 if self.cycles >= 80 {
                     self.cycles -= 80;
                     self.mode = 3;
                 }
             }
-            3 => { // Pixel Transfer (~172 dots)
+            3 => {
+                // Pixel Transfer (~172 dots)
                 if self.cycles >= 172 {
                     self.cycles -= 172;
                     self.mode = 0;
@@ -119,7 +121,8 @@ impl Gpu {
                     }
                 }
             }
-            0 => { // HBlank (~204 dots)
+            0 => {
+                // HBlank (~204 dots)
                 if self.cycles >= 204 {
                     self.cycles -= 204;
                     self.ly += 1;
@@ -146,7 +149,8 @@ impl Gpu {
                     self.check_lyc();
                 }
             }
-            1 => { // VBlank (10 scanlines, 456 dots each)
+            1 => {
+                // VBlank (10 scanlines, 456 dots each)
                 if self.cycles >= 456 {
                     self.cycles -= 456;
                     self.ly += 1;
@@ -186,7 +190,9 @@ impl Gpu {
     /// Render one scanline to the framebuffer
     fn render_scanline(&mut self) {
         let ly = self.ly as usize;
-        if ly >= SCREEN_H { return; }
+        if ly >= SCREEN_H {
+            return;
+        }
 
         let offset = ly * SCREEN_W;
 
@@ -229,8 +235,16 @@ impl Gpu {
     }
 
     fn render_bg_scanline(&mut self, ly: usize, offset: usize) {
-        let tile_data_area = if self.lcdc & 0x10 != 0 { 0x0000usize } else { 0x0800 };
-        let tile_map_area = if self.lcdc & 0x08 != 0 { 0x1C00usize } else { 0x1800 };
+        let tile_data_area = if self.lcdc & 0x10 != 0 {
+            0x0000usize
+        } else {
+            0x0800
+        };
+        let tile_map_area = if self.lcdc & 0x08 != 0 {
+            0x1C00usize
+        } else {
+            0x1800
+        };
         let signed_addr = self.lcdc & 0x10 == 0;
 
         let y = (self.scy as usize + ly) & 0xFF;
@@ -253,7 +267,9 @@ impl Gpu {
             };
 
             let row_addr = tile_addr + pixel_row * 2;
-            if row_addr + 1 >= self.vram.len() { continue; }
+            if row_addr + 1 >= self.vram.len() {
+                continue;
+            }
 
             let lo = self.vram[row_addr];
             let hi = self.vram[row_addr + 1];
@@ -266,11 +282,21 @@ impl Gpu {
     }
 
     fn render_window_scanline(&mut self, ly: usize, offset: usize) {
-        if ly < self.wy as usize { return; }
+        if ly < self.wy as usize {
+            return;
+        }
         let wx = self.wx as i32 - 7;
 
-        let tile_data_area = if self.lcdc & 0x10 != 0 { 0x0000usize } else { 0x0800 };
-        let tile_map_area = if self.lcdc & 0x40 != 0 { 0x1C00usize } else { 0x1800 };
+        let tile_data_area = if self.lcdc & 0x10 != 0 {
+            0x0000usize
+        } else {
+            0x0800
+        };
+        let tile_map_area = if self.lcdc & 0x40 != 0 {
+            0x1C00usize
+        } else {
+            0x1800
+        };
         let signed_addr = self.lcdc & 0x10 == 0;
 
         let win_y = self.window_line as usize;
@@ -281,13 +307,17 @@ impl Gpu {
 
         for x in 0..SCREEN_W {
             let win_x = x as i32 - wx;
-            if win_x < 0 { continue; }
+            if win_x < 0 {
+                continue;
+            }
             rendered = true;
 
             let tile_col = win_x as usize / 8;
             let pixel_col = win_x as usize % 8;
             let map_idx = tile_row * 32 + tile_col;
-            if map_idx >= 1024 { continue; }
+            if map_idx >= 1024 {
+                continue;
+            }
 
             let tile_id = self.vram[tile_map_area + map_idx];
 
@@ -299,7 +329,9 @@ impl Gpu {
             };
 
             let row_addr = tile_addr + pixel_row * 2;
-            if row_addr + 1 >= self.vram.len() { continue; }
+            if row_addr + 1 >= self.vram.len() {
+                continue;
+            }
 
             let lo = self.vram[row_addr];
             let hi = self.vram[row_addr + 1];
@@ -329,13 +361,7 @@ impl Gpu {
 
             if ly as i32 >= sy && (ly as i32) < sy + sprite_h as i32 {
                 if count < 10 {
-                    sprites[count] = (
-                        self.oam[i * 4],
-                        self.oam[i * 4 + 1],
-                        tile,
-                        flags,
-                        i,
-                    );
+                    sprites[count] = (self.oam[i * 4], self.oam[i * 4 + 1], tile, flags, i);
                     count += 1;
                 }
             }
@@ -349,10 +375,16 @@ impl Gpu {
             let flip_x = flags & 0x20 != 0;
             let flip_y = flags & 0x40 != 0;
             let behind_bg = flags & 0x80 != 0;
-            let palette = if flags & 0x10 != 0 { self.obp1 } else { self.obp0 };
+            let palette = if flags & 0x10 != 0 {
+                self.obp1
+            } else {
+                self.obp0
+            };
 
             let mut row = ly as i32 - sy;
-            if flip_y { row = sprite_h as i32 - 1 - row; }
+            if flip_y {
+                row = sprite_h as i32 - 1 - row;
+            }
 
             if sprite_h == 16 {
                 tile &= 0xFE; // In 8×16 mode, bit 0 is ignored
@@ -363,25 +395,33 @@ impl Gpu {
             }
 
             let tile_addr = tile as usize * 16 + row as usize * 2;
-            if tile_addr + 1 >= self.vram.len() { continue; }
+            if tile_addr + 1 >= self.vram.len() {
+                continue;
+            }
 
             let lo = self.vram[tile_addr];
             let hi = self.vram[tile_addr + 1];
 
             for px in 0..8i32 {
                 let screen_x = sx + px;
-                if screen_x < 0 || screen_x >= SCREEN_W as i32 { continue; }
+                if screen_x < 0 || screen_x >= SCREEN_W as i32 {
+                    continue;
+                }
 
                 let bit = if flip_x { px } else { 7 - px } as u8;
                 let color_id = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
-                if color_id == 0 { continue; } // Transparent
+                if color_id == 0 {
+                    continue;
+                } // Transparent
 
                 let screen_idx = offset + screen_x as usize;
 
                 // Behind BG: only draw if BG pixel is color 0
                 if behind_bg {
                     let bg_color = self.framebuffer[screen_idx];
-                    if bg_color != GB_PALETTE[0] { continue; }
+                    if bg_color != GB_PALETTE[0] {
+                        continue;
+                    }
                 }
 
                 let palette_color = (palette >> (color_id * 2)) & 3;
@@ -393,8 +433,16 @@ impl Gpu {
     // ======================== CGB RENDERING ========================
 
     fn render_bg_scanline_cgb(&mut self, ly: usize, offset: usize) {
-        let tile_data_area = if self.lcdc & 0x10 != 0 { 0x0000usize } else { 0x0800 };
-        let tile_map_area = if self.lcdc & 0x08 != 0 { 0x1C00usize } else { 0x1800 };
+        let tile_data_area = if self.lcdc & 0x10 != 0 {
+            0x0000usize
+        } else {
+            0x0800
+        };
+        let tile_map_area = if self.lcdc & 0x08 != 0 {
+            0x1C00usize
+        } else {
+            0x1800
+        };
         let signed_addr = self.lcdc & 0x10 == 0;
 
         let y = (self.scy as usize + ly) & 0xFF;
@@ -425,8 +473,14 @@ impl Gpu {
 
             let actual_row = if flip_y { 7 - pixel_row } else { pixel_row };
             let row_addr = tile_addr + actual_row * 2;
-            let vram_data = if tile_vram_bank == 1 { &self.vram1 } else { &self.vram };
-            if row_addr + 1 >= vram_data.len() { continue; }
+            let vram_data = if tile_vram_bank == 1 {
+                &self.vram1
+            } else {
+                &self.vram
+            };
+            if row_addr + 1 >= vram_data.len() {
+                continue;
+            }
 
             let lo = vram_data[row_addr];
             let hi = vram_data[row_addr + 1];
@@ -436,17 +490,27 @@ impl Gpu {
             let color = Self::cgb_color(&self.bg_palette, cgb_palette, color_id as usize);
             self.framebuffer[offset + x] = color;
             // Store priority info for sprite rendering
-            self.bg_priority[x] = (if color_id != 0 { 1 } else { 0 })
-                | (if bg_priority { 2 } else { 0 });
+            self.bg_priority[x] =
+                (if color_id != 0 { 1 } else { 0 }) | (if bg_priority { 2 } else { 0 });
         }
     }
 
     fn render_window_scanline_cgb(&mut self, ly: usize, offset: usize) {
-        if ly < self.wy as usize { return; }
+        if ly < self.wy as usize {
+            return;
+        }
         let wx = self.wx as i32 - 7;
 
-        let tile_data_area = if self.lcdc & 0x10 != 0 { 0x0000usize } else { 0x0800 };
-        let tile_map_area = if self.lcdc & 0x40 != 0 { 0x1C00usize } else { 0x1800 };
+        let tile_data_area = if self.lcdc & 0x10 != 0 {
+            0x0000usize
+        } else {
+            0x0800
+        };
+        let tile_map_area = if self.lcdc & 0x40 != 0 {
+            0x1C00usize
+        } else {
+            0x1800
+        };
         let signed_addr = self.lcdc & 0x10 == 0;
 
         let win_y = self.window_line as usize;
@@ -457,13 +521,17 @@ impl Gpu {
 
         for x in 0..SCREEN_W {
             let win_x = x as i32 - wx;
-            if win_x < 0 { continue; }
+            if win_x < 0 {
+                continue;
+            }
             rendered = true;
 
             let tile_col = win_x as usize / 8;
             let pixel_col = win_x as usize % 8;
             let map_idx = tile_row * 32 + tile_col;
-            if map_idx >= 1024 { continue; }
+            if map_idx >= 1024 {
+                continue;
+            }
 
             let tile_id = self.vram[tile_map_area + map_idx];
             let attrs = self.vram1[tile_map_area + map_idx];
@@ -482,8 +550,14 @@ impl Gpu {
 
             let actual_row = if flip_y { 7 - pixel_row } else { pixel_row };
             let row_addr = tile_addr + actual_row * 2;
-            let vram_data = if tile_vram_bank == 1 { &self.vram1 } else { &self.vram };
-            if row_addr + 1 >= vram_data.len() { continue; }
+            let vram_data = if tile_vram_bank == 1 {
+                &self.vram1
+            } else {
+                &self.vram
+            };
+            if row_addr + 1 >= vram_data.len() {
+                continue;
+            }
 
             let lo = vram_data[row_addr];
             let hi = vram_data[row_addr + 1];
@@ -492,8 +566,8 @@ impl Gpu {
 
             let color = Self::cgb_color(&self.bg_palette, cgb_palette, color_id as usize);
             self.framebuffer[offset + x] = color;
-            self.bg_priority[x] = (if color_id != 0 { 1 } else { 0 })
-                | (if bg_priority { 2 } else { 0 });
+            self.bg_priority[x] =
+                (if color_id != 0 { 1 } else { 0 }) | (if bg_priority { 2 } else { 0 });
         }
 
         if rendered {
@@ -535,27 +609,42 @@ impl Gpu {
             let tile_vram_bank = (flags >> 3) & 1;
 
             let mut row = ly as i32 - sy;
-            if flip_y { row = sprite_h as i32 - 1 - row; }
+            if flip_y {
+                row = sprite_h as i32 - 1 - row;
+            }
 
             if sprite_h == 16 {
                 tile &= 0xFE;
-                if row >= 8 { tile += 1; row -= 8; }
+                if row >= 8 {
+                    tile += 1;
+                    row -= 8;
+                }
             }
 
             let tile_addr = tile as usize * 16 + row as usize * 2;
-            let vram_data = if tile_vram_bank == 1 { &self.vram1 } else { &self.vram };
-            if tile_addr + 1 >= vram_data.len() { continue; }
+            let vram_data = if tile_vram_bank == 1 {
+                &self.vram1
+            } else {
+                &self.vram
+            };
+            if tile_addr + 1 >= vram_data.len() {
+                continue;
+            }
 
             let lo = vram_data[tile_addr];
             let hi = vram_data[tile_addr + 1];
 
             for px in 0..8i32 {
                 let screen_x = sx + px;
-                if screen_x < 0 || screen_x >= SCREEN_W as i32 { continue; }
+                if screen_x < 0 || screen_x >= SCREEN_W as i32 {
+                    continue;
+                }
 
                 let bit = if flip_x { px } else { 7 - px } as u8;
                 let color_id = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
-                if color_id == 0 { continue; } // Transparent
+                if color_id == 0 {
+                    continue;
+                } // Transparent
 
                 let sx_idx = screen_x as usize;
                 let screen_idx = offset + sx_idx;
@@ -578,16 +667,28 @@ impl Gpu {
     // VRAM read/write (bank-aware for CGB)
     pub fn read_vram(&self, addr: u16) -> u8 {
         let idx = (addr & 0x1FFF) as usize;
-        if self.vram_bank == 1 { self.vram1[idx] } else { self.vram[idx] }
+        if self.vram_bank == 1 {
+            self.vram1[idx]
+        } else {
+            self.vram[idx]
+        }
     }
     pub fn write_vram(&mut self, addr: u16, val: u8) {
         let idx = (addr & 0x1FFF) as usize;
-        if self.vram_bank == 1 { self.vram1[idx] = val; } else { self.vram[idx] = val; }
+        if self.vram_bank == 1 {
+            self.vram1[idx] = val;
+        } else {
+            self.vram[idx] = val;
+        }
     }
     /// Read VRAM from a specific bank (0 or 1)
     pub fn read_vram_bank(&self, addr: u16, bank: u8) -> u8 {
         let idx = (addr & 0x1FFF) as usize;
-        if bank == 1 { self.vram1[idx] } else { self.vram[idx] }
+        if bank == 1 {
+            self.vram1[idx]
+        } else {
+            self.vram[idx]
+        }
     }
 
     // CGB color palette access
@@ -617,7 +718,9 @@ impl Gpu {
     /// Convert CGB RGB555 palette entry to ARGB8888
     fn cgb_color(palette_data: &[u8], palette_num: usize, color_idx: usize) -> u32 {
         let offset = palette_num * 8 + color_idx * 2;
-        if offset + 1 >= palette_data.len() { return 0xFF000000; }
+        if offset + 1 >= palette_data.len() {
+            return 0xFF000000;
+        }
         let lo = palette_data[offset] as u16;
         let hi = palette_data[offset + 1] as u16;
         let rgb555 = lo | (hi << 8);
@@ -638,6 +741,8 @@ impl Gpu {
     }
     pub fn write_oam(&mut self, addr: u16, val: u8) {
         let idx = (addr - 0xFE00) as usize;
-        if idx < 160 { self.oam[idx] = val; }
+        if idx < 160 {
+            self.oam[idx] = val;
+        }
     }
 }

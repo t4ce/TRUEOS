@@ -16,7 +16,10 @@ const HYPER_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
 const HYPER_MENU_ROWS: [[&str; 2]; 3] = [
     ["status", "Show the kernel Hyper transport surfaces"],
     ["probe", "Describe the background HTTP/1 probe service"],
-    ["<url> [path]", "Download URL into TRUEOSFS apps/common by default"],
+    [
+        "<url> [path]",
+        "Download URL into TRUEOSFS apps/common by default",
+    ],
 ];
 const HYPER_DOWNLOAD_TIMEOUT_MS: u32 = 120_000;
 const HYPER_DOWNLOAD_MAX_BYTES: usize = 16 * 1024 * 1024 * 1024;

@@ -208,33 +208,32 @@ fn log_fault_alloc_trace() {
         trace.payload_start,
         trace.aligned_used,
     );
-    crate::globalog::log_with_purpose(Some("info"), format_args!(
-        "alloc-trace: seq={} caller=0x{:016X} caller1=0x{:016X} caller2=0x{:016X} size={} align={} stage={} head=0x{:016X} block=0x{:016X} block_size={} next=0x{:016X} payload=0x{:016X} aligned_used={}\n",
-        trace.seq,
-        trace.caller_rip,
-        trace.caller_rip_1,
-        trace.caller_rip_2,
-        trace.layout_size,
-        trace.layout_align,
-        trace.stage,
-        trace.head_ptr,
-        trace.block_ptr,
-        trace.block_size,
-        trace.block_next,
-        trace.payload_start,
-        trace.aligned_used,
-    ));
+    crate::globalog::log_with_purpose(
+        Some("info"),
+        format_args!(
+            "alloc-trace: seq={} caller=0x{:016X} caller1=0x{:016X} caller2=0x{:016X} size={} align={} stage={} head=0x{:016X} block=0x{:016X} block_size={} next=0x{:016X} payload=0x{:016X} aligned_used={}\n",
+            trace.seq,
+            trace.caller_rip,
+            trace.caller_rip_1,
+            trace.caller_rip_2,
+            trace.layout_size,
+            trace.layout_align,
+            trace.stage,
+            trace.head_ptr,
+            trace.block_ptr,
+            trace.block_size,
+            trace.block_next,
+            trace.payload_start,
+            trace.aligned_used,
+        ),
+    );
 }
 
 #[inline]
 fn is_canonical_addr(v: usize) -> bool {
     let sign = (v >> 47) & 1;
     let high = v >> 48;
-    if sign == 0 {
-        high == 0
-    } else {
-        high == 0xFFFF
-    }
+    if sign == 0 { high == 0 } else { high == 0xFFFF }
 }
 
 fn dump_stack_words(sp: usize, words: usize) {

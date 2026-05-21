@@ -10,8 +10,8 @@
 
 #![allow(dead_code)]
 
-pub mod pattern;
 pub mod dmg;
+pub mod pattern;
 pub mod player;
 pub mod synth;
 pub mod tables;
@@ -32,24 +32,25 @@ static PATTERNS: Mutex<Option<PatternBank>> = Mutex::new(None);
 static PLAYER: Mutex<Option<PatternPlayer>> = Mutex::new(None);
 static BASSLINE_TOGGLE_SEQ: AtomicU32 = AtomicU32::new(0);
 
-const PIANO_PROBE_MAX_NOTES: usize = 8;
+const PIANO_AUDIO_DEMO_MAX_NOTES: usize = 8;
 
 #[derive(Copy, Clone)]
-struct PianoProbeHeldState {
+struct PianoAudioDemoHeldState {
     len: usize,
-    notes: [u8; PIANO_PROBE_MAX_NOTES],
+    notes: [u8; PIANO_AUDIO_DEMO_MAX_NOTES],
 }
 
-impl PianoProbeHeldState {
+impl PianoAudioDemoHeldState {
     const fn empty() -> Self {
         Self {
             len: 0,
-            notes: [0; PIANO_PROBE_MAX_NOTES],
+            notes: [0; PIANO_AUDIO_DEMO_MAX_NOTES],
         }
     }
 }
 
-static PIANO_PROBE_HELD: Mutex<PianoProbeHeldState> = Mutex::new(PianoProbeHeldState::empty());
+static PIANO_AUDIO_DEMO_HELD: Mutex<PianoAudioDemoHeldState> =
+    Mutex::new(PianoAudioDemoHeldState::empty());
 
 /// Initialize the audio subsystem (HDA driver + synth engine + pattern bank)
 pub fn init() -> Result<(), &'static str> {
@@ -258,7 +259,7 @@ fn note_in_slice(notes: &[u8], len: usize, note: u8) -> bool {
 }
 
 /// Render and play the currently held piano notes as one mixed HDA buffer.
-pub fn play_piano_held_probe(
+pub fn play_piano_held_audio_demo(
     notes: &[u8],
     velocities: &[u8],
     len: usize,
@@ -269,10 +270,10 @@ pub fn play_piano_held_probe(
     let held_len = len
         .min(notes.len())
         .min(velocities.len())
-        .min(PIANO_PROBE_MAX_NOTES);
+        .min(PIANO_AUDIO_DEMO_MAX_NOTES);
 
     let samples = {
-        let mut held = PIANO_PROBE_HELD.lock();
+        let mut held = PIANO_AUDIO_DEMO_HELD.lock();
         let mut synth_lock = SYNTH.lock();
         let engine = synth_lock.as_mut().ok_or("Synth not initialized")?;
         let saved_wf = engine.waveform;
@@ -296,7 +297,7 @@ pub fn play_piano_held_probe(
         }
 
         held.len = held_len;
-        for idx in 0..PIANO_PROBE_MAX_NOTES {
+        for idx in 0..PIANO_AUDIO_DEMO_MAX_NOTES {
             held.notes[idx] = if idx < held_len {
                 notes[idx].min(127)
             } else {
@@ -420,12 +421,16 @@ pub fn pattern_play(name: &str, loops: u32) -> Result<(), &'static str> {
 }
 
 /// Play a short generated phrase seeded from the latest piano MIDI note.
-pub fn pattern_play_piano_probe(note: u8, velocity: u8, loops: u32) -> Result<(), &'static str> {
+pub fn pattern_play_piano_audio_demo(
+    note: u8,
+    velocity: u8,
+    loops: u32,
+) -> Result<(), &'static str> {
     ensure_patterns()?;
 
     let root = note.min(127);
     let vel = velocity.clamp(48, 127);
-    let mut pattern = Pattern::new("piano-probe", 8, 132);
+    let mut pattern = Pattern::new("piano-audio-demo", 8, 132);
     pattern.waveform = Waveform::Triangle;
     pattern.envelope = Envelope::new(2, 90, 45, 80);
 

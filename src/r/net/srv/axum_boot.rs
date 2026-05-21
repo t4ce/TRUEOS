@@ -1,7 +1,10 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
-use core::{net::SocketAddr, sync::atomic::{AtomicU16, Ordering}};
+use core::{
+    net::SocketAddr,
+    sync::atomic::{AtomicU16, Ordering},
+};
 use tokio::io;
 
 use axum::{Json, Router, routing::get};
