@@ -557,11 +557,7 @@ async fn probe_and_bind(
         }
     };
     if !quiet_empty || !devices.is_empty() {
-        crate::log!(
-            "crabusb: probe done ctrl={} devices={}\n",
-            info.index,
-            devices.len()
-        );
+        crate::log!("crabusb: probe done ctrl={} devices={}\n", info.index, devices.len());
     }
 
     update_runtime_diag(info.index, |diag| {

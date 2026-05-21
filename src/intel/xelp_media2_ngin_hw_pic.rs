@@ -1071,8 +1071,7 @@ fn build_jpeg_smoke_batch_skeleton(
         ),
     )?;
     batch[surface + 2] =
-        ((coded_width.saturating_sub(1)) << 4)
-            | ((decode_surface_height.saturating_sub(1)) << 18);
+        ((coded_width.saturating_sub(1)) << 4) | ((decode_surface_height.saturating_sub(1)) << 18);
     batch[surface + 3] = (1 << 1)
         | 1
         | ((output_pitch.saturating_sub(1)) << 3)
@@ -1290,8 +1289,7 @@ pub(super) fn submit_jpeg_smoke_batch(
         return None;
     }
     let surface_dw2 =
-        ((coded_width.saturating_sub(1)) << 4)
-            | ((decode_surface_height.saturating_sub(1)) << 18);
+        ((coded_width.saturating_sub(1)) << 4) | ((decode_surface_height.saturating_sub(1)) << 18);
     let surface_dw3 = (1 << 1)
         | 1
         | ((u32::try_from(output_surface_pitch)

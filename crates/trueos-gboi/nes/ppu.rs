@@ -2,9 +2,9 @@
 //! Scanline-accurate rendering: background tiles, sprites, scrolling, palettes
 #![allow(dead_code)]
 
+use super::cartridge::Cartridge;
 use alloc::vec;
 use alloc::vec::Vec;
-use super::cartridge::Cartridge;
 
 // NES system palette — 64 RGB colors (2C02)
 pub const NES_PALETTE: [u32; 64] = [
@@ -20,22 +20,22 @@ pub const NES_PALETTE: [u32; 64] = [
 
 pub struct Ppu {
     // Registers
-    pub ctrl: u8,       // $2000 PPUCTRL
-    pub mask: u8,       // $2001 PPUMASK
-    pub status: u8,     // $2002 PPUSTATUS
-    pub oam_addr: u8,   // $2003 OAMADDR
+    pub ctrl: u8,     // $2000 PPUCTRL
+    pub mask: u8,     // $2001 PPUMASK
+    pub status: u8,   // $2002 PPUSTATUS
+    pub oam_addr: u8, // $2003 OAMADDR
 
     // Internal registers
-    pub v: u16,         // Current VRAM address (15-bit)
-    pub t: u16,         // Temporary VRAM address (15-bit)
-    pub fine_x: u8,     // Fine X scroll (3-bit)
-    pub w: bool,        // Write toggle for $2005/$2006
-    pub data_buf: u8,   // PPUDATA read buffer
+    pub v: u16,       // Current VRAM address (15-bit)
+    pub t: u16,       // Temporary VRAM address (15-bit)
+    pub fine_x: u8,   // Fine X scroll (3-bit)
+    pub w: bool,      // Write toggle for $2005/$2006
+    pub data_buf: u8, // PPUDATA read buffer
 
     // Memory
-    pub oam: [u8; 256],        // Object Attribute Memory (64 sprites × 4 bytes)
-    pub vram: [u8; 2048],      // 2KB nametable RAM
-    pub palette: [u8; 32],     // Palette RAM
+    pub oam: [u8; 256],    // Object Attribute Memory (64 sprites × 4 bytes)
+    pub vram: [u8; 2048],  // 2KB nametable RAM
+    pub palette: [u8; 32], // Palette RAM
 
     // Rendering state
     pub scanline: i32,
@@ -55,8 +55,15 @@ pub struct Ppu {
 impl Ppu {
     pub fn new() -> Self {
         Self {
-            ctrl: 0, mask: 0, status: 0, oam_addr: 0,
-            v: 0, t: 0, fine_x: 0, w: false, data_buf: 0,
+            ctrl: 0,
+            mask: 0,
+            status: 0,
+            oam_addr: 0,
+            v: 0,
+            t: 0,
+            fine_x: 0,
+            w: false,
+            data_buf: 0,
             oam: [0; 256],
             vram: [0; 2048],
             palette: [0; 32],
@@ -75,16 +82,19 @@ impl Ppu {
 
     pub fn read_register(&mut self, addr: u16, cart: &Cartridge) -> u8 {
         match addr & 7 {
-            2 => { // PPUSTATUS
+            2 => {
+                // PPUSTATUS
                 let val = (self.status & 0xE0) | (self.data_buf & 0x1F);
                 self.status &= !0x80; // Clear VBlank
                 self.w = false;
                 val
             }
-            4 => { // OAMDATA
+            4 => {
+                // OAMDATA
                 self.oam[self.oam_addr as usize]
             }
-            7 => { // PPUDATA
+            7 => {
+                // PPUDATA
                 let addr = self.v & 0x3FFF;
                 let val = if addr >= 0x3F00 {
                     self.palette_read(addr)
@@ -93,7 +103,9 @@ impl Ppu {
                     self.data_buf = self.ppu_read(addr, cart);
                     buffered
                 };
-                self.v = self.v.wrapping_add(if self.ctrl & 0x04 != 0 { 32 } else { 1 });
+                self.v = self
+                    .v
+                    .wrapping_add(if self.ctrl & 0x04 != 0 { 32 } else { 1 });
                 val
             }
             _ => 0,
@@ -102,17 +114,20 @@ impl Ppu {
 
     pub fn write_register(&mut self, addr: u16, val: u8, cart: &mut Cartridge) {
         match addr & 7 {
-            0 => { // PPUCTRL
+            0 => {
+                // PPUCTRL
                 self.ctrl = val;
                 self.t = (self.t & 0xF3FF) | (((val as u16) & 3) << 10);
             }
             1 => self.mask = val,
             3 => self.oam_addr = val,
-            4 => { // OAMDATA
+            4 => {
+                // OAMDATA
                 self.oam[self.oam_addr as usize] = val;
                 self.oam_addr = self.oam_addr.wrapping_add(1);
             }
-            5 => { // PPUSCROLL
+            5 => {
+                // PPUSCROLL
                 if !self.w {
                     self.t = (self.t & 0xFFE0) | ((val as u16) >> 3);
                     self.fine_x = val & 7;
@@ -123,7 +138,8 @@ impl Ppu {
                 }
                 self.w = !self.w;
             }
-            6 => { // PPUADDR
+            6 => {
+                // PPUADDR
                 if !self.w {
                     self.t = (self.t & 0x00FF) | (((val as u16) & 0x3F) << 8);
                 } else {
@@ -132,10 +148,13 @@ impl Ppu {
                 }
                 self.w = !self.w;
             }
-            7 => { // PPUDATA
+            7 => {
+                // PPUDATA
                 let a = self.v & 0x3FFF;
                 self.ppu_write(a, val, cart);
-                self.v = self.v.wrapping_add(if self.ctrl & 0x04 != 0 { 32 } else { 1 });
+                self.v = self
+                    .v
+                    .wrapping_add(if self.ctrl & 0x04 != 0 { 32 } else { 1 });
             }
             _ => {}
         }
@@ -176,7 +195,9 @@ impl Ppu {
 
     fn palette_read(&self, addr: u16) -> u8 {
         let mut idx = (addr & 0x1F) as usize;
-        if idx >= 16 && idx & 3 == 0 { idx -= 16; }
+        if idx >= 16 && idx & 3 == 0 {
+            idx -= 16;
+        }
         self.palette[idx] & 0x3F
     }
 
@@ -224,15 +245,25 @@ impl Ppu {
 
     fn render_scanline(&mut self, cart: &Cartridge) {
         let y = self.scanline as usize;
-        if y >= 240 { return; }
+        if y >= 240 {
+            return;
+        }
 
         let bg_enabled = self.mask & 0x08 != 0;
         let spr_enabled = self.mask & 0x10 != 0;
         let bg_left = self.mask & 0x02 != 0;
         let spr_left = self.mask & 0x04 != 0;
 
-        let bg_pattern = if self.ctrl & 0x10 != 0 { 0x1000u16 } else { 0u16 };
-        let spr_pattern = if self.ctrl & 0x08 != 0 { 0x1000u16 } else { 0u16 };
+        let bg_pattern = if self.ctrl & 0x10 != 0 {
+            0x1000u16
+        } else {
+            0u16
+        };
+        let spr_pattern = if self.ctrl & 0x08 != 0 {
+            0x1000u16
+        } else {
+            0u16
+        };
         let tall_sprites = self.ctrl & 0x20 != 0;
         let spr_h = if tall_sprites { 16 } else { 8 };
 
@@ -258,9 +289,10 @@ impl Ppu {
                 let nt_addr = nt_base + (coarse_y + fine_y / 8) * 32 + actual_tile_x;
                 let tile_id = self.ppu_read(nt_addr, cart) as u16;
 
-                let attr_addr = nt_base + 0x03C0 + ((coarse_y + fine_y / 8) / 4) * 8 + actual_tile_x / 4;
+                let attr_addr =
+                    nt_base + 0x03C0 + ((coarse_y + fine_y / 8) / 4) * 8 + actual_tile_x / 4;
                 let attr = self.ppu_read(attr_addr, cart);
-                let shift = ((((coarse_y + fine_y / 8) & 2)) | ((actual_tile_x & 2) >> 1)) * 2;
+                let shift = (((coarse_y + fine_y / 8) & 2) | ((actual_tile_x & 2) >> 1)) * 2;
                 let palette_id = (attr >> shift) & 3;
 
                 let pattern_addr = bg_pattern + tile_id * 16 + (fine_y & 7);
@@ -275,11 +307,12 @@ impl Ppu {
             };
 
             // Sprite pixel
-            let (spr_color, spr_palette, spr_priority, is_sprite0) = if spr_enabled && (spr_left || x >= 8) {
-                self.get_sprite_pixel(x as u8, y as u8, spr_pattern, spr_h, cart)
-            } else {
-                (0, 0, false, false)
-            };
+            let (spr_color, spr_palette, spr_priority, is_sprite0) =
+                if spr_enabled && (spr_left || x >= 8) {
+                    self.get_sprite_pixel(x as u8, y as u8, spr_pattern, spr_h, cart)
+                } else {
+                    (0, 0, false, false)
+                };
 
             // Sprite 0 hit detection
             if is_sprite0 && bg_color != 0 && spr_color != 0 && x < 255 {
@@ -309,7 +342,14 @@ impl Ppu {
         }
     }
 
-    fn get_sprite_pixel(&self, x: u8, y: u8, spr_pattern: u16, spr_h: u8, cart: &Cartridge) -> (u8, u8, bool, bool) {
+    fn get_sprite_pixel(
+        &self,
+        x: u8,
+        y: u8,
+        spr_pattern: u16,
+        spr_h: u8,
+        cart: &Cartridge,
+    ) -> (u8, u8, bool, bool) {
         for i in 0..self.sprite_count as usize {
             let idx = self.sprite_indices[i] as usize * 4;
             let spr_y = self.oam[idx] as i16;
@@ -317,7 +357,9 @@ impl Ppu {
             let spr_attr = self.oam[idx + 2];
             let spr_x = self.oam[idx + 3] as i16;
 
-            if (x as i16) < spr_x || (x as i16) >= spr_x + 8 { continue; }
+            if (x as i16) < spr_x || (x as i16) >= spr_x + 8 {
+                continue;
+            }
 
             let flip_h = spr_attr & 0x40 != 0;
             let flip_v = spr_attr & 0x80 != 0;
@@ -325,8 +367,12 @@ impl Ppu {
             let palette_id = spr_attr & 3;
 
             let mut row = y as i16 - spr_y - 1;
-            if flip_v { row = (spr_h as i16 - 1) - row; }
-            if row < 0 || row >= spr_h as i16 { continue; }
+            if flip_v {
+                row = (spr_h as i16 - 1) - row;
+            }
+            if row < 0 || row >= spr_h as i16 {
+                continue;
+            }
 
             let (tile, pattern_base) = if spr_h == 16 {
                 let bank = (spr_tile as u16 & 1) * 0x1000;
@@ -345,7 +391,11 @@ impl Ppu {
             let lo = self.ppu_read(pattern_addr, cart);
             let hi = self.ppu_read(pattern_addr + 8, cart);
 
-            let col = if flip_h { x as i16 - spr_x } else { 7 - (x as i16 - spr_x) };
+            let col = if flip_h {
+                x as i16 - spr_x
+            } else {
+                7 - (x as i16 - spr_x)
+            };
             let color = ((lo >> col) & 1) | (((hi >> col) & 1) << 1);
 
             if color != 0 {

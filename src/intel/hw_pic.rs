@@ -443,11 +443,7 @@ fn process_jpeg_job(job: HwPicJob) -> HwPicOutput {
         } else {
             HwPicStatus::Failed
         },
-        if output_ready {
-            0
-        } else {
-            -13
-        }
+        if output_ready { 0 } else { -13 }
     );
     HwPicOutput {
         id: job.id,
@@ -477,10 +473,6 @@ fn process_jpeg_job(job: HwPicJob) -> HwPicOutput {
         gpu_addr: windows.output_surface_gpu_addr,
         phys_addr: backing.output_surface_phys,
         virt_addr: backing.output_surface_virt as usize,
-        error_code: if output_ready {
-            0
-        } else {
-            -13
-        },
+        error_code: if output_ready { 0 } else { -13 },
     }
 }

@@ -128,8 +128,8 @@ fn push_noise_burst(samples: &mut Vec<i16>, duration_ms: u32, volume: i32) {
 
 fn apply_loop_edge_fade(samples: &mut [i16], fade_ms: u32) {
     let frames = samples.len() / 2;
-    let fade_frames = ((SAMPLE_RATE_HZ as u64 * fade_ms as u64) / 1_000)
-        .min((frames / 2) as u64) as usize;
+    let fade_frames =
+        ((SAMPLE_RATE_HZ as u64 * fade_ms as u64) / 1_000).min((frames / 2) as u64) as usize;
     if fade_frames == 0 {
         return;
     }

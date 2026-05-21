@@ -4,11 +4,11 @@
 
 use alloc::vec;
 use alloc::vec::Vec;
+pub mod apu;
 pub mod cartridge;
+pub mod cpu;
 pub mod gpu;
 pub mod timer;
-pub mod cpu;
-pub mod apu;
 
 use cpu::GbBus;
 
@@ -72,30 +72,30 @@ pub struct GameBoyEmulator {
     pub cart: cartridge::Cartridge,
 
     // Memory — CGB: 8 banks of 4KB WRAM ($C000-$CFFF = bank 0, $D000-$DFFF = switchable)
-    pub wram: Vec<u8>,       // 32KB for CGB, 8KB for DMG
-    pub hram: [u8; 127],    // $FF80-$FFFE
+    pub wram: Vec<u8>,   // 32KB for CGB, 8KB for DMG
+    pub hram: [u8; 127], // $FF80-$FFFE
 
     // I/O
-    pub ie_reg: u8,          // $FFFF Interrupt Enable
-    pub if_reg: u8,          // $FF0F Interrupt Flag
-    pub joypad_reg: u8,      // $FF00 Joypad select
-    pub joypad_buttons: u8,  // A, B, Select, Start (active-low bits)
-    pub joypad_dirs: u8,     // Right, Left, Up, Down (active-low bits)
-    pub serial_data: u8,     // $FF01
-    pub serial_ctrl: u8,     // $FF02
+    pub ie_reg: u8,         // $FFFF Interrupt Enable
+    pub if_reg: u8,         // $FF0F Interrupt Flag
+    pub joypad_reg: u8,     // $FF00 Joypad select
+    pub joypad_buttons: u8, // A, B, Select, Start (active-low bits)
+    pub joypad_dirs: u8,    // Right, Left, Up, Down (active-low bits)
+    pub serial_data: u8,    // $FF01
+    pub serial_ctrl: u8,    // $FF02
 
     pub rom_loaded: bool,
     pub key_state: u32,
 
     // CGB registers
     pub cgb_mode: bool,
-    pub wram_bank: u8,       // $FF70: WRAM bank (1-7, 0 maps to 1)
-    pub key1: u8,            // $FF4D: Speed switch
-    pub hdma1: u8,           // $FF51: HDMA Source High
-    pub hdma2: u8,           // $FF52: HDMA Source Low
-    pub hdma3: u8,           // $FF53: HDMA Dest High
-    pub hdma4: u8,           // $FF54: HDMA Dest Low
-    pub hdma5: u8,           // $FF55: HDMA Length/Mode/Start
+    pub wram_bank: u8, // $FF70: WRAM bank (1-7, 0 maps to 1)
+    pub key1: u8,      // $FF4D: Speed switch
+    pub hdma1: u8,     // $FF51: HDMA Source High
+    pub hdma2: u8,     // $FF52: HDMA Source Low
+    pub hdma3: u8,     // $FF53: HDMA Dest High
+    pub hdma4: u8,     // $FF54: HDMA Dest Low
+    pub hdma5: u8,     // $FF55: HDMA Length/Mode/Start
     pub hdma_active: bool,
 }
 
@@ -154,13 +154,17 @@ impl GameBoyEmulator {
             if is_cgb {
                 // Initialize CGB BG palette 0 to a reasonable default (white gradient)
                 // Palette 0 color 0 = white
-                self.gpu.bg_palette[0] = 0xFF; self.gpu.bg_palette[1] = 0x7F;
+                self.gpu.bg_palette[0] = 0xFF;
+                self.gpu.bg_palette[1] = 0x7F;
                 // Palette 0 color 1 = light gray
-                self.gpu.bg_palette[2] = 0xB5; self.gpu.bg_palette[3] = 0x56;
+                self.gpu.bg_palette[2] = 0xB5;
+                self.gpu.bg_palette[3] = 0x56;
                 // Palette 0 color 2 = dark gray
-                self.gpu.bg_palette[4] = 0x4A; self.gpu.bg_palette[5] = 0x29;
+                self.gpu.bg_palette[4] = 0x4A;
+                self.gpu.bg_palette[5] = 0x29;
                 // Palette 0 color 3 = black
-                self.gpu.bg_palette[6] = 0x00; self.gpu.bg_palette[7] = 0x00;
+                self.gpu.bg_palette[6] = 0x00;
+                self.gpu.bg_palette[7] = 0x00;
                 // OBJ palettes similar defaults
                 for i in 0..8 {
                     self.gpu.obj_palette[i] = self.gpu.bg_palette[i];
@@ -168,7 +172,9 @@ impl GameBoyEmulator {
             }
             self.timer = timer::Timer::new();
             self.apu = apu::Apu::new();
-            for b in self.wram.iter_mut() { *b = 0; }
+            for b in self.wram.iter_mut() {
+                *b = 0;
+            }
             self.hram = [0; 127];
             self.ie_reg = 0;
             self.if_reg = 0;
@@ -243,7 +249,9 @@ impl GameBoyEmulator {
 
     /// Run one frame (~17556 M-cycles)
     pub fn tick(&mut self) {
-        if !self.rom_loaded { return; }
+        if !self.rom_loaded {
+            return;
+        }
 
         self.gpu.frame_ready = false;
         let mut frame_cycles: u32 = 0;
@@ -337,11 +345,13 @@ impl GameBoyEmulator {
     }
 
     fn render_no_rom(&self, out: &mut [u32], w: usize, h: usize) {
-        let bg = 0xFF081820u32;  // Dark green-black
-        let fg = 0xFFE0F8D0u32;  // Light green
-        let mg = 0xFF346856u32;  // Medium green
+        let bg = 0xFF081820u32; // Dark green-black
+        let fg = 0xFFE0F8D0u32; // Light green
+        let mg = 0xFF346856u32; // Medium green
 
-        for p in out.iter_mut() { *p = bg; }
+        for p in out.iter_mut() {
+            *p = bg;
+        }
 
         // Title
         draw_text(out, w, h, "GAME BOY", w / 2 - 32, h / 6, fg, 2);
@@ -355,16 +365,24 @@ impl GameBoyEmulator {
         let by = h * 5 / 8;
         let bw = 60usize;
         let bh = 80usize;
-        for x in (cx - bw/2)..=(cx + bw/2) {
+        for x in (cx - bw / 2)..=(cx + bw / 2) {
             if x < w {
-                if by < h { out[by * w + x] = mg; }
-                if by + bh < h { out[(by + bh) * w + x] = mg; }
+                if by < h {
+                    out[by * w + x] = mg;
+                }
+                if by + bh < h {
+                    out[(by + bh) * w + x] = mg;
+                }
             }
         }
         for y in by..=(by + bh) {
             if y < h {
-                if cx - bw/2 < w { out[y * w + (cx - bw/2)] = mg; }
-                if cx + bw/2 < w { out[y * w + (cx + bw/2)] = mg; }
+                if cx - bw / 2 < w {
+                    out[y * w + (cx - bw / 2)] = mg;
+                }
+                if cx + bw / 2 < w {
+                    out[y * w + (cx + bw / 2)] = mg;
+                }
             }
         }
         // Screen area
@@ -424,17 +442,33 @@ impl GbBus for BusAdapter<'_> {
             0xC000..=0xCFFF => self.wram[addr as usize - 0xC000],
             // WRAM bank 1-7 ($D000-$DFFF) — CGB switchable
             0xD000..=0xDFFF => {
-                let bank = if self.cgb_mode { (*self.wram_bank).max(1) as usize } else { 1 };
+                let bank = if self.cgb_mode {
+                    (*self.wram_bank).max(1) as usize
+                } else {
+                    1
+                };
                 let offset = bank * 0x1000 + (addr as usize - 0xD000);
-                if offset < self.wram.len() { self.wram[offset] } else { 0xFF }
-            },
+                if offset < self.wram.len() {
+                    self.wram[offset]
+                } else {
+                    0xFF
+                }
+            }
             // Echo RAM
             0xE000..=0xEFFF => self.wram[addr as usize - 0xE000],
             0xF000..=0xFDFF => {
-                let bank = if self.cgb_mode { (*self.wram_bank).max(1) as usize } else { 1 };
+                let bank = if self.cgb_mode {
+                    (*self.wram_bank).max(1) as usize
+                } else {
+                    1
+                };
                 let offset = bank * 0x1000 + (addr as usize - 0xF000);
-                if offset < self.wram.len() { self.wram[offset] } else { 0xFF }
-            },
+                if offset < self.wram.len() {
+                    self.wram[offset]
+                } else {
+                    0xFF
+                }
+            }
             // OAM
             0xFE00..=0xFE9F => self.gpu.read_oam(addr),
             // Not usable
@@ -442,8 +476,12 @@ impl GbBus for BusAdapter<'_> {
             // I/O registers
             0xFF00 => {
                 let mut val = *self.joypad_reg & 0x30;
-                if val & 0x10 == 0 { val |= *self.joypad_dirs; }
-                if val & 0x20 == 0 { val |= *self.joypad_buttons; }
+                if val & 0x10 == 0 {
+                    val |= *self.joypad_dirs;
+                }
+                if val & 0x20 == 0 {
+                    val |= *self.joypad_buttons;
+                }
                 val | 0xC0
             }
             0xFF01 => *self.serial_data,
@@ -460,7 +498,13 @@ impl GbBus for BusAdapter<'_> {
             0xFF41 => self.gpu.read_stat(),
             0xFF42 => self.gpu.scy,
             0xFF43 => self.gpu.scx,
-            0xFF44 => if self.gpu.lcdc & 0x80 != 0 { self.gpu.ly } else { 0 },
+            0xFF44 => {
+                if self.gpu.lcdc & 0x80 != 0 {
+                    self.gpu.ly
+                } else {
+                    0
+                }
+            }
             0xFF45 => self.gpu.lyc,
             0xFF46 => 0, // DMA — write-only
             0xFF47 => self.gpu.bgp,
@@ -469,18 +513,18 @@ impl GbBus for BusAdapter<'_> {
             0xFF4A => self.gpu.wy,
             0xFF4B => self.gpu.wx,
             // CGB registers
-            0xFF4D => *self.key1,                      // KEY1 speed switch
-            0xFF4F => self.gpu.vram_bank | 0xFE,       // VBK VRAM bank (only bit 0)
+            0xFF4D => *self.key1,                // KEY1 speed switch
+            0xFF4F => self.gpu.vram_bank | 0xFE, // VBK VRAM bank (only bit 0)
             0xFF51 => *self.hdma1,
             0xFF52 => *self.hdma2,
             0xFF53 => *self.hdma3,
             0xFF54 => *self.hdma4,
             0xFF55 => *self.hdma5,
-            0xFF68 => self.gpu.bcps,                   // BCPS
-            0xFF69 => self.gpu.read_bcpd(),            // BCPD
-            0xFF6A => self.gpu.ocps,                   // OCPS
-            0xFF6B => self.gpu.read_ocpd(),            // OCPD
-            0xFF70 => *self.wram_bank,                 // SVBK WRAM bank
+            0xFF68 => self.gpu.bcps,        // BCPS
+            0xFF69 => self.gpu.read_bcpd(), // BCPD
+            0xFF6A => self.gpu.ocps,        // OCPS
+            0xFF6B => self.gpu.read_ocpd(), // OCPD
+            0xFF70 => *self.wram_bank,      // SVBK WRAM bank
             // HRAM
             0xFF80..=0xFFFE => self.hram[(addr - 0xFF80) as usize],
             // IE
@@ -501,17 +545,29 @@ impl GbBus for BusAdapter<'_> {
             0xC000..=0xCFFF => self.wram[addr as usize - 0xC000] = val,
             // WRAM bank 1-7 (CGB switchable)
             0xD000..=0xDFFF => {
-                let bank = if self.cgb_mode { (*self.wram_bank).max(1) as usize } else { 1 };
+                let bank = if self.cgb_mode {
+                    (*self.wram_bank).max(1) as usize
+                } else {
+                    1
+                };
                 let offset = bank * 0x1000 + (addr as usize - 0xD000);
-                if offset < self.wram.len() { self.wram[offset] = val; }
-            },
+                if offset < self.wram.len() {
+                    self.wram[offset] = val;
+                }
+            }
             // Echo RAM
             0xE000..=0xEFFF => self.wram[addr as usize - 0xE000] = val,
             0xF000..=0xFDFF => {
-                let bank = if self.cgb_mode { (*self.wram_bank).max(1) as usize } else { 1 };
+                let bank = if self.cgb_mode {
+                    (*self.wram_bank).max(1) as usize
+                } else {
+                    1
+                };
                 let offset = bank * 0x1000 + (addr as usize - 0xF000);
-                if offset < self.wram.len() { self.wram[offset] = val; }
-            },
+                if offset < self.wram.len() {
+                    self.wram[offset] = val;
+                }
+            }
             // OAM
             0xFE00..=0xFE9F => self.gpu.write_oam(addr, val),
             // Not usable
@@ -554,10 +610,18 @@ impl GbBus for BusAdapter<'_> {
                         a @ 0xA000..=0xBFFF => self.cart.read(a),
                         a @ 0xC000..=0xCFFF => self.wram[a as usize - 0xC000],
                         a @ 0xD000..=0xDFFF => {
-                            let bank = if self.cgb_mode { (*self.wram_bank).max(1) as usize } else { 1 };
+                            let bank = if self.cgb_mode {
+                                (*self.wram_bank).max(1) as usize
+                            } else {
+                                1
+                            };
                             let offset = bank * 0x1000 + (a as usize - 0xD000);
-                            if offset < self.wram.len() { self.wram[offset] } else { 0 }
-                        },
+                            if offset < self.wram.len() {
+                                self.wram[offset]
+                            } else {
+                                0
+                            }
+                        }
                         _ => 0,
                     };
                     self.gpu.write_oam(0xFE00 + i, byte);
@@ -570,7 +634,7 @@ impl GbBus for BusAdapter<'_> {
             0xFF4B => self.gpu.wx = val,
             // CGB registers
             0xFF4D => *self.key1 = (*self.key1 & 0x80) | (val & 0x01), // KEY1: only bit 0 writable
-            0xFF4F => self.gpu.vram_bank = val & 0x01,                  // VBK
+            0xFF4F => self.gpu.vram_bank = val & 0x01,                 // VBK
             0xFF51 => *self.hdma1 = val,
             0xFF52 => *self.hdma2 = val & 0xF0,
             0xFF53 => *self.hdma3 = val & 0x1F,
@@ -581,7 +645,7 @@ impl GbBus for BusAdapter<'_> {
                     let src = ((*self.hdma1 as u16) << 8) | (*self.hdma2 as u16);
                     let dst = 0x8000 | (((*self.hdma3 as u16) << 8) | (*self.hdma4 as u16));
                     let len = ((val as u16 & 0x7F) + 1) * 16;
-                    
+
                     if val & 0x80 == 0 {
                         // General-purpose DMA: transfer all at once
                         for i in 0..len {
@@ -593,8 +657,12 @@ impl GbBus for BusAdapter<'_> {
                                 a @ 0xD000..=0xDFFF => {
                                     let bank = (*self.wram_bank).max(1) as usize;
                                     let offset = bank * 0x1000 + (a as usize - 0xD000);
-                                    if offset < self.wram.len() { self.wram[offset] } else { 0 }
-                                },
+                                    if offset < self.wram.len() {
+                                        self.wram[offset]
+                                    } else {
+                                        0
+                                    }
+                                }
                                 _ => 0xFF,
                             };
                             self.gpu.write_vram(dst.wrapping_add(i), byte);
@@ -610,8 +678,12 @@ impl GbBus for BusAdapter<'_> {
                                 a @ 0xD000..=0xDFFF => {
                                     let bank = (*self.wram_bank).max(1) as usize;
                                     let offset = bank * 0x1000 + (a as usize - 0xD000);
-                                    if offset < self.wram.len() { self.wram[offset] } else { 0 }
-                                },
+                                    if offset < self.wram.len() {
+                                        self.wram[offset]
+                                    } else {
+                                        0
+                                    }
+                                }
                                 _ => 0xFF,
                             };
                             self.gpu.write_vram(dst.wrapping_add(i), byte);
@@ -620,14 +692,16 @@ impl GbBus for BusAdapter<'_> {
                     }
                 }
             }
-            0xFF68 => self.gpu.bcps = val,               // BCPS
-            0xFF69 => self.gpu.write_bcpd(val),           // BCPD
-            0xFF6A => self.gpu.ocps = val,               // OCPS
-            0xFF6B => self.gpu.write_ocpd(val),           // OCPD
+            0xFF68 => self.gpu.bcps = val,      // BCPS
+            0xFF69 => self.gpu.write_bcpd(val), // BCPD
+            0xFF6A => self.gpu.ocps = val,      // OCPS
+            0xFF6B => self.gpu.write_ocpd(val), // OCPD
             0xFF70 => {
                 // SVBK: WRAM bank select (1-7, writing 0 selects bank 1)
                 *self.wram_bank = val & 0x07;
-                if *self.wram_bank == 0 { *self.wram_bank = 1; }
+                if *self.wram_bank == 0 {
+                    *self.wram_bank = 1;
+                }
             }
             // HRAM
             0xFF80..=0xFFFE => self.hram[(addr - 0xFF80) as usize] = val,
@@ -639,7 +713,16 @@ impl GbBus for BusAdapter<'_> {
 }
 
 // ======== Simple text rendering (3×5 bitmap font) ========
-fn draw_text(out: &mut [u32], w: usize, h: usize, text: &str, x: usize, y: usize, color: u32, scale: usize) {
+fn draw_text(
+    out: &mut [u32],
+    w: usize,
+    h: usize,
+    text: &str,
+    x: usize,
+    y: usize,
+    color: u32,
+    scale: usize,
+) {
     let mut cx = x;
     for ch in text.bytes() {
         let glyph = get_glyph(ch);
@@ -650,7 +733,9 @@ fn draw_text(out: &mut [u32], w: usize, h: usize, text: &str, x: usize, y: usize
                         for sx in 0..scale {
                             let px = cx + col * scale + sx;
                             let py = y + row * scale + sy;
-                            if px < w && py < h { out[py * w + px] = color; }
+                            if px < w && py < h {
+                                out[py * w + px] = color;
+                            }
                         }
                     }
                 }

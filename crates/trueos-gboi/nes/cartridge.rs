@@ -56,8 +56,12 @@ impl Cartridge {
     }
 
     pub fn from_ines(data: &[u8]) -> Option<Self> {
-        if data.len() < 16 { return None; }
-        if data[0..4] != INES_MAGIC { return None; }
+        if data.len() < 16 {
+            return None;
+        }
+        if data[0..4] != INES_MAGIC {
+            return None;
+        }
 
         let prg_banks = data[4] as usize;
         let chr_banks = data[5] as usize;
@@ -76,7 +80,9 @@ impl Cartridge {
         let prg_size = prg_banks * 16384;
         let chr_size = chr_banks * 8192;
 
-        if data.len() < offset + prg_size + chr_size { return None; }
+        if data.len() < offset + prg_size + chr_size {
+            return None;
+        }
 
         let prg_rom = data[offset..offset + prg_size].to_vec();
         let (chr_rom, chr_ram) = if chr_size > 0 {
@@ -144,12 +150,20 @@ impl Cartridge {
             3 => {
                 let bank_offset = (self.m3_chr_bank as usize) * 8192;
                 let idx = bank_offset + (addr as usize & 0x1FFF);
-                if idx < self.chr_rom.len() { self.chr_rom[idx] } else { 0 }
+                if idx < self.chr_rom.len() {
+                    self.chr_rom[idx]
+                } else {
+                    0
+                }
             }
             1 => self.mapper1_ppu_read(addr),
             _ => {
                 let idx = addr as usize & (self.chr_rom.len() - 1).max(0x1FFF);
-                if idx < self.chr_rom.len() { self.chr_rom[idx] } else { 0 }
+                if idx < self.chr_rom.len() {
+                    self.chr_rom[idx]
+                } else {
+                    0
+                }
             }
         }
     }
@@ -240,7 +254,9 @@ impl Cartridge {
     }
 
     fn mapper1_cpu_write(&mut self, addr: u16, val: u8) {
-        if addr < 0x8000 { return; }
+        if addr < 0x8000 {
+            return;
+        }
 
         if val & 0x80 != 0 {
             self.m1_shift = 0x10;
@@ -288,7 +304,11 @@ impl Cartridge {
                 (self.m1_chr_bank1 as usize) * 4096 + (addr as usize & 0x0FFF)
             }
         };
-        if idx < self.chr_rom.len() { self.chr_rom[idx] } else { 0 }
+        if idx < self.chr_rom.len() {
+            self.chr_rom[idx]
+        } else {
+            0
+        }
     }
 
     // ======================== Mapper 2 (UxROM) ========================

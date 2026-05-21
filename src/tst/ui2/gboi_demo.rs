@@ -224,8 +224,8 @@ async fn run_ui2_window_mode(mut emulator: crate::gboi::gb::GameBoyEmulator) {
     attach_keyboard_window(surface.window_id());
     let mut raw_events =
         [crate::r::keyboard::TrueosKeyboardOutputEvent::default(); UI2_GBOI_KEYBOARD_BATCH];
-    let mut pressed_buttons: [Option<crate::gboi::gb::GameBoyButton>;
-        UI2_GBOI_KEYBOARD_BATCH] = [None; UI2_GBOI_KEYBOARD_BATCH];
+    let mut pressed_buttons: [Option<crate::gboi::gb::GameBoyButton>; UI2_GBOI_KEYBOARD_BATCH] =
+        [None; UI2_GBOI_KEYBOARD_BATCH];
     let mut pressed_button_count = 0usize;
 
     loop {

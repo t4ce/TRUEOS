@@ -667,12 +667,7 @@ fn fs_rc_to_errno(rc: i32) -> c_int {
 
 fn read_file_from_cabi(path: &str) -> Result<Vec<u8>, c_int> {
     let len = unsafe {
-        crate::r::io::cabi::trueos_cabi_fs_read_file(
-            path.as_ptr(),
-            path.len(),
-            ptr::null_mut(),
-            0,
-        )
+        crate::r::io::cabi::trueos_cabi_fs_read_file(path.as_ptr(), path.len(), ptr::null_mut(), 0)
     };
     if len < 0 {
         return Err(fs_rc_to_errno(len as i32));
@@ -1726,11 +1721,7 @@ pub unsafe extern "C" fn pthread_getspecific(key: u32) -> *mut c_void {
         return ptr::null_mut();
     }
     let slot = pthread_tls_slot(key);
-    PTHREAD_TLS_VALUES
-        .lock()
-        .get(slot)
-        .copied()
-        .unwrap_or(0) as *mut c_void
+    PTHREAD_TLS_VALUES.lock().get(slot).copied().unwrap_or(0) as *mut c_void
 }
 
 #[unsafe(no_mangle)]

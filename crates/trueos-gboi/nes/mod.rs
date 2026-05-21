@@ -133,7 +133,7 @@ impl<'a> CpuBus for BusAdapter<'a> {
                 }
             }
             0x4000..=0x4015 | 0x4017 => {} // APU
-            0x4018..=0x5FFF => {} // Expansion
+            0x4018..=0x5FFF => {}          // Expansion
             0x6000..=0xFFFF => self.cart.cpu_write(addr, val),
         }
     }
@@ -228,7 +228,9 @@ impl NesEmulator {
 
     /// Run one full frame (~29780 CPU cycles for NTSC)
     pub fn tick(&mut self) {
-        if !self.rom_loaded { return; }
+        if !self.rom_loaded {
+            return;
+        }
 
         // Run 262 scanlines per frame
         for _ in 0..262 {
@@ -329,10 +331,16 @@ impl NesEmulator {
         }
         // D-pad
         for d in 0..5u32 {
-            let px = bx + 12; let py = cy + 5 + d as usize;
-            if px < w && py < h { output[py * w + px] = 0xFF666666; }
-            let px = bx + 10 + d as usize; let py = cy + 7;
-            if px < w && py < h { output[py * w + px] = 0xFF666666; }
+            let px = bx + 12;
+            let py = cy + 5 + d as usize;
+            if px < w && py < h {
+                output[py * w + px] = 0xFF666666;
+            }
+            let px = bx + 10 + d as usize;
+            let py = cy + 7;
+            if px < w && py < h {
+                output[py * w + px] = 0xFF666666;
+            }
         }
         // A/B buttons
         for btn_x in [bx + 42, bx + 50] {
@@ -348,29 +356,57 @@ impl NesEmulator {
         }
     }
 
-    fn draw_text(&self, buf: &mut [u32], w: usize, h: usize, x: usize, y: usize, text: &str, color: u32) {
+    fn draw_text(
+        &self,
+        buf: &mut [u32],
+        w: usize,
+        h: usize,
+        x: usize,
+        y: usize,
+        text: &str,
+        color: u32,
+    ) {
         // Simple 3x5 bitmap font
         const FONT: [u64; 128] = {
             let mut f = [0u64; 128];
-            f[b'A' as usize] = 0x4A_EA_CE; f[b'B' as usize] = 0xCA_CA_CE;
-            f[b'C' as usize] = 0x68_88_6E; f[b'D' as usize] = 0xCA_AA_CE;
-            f[b'E' as usize] = 0xE8_C8_EE; f[b'F' as usize] = 0xE8_C8_80;
-            f[b'G' as usize] = 0x68_A8_6E; f[b'H' as usize] = 0xAA_EA_AE;
-            f[b'I' as usize] = 0xE4_44_EE; f[b'J' as usize] = 0x22_2A_4E;
-            f[b'K' as usize] = 0xAA_CA_AE; f[b'L' as usize] = 0x88_88_EE;
-            f[b'M' as usize] = 0xAE_EA_AE; f[b'N' as usize] = 0xAE_EA_AE;
-            f[b'O' as usize] = 0x4A_AA_4E; f[b'P' as usize] = 0xCA_C8_80;
-            f[b'Q' as usize] = 0x4A_AE_6E; f[b'R' as usize] = 0xCA_CA_AE;
-            f[b'S' as usize] = 0x68_42_CE; f[b'T' as usize] = 0xE4_44_40;
-            f[b'U' as usize] = 0xAA_AA_EE; f[b'V' as usize] = 0xAA_AA_40;
-            f[b'W' as usize] = 0xAA_EE_AE; f[b'X' as usize] = 0xAA_4A_AE;
-            f[b'Y' as usize] = 0xAA_44_40; f[b'Z' as usize] = 0xE2_48_EE;
-            f[b'0' as usize] = 0x4A_AA_4E; f[b'1' as usize] = 0x4C_44_EE;
-            f[b'2' as usize] = 0xC2_48_EE; f[b'3' as usize] = 0xC2_42_CE;
-            f[b'4' as usize] = 0xAA_E2_2E; f[b'5' as usize] = 0xE8_C2_CE;
-            f[b'6' as usize] = 0x68_CA_6E; f[b'7' as usize] = 0xE2_24_40;
-            f[b'8' as usize] = 0x6A_4A_6E; f[b'9' as usize] = 0x6A_62_CE;
-            f[b':' as usize] = 0x04_04_00; f[b' ' as usize] = 0x00_00_00;
+            f[b'A' as usize] = 0x4A_EA_CE;
+            f[b'B' as usize] = 0xCA_CA_CE;
+            f[b'C' as usize] = 0x68_88_6E;
+            f[b'D' as usize] = 0xCA_AA_CE;
+            f[b'E' as usize] = 0xE8_C8_EE;
+            f[b'F' as usize] = 0xE8_C8_80;
+            f[b'G' as usize] = 0x68_A8_6E;
+            f[b'H' as usize] = 0xAA_EA_AE;
+            f[b'I' as usize] = 0xE4_44_EE;
+            f[b'J' as usize] = 0x22_2A_4E;
+            f[b'K' as usize] = 0xAA_CA_AE;
+            f[b'L' as usize] = 0x88_88_EE;
+            f[b'M' as usize] = 0xAE_EA_AE;
+            f[b'N' as usize] = 0xAE_EA_AE;
+            f[b'O' as usize] = 0x4A_AA_4E;
+            f[b'P' as usize] = 0xCA_C8_80;
+            f[b'Q' as usize] = 0x4A_AE_6E;
+            f[b'R' as usize] = 0xCA_CA_AE;
+            f[b'S' as usize] = 0x68_42_CE;
+            f[b'T' as usize] = 0xE4_44_40;
+            f[b'U' as usize] = 0xAA_AA_EE;
+            f[b'V' as usize] = 0xAA_AA_40;
+            f[b'W' as usize] = 0xAA_EE_AE;
+            f[b'X' as usize] = 0xAA_4A_AE;
+            f[b'Y' as usize] = 0xAA_44_40;
+            f[b'Z' as usize] = 0xE2_48_EE;
+            f[b'0' as usize] = 0x4A_AA_4E;
+            f[b'1' as usize] = 0x4C_44_EE;
+            f[b'2' as usize] = 0xC2_48_EE;
+            f[b'3' as usize] = 0xC2_42_CE;
+            f[b'4' as usize] = 0xAA_E2_2E;
+            f[b'5' as usize] = 0xE8_C2_CE;
+            f[b'6' as usize] = 0x68_CA_6E;
+            f[b'7' as usize] = 0xE2_24_40;
+            f[b'8' as usize] = 0x6A_4A_6E;
+            f[b'9' as usize] = 0x6A_62_CE;
+            f[b':' as usize] = 0x04_04_00;
+            f[b' ' as usize] = 0x00_00_00;
             f[b'.' as usize] = 0x00_00_40;
             f
         };

@@ -896,15 +896,7 @@ pub(super) fn probe_output_surface(
         .min(coded_height.saturating_sub(center_luma_rows));
     let chroma_y_offset = (coded_height + MEDIA_YTILE_H - 1) & !(MEDIA_YTILE_H - 1);
     let luma_storage_pad_first_row = if chroma_y_offset > coded_height {
-        probe_tiled_rect(
-            output_surface,
-            output_pitch,
-            0,
-            coded_height,
-            coded_width,
-            1,
-            0,
-        )
+        probe_tiled_rect(output_surface, output_pitch, 0, coded_height, coded_width, 1, 0)
     } else {
         None
     };
@@ -922,8 +914,7 @@ pub(super) fn probe_output_surface(
         None
     };
     let chroma_plane_rows = coded_height.div_ceil(2);
-    let chroma_plane_stride_rows =
-        (chroma_plane_rows + MEDIA_YTILE_H - 1) & !(MEDIA_YTILE_H - 1);
+    let chroma_plane_stride_rows = (chroma_plane_rows + MEDIA_YTILE_H - 1) & !(MEDIA_YTILE_H - 1);
     let cr_y_offset = chroma_y_offset.saturating_add(chroma_plane_stride_rows);
     let chroma_width = coded_width.div_ceil(2);
     let center_chroma_x = visible_x / 2;
@@ -1058,8 +1049,7 @@ pub(super) fn probe_output_surface(
     MediaSurfaceProbe {
         valid,
         luma_visible_last_row: luma_visible_last_row.unwrap_or_else(MediaSurfaceProbeBand::empty),
-        luma_visible_tail8_row: luma_visible_tail8_row
-            .unwrap_or_else(MediaSurfaceProbeBand::empty),
+        luma_visible_tail8_row: luma_visible_tail8_row.unwrap_or_else(MediaSurfaceProbeBand::empty),
         luma_storage_pad_first_row: luma_storage_pad_first_row
             .unwrap_or_else(MediaSurfaceProbeBand::empty),
         luma_storage_pad_last_row: luma_storage_pad_last_row

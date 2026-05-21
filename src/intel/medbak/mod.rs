@@ -5,8 +5,7 @@ pub(crate) mod xelp_media_mp4;
 pub(crate) mod xelp_media_source;
 
 pub(super) use super::{
-    claimed_device, dma_flush, ggtt_invalidate, guc_ready, map_ggtt, mask_en, mmio_read,
-    mmio_write,
+    claimed_device, dma_flush, ggtt_invalidate, guc_ready, map_ggtt, mask_en, mmio_read, mmio_write,
 };
 
 pub(super) mod guc {

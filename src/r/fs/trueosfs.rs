@@ -820,7 +820,9 @@ pub async fn file_in_async(
                 let name_blocks = (name.as_bytes().len() + (bs - 1)) / bs;
                 trueos_fs::FileRecordRef {
                     entry_lba,
-                    data_lba: entry_lba.saturating_add(1).saturating_add(name_blocks as u64),
+                    data_lba: entry_lba
+                        .saturating_add(1)
+                        .saturating_add(name_blocks as u64),
                     data_len: bytes.len() as u64,
                 }
             })

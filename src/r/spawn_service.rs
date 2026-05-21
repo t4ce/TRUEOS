@@ -59,7 +59,7 @@ define_started_flags!(
     HW_PIC_SERVICE_STARTED,
     HW_VID_PROBE_STARTED,
     HW_LOGO_PRESENT_TASK_STARTED,
-    INTEL_HDA_PROBE_STARTED,
+    INTEL_HDA_AUDIO_DEMO_STARTED,
     RAPLE_SERVICE_STARTED,
     GFX_TEXTURE_UPLOAD_SERVICE_STARTED,
     HTML_SHACK_SERVICE_STARTED,
@@ -490,9 +490,7 @@ fn hyper_http1_probe_enabled() -> bool {
 }
 
 fn spawn_axum_boot(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| {
-        crate::r::net::srv::axum_boot::axum_boot_service_task()
-    })
+    spawn_local(spawner, |_spawner| crate::r::net::srv::axum_boot::axum_boot_service_task())
 }
 
 fn spawn_ws_time(spawner: Spawner) -> SpawnAttempt {
@@ -615,10 +613,10 @@ fn spawn_hw_logo_present_task(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |_worker_spawner| crate::intel::hw_logo_present_task())
 }
 
-fn spawn_intel_hda_probe_task(spawner: Spawner) -> SpawnAttempt {
+fn spawn_intel_hda_audio_demo_task(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |worker_spawner| {
         let _ = worker_spawner;
-        crate::intel_hda_probe::task()
+        crate::intel_hda_audio_demo::task()
     })
 }
 
@@ -1291,7 +1289,12 @@ static TASKS: [TaskSpec; 71] = [
         &HW_LOGO_PRESENT_TASK_STARTED,
         spawn_hw_logo_present_task,
     ),
-    TaskSpec::disabled("intel-hda-probe", 0, &INTEL_HDA_PROBE_STARTED, spawn_intel_hda_probe_task),
+    TaskSpec::disabled(
+        "intel-hda-audio-demo",
+        0,
+        &INTEL_HDA_AUDIO_DEMO_STARTED,
+        spawn_intel_hda_audio_demo_task,
+    ),
     TaskSpec::enabled("raple-service", 0, &RAPLE_SERVICE_STARTED, spawn_raple_service),
     TaskSpec::enabled(
         "html_fetch_service",

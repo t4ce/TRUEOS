@@ -19,10 +19,10 @@ pub struct Cartridge {
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum MbcType {
-    None,   // No MBC
-    Mbc1,   // MBC1
-    Mbc3,   // MBC3 (with RTC)
-    Mbc5,   // MBC5
+    None, // No MBC
+    Mbc1, // MBC1
+    Mbc3, // MBC3 (with RTC)
+    Mbc5, // MBC5
 }
 
 impl Cartridge {
@@ -41,7 +41,9 @@ impl Cartridge {
     }
 
     pub fn from_rom(data: &[u8]) -> Option<Self> {
-        if data.len() < 0x150 { return None; }
+        if data.len() < 0x150 {
+            return None;
+        }
 
         // Read title ($0134-$0143)
         let mut title = [0u8; 16];
@@ -96,14 +98,25 @@ impl Cartridge {
 
         let ram = vec![0u8; ram_size.max(8192)];
 
-        let title_str: Vec<u8> = title.iter().copied().take_while(|&c| c != 0 && c >= 0x20).collect();
-        crate::log!("[GB] ROM: \"{}\" type={:#04X} mbc={:?} ROM={}KB RAM={}KB CGB={:#04X}\n",
+        let title_str: Vec<u8> = title
+            .iter()
+            .copied()
+            .take_while(|&c| c != 0 && c >= 0x20)
+            .collect();
+        crate::log!(
+            "[GB] ROM: \"{}\" type={:#04X} mbc={:?} ROM={}KB RAM={}KB CGB={:#04X}\n",
             core::str::from_utf8(&title_str).unwrap_or("???"),
             cart_type,
-            match mbc_type { MbcType::None => "None", MbcType::Mbc1 => "MBC1", MbcType::Mbc3 => "MBC3", MbcType::Mbc5 => "MBC5" },
+            match mbc_type {
+                MbcType::None => "None",
+                MbcType::Mbc1 => "MBC1",
+                MbcType::Mbc3 => "MBC3",
+                MbcType::Mbc5 => "MBC5",
+            },
             rom.len() / 1024,
             ram_size / 1024,
-            cgb_flag);
+            cgb_flag
+        );
 
         Some(Self {
             rom,
@@ -140,11 +153,19 @@ impl Cartridge {
     fn mbc0_read(&self, addr: u16) -> u8 {
         match addr {
             0x0000..=0x7FFF => {
-                if (addr as usize) < self.rom.len() { self.rom[addr as usize] } else { 0xFF }
+                if (addr as usize) < self.rom.len() {
+                    self.rom[addr as usize]
+                } else {
+                    0xFF
+                }
             }
             0xA000..=0xBFFF => {
                 let idx = (addr - 0xA000) as usize;
-                if idx < self.ram.len() { self.ram[idx] } else { 0xFF }
+                if idx < self.ram.len() {
+                    self.ram[idx]
+                } else {
+                    0xFF
+                }
             }
             _ => 0xFF,
         }
@@ -152,7 +173,9 @@ impl Cartridge {
     fn mbc0_write(&mut self, addr: u16, val: u8) {
         if addr >= 0xA000 && addr <= 0xBFFF {
             let idx = (addr - 0xA000) as usize;
-            if idx < self.ram.len() { self.ram[idx] = val; }
+            if idx < self.ram.len() {
+                self.ram[idx] = val;
+            }
         }
     }
 
@@ -161,24 +184,52 @@ impl Cartridge {
         match addr {
             0x0000..=0x3FFF => {
                 if self.mode == 1 {
-                    let bank = ((self.ram_bank as usize & 3) << 5) % (self.rom.len() / 16384).max(1);
+                    let bank =
+                        ((self.ram_bank as usize & 3) << 5) % (self.rom.len() / 16384).max(1);
                     let idx = bank * 16384 + addr as usize;
-                    if idx < self.rom.len() { self.rom[idx] } else { 0xFF }
+                    if idx < self.rom.len() {
+                        self.rom[idx]
+                    } else {
+                        0xFF
+                    }
                 } else {
-                    if (addr as usize) < self.rom.len() { self.rom[addr as usize] } else { 0xFF }
+                    if (addr as usize) < self.rom.len() {
+                        self.rom[addr as usize]
+                    } else {
+                        0xFF
+                    }
                 }
             }
             0x4000..=0x7FFF => {
-                let bank = if self.rom_bank == 0 { 1 } else { self.rom_bank as usize };
-                let full_bank = (bank | ((self.ram_bank as usize & 3) << 5)) % (self.rom.len() / 16384).max(1);
+                let bank = if self.rom_bank == 0 {
+                    1
+                } else {
+                    self.rom_bank as usize
+                };
+                let full_bank =
+                    (bank | ((self.ram_bank as usize & 3) << 5)) % (self.rom.len() / 16384).max(1);
                 let idx = full_bank * 16384 + (addr as usize - 0x4000);
-                if idx < self.rom.len() { self.rom[idx] } else { 0xFF }
+                if idx < self.rom.len() {
+                    self.rom[idx]
+                } else {
+                    0xFF
+                }
             }
             0xA000..=0xBFFF => {
-                if !self.ram_enabled { return 0xFF; }
-                let bank = if self.mode == 1 { self.ram_bank as usize } else { 0 };
+                if !self.ram_enabled {
+                    return 0xFF;
+                }
+                let bank = if self.mode == 1 {
+                    self.ram_bank as usize
+                } else {
+                    0
+                };
                 let idx = bank * 8192 + (addr as usize - 0xA000);
-                if idx < self.ram.len() { self.ram[idx] } else { 0xFF }
+                if idx < self.ram.len() {
+                    self.ram[idx]
+                } else {
+                    0xFF
+                }
             }
             _ => 0xFF,
         }
@@ -188,16 +239,26 @@ impl Cartridge {
             0x0000..=0x1FFF => self.ram_enabled = (val & 0x0F) == 0x0A,
             0x2000..=0x3FFF => {
                 let mut bank = (val & 0x1F) as u16;
-                if bank == 0 { bank = 1; }
+                if bank == 0 {
+                    bank = 1;
+                }
                 self.rom_bank = bank;
             }
             0x4000..=0x5FFF => self.ram_bank = val & 3,
             0x6000..=0x7FFF => self.mode = val & 1,
             0xA000..=0xBFFF => {
-                if !self.ram_enabled { return; }
-                let bank = if self.mode == 1 { self.ram_bank as usize } else { 0 };
+                if !self.ram_enabled {
+                    return;
+                }
+                let bank = if self.mode == 1 {
+                    self.ram_bank as usize
+                } else {
+                    0
+                };
                 let idx = bank * 8192 + (addr as usize - 0xA000);
-                if idx < self.ram.len() { self.ram[idx] = val; }
+                if idx < self.ram.len() {
+                    self.ram[idx] = val;
+                }
             }
             _ => {}
         }
@@ -207,18 +268,37 @@ impl Cartridge {
     fn mbc3_read(&self, addr: u16) -> u8 {
         match addr {
             0x0000..=0x3FFF => {
-                if (addr as usize) < self.rom.len() { self.rom[addr as usize] } else { 0xFF }
+                if (addr as usize) < self.rom.len() {
+                    self.rom[addr as usize]
+                } else {
+                    0xFF
+                }
             }
             0x4000..=0x7FFF => {
-                let bank = if self.rom_bank == 0 { 1 } else { self.rom_bank as usize };
-                let idx = (bank % (self.rom.len() / 16384).max(1)) * 16384 + (addr as usize - 0x4000);
-                if idx < self.rom.len() { self.rom[idx] } else { 0xFF }
+                let bank = if self.rom_bank == 0 {
+                    1
+                } else {
+                    self.rom_bank as usize
+                };
+                let idx =
+                    (bank % (self.rom.len() / 16384).max(1)) * 16384 + (addr as usize - 0x4000);
+                if idx < self.rom.len() {
+                    self.rom[idx]
+                } else {
+                    0xFF
+                }
             }
             0xA000..=0xBFFF => {
-                if !self.ram_enabled { return 0xFF; }
+                if !self.ram_enabled {
+                    return 0xFF;
+                }
                 if self.ram_bank <= 3 {
                     let idx = self.ram_bank as usize * 8192 + (addr as usize - 0xA000);
-                    if idx < self.ram.len() { self.ram[idx] } else { 0xFF }
+                    if idx < self.ram.len() {
+                        self.ram[idx]
+                    } else {
+                        0xFF
+                    }
                 } else {
                     0 // RTC registers (not fully emulated)
                 }
@@ -236,10 +316,14 @@ impl Cartridge {
             0x4000..=0x5FFF => self.ram_bank = val,
             0x6000..=0x7FFF => {} // RTC latch
             0xA000..=0xBFFF => {
-                if !self.ram_enabled { return; }
+                if !self.ram_enabled {
+                    return;
+                }
                 if self.ram_bank <= 3 {
                     let idx = self.ram_bank as usize * 8192 + (addr as usize - 0xA000);
-                    if idx < self.ram.len() { self.ram[idx] = val; }
+                    if idx < self.ram.len() {
+                        self.ram[idx] = val;
+                    }
                 }
             }
             _ => {}
@@ -250,17 +334,32 @@ impl Cartridge {
     fn mbc5_read(&self, addr: u16) -> u8 {
         match addr {
             0x0000..=0x3FFF => {
-                if (addr as usize) < self.rom.len() { self.rom[addr as usize] } else { 0xFF }
+                if (addr as usize) < self.rom.len() {
+                    self.rom[addr as usize]
+                } else {
+                    0xFF
+                }
             }
             0x4000..=0x7FFF => {
                 let bank = self.rom_bank as usize;
-                let idx = (bank % (self.rom.len() / 16384).max(1)) * 16384 + (addr as usize - 0x4000);
-                if idx < self.rom.len() { self.rom[idx] } else { 0xFF }
+                let idx =
+                    (bank % (self.rom.len() / 16384).max(1)) * 16384 + (addr as usize - 0x4000);
+                if idx < self.rom.len() {
+                    self.rom[idx]
+                } else {
+                    0xFF
+                }
             }
             0xA000..=0xBFFF => {
-                if !self.ram_enabled { return 0xFF; }
+                if !self.ram_enabled {
+                    return 0xFF;
+                }
                 let idx = (self.ram_bank as usize & 0x0F) * 8192 + (addr as usize - 0xA000);
-                if idx < self.ram.len() { self.ram[idx] } else { 0xFF }
+                if idx < self.ram.len() {
+                    self.ram[idx]
+                } else {
+                    0xFF
+                }
             }
             _ => 0xFF,
         }
@@ -272,9 +371,13 @@ impl Cartridge {
             0x3000..=0x3FFF => self.rom_bank = (self.rom_bank & 0xFF) | (((val & 1) as u16) << 8),
             0x4000..=0x5FFF => self.ram_bank = val & 0x0F,
             0xA000..=0xBFFF => {
-                if !self.ram_enabled { return; }
+                if !self.ram_enabled {
+                    return;
+                }
                 let idx = (self.ram_bank as usize & 0x0F) * 8192 + (addr as usize - 0xA000);
-                if idx < self.ram.len() { self.ram[idx] = val; }
+                if idx < self.ram.len() {
+                    self.ram[idx] = val;
+                }
             }
             _ => {}
         }

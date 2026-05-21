@@ -1577,10 +1577,7 @@ pub async fn fetch_https_to_file_hyper_with_profile_async(
                     return Err(fetch_error_to_code(FetchError::ResponseTooLarge));
                 }
                 let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
-                    crate::log!(
-                        "vhttps-hyper-file: publish failed key={} reason=no-root\n",
-                        key
-                    );
+                    crate::log!("vhttps-hyper-file: publish failed key={} reason=no-root\n", key);
                     return Err(FS_ERR_NOT_FOUND);
                 };
                 let disk_info = disk.info();
@@ -1631,10 +1628,7 @@ pub async fn fetch_https_to_file_hyper_with_profile_async(
                         return Err(FS_ERR_IO);
                     }
                     Ok(None) => {
-                        crate::log!(
-                            "vhttps-hyper-file: publish verify missing key={}\n",
-                            key
-                        );
+                        crate::log!("vhttps-hyper-file: publish verify missing key={}\n", key);
                         return Err(FS_ERR_NOT_FOUND);
                     }
                     Err(err) => {

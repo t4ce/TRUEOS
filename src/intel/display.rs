@@ -454,39 +454,39 @@ pub(crate) async fn hw_logo_present_task() {
 
         let (visible_x, visible_y, visible_width, visible_height, target_width, target_height) =
             if output.width != 0 && output.height != 0 {
-            if let Some(surface) = *PRIMARY_SURFACE.lock() {
-                if JPG_CENTER_CROP
-                    && (output.width > surface.width || output.height > surface.height)
-                {
-                    let (crop_w, crop_h) = center_crop_size(
-                        output.width as usize,
-                        output.height as usize,
-                        surface.width as usize,
-                        surface.height as usize,
-                    );
-                    (
-                        output.width.saturating_sub(crop_w as u32) / 2,
-                        output.height.saturating_sub(crop_h as u32) / 2,
-                        crop_w as u32,
-                        crop_h as u32,
-                        surface.width as usize,
-                        surface.height as usize,
-                    )
+                if let Some(surface) = *PRIMARY_SURFACE.lock() {
+                    if JPG_CENTER_CROP
+                        && (output.width > surface.width || output.height > surface.height)
+                    {
+                        let (crop_w, crop_h) = center_crop_size(
+                            output.width as usize,
+                            output.height as usize,
+                            surface.width as usize,
+                            surface.height as usize,
+                        );
+                        (
+                            output.width.saturating_sub(crop_w as u32) / 2,
+                            output.height.saturating_sub(crop_h as u32) / 2,
+                            crop_w as u32,
+                            crop_h as u32,
+                            surface.width as usize,
+                            surface.height as usize,
+                        )
+                    } else {
+                        let (fit_w, fit_h) = aspect_fit_size(
+                            output.width as usize,
+                            output.height as usize,
+                            surface.width as usize,
+                            surface.height as usize,
+                        );
+                        (0, 0, output.width, output.height, fit_w, fit_h)
+                    }
                 } else {
-                    let (fit_w, fit_h) = aspect_fit_size(
-                        output.width as usize,
-                        output.height as usize,
-                        surface.width as usize,
-                        surface.height as usize,
-                    );
-                    (0, 0, output.width, output.height, fit_w, fit_h)
+                    (0, 0, 0, 0, 0, 0)
                 }
             } else {
                 (0, 0, 0, 0, 0, 0)
-            }
-        } else {
-            (0, 0, 0, 0, 0, 0)
-        };
+            };
 
         let presented = if output.status == crate::intel::hw_pic::HwPicStatus::Ready
             && matches!(output.format, crate::intel::hw_pic::HwPicPixelFormat::Imc3)
@@ -806,10 +806,7 @@ pub(crate) fn present_rgba_primary_top_right(
                 core::ptr::write_volatile(dst_row.add(col_idx), pixel);
             }
         }
-        crate::intel::dma_flush(
-            unsafe { surface.virt.add(dst_row_off) },
-            copy_w.saturating_mul(4),
-        );
+        crate::intel::dma_flush(unsafe { surface.virt.add(dst_row_off) }, copy_w.saturating_mul(4));
     }
 
     let byte_len = dst_pitch.saturating_mul(dst_height);
@@ -1156,24 +1153,21 @@ pub(crate) fn present_nv12_surface_center(
             let c = (y - 16).max(0);
             let u = unsafe { i32::from(*src.get_unchecked(u_off)) } - 128;
             let v = unsafe { i32::from(*src.get_unchecked(v_off)) } - 128;
-            let (r, g, b) = if VIDEO_NV12_BLACK_PROOF_LIFT
-                && y <= 24
-                && u.abs() <= 4
-                && v.abs() <= 4
-            {
-                let checker = ((row_idx >> 5) ^ (col_idx >> 5)) & 1;
-                if checker == 0 {
-                    (0x30, 0x58, 0xD0)
+            let (r, g, b) =
+                if VIDEO_NV12_BLACK_PROOF_LIFT && y <= 24 && u.abs() <= 4 && v.abs() <= 4 {
+                    let checker = ((row_idx >> 5) ^ (col_idx >> 5)) & 1;
+                    if checker == 0 {
+                        (0x30, 0x58, 0xD0)
+                    } else {
+                        (0x70, 0x20, 0xA0)
+                    }
                 } else {
-                    (0x70, 0x20, 0xA0)
-                }
-            } else {
-                (
-                    clamp_u8_i32((298 * c + 409 * v + 128) >> 8),
-                    clamp_u8_i32((298 * c - 100 * u - 208 * v + 128) >> 8),
-                    clamp_u8_i32((298 * c + 516 * u + 128) >> 8),
-                )
-            };
+                    (
+                        clamp_u8_i32((298 * c + 409 * v + 128) >> 8),
+                        clamp_u8_i32((298 * c - 100 * u - 208 * v + 128) >> 8),
+                        clamp_u8_i32((298 * c + 516 * u + 128) >> 8),
+                    )
+                };
             let pixel = u32::from_le_bytes([b, g, r, 0]);
             unsafe {
                 core::ptr::write_volatile(dst_row.add(col_idx), pixel);
