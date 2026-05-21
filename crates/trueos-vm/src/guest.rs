@@ -60,6 +60,10 @@ unsafe extern "C" {
     fn image_bss_start() -> !;
     #[link_name = "__bss_end"]
     fn image_bss_end() -> !;
+    #[link_name = "trueos_vmx_hull_text_start"]
+    fn hull_text_start() -> !;
+    #[link_name = "trueos_vmx_hull_text_end"]
+    fn hull_text_end() -> !;
     #[link_name = "trueos_vmx_guest_entry"]
     pub fn entry() -> !;
     /// Defined in `src/hv/guest_run.rs`; executes a staged blueprint launch inside

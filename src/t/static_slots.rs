@@ -23,6 +23,10 @@ impl<T, const N: usize> StaticSlots<T, N> {
         self.get(index as usize)
     }
 
+    pub fn checked_u8(&self, index: u8, err: &'static str) -> Result<&Mutex<T>, &'static str> {
+        self.get_u8(index).ok_or(err)
+    }
+
     pub fn iter(&self) -> core::slice::Iter<'_, Mutex<T>> {
         self.slots.iter()
     }
