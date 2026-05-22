@@ -238,13 +238,20 @@ struct ResolvedBinding {
 static HID_HUT: Mutex<HidHutState> = Mutex::new(HidHutState::new());
 
 #[inline]
-fn set_key_down_bit(bits: &mut [u32; 8], key_code: u8) {
+pub fn set_key_down_bit(bits: &mut [u32; 8], key_code: u8) {
     let key_code = key_code as usize;
     bits[key_code / 32] |= 1u32 << (key_code % 32);
 }
 
 #[inline]
-fn keyboard_key_down_bits(modifiers: u8, keys: [u8; 6]) -> [u32; 8] {
+#[allow(dead_code)]
+pub fn key_down_bit(bits: &[u32; 8], key_code: u8) -> bool {
+    let key_code = key_code as usize;
+    (bits[key_code / 32] & (1u32 << (key_code % 32))) != 0
+}
+
+#[inline]
+pub fn keyboard_key_down_bits(modifiers: u8, keys: [u8; 6]) -> [u32; 8] {
     let mut bits = [0u32; 8];
     for modifier_idx in 0..8 {
         if (modifiers & (1 << modifier_idx)) != 0 {
@@ -257,6 +264,37 @@ fn keyboard_key_down_bits(modifiers: u8, keys: [u8; 6]) -> [u32; 8] {
         }
     }
     bits
+}
+
+#[inline]
+#[allow(dead_code)]
+pub fn keyboard_modifiers_from_key_down_bits(bits: &[u32; 8]) -> u8 {
+    let mut modifiers = 0u8;
+    for modifier_idx in 0..8 {
+        if key_down_bit(bits, 0xE0 + modifier_idx) {
+            modifiers |= 1 << modifier_idx;
+        }
+    }
+    modifiers
+}
+
+#[inline]
+#[allow(dead_code)]
+pub fn keyboard_boot_keys_from_key_down_bits(bits: &[u32; 8]) -> [u8; 6] {
+    let mut keys = [0u8; 6];
+    let mut out_idx = 0usize;
+    for key_code in 1u16..=0xDF {
+        let key_code = key_code as u8;
+        if !key_down_bit(bits, key_code) {
+            continue;
+        }
+        keys[out_idx] = key_code;
+        out_idx += 1;
+        if out_idx == keys.len() {
+            break;
+        }
+    }
+    keys
 }
 
 fn normalized_tag(value: &str) -> String<HID_SOURCE_TAG_MAX> {
@@ -513,6 +551,31 @@ pub fn upsert_keyboard_state(
         let last = guard.keyboards.len() - 1;
         guard.keyboards[last] = next;
     }
+}
+
+#[allow(dead_code)]
+pub fn upsert_keyboard_nkro_state(
+    controller_id: u32,
+    slot_id: u32,
+    ep_target: u32,
+    key_down_bits: [u32; 8],
+    source_kind: HidSourceKind,
+    source_tag: &str,
+    virtual_device: bool,
+) {
+    let modifiers = keyboard_modifiers_from_key_down_bits(&key_down_bits);
+    let keys = keyboard_boot_keys_from_key_down_bits(&key_down_bits);
+    upsert_keyboard_state(
+        controller_id,
+        slot_id,
+        ep_target,
+        modifiers,
+        keys,
+        [0; 6],
+        source_kind,
+        source_tag,
+        virtual_device,
+    );
 }
 
 pub fn upsert_combo(combo_id: u32, source_kind: HidSourceKind, source_tag: &str) -> bool {

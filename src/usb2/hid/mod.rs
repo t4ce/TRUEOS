@@ -5,6 +5,7 @@ pub mod boot;
 pub mod eyetracker;
 pub mod hut;
 pub mod input;
+pub mod kbd_nkro;
 pub mod keyboard;
 pub mod mediacontrol;
 pub mod mouse;
