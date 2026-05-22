@@ -171,6 +171,22 @@ fn step_emulator(emulator: &mut crate::gboi::gb::GameBoyEmulator) {
     }
 }
 
+fn pump_audio(
+    emulator: &mut crate::gboi::gb::GameBoyEmulator,
+    audio_stream: &mut crate::aud::dmg::DmgAudioStream,
+    audio_samples: &mut Vec<i16>,
+) {
+    audio_samples.clear();
+    emulator.drain_audio_samples_into(audio_samples);
+    if audio_samples.is_empty() {
+        return;
+    }
+
+    if let Err(err) = audio_stream.push_samples(audio_samples.as_slice()) {
+        crate::log!("ui2-gboi-demo: audio stream disabled err={}\n", err);
+    }
+}
+
 async fn run_intel_primary_mode(mut emulator: crate::gboi::gb::GameBoyEmulator) {
     crate::log!(
         "ui2-gboi-demo: present mode=intel-primary-top-right size={}x{} scale={} output={}x{}\n",
@@ -181,12 +197,16 @@ async fn run_intel_primary_mode(mut emulator: crate::gboi::gb::GameBoyEmulator) 
         UI2_GBOI_VIEW_H.saturating_mul(UI2_GBOI_DIRECT_SCALE.max(1))
     );
 
+    let mut audio_stream = crate::aud::dmg::DmgAudioStream::new();
+    let mut audio_samples = Vec::new();
+
     loop {
         if crate::r::spawn_service::task_stop_requested(UI2_GBOI_TASK_NAME) {
             break;
         }
 
         step_emulator(&mut emulator);
+        pump_audio(&mut emulator, &mut audio_stream, &mut audio_samples);
 
         let (pixels, out_w, out_h) = render_direct_frame(&emulator);
         if !crate::intel::present_rgba_primary_top_right(
@@ -251,6 +271,8 @@ async fn run_ui2_window_mode(mut emulator: crate::gboi::gb::GameBoyEmulator) {
     attach_keyboard_window(surface.window_id());
     let mut raw_events =
         [crate::r::keyboard::TrueosKeyboardOutputEvent::default(); UI2_GBOI_KEYBOARD_BATCH];
+    let mut audio_stream = crate::aud::dmg::DmgAudioStream::new();
+    let mut audio_samples = Vec::new();
 
     loop {
         if crate::r::spawn_service::task_stop_requested(UI2_GBOI_TASK_NAME) {
@@ -261,6 +283,7 @@ async fn run_ui2_window_mode(mut emulator: crate::gboi::gb::GameBoyEmulator) {
 
         sync_gboi_buttons_from_hid_hut(&mut emulator);
         step_emulator(&mut emulator);
+        pump_audio(&mut emulator, &mut audio_stream, &mut audio_samples);
 
         let pixels = render_frame(&emulator);
         if !surface.upload_rgba_owned(pixels, "ui2-gboi-demo-present") {
@@ -281,6 +304,9 @@ pub async fn ui2_gboi_demo_task() {
     let _task_guard = crate::r::spawn_service::task_run_guard(UI2_GBOI_TASK_NAME);
     let mut emulator = crate::gboi::gb::GameBoyEmulator::new();
     load_boot_rom(&mut emulator);
+    if let Err(err) = crate::aud::init() {
+        crate::log!("ui2-gboi-demo: audio init unavailable err={}\n", err);
+    }
 
     match choose_present_mode() {
         GboiPresentMode::Ui2Window => run_ui2_window_mode(emulator).await,

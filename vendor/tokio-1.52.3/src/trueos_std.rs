@@ -127,6 +127,10 @@ pub mod path {
         yielded_root: bool,
     }
 
+    pub struct Display<'a> {
+        path: &'a Path,
+    }
+
     impl Path {
         pub fn new<S: AsRef<str> + ?Sized>(s: &S) -> &Path {
             unsafe { &*(s.as_ref() as *const str as *const Path) }
@@ -144,8 +148,31 @@ pub mod path {
             self.to_owned()
         }
 
+        pub fn parent(&self) -> Option<&Path> {
+            let trimmed = trim_trailing_slashes(&self.inner);
+            if trimmed.is_empty() {
+                return None;
+            }
+            let index = trimmed.rfind('/')?;
+            if index == 0 {
+                Some(Path::new("/"))
+            } else {
+                Some(Path::new(&trimmed[..index]))
+            }
+        }
+
+        pub fn file_name(&self) -> Option<&str> {
+            let trimmed = trim_trailing_slashes(&self.inner);
+            let name = trimmed.rsplit('/').next()?;
+            if name.is_empty() { None } else { Some(name) }
+        }
+
         pub fn components(&self) -> Components<'_> {
             Components { path: &self.inner, pos: 0, yielded_root: false }
+        }
+
+        pub fn display(&self) -> Display<'_> {
+            Display { path: self }
         }
 
         pub fn join<P: AsRef<Path>>(&self, path: P) -> PathBuf {
@@ -162,6 +189,12 @@ pub mod path {
     impl fmt::Debug for Path {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             fmt::Debug::fmt(&&self.inner, f)
+        }
+    }
+
+    impl fmt::Display for Display<'_> {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str(&self.path.inner)
         }
     }
 
@@ -205,8 +238,12 @@ pub mod path {
             self.inner.as_str()
         }
 
+        pub fn display(&self) -> Display<'_> {
+            self.as_path().display()
+        }
+
         pub fn file_name(&self) -> Option<&str> {
-            self.inner.trim_end_matches('/').rsplit('/').next().filter(|name| !name.is_empty())
+            self.as_path().file_name()
         }
 
         pub fn set_file_name<S: AsRef<str>>(&mut self, file_name: S) {
@@ -358,6 +395,14 @@ pub mod path {
     impl From<&PathBuf> for PathBuf {
         fn from(value: &PathBuf) -> Self {
             value.clone()
+        }
+    }
+
+    fn trim_trailing_slashes(path: &str) -> &str {
+        if path.len() > 1 {
+            path.trim_end_matches('/')
+        } else {
+            path
         }
     }
 }
