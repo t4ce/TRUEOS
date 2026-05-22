@@ -45,33 +45,9 @@ impl USBHost {
     }
 
     pub async fn open_device(&mut self, dev: &DeviceInfo) -> Result<Device> {
-        info!(
-            "crabusb/host: open_device backend begin id={} vid={:04x} pid={:04x}",
-            dev.id(),
-            dev.vendor_id(),
-            dev.product_id()
-        );
         let device = self.backend.open_device(dev.inner.as_ref()).await?;
-        info!(
-            "crabusb/host: open_device backend end id={} vid={:04x} pid={:04x}",
-            dev.id(),
-            dev.vendor_id(),
-            dev.product_id()
-        );
         let mut device: Device = device.into();
-        info!(
-            "crabusb/host: open_device public-init begin id={} vid={:04x} pid={:04x}",
-            dev.id(),
-            dev.vendor_id(),
-            dev.product_id()
-        );
         device.init().await?;
-        info!(
-            "crabusb/host: open_device public-init end id={} vid={:04x} pid={:04x}",
-            dev.id(),
-            dev.vendor_id(),
-            dev.product_id()
-        );
         Ok(device)
     }
 }

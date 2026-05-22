@@ -336,17 +336,6 @@ impl Endpoint {
             let Some(event) = self.ring.get_finished(event_trb.0) else {
                 continue;
             };
-            if self.dci.as_u8() == Dci::CTRL.as_u8() && request_id.0 >= 4 {
-                info!(
-                    "crabusb/xhci/endpoint: control event dci={} req={} stage={:?} trb=0x{:x} remaining={} code={:?}",
-                    self.dci.as_u8(),
-                    request_id.0,
-                    stage,
-                    event_trb.0.raw(),
-                    event.trb_transfer_length(),
-                    event.completion_code()
-                );
-            }
             let remaining = event.trb_transfer_length() as usize;
             if let Some(submitted) = self.inflight.get_mut(&request_id)
                 && let SubmittedTdKind::Control(control_td) = &mut submitted.kind
@@ -643,7 +632,7 @@ impl EndpointOp for Endpoint {
         let data_len = transfer.buffer_len();
         let dir = transfer.direction;
         let request_id = self.allocate_request_id();
-        let trace_ep0 = self.dci.as_u8() == Dci::CTRL.as_u8() && request_id.0 >= 4;
+        let trace_ep0 = false;
         if trace_ep0 {
             info!(
                 "crabusb/xhci/endpoint: submit begin dci={} req={} kind={} dir={:?} len={} trbs={} dma=0x{:x}",

@@ -35,7 +35,6 @@ static CONTROLLER_RUNTIME_DIAG: [Mutex<super::UsbControllerRuntimeDiag>; MAX_XHC
 const EVENT_PUMP_NOT_READY_SLEEP_MS: u64 = 10;
 const EVENT_PUMP_HOT_IDLE_YIELDS: u8 = 64;
 const EVENT_PUMP_IDLE_SLEEP_US: u64 = 100;
-const TEMP_BIND_ONLY_BOOT_HID: bool = true;
 
 #[inline]
 fn usb_log_all_enabled() -> bool {
@@ -51,24 +50,6 @@ fn speed_label(speed: usb_if::Speed) -> &'static str {
         usb_if::Speed::SuperSpeedPlus => "SS+",
         _ => "?",
     }
-}
-
-fn has_boot_keyboard_or_mouse(
-    configs: &[usb_if::descriptor::ConfigurationDescriptor],
-) -> bool {
-    configs.iter().any(|cfg| {
-        cfg.interfaces.iter().any(|interface| {
-            interface.alt_settings.iter().any(|alt| {
-                matches!(
-                    (alt.class, alt.subclass, alt.protocol),
-                    (0x03, 0x01, 0x01) | (0x03, 0x01, 0x02)
-                ) && alt.endpoints.iter().any(|ep| {
-                    ep.transfer_type == usb_if::descriptor::EndpointType::Interrupt
-                        && ep.direction == usb_if::transfer::Direction::In
-                })
-            })
-        })
-    })
 }
 
 fn classify_device_kind(dev: &ObservedUsbDevice) -> &'static str {
@@ -706,28 +687,6 @@ async fn probe_and_bind(
 
         let controller_id = info.index as u32;
         let mut bound_any = false;
-        if TEMP_BIND_ONLY_BOOT_HID && !has_boot_keyboard_or_mouse(dev.configurations()) {
-            if usb_log_all_enabled() {
-                crate::log!(
-                    "crabusb: bind ctrl={} root_port={} vid={:04X} pid={:04X} temporary skip non-boot-hid\n",
-                    info.index,
-                    location.root_port_id,
-                    desc.vendor_id,
-                    desc.product_id
-                );
-            }
-            continue;
-        }
-        if desc.vendor_id == 0x0416 && desc.product_id == 0xA125 {
-            crate::log!(
-                "crabusb: bind ctrl={} root_port={} vid={:04X} pid={:04X} temporary skip known mainboard LED before handoff\n",
-                info.index,
-                location.root_port_id,
-                desc.vendor_id,
-                desc.product_id
-            );
-            continue;
-        }
         if super::hid::boot::maybe_start_hid_boot_streams(
             host,
             dev_info,
@@ -738,18 +697,6 @@ async fn probe_and_bind(
         .await
         {
             bound_any = true;
-        }
-        if TEMP_BIND_ONLY_BOOT_HID {
-            if bound_any && usb_log_all_enabled() {
-                crate::log!(
-                    "crabusb: bind ctrl={} root_port={} vid={:04X} pid={:04X} temporary boot-hid-only handoff=true\n",
-                    info.index,
-                    location.root_port_id,
-                    desc.vendor_id,
-                    desc.product_id
-                );
-            }
-            continue;
         }
         if super::midi::maybe_start_midi(host, dev_info, spawner, controller_id).await {
             bound_any = true;
@@ -941,13 +888,15 @@ pub async fn bsp_service(controller_index: usize) {
         }
 
         if !BOOT_DEFER_DONE[controller_index].swap(true, Ordering::AcqRel) {
-            crate::log_info!(
-                target: "usb";
-                "crabusb: controller {} boot defer before USB bring-up; waiting {}ms\n",
-                controller_index,
-                BOOT_USB_DEFER_MS
-            );
-            Timer::after(EmbassyDuration::from_millis(BOOT_USB_DEFER_MS)).await;
+            if BOOT_USB_DEFER_MS != 0 {
+                crate::log_info!(
+                    target: "usb";
+                    "crabusb: controller {} boot defer before USB bring-up; waiting {}ms\n",
+                    controller_index,
+                    BOOT_USB_DEFER_MS
+                );
+                Timer::after(EmbassyDuration::from_millis(BOOT_USB_DEFER_MS)).await;
+            }
         }
 
         let Some(info) = super::controller_by_index(controller_index) else {

@@ -229,31 +229,7 @@ impl From<Box<dyn DeviceOp>> for Device {
 
 impl Device {
     pub(crate) async fn init(&mut self) -> Result<(), USBError> {
-        if self.vendor_id() == 0x22d4 && self.product_id() == 0x1321 {
-            info!(
-                "crabusb/device: public init skip optional manufacturer read slot={} vid={:04x} pid={:04x}",
-                self.slot_id(),
-                self.vendor_id(),
-                self.product_id()
-            );
-            self.manufacturer = None;
-            return Ok(());
-        }
-
-        info!(
-            "crabusb/device: public init read-manufacturer begin slot={} vid={:04x} pid={:04x}",
-            self.slot_id(),
-            self.vendor_id(),
-            self.product_id()
-        );
         self.manufacturer = self.read_manufacturer().await;
-        info!(
-            "crabusb/device: public init read-manufacturer end slot={} vid={:04x} pid={:04x} present={}",
-            self.slot_id(),
-            self.vendor_id(),
-            self.product_id(),
-            self.manufacturer.is_some()
-        );
         Ok(())
     }
 
