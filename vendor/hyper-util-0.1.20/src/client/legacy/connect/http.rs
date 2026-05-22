@@ -12,6 +12,7 @@ use std::sync::Arc;
 use core::task::{self, ready, Poll};
 use core::time::Duration;
 
+use alloc::boxed::Box;
 use futures_util::future::Either;
 use http::uri::{Scheme, Uri};
 use pin_project_lite::pin_project;

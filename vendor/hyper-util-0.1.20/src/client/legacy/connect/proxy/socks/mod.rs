@@ -9,6 +9,7 @@ use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 
+use alloc::boxed::Box;
 use bytes::BytesMut;
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]

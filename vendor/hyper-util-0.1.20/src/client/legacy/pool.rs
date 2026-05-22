@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use alloc::collections::VecDeque;
+use alloc::vec::Vec;
 use std::collections::{HashMap, HashSet};
 use core::convert::Infallible;
 use core::error::Error as StdError;

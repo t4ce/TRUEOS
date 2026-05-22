@@ -69,6 +69,7 @@ use std::{
         Arc,
     },
 };
+use alloc::boxed::Box;
 
 use ::http::Extensions;
 
@@ -301,6 +302,7 @@ where
 }
 
 pub(super) mod sealed {
+    use alloc::boxed::Box;
     use core::error::Error as StdError;
     use core::future::Future;
 

@@ -27,6 +27,7 @@ use core::pin::Pin;
 use core::str::FromStr;
 use core::task::{self, Poll};
 use std::{fmt, io, vec};
+use alloc::{boxed::Box, vec::Vec};
 
 #[cfg(not(target_os = "trueos"))]
 use tokio::task::JoinHandle;
@@ -73,10 +74,10 @@ fn trueos_lookup_host(host: &str) -> io::Result<SocketAddrs> {
     let mut octets = [0u8; 4];
     let rc = unsafe { trueos_cabi_dns_resolve_ipv4(host.as_ptr(), host.len(), octets.as_mut_ptr()) };
     if rc != 0 {
-        return Err(io::Error::from_raw_os_error(rc));
+        return Err(io::Error::new(io::ErrorKind::Other, "trueos dns resolve failed"));
     }
 
-    Ok(SocketAddrs::new(vec![SocketAddr::V4(SocketAddrV4::new(
+    Ok(SocketAddrs::new(alloc::vec![SocketAddr::V4(SocketAddrV4::new(
         Ipv4Addr::new(octets[0], octets[1], octets[2], octets[3]),
         0,
     ))]))
@@ -239,13 +240,13 @@ impl SocketAddrs {
         if let Ok(addr) = host.parse::<Ipv4Addr>() {
             let addr = SocketAddrV4::new(addr, port);
             return Some(SocketAddrs {
-                iter: vec![SocketAddr::V4(addr)].into_iter(),
+                iter: alloc::vec![SocketAddr::V4(addr)].into_iter(),
             });
         }
         if let Ok(addr) = host.parse::<Ipv6Addr>() {
             let addr = SocketAddrV6::new(addr, port, 0, 0);
             return Some(SocketAddrs {
-                iter: vec![SocketAddr::V6(addr)].into_iter(),
+                iter: alloc::vec![SocketAddr::V6(addr)].into_iter(),
             });
         }
         None
@@ -262,8 +263,8 @@ impl SocketAddrs {
         local_addr_ipv6: Option<Ipv6Addr>,
     ) -> (SocketAddrs, SocketAddrs) {
         match (local_addr_ipv4, local_addr_ipv6) {
-            (Some(_), None) => (self.filter(SocketAddr::is_ipv4), SocketAddrs::new(vec![])),
-            (None, Some(_)) => (self.filter(SocketAddr::is_ipv6), SocketAddrs::new(vec![])),
+            (Some(_), None) => (self.filter(SocketAddr::is_ipv4), SocketAddrs::new(alloc::vec![])),
+            (None, Some(_)) => (self.filter(SocketAddr::is_ipv6), SocketAddrs::new(alloc::vec![])),
             _ => {
                 let preferring_v6 = self
                     .iter
@@ -299,6 +300,7 @@ impl Iterator for SocketAddrs {
 }
 
 mod sealed {
+    use alloc::boxed::Box;
     use core::future::Future;
     use core::task::{self, Poll};
 
