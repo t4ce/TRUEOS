@@ -180,6 +180,10 @@ default-features = false
 version = "1.0.0"
 default-features = false
 
+[target.'cfg(any(target_os = "trueos", target_os = "zkvm"))'.dependencies.hashbrown]
+version = "0.17"
+default-features = false
+
 [dependencies.hyper]
 version = "1.8.0"
 default-features = false

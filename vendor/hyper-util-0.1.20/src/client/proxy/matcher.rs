@@ -13,6 +13,11 @@
 //! authentication to be used.
 
 use core::fmt;
+use alloc::{
+    borrow::{Cow, ToOwned},
+    string::{String, ToString},
+    vec::Vec,
+};
 use std::net::IpAddr;
 
 use http::header::HeaderValue;
@@ -331,8 +336,6 @@ fn get_first_env(names: &[&str]) -> String {
 }
 
 fn parse_env_uri(val: &str) -> Option<Intercept> {
-    use std::borrow::Cow;
-
     let uri = val.parse::<http::Uri>().ok()?;
     let mut builder = http::Uri::builder();
     let mut is_httpish = false;
@@ -541,6 +544,8 @@ impl DomainMatcher {
 }
 
 mod builder {
+    use alloc::string::String;
+
     /// A type that can used as a `Builder` value.
     ///
     /// Private and sealed, only visible in docs.

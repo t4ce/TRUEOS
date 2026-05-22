@@ -1,6 +1,7 @@
 use super::super::{ParsingError, SerializeError};
 
 use bytes::{Buf, BufMut, BytesMut};
+use alloc::string::String;
 use std::net::SocketAddrV4;
 
 /// +-----+-----+----+----+----+----+----+----+-------------+------+------------+------+

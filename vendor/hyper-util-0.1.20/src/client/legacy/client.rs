@@ -11,6 +11,7 @@ use core::pin::Pin;
 use core::task::{self, Poll};
 use core::time::Duration;
 
+use alloc::{boxed::Box, format};
 use futures_util::future::{self, Either, FutureExt, TryFutureExt};
 use http::uri::Scheme;
 use hyper::client::conn::TrySendError as ConnTrySendError;

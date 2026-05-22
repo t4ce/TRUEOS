@@ -4,6 +4,7 @@ pub use errors::*;
 mod messages;
 use messages::*;
 
+use alloc::{boxed::Box, string::{String, ToString}};
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use core::task::{Context, Poll};
 
