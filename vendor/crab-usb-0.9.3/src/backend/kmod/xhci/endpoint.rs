@@ -61,8 +61,18 @@ impl ControlTd {
         .flatten()
     }
 
+    fn completion_first_trbs(self) -> impl Iterator<Item = (TransferId, ControlStage)> {
+        [
+            Some((self.status_trb, ControlStage::Status)),
+            self.data_trb.map(|trb| (trb, ControlStage::Data)),
+            Some((self.setup_trb, ControlStage::Setup)),
+        ]
+        .into_iter()
+        .flatten()
+    }
+
     fn register_waker(&self, ring: &SendRing<TransferEvent>, cx: &mut core::task::Context<'_>) {
-        for (trb, _) in (*self).trbs() {
+        for (trb, _) in (*self).completion_first_trbs() {
             ring.register_cx(trb.0, cx);
         }
     }
@@ -322,10 +332,21 @@ impl Endpoint {
         request_id: EndpointRequestId,
         control_td: ControlTd,
     ) -> Option<Result<TransferCompletion, TransferError>> {
-        for (event_trb, stage) in control_td.trbs() {
+        for (event_trb, stage) in control_td.completion_first_trbs() {
             let Some(event) = self.ring.get_finished(event_trb.0) else {
                 continue;
             };
+            if self.dci.as_u8() == Dci::CTRL.as_u8() && request_id.0 >= 4 {
+                info!(
+                    "crabusb/xhci/endpoint: control event dci={} req={} stage={:?} trb=0x{:x} remaining={} code={:?}",
+                    self.dci.as_u8(),
+                    request_id.0,
+                    stage,
+                    event_trb.0.raw(),
+                    event.trb_transfer_length(),
+                    event.completion_code()
+                );
+            }
             let remaining = event.trb_transfer_length() as usize;
             if let Some(submitted) = self.inflight.get_mut(&request_id)
                 && let SubmittedTdKind::Control(control_td) = &mut submitted.kind
@@ -622,6 +643,24 @@ impl EndpointOp for Endpoint {
         let data_len = transfer.buffer_len();
         let dir = transfer.direction;
         let request_id = self.allocate_request_id();
+        let trace_ep0 = self.dci.as_u8() == Dci::CTRL.as_u8() && request_id.0 >= 4;
+        if trace_ep0 {
+            info!(
+                "crabusb/xhci/endpoint: submit begin dci={} req={} kind={} dir={:?} len={} trbs={} dma=0x{:x}",
+                self.dci.as_u8(),
+                request_id.0,
+                match &transfer.kind {
+                    TransferKind::Control(_) => "control",
+                    TransferKind::Bulk => "bulk",
+                    TransferKind::Interrupt => "interrupt",
+                    TransferKind::Isochronous { .. } => "iso",
+                },
+                dir,
+                data_len,
+                required_trbs,
+                data_bus_addr
+            );
+        }
 
         let kind = match &transfer.kind {
             TransferKind::Control(t) => {
@@ -668,37 +707,25 @@ impl EndpointOp for Endpoint {
                 }
 
                 let has_data_stage = data.is_some();
-                let mut control_trbs: Vec<transfer::Allowed> = vec![setup.into()];
-                if let Some(data) = data {
-                    control_trbs.push(data.into());
-                }
-                control_trbs.push(status.into());
-
-                let control_addrs = self.ring.enqueue_transfer_td(&mut control_trbs);
-                let mut control_addrs = control_addrs.into_iter();
-                let setup_trb = TransferId(
-                    control_addrs
-                        .next()
-                        .expect("control TD must contain setup TRB"),
-                );
-                let data_trb = if has_data_stage {
-                    Some(TransferId(
-                        control_addrs
-                            .next()
-                            .expect("control data TD must contain data TRB"),
-                    ))
+                let setup_trb = TransferId(self.ring.enque_transfer(setup.into()));
+                let data_trb = if let Some(data) = data {
+                    Some(TransferId(self.ring.enque_transfer(data.into())))
                 } else {
                     None
                 };
-                let status_trb = TransferId(
-                    control_addrs
-                        .next()
-                        .expect("control TD must contain status TRB"),
-                );
-                debug_assert!(
-                    control_addrs.next().is_none(),
-                    "control TD yielded more TRB addresses than expected"
-                );
+                let status_trb = TransferId(self.ring.enque_transfer(status.into()));
+                if trace_ep0 {
+                    info!(
+                        "crabusb/xhci/endpoint: control td queued simple dci={} req={} setup=0x{:x} data=0x{:x} status=0x{:x} has_data={} len={}",
+                        self.dci.as_u8(),
+                        request_id.0,
+                        setup_trb.0.raw(),
+                        data_trb.map(|trb| trb.0.raw()).unwrap_or(0),
+                        status_trb.0.raw(),
+                        has_data_stage,
+                        data_len
+                    );
+                }
                 for trb in [Some(setup_trb), data_trb, Some(status_trb)]
                     .into_iter()
                     .flatten()
@@ -750,7 +777,22 @@ impl EndpointOp for Endpoint {
             },
         );
         mb();
+        if trace_ep0 {
+            info!(
+                "crabusb/xhci/endpoint: doorbell begin dci={} req={} outstanding={}",
+                self.dci.as_u8(),
+                request_id.0,
+                self.outstanding_trbs
+            );
+        }
         self.doorbell();
+        if trace_ep0 {
+            info!(
+                "crabusb/xhci/endpoint: doorbell end dci={} req={}",
+                self.dci.as_u8(),
+                request_id.0
+            );
+        }
 
         Ok(Self::public_request_id(request_id))
     }

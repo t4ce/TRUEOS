@@ -102,7 +102,8 @@ impl<C> Finished<C> {
     }
 
     pub fn get_finished(&self, addr: BusAddr) -> Option<C> {
-        self.waiter(addr).get_finished()
+        let slot = self.waiter(addr);
+        slot.get_finished()
     }
 
     fn waiter(&self, addr: BusAddr) -> &FinishedData<C> {
@@ -115,7 +116,8 @@ impl<C> Finished<C> {
     }
 
     pub fn register_cx(&self, addr: BusAddr, cx: &mut core::task::Context<'_>) {
-        self.waiter(addr).register(cx.waker());
+        let slot = self.waiter(addr);
+        slot.register(cx.waker());
     }
 
     pub fn take_waiter(&self, addr: BusAddr) -> TWaiter<C> {

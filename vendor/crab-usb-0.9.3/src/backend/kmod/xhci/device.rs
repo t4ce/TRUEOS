@@ -106,125 +106,158 @@ impl Device {
     }
 
     pub(crate) async fn init(&mut self, host: &mut Xhci, info: &DeviceAddressInfo) -> Result {
-        info!(
-            "crabusb/xhci/device: init begin slot={} root_port={} port={} speed={:?}",
-            self.id.as_u8(),
-            info.root_port_id,
-            info.port_id,
-            info.port_speed
-        );
+        let log_init = info.root_port_id == 4;
+        if log_init {
+            info!(
+                "crabusb/xhci/device: init begin slot={} root_port={} port={} speed={:?}",
+                self.id.as_u8(),
+                info.root_port_id,
+                info.port_id,
+                info.port_speed
+            );
+        }
         // Keep the raw PORTSC.PortSpeed encoding for interval calculations
         self.port_speed = info.port_speed;
         // let speed = info.port_speed.to_xhci_portsc_value();
 
-        info!(
-            "crabusb/xhci/device: init step=new-ep begin slot={} root_port={}",
-            self.id.as_u8(),
-            info.root_port_id
-        );
+        if log_init {
+            info!(
+                "crabusb/xhci/device: init step=new-ep begin slot={} root_port={}",
+                self.id.as_u8(),
+                info.root_port_id
+            );
+        }
         let ep = self.new_ep(Dci::CTRL)?;
         self.ctrl_ep = Some(Endpoint::new(EndpointInfo::control(), ep));
-        info!(
-            "crabusb/xhci/device: init step=new-ep end slot={} root_port={}",
-            self.id.as_u8(),
-            info.root_port_id
-        );
-        info!(
-            "crabusb/xhci/device: init step=address begin slot={} root_port={}",
-            self.id.as_u8(),
-            info.root_port_id
-        );
+        if log_init {
+            info!(
+                "crabusb/xhci/device: init step=new-ep end slot={} root_port={}",
+                self.id.as_u8(),
+                info.root_port_id
+            );
+        }
+        if log_init {
+            info!(
+                "crabusb/xhci/device: init step=address begin slot={} root_port={}",
+                self.id.as_u8(),
+                info.root_port_id
+            );
+        }
         self.address(host, info).await?;
-        info!(
-            "crabusb/xhci/device: init step=address end slot={} root_port={}",
-            self.id.as_u8(),
-            info.root_port_id
-        );
+        if log_init {
+            info!(
+                "crabusb/xhci/device: init step=address end slot={} root_port={}",
+                self.id.as_u8(),
+                info.root_port_id
+            );
+        }
         // self.dump_device_out();
-        info!(
-            "crabusb/xhci/device: init step=descriptor-base begin slot={} root_port={}",
-            self.id.as_u8(),
-            info.root_port_id
-        );
+        if log_init {
+            info!(
+                "crabusb/xhci/device: init step=descriptor-base begin slot={} root_port={}",
+                self.id.as_u8(),
+                info.root_port_id
+            );
+        }
         let base = self.get_device_descriptor_base().await?;
-        info!(
-            "crabusb/xhci/device: init step=descriptor-base end slot={} root_port={} mps0={}",
-            self.id.as_u8(),
-            info.root_port_id,
-            base.max_packet_size_0
-        );
         debug!("Device Descriptor Base: {:#x?}", base);
+        if log_init {
+            info!(
+                "crabusb/xhci/device: init step=descriptor-base end slot={} root_port={} mps0={}",
+                self.id.as_u8(),
+                info.root_port_id,
+                base.max_packet_size_0
+            );
+        }
 
-        info!(
-            "crabusb/xhci/device: init step=setup-max-packet begin slot={} root_port={}",
-            self.id.as_u8(),
-            info.root_port_id
-        );
+        if log_init {
+            info!(
+                "crabusb/xhci/device: init step=setup-max-packet begin slot={} root_port={}",
+                self.id.as_u8(),
+                info.root_port_id
+            );
+        }
         self.setup_max_packet(base, info).await?;
-        info!(
-            "crabusb/xhci/device: init step=setup-max-packet end slot={} root_port={}",
-            self.id.as_u8(),
-            info.root_port_id
-        );
+        if log_init {
+            info!(
+                "crabusb/xhci/device: init step=setup-max-packet end slot={} root_port={}",
+                self.id.as_u8(),
+                info.root_port_id
+            );
+        }
 
         // 读取当前配置（应该返回 0，表示未配置）
-        info!(
-            "crabusb/xhci/device: init step=get-configuration begin slot={} root_port={}",
-            self.id.as_u8(),
-            info.root_port_id
-        );
+        if log_init {
+            info!(
+                "crabusb/xhci/device: init step=get-configuration begin slot={} root_port={}",
+                self.id.as_u8(),
+                info.root_port_id
+            );
+        }
         let current_config = self.get_configuration().await?;
-        info!(
-            "crabusb/xhci/device: init step=get-configuration end slot={} root_port={} current={}",
-            self.id.as_u8(),
-            info.root_port_id,
-            current_config
-        );
         debug!("Current configuration value: {}", current_config);
+        if log_init {
+            info!(
+                "crabusb/xhci/device: init step=get-configuration end slot={} root_port={} current={}",
+                self.id.as_u8(),
+                info.root_port_id,
+                current_config
+            );
+        }
 
-        info!(
-            "crabusb/xhci/device: init step=read-device-descriptor begin slot={} root_port={}",
-            self.id.as_u8(),
-            info.root_port_id
-        );
+        if log_init {
+            info!(
+                "crabusb/xhci/device: init step=read-device-descriptor begin slot={} root_port={}",
+                self.id.as_u8(),
+                info.root_port_id
+            );
+        }
         self.read_descriptor().await?;
-        info!(
-            "crabusb/xhci/device: init step=read-device-descriptor end slot={} root_port={} vid={:04x} pid={:04x} configs={}",
-            self.id.as_u8(),
-            info.root_port_id,
-            self.desc.vendor_id,
-            self.desc.product_id,
-            self.desc.num_configurations
-        );
+        if log_init {
+            info!(
+                "crabusb/xhci/device: init step=read-device-descriptor end slot={} root_port={} vid={:04x} pid={:04x} configs={}",
+                self.id.as_u8(),
+                info.root_port_id,
+                self.desc.vendor_id,
+                self.desc.product_id,
+                self.desc.num_configurations
+            );
+        }
 
         // 读取所有配置描述符
         for i in 0..self.desc.num_configurations {
-            info!(
-                "crabusb/xhci/device: init step=config-descriptor begin slot={} root_port={} index={}",
-                self.id.as_u8(),
-                info.root_port_id,
-                i
-            );
+            if log_init {
+                info!(
+                    "crabusb/xhci/device: init step=config-descriptor begin slot={} root_port={} index={}",
+                    self.id.as_u8(),
+                    info.root_port_id,
+                    i
+                );
+            }
             let raw_config_desc = self
                 .control_endpoint_mut()
                 .get_configuration_descriptor_bytes(i)
                 .await?;
-            info!(
-                "crabusb/xhci/device: init step=config-descriptor-read end slot={} root_port={} index={} bytes={}",
-                self.id.as_u8(),
-                info.root_port_id,
-                i,
-                raw_config_desc.len()
-            );
+            if log_init {
+                info!(
+                    "crabusb/xhci/device: init step=config-descriptor-read end slot={} root_port={} index={} bytes={}",
+                    self.id.as_u8(),
+                    info.root_port_id,
+                    i,
+                    raw_config_desc.len()
+                );
+            }
             let config_desc = ConfigurationDescriptor::parse(&raw_config_desc)
                 .ok_or_else(|| anyhow!("config descriptor parse err"))?;
-            info!(
-                "crabusb/xhci/device: init step=config-descriptor-parse end slot={} root_port={} index={} ifs={}",
-                self.id.as_u8(),
-                info.root_port_id,
-                i,
-                config_desc.interfaces.len()
-            );
+            if log_init {
+                info!(
+                    "crabusb/xhci/device: init step=config-descriptor-parse end slot={} root_port={} index={} ifs={}",
+                    self.id.as_u8(),
+                    info.root_port_id,
+                    i,
+                    config_desc.interfaces.len()
+                );
+            }
             self.raw_config_desc.push(raw_config_desc);
             self.config_desc.push(config_desc);
         }
@@ -234,31 +267,38 @@ impl Device {
         if !self.config_desc.is_empty() {
             let config_value = self.config_desc[0].configuration_value;
             debug!("Setting device configuration to {}", config_value);
-            info!(
-                "crabusb/xhci/device: init step=set-configuration begin slot={} root_port={} cfg={}",
-                self.id.as_u8(),
-                info.root_port_id,
-                config_value
-            );
+            if log_init {
+                info!(
+                    "crabusb/xhci/device: init step=set-configuration begin slot={} root_port={} cfg={}",
+                    self.id.as_u8(),
+                    info.root_port_id,
+                    config_value
+                );
+            }
             self._set_configuration(config_value).await?;
-            info!(
-                "crabusb/xhci/device: init step=set-configuration end slot={} root_port={} cfg={}",
-                self.id.as_u8(),
-                info.root_port_id,
-                config_value
-            );
+            if log_init {
+                info!(
+                    "crabusb/xhci/device: init step=set-configuration end slot={} root_port={} cfg={}",
+                    self.id.as_u8(),
+                    info.root_port_id,
+                    config_value
+                );
+            }
         }
 
-        info!(
-            "crabusb/xhci/device: init end slot={} vid={:04x} pid={:04x} class={:02x} subclass={:02x} proto={:02x} configs={}",
-            self.id.as_u8(),
-            self.desc.vendor_id,
-            self.desc.product_id,
-            self.desc.class,
-            self.desc.subclass,
-            self.desc.protocol,
-            self.config_desc.len()
-        );
+        if log_init {
+            info!(
+                "crabusb/xhci/device: init end slot={} root_port={} vid={:04x} pid={:04x} class={:02x} subclass={:02x} proto={:02x} configs={}",
+                self.id.as_u8(),
+                info.root_port_id,
+                self.desc.vendor_id,
+                self.desc.product_id,
+                self.desc.class,
+                self.desc.subclass,
+                self.desc.protocol,
+                self.desc.num_configurations
+            );
+        }
         Ok(())
     }
 
@@ -293,7 +333,7 @@ impl Device {
 
         let current_packet_size = parse_default_max_packet_size_from_port_speed(info.port_speed);
         if packet_size == current_packet_size {
-            info!(
+            debug!(
                 "crabusb/xhci/device: slot={} root_port={} port={} ep0 mps {} already programmed",
                 self.id.as_u8(),
                 info.root_port_id,
