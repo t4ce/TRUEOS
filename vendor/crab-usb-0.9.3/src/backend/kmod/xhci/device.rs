@@ -106,7 +106,8 @@ impl Device {
     }
 
     pub(crate) async fn init(&mut self, host: &mut Xhci, info: &DeviceAddressInfo) -> Result {
-        let log_init = info.root_port_id == 4;
+        let log_init = false;
+        let log_config = info.root_port_id == 4;
         if log_init {
             info!(
                 "crabusb/xhci/device: init begin slot={} root_port={} port={} speed={:?}",
@@ -226,7 +227,7 @@ impl Device {
 
         // 读取所有配置描述符
         for i in 0..self.desc.num_configurations {
-            if log_init {
+            if log_config {
                 info!(
                     "crabusb/xhci/device: init step=config-descriptor begin slot={} root_port={} index={}",
                     self.id.as_u8(),
@@ -238,7 +239,7 @@ impl Device {
                 .control_endpoint_mut()
                 .get_configuration_descriptor_bytes(i)
                 .await?;
-            if log_init {
+            if log_config {
                 info!(
                     "crabusb/xhci/device: init step=config-descriptor-read end slot={} root_port={} index={} bytes={}",
                     self.id.as_u8(),
@@ -249,7 +250,7 @@ impl Device {
             }
             let config_desc = ConfigurationDescriptor::parse(&raw_config_desc)
                 .ok_or_else(|| anyhow!("config descriptor parse err"))?;
-            if log_init {
+            if log_config {
                 info!(
                     "crabusb/xhci/device: init step=config-descriptor-parse end slot={} root_port={} index={} ifs={}",
                     self.id.as_u8(),
@@ -267,7 +268,7 @@ impl Device {
         if !self.config_desc.is_empty() {
             let config_value = self.config_desc[0].configuration_value;
             debug!("Setting device configuration to {}", config_value);
-            if log_init {
+            if log_config {
                 info!(
                     "crabusb/xhci/device: init step=set-configuration begin slot={} root_port={} cfg={}",
                     self.id.as_u8(),
@@ -276,7 +277,7 @@ impl Device {
                 );
             }
             self._set_configuration(config_value).await?;
-            if log_init {
+            if log_config {
                 info!(
                     "crabusb/xhci/device: init step=set-configuration end slot={} root_port={} cfg={}",
                     self.id.as_u8(),
@@ -286,7 +287,7 @@ impl Device {
             }
         }
 
-        if log_init {
+        if log_config {
             info!(
                 "crabusb/xhci/device: init end slot={} root_port={} vid={:04x} pid={:04x} class={:02x} subclass={:02x} proto={:02x} configs={}",
                 self.id.as_u8(),

@@ -645,15 +645,6 @@ impl EventHandler {
                     let slot_id = c.slot_id();
                     let ep_id = c.endpoint_id();
                     let ptr = c.trb_pointer();
-                    info!(
-                        "xhci: event transfer slot={} ep={} ptr={:#x} code={:?} len={} event_data={}",
-                        slot_id,
-                        ep_id,
-                        ptr,
-                        c.completion_code(),
-                        c.trb_transfer_length(),
-                        c.event_data()
-                    );
                     trace!(
                         "xhci: event transfer slot={} ep={} ptr={:#x} code={:?} len={} \
                          event_data={}",
@@ -692,16 +683,6 @@ impl EventHandler {
             other_events,
             self.event_ring().erst_dequeue_pointer()
         );
-        if command_events != 0 || port_events != 0 || transfer_events != 0 || other_events != 0 {
-            info!(
-                "xhci: event ring drained command={} port={} transfer={} other={} erdp={:#x}",
-                command_events,
-                port_events,
-                transfer_events,
-                other_events,
-                self.event_ring().erst_dequeue_pointer()
-            );
-        }
         if matches!(event, Event::Nothing) && transfer_events > 0 {
             event = Event::TransferActivity {
                 count: transfer_events,
@@ -727,14 +708,6 @@ impl EventHandlerOp for EventHandler {
             let iman = irq.iman.read_volatile();
             let erdp = irq.erdp.read_volatile();
             if has_event_interrupt {
-                info!(
-                    "xhci: handle_event USBSTS.EINT=1 IMAN.IP={} IMAN.IE={} EHB={} ERDP={:#x} sw_erdp={:#x}",
-                    iman.interrupt_pending(),
-                    iman.interrupt_enable(),
-                    erdp.event_handler_busy(),
-                    erdp.event_ring_dequeue_pointer(),
-                    self.event_ring().erst_dequeue_pointer()
-                );
                 trace!(
                     "xhci: handle_event USBSTS.EINT=1 IMAN.IP={} IMAN.IE={} EHB={} ERDP={:#x} \
                      sw_erdp={:#x}",
@@ -745,14 +718,6 @@ impl EventHandlerOp for EventHandler {
                     self.event_ring().erst_dequeue_pointer()
                 );
             } else {
-                info!(
-                    "xhci: handle_event pending USBSTS.EINT=0 IMAN.IP={} IMAN.IE={} EHB={} ERDP={:#x} sw_erdp={:#x}",
-                    iman.interrupt_pending(),
-                    iman.interrupt_enable(),
-                    erdp.event_handler_busy(),
-                    erdp.event_ring_dequeue_pointer(),
-                    self.event_ring().erst_dequeue_pointer()
-                );
                 trace!(
                     "xhci: handle_event draining pending event with USBSTS.EINT=0 IMAN.IP={} \
                      IMAN.IE={} EHB={} ERDP={:#x} sw_erdp={:#x}",

@@ -898,13 +898,7 @@ pub async fn event_pump_task(controller_id: usize) {
             }
             Some(Event::TransferActivity { count }) => {
                 idle_yields = 0;
-                if usb_log_all_enabled() {
-                    crate::log!(
-                        "crabusb: pump transfer activity ctrl={} count={}\n",
-                        controller_id,
-                        count
-                    );
-                }
+                let _ = count;
             }
             Some(Event::Stopped) => {
                 idle_yields = 0;
