@@ -37,14 +37,30 @@ const MSG_TEXTURE_JPEG: u16 = 13;
 const MSG_TEXTURE_SVG: u16 = 14;
 const MSG_DRAW_RGB_TRIANGLES: u16 = 15;
 const MSG_DRAW_TEX_TRIANGLES: u16 = 16;
+const MSG_RESOURCE_SNAPSHOT_BEGIN: u16 = 17;
+const MSG_RESOURCE_SNAPSHOT_END: u16 = 18;
 const CAP_ONE_WAY_MONITOR: u32 = 1;
 const CAP_GFX_COMMAND_STREAM: u32 = 1 << 1;
+const CAP_RESOURCE_SNAPSHOT: u32 = 1 << 2;
+const RDP_TEXTURE_CACHE_CAP: usize = 512;
+
+#[derive(Clone)]
+struct CachedTexture {
+    tex_id: u32,
+    msg: u16,
+    fields: Vec<u32>,
+    data: Vec<u8>,
+    seq: u32,
+}
 
 static TRUEOS_RDP_STARTED: AtomicBool = AtomicBool::new(false);
 static TRUEOS_RDP_CLIENTS: AtomicU32 = AtomicU32::new(0);
 static TRUEOS_RDP_DROPPED_SENDS: AtomicU32 = AtomicU32::new(0);
+static TRUEOS_RDP_RESOURCE_SEQ: AtomicU32 = AtomicU32::new(1);
+static TRUEOS_RDP_TEXTURE_CACHE_BYTES: AtomicU32 = AtomicU32::new(0);
 static TRUEOS_RDP_COMMAND_QUEUE: Mutex<Option<&'static NetQueue<NetCommand>>> = Mutex::new(None);
 static TRUEOS_RDP_CLIENT_HANDLES: Mutex<Vec<NetHandle>> = Mutex::new(Vec::new());
+static TRUEOS_RDP_TEXTURE_CACHE: Mutex<Vec<CachedTexture>> = Mutex::new(Vec::new());
 
 #[inline]
 pub fn client_count() -> u32 {
@@ -54,6 +70,16 @@ pub fn client_count() -> u32 {
 #[inline]
 pub fn has_clients() -> bool {
     client_count() != 0
+}
+
+#[inline]
+pub fn cached_texture_count() -> u32 {
+    TRUEOS_RDP_TEXTURE_CACHE.lock().len() as u32
+}
+
+#[inline]
+pub fn cached_texture_bytes() -> u32 {
+    TRUEOS_RDP_TEXTURE_CACHE_BYTES.load(Ordering::Acquire)
 }
 
 fn active_view_dimensions() -> (u32, u32) {
@@ -91,13 +117,22 @@ fn frame_from_payload(payload: Vec<u8>) -> Vec<u8> {
 
 fn hello_frame() -> Vec<u8> {
     let (view_w, view_h) = active_view_dimensions();
-    let caps = CAP_ONE_WAY_MONITOR | CAP_GFX_COMMAND_STREAM;
+    let caps = CAP_ONE_WAY_MONITOR | CAP_GFX_COMMAND_STREAM | CAP_RESOURCE_SNAPSHOT;
 
     let mut payload = begin_payload(MSG_HELLO, 16);
     push_u32(&mut payload, view_w);
     push_u32(&mut payload, view_h);
     push_u32(&mut payload, caps);
 
+    frame_from_payload(payload)
+}
+
+fn protocol_frame(msg: u16, fields: &[u32], data: &[u8]) -> Vec<u8> {
+    let mut payload = begin_payload(msg, fields.len().saturating_mul(4).saturating_add(data.len()));
+    for field in fields {
+        push_u32(&mut payload, *field);
+    }
+    payload.extend_from_slice(data);
     frame_from_payload(payload)
 }
 
@@ -135,23 +170,140 @@ fn publish_small(msg: u16, fields: &[u32]) {
     if !has_clients() {
         return;
     }
-    let mut payload = begin_payload(msg, fields.len().saturating_mul(4));
-    for field in fields {
-        push_u32(&mut payload, *field);
-    }
-    broadcast_frame(frame_from_payload(payload));
+    broadcast_frame(protocol_frame(msg, fields, &[]));
 }
 
 fn publish_bytes(msg: u16, fields: &[u32], data: &[u8]) {
     if !has_clients() {
         return;
     }
-    let mut payload = begin_payload(msg, fields.len().saturating_mul(4).saturating_add(data.len()));
-    for field in fields {
-        push_u32(&mut payload, *field);
+    broadcast_frame(protocol_frame(msg, fields, data));
+}
+
+fn encoded_msg(kind: crate::r::resource_monitor::EncodedKind) -> u16 {
+    match kind {
+        crate::r::resource_monitor::EncodedKind::Png => MSG_TEXTURE_PNG,
+        crate::r::resource_monitor::EncodedKind::Jpeg => MSG_TEXTURE_JPEG,
+        crate::r::resource_monitor::EncodedKind::Svg => MSG_TEXTURE_SVG,
     }
-    payload.extend_from_slice(data);
-    broadcast_frame(frame_from_payload(payload));
+}
+
+fn encoded_fields(asset: &crate::r::resource_monitor::EncodedAsset) -> [u32; 3] {
+    [
+        asset.tex_id,
+        asset.flags,
+        asset.bytes.len().min(u32::MAX as usize) as u32,
+    ]
+}
+
+fn update_cached_texture(tex_id: u32, msg: u16, fields: &[u32], data: &[u8]) -> u32 {
+    if tex_id == 0 {
+        return TRUEOS_RDP_RESOURCE_SEQ.load(Ordering::Acquire);
+    }
+
+    let seq = TRUEOS_RDP_RESOURCE_SEQ.fetch_add(1, Ordering::AcqRel);
+    let mut cache = TRUEOS_RDP_TEXTURE_CACHE.lock();
+    if let Some(entry) = cache.iter_mut().find(|entry| entry.tex_id == tex_id) {
+        entry.msg = msg;
+        entry.fields.clear();
+        entry.fields.extend_from_slice(fields);
+        entry.data.clear();
+        entry.data.extend_from_slice(data);
+        entry.seq = seq;
+    } else {
+        if cache.len() >= RDP_TEXTURE_CACHE_CAP {
+            if let Some((oldest_idx, _)) =
+                cache.iter().enumerate().min_by_key(|(_, entry)| entry.seq)
+            {
+                cache.remove(oldest_idx);
+            }
+        }
+        cache.push(CachedTexture {
+            tex_id,
+            msg,
+            fields: fields.to_vec(),
+            data: data.to_vec(),
+            seq,
+        });
+    }
+
+    let bytes = cache
+        .iter()
+        .fold(0usize, |acc, entry| acc.saturating_add(entry.data.len()))
+        .min(u32::MAX as usize) as u32;
+    TRUEOS_RDP_TEXTURE_CACHE_BYTES.store(bytes, Ordering::Release);
+    seq
+}
+
+fn texture_cache_snapshot() -> Vec<CachedTexture> {
+    let mut textures = TRUEOS_RDP_TEXTURE_CACHE.lock().clone();
+    textures.sort_by_key(|entry| entry.seq);
+    textures
+}
+
+fn send_frame_to(
+    cmds: &NetQueue<NetCommand>,
+    handle: NetHandle,
+    frame: Vec<u8>,
+    label: &'static str,
+) {
+    if cmds
+        .push(NetCommand::SendTcp {
+            handle,
+            data: frame,
+        })
+        .is_err()
+    {
+        crate::log!("trueos-rdp: {} queue full handle={}\n", label, handle.0);
+    }
+}
+
+fn send_resource_snapshot(cmds: &NetQueue<NetCommand>, handle: NetHandle) {
+    let textures = texture_cache_snapshot();
+    let bytes = textures
+        .iter()
+        .fold(0usize, |acc, entry| acc.saturating_add(entry.data.len()))
+        .min(u32::MAX as usize) as u32;
+    let latest_seq = textures.last().map(|entry| entry.seq).unwrap_or(0);
+
+    send_frame_to(
+        cmds,
+        handle,
+        protocol_frame(
+            MSG_RESOURCE_SNAPSHOT_BEGIN,
+            &[
+                textures.len().min(u32::MAX as usize) as u32,
+                bytes,
+                latest_seq,
+            ],
+            &[],
+        ),
+        "snapshot-begin",
+    );
+
+    for texture in textures {
+        send_frame_to(
+            cmds,
+            handle,
+            protocol_frame(texture.msg, texture.fields.as_slice(), texture.data.as_slice()),
+            "snapshot-texture",
+        );
+    }
+
+    send_frame_to(
+        cmds,
+        handle,
+        protocol_frame(
+            MSG_RESOURCE_SNAPSHOT_END,
+            &[
+                cached_texture_count(),
+                cached_texture_bytes(),
+                TRUEOS_RDP_RESOURCE_SEQ.load(Ordering::Acquire),
+            ],
+            &[],
+        ),
+        "snapshot-end",
+    );
 }
 
 pub fn publish_begin_frame(seq: u32, flags: u32, clear_rgb: u32) {
@@ -212,45 +364,44 @@ pub fn publish_texture_rgba(
     rgba: &[u8],
 ) {
     let (rx, ry, rw, rh) = region.unwrap_or((0, 0, 0, 0));
-    publish_bytes(
-        MSG_TEXTURE_RGBA,
-        &[
-            tex_id,
-            width,
-            height,
-            flags,
-            rx,
-            ry,
-            rw,
-            rh,
-            rgba.len().min(u32::MAX as usize) as u32,
-        ],
-        rgba,
-    );
+    let fields = [
+        tex_id,
+        width,
+        height,
+        flags,
+        rx,
+        ry,
+        rw,
+        rh,
+        rgba.len().min(u32::MAX as usize) as u32,
+    ];
+    if let Some(asset) = crate::r::resource_monitor::encoded_texture(tex_id) {
+        let encoded_fields = encoded_fields(&asset);
+        let msg = encoded_msg(asset.kind);
+        update_cached_texture(tex_id, msg, &encoded_fields, asset.bytes.as_slice());
+        publish_bytes(msg, &encoded_fields, asset.bytes.as_slice());
+        return;
+    }
+    update_cached_texture(tex_id, MSG_TEXTURE_RGBA, &fields, rgba);
+    publish_bytes(MSG_TEXTURE_RGBA, &fields, rgba);
 }
 
 pub fn publish_texture_png(tex_id: u32, flags: u32, data: &[u8]) {
-    publish_bytes(
-        MSG_TEXTURE_PNG,
-        &[tex_id, flags, data.len().min(u32::MAX as usize) as u32],
-        data,
-    );
+    let fields = [tex_id, flags, data.len().min(u32::MAX as usize) as u32];
+    update_cached_texture(tex_id, MSG_TEXTURE_PNG, &fields, data);
+    publish_bytes(MSG_TEXTURE_PNG, &fields, data);
 }
 
 pub fn publish_texture_jpeg(tex_id: u32, flags: u32, data: &[u8]) {
-    publish_bytes(
-        MSG_TEXTURE_JPEG,
-        &[tex_id, flags, data.len().min(u32::MAX as usize) as u32],
-        data,
-    );
+    let fields = [tex_id, flags, data.len().min(u32::MAX as usize) as u32];
+    update_cached_texture(tex_id, MSG_TEXTURE_JPEG, &fields, data);
+    publish_bytes(MSG_TEXTURE_JPEG, &fields, data);
 }
 
 pub fn publish_texture_svg(tex_id: u32, flags: u32, data: &[u8]) {
-    publish_bytes(
-        MSG_TEXTURE_SVG,
-        &[tex_id, flags, data.len().min(u32::MAX as usize) as u32],
-        data,
-    );
+    let fields = [tex_id, flags, data.len().min(u32::MAX as usize) as u32];
+    update_cached_texture(tex_id, MSG_TEXTURE_SVG, &fields, data);
+    publish_bytes(MSG_TEXTURE_SVG, &fields, data);
 }
 
 pub fn publish_draw_rgb_triangles(frame_seq: u32, vcount: u32, vertices: &[u8]) {
@@ -299,15 +450,8 @@ fn open_listener(cmds: &NetQueue<NetCommand>) {
 }
 
 fn send_hello(cmds: &NetQueue<NetCommand>, handle: NetHandle) {
-    if cmds
-        .push(NetCommand::SendTcp {
-            handle,
-            data: hello_frame(),
-        })
-        .is_err()
-    {
-        crate::log!("trueos-rdp: hello queue full handle={}\n", handle.0);
-    }
+    send_frame_to(cmds, handle, hello_frame(), "hello");
+    send_resource_snapshot(cmds, handle);
 }
 
 #[task]

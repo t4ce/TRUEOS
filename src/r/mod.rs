@@ -15,6 +15,7 @@ pub mod net;
 pub mod path;
 pub mod rdp;
 pub mod readiness;
+pub mod resource_monitor;
 pub mod shader;
 pub mod silk_service;
 pub mod spawn_service;

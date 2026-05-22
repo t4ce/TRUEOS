@@ -4,6 +4,8 @@ use trueos_gfx_core::{
     Result, ShaderDesc, ShaderId, SwapchainDesc,
 };
 
+pub mod rdp_monitor;
+
 use crate::gfx::virtio_gpu_3d;
 
 pub enum Backend {
