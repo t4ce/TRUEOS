@@ -31,7 +31,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::future::Future;
 use core::pin::Pin;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
@@ -51,6 +51,7 @@ static SHARED_TOKIO_WAIT: WaitQueue = WaitQueue::new();
 static SHARED_TOKIO_READY: AtomicBool = AtomicBool::new(false);
 static SHARED_TOKIO_PUMP_LOGGED: AtomicBool = AtomicBool::new(false);
 static SHARED_TOKIO_UNREADY_LOGGED: AtomicBool = AtomicBool::new(false);
+static SHARED_TOKIO_ACTIVE: AtomicU32 = AtomicU32::new(0);
 
 struct SharedTokioResult<T> {
     value: Mutex<Option<T>>,
@@ -113,7 +114,15 @@ where
     }
 }
 
-pub async fn shared_tokio_job_pump() {
+fn shared_tokio_queued_jobs() -> usize {
+    SHARED_TOKIO_JOBS.lock().len()
+}
+
+fn shared_tokio_has_work() -> bool {
+    SHARED_TOKIO_ACTIVE.load(Ordering::Acquire) != 0 || shared_tokio_queued_jobs() != 0
+}
+
+async fn shared_tokio_job_pump_quantum(quantum_ms: u64) {
     SHARED_TOKIO_READY.store(true, Ordering::Release);
     crate::r::readiness::set(crate::r::readiness::TOKIO_RUNTIME_READY);
     if !SHARED_TOKIO_PUMP_LOGGED.swap(true, Ordering::AcqRel) {
@@ -131,52 +140,54 @@ pub async fn shared_tokio_job_pump() {
         };
 
         if let Some(make_job) = job {
-            detach_tokio_task(tokio::task::spawn_local(make_job()));
+            SHARED_TOKIO_ACTIVE.fetch_add(1, Ordering::AcqRel);
+            detach_tokio_task(tokio::task::spawn_local(async move {
+                make_job().await;
+                SHARED_TOKIO_ACTIVE.fetch_sub(1, Ordering::AcqRel);
+                SHARED_TOKIO_WAIT.notify_one();
+            }));
         } else {
-            SHARED_TOKIO_WAIT.wait_for_event_timeout(25).await;
+            break;
         }
     }
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(quantum_ms)).await;
 }
 
-fn run_shared_tokio_runtime() -> Result<(), RunError> {
+fn build_shared_tokio_runtime() -> Result<tokio::runtime::Runtime, RunError> {
     let mut builder = tokio::runtime::Builder::new_current_thread();
     builder.enable_io();
     builder.enable_time();
-    let runtime = builder.build().map_err(|_| RunError::Build)?;
-    let local = tokio::task::LocalSet::new();
-    local.block_on(&runtime, shared_tokio_job_pump());
-    Ok(())
+    builder.build().map_err(|_| RunError::Build)
 }
 
 #[embassy_executor::task]
 pub async fn shared_tokio_runtime_service_task() {
-    const RETRY_MS: u64 = 1000;
-    const HW_LOGO_DRAIN_TIMEOUT_MS: u64 = 12_000;
+    const QUANTUM_MS: u64 = 50;
+    const IDLE_WAIT_MS: u64 = 25;
 
     crate::r::readiness::wait_for(crate::r::readiness::BACKGROUND_AP_WORKER_READY).await;
-    let hw_logo_done = crate::intel::wait_hw_logo_sequence_done(HW_LOGO_DRAIN_TIMEOUT_MS).await;
     crate::log!(
-        "t/tokio: launching shared runtime after BACKGROUND_AP_WORKER_READY hw_logo_done={} timeout_ms={}\n",
-        hw_logo_done as u8,
-        HW_LOGO_DRAIN_TIMEOUT_MS
+        "t/tokio: launching shared runtime quantum pump after BACKGROUND_AP_WORKER_READY quantum={}ms\n",
+        QUANTUM_MS
     );
 
-    loop {
-        let rc = crate::t::trueos_tokio_worker::spawn_blocking_job_with_purpose(
-            Box::new(|| {
-                if let Err(err) = run_shared_tokio_runtime() {
-                    SHARED_TOKIO_READY.store(false, Ordering::Release);
-                    crate::log!("t/tokio: shared runtime failed {:?}\n", err);
-                }
-            }),
-            "shared-tokio-runtime",
-        );
-        if rc == 0 {
-            crate::log!("t/tokio: submitted shared runtime to blocking lane\n");
-            core::future::pending::<()>().await;
+    let runtime = match build_shared_tokio_runtime() {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            crate::log!("t/tokio: shared runtime failed {:?}\n", err);
+            return;
         }
-        crate::log!("t/tokio: shared runtime carrier unavailable rc={} retry={}ms\n", rc, RETRY_MS);
-        Timer::after(EmbassyDuration::from_millis(RETRY_MS)).await;
+    };
+    let local = tokio::task::LocalSet::new();
+
+    loop {
+        if !shared_tokio_has_work() && shared_tokio_runtime_ready() {
+            SHARED_TOKIO_WAIT.wait_for_event_timeout(IDLE_WAIT_MS).await;
+        }
+
+        local.block_on(&runtime, shared_tokio_job_pump_quantum(QUANTUM_MS));
+        Timer::after(EmbassyDuration::from_millis(1)).await;
     }
 }
 
