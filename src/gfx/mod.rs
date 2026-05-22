@@ -353,6 +353,166 @@ pub fn with_context_tag<R>(
     with_system_tag(owner, |sys| f(sys.context_mut()))
 }
 
+#[inline]
+pub fn rdp_monitor_begin_frame(seq: u32, flags: u32, clear_rgb: u32) {
+    #[cfg(feature = "trueos_rdp")]
+    crate::r::rdp::publish_begin_frame(seq, flags, clear_rgb);
+    #[cfg(not(feature = "trueos_rdp"))]
+    let _ = (seq, flags, clear_rgb);
+}
+
+#[inline]
+pub fn rdp_monitor_end_frame(
+    seq: u32,
+    flags: u32,
+    rgb_draws: u32,
+    tex_draws: u32,
+    draw_bytes: u32,
+) {
+    #[cfg(feature = "trueos_rdp")]
+    crate::r::rdp::publish_end_frame(seq, flags, rgb_draws, tex_draws, draw_bytes);
+    #[cfg(not(feature = "trueos_rdp"))]
+    let _ = (seq, flags, rgb_draws, tex_draws, draw_bytes);
+}
+
+#[inline]
+pub fn rdp_monitor_set_blend(
+    frame_seq: u32,
+    enabled: u32,
+    src_rgb: u32,
+    dst_rgb: u32,
+    src_alpha: u32,
+    dst_alpha: u32,
+) {
+    #[cfg(feature = "trueos_rdp")]
+    crate::r::rdp::publish_set_blend(frame_seq, enabled, src_rgb, dst_rgb, src_alpha, dst_alpha);
+    #[cfg(not(feature = "trueos_rdp"))]
+    let _ = (frame_seq, enabled, src_rgb, dst_rgb, src_alpha, dst_alpha);
+}
+
+#[inline]
+pub fn rdp_monitor_set_sampler(
+    frame_seq: u32,
+    wrap_s: u32,
+    wrap_t: u32,
+    min_filter: u32,
+    mag_filter: u32,
+) {
+    #[cfg(feature = "trueos_rdp")]
+    crate::r::rdp::publish_set_sampler(frame_seq, wrap_s, wrap_t, min_filter, mag_filter);
+    #[cfg(not(feature = "trueos_rdp"))]
+    let _ = (frame_seq, wrap_s, wrap_t, min_filter, mag_filter);
+}
+
+#[inline]
+pub fn rdp_monitor_set_scissor(frame_seq: u32, x: u32, y: u32, width: u32, height: u32) {
+    #[cfg(feature = "trueos_rdp")]
+    crate::r::rdp::publish_set_scissor(frame_seq, x, y, width, height);
+    #[cfg(not(feature = "trueos_rdp"))]
+    let _ = (frame_seq, x, y, width, height);
+}
+
+#[inline]
+pub fn rdp_monitor_clear_scissor(frame_seq: u32) {
+    #[cfg(feature = "trueos_rdp")]
+    crate::r::rdp::publish_clear_scissor(frame_seq);
+    #[cfg(not(feature = "trueos_rdp"))]
+    let _ = frame_seq;
+}
+
+#[inline]
+pub fn rdp_monitor_set_render_target(frame_seq: u32, tex_id: u32) {
+    #[cfg(feature = "trueos_rdp")]
+    crate::r::rdp::publish_set_render_target(frame_seq, tex_id);
+    #[cfg(not(feature = "trueos_rdp"))]
+    let _ = (frame_seq, tex_id);
+}
+
+#[inline]
+pub fn rdp_monitor_clear_render_target(frame_seq: u32) {
+    #[cfg(feature = "trueos_rdp")]
+    crate::r::rdp::publish_clear_render_target(frame_seq);
+    #[cfg(not(feature = "trueos_rdp"))]
+    let _ = frame_seq;
+}
+
+#[inline]
+pub fn rdp_monitor_clear_rect(frame_seq: u32, rgb: u32, x: u32, y: u32, width: u32, height: u32) {
+    #[cfg(feature = "trueos_rdp")]
+    crate::r::rdp::publish_clear_rect(frame_seq, rgb, x, y, width, height);
+    #[cfg(not(feature = "trueos_rdp"))]
+    let _ = (frame_seq, rgb, x, y, width, height);
+}
+
+#[inline]
+pub fn rdp_monitor_texture_rgba(
+    tex_id: u32,
+    width: u32,
+    height: u32,
+    flags: u32,
+    region: Option<(u32, u32, u32, u32)>,
+    rgba: &[u8],
+) {
+    #[cfg(feature = "trueos_rdp")]
+    crate::r::rdp::publish_texture_rgba(tex_id, width, height, flags, region, rgba);
+    #[cfg(not(feature = "trueos_rdp"))]
+    let _ = (tex_id, width, height, flags, region, rgba);
+}
+
+#[inline]
+pub fn rdp_monitor_texture_png(tex_id: u32, flags: u32, data: &[u8]) {
+    #[cfg(feature = "trueos_rdp")]
+    crate::r::rdp::publish_texture_png(tex_id, flags, data);
+    #[cfg(not(feature = "trueos_rdp"))]
+    let _ = (tex_id, flags, data);
+}
+
+#[inline]
+pub fn rdp_monitor_texture_jpeg(tex_id: u32, flags: u32, data: &[u8]) {
+    #[cfg(feature = "trueos_rdp")]
+    crate::r::rdp::publish_texture_jpeg(tex_id, flags, data);
+    #[cfg(not(feature = "trueos_rdp"))]
+    let _ = (tex_id, flags, data);
+}
+
+#[inline]
+pub fn rdp_monitor_texture_svg(tex_id: u32, flags: u32, data: &[u8]) {
+    #[cfg(feature = "trueos_rdp")]
+    crate::r::rdp::publish_texture_svg(tex_id, flags, data);
+    #[cfg(not(feature = "trueos_rdp"))]
+    let _ = (tex_id, flags, data);
+}
+
+#[inline]
+pub fn rdp_monitor_draw_rgb_triangles(frame_seq: u32, vcount: u32, vertices: &[u8]) {
+    #[cfg(feature = "trueos_rdp")]
+    crate::r::rdp::publish_draw_rgb_triangles(frame_seq, vcount, vertices);
+    #[cfg(not(feature = "trueos_rdp"))]
+    let _ = (frame_seq, vcount, vertices);
+}
+
+#[inline]
+pub fn rdp_monitor_draw_tex_triangles(
+    frame_seq: u32,
+    tex_id: u32,
+    vcount: u32,
+    sampler_flags: u32,
+    sample_kind: u32,
+    vertices: &[u8],
+) {
+    #[cfg(feature = "trueos_rdp")]
+    crate::r::rdp::publish_draw_tex_triangles(
+        frame_seq,
+        tex_id,
+        vcount,
+        sampler_flags,
+        sample_kind,
+        vertices,
+    );
+    #[cfg(not(feature = "trueos_rdp"))]
+    let _ = (frame_seq, tex_id, vcount, sampler_flags, sample_kind, vertices);
+}
+
 pub fn with_framebuffers<R>(
     f: impl FnOnce(Option<&'static crate::limine::FramebufferResponse>) -> R,
 ) -> Option<R> {
