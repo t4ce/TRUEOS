@@ -163,6 +163,7 @@ iso: baremetal-reboot-log artifacts images limine
 	mkdir -p $(ISO_BOOT_DIR)
 	cp $(ARTIFACT_RUNTIME_ELF) $(ISO_BOOT_DIR)/TRUEOS.elf
 	mkdir -p $(ISO_DIR)/EFI/BOOT
+	cp $(LIMINE_BOOTX64) $(ISO_DIR)/EFI/BOOT/BOOTX64.EFI
 	@if [ ! -f "$(GUC_FW_HOST_PATH)" ]; then \
 		echo "error: GUC firmware not found at $(GUC_FW_HOST_PATH)"; \
 		exit 1; \
@@ -224,6 +225,7 @@ iso: baremetal-reboot-log artifacts images limine
 		cp $(ISO_DIR)/EFI/BOOT/adlp_guc_70.bin $(ISO_BOOT_DIR)/EFI/BOOT/adlp_guc_70.bin; \
 	fi
 	cp $(LIMINE_CFG_GENERATED) $(ISO_BOOT_DIR)/limine.conf
+	cp $(LIMINE_CFG_GENERATED) $(ISO_DIR)/EFI/BOOT/limine.conf
 	cp $(ISO_BOOT_DIR)/TRUEOS.elf $(ISO_DIR)/TRUEOS.elf
 	rm -f $(ISO_BOOT_DIR)/$(ISO_EFI_IMG)
 	@efi_payload_kib=$$(du -sk "$(LIMINE_BOOTX64)" | cut -f1); \
@@ -236,6 +238,7 @@ iso: baremetal-reboot-log artifacts images limine
 	mkfs.vfat -n TRUEOS_EFI $(ISO_BOOT_DIR)/$(ISO_EFI_IMG)
 	mmd -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) ::/EFI ::/EFI/BOOT
 	mcopy -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) $(LIMINE_BOOTX64) ::/EFI/BOOT/BOOTX64.EFI
+	cp $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) $(ISO_DIR)/$(ISO_EFI_IMG)
 	xorriso -as mkisofs \
 		-iso-level 3 -full-iso9660-filenames \
 		-R \

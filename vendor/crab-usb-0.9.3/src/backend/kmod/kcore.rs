@@ -47,9 +47,6 @@ fn is_xhci_command_timeout(err: &USBError) -> bool {
     format!("{err:?}").contains("xHCI command timed out")
 }
 
-const TEMP_SKIP_SUPERSPEED_ADDRESS_INIT: bool = true;
-const TEMP_ONLY_ADDRESS_ROOT_PORT_4: bool = true;
-
 impl Core {
     pub(crate) fn new(backend: impl CoreOp) -> Self {
         Self {
@@ -100,29 +97,6 @@ impl Core {
                     addr_info.port_id,
                     addr_info.port_speed
                 );
-                if TEMP_SKIP_SUPERSPEED_ADDRESS_INIT
-                    && matches!(
-                        addr_info.port_speed,
-                        usb_if::Speed::SuperSpeed | usb_if::Speed::SuperSpeedPlus
-                    )
-                {
-                    info!(
-                        "kcore: temporary skip superspeed address/init root_port={} port={} speed={:?}",
-                        addr_info.root_port_id,
-                        addr_info.port_id,
-                        addr_info.port_speed
-                    );
-                    continue;
-                }
-                if TEMP_ONLY_ADDRESS_ROOT_PORT_4 && addr_info.root_port_id != 4 {
-                    info!(
-                        "kcore: temporary skip address/init non-target root_port={} port={} speed={:?}",
-                        addr_info.root_port_id,
-                        addr_info.port_id,
-                        addr_info.port_speed
-                    );
-                    continue;
-                }
                 let info = DeviceAddressInfo {
                     root_port_id: addr_info.root_port_id,
                     port_speed: addr_info.port_speed,

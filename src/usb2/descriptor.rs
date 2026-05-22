@@ -132,8 +132,6 @@ pub(crate) const fn hid_optional_descriptor_skip_reason(
 ) -> Option<UsbDescriptorSkipReason> {
     if vendor_id == 0x0627 && product_id == 0x0001 {
         Some(UsbDescriptorSkipReason::QemuBootHidOptionalRead)
-    } else if vendor_id == 0x22d4 && product_id == 0x1321 {
-        Some(UsbDescriptorSkipReason::QemuBootHidOptionalRead)
     } else {
         None
     }

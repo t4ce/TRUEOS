@@ -107,7 +107,7 @@ impl Device {
 
     pub(crate) async fn init(&mut self, host: &mut Xhci, info: &DeviceAddressInfo) -> Result {
         let log_init = false;
-        let log_config = info.root_port_id == 4;
+        let log_config = false;
         if log_init {
             info!(
                 "crabusb/xhci/device: init begin slot={} root_port={} port={} speed={:?}",
