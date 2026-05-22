@@ -1290,7 +1290,6 @@ fn primary_ipv4_addr(port: u16) -> Option<SocketAddr> {
 }
 
 async fn mail_http_runtime() -> Result<(), io::Error> {
-    tokio::task::spawn_local(crate::t::shared_tokio_job_pump());
     tokio::task::spawn_local(inbox_refresh_loop());
 
     let app = mail_router();

@@ -32,6 +32,7 @@ use alloc::vec::Vec;
 use core::future::Future;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicBool, Ordering};
+use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
 use crate::wait::WaitQueue;
@@ -114,6 +115,7 @@ where
 
 pub async fn shared_tokio_job_pump() {
     SHARED_TOKIO_READY.store(true, Ordering::Release);
+    crate::r::readiness::set(crate::r::readiness::TOKIO_RUNTIME_READY);
     if !SHARED_TOKIO_PUMP_LOGGED.swap(true, Ordering::AcqRel) {
         crate::log!("t/tokio: shared job pump online\n");
     }
@@ -133,6 +135,48 @@ pub async fn shared_tokio_job_pump() {
         } else {
             SHARED_TOKIO_WAIT.wait_for_event_timeout(25).await;
         }
+    }
+}
+
+fn run_shared_tokio_runtime() -> Result<(), RunError> {
+    let mut builder = tokio::runtime::Builder::new_current_thread();
+    builder.enable_io();
+    builder.enable_time();
+    let runtime = builder.build().map_err(|_| RunError::Build)?;
+    let local = tokio::task::LocalSet::new();
+    local.block_on(&runtime, shared_tokio_job_pump());
+    Ok(())
+}
+
+#[embassy_executor::task]
+pub async fn shared_tokio_runtime_service_task() {
+    const RETRY_MS: u64 = 1000;
+    const HW_LOGO_DRAIN_TIMEOUT_MS: u64 = 12_000;
+
+    crate::r::readiness::wait_for(crate::r::readiness::BACKGROUND_AP_WORKER_READY).await;
+    let hw_logo_done = crate::intel::wait_hw_logo_sequence_done(HW_LOGO_DRAIN_TIMEOUT_MS).await;
+    crate::log!(
+        "t/tokio: launching shared runtime after BACKGROUND_AP_WORKER_READY hw_logo_done={} timeout_ms={}\n",
+        hw_logo_done as u8,
+        HW_LOGO_DRAIN_TIMEOUT_MS
+    );
+
+    loop {
+        let rc = crate::t::trueos_tokio_worker::spawn_blocking_job_with_purpose(
+            Box::new(|| {
+                if let Err(err) = run_shared_tokio_runtime() {
+                    SHARED_TOKIO_READY.store(false, Ordering::Release);
+                    crate::log!("t/tokio: shared runtime failed {:?}\n", err);
+                }
+            }),
+            "shared-tokio-runtime",
+        );
+        if rc == 0 {
+            crate::log!("t/tokio: submitted shared runtime to blocking lane\n");
+            core::future::pending::<()>().await;
+        }
+        crate::log!("t/tokio: shared runtime carrier unavailable rc={} retry={}ms\n", rc, RETRY_MS);
+        Timer::after(EmbassyDuration::from_millis(RETRY_MS)).await;
     }
 }
 
