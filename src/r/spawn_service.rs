@@ -39,6 +39,7 @@ define_started_flags!(
     NET_POLL_STARTED,
     NET_SERVICE_STARTED,
     NET_CACHE_SERVICE_STARTED,
+    SHARED_TOKIO_RUNTIME_STARTED,
     TLS_SOCKET_SERVICE_STARTED,
     NTP_SYNC_STARTED,
     SNTP_SERVICE_STARTED,
@@ -431,6 +432,10 @@ fn spawn_net_cache_service(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_tls_socket_service(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::net::tls_socket::tls_socket_service_task())
+}
+
+fn spawn_shared_tokio_runtime(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::t::shared_tokio_runtime_service_task())
 }
 
 fn spawn_ntp_sync(spawner: Spawner) -> SpawnAttempt {
@@ -1125,9 +1130,9 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
 #[cfg(feature = "trueos_rdp")]
-const TASK_COUNT: usize = 73;
+const TASK_COUNT: usize = 74;
 #[cfg(not(feature = "trueos_rdp"))]
-const TASK_COUNT: usize = 71;
+const TASK_COUNT: usize = 72;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1160,6 +1165,12 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("net-poll-tasks", 0, &NET_POLL_STARTED, spawn_net_poll_tasks),
     TaskSpec::enabled("net-service", 0, &NET_SERVICE_STARTED, spawn_net_service),
     TaskSpec::enabled("net-cache-service", 0, &NET_CACHE_SERVICE_STARTED, spawn_net_cache_service),
+    TaskSpec::enabled(
+        "shared-tokio-runtime",
+        crate::r::readiness::BACKGROUND_AP_WORKER_READY,
+        &SHARED_TOKIO_RUNTIME_STARTED,
+        spawn_shared_tokio_runtime,
+    ),
     TaskSpec::enabled(
         "tls-socket-service",
         crate::r::readiness::NET_ANY_CONFIGURED,

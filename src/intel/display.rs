@@ -95,6 +95,8 @@ static OVERLAY_SURFACE: Mutex<Option<OverlaySurface>> = Mutex::new(None);
 static HW_LOGO_PENDING_IDS: Mutex<VecDeque<u32>> = Mutex::new(VecDeque::new());
 static HW_LOGO_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
 static HW_LOGO_NEXT_STAGE: AtomicU32 = AtomicU32::new(0);
+static HW_LOGO_SEQUENCE_DONE: AtomicBool = AtomicBool::new(false);
+static HW_LOGO_SEQUENCE_DONE_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
 
 struct BootLogoStage {
     name: &'static str,
@@ -398,12 +400,28 @@ fn submit_next_hw_logo_stage() -> bool {
     loop {
         let stage_idx = HW_LOGO_NEXT_STAGE.fetch_add(1, Ordering::AcqRel) as usize;
         let Some(stage) = PRIMARY_BOOT_JPEG_STAGES.get(stage_idx) else {
+            if !HW_LOGO_SEQUENCE_DONE.swap(true, Ordering::AcqRel) {
+                HW_LOGO_SEQUENCE_DONE_WAIT.notify_all();
+                crate::log!("intel/display: hw-logo sequence done stages={}\n", stage_idx);
+            }
             return false;
         };
         if submit_hw_logo_stage(stage.name, stage.jpeg) {
             return true;
         }
     }
+}
+
+pub(crate) async fn wait_hw_logo_sequence_done(timeout_ms: u64) -> bool {
+    while !HW_LOGO_SEQUENCE_DONE.load(Ordering::Acquire) {
+        if !HW_LOGO_SEQUENCE_DONE_WAIT
+            .wait_for_event_timeout(timeout_ms)
+            .await
+        {
+            return HW_LOGO_SEQUENCE_DONE.load(Ordering::Acquire);
+        }
+    }
+    true
 }
 
 fn submit_hw_logo_stage(name: &'static str, jpeg: &'static [u8]) -> bool {

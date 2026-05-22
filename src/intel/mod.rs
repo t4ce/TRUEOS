@@ -757,6 +757,10 @@ pub(crate) fn hw_logo_present_task()
     self::display::hw_logo_present_task()
 }
 
+pub(crate) async fn wait_hw_logo_sequence_done(timeout_ms: u64) -> bool {
+    self::display::wait_hw_logo_sequence_done(timeout_ms).await
+}
+
 pub async fn run_media_source_warmup_async() {
     crate::log!("intel/media: source warmup skipped reason=media-decode-disabled\n");
 }
