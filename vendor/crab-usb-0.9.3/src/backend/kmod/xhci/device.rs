@@ -55,6 +55,8 @@ pub struct Device {
 impl Device {
     const LS_FS_ADDRESS_DEVICE_SETTLE_MS: u64 = 10;
     const LS_FS_EP0_REEVALUATE_SETTLE_MS: u64 = 2;
+    const SS_ADDRESS_DEVICE_SETTLE_MS: u64 = 100;
+    const SS_POST_ADDRESS_DEVICE_SETTLE_MS: u64 = 100;
 
     pub(crate) async fn new(host: &mut Xhci) -> Result<Self> {
         let slot_id = host.device_slot_assignment().await?;
@@ -106,8 +108,8 @@ impl Device {
     }
 
     pub(crate) async fn init(&mut self, host: &mut Xhci, info: &DeviceAddressInfo) -> Result {
-        let log_init = false;
-        let log_config = false;
+        let log_init = info.root_port_id == 26;
+        let log_config = info.root_port_id == 26;
         if log_init {
             info!(
                 "crabusb/xhci/device: init begin slot={} root_port={} port={} speed={:?}",
@@ -510,6 +512,28 @@ impl Device {
 
         let input_bus_addr = self.ctx.input_bus_addr();
         trace!("Input context bus address: {input_bus_addr:#x?}");
+        if matches!(info.port_speed, Speed::SuperSpeed | Speed::SuperSpeedPlus) {
+            if info.root_port_id == 26 {
+                info!(
+                    "crabusb/xhci/device: address superspeed settle slot={} root_port={} delay_ms={}",
+                    self.id.as_u8(),
+                    info.root_port_id,
+                    Self::SS_ADDRESS_DEVICE_SETTLE_MS
+                );
+            }
+            self.kernel
+                .delay(Duration::from_millis(Self::SS_ADDRESS_DEVICE_SETTLE_MS));
+        }
+        if info.root_port_id == 26 {
+            info!(
+                "crabusb/xhci/device: address command begin slot={} root_port={} input={:#x?} route={:#x} ctrl_ring={:#x}",
+                self.id.as_u8(),
+                info.root_port_id,
+                input_bus_addr,
+                route_string,
+                ctrl_ring_addr.raw()
+            );
+        }
         let result = host
             .cmd_request(command::Allowed::AddressDevice(
                 *command::AddressDevice::new()
@@ -518,10 +542,30 @@ impl Device {
             ))
             .await?;
 
+        if info.root_port_id == 26 {
+            info!(
+                "crabusb/xhci/device: address command end slot={} root_port={} completion_slot={} code={:?}",
+                self.id.as_u8(),
+                info.root_port_id,
+                result.slot_id(),
+                result.completion_code()
+            );
+        }
         debug!("Address slot ok {result:x?}");
         if matches!(info.port_speed, Speed::Low | Speed::Full) {
             self.kernel
                 .delay(Duration::from_millis(Self::LS_FS_ADDRESS_DEVICE_SETTLE_MS));
+        } else if matches!(info.port_speed, Speed::SuperSpeed | Speed::SuperSpeedPlus) {
+            if info.root_port_id == 26 {
+                info!(
+                    "crabusb/xhci/device: post-address superspeed settle slot={} root_port={} delay_ms={}",
+                    self.id.as_u8(),
+                    info.root_port_id,
+                    Self::SS_POST_ADDRESS_DEVICE_SETTLE_MS
+                );
+            }
+            self.kernel
+                .delay(Duration::from_millis(Self::SS_POST_ADDRESS_DEVICE_SETTLE_MS));
         }
 
         Ok(())

@@ -229,6 +229,10 @@ impl From<Box<dyn DeviceOp>> for Device {
 
 impl Device {
     pub(crate) async fn init(&mut self) -> Result<(), USBError> {
+        if self.vendor_id() == 0x22d4 && self.product_id() == 0x1321 {
+            self.manufacturer = None;
+            return Ok(());
+        }
         self.manufacturer = self.read_manufacturer().await;
         Ok(())
     }
