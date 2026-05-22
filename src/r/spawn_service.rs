@@ -43,8 +43,6 @@ define_started_flags!(
     NTP_SYNC_STARTED,
     SNTP_SERVICE_STARTED,
     NET_SHELL_STARTED,
-    RESOURCE_MONITOR_STARTED,
-    TRUEOS_RDP_STARTED,
     AI_QJS_ONESHOT_STARTED,
     HTTP_TRUEOSFS_STARTED,
     HYPER_HTTP1_PROBE_STARTED,
@@ -103,6 +101,11 @@ define_started_flags!(
     HTML_DEMO_STARTED,
     SURFER_PARSE_POOL_STARTED
 );
+
+#[cfg(feature = "trueos_rdp")]
+static RESOURCE_MONITOR_STARTED: AtomicBool = AtomicBool::new(false);
+#[cfg(feature = "trueos_rdp")]
+static TRUEOS_RDP_STARTED: AtomicBool = AtomicBool::new(false);
 
 macro_rules! define_stop_flags {
     ($($name:ident),* $(,)?) => {
@@ -442,10 +445,12 @@ fn spawn_net_shell(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::tst_net_tcp_shell::net_shell_task())
 }
 
+#[cfg(feature = "trueos_rdp")]
 fn spawn_resource_monitor(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::resource_monitor::resource_monitor_task())
 }
 
+#[cfg(feature = "trueos_rdp")]
 fn spawn_trueos_rdp(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::rdp::trueos_rdp_task())
 }
@@ -1119,7 +1124,11 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::NET_SOCKET_READY
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-static TASKS: [TaskSpec; 73] = [
+#[cfg(feature = "trueos_rdp")]
+const TASK_COUNT: usize = 73;
+#[cfg(not(feature = "trueos_rdp"))]
+const TASK_COUNT: usize = 71;
+static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
         "codec-service",
@@ -1170,7 +1179,9 @@ static TASKS: [TaskSpec; 73] = [
         spawn_sntp_service,
     ),
     TaskSpec::enabled("net-shell", 0, &NET_SHELL_STARTED, spawn_net_shell),
+    #[cfg(feature = "trueos_rdp")]
     TaskSpec::enabled("resource-monitor", 0, &RESOURCE_MONITOR_STARTED, spawn_resource_monitor),
+    #[cfg(feature = "trueos_rdp")]
     TaskSpec::enabled(
         "trueos-rdp",
         crate::r::readiness::NET_ANY_CONFIGURED,

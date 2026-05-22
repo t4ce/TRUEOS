@@ -2864,7 +2864,7 @@ pub mod cabi {
         if rgba.len() < expected {
             return false;
         }
-        crate::gfx::backends::rdp_monitor::RdpMonitorBackend::texture_rgba(
+        crate::gfx::rdp_monitor_texture_rgba(
             host_tex_id,
             width,
             height,
@@ -4781,7 +4781,7 @@ pub mod cabi {
             _src_alpha,
             _dst_alpha,
         );
-        crate::gfx::backends::rdp_monitor::RdpMonitorBackend::set_blend(
+        crate::gfx::rdp_monitor_set_blend(
             frame_seq, enabled, src_rgb, dst_rgb, _src_alpha, _dst_alpha,
         );
         0
@@ -4835,7 +4835,7 @@ pub mod cabi {
             min_filter,
             mag_filter,
         );
-        crate::gfx::backends::rdp_monitor::RdpMonitorBackend::set_sampler(frame_seq, wrap_s, wrap_t, min_filter, mag_filter);
+        crate::gfx::rdp_monitor_set_sampler(frame_seq, wrap_s, wrap_t, min_filter, mag_filter);
         0
     }
 
@@ -4867,7 +4867,7 @@ pub mod cabi {
         let frame_seq = st.frame_seq;
         drop(st);
         gfx_trace_record(GFX_TRACE_OP_SET_SCISSOR, frame_seq, 0, x, y, width, height);
-        crate::gfx::backends::rdp_monitor::RdpMonitorBackend::set_scissor(frame_seq, x, y, width, height);
+        crate::gfx::rdp_monitor_set_scissor(frame_seq, x, y, width, height);
         0
     }
 
@@ -4884,7 +4884,7 @@ pub mod cabi {
         let frame_seq = st.frame_seq;
         drop(st);
         gfx_trace_record(GFX_TRACE_OP_CLEAR_SCISSOR, frame_seq, 0, 0, 0, 0, 0);
-        crate::gfx::backends::rdp_monitor::RdpMonitorBackend::clear_scissor(frame_seq);
+        crate::gfx::rdp_monitor_clear_scissor(frame_seq);
         0
     }
 
@@ -4924,7 +4924,7 @@ pub mod cabi {
             width,
             height,
         );
-        crate::gfx::backends::rdp_monitor::RdpMonitorBackend::clear_rect(frame_seq, rgb, x, y, width, height);
+        crate::gfx::rdp_monitor_clear_rect(frame_seq, rgb, x, y, width, height);
         0
     }
 
@@ -4948,7 +4948,7 @@ pub mod cabi {
             let frame_seq = st.frame_seq;
             drop(st);
             gfx_trace_record(GFX_TRACE_OP_SET_RENDER_TARGET, frame_seq, 0, 0, 0, 0, 0);
-            crate::gfx::backends::rdp_monitor::RdpMonitorBackend::set_render_target(frame_seq, 0);
+            crate::gfx::rdp_monitor_set_render_target(frame_seq, 0);
             return 0;
         }
         let idx = tex_id.saturating_sub(1) as usize;
@@ -4973,7 +4973,7 @@ pub mod cabi {
         let frame_seq = st.frame_seq;
         drop(st);
         gfx_trace_record(GFX_TRACE_OP_SET_RENDER_TARGET, frame_seq, 0, tex_id, 0, 0, 0);
-        crate::gfx::backends::rdp_monitor::RdpMonitorBackend::set_render_target(frame_seq, tex_id);
+        crate::gfx::rdp_monitor_set_render_target(frame_seq, tex_id);
         0
     }
 
@@ -4996,7 +4996,7 @@ pub mod cabi {
         let frame_seq = st.frame_seq;
         drop(st);
         gfx_trace_record(GFX_TRACE_OP_CLEAR_RENDER_TARGET, frame_seq, 0, 0, 0, 0, 0);
-        crate::gfx::backends::rdp_monitor::RdpMonitorBackend::clear_render_target(frame_seq);
+        crate::gfx::rdp_monitor_clear_render_target(frame_seq);
         0
     }
 
@@ -5926,7 +5926,7 @@ pub mod cabi {
             return -3;
         }
         let data = unsafe { core::slice::from_raw_parts(data_ptr, expected) };
-        crate::gfx::backends::rdp_monitor::RdpMonitorBackend::texture_rgba(
+        crate::gfx::rdp_monitor_texture_rgba(
             tex_id,
             width,
             height,
@@ -6295,7 +6295,7 @@ pub mod cabi {
             return -3;
         }
         let data = unsafe { core::slice::from_raw_parts(data_ptr, expected) };
-        crate::gfx::backends::rdp_monitor::RdpMonitorBackend::texture_rgba(tex_id, width, height, 0x8000_0001, None, data);
+        crate::gfx::rdp_monitor_texture_rgba(tex_id, width, height, 0x8000_0001, None, data);
         if !queue_texture_rgba_upload_owned(
             tex_id,
             width,
@@ -6338,7 +6338,8 @@ pub mod cabi {
             return -2;
         }
         let data = core::slice::from_raw_parts(data_ptr, data_len);
-        crate::gfx::backends::rdp_monitor::RdpMonitorBackend::texture_png(tex_id, 0, data);
+        crate::gfx::rdp_monitor_texture_png(tex_id, 0, data);
+        #[cfg(feature = "trueos_rdp")]
         crate::r::resource_monitor::preserve_encoded_texture(
             tex_id,
             crate::r::resource_monitor::EncodedKind::Png,
@@ -6391,7 +6392,8 @@ pub mod cabi {
             return -3;
         }
         let bytes = unsafe { core::slice::from_raw_parts(data_ptr, data_len) }.to_vec();
-        crate::gfx::backends::rdp_monitor::RdpMonitorBackend::texture_png(tex_id, 0x8000_0000, bytes.as_slice());
+        crate::gfx::rdp_monitor_texture_png(tex_id, 0x8000_0000, bytes.as_slice());
+        #[cfg(feature = "trueos_rdp")]
         crate::r::resource_monitor::preserve_encoded_texture(
             tex_id,
             crate::r::resource_monitor::EncodedKind::Png,
@@ -6427,7 +6429,8 @@ pub mod cabi {
             return -2;
         }
         let data = core::slice::from_raw_parts(data_ptr, data_len);
-        crate::gfx::backends::rdp_monitor::RdpMonitorBackend::texture_jpeg(tex_id, 0, data);
+        crate::gfx::rdp_monitor_texture_jpeg(tex_id, 0, data);
+        #[cfg(feature = "trueos_rdp")]
         crate::r::resource_monitor::preserve_encoded_texture(
             tex_id,
             crate::r::resource_monitor::EncodedKind::Jpeg,
@@ -6480,7 +6483,8 @@ pub mod cabi {
             return -3;
         }
         let bytes = unsafe { core::slice::from_raw_parts(data_ptr, data_len) }.to_vec();
-        crate::gfx::backends::rdp_monitor::RdpMonitorBackend::texture_jpeg(tex_id, 0x8000_0000, bytes.as_slice());
+        crate::gfx::rdp_monitor_texture_jpeg(tex_id, 0x8000_0000, bytes.as_slice());
+        #[cfg(feature = "trueos_rdp")]
         crate::r::resource_monitor::preserve_encoded_texture(
             tex_id,
             crate::r::resource_monitor::EncodedKind::Jpeg,
@@ -6519,7 +6523,8 @@ pub mod cabi {
             return -2;
         }
         let data = core::slice::from_raw_parts(data_ptr, data_len);
-        crate::gfx::backends::rdp_monitor::RdpMonitorBackend::texture_svg(tex_id, 0, data);
+        crate::gfx::rdp_monitor_texture_svg(tex_id, 0, data);
+        #[cfg(feature = "trueos_rdp")]
         crate::r::resource_monitor::preserve_encoded_texture(
             tex_id,
             crate::r::resource_monitor::EncodedKind::Svg,
@@ -6601,7 +6606,8 @@ pub mod cabi {
             return -3;
         }
         let bytes = unsafe { core::slice::from_raw_parts(data_ptr, data_len) }.to_vec();
-        crate::gfx::backends::rdp_monitor::RdpMonitorBackend::texture_svg(tex_id, 0x8000_0000, bytes.as_slice());
+        crate::gfx::rdp_monitor_texture_svg(tex_id, 0x8000_0000, bytes.as_slice());
+        #[cfg(feature = "trueos_rdp")]
         crate::r::resource_monitor::preserve_encoded_texture(
             tex_id,
             crate::r::resource_monitor::EncodedKind::Svg,
@@ -6717,7 +6723,7 @@ pub mod cabi {
             flags |= 2;
         }
         gfx_trace_record(GFX_TRACE_OP_BEGIN_FRAME, seq, flags, clear_rgb & 0x00FF_FFFF, 0, 0, 0);
-        crate::gfx::backends::rdp_monitor::RdpMonitorBackend::begin_frame(seq, flags, clear_rgb & 0x00FF_FFFF);
+        crate::gfx::rdp_monitor_begin_frame(seq, flags, clear_rgb & 0x00FF_FFFF);
         0
     }
 
@@ -6801,7 +6807,7 @@ pub mod cabi {
             0,
             0,
         );
-        crate::gfx::backends::rdp_monitor::RdpMonitorBackend::draw_rgb_triangles(frame_seq, vcount, bytes);
+        crate::gfx::rdp_monitor_draw_rgb_triangles(frame_seq, vcount, bytes);
         0
     }
 
@@ -6968,7 +6974,7 @@ pub mod cabi {
                 TexSampleKind::Rgba => 1,
             },
         );
-        crate::gfx::backends::rdp_monitor::RdpMonitorBackend::draw_tex_triangles(
+        crate::gfx::rdp_monitor_draw_tex_triangles(
             frame_seq,
             tex_id,
             vcount,
@@ -7128,7 +7134,7 @@ pub mod cabi {
             draw_bytes.min(u32::MAX as usize) as u32,
             0,
         );
-        crate::gfx::backends::rdp_monitor::RdpMonitorBackend::end_frame(
+        crate::gfx::rdp_monitor_end_frame(
             seq,
             end_flags,
             rgb_draws,

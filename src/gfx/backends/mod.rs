@@ -4,8 +4,6 @@ use trueos_gfx_core::{
     Result, ShaderDesc, ShaderId, SwapchainDesc,
 };
 
-pub mod rdp_monitor;
-
 use crate::gfx::virtio_gpu_3d;
 
 pub enum Backend {
@@ -121,6 +119,7 @@ impl Backend {
         ensure_pci_enumerated_if_empty();
         virtio_gpu_3d::VirglGfxBackend::init(framebuffers).map(Backend::Virgl)
     }
+
     pub fn context_mut(&mut self) -> &mut dyn GfxContext {
         match self {
             Backend::Virgl(b) => b,

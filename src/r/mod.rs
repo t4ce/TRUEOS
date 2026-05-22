@@ -13,8 +13,10 @@ pub mod io;
 pub mod keyboard;
 pub mod net;
 pub mod path;
+#[cfg(feature = "trueos_rdp")]
 pub mod rdp;
 pub mod readiness;
+#[cfg(feature = "trueos_rdp")]
 pub mod resource_monitor;
 pub mod shader;
 pub mod silk_service;
