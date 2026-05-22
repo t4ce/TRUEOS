@@ -591,7 +591,7 @@ async fn gfx_virgl_cursor_overlay_task() {
     );
     loop {
         let _ = crate::r::io::cabi::kernel_cursor_overlay_tick();
-        Timer::after(EmbassyDuration::from_millis(16)).await;
+        Timer::after(EmbassyDuration::from_millis(4)).await;
     }
 }
 
@@ -1256,7 +1256,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &WS_TIME_STARTED,
         spawn_ws_time,
     ),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "usb-controller-tasks",
         0,
         &USB_CONTROLLER_TASKS_STARTED,

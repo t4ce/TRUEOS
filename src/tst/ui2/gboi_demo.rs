@@ -85,6 +85,44 @@ fn drain_keyboard_events(
     count
 }
 
+#[inline]
+fn hid_key_is_down(key_down_bits: &[u32; 8], key_code: u8) -> bool {
+    let key_code = key_code as usize;
+    (key_down_bits[key_code / 32] & (1u32 << (key_code % 32))) != 0
+}
+
+fn sync_gboi_buttons_from_hid_hut(emulator: &mut crate::gboi::gb::GameBoyEmulator) {
+    const KEY_CODES: &[u8] = &[
+        0x04, 0x06, 0x07, 0x16, 0x1A, 0x1B, 0x1D, 0x28, 0x2C, 0x4F, 0x50, 0x51, 0x52,
+    ];
+
+    let keyboards = crate::usb2::hut::keyboards_snapshot();
+    for button in [
+        crate::gboi::gb::GameBoyButton::Right,
+        crate::gboi::gb::GameBoyButton::Left,
+        crate::gboi::gb::GameBoyButton::Up,
+        crate::gboi::gb::GameBoyButton::Down,
+        crate::gboi::gb::GameBoyButton::A,
+        crate::gboi::gb::GameBoyButton::B,
+        crate::gboi::gb::GameBoyButton::Select,
+        crate::gboi::gb::GameBoyButton::Start,
+    ] {
+        let pressed = KEY_CODES
+            .iter()
+            .filter(|key_code| {
+                crate::gboi::HostControl::from_hid_boot_keycode(**key_code)
+                    .and_then(|control| control.gb_button())
+                    == Some(button)
+            })
+            .any(|key_code| {
+                keyboards
+                    .iter()
+                    .any(|keyboard| hid_key_is_down(&keyboard.key_down_bits, *key_code))
+            });
+        emulator.set_button(button, pressed);
+    }
+}
+
 fn argb_to_rgba_owned(argb: &[u32]) -> Vec<u8> {
     let mut rgba = Vec::with_capacity(argb.len().saturating_mul(4));
     for px in argb {
@@ -108,17 +146,6 @@ fn render_direct_frame(emulator: &crate::gboi::gb::GameBoyEmulator) -> (Vec<u8>,
     let mut argb = alloc::vec![0u32; (out_w * out_h) as usize];
     emulator.render(argb.as_mut_slice(), out_w as usize, out_h as usize);
     (argb_to_rgba_owned(argb.as_slice()), out_w, out_h)
-}
-
-fn push_pressed_button(
-    pressed_buttons: &mut [Option<crate::gboi::gb::GameBoyButton>; UI2_GBOI_KEYBOARD_BATCH],
-    pressed_button_count: &mut usize,
-    button: crate::gboi::gb::GameBoyButton,
-) {
-    if *pressed_button_count < pressed_buttons.len() {
-        pressed_buttons[*pressed_button_count] = Some(button);
-        *pressed_button_count += 1;
-    }
 }
 
 fn load_boot_rom(emulator: &mut crate::gboi::gb::GameBoyEmulator) {
@@ -224,39 +251,16 @@ async fn run_ui2_window_mode(mut emulator: crate::gboi::gb::GameBoyEmulator) {
     attach_keyboard_window(surface.window_id());
     let mut raw_events =
         [crate::r::keyboard::TrueosKeyboardOutputEvent::default(); UI2_GBOI_KEYBOARD_BATCH];
-    let mut pressed_buttons: [Option<crate::gboi::gb::GameBoyButton>; UI2_GBOI_KEYBOARD_BATCH] =
-        [None; UI2_GBOI_KEYBOARD_BATCH];
-    let mut pressed_button_count = 0usize;
 
     loop {
         if crate::r::spawn_service::task_stop_requested(UI2_GBOI_TASK_NAME) {
             break;
         }
 
-        loop {
-            let wrote = drain_keyboard_events(&mut raw_events);
-            if wrote == 0 {
-                break;
-            }
-            for event in raw_events.iter().take(wrote).copied() {
-                let Some(control) = crate::gboi::HostControl::from_keyboard_event(event) else {
-                    continue;
-                };
-                if let Some(button) = control.gb_button() {
-                    emulator.set_button(button, true);
-                    push_pressed_button(&mut pressed_buttons, &mut pressed_button_count, button);
-                }
-            }
-        }
+        while drain_keyboard_events(&mut raw_events) != 0 {}
 
+        sync_gboi_buttons_from_hid_hut(&mut emulator);
         step_emulator(&mut emulator);
-
-        for button in pressed_buttons.iter_mut().take(pressed_button_count) {
-            if let Some(button) = button.take() {
-                emulator.set_button(button, false);
-            }
-        }
-        pressed_button_count = 0;
 
         let pixels = render_frame(&emulator);
         if !surface.upload_rgba_owned(pixels, "ui2-gboi-demo-present") {

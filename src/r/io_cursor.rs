@@ -1,6 +1,6 @@
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-const CURSOR_TICK_SUPPRESS_AFTER_BASE_MS: u64 = 60;
+const CURSOR_TICK_SUPPRESS_AFTER_BASE_MS: u64 = 8;
 const CURSOR_HALF_SPAN_VIEWPORT_RATIO: f32 = 0.013;
 const CURSOR_HALF_SPAN_MIN_PX: f32 = 12.0;
 const CURSOR_HALF_SPAN_MAX_PX: f32 = 24.0;
@@ -8,6 +8,7 @@ const CURSOR_THICKNESS_RATIO: f32 = 0.22;
 const CURSOR_THICKNESS_MIN_PX: f32 = 2.0;
 const CURSOR_THICKNESS_MAX_PX: f32 = 6.0;
 static VM_CURSOR_WRITE_REJECT_COUNT: AtomicU32 = AtomicU32::new(0);
+static LAST_CURSOR_OVERLAY_SIGNATURE: AtomicU64 = AtomicU64::new(0);
 
 #[inline]
 fn cursor_cross_metrics_px(vp_h: u32) -> (f32, f32) {
@@ -171,6 +172,31 @@ fn append_kernel_cursor_overlay(
         let color = crate::r::ui2::cursor_color_rgba8_for_cursor_id(cursor_id);
         append_cursor_cross(rgb_blob, ndc_x, ndc_y, vp_w, vp_h, color);
     }
+}
+
+fn cursor_overlay_signature(vp_w: u32, vp_h: u32, skip_slot_id: Option<u32>) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    let mut mix = |value: u64| {
+        hash ^= value;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01B3);
+    };
+
+    mix(vp_w as u64);
+    mix(vp_h as u64);
+    let cursors = crate::r::cursor::ordered_cursor_snapshot_with_slots();
+    for (idx, (slot_id, cx, cy)) in cursors.into_iter().enumerate() {
+        if skip_slot_id == Some(slot_id) {
+            continue;
+        }
+        let nx = if cx.is_finite() { cx.clamp(0.0, 1.0) } else { 0.0 };
+        let ny = if cy.is_finite() { cy.clamp(0.0, 1.0) } else { 0.0 };
+        let x_px = libm::round(nx * vp_w.saturating_sub(1).max(1) as f64) as u32;
+        let y_px = libm::round(ny * vp_h.saturating_sub(1).max(1) as f64) as u32;
+        mix((idx as u64).saturating_add(1));
+        mix(slot_id as u64);
+        mix(((x_px as u64) << 32) | y_px as u64);
+    }
+    hash
 }
 
 pub(super) fn append_kernel_cursor_overlay_draws(
@@ -545,6 +571,10 @@ pub fn kernel_cursor_overlay_tick() -> i32 {
     }
 
     let hw_cursor_slot = crate::intel::kernel_hw_cursor_slot();
+    let cursor_signature = cursor_overlay_signature(vp_w, vp_h, hw_cursor_slot);
+    if LAST_CURSOR_OVERLAY_SIGNATURE.load(Ordering::Acquire) == cursor_signature {
+        return 0;
+    }
 
     let mut rgb_blob: Vec<u8> = Vec::new();
     let mut tex_batches: Vec<CursorOverlayTexBatch> = Vec::new();
@@ -609,7 +639,11 @@ pub fn kernel_cursor_overlay_tick() -> i32 {
         return 0;
     }
 
-    unsafe { trueos_cabi_gfx_cursor_end_frame() }
+    let rc = unsafe { trueos_cabi_gfx_cursor_end_frame() };
+    if rc == 0 {
+        LAST_CURSOR_OVERLAY_SIGNATURE.store(cursor_signature, Ordering::Release);
+    }
+    rc
 }
 
 #[unsafe(no_mangle)]
