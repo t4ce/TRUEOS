@@ -1431,7 +1431,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &UI2_CURSORPICKER_DEMO_STARTED,
         spawn_ui2_cursorpicker_demo,
     ),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "ui2-gboi-demo",
         GBOI_DEMO_READY,
         &UI2_GBOI_DEMO_STARTED,
