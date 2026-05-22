@@ -52,6 +52,17 @@ impl TransferResultHandler {
                 res.completion_code(),
                 res.trb_transfer_length()
             );
+            if slot_id == 3 && ep_id == 1 {
+                info!(
+                    "xhci: ss ep0 dispatch transfer event slot={} ep={} ptr={:#x} code={:?} \
+                     len={}",
+                    slot_id,
+                    ep_id,
+                    ptr.raw(),
+                    res.completion_code(),
+                    res.trb_transfer_length()
+                );
+            }
             q.set_finished(ptr, res);
         } else {
             warn!(

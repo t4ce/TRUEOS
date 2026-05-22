@@ -622,6 +622,12 @@ impl EventHandler {
                 Allowed::CommandCompletion(c) => {
                     command_events += 1;
                     let addr = c.command_trb_pointer();
+                    info!(
+                        "xhci: event command ptr={:#x} slot={} code={:?}",
+                        addr,
+                        c.slot_id(),
+                        c.completion_code()
+                    );
                     trace!(
                         "xhci: event command ptr={:#x} slot={} code={:?}",
                         addr,
@@ -655,6 +661,18 @@ impl EventHandler {
                         c.trb_transfer_length(),
                         c.event_data()
                     );
+                    if slot_id == 3 && ep_id == 1 {
+                        info!(
+                            "xhci: ss ep0 transfer event slot={} ep={} ptr={:#x} code={:?} \
+                             len={} event_data={}",
+                            slot_id,
+                            ep_id,
+                            ptr,
+                            c.completion_code(),
+                            c.trb_transfer_length(),
+                            c.event_data()
+                        );
+                    }
 
                     // Interrupts synchronize queue state only. Do not call
                     // into OS glue or take manager/file/device locks here; the

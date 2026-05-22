@@ -1224,7 +1224,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &SHADER_COMPILE_SERVICE_STARTED,
         spawn_shader_compile_service,
     ),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "silk-service",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,
         &SILK_SERVICE_STARTED,
