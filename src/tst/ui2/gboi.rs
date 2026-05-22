@@ -24,6 +24,24 @@ pub(crate) enum HostControl {
 }
 
 impl HostControl {
+    pub(crate) fn from_hid_boot_keycode(key_code: u8) -> Option<Self> {
+        match key_code {
+            0x04 => Some(Self::Left),
+            0x06 => Some(Self::Select),
+            0x07 => Some(Self::Right),
+            0x16 => Some(Self::Down),
+            0x1A => Some(Self::Up),
+            0x1D => Some(Self::B),
+            0x1B | 0x2C => Some(Self::A),
+            0x28 => Some(Self::Start),
+            0x4F => Some(Self::Right),
+            0x50 => Some(Self::Left),
+            0x51 => Some(Self::Down),
+            0x52 => Some(Self::Up),
+            _ => None,
+        }
+    }
+
     pub(crate) fn from_keyboard_event(
         event: crate::r::keyboard::TrueosKeyboardOutputEvent,
     ) -> Option<Self> {

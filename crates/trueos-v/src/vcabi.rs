@@ -654,6 +654,7 @@ pub struct TrueosHidHutKeyboardState {
     pub source_tag_len: u8,
     pub keys: [u8; 6],
     pub ascii: [u8; 6],
+    pub key_down_bits: [u32; 8],
     pub source_tag: [u8; 32],
 }
 

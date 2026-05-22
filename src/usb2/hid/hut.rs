@@ -55,6 +55,7 @@ pub struct HidKeyboardState {
     pub modifiers: u8,
     pub keys: [u8; 6],
     pub ascii: [u8; 6],
+    pub key_down_bits: [u32; 8],
     pub combo_id: u32,
     pub source_kind: HidSourceKind,
     pub source_tag: String<HID_SOURCE_TAG_MAX>,
@@ -166,6 +167,7 @@ pub struct TrueosHidHutKeyboardState {
     pub source_tag_len: u8,
     pub keys: [u8; 6],
     pub ascii: [u8; 6],
+    pub key_down_bits: [u32; 8],
     pub source_tag: [u8; HID_HUT_SOURCE_TAG_MAX],
 }
 
@@ -182,6 +184,7 @@ impl Default for TrueosHidHutKeyboardState {
             source_tag_len: 0,
             keys: [0; 6],
             ascii: [0; 6],
+            key_down_bits: [0; 8],
             source_tag: [0; HID_HUT_SOURCE_TAG_MAX],
         }
     }
@@ -233,6 +236,28 @@ struct ResolvedBinding {
 }
 
 static HID_HUT: Mutex<HidHutState> = Mutex::new(HidHutState::new());
+
+#[inline]
+fn set_key_down_bit(bits: &mut [u32; 8], key_code: u8) {
+    let key_code = key_code as usize;
+    bits[key_code / 32] |= 1u32 << (key_code % 32);
+}
+
+#[inline]
+fn keyboard_key_down_bits(modifiers: u8, keys: [u8; 6]) -> [u32; 8] {
+    let mut bits = [0u32; 8];
+    for modifier_idx in 0..8 {
+        if (modifiers & (1 << modifier_idx)) != 0 {
+            set_key_down_bit(&mut bits, 0xE0 + modifier_idx);
+        }
+    }
+    for key in keys {
+        if key != 0 {
+            set_key_down_bit(&mut bits, key);
+        }
+    }
+    bits
+}
 
 fn normalized_tag(value: &str) -> String<HID_SOURCE_TAG_MAX> {
     let mut out = String::new();
@@ -451,6 +476,7 @@ pub fn upsert_keyboard_state(
         source_kind,
         source_tag,
     );
+    let key_down_bits = keyboard_key_down_bits(modifiers, keys);
     if let Some(existing) = guard.keyboards.iter_mut().find(|keyboard| {
         keyboard.controller_id == controller_id
             && keyboard.slot_id == slot_id
@@ -459,6 +485,7 @@ pub fn upsert_keyboard_state(
         existing.modifiers = modifiers;
         existing.keys = keys;
         existing.ascii = ascii;
+        existing.key_down_bits = key_down_bits;
         existing.combo_id = binding.combo_id;
         existing.source_kind = binding.source_kind;
         existing.source_tag = binding.source_tag.clone();
@@ -473,6 +500,7 @@ pub fn upsert_keyboard_state(
         modifiers,
         keys,
         ascii,
+        key_down_bits,
         combo_id: binding.combo_id,
         source_kind: binding.source_kind,
         source_tag: binding.source_tag,
@@ -714,6 +742,7 @@ pub fn read_keyboards_snapshot(out: &mut [TrueosHidHutKeyboardState]) -> usize {
             source_tag_len: 0,
             keys: keyboard.keys,
             ascii: keyboard.ascii,
+            key_down_bits: keyboard.key_down_bits,
             source_tag: [0; HID_HUT_SOURCE_TAG_MAX],
         };
         next.source_tag_len = copy_source_tag(&mut next.source_tag, &keyboard.source_tag);
