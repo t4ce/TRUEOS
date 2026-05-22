@@ -3,7 +3,6 @@ use alloc::string::String as AllocString;
 use embassy_executor::Spawner;
 
 use super::ShellBackend2;
-use super::print_shell_line;
 use super::shell2_cmd::ParseOutcome;
 
 pub(crate) type Shell2CmdHandler = fn(&Spawner, &'static dyn ShellBackend2, &str) -> ParseOutcome;
@@ -99,17 +98,6 @@ fn dispatch_update(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str
     super::cmds::update::try_parse(spawner, io, &mut args)
 }
 
-fn dispatch_not_wired(
-    cmd_name: &'static str,
-    _: &Spawner,
-    io: &'static dyn ShellBackend2,
-    _: &str,
-) -> ParseOutcome {
-    let msg = alloc::format!("{cmd_name}: not wired in shell2 yet");
-    print_shell_line(io, msg.as_str());
-    ParseOutcome::Handled
-}
-
 fn dispatch_bench(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
     super::cmds::bench::try_parse(spawner, io, &mut args)
@@ -136,7 +124,8 @@ fn dispatch_tlb(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -
 }
 
 fn dispatch_txt(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    dispatch_not_wired("txt", spawner, io, rest)
+    let _ = spawner;
+    super::cmds::txt::try_parse(io, rest)
 }
 
 const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
