@@ -615,6 +615,14 @@ pub(crate) async fn maybe_start_hid_boot_streams(
             target.in_max_packet_size,
             target.protocol
         );
+        crate::log_info!(target: "usb";
+            "crabusb: hid {:04X}:{:04X} open begin kind={} if#{} ep=0x{:02X}\n",
+            vendor_id,
+            product_id,
+            target.kind.as_str(),
+            target.interface_number,
+            target.in_endpoint
+        );
         let device = match host.open_device(dev_info).await {
             Ok(device) => device,
             Err(err) => {
@@ -629,9 +637,25 @@ pub(crate) async fn maybe_start_hid_boot_streams(
                 continue;
             }
         };
+        crate::log_info!(target: "usb";
+            "crabusb: hid {:04X}:{:04X} open end kind={} if#{} ep=0x{:02X}\n",
+            vendor_id,
+            product_id,
+            target.kind.as_str(),
+            target.interface_number,
+            target.in_endpoint
+        );
         let mut device = device;
 
         if descriptors_pending {
+            crate::log_info!(target: "usb";
+                "crabusb: hid {:04X}:{:04X} descriptor-dump begin kind={} if#{} ep=0x{:02X}\n",
+                vendor_id,
+                product_id,
+                target.kind.as_str(),
+                target.interface_number,
+                target.in_endpoint
+            );
             if should_skip_descriptor_logging(vendor_id, product_id, target.kind) {
                 crate::log_info!(target: "usb";
                     "crabusb: hid {} {:04X}:{:04X} skipping descriptor log for qemu boot hid\n",
@@ -646,6 +670,14 @@ pub(crate) async fn maybe_start_hid_boot_streams(
                 )
                 .await;
             }
+            crate::log_info!(target: "usb";
+                "crabusb: hid {:04X}:{:04X} descriptor-dump end kind={} if#{} ep=0x{:02X}\n",
+                vendor_id,
+                product_id,
+                target.kind.as_str(),
+                target.interface_number,
+                target.in_endpoint
+            );
             descriptors_pending = false;
         }
 

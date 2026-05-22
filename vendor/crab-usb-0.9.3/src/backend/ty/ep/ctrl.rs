@@ -16,7 +16,27 @@ impl Endpoint {
         param: usb_if::host::ControlSetup,
         buff: &mut [u8],
     ) -> Result<usize, TransferError> {
+        let trace_descriptor_read = matches!(param.request, Request::GetDescriptor)
+            && (param.value >> 8) == DescriptorType::CONFIGURATION.0 as u16;
+        if trace_descriptor_read {
+            info!(
+                "crabusb/ctrl: control_in begin req={:?} type={:?} recip={:?} value=0x{:04x} index=0x{:04x} len={}",
+                param.request,
+                param.request_type,
+                param.recipient,
+                param.value,
+                param.index,
+                buff.len()
+            );
+        }
         let t = self.wait(TransferRequest::control_in(param, buff)).await?;
+        if trace_descriptor_read {
+            info!(
+                "crabusb/ctrl: control_in end actual={} status={:?}",
+                t.actual_length,
+                t.status
+            );
+        }
         Ok(t.actual_length)
     }
 
