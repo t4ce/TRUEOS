@@ -123,7 +123,6 @@ http = { path = "vendor/http-1.4.0" }
 http-body = { path = "vendor/http-body-1.0.1" }
 http-body-util = { path = "vendor/http-body-util-0.1.3" }
 httpdate = { path = "vendor/httpdate-1.0.3" }
-ipnet = { path = "vendor/ipnet-2.12.0" }
 tower = { path = "vendor/tower-0.5.3" }
 tower-layer = { path = "vendor/tower-layer-0.3.3" }
 tower-http = { path = "vendor/tower-http-0.6.9" }
@@ -151,14 +150,10 @@ tokio = { path = "vendor/tokio-1.52.3" }
 tokio-util = { path = "vendor/tokio-util-0.7.18" }
 tokio-rustls = { path = "vendor/tokio-rustls-0.26.4" }
 mio = { path = "vendor/mio-1.2.0" }
-nix = { path = "vendor/nix-0.28.0" }
 rustix = { path = "vendor/rustix-1.1.4" }
 socket2 = { path = "vendor/socket2-0.6.3" }
 getrandom = { path = "vendor/getrandom-0.2.17" }
-rustyline = { path = "vendor/rustyline-14.0.0" }
 half = { path = "vendor/half-2.7.1" }
-fontdue = { path = "vendor/fontdue-0.9.3" }
-petgraph = { path = "vendor/petgraph-0.8.3" }
 smoltcp = { path = "vendor/smoltcp-0.13.1" }
 xhci = { path = "vendor/xhci-0.9.2" }
 aml = { path = "vendor/aml-0.16.4" }

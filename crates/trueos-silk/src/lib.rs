@@ -14,9 +14,7 @@ pub mod validation;
 pub use binding::{SymbolBindingArtifact, SymbolBindingRecord};
 pub use control::{SequenceArtifact, SequenceResult};
 pub use machine::{MachineOpArtifact, MachineOpKind, MachineOpResult};
-pub use memory::{
-    Arena, ArenaResult, BufferArtifact, BufferBinding, Span, SpanEnd, SpanResult,
-};
+pub use memory::{Arena, ArenaResult, BufferArtifact, BufferBinding, Span, SpanEnd, SpanResult};
 pub use plan::{
     ArenaBinding, ConstBinding, FsReadStep, LogWriteStep, ParseError, PlacementError,
     PlacementProgram, PlacementStep, Plan, parse_placement_program, parse_plan,

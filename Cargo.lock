@@ -2984,10 +2984,6 @@ dependencies = [
 ]
 
 [[patch.unused]]
-name = "fontdue"
-version = "0.9.3"
-
-[[patch.unused]]
 name = "h2"
 version = "0.4.14"
 
@@ -2998,18 +2994,6 @@ version = "0.0.8"
 [[patch.unused]]
 name = "h3-quinn"
 version = "0.0.10"
-
-[[patch.unused]]
-name = "ipnet"
-version = "2.12.0"
-
-[[patch.unused]]
-name = "nix"
-version = "0.28.0"
-
-[[patch.unused]]
-name = "petgraph"
-version = "0.8.3"
 
 [[patch.unused]]
 name = "quinn"
@@ -3030,10 +3014,6 @@ version = "0.13.3"
 [[patch.unused]]
 name = "rustix"
 version = "1.1.4"
-
-[[patch.unused]]
-name = "rustyline"
-version = "14.0.0"
 
 [[patch.unused]]
 name = "tokio-rustls"
