@@ -129,7 +129,8 @@ async fn take_runtime_wait(runtime_key: u64) -> Option<UsbMassRuntime> {
         Timer::after(EmbassyDuration::from_millis(MASS_RUNTIME_WAIT_DELAY_MS)).await;
     }
 
-    crate::log!(
+    crate::log_warn!(
+        target: "usb";
         "crabusb: mass runtime wait timeout key=0x{:016X} waited_ms={}\n",
         runtime_key,
         (MASS_RUNTIME_WAIT_LIMIT as u64 + 1) * MASS_RUNTIME_WAIT_DELAY_MS
@@ -469,7 +470,8 @@ fn log_transport_mismatch(rt: &UsbMassRuntime, stage: &'static str) {
         event.ptr
     );
     */
-    crate::log!(
+    crate::log_warn!(
+        target: "usb";
         "crabusb: mass {:04X}:{:04X} transport stage={} key=0x{:X} expect[ctrl={} slot={} out_ep=0x{:02X} in_ep=0x{:02X}]\n",
         rt.vendor_id,
         rt.product_id,
@@ -483,10 +485,7 @@ fn log_transport_mismatch(rt: &UsbMassRuntime, stage: &'static str) {
 }
 
 fn log_mass_io_success(command_tag: u32, blocks: usize, bytes: usize, block_size: usize) -> bool {
-    blocks != 1
-        || bytes != block_size
-        || (command_tag & 0xFF) < 0x10
-        || (command_tag & 0x3F) == 0
+    blocks != 1 || bytes != block_size || (command_tag & 0xFF) < 0x10 || (command_tag & 0x3F) == 0
 }
 
 async fn recover_runtime_transport(
@@ -496,7 +495,8 @@ async fn recover_runtime_transport(
 ) -> Result<(), mass::MassProbeError> {
     if let Some(reason) = err.transport_reason() {
         log_transport_mismatch(rt, stage);
-        crate::log!(
+        crate::log_warn!(
+            target: "usb";
             "crabusb: mass {:04X}:{:04X} recovery stage={} reason={} if#{} out_ep=0x{:02X} in_ep=0x{:02X}\n",
             rt.vendor_id,
             rt.product_id,
@@ -585,7 +585,8 @@ impl block::BlockDevice for UsbMassBlockDevice {
                             let bulk_out_ep = rt.bulk_out_ep;
                             let bulk_in_ep = rt.bulk_in_ep;
                             let command_tag = rt.io_tag;
-                            crate::log!(
+                            crate::log_trace!(
+                                target: "usb";
                                 "crabusb: mass {:04X}:{:04X} read-10 begin key=0x{:016X} slot={} lba={} blocks={} bytes={} tag=0x{:08X} out_ep=0x{:02X} in_ep=0x{:02X}\n",
                                 rt.vendor_id,
                                 rt.product_id,
@@ -623,7 +624,8 @@ impl block::BlockDevice for UsbMassBlockDevice {
                                         bytes_here,
                                         block_size,
                                     ) {
-                                        crate::log!(
+                                        crate::log_info!(
+                                            target: "usb";
                                             "crabusb: mass {:04X}:{:04X} read-10 end key=0x{:016X} slot={} lba={} blocks={} bytes={} tag=0x{:08X} status=ok\n",
                                             rt.vendor_id,
                                             rt.product_id,
@@ -639,7 +641,8 @@ impl block::BlockDevice for UsbMassBlockDevice {
                                     break;
                                 }
                                 Err(err) => {
-                                    crate::log!(
+                                    crate::log_warn!(
+                                        target: "usb";
                                         "crabusb: mass {:04X}:{:04X} read-10 end key=0x{:016X} slot={} lba={} blocks={} bytes={} tag=0x{:08X} status=err err={:?}\n",
                                         rt.vendor_id,
                                         rt.product_id,
@@ -680,7 +683,8 @@ impl block::BlockDevice for UsbMassBlockDevice {
                                         Timer::after(EmbassyDuration::from_millis(MASS_IO_RETRY_DELAY_MS)).await;
                                         continue;
                                     }
-                                    crate::log!(
+                                    crate::log_warn!(
+                                        target: "usb";
                                         "crabusb: mass {:04X}:{:04X} read lba={} blocks={} err={:?} sense={:?}\n",
                                         rt.vendor_id,
                                         rt.product_id,
@@ -743,7 +747,8 @@ impl block::BlockDevice for UsbMassBlockDevice {
                         let bulk_out_ep = rt.bulk_out_ep;
                         let bulk_in_ep = rt.bulk_in_ep;
                         let command_tag = rt.io_tag;
-                        crate::log!(
+                        crate::log_trace!(
+                            target: "usb";
                             "crabusb: mass {:04X}:{:04X} write-10 begin key=0x{:016X} slot={} lba={} blocks={} bytes={} tag=0x{:08X} out_ep=0x{:02X} in_ep=0x{:02X}\n",
                             rt.vendor_id,
                             rt.product_id,
@@ -781,7 +786,8 @@ impl block::BlockDevice for UsbMassBlockDevice {
                                     bytes_here,
                                     block_size,
                                 ) {
-                                    crate::log!(
+                                    crate::log_info!(
+                                        target: "usb";
                                         "crabusb: mass {:04X}:{:04X} write-10 end key=0x{:016X} slot={} lba={} blocks={} bytes={} tag=0x{:08X} status=ok\n",
                                         rt.vendor_id,
                                         rt.product_id,
@@ -797,7 +803,8 @@ impl block::BlockDevice for UsbMassBlockDevice {
                                 break;
                             }
                             Err(err) => {
-                                crate::log!(
+                                crate::log_warn!(
+                                    target: "usb";
                                     "crabusb: mass {:04X}:{:04X} write-10 end key=0x{:016X} slot={} lba={} blocks={} bytes={} tag=0x{:08X} status=err err={:?}\n",
                                     rt.vendor_id,
                                     rt.product_id,
@@ -1214,13 +1221,8 @@ pub(crate) async fn maybe_start_mass_storage(
         return false;
     };
     let transport_kind = mass::MassTransportKind::Bot;
-    let io_profile = choose_mass_io_profile(
-        transport_kind,
-        vendor_id,
-        product_id,
-        port_speed,
-        &target,
-    );
+    let io_profile =
+        choose_mass_io_profile(transport_kind, vendor_id, product_id, port_speed, &target);
 
     let device = match host.open_device(dev_info).await {
         Ok(device) => device,

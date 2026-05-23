@@ -371,17 +371,10 @@ async fn cabi_net_fetch_bytes_task_inner(
         crate::log!("net-fetch-bytes: skipped op_id={} reason=no_interest_after_slot\n", op_id);
         return;
     }
-    let (rc, body) = match crate::t::run_on_shared_tokio({
-        let url = url.clone();
-        move || async move {
-            fetch_https_body_hyper_async(url.as_str(), timeout_ms, max_bytes).await
-        }
-    })
-    .await
-    {
-        Ok(Ok(body)) => (0, body),
-        Ok(Err(code)) => (fetch_error_to_code(code), Vec::new()),
-        Err(_) => {
+    let (rc, body) = match get_bytes_shared(url.clone(), timeout_ms, max_bytes).await {
+        Ok(body) => (0, body),
+        Err(SharedFetchError::Fetch(err)) => (fetch_error_to_code(err), Vec::new()),
+        Err(SharedFetchError::Runtime) => {
             crate::log!(
                 "net-fetch-bytes: shared runtime unavailable op_id={} url={}\n",
                 op_id,
@@ -1451,6 +1444,28 @@ pub async fn fetch_https_body_hyper_async(
 ) -> Result<Vec<u8>, FetchError> {
     fetch_https_body_hyper_with_profile_async(url, NetProfile::default(), timeout_ms, max_bytes)
         .await
+}
+
+#[derive(Debug)]
+pub enum SharedFetchError {
+    Runtime,
+    Fetch(FetchError),
+}
+
+pub async fn get_bytes_shared(
+    url: String,
+    timeout_ms: u32,
+    max_bytes: usize,
+) -> Result<Vec<u8>, SharedFetchError> {
+    crate::t::run_on_shared_tokio({
+        let url = url.clone();
+        move || async move {
+            fetch_https_body_hyper_async(url.as_str(), timeout_ms, max_bytes).await
+        }
+    })
+    .await
+    .map_err(|_| SharedFetchError::Runtime)?
+    .map_err(SharedFetchError::Fetch)
 }
 
 pub async fn fetch_https_body_hyper_with_profile_async(
