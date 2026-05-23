@@ -433,19 +433,37 @@ pub(crate) async fn bot_recovery(
         bulk_out_ep,
         bulk_in_ep
     );
-    device
-        .control_out(
-            ControlSetup {
-                request_type: RequestType::Class,
-                recipient: Recipient::Interface,
-                request: Request::Other(0xFF),
-                value: 0,
-                index: interface_number as u16,
-            },
-            &[],
-        )
-        .await
-        .map_err(|_| MassProbeError::Transport("bot-reset"))?;
+    match control_out_with_timeout(
+        device,
+        ControlSetup {
+            request_type: RequestType::Class,
+            recipient: Recipient::Interface,
+            request: Request::Other(0xFF),
+            value: 0,
+            index: interface_number as u16,
+        },
+        &[],
+        BOT_IO_TIMEOUT_MS,
+    )
+    .await
+    {
+        Some(Ok(_)) => {}
+        Some(Err(err)) => {
+            crate::log!(
+                "crabusb: mass recovery if#{} reset failed err={:?}\n",
+                interface_number,
+                err
+            );
+            return Err(MassProbeError::Transport("bot-reset"));
+        }
+        None => {
+            crate::log!(
+                "crabusb: mass recovery if#{} reset timeout\n",
+                interface_number
+            );
+            return Err(MassProbeError::Transport("bot-reset-timeout"));
+        }
+    }
 
     crate::log!(
         "crabusb: mass recovery if#{} step=clear-halt-out ep=0x{:02X}\n",

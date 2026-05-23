@@ -108,6 +108,16 @@ impl Core {
                     matches!(addr.port_speed, Speed::SuperSpeed | Speed::SuperSpeedPlus)
                 });
             for addr_info in addr_infos {
+                if addr_info.root_port_id == 3 {
+                    info!(
+                        "kcore: temporary skip known keyboard before address root_port={} port={} speed={:?} reason=second-fullspeed-address-device-hangs",
+                        addr_info.root_port_id,
+                        addr_info.port_id,
+                        addr_info.port_speed
+                    );
+                    continue;
+                }
+
                 if addr_info.root_port_id == 11 {
                     info!(
                         "kcore: temporary skip known LED controller before address root_port={} port={} speed={:?}",

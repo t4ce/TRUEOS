@@ -57,6 +57,7 @@ impl Device {
     const LS_FS_ADDRESS_DEVICE_SETTLE_MS: u64 = 0;
     const LS_FS_PRE_ADDRESS_DEVICE_SETTLE_MS: u64 = 5;
     const KNOWN_MOUSE_PRE_ADDRESS_DEVICE_SETTLE_MS: u64 = 50;
+    const KNOWN_KEYBOARD_PRE_ADDRESS_DEVICE_SETTLE_MS: u64 = 50;
     const LS_FS_PRE_DEVICE_DESCRIPTOR_SETTLE_MS: u64 = 5;
     const LS_FS_EP0_REEVALUATE_SETTLE_MS: u64 = 2;
     const LS_FS_ALREADY_CONFIGURED_DESCRIPTOR_SETTLE_MS: u64 = 0;
@@ -700,9 +701,9 @@ impl Device {
                     "crabusb/xhci/device: address low/full settle busy slot={} root_port={} delay_ms={} reason=known-keyboard-hotpath",
                     self.id.as_u8(),
                     info.root_port_id,
-                    Self::LS_FS_PRE_ADDRESS_DEVICE_SETTLE_MS
+                    Self::KNOWN_KEYBOARD_PRE_ADDRESS_DEVICE_SETTLE_MS
                 );
-                delay_ms(Self::LS_FS_PRE_ADDRESS_DEVICE_SETTLE_MS as u32);
+                delay_ms(Self::KNOWN_KEYBOARD_PRE_ADDRESS_DEVICE_SETTLE_MS as u32);
             } else {
                 Timer::after(EmbassyDuration::from_millis(
                     Self::LS_FS_PRE_ADDRESS_DEVICE_SETTLE_MS,
