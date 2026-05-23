@@ -394,6 +394,6 @@ impl Drop for LocalRuntime {
     }
 }
 
-impl core::panic::UnwindSafe for LocalRuntime {}
+impl ::core::panic::UnwindSafe for LocalRuntime {}
 
-impl core::panic::RefUnwindSafe for LocalRuntime {}
+impl ::core::panic::RefUnwindSafe for LocalRuntime {}

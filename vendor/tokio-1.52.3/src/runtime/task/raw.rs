@@ -14,7 +14,7 @@ use core::future::Future;
 use crate::runtime::task::core::{Core, Trailer};
 use crate::runtime::task::{Cell, Harness, Header, Id, Schedule, State};
 #[cfg(tokio_unstable)]
-use core::panic::Location;
+use ::core::panic::Location;
 use core::ptr::NonNull;
 use core::task::{Poll, Waker};
 

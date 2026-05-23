@@ -567,7 +567,7 @@ impl<T> UnboundedSender<T> {
             if curr == usize::MAX ^ 1 {
                 // Overflowed the ref count. There is no safe way to recover, so
                 // abort the process. In practice, this should never happen.
-                core::panic!("unbounded channel message count overflow")
+                ::core::panic!("unbounded channel message count overflow")
             }
 
             match self

@@ -171,7 +171,7 @@ use crate::loom::sync::{Arc, RwLock, RwLockReadGuard};
 use core::fmt;
 use core::mem;
 use core::ops;
-use core::panic;
+use crate::panic;
 
 /// Receives values from the associated [`Sender`](struct@Sender).
 ///

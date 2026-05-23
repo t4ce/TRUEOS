@@ -10,7 +10,7 @@ use crate::util::cacheline::CachePadded;
 
 use alloc::vec::Vec;
 use core::fmt;
-use core::panic;
+use ::core::panic;
 use core::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release};
 use core::task::Poll::{Pending, Ready};
 use core::task::{ready, Context, Poll};
@@ -597,7 +597,7 @@ impl Semaphore for unbounded::Semaphore {
 
         if prev >> 1 == 0 {
             // Something went wrong
-            core::panic!("unbounded channel permit underflow");
+            ::core::panic!("unbounded channel permit underflow");
         }
     }
 
@@ -606,7 +606,7 @@ impl Semaphore for unbounded::Semaphore {
 
         if (prev >> 1) < n {
             // Something went wrong
-            core::panic!("unbounded channel permit underflow");
+            ::core::panic!("unbounded channel permit underflow");
         }
     }
 

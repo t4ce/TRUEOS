@@ -58,8 +58,8 @@ pub struct CancellationToken {
     inner: Arc<tree_node::TreeNode>,
 }
 
-impl core::panic::UnwindSafe for CancellationToken {}
-impl core::panic::RefUnwindSafe for CancellationToken {}
+impl ::core::panic::UnwindSafe for CancellationToken {}
+impl ::core::panic::RefUnwindSafe for CancellationToken {}
 
 pin_project! {
     /// A Future that is resolved once the corresponding [`CancellationToken`]

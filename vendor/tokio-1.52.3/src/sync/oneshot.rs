@@ -497,7 +497,7 @@ struct State(usize);
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
     #[cfg(all(tokio_unstable, feature = "tracing"))]
     let resource_span = {
-        let location = core::panic::Location::caller();
+        let location = ::core::panic::Location::caller();
 
         let resource_span = tracing::trace_span!(
             parent: None,

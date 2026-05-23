@@ -13,7 +13,7 @@ use crate::util::WakeList;
 
 use core::future::Future;
 use core::marker::PhantomPinned;
-use core::panic::{RefUnwindSafe, UnwindSafe};
+use ::core::panic::{RefUnwindSafe, UnwindSafe};
 use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::{self, Acquire, Relaxed, Release, SeqCst};

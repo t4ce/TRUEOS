@@ -511,7 +511,7 @@ pub mod path {
 }
 
 pub mod panic {
-    pub use core::panic::{AssertUnwindSafe, Location, RefUnwindSafe, UnwindSafe};
+    pub use ::core::panic::{AssertUnwindSafe, Location, RefUnwindSafe, UnwindSafe};
 
     pub fn resume_unwind(_: alloc::boxed::Box<dyn core::any::Any + Send>) -> ! {
         panic!("panic resume is not available on TRUEOS")

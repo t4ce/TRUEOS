@@ -505,9 +505,9 @@ impl Handle {
     }
 }
 
-impl core::panic::UnwindSafe for Handle {}
+impl ::core::panic::UnwindSafe for Handle {}
 
-impl core::panic::RefUnwindSafe for Handle {}
+impl ::core::panic::RefUnwindSafe for Handle {}
 
 cfg_taskdump! {
     impl Handle {
