@@ -20,8 +20,8 @@ include = [
     "LICENSE",
     "LICENSE-other-bits",
     "LICENSE-BoringSSL",
-    "src/polyfill/once_cell/LICENSE-APACHE",
-    "src/polyfill/once_cell/LICENSE-MIT",
+    "LICENSE-src-polyfill-once_cell-APACHE",
+    "LICENSE-src-polyfill-once_cell-MIT",
     "Cargo.toml",
     "pregenerated/*",
     "benches/*.rs",
@@ -137,7 +137,7 @@ include = [
     "third_party/fiat/p256_32.h",
     "third_party/fiat/p256_64.h",
     "third_party/fiat/p256_64_msvc.h",
-    "third_party/fiat/LICENSE",
+    "LICENSE-third_party-fiat",
 ]
 autolib = false
 autobins = false
