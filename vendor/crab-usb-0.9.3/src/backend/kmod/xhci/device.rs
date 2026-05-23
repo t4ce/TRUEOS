@@ -431,16 +431,6 @@ impl Device {
                     self.id.as_u8(),
                     config_value
                 );
-            } else if info.root_port_id == 26
-                && self.desc.vendor_id == 0x152e
-                && self.desc.product_id == 0x7001
-            {
-                self.current_config_value = Some(config_value);
-                info!(
-                    "crabusb/xhci/device: slot={} skipping set-configuration {} for known skhynix hotpath",
-                    self.id.as_u8(),
-                    config_value
-                );
             } else {
                 self._set_configuration(config_value).await?;
             }
@@ -1086,7 +1076,17 @@ impl Device {
             c.set_alternate_setting(alternate);
         });
 
-        if alternate != 0 {
+        let force_set_interface_zero = alternate == 0
+            && self.desc.vendor_id == 0x152e
+            && self.desc.product_id == 0x7001
+            && matches!(self.port_speed, Speed::SuperSpeed | Speed::SuperSpeedPlus);
+        if alternate != 0 || force_set_interface_zero {
+            if force_set_interface_zero {
+                info!(
+                    "crabusb/xhci/device: slot={} forcing set-interface 0 for known skhynix BOT hotpath",
+                    self.id.as_u8()
+                );
+            }
             self.control_endpoint_mut()
                 .control_out(
                     ControlSetup {

@@ -55,6 +55,7 @@ pub(crate) mod registry;
 
 #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
 pub mod unix;
+#[cfg(windows)]
 pub mod windows;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod zkvm;
