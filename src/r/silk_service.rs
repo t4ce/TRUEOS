@@ -20,6 +20,7 @@ place arena.art in main align 16
 place path.art in main align 8
 place buf.art in main align 16
 place ring.art in main align 16
+place asm.add.art in main align 16
 "#;
 
 enum SilkServiceError {
@@ -32,6 +33,7 @@ enum SilkServiceError {
     RingPlace(trueos_silk::SilkStatus),
     RingBind(trueos_silk::SilkStatus),
     RingOp(trueos_silk::SilkStatus),
+    MachineOp(trueos_silk::SilkStatus),
 }
 
 impl core::fmt::Display for SilkServiceError {
@@ -46,6 +48,7 @@ impl core::fmt::Display for SilkServiceError {
             Self::RingPlace(status) => write!(f, "ring place: {:?}", status),
             Self::RingBind(status) => write!(f, "ring bind: {:?}", status),
             Self::RingOp(status) => write!(f, "ring op: {:?}", status),
+            Self::MachineOp(status) => write!(f, "machine op: {:?}", status),
         }
     }
 }
@@ -160,6 +163,31 @@ fn ring_runtime_demo(plan: &trueos_silk::Plan) -> Result<String, SilkServiceErro
     ))
 }
 
+fn asm_add_artifact() -> String {
+    let artifact = trueos_silk::MachineOpArtifact::add_u64("asm.add.art");
+    format!(
+        "artifact {} kind={:?} inputs={} outputs={}\nbackend=x86_64.inline_asm add reg,reg\nvalidation=wrapping_add\n",
+        artifact.name, artifact.kind, artifact.input_count, artifact.output_count
+    )
+}
+
+fn asm_add_runtime_demo() -> Result<String, SilkServiceError> {
+    let artifact = trueos_silk::MachineOpArtifact::add_u64("asm.add.art");
+    let lhs = 0x1234_5678_9abc_def0u64;
+    let rhs = 0x0101_0101_0101_0101u64;
+    let result = artifact.run_add_u64(lhs, rhs);
+    if result.status != trueos_silk::SilkStatus::Ok {
+        return Err(SilkServiceError::MachineOp(result.status));
+    }
+
+    let expected = lhs.wrapping_add(rhs);
+    let valid = result.value == expected;
+    Ok(format!(
+        "asm.add.art runtime lhs=0x{:016x} rhs=0x{:016x} value=0x{:016x} expected=0x{:016x} valid={}\n",
+        lhs, rhs, result.value, expected, valid
+    ))
+}
+
 fn place_artifacts(
     plan: &trueos_silk::Plan,
     artifacts: &[Artifact<'_>],
@@ -210,6 +238,7 @@ async fn build_and_load_artifacts() -> Result<(), SilkServiceError> {
     let path = path_artifact(&plan);
     let buf = buf_artifact(&plan, read_bytes);
     let ring = ring_artifact()?;
+    let asm_add = asm_add_artifact();
     let artifacts = [
         Artifact {
             name: "demo.art",
@@ -231,22 +260,33 @@ async fn build_and_load_artifacts() -> Result<(), SilkServiceError> {
             name: "ring.art",
             bytes: ring.as_bytes(),
         },
+        Artifact {
+            name: "asm.add.art",
+            bytes: asm_add.as_bytes(),
+        },
     ];
     let placement = place_artifacts(&plan, &artifacts)?;
     let ring_runtime = ring_runtime_demo(&plan)?;
+    let asm_add_runtime = asm_add_runtime_demo()?;
 
     crate::log!(
-        "silk-service: built in-memory artifacts demo={} arena={} path={} buf={} ring={} placement={} ring_runtime={}\n",
+        "silk-service: built in-memory artifacts demo={} arena={} path={} buf={} ring={} asm_add={} placement={} ring_runtime={} asm_add_runtime={}\n",
         demo.len(),
         arena.len(),
         path.len(),
         buf.len(),
         ring.len(),
+        asm_add.len(),
         placement.len(),
-        ring_runtime.len()
+        ring_runtime.len(),
+        asm_add_runtime.len()
     );
     crate::log!("silk-service: placement begin\n{}silk-service: placement end\n", placement);
     crate::log!("silk-service: ring begin\n{}silk-service: ring end\n", ring_runtime);
+    crate::log!(
+        "silk-service: asm.add begin\n{}silk-service: asm.add end\n",
+        asm_add_runtime
+    );
     crate::log!(
         "silk-service: log.write {} bytes from {}\n",
         read_bytes.len(),

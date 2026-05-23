@@ -7,7 +7,8 @@ Cargo.lock
 node_modules
 package.json
 package-lock.json
-vid/
+bunny.mkv
+yelly.mp4
 *.gguf
 tools/*.gguf
 tinyllama/

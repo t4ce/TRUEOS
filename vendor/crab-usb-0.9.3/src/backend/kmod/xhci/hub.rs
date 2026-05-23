@@ -191,6 +191,7 @@ impl HubOp for XhciRootHub {
             info!("xhci/root-hub: rearm port {}", port_id);
             port.state = PortState::Uninit;
             port.changed.store(true, Ordering::Release);
+            port.change_waker.wake();
         }
     }
 
