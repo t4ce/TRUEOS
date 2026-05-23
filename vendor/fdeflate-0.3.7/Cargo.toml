@@ -11,7 +11,7 @@
 
 [package]
 edition = "2024"
-rust-version = "1.67.0"
+rust-version = "1.85"
 name = "fdeflate"
 version = "0.3.7"
 authors = ["The image-rs Developers"]

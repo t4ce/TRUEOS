@@ -11,7 +11,7 @@
 
 [package]
 edition = "2024"
-rust-version = "1.56"
+rust-version = "1.85"
 name = "httpdate"
 version = "1.0.3"
 authors = ["Pyfisch <pyfisch@posteo.org>"]

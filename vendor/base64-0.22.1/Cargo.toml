@@ -11,7 +11,7 @@
 
 [package]
 edition = "2024"
-rust-version = "1.48.0"
+rust-version = "1.85"
 name = "base64"
 version = "0.22.1"
 authors = ["Marshall Pierce <marshall@mpierce.org>"]

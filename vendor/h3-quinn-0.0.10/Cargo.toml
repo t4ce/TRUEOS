@@ -11,7 +11,7 @@
 
 [package]
 edition = "2024"
-rust-version = "1.70"
+rust-version = "1.85"
 name = "h3-quinn"
 version = "0.0.10"
 authors = ["Jean-Christophe BEGUE <jc.begue@pm.me>"]

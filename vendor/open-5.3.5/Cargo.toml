@@ -11,7 +11,7 @@
 
 [package]
 edition = "2024"
-rust-version = "1.62"
+rust-version = "1.85"
 name = "open"
 version = "5.3.5"
 authors = ["Sebastian Thiel <byronimo@gmail.com>"]

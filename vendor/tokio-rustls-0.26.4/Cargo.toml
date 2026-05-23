@@ -11,7 +11,7 @@
 
 [package]
 edition = "2024"
-rust-version = "1.71"
+rust-version = "1.85"
 name = "tokio-rustls"
 version = "0.26.4"
 build = false

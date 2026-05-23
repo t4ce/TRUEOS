@@ -11,7 +11,7 @@
 
 [package]
 edition = "2024"
-rust-version = "1.81"
+rust-version = "1.85"
 name = "half"
 version = "2.7.1"
 authors = ["Kathryn Long <squeeself@gmail.com>"]

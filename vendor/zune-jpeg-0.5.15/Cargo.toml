@@ -11,7 +11,7 @@
 
 [package]
 edition = "2024"
-rust-version = "1.75.0"
+rust-version = "1.85"
 name = "zune-jpeg"
 version = "0.5.15"
 authors = ["caleb <etemesicaleb@gmail.com>"]

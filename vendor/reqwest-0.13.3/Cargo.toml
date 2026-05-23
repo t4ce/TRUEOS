@@ -11,7 +11,7 @@
 
 [package]
 edition = "2024"
-rust-version = "1.64.0"
+rust-version = "1.85"
 name = "reqwest"
 version = "0.13.3"
 authors = ["Sean McArthur <sean@seanmonstar.com>"]
