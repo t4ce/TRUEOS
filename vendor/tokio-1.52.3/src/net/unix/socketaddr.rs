@@ -1,4 +1,7 @@
 use core::fmt;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use crate::path::Path;
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::path::Path;
 
 /// An address associated with a Tokio Unix socket.

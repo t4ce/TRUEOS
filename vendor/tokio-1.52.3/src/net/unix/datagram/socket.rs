@@ -7,6 +7,9 @@ use std::io;
 use std::net::Shutdown;
 use std::os::unix::io::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, RawFd};
 use std::os::unix::net;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use crate::path::Path;
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::path::Path;
 use core::task::{ready, Context, Poll};
 

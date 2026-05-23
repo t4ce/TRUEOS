@@ -1,6 +1,9 @@
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use crate::fs::asyncify;
 use alloc::borrow::ToOwned;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use crate::path::Path;
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::path::Path;
 
 /// Copies the contents of one file to another. This function will also copy the permission bits

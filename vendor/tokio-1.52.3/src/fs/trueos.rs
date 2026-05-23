@@ -5,7 +5,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
 use std::io::{self, Read, Seek, SeekFrom, Write};
-use std::path::{Component, Path, PathBuf};
+use crate::path::{Component, Path, PathBuf};
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FileType {
