@@ -401,7 +401,7 @@ impl<T> core::ops::Deref for Cow<'_, T> {
     fn deref(&self) -> &T {
         match self {
             Cow::Borrowed(t) => &*t,
-            Cow::Owned(ref t) => t,
+            Cow::Owned(t) => t,
         }
     }
 }

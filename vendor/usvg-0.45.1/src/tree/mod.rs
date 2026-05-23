@@ -642,7 +642,7 @@ impl Stroke {
             dash: None,
         };
 
-        if let Some(list) = self.dasharray {
+        if let Some(list) = &self.dasharray {
             stroke.dash = tiny_skia_path::StrokeDash::new(list.clone(), self.dashoffset);
         }
 
@@ -1219,25 +1219,25 @@ impl Group {
     }
 
     fn subroots(&self, f: &mut dyn FnMut(&Group)) {
-        if let Some(clip) = self.clip_path {
+        if let Some(clip) = &self.clip_path {
             f(&clip.root);
 
-            if let Some(sub_clip) = clip.clip_path {
+            if let Some(sub_clip) = &clip.clip_path {
                 f(&sub_clip.root);
             }
         }
 
-        if let Some(mask) = self.mask {
+        if let Some(mask) = &self.mask {
             f(&mask.root);
 
-            if let Some(sub_mask) = mask.mask {
+            if let Some(sub_mask) = &mask.mask {
                 f(&sub_mask.root);
             }
         }
 
         for filter in &self.filters {
             for primitive in &filter.primitives {
-                if let filter::Kind::Image(image) = primitive.kind {
+                if let filter::Kind::Image(image) = &primitive.kind {
                     f(image.root());
                 }
             }
@@ -1568,7 +1568,7 @@ impl Image {
     }
 
     fn subroots(&self, f: &mut dyn FnMut(&Group)) {
-        if let ImageKind::SVG(tree) = self.kind {
+        if let ImageKind::SVG(tree) = &self.kind {
             f(&tree.root)
         }
     }
@@ -1712,7 +1712,7 @@ fn has_text_nodes(root: &Group) -> bool {
         let mut has_text = false;
 
         if let Node::Image(image) = node {
-            if let ImageKind::SVG(tree) = image.kind {
+            if let ImageKind::SVG(tree) = &image.kind {
                 if has_text_nodes(&tree.root) {
                     has_text = true;
                 }
@@ -1756,12 +1756,12 @@ impl Group {
     pub(crate) fn collect_clip_paths(&self, clip_paths: &mut Vec<Arc<ClipPath>>) {
         for node in self.children() {
             if let Node::Group(g) = node {
-                if let Some(clip) = g.clip_path {
+                if let Some(clip) = &g.clip_path {
                     if !clip_paths.iter().any(|other| Arc::ptr_eq(clip, other)) {
                         clip_paths.push(clip.clone());
                     }
 
-                    if let Some(sub_clip) = clip.clip_path {
+                    if let Some(sub_clip) = &clip.clip_path {
                         if !clip_paths.iter().any(|other| Arc::ptr_eq(sub_clip, other)) {
                             clip_paths.push(sub_clip.clone());
                         }
@@ -1780,12 +1780,12 @@ impl Group {
     pub(crate) fn collect_masks(&self, masks: &mut Vec<Arc<Mask>>) {
         for node in self.children() {
             if let Node::Group(g) = node {
-                if let Some(mask) = g.mask {
+                if let Some(mask) = &g.mask {
                     if !masks.iter().any(|other| Arc::ptr_eq(mask, other)) {
                         masks.push(mask.clone());
                     }
 
-                    if let Some(sub_mask) = mask.mask {
+                    if let Some(sub_mask) = &mask.mask {
                         if !masks.iter().any(|other| Arc::ptr_eq(sub_mask, other)) {
                             masks.push(sub_mask.clone());
                         }

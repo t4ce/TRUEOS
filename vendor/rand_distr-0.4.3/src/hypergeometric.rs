@@ -241,7 +241,7 @@ impl Distribution<u64> for Hypergeometric {
         let Hypergeometric { n1, n2, k, sign_x, offset_x, sampling_method } = *self;
         let x = match sampling_method {
             InverseTransform { initial_p: mut p, initial_x: mut x } => {
-                let mut u = rng.gen::<f64>();
+                let mut u = rng.r#gen::<f64>();
                 while u > p && x < k as i64 { // the paper erroneously uses `until n < p`, which doesn't make any sense
                     u -= p;
                     p *= ((n1 as i64 - x as i64) * (k as i64 - x as i64)) as f64;
@@ -255,7 +255,7 @@ impl Distribution<u64> for Hypergeometric {
                 loop {
                     let (y, v) = loop {
                         let u = distr_region_select.sample(rng);
-                        let v = rng.gen::<f64>(); // for the accept/reject decision
+                        let v = rng.r#gen::<f64>(); // for the accept/reject decision
             
                         if u <= p1 {
                             // Region 1, central bell

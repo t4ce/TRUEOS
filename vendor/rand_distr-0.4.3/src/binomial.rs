@@ -116,7 +116,7 @@ impl Distribution<u64> for Binomial {
             let s = p / q;
             let a = ((self.n + 1) as f64) * s;
             let mut r = q.powi(self.n as i32);
-            let mut u: f64 = rng.gen();
+            let mut u: f64 = rng.r#gen();
             let mut x = 0;
             while u > r as f64 {
                 u -= r;

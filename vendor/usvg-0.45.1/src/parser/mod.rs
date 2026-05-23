@@ -55,7 +55,7 @@ impl From<roxmltree::Error> for Error {
 
 impl ::core::fmt::Display for Error {
     fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
-        match *self {
+        match self {
             Error::NotAnUtf8Str => {
                 write!(f, "provided data has not an UTF-8 encoding")
             }

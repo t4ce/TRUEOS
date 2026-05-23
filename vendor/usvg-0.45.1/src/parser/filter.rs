@@ -457,7 +457,7 @@ fn resolve_input(node: SvgNode, aid: AId, primitives: &[Primitive]) -> Input {
 
             // If `in` references an unknown `result` than fallback
             // to previous result or `SourceGraphic`.
-            if let Input::Reference(name) = input {
+            if let Input::Reference(ref name) = input {
                 if !primitives.iter().any(|p| p.result == *name) {
                     return if let Some(prev) = primitives.last() {
                         Input::Reference(prev.result.clone())

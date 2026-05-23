@@ -488,7 +488,8 @@ fn convert_chunked_slice_8<S: Copy + Default, D: Copy>(
     let src_remainder = src_chunks.remainder();
     for (s, d) in src_chunks.zip(&mut dst_chunks) {
         let chunk: &[S; 8] = s.try_into().unwrap();
-        d.copy_from_slice(unsafe { &fn8(chunk) });
+        let vec = unsafe { fn8(chunk) };
+        d.copy_from_slice(&vec);
     }
 
     // Process remainder
@@ -523,7 +524,8 @@ fn convert_chunked_slice_4<S: Copy + Default, D: Copy>(
     let src_remainder = src_chunks.remainder();
     for (s, d) in src_chunks.zip(&mut dst_chunks) {
         let chunk: &[S; 4] = s.try_into().unwrap();
-        d.copy_from_slice(unsafe { &f(chunk) });
+        let vec = unsafe { f(chunk) };
+        d.copy_from_slice(&vec);
     }
 
     // Process remainder
