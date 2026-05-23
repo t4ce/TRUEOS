@@ -1605,5 +1605,5 @@ fn uninit_u8_array() -> [MaybeUninit<u8>; SCRATCH_BUF_SIZE] {
 // Safety: All elements of `slice` must be initialized to prevent
 // undefined behavior.
 unsafe fn slice_assume_init<T>(slice: &[MaybeUninit<T>]) -> &[T] {
-    &*(slice as *const [MaybeUninit<T>] as *const [T])
+    unsafe { &*(slice as *const [MaybeUninit<T>] as *const [T]) }
 }

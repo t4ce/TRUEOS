@@ -92,7 +92,7 @@ where F: Float + FloatConst, Standard: Distribution<F>
             let mut result = F::zero();
             let mut p = F::one();
             while p > self.exp_lambda {
-                p = p*rng.gen::<F>();
+                p = p*rng.r#gen::<F>();
                 result = result + F::one();
             }
             result - F::one()
@@ -133,7 +133,7 @@ where F: Float + FloatConst, Standard: Distribution<F>
                         .exp();
 
                 // check with uniform random value - if below the threshold, we are within the target distribution
-                if rng.gen::<F>() <= check {
+                if rng.r#gen::<F>() <= check {
                     break;
                 }
             }

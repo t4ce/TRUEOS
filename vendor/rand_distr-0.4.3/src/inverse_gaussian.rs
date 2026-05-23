@@ -79,7 +79,7 @@ where
 
         let x = mu + mu_2l * (y - (F::from(4.).unwrap() * l * y + y * y).sqrt());
 
-        let u: F = rng.gen();
+        let u: F = rng.r#gen();
 
         if u <= mu / (mu + x) {
             return x;

@@ -36,7 +36,7 @@ pub(crate) fn convert(
         _ => unreachable!(),
     };
 
-    if let Some(ServerOrColor::Server(paint)) = paint {
+    if let Some(ServerOrColor::Server(ref paint)) = paint {
         cache
             .paint
             .insert(node.element_id().to_string(), paint.clone());
@@ -587,7 +587,7 @@ fn node_to_user_coordinates(
     match node {
         Node::Group(g) => {
             // No need to check clip paths, because they cannot have paint servers.
-            if let Some(mask) = g.mask {
+            if let Some(mask) = &mut g.mask {
                 if let Some(mask) = Arc::get_mut(mask) {
                     update_paint_servers(
                         &mut mask.root,
@@ -597,7 +597,7 @@ fn node_to_user_coordinates(
                         cache,
                     );
 
-                    if let Some(sub_mask) = mask.mask {
+                    if let Some(sub_mask) = &mut mask.mask {
                         if let Some(sub_mask) = Arc::get_mut(sub_mask) {
                             update_paint_servers(
                                 &mut sub_mask.root,
@@ -614,7 +614,7 @@ fn node_to_user_coordinates(
             for filter in &mut g.filters {
                 if let Some(filter) = Arc::get_mut(filter) {
                     for primitive in &mut filter.primitives {
-                        if let filter::Kind::Image(image) = primitive.kind {
+                        if let filter::Kind::Image(image) = &mut primitive.kind {
                             update_paint_servers(
                                 &mut image.root,
                                 context_transform,
@@ -652,7 +652,7 @@ fn node_to_user_coordinates(
             );
         }
         Node::Image(image) => {
-            if let ImageKind::SVG(tree) = image.kind {
+            if let ImageKind::SVG(tree) = &mut image.kind {
                 update_paint_servers(&mut tree.root, context_transform, context_bbox, None, cache);
             }
         }

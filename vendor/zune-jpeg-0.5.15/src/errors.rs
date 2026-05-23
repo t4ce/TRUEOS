@@ -71,28 +71,28 @@ impl Debug for DecodeErrors {
     fn fmt(&self, f: &mut Formatter<'_>) -> ::core::fmt::Result {
         match &self
         {
-            Self::Format(ref a) => write!(f, "{a:?}"),
+            Self::Format(a) => write!(f, "{a:?}"),
             Self::FormatStatic(a) => write!(f, "{:?}", &a),
 
-            Self::HuffmanDecode(ref reason) =>
+            Self::HuffmanDecode(reason) =>
             {
                 write!(f, "Error decoding huffman values: {reason}")
             }
             Self::ZeroError => write!(f, "Image width or height is set to zero, cannot continue"),
-            Self::DqtError(ref reason) => write!(f, "Error parsing DQT segment. Reason:{reason}"),
-            Self::SosError(ref reason) => write!(f, "Error parsing SOS Segment. Reason:{reason}"),
-            Self::SofError(ref reason) => write!(f, "Error parsing SOF segment. Reason:{reason}"),
+            Self::DqtError(reason) => write!(f, "Error parsing DQT segment. Reason:{reason}"),
+            Self::SosError(reason) => write!(f, "Error parsing SOS Segment. Reason:{reason}"),
+            Self::SofError(reason) => write!(f, "Error parsing SOF segment. Reason:{reason}"),
             Self::IllegalMagicBytes(bytes) =>
             {
                 write!(f, "Error parsing image. Illegal start bytes:{bytes:X}")
             }
-            Self::MCUError(ref reason) => write!(f, "Error in decoding MCU. Reason {reason}"),
-            Self::Unsupported(ref image_type) =>
+            Self::MCUError(reason) => write!(f, "Error in decoding MCU. Reason {reason}"),
+            Self::Unsupported(image_type) =>
                 {
                     write!(f, "{image_type:?}")
                 }
             Self::ExhaustedData => write!(f, "Exhausted data in the image"),
-            Self::LargeDimensions(ref dimensions) => write!(
+            Self::LargeDimensions(dimensions) => write!(
                 f,
                 "Too large dimensions {dimensions},library supports up to {}", crate::decoder::MAX_DIMENSIONS
             ),

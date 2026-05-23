@@ -17,7 +17,7 @@ use ::core::fmt;
 
 /// Samples floating-point numbers according to the exponential distribution,
 /// with rate parameter `λ = 1`. This is equivalent to `Exp::new(1.0)` or
-/// sampling with `-rng.gen::<f64>().ln()`, but faster.
+/// sampling with `-rng.r#gen::<f64>().ln()`, but faster.
 ///
 /// See `Exp` for the general exponential distribution.
 ///
@@ -51,7 +51,7 @@ impl Distribution<f32> for Exp1 {
     }
 }
 
-// This could be done via `-rng.gen::<f64>().ln()` but that is slower.
+// This could be done via `-rng.r#gen::<f64>().ln()` but that is slower.
 impl Distribution<f64> for Exp1 {
     #[inline]
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> f64 {
@@ -61,7 +61,7 @@ impl Distribution<f64> for Exp1 {
         }
         #[inline]
         fn zero_case<R: Rng + ?Sized>(rng: &mut R, _u: f64) -> f64 {
-            ziggurat_tables::ZIG_EXP_R - rng.gen::<f64>().ln()
+            ziggurat_tables::ZIG_EXP_R - rng.r#gen::<f64>().ln()
         }
 
         ziggurat(

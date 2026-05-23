@@ -613,7 +613,7 @@ impl ChunkedState {
                         buf.put_u8(byte);
                         *trailers_buf = Some(buf);
                     }
-                    Some(ref mut trailers_buf) => {
+                    Some(trailers_buf) => {
                         put_u8!(trailers_buf, byte, h1_max_header_size);
                     }
                 }

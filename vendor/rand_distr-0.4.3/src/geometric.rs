@@ -87,7 +87,7 @@ impl Distribution<u64> for Geometric
             // use the trivial algorithm:
             let mut failures = 0;
             loop {
-                let u = rng.gen::<f64>();
+                let u = rng.r#gen::<f64>();
                 if u <= self.p { break; }
                 failures += 1;
             }
@@ -108,7 +108,7 @@ impl Distribution<u64> for Geometric
         // Use the trivial algorithm to sample D from Geo(pi) = Geo(p) / 2^k:
         let d = {
             let mut failures = 0;
-            while rng.gen::<f64>() < pi {
+            while rng.r#gen::<f64>() < pi {
                 failures += 1;
             }
             failures
@@ -120,14 +120,14 @@ impl Distribution<u64> for Geometric
         // currently unsupported, but should improve performance by requiring
         // fewer iterations on average.                 ~ October 28, 2020
         let m = loop {
-            let m = rng.gen::<u64>() & ((1 << k) - 1);
+            let m = rng.r#gen::<u64>() & ((1 << k) - 1);
             let p_reject = if m <= core::i32::MAX as u64 {
                 (1.0 - p).powi(m as i32)
             } else {
                 (1.0 - p).powf(m as f64)
             };
             
-            let u = rng.gen::<f64>();
+            let u = rng.r#gen::<f64>();
             if u < p_reject {
                 break m;
             }
@@ -161,7 +161,7 @@ impl Distribution<u64> for StandardGeometric {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> u64 {
         let mut result = 0;
         loop {
-            let x = rng.gen::<u64>().leading_zeros() as u64;
+            let x = rng.r#gen::<u64>().leading_zeros() as u64;
             result += x;
             if x < 64 { break; }
         }
