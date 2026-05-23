@@ -42,7 +42,7 @@
 #![allow(missing_docs)]
 #[prelude_import]
 #[allow(unused)]
-use core::prelude::rust_2021::*;
+use core::prelude::rust_2024::*;
 
 use ::core::fmt;
 use core::hash;

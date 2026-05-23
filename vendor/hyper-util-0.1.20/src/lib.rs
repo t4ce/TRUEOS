@@ -193,7 +193,7 @@ pub mod pin {
 pub mod prelude {
     //! no_std stand-in for `std::prelude`.
     #[allow(missing_docs)]
-    pub mod rust_2021 {
+    pub mod rust_2024 {
         pub use alloc::{
             borrow::ToOwned,
             boxed::Box,
@@ -202,7 +202,7 @@ pub mod prelude {
             vec,
             vec::Vec,
         };
-        pub use core::prelude::rust_2021::*;
+        pub use core::prelude::rust_2024::*;
     }
 }
 

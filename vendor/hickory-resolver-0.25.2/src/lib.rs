@@ -264,12 +264,12 @@ pub mod pin {
 }
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod prelude {
-    pub mod rust_2021 {
+    pub mod rust_2024 {
         pub use alloc::boxed::Box;
         pub use alloc::string::{String, ToString};
         pub use alloc::vec;
         pub use alloc::vec::Vec;
-        pub use core::prelude::rust_2021::*;
+        pub use core::prelude::rust_2024::*;
     }
 }
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]

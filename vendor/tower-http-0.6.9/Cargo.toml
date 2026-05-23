@@ -10,7 +10,7 @@
 # See Cargo.toml.orig for the original contents.
 
 [package]
-edition = "2018"
+edition = "2024"
 rust-version = "1.64"
 name = "tower-http"
 version = "0.6.9"

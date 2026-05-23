@@ -24,7 +24,7 @@ extern crate self as std;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod prelude {
     //! TRUEOS no_std compatibility prelude for upstream std-shaped source.
-    pub mod rust_2021 {
+    pub mod rust_2024 {
         //! TRUEOS no_std compatibility prelude for upstream std-shaped source.
         pub use alloc::{
             boxed::Box,
@@ -32,7 +32,7 @@ pub mod prelude {
             string::{String, ToString},
             vec::Vec,
         };
-        pub use core::prelude::rust_2021::*;
+        pub use core::prelude::rust_2024::*;
     }
 }
 

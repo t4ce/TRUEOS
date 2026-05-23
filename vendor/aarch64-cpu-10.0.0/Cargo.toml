@@ -10,7 +10,7 @@
 # See Cargo.toml.orig for the original contents.
 
 [package]
-edition = "2018"
+edition = "2024"
 name = "aarch64-cpu"
 version = "10.0.0"
 authors = ["Andre Richter <andre.o.richter@gmail.com>"]
