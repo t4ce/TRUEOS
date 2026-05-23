@@ -2,6 +2,7 @@ use core::{
     num::NonZeroUsize,
     ops::{Deref, DerefMut},
     ptr::NonNull,
+    sync::atomic::{Ordering, fence},
 };
 
 use xhci::accessor::Mapper;
@@ -104,5 +105,7 @@ impl SlotBell {
         self.reg
             .doorbell
             .write_volatile_at(self.slot_id.as_usize(), bell);
+        let _ = self.reg.operational.usbsts.read_volatile();
+        fence(Ordering::SeqCst);
     }
 }

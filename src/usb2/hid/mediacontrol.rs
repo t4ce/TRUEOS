@@ -1,17 +1,12 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use core::future::Future;
-use core::task::Poll;
 
 use crab_usb::{USBHost, usb_if};
 use embassy_executor::Spawner;
-use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
 use crate::usb2::api::{EndpointSubmitExt, InterfaceEndpointError, claim_interface};
-
-const HID_INTERRUPT_TIMEOUT_MS: u64 = 1000;
 
 #[derive(Copy, Clone, Debug)]
 struct MediaControlTarget {
@@ -111,22 +106,6 @@ fn unregister_active_stream(stream: ActiveMediaControlStream) {
     }
 }
 
-async fn with_timeout_or_none<F: Future>(fut: F, timeout_ms: u64) -> Option<F::Output> {
-    let mut fut = core::pin::pin!(fut);
-    let mut timeout = core::pin::pin!(Timer::after(EmbassyDuration::from_millis(timeout_ms)));
-
-    core::future::poll_fn(|cx| {
-        if let Poll::Ready(out) = fut.as_mut().poll(cx) {
-            return Poll::Ready(Some(out));
-        }
-        if timeout.as_mut().poll(cx).is_ready() {
-            return Poll::Ready(None);
-        }
-        Poll::Pending
-    })
-    .await
-}
-
 fn report_changed(prev: &[u8], next: &[u8]) -> bool {
     prev.len() != next.len() || prev.iter().zip(next.iter()).any(|(a, b)| a != b)
 }
@@ -223,31 +202,10 @@ async fn media_control_task(
 
     let mut report = vec![0u8; usize::from(target.in_max_packet_size.max(1))];
     let mut last_report = Vec::new();
-    let mut timeout_logs = 0u32;
 
     loop {
-        match with_timeout_or_none(
-            interrupt_in.submit_and_wait(report.as_mut_slice()),
-            HID_INTERRUPT_TIMEOUT_MS,
-        )
-        .await
-        {
-            None => {
-                timeout_logs = timeout_logs.wrapping_add(1);
-                if crate::logflag::USB_LOG_ALL.load(core::sync::atomic::Ordering::Relaxed)
-                    && (timeout_logs <= 8 || timeout_logs.is_multiple_of(32))
-                {
-                    crate::log!(
-                        "crabusb: hid mediacontrol {:04X}:{:04X} interrupt timeout ep=0x{:02X} count={}\n",
-                        vendor_id,
-                        product_id,
-                        target.in_endpoint,
-                        timeout_logs
-                    );
-                }
-            }
-            Some(Ok(read)) => {
-                timeout_logs = 0;
+        match interrupt_in.submit_and_wait(report.as_mut_slice()).await {
+            Ok(read) => {
                 if read == 0 {
                     continue;
                 }
@@ -266,7 +224,7 @@ async fn media_control_task(
                     last_report.extend_from_slice(sample);
                 }
             }
-            Some(Err(err)) => {
+            Err(err) => {
                 crate::log!(
                     "crabusb: hid mediacontrol {:04X}:{:04X} stream stop ep=0x{:02X} err={:?}\n",
                     vendor_id,

@@ -1,6 +1,7 @@
 pub(crate) mod cmd;
 mod context;
 mod def;
+mod delay;
 pub(crate) mod device;
 mod endpoint;
 mod event;
@@ -20,7 +21,7 @@ fn parse_default_max_packet_size_from_port_speed(speed: Speed) -> u16 {
     // 根据 xHCI 规范表 6-30 和 U-Boot 实现：
     // 参考 U-Boot drivers/usb/host/xhci-mem.c:730-751
     match speed {
-        Speed::Full => 64,             // Full Speed → 64 bytes
+        Speed::Full => 8,              // Full Speed default-address EP0 starts at 8 bytes
         Speed::Low => 8,               // Low Speed → 8 bytes
         Speed::High => 64,             // High Speed → 64 bytes
         Speed::SuperSpeed => 512,      // SuperSpeed → 512 bytes

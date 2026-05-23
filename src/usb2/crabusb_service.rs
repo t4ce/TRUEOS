@@ -186,8 +186,10 @@ fn sync_observed_devices(
         })
         .collect();
 
-    if merged_current.is_empty() && !previous.is_empty() {
-        if let Some(diag) = super::controller_mmio_diag(controller_id) {
+    if !previous.is_empty()
+        && let Some(diag) = super::controller_mmio_diag(controller_id)
+    {
+        if merged_current.is_empty() {
             merged_current = previous
                 .iter()
                 .filter(|dev| {
@@ -197,6 +199,20 @@ fn sync_observed_devices(
                 })
                 .cloned()
                 .collect();
+        } else {
+            let still_connected: Vec<ObservedUsbDevice> = previous
+                .iter()
+                .filter(|known| {
+                    !merged_current
+                        .iter()
+                        .any(|candidate| same_physical_device(known, candidate))
+                        && diag.ports.iter().any(|port| {
+                            port.port_id == known.root_port_id && (port.portsc & (1 << 0)) != 0
+                        })
+                })
+                .cloned()
+                .collect();
+            merged_current.extend(still_connected);
         }
     }
 
@@ -483,7 +499,30 @@ fn observed_port_location(
     controller_id: usize,
     ordinal: usize,
     fallback_id: usize,
+    root_port_hint: Option<u8>,
+    port_id_hint: Option<u8>,
 ) -> ObservedPortLocation {
+    if let Some(root_port_id) = root_port_hint {
+        if let Some(diag) = super::controller_mmio_diag(controller_id)
+            && let Some(port) = diag.ports.iter().find(|port| port.port_id == root_port_id)
+        {
+            let raw_speed = (port.portsc >> 10) & 0xF;
+            return ObservedPortLocation {
+                root_port_id,
+                port_id: port_id_hint.unwrap_or(root_port_id),
+                route_string: u32::from(root_port_id) << 24,
+                speed: usb_if::Speed::from_xhci_portsc(raw_speed as u8),
+            };
+        }
+
+        return ObservedPortLocation {
+            root_port_id,
+            port_id: port_id_hint.unwrap_or(root_port_id),
+            route_string: u32::from(root_port_id) << 24,
+            speed: usb_if::Speed::Full,
+        };
+    }
+
     if let Some(diag) = super::controller_mmio_diag(controller_id)
         && let Some(port) = diag
             .ports
@@ -584,7 +623,13 @@ async fn probe_and_bind(
         // transfers leaf ownership on open_device(); doing that here just to
         // decorate the table with strings forces the later class bind path to
         // re-address an already-addressed physical device.
-        let location = observed_port_location(info.index, ordinal, dev.id());
+        let location = observed_port_location(
+            info.index,
+            ordinal,
+            dev.id(),
+            dev.as_device_info().and_then(|info| info.root_port_id()),
+            dev.as_device_info().and_then(|info| info.port_id()),
+        );
         current_devices.push(ObservedUsbDevice {
             backend_id: dev.id(),
             slot_id: dev.id() as u32,
@@ -616,7 +661,13 @@ async fn probe_and_bind(
 
     for (ordinal, dev) in devices.iter().enumerate() {
         let desc = dev.descriptor();
-        let location = observed_port_location(info.index, ordinal, dev.id());
+        let location = observed_port_location(
+            info.index,
+            ordinal,
+            dev.id(),
+            dev.as_device_info().and_then(|info| info.root_port_id()),
+            dev.as_device_info().and_then(|info| info.port_id()),
+        );
         let if_count: usize = dev
             .configurations()
             .iter()
@@ -842,10 +893,12 @@ pub async fn event_pump_task(controller_id: usize) {
                         port
                     );
                 }
+                Timer::after(EmbassyDuration::from_micros(0)).await;
             }
             Some(Event::TransferActivity { count }) => {
                 idle_yields = 0;
                 let _ = count;
+                Timer::after(EmbassyDuration::from_micros(EVENT_PUMP_IDLE_SLEEP_US)).await;
             }
             Some(Event::Stopped) => {
                 idle_yields = 0;

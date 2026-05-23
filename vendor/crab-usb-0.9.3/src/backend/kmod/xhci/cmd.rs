@@ -24,6 +24,7 @@ impl CommandRing {
             .write()
             .doorbell
             .write_volatile_at(0, doorbell::Register::default());
+        let _ = inner.reg.read().operational.usbsts.read_volatile();
         trb_addr
     }
 

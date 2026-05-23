@@ -89,7 +89,6 @@ define_started_flags!(
     USB_CONTROLLER_TASKS_STARTED,
     TRUEOSFS_READY_HOOK_STARTED,
     BP_AUTOSTART_STARTED,
-    UAS_SKHYNIX_ROUTE_PROBE_STARTED,
     APP_VM_RUN_QUEUE_STARTED,
     FACTORY_RAM_PROBE_STARTED,
     UART_SHELL_STARTED,
@@ -927,16 +926,6 @@ fn spawn_trueosfs_ready_hook(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| trueosfs_ready_hook_task())
 }
 
-fn spawn_uas_skhynix_route_probe(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_worker(spawner, |_worker_spawner| {
-        crate::tst_uas_skhynix_route_probe::boot_uas_skhynix_route_probe_task()
-    })
-}
-
-fn uas_skhynix_route_probe_enabled() -> bool {
-    crate::tst_uas_skhynix_route_probe::enabled()
-}
-
 fn spawn_app_vm_run_queue(spawner: Spawner) -> SpawnAttempt {
     match crate::shell2::spawn_app_vm_run_queue(spawner) {
         Ok(()) => SpawnAttempt::Spawned,
@@ -1130,9 +1119,9 @@ const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
 #[cfg(feature = "trueos_rdp")]
-const TASK_COUNT: usize = 74;
+const TASK_COUNT: usize = 73;
 #[cfg(not(feature = "trueos_rdp"))]
-const TASK_COUNT: usize = 72;
+const TASK_COUNT: usize = 71;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1487,12 +1476,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
             | crate::r::readiness::MANDELBROT_GPU_SIDEQUEST_READY,
         &LUMEN_SERVICE_STARTED,
         spawn_lumen_service,
-    ),
-    TaskSpec::disabled(
-        "uas-skhynix-route-probe",
-        0,
-        &UAS_SKHYNIX_ROUTE_PROBE_STARTED,
-        spawn_uas_skhynix_route_probe,
     ),
     TaskSpec::enabled("uart-shell", 0, &UART_SHELL_STARTED, spawn_uart_shell),
     TaskSpec::enabled("net-tcp-shell", 0, &NET_TCP_SHELL_STARTED, spawn_net_tcp_shell),

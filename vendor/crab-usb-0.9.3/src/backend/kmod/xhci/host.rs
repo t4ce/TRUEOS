@@ -119,13 +119,16 @@ impl Xhci {
             if ac64 { "64" } else { "32" }
         );
 
-        // 根据 AC64 位调整 DMA mask
-        let dma_mask = if ac64 {
-            u64::MAX as usize
-        } else {
-            // 控制器只支持 32 位地址，强制限制在 32 位
-            u32::MAX as usize
-        };
+        // TRUEOS baremetal currently keeps xHCI data buffers below 4G even
+        // when the Intel controller advertises AC64. The controller accepts
+        // low rings/contexts, but early EP0 reads can stop completing when
+        // the payload buffer lands above 4G.
+        let dma_mask = u32::MAX as usize;
+        if ac64 {
+            info!(
+                "xHCI: AC64 advertised; TRUEOS baremetal forcing 32-bit DMA mask for Intel-safe buffers"
+            );
+        }
 
         let kernel = Kernel::new(dma_mask as _, kernel);
 
@@ -635,6 +638,11 @@ impl EventHandler {
                         c.completion_code()
                     );
                     self.cmd_finished.set_finished(addr.into(), c);
+                    info!(
+                        "xhci: event command stored ptr={:#x} slot={}",
+                        addr,
+                        c.slot_id()
+                    );
                 }
                 Allowed::PortStatusChange(st) => {
                     port_events += 1;
@@ -661,19 +669,6 @@ impl EventHandler {
                         c.trb_transfer_length(),
                         c.event_data()
                     );
-                    if slot_id == 3 && ep_id == 1 {
-                        info!(
-                            "xhci: ss ep0 transfer event slot={} ep={} ptr={:#x} code={:?} \
-                             len={} event_data={}",
-                            slot_id,
-                            ep_id,
-                            ptr,
-                            c.completion_code(),
-                            c.trb_transfer_length(),
-                            c.event_data()
-                        );
-                    }
-
                     // Interrupts synchronize queue state only. Do not call
                     // into OS glue or take manager/file/device locks here; the
                     // waiter that owns the queue will advance the transfer flow.
