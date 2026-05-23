@@ -51,7 +51,7 @@ impl JoinError {
     /// ```
     /// # #[cfg(not(target_family = "wasm"))]
     /// # {
-    /// use core::panic;
+    /// use ::core::panic;
     ///
     /// #[tokio::main]
     /// async fn main() {
@@ -78,7 +78,7 @@ impl JoinError {
     /// # Examples
     ///
     /// ```should_panic,ignore-wasm
-    /// use core::panic;
+    /// use ::core::panic;
     ///
     /// #[tokio::main]
     /// async fn main() {
@@ -105,7 +105,7 @@ impl JoinError {
     /// # Examples
     ///
     /// ```should_panic,ignore-wasm
-    /// use core::panic;
+    /// use ::core::panic;
     ///
     /// #[tokio::main]
     /// async fn main() {

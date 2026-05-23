@@ -442,7 +442,7 @@ impl Semaphore {
     pub fn new(permits: usize) -> Self {
         #[cfg(all(tokio_unstable, feature = "tracing"))]
         let resource_span = {
-            let location = core::panic::Location::caller();
+            let location = ::core::panic::Location::caller();
 
             tracing::trace_span!(
                 parent: None,

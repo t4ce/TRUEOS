@@ -12,7 +12,7 @@ use core::result::Result::{self, Err, Ok};
 use core::task::{Context, Poll};
 use core::fmt;
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-use core::panic;
+use ::core::panic;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use crate::panic;
 
@@ -427,7 +427,7 @@ impl<T: 'static> JoinSet<T> {
     ///
     /// ```
     /// use tokio::task::JoinSet;
-    /// use core::panic;
+    /// use ::core::panic;
     ///
     /// # #[tokio::main(flavor = "current_thread")]
     /// # async fn main() {

@@ -266,7 +266,7 @@ use std::process::{Child as StdChild, Command as StdCommand, ExitStatus, Output,
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub fn abort() -> ! {
-    core::panic!("abort")
+    ::core::panic!("abort")
 }
 
 #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]

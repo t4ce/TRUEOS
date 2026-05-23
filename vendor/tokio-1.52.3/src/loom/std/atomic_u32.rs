@@ -1,7 +1,7 @@
 use core::cell::UnsafeCell;
 use core::fmt;
 use core::ops::Deref;
-use core::panic;
+use ::core::panic;
 
 /// `AtomicU32` providing an additional `unsync_load` function.
 pub(crate) struct AtomicU32 {

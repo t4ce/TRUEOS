@@ -5,8 +5,7 @@ use crate::loom::hint;
 use crate::loom::sync::atomic::AtomicUsize;
 
 use core::fmt;
-use core::panic::{AssertUnwindSafe, RefUnwindSafe, UnwindSafe};
-use std::panic::resume_unwind;
+use crate::panic::{resume_unwind, AssertUnwindSafe, RefUnwindSafe, UnwindSafe};
 use core::sync::atomic::Ordering::{AcqRel, Acquire, Release};
 use core::task::Waker;
 
@@ -178,7 +177,7 @@ impl AtomicWaker {
         W: WakerRef,
     {
         fn catch_unwind<F: FnOnce() -> R, R>(f: F) -> std::thread::Result<R> {
-            std::panic::catch_unwind(AssertUnwindSafe(f))
+            crate::panic::catch_unwind(AssertUnwindSafe(f))
         }
 
         match self

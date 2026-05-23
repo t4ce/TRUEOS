@@ -4,7 +4,7 @@ use crate::util::trace;
 
 use core::future::Future;
 use core::option::Option::{self, None, Some};
-use core::panic::Location;
+use ::core::panic::Location;
 use core::pin::Pin;
 use core::result::Result::{self, Err, Ok};
 use core::task::{self, ready, Poll};

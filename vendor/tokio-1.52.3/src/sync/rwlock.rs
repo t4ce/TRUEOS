@@ -206,7 +206,7 @@ impl<T: ?Sized> RwLock<T> {
     {
         #[cfg(all(tokio_unstable, feature = "tracing"))]
         let resource_span = {
-            let location = core::panic::Location::caller();
+            let location = ::core::panic::Location::caller();
             let resource_span = tracing::trace_span!(
                 parent: None,
                 "runtime.resource",
@@ -278,7 +278,7 @@ impl<T: ?Sized> RwLock<T> {
 
         #[cfg(all(tokio_unstable, feature = "tracing"))]
         let resource_span = {
-            let location = core::panic::Location::caller();
+            let location = ::core::panic::Location::caller();
 
             let resource_span = tracing::trace_span!(
                 parent: None,
