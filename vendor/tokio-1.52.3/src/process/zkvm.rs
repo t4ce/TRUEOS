@@ -8,10 +8,7 @@ use core::pin::Pin;
 use core::task::{Context, Poll};
 use std::ffi::OsStr;
 use std::io;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use crate::path::Path;
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-use std::path::Path;
 
 fn unsupported() -> io::Error {
     io::Error::new(io::ErrorKind::Other, "tokio process is not supported on zkvm")

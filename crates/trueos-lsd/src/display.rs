@@ -922,7 +922,7 @@ mod tests {
             format!(
                 "\n{}{}dir:\n",
                 tmp_dir.path().to_string_lossy(),
-                std::path::MAIN_SEPARATOR
+                tokio::path::MAIN_SEPARATOR
             )
         );
 

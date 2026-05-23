@@ -7,10 +7,7 @@ use io_uring::{opcode, types};
 use core::ffi::CString;
 use std::io::{self, Error};
 use std::os::fd::FromRawFd;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use crate::path::Path;
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-use std::path::Path;
 
 #[derive(Debug)]
 pub(crate) struct Open {

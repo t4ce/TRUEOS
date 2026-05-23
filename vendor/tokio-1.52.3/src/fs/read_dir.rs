@@ -16,10 +16,7 @@ use crate::ffi::OsString;
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::fs::{FileType, Metadata};
 use std::io;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use crate::path::{Path, PathBuf};
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-use std::path::{Path, PathBuf};
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::fs::{DirEntry as StdDirEntry, ReadDir as StdReadDir};
 

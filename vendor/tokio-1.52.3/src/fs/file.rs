@@ -20,10 +20,7 @@ use crate::fs::trueos::{Metadata, Permissions};
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::fs::{Metadata, Permissions};
 use std::io::{self, Seek, SeekFrom};
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use crate::path::Path;
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-use std::path::Path;
 
 #[cfg(test)]
 use super::mocks::JoinHandle;

@@ -4,10 +4,7 @@ use crate::fs::File;
 use alloc::borrow::ToOwned;
 
 use std::io;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use crate::path::Path;
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-use std::path::Path;
 
 cfg_io_uring! {
     mod uring_open_options;

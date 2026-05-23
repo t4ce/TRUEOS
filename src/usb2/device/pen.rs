@@ -482,6 +482,13 @@ fn log_transport_mismatch(rt: &UsbMassRuntime, stage: &'static str) {
     );
 }
 
+fn log_mass_io_success(command_tag: u32, blocks: usize, bytes: usize, block_size: usize) -> bool {
+    blocks != 1
+        || bytes != block_size
+        || (command_tag & 0xFF) < 0x10
+        || (command_tag & 0x3F) == 0
+}
+
 async fn recover_runtime_transport(
     rt: &mut UsbMassRuntime,
     stage: &'static str,
@@ -610,17 +617,24 @@ impl block::BlockDevice for UsbMassBlockDevice {
 
                             match result {
                                 Ok(()) => {
-                                    crate::log!(
-                                        "crabusb: mass {:04X}:{:04X} read-10 end key=0x{:016X} slot={} lba={} blocks={} bytes={} tag=0x{:08X} status=ok\n",
-                                        rt.vendor_id,
-                                        rt.product_id,
-                                        rt.runtime_key,
-                                        rt.slot_id,
-                                        cur_lba,
+                                    if log_mass_io_success(
+                                        command_tag,
                                         blocks_here,
                                         bytes_here,
-                                        command_tag
-                                    );
+                                        block_size,
+                                    ) {
+                                        crate::log!(
+                                            "crabusb: mass {:04X}:{:04X} read-10 end key=0x{:016X} slot={} lba={} blocks={} bytes={} tag=0x{:08X} status=ok\n",
+                                            rt.vendor_id,
+                                            rt.product_id,
+                                            rt.runtime_key,
+                                            rt.slot_id,
+                                            cur_lba,
+                                            blocks_here,
+                                            bytes_here,
+                                            command_tag
+                                        );
+                                    }
                                     mass_io_note_success(rt, block_size);
                                     break;
                                 }
@@ -761,17 +775,24 @@ impl block::BlockDevice for UsbMassBlockDevice {
 
                         match result {
                             Ok(()) => {
-                                crate::log!(
-                                    "crabusb: mass {:04X}:{:04X} write-10 end key=0x{:016X} slot={} lba={} blocks={} bytes={} tag=0x{:08X} status=ok\n",
-                                    rt.vendor_id,
-                                    rt.product_id,
-                                    rt.runtime_key,
-                                    rt.slot_id,
-                                    cur_lba,
+                                if log_mass_io_success(
+                                    command_tag,
                                     blocks_here,
                                     bytes_here,
-                                    command_tag
-                                );
+                                    block_size,
+                                ) {
+                                    crate::log!(
+                                        "crabusb: mass {:04X}:{:04X} write-10 end key=0x{:016X} slot={} lba={} blocks={} bytes={} tag=0x{:08X} status=ok\n",
+                                        rt.vendor_id,
+                                        rt.product_id,
+                                        rt.runtime_key,
+                                        rt.slot_id,
+                                        cur_lba,
+                                        blocks_here,
+                                        bytes_here,
+                                        command_tag
+                                    );
+                                }
                                 mass_io_note_success(&mut rt, block_size);
                                 break;
                             }

@@ -3,10 +3,7 @@ use crate::fs::asyncify;
 use alloc::borrow::ToOwned;
 
 use std::io;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use crate::path::Path;
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
-use std::path::Path;
 
 /// Creates a new, empty directory at the provided path.
 ///
