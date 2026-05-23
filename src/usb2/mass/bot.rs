@@ -154,17 +154,33 @@ fn log_bot_transport_debug(
         event.ptr
     );
     */
-    crate::log!(
-        "crabusb: mass bot-debug stage={} cmd={} tag=0x{:08X} expect[dci={} ep=0x{:02X} dir={} len={} ptr=0x{:X}]\n",
-        stage,
-        cmd,
-        tag,
-        endpoint_dci(ep),
-        ep,
-        direction,
-        len,
-        ptr as usize
-    );
+    if stage.ends_with("-timeout") {
+        crate::log_warn!(
+            target: "usb";
+            "crabusb: mass bot-debug stage={} cmd={} tag=0x{:08X} expect[dci={} ep=0x{:02X} dir={} len={} ptr=0x{:X}]\n",
+            stage,
+            cmd,
+            tag,
+            endpoint_dci(ep),
+            ep,
+            direction,
+            len,
+            ptr as usize
+        );
+    } else {
+        crate::log_info!(
+            target: "usb";
+            "crabusb: mass bot-debug stage={} cmd={} tag=0x{:08X} expect[dci={} ep=0x{:02X} dir={} len={} ptr=0x{:X}]\n",
+            stage,
+            cmd,
+            tag,
+            endpoint_dci(ep),
+            ep,
+            direction,
+            len,
+            ptr as usize
+        );
+    }
 }
 
 fn endpoint_dci(endpoint_addr: u8) -> u8 {
@@ -190,7 +206,12 @@ fn trace_read10_phase(tag: u32, cdb: &[u8], len: usize) -> bool {
         return false;
     };
     let tag_low = tag & 0xFF;
-    blocks != 1 || len != 512 || lba <= 4096 || tag_low < 0x10 || tag_low >= 0xA0 || (tag & 0x3F) == 0
+    blocks != 1
+        || len != 512
+        || lba <= 4096
+        || tag_low < 0x10
+        || tag_low >= 0xA0
+        || (tag & 0x3F) == 0
 }
 
 fn log_read10_phase_enter(
@@ -205,7 +226,8 @@ fn log_read10_phase_enter(
     let Some((lba, blocks)) = read10_cdb_lba_blocks(cdb) else {
         return;
     };
-    crate::log!(
+    crate::log_trace!(
+        target: "usb";
         "crabusb: mass read-10 phase={} tag=0x{:08X} lba={} blocks={} ep=0x{:02X} dci={} dir={} len={} ptr=0x{:X}\n",
         phase,
         tag,
@@ -235,7 +257,8 @@ async fn with_read10_phase_trace_or_none<F: core::future::Future>(
 
     let mut fut = core::pin::pin!(fut);
     let mut soft = core::pin::pin!(Timer::after(EmbassyDuration::from_millis(100)));
-    let mut timeout = core::pin::pin!(Timer::after(EmbassyDuration::from_millis(BOT_IO_TIMEOUT_MS)));
+    let mut timeout =
+        core::pin::pin!(Timer::after(EmbassyDuration::from_millis(BOT_IO_TIMEOUT_MS)));
     let mut traced = false;
 
     core::future::poll_fn(|cx| {
@@ -267,7 +290,8 @@ async fn read_and_validate_csw(
         let csw_len = csw.len();
         let csw_ptr = csw.as_ptr();
         if cmd == "read-10" && trace_read10 {
-            crate::log!(
+            crate::log_trace!(
+                target: "usb";
                 "crabusb: mass read-10 phase=csw-enter tag=0x{:08X} ep=0x{:02X} dci={} dir=1 len={} ptr=0x{:X}\n",
                 expected_tag,
                 bulk_in_ep,
@@ -583,7 +607,8 @@ pub(crate) async fn bot_recovery(
             return Err(MassProbeError::Transport("bot-reset"));
         }
         None => {
-            crate::log!(
+            crate::log_warn!(
+                target: "usb";
                 "crabusb: mass recovery if#{} reset timeout\n",
                 interface_number
             );

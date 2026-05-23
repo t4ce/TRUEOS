@@ -415,9 +415,12 @@ async fn hid_boot_stream_task(
 
                 let sample = &report[..read.min(report.len())];
                 match target.kind {
-                    HidBootKind::Keyboard => {
-                        super::handle_keyboard_boot_report(controller_id, slot_id, ep_target, sample)
-                    }
+                    HidBootKind::Keyboard => super::handle_keyboard_boot_report(
+                        controller_id,
+                        slot_id,
+                        ep_target,
+                        sample,
+                    ),
                     HidBootKind::Mouse => {
                         let mouse_sample = if target.strip_report_id && sample.len() > 1 {
                             &sample[1..]
@@ -446,13 +449,13 @@ async fn hid_boot_stream_task(
             }
             Err(err) => {
                 crate::log_info!(target: "usb";
-                    "crabusb: hid {} {:04X}:{:04X} stream stop ep=0x{:02X} err={:?}\n",
-                    target.kind.as_str(),
-                    vendor_id,
-                    product_id,
-                    target.in_endpoint,
-                    err
-                    );
+                "crabusb: hid {} {:04X}:{:04X} stream stop ep=0x{:02X} err={:?}\n",
+                target.kind.as_str(),
+                vendor_id,
+                product_id,
+                target.in_endpoint,
+                err
+                );
                 break;
             }
         }

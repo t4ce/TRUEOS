@@ -924,7 +924,7 @@ fn window_bottom_bar_height(window: &Ui2Window) -> f32 {
 #[inline]
 fn window_vertical_scrollbar_width(window: &Ui2Window) -> f32 {
     if window.decoration_mode == Ui2WindowDecorationMode::System && window.left_scrollbar_visible {
-        UI2_SYSTEM_SCROLLBAR_PX
+        UI2_SYSTEM_VERTICAL_SCROLLBAR_W
     } else {
         0.0
     }
@@ -934,7 +934,7 @@ fn window_vertical_scrollbar_width(window: &Ui2Window) -> f32 {
 fn window_horizontal_scrollbar_height(window: &Ui2Window) -> f32 {
     if window.decoration_mode == Ui2WindowDecorationMode::System && window.bottom_scrollbar_visible
     {
-        UI2_SYSTEM_SCROLLBAR_PX
+        UI2_SYSTEM_HORIZONTAL_SCROLLBAR_H
     } else {
         0.0
     }
@@ -1242,10 +1242,10 @@ pub(super) fn window_rect_for_content(
 ) -> Ui2Rect {
     match mode {
         Ui2WindowDecorationMode::System => Ui2Rect::new(
-            content_rect.x - UI2_SYSTEM_SCROLLBAR_PX,
+            content_rect.x - UI2_SYSTEM_VERTICAL_SCROLLBAR_W,
             content_rect.y - UI2_TITLE_H,
-            content_rect.w + UI2_SYSTEM_SCROLLBAR_PX,
-            content_rect.h + UI2_TITLE_H + UI2_SYSTEM_SCROLLBAR_PX + UI2_BOTTOM_BAR_H,
+            content_rect.w + UI2_SYSTEM_VERTICAL_SCROLLBAR_W,
+            content_rect.h + UI2_TITLE_H + UI2_SYSTEM_HORIZONTAL_SCROLLBAR_H + UI2_BOTTOM_BAR_H,
         ),
         Ui2WindowDecorationMode::Client => content_rect,
         Ui2WindowDecorationMode::None => content_rect,

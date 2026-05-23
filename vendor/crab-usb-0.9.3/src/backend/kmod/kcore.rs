@@ -43,6 +43,7 @@ pub struct Core {
     root_hub: Option<Id<Hub>>,
     inited_devices: BTreeMap<usize, Box<dyn DeviceOp>>,
     deferred_initial_superspeed: bool,
+    deferred_initial_keyboard: bool,
 }
 
 fn is_xhci_command_timeout(err: &USBError) -> bool {
@@ -57,6 +58,7 @@ impl Core {
             hubs: Arena::new(),
             inited_devices: BTreeMap::new(),
             deferred_initial_superspeed: false,
+            deferred_initial_keyboard: false,
         }
     }
 
@@ -108,13 +110,17 @@ impl Core {
                     matches!(addr.port_speed, Speed::SuperSpeed | Speed::SuperSpeedPlus)
                 });
             for addr_info in addr_infos {
-                if addr_info.root_port_id == 3 {
+                if !self.deferred_initial_keyboard && addr_info.root_port_id == 3 {
                     info!(
-                        "kcore: temporary skip known keyboard before address root_port={} port={} speed={:?} reason=second-fullspeed-address-device-hangs",
+                        "kcore: deferred initial known keyboard address root_port={} port={} speed={:?}",
                         addr_info.root_port_id,
                         addr_info.port_id,
                         addr_info.port_speed
                     );
+                    self.deferred_initial_keyboard = true;
+                    if let Some(hub) = self.hubs.get_mut(id) {
+                        hub.backend.rearm_port(addr_info.port_id);
+                    }
                     continue;
                 }
 

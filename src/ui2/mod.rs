@@ -48,7 +48,8 @@ use trueos_gfx_core::{
 const UI2_BAR_H: f32 = 26.0;
 const UI2_TITLE_H: f32 = UI2_BAR_H;
 const UI2_BOTTOM_BAR_H: f32 = UI2_BAR_H;
-const UI2_SYSTEM_SCROLLBAR_PX: f32 = 4.0;
+const UI2_SYSTEM_VERTICAL_SCROLLBAR_W: f32 = UI2_TITLE_H * 0.5;
+const UI2_SYSTEM_HORIZONTAL_SCROLLBAR_H: f32 = UI2_BOTTOM_BAR_H * 0.5;
 const UI2_BROWSER_FORK_WINDOW_OFFSET_PX: f32 = 24.0;
 const UI2_MINIMIZED_STRIP_W: f32 = 333.0;
 const UI2_MINIMIZED_STRIP_GAP: f32 = 6.0;
@@ -605,7 +606,7 @@ fn ui2_window_min_size(window: &Ui2Window) -> (f32, f32) {
     }
 
     let mut min_w: f32 = 1.0;
-    let min_h = if window.titlebar_visible {
+    let mut min_h = if window.titlebar_visible {
         UI2_TITLE_H
     } else {
         0.0
@@ -614,6 +615,12 @@ fn ui2_window_min_size(window: &Ui2Window) -> (f32, f32) {
     } else {
         0.0
     };
+    if window.left_scrollbar_visible {
+        min_w += UI2_SYSTEM_VERTICAL_SCROLLBAR_W;
+    }
+    if window.bottom_scrollbar_visible {
+        min_h += UI2_SYSTEM_HORIZONTAL_SCROLLBAR_H;
+    }
 
     let button_count = ui2_system_button_count(window);
     if button_count != 0 {

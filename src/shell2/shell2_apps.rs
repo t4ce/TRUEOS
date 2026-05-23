@@ -7,8 +7,8 @@ use embassy_executor::Spawner;
 use super::cmds::run;
 use super::cmds::tlb_helper::TlbTable;
 use super::{
-    line_width_for_backend, matrix_target_for_backend, print_matrix_target_line, print_shell_line,
-    set_matrix_target_active, MatrixTarget, ShellBackend2,
+    MatrixTarget, ShellBackend2, line_width_for_backend, matrix_target_for_backend,
+    print_matrix_target_line, print_shell_line, set_matrix_target_active,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -211,17 +211,9 @@ const ONLINE_FETCH_TIMEOUT_MS: u32 = 45_000;
 const ONLINE_HEADERS: &[&str; 3] = &["id", "module", "url"];
 
 async fn fetch_url_bytes(url: String, max_bytes: usize) -> Result<Vec<u8>, String> {
-    crate::t::run_on_shared_tokio(move || async move {
-        crate::t::net::https::fetch_https_body_hyper_async(
-            url.as_str(),
-            ONLINE_FETCH_TIMEOUT_MS,
-            max_bytes,
-        )
+    crate::t::net::https::get_bytes_shared(url, ONLINE_FETCH_TIMEOUT_MS, max_bytes)
         .await
-    })
-    .await
-    .map_err(|err| alloc::format!("shared tokio unavailable ({:?})", err))?
-    .map_err(|err| alloc::format!("{:?}", err))
+        .map_err(|err| alloc::format!("{:?}", err))
 }
 
 async fn fetch_online_apps_html() -> Result<Vec<u8>, String> {
