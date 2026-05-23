@@ -129,12 +129,6 @@ required-features = ["rustls-ring"]
 name = "many_connections"
 path = "tests/many_connections.rs"
 
-[[bench]]
-name = "bench"
-path = "benches/bench.rs"
-harness = false
-required-features = ["rustls-ring"]
-
 [dependencies.async-io]
 version = "2"
 optional = true

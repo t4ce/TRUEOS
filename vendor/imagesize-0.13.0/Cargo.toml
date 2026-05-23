@@ -44,11 +44,6 @@ path = "src/lib.rs"
 default = []
 std = ["core3/std"]
 
-[[bench]]
-name = "parse_benchmark"
-path = "benches/parse_benchmark.rs"
-harness = false
-
 [dependencies]
 
 [dependencies.core3]

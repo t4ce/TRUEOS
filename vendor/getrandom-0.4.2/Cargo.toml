@@ -72,10 +72,6 @@ path = "tests/mod.rs"
 name = "sys_rng"
 path = "tests/sys_rng.rs"
 
-[[bench]]
-name = "buffer"
-path = "benches/buffer.rs"
-
 [dependencies.cfg-if]
 version = "1"
 

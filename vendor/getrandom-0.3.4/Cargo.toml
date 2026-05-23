@@ -60,10 +60,6 @@ path = "src/lib.rs"
 name = "mod"
 path = "tests/mod.rs"
 
-[[bench]]
-name = "buffer"
-path = "benches/buffer.rs"
-
 [dependencies.cfg-if]
 version = "1"
 

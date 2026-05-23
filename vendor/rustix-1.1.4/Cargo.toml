@@ -150,11 +150,6 @@ use-libc-auxv = []
 name = "rustix"
 path = "src/lib.rs"
 
-[[bench]]
-name = "mod"
-path = "benches/mod.rs"
-harness = false
-
 [dependencies.bitflags]
 version = "2.4.0"
 default-features = false

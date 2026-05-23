@@ -84,10 +84,6 @@ path = "tests/normal.rs"
 name = "rdrand"
 path = "tests/rdrand.rs"
 
-[[bench]]
-name = "buffer"
-path = "benches/buffer.rs"
-
 [dependencies.cfg-if]
 version = "1"
 

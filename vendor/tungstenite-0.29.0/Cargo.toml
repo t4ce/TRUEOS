@@ -112,27 +112,6 @@ name = "srv_accept_unmasked_frames"
 path = "examples/srv_accept_unmasked_frames.rs"
 required-features = ["handshake"]
 
-[[bench]]
-name = "buffer"
-path = "benches/buffer.rs"
-harness = false
-
-[[bench]]
-name = "e2e"
-path = "benches/e2e.rs"
-harness = false
-required-features = ["handshake"]
-
-[[bench]]
-name = "read"
-path = "benches/read.rs"
-harness = false
-
-[[bench]]
-name = "write"
-path = "benches/write.rs"
-harness = false
-
 [dependencies.bytes]
 version = "1.9.0"
 default-features = false

@@ -27,9 +27,5 @@ keywords = [
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/pyfisch/httpdate"
 
-[[bench]]
-name = "benchmarks"
-harness = false
-
 [dev-dependencies.criterion]
 version = "0.5"
