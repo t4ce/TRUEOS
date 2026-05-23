@@ -3,7 +3,7 @@ use crate::fs::asyncify;
 use crate::runtime::prelude::*;
 use alloc::borrow::ToOwned;
 
-use std::io;
+use crate::io;
 use crate::path::Path;
 
 /// Creates a future which will open a file for reading and read the entire

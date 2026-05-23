@@ -1,6 +1,6 @@
 use crate::io::seek::{seek, Seek};
 use crate::io::AsyncSeek;
-use std::io::SeekFrom;
+use crate::io::SeekFrom;
 
 cfg_io_util! {
     /// An extension trait that adds utility methods to [`AsyncSeek`] types.

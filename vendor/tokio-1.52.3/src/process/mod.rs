@@ -259,7 +259,7 @@ use core::future::Future;
 use core::pin::Pin;
 use core::task::{ready, Context, Poll};
 use std::ffi::OsStr;
-use std::io;
+use crate::io;
 use crate::path::Path;
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::process::{Child as StdChild, Command as StdCommand, ExitStatus, Output, Stdio};
@@ -1759,7 +1759,7 @@ mod test {
 
     use futures::future::FutureExt;
     use core::future::Future;
-    use std::io;
+    use crate::io;
     use core::pin::Pin;
     use core::task::{Context, Poll};
 

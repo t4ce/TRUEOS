@@ -7,7 +7,7 @@ use mio::event::Source;
 use mio::Registry;
 use mio::Token;
 use ::core::fmt;
-use std::io;
+use crate::io;
 use core::ops::{Deref, DerefMut};
 use std::os::fd::{AsFd, BorrowedFd};
 use std::os::unix::io::{AsRawFd, RawFd};

@@ -4,7 +4,7 @@ use crate::runtime::driver::op::{CancelData, Cancellable, Completable, CqeResult
 
 use io_uring::{opcode, types};
 use ::core::fmt;
-use std::io::{self, Error};
+use crate::io::{self, Error};
 use std::os::fd::OwnedFd;
 
 /// Trait for buffers that can be used with io-uring read operations.

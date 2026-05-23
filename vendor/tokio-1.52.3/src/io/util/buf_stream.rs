@@ -2,7 +2,7 @@ use crate::io::util::{BufReader, BufWriter};
 use crate::io::{AsyncBufRead, AsyncRead, AsyncSeek, AsyncWrite, ReadBuf};
 
 use pin_project_lite::pin_project;
-use std::io::{self, IoSlice, SeekFrom};
+use crate::io::{self, IoSlice, SeekFrom};
 use core::pin::Pin;
 use core::task::{Context, Poll};
 

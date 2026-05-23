@@ -7,7 +7,7 @@ use crate::util::check_socket_for_blocking;
 
 use ::core::fmt;
 use core::future::poll_fn;
-use std::io::{self, Read, Write};
+use crate::io::{self, Read, Write};
 use std::net::Shutdown;
 #[cfg(target_os = "android")]
 use std::os::android::net::SocketAddrExt;
@@ -479,7 +479,7 @@ impl UnixStream {
         /// ```
         pub fn try_read_buf<B: BufMut>(&self, buf: &mut B) -> io::Result<usize> {
             self.io.registration().try_io(Interest::READABLE, || {
-                use std::io::Read;
+                use crate::io::Read;
 
                 let dst = buf.chunk_mut();
                 let dst =

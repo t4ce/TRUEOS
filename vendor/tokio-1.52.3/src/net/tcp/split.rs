@@ -12,7 +12,7 @@ use crate::io::{AsyncRead, AsyncWrite, Interest, ReadBuf, Ready};
 use crate::net::TcpStream;
 
 use core::future::poll_fn;
-use std::io;
+use crate::io;
 use std::net::{Shutdown, SocketAddr};
 use core::pin::Pin;
 use core::task::{Context, Poll};

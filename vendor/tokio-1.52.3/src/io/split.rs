@@ -7,7 +7,7 @@
 use crate::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use ::core::fmt;
-use std::io;
+use crate::io;
 use core::pin::Pin;
 use alloc::sync::Arc;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]

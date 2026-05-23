@@ -2,7 +2,7 @@
 use crate::io::blocking::Blocking;
 use crate::io::{AsyncRead, ReadBuf};
 
-use std::io;
+use crate::io;
 use core::pin::Pin;
 use core::task::Context;
 use core::task::Poll;
@@ -29,7 +29,7 @@ cfg_io_std! {
     #[derive(Debug)]
     #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     pub struct Stdin {
-        std: Blocking<std::io::Stdin>,
+        std: Blocking<crate::io::Stdin>,
     }
 
     #[derive(Debug)]
@@ -74,7 +74,7 @@ mod sys {
 
     impl AsRawFd for Stdin {
         fn as_raw_fd(&self) -> RawFd {
-            std::io::stdin().as_raw_fd()
+            crate::io::stdin().as_raw_fd()
         }
     }
 
@@ -90,7 +90,7 @@ cfg_windows! {
 
     impl AsRawHandle for Stdin {
         fn as_raw_handle(&self) -> RawHandle {
-            std::io::stdin().as_raw_handle()
+            crate::io::stdin().as_raw_handle()
         }
     }
 

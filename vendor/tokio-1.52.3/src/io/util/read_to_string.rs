@@ -10,7 +10,7 @@ use core::marker::PhantomPinned;
 use core::mem;
 use core::pin::Pin;
 use core::task::{ready, Context, Poll};
-use std::io;
+use crate::io;
 
 pin_project! {
     /// Future for the [`read_to_string`](super::AsyncReadExt::read_to_string) method.

@@ -13,7 +13,7 @@ use crate::signal::RxFuture;
 use crate::sync::watch;
 
 use mio::net::UnixStream;
-use std::io::{self, Error, ErrorKind, Write};
+use crate::io::{self, Error, ErrorKind, Write};
 use std::sync::OnceLock;
 use core::task::{Context, Poll};
 

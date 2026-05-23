@@ -3,7 +3,7 @@ use crate::runtime::prelude::*;
 
 use super::{Driver, Handle, TOKEN_SIGNAL};
 
-use std::io;
+use crate::io;
 
 impl Handle {
     pub(crate) fn register_signal_receiver(

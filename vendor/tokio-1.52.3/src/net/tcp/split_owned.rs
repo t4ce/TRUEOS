@@ -16,7 +16,7 @@ use ::core::fmt;
 use core::future::poll_fn;
 use core::pin::Pin;
 use core::task::{Context, Poll};
-use std::io;
+use crate::io;
 use std::net::{Shutdown, SocketAddr};
 use std::sync::Arc;
 

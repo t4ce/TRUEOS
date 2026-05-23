@@ -2,7 +2,7 @@ use crate::io::AsyncSeek;
 
 use pin_project_lite::pin_project;
 use core::future::Future;
-use std::io::{self, SeekFrom};
+use crate::io::{self, SeekFrom};
 use core::marker::PhantomPinned;
 use core::pin::Pin;
 use core::task::{ready, Context, Poll};

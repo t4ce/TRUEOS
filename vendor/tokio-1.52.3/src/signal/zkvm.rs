@@ -1,5 +1,5 @@
 use crate::signal::RxFuture;
-use std::io;
+use crate::io;
 
 pub(super) fn ctrl_c() -> io::Result<RxFuture> {
     Err(io::Error::new(

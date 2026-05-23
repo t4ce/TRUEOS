@@ -2,7 +2,7 @@
 use crate::fs::asyncify;
 use alloc::borrow::ToOwned;
 
-use std::io;
+use crate::io;
 use crate::path::Path;
 
 /// Recursively creates a directory and all of its parent components if they

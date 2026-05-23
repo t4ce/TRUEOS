@@ -41,7 +41,7 @@ use mio::unix::SourceFd;
 use ::core::fmt;
 use std::fs::File;
 use core::future::Future;
-use std::io;
+use crate::io;
 use std::os::unix::io::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
 use core::pin::Pin;
 use std::process::{Child as StdChild, ExitStatus, Stdio};

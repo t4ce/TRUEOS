@@ -5,7 +5,7 @@ use crate::runtime::scheduler;
 use mio::unix::SourceFd;
 use core::error::Error;
 use ::core::fmt;
-use std::io;
+use crate::io;
 use std::os::unix::io::{AsRawFd, RawFd};
 use core::task::{ready, Context, Poll};
 

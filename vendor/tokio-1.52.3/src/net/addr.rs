@@ -2,7 +2,7 @@ use crate::runtime::prelude::*;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use alloc::{borrow::ToOwned, string::String, vec::Vec};
 use core::future;
-use std::io;
+use crate::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
 /// Converts or resolves without blocking to one or more `SocketAddr` values.
@@ -282,7 +282,7 @@ pub(crate) mod sealed {
     //! time.
 
     use core::future::Future;
-    use std::io;
+    use crate::io;
     use std::net::SocketAddr;
 
     #[doc(hidden)]

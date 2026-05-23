@@ -4,7 +4,7 @@
 
 use core::ffi::c_void;
 use core::ffi::OsStr;
-use std::io::{self, Read, Write};
+use crate::io::{self, Read, Write};
 use core::pin::Pin;
 use core::ptr;
 use core::ptr::null_mut;
@@ -599,7 +599,7 @@ impl NamedPipeServer {
         /// ```
         pub fn try_read_buf<B: BufMut>(&self, buf: &mut B) -> io::Result<usize> {
             self.io.registration().try_io(Interest::READABLE, || {
-                use std::io::Read;
+                use crate::io::Read;
 
                 let dst = buf.chunk_mut();
                 let dst =
@@ -1391,7 +1391,7 @@ impl NamedPipeClient {
         /// ```
         pub fn try_read_buf<B: BufMut>(&self, buf: &mut B) -> io::Result<usize> {
             self.io.registration().try_io(Interest::READABLE, || {
-                use std::io::Read;
+                use crate::io::Read;
 
                 let dst = buf.chunk_mut();
                 let dst =

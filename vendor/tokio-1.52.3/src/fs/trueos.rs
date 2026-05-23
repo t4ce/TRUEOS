@@ -4,7 +4,7 @@ use crate::runtime::prelude::*;
 use alloc::string::String;
 use alloc::vec::Vec;
 use ::core::fmt;
-use std::io::{self, Read, Seek, SeekFrom, Write};
+use crate::io::{self, Read, Seek, SeekFrom, Write};
 use crate::path::{Component, Path, PathBuf};
 
 #[derive(Clone, Copy, Debug, Default)]

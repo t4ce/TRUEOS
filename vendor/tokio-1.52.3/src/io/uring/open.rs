@@ -5,7 +5,7 @@ use crate::runtime::driver::op::{CancelData, Cancellable, Completable, CqeResult
 
 use io_uring::{opcode, types};
 use core::ffi::CString;
-use std::io::{self, Error};
+use crate::io::{self, Error};
 use std::os::fd::FromRawFd;
 use crate::path::Path;
 

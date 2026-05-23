@@ -19,7 +19,7 @@ use crate::path::Path;
 /// # Ok(())
 /// # }
 /// ```
-pub async fn copy(from: impl AsRef<Path>, to: impl AsRef<Path>) -> Result<u64, std::io::Error> {
+pub async fn copy(from: impl AsRef<Path>, to: impl AsRef<Path>) -> Result<u64, crate::io::Error> {
     let from = from.as_ref().to_owned();
     let to = to.as_ref().to_owned();
     #[cfg(any(target_os = "trueos", target_os = "zkvm"))]

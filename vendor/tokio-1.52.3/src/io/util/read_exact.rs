@@ -2,7 +2,7 @@ use crate::io::{AsyncRead, ReadBuf};
 
 use pin_project_lite::pin_project;
 use core::future::Future;
-use std::io;
+use crate::io;
 use core::marker::PhantomPinned;
 use core::marker::Unpin;
 use core::pin::Pin;

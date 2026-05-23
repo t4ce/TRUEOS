@@ -3,7 +3,7 @@ use crate::runtime::prelude::*;
 
 use core::any::Any;
 use ::core::fmt;
-use std::io;
+use crate::io;
 
 use super::Id;
 use crate::util::SyncWrapper;

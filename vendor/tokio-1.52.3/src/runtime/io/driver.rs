@@ -20,7 +20,7 @@ use crate::runtime::io::{IoDriverMetrics, RegistrationSet, ScheduledIo};
 
 use mio::event::Source;
 use ::core::fmt;
-use std::io;
+use crate::io;
 use alloc::sync::Arc;
 use core::time::Duration;
 

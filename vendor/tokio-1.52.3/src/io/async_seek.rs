@@ -1,5 +1,5 @@
 use crate::runtime::prelude::*;
-use std::io::{self, SeekFrom};
+use crate::io::{self, SeekFrom};
 use core::ops::DerefMut;
 use core::pin::Pin;
 use core::task::{Context, Poll};

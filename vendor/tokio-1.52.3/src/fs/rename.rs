@@ -3,7 +3,7 @@ use crate::fs::asyncify;
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use alloc::borrow::ToOwned;
 
-use std::io;
+use crate::io;
 use crate::path::Path;
 
 /// Renames a file or directory to a new name, replacing the original file if

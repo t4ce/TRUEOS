@@ -6,7 +6,7 @@ use alloc::borrow::ToOwned;
 use crate::fs::trueos::Metadata;
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use std::fs::Metadata;
-use std::io;
+use crate::io;
 use crate::path::Path;
 
 /// Given a path, queries the file system to get information about a file,

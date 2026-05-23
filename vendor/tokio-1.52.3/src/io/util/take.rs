@@ -5,7 +5,7 @@ use core::convert::TryFrom;
 use core::pin::Pin;
 use core::task::{ready, Context, Poll};
 use core::cmp;
-use std::io;
+use crate::io;
 
 pin_project! {
     /// Stream for the [`take`](super::AsyncReadExt::take) method.

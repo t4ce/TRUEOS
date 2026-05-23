@@ -2,7 +2,7 @@ use crate::runtime::driver::op::{CancelData, Cancellable, Completable, CqeResult
 use crate::util::as_ref::OwnedBuf;
 
 use io_uring::{opcode, types};
-use std::io::{self, Error};
+use crate::io::{self, Error};
 use std::os::fd::{AsRawFd, OwnedFd};
 
 #[derive(Debug)]

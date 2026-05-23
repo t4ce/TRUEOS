@@ -15,7 +15,7 @@ use crate::io::util::write_int::{
 };
 use crate::io::util::write_vectored::{write_vectored, WriteVectored};
 use crate::io::AsyncWrite;
-use std::io::IoSlice;
+use crate::io::IoSlice;
 
 use bytes::Buf;
 

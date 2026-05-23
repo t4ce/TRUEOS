@@ -12,7 +12,7 @@ use crate::runtime::prelude::*;
 
 use crate::runtime::park::{ParkThread, UnparkThread};
 
-use std::io;
+use crate::io;
 use core::time::Duration;
 
 #[derive(Debug)]

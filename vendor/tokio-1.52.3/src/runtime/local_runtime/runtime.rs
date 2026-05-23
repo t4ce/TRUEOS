@@ -91,7 +91,7 @@ impl LocalRuntime {
     ///
     /// [mod]: crate::runtime
     /// [runtime builder]: crate::runtime::Builder
-    pub fn new() -> std::io::Result<LocalRuntime> {
+    pub fn new() -> crate::io::Result<LocalRuntime> {
         Builder::new_current_thread()
             .enable_all()
             .build_local(Default::default())

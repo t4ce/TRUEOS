@@ -12,7 +12,7 @@ use crate::io::{AsyncRead, AsyncWrite, Interest, ReadBuf, Ready};
 use crate::net::UnixStream;
 
 use crate::net::unix::SocketAddr;
-use std::io;
+use crate::io;
 use std::net::Shutdown;
 use core::pin::Pin;
 use core::task::{Context, Poll};

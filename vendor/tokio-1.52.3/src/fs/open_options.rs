@@ -3,7 +3,7 @@ use crate::fs::asyncify;
 use crate::fs::File;
 use alloc::borrow::ToOwned;
 
-use std::io;
+use crate::io;
 use crate::path::Path;
 
 cfg_io_uring! {

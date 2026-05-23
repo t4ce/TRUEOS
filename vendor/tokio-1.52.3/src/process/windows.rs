@@ -23,7 +23,7 @@ use crate::sync::oneshot;
 use ::core::fmt;
 use std::fs::File as StdFile;
 use core::future::Future;
-use std::io;
+use crate::io;
 use std::os::windows::prelude::{AsRawHandle, IntoRawHandle, OwnedHandle, RawHandle};
 use core::pin::Pin;
 use std::process::Stdio;

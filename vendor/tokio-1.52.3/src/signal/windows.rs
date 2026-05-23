@@ -9,7 +9,7 @@
 #![cfg_attr(docsrs, doc(cfg(all(windows, feature = "signal"))))]
 
 use crate::signal::RxFuture;
-use std::io;
+use crate::io;
 use core::task::{Context, Poll};
 
 #[cfg(windows)]

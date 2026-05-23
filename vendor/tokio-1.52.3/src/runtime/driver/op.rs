@@ -12,7 +12,7 @@ use crate::runtime::Handle;
 use io_uring::cqueue;
 use io_uring::squeue::Entry;
 use core::future::Future;
-use std::io::{self, Error};
+use crate::io::{self, Error};
 use core::mem;
 use std::os::fd::OwnedFd;
 use core::pin::Pin;

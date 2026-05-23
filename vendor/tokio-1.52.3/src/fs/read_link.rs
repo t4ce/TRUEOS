@@ -3,7 +3,7 @@ use crate::fs::asyncify;
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 use alloc::borrow::ToOwned;
 
-use std::io;
+use crate::io;
 use crate::path::{Path, PathBuf};
 
 /// Reads a symbolic link, returning the file that the link points to.

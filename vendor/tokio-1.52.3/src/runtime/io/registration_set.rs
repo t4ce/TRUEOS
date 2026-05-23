@@ -5,7 +5,7 @@ use core::sync::atomic::AtomicUsize;
 use crate::runtime::io::ScheduledIo;
 use crate::util::linked_list::{self, LinkedList};
 
-use std::io;
+use crate::io;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering::{Acquire, Release};
 use alloc::sync::Arc;

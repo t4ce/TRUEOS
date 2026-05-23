@@ -16,7 +16,7 @@ use core::error::Error;
 use ::core::fmt;
 use core::pin::Pin;
 use core::task::{Context, Poll};
-use std::io;
+use crate::io;
 use std::net::Shutdown;
 use std::sync::Arc;
 
